@@ -1,0 +1,83 @@
+{
+  "id": "tutorial-01-quick-tour",
+  "title": "Bruin Web Quick Tour",
+  "voice": "alloy",
+  "tts": {
+    "temperature": 0.7,
+    "exaggeration": 0.45,
+    "cfg_weight": 0.55
+  },
+  "intro": {
+    "durationMs": 2800,
+    "subtitle": "Inspect, materialize, and edit assets without leaving the graph"
+  },
+  "viewport": {
+    "width": 1440,
+    "height": 900
+  },
+  "workspaceFixture": "basic-workspace",
+  "segments": [
+    {
+      "id": "open-customers",
+      "text": "Hey, let's do a super quick tour of Bruin Web. We'll start by opening the customers asset from the sidebar so you can see the editor and the graph together.",
+      "action": {
+        "type": "clickAssetLink",
+        "assetName": "analytics.customers"
+      },
+      "paddingMs": 700
+    },
+    {
+      "id": "inspect-asset",
+      "text": "If you just want a fast preview, hit Inspect. Bruin runs the asset query and shows the rows right in the results panel.",
+      "action": {
+        "type": "inspectAsset"
+      },
+      "paddingMs": 900
+    },
+    {
+      "id": "circle-results-panel",
+      "text": "And right down here, you can see the results panel update without leaving the workspace, so you keep the graph, editor, and data preview in one place.",
+      "action": {
+        "type": "circleElement",
+        "target": {
+          "type": "testId",
+          "value": "workspace-results-panel"
+        },
+        "loops": 2,
+        "durationMs": 2400,
+        "paddingX": 24,
+        "paddingY": 24,
+        "settleMs": 280
+      },
+      "actionDelayMs": 700,
+      "paddingMs": 900
+    },
+    {
+      "id": "materialize-asset",
+      "text": "Once the result looks good, you can materialize the asset. That creates a run entry and keeps the output history handy while you work.",
+      "action": {
+        "type": "materializeAsset"
+      },
+      "paddingMs": 1200
+    },
+    {
+      "id": "rename-asset",
+      "text": "And because Bruin Web is working directly against your workspace files, tiny edits feel really direct. Let's rename the asset so you can see that update happen live.",
+      "action": {
+        "type": "renameAsset",
+        "from": "analytics.customers",
+        "to": "analytics.customer_preview"
+      },
+      "paddingMs": 900
+    },
+    {
+      "id": "reload-after-rename",
+      "text": "Even after a reload, the renamed asset is still there. That's the basic loop: browse the graph, inspect data, materialize it, and edit assets in place.",
+      "action": {
+        "type": "reloadAndVerifyAsset",
+        "assetName": "analytics.customer_preview"
+      },
+      "paddingMs": 1600
+    }
+  ]
+}

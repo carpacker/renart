@@ -1,0 +1,152 @@
+package service
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"testing"
+	"time"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+)
+
+type stubRunRunner struct {
+	args   []string
+	output []byte
+	err    error
+}
+
+func (s *stubRunRunner) RunAsset(_ context.Context, req RunAssetRequest, _ func([]byte)) ([]byte, error) {
+	s.args = []string{"run", req.AssetPath}
+	return s.output, s.err
+}
+
+func (s *stubRunRunner) RunPipeline(_ context.Context, req RunPipelineRequest, _ func([]byte)) ([]byte, error) {
+	s.args = []string{"run", req.Target}
+	return s.output, s.err
+}
+
+func (s *stubRunRunner) QueryAsset(_ context.Context, req QueryAssetRequest) ([]byte, error) {
+	s.args = []string{"query", req.AssetPath}
+	return s.output, s.err
+}
+
+func (s *stubRunRunner) QueryConnection(_ context.Context, req QueryConnectionRequest) ([]byte, error) {
+	s.args = []string{"query", "--connection", req.ConnectionName, "--query", req.Query}
+	return s.output, s.err
+}
+
+func (s *stubRunRunner) FormatAsset(_ context.Context, req FormatAssetRequest) ([]byte, error) {
+	s.args = []string{"format", req.AssetPath}
+	if req.UseSQLFluff {
+		s.args = append(s.args, "--sqlfluff")
+	}
+	return s.output, s.err
+}
+
+func (s *stubRunRunner) ApplyPatch(_ context.Context, req PatchRequest) ([]byte, error) {
+	s.args = []string{"patch", req.Operation, req.TargetPath}
+	return s.output, s.err
+}
+
+func (s *stubRunRunner) ImportDatabase(_ context.Context, req ImportDatabaseRequest) ([]byte, error) {
+	s.args = []string{"import", "database", req.PipelinePath}
+	return s.output, s.err
+}
+
+func (s *stubRunRunner) RunWithRetry(_ context.Context, req QueryAssetRequest, _ int, _ time.Duration) ([]byte, error, int) {
+	s.args = []string{"query", req.AssetPath}
+	return s.output, s.err, 1
+}
+
+func TestRunServiceExecute_DefaultsToRunCommand(t *testing.T) {
+	t.Parallel()
+
+	runner := &stubRunRunner{output: []byte("ok")}
+	svc := NewRunService(RunDependencies{Executor: runner})
+
+	result := svc.Execute(context.Background(), RunRequest{})
+
+	require.Equal(t, []string{"run", "."}, runner.args)
+	assert.Equal(t, "ok", result.Status)
+	assert.Equal(t, 200, result.HTTPCode)
+	assert.Equal(t, 0, result.ExitCode)
+	assert.Equal(t, []string{"run", "."}, result.Command)
+	assert.Equal(t, "ok", result.Output)
+}
+
+func TestRunServiceExecute_UsesPipelineTarget(t *testing.T) {
+	t.Parallel()
+
+	runner := &stubRunRunner{output: []byte("done")}
+	svc := NewRunService(RunDependencies{Executor: runner})
+
+	result := svc.Execute(context.Background(), RunRequest{
+		Command:    "lint",
+		PipelineID: EncodeID("pipelines/orders/pipeline.yml"),
+		Args:       []string{"--debug"},
+	})
+
+	assert.Equal(t, "error", result.Status)
+	assert.Equal(t, []string{"lint", "pipelines/orders", "--debug"}, result.Command)
+}
+
+func TestRunServiceExecute_AssetPathOverridesPipelineID(t *testing.T) {
+	t.Parallel()
+
+	runner := &stubRunRunner{output: []byte("asset")}
+	svc := NewRunService(RunDependencies{Executor: runner})
+
+	result := svc.Execute(context.Background(), RunRequest{
+		Command:    "query",
+		PipelineID: EncodeID("pipelines/orders/pipeline.yml"),
+		AssetPath:  "pipelines/orders/assets/order_items.sql",
+	})
+
+	assert.Equal(t, "error", result.Status)
+	assert.Equal(t, []string{"query", "pipelines/orders/assets/order_items.sql"}, result.Command)
+}
+
+func TestRunServiceExecute_InvalidPipelineID(t *testing.T) {
+	t.Parallel()
+
+	runner := &stubRunRunner{}
+	svc := NewRunService(RunDependencies{Executor: runner})
+
+	result := svc.Execute(context.Background(), RunRequest{PipelineID: "%%%"})
+
+	assert.Equal(t, "error", result.Status)
+	assert.Equal(t, 400, result.HTTPCode)
+	assert.Equal(t, 1, result.ExitCode)
+	assert.Equal(t, "invalid pipeline id", result.Error)
+	assert.Nil(t, runner.args)
+}
+
+func TestRunServiceExecute_PropagatesRunnerFailure(t *testing.T) {
+	t.Parallel()
+
+	runner := &stubRunRunner{output: []byte("bad output"), err: errors.New("boom")}
+	svc := NewRunService(RunDependencies{Executor: runner})
+
+	result := svc.Execute(context.Background(), RunRequest{Command: "patch", AssetPath: "assets/foo.sql"})
+
+	require.Equal(t, []string{"patch", "assets/foo.sql"}, result.Command)
+	assert.Equal(t, "error", result.Status)
+	assert.Equal(t, 400, result.HTTPCode)
+	assert.Equal(t, 1, result.ExitCode)
+	assert.Equal(t, []string{"patch", "assets/foo.sql"}, result.Command)
+	assert.Equal(t, "", result.Output)
+	assert.Equal(t, "command \"patch\" is not supported by this executor", result.Error)
+}
+
+func TestExtractInspectRawOutputUsesErrorField(t *testing.T) {
+	t.Parallel()
+
+	output, err := json.Marshal(map[string]any{
+		"error": "Catalog Error: Table with name raw_downstream does not exist\nLINE 1: select * from raw_downstream",
+	})
+	require.NoError(t, err)
+
+	assert.Equal(t, "Catalog Error: Table with name raw_downstream does not exist\nLINE 1: select * from raw_downstream", extractInspectRawOutput(output))
+}

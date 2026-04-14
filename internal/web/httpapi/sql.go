@@ -1,0 +1,120 @@
+package httpapi
+
+import (
+	"context"
+	"encoding/json"
+	"net/http"
+	"strings"
+
+	webapi "renart/internal/web/api"
+	"renart/internal/web/service"
+	"github.com/go-chi/chi/v5"
+)
+
+type SQLHandlers interface {
+	ColumnValues(ctx context.Context, connectionName, environment, query string) service.SQLColumnValuesResult
+	Databases(ctx context.Context, connectionName, environment string) (service.SQLDatabaseDiscoveryResult, *service.SQLAPIError)
+	Tables(ctx context.Context, connectionName, databaseName, environment string) (service.SQLTableDiscoveryResult, *service.SQLAPIError)
+	TableColumns(ctx context.Context, connectionName, tableName, environment string) (service.SQLTableColumnsResult, int)
+}
+
+type SQLAPI struct {
+	Service SQLHandlers
+}
+
+type SQLColumnValuesRequest struct {
+	Connection  string `json:"connection"`
+	Environment string `json:"environment,omitempty"`
+	Query       string `json:"query"`
+}
+
+func RegisterSQLRoutes(router chi.Router, handlers *SQLAPI) {
+	router.Post("/api/sql/column-values", handlers.HandleSQLColumnValues)
+	router.Get("/api/sql/databases", handlers.HandleGetSQLDatabases)
+	router.Get("/api/sql/tables", handlers.HandleGetSQLTables)
+	router.Get("/api/sql/table-columns", handlers.HandleGetSQLTableColumns)
+}
+
+func (h *SQLAPI) HandleSQLColumnValues(w http.ResponseWriter, r *http.Request) {
+	var req SQLColumnValuesRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		webapi.WriteBadRequest(w, "invalid_request_body", err.Error())
+		return
+	}
+
+	connectionName := strings.TrimSpace(req.Connection)
+	if connectionName == "" {
+		webapi.WriteBadRequest(w, "connection_required", "connection is required")
+		return
+	}
+
+	query := strings.TrimSpace(req.Query)
+	if query == "" {
+		webapi.WriteBadRequest(w, "query_required", "query is required")
+		return
+	}
+
+	result := h.Service.ColumnValues(r.Context(), connectionName, req.Environment, query)
+	webapi.WriteJSON(w, http.StatusOK, result)
+}
+
+func (h *SQLAPI) HandleGetSQLDatabases(w http.ResponseWriter, r *http.Request) {
+	connectionName := strings.TrimSpace(r.URL.Query().Get("connection"))
+	if connectionName == "" {
+		webapi.WriteBadRequest(w, "connection_required", "connection query parameter is required")
+		return
+	}
+
+	result, apiErr := h.Service.Databases(r.Context(), connectionName, strings.TrimSpace(r.URL.Query().Get("environment")))
+	if apiErr != nil {
+		webapi.WriteJSON(w, apiErr.Status, map[string]any{
+			"status": "error",
+			"error":  map[string]string{"code": apiErr.Code, "message": apiErr.Message},
+		})
+		return
+	}
+
+	webapi.WriteJSON(w, http.StatusOK, result)
+}
+
+func (h *SQLAPI) HandleGetSQLTables(w http.ResponseWriter, r *http.Request) {
+	connectionName := strings.TrimSpace(r.URL.Query().Get("connection"))
+	if connectionName == "" {
+		webapi.WriteBadRequest(w, "connection_required", "connection query parameter is required")
+		return
+	}
+
+	databaseName := strings.TrimSpace(r.URL.Query().Get("database"))
+	if databaseName == "" {
+		webapi.WriteBadRequest(w, "database_required", "database query parameter is required")
+		return
+	}
+
+	result, apiErr := h.Service.Tables(r.Context(), connectionName, databaseName, strings.TrimSpace(r.URL.Query().Get("environment")))
+	if apiErr != nil {
+		webapi.WriteJSON(w, apiErr.Status, map[string]any{
+			"status": "error",
+			"error":  map[string]string{"code": apiErr.Code, "message": apiErr.Message},
+		})
+		return
+	}
+
+	webapi.WriteJSON(w, http.StatusOK, result)
+}
+
+func (h *SQLAPI) HandleGetSQLTableColumns(w http.ResponseWriter, r *http.Request) {
+	connectionName := strings.TrimSpace(r.URL.Query().Get("connection"))
+	if connectionName == "" {
+		webapi.WriteBadRequest(w, "connection_required", "connection query parameter is required")
+		return
+	}
+
+	tableName := strings.TrimSpace(r.URL.Query().Get("table"))
+	if tableName == "" {
+		webapi.WriteBadRequest(w, "table_required", "table query parameter is required")
+		return
+	}
+
+	result, status := h.Service.TableColumns(r.Context(), connectionName, tableName, strings.TrimSpace(r.URL.Query().Get("environment")))
+	webapi.WriteJSON(w, status, result)
+}
