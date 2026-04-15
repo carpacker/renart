@@ -21,7 +21,7 @@ func TestApplyManualAssetUpstreamsPreservesTrackedInferred(t *testing.T) {
 	asset := &pipeline.Asset{
 		Name: "analytics.customers",
 		Meta: pipeline.EmptyStringMap{
-			bruinWebInferredUpstreamsMetaKey: "analytics.orders",
+			renartInferredUpstreamsMetaKey: "analytics.orders",
 		},
 		Upstreams: []pipeline.Upstream{
 			{Type: "asset", Value: "analytics.manual_seed", Mode: pipeline.UpstreamModeFull},
@@ -39,7 +39,7 @@ func TestApplyManualAssetUpstreamsPreservesTrackedInferred(t *testing.T) {
 	applyManualAssetUpstreams(asset, p, []string{"analytics.manual_seed"})
 
 	assert.Equal(t, []string{"analytics.manual_seed", "analytics.orders"}, upstreamValues(asset.Upstreams))
-	assert.Equal(t, "analytics.orders", asset.Meta[bruinWebInferredUpstreamsMetaKey])
+	assert.Equal(t, "analytics.orders", asset.Meta[renartInferredUpstreamsMetaKey])
 }
 
 func TestReconcileSQLAssetDependenciesRemovesOnlyTrackedInferred(t *testing.T) {
@@ -55,7 +55,7 @@ func TestReconcileSQLAssetDependenciesRemovesOnlyTrackedInferred(t *testing.T) {
 			Content: "select * from analytics.manual_seed",
 		},
 		Meta: pipeline.EmptyStringMap{
-			bruinWebInferredUpstreamsMetaKey: "analytics.customers",
+			renartInferredUpstreamsMetaKey: "analytics.customers",
 		},
 		Upstreams: []pipeline.Upstream{
 			{Type: "asset", Value: "analytics.manual_seed", Mode: pipeline.UpstreamModeFull},
@@ -75,7 +75,7 @@ func TestReconcileSQLAssetDependenciesRemovesOnlyTrackedInferred(t *testing.T) {
 	require.NoError(t, reconcileSQLAssetDependencies(context.Background(), asset, p, parser, renderer))
 
 	assert.Equal(t, []string{"analytics.manual_seed"}, upstreamValues(asset.Upstreams))
-	_, ok := asset.Meta[bruinWebInferredUpstreamsMetaKey]
+	_, ok := asset.Meta[renartInferredUpstreamsMetaKey]
 	assert.False(t, ok)
 }
 
@@ -173,13 +173,13 @@ select 1 as order_id
 	content, err := os.ReadFile(filepath.Join(assetsRoot, "customers.sql"))
 	require.NoError(t, err)
 	assert.Contains(t, string(content), "depends:\n  - analytics.orders")
-	assert.Contains(t, string(content), "bruin_web_inferred_upstreams: analytics.orders")
+	assert.Contains(t, string(content), "renart_inferred_upstreams: analytics.orders")
 
 	_, parsedPipeline, asset, err := resolveAssetByID(context.Background(), EncodeID("analytics/assets/customers.sql"))
 	require.NoError(t, err)
 	require.NotNil(t, parsedPipeline)
 	assert.Equal(t, []string{"analytics.orders"}, upstreamValues(asset.Upstreams))
-	assert.Equal(t, "analytics.orders", asset.Meta[bruinWebInferredUpstreamsMetaKey])
+	assert.Equal(t, "analytics.orders", asset.Meta[renartInferredUpstreamsMetaKey])
 }
 
 func TestAssetServiceUpdatePersistsManualUpstreamsInHeader(t *testing.T) {
@@ -382,12 +382,12 @@ select 1 as order_id
 	content, err := os.ReadFile(assetPath)
 	require.NoError(t, err)
 	assert.Contains(t, string(content), "depends:\n  - analytics.orders")
-	assert.Contains(t, string(content), "bruin_web_inferred_upstreams: analytics.orders")
+	assert.Contains(t, string(content), "renart_inferred_upstreams: analytics.orders")
 
 	_, _, asset, err := resolveAssetByID(context.Background(), response["asset_id"])
 	require.NoError(t, err)
 	assert.Equal(t, []string{"analytics.orders"}, upstreamValues(asset.Upstreams))
-	assert.Equal(t, "analytics.orders", asset.Meta[bruinWebInferredUpstreamsMetaKey])
+	assert.Equal(t, "analytics.orders", asset.Meta[renartInferredUpstreamsMetaKey])
 	assert.Equal(t, "analytics.orders_child_1", asset.Name)
 }
 
@@ -492,7 +492,7 @@ select 1 as customer_id
 	_, _, asset, err := resolveAssetByID(context.Background(), EncodeID("analytics/assets/customers.sql"))
 	require.NoError(t, err)
 	assert.Equal(t, []string{"analytics.manual_seed", "analytics.orders"}, upstreamValues(asset.Upstreams))
-	assert.Equal(t, "analytics.orders", asset.Meta[bruinWebInferredUpstreamsMetaKey])
+	assert.Equal(t, "analytics.orders", asset.Meta[renartInferredUpstreamsMetaKey])
 }
 
 func TestReconcileSQLAssetDependenciesResolvesSameSchemaUnqualifiedNames(t *testing.T) {
@@ -520,7 +520,7 @@ func TestReconcileSQLAssetDependenciesResolvesSameSchemaUnqualifiedNames(t *test
 	require.NoError(t, reconcileSQLAssetDependencies(context.Background(), asset, p, parser, renderer))
 
 	assert.Equal(t, []string{"analytics.orders"}, upstreamValues(asset.Upstreams))
-	assert.Equal(t, "analytics.orders", asset.Meta[bruinWebInferredUpstreamsMetaKey])
+	assert.Equal(t, "analytics.orders", asset.Meta[renartInferredUpstreamsMetaKey])
 }
 
 func TestDeriveDownstreamAssetName_PreservesPrefix(t *testing.T) {

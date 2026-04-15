@@ -20,7 +20,7 @@ test.describe("workspace onboarding live flows", () => {
     }
 
     await page.goto(`${liveApp.baseURL}/onboarding`);
-    await page.evaluate(() => window.localStorage.removeItem("bruin-web-onboarding-dismissed"));
+    await page.evaluate(() => window.localStorage.removeItem("renart-onboarding-dismissed"));
     await page.reload();
 
     await expect(page.getByTestId("workspace-onboarding")).toBeVisible({ timeout: 15000 });
@@ -45,7 +45,7 @@ test.describe("workspace onboarding live flows", () => {
     expect(configAfterValidation).not.toContain("postgres-default");
 
     const onboardingStateAfterValidation = await readFile(
-      join(liveApp.workspaceDir, ".bruin-web-onboarding.json"),
+      join(liveApp.workspaceDir, ".renart-onboarding.json"),
       "utf8"
     );
     expect(onboardingStateAfterValidation).toContain('"step": "import"');
@@ -70,7 +70,7 @@ test.describe("workspace onboarding live flows", () => {
     await page.getByRole("button", { name: "Open workspace" }).click();
 
     const onboardingStateAfterComplete = await readFile(
-      join(liveApp.workspaceDir, ".bruin-web-onboarding.json"),
+      join(liveApp.workspaceDir, ".renart-onboarding.json"),
       "utf8"
     );
     expect(onboardingStateAfterComplete).toContain('"active": false');

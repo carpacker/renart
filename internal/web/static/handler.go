@@ -54,7 +54,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	w.WriteHeader(http.StatusServiceUnavailable)
-	_, _ = w.Write([]byte("Bruin Web UI assets are unavailable."))
+	_, _ = w.Write([]byte("Renart UI assets are unavailable."))
 }
 
 func newAssetSource(fsys fs.FS) assetSource {

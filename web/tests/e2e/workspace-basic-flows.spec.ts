@@ -5,7 +5,7 @@ test.describe("workspace basic flows", () => {
     await mockWorkspaceEndpoints(page, createEmptyWorkspaceState());
     await page.goto("/");
 
-    await expect(page).toHaveTitle("Workspace · Bruin Web");
+    await expect(page).toHaveTitle("Workspace · Renart");
     await expect(
       page.getByRole("heading", { name: "Create your first pipeline" })
     ).toBeVisible();
@@ -26,7 +26,7 @@ test.describe("workspace basic flows", () => {
     await mockWorkspaceEndpoints(page, createPopulatedWorkspaceState());
     await page.goto("/?pipeline=pipeline-analytics&asset=asset-customers");
 
-    await expect(page).toHaveTitle("analytics.customers · analytics · Bruin Web");
+    await expect(page).toHaveTitle("analytics.customers · analytics · Renart");
     await expect(page.getByTestId("editor-asset-name")).toHaveText("analytics.customers");
     await expect(page.getByTestId("editor-asset-path")).toHaveText(
       "pipelines/analytics/assets/customers.sql"
@@ -39,7 +39,7 @@ test.describe("workspace basic flows", () => {
 
     await page.getByRole("link", { name: "analytics.orders" }).click();
 
-    await expect(page).toHaveTitle("analytics.orders · analytics · Bruin Web");
+    await expect(page).toHaveTitle("analytics.orders · analytics · Renart");
     await expect(page.getByTestId("editor-asset-name")).toHaveText("analytics.orders");
     await expect(page.getByTestId("editor-asset-path")).toHaveText(
       "pipelines/analytics/assets/orders.sql"

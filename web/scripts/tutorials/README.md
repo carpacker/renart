@@ -1,6 +1,6 @@
-# Automated Bruin Web Tutorials
+# Automated Renart Tutorials
 
-This directory contains a first pass at fully automated Bruin Web tutorial rendering.
+This directory contains a first pass at fully automated Renart tutorial rendering.
 
 The current flow is:
 

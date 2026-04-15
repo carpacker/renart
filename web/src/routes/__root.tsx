@@ -23,12 +23,12 @@ function RootComponent() {
 
 function getDocumentTitle(pathname: string) {
   if (pathname.startsWith("/settings/connections")) {
-    return "Connections · Settings · Bruin Web";
+    return "Connections · Settings · Renart";
   }
 
   if (pathname.startsWith("/settings/environments") || pathname === "/settings") {
-    return "Environments · Settings · Bruin Web";
+    return "Environments · Settings · Renart";
   }
 
-  return "Workspace · Bruin Web";
+  return "Workspace · Renart";
 }

@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 
 export type StoredNodePositions = Record<string, { x: number; y: number }>;
 
-const NODE_POSITIONS_STORAGE_KEY = "bruin-web-node-positions-v1";
+const NODE_POSITIONS_STORAGE_KEY = "renart-node-positions-v1";
 
 export function usePersistedNodePositions(): [
   StoredNodePositions,

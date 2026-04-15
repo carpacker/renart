@@ -133,7 +133,7 @@ type webServer struct {
 func Web() *cli.Command {
 	return &cli.Command{
 		Name:      "web",
-		Usage:     "start Bruin Web UI server",
+		Usage:     "start Renart UI server",
 		ArgsUsage: "[workspace root]",
 		Flags: []cli.Flag{
 			&cli.StringFlag{
@@ -330,7 +330,7 @@ func Web() *cli.Command {
 			server.registerRoutes(router)
 
 			address := fmt.Sprintf("%s:%d", c.String("host"), c.Int("port"))
-			fmt.Printf("Bruin Web listening on http://%s\n", address)
+			fmt.Printf("Renart listening on http://%s\n", address)
 
 			httpServer := &http.Server{
 				Addr:              address,
@@ -1055,7 +1055,7 @@ func (s *webServer) handleStatic(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	w.WriteHeader(http.StatusServiceUnavailable)
-	_, _ = w.Write([]byte("Bruin Web UI assets are unavailable."))
+	_, _ = w.Write([]byte("Renart UI assets are unavailable."))
 }
 
 // suppressWatcherFor marks a path as recently handled by a server-initiated

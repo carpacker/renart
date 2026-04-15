@@ -130,12 +130,13 @@ export function WorkspaceSidebar({
       <SidebarHeader className="border-b px-3 py-3 sm:px-4">
         <div className="flex items-start justify-between gap-2">
           <div className="min-w-0 flex items-center gap-2 text-sm font-semibold">
-            <Workflow className="size-4" />
+            <img
+              src="/icons/icon.svg"
+              alt="Renart"
+              className="size-8 shrink-0 rounded-sm"
+            />
             <div className="min-w-0">
-              <div className="truncate">Pipelines</div>
-              <div className="text-xs font-normal text-muted-foreground">
-                Browse assets and workspace settings
-              </div>
+              <div className="truncate">Renart</div>
             </div>
           </div>
           <div className="flex items-center gap-1">

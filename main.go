@@ -17,7 +17,7 @@ func main() {
 	app := &cli.Command{
 		Name:    "renart",
 		Version: version,
-		Usage:   "Standalone Bruin Web server",
+		Usage:   "Standalone Renart server",
 		Commands: []*cli.Command{
 			cmd.Web(),
 		},

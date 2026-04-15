@@ -1,8 +1,8 @@
-### Project Context: Bruin Web
+### Project Context: Renart
 
 ## Overview
 
-Bruin Web is the local-first browser UI for the Bruin CLI. It is not a standalone SaaS app and it is not backed by a Node.js server. The frontend is a static React application embedded into the Go Bruin binary and served by the Go HTTP server.
+Renart is the local-first browser UI for the Bruin CLI. It is not a standalone SaaS app and it is not backed by a Node.js server. The frontend is a static React application embedded into the Go Bruin binary and served by the Go HTTP server.
 
 The app is centered around an interactive lineage canvas, a resizable editor pane, live workspace updates from the filesystem, and direct manipulation of Bruin pipelines and assets.
 
@@ -225,4 +225,4 @@ Relevant files:
 
 ## Summary
 
-Bruin Web is currently a Vite-built, TanStack Router-based, SSE-driven React app embedded into the Go Bruin server. It is a visual pipeline editor first, not a form-over-CRUD dashboard. Any change should respect the filesystem-first model, Go-backed APIs, real-time SSE sync, and the established canvas/editor/results workflow.
+Renart is currently a Vite-built, TanStack Router-based, SSE-driven React app embedded into the Go Bruin server. It is a visual pipeline editor first, not a form-over-CRUD dashboard. Any change should respect the filesystem-first model, Go-backed APIs, real-time SSE sync, and the established canvas/editor/results workflow.

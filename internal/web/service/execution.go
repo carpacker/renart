@@ -1008,7 +1008,7 @@ func (s *ExecutionService) buildReadOnlyConfigFile(info *DuckDBExecutionInfo) (s
 	}
 	cfg.Environments[envName] = env
 
-	tempFile, err := os.CreateTemp("", "bruin-web-readonly-*.yml")
+	tempFile, err := os.CreateTemp("", "renart-readonly-*.yml")
 	if err != nil {
 		return "", nil, err
 	}

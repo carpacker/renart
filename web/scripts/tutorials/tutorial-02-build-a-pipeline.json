@@ -1,6 +1,6 @@
 {
   "id": "tutorial-02-build-a-pipeline",
-  "title": "Build A Tiny Pipeline In Bruin Web",
+  "title": "Build A Tiny Pipeline In Renart",
   "voice": "alloy",
   "tts": {
     "temperature": 0.7,
@@ -11,7 +11,7 @@
     "durationMs": 2800,
     "paddingMs": 700,
     "subtitle": "Create a pipeline from scratch, write the SQL, and watch the graph connect itself",
-    "text": "Hi I'm Lukas and I created a nice data visualization tool on top of bruin. For now it's called bruin web. You can use it as a notebook tool or as a visual pipeline builder that still allows for version controlling your pipeline definitions."
+    "text": "Hi I'm Lukas and I created a nice data visualization tool on top of bruin. It's called Renart. You can use it as a notebook tool or as a visual pipeline builder that still allows for version controlling your pipeline definitions."
   },
   "viewport": {
     "width": 1440,
@@ -77,7 +77,7 @@
     },
     {
       "id": "create-join-asset",
-      "text": "Now for the interesting part. I'll add one more asset that joins those two inputs together, and Bruin Web should wire the graph automatically once the dependencies are in place.",
+      "text": "Now for the interesting part. I'll add one more asset that joins those two inputs together, and Renart should wire the graph automatically once the dependencies are in place.",
       "action": {
         "type": "createAssetOnCanvas",
         "assetName": "demo_shop.customer_orders",

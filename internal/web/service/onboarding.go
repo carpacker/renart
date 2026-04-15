@@ -104,7 +104,7 @@ func NewOnboardingService(workspaceRoot, configPath string, executor BruinComman
 		workspaceRoot: workspaceRoot,
 		executor:      executor,
 		configPath:    configPath,
-		statePath:     filepath.Join(workspaceRoot, ".bruin-web-onboarding.json"),
+		statePath:     filepath.Join(workspaceRoot, ".renart-onboarding.json"),
 	}
 }
 

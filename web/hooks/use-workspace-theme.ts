@@ -6,7 +6,7 @@ export function useWorkspaceTheme() {
   const [theme, setTheme] = useState<"light" | "dark">("light");
 
   useEffect(() => {
-    const stored = window.localStorage.getItem("bruin-web-theme");
+    const stored = window.localStorage.getItem("renart-theme");
     const resolved =
       stored === "dark" || stored === "light"
         ? stored
@@ -19,7 +19,7 @@ export function useWorkspaceTheme() {
   useEffect(() => {
     const root = document.documentElement;
     root.classList.toggle("dark", theme === "dark");
-    window.localStorage.setItem("bruin-web-theme", theme);
+    window.localStorage.setItem("renart-theme", theme);
   }, [theme]);
 
   const monacoTheme = useMemo(

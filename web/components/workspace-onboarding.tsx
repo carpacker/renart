@@ -98,7 +98,7 @@ export function WorkspaceOnboarding({
       <div className="mx-auto flex w-full max-w-5xl flex-1 flex-col px-6 py-8">
         <div className="mb-8 flex items-start justify-between gap-4">
           <div>
-            <div className="text-sm font-medium text-muted-foreground">Welcome to Bruin Web</div>
+            <div className="text-sm font-medium text-muted-foreground">Welcome to Renart</div>
             <h1 className="mt-1 text-3xl font-semibold tracking-tight">
               Set up your first connection and import assets
             </h1>

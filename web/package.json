@@ -5,8 +5,9 @@
   "scripts": {
     "dev": "vite",
     "generate:api-types": "node ./scripts/generate-api-types.mjs",
+    "generate:icons": "node ./scripts/generate-icons.mjs",
     "typecheck": "corepack pnpm run generate:api-types && tsc --noEmit",
-    "build": "corepack pnpm run typecheck && vite build",
+    "build": "corepack pnpm run generate:icons && corepack pnpm run typecheck && vite build",
     "preview": "vite preview",
     "lint": "eslint .",
     "test:e2e": "playwright test",

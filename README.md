@@ -1,12 +1,12 @@
 # Renart
 
-Standalone extraction target for the Bruin Web backend and React frontend.
+Standalone extraction target for the Renart backend and React frontend.
 
 This directory is intended to become its own repository.
 
 Current shape:
 
-- Go web server code copied from Bruin Web-specific sources
+- Go web server code copied from Renart-specific sources
 - React frontend copied from `web/`
 - Core Bruin functionality expected to come from the published Go module `github.com/bruin-data/bruin`
 

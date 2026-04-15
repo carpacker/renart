@@ -131,7 +131,7 @@ func (h *OnboardingAPI) HandleUpdateOnboardingState(w http.ResponseWriter, r *ht
 	}
 
 	if h.Publisher != nil {
-		h.Publisher.ConfigChanged(r.Context(), ".bruin-web-onboarding.json", "config.updated")
+		h.Publisher.ConfigChanged(r.Context(), ".renart-onboarding.json", "config.updated")
 	}
 
 	webapi.WriteJSON(w, http.StatusOK, map[string]any{"status": "ok"})

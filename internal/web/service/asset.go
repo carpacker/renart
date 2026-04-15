@@ -62,7 +62,7 @@ type AssetService struct {
 	patchTimers map[string]*time.Timer
 }
 
-const bruinWebInferredUpstreamsMetaKey = "bruin_web_inferred_upstreams"
+const renartInferredUpstreamsMetaKey = "renart_inferred_upstreams"
 
 func NewAssetService(deps AssetDependencies) *AssetService {
 	return &AssetService{deps: deps, patchTimers: make(map[string]*time.Timer)}
@@ -531,7 +531,7 @@ func reconcileSQLAssetDependencies(ctx context.Context, asset *pipeline.Asset, p
 		return nil
 	}
 
-	tracked := parseBruinWebInferredUpstreams(asset.Meta)
+	tracked := parseRenartInferredUpstreams(asset.Meta)
 	manualAssetUpstreams := make([]pipeline.Upstream, 0)
 	nonAssetUpstreams := make([]pipeline.Upstream, 0)
 	manualNames := make(map[string]struct{})
@@ -583,7 +583,7 @@ func reconcileSQLAssetDependencies(ctx context.Context, asset *pipeline.Asset, p
 	}
 
 	asset.Upstreams = nextUpstreams
-	setBruinWebInferredUpstreams(&asset.Meta, nextInferred)
+	setRenartInferredUpstreams(&asset.Meta, nextInferred)
 
 	if err := asset.Persist(afero.NewOsFs(), parsedPipeline); err != nil {
 		return fmt.Errorf("failed to persist asset '%s': %w", asset.Name, err)
@@ -711,7 +711,7 @@ func applyManualAssetUpstreams(asset *pipeline.Asset, parsedPipeline *pipeline.P
 		return
 	}
 
-	tracked := parseBruinWebInferredUpstreams(asset.Meta)
+	tracked := parseRenartInferredUpstreams(asset.Meta)
 	preservedNonAsset := make([]pipeline.Upstream, 0)
 	preservedTracked := make([]pipeline.Upstream, 0)
 	manualNames := make(map[string]struct{})
@@ -761,16 +761,16 @@ func applyManualAssetUpstreams(asset *pipeline.Asset, parsedPipeline *pipeline.P
 	for _, upstream := range preservedTracked {
 		nextTracked = append(nextTracked, upstream.Value)
 	}
-	setBruinWebInferredUpstreams(&asset.Meta, nextTracked)
+	setRenartInferredUpstreams(&asset.Meta, nextTracked)
 }
 
-func parseBruinWebInferredUpstreams(meta map[string]string) map[string]string {
+func parseRenartInferredUpstreams(meta map[string]string) map[string]string {
 	result := make(map[string]string)
 	if meta == nil {
 		return result
 	}
 
-	for _, raw := range strings.Split(meta[bruinWebInferredUpstreamsMetaKey], ",") {
+	for _, raw := range strings.Split(meta[renartInferredUpstreamsMetaKey], ",") {
 		name := strings.TrimSpace(raw)
 		if name == "" {
 			continue
@@ -795,7 +795,7 @@ func getAssetByNameCaseInsensitiveLocal(parsedPipeline *pipeline.Pipeline, name 
 	return nil
 }
 
-func setBruinWebInferredUpstreams(meta *pipeline.EmptyStringMap, upstreams []string) {
+func setRenartInferredUpstreams(meta *pipeline.EmptyStringMap, upstreams []string) {
 	unique := make([]string, 0, len(upstreams))
 	seen := make(map[string]struct{}, len(upstreams))
 	for _, upstream := range upstreams {
@@ -815,7 +815,7 @@ func setBruinWebInferredUpstreams(meta *pipeline.EmptyStringMap, upstreams []str
 		if *meta == nil {
 			return
 		}
-		delete(*meta, bruinWebInferredUpstreamsMetaKey)
+		delete(*meta, renartInferredUpstreamsMetaKey)
 		if len(*meta) == 0 {
 			*meta = nil
 		}
@@ -829,7 +829,7 @@ func setBruinWebInferredUpstreams(meta *pipeline.EmptyStringMap, upstreams []str
 	if *meta == nil {
 		*meta = pipeline.EmptyStringMap{}
 	}
-	(*meta)[bruinWebInferredUpstreamsMetaKey] = strings.Join(unique, ",")
+	(*meta)[renartInferredUpstreamsMetaKey] = strings.Join(unique, ",")
 }
 
 func normalizeDependencyName(value string) string {

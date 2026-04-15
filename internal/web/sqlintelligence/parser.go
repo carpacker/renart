@@ -73,7 +73,7 @@ type parseContextResponse struct {
 }
 
 func ParseContextWithSchema(query, dialect string, schema Schema) (*ParseContext, error) {
-	tmpDir := filepath.Join(os.TempDir(), "bruin-web-sqlintelligence")
+	tmpDir := filepath.Join(os.TempDir(), "renart-sqlintelligence")
 
 	ep, err := python.NewEmbeddedPythonWithTmpDir(tmpDir+"-python", false)
 	if err != nil {

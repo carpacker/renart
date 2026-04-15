@@ -1,6 +1,6 @@
-# Bruin Web
+# Renart
 
-Small guide for running and using the Bruin Web UI locally.
+Small guide for running and using the Renart UI locally.
 
 ## Prerequisites
 
@@ -20,7 +20,7 @@ pnpm build
 cd ..
 ```
 
-2. Start the Bruin Web server:
+2. Start the Renart UI via the Bruin CLI command:
 
 ```bash
 ./bruin web --port 3000 --host 127.0.0.1

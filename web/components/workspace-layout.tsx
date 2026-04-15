@@ -134,14 +134,14 @@ export function WorkspaceLayout() {
         ?.name ?? null;
 
     if (!selectedPipeline) {
-      return "Workspace · Bruin Web";
+      return "Workspace · Renart";
     }
 
     if (!selectedAssetName) {
-      return `${selectedPipeline} · Bruin Web`;
+      return `${selectedPipeline} · Renart`;
     }
 
-    return `${selectedAssetName} · ${selectedPipeline} · Bruin Web`;
+    return `${selectedAssetName} · ${selectedPipeline} · Renart`;
   }, [currentView, pipeline, selectedAsset]);
 
   useEffect(() => {

@@ -93,7 +93,7 @@ async function openCustomersEditor(page: import("@playwright/test").Page) {
   const isMobile = test.info().project.name.includes("mobile");
   if (isMobile) {
     await page.goto(`${page.url().split("?")[0]}?pipeline=YW5hbHl0aWNz&asset=YW5hbHl0aWNzL2Fzc2V0cy9jdXN0b21lcnMuc3Fs`);
-    await expect(page).toHaveTitle("analytics.customers · analytics · Bruin Web");
+    await expect(page).toHaveTitle("analytics.customers · analytics · Renart");
     const editorDialog = page.getByRole("dialog", { name: "Asset Editor" });
     if (!(await editorDialog.isVisible().catch(() => false))) {
       const editButton = page.getByRole("button", { name: "Edit asset" });

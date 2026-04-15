@@ -142,7 +142,7 @@ export const liveTest = base.extend<{
 
     const fixtureRoot = resolve(webDir, "tests", "fixtures", fixtureName);
     mkdirSync(e2eWorkspaceRoot, { recursive: true });
-    const workspaceDir = mkdtempSync(join(e2eWorkspaceRoot, "bruin-web-e2e-"));
+    const workspaceDir = mkdtempSync(join(e2eWorkspaceRoot, "renart-e2e-"));
     cpSync(fixtureRoot, workspaceDir, { recursive: true });
     mkdirSync(join(workspaceDir, ".git"));
     mkdirSync(join(workspaceDir, "duckdb-files"));
@@ -185,7 +185,7 @@ export async function createLivePostgres() {
   mkdirSync(e2eWorkspaceRoot, { recursive: true });
   const releasePostgresLock = await acquireFileLock(postgresLockPath);
   const hostPort = await getAvailablePort();
-  const containerName = `bruin-web-e2e-pg-${randomUUID().slice(0, 8)}`;
+  const containerName = `renart-e2e-pg-${randomUUID().slice(0, 8)}`;
   const database = "bruin";
   const user = "postgres";
   const password = "postgres";
@@ -265,7 +265,7 @@ function waitForServer(baseURL: string) {
         }
 
         if (Date.now() > deadline) {
-          reject(new Error(`Timed out waiting for Bruin Web at ${baseURL}`));
+          reject(new Error(`Timed out waiting for Renart at ${baseURL}`));
           return;
         }
 
@@ -274,7 +274,7 @@ function waitForServer(baseURL: string) {
 
       request.on("error", () => {
         if (Date.now() > deadline) {
-          reject(new Error(`Timed out waiting for Bruin Web at ${baseURL}`));
+          reject(new Error(`Timed out waiting for Renart at ${baseURL}`));
           return;
         }
 
