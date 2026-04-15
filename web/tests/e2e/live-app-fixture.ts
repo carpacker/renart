@@ -29,7 +29,10 @@ export type LivePostgres = {
 
 const webDir = resolve(__dirname, "..", "..");
 const repoRoot = resolve(webDir, "..");
-const binaryPath = process.env.BRUIN_E2E_BINARY || resolve(repoRoot, "bruin");
+const defaultBinaryPath = existsSync(resolve(repoRoot, "renart"))
+  ? resolve(repoRoot, "renart")
+  : resolve(repoRoot, "bruin");
+const binaryPath = process.env.BRUIN_E2E_BINARY || defaultBinaryPath;
 const host = process.env.BRUIN_E2E_HOST || "127.0.0.1";
 const staticDir = resolve(webDir, "dist");
 const e2eWorkspaceRoot = resolve(repoRoot, ".playwright-live-workspaces");
@@ -136,7 +139,7 @@ export const liveTest = base.extend<{
   liveApp: async ({ fixtureName, livePostgres }, use) => {
     if (!existsSync(binaryPath)) {
       throw new Error(
-        `Bruin binary not found at ${binaryPath}. Build it first or set BRUIN_E2E_BINARY.`
+        `Renart binary not found at ${binaryPath}. Build it first or set BRUIN_E2E_BINARY.`
       );
     }
 
