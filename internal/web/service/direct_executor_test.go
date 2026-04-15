@@ -206,6 +206,62 @@ select 1 as customer_id
 	assert.Contains(t, string(formattedBytes), "select 1 as customer_id")
 }
 
+func TestHybridBruinExecutorQueryAssetRejectsWriteQueries(t *testing.T) {
+	t.Parallel()
+
+	workspaceRoot := t.TempDir()
+	pipelineRoot := filepath.Join(workspaceRoot, "analytics")
+	assetsRoot := filepath.Join(pipelineRoot, "assets")
+	require.NoError(t, os.MkdirAll(filepath.Join(workspaceRoot, ".git"), 0o755))
+	require.NoError(t, os.MkdirAll(assetsRoot, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(workspaceRoot, ".bruin.yml"), []byte(strings.TrimSpace(`
+default_environment: default
+environments:
+  default:
+    connections:
+      duckdb:
+        - name: duckdb-default
+          path: duckdb-files/local.db
+`)+"\n"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(pipelineRoot, "pipeline.yml"), []byte("name: analytics\n"), 0o644))
+	assetPath := filepath.Join(assetsRoot, "customers.sql")
+	require.NoError(t, os.WriteFile(assetPath, []byte(strings.TrimSpace(`
+/* @bruin
+name: analytics.customers
+type: duckdb.sql
+materialization:
+  type: view
+@bruin */
+
+delete from analytics.customers
+`)+"\n"), 0o644))
+
+	executor := NewHybridBruinExecutor(
+		workspaceRoot,
+		"bruin",
+		nil,
+		func() *pipeline.Builder {
+			osFS := afero.NewOsFs()
+			return pipeline.NewBuilder(
+				BuilderConfig,
+				pipeline.CreateTaskFromYamlDefinition(osFS),
+				pipeline.CreateTaskFromFileComments(osFS),
+				osFS,
+				DefaultGlossaryReader,
+			)
+		},
+	)
+
+	output, err := executor.QueryAsset(context.Background(), QueryAssetRequest{
+		AssetPath: assetPath,
+		Limit:     "200",
+		Output:    "json",
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), inspectReadOnlyErrorMessage)
+	assert.JSONEq(t, `{"error":"`+inspectReadOnlyErrorMessage+`"}`, string(output))
+}
+
 func TestHybridBruinExecutorRunAssetFallsBackToCLIForCheckedAssets(t *testing.T) {
 	t.Parallel()
 

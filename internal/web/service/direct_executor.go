@@ -304,6 +304,17 @@ func (e *HybridBruinExecutor) QueryAsset(ctx context.Context, req QueryAssetRequ
 		dialect = ""
 	}
 
+	if dialect != "" {
+		isSelect, selectErr := isReadOnlySelectQuery(queryStr, pp.Asset.Type)
+		if selectErr == nil && !isSelect {
+			output, marshalErr := json.Marshal(map[string]any{"error": inspectReadOnlyErrorMessage})
+			if marshalErr != nil {
+				return nil, fmt.Errorf(inspectReadOnlyErrorMessage)
+			}
+			return output, fmt.Errorf(inspectReadOnlyErrorMessage)
+		}
+	}
+
 	var parser *sqlparser.SQLParser
 	needsParser := strings.TrimSpace(req.Limit) != "" || pp.Config.SelectedEnvironment.SchemaPrefix != ""
 	if needsParser {

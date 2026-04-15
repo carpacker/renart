@@ -3,10 +3,14 @@ package service
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/bruin-data/bruin/pkg/pipeline"
+	"github.com/spf13/afero"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -228,4 +232,88 @@ func TestExecutionServiceMaterializePipelineStreamPreservesFailureOutput(t *test
 	assert.Empty(t, result.ChangedAssetIDs)
 	assert.Nil(t, result.MaterializedAt)
 	assert.False(t, recorded)
+}
+
+func TestExecutionServiceInspectAssetRejectsWriteQueries(t *testing.T) {
+	t.Parallel()
+
+	workspaceRoot := t.TempDir()
+	pipelineRoot := filepath.Join(workspaceRoot, "analytics")
+	assetsRoot := filepath.Join(pipelineRoot, "assets")
+	require.NoError(t, os.MkdirAll(filepath.Join(workspaceRoot, ".git"), 0o755))
+	require.NoError(t, os.MkdirAll(assetsRoot, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(workspaceRoot, ".bruin.yml"), []byte(strings.TrimSpace(`
+default_environment: default
+environments:
+  default:
+    connections:
+      duckdb:
+        - name: duckdb-default
+          path: duckdb-files/local.db
+`)+"\n"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(pipelineRoot, "pipeline.yml"), []byte("name: analytics\n"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(assetsRoot, "customers.sql"), []byte(strings.TrimSpace(`
+/* @bruin
+name: analytics.customers
+type: duckdb.sql
+materialization:
+  type: view
+@bruin */
+
+copy (select * from analytics.customers) to 'danger.parquet'
+`)+"\n"), 0o644))
+
+	buildPipeline := func(ctx context.Context, pipelinePath string) (*pipeline.Pipeline, error) {
+		osFS := afero.NewOsFs()
+		builder := pipeline.NewBuilder(
+			BuilderConfig,
+			pipeline.CreateTaskFromYamlDefinition(osFS),
+			pipeline.CreateTaskFromFileComments(osFS),
+			osFS,
+			DefaultGlossaryReader,
+		)
+		return builder.CreatePipelineFromPath(ctx, pipelinePath, pipeline.WithMutate())
+	}
+
+	resolveAssetByID := func(ctx context.Context, assetID string) (string, *pipeline.Pipeline, *pipeline.Asset, error) {
+		relAssetPath, err := DecodeID(assetID)
+		if err != nil {
+			return "", nil, nil, err
+		}
+		assetPath, err := SafeJoin(workspaceRoot, relAssetPath)
+		if err != nil {
+			return "", nil, nil, err
+		}
+		parsedPipeline, err := buildPipeline(ctx, filepath.Dir(filepath.Dir(assetPath)))
+		if err != nil {
+			return "", nil, nil, err
+		}
+		for _, asset := range parsedPipeline.Assets {
+			currentPath := asset.ExecutableFile.Path
+			if currentPath == "" {
+				currentPath = asset.DefinitionFile.Path
+			}
+			relCurrent, relErr := filepath.Rel(workspaceRoot, currentPath)
+			if relErr == nil && filepath.ToSlash(relCurrent) == filepath.ToSlash(relAssetPath) {
+				return filepath.ToSlash(relAssetPath), parsedPipeline, asset, nil
+			}
+		}
+		return "", nil, nil, ErrAssetNotFound
+	}
+
+	svc := NewExecutionService(ExecutionDependencies{
+		WorkspaceRoot:    workspaceRoot,
+		ConfigPath:       filepath.Join(workspaceRoot, ".bruin.yml"),
+		Executor:         &stubExecutionExecutor{},
+		ResolveAssetByID: resolveAssetByID,
+	})
+
+	result := svc.InspectAsset(context.Background(), EncodeID("analytics/assets/customers.sql"), "200", "")
+
+	assert.Equal(t, "error", result.Status)
+	assert.Equal(t, 400, result.HTTPStatus)
+	assert.Equal(t, inspectReadOnlyErrorMessage, result.Error)
+	assert.Equal(t, inspectReadOnlyErrorMessage, result.RawOutput)
+	assert.Empty(t, result.Rows)
+	assert.Empty(t, result.Columns)
 }

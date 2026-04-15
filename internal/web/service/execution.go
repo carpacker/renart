@@ -13,6 +13,7 @@ import (
 
 	"github.com/bruin-data/bruin/pkg/config"
 	"github.com/bruin-data/bruin/pkg/pipeline"
+	"github.com/bruin-data/bruin/pkg/sqlparser"
 	"github.com/spf13/afero"
 	"gopkg.in/yaml.v3"
 )
@@ -105,6 +106,8 @@ type ExecutionService struct {
 	deps ExecutionDependencies
 }
 
+const inspectReadOnlyErrorMessage = "Inspect only supports read-only single SELECT queries. Materialize the asset to run write, delete, copy, or multi-statement SQL."
+
 func NewExecutionService(deps ExecutionDependencies) *ExecutionService {
 	return &ExecutionService{deps: deps}
 }
@@ -113,6 +116,20 @@ func (s *ExecutionService) InspectAsset(ctx context.Context, assetID, limit, env
 	relAssetPath, err := DecodeID(assetID)
 	if err != nil {
 		return InspectResult{Status: "error", Error: "invalid asset id", HTTPStatus: 400}
+	}
+
+	if guardErr := s.ensureAssetInspectable(ctx, assetID, environment); guardErr != nil {
+		return InspectResult{
+			Status:     "error",
+			Columns:    []string{},
+			Rows:       []map[string]any{},
+			RawOutput:  guardErr.Error(),
+			Command:    []string{"query", "--asset", relAssetPath, "--output", "json", "--limit", limit},
+			Error:      guardErr.Error(),
+			Attempts:   0,
+			Retryable:  false,
+			HTTPStatus: 400,
+		}
 	}
 
 	duckDBInfo, infoErr := s.findDuckDBExecutionInfoByAsset(ctx, assetID)
@@ -192,6 +209,68 @@ func (s *ExecutionService) InspectAsset(ctx context.Context, assetID, limit, env
 		Attempts:   attempts,
 		HTTPStatus: 200,
 	}
+}
+
+func (s *ExecutionService) ensureAssetInspectable(ctx context.Context, assetID, environment string) error {
+	if s.deps.ResolveAssetByID == nil {
+		return nil
+	}
+
+	_, parsedPipeline, asset, err := s.deps.ResolveAssetByID(ctx, assetID)
+	if err != nil {
+		return err
+	}
+	if asset == nil || parsedPipeline == nil || !asset.IsSQLAsset() {
+		return nil
+	}
+
+	_, _, queryStr, err := getDirectConnectionAndQuery(ctx, &directPipelineInfo{Pipeline: parsedPipeline, Asset: asset, Config: loadExecutionConfigOrEmpty(s.deps.ConfigPath)}, environment)
+	if err != nil {
+		return nil
+	}
+
+	ok, err := isReadOnlySelectQuery(queryStr, asset.Type)
+	if err != nil {
+		return nil
+	}
+	if ok {
+		return nil
+	}
+
+	return fmt.Errorf(inspectReadOnlyErrorMessage)
+}
+
+func loadExecutionConfigOrEmpty(configPath string) *config.Config {
+	if strings.TrimSpace(configPath) == "" {
+		return &config.Config{}
+	}
+
+	cfg, err := config.LoadOrCreate(afero.NewOsFs(), configPath)
+	if err != nil || cfg == nil {
+		return &config.Config{}
+	}
+	if cfg.SelectedEnvironmentName == "" {
+		cfg.SelectedEnvironmentName = cfg.DefaultEnvironmentName
+	}
+	if cfg.SelectedEnvironment == nil && cfg.SelectedEnvironmentName != "" {
+		_ = cfg.SelectEnvironment(cfg.SelectedEnvironmentName)
+	}
+	return cfg
+}
+
+func isReadOnlySelectQuery(queryStr string, assetType pipeline.AssetType) (bool, error) {
+	dialect, err := sqlparser.AssetTypeToDialect(assetType)
+	if err != nil {
+		return false, err
+	}
+
+	parser, err := sqlparser.NewSQLParser(false)
+	if err != nil {
+		return false, err
+	}
+	defer parser.Close()
+
+	return parser.IsSingleSelectQuery(queryStr, dialect)
 }
 
 func extractInspectRawOutput(output []byte) string {

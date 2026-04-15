@@ -25,14 +25,22 @@ export function extractInspectErrorText(rawOutput: string | undefined): string {
 }
 
 export function normalizeInspectErrorMessage(value: string | undefined): string {
-  const trimmed = (value ?? "").trim();
-  if (!trimmed) {
-    return "";
-  }
+	const trimmed = (value ?? "").trim();
+	if (!trimmed) {
+		return "";
+	}
 
-  if (!trimmed.startsWith("Error:")) {
-    return trimmed;
-  }
+	if (
+		trimmed.includes(
+			"Inspect only supports read-only single SELECT queries"
+		)
+	) {
+		return trimmed;
+	}
+
+	if (!trimmed.startsWith("Error:")) {
+		return trimmed;
+	}
 
   const remainder = trimmed.slice("Error:".length).trim();
   if (!remainder.startsWith("{")) {
