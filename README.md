@@ -16,6 +16,29 @@ Current entrypoint:
 go run . web
 ```
 
+Documentation site scaffold:
+
+```bash
+cd docs
+corepack pnpm install
+corepack pnpm dev
+```
+
+Installer script:
+
+```bash
+curl -LsSf getrenart.com/install.sh | sh
+```
+
+The checked-in installer is generated from:
+
+```bash
+PATH="$HOME/go/bin:$PATH" binst init --source=goreleaser --file=.goreleaser.yaml -o .config/binstaller.yml
+PATH="$HOME/go/bin:$PATH" binst gen --config=.config/binstaller.yml -o install.sh
+```
+
+The docs are intended to be short user-facing product documentation for people using Renart in Bruin projects, not just implementation notes for developers working on Renart itself.
+
 CLI-backed operations are executed through the real `bruin` binary by default.
 
 Direct execution is preferred when Renart can reuse shared Bruin Go package logic while preserving compatibility with the real CLI. When parity is uncertain, Renart explicitly falls back to the real `bruin` binary instead of guessing.

@@ -1,0 +1,24 @@
+---
+title: Inspect and Materialize
+description: Preview data safely and run side-effecting work intentionally.
+---
+
+## Inspect
+
+Inspect is the safe preview path.
+
+For plain SQL assets, Renart only allows read-only single `SELECT` queries during inspect.
+
+That means inspect will reject statements like:
+
+- `DELETE`
+- `UPDATE`
+- `INSERT`
+- `COPY (...) TO ...`
+- multi-statement SQL
+
+If a query writes, deletes, exports, or otherwise causes side effects, use materialization instead.
+
+## Materialize
+
+Materialization is the path for actually running assets and pipelines when side effects are intended.
