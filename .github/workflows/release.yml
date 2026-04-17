@@ -37,6 +37,7 @@ jobs:
         run: |
           cd web
           corepack pnpm install --frozen-lockfile
+          corepack pnpm exec playwright install --with-deps chromium
           corepack pnpm build
 
       - name: Run GoReleaser

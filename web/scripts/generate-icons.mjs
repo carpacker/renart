@@ -9,6 +9,31 @@ const sourceSvg = resolve(iconDir, "icon.svg");
 const svgMarkup = readFileSync(sourceSvg, "utf8");
 const svgDataUrl = `data:image/svg+xml;base64,${Buffer.from(svgMarkup).toString("base64")}`;
 
+function resolveBrowserLaunchOptions() {
+  const explicitPath = process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH?.trim();
+  if (explicitPath) {
+    return { headless: true, executablePath: explicitPath };
+  }
+
+  const candidates = ["chromium", "chromium-browser", "google-chrome", "google-chrome-stable"];
+  for (const candidate of candidates) {
+    try {
+      const resolved = execFileSync("bash", ["-lc", `command -v ${candidate}`], {
+        cwd: webRoot,
+        stdio: ["ignore", "pipe", "ignore"],
+        encoding: "utf8",
+      }).trim();
+      if (resolved) {
+        return { headless: true, executablePath: resolved };
+      }
+    } catch {
+      // ignore and continue
+    }
+  }
+
+  return { headless: true };
+}
+
 mkdirSync(iconDir, { recursive: true });
 
 const rasterTargets = [
@@ -23,7 +48,7 @@ const rasterTargets = [
   [16, "icon-16.png"],
 ];
 
-const browser = await chromium.launch({ headless: true });
+const browser = await chromium.launch(resolveBrowserLaunchOptions());
 
 try {
   for (const [size, fileName] of rasterTargets) {
