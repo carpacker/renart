@@ -31,14 +31,9 @@ if ! command -v cargo >/dev/null 2>&1; then
 	exit 1
 fi
 
-modcache="$(go env GOPATH)/pkg/mod"
-module_dir="${modcache}/github.com/bruin-data/bruin@v0.11.528"
-
-if [ ! -d "${module_dir}" ]; then
-	go mod download github.com/bruin-data/bruin@v0.11.528
-fi
-
-rustffi_dir="${module_dir}/pkg/sqlparser/rustffi"
+script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+repo_root="$(cd -- "${script_dir}/.." && pwd)"
+rustffi_dir="${repo_root}/vendor/github.com/bruin-data/bruin/pkg/sqlparser/rustffi"
 
 if [ ! -f "${rustffi_dir}/Cargo.toml" ]; then
 	echo "unable to locate Bruin rustffi sources at ${rustffi_dir}" >&2
