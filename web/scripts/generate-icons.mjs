@@ -1,4 +1,4 @@
-import { mkdirSync, readFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { execFileSync } from "node:child_process";
 import { chromium } from "@playwright/test";
@@ -82,11 +82,40 @@ try {
   await browser.close();
 }
 
-execFileSync(
-  "convert",
-  [resolve(iconDir, "icon-32.png"), resolve(iconDir, "icon-16.png"), resolve(iconDir, "favicon.ico")],
-  {
-    cwd: webRoot,
-    stdio: "inherit",
+function createIcoFromPngs(pngBuffers) {
+  const count = pngBuffers.length;
+  const header = Buffer.alloc(6 + count * 16);
+  header.writeUInt16LE(0, 0);
+  header.writeUInt16LE(1, 2);
+  header.writeUInt16LE(count, 4);
+
+  let offset = header.length;
+  const chunks = [header];
+
+  for (let i = 0; i < pngBuffers.length; i += 1) {
+    const png = pngBuffers[i];
+    const width = png.readUInt32BE(16);
+    const height = png.readUInt32BE(20);
+    const entryOffset = 6 + i * 16;
+
+    header.writeUInt8(width >= 256 ? 0 : width, entryOffset + 0);
+    header.writeUInt8(height >= 256 ? 0 : height, entryOffset + 1);
+    header.writeUInt8(0, entryOffset + 2);
+    header.writeUInt8(0, entryOffset + 3);
+    header.writeUInt16LE(1, entryOffset + 4);
+    header.writeUInt16LE(32, entryOffset + 6);
+    header.writeUInt32LE(png.length, entryOffset + 8);
+    header.writeUInt32LE(offset, entryOffset + 12);
+
+    chunks.push(png);
+    offset += png.length;
   }
-);
+
+  return Buffer.concat(chunks);
+}
+
+const favicon = createIcoFromPngs([
+  readFileSync(resolve(iconDir, "icon-16.png")),
+  readFileSync(resolve(iconDir, "icon-32.png")),
+]);
+writeFileSync(resolve(iconDir, "favicon.ico"), favicon);

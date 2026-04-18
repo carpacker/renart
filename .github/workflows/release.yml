@@ -3,6 +3,8 @@ name: goreleaser
 on:
   pull_request:
   push:
+    branches:
+      - "release/**"
     tags:
       - "*"
 
@@ -41,6 +43,7 @@ jobs:
           corepack pnpm build
 
       - name: Run GoReleaser
+        if: startsWith(github.ref, 'refs/tags/')
         uses: goreleaser/goreleaser-action@v7
         with:
           distribution: goreleaser
@@ -48,3 +51,11 @@ jobs:
           args: release --clean
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Verify release build config
+        if: ${{ !startsWith(github.ref, 'refs/tags/') }}
+        uses: goreleaser/goreleaser-action@v7
+        with:
+          distribution: goreleaser
+          version: "~> v2"
+          args: release --snapshot --skip=publish --clean
