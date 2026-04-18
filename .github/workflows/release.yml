@@ -48,6 +48,18 @@ jobs:
           corepack pnpm exec playwright install --with-deps chromium
           corepack pnpm build
 
+      - name: Restore generated icon assets
+        run: |
+          git restore web/public/icons/apple-touch-icon.png \
+            web/public/icons/favicon.ico \
+            web/public/icons/icon-128.png \
+            web/public/icons/icon-192.png \
+            web/public/icons/icon-256.png \
+            web/public/icons/icon-32.png \
+            web/public/icons/icon-48.png \
+            web/public/icons/icon-512.png \
+            web/public/icons/icon-64.png
+
       - name: Build Rust sqlparser static library
         run: |
           chmod +x ./scripts/build_rustsqlparser_release_lib.sh
