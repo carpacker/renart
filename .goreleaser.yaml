@@ -6,7 +6,6 @@ builds:
     main: ./
     flags:
       - -trimpath
-      - -mod=vendor
       - -tags=bruin_no_duckdb
     ldflags:
       - -s -w -X main.version={{ .Version }}

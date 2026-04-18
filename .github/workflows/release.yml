@@ -25,6 +25,9 @@ jobs:
         with:
           go-version: stable
 
+      - name: Make Go module cache writable
+        run: echo "GOFLAGS=-modcacherw" >> "$GITHUB_ENV"
+
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@stable
 

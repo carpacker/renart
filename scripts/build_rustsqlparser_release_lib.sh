@@ -31,14 +31,21 @@ if ! command -v cargo >/dev/null 2>&1; then
 	exit 1
 fi
 
-script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
-repo_root="$(cd -- "${script_dir}/.." && pwd)"
-rustffi_dir="${repo_root}/vendor/github.com/bruin-data/bruin/pkg/sqlparser/rustffi"
+module_dir="$(go list -m -f '{{.Dir}}' github.com/bruin-data/bruin 2>/dev/null || true)"
+
+if [ -z "${module_dir}" ] || [ ! -d "${module_dir}" ]; then
+	go mod download github.com/bruin-data/bruin@v0.11.528
+	module_dir="$(go list -m -f '{{.Dir}}' github.com/bruin-data/bruin 2>/dev/null || true)"
+fi
+
+rustffi_dir="${module_dir}/pkg/sqlparser/rustffi"
 
 if [ ! -f "${rustffi_dir}/Cargo.toml" ]; then
 	echo "unable to locate Bruin rustffi sources at ${rustffi_dir}" >&2
 	exit 1
 fi
+
+chmod -R u+w "${rustffi_dir}" || true
 
 build_root="$(mktemp -d)"
 full_cleanup() {
