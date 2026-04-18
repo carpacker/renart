@@ -20,10 +20,26 @@ builds:
       - goos: windows
         goarch: arm64
 
+  - id: renart-duckdb-linux-amd64
+    binary: renart
+    main: ./
+    env:
+      - CGO_ENABLED=1
+    flags:
+      - -trimpath
+      - -tags=no_duckdb_arrow
+    ldflags:
+      - -s -w -X main.version={{ .Version }}
+    goos:
+      - linux
+    goarch:
+      - amd64
+
 archives:
   - id: renart-archives
     builds:
       - renart
+      - renart-duckdb-linux-amd64
     name_template: >-
       {{ .ProjectName }}_
       {{- title .Os }}_
