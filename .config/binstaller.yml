@@ -10,6 +10,10 @@ asset:
       arch: amd64
     arch: x86_64
   - when:
+      env:
+        RENART_INSTALL_DUCKDB: "1"
+    template: ${NAME}_${OS}_${ARCH}_duckdb${EXT}
+  - when:
       os: windows
     ext: .zip
   naming_convention:

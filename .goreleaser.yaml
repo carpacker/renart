@@ -39,11 +39,22 @@ archives:
   - id: renart-archives
     builds:
       - renart
+    name_template: >-
+      {{ .ProjectName }}_
+      {{- title .Os }}_
+      {{- if eq .Arch "amd64" }}x86_64{{ else }}{{ .Arch }}{{ end }}
+    format_overrides:
+      - goos: windows
+        format: zip
+
+  - id: renart-duckdb-archives
+    builds:
       - renart-duckdb-linux-amd64
     name_template: >-
       {{ .ProjectName }}_
       {{- title .Os }}_
       {{- if eq .Arch "amd64" }}x86_64{{ else }}{{ .Arch }}{{ end }}
+      _duckdb
     format_overrides:
       - goos: windows
         format: zip
