@@ -31,10 +31,13 @@ export async function materializeAssetStream(
   handlers: {
     onChunk?: (chunk: string) => void;
     onDone?: (payload: MaterializeStreamPayload) => void;
-  }
+  },
+  options?: { environment?: string }
 ) {
   return streamMaterialization(
-    `/api/assets/${assetId}/materialize/stream`,
+    `/api/assets/${assetId}/materialize/stream${buildQueryString({
+      environment: options?.environment,
+    })}`,
     handlers,
     "Asset materialization stream ended unexpectedly."
   );

@@ -18,6 +18,7 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
+  OnboardingImportSummary,
   OnboardingSessionState,
   WorkspaceConfigResponse,
 } from "@/lib/types";
@@ -97,14 +98,17 @@ export function WorkspaceOnboarding({
     <div data-testid="workspace-onboarding" className="flex min-h-screen flex-col bg-background">
       <div className="mx-auto flex w-full max-w-5xl flex-1 flex-col px-6 py-8">
         <div className="mb-8 flex items-start justify-between gap-4">
-          <div>
-            <div className="text-sm font-medium text-muted-foreground">Welcome to Renart</div>
+          <div className="flex items-start gap-4">
+            <img src="/icons/icon.svg" alt="Renart" className="mt-0.5 size-12 shrink-0" />
+            <div>
+              <div className="text-sm font-medium text-muted-foreground">Welcome to Renart</div>
             <h1 className="mt-1 text-3xl font-semibold tracking-tight">
               Set up your first connection and import assets
             </h1>
             <p className="mt-2 max-w-2xl text-sm text-muted-foreground">
               Pick a warehouse, validate access, choose the database or file you want, and import the tables into a pipeline.
             </p>
+            </div>
           </div>
           <Button variant="ghost" onClick={() => void handleSkip()}>
             Skip for now
@@ -305,12 +309,8 @@ export function WorkspaceOnboarding({
                 Your connection was saved and the selected tables were imported successfully.
               </CardDescription>
             </CardHeader>
-            <CardContent className="px-6 py-5">
-              {importResult?.output ? (
-                <pre className="max-h-64 overflow-auto rounded-md border bg-muted/30 p-3 text-xs">
-                  {importResult.output}
-                </pre>
-              ) : null}
+            <CardContent className="space-y-5 px-6 py-5">
+              {renderOnboardingSuccess(importResult)}
             </CardContent>
             <CardFooter className="flex justify-between gap-2 border-t px-6 py-4">
               <Button variant="outline" onClick={() => void navigateToStep("import")}>Back</Button>
@@ -321,6 +321,107 @@ export function WorkspaceOnboarding({
       </div>
     </div>
   );
+}
+
+function renderOnboardingSuccess(importResult: { output?: string } | null) {
+	const summary = parseOnboardingImportSummary(importResult?.output);
+	if (!summary) {
+		return importResult?.output ? (
+			<pre className="max-h-64 overflow-auto rounded-md border bg-muted/30 p-3 text-xs">
+				{importResult.output}
+			</pre>
+		) : null;
+	}
+
+	return (
+		<>
+			<div className="grid gap-3 md:grid-cols-3">
+				<SuccessMetric label="Imported tables" value={summary.importedTables ?? 0} testId="onboarding-imported-tables" />
+				<SuccessMetric label="Assets created" value={summary.successfulAssets ?? 0} testId="onboarding-successful-assets" />
+				<SuccessMetric label="Merged tables" value={summary.mergedTables ?? 0} testId="onboarding-merged-tables" />
+			</div>
+			<div className="rounded-xl border bg-muted/20 p-4 text-sm" data-testid="onboarding-import-summary">
+				<div className="font-medium">Import complete</div>
+				<div className="mt-2 space-y-1 text-muted-foreground">
+					{summary.database ? <div>Database: <span className="text-foreground">{summary.database}</span></div> : null}
+					{summary.pipelinePath ? <div>Pipeline path: <span className="text-foreground">{summary.pipelinePath}</span></div> : null}
+					<div>Processed assets: <span className="text-foreground">{summary.processedAssets ?? 0}</span></div>
+					<div>Failed assets: <span className="text-foreground">{summary.failedAssets ?? 0}</span></div>
+				</div>
+			</div>
+			{summary.warnings.length > 0 ? (
+				<div className="rounded-md border border-amber-300/50 bg-amber-50 px-3 py-2 text-sm text-amber-900">
+					{summary.warnings.join("\n")}
+				</div>
+			) : null}
+		</>
+	);
+}
+
+function SuccessMetric({ label, value, testId }: { label: string; value: number; testId: string }) {
+	return (
+		<div className="rounded-xl border bg-muted/20 p-4" data-testid={testId}>
+			<div className="text-xs uppercase tracking-wide text-muted-foreground">{label}</div>
+			<div className="mt-1 text-2xl font-semibold">{value}</div>
+		</div>
+	);
+}
+
+function parseOnboardingImportSummary(output?: string): OnboardingImportSummary | null {
+	const trimmed = output?.trim();
+	if (!trimmed) {
+		return null;
+	}
+
+	const lines = trimmed
+		.split("\n")
+		.map((line) => line.trim())
+		.filter(Boolean);
+
+	const summary: OnboardingImportSummary = { warnings: [] };
+	let found = false;
+
+	for (const line of lines) {
+		try {
+			const parsed = JSON.parse(line) as Record<string, unknown>;
+			if (typeof parsed.database === "string") {
+				summary.database = parsed.database;
+				found = true;
+			}
+			if (typeof parsed.imported_tables === "number") {
+				summary.importedTables = parsed.imported_tables;
+				found = true;
+			}
+			if (typeof parsed.merged_tables === "number") {
+				summary.mergedTables = parsed.merged_tables;
+				found = true;
+			}
+			if (typeof parsed.pipeline_path === "string") {
+				summary.pipelinePath = parsed.pipeline_path;
+				found = true;
+			}
+			if (typeof parsed.processed_assets === "number") {
+				summary.processedAssets = parsed.processed_assets;
+				found = true;
+			}
+			if (typeof parsed.successful_assets === "number") {
+				summary.successfulAssets = parsed.successful_assets;
+				found = true;
+			}
+			if (typeof parsed.failed_assets === "number") {
+				summary.failedAssets = parsed.failed_assets;
+				found = true;
+			}
+			if (Array.isArray(parsed.warnings)) {
+				summary.warnings = parsed.warnings.filter((item): item is string => typeof item === "string");
+				found = true;
+			}
+		} catch {
+			return null;
+		}
+	}
+
+	return found ? summary : null;
 }
 
 function StepPill({ active, children }: { active: boolean; children: string }) {

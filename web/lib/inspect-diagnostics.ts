@@ -35,6 +35,10 @@ export function buildInspectDiagnosticMarker(
     return [];
   }
 
+  if (parsed.lineNumber < 1 || parsed.lineNumber > model.getLineCount()) {
+    return [];
+  }
+
   const actualLineText = model.getLineContent(parsed.lineNumber);
   if (!actualLineText) {
     return [];

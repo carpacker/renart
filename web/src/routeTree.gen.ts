@@ -17,8 +17,17 @@ import { Route as OnboardingImportRouteImport } from './routes/onboarding.import
 import { Route as OnboardingConnectionRouteImport } from './routes/onboarding.connection'
 import { Route as WorkspaceSettingsRouteRouteImport } from './routes/_workspace/settings/route'
 import { Route as WorkspaceSettingsIndexRouteImport } from './routes/_workspace/settings/index'
-import { Route as WorkspaceSettingsEnvironmentsRouteImport } from './routes/_workspace/settings/environments'
-import { Route as WorkspaceSettingsConnectionsRouteImport } from './routes/_workspace/settings/connections'
+import { Route as WorkspaceSettingsEnvironmentsRouteRouteImport } from './routes/_workspace/settings/environments/route'
+import { Route as WorkspaceSettingsEnvironmentsIndexRouteImport } from './routes/_workspace/settings/environments/index'
+import { Route as WorkspaceSettingsEnvironmentsNewRouteImport } from './routes/_workspace/settings/environments/new'
+import { Route as WorkspaceSettingsEnvironmentsEnvironmentIdRouteRouteImport } from './routes/_workspace/settings/environments/$environmentId/route'
+import { Route as WorkspaceSettingsEnvironmentsEnvironmentIdIndexRouteImport } from './routes/_workspace/settings/environments/$environmentId/index'
+import { Route as WorkspaceSettingsEnvironmentsEnvironmentIdEditRouteImport } from './routes/_workspace/settings/environments/$environmentId/edit'
+import { Route as WorkspaceSettingsEnvironmentsEnvironmentIdConnectionsRouteRouteImport } from './routes/_workspace/settings/environments/$environmentId/connections/route'
+import { Route as WorkspaceSettingsEnvironmentsEnvironmentIdConnectionsNewRouteImport } from './routes/_workspace/settings/environments/$environmentId/connections/new'
+import { Route as WorkspaceSettingsEnvironmentsEnvironmentIdConnectionsConnectionIdRouteRouteImport } from './routes/_workspace/settings/environments/$environmentId/connections/$connectionId/route'
+import { Route as WorkspaceSettingsEnvironmentsEnvironmentIdConnectionsConnectionIdIndexRouteImport } from './routes/_workspace/settings/environments/$environmentId/connections/$connectionId/index'
+import { Route as WorkspaceSettingsEnvironmentsEnvironmentIdConnectionsConnectionIdEditRouteImport } from './routes/_workspace/settings/environments/$environmentId/connections/$connectionId/edit'
 
 const OnboardingRoute = OnboardingRouteImport.update({
   id: '/onboarding',
@@ -59,18 +68,82 @@ const WorkspaceSettingsIndexRoute = WorkspaceSettingsIndexRouteImport.update({
   path: '/',
   getParentRoute: () => WorkspaceSettingsRouteRoute,
 } as any)
-const WorkspaceSettingsEnvironmentsRoute =
-  WorkspaceSettingsEnvironmentsRouteImport.update({
+const WorkspaceSettingsEnvironmentsRouteRoute =
+  WorkspaceSettingsEnvironmentsRouteRouteImport.update({
     id: '/environments',
     path: '/environments',
     getParentRoute: () => WorkspaceSettingsRouteRoute,
   } as any)
-const WorkspaceSettingsConnectionsRoute =
-  WorkspaceSettingsConnectionsRouteImport.update({
+const WorkspaceSettingsEnvironmentsIndexRoute =
+  WorkspaceSettingsEnvironmentsIndexRouteImport.update({
+    id: '/',
+    path: '/',
+    getParentRoute: () => WorkspaceSettingsEnvironmentsRouteRoute,
+  } as any)
+const WorkspaceSettingsEnvironmentsNewRoute =
+  WorkspaceSettingsEnvironmentsNewRouteImport.update({
+    id: '/new',
+    path: '/new',
+    getParentRoute: () => WorkspaceSettingsEnvironmentsRouteRoute,
+  } as any)
+const WorkspaceSettingsEnvironmentsEnvironmentIdRouteRoute =
+  WorkspaceSettingsEnvironmentsEnvironmentIdRouteRouteImport.update({
+    id: '/$environmentId',
+    path: '/$environmentId',
+    getParentRoute: () => WorkspaceSettingsEnvironmentsRouteRoute,
+  } as any)
+const WorkspaceSettingsEnvironmentsEnvironmentIdIndexRoute =
+  WorkspaceSettingsEnvironmentsEnvironmentIdIndexRouteImport.update({
+    id: '/',
+    path: '/',
+    getParentRoute: () => WorkspaceSettingsEnvironmentsEnvironmentIdRouteRoute,
+  } as any)
+const WorkspaceSettingsEnvironmentsEnvironmentIdEditRoute =
+  WorkspaceSettingsEnvironmentsEnvironmentIdEditRouteImport.update({
+    id: '/edit',
+    path: '/edit',
+    getParentRoute: () => WorkspaceSettingsEnvironmentsEnvironmentIdRouteRoute,
+  } as any)
+const WorkspaceSettingsEnvironmentsEnvironmentIdConnectionsRouteRoute =
+  WorkspaceSettingsEnvironmentsEnvironmentIdConnectionsRouteRouteImport.update({
     id: '/connections',
     path: '/connections',
-    getParentRoute: () => WorkspaceSettingsRouteRoute,
+    getParentRoute: () => WorkspaceSettingsEnvironmentsEnvironmentIdRouteRoute,
   } as any)
+const WorkspaceSettingsEnvironmentsEnvironmentIdConnectionsNewRoute =
+  WorkspaceSettingsEnvironmentsEnvironmentIdConnectionsNewRouteImport.update({
+    id: '/new',
+    path: '/new',
+    getParentRoute: () =>
+      WorkspaceSettingsEnvironmentsEnvironmentIdConnectionsRouteRoute,
+  } as any)
+const WorkspaceSettingsEnvironmentsEnvironmentIdConnectionsConnectionIdRouteRoute =
+  WorkspaceSettingsEnvironmentsEnvironmentIdConnectionsConnectionIdRouteRouteImport.update(
+    {
+      id: '/$connectionId',
+      path: '/$connectionId',
+      getParentRoute: () =>
+        WorkspaceSettingsEnvironmentsEnvironmentIdConnectionsRouteRoute,
+    } as any,
+  )
+const WorkspaceSettingsEnvironmentsEnvironmentIdConnectionsConnectionIdIndexRoute =
+  WorkspaceSettingsEnvironmentsEnvironmentIdConnectionsConnectionIdIndexRouteImport.update(
+    {
+      id: '/',
+      path: '/',
+      getParentRoute: () =>
+        WorkspaceSettingsEnvironmentsEnvironmentIdConnectionsConnectionIdRouteRoute,
+    } as any,
+  )
+const WorkspaceSettingsEnvironmentsEnvironmentIdConnectionsConnectionIdEditRoute =
+  WorkspaceSettingsEnvironmentsEnvironmentIdConnectionsConnectionIdEditRouteImport.update(
+    {
+      id: '/edit',
+      path: '/edit',
+      getParentRoute: () =>
+        WorkspaceSettingsEnvironmentsEnvironmentIdConnectionsConnectionIdRouteRoute,
+    } as any,
+  )
 
 export interface FileRoutesByFullPath {
   '/': typeof WorkspaceIndexRoute
@@ -79,9 +152,18 @@ export interface FileRoutesByFullPath {
   '/onboarding/connection': typeof OnboardingConnectionRoute
   '/onboarding/import': typeof OnboardingImportRoute
   '/onboarding/success': typeof OnboardingSuccessRoute
-  '/settings/connections': typeof WorkspaceSettingsConnectionsRoute
-  '/settings/environments': typeof WorkspaceSettingsEnvironmentsRoute
+  '/settings/environments': typeof WorkspaceSettingsEnvironmentsRouteRouteWithChildren
   '/settings/': typeof WorkspaceSettingsIndexRoute
+  '/settings/environments/$environmentId': typeof WorkspaceSettingsEnvironmentsEnvironmentIdRouteRouteWithChildren
+  '/settings/environments/new': typeof WorkspaceSettingsEnvironmentsNewRoute
+  '/settings/environments/': typeof WorkspaceSettingsEnvironmentsIndexRoute
+  '/settings/environments/$environmentId/connections': typeof WorkspaceSettingsEnvironmentsEnvironmentIdConnectionsRouteRouteWithChildren
+  '/settings/environments/$environmentId/edit': typeof WorkspaceSettingsEnvironmentsEnvironmentIdEditRoute
+  '/settings/environments/$environmentId/': typeof WorkspaceSettingsEnvironmentsEnvironmentIdIndexRoute
+  '/settings/environments/$environmentId/connections/$connectionId': typeof WorkspaceSettingsEnvironmentsEnvironmentIdConnectionsConnectionIdRouteRouteWithChildren
+  '/settings/environments/$environmentId/connections/new': typeof WorkspaceSettingsEnvironmentsEnvironmentIdConnectionsNewRoute
+  '/settings/environments/$environmentId/connections/$connectionId/edit': typeof WorkspaceSettingsEnvironmentsEnvironmentIdConnectionsConnectionIdEditRoute
+  '/settings/environments/$environmentId/connections/$connectionId/': typeof WorkspaceSettingsEnvironmentsEnvironmentIdConnectionsConnectionIdIndexRoute
 }
 export interface FileRoutesByTo {
   '/onboarding': typeof OnboardingRouteWithChildren
@@ -89,9 +171,15 @@ export interface FileRoutesByTo {
   '/onboarding/import': typeof OnboardingImportRoute
   '/onboarding/success': typeof OnboardingSuccessRoute
   '/': typeof WorkspaceIndexRoute
-  '/settings/connections': typeof WorkspaceSettingsConnectionsRoute
-  '/settings/environments': typeof WorkspaceSettingsEnvironmentsRoute
   '/settings': typeof WorkspaceSettingsIndexRoute
+  '/settings/environments/new': typeof WorkspaceSettingsEnvironmentsNewRoute
+  '/settings/environments': typeof WorkspaceSettingsEnvironmentsIndexRoute
+  '/settings/environments/$environmentId/connections': typeof WorkspaceSettingsEnvironmentsEnvironmentIdConnectionsRouteRouteWithChildren
+  '/settings/environments/$environmentId/edit': typeof WorkspaceSettingsEnvironmentsEnvironmentIdEditRoute
+  '/settings/environments/$environmentId': typeof WorkspaceSettingsEnvironmentsEnvironmentIdIndexRoute
+  '/settings/environments/$environmentId/connections/new': typeof WorkspaceSettingsEnvironmentsEnvironmentIdConnectionsNewRoute
+  '/settings/environments/$environmentId/connections/$connectionId/edit': typeof WorkspaceSettingsEnvironmentsEnvironmentIdConnectionsConnectionIdEditRoute
+  '/settings/environments/$environmentId/connections/$connectionId': typeof WorkspaceSettingsEnvironmentsEnvironmentIdConnectionsConnectionIdIndexRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
@@ -102,9 +190,18 @@ export interface FileRoutesById {
   '/onboarding/import': typeof OnboardingImportRoute
   '/onboarding/success': typeof OnboardingSuccessRoute
   '/_workspace/': typeof WorkspaceIndexRoute
-  '/_workspace/settings/connections': typeof WorkspaceSettingsConnectionsRoute
-  '/_workspace/settings/environments': typeof WorkspaceSettingsEnvironmentsRoute
+  '/_workspace/settings/environments': typeof WorkspaceSettingsEnvironmentsRouteRouteWithChildren
   '/_workspace/settings/': typeof WorkspaceSettingsIndexRoute
+  '/_workspace/settings/environments/$environmentId': typeof WorkspaceSettingsEnvironmentsEnvironmentIdRouteRouteWithChildren
+  '/_workspace/settings/environments/new': typeof WorkspaceSettingsEnvironmentsNewRoute
+  '/_workspace/settings/environments/': typeof WorkspaceSettingsEnvironmentsIndexRoute
+  '/_workspace/settings/environments/$environmentId/connections': typeof WorkspaceSettingsEnvironmentsEnvironmentIdConnectionsRouteRouteWithChildren
+  '/_workspace/settings/environments/$environmentId/edit': typeof WorkspaceSettingsEnvironmentsEnvironmentIdEditRoute
+  '/_workspace/settings/environments/$environmentId/': typeof WorkspaceSettingsEnvironmentsEnvironmentIdIndexRoute
+  '/_workspace/settings/environments/$environmentId/connections/$connectionId': typeof WorkspaceSettingsEnvironmentsEnvironmentIdConnectionsConnectionIdRouteRouteWithChildren
+  '/_workspace/settings/environments/$environmentId/connections/new': typeof WorkspaceSettingsEnvironmentsEnvironmentIdConnectionsNewRoute
+  '/_workspace/settings/environments/$environmentId/connections/$connectionId/edit': typeof WorkspaceSettingsEnvironmentsEnvironmentIdConnectionsConnectionIdEditRoute
+  '/_workspace/settings/environments/$environmentId/connections/$connectionId/': typeof WorkspaceSettingsEnvironmentsEnvironmentIdConnectionsConnectionIdIndexRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
@@ -115,9 +212,18 @@ export interface FileRouteTypes {
     | '/onboarding/connection'
     | '/onboarding/import'
     | '/onboarding/success'
-    | '/settings/connections'
     | '/settings/environments'
     | '/settings/'
+    | '/settings/environments/$environmentId'
+    | '/settings/environments/new'
+    | '/settings/environments/'
+    | '/settings/environments/$environmentId/connections'
+    | '/settings/environments/$environmentId/edit'
+    | '/settings/environments/$environmentId/'
+    | '/settings/environments/$environmentId/connections/$connectionId'
+    | '/settings/environments/$environmentId/connections/new'
+    | '/settings/environments/$environmentId/connections/$connectionId/edit'
+    | '/settings/environments/$environmentId/connections/$connectionId/'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/onboarding'
@@ -125,9 +231,15 @@ export interface FileRouteTypes {
     | '/onboarding/import'
     | '/onboarding/success'
     | '/'
-    | '/settings/connections'
-    | '/settings/environments'
     | '/settings'
+    | '/settings/environments/new'
+    | '/settings/environments'
+    | '/settings/environments/$environmentId/connections'
+    | '/settings/environments/$environmentId/edit'
+    | '/settings/environments/$environmentId'
+    | '/settings/environments/$environmentId/connections/new'
+    | '/settings/environments/$environmentId/connections/$connectionId/edit'
+    | '/settings/environments/$environmentId/connections/$connectionId'
   id:
     | '__root__'
     | '/_workspace'
@@ -137,9 +249,18 @@ export interface FileRouteTypes {
     | '/onboarding/import'
     | '/onboarding/success'
     | '/_workspace/'
-    | '/_workspace/settings/connections'
     | '/_workspace/settings/environments'
     | '/_workspace/settings/'
+    | '/_workspace/settings/environments/$environmentId'
+    | '/_workspace/settings/environments/new'
+    | '/_workspace/settings/environments/'
+    | '/_workspace/settings/environments/$environmentId/connections'
+    | '/_workspace/settings/environments/$environmentId/edit'
+    | '/_workspace/settings/environments/$environmentId/'
+    | '/_workspace/settings/environments/$environmentId/connections/$connectionId'
+    | '/_workspace/settings/environments/$environmentId/connections/new'
+    | '/_workspace/settings/environments/$environmentId/connections/$connectionId/edit'
+    | '/_workspace/settings/environments/$environmentId/connections/$connectionId/'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
@@ -209,29 +330,169 @@ declare module '@tanstack/react-router' {
       id: '/_workspace/settings/environments'
       path: '/environments'
       fullPath: '/settings/environments'
-      preLoaderRoute: typeof WorkspaceSettingsEnvironmentsRouteImport
+      preLoaderRoute: typeof WorkspaceSettingsEnvironmentsRouteRouteImport
       parentRoute: typeof WorkspaceSettingsRouteRoute
     }
-    '/_workspace/settings/connections': {
-      id: '/_workspace/settings/connections'
+    '/_workspace/settings/environments/': {
+      id: '/_workspace/settings/environments/'
+      path: '/'
+      fullPath: '/settings/environments/'
+      preLoaderRoute: typeof WorkspaceSettingsEnvironmentsIndexRouteImport
+      parentRoute: typeof WorkspaceSettingsEnvironmentsRouteRoute
+    }
+    '/_workspace/settings/environments/new': {
+      id: '/_workspace/settings/environments/new'
+      path: '/new'
+      fullPath: '/settings/environments/new'
+      preLoaderRoute: typeof WorkspaceSettingsEnvironmentsNewRouteImport
+      parentRoute: typeof WorkspaceSettingsEnvironmentsRouteRoute
+    }
+    '/_workspace/settings/environments/$environmentId': {
+      id: '/_workspace/settings/environments/$environmentId'
+      path: '/$environmentId'
+      fullPath: '/settings/environments/$environmentId'
+      preLoaderRoute: typeof WorkspaceSettingsEnvironmentsEnvironmentIdRouteRouteImport
+      parentRoute: typeof WorkspaceSettingsEnvironmentsRouteRoute
+    }
+    '/_workspace/settings/environments/$environmentId/': {
+      id: '/_workspace/settings/environments/$environmentId/'
+      path: '/'
+      fullPath: '/settings/environments/$environmentId/'
+      preLoaderRoute: typeof WorkspaceSettingsEnvironmentsEnvironmentIdIndexRouteImport
+      parentRoute: typeof WorkspaceSettingsEnvironmentsEnvironmentIdRouteRoute
+    }
+    '/_workspace/settings/environments/$environmentId/edit': {
+      id: '/_workspace/settings/environments/$environmentId/edit'
+      path: '/edit'
+      fullPath: '/settings/environments/$environmentId/edit'
+      preLoaderRoute: typeof WorkspaceSettingsEnvironmentsEnvironmentIdEditRouteImport
+      parentRoute: typeof WorkspaceSettingsEnvironmentsEnvironmentIdRouteRoute
+    }
+    '/_workspace/settings/environments/$environmentId/connections': {
+      id: '/_workspace/settings/environments/$environmentId/connections'
       path: '/connections'
-      fullPath: '/settings/connections'
-      preLoaderRoute: typeof WorkspaceSettingsConnectionsRouteImport
-      parentRoute: typeof WorkspaceSettingsRouteRoute
+      fullPath: '/settings/environments/$environmentId/connections'
+      preLoaderRoute: typeof WorkspaceSettingsEnvironmentsEnvironmentIdConnectionsRouteRouteImport
+      parentRoute: typeof WorkspaceSettingsEnvironmentsEnvironmentIdRouteRoute
+    }
+    '/_workspace/settings/environments/$environmentId/connections/new': {
+      id: '/_workspace/settings/environments/$environmentId/connections/new'
+      path: '/new'
+      fullPath: '/settings/environments/$environmentId/connections/new'
+      preLoaderRoute: typeof WorkspaceSettingsEnvironmentsEnvironmentIdConnectionsNewRouteImport
+      parentRoute: typeof WorkspaceSettingsEnvironmentsEnvironmentIdConnectionsRouteRoute
+    }
+    '/_workspace/settings/environments/$environmentId/connections/$connectionId': {
+      id: '/_workspace/settings/environments/$environmentId/connections/$connectionId'
+      path: '/$connectionId'
+      fullPath: '/settings/environments/$environmentId/connections/$connectionId'
+      preLoaderRoute: typeof WorkspaceSettingsEnvironmentsEnvironmentIdConnectionsConnectionIdRouteRouteImport
+      parentRoute: typeof WorkspaceSettingsEnvironmentsEnvironmentIdConnectionsRouteRoute
+    }
+    '/_workspace/settings/environments/$environmentId/connections/$connectionId/': {
+      id: '/_workspace/settings/environments/$environmentId/connections/$connectionId/'
+      path: '/'
+      fullPath: '/settings/environments/$environmentId/connections/$connectionId/'
+      preLoaderRoute: typeof WorkspaceSettingsEnvironmentsEnvironmentIdConnectionsConnectionIdIndexRouteImport
+      parentRoute: typeof WorkspaceSettingsEnvironmentsEnvironmentIdConnectionsConnectionIdRouteRoute
+    }
+    '/_workspace/settings/environments/$environmentId/connections/$connectionId/edit': {
+      id: '/_workspace/settings/environments/$environmentId/connections/$connectionId/edit'
+      path: '/edit'
+      fullPath: '/settings/environments/$environmentId/connections/$connectionId/edit'
+      preLoaderRoute: typeof WorkspaceSettingsEnvironmentsEnvironmentIdConnectionsConnectionIdEditRouteImport
+      parentRoute: typeof WorkspaceSettingsEnvironmentsEnvironmentIdConnectionsConnectionIdRouteRoute
     }
   }
 }
 
+interface WorkspaceSettingsEnvironmentsEnvironmentIdConnectionsConnectionIdRouteRouteChildren {
+  WorkspaceSettingsEnvironmentsEnvironmentIdConnectionsConnectionIdEditRoute: typeof WorkspaceSettingsEnvironmentsEnvironmentIdConnectionsConnectionIdEditRoute
+  WorkspaceSettingsEnvironmentsEnvironmentIdConnectionsConnectionIdIndexRoute: typeof WorkspaceSettingsEnvironmentsEnvironmentIdConnectionsConnectionIdIndexRoute
+}
+
+const WorkspaceSettingsEnvironmentsEnvironmentIdConnectionsConnectionIdRouteRouteChildren: WorkspaceSettingsEnvironmentsEnvironmentIdConnectionsConnectionIdRouteRouteChildren =
+  {
+    WorkspaceSettingsEnvironmentsEnvironmentIdConnectionsConnectionIdEditRoute:
+      WorkspaceSettingsEnvironmentsEnvironmentIdConnectionsConnectionIdEditRoute,
+    WorkspaceSettingsEnvironmentsEnvironmentIdConnectionsConnectionIdIndexRoute:
+      WorkspaceSettingsEnvironmentsEnvironmentIdConnectionsConnectionIdIndexRoute,
+  }
+
+const WorkspaceSettingsEnvironmentsEnvironmentIdConnectionsConnectionIdRouteRouteWithChildren =
+  WorkspaceSettingsEnvironmentsEnvironmentIdConnectionsConnectionIdRouteRoute._addFileChildren(
+    WorkspaceSettingsEnvironmentsEnvironmentIdConnectionsConnectionIdRouteRouteChildren,
+  )
+
+interface WorkspaceSettingsEnvironmentsEnvironmentIdConnectionsRouteRouteChildren {
+  WorkspaceSettingsEnvironmentsEnvironmentIdConnectionsConnectionIdRouteRoute: typeof WorkspaceSettingsEnvironmentsEnvironmentIdConnectionsConnectionIdRouteRouteWithChildren
+  WorkspaceSettingsEnvironmentsEnvironmentIdConnectionsNewRoute: typeof WorkspaceSettingsEnvironmentsEnvironmentIdConnectionsNewRoute
+}
+
+const WorkspaceSettingsEnvironmentsEnvironmentIdConnectionsRouteRouteChildren: WorkspaceSettingsEnvironmentsEnvironmentIdConnectionsRouteRouteChildren =
+  {
+    WorkspaceSettingsEnvironmentsEnvironmentIdConnectionsConnectionIdRouteRoute:
+      WorkspaceSettingsEnvironmentsEnvironmentIdConnectionsConnectionIdRouteRouteWithChildren,
+    WorkspaceSettingsEnvironmentsEnvironmentIdConnectionsNewRoute:
+      WorkspaceSettingsEnvironmentsEnvironmentIdConnectionsNewRoute,
+  }
+
+const WorkspaceSettingsEnvironmentsEnvironmentIdConnectionsRouteRouteWithChildren =
+  WorkspaceSettingsEnvironmentsEnvironmentIdConnectionsRouteRoute._addFileChildren(
+    WorkspaceSettingsEnvironmentsEnvironmentIdConnectionsRouteRouteChildren,
+  )
+
+interface WorkspaceSettingsEnvironmentsEnvironmentIdRouteRouteChildren {
+  WorkspaceSettingsEnvironmentsEnvironmentIdConnectionsRouteRoute: typeof WorkspaceSettingsEnvironmentsEnvironmentIdConnectionsRouteRouteWithChildren
+  WorkspaceSettingsEnvironmentsEnvironmentIdEditRoute: typeof WorkspaceSettingsEnvironmentsEnvironmentIdEditRoute
+  WorkspaceSettingsEnvironmentsEnvironmentIdIndexRoute: typeof WorkspaceSettingsEnvironmentsEnvironmentIdIndexRoute
+}
+
+const WorkspaceSettingsEnvironmentsEnvironmentIdRouteRouteChildren: WorkspaceSettingsEnvironmentsEnvironmentIdRouteRouteChildren =
+  {
+    WorkspaceSettingsEnvironmentsEnvironmentIdConnectionsRouteRoute:
+      WorkspaceSettingsEnvironmentsEnvironmentIdConnectionsRouteRouteWithChildren,
+    WorkspaceSettingsEnvironmentsEnvironmentIdEditRoute:
+      WorkspaceSettingsEnvironmentsEnvironmentIdEditRoute,
+    WorkspaceSettingsEnvironmentsEnvironmentIdIndexRoute:
+      WorkspaceSettingsEnvironmentsEnvironmentIdIndexRoute,
+  }
+
+const WorkspaceSettingsEnvironmentsEnvironmentIdRouteRouteWithChildren =
+  WorkspaceSettingsEnvironmentsEnvironmentIdRouteRoute._addFileChildren(
+    WorkspaceSettingsEnvironmentsEnvironmentIdRouteRouteChildren,
+  )
+
+interface WorkspaceSettingsEnvironmentsRouteRouteChildren {
+  WorkspaceSettingsEnvironmentsEnvironmentIdRouteRoute: typeof WorkspaceSettingsEnvironmentsEnvironmentIdRouteRouteWithChildren
+  WorkspaceSettingsEnvironmentsNewRoute: typeof WorkspaceSettingsEnvironmentsNewRoute
+  WorkspaceSettingsEnvironmentsIndexRoute: typeof WorkspaceSettingsEnvironmentsIndexRoute
+}
+
+const WorkspaceSettingsEnvironmentsRouteRouteChildren: WorkspaceSettingsEnvironmentsRouteRouteChildren =
+  {
+    WorkspaceSettingsEnvironmentsEnvironmentIdRouteRoute:
+      WorkspaceSettingsEnvironmentsEnvironmentIdRouteRouteWithChildren,
+    WorkspaceSettingsEnvironmentsNewRoute:
+      WorkspaceSettingsEnvironmentsNewRoute,
+    WorkspaceSettingsEnvironmentsIndexRoute:
+      WorkspaceSettingsEnvironmentsIndexRoute,
+  }
+
+const WorkspaceSettingsEnvironmentsRouteRouteWithChildren =
+  WorkspaceSettingsEnvironmentsRouteRoute._addFileChildren(
+    WorkspaceSettingsEnvironmentsRouteRouteChildren,
+  )
+
 interface WorkspaceSettingsRouteRouteChildren {
-  WorkspaceSettingsConnectionsRoute: typeof WorkspaceSettingsConnectionsRoute
-  WorkspaceSettingsEnvironmentsRoute: typeof WorkspaceSettingsEnvironmentsRoute
+  WorkspaceSettingsEnvironmentsRouteRoute: typeof WorkspaceSettingsEnvironmentsRouteRouteWithChildren
   WorkspaceSettingsIndexRoute: typeof WorkspaceSettingsIndexRoute
 }
 
 const WorkspaceSettingsRouteRouteChildren: WorkspaceSettingsRouteRouteChildren =
   {
-    WorkspaceSettingsConnectionsRoute: WorkspaceSettingsConnectionsRoute,
-    WorkspaceSettingsEnvironmentsRoute: WorkspaceSettingsEnvironmentsRoute,
+    WorkspaceSettingsEnvironmentsRouteRoute:
+      WorkspaceSettingsEnvironmentsRouteRouteWithChildren,
     WorkspaceSettingsIndexRoute: WorkspaceSettingsIndexRoute,
   }
 

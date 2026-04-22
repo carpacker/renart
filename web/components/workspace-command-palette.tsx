@@ -1,6 +1,6 @@
 "use client";
 
-import { useNavigate } from "@tanstack/react-router";
+import { useNavigate, useRouterState } from "@tanstack/react-router";
 import { useCommandState } from "cmdk";
 import {
   Cable,
@@ -110,6 +110,9 @@ export function WorkspaceCommandPalette({
   currentView,
 }: WorkspaceCommandPaletteProps) {
   const navigate = useNavigate();
+  const routeSearch = useRouterState({
+    select: (state) => state.location.search as { environment?: string },
+  });
   const { normalizedConfigEnvironments } = useWorkspaceSettingsData();
   const [open, setOpen] = useState(false);
   const [search, setSearch] = useState("");
@@ -182,6 +185,7 @@ export function WorkspaceCommandPalette({
             search: {
               pipeline: pipeline.id,
               asset: assets[0]?.id ?? undefined,
+              environment: routeSearch.environment,
             },
           });
           setOpen(false);
@@ -209,6 +213,7 @@ export function WorkspaceCommandPalette({
               search: {
                 pipeline: pipeline.id,
                 asset: asset.id,
+                environment: routeSearch.environment,
               },
             });
             setOpen(false);
@@ -230,16 +235,18 @@ export function WorkspaceCommandPalette({
           environment.schema_prefix,
           ...connections.map((connection) => connection.name)
         ),
-        perform: () => {
-          void navigate({
-            to: "/settings/environments",
-            search: {
-              environment: environment.name,
-              mode: "edit",
-            },
-          });
-          setOpen(false);
-        },
+          perform: () => {
+            void navigate({
+              to: "/settings/environments/$environmentId",
+              params: {
+                environmentId: environment.name,
+              },
+              search: {
+                environment: environment.name,
+              },
+            });
+            setOpen(false);
+          },
       });
 
       for (const connection of connections) {
@@ -256,12 +263,13 @@ export function WorkspaceCommandPalette({
           ),
           perform: () => {
             void navigate({
-              to: "/settings/connections",
+              to: "/settings/environments/$environmentId/connections/$connectionId",
+              params: {
+                environmentId: environment.name,
+                connectionId: connection.name,
+              },
               search: {
                 environment: environment.name,
-                connection: connection.name,
-                connectionType: connection.type,
-                mode: "edit",
               },
             });
             setOpen(false);
@@ -300,7 +308,7 @@ export function WorkspaceCommandPalette({
         items: connectionItems,
       },
     ];
-  }, [navigate, normalizedConfigEnvironments, workspace.pipelines]);
+  }, [navigate, normalizedConfigEnvironments, routeSearch.environment, workspace.pipelines]);
 
   const currentSection = sections.find((section) => section.id === page) ?? null;
 

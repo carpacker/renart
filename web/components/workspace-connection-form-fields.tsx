@@ -1,6 +1,6 @@
 "use client";
 
-import { CheckCircle2, LoaderCircle, Save, Trash2 } from "lucide-react";
+import { CheckCircle2, LoaderCircle } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -27,7 +27,6 @@ type ConnectionFormState = {
 };
 
 export function WorkspaceConnectionFormFields({
-  activeConnectionExists,
   busy,
   canValidate,
   connectionForm,
@@ -36,10 +35,12 @@ export function WorkspaceConnectionFormFields({
   mode,
   selectedConnectionType,
   selectedEnvironment,
+  environmentDisabled = false,
+  showEnvironmentSelector = true,
   validateBusy,
   validateMessage,
   validateTone,
-  onDelete,
+  showActions = true,
   onEnvironmentChange,
   onFieldValueChange,
   onNameChange,
@@ -47,7 +48,6 @@ export function WorkspaceConnectionFormFields({
   onTypeChange,
   onValidate,
 }: {
-  activeConnectionExists: boolean;
   busy: boolean;
   canValidate: boolean;
   connectionForm: ConnectionFormState;
@@ -56,10 +56,12 @@ export function WorkspaceConnectionFormFields({
   mode: ConnectionMode;
   selectedConnectionType: WorkspaceConfigConnectionType | null;
   selectedEnvironment?: string | null;
+  environmentDisabled?: boolean;
+  showEnvironmentSelector?: boolean;
   validateBusy: boolean;
   validateMessage: string | null;
   validateTone: "error" | "success" | null;
-  onDelete: () => void;
+  showActions?: boolean;
   onEnvironmentChange: (value: string) => void;
   onFieldValueChange: (
     fieldName: string,
@@ -71,172 +73,164 @@ export function WorkspaceConnectionFormFields({
   onValidate: () => void;
 }) {
   return (
-    <div className="grid gap-3">
-      <div className="grid gap-1">
-        <Label>Environment</Label>
-        <Select
-          value={connectionForm.environmentName || selectedEnvironment || undefined}
-          onValueChange={onEnvironmentChange}
-        >
-          <SelectTrigger className="w-full">
-            <SelectValue placeholder="Select environment" />
-          </SelectTrigger>
-          <SelectContent>
-            {environments.map((environment) => (
-              <SelectItem key={environment.name} value={environment.name}>
-                {environment.name}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
+    <div className="grid gap-4">
+      {showEnvironmentSelector ? (
+        <div className="grid gap-1.5">
+          <Label>Environment</Label>
+          <Select
+            value={connectionForm.environmentName || selectedEnvironment || undefined}
+            onValueChange={onEnvironmentChange}
+            disabled={environmentDisabled}
+          >
+            <SelectTrigger className="w-full">
+              <SelectValue placeholder="Select environment" />
+            </SelectTrigger>
+            <SelectContent>
+              {environments.map((environment) => (
+                <SelectItem key={environment.name} value={environment.name}>
+                  {environment.name}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+      ) : null}
+
+      <div className="grid gap-4 sm:grid-cols-2">
+        <div className="grid gap-1.5">
+          <Label>Name</Label>
+          <Input
+            value={connectionForm.name}
+            onChange={(event) => onNameChange(event.target.value)}
+            placeholder="postgres-default"
+          />
+        </div>
+        <div className="grid gap-1.5">
+          <Label>Type</Label>
+          <Select value={connectionForm.type || undefined} onValueChange={onTypeChange}>
+            <SelectTrigger className="w-full">
+              <SelectValue placeholder="Select connection type" />
+            </SelectTrigger>
+            <SelectContent>
+              {connectionTypes.map((connectionType) => (
+                <SelectItem key={connectionType.type_name} value={connectionType.type_name}>
+                  {connectionType.type_name}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
       </div>
 
-      <div className="rounded-lg border bg-card/60 p-3 sm:p-4">
-        <div className="mb-3 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-          <div className="font-medium">
-            {mode === "create" ? "Create Connection" : "Edit Connection"}
-          </div>
-          {mode === "edit" && activeConnectionExists ? (
-            <Button
-              size="sm"
-              type="button"
-              variant="destructive"
-              onClick={onDelete}
-              disabled={busy}
-              className="w-full sm:w-auto"
-            >
-              <Trash2 className="mr-1 inline size-3" />
-              Delete
-            </Button>
-          ) : null}
-        </div>
-
-        <div className="grid gap-3">
-          <div className="grid gap-1">
-            <Label>Name</Label>
-            <Input
-              value={connectionForm.name}
-              onChange={(event) => onNameChange(event.target.value)}
-              placeholder="MY_CONNECTION"
-            />
-          </div>
-          <div className="grid gap-1">
-            <Label>Type</Label>
-            <Select value={connectionForm.type || undefined} onValueChange={onTypeChange}>
-              <SelectTrigger className="w-full">
-                <SelectValue placeholder="Select connection type" />
-              </SelectTrigger>
-              <SelectContent>
-                {connectionTypes.map((connectionType) => (
-                  <SelectItem key={connectionType.type_name} value={connectionType.type_name}>
-                    {connectionType.type_name}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
-
+      <div className="grid gap-3">
+        <Label>Configured Values</Label>
+        <div className="overflow-hidden rounded-lg border">
           {selectedConnectionType?.fields.map((field) => {
             const fieldValue = connectionForm.values[field.name];
             if (field.type === "bool") {
               return (
                 <div
                   key={field.name}
-                  className="flex flex-col gap-3 rounded-md border bg-background/70 px-3 py-3 text-sm sm:flex-row sm:items-center sm:justify-between"
+                  className="flex items-center justify-between gap-4 border-t px-4 py-3 first:border-t-0"
                 >
                   <div>
                     <div className="font-medium">{field.name}</div>
                     <div className="text-xs text-muted-foreground">
-                      {field.is_required
-                        ? "Required boolean field"
-                        : "Optional boolean field"}
+                      {field.is_required ? "Required" : "Optional"}
                     </div>
                   </div>
                   <Switch
                     checked={Boolean(fieldValue)}
-                    onCheckedChange={(checked) =>
-                      onFieldValueChange(field.name, checked)
-                    }
+                    onCheckedChange={(checked) => onFieldValueChange(field.name, checked)}
                   />
                 </div>
               );
             }
 
             return (
-              <div key={field.name} className="grid gap-1">
-                <Label>{field.name}</Label>
-                <Input
-                  type={field.type === "int" ? "number" : secretInputType(field.name)}
-                  value={
-                    fieldValue === undefined || fieldValue === null
-                      ? ""
-                      : String(fieldValue)
-                  }
-                  onChange={(event) =>
-                    onFieldValueChange(
-                      field.name,
-                      field.type === "int" ? event.target.value : event.target.value
-                    )
-                  }
-                  placeholder={
-                    field.default_value || (field.is_required ? "Required" : "Optional")
-                  }
-                />
+              <div
+                key={field.name}
+                className="grid border-t first:border-t-0 sm:grid-cols-[160px_minmax(0,1fr)]"
+              >
+                <div
+                  className="bg-muted/30 px-4 py-2 text-xs text-muted-foreground"
+                  style={{ fontFamily: '"Geist Mono", ui-monospace, SFMono-Regular, monospace' }}
+                >
+                  {field.name}
+                </div>
+                <div className="px-4 py-1.5 transition-colors focus-within:bg-emerald-500/10 dark:focus-within:bg-emerald-500/15">
+                  <Input
+                    type={field.type === "int" ? "number" : secretInputType(field.name)}
+                    value={
+                      fieldValue === undefined || fieldValue === null ? "" : String(fieldValue)
+                    }
+                    onChange={(event) =>
+                      onFieldValueChange(
+                        field.name,
+                        field.type === "int" ? event.target.value : event.target.value
+                      )
+                    }
+                    placeholder={
+                      field.default_value || (field.is_required ? "Required" : "Optional")
+                    }
+                    className="h-6 border-0 bg-transparent px-0 text-xs shadow-none focus-visible:ring-0"
+                    style={{ fontFamily: '"Geist Mono", ui-monospace, SFMono-Regular, monospace' }}
+                  />
+                </div>
               </div>
             );
           })}
-
-          {validateMessage ? (
-            <div
-              className={`rounded-md border px-3 py-2 text-sm ${
-                validateTone === "error"
-                  ? "border-destructive/40 bg-destructive/10 text-destructive"
-                  : "border-emerald-500/40 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300"
-              }`}
-            >
-              <div className="font-medium">
-                {validateTone === "error"
-                  ? "Connection validation failed"
-                  : "Connection validation succeeded"}
-              </div>
-              <div className="mt-1 whitespace-pre-wrap text-xs sm:text-sm">
-                {validateMessage}
-              </div>
-            </div>
-          ) : null}
-
-          <div className="flex flex-col gap-2 sm:flex-row">
-            <Button
-              type="button"
-              variant="outline"
-              className="w-full sm:w-auto"
-              onClick={onValidate}
-              disabled={busy || validateBusy || !canValidate}
-            >
-              {validateBusy ? (
-                <LoaderCircle className="mr-1 inline size-3 animate-spin" />
-              ) : (
-                <CheckCircle2 className="mr-1 inline size-3" />
-              )}
-              Validate Connection
-            </Button>
-            <Button
-              className="w-full sm:w-auto"
-              type="button"
-              onClick={onSave}
-              disabled={
-                busy ||
-                !connectionForm.environmentName ||
-                !connectionForm.name.trim() ||
-                !connectionForm.type
-              }
-            >
-              <Save className="mr-1 inline size-3" />
-              {mode === "create" ? "Create Connection" : "Save Connection"}
-            </Button>
-          </div>
         </div>
       </div>
+
+      {validateMessage ? (
+        <div
+          className={`rounded-md border px-3 py-2 text-sm ${
+            validateTone === "error"
+              ? "border-destructive/40 bg-destructive/10 text-destructive"
+              : "border-emerald-500/40 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300"
+          }`}
+        >
+          <div className="font-medium">
+            {validateTone === "error"
+              ? "Connection validation failed"
+              : "Connection validation succeeded"}
+          </div>
+          <div className="mt-1 whitespace-pre-wrap text-xs sm:text-sm">{validateMessage}</div>
+        </div>
+      ) : null}
+
+      {showActions ? (
+        <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-end">
+          <Button
+            type="button"
+            variant="outline"
+            className="w-full sm:w-auto"
+            onClick={onValidate}
+            disabled={busy || validateBusy || !canValidate}
+          >
+            {validateBusy ? (
+              <LoaderCircle className="mr-1 inline size-3 animate-spin" />
+            ) : (
+              <CheckCircle2 className="mr-1 inline size-3" />
+            )}
+            Verify Connection
+          </Button>
+          <Button
+            className="w-full sm:w-auto"
+            type="button"
+            onClick={onSave}
+            disabled={
+              busy ||
+              !connectionForm.environmentName ||
+              !connectionForm.name.trim() ||
+              !connectionForm.type
+            }
+          >
+            {mode === "create" ? "Create Connection" : "Save Changes"}
+          </Button>
+        </div>
+      ) : null}
     </div>
   );
 }

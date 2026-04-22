@@ -25,6 +25,8 @@ export const Route = createFileRoute("/_workspace/")({
     pipeline:
       typeof search.pipeline === "string" ? search.pipeline : undefined,
     asset: typeof search.asset === "string" ? search.asset : undefined,
+    environment:
+      typeof search.environment === "string" ? search.environment : undefined,
   }),
   component: WorkspaceIndexRouteComponent,
 });

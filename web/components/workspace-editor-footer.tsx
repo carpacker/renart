@@ -1,7 +1,5 @@
 "use client";
 
-import { Database } from "lucide-react";
-
 import { AssetSqlDebugPanel } from "@/components/asset-sql-debug-panel";
 import {
   WorkspaceResolvedUpstreamTable,
@@ -17,7 +15,6 @@ export function WorkspaceEditorFooter({
   mergedColumnNames,
   schemaSuggestionTables,
   schemaTablesCount,
-  selectedEnvironment,
 }: {
   asset: WebAsset | null;
   assetInspectColumns: string[];
@@ -26,15 +23,9 @@ export function WorkspaceEditorFooter({
   mergedColumnNames: string[];
   schemaSuggestionTables: SuggestionTableState[];
   schemaTablesCount: number;
-  selectedEnvironment?: string | null;
 }) {
   return (
     <>
-      <div className="mt-3 flex items-center gap-2 text-xs opacity-70">
-        <Database className="size-3" />
-        Environment: {selectedEnvironment || "default"}
-      </div>
-
       {asset ? (
         <AssetSqlDebugPanel
           asset={asset}

@@ -1,5 +1,6 @@
 "use client";
 
+import { useAtomValue } from "jotai";
 import { Link } from "@tanstack/react-router";
 import { AlertTriangle } from "lucide-react";
 import { Controller, UseFormReturn } from "react-hook-form";
@@ -9,11 +10,16 @@ import { Label } from "@/components/ui/label";
 import {
   Select,
   SelectContent,
+  SelectGroup,
   SelectItem,
+  SelectLabel,
+  SelectSeparator,
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
 import type { AssetConfigForm } from "@/components/workspace-editor-pane";
+import { workspaceAtom } from "@/lib/atoms/domains/workspace";
+import { groupAssetTypesByConfiguredConnections } from "@/lib/asset-types";
 
 const MATERIALIZATION_NONE_VALUE = "__none__";
 
@@ -34,6 +40,8 @@ export function AssetEditorConfigurationTab({
   requiredConnectionType: string | null;
   showMissingConnectionWarning: boolean;
 }) {
+  const workspace = useAtomValue(workspaceAtom);
+
   return (
     <>
       <div className="grid gap-1">
@@ -44,6 +52,7 @@ export function AssetEditorConfigurationTab({
           render={({ field }) => (
             <AssetTypeSelect
               availableAssetTypes={availableAssetTypes}
+              availableConnections={workspace?.connections ?? {}}
               onChange={(nextValue) => {
                 field.onChange(nextValue);
                 onAssetTypeChange(nextValue);
@@ -65,13 +74,21 @@ export function AssetEditorConfigurationTab({
                 .
               </div>
               <Link
-                to="/settings/connections"
-                search={{
-                  environment: activeConfigEnvironmentName ?? undefined,
-                  connection: undefined,
-                  connectionType: requiredConnectionType ?? undefined,
-                  mode: "create",
-                }}
+                to={
+                  activeConfigEnvironmentName
+                    ? "/settings/environments/$environmentId/connections/new"
+                    : "/settings/environments"
+                }
+                params={
+                  activeConfigEnvironmentName
+                    ? { environmentId: activeConfigEnvironmentName }
+                    : undefined
+                }
+                search={
+                  activeConfigEnvironmentName && requiredConnectionType
+                    ? { type: requiredConnectionType }
+                    : undefined
+                }
                 className="mt-1 inline-flex text-amber-700 underline decoration-amber-400 underline-offset-2 hover:text-amber-800 dark:text-amber-200 dark:hover:text-amber-100"
               >
                 Create a new {requiredConnectionType} connection
@@ -116,11 +133,18 @@ function AssetTypeSelect({
   value,
   onChange,
   availableAssetTypes,
+  availableConnections,
 }: {
   value: string;
   onChange: (value: string) => void;
   availableAssetTypes: string[];
+  availableConnections: Record<string, string>;
 }) {
+  const groupedAssetTypes = groupAssetTypesByConfiguredConnections(
+    availableAssetTypes,
+    availableConnections
+  );
+
   return (
     <Select value={value || undefined} onValueChange={onChange}>
       <SelectTrigger className="w-full">
@@ -134,18 +158,50 @@ function AssetTypeSelect({
         </SelectValue>
       </SelectTrigger>
       <SelectContent>
-        {availableAssetTypes.map((assetType) => (
-          <SelectItem key={assetType} value={assetType}>
-            <span className="flex items-center gap-2">
-              <AssetTypeIcon
-                assetType={assetType}
-                className="text-muted-foreground"
-              />
-              <span>{assetType}</span>
-            </span>
-          </SelectItem>
-        ))}
+        {groupedAssetTypes.configured.length > 0 ? (
+          <SelectGroup>
+            <SelectLabel>Configured connections</SelectLabel>
+            {groupedAssetTypes.configured.map((assetType) => (
+              <AssetTypeOption key={assetType} assetType={assetType} />
+            ))}
+          </SelectGroup>
+        ) : null}
+        {groupedAssetTypes.notConfigured.length > 0 ? (
+          <>
+            {groupedAssetTypes.configured.length > 0 ? <SelectSeparator /> : null}
+            <SelectGroup>
+              <SelectLabel>Other SQL types</SelectLabel>
+              {groupedAssetTypes.notConfigured.map((assetType) => (
+                <AssetTypeOption key={assetType} assetType={assetType} />
+              ))}
+            </SelectGroup>
+          </>
+        ) : null}
+        {groupedAssetTypes.other.length > 0 ? (
+          <>
+            {groupedAssetTypes.configured.length > 0 || groupedAssetTypes.notConfigured.length > 0 ? (
+              <SelectSeparator />
+            ) : null}
+            <SelectGroup>
+              <SelectLabel>Other asset types</SelectLabel>
+              {groupedAssetTypes.other.map((assetType) => (
+                <AssetTypeOption key={assetType} assetType={assetType} />
+              ))}
+            </SelectGroup>
+          </>
+        ) : null}
       </SelectContent>
     </Select>
+  );
+}
+
+function AssetTypeOption({ assetType }: { assetType: string }) {
+  return (
+    <SelectItem value={assetType}>
+      <span className="flex items-center gap-2">
+        <AssetTypeIcon assetType={assetType} className="text-muted-foreground" />
+        <span>{assetType}</span>
+      </span>
+    </SelectItem>
   );
 }

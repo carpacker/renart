@@ -1,26 +1,19 @@
-import { createFileRoute, useNavigate } from "@tanstack/react-router";
-
-import { WorkspaceEnvironmentsRoutePage } from "./environments";
+import { createFileRoute, redirect } from "@tanstack/react-router";
 
 export const Route = createFileRoute("/_workspace/settings/")({
-  component: WorkspaceSettingsIndexRouteComponent,
+  validateSearch: (search: Record<string, unknown>) => ({
+    environment:
+      typeof search.environment === "string" ? search.environment : undefined,
+  }),
+  beforeLoad: ({ search }) => {
+    if (search.environment) {
+      throw redirect({
+        to: "/settings/environments/$environmentId",
+        params: { environmentId: search.environment },
+        search: { environment: search.environment },
+      });
+    }
+
+    throw redirect({ to: "/settings/environments" });
+  },
 });
-
-function WorkspaceSettingsIndexRouteComponent() {
-  const navigate = useNavigate();
-
-  return (
-    <WorkspaceEnvironmentsRoutePage
-      onSearchChange={(next) =>
-        navigate({
-          to: "/settings/environments",
-          search: {
-            environment: next.environment,
-            mode: next.mode,
-          },
-          replace: true,
-        })
-      }
-    />
-  );
-}

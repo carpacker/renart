@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"os"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -175,6 +176,11 @@ func Web() *cli.Command {
 			absRoot, err := filepath.Abs(root)
 			if err != nil {
 				return fmt.Errorf("failed to resolve workspace root: %w", err)
+			}
+
+			if _, err := git.FindRepoFromPath(absRoot); err != nil {
+				_, _ = fmt.Fprintf(os.Stderr, "Renart must be started inside a git repository.\n")
+				return fmt.Errorf("renart must be started inside a git repository: %w", err)
 			}
 
 			staticDir := c.String("static-dir")
@@ -808,12 +814,12 @@ func (s *webServer) InspectAsset(ctx context.Context, assetID, limit, environmen
 	return executionInspectResult(s.executionSvc.InspectAsset(ctx, assetID, limit, environment))
 }
 
-func (s *webServer) MaterializeAssetStream(ctx context.Context, assetID string, onChunk func([]byte)) executionMaterializeEvent {
-	return executionMaterializeEvent(s.executionSvc.MaterializeAssetStream(ctx, assetID, onChunk))
+func (s *webServer) MaterializeAssetStream(ctx context.Context, assetID, environment string, onChunk func([]byte)) executionMaterializeEvent {
+	return executionMaterializeEvent(s.executionSvc.MaterializeAssetStream(ctx, assetID, environment, onChunk))
 }
 
-func (s *webServer) GetPipelineMaterialization(ctx context.Context, pipelineID string) (webhttpapi.PipelineMaterializationResponse, *apiError) {
-	response, err := s.executionSvc.GetPipelineMaterialization(ctx, pipelineID)
+func (s *webServer) GetPipelineMaterialization(ctx context.Context, pipelineID, environment string) (webhttpapi.PipelineMaterializationResponse, *apiError) {
+	response, err := s.executionSvc.GetPipelineMaterialization(ctx, pipelineID, environment)
 	if err != nil {
 		message := err.Error()
 		switch {
@@ -1043,8 +1049,8 @@ func (s *webServer) newConnectionManager(ctx context.Context, environment string
 	return manager, nil
 }
 
-func (s *webServer) MaterializePipelineStream(ctx context.Context, pipelineID string, onChunk func([]byte)) executionMaterializeEvent {
-	return executionMaterializeEvent(s.executionSvc.MaterializePipelineStream(ctx, pipelineID, onChunk))
+func (s *webServer) MaterializePipelineStream(ctx context.Context, pipelineID, environment string, onChunk func([]byte)) executionMaterializeEvent {
+	return executionMaterializeEvent(s.executionSvc.MaterializePipelineStream(ctx, pipelineID, environment, onChunk))
 }
 
 func (s *webServer) handleStatic(w http.ResponseWriter, r *http.Request) {

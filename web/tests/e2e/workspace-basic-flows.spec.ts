@@ -113,13 +113,150 @@ test.describe("workspace basic flows", () => {
     await expect(page.getByTestId("inspect-warning-banner")).not.toContainText('"attempts"');
     await expect(page.getByTestId("inspect-warning-banner")).not.toContainText('Error: {');
   });
+
+  test("switches environments from the top bar and threads them into requests", async ({ page }) => {
+    await mockWorkspaceEndpoints(page, createPopulatedWorkspaceState(), {
+      environments: ["default", "prod"],
+    });
+
+    const inspectRequests: string[] = [];
+    const materializationRequests: string[] = [];
+
+    await page.route("**/api/assets/asset-customers/inspect**", async (route) => {
+      inspectRequests.push(route.request().url());
+      await route.fulfill({
+        contentType: "application/json",
+        body: JSON.stringify({
+          status: "ok",
+          columns: ["customer_id"],
+          rows: [{ customer_id: 1 }],
+          raw_output: "",
+        }),
+      });
+    });
+
+    await page.route(
+      "**/api/assets/asset-customers/materialize/stream**",
+      async (route) => {
+        materializationRequests.push(route.request().url());
+        await route.fulfill({
+          status: 200,
+          contentType: "text/event-stream",
+          body:
+            'event: start\ndata: {"command":["run","asset-customers"]}\n\n' +
+            'event: done\ndata: {"status":"ok","command":["run","asset-customers"],"output":"ok","error":"","exit_code":0,"changed_asset_ids":["asset-customers"]}\n\n',
+        });
+      }
+    );
+
+    await page.goto("/?pipeline=pipeline-analytics&asset=asset-customers");
+
+    await expect(page.getByRole("combobox", { name: "Environment" })).toBeVisible();
+
+    await page.getByRole("combobox", { name: "Environment" }).click();
+    await page.getByRole("option", { name: "prod" }).click();
+
+    await expect(page).toHaveURL(/environment=prod/);
+
+    await page.getByRole("button", { name: "Inspect Data" }).click();
+    await page.getByRole("button", { name: "Materialize", exact: true }).click();
+
+    await expect.poll(() => inspectRequests.at(-1) ?? "").toContain(
+      "environment=prod"
+    );
+    await expect.poll(() => materializationRequests.at(-1) ?? "").toContain(
+      "environment=prod"
+    );
+  });
+
+  test("shows each environment only once in the selector", async ({ page }) => {
+    await mockWorkspaceEndpoints(page, createPopulatedWorkspaceState(), {
+      environments: ["default", "prod"],
+    });
+
+    await page.goto("/?pipeline=pipeline-analytics&asset=asset-customers");
+
+    await page.getByRole("combobox", { name: "Environment" }).click();
+
+    await expect(page.getByRole("option", { name: "default", exact: true })).toHaveCount(1);
+    await expect(page.getByRole("option", { name: "prod", exact: true })).toHaveCount(1);
+  });
+
+  test("preserves the selected environment when navigating to other assets", async ({ page }) => {
+    await mockWorkspaceEndpoints(page, createPopulatedWorkspaceState(), {
+      environments: ["default", "prod"],
+    });
+
+    await page.goto("/?pipeline=pipeline-analytics&asset=asset-customers");
+
+    await page.getByRole("combobox", { name: "Environment" }).click();
+    await page.getByRole("option", { name: "prod", exact: true }).click();
+
+    await expect(page).toHaveURL(/environment=prod/);
+
+    await page.getByRole("link", { name: "analytics.orders" }).click();
+    await expect(page).toHaveURL(/asset=asset-orders/);
+    await expect(page).toHaveURL(/environment=prod/);
+
+    await page.getByRole("button", { name: "Open search" }).click();
+    await page.getByPlaceholder("Search workspace commands...").fill("finance.revenue");
+    await page.getByRole("option", { name: /finance\.revenue/i }).click();
+
+    await expect(page).toHaveURL(/pipeline=pipeline-finance/);
+    await expect(page).toHaveURL(/asset=asset-revenue/);
+    await expect(page).toHaveURL(/environment=prod/);
+  });
+
+  test("preserves the selected environment when clicking canvas nodes", async ({ page }) => {
+    await mockWorkspaceEndpoints(page, createPopulatedWorkspaceState(), {
+      environments: ["default", "prod"],
+    });
+
+    await page.goto("/?pipeline=pipeline-analytics&asset=asset-customers");
+
+    await page.getByRole("combobox", { name: "Environment" }).click();
+    await page.getByRole("option", { name: "prod", exact: true }).click();
+
+    await expect(page).toHaveURL(/environment=prod/);
+
+    await page
+      .locator(".react-flow__node")
+      .filter({ hasText: "orders" })
+      .first()
+      .click();
+
+    await expect(page).toHaveURL(/asset=asset-orders/);
+    await expect(page).toHaveURL(/environment=prod/);
+  });
 });
 
 function createPipelineButton(page: Page) {
   return page.getByRole("button", { name: "Create pipeline" }).last();
 }
 
-async function mockWorkspaceEndpoints(page: Page, workspace: Record<string, unknown>) {
+async function mockWorkspaceEndpoints(
+  page: Page,
+  workspace: Record<string, unknown>,
+  options?: { environments?: string[] }
+) {
+  await page.route("**/api/onboarding/state", async (route) => {
+    if (route.request().method() !== "GET") {
+      await route.fulfill({
+        contentType: "application/json",
+        body: JSON.stringify({ status: "ok" }),
+      });
+      return;
+    }
+
+    await route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({
+        active: false,
+        step: "connection-config",
+      }),
+    });
+  });
+
   await page.route("**/api/workspace", async (route) => {
     await route.fulfill({
       contentType: "application/json",
@@ -128,6 +265,7 @@ async function mockWorkspaceEndpoints(page: Page, workspace: Record<string, unkn
   });
 
   await page.route("**/api/config", async (route) => {
+    const environments = options?.environments ?? [];
     await route.fulfill({
       contentType: "application/json",
       body: JSON.stringify({
@@ -135,7 +273,11 @@ async function mockWorkspaceEndpoints(page: Page, workspace: Record<string, unkn
         path: ".bruin.yml",
         default_environment: "default",
         selected_environment: "default",
-        environments: [],
+        environments: environments.map((name) => ({
+          name,
+          connections: [],
+          schema_prefix: "",
+        })),
         connection_types: [],
       }),
     });
@@ -196,6 +338,22 @@ function createPopulatedWorkspaceState() {
             path: "pipelines/analytics/assets/orders.sql",
             content: "select 1 as order_id",
             upstreams: ["analytics.customers"],
+            is_materialized: false,
+          },
+        ],
+      },
+      {
+        id: "pipeline-finance",
+        name: "finance",
+        path: "pipelines/finance",
+        assets: [
+          {
+            id: "asset-revenue",
+            name: "finance.revenue",
+            type: "duckdb.sql",
+            path: "pipelines/finance/assets/revenue.sql",
+            content: "select 1 as revenue",
+            upstreams: [],
             is_materialized: false,
           },
         ],

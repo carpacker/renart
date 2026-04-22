@@ -1,6 +1,7 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useAtom } from "jotai";
+import { useCallback, useEffect, useMemo } from "react";
 
 import {
   cloneWorkspaceEnvironment,
@@ -12,41 +13,71 @@ import {
   updateWorkspaceConnection,
   updateWorkspaceEnvironment,
 } from "@/lib/api";
+import { atom } from "jotai";
 import { WorkspaceConfigResponse } from "@/lib/types";
 
+const workspaceConfigAtom = atom<WorkspaceConfigResponse | null>(null);
+const workspaceConfigLoadingAtom = atom(false);
+const workspaceConfigBusyAtom = atom(false);
+const workspaceConfigStatusMessageAtom = atom<string | null>(null);
+const workspaceConfigStatusToneAtom = atom<"error" | "success" | null>(null);
+
+let workspaceConfigLoadPromise: Promise<void> | null = null;
+
 export function useWorkspaceSettingsData() {
-  const [workspaceConfig, setWorkspaceConfig] =
-    useState<WorkspaceConfigResponse | null>(null);
-  const [workspaceConfigLoading, setWorkspaceConfigLoading] = useState(false);
-  const [workspaceConfigBusy, setWorkspaceConfigBusy] = useState(false);
-  const [workspaceConfigStatusMessage, setWorkspaceConfigStatusMessage] =
-    useState<string | null>(null);
-  const [workspaceConfigStatusTone, setWorkspaceConfigStatusTone] = useState<
-    "error" | "success" | null
-  >(null);
+  const [workspaceConfig, setWorkspaceConfig] = useAtom(workspaceConfigAtom);
+  const [workspaceConfigLoading, setWorkspaceConfigLoading] = useAtom(
+    workspaceConfigLoadingAtom
+  );
+  const [workspaceConfigBusy, setWorkspaceConfigBusy] = useAtom(
+    workspaceConfigBusyAtom
+  );
+  const [workspaceConfigStatusMessage, setWorkspaceConfigStatusMessage] = useAtom(
+    workspaceConfigStatusMessageAtom
+  );
+  const [workspaceConfigStatusTone, setWorkspaceConfigStatusTone] = useAtom(
+    workspaceConfigStatusToneAtom
+  );
 
   const loadWorkspaceConfig = useCallback(async () => {
-    setWorkspaceConfigLoading(true);
-    try {
-      const response = await getWorkspaceConfig();
-      setWorkspaceConfig(response);
-      setWorkspaceConfigStatusMessage(null);
-      setWorkspaceConfigStatusTone(null);
-    } catch (error) {
-      setWorkspaceConfigStatusMessage(
-        error instanceof Error
-          ? error.message
-          : "Failed to load workspace config."
-      );
-      setWorkspaceConfigStatusTone("error");
-    } finally {
-      setWorkspaceConfigLoading(false);
+    if (workspaceConfigLoadPromise) {
+      await workspaceConfigLoadPromise;
+      return;
     }
-  }, []);
+
+    setWorkspaceConfigLoading(true);
+    workspaceConfigLoadPromise = (async () => {
+      try {
+        const response = await getWorkspaceConfig();
+        setWorkspaceConfig(response);
+        setWorkspaceConfigStatusMessage(null);
+        setWorkspaceConfigStatusTone(null);
+      } catch (error) {
+        setWorkspaceConfigStatusMessage(
+          error instanceof Error
+            ? error.message
+            : "Failed to load workspace config."
+        );
+        setWorkspaceConfigStatusTone("error");
+      } finally {
+        setWorkspaceConfigLoading(false);
+        workspaceConfigLoadPromise = null;
+      }
+    })();
+
+    await workspaceConfigLoadPromise;
+  }, [
+    setWorkspaceConfig,
+    setWorkspaceConfigLoading,
+    setWorkspaceConfigStatusMessage,
+    setWorkspaceConfigStatusTone,
+  ]);
 
   useEffect(() => {
-    void loadWorkspaceConfig();
-  }, [loadWorkspaceConfig]);
+    if (!workspaceConfig && !workspaceConfigLoading) {
+      void loadWorkspaceConfig();
+    }
+  }, [loadWorkspaceConfig, workspaceConfig, workspaceConfigLoading]);
 
   const normalizedConfigEnvironments = useMemo(
     () =>

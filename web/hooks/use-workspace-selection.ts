@@ -4,6 +4,7 @@ import { useNavigate, useRouterState } from "@tanstack/react-router";
 import { useAtomValue, useSetAtom } from "jotai";
 import { useCallback, useEffect } from "react";
 
+import { useWorkspaceEnvironment } from "@/hooks/use-workspace-environment";
 import {
   resolvedActivePipelineAtom,
   resolvedSelectedAssetAtom,
@@ -21,12 +22,14 @@ export function useWorkspaceSelection(): {
   const workspace = useAtomValue(workspaceAtom);
   const activePipeline = useAtomValue(resolvedActivePipelineAtom);
   const selectedAsset = useAtomValue(resolvedSelectedAssetAtom);
+  const { selectedEnvironment } = useWorkspaceEnvironment();
   const locationState = useRouterState({
     select: (state) => ({
       pathname: state.location.pathname,
       search: state.location.search as {
         pipeline?: string;
         asset?: string;
+        environment?: string;
       },
     }),
   });
@@ -76,14 +79,16 @@ export function useWorkspaceSelection(): {
 
     void navigate({
       to: "/",
-      search: {
-        pipeline: nextPipelineId,
-        asset: nextAssetId,
-      },
-      replace: true,
-    });
+        search: {
+          pipeline: nextPipelineId,
+          asset: nextAssetId,
+          environment: selectedEnvironment,
+        },
+        replace: true,
+      });
   }, [
     activePipeline,
+    selectedEnvironment,
     locationState.pathname,
     locationState.search.asset,
     locationState.search.pipeline,
@@ -109,10 +114,12 @@ export function useWorkspaceSelection(): {
         search: {
           pipeline: pipelineId,
           asset: nextAsset,
+          environment: selectedEnvironment,
         },
       });
     },
     [
+      selectedEnvironment,
       locationState.pathname,
       locationState.search.asset,
       locationState.search.pipeline,

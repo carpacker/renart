@@ -3,6 +3,7 @@
 import type { Monaco } from "@monaco-editor/react";
 import type * as MonacoNS from "monaco-editor";
 import { CSSProperties, useCallback, useEffect, useMemo, useState } from "react";
+import { Eye, Network, Settings2 } from "lucide-react";
 import { UseFormReturn } from "react-hook-form";
 import { Panel } from "react-resizable-panels";
 
@@ -234,9 +235,9 @@ export function WorkspaceEditorPane({
             onMount={handleEditorMount}
           />
 
-          <div className="flex min-w-0 flex-1 flex-col overflow-x-hidden overflow-y-auto p-4">
+          <div className="flex min-h-0 overflow-y-auto overflow-x-hidden min-w-0 flex-1 flex-col p-4">
             <Tabs
-              className="flex min-h-0 min-w-0 flex-1 flex-col"
+              className="flex min-w-0 flex-1 flex-col"
               onValueChange={(value) =>
                 onEditorTabChange(
                   value as
@@ -249,7 +250,7 @@ export function WorkspaceEditorPane({
               value={assetEditorTab}
             >
                 <TabsList
-                  className={`grid w-full min-w-0 grid-cols-3 ${
+                  className={`@container/tabs-list grid w-full min-w-0 grid-cols-3 ${
                     helpMode && visualizationHighlighted
                       ? "ring-2 ring-primary/70 ring-offset-2"
                       : ""
@@ -260,9 +261,18 @@ export function WorkspaceEditorPane({
                       : undefined
                   }
                 >
-                  <TabsTrigger value="configuration">Configuration</TabsTrigger>
-                  <TabsTrigger value="dependencies">Dependencies</TabsTrigger>
-                  <TabsTrigger value="visualization">Visualization</TabsTrigger>
+                  <TabsTrigger value="configuration">
+                    <Settings2 className="size-4" />
+                    <span className="truncate @max-[360px]/tabs-list:hidden">Configuration</span>
+                  </TabsTrigger>
+                  <TabsTrigger value="dependencies">
+                    <Network className="size-4" />
+                    <span className="truncate @max-[360px]/tabs-list:hidden">Dependencies</span>
+                  </TabsTrigger>
+                  <TabsTrigger value="visualization">
+                    <Eye className="size-4" />
+                    <span className="truncate @max-[360px]/tabs-list:hidden">Visualization</span>
+                  </TabsTrigger>
                 </TabsList>
 
                 <TabsContent className="mt-3 space-y-3" value="configuration">
@@ -310,16 +320,17 @@ export function WorkspaceEditorPane({
                 </TabsContent>
               </Tabs>
 
-              <WorkspaceEditorFooter
-                asset={asset}
-                assetInspectColumns={assetInspectColumns}
-                debugResolvedUpstreamTables={debugResolvedUpstreamTables}
-                declaredColumnNames={declaredColumnNames}
-                mergedColumnNames={mergedColumnNames}
-                schemaSuggestionTables={schemaSuggestionTables}
-                schemaTablesCount={schemaTables.length}
-                selectedEnvironment={selectedEnvironment}
-              />
+              <div className="mt-3">
+                <WorkspaceEditorFooter
+                  asset={asset}
+                  assetInspectColumns={assetInspectColumns}
+                  debugResolvedUpstreamTables={debugResolvedUpstreamTables}
+                  declaredColumnNames={declaredColumnNames}
+                  mergedColumnNames={mergedColumnNames}
+                  schemaSuggestionTables={schemaSuggestionTables}
+                  schemaTablesCount={schemaTables.length}
+                />
+              </div>
             </div>
           </div>
         </div>

@@ -98,7 +98,7 @@ func TestExecutionServiceMaterializeAssetStreamPreservesSuccessOutput(t *testing
 		},
 	})
 
-	result := svc.MaterializeAssetStream(context.Background(), assetID, func(chunk []byte) {
+	result := svc.MaterializeAssetStream(context.Background(), assetID, "", func(chunk []byte) {
 		streamed = append(streamed, string(chunk))
 	})
 
@@ -140,7 +140,7 @@ func TestExecutionServiceMaterializeAssetStreamPreservesFailureOutput(t *testing
 		},
 	})
 
-	result := svc.MaterializeAssetStream(context.Background(), assetID, nil)
+	result := svc.MaterializeAssetStream(context.Background(), assetID, "", nil)
 
 	require.Len(t, executor.runAssetRequests, 1)
 	assert.Equal(t, "error", result.Status)
@@ -179,7 +179,7 @@ func TestExecutionServiceMaterializePipelineStreamPreservesSuccessOutput(t *test
 		},
 	})
 
-	result := svc.MaterializePipelineStream(context.Background(), pipelineID, func(chunk []byte) {
+	result := svc.MaterializePipelineStream(context.Background(), pipelineID, "", func(chunk []byte) {
 		streamed = append(streamed, string(chunk))
 	})
 
@@ -222,7 +222,7 @@ func TestExecutionServiceMaterializePipelineStreamPreservesFailureOutput(t *test
 		},
 	})
 
-	result := svc.MaterializePipelineStream(context.Background(), pipelineID, nil)
+	result := svc.MaterializePipelineStream(context.Background(), pipelineID, "", nil)
 
 	require.Len(t, executor.runPipelineReqs, 1)
 	assert.Equal(t, "error", result.Status)

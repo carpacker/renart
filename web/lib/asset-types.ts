@@ -67,3 +67,48 @@ export function isSqlAssetType(assetType?: string | null) {
 export function getConnectionTypeForAssetType(assetType?: string | null) {
   return ASSET_TYPE_TO_CONNECTION_TYPE[(assetType ?? "").trim().toLowerCase()] ?? null;
 }
+
+export function getConfiguredConnectionTypes(connections?: Record<string, string> | null) {
+  return new Set(
+    Object.values(connections ?? {})
+      .map((value) => value.trim())
+      .filter(Boolean)
+  );
+}
+
+export function getPreferredSqlAssetType(connections?: Record<string, string> | null) {
+  const configuredConnectionTypes = getConfiguredConnectionTypes(connections);
+  for (const connectionType of configuredConnectionTypes) {
+    const assetType = CONNECTION_TYPE_TO_ASSET_TYPE[connectionType];
+    if (assetType) {
+      return assetType;
+    }
+  }
+
+  return "duckdb.sql";
+}
+
+export function groupAssetTypesByConfiguredConnections(
+  assetTypes: string[],
+  connections?: Record<string, string> | null
+) {
+  const configuredConnectionTypes = getConfiguredConnectionTypes(connections);
+  const configured: string[] = [];
+  const notConfigured: string[] = [];
+  const other: string[] = [];
+
+  for (const assetType of assetTypes) {
+    const connectionType = getConnectionTypeForAssetType(assetType);
+    if (!connectionType) {
+      other.push(assetType);
+      continue;
+    }
+    if (configuredConnectionTypes.has(connectionType)) {
+      configured.push(assetType);
+      continue;
+    }
+    notConfigured.push(assetType);
+  }
+
+  return { configured, notConfigured, other };
+}

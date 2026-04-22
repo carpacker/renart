@@ -1,3 +1,5 @@
+import { readFile, writeFile } from "node:fs/promises";
+import { join } from "node:path";
 import { expect } from "@playwright/test";
 
 import { liveTest as test } from "./live-app-fixture";
@@ -74,6 +76,46 @@ test.describe("workspace live basic flows", () => {
       page.getByRole("columnheader", { name: "customer_id", exact: true })
     ).toBeVisible();
     await expect(page.getByRole("cell", { name: "Ada", exact: true })).toBeVisible();
+  });
+
+  test("switches environments, updates the selector label, and refetches inspect", async ({
+    liveApp,
+    page,
+  }) => {
+    test.skip(test.info().project.name.includes("mobile"), "Desktop-only environment selector coverage.");
+
+    const configPath = join(liveApp.workspaceDir, ".bruin.yml");
+    const currentConfig = await readFile(configPath, "utf8");
+    await writeFile(
+      configPath,
+      `${currentConfig.trimEnd()}\n  prod:\n    connections:\n      duckdb:\n        - name: duckdb-default\n          path: duckdb-files/local.db\n`,
+      "utf8"
+    );
+
+    await page.goto(`${liveApp.baseURL}/`);
+    await openCustomersEditor(page, liveApp.baseURL);
+
+    await expect(page.getByRole("combobox", { name: "Environment" })).toContainText(
+      /Environment:\s*default/
+    );
+
+    const prodInspectRequest = page.waitForRequest(
+      (request) =>
+        request.url().includes("/api/assets/") &&
+        request.url().includes("/inspect") &&
+        request.url().includes("environment=prod")
+    );
+
+    await page.getByRole("combobox", { name: "Environment" }).click();
+    const prodOption = page.getByRole("option", { name: "prod", exact: true });
+    await expect(prodOption).toBeVisible();
+    await prodOption.dispatchEvent("click");
+
+    await expect(page).toHaveURL(/environment=prod/);
+    await expect(page.getByRole("combobox", { name: "Environment" })).toContainText(
+      /Environment:\s*prod/
+    );
+    await prodInspectRequest;
   });
 
   test("reveals nested command palette matches from root search", async ({

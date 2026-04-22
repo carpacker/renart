@@ -11,7 +11,12 @@ function RootComponent() {
   const location = useLocation();
 
   useEffect(() => {
-    document.title = getDocumentTitle(location.pathname);
+    const title = getDocumentTitle(location.pathname);
+    if (!title) {
+      return;
+    }
+
+    document.title = title;
   }, [location.pathname]);
 
   return (
@@ -22,13 +27,13 @@ function RootComponent() {
 }
 
 function getDocumentTitle(pathname: string) {
-  if (pathname.startsWith("/settings/connections")) {
+  if (pathname.includes("/connections")) {
     return "Connections · Settings · Renart";
   }
 
-  if (pathname.startsWith("/settings/environments") || pathname === "/settings") {
+  if (pathname.startsWith("/settings")) {
     return "Environments · Settings · Renart";
   }
 
-  return "Workspace · Renart";
+  return null;
 }

@@ -19,6 +19,7 @@ import {
 } from "react";
 
 import { WorkspaceCommandPalette } from "@/components/workspace-command-palette";
+import { WorkspaceEnvironmentSwitcher } from "@/components/workspace-environment-switcher";
 import { WorkspacePipelineDialogs } from "@/components/workspace-pipeline-dialogs";
 import { WorkspaceSidebar } from "@/components/workspace-sidebar";
 import { Spinner } from "@/components/ui/spinner";
@@ -32,6 +33,7 @@ import { WebPipeline, WorkspaceState } from "@/lib/types";
 import { useAssetActions } from "@/hooks/use-asset-actions";
 import { useAssetResults } from "@/hooks/use-asset-results";
 import { usePipelineMaterializationState } from "@/hooks/use-pipeline-materialization-state";
+import { useWorkspaceEnvironment } from "@/hooks/use-workspace-environment";
 import { useWorkspaceSelection } from "@/hooks/use-workspace-selection";
 import { useWorkspaceSync } from "@/hooks/use-workspace-sync";
 import { useWorkspaceTheme } from "@/hooks/use-workspace-theme";
@@ -64,6 +66,7 @@ export function WorkspaceLayout() {
   const { activePipeline, selectedAsset, navigateSelection } =
     useWorkspaceSelection();
   const pipeline = useAtomValue(pipelineAtom);
+  const { selectedEnvironment } = useWorkspaceEnvironment();
   const assetActions = useAssetActions();
   const assetResults = useAssetResults();
   const pipelineMaterialization = usePipelineMaterializationState();
@@ -94,15 +97,11 @@ export function WorkspaceLayout() {
 
   const currentView = useMemo<"workspace" | "environments" | "connections">(
     () => {
-      if (routeState.pathname === "/settings/connections") {
+      if (routeState.pathname.includes("/connections")) {
         return "connections";
       }
 
-      if (
-        routeState.pathname === "/settings" ||
-        routeState.pathname === "/settings/" ||
-        routeState.pathname === "/settings/environments"
-      ) {
+      if (routeState.pathname.startsWith("/settings")) {
         return "environments";
       }
 
@@ -212,6 +211,7 @@ export function WorkspaceLayout() {
           search: {
             pipeline: undefined,
             asset: undefined,
+            environment: routeState.search.environment,
           },
           replace: true,
         });
@@ -369,7 +369,7 @@ export function WorkspaceLayout() {
               setTheme((current) => (current === "dark" ? "light" : "dark"))
             }
             currentView={currentView}
-            connectionsEnvironment={routeState.search.environment ?? null}
+            connectionsEnvironment={selectedEnvironment ?? null}
             onCreatePipeline={assetActions.openCreatePipelineDialog}
             onRunPipeline={handleRunPipelineById}
             canRunPipeline={Boolean(pipeline)}
@@ -405,12 +405,13 @@ export function WorkspaceLayout() {
                     : "Project settings"}
                 </div>
               </div>
-	      <WorkspaceCommandPalette
+              <WorkspaceCommandPalette
                   workspace={workspace}
                   activePipeline={activePipeline}
                   selectedAsset={selectedAsset}
                   currentView={currentView}
 	      />
+              {currentView === "workspace" ? <WorkspaceEnvironmentSwitcher /> : null}
             </header>
 
             <div className="min-h-0 flex-1 overflow-hidden">

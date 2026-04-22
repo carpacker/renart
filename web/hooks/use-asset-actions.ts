@@ -11,7 +11,7 @@ import {
   updatePipeline,
   updateAsset,
 } from "@/lib/api";
-import { workspaceAtom } from "@/lib/atoms/domains/workspace";
+import { preferredSqlAssetTypeAtom, workspaceAtom } from "@/lib/atoms/domains/workspace";
 import { normalizeAssetName } from "@/lib/workspace-shell-helpers";
 
 export type UIMessage = {
@@ -38,6 +38,7 @@ type UpdateAssetInput = {
 
 export function useAssetActions(defaultPipelinePath = "my-pipeline") {
   const workspace = useAtomValue(workspaceAtom);
+  const defaultSqlAssetType = useAtomValue(preferredSqlAssetTypeAtom);
   const [createPipelineDialogOpen, setCreatePipelineDialogOpen] =
     useState(false);
   const [createPipelinePath, setCreatePipelinePath] =
@@ -237,6 +238,7 @@ export function useAssetActions(defaultPipelinePath = "my-pipeline") {
     createPipelinePath,
     setCreatePipelinePath,
     createPipelineLoading,
+    defaultSqlAssetType,
     openCreatePipelineDialog,
     confirmCreatePipeline,
     runCreateAsset,

@@ -24,8 +24,8 @@ type PipelineMaterializationResponse struct {
 }
 
 type PipelineExecutionHandlers interface {
-	GetPipelineMaterialization(ctx context.Context, pipelineID string) (PipelineMaterializationResponse, *APIError)
-	MaterializePipelineStream(ctx context.Context, pipelineID string, onChunk func([]byte)) MaterializeExecutionEvent
+	GetPipelineMaterialization(ctx context.Context, pipelineID, environment string) (PipelineMaterializationResponse, *APIError)
+	MaterializePipelineStream(ctx context.Context, pipelineID, environment string, onChunk func([]byte)) MaterializeExecutionEvent
 	ResolvePipelineRunTarget(pipelineID string) error
 }
 
@@ -39,7 +39,9 @@ func RegisterPipelineExecutionRoutes(router chi.Router, handlers *PipelineExecut
 }
 
 func (h *PipelineExecutionAPI) HandleGetPipelineMaterialization(w http.ResponseWriter, r *http.Request) {
-	resp, apiErr := h.Service.GetPipelineMaterialization(r.Context(), chi.URLParam(r, "id"))
+	pipelineID := chi.URLParam(r, "id")
+	environment := r.URL.Query().Get("environment")
+	resp, apiErr := h.Service.GetPipelineMaterialization(r.Context(), pipelineID, environment)
 	if apiErr != nil {
 		webapi.WriteJSON(w, apiErr.Status, map[string]any{
 			"status": "error",
@@ -52,6 +54,7 @@ func (h *PipelineExecutionAPI) HandleGetPipelineMaterialization(w http.ResponseW
 
 func (h *PipelineExecutionAPI) HandleMaterializePipelineStream(w http.ResponseWriter, r *http.Request) {
 	pipelineID := chi.URLParam(r, "id")
+	environment := r.URL.Query().Get("environment")
 	if err := h.Service.ResolvePipelineRunTarget(pipelineID); err != nil {
 		webapi.WriteBadRequest(w, "invalid_pipeline_id", "invalid pipeline id")
 		return
@@ -69,7 +72,7 @@ func (h *PipelineExecutionAPI) HandleMaterializePipelineStream(w http.ResponseWr
 	w.Header().Set("X-Accel-Buffering", "no")
 
 	_ = WriteSSEJSON(w, flusher, "start", map[string]any{"command": []string{"run", pipelineID}})
-	result := h.Service.MaterializePipelineStream(r.Context(), pipelineID, func(chunk []byte) {
+	result := h.Service.MaterializePipelineStream(r.Context(), pipelineID, environment, func(chunk []byte) {
 		_ = WriteSSEJSON(w, flusher, "output", map[string]any{"chunk": string(chunk)})
 	})
 	_ = WriteSSEJSON(w, flusher, "done", map[string]any{

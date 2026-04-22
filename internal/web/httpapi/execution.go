@@ -35,7 +35,7 @@ type MaterializeExecutionEvent struct {
 
 type ExecutionHandlers interface {
 	InspectAsset(ctx context.Context, assetID, limit, environment string) InspectExecutionResult
-	MaterializeAssetStream(ctx context.Context, assetID string, onChunk func([]byte)) MaterializeExecutionEvent
+	MaterializeAssetStream(ctx context.Context, assetID, environment string, onChunk func([]byte)) MaterializeExecutionEvent
 }
 
 type ExecutionAPI struct {
@@ -50,11 +50,12 @@ func RegisterExecutionRoutes(router chi.Router, handlers *ExecutionAPI) {
 func (h *ExecutionAPI) HandleInspectAsset(w http.ResponseWriter, r *http.Request) {
 	assetID := chi.URLParam(r, "assetID")
 	limit := r.URL.Query().Get("limit")
+	environment := r.URL.Query().Get("environment")
 	if limit == "" {
 		limit = "200"
 	}
 
-	result := h.Service.InspectAsset(r.Context(), assetID, limit, r.URL.Query().Get("environment"))
+	result := h.Service.InspectAsset(r.Context(), assetID, limit, environment)
 	webapi.WriteJSON(w, result.HTTPStatus, map[string]any{
 		"status":     result.Status,
 		"columns":    result.Columns,
@@ -69,6 +70,7 @@ func (h *ExecutionAPI) HandleInspectAsset(w http.ResponseWriter, r *http.Request
 
 func (h *ExecutionAPI) HandleMaterializeAssetStream(w http.ResponseWriter, r *http.Request) {
 	assetID := chi.URLParam(r, "assetID")
+	environment := r.URL.Query().Get("environment")
 	flusher, ok := w.(http.Flusher)
 	if !ok {
 		webapi.WriteInternalError(w, "streaming_unsupported", "streaming unsupported")
@@ -81,7 +83,7 @@ func (h *ExecutionAPI) HandleMaterializeAssetStream(w http.ResponseWriter, r *ht
 	w.Header().Set("X-Accel-Buffering", "no")
 
 	_ = WriteSSEJSON(w, flusher, "start", map[string]any{"command": []string{"run", assetID}})
-	result := h.Service.MaterializeAssetStream(r.Context(), assetID, func(chunk []byte) {
+	result := h.Service.MaterializeAssetStream(r.Context(), assetID, environment, func(chunk []byte) {
 		_ = WriteSSEJSON(w, flusher, "output", map[string]any{"chunk": string(chunk)})
 	})
 	_ = WriteSSEJSON(w, flusher, "done", map[string]any{

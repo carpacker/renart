@@ -61,6 +61,12 @@ test.describe("workspace onboarding live flows", () => {
     await expect(page.getByTestId("onboarding-step-success")).toBeVisible({
       timeout: 30000,
     });
+    await expect(page.getByTestId("onboarding-import-summary")).toContainText("Import complete");
+    await expect(page.getByTestId("onboarding-imported-tables")).toContainText("1");
+    await expect(page.getByTestId("onboarding-successful-assets")).toContainText("1");
+    await expect(page.getByTestId("onboarding-merged-tables")).toContainText("0");
+    await expect(page.getByTestId("onboarding-import-summary")).toContainText(livePostgres.database);
+    await expect(page.getByTestId("onboarding-import-summary")).toContainText("analytics");
 
     const configAfterImport = await readFile(join(liveApp.workspaceDir, ".bruin.yml"), "utf8");
     expect(configAfterImport).toContain("postgres-default");

@@ -135,6 +135,12 @@ export function WorkspacePage() {
     setSidebarState,
   });
 
+  const buildCreateAssetInputForWorkspace = useCallback(
+    (name: string, kind: "sql" | "python" | "ingestr") =>
+      buildCreateAssetInput(name, kind, assetActions.defaultSqlAssetType),
+    [assetActions.defaultSqlAssetType]
+  );
+
   const {
     handlePaneClick,
     handlePaneContextMenu,
@@ -155,7 +161,7 @@ export function WorkspacePage() {
     navigateSelection,
     isMobile,
     openSelectedAssetEditor: () => setMobileEditorOpen(true),
-    buildCreateAssetInput,
+    buildCreateAssetInput: buildCreateAssetInputForWorkspace,
   });
 
   const {

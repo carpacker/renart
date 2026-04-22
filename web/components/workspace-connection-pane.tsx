@@ -85,7 +85,6 @@ export function WorkspaceConnectionPane({
     connectionForm,
     selectedConnectionType,
     setConnectionForm,
-    handleDelete,
     handleSave,
   } = useWorkspaceConnectionForm({
     connectionTypes,
@@ -152,7 +151,6 @@ export function WorkspaceConnectionPane({
       onReload={onReload}
     >
       <WorkspaceConnectionFormFields
-        activeConnectionExists={Boolean(activeConnection)}
         busy={busy}
         canValidate={canValidate}
         connectionForm={connectionForm}
@@ -164,7 +162,6 @@ export function WorkspaceConnectionPane({
         validateBusy={validateBusy}
         validateMessage={validateMessage}
         validateTone={validateTone}
-        onDelete={() => void handleDelete()}
         onEnvironmentChange={(value) => {
           onSelectedEnvironmentChange(value);
           onModeChange("edit");

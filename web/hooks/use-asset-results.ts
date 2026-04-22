@@ -2,7 +2,7 @@
 
 import AnsiToHtml from "ansi-to-html";
 import { useAtom, useAtomValue, useSetAtom } from "jotai";
-import { useMemo, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 
 import {
   assetResultsAtom,
@@ -12,6 +12,7 @@ import {
 import {
   pipelineAtom,
   resolvedSelectedAssetAtom,
+  selectedEnvironmentAtom,
 } from "@/lib/atoms/domains/workspace";
 import { useAssetInspect } from "@/hooks/use-asset-inspect";
 import { materializeAssetStream, materializePipelineStream } from "@/lib/api";
@@ -64,6 +65,7 @@ export function useAssetResults() {
   const [assetMaterializeLoading, setAssetMaterializeLoading] = useState(false);
   const asset = useAtomValue(enrichedSelectedAssetAtom);
   const pipeline = useAtomValue(pipelineAtom);
+  const selectedEnvironment = useAtomValue(selectedEnvironmentAtom);
   const pipelineId = pipeline?.id ?? null;
   const selectedAssetId = useAtomValue(resolvedSelectedAssetAtom);
   const inspectAssets = useMemo(() => (asset ? [asset] : []), [asset]);
@@ -166,7 +168,7 @@ export function useAssetResults() {
     });
   };
 
-  const runInspectForAsset = async (assetId: string, contentSnapshot?: string) => {
+  const runInspectForAsset = useCallback(async (assetId: string, contentSnapshot?: string) => {
     try {
       const result = await inspectAssetById(assetId, {
         force: true,
@@ -189,9 +191,9 @@ export function useAssetResults() {
       setResultTab("inspect");
       return failure;
     }
-  };
+  }, [inspectAssetById]);
 
-  const runMaterializeForAsset = async (
+  const runMaterializeForAsset = useCallback(async (
     assetId: string,
     refresh?: () => Promise<void> | void
   ) => {
@@ -234,7 +236,7 @@ export function useAssetResults() {
             updatedAt: Date.now(),
           }));
         },
-      });
+      }, { environment: selectedEnvironment });
       upsertMaterializeEntry(entryId, (previous) => ({
         ...(previous ??
           createMaterializeEntry({
@@ -299,9 +301,9 @@ export function useAssetResults() {
         await refresh();
       }
     }
-  };
+  }, [asset?.name, pipeline?.name, pipelineId, selectedEnvironment, setChangedAssetIds, setResultTab]);
 
-  const runMaterializePipeline = async (
+  const runMaterializePipeline = useCallback(async (
     pipelineId: string,
     refresh?: () => Promise<void> | void
   ) => {
@@ -342,7 +344,7 @@ export function useAssetResults() {
             updatedAt: Date.now(),
           }));
         },
-      });
+      }, { environment: selectedEnvironment });
 
       upsertMaterializeEntry(entryId, (previous) => ({
         ...(previous ??
@@ -402,7 +404,7 @@ export function useAssetResults() {
         await refresh();
       }
     }
-  };
+  }, [pipeline?.name, selectedEnvironment, setChangedAssetIds]);
 
   const setMaterializeBatchResult = (
     output: string,

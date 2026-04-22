@@ -65,6 +65,28 @@ If a user flow depends on workspace discovery or project semantics, prefer solut
 - **Tables:** `@tanstack/react-virtual`
 - **Realtime Sync:** Server-Sent Events (SSE)
 
+## Frontend Learnings
+
+When working on `renart/web`, preserve the component and routing patterns the app already uses.
+
+### Cards
+
+- Prefer the shared shadcn card primitives from `renart/web/components/ui/card.tsx` for panelized UI.
+- Do not build ad hoc "card" wrappers out of plain `div`s with repeated `rounded-* border bg-card shadow-*` class stacks when the intent is a card.
+- If a page needs a header/body split, use `Card`, `CardHeader`, `CardTitle`, `CardDescription`, and `CardContent` instead of hand-rolled section shells.
+
+### TanStack Router
+
+- For hierarchical URLs that should not visually nest parent pages, use pathful layout routes with `route.tsx` plus leaf `index.tsx` files.
+- Example pattern for settings-style pages:
+  - `foo/route.tsx` for the non-visual parent route that renders `<Outlet />`
+  - `foo/index.tsx` for `/foo`
+  - `foo/$id/route.tsx` for the non-visual branch route
+  - `foo/$id/index.tsx` for `/foo/$id`
+- Avoid underscore-flattened route hacks when the goal is simply to prevent a visible parent page from rendering around its children.
+- Avoid putting visible page UI in a route file that also needs to host child routes unless you explicitly want nested rendering.
+- After changing route files, regenerate the TanStack route tree by running the Renart web build so `src/routeTree.gen.ts` matches the filesystem routes.
+
 ## App Shape
 
 ### Entry points

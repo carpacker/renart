@@ -293,7 +293,7 @@ func extractInspectRawOutput(output []byte) string {
 	return trimmed
 }
 
-func (s *ExecutionService) MaterializeAssetStream(ctx context.Context, assetID string, onChunk func([]byte)) MaterializeResult {
+func (s *ExecutionService) MaterializeAssetStream(ctx context.Context, assetID, environment string, onChunk func([]byte)) MaterializeResult {
 	relAssetPath, err := DecodeID(assetID)
 	if err != nil {
 		return MaterializeResult{Status: "error", Error: "invalid asset id", ExitCode: 1}
@@ -305,10 +305,13 @@ func (s *ExecutionService) MaterializeAssetStream(ctx context.Context, assetID s
 	}
 
 	cmdArgs := []string{"run", relAssetPath}
+	if strings.TrimSpace(environment) != "" {
+		cmdArgs = append(cmdArgs, "--env", environment)
+	}
 	var output []byte
 	run := func() error {
 		var runErr error
-		output, runErr = s.deps.Executor.RunAsset(ctx, RunAssetRequest{AssetPath: relAssetPath}, onChunk)
+		output, runErr = s.deps.Executor.RunAsset(ctx, RunAssetRequest{AssetPath: relAssetPath, Environment: environment}, onChunk)
 		return runErr
 	}
 
@@ -356,7 +359,7 @@ func (s *ExecutionService) MaterializeAssetStream(ctx context.Context, assetID s
 	}
 }
 
-func (s *ExecutionService) GetPipelineMaterialization(ctx context.Context, pipelineID string) (PipelineMaterializationResponse, error) {
+func (s *ExecutionService) GetPipelineMaterialization(ctx context.Context, pipelineID, environment string) (PipelineMaterializationResponse, error) {
 	relPipelinePath, err := DecodeID(pipelineID)
 	if err != nil {
 		return PipelineMaterializationResponse{}, fmt.Errorf("invalid pipeline id")
@@ -372,7 +375,7 @@ func (s *ExecutionService) GetPipelineMaterialization(ctx context.Context, pipel
 		return PipelineMaterializationResponse{}, err
 	}
 
-	matInfo := s.inspectPipelineMaterializations(ctx, parsed)
+	matInfo := s.inspectPipelineMaterializations(ctx, parsed, environment)
 	freshnessByAssetName := ComputePipelineFreshness(parsed, matInfo, s.deps.FreshnessSnapshot())
 	assets := make([]PipelineMaterializationState, 0, len(parsed.Assets))
 
@@ -419,14 +422,17 @@ func (s *ExecutionService) GetPipelineMaterialization(ctx context.Context, pipel
 	return PipelineMaterializationResponse{PipelineID: pipelineID, Assets: assets}, nil
 }
 
-func (s *ExecutionService) MaterializePipelineStream(ctx context.Context, pipelineID string, onChunk func([]byte)) MaterializeResult {
+func (s *ExecutionService) MaterializePipelineStream(ctx context.Context, pipelineID, environment string, onChunk func([]byte)) MaterializeResult {
 	target, err := ResolvePipelineRunTarget(pipelineID)
 	if err != nil {
 		return MaterializeResult{Status: "error", Error: "invalid pipeline id", ExitCode: 1}
 	}
 
 	cmdArgs := []string{"run", target}
-	output, runErr := s.deps.Executor.RunPipeline(ctx, RunPipelineRequest{Target: target}, onChunk)
+	if strings.TrimSpace(environment) != "" {
+		cmdArgs = append(cmdArgs, "--env", environment)
+	}
+	output, runErr := s.deps.Executor.RunPipeline(ctx, RunPipelineRequest{Target: target, Environment: environment}, onChunk)
 
 	changedAssetIDs := make([]string, 0)
 	var materializedAt *time.Time
@@ -486,7 +492,7 @@ func ResolvePipelineRunTarget(pipelineID string) (string, error) {
 	return filepath.ToSlash(cleaned), nil
 }
 
-func (s *ExecutionService) inspectPipelineMaterializations(ctx context.Context, parsed *pipeline.Pipeline) map[string]PipelineMaterializationInfo {
+func (s *ExecutionService) inspectPipelineMaterializations(ctx context.Context, parsed *pipeline.Pipeline, environment string) map[string]PipelineMaterializationInfo {
 	result := make(map[string]PipelineMaterializationInfo)
 
 	assetsByConnection := make(map[string][]*pipeline.Asset)
@@ -499,7 +505,7 @@ func (s *ExecutionService) inspectPipelineMaterializations(ctx context.Context, 
 	}
 
 	for connName, assets := range assetsByConnection {
-		objects, err := s.fetchObjectsForConnection(ctx, connName)
+		objects, err := s.fetchObjectsForConnection(ctx, connName, environment)
 		if err != nil || len(objects) == 0 {
 			for _, asset := range assets {
 				key := MaterializationAssetKey(asset.Name, connName)
@@ -539,7 +545,7 @@ func (s *ExecutionService) inspectPipelineMaterializations(ctx context.Context, 
 			}
 		}
 
-		rowCounts := s.fetchRowCountsForObjects(ctx, connName, tableObjects)
+		rowCounts := s.fetchRowCountsForObjects(ctx, connName, environment, tableObjects)
 
 		objectsByName := make(map[string]DBObjectInfo)
 		for _, object := range objects {
@@ -714,7 +720,7 @@ type DBObjectInfo struct {
 	Kind          string
 }
 
-func (s *ExecutionService) fetchObjectsForConnection(ctx context.Context, connectionName string) ([]DBObjectInfo, error) {
+func (s *ExecutionService) fetchObjectsForConnection(ctx context.Context, connectionName, environment string) ([]DBObjectInfo, error) {
 	queries := []string{
 		`SELECT table_schema, table_name, table_type FROM information_schema.tables`,
 		`SHOW TABLES`,
@@ -723,7 +729,7 @@ func (s *ExecutionService) fetchObjectsForConnection(ctx context.Context, connec
 	var rows []map[string]any
 	var lastErr error
 	for _, query := range queries {
-		_, qRows, err := s.runConnectionQuery(ctx, connectionName, query)
+		_, qRows, err := s.RunConnectionQueryForEnvironment(ctx, connectionName, environment, query)
 		if err != nil {
 			lastErr = err
 			continue
@@ -764,7 +770,7 @@ func (s *ExecutionService) fetchObjectsForConnection(ctx context.Context, connec
 	return objects, nil
 }
 
-func (s *ExecutionService) fetchRowCountsForObjects(ctx context.Context, connectionName string, objects []DBObjectInfo) map[string]int64 {
+func (s *ExecutionService) fetchRowCountsForObjects(ctx context.Context, connectionName, environment string, objects []DBObjectInfo) map[string]int64 {
 	result := make(map[string]int64)
 	if len(objects) == 0 {
 		return result
@@ -780,7 +786,7 @@ func (s *ExecutionService) fetchRowCountsForObjects(ctx context.Context, connect
 	}
 
 	countQuery := strings.Join(queries, " UNION ALL ")
-	_, rows, err := s.runConnectionQuery(ctx, connectionName, countQuery)
+	_, rows, err := s.RunConnectionQueryForEnvironment(ctx, connectionName, environment, countQuery)
 	if err != nil {
 		return result
 	}

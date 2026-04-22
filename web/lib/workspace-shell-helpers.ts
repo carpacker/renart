@@ -27,7 +27,8 @@ export function normalizeAssetName(input: string): string {
 
 export function buildCreateAssetInput(
   name: string,
-  kind: NewAssetKind
+  kind: NewAssetKind,
+  preferredSqlAssetType = "duckdb.sql"
 ): {
   name: string;
   type: string;
@@ -57,7 +58,7 @@ parameters:
 
   return {
     name,
-    type: "duckdb.sql",
+    type: preferredSqlAssetType,
   };
 }
 

@@ -4,35 +4,29 @@ import { liveTest as test } from "./live-app-fixture";
 test.describe("implemented feature requests live", () => {
   test.use({ fixtureName: "configured-workspace" });
 
-  test("opens the environment editor for a configured workspace", async ({ liveApp, page }) => {
+  test("opens the environment edit dialog from the environments hub", async ({ liveApp, page }) => {
     await page.goto(`${liveApp.baseURL}/settings/environments`);
+    await page.getByRole("link", { name: "Edit" }).first().click();
 
-    if (!test.info().project.name.includes("mobile")) {
-      await page.getByRole("button", { name: "Edit" }).first().click();
-    }
-
-    await expect(page.getByText("Environment Editor", { exact: true }).last()).toBeVisible();
-    await expect(page.getByText(".bruin.yml", { exact: true }).last()).toBeVisible();
-    await expect(page.locator('input[placeholder="staging"]')).toHaveValue("default");
-    await expect(page.locator('input[placeholder="staging_"]')).toHaveValue("dev_");
+    await expect(page).toHaveURL(/\/settings\/environments\/default\/edit/);
+    await expect(page.getByRole("dialog")).toBeVisible();
+    await expect(page.getByRole("textbox").first()).toHaveValue("default");
+    await expect(page.getByRole("button", { name: "Save Changes" })).toBeVisible();
   });
 
-  test("opens the connection editor with an explicit type selector", async ({
+  test("opens the connection dialog with an explicit type selector", async ({
     liveApp,
     page,
   }) => {
-    await page.goto(`${liveApp.baseURL}/settings/connections`);
+    await page.goto(`${liveApp.baseURL}/settings/environments/default`);
+    await page.getByRole("row", { name: /duckdb-default/i }).getByRole("link", { name: "View" }).click();
 
-    if (!test.info().project.name.includes("mobile")) {
-      await page.getByRole("button", { name: "Edit" }).first().click();
-    }
-
-    await expect(page.getByText("Connection Editor", { exact: true }).last()).toBeVisible();
-    await expect(page.getByRole("textbox", { name: "MY_CONNECTION" })).toHaveValue(
-      "duckdb-default"
-    );
-    await expect(page.getByRole("combobox").nth(1)).toContainText("duckdb");
-    await expect(page.locator('input[value="duckdb-files/local.db"]')).toBeVisible();
+    await expect(page).toHaveURL(/\/settings\/environments\/default\/connections\/duckdb-default/);
+    const dialog = page.getByRole("dialog");
+    await expect(dialog).toBeVisible();
+    await expect(dialog.getByRole("textbox").first()).toHaveValue("duckdb-default");
+    await expect(dialog.getByRole("combobox").first()).toContainText("duckdb");
+    await expect(dialog.locator('input[value="duckdb-files/local.db"]')).toBeVisible();
   });
 
   test("renames an asset inline from the editor header with Enter", async ({

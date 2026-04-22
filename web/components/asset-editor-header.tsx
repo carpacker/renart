@@ -125,7 +125,7 @@ export function AssetEditorHeader({
         {assetPath ?? "No asset selected"}
       </div>
       <div
-        className={`mt-2 flex flex-wrap gap-2 ${
+        className={`mt-2 flex flex-wrap items-center gap-2 ${
           helpMode && actionHighlighted
             ? "rounded-md ring-2 ring-primary/70 ring-offset-2"
             : ""

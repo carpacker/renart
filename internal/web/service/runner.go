@@ -15,11 +15,13 @@ import (
 )
 
 type RunAssetRequest struct {
-	AssetPath string
+	AssetPath   string
+	Environment string
 }
 
 type RunPipelineRequest struct {
-	Target string
+	Target      string
+	Environment string
 }
 
 type QueryAssetRequest struct {
@@ -122,11 +124,21 @@ func resolveDefaultBruinBinary(workspaceRoot string) string {
 }
 
 func (r *CLIBruinExecutor) RunAsset(ctx context.Context, req RunAssetRequest, onChunk func([]byte)) ([]byte, error) {
-	return r.runMaybeStreaming(ctx, []string{"run", req.AssetPath}, onChunk)
+	args := []string{"run"}
+	if strings.TrimSpace(req.Environment) != "" {
+		args = append(args, "--env", req.Environment)
+	}
+	args = append(args, req.AssetPath)
+	return r.runMaybeStreaming(ctx, args, onChunk)
 }
 
 func (r *CLIBruinExecutor) RunPipeline(ctx context.Context, req RunPipelineRequest, onChunk func([]byte)) ([]byte, error) {
-	return r.runMaybeStreaming(ctx, []string{"run", req.Target}, onChunk)
+	args := []string{"run"}
+	if strings.TrimSpace(req.Environment) != "" {
+		args = append(args, "--env", req.Environment)
+	}
+	args = append(args, req.Target)
+	return r.runMaybeStreaming(ctx, args, onChunk)
 }
 
 func (r *CLIBruinExecutor) QueryAsset(ctx context.Context, req QueryAssetRequest) ([]byte, error) {

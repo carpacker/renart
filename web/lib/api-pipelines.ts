@@ -1,4 +1,5 @@
 import {
+  buildQueryString,
   fetchJSON,
   fetchJSONWithBody,
   MaterializeStreamPayload,
@@ -41,18 +42,26 @@ export async function materializePipelineStream(
   handlers: {
     onChunk?: (chunk: string) => void;
     onDone?: (payload: MaterializeStreamPayload) => void;
-  }
+  },
+  options?: { environment?: string }
 ) {
   return streamMaterialization(
-    `/api/pipelines/${pipelineId}/materialize/stream`,
+    `/api/pipelines/${pipelineId}/materialize/stream${buildQueryString({
+      environment: options?.environment,
+    })}`,
     handlers,
     "Pipeline materialization stream ended unexpectedly."
   );
 }
 
-export async function getPipelineMaterialization(pipelineId: string) {
+export async function getPipelineMaterialization(
+  pipelineId: string,
+  options?: { environment?: string }
+) {
   return fetchJSON<PipelineMaterializationResponse>(
-    `/api/pipelines/${pipelineId}/materialization`,
+    `/api/pipelines/${pipelineId}/materialization${buildQueryString({
+      environment: options?.environment,
+    })}`,
     {
       method: "GET",
       cache: "no-store",

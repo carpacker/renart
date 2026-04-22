@@ -121,6 +121,17 @@ export type OnboardingImportResponse = {
   asset_paths?: string[];
 };
 
+export type OnboardingImportSummary = {
+  database?: string;
+  importedTables?: number;
+  mergedTables?: number;
+  pipelinePath?: string;
+  processedAssets?: number;
+  successfulAssets?: number;
+  failedAssets?: number;
+  warnings: string[];
+};
+
 export type AssetInspectResponse = GeneratedAssetInspectResponse & {
   status: "ok" | "error";
   command?: string[];

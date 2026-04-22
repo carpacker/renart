@@ -60,12 +60,13 @@ func (h *SQLAPI) HandleSQLColumnValues(w http.ResponseWriter, r *http.Request) {
 
 func (h *SQLAPI) HandleGetSQLDatabases(w http.ResponseWriter, r *http.Request) {
 	connectionName := strings.TrimSpace(r.URL.Query().Get("connection"))
+	environment := strings.TrimSpace(r.URL.Query().Get("environment"))
 	if connectionName == "" {
 		webapi.WriteBadRequest(w, "connection_required", "connection query parameter is required")
 		return
 	}
 
-	result, apiErr := h.Service.Databases(r.Context(), connectionName, strings.TrimSpace(r.URL.Query().Get("environment")))
+	result, apiErr := h.Service.Databases(r.Context(), connectionName, environment)
 	if apiErr != nil {
 		webapi.WriteJSON(w, apiErr.Status, map[string]any{
 			"status": "error",
@@ -79,6 +80,7 @@ func (h *SQLAPI) HandleGetSQLDatabases(w http.ResponseWriter, r *http.Request) {
 
 func (h *SQLAPI) HandleGetSQLTables(w http.ResponseWriter, r *http.Request) {
 	connectionName := strings.TrimSpace(r.URL.Query().Get("connection"))
+	environment := strings.TrimSpace(r.URL.Query().Get("environment"))
 	if connectionName == "" {
 		webapi.WriteBadRequest(w, "connection_required", "connection query parameter is required")
 		return
@@ -90,7 +92,7 @@ func (h *SQLAPI) HandleGetSQLTables(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	result, apiErr := h.Service.Tables(r.Context(), connectionName, databaseName, strings.TrimSpace(r.URL.Query().Get("environment")))
+	result, apiErr := h.Service.Tables(r.Context(), connectionName, databaseName, environment)
 	if apiErr != nil {
 		webapi.WriteJSON(w, apiErr.Status, map[string]any{
 			"status": "error",
@@ -104,6 +106,7 @@ func (h *SQLAPI) HandleGetSQLTables(w http.ResponseWriter, r *http.Request) {
 
 func (h *SQLAPI) HandleGetSQLTableColumns(w http.ResponseWriter, r *http.Request) {
 	connectionName := strings.TrimSpace(r.URL.Query().Get("connection"))
+	environment := strings.TrimSpace(r.URL.Query().Get("environment"))
 	if connectionName == "" {
 		webapi.WriteBadRequest(w, "connection_required", "connection query parameter is required")
 		return
@@ -115,6 +118,6 @@ func (h *SQLAPI) HandleGetSQLTableColumns(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	result, status := h.Service.TableColumns(r.Context(), connectionName, tableName, strings.TrimSpace(r.URL.Query().Get("environment")))
+	result, status := h.Service.TableColumns(r.Context(), connectionName, tableName, environment)
 	webapi.WriteJSON(w, status, result)
 }

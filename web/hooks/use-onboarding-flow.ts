@@ -2,7 +2,7 @@
 
 import { useAtom } from "jotai";
 import { useCallback } from "react";
-import { useNavigate } from "@tanstack/react-router";
+import { useNavigate, useRouterState } from "@tanstack/react-router";
 
 import {
   onboardingBusyAtom,
@@ -55,6 +55,9 @@ export function useOnboardingFlow({
   onReloadWorkspace,
 }: Params) {
   const navigate = useNavigate();
+  const routeSearch = useRouterState({
+    select: (state) => state.location.search as { environment?: string },
+  });
   const [step, setStep] = useAtom(onboardingStepAtom);
   const [selectedType, setSelectedType] = useAtom(onboardingSelectedTypeAtom);
   const [busy, setBusy] = useAtom(onboardingBusyAtom);
@@ -230,24 +233,44 @@ export function useOnboardingFlow({
         void navigate({
           to: "/onboarding/success",
           replace: true,
-          search: { pipeline: undefined, asset: undefined },
+          search: {
+            pipeline: undefined,
+            asset: undefined,
+            environment: routeSearch.environment,
+          },
         });
       }
     } finally {
       setBusy(false);
     }
-  }, [connectionName, defaultEnvironment, draftValues, importForm, onCreateConnection, onReloadConfig, onReloadWorkspace, onUpdateConnection, selectedTables, selectedType, setBusy, setImportResult, setStep, workspaceConfig.environments, navigate]);
+  }, [connectionName, defaultEnvironment, draftValues, importForm, navigate, onCreateConnection, onReloadConfig, onReloadWorkspace, onUpdateConnection, routeSearch.environment, selectedTables, selectedType, setBusy, setImportResult, setStep, workspaceConfig.environments]);
 
   const handleSkip = useCallback(async () => {
     await updateOnboardingState({ active: false });
-    void navigate({ to: "/", replace: true, search: { pipeline: undefined, asset: undefined } });
-  }, [navigate]);
+    void navigate({
+      to: "/",
+      replace: true,
+      search: {
+        pipeline: undefined,
+        asset: undefined,
+        environment: routeSearch.environment,
+      },
+    });
+  }, [navigate, routeSearch.environment]);
 
   const handleComplete = useCallback(async () => {
     await updateOnboardingState({ active: false });
     await onReloadConfig();
-    void navigate({ to: "/", replace: true, search: { pipeline: undefined, asset: undefined } });
-  }, [navigate, onReloadConfig]);
+    void navigate({
+      to: "/",
+      replace: true,
+      search: {
+        pipeline: undefined,
+        asset: undefined,
+        environment: routeSearch.environment,
+      },
+    });
+  }, [navigate, onReloadConfig, routeSearch.environment]);
 
   const importDisabled =
     busy ||

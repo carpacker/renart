@@ -8,7 +8,10 @@ import {
   materializationByAssetIdAtom,
   MaterializationByAssetId,
 } from "@/lib/atoms/domains/results";
-import { resolvedActivePipelineAtom } from "@/lib/atoms/domains/workspace";
+import {
+  resolvedActivePipelineAtom,
+  selectedEnvironmentAtom,
+} from "@/lib/atoms/domains/workspace";
 import { getPipelineMaterialization } from "@/lib/api";
 import { WebPipeline } from "@/lib/types";
 
@@ -18,11 +21,14 @@ export function usePipelineMaterializationState(): {
 } {
   const activePipeline = useAtomValue(resolvedActivePipelineAtom);
   const enrichedPipeline = useAtomValue(enrichedPipelineAtom);
+  const selectedEnvironment = useAtomValue(selectedEnvironmentAtom);
   const setMaterializationByAssetId = useSetAtom(materializationByAssetIdAtom);
 
   const refreshPipelineMaterialization = useCallback(
     async (pipelineId: string) => {
-      const response = await getPipelineMaterialization(pipelineId);
+      const response = await getPipelineMaterialization(pipelineId, {
+        environment: selectedEnvironment,
+      });
       const mapped = response.assets.reduce<MaterializationByAssetId>(
         (acc, item) => {
           acc[item.asset_id] = {
@@ -40,8 +46,12 @@ export function usePipelineMaterializationState(): {
 
       setMaterializationByAssetId(mapped);
     },
-    [setMaterializationByAssetId]
+    [selectedEnvironment, setMaterializationByAssetId]
   );
+
+  useEffect(() => {
+    setMaterializationByAssetId({});
+  }, [selectedEnvironment, setMaterializationByAssetId]);
 
   useEffect(() => {
     if (!activePipeline) {

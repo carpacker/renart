@@ -26,12 +26,14 @@ func RegisterSuggestionRoutes(router chi.Router, handlers *SuggestionsAPI) {
 
 func (h *SuggestionsAPI) HandleGetIngestrSuggestions(w http.ResponseWriter, r *http.Request) {
 	connectionName := strings.TrimSpace(r.URL.Query().Get("connection"))
+	prefix := strings.TrimSpace(r.URL.Query().Get("prefix"))
+	environment := strings.TrimSpace(r.URL.Query().Get("environment"))
 	if connectionName == "" {
 		webapi.WriteBadRequest(w, "connection_required", "connection query parameter is required")
 		return
 	}
 
-	result, apiErr := h.Service.Ingestr(r.Context(), connectionName, strings.TrimSpace(r.URL.Query().Get("prefix")), strings.TrimSpace(r.URL.Query().Get("environment")))
+	result, apiErr := h.Service.Ingestr(r.Context(), connectionName, prefix, environment)
 	if apiErr != nil {
 		webapi.WriteJSON(w, apiErr.Status, map[string]any{
 			"status": "error",
@@ -45,12 +47,14 @@ func (h *SuggestionsAPI) HandleGetIngestrSuggestions(w http.ResponseWriter, r *h
 
 func (h *SuggestionsAPI) HandleGetSQLPathSuggestions(w http.ResponseWriter, r *http.Request) {
 	assetID := strings.TrimSpace(chi.URLParam(r, "assetID"))
+	prefix := strings.TrimSpace(r.URL.Query().Get("prefix"))
+	environment := strings.TrimSpace(r.URL.Query().Get("environment"))
 	if assetID == "" {
 		webapi.WriteBadRequest(w, "asset_id_required", "asset ID is required")
 		return
 	}
 
-	result, apiErr := h.Service.SQLPath(r.Context(), assetID, strings.TrimSpace(r.URL.Query().Get("prefix")), strings.TrimSpace(r.URL.Query().Get("environment")))
+	result, apiErr := h.Service.SQLPath(r.Context(), assetID, prefix, environment)
 	if apiErr != nil {
 		webapi.WriteJSON(w, apiErr.Status, map[string]any{
 			"status": "error",

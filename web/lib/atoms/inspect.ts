@@ -22,3 +22,9 @@ export const assetInspectAtom = atom<AssetInspectState>({
   loadingByAssetId: {},
   requestedLimitsByAssetId: {},
 });
+
+export const emptyAssetInspectState: AssetInspectState = {
+  byAssetId: {},
+  loadingByAssetId: {},
+  requestedLimitsByAssetId: {},
+};

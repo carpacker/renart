@@ -1,12 +1,13 @@
 "use client";
 
-import { useAtom, useSetAtom } from "jotai";
+import { useAtom, useAtomValue, useSetAtom } from "jotai";
 import { useCallback, useEffect, useMemo, useRef } from "react";
 
 import { inspectAsset } from "@/lib/api";
 import { assetInspectAtom, changedAssetIdsAtom } from "@/lib/atoms/domains/results";
 import { normalizeInspectErrorMessage } from "@/lib/inspect-errors";
 import { registerAssetColumnsAtom } from "@/lib/atoms/domains/suggestions";
+import { selectedEnvironmentAtom } from "@/lib/atoms/domains/workspace";
 import {
   getAssetViewMode,
   getTablePreviewLimit,
@@ -53,14 +54,19 @@ function normalizeRequests(requests: Array<{ id: string; limit: number }>) {
   return Object.entries(maxLimitByAssetId).map(([id, limit]) => ({ id, limit }));
 }
 
-function getInspectRequestKey(assetId: string, limit: number) {
-  return `${assetId}:${limit}`;
+function getInspectRequestKey(
+  assetId: string,
+  limit: number,
+  environment?: string
+) {
+  return `${assetId}:${limit}:${environment ?? ""}`;
 }
 
 export function useAssetInspect(visualAssets: WebAsset[] = []) {
   const [inspectState, setInspectState] = useAtom(assetInspectAtom);
   const [changedIds, setChangedIds] = useAtom(changedAssetIdsAtom);
   const registerAssetColumns = useSetAtom(registerAssetColumnsAtom);
+  const selectedEnvironment = useAtomValue(selectedEnvironmentAtom);
 
   const { byAssetId, loadingByAssetId, requestedLimitsByAssetId } = inspectState;
 
@@ -202,7 +208,11 @@ export function useAssetInspect(visualAssets: WebAsset[] = []) {
       try {
         const results = await Promise.all(
           requestsToFetch.map(async ({ id, limit }) => {
-            const requestKey = getInspectRequestKey(id, limit);
+            const requestKey = getInspectRequestKey(
+              id,
+              limit,
+              selectedEnvironment
+            );
             const existingRequest = inFlightInspectRequests.get(requestKey);
 
             if (existingRequest) {
@@ -211,7 +221,7 @@ export function useAssetInspect(visualAssets: WebAsset[] = []) {
 
             const request = (async () => {
               try {
-                return await inspectAsset(id, { limit });
+                return await inspectAsset(id, { limit, environment: selectedEnvironment });
               } catch (error) {
                 return inspectFailure(error);
               } finally {
@@ -241,7 +251,7 @@ export function useAssetInspect(visualAssets: WebAsset[] = []) {
         setLoading(assetIdsToFetch, false);
       }
     },
-    [byAssetId, mergeInspectResults, setLoading]
+    [byAssetId, mergeInspectResults, selectedEnvironment, setLoading]
   );
 
   const inspectAssetById = useCallback(

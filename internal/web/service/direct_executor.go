@@ -93,6 +93,11 @@ func (e *HybridBruinExecutor) RunAsset(ctx context.Context, req RunAssetRequest,
 	if shouldFallbackToCLIRunAsset(pp.Asset, pp.Pipeline) {
 		return e.cli.RunAsset(ctx, req, onChunk)
 	}
+	if strings.TrimSpace(req.Environment) != "" {
+		if err := pp.Config.SelectEnvironment(req.Environment); err != nil {
+			return nil, fmt.Errorf("failed to use the environment '%s': %w", req.Environment, err)
+		}
+	}
 
 	manager, err := e.directConnectionManager(ctx, pp.Config)
 	if err != nil {
@@ -179,6 +184,11 @@ func (e *HybridBruinExecutor) RunPipeline(ctx context.Context, req RunPipelineRe
 	}
 	if cfg.SelectedEnvironmentName == "" {
 		cfg.SelectedEnvironmentName = cfg.DefaultEnvironmentName
+	}
+	if strings.TrimSpace(req.Environment) != "" {
+		if selectErr := cfg.SelectEnvironment(req.Environment); selectErr != nil {
+			return nil, fmt.Errorf("failed to use the environment '%s': %w", req.Environment, selectErr)
+		}
 	}
 	if cfg.SelectedEnvironment == nil && cfg.SelectedEnvironmentName != "" {
 		if selectErr := cfg.SelectEnvironment(cfg.SelectedEnvironmentName); selectErr != nil {

@@ -72,8 +72,7 @@ export function WorkspaceEnvironmentPane({
   onCloneEnvironment,
   onDeleteEnvironment,
 }: WorkspaceEnvironmentPaneProps) {
-  const { activeEnvironment, environmentForm, setEnvironmentForm, handleDelete, handleSave } =
-    useWorkspaceEnvironmentForm({
+  const { environmentForm, setEnvironmentForm } = useWorkspaceEnvironmentForm({
       defaultEnvironment,
       environments,
       mode,
@@ -101,8 +100,6 @@ export function WorkspaceEnvironmentPane({
       onReload={onReload}
     >
       <WorkspaceEnvironmentFormFields
-        activeEnvironmentExists={Boolean(activeEnvironment)}
-        busy={busy}
         environmentForm={environmentForm}
         environments={environments}
         mode={mode}
@@ -118,14 +115,12 @@ export function WorkspaceEnvironmentPane({
             };
           })
         }
-        onDelete={() => void handleDelete()}
         onNameChange={(value) =>
           setEnvironmentForm((current) => ({
             ...current,
             name: value,
           }))
         }
-        onSave={() => void handleSave()}
         onSchemaPrefixChange={(value) =>
           setEnvironmentForm((current) => ({
             ...current,

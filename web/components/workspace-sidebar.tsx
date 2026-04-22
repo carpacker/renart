@@ -183,6 +183,7 @@ export function WorkspaceSidebar({
                     search={{
                       pipeline: activePipeline ?? undefined,
                       asset: selectedAsset ?? undefined,
+                      environment: connectionsEnvironment ?? undefined,
                     }}
                     activeOptions={{ exact: true, includeSearch: false }}
                     onClick={closeSidebarAfterNavigation}
@@ -204,8 +205,16 @@ export function WorkspaceSidebar({
                   isActive={currentView === "environments"}
                 >
                   <Link
-                    to="/settings/environments"
-                    search={{ environment: undefined, mode: undefined }}
+                    to={
+                      connectionsEnvironment
+                        ? "/settings/environments/$environmentId"
+                        : "/settings/environments"
+                    }
+                    params={
+                      connectionsEnvironment
+                        ? { environmentId: connectionsEnvironment }
+                        : undefined
+                    }
                     activeOptions={{ exact: true, includeSearch: false }}
                     onClick={closeSidebarAfterNavigation}
                   >
@@ -219,14 +228,18 @@ export function WorkspaceSidebar({
                   asChild
                   isActive={currentView === "connections"}
                 >
-                  <Link
-                    to="/settings/connections"
-                    search={{
-                      environment: connectionsEnvironment ?? undefined,
-                      connection: undefined,
-                      connectionType: undefined,
-                      mode: undefined,
-                    }}
+                    <Link
+                      to={
+                        connectionsEnvironment
+                          ? "/settings/environments/$environmentId"
+                          : "/settings/environments"
+                      }
+                     params={
+                       connectionsEnvironment
+                         ? { environmentId: connectionsEnvironment }
+                         : undefined
+                     }
+                    search={{ environment: connectionsEnvironment ?? undefined }}
                     activeOptions={{ exact: true, includeSearch: false }}
                     onClick={closeSidebarAfterNavigation}
                   >
@@ -259,6 +272,7 @@ export function WorkspaceSidebar({
                               search={{
                                 pipeline: item.id,
                                 asset: assets[0]?.id ?? undefined,
+                                environment: connectionsEnvironment ?? undefined,
                               }}
                               activeOptions={{ exact: true, includeSearch: false }}
                               onClick={closeSidebarAfterNavigation}
@@ -338,7 +352,11 @@ export function WorkspaceSidebar({
                             >
                               <Link
                                 to="/"
-                                search={{ pipeline: item.id, asset: asset.id }}
+                                search={{
+                                  pipeline: item.id,
+                                  asset: asset.id,
+                                  environment: connectionsEnvironment ?? undefined,
+                                }}
                                 activeOptions={{
                                   exact: true,
                                   includeSearch: false,
