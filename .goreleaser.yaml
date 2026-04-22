@@ -24,6 +24,8 @@ builds:
     binary: renart
     main: ./
     env:
+      - CC=x86_64-linux-gnu-gcc
+      - CXX=x86_64-linux-gnu-g++
       - CGO_ENABLED=1
     flags:
       - -trimpath
@@ -34,6 +36,93 @@ builds:
       - linux
     goarch:
       - amd64
+    hooks:
+      pre:
+        - cmd: ./scripts/build_rustsqlparser_release_lib.sh x86_64-unknown-linux-gnu
+
+  - id: renart-duckdb-linux-arm64
+    binary: renart
+    main: ./
+    env:
+      - CC=aarch64-linux-gnu-gcc
+      - CXX=aarch64-linux-gnu-g++
+      - CGO_ENABLED=1
+    flags:
+      - -trimpath
+      - -tags=no_duckdb_arrow
+    ldflags:
+      - -s -w -X main.version={{ .Version }}
+    goos:
+      - linux
+    goarch:
+      - arm64
+    hooks:
+      pre:
+        - cmd: ./scripts/build_rustsqlparser_release_lib.sh aarch64-unknown-linux-gnu
+
+  - id: renart-duckdb-darwin-amd64
+    binary: renart
+    main: ./
+    env:
+      - CC=o64-clang
+      - CXX=o64-clang++
+      - CGO_ENABLED=1
+      - MACOSX_DEPLOYMENT_TARGET=10.15
+    flags:
+      - -trimpath
+      - -tags=no_duckdb_arrow
+    ldflags:
+      - -s -w -X main.version={{ .Version }}
+    goos:
+      - darwin
+    goarch:
+      - amd64
+    hooks:
+      pre:
+        - cmd: ./scripts/build_rustsqlparser_release_lib.sh x86_64-apple-darwin
+
+  - id: renart-duckdb-darwin-arm64
+    binary: renart
+    main: ./
+    env:
+      - CC=oa64-clang
+      - CXX=oa64-clang++
+      - CGO_ENABLED=1
+      - MACOSX_DEPLOYMENT_TARGET=10.15
+    flags:
+      - -trimpath
+      - -tags=no_duckdb_arrow
+    ldflags:
+      - -s -w -X main.version={{ .Version }}
+    goos:
+      - darwin
+    goarch:
+      - arm64
+    hooks:
+      pre:
+        - cmd: ./scripts/build_rustsqlparser_release_lib.sh aarch64-apple-darwin
+
+  - id: renart-duckdb-windows-amd64
+    binary: renart
+    main: ./
+    env:
+      - CC=x86_64-w64-mingw32-gcc
+      - CXX=x86_64-w64-mingw32-g++
+      - CGO_ENABLED=1
+      - CGO_LDFLAGS=-static-libgcc -static-libstdc++ -Wl,-Bstatic -lstdc++ -lwinpthread -Wl,-Bdynamic
+    flags:
+      - -trimpath
+      - -tags=no_duckdb_arrow
+      - -buildmode=exe
+    ldflags:
+      - -s -w -X main.version={{ .Version }} -extldflags=-static
+    goos:
+      - windows
+    goarch:
+      - amd64
+    hooks:
+      pre:
+        - cmd: ./scripts/build_rustsqlparser_release_lib.sh x86_64-pc-windows-gnu
 
 archives:
   - id: renart-archives
@@ -50,6 +139,10 @@ archives:
   - id: renart-duckdb-archives
     builds:
       - renart-duckdb-linux-amd64
+      - renart-duckdb-linux-arm64
+      - renart-duckdb-darwin-amd64
+      - renart-duckdb-darwin-arm64
+      - renart-duckdb-windows-amd64
     name_template: >-
       {{ .ProjectName }}_
       {{- title .Os }}_
