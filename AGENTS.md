@@ -65,6 +65,10 @@ If a user flow depends on workspace discovery or project semantics, prefer solut
 - **Tables:** `@tanstack/react-virtual`
 - **Realtime Sync:** Server-Sent Events (SSE)
 
+## Local Tooling
+
+- Go is installed at `/usr/local/go`. If `go` is not on `PATH`, use `/usr/local/go/bin/go`.
+
 ## Frontend Learnings
 
 When working on `renart/web`, preserve the component and routing patterns the app already uses.

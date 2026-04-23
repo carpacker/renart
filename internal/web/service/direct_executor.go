@@ -130,9 +130,6 @@ func (e *HybridBruinExecutor) RunAsset(ctx context.Context, req RunAssetRequest,
 	if len(pending) == 0 {
 		return []byte(""), nil
 	}
-	if len(pending) != 1 || pending[0].GetType() != scheduler.TaskInstanceTypeMain {
-		return e.cli.RunAsset(ctx, req, onChunk)
-	}
 
 	printer := &streamCaptureWriter{buffer: bytes.NewBuffer(nil), onChunk: onChunk}
 	formatting := directRunFormatting{doNotLogTaskName: true}
@@ -147,13 +144,50 @@ func (e *HybridBruinExecutor) RunAsset(ctx context.Context, req RunAssetRequest,
 	runCtx = context.WithValue(runCtx, bruinexecutor.ContextLogger, zap.NewNop().Sugar())
 
 	seq := bruinexecutor.Sequential{TaskTypeMap: mainExecutors}
+	results := make([]*scheduler.TaskExecutionResult, 0, len(pending))
 	startedAt := time.Now()
-	writeDirectRunLifecycle(printer, pending[0], nil, true, 0)
-	err = seq.RunSingleTask(runCtx, pending[0])
-	results := []*scheduler.TaskExecutionResult{{Instance: pending[0], Error: err}}
-	writeDirectRunLifecycle(printer, pending[0], err, false, time.Since(startedAt))
+
+	for {
+		pending = s.GetTaskInstancesByStatus(scheduler.Pending)
+		if len(pending) == 0 {
+			break
+		}
+
+		progressed := false
+		for _, instance := range pending {
+			if instance.GetType() != scheduler.TaskInstanceTypeMain &&
+				instance.GetType() != scheduler.TaskInstanceTypeColumnCheck &&
+				instance.GetType() != scheduler.TaskInstanceTypeCustomCheck &&
+				instance.GetType() != scheduler.TaskInstanceTypeMetadataPush {
+				continue
+			}
+			if !allDirectRunPipelineDependenciesSucceeded(instance) {
+				continue
+			}
+
+			progressed = true
+			instance.MarkAs(scheduler.Running)
+			writeDirectRunLifecycle(printer, instance, nil, true, 0)
+			taskStartedAt := time.Now()
+			if err := seq.RunSingleTask(runCtx, instance); err != nil {
+				results = append(results, &scheduler.TaskExecutionResult{Instance: instance, Error: err})
+				writeDirectRunLifecycle(printer, instance, err, false, time.Since(taskStartedAt))
+				writeDirectRunSummary(printer, buildDirectRunSummary(results, time.Since(startedAt)))
+				return printer.buffer.Bytes(), err
+			}
+			instance.MarkAs(scheduler.Succeeded)
+			results = append(results, &scheduler.TaskExecutionResult{Instance: instance, Error: nil})
+			writeDirectRunLifecycle(printer, instance, nil, false, time.Since(taskStartedAt))
+		}
+
+		if !progressed {
+			writeDirectRunSummary(printer, buildDirectRunSummary(results, time.Since(startedAt)))
+			return printer.buffer.Bytes(), fmt.Errorf("direct run stalled: no runnable task instances remained")
+		}
+	}
+
 	writeDirectRunSummary(printer, buildDirectRunSummary(results, time.Since(startedAt)))
-	return printer.buffer.Bytes(), err
+	return printer.buffer.Bytes(), nil
 }
 
 func (e *HybridBruinExecutor) RunPipeline(ctx context.Context, req RunPipelineRequest, onChunk func([]byte)) ([]byte, error) {
@@ -267,7 +301,8 @@ func (e *HybridBruinExecutor) RunPipeline(ctx context.Context, req RunPipelineRe
 		}
 
 		if !progressed {
-			return e.cli.RunPipeline(ctx, req, onChunk)
+			writeDirectRunSummary(printer, buildDirectRunSummary(results, time.Since(startedAt)))
+			return printer.buffer.Bytes(), fmt.Errorf("direct run stalled: no runnable task instances remained")
 		}
 	}
 
@@ -982,12 +1017,10 @@ func shouldFallbackToCLIRunAsset(asset *pipeline.Asset, foundPipeline *pipeline.
 	if asset == nil || foundPipeline == nil {
 		return true
 	}
-	if foundPipeline.MetadataPush.HasAnyEnabled() {
-		return true
-	}
 	if asset.Type != pipeline.AssetTypeDuckDBQuery &&
 		asset.Type != pipeline.AssetTypeMotherduckQuery &&
 		asset.Type != pipeline.AssetTypePostgresQuery &&
+		asset.Type != pipeline.AssetTypeRedshiftQuery &&
 		asset.Type != pipeline.AssetTypeBigqueryQuery &&
 		asset.Type != pipeline.AssetTypeAthenaQuery &&
 		asset.Type != pipeline.AssetTypeDatabricksQuery &&
@@ -996,6 +1029,7 @@ func shouldFallbackToCLIRunAsset(asset *pipeline.Asset, foundPipeline *pipeline.
 		asset.Type != pipeline.AssetTypeMySQLQuery &&
 		asset.Type != pipeline.AssetTypeSnowflakeQuery &&
 		asset.Type != pipeline.AssetTypeMsSQLQuery &&
+		asset.Type != pipeline.AssetTypeSynapseQuery &&
 		asset.Type != pipeline.AssetTypeClickHouse &&
 		asset.Type != pipeline.AssetTypeTrinoQuery &&
 		asset.Type != pipeline.AssetTypeVerticaQuery {
@@ -1008,9 +1042,6 @@ func shouldFallbackToCLIRunPipeline(foundPipeline *pipeline.Pipeline) bool {
 	if foundPipeline == nil {
 		return true
 	}
-	if foundPipeline.MetadataPush.HasAnyEnabled() {
-		return true
-	}
 	for _, asset := range foundPipeline.Assets {
 		if asset == nil {
 			return true
@@ -1021,6 +1052,7 @@ func shouldFallbackToCLIRunPipeline(foundPipeline *pipeline.Pipeline) bool {
 		if asset.Type != pipeline.AssetTypeDuckDBQuery &&
 			asset.Type != pipeline.AssetTypeMotherduckQuery &&
 			asset.Type != pipeline.AssetTypePostgresQuery &&
+			asset.Type != pipeline.AssetTypeRedshiftQuery &&
 			asset.Type != pipeline.AssetTypeBigqueryQuery &&
 			asset.Type != pipeline.AssetTypeAthenaQuery &&
 			asset.Type != pipeline.AssetTypeDatabricksQuery &&
@@ -1029,6 +1061,7 @@ func shouldFallbackToCLIRunPipeline(foundPipeline *pipeline.Pipeline) bool {
 			asset.Type != pipeline.AssetTypeMySQLQuery &&
 			asset.Type != pipeline.AssetTypeSnowflakeQuery &&
 			asset.Type != pipeline.AssetTypeMsSQLQuery &&
+			asset.Type != pipeline.AssetTypeSynapseQuery &&
 			asset.Type != pipeline.AssetTypeClickHouse &&
 			asset.Type != pipeline.AssetTypeTrinoQuery &&
 			asset.Type != pipeline.AssetTypeVerticaQuery {
@@ -1137,6 +1170,12 @@ func buildDirectMainExecutors(manager config.ConnectionAndDetailsGetter, rendere
 	executors[pipeline.AssetTypePostgresQuery][scheduler.TaskInstanceTypeColumnCheck] = pg.NewColumnCheckOperator(manager)
 	executors[pipeline.AssetTypePostgresQuery][scheduler.TaskInstanceTypeCustomCheck] = ansisql.NewCustomCheckOperator(manager, renderer)
 	executors[pipeline.AssetTypePostgresQuery][scheduler.TaskInstanceTypeMetadataPush] = pg.NewMetadataPushOperator(manager)
+	ensureExecutorConfig(pipeline.AssetTypeRedshiftQuery)
+	executors[pipeline.AssetTypeRedshiftQuery][scheduler.TaskInstanceTypeMain] = pg.NewBasicOperator(manager, wholeFileExtractor, pipeline.HookWrapperMaterializer{
+		Mat: pg.NewMaterializer(false),
+	}, parser)
+	executors[pipeline.AssetTypeRedshiftQuery][scheduler.TaskInstanceTypeColumnCheck] = pg.NewColumnCheckOperator(manager)
+	executors[pipeline.AssetTypeRedshiftQuery][scheduler.TaskInstanceTypeCustomCheck] = ansisql.NewCustomCheckOperator(manager, renderer)
 	ensureExecutorConfig(pipeline.AssetTypeBigqueryQuery)
 	executors[pipeline.AssetTypeBigqueryQuery][scheduler.TaskInstanceTypeMain] = bq.NewBasicOperator(manager, wholeFileExtractor, pipeline.HookWrapperMaterializer{
 		Mat: bq.NewMaterializer(false),
@@ -1181,6 +1220,10 @@ func buildDirectMainExecutors(manager config.ConnectionAndDetailsGetter, rendere
 	executors[pipeline.AssetTypeMsSQLQuery][scheduler.TaskInstanceTypeMain] = ms.NewBasicOperator(manager, wholeFileExtractor, ms.NewMaterializer(false), parser)
 	executors[pipeline.AssetTypeMsSQLQuery][scheduler.TaskInstanceTypeColumnCheck] = ms.NewColumnCheckOperator(manager)
 	executors[pipeline.AssetTypeMsSQLQuery][scheduler.TaskInstanceTypeCustomCheck] = ansisql.NewCustomCheckOperator(manager, renderer)
+	ensureExecutorConfig(pipeline.AssetTypeSynapseQuery)
+	executors[pipeline.AssetTypeSynapseQuery][scheduler.TaskInstanceTypeMain] = ms.NewBasicOperator(manager, wholeFileExtractor, ms.NewMaterializer(false), parser)
+	executors[pipeline.AssetTypeSynapseQuery][scheduler.TaskInstanceTypeColumnCheck] = ms.NewColumnCheckOperator(manager)
+	executors[pipeline.AssetTypeSynapseQuery][scheduler.TaskInstanceTypeCustomCheck] = ansisql.NewCustomCheckOperator(manager, renderer)
 	ensureExecutorConfig(pipeline.AssetTypeClickHouse)
 	executors[pipeline.AssetTypeClickHouse][scheduler.TaskInstanceTypeMain] = ch.NewBasicOperator(manager, wholeFileExtractor, ch.NewMaterializer(false), parser)
 	executors[pipeline.AssetTypeClickHouse][scheduler.TaskInstanceTypeColumnCheck] = ch.NewColumnCheckOperator(manager)

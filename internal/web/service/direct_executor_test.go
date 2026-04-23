@@ -265,7 +265,16 @@ delete from analytics.customers
 func TestHybridBruinExecutorRunAssetFallsBackToCLIForCheckedAssets(t *testing.T) {
 	t.Parallel()
 
-	assert.True(t, shouldFallbackToCLIRunAsset(&pipeline.Asset{}, &pipeline.Pipeline{MetadataPush: pipeline.MetadataPush{Global: true}}))
+	assert.True(t, shouldFallbackToCLIRunAsset(&pipeline.Asset{Type: pipeline.AssetTypeOracleQuery}, &pipeline.Pipeline{}))
+}
+
+func TestHybridBruinExecutorRunAssetAllowsMetadataPushPipelines(t *testing.T) {
+	t.Parallel()
+
+	assert.False(t, shouldFallbackToCLIRunAsset(
+		&pipeline.Asset{Type: pipeline.AssetTypeBigqueryQuery},
+		&pipeline.Pipeline{MetadataPush: pipeline.MetadataPush{Global: true}},
+	))
 }
 
 func TestHybridBruinExecutorRunPipelineFallsBackForUnsupportedCases(t *testing.T) {
@@ -274,7 +283,10 @@ func TestHybridBruinExecutorRunPipelineFallsBackForUnsupportedCases(t *testing.T
 	assert.False(t, shouldFallbackToCLIRunPipeline(&pipeline.Pipeline{
 		Assets: []*pipeline.Asset{{Type: pipeline.AssetTypePostgresQuery}},
 	}))
-	assert.True(t, shouldFallbackToCLIRunPipeline(&pipeline.Pipeline{
+	assert.False(t, shouldFallbackToCLIRunPipeline(&pipeline.Pipeline{
+		Assets: []*pipeline.Asset{{Type: pipeline.AssetTypeRedshiftQuery}},
+	}))
+	assert.False(t, shouldFallbackToCLIRunPipeline(&pipeline.Pipeline{
 		Assets:       []*pipeline.Asset{{Type: pipeline.AssetTypeDuckDBQuery}},
 		MetadataPush: pipeline.MetadataPush{Global: true},
 	}))
@@ -315,6 +327,9 @@ func TestHybridBruinExecutorRunPipelineFallsBackForUnsupportedCases(t *testing.T
 		Assets: []*pipeline.Asset{{Type: pipeline.AssetTypeMsSQLQuery}},
 	}))
 	assert.False(t, shouldFallbackToCLIRunPipeline(&pipeline.Pipeline{
+		Assets: []*pipeline.Asset{{Type: pipeline.AssetTypeSynapseQuery}},
+	}))
+	assert.False(t, shouldFallbackToCLIRunPipeline(&pipeline.Pipeline{
 		Assets: []*pipeline.Asset{{Type: pipeline.AssetTypeClickHouse}},
 	}))
 	assert.False(t, shouldFallbackToCLIRunPipeline(&pipeline.Pipeline{
@@ -330,6 +345,7 @@ func TestHybridBruinExecutorRunAssetSupportsSimpleSQLAssets(t *testing.T) {
 
 	assert.False(t, shouldFallbackToCLIRunAsset(&pipeline.Asset{Type: pipeline.AssetTypeMotherduckQuery}, &pipeline.Pipeline{}))
 	assert.False(t, shouldFallbackToCLIRunAsset(&pipeline.Asset{Type: pipeline.AssetTypePostgresQuery}, &pipeline.Pipeline{}))
+	assert.False(t, shouldFallbackToCLIRunAsset(&pipeline.Asset{Type: pipeline.AssetTypeRedshiftQuery}, &pipeline.Pipeline{}))
 	assert.False(t, shouldFallbackToCLIRunAsset(&pipeline.Asset{Type: pipeline.AssetTypeBigqueryQuery}, &pipeline.Pipeline{}))
 	assert.False(t, shouldFallbackToCLIRunAsset(&pipeline.Asset{Type: pipeline.AssetTypeAthenaQuery}, &pipeline.Pipeline{}))
 	assert.False(t, shouldFallbackToCLIRunAsset(&pipeline.Asset{Type: pipeline.AssetTypeDatabricksQuery}, &pipeline.Pipeline{}))
@@ -338,12 +354,25 @@ func TestHybridBruinExecutorRunAssetSupportsSimpleSQLAssets(t *testing.T) {
 	assert.False(t, shouldFallbackToCLIRunAsset(&pipeline.Asset{Type: pipeline.AssetTypeMySQLQuery}, &pipeline.Pipeline{}))
 	assert.False(t, shouldFallbackToCLIRunAsset(&pipeline.Asset{Type: pipeline.AssetTypeSnowflakeQuery}, &pipeline.Pipeline{}))
 	assert.False(t, shouldFallbackToCLIRunAsset(&pipeline.Asset{Type: pipeline.AssetTypeMsSQLQuery}, &pipeline.Pipeline{}))
+	assert.False(t, shouldFallbackToCLIRunAsset(&pipeline.Asset{Type: pipeline.AssetTypeSynapseQuery}, &pipeline.Pipeline{}))
 	assert.False(t, shouldFallbackToCLIRunAsset(&pipeline.Asset{Type: pipeline.AssetTypeClickHouse}, &pipeline.Pipeline{}))
 	assert.False(t, shouldFallbackToCLIRunAsset(&pipeline.Asset{Type: pipeline.AssetTypeTrinoQuery}, &pipeline.Pipeline{}))
 	assert.False(t, shouldFallbackToCLIRunAsset(&pipeline.Asset{Type: pipeline.AssetTypeVerticaQuery}, &pipeline.Pipeline{}))
 	assert.False(t, shouldFallbackToCLIRunAsset(&pipeline.Asset{Type: pipeline.AssetTypePostgresQuery, Columns: []pipeline.Column{{Name: "id"}}}, &pipeline.Pipeline{}))
 	assert.False(t, shouldFallbackToCLIRunAsset(&pipeline.Asset{Type: pipeline.AssetTypePostgresQuery, CustomChecks: []pipeline.CustomCheck{{Name: "row_count"}}}, &pipeline.Pipeline{}))
 	assert.True(t, shouldFallbackToCLIRunAsset(&pipeline.Asset{Type: pipeline.AssetTypeOracleQuery}, &pipeline.Pipeline{}))
+}
+
+func TestDirectRunAssetWithCustomChecksDoesNotFallbackToCLI(t *testing.T) {
+	t.Parallel()
+
+	assert.False(t, shouldFallbackToCLIRunAsset(
+		&pipeline.Asset{
+			Type: pipeline.AssetTypeDuckDBQuery,
+			CustomChecks: []pipeline.CustomCheck{{Name: "row_count_positive"}},
+		},
+		&pipeline.Pipeline{},
+	))
 }
 
 func TestDirectFormatAssetMatchesCLIFormatting(t *testing.T) {
