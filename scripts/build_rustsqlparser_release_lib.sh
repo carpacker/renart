@@ -60,5 +60,7 @@ cp -R "${rustffi_dir}/." "${work_dir}/"
 rustup target add "${target}"
 cargo build --release --manifest-path "${work_dir}/Cargo.toml" --target "${target}"
 
+mkdir -p "${rustffi_dir}/target/release"
 mkdir -p "${rustffi_dir}/target/${target}/release"
+cp "${work_dir}/target/${target}/release/libbruin_rustsqlparser.a" "${rustffi_dir}/target/release/"
 cp "${work_dir}/target/${target}/release/libbruin_rustsqlparser.a" "${rustffi_dir}/target/${target}/release/"
