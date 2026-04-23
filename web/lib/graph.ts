@@ -19,10 +19,15 @@ export type AssetNodeData = {
   freshnessStatus?: "fresh" | "stale";
   materializedAs?: string;
   rowCount?: number;
+  inspectLoading?: boolean;
+  materializeLoading?: boolean;
   previewLoading?: boolean;
   canLoadMorePreviewRows?: boolean;
   onLoadMorePreviewRows?: () => void;
   onCreateDownstreamAsset?: () => void;
+  onInspect?: () => void;
+  onMaterialize?: () => void;
+  onDelete?: () => void;
   preview?: {
     mode: "table" | "chart" | "markdown";
     columns: string[];

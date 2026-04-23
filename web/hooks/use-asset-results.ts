@@ -460,6 +460,7 @@ export function useAssetResults() {
   return {
     inspectResult,
     inspectDiagnosticSnapshotByAssetId,
+    inspectLoadingByAssetId,
     inspectLoading,
     materializeLoading: effectiveMaterializeLoading,
     pipelineMaterializeLoading,

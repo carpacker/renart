@@ -47,6 +47,11 @@ type UseAssetCanvasInteractionsInput = {
     }
   ) => Promise<{ asset_id?: string } | null>;
   navigateSelection: (pipelineId: string, assetId: string | null) => void;
+  inspectLoadingByAssetId?: Record<string, boolean>;
+  materializeLoading?: boolean;
+  onInspectAsset?: (assetId: string) => void;
+  onMaterializeAsset?: (assetId: string) => void;
+  onDeleteAsset?: (assetId: string) => void;
   isMobile?: boolean;
   openSelectedAssetEditor?: () => void;
   buildCreateAssetInput: (
@@ -77,6 +82,11 @@ export function useAssetCanvasInteractions({
   setEdges,
   runCreateAsset,
   navigateSelection,
+  inspectLoadingByAssetId,
+  materializeLoading = false,
+  onInspectAsset,
+  onMaterializeAsset,
+  onDeleteAsset,
   isMobile = false,
   openSelectedAssetEditor,
   buildCreateAssetInput,
@@ -101,6 +111,10 @@ export function useAssetCanvasInteractions({
       }
 
       if (target.closest('[data-new-asset-node="true"]')) {
+        return;
+      }
+
+      if (target.closest(".react-flow")) {
         return;
       }
 
@@ -264,6 +278,17 @@ export function useAssetCanvasInteractions({
               ...(node.data as Record<string, unknown>),
               onCreateDownstreamAsset: () =>
                 handleCreateDownstreamAsset(node.id),
+              onInspect: onInspectAsset
+                ? () => onInspectAsset(node.id)
+                : undefined,
+              onMaterialize: onMaterializeAsset
+                ? () => onMaterializeAsset(node.id)
+                : undefined,
+              onDelete: onDeleteAsset
+                ? () => onDeleteAsset(node.id)
+                : undefined,
+              inspectLoading: inspectLoadingByAssetId?.[node.id] ?? false,
+              materializeLoading,
             }
           : node.data,
       position: storedNodePositions[node.id] ?? node.position,
@@ -304,7 +329,12 @@ export function useAssetCanvasInteractions({
     graphEdges,
     graphNodes,
     handleCreateDownstreamAsset,
+    inspectLoadingByAssetId,
+    materializeLoading,
     newAssetDraft,
+    onDeleteAsset,
+    onInspectAsset,
+    onMaterializeAsset,
     selectedAssetId,
     setEdges,
     setNodes,

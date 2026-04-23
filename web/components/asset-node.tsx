@@ -1,6 +1,6 @@
 "use client";
 
-import { ArrowRight, Database, Plus } from "lucide-react";
+import { ArrowRight, Database, Eye, Hammer, Plus, Trash2 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Handle, NodeProps, Position, useUpdateNodeInternals } from "reactflow";
 
@@ -10,6 +10,13 @@ import {
 } from "@/components/asset-node-preview";
 import { AssetTypeIcon, resolveAssetIcon } from "@/components/asset-type-icon";
 import { Button } from "@/components/ui/button";
+import {
+  ContextMenu,
+  ContextMenuContent,
+  ContextMenuItem,
+  ContextMenuSeparator,
+  ContextMenuTrigger,
+} from "@/components/ui/context-menu";
 import { AssetNodeData } from "@/lib/graph";
 import {
   buildLineChartSpec,
@@ -93,159 +100,195 @@ export function AssetNode({ id, data, selected }: NodeProps<AssetNodeData>) {
   return (
     <>
       <Handle type="target" position={Position.Top} />
-      <div
-        ref={containerRef}
-        className={`relative min-w-56 rounded-lg border-2 bg-card p-3 shadow-sm transition-colors ${
-          selected
-            ? "border-primary ring-2 ring-primary/30"
-            : "border-border/90"
-        }`}
-        style={maxWidthStyle}
-        onMouseLeave={() => setShowAddButton(false)}
-        onMouseMove={(event) => {
-          const element = containerRef.current;
-          if (!element || !data.onCreateDownstreamAsset) {
-            setShowAddButton(false);
-            return;
-          }
-
-          const rect = element.getBoundingClientRect();
-          setShowAddButton(event.clientY >= rect.bottom - 36);
-        }}
-      >
-        {data.isMaterialized && (
-          <span
-            className={`absolute top-2 right-2 size-2.5 rounded-full ${
-              data.freshnessStatus === "stale"
-                ? "bg-muted-foreground"
-                : "bg-emerald-500"
+      <ContextMenu>
+        <ContextMenuTrigger asChild>
+          <div
+            ref={containerRef}
+            className={`relative min-w-56 rounded-lg border-2 bg-card p-3 shadow-sm transition-colors ${
+              selected
+                ? "border-primary ring-2 ring-primary/30"
+                : "border-border/90"
             }`}
-          />
-        )}
+            style={maxWidthStyle}
+            onMouseLeave={() => setShowAddButton(false)}
+            onMouseMove={(event) => {
+              const element = containerRef.current;
+              if (!element || !data.onCreateDownstreamAsset) {
+                setShowAddButton(false);
+                return;
+              }
 
-        {isIngestrAsset ? (
-          <div>
-            <div className="flex items-center gap-2">
-              <AssetTypeIcon
-                assetType={data.assetType}
-                className="shrink-0 px-2 text-muted-foreground"
-                size={18}
+              const rect = element.getBoundingClientRect();
+              setShowAddButton(event.clientY >= rect.bottom - 36);
+            }}
+          >
+            {data.isMaterialized && (
+              <span
+                className={`absolute top-2 right-2 size-2.5 rounded-full ${
+                  data.freshnessStatus === "stale"
+                    ? "bg-muted-foreground"
+                    : "bg-emerald-500"
+                }`}
               />
-              <div className="min-w-0 mr-4">
-                <div
-                  className="truncate text-sm font-semibold leading-tight"
-                  title={data.name}
-                >
-                  {leaf}
-                </div>
-                {prefix && (
-                  <div
-                    className="truncate text-[10px] leading-tight text-muted-foreground/90"
-                    title={prefix}
-                  >
-                    {prefix}
+            )}
+
+            {isIngestrAsset ? (
+              <div>
+                <div className="flex items-center gap-2">
+                  <AssetTypeIcon
+                    assetType={data.assetType}
+                    className="shrink-0 px-2 text-muted-foreground"
+                    size={18}
+                  />
+                  <div className="min-w-0 mr-4">
+                    <div
+                      className="truncate text-sm font-semibold leading-tight"
+                      title={data.name}
+                    >
+                      {leaf}
+                    </div>
+                    {prefix && (
+                      <div
+                        className="truncate text-[10px] leading-tight text-muted-foreground/90"
+                        title={prefix}
+                      >
+                        {prefix}
+                      </div>
+                    )}
                   </div>
-                )}
-              </div>
-            </div>
-
-            <div className="mt-3 flex items-center justify-between gap-3 rounded-lg border border-border/70 bg-muted/20 px-3 py-2">
-              <IngestrEndpoint
-                connection={data.parameters?.source_connection}
-                label={ingestrSource.primaryLabel}
-                secondaryLabel={ingestrSource.secondaryLabel}
-              />
-              <ArrowRight className="size-4 shrink-0 text-muted-foreground" />
-              <IngestrEndpoint
-                connection={data.parameters?.destination}
-                label={ingestrDestination.primaryLabel}
-                secondaryLabel={ingestrDestination.secondaryLabel}
-              />
-            </div>
-          </div>
-        ) : (
-          <>
-            <div className="flex items-center gap-1.5 pr-4">
-              <AssetTypeIcon
-                assetType={data.assetType}
-                className="shrink-0 px-2 text-muted-foreground"
-                connection={data.connection}
-                meta={data.meta}
-              />
-              <div className="min-w-0 flex-1 overflow-hidden">
-                <div
-                  className="truncate text-sm font-semibold leading-tight"
-                  title={data.name}
-                >
-                  {leaf}
                 </div>
-                {prefix && (
-                  <div
-                    className="truncate text-[10px] leading-tight text-muted-foreground/90"
-                    title={prefix}
-                  >
-                    {prefix}
-                  </div>
-                )}
+
+                <div className="mt-3 flex items-center justify-between gap-3 rounded-lg border border-border/70 bg-muted/20 px-3 py-2">
+                  <IngestrEndpoint
+                    connection={data.parameters?.source_connection}
+                    label={ingestrSource.primaryLabel}
+                    secondaryLabel={ingestrSource.secondaryLabel}
+                  />
+                  <ArrowRight className="size-4 shrink-0 text-muted-foreground" />
+                  <IngestrEndpoint
+                    connection={data.parameters?.destination}
+                    label={ingestrDestination.primaryLabel}
+                    secondaryLabel={ingestrDestination.secondaryLabel}
+                  />
+                </div>
               </div>
-            </div>
+            ) : (
+              <>
+                <div className="flex items-center gap-1.5 pr-4">
+                  <AssetTypeIcon
+                    assetType={data.assetType}
+                    className="shrink-0 px-2 text-muted-foreground"
+                    connection={data.connection}
+                    meta={data.meta}
+                  />
+                  <div className="min-w-0 flex-1 overflow-hidden">
+                    <div
+                      className="truncate text-sm font-semibold leading-tight"
+                      title={data.name}
+                    >
+                      {leaf}
+                    </div>
+                    {prefix && (
+                      <div
+                        className="truncate text-[10px] leading-tight text-muted-foreground/90"
+                        title={prefix}
+                      >
+                        {prefix}
+                      </div>
+                    )}
+                  </div>
+                </div>
 
-            <div className="mt-2 text-xs">
-              Materialization:{" "}
-              <span className="font-medium">{materializationType}</span>
-            </div>
+                <div className="mt-2 text-xs">
+                  Materialization:{" "}
+                  <span className="font-medium">{materializationType}</span>
+                </div>
 
-            <div className={`text-xs ${rowCountClass}`}>
-              Rows: {formatRowCount(data.rowCount)}
-            </div>
-          </>
-        )}
+                <div className={`text-xs ${rowCountClass}`}>
+                  Rows: {formatRowCount(data.rowCount)}
+                </div>
+              </>
+            )}
 
-        <AssetNodePreview
-          assetId={id}
-          canLoadMorePreviewRows={data.canLoadMorePreviewRows}
-          chart={chart}
-          chartType={chartType}
-          isPreviewLoading={isPreviewLoading}
-          markdown={markdown}
-          onLoadMorePreviewRows={data.onLoadMorePreviewRows}
-          previewColumns={previewColumns}
-          dense={tableDense}
-          previewError={previewError}
-          previewMode={previewMode}
-          previewRows={previewRows}
-        />
+            <AssetNodePreview
+              assetId={id}
+              canLoadMorePreviewRows={data.canLoadMorePreviewRows}
+              chart={chart}
+              chartType={chartType}
+              isPreviewLoading={isPreviewLoading}
+              markdown={markdown}
+              onLoadMorePreviewRows={data.onLoadMorePreviewRows}
+              previewColumns={previewColumns}
+              dense={tableDense}
+              previewError={previewError}
+              previewMode={previewMode}
+              previewRows={previewRows}
+            />
 
-        <AssetNodeMeasurement
-          assetId={id}
-          canLoadMorePreviewRows={data.canLoadMorePreviewRows}
-          dense={tableDense}
-          isPreviewLoading={isPreviewLoading}
-          markdown={markdown || ""}
-          measurementRef={measurementRef}
-          previewColumns={previewColumns}
-          previewMode={previewMode}
-          previewRows={previewRows}
-        />
+            <AssetNodeMeasurement
+              assetId={id}
+              canLoadMorePreviewRows={data.canLoadMorePreviewRows}
+              dense={tableDense}
+              isPreviewLoading={isPreviewLoading}
+              markdown={markdown || ""}
+              measurementRef={measurementRef}
+              previewColumns={previewColumns}
+              previewMode={previewMode}
+              previewRows={previewRows}
+            />
 
-        {data.onCreateDownstreamAsset && showAddButton && (
-          <div className="absolute -bottom-4 left-1/2 z-10 -translate-x-1/2 nodrag nopan">
-            <Button
-              className="h-8 rounded-full px-3 shadow-md"
-              onClick={(event) => {
-                event.preventDefault();
-                event.stopPropagation();
-                data.onCreateDownstreamAsset?.();
-              }}
-              size="sm"
-              type="button"
-            >
-              <Plus className="mr-1 size-3.5" />
-              Add
-            </Button>
+            {data.onCreateDownstreamAsset && showAddButton && (
+              <div className="absolute -bottom-4 left-1/2 z-10 -translate-x-1/2 nodrag nopan">
+                <Button
+                  className="h-8 rounded-full px-3 shadow-md"
+                  onClick={(event) => {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    data.onCreateDownstreamAsset?.();
+                  }}
+                  size="sm"
+                  type="button"
+                >
+                  <Plus className="mr-1 size-3.5" />
+                  Add
+                </Button>
+              </div>
+            )}
           </div>
-        )}
-      </div>
+        </ContextMenuTrigger>
+        <ContextMenuContent>
+          <ContextMenuItem disabled>{data.name}</ContextMenuItem>
+          <ContextMenuSeparator />
+          <ContextMenuItem
+            disabled={Boolean(data.materializeLoading)}
+            onSelect={() => {
+              data.onMaterialize?.();
+            }}
+          >
+            <Hammer />
+            Materialize
+          </ContextMenuItem>
+          <ContextMenuItem
+            disabled={Boolean(data.inspectLoading)}
+            onSelect={() => {
+              data.onInspect?.();
+            }}
+          >
+            <Eye />
+            Inspect
+          </ContextMenuItem>
+          <ContextMenuSeparator />
+          <ContextMenuItem
+            variant="destructive"
+            onSelect={() => {
+              data.onDelete?.();
+            }}
+          >
+            <Trash2 />
+            Delete Asset
+          </ContextMenuItem>
+        </ContextMenuContent>
+      </ContextMenu>
       <Handle type="source" position={Position.Bottom} />
     </>
   );

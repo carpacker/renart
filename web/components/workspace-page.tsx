@@ -142,29 +142,6 @@ export function WorkspacePage() {
   );
 
   const {
-    handlePaneClick,
-    handlePaneContextMenu,
-    handleNodeDragStop,
-    handleNodeClick,
-  } = useAssetCanvasInteractions({
-    reactFlowInstance,
-    canvasContainerRef,
-    graphNodes: graph.nodes,
-    graphEdges: graph.edges,
-    connectedNodeIDs,
-    storedNodePositions,
-    setStoredNodePositions,
-    defaultAssetNamesByKind,
-    setNodes,
-    setEdges,
-    runCreateAsset: assetActions.runCreateAsset,
-    navigateSelection,
-    isMobile,
-    openSelectedAssetEditor: () => setMobileEditorOpen(true),
-    buildCreateAssetInput: buildCreateAssetInputForWorkspace,
-  });
-
-  const {
     deleteDialogOpen,
     deleteLoading,
     setDeleteDialogOpen,
@@ -193,6 +170,72 @@ export function WorkspacePage() {
     navigateSelection,
     clearResultsAfterDelete: assetResults.clearResultsAfterDelete,
     clearPreviewForAsset,
+  });
+
+  const handleDeleteAssetFromNode = useCallback(
+    (assetId: string) => {
+      if (!pipeline) {
+        return;
+      }
+
+      navigateSelection(pipeline.id, assetId);
+      setDeleteDialogOpen(true);
+    },
+    [navigateSelection, pipeline, setDeleteDialogOpen]
+  );
+
+  const handleInspectAssetFromNode = useCallback(
+    (assetId: string) => {
+      if (!pipeline) {
+        return;
+      }
+
+      navigateSelection(pipeline.id, assetId);
+      void assetResults.runInspectForAsset(assetId);
+    },
+    [assetResults, navigateSelection, pipeline]
+  );
+
+  const handleMaterializeAssetFromNode = useCallback(
+    (assetId: string) => {
+      if (!pipeline) {
+        return;
+      }
+
+      navigateSelection(pipeline.id, assetId);
+      void assetResults.runMaterializeForAsset(assetId, async () => {
+        await refreshPipelineMaterialization(pipeline.id).catch(() => undefined);
+      });
+    },
+    [assetResults, navigateSelection, pipeline, refreshPipelineMaterialization]
+  );
+
+  const {
+    handlePaneClick,
+    handlePaneContextMenu,
+    handleNodeDragStop,
+    handleNodeClick,
+  } = useAssetCanvasInteractions({
+    reactFlowInstance,
+    canvasContainerRef,
+    graphNodes: graph.nodes,
+    graphEdges: graph.edges,
+    connectedNodeIDs,
+    storedNodePositions,
+    setStoredNodePositions,
+    defaultAssetNamesByKind,
+    setNodes,
+    setEdges,
+    runCreateAsset: assetActions.runCreateAsset,
+    navigateSelection,
+    inspectLoadingByAssetId: assetResults.inspectLoadingByAssetId,
+    materializeLoading: assetResults.materializeLoading,
+    onDeleteAsset: handleDeleteAssetFromNode,
+    onInspectAsset: handleInspectAssetFromNode,
+    onMaterializeAsset: handleMaterializeAssetFromNode,
+    isMobile,
+    openSelectedAssetEditor: () => setMobileEditorOpen(true),
+    buildCreateAssetInput: buildCreateAssetInputForWorkspace,
   });
 
   const handleRunPipeline = () => {
@@ -290,6 +333,36 @@ export function WorkspacePage() {
   } as const;
 
   const editorPane = <WorkspaceEditorPane {...editorPaneProps} mobile={isMobile} />;
+
+  useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (!asset || !pipeline || deleteLoading || deleteDialogOpen) {
+        return;
+      }
+
+      const target = event.target;
+      if (
+        target instanceof HTMLElement &&
+        (target.isContentEditable ||
+          target.closest("input, textarea, [role='dialog'], [data-radix-popper-content-wrapper]") ||
+          target.tagName === "INPUT" ||
+          target.tagName === "TEXTAREA")
+      ) {
+        return;
+      }
+
+      if (event.key !== "Backspace" && event.key !== "Delete") {
+        return;
+      }
+
+      event.preventDefault();
+      setDeleteDialogOpen(true);
+    };
+
+    document.addEventListener("keydown", handleKeyDown);
+    return () => document.removeEventListener("keydown", handleKeyDown);
+  }, [asset, deleteDialogOpen, deleteLoading, pipeline, setDeleteDialogOpen]);
+
   const handleReloadWorkspace = useCallback(async () => {
     const data = await getWorkspace();
     setWorkspace(data);

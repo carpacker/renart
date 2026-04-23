@@ -1,4 +1,5 @@
 import { cloneElement, isValidElement, ReactElement, ReactNode } from "react";
+import { Database } from "lucide-react";
 
 import {
   SiClickhouse,
@@ -39,10 +40,6 @@ export function AssetTypeIcon({
 }: AssetTypeIconProps) {
   const resolved = resolveAssetIcon(assetType, connection, meta, size);
 
-  if (!resolved) {
-    return null;
-  }
-
   return <span className={cn(className)}>{resolved.icon}</span>;
 }
 
@@ -51,7 +48,7 @@ export function resolveAssetIcon(
   connection?: string,
   meta?: Record<string, string>,
   size = 16
-): { icon: ReactNode } | null {
+): { icon: ReactNode; badge?: { background: string } } {
   const type = normalize(assetType);
   const provider = providerFromAssetType(type);
   const fallback = normalize(
@@ -68,95 +65,139 @@ export function resolveAssetIcon(
   const value = provider || fallback;
 
   if (isPythonType(type)) {
-    return iconWithColor(SiPython({ size }), "#3b82f6");
+    return iconWithColor(SiPython({ size }), "#3b82f6", "#dbeafe");
   }
   if (isRType(type)) {
-    return iconWithColor(SiR({ size }), "#0284c7");
+    return iconWithColor(SiR({ size }), "#0284c7", "#cffafe");
   }
   if (isIngestrType(type)) {
-    return iconWithColor(GiBearFace({ size }), "#d97706");
+    return iconWithColor(GiBearFace({ size }), "#d97706", "#fef3c7");
   }
   if (isSensorType(type)) {
-    return iconWithColor(SiPrometheus({ size }), "#f97316");
+    return iconWithColor(SiPrometheus({ size }), "#f97316", "#ffedd5");
   }
   if (isSeedType(type)) {
-    return iconWithColor(SiDbt({ size }), "#ea580c");
+    return iconWithColor(SiDbt({ size }), "#ea580c", "#ffedd5");
   }
   if (isDashboardType(type)) {
-    return iconWithColor(SiGrafana({ size }), "#f97316");
+    return iconWithColor(SiGrafana({ size }), "#f97316", "#ffedd5");
   }
 
   if (has(value, "athena")) {
-    return null;
+    return placeholderIcon(size, value || type);
   }
   if (has(value, "clickhouse")) {
-    return iconWithColor(SiClickhouse({ size }), "#eab308");
+    return iconWithColor(SiClickhouse({ size }), "#ca8a04", "#fef3c7");
   }
   if (has(value, "databricks")) {
-    return iconWithColor(SiDatabricks({ size }), "#ef4444");
+    return iconWithColor(SiDatabricks({ size }), "#ef4444", "#fee2e2");
   }
   if (has(value, "motherduck")) {
-    return { icon: duckdbIcon(size) };
+    return { icon: duckdbIcon(size), badge: { background: "#fef3c7" } };
   }
   if (has(value, "duckdb")) {
-    return { icon: duckdbIcon(size) };
+    return { icon: duckdbIcon(size), badge: { background: "#fef3c7" } };
   }
   if (has(value, "oracle")) {
-    return null;
+    return placeholderIcon(size, value || type);
   }
   if (has(value, "bigquery")) {
-    return iconWithColor(SiGooglebigquery({ size }), "#3b82f6");
+    return iconWithColor(SiGooglebigquery({ size }), "#3b82f6", "#dbeafe");
   }
   if (has(value, "microsoft sql server", "sqlserver", "mssql")) {
-    return null;
+    return placeholderIcon(size, value || type);
   }
   if (has(value, "fabric")) {
-    return null;
+    return placeholderIcon(size, value || type);
   }
   if (has(value, "mysql")) {
-    return iconWithColor(SiMysql({ size }), "#0369a1");
+    return iconWithColor(SiMysql({ size }), "#0369a1", "#e0f2fe");
   }
   if (has(value, "postgres", "postgresql")) {
-    return iconWithColor(SiPostgresql({ size }), "#2563eb");
+    return iconWithColor(SiPostgresql({ size }), "#2563eb", "#dbeafe");
   }
   if (has(value, "redshift")) {
-    return null;
+    return placeholderIcon(size, value || type);
   }
   if (has(value, "snowflake")) {
-    return iconWithColor(SiSnowflake({ size }), "#06b6d4");
+    return iconWithColor(SiSnowflake({ size }), "#0891b2", "#cffafe");
   }
   if (has(value, "synapse")) {
-    return null;
+    return placeholderIcon(size, value || type);
   }
   if (has(value, "amazons3", "s3")) {
-    return null;
+    return placeholderIcon(size, value || type);
   }
   if (has(value, "trino")) {
-    return iconWithColor(SiTrino({ size }), "#6366f1");
+    return iconWithColor(SiTrino({ size }), "#6366f1", "#e0e7ff");
   }
   if (has(value, "emr")) {
-    return null;
+    return placeholderIcon(size, value || type);
   }
   if (has(value, "dataproc")) {
-    return null;
+    return placeholderIcon(size, value || type);
   }
 
   if (has(type, ".sql") || has(value, "sql")) {
-    return iconWithColor(SiSqlite({ size }), "#8b5cf6");
+    return iconWithColor(SiSqlite({ size }), "#8b5cf6", "#f3e8ff");
   }
 
-  return null;
+  return placeholderIcon(size, value || type);
 }
 
-function iconWithColor(icon: ReactNode, color: string) {
+function placeholderIcon(size: number, seed: string) {
+  const palette = pickPlaceholderPalette(seed);
+  const iconSize = Math.max(12, size - 4);
+
+  return {
+    icon: (
+      <span
+        className="inline-flex items-center justify-center rounded-[4px]"
+        style={{
+          width: size,
+          height: size,
+          backgroundColor: palette.background,
+        }}
+      >
+        <Database size={iconSize} color={palette.foreground} />
+      </span>
+    ),
+    badge: { background: palette.background },
+  };
+}
+
+function pickPlaceholderPalette(seed: string) {
+  if (has(seed, "athena")) {
+    return { background: "#fef3c7", foreground: "#a16207" };
+  }
+  if (has(seed, "oracle")) {
+    return { background: "#fee2e2", foreground: "#dc2626" };
+  }
+  if (has(seed, "microsoft sql server", "sqlserver", "mssql", "fabric", "synapse")) {
+    return { background: "#dbeafe", foreground: "#2563eb" };
+  }
+  if (has(seed, "redshift")) {
+    return { background: "#f3e8ff", foreground: "#7c3aed" };
+  }
+  if (has(seed, "amazons3", "s3", "emr")) {
+    return { background: "#ffedd5", foreground: "#ea580c" };
+  }
+  if (has(seed, "dataproc")) {
+    return { background: "#dcfce7", foreground: "#16a34a" };
+  }
+  return { background: "#e5e7eb", foreground: "#6b7280" };
+}
+
+function iconWithColor(icon: ReactNode, color: string, background?: string) {
   if (!isValidElement(icon)) {
-    return { icon };
+    return { icon, badge: background ? { background } : undefined };
   }
 
   return {
     icon: cloneElement(icon as ReactElement<{ color?: string }>, {
       color,
     }),
+    badge: background ? { background } : undefined,
   };
 }
 

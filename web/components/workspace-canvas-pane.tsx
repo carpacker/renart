@@ -142,8 +142,10 @@ export function WorkspaceCanvasPane({
             <ReactFlow
               nodes={nodes}
               edges={edges}
+              nodesDraggable
               nodeTypes={nodeTypes}
               panActivationKeyCode={null}
+              deleteKeyCode={null}
               minZoom={0.1}
               onInit={onInit}
               onNodesChange={onNodesChange}
