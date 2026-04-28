@@ -143,8 +143,8 @@ test.describe("workspace basic flows", () => {
           status: 200,
           contentType: "text/event-stream",
           body:
-            'event: start\ndata: {"command":["run","asset-customers"]}\n\n' +
-            'event: done\ndata: {"status":"ok","command":["run","asset-customers"],"output":"ok","error":"","exit_code":0,"changed_asset_ids":["asset-customers"]}\n\n',
+            'event: start\ndata: {"operation":{"type":"run","asset_path":"asset-customers","target":"asset-customers"}}\n\n' +
+            'event: done\ndata: {"status":"ok","operation":{"type":"run","asset_path":"asset-customers","target":"asset-customers"},"output":"ok","error":"","exit_code":0,"changed_asset_ids":["asset-customers"]}\n\n',
         });
       }
     );

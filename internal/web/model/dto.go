@@ -125,6 +125,75 @@ type UpdatePipelineRequest struct {
 	Content string `json:"content"`
 }
 
+type PipelineConfigConnection struct {
+	Platform string `json:"platform"`
+	Name     string `json:"name"`
+}
+
+type PipelineConfigNotification struct {
+	Enabled    bool   `json:"enabled"`
+	Channel    string `json:"channel,omitempty"`
+	Connection string `json:"connection,omitempty"`
+	Success    bool   `json:"success"`
+	Failure    bool   `json:"failure"`
+}
+
+type PipelineConfigDefaults struct {
+	RerunCooldown  *int   `json:"rerun_cooldown,omitempty"`
+	StartOffsetRaw string `json:"start_offset_raw,omitempty"`
+	EndOffsetRaw   string `json:"end_offset_raw,omitempty"`
+}
+
+type PipelineConfigVariable struct {
+	Name         string         `json:"name"`
+	Type         string         `json:"type"`
+	DefaultValue any            `json:"default_value"`
+	Description  string         `json:"description,omitempty"`
+	Extra        map[string]any `json:"extra,omitempty"`
+}
+
+type PipelineConfigResponse struct {
+	Status               string                     `json:"status"`
+	ID                   string                     `json:"id"`
+	Path                 string                     `json:"path"`
+	Name                 string                     `json:"name"`
+	Schedule             string                     `json:"schedule,omitempty"`
+	StartDate            string                     `json:"start_date,omitempty"`
+	Owner                string                     `json:"owner,omitempty"`
+	Tags                 []string                   `json:"tags"`
+	Domains              []string                   `json:"domains"`
+	DefaultConnections   []PipelineConfigConnection `json:"default_connections"`
+	Catchup              bool                       `json:"catchup"`
+	MetadataPushBigQuery bool                       `json:"metadata_push_bigquery"`
+	Retries              int                        `json:"retries"`
+	Concurrency          int                        `json:"concurrency"`
+	MaxActiveSteps       *int                       `json:"max_active_steps,omitempty"`
+	NotificationsSlack   PipelineConfigNotification `json:"notifications_slack"`
+	NotificationsTeams   PipelineConfigNotification `json:"notifications_teams"`
+	Defaults             PipelineConfigDefaults     `json:"defaults"`
+	Variables            []PipelineConfigVariable   `json:"variables"`
+	YAML                 string                     `json:"yaml"`
+}
+
+type UpdatePipelineConfigRequest struct {
+	Name                 string                     `json:"name"`
+	Schedule             string                     `json:"schedule"`
+	StartDate            string                     `json:"start_date"`
+	Owner                string                     `json:"owner"`
+	Tags                 []string                   `json:"tags"`
+	Domains              []string                   `json:"domains"`
+	DefaultConnections   []PipelineConfigConnection `json:"default_connections"`
+	Catchup              bool                       `json:"catchup"`
+	MetadataPushBigQuery bool                       `json:"metadata_push_bigquery"`
+	Retries              int                        `json:"retries"`
+	Concurrency          int                        `json:"concurrency"`
+	MaxActiveSteps       *int                       `json:"max_active_steps,omitempty"`
+	NotificationsSlack   PipelineConfigNotification `json:"notifications_slack"`
+	NotificationsTeams   PipelineConfigNotification `json:"notifications_teams"`
+	Defaults             PipelineConfigDefaults     `json:"defaults"`
+	Variables            []PipelineConfigVariable   `json:"variables"`
+}
+
 // CreateAssetRequest is the request body for creating an asset.
 type CreateAssetRequest struct {
 	Name    string `json:"name"`
@@ -148,40 +217,54 @@ type UpdateAssetColumnsRequest struct {
 
 // RunRequest is the request body for running commands.
 type RunRequest struct {
-	Command    string   `json:"command"`
-	PipelineID string   `json:"pipeline_id"`
-	AssetPath  string   `json:"asset_path"`
-	Args       []string `json:"args"`
+	PipelineID  string `json:"pipeline_id"`
+	AssetPath   string `json:"asset_path"`
+	Environment string `json:"environment"`
+}
+
+// OperationMetadata describes the typed backend operation behind a response.
+type OperationMetadata struct {
+	Type           string `json:"type"`
+	Target         string `json:"target,omitempty"`
+	PipelineID     string `json:"pipeline_id,omitempty"`
+	AssetPath      string `json:"asset_path,omitempty"`
+	ConnectionName string `json:"connection_name,omitempty"`
+	Query          string `json:"query,omitempty"`
+	Limit          string `json:"limit,omitempty"`
+	Environment    string `json:"environment,omitempty"`
+	Operation      string `json:"operation,omitempty"`
+	TargetPath     string `json:"target_path,omitempty"`
+	ConfigFile     string `json:"config_file,omitempty"`
 }
 
 // CommandResult represents the result of a command execution.
 type CommandResult struct {
-	Status    string   `json:"status"`
-	Command   []string `json:"command"`
-	Output    string   `json:"output"`
-	ExitCode  int      `json:"exit_code"`
-	Error     string   `json:"error,omitempty"`
-	Attempts  int      `json:"attempts,omitempty"`
-	Retryable bool     `json:"retryable,omitempty"`
+	Status    string            `json:"status"`
+	Operation OperationMetadata `json:"operation"`
+	Output    string            `json:"output"`
+	ExitCode  int               `json:"exit_code"`
+	Error     string            `json:"error,omitempty"`
+	Attempts  int               `json:"attempts,omitempty"`
+	Retryable bool              `json:"retryable,omitempty"`
 }
 
 // InspectResult represents the result of an asset inspection.
 type InspectResult struct {
-	Status    string           `json:"status"`
-	Columns   []string         `json:"columns"`
-	Rows      []map[string]any `json:"rows"`
-	RawOutput string           `json:"raw_output"`
-	Command   []string         `json:"command"`
-	Error     string           `json:"error,omitempty"`
-	Attempts  int              `json:"attempts,omitempty"`
-	Retryable bool             `json:"retryable,omitempty"`
+	Status    string            `json:"status"`
+	Columns   []string          `json:"columns"`
+	Rows      []map[string]any  `json:"rows"`
+	RawOutput string            `json:"raw_output"`
+	Operation OperationMetadata `json:"operation"`
+	Error     string            `json:"error,omitempty"`
+	Attempts  int               `json:"attempts,omitempty"`
+	Retryable bool              `json:"retryable,omitempty"`
 }
 
 // InferColumnsResult represents the result of column inference.
 type InferColumnsResult struct {
-	Status    string   `json:"status"`
-	Columns   []Column `json:"columns"`
-	RawOutput string   `json:"raw_output"`
-	Command   []string `json:"command"`
-	Error     string   `json:"error,omitempty"`
+	Status    string            `json:"status"`
+	Columns   []Column          `json:"columns"`
+	RawOutput string            `json:"raw_output"`
+	Operation OperationMetadata `json:"operation"`
+	Error     string            `json:"error,omitempty"`
 }

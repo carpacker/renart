@@ -23,7 +23,7 @@ type InspectResult struct {
 	Columns    []string
 	Rows       []map[string]any
 	RawOutput  string
-	Command    []string
+	Operation  OperationMetadata
 	Error      string
 	Attempts   int
 	Retryable  bool
@@ -32,7 +32,7 @@ type InspectResult struct {
 
 type MaterializeResult struct {
 	Status          string
-	Command         []string
+	Operation       OperationMetadata
 	Output          string
 	Error           string
 	ExitCode        int
@@ -124,7 +124,7 @@ func (s *ExecutionService) InspectAsset(ctx context.Context, assetID, limit, env
 			Columns:    []string{},
 			Rows:       []map[string]any{},
 			RawOutput:  guardErr.Error(),
-			Command:    []string{"query", "--asset", relAssetPath, "--output", "json", "--limit", limit},
+			Operation:  queryAssetOperation(relAssetPath, limit, environment, ""),
 			Error:      guardErr.Error(),
 			Attempts:   0,
 			Retryable:  false,
@@ -143,14 +143,11 @@ func (s *ExecutionService) InspectAsset(ctx context.Context, assetID, limit, env
 		Environment: environment,
 		Output:      "json",
 	}
-	cmdArgs := []string{"query", "--asset", relAssetPath, "--output", "json", "--limit", limit}
-	if environment != "" {
-		cmdArgs = append(cmdArgs, "--environment", environment)
-	}
+	operation := queryAssetOperation(relAssetPath, limit, environment, "")
 
 	var output []byte
 	var attempts int
-	run := func(args []string) error {
+	run := func() error {
 		var runErr error
 		output, runErr, attempts = s.deps.Executor.RunWithRetry(ctx, queryReq, 4, 150*time.Millisecond)
 		return runErr
@@ -159,20 +156,18 @@ func (s *ExecutionService) InspectAsset(ctx context.Context, assetID, limit, env
 	if duckDBInfo != nil {
 		mu := s.deps.DuckDBLock(duckDBInfo.LockKey)
 		mu.Lock()
-		err = run(cmdArgs)
+		err = run()
 		if err != nil && IsDuckDBLockError(err, output) {
 			if readOnlyConfigPath, cleanup, cfgErr := s.buildReadOnlyConfigFile(duckDBInfo); cfgErr == nil {
 				defer cleanup()
-				readOnlyArgs := append([]string{}, cmdArgs...)
-				readOnlyArgs = append(readOnlyArgs, "--config-file", readOnlyConfigPath)
 				queryReq.ConfigFile = readOnlyConfigPath
-				err = run(readOnlyArgs)
-				cmdArgs = readOnlyArgs
+				operation.ConfigFile = readOnlyConfigPath
+				err = run()
 			}
 		}
 		mu.Unlock()
 	} else {
-		err = run(cmdArgs)
+		err = run()
 	}
 
 	if err != nil {
@@ -191,7 +186,7 @@ func (s *ExecutionService) InspectAsset(ctx context.Context, assetID, limit, env
 			Columns:    []string{},
 			Rows:       []map[string]any{},
 			RawOutput:  rawOutput,
-			Command:    cmdArgs,
+			Operation:  operation,
 			Error:      errorMessage,
 			Attempts:   attempts,
 			Retryable:  statusCode == 409,
@@ -205,7 +200,7 @@ func (s *ExecutionService) InspectAsset(ctx context.Context, assetID, limit, env
 		Columns:    columns,
 		Rows:       rows,
 		RawOutput:  string(output),
-		Command:    cmdArgs,
+		Operation:  operation,
 		Attempts:   attempts,
 		HTTPStatus: 200,
 	}
@@ -304,10 +299,7 @@ func (s *ExecutionService) MaterializeAssetStream(ctx context.Context, assetID, 
 		return MaterializeResult{Status: "error", Error: infoErr.Error(), ExitCode: 1}
 	}
 
-	cmdArgs := []string{"run", relAssetPath}
-	if strings.TrimSpace(environment) != "" {
-		cmdArgs = append(cmdArgs, "--env", environment)
-	}
+	operation := runOperation(relAssetPath, "", relAssetPath, environment)
 	var output []byte
 	run := func() error {
 		var runErr error
@@ -350,7 +342,7 @@ func (s *ExecutionService) MaterializeAssetStream(ctx context.Context, assetID, 
 
 	return MaterializeResult{
 		Status:          status,
-		Command:         cmdArgs,
+		Operation:       operation,
 		Output:          string(output),
 		Error:           errorMessage,
 		ExitCode:        exitCode,
@@ -428,10 +420,7 @@ func (s *ExecutionService) MaterializePipelineStream(ctx context.Context, pipeli
 		return MaterializeResult{Status: "error", Error: "invalid pipeline id", ExitCode: 1}
 	}
 
-	cmdArgs := []string{"run", target}
-	if strings.TrimSpace(environment) != "" {
-		cmdArgs = append(cmdArgs, "--env", environment)
-	}
+	operation := runOperation(target, pipelineID, "", environment)
 	output, runErr := s.deps.Executor.RunPipeline(ctx, RunPipelineRequest{Target: target, Environment: environment}, onChunk)
 
 	changedAssetIDs := make([]string, 0)
@@ -464,7 +453,7 @@ func (s *ExecutionService) MaterializePipelineStream(ctx context.Context, pipeli
 
 	return MaterializeResult{
 		Status:          status,
-		Command:         cmdArgs,
+		Operation:       operation,
 		Output:          string(output),
 		Error:           errorMessage,
 		ExitCode:        exitCode,
@@ -814,10 +803,6 @@ func (s *ExecutionService) runConnectionQuery(ctx context.Context, connectionNam
 }
 
 func (s *ExecutionService) RunConnectionQueryForEnvironment(ctx context.Context, connectionName, environment, query string) ([]string, []map[string]any, error) {
-	cmdArgs := []string{"query", "--connection", connectionName, "--query", query, "--output", "json"}
-	if strings.TrimSpace(environment) != "" {
-		cmdArgs = append(cmdArgs, "--environment", environment)
-	}
 	output, err := s.deps.Executor.QueryConnection(ctx, QueryConnectionRequest{
 		ConnectionName: connectionName,
 		Query:          query,

@@ -20,6 +20,50 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+type cliCompatExecutor struct {
+	workspaceRoot string
+	binaryPath    string
+}
+
+func NewCLIBruinExecutor(workspaceRoot, binaryPath string) *cliCompatExecutor {
+	return &cliCompatExecutor{workspaceRoot: workspaceRoot, binaryPath: binaryPath}
+}
+
+func (e *cliCompatExecutor) RunAsset(ctx context.Context, req RunAssetRequest, onChunk func([]byte)) ([]byte, error) {
+	args := []string{"run"}
+	if strings.TrimSpace(req.Environment) != "" {
+		args = append(args, "--env", req.Environment)
+	}
+	args = append(args, req.AssetPath)
+	return e.runMaybeStreaming(ctx, args, onChunk)
+}
+
+func (e *cliCompatExecutor) RunPipeline(ctx context.Context, req RunPipelineRequest, onChunk func([]byte)) ([]byte, error) {
+	args := []string{"run"}
+	if strings.TrimSpace(req.Environment) != "" {
+		args = append(args, "--env", req.Environment)
+	}
+	args = append(args, req.Target)
+	return e.runMaybeStreaming(ctx, args, onChunk)
+}
+
+func (e *cliCompatExecutor) runMaybeStreaming(ctx context.Context, args []string, onChunk func([]byte)) ([]byte, error) {
+	cmd := exec.CommandContext(ctx, e.binaryPath, args...)
+	cmd.Dir = e.workspaceRoot
+	cmd.Env = append(os.Environ(), "TELEMETRY_OPTOUT=1")
+
+	if onChunk == nil {
+		return cmd.CombinedOutput()
+	}
+
+	buffer := bytes.NewBuffer(nil)
+	writer := &streamCaptureWriter{onChunk: onChunk, buffer: buffer}
+	cmd.Stdout = writer
+	cmd.Stderr = writer
+	err := cmd.Run()
+	return buffer.Bytes(), err
+}
+
 type stubConnectionManager struct {
 	conn any
 }
@@ -262,10 +306,10 @@ delete from analytics.customers
 	assert.JSONEq(t, `{"error":"`+inspectReadOnlyErrorMessage+`"}`, string(output))
 }
 
-func TestHybridBruinExecutorRunAssetFallsBackToCLIForCheckedAssets(t *testing.T) {
+func TestHybridBruinExecutorRunAssetSupportsOracle(t *testing.T) {
 	t.Parallel()
 
-	assert.True(t, shouldFallbackToCLIRunAsset(&pipeline.Asset{Type: pipeline.AssetTypeOracleQuery}, &pipeline.Pipeline{}))
+	assert.False(t, shouldFallbackToCLIRunAsset(&pipeline.Asset{Type: pipeline.AssetTypeOracleQuery}, &pipeline.Pipeline{}))
 }
 
 func TestHybridBruinExecutorRunAssetAllowsMetadataPushPipelines(t *testing.T) {
@@ -338,6 +382,12 @@ func TestHybridBruinExecutorRunPipelineFallsBackForUnsupportedCases(t *testing.T
 	assert.False(t, shouldFallbackToCLIRunPipeline(&pipeline.Pipeline{
 		Assets: []*pipeline.Asset{{Type: pipeline.AssetTypeVerticaQuery}},
 	}))
+	assert.False(t, shouldFallbackToCLIRunPipeline(&pipeline.Pipeline{
+		Assets: []*pipeline.Asset{{Type: pipeline.AssetTypeOracleQuery}},
+	}))
+	assert.False(t, shouldFallbackToCLIRunPipeline(&pipeline.Pipeline{
+		Assets: []*pipeline.Asset{{Type: pipeline.AssetTypePostgresQuerySensor}},
+	}))
 }
 
 func TestHybridBruinExecutorRunAssetSupportsSimpleSQLAssets(t *testing.T) {
@@ -360,7 +410,19 @@ func TestHybridBruinExecutorRunAssetSupportsSimpleSQLAssets(t *testing.T) {
 	assert.False(t, shouldFallbackToCLIRunAsset(&pipeline.Asset{Type: pipeline.AssetTypeVerticaQuery}, &pipeline.Pipeline{}))
 	assert.False(t, shouldFallbackToCLIRunAsset(&pipeline.Asset{Type: pipeline.AssetTypePostgresQuery, Columns: []pipeline.Column{{Name: "id"}}}, &pipeline.Pipeline{}))
 	assert.False(t, shouldFallbackToCLIRunAsset(&pipeline.Asset{Type: pipeline.AssetTypePostgresQuery, CustomChecks: []pipeline.CustomCheck{{Name: "row_count"}}}, &pipeline.Pipeline{}))
-	assert.True(t, shouldFallbackToCLIRunAsset(&pipeline.Asset{Type: pipeline.AssetTypeOracleQuery}, &pipeline.Pipeline{}))
+	assert.False(t, shouldFallbackToCLIRunAsset(&pipeline.Asset{Type: pipeline.AssetTypeOracleQuery}, &pipeline.Pipeline{}))
+	assert.False(t, shouldFallbackToCLIRunAsset(&pipeline.Asset{Type: pipeline.AssetTypePostgresQuerySensor}, &pipeline.Pipeline{}))
+	assert.False(t, shouldFallbackToCLIRunAsset(&pipeline.Asset{Type: pipeline.AssetTypeS3KeySensor}, &pipeline.Pipeline{}))
+	assert.False(t, shouldFallbackToCLIRunAsset(&pipeline.Asset{Type: pipeline.AssetTypePython}, &pipeline.Pipeline{}))
+	assert.True(t, shouldFallbackToCLIRunAsset(&pipeline.Asset{Type: pipeline.AssetType("unknown.custom")}, &pipeline.Pipeline{}))
+}
+
+func TestDirectUnsupportedOperatorReturnsExplicitError(t *testing.T) {
+	t.Parallel()
+
+	err := directUnsupportedOperator{assetType: pipeline.AssetTypePython}.Run(context.Background(), nil)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), `direct execution is not implemented for asset type "python"`)
 }
 
 func TestDirectRunAssetWithCustomChecksDoesNotFallbackToCLI(t *testing.T) {
@@ -368,7 +430,7 @@ func TestDirectRunAssetWithCustomChecksDoesNotFallbackToCLI(t *testing.T) {
 
 	assert.False(t, shouldFallbackToCLIRunAsset(
 		&pipeline.Asset{
-			Type: pipeline.AssetTypeDuckDBQuery,
+			Type:         pipeline.AssetTypeDuckDBQuery,
 			CustomChecks: []pipeline.CustomCheck{{Name: "row_count_positive"}},
 		},
 		&pipeline.Pipeline{},

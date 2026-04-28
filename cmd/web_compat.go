@@ -5,20 +5,12 @@ import (
 	"path/filepath"
 	"strings"
 
-	"renart/internal/web/service"
 	"github.com/bruin-data/bruin/pkg/pipeline"
+	"renart/internal/web/service"
 )
 
 func replaceAssetNameReferences(content, oldName, newName string) string {
 	return service.ReplaceAssetNameReferences(content, oldName, newName)
-}
-
-func buildInferAssetColumnsCommand(parsedPipeline *pipeline.Pipeline, asset *pipeline.Asset) ([]string, error) {
-	return service.BuildInferAssetColumnsCommand(parsedPipeline, asset)
-}
-
-func buildRemoteTableColumnsCommand(connectionName, query, environment string) []string {
-	return service.BuildRemoteTableColumnsCommand(connectionName, query, environment)
 }
 
 func buildSchemaTableSuggestionItems(tables map[string][]string, prefix string) []ingestrSuggestionItem {

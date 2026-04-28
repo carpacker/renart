@@ -55,6 +55,7 @@ type Props = {
   onCreatePipeline: () => void;
   onDeletePipeline: (pipelineId: string) => void;
   onRenamePipeline: (pipelineId: string) => void;
+  onOpenPipelineSettings: (pipelineId: string) => void;
   canDeletePipeline: boolean;
   deletePipelineLoading: boolean;
   renamePipelineLoading: boolean;
@@ -77,6 +78,7 @@ export function WorkspaceSidebar({
   onCreatePipeline,
   onDeletePipeline,
   onRenamePipeline,
+  onOpenPipelineSettings,
   canDeletePipeline,
   deletePipelineLoading,
   renamePipelineLoading,
@@ -309,6 +311,12 @@ export function WorkspaceSidebar({
                       <ContextMenuContent>
                         <ContextMenuItem disabled>{item.name}</ContextMenuItem>
                         <ContextMenuSeparator />
+                        <ContextMenuItem
+                          onClick={() => onOpenPipelineSettings(item.id)}
+                        >
+                          <Settings2 />
+                          Pipeline Settings
+                        </ContextMenuItem>
                         <ContextMenuItem
                           disabled={renamePipelineLoading}
                           onClick={() => onRenamePipeline(item.id)}

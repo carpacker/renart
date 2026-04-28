@@ -386,17 +386,11 @@ func (s *AssetService) RunSQLPatches(relAssetPath string) {
 		prefixedPath = "./" + strings.TrimPrefix(prefixedPath, "./")
 	}
 
-	commands := [][]string{
-		{"patch", "fill-columns-from-db", prefixedPath},
-	}
-
 	if s.deps.Executor != nil {
-		for _, args := range commands {
-			_, _ = s.deps.Executor.ApplyPatch(context.Background(), PatchRequest{
-				Operation:  args[1],
-				TargetPath: args[2],
-			})
-		}
+		_, _ = s.deps.Executor.ApplyPatch(context.Background(), PatchRequest{
+			Operation:  "fill-columns-from-db",
+			TargetPath: prefixedPath,
+		})
 	}
 
 	if err := s.reconcileSQLAssetDependencies(context.Background(), relAssetPath); err != nil {

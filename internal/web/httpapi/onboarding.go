@@ -6,9 +6,9 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/go-chi/chi/v5"
 	webapi "renart/internal/web/api"
 	"renart/internal/web/service"
-	"github.com/go-chi/chi/v5"
 )
 
 type OnboardingImportService interface {
@@ -30,14 +30,14 @@ type OnboardingAPI struct {
 }
 
 type ImportDatabaseRequest struct {
-	ConnectionName  string `json:"connection_name"`
-	EnvironmentName string `json:"environment_name"`
-	PipelineName    string `json:"pipeline_name"`
-	Schema          string `json:"schema"`
-	Pattern         string `json:"pattern"`
+	ConnectionName  string   `json:"connection_name"`
+	EnvironmentName string   `json:"environment_name"`
+	PipelineName    string   `json:"pipeline_name"`
+	Schema          string   `json:"schema"`
+	Pattern         string   `json:"pattern"`
 	Tables          []string `json:"tables"`
-	DisableColumns  bool   `json:"disable_columns"`
-	CreateIfMissing bool   `json:"create_if_missing"`
+	DisableColumns  bool     `json:"disable_columns"`
+	CreateIfMissing bool     `json:"create_if_missing"`
 }
 
 type OnboardingDiscoveryRequest struct {
@@ -89,7 +89,7 @@ func (h *OnboardingAPI) HandleImportDatabase(w http.ResponseWriter, r *http.Requ
 
 	webapi.WriteJSON(w, result.HTTPCode, map[string]any{
 		"status":        result.Status,
-		"command":       result.Command,
+		"operation":     result.Operation,
 		"output":        result.Output,
 		"error":         result.Error,
 		"pipeline_path": result.PipelinePath,

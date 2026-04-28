@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	webapi "renart/internal/web/api"
+	webmodel "renart/internal/web/model"
 	"renart/internal/web/service"
 	"github.com/go-chi/chi/v5"
 )
@@ -35,6 +36,8 @@ type UpdatePipelineRequest struct {
 func RegisterPipelineRoutes(router chi.Router, handlers *PipelineHandlers) {
 	router.Post("/api/pipelines", handlers.HandleCreatePipeline)
 	router.Put("/api/pipelines", handlers.HandleUpdatePipeline)
+	router.Get("/api/pipelines/{id}/config", handlers.HandleGetPipelineConfig)
+	router.Put("/api/pipelines/{id}/config", handlers.HandleUpdatePipelineConfig)
 	router.Delete("/api/pipelines/{id}", handlers.HandleDeletePipeline)
 }
 
@@ -118,4 +121,49 @@ func (h *PipelineHandlers) HandleDeletePipeline(w http.ResponseWriter, r *http.R
 		h.Publisher.WorkspaceChanged(r.Context(), relPath, "pipeline.deleted")
 	}
 	webapi.WriteJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+func (h *PipelineHandlers) HandleGetPipelineConfig(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	resp, err := h.Service.GetConfig(r.Context(), id)
+	if err != nil {
+		h.writePipelineConfigError(w, err)
+		return
+	}
+
+	webapi.WriteJSON(w, http.StatusOK, resp)
+}
+
+func (h *PipelineHandlers) HandleUpdatePipelineConfig(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	var req webmodel.UpdatePipelineConfigRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		webapi.WriteBadRequest(w, "invalid_request_body", err.Error())
+		return
+	}
+
+	relPath, resp, err := h.Service.UpdateConfig(r.Context(), id, req)
+	if err != nil {
+		h.writePipelineConfigError(w, err)
+		return
+	}
+
+	if h.Publisher != nil {
+		h.Publisher.WorkspaceChanged(r.Context(), relPath, "pipeline.updated")
+	}
+	webapi.WriteJSON(w, http.StatusOK, resp)
+}
+
+func (h *PipelineHandlers) writePipelineConfigError(w http.ResponseWriter, err error) {
+	message := err.Error()
+	switch {
+	case strings.Contains(message, "illegal base64"):
+		webapi.WriteBadRequest(w, "invalid_pipeline_id", "invalid pipeline id")
+	case strings.Contains(message, "invalid path"):
+		webapi.WriteBadRequest(w, "invalid_pipeline_path", message)
+	case strings.Contains(message, "yaml") || strings.Contains(message, "parse") || strings.Contains(message, "variable") || strings.Contains(message, "interval modifier"):
+		webapi.WriteBadRequest(w, "pipeline_config_invalid", message)
+	default:
+		webapi.WriteInternalError(w, "pipeline_config_failed", message)
+	}
 }

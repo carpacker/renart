@@ -162,10 +162,6 @@ func Web() *cli.Command {
 				Value: 2 * time.Second,
 				Usage: "poll interval used when watch-mode is poll or auto",
 			},
-			&cli.StringFlag{
-				Name:  "bruin-binary",
-				Usage: "Bruin CLI binary used for CLI-backed operations",
-			},
 		},
 		Action: func(ctx context.Context, c *cli.Command) error {
 			root := c.Args().Get(0)
@@ -215,7 +211,7 @@ func Web() *cli.Command {
 				duckDBOps:     make(map[string]*sync.Mutex),
 			}
 
-			server.executor = service.NewHybridBruinExecutor(absRoot, c.String("bruin-binary"), server.newConnectionManager, server.newPipelineBuilder)
+			server.executor = service.NewHybridBruinExecutor(absRoot, "", server.newConnectionManager, server.newPipelineBuilder)
 
 			server.executionSvc = service.NewExecutionService(service.ExecutionDependencies{
 				WorkspaceRoot:         absRoot,
@@ -884,31 +880,27 @@ func (s *webServer) FillColumnsFromDB(ctx context.Context, assetID string) (int,
 	withDot := "./" + strings.TrimPrefix(normalizedPath, "./")
 	withoutDot := strings.TrimPrefix(normalizedPath, "./")
 
-	commands := [][]string{
-		{"patch", "fill-columns-from-db", withDot},
-		{"patch", "fill-columns-from-db", withoutDot},
-	}
-
 	type cmdResult struct {
-		Command  []string `json:"command"`
-		Output   string   `json:"output"`
-		ExitCode int      `json:"exit_code"`
-		Error    string   `json:"error,omitempty"`
+		Operation webmodel.OperationMetadata `json:"operation"`
+		Output    string                     `json:"output"`
+		ExitCode  int                        `json:"exit_code"`
+		Error     string                     `json:"error,omitempty"`
 	}
 
-	results := make([]cmdResult, 0, len(commands))
+	targets := []string{withDot, withoutDot}
+	results := make([]cmdResult, 0, len(targets))
 	allSucceeded := true
 
-	for _, args := range commands {
+	for _, targetPath := range targets {
 		out, runErr := s.executor.ApplyPatch(ctx, service.PatchRequest{
-			Operation:  args[1],
-			TargetPath: args[2],
+			Operation:  "fill-columns-from-db",
+			TargetPath: targetPath,
 		})
 
 		result := cmdResult{
-			Command:  args,
-			Output:   string(out),
-			ExitCode: 0,
+			Operation: webmodel.OperationMetadata{Type: "patch", Operation: "fill-columns-from-db", Target: targetPath, TargetPath: targetPath},
+			Output:    string(out),
+			ExitCode:  0,
 		}
 
 		if runErr != nil {
@@ -942,18 +934,19 @@ func (s *webServer) InferAssetColumns(ctx context.Context, assetID string) (int,
 		return 0, nil, &apiError{Status: http.StatusBadRequest, Code: "asset_resolve_failed", Message: err.Error()}
 	}
 
-	cmdArgs, err := buildInferAssetColumnsCommand(parsedPipeline, asset)
+	queryReq, err := service.BuildInferAssetColumnsQuery(parsedPipeline, asset, "")
 	if err != nil {
 		return 0, nil, &apiError{Status: http.StatusBadRequest, Code: "infer_columns_command_build_failed", Message: err.Error()}
 	}
+	operation := webmodel.OperationMetadata{Type: "query_connection", ConnectionName: queryReq.ConnectionName, Query: queryReq.Query, Environment: queryReq.Environment}
 
-	output, err := runLegacyExecutorCommand(ctx, s.executor, cmdArgs)
+	output, err := s.executor.QueryConnection(ctx, queryReq)
 	if err != nil {
 		return http.StatusBadRequest, map[string]any{
 			"status":     "error",
 			"columns":    []webColumn{},
 			"raw_output": string(output),
-			"command":    cmdArgs,
+			"operation":  operation,
 			"error":      err.Error(),
 		}, nil
 	}
@@ -963,7 +956,7 @@ func (s *webServer) InferAssetColumns(ctx context.Context, assetID string) (int,
 		"status":     "ok",
 		"columns":    inferred,
 		"raw_output": string(output),
-		"command":    cmdArgs,
+		"operation":  operation,
 	}, nil
 }
 
@@ -1399,27 +1392,6 @@ func encodeID(value string) string {
 
 func decodeID(value string) (string, error) {
 	return service.DecodeID(value)
-}
-
-func runLegacyExecutorCommand(ctx context.Context, executor service.BruinCommandExecutor, args []string) ([]byte, error) {
-	if len(args) == 0 {
-		return nil, fmt.Errorf("missing command")
-	}
-
-	command := args[0]
-	if command == "patch" && len(args) >= 3 {
-		return executor.ApplyPatch(ctx, service.PatchRequest{Operation: args[1], TargetPath: args[2]})
-	}
-
-	cliExecutor, ok := executor.(*service.CLIBruinExecutor)
-	if !ok {
-		return nil, fmt.Errorf("command %q is not supported by this executor", command)
-	}
-
-	return cliExecutor.QueryConnection(ctx, service.QueryConnectionRequest{
-		ConnectionName: "",
-		Query:          strings.Join(args, " "),
-	})
 }
 
 func (s *webServer) runConnectionQueryForEnvironment(ctx context.Context, connectionName, environment, query string) ([]string, []map[string]any, error) {

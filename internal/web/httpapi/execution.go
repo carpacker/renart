@@ -7,8 +7,9 @@ import (
 	"net/http"
 	"time"
 
-	webapi "renart/internal/web/api"
 	"github.com/go-chi/chi/v5"
+	webapi "renart/internal/web/api"
+	webmodel "renart/internal/web/model"
 )
 
 type InspectExecutionResult struct {
@@ -16,7 +17,7 @@ type InspectExecutionResult struct {
 	Columns    []string
 	Rows       []map[string]any
 	RawOutput  string
-	Command    []string
+	Operation  webmodel.OperationMetadata
 	Error      string
 	Attempts   int
 	Retryable  bool
@@ -25,7 +26,7 @@ type InspectExecutionResult struct {
 
 type MaterializeExecutionEvent struct {
 	Status          string
-	Command         []string
+	Operation       webmodel.OperationMetadata
 	Output          string
 	Error           string
 	ExitCode        int
@@ -61,7 +62,7 @@ func (h *ExecutionAPI) HandleInspectAsset(w http.ResponseWriter, r *http.Request
 		"columns":    result.Columns,
 		"rows":       result.Rows,
 		"raw_output": result.RawOutput,
-		"command":    result.Command,
+		"operation":  result.Operation,
 		"error":      result.Error,
 		"attempts":   result.Attempts,
 		"retryable":  result.Retryable,
@@ -82,13 +83,13 @@ func (h *ExecutionAPI) HandleMaterializeAssetStream(w http.ResponseWriter, r *ht
 	w.Header().Set("Connection", "keep-alive")
 	w.Header().Set("X-Accel-Buffering", "no")
 
-	_ = WriteSSEJSON(w, flusher, "start", map[string]any{"command": []string{"run", assetID}})
+	_ = WriteSSEJSON(w, flusher, "start", map[string]any{"operation": webmodel.OperationMetadata{Type: "run", AssetPath: assetID, Target: assetID}})
 	result := h.Service.MaterializeAssetStream(r.Context(), assetID, environment, func(chunk []byte) {
 		_ = WriteSSEJSON(w, flusher, "output", map[string]any{"chunk": string(chunk)})
 	})
 	_ = WriteSSEJSON(w, flusher, "done", map[string]any{
 		"status":            result.Status,
-		"command":           result.Command,
+		"operation":         result.Operation,
 		"output":            result.Output,
 		"error":             result.Error,
 		"exit_code":         result.ExitCode,

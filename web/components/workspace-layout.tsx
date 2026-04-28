@@ -34,6 +34,7 @@ import { useAssetActions } from "@/hooks/use-asset-actions";
 import { useAssetResults } from "@/hooks/use-asset-results";
 import { usePipelineMaterializationState } from "@/hooks/use-pipeline-materialization-state";
 import { useWorkspaceEnvironment } from "@/hooks/use-workspace-environment";
+import { useIsMobile } from "@/hooks/use-mobile";
 import { useWorkspaceSelection } from "@/hooks/use-workspace-selection";
 import { useWorkspaceSync } from "@/hooks/use-workspace-sync";
 import { useWorkspaceTheme } from "@/hooks/use-workspace-theme";
@@ -67,6 +68,7 @@ export function WorkspaceLayout() {
     useWorkspaceSelection();
   const pipeline = useAtomValue(pipelineAtom);
   const { selectedEnvironment } = useWorkspaceEnvironment();
+  const isMobile = useIsMobile();
   const assetActions = useAssetActions();
   const assetResults = useAssetResults();
   const pipelineMaterialization = usePipelineMaterializationState();
@@ -381,6 +383,19 @@ export function WorkspaceLayout() {
               setRenamePipelineTargetId(pipelineId);
               setRenamePipelineName(targetPipeline?.name ?? "");
               setRenamePipelineDialogOpen(true);
+            }}
+            onOpenPipelineSettings={(pipelineId) => {
+              void navigate({
+                to: isMobile
+                  ? "/pipelines/$pipelineId/config"
+                  : "/pipelines/$pipelineId/config/general",
+                params: { pipelineId },
+                search: {
+                  pipeline: activePipeline ?? undefined,
+                  asset: selectedAsset ?? undefined,
+                  environment: selectedEnvironment ?? undefined,
+                },
+              });
             }}
             onDeletePipeline={(pipelineId) => {
               setDeletePipelineTargetId(pipelineId);

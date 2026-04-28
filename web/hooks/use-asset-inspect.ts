@@ -24,7 +24,7 @@ function inspectFailure(error: unknown): AssetInspectResponse {
     columns: [],
     rows: [],
     raw_output: "",
-    command: [],
+    operation: { type: "inspect" },
     error: message || String(error),
   };
 }
@@ -130,7 +130,7 @@ export function useAssetInspect(visualAssets: WebAsset[] = []) {
                   status: previousResult.status,
                   warning: normalizeInspectErrorMessage(result.error) || previousResult.warning,
                   raw_output: result.raw_output,
-                  command: result.command,
+                  operation: result.operation,
                   error: undefined,
                 }
               : {

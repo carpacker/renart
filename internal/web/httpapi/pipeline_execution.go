@@ -4,8 +4,9 @@ import (
 	"context"
 	"net/http"
 
-	webapi "renart/internal/web/api"
 	"github.com/go-chi/chi/v5"
+	webapi "renart/internal/web/api"
+	webmodel "renart/internal/web/model"
 )
 
 type PipelineMaterializationState struct {
@@ -71,13 +72,13 @@ func (h *PipelineExecutionAPI) HandleMaterializePipelineStream(w http.ResponseWr
 	w.Header().Set("Connection", "keep-alive")
 	w.Header().Set("X-Accel-Buffering", "no")
 
-	_ = WriteSSEJSON(w, flusher, "start", map[string]any{"command": []string{"run", pipelineID}})
+	_ = WriteSSEJSON(w, flusher, "start", map[string]any{"operation": webmodel.OperationMetadata{Type: "run", PipelineID: pipelineID, Target: pipelineID}})
 	result := h.Service.MaterializePipelineStream(r.Context(), pipelineID, environment, func(chunk []byte) {
 		_ = WriteSSEJSON(w, flusher, "output", map[string]any{"chunk": string(chunk)})
 	})
 	_ = WriteSSEJSON(w, flusher, "done", map[string]any{
 		"status":            result.Status,
-		"command":           result.Command,
+		"operation":         result.Operation,
 		"output":            result.Output,
 		"error":             result.Error,
 		"exit_code":         result.ExitCode,

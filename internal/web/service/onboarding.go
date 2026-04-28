@@ -77,7 +77,7 @@ type OnboardingPathSuggestionsResult struct {
 
 type OnboardingImportResult struct {
 	Status       string
-	Command      []string
+	Operation    OperationMetadata
 	Output       string
 	Error        string
 	PipelinePath string
@@ -396,28 +396,7 @@ func (s *OnboardingService) ImportDatabase(ctx context.Context, req OnboardingIm
 		}
 	}
 
-	args := []string{"import", "database"}
-	args = append(args, "--connection", connectionName)
-	if environmentName := strings.TrimSpace(req.EnvironmentName); environmentName != "" {
-		args = append(args, "--environment", environmentName)
-	}
-	if schema := strings.TrimSpace(req.Schema); schema != "" {
-		args = append(args, "--schema", schema)
-	}
-	if req.DisableColumns {
-		args = append(args, "--no-columns")
-	}
-	if configPath := strings.TrimSpace(s.configPath); configPath != "" {
-		args = append(args, "--config-file", configPath)
-	}
-	for _, table := range req.Tables {
-		trimmed := strings.TrimSpace(table)
-		if trimmed == "" {
-			continue
-		}
-		args = append(args, "--table", trimmed)
-	}
-	args = append(args, relPipelinePath)
+	operation := importDatabaseOperation(relPipelinePath, connectionName, req.EnvironmentName)
 
 	output, runErr := s.executor.ImportDatabase(ctx, ImportDatabaseRequest{
 		PipelinePath:   relPipelinePath,
@@ -431,7 +410,7 @@ func (s *OnboardingService) ImportDatabase(ctx context.Context, req OnboardingIm
 	if runErr != nil {
 		return OnboardingImportResult{
 			Status:       "error",
-			Command:      args,
+			Operation:    operation,
 			Output:       string(output),
 			Error:        runErr.Error(),
 			PipelinePath: relPipelinePath,
@@ -439,7 +418,7 @@ func (s *OnboardingService) ImportDatabase(ctx context.Context, req OnboardingIm
 		}
 	}
 
-	patchArgs := []string{"patch", "fill-asset-dependencies", relPipelinePath}
+	patchOp := patchOperation("fill-asset-dependencies", relPipelinePath)
 	patchOutput, patchErr := s.executor.ApplyPatch(ctx, PatchRequest{
 		Operation:  "fill-asset-dependencies",
 		TargetPath: relPipelinePath,
@@ -447,7 +426,7 @@ func (s *OnboardingService) ImportDatabase(ctx context.Context, req OnboardingIm
 	if patchErr != nil {
 		return OnboardingImportResult{
 			Status:       "error",
-			Command:      patchArgs,
+			Operation:    patchOp,
 			Output:       string(patchOutput),
 			Error:        patchErr.Error(),
 			PipelinePath: relPipelinePath,
@@ -474,7 +453,7 @@ func (s *OnboardingService) ImportDatabase(ctx context.Context, req OnboardingIm
 
 	return OnboardingImportResult{
 		Status:       "ok",
-		Command:      args,
+		Operation:    operation,
 		Output:       strings.TrimSpace(string(output) + "\n" + string(patchOutput)),
 		PipelinePath: relPipelinePath,
 		AssetPaths:   assetPaths,

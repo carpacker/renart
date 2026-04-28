@@ -1,4 +1,4 @@
-import { createFileRoute, redirect } from "@tanstack/react-router";
+import { Outlet, createFileRoute, redirect } from "@tanstack/react-router";
 
 import { WorkspacePage } from "@/components/workspace-page";
 import { getOnboardingState } from "@/lib/api";
@@ -32,5 +32,10 @@ export const Route = createFileRoute("/_workspace/")({
 });
 
 function WorkspaceIndexRouteComponent() {
-  return <WorkspacePage />;
+  return (
+    <>
+      <WorkspacePage />
+      <Outlet />
+    </>
+  );
 }

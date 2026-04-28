@@ -1,4 +1,4 @@
-import { AssetInspectResponse } from "@/lib/types";
+import { AssetInspectResponse, OperationMetadata } from "@/lib/types";
 import { extractInspectErrorText } from "@/lib/inspect-errors";
 
 export type JSONErrorPayload = {
@@ -8,7 +8,7 @@ export type JSONErrorPayload = {
 
 export type MaterializeStreamPayload = {
   status?: "ok" | "error";
-  command?: string[];
+  operation?: OperationMetadata;
   output?: string;
   error?: string;
   exit_code?: number;
@@ -20,7 +20,7 @@ export type MaterializeStreamPayload = {
 export type FillColumnsFromDBResponse = {
   status: "ok" | "error";
   results?: Array<{
-    command: string[];
+    operation: OperationMetadata;
     output: string;
     exit_code: number;
     error?: string;

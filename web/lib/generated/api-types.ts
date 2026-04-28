@@ -188,7 +188,7 @@ export type SqlDiscoveryTableColumnsResponse = {
   table: string;
   columns: SQLColumn[];
   raw_output: string;
-  command?: string[];
+  operation?: OperationMetadata;
   error?: string;
 };
 
@@ -274,7 +274,7 @@ export type AssetInspectResponse = {
   columns: string[];
   rows: Record<string, unknown>[];
   raw_output: string;
-  command: string[];
+  operation: OperationMetadata;
   error?: string;
   attempts?: number;
   retryable?: boolean;
@@ -284,6 +284,89 @@ export type InferColumnsResponse = {
   status: string;
   columns: WebColumn[];
   raw_output: string;
-  command: string[];
+  operation: OperationMetadata;
   error?: string;
+};
+
+export type OperationMetadata = {
+  type: string;
+  target?: string;
+  pipeline_id?: string;
+  asset_path?: string;
+  connection_name?: string;
+  query?: string;
+  limit?: string;
+  environment?: string;
+  operation?: string;
+  target_path?: string;
+  config_file?: string;
+};
+
+export type PipelineConfigConnection = {
+  platform: string;
+  name: string;
+};
+
+export type PipelineConfigNotification = {
+  enabled: boolean;
+  channel?: string;
+  connection?: string;
+  success: boolean;
+  failure: boolean;
+};
+
+export type PipelineConfigDefaults = {
+  rerun_cooldown?: number;
+  start_offset_raw?: string;
+  end_offset_raw?: string;
+};
+
+export type PipelineConfigVariable = {
+  name: string;
+  type: string;
+  default_value: unknown;
+  description?: string;
+  extra?: Record<string, unknown>;
+};
+
+export type WebPipelineConfigResponse = {
+  status: string;
+  id: string;
+  path: string;
+  name: string;
+  schedule?: string;
+  start_date?: string;
+  owner?: string;
+  tags: string[];
+  domains: string[];
+  default_connections: PipelineConfigConnection[];
+  catchup: boolean;
+  metadata_push_bigquery: boolean;
+  retries: number;
+  concurrency: number;
+  max_active_steps?: number;
+  notifications_slack: PipelineConfigNotification;
+  notifications_teams: PipelineConfigNotification;
+  defaults: PipelineConfigDefaults;
+  variables: PipelineConfigVariable[];
+  yaml: string;
+};
+
+export type WebUpdatePipelineConfigRequest = {
+  name: string;
+  schedule: string;
+  start_date: string;
+  owner: string;
+  tags: string[];
+  domains: string[];
+  default_connections: PipelineConfigConnection[];
+  catchup: boolean;
+  metadata_push_bigquery: boolean;
+  retries: number;
+  concurrency: number;
+  max_active_steps?: number;
+  notifications_slack: PipelineConfigNotification;
+  notifications_teams: PipelineConfigNotification;
+  defaults: PipelineConfigDefaults;
+  variables: PipelineConfigVariable[];
 };

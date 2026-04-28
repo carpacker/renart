@@ -53,13 +53,13 @@ type SQLColumn struct {
 }
 
 type SQLTableColumnsResult struct {
-	Status         string      `json:"status"`
-	ConnectionName string      `json:"connection_name"`
-	Table          string      `json:"table"`
-	Columns        []SQLColumn `json:"columns"`
-	RawOutput      string      `json:"raw_output"`
-	Command        []string    `json:"command,omitempty"`
-	Error          string      `json:"error,omitempty"`
+	Status         string            `json:"status"`
+	ConnectionName string            `json:"connection_name"`
+	Table          string            `json:"table"`
+	Columns        []SQLColumn       `json:"columns"`
+	RawOutput      string            `json:"raw_output"`
+	Operation      OperationMetadata `json:"operation,omitempty"`
+	Error          string            `json:"error,omitempty"`
 }
 
 type SQLDependencies struct {
@@ -168,7 +168,7 @@ func (s *SQLService) Tables(ctx context.Context, connectionName, databaseName, e
 
 func (s *SQLService) TableColumns(ctx context.Context, connectionName, tableName, environment string) (SQLTableColumnsResult, int) {
 	query := fmt.Sprintf("select * from %s limit 1", QuoteQualifiedIdentifier(tableName))
-	cmdArgs := BuildRemoteTableColumnsCommand(connectionName, query, environment)
+	operation := queryConnectionOperation(connectionName, query, environment)
 	output, err := s.deps.Executor.QueryConnection(ctx, QueryConnectionRequest{
 		ConnectionName: connectionName,
 		Query:          query,
@@ -182,7 +182,7 @@ func (s *SQLService) TableColumns(ctx context.Context, connectionName, tableName
 			Table:          tableName,
 			Columns:        []SQLColumn{},
 			RawOutput:      string(output),
-			Command:        cmdArgs,
+			Operation:      operation,
 			Error:          err.Error(),
 		}, http.StatusBadRequest
 	}
@@ -193,7 +193,7 @@ func (s *SQLService) TableColumns(ctx context.Context, connectionName, tableName
 		Table:          tableName,
 		Columns:        InferSQLColumnsFromQueryOutput(output),
 		RawOutput:      string(output),
-		Command:        cmdArgs,
+		Operation:      operation,
 	}, http.StatusOK
 }
 

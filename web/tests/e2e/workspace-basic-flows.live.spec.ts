@@ -329,6 +329,51 @@ test.describe("workspace live basic flows", () => {
     await expect(page.getByLabel("Pipeline name")).toHaveValue("analytics");
   });
 
+  test("opens pipeline settings, saves changes, and persists pipeline.yml", async ({
+    liveApp,
+    page,
+  }) => {
+    test.skip(test.info().project.name.includes("mobile"), "No mobile pipeline context-menu interaction yet.");
+
+    const pipelinePath = join(liveApp.workspaceDir, "analytics", "pipeline.yml");
+    const originalContent = await readFile(pipelinePath, "utf8");
+
+    try {
+      await page.goto(`${liveApp.baseURL}/?pipeline=YW5hbHl0aWNz&asset=YW5hbHl0aWNzL2Fzc2V0cy9jdXN0b21lcnMuc3Fs`);
+
+      await page
+        .getByRole("link", { name: "analytics", exact: true })
+        .click({ button: "right" });
+      await page.getByRole("menuitem", { name: "Pipeline Settings" }).click();
+
+      const dialog = page.getByRole("dialog");
+      await expect(dialog.getByText("No unsaved changes")).toBeVisible();
+
+      await dialog.getByRole("button", { name: "General" }).click();
+      await dialog.getByLabel("Owner").fill("data-platform-renart");
+      await dialog.getByPlaceholder("Add tag").fill("renart-live");
+      await dialog.getByPlaceholder("Add tag").press("Enter");
+
+      await dialog.getByRole("button", { name: "Execution" }).click();
+      await dialog.getByLabel("Retries").fill("3");
+      await dialog.getByLabel("Rerun Cooldown (s)").fill("120");
+
+      await dialog.getByRole("button", { name: "Save" }).click();
+      await expect(dialog.getByText("Saved changes", { exact: true })).toBeVisible();
+
+      const updatedContent = await readFile(pipelinePath, "utf8");
+      expect(updatedContent).toContain("owner: data-platform-renart");
+      expect(updatedContent).toContain("tags:\n  - renart-live");
+      expect(updatedContent).toContain("retries: 3");
+      expect(updatedContent).toContain("rerun_cooldown: 120");
+
+      await dialog.getByRole("button", { name: "Close", exact: true }).click();
+      await expect(page).toHaveURL(/\/?pipeline=YW5hbHl0aWNz/);
+    } finally {
+      await writeFile(pipelinePath, originalContent, "utf8");
+    }
+  });
+
   test("materializes the selected asset and records a history entry", async ({
     liveApp,
     page,

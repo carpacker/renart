@@ -32,6 +32,7 @@ import (
 	"github.com/bruin-data/bruin/pkg/postgres"
 	pg "github.com/bruin-data/bruin/pkg/postgres"
 	"github.com/bruin-data/bruin/pkg/query"
+	"github.com/bruin-data/bruin/pkg/s3"
 	"github.com/bruin-data/bruin/pkg/scheduler"
 	sf "github.com/bruin-data/bruin/pkg/snowflake"
 	"github.com/bruin-data/bruin/pkg/sqlparser"
@@ -43,7 +44,6 @@ import (
 )
 
 type HybridBruinExecutor struct {
-	cli                  *CLIBruinExecutor
 	newConnectionManager func(context.Context, string) (config.ConnectionAndDetailsGetter, error)
 	newPipelineBuilder   func() *pipeline.Builder
 	workspaceRoot        string
@@ -73,7 +73,6 @@ func NewHybridBruinExecutor(
 	newPipelineBuilder func() *pipeline.Builder,
 ) *HybridBruinExecutor {
 	return &HybridBruinExecutor{
-		cli:                  NewCLIBruinExecutor(workspaceRoot, binaryPath),
 		newConnectionManager: newConnectionManager,
 		newPipelineBuilder:   newPipelineBuilder,
 		workspaceRoot:        workspaceRoot,
@@ -82,7 +81,7 @@ func NewHybridBruinExecutor(
 
 func (e *HybridBruinExecutor) RunAsset(ctx context.Context, req RunAssetRequest, onChunk func([]byte)) ([]byte, error) {
 	if e.newPipelineBuilder == nil {
-		return e.cli.RunAsset(ctx, req, onChunk)
+		return nil, fmt.Errorf("direct run requires a pipeline builder")
 	}
 
 	pp, err := getDirectPipelineAndAsset(ctx, e.workspaceRoot, req.AssetPath, afero.NewOsFs())
@@ -91,7 +90,7 @@ func (e *HybridBruinExecutor) RunAsset(ctx context.Context, req RunAssetRequest,
 	}
 
 	if shouldFallbackToCLIRunAsset(pp.Asset, pp.Pipeline) {
-		return e.cli.RunAsset(ctx, req, onChunk)
+		return nil, fmt.Errorf("direct run is not supported for asset type %q", pp.Asset.Type)
 	}
 	if strings.TrimSpace(req.Environment) != "" {
 		if err := pp.Config.SelectEnvironment(req.Environment); err != nil {
@@ -192,7 +191,7 @@ func (e *HybridBruinExecutor) RunAsset(ctx context.Context, req RunAssetRequest,
 
 func (e *HybridBruinExecutor) RunPipeline(ctx context.Context, req RunPipelineRequest, onChunk func([]byte)) ([]byte, error) {
 	if e.newPipelineBuilder == nil {
-		return e.cli.RunPipeline(ctx, req, onChunk)
+		return nil, fmt.Errorf("direct pipeline run requires a pipeline builder")
 	}
 
 	resolvedTarget := resolveDirectPath(e.workspaceRoot, req.Target)
@@ -205,7 +204,7 @@ func (e *HybridBruinExecutor) RunPipeline(ctx context.Context, req RunPipelineRe
 		return nil, fmt.Errorf("pipeline not found")
 	}
 	if shouldFallbackToCLIRunPipeline(foundPipeline) {
-		return e.cli.RunPipeline(ctx, req, onChunk)
+		return nil, fmt.Errorf("direct pipeline run is not supported for one or more asset types")
 	}
 
 	configPath := filepath.Join(e.workspaceRoot, ".bruin.yml")
@@ -312,7 +311,7 @@ func (e *HybridBruinExecutor) RunPipeline(ctx context.Context, req RunPipelineRe
 
 func (e *HybridBruinExecutor) QueryAsset(ctx context.Context, req QueryAssetRequest) ([]byte, error) {
 	if e.newPipelineBuilder == nil {
-		return e.cli.QueryAsset(ctx, req)
+		return nil, fmt.Errorf("direct asset query requires a pipeline builder")
 	}
 
 	pp, err := getDirectPipelineAndAsset(ctx, e.workspaceRoot, req.AssetPath, afero.NewOsFs())
@@ -449,7 +448,7 @@ func (e *HybridBruinExecutor) QueryAsset(ctx context.Context, req QueryAssetRequ
 
 func (e *HybridBruinExecutor) QueryConnection(ctx context.Context, req QueryConnectionRequest) ([]byte, error) {
 	if e.newConnectionManager == nil {
-		return e.cli.QueryConnection(ctx, req)
+		return nil, fmt.Errorf("direct connection query requires a connection manager")
 	}
 
 	manager, err := e.newConnectionManager(ctx, req.Environment)
@@ -501,7 +500,7 @@ func (e *HybridBruinExecutor) QueryConnection(ctx context.Context, req QueryConn
 		return json.Marshal(response)
 	}
 
-	return e.cli.QueryConnection(ctx, req)
+	return nil, fmt.Errorf("direct connection query only supports json output")
 }
 
 func formatQueryRowsForJSON(rows [][]interface{}) [][]interface{} {
@@ -1017,25 +1016,11 @@ func shouldFallbackToCLIRunAsset(asset *pipeline.Asset, foundPipeline *pipeline.
 	if asset == nil || foundPipeline == nil {
 		return true
 	}
-	if asset.Type != pipeline.AssetTypeDuckDBQuery &&
-		asset.Type != pipeline.AssetTypeMotherduckQuery &&
-		asset.Type != pipeline.AssetTypePostgresQuery &&
-		asset.Type != pipeline.AssetTypeRedshiftQuery &&
-		asset.Type != pipeline.AssetTypeBigqueryQuery &&
-		asset.Type != pipeline.AssetTypeAthenaQuery &&
-		asset.Type != pipeline.AssetTypeDatabricksQuery &&
-		asset.Type != pipeline.AssetTypeFabricQuery &&
-		asset.Type != pipeline.AssetTypeFabricQueryLegacy &&
-		asset.Type != pipeline.AssetTypeMySQLQuery &&
-		asset.Type != pipeline.AssetTypeSnowflakeQuery &&
-		asset.Type != pipeline.AssetTypeMsSQLQuery &&
-		asset.Type != pipeline.AssetTypeSynapseQuery &&
-		asset.Type != pipeline.AssetTypeClickHouse &&
-		asset.Type != pipeline.AssetTypeTrinoQuery &&
-		asset.Type != pipeline.AssetTypeVerticaQuery {
-		return true
+	if isDirectRunAssetTypeSupported(asset.Type) {
+		return false
 	}
-	return false
+	_, known := bruinexecutor.DefaultExecutorsV2[asset.Type]
+	return !known
 }
 
 func shouldFallbackToCLIRunPipeline(foundPipeline *pipeline.Pipeline) bool {
@@ -1049,26 +1034,62 @@ func shouldFallbackToCLIRunPipeline(foundPipeline *pipeline.Pipeline) bool {
 		if shouldFallbackToCLIRunAsset(asset, foundPipeline) {
 			return true
 		}
-		if asset.Type != pipeline.AssetTypeDuckDBQuery &&
-			asset.Type != pipeline.AssetTypeMotherduckQuery &&
-			asset.Type != pipeline.AssetTypePostgresQuery &&
-			asset.Type != pipeline.AssetTypeRedshiftQuery &&
-			asset.Type != pipeline.AssetTypeBigqueryQuery &&
-			asset.Type != pipeline.AssetTypeAthenaQuery &&
-			asset.Type != pipeline.AssetTypeDatabricksQuery &&
-			asset.Type != pipeline.AssetTypeFabricQuery &&
-			asset.Type != pipeline.AssetTypeFabricQueryLegacy &&
-			asset.Type != pipeline.AssetTypeMySQLQuery &&
-			asset.Type != pipeline.AssetTypeSnowflakeQuery &&
-			asset.Type != pipeline.AssetTypeMsSQLQuery &&
-			asset.Type != pipeline.AssetTypeSynapseQuery &&
-			asset.Type != pipeline.AssetTypeClickHouse &&
-			asset.Type != pipeline.AssetTypeTrinoQuery &&
-			asset.Type != pipeline.AssetTypeVerticaQuery {
-			return true
-		}
 	}
 	return false
+}
+
+func isDirectRunAssetTypeSupported(assetType pipeline.AssetType) bool {
+	_, ok := directRunAssetTypes[assetType]
+	return ok
+}
+
+var directRunAssetTypes = map[pipeline.AssetType]struct{}{
+	pipeline.AssetTypeDuckDBQuery:             {},
+	pipeline.AssetTypeMotherduckQuery:         {},
+	pipeline.AssetTypePostgresQuery:           {},
+	pipeline.AssetTypeRedshiftQuery:           {},
+	pipeline.AssetTypeBigqueryQuery:           {},
+	pipeline.AssetTypeAthenaQuery:             {},
+	pipeline.AssetTypeDatabricksQuery:         {},
+	pipeline.AssetTypeFabricQuery:             {},
+	pipeline.AssetTypeFabricQueryLegacy:       {},
+	pipeline.AssetTypeMySQLQuery:              {},
+	pipeline.AssetTypeSnowflakeQuery:          {},
+	pipeline.AssetTypeMsSQLQuery:              {},
+	pipeline.AssetTypeSynapseQuery:            {},
+	pipeline.AssetTypeClickHouse:              {},
+	pipeline.AssetTypeTrinoQuery:              {},
+	pipeline.AssetTypeVerticaQuery:            {},
+	pipeline.AssetTypeOracleQuery:             {},
+	pipeline.AssetTypeBigqueryQuerySensor:     {},
+	pipeline.AssetTypeBigqueryTableSensor:     {},
+	pipeline.AssetTypePostgresQuerySensor:     {},
+	pipeline.AssetTypePostgresTableSensor:     {},
+	pipeline.AssetTypeRedshiftQuerySensor:     {},
+	pipeline.AssetTypeRedshiftTableSensor:     {},
+	pipeline.AssetTypeMySQLQuerySensor:        {},
+	pipeline.AssetTypeMySQLTableSensor:        {},
+	pipeline.AssetTypeClickHouseQuerySensor:   {},
+	pipeline.AssetTypeClickHouseTableSensor:   {},
+	pipeline.AssetTypeMsSQLQuerySensor:        {},
+	pipeline.AssetTypeMsSQLTableSensor:        {},
+	pipeline.AssetTypeFabricQuerySensor:       {},
+	pipeline.AssetTypeFabricQuerySensorLegacy: {},
+	pipeline.AssetTypeFabricTableSensor:       {},
+	pipeline.AssetTypeFabricTableSensorLegacy: {},
+	pipeline.AssetTypeDatabricksQuerySensor:   {},
+	pipeline.AssetTypeDatabricksTableSensor:   {},
+	pipeline.AssetTypeAthenaSQLSensor:         {},
+	pipeline.AssetTypeAthenaTableSensor:       {},
+	pipeline.AssetTypeDuckDBQuerySensor:       {},
+	pipeline.AssetTypeSynapseQuerySensor:      {},
+	pipeline.AssetTypeSynapseTableSensor:      {},
+	pipeline.AssetTypeSnowflakeQuerySensor:    {},
+	pipeline.AssetTypeSnowflakeTableSensor:    {},
+	pipeline.AssetTypeTrinoQuerySensor:        {},
+	pipeline.AssetTypeVerticaQuerySensor:      {},
+	pipeline.AssetTypeVerticaTableSensor:      {},
+	pipeline.AssetTypeS3KeySensor:             {},
 }
 
 func allDirectRunPipelineDependenciesSucceeded(instance scheduler.TaskInstance) bool {
@@ -1143,6 +1164,15 @@ func buildDirectMainExecutors(manager config.ConnectionAndDetailsGetter, rendere
 		}
 		executors[assetType] = cloned
 	}
+	for assetType := range executors {
+		if isDirectRunAssetTypeSupported(assetType) {
+			continue
+		}
+		if executors[assetType] == nil {
+			executors[assetType] = bruinexecutor.Config{}
+		}
+		executors[assetType][scheduler.TaskInstanceTypeMain] = directUnsupportedOperator{assetType: assetType}
+	}
 
 	wholeFileExtractor := &query.WholeFileExtractor{Fs: afero.NewOsFs(), Renderer: renderer}
 	ensureExecutorConfig := func(assetType pipeline.AssetType) {
@@ -1187,28 +1217,52 @@ func buildDirectMainExecutors(manager config.ConnectionAndDetailsGetter, rendere
 	executors[pipeline.AssetTypeBigqueryQuery][scheduler.TaskInstanceTypeColumnCheck] = bqColumnCheckOperator
 	executors[pipeline.AssetTypeBigqueryQuery][scheduler.TaskInstanceTypeCustomCheck] = ansisql.NewCustomCheckOperator(manager, renderer)
 	executors[pipeline.AssetTypeBigqueryQuery][scheduler.TaskInstanceTypeMetadataPush] = bq.NewMetadataPushOperator(manager)
+	ensureExecutorConfig(pipeline.AssetTypeBigqueryQuerySensor)
+	executors[pipeline.AssetTypeBigqueryQuerySensor][scheduler.TaskInstanceTypeMain] = bq.NewQuerySensor(manager, wholeFileExtractor, "once")
+	ensureExecutorConfig(pipeline.AssetTypeBigqueryTableSensor)
+	executors[pipeline.AssetTypeBigqueryTableSensor][scheduler.TaskInstanceTypeMain] = bq.NewTableSensor(manager, "once", wholeFileExtractor)
 	ensureExecutorConfig(pipeline.AssetTypeAthenaQuery)
 	executors[pipeline.AssetTypeAthenaQuery][scheduler.TaskInstanceTypeMain] = ath.NewBasicOperator(manager, wholeFileExtractor, ath.NewMaterializer(false), parser)
 	executors[pipeline.AssetTypeAthenaQuery][scheduler.TaskInstanceTypeColumnCheck] = ath.NewColumnCheckOperator(manager)
 	executors[pipeline.AssetTypeAthenaQuery][scheduler.TaskInstanceTypeCustomCheck] = ansisql.NewCustomCheckOperator(manager, renderer)
+	ensureExecutorConfig(pipeline.AssetTypeAthenaSQLSensor)
+	executors[pipeline.AssetTypeAthenaSQLSensor][scheduler.TaskInstanceTypeMain] = ath.NewQuerySensor(manager, renderer, 30)
+	ensureExecutorConfig(pipeline.AssetTypeAthenaTableSensor)
+	executors[pipeline.AssetTypeAthenaTableSensor][scheduler.TaskInstanceTypeMain] = ansisql.NewTableSensor(manager, "once", wholeFileExtractor)
 	ensureExecutorConfig(pipeline.AssetTypeDatabricksQuery)
 	executors[pipeline.AssetTypeDatabricksQuery][scheduler.TaskInstanceTypeMain] = dbsql.NewBasicOperator(manager, wholeFileExtractor, dbsql.NewMaterializer(false), parser)
 	executors[pipeline.AssetTypeDatabricksQuery][scheduler.TaskInstanceTypeColumnCheck] = dbsql.NewColumnCheckOperator(manager)
 	executors[pipeline.AssetTypeDatabricksQuery][scheduler.TaskInstanceTypeCustomCheck] = ansisql.NewCustomCheckOperator(manager, renderer)
+	ensureExecutorConfig(pipeline.AssetTypeDatabricksQuerySensor)
+	executors[pipeline.AssetTypeDatabricksQuerySensor][scheduler.TaskInstanceTypeMain] = ansisql.NewQuerySensor(manager, wholeFileExtractor, "once")
+	ensureExecutorConfig(pipeline.AssetTypeDatabricksTableSensor)
+	executors[pipeline.AssetTypeDatabricksTableSensor][scheduler.TaskInstanceTypeMain] = ansisql.NewTableSensor(manager, "once", wholeFileExtractor)
 	ensureExecutorConfig(pipeline.AssetTypeFabricQuery)
 	executors[pipeline.AssetTypeFabricQuery][scheduler.TaskInstanceTypeMain] = fw.NewBasicOperator(manager, wholeFileExtractor, fw.NewMaterializer(false), parser)
 	executors[pipeline.AssetTypeFabricQuery][scheduler.TaskInstanceTypeColumnCheck] = fw.NewColumnCheckOperator(manager)
 	executors[pipeline.AssetTypeFabricQuery][scheduler.TaskInstanceTypeCustomCheck] = ansisql.NewCustomCheckOperator(manager, renderer)
+	ensureExecutorConfig(pipeline.AssetTypeFabricQuerySensor)
+	executors[pipeline.AssetTypeFabricQuerySensor][scheduler.TaskInstanceTypeMain] = ansisql.NewQuerySensor(manager, wholeFileExtractor, "once")
+	ensureExecutorConfig(pipeline.AssetTypeFabricTableSensor)
+	executors[pipeline.AssetTypeFabricTableSensor][scheduler.TaskInstanceTypeMain] = ansisql.NewTableSensor(manager, "once", wholeFileExtractor)
 	ensureExecutorConfig(pipeline.AssetTypeFabricQueryLegacy)
 	executors[pipeline.AssetTypeFabricQueryLegacy][scheduler.TaskInstanceTypeMain] = fw.NewBasicOperator(manager, wholeFileExtractor, fw.NewMaterializer(false), parser)
 	executors[pipeline.AssetTypeFabricQueryLegacy][scheduler.TaskInstanceTypeColumnCheck] = fw.NewColumnCheckOperator(manager)
 	executors[pipeline.AssetTypeFabricQueryLegacy][scheduler.TaskInstanceTypeCustomCheck] = ansisql.NewCustomCheckOperator(manager, renderer)
+	ensureExecutorConfig(pipeline.AssetTypeFabricQuerySensorLegacy)
+	executors[pipeline.AssetTypeFabricQuerySensorLegacy][scheduler.TaskInstanceTypeMain] = ansisql.NewQuerySensor(manager, wholeFileExtractor, "once")
+	ensureExecutorConfig(pipeline.AssetTypeFabricTableSensorLegacy)
+	executors[pipeline.AssetTypeFabricTableSensorLegacy][scheduler.TaskInstanceTypeMain] = ansisql.NewTableSensor(manager, "once", wholeFileExtractor)
 	ensureExecutorConfig(pipeline.AssetTypeMySQLQuery)
 	executors[pipeline.AssetTypeMySQLQuery][scheduler.TaskInstanceTypeMain] = my.NewBasicOperator(manager, wholeFileExtractor, pipeline.HookWrapperMaterializer{
 		Mat: my.NewMaterializer(false),
 	}, parser)
 	executors[pipeline.AssetTypeMySQLQuery][scheduler.TaskInstanceTypeColumnCheck] = my.NewColumnCheckOperator(manager)
 	executors[pipeline.AssetTypeMySQLQuery][scheduler.TaskInstanceTypeCustomCheck] = ansisql.NewCustomCheckOperator(manager, renderer)
+	ensureExecutorConfig(pipeline.AssetTypeMySQLQuerySensor)
+	executors[pipeline.AssetTypeMySQLQuerySensor][scheduler.TaskInstanceTypeMain] = ansisql.NewQuerySensor(manager, wholeFileExtractor, "once")
+	ensureExecutorConfig(pipeline.AssetTypeMySQLTableSensor)
+	executors[pipeline.AssetTypeMySQLTableSensor][scheduler.TaskInstanceTypeMain] = ansisql.NewTableSensor(manager, "once", wholeFileExtractor)
 	ensureExecutorConfig(pipeline.AssetTypeSnowflakeQuery)
 	executors[pipeline.AssetTypeSnowflakeQuery][scheduler.TaskInstanceTypeMain] = sf.NewBasicOperator(manager, wholeFileExtractor, pipeline.HookWrapperMaterializer{
 		Mat: sf.NewMaterializer(false),
@@ -1216,28 +1270,123 @@ func buildDirectMainExecutors(manager config.ConnectionAndDetailsGetter, rendere
 	executors[pipeline.AssetTypeSnowflakeQuery][scheduler.TaskInstanceTypeColumnCheck] = sf.NewColumnCheckOperator(manager)
 	executors[pipeline.AssetTypeSnowflakeQuery][scheduler.TaskInstanceTypeCustomCheck] = ansisql.NewCustomCheckOperator(manager, renderer)
 	executors[pipeline.AssetTypeSnowflakeQuery][scheduler.TaskInstanceTypeMetadataPush] = sf.NewMetadataPushOperator(manager)
+	ensureExecutorConfig(pipeline.AssetTypeSnowflakeQuerySensor)
+	executors[pipeline.AssetTypeSnowflakeQuerySensor][scheduler.TaskInstanceTypeMain] = sf.NewQuerySensor(manager, wholeFileExtractor, 30)
+	ensureExecutorConfig(pipeline.AssetTypeSnowflakeTableSensor)
+	executors[pipeline.AssetTypeSnowflakeTableSensor][scheduler.TaskInstanceTypeMain] = ansisql.NewTableSensor(manager, "once", wholeFileExtractor)
 	ensureExecutorConfig(pipeline.AssetTypeMsSQLQuery)
 	executors[pipeline.AssetTypeMsSQLQuery][scheduler.TaskInstanceTypeMain] = ms.NewBasicOperator(manager, wholeFileExtractor, ms.NewMaterializer(false), parser)
 	executors[pipeline.AssetTypeMsSQLQuery][scheduler.TaskInstanceTypeColumnCheck] = ms.NewColumnCheckOperator(manager)
 	executors[pipeline.AssetTypeMsSQLQuery][scheduler.TaskInstanceTypeCustomCheck] = ansisql.NewCustomCheckOperator(manager, renderer)
+	ensureExecutorConfig(pipeline.AssetTypeMsSQLQuerySensor)
+	executors[pipeline.AssetTypeMsSQLQuerySensor][scheduler.TaskInstanceTypeMain] = ansisql.NewQuerySensor(manager, wholeFileExtractor, "once")
+	ensureExecutorConfig(pipeline.AssetTypeMsSQLTableSensor)
+	executors[pipeline.AssetTypeMsSQLTableSensor][scheduler.TaskInstanceTypeMain] = ansisql.NewTableSensor(manager, "once", wholeFileExtractor)
 	ensureExecutorConfig(pipeline.AssetTypeSynapseQuery)
 	executors[pipeline.AssetTypeSynapseQuery][scheduler.TaskInstanceTypeMain] = ms.NewBasicOperator(manager, wholeFileExtractor, ms.NewMaterializer(false), parser)
 	executors[pipeline.AssetTypeSynapseQuery][scheduler.TaskInstanceTypeColumnCheck] = ms.NewColumnCheckOperator(manager)
 	executors[pipeline.AssetTypeSynapseQuery][scheduler.TaskInstanceTypeCustomCheck] = ansisql.NewCustomCheckOperator(manager, renderer)
+	ensureExecutorConfig(pipeline.AssetTypeSynapseQuerySensor)
+	executors[pipeline.AssetTypeSynapseQuerySensor][scheduler.TaskInstanceTypeMain] = ansisql.NewQuerySensor(manager, wholeFileExtractor, "once")
+	ensureExecutorConfig(pipeline.AssetTypeSynapseTableSensor)
+	executors[pipeline.AssetTypeSynapseTableSensor][scheduler.TaskInstanceTypeMain] = ansisql.NewTableSensor(manager, "once", wholeFileExtractor)
 	ensureExecutorConfig(pipeline.AssetTypeClickHouse)
 	executors[pipeline.AssetTypeClickHouse][scheduler.TaskInstanceTypeMain] = ch.NewBasicOperator(manager, wholeFileExtractor, ch.NewMaterializer(false), parser)
 	executors[pipeline.AssetTypeClickHouse][scheduler.TaskInstanceTypeColumnCheck] = ch.NewColumnCheckOperator(manager)
 	executors[pipeline.AssetTypeClickHouse][scheduler.TaskInstanceTypeCustomCheck] = ansisql.NewCustomCheckOperator(manager, renderer)
+	ensureExecutorConfig(pipeline.AssetTypeClickHouseQuerySensor)
+	executors[pipeline.AssetTypeClickHouseQuerySensor][scheduler.TaskInstanceTypeMain] = ansisql.NewQuerySensor(manager, wholeFileExtractor, "once")
+	ensureExecutorConfig(pipeline.AssetTypeClickHouseTableSensor)
+	executors[pipeline.AssetTypeClickHouseTableSensor][scheduler.TaskInstanceTypeMain] = ansisql.NewTableSensor(manager, "once", wholeFileExtractor)
 	ensureExecutorConfig(pipeline.AssetTypeTrinoQuery)
 	executors[pipeline.AssetTypeTrinoQuery][scheduler.TaskInstanceTypeMain] = tri.NewBasicOperator(manager, wholeFileExtractor, pipeline.HookWrapperMaterializer{
 		Mat: tri.NewMaterializer(false),
 	}, parser)
 	executors[pipeline.AssetTypeTrinoQuery][scheduler.TaskInstanceTypeCustomCheck] = ansisql.NewCustomCheckOperator(manager, renderer)
+	ensureExecutorConfig(pipeline.AssetTypeTrinoQuerySensor)
+	executors[pipeline.AssetTypeTrinoQuerySensor][scheduler.TaskInstanceTypeMain] = ansisql.NewQuerySensor(manager, wholeFileExtractor, "once")
 	ensureExecutorConfig(pipeline.AssetTypeVerticaQuery)
 	executors[pipeline.AssetTypeVerticaQuery][scheduler.TaskInstanceTypeMain] = vert.NewBasicOperator(manager, wholeFileExtractor, vert.NewMaterializer(false), parser)
 	executors[pipeline.AssetTypeVerticaQuery][scheduler.TaskInstanceTypeColumnCheck] = vert.NewColumnCheckOperator(manager)
 	executors[pipeline.AssetTypeVerticaQuery][scheduler.TaskInstanceTypeCustomCheck] = ansisql.NewCustomCheckOperator(manager, renderer)
+	ensureExecutorConfig(pipeline.AssetTypeVerticaQuerySensor)
+	executors[pipeline.AssetTypeVerticaQuerySensor][scheduler.TaskInstanceTypeMain] = ansisql.NewQuerySensor(manager, wholeFileExtractor, "once")
+	ensureExecutorConfig(pipeline.AssetTypeVerticaTableSensor)
+	executors[pipeline.AssetTypeVerticaTableSensor][scheduler.TaskInstanceTypeMain] = ansisql.NewTableSensor(manager, "once", wholeFileExtractor)
+	ensureExecutorConfig(pipeline.AssetTypePostgresQuerySensor)
+	executors[pipeline.AssetTypePostgresQuerySensor][scheduler.TaskInstanceTypeMain] = ansisql.NewQuerySensor(manager, wholeFileExtractor, "once")
+	ensureExecutorConfig(pipeline.AssetTypePostgresTableSensor)
+	executors[pipeline.AssetTypePostgresTableSensor][scheduler.TaskInstanceTypeMain] = ansisql.NewTableSensor(manager, "once", wholeFileExtractor)
+	ensureExecutorConfig(pipeline.AssetTypeRedshiftQuerySensor)
+	executors[pipeline.AssetTypeRedshiftQuerySensor][scheduler.TaskInstanceTypeMain] = ansisql.NewQuerySensor(manager, wholeFileExtractor, "once")
+	ensureExecutorConfig(pipeline.AssetTypeRedshiftTableSensor)
+	executors[pipeline.AssetTypeRedshiftTableSensor][scheduler.TaskInstanceTypeMain] = ansisql.NewTableSensor(manager, "once", wholeFileExtractor)
+	ensureExecutorConfig(pipeline.AssetTypeDuckDBQuerySensor)
+	executors[pipeline.AssetTypeDuckDBQuerySensor][scheduler.TaskInstanceTypeMain] = ansisql.NewQuerySensor(manager, wholeFileExtractor, "once")
+	ensureExecutorConfig(pipeline.AssetTypeS3KeySensor)
+	executors[pipeline.AssetTypeS3KeySensor][scheduler.TaskInstanceTypeMain] = s3.NewKeySensor(manager, "once")
+	ensureExecutorConfig(pipeline.AssetTypeOracleQuery)
+	executors[pipeline.AssetTypeOracleQuery][scheduler.TaskInstanceTypeMain] = directOracleBasicOperator{connection: manager, extractor: wholeFileExtractor}
+	executors[pipeline.AssetTypeOracleQuery][scheduler.TaskInstanceTypeCustomCheck] = ansisql.NewCustomCheckOperator(manager, renderer)
 	return executors, nil
+}
+
+type directOracleBasicOperator struct {
+	connection config.ConnectionGetter
+	extractor  query.QueryExtractor
+}
+
+type directUnsupportedOperator struct {
+	assetType pipeline.AssetType
+}
+
+func (o directUnsupportedOperator) Run(_ context.Context, _ scheduler.TaskInstance) error {
+	return fmt.Errorf("direct execution is not implemented for asset type %q", o.assetType)
+}
+
+func (o directOracleBasicOperator) Run(ctx context.Context, ti scheduler.TaskInstance) error {
+	return o.RunTask(ctx, ti.GetPipeline(), ti.GetAsset())
+}
+
+func (o directOracleBasicOperator) RunTask(ctx context.Context, p *pipeline.Pipeline, asset *pipeline.Asset) error {
+	if asset.Materialization.Type != pipeline.MaterializationTypeNone {
+		return fmt.Errorf("direct oracle execution only supports assets without materialization")
+	}
+
+	extractor, err := o.extractor.CloneForAsset(ctx, p, asset)
+	if err != nil {
+		return fmt.Errorf("failed to clone extractor for asset %s: %w", asset.Name, err)
+	}
+	queries, err := extractor.ExtractQueriesFromString(asset.ExecutableFile.Content)
+	if err != nil {
+		return fmt.Errorf("cannot extract queries from the task file: %w", err)
+	}
+	if len(queries) == 0 {
+		return nil
+	}
+
+	connName, err := p.GetConnectionNameForAsset(asset)
+	if err != nil {
+		return err
+	}
+	rawConn := o.connection.GetConnection(connName)
+	if rawConn == nil {
+		return config.NewConnectionNotFoundError(ctx, "", connName)
+	}
+	conn, ok := rawConn.(interface {
+		RunQueryWithoutResult(context.Context, *query.Query) error
+	})
+	if !ok {
+		return fmt.Errorf("connection %q cannot run oracle queries", connName)
+	}
+
+	for _, queryToRun := range queries {
+		ansisql.LogQueryIfVerbose(ctx, ctx.Value(bruinexecutor.KeyPrinter), queryToRun.Query)
+		if err := conn.RunQueryWithoutResult(ctx, queryToRun); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func writeDirectRunPrelude(w io.Writer, pl *pipeline.Pipeline, asset *pipeline.Asset, formatting directRunFormatting) {
@@ -1527,10 +1676,7 @@ func fillDirectColumnsFromDB(ctx context.Context, pp *directPipelineInfo, fs afe
 }
 
 func (e *HybridBruinExecutor) FormatAsset(ctx context.Context, req FormatAssetRequest) ([]byte, error) {
-	if req.UseSQLFluff {
-		return e.cli.FormatAsset(ctx, req)
-	}
-
+	_ = ctx
 	assetPath := resolveDirectPath(e.workspaceRoot, req.AssetPath)
 	osFS := afero.NewOsFs()
 	builder := pipeline.NewBuilder(
@@ -1550,7 +1696,6 @@ func (e *HybridBruinExecutor) FormatAsset(ctx context.Context, req FormatAssetRe
 	if err := asset.Persist(afero.NewOsFs()); err != nil {
 		return nil, err
 	}
-
 	return []byte(""), nil
 }
 
@@ -1561,13 +1706,13 @@ func (e *HybridBruinExecutor) ApplyPatch(ctx context.Context, req PatchRequest) 
 	case "fill-columns-from-db":
 		return e.applyFillColumnsFromDB(ctx, req.TargetPath)
 	default:
-		return e.cli.ApplyPatch(ctx, req)
+		return nil, fmt.Errorf("direct patch operation %q is not supported", req.Operation)
 	}
 }
 
 func (e *HybridBruinExecutor) ImportDatabase(ctx context.Context, req ImportDatabaseRequest) ([]byte, error) {
 	if e.newConnectionManager == nil || e.newPipelineBuilder == nil {
-		return e.cli.ImportDatabase(ctx, req)
+		return nil, fmt.Errorf("direct database import requires a connection manager and pipeline builder")
 	}
 
 	manager, err := e.newConnectionManager(ctx, req.Environment)
@@ -1743,7 +1888,7 @@ func (e *HybridBruinExecutor) RunWithRetry(
 
 func (e *HybridBruinExecutor) applyFillAssetDependencies(ctx context.Context, targetPath string) ([]byte, error) {
 	if e.newPipelineBuilder == nil {
-		return e.cli.ApplyPatch(ctx, PatchRequest{Operation: "fill-asset-dependencies", TargetPath: targetPath})
+		return nil, fmt.Errorf("direct fill-asset-dependencies requires a pipeline builder")
 	}
 
 	sqlParserInstance, err := sqlparser.NewSQLParser(false)

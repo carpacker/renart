@@ -18,11 +18,20 @@ import { Route as OnboardingConnectionRouteImport } from './routes/onboarding.co
 import { Route as WorkspaceSettingsRouteRouteImport } from './routes/_workspace/settings/route'
 import { Route as WorkspaceSettingsIndexRouteImport } from './routes/_workspace/settings/index'
 import { Route as WorkspaceSettingsEnvironmentsRouteRouteImport } from './routes/_workspace/settings/environments/route'
+import { Route as WorkspacePipelinesPipelineIdRouteRouteImport } from './routes/_workspace/pipelines/$pipelineId/route'
 import { Route as WorkspaceSettingsEnvironmentsIndexRouteImport } from './routes/_workspace/settings/environments/index'
 import { Route as WorkspaceSettingsEnvironmentsNewRouteImport } from './routes/_workspace/settings/environments/new'
 import { Route as WorkspaceSettingsEnvironmentsEnvironmentIdRouteRouteImport } from './routes/_workspace/settings/environments/$environmentId/route'
+import { Route as WorkspacePipelinesPipelineIdConfigRouteRouteImport } from './routes/_workspace/pipelines/$pipelineId/config/route'
 import { Route as WorkspaceSettingsEnvironmentsEnvironmentIdIndexRouteImport } from './routes/_workspace/settings/environments/$environmentId/index'
+import { Route as WorkspacePipelinesPipelineIdConfigIndexRouteImport } from './routes/_workspace/pipelines/$pipelineId/config/index'
 import { Route as WorkspaceSettingsEnvironmentsEnvironmentIdEditRouteImport } from './routes/_workspace/settings/environments/$environmentId/edit'
+import { Route as WorkspacePipelinesPipelineIdConfigVariablesRouteImport } from './routes/_workspace/pipelines/$pipelineId/config/variables'
+import { Route as WorkspacePipelinesPipelineIdConfigPreviewRouteImport } from './routes/_workspace/pipelines/$pipelineId/config/preview'
+import { Route as WorkspacePipelinesPipelineIdConfigNotificationsRouteImport } from './routes/_workspace/pipelines/$pipelineId/config/notifications'
+import { Route as WorkspacePipelinesPipelineIdConfigGeneralRouteImport } from './routes/_workspace/pipelines/$pipelineId/config/general'
+import { Route as WorkspacePipelinesPipelineIdConfigExecutionRouteImport } from './routes/_workspace/pipelines/$pipelineId/config/execution'
+import { Route as WorkspacePipelinesPipelineIdConfigConnectionsRouteImport } from './routes/_workspace/pipelines/$pipelineId/config/connections'
 import { Route as WorkspaceSettingsEnvironmentsEnvironmentIdConnectionsRouteRouteImport } from './routes/_workspace/settings/environments/$environmentId/connections/route'
 import { Route as WorkspaceSettingsEnvironmentsEnvironmentIdConnectionsNewRouteImport } from './routes/_workspace/settings/environments/$environmentId/connections/new'
 import { Route as WorkspaceSettingsEnvironmentsEnvironmentIdConnectionsConnectionIdRouteRouteImport } from './routes/_workspace/settings/environments/$environmentId/connections/$connectionId/route'
@@ -74,6 +83,12 @@ const WorkspaceSettingsEnvironmentsRouteRoute =
     path: '/environments',
     getParentRoute: () => WorkspaceSettingsRouteRoute,
   } as any)
+const WorkspacePipelinesPipelineIdRouteRoute =
+  WorkspacePipelinesPipelineIdRouteRouteImport.update({
+    id: '/pipelines/$pipelineId',
+    path: '/pipelines/$pipelineId',
+    getParentRoute: () => WorkspaceRoute,
+  } as any)
 const WorkspaceSettingsEnvironmentsIndexRoute =
   WorkspaceSettingsEnvironmentsIndexRouteImport.update({
     id: '/',
@@ -92,17 +107,65 @@ const WorkspaceSettingsEnvironmentsEnvironmentIdRouteRoute =
     path: '/$environmentId',
     getParentRoute: () => WorkspaceSettingsEnvironmentsRouteRoute,
   } as any)
+const WorkspacePipelinesPipelineIdConfigRouteRoute =
+  WorkspacePipelinesPipelineIdConfigRouteRouteImport.update({
+    id: '/config',
+    path: '/config',
+    getParentRoute: () => WorkspacePipelinesPipelineIdRouteRoute,
+  } as any)
 const WorkspaceSettingsEnvironmentsEnvironmentIdIndexRoute =
   WorkspaceSettingsEnvironmentsEnvironmentIdIndexRouteImport.update({
     id: '/',
     path: '/',
     getParentRoute: () => WorkspaceSettingsEnvironmentsEnvironmentIdRouteRoute,
   } as any)
+const WorkspacePipelinesPipelineIdConfigIndexRoute =
+  WorkspacePipelinesPipelineIdConfigIndexRouteImport.update({
+    id: '/',
+    path: '/',
+    getParentRoute: () => WorkspacePipelinesPipelineIdConfigRouteRoute,
+  } as any)
 const WorkspaceSettingsEnvironmentsEnvironmentIdEditRoute =
   WorkspaceSettingsEnvironmentsEnvironmentIdEditRouteImport.update({
     id: '/edit',
     path: '/edit',
     getParentRoute: () => WorkspaceSettingsEnvironmentsEnvironmentIdRouteRoute,
+  } as any)
+const WorkspacePipelinesPipelineIdConfigVariablesRoute =
+  WorkspacePipelinesPipelineIdConfigVariablesRouteImport.update({
+    id: '/variables',
+    path: '/variables',
+    getParentRoute: () => WorkspacePipelinesPipelineIdConfigRouteRoute,
+  } as any)
+const WorkspacePipelinesPipelineIdConfigPreviewRoute =
+  WorkspacePipelinesPipelineIdConfigPreviewRouteImport.update({
+    id: '/preview',
+    path: '/preview',
+    getParentRoute: () => WorkspacePipelinesPipelineIdConfigRouteRoute,
+  } as any)
+const WorkspacePipelinesPipelineIdConfigNotificationsRoute =
+  WorkspacePipelinesPipelineIdConfigNotificationsRouteImport.update({
+    id: '/notifications',
+    path: '/notifications',
+    getParentRoute: () => WorkspacePipelinesPipelineIdConfigRouteRoute,
+  } as any)
+const WorkspacePipelinesPipelineIdConfigGeneralRoute =
+  WorkspacePipelinesPipelineIdConfigGeneralRouteImport.update({
+    id: '/general',
+    path: '/general',
+    getParentRoute: () => WorkspacePipelinesPipelineIdConfigRouteRoute,
+  } as any)
+const WorkspacePipelinesPipelineIdConfigExecutionRoute =
+  WorkspacePipelinesPipelineIdConfigExecutionRouteImport.update({
+    id: '/execution',
+    path: '/execution',
+    getParentRoute: () => WorkspacePipelinesPipelineIdConfigRouteRoute,
+  } as any)
+const WorkspacePipelinesPipelineIdConfigConnectionsRoute =
+  WorkspacePipelinesPipelineIdConfigConnectionsRouteImport.update({
+    id: '/connections',
+    path: '/connections',
+    getParentRoute: () => WorkspacePipelinesPipelineIdConfigRouteRoute,
   } as any)
 const WorkspaceSettingsEnvironmentsEnvironmentIdConnectionsRouteRoute =
   WorkspaceSettingsEnvironmentsEnvironmentIdConnectionsRouteRouteImport.update({
@@ -152,13 +215,22 @@ export interface FileRoutesByFullPath {
   '/onboarding/connection': typeof OnboardingConnectionRoute
   '/onboarding/import': typeof OnboardingImportRoute
   '/onboarding/success': typeof OnboardingSuccessRoute
+  '/pipelines/$pipelineId': typeof WorkspacePipelinesPipelineIdRouteRouteWithChildren
   '/settings/environments': typeof WorkspaceSettingsEnvironmentsRouteRouteWithChildren
   '/settings/': typeof WorkspaceSettingsIndexRoute
+  '/pipelines/$pipelineId/config': typeof WorkspacePipelinesPipelineIdConfigRouteRouteWithChildren
   '/settings/environments/$environmentId': typeof WorkspaceSettingsEnvironmentsEnvironmentIdRouteRouteWithChildren
   '/settings/environments/new': typeof WorkspaceSettingsEnvironmentsNewRoute
   '/settings/environments/': typeof WorkspaceSettingsEnvironmentsIndexRoute
   '/settings/environments/$environmentId/connections': typeof WorkspaceSettingsEnvironmentsEnvironmentIdConnectionsRouteRouteWithChildren
+  '/pipelines/$pipelineId/config/connections': typeof WorkspacePipelinesPipelineIdConfigConnectionsRoute
+  '/pipelines/$pipelineId/config/execution': typeof WorkspacePipelinesPipelineIdConfigExecutionRoute
+  '/pipelines/$pipelineId/config/general': typeof WorkspacePipelinesPipelineIdConfigGeneralRoute
+  '/pipelines/$pipelineId/config/notifications': typeof WorkspacePipelinesPipelineIdConfigNotificationsRoute
+  '/pipelines/$pipelineId/config/preview': typeof WorkspacePipelinesPipelineIdConfigPreviewRoute
+  '/pipelines/$pipelineId/config/variables': typeof WorkspacePipelinesPipelineIdConfigVariablesRoute
   '/settings/environments/$environmentId/edit': typeof WorkspaceSettingsEnvironmentsEnvironmentIdEditRoute
+  '/pipelines/$pipelineId/config/': typeof WorkspacePipelinesPipelineIdConfigIndexRoute
   '/settings/environments/$environmentId/': typeof WorkspaceSettingsEnvironmentsEnvironmentIdIndexRoute
   '/settings/environments/$environmentId/connections/$connectionId': typeof WorkspaceSettingsEnvironmentsEnvironmentIdConnectionsConnectionIdRouteRouteWithChildren
   '/settings/environments/$environmentId/connections/new': typeof WorkspaceSettingsEnvironmentsEnvironmentIdConnectionsNewRoute
@@ -171,11 +243,19 @@ export interface FileRoutesByTo {
   '/onboarding/import': typeof OnboardingImportRoute
   '/onboarding/success': typeof OnboardingSuccessRoute
   '/': typeof WorkspaceIndexRoute
+  '/pipelines/$pipelineId': typeof WorkspacePipelinesPipelineIdRouteRouteWithChildren
   '/settings': typeof WorkspaceSettingsIndexRoute
   '/settings/environments/new': typeof WorkspaceSettingsEnvironmentsNewRoute
   '/settings/environments': typeof WorkspaceSettingsEnvironmentsIndexRoute
   '/settings/environments/$environmentId/connections': typeof WorkspaceSettingsEnvironmentsEnvironmentIdConnectionsRouteRouteWithChildren
+  '/pipelines/$pipelineId/config/connections': typeof WorkspacePipelinesPipelineIdConfigConnectionsRoute
+  '/pipelines/$pipelineId/config/execution': typeof WorkspacePipelinesPipelineIdConfigExecutionRoute
+  '/pipelines/$pipelineId/config/general': typeof WorkspacePipelinesPipelineIdConfigGeneralRoute
+  '/pipelines/$pipelineId/config/notifications': typeof WorkspacePipelinesPipelineIdConfigNotificationsRoute
+  '/pipelines/$pipelineId/config/preview': typeof WorkspacePipelinesPipelineIdConfigPreviewRoute
+  '/pipelines/$pipelineId/config/variables': typeof WorkspacePipelinesPipelineIdConfigVariablesRoute
   '/settings/environments/$environmentId/edit': typeof WorkspaceSettingsEnvironmentsEnvironmentIdEditRoute
+  '/pipelines/$pipelineId/config': typeof WorkspacePipelinesPipelineIdConfigIndexRoute
   '/settings/environments/$environmentId': typeof WorkspaceSettingsEnvironmentsEnvironmentIdIndexRoute
   '/settings/environments/$environmentId/connections/new': typeof WorkspaceSettingsEnvironmentsEnvironmentIdConnectionsNewRoute
   '/settings/environments/$environmentId/connections/$connectionId/edit': typeof WorkspaceSettingsEnvironmentsEnvironmentIdConnectionsConnectionIdEditRoute
@@ -190,13 +270,22 @@ export interface FileRoutesById {
   '/onboarding/import': typeof OnboardingImportRoute
   '/onboarding/success': typeof OnboardingSuccessRoute
   '/_workspace/': typeof WorkspaceIndexRoute
+  '/_workspace/pipelines/$pipelineId': typeof WorkspacePipelinesPipelineIdRouteRouteWithChildren
   '/_workspace/settings/environments': typeof WorkspaceSettingsEnvironmentsRouteRouteWithChildren
   '/_workspace/settings/': typeof WorkspaceSettingsIndexRoute
+  '/_workspace/pipelines/$pipelineId/config': typeof WorkspacePipelinesPipelineIdConfigRouteRouteWithChildren
   '/_workspace/settings/environments/$environmentId': typeof WorkspaceSettingsEnvironmentsEnvironmentIdRouteRouteWithChildren
   '/_workspace/settings/environments/new': typeof WorkspaceSettingsEnvironmentsNewRoute
   '/_workspace/settings/environments/': typeof WorkspaceSettingsEnvironmentsIndexRoute
   '/_workspace/settings/environments/$environmentId/connections': typeof WorkspaceSettingsEnvironmentsEnvironmentIdConnectionsRouteRouteWithChildren
+  '/_workspace/pipelines/$pipelineId/config/connections': typeof WorkspacePipelinesPipelineIdConfigConnectionsRoute
+  '/_workspace/pipelines/$pipelineId/config/execution': typeof WorkspacePipelinesPipelineIdConfigExecutionRoute
+  '/_workspace/pipelines/$pipelineId/config/general': typeof WorkspacePipelinesPipelineIdConfigGeneralRoute
+  '/_workspace/pipelines/$pipelineId/config/notifications': typeof WorkspacePipelinesPipelineIdConfigNotificationsRoute
+  '/_workspace/pipelines/$pipelineId/config/preview': typeof WorkspacePipelinesPipelineIdConfigPreviewRoute
+  '/_workspace/pipelines/$pipelineId/config/variables': typeof WorkspacePipelinesPipelineIdConfigVariablesRoute
   '/_workspace/settings/environments/$environmentId/edit': typeof WorkspaceSettingsEnvironmentsEnvironmentIdEditRoute
+  '/_workspace/pipelines/$pipelineId/config/': typeof WorkspacePipelinesPipelineIdConfigIndexRoute
   '/_workspace/settings/environments/$environmentId/': typeof WorkspaceSettingsEnvironmentsEnvironmentIdIndexRoute
   '/_workspace/settings/environments/$environmentId/connections/$connectionId': typeof WorkspaceSettingsEnvironmentsEnvironmentIdConnectionsConnectionIdRouteRouteWithChildren
   '/_workspace/settings/environments/$environmentId/connections/new': typeof WorkspaceSettingsEnvironmentsEnvironmentIdConnectionsNewRoute
@@ -212,13 +301,22 @@ export interface FileRouteTypes {
     | '/onboarding/connection'
     | '/onboarding/import'
     | '/onboarding/success'
+    | '/pipelines/$pipelineId'
     | '/settings/environments'
     | '/settings/'
+    | '/pipelines/$pipelineId/config'
     | '/settings/environments/$environmentId'
     | '/settings/environments/new'
     | '/settings/environments/'
     | '/settings/environments/$environmentId/connections'
+    | '/pipelines/$pipelineId/config/connections'
+    | '/pipelines/$pipelineId/config/execution'
+    | '/pipelines/$pipelineId/config/general'
+    | '/pipelines/$pipelineId/config/notifications'
+    | '/pipelines/$pipelineId/config/preview'
+    | '/pipelines/$pipelineId/config/variables'
     | '/settings/environments/$environmentId/edit'
+    | '/pipelines/$pipelineId/config/'
     | '/settings/environments/$environmentId/'
     | '/settings/environments/$environmentId/connections/$connectionId'
     | '/settings/environments/$environmentId/connections/new'
@@ -231,11 +329,19 @@ export interface FileRouteTypes {
     | '/onboarding/import'
     | '/onboarding/success'
     | '/'
+    | '/pipelines/$pipelineId'
     | '/settings'
     | '/settings/environments/new'
     | '/settings/environments'
     | '/settings/environments/$environmentId/connections'
+    | '/pipelines/$pipelineId/config/connections'
+    | '/pipelines/$pipelineId/config/execution'
+    | '/pipelines/$pipelineId/config/general'
+    | '/pipelines/$pipelineId/config/notifications'
+    | '/pipelines/$pipelineId/config/preview'
+    | '/pipelines/$pipelineId/config/variables'
     | '/settings/environments/$environmentId/edit'
+    | '/pipelines/$pipelineId/config'
     | '/settings/environments/$environmentId'
     | '/settings/environments/$environmentId/connections/new'
     | '/settings/environments/$environmentId/connections/$connectionId/edit'
@@ -249,13 +355,22 @@ export interface FileRouteTypes {
     | '/onboarding/import'
     | '/onboarding/success'
     | '/_workspace/'
+    | '/_workspace/pipelines/$pipelineId'
     | '/_workspace/settings/environments'
     | '/_workspace/settings/'
+    | '/_workspace/pipelines/$pipelineId/config'
     | '/_workspace/settings/environments/$environmentId'
     | '/_workspace/settings/environments/new'
     | '/_workspace/settings/environments/'
     | '/_workspace/settings/environments/$environmentId/connections'
+    | '/_workspace/pipelines/$pipelineId/config/connections'
+    | '/_workspace/pipelines/$pipelineId/config/execution'
+    | '/_workspace/pipelines/$pipelineId/config/general'
+    | '/_workspace/pipelines/$pipelineId/config/notifications'
+    | '/_workspace/pipelines/$pipelineId/config/preview'
+    | '/_workspace/pipelines/$pipelineId/config/variables'
     | '/_workspace/settings/environments/$environmentId/edit'
+    | '/_workspace/pipelines/$pipelineId/config/'
     | '/_workspace/settings/environments/$environmentId/'
     | '/_workspace/settings/environments/$environmentId/connections/$connectionId'
     | '/_workspace/settings/environments/$environmentId/connections/new'
@@ -333,6 +448,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof WorkspaceSettingsEnvironmentsRouteRouteImport
       parentRoute: typeof WorkspaceSettingsRouteRoute
     }
+    '/_workspace/pipelines/$pipelineId': {
+      id: '/_workspace/pipelines/$pipelineId'
+      path: '/pipelines/$pipelineId'
+      fullPath: '/pipelines/$pipelineId'
+      preLoaderRoute: typeof WorkspacePipelinesPipelineIdRouteRouteImport
+      parentRoute: typeof WorkspaceRoute
+    }
     '/_workspace/settings/environments/': {
       id: '/_workspace/settings/environments/'
       path: '/'
@@ -354,6 +476,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof WorkspaceSettingsEnvironmentsEnvironmentIdRouteRouteImport
       parentRoute: typeof WorkspaceSettingsEnvironmentsRouteRoute
     }
+    '/_workspace/pipelines/$pipelineId/config': {
+      id: '/_workspace/pipelines/$pipelineId/config'
+      path: '/config'
+      fullPath: '/pipelines/$pipelineId/config'
+      preLoaderRoute: typeof WorkspacePipelinesPipelineIdConfigRouteRouteImport
+      parentRoute: typeof WorkspacePipelinesPipelineIdRouteRoute
+    }
     '/_workspace/settings/environments/$environmentId/': {
       id: '/_workspace/settings/environments/$environmentId/'
       path: '/'
@@ -361,12 +490,61 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof WorkspaceSettingsEnvironmentsEnvironmentIdIndexRouteImport
       parentRoute: typeof WorkspaceSettingsEnvironmentsEnvironmentIdRouteRoute
     }
+    '/_workspace/pipelines/$pipelineId/config/': {
+      id: '/_workspace/pipelines/$pipelineId/config/'
+      path: '/'
+      fullPath: '/pipelines/$pipelineId/config/'
+      preLoaderRoute: typeof WorkspacePipelinesPipelineIdConfigIndexRouteImport
+      parentRoute: typeof WorkspacePipelinesPipelineIdConfigRouteRoute
+    }
     '/_workspace/settings/environments/$environmentId/edit': {
       id: '/_workspace/settings/environments/$environmentId/edit'
       path: '/edit'
       fullPath: '/settings/environments/$environmentId/edit'
       preLoaderRoute: typeof WorkspaceSettingsEnvironmentsEnvironmentIdEditRouteImport
       parentRoute: typeof WorkspaceSettingsEnvironmentsEnvironmentIdRouteRoute
+    }
+    '/_workspace/pipelines/$pipelineId/config/variables': {
+      id: '/_workspace/pipelines/$pipelineId/config/variables'
+      path: '/variables'
+      fullPath: '/pipelines/$pipelineId/config/variables'
+      preLoaderRoute: typeof WorkspacePipelinesPipelineIdConfigVariablesRouteImport
+      parentRoute: typeof WorkspacePipelinesPipelineIdConfigRouteRoute
+    }
+    '/_workspace/pipelines/$pipelineId/config/preview': {
+      id: '/_workspace/pipelines/$pipelineId/config/preview'
+      path: '/preview'
+      fullPath: '/pipelines/$pipelineId/config/preview'
+      preLoaderRoute: typeof WorkspacePipelinesPipelineIdConfigPreviewRouteImport
+      parentRoute: typeof WorkspacePipelinesPipelineIdConfigRouteRoute
+    }
+    '/_workspace/pipelines/$pipelineId/config/notifications': {
+      id: '/_workspace/pipelines/$pipelineId/config/notifications'
+      path: '/notifications'
+      fullPath: '/pipelines/$pipelineId/config/notifications'
+      preLoaderRoute: typeof WorkspacePipelinesPipelineIdConfigNotificationsRouteImport
+      parentRoute: typeof WorkspacePipelinesPipelineIdConfigRouteRoute
+    }
+    '/_workspace/pipelines/$pipelineId/config/general': {
+      id: '/_workspace/pipelines/$pipelineId/config/general'
+      path: '/general'
+      fullPath: '/pipelines/$pipelineId/config/general'
+      preLoaderRoute: typeof WorkspacePipelinesPipelineIdConfigGeneralRouteImport
+      parentRoute: typeof WorkspacePipelinesPipelineIdConfigRouteRoute
+    }
+    '/_workspace/pipelines/$pipelineId/config/execution': {
+      id: '/_workspace/pipelines/$pipelineId/config/execution'
+      path: '/execution'
+      fullPath: '/pipelines/$pipelineId/config/execution'
+      preLoaderRoute: typeof WorkspacePipelinesPipelineIdConfigExecutionRouteImport
+      parentRoute: typeof WorkspacePipelinesPipelineIdConfigRouteRoute
+    }
+    '/_workspace/pipelines/$pipelineId/config/connections': {
+      id: '/_workspace/pipelines/$pipelineId/config/connections'
+      path: '/connections'
+      fullPath: '/pipelines/$pipelineId/config/connections'
+      preLoaderRoute: typeof WorkspacePipelinesPipelineIdConfigConnectionsRouteImport
+      parentRoute: typeof WorkspacePipelinesPipelineIdConfigRouteRoute
     }
     '/_workspace/settings/environments/$environmentId/connections': {
       id: '/_workspace/settings/environments/$environmentId/connections'
@@ -501,14 +679,65 @@ const WorkspaceSettingsRouteRouteWithChildren =
     WorkspaceSettingsRouteRouteChildren,
   )
 
+interface WorkspacePipelinesPipelineIdConfigRouteRouteChildren {
+  WorkspacePipelinesPipelineIdConfigConnectionsRoute: typeof WorkspacePipelinesPipelineIdConfigConnectionsRoute
+  WorkspacePipelinesPipelineIdConfigExecutionRoute: typeof WorkspacePipelinesPipelineIdConfigExecutionRoute
+  WorkspacePipelinesPipelineIdConfigGeneralRoute: typeof WorkspacePipelinesPipelineIdConfigGeneralRoute
+  WorkspacePipelinesPipelineIdConfigNotificationsRoute: typeof WorkspacePipelinesPipelineIdConfigNotificationsRoute
+  WorkspacePipelinesPipelineIdConfigPreviewRoute: typeof WorkspacePipelinesPipelineIdConfigPreviewRoute
+  WorkspacePipelinesPipelineIdConfigVariablesRoute: typeof WorkspacePipelinesPipelineIdConfigVariablesRoute
+  WorkspacePipelinesPipelineIdConfigIndexRoute: typeof WorkspacePipelinesPipelineIdConfigIndexRoute
+}
+
+const WorkspacePipelinesPipelineIdConfigRouteRouteChildren: WorkspacePipelinesPipelineIdConfigRouteRouteChildren =
+  {
+    WorkspacePipelinesPipelineIdConfigConnectionsRoute:
+      WorkspacePipelinesPipelineIdConfigConnectionsRoute,
+    WorkspacePipelinesPipelineIdConfigExecutionRoute:
+      WorkspacePipelinesPipelineIdConfigExecutionRoute,
+    WorkspacePipelinesPipelineIdConfigGeneralRoute:
+      WorkspacePipelinesPipelineIdConfigGeneralRoute,
+    WorkspacePipelinesPipelineIdConfigNotificationsRoute:
+      WorkspacePipelinesPipelineIdConfigNotificationsRoute,
+    WorkspacePipelinesPipelineIdConfigPreviewRoute:
+      WorkspacePipelinesPipelineIdConfigPreviewRoute,
+    WorkspacePipelinesPipelineIdConfigVariablesRoute:
+      WorkspacePipelinesPipelineIdConfigVariablesRoute,
+    WorkspacePipelinesPipelineIdConfigIndexRoute:
+      WorkspacePipelinesPipelineIdConfigIndexRoute,
+  }
+
+const WorkspacePipelinesPipelineIdConfigRouteRouteWithChildren =
+  WorkspacePipelinesPipelineIdConfigRouteRoute._addFileChildren(
+    WorkspacePipelinesPipelineIdConfigRouteRouteChildren,
+  )
+
+interface WorkspacePipelinesPipelineIdRouteRouteChildren {
+  WorkspacePipelinesPipelineIdConfigRouteRoute: typeof WorkspacePipelinesPipelineIdConfigRouteRouteWithChildren
+}
+
+const WorkspacePipelinesPipelineIdRouteRouteChildren: WorkspacePipelinesPipelineIdRouteRouteChildren =
+  {
+    WorkspacePipelinesPipelineIdConfigRouteRoute:
+      WorkspacePipelinesPipelineIdConfigRouteRouteWithChildren,
+  }
+
+const WorkspacePipelinesPipelineIdRouteRouteWithChildren =
+  WorkspacePipelinesPipelineIdRouteRoute._addFileChildren(
+    WorkspacePipelinesPipelineIdRouteRouteChildren,
+  )
+
 interface WorkspaceRouteChildren {
   WorkspaceSettingsRouteRoute: typeof WorkspaceSettingsRouteRouteWithChildren
   WorkspaceIndexRoute: typeof WorkspaceIndexRoute
+  WorkspacePipelinesPipelineIdRouteRoute: typeof WorkspacePipelinesPipelineIdRouteRouteWithChildren
 }
 
 const WorkspaceRouteChildren: WorkspaceRouteChildren = {
   WorkspaceSettingsRouteRoute: WorkspaceSettingsRouteRouteWithChildren,
   WorkspaceIndexRoute: WorkspaceIndexRoute,
+  WorkspacePipelinesPipelineIdRouteRoute:
+    WorkspacePipelinesPipelineIdRouteRouteWithChildren,
 }
 
 const WorkspaceRouteWithChildren = WorkspaceRoute._addFileChildren(

@@ -3,7 +3,6 @@ package httpapi
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
@@ -30,19 +29,10 @@ func (h *RunAPI) HandleRun(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	command := req.Command
-	if command == "" {
-		command = "run"
-	}
-	if !service.IsRunCommandAllowed(command) {
-		webapi.WriteBadRequest(w, "command_not_allowed", fmt.Sprintf("command %q is not allowed; permitted commands: run, query, patch, lint", command))
-		return
-	}
-
 	result := h.Service.Run(r.Context(), req)
 	webapi.WriteJSON(w, result.HTTPCode, map[string]any{
 		"status":    result.Status,
-		"command":   result.Command,
+		"operation": result.Operation,
 		"output":    result.Output,
 		"error":     result.Error,
 		"exit_code": result.ExitCode,

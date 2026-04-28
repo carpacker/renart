@@ -7,8 +7,13 @@ import type {
   OnboardingDiscoveryResponse as GeneratedOnboardingDiscoveryResponse,
   OnboardingImportFormState,
   OnboardingImportResultState,
+  OperationMetadata,
   OnboardingPathSuggestionsResponse,
   OnboardingSessionState as GeneratedOnboardingSessionState,
+  PipelineConfigConnection as GeneratedPipelineConfigConnection,
+  PipelineConfigDefaults as GeneratedPipelineConfigDefaults,
+  PipelineConfigNotification as GeneratedPipelineConfigNotification,
+  PipelineConfigVariable as GeneratedPipelineConfigVariable,
   PipelineMaterializationResponse as GeneratedPipelineMaterializationResponse,
   SqlDiscoveryDatabasesResponse,
   SqlDiscoveryTable,
@@ -22,7 +27,9 @@ import type {
   SqlParseContextTable,
   SqlPathSuggestionsResponse,
   WebAsset as GeneratedWebAsset,
+  WebPipelineConfigResponse as GeneratedWebPipelineConfigResponse,
   WebPipeline as GeneratedWebPipeline,
+  WebUpdatePipelineConfigRequest as GeneratedWebUpdatePipelineConfigRequest,
   WebColumn,
   WebColumnCheck,
   WorkspaceConfigConnection,
@@ -39,6 +46,7 @@ export type {
   IngestrSuggestionsResponse,
   OnboardingImportFormState,
   OnboardingImportResultState,
+  OperationMetadata,
   OnboardingPathSuggestionsResponse,
   SqlDiscoveryDatabasesResponse,
   SqlDiscoveryTable,
@@ -114,7 +122,7 @@ export type OnboardingSessionState = Omit<
 
 export type OnboardingImportResponse = {
   status: "ok" | "error";
-  command?: string[];
+  operation?: OperationMetadata;
   output?: string;
   error?: string;
   pipeline_path?: string;
@@ -134,13 +142,13 @@ export type OnboardingImportSummary = {
 
 export type AssetInspectResponse = GeneratedAssetInspectResponse & {
   status: "ok" | "error";
-  command?: string[];
+  operation?: OperationMetadata;
   warning?: string;
 };
 
 export type InferColumnsResponse = GeneratedInferColumnsResponse & {
   status: "ok" | "error";
-  command?: string[];
+  operation?: OperationMetadata;
 };
 
 export type FormatSQLAssetResponse = GeneratedFormatSQLAssetResponse & {
@@ -152,6 +160,31 @@ export type PipelineMaterializationResponse = Omit<GeneratedPipelineMaterializat
   assets: Array<GeneratedPipelineMaterializationResponse["assets"][number] & {
     freshness_status?: "fresh" | "stale";
   }>;
+};
+
+export type PipelineConfigConnection = GeneratedPipelineConfigConnection;
+
+export type PipelineConfigNotification = GeneratedPipelineConfigNotification;
+
+export type PipelineConfigDefaults = GeneratedPipelineConfigDefaults;
+
+export type PipelineConfigVariable = GeneratedPipelineConfigVariable & {
+  extra?: Record<string, unknown>;
+};
+
+export type PipelineConfigResponse = Omit<
+  GeneratedWebPipelineConfigResponse,
+  "status" | "variables"
+> & {
+  status: "ok" | "error";
+  variables: PipelineConfigVariable[];
+};
+
+export type UpdatePipelineConfigRequest = Omit<
+  GeneratedWebUpdatePipelineConfigRequest,
+  "variables"
+> & {
+  variables: PipelineConfigVariable[];
 };
 
 export type AssetFreshnessEntry = {

@@ -185,7 +185,7 @@ export function useAssetResults() {
         columns: [],
         rows: [],
         raw_output: "",
-        command: [],
+        operation: { type: "inspect" },
         error: String(error),
       };
       setResultTab("inspect");

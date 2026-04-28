@@ -73,7 +73,17 @@ const sources = [
   },
   {
     file: resolve(repoRoot, "internal", "web", "model", "dto.go"),
-    types: ["InspectResult", "InferColumnsResult"],
+    types: [
+      "InspectResult",
+      "InferColumnsResult",
+      "OperationMetadata",
+      "PipelineConfigConnection",
+      "PipelineConfigNotification",
+      "PipelineConfigDefaults",
+      "PipelineConfigVariable",
+      "PipelineConfigResponse",
+      "UpdatePipelineConfigRequest",
+    ],
   },
 ];
 
@@ -110,6 +120,8 @@ const renameMap = new Map([
   ["InspectResult", "AssetInspectResponse"],
   ["InferColumnsResult", "InferColumnsResponse"],
   ["Column", "WebColumn"],
+  ["PipelineConfigResponse", "WebPipelineConfigResponse"],
+  ["UpdatePipelineConfigRequest", "WebUpdatePipelineConfigRequest"],
 ]);
 
 function splitFields(body) {

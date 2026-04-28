@@ -19,11 +19,17 @@ type stubRunRunner struct {
 
 func (s *stubRunRunner) RunAsset(_ context.Context, req RunAssetRequest, _ func([]byte)) ([]byte, error) {
 	s.args = []string{"run", req.AssetPath}
+	if req.Environment != "" {
+		s.args = append(s.args, "--env", req.Environment)
+	}
 	return s.output, s.err
 }
 
 func (s *stubRunRunner) RunPipeline(_ context.Context, req RunPipelineRequest, _ func([]byte)) ([]byte, error) {
 	s.args = []string{"run", req.Target}
+	if req.Environment != "" {
+		s.args = append(s.args, "--env", req.Environment)
+	}
 	return s.output, s.err
 }
 
@@ -72,7 +78,8 @@ func TestRunServiceExecute_DefaultsToRunCommand(t *testing.T) {
 	assert.Equal(t, "ok", result.Status)
 	assert.Equal(t, 200, result.HTTPCode)
 	assert.Equal(t, 0, result.ExitCode)
-	assert.Equal(t, []string{"run", "."}, result.Command)
+	assert.Equal(t, "run", result.Operation.Type)
+	assert.Equal(t, ".", result.Operation.Target)
 	assert.Equal(t, "ok", result.Output)
 }
 
@@ -83,13 +90,15 @@ func TestRunServiceExecute_UsesPipelineTarget(t *testing.T) {
 	svc := NewRunService(RunDependencies{Executor: runner})
 
 	result := svc.Execute(context.Background(), RunRequest{
-		Command:    "lint",
-		PipelineID: EncodeID("pipelines/orders/pipeline.yml"),
-		Args:       []string{"--debug"},
+		PipelineID:  EncodeID("pipelines/orders/pipeline.yml"),
+		Environment: "staging",
 	})
 
-	assert.Equal(t, "error", result.Status)
-	assert.Equal(t, []string{"lint", "pipelines/orders", "--debug"}, result.Command)
+	require.Equal(t, []string{"run", "pipelines/orders", "--env", "staging"}, runner.args)
+	assert.Equal(t, "ok", result.Status)
+	assert.Equal(t, "run", result.Operation.Type)
+	assert.Equal(t, "pipelines/orders", result.Operation.Target)
+	assert.Equal(t, "staging", result.Operation.Environment)
 }
 
 func TestRunServiceExecute_AssetPathOverridesPipelineID(t *testing.T) {
@@ -99,13 +108,13 @@ func TestRunServiceExecute_AssetPathOverridesPipelineID(t *testing.T) {
 	svc := NewRunService(RunDependencies{Executor: runner})
 
 	result := svc.Execute(context.Background(), RunRequest{
-		Command:    "query",
 		PipelineID: EncodeID("pipelines/orders/pipeline.yml"),
 		AssetPath:  "pipelines/orders/assets/order_items.sql",
 	})
 
-	assert.Equal(t, "error", result.Status)
-	assert.Equal(t, []string{"query", "pipelines/orders/assets/order_items.sql"}, result.Command)
+	assert.Equal(t, "ok", result.Status)
+	assert.Equal(t, "pipelines/orders/assets/order_items.sql", result.Operation.Target)
+	assert.Equal(t, []string{"run", "pipelines/orders/assets/order_items.sql"}, runner.args)
 }
 
 func TestRunServiceExecute_InvalidPipelineID(t *testing.T) {
@@ -129,15 +138,16 @@ func TestRunServiceExecute_PropagatesRunnerFailure(t *testing.T) {
 	runner := &stubRunRunner{output: []byte("bad output"), err: errors.New("boom")}
 	svc := NewRunService(RunDependencies{Executor: runner})
 
-	result := svc.Execute(context.Background(), RunRequest{Command: "patch", AssetPath: "assets/foo.sql"})
+	result := svc.Execute(context.Background(), RunRequest{AssetPath: "assets/foo.sql"})
 
-	require.Equal(t, []string{"patch", "assets/foo.sql"}, result.Command)
+	require.Equal(t, "run", result.Operation.Type)
+	require.Equal(t, "assets/foo.sql", result.Operation.Target)
 	assert.Equal(t, "error", result.Status)
 	assert.Equal(t, 400, result.HTTPCode)
 	assert.Equal(t, 1, result.ExitCode)
-	assert.Equal(t, []string{"patch", "assets/foo.sql"}, result.Command)
-	assert.Equal(t, "", result.Output)
-	assert.Equal(t, "command \"patch\" is not supported by this executor", result.Error)
+	assert.Equal(t, "assets/foo.sql", result.Operation.AssetPath)
+	assert.Equal(t, "bad output", result.Output)
+	assert.Equal(t, "boom", result.Error)
 }
 
 func TestExtractInspectRawOutputUsesErrorField(t *testing.T) {

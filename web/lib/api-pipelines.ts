@@ -5,7 +5,11 @@ import {
   MaterializeStreamPayload,
 } from "@/lib/api-core";
 import { streamMaterialization } from "@/lib/api-streams";
-import { PipelineMaterializationResponse } from "@/lib/types";
+import {
+  PipelineConfigResponse,
+  PipelineMaterializationResponse,
+  UpdatePipelineConfigRequest,
+} from "@/lib/types";
 
 export async function createPipeline(input: {
   path: string;
@@ -35,6 +39,24 @@ export async function updatePipeline(input: {
     "PUT",
     input
   );
+}
+
+export async function getPipelineConfig(pipelineId: string) {
+	return fetchJSON<PipelineConfigResponse>(`/api/pipelines/${pipelineId}/config`, {
+		method: "GET",
+		cache: "no-store",
+	});
+}
+
+export async function updatePipelineConfig(
+	pipelineId: string,
+	input: UpdatePipelineConfigRequest
+) {
+	return fetchJSONWithBody<PipelineConfigResponse>(
+		`/api/pipelines/${pipelineId}/config`,
+		"PUT",
+		input
+	);
 }
 
 export async function materializePipelineStream(
