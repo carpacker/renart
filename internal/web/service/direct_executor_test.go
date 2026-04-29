@@ -414,15 +414,8 @@ func TestHybridBruinExecutorRunAssetSupportsSimpleSQLAssets(t *testing.T) {
 	assert.False(t, shouldFallbackToCLIRunAsset(&pipeline.Asset{Type: pipeline.AssetTypePostgresQuerySensor}, &pipeline.Pipeline{}))
 	assert.False(t, shouldFallbackToCLIRunAsset(&pipeline.Asset{Type: pipeline.AssetTypeS3KeySensor}, &pipeline.Pipeline{}))
 	assert.False(t, shouldFallbackToCLIRunAsset(&pipeline.Asset{Type: pipeline.AssetTypePython}, &pipeline.Pipeline{}))
+	assert.False(t, shouldFallbackToCLIRunAsset(&pipeline.Asset{Type: pipeline.AssetTypeIngestr}, &pipeline.Pipeline{}))
 	assert.True(t, shouldFallbackToCLIRunAsset(&pipeline.Asset{Type: pipeline.AssetType("unknown.custom")}, &pipeline.Pipeline{}))
-}
-
-func TestDirectUnsupportedOperatorReturnsExplicitError(t *testing.T) {
-	t.Parallel()
-
-	err := directUnsupportedOperator{assetType: pipeline.AssetTypePython}.Run(context.Background(), nil)
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), `direct execution is not implemented for asset type "python"`)
 }
 
 func TestDirectRunAssetWithCustomChecksDoesNotFallbackToCLI(t *testing.T) {
@@ -720,6 +713,57 @@ func TestDirectRunPipelineSuccessMatchesCLISideEffects(t *testing.T) {
 	assert.Equal(t, queryDuckDBResult(t, bruinBinary, cliWorkspace), queryDuckDBResult(t, bruinBinary, directWorkspace))
 }
 
+func TestDirectRunPythonAssetMatchesCLIOutput(t *testing.T) {
+	t.Parallel()
+
+	bruinBinary := compatBruinBinary(t)
+	directWorkspace, directAssetPath := createPythonWorkspace(t)
+	cliWorkspace, cliAssetPath := createPythonWorkspace(t)
+
+	directExecutor := newCompatDirectExecutor(directWorkspace, bruinBinary)
+	cliExecutor := NewCLIBruinExecutor(cliWorkspace, bruinBinary)
+
+	directOutput, directErr := directExecutor.RunAsset(context.Background(), RunAssetRequest{AssetPath: directAssetPath}, nil)
+	cliOutput, cliErr := cliExecutor.RunAsset(context.Background(), RunAssetRequest{AssetPath: cliAssetPath}, nil)
+
+	require.NoError(t, directErr)
+	require.NoError(t, cliErr)
+	directText := normalizeRunCompatibilityText(string(directOutput))
+	cliText := normalizeRunCompatibilityText(string(cliOutput))
+	assert.Contains(t, directText, "python direct compatibility")
+	assert.Contains(t, cliText, "python direct compatibility")
+	assert.Contains(t, directText, "bruin run completed successfully")
+	assert.Contains(t, cliText, "bruin run completed successfully")
+	assert.Contains(t, directText, "analytics.python_task")
+	assert.Contains(t, cliText, "analytics.python_task")
+}
+
+func TestDirectRunIngestrAssetFailureMatchesCLIErrorSemantics(t *testing.T) {
+	t.Parallel()
+
+	bruinBinary := compatBruinBinary(t)
+	directWorkspace, directAssetPath := createFailingIngestrWorkspace(t)
+	cliWorkspace, cliAssetPath := createFailingIngestrWorkspace(t)
+
+	directExecutor := newCompatDirectExecutor(directWorkspace, bruinBinary)
+	cliExecutor := NewCLIBruinExecutor(cliWorkspace, bruinBinary)
+
+	directOutput, directErr := directExecutor.RunAsset(context.Background(), RunAssetRequest{AssetPath: directAssetPath}, nil)
+	cliOutput, cliErr := cliExecutor.RunAsset(context.Background(), RunAssetRequest{AssetPath: cliAssetPath}, nil)
+
+	require.Error(t, directErr)
+	require.Error(t, cliErr)
+	directText := normalizeRunCompatibilityText(directErr.Error() + "\n" + string(directOutput))
+	cliText := normalizeRunCompatibilityText(cliErr.Error() + "\n" + string(cliOutput))
+	directCore := extractCoreRunFailure(directText)
+	cliCore := extractCoreRunFailure(cliText)
+	for _, text := range []string{directCore, cliCore} {
+		assert.Contains(t, text, "source connection 'missing-source' not found")
+		assert.Contains(t, text, "analytics.ingest")
+		assert.Contains(t, text, "bruin run completed with failures")
+	}
+}
+
 func compatBruinBinary(t *testing.T) string {
 	t.Helper()
 
@@ -732,6 +776,24 @@ func compatBruinBinary(t *testing.T) string {
 	}
 
 	return bruinBinary
+}
+
+func newCompatDirectExecutor(workspaceRoot, bruinBinary string) *HybridBruinExecutor {
+	return NewHybridBruinExecutor(
+		workspaceRoot,
+		bruinBinary,
+		nil,
+		func() *pipeline.Builder {
+			osFS := afero.NewOsFs()
+			return pipeline.NewBuilder(
+				BuilderConfig,
+				pipeline.CreateTaskFromYamlDefinition(osFS),
+				pipeline.CreateTaskFromFileComments(osFS),
+				osFS,
+				DefaultGlossaryReader,
+			)
+		},
+	)
 }
 
 func createFailingDuckDBWorkspace(t *testing.T) (string, string) {
@@ -769,6 +831,68 @@ materialization:
 select * from missing_source
 `)+"\n"), 0o644))
 
+	return workspaceRoot, assetPath
+}
+
+func createPythonWorkspace(t *testing.T) (string, string) {
+	t.Helper()
+
+	workspaceRoot := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(workspaceRoot, ".git"), 0o755))
+	pipelineRoot := filepath.Join(workspaceRoot, "analytics")
+	assetsRoot := filepath.Join(pipelineRoot, "assets")
+	require.NoError(t, os.MkdirAll(assetsRoot, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(workspaceRoot, ".bruin.yml"), []byte(strings.TrimSpace(`
+default_environment: default
+environments:
+  default:
+    connections: {}
+`)+"\n"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(pipelineRoot, "pipeline.yml"), []byte("name: analytics\n"), 0o644))
+	assetPath := filepath.Join(assetsRoot, "python_task.py")
+	require.NoError(t, os.WriteFile(assetPath, []byte(strings.TrimSpace(`
+""" @bruin
+name: analytics.python_task
+type: python
+@bruin """
+
+print("python direct compatibility")
+`)+"\n"), 0o644))
+	return workspaceRoot, assetPath
+}
+
+func createFailingIngestrWorkspace(t *testing.T) (string, string) {
+	t.Helper()
+
+	workspaceRoot := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(workspaceRoot, ".git"), 0o755))
+	pipelineRoot := filepath.Join(workspaceRoot, "analytics")
+	assetsRoot := filepath.Join(pipelineRoot, "assets")
+	require.NoError(t, os.MkdirAll(assetsRoot, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(workspaceRoot, ".bruin.yml"), []byte(strings.TrimSpace(`
+default_environment: default
+environments:
+  default:
+    connections:
+      duckdb:
+        - name: duckdb-default
+          path: local.db
+`)+"\n"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(pipelineRoot, "pipeline.yml"), []byte(strings.TrimSpace(`
+name: analytics
+default_connections:
+  duckdb: duckdb-default
+`)+"\n"), 0o644))
+	assetPath := filepath.Join(assetsRoot, "ingest.asset.yml")
+	require.NoError(t, os.WriteFile(assetPath, []byte(strings.TrimSpace(`
+name: analytics.ingest
+type: ingestr
+parameters:
+  source_connection: missing-source
+  source: duckdb
+  destination: duckdb
+  source_table: source_table
+`)+"\n"), 0o644))
 	return workspaceRoot, assetPath
 }
 

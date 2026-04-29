@@ -22,6 +22,7 @@ import (
 	bruinexecutor "github.com/bruin-data/bruin/pkg/executor"
 	fw "github.com/bruin-data/bruin/pkg/fabric"
 	"github.com/bruin-data/bruin/pkg/git"
+	bruiningestr "github.com/bruin-data/bruin/pkg/ingestr"
 	"github.com/bruin-data/bruin/pkg/jinja"
 	"github.com/bruin-data/bruin/pkg/mssql"
 	ms "github.com/bruin-data/bruin/pkg/mssql"
@@ -31,6 +32,7 @@ import (
 	"github.com/bruin-data/bruin/pkg/pipeline"
 	"github.com/bruin-data/bruin/pkg/postgres"
 	pg "github.com/bruin-data/bruin/pkg/postgres"
+	bruinpython "github.com/bruin-data/bruin/pkg/python"
 	"github.com/bruin-data/bruin/pkg/query"
 	"github.com/bruin-data/bruin/pkg/s3"
 	"github.com/bruin-data/bruin/pkg/scheduler"
@@ -114,7 +116,7 @@ func (e *HybridBruinExecutor) RunAsset(ctx context.Context, req RunAssetRequest,
 		return nil, err
 	}
 
-	mainExecutors, err := buildDirectMainExecutors(manager, renderer, parser)
+	mainExecutors, err := buildDirectMainExecutors(manager, renderer, parser, pp.Pipeline)
 	if err != nil {
 		return nil, err
 	}
@@ -243,7 +245,7 @@ func (e *HybridBruinExecutor) RunPipeline(ctx context.Context, req RunPipelineRe
 	if err != nil {
 		return nil, err
 	}
-	mainExecutors, err := buildDirectMainExecutors(manager, renderer, parser)
+	mainExecutors, err := buildDirectMainExecutors(manager, renderer, parser, foundPipeline)
 	if err != nil {
 		return nil, err
 	}
@@ -1090,6 +1092,8 @@ var directRunAssetTypes = map[pipeline.AssetType]struct{}{
 	pipeline.AssetTypeVerticaQuerySensor:      {},
 	pipeline.AssetTypeVerticaTableSensor:      {},
 	pipeline.AssetTypeS3KeySensor:             {},
+	pipeline.AssetTypePython:                  {},
+	pipeline.AssetTypeIngestr:                 {},
 }
 
 func allDirectRunPipelineDependenciesSucceeded(instance scheduler.TaskInstance) bool {
@@ -1151,7 +1155,7 @@ func buildDirectRunAssetRenderer(pp *directPipelineInfo) (*jinja.Renderer, error
 	return jinja.NewRendererWithStartEndDatesAndMacros(&startDate, &endDate, &now, pp.Pipeline.Name, "renart-run", nil, macroContent), nil
 }
 
-func buildDirectMainExecutors(manager config.ConnectionAndDetailsGetter, renderer *jinja.Renderer, parser *sqlparser.SQLParser) (map[pipeline.AssetType]bruinexecutor.Config, error) {
+func buildDirectMainExecutors(manager config.ConnectionAndDetailsGetter, renderer *jinja.Renderer, parser *sqlparser.SQLParser, pl *pipeline.Pipeline) (map[pipeline.AssetType]bruinexecutor.Config, error) {
 	executors := make(map[pipeline.AssetType]bruinexecutor.Config, len(bruinexecutor.DefaultExecutorsV2))
 	for assetType, cfg := range bruinexecutor.DefaultExecutorsV2 {
 		if cfg == nil {
@@ -1328,7 +1332,26 @@ func buildDirectMainExecutors(manager config.ConnectionAndDetailsGetter, rendere
 	ensureExecutorConfig(pipeline.AssetTypeOracleQuery)
 	executors[pipeline.AssetTypeOracleQuery][scheduler.TaskInstanceTypeMain] = directOracleBasicOperator{connection: manager, extractor: wholeFileExtractor}
 	executors[pipeline.AssetTypeOracleQuery][scheduler.TaskInstanceTypeCustomCheck] = ansisql.NewCustomCheckOperator(manager, renderer)
+	ensureExecutorConfig(pipeline.AssetTypePython)
+	executors[pipeline.AssetTypePython][scheduler.TaskInstanceTypeMain] = bruinpython.NewLocalOperator(manager, directPythonEnvVariables(pl))
+	ingestrOperator, err := bruiningestr.NewBasicOperator(manager, renderer)
+	if err != nil {
+		return nil, err
+	}
+	ensureExecutorConfig(pipeline.AssetTypeIngestr)
+	executors[pipeline.AssetTypeIngestr][scheduler.TaskInstanceTypeMain] = ingestrOperator
 	return executors, nil
+}
+
+func directPythonEnvVariables(pl *pipeline.Pipeline) map[string]string {
+	if pl == nil {
+		return map[string]string{}
+	}
+	now := time.Now().UTC()
+	yesterday := now.Add(-24 * time.Hour)
+	startDate := time.Date(yesterday.Year(), yesterday.Month(), yesterday.Day(), 0, 0, 0, 0, time.UTC)
+	endDate := time.Date(yesterday.Year(), yesterday.Month(), yesterday.Day(), 23, 59, 59, 0, time.UTC)
+	return jinja.PythonEnvVariables(&startDate, &endDate, &now, pl.Name, "renart-run", false, "")
 }
 
 type directOracleBasicOperator struct {

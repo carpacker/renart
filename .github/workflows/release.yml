@@ -72,7 +72,7 @@ jobs:
             -v "$PWD":/src \
             -w /src \
             goreleaser/goreleaser-cross:v1.26.2-3 \
-            release --clean --verbose
+            release --clean --verbose --parallelism=1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -85,4 +85,4 @@ jobs:
             -v "$PWD":/src \
             -w /src \
             goreleaser/goreleaser-cross:v1.26.2-3 \
-            release --snapshot --skip=publish --clean --verbose
+            release --snapshot --skip=publish --clean --verbose --parallelism=1

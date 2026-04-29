@@ -31,11 +31,20 @@ if ! command -v cargo >/dev/null 2>&1; then
 	exit 1
 fi
 
+bruin_version="$(go list -m -f '{{.Version}}' github.com/bruin-data/bruin 2>/dev/null || true)"
+if [ -z "${bruin_version}" ]; then
+	bruin_version="v0.11.528"
+fi
+
+go mod download "github.com/bruin-data/bruin@${bruin_version}"
+
 module_dir="$(go list -m -f '{{.Dir}}' github.com/bruin-data/bruin 2>/dev/null || true)"
 
-if [ -z "${module_dir}" ] || [ ! -d "${module_dir}" ]; then
-	go mod download github.com/bruin-data/bruin@v0.11.528
-	module_dir="$(go list -m -f '{{.Dir}}' github.com/bruin-data/bruin 2>/dev/null || true)"
+vendor_dir="$(pwd)/vendor/github.com/bruin-data/bruin"
+if [ -f "${vendor_dir}/pkg/sqlparser/rustffi/Cargo.toml" ]; then
+	module_dir="${vendor_dir}"
+elif [ -z "${module_dir}" ] || [ ! -d "${module_dir}" ]; then
+	module_dir="$(go env GOMODCACHE)/github.com/bruin-data/bruin@${bruin_version}"
 fi
 
 rustffi_dir="${module_dir}/pkg/sqlparser/rustffi"
@@ -45,22 +54,21 @@ if [ ! -f "${rustffi_dir}/Cargo.toml" ]; then
 	exit 1
 fi
 
-chmod -R u+w "${rustffi_dir}" || true
+if [ "${target}" = "x86_64-pc-windows-gnu" ]; then
+	mingw_include_dir="/usr/x86_64-w64-mingw32/include"
+	for header in KnownFolders.h ShlObj.h Propkey.h; do
+		lower_header="$(printf '%s' "${header}" | tr '[:upper:]' '[:lower:]')"
+		if [ -f "${mingw_include_dir}/${lower_header}" ] && [ ! -e "${mingw_include_dir}/${header}" ]; then
+			ln -s "${mingw_include_dir}/${lower_header}" "${mingw_include_dir}/${header}"
+		fi
+	done
+fi
 
-build_root="$(mktemp -d)"
-full_cleanup() {
-	rm -rf "${build_root}"
-	cleanup
-}
-trap full_cleanup EXIT
-work_dir="${build_root}/rustffi"
-mkdir -p "${work_dir}"
-cp -R "${rustffi_dir}/." "${work_dir}/"
+chmod -R u+w "${rustffi_dir}" || true
+rm -f "${rustffi_dir}/target/release/libbruin_rustsqlparser.a"
 
 rustup target add "${target}"
-cargo build --release --manifest-path "${work_dir}/Cargo.toml" --target "${target}"
+cargo build --release --manifest-path "${rustffi_dir}/Cargo.toml" --target "${target}" --target-dir "${rustffi_dir}/target"
 
-mkdir -p "${rustffi_dir}/target/release"
 mkdir -p "${rustffi_dir}/target/${target}/release"
-cp "${work_dir}/target/${target}/release/libbruin_rustsqlparser.a" "${rustffi_dir}/target/release/"
-cp "${work_dir}/target/${target}/release/libbruin_rustsqlparser.a" "${rustffi_dir}/target/${target}/release/"
+test -f "${rustffi_dir}/target/${target}/release/libbruin_rustsqlparser.a"
