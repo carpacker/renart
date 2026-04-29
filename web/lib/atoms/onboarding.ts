@@ -6,7 +6,7 @@ import {
   OnboardingSessionState,
 } from "@/lib/types";
 
-export type OnboardingStep = "connection-type" | "connection-config" | "import" | "success";
+export type OnboardingStep = "connection-type" | "connection-config" | "import" | "quickstart" | "success";
 
 export type OnboardingImportForm = {
   database: string;

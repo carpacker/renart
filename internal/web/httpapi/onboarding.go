@@ -13,6 +13,7 @@ import (
 
 type OnboardingImportService interface {
 	ImportDatabase(ctx context.Context, req service.OnboardingImportRequest) service.OnboardingImportResult
+	CreateDuckDBQuickstart(ctx context.Context, req service.OnboardingQuickstartRequest) service.OnboardingImportResult
 	PreviewDiscovery(ctx context.Context, req service.OnboardingDiscoveryRequest) (service.OnboardingDiscoveryResult, int)
 	PathSuggestions(prefix string) (service.OnboardingPathSuggestionsResult, int)
 	GetState() (service.OnboardingSessionState, error)
@@ -47,9 +48,18 @@ type OnboardingDiscoveryRequest struct {
 	Database        string         `json:"database"`
 }
 
+type OnboardingQuickstartRequest struct {
+	EnvironmentName string `json:"environment_name"`
+	PipelineName    string `json:"pipeline_name"`
+	ConnectionName  string `json:"connection_name"`
+	DatabasePath    string `json:"database_path"`
+	Materialize     bool   `json:"materialize"`
+}
+
 func RegisterOnboardingRoutes(router chi.Router, handlers *OnboardingAPI) {
 	router.Get("/api/onboarding/state", handlers.HandleGetOnboardingState)
 	router.Post("/api/onboarding/import", handlers.HandleImportDatabase)
+	router.Post("/api/onboarding/quickstart", handlers.HandleCreateDuckDBQuickstart)
 	router.Post("/api/onboarding/discovery", handlers.HandlePreviewDiscovery)
 	router.Get("/api/onboarding/path-suggestions", handlers.HandlePathSuggestions)
 	router.Put("/api/onboarding/state", handlers.HandleUpdateOnboardingState)
@@ -85,6 +95,36 @@ func (h *OnboardingAPI) HandleImportDatabase(w http.ResponseWriter, r *http.Requ
 
 	if result.Status == "ok" && h.Publisher != nil {
 		h.Publisher.WorkspaceChanged(r.Context(), result.PipelinePath, "pipeline.imported")
+	}
+
+	webapi.WriteJSON(w, result.HTTPCode, map[string]any{
+		"status":        result.Status,
+		"operation":     result.Operation,
+		"output":        result.Output,
+		"error":         result.Error,
+		"pipeline_path": result.PipelinePath,
+		"asset_paths":   result.AssetPaths,
+	})
+}
+
+func (h *OnboardingAPI) HandleCreateDuckDBQuickstart(w http.ResponseWriter, r *http.Request) {
+	var req OnboardingQuickstartRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		webapi.WriteBadRequest(w, "invalid_request_body", err.Error())
+		return
+	}
+
+	result := h.Service.CreateDuckDBQuickstart(r.Context(), service.OnboardingQuickstartRequest{
+		EnvironmentName: strings.TrimSpace(req.EnvironmentName),
+		PipelineName:    strings.TrimSpace(req.PipelineName),
+		ConnectionName:  strings.TrimSpace(req.ConnectionName),
+		DatabasePath:    strings.TrimSpace(req.DatabasePath),
+		Materialize:     req.Materialize,
+	})
+
+	if result.Status == "ok" && h.Publisher != nil {
+		h.Publisher.ConfigChanged(r.Context(), ".bruin.yml", "config.updated")
+		h.Publisher.WorkspaceChanged(r.Context(), result.PipelinePath, "pipeline.created")
 	}
 
 	webapi.WriteJSON(w, result.HTTPCode, map[string]any{

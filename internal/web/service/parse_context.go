@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"strings"
 
-	"renart/internal/web/sqlintelligence"
 	"github.com/bruin-data/bruin/pkg/pipeline"
+	"renart/internal/web/sqlintelligence"
 )
 
 var assetTypeDialectMap = map[pipeline.AssetType]string{
@@ -55,12 +55,14 @@ type ParseContextDiagnostic struct {
 }
 
 type ParseContextTable struct {
-	Name         string             `json:"name"`
-	SourceKind   string             `json:"source_kind,omitempty"`
-	ResolvedName string             `json:"resolved_name,omitempty"`
-	Alias        string             `json:"alias,omitempty"`
-	Parts        []ParseContextPart `json:"parts"`
-	AliasRange   *ParseContextRange `json:"alias_range,omitempty"`
+	Name         string                       `json:"name"`
+	SourceKind   string                       `json:"source_kind,omitempty"`
+	ResolvedName string                       `json:"resolved_name,omitempty"`
+	Alias        string                       `json:"alias,omitempty"`
+	Columns      map[string]string            `json:"columns,omitempty"`
+	ColumnRanges map[string]ParseContextRange `json:"column_ranges,omitempty"`
+	Parts        []ParseContextPart           `json:"parts"`
+	AliasRange   *ParseContextRange           `json:"alias_range,omitempty"`
 }
 
 type ParseContextColumn struct {
@@ -214,6 +216,8 @@ func ParseContextTablesFromParser(input []sqlintelligence.ParseContextTable) []P
 			SourceKind:   table.SourceKind,
 			ResolvedName: table.ResolvedName,
 			Alias:        table.Alias,
+			Columns:      ParseContextSchemaColumnsFromParser(table.Columns),
+			ColumnRanges: ParseContextColumnRangesFromParser(table.ColumnRanges),
 			Parts:        ParseContextPartsFromParser(table.Parts),
 		}
 		if table.AliasRange != nil {
@@ -221,6 +225,28 @@ func ParseContextTablesFromParser(input []sqlintelligence.ParseContextTable) []P
 			item.AliasRange = &aliasRange
 		}
 		result = append(result, item)
+	}
+	return result
+}
+
+func ParseContextSchemaColumnsFromParser(input []sqlintelligence.SchemaColumn) map[string]string {
+	if len(input) == 0 {
+		return nil
+	}
+	result := make(map[string]string, len(input))
+	for _, column := range input {
+		result[column.Name] = column.Type
+	}
+	return result
+}
+
+func ParseContextColumnRangesFromParser(input map[string]sqlintelligence.ParseContextRange) map[string]ParseContextRange {
+	if len(input) == 0 {
+		return nil
+	}
+	result := make(map[string]ParseContextRange, len(input))
+	for name, rangeValue := range input {
+		result[name] = ParseContextRangeFromParser(rangeValue)
 	}
 	return result
 }

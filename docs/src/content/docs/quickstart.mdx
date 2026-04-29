@@ -1,0 +1,53 @@
+---
+title: Quickstart
+description: Create and run a local DuckDB sample pipeline in Renart.
+---
+
+The fastest way to try Renart is the DuckDB quickstart. It creates a small Bruin project in your current Git workspace, adds a local DuckDB connection, and materializes a sample pipeline from the Renart onboarding flow.
+
+## Start Renart
+
+Open Renart from an empty Git-backed workspace:
+
+```bash
+renart web
+```
+
+If the workspace has no pipelines or connections yet, Renart opens onboarding automatically.
+
+## Choose The Quickstart
+
+On the welcome screen, choose **Try the DuckDB quickstart** instead of importing an existing warehouse.
+
+Renart will show what it is about to create:
+
+- `duckdb-files/renart_quickstart.duckdb`
+- a `quickstart` pipeline
+- `quickstart.customers`
+- `quickstart.orders`
+- `quickstart.customer_orders`
+
+Click **Create and materialize**.
+
+## Explore The Pipeline
+
+When the quickstart finishes, click **Open workspace**.
+
+You can now use the canvas to inspect the sample data flow:
+
+- `quickstart.customers` creates a tiny customer table.
+- `quickstart.orders` creates a tiny order table.
+- `quickstart.customer_orders` depends on both upstream assets and summarizes revenue by customer.
+
+The pipeline has already been materialized, so the DuckDB database contains the sample tables.
+
+## Next Steps
+
+Use the quickstart as a safe local playground:
+
+- edit the SQL assets and watch Renart save the underlying files
+- materialize the pipeline again from the workspace
+- create a downstream asset from the canvas
+- replace the sample SQL with your own DuckDB queries
+
+If you already have warehouse tables, go back through onboarding and choose **Import an existing warehouse** instead.

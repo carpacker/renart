@@ -114,3 +114,55 @@ test.describe("workspace onboarding live flows", () => {
       .toBe(false);
   });
 });
+
+test.describe("workspace onboarding DuckDB quickstart", () => {
+  test.use({ fixtureName: "empty-workspace" });
+
+  test("creates and materializes the DuckDB quickstart pipeline", async ({
+    page,
+    liveApp,
+  }) => {
+    await page.goto(`${liveApp.baseURL}/onboarding`);
+    await page.evaluate(() => window.localStorage.removeItem("renart-onboarding-dismissed"));
+    await page.reload();
+
+    await expect(page.getByTestId("workspace-onboarding")).toBeVisible({ timeout: 15000 });
+    await page.getByTestId("onboarding-quickstart-choice").click();
+    await expect(page.getByTestId("onboarding-step-quickstart")).toBeVisible();
+
+    await page.getByTestId("onboarding-create-quickstart").click();
+    await expect(page.getByTestId("onboarding-step-success")).toBeVisible({
+      timeout: 60000,
+    });
+    await expect(page.getByTestId("onboarding-quickstart-summary")).toContainText("Quickstart complete");
+    await expect(page.getByTestId("onboarding-quickstart-assets")).toContainText("3");
+
+    const configAfterQuickstart = await readFile(join(liveApp.workspaceDir, ".bruin.yml"), "utf8");
+    expect(configAfterQuickstart).toContain("duckdb-default");
+    expect(configAfterQuickstart).toContain("duckdb-files/renart_quickstart.duckdb");
+
+    const pipelineFile = await readFile(join(liveApp.workspaceDir, "quickstart", "pipeline.yml"), "utf8");
+    expect(pipelineFile).toContain("name: quickstart");
+    expect(pipelineFile).toContain("duckdb: duckdb-default");
+
+    const finalAsset = await readFile(
+      join(liveApp.workspaceDir, "quickstart", "assets", "customer_orders.sql"),
+      "utf8"
+    );
+    expect(finalAsset).toContain("quickstart.customer_orders");
+    expect(finalAsset).not.toContain("columns:");
+    expect(finalAsset).not.toContain("checks:");
+
+    await access(join(liveApp.workspaceDir, "duckdb-files", "renart_quickstart.duckdb"));
+
+    await page.getByRole("button", { name: "Open workspace" }).click();
+    await expect(page).toHaveURL(/\/(?:\?.*)?$/, { timeout: 30000 });
+    await expect
+      .poll(async () => {
+        const response = await page.request.get(`${liveApp.baseURL}/api/workspace`);
+        const workspace = await response.json();
+        return JSON.stringify(workspace).includes("quickstart.customer_orders");
+      })
+      .toBe(true);
+  });
+});

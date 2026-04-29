@@ -29,6 +29,20 @@ export async function importOnboardingDatabase(input: {
   );
 }
 
+export async function createDuckDBQuickstart(input: {
+  environment_name?: string;
+  pipeline_name?: string;
+  connection_name?: string;
+  database_path?: string;
+  materialize?: boolean;
+}): Promise<OnboardingImportResponse> {
+  return fetchJSONWithBody<OnboardingImportResponse>(
+    "/api/onboarding/quickstart",
+    "POST",
+    input
+  );
+}
+
 export async function previewOnboardingDiscovery(input: {
   environment_name: string;
   type: string;

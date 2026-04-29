@@ -27,12 +27,13 @@ def extract_tables(parsed):
 
         for table in stmt.find_all(exp.Table):
             actual_table_name = table.name
-            is_cte_reference = (
+            is_unaliased_cte_definition_reference = (
                 actual_table_name in cte_names
                 and not table.db
                 and not table.catalog
+                and not table.alias
             )
-            if is_cte_reference:
+            if is_unaliased_cte_definition_reference:
                 continue
 
             table_refs.append(table)
@@ -172,11 +173,39 @@ def build_alias_range(query, table):
     return build_range_from_meta(query, alias_identifier.meta)
 
 
+def build_expression_alias_range(query, expression):
+    alias_expr = expression.args.get("alias") if hasattr(expression, "args") else None
+    if alias_expr is None:
+        return None
+
+    for alias_identifier in (alias_expr, alias_expr.this if hasattr(alias_expr, "this") else None):
+        if alias_identifier is None or not hasattr(alias_identifier, "meta"):
+            continue
+
+        range_info = build_range_from_meta(query, alias_identifier.meta)
+        if range_info:
+            return range_info
+
+    return None
+
+
 def detect_table_source_kind(table):
     table_this = getattr(table, "this", None)
     if isinstance(table_this, exp.Anonymous) or isinstance(table_this, exp.Func):
         return "table_function"
     return "table"
+
+
+def is_cte_table_reference(table, cte_schemas):
+    return (
+        table.name in cte_schemas
+        and not getattr(table, "db", None)
+        and not getattr(table, "catalog", None)
+    )
+
+
+def is_inside_cte_definition(table):
+    return table.find_ancestor(exp.CTE) is not None
 
 
 def get_table_display_name(table, current_database, dialect):
@@ -218,6 +247,37 @@ def build_schema_lookups(schema):
     return exact, short
 
 
+def collect_cte_schemas(query, parsed):
+    cte_schemas = {}
+    cte_column_ranges = {}
+
+    for cte in parsed.find_all(exp.CTE):
+        cte_name = cte.alias_or_name
+        if not cte_name:
+            continue
+
+        columns = {}
+        column_ranges = {}
+        expression = cte.this
+        if not isinstance(expression, exp.Select):
+            continue
+
+        for select_expression in expression.expressions:
+            name = select_expression.alias_or_name
+            if name:
+                columns[name] = ""
+                alias_range = build_expression_alias_range(query, select_expression)
+                if alias_range:
+                    column_ranges[name] = alias_range
+
+        if columns:
+            cte_schemas[cte_name] = columns
+        if column_ranges:
+            cte_column_ranges[cte_name] = column_ranges
+
+    return cte_schemas, cte_column_ranges
+
+
 def resolve_table_name_from_schema(table_name, exact, short):
     normalized_name = normalize_identifier(table_name)
     if normalized_name in exact:
@@ -248,23 +308,57 @@ def is_path_like_table_reference(table_name, dialect):
     return False
 
 
-def analyze_parse_context_diagnostics(parsed_tables, parsed_columns, schema, dialect):
-    if not schema:
+def collect_select_aliases(parsed):
+    aliases = set()
+
+    for select in parsed.find_all(exp.Select):
+        for expression in select.expressions:
+            alias = expression.alias_or_name if isinstance(expression, exp.Alias) else expression.alias
+            if alias:
+                aliases.add(normalize_identifier(alias))
+
+    return aliases
+
+
+def collect_order_alias_references(parsed, select_aliases):
+    references = set()
+
+    for order in parsed.find_all(exp.Order):
+        for column in order.find_all(exp.Column):
+            if column.table:
+                continue
+
+            column_name = normalize_identifier(column.name)
+            if column_name in select_aliases:
+                references.add(column_name)
+
+    return references
+
+
+def analyze_parse_context_diagnostics(parsed_tables, parsed_columns, schema, dialect, output_alias_references=None, cte_schemas=None):
+    cte_schemas = cte_schemas or {}
+    if not schema and not cte_schemas:
         return parsed_tables, parsed_columns, []
 
-    exact_schema, short_schema = build_schema_lookups(schema)
+    combined_schema = dict(schema or {})
+    combined_schema.update(cte_schemas)
+    exact_schema, short_schema = build_schema_lookups(combined_schema)
     diagnostics = []
+    output_alias_references = output_alias_references or set()
     alias_lookup = {}
+    aliased_relation_names = set()
     resolved_tables = []
 
     for table in parsed_tables:
         source_kind = table.get("source_kind", "table")
-        resolved_name = resolve_table_name_from_schema(table["name"], exact_schema, short_schema)
+        resolved_name = table["name"] if source_kind == "cte" else resolve_table_name_from_schema(table["name"], exact_schema, short_schema)
         updated_table = dict(table)
         if resolved_name:
             updated_table["resolved_name"] = resolved_name
-            if table.get("alias"):
+            if table.get("alias") and source_kind != "cte_source":
                 alias_lookup[normalize_identifier(table["alias"])] = resolved_name
+                aliased_relation_names.add(normalize_identifier(table["name"]))
+                aliased_relation_names.add(normalize_identifier(resolved_name))
         else:
             updated_table["resolved_name"] = ""
             if source_kind == "table" and not is_path_like_table_reference(table["name"], dialect):
@@ -277,7 +371,7 @@ def analyze_parse_context_diagnostics(parsed_tables, parsed_columns, schema, dia
     resolved_table_names = [
         table.get("resolved_name", "")
         for table in resolved_tables
-        if table.get("resolved_name") and table.get("source_kind", "table") == "table"
+        if table.get("resolved_name") and table.get("source_kind", "table") in ("table", "cte")
     ]
     has_confident_schema_source = len(resolved_table_names) > 0
 
@@ -290,7 +384,7 @@ def analyze_parse_context_diagnostics(parsed_tables, parsed_columns, schema, dia
 
         if qualifier:
             resolved_table_name = alias_lookup.get(qualifier)
-            if not resolved_table_name:
+            if not resolved_table_name and qualifier not in aliased_relation_names:
                 resolved_table_name = resolve_table_name_from_schema(qualifier, exact_schema, short_schema)
 
             if not resolved_table_name:
@@ -310,6 +404,8 @@ def analyze_parse_context_diagnostics(parsed_tables, parsed_columns, schema, dia
 
             if len(candidate_tables) == 1:
                 resolved_table_name = candidate_tables[0]
+            elif column_name in output_alias_references:
+                resolved_table_name = ""
             elif len(candidate_tables) == 0 and column_name and has_confident_schema_source:
                 diagnostics.append(build_diagnostic(f"Unresolved column: {column.get('name', '')}", parts[-1]["range"] if parts else None))
 
@@ -357,6 +453,9 @@ def get_parse_context(query, dialect, schema=None):
 
     tables = []
     columns = []
+    output_alias_references = set()
+    cte_schemas = {}
+    cte_column_ranges = {}
     current_database = None
 
     for parsed_single in parsed_statements:
@@ -370,6 +469,9 @@ def get_parse_context(query, dialect, schema=None):
 
         try:
             extracted_tables = extract_tables(parsed_single)
+            parsed_cte_schemas, parsed_cte_column_ranges = collect_cte_schemas(query, parsed_single)
+            cte_schemas.update(parsed_cte_schemas)
+            cte_column_ranges.update(parsed_cte_column_ranges)
         except Exception as error:
             return {
                 "query_kind": query_kind,
@@ -381,15 +483,30 @@ def get_parse_context(query, dialect, schema=None):
             }
 
         for table in extracted_tables:
+            table_name = get_table_display_name(table, current_database, dialect)
+            if is_cte_table_reference(table, cte_schemas):
+                source_kind = "cte"
+            elif is_inside_cte_definition(table):
+                source_kind = "cte_source"
+            else:
+                source_kind = detect_table_source_kind(table)
             tables.append(
                 {
-                    "name": get_table_display_name(table, current_database, dialect),
-                    "source_kind": detect_table_source_kind(table),
+                    "name": table_name,
+                    "source_kind": source_kind,
+                    "columns": [
+                        {"name": column_name, "type": column_type}
+                        for column_name, column_type in (cte_schemas.get(table_name, {}) if source_kind == "cte" else {}).items()
+                    ],
+                    "column_ranges": cte_column_ranges.get(table_name, {}) if source_kind == "cte" else {},
                     "alias": table.alias,
                     "parts": build_identifier_parts(query, table.parts, "table"),
                     "alias_range": build_alias_range(query, table),
                 }
             )
+
+        select_aliases = collect_select_aliases(parsed_single)
+        output_alias_references.update(collect_order_alias_references(parsed_single, select_aliases))
 
         for column in find_all_in_scope(parsed_single, exp.Column):
             parts = build_column_parts(query, column)
@@ -405,7 +522,7 @@ def get_parse_context(query, dialect, schema=None):
                 }
             )
 
-    resolved_tables, resolved_columns, diagnostics = analyze_parse_context_diagnostics(tables, columns, schema, dialect)
+    resolved_tables, resolved_columns, diagnostics = analyze_parse_context_diagnostics(tables, columns, schema, dialect, output_alias_references, cte_schemas)
     return {
         "query_kind": query_kind,
         "is_single_select": is_single_select,

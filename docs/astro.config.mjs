@@ -31,6 +31,7 @@ export default defineConfig({
           label: 'Getting Started',
           items: [
             { label: 'Installation', slug: 'installation' },
+            { label: 'Quickstart', slug: 'quickstart' },
             { label: 'Running Renart', slug: 'running-renart' },
           ],
         },

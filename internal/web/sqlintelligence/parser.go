@@ -31,12 +31,19 @@ type ParseContextPart struct {
 }
 
 type ParseContextTable struct {
-	Name         string             `json:"name"`
-	SourceKind   string             `json:"source_kind,omitempty"`
-	ResolvedName string             `json:"resolved_name,omitempty"`
-	Alias        string             `json:"alias"`
-	Parts        []ParseContextPart `json:"parts"`
-	AliasRange   *ParseContextRange `json:"alias_range,omitempty"`
+	Name         string                       `json:"name"`
+	SourceKind   string                       `json:"source_kind,omitempty"`
+	ResolvedName string                       `json:"resolved_name,omitempty"`
+	Alias        string                       `json:"alias"`
+	Columns      []SchemaColumn               `json:"columns,omitempty"`
+	ColumnRanges map[string]ParseContextRange `json:"column_ranges,omitempty"`
+	Parts        []ParseContextPart           `json:"parts"`
+	AliasRange   *ParseContextRange           `json:"alias_range,omitempty"`
+}
+
+type SchemaColumn struct {
+	Name string `json:"name"`
+	Type string `json:"type,omitempty"`
 }
 
 type ParseContextColumn struct {

@@ -27,6 +27,14 @@ type OnboardingImportRequest struct {
 	CreateIfMissing bool
 }
 
+type OnboardingQuickstartRequest struct {
+	EnvironmentName string
+	PipelineName    string
+	ConnectionName  string
+	DatabasePath    string
+	Materialize     bool
+}
+
 type OnboardingImportFormState struct {
 	Database       string `json:"database,omitempty"`
 	PipelineName   string `json:"pipeline_name,omitempty"`
@@ -96,6 +104,7 @@ const (
 	OnboardingStateConnection = "connection-type"
 	OnboardingStateConfig     = "connection-config"
 	OnboardingStateImport     = "import"
+	OnboardingStateQuickstart = "quickstart"
 	OnboardingStateSuccess    = "success"
 )
 
@@ -303,7 +312,7 @@ func normalizeOnboardingSessionState(state OnboardingSessionState) OnboardingSes
 
 	step := strings.TrimSpace(state.Step)
 	switch step {
-	case OnboardingStateConnection, OnboardingStateConfig, OnboardingStateImport, OnboardingStateSuccess:
+	case OnboardingStateConnection, OnboardingStateConfig, OnboardingStateImport, OnboardingStateQuickstart, OnboardingStateSuccess:
 	default:
 		step = OnboardingStateConnection
 	}
@@ -459,6 +468,178 @@ func (s *OnboardingService) ImportDatabase(ctx context.Context, req OnboardingIm
 		AssetPaths:   assetPaths,
 		HTTPCode:     200,
 	}
+}
+
+func (s *OnboardingService) CreateDuckDBQuickstart(ctx context.Context, req OnboardingQuickstartRequest) OnboardingImportResult {
+	environmentName := strings.TrimSpace(req.EnvironmentName)
+	if environmentName == "" {
+		environmentName = "default"
+	}
+	connectionName := strings.TrimSpace(req.ConnectionName)
+	if connectionName == "" {
+		connectionName = "duckdb-default"
+	}
+	pipelineName := strings.Trim(strings.TrimSpace(req.PipelineName), `/\\`)
+	if pipelineName == "" {
+		pipelineName = "quickstart"
+	}
+	databasePath := filepath.ToSlash(strings.TrimSpace(req.DatabasePath))
+	if databasePath == "" {
+		databasePath = "duckdb-files/renart_quickstart.duckdb"
+	}
+
+	relPipelinePath := filepath.ToSlash(pipelineName)
+	absPipelinePath, err := SafeJoin(s.workspaceRoot, relPipelinePath)
+	if err != nil {
+		return OnboardingImportResult{Status: "error", Error: err.Error(), HTTPCode: 400}
+	}
+	if _, err := os.Stat(absPipelinePath); err == nil {
+		return OnboardingImportResult{Status: "error", Error: fmt.Sprintf("pipeline %q already exists", relPipelinePath), HTTPCode: 400}
+	} else if !os.IsNotExist(err) {
+		return OnboardingImportResult{Status: "error", Error: err.Error(), HTTPCode: 500}
+	}
+
+	configService := NewConfigService(s.workspaceRoot, s.configPath)
+	cfg, _, err := configService.LoadForEditing()
+	if err != nil {
+		return OnboardingImportResult{Status: "error", Error: err.Error(), HTTPCode: 500}
+	}
+	if _, exists := cfg.Environments[environmentName]; exists {
+		if err := cfg.DeleteConnection(environmentName, connectionName); err != nil && !strings.Contains(err.Error(), "does not exist") {
+			return OnboardingImportResult{Status: "error", Error: err.Error(), HTTPCode: 400}
+		}
+	}
+	if err := configService.AddConnection(cfg, UpsertWorkspaceConnectionParams{
+		EnvironmentName: environmentName,
+		Name:            connectionName,
+		Type:            "duckdb",
+		Values:          map[string]any{"path": databasePath},
+	}); err != nil {
+		return OnboardingImportResult{Status: "error", Error: err.Error(), HTTPCode: 400}
+	}
+	if _, err := configService.Persist(cfg); err != nil {
+		return OnboardingImportResult{Status: "error", Error: err.Error(), HTTPCode: 500}
+	}
+
+	if err := os.MkdirAll(filepath.Dir(filepath.Join(s.workspaceRoot, databasePath)), 0o755); err != nil {
+		return OnboardingImportResult{Status: "error", Error: err.Error(), HTTPCode: 500}
+	}
+	assetsDir := filepath.Join(absPipelinePath, "assets")
+	if err := os.MkdirAll(assetsDir, 0o755); err != nil {
+		return OnboardingImportResult{Status: "error", Error: err.Error(), HTTPCode: 500}
+	}
+
+	files := map[string]string{
+		"pipeline.yml":                                 quickstartPipelineYAML(filepath.Base(relPipelinePath), connectionName),
+		filepath.Join("assets", "customers.sql"):       quickstartCustomersSQL(),
+		filepath.Join("assets", "orders.sql"):          quickstartOrdersSQL(),
+		filepath.Join("assets", "customer_orders.sql"): quickstartCustomerOrdersSQL(),
+	}
+	for relPath, content := range files {
+		absPath := filepath.Join(absPipelinePath, relPath)
+		if err := os.MkdirAll(filepath.Dir(absPath), 0o755); err != nil {
+			return OnboardingImportResult{Status: "error", Error: err.Error(), HTTPCode: 500}
+		}
+		if err := os.WriteFile(absPath, []byte(content), 0o644); err != nil {
+			return OnboardingImportResult{Status: "error", Error: err.Error(), HTTPCode: 500}
+		}
+	}
+
+	assetPaths := []string{
+		filepath.ToSlash(filepath.Join(relPipelinePath, "assets", "customers.sql")),
+		filepath.ToSlash(filepath.Join(relPipelinePath, "assets", "orders.sql")),
+		filepath.ToSlash(filepath.Join(relPipelinePath, "assets", "customer_orders.sql")),
+	}
+	output := fmt.Sprintf("Created DuckDB quickstart pipeline at %s", relPipelinePath)
+	operation := runOperation(relPipelinePath, EncodeID(relPipelinePath), "", environmentName)
+	if req.Materialize {
+		runOutput, runErr := s.executor.RunPipeline(ctx, RunPipelineRequest{Target: relPipelinePath, Environment: environmentName}, nil)
+		output = strings.TrimSpace(output + "\n" + string(runOutput))
+		if runErr != nil {
+			return OnboardingImportResult{
+				Status:       "error",
+				Operation:    operation,
+				Output:       output,
+				Error:        runErr.Error(),
+				PipelinePath: relPipelinePath,
+				AssetPaths:   assetPaths,
+				HTTPCode:     400,
+			}
+		}
+	}
+
+	return OnboardingImportResult{
+		Status:       "ok",
+		Operation:    operation,
+		Output:       output,
+		PipelinePath: relPipelinePath,
+		AssetPaths:   assetPaths,
+		HTTPCode:     200,
+	}
+}
+
+func quickstartPipelineYAML(name, connectionName string) string {
+	return fmt.Sprintf("name: %s\nschedule: daily\nstart_date: \"2024-01-01\"\n\ndefault_connections:\n  duckdb: %s\n", name, connectionName)
+}
+
+func quickstartCustomersSQL() string {
+	return `/* @bruin
+name: quickstart.customers
+type: duckdb.sql
+materialization:
+  type: table
+@bruin */
+
+SELECT *
+FROM (VALUES
+  (1, 'Ada Lovelace', 'London'),
+  (2, 'Grace Hopper', 'New York'),
+  (3, 'Katherine Johnson', 'Virginia')
+) AS customers(customer_id, customer_name, city)
+`
+}
+
+func quickstartOrdersSQL() string {
+	return `/* @bruin
+name: quickstart.orders
+type: duckdb.sql
+materialization:
+  type: table
+@bruin */
+
+SELECT *
+FROM (VALUES
+  (101, 1, 120.50),
+  (102, 1, 89.90),
+  (103, 2, 250.00),
+  (104, 3, 74.25)
+) AS orders(order_id, customer_id, order_total)
+`
+}
+
+func quickstartCustomerOrdersSQL() string {
+	return `/* @bruin
+name: quickstart.customer_orders
+type: duckdb.sql
+materialization:
+  type: table
+depends:
+  - quickstart.customers
+  - quickstart.orders
+@bruin */
+
+SELECT
+  customers.customer_id,
+  customers.customer_name,
+  customers.city,
+  count(orders.order_id) AS order_count,
+  sum(orders.order_total) AS total_revenue
+FROM quickstart.customers AS customers
+JOIN quickstart.orders AS orders
+  ON customers.customer_id = orders.customer_id
+GROUP BY 1, 2, 3
+ORDER BY total_revenue DESC
+`
 }
 
 func DefaultOnboardingConnectionName(typeName string) string {

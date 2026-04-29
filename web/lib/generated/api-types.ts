@@ -217,6 +217,8 @@ export type SqlParseContextTable = {
   source_kind?: string;
   resolved_name?: string;
   alias?: string;
+  columns?: Record<string, string>;
+  column_ranges?: Record<string, SqlParseContextRange>;
   parts: SqlParseContextPart[];
   alias_range?: SqlParseContextRange;
 };

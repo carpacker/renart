@@ -292,6 +292,80 @@ function findParserAliasEntry(
   );
 }
 
+function findParserTableColumns(
+  parseContext: ReturnType<NonNullable<RemoteSQLResolver["getParseContext"]>>,
+  identifier: string,
+) {
+  if (!parseContext) {
+    return [];
+  }
+
+  const normalizedIdentifier = identifier.trim().toLowerCase();
+  const entry = (parseContext.tables ?? []).find(
+    (table) =>
+      table.alias?.trim().toLowerCase() === normalizedIdentifier ||
+      table.name.trim().toLowerCase() === normalizedIdentifier ||
+      table.resolved_name?.trim().toLowerCase() === normalizedIdentifier,
+  );
+
+  return Object.entries(entry?.columns ?? {}).map(([name, type]) => ({ name, type }));
+}
+
+function findParserCTEColumnDefinitionRange(
+  parseContext: ReturnType<NonNullable<RemoteSQLResolver["getParseContext"]>>,
+  identifier: string | null,
+) {
+  if (!parseContext || !identifier) {
+    return null;
+  }
+
+  const dotIndex = identifier.lastIndexOf(".");
+  if (dotIndex < 1) {
+    return null;
+  }
+
+  const tableIdentifier = identifier.slice(0, dotIndex).trim().toLowerCase();
+  const columnName = identifier.slice(dotIndex + 1).trim().toLowerCase();
+  if (!tableIdentifier || !columnName) {
+    return null;
+  }
+
+  const entry = (parseContext.tables ?? []).find(
+    (table) =>
+      table.source_kind === "cte" &&
+      (table.alias?.trim().toLowerCase() === tableIdentifier ||
+        table.name.trim().toLowerCase() === tableIdentifier ||
+        table.resolved_name?.trim().toLowerCase() === tableIdentifier),
+  );
+  if (!entry?.column_ranges) {
+    return null;
+  }
+
+  const rangeEntry = Object.entries(entry.column_ranges).find(
+    ([name]) => name.toLowerCase() === columnName,
+  );
+
+  return rangeEntry?.[1] ?? null;
+}
+
+function collectParserTableColumnSuggestions(
+  monaco: Monaco,
+  columns: Array<{ name: string; type?: string }>,
+  tableIdentifier: string,
+  range: MonacoNS.IRange,
+): MonacoNS.languages.CompletionItem[] {
+  return columns.map((column) => ({
+    label: column.name,
+    kind: monaco.languages.CompletionItemKind.Field,
+    detail: column.type
+      ? `${tableIdentifier}.${column.name} (${column.type})`
+      : `${tableIdentifier}.${column.name}`,
+    insertText: column.name,
+    range,
+    sortText: "0",
+  }));
+}
+
 function aliasNameAtPosition(
   model: MonacoNS.editor.ITextModel,
   position: MonacoNS.Position,
@@ -537,6 +611,39 @@ function collectColumnSuggestions(
         insertText: column.name,
         range,
         sortText: column.primaryKey ? "1" : "2",
+      });
+    }
+  }
+
+  return suggestions;
+}
+
+function collectParserScopedColumnSuggestions(
+  monaco: Monaco,
+  parseContext: ReturnType<NonNullable<RemoteSQLResolver["getParseContext"]>>,
+  range: MonacoNS.IRange,
+): MonacoNS.languages.CompletionItem[] {
+  const suggestions: MonacoNS.languages.CompletionItem[] = [];
+  const seen = new Set<string>();
+
+  for (const table of parseContext?.tables ?? []) {
+    if (table.source_kind === "cte_source") {
+      continue;
+    }
+
+    for (const [name, type] of Object.entries(table.columns ?? {})) {
+      const key = name.toLowerCase();
+      if (seen.has(key)) {
+        continue;
+      }
+      seen.add(key);
+      suggestions.push({
+        label: name,
+        kind: monaco.languages.CompletionItemKind.Field,
+        detail: type ? `${table.alias ?? table.name}.${name} (${type})` : `${table.alias ?? table.name}.${name}`,
+        insertText: name,
+        range,
+        sortText: "0",
       });
     }
   }
@@ -1069,10 +1176,12 @@ export function registerSQLProviders(
           ? buildParserAliasMap(tables, parseContext)
           : buildAliasMap(sqlTextBeforeCursor, tables);
         const parserReferencedNames = new Set(
-          (parseContext?.tables ?? []).flatMap((table) => [
-            table.name.toLowerCase(),
-            (table.resolved_name ?? "").toLowerCase(),
-          ]),
+          (parseContext?.tables ?? [])
+            .filter((table) => table.source_kind !== "cte_source")
+            .flatMap((table) => [
+              table.name.toLowerCase(),
+              (table.resolved_name ?? "").toLowerCase(),
+            ]),
         );
         const referencedTables = (
           parserReferencedNames.size > 0
@@ -1114,6 +1223,30 @@ export function registerSQLProviders(
 
         const dotPrefix = parseDotPrefix(textBeforeCursor);
         if (dotPrefix) {
+          const parserColumns = findParserTableColumns(parseContext, dotPrefix.tablePart);
+          const matchingParserColumns = parserColumns.filter((column) => {
+            if (!dotPrefix.columnPrefix.trim()) {
+              return true;
+            }
+
+            return column.name.toLowerCase().includes(dotPrefix.columnPrefix.trim().toLowerCase());
+          });
+          if (matchingParserColumns.length > 0) {
+            return {
+              suggestions: collectParserTableColumnSuggestions(
+                monaco,
+                matchingParserColumns,
+                dotPrefix.tablePart,
+                {
+                  startLineNumber: position.lineNumber,
+                  endLineNumber: position.lineNumber,
+                  startColumn: position.column - dotPrefix.columnPrefix.length,
+                  endColumn: position.column,
+                },
+              ),
+            };
+          }
+
           const table = resolveTableReference(
             tables,
             aliasMap,
@@ -1165,6 +1298,8 @@ export function registerSQLProviders(
         }
 
         if (inColumnCtx) {
+          suggestions.push(...collectParserScopedColumnSuggestions(monaco, parseContext, range));
+
           const scopedColumnSuggestions = collectColumnSuggestions(
             monaco,
             columnSuggestionTables,
@@ -1278,7 +1413,21 @@ export function registerSQLProviders(
             );
 
         const identifier = identifierAtPosition(model, position);
+        const fullIdentifier = identifierInfoAtPosition(model, position)?.identifier ?? identifier;
         const parseContext = remoteResolver?.getParseContext?.() ?? null;
+        const cteColumnRange = findParserCTEColumnDefinitionRange(parseContext, fullIdentifier);
+        if (cteColumnRange) {
+          return {
+            uri: model.uri,
+            range: new monaco.Range(
+              cteColumnRange.line,
+              cteColumnRange.col,
+              cteColumnRange.end_line,
+              cteColumnRange.end_col,
+            ),
+          };
+        }
+
         const aliasIdentifier = parseContext
           ? aliasNameAtPosition(model, position, parseContext)
           : null;

@@ -75,6 +75,7 @@ export function WorkspaceOnboarding({
     importResult,
     navigateToStep,
     handleComplete,
+    handleCreateQuickstart,
     handleSaveAndImport,
     handleSkip,
     handleSelectDatabase,
@@ -83,6 +84,7 @@ export function WorkspaceOnboarding({
     selectedType,
     updateImportFormField,
     updateSelectedTables,
+    chooseQuickstart,
     chooseType,
     step,
   } = useOnboardingFlow({
@@ -102,12 +104,12 @@ export function WorkspaceOnboarding({
             <img src="/icons/icon.svg" alt="Renart" className="mt-0.5 size-12 shrink-0" />
             <div>
               <div className="text-sm font-medium text-muted-foreground">Welcome to Renart</div>
-            <h1 className="mt-1 text-3xl font-semibold tracking-tight">
-              Set up your first connection and import assets
-            </h1>
-            <p className="mt-2 max-w-2xl text-sm text-muted-foreground">
-              Pick a warehouse, validate access, choose the database or file you want, and import the tables into a pipeline.
-            </p>
+              <h1 className="mt-1 text-3xl font-semibold tracking-tight">
+                Start from your data or try the DuckDB quickstart
+              </h1>
+              <p className="mt-2 max-w-2xl text-sm text-muted-foreground">
+                Import existing warehouse tables into a Bruin project, or create a local DuckDB sample pipeline and materialize it right away.
+              </p>
             </div>
           </div>
           <Button variant="ghost" onClick={() => void handleSkip()}>
@@ -119,30 +121,101 @@ export function WorkspaceOnboarding({
           <StepPill active={step === "connection-type"}>1. Choose warehouse</StepPill>
           <StepPill active={step === "connection-config"}>2. Validate access</StepPill>
           <StepPill active={step === "import"}>3. Choose database and import</StepPill>
+          <StepPill active={step === "quickstart"}>Quickstart</StepPill>
           <StepPill active={step === "success"}>4. Done</StepPill>
         </div>
 
         {step === "connection-type" ? (
-          <div data-testid="onboarding-step-connection-type" className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
-            {featuredTypes.map((connectionType) => (
-              <button
-                key={connectionType.type_name}
-                type="button"
-                onClick={() => void chooseType(connectionType.type_name)}
-                className="rounded-2xl border bg-card p-5 text-left transition hover:border-primary/60 hover:bg-muted/20"
-              >
-                <div className="flex items-center gap-3">
-                  <span className="flex size-10 items-center justify-center rounded-xl border bg-background">
-                    <OnboardingConnectionIcon type={connectionType.type_name} />
-                  </span>
-                  <div className="text-lg font-medium">{TYPE_LABELS[connectionType.type_name] ?? connectionType.type_name}</div>
-                </div>
-                <div className="mt-3 text-sm text-muted-foreground">
-                  Connect {TYPE_LABELS[connectionType.type_name] ?? connectionType.type_name} and import existing assets.
-                </div>
-              </button>
-            ))}
+          <div data-testid="onboarding-step-connection-type" className="space-y-6">
+            <div className="grid gap-4 md:grid-cols-2">
+              <Card className="rounded-2xl border shadow-sm">
+                <CardHeader>
+                  <CardTitle>Import an existing warehouse</CardTitle>
+                  <CardDescription>
+                    Connect to Postgres, DuckDB, Snowflake, BigQuery, Redshift, or Databricks and import real tables into a Renart workspace.
+                  </CardDescription>
+                </CardHeader>
+                <CardContent>
+                  <div className="text-sm text-muted-foreground">
+                    Best when you already have a database or DuckDB file and want Renart to create assets from it.
+                  </div>
+                </CardContent>
+              </Card>
+              <Card className="rounded-2xl border border-primary/30 bg-primary/5 shadow-sm">
+                <CardHeader>
+                  <CardTitle>Try the DuckDB quickstart</CardTitle>
+                  <CardDescription>
+                    Create a local sample pipeline with customers, orders, and a downstream summary asset, then materialize it with Bruin.
+                  </CardDescription>
+                </CardHeader>
+                <CardFooter>
+                  <Button data-testid="onboarding-quickstart-choice" onClick={() => void chooseQuickstart()}>
+                    Start quickstart
+                  </Button>
+                </CardFooter>
+              </Card>
+            </div>
+            <div>
+              <div className="mb-3 text-sm font-medium text-muted-foreground">Choose a warehouse to import</div>
+              <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+                {featuredTypes.map((connectionType) => (
+                  <button
+                    key={connectionType.type_name}
+                    type="button"
+                    onClick={() => void chooseType(connectionType.type_name)}
+                    className="rounded-2xl border bg-card p-5 text-left transition hover:border-primary/60 hover:bg-muted/20"
+                  >
+                    <div className="flex items-center gap-3">
+                      <span className="flex size-10 items-center justify-center rounded-xl border bg-background">
+                        <OnboardingConnectionIcon type={connectionType.type_name} />
+                      </span>
+                      <div className="text-lg font-medium">{TYPE_LABELS[connectionType.type_name] ?? connectionType.type_name}</div>
+                    </div>
+                    <div className="mt-3 text-sm text-muted-foreground">
+                      Connect {TYPE_LABELS[connectionType.type_name] ?? connectionType.type_name} and import existing assets.
+                    </div>
+                  </button>
+                ))}
+              </div>
+            </div>
           </div>
+        ) : null}
+
+        {step === "quickstart" ? (
+          <Card className="max-w-2xl rounded-2xl border shadow-sm" data-testid="onboarding-step-quickstart">
+            <CardHeader className="border-b px-6 py-5">
+              <CardTitle className="text-xl font-semibold tracking-tight">DuckDB quickstart</CardTitle>
+              <CardDescription>
+                Renart will create a local DuckDB connection, write a sample Bruin pipeline, and materialize it.
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-5 px-6 py-5">
+              <div className="grid gap-1.5">
+                <Label>Pipeline name</Label>
+                <Input
+                  value={importForm.pipelineName}
+                  onChange={(event) => {
+                    void updateImportFormField("pipelineName", event.target.value);
+                  }}
+                  placeholder="quickstart"
+                />
+              </div>
+              <div className="rounded-xl border bg-muted/20 p-4 text-sm text-muted-foreground">
+                This creates `duckdb-files/renart_quickstart.duckdb` and three SQL assets: `quickstart.customers`, `quickstart.orders`, and `quickstart.customer_orders`.
+              </div>
+              {importResult?.error ? (
+                <div className="rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-destructive">
+                  {importResult.error}
+                </div>
+              ) : null}
+            </CardContent>
+            <CardFooter className="flex items-center justify-between gap-2 border-t px-6 py-4">
+              <Button variant="outline" onClick={() => void navigateToStep("connection-type")}>Back</Button>
+              <Button data-testid="onboarding-create-quickstart" onClick={() => void handleCreateQuickstart()} disabled={busy || !importForm.pipelineName.trim()}>
+                {busy ? "Creating and materializing..." : "Create and materialize"}
+              </Button>
+            </CardFooter>
+          </Card>
         ) : null}
 
         {step === "connection-config" ? (
@@ -306,14 +379,16 @@ export function WorkspaceOnboarding({
             <CardHeader className="border-b px-6 py-5">
               <CardTitle className="text-xl font-semibold tracking-tight">Workspace is ready</CardTitle>
               <CardDescription>
-                Your connection was saved and the selected tables were imported successfully.
+                {selectedType === "quickstart"
+                  ? "Your DuckDB quickstart pipeline was created and materialized successfully."
+                  : "Your connection was saved and the selected tables were imported successfully."}
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-5 px-6 py-5">
-              {renderOnboardingSuccess(importResult)}
+              {selectedType === "quickstart" ? renderQuickstartSuccess(importResult) : renderOnboardingSuccess(importResult)}
             </CardContent>
             <CardFooter className="flex justify-between gap-2 border-t px-6 py-4">
-              <Button variant="outline" onClick={() => void navigateToStep("import")}>Back</Button>
+              <Button variant="outline" onClick={() => void navigateToStep(selectedType === "quickstart" ? "quickstart" : "import")}>Back</Button>
               <Button onClick={() => void handleComplete()}>Open workspace</Button>
             </CardFooter>
           </Card>
@@ -356,6 +431,31 @@ function renderOnboardingSuccess(importResult: { output?: string } | null) {
 			) : null}
 		</>
 	);
+}
+
+function renderQuickstartSuccess(importResult: { output?: string; pipeline_path?: string; asset_paths?: string[] } | null) {
+  return (
+    <div className="space-y-4" data-testid="onboarding-quickstart-summary">
+      <div className="grid gap-3 md:grid-cols-3">
+        <SuccessMetric label="Pipeline" value={1} testId="onboarding-quickstart-pipelines" />
+        <SuccessMetric label="SQL assets" value={importResult?.asset_paths?.length ?? 3} testId="onboarding-quickstart-assets" />
+        <SuccessMetric label="Runs" value={1} testId="onboarding-quickstart-runs" />
+      </div>
+      <div className="rounded-xl border bg-muted/20 p-4 text-sm">
+        <div className="font-medium">Quickstart complete</div>
+        <div className="mt-2 space-y-1 text-muted-foreground">
+          <div>Pipeline path: <span className="text-foreground">{importResult?.pipeline_path ?? "quickstart"}</span></div>
+          <div>DuckDB connection: <span className="text-foreground">duckdb-default</span></div>
+          <div>Database file: <span className="text-foreground">duckdb-files/renart_quickstart.duckdb</span></div>
+        </div>
+      </div>
+      {importResult?.output ? (
+        <pre className="max-h-56 overflow-auto rounded-md border bg-muted/30 p-3 text-xs">
+          {importResult.output}
+        </pre>
+      ) : null}
+    </div>
+  );
 }
 
 function SuccessMetric({ label, value, testId }: { label: string; value: number; testId: string }) {
