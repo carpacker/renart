@@ -551,38 +551,6 @@ func resolveDirectPath(workspaceRoot, maybeRelative string) string {
 	return filepath.Join(workspaceRoot, filepath.FromSlash(trimmed))
 }
 
-func determineDirectAssetType(connectionName string, conn interface{}) pipeline.AssetType {
-	connType := strings.ToLower(fmt.Sprintf("%T", conn))
-	connectionLower := strings.ToLower(connectionName)
-	for _, value := range []string{connType, connectionLower} {
-		switch {
-		case strings.Contains(value, "snowflake"):
-			return pipeline.AssetTypeSnowflakeSource
-		case strings.Contains(value, "bigquery"), strings.Contains(value, "bq"):
-			return pipeline.AssetTypeBigquerySource
-		case strings.Contains(value, "postgres"), strings.Contains(value, "pg"):
-			return pipeline.AssetTypePostgresSource
-		case strings.Contains(value, "redshift"), strings.Contains(value, "rs"):
-			return pipeline.AssetTypeRedshiftSource
-		case strings.Contains(value, "athena"):
-			return pipeline.AssetTypeAthenaSource
-		case strings.Contains(value, "databricks"):
-			return pipeline.AssetTypeDatabricksSource
-		case strings.Contains(value, "duckdb"):
-			return pipeline.AssetTypeDuckDBSource
-		case strings.Contains(value, "clickhouse"):
-			return pipeline.AssetTypeClickHouseSource
-		case strings.Contains(value, "oracle"):
-			return pipeline.AssetTypeOracleSource
-		case strings.Contains(value, "mssql"), strings.Contains(value, "sqlserver"):
-			return pipeline.AssetTypeMsSQLSource
-		case strings.Contains(value, "synapse"):
-			return pipeline.AssetTypeSynapseSource
-		}
-	}
-	return pipeline.AssetTypeEmpty
-}
-
 func createDirectImportedAsset(ctx context.Context, assetsPath, schemaName, tableName string, assetType pipeline.AssetType, conn interface{}, fillColumns bool, table *ansisql.DBTable) (*pipeline.Asset, string) {
 	schemaFolder := filepath.Join(assetsPath, strings.ToLower(schemaName))
 	isView := table.Type == ansisql.DBTableTypeView && table.ViewDefinition != ""
@@ -816,35 +784,6 @@ func formatDirectBytes(bytes int64) string {
 		return fmt.Sprintf("%.2f KB", float64(bytes)/KB)
 	default:
 		return fmt.Sprintf("%d bytes", bytes)
-	}
-}
-
-func convertDirectSourceTypeToQueryType(sourceType pipeline.AssetType) pipeline.AssetType {
-	switch sourceType {
-	case pipeline.AssetTypeBigquerySource:
-		return pipeline.AssetTypeBigqueryQuery
-	case pipeline.AssetTypeSnowflakeSource:
-		return pipeline.AssetTypeSnowflakeQuery
-	case pipeline.AssetTypePostgresSource:
-		return pipeline.AssetTypePostgresQuery
-	case pipeline.AssetTypeRedshiftSource:
-		return pipeline.AssetTypeRedshiftQuery
-	case pipeline.AssetTypeMsSQLSource:
-		return pipeline.AssetTypeMsSQLQuery
-	case pipeline.AssetTypeSynapseSource:
-		return pipeline.AssetTypeSynapseQuery
-	case pipeline.AssetTypeDatabricksSource:
-		return pipeline.AssetTypeDatabricksQuery
-	case pipeline.AssetTypeAthenaSource:
-		return pipeline.AssetTypeAthenaQuery
-	case pipeline.AssetTypeDuckDBSource:
-		return pipeline.AssetTypeDuckDBQuery
-	case pipeline.AssetTypeClickHouseSource:
-		return pipeline.AssetTypeClickHouse
-	case pipeline.AssetTypeOracleSource:
-		return pipeline.AssetTypeOracleQuery
-	default:
-		return sourceType
 	}
 }
 
@@ -1794,7 +1733,10 @@ func (e *HybridBruinExecutor) ImportDatabase(ctx context.Context, req ImportData
 	}
 
 	assetsPath := filepath.Join(pipelinePath, "assets")
-	assetType := determineDirectAssetType(req.ConnectionName, conn)
+	assetType, ok := sourceAssetTypeForConnectionType(manager.GetConnectionType(req.ConnectionName))
+	if !ok {
+		assetType = pipeline.AssetTypeEmpty
+	}
 	selectedTables := make(map[string]bool, len(req.Tables))
 	for _, tableName := range req.Tables {
 		trimmed := strings.ToLower(strings.TrimSpace(tableName))
