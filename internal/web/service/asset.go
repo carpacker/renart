@@ -636,43 +636,6 @@ func reconcileSQLAssetDependencies(ctx context.Context, asset *pipeline.Asset, p
 	return nil
 }
 
-func assetContentHasExplicitName(content string) bool {
-	for _, line := range strings.Split(content, "\n") {
-		if strings.HasPrefix(strings.TrimSpace(line), "name:") {
-			return true
-		}
-	}
-	return false
-}
-
-func removePersistedAssetNameField(asset *pipeline.Asset) error {
-	path := asset.ExecutableFile.Path
-	if strings.TrimSpace(path) == "" {
-		path = asset.DefinitionFile.Path
-	}
-	if strings.TrimSpace(path) == "" {
-		return nil
-	}
-	fs := afero.NewOsFs()
-	contentBytes, err := afero.ReadFile(fs, path)
-	if err != nil {
-		return err
-	}
-	content := removeAssetNameFieldFromContent(string(contentBytes))
-	return afero.WriteFile(fs, path, []byte(content), 0o644)
-}
-
-func removeAssetNameFieldFromContent(content string) string {
-	lines := strings.Split(content, "\n")
-	for index, line := range lines {
-		if strings.HasPrefix(strings.TrimSpace(line), "name:") {
-			lines = append(lines[:index], lines[index+1:]...)
-			return strings.Join(lines, "\n")
-		}
-	}
-	return content
-}
-
 func inferAllSQLAssetDependencies(ctx context.Context, asset *pipeline.Asset, parsedPipeline *pipeline.Pipeline, sqlParserInstance *sqlparser.SQLParser, renderer *jinja.Renderer) ([]string, error) {
 	cloned := *asset
 	cloned.Upstreams = nil
@@ -1049,39 +1012,6 @@ func DefaultDerivedSQLAssetContent(assetName, assetType, assetPath, sourceAssetN
 	return header + fmt.Sprintf("select * from %s\n", queryTarget)
 }
 
-func assetPathForInferredName(assetName, extension string) string {
-	parts := strings.Split(strings.TrimSpace(assetName), ".")
-	pathParts := make([]string, 0, len(parts)+1)
-	pathParts = append(pathParts, "assets")
-	for _, part := range parts {
-		pathParts = append(pathParts, SlugUnderscore(part))
-	}
-	return filepath.ToSlash(filepath.Join(append(pathParts[:len(pathParts)-1], pathParts[len(pathParts)-1]+extension)...))
-}
-
-func assetNameLeafPath(assetName string) string {
-	parts := strings.Split(strings.TrimSpace(assetName), ".")
-	return SlugUnderscore(parts[len(parts)-1])
-}
-
-func inferredAssetNameFromPath(relAssetPath string) string {
-	clean := filepath.ToSlash(filepath.Clean(relAssetPath))
-	parts := strings.Split(clean, "/")
-	assetsIndex := -1
-	for index, part := range parts {
-		if part == "assets" {
-			assetsIndex = index
-			break
-		}
-	}
-	if assetsIndex < 0 || assetsIndex >= len(parts)-1 {
-		return ""
-	}
-	nameParts := append([]string(nil), parts[assetsIndex+1:]...)
-	nameParts[len(nameParts)-1] = strings.TrimSuffix(nameParts[len(nameParts)-1], filepath.Ext(nameParts[len(nameParts)-1]))
-	return strings.Join(nameParts, ".")
-}
-
 func EnsurePythonRequirementsFile(absAssetPath, assetType, relAssetPath string) error {
 	loweredType := strings.ToLower(strings.TrimSpace(assetType))
 	loweredPath := strings.ToLower(strings.TrimSpace(relAssetPath))
@@ -1096,17 +1026,6 @@ func EnsurePythonRequirementsFile(absAssetPath, assetType, relAssetPath string) 
 		return nil
 	}
 	return afero.WriteFile(fs, requirementsPath, []byte("pandas\n"), 0o644)
-}
-
-func pipelineRelPathForAsset(relAssetPath string) string {
-	clean := filepath.ToSlash(filepath.Clean(relAssetPath))
-	parts := strings.Split(clean, "/")
-	for index, part := range parts {
-		if part == "assets" {
-			return filepath.ToSlash(filepath.Join(parts[:index]...))
-		}
-	}
-	return filepath.ToSlash(filepath.Dir(filepath.Dir(clean)))
 }
 
 func defaultDerivedSQLAssetContent(assetName, assetType, assetPath, sourceAssetName, connectionName string) string {
