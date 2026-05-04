@@ -27,7 +27,7 @@ test.describe("sql intellisense live", () => {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
-              asset_id: "YW5hbHl0aWNzL2Fzc2V0cy9jdXN0b21lcnMuc3Fs",
+              asset_id: "YW5hbHl0aWNzL2Fzc2V0cy9hbmFseXRpY3MvY3VzdG9tZXJzLnNxbA",
               content: "select o.order_id\nfrom analytics.orders as o",
               schema: [],
             }),
@@ -64,7 +64,7 @@ test.describe("sql intellisense live", () => {
     const saveResponse = page.waitForResponse(
       (response) =>
         response.url().includes("/api/pipelines/") &&
-        response.url().includes("/assets/YW5hbHl0aWNzL2Fzc2V0cy9jdXN0b21lcnMuc3Fs") &&
+        response.url().includes("/assets/YW5hbHl0aWNzL2Fzc2V0cy9hbmFseXRpY3MvY3VzdG9tZXJzLnNxbA") &&
         response.request().method() === "PUT" &&
         (response.request().postData() ?? "").includes("from analytics.orders")
     );
@@ -105,7 +105,7 @@ test.describe("sql intellisense live", () => {
 
     await expect(page.getByTestId("editor-asset-name")).toHaveText("analytics.orders");
     await expect(page.getByTestId("editor-asset-path")).toHaveText(
-      "analytics/assets/orders.sql"
+      "analytics/assets/analytics/orders.sql"
     );
   });
 
@@ -174,7 +174,7 @@ test.describe("sql intellisense live", () => {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
-              asset_id: "YW5hbHl0aWNzL2Fzc2V0cy9jdXN0b21lcnMuc3Fs",
+              asset_id: "YW5hbHl0aWNzL2Fzc2V0cy9hbmFseXRpY3MvY3VzdG9tZXJzLnNxbA",
               content: 'select * from "./duckdb-files/customers.csv"',
               schema: [],
             }),
@@ -417,13 +417,13 @@ test.describe("sql intellisense ranking live", () => {
     await page.goto(`${liveApp.baseURL}/?pipeline=YW5hbHl0aWNz`);
 
     if (test.info().project.name.includes("mobile")) {
-      await page.goto(`${liveApp.baseURL}/?pipeline=YW5hbHl0aWNz&asset=YW5hbHl0aWNzL2Fzc2V0cy9kZXBlbmRlbmNpZXMuc3Fs`);
+      await page.goto(`${liveApp.baseURL}/?pipeline=YW5hbHl0aWNz&asset=YW5hbHl0aWNzL2Fzc2V0cy9hbmFseXRpY3MvZGVwZW5kZW5jaWVzLnNxbA`);
       const editorDialog = page.getByRole("dialog", { name: "Asset Editor" });
       if (!(await editorDialog.isVisible().catch(() => false))) {
         await page.getByRole("button", { name: "Edit asset" }).click();
       }
     } else {
-      await page.getByRole("link", { name: "analytics.dependencies" }).click();
+      await page.getByRole("link", { name: "dependencies", exact: true }).click();
     }
     await page.getByRole("button", { name: "Materialize", exact: true }).click();
     await expect(page.getByText("Asset: analytics.dependencies", { exact: true })).toBeVisible({
@@ -431,14 +431,17 @@ test.describe("sql intellisense ranking live", () => {
     });
 
     if (test.info().project.name.includes("mobile")) {
-      await page.goto(`${liveApp.baseURL}/?pipeline=bWFydHM&asset=bWFydHMvYXNzZXRzL2RlcGVuZGVuY2llcy5zcWw`);
+      await page.goto(`${liveApp.baseURL}/?pipeline=bWFydHM&asset=bWFydHMvYXNzZXRzL21hcnRzL2RlcGVuZGVuY2llcy5zcWw`);
       const editorDialog = page.getByRole("dialog", { name: "Asset Editor" });
       if (!(await editorDialog.isVisible().catch(() => false))) {
         await page.getByRole("button", { name: "Edit asset" }).click();
       }
     } else {
       await page.getByRole("link", { name: "marts" }).click();
-      await page.getByRole("link", { name: "marts.dependencies" }).click();
+      await page
+        .locator('a[href*="bWFydHMvYXNzZXRzL21hcnRzL2RlcGVuZGVuY2llcy5zcWw"]')
+        .last()
+        .click();
     }
     await page.getByRole("button", { name: "Materialize", exact: true }).click();
     await expect(page.getByText("Asset: marts.dependencies", { exact: true })).toBeVisible({
@@ -469,7 +472,7 @@ test.describe("sql intellisense ranking live", () => {
 async function openCustomersEditor(page: Page, baseURL: string) {
   const isMobile = test.info().project.name.includes("mobile");
   if (isMobile) {
-    await page.goto(`${baseURL}/?pipeline=YW5hbHl0aWNz&asset=YW5hbHl0aWNzL2Fzc2V0cy9jdXN0b21lcnMuc3Fs`);
+    await page.goto(`${baseURL}/?pipeline=YW5hbHl0aWNz&asset=YW5hbHl0aWNzL2Fzc2V0cy9hbmFseXRpY3MvY3VzdG9tZXJzLnNxbA`);
     await expect(page).toHaveTitle("analytics.customers · analytics · Renart");
     const editorDialog = page.getByRole("dialog", { name: "Asset Editor" });
     if (!(await editorDialog.isVisible().catch(() => false))) {
@@ -482,7 +485,7 @@ async function openCustomersEditor(page: Page, baseURL: string) {
     await expect(page.getByTestId("editor-asset-name")).toHaveText("analytics.customers");
     await waitForEditorReady(page);
   } else {
-    await page.goto(`${baseURL}/?pipeline=YW5hbHl0aWNz&asset=YW5hbHl0aWNzL2Fzc2V0cy9jdXN0b21lcnMuc3Fs`);
+    await page.goto(`${baseURL}/?pipeline=YW5hbHl0aWNz&asset=YW5hbHl0aWNzL2Fzc2V0cy9hbmFseXRpY3MvY3VzdG9tZXJzLnNxbA`);
     const editorAssetName = page.getByTestId("editor-asset-name");
     if (!(await editorAssetName.isVisible().catch(() => false))) {
       const analyticsLink = page.getByRole("link", { name: "analytics", exact: true });
@@ -501,7 +504,7 @@ async function reopenCustomersEditor(page: Page, baseURL: string) {
     return;
   }
 
-  await page.getByRole("link", { name: "analytics.orders" }).click();
+  await page.getByRole("link", { name: "orders", exact: true }).click();
   await openCustomersEditor(page, baseURL);
 }
 

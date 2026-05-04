@@ -29,7 +29,7 @@ test.describe("workspace basic flows", () => {
     await expect(page).toHaveTitle("analytics.customers · analytics · Renart");
     await expect(page.getByTestId("editor-asset-name")).toHaveText("analytics.customers");
     await expect(page.getByTestId("editor-asset-path")).toHaveText(
-      "pipelines/analytics/assets/customers.sql"
+      "pipelines/analytics/assets/analytics/customers.sql"
     );
   });
 
@@ -37,12 +37,12 @@ test.describe("workspace basic flows", () => {
     await mockWorkspaceEndpoints(page, createPopulatedWorkspaceState());
     await page.goto("/?pipeline=pipeline-analytics&asset=asset-customers");
 
-    await page.getByRole("link", { name: "analytics.orders" }).click();
+    await page.getByRole("link", { name: "orders", exact: true }).click();
 
     await expect(page).toHaveTitle("analytics.orders · analytics · Renart");
     await expect(page.getByTestId("editor-asset-name")).toHaveText("analytics.orders");
     await expect(page.getByTestId("editor-asset-path")).toHaveText(
-      "pipelines/analytics/assets/orders.sql"
+      "pipelines/analytics/assets/analytics/orders.sql"
     );
   });
 
@@ -194,7 +194,7 @@ test.describe("workspace basic flows", () => {
 
     await expect(page).toHaveURL(/environment=prod/);
 
-    await page.getByRole("link", { name: "analytics.orders" }).click();
+    await page.getByRole("link", { name: "orders", exact: true }).click();
     await expect(page).toHaveURL(/asset=asset-orders/);
     await expect(page).toHaveURL(/environment=prod/);
 
@@ -326,7 +326,7 @@ function createPopulatedWorkspaceState() {
             id: "asset-customers",
             name: "analytics.customers",
             type: "duckdb.sql",
-            path: "pipelines/analytics/assets/customers.sql",
+            path: "pipelines/analytics/assets/analytics/customers.sql",
             content: "select 1 as customer_id",
             upstreams: [],
             is_materialized: false,
@@ -335,7 +335,7 @@ function createPopulatedWorkspaceState() {
             id: "asset-orders",
             name: "analytics.orders",
             type: "duckdb.sql",
-            path: "pipelines/analytics/assets/orders.sql",
+            path: "pipelines/analytics/assets/analytics/orders.sql",
             content: "select 1 as order_id",
             upstreams: ["analytics.customers"],
             is_materialized: false,

@@ -36,7 +36,7 @@ test.describe("workspace live basic flows", () => {
 
     await openCustomersEditor(page, liveApp.baseURL);
     if (test.info().project.name.includes("mobile")) {
-      await page.goto(`${liveApp.baseURL}/?pipeline=YW5hbHl0aWNz&asset=YW5hbHl0aWNzL2Fzc2V0cy9vcmRlcnMuc3Fs`);
+      await page.goto(`${liveApp.baseURL}/?pipeline=YW5hbHl0aWNz&asset=YW5hbHl0aWNzL2Fzc2V0cy9hbmFseXRpY3Mvb3JkZXJzLnNxbA`);
       await expect(page).toHaveTitle("analytics.orders · analytics · Renart");
       const editorDialog = page.getByRole("dialog", { name: "Asset Editor" });
       if (!(await editorDialog.isVisible().catch(() => false))) {
@@ -44,7 +44,7 @@ test.describe("workspace live basic flows", () => {
       }
       await expect(page.getByTestId("editor-asset-name")).toHaveText("analytics.orders");
     } else {
-      await page.getByRole("link", { name: "analytics.orders" }).click();
+      await page.getByRole("link", { name: "orders", exact: true }).click();
     }
 
     await expect(page).toHaveTitle("analytics.orders · analytics · Renart");
@@ -134,7 +134,7 @@ test.describe("workspace live basic flows", () => {
 
     await expect(page.getByTestId("editor-asset-name")).toHaveText("analytics.orders");
     await expect(page.getByTestId("editor-asset-path")).toHaveText(
-      "analytics/assets/orders.sql"
+      "analytics/assets/analytics/orders.sql"
     );
   });
 
@@ -183,7 +183,7 @@ test.describe("workspace live basic flows", () => {
       .getByRole("button", { name: "Create", exact: true })
       .click();
 
-    await expect(page.getByRole("link", { name: "analytics.manual_seed" })).toBeVisible();
+    await expect(page.getByRole("link", { name: "manual_seed", exact: true })).toBeVisible();
 
     await openCustomersEditor(page, liveApp.baseURL);
 
@@ -212,7 +212,7 @@ test.describe("workspace live basic flows", () => {
     const saveWithInferredDependency = page.waitForResponse(
       (response) =>
         response.url().includes("/api/pipelines/") &&
-        response.url().includes("/assets/YW5hbHl0aWNzL2Fzc2V0cy9jdXN0b21lcnMuc3Fs") &&
+        response.url().includes("/assets/YW5hbHl0aWNzL2Fzc2V0cy9hbmFseXRpY3MvY3VzdG9tZXJzLnNxbA") &&
         response.request().method() === "PUT" &&
         (response.request().postData() ?? "").includes("from analytics.orders")
     );
@@ -234,7 +234,7 @@ test.describe("workspace live basic flows", () => {
     const saveWithoutInferredDependency = page.waitForResponse(
       (response) =>
         response.url().includes("/api/pipelines/") &&
-        response.url().includes("/assets/YW5hbHl0aWNzL2Fzc2V0cy9jdXN0b21lcnMuc3Fs") &&
+        response.url().includes("/assets/YW5hbHl0aWNzL2Fzc2V0cy9hbmFseXRpY3MvY3VzdG9tZXJzLnNxbA") &&
         response.request().method() === "PUT" &&
         (response.request().postData() ?? "").includes("select 1 as customer_id")
     );
@@ -339,7 +339,7 @@ test.describe("workspace live basic flows", () => {
     const originalContent = await readFile(pipelinePath, "utf8");
 
     try {
-      await page.goto(`${liveApp.baseURL}/?pipeline=YW5hbHl0aWNz&asset=YW5hbHl0aWNzL2Fzc2V0cy9jdXN0b21lcnMuc3Fs`);
+      await page.goto(`${liveApp.baseURL}/?pipeline=YW5hbHl0aWNz&asset=YW5hbHl0aWNzL2Fzc2V0cy9hbmFseXRpY3MvY3VzdG9tZXJzLnNxbA`);
 
       await page
         .getByRole("link", { name: "analytics", exact: true })
@@ -452,20 +452,20 @@ test.describe("workspace live basic flows", () => {
       .getByRole("button", { name: "Create", exact: true })
       .click();
 
-    await expect(page.getByRole("link", { name: "analytics.new_asset" })).toBeVisible();
+    await expect(page.getByRole("link", { name: "new_asset", exact: true })).toBeVisible();
 
-    await page.getByRole("link", { name: "analytics.new_asset" }).click();
+    await page.getByRole("link", { name: "new_asset", exact: true }).click();
     await page.getByRole("button", { name: "Rename asset" }).click();
     await page.locator('input[value="analytics.new_asset"]').fill("analytics.renamed_asset");
     await page.getByRole("button", { name: "Save" }).first().click();
 
-    await expect(page.getByRole("link", { name: "analytics.renamed_asset" })).toBeVisible();
+    await expect(page.getByRole("link", { name: "renamed_asset", exact: true })).toBeVisible();
 
     await page.getByRole("button", { name: "Delete" }).click();
     await page.getByRole("button", { name: "Delete" }).last().click();
 
     await expect(
-      page.getByRole("link", { name: "analytics.renamed_asset" })
+      page.getByRole("link", { name: "renamed_asset", exact: true })
     ).toHaveCount(0);
   });
 
@@ -534,7 +534,7 @@ async function selectCustomersInWorkspace(
 ) {
   const isMobile = test.info().project.name.includes("mobile");
   if (isMobile) {
-    await page.goto(`${baseURL}/?pipeline=YW5hbHl0aWNz&asset=YW5hbHl0aWNzL2Fzc2V0cy9jdXN0b21lcnMuc3Fs`);
+    await page.goto(`${baseURL}/?pipeline=YW5hbHl0aWNz&asset=YW5hbHl0aWNzL2Fzc2V0cy9hbmFseXRpY3MvY3VzdG9tZXJzLnNxbA`);
     await expect(page).toHaveTitle("analytics.customers · analytics · Renart");
     return;
   }
@@ -555,7 +555,7 @@ async function openCustomersEditor(
     await expect(page.getByTestId("editor-asset-name")).toHaveText("analytics.customers");
     await waitForEditorReady(page);
   } else {
-    await page.goto(`${baseURL}/?pipeline=YW5hbHl0aWNz&asset=YW5hbHl0aWNzL2Fzc2V0cy9jdXN0b21lcnMuc3Fs`);
+    await page.goto(`${baseURL}/?pipeline=YW5hbHl0aWNz&asset=YW5hbHl0aWNzL2Fzc2V0cy9hbmFseXRpY3MvY3VzdG9tZXJzLnNxbA`);
     const editorAssetName = page.getByTestId("editor-asset-name");
     const selectedAssetName = await editorAssetName.textContent().catch(() => null);
     if (
@@ -563,7 +563,7 @@ async function openCustomersEditor(
       selectedAssetName?.trim() !== "analytics.customers"
     ) {
       const analyticsLink = page.getByRole("link", { name: "analytics", exact: true });
-      const customersLink = page.getByRole("link", { name: "analytics.customers", exact: true });
+      const customersLink = page.getByRole("link", { name: "customers", exact: true });
       if (!(await customersLink.isVisible().catch(() => false))) {
         await expect(analyticsLink).toBeVisible({ timeout: 15000 });
         await analyticsLink.click();
@@ -585,7 +585,7 @@ async function reopenCustomersEditor(
     return;
   }
 
-  await page.getByRole("link", { name: "analytics.orders" }).click();
+  await page.getByRole("link", { name: "orders", exact: true }).click();
   await openCustomersEditor(page, baseURL);
 }
 

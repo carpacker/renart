@@ -1,5 +1,4 @@
 /* @bruin
-name: analytics.orders
 type: duckdb.sql
 materialization:
   type: view

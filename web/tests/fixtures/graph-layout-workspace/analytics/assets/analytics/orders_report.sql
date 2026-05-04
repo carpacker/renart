@@ -1,8 +1,10 @@
 /* @bruin
-name: analytics.dependencies
 type: duckdb.sql
 materialization:
   type: view
+meta:
+  web_view: table
 @bruin */
 
-select 1 as dependency_id
+select *
+from analytics.orders

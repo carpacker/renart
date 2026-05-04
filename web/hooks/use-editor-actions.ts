@@ -30,7 +30,7 @@ type UseEditorActionsInput = {
       meta?: Record<string, string>;
       upstreams?: string[];
     }
-  ) => Promise<boolean>;
+  ) => Promise<{ status?: string; asset_id?: string } | null>;
   runDeleteAsset: (pipelineId: string, assetId: string) => Promise<boolean>;
   runUpdatePipeline: (
     pipelineId: string,
@@ -263,12 +263,16 @@ export function useEditorActions({
         return true;
       }
 
-      return runUpdateAsset(pipelineId, asset.id, {
+      const result = await runUpdateAsset(pipelineId, asset.id, {
         name: trimmedName,
         content: editorValue,
       });
+      if (result?.asset_id && result.asset_id !== asset.id) {
+        navigateSelection(pipelineId, result.asset_id);
+      }
+      return Boolean(result);
     },
-    [asset, editorValue, pipelineId, runUpdateAsset]
+    [asset, editorValue, navigateSelection, pipelineId, runUpdateAsset]
   );
 
   const handleMaterializationTypeChange = useCallback(

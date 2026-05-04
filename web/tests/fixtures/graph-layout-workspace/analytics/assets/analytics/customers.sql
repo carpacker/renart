@@ -1,5 +1,4 @@
 /* @bruin
-name: analytics.customers
 type: duckdb.sql
 materialization:
   type: view

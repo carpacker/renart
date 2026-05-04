@@ -86,7 +86,7 @@ test.describe("implemented feature requests live", () => {
 async function openCustomersEditor(page: import("@playwright/test").Page) {
   const isMobile = test.info().project.name.includes("mobile");
   if (isMobile) {
-    await page.goto(`${page.url().split("?")[0]}?pipeline=YW5hbHl0aWNz&asset=YW5hbHl0aWNzL2Fzc2V0cy9jdXN0b21lcnMuc3Fs`);
+    await page.goto(`${page.url().split("?")[0]}?pipeline=YW5hbHl0aWNz&asset=YW5hbHl0aWNzL2Fzc2V0cy9hbmFseXRpY3MvY3VzdG9tZXJzLnNxbA`);
     await expect(page).toHaveTitle("analytics.customers · analytics · Renart");
     const editorDialog = page.getByRole("dialog", { name: "Asset Editor" });
     if (!(await editorDialog.isVisible().catch(() => false))) {
@@ -98,7 +98,7 @@ async function openCustomersEditor(page: import("@playwright/test").Page) {
     await expect(editorDialog).toBeVisible();
     await expect(page.getByTestId("editor-asset-name")).toHaveText("analytics.customers");
   } else {
-    await page.goto(`${page.url().split("?")[0]}?pipeline=YW5hbHl0aWNz&asset=YW5hbHl0aWNzL2Fzc2V0cy9jdXN0b21lcnMuc3Fs`);
+    await page.goto(`${page.url().split("?")[0]}?pipeline=YW5hbHl0aWNz&asset=YW5hbHl0aWNzL2Fzc2V0cy9hbmFseXRpY3MvY3VzdG9tZXJzLnNxbA`);
     const editorAssetName = page.getByTestId("editor-asset-name");
     if (!(await editorAssetName.isVisible().catch(() => false))) {
       const analyticsLink = page.getByRole("link", { name: "analytics", exact: true });

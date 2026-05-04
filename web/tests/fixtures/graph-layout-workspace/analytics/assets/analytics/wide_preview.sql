@@ -1,5 +1,4 @@
 /* @bruin
-name: analytics.wide_preview
 type: duckdb.sql
 materialization:
   type: view

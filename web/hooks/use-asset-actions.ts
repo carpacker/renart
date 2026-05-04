@@ -212,19 +212,18 @@ export function useAssetActions(defaultPipelinePath = "my-pipeline") {
             "error",
             `Asset "${trimmedName}" already exists. Choose a different name.`
           );
-          return false;
+          return null;
         }
       }
 
       try {
-        await updateAsset(pipelineId, assetId, {
+        return await updateAsset(pipelineId, assetId, {
           ...input,
           name: trimmedName ?? input.name,
         });
-        return true;
       } catch (error) {
         pushUIMessage("error", `Failed to update asset: ${String(error)}`);
-        return false;
+        return null;
       }
     },
     [getConflictingAssetName, pushUIMessage]

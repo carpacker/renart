@@ -202,6 +202,7 @@ func (s *AssetService) Update(ctx context.Context, assetID string, req AssetUpda
 	if err != nil {
 		return nil, &AssetAPIError{Status: 500, Code: "asset_read_failed", Message: err.Error()}
 	}
+	originalHadExplicitName := assetContentHasExplicitName(string(originalBytes))
 	desiredExecutable := ExtractExecutableContent(string(originalBytes))
 	if req.Content != nil {
 		desiredExecutable = *req.Content
@@ -209,6 +210,9 @@ func (s *AssetService) Update(ctx context.Context, assetID string, req AssetUpda
 
 	changedAssetIDs := []string{assetID}
 	changedAssetPaths := []string{filepath.ToSlash(relAssetPath)}
+	nextAssetID := assetID
+	nextRelAssetPath := filepath.ToSlash(relAssetPath)
+	inferredRenameRelAssetPath := ""
 
 	if req.Name != nil || req.Type != nil || req.MaterializationType != nil || req.Meta != nil || req.Upstreams != nil {
 		_, parsedPipeline, asset, resolveErr := s.deps.ResolveAssetByID(ctx, assetID)
@@ -223,12 +227,19 @@ func (s *AssetService) Update(ctx context.Context, assetID string, req AssetUpda
 			if nextName == "" {
 				return nil, &AssetAPIError{Status: 400, Code: "invalid_asset_name", Message: "asset name cannot be empty"}
 			}
+			if !strings.Contains(nextName, ".") {
+				return nil, &AssetAPIError{Status: 400, Code: "missing_asset_prefix", Message: "asset name must include a prefix, for example analytics.orders"}
+			}
 			if existing := getAssetByNameCaseInsensitiveLocal(parsedPipeline, nextName); existing != nil && existing.DefinitionFile.Path != asset.DefinitionFile.Path {
 				return nil, &AssetAPIError{Status: 400, Code: "duplicate_asset_name", Message: fmt.Sprintf("an asset named %q already exists", nextName)}
 			}
 			if nextName != asset.Name {
 				asset.Name = nextName
 				renamedAsset = true
+				if !originalHadExplicitName {
+					extension := filepath.Ext(relAssetPath)
+					inferredRenameRelAssetPath = filepath.ToSlash(filepath.Join(pipelineRelPathForAsset(relAssetPath), assetPathForInferredName(nextName, extension)))
+				}
 			}
 		}
 		if req.Type != nil {
@@ -287,11 +298,39 @@ func (s *AssetService) Update(ctx context.Context, assetID string, req AssetUpda
 		}
 		s.ScheduleSQLPatches(relAssetPath)
 	}
+	if inferredRenameRelAssetPath != "" && inferredRenameRelAssetPath != filepath.ToSlash(relAssetPath) {
+		newAbsAssetPath, pathErr := SafeJoin(s.deps.WorkspaceRoot, inferredRenameRelAssetPath)
+		if pathErr != nil {
+			return nil, &AssetAPIError{Status: 400, Code: "invalid_asset_path", Message: pathErr.Error()}
+		}
+		if exists, existsErr := afero.Exists(fs, newAbsAssetPath); existsErr != nil {
+			return nil, &AssetAPIError{Status: 500, Code: "asset_stat_failed", Message: existsErr.Error()}
+		} else if exists {
+			return nil, &AssetAPIError{Status: 400, Code: "asset_path_exists", Message: "an asset already exists at the inferred path"}
+		}
+		currentBytes, readErr := afero.ReadFile(fs, absAssetPath)
+		if readErr != nil {
+			return nil, &AssetAPIError{Status: 500, Code: "asset_read_failed", Message: readErr.Error()}
+		}
+		if mkdirErr := fs.MkdirAll(filepath.Dir(newAbsAssetPath), 0o755); mkdirErr != nil {
+			return nil, &AssetAPIError{Status: 500, Code: "asset_dir_create_failed", Message: mkdirErr.Error()}
+		}
+		if writeErr := afero.WriteFile(fs, newAbsAssetPath, []byte(removeAssetNameFieldFromContent(string(currentBytes))), 0o644); writeErr != nil {
+			return nil, &AssetAPIError{Status: 500, Code: "asset_write_failed", Message: writeErr.Error()}
+		}
+		if removeErr := fs.Remove(absAssetPath); removeErr != nil {
+			return nil, &AssetAPIError{Status: 500, Code: "asset_remove_failed", Message: removeErr.Error()}
+		}
+		nextRelAssetPath = inferredRenameRelAssetPath
+		nextAssetID = EncodeID(inferredRenameRelAssetPath)
+		changedAssetIDs = appendUniqueStrings(changedAssetIDs, nextAssetID)
+		changedAssetPaths = appendUniqueStrings(changedAssetPaths, inferredRenameRelAssetPath)
+	}
 	for _, changedPath := range changedAssetPaths {
 		s.deps.SuppressWatcher(changedPath)
 	}
-	s.deps.PushWorkspaceUpdateImmediateWithChangedIDs(ctx, "asset.updated", relAssetPath, changedAssetIDs)
-	return map[string]string{"status": "ok"}, nil
+	s.deps.PushWorkspaceUpdateImmediateWithChangedIDs(ctx, "asset.updated", nextRelAssetPath, changedAssetIDs)
+	return map[string]string{"status": "ok", "asset_id": nextAssetID, "asset_path": nextRelAssetPath}, nil
 }
 
 func (s *AssetService) RefactorDirectDependencies(ctx context.Context, parsedPipeline *pipeline.Pipeline, oldName, newName string) ([]string, []string, error) {
@@ -619,14 +658,19 @@ func removePersistedAssetNameField(asset *pipeline.Asset) error {
 	if err != nil {
 		return err
 	}
-	lines := strings.Split(string(contentBytes), "\n")
+	content := removeAssetNameFieldFromContent(string(contentBytes))
+	return afero.WriteFile(fs, path, []byte(content), 0o644)
+}
+
+func removeAssetNameFieldFromContent(content string) string {
+	lines := strings.Split(content, "\n")
 	for index, line := range lines {
 		if strings.HasPrefix(strings.TrimSpace(line), "name:") {
 			lines = append(lines[:index], lines[index+1:]...)
-			return afero.WriteFile(fs, path, []byte(strings.Join(lines, "\n")), 0o644)
+			return strings.Join(lines, "\n")
 		}
 	}
-	return nil
+	return content
 }
 
 func inferAllSQLAssetDependencies(ctx context.Context, asset *pipeline.Asset, parsedPipeline *pipeline.Pipeline, sqlParserInstance *sqlparser.SQLParser, renderer *jinja.Renderer) ([]string, error) {
@@ -1116,6 +1160,17 @@ func EnsurePythonRequirementsFile(absAssetPath, assetType, relAssetPath string) 
 		return nil
 	}
 	return afero.WriteFile(fs, requirementsPath, []byte("pandas\n"), 0o644)
+}
+
+func pipelineRelPathForAsset(relAssetPath string) string {
+	clean := filepath.ToSlash(filepath.Clean(relAssetPath))
+	parts := strings.Split(clean, "/")
+	for index, part := range parts {
+		if part == "assets" {
+			return filepath.ToSlash(filepath.Join(parts[:index]...))
+		}
+	}
+	return filepath.ToSlash(filepath.Dir(filepath.Dir(clean)))
 }
 
 func defaultDerivedSQLAssetContent(assetName, assetType, assetPath, sourceAssetName, connectionName string) string {
