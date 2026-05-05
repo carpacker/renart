@@ -1,4 +1,5 @@
 let monacoEditorModulePromise: Promise<typeof import("@monaco-editor/react")> | null = null;
+let monacoWarmupPromise: Promise<unknown> | null = null;
 
 export function loadMonacoEditorModule() {
   if (!monacoEditorModulePromise) {
@@ -14,4 +15,17 @@ export function loadMonacoEditorModule() {
   }
 
   return monacoEditorModulePromise;
+}
+
+export function warmMonacoEditorRuntime() {
+  if (!monacoWarmupPromise) {
+    monacoWarmupPromise = loadMonacoEditorModule()
+      .then((module) => module.loader.init())
+      .catch((error) => {
+        monacoWarmupPromise = null;
+        throw error;
+      });
+  }
+
+  return monacoWarmupPromise;
 }

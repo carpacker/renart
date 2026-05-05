@@ -68,7 +68,7 @@ func (h *Handler) serveAsset(w http.ResponseWriter, r *http.Request, assetPath s
 			continue
 		}
 
-		return serveFile(w, r, source.fs, assetPath)
+		return serveFile(w, r, source.fs, assetPath, entry.ModTime())
 	}
 
 	return false
@@ -80,7 +80,11 @@ func (h *Handler) serveIndex(w http.ResponseWriter, r *http.Request) bool {
 			continue
 		}
 
-		return serveFile(w, r, source.fs, "index.html")
+		entry, err := fs.Stat(source.fs, "index.html")
+		if err != nil {
+			continue
+		}
+		return serveFile(w, r, source.fs, "index.html", entry.ModTime())
 	}
 
 	return false
@@ -95,7 +99,7 @@ func normalizeAssetPath(requestPath string) string {
 	return clean
 }
 
-func serveFile(w http.ResponseWriter, r *http.Request, fsys fs.FS, name string) bool {
+func serveFile(w http.ResponseWriter, r *http.Request, fsys fs.FS, name string, modTime time.Time) bool {
 	content, err := fs.ReadFile(fsys, name)
 	if err != nil {
 		return false
@@ -104,7 +108,26 @@ func serveFile(w http.ResponseWriter, r *http.Request, fsys fs.FS, name string) 
 	if contentType := mime.TypeByExtension(filepath.Ext(name)); contentType != "" {
 		w.Header().Set("Content-Type", contentType)
 	}
+	w.Header().Set("Cache-Control", cacheControlForPath(name))
 
-	http.ServeContent(w, r, path.Base(name), time.Time{}, bytes.NewReader(content))
+	http.ServeContent(w, r, path.Base(name), modTime, bytes.NewReader(content))
 	return true
+}
+
+func cacheControlForPath(name string) string {
+	clean := strings.TrimPrefix(path.Clean("/"+name), "/")
+	switch {
+	case clean == "index.html" || clean == "mockServiceWorker.js":
+		return "no-cache"
+	case strings.HasPrefix(clean, "assets/"):
+		return "public, max-age=31536000, immutable"
+	case strings.HasPrefix(clean, "monaco/"):
+		return "public, max-age=86400"
+	case strings.HasPrefix(clean, "wasm/"):
+		return "no-cache"
+	case strings.HasPrefix(clean, "icons/"):
+		return "public, max-age=86400"
+	default:
+		return "public, max-age=3600"
+	}
 }

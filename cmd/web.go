@@ -29,6 +29,8 @@ import (
 	webstatic "renart/internal/web/static"
 	"renart/internal/web/watch"
 	webui "renart/web"
+
+	"golang.org/x/net/http2"
 )
 
 type webAsset struct {
@@ -162,6 +164,14 @@ func Web() *cli.Command {
 				Name:  "watch-poll-interval",
 				Value: 2 * time.Second,
 				Usage: "poll interval used when watch-mode is poll or auto",
+			},
+			&cli.StringFlag{
+				Name:  "tls-cert",
+				Usage: "optional TLS certificate path; enables HTTPS and HTTP/2 when used with --tls-key",
+			},
+			&cli.StringFlag{
+				Name:  "tls-key",
+				Usage: "optional TLS private key path; enables HTTPS and HTTP/2 when used with --tls-cert",
 			},
 		},
 		Action: func(ctx context.Context, c *cli.Command) error {
@@ -336,12 +346,24 @@ func Web() *cli.Command {
 			server.registerRoutes(router)
 
 			address := fmt.Sprintf("%s:%d", c.String("host"), c.Int("port"))
-			fmt.Printf("Renart listening on http://%s\n", address)
+			tlsCert := strings.TrimSpace(c.String("tls-cert"))
+			tlsKey := strings.TrimSpace(c.String("tls-key"))
+			if (tlsCert == "") != (tlsKey == "") {
+				return fmt.Errorf("--tls-cert and --tls-key must be provided together")
+			}
 
 			httpServer := &http.Server{
 				Addr:              address,
 				Handler:           router,
 				ReadHeaderTimeout: 10 * time.Second,
+			}
+			if tlsCert != "" {
+				if err := http2.ConfigureServer(httpServer, &http2.Server{}); err != nil {
+					return fmt.Errorf("failed to configure HTTP/2: %w", err)
+				}
+				fmt.Printf("Renart listening on https://%s (HTTP/2 enabled)\n", address)
+			} else {
+				fmt.Printf("Renart listening on http://%s\n", address)
 			}
 
 			go func() {
@@ -351,7 +373,11 @@ func Web() *cli.Command {
 				_ = httpServer.Shutdown(shutdownCtx)
 			}()
 
-			err = httpServer.ListenAndServe()
+			if tlsCert != "" {
+				err = httpServer.ListenAndServeTLS(tlsCert, tlsKey)
+			} else {
+				err = httpServer.ListenAndServe()
+			}
 			if err != nil && err != http.ErrServerClosed {
 				return err
 			}

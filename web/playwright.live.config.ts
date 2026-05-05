@@ -1,12 +1,14 @@
 import { defineConfig, devices } from "@playwright/test";
 
+const liveWorkers = Number.parseInt(process.env.RENART_E2E_LIVE_WORKERS ?? "2", 10);
+
 export default defineConfig({
   testDir: "./tests/e2e",
   testMatch: "**/*.live.spec.ts",
   outputDir: "/dev/shm/bruin-playwright/test-results",
   globalSetup: "./tests/e2e/live-global-setup.ts",
   fullyParallel: false,
-  workers: 1,
+  workers: Number.isFinite(liveWorkers) && liveWorkers > 0 ? liveWorkers : 2,
   retries: process.env.CI ? 1 : 0,
   use: {
     trace: "on-first-retry",
