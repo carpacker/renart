@@ -303,21 +303,11 @@ func (s *ExecutionService) ensureAssetInspectable(ctx context.Context, assetID, 
 }
 
 func loadExecutionConfigOrEmpty(configPath string) *config.Config {
-	if strings.TrimSpace(configPath) == "" {
+	selected, err := selectConfigEnvironment(loadConfigOrEmpty(configPath), "")
+	if err != nil {
 		return &config.Config{}
 	}
-
-	cfg, err := config.LoadOrCreate(afero.NewOsFs(), configPath)
-	if err != nil || cfg == nil {
-		return &config.Config{}
-	}
-	if cfg.SelectedEnvironmentName == "" {
-		cfg.SelectedEnvironmentName = cfg.DefaultEnvironmentName
-	}
-	if cfg.SelectedEnvironment == nil && cfg.SelectedEnvironmentName != "" {
-		_ = cfg.SelectEnvironment(cfg.SelectedEnvironmentName)
-	}
-	return cfg
+	return selected
 }
 
 func isReadOnlySelectQuery(queryStr string, assetType pipeline.AssetType) (bool, error) {

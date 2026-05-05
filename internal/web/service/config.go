@@ -10,7 +10,6 @@ import (
 	"strings"
 
 	"github.com/bruin-data/bruin/pkg/config"
-	"github.com/bruin-data/bruin/pkg/connection"
 	"github.com/spf13/afero"
 )
 
@@ -194,15 +193,9 @@ func (s *ConfigService) UpdateConnection(cfg *config.Config, params UpsertWorksp
 }
 
 func (s *ConfigService) TestConnection(ctx context.Context, cfg *config.Config, params TestWorkspaceConnectionParams) (string, error) {
-	environmentName := strings.TrimSpace(params.EnvironmentName)
-	if environmentName == "" {
-		environmentName = cfg.SelectedEnvironmentName
-	}
-	if environmentName == "" {
-		environmentName = cfg.DefaultEnvironmentName
-	}
-	if environmentName == "" {
-		return "", fmt.Errorf("no environment selected")
+	environmentName, err := requireEnvironmentName(cfg, params.EnvironmentName)
+	if err != nil {
+		return "", err
 	}
 
 	connectionName := strings.TrimSpace(params.Name)
@@ -222,13 +215,14 @@ func (s *ConfigService) TestConnection(ctx context.Context, cfg *config.Config, 
 		}
 	}
 
-	if err := cfg.SelectEnvironment(environmentName); err != nil {
+	selectedCfg, err := selectConfigEnvironment(cfg, environmentName)
+	if err != nil {
 		return "", err
 	}
 
-	manager, errs := connection.NewManagerFromConfigWithContext(ctx, cfg)
-	if len(errs) > 0 {
-		return "", errs[0]
+	manager, err := newConnectionManagerFromConfig(ctx, selectedCfg)
+	if err != nil {
+		return "", err
 	}
 
 	conn := manager.GetConnection(connectionName)

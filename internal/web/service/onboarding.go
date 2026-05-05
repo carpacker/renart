@@ -10,7 +10,6 @@ import (
 	"strings"
 
 	"github.com/bruin-data/bruin/pkg/config"
-	"github.com/bruin-data/bruin/pkg/connection"
 	"github.com/bruin-data/bruin/pkg/git"
 	bruinpath "github.com/bruin-data/bruin/pkg/path"
 	"github.com/spf13/afero"
@@ -194,13 +193,14 @@ func (s *OnboardingService) PreviewDiscovery(ctx context.Context, req Onboarding
 		return OnboardingDiscoveryResult{Status: "error", Databases: []string{}, Tables: []SQLDiscoveryTableItem{}, Error: err.Error()}, 400
 	}
 
-	if err := cfg.SelectEnvironment(environmentName); err != nil {
+	selectedCfg, err := selectConfigEnvironment(cfg, environmentName)
+	if err != nil {
 		return OnboardingDiscoveryResult{Status: "error", Databases: []string{}, Tables: []SQLDiscoveryTableItem{}, Error: err.Error()}, 400
 	}
 
-	manager, errs := connection.NewManagerFromConfigWithContext(ctx, cfg)
-	if len(errs) > 0 {
-		return OnboardingDiscoveryResult{Status: "error", Databases: []string{}, Tables: []SQLDiscoveryTableItem{}, Error: errs[0].Error()}, 400
+	manager, err := newConnectionManagerFromConfig(ctx, selectedCfg)
+	if err != nil {
+		return OnboardingDiscoveryResult{Status: "error", Databases: []string{}, Tables: []SQLDiscoveryTableItem{}, Error: err.Error()}, 400
 	}
 
 	conn := manager.GetConnection(connectionName)

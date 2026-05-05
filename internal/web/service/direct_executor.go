@@ -848,14 +848,14 @@ func getDirectPipelineAndAsset(ctx context.Context, workspaceRoot, inputPath str
 
 func getDirectConnectionAndQuery(ctx context.Context, pp *directPipelineInfo, environment string) (string, interface{}, string, error) {
 	if environment != "" {
-		if err := pp.Config.SelectEnvironment(environment); err != nil {
+		if _, err := selectConfigEnvironment(pp.Config, environment); err != nil {
 			return "", nil, "", err
 		}
 	}
 
-	manager, errs := connection.NewManagerFromConfigWithContext(ctx, pp.Config)
-	if len(errs) > 0 {
-		return "", nil, "", errs[0]
+	manager, err := newConnectionManagerFromConfig(ctx, pp.Config)
+	if err != nil {
+		return "", nil, "", err
 	}
 
 	connName, err := pp.Pipeline.GetConnectionNameForAsset(pp.Asset)
@@ -887,7 +887,7 @@ func getDirectConnectionAndQuery(ctx context.Context, pp *directPipelineInfo, en
 
 func (e *HybridBruinExecutor) buildDirectAssetQuery(ctx context.Context, pp *directPipelineInfo, environment string) (string, interface{}, string, error) {
 	if strings.TrimSpace(environment) != "" {
-		if err := pp.Config.SelectEnvironment(environment); err != nil {
+		if _, err := selectConfigEnvironment(pp.Config, environment); err != nil {
 			return "", nil, "", fmt.Errorf("failed to use the environment '%s': %w", environment, err)
 		}
 	}
@@ -900,9 +900,9 @@ func (e *HybridBruinExecutor) buildDirectAssetQuery(ctx context.Context, pp *dir
 			return "", nil, "", fmt.Errorf("failed to create connection manager: %w", err)
 		}
 	} else {
-		connectionManager, errs := connection.NewManagerFromConfigWithContext(ctx, pp.Config)
-		if len(errs) > 0 {
-			return "", nil, "", fmt.Errorf("failed to create connection manager: %w", errs[0])
+		connectionManager, err := newConnectionManagerFromConfig(ctx, pp.Config)
+		if err != nil {
+			return "", nil, "", fmt.Errorf("failed to create connection manager: %w", err)
 		}
 		manager = connectionManager
 	}
@@ -949,12 +949,7 @@ func (e *HybridBruinExecutor) directConnectionManager(ctx context.Context, cfg *
 		return e.newConnectionManager(ctx, cfg.SelectedEnvironmentName)
 	}
 
-	manager, errs := connection.NewManagerFromConfigWithContext(ctx, cfg)
-	if len(errs) > 0 {
-		return nil, errs[0]
-	}
-
-	return manager, nil
+	return newConnectionManagerFromConfig(ctx, cfg)
 }
 
 func shouldFallbackToCLIRunAsset(asset *pipeline.Asset, foundPipeline *pipeline.Pipeline) bool {

@@ -157,15 +157,9 @@ func (s *SuggestionsService) BuildSQLS3PathSuggestionItems(ctx context.Context, 
 		return nil, err
 	}
 
-	cfg, err := config.LoadOrCreate(afero.NewOsFs(), s.deps.ConfigPath)
+	cfg, err := loadSelectedConfig(s.deps.ConfigPath, environment)
 	if err != nil {
 		return nil, fmt.Errorf("failed to load config: %w", err)
-	}
-
-	if environment != "" {
-		if err := cfg.SelectEnvironment(environment); err != nil {
-			return nil, fmt.Errorf("failed to select environment '%s': %w", environment, err)
-		}
 	}
 
 	if cfg.SelectedEnvironment == nil || cfg.SelectedEnvironment.Connections == nil {
