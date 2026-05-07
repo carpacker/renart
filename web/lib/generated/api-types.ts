@@ -278,6 +278,9 @@ export type AssetInspectResponse = {
   raw_output: string;
   operation: OperationMetadata;
   error?: string;
+  missing_upstream_asset_ids?: string[];
+  missing_upstream_asset_names?: string[];
+  missing_upstream_assets_materializable?: boolean;
   attempts?: number;
   retryable?: boolean;
 };
@@ -295,6 +298,8 @@ export type OperationMetadata = {
   target?: string;
   pipeline_id?: string;
   asset_path?: string;
+  run_scope?: string;
+  asset_paths?: string[];
   connection_name?: string;
   query?: string;
   limit?: string;

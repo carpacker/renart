@@ -1,0 +1,11 @@
+.git
+dist
+web/dist
+docs/dist
+docs/.astro
+web/node_modules
+docs/node_modules
+.playwright-live-workspaces
+duckdb-files
+onboarding
+*.tar.gz

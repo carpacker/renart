@@ -20,7 +20,7 @@ type Params = {
   onboardingState: OnboardingSessionState;
   selectedType: string;
   step: string;
-  draftValues: Record<string, string | number | boolean>;
+  draftValues: Record<string, string | number | boolean | string[]>;
   importForm: {
     database: string;
     pipelineName: string;
@@ -30,7 +30,7 @@ type Params = {
   };
   selectedTables: string[];
   importResult: OnboardingImportResponse | null;
-  setDraftValues: (values: Record<string, string | number | boolean>) => void;
+  setDraftValues: (values: Record<string, string | number | boolean | string[]>) => void;
 };
 
 export function useOnboardingPersistence({
@@ -141,7 +141,7 @@ export function useOnboardingPersistence({
 
 function applyOnboardingDraftDefaults(
   typeName: string,
-  values: Record<string, string | number | boolean>
+  values: Record<string, string | number | boolean | string[]>
 ) {
   if (typeName === "postgres") {
     return {

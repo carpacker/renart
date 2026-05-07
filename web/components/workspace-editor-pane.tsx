@@ -22,6 +22,7 @@ import { useSQLFormatting } from "@/hooks/use-sql-formatting";
 import { useWorkspaceEditorDerivedState } from "@/hooks/use-workspace-editor-derived-state";
 import { useYAMLIntellisense } from "@/hooks/use-yaml-intellisense";
 import { defineBruinMonacoThemes } from "@/lib/monaco-theme";
+import { MaterializeScope } from "@/lib/materialize-scope";
 import { WebAsset } from "@/lib/types";
 import { InspectDiagnosticSnapshot } from "@/lib/inspect-diagnostics";
 
@@ -54,7 +55,7 @@ type WorkspaceEditorPaneProps = {
     value: "configuration" | "checks" | "visualization" | "dependencies"
   ) => void;
   onEditorChange: (value?: string) => void;
-  onMaterializeSelectedAsset: () => void;
+  onMaterializeSelectedAsset: (scope?: MaterializeScope) => void;
   onInspectSelectedAsset: () => void;
   onSaveSelectedAsset: () => Promise<false | "saved" | "already-saved">;
   onOpenDeleteDialog: () => void;

@@ -275,6 +275,61 @@ test.describe("sql intellisense live", () => {
       .toEqual(expect.arrayContaining([expect.stringContaining("Catalog Error")]));
   });
 
+  test("offers a quick fix for similar unresolved column names", async ({
+    liveApp,
+    page,
+  }) => {
+    test.skip(test.info().project.name.includes("mobile"), "Monaco quick-fix UI is only stable in the desktop editor.");
+
+    await page.goto(`${liveApp.baseURL}/`);
+    await openCustomersEditor(page, liveApp.baseURL);
+
+    await replaceEditorContentByInsertText(
+      page,
+      "select c.custmer_name\nfrom analytics.customers as c"
+    );
+
+    await expect
+      .poll(async () => getEditorMarkerMessages(page), { timeout: 15000 })
+      .toEqual(
+        expect.arrayContaining([
+          expect.stringContaining("Unresolved column 'custmer_name'. Did you mean 'customer_name'?"),
+        ])
+      );
+
+    await setEditorPositionAfterText(page, "custmer_name");
+    await page.evaluate(() => {
+      const monaco = (window as typeof window & { monaco?: any }).monaco;
+      const editor = monaco?.editor.getEditors?.()[0];
+      void editor?.getAction("editor.action.showHover")?.run();
+    });
+    const hover = page.locator(".monaco-hover").first();
+    await expect(hover).toBeVisible({ timeout: 10000 });
+    await expect(hover.getByText("Unresolved column", { exact: true })).toBeVisible();
+    await expect(hover.getByText("custmer_name", { exact: true })).toBeVisible();
+    await expect(hover.getByText("Did you mean customer_name?", { exact: true })).toBeVisible();
+    await expect(hover.getByText("Available columns in customers:", { exact: true })).toBeVisible();
+    await expect(hover.getByRole("listitem").filter({ hasText: "customer_name" })).toBeVisible();
+
+    await page.keyboard.press("Escape");
+    await page.evaluate(() => {
+      const monaco = (window as typeof window & { monaco?: any }).monaco;
+      const editor = monaco?.editor.getEditors?.()[0];
+      void editor?.getAction("editor.action.quickFix")?.run();
+    });
+
+    const actionWidget = page.locator(".action-widget").first();
+    await expect(actionWidget).toBeVisible({ timeout: 10000 });
+    await expect(
+      actionWidget.getByText("Change 'custmer_name' to 'customer_name'", { exact: true })
+    ).toBeVisible();
+    await page.keyboard.press("Enter");
+
+    await expect
+      .poll(async () => getEditorValue(page), { timeout: 10000 })
+      .toContain("select c.customer_name");
+  });
+
   test("renders Jinja ghost text and completions in the SQL editor", async ({
     liveApp,
     page,
@@ -533,6 +588,24 @@ async function setEditorPositionAfterText(page: Page, text: string) {
     editor.focus();
     editor.setPosition(position);
   }, text);
+}
+
+async function getEditorMarkerMessages(page: Page) {
+  return await page.evaluate(() => {
+    const monaco = (window as typeof window & { monaco?: any }).monaco;
+    const editor = monaco?.editor.getEditors?.()[0];
+    const model = editor?.getModel();
+    if (!monaco || !model) return [];
+    return monaco.editor.getModelMarkers({ resource: model.uri }).map((marker: { message: string }) => marker.message);
+  });
+}
+
+async function getEditorValue(page: Page) {
+  return await page.evaluate(() => {
+    const monaco = (window as typeof window & { monaco?: any }).monaco;
+    const editor = monaco?.editor.getEditors?.()[0];
+    return editor?.getModel()?.getValue() ?? "";
+  });
 }
 
 async function replaceEditorContent(

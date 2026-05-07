@@ -1,14 +1,18 @@
 "use client";
 
+import { useMemo } from "react";
+
 import { AssetInspectView } from "@/components/asset-inspect-view";
 import { InspectWarningCard } from "@/components/inspect-warning-card";
 import { WorkspaceMaterializeHistoryList } from "@/components/workspace-materialize-history-list";
 import { WorkspaceMaterializeOutputView } from "@/components/workspace-materialize-output-view";
+import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Spinner } from "@/components/ui/spinner";
 import { MaterializeHistoryEntry } from "@/lib/atoms/results";
-import { extractInspectErrorText } from "@/lib/inspect-errors";
-import { AssetInspectResponse } from "@/lib/types";
+import { extractInspectErrorText, extractMissingReferencedObjects } from "@/lib/inspect-errors";
+import { MaterializeScope } from "@/lib/materialize-scope";
+import { AssetInspectResponse, WebAsset } from "@/lib/types";
 
 type Props = {
   inspectResult: AssetInspectResponse | null;
@@ -25,6 +29,9 @@ type Props = {
   onLoadMoreInspectRows?: () => void;
   onResultTabChange: (value: "inspect" | "materialize") => void;
   onSelectMaterializeEntry: (entryId: string) => void;
+  onMaterializeMissingUpstreams?: (scope: MaterializeScope) => void;
+  selectedAsset?: WebAsset | null;
+  pipelineAssets?: WebAsset[];
 };
 
 export function WorkspaceResultsPanel({
@@ -42,8 +49,38 @@ export function WorkspaceResultsPanel({
   onLoadMoreInspectRows,
   onResultTabChange,
   onSelectMaterializeEntry,
+  onMaterializeMissingUpstreams,
+  selectedAsset,
+  pipelineAssets = [],
 }: Props) {
   const inspectErrorDetails = extractInspectErrorText(inspectResult?.raw_output);
+  const fallbackMissingUpstreamNames = useMemo(() => {
+    if (!selectedAsset || !inspectResult?.error) {
+      return [];
+    }
+
+    const referenced = new Set([
+      ...extractMissingReferencedObjects(inspectResult.error),
+      ...extractMissingReferencedObjects(inspectErrorDetails),
+    ]);
+    if (referenced.size === 0) {
+      return [];
+    }
+
+    const upstreamSet = new Set(selectedAsset.upstreams ?? []);
+    return pipelineAssets
+      .filter((asset) => upstreamSet.has(asset.name))
+      .map((asset) => asset.name)
+      .filter((name) => referenced.has(name.toLowerCase()));
+  }, [inspectErrorDetails, inspectResult?.error, pipelineAssets, selectedAsset]);
+  const missingUpstreamNames =
+    inspectResult?.missing_upstream_asset_names?.length
+      ? inspectResult.missing_upstream_asset_names
+      : fallbackMissingUpstreamNames;
+  const missingUpstreamsMaterializable = missingUpstreamNames.length > 0;
+  const inspectMessage = missingUpstreamsMaterializable
+    ? `One or more upstream Renart assets are not materialized yet: ${missingUpstreamNames.join(", ")}. Materialize the upstream assets, then inspect again.`
+    : inspectResult?.error || inspectErrorDetails || "Inspect failed.";
 
   return (
     <div
@@ -80,8 +117,19 @@ export function WorkspaceResultsPanel({
           ) : inspectResult?.error ? (
             <div className="flex h-full min-h-0 items-center justify-center p-6">
               <InspectWarningCard
-                message={inspectResult.error || inspectErrorDetails || "Inspect failed."}
+                message={inspectMessage}
                 testId="inspect-warning-empty-state"
+                actions={
+                  missingUpstreamsMaterializable && onMaterializeMissingUpstreams ? (
+                    <Button
+                      size="sm"
+                      type="button"
+                      onClick={() => onMaterializeMissingUpstreams("asset_with_upstreams")}
+                    >
+                      Materialize upstream assets
+                    </Button>
+                  ) : undefined
+                }
               />
             </div>
           ) : (

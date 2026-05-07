@@ -15,6 +15,7 @@ export type MaterializeStreamPayload = {
   changed_asset_ids?: string[];
   materialized_at?: string;
   chunk?: string;
+  run_scope?: string;
 };
 
 export type FillColumnsFromDBResponse = {

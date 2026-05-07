@@ -6,10 +6,10 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/go-chi/chi/v5"
 	webapi "renart/internal/web/api"
 	webmodel "renart/internal/web/model"
 	"renart/internal/web/service"
-	"github.com/go-chi/chi/v5"
 )
 
 type PipelineChangePublisher interface {

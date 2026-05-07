@@ -37,6 +37,7 @@ import { useWorkspaceDerivedState } from "@/hooks/use-workspace-derived-state";
 import { useOnboarding } from "@/hooks/use-onboarding";
 import { getAvailableAssetTypes } from "@/lib/asset-types";
 import { getWorkspace } from "@/lib/api";
+import { MaterializeScope } from "@/lib/materialize-scope";
 
 import { useWorkspaceLayout } from "./workspace-layout";
 
@@ -188,17 +189,27 @@ export function WorkspacePage() {
   );
 
   const handleMaterializeAssetFromNode = useCallback(
-    (assetId: string) => {
+    (assetId: string, scope: MaterializeScope = "asset") => {
       if (!pipeline) {
         return;
       }
 
       navigateSelection(pipeline.id, assetId);
-      void assetResults.runMaterializeForAsset(assetId, async () => {
+      void assetResults.runMaterializeForAsset(assetId, scope, async () => {
         await refreshPipelineMaterialization(pipeline.id).catch(() => undefined);
       });
     },
     [assetResults, navigateSelection, pipeline, refreshPipelineMaterialization]
+  );
+
+  const handleMaterializeMissingUpstreams = useCallback(
+    (scope: MaterializeScope) => {
+      if (!selectedAsset) {
+        return;
+      }
+      handleMaterializeAssetFromNode(selectedAsset, scope);
+    },
+    [handleMaterializeAssetFromNode, selectedAsset]
   );
 
   const {
@@ -531,6 +542,9 @@ export function WorkspacePage() {
           onLoadMoreInspectRows: assetResults.loadMoreInspectRows,
           onResultTabChange: assetResults.setResultTab,
           onSelectMaterializeEntry: handleSelectMaterializeEntry,
+          onMaterializeMissingUpstreams: handleMaterializeMissingUpstreams,
+          selectedAsset: asset,
+          pipelineAssets: enrichedPipeline?.assets ?? [],
           onInit: setReactFlowInstance,
           onNodesChange,
           onEdgesChange,

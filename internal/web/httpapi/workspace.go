@@ -6,8 +6,8 @@ import (
 	"fmt"
 	"net/http"
 
-	webapi "renart/internal/web/api"
 	"github.com/go-chi/chi/v5"
+	webapi "renart/internal/web/api"
 )
 
 type WorkspaceReader interface {

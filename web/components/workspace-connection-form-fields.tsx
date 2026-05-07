@@ -1,8 +1,21 @@
 "use client";
 
+import { useState } from "react";
 import { CheckCircle2, LoaderCircle } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
+import {
+  Combobox,
+  ComboboxChip,
+  ComboboxChips,
+  ComboboxChipsInput,
+  ComboboxContent,
+  ComboboxEmpty,
+  ComboboxItem,
+  ComboboxList,
+  ComboboxValue,
+  useComboboxAnchor,
+} from "@/components/ui/combobox";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
@@ -23,7 +36,7 @@ type ConnectionFormState = {
   environmentName: string;
   name: string;
   type: string;
-  values: Record<string, string | number | boolean>;
+  values: Record<string, string | number | boolean | string[]>;
 };
 
 export function WorkspaceConnectionFormFields({
@@ -65,7 +78,7 @@ export function WorkspaceConnectionFormFields({
   onEnvironmentChange: (value: string) => void;
   onFieldValueChange: (
     fieldName: string,
-    value: string | number | boolean
+    value: string | number | boolean | string[]
   ) => void;
   onNameChange: (value: string) => void;
   onSave: () => void;
@@ -147,6 +160,31 @@ export function WorkspaceConnectionFormFields({
               );
             }
 
+            if (field.type === "string_array") {
+              const values = Array.isArray(fieldValue) ? fieldValue : [];
+              return (
+                <div
+                  key={field.name}
+                  className="grid border-t first:border-t-0 sm:grid-cols-[160px_minmax(0,1fr)]"
+                >
+                  <div
+                    className="bg-muted/30 px-4 py-2 text-xs text-muted-foreground"
+                    style={{ fontFamily: '"Geist Mono", ui-monospace, SFMono-Regular, monospace' }}
+                  >
+                    {field.name}
+                  </div>
+                  <div className="px-4 py-1.5 transition-colors focus-within:bg-emerald-500/10 dark:focus-within:bg-emerald-500/15">
+                    <StringArrayCombobox
+                      value={values}
+                      suggestions={field.default_value?.split(",") ?? []}
+                      placeholder="Add values..."
+                      onChange={(nextValues) => onFieldValueChange(field.name, nextValues)}
+                    />
+                  </div>
+                </div>
+              );
+            }
+
             return (
               <div
                 key={field.name}
@@ -162,12 +200,18 @@ export function WorkspaceConnectionFormFields({
                   <Input
                     type={field.type === "int" ? "number" : secretInputType(field.name)}
                     value={
-                      fieldValue === undefined || fieldValue === null ? "" : String(fieldValue)
+                      fieldValue === undefined || fieldValue === null
+                        ? ""
+                        : Array.isArray(fieldValue)
+                          ? fieldValue.join(", ")
+                          : String(fieldValue)
                     }
                     onChange={(event) =>
                       onFieldValueChange(
                         field.name,
-                        field.type === "int" ? event.target.value : event.target.value
+                        field.type === "string_array"
+                          ? event.target.value.split(",").map((item) => item.trim()).filter(Boolean)
+                          : field.type === "int" ? event.target.value : event.target.value
                       )
                     }
                     placeholder={
@@ -233,6 +277,119 @@ export function WorkspaceConnectionFormFields({
       ) : null}
     </div>
   );
+}
+
+function StringArrayCombobox({
+  value,
+  suggestions,
+  placeholder,
+  onChange,
+}: {
+  value: string[];
+  suggestions: string[];
+  placeholder: string;
+  onChange: (value: string[]) => void;
+}) {
+  const anchor = useComboboxAnchor();
+  const [draft, setDraft] = useState("");
+  const normalizedValue = compactUnique(value);
+  const draftAsItem = draft.trim();
+  const items = compactUnique([
+    ...normalizedValue,
+    ...suggestions,
+    ...(draftAsItem ? [draftAsItem] : []),
+  ]);
+
+  const commitDraft = () => {
+    const additions = splitCommaSeparated(draft);
+    if (additions.length === 0) {
+      return;
+    }
+    onChange(compactUnique([...normalizedValue, ...additions]));
+    setDraft("");
+  };
+
+  const toggleValue = (item: string) => {
+    const key = item.toLowerCase();
+    if (normalizedValue.some((current) => current.toLowerCase() === key)) {
+      onChange(normalizedValue.filter((current) => current.toLowerCase() !== key));
+      setDraft("");
+      return;
+    }
+    onChange(compactUnique([...normalizedValue, item]));
+    setDraft("");
+  };
+
+  return (
+    <Combobox
+      multiple
+      autoHighlight
+      items={items}
+      value={normalizedValue}
+      onValueChange={(nextValue) =>
+        onChange(Array.isArray(nextValue) ? compactUnique(nextValue as string[]) : [])
+      }
+    >
+      <ComboboxChips ref={anchor} className="min-h-7 w-full border-0 bg-transparent px-0 py-0 shadow-none focus-within:ring-0">
+        <ComboboxValue>
+          {(values) => (
+            <>
+              {(values as string[]).map((item) => (
+                <ComboboxChip key={item}>{item}</ComboboxChip>
+              ))}
+              <ComboboxChipsInput
+                value={draft}
+                placeholder={placeholder}
+                onChange={(event) => setDraft(event.target.value)}
+                onBlur={commitDraft}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter" || event.key === ",") {
+                    event.preventDefault();
+                    commitDraft();
+                  }
+                }}
+              />
+            </>
+          )}
+        </ComboboxValue>
+      </ComboboxChips>
+      <ComboboxContent anchor={anchor}>
+        <ComboboxEmpty>No values yet.</ComboboxEmpty>
+        <ComboboxList>
+          {(item) => (
+            <ComboboxItem key={item} value={item} onClick={() => toggleValue(item)}>
+              {item}
+            </ComboboxItem>
+          )}
+        </ComboboxList>
+      </ComboboxContent>
+    </Combobox>
+  );
+}
+
+function splitCommaSeparated(value: string) {
+  return value
+    .split(",")
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+function compactUnique(values: string[]) {
+  const result: string[] = [];
+  const seen = new Set<string>();
+  for (const value of values) {
+    const trimmed = value.trim();
+    if (!trimmed) {
+      continue;
+    }
+    const key = trimmed.toLowerCase();
+    if (seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    result.push(trimmed);
+  }
+  return result;
 }
 
 function secretInputType(name: string) {

@@ -6,9 +6,9 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/go-chi/chi/v5"
 	webapi "renart/internal/web/api"
 	"renart/internal/web/service"
-	"github.com/go-chi/chi/v5"
 )
 
 type ParseContextHandlers interface {

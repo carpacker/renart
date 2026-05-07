@@ -22,24 +22,17 @@ export default defineConfig({
         {
           label: 'Introduction',
           items: [
-            { label: 'Overview', slug: 'index' },
-            { label: 'Who Renart Is For', slug: 'who-renart-is-for' },
-            { label: 'Bruin CLI and Renart', slug: 'bruin-cli-and-renart' },
+            { label: 'Overview', slug: 'docs' },
+            { label: 'Who Renart Is For', slug: 'docs/who-renart-is-for' },
+            { label: 'Bruin CLI and Renart', slug: 'docs/bruin-cli-and-renart' },
           ],
         },
         {
           label: 'Getting Started',
           items: [
-            { label: 'Installation', slug: 'installation' },
-            { label: 'Quickstart', slug: 'quickstart' },
-            { label: 'Running Renart', slug: 'running-renart' },
-          ],
-        },
-        {
-          label: 'Using Renart',
-          items: [
-            { label: 'Inspect and Materialize', slug: 'inspect-and-materialize' },
-            { label: 'Visual Workflow', slug: 'visual-workflow' },
+            { label: 'Installation', slug: 'docs/installation' },
+            { label: 'Quickstart', slug: 'docs/quickstart' },
+            { label: 'Running Renart', slug: 'docs/running-renart' },
           ],
         },
       ],

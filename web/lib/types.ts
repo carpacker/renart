@@ -64,7 +64,7 @@ export type {
   WorkspaceConfigEnvironment,
 };
 
-export type WorkspaceConfigFieldType = "string" | "int" | "bool";
+export type WorkspaceConfigFieldType = "string" | "int" | "bool" | "string_array";
 
 export type WorkspaceConfigFieldDef = Omit<
   GeneratedWorkspaceConfigFieldDef,
@@ -144,6 +144,9 @@ export type AssetInspectResponse = GeneratedAssetInspectResponse & {
   status: "ok" | "error";
   operation?: OperationMetadata;
   warning?: string;
+  missing_upstream_asset_ids?: string[];
+  missing_upstream_asset_names?: string[];
+  missing_upstream_assets_materializable?: boolean;
 };
 
 export type InferColumnsResponse = GeneratedInferColumnsResponse & {

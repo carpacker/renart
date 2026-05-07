@@ -421,7 +421,7 @@ export function useOnboardingFlow({
 
 function applyOnboardingDraftDefaults(
   typeName: string,
-  values: Record<string, string | number | boolean>
+  values: Record<string, string | number | boolean | string[]>
 ) {
   if (typeName === "postgres") {
     return {

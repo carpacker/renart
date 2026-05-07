@@ -285,13 +285,13 @@ function buildTypeValues({
   activeConnection: { type: string } | null;
   connectionTypes: WorkspaceConfigConnectionType[];
   mode: ConnectionMode;
-  previousValues: Record<string, string | number | boolean>;
+  previousValues: Record<string, string | number | boolean | string[]>;
   typeName: string;
 }) {
   const connectionType = connectionTypes.find(
     (candidate) => candidate.type_name === typeName
   );
-  const values: Record<string, string | number | boolean> = {};
+  const values: Record<string, string | number | boolean | string[]> = {};
 
   for (const field of connectionType?.fields ?? []) {
     const previousValue = previousValues[field.name];
@@ -313,6 +313,12 @@ function buildTypeValues({
     }
     if (field.type === "int") {
       values[field.name] = field.default_value ? Number(field.default_value) : "";
+      continue;
+    }
+    if (field.type === "string_array") {
+      values[field.name] = field.default_value
+        ? field.default_value.split(",").map((item) => item.trim()).filter(Boolean)
+        : [];
       continue;
     }
     values[field.name] = field.default_value ?? "";

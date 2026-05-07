@@ -1,15 +1,18 @@
 "use client";
 
 import { AlertTriangle } from "lucide-react";
+import { ReactNode } from "react";
 
 import { Alert, AlertTitle, AlertDescription } from "@/components/ui/alert";
 
 export function InspectWarningCard({
   message,
   testId,
+  actions,
 }: {
   message: string;
   testId?: string;
+  actions?: ReactNode;
 }) {
   return (
     <Alert
@@ -21,6 +24,7 @@ export function InspectWarningCard({
       <AlertDescription className="whitespace-pre-wrap font-[monospace] text-xs leading-5">
         {message}
       </AlertDescription>
+      {actions ? <div className="mt-3">{actions}</div> : null}
     </Alert>
   );
 }

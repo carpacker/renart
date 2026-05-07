@@ -14,7 +14,7 @@ import {
   resolveTableAtPosition,
 } from "@/lib/monaco-sql-providers";
 import { resolveConnection, SchemaTable } from "@/lib/sql-schema";
-import { WebAsset } from "@/lib/types";
+import { SqlParseContextDiagnostic, WebAsset } from "@/lib/types";
 import { useAtomValue, useSetAtom } from "jotai";
 
 import { workspaceAtom } from "@/lib/atoms/domains/workspace";
@@ -86,6 +86,197 @@ function schemaNameFromAssetName(name?: string | null) {
   }
 
   return parts[parts.length - 2] ?? null;
+}
+
+type UnresolvedColumnSuggestion = {
+  diagnostic: SqlParseContextDiagnostic;
+  unknownColumn: string;
+  replacementColumn: string;
+  availableColumns: string[];
+  tableIdentifier: string | null;
+  range: MonacoNS.IRange;
+};
+
+type ColumnSuggestionContext = {
+  columns: string[];
+  tableIdentifier: string | null;
+};
+
+type ParseContextLike = {
+  tables?: Array<{ name: string; alias?: string; resolved_name?: string; columns?: Record<string, string> }>;
+} | null | undefined;
+
+function normalizeIdentifierPart(value: string) {
+  return value.trim().replace(/^[`"']+|[`"']+$/g, "");
+}
+
+function extractUnresolvedColumnName(message: string) {
+  const match = message.match(/unresolved\s+column\s*:\s*((?:[`"']?[\w$]+[`"']?\.)?[`"']?[\w$]+[`"']?)/i);
+  const identifier = match ? normalizeIdentifierPart(match[1]) : null;
+  return identifier?.split(".").at(-1) ?? null;
+}
+
+function formatUnresolvedColumnMessage(unknownColumn: string, replacementColumn: string) {
+  return `Unresolved column '${unknownColumn}'. Did you mean '${replacementColumn}'?`;
+}
+
+function levenshteinDistance(left: string, right: string) {
+  const rows = left.length + 1;
+  const columns = right.length + 1;
+  const matrix = Array.from({ length: rows }, () => new Array<number>(columns).fill(0));
+
+  for (let row = 0; row < rows; row += 1) {
+    matrix[row][0] = row;
+  }
+  for (let column = 0; column < columns; column += 1) {
+    matrix[0][column] = column;
+  }
+
+  for (let row = 1; row < rows; row += 1) {
+    for (let column = 1; column < columns; column += 1) {
+      const cost = left[row - 1] === right[column - 1] ? 0 : 1;
+      matrix[row][column] = Math.min(
+        matrix[row - 1][column] + 1,
+        matrix[row][column - 1] + 1,
+        matrix[row - 1][column - 1] + cost,
+      );
+    }
+  }
+
+  return matrix[left.length][right.length];
+}
+
+function findSimilarColumn(unknownColumn: string, columns: string[]) {
+  const normalizedUnknown = unknownColumn.toLowerCase();
+  const maxDistance = Math.max(2, Math.floor(normalizedUnknown.length / 3));
+
+  let best: { column: string; distance: number } | null = null;
+  for (const column of columns) {
+    const distance = levenshteinDistance(normalizedUnknown, column.toLowerCase());
+    if (distance > maxDistance) {
+      continue;
+    }
+    if (!best || distance < best.distance || (distance === best.distance && column.length < best.column.length)) {
+      best = { column, distance };
+    }
+  }
+
+  return best?.column ?? null;
+}
+
+function buildAliasColumnMap(parseContext: ParseContextLike, tables: SchemaTable[]) {
+  const aliasColumns = new Map<string, ColumnSuggestionContext>();
+  for (const tableEntry of parseContext?.tables ?? []) {
+    const tableName = tableEntry.resolved_name ?? tableEntry.name;
+    const table = tables.find(
+      (candidate) =>
+        candidate.name.toLowerCase() === tableName.toLowerCase() ||
+        candidate.shortName.toLowerCase() === tableName.toLowerCase(),
+    );
+    const columns = table?.columns.length
+      ? table.columns.map((column) => column.name)
+      : Object.keys(tableEntry.columns ?? {});
+    if (columns.length === 0) {
+      continue;
+    }
+
+    const tableIdentifier = table?.shortName ?? tableEntry.resolved_name ?? tableEntry.name;
+    const context = { columns, tableIdentifier };
+    aliasColumns.set(tableEntry.name.toLowerCase(), context);
+    if (table) {
+      aliasColumns.set(table.name.toLowerCase(), context);
+      aliasColumns.set(table.shortName.toLowerCase(), context);
+    }
+    if (tableEntry.alias) {
+      aliasColumns.set(tableEntry.alias.toLowerCase(), context);
+    }
+  }
+
+  return aliasColumns;
+}
+
+function columnContextForDiagnostic(
+  model: MonacoNS.editor.ITextModel,
+  diagnostic: SqlParseContextDiagnostic,
+  parseContext: ParseContextLike,
+  tables: SchemaTable[],
+): ColumnSuggestionContext {
+  const range = diagnostic.range;
+  if (!range) {
+    return { columns: [], tableIdentifier: null };
+  }
+
+  const aliasColumnMap = buildAliasColumnMap(parseContext, tables);
+  const linePrefix = model.getValueInRange({
+    startLineNumber: range.line,
+    startColumn: 1,
+    endLineNumber: range.line,
+    endColumn: range.col,
+  });
+  const qualifier = linePrefix.match(/([`"']?[\w$]+[`"']?)\.\s*$/)?.[1];
+  if (qualifier) {
+    return aliasColumnMap.get(normalizeIdentifierPart(qualifier).toLowerCase()) ?? { columns: [], tableIdentifier: null };
+  }
+
+  return {
+    columns: Array.from(new Set(tables.flatMap((table) => table.columns.map((column) => column.name)))),
+    tableIdentifier: null,
+  };
+}
+
+function buildUnresolvedColumnSuggestions(
+  model: MonacoNS.editor.ITextModel,
+  diagnostics: SqlParseContextDiagnostic[],
+  parseContext: ParseContextLike,
+  tables: SchemaTable[],
+): UnresolvedColumnSuggestion[] {
+  return diagnostics.flatMap((diagnostic) => {
+    if (!diagnostic.range) {
+      return [];
+    }
+
+    const unknownColumn = extractUnresolvedColumnName(diagnostic.message);
+    if (!unknownColumn) {
+      return [];
+    }
+
+    const columnContext = columnContextForDiagnostic(model, diagnostic, parseContext, tables);
+    const replacementColumn = findSimilarColumn(unknownColumn, columnContext.columns);
+    if (!replacementColumn) {
+      return [];
+    }
+
+    return [{
+      diagnostic,
+      unknownColumn,
+      replacementColumn,
+      availableColumns: columnContext.columns,
+      tableIdentifier: columnContext.tableIdentifier,
+      range: {
+        startLineNumber: diagnostic.range.line,
+        startColumn: diagnostic.range.col,
+        endLineNumber: diagnostic.range.end_line,
+        endColumn: diagnostic.range.end_col,
+      },
+    }];
+  });
+}
+
+function positionInRange(position: MonacoNS.Position, range: MonacoNS.IRange) {
+  if (position.lineNumber < range.startLineNumber || position.lineNumber > range.endLineNumber) {
+    return false;
+  }
+  if (position.lineNumber === range.startLineNumber && position.column < range.startColumn) {
+    return false;
+  }
+  if (position.lineNumber === range.endLineNumber && position.column > range.endColumn) {
+    return false;
+  }
+  return true;
+}
+
+function formatAvailableColumnsMarkdown(columns: string[]) {
+  return `(${columns.slice(0,5).map((column) => `\`${column}\``).join(", ")}${columns.length > 5 ? '...' : ''})`;
 }
 
 function remoteTablesForConnection(
@@ -431,21 +622,39 @@ export function useSQLIntellisense(
       return;
     }
 
+    const unresolvedColumnSuggestions = buildUnresolvedColumnSuggestions(
+      model,
+      parseContext?.diagnostics ?? [],
+      parseContext,
+      tables,
+    );
+
     const diagnostics = (parseContext?.diagnostics ?? [])
       .filter((diagnostic) => diagnostic.range)
-      .map((diagnostic) => ({
+      .map((diagnostic) => {
+        const unresolvedColumnSuggestion = unresolvedColumnSuggestions.find(
+          (suggestion) => suggestion.diagnostic === diagnostic,
+        );
+
+        return {
         severity:
           diagnostic.severity === "warning"
             ? monaco.MarkerSeverity.Warning
             : diagnostic.severity === "info"
               ? monaco.MarkerSeverity.Info
               : monaco.MarkerSeverity.Error,
-        message: diagnostic.message,
+        message: unresolvedColumnSuggestion
+          ? formatUnresolvedColumnMessage(
+              unresolvedColumnSuggestion.unknownColumn,
+              unresolvedColumnSuggestion.replacementColumn,
+            )
+          : diagnostic.message,
         startLineNumber: diagnostic.range!.line,
         startColumn: diagnostic.range!.col,
         endLineNumber: diagnostic.range!.end_line,
         endColumn: diagnostic.range!.end_col,
-      }));
+        };
+      });
 
     const inspectDiagnostics = buildInspectDiagnosticMarker(
       model,
@@ -460,5 +669,106 @@ export function useSQLIntellisense(
     return () => {
       monaco.editor.setModelMarkers(model, "bruin-sql-parse-context", []);
     };
-  }, [editor, inspectDiagnosticSnapshot, monaco, parseContextKey]);
+  }, [editor, inspectDiagnosticSnapshot, monaco, parseContextKey, tables]);
+
+  useEffect(() => {
+    if (!editor || !monaco) {
+      return;
+    }
+
+    const model = editor.getModel();
+    if (!model) {
+      return;
+    }
+
+    const disposable = monaco.languages.registerCodeActionProvider("sql", {
+      provideCodeActions: (_model, _range, context) => {
+        if (_model.uri.toString() !== model.uri.toString()) {
+          return { actions: [], dispose: () => undefined };
+        }
+
+        const suggestions = buildUnresolvedColumnSuggestions(
+          model,
+          parseContext?.diagnostics ?? [],
+          parseContext,
+          tables,
+        );
+
+        const actions = suggestions
+          .filter((suggestion) =>
+            context.markers.some(
+              (marker) =>
+                marker.startLineNumber === suggestion.range.startLineNumber &&
+                marker.startColumn === suggestion.range.startColumn &&
+                marker.endLineNumber === suggestion.range.endLineNumber &&
+                marker.endColumn === suggestion.range.endColumn,
+            ),
+          )
+          .map((suggestion) => ({
+            title: `Change '${suggestion.unknownColumn}' to '${suggestion.replacementColumn}'`,
+            kind: "quickfix",
+            diagnostics: context.markers,
+            edit: {
+              edits: [
+                {
+                  resource: model.uri,
+                  versionId: model.getVersionId(),
+                  textEdit: {
+                    range: suggestion.range,
+                    text: suggestion.replacementColumn,
+                  },
+                },
+              ],
+            },
+            isPreferred: true,
+          }));
+
+        return { actions, dispose: () => undefined };
+      },
+    });
+
+    return () => disposable.dispose();
+  }, [editor, monaco, parseContextKey, tables]);
+
+  useEffect(() => {
+    if (!editor || !monaco) {
+      return;
+    }
+
+    const model = editor.getModel();
+    if (!model) {
+      return;
+    }
+
+    const disposable = monaco.languages.registerHoverProvider("sql", {
+      provideHover: (_model, position) => {
+        if (_model.uri.toString() !== model.uri.toString()) {
+          return null;
+        }
+
+        const suggestion = buildUnresolvedColumnSuggestions(
+          model,
+          parseContext?.diagnostics ?? [],
+          parseContext,
+          tables,
+        ).find((candidate) => positionInRange(position, candidate.range));
+
+        if (!suggestion) {
+          return null;
+        }
+
+        return {
+          range: suggestion.range,
+          contents: [
+            { value: `**Unresolved column** \`${suggestion.unknownColumn}\`` },
+            {
+              value: `Did you mean \`${suggestion.replacementColumn}\``,
+            },
+          ],
+        };
+      },
+    });
+
+    return () => disposable.dispose();
+  }, [editor, monaco, parseContextKey, tables]);
 }

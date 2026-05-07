@@ -5,6 +5,7 @@ import {
   normalizeInspectResponse,
 } from "@/lib/api-core";
 import { streamMaterialization } from "@/lib/api-streams";
+import { MaterializeScope } from "@/lib/materialize-scope";
 import { AssetInspectResponse } from "@/lib/types";
 
 export async function inspectAsset(
@@ -32,11 +33,12 @@ export async function materializeAssetStream(
     onChunk?: (chunk: string) => void;
     onDone?: (payload: MaterializeStreamPayload) => void;
   },
-  options?: { environment?: string }
+  options?: { environment?: string; scope?: MaterializeScope }
 ) {
   return streamMaterialization(
     `/api/assets/${assetId}/materialize/stream${buildQueryString({
       environment: options?.environment,
+      scope: options?.scope,
     })}`,
     handlers,
     "Asset materialization stream ended unexpectedly."

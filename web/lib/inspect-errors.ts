@@ -74,3 +74,30 @@ export function normalizeInspectErrorMessage(value: string | undefined): string 
 
   return remainder;
 }
+
+export function extractMissingReferencedObjects(value: string | undefined): string[] {
+  const trimmed = (value ?? "").trim();
+  if (!trimmed) {
+    return [];
+  }
+
+  const patterns = [
+    /table with name ([a-zA-Z0-9_.\"]+) does not exist/gi,
+    /relation ([a-zA-Z0-9_.\"]+) does not exist/gi,
+    /no such table:?\s*([a-zA-Z0-9_.\"]+)/gi,
+    /object ([a-zA-Z0-9_.\"]+) does not exist/gi,
+  ];
+  const result = new Set<string>();
+
+  for (const pattern of patterns) {
+    let match: RegExpExecArray | null;
+    do {
+      match = pattern.exec(trimmed);
+      if (match?.[1]) {
+        result.add(match[1].replaceAll('"', "").trim().toLowerCase());
+      }
+    } while (match);
+  }
+
+  return [...result];
+}

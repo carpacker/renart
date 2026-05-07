@@ -6,10 +6,10 @@ import (
 	"net/http"
 	"strings"
 
-	webapi "renart/internal/web/api"
-	"renart/internal/web/service"
 	"github.com/bruin-data/bruin/pkg/config"
 	"github.com/go-chi/chi/v5"
+	webapi "renart/internal/web/api"
+	"renart/internal/web/service"
 )
 
 type ConfigChangePublisher interface {
@@ -59,10 +59,10 @@ type DeleteWorkspaceConnectionRequest struct {
 }
 
 type TestWorkspaceConnectionRequest struct {
-	EnvironmentName string `json:"environment_name"`
-	CurrentName     string `json:"current_name,omitempty"`
-	Name            string `json:"name"`
-	Type            string `json:"type,omitempty"`
+	EnvironmentName string         `json:"environment_name"`
+	CurrentName     string         `json:"current_name,omitempty"`
+	Name            string         `json:"name"`
+	Type            string         `json:"type,omitempty"`
 	Values          map[string]any `json:"values,omitempty"`
 }
 

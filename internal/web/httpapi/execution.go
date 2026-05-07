@@ -13,15 +13,18 @@ import (
 )
 
 type InspectExecutionResult struct {
-	Status     string
-	Columns    []string
-	Rows       []map[string]any
-	RawOutput  string
-	Operation  webmodel.OperationMetadata
-	Error      string
-	Attempts   int
-	Retryable  bool
-	HTTPStatus int
+	Status                              string
+	Columns                             []string
+	Rows                                []map[string]any
+	RawOutput                           string
+	Operation                           webmodel.OperationMetadata
+	Error                               string
+	MissingUpstreamAssetIDs             []string
+	MissingUpstreamAssetNames           []string
+	MissingUpstreamAssetsMaterializable bool
+	Attempts                            int
+	Retryable                           bool
+	HTTPStatus                          int
 }
 
 type MaterializeExecutionEvent struct {
@@ -36,7 +39,7 @@ type MaterializeExecutionEvent struct {
 
 type ExecutionHandlers interface {
 	InspectAsset(ctx context.Context, assetID, limit, environment string) InspectExecutionResult
-	MaterializeAssetStream(ctx context.Context, assetID, environment string, onChunk func([]byte)) MaterializeExecutionEvent
+	MaterializeAssetStream(ctx context.Context, assetID, environment, scope string, onChunk func([]byte)) MaterializeExecutionEvent
 }
 
 type ExecutionAPI struct {
@@ -58,20 +61,24 @@ func (h *ExecutionAPI) HandleInspectAsset(w http.ResponseWriter, r *http.Request
 
 	result := h.Service.InspectAsset(r.Context(), assetID, limit, environment)
 	webapi.WriteJSON(w, result.HTTPStatus, map[string]any{
-		"status":     result.Status,
-		"columns":    result.Columns,
-		"rows":       result.Rows,
-		"raw_output": result.RawOutput,
-		"operation":  result.Operation,
-		"error":      result.Error,
-		"attempts":   result.Attempts,
-		"retryable":  result.Retryable,
+		"status":                                 result.Status,
+		"columns":                                result.Columns,
+		"rows":                                   result.Rows,
+		"raw_output":                             result.RawOutput,
+		"operation":                              result.Operation,
+		"error":                                  result.Error,
+		"missing_upstream_asset_ids":             result.MissingUpstreamAssetIDs,
+		"missing_upstream_asset_names":           result.MissingUpstreamAssetNames,
+		"missing_upstream_assets_materializable": result.MissingUpstreamAssetsMaterializable,
+		"attempts":                               result.Attempts,
+		"retryable":                              result.Retryable,
 	})
 }
 
 func (h *ExecutionAPI) HandleMaterializeAssetStream(w http.ResponseWriter, r *http.Request) {
 	assetID := chi.URLParam(r, "assetID")
 	environment := r.URL.Query().Get("environment")
+	scope := r.URL.Query().Get("scope")
 	flusher, ok := w.(http.Flusher)
 	if !ok {
 		webapi.WriteInternalError(w, "streaming_unsupported", "streaming unsupported")
@@ -84,7 +91,7 @@ func (h *ExecutionAPI) HandleMaterializeAssetStream(w http.ResponseWriter, r *ht
 	w.Header().Set("X-Accel-Buffering", "no")
 
 	_ = WriteSSEJSON(w, flusher, "start", map[string]any{"operation": webmodel.OperationMetadata{Type: "run", AssetPath: assetID, Target: assetID}})
-	result := h.Service.MaterializeAssetStream(r.Context(), assetID, environment, func(chunk []byte) {
+	result := h.Service.MaterializeAssetStream(r.Context(), assetID, environment, scope, func(chunk []byte) {
 		_ = WriteSSEJSON(w, flusher, "output", map[string]any{"chunk": string(chunk)})
 	})
 	_ = WriteSSEJSON(w, flusher, "done", map[string]any{

@@ -11,7 +11,7 @@ type Params = {
   selectedType: string;
   connectionName: string;
   defaultEnvironment: string;
-  draftValues: Record<string, string | number | boolean>;
+  draftValues: Record<string, string | number | boolean | string[]>;
   importForm: OnboardingImportFormState & {
     pipelineName: string;
     disableColumns: boolean;
@@ -22,7 +22,7 @@ type Params = {
   setDiscoveryBusy: (value: boolean) => void;
   setDiscoveryError: (value: string | null) => void;
   setDiscoveryState: (value: OnboardingDiscoveryResponse) => void;
-  setDraftValues: (value: Record<string, string | number | boolean>) => void;
+  setDraftValues: (value: Record<string, string | number | boolean | string[]>) => void;
   setImportForm: (value: { database: string; pipelineName: string; schema: string; pattern: string; disableColumns: boolean } | ((current: { database: string; pipelineName: string; schema: string; pattern: string; disableColumns: boolean }) => { database: string; pipelineName: string; schema: string; pattern: string; disableColumns: boolean })) => void;
   setSelectedTables: (value: string[]) => void;
   setStep: (value: "start" | "connection-type" | "connection-config" | "import" | "quickstart" | "success") => void;
@@ -87,7 +87,7 @@ export function useOnboardingDiscovery({
   }, [defaultEnvironment, discoveryBusy, discoveryState.databases.length, draftValues, importForm.database, selectedTables.length, selectedType, setDiscoveryBusy, setDiscoveryError, setDiscoveryState, setSelectedTables, step]);
 
   const runDiscovery = useCallback(
-    async (values: Record<string, string | number | boolean>, database?: string) => {
+    async (values: Record<string, string | number | boolean | string[]>, database?: string) => {
       setDiscoveryBusy(true);
       setDiscoveryError(null);
       try {

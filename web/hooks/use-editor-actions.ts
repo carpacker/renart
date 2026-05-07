@@ -7,6 +7,7 @@ import { fillAssetColumnsFromDB } from "@/lib/api";
 import { editorDraftAtom } from "@/lib/atoms/domains/editor";
 import { enrichedSelectedAssetAtom } from "@/lib/atoms/domains/results";
 import { pipelineAtom } from "@/lib/atoms/domains/workspace";
+import { MaterializeScope } from "@/lib/materialize-scope";
 import { VISUALIZATION_META_KEYS } from "@/lib/visualization-meta";
 
 type UseEditorActionsInput = {
@@ -39,6 +40,7 @@ type UseEditorActionsInput = {
   runInspectForAsset: (assetId: string, contentSnapshot?: string) => Promise<unknown>;
   runMaterializeForAsset: (
     assetId: string,
+    scope?: MaterializeScope,
     refresh?: () => Promise<void> | void
   ) => Promise<unknown>;
   refreshPipelineMaterialization: (pipelineId: string) => Promise<void>;
@@ -187,12 +189,12 @@ export function useEditorActions({
     runDeleteAsset,
   ]);
 
-  const handleMaterializeSelectedAsset = useCallback(() => {
+  const handleMaterializeSelectedAsset = useCallback((scope: MaterializeScope = "asset") => {
     if (!asset) {
       return;
     }
 
-    void runMaterializeForAsset(asset.id, async () => {
+    void runMaterializeForAsset(asset.id, scope, async () => {
       if (pipelineId) {
         await refreshPipelineMaterialization(pipelineId).catch(() => undefined);
       }

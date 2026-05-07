@@ -17,7 +17,8 @@ import {
 } from "@/lib/atoms/domains/workspace";
 import { useAssetInspect } from "@/hooks/use-asset-inspect";
 import { materializeAssetStream, materializePipelineStream } from "@/lib/api";
-import { AssetInspectResponse } from "@/lib/types";
+import { MaterializeScope, labelForMaterializeScope } from "@/lib/materialize-scope";
+import { AssetInspectResponse, WebAsset } from "@/lib/types";
 
 let nextMaterializeHistoryId = 0;
 
@@ -56,6 +57,61 @@ function createMaterializeEntry(input: {
     createdAt: input.createdAt,
     updatedAt: input.updatedAt ?? input.createdAt,
   };
+}
+
+function resolveScopedMaterializingAssetIds(
+  assets: WebAsset[],
+  assetId: string,
+  scope: MaterializeScope
+) {
+  const selected = assets.find((candidate) => candidate.id === assetId) ?? null;
+  if (!selected || scope === "asset") {
+    return [assetId];
+  }
+
+  const assetByName = new Map(assets.map((candidate) => [candidate.name, candidate]));
+  const downstreamByName = new Map<string, WebAsset[]>();
+  for (const candidate of assets) {
+    for (const upstreamName of candidate.upstreams ?? []) {
+      const downstream = downstreamByName.get(upstreamName) ?? [];
+      downstream.push(candidate);
+      downstreamByName.set(upstreamName, downstream);
+    }
+  }
+
+  const selectedNames = new Set<string>();
+  const queue = [selected.name];
+  while (queue.length > 0) {
+    const name = queue.shift();
+    if (!name || selectedNames.has(name)) {
+      continue;
+    }
+    selectedNames.add(name);
+
+    const current = assetByName.get(name);
+    if (!current) {
+      continue;
+    }
+
+    if (scope === "asset_with_upstreams" || scope === "asset_with_upstreams_and_downstreams") {
+      for (const upstreamName of current.upstreams ?? []) {
+        if (assetByName.has(upstreamName)) {
+          queue.push(upstreamName);
+        }
+      }
+    }
+
+    if (scope === "asset_with_downstreams" || scope === "asset_with_upstreams_and_downstreams") {
+      for (const downstream of downstreamByName.get(name) ?? []) {
+        queue.push(downstream.name);
+      }
+    }
+  }
+
+  const ids = assets
+    .filter((candidate) => selectedNames.has(candidate.name))
+    .map((candidate) => candidate.id);
+  return ids.length > 0 ? ids : [assetId];
 }
 
 export function useAssetResults() {
@@ -197,18 +253,27 @@ export function useAssetResults() {
 
   const runMaterializeForAsset = useCallback(async (
     assetId: string,
+    scope: MaterializeScope = "asset",
     refresh?: () => Promise<void> | void
   ) => {
     const entryId = createMaterializeHistoryId();
     const startedAt = Date.now();
+    const materializeLabel = asset?.name
+      ? `${labelForMaterializeScope(scope)}: ${asset.name}`
+      : labelForMaterializeScope(scope);
+    const scopedMaterializingIds = resolveScopedMaterializingAssetIds(
+      pipeline?.assets ?? [],
+      assetId,
+      scope
+    );
 
     setAssetMaterializeLoading(true);
-    setMaterializingAssetIds((previous: Set<string>) => new Set([...previous, assetId]));
+    setMaterializingAssetIds((previous: Set<string>) => new Set([...previous, ...scopedMaterializingIds]));
     upsertMaterializeEntry(entryId, () => ({
       ...createMaterializeEntry({
         id: entryId,
         kind: "asset",
-        label: asset?.name ? `Asset: ${asset.name}` : "Asset materialize",
+        label: materializeLabel,
         assetId,
         assetName: asset?.name ?? null,
         pipelineId: pipelineId ?? null,
@@ -226,7 +291,7 @@ export function useAssetResults() {
               createMaterializeEntry({
                 id: entryId,
                 kind: "asset",
-                label: asset?.name ? `Asset: ${asset.name}` : "Asset materialize",
+                label: materializeLabel,
                 assetId,
                 assetName: asset?.name ?? null,
                 pipelineId: pipelineId ?? null,
@@ -239,13 +304,13 @@ export function useAssetResults() {
             updatedAt: Date.now(),
           }));
         },
-      }, { environment: selectedEnvironment });
+        }, { environment: selectedEnvironment, scope });
       upsertMaterializeEntry(entryId, (previous) => ({
         ...(previous ??
           createMaterializeEntry({
             id: entryId,
             kind: "asset",
-            label: asset?.name ? `Asset: ${asset.name}` : "Asset materialize",
+            label: materializeLabel,
             assetId,
             assetName: asset?.name ?? null,
             pipelineId: pipelineId ?? null,
@@ -280,7 +345,7 @@ export function useAssetResults() {
           createMaterializeEntry({
             id: entryId,
             kind: "asset",
-            label: asset?.name ? `Asset: ${asset.name}` : "Asset materialize",
+            label: materializeLabel,
             assetId,
             assetName: asset?.name ?? null,
             pipelineId: pipelineId ?? null,
@@ -302,14 +367,16 @@ export function useAssetResults() {
       setAssetMaterializeLoading(false);
       setMaterializingAssetIds((previous: Set<string>) => {
         const next = new Set(previous);
-        next.delete(assetId);
+        for (const id of scopedMaterializingIds) {
+          next.delete(id);
+        }
         return next;
       });
       if (refresh) {
         await refresh();
       }
     }
-  }, [asset?.name, pipeline?.name, pipelineId, selectedEnvironment, setChangedAssetIds, setResultTab]);
+  }, [asset?.name, pipeline, pipelineId, selectedEnvironment, setChangedAssetIds, setResultTab]);
 
   const runMaterializePipeline = useCallback(async (
     pipelineId: string,
@@ -317,9 +384,10 @@ export function useAssetResults() {
   ) => {
     const entryId = createMaterializeHistoryId();
     const startedAt = Date.now();
+    const pipelineMaterializingIds = pipeline?.assets.map((current) => current.id) ?? [];
 
     setPipelineMaterializeLoading(true);
-    setMaterializingAssetIds(new Set(pipeline?.assets.map((current) => current.id) ?? []));
+    setMaterializingAssetIds((previous: Set<string>) => new Set([...previous, ...pipelineMaterializingIds]));
     upsertMaterializeEntry(entryId, () => ({
       ...createMaterializeEntry({
         id: entryId,
@@ -409,12 +477,18 @@ export function useAssetResults() {
       return null;
     } finally {
       setPipelineMaterializeLoading(false);
-      setMaterializingAssetIds(new Set());
+      setMaterializingAssetIds((previous: Set<string>) => {
+        const next = new Set(previous);
+        for (const id of pipelineMaterializingIds) {
+          next.delete(id);
+        }
+        return next;
+      });
       if (refresh) {
         await refresh();
       }
     }
-  }, [pipeline?.name, selectedEnvironment, setChangedAssetIds]);
+  }, [pipeline, selectedEnvironment, setChangedAssetIds]);
 
   const setMaterializeBatchResult = (
     output: string,

@@ -841,8 +841,8 @@ func (s *webServer) InspectAsset(ctx context.Context, assetID, limit, environmen
 	return executionInspectResult(s.executionSvc.InspectAsset(ctx, assetID, limit, environment))
 }
 
-func (s *webServer) MaterializeAssetStream(ctx context.Context, assetID, environment string, onChunk func([]byte)) executionMaterializeEvent {
-	return executionMaterializeEvent(s.executionSvc.MaterializeAssetStream(ctx, assetID, environment, onChunk))
+func (s *webServer) MaterializeAssetStream(ctx context.Context, assetID, environment, scope string, onChunk func([]byte)) executionMaterializeEvent {
+	return executionMaterializeEvent(s.executionSvc.MaterializeAssetStream(ctx, assetID, environment, scope, onChunk))
 }
 
 func (s *webServer) GetPipelineMaterialization(ctx context.Context, pipelineID, environment string) (webhttpapi.PipelineMaterializationResponse, *apiError) {

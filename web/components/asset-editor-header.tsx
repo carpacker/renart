@@ -1,10 +1,31 @@
 "use client";
 
 import { CSSProperties, KeyboardEvent, useEffect, useState } from "react";
-import { Check, Eye, Hammer, Pencil, Trash2 } from "lucide-react";
+import {
+  ArrowDownFromLine,
+  ArrowDownToLine,
+  ArrowDownWideNarrow,
+  Check,
+  ChevronDown,
+  Eye,
+  Hammer,
+  Pencil,
+  Trash2,
+} from "lucide-react";
 
 import { Button } from "@/components/ui/button";
+import { ButtonGroup } from "@/components/ui/button-group";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuGroup,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
+import { MaterializeScope } from "@/lib/materialize-scope";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 
 type AssetEditorHeaderProps = {
@@ -19,7 +40,7 @@ type AssetEditorHeaderProps = {
   inspectLoading: boolean;
   deleteLoading: boolean;
   onRenameAsset: (assetName: string) => Promise<boolean> | boolean;
-  onMaterialize: () => void;
+  onMaterialize: (scope?: MaterializeScope) => void;
   onInspect: () => void;
   onDelete: () => void;
 };
@@ -132,16 +153,55 @@ export function AssetEditorHeader({
         }`}
         style={helpMode && actionHighlighted ? highlightStyle : undefined}
       >
-        <Button
-          size="sm"
-          variant="outline"
-          disabled={!hasAsset || materializeLoading}
-          onClick={onMaterialize}
-          type="button"
-        >
-          <Hammer className="mr-1 inline size-3" />
-          {materializeLoading ? "Running..." : "Materialize"}
-        </Button>
+        <ButtonGroup>
+          <Button
+            size="sm"
+            variant="outline"
+            disabled={!hasAsset || materializeLoading}
+            onClick={() => onMaterialize("asset")}
+            type="button"
+          >
+            <Hammer className="mr-1 inline size-3" />
+            {materializeLoading ? "Running..." : "Materialize"}
+          </Button>
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button
+                size="icon-sm"
+                variant="outline"
+                disabled={!hasAsset || materializeLoading}
+                type="button"
+                aria-label="Materialize options"
+              >
+                <ChevronDown className="size-3.5" />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="w-44">
+              <DropdownMenuGroup>
+                <DropdownMenuLabel>Materialize</DropdownMenuLabel>
+                <DropdownMenuItem onClick={() => onMaterialize("asset")}>
+                  <Hammer className="size-4" />
+                  Asset only
+                </DropdownMenuItem>
+              </DropdownMenuGroup>
+              <DropdownMenuSeparator />
+              <DropdownMenuGroup>
+                <DropdownMenuItem onClick={() => onMaterialize("asset_with_upstreams")}>
+                <ArrowDownToLine className="size-4" />
+                With upstream
+                </DropdownMenuItem>
+                <DropdownMenuItem onClick={() => onMaterialize("asset_with_downstreams")}>
+                <ArrowDownFromLine className="size-4" />
+                  With downstream
+                </DropdownMenuItem>
+                <DropdownMenuItem onClick={() => onMaterialize("asset_with_upstreams_and_downstreams")}>
+                <ArrowDownWideNarrow className="size-4" />
+                  With both
+                </DropdownMenuItem>
+              </DropdownMenuGroup>
+            </DropdownMenuContent>
+          </DropdownMenu>
+        </ButtonGroup>
         <TooltipProvider>
           <Tooltip>
             <TooltipTrigger asChild>

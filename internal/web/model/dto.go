@@ -224,17 +224,19 @@ type RunRequest struct {
 
 // OperationMetadata describes the typed backend operation behind a response.
 type OperationMetadata struct {
-	Type           string `json:"type"`
-	Target         string `json:"target,omitempty"`
-	PipelineID     string `json:"pipeline_id,omitempty"`
-	AssetPath      string `json:"asset_path,omitempty"`
-	ConnectionName string `json:"connection_name,omitempty"`
-	Query          string `json:"query,omitempty"`
-	Limit          string `json:"limit,omitempty"`
-	Environment    string `json:"environment,omitempty"`
-	Operation      string `json:"operation,omitempty"`
-	TargetPath     string `json:"target_path,omitempty"`
-	ConfigFile     string `json:"config_file,omitempty"`
+	Type           string   `json:"type"`
+	Target         string   `json:"target,omitempty"`
+	PipelineID     string   `json:"pipeline_id,omitempty"`
+	AssetPath      string   `json:"asset_path,omitempty"`
+	RunScope       string   `json:"run_scope,omitempty"`
+	AssetPaths     []string `json:"asset_paths,omitempty"`
+	ConnectionName string   `json:"connection_name,omitempty"`
+	Query          string   `json:"query,omitempty"`
+	Limit          string   `json:"limit,omitempty"`
+	Environment    string   `json:"environment,omitempty"`
+	Operation      string   `json:"operation,omitempty"`
+	TargetPath     string   `json:"target_path,omitempty"`
+	ConfigFile     string   `json:"config_file,omitempty"`
 }
 
 // CommandResult represents the result of a command execution.
@@ -250,14 +252,17 @@ type CommandResult struct {
 
 // InspectResult represents the result of an asset inspection.
 type InspectResult struct {
-	Status    string            `json:"status"`
-	Columns   []string          `json:"columns"`
-	Rows      []map[string]any  `json:"rows"`
-	RawOutput string            `json:"raw_output"`
-	Operation OperationMetadata `json:"operation"`
-	Error     string            `json:"error,omitempty"`
-	Attempts  int               `json:"attempts,omitempty"`
-	Retryable bool              `json:"retryable,omitempty"`
+	Status                              string            `json:"status"`
+	Columns                             []string          `json:"columns"`
+	Rows                                []map[string]any  `json:"rows"`
+	RawOutput                           string            `json:"raw_output"`
+	Operation                           OperationMetadata `json:"operation"`
+	Error                               string            `json:"error,omitempty"`
+	MissingUpstreamAssetIDs             []string          `json:"missing_upstream_asset_ids,omitempty"`
+	MissingUpstreamAssetNames           []string          `json:"missing_upstream_asset_names,omitempty"`
+	MissingUpstreamAssetsMaterializable bool              `json:"missing_upstream_assets_materializable,omitempty"`
+	Attempts                            int               `json:"attempts,omitempty"`
+	Retryable                           bool              `json:"retryable,omitempty"`
 }
 
 // InferColumnsResult represents the result of column inference.

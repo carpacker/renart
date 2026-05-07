@@ -14,6 +14,13 @@ func runOperation(target, pipelineID, assetPath, environment string) webmodel.Op
 	}
 }
 
+func scopedRunOperation(target, pipelineID, assetPath, environment, runScope string, assetPaths []string) webmodel.OperationMetadata {
+	operation := runOperation(target, pipelineID, assetPath, environment)
+	operation.RunScope = runScope
+	operation.AssetPaths = append([]string(nil), assetPaths...)
+	return operation
+}
+
 func queryAssetOperation(assetPath, limit, environment, configFile string) webmodel.OperationMetadata {
 	return webmodel.OperationMetadata{
 		Type:        "query_asset",

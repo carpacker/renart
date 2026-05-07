@@ -1,0 +1,33 @@
+---
+title: Installation
+description: Install Renart.
+---
+
+Install Renart with:
+
+```bash
+curl -LsSf getrenart.com/install.sh | sh
+```
+
+The installer downloads the matching release binary from GitHub Releases and places it in your local bin directory.
+
+The repository keeps the checked-in installer generated from:
+
+```bash
+PATH="$HOME/go/bin:$PATH" binst init --source=goreleaser --file=.goreleaser.yaml -o .config/binstaller.yml
+PATH="$HOME/go/bin:$PATH" binst gen --config=.config/binstaller.yml -o install.sh
+```
+
+## Current local setup
+
+If you are working from the repository directly, you can still run Renart with:
+
+```bash
+go run . web
+```
+
+## Important
+
+Start Renart inside a Git repository.
+
+Renart is designed around Git-backed project workspaces, and some workspace flows expect that repository context to exist.

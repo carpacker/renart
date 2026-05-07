@@ -21,7 +21,7 @@ type ConnectionFormState = {
   environmentName: string;
   name: string;
   type: string;
-  values: Record<string, string | number | boolean>;
+  values: Record<string, string | number | boolean | string[]>;
 };
 
 export function useWorkspaceConnectionForm({

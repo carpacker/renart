@@ -59,7 +59,7 @@ export const onboardingDiscoveryStateAtom = atom<OnboardingDiscoveryResponse>({
   tables: [],
 });
 export const onboardingSelectedTablesAtom = atom<string[]>([]);
-export const onboardingDraftValuesAtom = atom<Record<string, string | number | boolean>>({});
+export const onboardingDraftValuesAtom = atom<Record<string, string | number | boolean | string[]>>({});
 export const onboardingImportFormAtom = atom<OnboardingImportForm>({
   database: "",
   pipelineName: "analytics",
@@ -110,5 +110,5 @@ function normalizeDraftValues(values?: Record<string, unknown>) {
 
   return Object.fromEntries(
     Object.entries(values).filter(([, value]) => value !== null && value !== undefined)
-  ) as Record<string, string | number | boolean>;
+  ) as Record<string, string | number | boolean | string[]>;
 }

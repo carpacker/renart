@@ -1,6 +1,6 @@
 import { WorkspaceConfigResponse } from "@/lib/types";
 
-export type OnboardingConnectionValues = Record<string, string | number | boolean>;
+export type OnboardingConnectionValues = Record<string, string | number | boolean | string[]>;
 
 export type OnboardingConnectionDraft = {
   environmentName: string;

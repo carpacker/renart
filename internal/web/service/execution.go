@@ -1,10 +1,12 @@
 package service
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"sync"
@@ -18,15 +20,18 @@ import (
 )
 
 type InspectResult struct {
-	Status     string
-	Columns    []string
-	Rows       []map[string]any
-	RawOutput  string
-	Operation  OperationMetadata
-	Error      string
-	Attempts   int
-	Retryable  bool
-	HTTPStatus int
+	Status                              string
+	Columns                             []string
+	Rows                                []map[string]any
+	RawOutput                           string
+	Operation                           OperationMetadata
+	Error                               string
+	MissingUpstreamAssetIDs             []string
+	MissingUpstreamAssetNames           []string
+	MissingUpstreamAssetsMaterializable bool
+	Attempts                            int
+	Retryable                           bool
+	HTTPStatus                          int
 }
 
 type MaterializeResult struct {
@@ -38,6 +43,15 @@ type MaterializeResult struct {
 	ChangedAssetIDs []string
 	MaterializedAt  *time.Time
 }
+
+type MaterializeScope string
+
+const (
+	MaterializeScopeAsset                 MaterializeScope = "asset"
+	MaterializeScopeAssetWithUpstreams    MaterializeScope = "asset_with_upstreams"
+	MaterializeScopeAssetWithDownstreams  MaterializeScope = "asset_with_downstreams"
+	MaterializeScopeAssetWithNeighborhood MaterializeScope = "asset_with_upstreams_and_downstreams"
+)
 
 type DuckDBExecutionInfo struct {
 	ConnectionName string
@@ -158,17 +172,21 @@ func (s *ExecutionService) InspectAsset(ctx context.Context, assetID, limit, env
 
 	if duckDBInfo != nil {
 		mu := s.deps.DuckDBLock(duckDBInfo.LockKey)
-		mu.Lock()
-		err = run()
-		if err != nil && IsDuckDBLockError(err, output) {
-			if readOnlyConfigPath, cleanup, cfgErr := s.buildReadOnlyConfigFile(duckDBInfo); cfgErr == nil {
-				defer cleanup()
-				queryReq.ConfigFile = readOnlyConfigPath
-				operation.ConfigFile = readOnlyConfigPath
-				err = run()
+		if mu != nil {
+			mu.Lock()
+			err = run()
+			if err != nil && IsDuckDBLockError(err, output) {
+				if readOnlyConfigPath, cleanup, cfgErr := s.buildReadOnlyConfigFile(duckDBInfo); cfgErr == nil {
+					defer cleanup()
+					queryReq.ConfigFile = readOnlyConfigPath
+					operation.ConfigFile = readOnlyConfigPath
+					err = run()
+				}
 			}
+			mu.Unlock()
+		} else {
+			err = run()
 		}
-		mu.Unlock()
 	} else {
 		err = run()
 	}
@@ -184,16 +202,24 @@ func (s *ExecutionService) InspectAsset(ctx context.Context, assetID, limit, env
 			statusCode = 409
 			errorMessage = "duckdb database is busy (lock held by another process), please retry"
 		}
+		detectionText := rawOutput
+		if strings.TrimSpace(detectionText) == "" {
+			detectionText = errorMessage
+		}
+		missingUpstreamIDs, missingUpstreamNames := s.findMissingUpstreamAssets(ctx, assetID, detectionText)
 		return InspectResult{
-			Status:     "error",
-			Columns:    []string{},
-			Rows:       []map[string]any{},
-			RawOutput:  rawOutput,
-			Operation:  operation,
-			Error:      errorMessage,
-			Attempts:   attempts,
-			Retryable:  statusCode == 409,
-			HTTPStatus: statusCode,
+			Status:                              "error",
+			Columns:                             []string{},
+			Rows:                                []map[string]any{},
+			RawOutput:                           rawOutput,
+			Operation:                           operation,
+			Error:                               errorMessage,
+			MissingUpstreamAssetIDs:             missingUpstreamIDs,
+			MissingUpstreamAssetNames:           missingUpstreamNames,
+			MissingUpstreamAssetsMaterializable: len(missingUpstreamIDs) > 0,
+			Attempts:                            attempts,
+			Retryable:                           statusCode == 409,
+			HTTPStatus:                          statusCode,
 		}
 	}
 
@@ -345,10 +371,15 @@ func extractInspectRawOutput(output []byte) string {
 	return trimmed
 }
 
-func (s *ExecutionService) MaterializeAssetStream(ctx context.Context, assetID, environment string, onChunk func([]byte)) MaterializeResult {
+func (s *ExecutionService) MaterializeAssetStream(ctx context.Context, assetID, environment, scope string, onChunk func([]byte)) MaterializeResult {
 	relAssetPath, err := DecodeID(assetID)
 	if err != nil {
 		return MaterializeResult{Status: "error", Error: "invalid asset id", ExitCode: 1}
+	}
+
+	normalizedScope, scopeErr := normalizeMaterializeScope(scope)
+	if scopeErr != nil {
+		return MaterializeResult{Status: "error", Error: scopeErr.Error(), ExitCode: 1}
 	}
 
 	duckDBInfo, infoErr := s.findDuckDBExecutionInfoByAsset(ctx, assetID)
@@ -358,10 +389,30 @@ func (s *ExecutionService) MaterializeAssetStream(ctx context.Context, assetID, 
 
 	operation := runOperation(relAssetPath, "", relAssetPath, environment)
 	var output []byte
+	assetIDsToRefresh := []string{assetID}
+	materializedAssetIDs := []string{assetID}
+	assetNamesToRecord := make([]string, 0, 1)
 	run := func() error {
 		var runErr error
-		output, runErr = s.deps.Executor.RunAsset(ctx, RunAssetRequest{AssetPath: relAssetPath, Environment: environment}, onChunk)
+		output, runErr = s.runSingleAssetMaterialization(ctx, relAssetPath, environment, onChunk)
 		return runErr
+	}
+	if normalizedScope != MaterializeScopeAsset {
+		scoped, scopedErr := s.resolveMaterializeAssetScope(ctx, assetID, normalizedScope)
+		if scopedErr != nil {
+			return MaterializeResult{Status: "error", Error: scopedErr.Error(), ExitCode: 1}
+		}
+		operation = scopedRunOperation(relAssetPath, scoped.PipelineID, relAssetPath, environment, string(normalizedScope), scoped.AssetPaths)
+		assetIDsToRefresh = scoped.RefreshAssetIDs
+		materializedAssetIDs = scoped.AssetIDs
+		assetNamesToRecord = scoped.AssetNames
+		run = func() error {
+			var runErr error
+			output, runErr = s.runScopedAssetMaterialization(ctx, scoped.AssetPaths, environment, onChunk)
+			return runErr
+		}
+	} else if assetName := s.deps.ResolveAssetNameByID(assetID); assetName != "" {
+		assetNamesToRecord = append(assetNamesToRecord, assetName)
 	}
 
 	var runErr error
@@ -379,10 +430,13 @@ func (s *ExecutionService) MaterializeAssetStream(ctx context.Context, assetID, 
 	if runErr == nil {
 		now := time.Now().UTC()
 		materializedAt = &now
-		if assetName := s.deps.ResolveAssetNameByID(assetID); assetName != "" {
+		for _, assetName := range assetNamesToRecord {
+			if assetName == "" {
+				continue
+			}
 			s.deps.RecordMaterialization(assetName, now, "succeeded")
 		}
-		changedAssetIDs = s.deps.FindInspectIDs(assetID)
+		changedAssetIDs = s.deps.FindInspectIDs(assetIDsToRefresh...)
 	}
 
 	status := "ok"
@@ -397,15 +451,255 @@ func (s *ExecutionService) MaterializeAssetStream(ctx context.Context, assetID, 
 		}
 	}
 
+	if runErr != nil {
+		materializedAssetIDs = nil
+	}
+
 	return MaterializeResult{
 		Status:          status,
 		Operation:       operation,
 		Output:          string(output),
 		Error:           errorMessage,
 		ExitCode:        exitCode,
-		ChangedAssetIDs: changedAssetIDs,
+		ChangedAssetIDs: coalesceMaterializedAssetIDs(changedAssetIDs, materializedAssetIDs),
 		MaterializedAt:  materializedAt,
 	}
+}
+
+func (s *ExecutionService) runSingleAssetMaterialization(ctx context.Context, assetPath, environment string, onChunk func([]byte)) ([]byte, error) {
+	return s.deps.Executor.RunAsset(ctx, RunAssetRequest{AssetPath: assetPath, Environment: environment}, onChunk)
+}
+
+func (s *ExecutionService) runScopedAssetMaterialization(ctx context.Context, assetPaths []string, environment string, onChunk func([]byte)) ([]byte, error) {
+	var combined bytes.Buffer
+	for _, assetPath := range assetPaths {
+		chunkOutput, err := s.runSingleAssetMaterialization(ctx, assetPath, environment, onChunk)
+		if len(chunkOutput) > 0 {
+			_, _ = combined.Write(chunkOutput)
+		}
+		if err != nil {
+			return combined.Bytes(), err
+		}
+	}
+	return combined.Bytes(), nil
+}
+
+type materializeAssetScopeResult struct {
+	PipelineID      string
+	AssetIDs        []string
+	AssetPaths      []string
+	AssetNames      []string
+	RefreshAssetIDs []string
+}
+
+func normalizeMaterializeScope(scope string) (MaterializeScope, error) {
+	trimmed := strings.TrimSpace(scope)
+	if trimmed == "" {
+		return MaterializeScopeAsset, nil
+	}
+	value := MaterializeScope(trimmed)
+	switch value {
+	case MaterializeScopeAsset, MaterializeScopeAssetWithUpstreams, MaterializeScopeAssetWithDownstreams, MaterializeScopeAssetWithNeighborhood:
+		return value, nil
+	default:
+		return "", fmt.Errorf("invalid materialize scope %q", scope)
+	}
+}
+
+func coalesceMaterializedAssetIDs(changedAssetIDs, materializedAssetIDs []string) []string {
+	if len(changedAssetIDs) > 0 {
+		return changedAssetIDs
+	}
+	return materializedAssetIDs
+}
+
+func (s *ExecutionService) resolveMaterializeAssetScope(ctx context.Context, assetID string, scope MaterializeScope) (materializeAssetScopeResult, error) {
+	if s.deps.ResolveAssetByID == nil {
+		return materializeAssetScopeResult{}, fmt.Errorf("asset resolution is not available")
+	}
+
+	_, parsedPipeline, selectedAsset, err := s.deps.ResolveAssetByID(ctx, assetID)
+	if err != nil {
+		return materializeAssetScopeResult{}, err
+	}
+	if parsedPipeline == nil || selectedAsset == nil {
+		return materializeAssetScopeResult{}, fmt.Errorf("asset not found")
+	}
+
+	assetIDByName := make(map[string]string, len(parsedPipeline.Assets))
+	assetPathByName := make(map[string]string, len(parsedPipeline.Assets))
+	assetByName := make(map[string]*pipeline.Asset, len(parsedPipeline.Assets))
+	downstreamByName := make(map[string][]string)
+	for _, asset := range parsedPipeline.Assets {
+		assetByName[asset.Name] = asset
+		assetIDByName[asset.Name] = encodePipelineAssetID(s.deps.WorkspaceRoot, asset)
+		assetPathByName[asset.Name] = assetRunPathForPipelineAsset(s.deps.WorkspaceRoot, asset)
+		for _, upstream := range asset.Upstreams {
+			upstreamName := strings.TrimSpace(upstream.Value)
+			if upstreamName == "" {
+				continue
+			}
+			downstreamByName[upstreamName] = append(downstreamByName[upstreamName], asset.Name)
+		}
+	}
+
+	selected := make(map[string]struct{})
+	queue := []string{selectedAsset.Name}
+	for len(queue) > 0 {
+		name := queue[0]
+		queue = queue[1:]
+		if _, seen := selected[name]; seen {
+			continue
+		}
+		selected[name] = struct{}{}
+		current := assetByName[name]
+		if current == nil {
+			continue
+		}
+		if scope == MaterializeScopeAssetWithUpstreams || scope == MaterializeScopeAssetWithNeighborhood {
+			for _, upstream := range current.Upstreams {
+				upstreamName := strings.TrimSpace(upstream.Value)
+				if upstreamName == "" || assetByName[upstreamName] == nil {
+					continue
+				}
+				queue = append(queue, upstreamName)
+			}
+		}
+		if scope == MaterializeScopeAssetWithDownstreams || scope == MaterializeScopeAssetWithNeighborhood {
+			for _, downstream := range downstreamByName[name] {
+				if assetByName[downstream] == nil {
+					continue
+				}
+				queue = append(queue, downstream)
+			}
+		}
+	}
+
+	orderedNames := make([]string, 0, len(parsedPipeline.Assets))
+	for _, asset := range parsedPipeline.Assets {
+		if _, ok := selected[asset.Name]; ok {
+			orderedNames = append(orderedNames, asset.Name)
+		}
+	}
+	if len(orderedNames) == 0 {
+		return materializeAssetScopeResult{}, fmt.Errorf("asset scope is empty")
+	}
+
+	assetIDs := make([]string, 0, len(orderedNames))
+	assetPaths := make([]string, 0, len(orderedNames))
+	assetNames := make([]string, 0, len(orderedNames))
+	for _, name := range orderedNames {
+		assetIDs = append(assetIDs, assetIDByName[name])
+		assetPaths = append(assetPaths, assetPathByName[name])
+		assetNames = append(assetNames, name)
+	}
+
+	refreshIDs := append([]string(nil), assetIDs...)
+	return materializeAssetScopeResult{
+		PipelineID:      encodePipelineIDForParsedPipeline(s.deps.WorkspaceRoot, parsedPipeline),
+		AssetIDs:        assetIDs,
+		AssetPaths:      assetPaths,
+		AssetNames:      assetNames,
+		RefreshAssetIDs: refreshIDs,
+	}, nil
+}
+
+func assetRunPathForPipelineAsset(workspaceRoot string, asset *pipeline.Asset) string {
+	assetPath := asset.ExecutableFile.Path
+	if assetPath == "" {
+		assetPath = asset.DefinitionFile.Path
+	}
+	relPath, err := filepath.Rel(workspaceRoot, assetPath)
+	if err != nil {
+		return filepath.ToSlash(assetPath)
+	}
+	return filepath.ToSlash(relPath)
+}
+
+func encodePipelineAssetID(workspaceRoot string, asset *pipeline.Asset) string {
+	return EncodeID(assetRunPathForPipelineAsset(workspaceRoot, asset))
+}
+
+func encodePipelineIDForParsedPipeline(workspaceRoot string, parsed *pipeline.Pipeline) string {
+	if parsed == nil {
+		return ""
+	}
+	pipelinePath := parsed.DefinitionFile.Path
+	if pipelinePath == "" {
+		return ""
+	}
+	relPath, err := filepath.Rel(workspaceRoot, pipelinePath)
+	if err != nil {
+		return ""
+	}
+	return EncodeID(filepath.ToSlash(relPath))
+}
+
+func (s *ExecutionService) findMissingUpstreamAssets(ctx context.Context, assetID, rawOutput string) ([]string, []string) {
+	if s.deps.ResolveAssetByID == nil || strings.TrimSpace(rawOutput) == "" {
+		return nil, nil
+	}
+
+	_, parsedPipeline, asset, err := s.deps.ResolveAssetByID(ctx, assetID)
+	if err != nil || parsedPipeline == nil || asset == nil {
+		return nil, nil
+	}
+
+	missingObjectNames := extractMissingObjectNames(rawOutput)
+	if len(missingObjectNames) == 0 {
+		return nil, nil
+	}
+
+	assetIDs := make([]string, 0)
+	assetNames := make([]string, 0)
+	for _, upstream := range asset.Upstreams {
+		upstreamName := strings.TrimSpace(upstream.Value)
+		if upstreamName == "" {
+			continue
+		}
+		if _, ok := missingObjectNames[normalizeMissingObjectIdentifier(upstreamName)]; !ok {
+			continue
+		}
+		upstreamAsset := parsedPipeline.GetAssetByNameCaseInsensitive(upstreamName)
+		if upstreamAsset == nil {
+			continue
+		}
+		assetIDs = append(assetIDs, encodePipelineAssetID(s.deps.WorkspaceRoot, upstreamAsset))
+		assetNames = append(assetNames, upstreamAsset.Name)
+	}
+	if len(assetIDs) == 0 {
+		return nil, nil
+	}
+	return assetIDs, assetNames
+}
+
+var missingObjectPatterns = []*regexp.Regexp{
+	regexp.MustCompile(`(?i)table with name ([a-zA-Z0-9_\.\"]+) does not exist`),
+	regexp.MustCompile(`(?i)relation ([a-zA-Z0-9_\.\"]+) does not exist`),
+	regexp.MustCompile(`(?i)no such table:?\s*([a-zA-Z0-9_\.\"]+)`),
+	regexp.MustCompile(`(?i)object ([a-zA-Z0-9_\.\"]+) does not exist`),
+}
+
+func extractMissingObjectNames(rawOutput string) map[string]struct{} {
+	result := make(map[string]struct{})
+	for _, pattern := range missingObjectPatterns {
+		matches := pattern.FindAllStringSubmatch(rawOutput, -1)
+		for _, match := range matches {
+			if len(match) < 2 {
+				continue
+			}
+			name := normalizeMissingObjectIdentifier(match[1])
+			if name == "" {
+				continue
+			}
+			result[name] = struct{}{}
+		}
+	}
+	return result
+}
+
+func normalizeMissingObjectIdentifier(name string) string {
+	return strings.ToLower(strings.Trim(strings.ReplaceAll(name, `"`, ""), " "))
 }
 
 func (s *ExecutionService) GetPipelineMaterialization(ctx context.Context, pipelineID, environment string) (PipelineMaterializationResponse, error) {

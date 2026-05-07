@@ -333,20 +333,21 @@ func buildWorkspaceConfigFieldDefs(connectionType reflect.Type) []WorkspaceConfi
 			continue
 		}
 
-		fieldType := buildWorkspaceConfigFieldType(structField.Type.Kind())
+		fieldType := buildWorkspaceConfigFieldType(structField.Type)
 		if fieldType == "" {
 			continue
 		}
 
-		defaultValue := ""
+		defaultValues := make([]string, 0)
 		if jsonschemaTag := structField.Tag.Get("jsonschema"); jsonschemaTag != "" {
 			for part := range strings.SplitSeq(jsonschemaTag, ",") {
 				part = strings.TrimSpace(part)
 				if value, ok := strings.CutPrefix(part, "default="); ok {
-					defaultValue = value
+					defaultValues = append(defaultValues, value)
 				}
 			}
 		}
+		defaultValue := strings.Join(defaultValues, ",")
 		if defaultValue == "" {
 			defaultValue = structField.Tag.Get("default")
 		}
@@ -363,14 +364,19 @@ func buildWorkspaceConfigFieldDefs(connectionType reflect.Type) []WorkspaceConfi
 	return fields
 }
 
-func buildWorkspaceConfigFieldType(kind reflect.Kind) string {
-	switch kind { //nolint:exhaustive
+func buildWorkspaceConfigFieldType(fieldType reflect.Type) string {
+	switch fieldType.Kind() { //nolint:exhaustive
 	case reflect.String:
 		return "string"
 	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
 		return "int"
 	case reflect.Bool:
 		return "bool"
+	case reflect.Slice:
+		if fieldType.Elem().Kind() == reflect.String {
+			return "string_array"
+		}
+		return ""
 	default:
 		return ""
 	}
@@ -434,7 +440,7 @@ func buildWorkspaceConfigConnections(connections *config.Connections) []Workspac
 
 func buildWorkspaceConfigConnectionValues(connectionValue any, typeName string) map[string]any {
 	result := make(map[string]any)
-	fieldDefs := config.GetConnectionFieldsForType(typeName)
+	fieldDefs := workspaceConnectionFieldDefsForType(typeName)
 	if len(fieldDefs) == 0 {
 		return result
 	}
@@ -467,6 +473,15 @@ func buildWorkspaceConfigConnectionValues(connectionValue any, typeName string) 
 				result[fieldDef.Name] = fieldValue.Bool()
 			case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
 				result[fieldDef.Name] = fieldValue.Int()
+			case reflect.Slice:
+				if fieldValue.Type().Elem().Kind() != reflect.String {
+					continue
+				}
+				values := make([]string, 0, fieldValue.Len())
+				for itemIndex := 0; itemIndex < fieldValue.Len(); itemIndex++ {
+					values = append(values, fieldValue.Index(itemIndex).String())
+				}
+				result[fieldDef.Name] = values
 			}
 			break
 		}
@@ -477,7 +492,7 @@ func buildWorkspaceConfigConnectionValues(connectionValue any, typeName string) 
 
 func normalizeWorkspaceConnectionValues(typeName string, values map[string]any) (map[string]any, error) {
 	result := make(map[string]any)
-	fieldDefs := config.GetConnectionFieldsForType(typeName)
+	fieldDefs := workspaceConnectionFieldDefsForType(typeName)
 	for _, fieldDef := range fieldDefs {
 		rawValue, exists := values[fieldDef.Name]
 		if !exists {
@@ -499,10 +514,55 @@ func normalizeWorkspaceConnectionValues(typeName string, values map[string]any) 
 				return nil, fmt.Errorf("invalid value for %s: %w", fieldDef.Name, err)
 			}
 			result[fieldDef.Name] = intValue
+		case "string_array":
+			result[fieldDef.Name] = normalizeWorkspaceStringArrayValue(rawValue)
 		}
 	}
 
 	return result, nil
+}
+
+func workspaceConnectionFieldDefsForType(typeName string) []WorkspaceConfigFieldDef {
+	for _, connectionType := range BuildWorkspaceConfigConnectionTypes() {
+		if connectionType.TypeName == typeName {
+			return connectionType.Fields
+		}
+	}
+	return nil
+}
+
+func normalizeWorkspaceStringArrayValue(rawValue any) []string {
+	switch value := rawValue.(type) {
+	case []string:
+		return compactWorkspaceStringArray(value)
+	case []any:
+		items := make([]string, 0, len(value))
+		for _, item := range value {
+			items = append(items, fmt.Sprint(item))
+		}
+		return compactWorkspaceStringArray(items)
+	case string:
+		return compactWorkspaceStringArray(strings.Split(value, ","))
+	default:
+		return compactWorkspaceStringArray([]string{fmt.Sprint(value)})
+	}
+}
+
+func compactWorkspaceStringArray(values []string) []string {
+	result := make([]string, 0, len(values))
+	seen := make(map[string]struct{}, len(values))
+	for _, value := range values {
+		trimmed := strings.TrimSpace(value)
+		if trimmed == "" {
+			continue
+		}
+		if _, ok := seen[trimmed]; ok {
+			continue
+		}
+		seen[trimmed] = struct{}{}
+		result = append(result, trimmed)
+	}
+	return result
 }
 
 func normalizeWorkspaceBoolValue(rawValue any) (bool, error) {

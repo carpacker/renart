@@ -18,7 +18,8 @@ import { Button } from "@/components/ui/button";
 import { useOnboarding } from "@/hooks/use-onboarding";
 import { MaterializeHistoryEntry } from "@/lib/atoms/results";
 import type { OnboardingRect } from "@/lib/atoms/onboarding";
-import { AssetInspectResponse } from "@/lib/types";
+import { MaterializeScope } from "@/lib/materialize-scope";
+import { AssetInspectResponse, WebAsset } from "@/lib/types";
 
 export type WorkspaceCanvasPaneProps = {
   highlighted: boolean;
@@ -42,6 +43,9 @@ export type WorkspaceCanvasPaneProps = {
   onLoadMoreInspectRows?: () => void;
   onResultTabChange: (tab: "inspect" | "materialize") => void;
   onSelectMaterializeEntry: (entryId: string) => void;
+  onMaterializeMissingUpstreams?: (scope: MaterializeScope) => void;
+  selectedAsset?: WebAsset | null;
+  pipelineAssets?: WebAsset[];
   onInit: (instance: ReactFlowInstance) => void;
   onNodesChange: Parameters<typeof ReactFlow>[0]["onNodesChange"];
   onEdgesChange: Parameters<typeof ReactFlow>[0]["onEdgesChange"];
@@ -90,6 +94,9 @@ export function WorkspaceCanvasPane({
   onLoadMoreInspectRows,
   onResultTabChange,
   onSelectMaterializeEntry,
+  onMaterializeMissingUpstreams,
+  selectedAsset,
+  pipelineAssets,
   onInit,
   onNodesChange,
   onEdgesChange,
@@ -239,6 +246,9 @@ export function WorkspaceCanvasPane({
                 onLoadMoreInspectRows={onLoadMoreInspectRows}
                 onResultTabChange={onResultTabChange}
                 onSelectMaterializeEntry={onSelectMaterializeEntry}
+                onMaterializeMissingUpstreams={onMaterializeMissingUpstreams}
+                selectedAsset={selectedAsset}
+                pipelineAssets={pipelineAssets}
               />
             </Panel>
           </>
