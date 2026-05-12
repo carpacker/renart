@@ -37,6 +37,9 @@ try {
 
   browser = await chromium.launch();
   const page = await browser.newPage({ viewport: { width: 1440, height: 960 }, deviceScaleFactor: 1 });
+  await page.addInitScript(() => {
+    window.localStorage.setItem("renart-theme", "dark");
+  });
   await page.goto(`${baseURL}/onboarding`, { waitUntil: "networkidle" });
   await page.getByTestId("workspace-onboarding").screenshot({
     path: path.join(docsPublicDir, "quickstart-onboarding.png"),

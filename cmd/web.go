@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -345,12 +346,19 @@ func Web() *cli.Command {
 			router := chi.NewRouter()
 			server.registerRoutes(router)
 
-			address := fmt.Sprintf("%s:%d", c.String("host"), c.Int("port"))
+			host := c.String("host")
+			port := c.Int("port")
 			tlsCert := strings.TrimSpace(c.String("tls-cert"))
 			tlsKey := strings.TrimSpace(c.String("tls-key"))
 			if (tlsCert == "") != (tlsKey == "") {
 				return fmt.Errorf("--tls-cert and --tls-key must be provided together")
 			}
+
+			listener, address, err := listenWithDefaultPortFallback(host, port)
+			if err != nil {
+				return err
+			}
+			defer listener.Close()
 
 			httpServer := &http.Server{
 				Addr:              address,
@@ -374,9 +382,9 @@ func Web() *cli.Command {
 			}()
 
 			if tlsCert != "" {
-				err = httpServer.ListenAndServeTLS(tlsCert, tlsKey)
+				err = httpServer.ServeTLS(listener, tlsCert, tlsKey)
 			} else {
-				err = httpServer.ListenAndServe()
+				err = httpServer.Serve(listener)
 			}
 			if err != nil && err != http.ErrServerClosed {
 				return err
@@ -387,6 +395,30 @@ func Web() *cli.Command {
 		Before: telemetry.BeforeCommand,
 		After:  telemetry.AfterCommand,
 	}
+}
+
+func listenWithDefaultPortFallback(host string, port int) (net.Listener, string, error) {
+	address := fmt.Sprintf("%s:%d", host, port)
+	listener, err := net.Listen("tcp", address)
+	if err == nil {
+		return listener, address, nil
+	}
+
+	if port != 8080 {
+		return nil, "", fmt.Errorf("failed to listen on %s: %w", address, err)
+	}
+
+	firstErr := err
+	for fallbackPort := 8081; fallbackPort <= 8099; fallbackPort++ {
+		fallbackAddress := fmt.Sprintf("%s:%d", host, fallbackPort)
+		listener, err = net.Listen("tcp", fallbackAddress)
+		if err == nil {
+			fmt.Printf("warning: %s is unavailable, using fallback port %d instead\n", address, fallbackPort)
+			return listener, fallbackAddress, nil
+		}
+	}
+
+	return nil, "", fmt.Errorf("failed to listen on %s and no fallback port from 8081 to 8099 was available: %w", address, firstErr)
 }
 
 func (s *webServer) registerRoutes(router chi.Router) {

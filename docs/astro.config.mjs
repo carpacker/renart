@@ -11,6 +11,14 @@ export default defineConfig({
       },
       plugins: [starlightThemeRapide()],
       description: 'User documentation for Renart, the visual workspace for Bruin projects.',
+      head: [
+        { tag: 'meta', attrs: { property: 'og:type', content: 'website' } },
+        { tag: 'meta', attrs: { property: 'og:site_name', content: 'Renart Docs' } },
+        { tag: 'meta', attrs: { property: 'og:image', content: 'https://getrenart.com/landing/feature-dag-canvas.png' } },
+        { tag: 'meta', attrs: { property: 'og:image:alt', content: 'Renart DAG canvas showing connected Bruin assets' } },
+        { tag: 'meta', attrs: { name: 'twitter:card', content: 'summary_large_image' } },
+        { tag: 'meta', attrs: { name: 'twitter:image', content: 'https://getrenart.com/landing/feature-dag-canvas.png' } },
+      ],
       social: [
         {
           icon: 'github',
