@@ -3,6 +3,7 @@ import starlight from '@astrojs/starlight';
 import starlightThemeRapide from 'starlight-theme-rapide';
 
 export default defineConfig({
+  site: 'https://getrenart.com',
   integrations: [
     starlight({
       title: 'Renart Docs',
@@ -31,8 +32,9 @@ export default defineConfig({
           label: 'Introduction',
           items: [
             { label: 'Overview', slug: 'docs' },
+            { label: 'Concepts', slug: 'docs/concepts' },
             { label: 'Who Renart Is For', slug: 'docs/who-renart-is-for' },
-            { label: 'Bruin CLI and Renart', slug: 'docs/bruin-cli-and-renart' },
+            { label: 'Renart for Bruin Users', slug: 'docs/bruin-cli-and-renart' },
           ],
         },
         {

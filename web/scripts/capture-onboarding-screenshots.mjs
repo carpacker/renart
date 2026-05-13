@@ -41,6 +41,7 @@ try {
     window.localStorage.setItem("renart-theme", "dark");
   });
   await page.goto(`${baseURL}/onboarding`, { waitUntil: "networkidle" });
+  await forceDarkTheme(page);
   await page.getByTestId("workspace-onboarding").screenshot({
     path: path.join(docsPublicDir, "quickstart-onboarding.png"),
   });
@@ -71,6 +72,7 @@ try {
   await page.goto(`${baseURL}/?pipeline=${encodeURIComponent(pipelineId)}&asset=${encodeURIComponent(assetId)}`, {
     waitUntil: "domcontentloaded",
   });
+  await forceDarkTheme(page);
   await page.getByTestId("editor-asset-name").getByText("quickstart.player_stats").waitFor({ timeout: 60_000 });
   await page.locator(".monaco-editor").waitFor({ timeout: 60_000 });
   await page.screenshot({
@@ -134,4 +136,12 @@ async function run(command, args, cwd) {
       }
     });
   });
+}
+
+async function forceDarkTheme(page) {
+  await page.evaluate(() => {
+    window.localStorage.setItem("renart-theme", "dark");
+    document.documentElement.classList.add("dark");
+  });
+  await page.waitForTimeout(250);
 }

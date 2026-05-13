@@ -18,6 +18,7 @@ function readGitValue(command: string, fallback: string) {
 const latestVersion = process.env.RENART_VERSION || readGitValue('git describe --tags --abbrev=0', 'local build');
 const commit = process.env.RENART_COMMIT || readGitValue('git rev-parse --short HEAD', 'unknown');
 const currentYear = new Date().getFullYear();
+const hasBuildMetadata = latestVersion !== 'local build' || commit !== 'unknown';
 ---
 
 <!doctype html>
@@ -70,6 +71,8 @@ const currentYear = new Date().getFullYear();
           <span class="pip"></span>
           <strong>{latestVersion}</strong>
           <span class="sep">/</span>
+          <strong>alpha</strong>
+          <span class="sep">/</span>
           Open source / Apache 2.0
         </span>
 
@@ -79,7 +82,7 @@ const currentYear = new Date().getFullYear();
         </h1>
 
         <p class="hero-sub">
-          Renart gives Git-native <a href={bruinUrl}>Bruin</a> projects a fast visual IDE for assets, dependencies, lineage, SQL inspection, and materialization.
+          Write SQL with real IntelliSense, visualize your pipeline as a live canvas, and run assets without leaving your repository. Built on <a href={bruinUrl}>Bruin</a>.
         </p>
 
         <div class="ctas">
@@ -116,9 +119,12 @@ const currentYear = new Date().getFullYear();
 
       <section class="block" id="features">
         <div class="eyebrow"><span class="bar"></span> Why Renart</div>
-        <h2 class="h2">An IDE that still respects <em>real files</em>.</h2>
+        <h2 class="h2">A visual editor that writes <em>real files</em>.</h2>
         <p class="lede">
-          Renart does not replace Bruin or hide your project behind a proprietary model. It reads and writes the same repository files your team reviews, runs, and commits.
+          Renart reads and writes the same repository files your team reviews, runs, and commits. It does not hide your pipeline behind a proprietary model or replace the tools you already trust.
+        </p>
+        <p class="lede lede-small">
+          Renart is open source under Apache 2.0 and runs locally in your environment. No account, no hosted control plane, no cloud dependency.
         </p>
 
         <div class="bento">
@@ -128,8 +134,8 @@ const currentYear = new Date().getFullYear();
             </div>
             <div class="card-content">
               <div class="card-tag">IntelliSense</div>
-              <h3>Column-aware SQL completion</h3>
-              <p>Renart surfaces Monaco completions from the current Bruin workspace context, including useful suggestions as you type.</p>
+              <h3>Write SQL against your actual schema</h3>
+              <p>Your editor knows the columns exposed by upstream assets, so IntelliSense is grounded in the pipeline you are actually building.</p>
             </div>
           </article>
 
@@ -139,8 +145,8 @@ const currentYear = new Date().getFullYear();
             </div>
             <div class="card-content">
               <div class="card-tag">Validation</div>
-              <h3>SQL feedback before runtime</h3>
-              <p>Catch unresolved columns and similar mistakes in the editor, then jump straight to the relevant line instead of waiting for a failed run.</p>
+              <h3>Catch broken columns before you run</h3>
+              <p>See unresolved columns and similar mistakes while you type instead of learning about them from a failed scheduled run.</p>
             </div>
           </article>
 
@@ -163,8 +169,8 @@ const currentYear = new Date().getFullYear();
             </div>
             <div class="card-content">
               <div class="card-tag">Canvas</div>
-              <h3>The DAG is the workspace</h3>
-              <p>Use the canvas to understand assets, dependencies, and data flow at a glance, then open any node to edit the underlying Bruin asset.</p>
+              <h3>See every dependency before you touch a file</h3>
+              <p>The pipeline canvas is not a static diagram. Open any node, inspect lineage, and edit the underlying Bruin asset from the same surface.</p>
             </div>
           </article>
 
@@ -172,18 +178,18 @@ const currentYear = new Date().getFullYear();
             <div class="workflow-grid">
               <div>
                 <div class="card-tag">Execution</div>
-                <h3>Inspect safely, materialize intentionally</h3>
-                <p>Inspect is the conservative preview path. Materialization is the explicit execution path for changes that produce side effects.</p>
+                <h3>Preview without side effects. Run when you are sure.</h3>
+                <p>Use inspect to preview results conservatively, then materialize explicitly when you want the asset to execute for real.</p>
               </div>
               <div>
                 <div class="card-tag">Sync</div>
-                <h3>Filesystem state wins</h3>
-                <p>The Go server watches workspace files and streams updates to the frontend over SSE, so external edits and CLI activity reconcile back into the UI.</p>
+                <h3>The CLI and the UI stay aligned</h3>
+                <p>Use Renart alongside your editor and the Bruin CLI. External file edits reconcile back into the UI instead of drifting out of sync.</p>
               </div>
               <div>
                 <div class="card-tag">Git</div>
-                <h3>Built for repositories</h3>
-                <p>Renart is designed to start inside a Git repository and keep visual edits reviewable as normal project file changes.</p>
+                <h3>Every visual change is a reviewable diff</h3>
+                <p>Renart is designed for Git-native workflows, so visual edits still become normal project file changes your team can review and commit.</p>
               </div>
             </div>
           </article>
@@ -207,11 +213,12 @@ const currentYear = new Date().getFullYear();
         <div class="bruin-grid">
           <div class="bruin-list">
             <div class="bruin-row"><span class="check">✓</span><span><b>Bruin assets on disk.</b> Edit SQL, Python, and YAML files through a git-native IDE.</span></div>
-            <div class="bruin-row"><span class="check">✓</span><span><b>Go server as the filesystem path.</b> File-changing actions go through Renart backend APIs.</span></div>
-            <div class="bruin-row"><span class="check">✓</span><span><b>SSE-driven reconciliation.</b> Workspace events keep frontend state aligned with files.</span></div>
+            <div class="bruin-row"><span class="check">✓</span><span><b>All edits go through project files.</b> Renart does not store your pipeline in a proprietary database.</span></div>
+            <div class="bruin-row"><span class="check">✓</span><span><b>Use the CLI alongside the UI.</b> Changes made outside Renart sync back automatically.</span></div>
             <div class="bruin-row"><span class="check">✓</span><span><b>Inspect and materialize.</b> Preview results safely, then run assets intentionally when needed.</span></div>
             <div class="bruin-row"><span class="check">✓</span><span><b>Canvas-first lineage.</b> Understand dependencies visually while staying close to source files.</span></div>
           </div>
+          <div class="bruin-illus-wrap">
           <div class="bruin-illus" aria-hidden="true">
             <svg viewBox="0 0 360 340" preserveAspectRatio="xMidYMid meet">
               <path d="M180 60 L180 130" stroke="var(--accent)" stroke-width="1.5" stroke-dasharray="4 3" fill="none" />
@@ -223,12 +230,14 @@ const currentYear = new Date().getFullYear();
             <div class="bruin-pill git" style="top: 250px; left: 24px;"><span class="ico">G</span>Git repo</div>
             <div class="bruin-pill wh" style="top: 250px; right: 24px;"><span class="ico">W</span>Warehouse</div>
           </div>
+          <p class="bruin-caption">Renart is the IDE layer. Bruin remains the pipeline project model, with files in Git and execution against your warehouse.</p>
+          </div>
         </div>
       </section>
 
       <section class="final">
-        <h2>Start building <em>visibly</em>.</h2>
-        <p>Install Renart, open a Git-native Bruin project, and inspect your first pipeline from the canvas.</p>
+        <h2>Install and open your <em>first pipeline</em>.</h2>
+        <p>Get Renart running locally, open your repository, and see your pipeline canvas in minutes.</p>
         <div class="ctas">
           <a href="/docs/installation/" class="btn btn-primary">Get started</a>
           <a href={repoUrl} class="btn btn-ghost">View on GitHub <span class="arrow">-&gt;</span></a>
@@ -275,11 +284,13 @@ const currentYear = new Date().getFullYear();
       </div>
       <div class="foot-bottom">
         <span>© {currentYear} Renart / Apache 2.0</span>
-        <div class="meta">
-          <span>build {commit}</span>
-          <span class="sep">/</span>
-          <span>{latestVersion}</span>
-        </div>
+        {hasBuildMetadata ? (
+          <div class="meta">
+            <span>build {commit}</span>
+            <span class="sep">/</span>
+            <span>{latestVersion}</span>
+          </div>
+        ) : null}
       </div>
     </footer>
 
@@ -546,6 +557,7 @@ const currentYear = new Date().getFullYear();
   .bar { width: 14px; height: 1px; background: var(--accent); }
   .h2 { font-family: var(--serif); font-weight: 400; font-size: clamp(34px, 4.5vw, 56px); line-height: 1.04; letter-spacing: -0.02em; max-width: 18ch; margin: 0; }
   .lede { margin-top: 18px; font-size: 17px; color: var(--fg-2); max-width: 64ch; text-wrap: pretty; }
+  .lede-small { font-size: 15px; color: var(--fg-3); }
 
   .bento { margin-top: 56px; display: grid; grid-template-columns: repeat(6, 1fr); grid-auto-rows: minmax(280px, auto); gap: 20px; }
   .card { border: 1px solid var(--line); border-radius: var(--r-4); background: var(--bg-1); overflow: hidden; display: flex; flex-direction: column; position: relative; transition: border-color 0.2s; }
@@ -574,11 +586,13 @@ const currentYear = new Date().getFullYear();
   .bruin-row { display: grid; grid-template-columns: 22px 1fr; gap: 12px; align-items: center; padding: 14px 18px; background: var(--bg-1); font-size: 14px; color: var(--fg-2); }
   .check { width: 18px; height: 18px; border-radius: 50%; background: var(--accent-soft); color: var(--accent); display: grid; place-items: center; font-size: 12px; }
   .bruin-row b { color: var(--fg); font-weight: 500; }
+  .bruin-illus-wrap { display: grid; gap: 14px; }
   .bruin-illus { border: 1px solid var(--line); border-radius: var(--r-4); background: var(--bg-1); padding: 32px; aspect-ratio: 1.05 / 1; position: relative; overflow: hidden; isolation: isolate; }
   .bruin-illus::before { content: ''; position: absolute; inset: 0; z-index: 0; background: radial-gradient(circle at 1px 1px, var(--line-2) 1px, transparent 1px) 0 0 / 16px 16px; opacity: 0.6; }
   .bruin-illus svg { position: absolute; inset: 0; z-index: 1; width: 100%; height: 100%; }
   .bruin-pill { position: absolute; z-index: 2; padding: 8px 12px; border: 1px solid var(--line-2); border-radius: var(--r-2); background: var(--bg); font-family: var(--mono); font-size: 11.5px; color: var(--fg-2); display: inline-flex; align-items: center; gap: 8px; box-shadow: var(--shadow-card); white-space: nowrap; }
   .bruin-pill .ico { width: 14px; height: 14px; border-radius: 3px; display: grid; place-items: center; font-size: 8px; font-weight: 700; background: var(--accent-soft); color: var(--accent); }
+  .bruin-caption { margin: 0; color: var(--fg-3); font-size: 13px; line-height: 1.5; text-wrap: pretty; }
 
   .final { margin: 160px auto 0; max-width: 1100px; padding: 100px 28px 120px; text-align: center; border-top: 1px solid var(--line); position: relative; }
   .final::before { content: ''; position: absolute; top: -1px; left: 50%; transform: translateX(-50%); width: 320px; height: 320px; background: radial-gradient(circle, var(--accent-glow), transparent 60%); pointer-events: none; }

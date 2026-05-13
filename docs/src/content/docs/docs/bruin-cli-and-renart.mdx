@@ -1,13 +1,13 @@
 ---
-title: Bruin CLI and Renart
-description: When to use Bruin CLI and when to use Renart.
+title: Renart for Bruin Users
+description: What Renart adds to Bruin CLI workflows.
 ---
 
-Bruin CLI and Renart work on the same projects, but they support different working styles.
+Renart and the Bruin CLI work on the same project files. If you already use Bruin from your terminal, Renart is not a replacement project format or a separate runtime. It is an IDE layer for the same assets, pipelines, and repository.
 
-## Bruin CLI
+## Keep Using Bruin CLI
 
-Bruin CLI is a better fit when you want a more coding-oriented, terminal-first experience.
+Bruin CLI remains the right tool when you want a coding-oriented, terminal-first experience.
 
 Typical cases:
 
@@ -15,17 +15,17 @@ Typical cases:
 - running commands from the terminal
 - working in a script-heavy or automation-heavy loop
 
-## Renart
+## Use Renart For Visual Work
 
-Renart is a better fit when you want a faster visual workflow.
+Renart is a better fit when you want to see and change the pipeline structure directly.
 
 Typical cases:
 
-- exploring a pipeline on a canvas
+- exploring a pipeline on the pipeline canvas
 - understanding dependencies and lineage quickly
 - editing assets with more context around them
 - inspecting and running work without leaving the workspace view
 
-## Same project model
+## Same Project Model
 
-Both work against the same underlying project files. Renart is not a separate project format.
+Both tools work against the same underlying files. Renart reads workspace state from disk, sends file-changing actions through the local Go server, and reconciles external edits back into the UI. You can keep terminal commands, editor workflows, and Git review practices in place while using Renart for canvas-first editing and inspection.

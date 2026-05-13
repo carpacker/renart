@@ -1,0 +1,30 @@
+---
+title: Concepts
+description: The core Renart and Bruin concepts used throughout the docs.
+---
+
+Renart is easiest to understand as an IDE for a Git repository that contains a Bruin data pipeline project. The UI is visual, but the project remains file-based.
+
+## Pipeline
+
+A pipeline is the collection of data work you run and review together. In Renart, a pipeline appears on the pipeline canvas so you can see how assets depend on each other.
+
+## Asset
+
+An asset is one unit of pipeline work. It can be a SQL transformation, a Python asset, an ingestion asset, or another Bruin-supported asset type. On the canvas, each asset appears as a node, but the asset itself still lives as a real project file.
+
+## Pipeline Canvas
+
+The pipeline canvas is the visual surface for understanding dependencies and lineage. It is not an exported diagram. It is the main workspace for opening assets, inspecting results, and creating downstream work.
+
+## Inspect
+
+Inspect is the safe preview path. Use it when you want to see what a SQL asset returns without treating that action as a full pipeline run.
+
+## Materialize
+
+Materialize is the explicit run path. Use it when you want an asset or pipeline to execute and produce its intended side effects in the target system.
+
+## Git-Native
+
+Git-native means the repository remains the source of truth. Renart can make visual edits, but those edits become normal file changes that your team can diff, review, and commit.

@@ -2,7 +2,13 @@
 
 Renart is an IDE for git-native data pipelines.
 
-It gives Bruin projects a fast visual editing environment for assets, dependencies, lineage, SQL inspection, and materialization while keeping the filesystem and Git as the source of truth.
+It gives your data pipelines a visual editing environment with a pipeline canvas, IntelliSense, SQL validation, inspect flows, and materialization while keeping the filesystem and Git as the source of truth. Built on top of Bruin.
+
+![Renart pipeline canvas and editor](docs/public/landing/feature-dag-canvas.png)
+
+## Why Renart Exists
+
+Most data pipeline tools make you choose between a visual interface and real version-controlled files. Renart is built to avoid that tradeoff. Every visual edit is a file change, every canvas view reflects your actual pipeline structure, and the CLI can keep working alongside the UI.
 
 ## Who Renart Is For
 
