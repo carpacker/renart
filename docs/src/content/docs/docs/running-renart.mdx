@@ -11,6 +11,12 @@ From `renart/`:
 go run . web
 ```
 
+Renart opens the local URL in your default browser after the server is ready. To skip that behavior in scripts or CI, pass `--no-open`:
+
+```bash
+go run . web --no-open
+```
+
 If you want to point Renart at a specific Bruin binary:
 
 ```bash

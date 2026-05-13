@@ -21,7 +21,7 @@ try {
 
   server = spawn(
     goBinary,
-    ["run", ".", "web", workspaceDir, "--port", String(port), "--static-dir", path.join(webRoot, "dist"), "--watch-mode", "fsnotify"],
+    ["run", ".", "web", workspaceDir, "--port", String(port), "--static-dir", path.join(webRoot, "dist"), "--watch-mode", "fsnotify", "--no-open"],
     { cwd: repoRoot, detached: true, stdio: ["ignore", "pipe", "pipe"] }
   );
 

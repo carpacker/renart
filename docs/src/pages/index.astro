@@ -1,5 +1,9 @@
 ---
 import { execSync } from 'node:child_process';
+import { Font, Image } from 'astro:assets';
+import dagCanvas from '../assets/landing/feature-dag-canvas.png';
+import intellisenseImage from '../assets/landing/feature-intellisense.png';
+import validationImage from '../assets/landing/feature-validation.png';
 
 const repoUrl = 'https://github.com/renart-data/renart';
 const bruinUrl = 'https://github.com/bruin-data/bruin';
@@ -39,9 +43,9 @@ const hasBuildMetadata = latestVersion !== 'local build' || commit !== 'unknown'
     <meta name="twitter:description" content="A fast visual IDE for Git-native Bruin pipelines." />
     <meta name="twitter:image" content="https://getrenart.com/landing/feature-dag-canvas.png" />
     <title>Renart - The IDE for git-native data pipelines</title>
-    <link rel="preconnect" href="https://fonts.googleapis.com" />
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    <link href="https://fonts.googleapis.com/css2?family=Geist:wght@300;400;500;600;700&family=Geist+Mono:wght@400;500;600&family=Instrument+Serif:ital@0;1&display=swap" rel="stylesheet" />
+    <Font cssVariable="--font-geist" preload />
+    <Font cssVariable="--font-geist-mono" />
+    <Font cssVariable="--font-instrument-serif" preload />
   </head>
   <body>
     <header class="nav">
@@ -102,8 +106,10 @@ const hasBuildMetadata = latestVersion !== 'local build' || commit !== 'unknown'
         </div>
 
         <div class="hero-media">
-          <video autoplay muted loop playsinline poster="/landing/feature-dag-canvas.png">
-            <source src="/landing/hero-canvas-roundtrip.webm" type="video/webm" />
+          <Image class="hero-poster" src={dagCanvas} alt="Renart pipeline canvas and editor" widths={[360, 640, 960, 1180]} sizes="(max-width: 760px) calc(100vw - 40px), 1180px" format="webp" loading="eager" fetchpriority="high" decoding="async" />
+          <video class="hero-video" autoplay muted loop playsinline preload="none" width="1920" height="1080" aria-label="Silent screen recording of Renart editing and running a pipeline">
+            <source src="/landing/hero-canvas-roundtrip.webm" type="video/webm" media="(min-width: 761px)" />
+            <track kind="captions" src="/landing/hero-canvas-roundtrip.vtt" srclang="en" label="English" default />
           </video>
         </div>
       </section>
@@ -130,7 +136,7 @@ const hasBuildMetadata = latestVersion !== 'local build' || commit !== 'unknown'
         <div class="bento">
           <article class="card span-3">
             <div class="card-visual image-pad">
-              <img src="/landing/feature-intellisense.png" alt="Monaco editor showing Renart SQL IntelliSense suggestions while typing HAVING order_" loading="lazy" />
+              <Image src={intellisenseImage} alt="Monaco editor showing Renart SQL IntelliSense suggestions while typing HAVING order_" widths={[320, 480, 640]} sizes="(max-width: 1100px) calc(100vw - 88px), 512px" format="webp" loading="lazy" decoding="async" />
             </div>
             <div class="card-content">
               <div class="card-tag">IntelliSense</div>
@@ -141,7 +147,7 @@ const hasBuildMetadata = latestVersion !== 'local build' || commit !== 'unknown'
 
           <article class="card span-3">
             <div class="card-visual image-pad">
-              <img src="/landing/feature-validation.png" alt="Monaco editor showing SQL validation hover for an unresolved column" loading="lazy" />
+              <Image src={validationImage} alt="Monaco editor showing SQL validation hover for an unresolved column" widths={[320, 480, 640]} sizes="(max-width: 1100px) calc(100vw - 88px), 512px" format="webp" loading="lazy" decoding="async" />
             </div>
             <div class="card-content">
               <div class="card-tag">Validation</div>
@@ -165,7 +171,7 @@ const hasBuildMetadata = latestVersion !== 'local build' || commit !== 'unknown'
 
           <article class="card span-6">
             <div class="card-visual media-fill">
-              <img src="/landing/feature-dag-canvas.png" alt="Renart DAG canvas showing connected Bruin assets" loading="lazy" />
+              <Image src={dagCanvas} alt="Renart DAG canvas showing connected Bruin assets" widths={[480, 720, 960, 1200]} sizes="(max-width: 1100px) calc(100vw - 40px), 766px" format="webp" loading="lazy" decoding="async" />
             </div>
             <div class="card-content">
               <div class="card-tag">Canvas</div>
@@ -341,9 +347,9 @@ const hasBuildMetadata = latestVersion !== 'local build' || commit !== 'unknown'
     --accent-soft-2: rgba(110, 231, 164, 0.18);
     --accent-glow: rgba(52, 209, 122, 0.18);
     --warn: #f0b429;
-    --serif: 'Instrument Serif', 'Times New Roman', serif;
-    --sans: 'Geist', ui-sans-serif, system-ui, sans-serif;
-    --mono: 'Geist Mono', ui-monospace, 'SF Mono', Menlo, monospace;
+    --serif: var(--font-instrument-serif), Georgia, Cambria, 'Times New Roman', Times, serif;
+    --sans: var(--font-geist), system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    --mono: var(--font-geist-mono), 'SFMono-Regular', 'SF Mono', Consolas, 'Liberation Mono', Menlo, monospace;
     --r-1: 4px;
     --r-2: 6px;
     --r-3: 8px;
@@ -540,7 +546,8 @@ const hasBuildMetadata = latestVersion !== 'local build' || commit !== 'unknown'
     pointer-events: none;
     box-shadow: inset 0 1px 0 var(--accent-soft-2);
   }
-  .hero-media video { display: block; width: 100%; height: auto; aspect-ratio: 16 / 9; object-fit: cover; }
+  .hero-media img, .hero-media video { display: block; width: 100%; height: auto; aspect-ratio: 16 / 9; object-fit: cover; }
+  .hero-video { display: none; }
 
   .marquee-wrap { margin: 96px 0 0; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); overflow: hidden; background: var(--bg); position: relative; }
   .marquee-wrap::before, .marquee-wrap::after { content: ''; position: absolute; top: 0; bottom: 0; width: 120px; z-index: 2; pointer-events: none; }
@@ -617,6 +624,10 @@ const hasBuildMetadata = latestVersion !== 'local build' || commit !== 'unknown'
     .bento { grid-template-columns: repeat(2, 1fr); }
     .span-3, .span-2, .span-4, .span-6 { grid-column: span 2; }
     .bruin-grid, .workflow-grid { grid-template-columns: 1fr; }
+  }
+  @media (min-width: 761px) {
+    .hero-poster { display: none !important; }
+    .hero-video { display: block; }
   }
   @media (max-width: 760px) {
     .nav-links, .nav-stars { display: none; }

@@ -172,6 +172,7 @@ export const liveTest = base.extend<{
         staticDir,
         "--watch-mode",
         "poll",
+        "--no-open",
         workspaceDir,
       ],
       {

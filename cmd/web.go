@@ -7,7 +7,9 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 	"sync"
@@ -173,6 +175,10 @@ func Web() *cli.Command {
 			&cli.StringFlag{
 				Name:  "tls-key",
 				Usage: "optional TLS private key path; enables HTTPS and HTTP/2 when used with --tls-cert",
+			},
+			&cli.BoolFlag{
+				Name:  "no-open",
+				Usage: "do not open Renart in the default browser after startup",
 			},
 		},
 		Action: func(ctx context.Context, c *cli.Command) error {
@@ -374,6 +380,14 @@ func Web() *cli.Command {
 				fmt.Printf("Renart listening on http://%s\n", address)
 			}
 
+			if !c.Bool("no-open") {
+				scheme := "http"
+				if tlsCert != "" {
+					scheme = "https"
+				}
+				go openBrowserWhenReachable(ctx, scheme+"://"+address, address)
+			}
+
 			go func() {
 				<-ctx.Done()
 				shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -395,6 +409,49 @@ func Web() *cli.Command {
 		Before: telemetry.BeforeCommand,
 		After:  telemetry.AfterCommand,
 	}
+}
+
+func openBrowserWhenReachable(ctx context.Context, url, address string) {
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		select {
+		case <-ctx.Done():
+			return
+		default:
+		}
+
+		conn, err := net.DialTimeout("tcp", address, 200*time.Millisecond)
+		if err == nil {
+			_ = conn.Close()
+			if err := openBrowser(url); err != nil {
+				fmt.Printf("warning: failed to open browser: %v\n", err)
+			}
+			return
+		}
+
+		time.Sleep(100 * time.Millisecond)
+	}
+
+	fmt.Printf("warning: server did not become reachable quickly enough to open browser automatically; open %s manually\n", url)
+}
+
+func openBrowser(url string) error {
+	var command string
+	var args []string
+
+	switch runtime.GOOS {
+	case "darwin":
+		command = "open"
+		args = []string{url}
+	case "windows":
+		command = "rundll32"
+		args = []string{"url.dll,FileProtocolHandler", url}
+	default:
+		command = "xdg-open"
+		args = []string{url}
+	}
+
+	return exec.Command(command, args...).Start()
 }
 
 func listenWithDefaultPortFallback(host string, port int) (net.Listener, string, error) {

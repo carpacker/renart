@@ -38,6 +38,7 @@ try {
       staticDir,
       "--watch-mode",
       "fsnotify",
+      "--no-open",
     ],
     { cwd: repoRoot, detached: true, stdio: ["ignore", "pipe", "pipe"] }
   );

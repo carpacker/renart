@@ -1,0 +1,4 @@
+User-agent: *
+Allow: /
+
+Sitemap: https://getrenart.com/sitemap-index.xml

@@ -64,6 +64,7 @@ const server = spawn(
     staticDir,
     "--watch-mode",
     "poll",
+    "--no-open",
     workspaceDir,
   ],
   {
