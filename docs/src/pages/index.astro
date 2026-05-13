@@ -19,10 +19,13 @@ function readGitValue(command: string, fallback: string) {
   }
 }
 
-const latestVersion = process.env.RENART_VERSION || readGitValue('git describe --tags --abbrev=0', 'local build');
+const tagVersion = readGitValue('git describe --tags --abbrev=0', '0.0.0');
 const commit = process.env.RENART_COMMIT || readGitValue('git rev-parse --short HEAD', 'unknown');
+const explicitVersion = process.env.RENART_VERSION;
+const latestVersion = explicitVersion && explicitVersion !== 'local build'
+  ? explicitVersion
+  : `${tagVersion}#${commit}`;
 const currentYear = new Date().getFullYear();
-const hasBuildMetadata = latestVersion !== 'local build' || commit !== 'unknown';
 ---
 
 <!doctype html>
@@ -112,6 +115,7 @@ const hasBuildMetadata = latestVersion !== 'local build' || commit !== 'unknown'
             <track kind="captions" src="/landing/hero-canvas-roundtrip.vtt" srclang="en" label="English" default />
           </video>
         </div>
+        <p class="hero-media-caption">Silent screen recording of Renart editing and running a pipeline.</p>
       </section>
 
       <div class="marquee-wrap" aria-label="Supported data stack examples">
@@ -224,7 +228,7 @@ const hasBuildMetadata = latestVersion !== 'local build' || commit !== 'unknown'
             <div class="bruin-row"><span class="check">✓</span><span><b>Inspect and materialize.</b> Preview results safely, then run assets intentionally when needed.</span></div>
             <div class="bruin-row"><span class="check">✓</span><span><b>Canvas-first lineage.</b> Understand dependencies visually while staying close to source files.</span></div>
           </div>
-          <div class="bruin-illus-wrap">
+          <div class="bruin-illus-wrap" hidden>
           <div class="bruin-illus" aria-hidden="true">
             <svg viewBox="0 0 360 340" preserveAspectRatio="xMidYMid meet">
               <path d="M180 60 L180 130" stroke="var(--accent)" stroke-width="1.5" stroke-dasharray="4 3" fill="none" />
@@ -290,13 +294,9 @@ const hasBuildMetadata = latestVersion !== 'local build' || commit !== 'unknown'
       </div>
       <div class="foot-bottom">
         <span>© {currentYear} Renart / Apache 2.0</span>
-        {hasBuildMetadata ? (
           <div class="meta">
-            <span>build {commit}</span>
-            <span class="sep">/</span>
             <span>{latestVersion}</span>
           </div>
-        ) : null}
       </div>
     </footer>
 
@@ -549,6 +549,7 @@ const hasBuildMetadata = latestVersion !== 'local build' || commit !== 'unknown'
   }
   .hero-media img, .hero-media video { display: block; width: 100%; height: 100%; object-fit: cover; }
   .hero-video { display: none; }
+  .hero-media-caption { margin: 14px auto 0; max-width: 1180px; color: var(--fg-4); font-family: var(--mono); font-size: 11.5px; text-align: left; }
 
   .marquee-wrap { margin: 96px 0 0; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); overflow: hidden; background: var(--bg); position: relative; }
   .marquee-wrap::before, .marquee-wrap::after { content: ''; position: absolute; top: 0; bottom: 0; width: 120px; z-index: 2; pointer-events: none; }
@@ -589,7 +590,7 @@ const hasBuildMetadata = latestVersion !== 'local build' || commit !== 'unknown'
   .manifesto blockquote { font-family: var(--serif); font-style: italic; font-size: clamp(28px, 4vw, 44px); line-height: 1.25; letter-spacing: -0.015em; text-wrap: balance; margin: 0; }
   .attrib { margin-top: 24px; font-family: var(--mono); font-size: 12px; color: var(--fg-4); text-transform: uppercase; letter-spacing: 0.12em; }
 
-  .bruin-grid { margin-top: 56px; display: grid; grid-template-columns: 1.1fr 1fr; gap: 60px; align-items: center; }
+  .bruin-grid { margin-top: 56px; display: grid; grid-template-columns: minmax(0, 760px); gap: 60px; align-items: center; }
   .bruin-list { display: flex; flex-direction: column; gap: 1px; background: var(--line); border: 1px solid var(--line); border-radius: var(--r-3); overflow: hidden; }
   .bruin-row { display: grid; grid-template-columns: 22px 1fr; gap: 12px; align-items: center; padding: 14px 18px; background: var(--bg-1); font-size: 14px; color: var(--fg-2); }
   .check { width: 18px; height: 18px; border-radius: 50%; background: var(--accent-soft); color: var(--accent); display: grid; place-items: center; font-size: 12px; }
