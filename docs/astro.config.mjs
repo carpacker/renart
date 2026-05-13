@@ -10,7 +10,7 @@ export default defineConfig({
 	src: '../web/public/icons/icon.svg',
       },
       plugins: [starlightThemeRapide()],
-      description: 'User documentation for Renart, the visual workspace for Bruin projects.',
+      description: 'User documentation for Renart, the IDE for git-native data pipelines.',
       head: [
         { tag: 'meta', attrs: { property: 'og:type', content: 'website' } },
         { tag: 'meta', attrs: { property: 'og:site_name', content: 'Renart Docs' } },

@@ -25,19 +25,19 @@ const currentYear = new Date().getFullYear();
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <meta name="description" content="Renart is a fast visual workspace for Bruin projects." />
+    <meta name="description" content="Renart is an IDE for git-native data pipelines." />
     <meta property="og:type" content="website" />
     <meta property="og:site_name" content="Renart" />
-    <meta property="og:title" content="Renart - The visual workspace for Bruin projects" />
-    <meta property="og:description" content="A fast visual editor for Git-backed Bruin pipelines." />
+    <meta property="og:title" content="Renart - The IDE for git-native data pipelines" />
+    <meta property="og:description" content="A fast visual IDE for Git-native Bruin pipelines." />
     <meta property="og:url" content="https://getrenart.com/" />
     <meta property="og:image" content="https://getrenart.com/landing/feature-dag-canvas.png" />
     <meta property="og:image:alt" content="Renart DAG canvas showing connected Bruin assets" />
     <meta name="twitter:card" content="summary_large_image" />
-    <meta name="twitter:title" content="Renart - The visual workspace for Bruin projects" />
-    <meta name="twitter:description" content="A fast visual editor for Git-backed Bruin pipelines." />
+    <meta name="twitter:title" content="Renart - The IDE for git-native data pipelines" />
+    <meta name="twitter:description" content="A fast visual IDE for Git-native Bruin pipelines." />
     <meta name="twitter:image" content="https://getrenart.com/landing/feature-dag-canvas.png" />
-    <title>Renart - The visual workspace for Bruin projects</title>
+    <title>Renart - The IDE for git-native data pipelines</title>
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link href="https://fonts.googleapis.com/css2?family=Geist:wght@300;400;500;600;700&family=Geist+Mono:wght@400;500;600&family=Instrument+Serif:ital@0;1&display=swap" rel="stylesheet" />
@@ -56,9 +56,8 @@ const currentYear = new Date().getFullYear();
           <a class="nav-link" href="/docs/">Docs</a>
         </nav>
         <div class="nav-right">
-          <a class="nav-stars" href={repoUrl}>
+          <a class="nav-stars nav-icon-link" href={repoUrl} aria-label="Renart GitHub project">
             <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z" /></svg>
-            GitHub
           </a>
           <a class="nav-cta" href="/docs/installation/">Get started</a>
         </div>
@@ -75,12 +74,12 @@ const currentYear = new Date().getFullYear();
         </span>
 
         <h1>
-          The visual workspace<br />
-          for <em>Bruin pipelines</em>
+          The <span class="stroke">IDE</span><br />
+          for <em>git-native data pipelines</em>
         </h1>
 
         <p class="hero-sub">
-          Renart gives Git-backed <a href={bruinUrl}>Bruin</a> projects a fast visual editor for assets, dependencies, lineage, SQL inspection, and materialization.
+          Renart gives Git-native <a href={bruinUrl}>Bruin</a> projects a fast visual IDE for assets, dependencies, lineage, SQL inspection, and materialization.
         </p>
 
         <div class="ctas">
@@ -107,7 +106,7 @@ const currentYear = new Date().getFullYear();
       </section>
 
       <div class="marquee-wrap" aria-label="Supported data stack examples">
-        <div class="marquee-label">Works with Bruin projects connected to your existing stack</div>
+        <div class="marquee-label">Works with git-native Bruin projects connected to your existing stack</div>
         <div class="marquee">
           {['BigQuery', 'Snowflake', 'Postgres', 'DuckDB', 'Stripe', 'Salesforce', 'S3', 'Redshift', 'HTTP APIs', 'Git'].concat(['BigQuery', 'Snowflake', 'Postgres', 'DuckDB', 'Stripe', 'Salesforce', 'S3', 'Redshift', 'HTTP APIs', 'Git']).map((item) => (
             <span class="marquee-item"><span class="ico"></span>{item}</span>
@@ -117,7 +116,7 @@ const currentYear = new Date().getFullYear();
 
       <section class="block" id="features">
         <div class="eyebrow"><span class="bar"></span> Why Renart</div>
-        <h2 class="h2">A visual editor that still respects <em>real files</em>.</h2>
+        <h2 class="h2">An IDE that still respects <em>real files</em>.</h2>
         <p class="lede">
           Renart does not replace Bruin or hide your project behind a proprietary model. It reads and writes the same repository files your team reviews, runs, and commits.
         </p>
@@ -153,7 +152,7 @@ const currentYear = new Date().getFullYear();
             <div class="card-content">
               <div class="card-tag">Navigation</div>
               <h3>Jump to referenced assets</h3>
-              <p>Move from a dependency reference to the source asset without leaving the visual workspace.</p>
+              <p>Move from a dependency reference to the source asset without leaving the IDE.</p>
             </div>
           </article>
           -->
@@ -207,7 +206,7 @@ const currentYear = new Date().getFullYear();
 
         <div class="bruin-grid">
           <div class="bruin-list">
-            <div class="bruin-row"><span class="check">✓</span><span><b>Bruin assets on disk.</b> Edit SQL, Python, and YAML files through a visual workspace.</span></div>
+            <div class="bruin-row"><span class="check">✓</span><span><b>Bruin assets on disk.</b> Edit SQL, Python, and YAML files through a git-native IDE.</span></div>
             <div class="bruin-row"><span class="check">✓</span><span><b>Go server as the filesystem path.</b> File-changing actions go through Renart backend APIs.</span></div>
             <div class="bruin-row"><span class="check">✓</span><span><b>SSE-driven reconciliation.</b> Workspace events keep frontend state aligned with files.</span></div>
             <div class="bruin-row"><span class="check">✓</span><span><b>Inspect and materialize.</b> Preview results safely, then run assets intentionally when needed.</span></div>
@@ -229,7 +228,7 @@ const currentYear = new Date().getFullYear();
 
       <section class="final">
         <h2>Start building <em>visibly</em>.</h2>
-        <p>Install Renart, open a Git-backed Bruin project, and inspect your first pipeline from the canvas.</p>
+        <p>Install Renart, open a Git-native Bruin project, and inspect your first pipeline from the canvas.</p>
         <div class="ctas">
           <a href="/docs/installation/" class="btn btn-primary">Get started</a>
           <a href={repoUrl} class="btn btn-ghost">View on GitHub <span class="arrow">-&gt;</span></a>
@@ -248,7 +247,7 @@ const currentYear = new Date().getFullYear();
       <div class="footer-inner">
         <div class="foot-brand">
           <a href="/" class="logo"><img class="logo-mark" src="/icons/icon.svg" alt="" width="22" height="22" />renart</a>
-          <p>A fast visual workspace for Bruin projects. Open source under Apache 2.0.</p>
+          <p>An IDE for git-native data pipelines. Open source under Apache 2.0.</p>
         </div>
         <div class="foot-col">
           <h5>Product</h5>
@@ -426,6 +425,7 @@ const currentYear = new Date().getFullYear();
   }
   .nav-stars { border: 1px solid var(--line-2); color: var(--fg-2); }
   .nav-stars svg { width: 14px; height: 14px; fill: currentColor; }
+  .nav-icon-link { width: 32px; height: 32px; justify-content: center; padding: 0; }
   .nav-cta { background: var(--fg); color: var(--bg); }
 
   .hero {
@@ -459,6 +459,7 @@ const currentYear = new Date().getFullYear();
     margin: 0 0 28px;
   }
   .hero h1 em, .h2 em, .final h2 em, .manifesto em { font-style: italic; color: var(--accent); }
+  .stroke { color: transparent; -webkit-text-stroke: 1px var(--fg-3); }
   .hero-sub { font-size: 18px; color: var(--fg-2); max-width: 680px; margin: 0 auto 40px; text-wrap: pretty; }
   .hero-sub a { color: var(--accent); border-bottom: 1px solid var(--accent-soft-2); }
   .ctas { display: inline-flex; gap: 10px; align-items: center; flex-wrap: wrap; justify-content: center; }

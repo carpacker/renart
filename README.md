@@ -1,107 +1,104 @@
 # Renart
 
-Standalone extraction target for the Renart backend and React frontend.
+Renart is an IDE for git-native data pipelines.
 
-This directory is intended to become its own repository.
+It gives Bruin projects a fast visual editing environment for assets, dependencies, lineage, SQL inspection, and materialization while keeping the filesystem and Git as the source of truth.
 
-Current shape:
+## Who Renart Is For
 
-- Go web server code copied from Renart-specific sources
-- React frontend copied from `web/`
-- Core Bruin functionality expected to come from the published Go module `github.com/bruin-data/bruin`
+Renart is for data engineers, analytics engineers, and technical data users who want to understand and change real pipeline structures without losing the benefits of version-controlled project files.
 
-Current entrypoint:
+Use Renart when you want:
 
-```bash
-go run . web
-```
+- a canvas-first view of assets, dependencies, and data flow
+- editor workflows that still write normal Bruin project files
+- safe inspect flows for previewing SQL results
+- explicit materialization flows for running assets
+- a Git-friendly alternative to a generic pipeline dashboard
 
-Documentation site scaffold:
-
-```bash
-cd docs
-corepack pnpm install
-corepack pnpm dev
-```
-
-Installer script:
+## Install
 
 ```bash
 curl -LsSf getrenart.com/install.sh | sh
 ```
 
-The checked-in installer is generated from:
+Then start Renart inside a Git repository that contains, or will contain, a Bruin project:
 
 ```bash
-PATH="$HOME/go/bin:$PATH" binst init --source=goreleaser --file=.goreleaser.yaml -o .config/binstaller.yml
-PATH="$HOME/go/bin:$PATH" binst gen --config=.config/binstaller.yml -o install.sh
+renart web
 ```
 
-The docs are intended to be short user-facing product documentation for people using Renart in Bruin projects, not just implementation notes for developers working on Renart itself.
+Renart starts on `127.0.0.1:8080` by default. If that port is unavailable, it picks the next available fallback port and prints the URL.
 
-CLI-backed operations are executed through the real `bruin` binary by default.
+## Documentation
 
-Direct execution is preferred when Renart can reuse shared Bruin Go package logic while preserving compatibility with the real CLI. When parity is uncertain, Renart explicitly falls back to the real `bruin` binary instead of guessing.
-
-If needed, you can override that path when starting Renart:
+The documentation site lives in `docs/`.
 
 ```bash
-go run . web --bruin-binary /path/to/bruin
+make docs-dev
 ```
 
-## Current Executor Status
+The production docs build is fully static and can be served by Caddy:
 
-Direct executor paths currently cover:
+```bash
+make docs-docker
+make docs-docker-run
+```
 
-- `QueryAsset`
-- `QueryConnection`
-- `ImportDatabase`
-- `ApplyPatch`
-  - `fill-asset-dependencies`
-  - `fill-columns-from-db`
-- `FormatAsset` for non-`sqlfluff`
-- `RunAsset` for conservative simple SQL backends:
-  - `duckdb.sql`
-  - `motherduck.sql`
-  - `pg.sql`
-  - `bq.sql`
-  - `athena.sql`
-  - `databricks.sql`
-  - `fabric.sql`
-  - `fw.sql`
-  - `my.sql`
-  - `sf.sql`
-  - `ms.sql`
-  - `clickhouse.sql`
-  - `trino.sql`
-  - `vertica.sql`
-- `RunPipeline` for conservative whole-pipeline runs across that same SQL backend set
-- direct column checks for the same conservative SQL backend set
-- direct custom checks for the same conservative SQL backend set
-- direct metadata push for the subset of supported backends with a shared Bruin metadata operator:
-  - `pg.sql`
-  - `bq.sql`
-  - `sf.sql`
+## Development
 
-CLI-backed paths remain in place for:
+Renart is a Go server plus a static React frontend embedded into the binary.
 
-- `FormatAsset` with `sqlfluff`
-- unsupported or higher-risk run paths
-- metadata push outside the explicitly supported direct subset
-- Oracle run paths
+- Backend: Go HTTP server
+- Frontend: React, TypeScript, Vite, TanStack Router, Tailwind CSS, Monaco, React Flow
+- Docs: Astro and Starlight
+- Runtime sync: filesystem watcher plus Server-Sent Events
 
-## Compatibility Rules
+Useful targets:
 
-- The real `bruin` CLI is the compatibility oracle.
-- Direct paths should reuse shared Bruin package logic instead of reimplementing CLI behavior from scratch.
-- If parity cannot be shown confidently, Renart should fall back to the real CLI.
-- New direct paths should add focused compatibility tests and keep Renart live E2E green.
-- CLI fallbacks launched from Renart disable telemetry with `TELEMETRY_OPTOUT=1`.
+```bash
+make help
+make build
+make check
+make web-build
+make docs-build
+make landing-media
+make docs-screenshots
+```
 
-Likely follow-up after splitting into a fresh repo:
+Direct command equivalents:
 
-1. Reduce the copied Go surface further if desired.
-2. Run `go mod tidy` in the new repo.
-3. Decide whether to keep or drop copied tests.
-4. Continue expanding direct execution only where compatibility can be demonstrated.
-5. Update frontend package naming and live test wiring.
+```bash
+/usr/local/go/bin/go build .
+corepack pnpm --dir web build
+corepack pnpm --dir docs build
+```
+
+## Architecture Principles
+
+- The filesystem is authoritative.
+- Git-backed project workspaces are the normal operating model.
+- Frontend state exists for responsiveness, not persistence.
+- File-changing actions go through the Go server APIs.
+- Workspace changes reconcile through Server-Sent Events, not polling.
+- Bruin compatibility matters more than clever internal shortcuts.
+
+## Contributing
+
+Contributions should preserve Renart's positioning as an IDE for git-native data pipelines: visual and direct, but still grounded in real files, real Bruin project semantics, and reviewable Git diffs.
+
+Before opening a PR, run the relevant checks:
+
+```bash
+make check
+```
+
+For frontend changes, also consider live flow coverage when the behavior touches workspace sync, canvas interactions, inspect/materialize, or Monaco editor behavior:
+
+```bash
+make web-test-live
+```
+
+## License
+
+Renart is licensed under Apache License 2.0. See `LICENSE`.
