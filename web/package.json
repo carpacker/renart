@@ -19,12 +19,6 @@
     "tutorial:build-pipeline": "corepack pnpm build && node ./scripts/tutorials/render-tutorial.mjs ./scripts/tutorials/tutorial-02-build-a-pipeline.json",
     "audit": "pnpm audit --audit-level=high"
   },
-  "pnpm": {
-    "onlyBuiltDependencies": [
-      "esbuild",
-      "msw"
-    ]
-  },
   "dependencies": {
     "@base-ui/react": "^1.3.0",
     "@monaco-editor/react": "^4.7.0",
