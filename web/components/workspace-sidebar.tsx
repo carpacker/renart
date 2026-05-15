@@ -5,15 +5,21 @@ import {
   Cable,
   ChevronRight,
   ChevronsLeft,
+  Database,
+  FileCode2,
+  FileText,
+  Folder,
   FolderPlus,
   Moon,
   Pencil,
   Play,
+  TableProperties,
   Settings2,
   Sun,
   Trash2,
   Workflow,
 } from "lucide-react";
+import type { LucideIcon } from "lucide-react";
 import { CSSProperties, useEffect, useMemo, useState } from "react";
 
 import { Button } from "@/components/ui/button";
@@ -62,7 +68,6 @@ type Props = {
   onRunPipeline: (pipelineId: string) => void;
   canRunPipeline: boolean;
   runPipelineLoading: boolean;
-  onOnboardingMountChange?: (element: HTMLDivElement | null) => void;
 };
 
 export function WorkspaceSidebar({
@@ -85,7 +90,6 @@ export function WorkspaceSidebar({
   onRunPipeline,
   canRunPipeline,
   runPipelineLoading,
-  onOnboardingMountChange,
 }: Props) {
   const { isMobile, state, openMobile, setOpenMobile, toggleSidebar } = useSidebar();
   const [expandedPipelineIds, setExpandedPipelineIds] = useState<Set<string>>(
@@ -410,36 +414,41 @@ export function WorkspaceSidebar({
                                       isGroupExpanded ? "rotate-90" : ""
                                     }`}
                                   />
+                                  <Folder className="size-3.5 text-muted-foreground" />
                                   <span>{group.prefix}</span>
                                 </button>
                               </SidebarMenuSubButton>
                               {isGroupExpanded && (
                                 <SidebarMenuSub className="ml-3">
-                                  {group.assets.map(({ asset, leaf }) => (
-                                    <SidebarMenuSubItem key={asset.id}>
-                                      <SidebarMenuSubButton
-                                        asChild
-                                        isActive={asset.id === selectedAsset}
-                                        size="sm"
-                                      >
-                                        <Link
-                                          to="/"
-                                          search={{
-                                            pipeline: item.id,
-                                            asset: asset.id,
-                                            environment: connectionsEnvironment ?? undefined,
-                                          }}
-                                          activeOptions={{
-                                            exact: true,
-                                            includeSearch: false,
-                                          }}
-                                          onClick={closeSidebarAfterNavigation}
+                                  {group.assets.map(({ asset, leaf }) => {
+                                    const AssetIcon = assetIconForType(asset.type);
+                                    return (
+                                      <SidebarMenuSubItem key={asset.id}>
+                                        <SidebarMenuSubButton
+                                          asChild
+                                          isActive={asset.id === selectedAsset}
+                                          size="sm"
                                         >
-                                          <span>{leaf}</span>
-                                        </Link>
-                                      </SidebarMenuSubButton>
-                                    </SidebarMenuSubItem>
-                                  ))}
+                                          <Link
+                                            to="/"
+                                            search={{
+                                              pipeline: item.id,
+                                              asset: asset.id,
+                                              environment: connectionsEnvironment ?? undefined,
+                                            }}
+                                            activeOptions={{
+                                              exact: true,
+                                              includeSearch: false,
+                                            }}
+                                            onClick={closeSidebarAfterNavigation}
+                                          >
+                                            <AssetIcon.icon className={`size-3.5 ${AssetIcon.className}`} />
+                                            <span>{leaf}</span>
+                                          </Link>
+                                        </SidebarMenuSubButton>
+                                      </SidebarMenuSubItem>
+                                    );
+                                  })}
                                 </SidebarMenuSub>
                               )}
                             </SidebarMenuSubItem>
@@ -454,14 +463,6 @@ export function WorkspaceSidebar({
           </SidebarGroupContent>
         </SidebarGroup>
 
-        {onOnboardingMountChange && (
-          <SidebarGroup>
-            <SidebarGroupLabel>Onboarding</SidebarGroupLabel>
-            <SidebarGroupContent>
-              <div ref={onOnboardingMountChange} />
-            </SidebarGroupContent>
-          </SidebarGroup>
-        )}
       </SidebarContent>
     </Sidebar>
   );
@@ -498,4 +499,27 @@ function splitAssetName(name: string): { prefix: string; leaf: string } {
     prefix: parts.slice(0, -1).join("."),
     leaf: parts[parts.length - 1],
   };
+}
+
+function assetIconForType(assetType?: string | null): {
+  icon: LucideIcon;
+  className: string;
+} {
+  const normalized = (assetType ?? "").trim().toLowerCase();
+  if (normalized.endsWith(".seed")) {
+    return { icon: TableProperties, className: "text-emerald-500" };
+  }
+  if (normalized.endsWith(".sql")) {
+    return { icon: Database, className: "text-sky-500" };
+  }
+  if (normalized === "ingestr") {
+    return { icon: Cable, className: "text-violet-500" };
+  }
+  if (normalized === "python") {
+    return { icon: FileCode2, className: "text-yellow-500" };
+  }
+  if (normalized === "r") {
+    return { icon: FileText, className: "text-blue-500" };
+  }
+  return { icon: FileText, className: "text-muted-foreground" };
 }

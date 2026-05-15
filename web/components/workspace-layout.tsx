@@ -56,7 +56,6 @@ type WorkspaceLayoutContextValue = {
   navigateSelection: (pipelineId: string, assetId: string | null) => void;
   pipeline: WebPipeline | null;
   pipelineMaterialization: ReturnType<typeof usePipelineMaterializationState>;
-  sidebarOnboardingMount: HTMLDivElement | null;
   selectedAsset: string | null;
   setSidebarState: Dispatch<SetStateAction<WorkspaceSidebarState>>;
   theme: ReturnType<typeof useWorkspaceTheme>["theme"];
@@ -98,8 +97,6 @@ export function WorkspaceLayout() {
   const [pendingPipelinePathSelection, setPendingPipelinePathSelection] =
     useState<string | null>(null);
   const [sidebarState, setSidebarState] = useState<WorkspaceSidebarState>({});
-  const [sidebarOnboardingMount, setSidebarOnboardingMount] =
-    useState<HTMLDivElement | null>(null);
   const onboarding = useOnboarding({
     spotlightActive: routeState.pathname.startsWith("/settings/environments"),
     spotlightSelectors: [
@@ -329,7 +326,6 @@ export function WorkspaceLayout() {
       navigateSelection,
       pipeline,
       pipelineMaterialization,
-      sidebarOnboardingMount,
       selectedAsset,
       setSidebarState,
       theme,
@@ -343,7 +339,6 @@ export function WorkspaceLayout() {
     navigateSelection,
     pipeline,
     pipelineMaterialization,
-    sidebarOnboardingMount,
     selectedAsset,
     theme,
     workspace,
@@ -424,7 +419,6 @@ export function WorkspaceLayout() {
             canDeletePipeline={Boolean(pipeline)}
             deletePipelineLoading={deletePipelineLoading}
             renamePipelineLoading={renamePipelineLoading}
-            onOnboardingMountChange={setSidebarOnboardingMount}
           />
 
           <SidebarInset className="min-w-0 min-h-0">
