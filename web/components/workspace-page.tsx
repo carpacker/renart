@@ -132,6 +132,10 @@ export function WorkspacePage() {
       buildCreateAssetInput(name, kind, assetActions.defaultSqlAssetType),
     [assetActions.defaultSqlAssetType]
   );
+  const defaultSeedAssetType = useMemo(
+    () => assetActions.defaultSqlAssetType.replace(/\.sql$/, ".seed"),
+    [assetActions.defaultSqlAssetType]
+  );
 
   const {
     deleteDialogOpen,
@@ -217,6 +221,10 @@ export function WorkspacePage() {
     handlePaneContextMenu,
     handleNodeDragStop,
     handleNodeClick,
+    handleCanvasDragOver,
+    handleCanvasDragLeave,
+    handleCanvasDrop,
+    seedDropActive,
   } = useAssetCanvasInteractions({
     reactFlowInstance,
     canvasContainerRef,
@@ -237,6 +245,7 @@ export function WorkspacePage() {
     isMobile,
     openSelectedAssetEditor: () => setMobileEditorOpen(true),
     buildCreateAssetInput: buildCreateAssetInputForWorkspace,
+    defaultSeedAssetType,
   });
 
   const handleRunPipeline = () => {
@@ -552,6 +561,10 @@ export function WorkspacePage() {
           onPaneClick: handlePaneClick,
           onPaneContextMenu: handlePaneContextMenu,
           onNodeClick: handleNodeClick,
+          onCanvasDragOver: handleCanvasDragOver,
+          onCanvasDragLeave: handleCanvasDragLeave,
+          onCanvasDrop: handleCanvasDrop,
+          seedDropActive,
           onRecomputeGraph: handleRecomputeGraph,
           onRunPipeline: handleRunPipeline,
           canRunPipeline: Boolean(pipeline),

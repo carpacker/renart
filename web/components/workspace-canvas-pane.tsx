@@ -1,6 +1,6 @@
 "use client";
 
-import { CSSProperties, MutableRefObject, ReactNode, useEffect } from "react";
+import { CSSProperties, DragEvent, MutableRefObject, ReactNode, useEffect } from "react";
 import { FilePenLine, LoaderCircle, Rows3 } from "lucide-react";
 import {
   Background,
@@ -53,6 +53,10 @@ export type WorkspaceCanvasPaneProps = {
   onPaneClick: Parameters<typeof ReactFlow>[0]["onPaneClick"];
   onPaneContextMenu: Parameters<typeof ReactFlow>[0]["onPaneContextMenu"];
   onNodeClick: Parameters<typeof ReactFlow>[0]["onNodeClick"];
+  onCanvasDragOver?: (event: DragEvent<HTMLDivElement>) => void;
+  onCanvasDragLeave?: (event: DragEvent<HTMLDivElement>) => void;
+  onCanvasDrop?: (event: DragEvent<HTMLDivElement>) => void;
+  seedDropActive?: boolean;
   onRecomputeGraph: () => void;
   onRunPipeline?: () => void;
   canRunPipeline?: boolean;
@@ -104,6 +108,10 @@ export function WorkspaceCanvasPane({
   onPaneClick,
   onPaneContextMenu,
   onNodeClick,
+  onCanvasDragOver,
+  onCanvasDragLeave,
+  onCanvasDrop,
+  seedDropActive = false,
   onRecomputeGraph,
   onRunPipeline,
   canRunPipeline = false,
@@ -136,7 +144,14 @@ export function WorkspaceCanvasPane({
     >
       <PanelGroup direction="vertical">
         <Panel defaultSize={hasResultData ? 72 : 100} minSize={45}>
-          <div className="relative h-full" ref={canvasContainerRef}>
+          <div
+            className="relative h-full"
+            ref={canvasContainerRef}
+            onDragOver={onCanvasDragOver}
+            onDragLeave={onCanvasDragLeave}
+            onDrop={onCanvasDrop}
+            data-testid="workspace-canvas-dropzone"
+          >
             <div className="absolute right-3 top-3 z-10 flex gap-2">
               {onRunPipeline ? (
                 <Button
@@ -196,6 +211,7 @@ export function WorkspaceCanvasPane({
                 </div>
               </QuickstartTourCard>
             ) : null}
+            {seedDropActive ? <SeedDropOverlay /> : null}
             <ReactFlow
               nodes={nodes.map((node) =>
                 tourHighlightedNodeIds.includes(node.id)
@@ -287,6 +303,27 @@ function QuickstartTourCard({
   return (
     <div className="fixed z-[70] max-w-[360px] rounded-xl border bg-popover p-4 text-popover-foreground shadow-lg ring-4 ring-primary/20" style={style}>
       {children}
+    </div>
+  );
+}
+
+function SeedDropOverlay() {
+  return (
+    <div
+      className="pointer-events-none absolute inset-3 z-30 flex items-center justify-center overflow-hidden rounded-3xl border border-emerald-300/70 bg-emerald-950/20 shadow-[inset_0_0_0_1px_rgba(16,185,129,0.2),0_24px_80px_rgba(16,185,129,0.22)] backdrop-blur-sm seed-drop-overlay"
+      data-testid="seed-drop-overlay"
+    >
+      <div className="absolute h-64 w-64 rounded-full bg-emerald-400/20 blur-3xl seed-drop-orb" />
+      <div className="absolute h-96 w-96 rounded-full border border-emerald-300/30 seed-drop-ring" />
+      <div className="relative rounded-2xl border border-emerald-200/50 bg-background/90 px-6 py-5 text-center shadow-2xl seed-drop-card">
+        <div className="mx-auto mb-3 flex size-12 items-center justify-center rounded-2xl bg-emerald-500 text-white shadow-lg shadow-emerald-500/30">
+          <Rows3 className="size-6" />
+        </div>
+        <div className="text-base font-semibold">Drop CSV to create a seed asset</div>
+        <div className="mt-1 max-w-72 text-sm text-muted-foreground">
+          Renart will copy the file, generate Bruin seed YAML, and place it on the canvas.
+        </div>
+      </div>
     </div>
   );
 }

@@ -78,6 +78,64 @@ test.describe("workspace live basic flows", () => {
     await expect(page.getByRole("cell", { name: "Ada", exact: true })).toBeVisible();
   });
 
+  test("loads a Bruin seed asset and keeps its YAML definition editable", async ({
+    liveApp,
+    page,
+  }) => {
+    test.skip(test.info().project.name.includes("mobile"), "Desktop seed asset editor coverage.");
+
+    await page.goto(`${liveApp.baseURL}/`);
+    await openSeedEditor(page, liveApp.baseURL);
+
+    await expect(page).toHaveTitle("analytics.customer_seed · analytics · Renart");
+    await expect(page.getByTestId("editor-asset-name")).toHaveText("analytics.customer_seed");
+    await expect(page.getByTestId("editor-asset-path")).toHaveText(
+      "analytics/assets/analytics/customer_seed.asset.yml"
+    );
+    await expect(page.locator(".view-line", { hasText: "type: duckdb.seed" })).toBeVisible();
+    await expect(page.locator(".view-line", { hasText: "path: ./customer_seed.csv" })).toBeVisible();
+
+    const seedAsset = await page.evaluate(async () => {
+      const response = await fetch("/api/workspace", { cache: "no-store" });
+      const workspace = await response.json() as {
+        pipelines?: Array<{ assets?: Array<{ name: string; type: string; content: string }> }>;
+      };
+      return workspace.pipelines
+        ?.flatMap((pipeline) => pipeline.assets ?? [])
+        .find((asset) => asset.name === "analytics.customer_seed") ?? null;
+    });
+    expect(seedAsset).toMatchObject({
+      name: "analytics.customer_seed",
+      type: "duckdb.seed",
+    });
+    expect(seedAsset?.content).toContain("path: ./customer_seed.csv");
+    await waitForWorkspaceAssetUpstreams(page, "analytics.seed_customers", [
+      "analytics.customer_seed",
+    ]);
+
+    await page.getByRole("tab", { name: "Dependencies" }).click();
+    await expect(page.getByText("No automatically inferred dependencies for this asset.")).toBeVisible();
+
+    await page.getByRole("tab", { name: "Materialize" }).click();
+    await page.getByRole("button", { name: "Materialize", exact: true }).click();
+    await expect(page.getByText(/Materialize asset: analytics\.customer_seed/)).toBeVisible({
+      timeout: 60000,
+    });
+
+    const inspectResponse = page.waitForResponse(
+      (response) => response.url().includes("/inspect") && response.status() === 200
+    );
+    await page.getByRole("button", { name: "Inspect Data" }).click();
+    await inspectResponse;
+    await page.getByRole("tab", { name: "Inspect" }).click();
+    await expect(page.getByText("2 rows", { exact: true })).toBeVisible({ timeout: 15000 });
+    await expect(page.getByRole("cell", { name: "Grace", exact: true })).toBeVisible();
+
+    await page.getByRole("tab", { name: "Configuration" }).click();
+    await page.getByRole("combobox").filter({ hasText: "duckdb.seed" }).click();
+    await expect(page.getByRole("option", { name: "duckdb.seed" })).toBeVisible();
+  });
+
   test("switches environments, updates the selector label, and refetches inspect", async ({
     liveApp,
     page,
@@ -386,7 +444,7 @@ test.describe("workspace live basic flows", () => {
     if (test.info().project.name.includes("mobile")) {
       await expect(page.getByRole("button", { name: "Materialize", exact: true })).toBeVisible();
       await page.getByRole("button", { name: "Materialize", exact: true }).click();
-      await expect(page.getByText("Asset: analytics.customers", { exact: true })).toBeVisible({ timeout: 15000 });
+      await expect(page.getByText(/Materialize asset: analytics\.customers/)).toBeVisible({ timeout: 15000 });
       return;
     }
 
@@ -397,7 +455,7 @@ test.describe("workspace live basic flows", () => {
     await expect(page.getByRole("tab", { name: "Materialize" })).toBeVisible();
     await expect(emptyHistoryMessage).toHaveCount(0);
     await expect(
-      page.getByText("Asset: analytics.customers", { exact: true })
+      page.getByText(/Materialize asset: analytics\.customers/)
     ).toBeVisible({ timeout: 15000 });
   });
 
@@ -467,6 +525,58 @@ test.describe("workspace live basic flows", () => {
     await expect(
       page.getByRole("link", { name: "renamed_asset", exact: true })
     ).toHaveCount(0);
+  });
+
+  test("creates a seed asset by dropping a CSV file on the canvas", async ({
+    liveApp,
+    page,
+  }) => {
+    test.skip(test.info().project.name.includes("mobile"), "Desktop file drop coverage.");
+
+    await page.goto(`${liveApp.baseURL}/`);
+    await openCustomersEditor(page, liveApp.baseURL);
+
+    const dropzone = page.getByTestId("workspace-canvas-dropzone");
+    const dataTransfer = await page.evaluateHandle(() => {
+      const transfer = new DataTransfer();
+      transfer.items.add(
+        new File(
+          ["customer_id,customer_name\n10,Lin\n11,Barbara\n"],
+          "regional_customers.csv",
+          { type: "text/csv" }
+        )
+      );
+      return transfer;
+    });
+
+    await dropzone.dispatchEvent("dragover", { dataTransfer });
+    await expect(page.getByTestId("seed-drop-overlay")).toBeVisible();
+
+    const createRequest = page.waitForRequest((request) =>
+      request.method() === "POST" && request.url().includes("/api/pipelines/") && request.url().endsWith("/assets")
+    );
+    await dropzone.dispatchEvent("drop", { dataTransfer });
+    await createRequest;
+
+    await expect(page.getByRole("link", { name: "regional_customers", exact: true })).toBeVisible({
+      timeout: 15000,
+    });
+    await expect(page.getByTestId("editor-asset-name")).toHaveText("analytics.regional_customers");
+    await expect(page.locator(".view-line", { hasText: "type: duckdb.seed" })).toBeVisible();
+    await expect(page.locator(".view-line", { hasText: "path: ./regional_customers.csv" })).toBeVisible();
+
+    const seedDefinition = await readFile(
+      join(liveApp.workspaceDir, "analytics/assets/analytics/regional_customers.asset.yml"),
+      "utf8"
+    );
+    const seedCSV = await readFile(
+      join(liveApp.workspaceDir, "analytics/assets/analytics/regional_customers.csv"),
+      "utf8"
+    );
+    expect(seedDefinition).toContain("name: analytics.regional_customers");
+    expect(seedDefinition).toContain("type: duckdb.seed");
+    expect(seedDefinition).toContain("path: ./regional_customers.csv");
+    expect(seedCSV).toContain("11,Barbara");
   });
 
   test.describe("empty workspace live flows", () => {
@@ -574,6 +684,23 @@ async function openCustomersEditor(
     await expect(editorAssetName).toHaveText("analytics.customers", { timeout: 15000 });
     await waitForEditorReady(page);
   }
+}
+
+async function openSeedEditor(
+  page: import("@playwright/test").Page,
+  baseURL: string
+) {
+  const pipelineId = encodeRouteId("analytics/pipeline.yml");
+  const assetId = encodeRouteId("analytics/assets/analytics/customer_seed.asset.yml");
+  await page.goto(`${baseURL}/?pipeline=${pipelineId}&asset=${assetId}`);
+  await expect(page.getByTestId("editor-asset-name")).toHaveText("analytics.customer_seed", {
+    timeout: 15000,
+  });
+  await waitForEditorReady(page);
+}
+
+function encodeRouteId(value: string) {
+  return Buffer.from(value, "utf8").toString("base64url");
 }
 
 async function reopenCustomersEditor(

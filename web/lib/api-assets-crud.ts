@@ -9,6 +9,8 @@ export async function createAsset(
     path?: string;
     content?: string;
     source_asset_id?: string;
+    seed_file_name?: string;
+    seed_file_content?: string;
   }
 ) {
   return fetchJSONWithBody<{ status: string; asset_id?: string; asset_path?: string }>(

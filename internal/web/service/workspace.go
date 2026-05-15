@@ -155,6 +155,12 @@ func (s *WorkspaceService) ComputeState(ctx context.Context) (model.WorkspaceSta
 			if assetPath == "" {
 				assetPath = asset.DefinitionFile.Path
 			}
+			content := asset.ExecutableFile.Content
+			if strings.TrimSpace(content) == "" && asset.ExecutableFile.Path == "" {
+				if definitionBytes, readErr := afero.ReadFile(fs, asset.DefinitionFile.Path); readErr == nil {
+					content = string(definitionBytes)
+				}
+			}
 
 			relAssetPath, relErr := filepath.Rel(s.workspaceRoot, assetPath)
 			if relErr != nil {
@@ -178,7 +184,7 @@ func (s *WorkspaceService) ComputeState(ctx context.Context) (model.WorkspaceSta
 				Name:                asset.Name,
 				Type:                string(asset.Type),
 				Path:                filepath.ToSlash(relAssetPath),
-				Content:             asset.ExecutableFile.Content,
+				Content:             content,
 				Upstreams:           upstreams,
 				Parameters:          asset.Parameters,
 				Meta:                asset.Meta,

@@ -140,6 +140,10 @@ func MergeExecutableContent(currentFileContent, executableContent string) string
 
 // DefaultAssetContent generates default content for a new asset.
 func DefaultAssetContent(assetName, assetType, assetPath string) string {
+	if strings.HasSuffix(strings.ToLower(strings.TrimSpace(assetType)), ".seed") {
+		return fmt.Sprintf("name: %s\ntype: %s\n\nparameters:\n  path: ./%s.csv\n", assetName, assetType, assetNameLeafPath(assetName))
+	}
+
 	if strings.HasSuffix(strings.ToLower(assetPath), ".py") {
 		return `""" @bruin
 

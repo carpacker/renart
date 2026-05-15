@@ -16,11 +16,13 @@ type APIError struct {
 }
 
 type CreateAssetRequest struct {
-	Name          string `json:"name"`
-	Type          string `json:"type"`
-	Path          string `json:"path"`
-	Content       string `json:"content"`
-	SourceAssetID string `json:"source_asset_id"`
+	Name            string `json:"name"`
+	Type            string `json:"type"`
+	Path            string `json:"path"`
+	Content         string `json:"content"`
+	SourceAssetID   string `json:"source_asset_id"`
+	SeedFileName    string `json:"seed_file_name"`
+	SeedFileContent string `json:"seed_file_content"`
 }
 
 type UpdateAssetRequest struct {

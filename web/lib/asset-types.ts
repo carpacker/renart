@@ -20,6 +20,23 @@ export const SQL_ASSET_TYPES = [
   "vertica.sql",
 ] as const;
 
+export const SEED_ASSET_TYPES = [
+  "athena.seed",
+  "bq.seed",
+  "clickhouse.seed",
+  "databricks.seed",
+  "duckdb.seed",
+  "fabric.seed",
+  "fw.seed",
+  "ms.seed",
+  "my.seed",
+  "pg.seed",
+  "rs.seed",
+  "sf.seed",
+  "synapse.seed",
+  "vertica.seed",
+] as const;
+
 export const NON_SQL_ASSET_TYPES = ["python", "ingestr", "r"] as const;
 
 const CONNECTION_TYPE_TO_ASSET_TYPE: Record<string, string> = {
@@ -56,7 +73,7 @@ export function getAvailableAssetTypes(
     .filter((value): value is string => Boolean(value));
 
   return Array.from(
-    new Set([...mappedSqlTypes, ...SQL_ASSET_TYPES, ...NON_SQL_ASSET_TYPES])
+    new Set([...mappedSqlTypes, ...SQL_ASSET_TYPES, ...SEED_ASSET_TYPES, ...NON_SQL_ASSET_TYPES])
   ).sort((left, right) => left.localeCompare(right));
 }
 

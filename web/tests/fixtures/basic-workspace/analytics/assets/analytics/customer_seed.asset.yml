@@ -1,0 +1,14 @@
+name: analytics.customer_seed
+type: duckdb.seed
+description: Customer records loaded from a local CSV seed file.
+
+parameters:
+  path: ./customer_seed.csv
+
+columns:
+  - name: customer_id
+    type: integer
+  - name: customer_name
+    type: varchar
+  - name: segment
+    type: varchar

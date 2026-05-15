@@ -247,3 +247,62 @@ body > .parameter-hints-widget {
   stroke-width: 3;
   filter: drop-shadow(0 0 8px rgba(59, 130, 246, 0.8));
 }
+
+@keyframes seed-drop-overlay-enter {
+  from {
+    opacity: 0;
+    transform: scale(0.985);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+@keyframes seed-drop-card-float {
+  0%, 100% {
+    transform: translateY(0) scale(1);
+  }
+  50% {
+    transform: translateY(-8px) scale(1.015);
+  }
+}
+
+@keyframes seed-drop-ring-pulse {
+  0% {
+    opacity: 0.25;
+    transform: scale(0.82);
+  }
+  60% {
+    opacity: 0.5;
+  }
+  100% {
+    opacity: 0;
+    transform: scale(1.16);
+  }
+}
+
+@keyframes seed-drop-orb-drift {
+  0%, 100% {
+    transform: translate(-40px, 24px);
+  }
+  50% {
+    transform: translate(44px, -28px);
+  }
+}
+
+.seed-drop-overlay {
+  animation: seed-drop-overlay-enter 180ms ease-out both;
+}
+
+.seed-drop-card {
+  animation: seed-drop-card-float 1.7s ease-in-out infinite;
+}
+
+.seed-drop-ring {
+  animation: seed-drop-ring-pulse 1.2s ease-out infinite;
+}
+
+.seed-drop-orb {
+  animation: seed-drop-orb-drift 3s ease-in-out infinite;
+}

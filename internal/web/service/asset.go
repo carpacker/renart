@@ -163,6 +163,16 @@ func (s *AssetService) Create(ctx context.Context, pipelineID string, req Create
 	if err := afero.WriteFile(fs, absAssetPath, []byte(content), 0o644); err != nil {
 		return nil, &AssetAPIError{Status: 500, Code: "asset_write_failed", Message: err.Error()}
 	}
+	if strings.TrimSpace(req.SeedFileName) != "" {
+		seedFileName := filepath.Base(strings.TrimSpace(req.SeedFileName))
+		if seedFileName == "." || seedFileName == string(filepath.Separator) || seedFileName == "" {
+			return nil, &AssetAPIError{Status: 400, Code: "invalid_seed_file_name", Message: "seed file name is invalid"}
+		}
+		seedFilePath := filepath.Join(filepath.Dir(absAssetPath), seedFileName)
+		if err := afero.WriteFile(fs, seedFilePath, []byte(req.SeedFileContent), 0o644); err != nil {
+			return nil, &AssetAPIError{Status: 500, Code: "seed_file_write_failed", Message: err.Error()}
+		}
+	}
 	if err := s.deps.EnsurePythonRequirements(absAssetPath, assetType, relAssetPath); err != nil {
 		return nil, &AssetAPIError{Status: 500, Code: "requirements_write_failed", Message: err.Error()}
 	}
@@ -180,11 +190,13 @@ func (s *AssetService) Create(ctx context.Context, pipelineID string, req Create
 }
 
 type CreateAssetParams struct {
-	Name          string
-	Type          string
-	Path          string
-	Content       string
-	SourceAssetID string
+	Name            string
+	Type            string
+	Path            string
+	Content         string
+	SourceAssetID   string
+	SeedFileName    string
+	SeedFileContent string
 }
 
 func (s *AssetService) Update(ctx context.Context, assetID string, req AssetUpdateRequest) (map[string]string, *AssetAPIError) {
@@ -896,6 +908,8 @@ func pipelinePathsReferToSameRoot(sourcePipelinePath, targetPipelineRoot string)
 func extensionForAssetType(assetType string) string {
 	lowered := strings.ToLower(strings.TrimSpace(assetType))
 	switch {
+	case strings.HasSuffix(lowered, ".seed"):
+		return ".asset.yml"
 	case strings.HasSuffix(lowered, ".py") || strings.Contains(lowered, "python"):
 		return ".py"
 	case strings.HasSuffix(lowered, ".sql") || strings.Contains(lowered, "sql"):

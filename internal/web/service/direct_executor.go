@@ -985,21 +985,35 @@ func isDirectRunAssetTypeSupported(assetType pipeline.AssetType) bool {
 
 var directRunAssetTypes = map[pipeline.AssetType]struct{}{
 	pipeline.AssetTypeDuckDBQuery:             {},
+	pipeline.AssetTypeDuckDBSeed:              {},
 	pipeline.AssetTypeMotherduckQuery:         {},
 	pipeline.AssetTypePostgresQuery:           {},
+	pipeline.AssetTypePostgresSeed:            {},
 	pipeline.AssetTypeRedshiftQuery:           {},
+	pipeline.AssetTypeRedshiftSeed:            {},
 	pipeline.AssetTypeBigqueryQuery:           {},
+	pipeline.AssetTypeBigquerySeed:            {},
 	pipeline.AssetTypeAthenaQuery:             {},
+	pipeline.AssetTypeAthenaSeed:              {},
 	pipeline.AssetTypeDatabricksQuery:         {},
+	pipeline.AssetTypeDatabricksSeed:          {},
 	pipeline.AssetTypeFabricQuery:             {},
+	pipeline.AssetTypeFabricSeed:              {},
 	pipeline.AssetTypeFabricQueryLegacy:       {},
+	pipeline.AssetTypeFabricSeedLegacy:        {},
 	pipeline.AssetTypeMySQLQuery:              {},
+	pipeline.AssetTypeMySQLSeed:               {},
 	pipeline.AssetTypeSnowflakeQuery:          {},
+	pipeline.AssetTypeSnowflakeSeed:           {},
 	pipeline.AssetTypeMsSQLQuery:              {},
+	pipeline.AssetTypeMsSQLSeed:               {},
 	pipeline.AssetTypeSynapseQuery:            {},
+	pipeline.AssetTypeSynapseSeed:             {},
 	pipeline.AssetTypeClickHouse:              {},
+	pipeline.AssetTypeClickHouseSeed:          {},
 	pipeline.AssetTypeTrinoQuery:              {},
 	pipeline.AssetTypeVerticaQuery:            {},
+	pipeline.AssetTypeVerticaSeed:             {},
 	pipeline.AssetTypeOracleQuery:             {},
 	pipeline.AssetTypeBigqueryQuerySensor:     {},
 	pipeline.AssetTypeBigqueryTableSensor:     {},
@@ -1117,9 +1131,27 @@ func buildDirectMainExecutors(manager config.ConnectionAndDetailsGetter, rendere
 	}
 
 	wholeFileExtractor := &query.WholeFileExtractor{Fs: afero.NewOsFs(), Renderer: renderer}
+	customCheckRunner := ansisql.NewCustomCheckOperator(manager, renderer)
+	seedOperator, err := bruiningestr.NewSeedOperator(manager, renderer)
+	if err != nil {
+		return nil, err
+	}
 	ensureExecutorConfig := func(assetType pipeline.AssetType) {
 		if executors[assetType] == nil {
 			executors[assetType] = bruinexecutor.Config{}
+		}
+	}
+	assignSeedExecutor := func(assetType pipeline.AssetType, columnCheck bruinexecutor.Operator, customCheck bruinexecutor.Operator, metadataPush bruinexecutor.Operator) {
+		ensureExecutorConfig(assetType)
+		executors[assetType][scheduler.TaskInstanceTypeMain] = seedOperator
+		if columnCheck != nil {
+			executors[assetType][scheduler.TaskInstanceTypeColumnCheck] = columnCheck
+		}
+		if customCheck != nil {
+			executors[assetType][scheduler.TaskInstanceTypeCustomCheck] = customCheck
+		}
+		if metadataPush != nil {
+			executors[assetType][scheduler.TaskInstanceTypeMetadataPush] = metadataPush
 		}
 	}
 
@@ -1127,8 +1159,10 @@ func buildDirectMainExecutors(manager config.ConnectionAndDetailsGetter, rendere
 	executors[pipeline.AssetTypeDuckDBQuery][scheduler.TaskInstanceTypeMain] = duck.NewBasicOperator(manager, wholeFileExtractor, pipeline.HookWrapperMaterializer{
 		Mat: duck.NewMaterializer(false),
 	}, parser)
-	executors[pipeline.AssetTypeDuckDBQuery][scheduler.TaskInstanceTypeColumnCheck] = duck.NewColumnCheckOperator(manager)
-	executors[pipeline.AssetTypeDuckDBQuery][scheduler.TaskInstanceTypeCustomCheck] = ansisql.NewCustomCheckOperator(manager, renderer)
+	duckColumnCheckOperator := duck.NewColumnCheckOperator(manager)
+	executors[pipeline.AssetTypeDuckDBQuery][scheduler.TaskInstanceTypeColumnCheck] = duckColumnCheckOperator
+	executors[pipeline.AssetTypeDuckDBQuery][scheduler.TaskInstanceTypeCustomCheck] = customCheckRunner
+	assignSeedExecutor(pipeline.AssetTypeDuckDBSeed, duckColumnCheckOperator, customCheckRunner, nil)
 	ensureExecutorConfig(pipeline.AssetTypeMotherduckQuery)
 	executors[pipeline.AssetTypeMotherduckQuery][scheduler.TaskInstanceTypeMain] = duck.NewBasicOperator(manager, wholeFileExtractor, pipeline.HookWrapperMaterializer{
 		Mat: duck.NewMaterializer(false),
@@ -1139,15 +1173,19 @@ func buildDirectMainExecutors(manager config.ConnectionAndDetailsGetter, rendere
 	executors[pipeline.AssetTypePostgresQuery][scheduler.TaskInstanceTypeMain] = pg.NewBasicOperator(manager, wholeFileExtractor, pipeline.HookWrapperMaterializer{
 		Mat: pg.NewMaterializer(false),
 	}, parser)
-	executors[pipeline.AssetTypePostgresQuery][scheduler.TaskInstanceTypeColumnCheck] = pg.NewColumnCheckOperator(manager)
-	executors[pipeline.AssetTypePostgresQuery][scheduler.TaskInstanceTypeCustomCheck] = ansisql.NewCustomCheckOperator(manager, renderer)
-	executors[pipeline.AssetTypePostgresQuery][scheduler.TaskInstanceTypeMetadataPush] = pg.NewMetadataPushOperator(manager)
+	pgColumnCheckOperator := pg.NewColumnCheckOperator(manager)
+	pgMetadataPushOperator := pg.NewMetadataPushOperator(manager)
+	executors[pipeline.AssetTypePostgresQuery][scheduler.TaskInstanceTypeColumnCheck] = pgColumnCheckOperator
+	executors[pipeline.AssetTypePostgresQuery][scheduler.TaskInstanceTypeCustomCheck] = customCheckRunner
+	executors[pipeline.AssetTypePostgresQuery][scheduler.TaskInstanceTypeMetadataPush] = pgMetadataPushOperator
+	assignSeedExecutor(pipeline.AssetTypePostgresSeed, pgColumnCheckOperator, customCheckRunner, pgMetadataPushOperator)
 	ensureExecutorConfig(pipeline.AssetTypeRedshiftQuery)
 	executors[pipeline.AssetTypeRedshiftQuery][scheduler.TaskInstanceTypeMain] = pg.NewBasicOperator(manager, wholeFileExtractor, pipeline.HookWrapperMaterializer{
 		Mat: pg.NewMaterializer(false),
 	}, parser)
-	executors[pipeline.AssetTypeRedshiftQuery][scheduler.TaskInstanceTypeColumnCheck] = pg.NewColumnCheckOperator(manager)
-	executors[pipeline.AssetTypeRedshiftQuery][scheduler.TaskInstanceTypeCustomCheck] = ansisql.NewCustomCheckOperator(manager, renderer)
+	executors[pipeline.AssetTypeRedshiftQuery][scheduler.TaskInstanceTypeColumnCheck] = pgColumnCheckOperator
+	executors[pipeline.AssetTypeRedshiftQuery][scheduler.TaskInstanceTypeCustomCheck] = customCheckRunner
+	assignSeedExecutor(pipeline.AssetTypeRedshiftSeed, pgColumnCheckOperator, customCheckRunner, nil)
 	ensureExecutorConfig(pipeline.AssetTypeBigqueryQuery)
 	executors[pipeline.AssetTypeBigqueryQuery][scheduler.TaskInstanceTypeMain] = bq.NewBasicOperator(manager, wholeFileExtractor, pipeline.HookWrapperMaterializer{
 		Mat: bq.NewMaterializer(false),
@@ -1157,40 +1195,49 @@ func buildDirectMainExecutors(manager config.ConnectionAndDetailsGetter, rendere
 		return nil, err
 	}
 	executors[pipeline.AssetTypeBigqueryQuery][scheduler.TaskInstanceTypeColumnCheck] = bqColumnCheckOperator
-	executors[pipeline.AssetTypeBigqueryQuery][scheduler.TaskInstanceTypeCustomCheck] = ansisql.NewCustomCheckOperator(manager, renderer)
-	executors[pipeline.AssetTypeBigqueryQuery][scheduler.TaskInstanceTypeMetadataPush] = bq.NewMetadataPushOperator(manager)
+	bqMetadataPushOperator := bq.NewMetadataPushOperator(manager)
+	executors[pipeline.AssetTypeBigqueryQuery][scheduler.TaskInstanceTypeCustomCheck] = customCheckRunner
+	executors[pipeline.AssetTypeBigqueryQuery][scheduler.TaskInstanceTypeMetadataPush] = bqMetadataPushOperator
+	assignSeedExecutor(pipeline.AssetTypeBigquerySeed, bqColumnCheckOperator, customCheckRunner, bqMetadataPushOperator)
 	ensureExecutorConfig(pipeline.AssetTypeBigqueryQuerySensor)
 	executors[pipeline.AssetTypeBigqueryQuerySensor][scheduler.TaskInstanceTypeMain] = bq.NewQuerySensor(manager, wholeFileExtractor, "once")
 	ensureExecutorConfig(pipeline.AssetTypeBigqueryTableSensor)
 	executors[pipeline.AssetTypeBigqueryTableSensor][scheduler.TaskInstanceTypeMain] = bq.NewTableSensor(manager, "once", wholeFileExtractor)
 	ensureExecutorConfig(pipeline.AssetTypeAthenaQuery)
 	executors[pipeline.AssetTypeAthenaQuery][scheduler.TaskInstanceTypeMain] = ath.NewBasicOperator(manager, wholeFileExtractor, ath.NewMaterializer(false), parser)
-	executors[pipeline.AssetTypeAthenaQuery][scheduler.TaskInstanceTypeColumnCheck] = ath.NewColumnCheckOperator(manager)
-	executors[pipeline.AssetTypeAthenaQuery][scheduler.TaskInstanceTypeCustomCheck] = ansisql.NewCustomCheckOperator(manager, renderer)
+	athenaColumnCheckOperator := ath.NewColumnCheckOperator(manager)
+	executors[pipeline.AssetTypeAthenaQuery][scheduler.TaskInstanceTypeColumnCheck] = athenaColumnCheckOperator
+	executors[pipeline.AssetTypeAthenaQuery][scheduler.TaskInstanceTypeCustomCheck] = customCheckRunner
+	assignSeedExecutor(pipeline.AssetTypeAthenaSeed, athenaColumnCheckOperator, customCheckRunner, nil)
 	ensureExecutorConfig(pipeline.AssetTypeAthenaSQLSensor)
 	executors[pipeline.AssetTypeAthenaSQLSensor][scheduler.TaskInstanceTypeMain] = ath.NewQuerySensor(manager, renderer, 30)
 	ensureExecutorConfig(pipeline.AssetTypeAthenaTableSensor)
 	executors[pipeline.AssetTypeAthenaTableSensor][scheduler.TaskInstanceTypeMain] = ansisql.NewTableSensor(manager, "once", wholeFileExtractor)
 	ensureExecutorConfig(pipeline.AssetTypeDatabricksQuery)
 	executors[pipeline.AssetTypeDatabricksQuery][scheduler.TaskInstanceTypeMain] = dbsql.NewBasicOperator(manager, wholeFileExtractor, dbsql.NewMaterializer(false), parser)
-	executors[pipeline.AssetTypeDatabricksQuery][scheduler.TaskInstanceTypeColumnCheck] = dbsql.NewColumnCheckOperator(manager)
-	executors[pipeline.AssetTypeDatabricksQuery][scheduler.TaskInstanceTypeCustomCheck] = ansisql.NewCustomCheckOperator(manager, renderer)
+	databricksColumnCheckOperator := dbsql.NewColumnCheckOperator(manager)
+	executors[pipeline.AssetTypeDatabricksQuery][scheduler.TaskInstanceTypeColumnCheck] = databricksColumnCheckOperator
+	executors[pipeline.AssetTypeDatabricksQuery][scheduler.TaskInstanceTypeCustomCheck] = customCheckRunner
+	assignSeedExecutor(pipeline.AssetTypeDatabricksSeed, databricksColumnCheckOperator, customCheckRunner, nil)
 	ensureExecutorConfig(pipeline.AssetTypeDatabricksQuerySensor)
 	executors[pipeline.AssetTypeDatabricksQuerySensor][scheduler.TaskInstanceTypeMain] = ansisql.NewQuerySensor(manager, wholeFileExtractor, "once")
 	ensureExecutorConfig(pipeline.AssetTypeDatabricksTableSensor)
 	executors[pipeline.AssetTypeDatabricksTableSensor][scheduler.TaskInstanceTypeMain] = ansisql.NewTableSensor(manager, "once", wholeFileExtractor)
 	ensureExecutorConfig(pipeline.AssetTypeFabricQuery)
 	executors[pipeline.AssetTypeFabricQuery][scheduler.TaskInstanceTypeMain] = fw.NewBasicOperator(manager, wholeFileExtractor, fw.NewMaterializer(false), parser)
-	executors[pipeline.AssetTypeFabricQuery][scheduler.TaskInstanceTypeColumnCheck] = fw.NewColumnCheckOperator(manager)
-	executors[pipeline.AssetTypeFabricQuery][scheduler.TaskInstanceTypeCustomCheck] = ansisql.NewCustomCheckOperator(manager, renderer)
+	fabricColumnCheckOperator := fw.NewColumnCheckOperator(manager)
+	executors[pipeline.AssetTypeFabricQuery][scheduler.TaskInstanceTypeColumnCheck] = fabricColumnCheckOperator
+	executors[pipeline.AssetTypeFabricQuery][scheduler.TaskInstanceTypeCustomCheck] = customCheckRunner
+	assignSeedExecutor(pipeline.AssetTypeFabricSeed, fabricColumnCheckOperator, customCheckRunner, nil)
 	ensureExecutorConfig(pipeline.AssetTypeFabricQuerySensor)
 	executors[pipeline.AssetTypeFabricQuerySensor][scheduler.TaskInstanceTypeMain] = ansisql.NewQuerySensor(manager, wholeFileExtractor, "once")
 	ensureExecutorConfig(pipeline.AssetTypeFabricTableSensor)
 	executors[pipeline.AssetTypeFabricTableSensor][scheduler.TaskInstanceTypeMain] = ansisql.NewTableSensor(manager, "once", wholeFileExtractor)
 	ensureExecutorConfig(pipeline.AssetTypeFabricQueryLegacy)
 	executors[pipeline.AssetTypeFabricQueryLegacy][scheduler.TaskInstanceTypeMain] = fw.NewBasicOperator(manager, wholeFileExtractor, fw.NewMaterializer(false), parser)
-	executors[pipeline.AssetTypeFabricQueryLegacy][scheduler.TaskInstanceTypeColumnCheck] = fw.NewColumnCheckOperator(manager)
-	executors[pipeline.AssetTypeFabricQueryLegacy][scheduler.TaskInstanceTypeCustomCheck] = ansisql.NewCustomCheckOperator(manager, renderer)
+	executors[pipeline.AssetTypeFabricQueryLegacy][scheduler.TaskInstanceTypeColumnCheck] = fabricColumnCheckOperator
+	executors[pipeline.AssetTypeFabricQueryLegacy][scheduler.TaskInstanceTypeCustomCheck] = customCheckRunner
+	assignSeedExecutor(pipeline.AssetTypeFabricSeedLegacy, fabricColumnCheckOperator, customCheckRunner, nil)
 	ensureExecutorConfig(pipeline.AssetTypeFabricQuerySensorLegacy)
 	executors[pipeline.AssetTypeFabricQuerySensorLegacy][scheduler.TaskInstanceTypeMain] = ansisql.NewQuerySensor(manager, wholeFileExtractor, "once")
 	ensureExecutorConfig(pipeline.AssetTypeFabricTableSensorLegacy)
@@ -1199,8 +1246,10 @@ func buildDirectMainExecutors(manager config.ConnectionAndDetailsGetter, rendere
 	executors[pipeline.AssetTypeMySQLQuery][scheduler.TaskInstanceTypeMain] = my.NewBasicOperator(manager, wholeFileExtractor, pipeline.HookWrapperMaterializer{
 		Mat: my.NewMaterializer(false),
 	}, parser)
-	executors[pipeline.AssetTypeMySQLQuery][scheduler.TaskInstanceTypeColumnCheck] = my.NewColumnCheckOperator(manager)
-	executors[pipeline.AssetTypeMySQLQuery][scheduler.TaskInstanceTypeCustomCheck] = ansisql.NewCustomCheckOperator(manager, renderer)
+	mySQLColumnCheckOperator := my.NewColumnCheckOperator(manager)
+	executors[pipeline.AssetTypeMySQLQuery][scheduler.TaskInstanceTypeColumnCheck] = mySQLColumnCheckOperator
+	executors[pipeline.AssetTypeMySQLQuery][scheduler.TaskInstanceTypeCustomCheck] = customCheckRunner
+	assignSeedExecutor(pipeline.AssetTypeMySQLSeed, mySQLColumnCheckOperator, customCheckRunner, nil)
 	ensureExecutorConfig(pipeline.AssetTypeMySQLQuerySensor)
 	executors[pipeline.AssetTypeMySQLQuerySensor][scheduler.TaskInstanceTypeMain] = ansisql.NewQuerySensor(manager, wholeFileExtractor, "once")
 	ensureExecutorConfig(pipeline.AssetTypeMySQLTableSensor)
@@ -1209,33 +1258,41 @@ func buildDirectMainExecutors(manager config.ConnectionAndDetailsGetter, rendere
 	executors[pipeline.AssetTypeSnowflakeQuery][scheduler.TaskInstanceTypeMain] = sf.NewBasicOperator(manager, wholeFileExtractor, pipeline.HookWrapperMaterializer{
 		Mat: sf.NewMaterializer(false),
 	}, parser)
-	executors[pipeline.AssetTypeSnowflakeQuery][scheduler.TaskInstanceTypeColumnCheck] = sf.NewColumnCheckOperator(manager)
-	executors[pipeline.AssetTypeSnowflakeQuery][scheduler.TaskInstanceTypeCustomCheck] = ansisql.NewCustomCheckOperator(manager, renderer)
-	executors[pipeline.AssetTypeSnowflakeQuery][scheduler.TaskInstanceTypeMetadataPush] = sf.NewMetadataPushOperator(manager)
+	snowflakeColumnCheckOperator := sf.NewColumnCheckOperator(manager)
+	snowflakeMetadataPushOperator := sf.NewMetadataPushOperator(manager)
+	executors[pipeline.AssetTypeSnowflakeQuery][scheduler.TaskInstanceTypeColumnCheck] = snowflakeColumnCheckOperator
+	executors[pipeline.AssetTypeSnowflakeQuery][scheduler.TaskInstanceTypeCustomCheck] = customCheckRunner
+	executors[pipeline.AssetTypeSnowflakeQuery][scheduler.TaskInstanceTypeMetadataPush] = snowflakeMetadataPushOperator
+	assignSeedExecutor(pipeline.AssetTypeSnowflakeSeed, snowflakeColumnCheckOperator, customCheckRunner, snowflakeMetadataPushOperator)
 	ensureExecutorConfig(pipeline.AssetTypeSnowflakeQuerySensor)
 	executors[pipeline.AssetTypeSnowflakeQuerySensor][scheduler.TaskInstanceTypeMain] = sf.NewQuerySensor(manager, wholeFileExtractor, 30)
 	ensureExecutorConfig(pipeline.AssetTypeSnowflakeTableSensor)
 	executors[pipeline.AssetTypeSnowflakeTableSensor][scheduler.TaskInstanceTypeMain] = ansisql.NewTableSensor(manager, "once", wholeFileExtractor)
 	ensureExecutorConfig(pipeline.AssetTypeMsSQLQuery)
 	executors[pipeline.AssetTypeMsSQLQuery][scheduler.TaskInstanceTypeMain] = ms.NewBasicOperator(manager, wholeFileExtractor, ms.NewMaterializer(false), parser)
-	executors[pipeline.AssetTypeMsSQLQuery][scheduler.TaskInstanceTypeColumnCheck] = ms.NewColumnCheckOperator(manager)
-	executors[pipeline.AssetTypeMsSQLQuery][scheduler.TaskInstanceTypeCustomCheck] = ansisql.NewCustomCheckOperator(manager, renderer)
+	msSQLColumnCheckOperator := ms.NewColumnCheckOperator(manager)
+	executors[pipeline.AssetTypeMsSQLQuery][scheduler.TaskInstanceTypeColumnCheck] = msSQLColumnCheckOperator
+	executors[pipeline.AssetTypeMsSQLQuery][scheduler.TaskInstanceTypeCustomCheck] = customCheckRunner
+	assignSeedExecutor(pipeline.AssetTypeMsSQLSeed, msSQLColumnCheckOperator, customCheckRunner, nil)
 	ensureExecutorConfig(pipeline.AssetTypeMsSQLQuerySensor)
 	executors[pipeline.AssetTypeMsSQLQuerySensor][scheduler.TaskInstanceTypeMain] = ansisql.NewQuerySensor(manager, wholeFileExtractor, "once")
 	ensureExecutorConfig(pipeline.AssetTypeMsSQLTableSensor)
 	executors[pipeline.AssetTypeMsSQLTableSensor][scheduler.TaskInstanceTypeMain] = ansisql.NewTableSensor(manager, "once", wholeFileExtractor)
 	ensureExecutorConfig(pipeline.AssetTypeSynapseQuery)
 	executors[pipeline.AssetTypeSynapseQuery][scheduler.TaskInstanceTypeMain] = ms.NewBasicOperator(manager, wholeFileExtractor, ms.NewMaterializer(false), parser)
-	executors[pipeline.AssetTypeSynapseQuery][scheduler.TaskInstanceTypeColumnCheck] = ms.NewColumnCheckOperator(manager)
-	executors[pipeline.AssetTypeSynapseQuery][scheduler.TaskInstanceTypeCustomCheck] = ansisql.NewCustomCheckOperator(manager, renderer)
+	executors[pipeline.AssetTypeSynapseQuery][scheduler.TaskInstanceTypeColumnCheck] = msSQLColumnCheckOperator
+	executors[pipeline.AssetTypeSynapseQuery][scheduler.TaskInstanceTypeCustomCheck] = customCheckRunner
+	assignSeedExecutor(pipeline.AssetTypeSynapseSeed, msSQLColumnCheckOperator, customCheckRunner, nil)
 	ensureExecutorConfig(pipeline.AssetTypeSynapseQuerySensor)
 	executors[pipeline.AssetTypeSynapseQuerySensor][scheduler.TaskInstanceTypeMain] = ansisql.NewQuerySensor(manager, wholeFileExtractor, "once")
 	ensureExecutorConfig(pipeline.AssetTypeSynapseTableSensor)
 	executors[pipeline.AssetTypeSynapseTableSensor][scheduler.TaskInstanceTypeMain] = ansisql.NewTableSensor(manager, "once", wholeFileExtractor)
 	ensureExecutorConfig(pipeline.AssetTypeClickHouse)
 	executors[pipeline.AssetTypeClickHouse][scheduler.TaskInstanceTypeMain] = ch.NewBasicOperator(manager, wholeFileExtractor, ch.NewMaterializer(false), parser)
-	executors[pipeline.AssetTypeClickHouse][scheduler.TaskInstanceTypeColumnCheck] = ch.NewColumnCheckOperator(manager)
-	executors[pipeline.AssetTypeClickHouse][scheduler.TaskInstanceTypeCustomCheck] = ansisql.NewCustomCheckOperator(manager, renderer)
+	clickHouseColumnCheckOperator := ch.NewColumnCheckOperator(manager)
+	executors[pipeline.AssetTypeClickHouse][scheduler.TaskInstanceTypeColumnCheck] = clickHouseColumnCheckOperator
+	executors[pipeline.AssetTypeClickHouse][scheduler.TaskInstanceTypeCustomCheck] = customCheckRunner
+	assignSeedExecutor(pipeline.AssetTypeClickHouseSeed, clickHouseColumnCheckOperator, customCheckRunner, nil)
 	ensureExecutorConfig(pipeline.AssetTypeClickHouseQuerySensor)
 	executors[pipeline.AssetTypeClickHouseQuerySensor][scheduler.TaskInstanceTypeMain] = ansisql.NewQuerySensor(manager, wholeFileExtractor, "once")
 	ensureExecutorConfig(pipeline.AssetTypeClickHouseTableSensor)
@@ -1249,8 +1306,10 @@ func buildDirectMainExecutors(manager config.ConnectionAndDetailsGetter, rendere
 	executors[pipeline.AssetTypeTrinoQuerySensor][scheduler.TaskInstanceTypeMain] = ansisql.NewQuerySensor(manager, wholeFileExtractor, "once")
 	ensureExecutorConfig(pipeline.AssetTypeVerticaQuery)
 	executors[pipeline.AssetTypeVerticaQuery][scheduler.TaskInstanceTypeMain] = vert.NewBasicOperator(manager, wholeFileExtractor, vert.NewMaterializer(false), parser)
-	executors[pipeline.AssetTypeVerticaQuery][scheduler.TaskInstanceTypeColumnCheck] = vert.NewColumnCheckOperator(manager)
-	executors[pipeline.AssetTypeVerticaQuery][scheduler.TaskInstanceTypeCustomCheck] = ansisql.NewCustomCheckOperator(manager, renderer)
+	verticaColumnCheckOperator := vert.NewColumnCheckOperator(manager)
+	executors[pipeline.AssetTypeVerticaQuery][scheduler.TaskInstanceTypeColumnCheck] = verticaColumnCheckOperator
+	executors[pipeline.AssetTypeVerticaQuery][scheduler.TaskInstanceTypeCustomCheck] = customCheckRunner
+	assignSeedExecutor(pipeline.AssetTypeVerticaSeed, verticaColumnCheckOperator, customCheckRunner, nil)
 	ensureExecutorConfig(pipeline.AssetTypeVerticaQuerySensor)
 	executors[pipeline.AssetTypeVerticaQuerySensor][scheduler.TaskInstanceTypeMain] = ansisql.NewQuerySensor(manager, wholeFileExtractor, "once")
 	ensureExecutorConfig(pipeline.AssetTypeVerticaTableSensor)
@@ -1269,7 +1328,7 @@ func buildDirectMainExecutors(manager config.ConnectionAndDetailsGetter, rendere
 	executors[pipeline.AssetTypeS3KeySensor][scheduler.TaskInstanceTypeMain] = s3.NewKeySensor(manager, "once")
 	ensureExecutorConfig(pipeline.AssetTypeOracleQuery)
 	executors[pipeline.AssetTypeOracleQuery][scheduler.TaskInstanceTypeMain] = directOracleBasicOperator{connection: manager, extractor: wholeFileExtractor}
-	executors[pipeline.AssetTypeOracleQuery][scheduler.TaskInstanceTypeCustomCheck] = ansisql.NewCustomCheckOperator(manager, renderer)
+	executors[pipeline.AssetTypeOracleQuery][scheduler.TaskInstanceTypeCustomCheck] = customCheckRunner
 	ensureExecutorConfig(pipeline.AssetTypePython)
 	executors[pipeline.AssetTypePython][scheduler.TaskInstanceTypeMain] = bruinpython.NewLocalOperator(manager, directPythonEnvVariables(pl))
 	ingestrOperator, err := bruiningestr.NewBasicOperator(manager, renderer)

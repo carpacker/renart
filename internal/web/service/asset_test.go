@@ -445,6 +445,39 @@ func TestAssetServiceCreateRejectsUnprefixedAssetName(t *testing.T) {
 	assert.Equal(t, "missing_asset_prefix", apiErr.Code)
 }
 
+func TestAssetServiceCreateWritesDroppedSeedFile(t *testing.T) {
+	t.Parallel()
+
+	workspaceRoot := t.TempDir()
+	pipelineRoot := filepath.Join(workspaceRoot, "analytics")
+	require.NoError(t, os.MkdirAll(filepath.Join(pipelineRoot, "assets"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(pipelineRoot, "pipeline.yml"), []byte("name: analytics\n"), 0o644))
+
+	service := NewAssetService(AssetDependencies{
+		WorkspaceRoot:                workspaceRoot,
+		DefaultAssetContent:          DefaultAssetContent,
+		DerivedAssetContent:          DefaultDerivedSQLAssetContent,
+		EnsurePythonRequirements:     func(string, string, string) error { return nil },
+		SuppressWatcher:              func(string) {},
+		PushWorkspaceUpdateImmediate: func(context.Context, string, string) {},
+	})
+
+	response, apiErr := service.Create(context.Background(), EncodeID("analytics"), CreateAssetParams{
+		Name:            "analytics.regional_customers",
+		Type:            "duckdb.seed",
+		Path:            "assets/analytics/regional_customers.asset.yml",
+		Content:         "name: analytics.regional_customers\ntype: duckdb.seed\n\nparameters:\n  path: ./regional_customers.csv\n",
+		SeedFileName:    "regional_customers.csv",
+		SeedFileContent: "customer_id,customer_name\n10,Lin\n",
+	})
+	require.Nil(t, apiErr)
+	assert.Equal(t, "analytics/assets/analytics/regional_customers.asset.yml", response["asset_path"])
+
+	seedContent, err := os.ReadFile(filepath.Join(pipelineRoot, "assets/analytics/regional_customers.csv"))
+	require.NoError(t, err)
+	assert.Equal(t, "customer_id,customer_name\n10,Lin\n", string(seedContent))
+}
+
 func TestAssetServiceUpdateReconcilesSQLDependenciesImmediately(t *testing.T) {
 	t.Parallel()
 
