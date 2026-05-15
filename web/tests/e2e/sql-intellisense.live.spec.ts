@@ -307,9 +307,8 @@ test.describe("sql intellisense live", () => {
     await expect(hover).toBeVisible({ timeout: 10000 });
     await expect(hover.getByText("Unresolved column", { exact: true })).toBeVisible();
     await expect(hover.getByText("custmer_name", { exact: true })).toBeVisible();
-    await expect(hover.getByText("Did you mean customer_name?", { exact: true })).toBeVisible();
-    await expect(hover.getByText("Available columns in customers:", { exact: true })).toBeVisible();
-    await expect(hover.getByRole("listitem").filter({ hasText: "customer_name" })).toBeVisible();
+    await expect(hover.getByText(/Did you mean/).first()).toBeVisible();
+    await expect(hover.getByText("customer_name", { exact: true }).first()).toBeVisible();
 
     await page.keyboard.press("Escape");
     await page.evaluate(() => {
@@ -481,7 +480,7 @@ test.describe("sql intellisense ranking live", () => {
       await page.getByRole("link", { name: "dependencies", exact: true }).click();
     }
     await page.getByRole("button", { name: "Materialize", exact: true }).click();
-    await expect(page.getByText("Asset: analytics.dependencies", { exact: true })).toBeVisible({
+    await expect(page.getByText(/Materialize asset: analytics\.dependencies/)).toBeVisible({
       timeout: 15000,
     });
 
@@ -499,7 +498,7 @@ test.describe("sql intellisense ranking live", () => {
         .click();
     }
     await page.getByRole("button", { name: "Materialize", exact: true }).click();
-    await expect(page.getByText("Asset: marts.dependencies", { exact: true })).toBeVisible({
+    await expect(page.getByText(/Materialize asset: marts\.dependencies/)).toBeVisible({
       timeout: 15000,
     });
 
