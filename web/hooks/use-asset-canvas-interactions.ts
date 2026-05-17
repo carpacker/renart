@@ -9,7 +9,7 @@ import {
   useEffect,
   useState,
 } from "react";
-import { Edge, Node, ReactFlowInstance } from "reactflow";
+import { Edge, MarkerType, Node, ReactFlowInstance } from "reactflow";
 
 import { NewAssetKind, NewAssetNodeData } from "@/components/new-asset-node";
 import { StoredNodePositions } from "@/hooks/use-persisted-node-positions";
@@ -24,6 +24,7 @@ type NewAssetDraftState = {
   flowY: number;
   name: string;
   kind: NewAssetKind;
+  sourceAssetId?: string;
 };
 
 type UseAssetCanvasInteractionsInput = {
@@ -215,7 +216,9 @@ export function useAssetCanvasInteractions({
       }
 
       const draftPosition = { x: newAssetDraft.flowX, y: newAssetDraft.flowY };
-      const createInput = buildCreateAssetInput(name, newAssetDraft.kind);
+      const createInput = newAssetDraft.sourceAssetId
+        ? { name, source_asset_id: newAssetDraft.sourceAssetId }
+        : buildCreateAssetInput(name, newAssetDraft.kind);
       void runCreateAsset(pipelineId, createInput).then((response) => {
         if (response?.asset_id) {
           setStoredNodePositions((previous) => ({
@@ -260,28 +263,23 @@ export function useAssetCanvasInteractions({
         sourceNode?.height ??
         180;
 
-      void runCreateAsset(pipelineId, {
-        source_asset_id: sourceAssetId,
-      }).then((response) => {
-        if (response?.asset_id) {
-          setStoredNodePositions((previous) => ({
-            ...previous,
-            [response.asset_id as string]: {
-              x: sourcePosition.x,
-              y: sourcePosition.y + sourceHeight + DOWNSTREAM_NODE_VERTICAL_GAP,
-            },
-          }));
-          navigateSelection(pipelineId, response.asset_id);
-        }
+      const sourceAsset = pipeline?.assets.find((asset) => asset.id === sourceAssetId);
+      setNewAssetDraft({
+        flowX: sourcePosition.x,
+        flowY: sourcePosition.y + sourceHeight + DOWNSTREAM_NODE_VERTICAL_GAP,
+        name: buildSuggestedDownstreamAssetName(
+          sourceAsset?.name ?? "asset",
+          new Set(pipeline?.assets.map((asset) => asset.name) ?? [])
+        ),
+        kind: "sql",
+        sourceAssetId,
       });
     },
     [
       graphNodes,
-      navigateSelection,
+      pipeline?.assets,
       pipelineId,
       reactFlowInstance,
-      runCreateAsset,
-      setStoredNodePositions,
       storedNodePositions,
     ]
   );
@@ -316,7 +314,12 @@ export function useAssetCanvasInteractions({
       const draftData: NewAssetNodeData = {
         name: newAssetDraft.name,
         kind: newAssetDraft.kind,
+        createLabel: newAssetDraft.sourceAssetId ? "Create child" : undefined,
+        kindLocked: Boolean(newAssetDraft.sourceAssetId),
         onKindChange: (kind) => {
+          if (newAssetDraft.sourceAssetId) {
+            return newAssetDraft.name;
+          }
           const nextName = defaultAssetNamesByKind[kind];
           setNewAssetDraft((previous) =>
             previous ? { ...previous, kind, name: nextName } : previous
@@ -335,11 +338,30 @@ export function useAssetCanvasInteractions({
         selected: false,
         draggable: true,
         selectable: false,
+        focusable: false,
       });
     }
 
     setNodes((currentNodes) => mergeStableNodes(currentNodes, mappedNodes));
-    setEdges((currentEdges) => mergeStableEdges(currentEdges, graphEdges));
+    const mappedEdges = newAssetDraft?.sourceAssetId
+      ? [
+          ...graphEdges,
+          {
+            id: `${newAssetDraft.sourceAssetId}->${NEW_ASSET_NODE_ID}`,
+            source: newAssetDraft.sourceAssetId,
+            target: NEW_ASSET_NODE_ID,
+            animated: true,
+            className: "asset-edge-active",
+            markerEnd: {
+              type: MarkerType.ArrowClosed,
+              color: "var(--primary)",
+              width: 18,
+              height: 18,
+            },
+          },
+        ]
+      : graphEdges;
+    setEdges((currentEdges) => mergeStableEdges(currentEdges, mappedEdges));
   }, [
     connectedNodeIDs,
     defaultAssetNamesByKind,
@@ -445,6 +467,43 @@ function mergeStableNodes(currentNodes: Node[], nextNodes: Node[]) {
   return changed ? merged : currentNodes;
 }
 
+function buildSuggestedDownstreamAssetName(sourceAssetName: string, existingNames: Set<string>) {
+  const trimmed = sourceAssetName.trim() || "asset";
+  const lastDot = trimmed.lastIndexOf(".");
+  const prefix = lastDot >= 0 ? trimmed.slice(0, lastDot) : "";
+  const leaf = lastDot >= 0 ? trimmed.slice(lastDot + 1) : trimmed;
+  const baseLeaf = `${slugifyAssetLeaf(leaf)}_child`;
+
+  for (let index = 1; index < 1000; index += 1) {
+    const candidateLeaf = `${baseLeaf}_${index}`;
+    const candidate = prefix ? `${prefix}.${candidateLeaf}` : candidateLeaf;
+    if (!hasAssetName(existingNames, candidate)) {
+      return candidate;
+    }
+  }
+
+  return prefix ? `${prefix}.${baseLeaf}_1` : `${baseLeaf}_1`;
+}
+
+function hasAssetName(existingNames: Set<string>, candidate: string) {
+  const normalizedCandidate = candidate.trim().toLowerCase();
+  for (const name of existingNames) {
+    if (name.trim().toLowerCase() === normalizedCandidate) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function slugifyAssetLeaf(value: string) {
+  return value
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9\s_-]/g, "")
+    .replace(/[\s_-]+/g, "_")
+    .replace(/^_+|_+$/g, "") || "asset";
+}
+
 function mergeStableEdges(currentEdges: Edge[], nextEdges: Edge[]) {
   if (currentEdges.length === 0) {
     return nextEdges;
@@ -464,6 +523,8 @@ function mergeStableEdges(currentEdges: Edge[], nextEdges: Edge[]) {
       current.target === next.target &&
       current.type === next.type &&
       current.animated === next.animated &&
+      current.className === next.className &&
+      shallowEqual(current.markerEnd as Record<string, unknown>, next.markerEnd as Record<string, unknown>) &&
       shallowEqual(current.data as Record<string, unknown>, next.data as Record<string, unknown>);
     if (same) {
       return current;

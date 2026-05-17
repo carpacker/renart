@@ -99,7 +99,7 @@ export function AssetNode({ id, data, selected }: NodeProps<AssetNodeData>) {
 
   return (
     <>
-      <Handle type="target" position={Position.Top} />
+      <Handle className="asset-node-hidden-handle" type="target" position={Position.Top} />
       <ContextMenu>
         <ContextMenuTrigger asChild>
           <div
@@ -292,7 +292,7 @@ export function AssetNode({ id, data, selected }: NodeProps<AssetNodeData>) {
           </ContextMenuItem>
         </ContextMenuContent>
       </ContextMenu>
-      <Handle type="source" position={Position.Bottom} />
+      <Handle className="asset-node-hidden-handle" type="source" position={Position.Bottom} />
     </>
   );
 }

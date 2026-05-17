@@ -221,6 +221,21 @@ body > .parameter-hints-widget {
   z-index: 80 !important;
 }
 
+.react-flow__edge.asset-edge path {
+  stroke: var(--muted-foreground);
+  stroke-width: 1.5;
+}
+
+.react-flow__edge.asset-edge-active path {
+  stroke: var(--primary);
+  stroke-width: 3;
+  filter: drop-shadow(0 0 7px var(--primary));
+}
+
+.asset-node-hidden-handle {
+  opacity: 0;
+}
+
 @layer base {
   * {
     @apply border-border outline-ring/50;

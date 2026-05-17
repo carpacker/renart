@@ -527,6 +527,46 @@ test.describe("workspace live basic flows", () => {
     ).toHaveCount(0);
   });
 
+  test("names a downstream child asset inline before creating it", async ({
+    liveApp,
+    page,
+  }) => {
+    test.skip(test.info().project.name.includes("mobile"), "Desktop canvas hover coverage.");
+
+    await page.goto(`${liveApp.baseURL}/`);
+    await openCustomersEditor(page, liveApp.baseURL);
+
+    const customersNode = page.getByTestId(
+      `rf__node-${encodeRouteId("analytics/assets/analytics/customers.sql")}`
+    );
+    await expect(customersNode).toBeVisible({ timeout: 15000 });
+
+    const box = await customersNode.boundingBox();
+    if (!box) {
+      throw new Error("Could not locate the customers node.");
+    }
+
+    await customersNode.hover({
+      position: { x: Math.round(box.width / 2), y: Math.max(1, box.height - 8) },
+    });
+    await customersNode.getByRole("button", { name: "Add" }).click();
+
+    await expect(page.getByText("New child asset")).toBeVisible();
+    await expect(page.getByPlaceholder("Asset name")).toBeFocused();
+    await expect(page.getByRole("link", { name: "named_child", exact: true })).toHaveCount(0);
+
+    await page.getByPlaceholder("Asset name").fill("analytics.named_child");
+    await page
+      .getByTestId("rf__node-__new_asset__")
+      .getByRole("button", { name: "Create child" })
+      .click();
+
+    await expect(page.getByRole("link", { name: "named_child", exact: true })).toBeVisible({
+      timeout: 15000,
+    });
+    await waitForWorkspaceAssetUpstreams(page, "analytics.named_child", ["analytics.customers"]);
+  });
+
   test("creates a seed asset by dropping a CSV file on the canvas", async ({
     liveApp,
     page,

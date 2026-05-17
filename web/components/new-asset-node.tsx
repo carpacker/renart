@@ -1,8 +1,8 @@
 "use client";
 
 import { Database, Hammer, Workflow } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
-import { NodeProps } from "reactflow";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { Handle, NodeProps, Position } from "reactflow";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -16,6 +16,8 @@ export type NewAssetNodeData = {
   onKindChange: (kind: NewAssetKind) => string;
   onCreate: (name: string) => void;
   onCancel: () => void;
+  createLabel?: string;
+  kindLocked?: boolean;
 };
 
 export function NewAssetNode({ data }: NodeProps<NewAssetNodeData>) {
@@ -23,44 +25,70 @@ export function NewAssetNode({ data }: NodeProps<NewAssetNodeData>) {
   const [name, setName] = useState(data.name);
 
   useEffect(() => {
-    const frame = window.requestAnimationFrame(() => {
-      inputRef.current?.focus();
-      inputRef.current?.select();
-    });
+    setName(data.name);
+  }, [data.name]);
 
-    return () => window.cancelAnimationFrame(frame);
-  }, []);
+  useLayoutEffect(() => {
+    focusNameInput(inputRef.current);
+    const frame = window.requestAnimationFrame(() => {
+      focusNameInput(inputRef.current);
+    });
+    const timeout = window.setTimeout(() => {
+      focusNameInput(inputRef.current);
+    }, 50);
+    const interval = window.setInterval(() => {
+      focusNameInput(inputRef.current);
+    }, 75);
+    const intervalTimeout = window.setTimeout(() => {
+      window.clearInterval(interval);
+    }, 900);
+
+    return () => {
+      window.cancelAnimationFrame(frame);
+      window.clearTimeout(timeout);
+      window.clearInterval(interval);
+      window.clearTimeout(intervalTimeout);
+    };
+  }, [data.name]);
 
   return (
     <div
       className="min-w-72 rounded-lg border-2 border-primary/40 bg-card p-2 shadow-sm"
       data-new-asset-node="true"
     >
-      <Tabs
-        onValueChange={(value) =>
-          setName(data.onKindChange(value as NewAssetKind))
-        }
-        value={data.kind}
-      >
-        <TabsList className="nodrag mb-2 grid w-full grid-cols-3">
-          <TabsTrigger className="nodrag" value="sql">
-            <Database className="mr-1 size-3.5 text-emerald-600" />
-            SQL
-          </TabsTrigger>
-          <TabsTrigger className="nodrag" value="python">
-            <Hammer className="mr-1 size-3.5 text-amber-600" />
-            Python
-          </TabsTrigger>
-          <TabsTrigger className="nodrag" value="ingestr">
-            <Workflow className="mr-1 size-3.5 text-sky-600" />
-            Ingestr
-          </TabsTrigger>
-        </TabsList>
-      </Tabs>
+      <Handle className="asset-node-hidden-handle" type="target" position={Position.Top} />
+      {data.kindLocked ? (
+        <div className="nodrag mb-2 px-1 text-sm font-medium">
+          New child asset
+        </div>
+      ) : (
+        <Tabs
+          onValueChange={(value) =>
+            setName(data.onKindChange(value as NewAssetKind))
+          }
+          value={data.kind}
+        >
+          <TabsList className="nodrag mb-2 grid w-full grid-cols-3">
+            <TabsTrigger className="nodrag" value="sql">
+              <Database className="mr-1 size-3.5 text-emerald-600" />
+              SQL
+            </TabsTrigger>
+            <TabsTrigger className="nodrag" value="python">
+              <Hammer className="mr-1 size-3.5 text-amber-600" />
+              Python
+            </TabsTrigger>
+            <TabsTrigger className="nodrag" value="ingestr">
+              <Workflow className="mr-1 size-3.5 text-sky-600" />
+              Ingestr
+            </TabsTrigger>
+          </TabsList>
+        </Tabs>
+      )}
 
       <div className="nodrag flex items-center gap-2">
         <Input
           ref={inputRef}
+          autoFocus
           className="h-8 text-base md:text-sm"
           onChange={(event) => setName(event.target.value)}
           onKeyDown={(event) => {
@@ -83,9 +111,22 @@ export function NewAssetNode({ data }: NodeProps<NewAssetNodeData>) {
           size="sm"
           type="button"
         >
-          Create
+          {data.createLabel ?? "Create"}
         </Button>
       </div>
     </div>
   );
+}
+
+function focusNameInput(input: HTMLInputElement | null) {
+  if (!input) {
+    return;
+  }
+
+  if (document.activeElement === input) {
+    return;
+  }
+
+  input.focus({ preventScroll: true });
+  input.select();
 }

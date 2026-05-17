@@ -1,5 +1,5 @@
 import dagre from "dagre";
-import { Edge, Node } from "reactflow";
+import { Edge, MarkerType, Node } from "reactflow";
 
 import { AssetViewMode, getAssetViewMode } from "@/lib/asset-visualization";
 import { AssetInspectResponse, WebPipeline } from "@/lib/types";
@@ -76,13 +76,22 @@ export function buildFlowFromPipeline(
         continue;
       }
 
+      const active = Boolean(
+        materializingAssetIds?.has(sourceId) && materializingAssetIds.has(asset.id)
+      );
+
       edges.push({
         id: `${sourceId}->${asset.id}`,
         source: sourceId,
         target: asset.id,
-        animated: Boolean(
-          materializingAssetIds?.has(sourceId) && materializingAssetIds.has(asset.id)
-        ),
+        animated: active,
+        className: active ? "asset-edge-active" : "asset-edge",
+        markerEnd: {
+          type: MarkerType.ArrowClosed,
+          color: active ? "var(--primary)" : "var(--muted-foreground)",
+          width: 18,
+          height: 18,
+        },
       });
     }
   }
