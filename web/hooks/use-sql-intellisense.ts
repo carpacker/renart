@@ -13,7 +13,7 @@ import {
   registerSQLProviders,
   resolveTableAtPosition,
 } from "@/lib/monaco-sql-providers";
-import { resolveConnection, SchemaTable } from "@/lib/sql-schema";
+import { findTableByIdentifier, resolveConnection, SchemaTable } from "@/lib/sql-schema";
 import { SqlParseContextDiagnostic, WebAsset } from "@/lib/types";
 import { useAtomValue, useSetAtom } from "jotai";
 
@@ -97,6 +97,19 @@ type UnresolvedColumnSuggestion = {
   range: MonacoNS.IRange;
 };
 
+type UnresolvedTableSuggestion = {
+  diagnostic: SqlParseContextDiagnostic;
+  unknownTable: string;
+  replacementTable: string;
+  replacementText: string;
+  range: MonacoNS.IRange;
+};
+
+type SelfReferenceDiagnostic = {
+  message: string;
+  range: MonacoNS.IRange;
+};
+
 type ColumnSuggestionContext = {
   columns: string[];
   tableIdentifier: string | null;
@@ -116,8 +129,17 @@ function extractUnresolvedColumnName(message: string) {
   return identifier?.split(".").at(-1) ?? null;
 }
 
+function extractUnresolvedTableName(message: string) {
+  const match = message.match(/unresolved\s+table(?:\s+or\s+alias)?\s*:\s*([^\s,;)]+)/i);
+  return match ? normalizeIdentifierPart(match[1]) : null;
+}
+
 function formatUnresolvedColumnMessage(unknownColumn: string, replacementColumn: string) {
   return `Unresolved column '${unknownColumn}'. Did you mean '${replacementColumn}'?`;
+}
+
+function formatUnresolvedTableMessage(unknownTable: string, replacementTable: string) {
+  return `Unresolved table '${unknownTable}'. Did you mean '${replacementTable}'?`;
 }
 
 function levenshteinDistance(left: string, right: string) {
@@ -162,6 +184,32 @@ function findSimilarColumn(unknownColumn: string, columns: string[]) {
   }
 
   return best?.column ?? null;
+}
+
+function findSimilarTable(unknownTable: string, tables: SchemaTable[]) {
+  const normalizedUnknown = unknownTable.toLowerCase();
+  const unknownShortName = normalizedUnknown.split(".").at(-1) ?? normalizedUnknown;
+  const maxDistance = Math.max(2, Math.floor(unknownShortName.length / 3));
+
+  let best: { table: SchemaTable; distance: number; candidateLength: number } | null = null;
+  for (const table of tables) {
+    const candidates = [table.name, table.shortName];
+    for (const candidate of candidates) {
+      const normalizedCandidate = candidate.toLowerCase();
+      const candidateShortName = normalizedCandidate.split(".").at(-1) ?? normalizedCandidate;
+      const directDistance = levenshteinDistance(normalizedUnknown, normalizedCandidate);
+      const shortDistance = levenshteinDistance(unknownShortName, candidateShortName);
+      const distance = Math.min(directDistance, shortDistance);
+      if (distance > maxDistance) {
+        continue;
+      }
+      if (!best || distance < best.distance || (distance === best.distance && candidate.length < best.candidateLength)) {
+        best = { table, distance, candidateLength: candidate.length };
+      }
+    }
+  }
+
+  return best?.table.name ?? null;
 }
 
 function buildAliasColumnMap(parseContext: ParseContextLike, tables: SchemaTable[]) {
@@ -260,6 +308,82 @@ function buildUnresolvedColumnSuggestions(
       },
     }];
   });
+}
+
+function buildUnresolvedTableSuggestions(
+  model: MonacoNS.editor.ITextModel,
+  diagnostics: SqlParseContextDiagnostic[],
+  tables: SchemaTable[],
+): UnresolvedTableSuggestion[] {
+  return diagnostics.flatMap((diagnostic) => {
+    if (!diagnostic.range) {
+      return [];
+    }
+
+    const unknownTable = extractUnresolvedTableName(diagnostic.message);
+    if (!unknownTable || unknownTable.includes("/")) {
+      return [];
+    }
+
+    const replacementTable = findSimilarTable(unknownTable, tables);
+    const replacementSchemaTable = replacementTable ? findTableByIdentifier(tables, replacementTable) : null;
+    if (!replacementTable || !replacementSchemaTable) {
+      return [];
+    }
+
+    const range = {
+      startLineNumber: diagnostic.range.line,
+      startColumn: diagnostic.range.col,
+      endLineNumber: diagnostic.range.end_line,
+      endColumn: diagnostic.range.end_col,
+    };
+    const diagnosticText = model.getValueInRange(range);
+    const replacementText = diagnosticText.includes(".") ? replacementTable : replacementSchemaTable.shortName;
+
+    return [{
+      diagnostic,
+      unknownTable,
+      replacementTable,
+      replacementText,
+      range,
+    }];
+  });
+}
+
+function buildSelfReferenceDiagnostics(
+  asset: WebAsset | null,
+  parseContext: { tables?: Array<{ name: string; resolved_name?: string; parts?: Array<{ kind: string; range: SqlParseContextDiagnostic["range"] }> }> } | null | undefined,
+): SelfReferenceDiagnostic[] {
+  if (!asset?.name) {
+    return [];
+  }
+
+  const assetName = asset.name.toLowerCase();
+  const assetShortName = assetName.split(".").at(-1) ?? assetName;
+  const diagnostics: SelfReferenceDiagnostic[] = [];
+  for (const table of parseContext?.tables ?? []) {
+    const tableName = (table.resolved_name || table.name || "").toLowerCase();
+    const tableShortName = tableName.split(".").at(-1) ?? tableName;
+    if (tableName !== assetName && tableShortName !== assetShortName) {
+      continue;
+    }
+
+    const range = table.parts?.findLast((part) => part.kind === "table")?.range;
+    if (!range) {
+      continue;
+    }
+    diagnostics.push({
+      message: `Circular dependency: asset '${asset.name}' references itself.`,
+      range: {
+        startLineNumber: range.line,
+        startColumn: range.col,
+        endLineNumber: range.end_line,
+        endColumn: range.end_col,
+      },
+    });
+  }
+
+  return diagnostics;
 }
 
 function positionInRange(position: MonacoNS.Position, range: MonacoNS.IRange) {
@@ -628,11 +752,20 @@ export function useSQLIntellisense(
       parseContext,
       tables,
     );
+    const unresolvedTableSuggestions = buildUnresolvedTableSuggestions(
+      model,
+      parseContext?.diagnostics ?? [],
+      tables,
+    );
+    const selfReferenceDiagnostics = buildSelfReferenceDiagnostics(asset, parseContext);
 
     const diagnostics = (parseContext?.diagnostics ?? [])
       .filter((diagnostic) => diagnostic.range)
       .map((diagnostic) => {
         const unresolvedColumnSuggestion = unresolvedColumnSuggestions.find(
+          (suggestion) => suggestion.diagnostic === diagnostic,
+        );
+        const unresolvedTableSuggestion = unresolvedTableSuggestions.find(
           (suggestion) => suggestion.diagnostic === diagnostic,
         );
 
@@ -648,6 +781,11 @@ export function useSQLIntellisense(
               unresolvedColumnSuggestion.unknownColumn,
               unresolvedColumnSuggestion.replacementColumn,
             )
+          : unresolvedTableSuggestion
+            ? formatUnresolvedTableMessage(
+                unresolvedTableSuggestion.unknownTable,
+                unresolvedTableSuggestion.replacementTable,
+              )
           : diagnostic.message,
         startLineNumber: diagnostic.range!.line,
         startColumn: diagnostic.range!.col,
@@ -663,13 +801,21 @@ export function useSQLIntellisense(
 
     monaco.editor.setModelMarkers(model, "bruin-sql-parse-context", [
       ...diagnostics,
+      ...selfReferenceDiagnostics.map((diagnostic) => ({
+        severity: monaco.MarkerSeverity.Error,
+        message: diagnostic.message,
+        startLineNumber: diagnostic.range.startLineNumber,
+        startColumn: diagnostic.range.startColumn,
+        endLineNumber: diagnostic.range.endLineNumber,
+        endColumn: diagnostic.range.endColumn,
+      })),
       ...inspectDiagnostics,
     ]);
 
     return () => {
       monaco.editor.setModelMarkers(model, "bruin-sql-parse-context", []);
     };
-  }, [editor, inspectDiagnosticSnapshot, monaco, parseContextKey, tables]);
+  }, [asset, editor, inspectDiagnosticSnapshot, monaco, parseContextKey, tables]);
 
   useEffect(() => {
     if (!editor || !monaco) {
@@ -687,14 +833,19 @@ export function useSQLIntellisense(
           return { actions: [], dispose: () => undefined };
         }
 
-        const suggestions = buildUnresolvedColumnSuggestions(
+        const columnSuggestions = buildUnresolvedColumnSuggestions(
           model,
           parseContext?.diagnostics ?? [],
           parseContext,
           tables,
         );
+        const tableSuggestions = buildUnresolvedTableSuggestions(
+          model,
+          parseContext?.diagnostics ?? [],
+          tables,
+        );
 
-        const actions = suggestions
+        const columnActions = columnSuggestions
           .filter((suggestion) =>
             context.markers.some(
               (marker) =>
@@ -723,7 +874,36 @@ export function useSQLIntellisense(
             isPreferred: true,
           }));
 
-        return { actions, dispose: () => undefined };
+        const tableActions = tableSuggestions
+          .filter((suggestion) =>
+            context.markers.some(
+              (marker) =>
+                marker.startLineNumber === suggestion.range.startLineNumber &&
+                marker.startColumn === suggestion.range.startColumn &&
+                marker.endLineNumber === suggestion.range.endLineNumber &&
+                marker.endColumn === suggestion.range.endColumn,
+            ),
+          )
+          .map((suggestion) => ({
+            title: `Change '${suggestion.unknownTable}' to '${suggestion.replacementTable}'`,
+            kind: "quickfix",
+            diagnostics: context.markers,
+            edit: {
+              edits: [
+                {
+                  resource: model.uri,
+                  versionId: model.getVersionId(),
+                  textEdit: {
+                    range: suggestion.range,
+                    text: suggestion.replacementText,
+                  },
+                },
+              ],
+            },
+            isPreferred: true,
+          }));
+
+        return { actions: [...columnActions, ...tableActions], dispose: () => undefined };
       },
     });
 
@@ -746,23 +926,39 @@ export function useSQLIntellisense(
           return null;
         }
 
-        const suggestion = buildUnresolvedColumnSuggestions(
+        const columnSuggestion = buildUnresolvedColumnSuggestions(
           model,
           parseContext?.diagnostics ?? [],
           parseContext,
           tables,
         ).find((candidate) => positionInRange(position, candidate.range));
 
-        if (!suggestion) {
+        const tableSuggestion = buildUnresolvedTableSuggestions(
+          model,
+          parseContext?.diagnostics ?? [],
+          tables,
+        ).find((candidate) => positionInRange(position, candidate.range));
+
+        if (!columnSuggestion && !tableSuggestion) {
           return null;
         }
 
+        if (tableSuggestion) {
+          return {
+            range: tableSuggestion.range,
+            contents: [
+              { value: `**Unresolved table** \`${tableSuggestion.unknownTable}\`` },
+              { value: `Did you mean \`${tableSuggestion.replacementTable}\`` },
+            ],
+          };
+        }
+
         return {
-          range: suggestion.range,
+          range: columnSuggestion!.range,
           contents: [
-            { value: `**Unresolved column** \`${suggestion.unknownColumn}\`` },
+            { value: `**Unresolved column** \`${columnSuggestion!.unknownColumn}\`` },
             {
-              value: `Did you mean \`${suggestion.replacementColumn}\``,
+              value: `Did you mean \`${columnSuggestion!.replacementColumn}\``,
             },
           ],
         };

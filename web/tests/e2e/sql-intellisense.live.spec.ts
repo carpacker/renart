@@ -329,6 +329,83 @@ test.describe("sql intellisense live", () => {
       .toContain("select c.customer_name");
   });
 
+  test("reports self references as circular dependencies", async ({
+    liveApp,
+    page,
+  }) => {
+    test.skip(test.info().project.name.includes("mobile"), "Monaco diagnostics are only stable in the desktop editor.");
+
+    await page.goto(`${liveApp.baseURL}/`);
+    await openCustomersEditor(page, liveApp.baseURL);
+
+    await replaceEditorContentByInsertText(
+      page,
+      "select *\nfrom analytics.customers"
+    );
+
+    await expect
+      .poll(async () => getEditorMarkerMessages(page), { timeout: 15000 })
+      .toEqual(
+        expect.arrayContaining([
+          expect.stringContaining("Circular dependency: asset 'analytics.customers' references itself."),
+        ])
+      );
+
+    await expect
+      .poll(async () => getEditorMarkerMessages(page), { timeout: 15000 })
+      .not.toEqual(expect.arrayContaining([expect.stringContaining("Unresolved table: analytics.customers")]));
+  });
+
+  test("offers a quick fix for similar unresolved table names", async ({
+    liveApp,
+    page,
+  }) => {
+    test.skip(test.info().project.name.includes("mobile"), "Monaco quick-fix UI is only stable in the desktop editor.");
+
+    await page.goto(`${liveApp.baseURL}/`);
+    await openCustomersEditor(page, liveApp.baseURL);
+
+    await replaceEditorContentByInsertText(page, "select *\nfrom analytics.ordrs");
+
+    await expect
+      .poll(async () => getEditorMarkerMessages(page), { timeout: 15000 })
+      .toEqual(
+        expect.arrayContaining([
+          expect.stringContaining("Unresolved table 'analytics.ordrs'. Did you mean 'analytics.orders'?"),
+        ])
+      );
+
+    await setEditorPositionAfterText(page, "analytics.ordrs");
+    await page.evaluate(() => {
+      const monaco = (window as typeof window & { monaco?: any }).monaco;
+      const editor = monaco?.editor.getEditors?.()[0];
+      void editor?.getAction("editor.action.showHover")?.run();
+    });
+    const hover = page.locator(".monaco-hover").first();
+    await expect(hover).toBeVisible({ timeout: 10000 });
+    await expect(hover.getByText("Unresolved table", { exact: true })).toBeVisible();
+    await expect(hover.getByText("analytics.ordrs", { exact: true })).toBeVisible();
+    await expect(hover.getByText("analytics.orders", { exact: true }).first()).toBeVisible();
+
+    await page.keyboard.press("Escape");
+    await page.evaluate(() => {
+      const monaco = (window as typeof window & { monaco?: any }).monaco;
+      const editor = monaco?.editor.getEditors?.()[0];
+      void editor?.getAction("editor.action.quickFix")?.run();
+    });
+
+    const actionWidget = page.locator(".action-widget").first();
+    await expect(actionWidget).toBeVisible({ timeout: 10000 });
+    await expect(
+      actionWidget.getByText("Change 'analytics.ordrs' to 'analytics.orders'", { exact: true })
+    ).toBeVisible();
+    await page.keyboard.press("Enter");
+
+    await expect
+      .poll(async () => getEditorValue(page), { timeout: 10000 })
+      .toContain("from analytics.orders");
+  });
+
   test("renders Jinja ghost text and completions in the SQL editor", async ({
     liveApp,
     page,
