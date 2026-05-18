@@ -15,6 +15,16 @@ type APIError struct {
 	Message string
 }
 
+type ErrorResponse struct {
+	Status string            `json:"status"`
+	Error  ErrorResponseBody `json:"error"`
+}
+
+type ErrorResponseBody struct {
+	Code    string `json:"code"`
+	Message string `json:"message"`
+}
+
 type CreateAssetRequest struct {
 	Name            string `json:"name"`
 	Type            string `json:"type"`
@@ -45,10 +55,20 @@ type FormatSQLAssetResponse struct {
 	Error   string `json:"error,omitempty"`
 }
 
+type AssetMutationResponse struct {
+	Status    string `json:"status"`
+	AssetID   string `json:"asset_id,omitempty"`
+	AssetPath string `json:"asset_path,omitempty"`
+}
+
+type StatusResponse struct {
+	Status string `json:"status"`
+}
+
 type AssetHandlers interface {
-	CreateAsset(ctx context.Context, pipelineID string, req CreateAssetRequest) (map[string]string, *APIError)
-	UpdateAsset(ctx context.Context, assetID string, req UpdateAssetRequest) (map[string]string, *APIError)
-	DeleteAsset(ctx context.Context, assetID string) (map[string]string, *APIError)
+	CreateAsset(ctx context.Context, pipelineID string, req CreateAssetRequest) (AssetMutationResponse, *APIError)
+	UpdateAsset(ctx context.Context, assetID string, req UpdateAssetRequest) (AssetMutationResponse, *APIError)
+	DeleteAsset(ctx context.Context, assetID string) (StatusResponse, *APIError)
 	FormatSQLAsset(ctx context.Context, assetID string, req FormatSQLAssetRequest) (FormatSQLAssetResponse, *APIError)
 }
 
@@ -71,10 +91,7 @@ func (h *AssetsAPI) HandleCreateAsset(w http.ResponseWriter, r *http.Request) {
 	}
 	resp, apiErr := h.Service.CreateAsset(r.Context(), chi.URLParam(r, "id"), req)
 	if apiErr != nil {
-		webapi.WriteJSON(w, apiErr.Status, map[string]any{
-			"status": "error",
-			"error":  map[string]string{"code": apiErr.Code, "message": apiErr.Message},
-		})
+		writeAPIError(w, apiErr)
 		return
 	}
 	webapi.WriteJSON(w, http.StatusCreated, resp)
@@ -88,10 +105,7 @@ func (h *AssetsAPI) HandleUpdateAsset(w http.ResponseWriter, r *http.Request) {
 	}
 	resp, apiErr := h.Service.UpdateAsset(r.Context(), chi.URLParam(r, "assetID"), req)
 	if apiErr != nil {
-		webapi.WriteJSON(w, apiErr.Status, map[string]any{
-			"status": "error",
-			"error":  map[string]string{"code": apiErr.Code, "message": apiErr.Message},
-		})
+		writeAPIError(w, apiErr)
 		return
 	}
 	webapi.WriteJSON(w, http.StatusOK, resp)
@@ -100,10 +114,7 @@ func (h *AssetsAPI) HandleUpdateAsset(w http.ResponseWriter, r *http.Request) {
 func (h *AssetsAPI) HandleDeleteAsset(w http.ResponseWriter, r *http.Request) {
 	resp, apiErr := h.Service.DeleteAsset(r.Context(), chi.URLParam(r, "assetID"))
 	if apiErr != nil {
-		webapi.WriteJSON(w, apiErr.Status, map[string]any{
-			"status": "error",
-			"error":  map[string]string{"code": apiErr.Code, "message": apiErr.Message},
-		})
+		writeAPIError(w, apiErr)
 		return
 	}
 	webapi.WriteJSON(w, http.StatusOK, resp)
@@ -117,11 +128,18 @@ func (h *AssetsAPI) HandleFormatSQLAsset(w http.ResponseWriter, r *http.Request)
 	}
 	resp, apiErr := h.Service.FormatSQLAsset(r.Context(), chi.URLParam(r, "assetID"), req)
 	if apiErr != nil {
-		webapi.WriteJSON(w, apiErr.Status, map[string]any{
-			"status": "error",
-			"error":  map[string]string{"code": apiErr.Code, "message": apiErr.Message},
-		})
+		writeAPIError(w, apiErr)
 		return
 	}
 	webapi.WriteJSON(w, http.StatusOK, resp)
+}
+
+func writeAPIError(w http.ResponseWriter, apiErr *APIError) {
+	webapi.WriteJSON(w, apiErr.Status, ErrorResponse{
+		Status: "error",
+		Error: ErrorResponseBody{
+			Code:    apiErr.Code,
+			Message: apiErr.Message,
+		},
+	})
 }

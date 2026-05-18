@@ -11,11 +11,7 @@ import (
 )
 
 func loadConfigOrEmpty(configPath string) *config.Config {
-	if strings.TrimSpace(configPath) == "" {
-		return &config.Config{}
-	}
-
-	cfg, err := config.LoadOrCreate(afero.NewOsFs(), configPath)
+	cfg, err := loadConfig(afero.NewOsFs(), configPath)
 	if err != nil || cfg == nil {
 		return &config.Config{}
 	}
@@ -23,18 +19,32 @@ func loadConfigOrEmpty(configPath string) *config.Config {
 }
 
 func loadSelectedConfig(configPath string, requestedEnvironment string) (*config.Config, error) {
-	if strings.TrimSpace(configPath) == "" {
-		return selectConfigEnvironment(&config.Config{}, requestedEnvironment)
-	}
+	return loadSelectedConfigFS(afero.NewOsFs(), configPath, requestedEnvironment)
+}
 
-	cfg, err := config.LoadOrCreate(afero.NewOsFs(), configPath)
+func loadSelectedConfigFS(fs afero.Fs, configPath string, requestedEnvironment string) (*config.Config, error) {
+	cfg, err := loadConfig(fs, configPath)
+	if err != nil {
+		return nil, err
+	}
+	return selectConfigEnvironment(cfg, requestedEnvironment)
+}
+
+func loadConfig(fs afero.Fs, configPath string) (*config.Config, error) {
+	if strings.TrimSpace(configPath) == "" {
+		return &config.Config{}, nil
+	}
+	if fs == nil {
+		fs = afero.NewOsFs()
+	}
+	cfg, err := config.LoadOrCreate(fs, configPath)
 	if err != nil {
 		return nil, err
 	}
 	if cfg == nil {
 		cfg = &config.Config{}
 	}
-	return selectConfigEnvironment(cfg, requestedEnvironment)
+	return cfg, nil
 }
 
 func selectConfigEnvironment(cfg *config.Config, requestedEnvironment string) (*config.Config, error) {

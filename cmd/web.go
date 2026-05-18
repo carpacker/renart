@@ -76,7 +76,9 @@ type webColumn struct {
 }
 
 type apiError = webhttpapi.APIError
+type assetMutationResponse = webhttpapi.AssetMutationResponse
 type formatSQLAssetResponse = webhttpapi.FormatSQLAssetResponse
+type statusResponse = webhttpapi.StatusResponse
 
 type ingestrSuggestionItem struct {
 	Value  string `json:"value"`
@@ -271,15 +273,16 @@ func Web() *cli.Command {
 			})
 
 			server.assetSvc = service.NewAssetService(service.AssetDependencies{
-				WorkspaceRoot:                              absRoot,
-				Executor:                                   server.executor,
-				ResolveAssetByID:                           server.resolveAssetByID,
-				DefaultAssetContent:                        defaultAssetContent,
-				DerivedAssetContent:                        defaultDerivedSQLAssetContent,
-				EnsurePythonRequirements:                   ensurePythonRequirementsFile,
-				SuppressWatcher:                            server.suppressWatcherFor,
-				PushWorkspaceUpdate:                        server.pushWorkspaceUpdate,
-				PushWorkspaceUpdateImmediate:               server.pushWorkspaceUpdateImmediate,
+				Fs:                           afero.NewOsFs(),
+				WorkspaceRoot:                absRoot,
+				Executor:                     server.executor,
+				ResolveAssetByID:             server.resolveAssetByID,
+				DefaultAssetContent:          defaultAssetContent,
+				DerivedAssetContent:          defaultDerivedSQLAssetContent,
+				EnsurePythonRequirements:     ensurePythonRequirementsFile,
+				SuppressWatcher:              server.suppressWatcherFor,
+				PushWorkspaceUpdate:          server.pushWorkspaceUpdate,
+				PushWorkspaceUpdateImmediate: server.pushWorkspaceUpdateImmediate,
 				PushWorkspaceUpdateImmediateWithChangedIDs: server.pushWorkspaceUpdateImmediateWithChangedIDs,
 			})
 
@@ -950,19 +953,19 @@ func (s *webServer) GetPipelineMaterialization(ctx context.Context, pipelineID, 
 	return webhttpapi.PipelineMaterializationResponse{PipelineID: response.PipelineID, Assets: pipelineExecutionStatesToAPI(response.Assets)}, nil
 }
 
-func (s *webServer) CreateAsset(ctx context.Context, pipelineID string, req webhttpapi.CreateAssetRequest) (map[string]string, *apiError) {
+func (s *webServer) CreateAsset(ctx context.Context, pipelineID string, req webhttpapi.CreateAssetRequest) (assetMutationResponse, *apiError) {
 	result, err := s.assetSvc.Create(ctx, pipelineID, service.CreateAssetParams(req))
 	if err != nil {
-		return nil, &apiError{Status: err.Status, Code: err.Code, Message: err.Message}
+		return assetMutationResponse{}, &apiError{Status: err.Status, Code: err.Code, Message: err.Message}
 	}
-	return result, nil
+	return assetMutationResponse(result), nil
 }
 
 type updateAssetColumnsRequest struct {
 	Columns []webColumn `json:"columns"`
 }
 
-func (s *webServer) UpdateAsset(ctx context.Context, assetID string, req webhttpapi.UpdateAssetRequest) (map[string]string, *apiError) {
+func (s *webServer) UpdateAsset(ctx context.Context, assetID string, req webhttpapi.UpdateAssetRequest) (assetMutationResponse, *apiError) {
 	result, err := s.assetSvc.Update(ctx, assetID, service.AssetUpdateRequest{
 		Name:                req.Name,
 		Type:                req.Type,
@@ -972,9 +975,9 @@ func (s *webServer) UpdateAsset(ctx context.Context, assetID string, req webhttp
 		Upstreams:           req.Upstreams,
 	})
 	if err != nil {
-		return nil, &apiError{Status: err.Status, Code: err.Code, Message: err.Message}
+		return assetMutationResponse{}, &apiError{Status: err.Status, Code: err.Code, Message: err.Message}
 	}
-	return result, nil
+	return assetMutationResponse(result), nil
 }
 
 func (s *webServer) FormatSQLAsset(ctx context.Context, assetID string, req webhttpapi.FormatSQLAssetRequest) (formatSQLAssetResponse, *apiError) {
@@ -1080,26 +1083,26 @@ func (s *webServer) InferAssetColumns(ctx context.Context, assetID string) (int,
 	}, nil
 }
 
-func (s *webServer) UpdateAssetColumns(ctx context.Context, assetID string, columns []any) (map[string]string, *apiError) {
+func (s *webServer) UpdateAssetColumns(ctx context.Context, assetID string, columns []any) (statusResponse, *apiError) {
 	_, parsedPipeline, asset, err := s.resolveAssetByID(ctx, assetID)
 	if err != nil {
-		return nil, &apiError{Status: http.StatusBadRequest, Code: "asset_resolve_failed", Message: err.Error()}
+		return statusResponse{}, &apiError{Status: http.StatusBadRequest, Code: "asset_resolve_failed", Message: err.Error()}
 	}
 
 	columnBytes, err := json.Marshal(columns)
 	if err != nil {
-		return nil, &apiError{Status: http.StatusBadRequest, Code: "invalid_request_body", Message: err.Error()}
+		return statusResponse{}, &apiError{Status: http.StatusBadRequest, Code: "invalid_request_body", Message: err.Error()}
 	}
 
 	var req updateAssetColumnsRequest
 	if err := json.Unmarshal(columnBytes, &req.Columns); err != nil {
-		return nil, &apiError{Status: http.StatusBadRequest, Code: "invalid_request_body", Message: err.Error()}
+		return statusResponse{}, &apiError{Status: http.StatusBadRequest, Code: "invalid_request_body", Message: err.Error()}
 	}
 
 	asset.Columns = webColumnsToPipelineColumns(req.Columns)
 	err = asset.Persist(afero.NewOsFs(), parsedPipeline)
 	if err != nil {
-		return nil, &apiError{Status: http.StatusInternalServerError, Code: "asset_persist_failed", Message: err.Error()}
+		return statusResponse{}, &apiError{Status: http.StatusInternalServerError, Code: "asset_persist_failed", Message: err.Error()}
 	}
 
 	relAssetPath, decodeErr := decodeID(assetID)
@@ -1108,15 +1111,15 @@ func (s *webServer) UpdateAssetColumns(ctx context.Context, assetID string, colu
 		s.pushWorkspaceUpdateImmediate(ctx, "asset.columns.updated", relAssetPath)
 	}
 
-	return map[string]string{"status": "ok"}, nil
+	return statusResponse{Status: "ok"}, nil
 }
 
-func (s *webServer) DeleteAsset(ctx context.Context, assetID string) (map[string]string, *apiError) {
+func (s *webServer) DeleteAsset(ctx context.Context, assetID string) (statusResponse, *apiError) {
 	result, err := s.assetSvc.Delete(ctx, assetID)
 	if err != nil {
-		return nil, &apiError{Status: err.Status, Code: err.Code, Message: err.Message}
+		return statusResponse{}, &apiError{Status: err.Status, Code: err.Code, Message: err.Message}
 	}
-	return result, nil
+	return statusResponse(result), nil
 }
 
 func (s *webServer) resolveAssetByID(ctx context.Context, assetID string) (string, *pipeline.Pipeline, *pipeline.Asset, error) {

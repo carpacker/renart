@@ -15,6 +15,20 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func newAssetTestResolver(workspaceRoot string) *WorkspaceResolver {
+	return NewWorkspaceResolver(workspaceRoot, func(ctx context.Context, pipelinePath string) (*pipeline.Pipeline, error) {
+		osFS := afero.NewOsFs()
+		builder := pipeline.NewBuilder(
+			BuilderConfig,
+			pipeline.CreateTaskFromYamlDefinition(osFS),
+			pipeline.CreateTaskFromFileComments(osFS),
+			osFS,
+			nil,
+		)
+		return builder.CreatePipelineFromPath(ctx, pipelinePath, pipeline.WithMutate())
+	})
+}
+
 func TestApplyManualAssetUpstreamsPreservesTrackedInferred(t *testing.T) {
 	t.Parallel()
 
@@ -40,6 +54,41 @@ func TestApplyManualAssetUpstreamsPreservesTrackedInferred(t *testing.T) {
 
 	assert.Equal(t, []string{"analytics.manual_seed", "analytics.orders"}, upstreamValues(asset.Upstreams))
 	assert.Equal(t, "analytics.orders", asset.Meta[renartInferredUpstreamsMetaKey])
+}
+
+func TestMergeSQLAssetDependenciesPreservesManualAndReplacesTrackedInferred(t *testing.T) {
+	t.Parallel()
+
+	merged := mergeSQLAssetDependencies(
+		"analytics.orders_report",
+		[]pipeline.Upstream{
+			{Type: "asset", Value: "analytics.manual_seed", Mode: pipeline.UpstreamModeFull},
+			{Type: "asset", Value: "analytics.old_inferred", Mode: pipeline.UpstreamModeFull},
+			{Type: "uri", Value: "s3://bucket/orders.csv"},
+		},
+		pipeline.EmptyStringMap{renartInferredUpstreamsMetaKey: "analytics.old_inferred"},
+		[]string{"analytics.z_customers", "analytics.manual_seed", "analytics.a_orders", "analytics.orders_report"},
+	)
+
+	assert.Equal(t, []string{"s3://bucket/orders.csv", "analytics.manual_seed", "analytics.a_orders", "analytics.z_customers"}, upstreamValues(merged.Upstreams))
+	assert.Equal(t, []string{"analytics.a_orders", "analytics.z_customers"}, merged.Inferred)
+}
+
+func TestMergeSQLAssetDependenciesClearsStaleTrackedInferred(t *testing.T) {
+	t.Parallel()
+
+	merged := mergeSQLAssetDependencies(
+		"analytics.orders_report",
+		[]pipeline.Upstream{
+			{Type: "asset", Value: "analytics.manual_seed", Mode: pipeline.UpstreamModeFull},
+			{Type: "asset", Value: "analytics.old_inferred", Mode: pipeline.UpstreamModeFull},
+		},
+		pipeline.EmptyStringMap{renartInferredUpstreamsMetaKey: "analytics.old_inferred"},
+		nil,
+	)
+
+	assert.Equal(t, []string{"analytics.manual_seed"}, upstreamValues(merged.Upstreams))
+	assert.Empty(t, merged.Inferred)
 }
 
 func TestDeriveSQLAssetTypeForIngestrSourceUsesDestinationType(t *testing.T) {
@@ -160,47 +209,7 @@ materialization:
 select 1 as order_id
 `)+"\n"), 0o644))
 
-	buildPipeline := func(ctx context.Context, pipelinePath string) (*pipeline.Pipeline, error) {
-		osFS := afero.NewOsFs()
-		builder := pipeline.NewBuilder(
-			BuilderConfig,
-			pipeline.CreateTaskFromYamlDefinition(osFS),
-			pipeline.CreateTaskFromFileComments(osFS),
-			osFS,
-			nil,
-		)
-		return builder.CreatePipelineFromPath(ctx, pipelinePath, pipeline.WithMutate())
-	}
-
-	resolveAssetByID := func(ctx context.Context, assetID string) (string, *pipeline.Pipeline, *pipeline.Asset, error) {
-		relAssetPath, err := DecodeID(assetID)
-		if err != nil {
-			return "", nil, nil, err
-		}
-
-		parsedPipeline, err := buildPipeline(ctx, pipelineRoot)
-		if err != nil {
-			return "", nil, nil, err
-		}
-
-		normalizedTarget := filepath.ToSlash(relAssetPath)
-		for _, asset := range parsedPipeline.Assets {
-			currentPath := asset.ExecutableFile.Path
-			if currentPath == "" {
-				currentPath = asset.DefinitionFile.Path
-			}
-
-			relCurrent, relErr := filepath.Rel(workspaceRoot, currentPath)
-			if relErr != nil {
-				continue
-			}
-			if filepath.ToSlash(relCurrent) == normalizedTarget {
-				return normalizedTarget, parsedPipeline, asset, nil
-			}
-		}
-
-		return "", nil, nil, ErrAssetNotFound
-	}
+	resolveAssetByID := newAssetTestResolver(workspaceRoot).ResolveAssetByID
 
 	service := NewAssetService(AssetDependencies{
 		WorkspaceRoot:    workspaceRoot,
@@ -256,47 +265,7 @@ materialization:
 select 1 as seed_id
 `)+"\n"), 0o644))
 
-	buildPipeline := func(ctx context.Context, pipelinePath string) (*pipeline.Pipeline, error) {
-		osFS := afero.NewOsFs()
-		builder := pipeline.NewBuilder(
-			BuilderConfig,
-			pipeline.CreateTaskFromYamlDefinition(osFS),
-			pipeline.CreateTaskFromFileComments(osFS),
-			osFS,
-			nil,
-		)
-		return builder.CreatePipelineFromPath(ctx, pipelinePath, pipeline.WithMutate())
-	}
-
-	resolveAssetByID := func(ctx context.Context, assetID string) (string, *pipeline.Pipeline, *pipeline.Asset, error) {
-		relAssetPath, err := DecodeID(assetID)
-		if err != nil {
-			return "", nil, nil, err
-		}
-
-		parsedPipeline, err := buildPipeline(ctx, pipelineRoot)
-		if err != nil {
-			return "", nil, nil, err
-		}
-
-		normalizedTarget := filepath.ToSlash(relAssetPath)
-		for _, asset := range parsedPipeline.Assets {
-			currentPath := asset.ExecutableFile.Path
-			if currentPath == "" {
-				currentPath = asset.DefinitionFile.Path
-			}
-
-			relCurrent, relErr := filepath.Rel(workspaceRoot, currentPath)
-			if relErr != nil {
-				continue
-			}
-			if filepath.ToSlash(relCurrent) == normalizedTarget {
-				return normalizedTarget, parsedPipeline, asset, nil
-			}
-		}
-
-		return "", nil, nil, ErrAssetNotFound
-	}
+	resolveAssetByID := newAssetTestResolver(workspaceRoot).ResolveAssetByID
 
 	service := NewAssetService(AssetDependencies{
 		WorkspaceRoot:    workspaceRoot,
@@ -346,47 +315,7 @@ materialization:
 select 1 as order_id
 `)+"\n"), 0o644))
 
-	buildPipeline := func(ctx context.Context, pipelinePath string) (*pipeline.Pipeline, error) {
-		osFS := afero.NewOsFs()
-		builder := pipeline.NewBuilder(
-			BuilderConfig,
-			pipeline.CreateTaskFromYamlDefinition(osFS),
-			pipeline.CreateTaskFromFileComments(osFS),
-			osFS,
-			nil,
-		)
-		return builder.CreatePipelineFromPath(ctx, pipelinePath, pipeline.WithMutate())
-	}
-
-	resolveAssetByID := func(ctx context.Context, assetID string) (string, *pipeline.Pipeline, *pipeline.Asset, error) {
-		relAssetPath, err := DecodeID(assetID)
-		if err != nil {
-			return "", nil, nil, err
-		}
-
-		parsedPipeline, err := buildPipeline(ctx, pipelineRoot)
-		if err != nil {
-			return "", nil, nil, err
-		}
-
-		normalizedTarget := filepath.ToSlash(relAssetPath)
-		for _, asset := range parsedPipeline.Assets {
-			currentPath := asset.ExecutableFile.Path
-			if currentPath == "" {
-				currentPath = asset.DefinitionFile.Path
-			}
-
-			relCurrent, relErr := filepath.Rel(workspaceRoot, currentPath)
-			if relErr != nil {
-				continue
-			}
-			if filepath.ToSlash(relCurrent) == normalizedTarget {
-				return normalizedTarget, parsedPipeline, asset, nil
-			}
-		}
-
-		return "", nil, nil, ErrAssetNotFound
-	}
+	resolveAssetByID := newAssetTestResolver(workspaceRoot).ResolveAssetByID
 
 	service := NewAssetService(AssetDependencies{
 		WorkspaceRoot:                workspaceRoot,
@@ -402,10 +331,10 @@ select 1 as order_id
 		SourceAssetID: EncodeID("analytics/assets/analytics/orders.sql"),
 	})
 	require.Nil(t, apiErr)
-	require.Equal(t, "ok", response["status"])
-	require.Equal(t, "analytics/assets/analytics/orders_child_1.sql", response["asset_path"])
+	require.Equal(t, "ok", response.Status)
+	require.Equal(t, "analytics/assets/analytics/orders_child_1.sql", response.AssetPath)
 
-	assetPath := filepath.Join(workspaceRoot, filepath.FromSlash(response["asset_path"]))
+	assetPath := filepath.Join(workspaceRoot, filepath.FromSlash(response.AssetPath))
 	content, err := os.ReadFile(assetPath)
 	require.NoError(t, err)
 	assert.NotContains(t, string(content), "name:")
@@ -413,7 +342,7 @@ select 1 as order_id
 	assert.Contains(t, string(content), "depends:\n  - analytics.orders")
 	assert.Contains(t, string(content), "renart_inferred_upstreams: analytics.orders")
 
-	_, _, asset, err := resolveAssetByID(context.Background(), response["asset_id"])
+	_, _, asset, err := resolveAssetByID(context.Background(), response.AssetID)
 	require.NoError(t, err)
 	assert.Equal(t, []string{"analytics.orders"}, upstreamValues(asset.Upstreams))
 	assert.Equal(t, "analytics.orders", asset.Meta[renartInferredUpstreamsMetaKey])
@@ -471,7 +400,7 @@ func TestAssetServiceCreateWritesDroppedSeedFile(t *testing.T) {
 		SeedFileContent: "customer_id,customer_name\n10,Lin\n",
 	})
 	require.Nil(t, apiErr)
-	assert.Equal(t, "analytics/assets/analytics/regional_customers.asset.yml", response["asset_path"])
+	assert.Equal(t, "analytics/assets/analytics/regional_customers.asset.yml", response.AssetPath)
 
 	seedContent, err := os.ReadFile(filepath.Join(pipelineRoot, "assets/analytics/regional_customers.csv"))
 	require.NoError(t, err)
@@ -515,53 +444,7 @@ depends:
 select 1 as customer_id
 `)+"\n"), 0o644))
 
-	buildPipeline := func(ctx context.Context, pipelinePath string) (*pipeline.Pipeline, error) {
-		osFS := afero.NewOsFs()
-		builder := pipeline.NewBuilder(
-			BuilderConfig,
-			pipeline.CreateTaskFromYamlDefinition(osFS),
-			pipeline.CreateTaskFromFileComments(osFS),
-			osFS,
-			nil,
-		)
-		return builder.CreatePipelineFromPath(ctx, pipelinePath, pipeline.WithMutate())
-	}
-
-	resolveAssetByID := func(ctx context.Context, assetID string) (string, *pipeline.Pipeline, *pipeline.Asset, error) {
-		relAssetPath, err := DecodeID(assetID)
-		if err != nil {
-			return "", nil, nil, err
-		}
-
-		assetPath, err := SafeJoin(workspaceRoot, relAssetPath)
-		if err != nil {
-			return "", nil, nil, err
-		}
-
-		pipelinePath := filepath.Dir(filepath.Dir(assetPath))
-		parsedPipeline, err := buildPipeline(ctx, pipelinePath)
-		if err != nil {
-			return "", nil, nil, err
-		}
-
-		normalizedTarget := filepath.ToSlash(relAssetPath)
-		for _, asset := range parsedPipeline.Assets {
-			currentPath := asset.ExecutableFile.Path
-			if currentPath == "" {
-				currentPath = asset.DefinitionFile.Path
-			}
-
-			relCurrent, relErr := filepath.Rel(workspaceRoot, currentPath)
-			if relErr != nil {
-				continue
-			}
-			if filepath.ToSlash(relCurrent) == normalizedTarget {
-				return normalizedTarget, parsedPipeline, asset, nil
-			}
-		}
-
-		return "", nil, nil, ErrAssetNotFound
-	}
+	resolveAssetByID := newAssetTestResolver(workspaceRoot).ResolveAssetByID
 
 	service := NewAssetService(AssetDependencies{
 		WorkspaceRoot:    workspaceRoot,

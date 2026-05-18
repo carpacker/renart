@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"path/filepath"
 	"regexp"
-	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -272,7 +271,7 @@ func (s *ExecutionService) inspectMaterializedNonSQLAsset(ctx context.Context, a
 		}, true
 	}
 
-	output, _ := json.Marshal(map[string]any{"columns": columns, "rows": rows})
+	output, _ := json.Marshal(QueryRowsEnvelope{Columns: columns, Rows: rows})
 	return InspectResult{
 		Status:     "ok",
 		Columns:    columns,
@@ -707,12 +706,10 @@ func (s *ExecutionService) GetPipelineMaterialization(ctx context.Context, pipel
 	if err != nil {
 		return PipelineMaterializationResponse{}, fmt.Errorf("invalid pipeline id")
 	}
-
-	absPipelinePath, err := SafeJoin(s.deps.WorkspaceRoot, relPipelinePath)
+	absPipelinePath, err := NewWorkspaceResolver(s.deps.WorkspaceRoot, nil).JoinPath(relPipelinePath)
 	if err != nil {
 		return PipelineMaterializationResponse{}, err
 	}
-
 	parsed, err := s.deps.NewPipelineBuilder().CreatePipelineFromPath(ctx, absPipelinePath, pipeline.WithMutate())
 	if err != nil {
 		return PipelineMaterializationResponse{}, err
@@ -1053,102 +1050,6 @@ func ComputePipelineFreshness(parsed *pipeline.Pipeline, matInfo map[string]Pipe
 	return result
 }
 
-type DBObjectInfo struct {
-	Schema        string
-	Name          string
-	QualifiedName string
-	Kind          string
-}
-
-func (s *ExecutionService) fetchObjectsForConnection(ctx context.Context, connectionName, environment string) ([]DBObjectInfo, error) {
-	queries := []string{
-		`SELECT table_schema, table_name, table_type FROM information_schema.tables`,
-		`SHOW TABLES`,
-	}
-
-	var rows []map[string]any
-	var lastErr error
-	for _, query := range queries {
-		_, qRows, err := s.RunConnectionQueryForEnvironment(ctx, connectionName, environment, query)
-		if err != nil {
-			lastErr = err
-			continue
-		}
-		rows = qRows
-		break
-	}
-
-	if len(rows) == 0 {
-		return []DBObjectInfo{}, lastErr
-	}
-
-	objects := make([]DBObjectInfo, 0, len(rows))
-	for _, row := range rows {
-		name := ReadStringField(row, "table_name", "name", "table")
-		if name == "" {
-			continue
-		}
-
-		schema := ReadStringField(row, "table_schema", "schema", "database")
-		qualifiedName := name
-		if schema != "" {
-			qualifiedName = schema + "." + name
-		}
-
-		kind := strings.ToLower(ReadStringField(row, "table_type", "type"))
-		if strings.Contains(kind, "view") {
-			kind = "view"
-		} else if kind != "" {
-			kind = "table"
-		} else {
-			kind = "table"
-		}
-
-		objects = append(objects, DBObjectInfo{Schema: schema, Name: name, QualifiedName: qualifiedName, Kind: kind})
-	}
-
-	return objects, nil
-}
-
-func (s *ExecutionService) fetchRowCountsForObjects(ctx context.Context, connectionName, environment string, objects []DBObjectInfo) map[string]int64 {
-	result := make(map[string]int64)
-	if len(objects) == 0 {
-		return result
-	}
-
-	queries := make([]string, 0, len(objects))
-	for _, object := range objects {
-		queries = append(queries, fmt.Sprintf(
-			"SELECT '%s' AS object_name, COUNT(*) AS row_count FROM %s",
-			EscapeSQLLiteral(object.QualifiedName),
-			QuoteQualifiedIdentifier(object.QualifiedName),
-		))
-	}
-
-	countQuery := strings.Join(queries, " UNION ALL ")
-	_, rows, err := s.RunConnectionQueryForEnvironment(ctx, connectionName, environment, countQuery)
-	if err != nil {
-		return result
-	}
-
-	for _, row := range rows {
-		objName := ReadStringField(row, "object_name")
-		if objName == "" {
-			continue
-		}
-
-		if count, ok := ReadInt64Field(row, "row_count"); ok {
-			result[NormalizeIdentifier(objName)] = count
-			parts := strings.Split(NormalizeIdentifier(objName), ".")
-			if len(parts) > 1 {
-				result[parts[len(parts)-1]] = count
-			}
-		}
-	}
-
-	return result
-}
-
 func (s *ExecutionService) runConnectionQuery(ctx context.Context, connectionName, query string) ([]string, []map[string]any, error) {
 	return s.RunConnectionQueryForEnvironment(ctx, connectionName, "", query)
 }
@@ -1211,46 +1112,6 @@ func ReadInt64Field(row map[string]any, key string) (int64, bool) {
 	return 0, false
 }
 
-func ParseQueryJSONOutput(output []byte) ([]string, []map[string]any) {
-	rows := make([]map[string]any, 0)
-
-	var asRows []map[string]any
-	if err := json.Unmarshal(output, &asRows); err == nil {
-		rows = asRows
-		return inferColumns(rows), rows
-	}
-
-	var asEnvelope map[string]any
-	if err := json.Unmarshal(output, &asEnvelope); err == nil {
-		columns := extractColumnNames(asEnvelope["columns"])
-
-		if v, ok := asEnvelope["rows"]; ok {
-			if parsedRows := castRows(v); len(parsedRows) > 0 {
-				rows = parsedRows
-			} else if parsedRowsByColumns := castRowsByColumns(v, columns); len(parsedRowsByColumns) > 0 {
-				rows = parsedRowsByColumns
-			}
-		}
-		if len(rows) == 0 {
-			if v, ok := asEnvelope["data"]; ok {
-				if parsedRows := castRows(v); len(parsedRows) > 0 {
-					rows = parsedRows
-				} else {
-					rows = castRowsByColumns(v, columns)
-				}
-			}
-		}
-
-		if len(columns) == 0 {
-			columns = inferColumns(rows)
-		}
-
-		return columns, rows
-	}
-
-	return []string{}, rows
-}
-
 func maxTimePtr(a, b *time.Time) *time.Time {
 	if a == nil {
 		return b
@@ -1262,99 +1123,6 @@ func maxTimePtr(a, b *time.Time) *time.Time {
 		return b
 	}
 	return a
-}
-
-func extractColumnNames(value any) []string {
-	items, ok := value.([]any)
-	if !ok {
-		return []string{}
-	}
-
-	columns := make([]string, 0, len(items))
-	for _, item := range items {
-		if name, ok := item.(string); ok {
-			columns = append(columns, name)
-			continue
-		}
-
-		columnMap, ok := item.(map[string]any)
-		if !ok {
-			continue
-		}
-
-		nameValue, ok := columnMap["name"]
-		if !ok {
-			continue
-		}
-
-		if name, ok := nameValue.(string); ok {
-			columns = append(columns, name)
-		}
-	}
-
-	return columns
-}
-
-func castRows(value any) []map[string]any {
-	items, ok := value.([]any)
-	if !ok {
-		return []map[string]any{}
-	}
-
-	rows := make([]map[string]any, 0, len(items))
-	for _, item := range items {
-		row, ok := item.(map[string]any)
-		if ok {
-			rows = append(rows, row)
-		}
-	}
-
-	return rows
-}
-
-func castRowsByColumns(value any, columns []string) []map[string]any {
-	if len(columns) == 0 {
-		return []map[string]any{}
-	}
-
-	items, ok := value.([]any)
-	if !ok {
-		return []map[string]any{}
-	}
-
-	rows := make([]map[string]any, 0, len(items))
-	for _, item := range items {
-		cellValues, ok := item.([]any)
-		if !ok {
-			continue
-		}
-
-		row := make(map[string]any, len(columns))
-		for idx, column := range columns {
-			if idx < len(cellValues) {
-				row[column] = cellValues[idx]
-				continue
-			}
-			row[column] = nil
-		}
-
-		rows = append(rows, row)
-	}
-
-	return rows
-}
-
-func inferColumns(rows []map[string]any) []string {
-	if len(rows) == 0 {
-		return []string{}
-	}
-
-	columns := make([]string, 0)
-	for key := range rows[0] {
-		columns = append(columns, key)
-	}
-	sort.Strings(columns)
-	return columns
 }
 
 func (s *ExecutionService) findDuckDBExecutionInfoByAsset(ctx context.Context, assetID string) (*DuckDBExecutionInfo, error) {
@@ -1373,7 +1141,7 @@ func (s *ExecutionService) findDuckDBExecutionInfoByAsset(ctx context.Context, a
 		return nil, nil
 	}
 
-	cfg, cfgErr := config.LoadOrCreate(fs, s.deps.ConfigPath)
+	cfg, cfgErr := loadSelectedConfig(s.deps.ConfigPath, "")
 	if cfgErr != nil || cfg.SelectedEnvironment == nil || cfg.SelectedEnvironment.Connections == nil {
 		return nil, nil
 	}
@@ -1399,7 +1167,7 @@ func (s *ExecutionService) buildReadOnlyConfigFile(info *DuckDBExecutionInfo) (s
 		return "", nil, fmt.Errorf("duckdb read-only config requires connection info")
 	}
 
-	cfg, err := config.LoadOrCreate(afero.NewOsFs(), s.deps.ConfigPath)
+	cfg, err := loadSelectedConfig(s.deps.ConfigPath, "")
 	if err != nil {
 		return "", nil, err
 	}
@@ -1408,9 +1176,6 @@ func (s *ExecutionService) buildReadOnlyConfigFile(info *DuckDBExecutionInfo) (s
 	}
 
 	envName := cfg.SelectedEnvironmentName
-	if envName == "" {
-		envName = cfg.DefaultEnvironmentName
-	}
 	env, ok := cfg.Environments[envName]
 	if !ok || env.Connections == nil {
 		return "", nil, fmt.Errorf("environment '%s' not found", envName)

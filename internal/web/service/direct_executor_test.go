@@ -80,6 +80,23 @@ func (s *stubConnectionManager) GetConnectionType(_ string) string {
 	return "stub"
 }
 
+func TestFillDirectColumnsFromDBRejectsMissingPipelineInfo(t *testing.T) {
+	t.Parallel()
+
+	status, err := fillDirectColumnsFromDB(context.Background(), &directPipelineInfo{}, afero.NewMemMapFs(), "", nil)
+
+	assert.Equal(t, fillStatusFailed, status)
+	require.Error(t, err)
+}
+
+func TestUpdateDirectAssetDependenciesRejectsMissingPipelineInfo(t *testing.T) {
+	t.Parallel()
+
+	err := updateDirectAssetDependencies(context.Background(), nil, nil, nil, nil, afero.NewMemMapFs())
+
+	require.Error(t, err)
+}
+
 type stubSchemaQuerier struct {
 	query string
 }

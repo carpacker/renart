@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -16,7 +15,6 @@ import (
 	bq "github.com/bruin-data/bruin/pkg/bigquery"
 	ch "github.com/bruin-data/bruin/pkg/clickhouse"
 	"github.com/bruin-data/bruin/pkg/config"
-	"github.com/bruin-data/bruin/pkg/connection"
 	dbsql "github.com/bruin-data/bruin/pkg/databricks"
 	duck "github.com/bruin-data/bruin/pkg/duckdb"
 	bruinexecutor "github.com/bruin-data/bruin/pkg/executor"
@@ -28,7 +26,6 @@ import (
 	ms "github.com/bruin-data/bruin/pkg/mssql"
 	my "github.com/bruin-data/bruin/pkg/mysql"
 	"github.com/bruin-data/bruin/pkg/oracle"
-	bruinpath "github.com/bruin-data/bruin/pkg/path"
 	"github.com/bruin-data/bruin/pkg/pipeline"
 	"github.com/bruin-data/bruin/pkg/postgres"
 	pg "github.com/bruin-data/bruin/pkg/postgres"
@@ -40,7 +37,6 @@ import (
 	"github.com/bruin-data/bruin/pkg/sqlparser"
 	tri "github.com/bruin-data/bruin/pkg/trino"
 	vert "github.com/bruin-data/bruin/pkg/vertica"
-	"github.com/fatih/color"
 	"github.com/spf13/afero"
 	"go.uber.org/zap"
 )
@@ -50,23 +46,6 @@ type HybridBruinExecutor struct {
 	newPipelineBuilder   func() *pipeline.Builder
 	workspaceRoot        string
 }
-
-type directRunFormatting struct {
-	doNotLogTaskName bool
-	startDate        time.Time
-	endDate          time.Time
-}
-
-type directRunSummary struct {
-	results      []*scheduler.TaskExecutionResult
-	failedAssets []string
-	duration     time.Duration
-}
-
-var directRunTimePrinter = color.New(color.FgWhite, color.Faint).SprintfFunc()
-var directRunFaintPrinter = color.New(color.Faint).SprintfFunc()
-var directRunGreenPrinter = color.New(color.FgGreen).SprintfFunc()
-var directRunRedPrinter = color.New(color.FgRed).SprintfFunc()
 
 func NewHybridBruinExecutor(
 	workspaceRoot string,
@@ -94,10 +73,8 @@ func (e *HybridBruinExecutor) RunAsset(ctx context.Context, req RunAssetRequest,
 	if shouldFallbackToCLIRunAsset(pp.Asset, pp.Pipeline) {
 		return nil, fmt.Errorf("direct run is not supported for asset type %q", pp.Asset.Type)
 	}
-	if strings.TrimSpace(req.Environment) != "" {
-		if err := pp.Config.SelectEnvironment(req.Environment); err != nil {
-			return nil, fmt.Errorf("failed to use the environment '%s': %w", req.Environment, err)
-		}
+	if _, err := selectConfigEnvironment(pp.Config, req.Environment); err != nil {
+		return nil, fmt.Errorf("failed to use the environment '%s': %w", req.Environment, err)
 	}
 
 	manager, err := e.directConnectionManager(ctx, pp.Config)
@@ -214,25 +191,9 @@ func (e *HybridBruinExecutor) RunPipeline(ctx context.Context, req RunPipelineRe
 		return nil, fmt.Errorf("failed to find the git repository root: %w", err)
 	}
 	configPath := filepath.Join(repoRoot.Path, ".bruin.yml")
-	cfg, err := config.LoadOrCreate(afero.NewOsFs(), configPath)
+	cfg, err := loadSelectedConfig(configPath, req.Environment)
 	if err != nil {
 		return nil, err
-	}
-	if cfg == nil {
-		cfg = &config.Config{}
-	}
-	if cfg.SelectedEnvironmentName == "" {
-		cfg.SelectedEnvironmentName = cfg.DefaultEnvironmentName
-	}
-	if strings.TrimSpace(req.Environment) != "" {
-		if selectErr := cfg.SelectEnvironment(req.Environment); selectErr != nil {
-			return nil, fmt.Errorf("failed to use the environment '%s': %w", req.Environment, selectErr)
-		}
-	}
-	if cfg.SelectedEnvironment == nil && cfg.SelectedEnvironmentName != "" {
-		if selectErr := cfg.SelectEnvironment(cfg.SelectedEnvironmentName); selectErr != nil {
-			return nil, selectErr
-		}
 	}
 
 	pp := &directPipelineInfo{Pipeline: foundPipeline, Config: cfg}
@@ -322,7 +283,7 @@ func (e *HybridBruinExecutor) QueryAsset(ctx context.Context, req QueryAssetRequ
 
 	pp, err := getDirectPipelineAndAsset(ctx, e.workspaceRoot, req.AssetPath, afero.NewOsFs())
 	if err != nil {
-		output, marshalErr := json.Marshal(map[string]any{"error": err.Error()})
+		output, marshalErr := json.Marshal(directErrorResponse{Error: err.Error()})
 		if marshalErr != nil {
 			return nil, err
 		}
@@ -331,9 +292,7 @@ func (e *HybridBruinExecutor) QueryAsset(ctx context.Context, req QueryAssetRequ
 
 	if !pp.Asset.IsSQLAsset() {
 		err := fmt.Errorf("asset '%s' is not a SQL asset (type: %s). Only SQL assets can be queried", req.AssetPath, pp.Asset.Type)
-		output, marshalErr := json.Marshal(map[string]any{
-			"error": fmt.Sprintf("asset '%s' is not a SQL asset (type: %s). Only SQL assets can be queried", req.AssetPath, pp.Asset.Type),
-		})
+		output, marshalErr := json.Marshal(directErrorResponse{Error: err.Error()})
 		if marshalErr != nil {
 			return nil, err
 		}
@@ -342,7 +301,7 @@ func (e *HybridBruinExecutor) QueryAsset(ctx context.Context, req QueryAssetRequ
 
 	connName, conn, queryStr, err := e.buildDirectAssetQuery(ctx, pp, req.Environment)
 	if err != nil {
-		output, marshalErr := json.Marshal(map[string]any{"error": err.Error()})
+		output, marshalErr := json.Marshal(directErrorResponse{Error: err.Error()})
 		if marshalErr != nil {
 			return nil, err
 		}
@@ -357,7 +316,7 @@ func (e *HybridBruinExecutor) QueryAsset(ctx context.Context, req QueryAssetRequ
 	if dialect != "" {
 		isSelect, selectErr := isReadOnlySelectQuery(queryStr, pp.Asset.Type)
 		if selectErr == nil && !isSelect {
-			output, marshalErr := json.Marshal(map[string]any{"error": inspectReadOnlyErrorMessage})
+			output, marshalErr := json.Marshal(directErrorResponse{Error: inspectReadOnlyErrorMessage})
 			if marshalErr != nil {
 				return nil, fmt.Errorf(inspectReadOnlyErrorMessage)
 			}
@@ -371,7 +330,7 @@ func (e *HybridBruinExecutor) QueryAsset(ctx context.Context, req QueryAssetRequ
 		parser, err = sqlparser.NewSQLParser(false)
 		if err != nil {
 			wrappedErr := fmt.Errorf("failed to initialize SQL parser: %w", err)
-			output, marshalErr := json.Marshal(map[string]any{"error": wrappedErr.Error()})
+			output, marshalErr := json.Marshal(directErrorResponse{Error: wrappedErr.Error()})
 			if marshalErr != nil {
 				return nil, wrappedErr
 			}
@@ -380,7 +339,7 @@ func (e *HybridBruinExecutor) QueryAsset(ctx context.Context, req QueryAssetRequ
 		defer parser.Close()
 		if err := parser.Start(); err != nil {
 			wrappedErr := fmt.Errorf("failed to start SQL parser: %w", err)
-			output, marshalErr := json.Marshal(map[string]any{"error": wrappedErr.Error()})
+			output, marshalErr := json.Marshal(directErrorResponse{Error: wrappedErr.Error()})
 			if marshalErr != nil {
 				return nil, wrappedErr
 			}
@@ -392,7 +351,7 @@ func (e *HybridBruinExecutor) QueryAsset(ctx context.Context, req QueryAssetRequ
 		queryStr, err = applyDirectSchemaPrefix(ctx, queryStr, dialect, parser, pp, conn)
 		if err != nil {
 			wrappedErr := fmt.Errorf("failed to apply schema prefix: %w", err)
-			output, marshalErr := json.Marshal(map[string]any{"error": wrappedErr.Error()})
+			output, marshalErr := json.Marshal(directErrorResponse{Error: wrappedErr.Error()})
 			if marshalErr != nil {
 				return nil, wrappedErr
 			}
@@ -412,7 +371,7 @@ func (e *HybridBruinExecutor) QueryAsset(ctx context.Context, req QueryAssetRequ
 	})
 	if !ok {
 		err := fmt.Errorf("connection type %s does not support querying", connName)
-		output, marshalErr := json.Marshal(map[string]any{"error": err.Error()})
+		output, marshalErr := json.Marshal(directErrorResponse{Error: err.Error()})
 		if marshalErr != nil {
 			return nil, err
 		}
@@ -422,33 +381,14 @@ func (e *HybridBruinExecutor) QueryAsset(ctx context.Context, req QueryAssetRequ
 	result, err := querier.SelectWithSchema(ctx, &query.Query{Query: queryStr})
 	if err != nil {
 		wrappedErr := fmt.Errorf("query execution failed: %w", err)
-		output, marshalErr := json.Marshal(map[string]any{"error": wrappedErr.Error()})
+		output, marshalErr := json.Marshal(directErrorResponse{Error: wrappedErr.Error()})
 		if marshalErr != nil {
 			return nil, wrappedErr
 		}
 		return output, wrappedErr
 	}
 
-	response := struct {
-		Columns  []map[string]string `json:"columns"`
-		Rows     [][]interface{}     `json:"rows"`
-		ConnName string              `json:"connectionName"`
-		Query    string              `json:"query"`
-	}{
-		Columns:  make([]map[string]string, len(result.Columns)),
-		Rows:     formatQueryRowsForJSON(result.Rows),
-		ConnName: connName,
-		Query:    queryStr,
-	}
-
-	for i, colName := range result.Columns {
-		colType := ""
-		if i < len(result.ColumnTypes) {
-			colType = result.ColumnTypes[i]
-		}
-		response.Columns[i] = map[string]string{"name": colName, "type": colType}
-	}
-
+	response := NewQueryResultDTO(result, connName, queryStr)
 	return json.Marshal(response)
 }
 
@@ -479,410 +419,13 @@ func (e *HybridBruinExecutor) QueryConnection(ctx context.Context, req QueryConn
 		return nil, err
 	}
 
-	response := struct {
-		Columns  []map[string]string `json:"columns"`
-		Rows     [][]interface{}     `json:"rows"`
-		ConnName string              `json:"connectionName"`
-		Query    string              `json:"query"`
-		Status   string              `json:"status,omitempty"`
-		Error    string              `json:"error,omitempty"`
-		Output   string              `json:"output,omitempty"`
-	}{
-		Columns:  make([]map[string]string, len(result.Columns)),
-		Rows:     formatQueryRowsForJSON(result.Rows),
-		ConnName: req.ConnectionName,
-		Query:    req.Query,
-	}
-
-	for i, colName := range result.Columns {
-		colType := ""
-		if i < len(result.ColumnTypes) {
-			colType = result.ColumnTypes[i]
-		}
-		response.Columns[i] = map[string]string{"name": colName, "type": colType}
-	}
+	response := NewQueryResultDTO(result, req.ConnectionName, req.Query)
 
 	if strings.EqualFold(strings.TrimSpace(req.Output), "json") || strings.TrimSpace(req.Output) == "" {
 		return json.Marshal(response)
 	}
 
 	return nil, fmt.Errorf("direct connection query only supports json output")
-}
-
-func formatQueryRowsForJSON(rows [][]interface{}) [][]interface{} {
-	formatted := make([][]interface{}, len(rows))
-	for i, row := range rows {
-		formatted[i] = make([]interface{}, len(row))
-		for j, value := range row {
-			formatted[i][j] = formatQueryJSONValue(value)
-		}
-	}
-	return formatted
-}
-
-func formatQueryJSONValue(value interface{}) interface{} {
-	switch v := value.(type) {
-	case nil:
-		return nil
-	case []byte:
-		return string(v)
-	default:
-		return v
-	}
-}
-
-func resolveDirectPipelinePath(pipelinePath string) string {
-	pathParts := strings.Split(pipelinePath, "/")
-	last := pathParts[len(pathParts)-1]
-	if last != "pipeline.yml" && last != "pipeline.yaml" {
-		return pipelinePath
-	}
-	if len(pathParts) == 1 {
-		return "."
-	}
-	return strings.Join(pathParts[:len(pathParts)-1], "/")
-}
-
-func resolveDirectPath(workspaceRoot, maybeRelative string) string {
-	trimmed := strings.TrimSpace(maybeRelative)
-	if trimmed == "" || filepath.IsAbs(trimmed) {
-		return trimmed
-	}
-	return filepath.Join(workspaceRoot, filepath.FromSlash(trimmed))
-}
-
-func createDirectImportedAsset(ctx context.Context, assetsPath, schemaName, tableName string, assetType pipeline.AssetType, conn interface{}, fillColumns bool, table *ansisql.DBTable) (*pipeline.Asset, string) {
-	schemaFolder := filepath.Join(assetsPath, strings.ToLower(schemaName))
-	isView := table.Type == ansisql.DBTableTypeView && table.ViewDefinition != ""
-
-	var fileName, filePath string
-	var materializationType pipeline.MaterializationType
-	var content string
-
-	if isView {
-		fileName = strings.ToLower(tableName) + ".sql"
-		filePath = filepath.Join(schemaFolder, fileName)
-		content = table.ViewDefinition
-		materializationType = pipeline.MaterializationTypeView
-	} else {
-		fileName = strings.ToLower(tableName) + ".asset.yml"
-		filePath = filepath.Join(schemaFolder, fileName)
-	}
-
-	actualAssetType := assetType
-	if isView {
-		actualAssetType = convertDirectSourceTypeToQueryType(assetType)
-	}
-
-	assetName := fmt.Sprintf("%s.%s", strings.ToLower(schemaName), strings.ToLower(tableName))
-	asset := &pipeline.Asset{
-		Name: assetName,
-		Type: actualAssetType,
-		ExecutableFile: pipeline.ExecutableFile{
-			Name:    fileName,
-			Path:    filePath,
-			Content: content,
-		},
-		Description: buildDirectEnhancedDescription(table, schemaName, tableName),
-	}
-
-	if isView {
-		asset.Materialization = pipeline.Materialization{Type: materializationType}
-	}
-
-	if !fillColumns {
-		return asset, ""
-	}
-
-	if len(table.Columns) > 0 {
-		columns := make([]pipeline.Column, 0, len(table.Columns))
-		for _, col := range table.Columns {
-			columns = append(columns, pipeline.Column{
-				Name:        col.Name,
-				Type:        col.Type,
-				Description: col.Description,
-				Checks:      []pipeline.ColumnCheck{},
-				Upstreams:   []*pipeline.UpstreamColumn{},
-			})
-		}
-		asset.Columns = columns
-		return asset, ""
-	}
-
-	if err := fillDirectAssetColumnsFromDB(ctx, asset, conn, schemaName, tableName); err != nil {
-		return asset, fmt.Sprintf("Could not fill columns: %v", err)
-	}
-
-	return asset, ""
-}
-
-func fillDirectAssetColumnsFromDB(ctx context.Context, asset *pipeline.Asset, conn interface{}, schemaName, tableName string) error {
-	querier, ok := conn.(interface {
-		SelectWithSchema(context.Context, *query.Query) (*query.QueryResult, error)
-	})
-	if !ok {
-		return fmt.Errorf("connection does not support schema introspection")
-	}
-
-	fullTableName := schemaName + "." + tableName
-	if _, ok := conn.(*postgres.Client); ok {
-		fullTableName = postgres.QuoteIdentifier(fullTableName)
-	}
-	if _, ok := conn.(*mssql.DB); ok {
-		fullTableName = mssql.QuoteIdentifier(fullTableName)
-	}
-
-	queryStr := fmt.Sprintf("SELECT * FROM %s WHERE 1=0 LIMIT 0", fullTableName)
-	if _, ok := conn.(*mssql.DB); ok {
-		queryStr = "SELECT TOP 0 * FROM " + fullTableName
-	} else if _, ok := conn.(*oracle.Client); ok {
-		queryStr = "SELECT * FROM " + fullTableName + " WHERE 1=0"
-	}
-
-	result, err := querier.SelectWithSchema(ctx, &query.Query{Query: queryStr})
-	if err != nil {
-		return err
-	}
-	if len(result.Columns) == 0 {
-		return fmt.Errorf("no columns found for table %s.%s", schemaName, tableName)
-	}
-
-	descriptions := fetchDirectColumnDescriptions(ctx, conn, schemaName, tableName)
-	skipColumns := map[string]bool{"_IS_CURRENT": true, "_VALID_UNTIL": true, "_VALID_FROM": true}
-	columns := make([]pipeline.Column, 0, len(result.Columns))
-	for i, colName := range result.Columns {
-		if skipColumns[colName] {
-			continue
-		}
-		colType := ""
-		if i < len(result.ColumnTypes) {
-			colType = result.ColumnTypes[i]
-		}
-		columns = append(columns, pipeline.Column{
-			Name:        colName,
-			Type:        colType,
-			Description: descriptions[colName],
-			Checks:      []pipeline.ColumnCheck{},
-			Upstreams:   []*pipeline.UpstreamColumn{},
-		})
-	}
-	asset.Columns = columns
-	return nil
-}
-
-func fetchDirectColumnDescriptions(ctx context.Context, conn interface{}, schemaName, tableName string) map[string]string {
-	descriptions := make(map[string]string)
-	selector, ok := conn.(interface {
-		Select(context.Context, *query.Query) ([][]interface{}, error)
-	})
-	if !ok {
-		return descriptions
-	}
-
-	var queryStr string
-	switch conn.(type) {
-	case *postgres.Client:
-		queryStr = fmt.Sprintf(`
-SELECT a.attname as column_name, pg_catalog.col_description(a.attrelid, a.attnum) as column_description
-FROM pg_catalog.pg_attribute a
-JOIN pg_catalog.pg_class c ON a.attrelid = c.oid
-JOIN pg_catalog.pg_namespace n ON c.relnamespace = n.oid
-WHERE n.nspname = '%s' AND c.relname = '%s' AND a.attnum > 0 AND NOT a.attisdropped
-AND pg_catalog.col_description(a.attrelid, a.attnum) IS NOT NULL
-`, schemaName, tableName)
-	case *mssql.DB:
-		queryStr = fmt.Sprintf(`
-SELECT c.name AS column_name, CAST(ep.value AS NVARCHAR(MAX)) AS column_description
-FROM sys.columns c
-JOIN sys.tables t ON c.object_id = t.object_id
-JOIN sys.schemas s ON t.schema_id = s.schema_id
-LEFT JOIN sys.extended_properties ep ON c.object_id = ep.major_id AND c.column_id = ep.minor_id AND ep.name = 'MS_Description'
-WHERE s.name = '%s' AND t.name = '%s' AND ep.value IS NOT NULL
-`, schemaName, tableName)
-	default:
-		return descriptions
-	}
-
-	rows, err := selector.Select(ctx, &query.Query{Query: queryStr})
-	if err != nil {
-		return descriptions
-	}
-	for _, row := range rows {
-		if len(row) >= 2 {
-			colName, ok1 := row[0].(string)
-			desc, ok2 := row[1].(string)
-			if ok1 && ok2 {
-				descriptions[colName] = desc
-			}
-		}
-	}
-	return descriptions
-}
-
-func buildDirectEnhancedDescription(table *ansisql.DBTable, schemaName, tableName string) string {
-	var parts []string
-	if table.Description != "" {
-		parts = append(parts, table.Description, "")
-	}
-	parts = append(parts, "Imported "+directTableTypeDescription(table.Type)+": "+schemaName+"."+tableName)
-	parts = append(parts, "Extracted at: "+time.Now().UTC().Format(time.RFC3339))
-	if table.CreatedAt != nil {
-		parts = append(parts, "Created at: "+table.CreatedAt.UTC().Format(time.RFC3339))
-	}
-	if table.LastModified != nil {
-		parts = append(parts, "Last modified: "+table.LastModified.UTC().Format(time.RFC3339))
-	}
-	if table.RowCount != nil {
-		parts = append(parts, "Row count: "+formatDirectNumber(*table.RowCount))
-	}
-	if table.SizeBytes != nil {
-		parts = append(parts, "Size: "+formatDirectBytes(*table.SizeBytes))
-	}
-	if table.Owner != "" {
-		parts = append(parts, "Owner: "+table.Owner)
-	}
-	return strings.Join(parts, "\n")
-}
-
-func directTableTypeDescription(tableType ansisql.DBTableType) string {
-	if tableType == ansisql.DBTableTypeView {
-		return "view"
-	}
-	return "table"
-}
-
-func formatDirectNumber(n int64) string {
-	if n < 1000 {
-		return strconv.FormatInt(n, 10)
-	}
-	s := strconv.FormatInt(n, 10)
-	var result strings.Builder
-	for i, c := range s {
-		if i > 0 && (len(s)-i)%3 == 0 {
-			result.WriteRune(',')
-		}
-		result.WriteRune(c)
-	}
-	return result.String()
-}
-
-func formatDirectBytes(bytes int64) string {
-	const (
-		KB = 1024
-		MB = KB * 1024
-		GB = MB * 1024
-		TB = GB * 1024
-	)
-	switch {
-	case bytes >= TB:
-		return fmt.Sprintf("%.2f TB", float64(bytes)/TB)
-	case bytes >= GB:
-		return fmt.Sprintf("%.2f GB", float64(bytes)/GB)
-	case bytes >= MB:
-		return fmt.Sprintf("%.2f MB", float64(bytes)/MB)
-	case bytes >= KB:
-		return fmt.Sprintf("%.2f KB", float64(bytes)/KB)
-	default:
-		return fmt.Sprintf("%d bytes", bytes)
-	}
-}
-
-const (
-	fillStatusUpdated = "updated"
-	fillStatusSkipped = "skipped"
-	fillStatusFailed  = "failed"
-)
-
-type directPipelineInfo struct {
-	Pipeline *pipeline.Pipeline
-	Asset    *pipeline.Asset
-	Config   *config.Config
-}
-
-func directPathReferencesAsset(inputPath string) bool {
-	lower := strings.ToLower(strings.TrimSpace(inputPath))
-	for _, suffix := range pipeline.SupportedFileSuffixes {
-		if strings.HasSuffix(lower, strings.ToLower(suffix)) {
-			return true
-		}
-	}
-	return false
-}
-
-func getDirectPipelineAndAsset(ctx context.Context, workspaceRoot, inputPath string, fs afero.Fs) (*directPipelineInfo, error) {
-	resolvedInputPath := resolveDirectPath(workspaceRoot, inputPath)
-	repoRoot, err := git.FindRepoFromPath(resolvedInputPath)
-	if err != nil {
-		return nil, err
-	}
-	pipelinePath, err := bruinpath.GetPipelineRootFromTask(resolvedInputPath, BuilderConfig.PipelineFileName)
-	if err != nil {
-		return nil, err
-	}
-	configFilePath := filepath.Join(repoRoot.Path, ".bruin.yml")
-	cm, err := config.LoadOrCreate(fs, configFilePath)
-	if err != nil {
-		return nil, err
-	}
-	builder := pipeline.NewBuilder(
-		BuilderConfig,
-		pipeline.CreateTaskFromYamlDefinition(fs),
-		pipeline.CreateTaskFromFileComments(fs),
-		fs,
-		DefaultGlossaryReader,
-	)
-	foundPipeline, err := builder.CreatePipelineFromPath(ctx, pipelinePath, pipeline.WithMutate())
-	if err != nil {
-		return nil, err
-	}
-	asset, err := builder.CreateAssetFromFile(resolvedInputPath, foundPipeline)
-	if err != nil {
-		return nil, err
-	}
-	asset, err = builder.MutateAsset(ctx, asset, foundPipeline)
-	if err != nil {
-		return nil, err
-	}
-	return &directPipelineInfo{Pipeline: foundPipeline, Asset: asset, Config: cm}, nil
-}
-
-func getDirectConnectionAndQuery(ctx context.Context, pp *directPipelineInfo, environment string) (string, interface{}, string, error) {
-	if environment != "" {
-		if _, err := selectConfigEnvironment(pp.Config, environment); err != nil {
-			return "", nil, "", err
-		}
-	}
-
-	manager, err := newConnectionManagerFromConfig(ctx, pp.Config)
-	if err != nil {
-		return "", nil, "", err
-	}
-
-	connName, err := pp.Pipeline.GetConnectionNameForAsset(pp.Asset)
-	if err != nil {
-		return "", nil, "", err
-	}
-	conn := manager.GetConnection(connName)
-	if conn == nil {
-		return "", nil, "", fmt.Errorf("connection %q not found", connName)
-	}
-
-	renderer := jinja.NewRendererWithYesterday(pp.Pipeline.Name, "renart-query")
-	fetchCtx := context.WithValue(ctx, config.EnvironmentContextKey, pp.Config.SelectedEnvironment)
-	extractor := &query.WholeFileExtractor{Fs: afero.NewOsFs(), Renderer: renderer}
-	clonedExtractor, err := extractor.CloneForAsset(fetchCtx, pp.Pipeline, pp.Asset)
-	if err != nil {
-		return "", nil, "", err
-	}
-	queries, err := clonedExtractor.ExtractQueriesFromString(pp.Asset.ExecutableFile.Content)
-	if err != nil {
-		return "", nil, "", err
-	}
-	if len(queries) == 0 {
-		return "", nil, "", fmt.Errorf("no query found in asset")
-	}
-
-	return connName, conn, queries[0].Query, nil
 }
 
 func (e *HybridBruinExecutor) buildDirectAssetQuery(ctx context.Context, pp *directPipelineInfo, environment string) (string, interface{}, string, error) {
@@ -1409,104 +952,6 @@ func (o directOracleBasicOperator) RunTask(ctx context.Context, p *pipeline.Pipe
 	return nil
 }
 
-func writeDirectRunPrelude(w io.Writer, pl *pipeline.Pipeline, asset *pipeline.Asset, formatting directRunFormatting) {
-	if pl == nil || w == nil {
-		return
-	}
-
-	_, _ = fmt.Fprintf(w, "Analyzed the pipeline '%s' with %d assets.\n", pl.Name, len(pl.Assets))
-	if asset != nil {
-		_, _ = fmt.Fprintf(w, "Running only the asset '%s'\n", asset.Name)
-	}
-	_, _ = fmt.Fprintf(w, "\nInterval: %s - %s\n", formatting.startDate.Format(time.RFC3339), formatting.endDate.Format(time.RFC3339))
-	_, _ = fmt.Fprint(w, "\nStarting the pipeline execution...\n\n")
-}
-
-func writeDirectRunLifecycle(w io.Writer, instance scheduler.TaskInstance, err error, running bool, duration time.Duration) {
-	if w == nil || instance == nil {
-		return
-	}
-
-	timestamp := directRunTimePrinter("[%s]", time.Now().Format("15:04:05"))
-	if running {
-		_, _ = fmt.Fprintf(w, "%s %s\n", timestamp, directRunFaintPrinter("Running:  %s", instance.GetHumanID()))
-		return
-	}
-
-	status := "Finished"
-	statusPrinter := directRunGreenPrinter
-	if err != nil {
-		status = "Failed"
-		statusPrinter = directRunRedPrinter
-	}
-	durationSuffix := ""
-	if duration > 0 {
-		durationSuffix = directRunFaintPrinter(" (%s)", duration.Truncate(time.Millisecond).String())
-	}
-	_, _ = fmt.Fprintf(w, "%s %s\n", timestamp, statusPrinter("%s: %s%s", status, instance.GetHumanID(), durationSuffix))
-}
-
-func buildDirectRunSummary(results []*scheduler.TaskExecutionResult, duration time.Duration) directRunSummary {
-	summary := directRunSummary{results: results, duration: duration}
-	seenFailed := make(map[string]struct{})
-	for _, result := range results {
-		if result == nil || result.Instance == nil || result.Error == nil {
-			continue
-		}
-		assetName := result.Instance.GetAsset().Name
-		if _, ok := seenFailed[assetName]; ok {
-			continue
-		}
-		seenFailed[assetName] = struct{}{}
-		summary.failedAssets = append(summary.failedAssets, assetName)
-	}
-	return summary
-}
-
-func writeDirectRunSummary(w io.Writer, summary directRunSummary) {
-	if w == nil {
-		return
-	}
-
-	_, _ = fmt.Fprint(w, "\n==================================================\n\n")
-	mainSucceeded := 0
-	for _, result := range summary.results {
-		if result == nil || result.Instance == nil || result.Instance.GetType() != scheduler.TaskInstanceTypeMain {
-			continue
-		}
-		status := "PASS"
-		statusPrinter := directRunGreenPrinter
-		if result.Error != nil {
-			status = "FAIL"
-			statusPrinter = directRunRedPrinter
-		} else {
-			mainSucceeded++
-		}
-		_, _ = fmt.Fprintf(w, "%s %s\n", statusPrinter(status), result.Instance.GetAsset().Name)
-	}
-
-	if len(summary.failedAssets) > 0 {
-		_, _ = fmt.Fprintf(w, "\n\nbruin run completed with %s in %s\n\n", directRunRedPrinter("failures"), summary.duration.Truncate(time.Millisecond))
-		_, _ = fmt.Fprintf(w, " %s Assets executed      %s\n", directRunRedPrinter("✗"), directRunRedPrinter("%d failed", len(summary.failedAssets)))
-		_, _ = fmt.Fprintf(w, "%d assets failed\n", len(summary.failedAssets))
-		for _, result := range summary.results {
-			if result == nil || result.Instance == nil || result.Error == nil || result.Instance.GetType() != scheduler.TaskInstanceTypeMain {
-				continue
-			}
-			_, _ = fmt.Fprintf(w, "└── %s\n", result.Instance.GetAsset().Name)
-			for _, line := range strings.Split(strings.TrimSpace(result.Error.Error()), "\n") {
-				if trimmed := strings.TrimSpace(line); trimmed != "" {
-					_, _ = fmt.Fprintf(w, "└── %s\n", trimmed)
-				}
-			}
-		}
-		return
-	}
-
-	_, _ = fmt.Fprintf(w, "\n\nbruin run completed %s in %s\n\n", directRunGreenPrinter("successfully"), summary.duration.Truncate(time.Millisecond))
-	_, _ = fmt.Fprintf(w, " %s Assets executed      %s\n", directRunGreenPrinter("✓"), directRunGreenPrinter("%d succeeded", mainSucceeded))
-}
-
 func addDirectLimitToQuery(queryStr string, limit int64, conn interface{}, parser *sqlparser.SQLParser, dialect string) string {
 	if parser != nil {
 		isSingleSelect, err := parser.IsSingleSelectQuery(queryStr, dialect)
@@ -1566,6 +1011,10 @@ func applyDirectSchemaPrefix(_ context.Context, queryStr, dialect string, parser
 }
 
 func updateDirectAssetDependencies(ctx context.Context, asset *pipeline.Asset, p *pipeline.Pipeline, sp *sqlparser.SQLParser, renderer *jinja.Renderer, fs afero.Fs) error {
+	if asset == nil || p == nil {
+		return fmt.Errorf("pipeline and asset are required to update direct asset dependencies")
+	}
+
 	assetRenderer, err := renderer.CloneForAsset(ctx, p, asset)
 	if err != nil {
 		return fmt.Errorf("failed to create renderer for asset '%s': %w", asset.Name, err)
@@ -1588,6 +1037,10 @@ func updateDirectAssetDependencies(ctx context.Context, asset *pipeline.Asset, p
 }
 
 func fillDirectColumnsFromDB(ctx context.Context, pp *directPipelineInfo, fs afero.Fs, environment string, manager config.ConnectionGetter) (string, error) {
+	if pp == nil || pp.Pipeline == nil || pp.Asset == nil {
+		return fillStatusFailed, fmt.Errorf("pipeline and asset are required to fill columns from DB")
+	}
+
 	var conn interface{}
 	var err error
 	if manager != nil {
@@ -1600,14 +1053,13 @@ func fillDirectColumnsFromDB(ctx context.Context, pp *directPipelineInfo, fs afe
 			return fillStatusFailed, fmt.Errorf("failed to get connection for asset '%s'", pp.Asset.Name)
 		}
 	} else {
-		if environment != "" {
-			if err := pp.Config.SelectEnvironment(environment); err != nil {
-				return fillStatusFailed, err
-			}
+		selectedConfig, err := selectConfigEnvironment(pp.Config, environment)
+		if err != nil {
+			return fillStatusFailed, err
 		}
-		connectionManager, errs := connection.NewManagerFromConfigWithContext(ctx, pp.Config)
-		if len(errs) > 0 {
-			return fillStatusFailed, errs[0]
+		connectionManager, err := newConnectionManagerFromConfig(ctx, selectedConfig)
+		if err != nil {
+			return fillStatusFailed, err
 		}
 		connName, err := pp.Pipeline.GetConnectionNameForAsset(pp.Asset)
 		if err != nil {
@@ -1783,6 +1235,9 @@ func (e *HybridBruinExecutor) ImportDatabase(ctx context.Context, req ImportData
 
 	existingAssets := make(map[string]*pipeline.Asset, len(foundPipeline.Assets))
 	for _, asset := range foundPipeline.Assets {
+		if asset == nil {
+			continue
+		}
 		existingAssets[strings.ToLower(asset.Name)] = asset
 	}
 
@@ -1802,7 +1257,7 @@ func (e *HybridBruinExecutor) ImportDatabase(ctx context.Context, req ImportData
 	fs := afero.NewOsFs()
 	totalTables := 0
 	mergedTableCount := 0
-	warnings := make([]map[string]string, 0)
+	warnings := make([]directImportWarning, 0)
 
 	for _, schemaObj := range summary.Schemas {
 		if req.Schema != "" && !strings.EqualFold(schemaObj.Name, req.Schema) {
@@ -1816,7 +1271,7 @@ func (e *HybridBruinExecutor) ImportDatabase(ctx context.Context, req ImportData
 
 			createdAsset, warning := createDirectImportedAsset(ctx, assetsPath, schemaObj.Name, table.Name, assetType, conn, !req.DisableColumns, table)
 			if warning != "" {
-				warnings = append(warnings, map[string]string{"table": fullName, "warning": warning})
+				warnings = append(warnings, directImportWarning{Table: fullName, Warning: warning})
 			}
 			if createdAsset == nil {
 				continue
@@ -1852,35 +1307,15 @@ func (e *HybridBruinExecutor) ImportDatabase(ctx context.Context, req ImportData
 		}
 	}
 
-	response := map[string]any{
-		"status":          "ok",
-		"imported_tables": totalTables,
-		"merged_tables":   mergedTableCount,
-		"database":        summary.Name,
-		"pipeline_path":   pipelinePath,
-		"warnings":        warnings,
+	response := directImportDatabaseResponse{
+		Status:         "ok",
+		ImportedTables: totalTables,
+		MergedTables:   mergedTableCount,
+		Database:       summary.Name,
+		PipelinePath:   pipelinePath,
+		Warnings:       warnings,
 	}
 	return json.Marshal(response)
-}
-
-func matchesDirectImportedTable(selectedTables map[string]bool, databaseName, schemaName, tableName string) bool {
-	if len(selectedTables) == 0 {
-		return true
-	}
-
-	candidates := []string{
-		strings.ToLower(strings.TrimSpace(fmt.Sprintf("%s.%s", schemaName, tableName))),
-		strings.ToLower(strings.TrimSpace(fmt.Sprintf("%s.%s.%s", databaseName, schemaName, tableName))),
-		strings.ToLower(strings.TrimSpace(tableName)),
-	}
-
-	for _, candidate := range candidates {
-		if candidate != "" && selectedTables[candidate] {
-			return true
-		}
-	}
-
-	return false
 }
 
 func (e *HybridBruinExecutor) RunWithRetry(
@@ -1907,127 +1342,4 @@ func (e *HybridBruinExecutor) RunWithRetry(
 		}
 		delay *= 2
 	}
-}
-
-func (e *HybridBruinExecutor) applyFillAssetDependencies(ctx context.Context, targetPath string) ([]byte, error) {
-	if e.newPipelineBuilder == nil {
-		return nil, fmt.Errorf("direct fill-asset-dependencies requires a pipeline builder")
-	}
-
-	sqlParserInstance, err := sqlparser.NewSQLParser(false)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create sql parser: %w", err)
-	}
-	defer sqlParserInstance.Close()
-
-	jinjaRenderer := jinja.NewRendererWithYesterday("test-pipeline", "test-run-id")
-	builder := e.newPipelineBuilder()
-	fs := afero.NewOsFs()
-
-	if directPathReferencesAsset(targetPath) {
-		resolvedTargetPath := resolveDirectPath(e.workspaceRoot, targetPath)
-		pipelinePath, err := bruinpath.GetPipelineRootFromTask(resolvedTargetPath, BuilderConfig.PipelineFileName)
-		if err != nil {
-			return nil, fmt.Errorf("failed to find the pipeline this asset belongs to: %w", err)
-		}
-
-		foundPipeline, err := builder.CreatePipelineFromPath(ctx, pipelinePath, pipeline.WithMutate())
-		if err != nil {
-			return nil, fmt.Errorf("failed to build pipeline at '%s': %w", pipelinePath, err)
-		}
-
-		asset, err := builder.CreateAssetFromFile(resolvedTargetPath, foundPipeline)
-		if err != nil {
-			return nil, fmt.Errorf("failed to build asset from file '%s': %w", resolvedTargetPath, err)
-		}
-		asset, err = builder.MutateAsset(ctx, asset, foundPipeline)
-		if err != nil {
-			return nil, fmt.Errorf("failed to mutate asset '%s': %w", asset.Name, err)
-		}
-		if err := updateDirectAssetDependencies(ctx, asset, foundPipeline, sqlParserInstance, jinjaRenderer, fs); err != nil {
-			return nil, err
-		}
-		return []byte(`{"status":"success","message":"Asset dependencies updated successfully"}`), nil
-	}
-
-	resolvedTargetPath := resolveDirectPath(e.workspaceRoot, targetPath)
-	foundPipeline, err := builder.CreatePipelineFromPath(ctx, resolvedTargetPath, pipeline.WithMutate())
-	if err != nil {
-		return nil, fmt.Errorf("failed to build pipeline at '%s': %w", resolvedTargetPath, err)
-	}
-
-	processedAssets := 0
-	successfulAssets := 0
-	failedAssets := 0
-	for _, asset := range foundPipeline.Assets {
-		processedAssets++
-		if err := updateDirectAssetDependencies(ctx, asset, foundPipeline, sqlParserInstance, jinjaRenderer, fs); err != nil {
-			failedAssets++
-			continue
-		}
-		successfulAssets++
-	}
-
-	resp := map[string]any{
-		"status":            "success",
-		"processed_assets":  processedAssets,
-		"successful_assets": successfulAssets,
-		"failed_assets":     failedAssets,
-	}
-	return json.Marshal(resp)
-}
-
-func (e *HybridBruinExecutor) applyFillColumnsFromDB(ctx context.Context, targetPath string) ([]byte, error) {
-	fs := afero.NewOsFs()
-	if directPathReferencesAsset(targetPath) {
-		pp, err := getDirectPipelineAndAsset(ctx, e.workspaceRoot, targetPath, fs)
-		if err != nil {
-			return nil, err
-		}
-		status, err := fillDirectColumnsFromDB(ctx, pp, fs, "", nil)
-		if err != nil {
-			return nil, fmt.Errorf("failed to fill columns from DB for asset '%s': %w", pp.Asset.Name, err)
-		}
-		return json.Marshal(map[string]any{"status": status, "asset": pp.Asset.Name})
-	}
-
-	builder := e.newPipelineBuilder()
-	foundPipeline, err := builder.CreatePipelineFromPath(ctx, resolveDirectPath(e.workspaceRoot, targetPath), pipeline.WithMutate())
-	if err != nil {
-		return nil, fmt.Errorf("failed to build pipeline at '%s': %w", targetPath, err)
-	}
-	repoRoot, err := git.FindRepoFromPath(targetPath)
-	if err != nil {
-		return nil, fmt.Errorf("failed to find the git repository root: %w", err)
-	}
-	cm, err := config.LoadOrCreate(fs, filepath.Join(repoRoot.Path, ".bruin.yml"))
-	if err != nil {
-		return nil, fmt.Errorf("failed to load the config file: %w", err)
-	}
-
-	updatedAssets := []string{}
-	skippedAssets := []string{}
-	failedAssets := []string{}
-	for _, asset := range foundPipeline.Assets {
-		pp := &directPipelineInfo{Pipeline: foundPipeline, Asset: asset, Config: cm}
-		status, err := fillDirectColumnsFromDB(ctx, pp, fs, "", nil)
-		switch status {
-		case fillStatusUpdated:
-			updatedAssets = append(updatedAssets, asset.Name)
-		case fillStatusSkipped:
-			skippedAssets = append(skippedAssets, asset.Name)
-		case fillStatusFailed:
-			failedAssets = append(failedAssets, asset.Name)
-			_ = err
-		}
-	}
-
-	resp := map[string]any{
-		"status":              "success",
-		"updated_asset_names": updatedAssets,
-		"skipped_asset_names": skippedAssets,
-		"failed_asset_names":  failedAssets,
-		"processed_assets":    len(foundPipeline.Assets),
-	}
-	return json.Marshal(resp)
 }

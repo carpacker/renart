@@ -12,7 +12,7 @@ import (
 type AssetColumnsHandlers interface {
 	FillColumnsFromDB(ctx context.Context, assetID string) (int, map[string]any, *APIError)
 	InferAssetColumns(ctx context.Context, assetID string) (int, map[string]any, *APIError)
-	UpdateAssetColumns(ctx context.Context, assetID string, columns []any) (map[string]string, *APIError)
+	UpdateAssetColumns(ctx context.Context, assetID string, columns []any) (StatusResponse, *APIError)
 }
 
 type AssetColumnsAPI struct {
@@ -32,10 +32,7 @@ func RegisterAssetColumnRoutes(router chi.Router, handlers *AssetColumnsAPI) {
 func (h *AssetColumnsAPI) HandleFillColumnsFromDB(w http.ResponseWriter, r *http.Request) {
 	status, body, apiErr := h.Service.FillColumnsFromDB(r.Context(), chi.URLParam(r, "assetID"))
 	if apiErr != nil {
-		webapi.WriteJSON(w, apiErr.Status, map[string]any{
-			"status": "error",
-			"error":  map[string]string{"code": apiErr.Code, "message": apiErr.Message},
-		})
+		writeAPIError(w, apiErr)
 		return
 	}
 	webapi.WriteJSON(w, status, body)
@@ -44,10 +41,7 @@ func (h *AssetColumnsAPI) HandleFillColumnsFromDB(w http.ResponseWriter, r *http
 func (h *AssetColumnsAPI) HandleInferAssetColumns(w http.ResponseWriter, r *http.Request) {
 	status, body, apiErr := h.Service.InferAssetColumns(r.Context(), chi.URLParam(r, "assetID"))
 	if apiErr != nil {
-		webapi.WriteJSON(w, apiErr.Status, map[string]any{
-			"status": "error",
-			"error":  map[string]string{"code": apiErr.Code, "message": apiErr.Message},
-		})
+		writeAPIError(w, apiErr)
 		return
 	}
 	webapi.WriteJSON(w, status, body)
@@ -61,10 +55,7 @@ func (h *AssetColumnsAPI) HandleUpdateAssetColumns(w http.ResponseWriter, r *htt
 	}
 	resp, apiErr := h.Service.UpdateAssetColumns(r.Context(), chi.URLParam(r, "assetID"), req.Columns)
 	if apiErr != nil {
-		webapi.WriteJSON(w, apiErr.Status, map[string]any{
-			"status": "error",
-			"error":  map[string]string{"code": apiErr.Code, "message": apiErr.Message},
-		})
+		writeAPIError(w, apiErr)
 		return
 	}
 	webapi.WriteJSON(w, http.StatusOK, resp)

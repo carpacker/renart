@@ -96,6 +96,12 @@ func (s *WorkspaceService) NewPipelineBuilder() *pipeline.Builder {
 	)
 }
 
+func (s *WorkspaceService) resolver() *WorkspaceResolver {
+	return NewWorkspaceResolver(s.workspaceRoot, func(ctx context.Context, pipelinePath string) (*pipeline.Pipeline, error) {
+		return s.NewPipelineBuilder().CreatePipelineFromPath(ctx, pipelinePath, pipeline.WithMutate())
+	})
+}
+
 // ComputeState computes the current workspace state from disk.
 func (s *WorkspaceService) ComputeState(ctx context.Context) (model.WorkspaceState, error) {
 	state := model.WorkspaceState{
@@ -206,45 +212,7 @@ func (s *WorkspaceService) ComputeState(ctx context.Context) (model.WorkspaceSta
 
 // ResolveAssetByID finds an asset by its encoded ID.
 func (s *WorkspaceService) ResolveAssetByID(ctx context.Context, assetID string) (string, *pipeline.Pipeline, *pipeline.Asset, error) {
-	relAssetPath, err := DecodeID(assetID)
-	if err != nil {
-		return "", nil, nil, err
-	}
-
-	absAssetPath, err := SafeJoin(s.workspaceRoot, relAssetPath)
-	if err != nil {
-		return "", nil, nil, err
-	}
-
-	pipelinePath, err := bruinpath.GetPipelineRootFromTask(absAssetPath, PipelineDefinitionFiles)
-	if err != nil {
-		return "", nil, nil, err
-	}
-
-	builder := s.NewPipelineBuilder()
-	parsed, err := builder.CreatePipelineFromPath(ctx, pipelinePath, pipeline.WithMutate())
-	if err != nil {
-		return "", nil, nil, err
-	}
-
-	normalizedTarget := filepath.ToSlash(relAssetPath)
-	for _, current := range parsed.Assets {
-		assetPath := current.ExecutableFile.Path
-		if assetPath == "" {
-			assetPath = current.DefinitionFile.Path
-		}
-
-		relCurrent, relErr := filepath.Rel(s.workspaceRoot, assetPath)
-		if relErr != nil {
-			continue
-		}
-
-		if filepath.ToSlash(relCurrent) == normalizedTarget {
-			return normalizedTarget, parsed, current, nil
-		}
-	}
-
-	return "", nil, nil, ErrAssetNotFound
+	return s.resolver().ResolveAssetByID(ctx, assetID)
 }
 
 // ErrAssetNotFound is returned when an asset cannot be found.

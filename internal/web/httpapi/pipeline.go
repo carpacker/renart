@@ -69,7 +69,7 @@ func (h *PipelineHandlers) HandleCreatePipeline(w http.ResponseWriter, r *http.R
 	if h.Publisher != nil {
 		h.Publisher.WorkspaceChanged(r.Context(), relPath, "pipeline.created")
 	}
-	webapi.WriteJSON(w, http.StatusCreated, map[string]string{"status": "ok"})
+	webapi.WriteJSON(w, http.StatusCreated, StatusResponse{Status: "ok"})
 }
 
 func (h *PipelineHandlers) HandleUpdatePipeline(w http.ResponseWriter, r *http.Request) {
@@ -98,7 +98,7 @@ func (h *PipelineHandlers) HandleUpdatePipeline(w http.ResponseWriter, r *http.R
 	if h.Publisher != nil {
 		h.Publisher.WorkspaceChanged(r.Context(), relPath, "pipeline.updated")
 	}
-	webapi.WriteJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+	webapi.WriteJSON(w, http.StatusOK, StatusResponse{Status: "ok"})
 }
 
 func (h *PipelineHandlers) HandleDeletePipeline(w http.ResponseWriter, r *http.Request) {
@@ -120,7 +120,7 @@ func (h *PipelineHandlers) HandleDeletePipeline(w http.ResponseWriter, r *http.R
 	if h.Publisher != nil {
 		h.Publisher.WorkspaceChanged(r.Context(), relPath, "pipeline.deleted")
 	}
-	webapi.WriteJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+	webapi.WriteJSON(w, http.StatusOK, StatusResponse{Status: "ok"})
 }
 
 func (h *PipelineHandlers) HandleGetPipelineConfig(w http.ResponseWriter, r *http.Request) {

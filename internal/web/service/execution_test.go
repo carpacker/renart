@@ -16,6 +16,20 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func newExecutionTestResolver(workspaceRoot string) *WorkspaceResolver {
+	return NewWorkspaceResolver(workspaceRoot, func(ctx context.Context, pipelinePath string) (*pipeline.Pipeline, error) {
+		osFS := afero.NewOsFs()
+		builder := pipeline.NewBuilder(
+			BuilderConfig,
+			pipeline.CreateTaskFromYamlDefinition(osFS),
+			pipeline.CreateTaskFromFileComments(osFS),
+			osFS,
+			DefaultGlossaryReader,
+		)
+		return builder.CreatePipelineFromPath(ctx, pipelinePath, pipeline.WithMutate())
+	})
+}
+
 type stubExecutionExecutor struct {
 	runAssetOutput    []byte
 	runAssetErr       error
@@ -274,43 +288,7 @@ materialization:
 copy (select * from analytics.customers) to 'danger.parquet'
 `)+"\n"), 0o644))
 
-	buildPipeline := func(ctx context.Context, pipelinePath string) (*pipeline.Pipeline, error) {
-		osFS := afero.NewOsFs()
-		builder := pipeline.NewBuilder(
-			BuilderConfig,
-			pipeline.CreateTaskFromYamlDefinition(osFS),
-			pipeline.CreateTaskFromFileComments(osFS),
-			osFS,
-			DefaultGlossaryReader,
-		)
-		return builder.CreatePipelineFromPath(ctx, pipelinePath, pipeline.WithMutate())
-	}
-
-	resolveAssetByID := func(ctx context.Context, assetID string) (string, *pipeline.Pipeline, *pipeline.Asset, error) {
-		relAssetPath, err := DecodeID(assetID)
-		if err != nil {
-			return "", nil, nil, err
-		}
-		assetPath, err := SafeJoin(workspaceRoot, relAssetPath)
-		if err != nil {
-			return "", nil, nil, err
-		}
-		parsedPipeline, err := buildPipeline(ctx, filepath.Dir(filepath.Dir(assetPath)))
-		if err != nil {
-			return "", nil, nil, err
-		}
-		for _, asset := range parsedPipeline.Assets {
-			currentPath := asset.ExecutableFile.Path
-			if currentPath == "" {
-				currentPath = asset.DefinitionFile.Path
-			}
-			relCurrent, relErr := filepath.Rel(workspaceRoot, currentPath)
-			if relErr == nil && filepath.ToSlash(relCurrent) == filepath.ToSlash(relAssetPath) {
-				return filepath.ToSlash(relAssetPath), parsedPipeline, asset, nil
-			}
-		}
-		return "", nil, nil, ErrAssetNotFound
-	}
+	resolveAssetByID := newExecutionTestResolver(workspaceRoot).ResolveAssetByID
 
 	svc := NewExecutionService(ExecutionDependencies{
 		WorkspaceRoot:    workspaceRoot,
@@ -424,43 +402,7 @@ depends:
 select * from analytics.players
 `)+"\n"), 0o644))
 
-	buildPipeline := func(ctx context.Context, pipelinePath string) (*pipeline.Pipeline, error) {
-		osFS := afero.NewOsFs()
-		builder := pipeline.NewBuilder(
-			BuilderConfig,
-			pipeline.CreateTaskFromYamlDefinition(osFS),
-			pipeline.CreateTaskFromFileComments(osFS),
-			osFS,
-			DefaultGlossaryReader,
-		)
-		return builder.CreatePipelineFromPath(ctx, pipelinePath, pipeline.WithMutate())
-	}
-
-	resolveAssetByID := func(ctx context.Context, assetID string) (string, *pipeline.Pipeline, *pipeline.Asset, error) {
-		relAssetPath, err := DecodeID(assetID)
-		if err != nil {
-			return "", nil, nil, err
-		}
-		assetPath, err := SafeJoin(workspaceRoot, relAssetPath)
-		if err != nil {
-			return "", nil, nil, err
-		}
-		parsedPipeline, err := buildPipeline(ctx, filepath.Dir(filepath.Dir(filepath.Dir(assetPath))))
-		if err != nil {
-			return "", nil, nil, err
-		}
-		for _, asset := range parsedPipeline.Assets {
-			currentPath := asset.ExecutableFile.Path
-			if currentPath == "" {
-				currentPath = asset.DefinitionFile.Path
-			}
-			relCurrent, relErr := filepath.Rel(workspaceRoot, currentPath)
-			if relErr == nil && filepath.ToSlash(relCurrent) == filepath.ToSlash(relAssetPath) {
-				return filepath.ToSlash(relAssetPath), parsedPipeline, asset, nil
-			}
-		}
-		return "", nil, nil, ErrAssetNotFound
-	}
+	resolveAssetByID := newExecutionTestResolver(workspaceRoot).ResolveAssetByID
 
 	queryErr := errors.New("Catalog Error: Table with name analytics.players does not exist")
 	svc := NewExecutionService(ExecutionDependencies{

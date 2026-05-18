@@ -21,6 +21,12 @@ func NewPipelineService(workspaceRoot string) *PipelineService {
 	return &PipelineService{workspaceRoot: workspaceRoot}
 }
 
+func (s *PipelineService) resolver() *WorkspaceResolver {
+	return NewWorkspaceResolver(s.workspaceRoot, func(ctx context.Context, pipelinePath string) (*pipeline.Pipeline, error) {
+		return s.newPipelineBuilder().CreatePipelineFromPath(ctx, pipelinePath, pipeline.WithMutate(), pipeline.WithOnlyPipeline())
+	})
+}
+
 func (s *PipelineService) Create(ctx context.Context, relPath, name, content string) (string, error) {
 	absPath, err := SafeJoin(s.workspaceRoot, relPath)
 	if err != nil {
@@ -47,12 +53,7 @@ func (s *PipelineService) Create(ctx context.Context, relPath, name, content str
 }
 
 func (s *PipelineService) Update(ctx context.Context, pipelineID, name, content string) (string, error) {
-	relPath, err := DecodeID(pipelineID)
-	if err != nil {
-		return "", err
-	}
-
-	absPath, err := SafeJoin(s.workspaceRoot, relPath)
+	relPath, absPath, err := s.resolver().DecodePipelineID(pipelineID)
 	if err != nil {
 		return "", err
 	}
@@ -139,12 +140,7 @@ func (s *PipelineService) UpdateConfig(ctx context.Context, pipelineID string, r
 }
 
 func (s *PipelineService) Delete(pipelineID string) (string, error) {
-	relPath, err := DecodeID(pipelineID)
-	if err != nil {
-		return "", err
-	}
-
-	absPath, err := SafeJoin(s.workspaceRoot, relPath)
+	relPath, absPath, err := s.resolver().DecodePipelineID(pipelineID)
 	if err != nil {
 		return "", err
 	}
@@ -157,17 +153,7 @@ func (s *PipelineService) Delete(pipelineID string) (string, error) {
 }
 
 func (s *PipelineService) loadPipeline(ctx context.Context, pipelineID string) (*pipeline.Pipeline, string, error) {
-	relPath, err := DecodeID(pipelineID)
-	if err != nil {
-		return nil, "", err
-	}
-
-	absPath, err := SafeJoin(s.workspaceRoot, relPath)
-	if err != nil {
-		return nil, "", err
-	}
-
-	parsed, err := s.newPipelineBuilder().CreatePipelineFromPath(ctx, absPath, pipeline.WithMutate(), pipeline.WithOnlyPipeline())
+	relPath, _, parsed, err := s.resolver().LoadPipelineByID(ctx, pipelineID)
 	if err != nil {
 		return nil, "", err
 	}

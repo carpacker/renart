@@ -16,12 +16,6 @@ import (
 	"github.com/spf13/afero"
 )
 
-type AssetAPIError struct {
-	Status  int
-	Code    string
-	Message string
-}
-
 type AssetUpdateRequest struct {
 	Name                *string
 	Type                *string
@@ -29,6 +23,21 @@ type AssetUpdateRequest struct {
 	MaterializationType *string
 	Meta                map[string]string
 	Upstreams           []string
+}
+
+type AssetMutationResponse struct {
+	Status    string `json:"status"`
+	AssetID   string `json:"asset_id,omitempty"`
+	AssetPath string `json:"asset_path,omitempty"`
+}
+
+type StatusResponse struct {
+	Status string `json:"status"`
+}
+
+type sqlAssetDependencyMerge struct {
+	Upstreams []pipeline.Upstream
+	Inferred  []string
 }
 
 type FormatSQLAssetRequest struct {
@@ -43,6 +52,7 @@ type FormatSQLAssetResponse struct {
 }
 
 type AssetDependencies struct {
+	Fs                                         afero.Fs
 	WorkspaceRoot                              string
 	Executor                                   BruinCommandExecutor
 	ResolveAssetByID                           func(context.Context, string) (string, *pipeline.Pipeline, *pipeline.Asset, error)
@@ -67,18 +77,24 @@ func NewAssetService(deps AssetDependencies) *AssetService {
 	return &AssetService{deps: deps, patchTimers: make(map[string]*time.Timer)}
 }
 
-func (s *AssetService) Create(ctx context.Context, pipelineID string, req CreateAssetParams) (map[string]string, *AssetAPIError) {
-	relPipelinePath, err := DecodeID(pipelineID)
+func (s *AssetService) fs() afero.Fs {
+	if s.deps.Fs != nil {
+		return s.deps.Fs
+	}
+	return afero.NewOsFs()
+}
+
+func (s *AssetService) resolver() *WorkspaceResolver {
+	return NewWorkspaceResolver(s.deps.WorkspaceRoot, nil)
+}
+
+func (s *AssetService) Create(ctx context.Context, pipelineID string, req CreateAssetParams) (AssetMutationResponse, *ServiceAPIError) {
+	_, pipelinePath, err := s.resolver().DecodePipelineID(pipelineID)
 	if err != nil {
-		return nil, &AssetAPIError{Status: 400, Code: "invalid_pipeline_id", Message: "invalid pipeline id"}
+		return AssetMutationResponse{}, newServiceAPIError(400, "invalid_pipeline_id", "invalid pipeline id")
 	}
 	if req.Name == "" && req.Path == "" && req.SourceAssetID == "" {
-		return nil, &AssetAPIError{Status: 400, Code: "missing_name_or_path", Message: "name or path is required"}
-	}
-
-	pipelinePath, err := SafeJoin(s.deps.WorkspaceRoot, relPipelinePath)
-	if err != nil {
-		return nil, &AssetAPIError{Status: 400, Code: "invalid_pipeline_path", Message: err.Error()}
+		return AssetMutationResponse{}, newServiceAPIError(400, "missing_name_or_path", "name or path is required")
 	}
 
 	var sourceAsset *pipeline.Asset
@@ -88,10 +104,10 @@ func (s *AssetService) Create(ctx context.Context, pipelineID string, req Create
 	if strings.TrimSpace(req.SourceAssetID) != "" {
 		resolvedRelPath, resolvedPipeline, resolvedAsset, resolveErr := s.deps.ResolveAssetByID(ctx, req.SourceAssetID)
 		if resolveErr != nil {
-			return nil, &AssetAPIError{Status: 400, Code: "invalid_source_asset_id", Message: resolveErr.Error()}
+			return AssetMutationResponse{}, newServiceAPIError(400, "invalid_source_asset_id", resolveErr.Error())
 		}
 		if !pipelinePathsReferToSameRoot(resolvedPipeline.DefinitionFile.Path, pipelinePath) {
-			return nil, &AssetAPIError{Status: 400, Code: "invalid_source_asset", Message: "source asset must belong to the selected pipeline"}
+			return AssetMutationResponse{}, newServiceAPIError(400, "invalid_source_asset", "source asset must belong to the selected pipeline")
 		}
 		sourceAsset = resolvedAsset
 		sourcePipeline = resolvedPipeline
@@ -106,15 +122,15 @@ func (s *AssetService) Create(ctx context.Context, pipelineID string, req Create
 		assetName = deriveDownstreamAssetName(sourceAsset.Name, sourcePipeline)
 	}
 	if assetName != "" && !strings.Contains(assetName, ".") {
-		return nil, &AssetAPIError{Status: 400, Code: "missing_asset_prefix", Message: "asset name must include a prefix, for example analytics.orders"}
+		return AssetMutationResponse{}, newServiceAPIError(400, "missing_asset_prefix", "asset name must include a prefix, for example analytics.orders")
 	}
 
 	relAssetPath := req.Path
 	if relAssetPath == "" {
 		if sourceAsset != nil {
-			sourceAbsAssetPath, pathErr := SafeJoin(s.deps.WorkspaceRoot, sourceRelAssetPath)
+			sourceAbsAssetPath, pathErr := s.resolver().JoinPath(sourceRelAssetPath)
 			if pathErr != nil {
-				return nil, &AssetAPIError{Status: 400, Code: "invalid_source_asset_path", Message: pathErr.Error()}
+				return AssetMutationResponse{}, newServiceAPIError(400, "invalid_source_asset_path", pathErr.Error())
 			}
 			sourcePipelineRelativeDir, relErr := filepath.Rel(pipelinePath, filepath.Dir(sourceAbsAssetPath))
 			if relErr != nil {
@@ -130,16 +146,16 @@ func (s *AssetService) Create(ctx context.Context, pipelineID string, req Create
 		}
 	}
 	if inferredAssetNameFromPath(relAssetPath) == "" || !strings.Contains(inferredAssetNameFromPath(relAssetPath), ".") {
-		return nil, &AssetAPIError{Status: 400, Code: "missing_asset_prefix", Message: "asset path must infer a prefixed asset name under assets/<prefix>/"}
+		return AssetMutationResponse{}, newServiceAPIError(400, "missing_asset_prefix", "asset path must infer a prefixed asset name under assets/<prefix>/")
 	}
 
 	absAssetPath, err := SafeJoin(pipelinePath, relAssetPath)
 	if err != nil {
-		return nil, &AssetAPIError{Status: 400, Code: "invalid_asset_path", Message: err.Error()}
+		return AssetMutationResponse{}, newServiceAPIError(400, "invalid_asset_path", err.Error())
 	}
-	fs := afero.NewOsFs()
+	fs := s.fs()
 	if err := fs.MkdirAll(filepath.Dir(absAssetPath), 0o755); err != nil {
-		return nil, &AssetAPIError{Status: 500, Code: "asset_dir_create_failed", Message: err.Error()}
+		return AssetMutationResponse{}, newServiceAPIError(500, "asset_dir_create_failed", err.Error())
 	}
 
 	assetType := strings.TrimSpace(req.Type)
@@ -161,32 +177,32 @@ func (s *AssetService) Create(ctx context.Context, pipelineID string, req Create
 	}
 
 	if err := afero.WriteFile(fs, absAssetPath, []byte(content), 0o644); err != nil {
-		return nil, &AssetAPIError{Status: 500, Code: "asset_write_failed", Message: err.Error()}
+		return AssetMutationResponse{}, newServiceAPIError(500, "asset_write_failed", err.Error())
 	}
 	if strings.TrimSpace(req.SeedFileName) != "" {
 		seedFileName := filepath.Base(strings.TrimSpace(req.SeedFileName))
 		if seedFileName == "." || seedFileName == string(filepath.Separator) || seedFileName == "" {
-			return nil, &AssetAPIError{Status: 400, Code: "invalid_seed_file_name", Message: "seed file name is invalid"}
+			return AssetMutationResponse{}, newServiceAPIError(400, "invalid_seed_file_name", "seed file name is invalid")
 		}
 		seedFilePath := filepath.Join(filepath.Dir(absAssetPath), seedFileName)
 		if err := afero.WriteFile(fs, seedFilePath, []byte(req.SeedFileContent), 0o644); err != nil {
-			return nil, &AssetAPIError{Status: 500, Code: "seed_file_write_failed", Message: err.Error()}
+			return AssetMutationResponse{}, newServiceAPIError(500, "seed_file_write_failed", err.Error())
 		}
 	}
 	if err := s.deps.EnsurePythonRequirements(absAssetPath, assetType, relAssetPath); err != nil {
-		return nil, &AssetAPIError{Status: 500, Code: "requirements_write_failed", Message: err.Error()}
+		return AssetMutationResponse{}, newServiceAPIError(500, "requirements_write_failed", err.Error())
 	}
 
 	relWorkspaceAssetPath, _ := filepath.Rel(s.deps.WorkspaceRoot, absAssetPath)
 	assetPath := filepath.ToSlash(relWorkspaceAssetPath)
 	if strings.HasSuffix(strings.ToLower(assetPath), ".sql") {
 		if err := s.reconcileSQLAssetDependencies(ctx, assetPath); err != nil {
-			return nil, &AssetAPIError{Status: 500, Code: "asset_dependency_reconcile_failed", Message: err.Error()}
+			return AssetMutationResponse{}, newServiceAPIError(500, "asset_dependency_reconcile_failed", err.Error())
 		}
 	}
 	s.deps.SuppressWatcher(assetPath)
 	s.deps.PushWorkspaceUpdateImmediate(ctx, "asset.created", assetPath)
-	return map[string]string{"status": "ok", "asset_id": EncodeID(assetPath), "asset_path": assetPath}, nil
+	return AssetMutationResponse{Status: "ok", AssetID: EncodeID(assetPath), AssetPath: assetPath}, nil
 }
 
 type CreateAssetParams struct {
@@ -199,20 +215,20 @@ type CreateAssetParams struct {
 	SeedFileContent string
 }
 
-func (s *AssetService) Update(ctx context.Context, assetID string, req AssetUpdateRequest) (map[string]string, *AssetAPIError) {
+func (s *AssetService) Update(ctx context.Context, assetID string, req AssetUpdateRequest) (AssetMutationResponse, *ServiceAPIError) {
 	relAssetPath, err := DecodeID(assetID)
 	if err != nil {
-		return nil, &AssetAPIError{Status: 400, Code: "invalid_asset_id", Message: "invalid asset id"}
+		return AssetMutationResponse{}, newServiceAPIError(400, "invalid_asset_id", "invalid asset id")
 	}
-	absAssetPath, err := SafeJoin(s.deps.WorkspaceRoot, relAssetPath)
+	absAssetPath, err := s.resolver().JoinPath(relAssetPath)
 	if err != nil {
-		return nil, &AssetAPIError{Status: 400, Code: "invalid_asset_path", Message: err.Error()}
+		return AssetMutationResponse{}, newServiceAPIError(400, "invalid_asset_path", err.Error())
 	}
 
-	fs := afero.NewOsFs()
+	fs := s.fs()
 	originalBytes, err := afero.ReadFile(fs, absAssetPath)
 	if err != nil {
-		return nil, &AssetAPIError{Status: 500, Code: "asset_read_failed", Message: err.Error()}
+		return AssetMutationResponse{}, newServiceAPIError(500, "asset_read_failed", err.Error())
 	}
 	originalHadExplicitName := assetContentHasExplicitName(string(originalBytes))
 	desiredExecutable := ExtractExecutableContent(string(originalBytes))
@@ -229,7 +245,7 @@ func (s *AssetService) Update(ctx context.Context, assetID string, req AssetUpda
 	if req.Name != nil || req.Type != nil || req.MaterializationType != nil || req.Meta != nil || req.Upstreams != nil {
 		_, parsedPipeline, asset, resolveErr := s.deps.ResolveAssetByID(ctx, assetID)
 		if resolveErr != nil {
-			return nil, &AssetAPIError{Status: 400, Code: "asset_resolve_failed", Message: resolveErr.Error()}
+			return AssetMutationResponse{}, newServiceAPIError(400, "asset_resolve_failed", resolveErr.Error())
 		}
 
 		originalAssetName := asset.Name
@@ -237,13 +253,13 @@ func (s *AssetService) Update(ctx context.Context, assetID string, req AssetUpda
 		if req.Name != nil {
 			nextName := strings.TrimSpace(*req.Name)
 			if nextName == "" {
-				return nil, &AssetAPIError{Status: 400, Code: "invalid_asset_name", Message: "asset name cannot be empty"}
+				return AssetMutationResponse{}, newServiceAPIError(400, "invalid_asset_name", "asset name cannot be empty")
 			}
 			if !strings.Contains(nextName, ".") {
-				return nil, &AssetAPIError{Status: 400, Code: "missing_asset_prefix", Message: "asset name must include a prefix, for example analytics.orders"}
+				return AssetMutationResponse{}, newServiceAPIError(400, "missing_asset_prefix", "asset name must include a prefix, for example analytics.orders")
 			}
 			if existing := getAssetByNameCaseInsensitiveLocal(parsedPipeline, nextName); existing != nil && existing.DefinitionFile.Path != asset.DefinitionFile.Path {
-				return nil, &AssetAPIError{Status: 400, Code: "duplicate_asset_name", Message: fmt.Sprintf("an asset named %q already exists", nextName)}
+				return AssetMutationResponse{}, newServiceAPIError(400, "duplicate_asset_name", fmt.Sprintf("an asset named %q already exists", nextName))
 			}
 			if nextName != asset.Name {
 				asset.Name = nextName
@@ -257,7 +273,7 @@ func (s *AssetService) Update(ctx context.Context, assetID string, req AssetUpda
 		if req.Type != nil {
 			nextType := strings.TrimSpace(*req.Type)
 			if nextType == "" {
-				return nil, &AssetAPIError{Status: 400, Code: "invalid_asset_type", Message: "asset type cannot be empty"}
+				return AssetMutationResponse{}, newServiceAPIError(400, "invalid_asset_type", "asset type cannot be empty")
 			}
 			asset.Type = pipeline.AssetType(nextType)
 		}
@@ -282,13 +298,13 @@ func (s *AssetService) Update(ctx context.Context, assetID string, req AssetUpda
 		if req.Upstreams != nil {
 			applyManualAssetUpstreams(asset, parsedPipeline, req.Upstreams)
 		}
-		if err := asset.Persist(afero.NewOsFs(), parsedPipeline); err != nil {
-			return nil, &AssetAPIError{Status: 500, Code: "asset_persist_failed", Message: err.Error()}
+		if err := asset.Persist(fs, parsedPipeline); err != nil {
+			return AssetMutationResponse{}, newServiceAPIError(500, "asset_persist_failed", err.Error())
 		}
 		if renamedAsset {
 			affectedIDs, affectedPaths, refactorErr := s.RefactorDirectDependencies(ctx, parsedPipeline, originalAssetName, asset.Name)
 			if refactorErr != nil {
-				return nil, &AssetAPIError{Status: 500, Code: "asset_rename_refactor_failed", Message: refactorErr.Error()}
+				return AssetMutationResponse{}, newServiceAPIError(500, "asset_rename_refactor_failed", refactorErr.Error())
 			}
 			changedAssetIDs = appendUniqueStrings(changedAssetIDs, affectedIDs...)
 			changedAssetPaths = appendUniqueStrings(changedAssetPaths, affectedPaths...)
@@ -297,41 +313,41 @@ func (s *AssetService) Update(ctx context.Context, assetID string, req AssetUpda
 
 	latestBytes, err := afero.ReadFile(fs, absAssetPath)
 	if err != nil {
-		return nil, &AssetAPIError{Status: 500, Code: "asset_read_failed", Message: err.Error()}
+		return AssetMutationResponse{}, newServiceAPIError(500, "asset_read_failed", err.Error())
 	}
 	mergedContent := MergeExecutableContent(string(latestBytes), desiredExecutable)
 	if err := afero.WriteFile(fs, absAssetPath, []byte(mergedContent), 0o644); err != nil {
-		return nil, &AssetAPIError{Status: 500, Code: "asset_write_failed", Message: err.Error()}
+		return AssetMutationResponse{}, newServiceAPIError(500, "asset_write_failed", err.Error())
 	}
 
 	if req.Content != nil && strings.HasSuffix(strings.ToLower(relAssetPath), ".sql") {
 		if err := s.reconcileSQLAssetDependencies(ctx, relAssetPath); err != nil {
-			return nil, &AssetAPIError{Status: 500, Code: "asset_dependency_reconcile_failed", Message: err.Error()}
+			return AssetMutationResponse{}, newServiceAPIError(500, "asset_dependency_reconcile_failed", err.Error())
 		}
 		s.ScheduleSQLPatches(relAssetPath)
 	}
 	if inferredRenameRelAssetPath != "" && inferredRenameRelAssetPath != filepath.ToSlash(relAssetPath) {
-		newAbsAssetPath, pathErr := SafeJoin(s.deps.WorkspaceRoot, inferredRenameRelAssetPath)
+		newAbsAssetPath, pathErr := s.resolver().JoinPath(inferredRenameRelAssetPath)
 		if pathErr != nil {
-			return nil, &AssetAPIError{Status: 400, Code: "invalid_asset_path", Message: pathErr.Error()}
+			return AssetMutationResponse{}, newServiceAPIError(400, "invalid_asset_path", pathErr.Error())
 		}
 		if exists, existsErr := afero.Exists(fs, newAbsAssetPath); existsErr != nil {
-			return nil, &AssetAPIError{Status: 500, Code: "asset_stat_failed", Message: existsErr.Error()}
+			return AssetMutationResponse{}, newServiceAPIError(500, "asset_stat_failed", existsErr.Error())
 		} else if exists {
-			return nil, &AssetAPIError{Status: 400, Code: "asset_path_exists", Message: "an asset already exists at the inferred path"}
+			return AssetMutationResponse{}, newServiceAPIError(400, "asset_path_exists", "an asset already exists at the inferred path")
 		}
 		currentBytes, readErr := afero.ReadFile(fs, absAssetPath)
 		if readErr != nil {
-			return nil, &AssetAPIError{Status: 500, Code: "asset_read_failed", Message: readErr.Error()}
+			return AssetMutationResponse{}, newServiceAPIError(500, "asset_read_failed", readErr.Error())
 		}
 		if mkdirErr := fs.MkdirAll(filepath.Dir(newAbsAssetPath), 0o755); mkdirErr != nil {
-			return nil, &AssetAPIError{Status: 500, Code: "asset_dir_create_failed", Message: mkdirErr.Error()}
+			return AssetMutationResponse{}, newServiceAPIError(500, "asset_dir_create_failed", mkdirErr.Error())
 		}
 		if writeErr := afero.WriteFile(fs, newAbsAssetPath, []byte(removeAssetNameFieldFromContent(string(currentBytes))), 0o644); writeErr != nil {
-			return nil, &AssetAPIError{Status: 500, Code: "asset_write_failed", Message: writeErr.Error()}
+			return AssetMutationResponse{}, newServiceAPIError(500, "asset_write_failed", writeErr.Error())
 		}
 		if removeErr := fs.Remove(absAssetPath); removeErr != nil {
-			return nil, &AssetAPIError{Status: 500, Code: "asset_remove_failed", Message: removeErr.Error()}
+			return AssetMutationResponse{}, newServiceAPIError(500, "asset_remove_failed", removeErr.Error())
 		}
 		nextRelAssetPath = inferredRenameRelAssetPath
 		nextAssetID = EncodeID(inferredRenameRelAssetPath)
@@ -342,7 +358,7 @@ func (s *AssetService) Update(ctx context.Context, assetID string, req AssetUpda
 		s.deps.SuppressWatcher(changedPath)
 	}
 	s.deps.PushWorkspaceUpdateImmediateWithChangedIDs(ctx, "asset.updated", nextRelAssetPath, changedAssetIDs)
-	return map[string]string{"status": "ok", "asset_id": nextAssetID, "asset_path": nextRelAssetPath}, nil
+	return AssetMutationResponse{Status: "ok", AssetID: nextAssetID, AssetPath: nextRelAssetPath}, nil
 }
 
 func (s *AssetService) RefactorDirectDependencies(ctx context.Context, parsedPipeline *pipeline.Pipeline, oldName, newName string) ([]string, []string, error) {
@@ -357,7 +373,7 @@ func (s *AssetService) RefactorDirectDependencies(ctx context.Context, parsedPip
 	defer sqlParserInstance.Close()
 
 	renderer := jinja.NewRendererWithYesterday(parsedPipeline.Name, "web-rename")
-	fs := afero.NewOsFs()
+	fs := s.fs()
 	changedIDs := make([]string, 0)
 	changedPaths := make([]string, 0)
 
@@ -394,7 +410,7 @@ func (s *AssetService) RefactorDirectDependencies(ctx context.Context, parsedPip
 		}
 
 		if isSQLAsset {
-			if err := reconcileSQLAssetDependencies(ctx, current, parsedPipeline, sqlParserInstance, renderer); err != nil {
+			if err := reconcileSQLAssetDependenciesFS(ctx, fs, current, parsedPipeline, sqlParserInstance, renderer); err != nil {
 				return nil, nil, fmt.Errorf("failed to refresh dependencies for asset '%s': %w", current.Name, err)
 			}
 		}
@@ -460,43 +476,43 @@ func (s *AssetService) RunSQLPatches(relAssetPath string) {
 	}
 }
 
-func (s *AssetService) Delete(ctx context.Context, assetID string) (map[string]string, *AssetAPIError) {
+func (s *AssetService) Delete(ctx context.Context, assetID string) (StatusResponse, *ServiceAPIError) {
 	relAssetPath, err := DecodeID(assetID)
 	if err != nil {
-		return nil, &AssetAPIError{Status: 400, Code: "invalid_asset_id", Message: "invalid asset id"}
+		return StatusResponse{}, newServiceAPIError(400, "invalid_asset_id", "invalid asset id")
 	}
-	absAssetPath, err := SafeJoin(s.deps.WorkspaceRoot, relAssetPath)
+	absAssetPath, err := s.resolver().JoinPath(relAssetPath)
 	if err != nil {
-		return nil, &AssetAPIError{Status: 400, Code: "invalid_asset_path", Message: err.Error()}
+		return StatusResponse{}, newServiceAPIError(400, "invalid_asset_path", err.Error())
 	}
-	if err := afero.NewOsFs().Remove(absAssetPath); err != nil {
-		return nil, &AssetAPIError{Status: 500, Code: "asset_delete_failed", Message: err.Error()}
+	if err := s.fs().Remove(absAssetPath); err != nil {
+		return StatusResponse{}, newServiceAPIError(500, "asset_delete_failed", err.Error())
 	}
 	s.deps.SuppressWatcher(relAssetPath)
 	s.deps.PushWorkspaceUpdateImmediate(ctx, "asset.deleted", relAssetPath)
-	return map[string]string{"status": "ok"}, nil
+	return StatusResponse{Status: "ok"}, nil
 }
 
-func (s *AssetService) FormatSQL(ctx context.Context, assetID string, req FormatSQLAssetRequest) (FormatSQLAssetResponse, *AssetAPIError) {
+func (s *AssetService) FormatSQL(ctx context.Context, assetID string, req FormatSQLAssetRequest) (FormatSQLAssetResponse, *ServiceAPIError) {
 	relAssetPath, err := DecodeID(assetID)
 	if err != nil {
-		return FormatSQLAssetResponse{}, &AssetAPIError{Status: 400, Code: "invalid_asset_id", Message: "invalid asset id"}
+		return FormatSQLAssetResponse{}, newServiceAPIError(400, "invalid_asset_id", "invalid asset id")
 	}
 	if !strings.HasSuffix(strings.ToLower(relAssetPath), ".sql") {
-		return FormatSQLAssetResponse{}, &AssetAPIError{Status: 400, Code: "invalid_asset_type", Message: "only SQL assets can be formatted"}
+		return FormatSQLAssetResponse{}, newServiceAPIError(400, "invalid_asset_type", "only SQL assets can be formatted")
 	}
-	absAssetPath, err := SafeJoin(s.deps.WorkspaceRoot, relAssetPath)
+	absAssetPath, err := s.resolver().JoinPath(relAssetPath)
 	if err != nil {
-		return FormatSQLAssetResponse{}, &AssetAPIError{Status: 400, Code: "invalid_asset_path", Message: err.Error()}
+		return FormatSQLAssetResponse{}, newServiceAPIError(400, "invalid_asset_path", err.Error())
 	}
-	fs := afero.NewOsFs()
+	fs := s.fs()
 	originalBytes, err := afero.ReadFile(fs, absAssetPath)
 	if err != nil {
-		return FormatSQLAssetResponse{}, &AssetAPIError{Status: 500, Code: "asset_read_failed", Message: err.Error()}
+		return FormatSQLAssetResponse{}, newServiceAPIError(500, "asset_read_failed", err.Error())
 	}
 	mergedContent := MergeExecutableContent(string(originalBytes), req.Content)
 	if err := afero.WriteFile(fs, absAssetPath, []byte(mergedContent), 0o644); err != nil {
-		return FormatSQLAssetResponse{}, &AssetAPIError{Status: 500, Code: "asset_write_failed", Message: err.Error()}
+		return FormatSQLAssetResponse{}, newServiceAPIError(500, "asset_write_failed", err.Error())
 	}
 	output, err := s.deps.Executor.FormatAsset(ctx, FormatAssetRequest{AssetPath: relAssetPath, UseSQLFluff: true})
 	if err != nil {
@@ -504,7 +520,7 @@ func (s *AssetService) FormatSQL(ctx context.Context, assetID string, req Format
 	}
 	formattedBytes, err := afero.ReadFile(fs, absAssetPath)
 	if err != nil {
-		return FormatSQLAssetResponse{}, &AssetAPIError{Status: 500, Code: "asset_read_failed", Message: err.Error()}
+		return FormatSQLAssetResponse{}, newServiceAPIError(500, "asset_read_failed", err.Error())
 	}
 	s.deps.SuppressWatcher(relAssetPath)
 	s.deps.PushWorkspaceUpdateImmediateWithChangedIDs(ctx, "asset.updated", relAssetPath, []string{assetID})
@@ -573,27 +589,56 @@ func (s *AssetService) reconcileSQLAssetDependencies(ctx context.Context, relAss
 	defer sqlParserInstance.Close()
 
 	renderer := jinja.NewRendererWithYesterday(parsedPipeline.Name, "web-asset-update")
-	return reconcileSQLAssetDependencies(ctx, asset, parsedPipeline, sqlParserInstance, renderer)
+	return reconcileSQLAssetDependenciesFS(ctx, s.fs(), asset, parsedPipeline, sqlParserInstance, renderer)
 }
 
 func reconcileSQLAssetDependencies(ctx context.Context, asset *pipeline.Asset, parsedPipeline *pipeline.Pipeline, sqlParserInstance *sqlparser.SQLParser, renderer *jinja.Renderer) error {
+	return reconcileSQLAssetDependenciesFS(ctx, afero.NewOsFs(), asset, parsedPipeline, sqlParserInstance, renderer)
+}
+
+func reconcileSQLAssetDependenciesFS(ctx context.Context, fs afero.Fs, asset *pipeline.Asset, parsedPipeline *pipeline.Pipeline, sqlParserInstance *sqlparser.SQLParser, renderer *jinja.Renderer) error {
 	if asset == nil || parsedPipeline == nil {
 		return nil
 	}
+	if fs == nil {
+		fs = afero.NewOsFs()
+	}
 
-	tracked := parseRenartInferredUpstreams(asset.Meta)
+	inferredNames, err := inferAllSQLAssetDependencies(ctx, asset, parsedPipeline, sqlParserInstance, renderer)
+	if err != nil {
+		return err
+	}
+	merged := mergeSQLAssetDependencies(asset.Name, asset.Upstreams, asset.Meta, inferredNames)
+	asset.Upstreams = merged.Upstreams
+	setRenartInferredUpstreams(&asset.Meta, merged.Inferred)
+	originalHadExplicitName := assetContentHasExplicitName(asset.ExecutableFile.Content)
+
+	if err := asset.Persist(fs, parsedPipeline); err != nil {
+		return fmt.Errorf("failed to persist asset '%s': %w", asset.Name, err)
+	}
+	if !originalHadExplicitName {
+		if err := removePersistedAssetNameField(asset); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func mergeSQLAssetDependencies(assetName string, currentUpstreams []pipeline.Upstream, meta pipeline.EmptyStringMap, inferredNames []string) sqlAssetDependencyMerge {
+	tracked := parseRenartInferredUpstreams(meta)
 	manualAssetUpstreams := make([]pipeline.Upstream, 0)
 	nonAssetUpstreams := make([]pipeline.Upstream, 0)
 	manualNames := make(map[string]struct{})
 
-	for _, upstream := range asset.Upstreams {
+	for _, upstream := range currentUpstreams {
 		if !isAssetUpstream(upstream) {
 			nonAssetUpstreams = append(nonAssetUpstreams, upstream)
 			continue
 		}
 
 		normalized := normalizeDependencyName(upstream.Value)
-		if normalized == "" || strings.EqualFold(normalized, asset.Name) {
+		if normalized == "" || strings.EqualFold(normalized, assetName) {
 			continue
 		}
 		if _, ok := tracked[normalized]; ok {
@@ -604,15 +649,10 @@ func reconcileSQLAssetDependencies(ctx context.Context, asset *pipeline.Asset, p
 		manualNames[normalized] = struct{}{}
 	}
 
-	inferredNames, err := inferAllSQLAssetDependencies(ctx, asset, parsedPipeline, sqlParserInstance, renderer)
-	if err != nil {
-		return err
-	}
-
 	nextInferred := make([]string, 0, len(inferredNames))
 	for _, name := range inferredNames {
 		normalized := normalizeDependencyName(name)
-		if normalized == "" || strings.EqualFold(normalized, asset.Name) {
+		if normalized == "" || strings.EqualFold(normalized, assetName) {
 			continue
 		}
 		if _, ok := manualNames[normalized]; ok {
@@ -632,20 +672,7 @@ func reconcileSQLAssetDependencies(ctx context.Context, asset *pipeline.Asset, p
 		nextUpstreams = append(nextUpstreams, pipeline.Upstream{Type: "asset", Value: name, Mode: pipeline.UpstreamModeFull})
 	}
 
-	asset.Upstreams = nextUpstreams
-	setRenartInferredUpstreams(&asset.Meta, nextInferred)
-	originalHadExplicitName := assetContentHasExplicitName(asset.ExecutableFile.Content)
-
-	if err := asset.Persist(afero.NewOsFs(), parsedPipeline); err != nil {
-		return fmt.Errorf("failed to persist asset '%s': %w", asset.Name, err)
-	}
-	if !originalHadExplicitName {
-		if err := removePersistedAssetNameField(asset); err != nil {
-			return err
-		}
-	}
-
-	return nil
+	return sqlAssetDependencyMerge{Upstreams: nextUpstreams, Inferred: nextInferred}
 }
 
 func inferAllSQLAssetDependencies(ctx context.Context, asset *pipeline.Asset, parsedPipeline *pipeline.Pipeline, sqlParserInstance *sqlparser.SQLParser, renderer *jinja.Renderer) ([]string, error) {
