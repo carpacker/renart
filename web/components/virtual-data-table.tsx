@@ -1,7 +1,9 @@
 "use client";
 
 import { Loader2 } from "lucide-react";
-import { UIEvent, useLayoutEffect, useMemo, useRef } from "react";
+import { UIEvent, WheelEventHandler, useLayoutEffect, useMemo, useRef } from "react";
+
+import { ScrollArea } from "@/components/ui/scroll-area";
 
 const tableScrollPositions = new Map<string, { top: number; left: number }>();
 
@@ -16,6 +18,7 @@ type Props = {
   emptyLabel?: string;
   autoLoadMore?: boolean;
   scrollKey?: string;
+  onWheelCapture?: WheelEventHandler<HTMLDivElement>;
 };
 
 export function VirtualDataTable({
@@ -29,6 +32,7 @@ export function VirtualDataTable({
   emptyLabel = "No rows returned.",
   autoLoadMore = false,
   scrollKey,
+  onWheelCapture,
 }: Props) {
   const fillAvailableHeight = typeof height === "string";
   const scrollContainerRef = useRef<HTMLDivElement | null>(null);
@@ -117,10 +121,12 @@ export function VirtualDataTable({
         </div>
       ) : null}
 
-      <div
-        ref={scrollContainerRef}
-        className={fillAvailableHeight ? "min-h-0 flex-1 overflow-auto" : "overflow-auto max-h-56 h-fit"}
-        onScroll={handleScroll}
+      <ScrollArea
+        className={fillAvailableHeight ? "min-h-0 flex-1" : "h-fit max-h-56"}
+        viewportClassName={fillAvailableHeight ? undefined : "max-h-56"}
+        viewportRef={scrollContainerRef}
+        onViewportScroll={handleScroll}
+        onWheelCapture={onWheelCapture}
       >
         <table className="min-w-full border-collapse text-xs">
           <thead className="sticky top-0 z-10 bg-muted/70 backdrop-blur">
@@ -195,7 +201,7 @@ export function VirtualDataTable({
             ) : null}
           </tbody>
         </table>
-      </div>
+      </ScrollArea>
     </div>
   );
 }

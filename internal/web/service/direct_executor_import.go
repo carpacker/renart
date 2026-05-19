@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"path/filepath"
 	"strconv"
@@ -14,7 +15,144 @@ import (
 	"github.com/bruin-data/bruin/pkg/pipeline"
 	"github.com/bruin-data/bruin/pkg/postgres"
 	"github.com/bruin-data/bruin/pkg/query"
+	"github.com/spf13/afero"
 )
+
+func (e *HybridBruinExecutor) ImportDatabase(ctx context.Context, req ImportDatabaseRequest) ([]byte, error) {
+	if e.newConnectionManager == nil || e.newPipelineBuilder == nil {
+		return nil, fmt.Errorf("direct database import requires a connection manager and pipeline builder")
+	}
+
+	manager, err := e.newConnectionManager(ctx, req.Environment)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create connection manager: %w", err)
+	}
+
+	conn := manager.GetConnection(req.ConnectionName)
+	if conn == nil {
+		return nil, fmt.Errorf("connection %q not found", req.ConnectionName)
+	}
+
+	pipelinePath := resolveDirectPath(e.workspaceRoot, resolveDirectPipelinePath(req.PipelinePath))
+	foundPipeline, err := e.newPipelineBuilder().CreatePipelineFromPath(ctx, pipelinePath, pipeline.WithMutate())
+	if err != nil {
+		return nil, fmt.Errorf("failed to get pipeline from path: %w", err)
+	}
+
+	var summary *ansisql.DBDatabase
+	schemaList := append([]string{}, req.Schemas...)
+	if strings.TrimSpace(req.Schema) != "" {
+		schemaList = []string{req.Schema}
+	}
+
+	if len(schemaList) > 0 {
+		if schemaSummarizer, ok := conn.(interface {
+			GetDatabaseSummaryForSchemas(context.Context, []string) (*ansisql.DBDatabase, error)
+		}); ok {
+			summary, err = schemaSummarizer.GetDatabaseSummaryForSchemas(ctx, schemaList)
+			if err != nil {
+				return nil, fmt.Errorf("failed to retrieve database summary for specified schemas: %w", err)
+			}
+		}
+	}
+
+	if summary == nil {
+		summarizer, ok := conn.(interface {
+			GetDatabaseSummary(context.Context) (*ansisql.DBDatabase, error)
+		})
+		if !ok {
+			return nil, fmt.Errorf("connection %q does not support database summary", req.ConnectionName)
+		}
+		summary, err = summarizer.GetDatabaseSummary(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("failed to retrieve database summary: %w", err)
+		}
+	}
+
+	existingAssets := make(map[string]*pipeline.Asset, len(foundPipeline.Assets))
+	for _, asset := range foundPipeline.Assets {
+		if asset == nil {
+			continue
+		}
+		existingAssets[strings.ToLower(asset.Name)] = asset
+	}
+
+	assetsPath := filepath.Join(pipelinePath, "assets")
+	assetType, ok := sourceAssetTypeForConnectionType(manager.GetConnectionType(req.ConnectionName))
+	if !ok {
+		assetType = pipeline.AssetTypeEmpty
+	}
+	selectedTables := make(map[string]bool, len(req.Tables))
+	for _, tableName := range req.Tables {
+		trimmed := strings.ToLower(strings.TrimSpace(tableName))
+		if trimmed != "" {
+			selectedTables[trimmed] = true
+		}
+	}
+
+	fs := afero.NewOsFs()
+	totalTables := 0
+	mergedTableCount := 0
+	warnings := make([]directImportWarning, 0)
+
+	for _, schemaObj := range summary.Schemas {
+		if req.Schema != "" && !strings.EqualFold(schemaObj.Name, req.Schema) {
+			continue
+		}
+		for _, table := range schemaObj.Tables {
+			fullName := fmt.Sprintf("%s.%s", schemaObj.Name, table.Name)
+			if len(selectedTables) > 0 && !matchesDirectImportedTable(selectedTables, summary.Name, schemaObj.Name, table.Name) {
+				continue
+			}
+
+			createdAsset, warning := createDirectImportedAsset(ctx, assetsPath, schemaObj.Name, table.Name, assetType, conn, !req.DisableColumns, table)
+			if warning != "" {
+				warnings = append(warnings, directImportWarning{Table: fullName, Warning: warning})
+			}
+			if createdAsset == nil {
+				continue
+			}
+
+			assetName := fmt.Sprintf("%s.%s", strings.ToLower(schemaObj.Name), strings.ToLower(table.Name))
+			if existingAssets[assetName] == nil {
+				schemaFolder := filepath.Join(assetsPath, strings.ToLower(schemaObj.Name))
+				if err := fs.MkdirAll(schemaFolder, 0o755); err != nil {
+					return nil, fmt.Errorf("failed to create schema directory %s: %w", schemaFolder, err)
+				}
+				if err := createdAsset.Persist(fs); err != nil {
+					return nil, err
+				}
+				existingAssets[assetName] = createdAsset
+				totalTables++
+			} else {
+				existingAsset := existingAssets[assetName]
+				existingColumns := make(map[string]pipeline.Column, len(existingAsset.Columns))
+				for _, column := range existingAsset.Columns {
+					existingColumns[column.Name] = column
+				}
+				for _, column := range createdAsset.Columns {
+					if _, ok := existingColumns[column.Name]; !ok {
+						existingAsset.Columns = append(existingAsset.Columns, column)
+					}
+				}
+				if err := existingAsset.Persist(fs); err != nil {
+					return nil, err
+				}
+				mergedTableCount++
+			}
+		}
+	}
+
+	response := directImportDatabaseResponse{
+		Status:         "ok",
+		ImportedTables: totalTables,
+		MergedTables:   mergedTableCount,
+		Database:       summary.Name,
+		PipelinePath:   pipelinePath,
+		Warnings:       warnings,
+	}
+	return json.Marshal(response)
+}
 
 func createDirectImportedAsset(ctx context.Context, assetsPath, schemaName, tableName string, assetType pipeline.AssetType, conn interface{}, fillColumns bool, table *ansisql.DBTable) (*pipeline.Asset, string) {
 	schemaFolder := filepath.Join(assetsPath, strings.ToLower(schemaName))

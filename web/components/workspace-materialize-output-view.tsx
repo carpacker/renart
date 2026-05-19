@@ -3,6 +3,7 @@
 import { Play } from "lucide-react";
 import { useEffect, useRef } from "react";
 
+import { ScrollArea } from "@/components/ui/scroll-area";
 import { Spinner } from "@/components/ui/spinner";
 import { MaterializeHistoryEntry } from "@/lib/atoms/results";
 
@@ -15,7 +16,7 @@ export function WorkspaceMaterializeOutputView({
   outputHtml: string;
   pipelineMaterializeLoading?: boolean;
 }) {
-  const materializeOutputRef = useRef<HTMLPreElement | null>(null);
+  const materializeOutputRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
     const element = materializeOutputRef.current;
@@ -55,11 +56,16 @@ export function WorkspaceMaterializeOutputView({
             : "bg-background"
         }`}
       >
-        <pre
-          ref={materializeOutputRef}
-          className="min-h-0 flex-1 overflow-auto whitespace-pre-wrap p-2 font-mono text-[11px]"
-          dangerouslySetInnerHTML={{ __html: outputHtml }}
-        />
+        <ScrollArea
+          className="min-h-0 flex-1"
+          viewportClassName="p-2"
+          viewportRef={materializeOutputRef}
+        >
+          <pre
+            className="whitespace-pre-wrap font-mono text-[11px]"
+            dangerouslySetInnerHTML={{ __html: outputHtml }}
+          />
+        </ScrollArea>
         {entry.loading ? (
           <div className="flex items-center gap-2 border-t bg-muted/40 px-2 py-1 font-mono text-[11px] text-muted-foreground">
             <Spinner className="size-3.5" />

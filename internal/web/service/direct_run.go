@@ -1,0 +1,398 @@
+package service
+
+import (
+	"bytes"
+	"context"
+	"fmt"
+	"path/filepath"
+	"time"
+
+	"github.com/bruin-data/bruin/pkg/config"
+	bruinexecutor "github.com/bruin-data/bruin/pkg/executor"
+	"github.com/bruin-data/bruin/pkg/git"
+	"github.com/bruin-data/bruin/pkg/jinja"
+	"github.com/bruin-data/bruin/pkg/pipeline"
+	"github.com/bruin-data/bruin/pkg/scheduler"
+	"github.com/bruin-data/bruin/pkg/sqlparser"
+	"github.com/spf13/afero"
+	"go.uber.org/zap"
+)
+
+func (e *HybridBruinExecutor) RunAsset(ctx context.Context, req RunAssetRequest, onChunk func([]byte)) ([]byte, error) {
+	if e.newPipelineBuilder == nil {
+		return nil, fmt.Errorf("direct run requires a pipeline builder")
+	}
+
+	pp, err := getDirectPipelineAndAsset(ctx, e.workspaceRoot, req.AssetPath, afero.NewOsFs())
+	if err != nil {
+		return nil, err
+	}
+
+	if shouldFallbackToCLIRunAsset(pp.Asset, pp.Pipeline) {
+		return nil, fmt.Errorf("direct run is not supported for asset type %q", pp.Asset.Type)
+	}
+	if _, err := selectConfigEnvironment(pp.Config, req.Environment); err != nil {
+		return nil, fmt.Errorf("failed to use the environment '%s': %w", req.Environment, err)
+	}
+
+	manager, err := e.directConnectionManager(ctx, pp.Config)
+	if err != nil {
+		return nil, err
+	}
+
+	runCtx, parser, cleanup, err := buildDirectRunAssetContext(ctx, pp)
+	if err != nil {
+		return nil, err
+	}
+	defer cleanup()
+
+	renderer, err := buildDirectRunAssetRenderer(pp)
+	if err != nil {
+		return nil, err
+	}
+
+	mainExecutors, err := buildDirectMainExecutors(manager, renderer, parser, pp.Pipeline)
+	if err != nil {
+		return nil, err
+	}
+
+	s := scheduler.NewScheduler(zap.NewNop().Sugar(), pp.Pipeline, "renart-run")
+	s.MarkAll(scheduler.Skipped)
+	if !s.MarkAsset(pp.Asset, scheduler.Pending, false) {
+		return nil, fmt.Errorf("asset '%s' was not found among the pipeline's scheduled task instances", pp.Asset.Name)
+	}
+
+	pending := s.GetTaskInstancesByStatus(scheduler.Pending)
+	if len(pending) == 0 {
+		return []byte(""), nil
+	}
+
+	printer := &streamCaptureWriter{buffer: bytes.NewBuffer(nil), onChunk: onChunk}
+	formatting := directRunFormatting{doNotLogTaskName: true}
+	if startDate, ok := runCtx.Value(pipeline.RunConfigStartDate).(time.Time); ok {
+		formatting.startDate = startDate
+	}
+	if endDate, ok := runCtx.Value(pipeline.RunConfigEndDate).(time.Time); ok {
+		formatting.endDate = endDate
+	}
+	writeDirectRunPrelude(printer, pp.Pipeline, pp.Asset, formatting)
+	runCtx = context.WithValue(runCtx, bruinexecutor.KeyPrinter, printer)
+	runCtx = context.WithValue(runCtx, bruinexecutor.ContextLogger, zap.NewNop().Sugar())
+
+	seq := bruinexecutor.Sequential{TaskTypeMap: mainExecutors}
+	results := make([]*scheduler.TaskExecutionResult, 0, len(pending))
+	startedAt := time.Now()
+
+	for {
+		pending = s.GetTaskInstancesByStatus(scheduler.Pending)
+		if len(pending) == 0 {
+			break
+		}
+
+		progressed := false
+		for _, instance := range pending {
+			if instance.GetType() != scheduler.TaskInstanceTypeMain &&
+				instance.GetType() != scheduler.TaskInstanceTypeColumnCheck &&
+				instance.GetType() != scheduler.TaskInstanceTypeCustomCheck &&
+				instance.GetType() != scheduler.TaskInstanceTypeMetadataPush {
+				continue
+			}
+			if !allDirectRunPipelineDependenciesSucceeded(instance) {
+				continue
+			}
+
+			progressed = true
+			instance.MarkAs(scheduler.Running)
+			writeDirectRunLifecycle(printer, instance, nil, true, 0)
+			taskStartedAt := time.Now()
+			if err := seq.RunSingleTask(runCtx, instance); err != nil {
+				results = append(results, &scheduler.TaskExecutionResult{Instance: instance, Error: err})
+				writeDirectRunLifecycle(printer, instance, err, false, time.Since(taskStartedAt))
+				writeDirectRunSummary(printer, buildDirectRunSummary(results, time.Since(startedAt)))
+				return printer.buffer.Bytes(), err
+			}
+			instance.MarkAs(scheduler.Succeeded)
+			results = append(results, &scheduler.TaskExecutionResult{Instance: instance, Error: nil})
+			writeDirectRunLifecycle(printer, instance, nil, false, time.Since(taskStartedAt))
+		}
+
+		if !progressed {
+			writeDirectRunSummary(printer, buildDirectRunSummary(results, time.Since(startedAt)))
+			return printer.buffer.Bytes(), fmt.Errorf("direct run stalled: no runnable task instances remained")
+		}
+	}
+
+	writeDirectRunSummary(printer, buildDirectRunSummary(results, time.Since(startedAt)))
+	return printer.buffer.Bytes(), nil
+}
+
+func (e *HybridBruinExecutor) RunPipeline(ctx context.Context, req RunPipelineRequest, onChunk func([]byte)) ([]byte, error) {
+	if e.newPipelineBuilder == nil {
+		return nil, fmt.Errorf("direct pipeline run requires a pipeline builder")
+	}
+
+	resolvedTarget := resolveDirectPath(e.workspaceRoot, req.Target)
+	builder := e.newPipelineBuilder()
+	foundPipeline, err := builder.CreatePipelineFromPath(ctx, resolvedTarget, pipeline.WithMutate())
+	if err != nil {
+		return nil, err
+	}
+	if foundPipeline == nil {
+		return nil, fmt.Errorf("pipeline not found")
+	}
+	if shouldFallbackToCLIRunPipeline(foundPipeline) {
+		return nil, fmt.Errorf("direct pipeline run is not supported for one or more asset types")
+	}
+
+	repoRoot, err := git.FindRepoFromPath(resolvedTarget)
+	if err != nil {
+		return nil, fmt.Errorf("failed to find the git repository root: %w", err)
+	}
+	configPath := filepath.Join(repoRoot.Path, ".bruin.yml")
+	cfg, err := loadSelectedConfig(configPath, req.Environment)
+	if err != nil {
+		return nil, err
+	}
+
+	pp := &directPipelineInfo{Pipeline: foundPipeline, Config: cfg}
+	manager, err := e.directConnectionManager(ctx, cfg)
+	if err != nil {
+		return nil, err
+	}
+	runCtx, parser, cleanup, err := buildDirectRunAssetContext(ctx, pp)
+	if err != nil {
+		return nil, err
+	}
+	defer cleanup()
+	renderer, err := buildDirectRunAssetRenderer(pp)
+	if err != nil {
+		return nil, err
+	}
+	mainExecutors, err := buildDirectMainExecutors(manager, renderer, parser, foundPipeline)
+	if err != nil {
+		return nil, err
+	}
+
+	printer := &streamCaptureWriter{buffer: bytes.NewBuffer(nil), onChunk: onChunk}
+	formatting := directRunFormatting{}
+	if startDate, ok := runCtx.Value(pipeline.RunConfigStartDate).(time.Time); ok {
+		formatting.startDate = startDate
+	}
+	if endDate, ok := runCtx.Value(pipeline.RunConfigEndDate).(time.Time); ok {
+		formatting.endDate = endDate
+	}
+	writeDirectRunPrelude(printer, foundPipeline, nil, formatting)
+	runCtx = context.WithValue(runCtx, bruinexecutor.KeyPrinter, printer)
+	runCtx = context.WithValue(runCtx, bruinexecutor.ContextLogger, zap.NewNop().Sugar())
+
+	seq := bruinexecutor.Sequential{TaskTypeMap: mainExecutors}
+	s := scheduler.NewScheduler(zap.NewNop().Sugar(), foundPipeline, "renart-run")
+	s.MarkAll(scheduler.Pending)
+	results := make([]*scheduler.TaskExecutionResult, 0)
+	startedAt := time.Now()
+
+	for {
+		pending := s.GetTaskInstancesByStatus(scheduler.Pending)
+		if len(pending) == 0 {
+			break
+		}
+
+		progressed := false
+		for _, instance := range pending {
+			if instance.GetType() != scheduler.TaskInstanceTypeMain &&
+				instance.GetType() != scheduler.TaskInstanceTypeColumnCheck &&
+				instance.GetType() != scheduler.TaskInstanceTypeCustomCheck &&
+				instance.GetType() != scheduler.TaskInstanceTypeMetadataPush {
+				continue
+			}
+			if !allDirectRunPipelineDependenciesSucceeded(instance) {
+				continue
+			}
+
+			progressed = true
+			instance.MarkAs(scheduler.Running)
+			writeDirectRunLifecycle(printer, instance, nil, true, 0)
+			taskStartedAt := time.Now()
+			if err := seq.RunSingleTask(runCtx, instance); err != nil {
+				results = append(results, &scheduler.TaskExecutionResult{Instance: instance, Error: err})
+				writeDirectRunLifecycle(printer, instance, err, false, time.Since(taskStartedAt))
+				writeDirectRunSummary(printer, buildDirectRunSummary(results, time.Since(startedAt)))
+				return printer.buffer.Bytes(), err
+			}
+			instance.MarkAs(scheduler.Succeeded)
+			results = append(results, &scheduler.TaskExecutionResult{Instance: instance, Error: nil})
+			writeDirectRunLifecycle(printer, instance, nil, false, time.Since(taskStartedAt))
+		}
+
+		if !progressed {
+			writeDirectRunSummary(printer, buildDirectRunSummary(results, time.Since(startedAt)))
+			return printer.buffer.Bytes(), fmt.Errorf("direct run stalled: no runnable task instances remained")
+		}
+	}
+
+	writeDirectRunSummary(printer, buildDirectRunSummary(results, time.Since(startedAt)))
+	return printer.buffer.Bytes(), nil
+}
+
+func (e *HybridBruinExecutor) directConnectionManager(ctx context.Context, cfg *config.Config) (config.ConnectionAndDetailsGetter, error) {
+	if e.newConnectionManager != nil {
+		return e.newConnectionManager(ctx, cfg.SelectedEnvironmentName)
+	}
+
+	return newConnectionManagerFromConfig(ctx, cfg)
+}
+
+func shouldFallbackToCLIRunAsset(asset *pipeline.Asset, foundPipeline *pipeline.Pipeline) bool {
+	if asset == nil || foundPipeline == nil {
+		return true
+	}
+	if isDirectRunAssetTypeSupported(asset.Type) {
+		return false
+	}
+	_, known := bruinexecutor.DefaultExecutorsV2[asset.Type]
+	return !known
+}
+
+func shouldFallbackToCLIRunPipeline(foundPipeline *pipeline.Pipeline) bool {
+	if foundPipeline == nil {
+		return true
+	}
+	for _, asset := range foundPipeline.Assets {
+		if asset == nil {
+			return true
+		}
+		if shouldFallbackToCLIRunAsset(asset, foundPipeline) {
+			return true
+		}
+	}
+	return false
+}
+
+func isDirectRunAssetTypeSupported(assetType pipeline.AssetType) bool {
+	_, ok := directRunAssetTypes[assetType]
+	return ok
+}
+
+var directRunAssetTypes = map[pipeline.AssetType]struct{}{
+	pipeline.AssetTypeDuckDBQuery:             {},
+	pipeline.AssetTypeDuckDBSeed:              {},
+	pipeline.AssetTypeMotherduckQuery:         {},
+	pipeline.AssetTypePostgresQuery:           {},
+	pipeline.AssetTypePostgresSeed:            {},
+	pipeline.AssetTypeRedshiftQuery:           {},
+	pipeline.AssetTypeRedshiftSeed:            {},
+	pipeline.AssetTypeBigqueryQuery:           {},
+	pipeline.AssetTypeBigquerySeed:            {},
+	pipeline.AssetTypeAthenaQuery:             {},
+	pipeline.AssetTypeAthenaSeed:              {},
+	pipeline.AssetTypeDatabricksQuery:         {},
+	pipeline.AssetTypeDatabricksSeed:          {},
+	pipeline.AssetTypeFabricQuery:             {},
+	pipeline.AssetTypeFabricSeed:              {},
+	pipeline.AssetTypeFabricQueryLegacy:       {},
+	pipeline.AssetTypeFabricSeedLegacy:        {},
+	pipeline.AssetTypeMySQLQuery:              {},
+	pipeline.AssetTypeMySQLSeed:               {},
+	pipeline.AssetTypeSnowflakeQuery:          {},
+	pipeline.AssetTypeSnowflakeSeed:           {},
+	pipeline.AssetTypeMsSQLQuery:              {},
+	pipeline.AssetTypeMsSQLSeed:               {},
+	pipeline.AssetTypeSynapseQuery:            {},
+	pipeline.AssetTypeSynapseSeed:             {},
+	pipeline.AssetTypeClickHouse:              {},
+	pipeline.AssetTypeClickHouseSeed:          {},
+	pipeline.AssetTypeTrinoQuery:              {},
+	pipeline.AssetTypeVerticaQuery:            {},
+	pipeline.AssetTypeVerticaSeed:             {},
+	pipeline.AssetTypeOracleQuery:             {},
+	pipeline.AssetTypeBigqueryQuerySensor:     {},
+	pipeline.AssetTypeBigqueryTableSensor:     {},
+	pipeline.AssetTypePostgresQuerySensor:     {},
+	pipeline.AssetTypePostgresTableSensor:     {},
+	pipeline.AssetTypeRedshiftQuerySensor:     {},
+	pipeline.AssetTypeRedshiftTableSensor:     {},
+	pipeline.AssetTypeMySQLQuerySensor:        {},
+	pipeline.AssetTypeMySQLTableSensor:        {},
+	pipeline.AssetTypeClickHouseQuerySensor:   {},
+	pipeline.AssetTypeClickHouseTableSensor:   {},
+	pipeline.AssetTypeMsSQLQuerySensor:        {},
+	pipeline.AssetTypeMsSQLTableSensor:        {},
+	pipeline.AssetTypeFabricQuerySensor:       {},
+	pipeline.AssetTypeFabricQuerySensorLegacy: {},
+	pipeline.AssetTypeFabricTableSensor:       {},
+	pipeline.AssetTypeFabricTableSensorLegacy: {},
+	pipeline.AssetTypeDatabricksQuerySensor:   {},
+	pipeline.AssetTypeDatabricksTableSensor:   {},
+	pipeline.AssetTypeAthenaSQLSensor:         {},
+	pipeline.AssetTypeAthenaTableSensor:       {},
+	pipeline.AssetTypeDuckDBQuerySensor:       {},
+	pipeline.AssetTypeSynapseQuerySensor:      {},
+	pipeline.AssetTypeSynapseTableSensor:      {},
+	pipeline.AssetTypeSnowflakeQuerySensor:    {},
+	pipeline.AssetTypeSnowflakeTableSensor:    {},
+	pipeline.AssetTypeTrinoQuerySensor:        {},
+	pipeline.AssetTypeVerticaQuerySensor:      {},
+	pipeline.AssetTypeVerticaTableSensor:      {},
+	pipeline.AssetTypeS3KeySensor:             {},
+	pipeline.AssetTypePython:                  {},
+	pipeline.AssetTypeIngestr:                 {},
+}
+
+func allDirectRunPipelineDependenciesSucceeded(instance scheduler.TaskInstance) bool {
+	for _, upstream := range instance.GetUpstream() {
+		if upstream.GetStatus() != scheduler.Succeeded && upstream.GetStatus() != scheduler.Skipped {
+			return false
+		}
+	}
+	return true
+}
+
+func buildDirectRunAssetContext(ctx context.Context, pp *directPipelineInfo) (context.Context, *sqlparser.SQLParser, func(), error) {
+	now := time.Now().UTC()
+	yesterday := now.Add(-24 * time.Hour)
+	startDate := time.Date(yesterday.Year(), yesterday.Month(), yesterday.Day(), 0, 0, 0, 0, time.UTC)
+	endDate := time.Date(yesterday.Year(), yesterday.Month(), yesterday.Day(), 23, 59, 59, 0, time.UTC)
+
+	runCtx := context.WithValue(ctx, pipeline.RunConfigFullRefresh, false)
+	runCtx = context.WithValue(runCtx, pipeline.RunConfigStartDate, startDate)
+	runCtx = context.WithValue(runCtx, pipeline.RunConfigEndDate, endDate)
+	runCtx = context.WithValue(runCtx, pipeline.RunConfigExecutionDate, now)
+	runCtx = context.WithValue(runCtx, pipeline.RunConfigRunID, "renart-run")
+	runCtx = context.WithValue(runCtx, config.EnvironmentContextKey, pp.Config.SelectedEnvironment)
+	runCtx = context.WithValue(runCtx, config.EnvironmentNameContextKey, pp.Config.SelectedEnvironmentName)
+	runCtx = context.WithValue(runCtx, bruinexecutor.KeyIsDebug, false)
+	runCtx = context.WithValue(runCtx, bruinexecutor.KeyVerbose, false)
+	runCtx = context.WithValue(runCtx, config.SecretsBackendContextKey, "")
+
+	if pp.Config.SelectedEnvironment == nil || pp.Config.SelectedEnvironment.SchemaPrefix == "" {
+		return runCtx, nil, func() {}, nil
+	}
+
+	parser, err := sqlparser.NewSQLParser(false)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	if err := parser.Start(); err != nil {
+		parser.Close()
+		return nil, nil, nil, err
+	}
+
+	cleanup := func() {
+		parser.Close()
+	}
+
+	return runCtx, parser, cleanup, nil
+}
+
+func buildDirectRunAssetRenderer(pp *directPipelineInfo) (*jinja.Renderer, error) {
+	now := time.Now().UTC()
+	yesterday := now.Add(-24 * time.Hour)
+	startDate := time.Date(yesterday.Year(), yesterday.Month(), yesterday.Day(), 0, 0, 0, 0, time.UTC)
+	endDate := time.Date(yesterday.Year(), yesterday.Month(), yesterday.Day(), 23, 59, 59, 0, time.UTC)
+	macroContent, err := jinja.LoadMacros(afero.NewOsFs(), pp.Pipeline.MacrosPath)
+	if err != nil {
+		return nil, err
+	}
+
+	return jinja.NewRendererWithStartEndDatesAndMacros(&startDate, &endDate, &now, pp.Pipeline.Name, "renart-run", nil, macroContent), nil
+}

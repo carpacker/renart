@@ -2,24 +2,27 @@
 
 ## Overview
 
-Renart is the local-first browser UI for the Bruin CLI. It is not a standalone SaaS app and it is not backed by a Node.js server. The frontend is a static React application embedded into the Go Bruin binary and served by the Go HTTP server.
+Renart is the git-native data pipeline IDE for Bruin projects. It is not a standalone SaaS app and it is not backed by a Node.js server. The frontend is a static React application embedded into the Go Renart server and served by the Go HTTP server.
 
-The app is centered around an interactive lineage canvas, a resizable editor pane, live workspace updates from the filesystem, and direct manipulation of Bruin pipelines and assets.
+The app is centered around an interactive lineage canvas, a resizable editor pane, live workspace updates from the filesystem, and direct manipulation of version-controlled Bruin pipelines and assets.
 
 ## Current Stack
 
-- **Backend:** Go HTTP server in the main Bruin repo
-- **Frontend:** React 19 + TypeScript
+- **Backend:** Go HTTP server using Bruin packages for project parsing, config, execution, and persistence
+- **Frontend:** React 19.2 + TypeScript 5.9
 - **Routing:** TanStack Router
-- **Build Tool:** Vite via `rolldown-vite`
-- **Styling:** Tailwind CSS v4 + shadcn/ui + Radix primitives
+- **Build Tool:** Vite 8 via `rolldown-vite`
+- **Styling:** Tailwind CSS v4 + shadcn/ui + Radix primitives + Base UI where used
 - **Canvas / DAG:** React Flow
 - **Editor:** Monaco via `@monaco-editor/react`
-- **State:** Jotai
-- **Forms:** React Hook Form
+- **State:** Jotai plus SWR where hooks already use remote cache semantics
+- **Forms:** React Hook Form and TanStack Form where already adopted
 - **Charts:** Recharts
 - **Panels:** `react-resizable-panels`
 - **Tables:** `@tanstack/react-virtual`
+- **Command UI:** `cmdk`
+- **Icons:** `lucide-react` and `react-icons`
+- **Markdown:** `react-markdown`
 - **Realtime Sync:** Server-Sent Events (SSE)
 
 ## Runtime Model
@@ -164,17 +167,46 @@ Frontend code already calls these Go endpoints through [lib/api.ts](lib/api.ts):
 - `GET /api/workspace`
 - `GET /api/events`
 - `POST /api/pipelines`
+- `PUT /api/pipelines`
+- `GET /api/pipelines/:pipelineId/config`
+- `PUT /api/pipelines/:pipelineId/config`
 - `DELETE /api/pipelines/:pipelineId`
 - `POST /api/pipelines/:pipelineId/assets`
 - `PUT /api/pipelines/:pipelineId/assets/:assetId`
 - `DELETE /api/pipelines/:pipelineId/assets/:assetId`
+- `POST /api/assets/:assetId/format-sql`
 - `GET /api/assets/:assetId/inspect`
 - `POST /api/assets/:assetId/materialize/stream`
 - `GET /api/pipelines/:pipelineId/materialization`
+- `POST /api/pipelines/:pipelineId/materialize/stream`
+- `POST /api/run`
 - `GET /api/assets/freshness`
 - `GET /api/assets/:assetId/columns/infer`
 - `PUT /api/assets/:assetId/columns`
 - `POST /api/assets/:assetId/fill-columns-from-db`
+- `POST /api/assets/:assetId/render-jinja`
+- `GET /api/assets/:assetId/sql-path-suggestions`
+- `GET /api/config`
+- `POST /api/config/environments`
+- `PUT /api/config/environments`
+- `POST /api/config/environments/clone`
+- `DELETE /api/config/environments`
+- `POST /api/config/connections`
+- `PUT /api/config/connections`
+- `DELETE /api/config/connections`
+- `POST /api/config/connections/test`
+- `GET /api/ingestr/suggestions`
+- `POST /api/sql/parse-context`
+- `POST /api/sql/column-values`
+- `GET /api/sql/databases`
+- `GET /api/sql/tables`
+- `GET /api/sql/table-columns`
+- `GET /api/onboarding/state`
+- `PUT /api/onboarding/state`
+- `POST /api/onboarding/import`
+- `POST /api/onboarding/quickstart`
+- `POST /api/onboarding/discovery`
+- `GET /api/onboarding/path-suggestions`
 
 Do not introduce frontend assumptions that require a separate server runtime.
 
@@ -225,4 +257,4 @@ Relevant files:
 
 ## Summary
 
-Renart is currently a Vite-built, TanStack Router-based, SSE-driven React app embedded into the Go Bruin server. It is a visual pipeline editor first, not a form-over-CRUD dashboard. Any change should respect the filesystem-first model, Go-backed APIs, real-time SSE sync, and the established canvas/editor/results workflow.
+Renart is currently a Vite-built, TanStack Router-based, SSE-driven React app embedded into the Go Renart server. It is a git-native data pipeline IDE first, not a form-over-CRUD dashboard. Any change should respect the filesystem-first model, Go-backed APIs, real-time SSE sync, and the established canvas/editor/results workflow.

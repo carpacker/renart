@@ -3,6 +3,7 @@
 import { CircleAlert, CircleCheckBig, Clock3, LoaderCircle } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
+import { ScrollArea } from "@/components/ui/scroll-area";
 import { MaterializeHistoryEntry } from "@/lib/atoms/results";
 
 export function WorkspaceMaterializeHistoryList({
@@ -19,7 +20,7 @@ export function WorkspaceMaterializeHistoryList({
       <div className="border-b px-3 py-2 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
         History
       </div>
-      <div className="min-h-0 flex-1 overflow-auto p-2">
+      <ScrollArea className="min-h-0 flex-1" viewportClassName="p-2">
         {entries.length === 0 ? (
           <div className="flex h-full min-h-0 items-center justify-center rounded border border-dashed bg-background/70 px-3 text-center text-xs text-muted-foreground">
             No materialize runs yet.
@@ -64,7 +65,7 @@ export function WorkspaceMaterializeHistoryList({
             })}
           </div>
         )}
-      </div>
+      </ScrollArea>
     </div>
   );
 }

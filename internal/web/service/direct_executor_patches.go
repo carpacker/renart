@@ -8,7 +8,6 @@ import (
 
 	"github.com/bruin-data/bruin/pkg/git"
 	"github.com/bruin-data/bruin/pkg/jinja"
-	bruinpath "github.com/bruin-data/bruin/pkg/path"
 	"github.com/bruin-data/bruin/pkg/pipeline"
 	"github.com/bruin-data/bruin/pkg/sqlparser"
 	"github.com/spf13/afero"
@@ -31,23 +30,12 @@ func (e *HybridBruinExecutor) applyFillAssetDependencies(ctx context.Context, ta
 
 	if directPathReferencesAsset(targetPath) {
 		resolvedTargetPath := resolveDirectPath(e.workspaceRoot, targetPath)
-		pipelinePath, err := bruinpath.GetPipelineRootFromTask(resolvedTargetPath, BuilderConfig.PipelineFileName)
+		resolver := NewWorkspaceResolver(e.workspaceRoot, func(ctx context.Context, pipelinePath string) (*pipeline.Pipeline, error) {
+			return builder.CreatePipelineFromPath(ctx, pipelinePath, pipeline.WithMutate())
+		})
+		_, foundPipeline, asset, err := resolver.ResolveAssetByPath(ctx, "", resolvedTargetPath)
 		if err != nil {
-			return nil, fmt.Errorf("failed to find the pipeline this asset belongs to: %w", err)
-		}
-
-		foundPipeline, err := builder.CreatePipelineFromPath(ctx, pipelinePath, pipeline.WithMutate())
-		if err != nil {
-			return nil, fmt.Errorf("failed to build pipeline at '%s': %w", pipelinePath, err)
-		}
-
-		asset, err := builder.CreateAssetFromFile(resolvedTargetPath, foundPipeline)
-		if err != nil {
-			return nil, fmt.Errorf("failed to build asset from file '%s': %w", resolvedTargetPath, err)
-		}
-		asset, err = builder.MutateAsset(ctx, asset, foundPipeline)
-		if err != nil {
-			return nil, fmt.Errorf("failed to mutate asset '%s': %w", asset.Name, err)
+			return nil, err
 		}
 		if err := updateDirectAssetDependencies(ctx, asset, foundPipeline, sqlParserInstance, jinjaRenderer, fs); err != nil {
 			return nil, err

@@ -9,7 +9,6 @@ import (
 	"github.com/bruin-data/bruin/pkg/config"
 	"github.com/bruin-data/bruin/pkg/git"
 	"github.com/bruin-data/bruin/pkg/jinja"
-	bruinpath "github.com/bruin-data/bruin/pkg/path"
 	"github.com/bruin-data/bruin/pkg/pipeline"
 	"github.com/bruin-data/bruin/pkg/query"
 	"github.com/spf13/afero"
@@ -57,31 +56,22 @@ func getDirectPipelineAndAsset(ctx context.Context, workspaceRoot, inputPath str
 	if err != nil {
 		return nil, err
 	}
-	pipelinePath, err := bruinpath.GetPipelineRootFromTask(resolvedInputPath, BuilderConfig.PipelineFileName)
-	if err != nil {
-		return nil, err
-	}
 	configFilePath := filepath.Join(repoRoot.Path, ".bruin.yml")
 	cm, err := loadSelectedConfigFS(fs, configFilePath, "")
 	if err != nil {
 		return nil, err
 	}
-	builder := pipeline.NewBuilder(
-		BuilderConfig,
-		pipeline.CreateTaskFromYamlDefinition(fs),
-		pipeline.CreateTaskFromFileComments(fs),
-		fs,
-		DefaultGlossaryReader,
-	)
-	foundPipeline, err := builder.CreatePipelineFromPath(ctx, pipelinePath, pipeline.WithMutate())
-	if err != nil {
-		return nil, err
-	}
-	asset, err := builder.CreateAssetFromFile(resolvedInputPath, foundPipeline)
-	if err != nil {
-		return nil, err
-	}
-	asset, err = builder.MutateAsset(ctx, asset, foundPipeline)
+	resolver := NewWorkspaceResolver(workspaceRoot, func(ctx context.Context, pipelinePath string) (*pipeline.Pipeline, error) {
+		builder := pipeline.NewBuilder(
+			BuilderConfig,
+			pipeline.CreateTaskFromYamlDefinition(fs),
+			pipeline.CreateTaskFromFileComments(fs),
+			fs,
+			DefaultGlossaryReader,
+		)
+		return builder.CreatePipelineFromPath(ctx, pipelinePath, pipeline.WithMutate())
+	})
+	_, foundPipeline, asset, err := resolver.ResolveAssetByPath(ctx, "", resolvedInputPath)
 	if err != nil {
 		return nil, err
 	}

@@ -20,6 +20,7 @@ import {
   ChartTooltip,
   ChartTooltipContent,
 } from "@/components/ui/chart";
+import { ScrollArea } from "@/components/ui/scroll-area";
 import { VirtualDataTable } from "@/components/virtual-data-table";
 import {
   buildLineChartSpec,
@@ -56,7 +57,7 @@ export function AssetInspectView({
   if (view === "markdown") {
     const markdown = buildMarkdown(meta, rows);
     return (
-      <div className="relative h-full overflow-auto rounded border bg-background p-3 text-sm">
+      <ScrollArea className="relative h-full rounded border bg-background" viewportClassName="p-3 text-sm">
         <article className="max-w-none text-sm leading-6 text-foreground">
           <Suspense fallback={<div className="text-muted-foreground">Loading markdown...</div>}>
             <ReactMarkdown
@@ -88,9 +89,9 @@ export function AssetInspectView({
                   </code>
                 ),
                 pre: ({ children }) => (
-                  <pre className="mb-3 overflow-auto rounded border bg-muted/30 p-3 font-mono text-xs">
-                    {children}
-                  </pre>
+                  <ScrollArea className="mb-3 rounded border bg-muted/30" viewportClassName="p-3">
+                    <pre className="font-mono text-xs">{children}</pre>
+                  </ScrollArea>
                 ),
               }}
             >
@@ -99,7 +100,7 @@ export function AssetInspectView({
           </Suspense>
         </article>
         <InspectWarningBanner warning={warning} />
-      </div>
+      </ScrollArea>
     );
   }
 

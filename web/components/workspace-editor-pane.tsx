@@ -14,6 +14,7 @@ import { AssetEditorHeader } from "@/components/asset-editor-header";
 import { AssetEditorVisualizationTab } from "@/components/asset-editor-visualization-tab";
 import { WorkspaceEditorFooter } from "@/components/workspace-editor-footer";
 import { Label } from "@/components/ui/label";
+import { ScrollArea } from "@/components/ui/scroll-area";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
 import { useSQLIntellisense } from "@/hooks/use-sql-intellisense";
@@ -238,7 +239,7 @@ export function WorkspaceEditorPane({
             onMount={handleEditorMount}
           />
 
-          <div className="flex min-h-0 overflow-y-auto overflow-x-hidden min-w-0 flex-1 flex-col p-4">
+          <ScrollArea className="min-h-0 min-w-0 flex-1" viewportClassName="p-4">
             <Tabs
               className="flex min-w-0 flex-1 flex-col"
               onValueChange={(value) =>
@@ -321,21 +322,21 @@ export function WorkspaceEditorPane({
                     onSaveVisualizationSettings={onSaveVisualizationSettings}
                   />
                 </TabsContent>
-              </Tabs>
+            </Tabs>
 
-              <div className="mt-3">
-                <WorkspaceEditorFooter
-                  asset={asset}
-                  assetInspectColumns={assetInspectColumns}
-                  debugResolvedUpstreamTables={debugResolvedUpstreamTables}
-                  declaredColumnNames={declaredColumnNames}
-                  mergedColumnNames={mergedColumnNames}
-                  schemaSuggestionTables={schemaSuggestionTables}
-                  schemaTablesCount={schemaTables.length}
-                />
-              </div>
+            <div className="mt-3">
+              <WorkspaceEditorFooter
+                asset={asset}
+                assetInspectColumns={assetInspectColumns}
+                debugResolvedUpstreamTables={debugResolvedUpstreamTables}
+                declaredColumnNames={declaredColumnNames}
+                mergedColumnNames={mergedColumnNames}
+                schemaSuggestionTables={schemaSuggestionTables}
+                schemaTablesCount={schemaTables.length}
+              />
             </div>
-          </div>
+          </ScrollArea>
+        </div>
         </div>
     </div>
   );

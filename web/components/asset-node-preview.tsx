@@ -3,6 +3,7 @@ import { createPortal } from "react-dom";
 import { AlertTriangle, Loader2 } from "lucide-react";
 
 import { Alert, AlertTitle, AlertDescription } from "@/components/ui/alert";
+import { ScrollArea } from "@/components/ui/scroll-area";
 import {
   Bar,
   BarChart,
@@ -280,6 +281,7 @@ function TablePreview({
         onLoadMore={onLoadMore}
         autoLoadMore
         scrollKey={`asset-preview:${assetId}`}
+        onWheelCapture={stopPreviewScrollPropagation}
       />
     </div>
   );
@@ -287,7 +289,7 @@ function TablePreview({
 
 function MarkdownPreview({ markdown }: { markdown: string }) {
   return (
-    <div className="max-h-56 overflow-auto rounded border bg-background p-2">
+    <ScrollArea className="max-h-56 rounded border bg-background" viewportClassName="max-h-56 p-2">
       <article className="max-w-none text-xs leading-5 text-foreground">
         <Suspense fallback={<div className="text-muted-foreground">Loading preview...</div>}>
           <ReactMarkdown
@@ -309,22 +311,10 @@ function MarkdownPreview({ markdown }: { markdown: string }) {
           </ReactMarkdown>
         </Suspense>
       </article>
-    </div>
+    </ScrollArea>
   );
 }
 
 function stopPreviewScrollPropagation(event: WheelEvent<HTMLDivElement>) {
-  const element = event.currentTarget;
-  const canScrollVertically = element.scrollHeight > element.clientHeight + 1;
-  const canScrollHorizontally = element.scrollWidth > element.clientWidth + 1;
-
-  const wantsVerticalScroll = Math.abs(event.deltaY) >= Math.abs(event.deltaX);
-  const wantsHorizontalScroll = !wantsVerticalScroll && event.deltaX !== 0;
-
-  if (
-    (wantsVerticalScroll && canScrollVertically) ||
-    (wantsHorizontalScroll && canScrollHorizontally)
-  ) {
-    event.stopPropagation();
-  }
+  event.stopPropagation();
 }
