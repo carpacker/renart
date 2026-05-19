@@ -18,5 +18,12 @@
 		Referrer-Policy strict-origin-when-cross-origin
 	}
 
+	# Runtime tracking injection for static HTML.
+	# Set RENART_TRACKING_HEAD to raw HTML such as analytics <script> tags.
+	# For build-time injection instead, set PUBLIC_RENART_TRACKING_HEAD before `astro build`.
+	templates {
+		mime text/html
+	}
+
 	file_server
 }
