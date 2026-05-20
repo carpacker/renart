@@ -16,7 +16,7 @@ import (
 	"github.com/spf13/afero"
 )
 
-func updateDirectAssetDependencies(ctx context.Context, asset *pipeline.Asset, p *pipeline.Pipeline, sp *sqlparser.SQLParser, renderer *jinja.Renderer, fs afero.Fs) error {
+func updateDirectAssetDependencies(ctx context.Context, asset *pipeline.Asset, p *pipeline.Pipeline, sp sqlparser.Parser, renderer *jinja.Renderer, fs afero.Fs) error {
 	if asset == nil || p == nil {
 		return fmt.Errorf("pipeline and asset are required to update direct asset dependencies")
 	}

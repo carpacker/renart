@@ -16,6 +16,11 @@ export function defineBruinMonacoThemes(monaco: Monaco) {
       { token: "table", foreground: "0f766e" },
       { token: "column", foreground: "1d4ed8" },
       { token: "alias", foreground: "7c3aed" },
+      { token: "schedule.preset", foreground: "7c3aed", fontStyle: "bold" },
+      { token: "schedule.number", foreground: "1d4ed8" },
+      { token: "schedule.wildcard", foreground: "0f766e", fontStyle: "bold" },
+      { token: "schedule.operator", foreground: "7c5a2a" },
+      { token: "schedule.invalid", foreground: "dc2626" },
     ],
     colors: {},
     semanticTokenColors: {
@@ -35,6 +40,11 @@ export function defineBruinMonacoThemes(monaco: Monaco) {
       { token: "table", foreground: "74cfc5" },
       { token: "column", foreground: "93c5fd" },
       { token: "alias", foreground: "c4b5fd" },
+      { token: "schedule.preset", foreground: "c4b5fd", fontStyle: "bold" },
+      { token: "schedule.number", foreground: "93c5fd" },
+      { token: "schedule.wildcard", foreground: "74cfc5", fontStyle: "bold" },
+      { token: "schedule.operator", foreground: "d6b36d" },
+      { token: "schedule.invalid", foreground: "f87171" },
     ],
     colors: {},
     semanticTokenColors: {

@@ -762,18 +762,18 @@ func (s *ExecutionService) GetPipelineMaterialization(ctx context.Context, pipel
 	return PipelineMaterializationResponse{PipelineID: pipelineID, Assets: assets}, nil
 }
 
-func (s *ExecutionService) MaterializePipelineStream(ctx context.Context, pipelineID, environment string, onChunk func([]byte)) MaterializeResult {
+func (s *ExecutionService) MaterializePipelineStream(ctx context.Context, pipelineID, environment string, dryRun bool, onChunk func([]byte)) MaterializeResult {
 	target, err := ResolvePipelineRunTarget(pipelineID)
 	if err != nil {
 		return MaterializeResult{Status: "error", Error: "invalid pipeline id", ExitCode: 1}
 	}
 
 	operation := runOperation(target, pipelineID, "", environment)
-	output, runErr := s.deps.Executor.RunPipeline(ctx, RunPipelineRequest{Target: target, Environment: environment}, onChunk)
+	output, runErr := s.deps.Executor.RunPipeline(ctx, RunPipelineRequest{Target: target, Environment: environment, DryRun: dryRun}, onChunk)
 
 	changedAssetIDs := make([]string, 0)
 	var materializedAt *time.Time
-	if runErr == nil {
+	if runErr == nil && !dryRun {
 		now := time.Now().UTC()
 		materializedAt = &now
 		for _, currentPipeline := range s.deps.CurrentPipelines() {

@@ -248,14 +248,14 @@ export function WorkspacePage() {
     defaultSeedAssetType,
   });
 
-  const handleRunPipeline = () => {
+  const handleRunPipeline = (options?: { dryRun?: boolean }) => {
     if (!pipeline || assetResults.materializeLoading) {
       return;
     }
 
     void assetResults.runMaterializePipeline(pipeline.id, async () => {
       await refreshPipelineMaterialization(pipeline.id).catch(() => undefined);
-    });
+    }, options);
   };
 
   const quickstartAssets = useMemo(() => {

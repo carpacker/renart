@@ -138,6 +138,11 @@ func MergeExecutableContent(currentFileContent, executableContent string) string
 	return header + sep + strings.TrimLeft(executableContent, "\r\n")
 }
 
+func normalizeExecutableContent(content string) string {
+	normalized := strings.ReplaceAll(content, "\r\n", "\n")
+	return strings.TrimRight(normalized, "\n")
+}
+
 // DefaultAssetContent generates default content for a new asset.
 func DefaultAssetContent(assetName, assetType, assetPath string) string {
 	if strings.HasSuffix(strings.ToLower(strings.TrimSpace(assetType)), ".seed") {

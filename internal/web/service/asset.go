@@ -220,10 +220,12 @@ func (s *AssetService) Update(ctx context.Context, assetID string, req AssetUpda
 		return AssetMutationResponse{}, newServiceAPIError(500, "asset_read_failed", err.Error())
 	}
 	originalHadExplicitName := assetContentHasExplicitName(string(originalBytes))
-	desiredExecutable := ExtractExecutableContent(string(originalBytes))
+	originalExecutable := ExtractExecutableContent(string(originalBytes))
+	desiredExecutable := originalExecutable
 	if req.Content != nil {
 		desiredExecutable = *req.Content
 	}
+	executableChanged := req.Content != nil && normalizeExecutableContent(desiredExecutable) != normalizeExecutableContent(originalExecutable)
 
 	changedAssetIDs := []string{assetID}
 	changedAssetPaths := []string{filepath.ToSlash(relAssetPath)}
@@ -309,11 +311,14 @@ func (s *AssetService) Update(ctx context.Context, assetID string, req AssetUpda
 		return AssetMutationResponse{}, newServiceAPIError(500, "asset_write_failed", err.Error())
 	}
 
-	if req.Content != nil && strings.HasSuffix(strings.ToLower(relAssetPath), ".sql") {
+	shouldReconcileDependencies := strings.HasSuffix(strings.ToLower(relAssetPath), ".sql") && (executableChanged || req.Upstreams != nil)
+	if shouldReconcileDependencies {
 		if err := s.reconcileSQLAssetDependencies(ctx, relAssetPath); err != nil {
 			return AssetMutationResponse{}, newServiceAPIError(500, "asset_dependency_reconcile_failed", err.Error())
 		}
-		s.ScheduleSQLPatches(relAssetPath)
+		if executableChanged {
+			s.ScheduleSQLPatches(relAssetPath)
+		}
 	}
 	if inferredRenameRelAssetPath != "" && inferredRenameRelAssetPath != filepath.ToSlash(relAssetPath) {
 		newAbsAssetPath, pathErr := s.resolver().JoinPath(inferredRenameRelAssetPath)

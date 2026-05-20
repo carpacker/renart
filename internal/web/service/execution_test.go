@@ -203,7 +203,7 @@ func TestExecutionServiceMaterializePipelineStreamPreservesSuccessOutput(t *test
 		},
 	})
 
-	result := svc.MaterializePipelineStream(context.Background(), pipelineID, "", func(chunk []byte) {
+	result := svc.MaterializePipelineStream(context.Background(), pipelineID, "", false, func(chunk []byte) {
 		streamed = append(streamed, string(chunk))
 	})
 
@@ -247,13 +247,45 @@ func TestExecutionServiceMaterializePipelineStreamPreservesFailureOutput(t *test
 		},
 	})
 
-	result := svc.MaterializePipelineStream(context.Background(), pipelineID, "", nil)
+	result := svc.MaterializePipelineStream(context.Background(), pipelineID, "", false, nil)
 
 	require.Len(t, executor.runPipelineReqs, 1)
 	assert.Equal(t, "error", result.Status)
 	assert.Equal(t, "pipeline failed during direct execution\n", result.Output)
 	assert.Equal(t, "pipeline failed", result.Error)
 	assert.Equal(t, 1, result.ExitCode)
+	assert.Empty(t, result.ChangedAssetIDs)
+	assert.Nil(t, result.MaterializedAt)
+	assert.False(t, recorded)
+}
+
+func TestExecutionServiceMaterializePipelineStreamDryRunDoesNotRecordMaterialization(t *testing.T) {
+	t.Parallel()
+
+	pipelineID := EncodeID("pipelines/orders/pipeline.yml")
+	executor := &stubExecutionExecutor{
+		runPipelineOutput: []byte("dry run complete\n"),
+	}
+	recorded := false
+
+	svc := NewExecutionService(ExecutionDependencies{
+		Executor: executor,
+		CurrentPipelines: func() []PipelineView {
+			return []PipelineView{{
+				ID:     pipelineID,
+				Assets: []AssetView{{ID: "asset-1", Name: "analytics.orders"}},
+			}}
+		},
+		RecordMaterialization: func(string, time.Time, string) {
+			recorded = true
+		},
+	})
+
+	result := svc.MaterializePipelineStream(context.Background(), pipelineID, "", true, nil)
+
+	require.Len(t, executor.runPipelineReqs, 1)
+	assert.True(t, executor.runPipelineReqs[0].DryRun)
+	assert.Equal(t, "ok", result.Status)
 	assert.Empty(t, result.ChangedAssetIDs)
 	assert.Nil(t, result.MaterializedAt)
 	assert.False(t, recorded)

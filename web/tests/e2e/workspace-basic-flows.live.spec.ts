@@ -1,4 +1,4 @@
-import { readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { expect } from "@playwright/test";
 
@@ -56,6 +56,27 @@ test.describe("workspace live basic flows", () => {
     ).toBeVisible();
   });
 
+  test("does not refetch onboarding state when switching selected assets", async ({
+    liveApp,
+    page,
+  }) => {
+    test.skip(test.info().project.name.includes("mobile"), "Desktop sidebar navigation coverage.");
+
+    let onboardingStateRequests = 0;
+    page.on("request", (request) => {
+      if (request.url().includes("/api/onboarding/state")) {
+        onboardingStateRequests += 1;
+      }
+    });
+
+    await page.goto(`${liveApp.baseURL}/?pipeline=YW5hbHl0aWNz&asset=YW5hbHl0aWNzL2Fzc2V0cy9hbmFseXRpY3MvY3VzdG9tZXJzLnNxbA`);
+    await expect(page).toHaveTitle("analytics.customers · analytics · Renart");
+    await page.getByRole("link", { name: "orders", exact: true }).click();
+    await expect(page).toHaveTitle("analytics.orders · analytics · Renart");
+
+    expect(onboardingStateRequests).toBeLessThanOrEqual(1);
+  });
+
   test("runs inspect for the selected asset", async ({ liveApp, page }) => {
     await page.goto(`${liveApp.baseURL}/`);
 
@@ -76,6 +97,45 @@ test.describe("workspace live basic flows", () => {
       page.getByRole("columnheader", { name: "customer_id", exact: true })
     ).toBeVisible();
     await expect(page.getByRole("cell", { name: "Ada", exact: true })).toBeVisible();
+  });
+
+  test("inspects DuckDB struct and array values as JSON", async ({
+    liveApp,
+    page,
+  }) => {
+    test.skip(test.info().project.name.includes("mobile"), "Desktop inspect table coverage.");
+
+    const assetPath = "analytics/assets/analytics/complex_types.sql";
+    await writeFile(
+      join(liveApp.workspaceDir, assetPath),
+      `/* @bruin
+name: analytics.complex_types
+type: duckdb.sql
+materialization:
+  type: view
+@bruin */
+
+select struct(test := 1) a, array(1,2,4) b, array(struct(test := 1), struct(test := 1)) c
+`,
+      "utf8"
+    );
+
+    await page.goto(`${liveApp.baseURL}/?pipeline=${encodeRouteId("analytics/pipeline.yml")}&asset=${encodeRouteId(assetPath)}`);
+    await expect(page.getByTestId("editor-asset-name")).toHaveText("analytics.complex_types", {
+      timeout: 15000,
+    });
+
+    await page.getByRole("button", { name: /Inspect/ }).click();
+
+    await expect(page.getByText("1 rows", { exact: true })).toBeVisible({
+      timeout: 15000,
+    });
+    await expect(page.getByRole("columnheader", { name: "a", exact: true })).toBeVisible();
+    await expect(page.getByRole("columnheader", { name: "b", exact: true })).toBeVisible();
+    await expect(page.getByRole("columnheader", { name: "c", exact: true })).toBeVisible();
+    await expect(page.getByRole("cell", { name: '{"test":1}', exact: true })).toBeVisible();
+    await expect(page.getByRole("cell", { name: "[1,2,4]", exact: true })).toBeVisible();
+    await expect(page.getByRole("cell", { name: '[{"test":1},{"test":1}]', exact: true })).toBeVisible();
   });
 
   test("loads a Bruin seed asset and keeps its YAML definition editable", async ({
@@ -399,10 +459,12 @@ test.describe("workspace live basic flows", () => {
     try {
       await page.goto(`${liveApp.baseURL}/?pipeline=YW5hbHl0aWNz&asset=YW5hbHl0aWNzL2Fzc2V0cy9hbmFseXRpY3MvY3VzdG9tZXJzLnNxbA`);
 
-      await page
-        .getByRole("link", { name: "analytics", exact: true })
-        .click({ button: "right" });
-      await page.getByRole("menuitem", { name: "Pipeline Settings" }).click();
+      const pipelineSettingsItem = page.getByRole("button", {
+        name: "Pipeline settings",
+        exact: true,
+      });
+      await expect(pipelineSettingsItem).toBeVisible();
+      await pipelineSettingsItem.click();
 
       const dialog = page.getByRole("dialog");
       await expect(dialog.getByText("No unsaved changes")).toBeVisible();
@@ -426,10 +488,28 @@ test.describe("workspace live basic flows", () => {
       expect(updatedContent).toContain("rerun_cooldown: 120");
 
       await dialog.getByRole("button", { name: "Close", exact: true }).click();
+      await expect(dialog).toHaveCount(0);
       await expect(page).toHaveURL(/\/?pipeline=YW5hbHl0aWNz/);
     } finally {
       await writeFile(pipelinePath, originalContent, "utf8");
     }
+  });
+
+  test("closes pipeline settings from the section index instead of redirecting to general", async ({
+    liveApp,
+    page,
+  }) => {
+    test.skip(test.info().project.name.includes("mobile"), "Desktop route redirect coverage.");
+
+    await page.goto(`${liveApp.baseURL}/pipelines/YW5hbHl0aWNz/config?pipeline=YW5hbHl0aWNz&asset=YW5hbHl0aWNzL2Fzc2V0cy9hbmFseXRpY3MvY3VzdG9tZXJzLnNxbA`);
+
+    const dialog = page.getByRole("dialog");
+    await expect(dialog).toBeVisible();
+    await dialog.getByRole("button", { name: "Close", exact: true }).click();
+
+    await expect(dialog).toHaveCount(0);
+    await expect(page).not.toHaveURL(/\/pipelines\/[^/]+\/config\/general/);
+    await expect(page).toHaveURL(/\/?pipeline=YW5hbHl0aWNz/);
   });
 
   test("materializes the selected asset and records a history entry", async ({
@@ -674,6 +754,82 @@ test.describe("workspace live basic flows", () => {
       await expect(
         page.getByRole("link", { name: "experiments_renamed", exact: true })
       ).toHaveCount(0);
+    });
+  });
+
+  test.describe("postgres live flows", () => {
+    test.use({ fixtureName: "empty-workspace-postgres" });
+
+    test("dry-runs a postgres pipeline without materializing it", async ({
+      liveApp,
+      livePostgres,
+      page,
+    }) => {
+      test.skip(test.info().project.name.includes("mobile"), "Desktop run options coverage.");
+      if (!livePostgres) {
+        throw new Error("Expected live Postgres fixture to be available.");
+      }
+
+      await mkdir(join(liveApp.workspaceDir, "analytics/assets/analytics"), {
+        recursive: true,
+      });
+      await writeFile(
+        join(liveApp.workspaceDir, ".bruin.yml"),
+        `default_environment: default
+environments:
+  default:
+    connections:
+      postgres:
+        - name: postgres-default
+          host: ${livePostgres.host}
+          port: ${livePostgres.port}
+          database: ${livePostgres.database}
+          username: ${livePostgres.user}
+          password: ${livePostgres.password}
+          ssl_mode: disable
+`,
+        "utf8"
+      );
+      await writeFile(
+        join(liveApp.workspaceDir, ".renart-onboarding.json"),
+        JSON.stringify({ active: false, step: "complete" }),
+        "utf8"
+      );
+      await writeFile(
+        join(liveApp.workspaceDir, "analytics/pipeline.yml"),
+        `name: analytics
+default_connections:
+  postgres: postgres-default
+`,
+        "utf8"
+      );
+      await writeFile(
+        join(liveApp.workspaceDir, "analytics/assets/analytics/orders.sql"),
+        `/* @bruin
+name: analytics.orders
+type: pg.sql
+materialization:
+  type: table
+@bruin */
+
+select order_id, order_total from analytics.orders
+`,
+        "utf8"
+      );
+
+      await page.goto(`${liveApp.baseURL}/?pipeline=${encodeRouteId("analytics/pipeline.yml")}`);
+      await expect(page).toHaveTitle(/analytics · Renart$/, { timeout: 15000 });
+      await page.getByRole("tab", { name: "Materialize" }).click();
+      await page.getByRole("button", { name: "Pipeline run options" }).click();
+      await page.getByRole("menuitem", { name: "Dry run" }).click();
+
+      await expect(page.getByText("Dry run: analytics", { exact: true })).toBeVisible({
+        timeout: 30000,
+      });
+      await expect(page.getByText(/Successfully validated 1 assets across 1 pipeline/)).toBeVisible({
+        timeout: 30000,
+      });
+      await expect(page.getByText(/Materialization failed/)).toHaveCount(0);
     });
   });
 });

@@ -13,6 +13,7 @@ import {
   Moon,
   Pencil,
   Play,
+  Rows3,
   TableProperties,
   Settings2,
   Sun,
@@ -65,7 +66,7 @@ type Props = {
   canDeletePipeline: boolean;
   deletePipelineLoading: boolean;
   renamePipelineLoading: boolean;
-  onRunPipeline: (pipelineId: string) => void;
+  onRunPipeline: (pipelineId: string, options?: { dryRun?: boolean }) => void;
   canRunPipeline: boolean;
   runPipelineLoading: boolean;
 };
@@ -114,6 +115,11 @@ export function WorkspaceSidebar({
   const handleCreatePipeline = () => {
     closeSidebarAfterNavigation();
     onCreatePipeline();
+  };
+
+  const handleOpenPipelineSettings = (pipelineId: string) => {
+    closeSidebarAfterNavigation();
+    onOpenPipelineSettings(pipelineId);
   };
 
   useEffect(() => {
@@ -289,7 +295,7 @@ export function WorkspaceSidebar({
         </SidebarGroup>
 
         <SidebarGroup>
-          <SidebarGroupLabel>Workspace</SidebarGroupLabel>
+          <SidebarGroupLabel>Pipelines</SidebarGroupLabel>
           <SidebarGroupContent>
             <SidebarMenu>
               {workspace?.pipelines.map((item) => {
@@ -346,7 +352,7 @@ export function WorkspaceSidebar({
                         <ContextMenuItem disabled>{item.name}</ContextMenuItem>
                         <ContextMenuSeparator />
                         <ContextMenuItem
-                          onClick={() => onOpenPipelineSettings(item.id)}
+                          onClick={() => handleOpenPipelineSettings(item.id)}
                         >
                           <Settings2 />
                           Pipeline Settings
@@ -371,6 +377,13 @@ export function WorkspaceSidebar({
                           />
                           Run Pipeline
                         </ContextMenuItem>
+                        <ContextMenuItem
+                          disabled={!canRunPipeline || runPipelineLoading}
+                          onClick={() => onRunPipeline(item.id, { dryRun: true })}
+                        >
+                          <Rows3 />
+                          Dry Run Pipeline
+                        </ContextMenuItem>
                         <ContextMenuSeparator />
                         <ContextMenuItem
                           variant="destructive"
@@ -383,8 +396,20 @@ export function WorkspaceSidebar({
                       </ContextMenuContent>
                     </ContextMenu>
 
-                    {isExpanded && (
-                      <SidebarMenuSub>
+                    <SidebarMenuSub>
+                      <SidebarMenuSubItem>
+                        <SidebarMenuSubButton asChild size="sm">
+                          <button
+                            type="button"
+                            onClick={() => handleOpenPipelineSettings(item.id)}
+                          >
+                            <Settings2 className="size-3.5 text-muted-foreground" />
+                            <span>Pipeline settings</span>
+                          </button>
+                        </SidebarMenuSubButton>
+                      </SidebarMenuSubItem>
+                      {isExpanded && (
+                        <>
                         {(pipelineAssetGroups[item.id] ?? []).map((group) => {
                           const groupKey = `${item.id}:${group.prefix}`;
                           const isGroupExpanded = !collapsedAssetGroups.has(groupKey);
@@ -454,8 +479,9 @@ export function WorkspaceSidebar({
                             </SidebarMenuSubItem>
                           );
                         })}
-                      </SidebarMenuSub>
-                    )}
+                        </>
+                      )}
+                    </SidebarMenuSub>
                   </SidebarMenuItem>
                 );
               })}

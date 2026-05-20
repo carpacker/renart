@@ -33,7 +33,14 @@ import {
 } from "react";
 
 import { useIsMobile } from "@/hooks/use-mobile";
+import { useWorkspaceTheme } from "@/hooks/use-workspace-theme";
 import { getPipelineConfig, updatePipelineConfig } from "@/lib/api-pipelines";
+import {
+  getPipelineScheduleCompletionItems,
+  isValidPipelineSchedule,
+  PIPELINE_SCHEDULE_LANGUAGE,
+  registerPipelineScheduleLanguage,
+} from "@/lib/pipeline-yaml-intellisense";
 import type {
   PipelineConfigConnection,
   PipelineConfigNotification,
@@ -64,6 +71,7 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { MonacoSingleLineInput } from "@/components/ui/monaco-single-line-input";
 import { Separator } from "@/components/ui/separator";
 import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
@@ -145,11 +153,15 @@ export function WorkspacePipelineConfigDialogLayout({
   const [draft, setDraftState] = useState<EditablePipelineConfig | null>(null);
   const [yamlPreview, setYamlPreview] = useState("");
   const mountedRef = useRef(false);
+  const closingRef = useRef(false);
 
   const currentSection = getCurrentSectionFromPath(pathname);
   const isSectionListPage = currentSection === null;
 
   useEffect(() => {
+    if (closingRef.current) {
+      return;
+    }
     if (mountedRef.current && isMobile) {
       return;
     }
@@ -213,6 +225,7 @@ export function WorkspacePipelineConfigDialogLayout({
   }, [draft, originalConfig]);
 
   const closeDialog = () => {
+    closingRef.current = true;
     void navigate({
       to: "/",
       search: {
@@ -342,7 +355,7 @@ export function WorkspacePipelineConfigDialogLayout({
   return (
     <WorkspacePipelineConfigContext.Provider value={contextValue}>
       <Dialog open onOpenChange={(open) => !open && closeDialog()}>
-        <DialogContent className="left-0 top-0 h-dvh w-screen max-w-none translate-x-0 translate-y-0 overflow-hidden rounded-none border-0 p-0 md:left-1/2 md:top-1/2 md:h-auto md:max-h-[88vh] md:min-h-[680px] md:w-full md:max-w-6xl md:-translate-x-1/2 md:-translate-y-1/2 md:rounded-lg md:border">
+        <DialogContent className="left-0 top-0 flex h-dvh w-screen max-w-none translate-x-0 translate-y-0 flex-col overflow-hidden rounded-none border-0 p-0 md:left-1/2 md:top-1/2 md:h-auto md:max-h-[88vh] md:min-h-[680px] md:w-full md:max-w-6xl md:-translate-x-1/2 md:-translate-y-1/2 md:rounded-lg md:border">
           <DialogHeader className="border-b px-4 py-4 md:px-6 md:py-5">
             <div className="flex items-center gap-3 pr-2 sm:pr-8">
               {leftHeaderAction}
@@ -382,7 +395,7 @@ export function WorkspacePipelineConfigDialogLayout({
           </DialogHeader>
 
           <div className="flex min-h-0 flex-1 overflow-hidden">
-            <aside className="hidden w-48 shrink-0 border-r bg-muted/20 p-3 md:block">
+            <aside className="hidden w-48 shrink-0 self-stretch border-r bg-muted/20 p-3 md:block">
               <nav className="space-y-1">
                 {SECTION_ORDER.map((item) => (
                   <Button
@@ -399,6 +412,18 @@ export function WorkspacePipelineConfigDialogLayout({
             </aside>
 
             <div className="min-h-0 min-w-0 flex-1 overflow-auto px-4 py-4 md:px-6 md:py-5">
+              {error || saveMessage ? (
+                <div className="mb-4 flex min-h-5 items-center gap-2 text-sm text-muted-foreground">
+                  {error ? (
+                    <>
+                      <AlertCircle className="size-4 text-destructive" />
+                      <span className="text-destructive">{error}</span>
+                    </>
+                  ) : saveMessage ? (
+                    <span>{saveMessage}</span>
+                  ) : null}
+                </div>
+              ) : null}
               {loading ? (
                 <div className="flex items-center gap-2 text-sm text-muted-foreground">
                   <Loader2 className="size-4 animate-spin" />
@@ -407,19 +432,6 @@ export function WorkspacePipelineConfigDialogLayout({
               ) : (
                 children
               )}
-            </div>
-          </div>
-
-          <div className="mt-4 flex items-center justify-end gap-2 border-t px-4 py-4 md:px-6">
-            <div className="flex min-h-5 items-center gap-2 text-sm text-muted-foreground">
-              {error ? (
-                <>
-                  <AlertCircle className="size-4 text-destructive" />
-                  <span className="text-destructive">{error}</span>
-                </>
-              ) : saveMessage ? (
-                <span>{saveMessage}</span>
-              ) : null}
             </div>
           </div>
         </DialogContent>
@@ -467,6 +479,7 @@ export function WorkspacePipelineConfigSectionPage({
 }) {
   const { copying, draft, handleCopyYaml, setDraft, yamlPreview } =
     useWorkspacePipelineConfig();
+  const { monacoTheme } = useWorkspaceTheme();
 
   if (!draft) {
     return <div className="text-sm text-muted-foreground">Pipeline not found.</div>;
@@ -476,6 +489,7 @@ export function WorkspacePipelineConfigSectionPage({
     <PipelineConfigSection
       section={section}
       draft={draft}
+      monacoTheme={monacoTheme}
       yamlPreview={yamlPreview}
       copying={copying}
       onCopyYaml={() => {
@@ -541,6 +555,7 @@ function ResponsiveActionButton({
 function PipelineConfigSection({
   section,
   draft,
+  monacoTheme,
   yamlPreview,
   copying,
   onCopyYaml,
@@ -548,11 +563,14 @@ function PipelineConfigSection({
 }: {
   section: SectionName;
   draft: EditablePipelineConfig;
+  monacoTheme: string;
   yamlPreview: string;
   copying: boolean;
   onCopyYaml: () => void;
   onChange: (next: EditablePipelineConfig) => void;
 }) {
+  const scheduleInvalid = !isValidPipelineSchedule(draft.schedule);
+
   if (section === "General") {
     return (
       <div className="space-y-6">
@@ -573,13 +591,38 @@ function PipelineConfigSection({
               onChange={(event) => onChange({ ...draft, owner: event.target.value })}
             />
           </LabeledField>
-          <LabeledField label="Schedule">
-            <Input
+          <LabeledField
+            label="Schedule"
+            description={
+              scheduleInvalid
+                ? "Use @daily, @hourly, or a five-field cron expression."
+                : undefined
+            }
+          >
+            <MonacoSingleLineInput
               value={draft.schedule}
-              onChange={(event) =>
-                onChange({ ...draft, schedule: event.target.value })
-              }
+              onChange={(schedule) => onChange({ ...draft, schedule })}
+              aria-invalid={scheduleInvalid}
               placeholder="@daily"
+              language={PIPELINE_SCHEDULE_LANGUAGE}
+              path="renart-pipeline-schedule.schedule"
+              theme={monacoTheme}
+              configureMonaco={registerPipelineScheduleLanguage}
+              completionProvider={({ monaco, model, position }) => {
+                const lineLength = model.getLineMaxColumn(position.lineNumber);
+                return {
+                  suggestions: getPipelineScheduleCompletionItems({
+                    monaco,
+                    value: model.getValue(),
+                    range: {
+                      startLineNumber: position.lineNumber,
+                      endLineNumber: position.lineNumber,
+                      startColumn: 1,
+                      endColumn: lineLength,
+                    },
+                  }),
+                };
+              }}
             />
           </LabeledField>
           <LabeledField label="Start Date">

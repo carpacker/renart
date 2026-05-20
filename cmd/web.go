@@ -1165,8 +1165,8 @@ func (s *webServer) newConnectionManager(ctx context.Context, environment string
 	return manager, nil
 }
 
-func (s *webServer) MaterializePipelineStream(ctx context.Context, pipelineID, environment string, onChunk func([]byte)) executionMaterializeEvent {
-	return executionMaterializeEvent(s.executionSvc.MaterializePipelineStream(ctx, pipelineID, environment, onChunk))
+func (s *webServer) MaterializePipelineStream(ctx context.Context, pipelineID, environment string, dryRun bool, onChunk func([]byte)) executionMaterializeEvent {
+	return executionMaterializeEvent(s.executionSvc.MaterializePipelineStream(ctx, pipelineID, environment, dryRun, onChunk))
 }
 
 func (s *webServer) handleStatic(w http.ResponseWriter, r *http.Request) {

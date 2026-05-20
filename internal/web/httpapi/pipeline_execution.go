@@ -26,7 +26,7 @@ type PipelineMaterializationResponse struct {
 
 type PipelineExecutionHandlers interface {
 	GetPipelineMaterialization(ctx context.Context, pipelineID, environment string) (PipelineMaterializationResponse, *APIError)
-	MaterializePipelineStream(ctx context.Context, pipelineID, environment string, onChunk func([]byte)) MaterializeExecutionEvent
+	MaterializePipelineStream(ctx context.Context, pipelineID, environment string, dryRun bool, onChunk func([]byte)) MaterializeExecutionEvent
 	ResolvePipelineRunTarget(pipelineID string) error
 }
 
@@ -56,6 +56,7 @@ func (h *PipelineExecutionAPI) HandleGetPipelineMaterialization(w http.ResponseW
 func (h *PipelineExecutionAPI) HandleMaterializePipelineStream(w http.ResponseWriter, r *http.Request) {
 	pipelineID := chi.URLParam(r, "id")
 	environment := r.URL.Query().Get("environment")
+	dryRun := r.URL.Query().Get("dry_run") == "true"
 	if err := h.Service.ResolvePipelineRunTarget(pipelineID); err != nil {
 		webapi.WriteBadRequest(w, "invalid_pipeline_id", "invalid pipeline id")
 		return
@@ -73,7 +74,7 @@ func (h *PipelineExecutionAPI) HandleMaterializePipelineStream(w http.ResponseWr
 	w.Header().Set("X-Accel-Buffering", "no")
 
 	_ = WriteSSEJSON(w, flusher, "start", map[string]any{"operation": webmodel.OperationMetadata{Type: "run", PipelineID: pipelineID, Target: pipelineID}})
-	result := h.Service.MaterializePipelineStream(r.Context(), pipelineID, environment, func(chunk []byte) {
+	result := h.Service.MaterializePipelineStream(r.Context(), pipelineID, environment, dryRun, func(chunk []byte) {
 		_ = WriteSSEJSON(w, flusher, "output", map[string]any{"chunk": string(chunk)})
 	})
 	_ = WriteSSEJSON(w, flusher, "done", map[string]any{

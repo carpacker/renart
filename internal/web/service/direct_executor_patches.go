@@ -9,7 +9,6 @@ import (
 	"github.com/bruin-data/bruin/pkg/git"
 	"github.com/bruin-data/bruin/pkg/jinja"
 	"github.com/bruin-data/bruin/pkg/pipeline"
-	"github.com/bruin-data/bruin/pkg/sqlparser"
 	"github.com/spf13/afero"
 )
 
@@ -18,7 +17,7 @@ func (e *HybridBruinExecutor) applyFillAssetDependencies(ctx context.Context, ta
 		return nil, fmt.Errorf("direct fill-asset-dependencies requires a pipeline builder")
 	}
 
-	sqlParserInstance, err := sqlparser.NewSQLParser(false)
+	sqlParserInstance, err := newDependencyParser()
 	if err != nil {
 		return nil, fmt.Errorf("failed to create sql parser: %w", err)
 	}

@@ -18,6 +18,7 @@ type RunAssetRequest struct {
 type RunPipelineRequest struct {
 	Target      string
 	Environment string
+	DryRun      bool
 }
 
 type QueryAssetRequest struct {
