@@ -5,7 +5,7 @@ go 1.25.0
 require (
 	github.com/bruin-data/bruin v0.11.528
 	github.com/fatih/color v1.19.0
-	github.com/fsnotify/fsnotify v1.5.4
+	github.com/fsnotify/fsnotify v1.10.1
 	github.com/go-chi/chi/v5 v5.2.5
 	github.com/kluctl/go-embed-python v0.0.0-3.13.1-20241219-1
 	github.com/pkg/errors v0.9.1
