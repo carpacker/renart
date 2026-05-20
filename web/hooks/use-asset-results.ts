@@ -380,19 +380,26 @@ export function useAssetResults() {
 
   const runMaterializePipeline = useCallback(async (
     pipelineId: string,
-    refresh?: () => Promise<void> | void
+    refresh?: () => Promise<void> | void,
+    options?: { dryRun?: boolean }
   ) => {
     const entryId = createMaterializeHistoryId();
     const startedAt = Date.now();
     const pipelineMaterializingIds = pipeline?.assets.map((current) => current.id) ?? [];
 
     setPipelineMaterializeLoading(true);
-    setMaterializingAssetIds((previous: Set<string>) => new Set([...previous, ...pipelineMaterializingIds]));
+    if (!options?.dryRun) {
+      setMaterializingAssetIds((previous: Set<string>) => new Set([...previous, ...pipelineMaterializingIds]));
+    }
     upsertMaterializeEntry(entryId, () => ({
       ...createMaterializeEntry({
         id: entryId,
         kind: "pipeline",
-        label: pipeline?.name ? `Pipeline: ${pipeline.name}` : "Pipeline materialize",
+        label: pipeline?.name
+          ? `${options?.dryRun ? "Dry run" : "Pipeline"}: ${pipeline.name}`
+          : options?.dryRun
+            ? "Pipeline dry run"
+            : "Pipeline materialize",
         pipelineId,
         pipelineName: pipeline?.name ?? null,
         loading: true,
@@ -409,8 +416,10 @@ export function useAssetResults() {
                 id: entryId,
                 kind: "pipeline",
                 label: pipeline?.name
-                  ? `Pipeline: ${pipeline.name}`
-                  : "Pipeline materialize",
+                  ? `${options?.dryRun ? "Dry run" : "Pipeline"}: ${pipeline.name}`
+                  : options?.dryRun
+                    ? "Pipeline dry run"
+                    : "Pipeline materialize",
                 pipelineId,
                 pipelineName: pipeline?.name ?? null,
                 loading: true,
@@ -421,14 +430,18 @@ export function useAssetResults() {
             updatedAt: Date.now(),
           }));
         },
-      }, { environment: selectedEnvironment });
+      }, { environment: selectedEnvironment, dryRun: options?.dryRun });
 
       upsertMaterializeEntry(entryId, (previous) => ({
         ...(previous ??
           createMaterializeEntry({
             id: entryId,
             kind: "pipeline",
-            label: pipeline?.name ? `Pipeline: ${pipeline.name}` : "Pipeline materialize",
+            label: pipeline?.name
+              ? `${options?.dryRun ? "Dry run" : "Pipeline"}: ${pipeline.name}`
+              : options?.dryRun
+                ? "Pipeline dry run"
+                : "Pipeline materialize",
             pipelineId,
             pipelineName: pipeline?.name ?? null,
             loading: true,
@@ -459,7 +472,11 @@ export function useAssetResults() {
           createMaterializeEntry({
             id: entryId,
             kind: "pipeline",
-            label: pipeline?.name ? `Pipeline: ${pipeline.name}` : "Pipeline materialize",
+            label: pipeline?.name
+              ? `${options?.dryRun ? "Dry run" : "Pipeline"}: ${pipeline.name}`
+              : options?.dryRun
+                ? "Pipeline dry run"
+                : "Pipeline materialize",
             pipelineId,
             pipelineName: pipeline?.name ?? null,
             loading: true,
@@ -484,7 +501,7 @@ export function useAssetResults() {
         }
         return next;
       });
-      if (refresh) {
+      if (!options?.dryRun && refresh) {
         await refresh();
       }
     }

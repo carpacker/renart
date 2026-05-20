@@ -13,6 +13,7 @@ import {
   Moon,
   Pencil,
   Play,
+  Rows3,
   TableProperties,
   Settings2,
   Sun,
@@ -65,7 +66,7 @@ type Props = {
   canDeletePipeline: boolean;
   deletePipelineLoading: boolean;
   renamePipelineLoading: boolean;
-  onRunPipeline: (pipelineId: string) => void;
+  onRunPipeline: (pipelineId: string, options?: { dryRun?: boolean }) => void;
   canRunPipeline: boolean;
   runPipelineLoading: boolean;
 };
@@ -375,6 +376,13 @@ export function WorkspaceSidebar({
                             }
                           />
                           Run Pipeline
+                        </ContextMenuItem>
+                        <ContextMenuItem
+                          disabled={!canRunPipeline || runPipelineLoading}
+                          onClick={() => onRunPipeline(item.id, { dryRun: true })}
+                        >
+                          <Rows3 />
+                          Dry Run Pipeline
                         </ContextMenuItem>
                         <ContextMenuSeparator />
                         <ContextMenuItem

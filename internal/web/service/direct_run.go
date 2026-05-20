@@ -140,10 +140,6 @@ func (e *HybridBruinExecutor) RunPipeline(ctx context.Context, req RunPipelineRe
 	if foundPipeline == nil {
 		return nil, fmt.Errorf("pipeline not found")
 	}
-	if shouldFallbackToCLIRunPipeline(foundPipeline) {
-		return nil, fmt.Errorf("direct pipeline run is not supported for one or more asset types")
-	}
-
 	repoRoot, err := git.FindRepoFromPath(resolvedTarget)
 	if err != nil {
 		return nil, fmt.Errorf("failed to find the git repository root: %w", err)
@@ -153,12 +149,18 @@ func (e *HybridBruinExecutor) RunPipeline(ctx context.Context, req RunPipelineRe
 	if err != nil {
 		return nil, err
 	}
-
-	pp := &directPipelineInfo{Pipeline: foundPipeline, Config: cfg}
 	manager, err := e.directConnectionManager(ctx, cfg)
 	if err != nil {
 		return nil, err
 	}
+	if req.DryRun {
+		return e.dryRunPipeline(ctx, foundPipeline, cfg, manager, onChunk)
+	}
+	if shouldFallbackToCLIRunPipeline(foundPipeline) {
+		return nil, fmt.Errorf("direct pipeline run is not supported for one or more asset types")
+	}
+
+	pp := &directPipelineInfo{Pipeline: foundPipeline, Config: cfg}
 	runCtx, parser, cleanup, err := buildDirectRunAssetContext(ctx, pp)
 	if err != nil {
 		return nil, err
@@ -370,10 +372,6 @@ func buildDirectRunAssetContext(ctx context.Context, pp *directPipelineInfo) (co
 
 	parser, err := sqlparser.NewSQLParser(false)
 	if err != nil {
-		return nil, nil, nil, err
-	}
-	if err := parser.Start(); err != nil {
-		parser.Close()
 		return nil, nil, nil, err
 	}
 

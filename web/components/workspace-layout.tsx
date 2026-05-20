@@ -171,7 +171,7 @@ export function WorkspaceLayout() {
   }, [currentView]);
 
   const handleRunPipelineById = useCallback(
-    (pipelineId: string) => {
+    (pipelineId: string, options?: { dryRun?: boolean }) => {
       if (assetResults.materializeLoading) {
         return;
       }
@@ -180,7 +180,7 @@ export function WorkspaceLayout() {
         await pipelineMaterialization
           .refreshPipelineMaterialization(pipelineId)
           .catch(() => undefined);
-      });
+      }, options);
     },
     [assetResults, pipelineMaterialization]
   );

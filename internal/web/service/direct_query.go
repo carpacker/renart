@@ -78,14 +78,6 @@ func (e *HybridBruinExecutor) QueryAsset(ctx context.Context, req QueryAssetRequ
 			return output, wrappedErr
 		}
 		defer parser.Close()
-		if err := parser.Start(); err != nil {
-			wrappedErr := fmt.Errorf("failed to start SQL parser: %w", err)
-			output, marshalErr := json.Marshal(directErrorResponse{Error: wrappedErr.Error()})
-			if marshalErr != nil {
-				return nil, wrappedErr
-			}
-			return output, wrappedErr
-		}
 	}
 
 	if parser != nil && pp.Config.SelectedEnvironment.SchemaPrefix != "" {

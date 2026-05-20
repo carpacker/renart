@@ -65,11 +65,12 @@ export async function materializePipelineStream(
     onChunk?: (chunk: string) => void;
     onDone?: (payload: MaterializeStreamPayload) => void;
   },
-  options?: { environment?: string }
+  options?: { environment?: string; dryRun?: boolean }
 ) {
   return streamMaterialization(
     `/api/pipelines/${pipelineId}/materialize/stream${buildQueryString({
       environment: options?.environment,
+      dry_run: options?.dryRun ? "true" : undefined,
     })}`,
     handlers,
     "Pipeline materialization stream ended unexpectedly."

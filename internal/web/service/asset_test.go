@@ -29,6 +29,54 @@ func newAssetTestResolver(workspaceRoot string) *WorkspaceResolver {
 	})
 }
 
+type stubDependencyParser struct {
+	usedTables                 []string
+	missingDependencies        []string
+	err                        error
+	getMissingDependenciesCall int
+	usedTablesCall             int
+}
+
+func (s *stubDependencyParser) Start() error {
+	return nil
+}
+
+func (s *stubDependencyParser) ColumnLineage(string, string, sqlparser.Schema) (*sqlparser.Lineage, error) {
+	return nil, nil
+}
+
+func (s *stubDependencyParser) UsedTables(string, string) ([]string, error) {
+	s.usedTablesCall++
+	if s.err != nil {
+		return nil, s.err
+	}
+	return append([]string(nil), s.usedTables...), nil
+}
+
+func (s *stubDependencyParser) RenameTables(string, string, map[string]string) (string, error) {
+	return "", nil
+}
+
+func (s *stubDependencyParser) AddLimit(string, int, string) (string, error) {
+	return "", nil
+}
+
+func (s *stubDependencyParser) IsSingleSelectQuery(string, string) (bool, error) {
+	return true, nil
+}
+
+func (s *stubDependencyParser) GetMissingDependenciesForAsset(*pipeline.Asset, *pipeline.Pipeline, jinja.RendererInterface) ([]string, error) {
+	s.getMissingDependenciesCall++
+	if s.err != nil {
+		return nil, s.err
+	}
+	return append([]string(nil), s.missingDependencies...), nil
+}
+
+func (s *stubDependencyParser) Close() error {
+	return nil
+}
+
 func TestApplyManualAssetUpstreamsPreservesTrackedInferred(t *testing.T) {
 	t.Parallel()
 
@@ -163,7 +211,7 @@ func TestReconcileSQLAssetDependenciesRemovesOnlyTrackedInferred(t *testing.T) {
 		Assets: []*pipeline.Asset{asset, customers, manual},
 	}
 
-	parser, err := sqlparser.NewSQLParser(false)
+	parser, err := sqlparser.NewRustSQLParser(false)
 	require.NoError(t, err)
 	defer parser.Close()
 
@@ -231,8 +279,6 @@ select 1 as order_id
 }
 
 func TestAssetServiceUpdatePersistsManualUpstreamsInHeader(t *testing.T) {
-	t.Parallel()
-
 	workspaceRoot := t.TempDir()
 	pipelineRoot := filepath.Join(workspaceRoot, "analytics")
 	assetsRoot := filepath.Join(pipelineRoot, "assets")
@@ -288,6 +334,85 @@ select 1 as seed_id
 	_, _, asset, err := resolveAssetByID(context.Background(), EncodeID("analytics/assets/customers.sql"))
 	require.NoError(t, err)
 	assert.Equal(t, []string{"analytics.manual_seed"}, upstreamValues(asset.Upstreams))
+}
+
+func TestAssetServiceUpdateManualUpstreamsWithUnchangedContentReconcilesDependencies(t *testing.T) {
+	workspaceRoot := t.TempDir()
+	pipelineRoot := filepath.Join(workspaceRoot, "analytics")
+	assetsRoot := filepath.Join(pipelineRoot, "assets")
+	require.NoError(t, os.MkdirAll(assetsRoot, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(pipelineRoot, "pipeline.yml"), []byte(strings.TrimSpace(`
+name: analytics
+schedule: daily
+start_date: "2024-01-01"
+default_connections:
+  duckdb: duckdb-default
+`)+"\n"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(assetsRoot, "orders.sql"), []byte(strings.TrimSpace(`
+/* @bruin
+name: analytics.orders
+type: duckdb.sql
+materialization:
+  type: view
+@bruin */
+
+select 1 as order_id
+`)+"\n"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(assetsRoot, "manual_seed.sql"), []byte(strings.TrimSpace(`
+/* @bruin
+name: analytics.manual_seed
+type: duckdb.sql
+materialization:
+  type: view
+@bruin */
+
+select 1 as seed_id
+`)+"\n"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(assetsRoot, "customers.sql"), []byte(strings.TrimSpace(`
+/* @bruin
+name: analytics.customers
+type: duckdb.sql
+materialization:
+  type: view
+depends:
+  - analytics.orders
+meta:
+  renart_inferred_upstreams: analytics.orders
+@bruin */
+
+select 1 as customer_id
+`)+"\n"), 0o644))
+
+	resolveAssetByID := newAssetTestResolver(workspaceRoot).ResolveAssetByID
+	parser := &stubDependencyParser{missingDependencies: []string{"analytics.orders"}}
+	previousFactory := newDependencyParser
+	newDependencyParser = func() (sqlparser.Parser, error) { return parser, nil }
+	t.Cleanup(func() {
+		newDependencyParser = previousFactory
+	})
+
+	service := NewAssetService(AssetDependencies{
+		WorkspaceRoot:    workspaceRoot,
+		ResolveAssetByID: resolveAssetByID,
+		SuppressWatcher:  func(string) {},
+		PushWorkspaceUpdateImmediateWithChangedIDs: func(context.Context, string, string, []string) {},
+	})
+
+	content := "select 1 as customer_id"
+	_, apiErr := service.Update(context.Background(), EncodeID("analytics/assets/customers.sql"), AssetUpdateRequest{
+		Content:   &content,
+		Upstreams: []string{"analytics.manual_seed"},
+	})
+	require.Nil(t, apiErr)
+	assert.NotZero(t, parser.getMissingDependenciesCall)
+
+	_, _, asset, err := resolveAssetByID(context.Background(), EncodeID("analytics/assets/customers.sql"))
+	require.NoError(t, err)
+	assert.Equal(t, []string{"analytics.manual_seed", "analytics.orders"}, upstreamValues(asset.Upstreams))
+	assert.Equal(t, "analytics.orders", asset.Meta[renartInferredUpstreamsMetaKey])
+	fileContent, err := os.ReadFile(filepath.Join(assetsRoot, "customers.sql"))
+	require.NoError(t, err)
+	assert.Contains(t, string(fileContent), "depends:\n  - analytics.manual_seed\n  - analytics.orders")
 }
 
 func TestAssetServiceCreateReconcilesSQLDependenciesImmediately(t *testing.T) {
@@ -465,6 +590,72 @@ select 1 as customer_id
 	assert.Equal(t, "analytics.orders", asset.Meta[renartInferredUpstreamsMetaKey])
 }
 
+func TestAssetServiceUpdateChangedContentReconcilesDependenciesViaParser(t *testing.T) {
+	workspaceRoot := t.TempDir()
+	pipelineRoot := filepath.Join(workspaceRoot, "analytics")
+	assetsRoot := filepath.Join(pipelineRoot, "assets")
+	require.NoError(t, os.MkdirAll(assetsRoot, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(pipelineRoot, "pipeline.yml"), []byte(strings.TrimSpace(`
+name: analytics
+schedule: daily
+start_date: "2024-01-01"
+default_connections:
+  duckdb: duckdb-default
+`)+"\n"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(assetsRoot, "orders.sql"), []byte(strings.TrimSpace(`
+/* @bruin
+name: analytics.orders
+type: duckdb.sql
+materialization:
+  type: view
+@bruin */
+
+select 1 as order_id
+`)+"\n"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(assetsRoot, "customers.sql"), []byte(strings.TrimSpace(`
+/* @bruin
+name: analytics.customers
+type: duckdb.sql
+materialization:
+  type: view
+depends:
+  - analytics.manual_seed
+@bruin */
+
+select 1 as customer_id
+`)+"\n"), 0o644))
+
+	resolveAssetByID := newAssetTestResolver(workspaceRoot).ResolveAssetByID
+	parser := &stubDependencyParser{missingDependencies: []string{"analytics.orders"}}
+	previousFactory := newDependencyParser
+	newDependencyParser = func() (sqlparser.Parser, error) { return parser, nil }
+	t.Cleanup(func() {
+		newDependencyParser = previousFactory
+	})
+
+	service := NewAssetService(AssetDependencies{
+		WorkspaceRoot:    workspaceRoot,
+		ResolveAssetByID: resolveAssetByID,
+		SuppressWatcher:  func(string) {},
+		PushWorkspaceUpdateImmediateWithChangedIDs: func(context.Context, string, string, []string) {},
+	})
+
+	content := "select *\nfrom analytics.orders\n"
+	_, apiErr := service.Update(context.Background(), EncodeID("analytics/assets/customers.sql"), AssetUpdateRequest{
+		Content: &content,
+	})
+	require.Nil(t, apiErr)
+	assert.NotZero(t, parser.getMissingDependenciesCall)
+
+	_, _, asset, err := resolveAssetByID(context.Background(), EncodeID("analytics/assets/customers.sql"))
+	require.NoError(t, err)
+	assert.Equal(t, []string{"analytics.manual_seed", "analytics.orders"}, upstreamValues(asset.Upstreams))
+	assert.Equal(t, "analytics.orders", asset.Meta[renartInferredUpstreamsMetaKey])
+	fileContent, err := os.ReadFile(filepath.Join(assetsRoot, "customers.sql"))
+	require.NoError(t, err)
+	assert.Contains(t, string(fileContent), "renart_inferred_upstreams: analytics.orders")
+}
+
 func TestReconcileSQLAssetDependenciesResolvesSameSchemaUnqualifiedNames(t *testing.T) {
 	t.Parallel()
 
@@ -482,7 +673,7 @@ func TestReconcileSQLAssetDependenciesResolvesSameSchemaUnqualifiedNames(t *test
 		Assets: []*pipeline.Asset{asset, orders},
 	}
 
-	parser, err := sqlparser.NewSQLParser(false)
+	parser, err := sqlparser.NewRustSQLParser(false)
 	require.NoError(t, err)
 	defer parser.Close()
 

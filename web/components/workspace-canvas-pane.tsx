@@ -1,7 +1,7 @@
 "use client";
 
 import { CSSProperties, DragEvent, MutableRefObject, ReactNode, useEffect } from "react";
-import { FilePenLine, LoaderCircle, Rows3 } from "lucide-react";
+import { ChevronDown, FilePenLine, LoaderCircle, Rows3 } from "lucide-react";
 import {
   Background,
   Controls,
@@ -15,6 +15,15 @@ import { Panel, PanelGroup, PanelResizeHandle } from "react-resizable-panels";
 
 import { WorkspaceResultsPanel } from "@/components/workspace-results-panel";
 import { Button } from "@/components/ui/button";
+import { ButtonGroup } from "@/components/ui/button-group";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuGroup,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { useOnboarding } from "@/hooks/use-onboarding";
 import { MaterializeHistoryEntry } from "@/lib/atoms/results";
 import type { OnboardingRect } from "@/lib/atoms/onboarding";
@@ -58,7 +67,7 @@ export type WorkspaceCanvasPaneProps = {
   onCanvasDrop?: (event: DragEvent<HTMLDivElement>) => void;
   seedDropActive?: boolean;
   onRecomputeGraph: () => void;
-  onRunPipeline?: () => void;
+  onRunPipeline?: (options?: { dryRun?: boolean }) => void;
   canRunPipeline?: boolean;
   showEditorButton?: boolean;
   isEditorButtonDisabled?: boolean;
@@ -154,20 +163,46 @@ export function WorkspaceCanvasPane({
           >
             <div className="absolute right-3 top-3 z-10 flex gap-2">
               {onRunPipeline ? (
-                <Button
-                  onClick={onRunPipeline}
-                  size="sm"
-                  type="button"
-                  disabled={!canRunPipeline || pipelineMaterializeLoading}
-                  className={quickstartTour?.step === 2 ? "quickstart-tour-spotlight quickstart-tour-halo" : undefined}
-                >
-                  {pipelineMaterializeLoading ? (
-                    <LoaderCircle className="mr-2 size-3.5 animate-spin" />
-                  ) : (
-                    <PlayIcon className="mr-2 size-3.5" />
-                  )}
-                  {pipelineMaterializeLoading ? "Running pipeline..." : "Run pipeline"}
-                </Button>
+                <ButtonGroup className={quickstartTour?.step === 2 ? "quickstart-tour-spotlight quickstart-tour-halo" : undefined}>
+                  <Button
+                    onClick={() => onRunPipeline()}
+                    size="sm"
+                    type="button"
+                    disabled={!canRunPipeline || pipelineMaterializeLoading}
+                  >
+                    {pipelineMaterializeLoading ? (
+                      <LoaderCircle className="mr-2 size-3.5 animate-spin" />
+                    ) : (
+                      <PlayIcon className="mr-2 size-3.5" />
+                    )}
+                    {pipelineMaterializeLoading ? "Running pipeline..." : "Run pipeline"}
+                  </Button>
+                  <DropdownMenu>
+                    <DropdownMenuTrigger asChild>
+                      <Button
+                        size="icon-sm"
+                        type="button"
+                        disabled={!canRunPipeline || pipelineMaterializeLoading}
+                        aria-label="Pipeline run options"
+                      >
+                        <ChevronDown className="size-3.5" />
+                      </Button>
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent align="end" className="w-44">
+                      <DropdownMenuGroup>
+                        <DropdownMenuLabel>Run pipeline</DropdownMenuLabel>
+                        <DropdownMenuItem onClick={() => onRunPipeline()}>
+                          <PlayIcon className="size-4" />
+                          Run normally
+                        </DropdownMenuItem>
+                        <DropdownMenuItem onClick={() => onRunPipeline({ dryRun: true })}>
+                          <Rows3 className="size-4" />
+                          Dry run
+                        </DropdownMenuItem>
+                      </DropdownMenuGroup>
+                    </DropdownMenuContent>
+                  </DropdownMenu>
+                </ButtonGroup>
               ) : null}
               {showEditorButton ? (
                 <Button
