@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -128,6 +129,34 @@ func (s *stubSchemaQuerier) GetDatabaseSummary(_ context.Context) (*ansisql.DBDa
 	return &ansisql.DBDatabase{}, nil
 }
 
+type stubComplexSchemaQuerier struct {
+	queries []string
+}
+
+func (s *stubComplexSchemaQuerier) SelectWithSchema(_ context.Context, q *query.Query) (*query.QueryResult, error) {
+	s.queries = append(s.queries, q.Query)
+	switch len(s.queries) {
+	case 1:
+		return nil, fmt.Errorf("not yet implemented populating from columns of type struct<test: int32>")
+	case 2:
+		return &query.QueryResult{
+			Columns:     []string{"a", "b", "c", "plain value"},
+			ColumnTypes: []string{"STRUCT(test INTEGER)", "INTEGER[]", "STRUCT(test INTEGER)[]", "VARCHAR"},
+		}, nil
+	default:
+		return &query.QueryResult{
+			Columns:     []string{"a", "b", "c", "plain value"},
+			ColumnTypes: []string{"JSON", "JSON", "JSON", "VARCHAR"},
+			Rows: [][]interface{}{{
+				`{"test":1}`,
+				`[1,2,4]`,
+				`[{"test":1},{"test":1}]`,
+				"ok",
+			}},
+		}, nil
+	}
+}
+
 func (s *stubSchemaQuerier) CreateSchemaIfNotExist(_ context.Context, _ *pipeline.Asset) error {
 	return nil
 }
@@ -169,6 +198,20 @@ func TestHybridBruinExecutorQueryConnectionUsesDirectPath(t *testing.T) {
 		"connectionName": "warehouse",
 		"query": "select 1 as id, 'alice' as name"
 	}`, string(output))
+}
+
+func TestSelectWithComplexJSONFallbackRewritesOnlyComplexColumns(t *testing.T) {
+	t.Parallel()
+
+	querier := &stubComplexSchemaQuerier{}
+	queryText := "select struct_pack(test := 1) a, [1,2,4] b, [struct_pack(test := 1)] c, 'ok' as \"plain value\""
+	result, err := selectWithComplexJSONFallback(context.Background(), querier, queryText)
+
+	require.NoError(t, err)
+	require.Len(t, querier.queries, 3)
+	assert.Equal(t, "SELECT * FROM (\n"+queryText+"\n) AS renart_schema_query LIMIT 0", querier.queries[1])
+	assert.Equal(t, "SELECT to_json(a) AS a, to_json(b) AS b, to_json(c) AS c, \"plain value\" FROM (\n"+queryText+"\n) AS renart_complex_query", querier.queries[2])
+	assert.Equal(t, [][]interface{}{{`{"test":1}`, `[1,2,4]`, `[{"test":1},{"test":1}]`, "ok"}}, result.Rows)
 }
 
 func TestHybridBruinExecutorQueryAssetUsesDirectPath(t *testing.T) {

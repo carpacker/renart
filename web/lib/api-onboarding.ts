@@ -6,10 +6,39 @@ import {
   OnboardingSessionState,
 } from "@/lib/types";
 
-export async function getOnboardingState(): Promise<OnboardingSessionState> {
-  return fetchJSON<OnboardingSessionState>("/api/onboarding/state", {
+let cachedOnboardingState: OnboardingSessionState | null = null;
+let pendingOnboardingState: Promise<OnboardingSessionState> | null = null;
+
+export async function getOnboardingState(options?: {
+  cache?: boolean;
+}): Promise<OnboardingSessionState> {
+  if (options?.cache && cachedOnboardingState) {
+    return cachedOnboardingState;
+  }
+  if (options?.cache && pendingOnboardingState) {
+    return pendingOnboardingState;
+  }
+
+  const request = fetchJSON<OnboardingSessionState>("/api/onboarding/state", {
     cache: "no-store",
   });
+
+  if (!options?.cache) {
+    const state = await request;
+    cachedOnboardingState = state;
+    return state;
+  }
+
+  pendingOnboardingState = request
+    .then((state) => {
+      cachedOnboardingState = state;
+      return state;
+    })
+    .finally(() => {
+      pendingOnboardingState = null;
+    });
+
+  return pendingOnboardingState;
 }
 
 export async function importOnboardingDatabase(input: {
@@ -22,6 +51,7 @@ export async function importOnboardingDatabase(input: {
   disable_columns?: boolean;
   create_if_missing?: boolean;
 }): Promise<OnboardingImportResponse> {
+  invalidateOnboardingStateCache();
   return fetchJSONWithBody<OnboardingImportResponse>(
     "/api/onboarding/import",
     "POST",
@@ -36,6 +66,7 @@ export async function createDuckDBQuickstart(input: {
   database_path?: string;
   materialize?: boolean;
 }): Promise<OnboardingImportResponse> {
+  invalidateOnboardingStateCache();
   return fetchJSONWithBody<OnboardingImportResponse>(
     "/api/onboarding/quickstart",
     "POST",
@@ -72,5 +103,12 @@ export async function getOnboardingPathSuggestions(prefix?: string) {
 export async function updateOnboardingState(
   state: OnboardingSessionState
 ): Promise<{ status: string }> {
+  cachedOnboardingState = state;
+  pendingOnboardingState = null;
   return fetchJSONWithBody<{ status: string }>("/api/onboarding/state", "PUT", state);
+}
+
+function invalidateOnboardingStateCache() {
+  cachedOnboardingState = null;
+  pendingOnboardingState = null;
 }

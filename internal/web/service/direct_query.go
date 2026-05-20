@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -118,7 +119,7 @@ func (e *HybridBruinExecutor) QueryAsset(ctx context.Context, req QueryAssetRequ
 		return output, err
 	}
 
-	result, err := querier.SelectWithSchema(ctx, &query.Query{Query: queryStr})
+	result, err := selectWithComplexJSONFallback(ctx, querier, queryStr)
 	if err != nil {
 		wrappedErr := fmt.Errorf("query execution failed: %w", err)
 		output, marshalErr := json.Marshal(directErrorResponse{Error: wrappedErr.Error()})
@@ -154,7 +155,7 @@ func (e *HybridBruinExecutor) QueryConnection(ctx context.Context, req QueryConn
 		return nil, fmt.Errorf("connection %q does not support querying", req.ConnectionName)
 	}
 
-	result, err := querier.SelectWithSchema(ctx, &query.Query{Query: req.Query})
+	result, err := selectWithComplexJSONFallback(ctx, querier, req.Query)
 	if err != nil {
 		return nil, err
 	}
@@ -166,6 +167,89 @@ func (e *HybridBruinExecutor) QueryConnection(ctx context.Context, req QueryConn
 	}
 
 	return nil, fmt.Errorf("direct connection query only supports json output")
+}
+
+type directSchemaQuerier interface {
+	SelectWithSchema(context.Context, *query.Query) (*query.QueryResult, error)
+}
+
+func selectWithComplexJSONFallback(ctx context.Context, querier directSchemaQuerier, queryStr string) (*query.QueryResult, error) {
+	result, err := querier.SelectWithSchema(ctx, &query.Query{Query: queryStr})
+	if err == nil || !isComplexDuckDBPopulateError(err) {
+		return result, err
+	}
+
+	schemaResult, schemaErr := querier.SelectWithSchema(ctx, &query.Query{Query: wrapDirectQueryWithLimit(queryStr, 0)})
+	if schemaErr != nil {
+		return nil, err
+	}
+
+	rewrittenQuery, ok := rewriteComplexColumnsToJSON(queryStr, schemaResult.Columns, schemaResult.ColumnTypes)
+	if !ok {
+		return nil, err
+	}
+
+	return querier.SelectWithSchema(ctx, &query.Query{Query: rewrittenQuery})
+}
+
+func isComplexDuckDBPopulateError(err error) bool {
+	if err == nil {
+		return false
+	}
+	message := strings.ToLower(err.Error())
+	return strings.Contains(message, "not yet implemented populating from columns of type") ||
+		strings.Contains(message, "not implemented") && strings.Contains(message, "populating from columns of type")
+}
+
+func rewriteComplexColumnsToJSON(queryStr string, columns []string, columnTypes []string) (string, bool) {
+	if len(columns) == 0 {
+		return "", false
+	}
+
+	selectItems := make([]string, 0, len(columns))
+	hasComplexColumn := false
+	for index, column := range columns {
+		columnType := ""
+		if index < len(columnTypes) {
+			columnType = columnTypes[index]
+		}
+
+		quoted := quoteDirectIdentifier(column)
+		if isComplexDuckDBColumnType(columnType) {
+			hasComplexColumn = true
+			selectItems = append(selectItems, fmt.Sprintf("to_json(%s) AS %s", quoted, quoted))
+			continue
+		}
+		selectItems = append(selectItems, quoted)
+	}
+
+	if !hasComplexColumn {
+		return "", false
+	}
+
+	return fmt.Sprintf("SELECT %s FROM (\n%s\n) AS renart_complex_query", strings.Join(selectItems, ", "), strings.TrimRight(queryStr, "; \n\t")), true
+}
+
+func isComplexDuckDBColumnType(columnType string) bool {
+	lowered := strings.ToLower(strings.TrimSpace(columnType))
+	return strings.Contains(lowered, "struct") ||
+		strings.Contains(lowered, "map") ||
+		strings.Contains(lowered, "union") ||
+		strings.Contains(lowered, "[]") ||
+		strings.Contains(lowered, "list")
+}
+
+var simpleDirectIdentifierPattern = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
+
+func quoteDirectIdentifier(identifier string) string {
+	if simpleDirectIdentifierPattern.MatchString(identifier) {
+		return identifier
+	}
+	return `"` + strings.ReplaceAll(identifier, `"`, `""`) + `"`
+}
+
+func wrapDirectQueryWithLimit(queryStr string, limit int64) string {
+	return fmt.Sprintf("SELECT * FROM (\n%s\n) AS renart_schema_query LIMIT %d", strings.TrimRight(queryStr, "; \n\t"), limit)
 }
 
 func (e *HybridBruinExecutor) buildDirectAssetQuery(ctx context.Context, pp *directPipelineInfo, environment string) (string, interface{}, string, error) {

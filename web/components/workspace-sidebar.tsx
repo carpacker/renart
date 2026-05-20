@@ -116,6 +116,11 @@ export function WorkspaceSidebar({
     onCreatePipeline();
   };
 
+  const handleOpenPipelineSettings = (pipelineId: string) => {
+    closeSidebarAfterNavigation();
+    onOpenPipelineSettings(pipelineId);
+  };
+
   useEffect(() => {
     if (!activePipeline) {
       return;
@@ -289,7 +294,7 @@ export function WorkspaceSidebar({
         </SidebarGroup>
 
         <SidebarGroup>
-          <SidebarGroupLabel>Workspace</SidebarGroupLabel>
+          <SidebarGroupLabel>Pipelines</SidebarGroupLabel>
           <SidebarGroupContent>
             <SidebarMenu>
               {workspace?.pipelines.map((item) => {
@@ -346,7 +351,7 @@ export function WorkspaceSidebar({
                         <ContextMenuItem disabled>{item.name}</ContextMenuItem>
                         <ContextMenuSeparator />
                         <ContextMenuItem
-                          onClick={() => onOpenPipelineSettings(item.id)}
+                          onClick={() => handleOpenPipelineSettings(item.id)}
                         >
                           <Settings2 />
                           Pipeline Settings
@@ -383,8 +388,20 @@ export function WorkspaceSidebar({
                       </ContextMenuContent>
                     </ContextMenu>
 
-                    {isExpanded && (
-                      <SidebarMenuSub>
+                    <SidebarMenuSub>
+                      <SidebarMenuSubItem>
+                        <SidebarMenuSubButton asChild size="sm">
+                          <button
+                            type="button"
+                            onClick={() => handleOpenPipelineSettings(item.id)}
+                          >
+                            <Settings2 className="size-3.5 text-muted-foreground" />
+                            <span>Pipeline settings</span>
+                          </button>
+                        </SidebarMenuSubButton>
+                      </SidebarMenuSubItem>
+                      {isExpanded && (
+                        <>
                         {(pipelineAssetGroups[item.id] ?? []).map((group) => {
                           const groupKey = `${item.id}:${group.prefix}`;
                           const isGroupExpanded = !collapsedAssetGroups.has(groupKey);
@@ -454,8 +471,9 @@ export function WorkspaceSidebar({
                             </SidebarMenuSubItem>
                           );
                         })}
-                      </SidebarMenuSub>
-                    )}
+                        </>
+                      )}
+                    </SidebarMenuSub>
                   </SidebarMenuItem>
                 );
               })}

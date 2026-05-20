@@ -5,7 +5,7 @@ import { getOnboardingState } from "@/lib/api";
 
 export const Route = createFileRoute("/_workspace/")({
   beforeLoad: async () => {
-    const state = await getOnboardingState();
+    const state = await getOnboardingState({ cache: true });
     if (!state.active) {
       return;
     }
