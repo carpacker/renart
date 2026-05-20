@@ -38,6 +38,8 @@ import { getPipelineConfig, updatePipelineConfig } from "@/lib/api-pipelines";
 import {
   getPipelineScheduleCompletionItems,
   isValidPipelineSchedule,
+  PIPELINE_SCHEDULE_LANGUAGE,
+  registerPipelineScheduleLanguage,
 } from "@/lib/pipeline-yaml-intellisense";
 import type {
   PipelineConfigConnection,
@@ -602,14 +604,16 @@ function PipelineConfigSection({
               onChange={(schedule) => onChange({ ...draft, schedule })}
               aria-invalid={scheduleInvalid}
               placeholder="@daily"
-              language="yaml"
-              path="renart-pipeline-schedule.yaml"
+              language={PIPELINE_SCHEDULE_LANGUAGE}
+              path="renart-pipeline-schedule.schedule"
               theme={monacoTheme}
+              configureMonaco={registerPipelineScheduleLanguage}
               completionProvider={({ monaco, model, position }) => {
                 const lineLength = model.getLineMaxColumn(position.lineNumber);
                 return {
                   suggestions: getPipelineScheduleCompletionItems({
                     monaco,
+                    value: model.getValue(),
                     range: {
                       startLineNumber: position.lineNumber,
                       endLineNumber: position.lineNumber,

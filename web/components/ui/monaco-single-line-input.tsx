@@ -33,6 +33,7 @@ export function MonacoSingleLineInput({
   placeholder,
   theme = "bruin-vs",
   completionProvider,
+  configureMonaco,
 }: {
   value: string;
   onChange: (value: string) => void;
@@ -47,6 +48,7 @@ export function MonacoSingleLineInput({
   placeholder?: string;
   theme?: string;
   completionProvider?: MonacoSingleLineCompletionProvider;
+  configureMonaco?: (monaco: Monaco) => void;
 }) {
   const generatedId = useId().replace(/:/g, "");
   const editorRef = useRef<MonacoNS.editor.IStandaloneCodeEditor | null>(null);
@@ -90,7 +92,10 @@ export function MonacoSingleLineInput({
             path={path ?? `renart-single-line-${generatedId}.${language}`}
             value={value}
             theme={theme}
-            beforeMount={defineBruinMonacoThemes}
+            beforeMount={(monaco) => {
+              defineBruinMonacoThemes(monaco);
+              configureMonaco?.(monaco);
+            }}
             onChange={(nextValue) => {
               const sanitized = sanitizeValue(nextValue);
               if (nextValue !== undefined && sanitized !== nextValue) {
@@ -100,6 +105,7 @@ export function MonacoSingleLineInput({
             }}
             onMount={(editor, monaco) => {
               defineBruinMonacoThemes(monaco);
+              configureMonaco?.(monaco);
               editorRef.current = editor;
               modelUriRef.current = editor.getModel()?.uri.toString() ?? null;
               editor.addCommand(monaco.KeyCode.Enter, () => onEnter?.());
@@ -112,7 +118,7 @@ export function MonacoSingleLineInput({
 
               if (completionProvider) {
                 const provider: MonacoNS.languages.CompletionItemProvider = {
-                  triggerCharacters: ["@", "*", " "],
+                  triggerCharacters: ["@", "*", " ", ",", "-", "/", "0", "1", "2", "3", "4", "5", "6", "7", "8", "9"],
                   provideCompletionItems: (model, position) => {
                     if (model.uri.toString() !== modelUriRef.current) {
                       return { suggestions: [] };
@@ -153,6 +159,11 @@ export function MonacoSingleLineInput({
                 vertical: "hidden",
               },
               suggestOnTriggerCharacters: true,
+              quickSuggestions: {
+                other: "on",
+                comments: "off",
+                strings: "on",
+              },
               tabFocusMode: true,
               wordWrap: "off",
             }}
