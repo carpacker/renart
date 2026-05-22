@@ -1,27 +1,6 @@
 version: 2
 
 builds:
-  - id: renart
-    binary: renart
-    main: ./
-    env:
-      - CGO_ENABLED=0
-    flags:
-      - -trimpath
-      - -tags=bruin_no_duckdb
-    ldflags:
-      - -s -w -X main.version={{ .Version }}
-    goos:
-      - linux
-      - darwin
-      - windows
-    goarch:
-      - amd64
-      - arm64
-    ignore:
-      - goos: windows
-        goarch: arm64
-
   - id: renart-duckdb-linux-amd64
     binary: renart
     main: ./
@@ -127,17 +106,6 @@ builds:
         - cmd: ./scripts/build_rustsqlparser_release_lib.sh x86_64-pc-windows-gnu
 
 archives:
-  - id: renart-archives
-    builds:
-      - renart
-    name_template: >-
-      {{ .ProjectName }}_
-      {{- title .Os }}_
-      {{- if eq .Arch "amd64" }}x86_64{{ else }}{{ .Arch }}{{ end }}
-    format_overrides:
-      - goos: windows
-        format: zip
-
   - id: renart-duckdb-archives
     builds:
       - renart-duckdb-linux-amd64
