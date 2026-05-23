@@ -14,6 +14,7 @@ import (
 
 	"github.com/bruin-data/bruin/pkg/ansisql"
 	"github.com/bruin-data/bruin/pkg/config"
+	"github.com/bruin-data/bruin/pkg/jinja"
 	"github.com/bruin-data/bruin/pkg/pipeline"
 	"github.com/bruin-data/bruin/pkg/query"
 	"github.com/spf13/afero"
@@ -256,6 +257,7 @@ select 1 as customer_id,'Ada' as customer_name union all select 2 as customer_id
 				pipeline.CreateTaskFromFileComments(osFS),
 				osFS,
 				DefaultGlossaryReader,
+				jinja.VariantRendererFactory,
 			)
 		},
 	)
@@ -352,6 +354,7 @@ delete from analytics.customers
 				pipeline.CreateTaskFromFileComments(osFS),
 				osFS,
 				DefaultGlossaryReader,
+				jinja.VariantRendererFactory,
 			)
 		},
 	)
@@ -582,6 +585,7 @@ func TestDirectRunAssetFailureMatchesCLIErrorSemantics(t *testing.T) {
 				pipeline.CreateTaskFromFileComments(osFS),
 				osFS,
 				DefaultGlossaryReader,
+				jinja.VariantRendererFactory,
 			)
 		},
 	)
@@ -635,6 +639,7 @@ func TestDirectRunPipelineFailureMatchesCLIErrorSemantics(t *testing.T) {
 				pipeline.CreateTaskFromFileComments(osFS),
 				osFS,
 				DefaultGlossaryReader,
+				jinja.VariantRendererFactory,
 			)
 		},
 	)
@@ -688,6 +693,7 @@ func TestDirectRunAssetSuccessMatchesCLISideEffects(t *testing.T) {
 				pipeline.CreateTaskFromFileComments(osFS),
 				osFS,
 				DefaultGlossaryReader,
+				jinja.VariantRendererFactory,
 			)
 		},
 	)
@@ -743,6 +749,7 @@ func TestDirectRunPipelineSuccessMatchesCLISideEffects(t *testing.T) {
 				pipeline.CreateTaskFromFileComments(osFS),
 				osFS,
 				DefaultGlossaryReader,
+				jinja.VariantRendererFactory,
 			)
 		},
 	)
@@ -854,6 +861,7 @@ func newCompatDirectExecutor(workspaceRoot, bruinBinary string) *HybridBruinExec
 				pipeline.CreateTaskFromFileComments(osFS),
 				osFS,
 				DefaultGlossaryReader,
+				jinja.VariantRendererFactory,
 			)
 		},
 	)

@@ -18,6 +18,7 @@ import (
 	"github.com/bruin-data/bruin/pkg/config"
 	"github.com/bruin-data/bruin/pkg/connection"
 	"github.com/bruin-data/bruin/pkg/git"
+	"github.com/bruin-data/bruin/pkg/jinja"
 	"github.com/bruin-data/bruin/pkg/pipeline"
 	"github.com/bruin-data/bruin/pkg/telemetry"
 	"github.com/go-chi/chi/v5"
@@ -879,6 +880,7 @@ func (s *webServer) newPipelineBuilder() *pipeline.Builder {
 		pipeline.CreateTaskFromFileComments(osFS),
 		osFS,
 		service.DefaultGlossaryReader,
+		jinja.VariantRendererFactory,
 	)
 }
 

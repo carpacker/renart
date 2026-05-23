@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/bruin-data/bruin/pkg/jinja"
 	"github.com/bruin-data/bruin/pkg/pipeline"
 	"github.com/spf13/afero"
 	webmodel "renart/internal/web/model"
@@ -528,5 +529,6 @@ func (s *PipelineService) newPipelineBuilder() *pipeline.Builder {
 		pipeline.CreateTaskFromFileComments(osFS),
 		osFS,
 		DefaultGlossaryReader,
+		jinja.VariantRendererFactory,
 	)
 }

@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/bruin-data/bruin/pkg/config"
+	"github.com/bruin-data/bruin/pkg/jinja"
 	"github.com/bruin-data/bruin/pkg/pipeline"
 	"github.com/spf13/afero"
 )
@@ -39,6 +40,7 @@ func (e *HybridBruinExecutor) FormatAsset(ctx context.Context, req FormatAssetRe
 		pipeline.CreateTaskFromFileComments(osFS),
 		osFS,
 		DefaultGlossaryReader,
+		jinja.VariantRendererFactory,
 	)
 	asset, err := builder.CreateAssetFromFile(assetPath, nil)
 	if err != nil {
