@@ -10,6 +10,7 @@ import (
 
 	"github.com/bruin-data/bruin/pkg/git"
 	"github.com/bruin-data/bruin/pkg/glossary"
+	"github.com/bruin-data/bruin/pkg/jinja"
 	bruinpath "github.com/bruin-data/bruin/pkg/path"
 	"github.com/bruin-data/bruin/pkg/pipeline"
 	"github.com/spf13/afero"
@@ -93,6 +94,7 @@ func (s *WorkspaceService) NewPipelineBuilder() *pipeline.Builder {
 		pipeline.CreateTaskFromFileComments(osFS),
 		osFS,
 		DefaultGlossaryReader,
+		jinja.VariantRendererFactory,
 	)
 }
 

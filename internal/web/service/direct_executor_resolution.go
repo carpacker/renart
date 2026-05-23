@@ -68,6 +68,7 @@ func getDirectPipelineAndAsset(ctx context.Context, workspaceRoot, inputPath str
 			pipeline.CreateTaskFromFileComments(fs),
 			fs,
 			DefaultGlossaryReader,
+			jinja.VariantRendererFactory,
 		)
 		return builder.CreatePipelineFromPath(ctx, pipelinePath, pipeline.WithMutate())
 	})

@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/bruin-data/bruin/pkg/jinja"
 	"github.com/bruin-data/bruin/pkg/pipeline"
 	"github.com/spf13/afero"
 	"github.com/stretchr/testify/assert"
@@ -25,6 +26,7 @@ func newExecutionTestResolver(workspaceRoot string) *WorkspaceResolver {
 			pipeline.CreateTaskFromFileComments(osFS),
 			osFS,
 			DefaultGlossaryReader,
+			jinja.VariantRendererFactory,
 		)
 		return builder.CreatePipelineFromPath(ctx, pipelinePath, pipeline.WithMutate())
 	})

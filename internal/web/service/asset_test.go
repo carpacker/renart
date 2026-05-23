@@ -24,6 +24,7 @@ func newAssetTestResolver(workspaceRoot string) *WorkspaceResolver {
 			pipeline.CreateTaskFromFileComments(osFS),
 			osFS,
 			nil,
+			jinja.VariantRendererFactory,
 		)
 		return builder.CreatePipelineFromPath(ctx, pipelinePath, pipeline.WithMutate())
 	})
