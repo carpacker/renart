@@ -11,7 +11,11 @@ import {
   ReactFlow,
   ReactFlowInstance,
 } from "reactflow";
-import { Panel, PanelGroup, PanelResizeHandle } from "react-resizable-panels";
+import {
+  Group as PanelGroup,
+  Panel,
+  Separator as PanelResizeHandle,
+} from "react-resizable-panels";
 
 import { WorkspaceResultsPanel } from "@/components/workspace-results-panel";
 import { Button } from "@/components/ui/button";
@@ -151,7 +155,7 @@ export function WorkspaceCanvasPane({
       defaultSize={50}
       minSize={30}
     >
-      <PanelGroup direction="vertical">
+      <PanelGroup orientation="vertical">
         <Panel defaultSize={hasResultData ? 72 : 100} minSize={45}>
           <div
             className="relative h-full"

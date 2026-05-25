@@ -2,7 +2,10 @@
 
 import { Dispatch, ReactNode, SetStateAction } from "react";
 import { Plus } from "lucide-react";
-import { PanelGroup, PanelResizeHandle } from "react-resizable-panels";
+import {
+  Group as PanelGroup,
+  Separator as PanelResizeHandle,
+} from "react-resizable-panels";
 
 import { WorkspaceCanvasPane, WorkspaceCanvasPaneProps } from "@/components/workspace-canvas-pane";
 import { WorkspaceMobileEditorSheet } from "@/components/workspace-mobile-editor-sheet";
@@ -54,7 +57,7 @@ export function WorkspaceMainContent({
   return (
     <>
       <PanelGroup
-        direction={isMobile ? "vertical" : "horizontal"}
+        orientation={isMobile ? "vertical" : "horizontal"}
         className="h-full min-h-0 min-w-0"
       >
         <WorkspaceCanvasPane {...canvasPaneProps} />
