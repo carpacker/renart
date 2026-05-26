@@ -1,7 +1,11 @@
 "use client";
 
 import { ReactNode, useEffect, useState } from "react";
-import { Panel, PanelGroup, PanelResizeHandle } from "react-resizable-panels";
+import {
+  Group as PanelGroup,
+  Panel,
+  Separator as PanelResizeHandle,
+} from "react-resizable-panels";
 
 import { useIsMobile } from "@/hooks/use-mobile";
 import { WorkspaceMobilePaneSheet } from "@/components/workspace-mobile-pane-sheet";
@@ -55,7 +59,7 @@ export function WorkspaceSettingsSplitView({
 
   return (
     <PanelGroup
-      direction="horizontal"
+      orientation="horizontal"
       className="h-full min-h-0 overflow-hidden"
     >
       <Panel defaultSize={50} minSize={30}>
