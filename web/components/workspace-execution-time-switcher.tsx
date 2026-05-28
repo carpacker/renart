@@ -5,7 +5,10 @@ import { Clock3 } from "lucide-react";
 import {
   Select,
   SelectContent,
+  SelectGroup,
   SelectItem,
+  SelectLabel,
+  SelectSeparator,
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
@@ -15,6 +18,8 @@ import { WebPipeline } from "@/lib/types";
 export function WorkspaceExecutionTimeSwitcher({ pipeline }: { pipeline: WebPipeline | null }) {
   const { options, selectedOption, selectedValue, handleExecutionTimeChange } =
     useWorkspaceExecutionTime(pipeline);
+  const groups = groupOptionsByDay(options);
+  const hasMultiplePartitionsPerDay = groups.some((group) => group.options.length > 1);
 
   if (options.length === 0) {
     return null;
@@ -31,12 +36,43 @@ export function WorkspaceExecutionTimeSwitcher({ pipeline }: { pipeline: WebPipe
         </span>
       </SelectTrigger>
       <SelectContent align="end" position="popper">
-        {options.map((option) => (
-          <SelectItem key={option.value} value={option.value}>
-            {option.label}{option.isDefault ? " (default)" : ""}
-          </SelectItem>
-        ))}
+        {hasMultiplePartitionsPerDay
+          ? groups.map((group, index) => (
+              <SelectGroup key={group.day}>
+                <SelectLabel>{group.day}</SelectLabel>
+                {group.options.map((option) => (
+                  <SelectItem key={option.value} value={option.value}>
+                    {option.label}{option.isDefault ? " (default)" : ""}
+                  </SelectItem>
+                ))}
+                {index < groups.length - 1 ? <SelectSeparator /> : null}
+              </SelectGroup>
+            ))
+          : options.map((option) => (
+              <SelectItem key={option.value} value={option.value}>
+                {option.label}{option.isDefault ? " (default)" : ""}
+              </SelectItem>
+            ))}
       </SelectContent>
     </Select>
   );
+}
+
+function groupOptionsByDay<T extends { start: string }>(options: T[]) {
+  const formatter = new Intl.DateTimeFormat(undefined, {
+    weekday: "short",
+    month: "short",
+    day: "numeric",
+  });
+  const groups: Array<{ day: string; options: T[] }> = [];
+  for (const option of options) {
+    const day = formatter.format(new Date(option.start));
+    const current = groups[groups.length - 1];
+    if (current?.day === day) {
+      current.options.push(option);
+    } else {
+      groups.push({ day, options: [option] });
+    }
+  }
+  return groups;
 }

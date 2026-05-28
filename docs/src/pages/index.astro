@@ -286,19 +286,75 @@ const landingStructuredData = JSON.stringify({
             <div class="bruin-row"><span class="check">✓</span><span><b>Inspect and materialize.</b> Preview results safely, then run assets intentionally when needed.</span></div>
             <div class="bruin-row"><span class="check">✓</span><span><b>Canvas-first lineage.</b> Understand dependencies visually while staying close to source files.</span></div>
           </div>
-          <div class="bruin-illus-wrap" hidden>
-          <div class="bruin-illus" aria-hidden="true">
-            <svg viewBox="0 0 360 340" preserveAspectRatio="xMidYMid meet">
-              <path d="M180 60 L180 130" stroke="var(--accent)" stroke-width="1.5" stroke-dasharray="4 3" fill="none" />
-              <path d="M180 180 L180 260" stroke="var(--line-3)" stroke-width="1.2" fill="none" />
-              <path d="M120 285 L240 285" stroke="var(--line-3)" stroke-width="1.2" fill="none" stroke-dasharray="3 3" />
-            </svg>
-            <div class="bruin-pill renart" style="top: 32px; left: 50%; transform: translateX(-50%);"><span class="ico">R</span>Renart</div>
-            <div class="bruin-pill bruin" style="top: 134px; left: 50%; transform: translateX(-50%);"><span class="ico">B</span>Bruin project</div>
-            <div class="bruin-pill git" style="top: 250px; left: 24px;"><span class="ico">G</span>Git repo</div>
-            <div class="bruin-pill wh" style="top: 250px; right: 24px;"><span class="ico">W</span>Warehouse</div>
-          </div>
-          <p class="bruin-caption">Renart is the IDE layer. Bruin remains the pipeline project model, with files in Git and execution against your warehouse.</p>
+          <div class="bruin-illus-wrap">
+            <div class="bruin-illus" aria-hidden="true">
+              <svg class="arch-svg" viewBox="0 0 540 540" preserveAspectRatio="none">
+                <defs>
+                  <marker id="arr-mute" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+                    <path d="M0 0 L9 5 L0 10 Z" fill="var(--line-3)" />
+                  </marker>
+                  <marker id="arr-accent" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+                    <path d="M0 0 L9 5 L0 10 Z" fill="var(--accent)" />
+                  </marker>
+                </defs>
+                <path d="M270 138 V 198" stroke="var(--accent)" stroke-width="1.5" fill="none" marker-end="url(#arr-accent)" />
+                <path d="M270 302 V 340" stroke="var(--line-3)" stroke-width="1.2" fill="none" />
+                <path d="M270 340 H 140 V 372" stroke="var(--line-3)" stroke-width="1.2" fill="none" marker-end="url(#arr-mute)" />
+                <path d="M270 340 H 400 V 372" stroke="var(--line-3)" stroke-width="1.2" fill="none" marker-end="url(#arr-mute)" />
+                <circle cx="270" cy="340" r="3" fill="var(--line-3)" />
+              </svg>
+
+              <div class="arch-node arch-node--primary" style="top: 5.2%; left: 12%; right: 12%; height: 19.6%;">
+                <div class="arch-node__head">
+                  <div class="arch-node__chrome"><span></span><span></span><span></span></div>
+                  <span class="arch-node__role">IDE Layer</span>
+                </div>
+                <div class="arch-node__title-row">
+                  <span class="arch-node__mark">R</span>
+                  <span class="arch-node__title">Renart</span>
+                </div>
+                <div class="arch-node__sub">Git-native data pipeline IDE</div>
+              </div>
+
+              <span class="arch-edge-label arch-edge-label--accent" style="top: 31.2%; left: 50%;">built on</span>
+
+              <div class="arch-node arch-node--secondary" style="top: 37%; left: 12%; right: 12%; height: 19.6%;">
+                <div class="arch-node__head">
+                  <span class="arch-node__role">Core engine</span>
+                  <span class="arch-mini-dag" aria-hidden="true"><i class="on"></i><em></em><i></i><em></em><i></i></span>
+                </div>
+                <div class="arch-node__title-row">
+                  <span class="arch-node__mark">B</span>
+                  <span class="arch-node__title">Bruin</span>
+                </div>
+                <div class="arch-node__sub">End-to-end data framework</div>
+              </div>
+
+              <span class="arch-edge-label arch-edge-label--mute" style="top: 63%; left: 50%;">preserves</span>
+
+              <div class="arch-node arch-node--tertiary arch-node--source" style="top: 68.9%; left: 5.5%; width: 41%; height: 27%;">
+                <div class="arch-node__head"><span class="arch-node__role">Workspace</span></div>
+                <div class="arch-node__title-row">
+                  <span class="arch-node__mark">F</span>
+                  <span class="arch-node__title">Project files</span>
+                </div>
+                <div class="arch-chips">
+                  <span class="chip">SQL</span><span class="chip">Python</span><span class="chip">YAML</span><span class="chip more">assets</span>
+                </div>
+              </div>
+
+              <div class="arch-node arch-node--tertiary arch-node--warehouse" style="top: 68.9%; right: 5.5%; width: 41%; height: 27%;">
+                <div class="arch-node__head"><span class="arch-node__role">Versioning</span></div>
+                <div class="arch-node__title-row">
+                  <span class="arch-node__mark">G</span>
+                  <span class="arch-node__title">Git history</span>
+                </div>
+                <div class="arch-chips">
+                  <span class="chip">diffs</span><span class="chip">reviews</span><span class="chip">branches</span><span class="chip more">CI</span>
+                </div>
+              </div>
+            </div>
+            <p class="bruin-caption">Renart is the IDE layer. Bruin remains the project model, with workspace files and Git history as the source of accountability.</p>
           </div>
         </div>
       </section>
@@ -654,11 +710,30 @@ const landingStructuredData = JSON.stringify({
   .check { width: 18px; height: 18px; border-radius: 50%; background: var(--accent-soft); color: var(--accent); display: grid; place-items: center; font-size: 12px; }
   .bruin-row b { color: var(--fg); font-weight: 500; }
   .bruin-illus-wrap { display: grid; gap: 14px; }
-  .bruin-illus { border: 1px solid var(--line); border-radius: var(--r-4); background: var(--bg-1); padding: 32px; aspect-ratio: 1.05 / 1; position: relative; overflow: hidden; isolation: isolate; }
-  .bruin-illus::before { content: ''; position: absolute; inset: 0; z-index: 0; background: radial-gradient(circle at 1px 1px, var(--line-2) 1px, transparent 1px) 0 0 / 16px 16px; opacity: 0.6; }
+  .bruin-illus { border: 1px solid var(--line); border-radius: var(--r-4); background: linear-gradient(180deg, color-mix(in srgb, var(--bg-1) 92%, var(--accent) 8%), var(--bg-1)); aspect-ratio: 1.05 / 1; position: relative; overflow: hidden; isolation: isolate; box-shadow: var(--shadow-card); }
+  .bruin-illus::before { content: ''; position: absolute; inset: 0; z-index: 0; background: radial-gradient(circle at 1px 1px, var(--line-2) 1px, transparent 1px) 0 0 / 16px 16px, radial-gradient(circle at 50% 18%, var(--accent-glow), transparent 46%); opacity: 0.8; }
+  .bruin-illus::after { content: ''; position: absolute; inset: 7%; z-index: 0; border: 1px solid var(--line); border-radius: calc(var(--r-4) - 8px); background: color-mix(in srgb, var(--bg) 58%, transparent); }
   .bruin-illus svg { position: absolute; inset: 0; z-index: 1; width: 100%; height: 100%; }
-  .bruin-pill { position: absolute; z-index: 2; padding: 8px 12px; border: 1px solid var(--line-2); border-radius: var(--r-2); background: var(--bg); font-family: var(--mono); font-size: 11.5px; color: var(--fg-2); display: inline-flex; align-items: center; gap: 8px; box-shadow: var(--shadow-card); white-space: nowrap; }
-  .bruin-pill .ico { width: 14px; height: 14px; border-radius: 3px; display: grid; place-items: center; font-size: 8px; font-weight: 700; background: var(--accent-soft); color: var(--accent); }
+  .arch-node { position: absolute; z-index: 2; display: flex; flex-direction: column; justify-content: space-between; min-width: 0; padding: 14px 16px; border: 1px solid var(--line-2); border-radius: var(--r-3); background: color-mix(in srgb, var(--bg) 92%, transparent); box-shadow: var(--shadow-card); backdrop-filter: blur(12px); }
+  .arch-node--primary { border-color: var(--accent-soft-2); background: linear-gradient(135deg, color-mix(in srgb, var(--accent-soft) 42%, var(--bg) 58%), var(--bg)); }
+  .arch-node--secondary { border-color: color-mix(in srgb, var(--accent) 32%, var(--line-2)); }
+  .arch-node--tertiary { padding: 13px 14px; background: color-mix(in srgb, var(--bg-1) 94%, transparent); }
+  .arch-node__head { display: flex; align-items: center; justify-content: space-between; gap: 10px; min-width: 0; }
+  .arch-node__chrome { display: inline-flex; gap: 5px; }
+  .arch-node__chrome span { width: 7px; height: 7px; border-radius: 50%; background: var(--line-3); }
+  .arch-node__role { font-family: var(--mono); font-size: 10px; color: var(--fg-4); text-transform: uppercase; letter-spacing: 0.11em; white-space: nowrap; }
+  .arch-node__title-row { display: flex; align-items: center; gap: 10px; min-width: 0; }
+  .arch-node__mark { width: 28px; height: 28px; border: 1px solid var(--accent-soft-2); border-radius: 9px; background: var(--accent-soft); color: var(--accent); display: grid; place-items: center; font-family: var(--mono); font-size: 12px; font-weight: 700; flex: none; }
+  .arch-node__title { font-size: clamp(18px, 2vw, 24px); font-weight: 500; letter-spacing: -0.02em; color: var(--fg); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .arch-node__sub { color: var(--fg-3); font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .arch-mini-dag { display: grid; grid-template-columns: 7px 14px 7px 14px 7px; align-items: center; opacity: 0.75; }
+  .arch-mini-dag i { width: 7px; height: 7px; border: 1px solid var(--line-3); border-radius: 50%; }
+  .arch-mini-dag i.on { border-color: var(--accent); background: var(--accent-soft); }
+  .arch-mini-dag em { height: 1px; background: var(--line-3); }
+  .arch-edge-label { position: absolute; z-index: 3; transform: translateX(-50%); padding: 3px 7px; border: 1px solid var(--line); border-radius: 999px; background: var(--bg); font-family: var(--mono); font-size: 9px; color: var(--fg-4); text-transform: uppercase; letter-spacing: 0.12em; white-space: nowrap; }
+  .arch-edge-label--accent { color: var(--accent); border-color: var(--accent-soft-2); }
+  .arch-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+  .chip { padding: 4px 6px; border: 1px solid var(--line); border-radius: 999px; color: var(--fg-3); font-family: var(--mono); font-size: 10px; line-height: 1; }
   .bruin-caption { margin: 0; color: var(--fg-3); font-size: 13px; line-height: 1.5; text-wrap: pretty; }
 
   .final { margin: 160px auto 0; max-width: 1100px; padding: 100px 28px 120px; text-align: center; border-top: 1px solid var(--line); position: relative; }
