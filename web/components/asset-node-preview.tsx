@@ -210,7 +210,7 @@ function ChartPreview({
             />
             <YAxis axisLine={false} tickLine={false} tickMargin={8} />
             <ChartTooltip
-              content={<ChartTooltipContent hideLabel />}
+              content={(props) => <ChartTooltipContent {...props} hideLabel />}
               cursor={false}
             />
             <ChartLegend content={<ChartLegendContent />} />
@@ -233,7 +233,7 @@ function ChartPreview({
               tickMargin={8}
             />
             <YAxis axisLine={false} tickLine={false} tickMargin={8} />
-            <ChartTooltip content={<ChartTooltipContent />} />
+            <ChartTooltip content={(props) => <ChartTooltipContent {...props} />} />
             <ChartLegend content={<ChartLegendContent />} />
             {chart.series.map((series) => (
               <Line
