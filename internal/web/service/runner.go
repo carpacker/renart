@@ -13,12 +13,16 @@ import (
 type RunAssetRequest struct {
 	AssetPath   string
 	Environment string
+	StartDate   string
+	EndDate     string
 }
 
 type RunPipelineRequest struct {
 	Target      string
 	Environment string
 	DryRun      bool
+	StartDate   string
+	EndDate     string
 }
 
 type QueryAssetRequest struct {
@@ -27,6 +31,8 @@ type QueryAssetRequest struct {
 	Environment string
 	ConfigFile  string
 	Output      string
+	StartDate   string
+	EndDate     string
 }
 
 type QueryConnectionRequest struct {

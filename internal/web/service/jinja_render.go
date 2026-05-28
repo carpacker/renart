@@ -22,7 +22,9 @@ type JinjaRenderService struct {
 }
 
 type JinjaRenderRequest struct {
-	Content string `json:"content"`
+	Content   string `json:"content"`
+	StartDate string `json:"start_date,omitempty"`
+	EndDate   string `json:"end_date,omitempty"`
 }
 
 type JinjaRenderSpan struct {
@@ -81,7 +83,7 @@ func (s *JinjaRenderService) Render(ctx context.Context, assetID string, req Jin
 		content = asset.ExecutableFile.Content
 	}
 
-	renderer, err := buildJinjaPreviewRenderer(ctx, parsed, asset)
+	renderer, err := buildJinjaPreviewRenderer(ctx, parsed, asset, req.StartDate, req.EndDate)
 	if err != nil {
 		return JinjaRenderResult{}, &JinjaRenderAPIError{Status: 400, Code: "renderer_failed", Message: err.Error()}
 	}
@@ -105,24 +107,25 @@ func (s *JinjaRenderService) Render(ctx context.Context, assetID string, req Jin
 	return result, nil
 }
 
-func buildJinjaPreviewRenderer(ctx context.Context, parsed *pipeline.Pipeline, asset *pipeline.Asset) (jinja.RendererInterface, error) {
+func buildJinjaPreviewRenderer(ctx context.Context, parsed *pipeline.Pipeline, asset *pipeline.Asset, start, end string) (jinja.RendererInterface, error) {
 	if parsed == nil || asset == nil {
 		return nil, fmt.Errorf("asset or pipeline is missing")
 	}
 
 	now := time.Now().UTC()
-	yesterday := now.Add(-24 * time.Hour)
-	startDate := time.Date(yesterday.Year(), yesterday.Month(), yesterday.Day(), 0, 0, 0, 0, time.UTC)
-	endDate := time.Date(yesterday.Year(), yesterday.Month(), yesterday.Day(), 23, 59, 59, 0, time.UTC)
+	timeWindow, err := ResolveExecutionTimeWindow(string(parsed.Schedule), start, end, now)
+	if err != nil {
+		return nil, err
+	}
 
 	macroContent, err := jinja.LoadMacros(afero.NewOsFs(), parsed.MacrosPath)
 	if err != nil {
 		return nil, err
 	}
 
-	renderer := jinja.NewRendererWithStartEndDatesAndMacros(&startDate, &endDate, &now, parsed.Name, "renart-preview", nil, macroContent)
-	runCtx := context.WithValue(ctx, pipeline.RunConfigStartDate, startDate)
-	runCtx = context.WithValue(runCtx, pipeline.RunConfigEndDate, endDate)
+	renderer := jinja.NewRendererWithStartEndDatesAndMacros(&timeWindow.Start, &timeWindow.End, &now, parsed.Name, "renart-preview", nil, macroContent)
+	runCtx := context.WithValue(ctx, pipeline.RunConfigStartDate, timeWindow.Start)
+	runCtx = context.WithValue(runCtx, pipeline.RunConfigEndDate, timeWindow.End)
 	runCtx = context.WithValue(runCtx, pipeline.RunConfigExecutionDate, now)
 	runCtx = context.WithValue(runCtx, pipeline.RunConfigRunID, "renart-preview")
 	runCtx = context.WithValue(runCtx, pipeline.RunConfigFullRefresh, false)

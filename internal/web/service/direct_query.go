@@ -18,6 +18,7 @@ import (
 )
 
 func (e *HybridBruinExecutor) QueryAsset(ctx context.Context, req QueryAssetRequest) ([]byte, error) {
+	queryStartedAt := time.Now()
 	if e.newPipelineBuilder == nil {
 		return nil, fmt.Errorf("direct asset query requires a pipeline builder")
 	}
@@ -40,7 +41,7 @@ func (e *HybridBruinExecutor) QueryAsset(ctx context.Context, req QueryAssetRequ
 		return output, err
 	}
 
-	connName, conn, queryStr, err := e.buildDirectAssetQuery(ctx, pp, req.Environment)
+	connName, conn, queryStr, err := e.buildDirectAssetQuery(ctx, pp, req.Environment, req.StartDate, req.EndDate)
 	if err != nil {
 		output, marshalErr := json.Marshal(directErrorResponse{Error: err.Error()})
 		if marshalErr != nil {
@@ -57,6 +58,15 @@ func (e *HybridBruinExecutor) QueryAsset(ctx context.Context, req QueryAssetRequ
 	if dialect != "" {
 		isSelect, selectErr := isReadOnlySelectQuery(queryStr, pp.Asset.Type)
 		if selectErr == nil && !isSelect {
+			_ = e.executionLogSink().SaveQueryLog(ctx, QueryLogRecord{
+				Query:               queryStr,
+				QueryStartTimestamp: queryStartedAt,
+				Connection:          connName,
+				Error:               fmt.Errorf(inspectReadOnlyErrorMessage),
+				Asset:               req.AssetPath,
+				Environment:         req.Environment,
+				Limit:               parseQueryLogLimit(req.Limit),
+			})
 			output, marshalErr := json.Marshal(directErrorResponse{Error: inspectReadOnlyErrorMessage})
 			if marshalErr != nil {
 				return nil, fmt.Errorf(inspectReadOnlyErrorMessage)
@@ -84,6 +94,15 @@ func (e *HybridBruinExecutor) QueryAsset(ctx context.Context, req QueryAssetRequ
 		queryStr, err = applyDirectSchemaPrefix(ctx, queryStr, dialect, parser, pp, conn)
 		if err != nil {
 			wrappedErr := fmt.Errorf("failed to apply schema prefix: %w", err)
+			_ = e.executionLogSink().SaveQueryLog(ctx, QueryLogRecord{
+				Query:               queryStr,
+				QueryStartTimestamp: queryStartedAt,
+				Connection:          connName,
+				Error:               wrappedErr,
+				Asset:               req.AssetPath,
+				Environment:         req.Environment,
+				Limit:               parseQueryLogLimit(req.Limit),
+			})
 			output, marshalErr := json.Marshal(directErrorResponse{Error: wrappedErr.Error()})
 			if marshalErr != nil {
 				return nil, wrappedErr
@@ -104,6 +123,15 @@ func (e *HybridBruinExecutor) QueryAsset(ctx context.Context, req QueryAssetRequ
 	})
 	if !ok {
 		err := fmt.Errorf("connection type %s does not support querying", connName)
+		_ = e.executionLogSink().SaveQueryLog(ctx, QueryLogRecord{
+			Query:               queryStr,
+			QueryStartTimestamp: queryStartedAt,
+			Connection:          connName,
+			Error:               err,
+			Asset:               req.AssetPath,
+			Environment:         req.Environment,
+			Limit:               parseQueryLogLimit(req.Limit),
+		})
 		output, marshalErr := json.Marshal(directErrorResponse{Error: err.Error()})
 		if marshalErr != nil {
 			return nil, err
@@ -114,6 +142,15 @@ func (e *HybridBruinExecutor) QueryAsset(ctx context.Context, req QueryAssetRequ
 	result, err := selectWithComplexJSONFallback(ctx, querier, queryStr)
 	if err != nil {
 		wrappedErr := fmt.Errorf("query execution failed: %w", err)
+		_ = e.executionLogSink().SaveQueryLog(ctx, QueryLogRecord{
+			Query:               queryStr,
+			QueryStartTimestamp: queryStartedAt,
+			Connection:          connName,
+			Error:               wrappedErr,
+			Asset:               req.AssetPath,
+			Environment:         req.Environment,
+			Limit:               parseQueryLogLimit(req.Limit),
+		})
 		output, marshalErr := json.Marshal(directErrorResponse{Error: wrappedErr.Error()})
 		if marshalErr != nil {
 			return nil, wrappedErr
@@ -121,11 +158,22 @@ func (e *HybridBruinExecutor) QueryAsset(ctx context.Context, req QueryAssetRequ
 		return output, wrappedErr
 	}
 
+	_ = e.executionLogSink().SaveQueryLog(ctx, QueryLogRecord{
+		Query:               queryStr,
+		QueryStartTimestamp: queryStartedAt,
+		Connection:          connName,
+		Result:              result,
+		Asset:               req.AssetPath,
+		Environment:         req.Environment,
+		Limit:               parseQueryLogLimit(req.Limit),
+	})
+
 	response := NewQueryResultDTO(result, connName, queryStr)
 	return json.Marshal(response)
 }
 
 func (e *HybridBruinExecutor) QueryConnection(ctx context.Context, req QueryConnectionRequest) ([]byte, error) {
+	queryStartedAt := time.Now()
 	if e.newConnectionManager == nil {
 		return nil, fmt.Errorf("direct connection query requires a connection manager")
 	}
@@ -149,8 +197,23 @@ func (e *HybridBruinExecutor) QueryConnection(ctx context.Context, req QueryConn
 
 	result, err := selectWithComplexJSONFallback(ctx, querier, req.Query)
 	if err != nil {
+		_ = e.executionLogSink().SaveQueryLog(ctx, QueryLogRecord{
+			Query:               req.Query,
+			QueryStartTimestamp: queryStartedAt,
+			Connection:          req.ConnectionName,
+			Error:               err,
+			Environment:         req.Environment,
+		})
 		return nil, err
 	}
+
+	_ = e.executionLogSink().SaveQueryLog(ctx, QueryLogRecord{
+		Query:               req.Query,
+		QueryStartTimestamp: queryStartedAt,
+		Connection:          req.ConnectionName,
+		Result:              result,
+		Environment:         req.Environment,
+	})
 
 	response := NewQueryResultDTO(result, req.ConnectionName, req.Query)
 
@@ -159,6 +222,14 @@ func (e *HybridBruinExecutor) QueryConnection(ctx context.Context, req QueryConn
 	}
 
 	return nil, fmt.Errorf("direct connection query only supports json output")
+}
+
+func parseQueryLogLimit(raw string) int64 {
+	limit, err := strconv.ParseInt(strings.TrimSpace(raw), 10, 64)
+	if err != nil || limit <= 0 {
+		return 0
+	}
+	return limit
 }
 
 type directSchemaQuerier interface {
@@ -244,7 +315,7 @@ func wrapDirectQueryWithLimit(queryStr string, limit int64) string {
 	return fmt.Sprintf("SELECT * FROM (\n%s\n) AS renart_schema_query LIMIT %d", strings.TrimRight(queryStr, "; \n\t"), limit)
 }
 
-func (e *HybridBruinExecutor) buildDirectAssetQuery(ctx context.Context, pp *directPipelineInfo, environment string) (string, interface{}, string, error) {
+func (e *HybridBruinExecutor) buildDirectAssetQuery(ctx context.Context, pp *directPipelineInfo, environment, start, end string) (string, interface{}, string, error) {
 	if strings.TrimSpace(environment) != "" {
 		if _, err := selectConfigEnvironment(pp.Config, environment); err != nil {
 			return "", nil, "", fmt.Errorf("failed to use the environment '%s': %w", environment, err)
@@ -276,12 +347,13 @@ func (e *HybridBruinExecutor) buildDirectAssetQuery(ctx context.Context, pp *dir
 	}
 
 	now := time.Now().UTC()
-	yesterday := now.Add(-24 * time.Hour)
-	startDate := time.Date(yesterday.Year(), yesterday.Month(), yesterday.Day(), 0, 0, 0, 0, time.UTC)
-	endDate := time.Date(yesterday.Year(), yesterday.Month(), yesterday.Day(), 23, 59, 59, 0, time.UTC)
-	renderer := jinja.NewRendererWithStartEndDates(&startDate, &endDate, &now, pp.Pipeline.Name, "your-run-id", nil)
-	fetchCtx := context.WithValue(ctx, pipeline.RunConfigStartDate, startDate)
-	fetchCtx = context.WithValue(fetchCtx, pipeline.RunConfigEndDate, endDate)
+	timeWindow, err := ResolveExecutionTimeWindow(string(pp.Pipeline.Schedule), start, end, now)
+	if err != nil {
+		return "", nil, "", err
+	}
+	renderer := jinja.NewRendererWithStartEndDates(&timeWindow.Start, &timeWindow.End, &now, pp.Pipeline.Name, "your-run-id", nil)
+	fetchCtx := context.WithValue(ctx, pipeline.RunConfigStartDate, timeWindow.Start)
+	fetchCtx = context.WithValue(fetchCtx, pipeline.RunConfigEndDate, timeWindow.End)
 	fetchCtx = context.WithValue(fetchCtx, pipeline.RunConfigExecutionDate, now)
 	fetchCtx = context.WithValue(fetchCtx, pipeline.RunConfigRunID, "your-run-id")
 	fetchCtx = context.WithValue(fetchCtx, config.EnvironmentContextKey, pp.Config.SelectedEnvironment)

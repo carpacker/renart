@@ -40,13 +40,18 @@ func (e *HybridBruinExecutor) RunAsset(ctx context.Context, req RunAssetRequest,
 		return nil, err
 	}
 
-	runCtx, parser, cleanup, err := buildDirectRunAssetContext(ctx, pp)
+	runID := newRenartRunID()
+	timeWindow, err := ResolveExecutionTimeWindow(string(pp.Pipeline.Schedule), req.StartDate, req.EndDate, time.Now().UTC())
+	if err != nil {
+		return nil, err
+	}
+	runCtx, parser, cleanup, err := buildDirectRunAssetContext(ctx, pp, timeWindow, runID)
 	if err != nil {
 		return nil, err
 	}
 	defer cleanup()
 
-	renderer, err := buildDirectRunAssetRenderer(pp)
+	renderer, err := buildDirectRunAssetRenderer(pp, timeWindow, runID)
 	if err != nil {
 		return nil, err
 	}
@@ -56,7 +61,7 @@ func (e *HybridBruinExecutor) RunAsset(ctx context.Context, req RunAssetRequest,
 		return nil, err
 	}
 
-	s := scheduler.NewScheduler(zap.NewNop().Sugar(), pp.Pipeline, "renart-run")
+	s := scheduler.NewScheduler(zap.NewNop().Sugar(), pp.Pipeline, runID)
 	s.MarkAll(scheduler.Skipped)
 	if !s.MarkAsset(pp.Asset, scheduler.Pending, false) {
 		return nil, fmt.Errorf("asset '%s' was not found among the pipeline's scheduled task instances", pp.Asset.Name)
@@ -106,9 +111,11 @@ func (e *HybridBruinExecutor) RunAsset(ctx context.Context, req RunAssetRequest,
 			writeDirectRunLifecycle(printer, instance, nil, true, 0)
 			taskStartedAt := time.Now()
 			if err := seq.RunSingleTask(runCtx, instance); err != nil {
+				instance.MarkAs(scheduler.Failed)
 				results = append(results, &scheduler.TaskExecutionResult{Instance: instance, Error: err})
 				writeDirectRunLifecycle(printer, instance, err, false, time.Since(taskStartedAt))
 				writeDirectRunSummary(printer, buildDirectRunSummary(results, time.Since(startedAt)))
+				_ = e.saveDirectRunLog(ctx, pp.Pipeline, s, runID, req.Environment, timeWindow, []string{"renart", "run", req.AssetPath})
 				return printer.buffer.Bytes(), err
 			}
 			instance.MarkAs(scheduler.Succeeded)
@@ -123,6 +130,7 @@ func (e *HybridBruinExecutor) RunAsset(ctx context.Context, req RunAssetRequest,
 	}
 
 	writeDirectRunSummary(printer, buildDirectRunSummary(results, time.Since(startedAt)))
+	_ = e.saveDirectRunLog(ctx, pp.Pipeline, s, runID, req.Environment, timeWindow, []string{"renart", "run", req.AssetPath})
 	return printer.buffer.Bytes(), nil
 }
 
@@ -161,12 +169,17 @@ func (e *HybridBruinExecutor) RunPipeline(ctx context.Context, req RunPipelineRe
 	}
 
 	pp := &directPipelineInfo{Pipeline: foundPipeline, Config: cfg}
-	runCtx, parser, cleanup, err := buildDirectRunAssetContext(ctx, pp)
+	runID := newRenartRunID()
+	timeWindow, err := ResolveExecutionTimeWindow(string(foundPipeline.Schedule), req.StartDate, req.EndDate, time.Now().UTC())
+	if err != nil {
+		return nil, err
+	}
+	runCtx, parser, cleanup, err := buildDirectRunAssetContext(ctx, pp, timeWindow, runID)
 	if err != nil {
 		return nil, err
 	}
 	defer cleanup()
-	renderer, err := buildDirectRunAssetRenderer(pp)
+	renderer, err := buildDirectRunAssetRenderer(pp, timeWindow, runID)
 	if err != nil {
 		return nil, err
 	}
@@ -188,7 +201,7 @@ func (e *HybridBruinExecutor) RunPipeline(ctx context.Context, req RunPipelineRe
 	runCtx = context.WithValue(runCtx, bruinexecutor.ContextLogger, zap.NewNop().Sugar())
 
 	seq := bruinexecutor.Sequential{TaskTypeMap: mainExecutors}
-	s := scheduler.NewScheduler(zap.NewNop().Sugar(), foundPipeline, "renart-run")
+	s := scheduler.NewScheduler(zap.NewNop().Sugar(), foundPipeline, runID)
 	s.MarkAll(scheduler.Pending)
 	results := make([]*scheduler.TaskExecutionResult, 0)
 	startedAt := time.Now()
@@ -216,9 +229,11 @@ func (e *HybridBruinExecutor) RunPipeline(ctx context.Context, req RunPipelineRe
 			writeDirectRunLifecycle(printer, instance, nil, true, 0)
 			taskStartedAt := time.Now()
 			if err := seq.RunSingleTask(runCtx, instance); err != nil {
+				instance.MarkAs(scheduler.Failed)
 				results = append(results, &scheduler.TaskExecutionResult{Instance: instance, Error: err})
 				writeDirectRunLifecycle(printer, instance, err, false, time.Since(taskStartedAt))
 				writeDirectRunSummary(printer, buildDirectRunSummary(results, time.Since(startedAt)))
+				_ = e.saveDirectRunLog(ctx, foundPipeline, s, runID, req.Environment, timeWindow, []string{"renart", "run", req.Target})
 				return printer.buffer.Bytes(), err
 			}
 			instance.MarkAs(scheduler.Succeeded)
@@ -228,12 +243,30 @@ func (e *HybridBruinExecutor) RunPipeline(ctx context.Context, req RunPipelineRe
 
 		if !progressed {
 			writeDirectRunSummary(printer, buildDirectRunSummary(results, time.Since(startedAt)))
+			_ = e.saveDirectRunLog(ctx, foundPipeline, s, runID, req.Environment, timeWindow, []string{"renart", "run", req.Target})
 			return printer.buffer.Bytes(), fmt.Errorf("direct run stalled: no runnable task instances remained")
 		}
 	}
 
 	writeDirectRunSummary(printer, buildDirectRunSummary(results, time.Since(startedAt)))
+	_ = e.saveDirectRunLog(ctx, foundPipeline, s, runID, req.Environment, timeWindow, []string{"renart", "run", req.Target})
 	return printer.buffer.Bytes(), nil
+}
+
+func (e *HybridBruinExecutor) saveDirectRunLog(ctx context.Context, foundPipeline *pipeline.Pipeline, s *scheduler.Scheduler, runID, environment string, timeWindow ExecutionTimeWindow, cmdline []string) error {
+	runConfig := &scheduler.RunConfig{
+		Environment: environment,
+		Output:      "plain",
+		StartDate:   timeWindow.StartRFC3339(),
+		EndDate:     timeWindow.EndRFC3339(),
+	}
+	return e.executionLogSink().SaveRunLog(ctx, RunLogRecord{
+		Pipeline:  foundPipeline,
+		Scheduler: s,
+		RunConfig: runConfig,
+		RunID:     runID,
+		Cmdline:   cmdline,
+	})
 }
 
 func (e *HybridBruinExecutor) directConnectionManager(ctx context.Context, cfg *config.Config) (config.ConnectionAndDetailsGetter, error) {
@@ -349,17 +382,13 @@ func allDirectRunPipelineDependenciesSucceeded(instance scheduler.TaskInstance) 
 	return true
 }
 
-func buildDirectRunAssetContext(ctx context.Context, pp *directPipelineInfo) (context.Context, *sqlparser.SQLParser, func(), error) {
+func buildDirectRunAssetContext(ctx context.Context, pp *directPipelineInfo, timeWindow ExecutionTimeWindow, runID string) (context.Context, *sqlparser.SQLParser, func(), error) {
 	now := time.Now().UTC()
-	yesterday := now.Add(-24 * time.Hour)
-	startDate := time.Date(yesterday.Year(), yesterday.Month(), yesterday.Day(), 0, 0, 0, 0, time.UTC)
-	endDate := time.Date(yesterday.Year(), yesterday.Month(), yesterday.Day(), 23, 59, 59, 0, time.UTC)
-
 	runCtx := context.WithValue(ctx, pipeline.RunConfigFullRefresh, false)
-	runCtx = context.WithValue(runCtx, pipeline.RunConfigStartDate, startDate)
-	runCtx = context.WithValue(runCtx, pipeline.RunConfigEndDate, endDate)
+	runCtx = context.WithValue(runCtx, pipeline.RunConfigStartDate, timeWindow.Start)
+	runCtx = context.WithValue(runCtx, pipeline.RunConfigEndDate, timeWindow.End)
 	runCtx = context.WithValue(runCtx, pipeline.RunConfigExecutionDate, now)
-	runCtx = context.WithValue(runCtx, pipeline.RunConfigRunID, "renart-run")
+	runCtx = context.WithValue(runCtx, pipeline.RunConfigRunID, runID)
 	runCtx = context.WithValue(runCtx, config.EnvironmentContextKey, pp.Config.SelectedEnvironment)
 	runCtx = context.WithValue(runCtx, config.EnvironmentNameContextKey, pp.Config.SelectedEnvironmentName)
 	runCtx = context.WithValue(runCtx, bruinexecutor.KeyIsDebug, false)
@@ -382,15 +411,12 @@ func buildDirectRunAssetContext(ctx context.Context, pp *directPipelineInfo) (co
 	return runCtx, parser, cleanup, nil
 }
 
-func buildDirectRunAssetRenderer(pp *directPipelineInfo) (*jinja.Renderer, error) {
+func buildDirectRunAssetRenderer(pp *directPipelineInfo, timeWindow ExecutionTimeWindow, runID string) (*jinja.Renderer, error) {
 	now := time.Now().UTC()
-	yesterday := now.Add(-24 * time.Hour)
-	startDate := time.Date(yesterday.Year(), yesterday.Month(), yesterday.Day(), 0, 0, 0, 0, time.UTC)
-	endDate := time.Date(yesterday.Year(), yesterday.Month(), yesterday.Day(), 23, 59, 59, 0, time.UTC)
 	macroContent, err := jinja.LoadMacros(afero.NewOsFs(), pp.Pipeline.MacrosPath)
 	if err != nil {
 		return nil, err
 	}
 
-	return jinja.NewRendererWithStartEndDatesAndMacros(&startDate, &endDate, &now, pp.Pipeline.Name, "renart-run", nil, macroContent), nil
+	return jinja.NewRendererWithStartEndDatesAndMacros(&timeWindow.Start, &timeWindow.End, &now, pp.Pipeline.Name, runID, nil, macroContent), nil
 }

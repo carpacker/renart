@@ -47,10 +47,11 @@ type ColumnCheck struct {
 
 // Pipeline represents a web API pipeline.
 type Pipeline struct {
-	ID     string  `json:"id"`
-	Name   string  `json:"name"`
-	Path   string  `json:"path"`
-	Assets []Asset `json:"assets"`
+	ID       string  `json:"id"`
+	Name     string  `json:"name"`
+	Path     string  `json:"path"`
+	Schedule string  `json:"schedule,omitempty"`
+	Assets   []Asset `json:"assets"`
 }
 
 // WorkspaceState represents the current state of a workspace.
@@ -234,6 +235,8 @@ type OperationMetadata struct {
 	Query          string   `json:"query,omitempty"`
 	Limit          string   `json:"limit,omitempty"`
 	Environment    string   `json:"environment,omitempty"`
+	StartDate      string   `json:"start_date,omitempty"`
+	EndDate        string   `json:"end_date,omitempty"`
 	Operation      string   `json:"operation,omitempty"`
 	TargetPath     string   `json:"target_path,omitempty"`
 	ConfigFile     string   `json:"config_file,omitempty"`

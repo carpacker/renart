@@ -160,7 +160,7 @@ require (
 	github.com/pmezard/go-difflib v1.0.1-0.20181226105442-5d4384ee4fb2 // indirect
 	github.com/prometheus/procfs v0.7.3 // indirect
 	github.com/rivo/uniseg v0.4.7 // indirect
-	github.com/robfig/cron/v3 v3.0.1 // indirect
+	github.com/robfig/cron/v3 v3.0.1
 	github.com/rs/zerolog v1.28.0 // indirect
 	github.com/rudderlabs/analytics-go/v4 v4.2.1 // indirect
 	github.com/samber/lo v1.51.0 // indirect

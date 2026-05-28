@@ -1,4 +1,4 @@
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { execFileSync } from "node:child_process";
 import { chromium } from "@playwright/test";
@@ -8,6 +8,21 @@ const iconDir = resolve(webRoot, "public", "icons");
 const sourceSvg = resolve(iconDir, "icon.svg");
 const svgMarkup = readFileSync(sourceSvg, "utf8");
 const svgDataUrl = `data:image/svg+xml;base64,${Buffer.from(svgMarkup).toString("base64")}`;
+
+function writeFileIfChanged(filePath, nextContent) {
+  if (existsSync(filePath)) {
+    const currentContent = readFileSync(filePath);
+    if (Buffer.isBuffer(nextContent) && currentContent.equals(nextContent)) {
+      return false;
+    }
+    if (typeof nextContent === "string" && currentContent.equals(Buffer.from(nextContent))) {
+      return false;
+    }
+  }
+
+  writeFileSync(filePath, nextContent);
+  return true;
+}
 
 function resolveBrowserLaunchOptions() {
   const explicitPath = process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH?.trim();
@@ -73,7 +88,8 @@ try {
         const img = document.getElementById("icon");
         return img instanceof HTMLImageElement && img.complete && img.naturalWidth > 0;
       });
-      await page.screenshot({ path: output, omitBackground: true });
+      const png = await page.screenshot({ omitBackground: true });
+      writeFileIfChanged(output, png);
     } finally {
       await page.close();
     }
@@ -118,4 +134,4 @@ const favicon = createIcoFromPngs([
   readFileSync(resolve(iconDir, "icon-16.png")),
   readFileSync(resolve(iconDir, "icon-32.png")),
 ]);
-writeFileSync(resolve(iconDir, "favicon.ico"), favicon);
+writeFileIfChanged(resolve(iconDir, "favicon.ico"), favicon);

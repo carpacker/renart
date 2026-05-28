@@ -13,6 +13,7 @@ import {
 import {
   pipelineAtom,
   resolvedSelectedAssetAtom,
+  selectedExecutionTimeWindowAtom,
   selectedEnvironmentAtom,
 } from "@/lib/atoms/domains/workspace";
 import { useAssetInspect } from "@/hooks/use-asset-inspect";
@@ -41,6 +42,7 @@ function createMaterializeEntry(input: {
   loading?: boolean;
   createdAt: number;
   updatedAt?: number;
+  timeWindow?: { start: string; end: string } | null;
 }) {
   return {
     id: input.id,
@@ -56,6 +58,7 @@ function createMaterializeEntry(input: {
     loading: input.loading ?? false,
     createdAt: input.createdAt,
     updatedAt: input.updatedAt ?? input.createdAt,
+    timeWindow: input.timeWindow ?? null,
   };
 }
 
@@ -126,6 +129,7 @@ export function useAssetResults() {
   const selectedEnvironment = useAtomValue(selectedEnvironmentAtom);
   const pipelineId = pipeline?.id ?? null;
   const selectedAssetId = useAtomValue(resolvedSelectedAssetAtom);
+  const selectedExecutionTimeWindow = useAtomValue(selectedExecutionTimeWindowAtom);
   const inspectAssets = useMemo(() => (asset ? [asset] : []), [asset]);
   const {
     inspectAssetById,
@@ -232,6 +236,7 @@ export function useAssetResults() {
         force: true,
         limit: 200,
         contentSnapshot,
+        timeWindow: selectedExecutionTimeWindow ?? undefined,
       });
       if (result.rows.length > 0 || result.error) {
         setResultTab("inspect");
@@ -249,7 +254,7 @@ export function useAssetResults() {
       setResultTab("inspect");
       return failure;
     }
-  }, [inspectAssetById]);
+  }, [inspectAssetById, selectedExecutionTimeWindow]);
 
   const runMaterializeForAsset = useCallback(async (
     assetId: string,
@@ -280,6 +285,7 @@ export function useAssetResults() {
         pipelineName: pipeline?.name ?? null,
         loading: true,
         createdAt: startedAt,
+        timeWindow: selectedExecutionTimeWindow,
       }),
     }));
 
@@ -298,13 +304,14 @@ export function useAssetResults() {
                 pipelineName: pipeline?.name ?? null,
                 loading: true,
                 createdAt: startedAt,
+                timeWindow: selectedExecutionTimeWindow,
               })),
             output: (previous?.output ?? "") + chunk,
             loading: true,
             updatedAt: Date.now(),
           }));
         },
-        }, { environment: selectedEnvironment, scope });
+        }, { environment: selectedEnvironment, scope, timeWindow: selectedExecutionTimeWindow ?? undefined });
       upsertMaterializeEntry(entryId, (previous) => ({
         ...(previous ??
           createMaterializeEntry({
@@ -317,6 +324,7 @@ export function useAssetResults() {
             pipelineName: pipeline?.name ?? null,
             loading: true,
             createdAt: startedAt,
+            timeWindow: selectedExecutionTimeWindow,
           })),
         output: result.output ?? previous?.output ?? "",
         status: result.status ?? "error",
@@ -352,6 +360,7 @@ export function useAssetResults() {
             pipelineName: pipeline?.name ?? null,
             loading: true,
             createdAt: startedAt,
+            timeWindow: selectedExecutionTimeWindow,
           })),
         output:
           (previous?.output ?? "") +
@@ -376,7 +385,7 @@ export function useAssetResults() {
         await refresh();
       }
     }
-  }, [asset?.name, pipeline, pipelineId, selectedEnvironment, setChangedAssetIds, setResultTab]);
+  }, [asset?.name, pipeline, pipelineId, selectedEnvironment, selectedExecutionTimeWindow, setChangedAssetIds, setResultTab]);
 
   const runMaterializePipeline = useCallback(async (
     pipelineId: string,
@@ -404,6 +413,7 @@ export function useAssetResults() {
         pipelineName: pipeline?.name ?? null,
         loading: true,
         createdAt: startedAt,
+        timeWindow: selectedExecutionTimeWindow,
       }),
     }));
 
@@ -424,13 +434,14 @@ export function useAssetResults() {
                 pipelineName: pipeline?.name ?? null,
                 loading: true,
                 createdAt: startedAt,
+                timeWindow: selectedExecutionTimeWindow,
               })),
             output: (previous?.output ?? "") + chunk,
             loading: true,
             updatedAt: Date.now(),
           }));
         },
-      }, { environment: selectedEnvironment, dryRun: options?.dryRun });
+      }, { environment: selectedEnvironment, dryRun: options?.dryRun, timeWindow: selectedExecutionTimeWindow ?? undefined });
 
       upsertMaterializeEntry(entryId, (previous) => ({
         ...(previous ??
@@ -446,6 +457,7 @@ export function useAssetResults() {
             pipelineName: pipeline?.name ?? null,
             loading: true,
             createdAt: startedAt,
+            timeWindow: selectedExecutionTimeWindow,
           })),
         output: result.output ?? previous?.output ?? "",
         status: result.status ?? "error",
@@ -481,6 +493,7 @@ export function useAssetResults() {
             pipelineName: pipeline?.name ?? null,
             loading: true,
             createdAt: startedAt,
+            timeWindow: selectedExecutionTimeWindow,
           })),
         output:
           (previous?.output ?? "") +
@@ -505,7 +518,7 @@ export function useAssetResults() {
         await refresh();
       }
     }
-  }, [pipeline, selectedEnvironment, setChangedAssetIds]);
+  }, [pipeline, selectedEnvironment, selectedExecutionTimeWindow, setChangedAssetIds]);
 
   const setMaterializeBatchResult = (
     output: string,

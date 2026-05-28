@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import type * as MonacoNS from "monaco-editor";
+import { useAtomValue } from "jotai";
 
 import {
   JinjaRenderResponse,
@@ -9,6 +10,7 @@ import {
   registerJinjaProviders,
   renderJinjaAsset,
 } from "@/lib/jinja-intellisense";
+import { selectedExecutionTimeWindowAtom } from "@/lib/atoms/domains/workspace";
 import { WebAsset } from "@/lib/types";
 
 export function useJinjaIntellisense(
@@ -18,6 +20,7 @@ export function useJinjaIntellisense(
   content: string,
 ) {
   const [renderResult, setRenderResult] = useState<JinjaRenderResponse | null>(null);
+  const selectedExecutionTimeWindow = useAtomValue(selectedExecutionTimeWindowAtom);
   const renderResultRef = useRef<JinjaRenderResponse | null>(null);
   renderResultRef.current = renderResult;
   const assetId = asset?.id ?? null;
@@ -39,7 +42,7 @@ export function useJinjaIntellisense(
     const controller = new AbortController();
     const timer = window.setTimeout(async () => {
       try {
-        const response = await renderJinjaAsset({ assetId, content, signal: controller.signal });
+        const response = await renderJinjaAsset({ assetId, content, timeWindow: selectedExecutionTimeWindow, signal: controller.signal });
         if (!controller.signal.aborted) {
           setRenderResult(response);
         }
@@ -54,7 +57,7 @@ export function useJinjaIntellisense(
       controller.abort();
       window.clearTimeout(timer);
     };
-  }, [assetId, content, isSqlAsset]);
+  }, [assetId, content, isSqlAsset, selectedExecutionTimeWindow]);
 
   useEffect(() => {
     if (!editor || !monaco || !isSqlAsset) return;

@@ -59,6 +59,11 @@ export function WorkspaceMaterializeHistoryList({
                           ? "Batch output"
                           : "Asset materialize"}
                     </div>
+                    {entry.timeWindow ? (
+                      <div className="truncate text-[11px] text-muted-foreground">
+                        {formatTimeWindow(entry.timeWindow)}
+                      </div>
+                    ) : null}
                   </div>
                 </Button>
               );
@@ -68,6 +73,12 @@ export function WorkspaceMaterializeHistoryList({
       </ScrollArea>
     </div>
   );
+}
+
+function formatTimeWindow(window: { start: string; end: string }) {
+  const start = new Date(window.start);
+  const end = new Date(window.end);
+  return `${start.toLocaleString()} - ${end.toLocaleString()}`;
 }
 
 function MaterializeEntryStatus({ entry }: { entry: MaterializeHistoryEntry }) {

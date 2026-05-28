@@ -101,6 +101,7 @@ export type WebAsset = GeneratedWebAsset & {
 };
 
 export type WebPipeline = Omit<GeneratedWebPipeline, "assets"> & {
+  schedule?: string;
   assets: WebAsset[];
 };
 

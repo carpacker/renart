@@ -11,7 +11,7 @@ The app is centered around an interactive lineage canvas, a resizable editor pan
 - **Backend:** Go HTTP server using Bruin packages for project parsing, config, execution, and persistence
 - **Frontend:** React 19.2 + TypeScript 5.9
 - **Routing:** TanStack Router
-- **Build Tool:** Vite 8 via `rolldown-vite`
+- **Build Tool:** Vite 8
 - **Styling:** Tailwind CSS v4 + shadcn/ui + Radix primitives + Base UI where used
 - **Canvas / DAG:** React Flow
 - **Editor:** Monaco via `@monaco-editor/react`

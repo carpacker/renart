@@ -20,18 +20,18 @@ export function WorkspaceEnvironmentSwitcher() {
   } = useWorkspaceEnvironment();
 
   return (
-    <div className="ml-auto flex items-center gap-2">
+    <div className="flex min-w-0 shrink items-center gap-2">
       <Select
         value={selectedEnvironment || "__default__"}
         onValueChange={handleEnvironmentChange}
       >
         <SelectTrigger
           aria-label="Environment"
-          className="h-8 min-w-36 bg-muted/20 text-xs"
+          className="h-8 w-9 min-w-0 bg-muted/20 px-2 text-xs sm:w-auto sm:min-w-36 sm:px-3"
         >
           <span className="flex min-w-0 flex-1 items-center gap-1.5 overflow-hidden text-left">
-            <Database className="size-3 text-muted-foreground" />
-            <SelectValue placeholder="Environment">
+            <Database className="size-3 shrink-0 text-muted-foreground" />
+            <SelectValue className="hidden sm:inline" placeholder="Environment">
               {`Environment: ${selectedEnvironmentLabel}`}
             </SelectValue>
           </span>

@@ -124,13 +124,13 @@ func NewExecutionService(deps ExecutionDependencies) *ExecutionService {
 	return &ExecutionService{deps: deps}
 }
 
-func (s *ExecutionService) InspectAsset(ctx context.Context, assetID, limit, environment string) InspectResult {
+func (s *ExecutionService) InspectAsset(ctx context.Context, assetID, limit, environment, startDate, endDate string) InspectResult {
 	relAssetPath, err := DecodeID(assetID)
 	if err != nil {
 		return InspectResult{Status: "error", Error: "invalid asset id", HTTPStatus: 400}
 	}
 
-	if guardErr := s.ensureAssetInspectable(ctx, assetID, environment); guardErr != nil {
+	if guardErr := s.ensureAssetInspectable(ctx, assetID, environment, startDate, endDate); guardErr != nil {
 		return InspectResult{
 			Status:     "error",
 			Columns:    []string{},
@@ -157,9 +157,12 @@ func (s *ExecutionService) InspectAsset(ctx context.Context, assetID, limit, env
 		AssetPath:   relAssetPath,
 		Limit:       limit,
 		Environment: environment,
+		StartDate:   startDate,
+		EndDate:     endDate,
 		Output:      "json",
 	}
-	operation := queryAssetOperation(relAssetPath, limit, environment, "")
+	timeWindow, _ := s.resolveAssetExecutionTimeWindow(ctx, assetID, startDate, endDate)
+	operation := withOperationTimeWindow(queryAssetOperation(relAssetPath, limit, environment, ""), timeWindow)
 
 	var output []byte
 	var attempts int
@@ -298,7 +301,7 @@ func normalizeInspectLimit(limit string) int {
 	return value
 }
 
-func (s *ExecutionService) ensureAssetInspectable(ctx context.Context, assetID, environment string) error {
+func (s *ExecutionService) ensureAssetInspectable(ctx context.Context, assetID, environment, startDate, endDate string) error {
 	if s.deps.ResolveAssetByID == nil {
 		return nil
 	}
@@ -311,7 +314,7 @@ func (s *ExecutionService) ensureAssetInspectable(ctx context.Context, assetID, 
 		return nil
 	}
 
-	_, _, queryStr, err := getDirectConnectionAndQuery(ctx, &directPipelineInfo{Pipeline: parsedPipeline, Asset: asset, Config: loadExecutionConfigOrEmpty(s.deps.ConfigPath)}, environment)
+	_, _, queryStr, err := getDirectConnectionAndQuery(ctx, &directPipelineInfo{Pipeline: parsedPipeline, Asset: asset, Config: loadExecutionConfigOrEmpty(s.deps.ConfigPath)}, environment, startDate, endDate)
 	if err != nil {
 		return nil
 	}
@@ -370,7 +373,7 @@ func extractInspectRawOutput(output []byte) string {
 	return trimmed
 }
 
-func (s *ExecutionService) MaterializeAssetStream(ctx context.Context, assetID, environment, scope string, onChunk func([]byte)) MaterializeResult {
+func (s *ExecutionService) MaterializeAssetStream(ctx context.Context, assetID, environment, scope, startDate, endDate string, onChunk func([]byte)) MaterializeResult {
 	relAssetPath, err := DecodeID(assetID)
 	if err != nil {
 		return MaterializeResult{Status: "error", Error: "invalid asset id", ExitCode: 1}
@@ -386,14 +389,18 @@ func (s *ExecutionService) MaterializeAssetStream(ctx context.Context, assetID, 
 		return MaterializeResult{Status: "error", Error: infoErr.Error(), ExitCode: 1}
 	}
 
-	operation := runOperation(relAssetPath, "", relAssetPath, environment)
+	timeWindow, timeWindowErr := s.resolveAssetExecutionTimeWindow(ctx, assetID, startDate, endDate)
+	if timeWindowErr != nil {
+		return MaterializeResult{Status: "error", Error: timeWindowErr.Error(), ExitCode: 1}
+	}
+	operation := withOperationTimeWindow(runOperation(relAssetPath, "", relAssetPath, environment), timeWindow)
 	var output []byte
 	assetIDsToRefresh := []string{assetID}
 	materializedAssetIDs := []string{assetID}
 	assetNamesToRecord := make([]string, 0, 1)
 	run := func() error {
 		var runErr error
-		output, runErr = s.runSingleAssetMaterialization(ctx, relAssetPath, environment, onChunk)
+		output, runErr = s.runSingleAssetMaterialization(ctx, relAssetPath, environment, timeWindow, onChunk)
 		return runErr
 	}
 	if normalizedScope != MaterializeScopeAsset {
@@ -401,13 +408,13 @@ func (s *ExecutionService) MaterializeAssetStream(ctx context.Context, assetID, 
 		if scopedErr != nil {
 			return MaterializeResult{Status: "error", Error: scopedErr.Error(), ExitCode: 1}
 		}
-		operation = scopedRunOperation(relAssetPath, scoped.PipelineID, relAssetPath, environment, string(normalizedScope), scoped.AssetPaths)
+		operation = withOperationTimeWindow(scopedRunOperation(relAssetPath, scoped.PipelineID, relAssetPath, environment, string(normalizedScope), scoped.AssetPaths), timeWindow)
 		assetIDsToRefresh = scoped.RefreshAssetIDs
 		materializedAssetIDs = scoped.AssetIDs
 		assetNamesToRecord = scoped.AssetNames
 		run = func() error {
 			var runErr error
-			output, runErr = s.runScopedAssetMaterialization(ctx, scoped.AssetPaths, environment, onChunk)
+			output, runErr = s.runScopedAssetMaterialization(ctx, scoped.AssetPaths, environment, timeWindow, onChunk)
 			return runErr
 		}
 	} else if assetName := s.deps.ResolveAssetNameByID(assetID); assetName != "" {
@@ -465,14 +472,14 @@ func (s *ExecutionService) MaterializeAssetStream(ctx context.Context, assetID, 
 	}
 }
 
-func (s *ExecutionService) runSingleAssetMaterialization(ctx context.Context, assetPath, environment string, onChunk func([]byte)) ([]byte, error) {
-	return s.deps.Executor.RunAsset(ctx, RunAssetRequest{AssetPath: assetPath, Environment: environment}, onChunk)
+func (s *ExecutionService) runSingleAssetMaterialization(ctx context.Context, assetPath, environment string, timeWindow ExecutionTimeWindow, onChunk func([]byte)) ([]byte, error) {
+	return s.deps.Executor.RunAsset(ctx, RunAssetRequest{AssetPath: assetPath, Environment: environment, StartDate: timeWindow.StartRFC3339(), EndDate: timeWindow.EndRFC3339()}, onChunk)
 }
 
-func (s *ExecutionService) runScopedAssetMaterialization(ctx context.Context, assetPaths []string, environment string, onChunk func([]byte)) ([]byte, error) {
+func (s *ExecutionService) runScopedAssetMaterialization(ctx context.Context, assetPaths []string, environment string, timeWindow ExecutionTimeWindow, onChunk func([]byte)) ([]byte, error) {
 	var combined bytes.Buffer
 	for _, assetPath := range assetPaths {
-		chunkOutput, err := s.runSingleAssetMaterialization(ctx, assetPath, environment, onChunk)
+		chunkOutput, err := s.runSingleAssetMaterialization(ctx, assetPath, environment, timeWindow, onChunk)
 		if len(chunkOutput) > 0 {
 			_, _ = combined.Write(chunkOutput)
 		}
@@ -762,14 +769,18 @@ func (s *ExecutionService) GetPipelineMaterialization(ctx context.Context, pipel
 	return PipelineMaterializationResponse{PipelineID: pipelineID, Assets: assets}, nil
 }
 
-func (s *ExecutionService) MaterializePipelineStream(ctx context.Context, pipelineID, environment string, dryRun bool, onChunk func([]byte)) MaterializeResult {
+func (s *ExecutionService) MaterializePipelineStream(ctx context.Context, pipelineID, environment string, dryRun bool, startDate, endDate string, onChunk func([]byte)) MaterializeResult {
 	target, err := ResolvePipelineRunTarget(pipelineID)
 	if err != nil {
 		return MaterializeResult{Status: "error", Error: "invalid pipeline id", ExitCode: 1}
 	}
 
-	operation := runOperation(target, pipelineID, "", environment)
-	output, runErr := s.deps.Executor.RunPipeline(ctx, RunPipelineRequest{Target: target, Environment: environment, DryRun: dryRun}, onChunk)
+	timeWindow, timeWindowErr := s.resolvePipelineExecutionTimeWindow(ctx, pipelineID, startDate, endDate)
+	if timeWindowErr != nil {
+		return MaterializeResult{Status: "error", Error: timeWindowErr.Error(), ExitCode: 1}
+	}
+	operation := withOperationTimeWindow(runOperation(target, pipelineID, "", environment), timeWindow)
+	output, runErr := s.deps.Executor.RunPipeline(ctx, RunPipelineRequest{Target: target, Environment: environment, DryRun: dryRun, StartDate: timeWindow.StartRFC3339(), EndDate: timeWindow.EndRFC3339()}, onChunk)
 
 	changedAssetIDs := make([]string, 0)
 	var materializedAt *time.Time
@@ -827,6 +838,29 @@ func ResolvePipelineRunTarget(pipelineID string) (string, error) {
 	}
 
 	return filepath.ToSlash(cleaned), nil
+}
+
+func (s *ExecutionService) resolveAssetExecutionTimeWindow(ctx context.Context, assetID, startDate, endDate string) (ExecutionTimeWindow, error) {
+	schedule := ""
+	if s.deps.ResolveAssetByID != nil {
+		_, parsedPipeline, _, err := s.deps.ResolveAssetByID(ctx, assetID)
+		if err == nil && parsedPipeline != nil {
+			schedule = string(parsedPipeline.Schedule)
+		}
+	}
+	return ResolveExecutionTimeWindow(schedule, startDate, endDate, time.Now().UTC())
+}
+
+func (s *ExecutionService) resolvePipelineExecutionTimeWindow(ctx context.Context, pipelineID, startDate, endDate string) (ExecutionTimeWindow, error) {
+	if target, err := ResolvePipelineRunTarget(pipelineID); err == nil && s.deps.NewPipelineBuilder != nil {
+		absPipelinePath, joinErr := NewWorkspaceResolver(s.deps.WorkspaceRoot, nil).JoinPath(target)
+		if joinErr == nil {
+			if parsed, parseErr := s.deps.NewPipelineBuilder().CreatePipelineFromPath(ctx, absPipelinePath, pipeline.WithMutate()); parseErr == nil && parsed != nil {
+				return ResolveExecutionTimeWindow(string(parsed.Schedule), startDate, endDate, time.Now().UTC())
+			}
+		}
+	}
+	return ResolveExecutionTimeWindow("", startDate, endDate, time.Now().UTC())
 }
 
 func (s *ExecutionService) inspectPipelineMaterializations(ctx context.Context, parsed *pipeline.Pipeline, environment string) map[string]PipelineMaterializationInfo {

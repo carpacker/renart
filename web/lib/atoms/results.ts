@@ -16,6 +16,7 @@ export type MaterializeHistoryEntry = {
   loading: boolean;
   createdAt: number;
   updatedAt: number;
+  timeWindow?: { start: string; end: string } | null;
 };
 
 export type AssetResultsState = {

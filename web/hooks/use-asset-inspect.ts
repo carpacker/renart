@@ -4,10 +4,11 @@ import { useAtom, useAtomValue, useSetAtom } from "jotai";
 import { useCallback, useEffect, useMemo, useRef } from "react";
 
 import { inspectAsset } from "@/lib/api";
-import { assetInspectAtom, changedAssetIdsAtom } from "@/lib/atoms/domains/results";
+import { assetInspectAtom, changedAssetIdsAtom, emptyAssetInspectState } from "@/lib/atoms/domains/results";
 import { normalizeInspectErrorMessage } from "@/lib/inspect-errors";
 import { registerAssetColumnsAtom } from "@/lib/atoms/domains/suggestions";
 import { selectedEnvironmentAtom } from "@/lib/atoms/domains/workspace";
+import { selectedExecutionTimeWindowAtom } from "@/lib/atoms/domains/workspace";
 import {
   getAssetViewMode,
   getTablePreviewLimit,
@@ -57,9 +58,10 @@ function normalizeRequests(requests: Array<{ id: string; limit: number }>) {
 function getInspectRequestKey(
   assetId: string,
   limit: number,
-  environment?: string
+  environment?: string,
+  timeWindow?: { start: string; end: string } | null
 ) {
-  return `${assetId}:${limit}:${environment ?? ""}`;
+  return `${assetId}:${limit}:${environment ?? ""}:${timeWindow?.start ?? ""}:${timeWindow?.end ?? ""}`;
 }
 
 export function useAssetInspect(visualAssets: WebAsset[] = []) {
@@ -67,6 +69,7 @@ export function useAssetInspect(visualAssets: WebAsset[] = []) {
   const [changedIds, setChangedIds] = useAtom(changedAssetIdsAtom);
   const registerAssetColumns = useSetAtom(registerAssetColumnsAtom);
   const selectedEnvironment = useAtomValue(selectedEnvironmentAtom);
+  const selectedExecutionTimeWindow = useAtomValue(selectedExecutionTimeWindowAtom);
 
   const { byAssetId, loadingByAssetId, requestedLimitsByAssetId } = inspectState;
 
@@ -211,7 +214,8 @@ export function useAssetInspect(visualAssets: WebAsset[] = []) {
             const requestKey = getInspectRequestKey(
               id,
               limit,
-              selectedEnvironment
+              selectedEnvironment,
+              selectedExecutionTimeWindow
             );
             const existingRequest = inFlightInspectRequests.get(requestKey);
 
@@ -221,7 +225,7 @@ export function useAssetInspect(visualAssets: WebAsset[] = []) {
 
             const request = (async () => {
               try {
-                return await inspectAsset(id, { limit, environment: selectedEnvironment });
+                return await inspectAsset(id, { limit, environment: selectedEnvironment, timeWindow: selectedExecutionTimeWindow ?? undefined });
               } catch (error) {
                 return inspectFailure(error);
               } finally {
@@ -251,13 +255,13 @@ export function useAssetInspect(visualAssets: WebAsset[] = []) {
         setLoading(assetIdsToFetch, false);
       }
     },
-    [byAssetId, mergeInspectResults, selectedEnvironment, setLoading]
+    [byAssetId, mergeInspectResults, selectedEnvironment, selectedExecutionTimeWindow, setLoading]
   );
 
   const inspectAssetById = useCallback(
     async (
       assetId: string,
-      options?: { force?: boolean; limit?: number; contentSnapshot?: string }
+      options?: { force?: boolean; limit?: number; contentSnapshot?: string; timeWindow?: { start: string; end: string } }
     ): Promise<AssetInspectResponse> => {
       const limit =
         options?.limit ??
@@ -313,6 +317,11 @@ export function useAssetInspect(visualAssets: WebAsset[] = []) {
       setRequestedLimit,
     ]
   );
+
+  useEffect(() => {
+    setInspectState(emptyAssetInspectState);
+    setChangedIds(new Set<string>());
+  }, [selectedExecutionTimeWindow?.start, selectedExecutionTimeWindow?.end, setChangedIds, setInspectState]);
 
   useEffect(() => {
     for (const [assetId, baseLimit] of Object.entries(baseLimitByAssetId)) {

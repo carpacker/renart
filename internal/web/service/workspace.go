@@ -148,10 +148,11 @@ func (s *WorkspaceService) ComputeState(ctx context.Context) (model.WorkspaceSta
 		}
 
 		pSummary := model.Pipeline{
-			ID:     EncodeID(relPipelinePath),
-			Name:   parsed.Name,
-			Path:   filepath.ToSlash(relPipelinePath),
-			Assets: make([]model.Asset, 0, len(parsed.Assets)),
+			ID:       EncodeID(relPipelinePath),
+			Name:     parsed.Name,
+			Path:     filepath.ToSlash(relPipelinePath),
+			Schedule: string(parsed.Schedule),
+			Assets:   make([]model.Asset, 0, len(parsed.Assets)),
 		}
 
 		if pSummary.Name == "" {

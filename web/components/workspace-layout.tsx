@@ -21,6 +21,7 @@ import {
 
 import { WorkspaceCommandPalette } from "@/components/workspace-command-palette";
 import { WorkspaceEnvironmentSwitcher } from "@/components/workspace-environment-switcher";
+import { WorkspaceExecutionTimeSwitcher } from "@/components/workspace-execution-time-switcher";
 import { WorkspacePipelineDialogs } from "@/components/workspace-pipeline-dialogs";
 import { WorkspaceSidebar } from "@/components/workspace-sidebar";
 import { Button } from "@/components/ui/button";
@@ -80,7 +81,7 @@ export function WorkspaceLayout() {
   const routeState = useRouterState({
     select: (state) => ({
       pathname: state.location.pathname,
-      search: state.location.search as { environment?: string },
+      search: state.location.search as { environment?: string; time?: string },
     }),
   });
   const [deletePipelineDialogOpen, setDeletePipelineDialogOpen] =
@@ -231,6 +232,7 @@ export function WorkspaceLayout() {
             pipeline: undefined,
             asset: undefined,
             environment: routeState.search.environment,
+            time: routeState.search.time,
           },
           replace: true,
         });
@@ -244,6 +246,8 @@ export function WorkspaceLayout() {
     navigate,
     navigateSelection,
     pipeline,
+    routeState.search.environment,
+    routeState.search.time,
     workspace?.pipelines,
   ]);
 
@@ -409,6 +413,7 @@ export function WorkspaceLayout() {
                   pipeline: activePipeline ?? undefined,
                   asset: selectedAsset ?? undefined,
                   environment: selectedEnvironment ?? undefined,
+                  time: routeState.search.time,
                 },
               });
             }}
@@ -443,6 +448,7 @@ export function WorkspaceLayout() {
                             pipeline: activePipeline ?? undefined,
                             asset: selectedAsset ?? undefined,
                             environment: selectedEnvironment,
+                            time: routeState.search.time,
                           },
                         });
                       }}
@@ -463,13 +469,13 @@ export function WorkspaceLayout() {
                 </EnvironmentTourCard>
               </div>
             ) : null}
-            <header className="flex h-12 shrink-0 items-center gap-3 border-b bg-background/95 px-3 backdrop-blur supports-[backdrop-filter]:bg-background/80">
+            <header className="flex h-12 shrink-0 items-center gap-2 border-b bg-background/95 px-2 backdrop-blur supports-[backdrop-filter]:bg-background/80 sm:gap-3 sm:px-3">
               <SidebarTrigger className="shrink-0" />
-              <div className="min-w-0">
+              <div className="min-w-0 flex-1 sm:flex-none">
                 <div className="truncate text-sm font-semibold">
                   {currentViewLabel}
                 </div>
-                <div className="truncate text-xs text-muted-foreground">
+                <div className="hidden truncate text-xs text-muted-foreground sm:block">
                   {currentView === "workspace"
                     ? `${workspace.pipelines.length} pipeline${workspace.pipelines.length === 1 ? "" : "s"}`
                     : "Project settings"}
@@ -481,7 +487,12 @@ export function WorkspaceLayout() {
                   selectedAsset={selectedAsset}
                   currentView={currentView}
 	      />
-              {currentView === "workspace" ? <WorkspaceEnvironmentSwitcher /> : null}
+              {currentView === "workspace" ? (
+                <div className="ml-auto flex min-w-0 shrink items-center gap-1 sm:gap-2">
+                  <WorkspaceExecutionTimeSwitcher pipeline={pipeline} />
+                  <WorkspaceEnvironmentSwitcher />
+                </div>
+              ) : null}
             </header>
 
             <div className="min-h-0 flex-1 overflow-hidden">

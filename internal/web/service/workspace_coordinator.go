@@ -62,10 +62,11 @@ type WorkspaceColumn struct {
 }
 
 type WorkspacePipeline struct {
-	ID     string           `json:"id"`
-	Name   string           `json:"name"`
-	Path   string           `json:"path"`
-	Assets []WorkspaceAsset `json:"assets"`
+	ID       string           `json:"id"`
+	Name     string           `json:"name"`
+	Path     string           `json:"path"`
+	Schedule string           `json:"schedule,omitempty"`
+	Assets   []WorkspaceAsset `json:"assets"`
 }
 
 type WorkspaceState struct {

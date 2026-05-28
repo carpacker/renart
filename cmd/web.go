@@ -95,10 +95,11 @@ type sqlDiscoveryTableItem struct {
 }
 
 type webPipeline struct {
-	ID     string     `json:"id"`
-	Name   string     `json:"name"`
-	Path   string     `json:"path"`
-	Assets []webAsset `json:"assets"`
+	ID       string     `json:"id"`
+	Name     string     `json:"name"`
+	Path     string     `json:"path"`
+	Schedule string     `json:"schedule,omitempty"`
+	Assets   []webAsset `json:"assets"`
 }
 
 type workspaceState struct {
@@ -549,10 +550,11 @@ func workspaceCoordStateFromModel(state webmodel.WorkspaceState) service.Workspa
 
 func workspaceCoordPipelineFromModel(pipeline webmodel.Pipeline) service.WorkspacePipeline {
 	result := service.WorkspacePipeline{
-		ID:     pipeline.ID,
-		Name:   pipeline.Name,
-		Path:   pipeline.Path,
-		Assets: make([]service.WorkspaceAsset, 0, len(pipeline.Assets)),
+		ID:       pipeline.ID,
+		Name:     pipeline.Name,
+		Path:     pipeline.Path,
+		Schedule: pipeline.Schedule,
+		Assets:   make([]service.WorkspaceAsset, 0, len(pipeline.Assets)),
 	}
 
 	for _, asset := range pipeline.Assets {
@@ -631,10 +633,11 @@ func workspaceCoordStateFromWeb(state workspaceState) service.WorkspaceState {
 			})
 		}
 		result.Pipelines = append(result.Pipelines, service.WorkspacePipeline{
-			ID:     pipeline.ID,
-			Name:   pipeline.Name,
-			Path:   pipeline.Path,
-			Assets: assets,
+			ID:       pipeline.ID,
+			Name:     pipeline.Name,
+			Path:     pipeline.Path,
+			Schedule: pipeline.Schedule,
+			Assets:   assets,
 		})
 	}
 
@@ -643,10 +646,11 @@ func workspaceCoordStateFromWeb(state workspaceState) service.WorkspaceState {
 
 func workspacePipelineFromCoord(pipeline service.WorkspacePipeline) webPipeline {
 	result := webPipeline{
-		ID:     pipeline.ID,
-		Name:   pipeline.Name,
-		Path:   pipeline.Path,
-		Assets: make([]webAsset, 0, len(pipeline.Assets)),
+		ID:       pipeline.ID,
+		Name:     pipeline.Name,
+		Path:     pipeline.Path,
+		Schedule: pipeline.Schedule,
+		Assets:   make([]webAsset, 0, len(pipeline.Assets)),
 	}
 
 	for _, asset := range pipeline.Assets {
@@ -673,10 +677,11 @@ func workspacePipelineFromCoord(pipeline service.WorkspacePipeline) webPipeline 
 
 func webPipelineFromModel(pipeline webmodel.Pipeline) webPipeline {
 	result := webPipeline{
-		ID:     pipeline.ID,
-		Name:   pipeline.Name,
-		Path:   pipeline.Path,
-		Assets: make([]webAsset, 0, len(pipeline.Assets)),
+		ID:       pipeline.ID,
+		Name:     pipeline.Name,
+		Path:     pipeline.Path,
+		Schedule: pipeline.Schedule,
+		Assets:   make([]webAsset, 0, len(pipeline.Assets)),
 	}
 
 	for _, asset := range pipeline.Assets {
@@ -931,12 +936,12 @@ type executionInspectResult = webhttpapi.InspectExecutionResult
 
 type executionMaterializeEvent = webhttpapi.MaterializeExecutionEvent
 
-func (s *webServer) InspectAsset(ctx context.Context, assetID, limit, environment string) executionInspectResult {
-	return executionInspectResult(s.executionSvc.InspectAsset(ctx, assetID, limit, environment))
+func (s *webServer) InspectAsset(ctx context.Context, assetID, limit, environment, startDate, endDate string) executionInspectResult {
+	return executionInspectResult(s.executionSvc.InspectAsset(ctx, assetID, limit, environment, startDate, endDate))
 }
 
-func (s *webServer) MaterializeAssetStream(ctx context.Context, assetID, environment, scope string, onChunk func([]byte)) executionMaterializeEvent {
-	return executionMaterializeEvent(s.executionSvc.MaterializeAssetStream(ctx, assetID, environment, scope, onChunk))
+func (s *webServer) MaterializeAssetStream(ctx context.Context, assetID, environment, scope, startDate, endDate string, onChunk func([]byte)) executionMaterializeEvent {
+	return executionMaterializeEvent(s.executionSvc.MaterializeAssetStream(ctx, assetID, environment, scope, startDate, endDate, onChunk))
 }
 
 func (s *webServer) GetPipelineMaterialization(ctx context.Context, pipelineID, environment string) (webhttpapi.PipelineMaterializationResponse, *apiError) {
@@ -1167,8 +1172,8 @@ func (s *webServer) newConnectionManager(ctx context.Context, environment string
 	return manager, nil
 }
 
-func (s *webServer) MaterializePipelineStream(ctx context.Context, pipelineID, environment string, dryRun bool, onChunk func([]byte)) executionMaterializeEvent {
-	return executionMaterializeEvent(s.executionSvc.MaterializePipelineStream(ctx, pipelineID, environment, dryRun, onChunk))
+func (s *webServer) MaterializePipelineStream(ctx context.Context, pipelineID, environment string, dryRun bool, startDate, endDate string, onChunk func([]byte)) executionMaterializeEvent {
+	return executionMaterializeEvent(s.executionSvc.MaterializePipelineStream(ctx, pipelineID, environment, dryRun, startDate, endDate, onChunk))
 }
 
 func (s *webServer) handleStatic(w http.ResponseWriter, r *http.Request) {

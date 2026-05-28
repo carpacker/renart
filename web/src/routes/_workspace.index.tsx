@@ -28,11 +28,10 @@ export const Route = createFileRoute("/_workspace/")({
     }
   },
   validateSearch: (search: Record<string, unknown>) => ({
-    pipeline:
-      typeof search.pipeline === "string" ? search.pipeline : undefined,
-    asset: typeof search.asset === "string" ? search.asset : undefined,
-    environment:
-      typeof search.environment === "string" ? search.environment : undefined,
+    ...(typeof search.pipeline === "string" ? { pipeline: search.pipeline } : {}),
+    ...(typeof search.asset === "string" ? { asset: search.asset } : {}),
+    ...(typeof search.environment === "string" ? { environment: search.environment } : {}),
+    ...(typeof search.time === "string" ? { time: search.time } : {}),
   }),
   component: WorkspaceIndexRouteComponent,
 });

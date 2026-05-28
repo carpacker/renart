@@ -21,6 +21,12 @@ func scopedRunOperation(target, pipelineID, assetPath, environment, runScope str
 	return operation
 }
 
+func withOperationTimeWindow(operation webmodel.OperationMetadata, timeWindow ExecutionTimeWindow) webmodel.OperationMetadata {
+	operation.StartDate = timeWindow.StartRFC3339()
+	operation.EndDate = timeWindow.EndRFC3339()
+	return operation
+}
+
 func queryAssetOperation(assetPath, limit, environment, configFile string) webmodel.OperationMetadata {
 	return webmodel.OperationMetadata{
 		Type:        "query_asset",

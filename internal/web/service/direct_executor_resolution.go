@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/bruin-data/bruin/pkg/config"
 	"github.com/bruin-data/bruin/pkg/git"
@@ -79,7 +80,7 @@ func getDirectPipelineAndAsset(ctx context.Context, workspaceRoot, inputPath str
 	return &directPipelineInfo{Pipeline: foundPipeline, Asset: asset, Config: cm}, nil
 }
 
-func getDirectConnectionAndQuery(ctx context.Context, pp *directPipelineInfo, environment string) (string, interface{}, string, error) {
+func getDirectConnectionAndQuery(ctx context.Context, pp *directPipelineInfo, environment, start, end string) (string, interface{}, string, error) {
 	if environment != "" {
 		if _, err := selectConfigEnvironment(pp.Config, environment); err != nil {
 			return "", nil, "", err
@@ -100,8 +101,18 @@ func getDirectConnectionAndQuery(ctx context.Context, pp *directPipelineInfo, en
 		return "", nil, "", fmt.Errorf("connection %q not found", connName)
 	}
 
-	renderer := jinja.NewRendererWithYesterday(pp.Pipeline.Name, "renart-query")
+	now := time.Now().UTC()
+	timeWindow, err := ResolveExecutionTimeWindow(string(pp.Pipeline.Schedule), start, end, now)
+	if err != nil {
+		return "", nil, "", err
+	}
+	renderer := jinja.NewRendererWithStartEndDates(&timeWindow.Start, &timeWindow.End, &now, pp.Pipeline.Name, "renart-query", nil)
 	fetchCtx := context.WithValue(ctx, config.EnvironmentContextKey, pp.Config.SelectedEnvironment)
+	fetchCtx = context.WithValue(fetchCtx, config.EnvironmentNameContextKey, pp.Config.SelectedEnvironmentName)
+	fetchCtx = context.WithValue(fetchCtx, pipeline.RunConfigStartDate, timeWindow.Start)
+	fetchCtx = context.WithValue(fetchCtx, pipeline.RunConfigEndDate, timeWindow.End)
+	fetchCtx = context.WithValue(fetchCtx, pipeline.RunConfigExecutionDate, now)
+	fetchCtx = context.WithValue(fetchCtx, pipeline.RunConfigRunID, "renart-query")
 	extractor := &query.WholeFileExtractor{Fs: afero.NewOsFs(), Renderer: renderer}
 	clonedExtractor, err := extractor.CloneForAsset(fetchCtx, pp.Pipeline, pp.Asset)
 	if err != nil {

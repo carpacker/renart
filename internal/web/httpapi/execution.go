@@ -38,8 +38,8 @@ type MaterializeExecutionEvent struct {
 }
 
 type ExecutionHandlers interface {
-	InspectAsset(ctx context.Context, assetID, limit, environment string) InspectExecutionResult
-	MaterializeAssetStream(ctx context.Context, assetID, environment, scope string, onChunk func([]byte)) MaterializeExecutionEvent
+	InspectAsset(ctx context.Context, assetID, limit, environment, startDate, endDate string) InspectExecutionResult
+	MaterializeAssetStream(ctx context.Context, assetID, environment, scope, startDate, endDate string, onChunk func([]byte)) MaterializeExecutionEvent
 }
 
 type ExecutionAPI struct {
@@ -55,11 +55,13 @@ func (h *ExecutionAPI) HandleInspectAsset(w http.ResponseWriter, r *http.Request
 	assetID := chi.URLParam(r, "assetID")
 	limit := r.URL.Query().Get("limit")
 	environment := r.URL.Query().Get("environment")
+	startDate := r.URL.Query().Get("start_date")
+	endDate := r.URL.Query().Get("end_date")
 	if limit == "" {
 		limit = "200"
 	}
 
-	result := h.Service.InspectAsset(r.Context(), assetID, limit, environment)
+	result := h.Service.InspectAsset(r.Context(), assetID, limit, environment, startDate, endDate)
 	webapi.WriteJSON(w, result.HTTPStatus, map[string]any{
 		"status":                                 result.Status,
 		"columns":                                result.Columns,
@@ -79,6 +81,8 @@ func (h *ExecutionAPI) HandleMaterializeAssetStream(w http.ResponseWriter, r *ht
 	assetID := chi.URLParam(r, "assetID")
 	environment := r.URL.Query().Get("environment")
 	scope := r.URL.Query().Get("scope")
+	startDate := r.URL.Query().Get("start_date")
+	endDate := r.URL.Query().Get("end_date")
 	flusher, ok := w.(http.Flusher)
 	if !ok {
 		webapi.WriteInternalError(w, "streaming_unsupported", "streaming unsupported")
@@ -91,7 +95,7 @@ func (h *ExecutionAPI) HandleMaterializeAssetStream(w http.ResponseWriter, r *ht
 	w.Header().Set("X-Accel-Buffering", "no")
 
 	_ = WriteSSEJSON(w, flusher, "start", map[string]any{"operation": webmodel.OperationMetadata{Type: "run", AssetPath: assetID, Target: assetID}})
-	result := h.Service.MaterializeAssetStream(r.Context(), assetID, environment, scope, func(chunk []byte) {
+	result := h.Service.MaterializeAssetStream(r.Context(), assetID, environment, scope, startDate, endDate, func(chunk []byte) {
 		_ = WriteSSEJSON(w, flusher, "output", map[string]any{"chunk": string(chunk)})
 	})
 	_ = WriteSSEJSON(w, flusher, "done", map[string]any{

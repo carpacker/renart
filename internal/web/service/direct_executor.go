@@ -3,6 +3,8 @@ package service
 import (
 	"context"
 	"fmt"
+	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/bruin-data/bruin/pkg/config"
@@ -15,6 +17,7 @@ type HybridBruinExecutor struct {
 	newConnectionManager func(context.Context, string) (config.ConnectionAndDetailsGetter, error)
 	newPipelineBuilder   func() *pipeline.Builder
 	workspaceRoot        string
+	logSink              ExecutionLogSink
 }
 
 func NewHybridBruinExecutor(
@@ -23,11 +26,30 @@ func NewHybridBruinExecutor(
 	newConnectionManager func(context.Context, string) (config.ConnectionAndDetailsGetter, error),
 	newPipelineBuilder func() *pipeline.Builder,
 ) *HybridBruinExecutor {
+	logSink := ExecutionLogSink(NoopExecutionLogSink{})
+	if strings.TrimSpace(workspaceRoot) != "" && filepath.IsAbs(workspaceRoot) {
+		logSink = NewBruinFileExecutionLogSink(workspaceRoot)
+	}
 	return &HybridBruinExecutor{
 		newConnectionManager: newConnectionManager,
 		newPipelineBuilder:   newPipelineBuilder,
 		workspaceRoot:        workspaceRoot,
+		logSink:              logSink,
 	}
+}
+
+func (e *HybridBruinExecutor) SetExecutionLogSink(sink ExecutionLogSink) {
+	if sink == nil {
+		sink = NoopExecutionLogSink{}
+	}
+	e.logSink = sink
+}
+
+func (e *HybridBruinExecutor) executionLogSink() ExecutionLogSink {
+	if e == nil || e.logSink == nil {
+		return NoopExecutionLogSink{}
+	}
+	return e.logSink
 }
 
 func (e *HybridBruinExecutor) FormatAsset(ctx context.Context, req FormatAssetRequest) ([]byte, error) {

@@ -5,6 +5,7 @@ import {
   getPreferredSqlAssetType,
 } from "@/lib/asset-types";
 import { WorkspaceState } from "@/lib/types";
+import { ExecutionTimeWindow } from "@/lib/execution-time";
 
 export type WorkspaceSyncMethod = "workspace-load" | "workspace-event";
 
@@ -24,6 +25,7 @@ export const selectedEnvironmentOverrideAtom = atom<string | undefined>(undefine
 export const selectedEnvironmentAtom = atom<string | undefined>((get) =>
 	get(selectedEnvironmentOverrideAtom) || get(workspaceAtom)?.selected_environment || undefined
 );
+export const selectedExecutionTimeWindowAtom = atom<ExecutionTimeWindow | null>(null);
 
 export const configuredConnectionTypesAtom = atom<Set<string>>((get) =>
   getConfiguredConnectionTypes(get(workspaceAtom)?.connections)

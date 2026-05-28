@@ -30,6 +30,7 @@ export function useWorkspaceSelection(): {
         pipeline?: string;
         asset?: string;
         environment?: string;
+        time?: string;
       },
     }),
   });
@@ -83,6 +84,7 @@ export function useWorkspaceSelection(): {
           pipeline: nextPipelineId,
           asset: nextAssetId,
           environment: selectedEnvironment,
+          time: locationState.search.time,
         },
         replace: true,
       });
@@ -92,6 +94,7 @@ export function useWorkspaceSelection(): {
     locationState.pathname,
     locationState.search.asset,
     locationState.search.pipeline,
+    locationState.search.time,
     navigate,
     selectedAsset,
     workspace,
@@ -115,6 +118,7 @@ export function useWorkspaceSelection(): {
           pipeline: pipelineId,
           asset: nextAsset,
           environment: selectedEnvironment,
+          time: locationState.search.time,
         },
       });
     },
@@ -123,6 +127,7 @@ export function useWorkspaceSelection(): {
       locationState.pathname,
       locationState.search.asset,
       locationState.search.pipeline,
+      locationState.search.time,
       navigate,
     ]
   );

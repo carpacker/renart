@@ -10,12 +10,14 @@ import { AssetInspectResponse } from "@/lib/types";
 
 export async function inspectAsset(
   assetId: string,
-  options?: { limit?: number; environment?: string }
+  options?: { limit?: number; environment?: string; timeWindow?: { start: string; end: string } }
 ) {
   const { res, text, parsed } = await fetchParsedText<AssetInspectResponse>(
     `/api/assets/${assetId}/inspect${buildQueryString({
       limit: options?.limit,
       environment: options?.environment,
+      start_date: options?.timeWindow?.start,
+      end_date: options?.timeWindow?.end,
     })}`,
     { method: "GET" }
   );
@@ -33,12 +35,14 @@ export async function materializeAssetStream(
     onChunk?: (chunk: string) => void;
     onDone?: (payload: MaterializeStreamPayload) => void;
   },
-  options?: { environment?: string; scope?: MaterializeScope }
+  options?: { environment?: string; scope?: MaterializeScope; timeWindow?: { start: string; end: string } }
 ) {
   return streamMaterialization(
     `/api/assets/${assetId}/materialize/stream${buildQueryString({
       environment: options?.environment,
       scope: options?.scope,
+      start_date: options?.timeWindow?.start,
+      end_date: options?.timeWindow?.end,
     })}`,
     handlers,
     "Asset materialization stream ended unexpectedly."

@@ -7,6 +7,8 @@ type RunRequest struct {
 	AssetPath   string `json:"asset_path"`
 	Environment string `json:"environment"`
 	DryRun      bool   `json:"dry_run"`
+	StartDate   string `json:"start_date"`
+	EndDate     string `json:"end_date"`
 }
 
 type RunResult struct {
@@ -54,9 +56,9 @@ func (s *RunService) Execute(ctx context.Context, req RunRequest) RunResult {
 	var output []byte
 	var err error
 	if req.AssetPath != "" {
-		output, err = s.deps.Executor.RunAsset(ctx, RunAssetRequest{AssetPath: target, Environment: req.Environment}, nil)
+		output, err = s.deps.Executor.RunAsset(ctx, RunAssetRequest{AssetPath: target, Environment: req.Environment, StartDate: req.StartDate, EndDate: req.EndDate}, nil)
 	} else {
-		output, err = s.deps.Executor.RunPipeline(ctx, RunPipelineRequest{Target: target, Environment: req.Environment, DryRun: req.DryRun}, nil)
+		output, err = s.deps.Executor.RunPipeline(ctx, RunPipelineRequest{Target: target, Environment: req.Environment, DryRun: req.DryRun, StartDate: req.StartDate, EndDate: req.EndDate}, nil)
 	}
 
 	if err != nil {

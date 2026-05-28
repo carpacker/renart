@@ -43,6 +43,11 @@ export function WorkspaceMaterializeOutputView({
           Running pipeline...
         </div>
       ) : null}
+      {entry.timeWindow ? (
+        <div className="rounded border bg-muted/30 px-2 py-1 text-xs text-muted-foreground">
+          Period: {new Date(entry.timeWindow.start).toLocaleString()} - {new Date(entry.timeWindow.end).toLocaleString()}
+        </div>
+      ) : null}
       {entry.status === "error" ? (
         <div className="rounded border border-destructive/40 bg-destructive/10 px-2 py-1 text-xs text-destructive">
           Materialization failed

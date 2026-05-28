@@ -51,6 +51,7 @@ export type JinjaRenderResponse = {
 export async function renderJinjaAsset(options: {
   assetId: string;
   content: string;
+  timeWindow?: { start: string; end: string } | null;
   signal?: AbortSignal;
 }) {
   return fetchJSON<JinjaRenderResponse>(`/api/assets/${options.assetId}/render-jinja`, {
@@ -58,7 +59,11 @@ export async function renderJinjaAsset(options: {
     headers: { "Content-Type": "application/json" },
     cache: "no-store",
     signal: options.signal,
-    body: JSON.stringify({ content: options.content }),
+    body: JSON.stringify({
+      content: options.content,
+      start_date: options.timeWindow?.start,
+      end_date: options.timeWindow?.end,
+    }),
   });
 }
 

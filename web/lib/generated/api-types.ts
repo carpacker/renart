@@ -43,6 +43,7 @@ export type WebPipeline = {
   id: string;
   name: string;
   path: string;
+  schedule?: string;
   assets: WebAsset[];
 };
 
@@ -304,6 +305,8 @@ export type OperationMetadata = {
   query?: string;
   limit?: string;
   environment?: string;
+  start_date?: string;
+  end_date?: string;
   operation?: string;
   target_path?: string;
   config_file?: string;

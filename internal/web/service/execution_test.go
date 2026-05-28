@@ -123,7 +123,7 @@ func TestExecutionServiceMaterializeAssetStreamPreservesSuccessOutput(t *testing
 		},
 	})
 
-	result := svc.MaterializeAssetStream(context.Background(), assetID, "", "", func(chunk []byte) {
+	result := svc.MaterializeAssetStream(context.Background(), assetID, "", "", "", "", func(chunk []byte) {
 		streamed = append(streamed, string(chunk))
 	})
 
@@ -166,7 +166,7 @@ func TestExecutionServiceMaterializeAssetStreamPreservesFailureOutput(t *testing
 		},
 	})
 
-	result := svc.MaterializeAssetStream(context.Background(), assetID, "", "", nil)
+	result := svc.MaterializeAssetStream(context.Background(), assetID, "", "", "", "", nil)
 
 	require.Len(t, executor.runAssetRequests, 1)
 	assert.Equal(t, "error", result.Status)
@@ -205,7 +205,7 @@ func TestExecutionServiceMaterializePipelineStreamPreservesSuccessOutput(t *test
 		},
 	})
 
-	result := svc.MaterializePipelineStream(context.Background(), pipelineID, "", false, func(chunk []byte) {
+	result := svc.MaterializePipelineStream(context.Background(), pipelineID, "", false, "", "", func(chunk []byte) {
 		streamed = append(streamed, string(chunk))
 	})
 
@@ -249,7 +249,7 @@ func TestExecutionServiceMaterializePipelineStreamPreservesFailureOutput(t *test
 		},
 	})
 
-	result := svc.MaterializePipelineStream(context.Background(), pipelineID, "", false, nil)
+	result := svc.MaterializePipelineStream(context.Background(), pipelineID, "", false, "", "", nil)
 
 	require.Len(t, executor.runPipelineReqs, 1)
 	assert.Equal(t, "error", result.Status)
@@ -283,7 +283,7 @@ func TestExecutionServiceMaterializePipelineStreamDryRunDoesNotRecordMaterializa
 		},
 	})
 
-	result := svc.MaterializePipelineStream(context.Background(), pipelineID, "", true, nil)
+	result := svc.MaterializePipelineStream(context.Background(), pipelineID, "", true, "", "", nil)
 
 	require.Len(t, executor.runPipelineReqs, 1)
 	assert.True(t, executor.runPipelineReqs[0].DryRun)
@@ -331,7 +331,7 @@ copy (select * from analytics.customers) to 'danger.parquet'
 		ResolveAssetByID: resolveAssetByID,
 	})
 
-	result := svc.InspectAsset(context.Background(), EncodeID("analytics/assets/customers.sql"), "200", "")
+	result := svc.InspectAsset(context.Background(), EncodeID("analytics/assets/customers.sql"), "200", "", "", "")
 
 	assert.Equal(t, "error", result.Status)
 	assert.Equal(t, 400, result.HTTPStatus)
@@ -362,7 +362,7 @@ func TestExecutionServiceInspectNonSQLAssetQueriesMaterializedTable(t *testing.T
 		},
 	})
 
-	result := svc.InspectAsset(context.Background(), EncodeID("analytics/assets/load_customers.yml"), "25", "")
+	result := svc.InspectAsset(context.Background(), EncodeID("analytics/assets/load_customers.yml"), "25", "", "", "")
 
 	require.Len(t, executor.queryConnReqs, 1)
 	assert.Equal(t, "duckdb-default", executor.queryConnReqs[0].ConnectionName)
@@ -388,7 +388,7 @@ func TestExecutionServiceInspectNonSQLAssetReportsMissingMaterializedTable(t *te
 		},
 	})
 
-	result := svc.InspectAsset(context.Background(), EncodeID("analytics/assets/task.py"), "25", "")
+	result := svc.InspectAsset(context.Background(), EncodeID("analytics/assets/task.py"), "25", "", "", "")
 
 	assert.Equal(t, "error", result.Status)
 	assert.Contains(t, result.Error, "Materialize the asset first")
@@ -449,7 +449,7 @@ select * from analytics.players
 		ResolveAssetByID: resolveAssetByID,
 	})
 
-	result := svc.InspectAsset(context.Background(), EncodeID("analytics/assets/analytics/player_stats.sql"), "25", "")
+	result := svc.InspectAsset(context.Background(), EncodeID("analytics/assets/analytics/player_stats.sql"), "25", "", "", "")
 
 	assert.Equal(t, "error", result.Status)
 	assert.Equal(t, []string{EncodeID("analytics/assets/analytics/players.sql")}, result.MissingUpstreamAssetIDs)
