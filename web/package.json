@@ -57,7 +57,7 @@
     "@types/react-dom": "^19.2.3",
     "@vitejs/plugin-react": "^5.2.0",
     "eslint": "^9.39.4",
-    "globals": "^16.5.0",
+    "globals": "^17.6.0",
     "monaco-editor": "0.55.1",
     "vite": "^8.0.0",
     "tailwindcss": "^4.3.0",
