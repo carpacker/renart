@@ -47,18 +47,6 @@ export function WorkspaceMaterializeHistoryList({
                       <Clock3 className="size-3" />
                       <span>{new Date(entry.updatedAt).toLocaleTimeString()}</span>
                     </div>
-                    <div className="truncate text-[11px] text-muted-foreground">
-                      {entry.kind === "pipeline"
-                        ? entry.pipelineName ?? "Pipeline run"
-                        : entry.assetName ?? "Asset run"}
-                    </div>
-                    <div className="text-[11px] text-muted-foreground">
-                      {entry.kind === "pipeline"
-                        ? "Pipeline materialize"
-                        : entry.kind === "batch"
-                          ? "Batch output"
-                          : "Asset materialize"}
-                    </div>
                     {entry.timeWindow ? (
                       <div className="truncate text-[11px] text-muted-foreground">
                         {formatTimeWindow(entry.timeWindow)}
@@ -77,8 +65,20 @@ export function WorkspaceMaterializeHistoryList({
 
 function formatTimeWindow(window: { start: string; end: string }) {
   const start = new Date(window.start);
-  const end = new Date(window.end);
-  return `${start.toLocaleString()} - ${end.toLocaleString()}`;
+  const dateFormatter = new Intl.DateTimeFormat(undefined, {
+    month: "short",
+    day: "numeric",
+  });
+  const timeFormatter = new Intl.DateTimeFormat(undefined, {
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+
+  if (start.getUTCHours() === 0 && start.getUTCMinutes() === 0) {
+    return dateFormatter.format(start);
+  }
+
+  return `${dateFormatter.format(start)} ${timeFormatter.format(start)}`;
 }
 
 function MaterializeEntryStatus({ entry }: { entry: MaterializeHistoryEntry }) {
