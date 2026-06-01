@@ -24,6 +24,8 @@ jobs:
         uses: actions/setup-go@v5
         with:
           go-version: stable
+          cache: true
+          cache-dependency-path: go.sum
 
       - name: Make Go module cache writable
         run: echo "GOFLAGS=-modcacherw" >> "$GITHUB_ENV"
@@ -40,6 +42,32 @@ jobs:
         uses: pnpm/action-setup@v4
         with:
           version: 10
+
+      - name: Cache pnpm store
+        uses: actions/cache@v4
+        with:
+          path: ~/.local/share/pnpm/store
+          key: ${{ runner.os }}-pnpm-${{ hashFiles('web/pnpm-lock.yaml') }}
+          restore-keys: |
+            ${{ runner.os }}-pnpm-
+
+      - name: Cache Playwright browsers
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: ${{ runner.os }}-playwright-${{ hashFiles('web/pnpm-lock.yaml') }}
+          restore-keys: |
+            ${{ runner.os }}-playwright-
+
+      - name: Cache Cargo dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ runner.os }}-cargo-${{ hashFiles('go.sum') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
 
       - name: Build web assets
         run: |
@@ -63,11 +91,19 @@ jobs:
       - name: Make release scripts executable
         run: chmod +x ./scripts/build_rustsqlparser_release_lib.sh
 
+      - name: Prepare Docker build cache mounts
+        run: |
+          mkdir -p "$HOME/go/pkg/mod" "$HOME/.cache/go-build" "$HOME/.cargo/registry" "$HOME/.cargo/git"
+
       - name: Run GoReleaser via goreleaser-cross
         if: startsWith(github.ref, 'refs/tags/')
         run: |
           docker run --rm \
             -v /var/run/docker.sock:/var/run/docker.sock \
+            -v "$HOME/go/pkg/mod":/go/pkg/mod \
+            -v "$HOME/.cache/go-build":/root/.cache/go-build \
+            -v "$HOME/.cargo/registry":/root/.cargo/registry \
+            -v "$HOME/.cargo/git":/root/.cargo/git \
             -e GITHUB_TOKEN=${{ secrets.GITHUB_TOKEN }} \
             -v "$PWD":/src \
             -w /src \
@@ -81,6 +117,10 @@ jobs:
         run: |
           docker run --rm \
             -v /var/run/docker.sock:/var/run/docker.sock \
+            -v "$HOME/go/pkg/mod":/go/pkg/mod \
+            -v "$HOME/.cache/go-build":/root/.cache/go-build \
+            -v "$HOME/.cargo/registry":/root/.cargo/registry \
+            -v "$HOME/.cargo/git":/root/.cargo/git \
             -e GITHUB_TOKEN=${{ secrets.GITHUB_TOKEN }} \
             -v "$PWD":/src \
             -w /src \
