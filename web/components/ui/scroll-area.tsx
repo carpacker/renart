@@ -8,11 +8,13 @@ import { cn } from "@/lib/utils";
 function ScrollArea({
   className,
   children,
+  horizontalScrollBarClassName,
   viewportClassName,
   viewportRef,
   onViewportScroll,
   ...props
 }: React.ComponentProps<typeof ScrollAreaPrimitive.Root> & {
+  horizontalScrollBarClassName?: string;
   viewportClassName?: string;
   viewportRef?: React.Ref<HTMLDivElement>;
   onViewportScroll?: React.UIEventHandler<HTMLDivElement>;
@@ -32,7 +34,7 @@ function ScrollArea({
         {children}
       </ScrollAreaPrimitive.Viewport>
       <ScrollBar />
-      <ScrollBar orientation="horizontal" />
+      <ScrollBar className={horizontalScrollBarClassName} orientation="horizontal" />
       <ScrollAreaPrimitive.Corner />
     </ScrollAreaPrimitive.Root>
   );
@@ -41,14 +43,21 @@ function ScrollArea({
 function ScrollBar({
   className,
   orientation = "vertical",
+  onPointerDown,
   ...props
 }: React.ComponentProps<typeof ScrollAreaPrimitive.ScrollAreaScrollbar>) {
+  const stopDragPropagation: React.PointerEventHandler<HTMLDivElement> = (event) => {
+    onPointerDown?.(event);
+    event.stopPropagation();
+  };
+
   return (
     <ScrollAreaPrimitive.ScrollAreaScrollbar
       data-slot="scroll-area-scrollbar"
       orientation={orientation}
+      onPointerDown={stopDragPropagation}
       className={cn(
-        "flex touch-none p-px transition-colors select-none",
+        "nodrag nopan flex touch-none p-px transition-colors select-none",
         orientation === "vertical" && "h-full w-2.5 border-l border-l-transparent",
         orientation === "horizontal" && "h-2.5 flex-col border-t border-t-transparent",
         className
@@ -57,7 +66,7 @@ function ScrollBar({
     >
       <ScrollAreaPrimitive.ScrollAreaThumb
         data-slot="scroll-area-thumb"
-        className="bg-border relative flex-1 rounded-full"
+        className="nodrag nopan bg-border relative flex-1 rounded-full"
       />
     </ScrollAreaPrimitive.ScrollAreaScrollbar>
   );
