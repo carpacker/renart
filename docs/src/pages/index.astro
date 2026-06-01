@@ -275,16 +275,16 @@ const landingStructuredData = JSON.stringify({
         <div class="eyebrow"><span class="bar"></span> Built on Bruin</div>
         <h2 class="h2">Not another abstraction layer. <em>A better interface</em> to the real thing.</h2>
         <p class="lede">
-          Every pipeline you build in Renart remains a native Bruin project: real files on disk, runnable from the CLI, and ready for Git review.
+          Every pipeline you build in Renart is a native Bruin project. No proprietary format, no vendor lock-in. Remove Renart tomorrow - your pipelines keep running.
         </p>
 
         <div class="bruin-grid">
           <div class="bruin-list">
-            <div class="bruin-row"><span class="check">✓</span><span><b>Bruin assets on disk.</b> Edit SQL, Python, and YAML files through a git-native IDE.</span></div>
-            <div class="bruin-row"><span class="check">✓</span><span><b>All edits go through project files.</b> Renart does not store your pipeline in a proprietary database.</span></div>
-            <div class="bruin-row"><span class="check">✓</span><span><b>Use the CLI alongside the UI.</b> Changes made outside Renart sync back automatically.</span></div>
-            <div class="bruin-row"><span class="check">✓</span><span><b>Inspect and materialize.</b> Preview results safely, then run assets intentionally when needed.</span></div>
-            <div class="bruin-row"><span class="check">✓</span><span><b>Canvas-first lineage.</b> Understand dependencies visually while staying close to source files.</span></div>
+            <div class="bruin-row"><span class="check">✓</span><span><b>Bruin assets, not abstractions.</b> Real <code>.sql</code>, <code>.py</code>, and <code>.yml</code> on disk.</span></div>
+            <div class="bruin-row"><span class="check">✓</span><span><b>Git-native by default.</b> Every visual edit becomes a clean diff, ready for review.</span></div>
+            <div class="bruin-row"><span class="check">✓</span><span><b>Multi-language.</b> SQL, Python, R - same DAG, same lineage, same quality checks.</span></div>
+            <div class="bruin-row"><span class="check">✓</span><span><b>Column-level lineage.</b> Trace any field back to its source across the entire DAG.</span></div>
+            <div class="bruin-row"><span class="check">✓</span><span><b>Built-in quality checks.</b> Define <code>not_null</code>, <code>unique</code>, custom SQL - they ship with the asset.</span></div>
           </div>
           <div class="bruin-illus-wrap">
             <div class="bruin-illus" aria-hidden="true">
@@ -330,31 +330,31 @@ const landingStructuredData = JSON.stringify({
                 <div class="arch-node__sub">End-to-end data framework</div>
               </div>
 
-              <span class="arch-edge-label arch-edge-label--mute" style="top: 63%; left: 50%;">preserves</span>
+              <span class="arch-edge-label arch-edge-label--mute" style="top: 63%; left: 50%;">connects to</span>
 
               <div class="arch-node arch-node--tertiary arch-node--source" style="top: 68.9%; left: 5.5%; width: 41%; height: 27%;">
-                <div class="arch-node__head"><span class="arch-node__role">Workspace</span></div>
+                <div class="arch-node__head"><span class="arch-node__role">Sources</span></div>
                 <div class="arch-node__title-row">
-                  <span class="arch-node__mark">F</span>
-                  <span class="arch-node__title">Project files</span>
+                  <span class="arch-node__mark">S</span>
+                  <span class="arch-node__title">Data sources</span>
                 </div>
                 <div class="arch-chips">
-                  <span class="chip">SQL</span><span class="chip">Python</span><span class="chip">YAML</span><span class="chip more">assets</span>
+                  <span class="chip">Files</span><span class="chip">APIs</span><span class="chip">Databases</span><span class="chip more">Sheets</span>
                 </div>
               </div>
 
               <div class="arch-node arch-node--tertiary arch-node--warehouse" style="top: 68.9%; right: 5.5%; width: 41%; height: 27%;">
-                <div class="arch-node__head"><span class="arch-node__role">Versioning</span></div>
+                <div class="arch-node__head"><span class="arch-node__role">Destination</span></div>
                 <div class="arch-node__title-row">
-                  <span class="arch-node__mark">G</span>
-                  <span class="arch-node__title">Git history</span>
+                  <span class="arch-node__mark">W</span>
+                  <span class="arch-node__title">Data warehouse</span>
                 </div>
                 <div class="arch-chips">
-                  <span class="chip">diffs</span><span class="chip">reviews</span><span class="chip">branches</span><span class="chip more">CI</span>
+                  <span class="chip">Snowflake</span><span class="chip">BigQuery</span><span class="chip">DuckDB</span><span class="chip more">more</span>
                 </div>
               </div>
             </div>
-            <p class="bruin-caption">Renart is the IDE layer. Bruin remains the project model, with workspace files and Git history as the source of accountability.</p>
+            <p class="bruin-caption">Renart is the IDE layer. Bruin is the execution and project engine connecting your sources to the warehouse.</p>
           </div>
         </div>
       </section>
