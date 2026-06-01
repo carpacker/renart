@@ -1,0 +1,83 @@
+name: live e2e
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+      - "release/**"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: live-e2e-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  live-e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: stable
+
+      - name: Make Go module cache writable
+        run: echo "GOFLAGS=-modcacherw" >> "$GITHUB_ENV"
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - name: Install web dependencies
+        working-directory: web
+        run: corepack pnpm install --frozen-lockfile
+
+      - name: Install Playwright Chromium
+        working-directory: web
+        run: corepack pnpm exec playwright install --with-deps chromium
+
+      - name: Build web assets
+        working-directory: web
+        run: corepack pnpm build
+
+      - name: Build Bruin Rust SQL parser library
+        run: ./scripts/build_rustsqlparser_release_lib.sh x86_64-unknown-linux-gnu
+
+      - name: Build Renart binary
+        run: go build -o renart .
+
+      - name: Run live e2e tests
+        working-directory: web
+        env:
+          BRUIN_E2E_BINARY: ${{ github.workspace }}/renart
+          PWTEST_CACHE_DIR: /dev/shm/bruin-playwright/cache
+          RENART_E2E_LIVE_WORKERS: 1
+        run: corepack pnpm exec playwright test --config=playwright.live.config.ts
+
+      - name: Upload Playwright artifacts
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: live-e2e-artifacts
+          path: /dev/shm/bruin-playwright/test-results
+          if-no-files-found: ignore
+
+      - name: Clean up live e2e containers
+        if: always()
+        run: |
+          docker ps -aq --filter "name=renart-e2e-pg" | xargs -r docker rm -f
