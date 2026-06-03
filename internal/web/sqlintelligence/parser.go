@@ -15,6 +15,8 @@ import (
 
 type Schema map[string]map[string]string
 
+type SchemaColumnSourceMethods map[string]map[string][]string
+
 type ParseContextRange struct {
 	Start   int `json:"start"`
 	End     int `json:"end"`
@@ -39,6 +41,7 @@ type ParseContextTable struct {
 	ColumnRanges map[string]ParseContextRange `json:"column_ranges,omitempty"`
 	Parts        []ParseContextPart           `json:"parts"`
 	AliasRange   *ParseContextRange           `json:"alias_range,omitempty"`
+	ScopeRange   *ParseContextRange           `json:"scope_range,omitempty"`
 }
 
 type SchemaColumn struct {
@@ -69,9 +72,10 @@ type ParseContext struct {
 }
 
 type parseContextRequest struct {
-	Query   string `json:"query"`
-	Dialect string `json:"dialect"`
-	Schema  Schema `json:"schema,omitempty"`
+	Query               string                    `json:"query"`
+	Dialect             string                    `json:"dialect"`
+	Schema              Schema                    `json:"schema,omitempty"`
+	ColumnSourceMethods SchemaColumnSourceMethods `json:"column_source_methods,omitempty"`
 }
 
 type parseContextResponse struct {
@@ -79,7 +83,11 @@ type parseContextResponse struct {
 	Error string `json:"error,omitempty"`
 }
 
-func ParseContextWithSchema(query, dialect string, schema Schema) (*ParseContext, error) {
+func ParseContextWithSchema(query, dialect string, schema Schema, columnSourceMethods ...SchemaColumnSourceMethods) (*ParseContext, error) {
+	if strings.EqualFold(os.Getenv("RENART_SQL_PARSER"), "polyglot") {
+		return ParseContextWithSchemaPolyglot(query, dialect, schema, columnSourceMethods...)
+	}
+
 	tmpDir := filepath.Join(os.TempDir(), "renart-sqlintelligence")
 
 	ep, err := python.NewEmbeddedPythonWithTmpDir(tmpDir+"-python", false)
@@ -121,6 +129,9 @@ func ParseContextWithSchema(query, dialect string, schema Schema) (*ParseContext
 		Query:   query,
 		Dialect: dialect,
 		Schema:  schema,
+	}
+	if len(columnSourceMethods) > 0 {
+		req.ColumnSourceMethods = columnSourceMethods[0]
 	}
 	if err := json.NewEncoder(stdin).Encode(req); err != nil {
 		_ = stdin.Close()

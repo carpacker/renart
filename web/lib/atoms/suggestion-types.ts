@@ -4,6 +4,7 @@ import { SchemaColumn } from "@/lib/sql-schema";
 export type SuggestionObservationMethod =
   | "workspace-load"
   | "workspace-event"
+  | "asset-sql-definition"
   | "asset-inspect"
   | "asset-column-inference"
   | "ingestr-suggestions"
@@ -52,6 +53,7 @@ export type SuggestionTableState = {
   assetId?: string;
   assetPath?: string;
   isBruinAsset: boolean;
+  isMaterialized?: boolean;
   remoteSuggestionKind?: string;
   remoteSuggestionDetail?: string;
   sourceMethods: SuggestionObservationMethod[];

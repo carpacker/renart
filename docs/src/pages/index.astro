@@ -24,12 +24,48 @@ function readGitValue(command: string, fallback: string) {
   }
 }
 
-const tagVersion = readGitValue('git describe --tags --abbrev=0', '0.0.0');
-const commit = process.env.RENART_COMMIT || readGitValue('git rev-parse --short HEAD', 'unknown');
-const explicitVersion = process.env.RENART_VERSION;
-const latestVersion = explicitVersion && explicitVersion !== 'local build'
-  ? explicitVersion
-  : `${tagVersion}#${commit}`;
+function normalizeVersion(value: string | undefined | null) {
+  const trimmed = value?.trim();
+  return trimmed && trimmed !== 'local build' ? trimmed : null;
+}
+
+async function readLatestPublishedVersion() {
+  const headers = {
+    Accept: 'application/vnd.github+json',
+    'User-Agent': 'renart-docs-build',
+  };
+
+  try {
+    const releaseResponse = await fetch('https://api.github.com/repos/renart-data/renart/releases/latest', { headers });
+    if (releaseResponse.ok) {
+      const release = await releaseResponse.json();
+      const version = normalizeVersion(release?.tag_name);
+      if (version) {
+        return version;
+      }
+    }
+  } catch {
+    // Fall through to tag-based and local fallbacks.
+  }
+
+  try {
+    const tagsResponse = await fetch('https://api.github.com/repos/renart-data/renart/tags?per_page=1', { headers });
+    if (tagsResponse.ok) {
+      const tags = await tagsResponse.json();
+      const version = normalizeVersion(tags?.[0]?.name);
+      if (version) {
+        return version;
+      }
+    }
+  } catch {
+    // Fall through to local fallback.
+  }
+
+  return normalizeVersion(readGitValue('git describe --tags --abbrev=0', '0.0.0')) ?? '0.0.0';
+}
+
+const explicitVersion = normalizeVersion(process.env.RENART_VERSION);
+const latestVersion = explicitVersion ?? await readLatestPublishedVersion();
 const currentYear = new Date().getFullYear();
 const landingStructuredData = JSON.stringify({
   '@context': 'https://schema.org',

@@ -15,6 +15,8 @@ export type SchemaTable = {
   columns: SchemaColumn[];
   /** True when the table originates from a Bruin asset (priority source). */
   isBruinAsset: boolean;
+  /** True when the asset is known to have been materialized before. */
+  isMaterialized?: boolean;
   /** The asset id — only present for Bruin asset tables. */
   assetId?: string;
   /** The pipeline id that owns this asset. */
@@ -36,6 +38,7 @@ export type SchemaColumn = {
   type?: string;
   description?: string;
   primaryKey?: boolean;
+  sourceMethods?: string[];
 };
 
 /** SQL asset type prefixes that target a specific connection platform. */
@@ -106,6 +109,7 @@ function toSchemaColumns(columns?: WebColumn[]): SchemaColumn[] {
     type: column.type,
     description: column.description,
     primaryKey: column.primary_key,
+    sourceMethods: ["workspace-load"],
   }));
 }
 
@@ -172,6 +176,7 @@ export function buildSchemaForAsset(
         shortName: tableParts.shortName,
         columns: toSchemaColumns(asset.columns),
         isBruinAsset: true,
+        isMaterialized: asset.is_materialized,
         assetId: asset.id,
         pipelineId: pipeline.id,
         assetPath: asset.path,

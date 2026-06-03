@@ -1,6 +1,7 @@
 import { parseQualifiedTableName, resolveConnection, SchemaColumn } from "@/lib/sql-schema";
 import { IngestrSuggestion, WebAsset, WebColumn, WorkspaceState } from "@/lib/types";
 
+import { MaterializationByAssetId } from "./materialization";
 import {
   ConnectionSuggestionEntry,
   DynamicSuggestionState,
@@ -46,6 +47,132 @@ function toSchemaColumns(columns?: WebColumn[]): SchemaColumn[] {
     description: column.description,
     primaryKey: column.primary_key,
   }));
+}
+
+function extractSQLDefinitionColumns(content?: string): SchemaColumn[] {
+  const sql = content?.trim();
+  if (!sql) {
+    return [];
+  }
+
+  const selectIndex = findTopLevelKeyword(sql, "select", 0);
+  if (selectIndex < 0) {
+    return [];
+  }
+
+  const fromIndex = findTopLevelKeyword(sql, "from", selectIndex + "select".length);
+  const selectListEnd = fromIndex < 0 ? sql.length : fromIndex;
+  const selectList = sql.slice(selectIndex + "select".length, selectListEnd);
+  const columns: SchemaColumn[] = [];
+  const seen = new Set<string>();
+
+  for (const expression of splitTopLevelComma(selectList)) {
+    const columnName = extractSelectExpressionColumnName(expression);
+    if (!columnName || seen.has(columnName.toLowerCase())) {
+      continue;
+    }
+    seen.add(columnName.toLowerCase());
+    columns.push({ name: columnName });
+  }
+
+  return columns;
+}
+
+function findTopLevelKeyword(sql: string, keyword: string, startIndex: number) {
+  const lower = sql.toLowerCase();
+  let depth = 0;
+  let quote: string | null = null;
+
+  for (let index = startIndex; index < sql.length; index++) {
+    const char = sql[index];
+    if (quote) {
+      if (char === quote) {
+        quote = null;
+      }
+      continue;
+    }
+    if (char === "'" || char === '"' || char === "`") {
+      quote = char;
+      continue;
+    }
+    if (char === "(") {
+      depth++;
+      continue;
+    }
+    if (char === ")") {
+      depth = Math.max(0, depth - 1);
+      continue;
+    }
+    if (depth !== 0 || !lower.startsWith(keyword, index)) {
+      continue;
+    }
+    const before = index > 0 ? lower[index - 1] : " ";
+    const after = lower[index + keyword.length] ?? " ";
+    if (/\w/.test(before) || /\w/.test(after)) {
+      continue;
+    }
+    return index;
+  }
+
+  return -1;
+}
+
+function splitTopLevelComma(value: string) {
+  const result: string[] = [];
+  let depth = 0;
+  let quote: string | null = null;
+  let start = 0;
+
+  for (let index = 0; index < value.length; index++) {
+    const char = value[index];
+    if (quote) {
+      if (char === quote) {
+        quote = null;
+      }
+      continue;
+    }
+    if (char === "'" || char === '"' || char === "`") {
+      quote = char;
+      continue;
+    }
+    if (char === "(") {
+      depth++;
+      continue;
+    }
+    if (char === ")") {
+      depth = Math.max(0, depth - 1);
+      continue;
+    }
+    if (char === "," && depth === 0) {
+      result.push(value.slice(start, index).trim());
+      start = index + 1;
+    }
+  }
+
+  result.push(value.slice(start).trim());
+  return result.filter(Boolean);
+}
+
+function extractSelectExpressionColumnName(expression: string) {
+  if (expression === "*") {
+    return null;
+  }
+
+  const aliasMatch = expression.match(/\bas\s+([a-zA-Z_][\w$]*|"[^"]+"|`[^`]+`)\s*$/i);
+  if (aliasMatch) {
+    return normalizeColumnIdentifier(aliasMatch[1]);
+  }
+
+  const directColumnMatch = expression.match(/^(?:[a-zA-Z_][\w$]*\.)?([a-zA-Z_][\w$]*)$/);
+  if (directColumnMatch) {
+    return normalizeColumnIdentifier(directColumnMatch[1]);
+  }
+
+  return null;
+}
+
+function normalizeColumnIdentifier(value: string) {
+  return value.trim().replace(/^["`]+|["`]+$/g, "");
 }
 
 function connectionKey(name: string, databaseName?: string | null): string {
@@ -344,7 +471,8 @@ function emptyCatalog(): SuggestionCatalogState {
 
 function buildCatalogFromWorkspace(
   workspace: WorkspaceState | null,
-  syncSource: SuggestionWorkspaceSyncSource | null
+  syncSource: SuggestionWorkspaceSyncSource | null,
+  materializationByAssetId: MaterializationByAssetId = {}
 ): SuggestionCatalogState {
   if (!workspace) {
     return emptyCatalog();
@@ -375,6 +503,7 @@ function buildCatalogFromWorkspace(
 
   for (const pipeline of workspace.pipelines ?? []) {
     for (const asset of pipeline.assets ?? []) {
+      const materialization = materializationByAssetId[asset.id];
       const connectionName = resolveConnection(asset, workspace.connections ?? {});
       const connectionType = connectionName
         ? workspace.connections?.[connectionName] ?? null
@@ -436,11 +565,16 @@ function buildCatalogFromWorkspace(
           assetId: asset.id,
           assetPath: asset.path,
           isBruinAsset: true,
+          isMaterialized: materialization?.is_materialized ?? asset.is_materialized,
         },
         tableSource
       );
 
       upsertColumns(tables, tableKey, toSchemaColumns(asset.columns), tableSource);
+      upsertColumns(tables, tableKey, extractSQLDefinitionColumns(asset.content), {
+        ...tableSource,
+        method: "asset-sql-definition",
+      });
     }
   }
 
@@ -784,7 +918,12 @@ export function buildSuggestionCatalog(args: {
   workspace: WorkspaceState | null;
   syncSource: SuggestionWorkspaceSyncSource | null;
   dynamicState: DynamicSuggestionState;
+  materializationByAssetId?: MaterializationByAssetId;
 }): SuggestionCatalogState {
-  const baseCatalog = buildCatalogFromWorkspace(args.workspace, args.syncSource);
+  const baseCatalog = buildCatalogFromWorkspace(
+    args.workspace,
+    args.syncSource,
+    args.materializationByAssetId
+  );
   return mergeDynamicSuggestions(baseCatalog, args.workspace, args.dynamicState);
 }

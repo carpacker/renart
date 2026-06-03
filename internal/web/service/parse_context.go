@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"fmt"
+	"regexp"
 	"strings"
 
 	"github.com/bruin-data/bruin/pkg/pipeline"
@@ -23,14 +24,21 @@ var assetTypeDialectMap = map[pipeline.AssetType]string{
 	pipeline.AssetTypeDuckDBQuery:     "duckdb",
 }
 
+var (
+	selectAliasPattern  = regexp.MustCompile(`(?i)\bas\s+([a-zA-Z_][\w$]*|"[^"]+"|` + "`" + `[^` + "`" + `]+` + "`" + `)\s*$`)
+	directColumnPattern = regexp.MustCompile(`^(?:[a-zA-Z_][\w$]*\.)?([a-zA-Z_][\w$]*)$`)
+)
+
 type ParseContextSchemaColumn struct {
-	Name string `json:"name"`
-	Type string `json:"type,omitempty"`
+	Name          string   `json:"name"`
+	Type          string   `json:"type,omitempty"`
+	SourceMethods []string `json:"source_methods,omitempty"`
 }
 
 type ParseContextSchemaTable struct {
-	Name    string                     `json:"name"`
-	Columns []ParseContextSchemaColumn `json:"columns"`
+	Name           string                     `json:"name"`
+	IsMaterialized bool                       `json:"is_materialized,omitempty"`
+	Columns        []ParseContextSchemaColumn `json:"columns"`
 }
 
 type ParseContextRange struct {
@@ -63,6 +71,7 @@ type ParseContextTable struct {
 	ColumnRanges map[string]ParseContextRange `json:"column_ranges,omitempty"`
 	Parts        []ParseContextPart           `json:"parts"`
 	AliasRange   *ParseContextRange           `json:"alias_range,omitempty"`
+	ScopeRange   *ParseContextRange           `json:"scope_range,omitempty"`
 }
 
 type ParseContextColumn struct {
@@ -104,7 +113,7 @@ func NewParseContextService(deps ParseContextDependencies) *ParseContextService 
 }
 
 func (s *ParseContextService) Parse(ctx context.Context, assetID, content string, schemaTables []ParseContextSchemaTable) (ParseContextResult, *ParseContextAPIError) {
-	_, _, asset, err := s.deps.ResolveAssetByID(ctx, assetID)
+	_, parsedPipeline, asset, err := s.deps.ResolveAssetByID(ctx, assetID)
 	if err != nil {
 		return ParseContextResult{}, &ParseContextAPIError{Status: 400, Code: "asset_not_found", Message: err.Error()}
 	}
@@ -124,8 +133,10 @@ func (s *ParseContextService) Parse(ctx context.Context, assetID, content string
 		content = asset.ExecutableFile.Content
 	}
 	schema := BuildParseContextSchema(asset, schemaTables)
+	columnSourceMethods := BuildParseContextColumnSourceMethods(asset, schemaTables)
+	ApplyAssetSQLDefinitionColumns(parsedPipeline, asset, schema, columnSourceMethods)
 
-	parseContext, err := sqlintelligence.ParseContextWithSchema(content, dialect, schema)
+	parseContext, err := sqlintelligence.ParseContextWithSchema(content, dialect, schema, columnSourceMethods)
 	if err != nil {
 		return ParseContextResult{
 			Status:  "error",
@@ -150,6 +161,99 @@ func (s *ParseContextService) Parse(ctx context.Context, assetID, content string
 	}, nil
 }
 
+func BuildParseContextColumnSourceMethods(asset *pipeline.Asset, suggestionTables []ParseContextSchemaTable) sqlintelligence.SchemaColumnSourceMethods {
+	sources := sqlintelligence.SchemaColumnSourceMethods{}
+
+	for _, table := range suggestionTables {
+		if strings.TrimSpace(table.Name) == "" {
+			continue
+		}
+
+		columns := sources[table.Name]
+		if columns == nil {
+			columns = map[string][]string{}
+		}
+		for _, column := range table.Columns {
+			if strings.TrimSpace(column.Name) == "" {
+				continue
+			}
+			if len(column.SourceMethods) > 0 {
+				columns[column.Name] = mergeStringSlices(columns[column.Name], column.SourceMethods)
+			}
+			if table.IsMaterialized && hasWorkspaceColumnSource(column.SourceMethods) {
+				columns[column.Name] = mergeStringSlices(columns[column.Name], []string{"materialized-workspace-load"})
+			}
+		}
+
+		if len(columns) > 0 {
+			sources[table.Name] = columns
+		}
+	}
+
+	if asset != nil && strings.TrimSpace(asset.Name) != "" && len(asset.Columns) > 0 {
+		columns := sources[asset.Name]
+		if columns == nil {
+			columns = map[string][]string{}
+		}
+		for _, column := range asset.Columns {
+			if strings.TrimSpace(column.Name) == "" {
+				continue
+			}
+			columns[column.Name] = mergeStringSlices(columns[column.Name], []string{"workspace-load"})
+		}
+		if len(columns) > 0 {
+			sources[asset.Name] = columns
+		}
+	}
+
+	MergeShortNameColumnSourceMethods(sources)
+	return sources
+}
+
+func mergeStringSlices(left, right []string) []string {
+	seen := map[string]bool{}
+	result := make([]string, 0, len(left)+len(right))
+	for _, value := range append(left, right...) {
+		if strings.TrimSpace(value) == "" || seen[value] {
+			continue
+		}
+		seen[value] = true
+		result = append(result, value)
+	}
+	return result
+}
+
+func hasWorkspaceColumnSource(values []string) bool {
+	for _, value := range values {
+		if value == "workspace-load" || value == "workspace-event" {
+			return true
+		}
+	}
+	return false
+}
+
+func MergeShortNameColumnSourceMethods(sources sqlintelligence.SchemaColumnSourceMethods) {
+	for tableName, columns := range sources {
+		if strings.Contains(tableName, ".") {
+			continue
+		}
+
+		qualifiedName := singleQualifiedTableForShortName(sources, tableName)
+		if qualifiedName == "" {
+			continue
+		}
+
+		qualifiedColumns := sources[qualifiedName]
+		if qualifiedColumns == nil {
+			qualifiedColumns = map[string][]string{}
+		}
+		for columnName, methods := range columns {
+			qualifiedColumns[columnName] = mergeStringSlices(qualifiedColumns[columnName], methods)
+		}
+		sources[qualifiedName] = qualifiedColumns
+	}
+}
+
 func AssetTypeToDialect(assetType pipeline.AssetType) (string, error) {
 	dialect, ok := assetTypeDialectMap[assetType]
 	if !ok {
@@ -167,7 +271,10 @@ func BuildParseContextSchema(asset *pipeline.Asset, suggestionTables []ParseCont
 			continue
 		}
 
-		columns := map[string]string{}
+		columns := schema[table.Name]
+		if columns == nil {
+			columns = map[string]string{}
+		}
 		for _, column := range table.Columns {
 			if strings.TrimSpace(column.Name) == "" {
 				continue
@@ -181,7 +288,10 @@ func BuildParseContextSchema(asset *pipeline.Asset, suggestionTables []ParseCont
 	}
 
 	if asset != nil && strings.TrimSpace(asset.Name) != "" && len(asset.Columns) > 0 {
-		columns := map[string]string{}
+		columns := schema[asset.Name]
+		if columns == nil {
+			columns = map[string]string{}
+		}
 		for _, column := range asset.Columns {
 			if strings.TrimSpace(column.Name) == "" {
 				continue
@@ -193,7 +303,250 @@ func BuildParseContextSchema(asset *pipeline.Asset, suggestionTables []ParseCont
 		}
 	}
 
+	MergeShortNameSchemaTables(schema)
 	return schema
+}
+
+func MergeShortNameSchemaTables(schema sqlintelligence.Schema) {
+	for tableName, columns := range schema {
+		if strings.Contains(tableName, ".") {
+			continue
+		}
+
+		qualifiedName := singleQualifiedTableForShortName(schema, tableName)
+		if qualifiedName == "" {
+			continue
+		}
+
+		qualifiedColumns := schema[qualifiedName]
+		if qualifiedColumns == nil {
+			qualifiedColumns = map[string]string{}
+		}
+		for columnName, columnType := range columns {
+			if _, exists := qualifiedColumns[columnName]; !exists {
+				qualifiedColumns[columnName] = columnType
+			}
+		}
+		schema[qualifiedName] = qualifiedColumns
+	}
+}
+
+func ApplyAssetSQLDefinitionColumns(parsedPipeline *pipeline.Pipeline, currentAsset *pipeline.Asset, schema sqlintelligence.Schema, sources sqlintelligence.SchemaColumnSourceMethods) {
+	if parsedPipeline == nil {
+		return
+	}
+
+	for _, asset := range parsedPipeline.Assets {
+		if asset == nil || strings.TrimSpace(asset.Name) == "" {
+			continue
+		}
+		if currentAsset != nil && strings.EqualFold(strings.TrimSpace(asset.Name), strings.TrimSpace(currentAsset.Name)) {
+			continue
+		}
+		if _, err := AssetTypeToDialect(asset.Type); err != nil {
+			continue
+		}
+
+		declaredColumns := asset.Columns
+		definitionColumns := ExtractSQLDefinitionColumns(asset.ExecutableFile.Content)
+		if len(declaredColumns) == 0 && len(definitionColumns) == 0 {
+			continue
+		}
+
+		schemaColumns := schema[asset.Name]
+		if schemaColumns == nil {
+			schemaColumns = map[string]string{}
+		}
+		sourceColumns := sources[asset.Name]
+		if sourceColumns == nil {
+			sourceColumns = map[string][]string{}
+		}
+
+		for _, column := range declaredColumns {
+			columnName := strings.TrimSpace(column.Name)
+			if columnName == "" {
+				continue
+			}
+			if _, exists := schemaColumns[columnName]; !exists {
+				schemaColumns[columnName] = strings.TrimSpace(column.Type)
+			}
+			sourceColumns[columnName] = mergeStringSlices(sourceColumns[columnName], []string{"workspace-load"})
+		}
+
+		for _, columnName := range definitionColumns {
+			if _, exists := schemaColumns[columnName]; !exists {
+				schemaColumns[columnName] = ""
+			}
+			sourceColumns[columnName] = mergeStringSlices(sourceColumns[columnName], []string{"asset-sql-definition"})
+		}
+
+		schema[asset.Name] = schemaColumns
+		sources[asset.Name] = sourceColumns
+	}
+
+	MergeShortNameSchemaTables(schema)
+	MergeShortNameColumnSourceMethods(sources)
+}
+
+func ExtractSQLDefinitionColumns(content string) []string {
+	sql := strings.TrimSpace(content)
+	if sql == "" {
+		return nil
+	}
+
+	selectIndex := findTopLevelKeyword(sql, "select", 0)
+	if selectIndex < 0 {
+		return nil
+	}
+
+	fromIndex := findTopLevelKeyword(sql, "from", selectIndex+len("select"))
+	if fromIndex < 0 {
+		fromIndex = len(sql)
+	}
+
+	selectList := sql[selectIndex+len("select") : fromIndex]
+	seen := map[string]bool{}
+	result := []string{}
+	for _, expression := range splitTopLevelComma(selectList) {
+		columnName := extractSelectExpressionColumnName(expression)
+		if columnName == "" || seen[strings.ToLower(columnName)] {
+			continue
+		}
+		seen[strings.ToLower(columnName)] = true
+		result = append(result, columnName)
+	}
+
+	return result
+}
+
+func findTopLevelKeyword(sql, keyword string, startIndex int) int {
+	lower := strings.ToLower(sql)
+	depth := 0
+	var quote rune
+
+	for index, char := range sql {
+		if index < startIndex {
+			continue
+		}
+		if quote != 0 {
+			if char == quote {
+				quote = 0
+			}
+			continue
+		}
+		switch char {
+		case '\'', '"', '`':
+			quote = char
+			continue
+		case '(':
+			depth++
+			continue
+		case ')':
+			if depth > 0 {
+				depth--
+			}
+			continue
+		}
+		if depth != 0 || !strings.HasPrefix(lower[index:], keyword) {
+			continue
+		}
+		before := byte(' ')
+		if index > 0 {
+			before = lower[index-1]
+		}
+		after := byte(' ')
+		if index+len(keyword) < len(lower) {
+			after = lower[index+len(keyword)]
+		}
+		if isIdentifierByte(before) || isIdentifierByte(after) {
+			continue
+		}
+		return index
+	}
+
+	return -1
+}
+
+func splitTopLevelComma(value string) []string {
+	result := []string{}
+	depth := 0
+	var quote rune
+	start := 0
+
+	for index, char := range value {
+		if quote != 0 {
+			if char == quote {
+				quote = 0
+			}
+			continue
+		}
+		switch char {
+		case '\'', '"', '`':
+			quote = char
+			continue
+		case '(':
+			depth++
+			continue
+		case ')':
+			if depth > 0 {
+				depth--
+			}
+			continue
+		case ',':
+			if depth == 0 {
+				if expression := strings.TrimSpace(value[start:index]); expression != "" {
+					result = append(result, expression)
+				}
+				start = index + 1
+			}
+		}
+	}
+	if expression := strings.TrimSpace(value[start:]); expression != "" {
+		result = append(result, expression)
+	}
+	return result
+}
+
+func extractSelectExpressionColumnName(expression string) string {
+	expression = strings.TrimSpace(expression)
+	if expression == "" || expression == "*" || strings.HasSuffix(expression, ".*") {
+		return ""
+	}
+
+	if match := selectAliasPattern.FindStringSubmatch(expression); len(match) == 2 {
+		return normalizeSQLIdentifier(match[1])
+	}
+	if match := directColumnPattern.FindStringSubmatch(expression); len(match) == 2 {
+		return normalizeSQLIdentifier(match[1])
+	}
+	return ""
+}
+
+func normalizeSQLIdentifier(value string) string {
+	return strings.Trim(strings.TrimSpace(value), "\"`")
+}
+
+func isIdentifierByte(value byte) bool {
+	return (value >= 'a' && value <= 'z') || (value >= '0' && value <= '9') || value == '_'
+}
+
+func singleQualifiedTableForShortName[T any](tables map[string]T, shortName string) string {
+	var match string
+	for tableName := range tables {
+		if !strings.Contains(tableName, ".") || tableShortName(tableName) != shortName {
+			continue
+		}
+		if match != "" {
+			return ""
+		}
+		match = tableName
+	}
+	return match
+}
+
+func tableShortName(tableName string) string {
+	parts := strings.Split(tableName, ".")
+	return parts[len(parts)-1]
 }
 
 func ParseContextRangeFromParser(input sqlintelligence.ParseContextRange) ParseContextRange {
@@ -223,6 +576,10 @@ func ParseContextTablesFromParser(input []sqlintelligence.ParseContextTable) []P
 		if table.AliasRange != nil {
 			aliasRange := ParseContextRangeFromParser(*table.AliasRange)
 			item.AliasRange = &aliasRange
+		}
+		if table.ScopeRange != nil {
+			scopeRange := ParseContextRangeFromParser(*table.ScopeRange)
+			item.ScopeRange = &scopeRange
 		}
 		result = append(result, item)
 	}

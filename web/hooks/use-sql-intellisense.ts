@@ -14,12 +14,13 @@ import {
   resolveTableAtPosition,
 } from "@/lib/monaco-sql-providers";
 import { findTableByIdentifier, resolveConnection, SchemaTable } from "@/lib/sql-schema";
-import { SqlParseContextDiagnostic, WebAsset } from "@/lib/types";
+import { SqlParseContextDiagnostic, WebAsset, WorkspaceState } from "@/lib/types";
 import { useAtomValue, useSetAtom } from "jotai";
 
 import { workspaceAtom } from "@/lib/atoms/domains/workspace";
 import {
   sqlDiscoveryCacheAtom,
+  SQLDiscoveryCacheState,
   sqlDiscoveryColumnsAtom,
   sqlDiscoveryTablesAtom,
 } from "@/lib/atoms/sql-discovery";
@@ -118,6 +119,75 @@ type ColumnSuggestionContext = {
 type ParseContextLike = {
   tables?: Array<{ name: string; alias?: string; resolved_name?: string; columns?: Record<string, string> }>;
 } | null | undefined;
+
+type SQLProviderState = {
+  asset: WebAsset | null;
+  activeParseContext: ReturnType<typeof useSQLParseContext>;
+  connectionName: string | null;
+  environment?: string;
+  sqlDiscoveryCache: SQLDiscoveryCacheState;
+  workspace: WorkspaceState | null;
+};
+
+function useStableSQLProviderState(args: {
+  activeParseContext: ReturnType<typeof useSQLParseContext>;
+  asset: WebAsset | null;
+  connectionName: string | null;
+  currentPipelineId: string | null;
+  environment?: string;
+  onGoToAsset?: (pipelineId: string, assetId: string) => void;
+  remoteTableNames: string[];
+  sqlDiscoveryCache: SQLDiscoveryCacheState;
+  tables: SchemaTable[];
+  upstreamNames: string[];
+  workspace: WorkspaceState | null;
+}) {
+  const goToAssetRef = useRef(args.onGoToAsset);
+  const providerTablesRef = useRef<SchemaTable[]>([]);
+  const providerUpstreamNamesRef = useRef<string[]>([]);
+  const providerTableContextRef = useRef({
+    currentPipelineId: null as string | null,
+    currentSchemaName: null as string | null,
+    currentTableName: null as string | null,
+    remoteTableNames: [] as string[],
+  });
+  const latestStateRef = useRef<SQLProviderState>({
+    asset: args.asset,
+    activeParseContext: args.activeParseContext,
+    connectionName: args.connectionName,
+    environment: args.environment,
+    sqlDiscoveryCache: args.sqlDiscoveryCache,
+    workspace: args.workspace,
+  });
+
+  goToAssetRef.current = args.onGoToAsset;
+  replaceStableArray(providerTablesRef.current, args.tables);
+  replaceStableArray(providerUpstreamNamesRef.current, args.upstreamNames);
+  replaceStableArray(providerTableContextRef.current.remoteTableNames, args.remoteTableNames);
+  providerTableContextRef.current.currentPipelineId = args.currentPipelineId;
+  providerTableContextRef.current.currentSchemaName = schemaNameFromAssetName(args.asset?.name);
+  providerTableContextRef.current.currentTableName = args.asset?.name ?? null;
+  latestStateRef.current = {
+    asset: args.asset,
+    activeParseContext: args.activeParseContext,
+    connectionName: args.connectionName,
+    environment: args.environment,
+    sqlDiscoveryCache: args.sqlDiscoveryCache,
+    workspace: args.workspace,
+  };
+
+  return {
+    goToAssetRef,
+    latestStateRef,
+    providerTableContextRef,
+    providerTablesRef,
+    providerUpstreamNamesRef,
+  };
+}
+
+function replaceStableArray<T>(target: T[], source: T[]) {
+  target.splice(0, target.length, ...source);
+}
 
 function normalizeIdentifierPart(value: string) {
   return value.trim().replace(/^[`"']+|[`"']+$/g, "");
@@ -419,8 +489,9 @@ function remoteTablesForConnection(
  * React hook that registers Monaco SQL completion / definition / hover
  * providers scoped to the given schema tables.
  *
- * Providers are re-registered whenever the `tables` reference changes.
- * Call this once from the component that owns the Monaco editor.
+ * Providers keep stable identities while reading latest schema state from refs.
+ * Re-registering completion providers while the suggest widget is open resets
+ * Monaco's focused completion item on every workspace SSE event.
  */
 export function useSQLIntellisense(
   monaco: typeof MonacoNS | null,
@@ -438,43 +509,61 @@ export function useSQLIntellisense(
   const loadSQLDiscoveryColumns = useSetAtom(sqlDiscoveryColumnsAtom);
   const loadSQLDiscoveryTables = useSetAtom(sqlDiscoveryTablesAtom);
   const parseContext = useSQLParseContext(asset, sqlContent, tables);
-  const parseContextKey = useMemo(() => JSON.stringify(parseContext ?? null), [parseContext]);
-  useSQLSemanticDecorations(editor, parseContext);
   const lastGoodParseContextRef = useRef<typeof parseContext>(null);
   if (parseContext && (!parseContext.errors || parseContext.errors.length === 0)) {
     lastGoodParseContextRef.current = parseContext;
   }
-  // Keep a stable ref to the latest callback so we don't re-register on
-  // every render when the parent re-creates the function.
-  const goToAssetRef = useRef(onGoToAsset);
-  goToAssetRef.current = onGoToAsset;
   const activeParseContext =
     parseContext && (!parseContext.errors || parseContext.errors.length === 0)
       ? parseContext
       : lastGoodParseContextRef.current;
+  const parseContextKey = useMemo(() => JSON.stringify(activeParseContext ?? null), [activeParseContext]);
+  useSQLSemanticDecorations(editor, activeParseContext);
+
+  const connectionName =
+    asset && workspace ? resolveConnection(asset, workspace.connections ?? {}) : null;
+  const currentPipelineId = asset
+    ? (workspace?.pipelines ?? []).find((pipeline) =>
+        pipeline.assets.some((candidate) => candidate.id === asset.id),
+      )?.id ?? null
+    : null;
+  const remoteTableNames = remoteTablesForConnection(
+    sqlDiscoveryCache.tablesByScope,
+    connectionName,
+    environment,
+  ).map((table) => table.name);
+
+  const {
+    goToAssetRef,
+    latestStateRef,
+    providerTableContextRef,
+    providerTablesRef,
+    providerUpstreamNamesRef,
+  } = useStableSQLProviderState({
+    activeParseContext,
+    asset,
+    connectionName,
+    currentPipelineId,
+    environment,
+    onGoToAsset,
+    remoteTableNames,
+    sqlDiscoveryCache,
+    tables,
+    upstreamNames,
+    workspace,
+  });
 
   useEffect(() => {
     if (!monaco) {
       return;
     }
 
-    const connectionName =
-      asset && workspace ? resolveConnection(asset, workspace.connections ?? {}) : null;
-    const currentPipelineId = asset
-      ? (workspace?.pipelines ?? []).find((pipeline) =>
-          pipeline.assets.some((candidate) => candidate.id === asset.id),
-        )?.id ?? null
-      : null;
-
-    const disposable = registerSQLProviders(monaco, tables, upstreamNames, {
+    const disposable = registerSQLProviders(monaco, providerTablesRef.current, providerUpstreamNamesRef.current, {
       getParseContext: () => {
-        if (parseContext && (!parseContext.errors || parseContext.errors.length === 0)) {
-          return parseContext;
-        }
-
-        return lastGoodParseContextRef.current;
+        return latestStateRef.current.activeParseContext;
       },
       async provideTableContextSuggestions({ monaco: monacoInstance, prefix, range }) {
+        const { connectionName, environment, sqlDiscoveryCache } = latestStateRef.current;
         if (!connectionName) {
           return [];
         }
@@ -503,22 +592,22 @@ export function useSQLIntellisense(
             );
           })
           .filter((table) => {
-            return !tables.some(
+            return !providerTablesRef.current.some(
               (candidate) => candidate.name.toLowerCase() === table.name.toLowerCase(),
             );
           })
           .map((table) => {
-            const matchingAsset = tables.find(
+            const matchingAsset = providerTablesRef.current.find(
               (candidate) => candidate.name.toLowerCase() === table.name.toLowerCase(),
             );
             const description = matchingAsset
               ? `Remote table + Bruin asset (${matchingAsset.assetPath ?? matchingAsset.name})`
               : "Remote table";
 
-            const currentSchemaName = schemaNameFromAssetName(asset?.name)?.toLowerCase() ?? null;
+            const currentSchemaName = schemaNameFromAssetName(latestStateRef.current.asset?.name)?.toLowerCase() ?? null;
             const tableSchemaName = schemaNameFromAssetName(table.name)?.toLowerCase() ?? null;
             const sameSchema = Boolean(currentSchemaName) && currentSchemaName === tableSchemaName;
-            const sameAssetName = asset?.name?.toLowerCase() === table.name.toLowerCase();
+            const sameAssetName = latestStateRef.current.asset?.name?.toLowerCase() === table.name.toLowerCase();
             const rank = sameAssetName ? "20" : sameSchema ? "21" : "22";
 
             return {
@@ -540,12 +629,13 @@ export function useSQLIntellisense(
         columnPrefix,
         range,
       }) {
+        const { connectionName, environment, sqlDiscoveryCache } = latestStateRef.current;
         if (!connectionName) {
           return [];
         }
 
         const normalizedIdentifier = tableIdentifier.trim().toLowerCase();
-        const localTable = tables.find(
+        const localTable = providerTablesRef.current.find(
           (table) =>
             table.name.toLowerCase() === normalizedIdentifier ||
             table.shortName.toLowerCase() === normalizedIdentifier
@@ -595,6 +685,7 @@ export function useSQLIntellisense(
         range,
         insideQuotes,
       }) {
+        const { activeParseContext, asset, connectionName, environment } = latestStateRef.current;
         if (!connectionName || !activeParseContext) {
           return [];
         }
@@ -657,6 +748,7 @@ export function useSQLIntellisense(
         }
       },
       async providePathSuggestions({ monaco: monacoInstance, prefix, range }) {
+        const { asset, environment } = latestStateRef.current;
         if (!asset?.id) {
           return [];
         }
@@ -683,19 +775,12 @@ export function useSQLIntellisense(
           sortText: suggestion.kind === "directory" ? "0" : "1",
         }));
       },
-    }, {
-      currentPipelineId,
-      currentSchemaName: schemaNameFromAssetName(asset?.name),
-      currentTableName: asset?.name ?? null,
-      remoteTableNames: (remoteTablesForConnection(sqlDiscoveryCache.tablesByScope, connectionName, environment) ?? []).map(
-        (table) => table.name,
-      ),
-    });
+    }, providerTableContextRef.current);
 
     return () => {
       disposable.dispose();
     };
-  }, [activeParseContext, asset, editor, environment, loadSQLDiscoveryColumns, loadSQLDiscoveryTables, monaco, parseContextKey, sqlDiscoveryCache.columnsByScope, sqlDiscoveryCache.tablesByScope, tables, upstreamNames, workspace]);
+  }, [loadSQLDiscoveryColumns, loadSQLDiscoveryTables, monaco]);
 
   useEffect(() => {
     if (!editor || tables.length === 0) {
@@ -748,18 +833,18 @@ export function useSQLIntellisense(
 
     const unresolvedColumnSuggestions = buildUnresolvedColumnSuggestions(
       model,
-      parseContext?.diagnostics ?? [],
-      parseContext,
+      activeParseContext?.diagnostics ?? [],
+      activeParseContext,
       tables,
     );
     const unresolvedTableSuggestions = buildUnresolvedTableSuggestions(
       model,
-      parseContext?.diagnostics ?? [],
+      activeParseContext?.diagnostics ?? [],
       tables,
     );
-    const selfReferenceDiagnostics = buildSelfReferenceDiagnostics(asset, parseContext);
+    const selfReferenceDiagnostics = buildSelfReferenceDiagnostics(asset, activeParseContext);
 
-    const diagnostics = (parseContext?.diagnostics ?? [])
+    const diagnostics = (activeParseContext?.diagnostics ?? [])
       .filter((diagnostic) => diagnostic.range)
       .map((diagnostic) => {
         const unresolvedColumnSuggestion = unresolvedColumnSuggestions.find(
@@ -833,16 +918,19 @@ export function useSQLIntellisense(
           return { actions: [], dispose: () => undefined };
         }
 
+        const currentParseContext = latestStateRef.current.activeParseContext;
+        const currentTables = providerTablesRef.current;
+
         const columnSuggestions = buildUnresolvedColumnSuggestions(
           model,
-          parseContext?.diagnostics ?? [],
-          parseContext,
-          tables,
+          currentParseContext?.diagnostics ?? [],
+          currentParseContext,
+          currentTables,
         );
         const tableSuggestions = buildUnresolvedTableSuggestions(
           model,
-          parseContext?.diagnostics ?? [],
-          tables,
+          currentParseContext?.diagnostics ?? [],
+          currentTables,
         );
 
         const columnActions = columnSuggestions
@@ -908,7 +996,7 @@ export function useSQLIntellisense(
     });
 
     return () => disposable.dispose();
-  }, [editor, monaco, parseContextKey, tables]);
+  }, [editor, monaco]);
 
   useEffect(() => {
     if (!editor || !monaco) {
@@ -926,17 +1014,20 @@ export function useSQLIntellisense(
           return null;
         }
 
+        const currentParseContext = latestStateRef.current.activeParseContext;
+        const currentTables = providerTablesRef.current;
+
         const columnSuggestion = buildUnresolvedColumnSuggestions(
           model,
-          parseContext?.diagnostics ?? [],
-          parseContext,
-          tables,
+          currentParseContext?.diagnostics ?? [],
+          currentParseContext,
+          currentTables,
         ).find((candidate) => positionInRange(position, candidate.range));
 
         const tableSuggestion = buildUnresolvedTableSuggestions(
           model,
-          parseContext?.diagnostics ?? [],
-          tables,
+          currentParseContext?.diagnostics ?? [],
+          currentTables,
         ).find((candidate) => positionInRange(position, candidate.range));
 
         if (!columnSuggestion && !tableSuggestion) {
@@ -966,5 +1057,5 @@ export function useSQLIntellisense(
     });
 
     return () => disposable.dispose();
-  }, [editor, monaco, parseContextKey, tables]);
+  }, [editor, monaco]);
 }

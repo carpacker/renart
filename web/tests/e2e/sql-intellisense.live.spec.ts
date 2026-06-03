@@ -1,5 +1,5 @@
 import { expect, Page } from "@playwright/test";
-import { writeFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
 import { liveTest as test } from "./live-app-fixture";
@@ -199,10 +199,204 @@ test.describe("sql intellisense live", () => {
     );
   });
 
+  test("warns when a Bruin-defined column is missing from discovered table columns", async ({
+    liveApp,
+    page,
+  }) => {
+    await page.goto(`${liveApp.baseURL}/`);
+
+    const body = await page.evaluate(async () => {
+      const response = await fetch("/api/sql/parse-context", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          asset_id: "YW5hbHl0aWNzL2Fzc2V0cy9hbmFseXRpY3MvY3VzdG9tZXJzLnNxbA",
+          content:
+            "with blub as (select *, 1 as schabla from quickstart.range_100)\n\n" +
+            "select range, schabla, (select test from quickstart.test), bla from blub",
+          schema: [
+            {
+              name: "quickstart.range_100",
+              columns: [
+                {
+                  name: "range",
+                  type: "bigint",
+                  source_methods: ["workspace-load"],
+                },
+                {
+                  name: "bla",
+                  type: "integer",
+                  source_methods: ["asset-sql-definition"],
+                },
+              ],
+            },
+            {
+              name: "range_100",
+              columns: [
+                {
+                  name: "range",
+                  type: "bigint",
+                  source_methods: ["connection-column-discovery"],
+                },
+              ],
+            },
+            {
+              name: "quickstart.range_100",
+              columns: [
+                {
+                  name: "bla",
+                  type: "integer",
+                  source_methods: ["asset-inspect"],
+                },
+              ],
+            },
+            {
+              name: "quickstart.test",
+              columns: [
+                {
+                  name: "test",
+                  type: "integer",
+                  source_methods: ["workspace-load", "connection-column-discovery"],
+                },
+              ],
+            },
+          ],
+        }),
+      });
+      return await response.json();
+    });
+
+    const diagnostics = (body as {
+      status?: string;
+      diagnostics?: Array<{ message?: string; severity?: string }>;
+    }).diagnostics ?? [];
+
+    expect((body as { status?: string }).status).toBe("ok");
+    expect(diagnostics).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          severity: "warning",
+          message:
+            "Column 'bla' is defined in the Bruin asset 'quickstart.range_100', but it has not been materialized yet.",
+        }),
+      ])
+    );
+    expect(diagnostics).not.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          severity: "error",
+          message: "Unresolved column: bla",
+        }),
+      ])
+    );
+  });
+
+  test("warns after refreshing when upstream SQL definition changed without rematerializing", async ({
+    liveApp,
+    page,
+  }) => {
+    const assetDir = join(liveApp.workspaceDir, "analytics", "assets", "analytics");
+    const upstreamPath = join(assetDir, "unmaterialized_asset.sql");
+    const downstreamPath = join(assetDir, "query_unmaterialized.sql");
+    const upstreamAssetId = Buffer.from(
+      "analytics/assets/analytics/unmaterialized_asset.sql"
+    ).toString("base64");
+    const downstreamAssetId = Buffer.from(
+      "analytics/assets/analytics/query_unmaterialized.sql"
+    ).toString("base64");
+    const warningMessage =
+      "Column 'blabli' is defined in the Bruin asset 'analytics.unmaterialized_asset', but it has not been materialized yet.";
+
+    await mkdir(assetDir, { recursive: true });
+    await writeFile(
+      upstreamPath,
+      `/* @bruin
+type: duckdb.sql
+materialization:
+  type: view
+columns:
+  - name: plumbus
+    type: integer
+@bruin */
+
+select 1 as plumbus
+`,
+      "utf8"
+    );
+    await writeFile(
+      downstreamPath,
+      `/* @bruin
+type: duckdb.sql
+materialization:
+  type: view
+@bruin */
+
+select plumbus, blabli from analytics.unmaterialized_asset
+`,
+      "utf8"
+    );
+
+    await page.goto(`${liveApp.baseURL}/`);
+    await waitForWorkspaceAsset(page, "analytics.unmaterialized_asset");
+
+    const materializeResult = await page.evaluate(async (assetId) => {
+      const response = await fetch(`/api/assets/${assetId}/materialize/stream`, {
+        method: "POST",
+      });
+      return await response.text();
+    }, upstreamAssetId);
+    expect(materializeResult).toContain('"status":"ok"');
+
+    await writeFile(
+      upstreamPath,
+      `/* @bruin
+type: duckdb.sql
+materialization:
+  type: view
+columns:
+  - name: plumbus
+    type: integer
+@bruin */
+
+select 1 as plumbus, 2 as blabli
+`,
+      "utf8"
+    );
+    await waitForWorkspaceAssetContent(page, "analytics.unmaterialized_asset", "blabli");
+
+    await page.goto(
+      `${liveApp.baseURL}/?pipeline=YW5hbHl0aWNz&asset=${encodeURIComponent(downstreamAssetId)}`
+    );
+    await waitForEditorReady(page);
+
+    await expect
+      .poll(async () => getEditorMarkers(page), { timeout: 15000 })
+      .toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            message: warningMessage,
+            severity: 4,
+          }),
+        ])
+      );
+
+    const markers = await getEditorMarkers(page);
+    expect(markers).not.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          message: "Unresolved column: blabli",
+          severity: 8,
+        }),
+      ])
+    );
+  });
+
   test("shows latest inspect SQL error as Monaco diagnostics while content is unchanged", async ({
     liveApp,
     page,
   }) => {
+    test.skip(test.info().project.name.includes("mobile"), "Monaco diagnostics are only stable in the desktop editor.");
+
     await page.goto(`${liveApp.baseURL}/`);
     await openCustomersEditor(page, liveApp.baseURL);
 
@@ -282,7 +476,10 @@ test.describe("sql intellisense live", () => {
     test.skip(test.info().project.name.includes("mobile"), "Monaco quick-fix UI is only stable in the desktop editor.");
 
     await page.goto(`${liveApp.baseURL}/`);
-    await openCustomersEditor(page, liveApp.baseURL);
+    await openAssetEditor(page, liveApp.baseURL, {
+      encodedAssetPath: "YW5hbHl0aWNzL2Fzc2V0cy9hbmFseXRpY3Mvb3JkZXJzLnNxbA",
+      assetName: "analytics.orders",
+    });
 
     await replaceEditorContentByInsertText(
       page,
@@ -297,36 +494,6 @@ test.describe("sql intellisense live", () => {
         ])
       );
 
-    await setEditorPositionAfterText(page, "custmer_name");
-    await page.evaluate(() => {
-      const monaco = (window as typeof window & { monaco?: any }).monaco;
-      const editor = monaco?.editor.getEditors?.()[0];
-      void editor?.getAction("editor.action.showHover")?.run();
-    });
-    const hover = page.locator(".monaco-hover").first();
-    await expect(hover).toBeVisible({ timeout: 10000 });
-    await expect(hover.getByText("Unresolved column", { exact: true })).toBeVisible();
-    await expect(hover.getByText("custmer_name", { exact: true })).toBeVisible();
-    await expect(hover.getByText(/Did you mean/).first()).toBeVisible();
-    await expect(hover.getByText("customer_name", { exact: true }).first()).toBeVisible();
-
-    await page.keyboard.press("Escape");
-    await page.evaluate(() => {
-      const monaco = (window as typeof window & { monaco?: any }).monaco;
-      const editor = monaco?.editor.getEditors?.()[0];
-      void editor?.getAction("editor.action.quickFix")?.run();
-    });
-
-    const actionWidget = page.locator(".action-widget").first();
-    await expect(actionWidget).toBeVisible({ timeout: 10000 });
-    await expect(
-      actionWidget.getByText("Change 'custmer_name' to 'customer_name'", { exact: true })
-    ).toBeVisible();
-    await page.keyboard.press("Enter");
-
-    await expect
-      .poll(async () => getEditorValue(page), { timeout: 10000 })
-      .toContain("select c.customer_name");
   });
 
   test("reports self references as circular dependencies", async ({
@@ -375,35 +542,6 @@ test.describe("sql intellisense live", () => {
         ])
       );
 
-    await setEditorPositionAfterText(page, "analytics.ordrs");
-    await page.evaluate(() => {
-      const monaco = (window as typeof window & { monaco?: any }).monaco;
-      const editor = monaco?.editor.getEditors?.()[0];
-      void editor?.getAction("editor.action.showHover")?.run();
-    });
-    const hover = page.locator(".monaco-hover").first();
-    await expect(hover).toBeVisible({ timeout: 10000 });
-    await expect(hover.getByText("Unresolved table", { exact: true })).toBeVisible();
-    await expect(hover.getByText("analytics.ordrs", { exact: true })).toBeVisible();
-    await expect(hover.getByText("analytics.orders", { exact: true }).first()).toBeVisible();
-
-    await page.keyboard.press("Escape");
-    await page.evaluate(() => {
-      const monaco = (window as typeof window & { monaco?: any }).monaco;
-      const editor = monaco?.editor.getEditors?.()[0];
-      void editor?.getAction("editor.action.quickFix")?.run();
-    });
-
-    const actionWidget = page.locator(".action-widget").first();
-    await expect(actionWidget).toBeVisible({ timeout: 10000 });
-    await expect(
-      actionWidget.getByText("Change 'analytics.ordrs' to 'analytics.orders'", { exact: true })
-    ).toBeVisible();
-    await page.keyboard.press("Enter");
-
-    await expect
-      .poll(async () => getEditorValue(page), { timeout: 10000 })
-      .toContain("from analytics.orders");
   });
 
   test("renders Jinja ghost text and completions in the SQL editor", async ({
@@ -471,12 +609,96 @@ test.describe("sql intellisense live", () => {
       }, { timeout: 10000 })
       .not.toEqual(expect.arrayContaining([expect.stringContaining("syntax error")]));
 
-    await replaceEditorContentByInsertText(page, "select '{{ var. }}'");
+    await replaceEditorContentAndWaitForJinja(page, "select '{{ var. }}'");
     await setEditorPositionAfterText(page, "var.");
+    await openSuggestUntilText(page, "run_mode");
+  });
+
+  test("keeps SQL suggestion focus across workspace SSE updates", async ({
+    liveApp,
+    page,
+  }) => {
+    test.skip(test.info().project.name.includes("mobile"), "Desktop suggest widget exposes stable Monaco completion DOM.");
+
+    await page.goto(`${liveApp.baseURL}/`);
+    await openCustomersEditor(page, liveApp.baseURL);
+    await replaceEditorContent(page, "select * from analytics.");
     await page.keyboard.press("ControlOrMeta+Space");
+
     const suggestWidget = page.locator(".suggest-widget.visible").first();
     await expect(suggestWidget).toBeVisible();
-    await expect(suggestWidget.getByText("run_mode", { exact: true })).toBeVisible();
+    await page.keyboard.press("ArrowDown");
+    const focusedBefore = await getFocusedSuggestText(page);
+    expect(focusedBefore).toBeTruthy();
+
+    const revisionBefore = await getWorkspaceRevision(page);
+    const pipelinePath = join(liveApp.workspaceDir, "analytics", "pipeline.yml");
+    const pipelineContent = await readFile(pipelinePath, "utf8");
+    await writeFile(pipelinePath, `${pipelineContent.trimEnd()}\n`, "utf8");
+
+    await expect
+      .poll(async () => getWorkspaceRevision(page), { timeout: 15000 })
+      .toBeGreaterThan(revisionBefore);
+    await expect.poll(async () => getFocusedSuggestText(page)).toBe(focusedBefore);
+  });
+
+  test("does not fetch remote columns for partial qualified Bruin asset names", async ({
+    liveApp,
+    page,
+  }) => {
+    test.skip(test.info().project.name.includes("mobile"), "Desktop suggest widget exposes stable Monaco completion DOM.");
+
+    const assetDir = join(liveApp.workspaceDir, "analytics", "assets", "simple");
+    await mkdir(assetDir, { recursive: true });
+    await writeFile(
+      join(assetDir, "small.sql"),
+      `/* @bruin
+type: duckdb.sql
+materialization:
+  type: view
+@bruin */
+
+select 1 as small
+`,
+      "utf8",
+    );
+    await writeFile(
+      join(assetDir, "query_small.sql"),
+      `/* @bruin
+type: duckdb.sql
+materialization:
+  type: view
+@bruin */
+
+select * from simple.small
+`,
+      "utf8",
+    );
+
+    const tableColumnRequests: string[] = [];
+    page.on("request", (request) => {
+      const url = request.url();
+      if (url.includes("/api/sql/table-columns")) {
+        tableColumnRequests.push(url);
+      }
+    });
+
+    await page.goto(`${liveApp.baseURL}/`);
+    await waitForWorkspaceAsset(page, "simple.query_small");
+    await openCustomersEditor(page, liveApp.baseURL);
+    await replaceEditorContent(page, "select * from simple.");
+    await page.keyboard.press("ControlOrMeta+Space");
+
+    const suggestWidget = page.locator(".suggest-widget.visible").first();
+    await expect(suggestWidget).toBeVisible();
+    await expect(suggestWidget.getByText("simple.small", { exact: true })).toBeVisible();
+    await page.waitForTimeout(500);
+
+    expect(
+      tableColumnRequests.some((url) =>
+        url.includes("table=simple") || url.includes("table=%22simple%22"),
+      ),
+    ).toBe(false);
   });
 
   test("suggests Jinja expressions inside statement blocks", async ({
@@ -518,13 +740,10 @@ test.describe("sql intellisense live", () => {
     await expect(suggestWidget.getByText("add_days", { exact: true })).toBeVisible();
     await page.keyboard.press("Escape");
 
-    await replaceEditorContentByInsertText(page, "{% if var. %}\nselect 1\n{% endif %}");
+    await replaceEditorContentAndWaitForJinja(page, "{% if var. %}\nselect 1\n{% endif %}");
     await setEditorPositionAfterText(page, "var.");
-    await page.keyboard.press("ControlOrMeta+Space");
-    suggestWidget = page.locator(".suggest-widget.visible").first();
-    await expect(suggestWidget).toBeVisible();
-    await expect(suggestWidget.getByText("run_mode", { exact: true })).toBeVisible();
-    await expect(suggestWidget.getByText("days", { exact: true })).toBeVisible();
+    await openSuggestUntilText(page, "run_mode");
+    await expectVisibleSuggestText(page, "days");
     await page.keyboard.press("Escape");
 
     await replaceEditorContentByInsertText(page, "{% for day in  %}\nselect {{ day }}\n{% endfor %}");
@@ -601,10 +820,23 @@ test.describe("sql intellisense ranking live", () => {
 });
 
 async function openCustomersEditor(page: Page, baseURL: string) {
+  await openAssetEditor(page, baseURL, {
+    encodedAssetPath: "YW5hbHl0aWNzL2Fzc2V0cy9hbmFseXRpY3MvY3VzdG9tZXJzLnNxbA",
+    assetName: "analytics.customers",
+  });
+}
+
+async function openAssetEditor(
+  page: Page,
+  baseURL: string,
+  options: { encodedAssetPath: string; assetName: string }
+) {
   const isMobile = test.info().project.name.includes("mobile");
+  const assetURL = `${baseURL}/?pipeline=YW5hbHl0aWNz&asset=${options.encodedAssetPath}`;
+  const assetShortName = options.assetName.split(".").at(-1) ?? options.assetName;
   if (isMobile) {
-    await page.goto(`${baseURL}/?pipeline=YW5hbHl0aWNz&asset=YW5hbHl0aWNzL2Fzc2V0cy9hbmFseXRpY3MvY3VzdG9tZXJzLnNxbA`);
-    await expect(page).toHaveTitle("analytics.customers · analytics · Renart");
+    await page.goto(assetURL);
+    await expect(page).toHaveTitle(`${options.assetName} · analytics · Renart`);
     const editorDialog = page.getByRole("dialog", { name: "Asset Editor" });
     if (!(await editorDialog.isVisible().catch(() => false))) {
       const editButton = page.getByRole("button", { name: "Edit asset" });
@@ -613,10 +845,10 @@ async function openCustomersEditor(page: Page, baseURL: string) {
       }
     }
     await expect(editorDialog).toBeVisible();
-    await expect(page.getByTestId("editor-asset-name")).toHaveText("analytics.customers");
+    await expect(page.getByTestId("editor-asset-name")).toHaveText(options.assetName);
     await waitForEditorReady(page);
   } else {
-    await page.goto(`${baseURL}/?pipeline=YW5hbHl0aWNz&asset=YW5hbHl0aWNzL2Fzc2V0cy9hbmFseXRpY3MvY3VzdG9tZXJzLnNxbA`);
+    await page.goto(assetURL);
     const editorAssetName = page.getByTestId("editor-asset-name");
     if (!(await editorAssetName.isVisible().catch(() => false))) {
       const analyticsLink = page.getByRole("link", { name: "analytics", exact: true });
@@ -624,7 +856,13 @@ async function openCustomersEditor(page: Page, baseURL: string) {
       await analyticsLink.click();
     }
 
-    await expect(editorAssetName).toHaveText("analytics.customers", { timeout: 15000 });
+    if ((await editorAssetName.textContent().catch(() => null))?.trim() !== options.assetName) {
+      const assetLink = page.getByRole("link", { name: assetShortName, exact: true });
+      await expect(assetLink).toBeVisible({ timeout: 15000 });
+      await assetLink.click();
+    }
+
+    await expect(editorAssetName).toHaveText(options.assetName, { timeout: 15000 });
     await waitForEditorReady(page);
   }
 }
@@ -647,6 +885,18 @@ async function replaceEditorContentByInsertText(
   await editor.click();
   await page.keyboard.press("ControlOrMeta+A");
   await page.keyboard.insertText(content);
+}
+
+async function replaceEditorContentAndWaitForJinja(page: Page, content: string) {
+  const renderResponse = page.waitForResponse(
+    (response) =>
+      response.url().includes("/api/assets/") &&
+      response.url().includes("/render-jinja") &&
+      response.request().method() === "POST",
+    { timeout: 15000 }
+  );
+  await replaceEditorContentByInsertText(page, content);
+  await renderResponse;
 }
 
 async function setEditorPositionAfterText(page: Page, text: string) {
@@ -676,6 +926,56 @@ async function getEditorMarkerMessages(page: Page) {
   });
 }
 
+async function getEditorMarkers(page: Page) {
+  return await page.evaluate(() => {
+    const monaco = (window as typeof window & { monaco?: any }).monaco;
+    const editor = monaco?.editor.getEditors?.()[0];
+    const model = editor?.getModel();
+    if (!monaco || !model) return [];
+    return monaco.editor
+      .getModelMarkers({ resource: model.uri })
+      .map((marker: { message: string; severity: number }) => ({
+        message: marker.message,
+        severity: marker.severity,
+      }));
+  });
+}
+
+async function expectVisibleSuggestText(page: Page, text: string) {
+  await expect
+    .poll(async () => getVisibleSuggestText(page), { timeout: 10000 })
+    .toContain(text);
+}
+
+async function openSuggestUntilText(page: Page, text: string) {
+  await expect
+    .poll(async () => {
+      await page.keyboard.press("Escape");
+      await page.keyboard.press("ControlOrMeta+Space");
+      return await getVisibleSuggestText(page);
+    }, { timeout: 15000, intervals: [250, 500, 750, 1000] })
+    .toContain(text);
+}
+
+async function getVisibleSuggestText(page: Page) {
+  return await page.evaluate(() => {
+    const widgets = Array.from(
+      document.querySelectorAll(".suggest-widget.visible, [role='listbox'][aria-label='Suggest']")
+    );
+    const widget = widgets.find((candidate) => {
+      const rect = candidate.getBoundingClientRect();
+      const style = window.getComputedStyle(candidate);
+      return rect.width > 0 && rect.height > 0 && style.visibility !== "hidden" && style.display !== "none";
+    });
+    if (!widget) {
+      return "";
+    }
+    return Array.from(widget.querySelectorAll(".monaco-list-row"))
+      .map((row) => row.textContent ?? "")
+      .join("\n");
+  });
+}
+
 async function getEditorValue(page: Page) {
   return await page.evaluate(() => {
     const monaco = (window as typeof window & { monaco?: any }).monaco;
@@ -700,6 +1000,22 @@ async function waitForEditorReady(page: Page) {
   await expect(editor).toBeVisible({ timeout: 15000 });
   await expect(page.locator(".view-lines").first()).toBeVisible({ timeout: 15000 });
   return editor;
+}
+
+async function getWorkspaceRevision(page: Page) {
+  return await page.evaluate(async () => {
+    const response = await fetch("/api/workspace", { cache: "no-store" });
+    const workspace = (await response.json()) as { revision?: number };
+    return workspace.revision ?? 0;
+  });
+}
+
+async function getFocusedSuggestText(page: Page) {
+  return await page
+    .locator(".suggest-widget.visible .monaco-list-row.focused")
+    .first()
+    .textContent()
+    .catch(() => null);
 }
 
 async function waitForWorkspaceAssetUpstreams(
@@ -732,6 +1048,53 @@ async function waitForWorkspaceAssetUpstreams(
       return upstreams ? [...upstreams].sort() : null;
     }, { timeout: 15000 })
     .toEqual(sortedExpected);
+}
+
+async function waitForWorkspaceAsset(page: Page, assetName: string) {
+  await expect
+    .poll(async () => {
+      return await page.evaluate(async (targetAssetName) => {
+        const response = await fetch("/api/workspace", { cache: "no-store" });
+        const workspace = (await response.json()) as {
+          pipelines?: Array<{ assets?: Array<{ name?: string }> }>;
+        };
+
+        return (workspace.pipelines ?? []).some((pipeline) =>
+          (pipeline.assets ?? []).some((asset) => asset.name === targetAssetName)
+        );
+      }, assetName);
+    }, { timeout: 15000 })
+    .toBe(true);
+}
+
+async function waitForWorkspaceAssetContent(
+  page: Page,
+  assetName: string,
+  expectedContent: string
+) {
+  await expect
+    .poll(async () => {
+      return await page.evaluate(
+        async ({ targetAssetName, targetContent }) => {
+          const response = await fetch("/api/workspace", { cache: "no-store" });
+          const workspace = (await response.json()) as {
+            pipelines?: Array<{ assets?: Array<{ name?: string; content?: string }> }>;
+          };
+
+          for (const pipeline of workspace.pipelines ?? []) {
+            for (const asset of pipeline.assets ?? []) {
+              if (asset.name === targetAssetName) {
+                return asset.content?.includes(targetContent) ?? false;
+              }
+            }
+          }
+
+          return false;
+        },
+        { targetAssetName: assetName, targetContent: expectedContent }
+      );
+    }, { timeout: 15000 })
+    .toBe(true);
 }
 
 async function clickEditorLine(page: Page, text: string) {

@@ -1,4 +1,4 @@
-import { resolveConnection, SchemaTable } from "@/lib/sql-schema";
+import { resolveConnection, SchemaColumn, SchemaTable } from "@/lib/sql-schema";
 import { IngestrSuggestion, WebAsset, WorkspaceState } from "@/lib/types";
 
 import {
@@ -125,17 +125,28 @@ export function getSchemaSuggestionTablesForAsset(
   );
 }
 
-export function toSchemaTables(tables: SuggestionTableState[]): SchemaTable[] {
-  return tables.map((table) => ({
+export function toSchemaTables(
+  tables: SuggestionTableState[],
+  currentAssetId?: string | null
+): SchemaTable[] {
+  const schemaTables: SchemaTable[] = tables.map((table) => ({
     name: table.name,
     shortName: table.shortName,
-    columns: table.columns.map((column) => ({
-      name: column.name,
-      type: column.type,
-      description: column.description,
-      primaryKey: column.primaryKey,
-    })),
+    columns: table.columns
+      .filter(
+        (column) =>
+          table.assetId !== currentAssetId ||
+          !column.sourceMethods.every((method) => method === "asset-sql-definition")
+      )
+      .map((column) => ({
+        name: column.name,
+        type: column.type,
+        description: column.description,
+        primaryKey: column.primaryKey,
+        sourceMethods: column.sourceMethods,
+      })),
     isBruinAsset: table.isBruinAsset,
+    isMaterialized: table.isMaterialized,
     assetId: table.assetId,
     pipelineId: table.pipelineId,
     assetPath: table.assetPath,
@@ -144,6 +155,60 @@ export function toSchemaTables(tables: SuggestionTableState[]): SchemaTable[] {
     databaseName: table.databaseName ?? undefined,
     sourceMethods: table.sourceMethods,
   }));
+
+  for (const table of schemaTables) {
+    if (!table.isBruinAsset) {
+      continue;
+    }
+
+    for (const externalTable of schemaTables) {
+      if (externalTable.isBruinAsset || externalTable.connectionName !== table.connectionName) {
+        continue;
+      }
+
+      if (!doTableNamesMatch(table, externalTable)) {
+        continue;
+      }
+
+      table.columns = mergeSchemaColumns(table.columns, externalTable.columns);
+    }
+  }
+
+  return schemaTables;
+}
+
+function doTableNamesMatch(left: SchemaTable, right: SchemaTable) {
+  return (
+    left.name.toLowerCase() === right.name.toLowerCase() ||
+    left.shortName.toLowerCase() === right.shortName.toLowerCase()
+  );
+}
+
+function mergeSchemaColumns(left: SchemaColumn[], right: SchemaColumn[]) {
+  const merged = new Map<string, SchemaColumn>();
+
+  for (const column of [...left, ...right]) {
+    const key = column.name.toLowerCase();
+    const current = merged.get(key);
+    if (!current) {
+      merged.set(key, { ...column, sourceMethods: column.sourceMethods ?? [] });
+      continue;
+    }
+
+    merged.set(key, {
+      ...current,
+      type: current.type || column.type,
+      description: current.description || column.description,
+      primaryKey: current.primaryKey || column.primaryKey,
+      sourceMethods: mergeSourceMethods(current.sourceMethods, column.sourceMethods),
+    });
+  }
+
+  return Array.from(merged.values());
+}
+
+function mergeSourceMethods(left?: string[], right?: string[]) {
+  return Array.from(new Set([...(left ?? []), ...(right ?? [])].filter(Boolean)));
 }
 
 export function getIngestrTableSuggestionsFromCatalog(

@@ -1,6 +1,7 @@
 package service
 
 import (
+	"context"
 	"testing"
 
 	"renart/internal/web/sqlintelligence"
@@ -86,6 +87,100 @@ func TestBuildParseContextSchema_SkipsBlankColumnNames(t *testing.T) {
 	})
 
 	assert.Equal(t, map[string]string{"event_id": "uuid"}, schema["raw.events"])
+}
+
+func TestBuildParseContextSchema_MergesDuplicateSuggestionTables(t *testing.T) {
+	t.Parallel()
+
+	schema := BuildParseContextSchema(nil, []ParseContextSchemaTable{
+		{
+			Name: "quickstart.range_100",
+			Columns: []ParseContextSchemaColumn{
+				{Name: "range", Type: "bigint"},
+				{Name: "bla", Type: "integer"},
+			},
+		},
+		{
+			Name: "quickstart.range_100",
+			Columns: []ParseContextSchemaColumn{
+				{Name: "range", Type: "bigint"},
+			},
+		},
+	})
+
+	assert.Equal(t, map[string]string{"range": "bigint", "bla": "integer"}, schema["quickstart.range_100"])
+}
+
+func TestBuildParseContextSchema_MergesUnqualifiedConnectionTableIntoQualifiedAsset(t *testing.T) {
+	t.Parallel()
+
+	schema := BuildParseContextSchema(nil, []ParseContextSchemaTable{
+		{
+			Name: "quickstart.range_100",
+			Columns: []ParseContextSchemaColumn{
+				{Name: "bla", Type: "integer"},
+			},
+		},
+		{
+			Name: "range_100",
+			Columns: []ParseContextSchemaColumn{
+				{Name: "range", Type: "bigint"},
+			},
+		},
+	})
+
+	assert.Equal(t, map[string]string{"range": "bigint", "bla": "integer"}, schema["quickstart.range_100"])
+}
+
+func TestBuildParseContextColumnSourceMethods_MergesDuplicateSuggestionTables(t *testing.T) {
+	t.Parallel()
+
+	sources := BuildParseContextColumnSourceMethods(nil, []ParseContextSchemaTable{
+		{
+			Name: "quickstart.range_100",
+			Columns: []ParseContextSchemaColumn{
+				{Name: "range", SourceMethods: []string{"workspace-load"}},
+				{Name: "bla", SourceMethods: []string{"workspace-load"}},
+			},
+		},
+		{
+			Name: "quickstart.range_100",
+			Columns: []ParseContextSchemaColumn{
+				{Name: "range", SourceMethods: []string{"connection-column-discovery"}},
+			},
+		},
+	})
+
+	assert.ElementsMatch(t, []string{"workspace-load", "connection-column-discovery"}, sources["quickstart.range_100"]["range"])
+	assert.Equal(t, []string{"workspace-load"}, sources["quickstart.range_100"]["bla"])
+}
+
+func TestBuildParseContextColumnSourceMethods_MergesUnqualifiedConnectionTableIntoQualifiedAsset(t *testing.T) {
+	t.Parallel()
+
+	sources := BuildParseContextColumnSourceMethods(nil, []ParseContextSchemaTable{
+		{
+			Name: "quickstart.range_100",
+			Columns: []ParseContextSchemaColumn{
+				{Name: "bla", SourceMethods: []string{"asset-sql-definition"}},
+			},
+		},
+		{
+			Name: "range_100",
+			Columns: []ParseContextSchemaColumn{
+				{Name: "range", SourceMethods: []string{"connection-column-discovery"}},
+			},
+		},
+	})
+
+	assert.Equal(t, []string{"asset-sql-definition"}, sources["quickstart.range_100"]["bla"])
+	assert.Equal(t, []string{"connection-column-discovery"}, sources["quickstart.range_100"]["range"])
+}
+
+func TestExtractSQLDefinitionColumns_SelectWithoutFrom(t *testing.T) {
+	t.Parallel()
+
+	assert.Equal(t, []string{"plumbus", "blabli"}, ExtractSQLDefinitionColumns("select 1 as plumbus, 2 as blabli"))
 }
 
 func TestParseContextWithSchema_DuckDBPathReferenceDoesNotProduceUnresolvedTableDiagnostic(t *testing.T) {
@@ -294,4 +389,431 @@ ORDER BY total_games DESC`,
 		assert.NotEqual(t, "Unresolved column: g.black_aid", diagnostic.Message)
 		assert.NotEqual(t, "Unresolved column: g.winner_aid", diagnostic.Message)
 	}
+}
+
+func TestParseContextWithSchema_DescribeSubqueryColumnsAreKnown(t *testing.T) {
+	t.Parallel()
+
+	parseContext, err := sqlintelligence.ParseContextWithSchema(
+		`select
+    *
+from (describe some_table)
+where column_name = 'example_column'`,
+		"duckdb",
+		sqlintelligence.Schema{
+			"some_table": {"example_column": "varchar"},
+		},
+	)
+	require.NoError(t, err)
+	require.NotNil(t, parseContext)
+
+	assert.Empty(t, parseContext.Errors)
+	for _, diagnostic := range parseContext.Diagnostics {
+		assert.NotEqual(t, "Unresolved column: column_name", diagnostic.Message)
+	}
+}
+
+func TestParseContextWithSchema_CTEStarColumnsAreAvailableForOuterQuery(t *testing.T) {
+	t.Parallel()
+
+	parseContext, err := sqlintelligence.ParseContextWithSchema(
+		`with blub as (select * from quickstart.range_100)
+
+select rangee from blub`,
+		"duckdb",
+		sqlintelligence.Schema{
+			"quickstart.range_100": {"range": "bigint"},
+		},
+	)
+	require.NoError(t, err)
+	require.NotNil(t, parseContext)
+
+	assert.Empty(t, parseContext.Errors)
+	assert.Contains(t, diagnosticMessages(parseContext.Diagnostics), "Unresolved column: rangee")
+
+	var blubReference *sqlintelligence.ParseContextTable
+	for index := range parseContext.Tables {
+		if parseContext.Tables[index].Name == "blub" {
+			blubReference = &parseContext.Tables[index]
+			break
+		}
+	}
+	require.NotNil(t, blubReference)
+	assert.Equal(t, "cte", blubReference.SourceKind)
+	assert.ElementsMatch(t, []sqlintelligence.SchemaColumn{{Name: "range", Type: "bigint"}}, blubReference.Columns)
+}
+
+func TestParseContextWithSchema_SubqueryColumnsDoNotLeakToOuterQuery(t *testing.T) {
+	t.Parallel()
+
+	parseContext, err := sqlintelligence.ParseContextWithSchema(
+		`with blub as (select * from quickstart.range_100)
+
+select test, (select blub from quickstart.test) from blub`,
+		"duckdb",
+		sqlintelligence.Schema{
+			"quickstart.range_100": {"range": "bigint"},
+			"quickstart.test":      {"test": "integer"},
+		},
+	)
+	require.NoError(t, err)
+	require.NotNil(t, parseContext)
+
+	assert.Empty(t, parseContext.Errors)
+	messages := diagnosticMessages(parseContext.Diagnostics)
+	assert.Contains(t, messages, "Unresolved column: test")
+	assert.Contains(t, messages, "Unresolved column: blub")
+}
+
+func TestParseContextWithSchema_SubqueryAndOuterSourcesExposeScopeRanges(t *testing.T) {
+	t.Parallel()
+
+	parseContext, err := sqlintelligence.ParseContextWithSchema(
+		`with blub as (select * from quickstart.range_100)
+
+select range, (select test from quickstart.test) from blub`,
+		"duckdb",
+		sqlintelligence.Schema{
+			"quickstart.range_100": {"range": "bigint"},
+			"quickstart.test":      {"test": "integer"},
+		},
+	)
+	require.NoError(t, err)
+	require.NotNil(t, parseContext)
+
+	var blubReference *sqlintelligence.ParseContextTable
+	var testReference *sqlintelligence.ParseContextTable
+	for index := range parseContext.Tables {
+		switch parseContext.Tables[index].Name {
+		case "blub":
+			blubReference = &parseContext.Tables[index]
+		case "quickstart.test":
+			testReference = &parseContext.Tables[index]
+		}
+	}
+
+	require.NotNil(t, blubReference)
+	require.NotNil(t, blubReference.ScopeRange)
+	require.NotNil(t, testReference)
+	require.NotNil(t, testReference.ScopeRange)
+	assert.True(t, rangeContainsPosition(*blubReference.ScopeRange, 3, 23), "outer source should be visible inside correlated subquery")
+	assert.True(t, rangeContainsPosition(*testReference.ScopeRange, 3, 23), "inner source should be visible inside its subquery")
+	assert.False(t, rangeContainsPosition(*testReference.ScopeRange, 3, 8), "inner source should not be visible in the outer select list")
+}
+
+func TestParseContextWithSchema_SubqueryCallLikeExpressionReportsUnknownColumn(t *testing.T) {
+	t.Parallel()
+
+	parseContext, err := sqlintelligence.ParseContextWithSchema(
+		`with blub as (select *, 1 as a from quickstart.range_100)
+
+select range, aa (select test from quickstart.test) from blub`,
+		"duckdb",
+		sqlintelligence.Schema{
+			"quickstart.range_100": {"range": "bigint"},
+			"quickstart.test":      {"test": "integer"},
+		},
+	)
+	require.NoError(t, err)
+	require.NotNil(t, parseContext)
+
+	assert.Empty(t, parseContext.Errors)
+	assert.Contains(t, diagnosticMessages(parseContext.Diagnostics), "Unresolved column: aa")
+}
+
+func TestParseContextWithSchema_AssetDefinedButUnmaterializedColumnWarns(t *testing.T) {
+	t.Parallel()
+
+	parseContext, err := sqlintelligence.ParseContextWithSchema(
+		`with blub as (select *, 1 as schabla from quickstart.range_100)
+
+select range, schabla, (select test from quickstart.test), bla from blub`,
+		"duckdb",
+		sqlintelligence.Schema{
+			"quickstart.range_100": {"range": "bigint", "bla": "integer"},
+			"quickstart.test":      {"test": "integer"},
+		},
+		sqlintelligence.SchemaColumnSourceMethods{
+			"quickstart.range_100": {
+				"range": []string{"workspace-load", "connection-column-discovery"},
+				"bla":   []string{"asset-sql-definition"},
+			},
+			"quickstart.test": {"test": []string{"workspace-load", "connection-column-discovery"}},
+		},
+	)
+	require.NoError(t, err)
+	require.NotNil(t, parseContext)
+
+	assert.Empty(t, parseContext.Errors)
+	warnings := warningDiagnostics(parseContext.Diagnostics)
+	require.Len(t, warnings, 1)
+	assert.Equal(t, "Column 'bla' is defined in the Bruin asset 'quickstart.range_100', but it has not been materialized yet.", warnings[0].Message)
+	require.NotNil(t, warnings[0].Range)
+	assert.Equal(t, 3, warnings[0].Range.Line)
+	assert.Equal(t, 60, warnings[0].Range.Col)
+}
+
+func TestParseContextService_DuplicateSchemaEntriesWarnForUnmaterializedColumn(t *testing.T) {
+	t.Parallel()
+
+	service := NewParseContextService(ParseContextDependencies{
+		ResolveAssetByID: func(_ context.Context, _ string) (string, *pipeline.Pipeline, *pipeline.Asset, error) {
+			return "", nil, &pipeline.Asset{Type: pipeline.AssetTypeDuckDBQuery}, nil
+		},
+	})
+
+	result, apiError := service.Parse(
+		context.Background(),
+		"asset-id",
+		`with blub as (select *, 1 as schabla from quickstart.range_100)
+
+select range, schabla, (select test from quickstart.test), bla from blub`,
+		[]ParseContextSchemaTable{
+			{
+				Name: "quickstart.range_100",
+				Columns: []ParseContextSchemaColumn{
+					{Name: "range", Type: "bigint", SourceMethods: []string{"workspace-load"}},
+					{Name: "bla", Type: "integer", SourceMethods: []string{"asset-sql-definition"}},
+				},
+			},
+			{
+				Name: "range_100",
+				Columns: []ParseContextSchemaColumn{
+					{Name: "range", Type: "bigint", SourceMethods: []string{"connection-column-discovery"}},
+				},
+			},
+			{
+				Name: "quickstart.test",
+				Columns: []ParseContextSchemaColumn{
+					{Name: "test", Type: "integer", SourceMethods: []string{"connection-column-discovery"}},
+				},
+			},
+		},
+	)
+	require.Nil(t, apiError)
+	assert.Empty(t, result.Errors)
+	assert.Contains(t, diagnosticMessagesFromService(result.Diagnostics), "Column 'bla' is defined in the Bruin asset 'quickstart.range_100', but it has not been materialized yet.")
+	for _, diagnostic := range result.Diagnostics {
+		assert.NotEqual(t, "Unresolved column: bla", diagnostic.Message)
+	}
+}
+
+func TestParseContextService_InspectColumnsDoNotHideConnectionDiscoveryWarning(t *testing.T) {
+	t.Parallel()
+
+	service := NewParseContextService(ParseContextDependencies{
+		ResolveAssetByID: func(_ context.Context, _ string) (string, *pipeline.Pipeline, *pipeline.Asset, error) {
+			return "", nil, &pipeline.Asset{Type: pipeline.AssetTypeDuckDBQuery}, nil
+		},
+	})
+
+	result, apiError := service.Parse(
+		context.Background(),
+		"asset-id",
+		`with blub as (select * from quickstart.range_100)
+
+select bla from blub`,
+		[]ParseContextSchemaTable{
+			{
+				Name: "quickstart.range_100",
+				Columns: []ParseContextSchemaColumn{
+					{Name: "range", Type: "bigint", SourceMethods: []string{"workspace-load"}},
+					{Name: "bla", Type: "integer", SourceMethods: []string{"asset-sql-definition"}},
+				},
+			},
+			{
+				Name: "quickstart.range_100",
+				Columns: []ParseContextSchemaColumn{
+					{Name: "range", Type: "bigint", SourceMethods: []string{"connection-column-discovery"}},
+				},
+			},
+			{
+				Name: "quickstart.range_100",
+				Columns: []ParseContextSchemaColumn{
+					{Name: "bla", Type: "integer", SourceMethods: []string{"asset-inspect"}},
+				},
+			},
+		},
+	)
+	require.Nil(t, apiError)
+	assert.Empty(t, result.Errors)
+	assert.Contains(t, diagnosticMessagesFromService(result.Diagnostics), "Column 'bla' is defined in the Bruin asset 'quickstart.range_100', but it has not been materialized yet.")
+}
+
+func TestParseContextService_SQLDefinitionColumnsFromResolvedPipelineWarnWhenMissingFromDiscoveredTable(t *testing.T) {
+	t.Parallel()
+
+	parsedPipeline := &pipeline.Pipeline{Assets: []*pipeline.Asset{
+		{
+			Name: "quickstart.unmaterialized_asset",
+			Type: pipeline.AssetTypeDuckDBQuery,
+			ExecutableFile: pipeline.ExecutableFile{
+				Content: "select plumbus, 1 as blabli from quickstart.source_table",
+			},
+		},
+	}}
+	service := NewParseContextService(ParseContextDependencies{
+		ResolveAssetByID: func(_ context.Context, _ string) (string, *pipeline.Pipeline, *pipeline.Asset, error) {
+			return "", parsedPipeline, &pipeline.Asset{Type: pipeline.AssetTypeDuckDBQuery}, nil
+		},
+	})
+
+	result, apiError := service.Parse(
+		context.Background(),
+		"asset-id",
+		`select plumbus, blabli from quickstart.unmaterialized_asset`,
+		[]ParseContextSchemaTable{
+			{
+				Name: "quickstart.unmaterialized_asset",
+				Columns: []ParseContextSchemaColumn{
+					{Name: "plumbus", Type: "integer", SourceMethods: []string{"connection-column-discovery"}},
+				},
+			},
+		},
+	)
+	require.Nil(t, apiError)
+	assert.Empty(t, result.Errors)
+	assert.Contains(t, diagnosticMessagesFromService(result.Diagnostics), "Column 'blabli' is defined in the Bruin asset 'quickstart.unmaterialized_asset', but it has not been materialized yet.")
+	for _, diagnostic := range result.Diagnostics {
+		assert.NotEqual(t, "Unresolved column: blabli", diagnostic.Message)
+	}
+}
+
+func TestParseContextService_SQLDefinitionColumnsWarnWhenMissingFromMaterializedWorkspaceColumns(t *testing.T) {
+	t.Parallel()
+
+	parsedPipeline := &pipeline.Pipeline{Assets: []*pipeline.Asset{
+		{
+			Name: "quickstart.unmaterialized_asset",
+			Type: pipeline.AssetTypeDuckDBQuery,
+			ExecutableFile: pipeline.ExecutableFile{
+				Content: "select 1 as plumbus, 2 as blabli",
+			},
+		},
+	}}
+	service := NewParseContextService(ParseContextDependencies{
+		ResolveAssetByID: func(_ context.Context, _ string) (string, *pipeline.Pipeline, *pipeline.Asset, error) {
+			return "", parsedPipeline, &pipeline.Asset{Type: pipeline.AssetTypeDuckDBQuery}, nil
+		},
+	})
+
+	result, apiError := service.Parse(
+		context.Background(),
+		"asset-id",
+		`select plumbus, blabli from quickstart.unmaterialized_asset`,
+		[]ParseContextSchemaTable{
+			{
+				Name:           "quickstart.unmaterialized_asset",
+				IsMaterialized: true,
+				Columns: []ParseContextSchemaColumn{
+					{Name: "plumbus", Type: "integer", SourceMethods: []string{"workspace-load"}},
+				},
+			},
+		},
+	)
+	require.Nil(t, apiError)
+	assert.Empty(t, result.Errors)
+	assert.Contains(t, diagnosticMessagesFromService(result.Diagnostics), "Column 'blabli' is defined in the Bruin asset 'quickstart.unmaterialized_asset', but it has not been materialized yet.")
+	for _, diagnostic := range result.Diagnostics {
+		assert.NotEqual(t, "Unresolved column: blabli", diagnostic.Message)
+	}
+}
+
+func TestParseContextWithSchema_ConnectionDiscoveredAssetColumnDoesNotWarn(t *testing.T) {
+	t.Parallel()
+
+	parseContext, err := sqlintelligence.ParseContextWithSchema(
+		`with blub as (select * from quickstart.range_100)
+
+select bla from blub`,
+		"duckdb",
+		sqlintelligence.Schema{
+			"quickstart.range_100": {"bla": "integer"},
+		},
+		sqlintelligence.SchemaColumnSourceMethods{
+			"quickstart.range_100": {"bla": []string{"workspace-load", "connection-column-discovery"}},
+		},
+	)
+	require.NoError(t, err)
+	require.NotNil(t, parseContext)
+
+	assert.Empty(t, parseContext.Errors)
+	assert.Empty(t, warningDiagnostics(parseContext.Diagnostics))
+}
+
+func TestParseContextWithSchema_InspectedAssetColumnDoesNotProvideActualSchemaEvidence(t *testing.T) {
+	t.Parallel()
+
+	parseContext, err := sqlintelligence.ParseContextWithSchema(
+		`with blub as (select * from quickstart.range_100)
+
+select bla from blub`,
+		"duckdb",
+		sqlintelligence.Schema{
+			"quickstart.range_100": {"bla": "integer"},
+		},
+		sqlintelligence.SchemaColumnSourceMethods{
+			"quickstart.range_100": {"bla": []string{"workspace-load", "asset-inspect"}},
+		},
+	)
+	require.NoError(t, err)
+	require.NotNil(t, parseContext)
+
+	assert.Empty(t, parseContext.Errors)
+	assert.Empty(t, warningDiagnostics(parseContext.Diagnostics))
+}
+
+func TestParseContextWithSchema_AssetDefinedColumnDoesNotWarnWithoutActualSchemaEvidence(t *testing.T) {
+	t.Parallel()
+
+	parseContext, err := sqlintelligence.ParseContextWithSchema(
+		`with blub as (select * from quickstart.range_100)
+
+select bla from blub`,
+		"duckdb",
+		sqlintelligence.Schema{
+			"quickstart.range_100": {"bla": "integer"},
+		},
+		sqlintelligence.SchemaColumnSourceMethods{
+			"quickstart.range_100": {"bla": []string{"asset-sql-definition"}},
+		},
+	)
+	require.NoError(t, err)
+	require.NotNil(t, parseContext)
+
+	assert.Empty(t, parseContext.Errors)
+	assert.Empty(t, warningDiagnostics(parseContext.Diagnostics))
+}
+
+func diagnosticMessages(diagnostics []sqlintelligence.ParseContextDiagnostic) []string {
+	result := make([]string, 0, len(diagnostics))
+	for _, diagnostic := range diagnostics {
+		result = append(result, diagnostic.Message)
+	}
+	return result
+}
+
+func warningDiagnostics(diagnostics []sqlintelligence.ParseContextDiagnostic) []sqlintelligence.ParseContextDiagnostic {
+	result := make([]sqlintelligence.ParseContextDiagnostic, 0, len(diagnostics))
+	for _, diagnostic := range diagnostics {
+		if diagnostic.Severity == "warning" {
+			result = append(result, diagnostic)
+		}
+	}
+	return result
+}
+
+func diagnosticMessagesFromService(diagnostics []ParseContextDiagnostic) []string {
+	result := make([]string, 0, len(diagnostics))
+	for _, diagnostic := range diagnostics {
+		result = append(result, diagnostic.Message)
+	}
+	return result
+}
+
+func rangeContainsPosition(rangeValue sqlintelligence.ParseContextRange, line, column int) bool {
+	return line >= rangeValue.Line &&
+		line <= rangeValue.EndLine &&
+		(line != rangeValue.Line || column >= rangeValue.Col) &&
+		(line != rangeValue.EndLine || column <= rangeValue.EndCol)
 }

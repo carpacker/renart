@@ -6,6 +6,7 @@
     "dev": "vite",
     "generate:api-types": "node ./scripts/generate-api-types.mjs",
     "generate:icons": "node ./scripts/generate-icons.mjs",
+    "sync:polyglot-wasm": "node ./scripts/sync-polyglot-wasm.mjs",
     "typecheck": "corepack pnpm run generate:api-types && tsc --noEmit",
     "build": "corepack pnpm run generate:icons && corepack pnpm run typecheck && vite build",
     "preview": "vite preview",
@@ -49,6 +50,7 @@
   "devDependencies": {
     "@eslint/js": "^9.39.4",
     "@playwright/test": "^1.60.0",
+    "@polyglot-sql/sdk": "0.4.3",
     "@tailwindcss/postcss": "^4.2.2",
     "@tanstack/router-plugin": "^1.167.8",
     "@types/dagre": "^0.7.54",
@@ -59,7 +61,6 @@
     "eslint": "^9.39.4",
     "globals": "^17.6.0",
     "monaco-editor": "0.55.1",
-    "vite": "^8.0.0",
     "tailwindcss": "^4.3.0",
     "typescript": "^5.9.3",
     "typescript-eslint": "^8.57.2",

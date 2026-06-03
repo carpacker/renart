@@ -250,6 +250,42 @@ function buildParserAliasMap(
   return aliasMap;
 }
 
+function completionLabelText(label: MonacoNS.languages.CompletionItem["label"]) {
+  return typeof label === "string" ? label : label.label;
+}
+
+function focusedSuggestText() {
+  if (typeof document === "undefined") {
+    return null;
+  }
+
+  return document
+    .querySelector(".suggest-widget.visible .monaco-list-row.focused")
+    ?.textContent
+    ?.trim()
+    .toLowerCase() ?? null;
+}
+
+function preserveFocusedSuggestion(
+  suggestions: MonacoNS.languages.CompletionItem[],
+) {
+  const focusedText = focusedSuggestText();
+  if (!focusedText) {
+    return suggestions;
+  }
+
+  let matched = false;
+  return suggestions.map((suggestion) => {
+    const label = completionLabelText(suggestion.label).trim().toLowerCase();
+    if (!label || matched || !focusedText.startsWith(label)) {
+      return suggestion;
+    }
+
+    matched = true;
+    return { ...suggestion, preselect: true };
+  });
+}
+
 function findParserResolvedTable(
   tables: SchemaTable[],
   parseContext: ReturnType<NonNullable<RemoteSQLResolver["getParseContext"]>>,
@@ -620,7 +656,9 @@ function collectColumnSuggestions(
 
 function collectParserScopedColumnSuggestions(
   monaco: Monaco,
+  tables: SchemaTable[],
   parseContext: ReturnType<NonNullable<RemoteSQLResolver["getParseContext"]>>,
+  position: MonacoNS.Position,
   range: MonacoNS.IRange,
 ): MonacoNS.languages.CompletionItem[] {
   const suggestions: MonacoNS.languages.CompletionItem[] = [];
@@ -631,7 +669,19 @@ function collectParserScopedColumnSuggestions(
       continue;
     }
 
-    for (const [name, type] of Object.entries(table.columns ?? {})) {
+    if (table.scope_range && !isPositionInParserRange(position, table.scope_range)) {
+      continue;
+    }
+
+    const parserColumns = Object.entries(table.columns ?? {}).map(([name, type]) => ({ name, type }));
+    const resolvedTable =
+      findTableByIdentifier(tables, table.resolved_name ?? table.name) ??
+      findTableByIdentifier(tables, table.name);
+    const columns = parserColumns.length > 0
+      ? parserColumns
+      : (resolvedTable?.columns ?? []).map((column) => ({ name: column.name, type: column.type }));
+
+    for (const { name, type } of columns) {
       const key = name.toLowerCase();
       if (seen.has(key)) {
         continue;
@@ -649,6 +699,18 @@ function collectParserScopedColumnSuggestions(
   }
 
   return suggestions;
+}
+
+function isPositionInParserRange(
+  position: MonacoNS.Position,
+  range: NonNullable<SqlParseContextTable["scope_range"]>,
+) {
+  return (
+    position.lineNumber >= range.line &&
+    position.lineNumber <= range.end_line &&
+    (position.lineNumber !== range.line || position.column >= range.col) &&
+    (position.lineNumber !== range.end_line || position.column <= range.end_col)
+  );
 }
 
 function stripSQLCommentsAndStrings(sqlText: string): string {
@@ -1165,7 +1227,7 @@ export function registerSQLProviders(
           });
 
           if (pathSuggestions.length > 0) {
-            return { suggestions: pathSuggestions };
+            return { suggestions: preserveFocusedSuggestion(pathSuggestions) };
           }
         }
 
@@ -1221,11 +1283,11 @@ export function registerSQLProviders(
           });
 
           if (valueSuggestions.length > 0) {
-            return { suggestions: valueSuggestions };
+            return { suggestions: preserveFocusedSuggestion(valueSuggestions) };
           }
         }
 
-        const dotPrefix = parseDotPrefix(textBeforeCursor);
+        const dotPrefix = inTableCtx ? null : parseDotPrefix(textBeforeCursor);
         if (dotPrefix) {
           const parserColumns = findParserTableColumns(parseContext, dotPrefix.tablePart);
           const matchingParserColumns = parserColumns.filter((column) => {
@@ -1236,18 +1298,19 @@ export function registerSQLProviders(
             return column.name.toLowerCase().includes(dotPrefix.columnPrefix.trim().toLowerCase());
           });
           if (matchingParserColumns.length > 0) {
+            const parserSuggestions = collectParserTableColumnSuggestions(
+              monaco,
+              matchingParserColumns,
+              dotPrefix.tablePart,
+              {
+                startLineNumber: position.lineNumber,
+                endLineNumber: position.lineNumber,
+                startColumn: position.column - dotPrefix.columnPrefix.length,
+                endColumn: position.column,
+              },
+            );
             return {
-              suggestions: collectParserTableColumnSuggestions(
-                monaco,
-                matchingParserColumns,
-                dotPrefix.tablePart,
-                {
-                  startLineNumber: position.lineNumber,
-                  endLineNumber: position.lineNumber,
-                  startColumn: position.column - dotPrefix.columnPrefix.length,
-                  endColumn: position.column,
-                },
-              ),
+              suggestions: preserveFocusedSuggestion(parserSuggestions),
             };
           }
 
@@ -1277,7 +1340,7 @@ export function registerSQLProviders(
               });
             }
 
-            return { suggestions };
+            return { suggestions: preserveFocusedSuggestion(suggestions) };
           }
 
           if (remoteResolver) {
@@ -1296,13 +1359,24 @@ export function registerSQLProviders(
             );
 
             if (remoteSuggestions.length > 0) {
-              return { suggestions: remoteSuggestions };
+              return { suggestions: preserveFocusedSuggestion(remoteSuggestions) };
             }
           }
         }
 
         if (inColumnCtx) {
-          suggestions.push(...collectParserScopedColumnSuggestions(monaco, parseContext, range));
+          const parserScopedColumnSuggestions = collectParserScopedColumnSuggestions(
+            monaco,
+            tables,
+            parseContext,
+            position,
+            range,
+          );
+          suggestions.push(...parserScopedColumnSuggestions);
+
+          if (parserScopedColumnSuggestions.length > 0) {
+            return { suggestions: preserveFocusedSuggestion(suggestions) };
+          }
 
           const scopedColumnSuggestions = collectColumnSuggestions(
             monaco,
@@ -1390,7 +1464,7 @@ export function registerSQLProviders(
           dedupedSuggestions.push(suggestion);
         }
 
-        return { suggestions: dedupedSuggestions };
+        return { suggestions: preserveFocusedSuggestion(dedupedSuggestions) };
       },
     }),
   );

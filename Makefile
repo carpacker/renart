@@ -5,7 +5,7 @@ DOCS_IMAGE ?= renart-docs:local
 RENART_VERSION ?= $(shell git describe --tags --abbrev=0 2>/dev/null || echo local)
 RENART_COMMIT ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo unknown)
 
-.PHONY: help build test check go-build go-test web-install web-build web-typecheck web-test-live docs-install docs-build docs-dev docs-preview docs-screenshots landing-media docs-docker docs-docker-run sync-install clean
+.PHONY: help build test check go-build go-test web-install web-build web-typecheck web-test-live web-sync-polyglot-wasm docs-install docs-build docs-dev docs-preview docs-screenshots landing-media docs-docker docs-docker-run sync-install clean
 
 help:
 	@printf "Renart build targets\n\n"
@@ -14,6 +14,7 @@ help:
 	@printf "  make go-build          Build Renart CLI\n"
 	@printf "  make go-test           Run Go tests\n"
 	@printf "  make web-build         Build React app\n"
+	@printf "  make web-sync-polyglot-wasm  Copy Polyglot SQL WASM from web dependency\n"
 	@printf "  make web-typecheck     Typecheck React app\n"
 	@printf "  make web-test-live     Run live Playwright tests\n"
 	@printf "  make docs-build        Build Astro/Starlight docs\n"
@@ -40,6 +41,9 @@ web-install:
 
 web-build:
 	$(PNPM) --dir web build
+
+web-sync-polyglot-wasm:
+	$(PNPM) --dir web sync:polyglot-wasm
 
 web-typecheck:
 	$(PNPM) --dir web typecheck
