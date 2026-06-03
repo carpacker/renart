@@ -7,7 +7,7 @@ type SQLTableDiscoveryEntry = {
   short_name: string;
 };
 
-type SQLDiscoveryCacheState = {
+export type SQLDiscoveryCacheState = {
   databasesByScope: Record<string, string[]>;
   tablesByScope: Record<string, SQLTableDiscoveryEntry[]>;
   columnsByScope: Record<string, Array<{ name: string; type?: string }>>;

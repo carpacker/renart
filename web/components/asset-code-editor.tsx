@@ -2,7 +2,7 @@
 
 import type { Monaco } from "@monaco-editor/react";
 import type * as MonacoNS from "monaco-editor";
-import { lazy, Suspense, useState } from "react";
+import { lazy, Suspense, useMemo, useState } from "react";
 
 import { SqlFormatOverlayButton } from "@/components/sql-format-overlay-button";
 import { loadMonacoEditorModule } from "@/lib/load-monaco-editor";
@@ -45,6 +45,16 @@ export function AssetCodeEditor({
   onMount: (editor: MonacoNS.editor.IStandaloneCodeEditor, monaco: Monaco) => void;
 }) {
   const [showFormatButton, setShowFormatButton] = useState(false);
+  const editorOptions = useMemo(
+    () => ({
+      minimap: { enabled: false },
+      fontSize: 13,
+      fixedOverflowWidgets: true,
+      quickSuggestions: true,
+      suggestOnTriggerCharacters: true,
+    }),
+    [],
+  );
 
   const handlePointerActivity = () => {
     if (!isSqlAsset) {
@@ -83,13 +93,7 @@ export function AssetCodeEditor({
           beforeMount={onBeforeMount}
           onChange={onChange}
           onMount={onMount}
-          options={{
-            minimap: { enabled: false },
-            fontSize: 13,
-            fixedOverflowWidgets: true,
-            quickSuggestions: true,
-            suggestOnTriggerCharacters: true,
-          }}
+          options={editorOptions}
         />
       </Suspense>
     </div>

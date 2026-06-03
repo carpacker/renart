@@ -18,9 +18,11 @@ export function useSQLParseContext(
     () =>
       schemaTables.map((table) => ({
         name: table.name,
+        is_materialized: table.isMaterialized,
         columns: table.columns.map((column) => ({
           name: column.name,
           type: column.type,
+          source_methods: column.sourceMethods,
         })),
       })),
     [schemaTables],

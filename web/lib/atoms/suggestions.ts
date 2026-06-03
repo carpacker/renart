@@ -2,6 +2,7 @@ import { atom } from "jotai";
 
 import { SchemaColumn, SchemaTable } from "@/lib/sql-schema";
 
+import { materializationByAssetIdAtom } from "./materialization";
 import { selectedAssetDataAtom } from "./selection";
 import {
   mergeRemoteTableEntries,
@@ -204,6 +205,7 @@ export const suggestionCatalogAtom = atom<SuggestionCatalogState>((get) => {
     workspace: get(workspaceAtom),
     syncSource: get(workspaceSyncSourceAtom),
     dynamicState: get(dynamicSuggestionStateAtom),
+    materializationByAssetId: get(materializationByAssetIdAtom),
   });
 });
 
@@ -242,5 +244,8 @@ export const selectedAssetSchemaSuggestionTablesAtom = atom<SuggestionTableState
 );
 
 export const selectedAssetSchemaTablesAtom = atom<SchemaTable[]>((get) =>
-  toSchemaTables(get(selectedAssetSchemaSuggestionTablesAtom))
+  toSchemaTables(
+    get(selectedAssetSchemaSuggestionTablesAtom),
+    get(selectedAssetDataAtom)?.id
+  )
 );

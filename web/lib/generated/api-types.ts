@@ -222,6 +222,7 @@ export type SqlParseContextTable = {
   column_ranges?: Record<string, SqlParseContextRange>;
   parts: SqlParseContextPart[];
   alias_range?: SqlParseContextRange;
+  scope_range?: SqlParseContextRange;
 };
 
 export type SqlParseContextColumn = {

@@ -29,6 +29,14 @@ export function replaceAssetColumnObservation(
   nextObservation: DynamicAssetColumnObservation
 ): DynamicAssetColumnObservation[] {
   const signature = `${nextObservation.method}::${nextObservation.environment ?? ""}`;
+  const currentObservation = observations.find(
+    (observation) =>
+      `${observation.method}::${observation.environment ?? ""}` === signature
+  );
+
+  if (nextObservation.columns.length === 0 && currentObservation?.columns.length) {
+    return observations;
+  }
 
   return [
     ...observations.filter(

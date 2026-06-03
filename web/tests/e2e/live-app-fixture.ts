@@ -188,7 +188,7 @@ export const liveTest = base.extend<{
     } finally {
       child.kill("SIGTERM");
       await waitForExit(child);
-      rmSync(workspaceDir, { recursive: true, force: true });
+      await removeDirectoryWithRetry(workspaceDir);
     }
   },
 });
@@ -316,6 +316,20 @@ function waitForExit(child: ReturnType<typeof spawn>) {
       resolveDone();
     });
   });
+}
+
+async function removeDirectoryWithRetry(path: string) {
+  let lastError: unknown = null;
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    try {
+      rmSync(path, { recursive: true, force: true });
+      return;
+    } catch (error) {
+      lastError = error;
+      await new Promise((resolveDelay) => setTimeout(resolveDelay, 100 * (attempt + 1)));
+    }
+  }
+  throw lastError;
 }
 
 function getAvailablePort() {
