@@ -2,7 +2,7 @@ import { expect, Page } from "@playwright/test";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
-import { liveTest as test } from "./live-app-fixture";
+import { liveTest as test } from "../live-app-fixture";
 
 test.describe("sql intellisense live", () => {
   test.use({ fixtureName: "configured-workspace" });

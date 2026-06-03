@@ -36,6 +36,8 @@ function DialogOverlay({
 function DialogContent({
   className,
   children,
+  onInteractOutside,
+  onPointerDownOutside,
   ...props
 }: React.ComponentProps<typeof DialogPrimitive.Content>) {
   return (
@@ -47,12 +49,30 @@ function DialogContent({
           "bg-background fixed left-1/2 top-1/2 z-50 w-full max-w-md -translate-x-1/2 -translate-y-1/2 rounded-lg border p-5 shadow-lg data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95 data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-95 duration-150",
           className,
         )}
+        onInteractOutside={(event) => {
+          if (isComboboxOutsideInteraction(event)) {
+            event.preventDefault()
+            return
+          }
+          onInteractOutside?.(event)
+        }}
+        onPointerDownOutside={(event) => {
+          if (isComboboxOutsideInteraction(event)) {
+            event.preventDefault()
+            return
+          }
+          onPointerDownOutside?.(event)
+        }}
         {...props}
       >
         {children}
       </DialogPrimitive.Content>
     </DialogPortal>
   )
+}
+
+function isComboboxOutsideInteraction(event: { target: EventTarget | null }) {
+  return event.target instanceof HTMLElement && !!event.target.closest("[data-slot=combobox-content]")
 }
 
 function DialogHeader({ className, ...props }: React.ComponentProps<"div">) {

@@ -2,7 +2,7 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { expect } from "@playwright/test";
 
-import { liveTest as test } from "./live-app-fixture";
+import { liveTest as test } from "../live-app-fixture";
 
 test.describe("workspace live basic flows", () => {
   test.use({ fixtureName: "basic-workspace" });
