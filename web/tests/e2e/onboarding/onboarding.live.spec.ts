@@ -2,7 +2,7 @@ import { expect } from "@playwright/test";
 import { access, readFile } from "node:fs/promises";
 import { join } from "node:path";
 
-import { liveTest as test } from "./live-app-fixture";
+import { liveTest as test } from "../live-app-fixture";
 
 test.describe("workspace onboarding live flows", () => {
   test.use({ fixtureName: "empty-workspace-postgres" });

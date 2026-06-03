@@ -1,6 +1,6 @@
 import { expect } from "@playwright/test";
 
-import { liveTest as test } from "./live-app-fixture";
+import { liveTest as test } from "../live-app-fixture";
 
 test.describe("graph layout live", () => {
   test.use({ fixtureName: "graph-layout-workspace" });
