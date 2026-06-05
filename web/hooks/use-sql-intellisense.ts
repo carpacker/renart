@@ -510,11 +510,15 @@ export function useSQLIntellisense(
   const loadSQLDiscoveryTables = useSetAtom(sqlDiscoveryTablesAtom);
   const parseContext = useSQLParseContext(asset, sqlContent, tables);
   const lastGoodParseContextRef = useRef<typeof parseContext>(null);
-  if (parseContext && (!parseContext.errors || parseContext.errors.length === 0)) {
+  const parseContextHasErrors = !!parseContext?.errors?.length;
+  const parseContextHasRangedDiagnostics = !!parseContext?.diagnostics?.some(
+    (diagnostic) => diagnostic.range,
+  );
+  if (parseContext && !parseContextHasErrors) {
     lastGoodParseContextRef.current = parseContext;
   }
   const activeParseContext =
-    parseContext && (!parseContext.errors || parseContext.errors.length === 0)
+    parseContext && (!parseContextHasErrors || parseContextHasRangedDiagnostics)
       ? parseContext
       : lastGoodParseContextRef.current;
   const parseContextKey = useMemo(() => JSON.stringify(activeParseContext ?? null), [activeParseContext]);

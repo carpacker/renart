@@ -391,6 +391,35 @@ select 1 as plumbus, 2 as blabli
     );
   });
 
+  test("shows parser syntax errors as Monaco diagnostics", async ({ liveApp, page }) => {
+    test.skip(test.info().project.name.includes("mobile"), "Monaco diagnostics are only stable in the desktop editor.");
+
+    await page.goto(`${liveApp.baseURL}/`);
+    await openCustomersEditor(page, liveApp.baseURL);
+    await replaceEditorContent(
+      page,
+      [
+        "SELECT",
+        "  customer_id",
+        "FROM analytics.customers",
+        "WHERE",
+        "  customer_id = 1 AND customer_id = 1",
+        "  >   -- dangling comparison operator",
+      ].join("\n")
+    );
+
+    await expect
+      .poll(async () => getEditorMarkers(page), { timeout: 15000 })
+      .toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            message: expect.stringContaining("Unexpected token: Gt"),
+            severity: 8,
+          }),
+        ])
+      );
+  });
+
   test("shows latest inspect SQL error as Monaco diagnostics while content is unchanged", async ({
     liveApp,
     page,

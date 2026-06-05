@@ -84,7 +84,7 @@ type parseContextResponse struct {
 }
 
 func ParseContextWithSchema(query, dialect string, schema Schema, columnSourceMethods ...SchemaColumnSourceMethods) (*ParseContext, error) {
-	if strings.EqualFold(os.Getenv("RENART_SQL_PARSER"), "polyglot") {
+	if !strings.EqualFold(os.Getenv("RENART_SQL_PARSER"), "python") {
 		return ParseContextWithSchemaPolyglot(query, dialect, schema, columnSourceMethods...)
 	}
 

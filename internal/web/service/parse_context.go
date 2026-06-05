@@ -611,8 +611,12 @@ func ParseContextColumnRangesFromParser(input map[string]sqlintelligence.ParseCo
 func ParseContextColumnsFromParser(input []sqlintelligence.ParseContextColumn) []ParseContextColumn {
 	result := make([]ParseContextColumn, 0, len(input))
 	for _, column := range input {
+		name := column.Name
+		if column.Qualifier != "" && !strings.Contains(name, ".") {
+			name = column.Qualifier + "." + name
+		}
 		result = append(result, ParseContextColumn{
-			Name:          column.Name,
+			Name:          name,
 			Qualifier:     column.Qualifier,
 			ResolvedTable: column.ResolvedTable,
 			Parts:         ParseContextPartsFromParser(column.Parts),

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 
 	"renart/internal/web/sqlformat"
@@ -73,8 +74,9 @@ type polyglotColumnMetadata struct {
 }
 
 var (
-	polyglotQuotedIdentifierPattern = regexp.MustCompile(`'([^']+)'`)
-	polyglotCallLikeSubqueryPattern = regexp.MustCompile(`(?i)\b([A-Za-z_][\w$]*)\s+\(\s*select\b`)
+	polyglotQuotedIdentifierPattern   = regexp.MustCompile(`'([^']+)'`)
+	polyglotCallLikeSubqueryPattern   = regexp.MustCompile(`(?i)\b([A-Za-z_][\w$]*)\s+\(\s*select\b`)
+	polyglotParseErrorLocationPattern = regexp.MustCompile(`(?i)line\s+(\d+),\s*column\s+(\d+)`)
 )
 
 func ParseContextWithSchemaPolyglot(query, dialect string, schema Schema, columnSourceMethods ...SchemaColumnSourceMethods) (*ParseContext, error) {
@@ -95,7 +97,8 @@ func ParseContextWithSchemaPolyglot(query, dialect string, schema Schema, column
 		if recovered := recoverPolyglotCallLikeSubquery(query, fmt.Sprint(parseResp.Error)); recovered != nil {
 			return recovered, nil
 		}
-		return &ParseContext{Diagnostics: []ParseContextDiagnostic{{Message: fmt.Sprint(parseResp.Error), Severity: "error"}}, Errors: []string{fmt.Sprint(parseResp.Error)}}, nil
+		message := fmt.Sprint(parseResp.Error)
+		return &ParseContext{Diagnostics: []ParseContextDiagnostic{{Message: message, Severity: "error", Range: parseErrorRange(query, message)}}, Errors: []string{message}}, nil
 	}
 
 	tokenJSON, err := sqlformat.Call(ctx, "tokenize", query, dialect)
@@ -191,6 +194,67 @@ func recoverPolyglotCallLikeSubquery(query, parseError string) *ParseContext {
 		}},
 		Errors: []string{},
 	}
+}
+
+func parseErrorRange(query, message string) *ParseContextRange {
+	match := polyglotParseErrorLocationPattern.FindStringSubmatch(message)
+	if len(match) < 3 {
+		return nil
+	}
+	line, err := strconv.Atoi(match[1])
+	if err != nil {
+		return nil
+	}
+	col, err := strconv.Atoi(match[2])
+	if err != nil {
+		return nil
+	}
+	offset := offsetFromLineCol(query, line, col)
+	if offset < 0 {
+		return nil
+	}
+	offset = nearestNonSpaceOffsetOnLine(query, offset)
+	end := offset + 1
+	if end > len(query) {
+		end = len(query)
+	}
+	rangeInfo := rangeFromOffsets(query, offset, end)
+	return &rangeInfo
+}
+
+func nearestNonSpaceOffsetOnLine(query string, offset int) int {
+	if offset < 0 {
+		return offset
+	}
+	if offset >= len(query) {
+		offset = len(query) - 1
+	}
+	if offset < 0 || !isSpaceByte(query[offset]) {
+		return offset
+	}
+	lineStart := offset
+	for lineStart > 0 && query[lineStart-1] != '\n' {
+		lineStart--
+	}
+	for index := offset - 1; index >= lineStart; index-- {
+		if !isSpaceByte(query[index]) {
+			return index
+		}
+	}
+	lineEnd := offset
+	for lineEnd < len(query) && query[lineEnd] != '\n' {
+		lineEnd++
+	}
+	for index := offset + 1; index < lineEnd; index++ {
+		if !isSpaceByte(query[index]) {
+			return index
+		}
+	}
+	return offset
+}
+
+func isSpaceByte(value byte) bool {
+	return value == ' ' || value == '\t' || value == '\r' || value == '\n'
 }
 
 func validateWithPolyglot(ctx context.Context, query, dialect string, schema Schema) (string, error) {
@@ -745,6 +809,7 @@ func findTokenRangeFrom(query string, tokens []polyglotToken, parts []string, st
 
 func polyglotDiagnostics(query string, tokens []polyglotToken, errors []polyglotValidationError, tables []ParseContextTable, columns []ParseContextColumn, schema Schema, ctes map[string]polyglotCTE, sourceMethods SchemaColumnSourceMethods, selectAliases map[string]bool, describeColumns map[string]bool) []ParseContextDiagnostic {
 	diagnostics := make([]ParseContextDiagnostic, 0, len(errors))
+	validationKeys := map[string]bool{}
 	for _, item := range errors {
 		severity := strings.ToLower(strings.TrimSpace(item.Severity))
 		if severity == "" {
@@ -753,23 +818,126 @@ func polyglotDiagnostics(query string, tokens []polyglotToken, errors []polyglot
 		var rangeInfo *ParseContextRange
 		match := polyglotQuotedIdentifierPattern.FindStringSubmatch(item.Message)
 		if len(match) > 1 {
-			rangeInfo = findTokenRange(query, tokens, []string{match[1]})
+			rangeInfo = findPolyglotIdentifierRange(query, tokens, match[1])
 		}
 		message := item.Message
+		if strings.EqualFold(item.Code, "E200") && len(match) > 1 {
+			if isDuckDBPathTable(match[1]) {
+				continue
+			}
+			message = "Unresolved table: " + match[1]
+		}
 		if strings.EqualFold(item.Code, "E201") && len(match) > 1 {
 			if selectAliases[strings.ToLower(match[1])] || describeColumns[strings.ToLower(match[1])] {
 				continue
 			}
 			message = "Unresolved column: " + match[1]
 		}
+		for _, key := range polyglotValidationDiagnosticKeys(item, message, match) {
+			validationKeys[key] = true
+		}
 		diagnostics = append(diagnostics, ParseContextDiagnostic{Message: message, Severity: severity, Range: rangeInfo})
 	}
-	diagnostics = append(diagnostics, polyglotLocalColumnDiagnostics(columns, tables, selectAliases, describeColumns)...)
+	diagnostics = append(diagnostics, polyglotLocalTableDiagnostics(tables, schema, validationKeys)...)
+	diagnostics = append(diagnostics, polyglotLocalColumnDiagnostics(columns, tables, selectAliases, describeColumns, validationKeys)...)
 	diagnostics = append(diagnostics, polyglotUnmaterializedColumnWarnings(columns, ctes, sourceMethods)...)
 	return diagnostics
 }
 
-func polyglotLocalColumnDiagnostics(columns []ParseContextColumn, tables []ParseContextTable, selectAliases map[string]bool, describeColumns map[string]bool) []ParseContextDiagnostic {
+func findPolyglotIdentifierRange(query string, tokens []polyglotToken, identifier string) *ParseContextRange {
+	if !strings.Contains(identifier, ".") {
+		return findTokenRange(query, tokens, []string{identifier})
+	}
+	parts := strings.Split(identifier, ".")
+	for index := 0; index < len(tokens); index++ {
+		matched := true
+		for partIndex, part := range parts {
+			tokenIndex := index + partIndex*2
+			if tokenIndex >= len(tokens) || !strings.EqualFold(tokens[tokenIndex].Text, part) {
+				matched = false
+				break
+			}
+			if partIndex < len(parts)-1 && (tokenIndex+1 >= len(tokens) || tokens[tokenIndex+1].Text != ".") {
+				matched = false
+				break
+			}
+		}
+		if matched {
+			rangeInfo := rangeFromOffsets(query, tokens[index].Span.Start, tokens[index+len(parts)*2-2].Span.End)
+			return &rangeInfo
+		}
+	}
+	return nil
+}
+
+func polyglotValidationDiagnosticKeys(item polyglotValidationError, message string, quotedIdentifier []string) []string {
+	keys := []string{polyglotDiagnosticKeyFromMessage(message)}
+	if len(quotedIdentifier) <= 1 {
+		return keys
+	}
+	identifier := quotedIdentifier[1]
+	switch strings.ToUpper(strings.TrimSpace(item.Code)) {
+	case "E200":
+		keys = append(keys, polyglotDiagnosticKey("table", identifier))
+	case "E201", "E221":
+		keys = append(keys, polyglotDiagnosticKey("column", identifier))
+	}
+	return keys
+}
+
+func polyglotDiagnosticKeyFromMessage(message string) string {
+	lower := strings.ToLower(strings.TrimSpace(message))
+	for _, prefix := range []string{"unresolved column: ", "unresolved table or alias: ", "unresolved table: "} {
+		if strings.HasPrefix(lower, prefix) {
+			kind := "column"
+			if strings.Contains(prefix, "table") {
+				kind = "table"
+			}
+			return polyglotDiagnosticKey(kind, strings.TrimSpace(message[len(prefix):]))
+		}
+	}
+	return lower
+}
+
+func polyglotDiagnosticKey(kind, identifier string) string {
+	return kind + ":" + strings.ToLower(strings.Trim(identifier, " `\"'"))
+}
+
+func polyglotLocalTableDiagnostics(tables []ParseContextTable, schema Schema, validationKeys map[string]bool) []ParseContextDiagnostic {
+	diagnostics := []ParseContextDiagnostic{}
+	for _, table := range tables {
+		if table.Name == "" || table.SourceKind == "cte" || isDuckDBPathTable(table.Name) {
+			continue
+		}
+		if _, ok := schema[table.ResolvedName]; ok {
+			continue
+		}
+		if _, ok := schema[table.Name]; ok {
+			continue
+		}
+		if validationKeys[polyglotDiagnosticKey("table", table.Name)] || validationKeys[polyglotDiagnosticKey("table", table.ResolvedName)] {
+			continue
+		}
+		var rangeInfo *ParseContextRange
+		if len(table.Parts) > 0 {
+			rangeCopy := table.Parts[0].Range
+			if len(table.Parts) > 1 {
+				rangeCopy.End = table.Parts[len(table.Parts)-1].Range.End
+				rangeCopy.EndLine = table.Parts[len(table.Parts)-1].Range.EndLine
+				rangeCopy.EndCol = table.Parts[len(table.Parts)-1].Range.EndCol
+			}
+			rangeInfo = &rangeCopy
+		}
+		diagnostics = append(diagnostics, ParseContextDiagnostic{Message: "Unresolved table: " + table.Name, Severity: "error", Range: rangeInfo})
+	}
+	return diagnostics
+}
+
+func isDuckDBPathTable(name string) bool {
+	return strings.Contains(name, "/") || strings.HasPrefix(name, ".")
+}
+
+func polyglotLocalColumnDiagnostics(columns []ParseContextColumn, tables []ParseContextTable, selectAliases map[string]bool, describeColumns map[string]bool, validationKeys map[string]bool) []ParseContextDiagnostic {
 	diagnostics := []ParseContextDiagnostic{}
 	for _, column := range columns {
 		if column.Name == "" {
@@ -780,6 +948,9 @@ func polyglotLocalColumnDiagnostics(columns []ParseContextColumn, tables []Parse
 		}
 		if column.ResolvedTable == "" {
 			if column.Qualifier != "" {
+				if validationKeys[polyglotDiagnosticKey("table", column.Qualifier)] {
+					continue
+				}
 				var rangeInfo *ParseContextRange
 				if len(column.Parts) > 0 {
 					rangeCopy := column.Parts[0].Range
@@ -789,6 +960,9 @@ func polyglotLocalColumnDiagnostics(columns []ParseContextColumn, tables []Parse
 				continue
 			}
 			if column.Qualifier == "" && len(tables) > 0 {
+				if validationKeys[polyglotDiagnosticKey("column", column.Name)] {
+					continue
+				}
 				var rangeInfo *ParseContextRange
 				if len(column.Parts) > 0 {
 					rangeCopy := column.Parts[len(column.Parts)-1].Range
@@ -800,6 +974,9 @@ func polyglotLocalColumnDiagnostics(columns []ParseContextColumn, tables []Parse
 		}
 		table := polyglotTableByResolvedName(tables, column.ResolvedTable)
 		if table == nil || !polyglotTableHasColumn(*table, column.Name) {
+			if validationKeys[polyglotDiagnosticKey("column", column.Name)] {
+				continue
+			}
 			var rangeInfo *ParseContextRange
 			if len(column.Parts) > 0 {
 				rangeCopy := column.Parts[len(column.Parts)-1].Range
@@ -977,4 +1154,29 @@ func offsetToLineCol(query string, offset int) (int, int) {
 		}
 	}
 	return line, offset - lineStart + 1
+}
+
+func offsetFromLineCol(query string, line, col int) int {
+	if line < 1 || col < 1 {
+		return -1
+	}
+	currentLine := 1
+	lineStart := 0
+	for index, char := range query {
+		if currentLine == line {
+			break
+		}
+		if char == '\n' {
+			currentLine++
+			lineStart = index + 1
+		}
+	}
+	if currentLine != line {
+		return -1
+	}
+	offset := lineStart + col - 1
+	if offset > len(query) {
+		return len(query)
+	}
+	return offset
 }

@@ -75,9 +75,50 @@ FROM quickstart.players`
 	assert.Empty(t, parseContext.Diagnostics)
 }
 
+func TestParseContextWithSchemaPolyglotReportsUnknownTable(t *testing.T) {
+	parseContext, err := ParseContextWithSchemaPolyglot(
+		"select * from analytics.ordrs",
+		"duckdb",
+		Schema{"analytics.orders": {"order_id": "integer"}},
+	)
+	require.NoError(t, err)
+
+	assert.Contains(t, diagnosticMessages(parseContext.Diagnostics), "Unresolved table: analytics.ordrs")
+	require.NotEmpty(t, parseContext.Diagnostics)
+	require.NotNil(t, parseContext.Diagnostics[0].Range)
+	assert.Equal(t, "analytics.ordrs", parseContext.Diagnostics[0].Range.RangeText("select * from analytics.ordrs"))
+}
+
+func TestParseContextWithSchemaPolyglotReportsDanglingComparisonOperator(t *testing.T) {
+	query := `SELECT
+  small
+FROM simple.small
+WHERE
+  small = 1 AND small = 1
+  >   -- I'd expect the '<' to cause problems`
+	parseContext, err := ParseContextWithSchemaPolyglot(
+		query,
+		"duckdb",
+		Schema{"simple.small": {"small": "integer"}},
+	)
+	require.NoError(t, err)
+
+	require.NotEmpty(t, parseContext.Diagnostics)
+	require.NotNil(t, parseContext.Diagnostics[0].Range)
+	assert.Equal(t, ">", parseContext.Diagnostics[0].Range.RangeText(query))
+}
+
 func (r ParseContextRange) RangeText(query string) string {
 	if r.Start < 0 || r.End > len(query) || r.Start > r.End {
 		return ""
 	}
 	return query[r.Start:r.End]
+}
+
+func diagnosticMessages(diagnostics []ParseContextDiagnostic) []string {
+	result := make([]string, 0, len(diagnostics))
+	for _, diagnostic := range diagnostics {
+		result = append(result, diagnostic.Message)
+	}
+	return result
 }
