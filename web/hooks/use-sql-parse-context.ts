@@ -48,6 +48,7 @@ export function useSQLParseContext(
           setData((current) => {
             if (
               response.errors?.length &&
+              !response.diagnostics?.some((diagnostic) => diagnostic.range) &&
               current &&
               !current.errors?.length
             ) {

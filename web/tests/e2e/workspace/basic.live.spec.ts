@@ -312,8 +312,9 @@ select struct(test := 1) a, array(1,2,4) b, array(struct(test := 1), struct(test
     await page.getByRole("tab", { name: "Dependencies" }).click();
     const dependencyInput = page.getByPlaceholder("Add dependency");
     const manualDependenciesSection = page.getByText("Manual dependencies").locator("..");
+    await dependencyInput.click();
     await dependencyInput.fill("analytics.manual_seed");
-    await page.getByRole("option", { name: "analytics.manual_seed" }).click();
+    await dependencyInput.press("Enter");
 
     await expect
       .poll(async () => {
