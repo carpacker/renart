@@ -1,5 +1,10 @@
 import { fetchJSON, fetchJSONWithBody } from "@/lib/api-core";
-import { FormatSQLAssetResponse } from "@/lib/types";
+import {
+  FormatPythonAssetResponse,
+  FormatSQLAssetResponse,
+  PythonCompletionsResponse,
+  PythonDiagnosticsResponse,
+} from "@/lib/types";
 
 export async function createAsset(
   pipelineId: string,
@@ -53,5 +58,44 @@ export async function formatSQLAsset(assetId: string, content: string) {
     `/api/assets/${assetId}/format-sql`,
     "POST",
     { content },
+  );
+}
+
+export async function formatPythonAsset(assetId: string, content: string) {
+  return fetchJSONWithBody<FormatPythonAssetResponse>(
+    `/api/assets/${assetId}/format-python`,
+    "POST",
+    { content },
+  );
+}
+
+export async function getPythonDiagnostics(
+  assetId: string,
+  content: string,
+  signal?: AbortSignal,
+) {
+  return fetchJSONWithBody<PythonDiagnosticsResponse>(
+    `/api/assets/${assetId}/python-diagnostics`,
+    "POST",
+    { content },
+    signal ? { signal } : undefined,
+  );
+}
+
+export async function getPythonCompletions(
+  assetId: string,
+  input: {
+    content: string;
+    line: number;
+    column: number;
+    snippets: boolean;
+  },
+  signal?: AbortSignal,
+) {
+  return fetchJSONWithBody<PythonCompletionsResponse>(
+    `/api/assets/${assetId}/python-completions`,
+    "POST",
+    input,
+    signal ? { signal } : undefined,
   );
 }

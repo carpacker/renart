@@ -160,6 +160,61 @@ export type FormatSQLAssetResponse = GeneratedFormatSQLAssetResponse & {
   error?: string;
 };
 
+export type FormatPythonAssetResponse = {
+  status: "ok" | "error";
+  asset_id: string;
+  content: string;
+  error?: string;
+};
+
+export type PythonDiagnosticsResponse = {
+  status: "ok" | "error";
+  asset_id: string;
+  diagnostics?: PythonDiagnostic[];
+  error?: string;
+};
+
+export type PythonCompletionsResponse = {
+  status: "ok" | "error";
+  asset_id: string;
+  completions?: PythonCompletion[];
+  error?: string;
+};
+
+export type PythonDiagnostic = {
+  id: string;
+  message: string;
+  severity: "info" | "warning" | "error" | "fatal";
+  range?: PythonRange;
+  display?: string;
+};
+
+export type PythonRange = {
+  start: PythonPosition;
+  end: PythonPosition;
+};
+
+export type PythonPosition = {
+  line: number;
+  column: number;
+};
+
+export type PythonCompletion = {
+  label: string;
+  kind?: string;
+  detail?: string;
+  insert_text?: string;
+  insert_text_format: "plaintext" | "snippet";
+  documentation?: string;
+  module_name?: string;
+  additional_text_edits?: PythonTextEdit[];
+};
+
+export type PythonTextEdit = {
+  range: PythonRange;
+  text: string;
+};
+
 export type PipelineMaterializationResponse = Omit<GeneratedPipelineMaterializationResponse, "assets"> & {
   assets: Array<GeneratedPipelineMaterializationResponse["assets"][number] & {
     freshness_status?: "fresh" | "stale";
