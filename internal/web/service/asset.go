@@ -64,6 +64,12 @@ type PythonCompletionsRequest struct {
 	Snippets bool
 }
 
+type PythonPositionRequest struct {
+	Content string
+	Line    int
+	Column  int
+}
+
 type PythonDiagnosticsResponse struct {
 	Status      string
 	AssetID     string
@@ -110,6 +116,58 @@ type PythonCompletion struct {
 type PythonTextEdit struct {
 	Range PythonRange
 	Text  string
+}
+
+type PythonHoverResponse struct {
+	Status  string
+	AssetID string
+	Hover   *PythonHover
+	Error   string
+}
+
+type PythonHover struct {
+	Contents string
+	Range    *PythonRange
+}
+
+type PythonSignatureHelpResponse struct {
+	Status        string
+	AssetID       string
+	SignatureHelp *PythonSignatureHelp
+	Error         string
+}
+
+type PythonSignatureHelp struct {
+	Signatures      []PythonSignature
+	ActiveSignature *int
+	ActiveParameter *int
+}
+
+type PythonSignature struct {
+	Label           string
+	Documentation   string
+	Parameters      []PythonSignatureParameter
+	ActiveParameter *int
+}
+
+type PythonSignatureParameter struct {
+	Label         string
+	Name          string
+	Type          string
+	Documentation string
+}
+
+type PythonGotoDefinitionResponse struct {
+	Status  string
+	AssetID string
+	Targets []PythonGotoTarget
+	Error   string
+}
+
+type PythonGotoTarget struct {
+	Path       string
+	FocusRange PythonRange
+	FullRange  PythonRange
 }
 
 type AssetDependencies struct {

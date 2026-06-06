@@ -5,15 +5,12 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
-	"errors"
-	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
 	"regexp"
 	"sort"
 	"strings"
-	"sync"
 
 	"github.com/spf13/afero"
 	"renart/internal/web/pyintelligence"
@@ -114,9 +111,6 @@ func (s *AssetService) PythonCompletions(ctx context.Context, assetID string, re
 		}
 		content = string(bytes)
 	}
-	if completions := s.fastPythonPackageCompletions(relAssetPath, content, req.Line, req.Column); len(completions) > 0 {
-		return PythonCompletionsResponse{Status: "ok", AssetID: assetID, Completions: completions}, nil
-	}
 	packageStubs := s.installedPythonPackageStubs(relAssetPath, absAssetPath, content)
 	options := defaultTyOptions()
 	if len(packageStubs) > 0 {
@@ -142,6 +136,86 @@ func (s *AssetService) PythonCompletions(ctx context.Context, assetID string, re
 		return PythonCompletionsResponse{Status: "error", AssetID: assetID, Error: completed.Error}, nil
 	}
 	return PythonCompletionsResponse{Status: "ok", AssetID: assetID, Completions: pythonCompletionsFromTy(completed.Result)}, nil
+}
+
+func (s *AssetService) PythonHover(ctx context.Context, assetID string, req PythonPositionRequest) (PythonHoverResponse, *ServiceAPIError) {
+	tyReq, serviceErr := s.pythonTyPositionRequest(assetID, req)
+	if serviceErr != nil {
+		return PythonHoverResponse{}, serviceErr
+	}
+	hovered, hoverErr := pyintelligence.HoverAt(ctx, tyReq)
+	if hoverErr != nil {
+		return PythonHoverResponse{}, newServiceAPIError(500, "python_hover_failed", hoverErr.Error())
+	}
+	if hovered.Status != "ok" {
+		return PythonHoverResponse{Status: "error", AssetID: assetID, Error: hovered.Error}, nil
+	}
+	return PythonHoverResponse{Status: "ok", AssetID: assetID, Hover: pythonHoverFromTy(hovered.Result)}, nil
+}
+
+func (s *AssetService) PythonSignatureHelp(ctx context.Context, assetID string, req PythonPositionRequest) (PythonSignatureHelpResponse, *ServiceAPIError) {
+	tyReq, serviceErr := s.pythonTyPositionRequest(assetID, req)
+	if serviceErr != nil {
+		return PythonSignatureHelpResponse{}, serviceErr
+	}
+	shown, signatureErr := pyintelligence.SignatureHelpAt(ctx, tyReq)
+	if signatureErr != nil {
+		return PythonSignatureHelpResponse{}, newServiceAPIError(500, "python_signature_help_failed", signatureErr.Error())
+	}
+	if shown.Status != "ok" {
+		return PythonSignatureHelpResponse{Status: "error", AssetID: assetID, Error: shown.Error}, nil
+	}
+	return PythonSignatureHelpResponse{Status: "ok", AssetID: assetID, SignatureHelp: pythonSignatureHelpFromTy(shown.Result)}, nil
+}
+
+func (s *AssetService) PythonGotoDefinition(ctx context.Context, assetID string, req PythonPositionRequest) (PythonGotoDefinitionResponse, *ServiceAPIError) {
+	tyReq, serviceErr := s.pythonTyPositionRequest(assetID, req)
+	if serviceErr != nil {
+		return PythonGotoDefinitionResponse{}, serviceErr
+	}
+	resolved, gotoErr := pyintelligence.GotoDefinition(ctx, tyReq)
+	if gotoErr != nil {
+		return PythonGotoDefinitionResponse{}, newServiceAPIError(500, "python_goto_definition_failed", gotoErr.Error())
+	}
+	if resolved.Status != "ok" {
+		return PythonGotoDefinitionResponse{Status: "error", AssetID: assetID, Error: resolved.Error}, nil
+	}
+	return PythonGotoDefinitionResponse{Status: "ok", AssetID: assetID, Targets: pythonGotoTargetsFromTy(resolved.Result)}, nil
+}
+
+func (s *AssetService) pythonTyPositionRequest(assetID string, req PythonPositionRequest) (pyintelligence.Request, *ServiceAPIError) {
+	if req.Line <= 0 || req.Column <= 0 {
+		return pyintelligence.Request{}, newServiceAPIError(400, "invalid_position", "line and column must be positive")
+	}
+	relAssetPath, absAssetPath, err := s.resolvePythonAssetPath(assetID)
+	if err != nil {
+		return pyintelligence.Request{}, err
+	}
+	content := req.Content
+	if strings.TrimSpace(content) == "" {
+		bytes, readErr := afero.ReadFile(s.fs(), absAssetPath)
+		if readErr != nil {
+			return pyintelligence.Request{}, newServiceAPIError(500, "asset_read_failed", readErr.Error())
+		}
+		content = string(bytes)
+	}
+	packageStubs := s.installedPythonPackageStubs(relAssetPath, absAssetPath, content)
+	options := defaultTyOptions()
+	if len(packageStubs) > 0 {
+		options = tyOptionsWithSitePackages()
+	}
+	sessionID, sessionFingerprint := tySessionFields(relAssetPath, options, packageStubs)
+	return pyintelligence.Request{
+		Root:               "/",
+		Path:               "/" + strings.TrimPrefix(relAssetPath, "/"),
+		Content:            content,
+		Options:            options,
+		Files:              packageStubs,
+		Line:               req.Line,
+		Column:             req.Column,
+		SessionID:          sessionID,
+		SessionFingerprint: sessionFingerprint,
+	}, nil
 }
 
 func (s *AssetService) resolvePythonAssetPath(assetID string) (string, string, *ServiceAPIError) {
@@ -199,17 +273,7 @@ var (
 	pythonRequirementPattern = regexp.MustCompile(`^\s*([A-Za-z0-9_.-]+)`)
 	pyprojectDependencyBlock = regexp.MustCompile(`(?s)dependencies\s*=\s*\[(.*?)\]`)
 	quotedDependencyPattern  = regexp.MustCompile(`['"]([^'"]+)['"]`)
-	pythonIdentifierPattern  = regexp.MustCompile(`^[A-Za-z_]\w*$`)
-	pythonDefClassPattern    = regexp.MustCompile(`(?m)^(?:def|class)\s+([A-Za-z_]\w*)\b`)
-	pythonAssignmentPattern  = regexp.MustCompile(`(?m)^([A-Za-z_]\w*)\s*=`)
-	pythonDotTargetPattern   = regexp.MustCompile(`([A-Za-z_]\w*)\.([A-Za-z_]\w*)?$`)
-	pythonImportAliasPattern = regexp.MustCompile(`(?m)^\s*import\s+([A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*)(?:\s+as\s+([A-Za-z_]\w*))?`)
-	pythonConstructorAssign  = regexp.MustCompile(`(?m)^\s*([A-Za-z_]\w*)\s*=\s*([A-Za-z_]\w*)\.([A-Za-z_]\w*)\s*\(`)
-	pythonAttributeAssign    = regexp.MustCompile(`(?m)^\s*([A-Za-z_]\w*)\s*=\s*([A-Za-z_]\w*)\.([A-Za-z_]\w*)\b`)
-	pythonCallTargetPattern  = regexp.MustCompile(`([A-Za-z_]\w*)\.([A-Za-z_]\w*)\([^()]*?([A-Za-z_]\w*)?$`)
 )
-
-var pythonClassMemberCache sync.Map
 
 func (s *AssetService) installedPythonPackageStubs(relAssetPath, absAssetPath, content string) []pyintelligence.VirtualFile {
 	modules := pythonRequestedModules(content)
@@ -235,380 +299,35 @@ func (s *AssetService) installedPythonPackageStubs(relAssetPath, absAssetPath, c
 
 	files := make([]pyintelligence.VirtualFile, 0, len(moduleNames))
 	for _, module := range moduleNames {
-		files = append(files, pyintelligence.VirtualFile{
-			Path:    "/site-packages/" + module + "/__init__.pyi",
-			Content: pythonInstalledModuleStub(modulePaths[module]),
-		})
+		files = append(files, pythonInstalledModuleFiles(module, modulePaths[module])...)
 	}
 	return files
 }
 
-func pythonInstalledModuleStub(modulePath string) string {
-	content := ""
-	if stat, err := os.Stat(modulePath); err == nil && stat.IsDir() {
-		content = readFirstExistingFile(
-			filepath.Join(modulePath, "__init__.pyi"),
-			filepath.Join(modulePath, "__init__.py"),
-		)
-	} else {
-		content = readFirstExistingFile(modulePath)
-	}
-
-	names := exportedPythonNames(content)
-	var builder strings.Builder
-	builder.WriteString("from typing import Any\n\n")
-	for _, name := range names {
-		_, _ = fmt.Fprintf(&builder, "%s: Any\n", name)
-	}
-	builder.WriteString("\ndef __getattr__(name: str) -> Any: ...\n")
-	return builder.String()
-}
-
-func (s *AssetService) fastPythonPackageCompletions(relAssetPath, content string, line, column int) []PythonCompletion {
-	aliases := pythonImportAliases(content)
-	if moduleAlias, className, prefix := pythonCallTargetAt(content, line, column); moduleAlias != "" && className != "" {
-		module := aliases[moduleAlias]
-		modulePath := s.pythonModuleInstallPath(relAssetPath, module)
-		if modulePath != "" {
-			return pythonSymbolCompletions(pythonConstructorParameters(modulePath, module, className), prefix, className)
-		}
-	}
-
-	target, prefix := pythonDotTargetAt(content, line, column)
-	if target == "" {
+func pythonInstalledModuleFiles(module, modulePath string) []pyintelligence.VirtualFile {
+	if module == "" || modulePath == "" {
 		return nil
 	}
-
-	if module := aliases[target]; module != "" {
-		modulePath := s.pythonModuleInstallPath(relAssetPath, module)
-		if modulePath == "" {
+	if stat, err := os.Stat(modulePath); err == nil && !stat.IsDir() {
+		content := readFirstExistingFile(modulePath)
+		if content == "" {
 			return nil
 		}
-		return pythonSymbolCompletions(pythonModuleExports(modulePath), prefix, module)
-	}
-
-	if classRef := pythonAssignedConstructor(contentBeforePosition(content, line, column), target, aliases); classRef.Module != "" && classRef.Name != "" {
-		modulePath := s.pythonModuleInstallPath(relAssetPath, classRef.Module)
-		if modulePath == "" {
-			return nil
+		ext := filepath.Ext(modulePath)
+		if ext == "" {
+			ext = ".py"
 		}
-		return pythonMemberCompletions(pythonClassMembers(modulePath, classRef.Module, classRef.Name), prefix, classRef.Name)
+		return []pyintelligence.VirtualFile{{Path: "/site-packages/" + module + ext, Content: content}}
 	}
 
-	if classRef := s.pythonAssignedAttributeClass(relAssetPath, contentBeforePosition(content, line, column), target, aliases); classRef.Module != "" && classRef.Name != "" {
-		modulePath := s.pythonModuleInstallPath(relAssetPath, classRef.Module)
-		if modulePath == "" {
-			return nil
-		}
-		return pythonMemberCompletions(pythonClassMembers(modulePath, classRef.Module, classRef.Name), prefix, classRef.Name)
-	}
-
-	return nil
-}
-
-type pythonClassRef struct {
-	Module string
-	Name   string
-}
-
-func pythonDotTargetAt(content string, line, column int) (string, string) {
-	if line <= 0 || column <= 0 {
-		return "", ""
-	}
-	lines := strings.Split(content, "\n")
-	if line > len(lines) {
-		return "", ""
-	}
-	lineText := lines[line-1]
-	end := min(column-1, len(lineText))
-	match := pythonDotTargetPattern.FindStringSubmatch(lineText[:end])
-	if len(match) != 3 {
-		return "", ""
-	}
-	return match[1], match[2]
-}
-
-func pythonCallTargetAt(content string, line, column int) (string, string, string) {
-	before := contentBeforePosition(content, line, column)
-	match := pythonCallTargetPattern.FindStringSubmatch(before)
-	if len(match) != 4 {
-		return "", "", ""
-	}
-	return match[1], match[2], match[3]
-}
-
-func contentBeforePosition(content string, line, column int) string {
-	if line <= 0 || column <= 0 {
-		return ""
-	}
-	lines := strings.Split(content, "\n")
-	if line > len(lines) {
-		return content
-	}
-	lines = lines[:line]
-	last := lines[len(lines)-1]
-	lines[len(lines)-1] = last[:min(column-1, len(last))]
-	return strings.Join(lines, "\n")
-}
-
-func pythonImportAliases(content string) map[string]string {
-	aliases := map[string]string{}
-	for _, match := range pythonImportAliasPattern.FindAllStringSubmatch(content, -1) {
-		module := strings.TrimSpace(match[1])
-		alias := strings.TrimSpace(match[2])
-		if alias == "" {
-			alias = strings.Split(module, ".")[0]
-		}
-		aliases[alias] = strings.Split(module, ".")[0]
-	}
-	return aliases
-}
-
-func pythonAssignedConstructor(content, variable string, aliases map[string]string) pythonClassRef {
-	matches := pythonConstructorAssign.FindAllStringSubmatch(content, -1)
-	for i := len(matches) - 1; i >= 0; i-- {
-		match := matches[i]
-		if len(match) != 4 || match[1] != variable {
-			continue
-		}
-		module := aliases[match[2]]
-		if module == "" {
-			continue
-		}
-		return pythonClassRef{Module: module, Name: match[3]}
-	}
-	return pythonClassRef{}
-}
-
-func (s *AssetService) pythonAssignedAttributeClass(relAssetPath, content, variable string, aliases map[string]string) pythonClassRef {
-	matches := pythonAttributeAssign.FindAllStringSubmatch(content, -1)
-	for i := len(matches) - 1; i >= 0; i-- {
-		match := matches[i]
-		if len(match) != 4 || match[1] != variable {
-			continue
-		}
-		owner := pythonAssignedConstructor(content, match[2], aliases)
-		if owner.Module == "" || owner.Name == "" {
-			continue
-		}
-		modulePath := s.pythonModuleInstallPath(relAssetPath, owner.Module)
-		if modulePath == "" {
-			continue
-		}
-		if ref := pythonClassAttributeType(modulePath, owner.Module, owner.Name, match[3]); ref.Module != "" && ref.Name != "" {
-			return ref
-		}
-	}
-	return pythonClassRef{}
-}
-
-type pythonSymbol struct {
-	Name string
-	Kind string
-}
-
-func pythonModuleExports(modulePath string) []pythonSymbol {
-	names := exportedPythonNames(pythonModuleInitContent(modulePath))
-	symbols := make([]pythonSymbol, 0, len(names))
-	for _, name := range names {
-		kind := "variable"
-		if len(name) > 0 && strings.ToUpper(name[:1]) == name[:1] {
-			kind = "class"
-		}
-		symbols = append(symbols, pythonSymbol{Name: name, Kind: kind})
-	}
-	return symbols
-}
-
-func pythonModuleInitContent(modulePath string) string {
-	if stat, err := os.Stat(modulePath); err == nil && stat.IsDir() {
-		return readFirstExistingFile(
-			filepath.Join(modulePath, "__init__.pyi"),
-			filepath.Join(modulePath, "__init__.py"),
-		)
-	}
-	return readFirstExistingFile(modulePath)
-}
-
-func pythonSymbolCompletions(symbols []pythonSymbol, prefix, detail string) []PythonCompletion {
-	completions := make([]PythonCompletion, 0, len(symbols))
-	for _, symbol := range symbols {
-		if prefix != "" && !strings.HasPrefix(symbol.Name, prefix) {
-			continue
-		}
-		completions = append(completions, PythonCompletion{
-			Label:            symbol.Name,
-			Kind:             symbol.Kind,
-			Detail:           detail,
-			InsertTextFormat: "plaintext",
-		})
-	}
-	return completions
-}
-
-func pythonMemberCompletions(members []pythonSymbol, prefix, detail string) []PythonCompletion {
-	return pythonSymbolCompletions(members, prefix, detail)
-}
-
-func pythonConstructorParameters(modulePath, rootModule, className string) []pythonSymbol {
-	content := ""
-	if classFile := resolvePythonClassFile(modulePath, rootModule, className); classFile != "" {
-		content = readFirstExistingFile(classFile)
-	}
-	params := parsePythonMethodParameters(content, className, "__init__")
-	symbols := make([]pythonSymbol, 0, len(params))
-	for _, param := range params {
-		symbols = append(symbols, pythonSymbol{Name: param, Kind: "variable"})
-	}
-	return symbols
-}
-
-func pythonClassMembers(modulePath, rootModule, className string) []pythonSymbol {
-	cacheKey := modulePath + "::" + className
-	if cached, ok := pythonClassMemberCache.Load(cacheKey); ok {
-		return cached.([]pythonSymbol)
-	}
-
-	content := ""
-	if classFile := resolvePythonClassFile(modulePath, rootModule, className); classFile != "" {
-		content = readFirstExistingFile(classFile)
-	}
-	if content == "" {
-		content = searchPythonClassContent(modulePath, className)
-	}
-	members := parsePythonClassMembers(content, className)
-	pythonClassMemberCache.Store(cacheKey, members)
-	return members
-}
-
-func pythonClassAttributeType(modulePath, rootModule, className, attribute string) pythonClassRef {
-	content := ""
-	if classFile := resolvePythonClassFile(modulePath, rootModule, className); classFile != "" {
-		content = readFirstExistingFile(classFile)
-	}
-	if content == "" {
-		return pythonClassRef{}
-	}
-	classBlock := pythonClassBlock(content, className)
-	if classBlock == "" {
-		return pythonClassRef{}
-	}
-	if ref := pythonPropertyReturnType(classBlock, attribute, rootModule); ref.Name != "" {
-		return ref
-	}
-	return pythonClassRef{}
-}
-
-func resolvePythonClassFile(modulePath, rootModule, className string) string {
-	siteRoot := filepath.Dir(modulePath)
-	moduleName := rootModule
-	for i := 0; i < 4; i++ {
-		path := pythonModuleFilePath(siteRoot, moduleName)
-		if path == "" {
-			return ""
-		}
-		content := readFirstExistingFile(path)
-		if strings.Contains(content, "class "+className) {
-			return path
-		}
-		source := pythonImportedSymbolSources(content)[className]
-		if source == "" || source == moduleName {
-			return ""
-		}
-		moduleName = source
-	}
-	return ""
-}
-
-func pythonModuleFilePath(siteRoot, moduleName string) string {
-	base := filepath.Join(append([]string{siteRoot}, strings.Split(moduleName, ".")...)...)
-	for _, path := range []string{base + ".pyi", base + ".py", filepath.Join(base, "__init__.pyi"), filepath.Join(base, "__init__.py")} {
-		if stat, err := os.Stat(path); err == nil && !stat.IsDir() {
-			return path
-		}
-	}
-	return ""
-}
-
-func pythonImportedSymbolSources(content string) map[string]string {
-	sources := map[string]string{}
-	for _, entry := range pythonImportEntries(content) {
-		for _, name := range entry.Names {
-			sources[name] = entry.Module
-		}
-	}
-	return sources
-}
-
-type pythonImportEntry struct {
-	Module string
-	Names  []string
-}
-
-func pythonImportEntries(content string) []pythonImportEntry {
-	entries := []pythonImportEntry{}
-	lines := strings.Split(content, "\n")
-	for i := 0; i < len(lines); i++ {
-		line := strings.TrimSpace(lines[i])
-		if !strings.HasPrefix(line, "from ") || !strings.Contains(line, " import ") {
-			continue
-		}
-		parts := strings.SplitN(strings.TrimPrefix(line, "from "), " import ", 2)
-		if len(parts) != 2 {
-			continue
-		}
-		module := strings.TrimSpace(parts[0])
-		importPart := parts[1]
-		if strings.Contains(importPart, "(") && !strings.Contains(importPart, ")") {
-			importPart = strings.TrimPrefix(strings.SplitN(importPart, "(", 2)[1], "(")
-			for i+1 < len(lines) {
-				i++
-				segment := strings.TrimSpace(lines[i])
-				if strings.Contains(segment, ")") {
-					importPart += "," + strings.SplitN(segment, ")", 2)[0]
-					break
-				}
-				importPart += "," + segment
-			}
-		} else if strings.Contains(importPart, "(") {
-			importPart = strings.SplitN(importPart, "(", 2)[1]
-			importPart = strings.SplitN(importPart, ")", 2)[0]
-		}
-		names := []string{}
-		for _, imported := range strings.Split(importPart, ",") {
-			imported = strings.TrimSpace(strings.Split(imported, "#")[0])
-			if imported == "" {
-				continue
-			}
-			parts := strings.Fields(imported)
-			name := parts[0]
-			if len(parts) >= 3 && parts[1] == "as" {
-				name = parts[2]
-			}
-			if pythonIdentifierPattern.MatchString(name) {
-				names = append(names, name)
-			}
-		}
-		entries = append(entries, pythonImportEntry{Module: module, Names: names})
-	}
-	return entries
-}
-
-var errPythonClassFound = errors.New("python class found")
-
-func searchPythonClassContent(modulePath, className string) string {
-	root := modulePath
-	if stat, err := os.Stat(root); err != nil || !stat.IsDir() {
-		root = filepath.Dir(root)
-	}
-	content := ""
-	_ = filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+	files := []pyintelligence.VirtualFile{}
+	_ = filepath.WalkDir(modulePath, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return nil
 		}
 		if d.IsDir() {
 			name := d.Name()
-			if name == "__pycache__" || name == "tests" || name == "test" {
+			if name == "__pycache__" || name == "tests" || name == "test" || strings.HasPrefix(name, ".") {
 				return filepath.SkipDir
 			}
 			return nil
@@ -616,179 +335,22 @@ func searchPythonClassContent(modulePath, className string) string {
 		if !strings.HasSuffix(path, ".py") && !strings.HasSuffix(path, ".pyi") {
 			return nil
 		}
-		candidate := readFirstExistingFile(path)
-		if strings.Contains(candidate, "class "+className) {
-			content = candidate
-			return errPythonClassFound
+		content := readFirstExistingFile(path)
+		if content == "" {
+			return nil
 		}
+		rel, err := filepath.Rel(modulePath, path)
+		if err != nil {
+			return nil
+		}
+		files = append(files, pyintelligence.VirtualFile{
+			Path:    "/site-packages/" + module + "/" + filepath.ToSlash(rel),
+			Content: content,
+		})
 		return nil
 	})
-	return content
-}
-
-func parsePythonClassMembers(content, className string) []pythonSymbol {
-	classBlock := pythonClassBlock(content, className)
-	if classBlock == "" {
-		return nil
-	}
-	return parsePythonClassBlockMembers(classBlock)
-}
-
-func pythonClassBlock(content, className string) string {
-	if content == "" {
-		return ""
-	}
-	lines := strings.Split(content, "\n")
-	classIndent := -1
-	block := []string{}
-	for _, line := range lines {
-		trimmed := strings.TrimSpace(line)
-		indent := len(line) - len(strings.TrimLeft(line, " \t"))
-		if classIndent < 0 {
-			if strings.HasPrefix(trimmed, "class "+className) {
-				classIndent = indent
-				block = append(block, line)
-			}
-			continue
-		}
-		if trimmed == "" {
-			block = append(block, line)
-			continue
-		}
-		if indent <= classIndent {
-			break
-		}
-		block = append(block, line)
-	}
-	return strings.Join(block, "\n")
-}
-
-func parsePythonClassBlockMembers(classBlock string) []pythonSymbol {
-	lines := strings.Split(classBlock, "\n")
-	members := map[string]string{}
-	for _, line := range lines[1:] {
-		trimmed := strings.TrimSpace(line)
-		if trimmed == "" || strings.HasPrefix(trimmed, "#") || strings.HasPrefix(trimmed, "@") {
-			continue
-		}
-		if strings.HasPrefix(trimmed, "def ") {
-			name := strings.Fields(strings.TrimPrefix(trimmed, "def "))[0]
-			name = strings.Split(name, "(")[0]
-			addPythonMember(members, name, "method")
-			continue
-		}
-		if match := pythonAssignmentPattern.FindStringSubmatch(trimmed); len(match) == 2 {
-			addPythonMember(members, match[1], "property")
-		}
-	}
-	result := make([]pythonSymbol, 0, len(members))
-	for name, kind := range members {
-		result = append(result, pythonSymbol{Name: name, Kind: kind})
-	}
-	sort.Slice(result, func(i, j int) bool { return result[i].Name < result[j].Name })
-	return result
-}
-
-func parsePythonMethodParameters(content, className, methodName string) []string {
-	classBlock := pythonClassBlock(content, className)
-	if classBlock == "" {
-		return nil
-	}
-	lines := strings.Split(classBlock, "\n")
-	for i, line := range lines {
-		trimmed := strings.TrimSpace(line)
-		if !strings.HasPrefix(trimmed, "def "+methodName+"(") {
-			continue
-		}
-		signature := trimmed
-		for !strings.Contains(signature, ")") && i+1 < len(lines) {
-			i++
-			signature += strings.TrimSpace(lines[i])
-		}
-		inside := strings.SplitN(signature, "(", 2)[1]
-		inside = strings.SplitN(inside, ")", 2)[0]
-		params := []string{}
-		for _, raw := range strings.Split(inside, ",") {
-			param := strings.TrimSpace(raw)
-			if param == "" || param == "self" || param == "*" || strings.HasPrefix(param, "**") || strings.HasPrefix(param, "*") {
-				continue
-			}
-			param = strings.Split(param, "=")[0]
-			param = strings.Split(param, ":")[0]
-			param = strings.TrimSpace(param)
-			if pythonIdentifierPattern.MatchString(param) {
-				params = append(params, param)
-			}
-		}
-		return params
-	}
-	return nil
-}
-
-func pythonPropertyReturnType(classBlock, attribute, defaultModule string) pythonClassRef {
-	lines := strings.Split(classBlock, "\n")
-	for i, line := range lines {
-		trimmed := strings.TrimSpace(line)
-		if strings.HasPrefix(trimmed, "def "+attribute+"(") {
-			if ref := pythonReturnAnnotation(trimmed, defaultModule); ref.Name != "" {
-				return ref
-			}
-		}
-		if !strings.HasPrefix(trimmed, attribute+" =") {
-			continue
-		}
-		window := strings.Join(lines[i:min(i+30, len(lines))], "\n")
-		if ref := pythonReturnsDocType(window, defaultModule); ref.Name != "" {
-			return ref
-		}
-	}
-	return pythonClassRef{}
-}
-
-func pythonReturnAnnotation(signature, defaultModule string) pythonClassRef {
-	if !strings.Contains(signature, "->") {
-		return pythonClassRef{}
-	}
-	ret := strings.TrimSpace(strings.SplitN(signature, "->", 2)[1])
-	ret = strings.Split(ret, ":")[0]
-	ret = strings.TrimSpace(strings.Split(ret, "|")[0])
-	return pythonTypeRef(ret, defaultModule)
-}
-
-func pythonReturnsDocType(content, defaultModule string) pythonClassRef {
-	for _, line := range strings.Split(content, "\n") {
-		trimmed := strings.TrimSpace(line)
-		if strings.HasPrefix(trimmed, "pandas.") || (pythonIdentifierPattern.MatchString(trimmed) && trimmed != "Returns") {
-			if ref := pythonTypeRef(strings.Fields(trimmed)[0], defaultModule); ref.Name != "" {
-				return ref
-			}
-		}
-	}
-	return pythonClassRef{}
-}
-
-func pythonTypeRef(value, defaultModule string) pythonClassRef {
-	value = strings.Trim(value, " `\t\r\n")
-	value = strings.TrimSuffix(value, ":")
-	if value == "" {
-		return pythonClassRef{}
-	}
-	parts := strings.Split(value, ".")
-	if len(parts) >= 2 && pythonIdentifierPattern.MatchString(parts[len(parts)-1]) {
-		return pythonClassRef{Module: parts[0], Name: parts[len(parts)-1]}
-	}
-	if pythonIdentifierPattern.MatchString(value) {
-		return pythonClassRef{Module: defaultModule, Name: value}
-	}
-	return pythonClassRef{}
-}
-
-func addPythonMember(members map[string]string, name, kind string) {
-	name = strings.TrimSpace(name)
-	if name == "" || strings.HasPrefix(name, "_") || !pythonIdentifierPattern.MatchString(name) {
-		return
-	}
-	members[name] = kind
+	sort.Slice(files, func(i, j int) bool { return files[i].Path < files[j].Path })
+	return files
 }
 
 func readFirstExistingFile(paths ...string) string {
@@ -799,71 +361,6 @@ func readFirstExistingFile(paths ...string) string {
 		}
 	}
 	return ""
-}
-
-func exportedPythonNames(content string) []string {
-	names := map[string]bool{}
-	for _, match := range pythonDefClassPattern.FindAllStringSubmatch(content, -1) {
-		if len(match) == 2 {
-			addPythonExportName(names, match[1])
-		}
-	}
-	for _, match := range pythonAssignmentPattern.FindAllStringSubmatch(content, -1) {
-		if len(match) == 2 {
-			addPythonExportName(names, match[1])
-		}
-	}
-
-	lines := strings.Split(content, "\n")
-	for i := 0; i < len(lines); i++ {
-		line := strings.TrimSpace(lines[i])
-		if !strings.HasPrefix(line, "from ") || !strings.Contains(line, " import ") {
-			continue
-		}
-		importPart := strings.SplitN(line, " import ", 2)[1]
-		if strings.Contains(importPart, "(") && !strings.Contains(importPart, ")") {
-			importPart = strings.TrimPrefix(strings.SplitN(importPart, "(", 2)[1], "(")
-			for i+1 < len(lines) {
-				i++
-				segment := strings.TrimSpace(lines[i])
-				if strings.Contains(segment, ")") {
-					importPart += "," + strings.SplitN(segment, ")", 2)[0]
-					break
-				}
-				importPart += "," + segment
-			}
-		} else if strings.Contains(importPart, "(") {
-			importPart = strings.SplitN(importPart, "(", 2)[1]
-			importPart = strings.SplitN(importPart, ")", 2)[0]
-		}
-		for _, imported := range strings.Split(importPart, ",") {
-			imported = strings.TrimSpace(strings.Split(imported, "#")[0])
-			if imported == "" {
-				continue
-			}
-			parts := strings.Fields(imported)
-			name := parts[0]
-			if len(parts) >= 3 && parts[1] == "as" {
-				name = parts[2]
-			}
-			addPythonExportName(names, name)
-		}
-	}
-
-	result := make([]string, 0, len(names))
-	for name := range names {
-		result = append(result, name)
-	}
-	sort.Strings(result)
-	return result
-}
-
-func addPythonExportName(names map[string]bool, name string) {
-	name = strings.TrimSpace(name)
-	if name == "" || strings.HasPrefix(name, "_") || !pythonIdentifierPattern.MatchString(name) {
-		return
-	}
-	names[name] = true
 }
 
 func pythonRequestedModules(content string) map[string]bool {
@@ -1093,4 +590,67 @@ func pythonTextEditsFromTy(input []pyintelligence.TextEdit) []PythonTextEdit {
 		})
 	}
 	return result
+}
+
+func pythonHoverFromTy(input *pyintelligence.Hover) *PythonHover {
+	if input == nil {
+		return nil
+	}
+	return &PythonHover{Contents: input.Contents, Range: pythonRangeFromTy(input.Range)}
+}
+
+func pythonSignatureHelpFromTy(input *pyintelligence.SignatureHelp) *PythonSignatureHelp {
+	if input == nil {
+		return nil
+	}
+	return &PythonSignatureHelp{
+		Signatures:      pythonSignaturesFromTy(input.Signatures),
+		ActiveSignature: input.ActiveSignature,
+		ActiveParameter: input.ActiveParameter,
+	}
+}
+
+func pythonSignaturesFromTy(input []pyintelligence.Signature) []PythonSignature {
+	result := make([]PythonSignature, 0, len(input))
+	for _, signature := range input {
+		result = append(result, PythonSignature{
+			Label:           signature.Label,
+			Documentation:   signature.Documentation,
+			Parameters:      pythonSignatureParametersFromTy(signature.Parameters),
+			ActiveParameter: signature.ActiveParameter,
+		})
+	}
+	return result
+}
+
+func pythonSignatureParametersFromTy(input []pyintelligence.SignatureParameter) []PythonSignatureParameter {
+	result := make([]PythonSignatureParameter, 0, len(input))
+	for _, parameter := range input {
+		result = append(result, PythonSignatureParameter{
+			Label:         parameter.Label,
+			Name:          parameter.Name,
+			Type:          parameter.Type,
+			Documentation: parameter.Documentation,
+		})
+	}
+	return result
+}
+
+func pythonGotoTargetsFromTy(input []pyintelligence.GotoTarget) []PythonGotoTarget {
+	result := make([]PythonGotoTarget, 0, len(input))
+	for _, target := range input {
+		result = append(result, PythonGotoTarget{
+			Path:       strings.TrimPrefix(target.Path, "/"),
+			FocusRange: pythonRangeValueFromTy(target.FocusRange),
+			FullRange:  pythonRangeValueFromTy(target.FullRange),
+		})
+	}
+	return result
+}
+
+func pythonRangeValueFromTy(input pyintelligence.Range) PythonRange {
+	return PythonRange{
+		Start: PythonPosition{Line: input.Start.Line, Column: input.Start.Column},
+		End:   PythonPosition{Line: input.End.Line, Column: input.End.Column},
+	}
 }

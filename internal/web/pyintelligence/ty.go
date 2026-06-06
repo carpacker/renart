@@ -51,6 +51,24 @@ type CompletionResponse struct {
 	Error  string       `json:"error,omitempty"`
 }
 
+type HoverResponse struct {
+	Status string `json:"status"`
+	Result *Hover `json:"result,omitempty"`
+	Error  string `json:"error,omitempty"`
+}
+
+type SignatureHelpResponse struct {
+	Status string         `json:"status"`
+	Result *SignatureHelp `json:"result,omitempty"`
+	Error  string         `json:"error,omitempty"`
+}
+
+type GotoDefinitionResponse struct {
+	Status string       `json:"status"`
+	Result []GotoTarget `json:"result,omitempty"`
+	Error  string       `json:"error,omitempty"`
+}
+
 type Diagnostic struct {
 	ID       string `json:"id"`
 	Message  string `json:"message"`
@@ -83,6 +101,37 @@ type Completion struct {
 type TextEdit struct {
 	Range Range  `json:"range"`
 	Text  string `json:"text"`
+}
+
+type Hover struct {
+	Contents string `json:"contents"`
+	Range    *Range `json:"range,omitempty"`
+}
+
+type SignatureHelp struct {
+	Signatures      []Signature `json:"signatures"`
+	ActiveSignature *int        `json:"active_signature,omitempty"`
+	ActiveParameter *int        `json:"active_parameter,omitempty"`
+}
+
+type Signature struct {
+	Label           string               `json:"label"`
+	Documentation   string               `json:"documentation,omitempty"`
+	Parameters      []SignatureParameter `json:"parameters"`
+	ActiveParameter *int                 `json:"active_parameter,omitempty"`
+}
+
+type SignatureParameter struct {
+	Label         string `json:"label"`
+	Name          string `json:"name"`
+	Type          string `json:"ty"`
+	Documentation string `json:"documentation,omitempty"`
+}
+
+type GotoTarget struct {
+	Path       string `json:"path"`
+	FocusRange Range  `json:"focus_range"`
+	FullRange  Range  `json:"full_range"`
 }
 
 type runtimeState struct {
@@ -119,6 +168,30 @@ func Complete(ctx context.Context, req Request) (CompletionResponse, error) {
 	var resp CompletionResponse
 	if err := call(ctx, "ty_complete_python", req, &resp); err != nil {
 		return CompletionResponse{}, err
+	}
+	return resp, nil
+}
+
+func HoverAt(ctx context.Context, req Request) (HoverResponse, error) {
+	var resp HoverResponse
+	if err := call(ctx, "ty_hover_python", req, &resp); err != nil {
+		return HoverResponse{}, err
+	}
+	return resp, nil
+}
+
+func SignatureHelpAt(ctx context.Context, req Request) (SignatureHelpResponse, error) {
+	var resp SignatureHelpResponse
+	if err := call(ctx, "ty_signature_help_python", req, &resp); err != nil {
+		return SignatureHelpResponse{}, err
+	}
+	return resp, nil
+}
+
+func GotoDefinition(ctx context.Context, req Request) (GotoDefinitionResponse, error) {
+	var resp GotoDefinitionResponse
+	if err := call(ctx, "ty_goto_definition_python", req, &resp); err != nil {
+		return GotoDefinitionResponse{}, err
 	}
 	return resp, nil
 }

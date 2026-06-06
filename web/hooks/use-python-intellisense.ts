@@ -3,8 +3,22 @@
 import type * as MonacoNS from "monaco-editor";
 import { useEffect, useRef } from "react";
 
-import { formatPythonAsset, getPythonCompletions, getPythonDiagnostics } from "@/lib/api";
-import type { PythonCompletion, PythonDiagnostic, WebAsset } from "@/lib/types";
+import {
+  formatPythonAsset,
+  getPythonCompletions,
+  getPythonDiagnostics,
+  getPythonGotoDefinition,
+  getPythonHover,
+  getPythonSignatureHelp,
+} from "@/lib/api";
+import type {
+  PythonCompletion,
+  PythonDiagnostic,
+  PythonGotoTarget,
+  PythonRange,
+  PythonSignatureHelp,
+  WebAsset,
+} from "@/lib/types";
 
 const pythonMarkerOwner = "bruin-python-ty";
 
@@ -95,9 +109,98 @@ export function usePythonIntellisense(
       },
     });
 
+    const hover = monaco.languages.registerHoverProvider("python", {
+      async provideHover(model, position, token) {
+        const currentAsset = assetRef.current;
+        if (!currentAsset?.id || !currentAsset.path.toLowerCase().endsWith(".py")) {
+          return null;
+        }
+        const controller = new AbortController();
+        const cancellation = token.onCancellationRequested(() => controller.abort());
+        try {
+          const response = await getPythonHover(
+            currentAsset.id,
+            positionRequest(model, position),
+            controller.signal,
+          );
+          if (token.isCancellationRequested || response.status !== "ok" || !response.hover) {
+            return null;
+          }
+          return {
+            contents: [{ value: response.hover.contents, isTrusted: false }],
+            range: response.hover.range ? rangeToMonaco(response.hover.range) : undefined,
+          };
+        } catch {
+          return null;
+        } finally {
+          cancellation.dispose();
+        }
+      },
+    });
+
+    const signature = monaco.languages.registerSignatureHelpProvider("python", {
+      signatureHelpTriggerCharacters: ["(", ","],
+      signatureHelpRetriggerCharacters: [","],
+      async provideSignatureHelp(model, position, token) {
+        const currentAsset = assetRef.current;
+        if (!currentAsset?.id || !currentAsset.path.toLowerCase().endsWith(".py")) {
+          return null;
+        }
+        const controller = new AbortController();
+        const cancellation = token.onCancellationRequested(() => controller.abort());
+        try {
+          const response = await getPythonSignatureHelp(
+            currentAsset.id,
+            positionRequest(model, position),
+            controller.signal,
+          );
+          if (token.isCancellationRequested || response.status !== "ok" || !response.signature_help) {
+            return null;
+          }
+          return {
+            value: signatureHelpToMonaco(response.signature_help),
+            dispose: () => {},
+          };
+        } catch {
+          return null;
+        } finally {
+          cancellation.dispose();
+        }
+      },
+    });
+
+    const definition = monaco.languages.registerDefinitionProvider("python", {
+      async provideDefinition(model, position, token) {
+        const currentAsset = assetRef.current;
+        if (!currentAsset?.id || !currentAsset.path.toLowerCase().endsWith(".py")) {
+          return [];
+        }
+        const controller = new AbortController();
+        const cancellation = token.onCancellationRequested(() => controller.abort());
+        try {
+          const response = await getPythonGotoDefinition(
+            currentAsset.id,
+            positionRequest(model, position),
+            controller.signal,
+          );
+          if (token.isCancellationRequested || response.status !== "ok") {
+            return [];
+          }
+          return (response.targets ?? []).map((target) => gotoTargetToLocation(monaco, target));
+        } catch {
+          return [];
+        } finally {
+          cancellation.dispose();
+        }
+      },
+    });
+
     return () => {
       formatting.dispose();
       completions.dispose();
+      hover.dispose();
+      signature.dispose();
+      definition.dispose();
     };
   }, [monaco]);
 
@@ -140,6 +243,56 @@ export function usePythonIntellisense(
       window.clearTimeout(timer);
     };
   }, [asset?.id, content, editor, isPythonAsset, monaco]);
+}
+
+function positionRequest(
+  model: MonacoNS.editor.ITextModel,
+  position: MonacoNS.Position,
+) {
+  return {
+    content: model.getValue(),
+    line: position.lineNumber,
+    column: position.column,
+  };
+}
+
+function rangeToMonaco(range: PythonRange): MonacoNS.IRange {
+  return {
+    startLineNumber: range.start.line,
+    startColumn: range.start.column,
+    endLineNumber: range.end.line,
+    endColumn: range.end.column,
+  };
+}
+
+function signatureHelpToMonaco(
+  help: PythonSignatureHelp,
+): MonacoNS.languages.SignatureHelp {
+  return {
+    signatures: help.signatures.map((signature) => ({
+      label: signature.label,
+      documentation: signature.documentation
+        ? { value: signature.documentation, isTrusted: false }
+        : undefined,
+      parameters: signature.parameters.map((parameter) => ({
+        label: parameter.label,
+        documentation: parameter.documentation || parameter.type,
+      })),
+      activeParameter: signature.active_parameter,
+    })),
+    activeSignature: help.active_signature ?? 0,
+    activeParameter: help.active_parameter ?? 0,
+  };
+}
+
+function gotoTargetToLocation(
+  monaco: typeof MonacoNS,
+  target: PythonGotoTarget,
+): MonacoNS.languages.Location {
+  return {
+    uri: monaco.Uri.file(target.path.startsWith("/") ? target.path : `/${target.path}`),
+    range: rangeToMonaco(target.focus_range),
+  };
 }
 
 function completionToSuggestion(

@@ -22,7 +22,7 @@ use ruff_text_size::{Ranged, TextSize};
 use serde::{Deserialize, Serialize};
 use ty_ide::{
     CompletionCapabilities, CompletionInsertTextFormat, CompletionKind, CompletionSettings,
-    completion,
+    MarkupKind, NavigationTarget, completion, goto_definition, hover, signature_help,
 };
 use ty_project::metadata::options::Options;
 use ty_project::metadata::value::ValueSource;
@@ -108,6 +108,48 @@ struct TyCompletion {
 struct TyTextEdit {
     range: TyRange,
     text: String,
+}
+
+#[derive(Debug, Serialize)]
+struct TyHover {
+    contents: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    range: Option<TyRange>,
+}
+
+#[derive(Debug, Serialize)]
+struct TySignatureHelp {
+    signatures: Vec<TySignature>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    active_signature: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    active_parameter: Option<usize>,
+}
+
+#[derive(Debug, Serialize)]
+struct TySignature {
+    label: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    documentation: Option<String>,
+    parameters: Vec<TySignatureParameter>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    active_parameter: Option<usize>,
+}
+
+#[derive(Debug, Serialize)]
+struct TySignatureParameter {
+    label: String,
+    name: String,
+    ty: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    documentation: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct TyGotoTarget {
+    path: String,
+    focus_range: TyRange,
+    full_range: TyRange,
 }
 
 #[derive(Debug, Serialize)]
@@ -199,6 +241,55 @@ pub unsafe extern "C" fn ty_complete_python(ptr: *const u8, len: usize) -> u64 {
         Ok(TyResponse {
             status: "ok",
             result: Some(completions),
+            diagnostics: None,
+            error: None,
+        })
+    })
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ty_hover_python(ptr: *const u8, len: usize) -> u64 {
+    run_json(ptr, len, |request| {
+        let line = request.line;
+        let column = request.column;
+        let hover = with_workspace(request, |workspace, file| workspace.hover(file, line, column))?;
+        Ok(TyResponse {
+            status: "ok",
+            result: hover,
+            diagnostics: None,
+            error: None,
+        })
+    })
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ty_signature_help_python(ptr: *const u8, len: usize) -> u64 {
+    run_json(ptr, len, |request| {
+        let line = request.line;
+        let column = request.column;
+        let signature_help = with_workspace(request, |workspace, file| {
+            workspace.signature_help(file, line, column)
+        })?;
+        Ok(TyResponse {
+            status: "ok",
+            result: signature_help,
+            diagnostics: None,
+            error: None,
+        })
+    })
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ty_goto_definition_python(ptr: *const u8, len: usize) -> u64 {
+    run_json(ptr, len, |request| {
+        let line = request.line;
+        let column = request.column;
+        let targets = with_workspace(request, |workspace, file| {
+            workspace.goto_definition(file, line, column)
+        })?;
+        Ok(TyResponse {
+            status: "ok",
+            result: Some(targets),
             diagnostics: None,
             error: None,
         })
@@ -410,6 +501,91 @@ impl Workspace {
             .into_iter()
             .map(|item| completion_to_json(&self.db, file, item))
             .collect())
+    }
+
+    fn hover(&self, file: &FileHandle, line: usize, column: usize) -> Result<Option<TyHover>, String> {
+        let offset = self.offset(file, line, column);
+        Ok(hover(&self.db, file.file, offset).map(|item| TyHover {
+            contents: item.display(&self.db, MarkupKind::Markdown).to_string(),
+            range: Some(range_from_file_range(&self.db, item.file_range())),
+        }))
+    }
+
+    fn signature_help(
+        &self,
+        file: &FileHandle,
+        line: usize,
+        column: usize,
+    ) -> Result<Option<TySignatureHelp>, String> {
+        let offset = self.offset(file, line, column);
+        Ok(signature_help(&self.db, file.file, offset).map(|help| {
+            let active_parameter = help
+                .active_signature
+                .and_then(|index| help.signatures.get(index))
+                .and_then(|signature| signature.active_parameter);
+            TySignatureHelp {
+                signatures: help
+                    .signatures
+                    .into_iter()
+                    .map(|signature| TySignature {
+                        label: signature.label,
+                        documentation: signature.documentation.map(|doc| doc.render_markdown()),
+                        parameters: signature
+                            .parameters
+                            .into_iter()
+                            .map(|parameter| TySignatureParameter {
+                                label: parameter.label,
+                                name: parameter.name,
+                                ty: parameter.ty.display(&self.db).to_string(),
+                                documentation: parameter.documentation,
+                            })
+                            .collect(),
+                        active_parameter: signature.active_parameter,
+                    })
+                    .collect(),
+                active_signature: help.active_signature,
+                active_parameter,
+            }
+        }))
+    }
+
+    fn goto_definition(
+        &self,
+        file: &FileHandle,
+        line: usize,
+        column: usize,
+    ) -> Result<Vec<TyGotoTarget>, String> {
+        let offset = self.offset(file, line, column);
+        let Some(targets) = goto_definition(&self.db, file.file, offset) else {
+            return Ok(Vec::new());
+        };
+        Ok(targets
+            .into_iter()
+            .map(|target| goto_target_to_json(&self.db, target))
+            .collect())
+    }
+
+    fn offset(&self, file: &FileHandle, line: usize, column: usize) -> TextSize {
+        let source = source_text(&self.db, file.file);
+        let index = line_index(&self.db, file.file);
+        let line = OneIndexed::new(line).unwrap_or(OneIndexed::MIN);
+        let column = OneIndexed::new(column).unwrap_or(OneIndexed::MIN);
+        index.offset(
+            SourceLocation {
+                line,
+                character_offset: column,
+            },
+            &source,
+            PositionEncoding::Utf16,
+        )
+    }
+}
+
+fn goto_target_to_json(db: &ProjectDatabase, target: NavigationTarget) -> TyGotoTarget {
+    TyGotoTarget {
+        path: target.file().path(db).as_str().to_string(),
+        focus_range: range_from_file_range(db, FileRange::new(target.file(), target.focus_range())),
+        full_range: range_from_file_range(db, FileRange::new(target.file(), target.full_range())),
     }
 }
 
