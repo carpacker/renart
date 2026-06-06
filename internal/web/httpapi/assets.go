@@ -55,6 +55,76 @@ type FormatSQLAssetResponse struct {
 	Error   string `json:"error,omitempty"`
 }
 
+type FormatPythonAssetRequest struct {
+	Content string `json:"content"`
+}
+
+type FormatPythonAssetResponse struct {
+	Status  string `json:"status"`
+	AssetID string `json:"asset_id"`
+	Content string `json:"content"`
+	Error   string `json:"error,omitempty"`
+}
+
+type PythonDiagnosticsRequest struct {
+	Content string `json:"content"`
+}
+
+type PythonCompletionsRequest struct {
+	Content  string `json:"content"`
+	Line     int    `json:"line"`
+	Column   int    `json:"column"`
+	Snippets bool   `json:"snippets"`
+}
+
+type PythonDiagnosticsResponse struct {
+	Status      string             `json:"status"`
+	AssetID     string             `json:"asset_id"`
+	Diagnostics []PythonDiagnostic `json:"diagnostics,omitempty"`
+	Error       string             `json:"error,omitempty"`
+}
+
+type PythonDiagnostic struct {
+	ID       string       `json:"id"`
+	Message  string       `json:"message"`
+	Severity string       `json:"severity"`
+	Range    *PythonRange `json:"range,omitempty"`
+	Display  string       `json:"display,omitempty"`
+}
+
+type PythonRange struct {
+	Start PythonPosition `json:"start"`
+	End   PythonPosition `json:"end"`
+}
+
+type PythonPosition struct {
+	Line   int `json:"line"`
+	Column int `json:"column"`
+}
+
+type PythonCompletionsResponse struct {
+	Status      string             `json:"status"`
+	AssetID     string             `json:"asset_id"`
+	Completions []PythonCompletion `json:"completions,omitempty"`
+	Error       string             `json:"error,omitempty"`
+}
+
+type PythonCompletion struct {
+	Label               string           `json:"label"`
+	Kind                string           `json:"kind,omitempty"`
+	Detail              string           `json:"detail,omitempty"`
+	InsertText          string           `json:"insert_text,omitempty"`
+	InsertTextFormat    string           `json:"insert_text_format"`
+	Documentation       string           `json:"documentation,omitempty"`
+	ModuleName          string           `json:"module_name,omitempty"`
+	AdditionalTextEdits []PythonTextEdit `json:"additional_text_edits,omitempty"`
+}
+
+type PythonTextEdit struct {
+	Range PythonRange `json:"range"`
+	Text  string      `json:"text"`
+}
+
 type AssetMutationResponse struct {
 	Status    string `json:"status"`
 	AssetID   string `json:"asset_id,omitempty"`
@@ -70,6 +140,9 @@ type AssetHandlers interface {
 	UpdateAsset(ctx context.Context, assetID string, req UpdateAssetRequest) (AssetMutationResponse, *APIError)
 	DeleteAsset(ctx context.Context, assetID string) (StatusResponse, *APIError)
 	FormatSQLAsset(ctx context.Context, assetID string, req FormatSQLAssetRequest) (FormatSQLAssetResponse, *APIError)
+	FormatPythonAsset(ctx context.Context, assetID string, req FormatPythonAssetRequest) (FormatPythonAssetResponse, *APIError)
+	PythonDiagnostics(ctx context.Context, assetID string, req PythonDiagnosticsRequest) (PythonDiagnosticsResponse, *APIError)
+	PythonCompletions(ctx context.Context, assetID string, req PythonCompletionsRequest) (PythonCompletionsResponse, *APIError)
 }
 
 type AssetsAPI struct {
@@ -81,6 +154,9 @@ func RegisterAssetRoutes(router chi.Router, handlers *AssetsAPI) {
 	router.Put("/api/pipelines/{pipelineID}/assets/{assetID}", handlers.HandleUpdateAsset)
 	router.Delete("/api/pipelines/{pipelineID}/assets/{assetID}", handlers.HandleDeleteAsset)
 	router.Post("/api/assets/{assetID}/format-sql", handlers.HandleFormatSQLAsset)
+	router.Post("/api/assets/{assetID}/format-python", handlers.HandleFormatPythonAsset)
+	router.Post("/api/assets/{assetID}/python-diagnostics", handlers.HandlePythonDiagnostics)
+	router.Post("/api/assets/{assetID}/python-completions", handlers.HandlePythonCompletions)
 }
 
 func (h *AssetsAPI) HandleCreateAsset(w http.ResponseWriter, r *http.Request) {
@@ -127,6 +203,48 @@ func (h *AssetsAPI) HandleFormatSQLAsset(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	resp, apiErr := h.Service.FormatSQLAsset(r.Context(), chi.URLParam(r, "assetID"), req)
+	if apiErr != nil {
+		writeAPIError(w, apiErr)
+		return
+	}
+	webapi.WriteJSON(w, http.StatusOK, resp)
+}
+
+func (h *AssetsAPI) HandleFormatPythonAsset(w http.ResponseWriter, r *http.Request) {
+	var req FormatPythonAssetRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		webapi.WriteBadRequest(w, "invalid_request_body", err.Error())
+		return
+	}
+	resp, apiErr := h.Service.FormatPythonAsset(r.Context(), chi.URLParam(r, "assetID"), req)
+	if apiErr != nil {
+		writeAPIError(w, apiErr)
+		return
+	}
+	webapi.WriteJSON(w, http.StatusOK, resp)
+}
+
+func (h *AssetsAPI) HandlePythonDiagnostics(w http.ResponseWriter, r *http.Request) {
+	var req PythonDiagnosticsRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		webapi.WriteBadRequest(w, "invalid_request_body", err.Error())
+		return
+	}
+	resp, apiErr := h.Service.PythonDiagnostics(r.Context(), chi.URLParam(r, "assetID"), req)
+	if apiErr != nil {
+		writeAPIError(w, apiErr)
+		return
+	}
+	webapi.WriteJSON(w, http.StatusOK, resp)
+}
+
+func (h *AssetsAPI) HandlePythonCompletions(w http.ResponseWriter, r *http.Request) {
+	var req PythonCompletionsRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		webapi.WriteBadRequest(w, "invalid_request_body", err.Error())
+		return
+	}
+	resp, apiErr := h.Service.PythonCompletions(r.Context(), chi.URLParam(r, "assetID"), req)
 	if apiErr != nil {
 		writeAPIError(w, apiErr)
 		return

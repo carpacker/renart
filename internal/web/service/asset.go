@@ -42,6 +42,76 @@ type FormatSQLAssetResponse struct {
 	Error   string
 }
 
+type FormatPythonAssetRequest struct {
+	Content string
+}
+
+type FormatPythonAssetResponse struct {
+	Status  string
+	AssetID string
+	Content string
+	Error   string
+}
+
+type PythonDiagnosticsRequest struct {
+	Content string
+}
+
+type PythonCompletionsRequest struct {
+	Content  string
+	Line     int
+	Column   int
+	Snippets bool
+}
+
+type PythonDiagnosticsResponse struct {
+	Status      string
+	AssetID     string
+	Diagnostics []PythonDiagnostic
+	Error       string
+}
+
+type PythonDiagnostic struct {
+	ID       string
+	Message  string
+	Severity string
+	Range    *PythonRange
+	Display  string
+}
+
+type PythonRange struct {
+	Start PythonPosition
+	End   PythonPosition
+}
+
+type PythonPosition struct {
+	Line   int
+	Column int
+}
+
+type PythonCompletionsResponse struct {
+	Status      string
+	AssetID     string
+	Completions []PythonCompletion
+	Error       string
+}
+
+type PythonCompletion struct {
+	Label               string
+	Kind                string
+	Detail              string
+	InsertText          string
+	InsertTextFormat    string
+	Documentation       string
+	ModuleName          string
+	AdditionalTextEdits []PythonTextEdit
+}
+
+type PythonTextEdit struct {
+	Range PythonRange
+	Text  string
+}
+
 type AssetDependencies struct {
 	Fs                                         afero.Fs
 	WorkspaceRoot                              string

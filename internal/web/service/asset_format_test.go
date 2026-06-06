@@ -75,6 +75,213 @@ select old_value from source_table
 	assert.Equal(t, []string{assetID}, pushedIDs)
 }
 
+func TestAssetServiceFormatPythonUsesTyAndPersistsExecutableContent(t *testing.T) {
+	workspaceRoot := t.TempDir()
+	pipelineRoot := filepath.Join(workspaceRoot, "analytics")
+	assetPath := filepath.Join("analytics", "assets", "task.py")
+	absAssetPath := filepath.Join(workspaceRoot, assetPath)
+	require.NoError(t, os.MkdirAll(filepath.Dir(absAssetPath), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(pipelineRoot, "pipeline.yml"), []byte(strings.TrimSpace(`
+name: analytics
+schedule: daily
+start_date: "2024-01-01"
+`)+"\n"), 0o644))
+	require.NoError(t, os.WriteFile(absAssetPath, []byte(strings.TrimSpace(`
+"""@bruin
+name: analytics.task
+type: python
+image: python:3.11
+@bruin"""
+
+def add(left:int,right:int)->int:
+ return left+right
+`)+"\n"), 0o644))
+
+	var suppressedPath string
+	var pushedEvent string
+	var pushedPath string
+	var pushedIDs []string
+	service := NewAssetService(AssetDependencies{
+		WorkspaceRoot:    workspaceRoot,
+		ResolveAssetByID: newAssetTestResolver(workspaceRoot).ResolveAssetByID,
+		SuppressWatcher:  func(path string) { suppressedPath = path },
+		PushWorkspaceUpdateImmediateWithChangedIDs: func(_ context.Context, event, path string, ids []string) {
+			pushedEvent = event
+			pushedPath = path
+			pushedIDs = ids
+		},
+	})
+
+	assetID := EncodeID(assetPath)
+	response, apiErr := service.FormatPython(context.Background(), assetID, FormatPythonAssetRequest{
+		Content: "def add(left:int,right:int)->int:\n return left+right\n",
+	})
+	require.Nil(t, apiErr)
+
+	expectedPython := "def add(left: int, right: int) -> int:\n    return left + right"
+	assert.Equal(t, "ok", response.Status)
+	assert.Equal(t, assetID, response.AssetID)
+	assert.Equal(t, expectedPython+"\n", response.Content)
+	assert.Empty(t, response.Error)
+
+	fileBytes, err := os.ReadFile(absAssetPath)
+	require.NoError(t, err)
+	fileContent := string(fileBytes)
+	assert.Contains(t, fileContent, "name: analytics.task")
+	assert.Contains(t, fileContent, "type: python")
+	assert.Equal(t, expectedPython, strings.TrimSpace(ExtractExecutableContent(fileContent)))
+	assert.Equal(t, assetPath, suppressedPath)
+	assert.Equal(t, "asset.updated", pushedEvent)
+	assert.Equal(t, assetPath, pushedPath)
+	assert.Equal(t, []string{assetID}, pushedIDs)
+}
+
+func TestAssetServicePythonDiagnosticsResolvesInstalledRequirementPackage(t *testing.T) {
+	workspaceRoot := t.TempDir()
+	pipelineRoot := filepath.Join(workspaceRoot, "analytics")
+	assetPath := filepath.Join("analytics", "assets", "task.py")
+	absAssetPath := filepath.Join(workspaceRoot, assetPath)
+	require.NoError(t, os.MkdirAll(filepath.Dir(absAssetPath), 0o755))
+	require.NoError(t, os.MkdirAll(filepath.Join(workspaceRoot, ".venv", "lib", "python3.11", "site-packages", "pandas"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(workspaceRoot, ".venv", "lib", "python3.11", "site-packages", "pandas", "__init__.py"), []byte("from pandas.core.api import (\n    Series,\n    DataFrame,\n)\n"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(pipelineRoot, "pipeline.yml"), []byte(strings.TrimSpace(`
+name: analytics
+schedule: daily
+start_date: "2024-01-01"
+`)+"\n"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(filepath.Dir(absAssetPath), "requirements.txt"), []byte("pandas\n"), 0o644))
+	require.NoError(t, os.WriteFile(absAssetPath, []byte(strings.TrimSpace(`
+"""@bruin
+name: analytics.task
+type: python
+image: python:3.11
+@bruin"""
+
+import pandas as pd
+
+df = pd.DataFrame({"a": [1]})
+`)+"\n"), 0o644))
+
+	service := NewAssetService(AssetDependencies{
+		WorkspaceRoot:    workspaceRoot,
+		ResolveAssetByID: newAssetTestResolver(workspaceRoot).ResolveAssetByID,
+	})
+
+	response, apiErr := service.PythonDiagnostics(context.Background(), EncodeID(assetPath), PythonDiagnosticsRequest{})
+	require.Nil(t, apiErr)
+	require.Equal(t, "ok", response.Status)
+	for _, diagnostic := range response.Diagnostics {
+		assert.NotContains(t, diagnostic.Message, "Cannot resolve imported module `pandas`")
+	}
+}
+
+func TestAssetServicePythonCompletionsReturnsTySuggestions(t *testing.T) {
+	workspaceRoot := t.TempDir()
+	pipelineRoot := filepath.Join(workspaceRoot, "analytics")
+	assetPath := filepath.Join("analytics", "assets", "task.py")
+	absAssetPath := filepath.Join(workspaceRoot, assetPath)
+	require.NoError(t, os.MkdirAll(filepath.Dir(absAssetPath), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(pipelineRoot, "pipeline.yml"), []byte(strings.TrimSpace(`
+name: analytics
+schedule: daily
+start_date: "2024-01-01"
+`)+"\n"), 0o644))
+	require.NoError(t, os.WriteFile(absAssetPath, []byte(strings.TrimSpace(`
+"""@bruin
+name: analytics.task
+type: python
+image: python:3.11
+@bruin"""
+
+def local_value() -> int:
+    return 1
+
+local_val
+`)+"\n"), 0o644))
+
+	service := NewAssetService(AssetDependencies{
+		WorkspaceRoot:    workspaceRoot,
+		ResolveAssetByID: newAssetTestResolver(workspaceRoot).ResolveAssetByID,
+	})
+
+	response, apiErr := service.PythonCompletions(context.Background(), EncodeID(assetPath), PythonCompletionsRequest{
+		Content:  "def local_value() -> int:\n    return 1\n\nlocal_val",
+		Line:     4,
+		Column:   10,
+		Snippets: true,
+	})
+	require.Nil(t, apiErr)
+	require.Equal(t, "ok", response.Status)
+	assert.Contains(t, pythonCompletionLabels(response.Completions), "local_value")
+}
+
+func TestAssetServicePythonCompletionsUsesInstalledPackageExports(t *testing.T) {
+	workspaceRoot := t.TempDir()
+	pipelineRoot := filepath.Join(workspaceRoot, "analytics")
+	assetPath := filepath.Join("analytics", "assets", "task.py")
+	absAssetPath := filepath.Join(workspaceRoot, assetPath)
+	require.NoError(t, os.MkdirAll(filepath.Dir(absAssetPath), 0o755))
+	pandasPath := filepath.Join(workspaceRoot, ".venv", "lib", "python3.11", "site-packages", "pandas")
+	require.NoError(t, os.MkdirAll(pandasPath, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(pandasPath, "__init__.py"), []byte("from pandas.core.api import (\n    Series,\n    DataFrame,\n)\n"), 0o644))
+	require.NoError(t, os.MkdirAll(filepath.Join(pandasPath, "core"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(pandasPath, "core", "api.py"), []byte("from pandas.core.frame import DataFrame\n"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(pandasPath, "core", "frame.py"), []byte("class DataFrame:\n    columns = None\n    def head(self): ...\n    def merge(self): ...\n"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(pipelineRoot, "pipeline.yml"), []byte(strings.TrimSpace(`
+name: analytics
+schedule: daily
+start_date: "2024-01-01"
+`)+"\n"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(filepath.Dir(absAssetPath), "requirements.txt"), []byte("pandas\n"), 0o644))
+	require.NoError(t, os.WriteFile(absAssetPath, []byte(strings.TrimSpace(`
+"""@bruin
+name: analytics.task
+type: python
+image: python:3.11
+@bruin"""
+
+import pandas as pd
+
+def materialize():
+    pd.
+`)+"\n"), 0o644))
+
+	service := NewAssetService(AssetDependencies{
+		WorkspaceRoot:    workspaceRoot,
+		ResolveAssetByID: newAssetTestResolver(workspaceRoot).ResolveAssetByID,
+	})
+
+	response, apiErr := service.PythonCompletions(context.Background(), EncodeID(assetPath), PythonCompletionsRequest{
+		Content:  "import pandas as pd\n\ndef materialize():\n    pd.",
+		Line:     4,
+		Column:   8,
+		Snippets: true,
+	})
+	require.Nil(t, apiErr)
+	require.Equal(t, "ok", response.Status)
+	assert.Contains(t, pythonCompletionLabels(response.Completions), "DataFrame")
+
+	response, apiErr = service.PythonCompletions(context.Background(), EncodeID(assetPath), PythonCompletionsRequest{
+		Content:  "import pandas as pd\n\nx = pd.DataFrame()\nx.",
+		Line:     4,
+		Column:   3,
+		Snippets: true,
+	})
+	require.Nil(t, apiErr)
+	require.Equal(t, "ok", response.Status)
+	labels := pythonCompletionLabels(response.Completions)
+	assert.Contains(t, labels, "columns")
+	assert.Contains(t, labels, "head")
+}
+
+func pythonCompletionLabels(completions []PythonCompletion) []string {
+	labels := make([]string, 0, len(completions))
+	for _, completion := range completions {
+		labels = append(labels, completion.Label)
+	}
+	return labels
+}
+
 func TestSQLFormatDialectForAssetTypeUsesBruinDialect(t *testing.T) {
 	assert.Equal(t, "postgresql", sqlFormatDialectForAssetType(pipeline.AssetTypePostgresQuery))
 	assert.Equal(t, "databricks", sqlFormatDialectForAssetType(pipeline.AssetTypeDatabricksQuery))

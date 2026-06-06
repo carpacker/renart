@@ -79,6 +79,9 @@ type webColumn struct {
 type apiError = webhttpapi.APIError
 type assetMutationResponse = webhttpapi.AssetMutationResponse
 type formatSQLAssetResponse = webhttpapi.FormatSQLAssetResponse
+type formatPythonAssetResponse = webhttpapi.FormatPythonAssetResponse
+type pythonDiagnosticsResponse = webhttpapi.PythonDiagnosticsResponse
+type pythonCompletionsResponse = webhttpapi.PythonCompletionsResponse
 type statusResponse = webhttpapi.StatusResponse
 
 type ingestrSuggestionItem struct {
@@ -993,6 +996,95 @@ func (s *webServer) FormatSQLAsset(ctx context.Context, assetID string, req webh
 		return formatSQLAssetResponse{}, &apiError{Status: err.Status, Code: err.Code, Message: err.Message}
 	}
 	return formatSQLAssetResponse(result), nil
+}
+
+func (s *webServer) FormatPythonAsset(ctx context.Context, assetID string, req webhttpapi.FormatPythonAssetRequest) (formatPythonAssetResponse, *apiError) {
+	result, err := s.assetSvc.FormatPython(ctx, assetID, service.FormatPythonAssetRequest{Content: req.Content})
+	if err != nil {
+		return formatPythonAssetResponse{}, &apiError{Status: err.Status, Code: err.Code, Message: err.Message}
+	}
+	return formatPythonAssetResponse(result), nil
+}
+
+func (s *webServer) PythonDiagnostics(ctx context.Context, assetID string, req webhttpapi.PythonDiagnosticsRequest) (pythonDiagnosticsResponse, *apiError) {
+	result, err := s.assetSvc.PythonDiagnostics(ctx, assetID, service.PythonDiagnosticsRequest{Content: req.Content})
+	if err != nil {
+		return pythonDiagnosticsResponse{}, &apiError{Status: err.Status, Code: err.Code, Message: err.Message}
+	}
+	return pythonDiagnosticsResponse{
+		Status:      result.Status,
+		AssetID:     result.AssetID,
+		Diagnostics: pythonDiagnosticsToAPI(result.Diagnostics),
+		Error:       result.Error,
+	}, nil
+}
+
+func (s *webServer) PythonCompletions(ctx context.Context, assetID string, req webhttpapi.PythonCompletionsRequest) (pythonCompletionsResponse, *apiError) {
+	result, err := s.assetSvc.PythonCompletions(ctx, assetID, service.PythonCompletionsRequest{Content: req.Content, Line: req.Line, Column: req.Column, Snippets: req.Snippets})
+	if err != nil {
+		return pythonCompletionsResponse{}, &apiError{Status: err.Status, Code: err.Code, Message: err.Message}
+	}
+	return pythonCompletionsResponse{
+		Status:      result.Status,
+		AssetID:     result.AssetID,
+		Completions: pythonCompletionsToAPI(result.Completions),
+		Error:       result.Error,
+	}, nil
+}
+
+func pythonDiagnosticsToAPI(input []service.PythonDiagnostic) []webhttpapi.PythonDiagnostic {
+	result := make([]webhttpapi.PythonDiagnostic, 0, len(input))
+	for _, diagnostic := range input {
+		result = append(result, webhttpapi.PythonDiagnostic{
+			ID:       diagnostic.ID,
+			Message:  diagnostic.Message,
+			Severity: diagnostic.Severity,
+			Range:    pythonRangeToAPI(diagnostic.Range),
+			Display:  diagnostic.Display,
+		})
+	}
+	return result
+}
+
+func pythonRangeToAPI(input *service.PythonRange) *webhttpapi.PythonRange {
+	if input == nil {
+		return nil
+	}
+	return &webhttpapi.PythonRange{
+		Start: webhttpapi.PythonPosition{Line: input.Start.Line, Column: input.Start.Column},
+		End:   webhttpapi.PythonPosition{Line: input.End.Line, Column: input.End.Column},
+	}
+}
+
+func pythonCompletionsToAPI(input []service.PythonCompletion) []webhttpapi.PythonCompletion {
+	result := make([]webhttpapi.PythonCompletion, 0, len(input))
+	for _, completion := range input {
+		result = append(result, webhttpapi.PythonCompletion{
+			Label:               completion.Label,
+			Kind:                completion.Kind,
+			Detail:              completion.Detail,
+			InsertText:          completion.InsertText,
+			InsertTextFormat:    completion.InsertTextFormat,
+			Documentation:       completion.Documentation,
+			ModuleName:          completion.ModuleName,
+			AdditionalTextEdits: pythonTextEditsToAPI(completion.AdditionalTextEdits),
+		})
+	}
+	return result
+}
+
+func pythonTextEditsToAPI(input []service.PythonTextEdit) []webhttpapi.PythonTextEdit {
+	result := make([]webhttpapi.PythonTextEdit, 0, len(input))
+	for _, edit := range input {
+		result = append(result, webhttpapi.PythonTextEdit{
+			Range: webhttpapi.PythonRange{
+				Start: webhttpapi.PythonPosition{Line: edit.Range.Start.Line, Column: edit.Range.Start.Column},
+				End:   webhttpapi.PythonPosition{Line: edit.Range.End.Line, Column: edit.Range.End.Column},
+			},
+			Text: edit.Text,
+		})
+	}
+	return result
 }
 
 func (s *webServer) FillColumnsFromDB(ctx context.Context, assetID string) (int, map[string]any, *apiError) {
