@@ -10,9 +10,11 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/spf13/afero"
+	"renart/internal/web/profiling"
 	"renart/internal/web/pyintelligence"
 )
 
@@ -59,10 +61,26 @@ func (s *AssetService) FormatPython(ctx context.Context, assetID string, req For
 }
 
 func (s *AssetService) PythonDiagnostics(ctx context.Context, assetID string, req PythonDiagnosticsRequest) (PythonDiagnosticsResponse, *ServiceAPIError) {
+	trace := profiling.New("RENART_PYINTELLIGENCE_PROFILE", "python.diagnostics")
+	profileAssetPath := ""
+	packageFileCount := 0
+	sentFileCount := 0
+	completionCount := 0
+	defer func() {
+		trace.Done(
+			"asset="+profileAssetPath,
+			"package_files="+strconv.Itoa(packageFileCount),
+			"sent_files="+strconv.Itoa(sentFileCount),
+			"completions="+strconv.Itoa(completionCount),
+		)
+	}()
+
 	relAssetPath, absAssetPath, err := s.resolvePythonAssetPath(assetID)
+	trace.Step("resolve")
 	if err != nil {
 		return PythonDiagnosticsResponse{}, err
 	}
+	profileAssetPath = filepath.ToSlash(relAssetPath)
 	content := req.Content
 	if strings.TrimSpace(content) == "" {
 		bytes, readErr := afero.ReadFile(s.fs(), absAssetPath)
@@ -71,38 +89,65 @@ func (s *AssetService) PythonDiagnostics(ctx context.Context, assetID string, re
 		}
 		content = string(bytes)
 	}
-	packageStubs := s.installedPythonPackageStubs(relAssetPath, absAssetPath, content)
+	trace.Step("content")
+	packageStubs, packageFingerprint := s.installedPythonPackageStubs(relAssetPath, absAssetPath, content)
+	packageFileCount = len(packageStubs)
+	trace.Step("packages")
 	options := defaultTyOptions()
 	if len(packageStubs) > 0 {
 		options = tyOptionsWithSitePackages()
 	}
-	sessionID, sessionFingerprint := tySessionFields(relAssetPath, options, packageStubs)
+	sessionID, sessionFingerprint := tySessionFields(relAssetPath, options, packageFingerprint)
+	trace.Step("session")
+	requestFiles := s.pythonTySessionFilesForRequest(sessionID, sessionFingerprint, packageStubs)
+	sentFileCount = len(requestFiles)
+	trace.Step("payload")
 	checked, checkErr := pyintelligence.Check(ctx, pyintelligence.Request{
 		Root:               "/",
 		Path:               "/" + strings.TrimPrefix(relAssetPath, "/"),
 		Content:            content,
 		Options:            options,
-		Files:              packageStubs,
+		Files:              requestFiles,
 		SessionID:          sessionID,
 		SessionFingerprint: sessionFingerprint,
 	})
+	trace.Step("ty")
 	if checkErr != nil {
 		return PythonDiagnosticsResponse{}, newServiceAPIError(500, "python_diagnostics_failed", checkErr.Error())
 	}
 	if checked.Status != "ok" {
 		return PythonDiagnosticsResponse{Status: "error", AssetID: assetID, Error: checked.Error}, nil
 	}
-	return PythonDiagnosticsResponse{Status: "ok", AssetID: assetID, Diagnostics: pythonDiagnosticsFromTy(checked.Diagnostics)}, nil
+	s.markPythonTySessionFilesReady(sessionID, sessionFingerprint)
+	response := PythonDiagnosticsResponse{Status: "ok", AssetID: assetID, Diagnostics: pythonDiagnosticsFromTy(checked.Diagnostics)}
+	trace.Step("map_response")
+	return response, nil
 }
 
 func (s *AssetService) PythonCompletions(ctx context.Context, assetID string, req PythonCompletionsRequest) (PythonCompletionsResponse, *ServiceAPIError) {
+	trace := profiling.New("RENART_PYINTELLIGENCE_PROFILE", "python.completions")
+	profileAssetPath := ""
+	packageFileCount := 0
+	sentFileCount := 0
+	completionCount := 0
+	defer func() {
+		trace.Done(
+			"asset="+profileAssetPath,
+			"package_files="+strconv.Itoa(packageFileCount),
+			"sent_files="+strconv.Itoa(sentFileCount),
+			"completions="+strconv.Itoa(completionCount),
+		)
+	}()
+
 	if req.Line <= 0 || req.Column <= 0 {
 		return PythonCompletionsResponse{}, newServiceAPIError(400, "invalid_position", "line and column must be positive")
 	}
 	relAssetPath, absAssetPath, err := s.resolvePythonAssetPath(assetID)
+	trace.Step("resolve")
 	if err != nil {
 		return PythonCompletionsResponse{}, err
 	}
+	profileAssetPath = filepath.ToSlash(relAssetPath)
 	content := req.Content
 	if strings.TrimSpace(content) == "" {
 		bytes, readErr := afero.ReadFile(s.fs(), absAssetPath)
@@ -111,111 +156,196 @@ func (s *AssetService) PythonCompletions(ctx context.Context, assetID string, re
 		}
 		content = string(bytes)
 	}
-	packageStubs := s.installedPythonPackageStubs(relAssetPath, absAssetPath, content)
+	trace.Step("content")
+	packageStubs, packageFingerprint := s.installedPythonPackageStubs(relAssetPath, absAssetPath, content)
+	packageFileCount = len(packageStubs)
+	trace.Step("packages")
 	options := defaultTyOptions()
 	if len(packageStubs) > 0 {
 		options = tyOptionsWithSitePackages()
 	}
-	sessionID, sessionFingerprint := tySessionFields(relAssetPath, options, packageStubs)
+	sessionID, sessionFingerprint := tySessionFields(relAssetPath, options, packageFingerprint)
+	trace.Step("session")
+	requestFiles := s.pythonTySessionFilesForRequest(sessionID, sessionFingerprint, packageStubs)
+	sentFileCount = len(requestFiles)
+	trace.Step("payload")
 	completed, completeErr := pyintelligence.Complete(ctx, pyintelligence.Request{
 		Root:               "/",
 		Path:               "/" + strings.TrimPrefix(relAssetPath, "/"),
 		Content:            content,
 		Options:            options,
-		Files:              packageStubs,
+		Files:              requestFiles,
 		Line:               req.Line,
 		Column:             req.Column,
 		Snippets:           req.Snippets,
 		SessionID:          sessionID,
 		SessionFingerprint: sessionFingerprint,
 	})
+	trace.Step("ty")
 	if completeErr != nil {
 		return PythonCompletionsResponse{}, newServiceAPIError(500, "python_completions_failed", completeErr.Error())
 	}
 	if completed.Status != "ok" {
 		return PythonCompletionsResponse{Status: "error", AssetID: assetID, Error: completed.Error}, nil
 	}
-	return PythonCompletionsResponse{Status: "ok", AssetID: assetID, Completions: pythonCompletionsFromTy(completed.Result)}, nil
+	s.markPythonTySessionFilesReady(sessionID, sessionFingerprint)
+	completionCount = len(completed.Result)
+	response := PythonCompletionsResponse{Status: "ok", AssetID: assetID, Completions: pythonCompletionsFromTy(completed.Result)}
+	trace.Step("map_response")
+	return response, nil
 }
 
 func (s *AssetService) PythonHover(ctx context.Context, assetID string, req PythonPositionRequest) (PythonHoverResponse, *ServiceAPIError) {
-	tyReq, serviceErr := s.pythonTyPositionRequest(assetID, req)
+	trace := profiling.New("RENART_PYINTELLIGENCE_PROFILE", "python.hover")
+	profileAssetPath := ""
+	packageFileCount := 0
+	sentFileCount := 0
+	defer func() {
+		trace.Done("asset="+profileAssetPath, "package_files="+strconv.Itoa(packageFileCount), "sent_files="+strconv.Itoa(sentFileCount))
+	}()
+
+	tyReq, relAssetPath, mountedFileCount, serviceErr := s.pythonTyPositionRequest(assetID, req, trace)
 	if serviceErr != nil {
 		return PythonHoverResponse{}, serviceErr
 	}
+	profileAssetPath = filepath.ToSlash(relAssetPath)
+	packageFileCount = mountedFileCount
+	sentFileCount = len(tyReq.Files)
 	hovered, hoverErr := pyintelligence.HoverAt(ctx, tyReq)
+	trace.Step("ty")
 	if hoverErr != nil {
 		return PythonHoverResponse{}, newServiceAPIError(500, "python_hover_failed", hoverErr.Error())
 	}
 	if hovered.Status != "ok" {
 		return PythonHoverResponse{Status: "error", AssetID: assetID, Error: hovered.Error}, nil
 	}
-	return PythonHoverResponse{Status: "ok", AssetID: assetID, Hover: pythonHoverFromTy(hovered.Result)}, nil
+	s.markPythonTySessionFilesReady(tyReq.SessionID, tyReq.SessionFingerprint)
+	response := PythonHoverResponse{Status: "ok", AssetID: assetID, Hover: pythonHoverFromTy(hovered.Result)}
+	trace.Step("map_response")
+	return response, nil
 }
 
 func (s *AssetService) PythonSignatureHelp(ctx context.Context, assetID string, req PythonPositionRequest) (PythonSignatureHelpResponse, *ServiceAPIError) {
-	tyReq, serviceErr := s.pythonTyPositionRequest(assetID, req)
+	trace := profiling.New("RENART_PYINTELLIGENCE_PROFILE", "python.signature_help")
+	profileAssetPath := ""
+	packageFileCount := 0
+	sentFileCount := 0
+	defer func() {
+		trace.Done("asset="+profileAssetPath, "package_files="+strconv.Itoa(packageFileCount), "sent_files="+strconv.Itoa(sentFileCount))
+	}()
+
+	tyReq, relAssetPath, mountedFileCount, serviceErr := s.pythonTyPositionRequest(assetID, req, trace)
 	if serviceErr != nil {
 		return PythonSignatureHelpResponse{}, serviceErr
 	}
+	profileAssetPath = filepath.ToSlash(relAssetPath)
+	packageFileCount = mountedFileCount
+	sentFileCount = len(tyReq.Files)
 	shown, signatureErr := pyintelligence.SignatureHelpAt(ctx, tyReq)
+	trace.Step("ty")
 	if signatureErr != nil {
 		return PythonSignatureHelpResponse{}, newServiceAPIError(500, "python_signature_help_failed", signatureErr.Error())
 	}
 	if shown.Status != "ok" {
 		return PythonSignatureHelpResponse{Status: "error", AssetID: assetID, Error: shown.Error}, nil
 	}
-	return PythonSignatureHelpResponse{Status: "ok", AssetID: assetID, SignatureHelp: pythonSignatureHelpFromTy(shown.Result)}, nil
+	s.markPythonTySessionFilesReady(tyReq.SessionID, tyReq.SessionFingerprint)
+	response := PythonSignatureHelpResponse{Status: "ok", AssetID: assetID, SignatureHelp: pythonSignatureHelpFromTy(shown.Result)}
+	trace.Step("map_response")
+	return response, nil
 }
 
 func (s *AssetService) PythonGotoDefinition(ctx context.Context, assetID string, req PythonPositionRequest) (PythonGotoDefinitionResponse, *ServiceAPIError) {
-	tyReq, serviceErr := s.pythonTyPositionRequest(assetID, req)
+	trace := profiling.New("RENART_PYINTELLIGENCE_PROFILE", "python.goto_definition")
+	profileAssetPath := ""
+	packageFileCount := 0
+	sentFileCount := 0
+	defer func() {
+		trace.Done("asset="+profileAssetPath, "package_files="+strconv.Itoa(packageFileCount), "sent_files="+strconv.Itoa(sentFileCount))
+	}()
+
+	tyReq, relAssetPath, mountedFileCount, serviceErr := s.pythonTyPositionRequest(assetID, req, trace)
 	if serviceErr != nil {
 		return PythonGotoDefinitionResponse{}, serviceErr
 	}
+	profileAssetPath = filepath.ToSlash(relAssetPath)
+	packageFileCount = mountedFileCount
+	sentFileCount = len(tyReq.Files)
 	resolved, gotoErr := pyintelligence.GotoDefinition(ctx, tyReq)
+	trace.Step("ty")
 	if gotoErr != nil {
 		return PythonGotoDefinitionResponse{}, newServiceAPIError(500, "python_goto_definition_failed", gotoErr.Error())
 	}
 	if resolved.Status != "ok" {
 		return PythonGotoDefinitionResponse{Status: "error", AssetID: assetID, Error: resolved.Error}, nil
 	}
-	return PythonGotoDefinitionResponse{Status: "ok", AssetID: assetID, Targets: pythonGotoTargetsFromTy(resolved.Result)}, nil
+	s.markPythonTySessionFilesReady(tyReq.SessionID, tyReq.SessionFingerprint)
+	response := PythonGotoDefinitionResponse{Status: "ok", AssetID: assetID, Targets: pythonGotoTargetsFromTy(resolved.Result)}
+	trace.Step("map_response")
+	return response, nil
 }
 
-func (s *AssetService) pythonTyPositionRequest(assetID string, req PythonPositionRequest) (pyintelligence.Request, *ServiceAPIError) {
+func (s *AssetService) pythonTyPositionRequest(assetID string, req PythonPositionRequest, trace *profiling.Trace) (pyintelligence.Request, string, int, *ServiceAPIError) {
 	if req.Line <= 0 || req.Column <= 0 {
-		return pyintelligence.Request{}, newServiceAPIError(400, "invalid_position", "line and column must be positive")
+		return pyintelligence.Request{}, "", 0, newServiceAPIError(400, "invalid_position", "line and column must be positive")
 	}
 	relAssetPath, absAssetPath, err := s.resolvePythonAssetPath(assetID)
+	trace.Step("resolve")
 	if err != nil {
-		return pyintelligence.Request{}, err
+		return pyintelligence.Request{}, "", 0, err
 	}
 	content := req.Content
 	if strings.TrimSpace(content) == "" {
 		bytes, readErr := afero.ReadFile(s.fs(), absAssetPath)
 		if readErr != nil {
-			return pyintelligence.Request{}, newServiceAPIError(500, "asset_read_failed", readErr.Error())
+			return pyintelligence.Request{}, "", 0, newServiceAPIError(500, "asset_read_failed", readErr.Error())
 		}
 		content = string(bytes)
 	}
-	packageStubs := s.installedPythonPackageStubs(relAssetPath, absAssetPath, content)
+	trace.Step("content")
+	packageStubs, packageFingerprint := s.installedPythonPackageStubs(relAssetPath, absAssetPath, content)
+	trace.Step("packages")
 	options := defaultTyOptions()
 	if len(packageStubs) > 0 {
 		options = tyOptionsWithSitePackages()
 	}
-	sessionID, sessionFingerprint := tySessionFields(relAssetPath, options, packageStubs)
+	sessionID, sessionFingerprint := tySessionFields(relAssetPath, options, packageFingerprint)
+	trace.Step("session")
+	requestFiles := s.pythonTySessionFilesForRequest(sessionID, sessionFingerprint, packageStubs)
+	trace.Step("payload")
 	return pyintelligence.Request{
 		Root:               "/",
 		Path:               "/" + strings.TrimPrefix(relAssetPath, "/"),
 		Content:            content,
 		Options:            options,
-		Files:              packageStubs,
+		Files:              requestFiles,
 		Line:               req.Line,
 		Column:             req.Column,
 		SessionID:          sessionID,
 		SessionFingerprint: sessionFingerprint,
-	}, nil
+	}, relAssetPath, len(packageStubs), nil
+}
+
+func (s *AssetService) pythonTySessionFilesForRequest(sessionID, sessionFingerprint string, files []pyintelligence.VirtualFile) []pyintelligence.VirtualFile {
+	if sessionID == "" || sessionFingerprint == "" || len(files) == 0 {
+		return files
+	}
+	s.pythonTySessionMu.Lock()
+	ready := s.pythonTySessionFiles[sessionID] == sessionFingerprint
+	s.pythonTySessionMu.Unlock()
+	if ready {
+		return nil
+	}
+	return files
+}
+
+func (s *AssetService) markPythonTySessionFilesReady(sessionID, sessionFingerprint string) {
+	if sessionID == "" || sessionFingerprint == "" {
+		return
+	}
+	s.pythonTySessionMu.Lock()
+	s.pythonTySessionFiles[sessionID] = sessionFingerprint
+	s.pythonTySessionMu.Unlock()
 }
 
 func (s *AssetService) resolvePythonAssetPath(assetID string) (string, string, *ServiceAPIError) {
@@ -250,7 +380,7 @@ func tyOptionsWithSitePackages() map[string]any {
 	}
 }
 
-func tySessionFields(relAssetPath string, options map[string]any, files []pyintelligence.VirtualFile) (string, string) {
+func tySessionFields(relAssetPath string, options map[string]any, filesFingerprint string) (string, string) {
 	path := filepath.ToSlash(relAssetPath)
 	hash := sha256.New()
 	_, _ = hash.Write([]byte(path))
@@ -259,13 +389,27 @@ func tySessionFields(relAssetPath string, options map[string]any, files []pyinte
 		_, _ = hash.Write(body)
 	}
 	_, _ = hash.Write([]byte{0})
-	for _, file := range files {
-		_, _ = hash.Write([]byte(file.Path))
-		_, _ = hash.Write([]byte{0})
-		_, _ = hash.Write([]byte(file.Content))
-		_, _ = hash.Write([]byte{0})
-	}
+	_, _ = hash.Write([]byte(filesFingerprint))
 	return "asset:" + path, hex.EncodeToString(hash.Sum(nil))
+}
+
+type pythonPackageMount struct {
+	files       []pyintelligence.VirtualFile
+	fingerprint string
+	cacheHit    bool
+}
+
+type pythonPackageMountCacheEntry struct {
+	signature   string
+	fingerprint string
+	files       []pyintelligence.VirtualFile
+}
+
+type pythonModuleFileMeta struct {
+	absPath     string
+	virtualPath string
+	size        int64
+	modUnixNano int64
 }
 
 var (
@@ -275,13 +419,33 @@ var (
 	quotedDependencyPattern  = regexp.MustCompile(`['"]([^'"]+)['"]`)
 )
 
-func (s *AssetService) installedPythonPackageStubs(relAssetPath, absAssetPath, content string) []pyintelligence.VirtualFile {
+func (s *AssetService) installedPythonPackageStubs(relAssetPath, absAssetPath, content string) ([]pyintelligence.VirtualFile, string) {
+	trace := profiling.New("RENART_PYINTELLIGENCE_PROFILE", "python.packages")
+	moduleCount := 0
+	installedCount := 0
+	fileCount := 0
+	cacheHits := 0
+	cacheMisses := 0
+	defer func() {
+		trace.Done(
+			"asset="+filepath.ToSlash(relAssetPath),
+			"modules="+strconv.Itoa(moduleCount),
+			"installed="+strconv.Itoa(installedCount),
+			"files="+strconv.Itoa(fileCount),
+			"cache_hits="+strconv.Itoa(cacheHits),
+			"cache_misses="+strconv.Itoa(cacheMisses),
+		)
+	}()
+
 	modules := pythonRequestedModules(content)
+	trace.Step("imports")
 	for _, dependency := range s.pythonDependencyNames(absAssetPath) {
 		modules[pythonModuleNameFromDependency(dependency)] = true
 	}
+	trace.Step("dependencies")
+	moduleCount = len(modules)
 	if len(modules) == 0 {
-		return nil
+		return nil, ""
 	}
 
 	moduleNames := make([]string, 0, len(modules))
@@ -295,32 +459,87 @@ func (s *AssetService) installedPythonPackageStubs(relAssetPath, absAssetPath, c
 			modulePaths[module] = modulePath
 		}
 	}
+	trace.Step("resolve_paths")
 	sort.Strings(moduleNames)
+	installedCount = len(moduleNames)
 
 	files := make([]pyintelligence.VirtualFile, 0, len(moduleNames))
+	fingerprintHash := sha256.New()
 	for _, module := range moduleNames {
-		files = append(files, pythonInstalledModuleFiles(module, modulePaths[module])...)
+		mount := s.cachedPythonInstalledModuleFiles(module, modulePaths[module])
+		if len(mount.files) == 0 {
+			continue
+		}
+		if mount.cacheHit {
+			cacheHits++
+		} else {
+			cacheMisses++
+		}
+		files = append(files, mount.files...)
+		_, _ = fingerprintHash.Write([]byte(module))
+		_, _ = fingerprintHash.Write([]byte{0})
+		_, _ = fingerprintHash.Write([]byte(filepath.Clean(modulePaths[module])))
+		_, _ = fingerprintHash.Write([]byte{0})
+		_, _ = fingerprintHash.Write([]byte(mount.fingerprint))
+		_, _ = fingerprintHash.Write([]byte{0})
 	}
-	return files
+	trace.Step("mounts")
+	fileCount = len(files)
+	if len(files) == 0 {
+		return nil, ""
+	}
+	return files, hex.EncodeToString(fingerprintHash.Sum(nil))
 }
 
-func pythonInstalledModuleFiles(module, modulePath string) []pyintelligence.VirtualFile {
+func (s *AssetService) cachedPythonInstalledModuleFiles(module, modulePath string) pythonPackageMount {
+	metas, signature := pythonInstalledModuleFileMetas(module, modulePath)
+	if signature == "" {
+		return pythonPackageMount{}
+	}
+	cacheKey := module + "\x00" + filepath.Clean(modulePath)
+
+	s.pythonPackageMountMu.Lock()
+	if cached, ok := s.pythonPackageMountCache[cacheKey]; ok && cached.signature == signature {
+		files := append([]pyintelligence.VirtualFile(nil), cached.files...)
+		s.pythonPackageMountMu.Unlock()
+		return pythonPackageMount{files: files, fingerprint: cached.fingerprint, cacheHit: true}
+	}
+	s.pythonPackageMountMu.Unlock()
+
+	mount := pythonInstalledModuleFilesFromMetas(metas)
+	if len(mount.files) == 0 {
+		return pythonPackageMount{}
+	}
+
+	s.pythonPackageMountMu.Lock()
+	s.pythonPackageMountCache[cacheKey] = pythonPackageMountCacheEntry{
+		signature:   signature,
+		fingerprint: mount.fingerprint,
+		files:       append([]pyintelligence.VirtualFile(nil), mount.files...),
+	}
+	s.pythonPackageMountMu.Unlock()
+	return mount
+}
+
+func pythonInstalledModuleFileMetas(module, modulePath string) ([]pythonModuleFileMeta, string) {
 	if module == "" || modulePath == "" {
-		return nil
+		return nil, ""
 	}
 	if stat, err := os.Stat(modulePath); err == nil && !stat.IsDir() {
-		content := readFirstExistingFile(modulePath)
-		if content == "" {
-			return nil
-		}
 		ext := filepath.Ext(modulePath)
 		if ext == "" {
 			ext = ".py"
 		}
-		return []pyintelligence.VirtualFile{{Path: "/site-packages/" + module + ext, Content: content}}
+		metas := []pythonModuleFileMeta{{
+			absPath:     modulePath,
+			virtualPath: "/site-packages/" + module + ext,
+			size:        stat.Size(),
+			modUnixNano: stat.ModTime().UnixNano(),
+		}}
+		return metas, pythonModuleFileSignature(metas)
 	}
 
-	files := []pyintelligence.VirtualFile{}
+	metas := []pythonModuleFileMeta{}
 	_ = filepath.WalkDir(modulePath, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return nil
@@ -335,22 +554,62 @@ func pythonInstalledModuleFiles(module, modulePath string) []pyintelligence.Virt
 		if !strings.HasSuffix(path, ".py") && !strings.HasSuffix(path, ".pyi") {
 			return nil
 		}
-		content := readFirstExistingFile(path)
-		if content == "" {
+		stat, err := d.Info()
+		if err != nil {
 			return nil
 		}
 		rel, err := filepath.Rel(modulePath, path)
 		if err != nil {
 			return nil
 		}
-		files = append(files, pyintelligence.VirtualFile{
-			Path:    "/site-packages/" + module + "/" + filepath.ToSlash(rel),
-			Content: content,
+		metas = append(metas, pythonModuleFileMeta{
+			absPath:     path,
+			virtualPath: "/site-packages/" + module + "/" + filepath.ToSlash(rel),
+			size:        stat.Size(),
+			modUnixNano: stat.ModTime().UnixNano(),
 		})
 		return nil
 	})
-	sort.Slice(files, func(i, j int) bool { return files[i].Path < files[j].Path })
-	return files
+	sort.Slice(metas, func(i, j int) bool { return metas[i].virtualPath < metas[j].virtualPath })
+	return metas, pythonModuleFileSignature(metas)
+}
+
+func pythonModuleFileSignature(metas []pythonModuleFileMeta) string {
+	if len(metas) == 0 {
+		return ""
+	}
+	hash := sha256.New()
+	for _, meta := range metas {
+		_, _ = hash.Write([]byte(meta.virtualPath))
+		_, _ = hash.Write([]byte{0})
+		_, _ = hash.Write([]byte(meta.absPath))
+		_, _ = hash.Write([]byte{0})
+		_, _ = hash.Write([]byte(strconv.FormatInt(meta.size, 10)))
+		_, _ = hash.Write([]byte{0})
+		_, _ = hash.Write([]byte(strconv.FormatInt(meta.modUnixNano, 10)))
+		_, _ = hash.Write([]byte{0})
+	}
+	return hex.EncodeToString(hash.Sum(nil))
+}
+
+func pythonInstalledModuleFilesFromMetas(metas []pythonModuleFileMeta) pythonPackageMount {
+	files := make([]pyintelligence.VirtualFile, 0, len(metas))
+	fingerprintHash := sha256.New()
+	for _, meta := range metas {
+		content := readFirstExistingFile(meta.absPath)
+		if content == "" {
+			continue
+		}
+		files = append(files, pyintelligence.VirtualFile{Path: meta.virtualPath, Content: content})
+		_, _ = fingerprintHash.Write([]byte(meta.virtualPath))
+		_, _ = fingerprintHash.Write([]byte{0})
+		_, _ = fingerprintHash.Write([]byte(content))
+		_, _ = fingerprintHash.Write([]byte{0})
+	}
+	if len(files) == 0 {
+		return pythonPackageMount{}
+	}
+	return pythonPackageMount{files: files, fingerprint: hex.EncodeToString(fingerprintHash.Sum(nil))}
 }
 
 func readFirstExistingFile(paths ...string) string {

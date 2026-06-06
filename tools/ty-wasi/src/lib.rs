@@ -54,6 +54,10 @@ struct PythonRequest {
     #[serde(default)]
     snippets: bool,
     #[serde(default)]
+    completion_details: bool,
+    #[serde(default)]
+    completion_documentation: bool,
+    #[serde(default)]
     session_id: String,
     #[serde(default)]
     session_fingerprint: String,
@@ -235,8 +239,17 @@ pub unsafe extern "C" fn ty_complete_python(ptr: *const u8, len: usize) -> u64 {
         let line = request.line;
         let column = request.column;
         let snippets = request.snippets;
+        let completion_details = request.completion_details;
+        let completion_documentation = request.completion_documentation;
         let completions = with_workspace(request, |workspace, file| {
-            workspace.complete(file, line, column, snippets)
+            workspace.complete(
+                file,
+                line,
+                column,
+                snippets,
+                completion_details,
+                completion_documentation,
+            )
         })?;
         Ok(TyResponse {
             status: "ok",
@@ -482,6 +495,8 @@ impl Workspace {
         line: usize,
         column: usize,
         snippets: bool,
+        completion_details: bool,
+        completion_documentation: bool,
     ) -> Result<Vec<TyCompletion>, String> {
         let source = source_text(&self.db, file.file);
         let index = line_index(&self.db, file.file);
@@ -499,7 +514,15 @@ impl Workspace {
         let capabilities = CompletionCapabilities::default().snippets(snippets);
         Ok(completion(&self.db, &settings, capabilities, file.file, offset)
             .into_iter()
-            .map(|item| completion_to_json(&self.db, file, item))
+            .map(|item| {
+                completion_to_json(
+                    &self.db,
+                    file,
+                    item,
+                    completion_details,
+                    completion_documentation,
+                )
+            })
             .collect())
     }
 
@@ -593,8 +616,10 @@ fn completion_to_json(
     db: &ProjectDatabase,
     file: &FileHandle,
     completion: ty_ide::Completion,
+    include_detail: bool,
+    include_documentation: bool,
 ) -> TyCompletion {
-    let detail = completion.ty.map(|ty| ty.display(db).to_string());
+    let detail = include_detail.then(|| completion.ty.map(|ty| ty.display(db).to_string())).flatten();
     let additional_text_edits = completion
         .import
         .as_ref()
@@ -609,7 +634,9 @@ fn completion_to_json(
             CompletionInsertTextFormat::PlainText => "plaintext",
             CompletionInsertTextFormat::Snippet => "snippet",
         },
-        documentation: completion.documentation.map(|doc| doc.render_markdown()),
+        documentation: include_documentation
+            .then(|| completion.documentation.map(|doc| doc.render_markdown()))
+            .flatten(),
         module_name: completion.module_name.map(ToString::to_string),
         additional_text_edits,
     }

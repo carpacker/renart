@@ -5,7 +5,7 @@ import (
 	"io/fs"
 )
 
-//go:embed dist dist/**
+//go:embed dist/index.html dist/assets/** dist/icons/** dist/monaco/** dist/*.svg
 var embeddedDist embed.FS
 
 func DistFS() (fs.FS, error) {

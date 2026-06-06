@@ -10,6 +10,7 @@ import (
 	"github.com/bruin-data/bruin/pkg/pipeline"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"renart/internal/web/pyintelligence"
 )
 
 func TestAssetServiceFormatSQLUsesPolyglotAndPersistsResult(t *testing.T) {
@@ -273,6 +274,61 @@ def materialize():
 	require.Equal(t, "ok", response.Status)
 	labels := pythonCompletionLabels(response.Completions)
 	assert.NotEmpty(t, labels)
+}
+
+func TestAssetServicePythonPackageMountCacheReusesUnchangedPackageFiles(t *testing.T) {
+	workspaceRoot := t.TempDir()
+	assetPath := filepath.Join("analytics", "assets", "task.py")
+	absAssetPath := filepath.Join(workspaceRoot, assetPath)
+	packagePath := filepath.Join(workspaceRoot, ".venv", "lib", "python3.11", "site-packages", "examplepkg")
+	require.NoError(t, os.MkdirAll(filepath.Dir(absAssetPath), 0o755))
+	require.NoError(t, os.MkdirAll(packagePath, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(packagePath, "__init__.py"), []byte("VALUE = 1\n"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(filepath.Dir(absAssetPath), "requirements.txt"), []byte("examplepkg\n"), 0o644))
+
+	service := NewAssetService(AssetDependencies{WorkspaceRoot: workspaceRoot})
+	files, fingerprint := service.installedPythonPackageStubs(assetPath, absAssetPath, "import examplepkg\n")
+	require.Len(t, files, 1)
+	require.NotEmpty(t, fingerprint)
+	assert.Equal(t, "VALUE = 1\n", files[0].Content)
+
+	files, repeatedFingerprint := service.installedPythonPackageStubs(assetPath, absAssetPath, "import examplepkg\n")
+	require.Len(t, files, 1)
+	assert.Equal(t, fingerprint, repeatedFingerprint)
+	assert.Len(t, service.pythonPackageMountCache, 1)
+}
+
+func TestAssetServicePythonPackageMountCacheInvalidatesWhenPackageFileChanges(t *testing.T) {
+	workspaceRoot := t.TempDir()
+	assetPath := filepath.Join("analytics", "assets", "task.py")
+	absAssetPath := filepath.Join(workspaceRoot, assetPath)
+	packagePath := filepath.Join(workspaceRoot, ".venv", "lib", "python3.11", "site-packages", "examplepkg")
+	packageFile := filepath.Join(packagePath, "__init__.py")
+	require.NoError(t, os.MkdirAll(filepath.Dir(absAssetPath), 0o755))
+	require.NoError(t, os.MkdirAll(packagePath, 0o755))
+	require.NoError(t, os.WriteFile(packageFile, []byte("VALUE = 1\n"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(filepath.Dir(absAssetPath), "requirements.txt"), []byte("examplepkg\n"), 0o644))
+
+	service := NewAssetService(AssetDependencies{WorkspaceRoot: workspaceRoot})
+	_, fingerprint := service.installedPythonPackageStubs(assetPath, absAssetPath, "import examplepkg\n")
+	require.NotEmpty(t, fingerprint)
+
+	require.NoError(t, os.WriteFile(packageFile, []byte("VALUE = 100\n"), 0o644))
+	files, changedFingerprint := service.installedPythonPackageStubs(assetPath, absAssetPath, "import examplepkg\n")
+	require.Len(t, files, 1)
+	assert.Equal(t, "VALUE = 100\n", files[0].Content)
+	assert.NotEqual(t, fingerprint, changedFingerprint)
+	assert.Len(t, service.pythonPackageMountCache, 1)
+}
+
+func TestAssetServicePythonTySessionFilesOnlySentUntilSessionIsWarm(t *testing.T) {
+	service := NewAssetService(AssetDependencies{})
+	files := []pyintelligence.VirtualFile{{Path: "/site-packages/examplepkg/__init__.py", Content: "VALUE = 1\n"}}
+
+	assert.Equal(t, files, service.pythonTySessionFilesForRequest("asset:test.py", "fingerprint-1", files))
+	service.markPythonTySessionFilesReady("asset:test.py", "fingerprint-1")
+	assert.Nil(t, service.pythonTySessionFilesForRequest("asset:test.py", "fingerprint-1", files))
+	assert.Equal(t, files, service.pythonTySessionFilesForRequest("asset:test.py", "fingerprint-2", files))
 }
 
 func pythonCompletionLabels(completions []PythonCompletion) []string {

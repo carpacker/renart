@@ -185,13 +185,22 @@ type AssetDependencies struct {
 }
 
 type AssetService struct {
-	deps        AssetDependencies
-	patchMu     sync.Mutex
-	patchTimers map[string]*time.Timer
+	deps                    AssetDependencies
+	patchMu                 sync.Mutex
+	patchTimers             map[string]*time.Timer
+	pythonPackageMountMu    sync.Mutex
+	pythonPackageMountCache map[string]pythonPackageMountCacheEntry
+	pythonTySessionMu       sync.Mutex
+	pythonTySessionFiles    map[string]string
 }
 
 func NewAssetService(deps AssetDependencies) *AssetService {
-	return &AssetService{deps: deps, patchTimers: make(map[string]*time.Timer)}
+	return &AssetService{
+		deps:                    deps,
+		patchTimers:             make(map[string]*time.Timer),
+		pythonPackageMountCache: make(map[string]pythonPackageMountCacheEntry),
+		pythonTySessionFiles:    make(map[string]string),
+	}
 }
 
 func (s *AssetService) fs() afero.Fs {
