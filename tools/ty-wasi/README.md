@@ -32,4 +32,6 @@ The exported ABI is JSON over raw linear-memory pointers:
 
 Requests may include virtual files under `/site-packages`. Renart uses this to expose installed Python packages to ty without copying full uv cache environments into WASM memory.
 
+Completion requests may set `completion_details` and `completion_documentation` to include per-item type strings and rendered documentation. Renart leaves these disabled for the normal completion list and relies on hover/signature requests for detailed information, which avoids eager rendering for large objects such as `pandas.DataFrame`.
+
 Diagnostics and completions may include `session_id` and `session_fingerprint`. Matching sessions reuse a warm ty project database and apply file-content changes incrementally; changed fingerprints rebuild the session so package stubs and options stay correct.

@@ -64,7 +64,7 @@ export function usePythonIntellisense(
 
     const completions = monaco.languages.registerCompletionItemProvider("python", {
       triggerCharacters: ["."],
-      async provideCompletionItems(model, position, _context, token) {
+      async provideCompletionItems(model, position, context, token) {
         const currentAsset = assetRef.current;
         if (!currentAsset?.id || !currentAsset.path.toLowerCase().endsWith(".py")) {
           return { suggestions: [] };
@@ -79,7 +79,7 @@ export function usePythonIntellisense(
               content: model.getValue(),
               line: position.lineNumber,
               column: position.column,
-              snippets: true,
+              snippets: shouldUsePythonCompletionSnippets(model, position, context),
             },
             controller.signal,
           );
@@ -243,6 +243,20 @@ export function usePythonIntellisense(
       window.clearTimeout(timer);
     };
   }, [asset?.id, content, editor, isPythonAsset, monaco]);
+}
+
+function shouldUsePythonCompletionSnippets(
+  model: MonacoNS.editor.ITextModel,
+  position: MonacoNS.Position,
+  context: MonacoNS.languages.CompletionContext,
+) {
+  if (context.triggerCharacter === ".") {
+    return false;
+  }
+  if (position.column > 1 && model.getLineContent(position.lineNumber).at(position.column - 2) === ".") {
+    return false;
+  }
+  return true;
 }
 
 function positionRequest(

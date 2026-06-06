@@ -5,7 +5,10 @@ import (
 	"embed"
 	"encoding/json"
 	"fmt"
+	"strconv"
 	"sync"
+
+	"renart/internal/web/profiling"
 
 	"github.com/tetratelabs/wazero"
 	"github.com/tetratelabs/wazero/api"
@@ -24,6 +27,8 @@ type Request struct {
 	Line               int            `json:"line,omitempty"`
 	Column             int            `json:"column,omitempty"`
 	Snippets           bool           `json:"snippets,omitempty"`
+	CompletionDetails  bool           `json:"completion_details"`
+	CompletionDocs     bool           `json:"completion_documentation"`
 	SessionID          string         `json:"session_id,omitempty"`
 	SessionFingerprint string         `json:"session_fingerprint,omitempty"`
 }
@@ -197,12 +202,25 @@ func GotoDefinition(ctx context.Context, req Request) (GotoDefinitionResponse, e
 }
 
 func call(ctx context.Context, functionName string, req Request, response any) error {
+	trace := profiling.New("RENART_PYINTELLIGENCE_PROFILE", "ty."+functionName)
+	requestBytes := 0
+	responseBytes := 0
+	defer func() {
+		trace.Done(
+			"request_bytes="+strconv.Itoa(requestBytes),
+			"response_bytes="+strconv.Itoa(responseBytes),
+			"files="+strconv.Itoa(len(req.Files)),
+		)
+	}()
+
 	initialized := initRuntime(ctx)
+	trace.Step("init_runtime")
 	if initialized.err != nil {
 		return initialized.err
 	}
 
 	executionMu.Lock()
+	trace.Step("lock_wait")
 	defer executionMu.Unlock()
 	if err := ctx.Err(); err != nil {
 		return err
@@ -219,16 +237,20 @@ func call(ctx context.Context, functionName string, req Request, response any) e
 	}
 
 	body, err := json.Marshal(req)
+	requestBytes = len(body)
+	trace.Step("marshal")
 	if err != nil {
 		return fmt.Errorf("marshal ty request: %w", err)
 	}
 	ptr, length, err := writeRequest(execCtx, memory, alloc, body)
+	trace.Step("write_request")
 	if err != nil {
 		return err
 	}
 	defer dealloc.Call(execCtx, ptr, length)
 
 	result, err := fn.Call(execCtx, ptr, length)
+	trace.Step("wasm_call")
 	if err != nil {
 		return fmt.Errorf("call ty wasm %s: %w", functionName, err)
 	}
@@ -239,12 +261,16 @@ func call(ctx context.Context, functionName string, req Request, response any) e
 	defer freeResult.Call(execCtx, packed)
 
 	bytes, err := readPacked(memory, packed)
+	responseBytes = len(bytes)
+	trace.Step("read_response")
 	if err != nil {
 		return err
 	}
 	if err := json.Unmarshal(bytes, response); err != nil {
+		trace.Step("unmarshal")
 		return fmt.Errorf("unmarshal ty response: %w", err)
 	}
+	trace.Step("unmarshal")
 	return nil
 }
 
