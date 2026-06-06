@@ -4,6 +4,9 @@ import {
   FormatSQLAssetResponse,
   PythonCompletionsResponse,
   PythonDiagnosticsResponse,
+  PythonGotoDefinitionResponse,
+  PythonHoverResponse,
+  PythonSignatureHelpResponse,
 } from "@/lib/types";
 
 export async function createAsset(
@@ -94,6 +97,45 @@ export async function getPythonCompletions(
 ) {
   return fetchJSONWithBody<PythonCompletionsResponse>(
     `/api/assets/${assetId}/python-completions`,
+    "POST",
+    input,
+    signal ? { signal } : undefined,
+  );
+}
+
+export async function getPythonHover(
+  assetId: string,
+  input: { content: string; line: number; column: number },
+  signal?: AbortSignal,
+) {
+  return fetchJSONWithBody<PythonHoverResponse>(
+    `/api/assets/${assetId}/python-hover`,
+    "POST",
+    input,
+    signal ? { signal } : undefined,
+  );
+}
+
+export async function getPythonSignatureHelp(
+  assetId: string,
+  input: { content: string; line: number; column: number },
+  signal?: AbortSignal,
+) {
+  return fetchJSONWithBody<PythonSignatureHelpResponse>(
+    `/api/assets/${assetId}/python-signature-help`,
+    "POST",
+    input,
+    signal ? { signal } : undefined,
+  );
+}
+
+export async function getPythonGotoDefinition(
+  assetId: string,
+  input: { content: string; line: number; column: number },
+  signal?: AbortSignal,
+) {
+  return fetchJSONWithBody<PythonGotoDefinitionResponse>(
+    `/api/assets/${assetId}/python-goto-definition`,
     "POST",
     input,
     signal ? { signal } : undefined,

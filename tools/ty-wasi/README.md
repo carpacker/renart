@@ -26,6 +26,9 @@ The exported ABI is JSON over raw linear-memory pointers:
 - `ty_format_python(ptr, len) -> packed_ptr_len`
 - `ty_check_python(ptr, len) -> packed_ptr_len`
 - `ty_complete_python(ptr, len) -> packed_ptr_len`
+- `ty_hover_python(ptr, len) -> packed_ptr_len`
+- `ty_signature_help_python(ptr, len) -> packed_ptr_len`
+- `ty_goto_definition_python(ptr, len) -> packed_ptr_len`
 
 Requests may include virtual files under `/site-packages`. Renart uses this to expose installed Python packages to ty without copying full uv cache environments into WASM memory.
 

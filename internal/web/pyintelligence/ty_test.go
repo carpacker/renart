@@ -129,6 +129,46 @@ func TestTyWASISessionUpdatesOpenFileContent(t *testing.T) {
 	}
 }
 
+func TestTyWASILanguageFeatures(t *testing.T) {
+	content := "class Widget:\n    def method(self, value: int) -> str:\n        return str(value)\n\nwidget = Widget()\nresult = widget.method(1)\n"
+	req := Request{
+		Root:               "/",
+		Path:               "/example.py",
+		Content:            content,
+		SessionID:          "language-feature-session",
+		SessionFingerprint: "same-options",
+		Options: map[string]any{
+			"environment": map[string]any{"python-version": "3.11"},
+		},
+	}
+
+	req.Line = 6
+	req.Column = 18
+	hovered, err := HoverAt(context.Background(), req)
+	require.NoError(t, err)
+	require.Equal(t, "ok", hovered.Status)
+	require.NotNil(t, hovered.Result)
+	assert.Contains(t, hovered.Result.Contents, "int")
+	assert.Contains(t, hovered.Result.Contents, "str")
+
+	req.Line = 6
+	req.Column = 24
+	signature, err := SignatureHelpAt(context.Background(), req)
+	require.NoError(t, err)
+	require.Equal(t, "ok", signature.Status)
+	require.NotNil(t, signature.Result)
+	require.NotEmpty(t, signature.Result.Signatures)
+	assert.Contains(t, signature.Result.Signatures[0].Label, "value: int")
+
+	req.Line = 6
+	req.Column = 17
+	gotoDefinition, err := GotoDefinition(context.Background(), req)
+	require.NoError(t, err)
+	require.Equal(t, "ok", gotoDefinition.Status)
+	require.NotEmpty(t, gotoDefinition.Result)
+	assert.Equal(t, "/example.py", gotoDefinition.Result[0].Path)
+}
+
 func completionLabels(completions []Completion) []string {
 	labels := make([]string, 0, len(completions))
 	for _, completion := range completions {

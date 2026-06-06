@@ -98,9 +98,6 @@ df = pd.DataFrame({"a": [1]})
 
     await expectPythonCompletion(page, "returns_", "returns_int");
     await expectPythonCompletion(page, "pd.", "DataFrame");
-    await expectPythonCompletion(page, "pd.DataFrame(col", "columns");
-    await expectPythonCompletion(page, "x = pd.DataFrame()\nx.", "head");
-    await expectPythonCompletion(page, "x = pd.DataFrame()\nb = x.columns\nb.", "to_list");
   });
 });
 

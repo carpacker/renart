@@ -82,6 +82,9 @@ type formatSQLAssetResponse = webhttpapi.FormatSQLAssetResponse
 type formatPythonAssetResponse = webhttpapi.FormatPythonAssetResponse
 type pythonDiagnosticsResponse = webhttpapi.PythonDiagnosticsResponse
 type pythonCompletionsResponse = webhttpapi.PythonCompletionsResponse
+type pythonHoverResponse = webhttpapi.PythonHoverResponse
+type pythonSignatureHelpResponse = webhttpapi.PythonSignatureHelpResponse
+type pythonGotoDefinitionResponse = webhttpapi.PythonGotoDefinitionResponse
 type statusResponse = webhttpapi.StatusResponse
 
 type ingestrSuggestionItem struct {
@@ -1032,6 +1035,45 @@ func (s *webServer) PythonCompletions(ctx context.Context, assetID string, req w
 	}, nil
 }
 
+func (s *webServer) PythonHover(ctx context.Context, assetID string, req webhttpapi.PythonPositionRequest) (pythonHoverResponse, *apiError) {
+	result, err := s.assetSvc.PythonHover(ctx, assetID, service.PythonPositionRequest{Content: req.Content, Line: req.Line, Column: req.Column})
+	if err != nil {
+		return pythonHoverResponse{}, &apiError{Status: err.Status, Code: err.Code, Message: err.Message}
+	}
+	return pythonHoverResponse{
+		Status:  result.Status,
+		AssetID: result.AssetID,
+		Hover:   pythonHoverToAPI(result.Hover),
+		Error:   result.Error,
+	}, nil
+}
+
+func (s *webServer) PythonSignatureHelp(ctx context.Context, assetID string, req webhttpapi.PythonPositionRequest) (pythonSignatureHelpResponse, *apiError) {
+	result, err := s.assetSvc.PythonSignatureHelp(ctx, assetID, service.PythonPositionRequest{Content: req.Content, Line: req.Line, Column: req.Column})
+	if err != nil {
+		return pythonSignatureHelpResponse{}, &apiError{Status: err.Status, Code: err.Code, Message: err.Message}
+	}
+	return pythonSignatureHelpResponse{
+		Status:        result.Status,
+		AssetID:       result.AssetID,
+		SignatureHelp: pythonSignatureHelpToAPI(result.SignatureHelp),
+		Error:         result.Error,
+	}, nil
+}
+
+func (s *webServer) PythonGotoDefinition(ctx context.Context, assetID string, req webhttpapi.PythonPositionRequest) (pythonGotoDefinitionResponse, *apiError) {
+	result, err := s.assetSvc.PythonGotoDefinition(ctx, assetID, service.PythonPositionRequest{Content: req.Content, Line: req.Line, Column: req.Column})
+	if err != nil {
+		return pythonGotoDefinitionResponse{}, &apiError{Status: err.Status, Code: err.Code, Message: err.Message}
+	}
+	return pythonGotoDefinitionResponse{
+		Status:  result.Status,
+		AssetID: result.AssetID,
+		Targets: pythonGotoTargetsToAPI(result.Targets),
+		Error:   result.Error,
+	}, nil
+}
+
 func pythonDiagnosticsToAPI(input []service.PythonDiagnostic) []webhttpapi.PythonDiagnostic {
 	result := make([]webhttpapi.PythonDiagnostic, 0, len(input))
 	for _, diagnostic := range input {
@@ -1085,6 +1127,69 @@ func pythonTextEditsToAPI(input []service.PythonTextEdit) []webhttpapi.PythonTex
 		})
 	}
 	return result
+}
+
+func pythonHoverToAPI(input *service.PythonHover) *webhttpapi.PythonHover {
+	if input == nil {
+		return nil
+	}
+	return &webhttpapi.PythonHover{Contents: input.Contents, Range: pythonRangeToAPI(input.Range)}
+}
+
+func pythonSignatureHelpToAPI(input *service.PythonSignatureHelp) *webhttpapi.PythonSignatureHelp {
+	if input == nil {
+		return nil
+	}
+	return &webhttpapi.PythonSignatureHelp{
+		Signatures:      pythonSignaturesToAPI(input.Signatures),
+		ActiveSignature: input.ActiveSignature,
+		ActiveParameter: input.ActiveParameter,
+	}
+}
+
+func pythonSignaturesToAPI(input []service.PythonSignature) []webhttpapi.PythonSignature {
+	result := make([]webhttpapi.PythonSignature, 0, len(input))
+	for _, signature := range input {
+		result = append(result, webhttpapi.PythonSignature{
+			Label:           signature.Label,
+			Documentation:   signature.Documentation,
+			Parameters:      pythonSignatureParametersToAPI(signature.Parameters),
+			ActiveParameter: signature.ActiveParameter,
+		})
+	}
+	return result
+}
+
+func pythonSignatureParametersToAPI(input []service.PythonSignatureParameter) []webhttpapi.PythonSignatureParameter {
+	result := make([]webhttpapi.PythonSignatureParameter, 0, len(input))
+	for _, parameter := range input {
+		result = append(result, webhttpapi.PythonSignatureParameter{
+			Label:         parameter.Label,
+			Name:          parameter.Name,
+			Type:          parameter.Type,
+			Documentation: parameter.Documentation,
+		})
+	}
+	return result
+}
+
+func pythonGotoTargetsToAPI(input []service.PythonGotoTarget) []webhttpapi.PythonGotoTarget {
+	result := make([]webhttpapi.PythonGotoTarget, 0, len(input))
+	for _, target := range input {
+		result = append(result, webhttpapi.PythonGotoTarget{
+			Path:       target.Path,
+			FocusRange: pythonRangeValueToAPI(target.FocusRange),
+			FullRange:  pythonRangeValueToAPI(target.FullRange),
+		})
+	}
+	return result
+}
+
+func pythonRangeValueToAPI(input service.PythonRange) webhttpapi.PythonRange {
+	return webhttpapi.PythonRange{
+		Start: webhttpapi.PythonPosition{Line: input.Start.Line, Column: input.Start.Column},
+		End:   webhttpapi.PythonPosition{Line: input.End.Line, Column: input.End.Column},
+	}
 }
 
 func (s *webServer) FillColumnsFromDB(ctx context.Context, assetID string) (int, map[string]any, *apiError) {

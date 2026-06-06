@@ -77,6 +77,12 @@ type PythonCompletionsRequest struct {
 	Snippets bool   `json:"snippets"`
 }
 
+type PythonPositionRequest struct {
+	Content string `json:"content"`
+	Line    int    `json:"line"`
+	Column  int    `json:"column"`
+}
+
 type PythonDiagnosticsResponse struct {
 	Status      string             `json:"status"`
 	AssetID     string             `json:"asset_id"`
@@ -125,6 +131,58 @@ type PythonTextEdit struct {
 	Text  string      `json:"text"`
 }
 
+type PythonHoverResponse struct {
+	Status  string       `json:"status"`
+	AssetID string       `json:"asset_id"`
+	Hover   *PythonHover `json:"hover,omitempty"`
+	Error   string       `json:"error,omitempty"`
+}
+
+type PythonHover struct {
+	Contents string       `json:"contents"`
+	Range    *PythonRange `json:"range,omitempty"`
+}
+
+type PythonSignatureHelpResponse struct {
+	Status        string               `json:"status"`
+	AssetID       string               `json:"asset_id"`
+	SignatureHelp *PythonSignatureHelp `json:"signature_help,omitempty"`
+	Error         string               `json:"error,omitempty"`
+}
+
+type PythonSignatureHelp struct {
+	Signatures      []PythonSignature `json:"signatures"`
+	ActiveSignature *int              `json:"active_signature,omitempty"`
+	ActiveParameter *int              `json:"active_parameter,omitempty"`
+}
+
+type PythonSignature struct {
+	Label           string                     `json:"label"`
+	Documentation   string                     `json:"documentation,omitempty"`
+	Parameters      []PythonSignatureParameter `json:"parameters"`
+	ActiveParameter *int                       `json:"active_parameter,omitempty"`
+}
+
+type PythonSignatureParameter struct {
+	Label         string `json:"label"`
+	Name          string `json:"name"`
+	Type          string `json:"type"`
+	Documentation string `json:"documentation,omitempty"`
+}
+
+type PythonGotoDefinitionResponse struct {
+	Status  string             `json:"status"`
+	AssetID string             `json:"asset_id"`
+	Targets []PythonGotoTarget `json:"targets,omitempty"`
+	Error   string             `json:"error,omitempty"`
+}
+
+type PythonGotoTarget struct {
+	Path       string      `json:"path"`
+	FocusRange PythonRange `json:"focus_range"`
+	FullRange  PythonRange `json:"full_range"`
+}
+
 type AssetMutationResponse struct {
 	Status    string `json:"status"`
 	AssetID   string `json:"asset_id,omitempty"`
@@ -143,6 +201,9 @@ type AssetHandlers interface {
 	FormatPythonAsset(ctx context.Context, assetID string, req FormatPythonAssetRequest) (FormatPythonAssetResponse, *APIError)
 	PythonDiagnostics(ctx context.Context, assetID string, req PythonDiagnosticsRequest) (PythonDiagnosticsResponse, *APIError)
 	PythonCompletions(ctx context.Context, assetID string, req PythonCompletionsRequest) (PythonCompletionsResponse, *APIError)
+	PythonHover(ctx context.Context, assetID string, req PythonPositionRequest) (PythonHoverResponse, *APIError)
+	PythonSignatureHelp(ctx context.Context, assetID string, req PythonPositionRequest) (PythonSignatureHelpResponse, *APIError)
+	PythonGotoDefinition(ctx context.Context, assetID string, req PythonPositionRequest) (PythonGotoDefinitionResponse, *APIError)
 }
 
 type AssetsAPI struct {
@@ -157,6 +218,9 @@ func RegisterAssetRoutes(router chi.Router, handlers *AssetsAPI) {
 	router.Post("/api/assets/{assetID}/format-python", handlers.HandleFormatPythonAsset)
 	router.Post("/api/assets/{assetID}/python-diagnostics", handlers.HandlePythonDiagnostics)
 	router.Post("/api/assets/{assetID}/python-completions", handlers.HandlePythonCompletions)
+	router.Post("/api/assets/{assetID}/python-hover", handlers.HandlePythonHover)
+	router.Post("/api/assets/{assetID}/python-signature-help", handlers.HandlePythonSignatureHelp)
+	router.Post("/api/assets/{assetID}/python-goto-definition", handlers.HandlePythonGotoDefinition)
 }
 
 func (h *AssetsAPI) HandleCreateAsset(w http.ResponseWriter, r *http.Request) {
@@ -245,6 +309,48 @@ func (h *AssetsAPI) HandlePythonCompletions(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	resp, apiErr := h.Service.PythonCompletions(r.Context(), chi.URLParam(r, "assetID"), req)
+	if apiErr != nil {
+		writeAPIError(w, apiErr)
+		return
+	}
+	webapi.WriteJSON(w, http.StatusOK, resp)
+}
+
+func (h *AssetsAPI) HandlePythonHover(w http.ResponseWriter, r *http.Request) {
+	var req PythonPositionRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		webapi.WriteBadRequest(w, "invalid_request_body", err.Error())
+		return
+	}
+	resp, apiErr := h.Service.PythonHover(r.Context(), chi.URLParam(r, "assetID"), req)
+	if apiErr != nil {
+		writeAPIError(w, apiErr)
+		return
+	}
+	webapi.WriteJSON(w, http.StatusOK, resp)
+}
+
+func (h *AssetsAPI) HandlePythonSignatureHelp(w http.ResponseWriter, r *http.Request) {
+	var req PythonPositionRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		webapi.WriteBadRequest(w, "invalid_request_body", err.Error())
+		return
+	}
+	resp, apiErr := h.Service.PythonSignatureHelp(r.Context(), chi.URLParam(r, "assetID"), req)
+	if apiErr != nil {
+		writeAPIError(w, apiErr)
+		return
+	}
+	webapi.WriteJSON(w, http.StatusOK, resp)
+}
+
+func (h *AssetsAPI) HandlePythonGotoDefinition(w http.ResponseWriter, r *http.Request) {
+	var req PythonPositionRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		webapi.WriteBadRequest(w, "invalid_request_body", err.Error())
+		return
+	}
+	resp, apiErr := h.Service.PythonGotoDefinition(r.Context(), chi.URLParam(r, "assetID"), req)
 	if apiErr != nil {
 		writeAPIError(w, apiErr)
 		return

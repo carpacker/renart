@@ -181,6 +181,27 @@ export type PythonCompletionsResponse = {
   error?: string;
 };
 
+export type PythonHoverResponse = {
+  status: "ok" | "error";
+  asset_id: string;
+  hover?: PythonHover;
+  error?: string;
+};
+
+export type PythonSignatureHelpResponse = {
+  status: "ok" | "error";
+  asset_id: string;
+  signature_help?: PythonSignatureHelp;
+  error?: string;
+};
+
+export type PythonGotoDefinitionResponse = {
+  status: "ok" | "error";
+  asset_id: string;
+  targets?: PythonGotoTarget[];
+  error?: string;
+};
+
 export type PythonDiagnostic = {
   id: string;
   message: string;
@@ -213,6 +234,37 @@ export type PythonCompletion = {
 export type PythonTextEdit = {
   range: PythonRange;
   text: string;
+};
+
+export type PythonHover = {
+  contents: string;
+  range?: PythonRange;
+};
+
+export type PythonSignatureHelp = {
+  signatures: PythonSignature[];
+  active_signature?: number;
+  active_parameter?: number;
+};
+
+export type PythonSignature = {
+  label: string;
+  documentation?: string;
+  parameters: PythonSignatureParameter[];
+  active_parameter?: number;
+};
+
+export type PythonSignatureParameter = {
+  label: string;
+  name: string;
+  type: string;
+  documentation?: string;
+};
+
+export type PythonGotoTarget = {
+  path: string;
+  focus_range: PythonRange;
+  full_range: PythonRange;
 };
 
 export type PipelineMaterializationResponse = Omit<GeneratedPipelineMaterializationResponse, "assets"> & {
