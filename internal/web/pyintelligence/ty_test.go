@@ -102,6 +102,33 @@ func TestTyWASICompletesPackageStubAttributes(t *testing.T) {
 	assert.Contains(t, completionLabels(completed.Result), "DataFrame")
 }
 
+func TestTyWASISessionUpdatesOpenFileContent(t *testing.T) {
+	req := Request{
+		Root:               "/",
+		Path:               "/example.py",
+		Content:            "def returns_int(value: str) -> int:\n    return value\n",
+		SessionID:          "test-session",
+		SessionFingerprint: "same-options",
+		Options: map[string]any{
+			"environment": map[string]any{"python-version": "3.11"},
+		},
+	}
+
+	checked, err := Check(context.Background(), req)
+	require.NoError(t, err)
+	require.Equal(t, "ok", checked.Status)
+	require.NotEmpty(t, checked.Diagnostics)
+	assert.Equal(t, "invalid-return-type", checked.Diagnostics[0].ID)
+
+	req.Content = "def returns_int(value: str) -> int:\n    return 1\n"
+	checked, err = Check(context.Background(), req)
+	require.NoError(t, err)
+	require.Equal(t, "ok", checked.Status)
+	for _, diagnostic := range checked.Diagnostics {
+		assert.NotEqual(t, "invalid-return-type", diagnostic.ID)
+	}
+}
+
 func completionLabels(completions []Completion) []string {
 	labels := make([]string, 0, len(completions))
 	for _, completion := range completions {

@@ -16,14 +16,16 @@ import (
 var tyWASM embed.FS
 
 type Request struct {
-	Root     string         `json:"root"`
-	Path     string         `json:"path"`
-	Content  string         `json:"content"`
-	Options  map[string]any `json:"options,omitempty"`
-	Files    []VirtualFile  `json:"files,omitempty"`
-	Line     int            `json:"line,omitempty"`
-	Column   int            `json:"column,omitempty"`
-	Snippets bool           `json:"snippets,omitempty"`
+	Root               string         `json:"root"`
+	Path               string         `json:"path"`
+	Content            string         `json:"content"`
+	Options            map[string]any `json:"options,omitempty"`
+	Files              []VirtualFile  `json:"files,omitempty"`
+	Line               int            `json:"line,omitempty"`
+	Column             int            `json:"column,omitempty"`
+	Snippets           bool           `json:"snippets,omitempty"`
+	SessionID          string         `json:"session_id,omitempty"`
+	SessionFingerprint string         `json:"session_fingerprint,omitempty"`
 }
 
 type VirtualFile struct {

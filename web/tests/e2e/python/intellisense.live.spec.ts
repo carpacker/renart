@@ -47,18 +47,24 @@ df = pd.DataFrame({"a": [1]})
     await mkdir(fakePandasPath, { recursive: true });
     await writeFile(
       join(fakePandasPath, "__init__.py"),
-      "from pandas.core.api import (\n    Series,\n    DataFrame,\n)\n",
+      "from pandas.core.api import (\n    Series,\n    DataFrame,\n    Index,\n)\n",
       "utf8"
     );
     await mkdir(join(fakePandasPath, "core"), { recursive: true });
     await writeFile(
       join(fakePandasPath, "core", "api.py"),
-      "from pandas.core.frame import DataFrame\n",
+      "from pandas.core.frame import DataFrame\nfrom pandas.core.indexes.base import Index\n",
+      "utf8"
+    );
+    await mkdir(join(fakePandasPath, "core", "indexes"), { recursive: true });
+    await writeFile(
+      join(fakePandasPath, "core", "frame.py"),
+      "class DataFrame:\n    def __init__(self, data=None, index=None, columns=None, dtype=None, copy=None): ...\n    columns = properties.AxisProperty(\n        doc=\"\"\"\n        Returns\n        -------\n        pandas.Index\n            The column labels.\n        \"\"\"\n    )\n    def head(self): ...\n    def merge(self): ...\n",
       "utf8"
     );
     await writeFile(
-      join(fakePandasPath, "core", "frame.py"),
-      "class DataFrame:\n    columns = None\n    def head(self): ...\n    def merge(self): ...\n",
+      join(fakePandasPath, "core", "indexes", "base.py"),
+      "class Index:\n    name = None\n    def to_list(self): ...\n    def unique(self): ...\n",
       "utf8"
     );
 
@@ -92,7 +98,9 @@ df = pd.DataFrame({"a": [1]})
 
     await expectPythonCompletion(page, "returns_", "returns_int");
     await expectPythonCompletion(page, "pd.", "DataFrame");
+    await expectPythonCompletion(page, "pd.DataFrame(col", "columns");
     await expectPythonCompletion(page, "x = pd.DataFrame()\nx.", "head");
+    await expectPythonCompletion(page, "x = pd.DataFrame()\nb = x.columns\nb.", "to_list");
   });
 });
 
