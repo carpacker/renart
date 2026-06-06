@@ -2,6 +2,9 @@ package service
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -76,12 +79,15 @@ func (s *AssetService) PythonDiagnostics(ctx context.Context, assetID string, re
 	if len(packageStubs) > 0 {
 		options = tyOptionsWithSitePackages()
 	}
+	sessionID, sessionFingerprint := tySessionFields(relAssetPath, options, packageStubs)
 	checked, checkErr := pyintelligence.Check(ctx, pyintelligence.Request{
-		Root:    "/",
-		Path:    "/" + strings.TrimPrefix(relAssetPath, "/"),
-		Content: content,
-		Options: options,
-		Files:   packageStubs,
+		Root:               "/",
+		Path:               "/" + strings.TrimPrefix(relAssetPath, "/"),
+		Content:            content,
+		Options:            options,
+		Files:              packageStubs,
+		SessionID:          sessionID,
+		SessionFingerprint: sessionFingerprint,
 	})
 	if checkErr != nil {
 		return PythonDiagnosticsResponse{}, newServiceAPIError(500, "python_diagnostics_failed", checkErr.Error())
@@ -116,15 +122,18 @@ func (s *AssetService) PythonCompletions(ctx context.Context, assetID string, re
 	if len(packageStubs) > 0 {
 		options = tyOptionsWithSitePackages()
 	}
+	sessionID, sessionFingerprint := tySessionFields(relAssetPath, options, packageStubs)
 	completed, completeErr := pyintelligence.Complete(ctx, pyintelligence.Request{
-		Root:     "/",
-		Path:     "/" + strings.TrimPrefix(relAssetPath, "/"),
-		Content:  content,
-		Options:  options,
-		Files:    packageStubs,
-		Line:     req.Line,
-		Column:   req.Column,
-		Snippets: req.Snippets,
+		Root:               "/",
+		Path:               "/" + strings.TrimPrefix(relAssetPath, "/"),
+		Content:            content,
+		Options:            options,
+		Files:              packageStubs,
+		Line:               req.Line,
+		Column:             req.Column,
+		Snippets:           req.Snippets,
+		SessionID:          sessionID,
+		SessionFingerprint: sessionFingerprint,
 	})
 	if completeErr != nil {
 		return PythonCompletionsResponse{}, newServiceAPIError(500, "python_completions_failed", completeErr.Error())
@@ -167,6 +176,24 @@ func tyOptionsWithSitePackages() map[string]any {
 	}
 }
 
+func tySessionFields(relAssetPath string, options map[string]any, files []pyintelligence.VirtualFile) (string, string) {
+	path := filepath.ToSlash(relAssetPath)
+	hash := sha256.New()
+	_, _ = hash.Write([]byte(path))
+	_, _ = hash.Write([]byte{0})
+	if body, err := json.Marshal(options); err == nil {
+		_, _ = hash.Write(body)
+	}
+	_, _ = hash.Write([]byte{0})
+	for _, file := range files {
+		_, _ = hash.Write([]byte(file.Path))
+		_, _ = hash.Write([]byte{0})
+		_, _ = hash.Write([]byte(file.Content))
+		_, _ = hash.Write([]byte{0})
+	}
+	return "asset:" + path, hex.EncodeToString(hash.Sum(nil))
+}
+
 var (
 	pythonImportPattern      = regexp.MustCompile(`(?m)^\s*(?:import\s+([A-Za-z_]\w*)|from\s+([A-Za-z_]\w*)\s+import\b)`)
 	pythonRequirementPattern = regexp.MustCompile(`^\s*([A-Za-z0-9_.-]+)`)
@@ -178,6 +205,8 @@ var (
 	pythonDotTargetPattern   = regexp.MustCompile(`([A-Za-z_]\w*)\.([A-Za-z_]\w*)?$`)
 	pythonImportAliasPattern = regexp.MustCompile(`(?m)^\s*import\s+([A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*)(?:\s+as\s+([A-Za-z_]\w*))?`)
 	pythonConstructorAssign  = regexp.MustCompile(`(?m)^\s*([A-Za-z_]\w*)\s*=\s*([A-Za-z_]\w*)\.([A-Za-z_]\w*)\s*\(`)
+	pythonAttributeAssign    = regexp.MustCompile(`(?m)^\s*([A-Za-z_]\w*)\s*=\s*([A-Za-z_]\w*)\.([A-Za-z_]\w*)\b`)
+	pythonCallTargetPattern  = regexp.MustCompile(`([A-Za-z_]\w*)\.([A-Za-z_]\w*)\([^()]*?([A-Za-z_]\w*)?$`)
 )
 
 var pythonClassMemberCache sync.Map
@@ -236,12 +265,20 @@ func pythonInstalledModuleStub(modulePath string) string {
 }
 
 func (s *AssetService) fastPythonPackageCompletions(relAssetPath, content string, line, column int) []PythonCompletion {
+	aliases := pythonImportAliases(content)
+	if moduleAlias, className, prefix := pythonCallTargetAt(content, line, column); moduleAlias != "" && className != "" {
+		module := aliases[moduleAlias]
+		modulePath := s.pythonModuleInstallPath(relAssetPath, module)
+		if modulePath != "" {
+			return pythonSymbolCompletions(pythonConstructorParameters(modulePath, module, className), prefix, className)
+		}
+	}
+
 	target, prefix := pythonDotTargetAt(content, line, column)
 	if target == "" {
 		return nil
 	}
 
-	aliases := pythonImportAliases(content)
 	if module := aliases[target]; module != "" {
 		modulePath := s.pythonModuleInstallPath(relAssetPath, module)
 		if modulePath == "" {
@@ -251,6 +288,14 @@ func (s *AssetService) fastPythonPackageCompletions(relAssetPath, content string
 	}
 
 	if classRef := pythonAssignedConstructor(contentBeforePosition(content, line, column), target, aliases); classRef.Module != "" && classRef.Name != "" {
+		modulePath := s.pythonModuleInstallPath(relAssetPath, classRef.Module)
+		if modulePath == "" {
+			return nil
+		}
+		return pythonMemberCompletions(pythonClassMembers(modulePath, classRef.Module, classRef.Name), prefix, classRef.Name)
+	}
+
+	if classRef := s.pythonAssignedAttributeClass(relAssetPath, contentBeforePosition(content, line, column), target, aliases); classRef.Module != "" && classRef.Name != "" {
 		modulePath := s.pythonModuleInstallPath(relAssetPath, classRef.Module)
 		if modulePath == "" {
 			return nil
@@ -281,6 +326,15 @@ func pythonDotTargetAt(content string, line, column int) (string, string) {
 		return "", ""
 	}
 	return match[1], match[2]
+}
+
+func pythonCallTargetAt(content string, line, column int) (string, string, string) {
+	before := contentBeforePosition(content, line, column)
+	match := pythonCallTargetPattern.FindStringSubmatch(before)
+	if len(match) != 4 {
+		return "", "", ""
+	}
+	return match[1], match[2], match[3]
 }
 
 func contentBeforePosition(content string, line, column int) string {
@@ -322,6 +376,28 @@ func pythonAssignedConstructor(content, variable string, aliases map[string]stri
 			continue
 		}
 		return pythonClassRef{Module: module, Name: match[3]}
+	}
+	return pythonClassRef{}
+}
+
+func (s *AssetService) pythonAssignedAttributeClass(relAssetPath, content, variable string, aliases map[string]string) pythonClassRef {
+	matches := pythonAttributeAssign.FindAllStringSubmatch(content, -1)
+	for i := len(matches) - 1; i >= 0; i-- {
+		match := matches[i]
+		if len(match) != 4 || match[1] != variable {
+			continue
+		}
+		owner := pythonAssignedConstructor(content, match[2], aliases)
+		if owner.Module == "" || owner.Name == "" {
+			continue
+		}
+		modulePath := s.pythonModuleInstallPath(relAssetPath, owner.Module)
+		if modulePath == "" {
+			continue
+		}
+		if ref := pythonClassAttributeType(modulePath, owner.Module, owner.Name, match[3]); ref.Module != "" && ref.Name != "" {
+			return ref
+		}
 	}
 	return pythonClassRef{}
 }
@@ -374,6 +450,19 @@ func pythonMemberCompletions(members []pythonSymbol, prefix, detail string) []Py
 	return pythonSymbolCompletions(members, prefix, detail)
 }
 
+func pythonConstructorParameters(modulePath, rootModule, className string) []pythonSymbol {
+	content := ""
+	if classFile := resolvePythonClassFile(modulePath, rootModule, className); classFile != "" {
+		content = readFirstExistingFile(classFile)
+	}
+	params := parsePythonMethodParameters(content, className, "__init__")
+	symbols := make([]pythonSymbol, 0, len(params))
+	for _, param := range params {
+		symbols = append(symbols, pythonSymbol{Name: param, Kind: "variable"})
+	}
+	return symbols
+}
+
 func pythonClassMembers(modulePath, rootModule, className string) []pythonSymbol {
 	cacheKey := modulePath + "::" + className
 	if cached, ok := pythonClassMemberCache.Load(cacheKey); ok {
@@ -390,6 +479,24 @@ func pythonClassMembers(modulePath, rootModule, className string) []pythonSymbol
 	members := parsePythonClassMembers(content, className)
 	pythonClassMemberCache.Store(cacheKey, members)
 	return members
+}
+
+func pythonClassAttributeType(modulePath, rootModule, className, attribute string) pythonClassRef {
+	content := ""
+	if classFile := resolvePythonClassFile(modulePath, rootModule, className); classFile != "" {
+		content = readFirstExistingFile(classFile)
+	}
+	if content == "" {
+		return pythonClassRef{}
+	}
+	classBlock := pythonClassBlock(content, className)
+	if classBlock == "" {
+		return pythonClassRef{}
+	}
+	if ref := pythonPropertyReturnType(classBlock, attribute, rootModule); ref.Name != "" {
+		return ref
+	}
+	return pythonClassRef{}
 }
 
 func resolvePythonClassFile(modulePath, rootModule, className string) string {
@@ -520,26 +627,49 @@ func searchPythonClassContent(modulePath, className string) string {
 }
 
 func parsePythonClassMembers(content, className string) []pythonSymbol {
-	if content == "" {
+	classBlock := pythonClassBlock(content, className)
+	if classBlock == "" {
 		return nil
+	}
+	return parsePythonClassBlockMembers(classBlock)
+}
+
+func pythonClassBlock(content, className string) string {
+	if content == "" {
+		return ""
 	}
 	lines := strings.Split(content, "\n")
 	classIndent := -1
-	members := map[string]string{}
+	block := []string{}
 	for _, line := range lines {
 		trimmed := strings.TrimSpace(line)
 		indent := len(line) - len(strings.TrimLeft(line, " \t"))
 		if classIndent < 0 {
 			if strings.HasPrefix(trimmed, "class "+className) {
 				classIndent = indent
+				block = append(block, line)
 			}
 			continue
 		}
-		if trimmed == "" || strings.HasPrefix(trimmed, "#") || strings.HasPrefix(trimmed, "@") {
+		if trimmed == "" {
+			block = append(block, line)
 			continue
 		}
 		if indent <= classIndent {
 			break
+		}
+		block = append(block, line)
+	}
+	return strings.Join(block, "\n")
+}
+
+func parsePythonClassBlockMembers(classBlock string) []pythonSymbol {
+	lines := strings.Split(classBlock, "\n")
+	members := map[string]string{}
+	for _, line := range lines[1:] {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" || strings.HasPrefix(trimmed, "#") || strings.HasPrefix(trimmed, "@") {
+			continue
 		}
 		if strings.HasPrefix(trimmed, "def ") {
 			name := strings.Fields(strings.TrimPrefix(trimmed, "def "))[0]
@@ -557,6 +687,100 @@ func parsePythonClassMembers(content, className string) []pythonSymbol {
 	}
 	sort.Slice(result, func(i, j int) bool { return result[i].Name < result[j].Name })
 	return result
+}
+
+func parsePythonMethodParameters(content, className, methodName string) []string {
+	classBlock := pythonClassBlock(content, className)
+	if classBlock == "" {
+		return nil
+	}
+	lines := strings.Split(classBlock, "\n")
+	for i, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if !strings.HasPrefix(trimmed, "def "+methodName+"(") {
+			continue
+		}
+		signature := trimmed
+		for !strings.Contains(signature, ")") && i+1 < len(lines) {
+			i++
+			signature += strings.TrimSpace(lines[i])
+		}
+		inside := strings.SplitN(signature, "(", 2)[1]
+		inside = strings.SplitN(inside, ")", 2)[0]
+		params := []string{}
+		for _, raw := range strings.Split(inside, ",") {
+			param := strings.TrimSpace(raw)
+			if param == "" || param == "self" || param == "*" || strings.HasPrefix(param, "**") || strings.HasPrefix(param, "*") {
+				continue
+			}
+			param = strings.Split(param, "=")[0]
+			param = strings.Split(param, ":")[0]
+			param = strings.TrimSpace(param)
+			if pythonIdentifierPattern.MatchString(param) {
+				params = append(params, param)
+			}
+		}
+		return params
+	}
+	return nil
+}
+
+func pythonPropertyReturnType(classBlock, attribute, defaultModule string) pythonClassRef {
+	lines := strings.Split(classBlock, "\n")
+	for i, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "def "+attribute+"(") {
+			if ref := pythonReturnAnnotation(trimmed, defaultModule); ref.Name != "" {
+				return ref
+			}
+		}
+		if !strings.HasPrefix(trimmed, attribute+" =") {
+			continue
+		}
+		window := strings.Join(lines[i:min(i+30, len(lines))], "\n")
+		if ref := pythonReturnsDocType(window, defaultModule); ref.Name != "" {
+			return ref
+		}
+	}
+	return pythonClassRef{}
+}
+
+func pythonReturnAnnotation(signature, defaultModule string) pythonClassRef {
+	if !strings.Contains(signature, "->") {
+		return pythonClassRef{}
+	}
+	ret := strings.TrimSpace(strings.SplitN(signature, "->", 2)[1])
+	ret = strings.Split(ret, ":")[0]
+	ret = strings.TrimSpace(strings.Split(ret, "|")[0])
+	return pythonTypeRef(ret, defaultModule)
+}
+
+func pythonReturnsDocType(content, defaultModule string) pythonClassRef {
+	for _, line := range strings.Split(content, "\n") {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "pandas.") || (pythonIdentifierPattern.MatchString(trimmed) && trimmed != "Returns") {
+			if ref := pythonTypeRef(strings.Fields(trimmed)[0], defaultModule); ref.Name != "" {
+				return ref
+			}
+		}
+	}
+	return pythonClassRef{}
+}
+
+func pythonTypeRef(value, defaultModule string) pythonClassRef {
+	value = strings.Trim(value, " `\t\r\n")
+	value = strings.TrimSuffix(value, ":")
+	if value == "" {
+		return pythonClassRef{}
+	}
+	parts := strings.Split(value, ".")
+	if len(parts) >= 2 && pythonIdentifierPattern.MatchString(parts[len(parts)-1]) {
+		return pythonClassRef{Module: parts[0], Name: parts[len(parts)-1]}
+	}
+	if pythonIdentifierPattern.MatchString(value) {
+		return pythonClassRef{Module: defaultModule, Name: value}
+	}
+	return pythonClassRef{}
 }
 
 func addPythonMember(members map[string]string, name, kind string) {

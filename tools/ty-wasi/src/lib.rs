@@ -1,6 +1,8 @@
 #![expect(unsafe_code, reason = "raw WASM ABI uses linear-memory pointers")]
 
 use std::any::Any;
+use std::cell::RefCell;
+use std::collections::HashMap;
 use std::slice;
 use std::sync::Once;
 
@@ -30,6 +32,10 @@ use ty_python_core::program::FallibleStrategy;
 
 static INIT: Once = Once::new();
 
+thread_local! {
+    static SESSIONS: RefCell<HashMap<String, WorkspaceSession>> = RefCell::new(HashMap::new());
+}
+
 #[derive(Debug, Deserialize)]
 struct PythonRequest {
     #[serde(default = "default_root")]
@@ -47,6 +53,10 @@ struct PythonRequest {
     column: usize,
     #[serde(default)]
     snippets: bool,
+    #[serde(default)]
+    session_id: String,
+    #[serde(default)]
+    session_fingerprint: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -121,6 +131,13 @@ struct FileHandle {
     file: File,
 }
 
+struct WorkspaceSession {
+    fingerprint: String,
+    path: String,
+    workspace: Workspace,
+    file: FileHandle,
+}
+
 #[unsafe(no_mangle)]
 pub extern "C" fn ty_alloc(len: usize) -> *mut u8 {
     let mut buffer = Vec::<u8>::with_capacity(len);
@@ -160,9 +177,7 @@ pub unsafe extern "C" fn ty_format_python(ptr: *const u8, len: usize) -> u64 {
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn ty_check_python(ptr: *const u8, len: usize) -> u64 {
     run_json(ptr, len, |request| {
-        let mut workspace = Workspace::new(&request.root, request.options, request.files)?;
-        let file = workspace.open_file(&request.path, &request.content)?;
-        let diagnostics = workspace.check_file(&file)?;
+        let diagnostics = with_workspace(request, |workspace, file| workspace.check_file(file))?;
         Ok(TyResponse::<()> {
             status: "ok",
             result: None,
@@ -175,15 +190,63 @@ pub unsafe extern "C" fn ty_check_python(ptr: *const u8, len: usize) -> u64 {
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn ty_complete_python(ptr: *const u8, len: usize) -> u64 {
     run_json(ptr, len, |request| {
-        let mut workspace = Workspace::new(&request.root, request.options, request.files)?;
-        let file = workspace.open_file(&request.path, &request.content)?;
-        let completions = workspace.complete(&file, request.line, request.column, request.snippets)?;
+        let line = request.line;
+        let column = request.column;
+        let snippets = request.snippets;
+        let completions = with_workspace(request, |workspace, file| {
+            workspace.complete(file, line, column, snippets)
+        })?;
         Ok(TyResponse {
             status: "ok",
             result: Some(completions),
             diagnostics: None,
             error: None,
         })
+    })
+}
+
+fn with_workspace<T, F>(request: PythonRequest, f: F) -> Result<T, String>
+where
+    F: FnOnce(&mut Workspace, &FileHandle) -> Result<T, String>,
+{
+    if request.session_id.is_empty() || request.session_fingerprint.is_empty() {
+        let mut workspace = Workspace::new(&request.root, request.options, request.files)?;
+        let file = workspace.open_file(&request.path, &request.content)?;
+        return f(&mut workspace, &file);
+    }
+
+    SESSIONS.with(|sessions| {
+        let mut sessions = sessions.borrow_mut();
+        let recreate = sessions
+            .get(&request.session_id)
+            .is_none_or(|session| {
+                session.fingerprint != request.session_fingerprint || session.path != request.path
+            });
+        if recreate {
+            let mut workspace = Workspace::new(&request.root, request.options, request.files)?;
+            let file = workspace.open_file(&request.path, &request.content)?;
+            sessions.insert(
+                request.session_id.clone(),
+                WorkspaceSession {
+                    fingerprint: request.session_fingerprint.clone(),
+                    path: request.path.clone(),
+                    workspace,
+                    file,
+                },
+            );
+        } else {
+            let session = sessions
+                .get_mut(&request.session_id)
+                .expect("session exists after recreate check");
+            session
+                .workspace
+                .update_open_file(&request.path, &request.content)?;
+        }
+
+        let session = sessions
+            .get_mut(&request.session_id)
+            .expect("session exists before callback");
+        f(&mut session.workspace, &session.file)
     })
 }
 
@@ -295,6 +358,17 @@ impl Workspace {
         let file = system_path_to_file(&self.db, &path).map_err(|error| error.to_string())?;
         self.db.project().open_file(&mut self.db, file);
         Ok(FileHandle { file })
+    }
+
+    fn update_open_file(&mut self, path: &str, contents: &str) -> Result<(), String> {
+        let path = SystemPath::absolute(path, self.db.project().root(&self.db));
+        self.system
+            .fs
+            .write_file_all(&path, contents)
+            .map_err(|error| error.to_string())?;
+        self.db
+            .apply_changes(&[ChangeEvent::file_content_changed(path)], None);
+        Ok(())
     }
 
     fn format(&self, file: &FileHandle) -> Result<Option<String>, String> {

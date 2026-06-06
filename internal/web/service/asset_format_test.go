@@ -143,7 +143,7 @@ func TestAssetServicePythonDiagnosticsResolvesInstalledRequirementPackage(t *tes
 	absAssetPath := filepath.Join(workspaceRoot, assetPath)
 	require.NoError(t, os.MkdirAll(filepath.Dir(absAssetPath), 0o755))
 	require.NoError(t, os.MkdirAll(filepath.Join(workspaceRoot, ".venv", "lib", "python3.11", "site-packages", "pandas"), 0o755))
-	require.NoError(t, os.WriteFile(filepath.Join(workspaceRoot, ".venv", "lib", "python3.11", "site-packages", "pandas", "__init__.py"), []byte("from pandas.core.api import (\n    Series,\n    DataFrame,\n)\n"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(workspaceRoot, ".venv", "lib", "python3.11", "site-packages", "pandas", "__init__.py"), []byte("from pandas.core.api import (\n    Series,\n    DataFrame,\n    Index,\n)\n"), 0o644))
 	require.NoError(t, os.WriteFile(filepath.Join(pipelineRoot, "pipeline.yml"), []byte(strings.TrimSpace(`
 name: analytics
 schedule: daily
@@ -223,10 +223,12 @@ func TestAssetServicePythonCompletionsUsesInstalledPackageExports(t *testing.T) 
 	require.NoError(t, os.MkdirAll(filepath.Dir(absAssetPath), 0o755))
 	pandasPath := filepath.Join(workspaceRoot, ".venv", "lib", "python3.11", "site-packages", "pandas")
 	require.NoError(t, os.MkdirAll(pandasPath, 0o755))
-	require.NoError(t, os.WriteFile(filepath.Join(pandasPath, "__init__.py"), []byte("from pandas.core.api import (\n    Series,\n    DataFrame,\n)\n"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(pandasPath, "__init__.py"), []byte("from pandas.core.api import (\n    Series,\n    DataFrame,\n    Index,\n)\n"), 0o644))
 	require.NoError(t, os.MkdirAll(filepath.Join(pandasPath, "core"), 0o755))
-	require.NoError(t, os.WriteFile(filepath.Join(pandasPath, "core", "api.py"), []byte("from pandas.core.frame import DataFrame\n"), 0o644))
-	require.NoError(t, os.WriteFile(filepath.Join(pandasPath, "core", "frame.py"), []byte("class DataFrame:\n    columns = None\n    def head(self): ...\n    def merge(self): ...\n"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(pandasPath, "core", "api.py"), []byte("from pandas.core.frame import DataFrame\nfrom pandas.core.indexes.base import Index\n"), 0o644))
+	require.NoError(t, os.MkdirAll(filepath.Join(pandasPath, "core", "indexes"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(pandasPath, "core", "frame.py"), []byte("class DataFrame:\n    def __init__(self, data=None, index=None, columns=None, dtype=None, copy=None): ...\n    columns = properties.AxisProperty(\n        doc=\"\"\"\n        Returns\n        -------\n        pandas.Index\n            The column labels.\n        \"\"\"\n    )\n    def head(self): ...\n    def merge(self): ...\n"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(pandasPath, "core", "indexes", "base.py"), []byte("class Index:\n    name = None\n    def to_list(self): ...\n    def unique(self): ...\n"), 0o644))
 	require.NoError(t, os.WriteFile(filepath.Join(pipelineRoot, "pipeline.yml"), []byte(strings.TrimSpace(`
 name: analytics
 schedule: daily
@@ -262,6 +264,16 @@ def materialize():
 	assert.Contains(t, pythonCompletionLabels(response.Completions), "DataFrame")
 
 	response, apiErr = service.PythonCompletions(context.Background(), EncodeID(assetPath), PythonCompletionsRequest{
+		Content:  "import pandas as pd\n\nx = pd.DataFrame(col",
+		Line:     3,
+		Column:   21,
+		Snippets: true,
+	})
+	require.Nil(t, apiErr)
+	require.Equal(t, "ok", response.Status)
+	assert.Contains(t, pythonCompletionLabels(response.Completions), "columns")
+
+	response, apiErr = service.PythonCompletions(context.Background(), EncodeID(assetPath), PythonCompletionsRequest{
 		Content:  "import pandas as pd\n\nx = pd.DataFrame()\nx.",
 		Line:     4,
 		Column:   3,
@@ -272,6 +284,18 @@ def materialize():
 	labels := pythonCompletionLabels(response.Completions)
 	assert.Contains(t, labels, "columns")
 	assert.Contains(t, labels, "head")
+
+	response, apiErr = service.PythonCompletions(context.Background(), EncodeID(assetPath), PythonCompletionsRequest{
+		Content:  "import pandas as pd\n\nx = pd.DataFrame()\nb = x.columns\nb.",
+		Line:     5,
+		Column:   3,
+		Snippets: true,
+	})
+	require.Nil(t, apiErr)
+	require.Equal(t, "ok", response.Status)
+	labels = pythonCompletionLabels(response.Completions)
+	assert.Contains(t, labels, "name")
+	assert.Contains(t, labels, "to_list")
 }
 
 func pythonCompletionLabels(completions []PythonCompletion) []string {
