@@ -10,21 +10,46 @@
 
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as WorkspaceRouteImport } from './routes/_workspace'
+import { Route as RedesignRouteRouteImport } from './routes/redesign/route'
 import { Route as OnboardingRouteRouteImport } from './routes/onboarding/route'
+import { Route as RedesignIndexRouteImport } from './routes/redesign/index'
 import { Route as OnboardingIndexRouteImport } from './routes/onboarding/index'
 import { Route as WorkspaceIndexRouteImport } from './routes/_workspace.index'
+import { Route as RedesignSchedulesRouteImport } from './routes/redesign/schedules'
+import { Route as RedesignCatalogRouteImport } from './routes/redesign/catalog'
 import { Route as OnboardingSuccessRouteImport } from './routes/onboarding.success'
 import { Route as OnboardingQuickstartRouteImport } from './routes/onboarding/quickstart'
 import { Route as WorkspaceRunsRouteImport } from './routes/_workspace/runs'
+import { Route as RedesignRunsRouteRouteImport } from './routes/redesign/runs/route'
+import { Route as RedesignProjectRouteRouteImport } from './routes/redesign/project/route'
+import { Route as RedesignAccountRouteRouteImport } from './routes/redesign/account/route'
 import { Route as OnboardingImportRouteRouteImport } from './routes/onboarding/import/route'
 import { Route as WorkspaceSettingsRouteRouteImport } from './routes/_workspace/settings/route'
+import { Route as RedesignRunsIndexRouteImport } from './routes/redesign/runs/index'
+import { Route as RedesignProjectIndexRouteImport } from './routes/redesign/project/index'
+import { Route as RedesignAccountIndexRouteImport } from './routes/redesign/account/index'
 import { Route as OnboardingImportIndexRouteImport } from './routes/onboarding/import/index'
 import { Route as WorkspaceSettingsIndexRouteImport } from './routes/_workspace/settings/index'
+import { Route as RedesignRunsRunIdRouteImport } from './routes/redesign/runs/$runId'
+import { Route as RedesignProjectGeneralRouteImport } from './routes/redesign/project/general'
+import { Route as RedesignProjectEnvironmentsRouteImport } from './routes/redesign/project/environments'
+import { Route as RedesignProjectConnectionsRouteImport } from './routes/redesign/project/connections'
+import { Route as RedesignNotebooksNotebookIdRouteImport } from './routes/redesign/notebooks/$notebookId'
+import { Route as RedesignDashboardsDashboardIdRouteImport } from './routes/redesign/dashboards/$dashboardId'
+import { Route as RedesignAccountWorkspacesRouteImport } from './routes/redesign/account/workspaces'
+import { Route as RedesignAccountProfileRouteImport } from './routes/redesign/account/profile'
+import { Route as RedesignAccountMembersRouteImport } from './routes/redesign/account/members'
+import { Route as RedesignAccountBillingRouteImport } from './routes/redesign/account/billing'
 import { Route as OnboardingImportReviewRouteImport } from './routes/onboarding/import/review'
 import { Route as OnboardingImportConnectionRouteImport } from './routes/onboarding/import/connection'
+import { Route as RedesignPipelinesPipelineIdRouteRouteImport } from './routes/redesign/pipelines/$pipelineId/route'
 import { Route as WorkspaceSettingsEnvironmentsRouteRouteImport } from './routes/_workspace/settings/environments/route'
 import { Route as WorkspacePipelinesPipelineIdRouteRouteImport } from './routes/_workspace/pipelines/$pipelineId/route'
+import { Route as RedesignPipelinesPipelineIdIndexRouteImport } from './routes/redesign/pipelines/$pipelineId/index'
 import { Route as WorkspaceSettingsEnvironmentsIndexRouteImport } from './routes/_workspace/settings/environments/index'
+import { Route as RedesignPipelinesPipelineIdSplitRouteImport } from './routes/redesign/pipelines/$pipelineId/split'
+import { Route as RedesignPipelinesPipelineIdCodeRouteImport } from './routes/redesign/pipelines/$pipelineId/code'
+import { Route as RedesignPipelinesPipelineIdCanvasRouteImport } from './routes/redesign/pipelines/$pipelineId/canvas'
 import { Route as WorkspaceSettingsEnvironmentsNewRouteImport } from './routes/_workspace/settings/environments/new'
 import { Route as WorkspaceSettingsEnvironmentsEnvironmentIdRouteRouteImport } from './routes/_workspace/settings/environments/$environmentId/route'
 import { Route as WorkspacePipelinesPipelineIdConfigRouteRouteImport } from './routes/_workspace/pipelines/$pipelineId/config/route'
@@ -37,7 +62,12 @@ import { Route as WorkspacePipelinesPipelineIdConfigNotificationsRouteImport } f
 import { Route as WorkspacePipelinesPipelineIdConfigGeneralRouteImport } from './routes/_workspace/pipelines/$pipelineId/config/general'
 import { Route as WorkspacePipelinesPipelineIdConfigExecutionRouteImport } from './routes/_workspace/pipelines/$pipelineId/config/execution'
 import { Route as WorkspacePipelinesPipelineIdConfigConnectionsRouteImport } from './routes/_workspace/pipelines/$pipelineId/config/connections'
+import { Route as RedesignPipelinesPipelineIdAssetsAssetIdRouteRouteImport } from './routes/redesign/pipelines/$pipelineId/assets/$assetId/route'
 import { Route as WorkspaceSettingsEnvironmentsEnvironmentIdConnectionsRouteRouteImport } from './routes/_workspace/settings/environments/$environmentId/connections/route'
+import { Route as RedesignPipelinesPipelineIdAssetsAssetIdIndexRouteImport } from './routes/redesign/pipelines/$pipelineId/assets/$assetId/index'
+import { Route as RedesignPipelinesPipelineIdAssetsAssetIdSplitRouteImport } from './routes/redesign/pipelines/$pipelineId/assets/$assetId/split'
+import { Route as RedesignPipelinesPipelineIdAssetsAssetIdCodeRouteImport } from './routes/redesign/pipelines/$pipelineId/assets/$assetId/code'
+import { Route as RedesignPipelinesPipelineIdAssetsAssetIdCanvasRouteImport } from './routes/redesign/pipelines/$pipelineId/assets/$assetId/canvas'
 import { Route as WorkspaceSettingsEnvironmentsEnvironmentIdConnectionsNewRouteImport } from './routes/_workspace/settings/environments/$environmentId/connections/new'
 import { Route as WorkspaceSettingsEnvironmentsEnvironmentIdConnectionsConnectionIdRouteRouteImport } from './routes/_workspace/settings/environments/$environmentId/connections/$connectionId/route'
 import { Route as WorkspaceSettingsEnvironmentsEnvironmentIdConnectionsConnectionIdIndexRouteImport } from './routes/_workspace/settings/environments/$environmentId/connections/$connectionId/index'
@@ -47,10 +77,20 @@ const WorkspaceRoute = WorkspaceRouteImport.update({
   id: '/_workspace',
   getParentRoute: () => rootRouteImport,
 } as any)
+const RedesignRouteRoute = RedesignRouteRouteImport.update({
+  id: '/redesign',
+  path: '/redesign',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const OnboardingRouteRoute = OnboardingRouteRouteImport.update({
   id: '/onboarding',
   path: '/onboarding',
   getParentRoute: () => rootRouteImport,
+} as any)
+const RedesignIndexRoute = RedesignIndexRouteImport.update({
+  id: '/',
+  path: '/',
+  getParentRoute: () => RedesignRouteRoute,
 } as any)
 const OnboardingIndexRoute = OnboardingIndexRouteImport.update({
   id: '/',
@@ -61,6 +101,16 @@ const WorkspaceIndexRoute = WorkspaceIndexRouteImport.update({
   id: '/',
   path: '/',
   getParentRoute: () => WorkspaceRoute,
+} as any)
+const RedesignSchedulesRoute = RedesignSchedulesRouteImport.update({
+  id: '/schedules',
+  path: '/schedules',
+  getParentRoute: () => RedesignRouteRoute,
+} as any)
+const RedesignCatalogRoute = RedesignCatalogRouteImport.update({
+  id: '/catalog',
+  path: '/catalog',
+  getParentRoute: () => RedesignRouteRoute,
 } as any)
 const OnboardingSuccessRoute = OnboardingSuccessRouteImport.update({
   id: '/success',
@@ -77,6 +127,21 @@ const WorkspaceRunsRoute = WorkspaceRunsRouteImport.update({
   path: '/runs',
   getParentRoute: () => WorkspaceRoute,
 } as any)
+const RedesignRunsRouteRoute = RedesignRunsRouteRouteImport.update({
+  id: '/runs',
+  path: '/runs',
+  getParentRoute: () => RedesignRouteRoute,
+} as any)
+const RedesignProjectRouteRoute = RedesignProjectRouteRouteImport.update({
+  id: '/project',
+  path: '/project',
+  getParentRoute: () => RedesignRouteRoute,
+} as any)
+const RedesignAccountRouteRoute = RedesignAccountRouteRouteImport.update({
+  id: '/account',
+  path: '/account',
+  getParentRoute: () => RedesignRouteRoute,
+} as any)
 const OnboardingImportRouteRoute = OnboardingImportRouteRouteImport.update({
   id: '/import',
   path: '/import',
@@ -86,6 +151,21 @@ const WorkspaceSettingsRouteRoute = WorkspaceSettingsRouteRouteImport.update({
   id: '/settings',
   path: '/settings',
   getParentRoute: () => WorkspaceRoute,
+} as any)
+const RedesignRunsIndexRoute = RedesignRunsIndexRouteImport.update({
+  id: '/',
+  path: '/',
+  getParentRoute: () => RedesignRunsRouteRoute,
+} as any)
+const RedesignProjectIndexRoute = RedesignProjectIndexRouteImport.update({
+  id: '/',
+  path: '/',
+  getParentRoute: () => RedesignProjectRouteRoute,
+} as any)
+const RedesignAccountIndexRoute = RedesignAccountIndexRouteImport.update({
+  id: '/',
+  path: '/',
+  getParentRoute: () => RedesignAccountRouteRoute,
 } as any)
 const OnboardingImportIndexRoute = OnboardingImportIndexRouteImport.update({
   id: '/',
@@ -97,6 +177,61 @@ const WorkspaceSettingsIndexRoute = WorkspaceSettingsIndexRouteImport.update({
   path: '/',
   getParentRoute: () => WorkspaceSettingsRouteRoute,
 } as any)
+const RedesignRunsRunIdRoute = RedesignRunsRunIdRouteImport.update({
+  id: '/$runId',
+  path: '/$runId',
+  getParentRoute: () => RedesignRunsRouteRoute,
+} as any)
+const RedesignProjectGeneralRoute = RedesignProjectGeneralRouteImport.update({
+  id: '/general',
+  path: '/general',
+  getParentRoute: () => RedesignProjectRouteRoute,
+} as any)
+const RedesignProjectEnvironmentsRoute =
+  RedesignProjectEnvironmentsRouteImport.update({
+    id: '/environments',
+    path: '/environments',
+    getParentRoute: () => RedesignProjectRouteRoute,
+  } as any)
+const RedesignProjectConnectionsRoute =
+  RedesignProjectConnectionsRouteImport.update({
+    id: '/connections',
+    path: '/connections',
+    getParentRoute: () => RedesignProjectRouteRoute,
+  } as any)
+const RedesignNotebooksNotebookIdRoute =
+  RedesignNotebooksNotebookIdRouteImport.update({
+    id: '/notebooks/$notebookId',
+    path: '/notebooks/$notebookId',
+    getParentRoute: () => RedesignRouteRoute,
+  } as any)
+const RedesignDashboardsDashboardIdRoute =
+  RedesignDashboardsDashboardIdRouteImport.update({
+    id: '/dashboards/$dashboardId',
+    path: '/dashboards/$dashboardId',
+    getParentRoute: () => RedesignRouteRoute,
+  } as any)
+const RedesignAccountWorkspacesRoute =
+  RedesignAccountWorkspacesRouteImport.update({
+    id: '/workspaces',
+    path: '/workspaces',
+    getParentRoute: () => RedesignAccountRouteRoute,
+  } as any)
+const RedesignAccountProfileRoute = RedesignAccountProfileRouteImport.update({
+  id: '/profile',
+  path: '/profile',
+  getParentRoute: () => RedesignAccountRouteRoute,
+} as any)
+const RedesignAccountMembersRoute = RedesignAccountMembersRouteImport.update({
+  id: '/members',
+  path: '/members',
+  getParentRoute: () => RedesignAccountRouteRoute,
+} as any)
+const RedesignAccountBillingRoute = RedesignAccountBillingRouteImport.update({
+  id: '/billing',
+  path: '/billing',
+  getParentRoute: () => RedesignAccountRouteRoute,
+} as any)
 const OnboardingImportReviewRoute = OnboardingImportReviewRouteImport.update({
   id: '/review',
   path: '/review',
@@ -107,6 +242,12 @@ const OnboardingImportConnectionRoute =
     id: '/connection',
     path: '/connection',
     getParentRoute: () => OnboardingImportRouteRoute,
+  } as any)
+const RedesignPipelinesPipelineIdRouteRoute =
+  RedesignPipelinesPipelineIdRouteRouteImport.update({
+    id: '/pipelines/$pipelineId',
+    path: '/pipelines/$pipelineId',
+    getParentRoute: () => RedesignRouteRoute,
   } as any)
 const WorkspaceSettingsEnvironmentsRouteRoute =
   WorkspaceSettingsEnvironmentsRouteRouteImport.update({
@@ -120,11 +261,35 @@ const WorkspacePipelinesPipelineIdRouteRoute =
     path: '/pipelines/$pipelineId',
     getParentRoute: () => WorkspaceRoute,
   } as any)
+const RedesignPipelinesPipelineIdIndexRoute =
+  RedesignPipelinesPipelineIdIndexRouteImport.update({
+    id: '/',
+    path: '/',
+    getParentRoute: () => RedesignPipelinesPipelineIdRouteRoute,
+  } as any)
 const WorkspaceSettingsEnvironmentsIndexRoute =
   WorkspaceSettingsEnvironmentsIndexRouteImport.update({
     id: '/',
     path: '/',
     getParentRoute: () => WorkspaceSettingsEnvironmentsRouteRoute,
+  } as any)
+const RedesignPipelinesPipelineIdSplitRoute =
+  RedesignPipelinesPipelineIdSplitRouteImport.update({
+    id: '/split',
+    path: '/split',
+    getParentRoute: () => RedesignPipelinesPipelineIdRouteRoute,
+  } as any)
+const RedesignPipelinesPipelineIdCodeRoute =
+  RedesignPipelinesPipelineIdCodeRouteImport.update({
+    id: '/code',
+    path: '/code',
+    getParentRoute: () => RedesignPipelinesPipelineIdRouteRoute,
+  } as any)
+const RedesignPipelinesPipelineIdCanvasRoute =
+  RedesignPipelinesPipelineIdCanvasRouteImport.update({
+    id: '/canvas',
+    path: '/canvas',
+    getParentRoute: () => RedesignPipelinesPipelineIdRouteRoute,
   } as any)
 const WorkspaceSettingsEnvironmentsNewRoute =
   WorkspaceSettingsEnvironmentsNewRouteImport.update({
@@ -198,11 +363,41 @@ const WorkspacePipelinesPipelineIdConfigConnectionsRoute =
     path: '/connections',
     getParentRoute: () => WorkspacePipelinesPipelineIdConfigRouteRoute,
   } as any)
+const RedesignPipelinesPipelineIdAssetsAssetIdRouteRoute =
+  RedesignPipelinesPipelineIdAssetsAssetIdRouteRouteImport.update({
+    id: '/assets/$assetId',
+    path: '/assets/$assetId',
+    getParentRoute: () => RedesignPipelinesPipelineIdRouteRoute,
+  } as any)
 const WorkspaceSettingsEnvironmentsEnvironmentIdConnectionsRouteRoute =
   WorkspaceSettingsEnvironmentsEnvironmentIdConnectionsRouteRouteImport.update({
     id: '/connections',
     path: '/connections',
     getParentRoute: () => WorkspaceSettingsEnvironmentsEnvironmentIdRouteRoute,
+  } as any)
+const RedesignPipelinesPipelineIdAssetsAssetIdIndexRoute =
+  RedesignPipelinesPipelineIdAssetsAssetIdIndexRouteImport.update({
+    id: '/',
+    path: '/',
+    getParentRoute: () => RedesignPipelinesPipelineIdAssetsAssetIdRouteRoute,
+  } as any)
+const RedesignPipelinesPipelineIdAssetsAssetIdSplitRoute =
+  RedesignPipelinesPipelineIdAssetsAssetIdSplitRouteImport.update({
+    id: '/split',
+    path: '/split',
+    getParentRoute: () => RedesignPipelinesPipelineIdAssetsAssetIdRouteRoute,
+  } as any)
+const RedesignPipelinesPipelineIdAssetsAssetIdCodeRoute =
+  RedesignPipelinesPipelineIdAssetsAssetIdCodeRouteImport.update({
+    id: '/code',
+    path: '/code',
+    getParentRoute: () => RedesignPipelinesPipelineIdAssetsAssetIdRouteRoute,
+  } as any)
+const RedesignPipelinesPipelineIdAssetsAssetIdCanvasRoute =
+  RedesignPipelinesPipelineIdAssetsAssetIdCanvasRouteImport.update({
+    id: '/canvas',
+    path: '/canvas',
+    getParentRoute: () => RedesignPipelinesPipelineIdAssetsAssetIdRouteRoute,
   } as any)
 const WorkspaceSettingsEnvironmentsEnvironmentIdConnectionsNewRoute =
   WorkspaceSettingsEnvironmentsEnvironmentIdConnectionsNewRouteImport.update({
@@ -241,24 +436,50 @@ const WorkspaceSettingsEnvironmentsEnvironmentIdConnectionsConnectionIdEditRoute
 
 export interface FileRoutesByFullPath {
   '/onboarding': typeof OnboardingRouteRouteWithChildren
+  '/redesign': typeof RedesignRouteRouteWithChildren
   '/': typeof WorkspaceIndexRoute
   '/settings': typeof WorkspaceSettingsRouteRouteWithChildren
   '/onboarding/import': typeof OnboardingImportRouteRouteWithChildren
+  '/redesign/account': typeof RedesignAccountRouteRouteWithChildren
+  '/redesign/project': typeof RedesignProjectRouteRouteWithChildren
+  '/redesign/runs': typeof RedesignRunsRouteRouteWithChildren
   '/runs': typeof WorkspaceRunsRoute
   '/onboarding/quickstart': typeof OnboardingQuickstartRoute
   '/onboarding/success': typeof OnboardingSuccessRoute
+  '/redesign/catalog': typeof RedesignCatalogRoute
+  '/redesign/schedules': typeof RedesignSchedulesRoute
   '/onboarding/': typeof OnboardingIndexRoute
+  '/redesign/': typeof RedesignIndexRoute
   '/pipelines/$pipelineId': typeof WorkspacePipelinesPipelineIdRouteRouteWithChildren
   '/settings/environments': typeof WorkspaceSettingsEnvironmentsRouteRouteWithChildren
+  '/redesign/pipelines/$pipelineId': typeof RedesignPipelinesPipelineIdRouteRouteWithChildren
   '/onboarding/import/connection': typeof OnboardingImportConnectionRoute
   '/onboarding/import/review': typeof OnboardingImportReviewRoute
+  '/redesign/account/billing': typeof RedesignAccountBillingRoute
+  '/redesign/account/members': typeof RedesignAccountMembersRoute
+  '/redesign/account/profile': typeof RedesignAccountProfileRoute
+  '/redesign/account/workspaces': typeof RedesignAccountWorkspacesRoute
+  '/redesign/dashboards/$dashboardId': typeof RedesignDashboardsDashboardIdRoute
+  '/redesign/notebooks/$notebookId': typeof RedesignNotebooksNotebookIdRoute
+  '/redesign/project/connections': typeof RedesignProjectConnectionsRoute
+  '/redesign/project/environments': typeof RedesignProjectEnvironmentsRoute
+  '/redesign/project/general': typeof RedesignProjectGeneralRoute
+  '/redesign/runs/$runId': typeof RedesignRunsRunIdRoute
   '/settings/': typeof WorkspaceSettingsIndexRoute
   '/onboarding/import/': typeof OnboardingImportIndexRoute
+  '/redesign/account/': typeof RedesignAccountIndexRoute
+  '/redesign/project/': typeof RedesignProjectIndexRoute
+  '/redesign/runs/': typeof RedesignRunsIndexRoute
   '/pipelines/$pipelineId/config': typeof WorkspacePipelinesPipelineIdConfigRouteRouteWithChildren
   '/settings/environments/$environmentId': typeof WorkspaceSettingsEnvironmentsEnvironmentIdRouteRouteWithChildren
   '/settings/environments/new': typeof WorkspaceSettingsEnvironmentsNewRoute
+  '/redesign/pipelines/$pipelineId/canvas': typeof RedesignPipelinesPipelineIdCanvasRoute
+  '/redesign/pipelines/$pipelineId/code': typeof RedesignPipelinesPipelineIdCodeRoute
+  '/redesign/pipelines/$pipelineId/split': typeof RedesignPipelinesPipelineIdSplitRoute
   '/settings/environments/': typeof WorkspaceSettingsEnvironmentsIndexRoute
+  '/redesign/pipelines/$pipelineId/': typeof RedesignPipelinesPipelineIdIndexRoute
   '/settings/environments/$environmentId/connections': typeof WorkspaceSettingsEnvironmentsEnvironmentIdConnectionsRouteRouteWithChildren
+  '/redesign/pipelines/$pipelineId/assets/$assetId': typeof RedesignPipelinesPipelineIdAssetsAssetIdRouteRouteWithChildren
   '/pipelines/$pipelineId/config/connections': typeof WorkspacePipelinesPipelineIdConfigConnectionsRoute
   '/pipelines/$pipelineId/config/execution': typeof WorkspacePipelinesPipelineIdConfigExecutionRoute
   '/pipelines/$pipelineId/config/general': typeof WorkspacePipelinesPipelineIdConfigGeneralRoute
@@ -270,6 +491,10 @@ export interface FileRoutesByFullPath {
   '/settings/environments/$environmentId/': typeof WorkspaceSettingsEnvironmentsEnvironmentIdIndexRoute
   '/settings/environments/$environmentId/connections/$connectionId': typeof WorkspaceSettingsEnvironmentsEnvironmentIdConnectionsConnectionIdRouteRouteWithChildren
   '/settings/environments/$environmentId/connections/new': typeof WorkspaceSettingsEnvironmentsEnvironmentIdConnectionsNewRoute
+  '/redesign/pipelines/$pipelineId/assets/$assetId/canvas': typeof RedesignPipelinesPipelineIdAssetsAssetIdCanvasRoute
+  '/redesign/pipelines/$pipelineId/assets/$assetId/code': typeof RedesignPipelinesPipelineIdAssetsAssetIdCodeRoute
+  '/redesign/pipelines/$pipelineId/assets/$assetId/split': typeof RedesignPipelinesPipelineIdAssetsAssetIdSplitRoute
+  '/redesign/pipelines/$pipelineId/assets/$assetId/': typeof RedesignPipelinesPipelineIdAssetsAssetIdIndexRoute
   '/settings/environments/$environmentId/connections/$connectionId/edit': typeof WorkspaceSettingsEnvironmentsEnvironmentIdConnectionsConnectionIdEditRoute
   '/settings/environments/$environmentId/connections/$connectionId/': typeof WorkspaceSettingsEnvironmentsEnvironmentIdConnectionsConnectionIdIndexRoute
 }
@@ -277,15 +502,35 @@ export interface FileRoutesByTo {
   '/runs': typeof WorkspaceRunsRoute
   '/onboarding/quickstart': typeof OnboardingQuickstartRoute
   '/onboarding/success': typeof OnboardingSuccessRoute
+  '/redesign/catalog': typeof RedesignCatalogRoute
+  '/redesign/schedules': typeof RedesignSchedulesRoute
   '/': typeof WorkspaceIndexRoute
   '/onboarding': typeof OnboardingIndexRoute
+  '/redesign': typeof RedesignIndexRoute
   '/pipelines/$pipelineId': typeof WorkspacePipelinesPipelineIdRouteRouteWithChildren
   '/onboarding/import/connection': typeof OnboardingImportConnectionRoute
   '/onboarding/import/review': typeof OnboardingImportReviewRoute
+  '/redesign/account/billing': typeof RedesignAccountBillingRoute
+  '/redesign/account/members': typeof RedesignAccountMembersRoute
+  '/redesign/account/profile': typeof RedesignAccountProfileRoute
+  '/redesign/account/workspaces': typeof RedesignAccountWorkspacesRoute
+  '/redesign/dashboards/$dashboardId': typeof RedesignDashboardsDashboardIdRoute
+  '/redesign/notebooks/$notebookId': typeof RedesignNotebooksNotebookIdRoute
+  '/redesign/project/connections': typeof RedesignProjectConnectionsRoute
+  '/redesign/project/environments': typeof RedesignProjectEnvironmentsRoute
+  '/redesign/project/general': typeof RedesignProjectGeneralRoute
+  '/redesign/runs/$runId': typeof RedesignRunsRunIdRoute
   '/settings': typeof WorkspaceSettingsIndexRoute
   '/onboarding/import': typeof OnboardingImportIndexRoute
+  '/redesign/account': typeof RedesignAccountIndexRoute
+  '/redesign/project': typeof RedesignProjectIndexRoute
+  '/redesign/runs': typeof RedesignRunsIndexRoute
   '/settings/environments/new': typeof WorkspaceSettingsEnvironmentsNewRoute
+  '/redesign/pipelines/$pipelineId/canvas': typeof RedesignPipelinesPipelineIdCanvasRoute
+  '/redesign/pipelines/$pipelineId/code': typeof RedesignPipelinesPipelineIdCodeRoute
+  '/redesign/pipelines/$pipelineId/split': typeof RedesignPipelinesPipelineIdSplitRoute
   '/settings/environments': typeof WorkspaceSettingsEnvironmentsIndexRoute
+  '/redesign/pipelines/$pipelineId': typeof RedesignPipelinesPipelineIdIndexRoute
   '/settings/environments/$environmentId/connections': typeof WorkspaceSettingsEnvironmentsEnvironmentIdConnectionsRouteRouteWithChildren
   '/pipelines/$pipelineId/config/connections': typeof WorkspacePipelinesPipelineIdConfigConnectionsRoute
   '/pipelines/$pipelineId/config/execution': typeof WorkspacePipelinesPipelineIdConfigExecutionRoute
@@ -297,31 +542,61 @@ export interface FileRoutesByTo {
   '/pipelines/$pipelineId/config': typeof WorkspacePipelinesPipelineIdConfigIndexRoute
   '/settings/environments/$environmentId': typeof WorkspaceSettingsEnvironmentsEnvironmentIdIndexRoute
   '/settings/environments/$environmentId/connections/new': typeof WorkspaceSettingsEnvironmentsEnvironmentIdConnectionsNewRoute
+  '/redesign/pipelines/$pipelineId/assets/$assetId/canvas': typeof RedesignPipelinesPipelineIdAssetsAssetIdCanvasRoute
+  '/redesign/pipelines/$pipelineId/assets/$assetId/code': typeof RedesignPipelinesPipelineIdAssetsAssetIdCodeRoute
+  '/redesign/pipelines/$pipelineId/assets/$assetId/split': typeof RedesignPipelinesPipelineIdAssetsAssetIdSplitRoute
+  '/redesign/pipelines/$pipelineId/assets/$assetId': typeof RedesignPipelinesPipelineIdAssetsAssetIdIndexRoute
   '/settings/environments/$environmentId/connections/$connectionId/edit': typeof WorkspaceSettingsEnvironmentsEnvironmentIdConnectionsConnectionIdEditRoute
   '/settings/environments/$environmentId/connections/$connectionId': typeof WorkspaceSettingsEnvironmentsEnvironmentIdConnectionsConnectionIdIndexRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/onboarding': typeof OnboardingRouteRouteWithChildren
+  '/redesign': typeof RedesignRouteRouteWithChildren
   '/_workspace': typeof WorkspaceRouteWithChildren
   '/_workspace/settings': typeof WorkspaceSettingsRouteRouteWithChildren
   '/onboarding/import': typeof OnboardingImportRouteRouteWithChildren
+  '/redesign/account': typeof RedesignAccountRouteRouteWithChildren
+  '/redesign/project': typeof RedesignProjectRouteRouteWithChildren
+  '/redesign/runs': typeof RedesignRunsRouteRouteWithChildren
   '/_workspace/runs': typeof WorkspaceRunsRoute
   '/onboarding/quickstart': typeof OnboardingQuickstartRoute
   '/onboarding/success': typeof OnboardingSuccessRoute
+  '/redesign/catalog': typeof RedesignCatalogRoute
+  '/redesign/schedules': typeof RedesignSchedulesRoute
   '/_workspace/': typeof WorkspaceIndexRoute
   '/onboarding/': typeof OnboardingIndexRoute
+  '/redesign/': typeof RedesignIndexRoute
   '/_workspace/pipelines/$pipelineId': typeof WorkspacePipelinesPipelineIdRouteRouteWithChildren
   '/_workspace/settings/environments': typeof WorkspaceSettingsEnvironmentsRouteRouteWithChildren
+  '/redesign/pipelines/$pipelineId': typeof RedesignPipelinesPipelineIdRouteRouteWithChildren
   '/onboarding/import/connection': typeof OnboardingImportConnectionRoute
   '/onboarding/import/review': typeof OnboardingImportReviewRoute
+  '/redesign/account/billing': typeof RedesignAccountBillingRoute
+  '/redesign/account/members': typeof RedesignAccountMembersRoute
+  '/redesign/account/profile': typeof RedesignAccountProfileRoute
+  '/redesign/account/workspaces': typeof RedesignAccountWorkspacesRoute
+  '/redesign/dashboards/$dashboardId': typeof RedesignDashboardsDashboardIdRoute
+  '/redesign/notebooks/$notebookId': typeof RedesignNotebooksNotebookIdRoute
+  '/redesign/project/connections': typeof RedesignProjectConnectionsRoute
+  '/redesign/project/environments': typeof RedesignProjectEnvironmentsRoute
+  '/redesign/project/general': typeof RedesignProjectGeneralRoute
+  '/redesign/runs/$runId': typeof RedesignRunsRunIdRoute
   '/_workspace/settings/': typeof WorkspaceSettingsIndexRoute
   '/onboarding/import/': typeof OnboardingImportIndexRoute
+  '/redesign/account/': typeof RedesignAccountIndexRoute
+  '/redesign/project/': typeof RedesignProjectIndexRoute
+  '/redesign/runs/': typeof RedesignRunsIndexRoute
   '/_workspace/pipelines/$pipelineId/config': typeof WorkspacePipelinesPipelineIdConfigRouteRouteWithChildren
   '/_workspace/settings/environments/$environmentId': typeof WorkspaceSettingsEnvironmentsEnvironmentIdRouteRouteWithChildren
   '/_workspace/settings/environments/new': typeof WorkspaceSettingsEnvironmentsNewRoute
+  '/redesign/pipelines/$pipelineId/canvas': typeof RedesignPipelinesPipelineIdCanvasRoute
+  '/redesign/pipelines/$pipelineId/code': typeof RedesignPipelinesPipelineIdCodeRoute
+  '/redesign/pipelines/$pipelineId/split': typeof RedesignPipelinesPipelineIdSplitRoute
   '/_workspace/settings/environments/': typeof WorkspaceSettingsEnvironmentsIndexRoute
+  '/redesign/pipelines/$pipelineId/': typeof RedesignPipelinesPipelineIdIndexRoute
   '/_workspace/settings/environments/$environmentId/connections': typeof WorkspaceSettingsEnvironmentsEnvironmentIdConnectionsRouteRouteWithChildren
+  '/redesign/pipelines/$pipelineId/assets/$assetId': typeof RedesignPipelinesPipelineIdAssetsAssetIdRouteRouteWithChildren
   '/_workspace/pipelines/$pipelineId/config/connections': typeof WorkspacePipelinesPipelineIdConfigConnectionsRoute
   '/_workspace/pipelines/$pipelineId/config/execution': typeof WorkspacePipelinesPipelineIdConfigExecutionRoute
   '/_workspace/pipelines/$pipelineId/config/general': typeof WorkspacePipelinesPipelineIdConfigGeneralRoute
@@ -333,6 +608,10 @@ export interface FileRoutesById {
   '/_workspace/settings/environments/$environmentId/': typeof WorkspaceSettingsEnvironmentsEnvironmentIdIndexRoute
   '/_workspace/settings/environments/$environmentId/connections/$connectionId': typeof WorkspaceSettingsEnvironmentsEnvironmentIdConnectionsConnectionIdRouteRouteWithChildren
   '/_workspace/settings/environments/$environmentId/connections/new': typeof WorkspaceSettingsEnvironmentsEnvironmentIdConnectionsNewRoute
+  '/redesign/pipelines/$pipelineId/assets/$assetId/canvas': typeof RedesignPipelinesPipelineIdAssetsAssetIdCanvasRoute
+  '/redesign/pipelines/$pipelineId/assets/$assetId/code': typeof RedesignPipelinesPipelineIdAssetsAssetIdCodeRoute
+  '/redesign/pipelines/$pipelineId/assets/$assetId/split': typeof RedesignPipelinesPipelineIdAssetsAssetIdSplitRoute
+  '/redesign/pipelines/$pipelineId/assets/$assetId/': typeof RedesignPipelinesPipelineIdAssetsAssetIdIndexRoute
   '/_workspace/settings/environments/$environmentId/connections/$connectionId/edit': typeof WorkspaceSettingsEnvironmentsEnvironmentIdConnectionsConnectionIdEditRoute
   '/_workspace/settings/environments/$environmentId/connections/$connectionId/': typeof WorkspaceSettingsEnvironmentsEnvironmentIdConnectionsConnectionIdIndexRoute
 }
@@ -340,24 +619,50 @@ export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
   fullPaths:
     | '/onboarding'
+    | '/redesign'
     | '/'
     | '/settings'
     | '/onboarding/import'
+    | '/redesign/account'
+    | '/redesign/project'
+    | '/redesign/runs'
     | '/runs'
     | '/onboarding/quickstart'
     | '/onboarding/success'
+    | '/redesign/catalog'
+    | '/redesign/schedules'
     | '/onboarding/'
+    | '/redesign/'
     | '/pipelines/$pipelineId'
     | '/settings/environments'
+    | '/redesign/pipelines/$pipelineId'
     | '/onboarding/import/connection'
     | '/onboarding/import/review'
+    | '/redesign/account/billing'
+    | '/redesign/account/members'
+    | '/redesign/account/profile'
+    | '/redesign/account/workspaces'
+    | '/redesign/dashboards/$dashboardId'
+    | '/redesign/notebooks/$notebookId'
+    | '/redesign/project/connections'
+    | '/redesign/project/environments'
+    | '/redesign/project/general'
+    | '/redesign/runs/$runId'
     | '/settings/'
     | '/onboarding/import/'
+    | '/redesign/account/'
+    | '/redesign/project/'
+    | '/redesign/runs/'
     | '/pipelines/$pipelineId/config'
     | '/settings/environments/$environmentId'
     | '/settings/environments/new'
+    | '/redesign/pipelines/$pipelineId/canvas'
+    | '/redesign/pipelines/$pipelineId/code'
+    | '/redesign/pipelines/$pipelineId/split'
     | '/settings/environments/'
+    | '/redesign/pipelines/$pipelineId/'
     | '/settings/environments/$environmentId/connections'
+    | '/redesign/pipelines/$pipelineId/assets/$assetId'
     | '/pipelines/$pipelineId/config/connections'
     | '/pipelines/$pipelineId/config/execution'
     | '/pipelines/$pipelineId/config/general'
@@ -369,6 +674,10 @@ export interface FileRouteTypes {
     | '/settings/environments/$environmentId/'
     | '/settings/environments/$environmentId/connections/$connectionId'
     | '/settings/environments/$environmentId/connections/new'
+    | '/redesign/pipelines/$pipelineId/assets/$assetId/canvas'
+    | '/redesign/pipelines/$pipelineId/assets/$assetId/code'
+    | '/redesign/pipelines/$pipelineId/assets/$assetId/split'
+    | '/redesign/pipelines/$pipelineId/assets/$assetId/'
     | '/settings/environments/$environmentId/connections/$connectionId/edit'
     | '/settings/environments/$environmentId/connections/$connectionId/'
   fileRoutesByTo: FileRoutesByTo
@@ -376,15 +685,35 @@ export interface FileRouteTypes {
     | '/runs'
     | '/onboarding/quickstart'
     | '/onboarding/success'
+    | '/redesign/catalog'
+    | '/redesign/schedules'
     | '/'
     | '/onboarding'
+    | '/redesign'
     | '/pipelines/$pipelineId'
     | '/onboarding/import/connection'
     | '/onboarding/import/review'
+    | '/redesign/account/billing'
+    | '/redesign/account/members'
+    | '/redesign/account/profile'
+    | '/redesign/account/workspaces'
+    | '/redesign/dashboards/$dashboardId'
+    | '/redesign/notebooks/$notebookId'
+    | '/redesign/project/connections'
+    | '/redesign/project/environments'
+    | '/redesign/project/general'
+    | '/redesign/runs/$runId'
     | '/settings'
     | '/onboarding/import'
+    | '/redesign/account'
+    | '/redesign/project'
+    | '/redesign/runs'
     | '/settings/environments/new'
+    | '/redesign/pipelines/$pipelineId/canvas'
+    | '/redesign/pipelines/$pipelineId/code'
+    | '/redesign/pipelines/$pipelineId/split'
     | '/settings/environments'
+    | '/redesign/pipelines/$pipelineId'
     | '/settings/environments/$environmentId/connections'
     | '/pipelines/$pipelineId/config/connections'
     | '/pipelines/$pipelineId/config/execution'
@@ -396,30 +725,60 @@ export interface FileRouteTypes {
     | '/pipelines/$pipelineId/config'
     | '/settings/environments/$environmentId'
     | '/settings/environments/$environmentId/connections/new'
+    | '/redesign/pipelines/$pipelineId/assets/$assetId/canvas'
+    | '/redesign/pipelines/$pipelineId/assets/$assetId/code'
+    | '/redesign/pipelines/$pipelineId/assets/$assetId/split'
+    | '/redesign/pipelines/$pipelineId/assets/$assetId'
     | '/settings/environments/$environmentId/connections/$connectionId/edit'
     | '/settings/environments/$environmentId/connections/$connectionId'
   id:
     | '__root__'
     | '/onboarding'
+    | '/redesign'
     | '/_workspace'
     | '/_workspace/settings'
     | '/onboarding/import'
+    | '/redesign/account'
+    | '/redesign/project'
+    | '/redesign/runs'
     | '/_workspace/runs'
     | '/onboarding/quickstart'
     | '/onboarding/success'
+    | '/redesign/catalog'
+    | '/redesign/schedules'
     | '/_workspace/'
     | '/onboarding/'
+    | '/redesign/'
     | '/_workspace/pipelines/$pipelineId'
     | '/_workspace/settings/environments'
+    | '/redesign/pipelines/$pipelineId'
     | '/onboarding/import/connection'
     | '/onboarding/import/review'
+    | '/redesign/account/billing'
+    | '/redesign/account/members'
+    | '/redesign/account/profile'
+    | '/redesign/account/workspaces'
+    | '/redesign/dashboards/$dashboardId'
+    | '/redesign/notebooks/$notebookId'
+    | '/redesign/project/connections'
+    | '/redesign/project/environments'
+    | '/redesign/project/general'
+    | '/redesign/runs/$runId'
     | '/_workspace/settings/'
     | '/onboarding/import/'
+    | '/redesign/account/'
+    | '/redesign/project/'
+    | '/redesign/runs/'
     | '/_workspace/pipelines/$pipelineId/config'
     | '/_workspace/settings/environments/$environmentId'
     | '/_workspace/settings/environments/new'
+    | '/redesign/pipelines/$pipelineId/canvas'
+    | '/redesign/pipelines/$pipelineId/code'
+    | '/redesign/pipelines/$pipelineId/split'
     | '/_workspace/settings/environments/'
+    | '/redesign/pipelines/$pipelineId/'
     | '/_workspace/settings/environments/$environmentId/connections'
+    | '/redesign/pipelines/$pipelineId/assets/$assetId'
     | '/_workspace/pipelines/$pipelineId/config/connections'
     | '/_workspace/pipelines/$pipelineId/config/execution'
     | '/_workspace/pipelines/$pipelineId/config/general'
@@ -431,12 +790,17 @@ export interface FileRouteTypes {
     | '/_workspace/settings/environments/$environmentId/'
     | '/_workspace/settings/environments/$environmentId/connections/$connectionId'
     | '/_workspace/settings/environments/$environmentId/connections/new'
+    | '/redesign/pipelines/$pipelineId/assets/$assetId/canvas'
+    | '/redesign/pipelines/$pipelineId/assets/$assetId/code'
+    | '/redesign/pipelines/$pipelineId/assets/$assetId/split'
+    | '/redesign/pipelines/$pipelineId/assets/$assetId/'
     | '/_workspace/settings/environments/$environmentId/connections/$connectionId/edit'
     | '/_workspace/settings/environments/$environmentId/connections/$connectionId/'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
   OnboardingRouteRoute: typeof OnboardingRouteRouteWithChildren
+  RedesignRouteRoute: typeof RedesignRouteRouteWithChildren
   WorkspaceRoute: typeof WorkspaceRouteWithChildren
 }
 
@@ -449,12 +813,26 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof WorkspaceRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/redesign': {
+      id: '/redesign'
+      path: '/redesign'
+      fullPath: '/redesign'
+      preLoaderRoute: typeof RedesignRouteRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/onboarding': {
       id: '/onboarding'
       path: '/onboarding'
       fullPath: '/onboarding'
       preLoaderRoute: typeof OnboardingRouteRouteImport
       parentRoute: typeof rootRouteImport
+    }
+    '/redesign/': {
+      id: '/redesign/'
+      path: '/'
+      fullPath: '/redesign/'
+      preLoaderRoute: typeof RedesignIndexRouteImport
+      parentRoute: typeof RedesignRouteRoute
     }
     '/onboarding/': {
       id: '/onboarding/'
@@ -469,6 +847,20 @@ declare module '@tanstack/react-router' {
       fullPath: '/'
       preLoaderRoute: typeof WorkspaceIndexRouteImport
       parentRoute: typeof WorkspaceRoute
+    }
+    '/redesign/schedules': {
+      id: '/redesign/schedules'
+      path: '/schedules'
+      fullPath: '/redesign/schedules'
+      preLoaderRoute: typeof RedesignSchedulesRouteImport
+      parentRoute: typeof RedesignRouteRoute
+    }
+    '/redesign/catalog': {
+      id: '/redesign/catalog'
+      path: '/catalog'
+      fullPath: '/redesign/catalog'
+      preLoaderRoute: typeof RedesignCatalogRouteImport
+      parentRoute: typeof RedesignRouteRoute
     }
     '/onboarding/success': {
       id: '/onboarding/success'
@@ -491,6 +883,27 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof WorkspaceRunsRouteImport
       parentRoute: typeof WorkspaceRoute
     }
+    '/redesign/runs': {
+      id: '/redesign/runs'
+      path: '/runs'
+      fullPath: '/redesign/runs'
+      preLoaderRoute: typeof RedesignRunsRouteRouteImport
+      parentRoute: typeof RedesignRouteRoute
+    }
+    '/redesign/project': {
+      id: '/redesign/project'
+      path: '/project'
+      fullPath: '/redesign/project'
+      preLoaderRoute: typeof RedesignProjectRouteRouteImport
+      parentRoute: typeof RedesignRouteRoute
+    }
+    '/redesign/account': {
+      id: '/redesign/account'
+      path: '/account'
+      fullPath: '/redesign/account'
+      preLoaderRoute: typeof RedesignAccountRouteRouteImport
+      parentRoute: typeof RedesignRouteRoute
+    }
     '/onboarding/import': {
       id: '/onboarding/import'
       path: '/import'
@@ -504,6 +917,27 @@ declare module '@tanstack/react-router' {
       fullPath: '/settings'
       preLoaderRoute: typeof WorkspaceSettingsRouteRouteImport
       parentRoute: typeof WorkspaceRoute
+    }
+    '/redesign/runs/': {
+      id: '/redesign/runs/'
+      path: '/'
+      fullPath: '/redesign/runs/'
+      preLoaderRoute: typeof RedesignRunsIndexRouteImport
+      parentRoute: typeof RedesignRunsRouteRoute
+    }
+    '/redesign/project/': {
+      id: '/redesign/project/'
+      path: '/'
+      fullPath: '/redesign/project/'
+      preLoaderRoute: typeof RedesignProjectIndexRouteImport
+      parentRoute: typeof RedesignProjectRouteRoute
+    }
+    '/redesign/account/': {
+      id: '/redesign/account/'
+      path: '/'
+      fullPath: '/redesign/account/'
+      preLoaderRoute: typeof RedesignAccountIndexRouteImport
+      parentRoute: typeof RedesignAccountRouteRoute
     }
     '/onboarding/import/': {
       id: '/onboarding/import/'
@@ -519,6 +953,76 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof WorkspaceSettingsIndexRouteImport
       parentRoute: typeof WorkspaceSettingsRouteRoute
     }
+    '/redesign/runs/$runId': {
+      id: '/redesign/runs/$runId'
+      path: '/$runId'
+      fullPath: '/redesign/runs/$runId'
+      preLoaderRoute: typeof RedesignRunsRunIdRouteImport
+      parentRoute: typeof RedesignRunsRouteRoute
+    }
+    '/redesign/project/general': {
+      id: '/redesign/project/general'
+      path: '/general'
+      fullPath: '/redesign/project/general'
+      preLoaderRoute: typeof RedesignProjectGeneralRouteImport
+      parentRoute: typeof RedesignProjectRouteRoute
+    }
+    '/redesign/project/environments': {
+      id: '/redesign/project/environments'
+      path: '/environments'
+      fullPath: '/redesign/project/environments'
+      preLoaderRoute: typeof RedesignProjectEnvironmentsRouteImport
+      parentRoute: typeof RedesignProjectRouteRoute
+    }
+    '/redesign/project/connections': {
+      id: '/redesign/project/connections'
+      path: '/connections'
+      fullPath: '/redesign/project/connections'
+      preLoaderRoute: typeof RedesignProjectConnectionsRouteImport
+      parentRoute: typeof RedesignProjectRouteRoute
+    }
+    '/redesign/notebooks/$notebookId': {
+      id: '/redesign/notebooks/$notebookId'
+      path: '/notebooks/$notebookId'
+      fullPath: '/redesign/notebooks/$notebookId'
+      preLoaderRoute: typeof RedesignNotebooksNotebookIdRouteImport
+      parentRoute: typeof RedesignRouteRoute
+    }
+    '/redesign/dashboards/$dashboardId': {
+      id: '/redesign/dashboards/$dashboardId'
+      path: '/dashboards/$dashboardId'
+      fullPath: '/redesign/dashboards/$dashboardId'
+      preLoaderRoute: typeof RedesignDashboardsDashboardIdRouteImport
+      parentRoute: typeof RedesignRouteRoute
+    }
+    '/redesign/account/workspaces': {
+      id: '/redesign/account/workspaces'
+      path: '/workspaces'
+      fullPath: '/redesign/account/workspaces'
+      preLoaderRoute: typeof RedesignAccountWorkspacesRouteImport
+      parentRoute: typeof RedesignAccountRouteRoute
+    }
+    '/redesign/account/profile': {
+      id: '/redesign/account/profile'
+      path: '/profile'
+      fullPath: '/redesign/account/profile'
+      preLoaderRoute: typeof RedesignAccountProfileRouteImport
+      parentRoute: typeof RedesignAccountRouteRoute
+    }
+    '/redesign/account/members': {
+      id: '/redesign/account/members'
+      path: '/members'
+      fullPath: '/redesign/account/members'
+      preLoaderRoute: typeof RedesignAccountMembersRouteImport
+      parentRoute: typeof RedesignAccountRouteRoute
+    }
+    '/redesign/account/billing': {
+      id: '/redesign/account/billing'
+      path: '/billing'
+      fullPath: '/redesign/account/billing'
+      preLoaderRoute: typeof RedesignAccountBillingRouteImport
+      parentRoute: typeof RedesignAccountRouteRoute
+    }
     '/onboarding/import/review': {
       id: '/onboarding/import/review'
       path: '/review'
@@ -532,6 +1036,13 @@ declare module '@tanstack/react-router' {
       fullPath: '/onboarding/import/connection'
       preLoaderRoute: typeof OnboardingImportConnectionRouteImport
       parentRoute: typeof OnboardingImportRouteRoute
+    }
+    '/redesign/pipelines/$pipelineId': {
+      id: '/redesign/pipelines/$pipelineId'
+      path: '/pipelines/$pipelineId'
+      fullPath: '/redesign/pipelines/$pipelineId'
+      preLoaderRoute: typeof RedesignPipelinesPipelineIdRouteRouteImport
+      parentRoute: typeof RedesignRouteRoute
     }
     '/_workspace/settings/environments': {
       id: '/_workspace/settings/environments'
@@ -547,12 +1058,40 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof WorkspacePipelinesPipelineIdRouteRouteImport
       parentRoute: typeof WorkspaceRoute
     }
+    '/redesign/pipelines/$pipelineId/': {
+      id: '/redesign/pipelines/$pipelineId/'
+      path: '/'
+      fullPath: '/redesign/pipelines/$pipelineId/'
+      preLoaderRoute: typeof RedesignPipelinesPipelineIdIndexRouteImport
+      parentRoute: typeof RedesignPipelinesPipelineIdRouteRoute
+    }
     '/_workspace/settings/environments/': {
       id: '/_workspace/settings/environments/'
       path: '/'
       fullPath: '/settings/environments/'
       preLoaderRoute: typeof WorkspaceSettingsEnvironmentsIndexRouteImport
       parentRoute: typeof WorkspaceSettingsEnvironmentsRouteRoute
+    }
+    '/redesign/pipelines/$pipelineId/split': {
+      id: '/redesign/pipelines/$pipelineId/split'
+      path: '/split'
+      fullPath: '/redesign/pipelines/$pipelineId/split'
+      preLoaderRoute: typeof RedesignPipelinesPipelineIdSplitRouteImport
+      parentRoute: typeof RedesignPipelinesPipelineIdRouteRoute
+    }
+    '/redesign/pipelines/$pipelineId/code': {
+      id: '/redesign/pipelines/$pipelineId/code'
+      path: '/code'
+      fullPath: '/redesign/pipelines/$pipelineId/code'
+      preLoaderRoute: typeof RedesignPipelinesPipelineIdCodeRouteImport
+      parentRoute: typeof RedesignPipelinesPipelineIdRouteRoute
+    }
+    '/redesign/pipelines/$pipelineId/canvas': {
+      id: '/redesign/pipelines/$pipelineId/canvas'
+      path: '/canvas'
+      fullPath: '/redesign/pipelines/$pipelineId/canvas'
+      preLoaderRoute: typeof RedesignPipelinesPipelineIdCanvasRouteImport
+      parentRoute: typeof RedesignPipelinesPipelineIdRouteRoute
     }
     '/_workspace/settings/environments/new': {
       id: '/_workspace/settings/environments/new'
@@ -638,12 +1177,47 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof WorkspacePipelinesPipelineIdConfigConnectionsRouteImport
       parentRoute: typeof WorkspacePipelinesPipelineIdConfigRouteRoute
     }
+    '/redesign/pipelines/$pipelineId/assets/$assetId': {
+      id: '/redesign/pipelines/$pipelineId/assets/$assetId'
+      path: '/assets/$assetId'
+      fullPath: '/redesign/pipelines/$pipelineId/assets/$assetId'
+      preLoaderRoute: typeof RedesignPipelinesPipelineIdAssetsAssetIdRouteRouteImport
+      parentRoute: typeof RedesignPipelinesPipelineIdRouteRoute
+    }
     '/_workspace/settings/environments/$environmentId/connections': {
       id: '/_workspace/settings/environments/$environmentId/connections'
       path: '/connections'
       fullPath: '/settings/environments/$environmentId/connections'
       preLoaderRoute: typeof WorkspaceSettingsEnvironmentsEnvironmentIdConnectionsRouteRouteImport
       parentRoute: typeof WorkspaceSettingsEnvironmentsEnvironmentIdRouteRoute
+    }
+    '/redesign/pipelines/$pipelineId/assets/$assetId/': {
+      id: '/redesign/pipelines/$pipelineId/assets/$assetId/'
+      path: '/'
+      fullPath: '/redesign/pipelines/$pipelineId/assets/$assetId/'
+      preLoaderRoute: typeof RedesignPipelinesPipelineIdAssetsAssetIdIndexRouteImport
+      parentRoute: typeof RedesignPipelinesPipelineIdAssetsAssetIdRouteRoute
+    }
+    '/redesign/pipelines/$pipelineId/assets/$assetId/split': {
+      id: '/redesign/pipelines/$pipelineId/assets/$assetId/split'
+      path: '/split'
+      fullPath: '/redesign/pipelines/$pipelineId/assets/$assetId/split'
+      preLoaderRoute: typeof RedesignPipelinesPipelineIdAssetsAssetIdSplitRouteImport
+      parentRoute: typeof RedesignPipelinesPipelineIdAssetsAssetIdRouteRoute
+    }
+    '/redesign/pipelines/$pipelineId/assets/$assetId/code': {
+      id: '/redesign/pipelines/$pipelineId/assets/$assetId/code'
+      path: '/code'
+      fullPath: '/redesign/pipelines/$pipelineId/assets/$assetId/code'
+      preLoaderRoute: typeof RedesignPipelinesPipelineIdAssetsAssetIdCodeRouteImport
+      parentRoute: typeof RedesignPipelinesPipelineIdAssetsAssetIdRouteRoute
+    }
+    '/redesign/pipelines/$pipelineId/assets/$assetId/canvas': {
+      id: '/redesign/pipelines/$pipelineId/assets/$assetId/canvas'
+      path: '/canvas'
+      fullPath: '/redesign/pipelines/$pipelineId/assets/$assetId/canvas'
+      preLoaderRoute: typeof RedesignPipelinesPipelineIdAssetsAssetIdCanvasRouteImport
+      parentRoute: typeof RedesignPipelinesPipelineIdAssetsAssetIdRouteRoute
     }
     '/_workspace/settings/environments/$environmentId/connections/new': {
       id: '/_workspace/settings/environments/$environmentId/connections/new'
@@ -709,6 +1283,134 @@ const OnboardingRouteRouteChildren: OnboardingRouteRouteChildren = {
 
 const OnboardingRouteRouteWithChildren = OnboardingRouteRoute._addFileChildren(
   OnboardingRouteRouteChildren,
+)
+
+interface RedesignAccountRouteRouteChildren {
+  RedesignAccountBillingRoute: typeof RedesignAccountBillingRoute
+  RedesignAccountMembersRoute: typeof RedesignAccountMembersRoute
+  RedesignAccountProfileRoute: typeof RedesignAccountProfileRoute
+  RedesignAccountWorkspacesRoute: typeof RedesignAccountWorkspacesRoute
+  RedesignAccountIndexRoute: typeof RedesignAccountIndexRoute
+}
+
+const RedesignAccountRouteRouteChildren: RedesignAccountRouteRouteChildren = {
+  RedesignAccountBillingRoute: RedesignAccountBillingRoute,
+  RedesignAccountMembersRoute: RedesignAccountMembersRoute,
+  RedesignAccountProfileRoute: RedesignAccountProfileRoute,
+  RedesignAccountWorkspacesRoute: RedesignAccountWorkspacesRoute,
+  RedesignAccountIndexRoute: RedesignAccountIndexRoute,
+}
+
+const RedesignAccountRouteRouteWithChildren =
+  RedesignAccountRouteRoute._addFileChildren(RedesignAccountRouteRouteChildren)
+
+interface RedesignProjectRouteRouteChildren {
+  RedesignProjectConnectionsRoute: typeof RedesignProjectConnectionsRoute
+  RedesignProjectEnvironmentsRoute: typeof RedesignProjectEnvironmentsRoute
+  RedesignProjectGeneralRoute: typeof RedesignProjectGeneralRoute
+  RedesignProjectIndexRoute: typeof RedesignProjectIndexRoute
+}
+
+const RedesignProjectRouteRouteChildren: RedesignProjectRouteRouteChildren = {
+  RedesignProjectConnectionsRoute: RedesignProjectConnectionsRoute,
+  RedesignProjectEnvironmentsRoute: RedesignProjectEnvironmentsRoute,
+  RedesignProjectGeneralRoute: RedesignProjectGeneralRoute,
+  RedesignProjectIndexRoute: RedesignProjectIndexRoute,
+}
+
+const RedesignProjectRouteRouteWithChildren =
+  RedesignProjectRouteRoute._addFileChildren(RedesignProjectRouteRouteChildren)
+
+interface RedesignRunsRouteRouteChildren {
+  RedesignRunsRunIdRoute: typeof RedesignRunsRunIdRoute
+  RedesignRunsIndexRoute: typeof RedesignRunsIndexRoute
+}
+
+const RedesignRunsRouteRouteChildren: RedesignRunsRouteRouteChildren = {
+  RedesignRunsRunIdRoute: RedesignRunsRunIdRoute,
+  RedesignRunsIndexRoute: RedesignRunsIndexRoute,
+}
+
+const RedesignRunsRouteRouteWithChildren =
+  RedesignRunsRouteRoute._addFileChildren(RedesignRunsRouteRouteChildren)
+
+interface RedesignPipelinesPipelineIdAssetsAssetIdRouteRouteChildren {
+  RedesignPipelinesPipelineIdAssetsAssetIdCanvasRoute: typeof RedesignPipelinesPipelineIdAssetsAssetIdCanvasRoute
+  RedesignPipelinesPipelineIdAssetsAssetIdCodeRoute: typeof RedesignPipelinesPipelineIdAssetsAssetIdCodeRoute
+  RedesignPipelinesPipelineIdAssetsAssetIdSplitRoute: typeof RedesignPipelinesPipelineIdAssetsAssetIdSplitRoute
+  RedesignPipelinesPipelineIdAssetsAssetIdIndexRoute: typeof RedesignPipelinesPipelineIdAssetsAssetIdIndexRoute
+}
+
+const RedesignPipelinesPipelineIdAssetsAssetIdRouteRouteChildren: RedesignPipelinesPipelineIdAssetsAssetIdRouteRouteChildren =
+  {
+    RedesignPipelinesPipelineIdAssetsAssetIdCanvasRoute:
+      RedesignPipelinesPipelineIdAssetsAssetIdCanvasRoute,
+    RedesignPipelinesPipelineIdAssetsAssetIdCodeRoute:
+      RedesignPipelinesPipelineIdAssetsAssetIdCodeRoute,
+    RedesignPipelinesPipelineIdAssetsAssetIdSplitRoute:
+      RedesignPipelinesPipelineIdAssetsAssetIdSplitRoute,
+    RedesignPipelinesPipelineIdAssetsAssetIdIndexRoute:
+      RedesignPipelinesPipelineIdAssetsAssetIdIndexRoute,
+  }
+
+const RedesignPipelinesPipelineIdAssetsAssetIdRouteRouteWithChildren =
+  RedesignPipelinesPipelineIdAssetsAssetIdRouteRoute._addFileChildren(
+    RedesignPipelinesPipelineIdAssetsAssetIdRouteRouteChildren,
+  )
+
+interface RedesignPipelinesPipelineIdRouteRouteChildren {
+  RedesignPipelinesPipelineIdCanvasRoute: typeof RedesignPipelinesPipelineIdCanvasRoute
+  RedesignPipelinesPipelineIdCodeRoute: typeof RedesignPipelinesPipelineIdCodeRoute
+  RedesignPipelinesPipelineIdSplitRoute: typeof RedesignPipelinesPipelineIdSplitRoute
+  RedesignPipelinesPipelineIdIndexRoute: typeof RedesignPipelinesPipelineIdIndexRoute
+  RedesignPipelinesPipelineIdAssetsAssetIdRouteRoute: typeof RedesignPipelinesPipelineIdAssetsAssetIdRouteRouteWithChildren
+}
+
+const RedesignPipelinesPipelineIdRouteRouteChildren: RedesignPipelinesPipelineIdRouteRouteChildren =
+  {
+    RedesignPipelinesPipelineIdCanvasRoute:
+      RedesignPipelinesPipelineIdCanvasRoute,
+    RedesignPipelinesPipelineIdCodeRoute: RedesignPipelinesPipelineIdCodeRoute,
+    RedesignPipelinesPipelineIdSplitRoute:
+      RedesignPipelinesPipelineIdSplitRoute,
+    RedesignPipelinesPipelineIdIndexRoute:
+      RedesignPipelinesPipelineIdIndexRoute,
+    RedesignPipelinesPipelineIdAssetsAssetIdRouteRoute:
+      RedesignPipelinesPipelineIdAssetsAssetIdRouteRouteWithChildren,
+  }
+
+const RedesignPipelinesPipelineIdRouteRouteWithChildren =
+  RedesignPipelinesPipelineIdRouteRoute._addFileChildren(
+    RedesignPipelinesPipelineIdRouteRouteChildren,
+  )
+
+interface RedesignRouteRouteChildren {
+  RedesignAccountRouteRoute: typeof RedesignAccountRouteRouteWithChildren
+  RedesignProjectRouteRoute: typeof RedesignProjectRouteRouteWithChildren
+  RedesignRunsRouteRoute: typeof RedesignRunsRouteRouteWithChildren
+  RedesignCatalogRoute: typeof RedesignCatalogRoute
+  RedesignSchedulesRoute: typeof RedesignSchedulesRoute
+  RedesignIndexRoute: typeof RedesignIndexRoute
+  RedesignPipelinesPipelineIdRouteRoute: typeof RedesignPipelinesPipelineIdRouteRouteWithChildren
+  RedesignDashboardsDashboardIdRoute: typeof RedesignDashboardsDashboardIdRoute
+  RedesignNotebooksNotebookIdRoute: typeof RedesignNotebooksNotebookIdRoute
+}
+
+const RedesignRouteRouteChildren: RedesignRouteRouteChildren = {
+  RedesignAccountRouteRoute: RedesignAccountRouteRouteWithChildren,
+  RedesignProjectRouteRoute: RedesignProjectRouteRouteWithChildren,
+  RedesignRunsRouteRoute: RedesignRunsRouteRouteWithChildren,
+  RedesignCatalogRoute: RedesignCatalogRoute,
+  RedesignSchedulesRoute: RedesignSchedulesRoute,
+  RedesignIndexRoute: RedesignIndexRoute,
+  RedesignPipelinesPipelineIdRouteRoute:
+    RedesignPipelinesPipelineIdRouteRouteWithChildren,
+  RedesignDashboardsDashboardIdRoute: RedesignDashboardsDashboardIdRoute,
+  RedesignNotebooksNotebookIdRoute: RedesignNotebooksNotebookIdRoute,
+}
+
+const RedesignRouteRouteWithChildren = RedesignRouteRoute._addFileChildren(
+  RedesignRouteRouteChildren,
 )
 
 interface WorkspaceSettingsEnvironmentsEnvironmentIdConnectionsConnectionIdRouteRouteChildren {
@@ -875,6 +1577,7 @@ const WorkspaceRouteWithChildren = WorkspaceRoute._addFileChildren(
 
 const rootRouteChildren: RootRouteChildren = {
   OnboardingRouteRoute: OnboardingRouteRouteWithChildren,
+  RedesignRouteRoute: RedesignRouteRouteWithChildren,
   WorkspaceRoute: WorkspaceRouteWithChildren,
 }
 export const routeTree = rootRouteImport

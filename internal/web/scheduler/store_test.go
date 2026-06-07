@@ -75,3 +75,27 @@ func TestStoreDetectsActiveRuns(t *testing.T) {
 	require.NoError(t, err)
 	assert.False(t, active)
 }
+
+func TestStorePersistsScheduleEnabledState(t *testing.T) {
+	store, err := OpenStore(filepath.Join(t.TempDir(), "state.db"))
+	require.NoError(t, err)
+	defer store.Close()
+
+	ctx := context.Background()
+	enabled, ok, err := store.ScheduleEnabled(ctx, "pipeline-id")
+	require.NoError(t, err)
+	assert.False(t, ok)
+	assert.False(t, enabled)
+
+	require.NoError(t, store.SetScheduleEnabled(ctx, "pipeline-id", false))
+	enabled, ok, err = store.ScheduleEnabled(ctx, "pipeline-id")
+	require.NoError(t, err)
+	assert.True(t, ok)
+	assert.False(t, enabled)
+
+	require.NoError(t, store.SetScheduleEnabled(ctx, "pipeline-id", true))
+	enabled, ok, err = store.ScheduleEnabled(ctx, "pipeline-id")
+	require.NoError(t, err)
+	assert.True(t, ok)
+	assert.True(t, enabled)
+}

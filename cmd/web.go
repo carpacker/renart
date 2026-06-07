@@ -978,19 +978,73 @@ func (s *webServer) ListSchedules(ctx context.Context) ([]webscheduler.PipelineS
 }
 
 func (s *webServer) GetPipelineSchedule(ctx context.Context, pipelineID string) (webscheduler.PipelineSchedule, error) {
-	return s.pipelineSvc.GetSchedule(ctx, pipelineID)
-}
-
-func (s *webServer) UpdatePipelineSchedule(ctx context.Context, pipelineID string, req webscheduler.UpdateScheduleRequest) (webscheduler.PipelineSchedule, error) {
-	relPath, updated, err := s.pipelineSvc.UpdateSchedule(ctx, pipelineID, req)
+	item, err := s.pipelineSvc.GetSchedule(ctx, pipelineID)
 	if err != nil {
 		return webscheduler.PipelineSchedule{}, err
 	}
-	s.WorkspaceChanged(ctx, relPath, "pipeline.updated")
+	return s.applyLocalScheduleSettings(ctx, item)
+}
+
+func (s *webServer) UpdatePipelineSchedule(ctx context.Context, pipelineID string, req webscheduler.UpdateScheduleRequest) (webscheduler.PipelineSchedule, error) {
+	current, err := s.pipelineSvc.GetSchedule(ctx, pipelineID)
+	if err != nil {
+		return webscheduler.PipelineSchedule{}, err
+	}
+	desiredSchedule := strings.TrimSpace(req.Schedule)
+	if desiredSchedule == "" {
+		desiredSchedule = strings.TrimSpace(current.Schedule)
+	}
+	desiredTimezone := strings.TrimSpace(req.Timezone)
+	if desiredTimezone == "" {
+		desiredTimezone = current.Timezone
+	}
+	if desiredTimezone == "" {
+		desiredTimezone = "UTC"
+	}
+	if req.Enabled && desiredSchedule == "" {
+		return webscheduler.PipelineSchedule{}, fmt.Errorf("schedule is required when scheduling is enabled")
+	}
+
+	updated := current
+	if desiredSchedule != strings.TrimSpace(current.Schedule) || desiredTimezone != strings.TrimSpace(current.Timezone) || req.Catchup != current.Catchup {
+		var relPath string
+		relPath, updated, err = s.pipelineSvc.UpdateSchedule(ctx, pipelineID, webscheduler.UpdateScheduleRequest{Enabled: req.Enabled, Schedule: desiredSchedule, Timezone: desiredTimezone, Catchup: req.Catchup})
+		if err != nil {
+			return webscheduler.PipelineSchedule{}, err
+		}
+		s.WorkspaceChanged(ctx, relPath, "pipeline.updated")
+	}
+	if s.schedulerStore != nil {
+		if err := s.schedulerStore.SetScheduleEnabled(ctx, pipelineID, req.Enabled); err != nil {
+			return webscheduler.PipelineSchedule{}, err
+		}
+	}
 	if s.schedulerSvc != nil {
 		_ = s.schedulerSvc.Reconcile(ctx)
+		items, err := s.schedulerSvc.ListSchedules(ctx)
+		if err == nil {
+			for _, item := range items {
+				if item.PipelineID == pipelineID {
+					return item, nil
+				}
+			}
+		}
 	}
-	return updated, nil
+	return s.applyLocalScheduleSettings(ctx, updated)
+}
+
+func (s *webServer) applyLocalScheduleSettings(ctx context.Context, item webscheduler.PipelineSchedule) (webscheduler.PipelineSchedule, error) {
+	if s.schedulerStore == nil {
+		return item, nil
+	}
+	enabled, ok, err := s.schedulerStore.ScheduleEnabled(ctx, item.PipelineID)
+	if err != nil {
+		return webscheduler.PipelineSchedule{}, err
+	}
+	if ok {
+		item.Enabled = enabled && strings.TrimSpace(item.Schedule) != ""
+	}
+	return item, nil
 }
 
 func (s *webServer) TriggerPipeline(ctx context.Context, pipelineID string, req webscheduler.TriggerRequest) (webscheduler.PipelineRun, error) {
