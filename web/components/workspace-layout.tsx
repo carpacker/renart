@@ -106,8 +106,12 @@ export function WorkspaceLayout() {
     ],
   });
 
-  const currentView = useMemo<"workspace" | "environments" | "connections">(
+  const currentView = useMemo<"workspace" | "environments" | "connections" | "runs">(
     () => {
+      if (routeState.pathname.startsWith("/runs")) {
+        return "runs";
+      }
+
       if (routeState.pathname.includes("/connections")) {
         return "connections";
       }
@@ -128,6 +132,10 @@ export function WorkspaceLayout() {
 
     if (currentView === "environments") {
       return "Environments";
+    }
+
+    if (currentView === "runs") {
+      return "Runs";
     }
 
     return pipeline?.name ?? "Workspace";

@@ -391,7 +391,8 @@ func buildDirectRunAssetContext(ctx context.Context, pp *directPipelineInfo, tim
 	runCtx = context.WithValue(runCtx, pipeline.RunConfigRunID, runID)
 	runCtx = context.WithValue(runCtx, config.EnvironmentContextKey, pp.Config.SelectedEnvironment)
 	runCtx = context.WithValue(runCtx, config.EnvironmentNameContextKey, pp.Config.SelectedEnvironmentName)
-	runCtx = context.WithValue(runCtx, bruinexecutor.KeyIsDebug, false)
+	isDebug := false
+	runCtx = context.WithValue(runCtx, bruinexecutor.KeyIsDebug, &isDebug)
 	runCtx = context.WithValue(runCtx, bruinexecutor.KeyVerbose, false)
 	runCtx = context.WithValue(runCtx, config.SecretsBackendContextKey, "")
 
