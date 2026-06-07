@@ -11,7 +11,9 @@ import (
 	"github.com/bruin-data/bruin/pkg/jinja"
 	"github.com/bruin-data/bruin/pkg/pipeline"
 	"github.com/spf13/afero"
+	"gopkg.in/yaml.v3"
 	webmodel "renart/internal/web/model"
+	"renart/internal/web/scheduler"
 )
 
 type PipelineService struct {
@@ -94,6 +96,84 @@ func (s *PipelineService) GetConfig(ctx context.Context, pipelineID string) (*we
 	return resp, nil
 }
 
+func (s *PipelineService) GetSchedule(ctx context.Context, pipelineID string) (scheduler.PipelineSchedule, error) {
+	parsed, relPath, err := s.loadPipeline(ctx, pipelineID)
+	if err != nil {
+		return scheduler.PipelineSchedule{}, err
+	}
+	timezone, catchup := s.readScheduleExtras(relPath)
+	schedule := strings.TrimSpace(string(parsed.Schedule))
+	return scheduler.PipelineSchedule{
+		PipelineID:   pipelineID,
+		PipelineName: parsed.Name,
+		PipelinePath: filepath.ToSlash(relPath),
+		Schedule:     schedule,
+		Timezone:     timezone,
+		Catchup:      catchup,
+		Enabled:      schedule != "",
+	}, nil
+}
+
+func (s *PipelineService) ListSchedules(ctx context.Context) ([]scheduler.PipelineSchedule, error) {
+	state, err := NewWorkspaceService(s.workspaceRoot, "").ComputeState(ctx)
+	if err != nil {
+		return nil, err
+	}
+	items := make([]scheduler.PipelineSchedule, 0, len(state.Pipelines))
+	for _, item := range state.Pipelines {
+		pipelineSchedule, err := s.GetSchedule(ctx, item.ID)
+		if err != nil {
+			continue
+		}
+		items = append(items, pipelineSchedule)
+	}
+	return items, nil
+}
+
+func (s *PipelineService) UpdateSchedule(ctx context.Context, pipelineID string, req scheduler.UpdateScheduleRequest) (string, scheduler.PipelineSchedule, error) {
+	_, relPath, err := s.loadPipeline(ctx, pipelineID)
+	if err != nil {
+		return "", scheduler.PipelineSchedule{}, err
+	}
+	absPath := filepath.Join(s.workspaceRoot, relPath, "pipeline.yml")
+	bytes, err := afero.ReadFile(afero.NewOsFs(), absPath)
+	if err != nil {
+		return "", scheduler.PipelineSchedule{}, err
+	}
+	var doc yaml.Node
+	if err := yaml.Unmarshal(bytes, &doc); err != nil {
+		return "", scheduler.PipelineSchedule{}, err
+	}
+	root := yamlDocumentMapping(&doc)
+	if root == nil {
+		return "", scheduler.PipelineSchedule{}, fmt.Errorf("pipeline config must be a YAML mapping")
+	}
+	if req.Enabled {
+		if strings.TrimSpace(req.Schedule) == "" {
+			return "", scheduler.PipelineSchedule{}, fmt.Errorf("schedule is required when scheduling is enabled")
+		}
+		setYAMLScalar(root, "schedule", strings.TrimSpace(req.Schedule))
+	} else {
+		removeYAMLKey(root, "schedule")
+	}
+	if strings.TrimSpace(req.Timezone) != "" {
+		setYAMLScalar(root, "timezone", strings.TrimSpace(req.Timezone))
+	}
+	setYAMLBool(root, "catchup", req.Catchup)
+	formatted, err := yaml.Marshal(&doc)
+	if err != nil {
+		return "", scheduler.PipelineSchedule{}, err
+	}
+	if err := afero.WriteFile(afero.NewOsFs(), absPath, formatted, 0o644); err != nil {
+		return "", scheduler.PipelineSchedule{}, err
+	}
+	updated, err := s.GetSchedule(ctx, pipelineID)
+	if err != nil {
+		return "", scheduler.PipelineSchedule{}, err
+	}
+	return filepath.ToSlash(relPath), updated, nil
+}
+
 func (s *PipelineService) UpdateConfig(ctx context.Context, pipelineID string, req webmodel.UpdatePipelineConfigRequest) (string, *webmodel.PipelineConfigResponse, error) {
 	parsed, relPath, err := s.loadPipeline(ctx, pipelineID)
 	if err != nil {
@@ -160,6 +240,82 @@ func (s *PipelineService) loadPipeline(ctx context.Context, pipelineID string) (
 	}
 
 	return parsed, relPath, nil
+}
+
+func (s *PipelineService) readScheduleExtras(relPath string) (string, bool) {
+	absPath := filepath.Join(s.workspaceRoot, relPath, "pipeline.yml")
+	bytes, err := afero.ReadFile(afero.NewOsFs(), absPath)
+	if err != nil {
+		return "UTC", false
+	}
+	var doc yaml.Node
+	if err := yaml.Unmarshal(bytes, &doc); err != nil {
+		return "UTC", false
+	}
+	root := yamlDocumentMapping(&doc)
+	if root == nil {
+		return "UTC", false
+	}
+	timezone := strings.TrimSpace(yamlScalar(root, "timezone"))
+	if timezone == "" {
+		timezone = "UTC"
+	}
+	return timezone, yamlBool(root, "catchup")
+}
+
+func yamlDocumentMapping(doc *yaml.Node) *yaml.Node {
+	if doc.Kind == yaml.DocumentNode && len(doc.Content) > 0 {
+		doc = doc.Content[0]
+	}
+	if doc.Kind != yaml.MappingNode {
+		return nil
+	}
+	return doc
+}
+
+func yamlScalar(root *yaml.Node, key string) string {
+	for i := 0; i+1 < len(root.Content); i += 2 {
+		if root.Content[i].Value == key {
+			return root.Content[i+1].Value
+		}
+	}
+	return ""
+}
+
+func yamlBool(root *yaml.Node, key string) bool {
+	for i := 0; i+1 < len(root.Content); i += 2 {
+		if root.Content[i].Value == key {
+			return strings.EqualFold(root.Content[i+1].Value, "true")
+		}
+	}
+	return false
+}
+
+func setYAMLScalar(root *yaml.Node, key, value string) {
+	setYAMLNode(root, key, &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: value})
+}
+
+func setYAMLBool(root *yaml.Node, key string, value bool) {
+	setYAMLNode(root, key, &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!bool", Value: strconv.FormatBool(value)})
+}
+
+func setYAMLNode(root *yaml.Node, key string, value *yaml.Node) {
+	for i := 0; i+1 < len(root.Content); i += 2 {
+		if root.Content[i].Value == key {
+			root.Content[i+1] = value
+			return
+		}
+	}
+	root.Content = append(root.Content, &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: key}, value)
+}
+
+func removeYAMLKey(root *yaml.Node, key string) {
+	for i := 0; i+1 < len(root.Content); i += 2 {
+		if root.Content[i].Value == key {
+			root.Content = append(root.Content[:i], root.Content[i+2:]...)
+			return
+		}
+	}
 }
 
 func buildPipelineConfigResponse(pipelineID, relPath string, parsed *pipeline.Pipeline) *webmodel.PipelineConfigResponse {

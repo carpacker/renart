@@ -35,7 +35,7 @@ type WorkspaceCommandPaletteProps = {
   workspace: WorkspaceState;
   activePipeline: string | null;
   selectedAsset: string | null;
-  currentView: "workspace" | "environments" | "connections";
+  currentView: "workspace" | "environments" | "connections" | "runs";
 };
 
 type PaletteItem = {
@@ -332,7 +332,7 @@ export function WorkspaceCommandPalette({
         <span className="flex min-w-0 items-center gap-2 truncate">
           <Search className="size-4 shrink-0" />
           <span className="truncate text-sm">
-            Search {currentView === "workspace" ? "workspace" : "settings"}
+            Search {currentView === "workspace" ? "workspace" : currentView === "runs" ? "runs" : "settings"}
           </span>
         </span>
         <span className="hidden text-xs sm:inline">{shortcutLabel}</span>

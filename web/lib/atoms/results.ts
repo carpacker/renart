@@ -1,5 +1,7 @@
 import { atom } from "jotai";
 
+import type { PipelineRun, PipelineRunLogLine } from "@/lib/types";
+
 export type AssetResultTab = "inspect" | "materialize";
 
 export type MaterializeHistoryEntry = {
@@ -10,6 +12,7 @@ export type MaterializeHistoryEntry = {
   assetName?: string | null;
   pipelineId?: string | null;
   pipelineName?: string | null;
+  runId?: string | null;
   output: string;
   status: "ok" | "error" | null;
   error: string;
@@ -18,6 +21,10 @@ export type MaterializeHistoryEntry = {
   updatedAt: number;
   timeWindow?: { start: string; end: string } | null;
 };
+
+export type SchedulerRunEvent =
+  | { type: "run.queued" | "run.started" | "run.finished"; run: PipelineRun }
+  | { type: "run.log"; run: { run_id: string; log: PipelineRunLogLine } };
 
 export type AssetResultsState = {
   resultTab: AssetResultTab;
@@ -32,3 +39,5 @@ export const assetResultsAtom = atom<AssetResultsState>({
 });
 
 export const changedAssetIdsAtom = atom<Set<string>>(new Set<string>());
+
+export const schedulerRunEventAtom = atom<SchedulerRunEvent | null>(null);

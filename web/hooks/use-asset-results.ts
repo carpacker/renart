@@ -2,13 +2,14 @@
 
 import AnsiToHtml from "ansi-to-html";
 import { useAtom, useAtomValue, useSetAtom } from "jotai";
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 
 import {
   assetResultsAtom,
   changedAssetIdsAtom,
   enrichedSelectedAssetAtom,
   materializingAssetIdsAtom,
+  schedulerRunEventAtom,
 } from "@/lib/atoms/domains/results";
 import {
   pipelineAtom,
@@ -17,7 +18,7 @@ import {
   selectedEnvironmentAtom,
 } from "@/lib/atoms/domains/workspace";
 import { useAssetInspect } from "@/hooks/use-asset-inspect";
-import { materializeAssetStream, materializePipelineStream } from "@/lib/api";
+import { materializeAssetStream, materializePipelineStream, triggerPipelineRun } from "@/lib/api";
 import { MaterializeScope, labelForMaterializeScope } from "@/lib/materialize-scope";
 import { AssetInspectResponse, WebAsset } from "@/lib/types";
 
@@ -36,6 +37,7 @@ function createMaterializeEntry(input: {
   assetName?: string | null;
   pipelineId?: string | null;
   pipelineName?: string | null;
+  runId?: string | null;
   output?: string;
   status?: "ok" | "error" | null;
   error?: string;
@@ -52,6 +54,7 @@ function createMaterializeEntry(input: {
     assetName: input.assetName,
     pipelineId: input.pipelineId,
     pipelineName: input.pipelineName,
+    runId: input.runId,
     output: input.output ?? "",
     status: input.status ?? null,
     error: input.error ?? "",
@@ -130,6 +133,7 @@ export function useAssetResults() {
   const pipelineId = pipeline?.id ?? null;
   const selectedAssetId = useAtomValue(resolvedSelectedAssetAtom);
   const selectedExecutionTimeWindow = useAtomValue(selectedExecutionTimeWindowAtom);
+  const schedulerRunEvent = useAtomValue(schedulerRunEventAtom);
   const inspectAssets = useMemo(() => (asset ? [asset] : []), [asset]);
   const {
     inspectAssetById,
@@ -229,6 +233,61 @@ export function useAssetResults() {
       };
     });
   };
+
+  useEffect(() => {
+    if (!schedulerRunEvent) {
+      return;
+    }
+
+    setResults((previous) => {
+      let matched = false;
+      const nextHistory = previous.materializeHistory.map((entry) => {
+        if (schedulerRunEvent.type === "run.log") {
+          if (entry.runId !== schedulerRunEvent.run.run_id) {
+            return entry;
+          }
+          matched = true;
+          const line = schedulerRunEvent.run.log.line;
+          return {
+            ...entry,
+            output: `${entry.output}${entry.output ? "\n" : ""}${line}`,
+            loading: true,
+            updatedAt: Date.now(),
+          };
+        }
+
+        if (entry.runId !== schedulerRunEvent.run.id) {
+          return entry;
+        }
+        matched = true;
+        if (schedulerRunEvent.type === "run.finished") {
+          const status: "ok" | "error" = schedulerRunEvent.run.status === "success" ? "ok" : "error";
+          return {
+            ...entry,
+            status,
+            error: schedulerRunEvent.run.error ?? "",
+            loading: false,
+            updatedAt: Date.now(),
+          };
+        }
+        return {
+          ...entry,
+          output: `${entry.output}${entry.output ? "\n" : ""}${schedulerRunEvent.run.status === "running" ? "Run started." : "Run queued."}`,
+          loading: true,
+          updatedAt: Date.now(),
+        };
+      });
+
+      if (!matched) {
+        return previous;
+      }
+
+      return {
+        ...previous,
+        materializeHistory: nextHistory,
+      };
+    });
+  }, [schedulerRunEvent, setResults]);
 
   const runInspectForAsset = useCallback(async (assetId: string, contentSnapshot?: string) => {
     try {
@@ -418,6 +477,37 @@ export function useAssetResults() {
     }));
 
     try {
+      if (!options?.dryRun) {
+        const response = await triggerPipelineRun(pipelineId, {
+          environment: selectedEnvironment,
+          start: selectedExecutionTimeWindow?.start,
+          end: selectedExecutionTimeWindow?.end,
+          trigger: "manual",
+        });
+        const run = response.run;
+        upsertMaterializeEntry(entryId, (previous) => ({
+          ...(previous ??
+            createMaterializeEntry({
+              id: entryId,
+              kind: "pipeline",
+              label: pipeline?.name ? `Pipeline: ${pipeline.name}` : "Pipeline materialize",
+              pipelineId,
+              pipelineName: pipeline?.name ?? null,
+              runId: run.id,
+              loading: true,
+              createdAt: startedAt,
+              timeWindow: selectedExecutionTimeWindow,
+            })),
+          runId: run.id,
+          output: `Queued manual River run ${run.id} for ${run.pipeline || pipeline?.name || "pipeline"}.`,
+          status: null,
+          error: "",
+          loading: true,
+          updatedAt: Date.now(),
+        }));
+        return { status: "ok", output: "", error: "", changed_asset_ids: [] };
+      }
+
       const result = await materializePipelineStream(pipelineId, {
         onChunk: (chunk) => {
           upsertMaterializeEntry(entryId, (previous) => ({

@@ -29,6 +29,7 @@ import (
 	"renart/internal/web/freshness"
 	webhttpapi "renart/internal/web/httpapi"
 	webmodel "renart/internal/web/model"
+	webscheduler "renart/internal/web/scheduler"
 	"renart/internal/web/service"
 	webstatic "renart/internal/web/static"
 	"renart/internal/web/watch"
@@ -137,6 +138,8 @@ type webServer struct {
 	jinjaRenderSvc  *service.JinjaRenderService
 	runSvc          *service.RunService
 	onboardingSvc   *service.OnboardingService
+	schedulerSvc    *webscheduler.Service
+	schedulerStore  *webscheduler.Store
 	workspaceCoord  *service.WorkspaceCoordinator
 
 	hub       *events.Hub
@@ -189,6 +192,16 @@ func Web() *cli.Command {
 			&cli.BoolFlag{
 				Name:  "no-open",
 				Usage: "do not open Renart in the default browser after startup",
+			},
+			&cli.BoolFlag{
+				Name:  "scheduler",
+				Value: true,
+				Usage: "run the local in-process scheduler",
+			},
+			&cli.StringFlag{
+				Name:  "scheduler-state",
+				Value: ".renart/state.db",
+				Usage: "local scheduler SQLite state path",
 			},
 		},
 		Action: func(ctx context.Context, c *cli.Command) error {
@@ -320,6 +333,35 @@ func Web() *cli.Command {
 			server.runSvc = service.NewRunService(service.RunDependencies{Executor: server.executor})
 			server.onboardingSvc = service.NewOnboardingService(absRoot, resolveConfigFilePath(absRoot), server.executor)
 
+			statePath := c.String("scheduler-state")
+			if !filepath.IsAbs(statePath) {
+				statePath = filepath.Join(absRoot, statePath)
+			}
+			server.schedulerStore, err = webscheduler.OpenStore(statePath)
+			if err != nil {
+				return fmt.Errorf("failed to initialize scheduler store: %w", err)
+			}
+			defer server.schedulerStore.Close()
+			server.schedulerSvc = webscheduler.New(webscheduler.Options{
+				Store:     server.schedulerStore,
+				StateDir:  filepath.Dir(statePath),
+				Pipelines: server.pipelineSvc.ListSchedules,
+				Publish: func(event any) {
+					server.hub.PublishImmediate(event)
+				},
+				Runner: func(ctx context.Context, req webscheduler.RunRequest, onLog func(string)) webscheduler.RunResult {
+					result := server.executionSvc.MaterializePipelineStream(ctx, req.PipelineID, req.Environment, false, req.Start, req.End, func(chunk []byte) {
+						if onLog != nil {
+							onLog(string(chunk))
+						}
+					})
+					if result.Output != "" && onLog != nil {
+						onLog(result.Output)
+					}
+					return webscheduler.RunResult{Status: result.Status, Error: result.Error}
+				},
+			})
+
 			server.workspaceCoord = service.NewWorkspaceCoordinator(service.WorkspaceCoordinatorDependencies{
 				WorkspaceService: server.workspaceSvc,
 				Hub:              server.hub,
@@ -347,6 +389,12 @@ func Web() *cli.Command {
 
 			if err := server.refreshWorkspace(ctx); err != nil {
 				fmt.Printf("warning: initial workspace parse failed: %v\n", err)
+			}
+
+			if c.Bool("scheduler") {
+				if err := server.schedulerSvc.Start(ctx); err != nil {
+					fmt.Printf("warning: failed to start local scheduler: %v\n", err)
+				}
 			}
 
 			go watch.New(watch.Config{
@@ -502,6 +550,7 @@ func (s *webServer) registerRoutes(router chi.Router) {
 	webhttpapi.RegisterParseContextRoutes(router, &webhttpapi.ParseContextAPI{Service: s})
 	webhttpapi.RegisterJinjaRenderRoutes(router, &webhttpapi.JinjaRenderAPI{Service: s})
 	webhttpapi.RegisterRunRoutes(router, &webhttpapi.RunAPI{Service: s})
+	webhttpapi.RegisterSchedulerRoutes(router, &webhttpapi.SchedulerAPI{Service: s})
 	webhttpapi.RegisterOnboardingRoutes(router, &webhttpapi.OnboardingAPI{Service: s.onboardingSvc, Publisher: s})
 	router.Get("/api/assets/freshness", s.handleGetAssetFreshness)
 
@@ -916,6 +965,60 @@ func (s *webServer) ConfigChanged(ctx context.Context, relPath, eventType string
 func (s *webServer) WorkspaceChanged(ctx context.Context, relPath, eventType string) {
 	s.workspaceCoord.SuppressWatcherFor(relPath)
 	s.workspaceCoord.PushUpdateImmediate(ctx, eventType, relPath)
+	if s.schedulerSvc != nil {
+		go func() { _ = s.schedulerSvc.Reconcile(context.Background()) }()
+	}
+}
+
+func (s *webServer) ListSchedules(ctx context.Context) ([]webscheduler.PipelineSchedule, error) {
+	if s.schedulerSvc != nil {
+		return s.schedulerSvc.ListSchedules(ctx)
+	}
+	return s.pipelineSvc.ListSchedules(ctx)
+}
+
+func (s *webServer) GetPipelineSchedule(ctx context.Context, pipelineID string) (webscheduler.PipelineSchedule, error) {
+	return s.pipelineSvc.GetSchedule(ctx, pipelineID)
+}
+
+func (s *webServer) UpdatePipelineSchedule(ctx context.Context, pipelineID string, req webscheduler.UpdateScheduleRequest) (webscheduler.PipelineSchedule, error) {
+	relPath, updated, err := s.pipelineSvc.UpdateSchedule(ctx, pipelineID, req)
+	if err != nil {
+		return webscheduler.PipelineSchedule{}, err
+	}
+	s.WorkspaceChanged(ctx, relPath, "pipeline.updated")
+	if s.schedulerSvc != nil {
+		_ = s.schedulerSvc.Reconcile(ctx)
+	}
+	return updated, nil
+}
+
+func (s *webServer) TriggerPipeline(ctx context.Context, pipelineID string, req webscheduler.TriggerRequest) (webscheduler.PipelineRun, error) {
+	if s.schedulerSvc == nil {
+		return webscheduler.PipelineRun{}, fmt.Errorf("scheduler is not initialized")
+	}
+	pipelineSchedule, err := s.pipelineSvc.GetSchedule(ctx, pipelineID)
+	if err != nil {
+		return webscheduler.PipelineRun{}, err
+	}
+	if strings.TrimSpace(req.Trigger) == "" {
+		req.Trigger = string(webscheduler.RunTriggerManual)
+	}
+	return s.schedulerSvc.Trigger(ctx, pipelineSchedule, req)
+}
+
+func (s *webServer) ListRuns(ctx context.Context, filter webscheduler.RunFilter) ([]webscheduler.PipelineRun, error) {
+	if s.schedulerSvc == nil {
+		return nil, fmt.Errorf("scheduler is not initialized")
+	}
+	return s.schedulerSvc.ListRuns(ctx, filter)
+}
+
+func (s *webServer) GetRun(ctx context.Context, runID string) (webscheduler.PipelineRun, []webscheduler.LogLine, error) {
+	if s.schedulerSvc == nil {
+		return webscheduler.PipelineRun{}, nil, fmt.Errorf("scheduler is not initialized")
+	}
+	return s.schedulerSvc.GetRun(ctx, runID)
 }
 
 func (s *webServer) CurrentWorkspace() any {

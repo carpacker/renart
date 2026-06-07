@@ -113,6 +113,63 @@ export type WorkspaceEvent = Omit<GeneratedWorkspaceEvent, "workspace"> & {
   workspace: WorkspaceState;
 };
 
+export type PipelineSchedule = {
+  pipeline_id: string;
+  pipeline_name: string;
+  pipeline_path: string;
+  schedule: string;
+  timezone: string;
+  catchup: boolean;
+  enabled: boolean;
+  next_run_at?: string;
+};
+
+export type PipelineRun = {
+  id: string;
+  pipeline_id: string;
+  pipeline: string;
+  environment: string;
+  trigger: "schedule" | "manual" | "api" | "cli";
+  status: "queued" | "running" | "success" | "failed" | "cancelled";
+  win_start?: string;
+  win_end?: string;
+  started_at?: string;
+  finished_at?: string;
+  error?: string;
+  log_ref?: string;
+};
+
+export type PipelineRunLogLine = {
+  at: string;
+  line: string;
+};
+
+export type SchedulesResponse = {
+  status: "ok" | "error";
+  schedules: PipelineSchedule[];
+};
+
+export type UpdateScheduleResponse = {
+  status: "ok" | "error";
+  schedule: PipelineSchedule;
+};
+
+export type TriggerPipelineResponse = {
+  status: "ok" | "error";
+  run: PipelineRun;
+};
+
+export type RunsResponse = {
+  status: "ok" | "error";
+  runs: PipelineRun[];
+};
+
+export type RunDetailResponse = {
+  status: "ok" | "error";
+  run: PipelineRun;
+  logs: PipelineRunLogLine[];
+};
+
 export type OnboardingSessionState = Omit<
   GeneratedOnboardingSessionState,
   "step" | "import_result"

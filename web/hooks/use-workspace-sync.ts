@@ -8,6 +8,7 @@ import {
   workspaceSyncSourceAtom,
 } from "@/lib/atoms/domains/workspace";
 import { getWorkspace } from "@/lib/api";
+import { SchedulerRunEvent, schedulerRunEventAtom } from "@/lib/atoms/domains/results";
 import { WebAsset, WorkspaceEvent, WorkspaceState } from "@/lib/types";
 
 function mergeWorkspaceWithPreservedContent(
@@ -57,9 +58,29 @@ function mergeWorkspaceWithPreservedContent(
   };
 }
 
+function isSchedulerRunEvent(payload: unknown): payload is SchedulerRunEvent {
+  return (
+    typeof payload === "object" &&
+    payload !== null &&
+    "type" in payload &&
+    typeof payload.type === "string" &&
+    payload.type.startsWith("run.")
+  );
+}
+
+function isWorkspaceEvent(payload: unknown): payload is WorkspaceEvent {
+  return (
+    typeof payload === "object" &&
+    payload !== null &&
+    "workspace" in payload &&
+    Boolean(payload.workspace)
+  );
+}
+
 export function useWorkspaceSync() {
   const workspace = useAtomValue(workspaceAtom);
   const setWorkspace = useSetAtom(workspaceAtom);
+  const setSchedulerRunEvent = useSetAtom(schedulerRunEventAtom);
   const setWorkspaceSyncSource = useSetAtom(workspaceSyncSourceAtom);
 
   useEffect(() => {
@@ -81,7 +102,16 @@ export function useWorkspaceSync() {
     const source = new EventSource("/api/events");
     source.onmessage = (event) => {
       try {
-        const payload = JSON.parse(event.data) as WorkspaceEvent;
+        const payload = JSON.parse(event.data) as unknown;
+
+        if (isSchedulerRunEvent(payload)) {
+          setSchedulerRunEvent(payload);
+          return;
+        }
+
+        if (!isWorkspaceEvent(payload)) {
+          return;
+        }
 
         setWorkspaceSyncSource({
           method: "workspace-event",
@@ -121,7 +151,7 @@ export function useWorkspaceSync() {
       mounted = false;
       source.close();
     };
-  }, [setWorkspace, setWorkspaceSyncSource]);
+  }, [setSchedulerRunEvent, setWorkspace, setWorkspaceSyncSource]);
 
   return workspace as WorkspaceState | null;
 }

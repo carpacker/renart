@@ -5,8 +5,9 @@ import {
   Cable,
   ChevronRight,
   ChevronsLeft,
-  Database,
-  FileCode2,
+	Database,
+	History,
+	FileCode2,
   FileText,
   Folder,
   FolderPlus,
@@ -51,7 +52,7 @@ import { WebAsset, WorkspaceState } from "@/lib/types";
 
 type Props = {
   workspace: WorkspaceState | null;
-  currentView: "workspace" | "environments" | "connections";
+  currentView: "workspace" | "environments" | "connections" | "runs";
   connectionsEnvironment?: string | null;
   activePipeline: string | null;
   selectedAsset: string | null;
@@ -239,6 +240,18 @@ export function WorkspaceSidebar({
                 <SidebarMenuButton onClick={handleCreatePipeline}>
                   <FolderPlus className="size-4" />
                   <span>New Pipeline</span>
+                </SidebarMenuButton>
+              </SidebarMenuItem>
+              <SidebarMenuItem>
+                <SidebarMenuButton asChild isActive={currentView === "runs"}>
+                  <Link
+                    to="/runs"
+                    activeOptions={{ exact: true, includeSearch: false }}
+                    onClick={closeSidebarAfterNavigation}
+                  >
+                    <History className="size-4" />
+                    <span>Runs</span>
+                  </Link>
                 </SidebarMenuButton>
               </SidebarMenuItem>
               <SidebarMenuItem>
