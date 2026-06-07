@@ -4,7 +4,6 @@ import (
 	"context"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -35,8 +34,8 @@ func TestPipelineServiceUpdatesScheduleFieldsInPipelineYAML(t *testing.T) {
 
 	_, updated, err = service.UpdateSchedule(context.Background(), pipelineID, scheduler.UpdateScheduleRequest{Enabled: false, Timezone: "Europe/Berlin"})
 	require.NoError(t, err)
-	assert.False(t, updated.Enabled)
+	assert.True(t, updated.Enabled)
 	bytes, err = os.ReadFile(filepath.Join(pipelineDir, "pipeline.yml"))
 	require.NoError(t, err)
-	assert.NotContains(t, strings.Split(string(bytes), "\n"), "schedule: '@hourly'")
+	assert.Contains(t, string(bytes), "schedule: '@hourly'")
 }

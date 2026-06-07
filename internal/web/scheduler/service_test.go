@@ -100,6 +100,34 @@ func TestServiceTriggerRejectsActiveRun(t *testing.T) {
 	assert.Contains(t, err.Error(), "already has a queued or running run")
 }
 
+func TestServiceListSchedulesAppliesLocalEnabledState(t *testing.T) {
+	stateDir := t.TempDir()
+	store, err := OpenStore(filepath.Join(stateDir, "state.db"))
+	require.NoError(t, err)
+	defer store.Close()
+
+	ctx := context.Background()
+	service := New(Options{
+		Store: store,
+		Pipelines: func(context.Context) ([]PipelineSchedule, error) {
+			return []PipelineSchedule{{PipelineID: "pipeline-id", PipelineName: "analytics", Schedule: "@hourly", Timezone: "UTC", Enabled: true}}, nil
+		},
+	})
+
+	items, err := service.ListSchedules(ctx)
+	require.NoError(t, err)
+	require.Len(t, items, 1)
+	assert.True(t, items[0].Enabled)
+	require.NotNil(t, items[0].NextRunAt)
+
+	require.NoError(t, store.SetScheduleEnabled(ctx, "pipeline-id", false))
+	items, err = service.ListSchedules(ctx)
+	require.NoError(t, err)
+	require.Len(t, items, 1)
+	assert.False(t, items[0].Enabled)
+	assert.Nil(t, items[0].NextRunAt)
+}
+
 func TestScheduledWorkerCreatesRunAndWatermark(t *testing.T) {
 	stateDir := t.TempDir()
 	store, err := OpenStore(filepath.Join(stateDir, "state.db"))

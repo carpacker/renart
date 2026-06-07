@@ -80,6 +80,11 @@ func (s *Store) migrate(ctx context.Context) error {
 			pipeline TEXT PRIMARY KEY,
 			up_to TEXT NOT NULL
 		)`,
+		`CREATE TABLE IF NOT EXISTS pipeline_schedule_settings (
+			pipeline_id TEXT PRIMARY KEY,
+			enabled INTEGER NOT NULL,
+			updated_at TEXT NOT NULL
+		)`,
 	}
 	for _, statement := range statements {
 		if _, err := s.db.ExecContext(ctx, statement); err != nil {
@@ -195,6 +200,27 @@ func (s *Store) LastInterval(ctx context.Context, pipeline string) (time.Time, b
 
 func (s *Store) SetInterval(ctx context.Context, pipeline string, upTo time.Time) error {
 	_, err := s.db.ExecContext(ctx, `INSERT INTO schedule_watermarks (pipeline, up_to) VALUES (?, ?) ON CONFLICT(pipeline) DO UPDATE SET up_to = excluded.up_to`, pipeline, formatTime(upTo))
+	return err
+}
+
+func (s *Store) ScheduleEnabled(ctx context.Context, pipelineID string) (bool, bool, error) {
+	var enabled int
+	err := s.db.QueryRowContext(ctx, `SELECT enabled FROM pipeline_schedule_settings WHERE pipeline_id = ?`, pipelineID).Scan(&enabled)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, false, nil
+	}
+	if err != nil {
+		return false, false, err
+	}
+	return enabled != 0, true, nil
+}
+
+func (s *Store) SetScheduleEnabled(ctx context.Context, pipelineID string, enabled bool) error {
+	value := 0
+	if enabled {
+		value = 1
+	}
+	_, err := s.db.ExecContext(ctx, `INSERT INTO pipeline_schedule_settings (pipeline_id, enabled, updated_at) VALUES (?, ?, ?) ON CONFLICT(pipeline_id) DO UPDATE SET enabled = excluded.enabled, updated_at = excluded.updated_at`, pipelineID, value, formatTime(time.Now().UTC()))
 	return err
 }
 

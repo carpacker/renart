@@ -148,13 +148,15 @@ func (s *PipelineService) UpdateSchedule(ctx context.Context, pipelineID string,
 	if root == nil {
 		return "", scheduler.PipelineSchedule{}, fmt.Errorf("pipeline config must be a YAML mapping")
 	}
-	if req.Enabled {
-		if strings.TrimSpace(req.Schedule) == "" {
-			return "", scheduler.PipelineSchedule{}, fmt.Errorf("schedule is required when scheduling is enabled")
-		}
-		setYAMLScalar(root, "schedule", strings.TrimSpace(req.Schedule))
-	} else {
-		removeYAMLKey(root, "schedule")
+	schedule := strings.TrimSpace(req.Schedule)
+	if schedule == "" {
+		schedule = strings.TrimSpace(yamlScalar(root, "schedule"))
+	}
+	if req.Enabled && schedule == "" {
+		return "", scheduler.PipelineSchedule{}, fmt.Errorf("schedule is required when scheduling is enabled")
+	}
+	if schedule != "" {
+		setYAMLScalar(root, "schedule", schedule)
 	}
 	if strings.TrimSpace(req.Timezone) != "" {
 		setYAMLScalar(root, "timezone", strings.TrimSpace(req.Timezone))

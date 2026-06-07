@@ -191,6 +191,9 @@ func (s *Service) Reconcile(ctx context.Context) error {
 	jobs := make([]*river.PeriodicJob, 0, len(pipelines))
 	for _, item := range pipelines {
 		item := item
+		if err := s.applyScheduleSettings(ctx, &item); err != nil {
+			return err
+		}
 		if !item.Enabled || strings.TrimSpace(item.Schedule) == "" {
 			continue
 		}
@@ -216,6 +219,9 @@ func (s *Service) ListSchedules(ctx context.Context) ([]PipelineSchedule, error)
 		return nil, err
 	}
 	for i := range items {
+		if err := s.applyScheduleSettings(ctx, &items[i]); err != nil {
+			return nil, err
+		}
 		if !items[i].Enabled || strings.TrimSpace(items[i].Schedule) == "" {
 			continue
 		}
@@ -227,6 +233,20 @@ func (s *Service) ListSchedules(ctx context.Context) ([]PipelineSchedule, error)
 	}
 	sort.Slice(items, func(i, j int) bool { return items[i].PipelineName < items[j].PipelineName })
 	return items, nil
+}
+
+func (s *Service) applyScheduleSettings(ctx context.Context, item *PipelineSchedule) error {
+	if s.store == nil || item == nil {
+		return nil
+	}
+	enabled, ok, err := s.store.ScheduleEnabled(ctx, item.PipelineID)
+	if err != nil {
+		return err
+	}
+	if ok {
+		item.Enabled = enabled && strings.TrimSpace(item.Schedule) != ""
+	}
+	return nil
 }
 
 func (s *Service) Trigger(ctx context.Context, pipeline PipelineSchedule, req TriggerRequest) (PipelineRun, error) {
