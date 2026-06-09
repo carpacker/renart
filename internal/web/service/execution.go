@@ -836,6 +836,13 @@ func (s *ExecutionService) MaterializePipelineStreamWithAssetEvents(ctx context.
 	}
 }
 
+// ResolvePipelineRunTarget validates that the pipeline ID decodes to a
+// runnable target path.
+func (s *ExecutionService) ResolvePipelineRunTarget(pipelineID string) error {
+	_, err := ResolvePipelineRunTarget(pipelineID)
+	return err
+}
+
 func ResolvePipelineRunTarget(pipelineID string) (string, error) {
 	relPath, err := DecodeID(pipelineID)
 	if err != nil {

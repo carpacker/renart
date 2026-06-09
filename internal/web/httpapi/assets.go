@@ -55,11 +55,11 @@ type (
 )
 
 type AssetHandlers interface {
-	CreateAsset(ctx context.Context, pipelineID string, req CreateAssetRequest) (AssetMutationResponse, *APIError)
-	UpdateAsset(ctx context.Context, assetID string, req UpdateAssetRequest) (AssetMutationResponse, *APIError)
-	DeleteAsset(ctx context.Context, assetID string) (StatusResponse, *APIError)
-	FormatSQLAsset(ctx context.Context, assetID string, req FormatSQLAssetRequest) (FormatSQLAssetResponse, *APIError)
-	FormatPythonAsset(ctx context.Context, assetID string, req FormatPythonAssetRequest) (FormatPythonAssetResponse, *APIError)
+	Create(ctx context.Context, pipelineID string, req CreateAssetRequest) (AssetMutationResponse, *APIError)
+	Update(ctx context.Context, assetID string, req UpdateAssetRequest) (AssetMutationResponse, *APIError)
+	Delete(ctx context.Context, assetID string) (StatusResponse, *APIError)
+	FormatSQL(ctx context.Context, assetID string, req FormatSQLAssetRequest) (FormatSQLAssetResponse, *APIError)
+	FormatPython(ctx context.Context, assetID string, req FormatPythonAssetRequest) (FormatPythonAssetResponse, *APIError)
 	PythonDiagnostics(ctx context.Context, assetID string, req PythonDiagnosticsRequest) (PythonDiagnosticsResponse, *APIError)
 	PythonCompletions(ctx context.Context, assetID string, req PythonCompletionsRequest) (PythonCompletionsResponse, *APIError)
 	PythonHover(ctx context.Context, assetID string, req PythonPositionRequest) (PythonHoverResponse, *APIError)
@@ -90,7 +90,7 @@ func (h *AssetsAPI) HandleCreateAsset(w http.ResponseWriter, r *http.Request) {
 		webapi.WriteBadRequest(w, "invalid_request_body", err.Error())
 		return
 	}
-	resp, apiErr := h.Service.CreateAsset(r.Context(), chi.URLParam(r, "id"), req)
+	resp, apiErr := h.Service.Create(r.Context(), chi.URLParam(r, "id"), req)
 	if apiErr != nil {
 		writeAPIError(w, apiErr)
 		return
@@ -104,7 +104,7 @@ func (h *AssetsAPI) HandleUpdateAsset(w http.ResponseWriter, r *http.Request) {
 		webapi.WriteBadRequest(w, "invalid_request_body", err.Error())
 		return
 	}
-	resp, apiErr := h.Service.UpdateAsset(r.Context(), chi.URLParam(r, "assetID"), req)
+	resp, apiErr := h.Service.Update(r.Context(), chi.URLParam(r, "assetID"), req)
 	if apiErr != nil {
 		writeAPIError(w, apiErr)
 		return
@@ -113,7 +113,7 @@ func (h *AssetsAPI) HandleUpdateAsset(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *AssetsAPI) HandleDeleteAsset(w http.ResponseWriter, r *http.Request) {
-	resp, apiErr := h.Service.DeleteAsset(r.Context(), chi.URLParam(r, "assetID"))
+	resp, apiErr := h.Service.Delete(r.Context(), chi.URLParam(r, "assetID"))
 	if apiErr != nil {
 		writeAPIError(w, apiErr)
 		return
@@ -127,7 +127,7 @@ func (h *AssetsAPI) HandleFormatSQLAsset(w http.ResponseWriter, r *http.Request)
 		webapi.WriteBadRequest(w, "invalid_request_body", err.Error())
 		return
 	}
-	resp, apiErr := h.Service.FormatSQLAsset(r.Context(), chi.URLParam(r, "assetID"), req)
+	resp, apiErr := h.Service.FormatSQL(r.Context(), chi.URLParam(r, "assetID"), req)
 	if apiErr != nil {
 		writeAPIError(w, apiErr)
 		return
@@ -141,7 +141,7 @@ func (h *AssetsAPI) HandleFormatPythonAsset(w http.ResponseWriter, r *http.Reque
 		webapi.WriteBadRequest(w, "invalid_request_body", err.Error())
 		return
 	}
-	resp, apiErr := h.Service.FormatPythonAsset(r.Context(), chi.URLParam(r, "assetID"), req)
+	resp, apiErr := h.Service.FormatPython(r.Context(), chi.URLParam(r, "assetID"), req)
 	if apiErr != nil {
 		writeAPIError(w, apiErr)
 		return

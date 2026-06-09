@@ -11,7 +11,7 @@ import (
 )
 
 type RunHandlers interface {
-	Run(ctx context.Context, req service.RunRequest) service.RunResult
+	Execute(ctx context.Context, req service.RunRequest) service.RunResult
 }
 
 type RunAPI struct {
@@ -29,7 +29,7 @@ func (h *RunAPI) HandleRun(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	result := h.Service.Run(r.Context(), req)
+	result := h.Service.Execute(r.Context(), req)
 	webapi.WriteJSON(w, result.HTTPCode, map[string]any{
 		"status":    result.Status,
 		"operation": result.Operation,
