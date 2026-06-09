@@ -7,6 +7,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	webapi "renart/internal/web/api"
+	"renart/internal/web/service"
 )
 
 type APIError struct {
@@ -25,173 +26,36 @@ type ErrorResponseBody struct {
 	Message string `json:"message"`
 }
 
-type CreateAssetRequest struct {
-	Name            string `json:"name"`
-	Type            string `json:"type"`
-	Path            string `json:"path"`
-	Content         string `json:"content"`
-	SourceAssetID   string `json:"source_asset_id"`
-	SeedFileName    string `json:"seed_file_name"`
-	SeedFileContent string `json:"seed_file_content"`
-}
-
-type UpdateAssetRequest struct {
-	Name                *string           `json:"name,omitempty"`
-	Type                *string           `json:"type,omitempty"`
-	Content             *string           `json:"content,omitempty"`
-	MaterializationType *string           `json:"materialization_type,omitempty"`
-	Meta                map[string]string `json:"meta,omitempty"`
-	Upstreams           []string          `json:"upstreams,omitempty"`
-}
-
-type FormatSQLAssetRequest struct {
-	Content string `json:"content"`
-}
-
-type FormatSQLAssetResponse struct {
-	Status  string `json:"status"`
-	AssetID string `json:"asset_id"`
-	Content string `json:"content"`
-	Error   string `json:"error,omitempty"`
-}
-
-type FormatPythonAssetRequest struct {
-	Content string `json:"content"`
-}
-
-type FormatPythonAssetResponse struct {
-	Status  string `json:"status"`
-	AssetID string `json:"asset_id"`
-	Content string `json:"content"`
-	Error   string `json:"error,omitempty"`
-}
-
-type PythonDiagnosticsRequest struct {
-	Content string `json:"content"`
-}
-
-type PythonCompletionsRequest struct {
-	Content  string `json:"content"`
-	Line     int    `json:"line"`
-	Column   int    `json:"column"`
-	Snippets bool   `json:"snippets"`
-}
-
-type PythonPositionRequest struct {
-	Content string `json:"content"`
-	Line    int    `json:"line"`
-	Column  int    `json:"column"`
-}
-
-type PythonDiagnosticsResponse struct {
-	Status      string             `json:"status"`
-	AssetID     string             `json:"asset_id"`
-	Diagnostics []PythonDiagnostic `json:"diagnostics,omitempty"`
-	Error       string             `json:"error,omitempty"`
-}
-
-type PythonDiagnostic struct {
-	ID       string       `json:"id"`
-	Message  string       `json:"message"`
-	Severity string       `json:"severity"`
-	Range    *PythonRange `json:"range,omitempty"`
-	Display  string       `json:"display,omitempty"`
-}
-
-type PythonRange struct {
-	Start PythonPosition `json:"start"`
-	End   PythonPosition `json:"end"`
-}
-
-type PythonPosition struct {
-	Line   int `json:"line"`
-	Column int `json:"column"`
-}
-
-type PythonCompletionsResponse struct {
-	Status      string             `json:"status"`
-	AssetID     string             `json:"asset_id"`
-	Completions []PythonCompletion `json:"completions,omitempty"`
-	Error       string             `json:"error,omitempty"`
-}
-
-type PythonCompletion struct {
-	Label               string           `json:"label"`
-	Kind                string           `json:"kind,omitempty"`
-	Detail              string           `json:"detail,omitempty"`
-	InsertText          string           `json:"insert_text,omitempty"`
-	InsertTextFormat    string           `json:"insert_text_format"`
-	Documentation       string           `json:"documentation,omitempty"`
-	ModuleName          string           `json:"module_name,omitempty"`
-	AdditionalTextEdits []PythonTextEdit `json:"additional_text_edits,omitempty"`
-}
-
-type PythonTextEdit struct {
-	Range PythonRange `json:"range"`
-	Text  string      `json:"text"`
-}
-
-type PythonHoverResponse struct {
-	Status  string       `json:"status"`
-	AssetID string       `json:"asset_id"`
-	Hover   *PythonHover `json:"hover,omitempty"`
-	Error   string       `json:"error,omitempty"`
-}
-
-type PythonHover struct {
-	Contents string       `json:"contents"`
-	Range    *PythonRange `json:"range,omitempty"`
-}
-
-type PythonSignatureHelpResponse struct {
-	Status        string               `json:"status"`
-	AssetID       string               `json:"asset_id"`
-	SignatureHelp *PythonSignatureHelp `json:"signature_help,omitempty"`
-	Error         string               `json:"error,omitempty"`
-}
-
-type PythonSignatureHelp struct {
-	Signatures      []PythonSignature `json:"signatures"`
-	ActiveSignature *int              `json:"active_signature,omitempty"`
-	ActiveParameter *int              `json:"active_parameter,omitempty"`
-}
-
-type PythonSignature struct {
-	Label           string                     `json:"label"`
-	Documentation   string                     `json:"documentation,omitempty"`
-	Parameters      []PythonSignatureParameter `json:"parameters"`
-	ActiveParameter *int                       `json:"active_parameter,omitempty"`
-}
-
-type PythonSignatureParameter struct {
-	Label         string `json:"label"`
-	Name          string `json:"name"`
-	Type          string `json:"type"`
-	Documentation string `json:"documentation,omitempty"`
-}
-
-type PythonGotoDefinitionResponse struct {
-	Status  string             `json:"status"`
-	AssetID string             `json:"asset_id"`
-	Targets []PythonGotoTarget `json:"targets,omitempty"`
-	Error   string             `json:"error,omitempty"`
-}
-
-type PythonGotoTarget struct {
-	Path       string      `json:"path"`
-	FocusRange PythonRange `json:"focus_range"`
-	FullRange  PythonRange `json:"full_range"`
-}
-
-type AssetMutationResponse struct {
-	Status    string `json:"status"`
-	AssetID   string `json:"asset_id,omitempty"`
-	AssetPath string `json:"asset_path,omitempty"`
-}
-
-type StatusResponse struct {
-	Status string `json:"status"`
-}
+// Asset request/response DTOs are defined once in the service package;
+// these aliases keep the httpapi names stable for handlers and consumers.
+type (
+	CreateAssetRequest           = service.CreateAssetParams
+	UpdateAssetRequest           = service.AssetUpdateRequest
+	FormatSQLAssetRequest        = service.FormatSQLAssetRequest
+	FormatSQLAssetResponse       = service.FormatSQLAssetResponse
+	FormatPythonAssetRequest     = service.FormatPythonAssetRequest
+	FormatPythonAssetResponse    = service.FormatPythonAssetResponse
+	PythonDiagnosticsRequest     = service.PythonDiagnosticsRequest
+	PythonCompletionsRequest     = service.PythonCompletionsRequest
+	PythonPositionRequest        = service.PythonPositionRequest
+	PythonDiagnosticsResponse    = service.PythonDiagnosticsResponse
+	PythonDiagnostic             = service.PythonDiagnostic
+	PythonRange                  = service.PythonRange
+	PythonPosition               = service.PythonPosition
+	PythonCompletionsResponse    = service.PythonCompletionsResponse
+	PythonCompletion             = service.PythonCompletion
+	PythonTextEdit               = service.PythonTextEdit
+	PythonHoverResponse          = service.PythonHoverResponse
+	PythonHover                  = service.PythonHover
+	PythonSignatureHelpResponse  = service.PythonSignatureHelpResponse
+	PythonSignatureHelp          = service.PythonSignatureHelp
+	PythonSignature              = service.PythonSignature
+	PythonSignatureParameter     = service.PythonSignatureParameter
+	PythonGotoDefinitionResponse = service.PythonGotoDefinitionResponse
+	PythonGotoTarget             = service.PythonGotoTarget
+	AssetMutationResponse        = service.AssetMutationResponse
+	StatusResponse               = service.StatusResponse
+)
 
 type AssetHandlers interface {
 	CreateAsset(ctx context.Context, pipelineID string, req CreateAssetRequest) (AssetMutationResponse, *APIError)

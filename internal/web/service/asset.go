@@ -13,12 +13,12 @@ import (
 )
 
 type AssetUpdateRequest struct {
-	Name                *string
-	Type                *string
-	Content             *string
-	MaterializationType *string
-	Meta                map[string]string
-	Upstreams           []string
+	Name                *string           `json:"name,omitempty"`
+	Type                *string           `json:"type,omitempty"`
+	Content             *string           `json:"content,omitempty"`
+	MaterializationType *string           `json:"materialization_type,omitempty"`
+	Meta                map[string]string `json:"meta,omitempty"`
+	Upstreams           []string          `json:"upstreams,omitempty"`
 }
 
 type AssetMutationResponse struct {
@@ -32,142 +32,142 @@ type StatusResponse struct {
 }
 
 type FormatSQLAssetRequest struct {
-	Content string
+	Content string `json:"content"`
 }
 
 type FormatSQLAssetResponse struct {
-	Status  string
-	AssetID string
-	Content string
-	Error   string
+	Status  string `json:"status"`
+	AssetID string `json:"asset_id"`
+	Content string `json:"content"`
+	Error   string `json:"error,omitempty"`
 }
 
 type FormatPythonAssetRequest struct {
-	Content string
+	Content string `json:"content"`
 }
 
 type FormatPythonAssetResponse struct {
-	Status  string
-	AssetID string
-	Content string
-	Error   string
+	Status  string `json:"status"`
+	AssetID string `json:"asset_id"`
+	Content string `json:"content"`
+	Error   string `json:"error,omitempty"`
 }
 
 type PythonDiagnosticsRequest struct {
-	Content string
+	Content string `json:"content"`
 }
 
 type PythonCompletionsRequest struct {
-	Content  string
-	Line     int
-	Column   int
-	Snippets bool
+	Content  string `json:"content"`
+	Line     int    `json:"line"`
+	Column   int    `json:"column"`
+	Snippets bool   `json:"snippets"`
 }
 
 type PythonPositionRequest struct {
-	Content string
-	Line    int
-	Column  int
+	Content string `json:"content"`
+	Line    int    `json:"line"`
+	Column  int    `json:"column"`
 }
 
 type PythonDiagnosticsResponse struct {
-	Status      string
-	AssetID     string
-	Diagnostics []PythonDiagnostic
-	Error       string
+	Status      string             `json:"status"`
+	AssetID     string             `json:"asset_id"`
+	Diagnostics []PythonDiagnostic `json:"diagnostics,omitempty"`
+	Error       string             `json:"error,omitempty"`
 }
 
 type PythonDiagnostic struct {
-	ID       string
-	Message  string
-	Severity string
-	Range    *PythonRange
-	Display  string
+	ID       string       `json:"id"`
+	Message  string       `json:"message"`
+	Severity string       `json:"severity"`
+	Range    *PythonRange `json:"range,omitempty"`
+	Display  string       `json:"display,omitempty"`
 }
 
 type PythonRange struct {
-	Start PythonPosition
-	End   PythonPosition
+	Start PythonPosition `json:"start"`
+	End   PythonPosition `json:"end"`
 }
 
 type PythonPosition struct {
-	Line   int
-	Column int
+	Line   int `json:"line"`
+	Column int `json:"column"`
 }
 
 type PythonCompletionsResponse struct {
-	Status      string
-	AssetID     string
-	Completions []PythonCompletion
-	Error       string
+	Status      string             `json:"status"`
+	AssetID     string             `json:"asset_id"`
+	Completions []PythonCompletion `json:"completions,omitempty"`
+	Error       string             `json:"error,omitempty"`
 }
 
 type PythonCompletion struct {
-	Label               string
-	Kind                string
-	Detail              string
-	InsertText          string
-	InsertTextFormat    string
-	Documentation       string
-	ModuleName          string
-	AdditionalTextEdits []PythonTextEdit
+	Label               string           `json:"label"`
+	Kind                string           `json:"kind,omitempty"`
+	Detail              string           `json:"detail,omitempty"`
+	InsertText          string           `json:"insert_text,omitempty"`
+	InsertTextFormat    string           `json:"insert_text_format"`
+	Documentation       string           `json:"documentation,omitempty"`
+	ModuleName          string           `json:"module_name,omitempty"`
+	AdditionalTextEdits []PythonTextEdit `json:"additional_text_edits,omitempty"`
 }
 
 type PythonTextEdit struct {
-	Range PythonRange
-	Text  string
+	Range PythonRange `json:"range"`
+	Text  string      `json:"text"`
 }
 
 type PythonHoverResponse struct {
-	Status  string
-	AssetID string
-	Hover   *PythonHover
-	Error   string
+	Status  string       `json:"status"`
+	AssetID string       `json:"asset_id"`
+	Hover   *PythonHover `json:"hover,omitempty"`
+	Error   string       `json:"error,omitempty"`
 }
 
 type PythonHover struct {
-	Contents string
-	Range    *PythonRange
+	Contents string       `json:"contents"`
+	Range    *PythonRange `json:"range,omitempty"`
 }
 
 type PythonSignatureHelpResponse struct {
-	Status        string
-	AssetID       string
-	SignatureHelp *PythonSignatureHelp
-	Error         string
+	Status        string               `json:"status"`
+	AssetID       string               `json:"asset_id"`
+	SignatureHelp *PythonSignatureHelp `json:"signature_help,omitempty"`
+	Error         string               `json:"error,omitempty"`
 }
 
 type PythonSignatureHelp struct {
-	Signatures      []PythonSignature
-	ActiveSignature *int
-	ActiveParameter *int
+	Signatures      []PythonSignature `json:"signatures"`
+	ActiveSignature *int              `json:"active_signature,omitempty"`
+	ActiveParameter *int              `json:"active_parameter,omitempty"`
 }
 
 type PythonSignature struct {
-	Label           string
-	Documentation   string
-	Parameters      []PythonSignatureParameter
-	ActiveParameter *int
+	Label           string                     `json:"label"`
+	Documentation   string                     `json:"documentation,omitempty"`
+	Parameters      []PythonSignatureParameter `json:"parameters"`
+	ActiveParameter *int                       `json:"active_parameter,omitempty"`
 }
 
 type PythonSignatureParameter struct {
-	Label         string
-	Name          string
-	Type          string
-	Documentation string
+	Label         string `json:"label"`
+	Name          string `json:"name"`
+	Type          string `json:"type"`
+	Documentation string `json:"documentation,omitempty"`
 }
 
 type PythonGotoDefinitionResponse struct {
-	Status  string
-	AssetID string
-	Targets []PythonGotoTarget
-	Error   string
+	Status  string             `json:"status"`
+	AssetID string             `json:"asset_id"`
+	Targets []PythonGotoTarget `json:"targets,omitempty"`
+	Error   string             `json:"error,omitempty"`
 }
 
 type PythonGotoTarget struct {
-	Path       string
-	FocusRange PythonRange
-	FullRange  PythonRange
+	Path       string      `json:"path"`
+	FocusRange PythonRange `json:"focus_range"`
+	FullRange  PythonRange `json:"full_range"`
 }
 
 type AssetDependencies struct {
@@ -332,13 +332,13 @@ func (s *AssetService) Create(ctx context.Context, pipelineID string, req Create
 }
 
 type CreateAssetParams struct {
-	Name            string
-	Type            string
-	Path            string
-	Content         string
-	SourceAssetID   string
-	SeedFileName    string
-	SeedFileContent string
+	Name            string `json:"name"`
+	Type            string `json:"type"`
+	Path            string `json:"path"`
+	Content         string `json:"content"`
+	SourceAssetID   string `json:"source_asset_id"`
+	SeedFileName    string `json:"seed_file_name"`
+	SeedFileContent string `json:"seed_file_content"`
 }
 
 func (s *AssetService) Update(ctx context.Context, assetID string, req AssetUpdateRequest) (AssetMutationResponse, *ServiceAPIError) {

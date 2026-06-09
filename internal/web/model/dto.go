@@ -62,6 +62,7 @@ type WorkspaceState struct {
 	Errors              []string            `json:"errors"`
 	UpdatedAt           time.Time           `json:"updated_at"`
 	Metadata            map[string][]string `json:"metadata"`
+	Revision            int64               `json:"revision,omitempty"`
 }
 
 // WorkspaceEvent represents an SSE event for workspace changes.

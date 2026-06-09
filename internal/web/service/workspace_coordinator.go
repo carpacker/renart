@@ -22,68 +22,20 @@ type WorkspaceEvent struct {
 	ChangedAssetIDs []string       `json:"changed_asset_ids,omitempty"`
 }
 
-type WorkspaceAsset struct {
-	ID                  string            `json:"id"`
-	Name                string            `json:"name"`
-	Type                string            `json:"type"`
-	Path                string            `json:"path"`
-	Content             string            `json:"content"`
-	Upstreams           []string          `json:"upstreams"`
-	Parameters          map[string]string `json:"parameters,omitempty"`
-	Meta                map[string]string `json:"meta,omitempty"`
-	Columns             []WorkspaceColumn `json:"columns,omitempty"`
-	Connection          string            `json:"connection,omitempty"`
-	MaterializationType string            `json:"materialization_type,omitempty"`
-	IsMaterialized      bool              `json:"is_materialized"`
-	MaterializedAs      string            `json:"materialized_as,omitempty"`
-	RowCount            *int64            `json:"row_count,omitempty"`
-}
-
-type WorkspaceColumnCheck struct {
-	Name        string `json:"name"`
-	Value       any    `json:"value,omitempty"`
-	Blocking    *bool  `json:"blocking,omitempty"`
-	Description string `json:"description,omitempty"`
-}
-
-type WorkspaceColumn struct {
-	Name          string                 `json:"name"`
-	Type          string                 `json:"type,omitempty"`
-	Description   string                 `json:"description,omitempty"`
-	Tags          []string               `json:"tags,omitempty"`
-	PrimaryKey    bool                   `json:"primary_key,omitempty"`
-	UpdateOnMerge bool                   `json:"update_on_merge,omitempty"`
-	MergeSQL      string                 `json:"merge_sql,omitempty"`
-	Nullable      *bool                  `json:"nullable,omitempty"`
-	Owner         string                 `json:"owner,omitempty"`
-	Domains       []string               `json:"domains,omitempty"`
-	Meta          map[string]string      `json:"meta,omitempty"`
-	Checks        []WorkspaceColumnCheck `json:"checks,omitempty"`
-}
-
-type WorkspacePipeline struct {
-	ID       string           `json:"id"`
-	Name     string           `json:"name"`
-	Path     string           `json:"path"`
-	Schedule string           `json:"schedule,omitempty"`
-	Assets   []WorkspaceAsset `json:"assets"`
-}
-
-type WorkspaceState struct {
-	Pipelines           []WorkspacePipeline `json:"pipelines"`
-	Connections         map[string]string   `json:"connections"`
-	SelectedEnvironment string              `json:"selected_environment,omitempty"`
-	Errors              []string            `json:"errors,omitempty"`
-	UpdatedAt           time.Time           `json:"updated_at"`
-	Metadata            map[string][]string `json:"metadata"`
-	Revision            int64               `json:"revision,omitempty"`
-}
+// The workspace DTOs are defined once in the model package; these aliases
+// keep service call sites compiling without a parallel type set.
+type (
+	WorkspaceAsset       = webmodel.Asset
+	WorkspaceColumnCheck = webmodel.ColumnCheck
+	WorkspaceColumn      = webmodel.Column
+	WorkspacePipeline    = webmodel.Pipeline
+	WorkspaceState       = webmodel.WorkspaceState
+)
 
 type WorkspaceCoordinatorDependencies struct {
 	WorkspaceService *WorkspaceService
 	Hub              *events.Hub
 	Freshness        *freshness.Tracker
-	ConvertState     func(webmodel.WorkspaceState) WorkspaceState
 	RefreshHook      func(context.Context) error
 }
 
@@ -125,7 +77,7 @@ func (c *WorkspaceCoordinator) Refresh(ctx context.Context) error {
 		return err
 	}
 
-	state := c.deps.ConvertState(c.deps.WorkspaceService.GetState())
+	state := c.deps.WorkspaceService.GetState()
 	state.Revision = c.revision.Add(1)
 	c.SetState(state)
 	return nil

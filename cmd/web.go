@@ -38,44 +38,15 @@ import (
 	"golang.org/x/net/http2"
 )
 
-type webAsset struct {
-	ID                  string            `json:"id"`
-	Name                string            `json:"name"`
-	Type                string            `json:"type"`
-	Path                string            `json:"path"`
-	Content             string            `json:"content"`
-	Upstreams           []string          `json:"upstreams"`
-	Parameters          map[string]string `json:"parameters,omitempty"`
-	Meta                map[string]string `json:"meta,omitempty"`
-	Columns             []webColumn       `json:"columns,omitempty"`
-	Connection          string            `json:"connection,omitempty"`
-	MaterializationType string            `json:"materialization_type,omitempty"`
-	IsMaterialized      bool              `json:"is_materialized"`
-	MaterializedAs      string            `json:"materialized_as,omitempty"`
-	RowCount            *int64            `json:"row_count,omitempty"`
-}
-
-type webColumnCheck struct {
-	Name        string `json:"name"`
-	Value       any    `json:"value,omitempty"`
-	Blocking    *bool  `json:"blocking,omitempty"`
-	Description string `json:"description,omitempty"`
-}
-
-type webColumn struct {
-	Name          string            `json:"name"`
-	Type          string            `json:"type,omitempty"`
-	Description   string            `json:"description,omitempty"`
-	Tags          []string          `json:"tags,omitempty"`
-	PrimaryKey    bool              `json:"primary_key,omitempty"`
-	UpdateOnMerge bool              `json:"update_on_merge,omitempty"`
-	MergeSQL      string            `json:"merge_sql,omitempty"`
-	Nullable      *bool             `json:"nullable,omitempty"`
-	Owner         string            `json:"owner,omitempty"`
-	Domains       []string          `json:"domains,omitempty"`
-	Meta          map[string]string `json:"meta,omitempty"`
-	Checks        []webColumnCheck  `json:"checks,omitempty"`
-}
+// Workspace DTOs are defined once in the model package and re-exported by
+// the service package; cmd uses them directly instead of mirror structs.
+type (
+	webAsset       = service.WorkspaceAsset
+	webColumnCheck = service.WorkspaceColumnCheck
+	webColumn      = service.WorkspaceColumn
+	webPipeline    = service.WorkspacePipeline
+	workspaceState = service.WorkspaceState
+)
 
 type apiError = webhttpapi.APIError
 type assetMutationResponse = webhttpapi.AssetMutationResponse
@@ -87,24 +58,6 @@ type pythonHoverResponse = webhttpapi.PythonHoverResponse
 type pythonSignatureHelpResponse = webhttpapi.PythonSignatureHelpResponse
 type pythonGotoDefinitionResponse = webhttpapi.PythonGotoDefinitionResponse
 type statusResponse = webhttpapi.StatusResponse
-
-type webPipeline struct {
-	ID       string     `json:"id"`
-	Name     string     `json:"name"`
-	Path     string     `json:"path"`
-	Schedule string     `json:"schedule,omitempty"`
-	Assets   []webAsset `json:"assets"`
-}
-
-type workspaceState struct {
-	Pipelines           []webPipeline       `json:"pipelines"`
-	Connections         map[string]string   `json:"connections"`
-	SelectedEnvironment string              `json:"selected_environment"`
-	Errors              []string            `json:"errors"`
-	UpdatedAt           time.Time           `json:"updated_at"`
-	Metadata            map[string][]string `json:"metadata"`
-	Revision            int64               `json:"revision,omitempty"`
-}
 
 type workspaceConfigFieldDef = service.WorkspaceConfigFieldDef
 
@@ -367,9 +320,6 @@ func Web() *cli.Command {
 				WorkspaceService: server.workspaceSvc,
 				Hub:              server.hub,
 				Freshness:        server.freshness,
-				ConvertState: func(state webmodel.WorkspaceState) service.WorkspaceState {
-					return workspaceCoordStateFromModel(state)
-				},
 			})
 
 			embeddedStaticFS, err := webui.DistFS()
@@ -560,350 +510,11 @@ func (s *webServer) registerRoutes(router chi.Router) {
 }
 
 func (s *webServer) currentState() workspaceState {
-	return workspaceStateFromCoord(s.workspaceCoord.CurrentState())
-}
-
-func (s *webServer) setState(state workspaceState) {
-	s.workspaceCoord.SetState(workspaceCoordStateFromWeb(state))
+	return s.workspaceCoord.CurrentState()
 }
 
 func (s *webServer) refreshWorkspace(ctx context.Context) error {
 	return s.workspaceCoord.Refresh(ctx)
-}
-
-func workspaceStateFromModel(state webmodel.WorkspaceState) workspaceState {
-	result := workspaceState{
-		Pipelines:           make([]webPipeline, 0, len(state.Pipelines)),
-		Connections:         mapsClone(state.Connections),
-		SelectedEnvironment: state.SelectedEnvironment,
-		Errors:              append([]string(nil), state.Errors...),
-		UpdatedAt:           state.UpdatedAt,
-		Metadata:            mapSliceClone(state.Metadata),
-	}
-
-	for _, pipeline := range state.Pipelines {
-		result.Pipelines = append(result.Pipelines, webPipelineFromModel(pipeline))
-	}
-
-	return result
-}
-
-func workspaceCoordStateFromModel(state webmodel.WorkspaceState) service.WorkspaceState {
-	result := service.WorkspaceState{
-		Pipelines:           make([]service.WorkspacePipeline, 0, len(state.Pipelines)),
-		Connections:         mapsClone(state.Connections),
-		SelectedEnvironment: state.SelectedEnvironment,
-		Errors:              append([]string(nil), state.Errors...),
-		UpdatedAt:           state.UpdatedAt,
-		Metadata:            mapSliceClone(state.Metadata),
-	}
-
-	for _, pipeline := range state.Pipelines {
-		result.Pipelines = append(result.Pipelines, workspaceCoordPipelineFromModel(pipeline))
-	}
-
-	return result
-}
-
-func workspaceCoordPipelineFromModel(pipeline webmodel.Pipeline) service.WorkspacePipeline {
-	result := service.WorkspacePipeline{
-		ID:       pipeline.ID,
-		Name:     pipeline.Name,
-		Path:     pipeline.Path,
-		Schedule: pipeline.Schedule,
-		Assets:   make([]service.WorkspaceAsset, 0, len(pipeline.Assets)),
-	}
-
-	for _, asset := range pipeline.Assets {
-		result.Assets = append(result.Assets, workspaceCoordAssetFromModel(asset))
-	}
-
-	return result
-}
-
-func workspaceCoordAssetFromModel(asset webmodel.Asset) service.WorkspaceAsset {
-	return service.WorkspaceAsset{
-		ID:                  asset.ID,
-		Name:                asset.Name,
-		Type:                asset.Type,
-		Path:                asset.Path,
-		Content:             asset.Content,
-		Upstreams:           append([]string(nil), asset.Upstreams...),
-		Parameters:          mapsClone(asset.Parameters),
-		Meta:                mapsClone(asset.Meta),
-		Columns:             workspaceCoordColumnsFromModel(asset.Columns),
-		Connection:          asset.Connection,
-		MaterializationType: asset.MaterializationType,
-		IsMaterialized:      asset.IsMaterialized,
-		MaterializedAs:      asset.MaterializedAs,
-		RowCount:            asset.RowCount,
-	}
-}
-
-func workspaceStateFromCoord(state service.WorkspaceState) workspaceState {
-	result := workspaceState{
-		Pipelines:           make([]webPipeline, 0, len(state.Pipelines)),
-		Connections:         mapsClone(state.Connections),
-		SelectedEnvironment: state.SelectedEnvironment,
-		Errors:              append([]string(nil), state.Errors...),
-		UpdatedAt:           state.UpdatedAt,
-		Metadata:            mapSliceClone(state.Metadata),
-		Revision:            state.Revision,
-	}
-
-	for _, pipeline := range state.Pipelines {
-		result.Pipelines = append(result.Pipelines, workspacePipelineFromCoord(pipeline))
-	}
-
-	return result
-}
-
-func workspaceCoordStateFromWeb(state workspaceState) service.WorkspaceState {
-	result := service.WorkspaceState{
-		Pipelines:           make([]service.WorkspacePipeline, 0, len(state.Pipelines)),
-		Connections:         mapsClone(state.Connections),
-		SelectedEnvironment: state.SelectedEnvironment,
-		Errors:              append([]string(nil), state.Errors...),
-		UpdatedAt:           state.UpdatedAt,
-		Metadata:            mapSliceClone(state.Metadata),
-		Revision:            state.Revision,
-	}
-
-	for _, pipeline := range state.Pipelines {
-		assets := make([]service.WorkspaceAsset, 0, len(pipeline.Assets))
-		for _, asset := range pipeline.Assets {
-			assets = append(assets, service.WorkspaceAsset{
-				ID:                  asset.ID,
-				Name:                asset.Name,
-				Type:                asset.Type,
-				Path:                asset.Path,
-				Content:             asset.Content,
-				Upstreams:           append([]string(nil), asset.Upstreams...),
-				Parameters:          mapsClone(asset.Parameters),
-				Meta:                mapsClone(asset.Meta),
-				Columns:             workspaceCoordColumnsFromWeb(asset.Columns),
-				Connection:          asset.Connection,
-				MaterializationType: asset.MaterializationType,
-				IsMaterialized:      asset.IsMaterialized,
-				MaterializedAs:      asset.MaterializedAs,
-				RowCount:            asset.RowCount,
-			})
-		}
-		result.Pipelines = append(result.Pipelines, service.WorkspacePipeline{
-			ID:       pipeline.ID,
-			Name:     pipeline.Name,
-			Path:     pipeline.Path,
-			Schedule: pipeline.Schedule,
-			Assets:   assets,
-		})
-	}
-
-	return result
-}
-
-func workspacePipelineFromCoord(pipeline service.WorkspacePipeline) webPipeline {
-	result := webPipeline{
-		ID:       pipeline.ID,
-		Name:     pipeline.Name,
-		Path:     pipeline.Path,
-		Schedule: pipeline.Schedule,
-		Assets:   make([]webAsset, 0, len(pipeline.Assets)),
-	}
-
-	for _, asset := range pipeline.Assets {
-		result.Assets = append(result.Assets, webAsset{
-			ID:                  asset.ID,
-			Name:                asset.Name,
-			Type:                asset.Type,
-			Path:                asset.Path,
-			Content:             asset.Content,
-			Upstreams:           append([]string(nil), asset.Upstreams...),
-			Parameters:          mapsClone(asset.Parameters),
-			Meta:                mapsClone(asset.Meta),
-			Columns:             webColumnsFromCoord(asset.Columns),
-			Connection:          asset.Connection,
-			MaterializationType: asset.MaterializationType,
-			IsMaterialized:      asset.IsMaterialized,
-			MaterializedAs:      asset.MaterializedAs,
-			RowCount:            asset.RowCount,
-		})
-	}
-
-	return result
-}
-
-func webPipelineFromModel(pipeline webmodel.Pipeline) webPipeline {
-	result := webPipeline{
-		ID:       pipeline.ID,
-		Name:     pipeline.Name,
-		Path:     pipeline.Path,
-		Schedule: pipeline.Schedule,
-		Assets:   make([]webAsset, 0, len(pipeline.Assets)),
-	}
-
-	for _, asset := range pipeline.Assets {
-		result.Assets = append(result.Assets, webAssetFromModel(asset))
-	}
-
-	return result
-}
-
-func webAssetFromModel(asset webmodel.Asset) webAsset {
-	result := webAsset{
-		ID:                  asset.ID,
-		Name:                asset.Name,
-		Type:                asset.Type,
-		Path:                asset.Path,
-		Content:             asset.Content,
-		Upstreams:           append([]string(nil), asset.Upstreams...),
-		Parameters:          mapsClone(asset.Parameters),
-		Meta:                mapsClone(asset.Meta),
-		Columns:             make([]webColumn, 0, len(asset.Columns)),
-		Connection:          asset.Connection,
-		MaterializationType: asset.MaterializationType,
-		IsMaterialized:      asset.IsMaterialized,
-		MaterializedAs:      asset.MaterializedAs,
-		RowCount:            asset.RowCount,
-	}
-
-	for _, column := range asset.Columns {
-		result.Columns = append(result.Columns, webColumnFromModel(column))
-	}
-
-	return result
-}
-
-func webColumnFromModel(column webmodel.Column) webColumn {
-	result := webColumn{
-		Name:          column.Name,
-		Type:          column.Type,
-		Description:   column.Description,
-		Tags:          append([]string(nil), column.Tags...),
-		PrimaryKey:    column.PrimaryKey,
-		UpdateOnMerge: column.UpdateOnMerge,
-		MergeSQL:      column.MergeSQL,
-		Nullable:      column.Nullable,
-		Owner:         column.Owner,
-		Domains:       append([]string(nil), column.Domains...),
-		Meta:          mapsClone(column.Meta),
-		Checks:        make([]webColumnCheck, 0, len(column.Checks)),
-	}
-
-	for _, check := range column.Checks {
-		result.Checks = append(result.Checks, webColumnCheck{
-			Name:        check.Name,
-			Value:       check.Value,
-			Blocking:    check.Blocking,
-			Description: check.Description,
-		})
-	}
-
-	return result
-}
-
-func workspaceCoordColumnsFromModel(columns []webmodel.Column) []service.WorkspaceColumn {
-	result := make([]service.WorkspaceColumn, 0, len(columns))
-	for _, column := range columns {
-		checks := make([]service.WorkspaceColumnCheck, 0, len(column.Checks))
-		for _, check := range column.Checks {
-			checks = append(checks, service.WorkspaceColumnCheck{
-				Name:        check.Name,
-				Value:       check.Value,
-				Blocking:    check.Blocking,
-				Description: check.Description,
-			})
-		}
-
-		result = append(result, service.WorkspaceColumn{
-			Name:          column.Name,
-			Type:          column.Type,
-			Description:   column.Description,
-			Tags:          append([]string(nil), column.Tags...),
-			PrimaryKey:    column.PrimaryKey,
-			UpdateOnMerge: column.UpdateOnMerge,
-			MergeSQL:      column.MergeSQL,
-			Nullable:      column.Nullable,
-			Owner:         column.Owner,
-			Domains:       append([]string(nil), column.Domains...),
-			Meta:          mapsClone(column.Meta),
-			Checks:        checks,
-		})
-	}
-	return result
-}
-
-func workspaceCoordColumnsFromWeb(columns []webColumn) []service.WorkspaceColumn {
-	result := make([]service.WorkspaceColumn, 0, len(columns))
-	for _, column := range columns {
-		checks := make([]service.WorkspaceColumnCheck, 0, len(column.Checks))
-		for _, check := range column.Checks {
-			checks = append(checks, service.WorkspaceColumnCheck{
-				Name:        check.Name,
-				Value:       check.Value,
-				Blocking:    check.Blocking,
-				Description: check.Description,
-			})
-		}
-
-		result = append(result, service.WorkspaceColumn{
-			Name:          column.Name,
-			Type:          column.Type,
-			Description:   column.Description,
-			Tags:          append([]string(nil), column.Tags...),
-			PrimaryKey:    column.PrimaryKey,
-			UpdateOnMerge: column.UpdateOnMerge,
-			MergeSQL:      column.MergeSQL,
-			Nullable:      column.Nullable,
-			Owner:         column.Owner,
-			Domains:       append([]string(nil), column.Domains...),
-			Meta:          mapsClone(column.Meta),
-			Checks:        checks,
-		})
-	}
-	return result
-}
-
-func webColumnsFromCoord(columns []service.WorkspaceColumn) []webColumn {
-	result := make([]webColumn, 0, len(columns))
-	for _, column := range columns {
-		checks := make([]webColumnCheck, 0, len(column.Checks))
-		for _, check := range column.Checks {
-			checks = append(checks, webColumnCheck{
-				Name:        check.Name,
-				Value:       check.Value,
-				Blocking:    check.Blocking,
-				Description: check.Description,
-			})
-		}
-
-		result = append(result, webColumn{
-			Name:          column.Name,
-			Type:          column.Type,
-			Description:   column.Description,
-			Tags:          append([]string(nil), column.Tags...),
-			PrimaryKey:    column.PrimaryKey,
-			UpdateOnMerge: column.UpdateOnMerge,
-			MergeSQL:      column.MergeSQL,
-			Nullable:      column.Nullable,
-			Owner:         column.Owner,
-			Domains:       append([]string(nil), column.Domains...),
-			Meta:          mapsClone(column.Meta),
-			Checks:        checks,
-		})
-	}
-	return result
-}
-
-func mapsClone(input map[string]string) map[string]string {
-	if len(input) == 0 {
-		return map[string]string{}
-	}
-
-	result := make(map[string]string, len(input))
-	for key, value := range input {
-		result[key] = value
-	}
-	return result
 }
 
 func pipelineExecutionStatesToAPI(input []service.PipelineMaterializationState) []webhttpapi.PipelineMaterializationState {
@@ -918,18 +529,6 @@ func pipelineExecutionStatesToAPI(input []service.PipelineMaterializationState) 
 			Connection:      item.Connection,
 			DeclaredMatType: item.DeclaredMatType,
 		})
-	}
-	return result
-}
-
-func mapSliceClone(input map[string][]string) map[string][]string {
-	if len(input) == 0 {
-		return map[string][]string{}
-	}
-
-	result := make(map[string][]string, len(input))
-	for key, values := range input {
-		result[key] = append([]string(nil), values...)
 	}
 	return result
 }
@@ -1141,11 +740,11 @@ func (s *webServer) GetPipelineMaterialization(ctx context.Context, pipelineID, 
 }
 
 func (s *webServer) CreateAsset(ctx context.Context, pipelineID string, req webhttpapi.CreateAssetRequest) (assetMutationResponse, *apiError) {
-	result, err := s.assetSvc.Create(ctx, pipelineID, service.CreateAssetParams(req))
+	result, err := s.assetSvc.Create(ctx, pipelineID, req)
 	if err != nil {
 		return assetMutationResponse{}, &apiError{Status: err.Status, Code: err.Code, Message: err.Message}
 	}
-	return assetMutationResponse(result), nil
+	return result, nil
 }
 
 type updateAssetColumnsRequest struct {
@@ -1153,217 +752,67 @@ type updateAssetColumnsRequest struct {
 }
 
 func (s *webServer) UpdateAsset(ctx context.Context, assetID string, req webhttpapi.UpdateAssetRequest) (assetMutationResponse, *apiError) {
-	result, err := s.assetSvc.Update(ctx, assetID, service.AssetUpdateRequest{
-		Name:                req.Name,
-		Type:                req.Type,
-		Content:             req.Content,
-		MaterializationType: req.MaterializationType,
-		Meta:                req.Meta,
-		Upstreams:           req.Upstreams,
-	})
+	result, err := s.assetSvc.Update(ctx, assetID, req)
 	if err != nil {
 		return assetMutationResponse{}, &apiError{Status: err.Status, Code: err.Code, Message: err.Message}
 	}
-	return assetMutationResponse(result), nil
+	return result, nil
 }
 
 func (s *webServer) FormatSQLAsset(ctx context.Context, assetID string, req webhttpapi.FormatSQLAssetRequest) (formatSQLAssetResponse, *apiError) {
-	result, err := s.assetSvc.FormatSQL(ctx, assetID, service.FormatSQLAssetRequest{Content: req.Content})
+	result, err := s.assetSvc.FormatSQL(ctx, assetID, req)
 	if err != nil {
 		return formatSQLAssetResponse{}, &apiError{Status: err.Status, Code: err.Code, Message: err.Message}
 	}
-	return formatSQLAssetResponse(result), nil
+	return result, nil
 }
 
 func (s *webServer) FormatPythonAsset(ctx context.Context, assetID string, req webhttpapi.FormatPythonAssetRequest) (formatPythonAssetResponse, *apiError) {
-	result, err := s.assetSvc.FormatPython(ctx, assetID, service.FormatPythonAssetRequest{Content: req.Content})
+	result, err := s.assetSvc.FormatPython(ctx, assetID, req)
 	if err != nil {
 		return formatPythonAssetResponse{}, &apiError{Status: err.Status, Code: err.Code, Message: err.Message}
 	}
-	return formatPythonAssetResponse(result), nil
+	return result, nil
 }
 
 func (s *webServer) PythonDiagnostics(ctx context.Context, assetID string, req webhttpapi.PythonDiagnosticsRequest) (pythonDiagnosticsResponse, *apiError) {
-	result, err := s.assetSvc.PythonDiagnostics(ctx, assetID, service.PythonDiagnosticsRequest{Content: req.Content})
+	result, err := s.assetSvc.PythonDiagnostics(ctx, assetID, req)
 	if err != nil {
 		return pythonDiagnosticsResponse{}, &apiError{Status: err.Status, Code: err.Code, Message: err.Message}
 	}
-	return pythonDiagnosticsResponse{
-		Status:      result.Status,
-		AssetID:     result.AssetID,
-		Diagnostics: pythonDiagnosticsToAPI(result.Diagnostics),
-		Error:       result.Error,
-	}, nil
+	return result, nil
 }
 
 func (s *webServer) PythonCompletions(ctx context.Context, assetID string, req webhttpapi.PythonCompletionsRequest) (pythonCompletionsResponse, *apiError) {
-	result, err := s.assetSvc.PythonCompletions(ctx, assetID, service.PythonCompletionsRequest{Content: req.Content, Line: req.Line, Column: req.Column, Snippets: req.Snippets})
+	result, err := s.assetSvc.PythonCompletions(ctx, assetID, req)
 	if err != nil {
 		return pythonCompletionsResponse{}, &apiError{Status: err.Status, Code: err.Code, Message: err.Message}
 	}
-	return pythonCompletionsResponse{
-		Status:      result.Status,
-		AssetID:     result.AssetID,
-		Completions: pythonCompletionsToAPI(result.Completions),
-		Error:       result.Error,
-	}, nil
+	return result, nil
 }
 
 func (s *webServer) PythonHover(ctx context.Context, assetID string, req webhttpapi.PythonPositionRequest) (pythonHoverResponse, *apiError) {
-	result, err := s.assetSvc.PythonHover(ctx, assetID, service.PythonPositionRequest{Content: req.Content, Line: req.Line, Column: req.Column})
+	result, err := s.assetSvc.PythonHover(ctx, assetID, req)
 	if err != nil {
 		return pythonHoverResponse{}, &apiError{Status: err.Status, Code: err.Code, Message: err.Message}
 	}
-	return pythonHoverResponse{
-		Status:  result.Status,
-		AssetID: result.AssetID,
-		Hover:   pythonHoverToAPI(result.Hover),
-		Error:   result.Error,
-	}, nil
+	return result, nil
 }
 
 func (s *webServer) PythonSignatureHelp(ctx context.Context, assetID string, req webhttpapi.PythonPositionRequest) (pythonSignatureHelpResponse, *apiError) {
-	result, err := s.assetSvc.PythonSignatureHelp(ctx, assetID, service.PythonPositionRequest{Content: req.Content, Line: req.Line, Column: req.Column})
+	result, err := s.assetSvc.PythonSignatureHelp(ctx, assetID, req)
 	if err != nil {
 		return pythonSignatureHelpResponse{}, &apiError{Status: err.Status, Code: err.Code, Message: err.Message}
 	}
-	return pythonSignatureHelpResponse{
-		Status:        result.Status,
-		AssetID:       result.AssetID,
-		SignatureHelp: pythonSignatureHelpToAPI(result.SignatureHelp),
-		Error:         result.Error,
-	}, nil
+	return result, nil
 }
 
 func (s *webServer) PythonGotoDefinition(ctx context.Context, assetID string, req webhttpapi.PythonPositionRequest) (pythonGotoDefinitionResponse, *apiError) {
-	result, err := s.assetSvc.PythonGotoDefinition(ctx, assetID, service.PythonPositionRequest{Content: req.Content, Line: req.Line, Column: req.Column})
+	result, err := s.assetSvc.PythonGotoDefinition(ctx, assetID, req)
 	if err != nil {
 		return pythonGotoDefinitionResponse{}, &apiError{Status: err.Status, Code: err.Code, Message: err.Message}
 	}
-	return pythonGotoDefinitionResponse{
-		Status:  result.Status,
-		AssetID: result.AssetID,
-		Targets: pythonGotoTargetsToAPI(result.Targets),
-		Error:   result.Error,
-	}, nil
-}
-
-func pythonDiagnosticsToAPI(input []service.PythonDiagnostic) []webhttpapi.PythonDiagnostic {
-	result := make([]webhttpapi.PythonDiagnostic, 0, len(input))
-	for _, diagnostic := range input {
-		result = append(result, webhttpapi.PythonDiagnostic{
-			ID:       diagnostic.ID,
-			Message:  diagnostic.Message,
-			Severity: diagnostic.Severity,
-			Range:    pythonRangeToAPI(diagnostic.Range),
-			Display:  diagnostic.Display,
-		})
-	}
-	return result
-}
-
-func pythonRangeToAPI(input *service.PythonRange) *webhttpapi.PythonRange {
-	if input == nil {
-		return nil
-	}
-	return &webhttpapi.PythonRange{
-		Start: webhttpapi.PythonPosition{Line: input.Start.Line, Column: input.Start.Column},
-		End:   webhttpapi.PythonPosition{Line: input.End.Line, Column: input.End.Column},
-	}
-}
-
-func pythonCompletionsToAPI(input []service.PythonCompletion) []webhttpapi.PythonCompletion {
-	result := make([]webhttpapi.PythonCompletion, 0, len(input))
-	for _, completion := range input {
-		result = append(result, webhttpapi.PythonCompletion{
-			Label:               completion.Label,
-			Kind:                completion.Kind,
-			Detail:              completion.Detail,
-			InsertText:          completion.InsertText,
-			InsertTextFormat:    completion.InsertTextFormat,
-			Documentation:       completion.Documentation,
-			ModuleName:          completion.ModuleName,
-			AdditionalTextEdits: pythonTextEditsToAPI(completion.AdditionalTextEdits),
-		})
-	}
-	return result
-}
-
-func pythonTextEditsToAPI(input []service.PythonTextEdit) []webhttpapi.PythonTextEdit {
-	result := make([]webhttpapi.PythonTextEdit, 0, len(input))
-	for _, edit := range input {
-		result = append(result, webhttpapi.PythonTextEdit{
-			Range: webhttpapi.PythonRange{
-				Start: webhttpapi.PythonPosition{Line: edit.Range.Start.Line, Column: edit.Range.Start.Column},
-				End:   webhttpapi.PythonPosition{Line: edit.Range.End.Line, Column: edit.Range.End.Column},
-			},
-			Text: edit.Text,
-		})
-	}
-	return result
-}
-
-func pythonHoverToAPI(input *service.PythonHover) *webhttpapi.PythonHover {
-	if input == nil {
-		return nil
-	}
-	return &webhttpapi.PythonHover{Contents: input.Contents, Range: pythonRangeToAPI(input.Range)}
-}
-
-func pythonSignatureHelpToAPI(input *service.PythonSignatureHelp) *webhttpapi.PythonSignatureHelp {
-	if input == nil {
-		return nil
-	}
-	return &webhttpapi.PythonSignatureHelp{
-		Signatures:      pythonSignaturesToAPI(input.Signatures),
-		ActiveSignature: input.ActiveSignature,
-		ActiveParameter: input.ActiveParameter,
-	}
-}
-
-func pythonSignaturesToAPI(input []service.PythonSignature) []webhttpapi.PythonSignature {
-	result := make([]webhttpapi.PythonSignature, 0, len(input))
-	for _, signature := range input {
-		result = append(result, webhttpapi.PythonSignature{
-			Label:           signature.Label,
-			Documentation:   signature.Documentation,
-			Parameters:      pythonSignatureParametersToAPI(signature.Parameters),
-			ActiveParameter: signature.ActiveParameter,
-		})
-	}
-	return result
-}
-
-func pythonSignatureParametersToAPI(input []service.PythonSignatureParameter) []webhttpapi.PythonSignatureParameter {
-	result := make([]webhttpapi.PythonSignatureParameter, 0, len(input))
-	for _, parameter := range input {
-		result = append(result, webhttpapi.PythonSignatureParameter{
-			Label:         parameter.Label,
-			Name:          parameter.Name,
-			Type:          parameter.Type,
-			Documentation: parameter.Documentation,
-		})
-	}
-	return result
-}
-
-func pythonGotoTargetsToAPI(input []service.PythonGotoTarget) []webhttpapi.PythonGotoTarget {
-	result := make([]webhttpapi.PythonGotoTarget, 0, len(input))
-	for _, target := range input {
-		result = append(result, webhttpapi.PythonGotoTarget{
-			Path:       target.Path,
-			FocusRange: pythonRangeValueToAPI(target.FocusRange),
-			FullRange:  pythonRangeValueToAPI(target.FullRange),
-		})
-	}
-	return result
-}
-
-func pythonRangeValueToAPI(input service.PythonRange) webhttpapi.PythonRange {
-	return webhttpapi.PythonRange{
-		Start: webhttpapi.PythonPosition{Line: input.Start.Line, Column: input.Start.Column},
-		End:   webhttpapi.PythonPosition{Line: input.End.Line, Column: input.End.Column},
-	}
+	return result, nil
 }
 
 func (s *webServer) FillColumnsFromDB(ctx context.Context, assetID string) (int, map[string]any, *apiError) {
