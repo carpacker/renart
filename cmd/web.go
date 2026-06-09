@@ -33,6 +33,7 @@ import (
 	"renart/internal/web/watch"
 	webui "renart/web"
 
+	"go.uber.org/zap"
 	"golang.org/x/net/http2"
 )
 
@@ -65,6 +66,7 @@ type webServer struct {
 	hub       *events.Hub
 	executor  service.BruinCommandExecutor
 	freshness *freshness.Tracker
+	logger    *zap.Logger
 
 	duckDBOpsMu sync.Mutex
 	duckDBOps   map[string]*sync.Mutex
@@ -158,6 +160,12 @@ func Web() *cli.Command {
 				return fmt.Errorf("watch-poll-interval must be greater than zero")
 			}
 
+			logger, err := zap.NewDevelopment(zap.WithCaller(false))
+			if err != nil {
+				return fmt.Errorf("failed to initialize logger: %w", err)
+			}
+			defer func() { _ = logger.Sync() }()
+
 			server := &webServer{
 				workspaceRoot: absRoot,
 				staticDir:     staticDir,
@@ -170,6 +178,7 @@ func Web() *cli.Command {
 				executor:      nil,
 				freshness:     freshness.New(),
 				duckDBOps:     make(map[string]*sync.Mutex),
+				logger:        logger,
 			}
 
 			server.executor = service.NewHybridBruinExecutor(absRoot, "", server.newConnectionManager, server.newPipelineBuilder)
@@ -299,10 +308,12 @@ func Web() *cli.Command {
 				WorkspaceService: server.workspaceSvc,
 				Hub:              server.hub,
 				Freshness:        server.freshness,
+				Logger:           logger,
 			})
 
 			embeddedStaticFS, err := webui.DistFS()
 			if err != nil {
+				logger.Warn("embedded web assets unavailable, falling back to static dir", zap.Error(err))
 				embeddedStaticFS = nil
 			}
 
@@ -314,18 +325,19 @@ func Web() *cli.Command {
 			// Bootstrap materialization timestamps from existing run logs.
 			logsDir := filepath.Join(absRoot, "logs")
 			if err := server.freshness.LoadFromRunLogs(logsDir); err != nil {
-				fmt.Printf("warning: failed to load run logs for freshness tracking: %v\n", err)
+				logger.Warn("failed to load run logs for freshness tracking", zap.Error(err))
 			}
 
 			if err := server.refreshWorkspace(ctx); err != nil {
-				fmt.Printf("warning: initial workspace parse failed: %v\n", err)
+				logger.Warn("initial workspace parse failed", zap.Error(err))
 			}
 
 			if c.Bool("scheduler") {
 				if err := server.schedulerSvc.Start(ctx); err != nil {
-					fmt.Printf("warning: failed to start local scheduler: %v\n", err)
+					logger.Warn("failed to start local scheduler", zap.Error(err))
 				}
 			}
+			defer server.schedulerSvc.Stop()
 
 			go watch.New(watch.Config{
 				WorkspaceRoot: absRoot,
@@ -339,6 +351,11 @@ func Web() *cli.Command {
 			}).Start(ctx)
 
 			router := chi.NewRouter()
+			router.Use(
+				webhttpapi.Recoverer(logger),
+				webhttpapi.SameOriginGuard(),
+				webhttpapi.RequestLogger(logger),
+			)
 			server.registerRoutes(router)
 
 			host := c.String("host")
@@ -359,6 +376,9 @@ func Web() *cli.Command {
 				Addr:              address,
 				Handler:           router,
 				ReadHeaderTimeout: 10 * time.Second,
+				// No ReadTimeout/WriteTimeout: both would sever long-lived
+				// SSE streams; IdleTimeout only applies between requests.
+				IdleTimeout: 2 * time.Minute,
 			}
 			if tlsCert != "" {
 				if err := http2.ConfigureServer(httpServer, &http2.Server{}); err != nil {
@@ -530,7 +550,11 @@ func (s *webServer) WorkspaceChanged(ctx context.Context, relPath, eventType str
 	s.workspaceCoord.SuppressWatcherFor(relPath)
 	s.workspaceCoord.PushUpdateImmediate(ctx, eventType, relPath)
 	if s.schedulerSvc != nil {
-		go func() { _ = s.schedulerSvc.Reconcile(context.Background()) }()
+		go func() {
+			if err := s.schedulerSvc.Reconcile(context.Background()); err != nil && s.logger != nil {
+				s.logger.Warn("scheduler reconcile failed", zap.Error(err))
+			}
+		}()
 	}
 }
 

@@ -9,6 +9,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"go.uber.org/zap"
 	"renart/internal/web/events"
 	"renart/internal/web/freshness"
 	webmodel "renart/internal/web/model"
@@ -37,6 +38,7 @@ type WorkspaceCoordinatorDependencies struct {
 	Hub              *events.Hub
 	Freshness        *freshness.Tracker
 	RefreshHook      func(context.Context) error
+	Logger           *zap.Logger
 }
 
 type WorkspaceCoordinator struct {
@@ -83,6 +85,14 @@ func (c *WorkspaceCoordinator) Refresh(ctx context.Context) error {
 	return nil
 }
 
+// refreshLogged refreshes the workspace state and logs failures; the
+// previous state keeps being served when a re-parse fails mid-edit.
+func (c *WorkspaceCoordinator) refreshLogged(ctx context.Context) {
+	if err := c.Refresh(ctx); err != nil && c.deps.Logger != nil {
+		c.deps.Logger.Warn("workspace refresh failed, serving previous state", zap.Error(err))
+	}
+}
+
 func (c *WorkspaceCoordinator) SuppressWatcherFor(eventPath string) {
 	normalized := filepath.ToSlash(eventPath)
 	c.recentServerWritesMu.Lock()
@@ -107,7 +117,7 @@ func (c *WorkspaceCoordinator) IsWatcherSuppressed(eventPath string) bool {
 }
 
 func (c *WorkspaceCoordinator) PushUpdate(ctx context.Context, eventType, eventPath string) {
-	_ = c.Refresh(ctx)
+	c.refreshLogged(ctx)
 	state := c.CurrentState()
 	changed := c.FindDirectlyChangedAssetIDs(filepath.ToSlash(eventPath))
 
@@ -132,7 +142,7 @@ func (c *WorkspaceCoordinator) PushUpdateImmediate(ctx context.Context, eventTyp
 }
 
 func (c *WorkspaceCoordinator) PushUpdateImmediateWithChangedIDs(ctx context.Context, eventType, eventPath string, changedAssetIDs []string) {
-	_ = c.Refresh(ctx)
+	c.refreshLogged(ctx)
 	state := c.CurrentState()
 	changed := changedAssetIDs
 	if len(changed) == 0 {
