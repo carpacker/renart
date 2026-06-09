@@ -9,7 +9,7 @@ import {
   updatePipelineSchedule,
 } from "@/lib/api";
 import { schedulerRunEventAtom } from "@/lib/atoms/domains/results";
-import type { PipelineRun, PipelineRunLogLine, PipelineSchedule } from "@/lib/types";
+import type { PipelineRun, PipelineRunLogLine, PipelineRunStep, PipelineSchedule } from "@/lib/types";
 
 type SchedulePatch = Partial<Pick<PipelineSchedule, "enabled" | "schedule" | "timezone" | "catchup">>;
 
@@ -18,6 +18,7 @@ export function usePipelineScheduler({ selectedRunId }: { selectedRunId?: string
   const [runs, setRuns] = useState<PipelineRun[]>([]);
   const [selectedRun, setSelectedRun] = useState<PipelineRun | null>(null);
   const [logs, setLogs] = useState<PipelineRunLogLine[]>([]);
+  const [steps, setSteps] = useState<PipelineRunStep[]>([]);
   const [loading, setLoading] = useState(true);
   const [busyPipeline, setBusyPipeline] = useState<string | null>(null);
   const [loadingRunId, setLoadingRunId] = useState<string | null>(null);
@@ -59,6 +60,7 @@ export function usePipelineScheduler({ selectedRunId }: { selectedRunId?: string
       if (response.status === "ok") {
         setSelectedRun(response.run);
         setLogs(response.logs ?? []);
+        setSteps(response.steps ?? []);
       }
     } finally {
       setLoadingRunId(null);
@@ -100,6 +102,7 @@ export function usePipelineScheduler({ selectedRunId }: { selectedRunId?: string
         setRuns((current) => [response.run, ...current.filter((run) => run.id !== response.run.id)]);
         setSelectedRun(response.run);
         setLogs([]);
+        setSteps([]);
       }
       return response;
     } finally {
@@ -115,6 +118,7 @@ export function usePipelineScheduler({ selectedRunId }: { selectedRunId?: string
         setRuns((current) => [response.run, ...current.filter((run) => run.id !== response.run.id)]);
         setSelectedRun(response.run);
         setLogs([]);
+        setSteps([]);
       }
       return response;
     } finally {
@@ -130,6 +134,7 @@ export function usePipelineScheduler({ selectedRunId }: { selectedRunId?: string
     if (!selectedRunId) {
       setSelectedRun(null);
       setLogs([]);
+      setSteps([]);
       return;
     }
     void selectRun(selectedRunId);
@@ -146,6 +151,14 @@ export function usePipelineScheduler({ selectedRunId }: { selectedRunId?: string
       }
       return;
     }
+    if (schedulerRunEvent.type === "run.step") {
+      const step = schedulerRunEvent.run;
+      if (selectedRun?.id === step.run_id || selectedRunId === step.run_id) {
+        setSteps((existing) => [step, ...existing.filter((item) => !(item.run_id === step.run_id && item.asset === step.asset))]
+          .sort((a, b) => new Date(a.started_at ?? a.finished_at ?? 0).getTime() - new Date(b.started_at ?? b.finished_at ?? 0).getTime()));
+      }
+      return;
+    }
     const run = schedulerRunEvent.run;
     setRuns((current) => [run, ...current.filter((item) => item.id !== run.id)]);
     setSelectedRun((current) => (current?.id === run.id ? run : current));
@@ -157,6 +170,7 @@ export function usePipelineScheduler({ selectedRunId }: { selectedRunId?: string
     runs,
     selectedRun,
     logs,
+    steps,
     loading,
     busyPipeline,
     loadingRunId,

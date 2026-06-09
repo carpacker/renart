@@ -1,6 +1,6 @@
 import { atom } from "jotai";
 
-import type { PipelineRun, PipelineRunLogLine } from "@/lib/types";
+import type { PipelineRun, PipelineRunLogLine, PipelineRunStep } from "@/lib/types";
 
 export type AssetResultTab = "inspect" | "materialize";
 
@@ -24,7 +24,8 @@ export type MaterializeHistoryEntry = {
 
 export type SchedulerRunEvent =
   | { type: "run.queued" | "run.started" | "run.finished"; run: PipelineRun }
-  | { type: "run.log"; run: { run_id: string; log: PipelineRunLogLine } };
+  | { type: "run.log"; run: { run_id: string; log: PipelineRunLogLine } }
+  | { type: "run.step"; run: PipelineRunStep };
 
 export type AssetResultsState = {
   resultTab: AssetResultTab;

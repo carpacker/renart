@@ -51,11 +51,11 @@ func TestServiceTriggerPersistsRunAndLogs(t *testing.T) {
 	}
 
 	require.Eventually(t, func() bool {
-		stored, logs, err := service.GetRun(context.Background(), run.ID)
+		stored, logs, _, err := service.GetRun(context.Background(), run.ID)
 		return err == nil && stored.Status == RunStatusSuccess && len(logs) == 1
 	}, 2*time.Second, 20*time.Millisecond)
 
-	stored, logs, err := service.GetRun(context.Background(), run.ID)
+	stored, logs, _, err := service.GetRun(context.Background(), run.ID)
 	require.NoError(t, err)
 	assert.Equal(t, RunStatusSuccess, stored.Status)
 	assert.Equal(t, "running pipeline-id", logs[0].Line)
@@ -69,6 +69,36 @@ func TestServiceTriggerPersistsRunAndLogs(t *testing.T) {
 			"log":    logs[0],
 		},
 	})
+}
+
+func TestServicePersistsStructuredRunSteps(t *testing.T) {
+	stateDir := t.TempDir()
+	store, err := OpenStore(filepath.Join(stateDir, "state.db"))
+	require.NoError(t, err)
+	defer store.Close()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	service := New(Options{
+		Store:    store,
+		StateDir: stateDir,
+		Runner: func(ctx context.Context, req RunRequest, onLog func(string)) RunResult {
+			started := time.Now().UTC()
+			req.OnStep(RunStepEvent{Asset: "orders_cleaned", Status: RunStatusRunning, StartedAt: &started})
+			finished := started.Add(150 * time.Millisecond)
+			req.OnStep(RunStepEvent{Asset: "orders_cleaned", Status: RunStatusSuccess, StartedAt: &started, FinishedAt: &finished})
+			return RunResult{Status: "ok"}
+		},
+	})
+	require.NoError(t, service.Start(ctx))
+	defer service.Stop()
+
+	run, err := service.Trigger(ctx, PipelineSchedule{PipelineID: "pipeline-id", PipelineName: "analytics"}, TriggerRequest{Trigger: string(RunTriggerManual)})
+	require.NoError(t, err)
+	require.Eventually(t, func() bool {
+		_, _, steps, err := service.GetRun(context.Background(), run.ID)
+		return err == nil && len(steps) == 1 && steps[0].Status == RunStatusSuccess
+	}, 2*time.Second, 20*time.Millisecond)
 }
 
 func TestServiceTriggerRejectsActiveRun(t *testing.T) {
@@ -159,7 +189,7 @@ func TestScheduledWorkerCreatesRunAndWatermark(t *testing.T) {
 	require.NotNil(t, runs[0].WinEnd)
 	assert.True(t, runs[0].WinStart.Before(*runs[0].WinEnd))
 
-	_, logs, err := service.GetRun(context.Background(), runs[0].ID)
+	_, logs, _, err := service.GetRun(context.Background(), runs[0].ID)
 	require.NoError(t, err)
 	require.Len(t, logs, 1)
 	assert.Equal(t, "scheduled pipeline-id", logs[0].Line)

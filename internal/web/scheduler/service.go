@@ -298,13 +298,13 @@ func (s *Service) ListRuns(ctx context.Context, filter RunFilter) ([]PipelineRun
 	return s.store.List(ctx, filter)
 }
 
-func (s *Service) GetRun(ctx context.Context, id string) (PipelineRun, []LogLine, error) {
+func (s *Service) GetRun(ctx context.Context, id string) (PipelineRun, []LogLine, []PipelineRunStep, error) {
 	return s.store.Get(ctx, id)
 }
 
 func (s *Service) prepareRun(ctx context.Context, args pipelineRunJobArgs) (PipelineRun, bool, error) {
 	if strings.TrimSpace(args.RunID) != "" {
-		run, _, err := s.store.Get(ctx, args.RunID)
+		run, _, _, err := s.store.Get(ctx, args.RunID)
 		if err != nil {
 			return PipelineRun{}, false, err
 		}
@@ -375,6 +375,9 @@ func (s *Service) execute(ctx context.Context, run PipelineRun) error {
 	s.publishRunEvent("run.started", run)
 
 	req := RunRequest{PipelineID: run.PipelineID, Environment: run.Environment}
+	req.OnStep = func(event RunStepEvent) {
+		s.persistRunStep(ctx, run.ID, event)
+	}
 	if run.WinStart != nil {
 		req.Start = run.WinStart.Format(time.RFC3339Nano)
 	}
@@ -395,6 +398,7 @@ func (s *Service) execute(ctx context.Context, run PipelineRun) error {
 		_ = s.store.SetInterval(ctx, run.PipelineID, *run.WinEnd)
 	}
 	finished := time.Now().UTC()
+	_ = s.store.FinishOpenSteps(ctx, run.ID, status, finished, runErr)
 	run.Status = status
 	run.FinishedAt = &finished
 	if runErr != nil {
@@ -402,6 +406,20 @@ func (s *Service) execute(ctx context.Context, run PipelineRun) error {
 	}
 	s.publishRunEvent("run.finished", run)
 	return nil
+}
+
+func (s *Service) persistRunStep(ctx context.Context, runID string, event RunStepEvent) {
+	asset := strings.TrimSpace(event.Asset)
+	if asset == "" {
+		return
+	}
+	step := PipelineRunStep{RunID: runID, Asset: asset, Status: event.Status, StartedAt: event.StartedAt, FinishedAt: event.FinishedAt, Error: event.Error}
+	if step.Status == "" {
+		step.Status = RunStatusRunning
+	}
+	if err := s.store.UpsertStep(ctx, step); err == nil {
+		s.publishRunEvent("run.step", step)
+	}
 }
 
 func (s *Service) windowStart(ctx context.Context, pipelineID string, end time.Time) time.Time {

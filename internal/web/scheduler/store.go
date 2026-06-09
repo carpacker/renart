@@ -76,6 +76,17 @@ func (s *Store) migrate(ctx context.Context) error {
 			FOREIGN KEY(run_id) REFERENCES pipeline_runs(id) ON DELETE CASCADE
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_run_logs_run_seq ON pipeline_run_logs (run_id, seq)`,
+		`CREATE TABLE IF NOT EXISTS pipeline_run_steps (
+			run_id TEXT NOT NULL,
+			asset TEXT NOT NULL,
+			status TEXT NOT NULL,
+			started_at TEXT,
+			finished_at TEXT,
+			error TEXT,
+			PRIMARY KEY(run_id, asset),
+			FOREIGN KEY(run_id) REFERENCES pipeline_runs(id) ON DELETE CASCADE
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_run_steps_run_started ON pipeline_run_steps (run_id, started_at)`,
 		`CREATE TABLE IF NOT EXISTS schedule_watermarks (
 			pipeline TEXT PRIMARY KEY,
 			up_to TEXT NOT NULL
@@ -158,26 +169,73 @@ func (s *Store) List(ctx context.Context, filter RunFilter) ([]PipelineRun, erro
 	return scanRuns(rows)
 }
 
-func (s *Store) Get(ctx context.Context, id string) (PipelineRun, []LogLine, error) {
+func (s *Store) Get(ctx context.Context, id string) (PipelineRun, []LogLine, []PipelineRunStep, error) {
 	row := s.db.QueryRowContext(ctx, `SELECT id, pipeline_id, pipeline, environment, trigger, status, win_start, win_end, started_at, finished_at, error, log_ref FROM pipeline_runs WHERE id = ?`, id)
 	run, err := scanRun(row)
 	if err != nil {
-		return PipelineRun{}, nil, err
+		return PipelineRun{}, nil, nil, err
 	}
 	logRows, err := s.db.QueryContext(ctx, `SELECT at, line FROM pipeline_run_logs WHERE run_id = ? ORDER BY seq ASC`, id)
 	if err != nil {
-		return PipelineRun{}, nil, err
+		return PipelineRun{}, nil, nil, err
 	}
 	defer logRows.Close()
 	logs := []LogLine{}
 	for logRows.Next() {
 		var atRaw, line string
 		if err := logRows.Scan(&atRaw, &line); err != nil {
-			return PipelineRun{}, nil, err
+			return PipelineRun{}, nil, nil, err
 		}
 		logs = append(logs, LogLine{At: parseTimeValue(atRaw), Line: line})
 	}
-	return run, logs, logRows.Err()
+	if err := logRows.Err(); err != nil {
+		return PipelineRun{}, nil, nil, err
+	}
+	steps, err := s.ListSteps(ctx, id)
+	if err != nil {
+		return PipelineRun{}, nil, nil, err
+	}
+	return run, logs, steps, nil
+}
+
+func (s *Store) UpsertStep(ctx context.Context, step PipelineRunStep) error {
+	if strings.TrimSpace(step.Asset) == "" {
+		return nil
+	}
+	_, err := s.db.ExecContext(ctx, `INSERT INTO pipeline_run_steps (run_id, asset, status, started_at, finished_at, error) VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(run_id, asset) DO UPDATE SET status = excluded.status, started_at = COALESCE(pipeline_run_steps.started_at, excluded.started_at), finished_at = excluded.finished_at, error = excluded.error`,
+		step.RunID, step.Asset, string(step.Status), timePtrString(step.StartedAt), timePtrString(step.FinishedAt), step.Error)
+	return err
+}
+
+func (s *Store) ListSteps(ctx context.Context, runID string) ([]PipelineRunStep, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT run_id, asset, status, started_at, finished_at, error FROM pipeline_run_steps WHERE run_id = ? ORDER BY COALESCE(started_at, finished_at, '') ASC, asset ASC`, runID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	steps := []PipelineRunStep{}
+	for rows.Next() {
+		var step PipelineRunStep
+		var status string
+		var startedAt, finishedAt sql.NullString
+		if err := rows.Scan(&step.RunID, &step.Asset, &status, &startedAt, &finishedAt, &step.Error); err != nil {
+			return nil, err
+		}
+		step.Status = RunStatus(status)
+		step.StartedAt = parseNullTime(startedAt)
+		step.FinishedAt = parseNullTime(finishedAt)
+		steps = append(steps, step)
+	}
+	return steps, rows.Err()
+}
+
+func (s *Store) FinishOpenSteps(ctx context.Context, runID string, status RunStatus, at time.Time, runErr error) error {
+	message := ""
+	if runErr != nil {
+		message = runErr.Error()
+	}
+	_, err := s.db.ExecContext(ctx, `UPDATE pipeline_run_steps SET status = ?, finished_at = ?, error = CASE WHEN ? = '' THEN error ELSE ? END WHERE run_id = ? AND finished_at IS NULL`, string(status), formatTime(at), message, message, runID)
+	return err
 }
 
 func (s *Store) HasActiveRun(ctx context.Context, pipelineID string) (bool, error) {

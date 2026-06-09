@@ -144,6 +144,15 @@ export type PipelineRunLogLine = {
   line: string;
 };
 
+export type PipelineRunStep = {
+  run_id: string;
+  asset: string;
+  status: PipelineRun["status"];
+  started_at?: string;
+  finished_at?: string;
+  error?: string;
+};
+
 export type SchedulesResponse = {
   status: "ok" | "error";
   schedules: PipelineSchedule[];
@@ -168,6 +177,7 @@ export type RunDetailResponse = {
   status: "ok" | "error";
   run: PipelineRun;
   logs: PipelineRunLogLine[];
+  steps: PipelineRunStep[];
 };
 
 export type OnboardingSessionState = Omit<

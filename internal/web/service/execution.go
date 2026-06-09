@@ -770,6 +770,10 @@ func (s *ExecutionService) GetPipelineMaterialization(ctx context.Context, pipel
 }
 
 func (s *ExecutionService) MaterializePipelineStream(ctx context.Context, pipelineID, environment string, dryRun bool, startDate, endDate string, onChunk func([]byte)) MaterializeResult {
+	return s.MaterializePipelineStreamWithAssetEvents(ctx, pipelineID, environment, dryRun, startDate, endDate, onChunk, nil)
+}
+
+func (s *ExecutionService) MaterializePipelineStreamWithAssetEvents(ctx context.Context, pipelineID, environment string, dryRun bool, startDate, endDate string, onChunk func([]byte), onAssetEvent func(ExecutionAssetEvent)) MaterializeResult {
 	target, err := ResolvePipelineRunTarget(pipelineID)
 	if err != nil {
 		return MaterializeResult{Status: "error", Error: "invalid pipeline id", ExitCode: 1}
@@ -780,7 +784,7 @@ func (s *ExecutionService) MaterializePipelineStream(ctx context.Context, pipeli
 		return MaterializeResult{Status: "error", Error: timeWindowErr.Error(), ExitCode: 1}
 	}
 	operation := withOperationTimeWindow(runOperation(target, pipelineID, "", environment), timeWindow)
-	output, runErr := s.deps.Executor.RunPipeline(ctx, RunPipelineRequest{Target: target, Environment: environment, DryRun: dryRun, StartDate: timeWindow.StartRFC3339(), EndDate: timeWindow.EndRFC3339()}, onChunk)
+	output, runErr := s.deps.Executor.RunPipeline(ctx, RunPipelineRequest{Target: target, Environment: environment, DryRun: dryRun, StartDate: timeWindow.StartRFC3339(), EndDate: timeWindow.EndRFC3339(), AssetEvent: onAssetEvent}, onChunk)
 
 	changedAssetIDs := make([]string, 0)
 	var materializedAt *time.Time
