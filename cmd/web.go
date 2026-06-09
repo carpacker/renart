@@ -88,19 +88,6 @@ type pythonSignatureHelpResponse = webhttpapi.PythonSignatureHelpResponse
 type pythonGotoDefinitionResponse = webhttpapi.PythonGotoDefinitionResponse
 type statusResponse = webhttpapi.StatusResponse
 
-type ingestrSuggestionItem struct {
-	Value  string `json:"value"`
-	Kind   string `json:"kind,omitempty"`
-	Detail string `json:"detail,omitempty"`
-}
-
-type sqlDiscoveryTableItem struct {
-	Name         string `json:"name"`
-	ShortName    string `json:"short_name"`
-	SchemaName   string `json:"schema_name,omitempty"`
-	DatabaseName string `json:"database_name,omitempty"`
-}
-
 type webPipeline struct {
 	ID       string     `json:"id"`
 	Name     string     `json:"name"`
@@ -1531,7 +1518,7 @@ func (s *webServer) getDuckDBOperationMutex(lockKey string) *sync.Mutex {
 }
 
 func (s *webServer) ResolvePipelineRunTarget(pipelineID string) error {
-	_, err := resolvePipelineRunTarget(pipelineID)
+	_, err := service.ResolvePipelineRunTarget(pipelineID)
 	return err
 }
 
