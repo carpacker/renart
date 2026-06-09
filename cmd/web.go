@@ -517,22 +517,6 @@ func (s *webServer) refreshWorkspace(ctx context.Context) error {
 	return s.workspaceCoord.Refresh(ctx)
 }
 
-func pipelineExecutionStatesToAPI(input []service.PipelineMaterializationState) []webhttpapi.PipelineMaterializationState {
-	result := make([]webhttpapi.PipelineMaterializationState, 0, len(input))
-	for _, item := range input {
-		result = append(result, webhttpapi.PipelineMaterializationState{
-			AssetID:         item.AssetID,
-			IsMaterialized:  item.IsMaterialized,
-			MaterializedAs:  item.MaterializedAs,
-			FreshnessStatus: item.FreshnessStatus,
-			RowCount:        item.RowCount,
-			Connection:      item.Connection,
-			DeclaredMatType: item.DeclaredMatType,
-		})
-	}
-	return result
-}
-
 func (s *webServer) newPipelineBuilder() *pipeline.Builder {
 	osFS := afero.NewOsFs()
 	return pipeline.NewBuilder(
@@ -724,25 +708,13 @@ func (s *webServer) MaterializeAssetStream(ctx context.Context, assetID, environ
 }
 
 func (s *webServer) GetPipelineMaterialization(ctx context.Context, pipelineID, environment string) (webhttpapi.PipelineMaterializationResponse, *apiError) {
-	response, err := s.executionSvc.GetPipelineMaterialization(ctx, pipelineID, environment)
-	if err != nil {
-		message := err.Error()
-		switch {
-		case strings.Contains(message, "invalid pipeline id"):
-			return webhttpapi.PipelineMaterializationResponse{}, &apiError{Status: http.StatusBadRequest, Code: "invalid_pipeline_id", Message: "invalid pipeline id"}
-		case strings.Contains(message, "invalid path"):
-			return webhttpapi.PipelineMaterializationResponse{}, &apiError{Status: http.StatusBadRequest, Code: "invalid_pipeline_path", Message: message}
-		default:
-			return webhttpapi.PipelineMaterializationResponse{}, &apiError{Status: http.StatusBadRequest, Code: "pipeline_parse_failed", Message: message}
-		}
-	}
-	return webhttpapi.PipelineMaterializationResponse{PipelineID: response.PipelineID, Assets: pipelineExecutionStatesToAPI(response.Assets)}, nil
+	return s.executionSvc.GetPipelineMaterialization(ctx, pipelineID, environment)
 }
 
 func (s *webServer) CreateAsset(ctx context.Context, pipelineID string, req webhttpapi.CreateAssetRequest) (assetMutationResponse, *apiError) {
 	result, err := s.assetSvc.Create(ctx, pipelineID, req)
 	if err != nil {
-		return assetMutationResponse{}, &apiError{Status: err.Status, Code: err.Code, Message: err.Message}
+		return assetMutationResponse{}, err
 	}
 	return result, nil
 }
@@ -754,7 +726,7 @@ type updateAssetColumnsRequest struct {
 func (s *webServer) UpdateAsset(ctx context.Context, assetID string, req webhttpapi.UpdateAssetRequest) (assetMutationResponse, *apiError) {
 	result, err := s.assetSvc.Update(ctx, assetID, req)
 	if err != nil {
-		return assetMutationResponse{}, &apiError{Status: err.Status, Code: err.Code, Message: err.Message}
+		return assetMutationResponse{}, err
 	}
 	return result, nil
 }
@@ -762,7 +734,7 @@ func (s *webServer) UpdateAsset(ctx context.Context, assetID string, req webhttp
 func (s *webServer) FormatSQLAsset(ctx context.Context, assetID string, req webhttpapi.FormatSQLAssetRequest) (formatSQLAssetResponse, *apiError) {
 	result, err := s.assetSvc.FormatSQL(ctx, assetID, req)
 	if err != nil {
-		return formatSQLAssetResponse{}, &apiError{Status: err.Status, Code: err.Code, Message: err.Message}
+		return formatSQLAssetResponse{}, err
 	}
 	return result, nil
 }
@@ -770,7 +742,7 @@ func (s *webServer) FormatSQLAsset(ctx context.Context, assetID string, req webh
 func (s *webServer) FormatPythonAsset(ctx context.Context, assetID string, req webhttpapi.FormatPythonAssetRequest) (formatPythonAssetResponse, *apiError) {
 	result, err := s.assetSvc.FormatPython(ctx, assetID, req)
 	if err != nil {
-		return formatPythonAssetResponse{}, &apiError{Status: err.Status, Code: err.Code, Message: err.Message}
+		return formatPythonAssetResponse{}, err
 	}
 	return result, nil
 }
@@ -778,7 +750,7 @@ func (s *webServer) FormatPythonAsset(ctx context.Context, assetID string, req w
 func (s *webServer) PythonDiagnostics(ctx context.Context, assetID string, req webhttpapi.PythonDiagnosticsRequest) (pythonDiagnosticsResponse, *apiError) {
 	result, err := s.assetSvc.PythonDiagnostics(ctx, assetID, req)
 	if err != nil {
-		return pythonDiagnosticsResponse{}, &apiError{Status: err.Status, Code: err.Code, Message: err.Message}
+		return pythonDiagnosticsResponse{}, err
 	}
 	return result, nil
 }
@@ -786,7 +758,7 @@ func (s *webServer) PythonDiagnostics(ctx context.Context, assetID string, req w
 func (s *webServer) PythonCompletions(ctx context.Context, assetID string, req webhttpapi.PythonCompletionsRequest) (pythonCompletionsResponse, *apiError) {
 	result, err := s.assetSvc.PythonCompletions(ctx, assetID, req)
 	if err != nil {
-		return pythonCompletionsResponse{}, &apiError{Status: err.Status, Code: err.Code, Message: err.Message}
+		return pythonCompletionsResponse{}, err
 	}
 	return result, nil
 }
@@ -794,7 +766,7 @@ func (s *webServer) PythonCompletions(ctx context.Context, assetID string, req w
 func (s *webServer) PythonHover(ctx context.Context, assetID string, req webhttpapi.PythonPositionRequest) (pythonHoverResponse, *apiError) {
 	result, err := s.assetSvc.PythonHover(ctx, assetID, req)
 	if err != nil {
-		return pythonHoverResponse{}, &apiError{Status: err.Status, Code: err.Code, Message: err.Message}
+		return pythonHoverResponse{}, err
 	}
 	return result, nil
 }
@@ -802,7 +774,7 @@ func (s *webServer) PythonHover(ctx context.Context, assetID string, req webhttp
 func (s *webServer) PythonSignatureHelp(ctx context.Context, assetID string, req webhttpapi.PythonPositionRequest) (pythonSignatureHelpResponse, *apiError) {
 	result, err := s.assetSvc.PythonSignatureHelp(ctx, assetID, req)
 	if err != nil {
-		return pythonSignatureHelpResponse{}, &apiError{Status: err.Status, Code: err.Code, Message: err.Message}
+		return pythonSignatureHelpResponse{}, err
 	}
 	return result, nil
 }
@@ -810,7 +782,7 @@ func (s *webServer) PythonSignatureHelp(ctx context.Context, assetID string, req
 func (s *webServer) PythonGotoDefinition(ctx context.Context, assetID string, req webhttpapi.PythonPositionRequest) (pythonGotoDefinitionResponse, *apiError) {
 	result, err := s.assetSvc.PythonGotoDefinition(ctx, assetID, req)
 	if err != nil {
-		return pythonGotoDefinitionResponse{}, &apiError{Status: err.Status, Code: err.Code, Message: err.Message}
+		return pythonGotoDefinitionResponse{}, err
 	}
 	return result, nil
 }
@@ -944,7 +916,7 @@ func (s *webServer) UpdateAssetColumns(ctx context.Context, assetID string, colu
 func (s *webServer) DeleteAsset(ctx context.Context, assetID string) (statusResponse, *apiError) {
 	result, err := s.assetSvc.Delete(ctx, assetID)
 	if err != nil {
-		return statusResponse{}, &apiError{Status: err.Status, Code: err.Code, Message: err.Message}
+		return statusResponse{}, err
 	}
 	return statusResponse(result), nil
 }
@@ -1356,11 +1328,11 @@ func (s *webServer) ColumnValues(ctx context.Context, connectionName, environmen
 	return s.sqlSvc.ColumnValues(ctx, connectionName, environment, query)
 }
 
-func (s *webServer) Databases(ctx context.Context, connectionName, environment string) (service.SQLDatabaseDiscoveryResult, *service.SQLAPIError) {
+func (s *webServer) Databases(ctx context.Context, connectionName, environment string) (service.SQLDatabaseDiscoveryResult, *service.APIError) {
 	return s.sqlSvc.Databases(ctx, connectionName, environment)
 }
 
-func (s *webServer) Tables(ctx context.Context, connectionName, databaseName, environment string) (service.SQLTableDiscoveryResult, *service.SQLAPIError) {
+func (s *webServer) Tables(ctx context.Context, connectionName, databaseName, environment string) (service.SQLTableDiscoveryResult, *service.APIError) {
 	return s.sqlSvc.Tables(ctx, connectionName, databaseName, environment)
 }
 
@@ -1368,19 +1340,19 @@ func (s *webServer) TableColumns(ctx context.Context, connectionName, tableName,
 	return s.sqlSvc.TableColumns(ctx, connectionName, tableName, environment)
 }
 
-func (s *webServer) Ingestr(ctx context.Context, connectionName, prefix, environment string) (service.IngestrSuggestionsResult, *service.SuggestionAPIError) {
+func (s *webServer) Ingestr(ctx context.Context, connectionName, prefix, environment string) (service.IngestrSuggestionsResult, *service.APIError) {
 	return s.suggestionsSvc.Ingestr(ctx, connectionName, prefix, environment)
 }
 
-func (s *webServer) SQLPath(ctx context.Context, assetID, prefix, environment string) (service.SQLPathSuggestionsResult, *service.SuggestionAPIError) {
+func (s *webServer) SQLPath(ctx context.Context, assetID, prefix, environment string) (service.SQLPathSuggestionsResult, *service.APIError) {
 	return s.suggestionsSvc.SQLPath(ctx, assetID, prefix, environment)
 }
 
-func (s *webServer) ParseContext(ctx context.Context, assetID, content string, schema []service.ParseContextSchemaTable) (service.ParseContextResult, *service.ParseContextAPIError) {
+func (s *webServer) ParseContext(ctx context.Context, assetID, content string, schema []service.ParseContextSchemaTable) (service.ParseContextResult, *service.APIError) {
 	return s.parseContextSvc.Parse(ctx, assetID, content, schema)
 }
 
-func (s *webServer) RenderJinja(ctx context.Context, assetID string, req service.JinjaRenderRequest) (service.JinjaRenderResult, *service.JinjaRenderAPIError) {
+func (s *webServer) RenderJinja(ctx context.Context, assetID string, req service.JinjaRenderRequest) (service.JinjaRenderResult, *service.APIError) {
 	return s.jinjaRenderSvc.Render(ctx, assetID, req)
 }
 

@@ -11,12 +11,6 @@ import (
 	"github.com/bruin-data/bruin/pkg/config"
 )
 
-type SQLAPIError struct {
-	Status  int
-	Code    string
-	Message string
-}
-
 type SQLColumnValuesResult struct {
 	Status string `json:"status"`
 	Values []any  `json:"values"`
@@ -93,27 +87,27 @@ func (s *SQLService) ColumnValues(ctx context.Context, connectionName, environme
 	return SQLColumnValuesResult{Status: "ok", Values: values}
 }
 
-func (s *SQLService) Databases(ctx context.Context, connectionName, environment string) (SQLDatabaseDiscoveryResult, *SQLAPIError) {
+func (s *SQLService) Databases(ctx context.Context, connectionName, environment string) (SQLDatabaseDiscoveryResult, *APIError) {
 	manager, err := s.deps.NewConnectionManager(ctx, environment)
 	if err != nil {
-		return SQLDatabaseDiscoveryResult{}, &SQLAPIError{Status: http.StatusInternalServerError, Code: "connection_manager_failed", Message: err.Error()}
+		return SQLDatabaseDiscoveryResult{}, &APIError{Status: http.StatusInternalServerError, Code: "connection_manager_failed", Message: err.Error()}
 	}
 
 	conn := manager.GetConnection(connectionName)
 	if conn == nil {
-		return SQLDatabaseDiscoveryResult{}, &SQLAPIError{Status: http.StatusBadRequest, Code: "connection_not_found", Message: fmt.Sprintf("connection '%s' not found", connectionName)}
+		return SQLDatabaseDiscoveryResult{}, &APIError{Status: http.StatusBadRequest, Code: "connection_not_found", Message: fmt.Sprintf("connection '%s' not found", connectionName)}
 	}
 
 	fetcher, ok := conn.(interface {
 		GetDatabases(ctx context.Context) ([]string, error)
 	})
 	if !ok {
-		return SQLDatabaseDiscoveryResult{}, &SQLAPIError{Status: http.StatusBadRequest, Code: "connection_type_not_supported", Message: fmt.Sprintf("connection '%s' does not support database discovery", connectionName)}
+		return SQLDatabaseDiscoveryResult{}, &APIError{Status: http.StatusBadRequest, Code: "connection_type_not_supported", Message: fmt.Sprintf("connection '%s' does not support database discovery", connectionName)}
 	}
 
 	databases, err := fetcher.GetDatabases(ctx)
 	if err != nil {
-		return SQLDatabaseDiscoveryResult{}, &SQLAPIError{Status: http.StatusBadRequest, Code: "sql_database_discovery_failed", Message: err.Error()}
+		return SQLDatabaseDiscoveryResult{}, &APIError{Status: http.StatusBadRequest, Code: "sql_database_discovery_failed", Message: err.Error()}
 	}
 
 	sort.Strings(databases)
@@ -125,15 +119,15 @@ func (s *SQLService) Databases(ctx context.Context, connectionName, environment 
 	}, nil
 }
 
-func (s *SQLService) Tables(ctx context.Context, connectionName, databaseName, environment string) (SQLTableDiscoveryResult, *SQLAPIError) {
+func (s *SQLService) Tables(ctx context.Context, connectionName, databaseName, environment string) (SQLTableDiscoveryResult, *APIError) {
 	manager, err := s.deps.NewConnectionManager(ctx, environment)
 	if err != nil {
-		return SQLTableDiscoveryResult{}, &SQLAPIError{Status: http.StatusInternalServerError, Code: "connection_manager_failed", Message: err.Error()}
+		return SQLTableDiscoveryResult{}, &APIError{Status: http.StatusInternalServerError, Code: "connection_manager_failed", Message: err.Error()}
 	}
 
 	conn := manager.GetConnection(connectionName)
 	if conn == nil {
-		return SQLTableDiscoveryResult{}, &SQLAPIError{Status: http.StatusBadRequest, Code: "connection_not_found", Message: fmt.Sprintf("connection '%s' not found", connectionName)}
+		return SQLTableDiscoveryResult{}, &APIError{Status: http.StatusBadRequest, Code: "connection_not_found", Message: fmt.Sprintf("connection '%s' not found", connectionName)}
 	}
 
 	tables := make([]SQLDiscoveryTableItem, 0)
@@ -142,7 +136,7 @@ func (s *SQLService) Tables(ctx context.Context, connectionName, databaseName, e
 	}); ok {
 		items, err := fetcherWithSchemas.GetTablesWithSchemas(ctx, databaseName)
 		if err != nil {
-			return SQLTableDiscoveryResult{}, &SQLAPIError{Status: http.StatusBadRequest, Code: "sql_table_discovery_failed", Message: err.Error()}
+			return SQLTableDiscoveryResult{}, &APIError{Status: http.StatusBadRequest, Code: "sql_table_discovery_failed", Message: err.Error()}
 		}
 		tables = BuildSQLDiscoveryTableItems(databaseName, items)
 	} else if fetcher, ok := conn.(interface {
@@ -150,11 +144,11 @@ func (s *SQLService) Tables(ctx context.Context, connectionName, databaseName, e
 	}); ok {
 		items, err := fetcher.GetTables(ctx, databaseName)
 		if err != nil {
-			return SQLTableDiscoveryResult{}, &SQLAPIError{Status: http.StatusBadRequest, Code: "sql_table_discovery_failed", Message: err.Error()}
+			return SQLTableDiscoveryResult{}, &APIError{Status: http.StatusBadRequest, Code: "sql_table_discovery_failed", Message: err.Error()}
 		}
 		tables = BuildSQLDiscoveryTableItemsWithoutSchemas(databaseName, items)
 	} else {
-		return SQLTableDiscoveryResult{}, &SQLAPIError{Status: http.StatusBadRequest, Code: "connection_type_not_supported", Message: fmt.Sprintf("connection '%s' does not support table discovery", connectionName)}
+		return SQLTableDiscoveryResult{}, &APIError{Status: http.StatusBadRequest, Code: "connection_type_not_supported", Message: fmt.Sprintf("connection '%s' does not support table discovery", connectionName)}
 	}
 
 	return SQLTableDiscoveryResult{

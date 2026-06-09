@@ -10,11 +10,8 @@ import (
 	"renart/internal/web/service"
 )
 
-type APIError struct {
-	Status  int
-	Code    string
-	Message string
-}
+// APIError is the shared service error shape, re-exported for handlers.
+type APIError = service.APIError
 
 type ErrorResponse struct {
 	Status string            `json:"status"`

@@ -13,7 +13,7 @@ import (
 )
 
 type JinjaRenderHandlers interface {
-	RenderJinja(ctx context.Context, assetID string, req service.JinjaRenderRequest) (service.JinjaRenderResult, *service.JinjaRenderAPIError)
+	RenderJinja(ctx context.Context, assetID string, req service.JinjaRenderRequest) (service.JinjaRenderResult, *service.APIError)
 }
 
 type JinjaRenderAPI struct {

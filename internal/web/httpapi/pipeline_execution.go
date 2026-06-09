@@ -7,22 +7,13 @@ import (
 	"github.com/go-chi/chi/v5"
 	webapi "renart/internal/web/api"
 	webmodel "renart/internal/web/model"
+	"renart/internal/web/service"
 )
 
-type PipelineMaterializationState struct {
-	AssetID         string `json:"asset_id"`
-	IsMaterialized  bool   `json:"is_materialized"`
-	MaterializedAs  string `json:"materialized_as,omitempty"`
-	FreshnessStatus string `json:"freshness_status,omitempty"`
-	RowCount        *int64 `json:"row_count,omitempty"`
-	Connection      string `json:"connection,omitempty"`
-	DeclaredMatType string `json:"materialization_type,omitempty"`
-}
-
-type PipelineMaterializationResponse struct {
-	PipelineID string                         `json:"pipeline_id"`
-	Assets     []PipelineMaterializationState `json:"assets"`
-}
+type (
+	PipelineMaterializationState    = service.PipelineMaterializationState
+	PipelineMaterializationResponse = service.PipelineMaterializationResponse
+)
 
 type PipelineExecutionHandlers interface {
 	GetPipelineMaterialization(ctx context.Context, pipelineID, environment string) (PipelineMaterializationResponse, *APIError)

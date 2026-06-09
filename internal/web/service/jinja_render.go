@@ -58,24 +58,18 @@ type JinjaRenderResult struct {
 	Error     string                `json:"error,omitempty"`
 }
 
-type JinjaRenderAPIError struct {
-	Status  int
-	Code    string
-	Message string
-}
-
 func NewJinjaRenderService(deps JinjaRenderDependencies) *JinjaRenderService {
 	return &JinjaRenderService{deps: deps}
 }
 
-func (s *JinjaRenderService) Render(ctx context.Context, assetID string, req JinjaRenderRequest) (JinjaRenderResult, *JinjaRenderAPIError) {
+func (s *JinjaRenderService) Render(ctx context.Context, assetID string, req JinjaRenderRequest) (JinjaRenderResult, *APIError) {
 	if s.deps.ResolveAssetByID == nil {
-		return JinjaRenderResult{}, &JinjaRenderAPIError{Status: 500, Code: "resolver_missing", Message: "asset resolver is not configured"}
+		return JinjaRenderResult{}, &APIError{Status: 500, Code: "resolver_missing", Message: "asset resolver is not configured"}
 	}
 
 	_, parsed, asset, err := s.deps.ResolveAssetByID(ctx, assetID)
 	if err != nil {
-		return JinjaRenderResult{}, &JinjaRenderAPIError{Status: 400, Code: "asset_resolve_failed", Message: err.Error()}
+		return JinjaRenderResult{}, &APIError{Status: 400, Code: "asset_resolve_failed", Message: err.Error()}
 	}
 
 	content := req.Content
@@ -85,7 +79,7 @@ func (s *JinjaRenderService) Render(ctx context.Context, assetID string, req Jin
 
 	renderer, err := buildJinjaPreviewRenderer(ctx, parsed, asset, req.StartDate, req.EndDate)
 	if err != nil {
-		return JinjaRenderResult{}, &JinjaRenderAPIError{Status: 400, Code: "renderer_failed", Message: err.Error()}
+		return JinjaRenderResult{}, &APIError{Status: 400, Code: "renderer_failed", Message: err.Error()}
 	}
 
 	rendered, renderErr := renderer.Render(content)

@@ -12,7 +12,7 @@ import (
 )
 
 type ParseContextHandlers interface {
-	ParseContext(ctx context.Context, assetID, content string, schema []service.ParseContextSchemaTable) (service.ParseContextResult, *service.ParseContextAPIError)
+	ParseContext(ctx context.Context, assetID, content string, schema []service.ParseContextSchemaTable) (service.ParseContextResult, *service.APIError)
 }
 
 type ParseContextAPI struct {

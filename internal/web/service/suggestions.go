@@ -18,12 +18,6 @@ type SuggestionItem struct {
 	Detail string `json:"detail,omitempty"`
 }
 
-type SuggestionAPIError struct {
-	Status  int
-	Code    string
-	Message string
-}
-
 type IngestrSuggestionsResult struct {
 	Status         string           `json:"status"`
 	ConnectionType string           `json:"connection_type,omitempty"`
@@ -52,15 +46,15 @@ func NewSuggestionsService(deps SuggestionsDependencies) *SuggestionsService {
 	return &SuggestionsService{deps: deps}
 }
 
-func (s *SuggestionsService) Ingestr(ctx context.Context, connectionName, prefix, environment string) (IngestrSuggestionsResult, *SuggestionAPIError) {
+func (s *SuggestionsService) Ingestr(ctx context.Context, connectionName, prefix, environment string) (IngestrSuggestionsResult, *APIError) {
 	manager, err := s.deps.NewConnectionManager(ctx, environment)
 	if err != nil {
-		return IngestrSuggestionsResult{}, &SuggestionAPIError{Status: 500, Code: "connection_manager_failed", Message: err.Error()}
+		return IngestrSuggestionsResult{}, &APIError{Status: 500, Code: "connection_manager_failed", Message: err.Error()}
 	}
 
 	conn := manager.GetConnection(connectionName)
 	if conn == nil {
-		return IngestrSuggestionsResult{}, &SuggestionAPIError{Status: 400, Code: "connection_not_found", Message: fmt.Sprintf("connection '%s' not found", connectionName)}
+		return IngestrSuggestionsResult{}, &APIError{Status: 400, Code: "connection_not_found", Message: fmt.Sprintf("connection '%s' not found", connectionName)}
 	}
 
 	result := IngestrSuggestionsResult{
@@ -75,7 +69,7 @@ func (s *SuggestionsService) Ingestr(ctx context.Context, connectionName, prefix
 	}); ok {
 		items, itemErr := BuildS3SuggestionItems(ctx, s3Conn, prefix, manager.GetConnectionDetails(connectionName))
 		if itemErr != nil {
-			return IngestrSuggestionsResult{}, &SuggestionAPIError{Status: 400, Code: "ingestr_s3_suggestions_failed", Message: itemErr.Error()}
+			return IngestrSuggestionsResult{}, &APIError{Status: 400, Code: "ingestr_s3_suggestions_failed", Message: itemErr.Error()}
 		}
 		result.Suggestions = items
 		return result, nil
@@ -86,12 +80,12 @@ func (s *SuggestionsService) Ingestr(ctx context.Context, connectionName, prefix
 	}); ok {
 		databaseName := DatabaseNameForConnectionDetails(manager.GetConnectionDetails(connectionName))
 		if databaseName == "" {
-			return IngestrSuggestionsResult{}, &SuggestionAPIError{Status: 400, Code: "database_name_missing", Message: fmt.Sprintf("connection '%s' has no database configured", connectionName)}
+			return IngestrSuggestionsResult{}, &APIError{Status: 400, Code: "database_name_missing", Message: fmt.Sprintf("connection '%s' has no database configured", connectionName)}
 		}
 
 		tables, tableErr := fetcherWithSchemas.GetTablesWithSchemas(ctx, databaseName)
 		if tableErr != nil {
-			return IngestrSuggestionsResult{}, &SuggestionAPIError{Status: 400, Code: "ingestr_table_suggestions_failed", Message: tableErr.Error()}
+			return IngestrSuggestionsResult{}, &APIError{Status: 400, Code: "ingestr_table_suggestions_failed", Message: tableErr.Error()}
 		}
 
 		result.Suggestions = BuildSchemaTableSuggestionItems(tables, prefix)
@@ -104,24 +98,24 @@ func (s *SuggestionsService) Ingestr(ctx context.Context, connectionName, prefix
 	}); ok {
 		suggestions, tableErr := BuildDuckDBSuggestionItems(ctx, fetcher, prefix)
 		if tableErr != nil {
-			return IngestrSuggestionsResult{}, &SuggestionAPIError{Status: 400, Code: "ingestr_table_suggestions_failed", Message: tableErr.Error()}
+			return IngestrSuggestionsResult{}, &APIError{Status: 400, Code: "ingestr_table_suggestions_failed", Message: tableErr.Error()}
 		}
 
 		result.Suggestions = suggestions
 		return result, nil
 	}
 
-	return IngestrSuggestionsResult{}, &SuggestionAPIError{Status: 400, Code: "connection_type_not_supported", Message: fmt.Sprintf("connection '%s' does not support ingestr suggestions", connectionName)}
+	return IngestrSuggestionsResult{}, &APIError{Status: 400, Code: "connection_type_not_supported", Message: fmt.Sprintf("connection '%s' does not support ingestr suggestions", connectionName)}
 }
 
-func (s *SuggestionsService) SQLPath(ctx context.Context, assetID, prefix, environment string) (SQLPathSuggestionsResult, *SuggestionAPIError) {
+func (s *SuggestionsService) SQLPath(ctx context.Context, assetID, prefix, environment string) (SQLPathSuggestionsResult, *APIError) {
 	if strings.TrimSpace(prefix) == "" {
 		return SQLPathSuggestionsResult{Status: "ok", Suggestions: []SuggestionItem{}}, nil
 	}
 
 	if s.deps.ResolveAssetByID != nil {
 		if _, _, _, err := s.deps.ResolveAssetByID(ctx, assetID); err != nil {
-			return SQLPathSuggestionsResult{}, &SuggestionAPIError{Status: 400, Code: "asset_not_found", Message: err.Error()}
+			return SQLPathSuggestionsResult{}, &APIError{Status: 400, Code: "asset_not_found", Message: err.Error()}
 		}
 	}
 
@@ -131,19 +125,19 @@ func (s *SuggestionsService) SQLPath(ctx context.Context, assetID, prefix, envir
 	case strings.HasPrefix(prefix, "s3://"):
 		items, err := s.BuildSQLS3PathSuggestionItems(ctx, prefix, environment)
 		if err != nil {
-			return SQLPathSuggestionsResult{}, &SuggestionAPIError{Status: 400, Code: "sql_path_suggestions_failed", Message: err.Error()}
+			return SQLPathSuggestionsResult{}, &APIError{Status: 400, Code: "sql_path_suggestions_failed", Message: err.Error()}
 		}
 		result.Suggestions = items
 	case strings.HasPrefix(prefix, "./"):
 		items, err := BuildWorkspacePathSuggestionItems(s.deps.WorkspaceRoot, prefix)
 		if err != nil {
-			return SQLPathSuggestionsResult{}, &SuggestionAPIError{Status: 400, Code: "sql_path_suggestions_failed", Message: err.Error()}
+			return SQLPathSuggestionsResult{}, &APIError{Status: 400, Code: "sql_path_suggestions_failed", Message: err.Error()}
 		}
 		result.Suggestions = items
 	case strings.HasPrefix(prefix, "/"):
 		items, err := BuildAbsolutePathSuggestionItems(prefix)
 		if err != nil {
-			return SQLPathSuggestionsResult{}, &SuggestionAPIError{Status: 400, Code: "sql_path_suggestions_failed", Message: err.Error()}
+			return SQLPathSuggestionsResult{}, &APIError{Status: 400, Code: "sql_path_suggestions_failed", Message: err.Error()}
 		}
 		result.Suggestions = items
 	}
