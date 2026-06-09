@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"net"
 	"net/http"
 	"net/url"
 	"runtime/debug"
@@ -10,6 +11,14 @@ import (
 	"go.uber.org/zap"
 	webapi "renart/internal/web/api"
 )
+
+func isLoopbackHost(hostname string) bool {
+	if strings.EqualFold(hostname, "localhost") {
+		return true
+	}
+	ip := net.ParseIP(hostname)
+	return ip != nil && ip.IsLoopback()
+}
 
 // statusWriter records the response status code while preserving the
 // http.Flusher behavior streaming handlers (SSE) depend on.
@@ -109,12 +118,21 @@ func SameOriginGuard() func(http.Handler) http.Handler {
 			}
 
 			parsed, err := url.Parse(origin)
-			if err != nil || parsed.Host == "" || !strings.EqualFold(parsed.Host, r.Host) {
+			if err != nil || parsed.Host == "" {
 				webapi.WriteError(w, http.StatusForbidden, "cross_origin_rejected", "cross-origin request rejected")
 				return
 			}
 
-			next.ServeHTTP(w, r)
+			// Loopback origins on any port are trusted so the Vite dev
+			// server (which proxies /api with a rewritten Host header)
+			// keeps working; web pages can never run on a loopback origin
+			// unless something local already serves them.
+			if strings.EqualFold(parsed.Host, r.Host) || isLoopbackHost(parsed.Hostname()) {
+				next.ServeHTTP(w, r)
+				return
+			}
+
+			webapi.WriteError(w, http.StatusForbidden, "cross_origin_rejected", "cross-origin request rejected")
 		})
 	}
 }
