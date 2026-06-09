@@ -256,6 +256,10 @@ export function useAssetResults() {
           };
         }
 
+        if (schedulerRunEvent.type === "run.step") {
+          return entry;
+        }
+
         if (entry.runId !== schedulerRunEvent.run.id) {
           return entry;
         }

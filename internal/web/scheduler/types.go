@@ -61,6 +61,15 @@ type PipelineRun struct {
 	LogRef      string     `json:"log_ref,omitempty"`
 }
 
+type PipelineRunStep struct {
+	RunID      string     `json:"run_id"`
+	Asset      string     `json:"asset"`
+	Status     RunStatus  `json:"status"`
+	StartedAt  *time.Time `json:"started_at,omitempty"`
+	FinishedAt *time.Time `json:"finished_at,omitempty"`
+	Error      string     `json:"error,omitempty"`
+}
+
 type LogLine struct {
 	At   time.Time `json:"at"`
 	Line string    `json:"line"`
@@ -88,4 +97,13 @@ type RunRequest struct {
 	Environment string
 	Start       string
 	End         string
+	OnStep      func(RunStepEvent)
+}
+
+type RunStepEvent struct {
+	Asset      string
+	Status     RunStatus
+	StartedAt  *time.Time
+	FinishedAt *time.Time
+	Error      string
 }

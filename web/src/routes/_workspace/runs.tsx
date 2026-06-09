@@ -70,6 +70,9 @@ function RunsPage() {
       }
       return;
     }
+    if (schedulerRunEvent.type === "run.step") {
+      return;
+    }
 
     const run = schedulerRunEvent.run;
     setRuns((current) => [

@@ -15,6 +15,7 @@ type RunAssetRequest struct {
 	Environment string
 	StartDate   string
 	EndDate     string
+	AssetEvent  func(ExecutionAssetEvent)
 }
 
 type RunPipelineRequest struct {
@@ -23,6 +24,15 @@ type RunPipelineRequest struct {
 	DryRun      bool
 	StartDate   string
 	EndDate     string
+	AssetEvent  func(ExecutionAssetEvent)
+}
+
+type ExecutionAssetEvent struct {
+	Asset      string
+	Status     string
+	StartedAt  *time.Time
+	FinishedAt *time.Time
+	Error      string
 }
 
 type QueryAssetRequest struct {

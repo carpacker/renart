@@ -17,7 +17,7 @@ type SchedulerHandlers interface {
 	UpdatePipelineSchedule(ctx context.Context, pipelineID string, req scheduler.UpdateScheduleRequest) (scheduler.PipelineSchedule, error)
 	TriggerPipeline(ctx context.Context, pipelineID string, req scheduler.TriggerRequest) (scheduler.PipelineRun, error)
 	ListRuns(ctx context.Context, filter scheduler.RunFilter) ([]scheduler.PipelineRun, error)
-	GetRun(ctx context.Context, runID string) (scheduler.PipelineRun, []scheduler.LogLine, error)
+	GetRun(ctx context.Context, runID string) (scheduler.PipelineRun, []scheduler.LogLine, []scheduler.PipelineRunStep, error)
 }
 
 type SchedulerAPI struct {
@@ -89,10 +89,10 @@ func (h *SchedulerAPI) HandleListRuns(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *SchedulerAPI) HandleGetRun(w http.ResponseWriter, r *http.Request) {
-	run, logs, err := h.Service.GetRun(r.Context(), chi.URLParam(r, "id"))
+	run, logs, steps, err := h.Service.GetRun(r.Context(), chi.URLParam(r, "id"))
 	if err != nil {
 		webapi.WriteBadRequest(w, "run_get_failed", err.Error())
 		return
 	}
-	webapi.WriteJSON(w, http.StatusOK, map[string]any{"status": "ok", "run": run, "logs": logs})
+	webapi.WriteJSON(w, http.StatusOK, map[string]any{"status": "ok", "run": run, "logs": logs, "steps": steps})
 }

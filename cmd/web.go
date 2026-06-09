@@ -350,10 +350,21 @@ func Web() *cli.Command {
 					server.hub.PublishImmediate(event)
 				},
 				Runner: func(ctx context.Context, req webscheduler.RunRequest, onLog func(string)) webscheduler.RunResult {
-					result := server.executionSvc.MaterializePipelineStream(ctx, req.PipelineID, req.Environment, false, req.Start, req.End, func(chunk []byte) {
+					result := server.executionSvc.MaterializePipelineStreamWithAssetEvents(ctx, req.PipelineID, req.Environment, false, req.Start, req.End, func(chunk []byte) {
 						if onLog != nil {
 							onLog(string(chunk))
 						}
+					}, func(event service.ExecutionAssetEvent) {
+						if req.OnStep == nil {
+							return
+						}
+						req.OnStep(webscheduler.RunStepEvent{
+							Asset:      event.Asset,
+							Status:     schedulerStatusFromExecutionStatus(event.Status),
+							StartedAt:  event.StartedAt,
+							FinishedAt: event.FinishedAt,
+							Error:      event.Error,
+						})
 					})
 					if result.Output != "" && onLog != nil {
 						onLog(result.Output)
@@ -1068,11 +1079,26 @@ func (s *webServer) ListRuns(ctx context.Context, filter webscheduler.RunFilter)
 	return s.schedulerSvc.ListRuns(ctx, filter)
 }
 
-func (s *webServer) GetRun(ctx context.Context, runID string) (webscheduler.PipelineRun, []webscheduler.LogLine, error) {
+func (s *webServer) GetRun(ctx context.Context, runID string) (webscheduler.PipelineRun, []webscheduler.LogLine, []webscheduler.PipelineRunStep, error) {
 	if s.schedulerSvc == nil {
-		return webscheduler.PipelineRun{}, nil, fmt.Errorf("scheduler is not initialized")
+		return webscheduler.PipelineRun{}, nil, nil, fmt.Errorf("scheduler is not initialized")
 	}
 	return s.schedulerSvc.GetRun(ctx, runID)
+}
+
+func schedulerStatusFromExecutionStatus(status string) webscheduler.RunStatus {
+	switch strings.ToLower(strings.TrimSpace(status)) {
+	case "success", "succeeded", "ok", "finished":
+		return webscheduler.RunStatusSuccess
+	case "failed", "failure", "error", "errored":
+		return webscheduler.RunStatusFailed
+	case "cancelled", "canceled":
+		return webscheduler.RunStatusCancelled
+	case "queued":
+		return webscheduler.RunStatusQueued
+	default:
+		return webscheduler.RunStatusRunning
+	}
 }
 
 func (s *webServer) CurrentWorkspace() any {
