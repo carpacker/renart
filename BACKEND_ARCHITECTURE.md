@@ -135,15 +135,24 @@ hide the call graph. Sub-packages would make boundaries legible. Not urgent.
 
 ## 4. Refactoring plan (order of attack)
 
-1. **Delete dead duplicated helpers** in `cmd/web_compat.go`.
+1. **Delete dead duplicated helpers** in `cmd/web_compat.go`. — _done_
 2. **Unify the model types** and delete conversion layers — unlocks everything
-   else.
-3. **Consolidate error types**, replace string-matched classification.
+   else. — _done: `model` owns workspace DTOs, `service` owns request/response
+   DTOs, `httpapi` re-exports aliases; ~800 lines of conversion code deleted_
+3. **Consolidate error types**, replace string-matched classification. —
+   _done: single `service.APIError`_
 4. **Slim down `cmd/web.go`**: re-point `httpapi` interfaces at services, move
-   adapter logic into services.
+   adapter logic into services. — _done: 2,175 → ~800 lines; handlers call
+   services directly; column operations live in `AssetService`_
 5. **Middleware + lifecycle**: zap logging, recovery, Origin check, scheduler
-   `Stop()` on shutdown, server timeouts.
-6. **Split `service` into sub-packages** opportunistically (later).
+   `Stop()` on shutdown, server timeouts. — _done: see
+   `internal/web/httpapi/middleware.go`; the origin guard trusts loopback
+   origins so the Vite dev proxy keeps working_
+6. **Split `service` into sub-packages** opportunistically (later). — _open_
+
+Note for future type changes: `web/scripts/generate-api-types.mjs` parses Go
+struct definitions to produce `web/lib/generated/api-types.ts`; it reads the
+workspace DTOs from `internal/web/model/dto.go`.
 
 Verification at each step: `go build ./...`, `go vet ./...`,
 `go test ./...`, and the live e2e suite (`corepack pnpm test:e2e:live` in
