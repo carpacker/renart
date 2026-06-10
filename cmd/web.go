@@ -122,25 +122,26 @@ type workspaceState struct {
 type workspaceConfigFieldDef = service.WorkspaceConfigFieldDef
 
 type webServer struct {
-	workspaceRoot   string
-	staticDir       string
-	staticHandler   http.Handler
-	watchMode       string
-	watchPoll       time.Duration
-	workspaceSvc    *service.WorkspaceService
-	configSvc       *service.ConfigService
-	pipelineSvc     *service.PipelineService
-	executionSvc    *service.ExecutionService
-	assetSvc        *service.AssetService
-	sqlSvc          *service.SQLService
-	suggestionsSvc  *service.SuggestionsService
-	parseContextSvc *service.ParseContextService
-	jinjaRenderSvc  *service.JinjaRenderService
-	runSvc          *service.RunService
-	onboardingSvc   *service.OnboardingService
-	schedulerSvc    *webscheduler.Service
-	schedulerStore  *webscheduler.Store
-	workspaceCoord  *service.WorkspaceCoordinator
+	workspaceRoot    string
+	staticDir        string
+	staticHandler    http.Handler
+	watchMode        string
+	watchPoll        time.Duration
+	workspaceSvc     *service.WorkspaceService
+	configSvc        *service.ConfigService
+	pipelineSvc      *service.PipelineService
+	executionSvc     *service.ExecutionService
+	assetSvc         *service.AssetService
+	sqlSvc           *service.SQLService
+	suggestionsSvc   *service.SuggestionsService
+	parseContextSvc  *service.ParseContextService
+	jinjaRenderSvc   *service.JinjaRenderService
+	runSvc           *service.RunService
+	onboardingSvc    *service.OnboardingService
+	sourceControlSvc *service.SourceControlService
+	schedulerSvc     *webscheduler.Service
+	schedulerStore   *webscheduler.Store
+	workspaceCoord   *service.WorkspaceCoordinator
 
 	hub       *events.Hub
 	executor  service.BruinCommandExecutor
@@ -332,6 +333,7 @@ func Web() *cli.Command {
 
 			server.runSvc = service.NewRunService(service.RunDependencies{Executor: server.executor})
 			server.onboardingSvc = service.NewOnboardingService(absRoot, resolveConfigFilePath(absRoot), server.executor)
+			server.sourceControlSvc = service.NewSourceControlService(absRoot)
 
 			statePath := c.String("scheduler-state")
 			if !filepath.IsAbs(statePath) {
@@ -563,6 +565,7 @@ func (s *webServer) registerRoutes(router chi.Router) {
 	webhttpapi.RegisterRunRoutes(router, &webhttpapi.RunAPI{Service: s})
 	webhttpapi.RegisterSchedulerRoutes(router, &webhttpapi.SchedulerAPI{Service: s})
 	webhttpapi.RegisterOnboardingRoutes(router, &webhttpapi.OnboardingAPI{Service: s.onboardingSvc, Publisher: s})
+	webhttpapi.RegisterSourceControlRoutes(router, &webhttpapi.SourceControlAPI{Service: s.sourceControlSvc})
 	router.Get("/api/assets/freshness", s.handleGetAssetFreshness)
 
 	router.Get("/*", s.handleStatic)

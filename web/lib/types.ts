@@ -180,6 +180,54 @@ export type RunDetailResponse = {
   steps: PipelineRunStep[];
 };
 
+export type SourceControlChange = {
+  path: string;
+  staged_status: string;
+  worktree_status: string;
+  staged: boolean;
+};
+
+export type SourceControlRepository = {
+  branch: string;
+  clean: boolean;
+  changes: SourceControlChange[];
+};
+
+export type SourceControlCommit = {
+  hash: string;
+  message: string;
+};
+
+export type SourceControlDiff = {
+  path: string;
+  staged: boolean;
+  patch: string;
+};
+
+export type SourceControlStatusResponse = {
+  status: "ok" | "error";
+  repository: SourceControlRepository;
+};
+
+export type SourceControlBranchesResponse = {
+  status: "ok" | "error";
+  branches: string[];
+};
+
+export type SourceControlDiffResponse = {
+  status: "ok" | "error";
+  diff: SourceControlDiff;
+};
+
+export type SourceControlActionResponse = {
+  status: "ok" | "error";
+  repository?: SourceControlRepository;
+};
+
+export type SourceControlCommitResponse = SourceControlActionResponse & {
+  commit?: SourceControlCommit;
+};
+
 export type OnboardingSessionState = Omit<
   GeneratedOnboardingSessionState,
   "step" | "import_result"
