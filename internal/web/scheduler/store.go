@@ -3,21 +3,30 @@ package scheduler
 import (
 	"context"
 	"database/sql"
+	"embed"
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/pressly/goose/v3"
 	"github.com/riverqueue/river/riverdriver/riversqlite"
 	"github.com/riverqueue/river/rivermigrate"
 	_ "modernc.org/sqlite"
+
+	"renart/internal/web/scheduler/storedb"
 )
 
+//go:embed storedb/migrations/*.sql
+var schedulerMigrations embed.FS
+
 type Store struct {
-	db *sql.DB
+	db      *sql.DB
+	queries *storedb.Queries
 }
 
 func OpenStore(path string) (*Store, error) {
@@ -32,7 +41,7 @@ func OpenStore(path string) (*Store, error) {
 		return nil, err
 	}
 	db.SetMaxOpenConns(1)
-	store := &Store{db: db}
+	store := &Store{db: db, queries: storedb.New(db)}
 	if err := store.migrate(context.Background()); err != nil {
 		_ = db.Close()
 		return nil, err
@@ -52,57 +61,16 @@ func (s *Store) Close() error {
 }
 
 func (s *Store) migrate(ctx context.Context) error {
-	statements := []string{
-		`CREATE TABLE IF NOT EXISTS pipeline_runs (
-			id TEXT PRIMARY KEY,
-			pipeline_id TEXT NOT NULL,
-			pipeline TEXT NOT NULL,
-			environment TEXT NOT NULL,
-			trigger TEXT NOT NULL,
-			status TEXT NOT NULL,
-			win_start TEXT,
-			win_end TEXT,
-			started_at TEXT,
-			finished_at TEXT,
-			error TEXT,
-			log_ref TEXT
-		)`,
-		`CREATE INDEX IF NOT EXISTS idx_runs_pipeline_time ON pipeline_runs (pipeline_id, started_at DESC)`,
-		`CREATE TABLE IF NOT EXISTS pipeline_run_logs (
-			run_id TEXT NOT NULL,
-			seq INTEGER PRIMARY KEY AUTOINCREMENT,
-			at TEXT NOT NULL,
-			line TEXT NOT NULL,
-			FOREIGN KEY(run_id) REFERENCES pipeline_runs(id) ON DELETE CASCADE
-		)`,
-		`CREATE INDEX IF NOT EXISTS idx_run_logs_run_seq ON pipeline_run_logs (run_id, seq)`,
-		`CREATE TABLE IF NOT EXISTS pipeline_run_steps (
-			run_id TEXT NOT NULL,
-			asset TEXT NOT NULL,
-			status TEXT NOT NULL,
-			started_at TEXT,
-			finished_at TEXT,
-			error TEXT,
-			PRIMARY KEY(run_id, asset),
-			FOREIGN KEY(run_id) REFERENCES pipeline_runs(id) ON DELETE CASCADE
-		)`,
-		`CREATE INDEX IF NOT EXISTS idx_run_steps_run_started ON pipeline_run_steps (run_id, started_at)`,
-		`CREATE TABLE IF NOT EXISTS schedule_watermarks (
-			pipeline TEXT PRIMARY KEY,
-			up_to TEXT NOT NULL
-		)`,
-		`CREATE TABLE IF NOT EXISTS pipeline_schedule_settings (
-			pipeline_id TEXT PRIMARY KEY,
-			enabled INTEGER NOT NULL,
-			updated_at TEXT NOT NULL
-		)`,
+	migrations, err := fs.Sub(schedulerMigrations, "storedb/migrations")
+	if err != nil {
+		return err
 	}
-	for _, statement := range statements {
-		if _, err := s.db.ExecContext(ctx, statement); err != nil {
-			return err
-		}
+	provider, err := goose.NewProvider(goose.DialectSQLite3, s.db, migrations)
+	if err != nil {
+		return err
 	}
-	return nil
+	_, err = provider.Up(ctx)
+	return err
 }
 
 func (s *Store) migrateRiver(ctx context.Context) error {
@@ -121,22 +89,36 @@ func (s *Store) Create(ctx context.Context, run PipelineRun) (string, error) {
 	if run.Status == "" {
 		run.Status = RunStatusQueued
 	}
-	_, err := s.db.ExecContext(ctx, `INSERT INTO pipeline_runs (id, pipeline_id, pipeline, environment, trigger, status, win_start, win_end, started_at, finished_at, error, log_ref) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		run.ID, run.PipelineID, run.Pipeline, run.Environment, string(run.Trigger), string(run.Status), timePtrString(run.WinStart), timePtrString(run.WinEnd), timePtrString(run.StartedAt), timePtrString(run.FinishedAt), run.Error, run.LogRef)
+	err := s.queries.CreateRun(ctx, storedb.CreateRunParams{
+		ID:          run.ID,
+		PipelineID:  run.PipelineID,
+		Pipeline:    run.Pipeline,
+		Environment: run.Environment,
+		Trigger:     string(run.Trigger),
+		Status:      string(run.Status),
+		WinStart:    nullTime(run.WinStart),
+		WinEnd:      nullTime(run.WinEnd),
+		StartedAt:   nullTime(run.StartedAt),
+		FinishedAt:  nullTime(run.FinishedAt),
+		Error:       stringValue(run.Error),
+		LogRef:      stringValue(run.LogRef),
+	})
 	return run.ID, err
 }
 
 func (s *Store) MarkRunning(ctx context.Context, id string, at time.Time) error {
-	_, err := s.db.ExecContext(ctx, `UPDATE pipeline_runs SET status = ?, started_at = ? WHERE id = ?`, string(RunStatusRunning), formatTime(at), id)
-	return err
+	return s.queries.MarkRunRunning(ctx, storedb.MarkRunRunningParams{
+		Status:    string(RunStatusRunning),
+		StartedAt: stringValue(formatTime(at)),
+		ID:        id,
+	})
 }
 
 func (s *Store) AppendLog(ctx context.Context, id string, line LogLine) error {
 	if line.At.IsZero() {
 		line.At = time.Now().UTC()
 	}
-	_, err := s.db.ExecContext(ctx, `INSERT INTO pipeline_run_logs (run_id, at, line) VALUES (?, ?, ?)`, id, formatTime(line.At), line.Line)
-	return err
+	return s.queries.AppendRunLog(ctx, storedb.AppendRunLogParams{RunID: id, At: formatTime(line.At), Line: line.Line})
 }
 
 func (s *Store) Finish(ctx context.Context, id string, status RunStatus, runErr error) error {
@@ -144,8 +126,12 @@ func (s *Store) Finish(ctx context.Context, id string, status RunStatus, runErr 
 	if runErr != nil {
 		message = runErr.Error()
 	}
-	_, err := s.db.ExecContext(ctx, `UPDATE pipeline_runs SET status = ?, finished_at = ?, error = ? WHERE id = ?`, string(status), formatTime(time.Now().UTC()), message, id)
-	return err
+	return s.queries.FinishRun(ctx, storedb.FinishRunParams{
+		Status:     string(status),
+		FinishedAt: stringValue(formatTime(time.Now().UTC())),
+		Error:      stringValue(message),
+		ID:         id,
+	})
 }
 
 func (s *Store) List(ctx context.Context, filter RunFilter) (RunList, error) {
@@ -157,115 +143,78 @@ func (s *Store) List(ctx context.Context, filter RunFilter) (RunList, error) {
 	if offset < 0 {
 		offset = 0
 	}
-	where, args := runFilterWhere(filter)
-	var total int
-	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM pipeline_runs`+where, args...).Scan(&total); err != nil {
-		return RunList{}, err
-	}
-	query := `SELECT id, pipeline_id, pipeline, environment, trigger, status, win_start, win_end, started_at, finished_at, error, log_ref FROM pipeline_runs` + where
-	query += ` ORDER BY COALESCE(started_at, '') DESC, id DESC LIMIT ? OFFSET ?`
-	args = append(args, limit, offset)
-	rows, err := s.db.QueryContext(ctx, query, args...)
+	params := runFilterParams(filter, limit, offset)
+	total, err := s.queries.CountRuns(ctx, storedb.CountRunsParams{
+		PipelineID:  params.PipelineID,
+		Environment: params.Environment,
+		Status:      params.Status,
+		QueryLike:   params.QueryLike,
+	})
 	if err != nil {
 		return RunList{}, err
 	}
-	defer rows.Close()
-	runs, err := scanRuns(rows)
+	rows, err := s.queries.ListRuns(ctx, params)
 	if err != nil {
 		return RunList{}, err
 	}
-	return RunList{Runs: runs, Total: total, Limit: limit, Offset: offset}, nil
+	return RunList{Runs: runsFromDB(rows), Total: int(total), Limit: limit, Offset: offset}, nil
 }
 
-func runFilterWhere(filter RunFilter) (string, []any) {
-	clauses := []string{}
-	args := []any{}
-	if filter.PipelineID != "" {
-		clauses = append(clauses, `pipeline_id = ?`)
-		args = append(args, filter.PipelineID)
-	}
-	if filter.Environment != "" {
-		if filter.Environment == "default" {
-			clauses = append(clauses, `(environment = ? OR environment = '')`)
-			args = append(args, filter.Environment)
-		} else {
-			clauses = append(clauses, `environment = ?`)
-			args = append(args, filter.Environment)
-		}
-	}
-	if filter.Status != "" {
-		clauses = append(clauses, `status = ?`)
-		args = append(args, string(filter.Status))
-	}
+func runFilterParams(filter RunFilter, limit, offset int) storedb.ListRunsParams {
+	queryLike := ""
 	if query := strings.TrimSpace(filter.Query); query != "" {
-		pattern := "%" + strings.ToLower(query) + "%"
-		clauses = append(clauses, `(LOWER(id) LIKE ? OR LOWER(pipeline) LIKE ? OR LOWER(pipeline_id) LIKE ?)`)
-		args = append(args, pattern, pattern, pattern)
+		queryLike = "%" + strings.ToLower(query) + "%"
 	}
-	if len(clauses) == 0 {
-		return "", args
+	return storedb.ListRunsParams{
+		PipelineID:  filter.PipelineID,
+		Environment: filter.Environment,
+		Status:      string(filter.Status),
+		QueryLike:   queryLike,
+		Limit:       int64(limit),
+		Offset:      int64(offset),
 	}
-	return ` WHERE ` + strings.Join(clauses, ` AND `), args
 }
 
 func (s *Store) Get(ctx context.Context, id string) (PipelineRun, []LogLine, []PipelineRunStep, error) {
-	row := s.db.QueryRowContext(ctx, `SELECT id, pipeline_id, pipeline, environment, trigger, status, win_start, win_end, started_at, finished_at, error, log_ref FROM pipeline_runs WHERE id = ?`, id)
-	run, err := scanRun(row)
+	row, err := s.queries.GetRun(ctx, id)
 	if err != nil {
 		return PipelineRun{}, nil, nil, err
 	}
-	logRows, err := s.db.QueryContext(ctx, `SELECT at, line FROM pipeline_run_logs WHERE run_id = ? ORDER BY seq ASC`, id)
+	logRows, err := s.queries.ListRunLogs(ctx, id)
 	if err != nil {
 		return PipelineRun{}, nil, nil, err
 	}
-	defer logRows.Close()
-	logs := []LogLine{}
-	for logRows.Next() {
-		var atRaw, line string
-		if err := logRows.Scan(&atRaw, &line); err != nil {
-			return PipelineRun{}, nil, nil, err
-		}
-		logs = append(logs, LogLine{At: parseTimeValue(atRaw), Line: line})
-	}
-	if err := logRows.Err(); err != nil {
-		return PipelineRun{}, nil, nil, err
+	logs := make([]LogLine, 0, len(logRows))
+	for _, item := range logRows {
+		logs = append(logs, LogLine{At: parseTimeValue(item.At), Line: item.Line})
 	}
 	steps, err := s.ListSteps(ctx, id)
 	if err != nil {
 		return PipelineRun{}, nil, nil, err
 	}
-	return run, logs, steps, nil
+	return runFromDB(row), logs, steps, nil
 }
 
 func (s *Store) UpsertStep(ctx context.Context, step PipelineRunStep) error {
 	if strings.TrimSpace(step.Asset) == "" {
 		return nil
 	}
-	_, err := s.db.ExecContext(ctx, `INSERT INTO pipeline_run_steps (run_id, asset, status, started_at, finished_at, error) VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(run_id, asset) DO UPDATE SET status = excluded.status, started_at = COALESCE(pipeline_run_steps.started_at, excluded.started_at), finished_at = excluded.finished_at, error = excluded.error`,
-		step.RunID, step.Asset, string(step.Status), timePtrString(step.StartedAt), timePtrString(step.FinishedAt), step.Error)
-	return err
+	return s.queries.UpsertRunStep(ctx, storedb.UpsertRunStepParams{
+		RunID:      step.RunID,
+		Asset:      step.Asset,
+		Status:     string(step.Status),
+		StartedAt:  nullTime(step.StartedAt),
+		FinishedAt: nullTime(step.FinishedAt),
+		Error:      stringValue(step.Error),
+	})
 }
 
 func (s *Store) ListSteps(ctx context.Context, runID string) ([]PipelineRunStep, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT run_id, asset, status, started_at, finished_at, error FROM pipeline_run_steps WHERE run_id = ? ORDER BY COALESCE(started_at, finished_at, '') ASC, asset ASC`, runID)
+	rows, err := s.queries.ListRunSteps(ctx, runID)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-	steps := []PipelineRunStep{}
-	for rows.Next() {
-		var step PipelineRunStep
-		var status string
-		var startedAt, finishedAt sql.NullString
-		if err := rows.Scan(&step.RunID, &step.Asset, &status, &startedAt, &finishedAt, &step.Error); err != nil {
-			return nil, err
-		}
-		step.Status = RunStatus(status)
-		step.StartedAt = parseNullTime(startedAt)
-		step.FinishedAt = parseNullTime(finishedAt)
-		steps = append(steps, step)
-	}
-	return steps, rows.Err()
+	return stepsFromDB(rows), nil
 }
 
 func (s *Store) FinishOpenSteps(ctx context.Context, runID string, status RunStatus, at time.Time, runErr error) error {
@@ -273,19 +222,25 @@ func (s *Store) FinishOpenSteps(ctx context.Context, runID string, status RunSta
 	if runErr != nil {
 		message = runErr.Error()
 	}
-	_, err := s.db.ExecContext(ctx, `UPDATE pipeline_run_steps SET status = ?, finished_at = ?, error = CASE WHEN ? = '' THEN error ELSE ? END WHERE run_id = ? AND finished_at IS NULL`, string(status), formatTime(at), message, message, runID)
-	return err
+	return s.queries.FinishOpenRunSteps(ctx, storedb.FinishOpenRunStepsParams{
+		Status:     string(status),
+		FinishedAt: stringValue(formatTime(at)),
+		Error:      message,
+		RunID:      runID,
+	})
 }
 
 func (s *Store) HasActiveRun(ctx context.Context, pipelineID string) (bool, error) {
-	var count int
-	err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM pipeline_runs WHERE pipeline_id = ? AND status IN (?, ?)`, pipelineID, string(RunStatusQueued), string(RunStatusRunning)).Scan(&count)
+	count, err := s.queries.CountActiveRuns(ctx, storedb.CountActiveRunsParams{
+		PipelineID:    pipelineID,
+		QueuedStatus:  string(RunStatusQueued),
+		RunningStatus: string(RunStatusRunning),
+	})
 	return count > 0, err
 }
 
 func (s *Store) LastInterval(ctx context.Context, pipeline string) (time.Time, bool, error) {
-	var raw string
-	err := s.db.QueryRowContext(ctx, `SELECT up_to FROM schedule_watermarks WHERE pipeline = ?`, pipeline).Scan(&raw)
+	raw, err := s.queries.GetScheduleWatermark(ctx, pipeline)
 	if errors.Is(err, sql.ErrNoRows) {
 		return time.Time{}, false, nil
 	}
@@ -296,13 +251,11 @@ func (s *Store) LastInterval(ctx context.Context, pipeline string) (time.Time, b
 }
 
 func (s *Store) SetInterval(ctx context.Context, pipeline string, upTo time.Time) error {
-	_, err := s.db.ExecContext(ctx, `INSERT INTO schedule_watermarks (pipeline, up_to) VALUES (?, ?) ON CONFLICT(pipeline) DO UPDATE SET up_to = excluded.up_to`, pipeline, formatTime(upTo))
-	return err
+	return s.queries.SetScheduleWatermark(ctx, storedb.SetScheduleWatermarkParams{Pipeline: pipeline, UpTo: formatTime(upTo)})
 }
 
 func (s *Store) ScheduleEnabled(ctx context.Context, pipelineID string) (bool, bool, error) {
-	var enabled int
-	err := s.db.QueryRowContext(ctx, `SELECT enabled FROM pipeline_schedule_settings WHERE pipeline_id = ?`, pipelineID).Scan(&enabled)
+	enabled, err := s.queries.GetScheduleEnabled(ctx, pipelineID)
 	if errors.Is(err, sql.ErrNoRows) {
 		return false, false, nil
 	}
@@ -317,46 +270,29 @@ func (s *Store) SetScheduleEnabled(ctx context.Context, pipelineID string, enabl
 	if enabled {
 		value = 1
 	}
-	_, err := s.db.ExecContext(ctx, `INSERT INTO pipeline_schedule_settings (pipeline_id, enabled, updated_at) VALUES (?, ?, ?) ON CONFLICT(pipeline_id) DO UPDATE SET enabled = excluded.enabled, updated_at = excluded.updated_at`, pipelineID, value, formatTime(time.Now().UTC()))
-	return err
+	return s.queries.SetScheduleEnabled(ctx, storedb.SetScheduleEnabledParams{
+		PipelineID: pipelineID,
+		Enabled:    int64(value),
+		UpdatedAt:  formatTime(time.Now().UTC()),
+	})
 }
 
-type rowScanner interface{ Scan(dest ...any) error }
-
-func scanRuns(rows *sql.Rows) ([]PipelineRun, error) {
-	runs := []PipelineRun{}
-	for rows.Next() {
-		run, err := scanRun(rows)
-		if err != nil {
-			return nil, err
-		}
-		runs = append(runs, run)
-	}
-	return runs, rows.Err()
-}
-
-func scanRun(row rowScanner) (PipelineRun, error) {
-	var run PipelineRun
-	var trigger, status string
-	var winStart, winEnd, startedAt, finishedAt sql.NullString
-	err := row.Scan(&run.ID, &run.PipelineID, &run.Pipeline, &run.Environment, &trigger, &status, &winStart, &winEnd, &startedAt, &finishedAt, &run.Error, &run.LogRef)
-	if err != nil {
-		return PipelineRun{}, err
-	}
-	run.Trigger = RunTrigger(trigger)
-	run.Status = RunStatus(status)
-	run.WinStart = parseNullTime(winStart)
-	run.WinEnd = parseNullTime(winEnd)
-	run.StartedAt = parseNullTime(startedAt)
-	run.FinishedAt = parseNullTime(finishedAt)
-	return run, nil
-}
-
-func timePtrString(value *time.Time) any {
+func nullTime(value *time.Time) sql.NullString {
 	if value == nil || value.IsZero() {
-		return nil
+		return sql.NullString{}
 	}
-	return formatTime(*value)
+	return stringValue(formatTime(*value))
+}
+
+func stringValue(value string) sql.NullString {
+	return sql.NullString{String: value, Valid: true}
+}
+
+func stringFromNull(value sql.NullString) string {
+	if !value.Valid {
+		return ""
+	}
+	return value.String
 }
 
 func parseNullTime(value sql.NullString) *time.Time {
@@ -377,6 +313,46 @@ func parseTimeValue(value string) time.Time {
 
 func formatTime(value time.Time) string {
 	return value.UTC().Format(time.RFC3339Nano)
+}
+
+func runsFromDB(rows []storedb.PipelineRun) []PipelineRun {
+	runs := make([]PipelineRun, 0, len(rows))
+	for _, row := range rows {
+		runs = append(runs, runFromDB(row))
+	}
+	return runs
+}
+
+func runFromDB(row storedb.PipelineRun) PipelineRun {
+	return PipelineRun{
+		ID:          row.ID,
+		PipelineID:  row.PipelineID,
+		Pipeline:    row.Pipeline,
+		Environment: row.Environment,
+		Trigger:     RunTrigger(row.Trigger),
+		Status:      RunStatus(row.Status),
+		WinStart:    parseNullTime(row.WinStart),
+		WinEnd:      parseNullTime(row.WinEnd),
+		StartedAt:   parseNullTime(row.StartedAt),
+		FinishedAt:  parseNullTime(row.FinishedAt),
+		Error:       stringFromNull(row.Error),
+		LogRef:      stringFromNull(row.LogRef),
+	}
+}
+
+func stepsFromDB(rows []storedb.PipelineRunStep) []PipelineRunStep {
+	steps := make([]PipelineRunStep, 0, len(rows))
+	for _, row := range rows {
+		steps = append(steps, PipelineRunStep{
+			RunID:      row.RunID,
+			Asset:      row.Asset,
+			Status:     RunStatus(row.Status),
+			StartedAt:  parseNullTime(row.StartedAt),
+			FinishedAt: parseNullTime(row.FinishedAt),
+			Error:      stringFromNull(row.Error),
+		})
+	}
+	return steps
 }
 
 func statusFromResult(result RunResult) (RunStatus, error) {
