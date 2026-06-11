@@ -76,8 +76,19 @@ type LogLine struct {
 }
 
 type RunFilter struct {
-	PipelineID string
-	Limit      int
+	PipelineID  string
+	Environment string
+	Status      RunStatus
+	Query       string
+	Limit       int
+	Offset      int
+}
+
+type RunList struct {
+	Runs   []PipelineRun `json:"runs"`
+	Total  int           `json:"total"`
+	Limit  int           `json:"limit"`
+	Offset int           `json:"offset"`
 }
 
 type RunResult struct {

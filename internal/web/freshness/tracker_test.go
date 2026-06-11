@@ -50,6 +50,25 @@ func TestGetAll(t *testing.T) {
 	assert.Equal(t, "failed", all["b"].MaterializedStatus)
 }
 
+func TestGetAllForEnvironment(t *testing.T) {
+	tr := New()
+	defaultTS := time.Date(2025, 1, 15, 10, 0, 0, 0, time.UTC)
+	prodTS := time.Date(2025, 1, 15, 11, 0, 0, 0, time.UTC)
+	contentTS := time.Date(2025, 1, 15, 12, 0, 0, 0, time.UTC)
+
+	tr.RecordMaterializationForEnvironment("orders", "", defaultTS, "succeeded")
+	tr.RecordMaterializationForEnvironment("orders", "prod", prodTS, "succeeded")
+	tr.RecordContentChange("orders", contentTS)
+
+	defaultItems := tr.GetAllForEnvironment("default")
+	prodItems := tr.GetAllForEnvironment("prod")
+	require.NotNil(t, defaultItems["orders"].MaterializedAt)
+	require.NotNil(t, prodItems["orders"].MaterializedAt)
+	assert.Equal(t, defaultTS, *defaultItems["orders"].MaterializedAt)
+	assert.Equal(t, prodTS, *prodItems["orders"].MaterializedAt)
+	assert.Equal(t, contentTS, *prodItems["orders"].ContentChangedAt)
+}
+
 func TestGet_Unknown(t *testing.T) {
 	tr := New()
 	assert.Nil(t, tr.Get("nonexistent"))

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"github.com/go-chi/chi/v5"
 	webapi "renart/internal/web/api"
@@ -16,7 +17,7 @@ type SchedulerHandlers interface {
 	GetPipelineSchedule(ctx context.Context, pipelineID string) (scheduler.PipelineSchedule, error)
 	UpdatePipelineSchedule(ctx context.Context, pipelineID string, req scheduler.UpdateScheduleRequest) (scheduler.PipelineSchedule, error)
 	TriggerPipeline(ctx context.Context, pipelineID string, req scheduler.TriggerRequest) (scheduler.PipelineRun, error)
-	ListRuns(ctx context.Context, filter scheduler.RunFilter) ([]scheduler.PipelineRun, error)
+	ListRuns(ctx context.Context, filter scheduler.RunFilter) (scheduler.RunList, error)
 	GetRun(ctx context.Context, runID string) (scheduler.PipelineRun, []scheduler.LogLine, []scheduler.PipelineRunStep, error)
 }
 
@@ -80,12 +81,35 @@ func (h *SchedulerAPI) HandleTriggerPipeline(w http.ResponseWriter, r *http.Requ
 
 func (h *SchedulerAPI) HandleListRuns(w http.ResponseWriter, r *http.Request) {
 	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
-	runs, err := h.Service.ListRuns(r.Context(), scheduler.RunFilter{PipelineID: r.URL.Query().Get("pipeline_id"), Limit: limit})
+	offset, _ := strconv.Atoi(r.URL.Query().Get("offset"))
+	if offset <= 0 {
+		page, _ := strconv.Atoi(r.URL.Query().Get("page"))
+		if page > 1 && limit > 0 {
+			offset = (page - 1) * limit
+		}
+	}
+	result, err := h.Service.ListRuns(r.Context(), scheduler.RunFilter{
+		PipelineID:  r.URL.Query().Get("pipeline_id"),
+		Environment: r.URL.Query().Get("environment"),
+		Status:      parseRunStatus(r.URL.Query().Get("status")),
+		Query:       r.URL.Query().Get("q"),
+		Limit:       limit,
+		Offset:      offset,
+	})
 	if err != nil {
 		webapi.WriteInternalError(w, "runs_list_failed", err.Error())
 		return
 	}
-	webapi.WriteJSON(w, http.StatusOK, map[string]any{"status": "ok", "runs": runs})
+	webapi.WriteJSON(w, http.StatusOK, map[string]any{"status": "ok", "runs": result.Runs, "total": result.Total, "limit": result.Limit, "offset": result.Offset})
+}
+
+func parseRunStatus(value string) scheduler.RunStatus {
+	switch scheduler.RunStatus(strings.TrimSpace(value)) {
+	case scheduler.RunStatusQueued, scheduler.RunStatusRunning, scheduler.RunStatusSuccess, scheduler.RunStatusFailed, scheduler.RunStatusCancelled:
+		return scheduler.RunStatus(strings.TrimSpace(value))
+	default:
+		return ""
+	}
 }
 
 func (h *SchedulerAPI) HandleGetRun(w http.ResponseWriter, r *http.Request) {

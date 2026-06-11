@@ -180,9 +180,11 @@ func TestScheduledWorkerCreatesRunAndWatermark(t *testing.T) {
 	worker := &pipelineRunWorker{service: service}
 	require.NoError(t, worker.Work(context.Background(), &river.Job[pipelineRunJobArgs]{Args: pipelineRunJobArgs{PipelineID: "pipeline-id", PipelineName: "analytics", Trigger: RunTriggerSchedule, Schedule: "@hourly", Timezone: "UTC"}}))
 
-	runs, err := service.ListRuns(context.Background(), RunFilter{PipelineID: "pipeline-id"})
+	result, err := service.ListRuns(context.Background(), RunFilter{PipelineID: "pipeline-id"})
 	require.NoError(t, err)
+	runs := result.Runs
 	require.Len(t, runs, 1)
+	assert.Equal(t, 1, result.Total)
 	assert.Equal(t, RunStatusSuccess, runs[0].Status)
 	assert.Equal(t, RunTriggerSchedule, runs[0].Trigger)
 	require.NotNil(t, runs[0].WinStart)

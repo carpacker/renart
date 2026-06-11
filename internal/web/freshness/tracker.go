@@ -24,29 +24,28 @@ type AssetTimestamps struct {
 // Tracker maintains in-memory per-asset freshness information.
 // It is safe for concurrent use.
 type Tracker struct {
-	mu   sync.RWMutex
-	data map[string]*AssetTimestamps // asset name → timestamps
+	mu            sync.RWMutex
+	data          map[string]*AssetTimestamps            // asset name -> aggregate timestamps
+	byEnvironment map[string]map[string]*AssetTimestamps // environment -> asset name -> timestamps
 }
 
 // New creates a fresh Tracker.
 func New() *Tracker {
-	return &Tracker{data: make(map[string]*AssetTimestamps)}
+	return &Tracker{data: make(map[string]*AssetTimestamps), byEnvironment: make(map[string]map[string]*AssetTimestamps)}
 }
 
 // RecordMaterialization updates the materialization timestamp for an asset.
 func (t *Tracker) RecordMaterialization(assetName string, ts time.Time, status string) {
+	t.RecordMaterializationForEnvironment(assetName, "", ts, status)
+}
+
+// RecordMaterializationForEnvironment updates the materialization timestamp for an asset in an environment.
+func (t *Tracker) RecordMaterializationForEnvironment(assetName, environment string, ts time.Time, status string) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
-	entry, ok := t.data[assetName]
-	if !ok {
-		entry = &AssetTimestamps{}
-		t.data[assetName] = entry
-	}
-	if status == "succeeded" {
-		entry.MaterializedAt = &ts
-	}
-	entry.MaterializedStatus = status
+	updateMaterializationEntry(t.ensureAggregateEntry(assetName), ts, status)
+	updateMaterializationEntry(t.ensureEnvironmentEntry(normalizeEnvironment(environment), assetName), ts, status)
 }
 
 // RecordContentChange updates the content-changed timestamp for an asset.
@@ -75,6 +74,27 @@ func (t *Tracker) GetAll() map[string]AssetTimestamps {
 	return out
 }
 
+// GetAllForEnvironment returns a snapshot of all tracked asset timestamps for an environment.
+func (t *Tracker) GetAllForEnvironment(environment string) map[string]AssetTimestamps {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+
+	items := t.byEnvironment[normalizeEnvironment(environment)]
+	out := make(map[string]AssetTimestamps, len(items)+len(t.data))
+	for k, v := range items {
+		out[k] = *v
+	}
+	for k, v := range t.data {
+		if v.ContentChangedAt == nil {
+			continue
+		}
+		entry := out[k]
+		entry.ContentChangedAt = v.ContentChangedAt
+		out[k] = entry
+	}
+	return out
+}
+
 // Get returns the freshness data for a single asset, or nil if not tracked.
 func (t *Tracker) Get(assetName string) *AssetTimestamps {
 	t.mu.RLock()
@@ -94,7 +114,8 @@ type runLogEntry struct {
 		Name   string `json:"name"`
 		Status string `json:"status"`
 	} `json:"state"`
-	Timestamp time.Time `json:"timestamp"`
+	Environment string    `json:"environment"`
+	Timestamp   time.Time `json:"timestamp"`
 }
 
 // LoadFromRunLogs scans <logsDir>/runs/<pipeline>/*.json and bootstraps
@@ -159,13 +180,15 @@ func (t *Tracker) ingest(entry runLogEntry) {
 	defer t.mu.Unlock()
 
 	for _, asset := range entry.State {
-		existing, ok := t.data[asset.Name]
+		environment := normalizeEnvironment(entry.Environment)
+		existing, ok := t.byEnvironment[environment][asset.Name]
 		if asset.Status != "succeeded" {
 			if !ok {
 				existing = &AssetTimestamps{}
-				t.data[asset.Name] = existing
+				t.ensureEnvironmentMap(environment)[asset.Name] = existing
 			}
 			existing.MaterializedStatus = asset.Status
+			updateMaterializationEntry(t.ensureAggregateEntry(asset.Name), entry.Timestamp, asset.Status)
 			continue
 		}
 
@@ -174,10 +197,53 @@ func (t *Tracker) ingest(entry runLogEntry) {
 		}
 		if !ok {
 			existing = &AssetTimestamps{}
-			t.data[asset.Name] = existing
+			t.ensureEnvironmentMap(environment)[asset.Name] = existing
 		}
 		ts := entry.Timestamp
 		existing.MaterializedAt = &ts
 		existing.MaterializedStatus = asset.Status
+		updateMaterializationEntry(t.ensureAggregateEntry(asset.Name), entry.Timestamp, asset.Status)
 	}
+}
+
+func (t *Tracker) ensureAggregateEntry(assetName string) *AssetTimestamps {
+	entry, ok := t.data[assetName]
+	if !ok {
+		entry = &AssetTimestamps{}
+		t.data[assetName] = entry
+	}
+	return entry
+}
+
+func (t *Tracker) ensureEnvironmentMap(environment string) map[string]*AssetTimestamps {
+	items, ok := t.byEnvironment[environment]
+	if !ok {
+		items = make(map[string]*AssetTimestamps)
+		t.byEnvironment[environment] = items
+	}
+	return items
+}
+
+func (t *Tracker) ensureEnvironmentEntry(environment, assetName string) *AssetTimestamps {
+	items := t.ensureEnvironmentMap(environment)
+	entry, ok := items[assetName]
+	if !ok {
+		entry = &AssetTimestamps{}
+		items[assetName] = entry
+	}
+	return entry
+}
+
+func updateMaterializationEntry(entry *AssetTimestamps, ts time.Time, status string) {
+	if status == "succeeded" {
+		entry.MaterializedAt = &ts
+	}
+	entry.MaterializedStatus = status
+}
+
+func normalizeEnvironment(environment string) string {
+	if environment == "" {
+		return "default"
+	}
+	return environment
 }

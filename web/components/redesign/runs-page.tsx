@@ -24,7 +24,8 @@ export type RedesignRunsSearch = {
 };
 
 export function normalizeRedesignRunsSearch(search: Record<string, unknown>): RedesignRunsSearch {
-  const page = typeof search.page === "number" && search.page > 0 ? Math.floor(search.page) : undefined;
+  const rawPage = typeof search.page === "number" ? search.page : typeof search.page === "string" ? Number(search.page) : undefined;
+  const page = rawPage && Number.isFinite(rawPage) && rawPage > 0 ? Math.floor(rawPage) : undefined;
   return {
     q: typeof search.q === "string" && search.q.trim() ? search.q : undefined,
     status: runStatuses.includes(search.status as never) ? (search.status as RedesignRunsSearch["status"]) : undefined,
@@ -33,20 +34,26 @@ export function normalizeRedesignRunsSearch(search: Record<string, unknown>): Re
 }
 
 export function RedesignRunsPage({ search = {}, onSearchChange }: { search?: RedesignRunsSearch; onSearchChange?: (search: RedesignRunsSearch) => void }) {
-  const { runs, loading } = usePipelineScheduler();
   const q = search.q ?? "";
   const status = search.status ?? "all";
-  const filteredRuns = runs.filter((run) => {
-    const matchesStatus = status === "all" || run.status === status;
-    const query = q.trim().toLowerCase();
-    const matchesQuery = !query || run.pipeline.toLowerCase().includes(query) || run.id.toLowerCase().includes(query);
-    return matchesStatus && matchesQuery;
-  });
-  const pages = Math.max(1, Math.ceil(filteredRuns.length / pageSize));
-  const page = Math.min(search.page ?? 1, pages);
-  const start = (page - 1) * pageSize;
-  const visibleRuns = filteredRuns.slice(start, start + pageSize);
+  const requestedPage = search.page ?? 1;
+  const runsQuery = useMemo(() => ({
+    limit: pageSize,
+    offset: (requestedPage - 1) * pageSize,
+    q: q.trim() || undefined,
+    status: status === "all" ? undefined : status,
+  }), [q, requestedPage, status]);
+  const { runs, loading, runsTotal, runsOffset } = usePipelineScheduler({ runsQuery });
+  const pages = Math.max(1, Math.ceil(runsTotal / pageSize));
+  const page = Math.min(requestedPage, pages);
+  const visibleRuns = runs;
   const updateSearch = (next: RedesignRunsSearch) => onSearchChange?.({ ...search, ...next });
+
+  useEffect(() => {
+    if (requestedPage > pages) {
+      updateSearch({ page: pages });
+    }
+  }, [pages, requestedPage]);
 
   return (
     <RedesignPage>
@@ -55,19 +62,19 @@ export function RedesignRunsPage({ search = {}, onSearchChange }: { search?: Red
         subtitle="Local pipeline run history from .renart/state.db"
         actions={(
           <div className="flex min-w-0 items-center gap-2">
-            <div className="flex h-8 min-w-0 items-center gap-2 rounded-md border bg-background px-2">
-              <Search className="size-3.5 text-muted-foreground" />
-              <Input value={q} onChange={(event) => updateSearch({ q: event.target.value || undefined, page: 1 })} placeholder="Search runs..." className="h-7 min-w-0 border-0 bg-transparent px-0 text-xs shadow-none focus-visible:ring-0" />
-              {q ? <Button variant="ghost" size="icon-sm" onClick={() => updateSearch({ q: undefined, page: 1 })}><X className="size-3.5" /></Button> : null}
+            <div className="relative h-8 w-56 shrink-0 rounded-md border bg-background sm:w-72">
+              <Search className="pointer-events-none absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" />
+              <Input value={q} onChange={(event) => updateSearch({ q: event.target.value || undefined, page: 1 })} placeholder="Search runs..." className="h-full border-0 bg-transparent pl-8 pr-14 text-xs shadow-none focus-visible:ring-0" />
+              {loading ? <Loader2 aria-label="Loading runs" className="pointer-events-none absolute right-8 top-1/2 size-3.5 -translate-y-1/2 animate-spin text-muted-foreground" /> : null}
+              {q ? <Button variant="ghost" size="icon-sm" className="absolute right-1 top-1/2 -translate-y-1/2" onClick={() => updateSearch({ q: undefined, page: 1 })}><X className="size-3.5" /></Button> : null}
             </div>
-            {loading ? <span className="flex items-center gap-1.5 text-xs text-muted-foreground"><Loader2 className="size-3.5 animate-spin" />Loading</span> : null}
           </div>
         )}
       />
       <div className="flex flex-wrap items-center gap-1.5 px-3 pb-2">
         {runStatuses.map((item) => (
           <Button key={item} variant={status === item ? "secondary" : "outline"} size="xs" className="capitalize" onClick={() => updateSearch({ status: item === "all" ? undefined : item, page: 1 })}>
-            {item}{item !== "all" ? <span className="ml-1 text-[10px] text-muted-foreground">{runs.filter((run) => run.status === item).length}</span> : null}
+            {item}
           </Button>
         ))}
       </div>
@@ -87,7 +94,7 @@ export function RedesignRunsPage({ search = {}, onSearchChange }: { search?: Red
             ])}
           />
           <div className="flex h-11 items-center gap-3 border-t px-3 text-xs text-muted-foreground">
-            <span>{filteredRuns.length === 0 ? "0 runs" : `${start + 1}-${start + visibleRuns.length} of ${filteredRuns.length}`}</span>
+            <span>{runsTotal === 0 ? "0 runs" : `${runsOffset + 1}-${runsOffset + visibleRuns.length} of ${runsTotal}`}</span>
             <div className="flex-1" />
             <Button variant="outline" size="xs" disabled={page <= 1} onClick={() => updateSearch({ page: page - 1 })}><ChevronLeft className="size-3" />Prev</Button>
             <span className="font-mono">{page} / {pages}</span>

@@ -256,13 +256,14 @@ func Web() *cli.Command {
 			server.executor = service.NewHybridBruinExecutor(absRoot, "", server.newConnectionManager, server.newPipelineBuilder)
 
 			server.executionSvc = service.NewExecutionService(service.ExecutionDependencies{
-				WorkspaceRoot:         absRoot,
-				ConfigPath:            resolveConfigFilePath(absRoot),
-				Executor:              server.executor,
-				ResolveAssetByID:      server.resolveAssetByID,
-				ResolveAssetNameByID:  server.findAssetNameByID,
-				FindInspectIDs:        server.findMaterializationInspectIDs,
-				RecordMaterialization: server.freshness.RecordMaterialization,
+				WorkspaceRoot:                       absRoot,
+				ConfigPath:                          resolveConfigFilePath(absRoot),
+				Executor:                            server.executor,
+				ResolveAssetByID:                    server.resolveAssetByID,
+				ResolveAssetNameByID:                server.findAssetNameByID,
+				FindInspectIDs:                      server.findMaterializationInspectIDs,
+				RecordMaterialization:               server.freshness.RecordMaterialization,
+				RecordMaterializationForEnvironment: server.freshness.RecordMaterializationForEnvironment,
 				CurrentPipelines: func() []service.PipelineView {
 					state := server.currentState()
 					pipelines := make([]service.PipelineView, 0, len(state.Pipelines))
@@ -1075,9 +1076,9 @@ func (s *webServer) TriggerPipeline(ctx context.Context, pipelineID string, req 
 	return s.schedulerSvc.Trigger(ctx, pipelineSchedule, req)
 }
 
-func (s *webServer) ListRuns(ctx context.Context, filter webscheduler.RunFilter) ([]webscheduler.PipelineRun, error) {
+func (s *webServer) ListRuns(ctx context.Context, filter webscheduler.RunFilter) (webscheduler.RunList, error) {
 	if s.schedulerSvc == nil {
-		return nil, fmt.Errorf("scheduler is not initialized")
+		return webscheduler.RunList{}, fmt.Errorf("scheduler is not initialized")
 	}
 	return s.schedulerSvc.ListRuns(ctx, filter)
 }
@@ -1624,8 +1625,12 @@ func (s *webServer) findAssetNameByID(assetID string) string {
 // handleGetAssetFreshness returns freshness timestamps for all tracked assets.
 // Each entry includes both materialization and content-change timestamps so
 // the frontend can compute staleness from either perspective.
-func (s *webServer) handleGetAssetFreshness(w http.ResponseWriter, _ *http.Request) {
+func (s *webServer) handleGetAssetFreshness(w http.ResponseWriter, r *http.Request) {
+	environment := strings.TrimSpace(r.URL.Query().Get("environment"))
 	all := s.freshness.GetAll()
+	if environment != "" {
+		all = s.freshness.GetAllForEnvironment(environment)
+	}
 
 	type assetFreshnessEntry struct {
 		AssetName          string     `json:"asset_name"`

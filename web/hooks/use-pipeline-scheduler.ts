@@ -2,6 +2,7 @@ import { useAtomValue } from "jotai";
 import { useCallback, useEffect, useState } from "react";
 
 import {
+  type GetRunsOptions,
   getRun,
   getRuns,
   getSchedules,
@@ -13,9 +14,12 @@ import type { PipelineRun, PipelineRunLogLine, PipelineRunStep, PipelineSchedule
 
 type SchedulePatch = Partial<Pick<PipelineSchedule, "enabled" | "schedule" | "timezone" | "catchup">>;
 
-export function usePipelineScheduler({ selectedRunId }: { selectedRunId?: string } = {}) {
+export function usePipelineScheduler({ selectedRunId, runsQuery }: { selectedRunId?: string; runsQuery?: GetRunsOptions } = {}) {
   const [schedules, setSchedules] = useState<PipelineSchedule[]>([]);
   const [runs, setRuns] = useState<PipelineRun[]>([]);
+  const [runsTotal, setRunsTotal] = useState(0);
+  const [runsLimit, setRunsLimit] = useState(runsQuery?.limit ?? 100);
+  const [runsOffset, setRunsOffset] = useState(runsQuery?.offset ?? 0);
   const [selectedRun, setSelectedRun] = useState<PipelineRun | null>(null);
   const [logs, setLogs] = useState<PipelineRunLogLine[]>([]);
   const [steps, setSteps] = useState<PipelineRunStep[]>([]);
@@ -24,23 +28,36 @@ export function usePipelineScheduler({ selectedRunId }: { selectedRunId?: string
   const [loadingRunId, setLoadingRunId] = useState<string | null>(null);
   const schedulerRunEvent = useAtomValue(schedulerRunEventAtom);
 
+  const refreshRuns = useCallback(async () => {
+    const response = await getRuns(runsQuery ?? 100);
+    if (response.status === "ok") {
+      setRuns(response.runs ?? []);
+      setRunsTotal(response.total ?? response.runs?.length ?? 0);
+      setRunsLimit(response.limit ?? runsQuery?.limit ?? 100);
+      setRunsOffset(response.offset ?? runsQuery?.offset ?? 0);
+    }
+  }, [runsQuery]);
+
   const refresh = useCallback(async () => {
     setLoading(true);
     try {
       const [scheduleResponse, runsResponse] = await Promise.all([
         getSchedules(),
-        getRuns(100),
+        getRuns(runsQuery ?? 100),
       ]);
       if (scheduleResponse.status === "ok") {
         setSchedules(scheduleResponse.schedules ?? []);
       }
       if (runsResponse.status === "ok") {
         setRuns(runsResponse.runs ?? []);
+        setRunsTotal(runsResponse.total ?? runsResponse.runs?.length ?? 0);
+        setRunsLimit(runsResponse.limit ?? runsQuery?.limit ?? 100);
+        setRunsOffset(runsResponse.offset ?? runsQuery?.offset ?? 0);
       }
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [runsQuery]);
 
   const refreshSchedules = useCallback(async () => {
     const response = await getSchedules();
@@ -162,12 +179,16 @@ export function usePipelineScheduler({ selectedRunId }: { selectedRunId?: string
     const run = schedulerRunEvent.run;
     setRuns((current) => [run, ...current.filter((item) => item.id !== run.id)]);
     setSelectedRun((current) => (current?.id === run.id ? run : current));
+    void refreshRuns();
     void refreshSchedules();
-  }, [refreshSchedules, schedulerRunEvent, selectedRun?.id, selectedRunId]);
+  }, [refreshRuns, refreshSchedules, schedulerRunEvent, selectedRun?.id, selectedRunId]);
 
   return {
     schedules,
     runs,
+    runsTotal,
+    runsLimit,
+    runsOffset,
     selectedRun,
     logs,
     steps,
@@ -175,6 +196,7 @@ export function usePipelineScheduler({ selectedRunId }: { selectedRunId?: string
     busyPipeline,
     loadingRunId,
     refresh,
+    refreshRuns,
     selectRun,
     patchScheduleDraft,
     updateSchedule,

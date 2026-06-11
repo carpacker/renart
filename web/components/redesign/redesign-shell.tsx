@@ -1,6 +1,7 @@
-import { Link, Outlet } from "@tanstack/react-router";
-import { Bell, Bot, Building2, Check, ChevronDown, Cloud, CreditCard, FileCode, GitBranch, GitCommit, Loader2, LogOut, Plus, RefreshCw, Search, Send, Settings, Sparkles, User, Users } from "lucide-react";
-import { ReactNode, useState } from "react";
+import { Link, Outlet, useLocation, useParams } from "@tanstack/react-router";
+import { Bell, Bot, Boxes, Building2, Check, ChevronDown, Cloud, CreditCard, FileCode, GitBranch, GitCommit, Loader2, LogOut, Plus, RefreshCw, Search, Send, Settings, Sparkles, User, Users, Clock } from "lucide-react";
+import { ReactNode, useEffect, useMemo, useState } from "react";
+import { useAtomValue, useSetAtom } from "jotai";
 
 import { Button } from "@/components/ui/button";
 import {
@@ -8,21 +9,26 @@ import {
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuLabel,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Separator } from "@/components/ui/separator";
 import { Sheet, SheetContent, SheetDescription, SheetFooter, SheetHeader, SheetTitle, SheetTrigger } from "@/components/ui/sheet";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { useSchedulerEvents } from "@/hooks/use-scheduler-events";
 import { useSourceControl } from "@/hooks/use-source-control";
+import { useWorkspaceSettingsData } from "@/hooks/use-workspace-settings-data";
+import { useWorkspaceSync } from "@/hooks/use-workspace-sync";
+import { selectedEnvironmentAtom, selectedEnvironmentOverrideAtom, selectedExecutionTimeWindowAtom, workspaceAtom } from "@/lib/atoms/domains/workspace";
+import { findExecutionTimeOption, getExecutionTimeOptions } from "@/lib/execution-time";
 import type { SourceControlChange } from "@/lib/types";
 
 import { navItems } from "./redesign-data";
 import { NavLinkButton } from "./redesign-primitives";
 
 export function RedesignShell() {
-  useSchedulerEvents();
+  useWorkspaceSync();
   const sourceControl = useSourceControl();
 
   return (
@@ -76,6 +82,8 @@ export function RedesignShell() {
         </nav>
 
         <div className="flex-1" />
+
+        <RedesignExecutionSelector />
 
         <Sheet>
           <SheetTrigger asChild>
@@ -143,6 +151,82 @@ export function RedesignShell() {
         ))}
       </nav>
     </div>
+  );
+}
+
+function RedesignExecutionSelector() {
+  const workspace = useAtomValue(workspaceAtom);
+  const location = useLocation();
+  const selectedEnvironment = useAtomValue(selectedEnvironmentAtom);
+  const setSelectedEnvironmentOverride = useSetAtom(selectedEnvironmentOverrideAtom);
+  const selectedExecutionTimeWindow = useAtomValue(selectedExecutionTimeWindowAtom);
+  const setSelectedExecutionTimeWindow = useSetAtom(selectedExecutionTimeWindowAtom);
+  const { normalizedConfigEnvironments } = useWorkspaceSettingsData();
+  const params = useParams({ strict: false }) as { pipelineId?: string };
+  const isBuildPage = location.pathname.startsWith("/redesign/pipelines");
+  const pipeline = useMemo(
+    () => workspace?.pipelines.find((item) => item.id === params.pipelineId) ?? workspace?.pipelines[0] ?? null,
+    [params.pipelineId, workspace?.pipelines]
+  );
+  const availableEnvironmentNames = useMemo(
+    () => normalizedConfigEnvironments.map((environment) => environment.name).filter((name) => name !== "default"),
+    [normalizedConfigEnvironments]
+  );
+  const options = useMemo(() => isBuildPage ? getExecutionTimeOptions(pipeline?.schedule) : [], [isBuildPage, pipeline?.schedule]);
+  const selectedOption = useMemo(
+    () => findExecutionTimeOption(options, selectedExecutionTimeWindow?.start),
+    [options, selectedExecutionTimeWindow?.start]
+  );
+  const selectedValue = selectedOption?.value ?? options[0]?.value ?? "";
+  const environmentValue = selectedEnvironment || "__default__";
+  const environmentLabel = selectedEnvironment || "default";
+
+  useEffect(() => {
+    if (!isBuildPage) return;
+    if (!selectedOption) return;
+    if (selectedExecutionTimeWindow?.start === selectedOption.start && selectedExecutionTimeWindow?.end === selectedOption.end) return;
+    setSelectedExecutionTimeWindow({ start: selectedOption.start, end: selectedOption.end });
+  }, [isBuildPage, selectedExecutionTimeWindow?.end, selectedExecutionTimeWindow?.start, selectedOption, setSelectedExecutionTimeWindow]);
+
+  const handleEnvironmentChange = (nextEnvironment: string) => {
+    setSelectedEnvironmentOverride(nextEnvironment === "__default__" ? undefined : nextEnvironment);
+  };
+  const handleExecutionTimeChange = (value: string) => {
+    const option = findExecutionTimeOption(options, value);
+    setSelectedExecutionTimeWindow(option ? { start: option.start, end: option.end } : null);
+  };
+
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <Button aria-label="Execution context" className="mx-1 hidden h-7 min-w-0 items-center gap-1.5 rounded-full border border-zinc-700 bg-zinc-950 py-0 pl-1 pr-2 text-xs text-zinc-200 hover:bg-zinc-800 hover:text-white md:flex">
+          <span className="flex size-5 shrink-0 items-center justify-center rounded-full bg-amber-500 text-[10px] font-bold uppercase text-zinc-900">{environmentLabel.slice(0, 1)}</span>
+          <span className="max-w-24 truncate font-mono">{environmentLabel}</span>
+          {isBuildPage ? <span className="hidden min-w-0 items-center gap-1 text-zinc-400 lg:flex"><Clock className="size-3" /> <span className="max-w-28 truncate">{selectedOption?.label ?? "Latest"}</span></span> : null}
+          <ChevronDown className="size-3 text-zinc-500" />
+        </Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end" className="w-64">
+        <DropdownMenuLabel>Environment</DropdownMenuLabel>
+        <DropdownMenuRadioGroup value={environmentValue} onValueChange={handleEnvironmentChange}>
+          <DropdownMenuRadioItem value="__default__"><Boxes className="size-4" />default</DropdownMenuRadioItem>
+          {availableEnvironmentNames.map((environmentName) => (
+            <DropdownMenuRadioItem key={environmentName} value={environmentName}><Boxes className="size-4" />{environmentName}</DropdownMenuRadioItem>
+          ))}
+        </DropdownMenuRadioGroup>
+        {isBuildPage && options.length > 0 ? (
+          <>
+            <DropdownMenuSeparator />
+            <DropdownMenuLabel>Time range</DropdownMenuLabel>
+            <DropdownMenuRadioGroup value={selectedValue} onValueChange={handleExecutionTimeChange}>
+              {options.map((option) => (
+                <DropdownMenuRadioItem key={option.value} value={option.value}><Clock className="size-4" />{option.label}</DropdownMenuRadioItem>
+              ))}
+            </DropdownMenuRadioGroup>
+          </>
+        ) : null}
+      </DropdownMenuContent>
+    </DropdownMenu>
   );
 }
 
