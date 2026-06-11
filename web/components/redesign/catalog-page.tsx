@@ -1,17 +1,109 @@
+import { useAtomValue } from "jotai";
 import { Filter, RotateCw, Search, Sparkles } from "lucide-react";
+import { useMemo } from "react";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { ScrollArea } from "@/components/ui/scroll-area";
+import { workspaceAtom } from "@/lib/atoms/domains/workspace";
+import type { WebAsset, WebPipeline } from "@/lib/types";
+import { labelForRedesignMaterializationState, useRedesignAssetMaterializationStatus } from "@/hooks/use-redesign-asset-materialization-status";
 
-import { assets, edges, getAsset } from "./redesign-data";
-import { AssetNode, PageHeader, RedesignPage, RedesignPanel } from "./redesign-primitives";
+import { assets, edges, type AssetKind } from "./redesign-data";
+import { RedesignLineageCanvas, assetNameParts, type RedesignLineageCanvasAsset } from "./lineage-canvas";
+import { PageHeader, RedesignPage, RedesignPanel } from "./redesign-primitives";
+
+function catalogAssetsForPipeline(pipeline: WebPipeline): RedesignLineageCanvasAsset[] {
+  return pipeline.assets.map((asset) => catalogAssetFromWorkspace(asset, pipeline));
+}
+
+function catalogAssetFromWorkspace(asset: WebAsset, pipeline: WebPipeline): RedesignLineageCanvasAsset {
+  const canonicalName = asset.name || assetFileName(asset.path);
+  const { prefix, title } = assetNameParts(canonicalName);
+  return {
+    id: asset.id,
+    name: canonicalName,
+    displayName: title,
+    prefix: prefix ?? assetDirectory(asset.path, pipeline.path),
+    kind: kindForAssetType(asset.type),
+    group: prefix ?? "ASSETS",
+    integration: integrationForAsset(asset),
+    description: asset.meta?.description ?? asset.path,
+    dir: assetDirectory(asset.path, pipeline.path),
+    status: asset.is_materialized ? "success" : "pending",
+    materializedAt: asset.is_materialized ? "current" : "not materialized",
+    pipelineId: pipeline.id,
+    isMaterialized: asset.is_materialized,
+    upstreams: asset.upstreams,
+    x: 0,
+    y: 0,
+  };
+}
+
+function kindForAssetType(type: string): AssetKind {
+  const normalized = type.toLowerCase();
+  if (normalized.includes("python")) return "python";
+  if (normalized.includes("sling")) return "sling";
+  if (normalized.includes("ingestr")) return "ingestr";
+  if (normalized.includes("source")) return "source";
+  if (normalized.includes("test")) return "unittest";
+  return "sql";
+}
+
+function integrationForAsset(asset: WebAsset) {
+  if (asset.connection) return asset.connection;
+  const provider = asset.type.split(".")[0]?.toLowerCase();
+  if (provider === "duckdb") return "DuckDB";
+  if (provider === "python") return "Python";
+  if (provider === "sling") return "Sling";
+  if (provider === "ingestr") return "ingestr";
+  return provider || "Asset";
+}
+
+function assetDirectory(assetPath: string, pipelinePath: string) {
+  const pipelineRoot = pipelinePath.replace(/\/?pipeline\.ya?ml$/i, "");
+  let relative = assetPath;
+  if (pipelineRoot && relative.startsWith(`${pipelineRoot}/`)) {
+    relative = relative.slice(pipelineRoot.length + 1);
+  }
+  if (relative.startsWith("assets/")) {
+    relative = relative.slice("assets/".length);
+  }
+  const dir = relative.split("/").slice(0, -1).join("/");
+  return dir || undefined;
+}
+
+function assetFileName(assetPath: string) {
+  const file = assetPath.split("/").pop() ?? assetPath;
+  return file.replace(/\.[^.]+$/, "");
+}
 
 export function RedesignCatalogPage() {
-  const groups = assets.reduce<Record<string, typeof assets>>((acc, asset) => {
-    acc[asset.group] = [...(acc[asset.group] ?? []), asset];
-    return acc;
-  }, {});
+  const workspace = useAtomValue(workspaceAtom);
+  const catalogAssets = useMemo<RedesignLineageCanvasAsset[]>(
+    () => workspace?.pipelines.length ? workspace.pipelines.flatMap(catalogAssetsForPipeline) : assets,
+    [workspace?.pipelines]
+  );
+  const materializationAssets = useMemo(
+    () => catalogAssets.map((asset) => ({
+      id: asset.id,
+      name: asset.name,
+      pipelineId: asset.pipelineId,
+      isMaterialized: asset.isMaterialized ?? (asset.status === "success" || asset.status === "ok"),
+    })),
+    [catalogAssets]
+  );
+  const materializationStatusByAssetId = useRedesignAssetMaterializationStatus(materializationAssets);
+  const displayedCatalogAssets = useMemo(
+    () => catalogAssets.map((asset) => ({
+      ...asset,
+      status: materializationStatusByAssetId[asset.id]?.status ?? asset.status,
+      materializedAt: labelForRedesignMaterializationState(materializationStatusByAssetId[asset.id]),
+    })),
+    [catalogAssets, materializationStatusByAssetId]
+  );
+  const catalogLinks = workspace?.pipelines.length
+    ? undefined
+    : edges.map(([source, target]) => ({ source, target }));
 
   return (
     <RedesignPage>
@@ -30,40 +122,7 @@ export function RedesignCatalogPage() {
       </div>
       <div className="min-h-0 flex-1 px-3 pb-3">
         <RedesignPanel className="h-full">
-          <ScrollArea className="h-full" viewportClassName="h-full">
-            <div
-              className="relative h-[540px] w-[1220px]"
-              style={{ backgroundImage: "radial-gradient(rgba(0,0,0,0.08) 1px, transparent 1px)", backgroundSize: "22px 22px" }}
-            >
-              {Object.entries(groups).map(([name, groupAssets]) => {
-                const items = groupAssets ?? [];
-                const minX = Math.min(...items.map((asset) => asset.x)) - 16;
-                const minY = Math.min(...items.map((asset) => asset.y)) - 42;
-                const maxX = Math.max(...items.map((asset) => asset.x)) + 248;
-                const maxY = Math.max(...items.map((asset) => asset.y)) + 112;
-                return (
-                  <div key={name} className="absolute rounded-2xl border bg-background/50" style={{ left: minX, top: minY, width: maxX - minX, height: maxY - minY }}>
-                    <div className="absolute left-3 top-2.5 flex items-center gap-2">
-                      <span className="font-mono text-xs font-semibold">{name}</span>
-                      <span className="rounded-full bg-primary/10 px-1.5 text-[10px] text-primary">{items.length}</span>
-                    </div>
-                  </div>
-                );
-              })}
-              <svg className="absolute inset-0 pointer-events-none" width="1220" height="540">
-                {edges.map(([from, to]) => {
-                  const source = getAsset(from);
-                  const target = getAsset(to);
-                  return <path key={`${from}-${to}`} d={`M${source.x + 232},${source.y + 48} C${source.x + 280},${source.y + 48} ${target.x - 48},${target.y + 48} ${target.x},${target.y + 48}`} stroke="#a1a1aa" strokeWidth="1.5" fill="none" />;
-                })}
-              </svg>
-              {assets.map((asset) => (
-                <div key={asset.id} className="absolute" style={{ left: asset.x, top: asset.y }}>
-                  <AssetNode asset={asset} />
-                </div>
-              ))}
-            </div>
-          </ScrollArea>
+          <RedesignLineageCanvas assets={displayedCatalogAssets} links={catalogLinks} />
         </RedesignPanel>
       </div>
     </RedesignPage>

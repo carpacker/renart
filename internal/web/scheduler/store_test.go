@@ -28,9 +28,11 @@ func TestStoreCreatesRunsLogsAndWatermarks(t *testing.T) {
 	require.NoError(t, store.Finish(ctx, id, RunStatusSuccess, nil))
 	require.NoError(t, store.SetInterval(ctx, "pipeline-id", end))
 
-	runs, err := store.List(ctx, RunFilter{PipelineID: "pipeline-id"})
+	result, err := store.List(ctx, RunFilter{PipelineID: "pipeline-id"})
 	require.NoError(t, err)
+	runs := result.Runs
 	require.Len(t, runs, 1)
+	assert.Equal(t, 1, result.Total)
 	assert.Equal(t, RunStatusSuccess, runs[0].Status)
 
 	run, logs, steps, err := store.Get(ctx, id)
@@ -81,6 +83,41 @@ func TestStoreDetectsActiveRuns(t *testing.T) {
 	active, err = store.HasActiveRun(ctx, "pipeline-id")
 	require.NoError(t, err)
 	assert.False(t, active)
+}
+
+func TestStoreListFiltersAndPaginatesRuns(t *testing.T) {
+	store, err := OpenStore(filepath.Join(t.TempDir(), "state.db"))
+	require.NoError(t, err)
+	defer store.Close()
+
+	ctx := context.Background()
+	base := time.Date(2026, 1, 1, 10, 0, 0, 0, time.UTC)
+	for index, run := range []PipelineRun{
+		{PipelineID: "pipeline-a", Pipeline: "analytics", Environment: "default", Trigger: RunTriggerManual, Status: RunStatusSuccess},
+		{PipelineID: "pipeline-b", Pipeline: "marketing", Environment: "prod", Trigger: RunTriggerManual, Status: RunStatusFailed},
+		{PipelineID: "pipeline-c", Pipeline: "analytics_daily", Environment: "prod", Trigger: RunTriggerManual, Status: RunStatusSuccess},
+	} {
+		startedAt := base.Add(time.Duration(index) * time.Minute)
+		run.StartedAt = &startedAt
+		_, err := store.Create(ctx, run)
+		require.NoError(t, err)
+	}
+
+	result, err := store.List(ctx, RunFilter{Query: "analytics", Status: RunStatusSuccess, Limit: 1})
+	require.NoError(t, err)
+	require.Len(t, result.Runs, 1)
+	assert.Equal(t, 2, result.Total)
+	assert.Equal(t, "analytics_daily", result.Runs[0].Pipeline)
+
+	result, err = store.List(ctx, RunFilter{Query: "analytics", Status: RunStatusSuccess, Limit: 1, Offset: 1})
+	require.NoError(t, err)
+	require.Len(t, result.Runs, 1)
+	assert.Equal(t, 2, result.Total)
+	assert.Equal(t, "analytics", result.Runs[0].Pipeline)
+
+	result, err = store.List(ctx, RunFilter{Environment: "prod", Limit: 10})
+	require.NoError(t, err)
+	assert.Equal(t, 2, result.Total)
 }
 
 func TestStorePersistsScheduleEnabledState(t *testing.T) {

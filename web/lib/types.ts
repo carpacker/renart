@@ -171,6 +171,9 @@ export type TriggerPipelineResponse = {
 export type RunsResponse = {
   status: "ok" | "error";
   runs: PipelineRun[];
+  total?: number;
+  limit?: number;
+  offset?: number;
 };
 
 export type RunDetailResponse = {

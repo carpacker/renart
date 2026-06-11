@@ -294,7 +294,7 @@ func (s *Service) Trigger(ctx context.Context, pipeline PipelineSchedule, req Tr
 	return run, nil
 }
 
-func (s *Service) ListRuns(ctx context.Context, filter RunFilter) ([]PipelineRun, error) {
+func (s *Service) ListRuns(ctx context.Context, filter RunFilter) (RunList, error) {
 	return s.store.List(ctx, filter)
 }
 

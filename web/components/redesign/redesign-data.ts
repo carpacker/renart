@@ -84,7 +84,7 @@ export type RedesignAsset = {
   description: string;
   dir?: string;
   imports?: string[];
-  status: "ok" | "overdue";
+  status: "ok" | "overdue" | "unknown" | "pending" | "success" | "failed";
   materializedAt: string;
   x: number;
   y: number;

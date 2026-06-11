@@ -148,25 +148,64 @@ func (s *Store) Finish(ctx context.Context, id string, status RunStatus, runErr 
 	return err
 }
 
-func (s *Store) List(ctx context.Context, filter RunFilter) ([]PipelineRun, error) {
+func (s *Store) List(ctx context.Context, filter RunFilter) (RunList, error) {
 	limit := filter.Limit
 	if limit <= 0 || limit > 500 {
 		limit = 100
 	}
-	query := `SELECT id, pipeline_id, pipeline, environment, trigger, status, win_start, win_end, started_at, finished_at, error, log_ref FROM pipeline_runs`
-	args := []any{}
-	if filter.PipelineID != "" {
-		query += ` WHERE pipeline_id = ?`
-		args = append(args, filter.PipelineID)
+	offset := filter.Offset
+	if offset < 0 {
+		offset = 0
 	}
-	query += ` ORDER BY COALESCE(started_at, '') DESC, id DESC LIMIT ?`
-	args = append(args, limit)
+	where, args := runFilterWhere(filter)
+	var total int
+	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM pipeline_runs`+where, args...).Scan(&total); err != nil {
+		return RunList{}, err
+	}
+	query := `SELECT id, pipeline_id, pipeline, environment, trigger, status, win_start, win_end, started_at, finished_at, error, log_ref FROM pipeline_runs` + where
+	query += ` ORDER BY COALESCE(started_at, '') DESC, id DESC LIMIT ? OFFSET ?`
+	args = append(args, limit, offset)
 	rows, err := s.db.QueryContext(ctx, query, args...)
 	if err != nil {
-		return nil, err
+		return RunList{}, err
 	}
 	defer rows.Close()
-	return scanRuns(rows)
+	runs, err := scanRuns(rows)
+	if err != nil {
+		return RunList{}, err
+	}
+	return RunList{Runs: runs, Total: total, Limit: limit, Offset: offset}, nil
+}
+
+func runFilterWhere(filter RunFilter) (string, []any) {
+	clauses := []string{}
+	args := []any{}
+	if filter.PipelineID != "" {
+		clauses = append(clauses, `pipeline_id = ?`)
+		args = append(args, filter.PipelineID)
+	}
+	if filter.Environment != "" {
+		if filter.Environment == "default" {
+			clauses = append(clauses, `(environment = ? OR environment = '')`)
+			args = append(args, filter.Environment)
+		} else {
+			clauses = append(clauses, `environment = ?`)
+			args = append(args, filter.Environment)
+		}
+	}
+	if filter.Status != "" {
+		clauses = append(clauses, `status = ?`)
+		args = append(args, string(filter.Status))
+	}
+	if query := strings.TrimSpace(filter.Query); query != "" {
+		pattern := "%" + strings.ToLower(query) + "%"
+		clauses = append(clauses, `(LOWER(id) LIKE ? OR LOWER(pipeline) LIKE ? OR LOWER(pipeline_id) LIKE ?)`)
+		args = append(args, pattern, pattern, pattern)
+	}
+	if len(clauses) == 0 {
+		return "", args
+	}
+	return ` WHERE ` + strings.Join(clauses, ` AND `), args
 }
 
 func (s *Store) Get(ctx context.Context, id string) (PipelineRun, []LogLine, []PipelineRunStep, error) {

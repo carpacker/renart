@@ -59,18 +59,19 @@ type DuckDBExecutionInfo struct {
 }
 
 type ExecutionDependencies struct {
-	WorkspaceRoot         string
-	ConfigPath            string
-	Executor              BruinCommandExecutor
-	ResolveAssetByID      func(context.Context, string) (string, *pipeline.Pipeline, *pipeline.Asset, error)
-	ResolveAssetNameByID  func(string) string
-	FindInspectIDs        func(...string) []string
-	RecordMaterialization func(string, time.Time, string)
-	CurrentPipelines      func() []PipelineView
-	DuckDBLock            func(string) *sync.Mutex
-	ParseQueryOutput      func([]byte) ([]string, []map[string]any)
-	NewPipelineBuilder    func() *pipeline.Builder
-	FreshnessSnapshot     func() map[string]AssetTimestamps
+	WorkspaceRoot                       string
+	ConfigPath                          string
+	Executor                            BruinCommandExecutor
+	ResolveAssetByID                    func(context.Context, string) (string, *pipeline.Pipeline, *pipeline.Asset, error)
+	ResolveAssetNameByID                func(string) string
+	FindInspectIDs                      func(...string) []string
+	RecordMaterialization               func(string, time.Time, string)
+	RecordMaterializationForEnvironment func(string, string, time.Time, string)
+	CurrentPipelines                    func() []PipelineView
+	DuckDBLock                          func(string) *sync.Mutex
+	ParseQueryOutput                    func([]byte) ([]string, []map[string]any)
+	NewPipelineBuilder                  func() *pipeline.Builder
+	FreshnessSnapshot                   func() map[string]AssetTimestamps
 }
 
 type PipelineView struct {
@@ -122,6 +123,16 @@ const inspectReadOnlyErrorMessage = "Inspect only supports read-only single SELE
 
 func NewExecutionService(deps ExecutionDependencies) *ExecutionService {
 	return &ExecutionService{deps: deps}
+}
+
+func (s *ExecutionService) recordMaterialization(assetName, environment string, at time.Time, status string) {
+	if s.deps.RecordMaterializationForEnvironment != nil {
+		s.deps.RecordMaterializationForEnvironment(assetName, environment, at, status)
+		return
+	}
+	if s.deps.RecordMaterialization != nil {
+		s.deps.RecordMaterialization(assetName, at, status)
+	}
 }
 
 func (s *ExecutionService) InspectAsset(ctx context.Context, assetID, limit, environment, startDate, endDate string) InspectResult {
@@ -440,7 +451,7 @@ func (s *ExecutionService) MaterializeAssetStream(ctx context.Context, assetID, 
 			if assetName == "" {
 				continue
 			}
-			s.deps.RecordMaterialization(assetName, now, "succeeded")
+			s.recordMaterialization(assetName, environment, now, "succeeded")
 		}
 		changedAssetIDs = s.deps.FindInspectIDs(assetIDsToRefresh...)
 	}
@@ -798,7 +809,7 @@ func (s *ExecutionService) MaterializePipelineStreamWithAssetEvents(ctx context.
 			for _, asset := range currentPipeline.Assets {
 				changedAssetIDs = append(changedAssetIDs, asset.ID)
 				if strings.TrimSpace(asset.Name) != "" {
-					s.deps.RecordMaterialization(asset.Name, now, "succeeded")
+					s.recordMaterialization(asset.Name, environment, now, "succeeded")
 				}
 			}
 			break

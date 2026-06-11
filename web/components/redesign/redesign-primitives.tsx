@@ -135,6 +135,7 @@ export function StatusPill({ status }: { status: string }) {
 export function AssetNode({ asset, selected }: { asset: RedesignAsset; selected?: boolean }) {
   const meta = kindMeta[asset.kind];
   const Icon = meta.icon;
+  const statusMeta = assetNodeStatusMeta(asset.status);
   return (
     <div
       className={cn(
@@ -150,14 +151,27 @@ export function AssetNode({ asset, selected }: { asset: RedesignAsset; selected?
       <div className="space-y-2 p-2.5">
         <p className="truncate text-[11px] text-muted-foreground">{asset.description}</p>
         <div className="flex items-center justify-between gap-1.5">
-          <span className={cn("truncate rounded px-1.5 py-0.5 text-[10px]", asset.status === "overdue" ? "bg-red-100 text-red-700" : "bg-emerald-100 text-emerald-700")}>
-            {asset.status === "overdue" ? "Overdue" : "Materialized"} · {asset.materializedAt}
+          <span className={cn("truncate rounded px-1.5 py-0.5 text-[10px]", statusMeta.className)}>
+            {statusMeta.label} · {asset.materializedAt}
           </span>
           <IntegrationBadge name={asset.integration} />
         </div>
       </div>
     </div>
   );
+}
+
+function assetNodeStatusMeta(status: RedesignAsset["status"]) {
+  if (status === "unknown") {
+    return { label: "Unknown", className: "bg-zinc-200 text-zinc-700" };
+  }
+  if (status === "pending") {
+    return { label: "Running", className: "bg-blue-100 text-blue-700" };
+  }
+  if (status === "failed" || status === "overdue") {
+    return { label: status === "overdue" ? "Overdue" : "Failed", className: "bg-red-100 text-red-700" };
+  }
+  return { label: "Materialized", className: "bg-emerald-100 text-emerald-700" };
 }
 
 export function SimpleTable({
