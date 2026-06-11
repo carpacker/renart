@@ -14,10 +14,7 @@ import {
   AssetConfigForm,
   WorkspaceEditorPane,
 } from "@/components/workspace-editor-pane";
-import {
-  assetEditorTabAtom,
-  editorValueAtom,
-} from "@/lib/atoms/domains/editor";
+import { assetEditorTabAtom } from "@/lib/atoms/domains/editor";
 import {
   enrichedSelectedAssetAtom,
 } from "@/lib/atoms/domains/results";
@@ -29,7 +26,7 @@ import {
 } from "@/lib/graph";
 import { buildCreateAssetInput } from "@/lib/workspace-shell-helpers";
 import { useAssetCanvasInteractions } from "@/hooks/use-asset-canvas-interactions";
-import { useDebouncedAssetSave } from "@/hooks/use-debounced-asset-save";
+import { useAssetContentEditing } from "@/hooks/use-asset-content-editing";
 import { useEditorActions } from "@/hooks/use-editor-actions";
 import { useWorkspaceGraphController } from "@/hooks/use-workspace-graph-controller";
 import { useWorkspaceSettingsData } from "@/hooks/use-workspace-settings-data";
@@ -53,7 +50,6 @@ export function WorkspacePage() {
     workspace,
   } = useWorkspaceLayout();
   const [assetEditorTab, setAssetEditorTab] = useAtom(assetEditorTabAtom);
-  const editorValue = useAtomValue(editorValueAtom);
   const asset = useAtomValue(enrichedSelectedAssetAtom);
   const routeSelection = useAtomValue(routeSelectionAtom);
   const setWorkspace = useSetAtom(workspaceAtom);
@@ -67,8 +63,16 @@ export function WorkspacePage() {
   const quickstartTourStep = onboarding.quickstartStep;
   const setQuickstartTourStep = onboarding.setQuickstartStep;
 
-  const { scheduleSave, flushAssetSave, hasPendingAssetSave, saveAssetNow } =
-    useDebouncedAssetSave(500);
+  const {
+    editorDisplayValue,
+    editorValue,
+    flushAssetSave,
+    handleEditorChange,
+    handleSaveSelectedAsset,
+  } = useAssetContentEditing({
+    asset,
+    pipelineId: pipeline?.id ?? null,
+  });
   const {
     workspaceConfig,
     handleCreateWorkspaceConnection,
@@ -141,22 +145,17 @@ export function WorkspacePage() {
     deleteDialogOpen,
     deleteLoading,
     setDeleteDialogOpen,
-    handleEditorChange,
     handleSaveVisualizationSettings,
     handleSaveManualUpstreams,
     handleConfirmDeleteAsset,
     handleMaterializeSelectedAsset,
     handleInspectSelectedAsset,
-    handleSaveSelectedAsset,
     handleAssetNameChange,
     handleAssetTypeChange,
     handleMaterializationTypeChange,
   } = useEditorActions({
     editorValue,
-    scheduleSave,
     flushAssetSave,
-    saveAssetNow,
-    hasPendingAssetSave,
     runUpdateAsset: assetActions.runUpdateAsset,
     runDeleteAsset: assetActions.runDeleteAsset,
     runUpdatePipeline: assetActions.runUpdatePipeline,
@@ -433,6 +432,7 @@ export function WorkspacePage() {
     deleteLoading,
     assetRenameLoading,
     editorValue,
+    editorDisplayValue,
     monacoTheme,
     assetEditorTab,
     form,

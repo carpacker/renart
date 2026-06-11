@@ -1,10 +1,8 @@
 "use client";
 
-import { useAtomValue, useSetAtom } from "jotai";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useAtomValue } from "jotai";
+import { useCallback, useState } from "react";
 
-import { fillAssetColumnsFromDB } from "@/lib/api";
-import { editorDraftAtom } from "@/lib/atoms/domains/editor";
 import { enrichedSelectedAssetAtom } from "@/lib/atoms/domains/results";
 import { pipelineAtom } from "@/lib/atoms/domains/workspace";
 import { MaterializeScope } from "@/lib/materialize-scope";
@@ -12,14 +10,7 @@ import { VISUALIZATION_META_KEYS } from "@/lib/visualization-meta";
 
 type UseEditorActionsInput = {
   editorValue: string;
-  scheduleSave: (pipelineId: string, assetId: string, content: string) => void;
   flushAssetSave: (assetId: string) => void;
-  saveAssetNow: (
-    pipelineId: string,
-    assetId: string,
-    content: string
-  ) => Promise<boolean>;
-  hasPendingAssetSave: (assetId: string) => boolean;
   runUpdateAsset: (
     pipelineId: string,
     assetId: string,
@@ -51,7 +42,6 @@ type UseEditorActionsInput = {
 
 export function useEditorActions({
   editorValue,
-  scheduleSave,
   flushAssetSave,
   runUpdateAsset,
   runDeleteAsset,
@@ -61,8 +51,6 @@ export function useEditorActions({
   navigateSelection,
   clearResultsAfterDelete,
   clearPreviewForAsset,
-  hasPendingAssetSave,
-  saveAssetNow,
   runUpdatePipeline,
 }: UseEditorActionsInput) {
   const asset = useAtomValue(enrichedSelectedAssetAtom);
@@ -70,52 +58,6 @@ export function useEditorActions({
   const pipelineId = pipeline?.id ?? null;
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const [deleteLoading, setDeleteLoading] = useState(false);
-  const fillColumnsTimerRef = useRef<ReturnType<typeof setTimeout> | null>(
-    null
-  );
-  const setEditorDraft = useSetAtom(editorDraftAtom);
-
-  const handleEditorChange = useCallback(
-    (value?: string) => {
-      const nextValue = value ?? "";
-      if (!asset || !pipelineId) {
-        return;
-      }
-
-      setEditorDraft((previous) => ({
-        ...previous,
-        [asset.id]: nextValue,
-      }));
-      scheduleSave(pipelineId, asset.id, nextValue);
-
-      const isSQLAsset =
-        asset.path.toLowerCase().endsWith(".sql") ||
-        asset.type.toLowerCase().includes("sql");
-      if (!isSQLAsset) {
-        return;
-      }
-
-      if (fillColumnsTimerRef.current) {
-        clearTimeout(fillColumnsTimerRef.current);
-      }
-
-      const currentAssetID = asset.id;
-      fillColumnsTimerRef.current = setTimeout(() => {
-        void fillAssetColumnsFromDB(currentAssetID).catch(() => {
-          // noop: best-effort post-edit sync
-        });
-      }, 1200);
-    },
-    [asset, pipelineId, scheduleSave, setEditorDraft]
-  );
-
-  useEffect(() => {
-    return () => {
-      if (fillColumnsTimerRef.current) {
-        clearTimeout(fillColumnsTimerRef.current);
-      }
-    };
-  }, []);
 
   const handleSaveVisualizationSettings = useCallback(
     (visualizationMeta: Record<string, string>) => {
@@ -214,28 +156,6 @@ export function useEditorActions({
     void runInspectForAsset(asset.id, editorValue);
   }, [asset, editorValue, runInspectForAsset]);
 
-  const handleSaveSelectedAsset = useCallback(async () => {
-    if (!asset || !pipelineId) {
-      return false;
-    }
-
-    const hasPendingSave = hasPendingAssetSave(asset.id);
-    const hasUnsavedChanges = hasPendingSave || editorValue !== asset.content;
-
-    if (!hasUnsavedChanges) {
-      return "already-saved";
-    }
-
-    const saved = await saveAssetNow(pipelineId, asset.id, editorValue);
-    return saved ? "saved" : false;
-  }, [
-    asset,
-    editorValue,
-    hasPendingAssetSave,
-    pipelineId,
-    saveAssetNow,
-  ]);
-
   const handlePipelineNameChange = useCallback(
     (pipelineName: string) => {
       if (!pipelineId) {
@@ -314,13 +234,11 @@ export function useEditorActions({
     deleteDialogOpen,
     deleteLoading,
     setDeleteDialogOpen,
-    handleEditorChange,
     handleSaveVisualizationSettings,
     handleSaveManualUpstreams,
     handleConfirmDeleteAsset,
     handleMaterializeSelectedAsset,
     handleInspectSelectedAsset,
-    handleSaveSelectedAsset,
     handlePipelineNameChange,
     handleAssetNameChange,
     handleAssetTypeChange,

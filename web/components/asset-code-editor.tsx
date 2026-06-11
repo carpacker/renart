@@ -15,6 +15,7 @@ const MonacoEditor = lazy(async () => {
 
 export function AssetCodeEditor({
   asset,
+  containerClassName,
   editorModelPath,
   editorValue,
   editorHighlighted,
@@ -30,6 +31,7 @@ export function AssetCodeEditor({
   onMount,
 }: {
   asset: WebAsset | null;
+  containerClassName?: string;
   editorModelPath: string;
   editorValue: string;
   editorHighlighted: boolean;
@@ -66,7 +68,9 @@ export function AssetCodeEditor({
 
   return (
     <div
-      className={`relative ${mobile ? "min-h-[240px]" : "h-[55%]"} border-b ${
+      className={`relative ${
+        containerClassName ?? `${mobile ? "min-h-[240px]" : "h-[55%]"} border-b`
+      } ${
         helpMode && editorHighlighted ? "ring-2 ring-primary/70 ring-inset" : ""
       }`}
       style={helpMode && editorHighlighted ? highlightStyle : undefined}

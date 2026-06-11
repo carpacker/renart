@@ -1,5 +1,5 @@
 import { Link, Outlet, useLocation, useNavigate } from "@tanstack/react-router";
-import { useAtomValue } from "jotai";
+import { useAtomValue, useSetAtom } from "jotai";
 import {
   Activity,
   AlertTriangle,
@@ -63,7 +63,7 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { workspaceAtom } from "@/lib/atoms/domains/workspace";
+import { routeSelectionAtom, workspaceAtom } from "@/lib/atoms/domains/workspace";
 import type { WebAsset, WebPipeline } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import { labelForRedesignMaterializationState, useRedesignAssetMaterializationStatus } from "@/hooks/use-redesign-asset-materialization-status";
@@ -89,6 +89,7 @@ import {
   schemaRows,
   tests,
 } from "./redesign-data";
+import { RedesignAssetEditor } from "./asset-editor";
 import { RedesignLineageCanvas, assetDisplayName, assetGroupName, assetNameParts, type RedesignLineageCanvasAsset } from "./lineage-canvas";
 import { IntegrationBadge, RedesignPage, RedesignPanel, SectionCard, SeverityIcon, SimpleTable, StatusPill } from "./redesign-primitives";
 
@@ -138,6 +139,7 @@ type BuildContextValue = {
   declaredDependencies: string[];
   addDependency: (dependency: string) => void;
   selectAsset: (assetId: string) => void;
+  goToAsset: (pipelineId: string, assetId: string) => void;
   openBottom: (tab: RedesignResultTab) => void;
 };
 
@@ -320,6 +322,21 @@ export function RedesignBuildPage({
     setVisualSelectedAssetId(selectedAssetId ?? firstAssetId);
   }, [firstAssetId, selectedAssetId]);
 
+  // Keep the global selection atoms pointed at the asset shown here so the
+  // selection-derived state (editor drafts, schema suggestion tables,
+  // intellisense context) works the same as on the classic workspace page.
+  const setRouteSelection = useSetAtom(routeSelectionAtom);
+  useEffect(() => {
+    if (!activePipeline) {
+      return;
+    }
+
+    setRouteSelection({
+      pipeline: activePipeline.id,
+      asset: effectiveSelectedAssetId ?? null,
+    });
+  }, [activePipeline, effectiveSelectedAssetId, setRouteSelection]);
+
   useEffect(() => {
     if (!workspace?.pipelines.length || activePipeline) {
       return;
@@ -351,6 +368,13 @@ export function RedesignBuildPage({
     onAssetSelect?.(assetId);
     setExplorerOpen(false);
   };
+  const goToAsset = (targetPipelineId: string, assetId: string) => {
+    void navigate({
+      to: redesignAssetViewPath(view),
+      params: { pipelineId: targetPipelineId, assetId },
+      search: { ...buildSearch, editor: "asset" },
+    });
+  };
   const buildContext: BuildContextValue = {
     pipelineId,
     pipeline: activePipeline,
@@ -361,6 +385,7 @@ export function RedesignBuildPage({
     declaredDependencies,
     addDependency,
     selectAsset,
+    goToAsset,
     openBottom,
   };
 
@@ -775,16 +800,14 @@ function EditorWorkspace({
   onInspect: () => void;
   onRun: () => void;
 }) {
+  const { declaredDependencies, addDependency, goToAsset, openBottom } = useBuildContext();
+
   if (adhoc) {
     return <AdhocEditor onRun={onRun} />;
   }
 
   const meta = kindMeta[asset.kind];
   const Icon = meta.icon;
-  const lines = asset.workspaceAsset?.content
-    ? asset.workspaceAsset.content.replace(/\s+$/, "").split(/\r?\n/)
-    : editorLinesFor(asset);
-  const { declaredDependencies, addDependency, openBottom } = useBuildContext();
   const missingDependencies = asset.kind === "python" ? missingPythonDependencies(asset, declaredDependencies) : [];
   const actionLabel = asset.kind === "source" ? "Validate" : asset.kind === "ingestr" || asset.kind === "sling" ? "Run" : "Materialize";
 
@@ -807,7 +830,21 @@ function EditorWorkspace({
           {asset.kind !== "source" ? <Button variant="outline" size="sm" onClick={onInspect}><Eye className="size-3.5" />Inspect</Button> : null}
         </div>
       </div>
-      <CodeBlock lines={lines} asset={asset} declaredDependencies={declaredDependencies} onAddDependency={addDependency} />
+      {asset.workspaceAsset && asset.pipelineId ? (
+        <RedesignAssetEditor
+          asset={asset.workspaceAsset}
+          pipelineId={asset.pipelineId}
+          onInspect={onInspect}
+          onGoToAsset={goToAsset}
+        />
+      ) : (
+        <CodeBlock
+          lines={editorLinesFor(asset)}
+          asset={asset}
+          declaredDependencies={declaredDependencies}
+          onAddDependency={addDependency}
+        />
+      )}
     </div>
   );
 }

@@ -1,8 +1,6 @@
 "use client";
 
-import type { Monaco } from "@monaco-editor/react";
-import type * as MonacoNS from "monaco-editor";
-import { CSSProperties, useCallback, useEffect, useMemo, useState } from "react";
+import { CSSProperties } from "react";
 import { Eye, Network, Settings2 } from "lucide-react";
 import { UseFormReturn } from "react-hook-form";
 import { Panel } from "react-resizable-panels";
@@ -17,13 +15,8 @@ import { Label } from "@/components/ui/label";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
-import { useSQLIntellisense } from "@/hooks/use-sql-intellisense";
-import { useJinjaIntellisense } from "@/hooks/use-jinja-intellisense";
-import { usePythonIntellisense } from "@/hooks/use-python-intellisense";
-import { useSQLFormatting } from "@/hooks/use-sql-formatting";
+import { useAssetMonaco } from "@/hooks/use-asset-monaco";
 import { useWorkspaceEditorDerivedState } from "@/hooks/use-workspace-editor-derived-state";
-import { useYAMLIntellisense } from "@/hooks/use-yaml-intellisense";
-import { defineBruinMonacoThemes } from "@/lib/monaco-theme";
 import { MaterializeScope } from "@/lib/materialize-scope";
 import { WebAsset } from "@/lib/types";
 import { InspectDiagnosticSnapshot } from "@/lib/inspect-diagnostics";
@@ -48,6 +41,7 @@ type WorkspaceEditorPaneProps = {
   deleteLoading: boolean;
   assetRenameLoading?: boolean;
   editorValue: string;
+  editorDisplayValue: string;
   monacoTheme: string;
   assetEditorTab: "configuration" | "checks" | "visualization" | "dependencies";
   form: UseFormReturn<AssetConfigForm>;
@@ -87,6 +81,7 @@ export function WorkspaceEditorPane({
   deleteLoading,
   assetRenameLoading,
   editorValue,
+  editorDisplayValue,
   monacoTheme,
   assetEditorTab,
   form,
@@ -108,9 +103,6 @@ export function WorkspaceEditorPane({
   availableAssetTypes,
   availableDependencyNames,
 }: WorkspaceEditorPaneProps) {
-  const [monacoInstance, setMonacoInstance] = useState<Monaco | null>(null);
-  const [editorInstance, setEditorInstance] =
-    useState<MonacoNS.editor.IStandaloneCodeEditor | null>(null);
   const selectedAssetType = form.watch("type");
   const {
     activeConfigEnvironment,
@@ -123,85 +115,27 @@ export function WorkspaceEditorPane({
     requiredConnectionType,
     schemaSuggestionTables,
     schemaTables,
-    selectedEnvironment,
     showMissingConnectionWarning,
   } = useWorkspaceEditorDerivedState({
     asset,
     selectedAssetType,
   });
 
-  useSQLIntellisense(
-    monacoInstance,
-    editorInstance,
+  const {
+    editorModelPath,
+    formatSQL,
+    handleBeforeMount,
+    handleMount,
+    isSqlAsset,
+    shortcutLabel,
+  } = useAssetMonaco({
     asset,
     editorValue,
-    schemaTables,
-    asset?.upstreams ?? [],
-    selectedEnvironment,
+    inspectDiagnosticSnapshot: inspectDiagnosticSnapshot ?? null,
     onGoToAsset,
-    inspectDiagnosticSnapshot ?? null,
-  );
-  useJinjaIntellisense(monacoInstance, editorInstance, asset, editorValue);
-  usePythonIntellisense(monacoInstance, editorInstance, asset, editorValue);
-  useYAMLIntellisense(monacoInstance, editorInstance, asset);
-
-  const { formatSQL, isSqlAsset, shortcutLabel } = useSQLFormatting(
-    asset,
-    editorInstance,
-    monacoInstance
-  );
-
-  const handleEditorBeforeMount = useCallback((monaco: Monaco) => {
-    defineBruinMonacoThemes(monaco);
-  }, []);
-
-  const handleEditorMount = useCallback(
-    (editor: MonacoNS.editor.IStandaloneCodeEditor, monaco: Monaco) => {
-      defineBruinMonacoThemes(monaco);
-      setEditorInstance(editor);
-      setMonacoInstance(monaco);
-    },
-    []
-  );
-
-  const editorModelPath = useMemo(() => {
-    if (!asset) {
-      return "inmemory://bruin/no-selection.sql";
-    }
-
-    const extension = asset.path.split(".").pop()?.toLowerCase() ?? "sql";
-      return `inmemory://bruin/assets/${asset.id}.${extension}`;
-  }, [asset]);
-
-  useEffect(() => {
-    if (!editorInstance || !monacoInstance) {
-      return;
-    }
-
-    const subscription = editorInstance.onKeyDown((event) => {
-      const ctrlOrCmd = event.ctrlKey || event.metaKey;
-      if (!ctrlOrCmd) {
-        return;
-      }
-
-      if (event.keyCode === monacoInstance.KeyCode.KeyS) {
-        event.preventDefault();
-        event.stopPropagation();
-        void onSaveSelectedAsset();
-        return;
-      }
-
-      if (event.keyCode === monacoInstance.KeyCode.Enter) {
-        event.preventDefault();
-        event.stopPropagation();
-        onInspectSelectedAsset();
-      }
-    });
-
-    return () => {
-      subscription.dispose();
-    };
-  }, [editorInstance, monacoInstance, onInspectSelectedAsset, onSaveSelectedAsset]);
+    onInspect: onInspectSelectedAsset,
+    onSave: onSaveSelectedAsset,
+  });
 
   const content = (
     <div className="flex h-full min-h-0 min-w-0 flex-col">
@@ -227,7 +161,7 @@ export function WorkspaceEditorPane({
           <AssetCodeEditor
             asset={asset}
             editorModelPath={editorModelPath}
-            editorValue={editorValue}
+            editorValue={editorDisplayValue}
             editorHighlighted={editorHighlighted}
             helpMode={helpMode}
             highlightStyle={highlightStyle}
@@ -236,9 +170,9 @@ export function WorkspaceEditorPane({
             mobile={mobile}
             monacoTheme={monacoTheme}
             onChange={onEditorChange}
-            onBeforeMount={handleEditorBeforeMount}
+            onBeforeMount={handleBeforeMount}
             onFormat={formatSQL}
-            onMount={handleEditorMount}
+            onMount={handleMount}
           />
 
           <ScrollArea className="min-h-0 min-w-0 flex-1" viewportClassName="p-4">

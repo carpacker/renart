@@ -1,16 +1,14 @@
 "use client";
 
-import { useAtomValue, useSetAtom } from "jotai";
+import { useAtomValue } from "jotai";
 import { useMemo } from "react";
 
-import { useAssetEditorSchemaInference } from "@/hooks/use-asset-editor-schema-inference";
 import { useWorkspaceSettingsData } from "@/hooks/use-workspace-settings-data";
 import {
   getConnectionTypeForAssetType,
   isSqlAssetType,
 } from "@/lib/asset-types";
 import {
-  registerAssetColumnsAtom,
   selectedAssetColumnEntriesAtom,
   selectedAssetInspectColumnsAtom,
   selectedAssetSchemaSuggestionTablesAtom,
@@ -42,13 +40,6 @@ export function useWorkspaceEditorDerivedState({
   const assetInspectColumns = useAtomValue(selectedAssetInspectColumnsAtom);
   const schemaTables = useAtomValue(selectedAssetSchemaTablesAtom);
   const schemaSuggestionTables = useAtomValue(selectedAssetSchemaSuggestionTablesAtom);
-  const registerAssetColumns = useSetAtom(registerAssetColumnsAtom);
-
-  useAssetEditorSchemaInference({
-    asset,
-    schemaSuggestionTables,
-    onRegisterAssetColumns: registerAssetColumns,
-  });
 
   const requiredConnectionType = useMemo(
     () => getConnectionTypeForAssetType(selectedAssetType),
