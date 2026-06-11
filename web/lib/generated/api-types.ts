@@ -50,8 +50,8 @@ export type WebPipeline = {
 export type WorkspaceState = {
   pipelines: WebPipeline[];
   connections: Record<string, string>;
-  selected_environment?: string;
-  errors?: string[];
+  selected_environment: string;
+  errors: string[];
   updated_at: string;
   metadata: Record<string, string[]>;
   revision?: number;
@@ -255,7 +255,7 @@ export type FormatSQLAssetResponse = {
   status: string;
   asset_id: string;
   content: string;
-  error: string;
+  error?: string;
 };
 
 export type PipelineMaterializationState = {

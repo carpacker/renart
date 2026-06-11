@@ -13,12 +13,12 @@ import (
 )
 
 type AssetUpdateRequest struct {
-	Name                *string
-	Type                *string
-	Content             *string
-	MaterializationType *string
-	Meta                map[string]string
-	Upstreams           []string
+	Name                *string           `json:"name,omitempty"`
+	Type                *string           `json:"type,omitempty"`
+	Content             *string           `json:"content,omitempty"`
+	MaterializationType *string           `json:"materialization_type,omitempty"`
+	Meta                map[string]string `json:"meta,omitempty"`
+	Upstreams           []string          `json:"upstreams,omitempty"`
 }
 
 type AssetMutationResponse struct {
@@ -32,142 +32,142 @@ type StatusResponse struct {
 }
 
 type FormatSQLAssetRequest struct {
-	Content string
+	Content string `json:"content"`
 }
 
 type FormatSQLAssetResponse struct {
-	Status  string
-	AssetID string
-	Content string
-	Error   string
+	Status  string `json:"status"`
+	AssetID string `json:"asset_id"`
+	Content string `json:"content"`
+	Error   string `json:"error,omitempty"`
 }
 
 type FormatPythonAssetRequest struct {
-	Content string
+	Content string `json:"content"`
 }
 
 type FormatPythonAssetResponse struct {
-	Status  string
-	AssetID string
-	Content string
-	Error   string
+	Status  string `json:"status"`
+	AssetID string `json:"asset_id"`
+	Content string `json:"content"`
+	Error   string `json:"error,omitempty"`
 }
 
 type PythonDiagnosticsRequest struct {
-	Content string
+	Content string `json:"content"`
 }
 
 type PythonCompletionsRequest struct {
-	Content  string
-	Line     int
-	Column   int
-	Snippets bool
+	Content  string `json:"content"`
+	Line     int    `json:"line"`
+	Column   int    `json:"column"`
+	Snippets bool   `json:"snippets"`
 }
 
 type PythonPositionRequest struct {
-	Content string
-	Line    int
-	Column  int
+	Content string `json:"content"`
+	Line    int    `json:"line"`
+	Column  int    `json:"column"`
 }
 
 type PythonDiagnosticsResponse struct {
-	Status      string
-	AssetID     string
-	Diagnostics []PythonDiagnostic
-	Error       string
+	Status      string             `json:"status"`
+	AssetID     string             `json:"asset_id"`
+	Diagnostics []PythonDiagnostic `json:"diagnostics,omitempty"`
+	Error       string             `json:"error,omitempty"`
 }
 
 type PythonDiagnostic struct {
-	ID       string
-	Message  string
-	Severity string
-	Range    *PythonRange
-	Display  string
+	ID       string       `json:"id"`
+	Message  string       `json:"message"`
+	Severity string       `json:"severity"`
+	Range    *PythonRange `json:"range,omitempty"`
+	Display  string       `json:"display,omitempty"`
 }
 
 type PythonRange struct {
-	Start PythonPosition
-	End   PythonPosition
+	Start PythonPosition `json:"start"`
+	End   PythonPosition `json:"end"`
 }
 
 type PythonPosition struct {
-	Line   int
-	Column int
+	Line   int `json:"line"`
+	Column int `json:"column"`
 }
 
 type PythonCompletionsResponse struct {
-	Status      string
-	AssetID     string
-	Completions []PythonCompletion
-	Error       string
+	Status      string             `json:"status"`
+	AssetID     string             `json:"asset_id"`
+	Completions []PythonCompletion `json:"completions,omitempty"`
+	Error       string             `json:"error,omitempty"`
 }
 
 type PythonCompletion struct {
-	Label               string
-	Kind                string
-	Detail              string
-	InsertText          string
-	InsertTextFormat    string
-	Documentation       string
-	ModuleName          string
-	AdditionalTextEdits []PythonTextEdit
+	Label               string           `json:"label"`
+	Kind                string           `json:"kind,omitempty"`
+	Detail              string           `json:"detail,omitempty"`
+	InsertText          string           `json:"insert_text,omitempty"`
+	InsertTextFormat    string           `json:"insert_text_format"`
+	Documentation       string           `json:"documentation,omitempty"`
+	ModuleName          string           `json:"module_name,omitempty"`
+	AdditionalTextEdits []PythonTextEdit `json:"additional_text_edits,omitempty"`
 }
 
 type PythonTextEdit struct {
-	Range PythonRange
-	Text  string
+	Range PythonRange `json:"range"`
+	Text  string      `json:"text"`
 }
 
 type PythonHoverResponse struct {
-	Status  string
-	AssetID string
-	Hover   *PythonHover
-	Error   string
+	Status  string       `json:"status"`
+	AssetID string       `json:"asset_id"`
+	Hover   *PythonHover `json:"hover,omitempty"`
+	Error   string       `json:"error,omitempty"`
 }
 
 type PythonHover struct {
-	Contents string
-	Range    *PythonRange
+	Contents string       `json:"contents"`
+	Range    *PythonRange `json:"range,omitempty"`
 }
 
 type PythonSignatureHelpResponse struct {
-	Status        string
-	AssetID       string
-	SignatureHelp *PythonSignatureHelp
-	Error         string
+	Status        string               `json:"status"`
+	AssetID       string               `json:"asset_id"`
+	SignatureHelp *PythonSignatureHelp `json:"signature_help,omitempty"`
+	Error         string               `json:"error,omitempty"`
 }
 
 type PythonSignatureHelp struct {
-	Signatures      []PythonSignature
-	ActiveSignature *int
-	ActiveParameter *int
+	Signatures      []PythonSignature `json:"signatures"`
+	ActiveSignature *int              `json:"active_signature,omitempty"`
+	ActiveParameter *int              `json:"active_parameter,omitempty"`
 }
 
 type PythonSignature struct {
-	Label           string
-	Documentation   string
-	Parameters      []PythonSignatureParameter
-	ActiveParameter *int
+	Label           string                     `json:"label"`
+	Documentation   string                     `json:"documentation,omitempty"`
+	Parameters      []PythonSignatureParameter `json:"parameters"`
+	ActiveParameter *int                       `json:"active_parameter,omitempty"`
 }
 
 type PythonSignatureParameter struct {
-	Label         string
-	Name          string
-	Type          string
-	Documentation string
+	Label         string `json:"label"`
+	Name          string `json:"name"`
+	Type          string `json:"type"`
+	Documentation string `json:"documentation,omitempty"`
 }
 
 type PythonGotoDefinitionResponse struct {
-	Status  string
-	AssetID string
-	Targets []PythonGotoTarget
-	Error   string
+	Status  string             `json:"status"`
+	AssetID string             `json:"asset_id"`
+	Targets []PythonGotoTarget `json:"targets,omitempty"`
+	Error   string             `json:"error,omitempty"`
 }
 
 type PythonGotoTarget struct {
-	Path       string
-	FocusRange PythonRange
-	FullRange  PythonRange
+	Path       string      `json:"path"`
+	FocusRange PythonRange `json:"focus_range"`
+	FullRange  PythonRange `json:"full_range"`
 }
 
 type AssetDependencies struct {
@@ -214,13 +214,13 @@ func (s *AssetService) resolver() *WorkspaceResolver {
 	return NewWorkspaceResolver(s.deps.WorkspaceRoot, nil)
 }
 
-func (s *AssetService) Create(ctx context.Context, pipelineID string, req CreateAssetParams) (AssetMutationResponse, *ServiceAPIError) {
+func (s *AssetService) Create(ctx context.Context, pipelineID string, req CreateAssetParams) (AssetMutationResponse, *APIError) {
 	_, pipelinePath, err := s.resolver().DecodePipelineID(pipelineID)
 	if err != nil {
-		return AssetMutationResponse{}, newServiceAPIError(400, "invalid_pipeline_id", "invalid pipeline id")
+		return AssetMutationResponse{}, newAPIError(400, "invalid_pipeline_id", "invalid pipeline id")
 	}
 	if req.Name == "" && req.Path == "" && req.SourceAssetID == "" {
-		return AssetMutationResponse{}, newServiceAPIError(400, "missing_name_or_path", "name or path is required")
+		return AssetMutationResponse{}, newAPIError(400, "missing_name_or_path", "name or path is required")
 	}
 
 	var sourceAsset *pipeline.Asset
@@ -230,10 +230,10 @@ func (s *AssetService) Create(ctx context.Context, pipelineID string, req Create
 	if strings.TrimSpace(req.SourceAssetID) != "" {
 		resolvedRelPath, resolvedPipeline, resolvedAsset, resolveErr := s.deps.ResolveAssetByID(ctx, req.SourceAssetID)
 		if resolveErr != nil {
-			return AssetMutationResponse{}, newServiceAPIError(400, "invalid_source_asset_id", resolveErr.Error())
+			return AssetMutationResponse{}, newAPIError(400, "invalid_source_asset_id", resolveErr.Error())
 		}
 		if !pipelinePathsReferToSameRoot(resolvedPipeline.DefinitionFile.Path, pipelinePath) {
-			return AssetMutationResponse{}, newServiceAPIError(400, "invalid_source_asset", "source asset must belong to the selected pipeline")
+			return AssetMutationResponse{}, newAPIError(400, "invalid_source_asset", "source asset must belong to the selected pipeline")
 		}
 		sourceAsset = resolvedAsset
 		sourcePipeline = resolvedPipeline
@@ -248,7 +248,7 @@ func (s *AssetService) Create(ctx context.Context, pipelineID string, req Create
 		assetName = deriveDownstreamAssetName(sourceAsset.Name, sourcePipeline)
 	}
 	if assetName != "" && !strings.Contains(assetName, ".") {
-		return AssetMutationResponse{}, newServiceAPIError(400, "missing_asset_prefix", "asset name must include a prefix, for example analytics.orders")
+		return AssetMutationResponse{}, newAPIError(400, "missing_asset_prefix", "asset name must include a prefix, for example analytics.orders")
 	}
 
 	relAssetPath := req.Path
@@ -256,7 +256,7 @@ func (s *AssetService) Create(ctx context.Context, pipelineID string, req Create
 		if sourceAsset != nil {
 			sourceAbsAssetPath, pathErr := s.resolver().JoinPath(sourceRelAssetPath)
 			if pathErr != nil {
-				return AssetMutationResponse{}, newServiceAPIError(400, "invalid_source_asset_path", pathErr.Error())
+				return AssetMutationResponse{}, newAPIError(400, "invalid_source_asset_path", pathErr.Error())
 			}
 			sourcePipelineRelativeDir, relErr := filepath.Rel(pipelinePath, filepath.Dir(sourceAbsAssetPath))
 			if relErr != nil {
@@ -272,16 +272,16 @@ func (s *AssetService) Create(ctx context.Context, pipelineID string, req Create
 		}
 	}
 	if inferredAssetNameFromPath(relAssetPath) == "" || !strings.Contains(inferredAssetNameFromPath(relAssetPath), ".") {
-		return AssetMutationResponse{}, newServiceAPIError(400, "missing_asset_prefix", "asset path must infer a prefixed asset name under assets/<prefix>/")
+		return AssetMutationResponse{}, newAPIError(400, "missing_asset_prefix", "asset path must infer a prefixed asset name under assets/<prefix>/")
 	}
 
 	absAssetPath, err := SafeJoin(pipelinePath, relAssetPath)
 	if err != nil {
-		return AssetMutationResponse{}, newServiceAPIError(400, "invalid_asset_path", err.Error())
+		return AssetMutationResponse{}, newAPIError(400, "invalid_asset_path", err.Error())
 	}
 	fs := s.fs()
 	if err := fs.MkdirAll(filepath.Dir(absAssetPath), 0o755); err != nil {
-		return AssetMutationResponse{}, newServiceAPIError(500, "asset_dir_create_failed", err.Error())
+		return AssetMutationResponse{}, newAPIError(500, "asset_dir_create_failed", err.Error())
 	}
 
 	assetType := strings.TrimSpace(req.Type)
@@ -303,27 +303,27 @@ func (s *AssetService) Create(ctx context.Context, pipelineID string, req Create
 	}
 
 	if err := afero.WriteFile(fs, absAssetPath, []byte(content), 0o644); err != nil {
-		return AssetMutationResponse{}, newServiceAPIError(500, "asset_write_failed", err.Error())
+		return AssetMutationResponse{}, newAPIError(500, "asset_write_failed", err.Error())
 	}
 	if strings.TrimSpace(req.SeedFileName) != "" {
 		seedFileName := filepath.Base(strings.TrimSpace(req.SeedFileName))
 		if seedFileName == "." || seedFileName == string(filepath.Separator) || seedFileName == "" {
-			return AssetMutationResponse{}, newServiceAPIError(400, "invalid_seed_file_name", "seed file name is invalid")
+			return AssetMutationResponse{}, newAPIError(400, "invalid_seed_file_name", "seed file name is invalid")
 		}
 		seedFilePath := filepath.Join(filepath.Dir(absAssetPath), seedFileName)
 		if err := afero.WriteFile(fs, seedFilePath, []byte(req.SeedFileContent), 0o644); err != nil {
-			return AssetMutationResponse{}, newServiceAPIError(500, "seed_file_write_failed", err.Error())
+			return AssetMutationResponse{}, newAPIError(500, "seed_file_write_failed", err.Error())
 		}
 	}
 	if err := s.deps.EnsurePythonRequirements(absAssetPath, assetType, relAssetPath); err != nil {
-		return AssetMutationResponse{}, newServiceAPIError(500, "requirements_write_failed", err.Error())
+		return AssetMutationResponse{}, newAPIError(500, "requirements_write_failed", err.Error())
 	}
 
 	relWorkspaceAssetPath, _ := filepath.Rel(s.deps.WorkspaceRoot, absAssetPath)
 	assetPath := filepath.ToSlash(relWorkspaceAssetPath)
 	if strings.HasSuffix(strings.ToLower(assetPath), ".sql") {
 		if err := s.reconcileSQLAssetDependencies(ctx, assetPath); err != nil {
-			return AssetMutationResponse{}, newServiceAPIError(500, "asset_dependency_reconcile_failed", err.Error())
+			return AssetMutationResponse{}, newAPIError(500, "asset_dependency_reconcile_failed", err.Error())
 		}
 	}
 	s.deps.SuppressWatcher(assetPath)
@@ -332,29 +332,29 @@ func (s *AssetService) Create(ctx context.Context, pipelineID string, req Create
 }
 
 type CreateAssetParams struct {
-	Name            string
-	Type            string
-	Path            string
-	Content         string
-	SourceAssetID   string
-	SeedFileName    string
-	SeedFileContent string
+	Name            string `json:"name"`
+	Type            string `json:"type"`
+	Path            string `json:"path"`
+	Content         string `json:"content"`
+	SourceAssetID   string `json:"source_asset_id"`
+	SeedFileName    string `json:"seed_file_name"`
+	SeedFileContent string `json:"seed_file_content"`
 }
 
-func (s *AssetService) Update(ctx context.Context, assetID string, req AssetUpdateRequest) (AssetMutationResponse, *ServiceAPIError) {
+func (s *AssetService) Update(ctx context.Context, assetID string, req AssetUpdateRequest) (AssetMutationResponse, *APIError) {
 	relAssetPath, err := DecodeID(assetID)
 	if err != nil {
-		return AssetMutationResponse{}, newServiceAPIError(400, "invalid_asset_id", "invalid asset id")
+		return AssetMutationResponse{}, newAPIError(400, "invalid_asset_id", "invalid asset id")
 	}
 	absAssetPath, err := s.resolver().JoinPath(relAssetPath)
 	if err != nil {
-		return AssetMutationResponse{}, newServiceAPIError(400, "invalid_asset_path", err.Error())
+		return AssetMutationResponse{}, newAPIError(400, "invalid_asset_path", err.Error())
 	}
 
 	fs := s.fs()
 	originalBytes, err := afero.ReadFile(fs, absAssetPath)
 	if err != nil {
-		return AssetMutationResponse{}, newServiceAPIError(500, "asset_read_failed", err.Error())
+		return AssetMutationResponse{}, newAPIError(500, "asset_read_failed", err.Error())
 	}
 	originalHadExplicitName := assetContentHasExplicitName(string(originalBytes))
 	originalExecutable := ExtractExecutableContent(string(originalBytes))
@@ -373,7 +373,7 @@ func (s *AssetService) Update(ctx context.Context, assetID string, req AssetUpda
 	if req.Name != nil || req.Type != nil || req.MaterializationType != nil || req.Meta != nil || req.Upstreams != nil {
 		_, parsedPipeline, asset, resolveErr := s.deps.ResolveAssetByID(ctx, assetID)
 		if resolveErr != nil {
-			return AssetMutationResponse{}, newServiceAPIError(400, "asset_resolve_failed", resolveErr.Error())
+			return AssetMutationResponse{}, newAPIError(400, "asset_resolve_failed", resolveErr.Error())
 		}
 
 		originalAssetName := asset.Name
@@ -381,13 +381,13 @@ func (s *AssetService) Update(ctx context.Context, assetID string, req AssetUpda
 		if req.Name != nil {
 			nextName := strings.TrimSpace(*req.Name)
 			if nextName == "" {
-				return AssetMutationResponse{}, newServiceAPIError(400, "invalid_asset_name", "asset name cannot be empty")
+				return AssetMutationResponse{}, newAPIError(400, "invalid_asset_name", "asset name cannot be empty")
 			}
 			if !strings.Contains(nextName, ".") {
-				return AssetMutationResponse{}, newServiceAPIError(400, "missing_asset_prefix", "asset name must include a prefix, for example analytics.orders")
+				return AssetMutationResponse{}, newAPIError(400, "missing_asset_prefix", "asset name must include a prefix, for example analytics.orders")
 			}
 			if existing := getAssetByNameCaseInsensitiveLocal(parsedPipeline, nextName); existing != nil && existing.DefinitionFile.Path != asset.DefinitionFile.Path {
-				return AssetMutationResponse{}, newServiceAPIError(400, "duplicate_asset_name", fmt.Sprintf("an asset named %q already exists", nextName))
+				return AssetMutationResponse{}, newAPIError(400, "duplicate_asset_name", fmt.Sprintf("an asset named %q already exists", nextName))
 			}
 			if nextName != asset.Name {
 				asset.Name = nextName
@@ -401,7 +401,7 @@ func (s *AssetService) Update(ctx context.Context, assetID string, req AssetUpda
 		if req.Type != nil {
 			nextType := strings.TrimSpace(*req.Type)
 			if nextType == "" {
-				return AssetMutationResponse{}, newServiceAPIError(400, "invalid_asset_type", "asset type cannot be empty")
+				return AssetMutationResponse{}, newAPIError(400, "invalid_asset_type", "asset type cannot be empty")
 			}
 			asset.Type = pipeline.AssetType(nextType)
 		}
@@ -427,12 +427,12 @@ func (s *AssetService) Update(ctx context.Context, assetID string, req AssetUpda
 			applyManualAssetUpstreams(asset, parsedPipeline, req.Upstreams)
 		}
 		if err := asset.Persist(fs, parsedPipeline); err != nil {
-			return AssetMutationResponse{}, newServiceAPIError(500, "asset_persist_failed", err.Error())
+			return AssetMutationResponse{}, newAPIError(500, "asset_persist_failed", err.Error())
 		}
 		if renamedAsset {
 			affectedIDs, affectedPaths, refactorErr := s.RefactorDirectDependencies(ctx, parsedPipeline, originalAssetName, asset.Name)
 			if refactorErr != nil {
-				return AssetMutationResponse{}, newServiceAPIError(500, "asset_rename_refactor_failed", refactorErr.Error())
+				return AssetMutationResponse{}, newAPIError(500, "asset_rename_refactor_failed", refactorErr.Error())
 			}
 			changedAssetIDs = appendUniqueStrings(changedAssetIDs, affectedIDs...)
 			changedAssetPaths = appendUniqueStrings(changedAssetPaths, affectedPaths...)
@@ -441,17 +441,17 @@ func (s *AssetService) Update(ctx context.Context, assetID string, req AssetUpda
 
 	latestBytes, err := afero.ReadFile(fs, absAssetPath)
 	if err != nil {
-		return AssetMutationResponse{}, newServiceAPIError(500, "asset_read_failed", err.Error())
+		return AssetMutationResponse{}, newAPIError(500, "asset_read_failed", err.Error())
 	}
 	mergedContent := MergeExecutableContent(string(latestBytes), desiredExecutable)
 	if err := afero.WriteFile(fs, absAssetPath, []byte(mergedContent), 0o644); err != nil {
-		return AssetMutationResponse{}, newServiceAPIError(500, "asset_write_failed", err.Error())
+		return AssetMutationResponse{}, newAPIError(500, "asset_write_failed", err.Error())
 	}
 
 	shouldReconcileDependencies := strings.HasSuffix(strings.ToLower(relAssetPath), ".sql") && (executableChanged || req.Upstreams != nil)
 	if shouldReconcileDependencies {
 		if err := s.reconcileSQLAssetDependencies(ctx, relAssetPath); err != nil {
-			return AssetMutationResponse{}, newServiceAPIError(500, "asset_dependency_reconcile_failed", err.Error())
+			return AssetMutationResponse{}, newAPIError(500, "asset_dependency_reconcile_failed", err.Error())
 		}
 		if executableChanged {
 			s.ScheduleSQLPatches(relAssetPath)
@@ -460,25 +460,25 @@ func (s *AssetService) Update(ctx context.Context, assetID string, req AssetUpda
 	if inferredRenameRelAssetPath != "" && inferredRenameRelAssetPath != filepath.ToSlash(relAssetPath) {
 		newAbsAssetPath, pathErr := s.resolver().JoinPath(inferredRenameRelAssetPath)
 		if pathErr != nil {
-			return AssetMutationResponse{}, newServiceAPIError(400, "invalid_asset_path", pathErr.Error())
+			return AssetMutationResponse{}, newAPIError(400, "invalid_asset_path", pathErr.Error())
 		}
 		if exists, existsErr := afero.Exists(fs, newAbsAssetPath); existsErr != nil {
-			return AssetMutationResponse{}, newServiceAPIError(500, "asset_stat_failed", existsErr.Error())
+			return AssetMutationResponse{}, newAPIError(500, "asset_stat_failed", existsErr.Error())
 		} else if exists {
-			return AssetMutationResponse{}, newServiceAPIError(400, "asset_path_exists", "an asset already exists at the inferred path")
+			return AssetMutationResponse{}, newAPIError(400, "asset_path_exists", "an asset already exists at the inferred path")
 		}
 		currentBytes, readErr := afero.ReadFile(fs, absAssetPath)
 		if readErr != nil {
-			return AssetMutationResponse{}, newServiceAPIError(500, "asset_read_failed", readErr.Error())
+			return AssetMutationResponse{}, newAPIError(500, "asset_read_failed", readErr.Error())
 		}
 		if mkdirErr := fs.MkdirAll(filepath.Dir(newAbsAssetPath), 0o755); mkdirErr != nil {
-			return AssetMutationResponse{}, newServiceAPIError(500, "asset_dir_create_failed", mkdirErr.Error())
+			return AssetMutationResponse{}, newAPIError(500, "asset_dir_create_failed", mkdirErr.Error())
 		}
 		if writeErr := afero.WriteFile(fs, newAbsAssetPath, []byte(removeAssetNameFieldFromContent(string(currentBytes))), 0o644); writeErr != nil {
-			return AssetMutationResponse{}, newServiceAPIError(500, "asset_write_failed", writeErr.Error())
+			return AssetMutationResponse{}, newAPIError(500, "asset_write_failed", writeErr.Error())
 		}
 		if removeErr := fs.Remove(absAssetPath); removeErr != nil {
-			return AssetMutationResponse{}, newServiceAPIError(500, "asset_remove_failed", removeErr.Error())
+			return AssetMutationResponse{}, newAPIError(500, "asset_remove_failed", removeErr.Error())
 		}
 		nextRelAssetPath = inferredRenameRelAssetPath
 		nextAssetID = EncodeID(inferredRenameRelAssetPath)
@@ -492,17 +492,17 @@ func (s *AssetService) Update(ctx context.Context, assetID string, req AssetUpda
 	return AssetMutationResponse{Status: "ok", AssetID: nextAssetID, AssetPath: nextRelAssetPath}, nil
 }
 
-func (s *AssetService) Delete(ctx context.Context, assetID string) (StatusResponse, *ServiceAPIError) {
+func (s *AssetService) Delete(ctx context.Context, assetID string) (StatusResponse, *APIError) {
 	relAssetPath, err := DecodeID(assetID)
 	if err != nil {
-		return StatusResponse{}, newServiceAPIError(400, "invalid_asset_id", "invalid asset id")
+		return StatusResponse{}, newAPIError(400, "invalid_asset_id", "invalid asset id")
 	}
 	absAssetPath, err := s.resolver().JoinPath(relAssetPath)
 	if err != nil {
-		return StatusResponse{}, newServiceAPIError(400, "invalid_asset_path", err.Error())
+		return StatusResponse{}, newAPIError(400, "invalid_asset_path", err.Error())
 	}
 	if err := s.fs().Remove(absAssetPath); err != nil {
-		return StatusResponse{}, newServiceAPIError(500, "asset_delete_failed", err.Error())
+		return StatusResponse{}, newAPIError(500, "asset_delete_failed", err.Error())
 	}
 	s.deps.SuppressWatcher(relAssetPath)
 	s.deps.PushWorkspaceUpdateImmediate(ctx, "asset.deleted", relAssetPath)

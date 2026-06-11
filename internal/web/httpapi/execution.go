@@ -5,37 +5,17 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"time"
 
 	"github.com/go-chi/chi/v5"
 	webapi "renart/internal/web/api"
 	webmodel "renart/internal/web/model"
+	"renart/internal/web/service"
 )
 
-type InspectExecutionResult struct {
-	Status                              string
-	Columns                             []string
-	Rows                                []map[string]any
-	RawOutput                           string
-	Operation                           webmodel.OperationMetadata
-	Error                               string
-	MissingUpstreamAssetIDs             []string
-	MissingUpstreamAssetNames           []string
-	MissingUpstreamAssetsMaterializable bool
-	Attempts                            int
-	Retryable                           bool
-	HTTPStatus                          int
-}
-
-type MaterializeExecutionEvent struct {
-	Status          string
-	Operation       webmodel.OperationMetadata
-	Output          string
-	Error           string
-	ExitCode        int
-	ChangedAssetIDs []string
-	MaterializedAt  *time.Time
-}
+type (
+	InspectExecutionResult    = service.InspectResult
+	MaterializeExecutionEvent = service.MaterializeResult
+)
 
 type ExecutionHandlers interface {
 	InspectAsset(ctx context.Context, assetID, limit, environment, startDate, endDate string) InspectExecutionResult

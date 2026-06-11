@@ -13,8 +13,8 @@ import (
 
 type SQLHandlers interface {
 	ColumnValues(ctx context.Context, connectionName, environment, query string) service.SQLColumnValuesResult
-	Databases(ctx context.Context, connectionName, environment string) (service.SQLDatabaseDiscoveryResult, *service.SQLAPIError)
-	Tables(ctx context.Context, connectionName, databaseName, environment string) (service.SQLTableDiscoveryResult, *service.SQLAPIError)
+	Databases(ctx context.Context, connectionName, environment string) (service.SQLDatabaseDiscoveryResult, *service.APIError)
+	Tables(ctx context.Context, connectionName, databaseName, environment string) (service.SQLTableDiscoveryResult, *service.APIError)
 	TableColumns(ctx context.Context, connectionName, tableName, environment string) (service.SQLTableColumnsResult, int)
 }
 

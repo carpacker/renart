@@ -5,13 +5,14 @@ DOCS_IMAGE ?= renart-docs:local
 RENART_VERSION ?= $(shell git describe --tags --abbrev=0 2>/dev/null || echo local)
 RENART_COMMIT ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo unknown)
 
-.PHONY: help build test check go-build go-test web-install web-build web-typecheck web-test-live web-sync-polyglot-wasm docs-install docs-build docs-dev docs-preview docs-screenshots landing-media docs-docker docs-docker-run sync-install clean
+.PHONY: help build test check go-build go-test standalone-build web-install web-build web-typecheck web-test-live web-sync-polyglot-wasm docs-install docs-build docs-dev docs-preview docs-screenshots landing-media docs-docker docs-docker-run sync-install clean
 
 help:
 	@printf "Renart build targets\n\n"
 	@printf "  make build             Build Go binary, web app, and docs\n"
 	@printf "  make check             Run Go tests plus web/docs builds\n"
 	@printf "  make go-build          Build Renart CLI\n"
+	@printf "  make standalone-build  Build Renart CLI plus the renart-gui desktop helper\n"
 	@printf "  make go-test           Run Go tests\n"
 	@printf "  make web-build         Build React app\n"
 	@printf "  make web-sync-polyglot-wasm  Copy Polyglot SQL WASM from web dependency\n"
@@ -32,6 +33,12 @@ test: go-test
 
 go-build:
 	$(GO) build .
+
+# Builds the desktop helper used by `renart standalone`. Platform deps:
+# Linux needs gtk3 + webkit2gtk dev packages, macOS needs the Xcode command
+# line tools, Windows needs the WebView2 runtime (no build deps).
+standalone-build: go-build
+	$(GO) build -tags webkit2_41,standalone,desktop,production -o renart-gui ./cmd/renart-gui
 
 go-test:
 	$(GO) test ./...

@@ -20,6 +20,7 @@ func main() {
 		Usage:   "Standalone Renart server",
 		Commands: []*cli.Command{
 			cmd.Web(),
+			cmd.Standalone(),
 		},
 		DisableSliceFlagSeparator: true,
 	}

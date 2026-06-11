@@ -101,18 +101,18 @@ type PipelineMaterializationInfo struct {
 }
 
 type PipelineMaterializationState struct {
-	AssetID         string
-	IsMaterialized  bool
-	MaterializedAs  string
-	FreshnessStatus string
-	RowCount        *int64
-	Connection      string
-	DeclaredMatType string
+	AssetID         string `json:"asset_id"`
+	IsMaterialized  bool   `json:"is_materialized"`
+	MaterializedAs  string `json:"materialized_as,omitempty"`
+	FreshnessStatus string `json:"freshness_status,omitempty"`
+	RowCount        *int64 `json:"row_count,omitempty"`
+	Connection      string `json:"connection,omitempty"`
+	DeclaredMatType string `json:"materialization_type,omitempty"`
 }
 
 type PipelineMaterializationResponse struct {
-	PipelineID string
-	Assets     []PipelineMaterializationState
+	PipelineID string                         `json:"pipeline_id"`
+	Assets     []PipelineMaterializationState `json:"assets"`
 }
 
 type ExecutionService struct {
@@ -719,18 +719,18 @@ func normalizeMissingObjectIdentifier(name string) string {
 	return strings.ToLower(strings.Trim(strings.ReplaceAll(name, `"`, ""), " "))
 }
 
-func (s *ExecutionService) GetPipelineMaterialization(ctx context.Context, pipelineID, environment string) (PipelineMaterializationResponse, error) {
+func (s *ExecutionService) GetPipelineMaterialization(ctx context.Context, pipelineID, environment string) (PipelineMaterializationResponse, *APIError) {
 	relPipelinePath, err := DecodeID(pipelineID)
 	if err != nil {
-		return PipelineMaterializationResponse{}, fmt.Errorf("invalid pipeline id")
+		return PipelineMaterializationResponse{}, badRequestError("invalid_pipeline_id", "invalid pipeline id")
 	}
 	absPipelinePath, err := NewWorkspaceResolver(s.deps.WorkspaceRoot, nil).JoinPath(relPipelinePath)
 	if err != nil {
-		return PipelineMaterializationResponse{}, err
+		return PipelineMaterializationResponse{}, badRequestError("invalid_pipeline_path", err.Error())
 	}
 	parsed, err := s.deps.NewPipelineBuilder().CreatePipelineFromPath(ctx, absPipelinePath, pipeline.WithMutate())
 	if err != nil {
-		return PipelineMaterializationResponse{}, err
+		return PipelineMaterializationResponse{}, badRequestError("pipeline_parse_failed", err.Error())
 	}
 
 	matInfo := s.inspectPipelineMaterializations(ctx, parsed, environment)
@@ -834,6 +834,13 @@ func (s *ExecutionService) MaterializePipelineStreamWithAssetEvents(ctx context.
 		ChangedAssetIDs: changedAssetIDs,
 		MaterializedAt:  materializedAt,
 	}
+}
+
+// ResolvePipelineRunTarget validates that the pipeline ID decodes to a
+// runnable target path.
+func (s *ExecutionService) ResolvePipelineRunTarget(pipelineID string) error {
+	_, err := ResolvePipelineRunTarget(pipelineID)
+	return err
 }
 
 func ResolvePipelineRunTarget(pipelineID string) (string, error) {

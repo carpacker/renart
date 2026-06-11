@@ -94,12 +94,6 @@ type ParseContextResult struct {
 	Error          string                   `json:"error,omitempty"`
 }
 
-type ParseContextAPIError struct {
-	Status  int
-	Code    string
-	Message string
-}
-
 type ParseContextDependencies struct {
 	ResolveAssetByID func(context.Context, string) (string, *pipeline.Pipeline, *pipeline.Asset, error)
 }
@@ -112,10 +106,10 @@ func NewParseContextService(deps ParseContextDependencies) *ParseContextService 
 	return &ParseContextService{deps: deps}
 }
 
-func (s *ParseContextService) Parse(ctx context.Context, assetID, content string, schemaTables []ParseContextSchemaTable) (ParseContextResult, *ParseContextAPIError) {
+func (s *ParseContextService) Parse(ctx context.Context, assetID, content string, schemaTables []ParseContextSchemaTable) (ParseContextResult, *APIError) {
 	_, parsedPipeline, asset, err := s.deps.ResolveAssetByID(ctx, assetID)
 	if err != nil {
-		return ParseContextResult{}, &ParseContextAPIError{Status: 400, Code: "asset_not_found", Message: err.Error()}
+		return ParseContextResult{}, &APIError{Status: 400, Code: "asset_not_found", Message: err.Error()}
 	}
 
 	dialect, err := AssetTypeToDialect(asset.Type)

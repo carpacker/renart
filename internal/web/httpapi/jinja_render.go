@@ -13,7 +13,7 @@ import (
 )
 
 type JinjaRenderHandlers interface {
-	RenderJinja(ctx context.Context, assetID string, req service.JinjaRenderRequest) (service.JinjaRenderResult, *service.JinjaRenderAPIError)
+	Render(ctx context.Context, assetID string, req service.JinjaRenderRequest) (service.JinjaRenderResult, *service.APIError)
 }
 
 type JinjaRenderAPI struct {
@@ -37,7 +37,7 @@ func (h *JinjaRenderAPI) HandleRenderJinja(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	result, apiErr := h.Service.RenderJinja(r.Context(), assetID, req)
+	result, apiErr := h.Service.Render(r.Context(), assetID, req)
 	if apiErr != nil {
 		webapi.WriteJSON(w, apiErr.Status, map[string]any{
 			"status": "error",

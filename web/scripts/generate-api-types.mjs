@@ -8,15 +8,12 @@ const outputPath = resolve(repoRoot, "web", "lib", "generated", "api-types.ts");
 
 const sources = [
   {
+    file: resolve(repoRoot, "internal", "web", "model", "dto.go"),
+    types: ["ColumnCheck", "Column", "Asset", "Pipeline", "WorkspaceState"],
+  },
+  {
     file: resolve(repoRoot, "internal", "web", "service", "workspace_coordinator.go"),
-    types: [
-      "WorkspaceColumnCheck",
-      "WorkspaceColumn",
-      "WorkspaceAsset",
-      "WorkspacePipeline",
-      "WorkspaceState",
-      "WorkspaceEvent",
-    ],
+    types: ["WorkspaceEvent"],
   },
   {
     file: resolve(repoRoot, "internal", "web", "service", "config.go"),
@@ -68,7 +65,7 @@ const sources = [
     types: ["FormatSQLAssetResponse"],
   },
   {
-    file: resolve(repoRoot, "internal", "web", "httpapi", "pipeline_execution.go"),
+    file: resolve(repoRoot, "internal", "web", "service", "execution.go"),
     types: ["PipelineMaterializationState", "PipelineMaterializationResponse"],
   },
   {
@@ -98,10 +95,9 @@ const scalarMap = new Map([
 ]);
 
 const renameMap = new Map([
-  ["WorkspaceAsset", "WebAsset"],
-  ["WorkspaceColumn", "WebColumn"],
-  ["WorkspaceColumnCheck", "WebColumnCheck"],
-  ["WorkspacePipeline", "WebPipeline"],
+  ["Asset", "WebAsset"],
+  ["ColumnCheck", "WebColumnCheck"],
+  ["Pipeline", "WebPipeline"],
   ["OnboardingDiscoveryResult", "OnboardingDiscoveryResponse"],
   ["OnboardingPathSuggestionsResult", "OnboardingPathSuggestionsResponse"],
   ["SuggestionItem", "IngestrSuggestion"],

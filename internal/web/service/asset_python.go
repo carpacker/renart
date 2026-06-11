@@ -18,7 +18,7 @@ import (
 	"renart/internal/web/pyintelligence"
 )
 
-func (s *AssetService) FormatPython(ctx context.Context, assetID string, req FormatPythonAssetRequest) (FormatPythonAssetResponse, *ServiceAPIError) {
+func (s *AssetService) FormatPython(ctx context.Context, assetID string, req FormatPythonAssetRequest) (FormatPythonAssetResponse, *APIError) {
 	relAssetPath, absAssetPath, err := s.resolvePythonAssetPath(assetID)
 	if err != nil {
 		return FormatPythonAssetResponse{}, err
@@ -26,7 +26,7 @@ func (s *AssetService) FormatPython(ctx context.Context, assetID string, req For
 	fs := s.fs()
 	originalBytes, readErr := afero.ReadFile(fs, absAssetPath)
 	if readErr != nil {
-		return FormatPythonAssetResponse{}, newServiceAPIError(500, "asset_read_failed", readErr.Error())
+		return FormatPythonAssetResponse{}, newAPIError(500, "asset_read_failed", readErr.Error())
 	}
 
 	content := req.Content
@@ -40,7 +40,7 @@ func (s *AssetService) FormatPython(ctx context.Context, assetID string, req For
 		Options: defaultTyOptions(),
 	})
 	if formatErr != nil {
-		return FormatPythonAssetResponse{}, newServiceAPIError(500, "python_format_failed", formatErr.Error())
+		return FormatPythonAssetResponse{}, newAPIError(500, "python_format_failed", formatErr.Error())
 	}
 	if formatted.Status != "ok" {
 		return FormatPythonAssetResponse{Status: "error", AssetID: assetID, Content: content, Error: formatted.Error}, nil
@@ -53,14 +53,14 @@ func (s *AssetService) FormatPython(ctx context.Context, assetID string, req For
 	}
 	mergedContent := MergeExecutableContent(string(originalBytes), formattedContent)
 	if writeErr := afero.WriteFile(fs, absAssetPath, []byte(mergedContent), 0o644); writeErr != nil {
-		return FormatPythonAssetResponse{}, newServiceAPIError(500, "asset_write_failed", writeErr.Error())
+		return FormatPythonAssetResponse{}, newAPIError(500, "asset_write_failed", writeErr.Error())
 	}
 	s.deps.SuppressWatcher(relAssetPath)
 	s.deps.PushWorkspaceUpdateImmediateWithChangedIDs(ctx, "asset.updated", relAssetPath, []string{assetID})
 	return FormatPythonAssetResponse{Status: "ok", AssetID: assetID, Content: formattedContent}, nil
 }
 
-func (s *AssetService) PythonDiagnostics(ctx context.Context, assetID string, req PythonDiagnosticsRequest) (PythonDiagnosticsResponse, *ServiceAPIError) {
+func (s *AssetService) PythonDiagnostics(ctx context.Context, assetID string, req PythonDiagnosticsRequest) (PythonDiagnosticsResponse, *APIError) {
 	trace := profiling.New("RENART_PYINTELLIGENCE_PROFILE", "python.diagnostics")
 	profileAssetPath := ""
 	packageFileCount := 0
@@ -85,7 +85,7 @@ func (s *AssetService) PythonDiagnostics(ctx context.Context, assetID string, re
 	if strings.TrimSpace(content) == "" {
 		bytes, readErr := afero.ReadFile(s.fs(), absAssetPath)
 		if readErr != nil {
-			return PythonDiagnosticsResponse{}, newServiceAPIError(500, "asset_read_failed", readErr.Error())
+			return PythonDiagnosticsResponse{}, newAPIError(500, "asset_read_failed", readErr.Error())
 		}
 		content = string(bytes)
 	}
@@ -113,7 +113,7 @@ func (s *AssetService) PythonDiagnostics(ctx context.Context, assetID string, re
 	})
 	trace.Step("ty")
 	if checkErr != nil {
-		return PythonDiagnosticsResponse{}, newServiceAPIError(500, "python_diagnostics_failed", checkErr.Error())
+		return PythonDiagnosticsResponse{}, newAPIError(500, "python_diagnostics_failed", checkErr.Error())
 	}
 	if checked.Status != "ok" {
 		return PythonDiagnosticsResponse{Status: "error", AssetID: assetID, Error: checked.Error}, nil
@@ -124,7 +124,7 @@ func (s *AssetService) PythonDiagnostics(ctx context.Context, assetID string, re
 	return response, nil
 }
 
-func (s *AssetService) PythonCompletions(ctx context.Context, assetID string, req PythonCompletionsRequest) (PythonCompletionsResponse, *ServiceAPIError) {
+func (s *AssetService) PythonCompletions(ctx context.Context, assetID string, req PythonCompletionsRequest) (PythonCompletionsResponse, *APIError) {
 	trace := profiling.New("RENART_PYINTELLIGENCE_PROFILE", "python.completions")
 	profileAssetPath := ""
 	packageFileCount := 0
@@ -140,7 +140,7 @@ func (s *AssetService) PythonCompletions(ctx context.Context, assetID string, re
 	}()
 
 	if req.Line <= 0 || req.Column <= 0 {
-		return PythonCompletionsResponse{}, newServiceAPIError(400, "invalid_position", "line and column must be positive")
+		return PythonCompletionsResponse{}, newAPIError(400, "invalid_position", "line and column must be positive")
 	}
 	relAssetPath, absAssetPath, err := s.resolvePythonAssetPath(assetID)
 	trace.Step("resolve")
@@ -152,7 +152,7 @@ func (s *AssetService) PythonCompletions(ctx context.Context, assetID string, re
 	if strings.TrimSpace(content) == "" {
 		bytes, readErr := afero.ReadFile(s.fs(), absAssetPath)
 		if readErr != nil {
-			return PythonCompletionsResponse{}, newServiceAPIError(500, "asset_read_failed", readErr.Error())
+			return PythonCompletionsResponse{}, newAPIError(500, "asset_read_failed", readErr.Error())
 		}
 		content = string(bytes)
 	}
@@ -183,7 +183,7 @@ func (s *AssetService) PythonCompletions(ctx context.Context, assetID string, re
 	})
 	trace.Step("ty")
 	if completeErr != nil {
-		return PythonCompletionsResponse{}, newServiceAPIError(500, "python_completions_failed", completeErr.Error())
+		return PythonCompletionsResponse{}, newAPIError(500, "python_completions_failed", completeErr.Error())
 	}
 	if completed.Status != "ok" {
 		return PythonCompletionsResponse{Status: "error", AssetID: assetID, Error: completed.Error}, nil
@@ -195,7 +195,7 @@ func (s *AssetService) PythonCompletions(ctx context.Context, assetID string, re
 	return response, nil
 }
 
-func (s *AssetService) PythonHover(ctx context.Context, assetID string, req PythonPositionRequest) (PythonHoverResponse, *ServiceAPIError) {
+func (s *AssetService) PythonHover(ctx context.Context, assetID string, req PythonPositionRequest) (PythonHoverResponse, *APIError) {
 	trace := profiling.New("RENART_PYINTELLIGENCE_PROFILE", "python.hover")
 	profileAssetPath := ""
 	packageFileCount := 0
@@ -214,7 +214,7 @@ func (s *AssetService) PythonHover(ctx context.Context, assetID string, req Pyth
 	hovered, hoverErr := pyintelligence.HoverAt(ctx, tyReq)
 	trace.Step("ty")
 	if hoverErr != nil {
-		return PythonHoverResponse{}, newServiceAPIError(500, "python_hover_failed", hoverErr.Error())
+		return PythonHoverResponse{}, newAPIError(500, "python_hover_failed", hoverErr.Error())
 	}
 	if hovered.Status != "ok" {
 		return PythonHoverResponse{Status: "error", AssetID: assetID, Error: hovered.Error}, nil
@@ -225,7 +225,7 @@ func (s *AssetService) PythonHover(ctx context.Context, assetID string, req Pyth
 	return response, nil
 }
 
-func (s *AssetService) PythonSignatureHelp(ctx context.Context, assetID string, req PythonPositionRequest) (PythonSignatureHelpResponse, *ServiceAPIError) {
+func (s *AssetService) PythonSignatureHelp(ctx context.Context, assetID string, req PythonPositionRequest) (PythonSignatureHelpResponse, *APIError) {
 	trace := profiling.New("RENART_PYINTELLIGENCE_PROFILE", "python.signature_help")
 	profileAssetPath := ""
 	packageFileCount := 0
@@ -244,7 +244,7 @@ func (s *AssetService) PythonSignatureHelp(ctx context.Context, assetID string, 
 	shown, signatureErr := pyintelligence.SignatureHelpAt(ctx, tyReq)
 	trace.Step("ty")
 	if signatureErr != nil {
-		return PythonSignatureHelpResponse{}, newServiceAPIError(500, "python_signature_help_failed", signatureErr.Error())
+		return PythonSignatureHelpResponse{}, newAPIError(500, "python_signature_help_failed", signatureErr.Error())
 	}
 	if shown.Status != "ok" {
 		return PythonSignatureHelpResponse{Status: "error", AssetID: assetID, Error: shown.Error}, nil
@@ -255,7 +255,7 @@ func (s *AssetService) PythonSignatureHelp(ctx context.Context, assetID string, 
 	return response, nil
 }
 
-func (s *AssetService) PythonGotoDefinition(ctx context.Context, assetID string, req PythonPositionRequest) (PythonGotoDefinitionResponse, *ServiceAPIError) {
+func (s *AssetService) PythonGotoDefinition(ctx context.Context, assetID string, req PythonPositionRequest) (PythonGotoDefinitionResponse, *APIError) {
 	trace := profiling.New("RENART_PYINTELLIGENCE_PROFILE", "python.goto_definition")
 	profileAssetPath := ""
 	packageFileCount := 0
@@ -274,7 +274,7 @@ func (s *AssetService) PythonGotoDefinition(ctx context.Context, assetID string,
 	resolved, gotoErr := pyintelligence.GotoDefinition(ctx, tyReq)
 	trace.Step("ty")
 	if gotoErr != nil {
-		return PythonGotoDefinitionResponse{}, newServiceAPIError(500, "python_goto_definition_failed", gotoErr.Error())
+		return PythonGotoDefinitionResponse{}, newAPIError(500, "python_goto_definition_failed", gotoErr.Error())
 	}
 	if resolved.Status != "ok" {
 		return PythonGotoDefinitionResponse{Status: "error", AssetID: assetID, Error: resolved.Error}, nil
@@ -285,9 +285,9 @@ func (s *AssetService) PythonGotoDefinition(ctx context.Context, assetID string,
 	return response, nil
 }
 
-func (s *AssetService) pythonTyPositionRequest(assetID string, req PythonPositionRequest, trace *profiling.Trace) (pyintelligence.Request, string, int, *ServiceAPIError) {
+func (s *AssetService) pythonTyPositionRequest(assetID string, req PythonPositionRequest, trace *profiling.Trace) (pyintelligence.Request, string, int, *APIError) {
 	if req.Line <= 0 || req.Column <= 0 {
-		return pyintelligence.Request{}, "", 0, newServiceAPIError(400, "invalid_position", "line and column must be positive")
+		return pyintelligence.Request{}, "", 0, newAPIError(400, "invalid_position", "line and column must be positive")
 	}
 	relAssetPath, absAssetPath, err := s.resolvePythonAssetPath(assetID)
 	trace.Step("resolve")
@@ -298,7 +298,7 @@ func (s *AssetService) pythonTyPositionRequest(assetID string, req PythonPositio
 	if strings.TrimSpace(content) == "" {
 		bytes, readErr := afero.ReadFile(s.fs(), absAssetPath)
 		if readErr != nil {
-			return pyintelligence.Request{}, "", 0, newServiceAPIError(500, "asset_read_failed", readErr.Error())
+			return pyintelligence.Request{}, "", 0, newAPIError(500, "asset_read_failed", readErr.Error())
 		}
 		content = string(bytes)
 	}
@@ -348,17 +348,17 @@ func (s *AssetService) markPythonTySessionFilesReady(sessionID, sessionFingerpri
 	s.pythonTySessionMu.Unlock()
 }
 
-func (s *AssetService) resolvePythonAssetPath(assetID string) (string, string, *ServiceAPIError) {
+func (s *AssetService) resolvePythonAssetPath(assetID string) (string, string, *APIError) {
 	relAssetPath, decodeErr := DecodeID(assetID)
 	if decodeErr != nil {
-		return "", "", newServiceAPIError(400, "invalid_asset_id", "invalid asset id")
+		return "", "", newAPIError(400, "invalid_asset_id", "invalid asset id")
 	}
 	if !strings.HasSuffix(strings.ToLower(relAssetPath), ".py") {
-		return "", "", newServiceAPIError(400, "invalid_asset_type", "only Python assets are supported")
+		return "", "", newAPIError(400, "invalid_asset_type", "only Python assets are supported")
 	}
 	absAssetPath, joinErr := s.resolver().JoinPath(relAssetPath)
 	if joinErr != nil {
-		return "", "", newServiceAPIError(400, "invalid_asset_path", joinErr.Error())
+		return "", "", newAPIError(400, "invalid_asset_path", joinErr.Error())
 	}
 	return relAssetPath, absAssetPath, nil
 }

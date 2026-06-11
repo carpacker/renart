@@ -10,22 +10,22 @@ import (
 	"github.com/spf13/afero"
 )
 
-func (s *AssetService) FormatSQL(ctx context.Context, assetID string, req FormatSQLAssetRequest) (FormatSQLAssetResponse, *ServiceAPIError) {
+func (s *AssetService) FormatSQL(ctx context.Context, assetID string, req FormatSQLAssetRequest) (FormatSQLAssetResponse, *APIError) {
 	relAssetPath, err := DecodeID(assetID)
 	if err != nil {
-		return FormatSQLAssetResponse{}, newServiceAPIError(400, "invalid_asset_id", "invalid asset id")
+		return FormatSQLAssetResponse{}, newAPIError(400, "invalid_asset_id", "invalid asset id")
 	}
 	if !strings.HasSuffix(strings.ToLower(relAssetPath), ".sql") {
-		return FormatSQLAssetResponse{}, newServiceAPIError(400, "invalid_asset_type", "only SQL assets can be formatted")
+		return FormatSQLAssetResponse{}, newAPIError(400, "invalid_asset_type", "only SQL assets can be formatted")
 	}
 	absAssetPath, err := s.resolver().JoinPath(relAssetPath)
 	if err != nil {
-		return FormatSQLAssetResponse{}, newServiceAPIError(400, "invalid_asset_path", err.Error())
+		return FormatSQLAssetResponse{}, newAPIError(400, "invalid_asset_path", err.Error())
 	}
 	fs := s.fs()
 	originalBytes, err := afero.ReadFile(fs, absAssetPath)
 	if err != nil {
-		return FormatSQLAssetResponse{}, newServiceAPIError(500, "asset_read_failed", err.Error())
+		return FormatSQLAssetResponse{}, newAPIError(500, "asset_read_failed", err.Error())
 	}
 	formattedSQL, err := sqlformat.Format(ctx, req.Content, s.sqlFormatDialect(ctx, assetID))
 	if err != nil {
@@ -33,7 +33,7 @@ func (s *AssetService) FormatSQL(ctx context.Context, assetID string, req Format
 	}
 	mergedContent := MergeExecutableContent(string(originalBytes), formattedSQL)
 	if err := afero.WriteFile(fs, absAssetPath, []byte(mergedContent), 0o644); err != nil {
-		return FormatSQLAssetResponse{}, newServiceAPIError(500, "asset_write_failed", err.Error())
+		return FormatSQLAssetResponse{}, newAPIError(500, "asset_write_failed", err.Error())
 	}
 	s.deps.SuppressWatcher(relAssetPath)
 	s.deps.PushWorkspaceUpdateImmediateWithChangedIDs(ctx, "asset.updated", relAssetPath, []string{assetID})
