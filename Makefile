@@ -38,7 +38,7 @@ go-build:
 # Linux needs gtk3 + webkit2gtk dev packages, macOS needs the Xcode command
 # line tools, Windows needs the WebView2 runtime (no build deps).
 standalone-build: go-build
-	$(GO) build -tags standalone,desktop,production -o renart-gui ./cmd/renart-gui
+	$(GO) build -tags webkit2_41,standalone,desktop,production -o renart-gui ./cmd/renart-gui
 
 go-test:
 	$(GO) test ./...
