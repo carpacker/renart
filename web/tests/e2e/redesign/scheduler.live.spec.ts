@@ -55,7 +55,7 @@ test.describe("redesign scheduler pages live", () => {
     if (stepAsset) {
       await expect(page.getByText(stepAsset, { exact: true }).first()).toBeVisible({ timeout: 30000 });
     }
-    await expect(page.getByText(/asset_(start|success)/)).toBeVisible({ timeout: 30000 });
+    await expect(page.getByText(/asset_(start|success)/).first()).toBeVisible({ timeout: 30000 });
   });
 });
 
