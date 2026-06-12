@@ -300,6 +300,8 @@ func (s *ExecutionService) InspectAsset(ctx context.Context, assetID, limit, env
 	}
 
 	columns, rows := s.deps.ParseQueryOutput(output)
+	// Surface the executed (rendered) query so the UI can show what actually ran.
+	operation.Query = ExtractQueryTextFromOutput(output)
 	return InspectResult{
 		Status:     "ok",
 		Columns:    columns,

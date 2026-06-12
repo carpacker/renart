@@ -39,6 +39,7 @@ type Props = {
   canLoadMore?: boolean;
   onLoadMore?: () => void;
   warning?: string;
+  frameless?: boolean;
 };
 
 export function AssetInspectView({
@@ -49,6 +50,7 @@ export function AssetInspectView({
   canLoadMore = false,
   onLoadMore,
   warning,
+  frameless = false,
 }: Props) {
   const view = getAssetViewMode(meta);
   const chartType = (meta?.web_chart_type ?? "line").trim().toLowerCase();
@@ -57,7 +59,7 @@ export function AssetInspectView({
   if (view === "markdown") {
     const markdown = buildMarkdown(meta, rows);
     return (
-      <ScrollArea className="relative h-full rounded border bg-background" viewportClassName="p-3 text-sm">
+      <ScrollArea className={`relative h-full bg-background ${frameless ? "" : "rounded border"}`} viewportClassName="p-3 text-sm">
         <article className="max-w-none text-sm leading-6 text-foreground">
           <Suspense fallback={<div className="text-muted-foreground">Loading markdown...</div>}>
             <ReactMarkdown
@@ -115,7 +117,7 @@ export function AssetInspectView({
     }
 
     return (
-      <div className="relative h-full rounded border bg-background p-2">
+      <div className={`relative h-full bg-background p-2 ${frameless ? "" : "rounded border"}`}>
         <ChartContainer
           className="h-full min-h-55 w-full"
           config={chart.config}
@@ -185,6 +187,7 @@ export function AssetInspectView({
         canLoadMore={canLoadMore}
         onLoadMore={onLoadMore}
         autoLoadMore
+        frameless={frameless}
       />
       <InspectWarningBanner warning={warning} />
     </div>

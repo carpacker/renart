@@ -10,6 +10,7 @@ import {
   AlertTriangle,
   Check,
   CheckCircle2,
+  ChevronRight,
   ChevronsUpDown,
   Circle,
   ClipboardCheck,
@@ -70,11 +71,26 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { materializeAssetStream } from "@/lib/api";
+import { AssetInspectView } from "@/components/asset-inspect-view";
+import { InspectWarningCard } from "@/components/inspect-warning-card";
+import { WorkspaceMaterializeOutputView } from "@/components/workspace-materialize-output-view";
+import { Spinner } from "@/components/ui/spinner";
+import { materializeAssetStream, runSQLQuery } from "@/lib/api";
 import type { AssetStaleness } from "@/lib/api-staleness";
-import { routeSelectionAtom, selectedEnvironmentAtom, workspaceAtom } from "@/lib/atoms/domains/workspace";
-import type { WebAsset, WebPipeline } from "@/lib/types";
+import { isSqlAssetType } from "@/lib/asset-types";
+import { editorDraftAtom } from "@/lib/atoms/domains/editor";
+import type { MaterializeHistoryEntry } from "@/lib/atoms/results";
+import {
+  routeSelectionAtom,
+  selectedEnvironmentAtom,
+  selectedExecutionTimeWindowAtom,
+  workspaceAtom,
+} from "@/lib/atoms/domains/workspace";
+import { renderJinjaAsset } from "@/lib/jinja-intellisense";
+import { resolveConnection } from "@/lib/sql-schema";
+import type { AssetInspectResponse, SqlQueryResponse, WebAsset, WebPipeline } from "@/lib/types";
 import { cn } from "@/lib/utils";
+import { useAssetResults } from "@/hooks/use-asset-results";
 import { useSelectedEnvironmentPolicy } from "@/hooks/use-environment-policy";
 import { useIsMobile } from "@/hooks/use-mobile";
 import { usePipelineDeploy, type PipelineDeployState } from "@/hooks/use-pipeline-deploy";
@@ -96,12 +112,12 @@ import {
   pipelineDependencies,
   pipelineVariables,
   pipelineVariants,
-  queryRows,
   renderedPipelineName,
   renderedPipelineSchedule,
   schemaRows,
   tests,
 } from "./redesign-data";
+import { RedesignAdhocEditor, useAdhocQueryDraft } from "./adhoc-editor";
 import { RedesignAssetEditor } from "./asset-editor";
 import { RedesignLineageCanvas, assetDisplayName, assetGroupName, assetNameParts, type RedesignLineageCanvasAsset } from "./lineage-canvas";
 import { IntegrationBadge, RedesignPage, RedesignPanel, SectionCard, SeverityIcon, SimpleTable, StalenessBadge, StatusPill, stalenessDotClassName, stalenessLabel } from "./redesign-primitives";
@@ -156,6 +172,14 @@ type BuildContextValue = {
   selectAsset: (assetId: string) => void;
   goToAsset: (pipelineId: string, assetId: string) => void;
   openBottom: (tab: RedesignResultTab) => void;
+  materializeSelectedAsset: () => void;
+  inspectSelectedAsset: () => void;
+  runAdhocQuery: () => void;
+  adhocContextAsset: WebAsset | null;
+  adhocLoading: boolean;
+  materializeLoading: boolean;
+  inspectLoading: boolean;
+  executionBlocked: boolean;
 };
 
 const BuildContext = createContext<BuildContextValue | null>(null);
@@ -271,7 +295,6 @@ export function RedesignBuildPage({
   editorMode = "asset",
   variant = "default",
   onResultTabChange,
-  onEditorModeChange,
   onVariantChange,
   onAssetSelect,
 }: {
@@ -281,13 +304,11 @@ export function RedesignBuildPage({
   editorMode?: RedesignEditorMode;
   variant?: string;
   onResultTabChange?: (tab: RedesignResultTab) => void;
-  onEditorModeChange?: (mode: RedesignEditorMode) => void;
   onVariantChange?: (variant: string) => void;
   onAssetSelect?: (assetId: string) => void;
 }) {
   const workspace = useAtomValue(workspaceAtom);
   const navigate = useNavigate();
-  const adhoc = editorMode === "adhoc";
   const location = useLocation();
   const view = redesignBuildViewFromPath(location.pathname);
   const buildSearch: RedesignBuildSearch = useMemo(
@@ -316,6 +337,14 @@ export function RedesignBuildPage({
   const deployState = usePipelineDeploy(activePipeline?.id);
   const environmentPolicy = useSelectedEnvironmentPolicy();
   const executionBlocked = Boolean(environmentPolicy?.protected);
+  const assetResults = useAssetResults();
+  const selectedEnvironment = useAtomValue(selectedEnvironmentAtom);
+  const selectedExecutionTimeWindow = useAtomValue(selectedExecutionTimeWindowAtom);
+  const editorDraft = useAtomValue(editorDraftAtom);
+  const [adhocResult, setAdhocResult] = useState<SqlQueryResponse | null>(null);
+  const [adhocRenderedQuery, setAdhocRenderedQuery] = useState<string | null>(null);
+  const [adhocLoading, setAdhocLoading] = useState(false);
+  const [adhocQuery] = useAdhocQueryDraft(pipelineId);
   const displayedPipelineAssets = useMemo(
     () => pipelineAssets.map((asset) => ({
       ...asset,
@@ -381,8 +410,105 @@ export function RedesignBuildPage({
     setHistory((current) => [{ id: Date.now(), kind, target, status: "success", time: new Date().toLocaleTimeString(), variant }, ...current].slice(0, 20));
   };
   const runAction = () => {
-    logHistory("materialize", selectedAsset?.name ?? pipelineId);
+    if (!activePipeline) {
+      return;
+    }
+    logHistory("run", activePipeline.name || pipelineId);
     openBottom("materialize");
+    void assetResults.runMaterializePipeline(activePipeline.id);
+  };
+  const materializeSelectedAsset = () => {
+    const workspaceAsset = selectedAsset?.workspaceAsset;
+    if (!activePipeline || !workspaceAsset) {
+      return;
+    }
+    logHistory("materialize", selectedAsset.name);
+    openBottom("materialize");
+    void assetResults.runMaterializeForAsset(workspaceAsset.id);
+  };
+  const inspectSelectedAsset = () => {
+    const workspaceAsset = selectedAsset?.workspaceAsset;
+    if (!activePipeline || !workspaceAsset) {
+      return;
+    }
+    logHistory("inspect", selectedAsset.name);
+    openBottom("inspect");
+    void assetResults.runInspectForAsset(
+      workspaceAsset.id,
+      editorDraft[workspaceAsset.id] ?? workspaceAsset.content
+    );
+  };
+  // SQL context for the ad hoc editor: the selected asset when it is SQL,
+  // otherwise the first SQL asset of the pipeline (dialect + connection).
+  const adhocContextAsset = useMemo(() => {
+    const candidates = activePipeline?.assets ?? [];
+    const isSql = (asset: WebAsset) =>
+      isSqlAssetType(asset.type) || asset.path.toLowerCase().endsWith(".sql");
+    const selected = candidates.find((asset) => asset.id === effectiveSelectedAssetId);
+    if (selected && isSql(selected)) {
+      return selected;
+    }
+    return candidates.find(isSql) ?? null;
+  }, [activePipeline?.assets, effectiveSelectedAssetId]);
+  const runAdhocQuery = async () => {
+    if (!activePipeline) {
+      return;
+    }
+    openBottom("query");
+    const connection = adhocContextAsset
+      ? resolveConnection(adhocContextAsset, workspace?.connections ?? {})
+      : null;
+    if (!connection || !adhocContextAsset) {
+      setAdhocRenderedQuery(null);
+      setAdhocResult({
+        status: "error",
+        columns: [],
+        rows: [],
+        error: "No SQL connection found for this pipeline; add a SQL asset or configure a connection first.",
+      });
+      return;
+    }
+    logHistory("query", connection);
+    setAdhocLoading(true);
+    try {
+      // Ad hoc queries are Jinja templates: render them with the pipeline's
+      // variables (and the selected execution window) before executing.
+      let queryText = adhocQuery;
+      try {
+        const rendered = await renderJinjaAsset({
+          assetId: adhocContextAsset.id,
+          content: adhocQuery,
+          timeWindow: selectedExecutionTimeWindow,
+        });
+        if (rendered.status === "error") {
+          setAdhocRenderedQuery(null);
+          setAdhocResult({
+            status: "error",
+            columns: [],
+            rows: [],
+            error: `Jinja rendering failed: ${rendered.error || "unknown error"}`,
+          });
+          return;
+        }
+        if (rendered.rendered?.trim()) {
+          queryText = rendered.rendered;
+        }
+      } catch {
+        // Rendering is best-effort; fall back to the raw query text.
+      }
+      setAdhocRenderedQuery(queryText);
+      const result = await runSQLQuery({
+        connection,
+        environment: selectedEnvironment,
+        query: queryText,
+        limit: 500,
+      });
+      setAdhocResult(result);
+    } catch (error) {
+      setAdhocResult({ status: "error", columns: [], rows: [], error: String(error) });
+    } finally {
+      setAdhocLoading(false);
+    }
   };
   const selectAsset = (assetId: string) => {
     setVisualSelectedAssetId(assetId);
@@ -394,6 +520,16 @@ export function RedesignBuildPage({
       to: redesignAssetViewPath(view),
       params: { pipelineId: targetPipelineId, assetId },
       search: { ...buildSearch, editor: "asset" },
+    });
+  };
+  // The ad hoc editor only renders in the code/split editor panes, so opening
+  // it from the explorer also navigates to the code view.
+  const openAdhoc = () => {
+    setExplorerOpen(false);
+    void navigate({
+      to: redesignAssetViewPath("code"),
+      params: { pipelineId, assetId: effectiveSelectedAssetId },
+      search: { ...buildSearch, editor: "adhoc" },
     });
   };
   const buildContext: BuildContextValue = {
@@ -410,6 +546,14 @@ export function RedesignBuildPage({
     selectAsset,
     goToAsset,
     openBottom,
+    materializeSelectedAsset,
+    inspectSelectedAsset,
+    runAdhocQuery,
+    adhocContextAsset,
+    adhocLoading,
+    materializeLoading: assetResults.materializeLoading,
+    inspectLoading: assetResults.inspectLoading,
+    executionBlocked,
   };
 
   return (
@@ -443,7 +587,7 @@ export function RedesignBuildPage({
             selectedAssetId={effectiveSelectedAssetId}
             buildSearch={buildSearch}
             onAssetSelect={selectAsset}
-            onAdhoc={() => onEditorModeChange?.("adhoc")}
+            onAdhoc={openAdhoc}
             onNewAsset={() => setNewAssetOpen(true)}
             onPipelineSettings={() => setPipelineSettingsOpen(true)}
           />
@@ -464,7 +608,23 @@ export function RedesignBuildPage({
             ) : null}
           </RedesignPanel>
 
-          <ResultsPanel activeTab={resultTab} onTabChange={openBottom} variant={variant} history={history} onHistoryOpen={(tab) => openBottom(tab)} />
+          <ResultsPanel
+            activeTab={resultTab}
+            onTabChange={openBottom}
+            variant={variant}
+            history={history}
+            onHistoryOpen={(tab) => openBottom(tab)}
+            inspectResult={assetResults.inspectResult}
+            inspectLoading={assetResults.inspectLoading}
+            canLoadMoreInspectRows={assetResults.canLoadMoreInspectRows}
+            onLoadMoreInspectRows={assetResults.loadMoreInspectRows}
+            selectedMaterializeEntry={assetResults.selectedMaterializeEntry}
+            materializeOutputHtml={assetResults.materializeOutputHtml}
+            pipelineMaterializeLoading={assetResults.pipelineMaterializeLoading}
+            adhocResult={adhocResult}
+            adhocRenderedQuery={adhocRenderedQuery}
+            adhocLoading={adhocLoading}
+          />
         </div>
 
         <RedesignPanel className="hidden min-h-0 xl:flex xl:flex-col">
@@ -480,7 +640,7 @@ export function RedesignBuildPage({
             selectedAssetId={effectiveSelectedAssetId}
             buildSearch={buildSearch}
             onAssetSelect={selectAsset}
-            onAdhoc={() => onEditorModeChange?.("adhoc")}
+            onAdhoc={openAdhoc}
             onNewAsset={() => setNewAssetOpen(true)}
             onPipelineSettings={() => setPipelineSettingsOpen(true)}
           />
@@ -601,7 +761,12 @@ function BuildTopBar({
           <DropdownMenuItem onSelect={onOpenPlan}><ClipboardCheck className="size-4" />Review impact plan</DropdownMenuItem>
         </DropdownMenuContent>
       </DropdownMenu>
-      <Button asChild variant={editorMode === "adhoc" ? "secondary" : "outline"} size="sm" className="hidden lg:inline-flex">
+      <Button
+        asChild
+        variant={editorMode === "adhoc" ? "secondary" : "outline"}
+        size="sm"
+        className={cn("hidden lg:inline-flex", editorMode === "adhoc" ? "text-primary ring-1 ring-primary/30" : null)}
+      >
         <Link to="/redesign/pipelines/$pipelineId/assets/$assetId/code" params={{ pipelineId, assetId: selectedAssetId }} search={{ result: resultTab, editor: "adhoc", variant }}>
           <Terminal className="size-3.5" /> Ad-hoc
         </Link>
@@ -736,6 +901,7 @@ function Explorer({
   const pipelineGroup = objectGroups.find((group) => group.id === "pipeline");
   const PipelineIcon = pipelineGroup?.icon ?? Layers;
   const { declaredDependencies, pipelineAssets } = useBuildContext();
+  const adhocActive = buildSearch.editor === "adhoc";
   const pipelineItems = workspace?.pipelines.length
     ? workspace.pipelines
     : [{ id: "simple", name: "simple", path: "", assets: [] } satisfies WebPipeline];
@@ -782,12 +948,18 @@ function Explorer({
                         {Object.entries(assetsByGroup).length > 0 ? Object.entries(assetsByGroup).map(([group, groupAssets]) => (
                           <div key={group}>
                             <div className="px-2 py-1 font-mono text-[11px] text-muted-foreground">{group}/</div>
-                            {groupAssets.map((asset) => <AssetButton key={asset.id} asset={asset} declaredDependencies={declaredDependencies} selected={selectedAssetId === asset.id} onSelect={() => onAssetSelect(asset.id)} />)}
+                            {groupAssets.map((asset) => <AssetButton key={asset.id} asset={asset} declaredDependencies={declaredDependencies} selected={!adhocActive && selectedAssetId === asset.id} onSelect={() => onAssetSelect(asset.id)} />)}
                           </div>
                         )) : <div className="px-2 py-1 text-xs text-muted-foreground">No assets found.</div>}
                         <div className="mt-1 border-t pt-1">
-                          <button className="flex h-7 w-full items-center gap-1.5 rounded-md px-2 text-left font-mono text-xs text-muted-foreground hover:bg-muted" onClick={onAdhoc}>
-                            <Terminal className="size-3.5" /> Ad-hoc query
+                          <button
+                            className={cn(
+                              "flex h-7 w-full items-center gap-1.5 rounded-md px-2 text-left font-mono text-xs hover:bg-muted",
+                              adhocActive ? "bg-primary/10 text-foreground ring-1 ring-primary/20" : "text-muted-foreground"
+                            )}
+                            onClick={onAdhoc}
+                          >
+                            <Terminal className={cn("size-3.5", adhocActive ? "text-primary" : null)} /> Ad-hoc query
                           </button>
                           <button className="flex h-7 w-full items-center gap-1.5 rounded-md px-2 text-left font-mono text-xs text-muted-foreground hover:bg-muted" onClick={onPipelineSettings}>
                             <SettingsIcon /> Pipeline settings
@@ -875,11 +1047,11 @@ export function RedesignBuildCanvasView() {
 }
 
 export function RedesignBuildSplitView() {
-  const { pipelineId, selectedAssetId, selectedAsset, selectAsset, openBottom } = useBuildContext();
+  const { pipelineId, selectedAssetId, selectedAsset, selectAsset, editorMode } = useBuildContext();
   return (
     <PanelGroup orientation="horizontal" className="h-full min-h-0 min-w-0">
       <Panel defaultSize={50} minSize={28} className="min-w-0">
-        <EditorWorkspace asset={selectedAsset} adhoc={false} onInspect={() => openBottom("inspect")} onRun={() => openBottom("materialize")} />
+        <EditorWorkspace asset={selectedAsset} adhoc={editorMode === "adhoc"} />
       </Panel>
       <PanelResizeHandle className="w-px bg-border" />
       <Panel defaultSize={50} minSize={28} className="min-w-0">
@@ -890,29 +1062,38 @@ export function RedesignBuildSplitView() {
 }
 
 export function RedesignBuildCodeView() {
-  const { selectedAsset, editorMode, openBottom } = useBuildContext();
-  const adhoc = editorMode === "adhoc";
-  return <EditorWorkspace asset={selectedAsset} adhoc={adhoc} onInspect={() => openBottom("inspect")} onRun={() => openBottom(adhoc ? "query" : "materialize")} />;
+  const { selectedAsset, editorMode } = useBuildContext();
+  return <EditorWorkspace asset={selectedAsset} adhoc={editorMode === "adhoc"} />;
 }
 
 function EditorWorkspace({
   asset,
   adhoc,
-  onInspect,
-  onRun,
 }: {
   asset: BuildAsset;
   adhoc: boolean;
-  onInspect: () => void;
-  onRun: () => void;
 }) {
-  const { pipelineId, selectedAssetId, view, buildSearch, declaredDependencies, addDependency, goToAsset, openBottom } = useBuildContext();
+  const {
+    pipelineId,
+    selectedAssetId,
+    view,
+    buildSearch,
+    declaredDependencies,
+    addDependency,
+    goToAsset,
+    openBottom,
+    materializeSelectedAsset,
+    inspectSelectedAsset,
+    materializeLoading,
+    inspectLoading,
+    executionBlocked,
+  } = useBuildContext();
   const isMobile = useIsMobile();
   const editorOnly = view === "code";
   const showActionLabels = editorOnly && !isMobile;
 
   if (adhoc) {
-    return <AdhocEditor showActionLabels={showActionLabels} onRun={onRun} />;
+    return <AdhocEditor showActionLabels={showActionLabels} />;
   }
 
   const missingDependencies = asset.kind === "python" ? missingPythonDependencies(asset, declaredDependencies) : [];
@@ -922,7 +1103,18 @@ function EditorWorkspace({
   return (
     <div className="relative flex h-full min-h-0 flex-col">
       <EditorFilenameHeader filename={filename}>
-        <EditorActionButtons actionLabel={actionLabel} showLabels={showActionLabels} showInspect={asset.kind !== "source"} onRun={onRun} onInspect={onInspect} />
+        <EditorActionButtons
+          actionLabel={actionLabel}
+          showLabels={showActionLabels}
+          showInspect={asset.kind !== "source"}
+          onRun={materializeSelectedAsset}
+          onInspect={inspectSelectedAsset}
+          runDisabled={materializeLoading || executionBlocked || !asset.workspaceAsset}
+          runBlockedReason={executionBlocked ? "This environment is protected: interactive execution is disabled" : undefined}
+          runLoading={materializeLoading}
+          inspectDisabled={inspectLoading || !asset.workspaceAsset}
+          inspectLoading={inspectLoading}
+        />
         {editorOnly ? (
           <BuildViewButtonGroup pipelineId={pipelineId} selectedAssetId={selectedAssetId} currentView={view} search={buildSearch} />
         ) : null}
@@ -936,7 +1128,7 @@ function EditorWorkspace({
         <RedesignAssetEditor
           asset={asset.workspaceAsset}
           pipelineId={asset.pipelineId}
-          onInspect={onInspect}
+          onInspect={inspectSelectedAsset}
           onGoToAsset={goToAsset}
         />
       ) : (
@@ -966,43 +1158,92 @@ function EditorActionButtons({
   showInspect,
   onRun,
   onInspect,
+  runDisabled = false,
+  runBlockedReason,
+  runLoading = false,
+  inspectDisabled = false,
+  inspectLoading = false,
 }: {
   actionLabel: string;
   showLabels: boolean;
   showInspect: boolean;
   onRun: () => void;
   onInspect: () => void;
+  runDisabled?: boolean;
+  runBlockedReason?: string;
+  runLoading?: boolean;
+  inspectDisabled?: boolean;
+  inspectLoading?: boolean;
 }) {
+  const runLabel = runLoading ? "Running..." : actionLabel;
+  const inspectLabel = inspectLoading ? "Loading..." : "Inspect";
   return (
     <>
-      <Button size={showLabels ? "sm" : "icon-sm"} onClick={onRun} aria-label={actionLabel} title={actionLabel}>
+      <Button
+        size={showLabels ? "sm" : "icon-sm"}
+        onClick={onRun}
+        disabled={runDisabled}
+        aria-label={actionLabel}
+        title={runBlockedReason ?? actionLabel}
+      >
         <Hammer className="size-3.5" />
-        {showLabels ? actionLabel : <span className="sr-only">{actionLabel}</span>}
+        {showLabels ? runLabel : <span className="sr-only">{runLabel}</span>}
       </Button>
       {showInspect ? (
-        <Button variant="outline" size={showLabels ? "sm" : "icon-sm"} onClick={onInspect} aria-label="Inspect" title="Inspect">
+        <Button
+          variant="outline"
+          size={showLabels ? "sm" : "icon-sm"}
+          onClick={onInspect}
+          disabled={inspectDisabled}
+          aria-label="Inspect"
+          title="Inspect"
+        >
           <Eye className="size-3.5" />
-          {showLabels ? "Inspect" : <span className="sr-only">Inspect</span>}
+          {showLabels ? inspectLabel : <span className="sr-only">{inspectLabel}</span>}
         </Button>
       ) : null}
     </>
   );
 }
 
-function AdhocEditor({ showActionLabels, onRun }: { showActionLabels: boolean; onRun: () => void }) {
-  const { pipelineId, selectedAssetId, view, buildSearch } = useBuildContext();
+function AdhocEditor({ showActionLabels }: { showActionLabels: boolean }) {
+  const {
+    pipelineId,
+    selectedAssetId,
+    view,
+    buildSearch,
+    adhocContextAsset,
+    adhocLoading,
+    runAdhocQuery,
+    goToAsset,
+  } = useBuildContext();
   return (
     <div className="relative flex h-full min-h-0 flex-col">
       <EditorFilenameHeader filename="Ad-hoc query">
-        <Button size={showActionLabels ? "sm" : "icon-sm"} onClick={onRun} aria-label="Run" title="Run">
+        <Button
+          size={showActionLabels ? "sm" : "icon-sm"}
+          onClick={runAdhocQuery}
+          disabled={adhocLoading || !adhocContextAsset}
+          aria-label="Run"
+          title="Run (⌘ + ↵)"
+        >
           <Play className="size-3.5" />
-          {showActionLabels ? "Run" : <span className="sr-only">Run</span>}
+          {showActionLabels ? (adhocLoading ? "Running..." : "Run") : <span className="sr-only">Run</span>}
         </Button>
         {view === "code" ? (
           <BuildViewButtonGroup pipelineId={pipelineId} selectedAssetId={selectedAssetId} currentView={view} search={buildSearch} />
         ) : null}
       </EditorFilenameHeader>
-      <CodeBlock lines={["select * from revenue_daily limit 100;"]} />
+      {adhocContextAsset ? (
+        <RedesignAdhocEditor
+          pipelineId={pipelineId}
+          contextAsset={adhocContextAsset}
+          onRunQuery={runAdhocQuery}
+          onGoToAsset={goToAsset}
+        />
+      ) : (
+        <CodeBlock lines={["select * from revenue_daily limit 100;"]} />
+      )}
     </div>
   );
 }
@@ -1049,12 +1290,32 @@ function ResultsPanel({
   variant,
   history,
   onHistoryOpen,
+  inspectResult,
+  inspectLoading,
+  canLoadMoreInspectRows,
+  onLoadMoreInspectRows,
+  selectedMaterializeEntry,
+  materializeOutputHtml,
+  pipelineMaterializeLoading,
+  adhocResult,
+  adhocRenderedQuery,
+  adhocLoading,
 }: {
   activeTab: RedesignResultTab;
   onTabChange: (tab: RedesignResultTab) => void;
   variant: string;
   history: Array<{ id: number; kind: string; target: string; status: string; time: string; variant: string }>;
   onHistoryOpen: (tab: RedesignResultTab) => void;
+  inspectResult: AssetInspectResponse | null;
+  inspectLoading: boolean;
+  canLoadMoreInspectRows: boolean;
+  onLoadMoreInspectRows: () => void;
+  selectedMaterializeEntry: MaterializeHistoryEntry | null;
+  materializeOutputHtml: string | null;
+  pipelineMaterializeLoading: boolean;
+  adhocResult: SqlQueryResponse | null;
+  adhocRenderedQuery: string | null;
+  adhocLoading: boolean;
 }) {
   return (
     <RedesignPanel className="h-56 shrink-0">
@@ -1073,16 +1334,61 @@ function ResultsPanel({
             </TabsList>
           </ScrollArea>
         </DelimitedCardHeader>
-        <TabsContent value="inspect" className="min-h-0 flex-1 overflow-hidden p-0">
-          <SimpleTable columns={["#", "day", "revenue"]} rows={queryRows.map((row) => [...row])} />
+        <TabsContent value="inspect" className="flex min-h-0 flex-1 flex-col overflow-hidden p-0">
+          {inspectLoading && !inspectResult ? (
+            <ResultsLoading label="Inspecting asset..." />
+          ) : inspectResult?.error ? (
+            <div className="flex h-full min-h-0 items-center justify-center overflow-auto p-3">
+              <InspectWarningCard message={inspectResult.error} testId="redesign-inspect-warning" />
+            </div>
+          ) : inspectResult ? (
+            <>
+              <RenderedQueryDisclosure query={inspectResult.operation?.query} />
+              <div className="min-h-0 flex-1">
+                <AssetInspectView
+                  columns={inspectResult.columns ?? []}
+                  rows={inspectResult.rows ?? []}
+                  loading={inspectLoading}
+                  canLoadMore={canLoadMoreInspectRows}
+                  onLoadMore={onLoadMoreInspectRows}
+                  warning={inspectResult.warning}
+                  frameless
+                />
+              </div>
+            </>
+          ) : (
+            <ResultsEmpty label="Inspect an asset to preview its data here." />
+          )}
         </TabsContent>
-        <TabsContent value="materialize" className="min-h-0 flex-1 p-3 font-mono text-xs">
-          <p><span className="text-emerald-600">PASS</span> simple.stripe_orders</p>
-          <p><span className="text-emerald-600">PASS</span> simple.revenue_daily</p>
-          <p className="mt-2">bruin run completed <span className="text-emerald-600">successfully</span> in 1m57s</p>
+        <TabsContent value="materialize" className="min-h-0 flex-1 overflow-hidden p-2">
+          <WorkspaceMaterializeOutputView
+            entry={selectedMaterializeEntry}
+            outputHtml={materializeOutputHtml ?? ""}
+            pipelineMaterializeLoading={pipelineMaterializeLoading}
+          />
         </TabsContent>
-        <TabsContent value="query" className="min-h-0 flex-1 overflow-hidden p-0">
-          <SimpleTable columns={["#", "day", "revenue"]} rows={queryRows.map((row) => [...row])} />
+        <TabsContent value="query" className="flex min-h-0 flex-1 flex-col overflow-hidden p-0">
+          {adhocLoading ? (
+            <ResultsLoading label="Running query..." />
+          ) : adhocResult?.error ? (
+            <div className="flex h-full min-h-0 items-center justify-center overflow-auto p-3">
+              <InspectWarningCard message={adhocResult.error} testId="redesign-query-warning" />
+            </div>
+          ) : adhocResult ? (
+            <>
+              <RenderedQueryDisclosure query={adhocRenderedQuery} />
+              <div className="min-h-0 flex-1">
+                <AssetInspectView
+                  columns={adhocResult.columns ?? []}
+                  rows={(adhocResult.rows ?? []) as Record<string, unknown>[]}
+                  warning={adhocResult.truncated ? "Result truncated; showing the first rows only." : undefined}
+                  frameless
+                />
+              </div>
+            </>
+          ) : (
+            <ResultsEmpty label="Run an ad hoc query to see results here." />
+          )}
         </TabsContent>
         <TabsContent value="tests" className="min-h-0 flex-1 overflow-auto p-3"><UnitTests /></TabsContent>
         <TabsContent value="diagnostics" className="min-h-0 flex-1 overflow-auto p-0"><DiagnosticsList /></TabsContent>
@@ -1091,6 +1397,78 @@ function ResultsPanel({
         <TabsContent value="history" className="min-h-0 flex-1 overflow-auto p-0"><HistoryPanel history={history} onOpen={onHistoryOpen} /></TabsContent>
       </Tabs>
     </RedesignPanel>
+  );
+}
+
+// RenderedQueryDisclosure shows the query that actually ran (post-Jinja) as a
+// single collapsed line above a results table, expandable to the full text.
+function RenderedQueryDisclosure({ query }: { query?: string | null }) {
+  const [open, setOpen] = useState(false);
+  const [copied, setCopied] = useState(false);
+  const trimmed = query?.trim();
+  if (!trimmed) {
+    return null;
+  }
+
+  const copyQuery = async () => {
+    try {
+      await navigator.clipboard.writeText(trimmed);
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 1400);
+    } catch {
+      // Clipboard access denied; nothing to do.
+    }
+  };
+
+  return (
+    <div className="shrink-0 border-b bg-muted/30" data-testid="rendered-query-disclosure">
+      <div className="flex min-w-0 items-center">
+        <button
+          type="button"
+          className="flex h-8 min-w-0 flex-1 items-center gap-1.5 px-2 text-left text-[11px] text-muted-foreground hover:bg-muted"
+          onClick={() => setOpen((value) => !value)}
+          aria-expanded={open}
+        >
+          <ChevronRight className={cn("size-3 shrink-0 transition-transform", open ? "rotate-90" : null)} />
+          <Terminal className="size-3 shrink-0" />
+          <span className="shrink-0 font-semibold uppercase tracking-wide">Query</span>
+          {!open ? (
+            <span className="min-w-0 flex-1 truncate font-mono">{trimmed.replace(/\s+/g, " ")}</span>
+          ) : null}
+        </button>
+        <Button
+          variant="outline"
+          size="xs"
+          className="mr-2 h-6 shrink-0 px-1.5 text-[10px] text-muted-foreground"
+          onClick={() => void copyQuery()}
+          aria-label="Copy rendered query"
+        >
+          {copied ? "copied" : "copy"}
+        </Button>
+      </div>
+      {open ? (
+        <pre className="max-h-28 overflow-auto whitespace-pre-wrap border-t bg-background px-2 py-1.5 font-mono text-[11px]">{trimmed}</pre>
+      ) : null}
+    </div>
+  );
+}
+
+function ResultsLoading({ label }: { label: string }) {
+  return (
+    <div className="flex h-full min-h-0 items-center justify-center bg-background">
+      <div className="flex items-center gap-2 text-xs opacity-80">
+        <Spinner className="size-4" />
+        <span>{label}</span>
+      </div>
+    </div>
+  );
+}
+
+function ResultsEmpty({ label }: { label: string }) {
+  return (
+    <div className="flex h-full min-h-0 items-center justify-center bg-background px-4 text-center text-xs text-muted-foreground">
+      {label}
+    </div>
   );
 }
 

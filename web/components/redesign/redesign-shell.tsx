@@ -276,6 +276,7 @@ function GitSheet({ sourceControl }: { sourceControl: ReturnType<typeof useSourc
   const unstagedChanges = changes.filter((change) => !change.staged);
   const changedCount = changes.length;
   const branch = repository?.branch || "unknown";
+  const showDiffPane = diffLoading || Boolean(diff);
 
   const submitCommit = async () => {
     await commit(message);
@@ -283,16 +284,16 @@ function GitSheet({ sourceControl }: { sourceControl: ReturnType<typeof useSourc
   };
 
   return (
-    <SheetContent className="w-full gap-0 p-0 sm:max-w-6xl">
+    <SheetContent className={cn("gap-0 p-0 !max-w-none", showDiffPane ? "!w-[calc(100vw-1rem)] sm:!w-[96vw] xl:!w-[72rem]" : "!w-full sm:!w-[28rem]")}>
       <SheetHeader className="pr-12">
         <SheetTitle className="flex items-center gap-2"><GitBranch className="size-4 text-primary" />Source control</SheetTitle>
         <SheetDescription>Review, stage, and commit local workspace changes.</SheetDescription>
       </SheetHeader>
-      <div className="grid min-h-0 flex-1 gap-4 overflow-auto p-4 pt-0 text-sm lg:grid-cols-[minmax(0,1fr)_22rem] lg:overflow-hidden">
-        <div className="order-2 min-h-[20rem] lg:order-1 lg:min-h-0">
+      <div className={cn("min-h-0 flex-1 overflow-auto p-4 pt-0 text-sm", showDiffPane ? "grid gap-4 lg:grid-cols-[minmax(28rem,1fr)_22rem] lg:overflow-hidden" : null)}>
+        {showDiffPane ? <div className="order-2 h-72 min-h-0 min-w-0 overflow-hidden lg:order-1 lg:h-auto lg:min-h-0">
           <DiffViewer diff={diff} loading={diffLoading} className="h-full" />
-        </div>
-        <div className="order-1 min-h-0 space-y-4 lg:order-2 lg:overflow-auto">
+        </div> : null}
+        <div className={cn("space-y-4", showDiffPane ? "order-1 lg:order-2 lg:overflow-auto" : null)}>
           <div className="flex items-center gap-2">
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
@@ -364,16 +365,16 @@ function DiffViewer({ diff, loading, className }: { diff: { path: string; staged
     return <div className={cn("flex items-center gap-2 rounded-lg border p-3 text-xs text-muted-foreground", className)}><Loader2 className="size-3.5 animate-spin" />Loading diff...</div>;
   }
   if (!diff) {
-    return <div className={cn("flex items-center justify-center rounded-lg border border-dashed p-4 text-center text-xs text-muted-foreground", className)}>Select a changed file to preview its diff.</div>;
+    return <div className={cn("flex min-w-0 items-center justify-center rounded-lg border border-dashed p-4 text-center text-xs text-muted-foreground", className)}>Select a changed file to preview its diff.</div>;
   }
   const lines = diff.patch ? diff.patch.split("\n") : ["No textual diff available."];
   return (
-    <div className={cn("flex min-h-0 flex-col overflow-hidden rounded-lg border", className)}>
+    <div className={cn("flex min-h-0 min-w-0 flex-col overflow-hidden rounded-lg border", className)}>
       <div className="flex h-8 items-center gap-2 border-b bg-muted/50 px-2 text-xs">
         <span className="min-w-0 flex-1 truncate font-mono">{diff.path}</span>
         <span className="rounded bg-background px-1.5 py-0.5 text-[10px] uppercase text-muted-foreground">{diff.staged ? "staged" : "worktree"}</span>
       </div>
-      <ScrollArea className="min-h-0 flex-1 bg-zinc-950" viewportClassName="h-full">
+      <ScrollArea className="min-h-0 min-w-0 flex-1 bg-zinc-950" viewportClassName="h-full">
         <pre className="min-w-max py-3 font-mono text-[11px] leading-relaxed text-zinc-100">{lines.map((line, index) => (
             <span key={`${index}-${line}`} className={cn("block whitespace-pre px-3", diffLineClassName(line, Boolean(diff.patch)))}>
               <span className="mr-3 inline-block w-8 select-none text-right text-zinc-600">{index + 1}</span>

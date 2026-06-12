@@ -35,7 +35,6 @@ function RedesignPipelineLayoutRoute() {
       editorMode={search.editor ?? "asset"}
       variant={search.variant ?? "default"}
       onResultTabChange={(result) => updateSearch({ result })}
-      onEditorModeChange={(editor) => updateSearch({ editor })}
       onVariantChange={(variant) => updateSearch({ variant })}
       onAssetSelect={(assetId) => navigate({
         to: redesignAssetViewPath(currentView),

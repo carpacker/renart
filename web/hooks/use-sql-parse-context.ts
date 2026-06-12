@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 
 import { getSQLParseContext } from "@/lib/api";
+import { isSqlAssetType } from "@/lib/asset-types";
 import { SchemaTable } from "@/lib/sql-schema";
 import { SqlParseContextResponse, WebAsset } from "@/lib/types";
 
@@ -11,7 +12,12 @@ export function useSQLParseContext(
   content: string,
   schemaTables: SchemaTable[],
 ) {
-  const assetId = asset?.id ?? null;
+  // Parse context is a SQL-only concept; never hit the endpoint for
+  // Python/YAML/ingestr assets.
+  const isSqlAsset = Boolean(
+    asset && (isSqlAssetType(asset.type) || asset.path.toLowerCase().endsWith(".sql")),
+  );
+  const assetId = isSqlAsset ? asset?.id ?? null : null;
   const [data, setData] = useState<SqlParseContextResponse | null>(null);
   const hasContent = useMemo(() => content.trim().length > 0, [content]);
   const schemaPayload = useMemo(

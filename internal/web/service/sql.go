@@ -17,6 +17,14 @@ type SQLColumnValuesResult struct {
 	Error  string `json:"error,omitempty"`
 }
 
+type SQLQueryResult struct {
+	Status    string           `json:"status"`
+	Columns   []string         `json:"columns"`
+	Rows      []map[string]any `json:"rows"`
+	Truncated bool             `json:"truncated,omitempty"`
+	Error     string           `json:"error,omitempty"`
+}
+
 type SQLDatabaseDiscoveryResult struct {
 	Status         string   `json:"status"`
 	ConnectionName string   `json:"connection_name"`
@@ -85,6 +93,29 @@ func (s *SQLService) ColumnValues(ctx context.Context, connectionName, environme
 	}
 
 	return SQLColumnValuesResult{Status: "ok", Values: values}
+}
+
+// Query runs an ad hoc statement against a named connection and returns the
+// full result set, capped at limit rows (0 means no cap).
+func (s *SQLService) Query(ctx context.Context, connectionName, environment, query string, limit int) SQLQueryResult {
+	columns, rows, err := s.deps.RunConnectionQuery(ctx, connectionName, environment, query)
+	if err != nil {
+		return SQLQueryResult{Status: "error", Columns: []string{}, Rows: []map[string]any{}, Error: err.Error()}
+	}
+
+	truncated := false
+	if limit > 0 && len(rows) > limit {
+		rows = rows[:limit]
+		truncated = true
+	}
+	if columns == nil {
+		columns = []string{}
+	}
+	if rows == nil {
+		rows = []map[string]any{}
+	}
+
+	return SQLQueryResult{Status: "ok", Columns: columns, Rows: rows, Truncated: truncated}
 }
 
 func (s *SQLService) Databases(ctx context.Context, connectionName, environment string) (SQLDatabaseDiscoveryResult, *APIError) {

@@ -5,6 +5,7 @@ import {
   SqlDiscoveryTableColumnsResponse,
   SqlDiscoveryTablesResponse,
   SqlPathSuggestionsResponse,
+  SqlQueryResponse,
 } from "@/lib/types";
 
 export async function getSQLDatabases(options: {
@@ -62,6 +63,29 @@ export async function getSQLTableColumns(options: {
     })}`,
     { cache: "no-store" }
   );
+}
+
+export async function runSQLQuery(options: {
+  connection: string;
+  environment?: string;
+  query: string;
+  limit?: number;
+  signal?: AbortSignal;
+}) {
+  return fetchJSON<SqlQueryResponse>("/api/sql/query", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    cache: "no-store",
+    signal: options.signal,
+    body: JSON.stringify({
+      connection: options.connection,
+      environment: options.environment ?? "",
+      query: options.query,
+      limit: options.limit,
+    }),
+  });
 }
 
 export async function getSQLParseContext(options: {

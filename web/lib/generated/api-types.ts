@@ -206,6 +206,14 @@ export type SQLColumn = {
   type?: string;
 };
 
+export type SqlQueryResponse = {
+  status: string;
+  columns: string[];
+  rows: Record<string, unknown>[];
+  truncated?: boolean;
+  error?: string;
+};
+
 export type SqlParseContextRange = {
   start: number;
   end: number;

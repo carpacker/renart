@@ -47,6 +47,7 @@ const sources = [
       "SQLTableDiscoveryResult",
       "SQLTableColumnsResult",
       "SQLColumn",
+      "SQLQueryResult",
     ],
   },
   {
@@ -107,6 +108,7 @@ const renameMap = new Map([
   ["SQLTableDiscoveryResult", "SqlDiscoveryTablesResponse"],
   ["SQLTableColumnsResult", "SqlDiscoveryTableColumnsResponse"],
   ["SQLDiscoveryTableItem", "SqlDiscoveryTable"],
+  ["SQLQueryResult", "SqlQueryResponse"],
   ["ParseContextRange", "SqlParseContextRange"],
   ["ParseContextPart", "SqlParseContextPart"],
   ["ParseContextTable", "SqlParseContextTable"],

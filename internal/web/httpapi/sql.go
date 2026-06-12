@@ -13,6 +13,7 @@ import (
 
 type SQLHandlers interface {
 	ColumnValues(ctx context.Context, connectionName, environment, query string) service.SQLColumnValuesResult
+	Query(ctx context.Context, connectionName, environment, query string, limit int) service.SQLQueryResult
 	Databases(ctx context.Context, connectionName, environment string) (service.SQLDatabaseDiscoveryResult, *service.APIError)
 	Tables(ctx context.Context, connectionName, databaseName, environment string) (service.SQLTableDiscoveryResult, *service.APIError)
 	TableColumns(ctx context.Context, connectionName, tableName, environment string) (service.SQLTableColumnsResult, int)
@@ -28,8 +29,16 @@ type SQLColumnValuesRequest struct {
 	Query       string `json:"query"`
 }
 
+type SQLQueryRequest struct {
+	Connection  string `json:"connection"`
+	Environment string `json:"environment,omitempty"`
+	Query       string `json:"query"`
+	Limit       int    `json:"limit,omitempty"`
+}
+
 func RegisterSQLRoutes(router chi.Router, handlers *SQLAPI) {
 	router.Post("/api/sql/column-values", handlers.HandleSQLColumnValues)
+	router.Post("/api/sql/query", handlers.HandleSQLQuery)
 	router.Get("/api/sql/databases", handlers.HandleGetSQLDatabases)
 	router.Get("/api/sql/tables", handlers.HandleGetSQLTables)
 	router.Get("/api/sql/table-columns", handlers.HandleGetSQLTableColumns)
@@ -55,6 +64,34 @@ func (h *SQLAPI) HandleSQLColumnValues(w http.ResponseWriter, r *http.Request) {
 	}
 
 	result := h.Service.ColumnValues(r.Context(), connectionName, req.Environment, query)
+	webapi.WriteJSON(w, http.StatusOK, result)
+}
+
+func (h *SQLAPI) HandleSQLQuery(w http.ResponseWriter, r *http.Request) {
+	var req SQLQueryRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		webapi.WriteBadRequest(w, "invalid_request_body", err.Error())
+		return
+	}
+
+	connectionName := strings.TrimSpace(req.Connection)
+	if connectionName == "" {
+		webapi.WriteBadRequest(w, "connection_required", "connection is required")
+		return
+	}
+
+	query := strings.TrimSpace(req.Query)
+	if query == "" {
+		webapi.WriteBadRequest(w, "query_required", "query is required")
+		return
+	}
+
+	limit := req.Limit
+	if limit <= 0 || limit > 1000 {
+		limit = 1000
+	}
+
+	result := h.Service.Query(r.Context(), connectionName, req.Environment, query, limit)
 	webapi.WriteJSON(w, http.StatusOK, result)
 }
 

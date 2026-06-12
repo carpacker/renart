@@ -27,6 +27,18 @@ type QueryRowsEnvelope struct {
 	Rows    []map[string]any `json:"rows"`
 }
 
+// ExtractQueryTextFromOutput pulls the executed query text out of a query
+// JSON envelope, if present.
+func ExtractQueryTextFromOutput(output []byte) string {
+	var envelope struct {
+		Query string `json:"query"`
+	}
+	if err := json.Unmarshal(output, &envelope); err != nil {
+		return ""
+	}
+	return envelope.Query
+}
+
 func NewQueryResultDTO(result *query.QueryResult, connectionName, queryText string) QueryResultDTO {
 	if result == nil {
 		return QueryResultDTO{ConnectionName: connectionName, Query: queryText}

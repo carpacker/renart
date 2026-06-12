@@ -21,6 +21,7 @@ type Props = {
   autoLoadMore?: boolean;
   scrollKey?: string;
   onWheelCapture?: WheelEventHandler<HTMLDivElement>;
+  frameless?: boolean;
 };
 
 export function VirtualDataTable({
@@ -35,6 +36,7 @@ export function VirtualDataTable({
   autoLoadMore = false,
   scrollKey,
   onWheelCapture,
+  frameless = false,
 }: Props) {
   const fillAvailableHeight = typeof height === "string";
   const scrollContainerRef = useRef<HTMLDivElement | null>(null);
@@ -140,9 +142,9 @@ export function VirtualDataTable({
 
   return (
     <div
-      className={`group/table relative overflow-hidden rounded border bg-background ${
-        fillAvailableHeight ? "flex h-full min-h-0 flex-col" : ""
-      }`}
+      className={`group/table relative overflow-hidden bg-background ${
+        frameless ? "" : "rounded border"
+      } ${fillAvailableHeight ? "flex h-full min-h-0 flex-col" : ""}`}
     >
       {rows.length > 0 && fallbackColumns.length > 0 ? (
         <Button
