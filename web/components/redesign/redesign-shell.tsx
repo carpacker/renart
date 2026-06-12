@@ -23,6 +23,7 @@ import { useWorkspaceSync } from "@/hooks/use-workspace-sync";
 import { selectedEnvironmentAtom, selectedEnvironmentOverrideAtom, selectedExecutionTimeWindowAtom, workspaceAtom } from "@/lib/atoms/domains/workspace";
 import { findExecutionTimeOption, getExecutionTimeOptions } from "@/lib/execution-time";
 import type { SourceControlChange } from "@/lib/types";
+import { cn } from "@/lib/utils";
 
 import { navItems } from "./redesign-data";
 import { NavLinkButton } from "./redesign-primitives";
@@ -282,54 +283,58 @@ function GitSheet({ sourceControl }: { sourceControl: ReturnType<typeof useSourc
   };
 
   return (
-    <SheetContent className="w-full sm:max-w-md">
-      <SheetHeader>
+    <SheetContent className="w-full gap-0 p-0 sm:max-w-6xl">
+      <SheetHeader className="pr-12">
         <SheetTitle className="flex items-center gap-2"><GitBranch className="size-4 text-primary" />Source control</SheetTitle>
         <SheetDescription>Review, stage, and commit local workspace changes.</SheetDescription>
       </SheetHeader>
-      <div className="flex-1 space-y-4 overflow-auto px-4 text-sm">
-        <div className="flex items-center gap-2">
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <Button variant="outline" className="min-w-0 flex-1 justify-start" disabled={busy || loading}>
-                <GitBranch className="size-4" />
-                <span className="truncate">{branch}</span>
-                <ChevronDown className="ml-auto size-3.5" />
-              </Button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="start" className="w-64">
-              <DropdownMenuLabel>Local branches</DropdownMenuLabel>
-              {branches.map((item) => (
-                <DropdownMenuItem key={item} disabled={busy || item === branch} onClick={() => void checkout(item)}>
+      <div className="grid min-h-0 flex-1 gap-4 overflow-auto p-4 pt-0 text-sm lg:grid-cols-[minmax(0,1fr)_22rem] lg:overflow-hidden">
+        <div className="order-2 min-h-[20rem] lg:order-1 lg:min-h-0">
+          <DiffViewer diff={diff} loading={diffLoading} className="h-full" />
+        </div>
+        <div className="order-1 min-h-0 space-y-4 lg:order-2 lg:overflow-auto">
+          <div className="flex items-center gap-2">
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button variant="outline" className="min-w-0 flex-1 justify-start" disabled={busy || loading}>
                   <GitBranch className="size-4" />
-                  <span className="flex-1 truncate">{item}</span>
-                  {item === branch ? <Check className="size-3.5" /> : null}
-                </DropdownMenuItem>
-              ))}
-              {branches.length === 0 ? <DropdownMenuItem disabled>No branches found</DropdownMenuItem> : null}
-            </DropdownMenuContent>
-          </DropdownMenu>
-          <Button variant="ghost" size="icon-sm" disabled={busy || loading} onClick={() => void refresh()}>
-            {loading ? <Loader2 className="size-3.5 animate-spin" /> : <RefreshCw className="size-3.5" />}
-          </Button>
-        </div>
-        {error ? <div className="rounded-md border border-red-200 bg-red-50 p-2 text-xs text-red-700">{error}</div> : null}
-        <div className="space-y-2">
-          <textarea className="min-h-16 w-full resize-none rounded-lg border bg-background p-2 text-sm outline-none" placeholder="Commit message..." value={message} onChange={(event) => setMessage(event.target.value)} />
-          <Button className="w-full" disabled={busy || stagedChanges.length === 0 || !message.trim()} onClick={() => void submitCommit()}>
-            {busy ? <Loader2 className="size-4 animate-spin" /> : <GitCommit className="size-4" />}Commit {stagedChanges.length} file{stagedChanges.length === 1 ? "" : "s"}
-          </Button>
-        </div>
-        <ChangeGroup title={`Staged · ${stagedChanges.length}`} changes={stagedChanges} actionLabel="Unstage" busy={busy} selectedPath={diff?.staged ? diff.path : ""} onSelect={(path) => void loadDiff(path, true)} onAction={(path) => void unstage([path])} />
-        <ChangeGroup title={`Changes · ${unstagedChanges.length}`} changes={unstagedChanges} actionLabel="Stage" busy={busy} selectedPath={!diff?.staged ? diff?.path : ""} onSelect={(path) => void loadDiff(path, false)} onAction={(path) => void stage([path])} />
-        {changedCount > 0 ? (
-          <div className="grid grid-cols-2 gap-2">
-            <Button variant="outline" size="sm" disabled={busy || unstagedChanges.length === 0} onClick={() => void stage(unstagedChanges.map((change) => change.path))}>Stage all</Button>
-            <Button variant="outline" size="sm" disabled={busy || stagedChanges.length === 0} onClick={() => void unstage(stagedChanges.map((change) => change.path))}>Unstage all</Button>
+                  <span className="truncate">{branch}</span>
+                  <ChevronDown className="ml-auto size-3.5" />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="start" className="w-64">
+                <DropdownMenuLabel>Local branches</DropdownMenuLabel>
+                {branches.map((item) => (
+                  <DropdownMenuItem key={item} disabled={busy || item === branch} onClick={() => void checkout(item)}>
+                    <GitBranch className="size-4" />
+                    <span className="flex-1 truncate">{item}</span>
+                    {item === branch ? <Check className="size-3.5" /> : null}
+                  </DropdownMenuItem>
+                ))}
+                {branches.length === 0 ? <DropdownMenuItem disabled>No branches found</DropdownMenuItem> : null}
+              </DropdownMenuContent>
+            </DropdownMenu>
+            <Button variant="ghost" size="icon-sm" disabled={busy || loading} onClick={() => void refresh()}>
+              {loading ? <Loader2 className="size-3.5 animate-spin" /> : <RefreshCw className="size-3.5" />}
+            </Button>
           </div>
-        ) : null}
-        {!loading && changedCount === 0 ? <div className="rounded-lg border border-dashed p-6 text-center text-xs text-muted-foreground">Working tree clean.</div> : null}
-        <DiffViewer diff={diff} loading={diffLoading} />
+          {error ? <div className="rounded-md border border-red-200 bg-red-50 p-2 text-xs text-red-700">{error}</div> : null}
+          <div className="space-y-2">
+            <textarea className="min-h-16 w-full resize-none rounded-lg border bg-background p-2 text-sm outline-none" placeholder="Commit message..." value={message} onChange={(event) => setMessage(event.target.value)} />
+            <Button className="w-full" disabled={busy || stagedChanges.length === 0 || !message.trim()} onClick={() => void submitCommit()}>
+              {busy ? <Loader2 className="size-4 animate-spin" /> : <GitCommit className="size-4" />}Commit {stagedChanges.length} file{stagedChanges.length === 1 ? "" : "s"}
+            </Button>
+          </div>
+          <ChangeGroup title={`Staged · ${stagedChanges.length}`} changes={stagedChanges} actionLabel="Unstage" busy={busy} selectedPath={diff?.staged ? diff.path : ""} onSelect={(path) => void loadDiff(path, true)} onAction={(path) => void unstage([path])} />
+          <ChangeGroup title={`Changes · ${unstagedChanges.length}`} changes={unstagedChanges} actionLabel="Stage" busy={busy} selectedPath={!diff?.staged ? diff?.path : ""} onSelect={(path) => void loadDiff(path, false)} onAction={(path) => void stage([path])} />
+          {changedCount > 0 ? (
+            <div className="grid grid-cols-2 gap-2">
+              <Button variant="outline" size="sm" disabled={busy || unstagedChanges.length === 0} onClick={() => void stage(unstagedChanges.map((change) => change.path))}>Stage all</Button>
+              <Button variant="outline" size="sm" disabled={busy || stagedChanges.length === 0} onClick={() => void unstage(stagedChanges.map((change) => change.path))}>Unstage all</Button>
+            </div>
+          ) : null}
+          {!loading && changedCount === 0 ? <div className="rounded-lg border border-dashed p-6 text-center text-xs text-muted-foreground">Working tree clean.</div> : null}
+        </div>
       </div>
     </SheetContent>
   );
@@ -354,24 +359,40 @@ function ChangeGroup({ title, changes, actionLabel, busy, selectedPath, onSelect
   );
 }
 
-function DiffViewer({ diff, loading }: { diff: { path: string; staged: boolean; patch: string } | null; loading: boolean }) {
+function DiffViewer({ diff, loading, className }: { diff: { path: string; staged: boolean; patch: string } | null; loading: boolean; className?: string }) {
   if (loading) {
-    return <div className="flex items-center gap-2 rounded-lg border p-3 text-xs text-muted-foreground"><Loader2 className="size-3.5 animate-spin" />Loading diff...</div>;
+    return <div className={cn("flex items-center gap-2 rounded-lg border p-3 text-xs text-muted-foreground", className)}><Loader2 className="size-3.5 animate-spin" />Loading diff...</div>;
   }
   if (!diff) {
-    return <div className="rounded-lg border border-dashed p-4 text-center text-xs text-muted-foreground">Select a changed file to preview its diff.</div>;
+    return <div className={cn("flex items-center justify-center rounded-lg border border-dashed p-4 text-center text-xs text-muted-foreground", className)}>Select a changed file to preview its diff.</div>;
   }
+  const lines = diff.patch ? diff.patch.split("\n") : ["No textual diff available."];
   return (
-    <div className="overflow-hidden rounded-lg border">
+    <div className={cn("flex min-h-0 flex-col overflow-hidden rounded-lg border", className)}>
       <div className="flex h-8 items-center gap-2 border-b bg-muted/50 px-2 text-xs">
         <span className="min-w-0 flex-1 truncate font-mono">{diff.path}</span>
         <span className="rounded bg-background px-1.5 py-0.5 text-[10px] uppercase text-muted-foreground">{diff.staged ? "staged" : "worktree"}</span>
       </div>
-      <ScrollArea className="max-h-72 bg-zinc-950" viewportClassName="max-h-72">
-        <pre className="whitespace-pre p-3 font-mono text-[11px] leading-relaxed text-zinc-100">{diff.patch || "No textual diff available."}</pre>
+      <ScrollArea className="min-h-0 flex-1 bg-zinc-950" viewportClassName="h-full">
+        <pre className="min-w-max py-3 font-mono text-[11px] leading-relaxed text-zinc-100">{lines.map((line, index) => (
+            <span key={`${index}-${line}`} className={cn("block whitespace-pre px-3", diffLineClassName(line, Boolean(diff.patch)))}>
+              <span className="mr-3 inline-block w-8 select-none text-right text-zinc-600">{index + 1}</span>
+              {line || " "}
+            </span>
+          ))}</pre>
       </ScrollArea>
     </div>
   );
+}
+
+function diffLineClassName(line: string, hasPatch: boolean) {
+  if (!hasPatch) return "text-zinc-500";
+  if (line.startsWith("diff --git") || line.startsWith("index ")) return "bg-sky-500/10 text-sky-200";
+  if (line.startsWith("@@")) return "bg-violet-500/15 text-violet-200";
+  if (line.startsWith("+++") || line.startsWith("---")) return "bg-blue-500/10 text-blue-200";
+  if (line.startsWith("+")) return "bg-emerald-500/10 text-emerald-200";
+  if (line.startsWith("-")) return "bg-red-500/10 text-red-200";
+  return "text-zinc-300";
 }
 
 function sourceControlStatusLabel(change: SourceControlChange) {

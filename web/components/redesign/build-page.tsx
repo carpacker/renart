@@ -1,6 +1,11 @@
 import { Link, Outlet, useLocation, useNavigate } from "@tanstack/react-router";
 import { useAtomValue, useSetAtom } from "jotai";
 import {
+  Group as PanelGroup,
+  Panel,
+  Separator as PanelResizeHandle,
+} from "react-resizable-panels";
+import {
   Activity,
   AlertTriangle,
   Check,
@@ -8,6 +13,7 @@ import {
   ChevronsUpDown,
   Circle,
   ClipboardCheck,
+  Columns2,
   Cpu,
   Database,
   Eye,
@@ -33,6 +39,7 @@ import {
 import { ComponentType, ReactNode, createContext, useContext, useEffect, useMemo, useState } from "react";
 
 import { Badge } from "@/components/ui/badge";
+import { ButtonGroup } from "@/components/ui/button-group";
 import {
   Breadcrumb,
   BreadcrumbItem,
@@ -69,6 +76,7 @@ import { routeSelectionAtom, selectedEnvironmentAtom, workspaceAtom } from "@/li
 import type { WebAsset, WebPipeline } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import { useSelectedEnvironmentPolicy } from "@/hooks/use-environment-policy";
+import { useIsMobile } from "@/hooks/use-mobile";
 import { usePipelineDeploy, type PipelineDeployState } from "@/hooks/use-pipeline-deploy";
 import { usePipelineStaleness } from "@/hooks/use-pipeline-staleness";
 import { labelForRedesignMaterializationState, useRedesignAssetMaterializationStatus } from "@/hooks/use-redesign-asset-materialization-status";
@@ -140,6 +148,8 @@ type BuildContextValue = {
   pipelineAssets: BuildAsset[];
   selectedAssetId: string;
   selectedAsset: BuildAsset;
+  view: RedesignBuildView;
+  buildSearch: RedesignBuildSearch;
   editorMode: RedesignEditorMode;
   declaredDependencies: string[];
   addDependency: (dependency: string) => void;
@@ -392,6 +402,8 @@ export function RedesignBuildPage({
     pipelineAssets: displayedPipelineAssets,
     selectedAssetId: effectiveSelectedAssetId,
     selectedAsset,
+    view,
+    buildSearch,
     editorMode,
     declaredDependencies,
     addDependency,
@@ -408,7 +420,6 @@ export function RedesignBuildPage({
         pipelineLabel={activePipeline?.name ?? pipelineId}
         selectedAsset={selectedAsset}
         selectedAssetId={effectiveSelectedAssetId}
-        view={view}
         resultTab={resultTab}
         editorMode={editorMode}
         variant={variant}
@@ -439,10 +450,18 @@ export function RedesignBuildPage({
         </RedesignPanel>
 
         <div className="flex min-h-0 flex-col gap-3">
-          <RedesignPanel className="flex min-h-0 flex-1 overflow-hidden">
+          <RedesignPanel className="relative flex min-h-0 flex-1 overflow-hidden">
             <DelimitedCardContent className="h-full min-h-0 flex-1 p-0">
               <Outlet />
             </DelimitedCardContent>
+            {view !== "code" ? (
+              <FloatingViewSwitcher
+                pipelineId={pipelineId}
+                selectedAssetId={effectiveSelectedAssetId}
+                currentView={view}
+                search={buildSearch}
+              />
+            ) : null}
           </RedesignPanel>
 
           <ResultsPanel activeTab={resultTab} onTabChange={openBottom} variant={variant} history={history} onHistoryOpen={(tab) => openBottom(tab)} />
@@ -497,7 +516,6 @@ function BuildTopBar({
   pipelineLabel,
   selectedAsset,
   selectedAssetId,
-  view,
   resultTab,
   editorMode,
   variant,
@@ -518,7 +536,6 @@ function BuildTopBar({
   pipelineLabel: string;
   selectedAsset: BuildAsset;
   selectedAssetId: string;
-  view: RedesignBuildView;
   resultTab: RedesignResultTab;
   editorMode: RedesignEditorMode;
   variant: string;
@@ -563,11 +580,6 @@ function BuildTopBar({
           </BreadcrumbItem>
         </BreadcrumbList>
       </Breadcrumb>
-      <div className="flex min-w-0 items-center gap-1 overflow-x-auto">
-        <ViewLink pipelineId={pipelineId} selectedAssetId={selectedAssetId} currentView={view} view="canvas" search={search} icon={Layers} label="Canvas" />
-        <ViewLink pipelineId={pipelineId} selectedAssetId={selectedAssetId} currentView={view} view="split" search={search} icon={Layers} label="Split" className="hidden sm:inline-flex" />
-        <ViewLink pipelineId={pipelineId} selectedAssetId={selectedAssetId} currentView={view} view="code" search={search} icon={FileCode} label="Code" />
-      </div>
       <DropdownMenu>
         <DropdownMenuTrigger asChild>
           <Button variant="outline" size="sm" className={cn("hidden font-mono lg:inline-flex", variant !== "default" ? "text-primary" : null)}>
@@ -626,6 +638,44 @@ function BuildTopBar({
   );
 }
 
+function FloatingViewSwitcher({
+  pipelineId,
+  selectedAssetId,
+  currentView,
+  search,
+}: {
+  pipelineId: string;
+  selectedAssetId: string;
+  currentView: RedesignBuildView;
+  search: RedesignBuildSearch;
+}) {
+  return (
+    <BuildViewButtonGroup pipelineId={pipelineId} selectedAssetId={selectedAssetId} currentView={currentView} search={search} className="absolute right-1 top-1 z-20 rounded-lg border bg-background/90 shadow-sm backdrop-blur" />
+  );
+}
+
+function BuildViewButtonGroup({
+  pipelineId,
+  selectedAssetId,
+  currentView,
+  search,
+  className,
+}: {
+  pipelineId: string;
+  selectedAssetId: string;
+  currentView: RedesignBuildView;
+  search: RedesignBuildSearch;
+  className?: string;
+}) {
+  return (
+    <ButtonGroup className={className}>
+      <ViewLink pipelineId={pipelineId} selectedAssetId={selectedAssetId} currentView={currentView} view="code" search={search} icon={FileCode} label="Code" />
+      <ViewLink pipelineId={pipelineId} selectedAssetId={selectedAssetId} currentView={currentView} view="split" search={search} icon={Columns2} label="Split" />
+      <ViewLink pipelineId={pipelineId} selectedAssetId={selectedAssetId} currentView={currentView} view="canvas" search={search} icon={Layers} label="Canvas" />
+    </ButtonGroup>
+  );
+}
+
 function ViewLink({
   pipelineId,
   selectedAssetId,
@@ -634,7 +684,6 @@ function ViewLink({
   search,
   icon: Icon,
   label,
-  className,
 }: {
   pipelineId: string;
   selectedAssetId: string;
@@ -643,12 +692,12 @@ function ViewLink({
   search: RedesignBuildSearch;
   icon: ComponentType<{ className?: string }>;
   label: string;
-  className?: string;
 }) {
   return (
-    <Button asChild variant={currentView === view ? "secondary" : "ghost"} size="sm" className={className}>
-      <Link to={redesignAssetViewPath(view)} params={{ pipelineId, assetId: selectedAssetId }} search={search}>
-        <Icon className="size-3.5" /> {label}
+    <Button asChild variant={currentView === view ? "secondary" : "outline"} size="icon-sm">
+      <Link to={redesignAssetViewPath(view)} params={{ pipelineId, assetId: selectedAssetId }} search={search} aria-label={`${label} view`} title={`${label} view`}>
+        <Icon className="size-3.5" />
+        <span className="sr-only">{label}</span>
       </Link>
     </Button>
   );
@@ -828,14 +877,15 @@ export function RedesignBuildCanvasView() {
 export function RedesignBuildSplitView() {
   const { pipelineId, selectedAssetId, selectedAsset, selectAsset, openBottom } = useBuildContext();
   return (
-    <div className="grid h-full min-h-0 grid-cols-1 md:grid-cols-2">
-      <div className="min-h-0 border-b md:border-b-0 md:border-r">
+    <PanelGroup orientation="horizontal" className="h-full min-h-0 min-w-0">
+      <Panel defaultSize={50} minSize={28} className="min-w-0">
+        <EditorWorkspace asset={selectedAsset} adhoc={false} onInspect={() => openBottom("inspect")} onRun={() => openBottom("materialize")} />
+      </Panel>
+      <PanelResizeHandle className="w-px bg-border" />
+      <Panel defaultSize={50} minSize={28} className="min-w-0">
         <PipelineCanvas pipelineId={pipelineId} selectedAssetId={selectedAssetId} onAssetSelect={selectAsset} />
-      </div>
-      <div className="min-h-0">
-        <EditorWorkspace asset={selectedAsset} adhoc={false} compact onInspect={() => openBottom("inspect")} onRun={() => openBottom("materialize")} />
-      </div>
-    </div>
+      </Panel>
+    </PanelGroup>
   );
 }
 
@@ -848,46 +898,40 @@ export function RedesignBuildCodeView() {
 function EditorWorkspace({
   asset,
   adhoc,
-  compact,
   onInspect,
   onRun,
 }: {
   asset: BuildAsset;
   adhoc: boolean;
-  compact?: boolean;
   onInspect: () => void;
   onRun: () => void;
 }) {
-  const { declaredDependencies, addDependency, goToAsset, openBottom } = useBuildContext();
+  const { pipelineId, selectedAssetId, view, buildSearch, declaredDependencies, addDependency, goToAsset, openBottom } = useBuildContext();
+  const isMobile = useIsMobile();
+  const editorOnly = view === "code";
+  const showActionLabels = editorOnly && !isMobile;
 
   if (adhoc) {
-    return <AdhocEditor onRun={onRun} />;
+    return <AdhocEditor showActionLabels={showActionLabels} onRun={onRun} />;
   }
 
-  const meta = kindMeta[asset.kind];
-  const Icon = meta.icon;
   const missingDependencies = asset.kind === "python" ? missingPythonDependencies(asset, declaredDependencies) : [];
   const actionLabel = asset.kind === "source" ? "Validate" : asset.kind === "ingestr" || asset.kind === "sling" ? "Run" : "Materialize";
+  const filename = asset.path ?? `${asset.dir ? `${asset.dir}/` : ""}${asset.name}${kindMeta[asset.kind].ext}`;
 
   return (
-    <div className="flex h-full min-h-0 flex-col">
-      <div className="flex min-h-11 items-center gap-2 border-b px-3">
-        <Icon className="size-4 text-primary" />
-        <div className="min-w-0">
-          <div className="truncate font-mono text-xs font-medium">{asset.dir ? `assets/${asset.dir}/` : ""}{asset.name}{meta.ext}</div>
-          {!compact ? <div className="truncate text-[11px] text-muted-foreground">{meta.description}</div> : null}
-        </div>
-        {missingDependencies.length > 0 ? (
-          <Button variant="outline" size="xs" className="border-amber-300 bg-amber-50 text-amber-700 hover:bg-amber-100" onClick={() => openBottom("diagnostics")}>
-            <AlertTriangle className="size-3" />{missingDependencies.length} not in deps
-          </Button>
+    <div className="relative flex h-full min-h-0 flex-col">
+      <EditorFilenameHeader filename={filename}>
+        <EditorActionButtons actionLabel={actionLabel} showLabels={showActionLabels} showInspect={asset.kind !== "source"} onRun={onRun} onInspect={onInspect} />
+        {editorOnly ? (
+          <BuildViewButtonGroup pipelineId={pipelineId} selectedAssetId={selectedAssetId} currentView={view} search={buildSearch} />
         ) : null}
-        <div className="ml-auto flex items-center gap-2">
-          {!compact ? <Button variant="outline" size="sm"><Database className="size-3.5" /> duckdb-default</Button> : null}
-          <Button size="sm" onClick={onRun}><Hammer className="size-3.5" />{actionLabel}</Button>
-          {asset.kind !== "source" ? <Button variant="outline" size="sm" onClick={onInspect}><Eye className="size-3.5" />Inspect</Button> : null}
-        </div>
-      </div>
+      </EditorFilenameHeader>
+      {missingDependencies.length > 0 ? (
+        <Button variant="outline" size="xs" className="absolute left-3 top-9 z-20 border-amber-300 bg-amber-50 text-amber-700 shadow-sm hover:bg-amber-100" onClick={() => openBottom("diagnostics")}>
+          <AlertTriangle className="size-3" />{missingDependencies.length} not in deps
+        </Button>
+      ) : null}
       {asset.workspaceAsset && asset.pipelineId ? (
         <RedesignAssetEditor
           asset={asset.workspaceAsset}
@@ -907,15 +951,57 @@ function EditorWorkspace({
   );
 }
 
-function AdhocEditor({ onRun }: { onRun: () => void }) {
+function EditorFilenameHeader({ filename, children }: { filename: string; children?: ReactNode }) {
   return (
-    <div className="flex h-full min-h-0 flex-col">
-      <div className="flex min-h-11 items-center gap-2 border-b px-3">
-        <Terminal className="size-4 text-primary" />
-        <span className="font-medium">Ad-hoc</span>
-        <Button variant="outline" size="sm" className="ml-auto"><Database className="size-3.5" /> duckdb-default</Button>
-        <Button size="sm" onClick={onRun}><Play className="size-3.5" />Run</Button>
-      </div>
+    <div className="flex h-10 min-w-0 shrink-0 items-center gap-2 overflow-hidden border-b bg-background/70 px-3">
+      <span className="block min-w-0 flex-[1_1_0] truncate font-mono text-[11px] text-muted-foreground">{filename}</span>
+      {children ? <div className="ml-auto flex shrink-0 items-center gap-1.5">{children}</div> : null}
+    </div>
+  );
+}
+
+function EditorActionButtons({
+  actionLabel,
+  showLabels,
+  showInspect,
+  onRun,
+  onInspect,
+}: {
+  actionLabel: string;
+  showLabels: boolean;
+  showInspect: boolean;
+  onRun: () => void;
+  onInspect: () => void;
+}) {
+  return (
+    <>
+      <Button size={showLabels ? "sm" : "icon-sm"} onClick={onRun} aria-label={actionLabel} title={actionLabel}>
+        <Hammer className="size-3.5" />
+        {showLabels ? actionLabel : <span className="sr-only">{actionLabel}</span>}
+      </Button>
+      {showInspect ? (
+        <Button variant="outline" size={showLabels ? "sm" : "icon-sm"} onClick={onInspect} aria-label="Inspect" title="Inspect">
+          <Eye className="size-3.5" />
+          {showLabels ? "Inspect" : <span className="sr-only">Inspect</span>}
+        </Button>
+      ) : null}
+    </>
+  );
+}
+
+function AdhocEditor({ showActionLabels, onRun }: { showActionLabels: boolean; onRun: () => void }) {
+  const { pipelineId, selectedAssetId, view, buildSearch } = useBuildContext();
+  return (
+    <div className="relative flex h-full min-h-0 flex-col">
+      <EditorFilenameHeader filename="Ad-hoc query">
+        <Button size={showActionLabels ? "sm" : "icon-sm"} onClick={onRun} aria-label="Run" title="Run">
+          <Play className="size-3.5" />
+          {showActionLabels ? "Run" : <span className="sr-only">Run</span>}
+        </Button>
+        {view === "code" ? (
+          <BuildViewButtonGroup pipelineId={pipelineId} selectedAssetId={selectedAssetId} currentView={view} search={buildSearch} />
+        ) : null}
+      </EditorFilenameHeader>
       <CodeBlock lines={["select * from revenue_daily limit 100;"]} />
     </div>
   );

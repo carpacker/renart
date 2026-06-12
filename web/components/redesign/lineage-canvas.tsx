@@ -234,7 +234,7 @@ export function RedesignLineageCanvas({
   }, [assets, lineageAssetId, links, onAssetSelect, selectedAssetId]);
 
   return (
-    <div className="h-full min-h-[520px] bg-zinc-100">
+    <div className="h-full min-h-0 bg-zinc-100">
       <ReactFlow
         nodes={nodes}
         edges={edges}
