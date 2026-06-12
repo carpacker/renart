@@ -10,7 +10,8 @@ CREATE TABLE IF NOT EXISTS pipeline_runs (
     started_at TEXT,
     finished_at TEXT,
     error TEXT,
-    log_ref TEXT
+    log_ref TEXT,
+    snapshot_version_id TEXT
 );
 
 CREATE INDEX IF NOT EXISTS idx_runs_pipeline_time ON pipeline_runs (pipeline_id, started_at DESC);
@@ -47,4 +48,75 @@ CREATE TABLE IF NOT EXISTS pipeline_schedule_settings (
     pipeline_id TEXT PRIMARY KEY,
     enabled INTEGER NOT NULL,
     updated_at TEXT NOT NULL
+);
+
+-- Materialization log (queried by the matlog package directly, not sqlc;
+-- kept here so this file stays the full schema reference).
+CREATE TABLE IF NOT EXISTS renart_materializations (
+    id              INTEGER PRIMARY KEY,
+    asset_id        TEXT NOT NULL,
+    environment     TEXT NOT NULL,
+    fingerprint     TEXT NOT NULL,
+    vars_hash       TEXT NOT NULL,
+    interval_start  TEXT NOT NULL DEFAULT '',
+    interval_end    TEXT NOT NULL DEFAULT '',
+    run_id          TEXT NOT NULL,
+    materialized_at TEXT NOT NULL,
+    own_content     TEXT NOT NULL DEFAULT ''
+);
+
+CREATE INDEX IF NOT EXISTS idx_renart_mat_lookup ON renart_materializations
+    (asset_id, environment, fingerprint, vars_hash);
+CREATE INDEX IF NOT EXISTS idx_renart_mat_age ON renart_materializations
+    (materialized_at);
+
+CREATE TABLE IF NOT EXISTS renart_coverage (
+    asset_id        TEXT NOT NULL,
+    environment     TEXT NOT NULL,
+    fingerprint     TEXT NOT NULL,
+    vars_hash       TEXT NOT NULL,
+    interval_start  TEXT NOT NULL DEFAULT '',
+    interval_end    TEXT NOT NULL DEFAULT '',
+    materialized_at TEXT NOT NULL,
+    own_content     TEXT NOT NULL DEFAULT '',
+    PRIMARY KEY (asset_id, environment, fingerprint, vars_hash, interval_start)
+);
+
+CREATE INDEX IF NOT EXISTS idx_renart_coverage_selection ON renart_coverage
+    (environment, vars_hash, asset_id);
+
+-- Snapshot store (queried by the snapshot package directly, not sqlc).
+CREATE TABLE IF NOT EXISTS renart_blobs (
+    hash    TEXT PRIMARY KEY,
+    content BLOB NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS renart_snapshots (
+    version_id  TEXT PRIMARY KEY,
+    pipeline_id TEXT NOT NULL,
+    merkle_root TEXT NOT NULL,
+    manifest    TEXT NOT NULL,
+    git_sha     TEXT,
+    git_dirty   INTEGER,
+    created_at  TEXT NOT NULL,
+    created_by  TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_renart_snapshots_pipeline
+    ON renart_snapshots (pipeline_id, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS renart_schedules (
+    pipeline_id         TEXT NOT NULL,
+    environment         TEXT NOT NULL,
+    snapshot_version_id TEXT NOT NULL DEFAULT '',
+    cron                TEXT NOT NULL,
+    timezone            TEXT NOT NULL DEFAULT 'UTC',
+    vars                TEXT,
+    catchup_policy      TEXT NOT NULL DEFAULT 'skip',
+    status              TEXT NOT NULL DEFAULT 'active',
+    archived_reason     TEXT NOT NULL DEFAULT '',
+    next_run_at         TEXT,
+    created_at          TEXT NOT NULL,
+    updated_at          TEXT NOT NULL,
+    PRIMARY KEY (pipeline_id, environment)
 );

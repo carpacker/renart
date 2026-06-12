@@ -10,8 +10,10 @@ import (
 	"time"
 
 	"go.uber.org/zap"
+	"renart/internal/web/bus"
 	"renart/internal/web/events"
 	"renart/internal/web/freshness"
+	"renart/internal/web/identity"
 	webmodel "renart/internal/web/model"
 )
 
@@ -39,6 +41,7 @@ type WorkspaceCoordinatorDependencies struct {
 	Freshness        *freshness.Tracker
 	RefreshHook      func(context.Context) error
 	Logger           *zap.Logger
+	Events           *bus.Bus
 }
 
 type WorkspaceCoordinator struct {
@@ -127,6 +130,7 @@ func (c *WorkspaceCoordinator) PushUpdate(ctx context.Context, eventType, eventP
 			c.deps.Freshness.RecordContentChange(name, now)
 		}
 	}
+	c.emitAssetSaved(changed, now)
 
 	c.deps.Hub.Publish(WorkspaceEvent{
 		Type:            eventType,
@@ -155,6 +159,7 @@ func (c *WorkspaceCoordinator) PushUpdateImmediateWithChangedIDs(ctx context.Con
 			c.deps.Freshness.RecordContentChange(name, now)
 		}
 	}
+	c.emitAssetSaved(changed, now)
 
 	c.deps.Hub.PublishImmediate(WorkspaceEvent{
 		Type:            eventType,
@@ -182,10 +187,11 @@ func (c *WorkspaceCoordinator) CurrentStateLiteEvent() WorkspaceEvent {
 }
 
 type workspaceAssetEntry struct {
-	id        string
-	name      string
-	path      string
-	upstreams []string
+	id           string
+	name         string
+	path         string
+	upstreams    []string
+	pipelineUUID string
 }
 
 func (c *WorkspaceCoordinator) buildAssetIndex() ([]workspaceAssetEntry, map[string]string) {
@@ -194,11 +200,40 @@ func (c *WorkspaceCoordinator) buildAssetIndex() ([]workspaceAssetEntry, map[str
 	nameToID := make(map[string]string)
 	for _, p := range state.Pipelines {
 		for _, a := range p.Assets {
-			all = append(all, workspaceAssetEntry{id: a.ID, name: a.Name, path: a.Path, upstreams: a.Upstreams})
+			all = append(all, workspaceAssetEntry{id: a.ID, name: a.Name, path: a.Path, upstreams: a.Upstreams, pipelineUUID: p.UUID})
 			nameToID[a.Name] = a.ID
 		}
 	}
 	return all, nameToID
+}
+
+// emitAssetSaved publishes AssetSaved bus events for the changed encoded
+// asset IDs. Both API saves and watcher-detected external edits funnel
+// through the coordinator, so this is the single seam for save observation.
+func (c *WorkspaceCoordinator) emitAssetSaved(changedAssetIDs []string, at time.Time) {
+	if c.deps.Events == nil || len(changedAssetIDs) == 0 {
+		return
+	}
+	changed := make(map[string]struct{}, len(changedAssetIDs))
+	for _, id := range changedAssetIDs {
+		changed[id] = struct{}{}
+	}
+	assets, _ := c.buildAssetIndex()
+	for _, asset := range assets {
+		if _, ok := changed[asset.id]; !ok {
+			continue
+		}
+		if asset.pipelineUUID == "" || asset.name == "" {
+			continue
+		}
+		c.deps.Events.EmitAssetSaved(bus.AssetSaved{
+			PipelineUUID: asset.pipelineUUID,
+			AssetID:      identity.AssetID(asset.pipelineUUID, asset.name),
+			AssetName:    asset.name,
+			Path:         asset.path,
+			SavedAt:      at,
+		})
+	}
 }
 
 func buildDownstreamIndex(assets []workspaceAssetEntry, nameToID map[string]string) map[string][]string {

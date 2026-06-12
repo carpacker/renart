@@ -26,16 +26,21 @@ const pipelineRunQueue = "renart_pipeline_runs"
 type PipelineSource func(context.Context) ([]PipelineSchedule, error)
 
 type Service struct {
-	store        *Store
-	runner       func(context.Context, RunRequest, func(string)) RunResult
-	pipelines    PipelineSource
-	publish      func(any)
-	stateDir     string
-	lock         *flock.Flock
-	riverClient  *river.Client[*sql.Tx]
-	mu           sync.Mutex
-	schedulerOn  bool
-	ownerMessage string
+	store                 *Store
+	runner                func(context.Context, RunRequest, func(string)) RunResult
+	pipelines             PipelineSource
+	publish               func(any)
+	stateDir              string
+	housekeeping          func(context.Context) error
+	resolvePipelineRef    func(context.Context, string) (PipelineRef, bool)
+	defaultEnvironment    func() string
+	pipelineIntervalAware func(context.Context, string) bool
+	deployPipeline        func(context.Context, string) (string, error)
+	lock                  *flock.Flock
+	riverClient           *river.Client[*sql.Tx]
+	mu                    sync.Mutex
+	schedulerOn           bool
+	ownerMessage          string
 }
 
 type Options struct {
@@ -44,18 +49,39 @@ type Options struct {
 	Pipelines PipelineSource
 	Publish   func(any)
 	StateDir  string
+	// Housekeeping runs daily as a River periodic job (materialization-log
+	// retention pruning and similar maintenance).
+	Housekeeping func(context.Context) error
+	// ResolvePipelineRef maps a stable pipeline UUID to its current
+	// workspace incarnation; ok=false means the pipeline file is gone
+	// (deleted or on another branch).
+	ResolvePipelineRef func(context.Context, string) (PipelineRef, bool)
+	// DefaultEnvironment names the environment legacy single-env schedules
+	// are migrated to.
+	DefaultEnvironment func() string
+	// PipelineIntervalAware reports whether the pipeline has interval-aware
+	// assets; the backfill catch-up policy is only legal for those.
+	PipelineIntervalAware func(context.Context, string) bool
+	// DeployPipeline snapshots the working tree and returns the new
+	// version ID (the "deploy now" path when enabling a schedule).
+	DeployPipeline func(context.Context, string) (string, error)
 }
 
 type pipelineRunJobArgs struct {
 	RunID        string     `json:"run_id,omitempty" river:"unique"`
 	PipelineID   string     `json:"pipeline_id,omitempty" river:"unique"`
 	PipelineName string     `json:"pipeline_name,omitempty"`
-	Environment  string     `json:"environment,omitempty"`
-	Trigger      RunTrigger `json:"trigger,omitempty"`
-	Schedule     string     `json:"schedule,omitempty"`
-	Timezone     string     `json:"timezone,omitempty"`
-	Start        string     `json:"start,omitempty"`
-	End          string     `json:"end,omitempty"`
+	// PipelineUUID is set for per-environment scheduled runs; together with
+	// Environment and the interval it forms the unique logical-run key, so
+	// restarts, leader churn, and catch-up can never double-enqueue.
+	PipelineUUID      string     `json:"pipeline_uuid,omitempty" river:"unique"`
+	Environment       string     `json:"environment,omitempty" river:"unique"`
+	Trigger           RunTrigger `json:"trigger,omitempty"`
+	Schedule          string     `json:"schedule,omitempty"`
+	Timezone          string     `json:"timezone,omitempty"`
+	Start             string     `json:"start,omitempty" river:"unique"`
+	End               string     `json:"end,omitempty" river:"unique"`
+	SnapshotVersionID string     `json:"snapshot_version_id,omitempty"`
 }
 
 func (pipelineRunJobArgs) Kind() string { return "renart-pipeline-run" }
@@ -73,6 +99,22 @@ func (w *pipelineRunWorker) Work(ctx context.Context, job *river.Job[pipelineRun
 	return w.service.execute(ctx, run)
 }
 
+type housekeepingJobArgs struct{}
+
+func (housekeepingJobArgs) Kind() string { return "renart-housekeeping" }
+
+type housekeepingWorker struct {
+	river.WorkerDefaults[housekeepingJobArgs]
+	service *Service
+}
+
+func (w *housekeepingWorker) Work(ctx context.Context, job *river.Job[housekeepingJobArgs]) error {
+	if w.service.housekeeping == nil {
+		return nil
+	}
+	return w.service.housekeeping(ctx)
+}
+
 type cronPeriodicSchedule struct {
 	schedule cron.Schedule
 }
@@ -82,7 +124,18 @@ func (s cronPeriodicSchedule) Next(current time.Time) time.Time {
 }
 
 func New(options Options) *Service {
-	return &Service{store: options.Store, runner: options.Runner, pipelines: options.Pipelines, publish: options.Publish, stateDir: options.StateDir}
+	return &Service{
+		store:                 options.Store,
+		runner:                options.Runner,
+		pipelines:             options.Pipelines,
+		publish:               options.Publish,
+		stateDir:              options.StateDir,
+		housekeeping:          options.Housekeeping,
+		resolvePipelineRef:    options.ResolvePipelineRef,
+		defaultEnvironment:    options.DefaultEnvironment,
+		pipelineIntervalAware: options.PipelineIntervalAware,
+		deployPipeline:        options.DeployPipeline,
+	}
 }
 
 func (s *Service) Start(ctx context.Context) error {
@@ -97,6 +150,7 @@ func (s *Service) Start(ctx context.Context) error {
 	}
 	workers := river.NewWorkers()
 	river.AddWorker(workers, &pipelineRunWorker{service: s})
+	river.AddWorker(workers, &housekeepingWorker{service: s})
 	client, err := river.NewClient(riversqlite.New(s.store.db), &river.Config{
 		CompletedJobRetentionPeriod: 24 * time.Hour,
 		DiscardedJobRetentionPeriod: 7 * 24 * time.Hour,
@@ -174,13 +228,14 @@ func (s *Service) clearRiverClient(client *river.Client[*sql.Tx]) {
 	s.mu.Unlock()
 }
 
+// Reconcile diffs the persisted (pipeline, environment) schedule rows
+// against the workspace and the running River periodic jobs. Pipelines
+// whose files are gone get archived tombstones (run history is untouched);
+// tombstones whose pipeline reappears — same UUID, e.g. after a branch
+// switch — are reactivated. Catch-up policies are applied for active rows.
 func (s *Service) Reconcile(ctx context.Context) error {
-	if s == nil || !s.schedulerOn || s.pipelines == nil {
+	if s == nil || !s.schedulerOn {
 		return nil
-	}
-	pipelines, err := s.pipelines(ctx)
-	if err != nil {
-		return err
 	}
 	s.mu.Lock()
 	client := s.riverClient
@@ -188,26 +243,195 @@ func (s *Service) Reconcile(ctx context.Context) error {
 	if client == nil {
 		return nil
 	}
-	jobs := make([]*river.PeriodicJob, 0, len(pipelines))
-	for _, item := range pipelines {
-		item := item
-		if err := s.applyScheduleSettings(ctx, &item); err != nil {
-			return err
-		}
-		if !item.Enabled || strings.TrimSpace(item.Schedule) == "" {
+
+	if err := s.migrateLegacySchedules(ctx); err != nil {
+		return err
+	}
+
+	rows, err := s.store.ListEnvSchedules(ctx)
+	if err != nil {
+		return err
+	}
+
+	now := time.Now()
+	jobs := make([]*river.PeriodicJob, 0, len(rows)+1)
+	for _, row := range rows {
+		row := row
+		ref, exists := s.resolveRef(ctx, row.PipelineUUID)
+
+		switch row.Status {
+		case ScheduleStatusActive, ScheduleStatusPaused:
+			if !exists {
+				_ = s.store.SetEnvScheduleStatus(ctx, row.PipelineUUID, row.Environment, ScheduleStatusArchived, ArchivedReasonMissing)
+				continue
+			}
+		case ScheduleStatusArchived:
+			if exists && row.ArchivedReason == ArchivedReasonMissing {
+				_ = s.store.SetEnvScheduleStatus(ctx, row.PipelineUUID, row.Environment, ScheduleStatusActive, "")
+				row.Status = ScheduleStatusActive
+			} else {
+				continue
+			}
+		default:
 			continue
 		}
-		schedule, err := parseSchedule(item.Schedule, item.Timezone)
-		if err != nil {
+		if row.Status != ScheduleStatusActive {
 			continue
 		}
+
+		schedule, parseErr := parseSchedule(row.Cron, row.Timezone)
+		if parseErr != nil {
+			continue
+		}
+		next := schedule.Next(now)
+		_ = s.store.SetEnvScheduleNextRun(ctx, row.PipelineUUID, row.Environment, &next)
+		s.catchUp(ctx, client, row, ref, schedule)
+
 		jobs = append(jobs, river.NewPeriodicJob(cronPeriodicSchedule{schedule: schedule}, func() (river.JobArgs, *river.InsertOpts) {
-			return pipelineRunJobArgs{PipelineID: item.PipelineID, PipelineName: item.PipelineName, Trigger: RunTriggerSchedule, Schedule: item.Schedule, Timezone: item.Timezone}, pipelineRunInsertOpts()
-		}, &river.PeriodicJobOpts{ID: "pipeline:" + item.PipelineID}))
+			args := pipelineRunJobArgs{
+				PipelineUUID:      row.PipelineUUID,
+				PipelineName:      ref.Name,
+				Environment:       row.Environment,
+				Trigger:           RunTriggerSchedule,
+				Schedule:          row.Cron,
+				Timezone:          row.Timezone,
+				SnapshotVersionID: row.SnapshotVersionID,
+			}
+			if start, end, ok := previousScheduleInterval(schedule, time.Now().UTC()); ok {
+				args.Start = start.UTC().Format(time.RFC3339Nano)
+				args.End = end.UTC().Format(time.RFC3339Nano)
+			}
+			return args, pipelineRunInsertOpts()
+		}, &river.PeriodicJobOpts{ID: "schedule:" + row.PipelineUUID + ":" + row.Environment}))
+	}
+
+	if s.housekeeping != nil {
+		jobs = append(jobs, river.NewPeriodicJob(river.PeriodicInterval(24*time.Hour), func() (river.JobArgs, *river.InsertOpts) {
+			return housekeepingJobArgs{}, &river.InsertOpts{MaxAttempts: 1, Queue: pipelineRunQueue}
+		}, &river.PeriodicJobOpts{ID: "renart-housekeeping", RunOnStart: true}))
 	}
 	client.PeriodicJobs().Clear()
 	_, err = client.PeriodicJobs().AddManySafely(jobs)
 	return err
+}
+
+func (s *Service) resolveRef(ctx context.Context, pipelineUUID string) (PipelineRef, bool) {
+	if s.resolvePipelineRef == nil {
+		return PipelineRef{}, false
+	}
+	return s.resolvePipelineRef(ctx, pipelineUUID)
+}
+
+// migrateLegacySchedules converts the pre-Phase-5 single-environment
+// schedule settings (pipeline.yml schedule + enabled flag) into explicit
+// (pipeline, environment) rows, once. The implicit "default" path is gone
+// afterwards: every schedule names its environment.
+func (s *Service) migrateLegacySchedules(ctx context.Context) error {
+	count, err := s.store.CountEnvSchedules(ctx)
+	if err != nil || count > 0 {
+		return err
+	}
+	if s.pipelines == nil {
+		return nil
+	}
+	items, err := s.pipelines(ctx)
+	if err != nil {
+		return err
+	}
+	environment := "default"
+	if s.defaultEnvironment != nil {
+		if name := strings.TrimSpace(s.defaultEnvironment()); name != "" {
+			environment = name
+		}
+	}
+	for _, item := range items {
+		enabled, ok, err := s.store.ScheduleEnabled(ctx, item.PipelineID)
+		if err != nil {
+			return err
+		}
+		if !ok || !enabled || strings.TrimSpace(item.Schedule) == "" || item.PipelineUUID == "" {
+			continue
+		}
+		policy := CatchupSkip
+		if item.Catchup {
+			policy = CatchupRunOnce
+		}
+		// Migrated rows keep snapshot_version_id empty: they execute the
+		// latest snapshot if one exists, else the working tree, preserving
+		// pre-migration behavior until the user deploys.
+		if err := s.store.UpsertEnvSchedule(ctx, EnvSchedule{
+			PipelineUUID:  item.PipelineUUID,
+			Environment:   environment,
+			Cron:          strings.TrimSpace(item.Schedule),
+			Timezone:      item.Timezone,
+			CatchupPolicy: policy,
+			Status:        ScheduleStatusActive,
+		}); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func watermarkKey(row EnvSchedule) string {
+	return row.PipelineUUID + "|" + row.Environment
+}
+
+// catchUp applies the schedule's catch-up policy for intervals missed while
+// the process was down (laptop closed overnight).
+func (s *Service) catchUp(ctx context.Context, client *river.Client[*sql.Tx], row EnvSchedule, ref PipelineRef, schedule cron.Schedule) {
+	key := watermarkKey(row)
+	now := time.Now().UTC()
+	_, prevEnd, found := previousScheduleInterval(schedule, now)
+	if !found {
+		return
+	}
+	last, ok, err := s.store.LastInterval(ctx, key)
+	if err != nil {
+		return
+	}
+	if !ok {
+		// First reconcile for this schedule: start tracking from here, no
+		// retroactive catch-up.
+		_ = s.store.SetInterval(ctx, key, prevEnd)
+		return
+	}
+	if !last.Before(prevEnd) {
+		return
+	}
+
+	insertCatchupJob := func(start, end time.Time) {
+		args := pipelineRunJobArgs{
+			PipelineUUID:      row.PipelineUUID,
+			PipelineName:      ref.Name,
+			Environment:       row.Environment,
+			Trigger:           RunTriggerSchedule,
+			Schedule:          row.Cron,
+			Timezone:          row.Timezone,
+			Start:             start.UTC().Format(time.RFC3339Nano),
+			End:               end.UTC().Format(time.RFC3339Nano),
+			SnapshotVersionID: row.SnapshotVersionID,
+		}
+		_, _ = client.Insert(ctx, args, pipelineRunInsertOpts())
+	}
+
+	switch row.CatchupPolicy {
+	case CatchupRunOnce:
+		insertCatchupJob(last, prevEnd)
+	case CatchupBackfill:
+		cursor := last
+		const maxBackfillRuns = 100
+		for count := 0; count < maxBackfillRuns; count++ {
+			next := schedule.Next(cursor)
+			if !next.After(cursor) || next.After(prevEnd) {
+				break
+			}
+			insertCatchupJob(cursor, next)
+			cursor = next
+		}
+	default: // CatchupSkip
+		_ = s.store.SetInterval(ctx, key, prevEnd)
+	}
 }
 
 func (s *Service) ListSchedules(ctx context.Context) ([]PipelineSchedule, error) {
@@ -235,9 +459,35 @@ func (s *Service) ListSchedules(ctx context.Context) ([]PipelineSchedule, error)
 	return items, nil
 }
 
+// applyScheduleSettings derives the legacy single-flag Enabled view from
+// the per-environment schedule rows: enabled means any active row exists
+// for the pipeline. Falls back to the pre-migration settings table while
+// no rows exist yet.
 func (s *Service) applyScheduleSettings(ctx context.Context, item *PipelineSchedule) error {
 	if s.store == nil || item == nil {
 		return nil
+	}
+	if item.PipelineUUID != "" {
+		rows, err := s.store.ListEnvSchedules(ctx)
+		if err != nil {
+			return err
+		}
+		seen := false
+		enabled := false
+		for _, row := range rows {
+			if row.PipelineUUID != item.PipelineUUID {
+				continue
+			}
+			seen = true
+			if row.Status == ScheduleStatusActive {
+				enabled = true
+				break
+			}
+		}
+		if seen {
+			item.Enabled = enabled && strings.TrimSpace(item.Schedule) != ""
+			return nil
+		}
 	}
 	enabled, ok, err := s.store.ScheduleEnabled(ctx, item.PipelineID)
 	if err != nil {
@@ -247,6 +497,163 @@ func (s *Service) applyScheduleSettings(ctx context.Context, item *PipelineSched
 		item.Enabled = enabled && strings.TrimSpace(item.Schedule) != ""
 	}
 	return nil
+}
+
+// ListAllEnvSchedules returns the live (active/paused) rows and the
+// archived tombstones, with presentation fields resolved.
+func (s *Service) ListAllEnvSchedules(ctx context.Context) (live []EnvSchedule, archived []EnvSchedule, err error) {
+	rows, err := s.store.ListEnvSchedules(ctx)
+	if err != nil {
+		return nil, nil, err
+	}
+	live = make([]EnvSchedule, 0, len(rows))
+	archived = make([]EnvSchedule, 0)
+	for _, row := range rows {
+		if ref, ok := s.resolveRef(ctx, row.PipelineUUID); ok {
+			row.PipelineID = ref.EncodedID
+			row.PipelineName = ref.Name
+		}
+		if row.Status == ScheduleStatusActive {
+			if schedule, parseErr := parseSchedule(row.Cron, row.Timezone); parseErr == nil {
+				next := schedule.Next(time.Now())
+				row.NextRunAt = &next
+			}
+		}
+		if row.PipelineID != "" {
+			if list, listErr := s.store.List(ctx, RunFilter{PipelineID: row.PipelineID, Environment: row.Environment, Limit: 1}); listErr == nil && len(list.Runs) > 0 {
+				lastRun := list.Runs[0]
+				row.LastRun = &lastRun
+			}
+		}
+		if row.Status == ScheduleStatusArchived {
+			archived = append(archived, row)
+		} else {
+			live = append(live, row)
+		}
+	}
+	sort.Slice(live, func(i, j int) bool {
+		if live[i].PipelineName != live[j].PipelineName {
+			return live[i].PipelineName < live[j].PipelineName
+		}
+		return live[i].Environment < live[j].Environment
+	})
+	return live, archived, nil
+}
+
+// UpsertEnvSchedule creates or updates the schedule for one (pipeline,
+// environment). Enabling requires a deployed snapshot: pass an explicit
+// version, set DeployNow, or rely on an already-pinned version.
+func (s *Service) UpsertEnvSchedule(ctx context.Context, pipelineUUID string, req UpsertEnvScheduleRequest) (EnvSchedule, error) {
+	environment := strings.TrimSpace(req.Environment)
+	if environment == "" {
+		return EnvSchedule{}, errors.New("environment is required: per-environment schedules have no implicit default")
+	}
+	cronExpr := strings.TrimSpace(req.Cron)
+	if cronExpr == "" {
+		return EnvSchedule{}, errors.New("cron expression is required")
+	}
+	timezone := strings.TrimSpace(req.Timezone)
+	if timezone == "" {
+		timezone = "UTC"
+	}
+	if _, err := parseSchedule(cronExpr, timezone); err != nil {
+		return EnvSchedule{}, fmt.Errorf("invalid cron expression: %w", err)
+	}
+	policy := req.CatchupPolicy
+	if policy == "" {
+		policy = CatchupSkip
+	}
+	switch policy {
+	case CatchupSkip, CatchupRunOnce, CatchupBackfill:
+	default:
+		return EnvSchedule{}, fmt.Errorf("invalid catchup policy %q", policy)
+	}
+	if policy == CatchupBackfill && s.pipelineIntervalAware != nil && !s.pipelineIntervalAware(ctx, pipelineUUID) {
+		return EnvSchedule{}, errors.New("backfill catch-up requires interval-aware assets (incremental materialization)")
+	}
+
+	existing, found, err := s.store.GetEnvSchedule(ctx, pipelineUUID, environment)
+	if err != nil {
+		return EnvSchedule{}, err
+	}
+
+	snapshotVersionID := strings.TrimSpace(req.SnapshotVersionID)
+	if snapshotVersionID == "" && found {
+		snapshotVersionID = existing.SnapshotVersionID
+	}
+	if req.DeployNow {
+		if s.deployPipeline == nil {
+			return EnvSchedule{}, errors.New("deploy is not available")
+		}
+		deployed, deployErr := s.deployPipeline(ctx, pipelineUUID)
+		if deployErr != nil {
+			return EnvSchedule{}, fmt.Errorf("deploy failed: %w", deployErr)
+		}
+		snapshotVersionID = deployed
+	}
+	if snapshotVersionID == "" && !found {
+		return EnvSchedule{}, errors.New("a deployed snapshot is required to schedule this pipeline; deploy it first or pass deploy_now")
+	}
+
+	status := ScheduleStatusActive
+	if req.Paused {
+		status = ScheduleStatusPaused
+	}
+	schedule := EnvSchedule{
+		PipelineUUID:      pipelineUUID,
+		Environment:       environment,
+		SnapshotVersionID: snapshotVersionID,
+		Cron:              cronExpr,
+		Timezone:          timezone,
+		Vars:              req.Vars,
+		CatchupPolicy:     policy,
+		Status:            status,
+	}
+	if found {
+		schedule.CreatedAt = existing.CreatedAt
+	}
+	if err := s.store.UpsertEnvSchedule(ctx, schedule); err != nil {
+		return EnvSchedule{}, err
+	}
+	if err := s.Reconcile(ctx); err != nil {
+		return EnvSchedule{}, err
+	}
+	updated, _, err := s.store.GetEnvSchedule(ctx, pipelineUUID, environment)
+	if err != nil {
+		return EnvSchedule{}, err
+	}
+	if ref, ok := s.resolveRef(ctx, pipelineUUID); ok {
+		updated.PipelineID = ref.EncodedID
+		updated.PipelineName = ref.Name
+	}
+	return updated, nil
+}
+
+// SetEnvScheduleLifecycle pauses or resumes one (pipeline, environment).
+func (s *Service) SetEnvScheduleLifecycle(ctx context.Context, pipelineUUID, environment string, status ScheduleStatus) error {
+	if status != ScheduleStatusActive && status != ScheduleStatusPaused {
+		return fmt.Errorf("invalid schedule status %q", status)
+	}
+	_, found, err := s.store.GetEnvSchedule(ctx, pipelineUUID, environment)
+	if err != nil {
+		return err
+	}
+	if !found {
+		return errors.New("schedule not found")
+	}
+	if err := s.store.SetEnvScheduleStatus(ctx, pipelineUUID, environment, status, ""); err != nil {
+		return err
+	}
+	return s.Reconcile(ctx)
+}
+
+// ArchiveEnvSchedule is the user-facing delete: the row becomes a tombstone
+// (run history stays addressable) and is never auto-restored.
+func (s *Service) ArchiveEnvSchedule(ctx context.Context, pipelineUUID, environment string) error {
+	if err := s.store.SetEnvScheduleStatus(ctx, pipelineUUID, environment, ScheduleStatusArchived, ArchivedReasonUser); err != nil {
+		return err
+	}
+	return s.Reconcile(ctx)
 }
 
 func (s *Service) Trigger(ctx context.Context, pipeline PipelineSchedule, req TriggerRequest) (PipelineRun, error) {
@@ -314,10 +721,27 @@ func (s *Service) prepareRun(ctx context.Context, args pipelineRunJobArgs) (Pipe
 		return run, true, nil
 	}
 
-	if strings.TrimSpace(args.PipelineID) == "" {
+	// Per-environment scheduled runs: resolve the stable UUID to the
+	// current workspace incarnation; a missing pipeline skips silently (the
+	// reconciler will archive the schedule).
+	pipelineUUID := strings.TrimSpace(args.PipelineUUID)
+	encodedPipelineID := strings.TrimSpace(args.PipelineID)
+	pipelineName := args.PipelineName
+	if pipelineUUID != "" {
+		ref, ok := s.resolveRef(ctx, pipelineUUID)
+		if !ok {
+			return PipelineRun{}, false, nil
+		}
+		encodedPipelineID = ref.EncodedID
+		if ref.Name != "" {
+			pipelineName = ref.Name
+		}
+	}
+
+	if encodedPipelineID == "" {
 		return PipelineRun{}, false, errors.New("pipeline id is required")
 	}
-	active, err := s.store.HasActiveRun(ctx, args.PipelineID)
+	active, err := s.store.HasActiveRun(ctx, encodedPipelineID)
 	if err != nil || active {
 		return PipelineRun{}, false, err
 	}
@@ -325,6 +749,7 @@ func (s *Service) prepareRun(ctx context.Context, args pipelineRunJobArgs) (Pipe
 	if trigger == "" {
 		trigger = RunTriggerSchedule
 	}
+	args.PipelineID = encodedPipelineID
 	start, end := s.scheduledWindow(ctx, args, time.Now().UTC())
 	if parsed := parseOptionalRequestTime(args.Start); parsed != nil {
 		start = *parsed
@@ -336,19 +761,24 @@ func (s *Service) prepareRun(ctx context.Context, args pipelineRunJobArgs) (Pipe
 		start = end.Add(-time.Minute)
 	}
 	run := PipelineRun{
-		PipelineID:  args.PipelineID,
-		Pipeline:    args.PipelineName,
-		Environment: strings.TrimSpace(args.Environment),
-		Trigger:     trigger,
-		Status:      RunStatusQueued,
-		WinStart:    &start,
-		WinEnd:      &end,
+		PipelineID:        encodedPipelineID,
+		PipelineUUID:      pipelineUUID,
+		Pipeline:          pipelineName,
+		Environment:       strings.TrimSpace(args.Environment),
+		Trigger:           trigger,
+		Status:            RunStatusQueued,
+		WinStart:          &start,
+		WinEnd:            &end,
+		SnapshotVersionID: args.SnapshotVersionID,
 	}
 	id, err := s.store.Create(ctx, run)
 	if err != nil {
 		return PipelineRun{}, false, err
 	}
 	run.ID = id
+	// Create persists SnapshotVersionID but PipelineUUID is in-memory only;
+	// re-attach it after the round trip for the watermark update.
+	run.PipelineUUID = pipelineUUID
 	s.publishRunEvent("run.queued", run)
 	return run, true, nil
 }
@@ -374,7 +804,7 @@ func (s *Service) execute(ctx context.Context, run PipelineRun) error {
 	run.StartedAt = &started
 	s.publishRunEvent("run.started", run)
 
-	req := RunRequest{PipelineID: run.PipelineID, Environment: run.Environment}
+	req := RunRequest{RunID: run.ID, PipelineID: run.PipelineID, Environment: run.Environment, SnapshotVersionID: run.SnapshotVersionID}
 	req.OnStep = func(event RunStepEvent) {
 		s.persistRunStep(ctx, run.ID, event)
 	}
@@ -395,7 +825,11 @@ func (s *Service) execute(ctx context.Context, run PipelineRun) error {
 		return err
 	}
 	if status == RunStatusSuccess && run.Trigger == RunTriggerSchedule && run.WinEnd != nil {
-		_ = s.store.SetInterval(ctx, run.PipelineID, *run.WinEnd)
+		watermark := run.PipelineID
+		if run.PipelineUUID != "" {
+			watermark = run.PipelineUUID + "|" + run.Environment
+		}
+		_ = s.store.SetInterval(ctx, watermark, *run.WinEnd)
 	}
 	finished := time.Now().UTC()
 	_ = s.store.FinishOpenSteps(ctx, run.ID, status, finished, runErr)

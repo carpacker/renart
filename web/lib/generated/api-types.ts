@@ -41,16 +41,24 @@ export type WebAsset = {
 
 export type WebPipeline = {
   id: string;
+  uuid?: string;
   name: string;
   path: string;
   schedule?: string;
   assets: WebAsset[];
 };
 
+export type EnvironmentPolicy = {
+  protected: boolean;
+  deployed_only: boolean;
+  confirm_destructive: boolean;
+};
+
 export type WorkspaceState = {
   pipelines: WebPipeline[];
   connections: Record<string, string>;
   selected_environment: string;
+  environment_policies?: Record<string, EnvironmentPolicy>;
   errors: string[];
   updated_at: string;
   metadata: Record<string, string[]>;

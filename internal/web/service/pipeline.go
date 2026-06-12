@@ -12,6 +12,7 @@ import (
 	"github.com/bruin-data/bruin/pkg/pipeline"
 	"github.com/spf13/afero"
 	"gopkg.in/yaml.v3"
+	"renart/internal/web/identity"
 	webmodel "renart/internal/web/model"
 	"renart/internal/web/scheduler"
 )
@@ -48,7 +49,11 @@ func (s *PipelineService) Create(ctx context.Context, relPath, name, content str
 		content = fmt.Sprintf("name: %s\n", name)
 	}
 
-	if err := afero.WriteFile(fs, filepath.Join(absPath, "pipeline.yml"), []byte(content), 0o644); err != nil {
+	pipelineYmlPath := filepath.Join(absPath, "pipeline.yml")
+	if err := afero.WriteFile(fs, pipelineYmlPath, []byte(content), 0o644); err != nil {
+		return "", err
+	}
+	if _, _, err := identity.EnsurePipelineID(fs, pipelineYmlPath); err != nil {
 		return "", err
 	}
 
@@ -105,6 +110,7 @@ func (s *PipelineService) GetSchedule(ctx context.Context, pipelineID string) (s
 	schedule := strings.TrimSpace(string(parsed.Schedule))
 	return scheduler.PipelineSchedule{
 		PipelineID:   pipelineID,
+		PipelineUUID: strings.TrimSpace(parsed.LegacyID),
 		PipelineName: parsed.Name,
 		PipelinePath: filepath.ToSlash(relPath),
 		Schedule:     schedule,

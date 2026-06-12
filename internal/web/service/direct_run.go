@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/bruin-data/bruin/pkg/config"
@@ -151,11 +152,14 @@ func (e *HybridBruinExecutor) RunPipeline(ctx context.Context, req RunPipelineRe
 	if foundPipeline == nil {
 		return nil, fmt.Errorf("pipeline not found")
 	}
-	repoRoot, err := git.FindRepoFromPath(resolvedTarget)
-	if err != nil {
-		return nil, fmt.Errorf("failed to find the git repository root: %w", err)
+	configPath := strings.TrimSpace(req.ConfigPath)
+	if configPath == "" {
+		repoRoot, repoErr := git.FindRepoFromPath(resolvedTarget)
+		if repoErr != nil {
+			return nil, fmt.Errorf("failed to find the git repository root: %w", repoErr)
+		}
+		configPath = filepath.Join(repoRoot.Path, ".bruin.yml")
 	}
-	configPath := filepath.Join(repoRoot.Path, ".bruin.yml")
 	cfg, err := loadSelectedConfig(configPath, req.Environment)
 	if err != nil {
 		return nil, err

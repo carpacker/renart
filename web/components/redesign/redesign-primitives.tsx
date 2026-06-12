@@ -18,6 +18,7 @@ import {
 } from "@/components/ui/delimited-card";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import type { AssetStaleness, AssetStalenessStatus } from "@/lib/api-staleness";
 import { cn } from "@/lib/utils";
 
 import { RedesignAsset, integrations, kindMeta } from "./redesign-data";
@@ -132,6 +133,47 @@ export function StatusPill({ status }: { status: string }) {
   return <span className="inline-flex items-center gap-1 rounded-full bg-muted px-1.5 py-0.5 text-[11px] text-muted-foreground"><Circle className="size-3" />Idle</span>;
 }
 
+const stalenessMeta: Record<AssetStalenessStatus, { label: string; className: string; dotClassName: string }> = {
+  fresh: { label: "Fresh", className: "bg-emerald-100 text-emerald-700", dotClassName: "bg-emerald-500" },
+  stale_edited: { label: "Edited", className: "bg-amber-100 text-amber-700", dotClassName: "bg-amber-500" },
+  stale_upstream: { label: "Upstream changed", className: "bg-amber-50 text-amber-600", dotClassName: "bg-amber-400" },
+  partial: { label: "Partial", className: "bg-sky-100 text-sky-700", dotClassName: "bg-sky-500" },
+  never_built: { label: "Never built", className: "bg-zinc-200 text-zinc-700", dotClassName: "bg-zinc-400" },
+  missing: { label: "Missing", className: "bg-red-100 text-red-700", dotClassName: "bg-red-500" },
+};
+
+export function stalenessLabel(staleness: AssetStaleness) {
+  if (staleness.status === "partial" && staleness.total_seconds && staleness.total_seconds > 0) {
+    const day = 24 * 60 * 60;
+    if (staleness.total_seconds >= day) {
+      return `${Math.floor((staleness.covered_seconds ?? 0) / day)}/${Math.round(staleness.total_seconds / day)} days`;
+    }
+    const hour = 60 * 60;
+    return `${Math.floor((staleness.covered_seconds ?? 0) / hour)}/${Math.round(staleness.total_seconds / hour)} hours`;
+  }
+  return stalenessMeta[staleness.status]?.label ?? staleness.status;
+}
+
+export function StalenessBadge({ staleness, className }: { staleness?: AssetStaleness; className?: string }) {
+  if (!staleness) return null;
+  const meta = stalenessMeta[staleness.status];
+  if (!meta) return null;
+  return (
+    <span
+      data-staleness={staleness.status}
+      title={`Staleness: ${stalenessLabel(staleness)}`}
+      className={cn("inline-flex items-center gap-1 truncate rounded px-1.5 py-0.5 text-[10px]", meta.className, className)}
+    >
+      <span className={cn("size-1.5 shrink-0 rounded-full", meta.dotClassName)} />
+      {stalenessLabel(staleness)}
+    </span>
+  );
+}
+
+export function stalenessDotClassName(status: AssetStalenessStatus) {
+  return stalenessMeta[status]?.dotClassName ?? "bg-zinc-400";
+}
+
 export function AssetNode({ asset, selected }: { asset: RedesignAsset; selected?: boolean }) {
   const meta = kindMeta[asset.kind];
   const Icon = meta.icon;
@@ -154,7 +196,10 @@ export function AssetNode({ asset, selected }: { asset: RedesignAsset; selected?
           <span className={cn("truncate rounded px-1.5 py-0.5 text-[10px]", statusMeta.className)}>
             {statusMeta.label} · {asset.materializedAt}
           </span>
-          <IntegrationBadge name={asset.integration} />
+          <div className="flex items-center gap-1.5">
+            <StalenessBadge staleness={asset.staleness} />
+            <IntegrationBadge name={asset.integration} />
+          </div>
         </div>
       </div>
     </div>

@@ -1,5 +1,6 @@
 import { atom } from "jotai";
 
+import type { StalenessUpdatedEvent } from "@/lib/api-staleness";
 import type { PipelineRun, PipelineRunLogLine, PipelineRunStep } from "@/lib/types";
 
 export type AssetResultTab = "inspect" | "materialize";
@@ -42,3 +43,5 @@ export const assetResultsAtom = atom<AssetResultsState>({
 export const changedAssetIdsAtom = atom<Set<string>>(new Set<string>());
 
 export const schedulerRunEventAtom = atom<SchedulerRunEvent | null>(null);
+
+export const stalenessEventAtom = atom<StalenessUpdatedEvent | null>(null);

@@ -8,7 +8,8 @@ import {
   workspaceSyncSourceAtom,
 } from "@/lib/atoms/domains/workspace";
 import { getWorkspace } from "@/lib/api";
-import { SchedulerRunEvent, schedulerRunEventAtom } from "@/lib/atoms/domains/results";
+import type { StalenessUpdatedEvent } from "@/lib/api-staleness";
+import { SchedulerRunEvent, schedulerRunEventAtom, stalenessEventAtom } from "@/lib/atoms/domains/results";
 import { WebAsset, WorkspaceEvent, WorkspaceState } from "@/lib/types";
 
 function mergeWorkspaceWithPreservedContent(
@@ -77,10 +78,20 @@ function isWorkspaceEvent(payload: unknown): payload is WorkspaceEvent {
   );
 }
 
+function isStalenessEvent(payload: unknown): payload is StalenessUpdatedEvent {
+  return (
+    typeof payload === "object" &&
+    payload !== null &&
+    "type" in payload &&
+    payload.type === "staleness.updated"
+  );
+}
+
 export function useWorkspaceSync() {
   const workspace = useAtomValue(workspaceAtom);
   const setWorkspace = useSetAtom(workspaceAtom);
   const setSchedulerRunEvent = useSetAtom(schedulerRunEventAtom);
+  const setStalenessEvent = useSetAtom(stalenessEventAtom);
   const setWorkspaceSyncSource = useSetAtom(workspaceSyncSourceAtom);
 
   useEffect(() => {
@@ -106,6 +117,11 @@ export function useWorkspaceSync() {
 
         if (isSchedulerRunEvent(payload)) {
           setSchedulerRunEvent(payload);
+          return;
+        }
+
+        if (isStalenessEvent(payload)) {
+          setStalenessEvent(payload);
           return;
         }
 
@@ -151,7 +167,7 @@ export function useWorkspaceSync() {
       mounted = false;
       source.close();
     };
-  }, [setSchedulerRunEvent, setWorkspace, setWorkspaceSyncSource]);
+  }, [setSchedulerRunEvent, setStalenessEvent, setWorkspace, setWorkspaceSyncSource]);
 
   return workspace as WorkspaceState | null;
 }

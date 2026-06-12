@@ -23,6 +23,7 @@ const (
 
 type PipelineSchedule struct {
 	PipelineID   string     `json:"pipeline_id"`
+	PipelineUUID string     `json:"pipeline_uuid,omitempty"`
 	PipelineName string     `json:"pipeline_name"`
 	PipelinePath string     `json:"pipeline_path"`
 	Schedule     string     `json:"schedule"`
@@ -30,6 +31,75 @@ type PipelineSchedule struct {
 	Catchup      bool       `json:"catchup"`
 	Enabled      bool       `json:"enabled"`
 	NextRunAt    *time.Time `json:"next_run_at,omitempty"`
+}
+
+type CatchupPolicy string
+
+const (
+	CatchupSkip     CatchupPolicy = "skip"
+	CatchupRunOnce  CatchupPolicy = "run_once"
+	CatchupBackfill CatchupPolicy = "backfill"
+)
+
+type ScheduleStatus string
+
+const (
+	ScheduleStatusActive   ScheduleStatus = "active"
+	ScheduleStatusPaused   ScheduleStatus = "paused"
+	ScheduleStatusArchived ScheduleStatus = "archived"
+	// ScheduleStatusDelegated is reserved for cloud-executed schedules.
+	ScheduleStatusDelegated ScheduleStatus = "delegated"
+)
+
+const (
+	// ArchivedReasonMissing marks reconciler tombstones (pipeline file gone,
+	// e.g. branch switch); these auto-restore when the file reappears.
+	ArchivedReasonMissing = "missing"
+	// ArchivedReasonUser marks explicit deletions; never auto-restored.
+	ArchivedReasonUser = "user"
+)
+
+// EnvSchedule is one (pipeline, environment) schedule row — the unit of
+// schedule identity.
+type EnvSchedule struct {
+	PipelineUUID      string         `json:"pipeline_uuid"`
+	Environment       string         `json:"environment"`
+	SnapshotVersionID string         `json:"snapshot_version_id,omitempty"`
+	Cron              string         `json:"cron"`
+	Timezone          string         `json:"timezone"`
+	Vars              map[string]any `json:"vars,omitempty"`
+	CatchupPolicy     CatchupPolicy  `json:"catchup_policy"`
+	Status            ScheduleStatus `json:"status"`
+	ArchivedReason    string         `json:"archived_reason,omitempty"`
+	NextRunAt         *time.Time     `json:"next_run_at,omitempty"`
+	CreatedAt         time.Time      `json:"created_at"`
+	UpdatedAt         time.Time      `json:"updated_at"`
+
+	// Resolved presentation fields (not persisted).
+	PipelineID   string       `json:"pipeline_id,omitempty"` // path-encoded API ID
+	PipelineName string       `json:"pipeline_name,omitempty"`
+	LastRun      *PipelineRun `json:"last_run,omitempty"`
+}
+
+// PipelineRef resolves a stable pipeline UUID to its current workspace
+// incarnation.
+type PipelineRef struct {
+	EncodedID string
+	Name      string
+}
+
+// UpsertEnvScheduleRequest creates or updates a per-environment schedule.
+type UpsertEnvScheduleRequest struct {
+	Environment       string         `json:"environment"`
+	Cron              string         `json:"cron"`
+	Timezone          string         `json:"timezone"`
+	Vars              map[string]any `json:"vars,omitempty"`
+	CatchupPolicy     CatchupPolicy  `json:"catchup_policy,omitempty"`
+	SnapshotVersionID string         `json:"snapshot_version_id,omitempty"`
+	// DeployNow deploys the working tree and pins the schedule to the new
+	// snapshot when none exists yet.
+	DeployNow bool `json:"deploy_now,omitempty"`
+	Paused    bool `json:"paused,omitempty"`
 }
 
 type UpdateScheduleRequest struct {
@@ -47,9 +117,13 @@ type TriggerRequest struct {
 }
 
 type PipelineRun struct {
-	ID          string     `json:"id"`
-	PipelineID  string     `json:"pipeline_id"`
-	Pipeline    string     `json:"pipeline"`
+	ID         string `json:"id"`
+	PipelineID string `json:"pipeline_id"`
+	// PipelineUUID is the stable identity for per-environment scheduled
+	// runs. Not persisted; carried in memory so run completion can advance
+	// the (pipeline, environment) watermark.
+	PipelineUUID string `json:"pipeline_uuid,omitempty"`
+	Pipeline     string `json:"pipeline"`
 	Environment string     `json:"environment"`
 	Trigger     RunTrigger `json:"trigger"`
 	Status      RunStatus  `json:"status"`
@@ -59,6 +133,9 @@ type PipelineRun struct {
 	FinishedAt  *time.Time `json:"finished_at,omitempty"`
 	Error       string     `json:"error,omitempty"`
 	LogRef      string     `json:"log_ref,omitempty"`
+	// SnapshotVersionID records the deployed snapshot the run executed;
+	// empty for working-tree builds.
+	SnapshotVersionID string `json:"snapshot_version_id,omitempty"`
 }
 
 type PipelineRunStep struct {
@@ -104,11 +181,15 @@ type Context interface {
 }
 
 type RunRequest struct {
+	RunID       string
 	PipelineID  string
 	Environment string
 	Start       string
 	End         string
-	OnStep      func(RunStepEvent)
+	// SnapshotVersionID pins the deployed snapshot the run must execute;
+	// empty means "latest snapshot, else working tree".
+	SnapshotVersionID string
+	OnStep            func(RunStepEvent)
 }
 
 type RunStepEvent struct {

@@ -25,6 +25,9 @@ type RunPipelineRequest struct {
 	StartDate   string
 	EndDate     string
 	AssetEvent  func(ExecutionAssetEvent)
+	// ConfigPath overrides .bruin.yml discovery via the git repo root. Set
+	// for snapshot runs, whose target directory lives outside the workspace.
+	ConfigPath string
 }
 
 type ExecutionAssetEvent struct {

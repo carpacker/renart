@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"embed"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -53,6 +54,13 @@ func OpenStore(path string) (*Store, error) {
 	return store, nil
 }
 
+// DB exposes the underlying SQLite handle so sibling stores (the
+// materialization log, snapshots) share the same database and migration
+// lifecycle.
+func (s *Store) DB() *sql.DB {
+	return s.db
+}
+
 func (s *Store) Close() error {
 	if s == nil || s.db == nil {
 		return nil
@@ -90,20 +98,29 @@ func (s *Store) Create(ctx context.Context, run PipelineRun) (string, error) {
 		run.Status = RunStatusQueued
 	}
 	err := s.queries.CreateRun(ctx, storedb.CreateRunParams{
-		ID:          run.ID,
-		PipelineID:  run.PipelineID,
-		Pipeline:    run.Pipeline,
-		Environment: run.Environment,
-		Trigger:     string(run.Trigger),
-		Status:      string(run.Status),
-		WinStart:    nullTime(run.WinStart),
-		WinEnd:      nullTime(run.WinEnd),
-		StartedAt:   nullTime(run.StartedAt),
-		FinishedAt:  nullTime(run.FinishedAt),
-		Error:       stringValue(run.Error),
-		LogRef:      stringValue(run.LogRef),
+		ID:                run.ID,
+		PipelineID:        run.PipelineID,
+		Pipeline:          run.Pipeline,
+		Environment:       run.Environment,
+		Trigger:           string(run.Trigger),
+		Status:            string(run.Status),
+		WinStart:          nullTime(run.WinStart),
+		WinEnd:            nullTime(run.WinEnd),
+		StartedAt:         nullTime(run.StartedAt),
+		FinishedAt:        nullTime(run.FinishedAt),
+		Error:             stringValue(run.Error),
+		LogRef:            stringValue(run.LogRef),
+		SnapshotVersionID: stringValue(run.SnapshotVersionID),
 	})
 	return run.ID, err
+}
+
+// SetRunSnapshotVersion records which deployed snapshot a run executed.
+func (s *Store) SetRunSnapshotVersion(ctx context.Context, runID, versionID string) error {
+	return s.queries.SetRunSnapshotVersion(ctx, storedb.SetRunSnapshotVersionParams{
+		SnapshotVersionID: stringValue(versionID),
+		ID:                runID,
+	})
 }
 
 func (s *Store) MarkRunning(ctx context.Context, id string, at time.Time) error {
@@ -277,6 +294,99 @@ func (s *Store) SetScheduleEnabled(ctx context.Context, pipelineID string, enabl
 	})
 }
 
+func (s *Store) UpsertEnvSchedule(ctx context.Context, schedule EnvSchedule) error {
+	now := time.Now().UTC()
+	if schedule.CreatedAt.IsZero() {
+		schedule.CreatedAt = now
+	}
+	varsJSON := ""
+	if len(schedule.Vars) > 0 {
+		encoded, err := json.Marshal(schedule.Vars)
+		if err != nil {
+			return err
+		}
+		varsJSON = string(encoded)
+	}
+	return s.queries.UpsertEnvSchedule(ctx, storedb.UpsertEnvScheduleParams{
+		PipelineID:        schedule.PipelineUUID,
+		Environment:       schedule.Environment,
+		SnapshotVersionID: schedule.SnapshotVersionID,
+		Cron:              schedule.Cron,
+		Timezone:          schedule.Timezone,
+		Vars:              stringValue(varsJSON),
+		CatchupPolicy:     string(schedule.CatchupPolicy),
+		Status:            string(schedule.Status),
+		ArchivedReason:    schedule.ArchivedReason,
+		CreatedAt:         formatTime(schedule.CreatedAt),
+		UpdatedAt:         formatTime(now),
+	})
+}
+
+func (s *Store) ListEnvSchedules(ctx context.Context) ([]EnvSchedule, error) {
+	rows, err := s.queries.ListEnvSchedules(ctx)
+	if err != nil {
+		return nil, err
+	}
+	schedules := make([]EnvSchedule, 0, len(rows))
+	for _, row := range rows {
+		schedules = append(schedules, envScheduleFromDB(row))
+	}
+	return schedules, nil
+}
+
+func (s *Store) GetEnvSchedule(ctx context.Context, pipelineUUID, environment string) (EnvSchedule, bool, error) {
+	row, err := s.queries.GetEnvSchedule(ctx, storedb.GetEnvScheduleParams{PipelineID: pipelineUUID, Environment: environment})
+	if errors.Is(err, sql.ErrNoRows) {
+		return EnvSchedule{}, false, nil
+	}
+	if err != nil {
+		return EnvSchedule{}, false, err
+	}
+	return envScheduleFromDB(row), true, nil
+}
+
+func (s *Store) SetEnvScheduleStatus(ctx context.Context, pipelineUUID, environment string, status ScheduleStatus, archivedReason string) error {
+	return s.queries.SetEnvScheduleStatus(ctx, storedb.SetEnvScheduleStatusParams{
+		Status:         string(status),
+		ArchivedReason: archivedReason,
+		UpdatedAt:      formatTime(time.Now().UTC()),
+		PipelineID:     pipelineUUID,
+		Environment:    environment,
+	})
+}
+
+func (s *Store) SetEnvScheduleNextRun(ctx context.Context, pipelineUUID, environment string, nextRunAt *time.Time) error {
+	return s.queries.SetEnvScheduleNextRun(ctx, storedb.SetEnvScheduleNextRunParams{
+		NextRunAt:   nullTime(nextRunAt),
+		PipelineID:  pipelineUUID,
+		Environment: environment,
+	})
+}
+
+func (s *Store) CountEnvSchedules(ctx context.Context) (int64, error) {
+	return s.queries.CountEnvSchedules(ctx)
+}
+
+func envScheduleFromDB(row storedb.RenartSchedule) EnvSchedule {
+	schedule := EnvSchedule{
+		PipelineUUID:      row.PipelineID,
+		Environment:       row.Environment,
+		SnapshotVersionID: row.SnapshotVersionID,
+		Cron:              row.Cron,
+		Timezone:          row.Timezone,
+		CatchupPolicy:     CatchupPolicy(row.CatchupPolicy),
+		Status:            ScheduleStatus(row.Status),
+		ArchivedReason:    row.ArchivedReason,
+		NextRunAt:         parseNullTime(row.NextRunAt),
+		CreatedAt:         parseTimeValue(row.CreatedAt),
+		UpdatedAt:         parseTimeValue(row.UpdatedAt),
+	}
+	if raw := stringFromNull(row.Vars); raw != "" {
+		_ = json.Unmarshal([]byte(raw), &schedule.Vars)
+	}
+	return schedule
+}
+
 func nullTime(value *time.Time) sql.NullString {
 	if value == nil || value.IsZero() {
 		return sql.NullString{}
@@ -325,18 +435,19 @@ func runsFromDB(rows []storedb.PipelineRun) []PipelineRun {
 
 func runFromDB(row storedb.PipelineRun) PipelineRun {
 	return PipelineRun{
-		ID:          row.ID,
-		PipelineID:  row.PipelineID,
-		Pipeline:    row.Pipeline,
-		Environment: row.Environment,
-		Trigger:     RunTrigger(row.Trigger),
-		Status:      RunStatus(row.Status),
-		WinStart:    parseNullTime(row.WinStart),
-		WinEnd:      parseNullTime(row.WinEnd),
-		StartedAt:   parseNullTime(row.StartedAt),
-		FinishedAt:  parseNullTime(row.FinishedAt),
-		Error:       stringFromNull(row.Error),
-		LogRef:      stringFromNull(row.LogRef),
+		ID:                row.ID,
+		PipelineID:        row.PipelineID,
+		Pipeline:          row.Pipeline,
+		Environment:       row.Environment,
+		Trigger:           RunTrigger(row.Trigger),
+		Status:            RunStatus(row.Status),
+		WinStart:          parseNullTime(row.WinStart),
+		WinEnd:            parseNullTime(row.WinEnd),
+		StartedAt:         parseNullTime(row.StartedAt),
+		FinishedAt:        parseNullTime(row.FinishedAt),
+		Error:             stringFromNull(row.Error),
+		LogRef:            stringFromNull(row.LogRef),
+		SnapshotVersionID: stringFromNull(row.SnapshotVersionID),
 	}
 }
 

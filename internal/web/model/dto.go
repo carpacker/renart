@@ -47,22 +47,36 @@ type ColumnCheck struct {
 
 // Pipeline represents a web API pipeline.
 type Pipeline struct {
-	ID       string  `json:"id"`
+	ID string `json:"id"`
+	// UUID is the stable identity stored in pipeline.yml (`id:`); all durable
+	// records (schedules, run history, snapshots) key off it instead of ID,
+	// which encodes the filesystem path.
+	UUID     string  `json:"uuid,omitempty"`
 	Name     string  `json:"name"`
 	Path     string  `json:"path"`
 	Schedule string  `json:"schedule,omitempty"`
 	Assets   []Asset `json:"assets"`
 }
 
+// EnvironmentPolicy mirrors the per-environment execution rules from
+// .renart/environments.yml so the UI can disable controls; enforcement
+// lives in the run-dispatch chokepoint, not here.
+type EnvironmentPolicy struct {
+	Protected          bool `json:"protected"`
+	DeployedOnly       bool `json:"deployed_only"`
+	ConfirmDestructive bool `json:"confirm_destructive"`
+}
+
 // WorkspaceState represents the current state of a workspace.
 type WorkspaceState struct {
-	Pipelines           []Pipeline          `json:"pipelines"`
-	Connections         map[string]string   `json:"connections"`
-	SelectedEnvironment string              `json:"selected_environment"`
-	Errors              []string            `json:"errors"`
-	UpdatedAt           time.Time           `json:"updated_at"`
-	Metadata            map[string][]string `json:"metadata"`
-	Revision            int64               `json:"revision,omitempty"`
+	Pipelines           []Pipeline                   `json:"pipelines"`
+	Connections         map[string]string            `json:"connections"`
+	SelectedEnvironment string                       `json:"selected_environment"`
+	EnvironmentPolicies map[string]EnvironmentPolicy `json:"environment_policies,omitempty"`
+	Errors              []string                     `json:"errors"`
+	UpdatedAt           time.Time                    `json:"updated_at"`
+	Metadata            map[string][]string          `json:"metadata"`
+	Revision            int64                        `json:"revision,omitempty"`
 }
 
 // WorkspaceEvent represents an SSE event for workspace changes.

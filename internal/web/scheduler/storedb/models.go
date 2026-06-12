@@ -9,18 +9,19 @@ import (
 )
 
 type PipelineRun struct {
-	ID          string
-	PipelineID  string
-	Pipeline    string
-	Environment string
-	Trigger     string
-	Status      string
-	WinStart    sql.NullString
-	WinEnd      sql.NullString
-	StartedAt   sql.NullString
-	FinishedAt  sql.NullString
-	Error       sql.NullString
-	LogRef      sql.NullString
+	ID                string
+	PipelineID        string
+	Pipeline          string
+	Environment       string
+	Trigger           string
+	Status            string
+	WinStart          sql.NullString
+	WinEnd            sql.NullString
+	StartedAt         sql.NullString
+	FinishedAt        sql.NullString
+	Error             sql.NullString
+	LogRef            sql.NullString
+	SnapshotVersionID sql.NullString
 }
 
 type PipelineRunLog struct {
@@ -43,6 +44,61 @@ type PipelineScheduleSetting struct {
 	PipelineID string
 	Enabled    int64
 	UpdatedAt  string
+}
+
+type RenartBlob struct {
+	Hash    string
+	Content []byte
+}
+
+type RenartCoverage struct {
+	AssetID        string
+	Environment    string
+	Fingerprint    string
+	VarsHash       string
+	IntervalStart  string
+	IntervalEnd    string
+	MaterializedAt string
+	OwnContent     string
+}
+
+type RenartMaterialization struct {
+	ID             int64
+	AssetID        string
+	Environment    string
+	Fingerprint    string
+	VarsHash       string
+	IntervalStart  string
+	IntervalEnd    string
+	RunID          string
+	MaterializedAt string
+	OwnContent     string
+}
+
+type RenartSchedule struct {
+	PipelineID        string
+	Environment       string
+	SnapshotVersionID string
+	Cron              string
+	Timezone          string
+	Vars              sql.NullString
+	CatchupPolicy     string
+	Status            string
+	ArchivedReason    string
+	NextRunAt         sql.NullString
+	CreatedAt         string
+	UpdatedAt         string
+}
+
+type RenartSnapshot struct {
+	VersionID  string
+	PipelineID string
+	MerkleRoot string
+	Manifest   string
+	GitSha     sql.NullString
+	GitDirty   sql.NullInt64
+	CreatedAt  string
+	CreatedBy  sql.NullString
 }
 
 type ScheduleWatermark struct {

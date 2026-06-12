@@ -2,6 +2,8 @@ package service
 
 import (
 	"context"
+	"fmt"
+	"os"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -14,7 +16,9 @@ import (
 	bruinpath "github.com/bruin-data/bruin/pkg/path"
 	"github.com/bruin-data/bruin/pkg/pipeline"
 	"github.com/spf13/afero"
+	"renart/internal/web/identity"
 	"renart/internal/web/model"
+	"renart/internal/web/policy"
 )
 
 // PipelineDefinitionFiles are the filenames that define a pipeline.
@@ -42,6 +46,20 @@ type WorkspaceService struct {
 	configPath    string
 	stateMu       sync.RWMutex
 	state         model.WorkspaceState
+}
+
+// NewDefaultPipelineBuilder constructs the standard Bruin pipeline builder
+// used across services and commands.
+func NewDefaultPipelineBuilder() *pipeline.Builder {
+	osFS := afero.NewOsFs()
+	return pipeline.NewBuilder(
+		BuilderConfig,
+		pipeline.CreateTaskFromYamlDefinition(osFS),
+		pipeline.CreateTaskFromFileComments(osFS),
+		osFS,
+		DefaultGlossaryReader,
+		jinja.VariantRendererFactory,
+	)
 }
 
 // NewWorkspaceService creates a new workspace service.
@@ -127,6 +145,19 @@ func (s *WorkspaceService) ComputeState(ctx context.Context) (model.WorkspaceSta
 		}
 	}
 
+	if policyConfig, policyErr := policy.Load(filepath.Join(s.workspaceRoot, ".renart", "environments.yml")); policyErr == nil && len(policyConfig.Environments) > 0 {
+		state.EnvironmentPolicies = make(map[string]model.EnvironmentPolicy, len(policyConfig.Environments))
+		for name, envPolicy := range policyConfig.Environments {
+			state.EnvironmentPolicies[name] = model.EnvironmentPolicy{
+				Protected:          envPolicy.Protected,
+				DeployedOnly:       envPolicy.DeployedOnly,
+				ConfirmDestructive: envPolicy.ConfirmDestructive,
+			}
+		}
+	} else if policyErr != nil {
+		state.Errors = append(state.Errors, "environment policy parse error: "+policyErr.Error())
+	}
+
 	pipelinePaths, err := bruinpath.GetPipelinePaths(s.workspaceRoot, PipelineDefinitionFiles)
 	if err != nil {
 		return state, err
@@ -147,8 +178,23 @@ func (s *WorkspaceService) ComputeState(ctx context.Context) (model.WorkspaceSta
 			relPipelinePath = pPath
 		}
 
+		pipelineUUID := strings.TrimSpace(parsed.LegacyID)
+		if pipelineUUID == "" {
+			generatedID, generated, idErr := identity.EnsurePipelineID(fs, pipelineDefinitionFilePath(parsed, pPath))
+			if idErr != nil {
+				state.Errors = append(state.Errors, pPath+": failed to assign pipeline id: "+idErr.Error())
+			} else {
+				pipelineUUID = generatedID
+				if generated {
+					state.Metadata["notices"] = append(state.Metadata["notices"],
+						fmt.Sprintf("assigned stable id %s to pipeline %s", generatedID, filepath.ToSlash(relPipelinePath)))
+				}
+			}
+		}
+
 		pSummary := model.Pipeline{
 			ID:       EncodeID(relPipelinePath),
+			UUID:     pipelineUUID,
 			Name:     parsed.Name,
 			Path:     filepath.ToSlash(relPipelinePath),
 			Schedule: string(parsed.Schedule),
@@ -211,6 +257,22 @@ func (s *WorkspaceService) ComputeState(ctx context.Context) (model.WorkspaceSta
 	state.Metadata["asset_directories"] = AssetsDirectoryNames
 
 	return state, nil
+}
+
+// pipelineDefinitionFilePath returns the pipeline.yml path for a parsed
+// pipeline, falling back to probing the pipeline directory when the parser
+// did not record it.
+func pipelineDefinitionFilePath(parsed *pipeline.Pipeline, pipelineDir string) string {
+	if parsed != nil && strings.TrimSpace(parsed.DefinitionFile.Path) != "" {
+		return parsed.DefinitionFile.Path
+	}
+	for _, name := range PipelineDefinitionFiles {
+		candidate := filepath.Join(pipelineDir, name)
+		if _, err := os.Stat(candidate); err == nil {
+			return candidate
+		}
+	}
+	return filepath.Join(pipelineDir, PipelineDefinitionFiles[0])
 }
 
 // ResolveAssetByID finds an asset by its encoded ID.

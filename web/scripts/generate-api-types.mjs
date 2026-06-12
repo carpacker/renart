@@ -9,7 +9,7 @@ const outputPath = resolve(repoRoot, "web", "lib", "generated", "api-types.ts");
 const sources = [
   {
     file: resolve(repoRoot, "internal", "web", "model", "dto.go"),
-    types: ["ColumnCheck", "Column", "Asset", "Pipeline", "WorkspaceState"],
+    types: ["ColumnCheck", "Column", "Asset", "Pipeline", "EnvironmentPolicy", "WorkspaceState"],
   },
   {
     file: resolve(repoRoot, "internal", "web", "service", "workspace_coordinator.go"),

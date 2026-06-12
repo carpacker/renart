@@ -1,0 +1,10 @@
+id: fixture-pipeline-uuid
+name: fixture
+schedule: "@daily"
+variables:
+  region:
+    type: string
+    default: eu
+  limit:
+    type: integer
+    default: 100

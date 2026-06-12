@@ -63,9 +63,14 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { routeSelectionAtom, workspaceAtom } from "@/lib/atoms/domains/workspace";
+import { materializeAssetStream } from "@/lib/api";
+import type { AssetStaleness } from "@/lib/api-staleness";
+import { routeSelectionAtom, selectedEnvironmentAtom, workspaceAtom } from "@/lib/atoms/domains/workspace";
 import type { WebAsset, WebPipeline } from "@/lib/types";
 import { cn } from "@/lib/utils";
+import { useSelectedEnvironmentPolicy } from "@/hooks/use-environment-policy";
+import { usePipelineDeploy, type PipelineDeployState } from "@/hooks/use-pipeline-deploy";
+import { usePipelineStaleness } from "@/hooks/use-pipeline-staleness";
 import { labelForRedesignMaterializationState, useRedesignAssetMaterializationStatus } from "@/hooks/use-redesign-asset-materialization-status";
 
 import {
@@ -91,7 +96,7 @@ import {
 } from "./redesign-data";
 import { RedesignAssetEditor } from "./asset-editor";
 import { RedesignLineageCanvas, assetDisplayName, assetGroupName, assetNameParts, type RedesignLineageCanvasAsset } from "./lineage-canvas";
-import { IntegrationBadge, RedesignPage, RedesignPanel, SectionCard, SeverityIcon, SimpleTable, StatusPill } from "./redesign-primitives";
+import { IntegrationBadge, RedesignPage, RedesignPanel, SectionCard, SeverityIcon, SimpleTable, StalenessBadge, StatusPill, stalenessDotClassName, stalenessLabel } from "./redesign-primitives";
 
 export type RedesignBuildView = "canvas" | "split" | "code";
 export type RedesignResultTab = "inspect" | "materialize" | "query" | "tests" | "diagnostics" | "metadata" | "shell" | "history";
@@ -297,13 +302,18 @@ export function RedesignBuildPage({
     [pipelineAssets]
   );
   const materializationStatusByAssetId = useRedesignAssetMaterializationStatus(materializationAssets);
+  const staleness = usePipelineStaleness(activePipeline?.id);
+  const deployState = usePipelineDeploy(activePipeline?.id);
+  const environmentPolicy = useSelectedEnvironmentPolicy();
+  const executionBlocked = Boolean(environmentPolicy?.protected);
   const displayedPipelineAssets = useMemo(
     () => pipelineAssets.map((asset) => ({
       ...asset,
       status: materializationStatusByAssetId[asset.id]?.status ?? asset.status,
       materializedAt: labelForRedesignMaterializationState(materializationStatusByAssetId[asset.id]),
+      staleness: staleness.byAssetName[asset.name],
     })),
-    [materializationStatusByAssetId, pipelineAssets]
+    [materializationStatusByAssetId, pipelineAssets, staleness.byAssetName]
   );
   const firstAssetId = displayedPipelineAssets[0]?.id ?? "revenue_daily";
   const [visualSelectedAssetId, setVisualSelectedAssetId] = useState(selectedAssetId ?? firstAssetId);
@@ -314,6 +324,7 @@ export function RedesignBuildPage({
   const [newAssetOpen, setNewAssetOpen] = useState(false);
   const [pipelineSettingsOpen, setPipelineSettingsOpen] = useState(false);
   const [planOpen, setPlanOpen] = useState(false);
+  const [buildStaleOpen, setBuildStaleOpen] = useState(false);
   const [addedDependencies, setAddedDependencies] = useState<string[]>([]);
   const [history, setHistory] = useState<Array<{ id: number; kind: string; target: string; status: string; time: string; variant: string }>>([]);
   const declaredDependencies = [...pipelineDependencies, ...addedDependencies];
@@ -409,6 +420,10 @@ export function RedesignBuildPage({
         onOpenPlan={() => setPlanOpen(true)}
         onVariantChange={onVariantChange}
         onRun={runAction}
+        staleCount={staleness.staleAssets.length}
+        onBuildStale={() => setBuildStaleOpen(true)}
+        deployState={deployState}
+        executionBlocked={executionBlocked}
       />
       <div className="grid min-h-0 flex-1 grid-cols-1 gap-3 px-3 pb-3 xl:grid-cols-[248px_minmax(0,1fr)_320px]">
         <RedesignPanel className="hidden min-h-0 xl:flex xl:flex-col">
@@ -462,6 +477,16 @@ export function RedesignBuildPage({
       <NewAssetDialog open={newAssetOpen} onOpenChange={setNewAssetOpen} />
       <PipelineSettingsDialog open={pipelineSettingsOpen} onOpenChange={setPipelineSettingsOpen} pipelineId={pipelineId} />
       <PlanDialog open={planOpen} onOpenChange={setPlanOpen} />
+      <BuildStaleDialog
+        open={buildStaleOpen}
+        onOpenChange={setBuildStaleOpen}
+        staleAssets={staleness.staleAssets}
+        pipelineAssets={displayedPipelineAssets}
+        onCompleted={() => {
+          logHistory("build stale", `${staleness.staleAssets.length} assets`);
+          openBottom("materialize");
+        }}
+      />
     </RedesignPage>
     </BuildContext.Provider>
   );
@@ -484,6 +509,10 @@ function BuildTopBar({
   onOpenPlan,
   onVariantChange,
   onRun,
+  staleCount = 0,
+  onBuildStale,
+  deployState,
+  executionBlocked = false,
 }: {
   pipelineId: string;
   pipelineLabel: string;
@@ -501,6 +530,10 @@ function BuildTopBar({
   onOpenPlan: () => void;
   onVariantChange?: (variant: string) => void;
   onRun: () => void;
+  staleCount?: number;
+  onBuildStale?: () => void;
+  deployState?: PipelineDeployState;
+  executionBlocked?: boolean;
 }) {
   const search: RedesignBuildSearch = { result: resultTab, editor: editorMode, variant };
 
@@ -568,7 +601,26 @@ function BuildTopBar({
         <ClipboardCheck className="size-3.5" /> Plan
       </Button>
       {historyCount > 0 ? <Button variant="ghost" size="sm" onClick={onOpenHistory}><History className="size-3.5" />{historyCount}</Button> : null}
-      <Button size="sm" onClick={onRun}><Play className="size-3.5" /> Run</Button>
+      {staleCount > 0 ? (
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={onBuildStale}
+          disabled={executionBlocked}
+          title={executionBlocked ? "This environment is protected: interactive execution is disabled" : undefined}
+        >
+          <Hammer className="size-3.5" /> Build stale <span className="rounded-full bg-amber-500 px-1 text-[10px] text-white">{staleCount}</span>
+        </Button>
+      ) : null}
+      {deployState ? <DeployButton deployState={deployState} /> : null}
+      <Button
+        size="sm"
+        onClick={onRun}
+        disabled={executionBlocked}
+        title={executionBlocked ? "This environment is protected: interactive execution is disabled; deploy and schedule instead" : undefined}
+      >
+        <Play className="size-3.5" /> Run
+      </Button>
       <Button variant="ghost" size="sm" className="xl:hidden" onClick={onOpenInspector}><PanelRight className="size-3.5" /></Button>
     </div>
   );
@@ -752,6 +804,12 @@ function AssetButton({
       >
         <Icon className="size-3.5 text-primary" />
       <span className="min-w-0 flex-1 truncate">{assetSidebarName(asset)}</span>
+      {asset.staleness && asset.staleness.status !== "fresh" ? (
+        <span
+          title={`Staleness: ${stalenessLabel(asset.staleness)}`}
+          className={cn("size-1.5 rounded-full", stalenessDotClassName(asset.staleness.status))}
+        />
+      ) : null}
       {missingCount > 0 ? <span title={`${missingCount} imports not in dependencies`} className="size-1.5 rounded-full bg-amber-500" /> : null}
     </button>
   );
@@ -1720,6 +1778,128 @@ function PlanDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (open
         <DialogFooter>
           <Button variant="outline" onClick={() => onOpenChange(false)}>Close</Button>
           <Button onClick={() => onOpenChange(false)}><Play className="size-4" />Run plan</Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+// DeployButton shows drift between the working tree and the latest deployed
+// snapshot and redeploys on click.
+function DeployButton({ deployState }: { deployState: PipelineDeployState }) {
+  const { status, deploying, deploy, driftedFileCount } = deployState;
+  if (!status) return null;
+
+  if (status.has_snapshot && status.in_sync) {
+    return (
+      <Button variant="ghost" size="sm" disabled title={`Deployed ${status.version_id ?? ""}`}>
+        <Package className="size-3.5 text-emerald-600" /> Deployed
+      </Button>
+    );
+  }
+
+  const label = status.has_snapshot
+    ? `Redeploy (${driftedFileCount} file${driftedFileCount === 1 ? "" : "s"} changed)`
+    : "Deploy";
+  const title = status.has_snapshot
+    ? `Working tree differs from deployed ${status.version_id ?? ""}`
+    : "No deployed snapshot yet; scheduled runs use the working tree until you deploy";
+  return (
+    <Button variant="outline" size="sm" onClick={() => void deploy()} disabled={deploying} title={title}>
+      <Package className={cn("size-3.5", status.has_snapshot ? "text-amber-600" : undefined)} />
+      {deploying ? "Deploying…" : label}
+    </Button>
+  );
+}
+
+type BuildStaleProgress = "pending" | "running" | "done" | "failed";
+
+// BuildStaleDialog compiles the stale set into a build plan: every stale
+// asset, and for partially-covered incrementals exactly the uncovered gap
+// intervals. Building runs the real materialize stream per asset/gap.
+function BuildStaleDialog({
+  open,
+  onOpenChange,
+  staleAssets,
+  pipelineAssets,
+  onCompleted,
+}: {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  staleAssets: AssetStaleness[];
+  pipelineAssets: BuildAsset[];
+  onCompleted: () => void;
+}) {
+  const selectedEnvironment = useAtomValue(selectedEnvironmentAtom);
+  const [progress, setProgress] = useState<Record<string, BuildStaleProgress>>({});
+  const [building, setBuilding] = useState(false);
+
+  const assetIdByName = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const asset of pipelineAssets) {
+      map.set(asset.name, asset.id);
+    }
+    return map;
+  }, [pipelineAssets]);
+
+  useEffect(() => {
+    if (!open) {
+      setProgress({});
+      setBuilding(false);
+    }
+  }, [open]);
+
+  const buildAll = async () => {
+    setBuilding(true);
+    for (const stale of staleAssets) {
+      const encodedAssetId = assetIdByName.get(stale.asset_name);
+      if (!encodedAssetId) continue;
+      setProgress((current) => ({ ...current, [stale.asset_name]: "running" }));
+      try {
+        const windows = stale.gaps?.length
+          ? stale.gaps.map((gap) => ({ start: gap.start, end: gap.end }))
+          : [undefined];
+        for (const timeWindow of windows) {
+          await materializeAssetStream(encodedAssetId, {}, { environment: selectedEnvironment, timeWindow });
+        }
+        setProgress((current) => ({ ...current, [stale.asset_name]: "done" }));
+      } catch {
+        setProgress((current) => ({ ...current, [stale.asset_name]: "failed" }));
+      }
+    }
+    setBuilding(false);
+    onCompleted();
+  };
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="max-w-2xl">
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2"><Hammer className="size-4 text-primary" />Build stale assets</DialogTitle>
+          <DialogDescription>
+            {staleAssets.length} asset{staleAssets.length === 1 ? "" : "s"} out of date for this environment and time range. Partial incrementals rebuild only the uncovered gaps.
+          </DialogDescription>
+        </DialogHeader>
+        <div className="max-h-80 space-y-1 overflow-y-auto">
+          {staleAssets.map((stale) => (
+            <div key={stale.asset_id} className="flex items-center gap-2 rounded-md border px-2 py-1.5 text-xs">
+              <span className="min-w-0 flex-1 truncate font-mono">{stale.asset_name}</span>
+              <StalenessBadge staleness={stale} />
+              {stale.gaps?.length ? (
+                <span className="text-[10px] text-muted-foreground">{stale.gaps.length} gap{stale.gaps.length === 1 ? "" : "s"}</span>
+              ) : null}
+              {progress[stale.asset_name] === "running" ? <span className="text-[10px] text-sky-600">building…</span> : null}
+              {progress[stale.asset_name] === "done" ? <Check className="size-3.5 text-emerald-600" /> : null}
+              {progress[stale.asset_name] === "failed" ? <XCircle className="size-3.5 text-red-600" /> : null}
+            </div>
+          ))}
+          {staleAssets.length === 0 ? <p className="text-xs text-muted-foreground">Everything is fresh.</p> : null}
+        </div>
+        <DialogFooter>
+          <Button variant="outline" onClick={() => onOpenChange(false)} disabled={building}>Close</Button>
+          <Button onClick={buildAll} disabled={building || staleAssets.length === 0}>
+            <Play className="size-4" />{building ? "Building…" : `Build ${staleAssets.length} asset${staleAssets.length === 1 ? "" : "s"}`}
+          </Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>

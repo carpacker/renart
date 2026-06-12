@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
@@ -23,11 +24,17 @@ import (
 	"github.com/spf13/afero"
 	"github.com/urfave/cli/v3"
 	webapi "renart/internal/web/api"
+	"renart/internal/web/bus"
 	"renart/internal/web/events"
+	"renart/internal/web/fingerprint"
 	"renart/internal/web/freshness"
+	"renart/internal/web/matlog"
 	webhttpapi "renart/internal/web/httpapi"
+	"renart/internal/web/policy"
 	webscheduler "renart/internal/web/scheduler"
 	"renart/internal/web/service"
+	"renart/internal/web/snapshot"
+	"renart/internal/web/staleness"
 
 	"go.uber.org/zap"
 	"golang.org/x/net/http2"
@@ -57,12 +64,18 @@ type webServer struct {
 	sourceControlSvc *service.SourceControlService
 	schedulerSvc     *webscheduler.Service
 	schedulerStore   *webscheduler.Store
+	stalenessSvc     *staleness.Service
+	snapshotStore    *snapshot.Store
+	policyLoader     *policy.Loader
 	workspaceCoord   *service.WorkspaceCoordinator
 
-	hub       *events.Hub
-	executor  service.BruinCommandExecutor
-	freshness *freshness.Tracker
-	logger    *zap.Logger
+	hub               *events.Hub
+	executor          service.BruinCommandExecutor
+	freshness         *freshness.Tracker
+	eventBus          *bus.Bus
+	fingerprintEngine *fingerprint.Engine
+	matlogStore       *matlog.Store
+	logger            *zap.Logger
 
 	duckDBOpsMu sync.Mutex
 	duckDBOps   map[string]*sync.Mutex
@@ -253,8 +266,20 @@ func (s *webServer) registerRoutes(router chi.Router) {
 	webhttpapi.RegisterJinjaRenderRoutes(router, &webhttpapi.JinjaRenderAPI{Service: s.jinjaRenderSvc})
 	webhttpapi.RegisterRunRoutes(router, &webhttpapi.RunAPI{Service: s.runSvc})
 	webhttpapi.RegisterSchedulerRoutes(router, &webhttpapi.SchedulerAPI{Service: s})
+	webhttpapi.RegisterEnvScheduleRoutes(router, &webhttpapi.EnvSchedulesAPI{
+		Service:             s.schedulerSvc,
+		ResolvePipelineUUID: s.findPipelineUUIDByID,
+	})
 	webhttpapi.RegisterOnboardingRoutes(router, &webhttpapi.OnboardingAPI{Service: s.onboardingSvc, Publisher: s})
 	webhttpapi.RegisterSourceControlRoutes(router, &webhttpapi.SourceControlAPI{Service: s.sourceControlSvc})
+	webhttpapi.RegisterStalenessRoutes(router, &webhttpapi.StalenessAPI{
+		Service:             s.stalenessSvc,
+		ResolvePipelineUUID: s.findPipelineUUIDByID,
+	})
+	webhttpapi.RegisterDeployRoutes(router, &webhttpapi.DeployAPI{
+		Snapshots:       s.snapshotStore,
+		ResolvePipeline: s.resolvePipelineForDeploy,
+	})
 	router.Get("/api/assets/freshness", s.handleGetAssetFreshness)
 
 	router.Get("/*", s.handleStatic)
@@ -354,15 +379,36 @@ func (s *webServer) UpdatePipelineSchedule(ctx context.Context, pipelineID strin
 		}
 		s.WorkspaceChanged(ctx, relPath, "pipeline.updated")
 	}
-	if s.schedulerStore != nil {
-		if err := s.schedulerStore.SetScheduleEnabled(ctx, pipelineID, req.Enabled); err != nil {
-			return webscheduler.PipelineSchedule{}, err
+
+	// Bridge to the per-environment schedule model: this legacy endpoint
+	// operates on the workspace's selected environment. Enabling deploys
+	// the working tree (a schedule needs a deployed snapshot).
+	if s.schedulerSvc != nil && updated.PipelineUUID != "" {
+		environment := strings.TrimSpace(s.currentState().SelectedEnvironment)
+		if environment == "" {
+			environment = "default"
 		}
-	}
-	if s.schedulerSvc != nil {
-		_ = s.schedulerSvc.Reconcile(ctx)
-		items, err := s.schedulerSvc.ListSchedules(ctx)
-		if err == nil {
+		if req.Enabled {
+			policy := webscheduler.CatchupSkip
+			if req.Catchup {
+				policy = webscheduler.CatchupRunOnce
+			}
+			if _, err := s.schedulerSvc.UpsertEnvSchedule(ctx, updated.PipelineUUID, webscheduler.UpsertEnvScheduleRequest{
+				Environment:   environment,
+				Cron:          desiredSchedule,
+				Timezone:      desiredTimezone,
+				CatchupPolicy: policy,
+				DeployNow:     true,
+			}); err != nil {
+				return webscheduler.PipelineSchedule{}, err
+			}
+		} else if _, found, getErr := s.schedulerStore.GetEnvSchedule(ctx, updated.PipelineUUID, environment); getErr == nil && found {
+			if err := s.schedulerSvc.SetEnvScheduleLifecycle(ctx, updated.PipelineUUID, environment, webscheduler.ScheduleStatusPaused); err != nil {
+				return webscheduler.PipelineSchedule{}, err
+			}
+		}
+		items, listErr := s.schedulerSvc.ListSchedules(ctx)
+		if listErr == nil {
 			for _, item := range items {
 				if item.PipelineID == pipelineID {
 					return item, nil
@@ -376,6 +422,30 @@ func (s *webServer) UpdatePipelineSchedule(ctx context.Context, pipelineID strin
 func (s *webServer) applyLocalScheduleSettings(ctx context.Context, item webscheduler.PipelineSchedule) (webscheduler.PipelineSchedule, error) {
 	if s.schedulerStore == nil {
 		return item, nil
+	}
+	// Per-environment rows win: enabled means any active row for the
+	// pipeline's stable UUID.
+	if item.PipelineUUID != "" {
+		rows, err := s.schedulerStore.ListEnvSchedules(ctx)
+		if err != nil {
+			return webscheduler.PipelineSchedule{}, err
+		}
+		seen := false
+		enabled := false
+		for _, row := range rows {
+			if row.PipelineUUID != item.PipelineUUID {
+				continue
+			}
+			seen = true
+			if row.Status == webscheduler.ScheduleStatusActive {
+				enabled = true
+				break
+			}
+		}
+		if seen {
+			item.Enabled = enabled && strings.TrimSpace(item.Schedule) != ""
+			return item, nil
+		}
 	}
 	enabled, ok, err := s.schedulerStore.ScheduleEnabled(ctx, item.PipelineID)
 	if err != nil {
@@ -452,6 +522,149 @@ func (s *webServer) writeJSON(w http.ResponseWriter, status int, body any) {
 
 func (s *webServer) resolveAssetByID(ctx context.Context, assetID string) (string, *pipeline.Pipeline, *pipeline.Asset, error) {
 	return s.workspaceSvc.ResolveAssetByID(ctx, assetID)
+}
+
+// findPipelineUUIDByID maps the path-encoded API pipeline ID to the stable
+// pipeline UUID from the current workspace state.
+func (s *webServer) findPipelineUUIDByID(pipelineID string) (string, bool) {
+	for _, p := range s.currentState().Pipelines {
+		if p.ID == pipelineID && p.UUID != "" {
+			return p.UUID, true
+		}
+	}
+	return "", false
+}
+
+// verifyMaterializedAssets is the staleness trust-but-verify hook: it asks
+// the execution service which assets actually exist in the warehouse for
+// the environment. Runs async and throttled by the staleness service.
+func (s *webServer) verifyMaterializedAssets(ctx context.Context, selection staleness.Selection, assetNames []string) (map[string]bool, error) {
+	resp, apiErr := s.executionSvc.GetPipelineMaterialization(ctx, selection.EncodedPipelineID, selection.Environment)
+	if apiErr != nil {
+		return nil, apiErr
+	}
+	existsByName := make(map[string]bool, len(resp.Assets))
+	for _, asset := range resp.Assets {
+		if name := s.findAssetNameByID(asset.AssetID); name != "" {
+			existsByName[name] = asset.IsMaterialized
+		}
+	}
+	result := make(map[string]bool, len(assetNames))
+	for _, name := range assetNames {
+		if present, ok := existsByName[name]; ok {
+			result[name] = present
+		}
+	}
+	return result, nil
+}
+
+// resolvePipelineForDeploy maps the encoded pipeline ID to (UUID, absolute
+// directory) for the deploy/drift endpoints.
+func (s *webServer) resolvePipelineForDeploy(pipelineID string) (string, string, bool) {
+	for _, p := range s.currentState().Pipelines {
+		if p.ID != pipelineID || p.UUID == "" {
+			continue
+		}
+		absPath, err := service.SafeJoin(s.workspaceRoot, p.Path)
+		if err != nil {
+			return "", "", false
+		}
+		return p.UUID, absPath, true
+	}
+	return "", "", false
+}
+
+// parsePipelineDir parses a pipeline from an explicit directory — used by
+// the materialization recorder to fingerprint snapshot content.
+func (s *webServer) parsePipelineDir(ctx context.Context, pipelineDir string) (*pipeline.Pipeline, error) {
+	return s.newPipelineBuilder().CreatePipelineFromPath(ctx, pipelineDir, pipeline.WithMutate())
+}
+
+// resolveScheduledRunSnapshot points the run spec at its deployed snapshot
+// — the schedule's pinned version when set, otherwise the latest deploy —
+// materializing it into a temp directory. The returned cleanup removes that
+// directory; it is safe to call always.
+func (s *webServer) resolveScheduledRunSnapshot(ctx context.Context, spec *service.PipelineRunSpec, onLog func(string)) func() {
+	cleanup := func() {}
+	if s.snapshotStore == nil {
+		return cleanup
+	}
+	versionID := spec.SnapshotVersionID
+	if versionID == "" {
+		pipelineUUID, ok := s.findPipelineUUIDByID(spec.PipelineID)
+		if !ok {
+			return cleanup
+		}
+		latest, err := s.snapshotStore.Latest(ctx, pipelineUUID)
+		if err != nil || latest == nil {
+			return cleanup
+		}
+		versionID = latest.VersionID
+	}
+	tempDir, err := os.MkdirTemp("", "renart-snapshot-")
+	if err != nil {
+		return cleanup
+	}
+	if err := s.snapshotStore.MaterializeForExecution(ctx, versionID, tempDir); err != nil {
+		_ = os.RemoveAll(tempDir)
+		if onLog != nil {
+			onLog("warning: failed to materialize deployed snapshot " + versionID + ", falling back to working tree: " + err.Error() + "\n")
+		}
+		spec.SnapshotVersionID = ""
+		return cleanup
+	}
+	spec.SnapshotDir = tempDir
+	spec.SnapshotVersionID = versionID
+	spec.ConfigPath = s.resolveConfigFilePath()
+	if onLog != nil {
+		onLog("executing deployed snapshot " + versionID + "\n")
+	}
+	if spec.RunID != "" && s.schedulerStore != nil {
+		_ = s.schedulerStore.SetRunSnapshotVersion(ctx, spec.RunID, versionID)
+	}
+	return func() { _ = os.RemoveAll(tempDir) }
+}
+
+// warmFingerprintCache fingerprints every workspace pipeline once so the
+// formatter-normalized SQL cache is populated before the first staleness
+// request arrives.
+func (s *webServer) warmFingerprintCache(ctx context.Context) {
+	started := time.Now()
+	pipelines := s.currentState().Pipelines
+	for _, p := range pipelines {
+		if ctx.Err() != nil {
+			return
+		}
+		if p.UUID == "" {
+			continue
+		}
+		parsed, err := s.resolvePipelineByUUID(ctx, p.UUID)
+		if err != nil {
+			continue
+		}
+		vars := fingerprint.EffectiveVars(parsed, nil)
+		if _, err := s.fingerprintEngine.DAG(parsed, vars); err != nil && s.logger != nil {
+			s.logger.Debug("fingerprint warm-up failed for pipeline", zap.String("pipeline", p.Name), zap.Error(err))
+		}
+	}
+	if s.logger != nil && len(pipelines) > 0 {
+		s.logger.Info("fingerprint cache warmed", zap.Int("pipelines", len(pipelines)), zap.Duration("took", time.Since(started)))
+	}
+}
+
+// resolvePipelineByUUID loads the parsed pipeline whose stable UUID matches.
+func (s *webServer) resolvePipelineByUUID(ctx context.Context, pipelineUUID string) (*pipeline.Pipeline, error) {
+	for _, p := range s.currentState().Pipelines {
+		if p.UUID != pipelineUUID {
+			continue
+		}
+		absPath, err := service.SafeJoin(s.workspaceRoot, p.Path)
+		if err != nil {
+			return nil, err
+		}
+		return s.newPipelineBuilder().CreatePipelineFromPath(ctx, absPath, pipeline.WithMutate())
+	}
+	return nil, fmt.Errorf("pipeline with id %s not found in workspace", pipelineUUID)
 }
 
 func (s *webServer) getDuckDBOperationMutex(lockKey string) *sync.Mutex {

@@ -1,6 +1,6 @@
 -- name: CreateRun :exec
-INSERT INTO pipeline_runs (id, pipeline_id, pipeline, environment, trigger, status, win_start, win_end, started_at, finished_at, error, log_ref)
-VALUES (@id, @pipeline_id, @pipeline, @environment, @trigger, @status, @win_start, @win_end, @started_at, @finished_at, @error, @log_ref);
+INSERT INTO pipeline_runs (id, pipeline_id, pipeline, environment, trigger, status, win_start, win_end, started_at, finished_at, error, log_ref, snapshot_version_id)
+VALUES (@id, @pipeline_id, @pipeline, @environment, @trigger, @status, @win_start, @win_end, @started_at, @finished_at, @error, @log_ref, @snapshot_version_id);
 
 -- name: MarkRunRunning :exec
 UPDATE pipeline_runs
@@ -34,7 +34,7 @@ WHERE (CAST(@pipeline_id AS TEXT) = '' OR pipeline_id = CAST(@pipeline_id AS TEX
   );
 
 -- name: ListRuns :many
-SELECT id, pipeline_id, pipeline, environment, trigger, status, win_start, win_end, started_at, finished_at, error, log_ref
+SELECT id, pipeline_id, pipeline, environment, trigger, status, win_start, win_end, started_at, finished_at, error, log_ref, snapshot_version_id
 FROM pipeline_runs
 WHERE (CAST(@pipeline_id AS TEXT) = '' OR pipeline_id = CAST(@pipeline_id AS TEXT))
   AND (
@@ -53,8 +53,13 @@ ORDER BY COALESCE(started_at, '') DESC, id DESC
 LIMIT @limit OFFSET @offset;
 
 -- name: GetRun :one
-SELECT id, pipeline_id, pipeline, environment, trigger, status, win_start, win_end, started_at, finished_at, error, log_ref
+SELECT id, pipeline_id, pipeline, environment, trigger, status, win_start, win_end, started_at, finished_at, error, log_ref, snapshot_version_id
 FROM pipeline_runs
+WHERE id = @id;
+
+-- name: SetRunSnapshotVersion :exec
+UPDATE pipeline_runs
+SET snapshot_version_id = @snapshot_version_id
 WHERE id = @id;
 
 -- name: ListRunLogs :many
@@ -109,3 +114,39 @@ WHERE pipeline_id = @pipeline_id;
 INSERT INTO pipeline_schedule_settings (pipeline_id, enabled, updated_at)
 VALUES (@pipeline_id, @enabled, @updated_at)
 ON CONFLICT(pipeline_id) DO UPDATE SET enabled = excluded.enabled, updated_at = excluded.updated_at;
+
+-- name: UpsertEnvSchedule :exec
+INSERT INTO renart_schedules (pipeline_id, environment, snapshot_version_id, cron, timezone, vars, catchup_policy, status, archived_reason, created_at, updated_at)
+VALUES (@pipeline_id, @environment, @snapshot_version_id, @cron, @timezone, @vars, @catchup_policy, @status, @archived_reason, @created_at, @updated_at)
+ON CONFLICT(pipeline_id, environment) DO UPDATE SET
+    snapshot_version_id = excluded.snapshot_version_id,
+    cron = excluded.cron,
+    timezone = excluded.timezone,
+    vars = excluded.vars,
+    catchup_policy = excluded.catchup_policy,
+    status = excluded.status,
+    archived_reason = excluded.archived_reason,
+    updated_at = excluded.updated_at;
+
+-- name: ListEnvSchedules :many
+SELECT pipeline_id, environment, snapshot_version_id, cron, timezone, vars, catchup_policy, status, archived_reason, next_run_at, created_at, updated_at
+FROM renart_schedules
+ORDER BY pipeline_id, environment;
+
+-- name: GetEnvSchedule :one
+SELECT pipeline_id, environment, snapshot_version_id, cron, timezone, vars, catchup_policy, status, archived_reason, next_run_at, created_at, updated_at
+FROM renart_schedules
+WHERE pipeline_id = @pipeline_id AND environment = @environment;
+
+-- name: SetEnvScheduleStatus :exec
+UPDATE renart_schedules
+SET status = @status, archived_reason = @archived_reason, updated_at = @updated_at
+WHERE pipeline_id = @pipeline_id AND environment = @environment;
+
+-- name: SetEnvScheduleNextRun :exec
+UPDATE renart_schedules
+SET next_run_at = @next_run_at
+WHERE pipeline_id = @pipeline_id AND environment = @environment;
+
+-- name: CountEnvSchedules :one
+SELECT COUNT(*) FROM renart_schedules;

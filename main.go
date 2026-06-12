@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"os"
 
 	"github.com/fatih/color"
@@ -21,12 +22,15 @@ func main() {
 		Commands: []*cli.Command{
 			cmd.Web(),
 			cmd.Standalone(),
+			cmd.Fp(),
+			cmd.Deploy(),
 		},
 		DisableSliceFlagSeparator: true,
 	}
 
 	err := app.Run(context.Background(), os.Args)
 	if err != nil {
+		fmt.Fprintln(os.Stderr, "Error:", err)
 		cli.HandleExitCoder(err)
 		os.Exit(1) //nolint:gocritic
 	}

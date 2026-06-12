@@ -1,0 +1,22 @@
+{
+  "fixture-pipeline-uuid:fixture.daily_summary": {
+    "fp": "v2:a790e6fd3dd2f8792d02b2f974c59e9efd07d48f5eb092ff020707f16de0653e",
+    "own_content": "v2:4019ce51f643493c70df530f1713071b5da181f647b4943df5318895eeba8710",
+    "consumed_vars": []
+  },
+  "fixture-pipeline-uuid:fixture.raw_events": {
+    "fp": "v2:1b1cbe4b23ba1cbe339e30b567f395bf095631149743a6d41a40595a0a70789b",
+    "own_content": "v2:fc123594e6651955b0af09331adb9946a09377087ff3237e9ede4586d40ae8e6",
+    "consumed_vars": [
+      "region"
+    ]
+  },
+  "fixture-pipeline-uuid:fixture.score": {
+    "fp": "v2:97d435ed45bf1a1c5abeb090f9863ed4fe1921cfb30f94dedb9ba4d5bf7ab5cf",
+    "own_content": "v2:d30062aea123c3c4e7f203b093b0af0f4e1d8cdca1722fbad2fa0d89028d2ff1",
+    "consumed_vars": [
+      "limit",
+      "region"
+    ]
+  }
+}

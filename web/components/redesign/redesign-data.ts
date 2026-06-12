@@ -19,6 +19,8 @@ import {
   TrendingUp,
 } from "lucide-react";
 
+import type { AssetStaleness } from "@/lib/api-staleness";
+
 export const integrations: Record<string, string> = {
   DuckDB: "#f59e0b",
   Stripe: "#635bff",
@@ -86,6 +88,7 @@ export type RedesignAsset = {
   imports?: string[];
   status: "ok" | "overdue" | "unknown" | "pending" | "success" | "failed";
   materializedAt: string;
+  staleness?: AssetStaleness;
   x: number;
   y: number;
 };

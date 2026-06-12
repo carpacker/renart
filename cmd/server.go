@@ -14,9 +14,15 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/spf13/afero"
 	"github.com/urfave/cli/v3"
+	"renart/internal/web/bus"
 	"renart/internal/web/events"
+	"renart/internal/web/fingerprint"
 	"renart/internal/web/freshness"
 	webhttpapi "renart/internal/web/httpapi"
+	"renart/internal/web/matlog"
+	"renart/internal/web/policy"
+	"renart/internal/web/snapshot"
+	"renart/internal/web/staleness"
 	webscheduler "renart/internal/web/scheduler"
 	"renart/internal/web/service"
 	webstatic "renart/internal/web/static"
@@ -139,11 +145,13 @@ func newWebServer(ctx context.Context, cfg serverConfig, logger *zap.Logger) (*w
 		hub:           events.NewDebouncedHub(150 * time.Millisecond),
 		executor:      nil,
 		freshness:     freshness.New(),
+		eventBus:      bus.New(),
 		duckDBOps:     make(map[string]*sync.Mutex),
 		logger:        logger,
 	}
 
 	server.executor = service.NewHybridBruinExecutor(absRoot, "", server.newConnectionManager, server.newPipelineBuilder)
+	server.policyLoader = policy.NewLoader(filepath.Join(absRoot, ".renart", "environments.yml"))
 
 	server.executionSvc = service.NewExecutionService(service.ExecutionDependencies{
 		WorkspaceRoot:                       absRoot,
@@ -162,9 +170,16 @@ func newWebServer(ctx context.Context, cfg serverConfig, logger *zap.Logger) (*w
 				for _, asset := range pipeline.Assets {
 					assets = append(assets, service.AssetView{ID: asset.ID, Name: asset.Name})
 				}
-				pipelines = append(pipelines, service.PipelineView{ID: pipeline.ID, Assets: assets})
+				pipelines = append(pipelines, service.PipelineView{ID: pipeline.ID, UUID: pipeline.UUID, Assets: assets})
 			}
 			return pipelines
+		},
+		Events: server.eventBus,
+		PolicyFor: func(environment string) policy.EnvironmentPolicy {
+			if strings.TrimSpace(environment) == "" {
+				environment = server.currentState().SelectedEnvironment
+			}
+			return server.policyLoader.For(environment)
 		},
 		DuckDBLock: func(lockKey string) *sync.Mutex {
 			return server.getDuckDBOperationMutex(lockKey)
@@ -231,6 +246,30 @@ func newWebServer(ctx context.Context, cfg serverConfig, logger *zap.Logger) (*w
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to initialize scheduler store: %w", err)
 	}
+
+	server.fingerprintEngine = fingerprint.NewEngine()
+	server.matlogStore = matlog.NewStore(server.schedulerStore.DB())
+	server.snapshotStore = snapshot.NewStore(server.schedulerStore.DB())
+	recorder := matlog.NewRecorder(server.matlogStore, server.fingerprintEngine, server.resolvePipelineByUUID, server.parsePipelineDir, logger)
+	// Subscription order matters: the recorder writes coverage before any
+	// later subscriber (the staleness service) re-reads it.
+	server.eventBus.OnRunCompleted(recorder.HandleRunCompleted)
+	server.eventBus.OnAssetSaved(func(event bus.AssetSaved) {
+		server.fingerprintEngine.Invalidate(event.AssetID)
+	})
+
+	server.stalenessSvc = staleness.New(staleness.Dependencies{
+		Store:   server.matlogStore,
+		Engine:  server.fingerprintEngine,
+		Resolve: server.resolvePipelineByUUID,
+		Publish: func(event any) {
+			server.hub.PublishImmediate(event)
+		},
+		Verify: server.verifyMaterializedAssets,
+		Logger: logger,
+	})
+	server.stalenessSvc.AttachBus(server.eventBus)
+
 	server.schedulerSvc = webscheduler.New(webscheduler.Options{
 		Store:     server.schedulerStore,
 		StateDir:  filepath.Dir(cfg.schedulerStatePath),
@@ -238,8 +277,65 @@ func newWebServer(ctx context.Context, cfg serverConfig, logger *zap.Logger) (*w
 		Publish: func(event any) {
 			server.hub.PublishImmediate(event)
 		},
+		Housekeeping: func(ctx context.Context) error {
+			_, pruneErr := server.matlogStore.Prune(ctx, time.Now().UTC().AddDate(0, 0, -90))
+			return pruneErr
+		},
+		ResolvePipelineRef: func(ctx context.Context, pipelineUUID string) (webscheduler.PipelineRef, bool) {
+			for _, p := range server.currentState().Pipelines {
+				if p.UUID == pipelineUUID {
+					return webscheduler.PipelineRef{EncodedID: p.ID, Name: p.Name}, true
+				}
+			}
+			return webscheduler.PipelineRef{}, false
+		},
+		DefaultEnvironment: func() string {
+			return server.currentState().SelectedEnvironment
+		},
+		PipelineIntervalAware: func(ctx context.Context, pipelineUUID string) bool {
+			parsed, err := server.resolvePipelineByUUID(ctx, pipelineUUID)
+			if err != nil {
+				return false
+			}
+			for _, asset := range parsed.Assets {
+				if matlog.IntervalAware(asset) {
+					return true
+				}
+			}
+			return false
+		},
+		DeployPipeline: func(ctx context.Context, pipelineUUID string) (string, error) {
+			for _, p := range server.currentState().Pipelines {
+				if p.UUID != pipelineUUID {
+					continue
+				}
+				absPath, err := service.SafeJoin(absRoot, p.Path)
+				if err != nil {
+					return "", err
+				}
+				deployed, _, err := server.snapshotStore.Deploy(ctx, pipelineUUID, absPath, "schedule")
+				if err != nil {
+					return "", err
+				}
+				return deployed.VersionID, nil
+			}
+			return "", fmt.Errorf("pipeline %s not found in workspace", pipelineUUID)
+		},
 		Runner: func(ctx context.Context, req webscheduler.RunRequest, onLog func(string)) webscheduler.RunResult {
-			result := server.executionSvc.MaterializePipelineStreamWithAssetEvents(ctx, req.PipelineID, req.Environment, false, req.Start, req.End, func(chunk []byte) {
+			spec := service.PipelineRunSpec{
+				RunID:             req.RunID,
+				PipelineID:        req.PipelineID,
+				Environment:       req.Environment,
+				StartDate:         req.Start,
+				EndDate:           req.End,
+				SnapshotVersionID: req.SnapshotVersionID,
+			}
+			// Scheduled runs execute the schedule's pinned snapshot (or the
+			// latest deployed one); build mode keeps running the working tree.
+			cleanupSnapshot := server.resolveScheduledRunSnapshot(ctx, &spec, onLog)
+			defer cleanupSnapshot()
+
+			result := server.executionSvc.MaterializePipelineRun(ctx, spec, func(chunk []byte) {
 				if onLog != nil {
 					onLog(string(chunk))
 				}
@@ -267,6 +363,7 @@ func newWebServer(ctx context.Context, cfg serverConfig, logger *zap.Logger) (*w
 		Hub:              server.hub,
 		Freshness:        server.freshness,
 		Logger:           logger,
+		Events:           server.eventBus,
 	})
 
 	embeddedStaticFS, err := webui.DistFS()
@@ -290,6 +387,11 @@ func newWebServer(ctx context.Context, cfg serverConfig, logger *zap.Logger) (*w
 	if err := server.refreshWorkspace(ctx); err != nil {
 		logger.Warn("initial workspace parse failed", zap.Error(err))
 	}
+
+	// Warm the fingerprint engine's formatter cache off the request path:
+	// the first SQL normalization per asset costs tens of milliseconds in
+	// the wasm formatter, and the first staleness fetch should not pay it.
+	go server.warmFingerprintCache(ctx)
 
 	if cfg.schedulerEnabled {
 		if err := server.schedulerSvc.Start(ctx); err != nil {

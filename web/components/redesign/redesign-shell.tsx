@@ -1,5 +1,5 @@
 import { Link, Outlet, useLocation, useParams } from "@tanstack/react-router";
-import { Bell, Bot, Boxes, Building2, Check, ChevronDown, Cloud, CreditCard, FileCode, GitBranch, GitCommit, Loader2, LogOut, Plus, RefreshCw, Search, Send, Settings, Sparkles, User, Users, Clock } from "lucide-react";
+import { Bell, Bot, Boxes, Building2, Check, ChevronDown, Cloud, CreditCard, FileCode, GitBranch, GitCommit, Loader2, Lock, LogOut, Plus, RefreshCw, Search, Send, Settings, Sparkles, User, Users, Clock } from "lucide-react";
 import { ReactNode, useEffect, useMemo, useState } from "react";
 import { useAtomValue, useSetAtom } from "jotai";
 
@@ -180,6 +180,8 @@ function RedesignExecutionSelector() {
   const selectedValue = selectedOption?.value ?? options[0]?.value ?? "";
   const environmentValue = selectedEnvironment || "__default__";
   const environmentLabel = selectedEnvironment || "default";
+  const environmentPolicies = workspace?.environment_policies;
+  const selectedPolicy = environmentPolicies?.[environmentLabel];
 
   useEffect(() => {
     if (!isBuildPage) return;
@@ -199,8 +201,14 @@ function RedesignExecutionSelector() {
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
-        <Button aria-label="Execution context" className="mx-1 hidden h-7 min-w-0 items-center gap-1.5 rounded-full border border-zinc-700 bg-zinc-950 py-0 pl-1 pr-2 text-xs text-zinc-200 hover:bg-zinc-800 hover:text-white md:flex">
-          <span className="flex size-5 shrink-0 items-center justify-center rounded-full bg-amber-500 text-[10px] font-bold uppercase text-zinc-900">{environmentLabel.slice(0, 1)}</span>
+        <Button
+          aria-label="Execution context"
+          title={selectedPolicy?.protected ? `Environment ${environmentLabel} is protected: interactive execution is disabled` : undefined}
+          className={`mx-1 hidden h-7 min-w-0 items-center gap-1.5 rounded-full border py-0 pl-1 pr-2 text-xs md:flex ${selectedPolicy?.protected ? "border-red-700 bg-red-950 text-red-100 hover:bg-red-900 hover:text-white" : "border-zinc-700 bg-zinc-950 text-zinc-200 hover:bg-zinc-800 hover:text-white"}`}
+        >
+          <span className={`flex size-5 shrink-0 items-center justify-center rounded-full text-[10px] font-bold uppercase text-zinc-900 ${selectedPolicy?.protected ? "bg-red-500 text-white" : "bg-amber-500"}`}>
+            {selectedPolicy?.protected ? <Lock className="size-3" /> : environmentLabel.slice(0, 1)}
+          </span>
           <span className="max-w-24 truncate font-mono">{environmentLabel}</span>
           {isBuildPage ? <span className="hidden min-w-0 items-center gap-1 text-zinc-400 lg:flex"><Clock className="size-3" /> <span className="max-w-28 truncate">{selectedOption?.label ?? "Latest"}</span></span> : null}
           <ChevronDown className="size-3 text-zinc-500" />
@@ -211,7 +219,11 @@ function RedesignExecutionSelector() {
         <DropdownMenuRadioGroup value={environmentValue} onValueChange={handleEnvironmentChange}>
           <DropdownMenuRadioItem value="__default__"><Boxes className="size-4" />default</DropdownMenuRadioItem>
           {availableEnvironmentNames.map((environmentName) => (
-            <DropdownMenuRadioItem key={environmentName} value={environmentName}><Boxes className="size-4" />{environmentName}</DropdownMenuRadioItem>
+            <DropdownMenuRadioItem key={environmentName} value={environmentName}>
+              {environmentPolicies?.[environmentName]?.protected ? <Lock className="size-4 text-red-600" /> : <Boxes className="size-4" />}
+              <span className={environmentPolicies?.[environmentName]?.protected ? "text-red-600" : undefined}>{environmentName}</span>
+              {environmentPolicies?.[environmentName]?.protected ? <span className="ml-auto text-[10px] uppercase text-red-600">protected</span> : null}
+            </DropdownMenuRadioItem>
           ))}
         </DropdownMenuRadioGroup>
         {isBuildPage && options.length > 0 ? (

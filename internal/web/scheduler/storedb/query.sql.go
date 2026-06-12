@@ -45,6 +45,17 @@ func (q *Queries) CountActiveRuns(ctx context.Context, arg CountActiveRunsParams
 	return count, err
 }
 
+const countEnvSchedules = `-- name: CountEnvSchedules :one
+SELECT COUNT(*) FROM renart_schedules
+`
+
+func (q *Queries) CountEnvSchedules(ctx context.Context) (int64, error) {
+	row := q.db.QueryRowContext(ctx, countEnvSchedules)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
 const countRuns = `-- name: CountRuns :one
 SELECT COUNT(*)
 FROM pipeline_runs
@@ -83,23 +94,24 @@ func (q *Queries) CountRuns(ctx context.Context, arg CountRunsParams) (int64, er
 }
 
 const createRun = `-- name: CreateRun :exec
-INSERT INTO pipeline_runs (id, pipeline_id, pipeline, environment, trigger, status, win_start, win_end, started_at, finished_at, error, log_ref)
-VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)
+INSERT INTO pipeline_runs (id, pipeline_id, pipeline, environment, trigger, status, win_start, win_end, started_at, finished_at, error, log_ref, snapshot_version_id)
+VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)
 `
 
 type CreateRunParams struct {
-	ID          string
-	PipelineID  string
-	Pipeline    string
-	Environment string
-	Trigger     string
-	Status      string
-	WinStart    sql.NullString
-	WinEnd      sql.NullString
-	StartedAt   sql.NullString
-	FinishedAt  sql.NullString
-	Error       sql.NullString
-	LogRef      sql.NullString
+	ID                string
+	PipelineID        string
+	Pipeline          string
+	Environment       string
+	Trigger           string
+	Status            string
+	WinStart          sql.NullString
+	WinEnd            sql.NullString
+	StartedAt         sql.NullString
+	FinishedAt        sql.NullString
+	Error             sql.NullString
+	LogRef            sql.NullString
+	SnapshotVersionID sql.NullString
 }
 
 func (q *Queries) CreateRun(ctx context.Context, arg CreateRunParams) error {
@@ -116,6 +128,7 @@ func (q *Queries) CreateRun(ctx context.Context, arg CreateRunParams) error {
 		arg.FinishedAt,
 		arg.Error,
 		arg.LogRef,
+		arg.SnapshotVersionID,
 	)
 	return err
 }
@@ -168,8 +181,39 @@ func (q *Queries) FinishRun(ctx context.Context, arg FinishRunParams) error {
 	return err
 }
 
+const getEnvSchedule = `-- name: GetEnvSchedule :one
+SELECT pipeline_id, environment, snapshot_version_id, cron, timezone, vars, catchup_policy, status, archived_reason, next_run_at, created_at, updated_at
+FROM renart_schedules
+WHERE pipeline_id = ?1 AND environment = ?2
+`
+
+type GetEnvScheduleParams struct {
+	PipelineID  string
+	Environment string
+}
+
+func (q *Queries) GetEnvSchedule(ctx context.Context, arg GetEnvScheduleParams) (RenartSchedule, error) {
+	row := q.db.QueryRowContext(ctx, getEnvSchedule, arg.PipelineID, arg.Environment)
+	var i RenartSchedule
+	err := row.Scan(
+		&i.PipelineID,
+		&i.Environment,
+		&i.SnapshotVersionID,
+		&i.Cron,
+		&i.Timezone,
+		&i.Vars,
+		&i.CatchupPolicy,
+		&i.Status,
+		&i.ArchivedReason,
+		&i.NextRunAt,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
 const getRun = `-- name: GetRun :one
-SELECT id, pipeline_id, pipeline, environment, trigger, status, win_start, win_end, started_at, finished_at, error, log_ref
+SELECT id, pipeline_id, pipeline, environment, trigger, status, win_start, win_end, started_at, finished_at, error, log_ref, snapshot_version_id
 FROM pipeline_runs
 WHERE id = ?1
 `
@@ -190,6 +234,7 @@ func (q *Queries) GetRun(ctx context.Context, id string) (PipelineRun, error) {
 		&i.FinishedAt,
 		&i.Error,
 		&i.LogRef,
+		&i.SnapshotVersionID,
 	)
 	return i, err
 }
@@ -218,6 +263,48 @@ func (q *Queries) GetScheduleWatermark(ctx context.Context, pipeline string) (st
 	var up_to string
 	err := row.Scan(&up_to)
 	return up_to, err
+}
+
+const listEnvSchedules = `-- name: ListEnvSchedules :many
+SELECT pipeline_id, environment, snapshot_version_id, cron, timezone, vars, catchup_policy, status, archived_reason, next_run_at, created_at, updated_at
+FROM renart_schedules
+ORDER BY pipeline_id, environment
+`
+
+func (q *Queries) ListEnvSchedules(ctx context.Context) ([]RenartSchedule, error) {
+	rows, err := q.db.QueryContext(ctx, listEnvSchedules)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []RenartSchedule
+	for rows.Next() {
+		var i RenartSchedule
+		if err := rows.Scan(
+			&i.PipelineID,
+			&i.Environment,
+			&i.SnapshotVersionID,
+			&i.Cron,
+			&i.Timezone,
+			&i.Vars,
+			&i.CatchupPolicy,
+			&i.Status,
+			&i.ArchivedReason,
+			&i.NextRunAt,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const listRunLogs = `-- name: ListRunLogs :many
@@ -293,7 +380,7 @@ func (q *Queries) ListRunSteps(ctx context.Context, runID string) ([]PipelineRun
 }
 
 const listRuns = `-- name: ListRuns :many
-SELECT id, pipeline_id, pipeline, environment, trigger, status, win_start, win_end, started_at, finished_at, error, log_ref
+SELECT id, pipeline_id, pipeline, environment, trigger, status, win_start, win_end, started_at, finished_at, error, log_ref, snapshot_version_id
 FROM pipeline_runs
 WHERE (CAST(?1 AS TEXT) = '' OR pipeline_id = CAST(?1 AS TEXT))
   AND (
@@ -350,6 +437,7 @@ func (q *Queries) ListRuns(ctx context.Context, arg ListRunsParams) ([]PipelineR
 			&i.FinishedAt,
 			&i.Error,
 			&i.LogRef,
+			&i.SnapshotVersionID,
 		); err != nil {
 			return nil, err
 		}
@@ -378,6 +466,64 @@ type MarkRunRunningParams struct {
 
 func (q *Queries) MarkRunRunning(ctx context.Context, arg MarkRunRunningParams) error {
 	_, err := q.db.ExecContext(ctx, markRunRunning, arg.Status, arg.StartedAt, arg.ID)
+	return err
+}
+
+const setEnvScheduleNextRun = `-- name: SetEnvScheduleNextRun :exec
+UPDATE renart_schedules
+SET next_run_at = ?1
+WHERE pipeline_id = ?2 AND environment = ?3
+`
+
+type SetEnvScheduleNextRunParams struct {
+	NextRunAt   sql.NullString
+	PipelineID  string
+	Environment string
+}
+
+func (q *Queries) SetEnvScheduleNextRun(ctx context.Context, arg SetEnvScheduleNextRunParams) error {
+	_, err := q.db.ExecContext(ctx, setEnvScheduleNextRun, arg.NextRunAt, arg.PipelineID, arg.Environment)
+	return err
+}
+
+const setEnvScheduleStatus = `-- name: SetEnvScheduleStatus :exec
+UPDATE renart_schedules
+SET status = ?1, archived_reason = ?2, updated_at = ?3
+WHERE pipeline_id = ?4 AND environment = ?5
+`
+
+type SetEnvScheduleStatusParams struct {
+	Status         string
+	ArchivedReason string
+	UpdatedAt      string
+	PipelineID     string
+	Environment    string
+}
+
+func (q *Queries) SetEnvScheduleStatus(ctx context.Context, arg SetEnvScheduleStatusParams) error {
+	_, err := q.db.ExecContext(ctx, setEnvScheduleStatus,
+		arg.Status,
+		arg.ArchivedReason,
+		arg.UpdatedAt,
+		arg.PipelineID,
+		arg.Environment,
+	)
+	return err
+}
+
+const setRunSnapshotVersion = `-- name: SetRunSnapshotVersion :exec
+UPDATE pipeline_runs
+SET snapshot_version_id = ?1
+WHERE id = ?2
+`
+
+type SetRunSnapshotVersionParams struct {
+	SnapshotVersionID sql.NullString
+	ID                string
+}
+
+func (q *Queries) SetRunSnapshotVersion(ctx context.Context, arg SetRunSnapshotVersionParams) error {
+	_, err := q.db.ExecContext(ctx, setRunSnapshotVersion, arg.SnapshotVersionID, arg.ID)
 	return err
 }
 
@@ -411,6 +557,51 @@ type SetScheduleWatermarkParams struct {
 
 func (q *Queries) SetScheduleWatermark(ctx context.Context, arg SetScheduleWatermarkParams) error {
 	_, err := q.db.ExecContext(ctx, setScheduleWatermark, arg.Pipeline, arg.UpTo)
+	return err
+}
+
+const upsertEnvSchedule = `-- name: UpsertEnvSchedule :exec
+INSERT INTO renart_schedules (pipeline_id, environment, snapshot_version_id, cron, timezone, vars, catchup_policy, status, archived_reason, created_at, updated_at)
+VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
+ON CONFLICT(pipeline_id, environment) DO UPDATE SET
+    snapshot_version_id = excluded.snapshot_version_id,
+    cron = excluded.cron,
+    timezone = excluded.timezone,
+    vars = excluded.vars,
+    catchup_policy = excluded.catchup_policy,
+    status = excluded.status,
+    archived_reason = excluded.archived_reason,
+    updated_at = excluded.updated_at
+`
+
+type UpsertEnvScheduleParams struct {
+	PipelineID        string
+	Environment       string
+	SnapshotVersionID string
+	Cron              string
+	Timezone          string
+	Vars              sql.NullString
+	CatchupPolicy     string
+	Status            string
+	ArchivedReason    string
+	CreatedAt         string
+	UpdatedAt         string
+}
+
+func (q *Queries) UpsertEnvSchedule(ctx context.Context, arg UpsertEnvScheduleParams) error {
+	_, err := q.db.ExecContext(ctx, upsertEnvSchedule,
+		arg.PipelineID,
+		arg.Environment,
+		arg.SnapshotVersionID,
+		arg.Cron,
+		arg.Timezone,
+		arg.Vars,
+		arg.CatchupPolicy,
+		arg.Status,
+		arg.ArchivedReason,
+		arg.CreatedAt,
+		arg.UpdatedAt,
+	)
 	return err
 }
 

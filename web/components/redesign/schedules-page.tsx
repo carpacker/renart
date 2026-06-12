@@ -1,42 +1,69 @@
-import { Clock, Filter, Loader2, Play, Search } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useAtomValue } from "jotai";
+import { ArchiveRestore, Clock, Loader2, Package, Play, Plus, Search } from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
 
 import { Button } from "@/components/ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
+import { envScheduleKey, useEnvSchedules } from "@/hooks/use-env-schedules";
 import { formatSchedulerDate, usePipelineScheduler } from "@/hooks/use-pipeline-scheduler";
-import type { PipelineRun, PipelineSchedule } from "@/lib/types";
+import { triggerPipelineRun } from "@/lib/api";
+import type { CatchupPolicy, EnvSchedule } from "@/lib/api-env-schedules";
+import { workspaceAtom } from "@/lib/atoms/domains/workspace";
+import type { PipelineRun } from "@/lib/types";
 
 import { PageHeader, RedesignPage, RedesignPanel } from "./redesign-primitives";
 
 const buckets = ["1hr", "6hr", "12hr", "24hr"] as const;
 
+// TimelineSchedule is the slice of a schedule the timeline rendering needs;
+// both legacy single-env and per-environment rows satisfy it.
+type TimelineSchedule = {
+  schedule: string;
+  timezone: string;
+  enabled: boolean;
+  next_run_at?: string;
+};
+
 export function RedesignSchedulesPage() {
-  const { schedules, runs, loading, busyPipeline, updateSchedule, triggerNow } = usePipelineScheduler();
+  const { runs } = usePipelineScheduler();
+  const envSchedules = useEnvSchedules();
   const [query, setQuery] = useState("");
   const [bucket, setBucket] = useState<(typeof buckets)[number]>("12hr");
+  const [newScheduleOpen, setNewScheduleOpen] = useState(false);
   const tickDensity = useTimelineTickDensity();
   const window = timelineWindow(bucket, tickDensity);
   const axis = timelineAxis(window);
-  const filteredSchedules = schedules.filter((schedule) => {
+  const filteredSchedules = envSchedules.schedules.filter((schedule) => {
     const value = query.trim().toLowerCase();
-    return !value || schedule.pipeline_name.toLowerCase().includes(value) || schedule.pipeline_path.toLowerCase().includes(value);
+    return !value ||
+      (schedule.pipeline_name ?? "").toLowerCase().includes(value) ||
+      schedule.environment.toLowerCase().includes(value) ||
+      schedule.cron.toLowerCase().includes(value);
   });
 
   return (
     <RedesignPage>
       <PageHeader
         title="Schedules"
-        subtitle="Local pipeline schedules from pipeline.yml and .renart/state.db"
-        actions={loading ? <span className="flex items-center gap-1.5 text-xs text-muted-foreground"><Loader2 className="size-3.5 animate-spin" />Loading</span> : null}
+        subtitle="One schedule per pipeline and environment; scheduled runs execute the pinned deployed snapshot"
+        actions={envSchedules.loading ? <span className="flex items-center gap-1.5 text-xs text-muted-foreground"><Loader2 className="size-3.5 animate-spin" />Loading</span> : null}
       />
       <div className="flex items-center gap-2 px-3 pb-2">
         <div className="relative min-w-0 flex-1 md:max-w-sm">
           <Search className="pointer-events-none absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" />
           <Input className="pl-8" placeholder="Filter jobs..." value={query} onChange={(event) => setQuery(event.target.value)} />
         </div>
-        <Button variant="outline" size="sm"><Filter className="size-3.5" />Filter</Button>
+        <Button variant="outline" size="sm" onClick={() => setNewScheduleOpen(true)}><Plus className="size-3.5" />New schedule</Button>
         <div className="ml-auto hidden overflow-hidden rounded-lg border md:flex">
           {buckets.map((item) => <Button key={item} variant={bucket === item ? "default" : "ghost"} size="sm" className="rounded-none" onClick={() => setBucket(item)}>{item}</Button>)}
         </div>
@@ -46,67 +73,112 @@ export function RedesignSchedulesPage() {
           <TooltipProvider>
           <div className="min-w-[980px]">
             <div className="sticky top-0 z-10 flex h-9 items-center border-b bg-card text-[11px] font-semibold uppercase text-muted-foreground">
-              <div className="w-72 px-3">Jobs</div>
+              <div className="w-80 px-3">Jobs</div>
               <TimelineAxis axis={axis} />
               <div className="w-56 px-3 text-right">Controls</div>
             </div>
-            {loading && filteredSchedules.length === 0 ? (
+            {envSchedules.loading && filteredSchedules.length === 0 ? (
               <div className="flex h-24 items-center gap-2 px-3 text-sm text-muted-foreground"><Loader2 className="size-4 animate-spin" />Loading schedules...</div>
             ) : null}
-            {!loading && filteredSchedules.length === 0 ? (
-              <div className="px-3 py-8 text-sm text-muted-foreground">No schedules found.</div>
+            {!envSchedules.loading && filteredSchedules.length === 0 ? (
+              <div className="px-3 py-8 text-sm text-muted-foreground">No schedules yet. Use “New schedule” to run a pipeline in an environment.</div>
             ) : null}
             {filteredSchedules.map((schedule) => (
-              <ScheduleRow
-                key={schedule.pipeline_id}
+              <EnvScheduleRow
+                key={envScheduleKey(schedule)}
                 schedule={schedule}
                 window={window}
                 axis={axis}
-                busy={busyPipeline === schedule.pipeline_id}
-                activeRun={runs.find((run) => run.pipeline_id === schedule.pipeline_id && (run.status === "queued" || run.status === "running"))}
-                onUpdate={updateSchedule}
-                onTrigger={() => void triggerNow(schedule)}
+                busy={envSchedules.busyKey === envScheduleKey(schedule)}
+                activeRun={runs.find((run) => run.pipeline_id === schedule.pipeline_id && run.environment === schedule.environment && (run.status === "queued" || run.status === "running"))}
+                onSetStatus={(status) => void envSchedules.setStatus(schedule, status)}
+                onArchive={() => void envSchedules.archive(schedule)}
               />
             ))}
+            {envSchedules.archived.length > 0 ? (
+              <ArchivedSection archived={envSchedules.archived} onRestore={(schedule) => void envSchedules.setStatus(schedule, "active")} />
+            ) : null}
           </div>
           </TooltipProvider>
         </RedesignPanel>
       </div>
+      <NewEnvScheduleDialog
+        open={newScheduleOpen}
+        onOpenChange={setNewScheduleOpen}
+        onCreate={async (pipeline, environment, input) => {
+          await envSchedules.upsert({ pipeline_uuid: pipeline.uuid ?? "", environment, pipeline_id: pipeline.id }, input);
+        }}
+      />
     </RedesignPage>
   );
 }
 
-function ScheduleRow({
+function EnvScheduleRow({
   schedule,
   window,
   axis,
   busy,
   activeRun,
-  onUpdate,
-  onTrigger,
+  onSetStatus,
+  onArchive,
 }: {
-  schedule: PipelineSchedule;
+  schedule: EnvSchedule;
   window: TimelineWindow;
   axis: TimelineTick[];
   busy: boolean;
   activeRun?: PipelineRun;
-  onUpdate: (schedule: PipelineSchedule, patch: Partial<Pick<PipelineSchedule, "enabled" | "schedule" | "timezone" | "catchup">>) => void;
-  onTrigger: () => void;
+  onSetStatus: (status: "active" | "paused") => void;
+  onArchive: () => void;
 }) {
-  const slots = expectedSlots(schedule, window);
-  const runPending = busy || Boolean(activeRun);
+  const enabled = schedule.status === "active";
+  const timeline: TimelineSchedule = {
+    schedule: schedule.cron,
+    timezone: schedule.timezone,
+    enabled,
+    next_run_at: schedule.next_run_at,
+  };
+  const slots = expectedSlots(timeline, window);
+  const [triggering, setTriggering] = useState(false);
+  const runPending = busy || triggering || Boolean(activeRun);
   const runLabel = activeRun?.status === "running" ? "Running" : activeRun?.status === "queued" ? "Queued" : "Run";
   const nowLeft = timelineLeft(Date.now(), window);
+  const triggerNow = async () => {
+    if (!schedule.pipeline_id) return;
+    setTriggering(true);
+    try {
+      await triggerPipelineRun(schedule.pipeline_id, { environment: schedule.environment, trigger: "manual" });
+    } finally {
+      setTriggering(false);
+    }
+  };
   return (
     <div className="flex min-h-14 items-center border-b hover:bg-muted/40">
-      <div className="flex w-72 min-w-0 items-center gap-3 px-3">
-        <Switch checked={schedule.enabled} disabled={busy} onCheckedChange={(enabled) => void onUpdate(schedule, { enabled })} />
+      <div className="flex w-80 min-w-0 items-center gap-3 px-3">
+        <Switch checked={enabled} disabled={busy} onCheckedChange={(next) => onSetStatus(next ? "active" : "paused")} />
         <div className="min-w-0">
-          <div className="flex items-center gap-2 font-mono text-xs text-primary"><Clock className="size-3.5 shrink-0 text-muted-foreground" /><span className="truncate">{schedule.pipeline_name}</span></div>
+          <div className="flex items-center gap-2 font-mono text-xs text-primary">
+            <Clock className="size-3.5 shrink-0 text-muted-foreground" />
+            <span className="truncate">{schedule.pipeline_name || schedule.pipeline_uuid}</span>
+            <span className="rounded-full bg-primary/10 px-1.5 py-0.5 text-[10px] font-medium text-primary">{schedule.environment}</span>
+          </div>
           <div className="mt-1 flex min-w-0 items-center gap-1.5 text-[11px] text-muted-foreground">
-            <span className="truncate font-mono">{schedule.schedule || "unscheduled"}</span>
+            <span className="truncate font-mono">{schedule.cron}</span>
             <span>·</span>
             <span className="truncate">{schedule.timezone || "UTC"}</span>
+            {schedule.last_run ? (
+              <>
+                <span>·</span>
+                <span className="truncate">last {schedule.last_run.status} {formatSchedulerDate(schedule.last_run.finished_at ?? schedule.last_run.started_at)}</span>
+              </>
+            ) : null}
+            {schedule.snapshot_version_id ? (
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <span className="inline-flex items-center gap-0.5 truncate"><Package className="size-3" />{schedule.snapshot_version_id.slice(0, 8)}</span>
+                </TooltipTrigger>
+                <TooltipContent>Pinned deployed snapshot {schedule.snapshot_version_id}</TooltipContent>
+              </Tooltip>
+            ) : null}
           </div>
         </div>
       </div>
@@ -116,26 +188,154 @@ function ScheduleRow({
           <Tooltip key={`${slot.at}-${slot.kind}-${index}`}>
             <TooltipTrigger asChild>
               <span
-                className={slotClassName(slot.kind, schedule.enabled, slot.phase)}
+                className={slotClassName(slot.kind, enabled, slot.phase)}
                 style={{ left: `${slot.left}%`, width: `${slot.width}%` }}
               />
             </TooltipTrigger>
             <TooltipContent>
               <div className="font-medium">{slot.kind === "persisted" ? "Next scheduled run" : slot.phase === "past" ? "Past expected run" : "Expected run"}</div>
               <div className="font-mono">{formatSchedulerDate(slot.at)}</div>
-              {slot.kind === "projected" ? <div className="text-background/70">Projected from pipeline schedule</div> : null}
+              {slot.kind === "projected" ? <div className="text-background/70">Projected from the schedule</div> : null}
             </TooltipContent>
           </Tooltip>
         ))}
         {nowLeft !== null ? <NowMarker left={nowLeft} /> : null}
       </div>
       <div className="flex w-56 items-center justify-end gap-2 px-3">
-        <label className="flex items-center gap-2 text-xs text-muted-foreground">
-          <Switch checked={schedule.catchup} disabled={busy} onCheckedChange={(catchup) => void onUpdate(schedule, { catchup })} /> Catch up
-        </label>
-        <Button size="sm" variant="outline" disabled={runPending} onClick={onTrigger}>{runPending ? <Loader2 className="size-3.5 animate-spin" /> : <Play className="size-3.5" />}{runLabel}</Button>
+        <span className="text-[10px] uppercase text-muted-foreground">{schedule.catchup_policy.replace("_", " ")}</span>
+        <Button size="sm" variant="ghost" disabled={busy} title="Archive schedule (run history is kept)" onClick={onArchive}><ArchiveRestore className="size-3.5" /></Button>
+        <Button size="sm" variant="outline" disabled={runPending} onClick={() => void triggerNow()}>{runPending ? <Loader2 className="size-3.5 animate-spin" /> : <Play className="size-3.5" />}{runLabel}</Button>
       </div>
     </div>
+  );
+}
+
+function ArchivedSection({ archived, onRestore }: { archived: EnvSchedule[]; onRestore: (schedule: EnvSchedule) => void }) {
+  return (
+    <div>
+      <div className="border-b bg-muted/40 px-3 py-1.5 text-[11px] font-semibold uppercase text-muted-foreground">Archived</div>
+      {archived.map((schedule) => (
+        <div key={envScheduleKey(schedule)} className="flex min-h-10 items-center gap-3 border-b px-3 text-xs text-muted-foreground">
+          <span className="truncate font-mono">{schedule.pipeline_name || schedule.pipeline_uuid}</span>
+          <span className="rounded-full bg-muted px-1.5 py-0.5 text-[10px]">{schedule.environment}</span>
+          <span className="truncate font-mono">{schedule.cron}</span>
+          <span className="truncate">{schedule.archived_reason === "missing" ? "pipeline file missing (restores automatically when it reappears)" : "archived"}</span>
+          <span className="ml-auto" />
+          {schedule.pipeline_id ? (
+            <Button size="sm" variant="ghost" onClick={() => onRestore(schedule)}><ArchiveRestore className="size-3.5" />Restore</Button>
+          ) : null}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function NewEnvScheduleDialog({
+  open,
+  onOpenChange,
+  onCreate,
+}: {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  onCreate: (pipeline: { id: string; uuid?: string; name: string }, environment: string, input: { cron: string; timezone: string; catchup_policy: CatchupPolicy; deploy_now: boolean }) => Promise<void>;
+}) {
+  const workspace = useAtomValue(workspaceAtom);
+  const pipelines = useMemo(() => workspace?.pipelines ?? [], [workspace?.pipelines]);
+  const [pipelineId, setPipelineId] = useState("");
+  const [environment, setEnvironment] = useState("");
+  const [cron, setCron] = useState("0 * * * *");
+  const [timezone, setTimezone] = useState("UTC");
+  const [catchupPolicy, setCatchupPolicy] = useState<CatchupPolicy>("skip");
+  const [deployNow, setDeployNow] = useState(true);
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (open) {
+      setPipelineId(pipelines[0]?.id ?? "");
+      setEnvironment(workspace?.selected_environment ?? "");
+      setError(null);
+    }
+  }, [open, pipelines, workspace?.selected_environment]);
+
+  const submit = async () => {
+    const pipeline = pipelines.find((item) => item.id === pipelineId);
+    if (!pipeline || !environment.trim() || !cron.trim()) {
+      setError("Pipeline, environment, and cron are required — schedules have no implicit default environment.");
+      return;
+    }
+    setSubmitting(true);
+    setError(null);
+    try {
+      await onCreate(
+        { id: pipeline.id, uuid: pipeline.uuid, name: pipeline.name },
+        environment.trim(),
+        { cron: cron.trim(), timezone: timezone.trim() || "UTC", catchup_policy: catchupPolicy, deploy_now: deployNow }
+      );
+      onOpenChange(false);
+    } catch (submitError) {
+      setError(submitError instanceof Error ? submitError.message : "Failed to save schedule.");
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="max-w-lg">
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2"><Clock className="size-4 text-primary" />New schedule</DialogTitle>
+          <DialogDescription>Schedules are per pipeline and environment, and execute a deployed snapshot.</DialogDescription>
+        </DialogHeader>
+        <div className="space-y-3">
+          <label className="block space-y-1.5">
+            <span className="text-xs font-medium text-muted-foreground">Pipeline</span>
+            <select
+              className="h-9 w-full rounded-md border bg-background px-2 text-sm"
+              value={pipelineId}
+              onChange={(event) => setPipelineId(event.target.value)}
+            >
+              {pipelines.map((pipeline) => <option key={pipeline.id} value={pipeline.id}>{pipeline.name || pipeline.path}</option>)}
+            </select>
+          </label>
+          <label className="block space-y-1.5">
+            <span className="text-xs font-medium text-muted-foreground">Environment</span>
+            <Input value={environment} onChange={(event) => setEnvironment(event.target.value)} placeholder="prod" />
+          </label>
+          <div className="grid grid-cols-2 gap-3">
+            <label className="block space-y-1.5">
+              <span className="text-xs font-medium text-muted-foreground">Cron</span>
+              <Input className="font-mono" value={cron} onChange={(event) => setCron(event.target.value)} placeholder="0 * * * *" />
+            </label>
+            <label className="block space-y-1.5">
+              <span className="text-xs font-medium text-muted-foreground">Timezone</span>
+              <Input value={timezone} onChange={(event) => setTimezone(event.target.value)} placeholder="UTC" />
+            </label>
+          </div>
+          <label className="block space-y-1.5">
+            <span className="text-xs font-medium text-muted-foreground">Catch-up policy</span>
+            <select
+              className="h-9 w-full rounded-md border bg-background px-2 text-sm"
+              value={catchupPolicy}
+              onChange={(event) => setCatchupPolicy(event.target.value as CatchupPolicy)}
+            >
+              <option value="skip">Skip missed intervals</option>
+              <option value="run_once">Run once to catch up</option>
+              <option value="backfill">Backfill each missed interval (incremental assets only)</option>
+            </select>
+          </label>
+          <label className="flex items-center gap-2 text-xs text-muted-foreground">
+            <Switch checked={deployNow} onCheckedChange={setDeployNow} />
+            Deploy the working tree now and pin this schedule to it
+          </label>
+          {error ? <p className="text-xs text-red-600">{error}</p> : null}
+        </div>
+        <DialogFooter>
+          <Button variant="outline" onClick={() => onOpenChange(false)} disabled={submitting}>Cancel</Button>
+          <Button onClick={() => void submit()} disabled={submitting}>{submitting ? "Saving…" : "Create schedule"}</Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }
 
@@ -266,7 +466,7 @@ function slotClassName(kind: "persisted" | "projected", enabled: boolean, phase:
       : "absolute top-3 h-8 rounded-sm border border-primary/40 bg-primary/15";
 }
 
-function expectedSlots(schedule: PipelineSchedule, window: TimelineWindow) {
+function expectedSlots(schedule: TimelineSchedule, window: TimelineWindow) {
   const now = Date.now();
   const persistedNext = schedule.next_run_at ? new Date(schedule.next_run_at).getTime() : null;
   const normalized = normalizeSchedule(schedule.schedule);

@@ -16,6 +16,9 @@ import (
 	"github.com/bruin-data/bruin/pkg/sqlparser"
 	"github.com/spf13/afero"
 	"gopkg.in/yaml.v3"
+	"renart/internal/web/bus"
+	"renart/internal/web/identity"
+	"renart/internal/web/policy"
 )
 
 type InspectResult struct {
@@ -72,10 +75,16 @@ type ExecutionDependencies struct {
 	ParseQueryOutput                    func([]byte) ([]string, []map[string]any)
 	NewPipelineBuilder                  func() *pipeline.Builder
 	FreshnessSnapshot                   func() map[string]AssetTimestamps
+	Events                              *bus.Bus
+	// PolicyFor returns the execution policy for an environment; nil means
+	// unrestricted. Enforced here — the run-dispatch chokepoint every
+	// execution path goes through — not in UI handlers.
+	PolicyFor func(environment string) policy.EnvironmentPolicy
 }
 
 type PipelineView struct {
 	ID     string
+	UUID   string
 	Assets []AssetView
 }
 
@@ -123,6 +132,60 @@ const inspectReadOnlyErrorMessage = "Inspect only supports read-only single SELE
 
 func NewExecutionService(deps ExecutionDependencies) *ExecutionService {
 	return &ExecutionService{deps: deps}
+}
+
+// emitRunCompleted publishes the run-completion event on the process bus.
+// This is the single seam Phase 2 (materialization facts) and Phase 3
+// (staleness) attach to for run observation.
+func (s *ExecutionService) emitRunCompleted(runID, pipelineUUID, environment string, window ExecutionTimeWindow, completedAt time.Time, assets []bus.AssetRun) {
+	s.emitRunCompletedForSpec(PipelineRunSpec{RunID: runID, Environment: environment}, pipelineUUID, window, completedAt, assets)
+}
+
+func (s *ExecutionService) emitRunCompletedForSpec(spec PipelineRunSpec, pipelineUUID string, window ExecutionTimeWindow, completedAt time.Time, assets []bus.AssetRun) {
+	if s.deps.Events == nil || pipelineUUID == "" || len(assets) == 0 {
+		return
+	}
+	event := bus.RunCompleted{
+		RunID:             spec.RunID,
+		PipelineUUID:      pipelineUUID,
+		Environment:       spec.Environment,
+		CompletedAt:       completedAt,
+		Assets:            assets,
+		SnapshotVersionID: spec.SnapshotVersionID,
+		SnapshotDir:       spec.SnapshotDir,
+	}
+	if !window.IsZero() {
+		start := window.Start
+		end := window.End
+		event.WinStart = &start
+		event.WinEnd = &end
+	}
+	s.deps.Events.EmitRunCompleted(event)
+}
+
+// checkRunPolicy evaluates the environment policy at the run-dispatch
+// chokepoint.
+func (s *ExecutionService) checkRunPolicy(request policy.RunRequest) error {
+	if s.deps.PolicyFor == nil {
+		return nil
+	}
+	return policy.Check(s.deps.PolicyFor(request.Environment), request)
+}
+
+// findPipelineViewForAsset locates the workspace pipeline containing the
+// given encoded asset ID.
+func (s *ExecutionService) findPipelineViewForAsset(assetID string) (PipelineView, bool) {
+	if s.deps.CurrentPipelines == nil {
+		return PipelineView{}, false
+	}
+	for _, view := range s.deps.CurrentPipelines() {
+		for _, asset := range view.Assets {
+			if asset.ID == assetID {
+				return view, true
+			}
+		}
+	}
+	return PipelineView{}, false
 }
 
 func (s *ExecutionService) recordMaterialization(assetName, environment string, at time.Time, status string) {
@@ -385,6 +448,9 @@ func extractInspectRawOutput(output []byte) string {
 }
 
 func (s *ExecutionService) MaterializeAssetStream(ctx context.Context, assetID, environment, scope, startDate, endDate string, onChunk func([]byte)) MaterializeResult {
+	if err := s.checkRunPolicy(policy.RunRequest{Environment: environment, Interactive: true}); err != nil {
+		return MaterializeResult{Status: "error", Error: err.Error(), ExitCode: 1}
+	}
 	relAssetPath, err := DecodeID(assetID)
 	if err != nil {
 		return MaterializeResult{Status: "error", Error: "invalid asset id", ExitCode: 1}
@@ -447,11 +513,23 @@ func (s *ExecutionService) MaterializeAssetStream(ctx context.Context, assetID, 
 	if runErr == nil {
 		now := time.Now().UTC()
 		materializedAt = &now
+		runAssets := make([]bus.AssetRun, 0, len(assetNamesToRecord))
+		pipelineView, pipelineFound := s.findPipelineViewForAsset(assetID)
 		for _, assetName := range assetNamesToRecord {
 			if assetName == "" {
 				continue
 			}
 			s.recordMaterialization(assetName, environment, now, "succeeded")
+			if pipelineFound {
+				runAssets = append(runAssets, bus.AssetRun{
+					AssetID:   identity.AssetID(pipelineView.UUID, assetName),
+					AssetName: assetName,
+					Status:    "succeeded",
+				})
+			}
+		}
+		if pipelineFound {
+			s.emitRunCompleted("", pipelineView.UUID, environment, timeWindow, now, runAssets)
 		}
 		changedAssetIDs = s.deps.FindInspectIDs(assetIDsToRefresh...)
 	}
@@ -785,33 +863,95 @@ func (s *ExecutionService) MaterializePipelineStream(ctx context.Context, pipeli
 }
 
 func (s *ExecutionService) MaterializePipelineStreamWithAssetEvents(ctx context.Context, pipelineID, environment string, dryRun bool, startDate, endDate string, onChunk func([]byte), onAssetEvent func(ExecutionAssetEvent)) MaterializeResult {
-	target, err := ResolvePipelineRunTarget(pipelineID)
+	return s.MaterializePipelineStreamForRun(ctx, "", pipelineID, environment, dryRun, startDate, endDate, onChunk, onAssetEvent)
+}
+
+// MaterializePipelineStreamForRun is the variant used by the scheduler: the
+// run ID is threaded through so the RunCompleted bus event attributes
+// materializations to the scheduler run record.
+func (s *ExecutionService) MaterializePipelineStreamForRun(ctx context.Context, runID, pipelineID, environment string, dryRun bool, startDate, endDate string, onChunk func([]byte), onAssetEvent func(ExecutionAssetEvent)) MaterializeResult {
+	return s.MaterializePipelineRun(ctx, PipelineRunSpec{
+		RunID:       runID,
+		PipelineID:  pipelineID,
+		Environment: environment,
+		DryRun:      dryRun,
+		StartDate:   startDate,
+		EndDate:     endDate,
+	}, onChunk, onAssetEvent)
+}
+
+// PipelineRunSpec describes one pipeline execution. When SnapshotDir is set
+// the executor runs the materialized snapshot instead of the working tree;
+// PipelineID still identifies the pipeline for events and asset listing.
+type PipelineRunSpec struct {
+	RunID             string
+	PipelineID        string
+	Environment       string
+	DryRun            bool
+	StartDate         string
+	EndDate           string
+	SnapshotDir       string
+	SnapshotVersionID string
+	// ConfigPath points the executor at .bruin.yml when the target directory
+	// is outside the workspace git repository (snapshot runs).
+	ConfigPath string
+}
+
+func (s *ExecutionService) MaterializePipelineRun(ctx context.Context, spec PipelineRunSpec, onChunk func([]byte), onAssetEvent func(ExecutionAssetEvent)) MaterializeResult {
+	// Build-mode pipeline runs have no scheduler run ID and execute the
+	// working tree; scheduler-dispatched runs carry both.
+	if err := s.checkRunPolicy(policy.RunRequest{
+		Environment:   spec.Environment,
+		Interactive:   spec.RunID == "" && spec.SnapshotDir == "",
+		SnapshotBased: spec.SnapshotDir != "",
+	}); err != nil {
+		return MaterializeResult{Status: "error", Error: err.Error(), ExitCode: 1}
+	}
+	target, err := ResolvePipelineRunTarget(spec.PipelineID)
 	if err != nil {
 		return MaterializeResult{Status: "error", Error: "invalid pipeline id", ExitCode: 1}
 	}
+	if spec.SnapshotDir != "" {
+		target = spec.SnapshotDir
+	}
 
-	timeWindow, timeWindowErr := s.resolvePipelineExecutionTimeWindow(ctx, pipelineID, startDate, endDate)
+	timeWindow, timeWindowErr := s.resolvePipelineExecutionTimeWindow(ctx, spec.PipelineID, spec.StartDate, spec.EndDate)
 	if timeWindowErr != nil {
 		return MaterializeResult{Status: "error", Error: timeWindowErr.Error(), ExitCode: 1}
 	}
-	operation := withOperationTimeWindow(runOperation(target, pipelineID, "", environment), timeWindow)
-	output, runErr := s.deps.Executor.RunPipeline(ctx, RunPipelineRequest{Target: target, Environment: environment, DryRun: dryRun, StartDate: timeWindow.StartRFC3339(), EndDate: timeWindow.EndRFC3339(), AssetEvent: onAssetEvent}, onChunk)
+	operation := withOperationTimeWindow(runOperation(target, spec.PipelineID, "", spec.Environment), timeWindow)
+	output, runErr := s.deps.Executor.RunPipeline(ctx, RunPipelineRequest{
+		Target:      target,
+		Environment: spec.Environment,
+		DryRun:      spec.DryRun,
+		StartDate:   timeWindow.StartRFC3339(),
+		EndDate:     timeWindow.EndRFC3339(),
+		AssetEvent:  onAssetEvent,
+		ConfigPath:  spec.ConfigPath,
+	}, onChunk)
 
 	changedAssetIDs := make([]string, 0)
 	var materializedAt *time.Time
-	if runErr == nil && !dryRun {
+	if runErr == nil && !spec.DryRun {
 		now := time.Now().UTC()
 		materializedAt = &now
 		for _, currentPipeline := range s.deps.CurrentPipelines() {
-			if currentPipeline.ID != pipelineID {
+			if currentPipeline.ID != spec.PipelineID {
 				continue
 			}
+			runAssets := make([]bus.AssetRun, 0, len(currentPipeline.Assets))
 			for _, asset := range currentPipeline.Assets {
 				changedAssetIDs = append(changedAssetIDs, asset.ID)
 				if strings.TrimSpace(asset.Name) != "" {
-					s.recordMaterialization(asset.Name, environment, now, "succeeded")
+					s.recordMaterialization(asset.Name, spec.Environment, now, "succeeded")
+					runAssets = append(runAssets, bus.AssetRun{
+						AssetID:   identity.AssetID(currentPipeline.UUID, asset.Name),
+						AssetName: asset.Name,
+						Status:    "succeeded",
+					})
 				}
 			}
+			s.emitRunCompletedForSpec(spec, currentPipeline.UUID, timeWindow, now, runAssets)
 			break
 		}
 	}
