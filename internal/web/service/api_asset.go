@@ -29,10 +29,20 @@ type nativeAPISpec struct {
 	Type       string            `yaml:"type"`
 	Connection string            `yaml:"connection"`
 	Parameters *nativeAPISpec    `yaml:"parameters"`
+	OpenAPI    nativeAPIOpenAPI  `yaml:"openapi"`
+	OpenAPIURL string            `yaml:"openapi_url"`
 	Request    nativeAPIRequest  `yaml:"request"`
 	Iterate    nativeAPIIterate  `yaml:"iterate"`
 	Response   nativeAPIResponse `yaml:"response"`
 	Load       nativeAPILoad     `yaml:"load"`
+}
+
+type nativeAPIOpenAPI struct {
+	URL            string `yaml:"url"`
+	Path           string `yaml:"path"`
+	Method         string `yaml:"method"`
+	OperationID    string `yaml:"operation_id"`
+	ResponseStatus string `yaml:"response_status"`
 }
 
 type nativeAPIRequest struct {
@@ -64,7 +74,7 @@ type nativeAPIAssetDefinition struct {
 	Connection string            `yaml:"connection"`
 	Depends    []string          `yaml:"depends"`
 	Meta       map[string]string `yaml:"meta"`
-	Parameters nativeAPISpec     `yaml:"parameters"`
+	Parameters map[string]any    `yaml:"parameters"`
 }
 
 func isAPIAssetType(assetType string) bool {
@@ -145,19 +155,21 @@ func apiAwareYamlTaskCreator(fs afero.Fs) pipeline.TaskCreator {
 }
 
 func defaultAPIAssetContent(assetName string) string {
-	leaf := assetNameLeafPath(assetName)
-	return fmt.Sprintf(`type: api
+	return `type: api
 
 parameters:
+  openapi:
+    url: https://petstore3.swagger.io/api/v3/openapi.json
+
   request:
-    url: https://api.example.com/%s
+    url: https://petstore3.swagger.io/api/v3/pet/findByStatus?status=available
     method: GET
     headers:
       Accept: application/json
 
   response:
-    records_path: data
-`, leaf)
+    records_path: ""
+`
 }
 
 func apiSummaryParameters(content string, asset *pipeline.Asset, pl *pipeline.Pipeline) map[string]string {
@@ -209,6 +221,10 @@ func parseNativeAPIAssetSpec(content string, asset *pipeline.Asset, pl *pipeline
 	spec := raw
 	if raw.Parameters != nil {
 		spec = *raw.Parameters
+		if strings.TrimSpace(spec.OpenAPI.URL) == "" && strings.TrimSpace(spec.OpenAPIURL) == "" {
+			spec.OpenAPI = raw.OpenAPI
+			spec.OpenAPIURL = raw.OpenAPIURL
+		}
 	}
 
 	connectionName := strings.TrimSpace(raw.Connection)
@@ -253,7 +269,7 @@ func apiTargetObjectName(asset *pipeline.Asset, spec nativeAPISpec) string {
 	return strings.TrimSpace(spec.Load.Object)
 }
 
-func apiResponseFieldColumns(asset *pipeline.Asset) []pipeline.Column {
+func apiResponseFieldColumns(ctx context.Context, asset *pipeline.Asset) []pipeline.Column {
 	if asset == nil {
 		return nil
 	}
@@ -262,7 +278,13 @@ func apiResponseFieldColumns(asset *pipeline.Asset) []pipeline.Column {
 		return nil
 	}
 	spec, _, err := parseNativeAPIAssetSpec(content, asset, nil)
-	if err != nil || len(spec.Response.Fields) == 0 {
+	if err != nil {
+		return nil
+	}
+	if columns, openAPIErr := apiOpenAPIColumns(ctx, spec); openAPIErr == nil && len(columns) > 0 {
+		return columns
+	}
+	if len(spec.Response.Fields) == 0 {
 		return nil
 	}
 	fieldNames := sortedFieldNames(spec.Response.Fields)
@@ -379,6 +401,10 @@ func writeAPIAssetCSV(ctx context.Context, renderer *jinja.Renderer, spec native
 		renderer.SetContextValue("start_month", start.Format("01"))
 	}
 	rows := make([]map[string]any, 0)
+	openAPIValidator, err := newAPIOpenAPIValidator(ctx, spec)
+	if err != nil {
+		return 0, err
+	}
 	fieldNames := sortedFieldNames(spec.Response.Fields)
 	for _, item := range items {
 		renderer.SetContextValue(itemName, item)
@@ -422,6 +448,11 @@ func writeAPIAssetCSV(ctx context.Context, renderer *jinja.Renderer, spec native
 		var decoded any
 		if err := json.Unmarshal(body, &decoded); err != nil {
 			return len(rows), err
+		}
+		if openAPIValidator != nil {
+			if err := openAPIValidator.Validate(decoded, url); err != nil {
+				return len(rows), err
+			}
 		}
 		records := recordsAtPath(decoded, spec.Response.RecordsPath)
 		for _, record := range records {

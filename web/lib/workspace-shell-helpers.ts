@@ -86,18 +86,20 @@ streams:
       name,
       type: "api",
       path,
-      // Defaults to a free, no-auth sample API that returns a JSON array, so the
-      // asset materializes out of the box; swap in your own endpoint.
+      // Defaults to a free, no-auth sample API with an OpenAPI spec, so Renart
+      // can infer columns and validate records out of the box.
       content: `type: api
 
 parameters:
+  openapi:
+    url: https://petstore3.swagger.io/api/v3/openapi.json
+
   request:
-    url: https://jsonplaceholder.typicode.com/users
+    url: https://petstore3.swagger.io/api/v3/pet/findByStatus?status=available
     method: GET
     headers:
       Accept: application/json
 
-  # The response is a JSON array, so records_path is the root ("").
   response:
     records_path: ""
 `,

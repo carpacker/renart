@@ -2,6 +2,8 @@ package service
 
 import (
 	"context"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 
 	"renart/internal/web/sqlintelligence"
@@ -715,6 +717,66 @@ parameters:
 	diagnostics := diagnosticMessagesFromService(result.Diagnostics)
 	assert.NotContains(t, diagnostics, "Unresolved table: quickstart.games")
 	assert.NotContains(t, diagnostics, "Unresolved column: white_username")
+}
+
+func TestParseContextService_APIOpenAPIColumnsResolveWorkspaceAssets(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`openapi: 3.0.3
+paths:
+  /players/{username}:
+    get:
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: object
+                    properties:
+                      username:
+                        type: string
+                      rating:
+                        type: integer
+`))
+	}))
+	defer server.Close()
+
+	parsedPipeline := &pipeline.Pipeline{Assets: []*pipeline.Asset{
+		{
+			Name: "quickstart.players",
+			Type: pipeline.AssetType(apiAssetType),
+			ExecutableFile: pipeline.ExecutableFile{Content: `type: api
+
+parameters:
+  openapi:
+    url: ` + server.URL + `
+  request:
+    url: https://api.example.com/players/{{ username }}
+  response:
+    records_path: data
+`},
+		},
+	}}
+	service := NewParseContextService(ParseContextDependencies{
+		ResolveAssetByID: func(_ context.Context, _ string) (string, *pipeline.Pipeline, *pipeline.Asset, error) {
+			return "", parsedPipeline, &pipeline.Asset{Type: pipeline.AssetTypeDuckDBQuery}, nil
+		},
+	})
+
+	result, apiError := service.Parse(
+		context.Background(),
+		"asset-id",
+		`select username, rating from quickstart.players`,
+		nil,
+	)
+	require.Nil(t, apiError)
+	assert.Empty(t, result.Errors)
+	diagnostics := diagnosticMessagesFromService(result.Diagnostics)
+	assert.NotContains(t, diagnostics, "Unresolved table: quickstart.players")
+	assert.NotContains(t, diagnostics, "Unresolved column: username")
+	assert.NotContains(t, diagnostics, "Unresolved column: rating")
 }
 
 func TestParseContextService_SQLDefinitionColumnsWarnWhenMissingFromMaterializedWorkspaceColumns(t *testing.T) {

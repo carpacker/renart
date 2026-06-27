@@ -2,11 +2,15 @@ package service
 
 import (
 	"context"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/bruin-data/bruin/pkg/pipeline"
+	"github.com/spf13/afero"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -74,4 +78,71 @@ select customer_id, upper(customer_name) as shout from analytics.customers
 	assert.Equal(t, "INTEGER", byName["customer_id"])
 	// computed column gets a type from the polyglot type annotation
 	assert.Equal(t, "VARCHAR", byName["shout"])
+}
+
+func TestInferAPIAssetColumnsFromOpenAPIDefinition(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`openapi: 3.0.3
+paths:
+  /games:
+    get:
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  games:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        id:
+                          type: integer
+                        white_username:
+                          type: string
+                        rated:
+                          type: boolean
+`))
+	}))
+	defer server.Close()
+
+	workspaceRoot := t.TempDir()
+	pipelineRoot := filepath.Join(workspaceRoot, "quickstart")
+	assetsRoot := filepath.Join(pipelineRoot, "assets")
+	require.NoError(t, os.MkdirAll(assetsRoot, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(pipelineRoot, "pipeline.yml"), []byte("name: quickstart\n"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(assetsRoot, "games.asset.yml"), []byte(`name: quickstart.games
+type: api
+
+parameters:
+  openapi:
+    url: `+server.URL+`
+  request:
+    url: https://api.example.com/games
+  response:
+    records_path: games
+`), 0o644))
+
+	resolver := NewWorkspaceResolver(workspaceRoot, func(ctx context.Context, pipelinePath string) (*pipeline.Pipeline, error) {
+		return NewRenartPipelineBuilder(afero.NewOsFs()).CreatePipelineFromPath(ctx, pipelinePath, pipeline.WithMutate())
+	})
+	service := NewAssetService(AssetDependencies{
+		WorkspaceRoot:                workspaceRoot,
+		ResolveAssetByID:             resolver.ResolveAssetByID,
+		SuppressWatcher:              func(string) {},
+		PushWorkspaceUpdateImmediate: func(context.Context, string, string) {},
+	})
+
+	cols, apiErr := service.InferAssetColumnsFromDefinition(context.Background(), EncodeID("quickstart/assets/games.asset.yml"))
+	require.Nil(t, apiErr)
+
+	byName := map[string]string{}
+	for _, c := range cols {
+		byName[c.Name] = c.Type
+	}
+	assert.Equal(t, "integer", byName["id"])
+	assert.Equal(t, "boolean", byName["rated"])
+	assert.Equal(t, "string", byName["white_username"])
 }

@@ -20,7 +20,14 @@ type YamlFieldContext = {
   key: string;
   inParameters: boolean;
   normalizedValue: string;
+  path: string[];
   quoted: boolean;
+  range: MonacoNS.IRange;
+};
+
+type YamlKeyContext = {
+  path: string[];
+  prefix: string;
   range: MonacoNS.IRange;
 };
 
@@ -35,7 +42,20 @@ type ConnectionEntry = {
   databaseName?: string | null;
 };
 
+type APIKeySuggestion = {
+  label: string;
+  insertText: string;
+  detail?: string;
+};
+
+type APIValueSuggestion = {
+  value: string;
+  detail?: string;
+};
+
 const SUPPORTED_DESTINATIONS = ["postgres", "duckdb", "s3"];
+const API_EXAMPLE_OPENAPI_URL = "https://petstore3.swagger.io/api/v3/openapi.json";
+const API_EXAMPLE_REQUEST_URL = "https://petstore3.swagger.io/api/v3/pet/findByStatus?status=available";
 
 export function useYAMLIntellisense(
   monaco: typeof MonacoNS | null,
@@ -64,28 +84,42 @@ export function useYAMLIntellisense(
         }
 
         const content = model.getValue();
-        if (!isIngestrYaml(content)) {
+        const isIngestr = isIngestrYaml(content);
+        const isAPI = isAPIYaml(content);
+        if (!isIngestr && !isAPI) {
           return { suggestions: [] };
         }
 
         const fieldContext = getYamlFieldContext(monaco, model, position);
-        if (!fieldContext) {
+        if (fieldContext) {
+          if (isAPI) {
+            return { suggestions: buildAPIValueSuggestions({ fieldContext, monaco }) };
+          }
+
+          const parsed = parseIngestrYaml(content);
+          const suggestions = await buildSuggestions({
+            catalog,
+            cacheRef,
+            connections,
+            fieldContext,
+            monaco,
+            onRegisterConnectionTables: registerConnectionTables,
+            parsed,
+            selectedEnvironment,
+          });
+
+          return { suggestions };
+        }
+
+        if (!isAPI) {
           return { suggestions: [] };
         }
 
-        const parsed = parseIngestrYaml(content);
-        const suggestions = await buildSuggestions({
-          catalog,
-          cacheRef,
-          connections,
-          fieldContext,
-          monaco,
-          onRegisterConnectionTables: registerConnectionTables,
-          parsed,
-          selectedEnvironment,
-        });
-
-        return { suggestions };
+        const keyContext = getYamlKeyContext(monaco, model, position);
+        if (!keyContext) {
+          return { suggestions: [] };
+        }
+        return { suggestions: buildAPIKeySuggestions({ keyContext, monaco }) };
       },
     });
 
@@ -135,6 +169,141 @@ export function useYAMLIntellisense(
       disposable.dispose();
     };
   }, [asset, editor, monaco]);
+}
+
+function buildAPIKeySuggestions({
+  keyContext,
+  monaco,
+}: {
+  keyContext: YamlKeyContext;
+  monaco: typeof MonacoNS;
+}) {
+  const snippetsForPath = apiKeySnippetsForPath(keyContext.path);
+  return snippetsForPath
+    .filter((item) => item.label.startsWith(keyContext.prefix))
+    .map((item) =>
+      toCompletionItem(monaco, {
+        detail: item.detail,
+        insertText: item.insertText,
+        insertTextRules: monaco.languages.CompletionItemInsertTextRule.InsertAsSnippet,
+        kind: monaco.languages.CompletionItemKind.Property,
+        label: item.label,
+        range: keyContext.range,
+      })
+    );
+}
+
+function buildAPIValueSuggestions({
+  fieldContext,
+  monaco,
+}: {
+  fieldContext: YamlFieldContext;
+  monaco: typeof MonacoNS;
+}) {
+  const values = apiValueSuggestionsForField(fieldContext);
+  return values.map((item) =>
+    toCompletionItem(monaco, {
+      detail: item.detail,
+      insertText: quoteValueIfNeeded(item.value, fieldContext.quoted),
+      kind: monaco.languages.CompletionItemKind.Value,
+      label: item.value,
+      range: fieldContext.range,
+    })
+  );
+}
+
+function apiKeySnippetsForPath(path: string[]): APIKeySuggestion[] {
+  if (path.length === 0) {
+    return [
+      { label: "name", insertText: "name: ${1:schema.asset}" },
+      { label: "type", insertText: "type: api" },
+      { label: "connection", insertText: "connection: ${1:duckdb-default}" },
+      { label: "parameters", insertText: "parameters:\n  openapi:\n    url: ${1:" + API_EXAMPLE_OPENAPI_URL + "}\n  request:\n    url: ${2:" + API_EXAMPLE_REQUEST_URL + "}\n    method: GET\n  response:\n    records_path: ${3:\"\"}" },
+      { label: "columns", insertText: "columns:\n  - name: ${1:column_name}\n    type: ${2:string}" },
+    ];
+  }
+
+  if (pathEndsWith(path, ["parameters"])) {
+    return [
+      { label: "openapi", detail: "OpenAPI spec metadata", insertText: "openapi:\n  url: ${1:" + API_EXAMPLE_OPENAPI_URL + "}" },
+      { label: "request", detail: "HTTP request", insertText: "request:\n  url: ${1:" + API_EXAMPLE_REQUEST_URL + "}\n  method: GET\n  headers:\n    Accept: application/json" },
+      { label: "response", detail: "Response shape", insertText: "response:\n  records_path: ${1:\"\"}" },
+      { label: "iterate", detail: "Repeat request over values", insertText: "iterate:\n  as: ${1:item}\n  over:\n    - ${2:value}" },
+      { label: "load", detail: "Load override", insertText: "load:\n  target: ${1:duckdb-default}\n  object: ${2:schema.table}" },
+    ];
+  }
+
+  if (pathEndsWith(path, ["parameters", "openapi"])) {
+    return [
+      { label: "url", detail: "OpenAPI JSON/YAML URL", insertText: "url: ${1:" + API_EXAMPLE_OPENAPI_URL + "}" },
+      { label: "path", detail: "OpenAPI path override", insertText: "path: ${1:/pet/findByStatus}" },
+      { label: "method", detail: "OpenAPI method override", insertText: "method: ${1:GET}" },
+      { label: "operation_id", detail: "OpenAPI operationId override", insertText: "operation_id: ${1:findPetsByStatus}" },
+      { label: "response_status", detail: "Response status to infer", insertText: "response_status: ${1:200}" },
+    ];
+  }
+
+  if (pathEndsWith(path, ["parameters", "request"])) {
+    return [
+      { label: "url", detail: "HTTP URL", insertText: "url: ${1:" + API_EXAMPLE_REQUEST_URL + "}" },
+      { label: "method", detail: "HTTP method", insertText: "method: ${1:GET}" },
+      { label: "headers", detail: "HTTP headers", insertText: "headers:\n  Accept: application/json" },
+    ];
+  }
+
+  if (pathEndsWith(path, ["parameters", "response"])) {
+    return [
+      { label: "records_path", detail: "Dot path to records", insertText: "records_path: ${1:\"\"}" },
+      { label: "fields", detail: "Output field mapping", insertText: "fields:\n  ${1:column_name}: ${2:json.path}" },
+    ];
+  }
+
+  if (pathEndsWith(path, ["parameters", "load"])) {
+    return [
+      { label: "target", insertText: "target: ${1:duckdb-default}" },
+      { label: "object", insertText: "object: ${1:schema.table}" },
+      { label: "mode", insertText: "mode: ${1:full-refresh}" },
+    ];
+  }
+
+  return [];
+}
+
+function apiValueSuggestionsForField(fieldContext: YamlFieldContext): APIValueSuggestion[] {
+  if (pathEndsWith(fieldContext.path, ["parameters", "request"]) && fieldContext.key === "method") {
+    return ["GET", "POST", "PUT", "PATCH", "DELETE"].map((value) => ({ value, detail: "HTTP method" }));
+  }
+  if (pathEndsWith(fieldContext.path, ["parameters", "openapi"]) && fieldContext.key === "method") {
+    return ["GET", "POST", "PUT", "PATCH", "DELETE"].map((value) => ({ value, detail: "OpenAPI operation method" }));
+  }
+  if (pathEndsWith(fieldContext.path, ["parameters", "openapi"]) && fieldContext.key === "url") {
+    return [{ value: API_EXAMPLE_OPENAPI_URL, detail: "sample OpenAPI spec" }];
+  }
+  if (pathEndsWith(fieldContext.path, ["parameters", "openapi"]) && fieldContext.key === "path") {
+    return [{ value: "/pet/findByStatus", detail: "sample OpenAPI path" }];
+  }
+  if (pathEndsWith(fieldContext.path, ["parameters", "openapi"]) && fieldContext.key === "response_status") {
+    return ["200", "201", "202", "default"].map((value) => ({ value, detail: "OpenAPI response status" }));
+  }
+  if (pathEndsWith(fieldContext.path, ["parameters", "request"]) && fieldContext.key === "url") {
+    return [{ value: API_EXAMPLE_REQUEST_URL, detail: "sample API endpoint" }];
+  }
+  if (pathEndsWith(fieldContext.path, ["parameters", "response"]) && fieldContext.key === "records_path") {
+    return [
+      { value: "\"\"", detail: "response root" },
+      { value: "data", detail: "common records property" },
+      { value: "items", detail: "common records property" },
+      { value: "results", detail: "common records property" },
+    ];
+  }
+  return [];
+}
+
+function pathEndsWith(path: string[], suffix: string[]) {
+  if (suffix.length > path.length) {
+    return false;
+  }
+  return suffix.every((part, index) => path[path.length - suffix.length + index] === part);
 }
 
 async function buildSuggestions(args: {
@@ -303,11 +472,13 @@ function toCompletionItem(
     kind: MonacoNS.languages.CompletionItemKind;
     detail?: string;
     insertText?: string;
+    insertTextRules?: MonacoNS.languages.CompletionItemInsertTextRule;
   }
 ): MonacoNS.languages.CompletionItem {
   return {
     detail: item.detail,
     insertText: item.insertText ?? item.label,
+    insertTextRules: item.insertTextRules,
     kind: item.kind,
     label: item.label,
     range: item.range,
@@ -354,6 +525,7 @@ function getYamlFieldContext(
     inParameters: isInsideParameters(model, position.lineNumber),
     key: match[2],
     normalizedValue: normalizeYamlValue(rawValue),
+    path: yamlParentPath(model, position.lineNumber, match[1].length),
     quoted: startsWithQuote(rawValue),
     range: new monaco.Range(
       position.lineNumber,
@@ -362,6 +534,60 @@ function getYamlFieldContext(
       lineText.length + 1
     ),
   };
+}
+
+function getYamlKeyContext(
+  monaco: typeof MonacoNS,
+  model: MonacoNS.editor.ITextModel,
+  position: MonacoNS.Position
+): YamlKeyContext | null {
+  const lineText = model.getLineContent(position.lineNumber);
+  const beforeCursor = lineText.slice(0, position.column - 1);
+  if (beforeCursor.includes(":")) {
+    return null;
+  }
+
+  const match = lineText.match(/^(\s*)([A-Za-z_][\w-]*)?\s*$/);
+  if (!match) {
+    return null;
+  }
+
+  const indent = match[1].length;
+  const prefix = match[2] ?? "";
+  return {
+    path: yamlParentPath(model, position.lineNumber, indent),
+    prefix,
+    range: new monaco.Range(position.lineNumber, indent + 1, position.lineNumber, lineText.length + 1),
+  };
+}
+
+function yamlParentPath(model: MonacoNS.editor.ITextModel, lineNumber: number, currentIndent: number) {
+  const parents: string[] = [];
+  let maxParentIndent = currentIndent;
+
+  for (let currentLine = lineNumber - 1; currentLine >= 1; currentLine -= 1) {
+    const text = model.getLineContent(currentLine);
+    const trimmed = text.trim();
+    if (!trimmed || trimmed.startsWith("#")) {
+      continue;
+    }
+    const match = text.match(/^(\s*)([A-Za-z_][\w-]*):(\s*)(.*)$/);
+    if (!match) {
+      continue;
+    }
+    const indent = match[1].length;
+    const key = match[2];
+    const value = (match[4] ?? "").trim();
+    if (indent >= maxParentIndent) {
+      continue;
+    }
+    if (value === "") {
+      parents.unshift(key);
+    }
+    maxParentIndent = indent;
+  }
+
+  return parents;
 }
 
 function isInsideParameters(
@@ -458,6 +684,10 @@ function startsWithQuote(value: string) {
 
 function isIngestrYaml(content: string) {
   return /^\s*type:\s*ingestr\s*$/m.test(content);
+}
+
+function isAPIYaml(content: string) {
+  return /^\s*type:\s*api\s*$/m.test(content);
 }
 
 function isYamlPath(path: string) {

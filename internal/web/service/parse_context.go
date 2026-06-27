@@ -129,7 +129,7 @@ func (s *ParseContextService) Parse(ctx context.Context, assetID, content string
 	}
 	schema := BuildParseContextSchema(asset, schemaTables)
 	columnSourceMethods := BuildParseContextColumnSourceMethods(asset, schemaTables)
-	ApplyAssetSQLDefinitionColumns(parsedPipeline, asset, schema, columnSourceMethods)
+	ApplyAssetSQLDefinitionColumns(ctx, parsedPipeline, asset, schema, columnSourceMethods)
 
 	parseContext, err := sqlintelligence.ParseContextWithSchema(content, dialect, schema, columnSourceMethods)
 	if err != nil {
@@ -329,7 +329,7 @@ func MergeShortNameSchemaTables(schema sqlintelligence.Schema) {
 	}
 }
 
-func ApplyAssetSQLDefinitionColumns(parsedPipeline *pipeline.Pipeline, currentAsset *pipeline.Asset, schema sqlintelligence.Schema, sources sqlintelligence.SchemaColumnSourceMethods) {
+func ApplyAssetSQLDefinitionColumns(ctx context.Context, parsedPipeline *pipeline.Pipeline, currentAsset *pipeline.Asset, schema sqlintelligence.Schema, sources sqlintelligence.SchemaColumnSourceMethods) {
 	if parsedPipeline == nil {
 		return
 	}
@@ -342,7 +342,7 @@ func ApplyAssetSQLDefinitionColumns(parsedPipeline *pipeline.Pipeline, currentAs
 			continue
 		}
 		if isAPIAsset(asset) {
-			declaredColumns := apiResponseFieldColumns(asset)
+			declaredColumns := apiResponseFieldColumns(ctx, asset)
 			if len(declaredColumns) == 0 {
 				continue
 			}

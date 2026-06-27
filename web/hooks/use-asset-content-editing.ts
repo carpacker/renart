@@ -4,6 +4,7 @@ import { useAtomValue, useSetAtom } from "jotai";
 import { useCallback, useEffect, useRef } from "react";
 
 import { useDebouncedAssetSave } from "@/hooks/use-debounced-asset-save";
+import { refreshAssetColumnsFromDefinition } from "@/lib/api-asset-transactions";
 import { fillAssetColumnsFromDB } from "@/lib/api";
 import {
   editorDraftAtom,
@@ -104,7 +105,8 @@ export function useAssetContentEditing({
       const isSQLAsset =
         asset.path.toLowerCase().endsWith(".sql") ||
         asset.type.toLowerCase().includes("sql");
-      if (!isSQLAsset) {
+      const isAPIAsset = asset.type.toLowerCase() === "api";
+      if (!isSQLAsset && !isAPIAsset) {
         return;
       }
 
@@ -114,7 +116,10 @@ export function useAssetContentEditing({
 
       const currentAssetID = asset.id;
       fillColumnsTimerRef.current = setTimeout(() => {
-        void fillAssetColumnsFromDB(currentAssetID).catch(() => {
+        const refresh = isAPIAsset
+          ? refreshAssetColumnsFromDefinition(currentAssetID)
+          : fillAssetColumnsFromDB(currentAssetID);
+        void refresh.catch(() => {
           // noop: best-effort post-edit sync
         });
       }, 1200);

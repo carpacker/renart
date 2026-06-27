@@ -97,9 +97,10 @@ type TypeCheckReport struct {
 // start/end/execution dates) and validates the rendered query against a schema
 // built from the other assets' declared and inferable columns — surfacing
 // unresolved tables/columns and type errors. For non-SQL assets that produce a
-// table but whose schema cannot be inferred from SQL (Python, ingestr, Sling,
-// API) it warns when no columns are declared, since that breaks downstream
-// type checking.
+// table but whose schema cannot be inferred from their definition (Python,
+// ingestr, Sling, or API assets without response fields/OpenAPI metadata) it
+// warns when no columns are declared, since that breaks downstream type
+// checking.
 //
 // workspaceRoot may be empty (e.g. from the CLI), in which case asset IDs are
 // left blank.
@@ -125,7 +126,7 @@ func CheckPipeline(ctx context.Context, fs afero.Fs, pp *pipeline.Pipeline, work
 	}
 	sort.SliceStable(assets, func(i, j int) bool { return assets[i].Name < assets[j].Name })
 
-	knownSchema := assetsWithKnownSchema(pp)
+	knownSchema := assetsWithKnownSchema(ctx, pp)
 
 	for _, asset := range assets {
 		ac := checkAsset(ctx, fs, pp, workspaceRoot, renderer, now, tw, asset, knownSchema)
@@ -163,7 +164,7 @@ func checkAsset(ctx context.Context, fs afero.Fs, pp *pipeline.Pipeline, workspa
 	if dialectErr != nil {
 		// Non-SQL asset: we cannot infer its output schema. Warn when a
 		// table-producing asset declares no columns so the gap is visible.
-		if nonSQLColumnsExpected(asset) && !assetHasDeclaredColumns(asset) {
+		if nonSQLColumnsExpected(asset) && !assetHasDeclaredColumns(ctx, asset) {
 			ac.Findings = append(ac.Findings, TypeCheckFinding{
 				Severity: typeCheckSeverityWarning,
 				Message:  "Declares no columns; types cannot be inferred for " + string(asset.Type) + " assets. Declare columns to enable downstream type checking.",
@@ -191,7 +192,7 @@ func checkAsset(ctx context.Context, fs afero.Fs, pp *pipeline.Pipeline, workspa
 
 	schema := sqlintelligence.Schema{}
 	sources := sqlintelligence.SchemaColumnSourceMethods{}
-	ApplyAssetSQLDefinitionColumns(pp, asset, schema, sources)
+	ApplyAssetSQLDefinitionColumns(ctx, pp, asset, schema, sources)
 	// Register every other pipeline asset as a resolvable table even when its
 	// columns are unknown, so references to it are not flagged "Unresolved
 	// table". Column checks against unknown-schema tables are suppressed below.
@@ -241,7 +242,7 @@ func checkAsset(ctx context.Context, fs afero.Fs, pp *pipeline.Pipeline, workspa
 // assetsWithKnownSchema maps each asset name (lower-cased) to whether its output
 // columns can be determined statically — via declared columns, API response
 // fields, or (for SQL assets) the column names in its SELECT list.
-func assetsWithKnownSchema(pp *pipeline.Pipeline) map[string]bool {
+func assetsWithKnownSchema(ctx context.Context, pp *pipeline.Pipeline) map[string]bool {
 	known := make(map[string]bool, len(pp.Assets))
 	for _, asset := range pp.Assets {
 		if asset == nil {
@@ -251,7 +252,7 @@ func assetsWithKnownSchema(pp *pipeline.Pipeline) map[string]bool {
 		if name == "" {
 			continue
 		}
-		isKnown := assetHasDeclaredColumns(asset)
+		isKnown := assetHasDeclaredColumns(ctx, asset)
 		if !isKnown {
 			if _, err := AssetTypeToDialect(asset.Type); err == nil {
 				isKnown = len(ExtractSQLDefinitionColumns(asset.ExecutableFile.Content)) > 0
@@ -378,11 +379,11 @@ func nonSQLColumnsExpected(asset *pipeline.Asset) bool {
 	return strings.Contains(assetType, "python") || strings.Contains(assetType, "ingestr")
 }
 
-func assetHasDeclaredColumns(asset *pipeline.Asset) bool {
+func assetHasDeclaredColumns(ctx context.Context, asset *pipeline.Asset) bool {
 	if len(asset.Columns) > 0 {
 		return true
 	}
-	if isAPIAsset(asset) && len(apiResponseFieldColumns(asset)) > 0 {
+	if isAPIAsset(asset) && len(apiResponseFieldColumns(ctx, asset)) > 0 {
 		return true
 	}
 	return false

@@ -109,6 +109,26 @@ func (s *AssetService) InferAssetColumns(ctx context.Context, assetID string) (i
 	if err != nil {
 		return 0, nil, badRequestError("asset_resolve_failed", err.Error())
 	}
+	if isAPIAsset(asset) {
+		columns := apiResponseFieldColumns(ctx, asset)
+		inferred := make([]WorkspaceColumn, 0, len(columns))
+		for _, column := range columns {
+			inferred = append(inferred, WorkspaceColumn{Name: column.Name, Type: column.Type})
+		}
+		if len(inferred) == 0 {
+			return http.StatusBadRequest, map[string]any{
+				"status":    "error",
+				"columns":   []WorkspaceColumn{},
+				"operation": webmodel.OperationMetadata{Type: "asset_definition", Target: asset.Name, Operation: "infer-api-columns"},
+				"error":     "API asset columns could not be inferred from response.fields or OpenAPI metadata",
+			}, nil
+		}
+		return http.StatusOK, map[string]any{
+			"status":    "ok",
+			"columns":   inferred,
+			"operation": webmodel.OperationMetadata{Type: "asset_definition", Target: asset.Name, Operation: "infer-api-columns"},
+		}, nil
+	}
 
 	queryReq, err := BuildInferAssetColumnsQuery(parsedPipeline, asset, "")
 	if err != nil {

@@ -8,11 +8,109 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/bruin-data/bruin/pkg/jinja"
 	"github.com/bruin-data/bruin/pkg/pipeline"
 	"github.com/spf13/afero"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func TestAPIAssetOpenAPIColumnsInferTypes(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, "/openapi.yaml", r.URL.Path)
+		_, _ = w.Write([]byte(`openapi: 3.0.3
+paths:
+  /player/{username}:
+    get:
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: object
+                    properties:
+                      username:
+                        type: string
+                      rating:
+                        type: integer
+                      active:
+                        type: boolean
+`))
+	}))
+	defer server.Close()
+
+	asset := &pipeline.Asset{
+		Name: "quickstart.players",
+		Type: pipeline.AssetType(apiAssetType),
+		ExecutableFile: pipeline.ExecutableFile{Content: `type: api
+
+parameters:
+  openapi:
+    url: ` + server.URL + `/openapi.yaml
+  request:
+    url: https://api.example.com/player/{{ username }}
+    method: GET
+  response:
+    records_path: data
+`},
+	}
+
+	columns := apiResponseFieldColumns(context.Background(), asset)
+	require.Len(t, columns, 3)
+	byName := map[string]string{}
+	for _, column := range columns {
+		byName[column.Name] = column.Type
+	}
+	assert.Equal(t, "boolean", byName["active"])
+	assert.Equal(t, "integer", byName["rating"])
+	assert.Equal(t, "string", byName["username"])
+}
+
+func TestWriteAPIAssetCSVValidatesResponseAgainstOpenAPI(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/openapi.yaml":
+			_, _ = w.Write([]byte(`openapi: 3.0.3
+paths:
+  /player/{username}:
+    get:
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: object
+                    required: [username, rating]
+                    properties:
+                      username:
+                        type: string
+                      rating:
+                        type: integer
+`))
+		case "/player/Hikaru":
+			_, _ = w.Write([]byte(`{"data":{"username":"Hikaru","rating":"not-an-integer"}}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	spec := nativeAPISpec{
+		OpenAPI:  nativeAPIOpenAPI{URL: server.URL + "/openapi.yaml"},
+		Request:  nativeAPIRequest{URL: server.URL + "/player/Hikaru", Method: http.MethodGet},
+		Response: nativeAPIResponse{RecordsPath: "data"},
+	}
+	_, err := writeAPIAssetCSV(context.Background(), jinja.NewRendererWithYesterday("quickstart", "test"), spec, filepath.Join(t.TempDir(), "players.csv"), nil)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "api response does not match OpenAPI schema")
+	assert.Contains(t, err.Error(), "$.data.rating expected integer")
+}
 
 func TestHybridBruinExecutorRunsAPIAssetThroughSlingWithBruinTargetConnection(t *testing.T) {
 	workspaceRoot := t.TempDir()

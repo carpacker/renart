@@ -22,7 +22,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { applyAssetTransaction, reconcileAssetColumns } from "@/lib/api-asset-transactions";
+import { applyAssetTransaction, reconcileAssetColumns, refreshAssetColumnsFromDefinition } from "@/lib/api-asset-transactions";
 import { updateAsset } from "@/lib/api-assets";
 import { updateAssetColumns } from "@/lib/api-assets-columns";
 import { getSQLTableColumns } from "@/lib/api-sql-discovery";
@@ -511,14 +511,26 @@ function ImportColumnsButton({ asset }: { asset: WebAsset }) {
   const [error, setError] = useState<string | null>(null);
   const connection = asset.connection;
   const table = asset.materialized_as || asset.name;
+  const isAPIAsset = asset.type.toLowerCase() === "api";
 
-  if (!connection) {
+  if (!connection && !isAPIAsset) {
     return <Comment depth={1}>no connection set — can&apos;t import columns from the warehouse</Comment>;
   }
 
   const run = () => {
     setLoading(true);
     setError(null);
+    if (isAPIAsset) {
+      refreshAssetColumnsFromDefinition(asset.id)
+        .catch((err) => setError(err instanceof Error ? err.message : "Failed to infer columns from OpenAPI"))
+        .finally(() => setLoading(false));
+      return;
+    }
+    if (!connection) {
+      setError("No connection set for warehouse column import");
+      setLoading(false);
+      return;
+    }
     getSQLTableColumns({ connection, table, environment })
       .then(async (response) => {
         if (response.error) {
@@ -546,7 +558,7 @@ function ImportColumnsButton({ asset }: { asset: WebAsset }) {
           className="font-monaco flex items-center gap-1 rounded-sm px-1 text-[11px] text-muted-foreground hover:bg-muted hover:text-foreground disabled:opacity-50"
         >
           {loading ? <Loader2 className="size-3 animate-spin" /> : <Database className="size-3" />}
-          import columns from warehouse
+          {isAPIAsset ? "infer columns from OpenAPI" : "import columns from warehouse"}
         </button>
       </Line>
       {error ? <Comment depth={1}>{error}</Comment> : null}

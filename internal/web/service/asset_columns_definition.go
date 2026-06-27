@@ -21,6 +21,18 @@ func (s *AssetService) InferAssetColumnsFromDefinition(ctx context.Context, asse
 		return nil, badRequestError("asset_resolve_failed", err.Error())
 	}
 
+	if isAPIAsset(asset) {
+		columns := apiResponseFieldColumns(ctx, asset)
+		if len(columns) == 0 {
+			return nil, badRequestError("column_inference_failed", "API asset columns could not be inferred from response.fields or OpenAPI metadata")
+		}
+		result := make([]WorkspaceColumn, 0, len(columns))
+		for _, column := range columns {
+			result = append(result, WorkspaceColumn{Name: column.Name, Type: column.Type})
+		}
+		return result, nil
+	}
+
 	dialect, dialectErr := AssetTypeToDialect(asset.Type)
 	if dialectErr != nil {
 		return nil, badRequestError("unsupported_asset_type", "column inference from definition is supported for SQL assets only")
@@ -31,7 +43,7 @@ func (s *AssetService) InferAssetColumnsFromDefinition(ctx context.Context, asse
 		return nil, badRequestError("query_render_failed", renderErr.Error())
 	}
 
-	schema := buildDefinitionSchema(parsedPipeline)
+	schema := buildDefinitionSchema(ctx, parsedPipeline)
 	columns, inferErr := sqlintelligence.AnnotateOutputColumns(ctx, rendered, dialect, schema)
 	if inferErr != nil {
 		return nil, badRequestError("column_inference_failed", inferErr.Error())
@@ -84,17 +96,24 @@ func (s *AssetService) renderAssetQuery(ctx context.Context, parsedPipeline *pip
 // every asset in the pipeline (keyed by asset name). Upstream assets that carry
 // no declared columns contribute nothing — infer their columns first to resolve
 // types through multiple hops.
-func buildDefinitionSchema(parsedPipeline *pipeline.Pipeline) sqlintelligence.Schema {
+func buildDefinitionSchema(ctx context.Context, parsedPipeline *pipeline.Pipeline) sqlintelligence.Schema {
 	schema := sqlintelligence.Schema{}
 	if parsedPipeline == nil {
 		return schema
 	}
 	for _, asset := range parsedPipeline.Assets {
-		if asset == nil || len(asset.Columns) == 0 {
+		if asset == nil {
 			continue
 		}
-		columns := make(map[string]string, len(asset.Columns))
-		for _, column := range asset.Columns {
+		assetColumns := asset.Columns
+		if len(assetColumns) == 0 && isAPIAsset(asset) {
+			assetColumns = apiResponseFieldColumns(ctx, asset)
+		}
+		if len(assetColumns) == 0 {
+			continue
+		}
+		columns := make(map[string]string, len(assetColumns))
+		for _, column := range assetColumns {
 			if column.Name == "" {
 				continue
 			}
