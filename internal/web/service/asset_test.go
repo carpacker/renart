@@ -13,6 +13,8 @@ import (
 	"github.com/spf13/afero"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"renart/internal/web/service/assetmeta"
 )
 
 func newAssetTestResolver(workspaceRoot string) *WorkspaceResolver {
@@ -78,13 +80,17 @@ func (s *stubDependencyParser) Close() error {
 	return nil
 }
 
-func TestApplyManualAssetUpstreamsPreservesTrackedInferred(t *testing.T) {
+func TestApplyManualAssetUpstreamsPreservesInferred(t *testing.T) {
 	t.Parallel()
 
+	// analytics.orders is a legacy-tracked inferred dep; analytics.manual_seed
+	// is the manual one the user is (re)declaring. The inferred dep must be
+	// preserved and the manual one recorded in renart_dep_add, while the legacy
+	// key is migrated away.
 	asset := &pipeline.Asset{
 		Name: "analytics.customers",
 		Meta: pipeline.EmptyStringMap{
-			renartInferredUpstreamsMetaKey: "analytics.orders",
+			assetmeta.KeyLegacyInferredUpstreams: "analytics.orders",
 		},
 		Upstreams: []pipeline.Upstream{
 			{Type: "asset", Value: "analytics.manual_seed", Mode: pipeline.UpstreamModeFull},
@@ -101,43 +107,10 @@ func TestApplyManualAssetUpstreamsPreservesTrackedInferred(t *testing.T) {
 
 	applyManualAssetUpstreams(asset, p, []string{"analytics.manual_seed"})
 
-	assert.Equal(t, []string{"analytics.manual_seed", "analytics.orders"}, upstreamValues(asset.Upstreams))
-	assert.Equal(t, "analytics.orders", asset.Meta[renartInferredUpstreamsMetaKey])
-}
-
-func TestMergeSQLAssetDependenciesPreservesManualAndReplacesTrackedInferred(t *testing.T) {
-	t.Parallel()
-
-	merged := mergeSQLAssetDependencies(
-		"analytics.orders_report",
-		[]pipeline.Upstream{
-			{Type: "asset", Value: "analytics.manual_seed", Mode: pipeline.UpstreamModeFull},
-			{Type: "asset", Value: "analytics.old_inferred", Mode: pipeline.UpstreamModeFull},
-			{Type: "uri", Value: "s3://bucket/orders.csv"},
-		},
-		pipeline.EmptyStringMap{renartInferredUpstreamsMetaKey: "analytics.old_inferred"},
-		[]string{"analytics.z_customers", "analytics.manual_seed", "analytics.a_orders", "analytics.orders_report"},
-	)
-
-	assert.Equal(t, []string{"s3://bucket/orders.csv", "analytics.manual_seed", "analytics.a_orders", "analytics.z_customers"}, upstreamValues(merged.Upstreams))
-	assert.Equal(t, []string{"analytics.a_orders", "analytics.z_customers"}, merged.Inferred)
-}
-
-func TestMergeSQLAssetDependenciesClearsStaleTrackedInferred(t *testing.T) {
-	t.Parallel()
-
-	merged := mergeSQLAssetDependencies(
-		"analytics.orders_report",
-		[]pipeline.Upstream{
-			{Type: "asset", Value: "analytics.manual_seed", Mode: pipeline.UpstreamModeFull},
-			{Type: "asset", Value: "analytics.old_inferred", Mode: pipeline.UpstreamModeFull},
-		},
-		pipeline.EmptyStringMap{renartInferredUpstreamsMetaKey: "analytics.old_inferred"},
-		nil,
-	)
-
-	assert.Equal(t, []string{"analytics.manual_seed"}, upstreamValues(merged.Upstreams))
-	assert.Empty(t, merged.Inferred)
+	assert.Equal(t, []string{"analytics.orders", "analytics.manual_seed"}, upstreamValues(asset.Upstreams))
+	assert.Equal(t, "a:analytics.manual_seed#full", asset.Meta[assetmeta.KeyDepAdd])
+	_, hasLegacy := asset.Meta[assetmeta.KeyLegacyInferredUpstreams]
+	assert.False(t, hasLegacy, "legacy inferred key should be migrated away")
 }
 
 func TestDeriveSQLAssetTypeForIngestrSourceUsesDestinationType(t *testing.T) {
@@ -200,7 +173,7 @@ func TestReconcileSQLAssetDependenciesRemovesOnlyTrackedInferred(t *testing.T) {
 			Content: "select * from analytics.manual_seed",
 		},
 		Meta: pipeline.EmptyStringMap{
-			renartInferredUpstreamsMetaKey: "analytics.customers",
+			assetmeta.KeyLegacyInferredUpstreams: "analytics.customers",
 		},
 		Upstreams: []pipeline.Upstream{
 			{Type: "asset", Value: "analytics.manual_seed", Mode: pipeline.UpstreamModeFull},
@@ -219,8 +192,11 @@ func TestReconcileSQLAssetDependenciesRemovesOnlyTrackedInferred(t *testing.T) {
 	renderer := jinja.NewRendererWithYesterday("analytics", "test-run")
 	require.NoError(t, reconcileSQLAssetDependencies(context.Background(), asset, p, parser, renderer))
 
+	// manual_seed is referenced by SQL (so re-inferred); customers was only
+	// tracked by the legacy key and is no longer referenced → dropped. The
+	// legacy key is migrated away.
 	assert.Equal(t, []string{"analytics.manual_seed"}, upstreamValues(asset.Upstreams))
-	_, ok := asset.Meta[renartInferredUpstreamsMetaKey]
+	_, ok := asset.Meta[assetmeta.KeyLegacyInferredUpstreams]
 	assert.False(t, ok)
 }
 
@@ -270,13 +246,18 @@ select 1 as order_id
 	content, err := os.ReadFile(filepath.Join(assetsRoot, "customers.sql"))
 	require.NoError(t, err)
 	assert.Contains(t, string(content), "depends:\n  - analytics.orders")
-	assert.Contains(t, string(content), "renart_inferred_upstreams: analytics.orders")
+	// The inferred dep is reconstructable from depends + the projection
+	// checksum; the deprecated explicit-list key must not be written.
+	assert.NotContains(t, string(content), "renart_inferred_upstreams")
+	assert.Contains(t, string(content), "renart_sig_deps:")
 
 	_, parsedPipeline, asset, err := resolveAssetByID(context.Background(), EncodeID("analytics/assets/analytics/customers.sql"))
 	require.NoError(t, err)
 	require.NotNil(t, parsedPipeline)
 	assert.Equal(t, []string{"analytics.orders"}, upstreamValues(asset.Upstreams))
-	assert.Equal(t, "analytics.orders", asset.Meta[renartInferredUpstreamsMetaKey])
+	assert.NotEmpty(t, asset.Meta[assetmeta.KeySigDeps])
+	_, hasLegacy := asset.Meta[assetmeta.KeyLegacyInferredUpstreams]
+	assert.False(t, hasLegacy)
 }
 
 func TestAssetServiceUpdatePersistsManualUpstreamsInHeader(t *testing.T) {
@@ -409,11 +390,13 @@ select 1 as customer_id
 
 	_, _, asset, err := resolveAssetByID(context.Background(), EncodeID("analytics/assets/customers.sql"))
 	require.NoError(t, err)
-	assert.Equal(t, []string{"analytics.manual_seed", "analytics.orders"}, upstreamValues(asset.Upstreams))
-	assert.Equal(t, "analytics.orders", asset.Meta[renartInferredUpstreamsMetaKey])
+	assert.Equal(t, []string{"analytics.orders", "analytics.manual_seed"}, upstreamValues(asset.Upstreams))
+	assert.Equal(t, "a:analytics.manual_seed#full", asset.Meta[assetmeta.KeyDepAdd])
+	assert.NotEmpty(t, asset.Meta[assetmeta.KeySigDeps])
 	fileContent, err := os.ReadFile(filepath.Join(assetsRoot, "customers.sql"))
 	require.NoError(t, err)
-	assert.Contains(t, string(fileContent), "depends:\n  - analytics.manual_seed\n  - analytics.orders")
+	// inferred deps are listed before manual ones (§19)
+	assert.Contains(t, string(fileContent), "depends:\n  - analytics.orders\n  - analytics.manual_seed")
 }
 
 func TestAssetServiceCreateReconcilesSQLDependenciesImmediately(t *testing.T) {
@@ -448,7 +431,7 @@ select 1 as order_id
 		ResolveAssetByID:             resolveAssetByID,
 		DefaultAssetContent:          DefaultAssetContent,
 		DerivedAssetContent:          DefaultDerivedSQLAssetContent,
-		EnsurePythonRequirements:     func(string, string, string) error { return nil },
+		EnsurePythonProject:          func(string, string, string) error { return nil },
 		SuppressWatcher:              func(string) {},
 		PushWorkspaceUpdateImmediate: func(context.Context, string, string) {},
 	})
@@ -466,13 +449,68 @@ select 1 as order_id
 	assert.NotContains(t, string(content), "name:")
 	assert.NotContains(t, string(content), "source connection:")
 	assert.Contains(t, string(content), "depends:\n  - analytics.orders")
-	assert.Contains(t, string(content), "renart_inferred_upstreams: analytics.orders")
+	assert.NotContains(t, string(content), "renart_inferred_upstreams")
+	assert.Contains(t, string(content), "renart_sig_deps:")
 
 	_, _, asset, err := resolveAssetByID(context.Background(), response.AssetID)
 	require.NoError(t, err)
 	assert.Equal(t, []string{"analytics.orders"}, upstreamValues(asset.Upstreams))
-	assert.Equal(t, "analytics.orders", asset.Meta[renartInferredUpstreamsMetaKey])
+	assert.NotEmpty(t, asset.Meta[assetmeta.KeySigDeps])
 	assert.Equal(t, "analytics.orders_child_1", asset.Name)
+}
+
+func TestAssetServiceCreateDownstreamFromUnprefixedSource(t *testing.T) {
+	t.Parallel()
+
+	// A notebook-promoted asset lives directly under assets/ with an unprefixed
+	// name. A downstream asset created from it carries a user-provided prefixed
+	// name, and its path must encode that prefix so bruin infers it back.
+	workspaceRoot := t.TempDir()
+	pipelineRoot := filepath.Join(workspaceRoot, "analytics")
+	assetsRoot := filepath.Join(pipelineRoot, "assets")
+	require.NoError(t, os.MkdirAll(assetsRoot, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(pipelineRoot, "pipeline.yml"), []byte(strings.TrimSpace(`
+name: analytics
+schedule: daily
+start_date: "2024-01-01"
+default_connections:
+  duckdb: duckdb-default
+`)+"\n"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(assetsRoot, "cell_4.sql"), []byte(strings.TrimSpace(`
+/* @bruin
+name: cell_4
+type: duckdb.sql
+materialization:
+  type: view
+@bruin */
+
+select 1 as id
+`)+"\n"), 0o644))
+
+	resolveAssetByID := newAssetTestResolver(workspaceRoot).ResolveAssetByID
+
+	service := NewAssetService(AssetDependencies{
+		WorkspaceRoot:                workspaceRoot,
+		ResolveAssetByID:             resolveAssetByID,
+		DefaultAssetContent:          DefaultAssetContent,
+		DerivedAssetContent:          DefaultDerivedSQLAssetContent,
+		EnsurePythonProject:          func(string, string, string) error { return nil },
+		SuppressWatcher:              func(string) {},
+		PushWorkspaceUpdateImmediate: func(context.Context, string, string) {},
+	})
+
+	response, apiErr := service.Create(context.Background(), EncodeID("analytics"), CreateAssetParams{
+		Name:          "marts.cell_4_downstream",
+		SourceAssetID: EncodeID("analytics/assets/cell_4.sql"),
+	})
+	require.Nil(t, apiErr)
+	require.Equal(t, "ok", response.Status)
+	require.Equal(t, "analytics/assets/marts/cell_4_downstream.sql", response.AssetPath)
+
+	_, _, asset, err := resolveAssetByID(context.Background(), response.AssetID)
+	require.NoError(t, err)
+	assert.Equal(t, "marts.cell_4_downstream", asset.Name)
+	assert.Equal(t, []string{"cell_4"}, upstreamValues(asset.Upstreams))
 }
 
 func TestAssetServiceCreateRejectsUnprefixedAssetName(t *testing.T) {
@@ -487,7 +525,7 @@ func TestAssetServiceCreateRejectsUnprefixedAssetName(t *testing.T) {
 		WorkspaceRoot:                workspaceRoot,
 		DefaultAssetContent:          DefaultAssetContent,
 		DerivedAssetContent:          DefaultDerivedSQLAssetContent,
-		EnsurePythonRequirements:     func(string, string, string) error { return nil },
+		EnsurePythonProject:          func(string, string, string) error { return nil },
 		SuppressWatcher:              func(string) {},
 		PushWorkspaceUpdateImmediate: func(context.Context, string, string) {},
 	})
@@ -512,7 +550,7 @@ func TestAssetServiceCreateWritesDroppedSeedFile(t *testing.T) {
 		WorkspaceRoot:                workspaceRoot,
 		DefaultAssetContent:          DefaultAssetContent,
 		DerivedAssetContent:          DefaultDerivedSQLAssetContent,
-		EnsurePythonRequirements:     func(string, string, string) error { return nil },
+		EnsurePythonProject:          func(string, string, string) error { return nil },
 		SuppressWatcher:              func(string) {},
 		PushWorkspaceUpdateImmediate: func(context.Context, string, string) {},
 	})
@@ -587,8 +625,11 @@ select 1 as customer_id
 
 	_, _, asset, err := resolveAssetByID(context.Background(), EncodeID("analytics/assets/customers.sql"))
 	require.NoError(t, err)
-	assert.Equal(t, []string{"analytics.manual_seed", "analytics.orders"}, upstreamValues(asset.Upstreams))
-	assert.Equal(t, "analytics.orders", asset.Meta[renartInferredUpstreamsMetaKey])
+	// analytics.manual_seed was an untracked file dep → adopted as manual;
+	// analytics.orders is now inferred from the SQL.
+	assert.Equal(t, []string{"analytics.orders", "analytics.manual_seed"}, upstreamValues(asset.Upstreams))
+	assert.Equal(t, "a:analytics.manual_seed#full", asset.Meta[assetmeta.KeyDepAdd])
+	assert.NotEmpty(t, asset.Meta[assetmeta.KeySigDeps])
 }
 
 func TestAssetServiceUpdateChangedContentReconcilesDependenciesViaParser(t *testing.T) {
@@ -650,11 +691,12 @@ select 1 as customer_id
 
 	_, _, asset, err := resolveAssetByID(context.Background(), EncodeID("analytics/assets/customers.sql"))
 	require.NoError(t, err)
-	assert.Equal(t, []string{"analytics.manual_seed", "analytics.orders"}, upstreamValues(asset.Upstreams))
-	assert.Equal(t, "analytics.orders", asset.Meta[renartInferredUpstreamsMetaKey])
+	assert.Equal(t, []string{"analytics.orders", "analytics.manual_seed"}, upstreamValues(asset.Upstreams))
+	assert.Equal(t, "a:analytics.manual_seed#full", asset.Meta[assetmeta.KeyDepAdd])
 	fileContent, err := os.ReadFile(filepath.Join(assetsRoot, "customers.sql"))
 	require.NoError(t, err)
-	assert.Contains(t, string(fileContent), "renart_inferred_upstreams: analytics.orders")
+	assert.NotContains(t, string(fileContent), "renart_inferred_upstreams")
+	assert.Contains(t, string(fileContent), "renart_sig_deps:")
 }
 
 func TestReconcileSQLAssetDependenciesResolvesSameSchemaUnqualifiedNames(t *testing.T) {
@@ -682,7 +724,7 @@ func TestReconcileSQLAssetDependenciesResolvesSameSchemaUnqualifiedNames(t *test
 	require.NoError(t, reconcileSQLAssetDependencies(context.Background(), asset, p, parser, renderer))
 
 	assert.Equal(t, []string{"analytics.orders"}, upstreamValues(asset.Upstreams))
-	assert.Equal(t, "analytics.orders", asset.Meta[renartInferredUpstreamsMetaKey])
+	assert.NotEmpty(t, asset.Meta[assetmeta.KeySigDeps])
 }
 
 func TestDeriveDownstreamAssetName_PreservesPrefix(t *testing.T) {

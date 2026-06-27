@@ -24,6 +24,8 @@ func main() {
 			cmd.Standalone(),
 			cmd.Fp(),
 			cmd.Deploy(),
+			cmd.TypeCheck(),
+			cmd.WarmCache(),
 		},
 		DisableSliceFlagSeparator: true,
 	}

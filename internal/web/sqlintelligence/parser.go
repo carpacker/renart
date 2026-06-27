@@ -55,12 +55,17 @@ type ParseContextDiagnostic struct {
 }
 
 type ParseContext struct {
-	QueryKind      string                   `json:"query_kind"`
-	IsSingleSelect bool                     `json:"is_single_select"`
-	Tables         []ParseContextTable      `json:"tables"`
-	Columns        []ParseContextColumn     `json:"columns"`
-	Diagnostics    []ParseContextDiagnostic `json:"diagnostics"`
-	Errors         []string                 `json:"errors"`
+	QueryKind      string `json:"query_kind"`
+	IsSingleSelect bool   `json:"is_single_select"`
+	// IsReadOnlyResult is true for a single statement that yields a result set
+	// with no side effects — a plain SELECT, a CTE-wrapped SELECT, or a set
+	// operation (UNION/INTERSECT/EXCEPT). Looser than IsSingleSelect (which is
+	// SELECT-only); used to decide what is safe to auto-recompute.
+	IsReadOnlyResult bool                     `json:"is_read_only_result"`
+	Tables           []ParseContextTable      `json:"tables"`
+	Columns          []ParseContextColumn     `json:"columns"`
+	Diagnostics      []ParseContextDiagnostic `json:"diagnostics"`
+	Errors           []string                 `json:"errors"`
 }
 
 type parseContextRequest struct {

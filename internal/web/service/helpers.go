@@ -145,6 +145,13 @@ func normalizeExecutableContent(content string) string {
 
 // DefaultAssetContent generates default content for a new asset.
 func DefaultAssetContent(assetName, assetType, assetPath string) string {
+	if isSlingAssetType(assetType) {
+		return defaultSlingAssetContent(assetName)
+	}
+	if isAPIAssetType(assetType) {
+		return defaultAPIAssetContent(assetName)
+	}
+
 	if strings.HasSuffix(strings.ToLower(strings.TrimSpace(assetType)), ".seed") {
 		return fmt.Sprintf("name: %s\ntype: %s\n\nparameters:\n  path: ./%s.csv\n", assetName, assetType, assetNameLeafPath(assetName))
 	}

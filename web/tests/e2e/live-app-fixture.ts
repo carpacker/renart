@@ -40,10 +40,12 @@ const postgresLockPath = resolve(e2eWorkspaceRoot, "postgres.lock");
 
 export const liveTest = base.extend<{
   fixtureName: string;
+  liveAppEnv: Record<string, string | undefined>;
   liveApp: LiveApp;
   livePostgres: LivePostgres | null;
 }>({
   fixtureName: ["basic-workspace", { option: true }],
+  liveAppEnv: [{}, { option: true }],
   livePostgres: [
     async ({ fixtureName }, use) => {
       if (fixtureName !== "empty-workspace-postgres") {
@@ -136,7 +138,7 @@ export const liveTest = base.extend<{
       }
     }
   },
-  liveApp: async ({ fixtureName, livePostgres }, use) => {
+  liveApp: async ({ fixtureName, livePostgres, liveAppEnv }, use) => {
     if (!existsSync(binaryPath)) {
       throw new Error(
         `Renart binary not found at ${binaryPath}. Build it first or set BRUIN_E2E_BINARY.`
@@ -177,7 +179,7 @@ export const liveTest = base.extend<{
       ],
       {
         cwd: repoRoot,
-        env: process.env,
+        env: { ...process.env, ...liveAppEnv },
         stdio: "inherit",
       }
     );
@@ -192,6 +194,39 @@ export const liveTest = base.extend<{
     }
   },
 });
+
+export const liveServerBinaryPath = binaryPath;
+export const liveServerStaticDir = staticDir;
+export const liveServerHost = host;
+export const liveServerRepoRoot = repoRoot;
+
+export type SpawnedServer = {
+  baseURL: string;
+  child: ReturnType<typeof spawn>;
+};
+
+// startLiveServer boots a Renart server against an existing workspace directory.
+// Used by tests that need to restart the server (e.g. crash recovery), which
+// the single-server liveApp fixture does not cover.
+export async function startLiveServer(workspaceDir: string): Promise<SpawnedServer> {
+  if (!existsSync(binaryPath)) {
+    throw new Error(`Renart binary not found at ${binaryPath}. Build it first or set BRUIN_E2E_BINARY.`);
+  }
+  const port = await getAvailablePort();
+  const baseURL = `http://${host}:${port}`;
+  const child = spawn(
+    binaryPath,
+    ["web", "--host", host, "--port", String(port), "--static-dir", staticDir, "--watch-mode", "poll", "--no-open", workspaceDir],
+    { cwd: repoRoot, env: process.env, stdio: "inherit" }
+  );
+  await waitForServer(baseURL);
+  return { baseURL, child };
+}
+
+export async function stopLiveServer(server: SpawnedServer, signal: NodeJS.Signals = "SIGTERM") {
+  server.child.kill(signal);
+  await waitForExit(server.child);
+}
 
 export async function createLivePostgres() {
   mkdirSync(e2eWorkspaceRoot, { recursive: true });

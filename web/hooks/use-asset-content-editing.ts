@@ -5,7 +5,10 @@ import { useCallback, useEffect, useRef } from "react";
 
 import { useDebouncedAssetSave } from "@/hooks/use-debounced-asset-save";
 import { fillAssetColumnsFromDB } from "@/lib/api";
-import { editorDraftAtom } from "@/lib/atoms/domains/editor";
+import {
+  editorDraftAtom,
+  editorProgrammaticContentAtom,
+} from "@/lib/atoms/domains/editor";
 import { WebAsset } from "@/lib/types";
 
 export type SaveSelectedAssetResult = false | "saved" | "already-saved";
@@ -26,6 +29,7 @@ export function useAssetContentEditing({
   saveDelay?: number;
 }) {
   const editorDraft = useAtomValue(editorDraftAtom);
+  const editorProgrammaticContent = useAtomValue(editorProgrammaticContentAtom);
   const setEditorDraft = useSetAtom(editorDraftAtom);
   const {
     scheduleSave,
@@ -45,6 +49,7 @@ export function useAssetContentEditing({
     assetId: null,
     value: "",
   });
+  const appliedProgrammaticRevisionRef = useRef<Record<string, number>>({});
 
   const editorValue = asset
     ? editorDraft[asset.id] ?? asset.content
@@ -56,12 +61,28 @@ export function useAssetContentEditing({
   // moves for changes that did not originate from the editor itself (asset
   // switch, SSE update, format) - the editor already has its own keystrokes.
   const assetId = asset?.id ?? null;
+  const programmaticContent = assetId
+    ? editorProgrammaticContent[assetId]
+    : undefined;
+  const hasUnappliedProgrammaticContent = Boolean(
+    assetId &&
+      programmaticContent &&
+      appliedProgrammaticRevisionRef.current[assetId] !==
+        programmaticContent.revision
+  );
   const lastEditorChange = lastEditorChangeRef.current;
   const changeCameFromEditor =
     assetId !== null &&
     lastEditorChange?.assetId === assetId &&
     lastEditorChange.value === editorValue;
-  if (displayValueRef.current.assetId !== assetId || !changeCameFromEditor) {
+  if (assetId && hasUnappliedProgrammaticContent && programmaticContent) {
+    displayValueRef.current = { assetId, value: programmaticContent.content };
+    appliedProgrammaticRevisionRef.current[assetId] =
+      programmaticContent.revision;
+  } else if (
+    displayValueRef.current.assetId !== assetId ||
+    !changeCameFromEditor
+  ) {
     displayValueRef.current = { assetId, value: editorValue };
   }
   const editorDisplayValue = displayValueRef.current.value;

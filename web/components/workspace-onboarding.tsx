@@ -261,7 +261,7 @@ export function WorkspaceOnboarding({
                 />
               </div>
               <div className="rounded-xl border bg-muted/20 p-4 text-sm text-muted-foreground">
-                This creates `duckdb-files/chess_playground.duckdb`, a `chess-default` source connection, and sample assets under the `quickstart` prefix.
+                This creates `duckdb-files/chess_playground.duckdb`, native Chess.com API assets, and sample assets under the `quickstart` prefix.
               </div>
               {importResult?.error ? (
                 <div className="space-y-3">
@@ -517,8 +517,8 @@ function renderOnboardingSuccess(importResult: { output?: string } | null) {
 function QuickstartDagPreview() {
   const nodeTypes: NodeTypes = { assetNode: AssetNode };
   const nodes = [
-    previewAssetNode("players", "quickstart.players", "ingestr", { x: 16, y: 24 }, { source_connection: "chess-default", source_table: "profiles", destination: "duckdb" }),
-    previewAssetNode("games", "quickstart.games", "ingestr", { x: 360, y: 24 }, { source_connection: "chess-default", source_table: "games", destination: "duckdb" }),
+    previewAssetNode("players", "quickstart.players", "api", { x: 16, y: 24 }, { url: "api.chess.com/player", target: "duckdb-default" }),
+    previewAssetNode("games", "quickstart.games", "api", { x: 360, y: 24 }, { url: "api.chess.com/games", target: "duckdb-default" }),
     previewAssetNode("stats", "quickstart.player_stats", "duckdb.sql", { x: 188, y: 180 }, undefined, "table", 10),
   ];
   const edges = [
@@ -599,7 +599,7 @@ function renderQuickstartSuccess(importResult: { output?: string; pipeline_path?
         <div className="mt-2 space-y-1 text-muted-foreground">
           <div>Pipeline path: <span className="text-foreground">{importResult?.pipeline_path ?? "quickstart"}</span></div>
           <div>DuckDB connection: <span className="text-foreground">duckdb-default</span></div>
-          <div>Chess source connection: <span className="text-foreground">chess-default</span></div>
+          <div>API target: <span className="text-foreground">duckdb-default</span></div>
           <div>Database file: <span className="text-foreground">duckdb-files/chess_playground.duckdb</span></div>
         </div>
       </div>

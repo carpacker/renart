@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"path/filepath"
 	"regexp"
-	"sort"
 	"strings"
 	"time"
 
@@ -13,6 +12,8 @@ import (
 	"github.com/bruin-data/bruin/pkg/pipeline"
 	"github.com/bruin-data/bruin/pkg/sqlparser"
 	"github.com/spf13/afero"
+
+	"renart/internal/web/service/assetmeta"
 )
 
 var newDependencyParser = func() (sqlparser.Parser, error) {
@@ -25,13 +26,6 @@ var newDependencyParser = func() (sqlparser.Parser, error) {
 
 	return sqlparser.NewSQLParser(false)
 }
-
-type sqlAssetDependencyMerge struct {
-	Upstreams []pipeline.Upstream
-	Inferred  []string
-}
-
-const renartInferredUpstreamsMetaKey = "renart_inferred_upstreams"
 
 func (s *AssetService) RefactorDirectDependencies(ctx context.Context, parsedPipeline *pipeline.Pipeline, oldName, newName string) ([]string, []string, error) {
 	if parsedPipeline == nil || strings.TrimSpace(oldName) == strings.TrimSpace(newName) {
@@ -124,6 +118,14 @@ func (s *AssetService) ScheduleSQLPatches(relAssetPath string) {
 }
 
 func (s *AssetService) RunSQLPatches(relAssetPath string) {
+	// Serialize against interactive saves (Update) for the same file: both
+	// read-modify-write the asset on disk, and an interleaved truncate would
+	// otherwise let a save observe a torn file and drop the @bruin header.
+	if absPath, err := s.resolver().JoinPath(relAssetPath); err == nil {
+		unlock := s.lockAssetFile(absPath)
+		defer unlock()
+	}
+
 	prefixedPath := relAssetPath
 	if !strings.HasPrefix(prefixedPath, "./") {
 		prefixedPath = "./" + strings.TrimPrefix(prefixedPath, "./")
@@ -217,6 +219,44 @@ func reconcileSQLAssetDependencies(ctx context.Context, asset *pipeline.Asset, p
 	return reconcileSQLAssetDependenciesFS(ctx, afero.NewOsFs(), asset, parsedPipeline, sqlParserInstance, renderer)
 }
 
+// reconcileSlingAssetDependencies auto-infers a Sling asset's upstream from its
+// source mapping: when source_table (or a single declared upstream) resolves to
+// an existing asset, that asset is recorded as an *inferred* dependency. User
+// edits (manual adds / ignores) are preserved through the same assetmeta model
+// the SQL path uses.
+func (s *AssetService) reconcileSlingAssetDependencies(ctx context.Context, relAssetPath string) error {
+	assetID := EncodeID(filepath.ToSlash(relAssetPath))
+	_, parsedPipeline, asset, err := s.deps.ResolveAssetByID(ctx, assetID)
+	if err != nil {
+		return err
+	}
+	if !isSlingAsset(asset) || parsedPipeline == nil {
+		return nil
+	}
+
+	inferred := make([]pipeline.Upstream, 0, 1)
+	if source := resolveSlingSourceAsset(parsedPipeline, asset); source != nil {
+		sourceName := strings.TrimSpace(source.Name)
+		if sourceName != "" && !strings.EqualFold(sourceName, strings.TrimSpace(asset.Name)) {
+			inferred = append(inferred, pipeline.Upstream{Type: "asset", Value: sourceName, Mode: pipeline.UpstreamModeFull})
+		}
+	}
+
+	final, next := assetmeta.ReconcileDependencies(assetmeta.DependencyReconcileInput{
+		AssetName: asset.Name,
+		Inferred:  inferred,
+		Current:   asset.Upstreams,
+		Prev:      assetmeta.Parse(asset.Meta),
+	})
+	asset.Upstreams = final
+	asset.Meta = pipeline.EmptyStringMap(next.Apply(asset.Meta))
+
+	if apiErr := s.persistYAMLAssetPreservingInferredName(asset); apiErr != nil {
+		return fmt.Errorf("persist sling dependencies for %q: %s", asset.Name, apiErr.Message)
+	}
+	return nil
+}
+
 func reconcileSQLAssetDependenciesFS(ctx context.Context, fs afero.Fs, asset *pipeline.Asset, parsedPipeline *pipeline.Pipeline, sqlParserInstance sqlparser.Parser, renderer *jinja.Renderer) error {
 	if asset == nil || parsedPipeline == nil {
 		return nil
@@ -229,9 +269,18 @@ func reconcileSQLAssetDependenciesFS(ctx context.Context, fs afero.Fs, asset *pi
 	if err != nil {
 		return err
 	}
-	merged := mergeSQLAssetDependencies(asset.Name, asset.Upstreams, asset.Meta, inferredNames)
-	asset.Upstreams = merged.Upstreams
-	setRenartInferredUpstreams(&asset.Meta, merged.Inferred)
+	inferredUpstreams := make([]pipeline.Upstream, 0, len(inferredNames))
+	for _, name := range inferredNames {
+		inferredUpstreams = append(inferredUpstreams, pipeline.Upstream{Type: "asset", Value: name, Mode: pipeline.UpstreamModeFull})
+	}
+	final, next := assetmeta.ReconcileDependencies(assetmeta.DependencyReconcileInput{
+		AssetName: asset.Name,
+		Inferred:  inferredUpstreams,
+		Current:   asset.Upstreams,
+		Prev:      assetmeta.Parse(asset.Meta),
+	})
+	asset.Upstreams = final
+	asset.Meta = pipeline.EmptyStringMap(next.Apply(asset.Meta))
 	originalHadExplicitName := assetContentHasExplicitName(asset.ExecutableFile.Content)
 
 	if err := asset.Persist(fs, parsedPipeline); err != nil {
@@ -244,56 +293,6 @@ func reconcileSQLAssetDependenciesFS(ctx context.Context, fs afero.Fs, asset *pi
 	}
 
 	return nil
-}
-
-func mergeSQLAssetDependencies(assetName string, currentUpstreams []pipeline.Upstream, meta pipeline.EmptyStringMap, inferredNames []string) sqlAssetDependencyMerge {
-	tracked := parseRenartInferredUpstreams(meta)
-	manualAssetUpstreams := make([]pipeline.Upstream, 0)
-	nonAssetUpstreams := make([]pipeline.Upstream, 0)
-	manualNames := make(map[string]struct{})
-
-	for _, upstream := range currentUpstreams {
-		if !isAssetUpstream(upstream) {
-			nonAssetUpstreams = append(nonAssetUpstreams, upstream)
-			continue
-		}
-
-		normalized := normalizeDependencyName(upstream.Value)
-		if normalized == "" || strings.EqualFold(normalized, assetName) {
-			continue
-		}
-		if _, ok := tracked[normalized]; ok {
-			continue
-		}
-
-		manualAssetUpstreams = append(manualAssetUpstreams, upstream)
-		manualNames[normalized] = struct{}{}
-	}
-
-	nextInferred := make([]string, 0, len(inferredNames))
-	for _, name := range inferredNames {
-		normalized := normalizeDependencyName(name)
-		if normalized == "" || strings.EqualFold(normalized, assetName) {
-			continue
-		}
-		if _, ok := manualNames[normalized]; ok {
-			continue
-		}
-		nextInferred = append(nextInferred, name)
-	}
-
-	sort.SliceStable(nextInferred, func(i, j int) bool {
-		return strings.ToLower(nextInferred[i]) < strings.ToLower(nextInferred[j])
-	})
-
-	nextUpstreams := make([]pipeline.Upstream, 0, len(nonAssetUpstreams)+len(manualAssetUpstreams)+len(nextInferred))
-	nextUpstreams = append(nextUpstreams, nonAssetUpstreams...)
-	nextUpstreams = append(nextUpstreams, manualAssetUpstreams...)
-	for _, name := range nextInferred {
-		nextUpstreams = append(nextUpstreams, pipeline.Upstream{Type: "asset", Value: name, Mode: pipeline.UpstreamModeFull})
-	}
-
-	return sqlAssetDependencyMerge{Upstreams: nextUpstreams, Inferred: nextInferred}
 }
 
 func inferAllSQLAssetDependencies(ctx context.Context, asset *pipeline.Asset, parsedPipeline *pipeline.Pipeline, sqlParserInstance sqlparser.Parser, renderer *jinja.Renderer) ([]string, error) {
@@ -410,17 +409,27 @@ func resolveInferredDependencyName(dep string, asset *pipeline.Asset, parsedPipe
 	return name
 }
 
+// applyManualAssetUpstreams sets the asset's manual (user-declared) upstreams
+// from the requested list while preserving inferred (renart-managed) ones and
+// any non-asset upstreams, and records the manual set in the provenance
+// (renart_dep_add). Inferred upstreams carry no name tracking under the new
+// model, so the "currently inferred" set is simply the asset upstreams that are
+// not in the previous d.add — a subsequent SQL reconcile re-derives them.
 func applyManualAssetUpstreams(asset *pipeline.Asset, parsedPipeline *pipeline.Pipeline, requested []string) {
 	if asset == nil {
 		return
 	}
 
-	tracked := parseRenartInferredUpstreams(asset.Meta)
-	preservedNonAsset := make([]pipeline.Upstream, 0)
-	preservedTracked := make([]pipeline.Upstream, 0)
-	manualNames := make(map[string]struct{})
-	nextManual := make([]pipeline.Upstream, 0, len(requested))
+	prev := assetmeta.Parse(asset.Meta)
+	prevManual := make(map[string]struct{}, len(prev.DepAdd))
+	for _, key := range prev.DepAdd {
+		prevManual[assetmeta.DependencyMatchKey(key)] = struct{}{}
+	}
 
+	// Build the requested manual upstreams (resolve canonical names, dedupe,
+	// skip self-references).
+	nextManual := make([]pipeline.Upstream, 0, len(requested))
+	manualKeys := make(map[string]struct{}, len(requested))
 	for _, raw := range requested {
 		name := strings.TrimSpace(raw)
 		if name == "" {
@@ -434,55 +443,47 @@ func applyManualAssetUpstreams(asset *pipeline.Asset, parsedPipeline *pipeline.P
 		if strings.EqualFold(name, asset.Name) {
 			continue
 		}
-
-		normalized := normalizeDependencyName(name)
-		if _, ok := manualNames[normalized]; ok {
+		upstream := pipeline.Upstream{Type: "asset", Value: name, Mode: pipeline.UpstreamModeFull}
+		key := assetmeta.DependencyMatchKey(assetmeta.DependencyKey(upstream))
+		if _, ok := manualKeys[key]; ok {
 			continue
 		}
-		manualNames[normalized] = struct{}{}
-		nextManual = append(nextManual, pipeline.Upstream{Type: "asset", Value: name, Mode: pipeline.UpstreamModeFull})
+		manualKeys[key] = struct{}{}
+		nextManual = append(nextManual, upstream)
 	}
 
+	// Preserve non-asset upstreams and inferred asset upstreams (everything that
+	// was not a previous manual dep and is not now requested as manual).
+	preservedNonAsset := make([]pipeline.Upstream, 0)
+	preservedInferred := make([]pipeline.Upstream, 0)
 	for _, upstream := range asset.Upstreams {
 		if !isAssetUpstream(upstream) {
 			preservedNonAsset = append(preservedNonAsset, upstream)
 			continue
 		}
-
-		normalized := normalizeDependencyName(upstream.Value)
-		if normalized == "" {
-			continue
+		key := assetmeta.DependencyMatchKey(assetmeta.DependencyKey(upstream))
+		if _, isManualNow := manualKeys[key]; isManualNow {
+			continue // promoted to manual; carried by nextManual
 		}
-		if _, ok := tracked[normalized]; ok {
-			if _, overridden := manualNames[normalized]; !overridden {
-				preservedTracked = append(preservedTracked, upstream)
-			}
+		if _, wasManual := prevManual[key]; wasManual {
+			continue // an old manual dep the user is replacing
 		}
+		preservedInferred = append(preservedInferred, upstream)
 	}
 
-	asset.Upstreams = append(append(preservedNonAsset, nextManual...), preservedTracked...)
-	nextTracked := make([]string, 0, len(preservedTracked))
-	for _, upstream := range preservedTracked {
-		nextTracked = append(nextTracked, upstream.Value)
-	}
-	setRenartInferredUpstreams(&asset.Meta, nextTracked)
-}
+	// Inferred first, then manual (§19).
+	asset.Upstreams = append(append(preservedInferred, preservedNonAsset...), nextManual...)
 
-func parseRenartInferredUpstreams(meta map[string]string) map[string]string {
-	result := make(map[string]string)
-	if meta == nil {
-		return result
+	next := prev
+	next.Version = assetmeta.SchemaVersion
+	next.Generator = assetmeta.GeneratorVersion
+	next.LegacyInferred = nil
+	depAdd := make([]string, 0, len(nextManual))
+	for _, upstream := range nextManual {
+		depAdd = append(depAdd, assetmeta.DependencyKey(upstream))
 	}
-
-	for _, raw := range strings.Split(meta[renartInferredUpstreamsMetaKey], ",") {
-		name := strings.TrimSpace(raw)
-		if name == "" {
-			continue
-		}
-		result[normalizeDependencyName(name)] = name
-	}
-
-	return result
+	next.DepAdd = depAdd
+	asset.Meta = pipeline.EmptyStringMap(next.Apply(asset.Meta))
 }
 
 func getAssetByNameCaseInsensitiveLocal(parsedPipeline *pipeline.Pipeline, name string) *pipeline.Asset {
@@ -497,43 +498,6 @@ func getAssetByNameCaseInsensitiveLocal(parsedPipeline *pipeline.Pipeline, name 
 	}
 
 	return nil
-}
-
-func setRenartInferredUpstreams(meta *pipeline.EmptyStringMap, upstreams []string) {
-	unique := make([]string, 0, len(upstreams))
-	seen := make(map[string]struct{}, len(upstreams))
-	for _, upstream := range upstreams {
-		name := strings.TrimSpace(upstream)
-		if name == "" {
-			continue
-		}
-		key := normalizeDependencyName(name)
-		if _, ok := seen[key]; ok {
-			continue
-		}
-		seen[key] = struct{}{}
-		unique = append(unique, name)
-	}
-
-	if len(unique) == 0 {
-		if *meta == nil {
-			return
-		}
-		delete(*meta, renartInferredUpstreamsMetaKey)
-		if len(*meta) == 0 {
-			*meta = nil
-		}
-		return
-	}
-
-	sort.SliceStable(unique, func(i, j int) bool {
-		return strings.ToLower(unique[i]) < strings.ToLower(unique[j])
-	})
-
-	if *meta == nil {
-		*meta = pipeline.EmptyStringMap{}
-	}
-	(*meta)[renartInferredUpstreamsMetaKey] = strings.Join(unique, ",")
 }
 
 func normalizeDependencyName(value string) string {

@@ -7,7 +7,7 @@ import {
   MoreHorizontal,
   XCircle,
 } from "lucide-react";
-import { ComponentType, ReactNode } from "react";
+import { ComponentType, Fragment, ReactNode } from "react";
 
 import { Button } from "@/components/ui/button";
 import {
@@ -16,6 +16,13 @@ import {
   DelimitedCardHeader,
   DelimitedCardTitle,
 } from "@/components/ui/delimited-card";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import type { AssetStaleness, AssetStalenessStatus } from "@/lib/api-staleness";
@@ -24,7 +31,7 @@ import { cn } from "@/lib/utils";
 import { RedesignAsset, integrations, kindMeta } from "./redesign-data";
 
 export function RedesignPage({ children }: { children: ReactNode }) {
-  return <div className="flex h-full min-h-0 flex-col bg-zinc-100 text-zinc-950">{children}</div>;
+  return <div className="flex h-full min-h-0 flex-col bg-muted/40 text-foreground">{children}</div>;
 }
 
 export function PageHeader({
@@ -134,12 +141,12 @@ export function StatusPill({ status }: { status: string }) {
 }
 
 const stalenessMeta: Record<AssetStalenessStatus, { label: string; className: string; dotClassName: string }> = {
-  fresh: { label: "Fresh", className: "bg-emerald-100 text-emerald-700", dotClassName: "bg-emerald-500" },
-  stale_edited: { label: "Edited", className: "bg-amber-100 text-amber-700", dotClassName: "bg-amber-500" },
-  stale_upstream: { label: "Upstream changed", className: "bg-amber-50 text-amber-600", dotClassName: "bg-amber-400" },
-  partial: { label: "Partial", className: "bg-sky-100 text-sky-700", dotClassName: "bg-sky-500" },
-  never_built: { label: "Never built", className: "bg-zinc-200 text-zinc-700", dotClassName: "bg-zinc-400" },
-  missing: { label: "Missing", className: "bg-red-100 text-red-700", dotClassName: "bg-red-500" },
+  fresh: { label: "Fresh", className: "bg-emerald-100 text-emerald-700 dark:bg-emerald-500/15 dark:text-emerald-300", dotClassName: "bg-emerald-500" },
+  stale_edited: { label: "Edited", className: "bg-amber-100 text-amber-700 dark:bg-amber-500/15 dark:text-amber-300", dotClassName: "bg-amber-500" },
+  stale_upstream: { label: "Upstream changed", className: "bg-amber-50 text-amber-600 dark:bg-amber-500/10 dark:text-amber-300", dotClassName: "bg-amber-400" },
+  partial: { label: "Partial", className: "bg-sky-100 text-sky-700 dark:bg-sky-500/15 dark:text-sky-300", dotClassName: "bg-sky-500" },
+  never_built: { label: "Never built", className: "bg-zinc-200 text-zinc-700 dark:bg-zinc-500/15 dark:text-zinc-300", dotClassName: "bg-zinc-400" },
+  missing: { label: "Missing", className: "bg-red-100 text-red-700 dark:bg-red-500/15 dark:text-red-300", dotClassName: "bg-red-500" },
 };
 
 export function stalenessLabel(staleness: AssetStaleness) {
@@ -174,7 +181,24 @@ export function stalenessDotClassName(status: AssetStalenessStatus) {
   return stalenessMeta[status]?.dotClassName ?? "bg-zinc-400";
 }
 
-export function AssetNode({ asset, selected }: { asset: RedesignAsset; selected?: boolean }) {
+export type AssetNodeAction = {
+  key: string;
+  label: string;
+  icon: ComponentType<{ className?: string }>;
+  onSelect: () => void;
+  destructive?: boolean;
+  separatorBefore?: boolean;
+};
+
+export function AssetNode({
+  asset,
+  selected,
+  actions,
+}: {
+  asset: RedesignAsset;
+  selected?: boolean;
+  actions?: AssetNodeAction[];
+}) {
   const meta = kindMeta[asset.kind];
   const Icon = meta.icon;
   const statusMeta = assetNodeStatusMeta(asset.status);
@@ -188,7 +212,22 @@ export function AssetNode({ asset, selected }: { asset: RedesignAsset; selected?
       <div className="flex h-8 items-center gap-1.5 border-b bg-muted/30 px-2.5">
         <Icon className="size-3.5 text-muted-foreground" />
         <span className="min-w-0 flex-1 truncate font-mono text-xs font-medium">{asset.name}</span>
-        <MoreHorizontal className="size-3.5 text-muted-foreground" />
+        {actions && actions.length > 0 ? (
+          <DropdownMenu>
+            <DropdownMenuTrigger
+              aria-label="Asset actions"
+              className="nodrag -mr-1 flex size-5 items-center justify-center rounded text-muted-foreground outline-none hover:bg-muted hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring data-[state=open]:bg-muted data-[state=open]:text-foreground"
+              onClick={(event) => event.stopPropagation()}
+            >
+              <MoreHorizontal className="size-3.5" />
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" onClick={(event) => event.stopPropagation()}>
+              <AssetNodeMenuItems actions={actions} ItemComponent={DropdownMenuItem} SeparatorComponent={DropdownMenuSeparator} />
+            </DropdownMenuContent>
+          </DropdownMenu>
+        ) : (
+          <MoreHorizontal className="size-3.5 text-muted-foreground" />
+        )}
       </div>
       <div className="space-y-2 p-2.5">
         <p className="truncate text-[11px] text-muted-foreground">{asset.description}</p>
@@ -206,28 +245,71 @@ export function AssetNode({ asset, selected }: { asset: RedesignAsset; selected?
   );
 }
 
+type AssetNodeMenuItemProps = {
+  variant?: "default" | "destructive";
+  onSelect?: (event: Event) => void;
+  className?: string;
+  children: ReactNode;
+};
+
+export function AssetNodeMenuItems({
+  actions,
+  ItemComponent,
+  SeparatorComponent,
+}: {
+  actions: AssetNodeAction[];
+  ItemComponent: ComponentType<AssetNodeMenuItemProps>;
+  SeparatorComponent: ComponentType;
+}) {
+  return (
+    <>
+      {actions.map((action) => {
+        const ActionIcon = action.icon;
+        return (
+          <Fragment key={action.key}>
+            {action.separatorBefore ? <SeparatorComponent /> : null}
+            <ItemComponent
+              variant={action.destructive ? "destructive" : "default"}
+              onSelect={() => action.onSelect()}
+            >
+              <ActionIcon className="size-3.5" />
+              {action.label}
+            </ItemComponent>
+          </Fragment>
+        );
+      })}
+    </>
+  );
+}
+
 function assetNodeStatusMeta(status: RedesignAsset["status"]) {
   if (status === "unknown") {
-    return { label: "Unknown", className: "bg-zinc-200 text-zinc-700" };
+    return { label: "Unknown", className: "bg-zinc-200 text-zinc-700 dark:bg-zinc-500/15 dark:text-zinc-300" };
   }
   if (status === "pending") {
-    return { label: "Running", className: "bg-blue-100 text-blue-700" };
+    return { label: "Running", className: "bg-blue-100 text-blue-700 dark:bg-blue-500/15 dark:text-blue-300" };
   }
   if (status === "failed" || status === "overdue") {
-    return { label: status === "overdue" ? "Overdue" : "Failed", className: "bg-red-100 text-red-700" };
+    return { label: status === "overdue" ? "Overdue" : "Failed", className: "bg-red-100 text-red-700 dark:bg-red-500/15 dark:text-red-300" };
   }
-  return { label: "Materialized", className: "bg-emerald-100 text-emerald-700" };
+  return { label: "Materialized", className: "bg-emerald-100 text-emerald-700 dark:bg-emerald-500/15 dark:text-emerald-300" };
 }
 
 export function SimpleTable({
   columns,
   rows,
+  className,
+  viewportClassName,
 }: {
   columns: string[];
   rows: Array<Array<ReactNode>>;
+  className?: string;
+  // Constrain the scroll viewport (e.g. "max-h-72"): the cap must live on the
+  // viewport, where Radix actually scrolls, not on the Root.
+  viewportClassName?: string;
 }) {
   return (
-    <ScrollArea className="h-full min-h-0">
+    <ScrollArea className={cn("h-full min-h-0", className)} viewportClassName={viewportClassName}>
       <Table>
         <TableHeader>
           <TableRow className="bg-muted/50">

@@ -38,7 +38,25 @@ func RegisterPipelineRoutes(router chi.Router, handlers *PipelineHandlers) {
 	router.Put("/api/pipelines", handlers.HandleUpdatePipeline)
 	router.Get("/api/pipelines/{id}/config", handlers.HandleGetPipelineConfig)
 	router.Put("/api/pipelines/{id}/config", handlers.HandleUpdatePipelineConfig)
+	router.Get("/api/pipelines/{id}/type-check", handlers.HandleTypeCheckPipeline)
 	router.Delete("/api/pipelines/{id}", handlers.HandleDeletePipeline)
+}
+
+func (h *PipelineHandlers) HandleTypeCheckPipeline(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	startDate := strings.TrimSpace(r.URL.Query().Get("start_date"))
+	endDate := strings.TrimSpace(r.URL.Query().Get("end_date"))
+
+	report, apiErr := h.Service.TypeCheck(r.Context(), id, startDate, endDate)
+	if apiErr != nil {
+		webapi.WriteJSON(w, apiErr.Status, map[string]any{
+			"status": "error",
+			"error":  map[string]string{"code": apiErr.Code, "message": apiErr.Message},
+		})
+		return
+	}
+
+	webapi.WriteJSON(w, http.StatusOK, report)
 }
 
 func (h *PipelineHandlers) HandleCreatePipeline(w http.ResponseWriter, r *http.Request) {

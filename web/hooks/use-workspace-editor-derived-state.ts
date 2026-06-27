@@ -14,12 +14,11 @@ import {
   selectedAssetSchemaSuggestionTablesAtom,
   selectedAssetSchemaTablesAtom,
 } from "@/lib/atoms/domains/suggestions";
+import { parseAssetProvenance } from "@/lib/asset-provenance";
 import { selectedEnvironmentAtom } from "@/lib/atoms/domains/workspace";
 import { SuggestionTableState } from "@/lib/atoms/suggestion-types";
 import { resolveEffectiveConfigEnvironment } from "@/lib/settings-environment";
 import { WebAsset } from "@/lib/types";
-
-const RENART_INFERRED_UPSTREAMS_META_KEY = "renart_inferred_upstreams";
 
 export type WorkspaceResolvedUpstreamTable = {
   upstreamName: string;
@@ -115,20 +114,19 @@ export function useWorkspaceEditorDerivedState({
     [asset]
   );
 
-  const inferredUpstreamNames = useMemo(() => {
-    const raw = asset?.meta?.[RENART_INFERRED_UPSTREAMS_META_KEY] ?? "";
-    return raw
-      .split(",")
-      .map((item) => item.trim())
-      .filter(Boolean);
-  }, [asset?.meta]);
-
+  // Manual dependencies are the ones the user added explicitly, tracked in the
+  // renart provenance (renart_dep_add); everything else in `upstreams` was
+  // inferred from the SQL. This mirrors the redesign's classifyDependencies.
   const manualUpstreamNames = useMemo(() => {
-    const inferred = new Set(inferredUpstreamNames.map((name) => name.toLowerCase()));
-    return (asset?.upstreams ?? []).filter(
-      (name) => !inferred.has(name.toLowerCase())
-    );
-  }, [asset?.upstreams, inferredUpstreamNames]);
+    const provenance = parseAssetProvenance(asset?.meta);
+    const manualKeys = new Set(provenance.depAdd.map((dep) => dep.value.toLowerCase()));
+    return (asset?.upstreams ?? []).filter((name) => manualKeys.has(name.toLowerCase()));
+  }, [asset?.meta, asset?.upstreams]);
+
+  const inferredUpstreamNames = useMemo(() => {
+    const manual = new Set(manualUpstreamNames.map((name) => name.toLowerCase()));
+    return (asset?.upstreams ?? []).filter((name) => !manual.has(name.toLowerCase()));
+  }, [asset?.upstreams, manualUpstreamNames]);
 
   const mergedColumnNames = useMemo(
     () => ((assetColumns ?? []).map((column) => column.name).filter(Boolean) as string[]),

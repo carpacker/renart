@@ -27,6 +27,7 @@ import { Route as OnboardingImportRouteRouteImport } from './routes/onboarding/i
 import { Route as WorkspaceSettingsRouteRouteImport } from './routes/_workspace/settings/route'
 import { Route as RedesignRunsIndexRouteImport } from './routes/redesign/runs/index'
 import { Route as RedesignProjectIndexRouteImport } from './routes/redesign/project/index'
+import { Route as RedesignNotebooksIndexRouteImport } from './routes/redesign/notebooks/index'
 import { Route as RedesignAccountIndexRouteImport } from './routes/redesign/account/index'
 import { Route as OnboardingImportIndexRouteImport } from './routes/onboarding/import/index'
 import { Route as WorkspaceSettingsIndexRouteImport } from './routes/_workspace/settings/index'
@@ -161,6 +162,11 @@ const RedesignProjectIndexRoute = RedesignProjectIndexRouteImport.update({
   id: '/',
   path: '/',
   getParentRoute: () => RedesignProjectRouteRoute,
+} as any)
+const RedesignNotebooksIndexRoute = RedesignNotebooksIndexRouteImport.update({
+  id: '/notebooks/',
+  path: '/notebooks/',
+  getParentRoute: () => RedesignRouteRoute,
 } as any)
 const RedesignAccountIndexRoute = RedesignAccountIndexRouteImport.update({
   id: '/',
@@ -468,6 +474,7 @@ export interface FileRoutesByFullPath {
   '/settings/': typeof WorkspaceSettingsIndexRoute
   '/onboarding/import/': typeof OnboardingImportIndexRoute
   '/redesign/account/': typeof RedesignAccountIndexRoute
+  '/redesign/notebooks/': typeof RedesignNotebooksIndexRoute
   '/redesign/project/': typeof RedesignProjectIndexRoute
   '/redesign/runs/': typeof RedesignRunsIndexRoute
   '/pipelines/$pipelineId/config': typeof WorkspacePipelinesPipelineIdConfigRouteRouteWithChildren
@@ -523,6 +530,7 @@ export interface FileRoutesByTo {
   '/settings': typeof WorkspaceSettingsIndexRoute
   '/onboarding/import': typeof OnboardingImportIndexRoute
   '/redesign/account': typeof RedesignAccountIndexRoute
+  '/redesign/notebooks': typeof RedesignNotebooksIndexRoute
   '/redesign/project': typeof RedesignProjectIndexRoute
   '/redesign/runs': typeof RedesignRunsIndexRoute
   '/settings/environments/new': typeof WorkspaceSettingsEnvironmentsNewRoute
@@ -585,6 +593,7 @@ export interface FileRoutesById {
   '/_workspace/settings/': typeof WorkspaceSettingsIndexRoute
   '/onboarding/import/': typeof OnboardingImportIndexRoute
   '/redesign/account/': typeof RedesignAccountIndexRoute
+  '/redesign/notebooks/': typeof RedesignNotebooksIndexRoute
   '/redesign/project/': typeof RedesignProjectIndexRoute
   '/redesign/runs/': typeof RedesignRunsIndexRoute
   '/_workspace/pipelines/$pipelineId/config': typeof WorkspacePipelinesPipelineIdConfigRouteRouteWithChildren
@@ -651,6 +660,7 @@ export interface FileRouteTypes {
     | '/settings/'
     | '/onboarding/import/'
     | '/redesign/account/'
+    | '/redesign/notebooks/'
     | '/redesign/project/'
     | '/redesign/runs/'
     | '/pipelines/$pipelineId/config'
@@ -706,6 +716,7 @@ export interface FileRouteTypes {
     | '/settings'
     | '/onboarding/import'
     | '/redesign/account'
+    | '/redesign/notebooks'
     | '/redesign/project'
     | '/redesign/runs'
     | '/settings/environments/new'
@@ -767,6 +778,7 @@ export interface FileRouteTypes {
     | '/_workspace/settings/'
     | '/onboarding/import/'
     | '/redesign/account/'
+    | '/redesign/notebooks/'
     | '/redesign/project/'
     | '/redesign/runs/'
     | '/_workspace/pipelines/$pipelineId/config'
@@ -931,6 +943,13 @@ declare module '@tanstack/react-router' {
       fullPath: '/redesign/project/'
       preLoaderRoute: typeof RedesignProjectIndexRouteImport
       parentRoute: typeof RedesignProjectRouteRoute
+    }
+    '/redesign/notebooks/': {
+      id: '/redesign/notebooks/'
+      path: '/notebooks'
+      fullPath: '/redesign/notebooks/'
+      preLoaderRoute: typeof RedesignNotebooksIndexRouteImport
+      parentRoute: typeof RedesignRouteRoute
     }
     '/redesign/account/': {
       id: '/redesign/account/'
@@ -1394,6 +1413,7 @@ interface RedesignRouteRouteChildren {
   RedesignPipelinesPipelineIdRouteRoute: typeof RedesignPipelinesPipelineIdRouteRouteWithChildren
   RedesignDashboardsDashboardIdRoute: typeof RedesignDashboardsDashboardIdRoute
   RedesignNotebooksNotebookIdRoute: typeof RedesignNotebooksNotebookIdRoute
+  RedesignNotebooksIndexRoute: typeof RedesignNotebooksIndexRoute
 }
 
 const RedesignRouteRouteChildren: RedesignRouteRouteChildren = {
@@ -1407,6 +1427,7 @@ const RedesignRouteRouteChildren: RedesignRouteRouteChildren = {
     RedesignPipelinesPipelineIdRouteRouteWithChildren,
   RedesignDashboardsDashboardIdRoute: RedesignDashboardsDashboardIdRoute,
   RedesignNotebooksNotebookIdRoute: RedesignNotebooksNotebookIdRoute,
+  RedesignNotebooksIndexRoute: RedesignNotebooksIndexRoute,
 }
 
 const RedesignRouteRouteWithChildren = RedesignRouteRoute._addFileChildren(

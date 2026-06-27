@@ -21,10 +21,11 @@ import (
 	webhttpapi "renart/internal/web/httpapi"
 	"renart/internal/web/matlog"
 	"renart/internal/web/policy"
-	"renart/internal/web/snapshot"
-	"renart/internal/web/staleness"
 	webscheduler "renart/internal/web/scheduler"
 	"renart/internal/web/service"
+	"renart/internal/web/snapshot"
+	"renart/internal/web/sqlformat"
+	"renart/internal/web/staleness"
 	webstatic "renart/internal/web/static"
 	"renart/internal/web/watch"
 	webui "renart/web"
@@ -207,17 +208,37 @@ func newWebServer(ctx context.Context, cfg serverConfig, logger *zap.Logger) (*w
 		ResolveAssetByID:             server.resolveAssetByID,
 		DefaultAssetContent:          defaultAssetContent,
 		DerivedAssetContent:          defaultDerivedSQLAssetContent,
-		EnsurePythonRequirements:     ensurePythonRequirementsFile,
+		EnsurePythonProject:          ensurePythonProjectFile,
 		SuppressWatcher:              server.suppressWatcherFor,
 		PushWorkspaceUpdate:          server.pushWorkspaceUpdate,
 		PushWorkspaceUpdateImmediate: server.pushWorkspaceUpdateImmediate,
 		PushWorkspaceUpdateImmediateWithChangedIDs: server.pushWorkspaceUpdateImmediateWithChangedIDs,
+		PushAssetContentUpdateImmediate:            server.pushAssetContentUpdateImmediate,
 	})
 
 	server.sqlSvc = service.NewSQLService(service.SQLDependencies{
 		Executor:             server.executor,
 		NewConnectionManager: server.newConnectionManager,
 		RunConnectionQuery:   server.executionSvc.RunConnectionQueryForEnvironment,
+	})
+
+	server.slingSvc = service.NewSlingService(service.SlingDependencies{
+		WorkspaceRoot:        absRoot,
+		NewConnectionManager: server.newConnectionManager,
+	})
+
+	server.notebookSvc = service.NewNotebookService(service.NotebookDependencies{
+		WorkspaceRoot:       absRoot,
+		ConfigPath:          resolveConfigFilePath(absRoot),
+		CurrentState:        func() service.WorkspaceState { return server.currentState() },
+		RunConnectionQuery:  server.executionSvc.RunConnectionQueryForEnvironment,
+		PushWorkspaceUpdate: server.pushWorkspaceUpdate,
+		// Validate cells for server-side auto-recompute with the same
+		// parse-context the editor uses (constructed below; referenced lazily).
+		ValidateSQL: func(ctx context.Context, assetID, content string, schemaTables []service.ParseContextSchemaTable) (service.ParseContextResult, *service.APIError) {
+			return server.parseContextSvc.Parse(ctx, assetID, content, schemaTables)
+		},
+		PublishEvent: func(payload any) { server.hub.PublishImmediate(payload) },
 	})
 
 	server.suggestionsSvc = service.NewSuggestionsService(service.SuggestionsDependencies{
@@ -233,6 +254,7 @@ func newWebServer(ctx context.Context, cfg serverConfig, logger *zap.Logger) (*w
 	server.parseContextSvc = service.NewParseContextService(service.ParseContextDependencies{
 		ResolveAssetByID: server.resolveAssetByID,
 	})
+	sqlformat.PrewarmPolyglotCompiler()
 	server.jinjaRenderSvc = service.NewJinjaRenderService(service.JinjaRenderDependencies{
 		ResolveAssetByID: server.resolveAssetByID,
 	})
@@ -386,6 +408,14 @@ func newWebServer(ctx context.Context, cfg serverConfig, logger *zap.Logger) (*w
 
 	if err := server.refreshWorkspace(ctx); err != nil {
 		logger.Warn("initial workspace parse failed", zap.Error(err))
+	}
+
+	// Notebook session DBs are disposable: remove files for notebooks that
+	// no longer exist (covers kill -9 mid-session and deleted notebooks).
+	if removed, err := server.notebookSvc.SweepSessions(); err != nil {
+		logger.Warn("notebook session sweep failed", zap.Error(err))
+	} else if len(removed) > 0 {
+		logger.Info("removed stale notebook sessions", zap.Strings("notebooks", removed))
 	}
 
 	// Warm the fingerprint engine's formatter cache off the request path:

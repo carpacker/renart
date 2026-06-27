@@ -324,6 +324,9 @@ func (s *ExecutionService) inspectMaterializedNonSQLAsset(ctx context.Context, a
 	}
 
 	connectionName, err := parsedPipeline.GetConnectionNameForAsset(asset)
+	if isAPIAsset(asset) {
+		connectionName, err = apiConnectionNameForAsset(asset, parsedPipeline)
+	}
 	if err != nil || strings.TrimSpace(connectionName) == "" {
 		return InspectResult{}, false
 	}
@@ -829,7 +832,11 @@ func (s *ExecutionService) GetPipelineMaterialization(ctx context.Context, pipel
 		}
 
 		connectionName := ""
-		if conn, connErr := parsed.GetConnectionNameForAsset(asset); connErr == nil {
+		if isAPIAsset(asset) {
+			if conn, connErr := apiConnectionNameForAsset(asset, parsed); connErr == nil {
+				connectionName = conn
+			}
+		} else if conn, connErr := parsed.GetConnectionNameForAsset(asset); connErr == nil {
 			connectionName = conn
 		}
 
@@ -1033,6 +1040,9 @@ func (s *ExecutionService) inspectPipelineMaterializations(ctx context.Context, 
 	assetsByConnection := make(map[string][]*pipeline.Asset)
 	for _, asset := range parsed.Assets {
 		conn, err := parsed.GetConnectionNameForAsset(asset)
+		if isAPIAsset(asset) {
+			conn, err = apiConnectionNameForAsset(asset, parsed)
+		}
 		if err != nil || conn == "" {
 			continue
 		}
@@ -1168,7 +1178,11 @@ func ComputePipelineFreshness(parsed *pipeline.Pipeline, matInfo map[string]Pipe
 
 		kind := "table"
 		connectionName := ""
-		if conn, err := parsed.GetConnectionNameForAsset(asset); err == nil {
+		if isAPIAsset(asset) {
+			if conn, err := apiConnectionNameForAsset(asset, parsed); err == nil {
+				connectionName = conn
+			}
+		} else if conn, err := parsed.GetConnectionNameForAsset(asset); err == nil {
 			connectionName = conn
 		}
 		if info, ok := matInfo[MaterializationAssetKey(asset.Name, connectionName)]; ok {
@@ -1330,6 +1344,9 @@ func (s *ExecutionService) findDuckDBExecutionInfoByAsset(ctx context.Context, a
 	}
 
 	connectionName, err := parsed.GetConnectionNameForAsset(asset)
+	if isAPIAsset(asset) {
+		connectionName, err = apiConnectionNameForAsset(asset, parsed)
+	}
 	if err != nil || connectionName == "" {
 		return nil, nil
 	}

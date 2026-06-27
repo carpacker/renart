@@ -66,8 +66,11 @@ func newFixture(t *testing.T, assets ...*pipeline.Asset) *fixture {
 	return f
 }
 
-// recordRun simulates a completed run: it fingerprints the current pipeline
-// and writes coverage rows for the named assets.
+// recordRun simulates a completed run exactly as the matlog recorder does: it
+// fingerprints the current pipeline, derives the *achieved* fingerprint for the
+// named assets (folding in each upstream's last-recorded fingerprint for
+// upstreams not part of this run), and writes coverage rows. Recording only a
+// downstream therefore captures the stale upstream it actually read.
 func (f *fixture) recordRun(t *testing.T, environment string, window *Interval, assetNames ...string) {
 	t.Helper()
 	vars := fingerprint.EffectiveVars(f.pipeline, nil)
@@ -75,13 +78,29 @@ func (f *fixture) recordRun(t *testing.T, environment string, window *Interval, 
 	require.NoError(t, err)
 	varsHash := fingerprint.AllVarsHash(vars)
 
+	succeeded := make(map[string]bool, len(assetNames))
+	for _, name := range assetNames {
+		succeeded[identity.AssetID("p", name)] = true
+	}
+	assetIDs := make([]string, 0, len(results))
+	for id := range results {
+		assetIDs = append(assetIDs, id)
+	}
+	latest, err := f.store.LatestFingerprint(context.Background(), assetIDs, environment)
+	require.NoError(t, err)
+	achieved, err := f.engine.AchievedFingerprints(f.pipeline, results, succeeded, func(id string) (fingerprint.Fingerprint, bool) {
+		fp, ok := latest[id]
+		return fingerprint.Fingerprint(fp), ok
+	})
+	require.NoError(t, err)
+
 	for _, name := range assetNames {
 		assetID := identity.AssetID("p", name)
 		result := results[assetID]
 		m := matlog.Materialization{
 			AssetID:        assetID,
 			Environment:    environment,
-			Fingerprint:    string(result.FP),
+			Fingerprint:    string(achieved[assetID]),
 			OwnContent:     string(result.OwnContent),
 			VarsHash:       varsHash,
 			RunID:          "run",
@@ -138,6 +157,45 @@ func TestEditFlipsAssetAndCone(t *testing.T) {
 	assert.Equal(t, StatusStaleEdited, statuses["a"].Status)
 	assert.Equal(t, StatusStaleUpstream, statuses["b"].Status)
 	assert.Equal(t, StatusFresh, statuses["c"].Status)
+}
+
+func TestMaterializingDownstreamOnStaleUpstreamStaysStale(t *testing.T) {
+	t.Parallel()
+	// A -> B -> C. Edit B, then materialize only C (without rebuilding B). C read
+	// B's old physical table, so it must stay stale; rebuilding B afterwards does
+	// not retroactively make C fresh either. Freshness is over the lineage
+	// actually consumed, not over current definitions.
+	f := newFixture(t,
+		sqlAsset("a", "select 1"),
+		sqlAsset("b", "select * from a", "a"),
+		sqlAsset("c", "select * from b", "b"),
+	)
+	f.recordRun(t, "dev", nil, "a", "b", "c")
+	require.Equal(t, StatusFresh, f.statuses(t, "dev", nil, nil)["c"].Status)
+
+	// Edit B: B is stale_edited, C inherits stale_upstream.
+	f.pipeline.Assets[1].ExecutableFile.Content = "select a.id from a"
+	statuses := f.statuses(t, "dev", nil, nil)
+	require.Equal(t, StatusStaleEdited, statuses["b"].Status)
+	require.Equal(t, StatusStaleUpstream, statuses["c"].Status)
+
+	// Materialize only C. It reads the un-rebuilt B, so it stays stale — the run
+	// was a data no-op for freshness purposes.
+	f.recordRun(t, "dev", nil, "c")
+	statuses = f.statuses(t, "dev", nil, nil)
+	assert.Equal(t, StatusStaleEdited, statuses["b"].Status, "B unchanged by materializing C")
+	assert.Equal(t, StatusStaleUpstream, statuses["c"].Status, "C built on old B must stay stale")
+
+	// Now materialize B. B goes fresh, but C's table was physically built from
+	// old-B rows, so C remains stale until it is itself rerun.
+	f.recordRun(t, "dev", nil, "b")
+	statuses = f.statuses(t, "dev", nil, nil)
+	assert.Equal(t, StatusFresh, statuses["b"].Status)
+	assert.Equal(t, StatusStaleUpstream, statuses["c"].Status, "rebuilding B does not retroactively refresh C")
+
+	// Finally rerun C against fresh B: now everything is current.
+	f.recordRun(t, "dev", nil, "c")
+	assert.Equal(t, StatusFresh, f.statuses(t, "dev", nil, nil)["c"].Status)
 }
 
 func TestCommentEditStaysFresh(t *testing.T) {

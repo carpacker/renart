@@ -97,6 +97,11 @@ test.describe("redesign build actions live", () => {
     liveApp,
     page,
   }) => {
+    // Asserts the explorer entry and the top-bar "Ad-hoc" link highlight in
+    // tandem; both are desktop chrome (the explorer is a drawer on mobile and the
+    // top-bar link is hidden below lg).
+    test.skip(test.info().project.name.includes("mobile"), "Explorer + top-bar ad-hoc affordances are desktop-only.");
+
     await page.goto(
       `${liveApp.baseURL}/redesign/pipelines/${pipelineId}/assets/${customersAssetId}/code?editor=adhoc`
     );

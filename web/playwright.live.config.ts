@@ -9,7 +9,7 @@ export default defineConfig({
   globalSetup: "./tests/e2e/live-global-setup.ts",
   fullyParallel: false,
   workers: Number.isFinite(liveWorkers) && liveWorkers > 0 ? liveWorkers : 1,
-  retries: process.env.CI ? 1 : 0,
+  retries: process.env.CI ? 2 : 1,
   use: {
     trace: "on-first-retry",
     video: "retain-on-failure",

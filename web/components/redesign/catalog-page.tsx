@@ -1,14 +1,25 @@
+import { useNavigate } from "@tanstack/react-router";
 import { useAtomValue } from "jotai";
-import { Filter, RotateCw, Search, Sparkles } from "lucide-react";
-import { useMemo } from "react";
+import { Filter, RotateCw, Search } from "lucide-react";
+import { useMemo, useState } from "react";
 
 import { Button } from "@/components/ui/button";
+import {
+  DropdownMenu,
+  DropdownMenuCheckboxItem,
+  DropdownMenuContent,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
+import { useAssetResults } from "@/hooks/use-asset-results";
+import { deleteAsset } from "@/lib/api-assets";
 import { workspaceAtom } from "@/lib/atoms/domains/workspace";
 import type { WebAsset, WebPipeline } from "@/lib/types";
 import { labelForRedesignMaterializationState, useRedesignAssetMaterializationStatus } from "@/hooks/use-redesign-asset-materialization-status";
 
-import { assets, edges, type AssetKind } from "./redesign-data";
+import { assets, edges, kindMeta, type AssetKind } from "./redesign-data";
 import { RedesignLineageCanvas, assetNameParts, type RedesignLineageCanvasAsset } from "./lineage-canvas";
 import { PageHeader, RedesignPage, RedesignPanel } from "./redesign-primitives";
 
@@ -77,8 +88,27 @@ function assetFileName(assetPath: string) {
   return file.replace(/\.[^.]+$/, "");
 }
 
-export function RedesignCatalogPage() {
+// Strip Bruin asset-selector decorations (++name+, -name) so the box behaves as
+// a plain substring filter over asset names.
+function normalizeFilterQuery(value: string) {
+  return value.trim().toLowerCase().replace(/^[+-]+/, "").replace(/[+-]+$/, "");
+}
+
+export type RedesignCatalogSearch = { asset?: string };
+
+export function normalizeRedesignCatalogSearch(search: Record<string, unknown>): RedesignCatalogSearch {
+  return {
+    asset: typeof search.asset === "string" && search.asset ? search.asset : undefined,
+  };
+}
+
+export function RedesignCatalogPage({ selectedAssetId }: { selectedAssetId?: string } = {}) {
   const workspace = useAtomValue(workspaceAtom);
+  const navigate = useNavigate();
+  const assetResults = useAssetResults();
+  const [query, setQuery] = useState("");
+  const [hiddenKinds, setHiddenKinds] = useState<Set<AssetKind>>(() => new Set());
+
   const catalogAssets = useMemo<RedesignLineageCanvasAsset[]>(
     () => workspace?.pipelines.length ? workspace.pipelines.flatMap(catalogAssetsForPipeline) : assets,
     [workspace?.pipelines]
@@ -101,9 +131,73 @@ export function RedesignCatalogPage() {
     })),
     [catalogAssets, materializationStatusByAssetId]
   );
-  const catalogLinks = workspace?.pipelines.length
-    ? undefined
-    : edges.map(([source, target]) => ({ source, target }));
+
+  const availableKinds = useMemo(() => {
+    const kinds = new Set<AssetKind>();
+    for (const asset of catalogAssets) {
+      kinds.add(asset.kind);
+    }
+    return [...kinds];
+  }, [catalogAssets]);
+
+  const filteredAssets = useMemo(() => {
+    const normalizedQuery = normalizeFilterQuery(query);
+    return displayedCatalogAssets.filter((asset) => {
+      if (hiddenKinds.has(asset.kind)) {
+        return false;
+      }
+      if (normalizedQuery && !asset.name.toLowerCase().includes(normalizedQuery)) {
+        return false;
+      }
+      return true;
+    });
+  }, [displayedCatalogAssets, hiddenKinds, query]);
+
+  const catalogLinks = useMemo(() => {
+    if (workspace?.pipelines.length) {
+      return undefined;
+    }
+    const visibleIds = new Set(filteredAssets.map((asset) => asset.id));
+    return edges
+      .map(([source, target]) => ({ source, target }))
+      .filter((edge) => visibleIds.has(edge.source) && visibleIds.has(edge.target));
+  }, [filteredAssets, workspace?.pipelines.length]);
+
+  const toggleKind = (kind: AssetKind) => {
+    setHiddenKinds((current) => {
+      const next = new Set(current);
+      if (next.has(kind)) {
+        next.delete(kind);
+      } else {
+        next.add(kind);
+      }
+      return next;
+    });
+  };
+
+  const runAsset = (assetId: string) => {
+    void assetResults.runMaterializeForAsset(assetId);
+  };
+  const removeAsset = async (assetId: string) => {
+    const target = catalogAssets.find((asset) => asset.id === assetId);
+    if (!target?.pipelineId) {
+      return;
+    }
+    // The workspace event stream refreshes the atom once the file is gone.
+    await deleteAsset(target.pipelineId, assetId);
+  };
+  const openInBuild = (assetId: string) => {
+    const target = catalogAssets.find((asset) => asset.id === assetId);
+    if (!target?.pipelineId) {
+      return;
+    }
+    void navigate({
+      to: "/redesign/pipelines/$pipelineId/assets/$assetId/canvas",
+      params: { pipelineId: target.pipelineId, assetId },
+    });
+  };
+
+  const filterActive = hiddenKinds.size > 0;
 
   return (
     <RedesignPage>
@@ -113,16 +207,50 @@ export function RedesignCatalogPage() {
         actions={<Button variant="outline" size="sm"><RotateCw className="size-3.5" />Reload</Button>}
       />
       <div className="flex items-center gap-2 px-3 pb-2">
-        <Button variant="outline" size="sm"><Filter className="size-3.5" />Filter</Button>
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button variant={filterActive ? "default" : "outline"} size="sm">
+              <Filter className="size-3.5" />
+              Filter{filterActive ? ` (${availableKinds.length - hiddenKinds.size}/${availableKinds.length})` : ""}
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="start" className="w-44">
+            <DropdownMenuLabel>Asset type</DropdownMenuLabel>
+            <DropdownMenuSeparator />
+            {availableKinds.map((kind) => (
+              <DropdownMenuCheckboxItem
+                key={kind}
+                checked={!hiddenKinds.has(kind)}
+                onCheckedChange={() => toggleKind(kind)}
+                onSelect={(event) => event.preventDefault()}
+              >
+                {kindMeta[kind]?.label ?? kind}
+              </DropdownMenuCheckboxItem>
+            ))}
+          </DropdownMenuContent>
+        </DropdownMenu>
         <div className="relative min-w-0 flex-1">
           <Search className="pointer-events-none absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" />
-          <Input className="pl-8" placeholder="Type an asset subset...  (ex: ++revenue_daily)" />
+          <Input
+            className="pl-8"
+            placeholder="Filter assets by name...  (ex: revenue_daily)"
+            value={query}
+            onChange={(event) => setQuery(event.target.value)}
+          />
         </div>
-        <Button size="sm"><Sparkles className="size-3.5" />Materialize all</Button>
       </div>
       <div className="min-h-0 flex-1 px-3 pb-3">
         <RedesignPanel className="h-full">
-          <RedesignLineageCanvas assets={displayedCatalogAssets} links={catalogLinks} />
+          <RedesignLineageCanvas
+            assets={filteredAssets}
+            links={catalogLinks}
+            selectedAssetId={selectedAssetId}
+            focusAssetId={selectedAssetId}
+            onRunAsset={runAsset}
+            onDeleteAsset={removeAsset}
+            onGoToAsset={openInBuild}
+            goToLabel="Open in build"
+          />
         </RedesignPanel>
       </div>
     </RedesignPage>

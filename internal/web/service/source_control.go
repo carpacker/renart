@@ -133,7 +133,11 @@ func (s *SourceControlService) Stage(paths []string) error {
 		if err != nil {
 			return err
 		}
-		if _, err := worktree.Add(cleaned); err != nil {
+		// SkipStatus avoids go-git recomputing the whole worktree status on
+		// every Add — without it, staging many files (e.g. "Stage all") is
+		// O(files × repo size) and appears to hang. For deleted paths go-git
+		// still falls back to a status-based add internally.
+		if err := worktree.AddWithOptions(&git.AddOptions{Path: cleaned, SkipStatus: true}); err != nil {
 			return err
 		}
 	}

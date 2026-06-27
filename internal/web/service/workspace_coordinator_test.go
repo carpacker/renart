@@ -1,10 +1,16 @@
 package service
 
 import (
+	"context"
+	"encoding/json"
 	"testing"
 	"time"
 
+	"renart/internal/web/events"
+	"renart/internal/web/freshness"
+
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestPathContains(t *testing.T) {
@@ -105,4 +111,50 @@ func TestWorkspaceCoordinatorFindInspectIDs(t *testing.T) {
 	assert.Equal(t, []string{"a"}, coord.FindDirectlyChangedAssetIDs("assets/a.sql"))
 	assert.Equal(t, "b", coord.FindAssetNameByID("b"))
 	assert.Equal(t, "", coord.FindAssetNameByID("missing"))
+}
+
+func TestWorkspaceCoordinatorPushAssetContentUpdateImmediateSkipsRefresh(t *testing.T) {
+	hub := events.NewHub()
+	refreshCalled := false
+	coord := NewWorkspaceCoordinator(WorkspaceCoordinatorDependencies{
+		Hub:       hub,
+		Freshness: freshness.New(),
+		RefreshHook: func(context.Context) error {
+			refreshCalled = true
+			return nil
+		},
+	})
+	coord.SetState(WorkspaceState{
+		Pipelines: []WorkspacePipeline{{
+			Assets: []WorkspaceAsset{
+				{ID: "keep", Content: "select 1"},
+				{ID: "drop", Content: "select 2"},
+			},
+		}},
+		Notebooks: []WorkspaceNotebook{{
+			Cells: []WorkspaceAsset{{ID: "cell", Content: "select 3"}},
+		}},
+	})
+	ch := hub.Subscribe()
+	defer hub.Unsubscribe(ch)
+
+	coord.PushAssetContentUpdateImmediate("asset.updated", "assets/keep.sql", []string{"keep"}, "SELECT 1")
+
+	assert.False(t, refreshCalled)
+	assert.Equal(t, "SELECT 1", coord.CurrentState().Pipelines[0].Assets[0].Content)
+	assert.Equal(t, "select 2", coord.CurrentState().Pipelines[0].Assets[1].Content)
+	assert.Equal(t, "select 3", coord.CurrentState().Notebooks[0].Cells[0].Content)
+
+	select {
+	case payload := <-ch:
+		var event WorkspaceEvent
+		require.NoError(t, json.Unmarshal(payload, &event))
+		assert.Equal(t, "asset.updated", event.Type)
+		assert.True(t, event.Lite)
+		assert.Equal(t, []string{"keep"}, event.ChangedAssetIDs)
+		assert.Equal(t, "SELECT 1", event.Workspace.Pipelines[0].Assets[0].Content)
+		assert.Equal(t, "", event.Workspace.Pipelines[0].Assets[1].Content)
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for workspace event")
+	}
 }

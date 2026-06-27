@@ -27,7 +27,9 @@ test.describe("redesign scheduler pages live", () => {
     await expect(page.getByRole("heading", { name: "Schedules" })).toBeVisible();
     await expect(page.getByText("analytics", { exact: true })).toBeVisible({ timeout: 15000 });
     await expect(page.getByText("daily", { exact: true })).toBeVisible();
-    await expect(page.getByText("Catch up", { exact: true })).toBeVisible();
+    // The catchup column renders the policy itself (here "skip", from the
+    // fixture's default), not a generic "Catch up" label.
+    await expect(page.getByText("skip", { exact: true })).toBeVisible();
     await expect(page.getByRole("button", { name: "Run" }).first()).toBeVisible();
   });
 

@@ -8,7 +8,6 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/bruin-data/bruin/pkg/jinja"
 	"github.com/bruin-data/bruin/pkg/pipeline"
 	"github.com/spf13/afero"
 	"gopkg.in/yaml.v3"
@@ -686,13 +685,5 @@ func max(value, floor int) int {
 }
 
 func (s *PipelineService) newPipelineBuilder() *pipeline.Builder {
-	osFS := afero.NewOsFs()
-	return pipeline.NewBuilder(
-		BuilderConfig,
-		pipeline.CreateTaskFromYamlDefinition(osFS),
-		pipeline.CreateTaskFromFileComments(osFS),
-		osFS,
-		DefaultGlossaryReader,
-		jinja.VariantRendererFactory,
-	)
+	return NewRenartPipelineBuilder(afero.NewOsFs())
 }

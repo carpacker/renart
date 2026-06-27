@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"github.com/bruin-data/bruin/pkg/config"
-	"github.com/bruin-data/bruin/pkg/jinja"
 	"github.com/bruin-data/bruin/pkg/pipeline"
 	"github.com/spf13/afero"
 )
@@ -56,14 +55,7 @@ func (e *HybridBruinExecutor) FormatAsset(ctx context.Context, req FormatAssetRe
 	_ = ctx
 	assetPath := resolveDirectPath(e.workspaceRoot, req.AssetPath)
 	osFS := afero.NewOsFs()
-	builder := pipeline.NewBuilder(
-		BuilderConfig,
-		pipeline.CreateTaskFromYamlDefinition(osFS),
-		pipeline.CreateTaskFromFileComments(osFS),
-		osFS,
-		DefaultGlossaryReader,
-		jinja.VariantRendererFactory,
-	)
+	builder := NewRenartPipelineBuilder(osFS)
 	asset, err := builder.CreateAssetFromFile(assetPath, nil)
 	if err != nil {
 		return nil, err

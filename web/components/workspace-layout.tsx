@@ -442,7 +442,7 @@ export function WorkspaceLayout() {
                   <div className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Quickstart tour</div>
                   <div className="mt-1 font-semibold">These are your connections</div>
                   <p className="mt-2 text-sm text-muted-foreground">
-                    The playground configured DuckDB for local tables and chess for source data. Return to the workspace to keep exploring the DAG.
+                    The playground configured DuckDB for local tables. The Chess.com API source assets live with the quickstart project files.
                   </p>
                   <div className="mt-3 flex gap-2">
                     <Button

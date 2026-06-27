@@ -28,6 +28,9 @@ import {
 export function AssetNode({ id, data, selected }: NodeProps<AssetNodeData>) {
   const updateNodeInternals = useUpdateNodeInternals();
   const isIngestrAsset = data.assetType.trim().toLowerCase() === "ingestr";
+  const isSlingAsset = data.assetType.trim().toLowerCase() === "sling";
+  const isAPIAsset = data.assetType.trim().toLowerCase() === "api";
+  const isTransferAsset = isIngestrAsset || isSlingAsset || isAPIAsset;
   const materializationType = normalizeMaterialization(data.materializedAs);
 
   const previewMode = getAssetViewMode(data.meta);
@@ -61,14 +64,44 @@ export function AssetNode({ id, data, selected }: NodeProps<AssetNodeData>) {
   const ingestrSource = useMemo(
     () =>
       buildIngestrEndpoint(
-        data.parameters?.source_connection,
-        data.parameters?.source_table
+        isAPIAsset
+          ? "HTTP API"
+          : isSlingAsset
+            ? data.parameters?.source
+            : data.parameters?.source_connection,
+        isAPIAsset
+          ? data.parameters?.url
+          : isSlingAsset
+            ? data.parameters?.streams
+            : data.parameters?.source_table
       ),
-    [data.parameters?.source_connection, data.parameters?.source_table]
+    [
+      isAPIAsset,
+      isSlingAsset,
+      data.parameters?.source,
+      data.parameters?.source_connection,
+      data.parameters?.source_table,
+      data.parameters?.streams,
+      data.parameters?.url,
+    ]
   );
   const ingestrDestination = useMemo(
-    () => buildIngestrEndpoint(data.parameters?.destination, data.connection),
-    [data.connection, data.parameters?.destination]
+    () =>
+      buildIngestrEndpoint(
+        isAPIAsset
+          ? data.parameters?.target
+          : isSlingAsset
+            ? data.parameters?.target
+            : data.parameters?.destination,
+        data.connection
+      ),
+    [
+      isAPIAsset,
+      isSlingAsset,
+      data.connection,
+      data.parameters?.destination,
+      data.parameters?.target,
+    ]
   );
 
   useEffect(() => {
@@ -135,7 +168,7 @@ export function AssetNode({ id, data, selected }: NodeProps<AssetNodeData>) {
               />
             )}
 
-            {isIngestrAsset ? (
+            {isTransferAsset ? (
               <div>
                 <div className="flex items-center gap-2">
                   <AssetTypeIcon
@@ -163,13 +196,25 @@ export function AssetNode({ id, data, selected }: NodeProps<AssetNodeData>) {
 
                 <div className="mt-3 flex items-center justify-between gap-3 rounded-lg border border-border/70 bg-muted/20 px-3 py-2">
                   <IngestrEndpoint
-                    connection={data.parameters?.source_connection}
+                    connection={
+                      isAPIAsset
+                        ? "HTTP API"
+                        : isSlingAsset
+                        ? data.parameters?.source
+                        : data.parameters?.source_connection
+                    }
                     label={ingestrSource.primaryLabel}
                     secondaryLabel={ingestrSource.secondaryLabel}
                   />
                   <ArrowRight className="size-4 shrink-0 text-muted-foreground" />
                   <IngestrEndpoint
-                    connection={data.parameters?.destination}
+                    connection={
+                      isAPIAsset
+                        ? data.parameters?.target
+                        : isSlingAsset
+                        ? data.parameters?.target
+                        : data.parameters?.destination
+                    }
                     label={ingestrDestination.primaryLabel}
                     secondaryLabel={ingestrDestination.secondaryLabel}
                   />

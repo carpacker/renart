@@ -322,12 +322,23 @@ export function useAssetResults() {
   const runMaterializeForAsset = useCallback(async (
     assetId: string,
     scope: MaterializeScope = "asset",
-    refresh?: () => Promise<void> | void
+    refresh?: () => Promise<void> | void,
+    overrides?: { assetName?: string; timeWindow?: { start: string; end: string } | null }
   ) => {
     const entryId = createMaterializeHistoryId();
     const startedAt = Date.now();
-    const materializeLabel = asset?.name
-      ? `${labelForMaterializeScope(scope)}: ${asset.name}`
+    // Resolve the asset being built rather than assuming it is the selected one:
+    // the stale-build flow materializes assets other than the active selection,
+    // and the entry must carry the correct name, label and time window.
+    const targetAssetName =
+      overrides?.assetName ??
+      pipeline?.assets.find((candidate) => candidate.id === assetId)?.name ??
+      asset?.name ??
+      null;
+    const entryTimeWindow =
+      overrides?.timeWindow !== undefined ? overrides.timeWindow : selectedExecutionTimeWindow;
+    const materializeLabel = targetAssetName
+      ? `${labelForMaterializeScope(scope)}: ${targetAssetName}`
       : labelForMaterializeScope(scope);
     const scopedMaterializingIds = resolveScopedMaterializingAssetIds(
       pipeline?.assets ?? [],
@@ -343,12 +354,12 @@ export function useAssetResults() {
         kind: "asset",
         label: materializeLabel,
         assetId,
-        assetName: asset?.name ?? null,
+        assetName: targetAssetName,
         pipelineId: pipelineId ?? null,
         pipelineName: pipeline?.name ?? null,
         loading: true,
         createdAt: startedAt,
-        timeWindow: selectedExecutionTimeWindow,
+        timeWindow: entryTimeWindow,
       }),
     }));
 
@@ -362,19 +373,19 @@ export function useAssetResults() {
                 kind: "asset",
                 label: materializeLabel,
                 assetId,
-                assetName: asset?.name ?? null,
+                assetName: targetAssetName,
                 pipelineId: pipelineId ?? null,
                 pipelineName: pipeline?.name ?? null,
                 loading: true,
                 createdAt: startedAt,
-                timeWindow: selectedExecutionTimeWindow,
+                timeWindow: entryTimeWindow,
               })),
             output: (previous?.output ?? "") + chunk,
             loading: true,
             updatedAt: Date.now(),
           }));
         },
-        }, { environment: selectedEnvironment, scope, timeWindow: selectedExecutionTimeWindow ?? undefined });
+        }, { environment: selectedEnvironment, scope, timeWindow: entryTimeWindow ?? undefined });
       upsertMaterializeEntry(entryId, (previous) => ({
         ...(previous ??
           createMaterializeEntry({
@@ -382,12 +393,12 @@ export function useAssetResults() {
             kind: "asset",
             label: materializeLabel,
             assetId,
-            assetName: asset?.name ?? null,
+            assetName: targetAssetName,
             pipelineId: pipelineId ?? null,
             pipelineName: pipeline?.name ?? null,
             loading: true,
             createdAt: startedAt,
-            timeWindow: selectedExecutionTimeWindow,
+            timeWindow: entryTimeWindow,
           })),
         output: result.output ?? previous?.output ?? "",
         status: result.status ?? "error",
@@ -418,12 +429,12 @@ export function useAssetResults() {
             kind: "asset",
             label: materializeLabel,
             assetId,
-            assetName: asset?.name ?? null,
+            assetName: targetAssetName,
             pipelineId: pipelineId ?? null,
             pipelineName: pipeline?.name ?? null,
             loading: true,
             createdAt: startedAt,
-            timeWindow: selectedExecutionTimeWindow,
+            timeWindow: entryTimeWindow,
           })),
         output:
           (previous?.output ?? "") +

@@ -5,20 +5,34 @@ import "time"
 
 // Asset represents a web API asset with its metadata.
 type Asset struct {
-	ID                  string            `json:"id"`
-	Name                string            `json:"name"`
-	Type                string            `json:"type"`
-	Path                string            `json:"path"`
-	Content             string            `json:"content"`
-	Upstreams           []string          `json:"upstreams"`
-	Parameters          map[string]string `json:"parameters,omitempty"`
-	Meta                map[string]string `json:"meta,omitempty"`
-	Columns             []Column          `json:"columns,omitempty"`
-	Connection          string            `json:"connection,omitempty"`
-	MaterializationType string            `json:"materialization_type,omitempty"`
-	IsMaterialized      bool              `json:"is_materialized"`
-	MaterializedAs      string            `json:"materialized_as,omitempty"`
-	RowCount            *int64            `json:"row_count,omitempty"`
+	ID                      string            `json:"id"`
+	Name                    string            `json:"name"`
+	Type                    string            `json:"type"`
+	Path                    string            `json:"path"`
+	Content                 string            `json:"content"`
+	Upstreams               []string          `json:"upstreams"`
+	Parameters              map[string]string `json:"parameters,omitempty"`
+	Meta                    map[string]string `json:"meta,omitempty"`
+	Columns                 []Column          `json:"columns,omitempty"`
+	Connection              string            `json:"connection,omitempty"`
+	MaterializationType     string            `json:"materialization_type,omitempty"`
+	MaterializationStrategy string            `json:"materialization_strategy,omitempty"`
+	IncrementalKey          string            `json:"incremental_key,omitempty"`
+	Owner                   string            `json:"owner,omitempty"`
+	Tags                    []string          `json:"tags,omitempty"`
+	IsMaterialized          bool              `json:"is_materialized"`
+	MaterializedAs          string            `json:"materialized_as,omitempty"`
+	RowCount                *int64            `json:"row_count,omitempty"`
+	// Class separates production assets from notebook cells; catalog,
+	// global lineage, and pipeline-side completion filter to "pipeline".
+	// Empty means "pipeline" (older payloads).
+	Class string `json:"class,omitempty"`
+	// CellID is the durable per-cell identifier for notebook cells; it
+	// survives renames (durable id = notebook UUID + ":" + cell id).
+	CellID string `json:"cell_id,omitempty"`
+	// ExternalRefs lists referenced table names that are not sibling cells
+	// (pipeline assets or warehouse tables); notebook cells only.
+	ExternalRefs []string `json:"external_refs,omitempty"`
 }
 
 // Column represents a column in an asset.
@@ -58,6 +72,34 @@ type Pipeline struct {
 	Assets   []Asset `json:"assets"`
 }
 
+// NotebookBlock is one ordered entry of a notebook: a cell reference or a
+// markdown prose block.
+type NotebookBlock struct {
+	Cell     string `json:"cell,omitempty"`
+	Markdown string `json:"markdown,omitempty"`
+}
+
+// Notebook represents a web API notebook: a folder of class-tagged cell
+// assets plus ordered presentation blocks.
+type Notebook struct {
+	ID string `json:"id"`
+	// UUID is the stable identity stored in notebook.yml (`id:`).
+	UUID     string          `json:"uuid,omitempty"`
+	Title    string          `json:"title"`
+	Path     string          `json:"path"`
+	Target   string          `json:"target,omitempty"`
+	Blocks   []NotebookBlock `json:"blocks"`
+	Cells    []Asset         `json:"cells"`
+	Problems []string        `json:"problems,omitempty"`
+	// Dependencies are the notebook's Python package specifiers, stored in
+	// pyproject.toml ([project].dependencies) and installed by uv.
+	Dependencies []string `json:"dependencies,omitempty"`
+	// InstalledModules are the top-level import names available in the
+	// notebook's virtualenv — the ground truth for whether an import resolves,
+	// regardless of how the providing package is named.
+	InstalledModules []string `json:"installed_modules,omitempty"`
+}
+
 // EnvironmentPolicy mirrors the per-environment execution rules from
 // .renart/environments.yml so the UI can disable controls; enforcement
 // lives in the run-dispatch chokepoint, not here.
@@ -70,6 +112,7 @@ type EnvironmentPolicy struct {
 // WorkspaceState represents the current state of a workspace.
 type WorkspaceState struct {
 	Pipelines           []Pipeline                   `json:"pipelines"`
+	Notebooks           []Notebook                   `json:"notebooks,omitempty"`
 	Connections         map[string]string            `json:"connections"`
 	SelectedEnvironment string                       `json:"selected_environment"`
 	EnvironmentPolicies map[string]EnvironmentPolicy `json:"environment_policies,omitempty"`

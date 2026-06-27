@@ -1,5 +1,5 @@
 import { cloneElement, isValidElement, ReactElement, ReactNode } from "react";
-import { Database } from "lucide-react";
+import { Database, Boxes, Globe } from "lucide-react";
 
 import {
   SiClickhouse,
@@ -72,6 +72,12 @@ export function resolveAssetIcon(
   }
   if (isIngestrType(type)) {
     return iconWithColor(GiBearFace({ size }), "#d97706", "#fef3c7");
+  }
+  if (isSlingType(type)) {
+    return iconWithColor(<Boxes size={size} />, "#7c3aed", "#ede9fe");
+  }
+  if (isAPIType(type)) {
+    return iconWithColor(<Globe size={size} />, "#0891b2", "#cffafe");
   }
   if (isSensorType(type)) {
     return iconWithColor(SiPrometheus({ size }), "#f97316", "#ffedd5");
@@ -273,6 +279,14 @@ function isSensorType(assetType: string) {
 
 function isIngestrType(assetType: string) {
   return assetType === "ingestr";
+}
+
+function isSlingType(assetType: string) {
+  return assetType === "sling";
+}
+
+function isAPIType(assetType: string) {
+  return assetType === "api";
 }
 
 function isPythonType(assetType: string) {

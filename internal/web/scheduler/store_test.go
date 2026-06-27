@@ -52,6 +52,50 @@ func TestStoreCreatesRunsLogsAndWatermarks(t *testing.T) {
 	assert.Equal(t, end, watermark)
 }
 
+func TestFailOrphanedRunsReconcilesRunningRuns(t *testing.T) {
+	store, err := OpenStore(filepath.Join(t.TempDir(), ".renart", "state.db"))
+	require.NoError(t, err)
+	defer store.Close()
+
+	ctx := context.Background()
+	started := time.Date(2026, 1, 2, 9, 0, 0, 0, time.UTC)
+
+	// A run that was executing when the process died: still "running", with an
+	// open step.
+	orphan, err := store.Create(ctx, PipelineRun{PipelineID: "p1", Pipeline: "analytics", Environment: "dev", Trigger: RunTriggerManual, Status: RunStatusQueued})
+	require.NoError(t, err)
+	require.NoError(t, store.MarkRunning(ctx, orphan, started))
+	require.NoError(t, store.UpsertStep(ctx, PipelineRunStep{RunID: orphan, Asset: "orders", Status: RunStatusRunning, StartedAt: &started}))
+
+	// A run that finished normally must be left untouched.
+	done, err := store.Create(ctx, PipelineRun{PipelineID: "p1", Pipeline: "analytics", Environment: "dev", Trigger: RunTriggerManual, Status: RunStatusQueued})
+	require.NoError(t, err)
+	require.NoError(t, store.MarkRunning(ctx, done, started))
+	require.NoError(t, store.Finish(ctx, done, RunStatusSuccess, nil))
+
+	ids, err := store.FailOrphanedRuns(ctx, orphanedRunError)
+	require.NoError(t, err)
+	require.Equal(t, []string{orphan}, ids)
+
+	orphanRun, _, steps, err := store.Get(ctx, orphan)
+	require.NoError(t, err)
+	assert.Equal(t, RunStatusFailed, orphanRun.Status)
+	assert.Equal(t, orphanedRunError, orphanRun.Error)
+	require.NotNil(t, orphanRun.FinishedAt)
+	require.Len(t, steps, 1)
+	assert.Equal(t, RunStatusFailed, steps[0].Status)
+	require.NotNil(t, steps[0].FinishedAt)
+
+	doneRun, _, _, err := store.Get(ctx, done)
+	require.NoError(t, err)
+	assert.Equal(t, RunStatusSuccess, doneRun.Status)
+
+	// Idempotent: a second pass finds nothing to reconcile.
+	again, err := store.FailOrphanedRuns(ctx, orphanedRunError)
+	require.NoError(t, err)
+	assert.Empty(t, again)
+}
+
 func TestStoreDefaultsRunStatusAndGeneratedID(t *testing.T) {
 	store, err := OpenStore(filepath.Join(t.TempDir(), "state.db"))
 	require.NoError(t, err)

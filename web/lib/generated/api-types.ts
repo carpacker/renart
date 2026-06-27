@@ -34,9 +34,16 @@ export type WebAsset = {
   columns?: WebColumn[];
   connection?: string;
   materialization_type?: string;
+  materialization_strategy?: string;
+  incremental_key?: string;
+  owner?: string;
+  tags?: string[];
   is_materialized: boolean;
   materialized_as?: string;
   row_count?: number;
+  class?: string;
+  cell_id?: string;
+  external_refs?: string[];
 };
 
 export type WebPipeline = {
@@ -48,6 +55,24 @@ export type WebPipeline = {
   assets: WebAsset[];
 };
 
+export type WebNotebookBlock = {
+  cell?: string;
+  markdown?: string;
+};
+
+export type WebNotebook = {
+  id: string;
+  uuid?: string;
+  title: string;
+  path: string;
+  target?: string;
+  blocks: WebNotebookBlock[];
+  cells: WebAsset[];
+  problems?: string[];
+  dependencies?: string[];
+  installed_modules?: string[];
+};
+
 export type EnvironmentPolicy = {
   protected: boolean;
   deployed_only: boolean;
@@ -56,6 +81,7 @@ export type EnvironmentPolicy = {
 
 export type WorkspaceState = {
   pipelines: WebPipeline[];
+  notebooks?: WebNotebook[];
   connections: Record<string, string>;
   selected_environment: string;
   environment_policies?: Record<string, EnvironmentPolicy>;
@@ -89,6 +115,7 @@ export type WorkspaceConfigConnection = {
   name: string;
   type: string;
   values: Record<string, unknown>;
+  sling_category?: string;
 };
 
 export type WorkspaceConfigEnvironment = {
@@ -260,6 +287,7 @@ export type SqlParseContextResponse = {
   dialect?: string;
   query_kind?: string;
   is_single_select: boolean;
+  is_read_only_result: boolean;
   tables: SqlParseContextTable[];
   columns: SqlParseContextColumn[];
   diagnostics?: SqlParseContextDiagnostic[];

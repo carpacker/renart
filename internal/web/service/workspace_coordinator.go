@@ -32,6 +32,7 @@ type (
 	WorkspaceColumnCheck = webmodel.ColumnCheck
 	WorkspaceColumn      = webmodel.Column
 	WorkspacePipeline    = webmodel.Pipeline
+	WorkspaceNotebook    = webmodel.Notebook
 	WorkspaceState       = webmodel.WorkspaceState
 )
 
@@ -168,6 +169,73 @@ func (c *WorkspaceCoordinator) PushUpdateImmediateWithChangedIDs(ctx context.Con
 		Lite:            true,
 		ChangedAssetIDs: changed,
 	})
+}
+
+func (c *WorkspaceCoordinator) PushAssetContentUpdateImmediate(eventType, eventPath string, changedAssetIDs []string, content string) {
+	changed := changedAssetIDs
+	if len(changed) == 0 {
+		changed = c.FindDirectlyChangedAssetIDs(filepath.ToSlash(eventPath))
+	}
+	now := time.Now().UTC()
+	state := c.updateAssetContent(changed, content, now)
+
+	for _, id := range changed {
+		if name := c.FindAssetNameByID(id); name != "" {
+			c.deps.Freshness.RecordContentChange(name, now)
+		}
+	}
+	c.emitAssetSaved(changed, now)
+
+	c.deps.Hub.PublishImmediate(WorkspaceEvent{
+		Type:            eventType,
+		Path:            filepath.ToSlash(eventPath),
+		Workspace:       StripAssetContentKeepingIDs(state, changed),
+		Lite:            true,
+		ChangedAssetIDs: changed,
+	})
+}
+
+func (c *WorkspaceCoordinator) updateAssetContent(assetIDs []string, content string, updatedAt time.Time) WorkspaceState {
+	if len(assetIDs) == 0 {
+		return c.CurrentState()
+	}
+	changed := make(map[string]struct{}, len(assetIDs))
+	for _, id := range assetIDs {
+		changed[id] = struct{}{}
+	}
+
+	c.stateMu.Lock()
+	defer c.stateMu.Unlock()
+
+	state := c.state
+	state.UpdatedAt = updatedAt
+	state.Revision = c.revision.Add(1)
+	state.Pipelines = make([]WorkspacePipeline, len(c.state.Pipelines))
+	for i, pipeline := range c.state.Pipelines {
+		nextPipeline := pipeline
+		nextPipeline.Assets = make([]WorkspaceAsset, len(pipeline.Assets))
+		for j, asset := range pipeline.Assets {
+			if _, ok := changed[asset.ID]; ok {
+				asset.Content = content
+			}
+			nextPipeline.Assets[j] = asset
+		}
+		state.Pipelines[i] = nextPipeline
+	}
+	state.Notebooks = make([]webmodel.Notebook, len(c.state.Notebooks))
+	for i, notebook := range c.state.Notebooks {
+		nextNotebook := notebook
+		nextNotebook.Cells = make([]WorkspaceAsset, len(notebook.Cells))
+		for j, cell := range notebook.Cells {
+			if _, ok := changed[cell.ID]; ok {
+				cell.Content = content
+			}
+			nextNotebook.Cells[j] = cell
+		}
+		state.Notebooks[i] = nextNotebook
+	}
+	c.state = state
+	return state
 }
 
 func (c *WorkspaceCoordinator) Subscribe() chan []byte {

@@ -7,8 +7,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
+	"runtime/debug"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/tetratelabs/wazero"
 	"github.com/tetratelabs/wazero/api"
@@ -22,9 +26,11 @@ var wasmFS embed.FS
 const DialectGeneric = "generic"
 
 var (
-	polyglotInterpreterOnce sync.Once
-	polyglotInterpreter     *polyglotEngine
-	polyglotInterpreterErr  error
+	polyglotInterpreterOnce    sync.Once
+	polyglotInterpreterMu      sync.RWMutex
+	polyglotInterpreter        *polyglotEngine
+	polyglotInterpreterErr     error
+	polyglotInterpreterRetired bool
 
 	polyglotCompilerOnce sync.Once
 	polyglotCompilerMu   sync.RWMutex
@@ -38,7 +44,26 @@ type polyglotEngine struct {
 	runtime  wazero.Runtime
 	compiled wazero.CompiledModule
 	name     string
+	// idle holds reusable module instances. Instantiating a module costs ~15ms
+	// (it copies the 18MB module's data into fresh linear memory), so reusing
+	// instances keeps SQL intellisense responsive. Each instance is closed after
+	// polyglotRecycleEvery uses to reclaim the WASM linear memory, which only
+	// ever grows.
+	idle chan *pooledModule
 }
+
+type pooledModule struct {
+	module api.Module
+	uses   int
+}
+
+// polyglotPoolSize bounds the number of cached idle module instances (and thus
+// the resident linear memory); polyglotRecycleEvery bounds how long any one
+// instance lives before it is closed and reclaimed.
+const (
+	polyglotPoolSize     = 4
+	polyglotRecycleEvery = 64
+)
 
 type polyglotFormatResponse struct {
 	Success bool     `json:"success"`
@@ -72,18 +97,67 @@ func Format(ctx context.Context, sql, dialect string) (string, error) {
 	return response.SQL[0], nil
 }
 
+// polyglotCompilerGrace is how long the first call waits for the compiled
+// engine before falling back to the interpreter. On a warm start the compiler
+// loads from the on-disk cache within a few seconds, so this avoids building
+// the memory-heavy interpreter (~160MB+) at all; on a cold start (compilation
+// takes far longer) the wait lapses and the interpreter bridges the gap.
+const polyglotCompilerGrace = 8 * time.Second
+
 func Call(ctx context.Context, functionName string, args ...string) (string, error) {
-	engine, err := polyglotEngineForCall(ctx)
-	if err != nil {
-		return "", err
+	// Prefer the compiled engine. It is built in the background; once ready it
+	// serves every call, so the interpreter is retired to reclaim memory.
+	startPolyglotCompiler()
+	if compiled := readyPolyglotCompiler(); compiled != nil {
+		return callPolyglotEngine(ctx, compiled, functionName, args...)
 	}
 
-	instanceID := atomic.AddUint64(&polyglotInstanceCount, 1)
-	module, err := engine.runtime.InstantiateModule(ctx, engine.compiled, wazero.NewModuleConfig().WithName(fmt.Sprintf("polyglot-sql-%s-%d", engine.name, instanceID)))
+	// Compiler not ready yet. If we have not built the interpreter, give the
+	// compiler a brief grace period to come up (cheap on warm cache hits) before
+	// paying for the interpreter.
+	if currentPolyglotInterpreter() == nil {
+		if compiled := awaitPolyglotCompiler(ctx, polyglotCompilerGrace); compiled != nil {
+			return callPolyglotEngine(ctx, compiled, functionName, args...)
+		}
+	}
+
+	// Build (once) and use the interpreter so calls don't block on a slow (cold)
+	// compilation. The read lock keeps the interpreter alive for the duration of
+	// the call, so the compiler goroutine can't close it out from under us when
+	// it retires it.
+	if _, err := initPolyglotInterpreter(ctx); err != nil {
+		return "", err
+	}
+	polyglotInterpreterMu.RLock()
+	engine := polyglotInterpreter
+	if engine == nil {
+		// Retired between init and lock — the compiler is ready now.
+		polyglotInterpreterMu.RUnlock()
+		if compiled := readyPolyglotCompiler(); compiled != nil {
+			return callPolyglotEngine(ctx, compiled, functionName, args...)
+		}
+		return "", errors.New("polyglot SQL engine unavailable")
+	}
+	defer polyglotInterpreterMu.RUnlock()
+	return callPolyglotEngine(ctx, engine, functionName, args...)
+}
+
+func callPolyglotEngine(ctx context.Context, engine *polyglotEngine, functionName string, args ...string) (resultString string, resultErr error) {
+	pm, err := engine.acquire(ctx)
 	if err != nil {
 		return "", err
 	}
-	defer module.Close(ctx)
+	// Return the instance to the pool on success so the next call reuses it
+	// (avoiding the ~15ms re-instantiation). On error close it — a half-finished
+	// call may have left guest state inconsistent.
+	defer func() {
+		if resultErr != nil {
+			_ = pm.module.Close(ctx)
+			return
+		}
+		engine.release(ctx, pm)
+	}()
+	module := pm.module
 
 	malloc := module.ExportedFunction("__wbindgen_export")
 	free := module.ExportedFunction("__wbindgen_export4")
@@ -142,41 +216,168 @@ func Call(ctx context.Context, functionName string, args ...string) (string, err
 	return string(output), nil
 }
 
-func polyglotEngineForCall(ctx context.Context) (*polyglotEngine, error) {
-	engine, err := initPolyglotInterpreter(ctx)
+func (engine *polyglotEngine) acquire(ctx context.Context) (*pooledModule, error) {
+	select {
+	case pm := <-engine.idle:
+		return pm, nil
+	default:
+	}
+	instanceID := atomic.AddUint64(&polyglotInstanceCount, 1)
+	module, err := engine.runtime.InstantiateModule(ctx, engine.compiled, wazero.NewModuleConfig().WithName(fmt.Sprintf("polyglot-sql-%s-%d", engine.name, instanceID)))
 	if err != nil {
 		return nil, err
 	}
-	startPolyglotCompiler()
-	if compiled := readyPolyglotCompiler(); compiled != nil {
-		return compiled, nil
+	return &pooledModule{module: module}, nil
+}
+
+func (engine *polyglotEngine) release(ctx context.Context, pm *pooledModule) {
+	pm.uses++
+	if pm.uses >= polyglotRecycleEvery {
+		_ = pm.module.Close(ctx)
+		return
 	}
-	return engine, nil
+	select {
+	case engine.idle <- pm:
+	default:
+		// Pool full: close the surplus instance instead of leaking it.
+		_ = pm.module.Close(ctx)
+	}
+}
+
+func PrewarmPolyglotCompiler() {
+	startPolyglotCompiler()
+}
+
+func PolyglotCompilerReady() bool {
+	return readyPolyglotCompiler() != nil
 }
 
 func initPolyglotInterpreter(ctx context.Context) (*polyglotEngine, error) {
 	polyglotInterpreterOnce.Do(func() {
-		polyglotInterpreter, polyglotInterpreterErr = buildPolyglotEngine(ctx, wazero.NewRuntimeConfigInterpreter(), "interpreted")
+		// Skip the (expensive) interpreter build if the compiled engine already
+		// took over while this first call was racing in.
+		if readyPolyglotCompiler() != nil {
+			return
+		}
+		engine, err := buildPolyglotEngine(ctx, wazero.NewRuntimeConfigInterpreter(), "interpreted")
+		polyglotInterpreterMu.Lock()
+		// The compiler can finish (and retire the interpreter) during the ~1s
+		// build above; if so, discard this engine rather than publishing it,
+		// otherwise it leaks ~160MB+ for the process lifetime.
+		if polyglotInterpreterRetired {
+			polyglotInterpreterMu.Unlock()
+			if engine != nil {
+				_ = engine.runtime.Close(ctx)
+			}
+			return
+		}
+		polyglotInterpreter = engine
+		polyglotInterpreterErr = err
+		polyglotInterpreterMu.Unlock()
 	})
+	polyglotInterpreterMu.RLock()
+	defer polyglotInterpreterMu.RUnlock()
 	return polyglotInterpreter, polyglotInterpreterErr
 }
 
 func startPolyglotCompiler() {
 	polyglotCompilerOnce.Do(func() {
 		go func() {
-			engine, err := buildPolyglotEngine(context.Background(), wazero.NewRuntimeConfigCompiler(), "compiled")
+			engine, err := buildPolyglotEngine(context.Background(), compilerRuntimeConfig(), "compiled")
 			polyglotCompilerMu.Lock()
-			defer polyglotCompilerMu.Unlock()
 			polyglotCompiler = engine
 			polyglotCompilerErr = err
+			polyglotCompilerMu.Unlock()
+			// The compiled engine now serves every call; free the interpreter
+			// (its decoded operations retain hundreds of MB of Go heap) and
+			// return that transient arena to the OS.
+			if err == nil && engine != nil {
+				retirePolyglotInterpreter(context.Background())
+				debug.FreeOSMemory()
+			}
 		}()
 	})
+}
+
+// retirePolyglotInterpreter closes the interpreter runtime and drops it once
+// the compiled engine has taken over. The write lock waits for any in-flight
+// interpreter call (which holds the read lock) to finish first.
+func retirePolyglotInterpreter(ctx context.Context) {
+	polyglotInterpreterMu.Lock()
+	defer polyglotInterpreterMu.Unlock()
+	polyglotInterpreterRetired = true
+	if polyglotInterpreter != nil {
+		_ = polyglotInterpreter.runtime.Close(ctx)
+		polyglotInterpreter = nil
+	}
 }
 
 func readyPolyglotCompiler() *polyglotEngine {
 	polyglotCompilerMu.RLock()
 	defer polyglotCompilerMu.RUnlock()
 	return polyglotCompiler
+}
+
+// awaitPolyglotCompiler waits up to timeout for the compiled engine, returning
+// nil if it is still not ready (so the caller can fall back to the interpreter).
+func awaitPolyglotCompiler(ctx context.Context, timeout time.Duration) *polyglotEngine {
+	deadline := time.Now().Add(timeout)
+	for {
+		if compiled := readyPolyglotCompiler(); compiled != nil {
+			return compiled
+		}
+		if time.Now().After(deadline) || ctx.Err() != nil {
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return nil
+		case <-time.After(50 * time.Millisecond):
+		}
+	}
+}
+
+func currentPolyglotInterpreter() *polyglotEngine {
+	polyglotInterpreterMu.RLock()
+	defer polyglotInterpreterMu.RUnlock()
+	return polyglotInterpreter
+}
+
+var (
+	wazeroCacheOnce sync.Once
+	wazeroCache     wazero.CompilationCache
+)
+
+// compilerRuntimeConfig returns the optimizing-compiler runtime config backed by
+// a shared on-disk compilation cache. Compiling the 18MB polyglot wasm with the
+// optimizing compiler takes seconds; the disk cache makes that cost paid once
+// per machine (keyed by wazero version + module) instead of once per process,
+// so server restarts — and the e2e suite's many short-lived servers — get a
+// ready compiler almost immediately instead of leaning on the memory-heavy
+// interpreter while compilation runs.
+func compilerRuntimeConfig() wazero.RuntimeConfig {
+	config := wazero.NewRuntimeConfigCompiler()
+	if cache := sharedWazeroCache(); cache != nil {
+		config = config.WithCompilationCache(cache)
+	}
+	return config
+}
+
+func sharedWazeroCache() wazero.CompilationCache {
+	wazeroCacheOnce.Do(func() {
+		base, err := os.UserCacheDir()
+		if err != nil || base == "" {
+			base = os.TempDir()
+		}
+		dir := filepath.Join(base, "renart", "wazero-cache")
+		if mkErr := os.MkdirAll(dir, 0o755); mkErr != nil {
+			return
+		}
+		if cache, cacheErr := wazero.NewCompilationCacheWithDir(dir); cacheErr == nil {
+			wazeroCache = cache
+		}
+	})
+	return wazeroCache
 }
 
 func buildPolyglotEngine(ctx context.Context, config wazero.RuntimeConfig, name string) (*polyglotEngine, error) {
@@ -204,7 +405,12 @@ func buildPolyglotEngine(ctx context.Context, config wazero.RuntimeConfig, name 
 		return nil, err
 	}
 
-	return &polyglotEngine{runtime: runtime, compiled: compiled, name: name}, nil
+	return &polyglotEngine{
+		runtime:  runtime,
+		compiled: compiled,
+		name:     name,
+		idle:     make(chan *pooledModule, polyglotPoolSize),
+	}, nil
 }
 
 func addWasmBindgenImportStub(builder wazero.HostModuleBuilder, name string, params, results []api.ValueType) error {

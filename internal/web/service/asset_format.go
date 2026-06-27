@@ -36,7 +36,11 @@ func (s *AssetService) FormatSQL(ctx context.Context, assetID string, req Format
 		return FormatSQLAssetResponse{}, newAPIError(500, "asset_write_failed", err.Error())
 	}
 	s.deps.SuppressWatcher(relAssetPath)
-	s.deps.PushWorkspaceUpdateImmediateWithChangedIDs(ctx, "asset.updated", relAssetPath, []string{assetID})
+	if s.deps.PushAssetContentUpdateImmediate != nil {
+		s.deps.PushAssetContentUpdateImmediate("asset.updated", relAssetPath, []string{assetID}, formattedSQL)
+	} else {
+		s.deps.PushWorkspaceUpdateImmediateWithChangedIDs(ctx, "asset.updated", relAssetPath, []string{assetID})
+	}
 	return FormatSQLAssetResponse{Status: "ok", AssetID: assetID, Content: formattedSQL}, nil
 }
 

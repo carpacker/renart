@@ -1,8 +1,24 @@
 import { expect } from "@playwright/test";
 import { access, readFile } from "node:fs/promises";
+import { mkdtempSync, writeFileSync } from "node:fs";
+import http from "node:http";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { liveTest as test } from "../live-app-fixture";
+
+const fakeUvRoot = mkdtempSync(join(tmpdir(), "renart-fake-uv-"));
+const fakeUvPath = join(fakeUvRoot, "uv");
+const fakeUvLogPath = join(fakeUvRoot, "uv.log");
+
+writeFileSync(
+  fakeUvPath,
+  `#!/bin/sh
+printf '%s\n' "$*" >> "$RENART_FAKE_UV_LOG"
+printf 'fake uv invoked: %s\n' "$*"
+`,
+  { mode: 0o755 }
+);
 
 test.describe("workspace onboarding live flows", () => {
   test.use({ fixtureName: "empty-workspace-postgres" });
@@ -134,7 +150,7 @@ test.describe("workspace onboarding DuckDB quickstart", () => {
     const configAfterQuickstart = await readFile(join(liveApp.workspaceDir, ".bruin.yml"), "utf8");
     expect(configAfterQuickstart).toContain("duckdb-default");
     expect(configAfterQuickstart).toContain("duckdb-files/chess_playground.duckdb");
-    expect(configAfterQuickstart).toContain("chess-default");
+    expect(configAfterQuickstart).not.toContain("chess-default");
 
     const pipelineFile = await readFile(join(liveApp.workspaceDir, "quickstart", "pipeline.yml"), "utf8");
     expect(pipelineFile).toContain("name: quickstart");
@@ -144,15 +160,27 @@ test.describe("workspace onboarding DuckDB quickstart", () => {
       join(liveApp.workspaceDir, "quickstart", "assets", "quickstart", "players.asset.yml"),
       "utf8"
     );
-    expect(playersAsset).not.toContain("name:");
-    expect(playersAsset).toContain("source_connection: chess-default");
+    expect(playersAsset).not.toContain("\nname:");
+    expect(playersAsset).toContain("type: api");
+    expect(playersAsset).toContain("parameters:");
+    expect(playersAsset).toContain("https://api.chess.com/pub/player/{{ username }}");
+    expect(playersAsset).not.toContain("destination:");
+    expect(playersAsset).not.toContain("object: quickstart.players");
+    expect(playersAsset).not.toContain("mode: full-refresh");
+    expect(playersAsset).not.toContain("MagnusCarlsen");
 
     const gamesAsset = await readFile(
       join(liveApp.workspaceDir, "quickstart", "assets", "quickstart", "games.asset.yml"),
       "utf8"
     );
-    expect(gamesAsset).not.toContain("name:");
-    expect(gamesAsset).toContain("source_table: games");
+    expect(gamesAsset).not.toContain("\nname:");
+    expect(gamesAsset).toContain("type: api");
+    expect(gamesAsset).toContain("parameters:");
+    expect(gamesAsset).toContain("https://api.chess.com/pub/player/{{ username }}/games/");
+    expect(gamesAsset).not.toContain("destination:");
+    expect(gamesAsset).not.toContain("object: quickstart.games");
+    expect(gamesAsset).not.toContain("mode: full-refresh");
+    expect(gamesAsset).not.toContain("MagnusCarlsen");
 
     const statsAsset = await readFile(
       join(liveApp.workspaceDir, "quickstart", "assets", "quickstart", "player_stats.sql"),
@@ -160,8 +188,8 @@ test.describe("workspace onboarding DuckDB quickstart", () => {
     );
     expect(statsAsset).not.toContain("name:");
     expect(statsAsset).toContain("quickstart.games");
-    expect(statsAsset).toContain("players_white");
-    expect(statsAsset).toContain("players_black");
+    expect(statsAsset).toContain("white_username");
+    expect(statsAsset).toContain("black_username");
     expect(statsAsset).toContain("games_white");
     expect(statsAsset).toContain("games_black");
     expect(statsAsset).not.toContain("columns:");
@@ -182,5 +210,91 @@ test.describe("workspace onboarding DuckDB quickstart", () => {
         return JSON.stringify(workspace).includes("quickstart.player_stats");
       })
       .toBe(true);
+  });
+});
+
+test.describe("workspace onboarding API quickstart uv installation", () => {
+  test.use({
+    fixtureName: "empty-workspace",
+    liveAppEnv: {
+      PATH: fakeUvRoot,
+      RENART_UV_BINARY: fakeUvPath,
+      RENART_FAKE_UV_LOG: fakeUvLogPath,
+      RENART_SLING_PACKAGE: "sling-test-package",
+      RENART_SLING_BINARY: "",
+      SLING_BINARY: "",
+    },
+  });
+
+  test("loads generated API assets through uv-backed Sling when sling is not on PATH", async ({
+    page,
+    liveApp,
+  }) => {
+    const apiServer = http.createServer((request, response) => {
+      if (request.url === "/player/Hikaru") {
+        response.writeHead(200, { "content-type": "application/json" });
+        response.end(JSON.stringify({ username: "Hikaru", name: "Hikaru Nakamura" }));
+        return;
+      }
+      response.writeHead(404, { "content-type": "application/json" });
+      response.end(JSON.stringify({ error: "not found" }));
+    });
+    await new Promise<void>((resolve) => apiServer.listen(0, "127.0.0.1", resolve));
+    const apiPort = (apiServer.address() as { port: number }).port;
+
+    const quickstartResponse = await page.request.post(`${liveApp.baseURL}/api/onboarding/quickstart`, {
+      data: {
+        environment_name: "default",
+        pipeline_name: "quickstart",
+        connection_name: "duckdb-default",
+        database_path: "duckdb-files/chess_playground.duckdb",
+        materialize: false,
+      },
+    });
+    expect(quickstartResponse.ok()).toBe(true);
+    await expect(quickstartResponse.json()).resolves.toMatchObject({ status: "ok" });
+
+    writeFileSync(
+      join(liveApp.workspaceDir, "quickstart", "assets", "quickstart", "players.asset.yml"),
+      `type: api
+
+parameters:
+  request:
+    url: http://127.0.0.1:${apiPort}/player/{{ username }}
+    method: GET
+
+  iterate:
+    as: username
+    over:
+      - Hikaru
+
+  response:
+    fields:
+      username: username
+      name: name
+`,
+      "utf8"
+    );
+
+    try {
+      const assetId = Buffer.from("quickstart/assets/quickstart/players.asset.yml").toString("base64url");
+      const materializeResponse = await page.request.post(
+        `${liveApp.baseURL}/api/assets/${assetId}/materialize/stream?environment=default`
+      );
+      expect(materializeResponse.ok()).toBe(true);
+      const streamBody = await materializeResponse.text();
+      expect(streamBody).toContain('"status":"ok"');
+      expect(streamBody).toContain("fake uv invoked");
+
+      const uvLog = await readFile(fakeUvLogPath, "utf8");
+      expect(uvLog).toContain(
+        "tool run --no-config --python 3.11 --from sling-test-package sling run --src-stream file://"
+      );
+      expect(uvLog).toContain("--tgt-conn duckdb:///");
+      expect(uvLog).toContain("--tgt-object quickstart.players");
+      expect(uvLog).not.toContain("--mode full-refresh");
+    } finally {
+      apiServer.close();
+    }
   });
 });

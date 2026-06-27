@@ -1,0 +1,327 @@
+package service
+
+import (
+	"context"
+	"path/filepath"
+	"strings"
+	"time"
+
+	"renart/internal/web/notebook"
+)
+
+// onCellChanged is called after a cell is saved. It marks the cell and its
+// descendants stale and (when auto-recompute is on) kicks off a debounced
+// recompute pass. Safe to call for any mutation that changes a cell's content.
+func (s *NotebookService) onCellChanged(notebookID string, nb *notebook.Notebook, cellID string) {
+	rt := s.runtimes.get(nb.UUID)
+
+	cell := nb.CellByID(cellID)
+	closure := map[string]bool{cellID: true}
+	if cell != nil {
+		for _, descendant := range notebook.Descendants(nb, cell) {
+			closure[descendant.ID] = true
+		}
+	}
+
+	rt.mu.Lock()
+	for id := range closure {
+		rt.stale[id] = true
+		// A fresh edit gives the whole affected subgraph another auto attempt.
+		delete(rt.autoFailed, id)
+	}
+	cancel := rt.cancelWave
+	auto := rt.autoRecompute
+	// Optimistically treat all stale cells as auto-pending so an edit does not
+	// flash the stale treatment; the pass demotes any that won't refresh
+	// (Python, non-SELECT, errors) within a debounce.
+	optimisticPending := sortedKeys(rt.stale)
+	rt.mu.Unlock()
+
+	// Interrupt any wave in flight so the pass re-loops against the new content.
+	if cancel != nil {
+		cancel()
+	}
+
+	s.publishRuntime(notebookID, nb.UUID, optimisticPending, nil, nil)
+	if auto {
+		s.scheduleRecompute(notebookID, nb.UUID)
+	}
+}
+
+// scheduleRecompute (re)arms the debounce timer; when it fires it ensures a
+// single recompute pass is running for the notebook.
+func (s *NotebookService) scheduleRecompute(notebookID, uuid string) {
+	rt := s.runtimes.get(uuid)
+	rt.mu.Lock()
+	defer rt.mu.Unlock()
+	if rt.debounce != nil {
+		rt.debounce.Stop()
+	}
+	rt.debounce = time.AfterFunc(autoRecomputeDebounce, func() {
+		rt.mu.Lock()
+		rt.debounce = nil
+		if rt.passActive || !rt.autoRecompute {
+			rt.mu.Unlock()
+			return
+		}
+		rt.passActive = true
+		rt.mu.Unlock()
+		s.runRecomputePass(notebookID, uuid)
+	})
+}
+
+// runRecomputePass recomputes safe cells wave by wave until none remain,
+// streaming results to clients. It assumes rt.passActive is already set; it
+// clears it (atomically with the stale check) before returning.
+func (s *NotebookService) runRecomputePass(notebookID, uuid string) {
+	rt := s.runtimes.get(uuid)
+	for {
+		rt.mu.Lock()
+		if !rt.autoRecompute || len(rt.stale) == 0 {
+			rt.passActive = false
+			rt.mu.Unlock()
+			s.publishRuntime(notebookID, uuid, nil, nil, nil)
+			return
+		}
+		rt.mu.Unlock()
+
+		nb, apiErr := s.load(notebookID)
+		if apiErr != nil {
+			rt.mu.Lock()
+			rt.passActive = false
+			rt.mu.Unlock()
+			return
+		}
+
+		cells := s.buildAutoCells(nb, rt)
+		closure := computeAutoRecomputeClosure(cells)
+		wave := computeAutoRecomputeWave(cells)
+		s.publishRuntime(notebookID, uuid, sortedKeys(closure), wave, nil)
+		if len(wave) == 0 {
+			rt.mu.Lock()
+			rt.passActive = false
+			rt.mu.Unlock()
+			return
+		}
+
+		results, cancelled := s.runAutoWave(uuid, nb, wave)
+		if cancelled {
+			// Superseded by an edit; loop with the new state.
+			continue
+		}
+		s.recordResults(rt, results)
+		delta := make(map[string]notebook.CellRunResult, len(results))
+		for _, result := range results {
+			delta[result.CellID] = result
+		}
+		s.publishRuntime(notebookID, uuid, sortedKeys(closure), nil, delta)
+	}
+}
+
+// runAutoWave executes the given cell ids in one session pass with a cancellable
+// context (stored so an edit can interrupt it). cancelled is true when the wave
+// was interrupted rather than completing.
+func (s *NotebookService) runAutoWave(uuid string, nb *notebook.Notebook, wave []string) (results []notebook.CellRunResult, cancelled bool) {
+	rt := s.runtimes.get(uuid)
+	rt.mu.Lock()
+	environment := rt.environment
+	rt.mu.Unlock()
+
+	cells, selectErr := s.selectRunCells(nb, RunNotebookRequest{Cells: wave})
+	if selectErr != nil || len(cells) == 0 {
+		return nil, false
+	}
+	renderSQL, renderErr := s.newNotebookJinjaRenderer("", "")
+	if renderErr != nil {
+		return nil, false
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	rt.mu.Lock()
+	rt.cancelWave = cancel
+	rt.mu.Unlock()
+	defer func() {
+		rt.mu.Lock()
+		rt.cancelWave = nil
+		rt.mu.Unlock()
+		cancel()
+	}()
+
+	runner := s.newRunner(renderSQL, environment)
+	results, runErr := runner.RunCells(ctx, nb, cells, notebook.RunOptions{})
+	if ctx.Err() != nil {
+		return nil, true
+	}
+	if runErr != nil {
+		return nil, false
+	}
+	return results, false
+}
+
+// recordResults folds a wave's results into the runtime: ok cells become fresh,
+// failed/blocked cells stay stale and are remembered so they are not retried
+// until edited.
+func (s *NotebookService) recordResults(rt *notebookRuntime, results []notebook.CellRunResult) {
+	rt.mu.Lock()
+	defer rt.mu.Unlock()
+	for _, result := range results {
+		rt.results[result.CellID] = result
+		if result.Status == notebook.CellRunOK {
+			delete(rt.stale, result.CellID)
+			delete(rt.autoFailed, result.CellID)
+		} else {
+			rt.stale[result.CellID] = true
+			rt.autoFailed[result.CellID] = true
+		}
+	}
+}
+
+// buildAutoCells assembles the eligibility inputs for every cell, validating the
+// SQL of each stale, non-Python cell against its siblings' current output
+// columns (the same parse-context the editor uses — so a broken upstream change
+// surfaces as an error and blocks the downstream).
+func (s *NotebookService) buildAutoCells(nb *notebook.Notebook, rt *notebookRuntime) []autoCellInfo {
+	rt.mu.Lock()
+	stale := make(map[string]bool, len(rt.stale))
+	for id := range rt.stale {
+		stale[id] = rt.stale[id]
+	}
+	ranOk := map[string]bool{}
+	for id, result := range rt.results {
+		ranOk[id] = result.Status == notebook.CellRunOK
+	}
+	autoFailed := make(map[string]bool, len(rt.autoFailed))
+	for id := range rt.autoFailed {
+		autoFailed[id] = rt.autoFailed[id]
+	}
+	rt.mu.Unlock()
+
+	nameToID := map[string]string{}
+	for _, cell := range nb.Cells {
+		nameToID[strings.ToLower(cell.Asset.Name)] = cell.ID
+	}
+
+	out := make([]autoCellInfo, 0, len(nb.Cells))
+	for _, cell := range nb.Cells {
+		isPython := notebook.IsPythonCell(cell)
+		info := autoCellInfo{
+			cellID:     cell.ID,
+			stale:      stale[cell.ID],
+			ranOk:      ranOk[cell.ID],
+			isPython:   isPython,
+			autoFailed: autoFailed[cell.ID],
+		}
+		for _, upstream := range cell.Asset.Upstreams {
+			if id, ok := nameToID[strings.ToLower(upstream.Value)]; ok {
+				info.upstreamIDs = append(info.upstreamIDs, id)
+			}
+		}
+		// Only stale, non-Python cells need a validity verdict (a fresh upstream
+		// short-circuits eligibility; Python is never auto-run).
+		if info.stale && !isPython {
+			selectOnly, hasErr, ok := s.validateCellSQL(nb, cell, rt)
+			info.statusLoaded = ok
+			info.isSelectOnly = selectOnly
+			info.hasSqlError = hasErr
+		}
+		out = append(out, info)
+	}
+	return out
+}
+
+// validateCellSQL runs the shared parse-context validator for a cell against the
+// current sibling output columns. ok is false when validation could not run.
+func (s *NotebookService) validateCellSQL(nb *notebook.Notebook, cell *notebook.Cell, rt *notebookRuntime) (isSelectOnly, hasErr, ok bool) {
+	if s.deps.ValidateSQL == nil {
+		return false, false, false
+	}
+	assetID := s.cellAssetID(cell)
+	if assetID == "" {
+		return false, false, false
+	}
+	schemaTables := s.buildCellSchemaTables(nb, cell, rt)
+	result, apiErr := s.deps.ValidateSQL(context.Background(), assetID, cell.Asset.ExecutableFile.Content, schemaTables)
+	if apiErr != nil {
+		return false, false, false
+	}
+	hasErr = len(result.Errors) > 0
+	for _, diagnostic := range result.Diagnostics {
+		if diagnostic.Severity == "error" || diagnostic.Severity == "fatal" {
+			hasErr = true
+			break
+		}
+	}
+	// Auto-recompute any read-only result query (SELECT, CTE, or a UNION/
+	// INTERSECT/EXCEPT set operation) — not just a plain single SELECT. They are
+	// side-effect-free and the runner wraps them in a view anyway.
+	return result.IsReadOnlyResult, hasErr, true
+}
+
+// buildCellSchemaTables describes the tables a cell can read: every sibling cell
+// (its latest run columns when available, else its declared columns) and the
+// cell's external references (registered with no columns, so references resolve
+// but column checks against them stay lenient).
+func (s *NotebookService) buildCellSchemaTables(nb *notebook.Notebook, cell *notebook.Cell, rt *notebookRuntime) []ParseContextSchemaTable {
+	rt.mu.Lock()
+	resultsCopy := make(map[string][]string, len(rt.results))
+	for id, result := range rt.results {
+		if result.Status == notebook.CellRunOK && len(result.Columns) > 0 {
+			resultsCopy[id] = result.Columns
+		}
+	}
+	rt.mu.Unlock()
+
+	tables := make([]ParseContextSchemaTable, 0, len(nb.Cells))
+	seen := map[string]bool{}
+	for _, sibling := range nb.Cells {
+		if sibling.ID == cell.ID {
+			continue
+		}
+		name := sibling.Asset.Name
+		if name == "" || seen[strings.ToLower(name)] {
+			continue
+		}
+		seen[strings.ToLower(name)] = true
+		var columns []ParseContextSchemaColumn
+		if runColumns, ok := resultsCopy[sibling.ID]; ok {
+			for _, column := range runColumns {
+				columns = append(columns, ParseContextSchemaColumn{Name: column, SourceMethods: []string{"notebook-run"}})
+			}
+		} else {
+			for _, column := range sibling.Asset.Columns {
+				columns = append(columns, ParseContextSchemaColumn{Name: column.Name})
+			}
+		}
+		tables = append(tables, ParseContextSchemaTable{Name: name, Columns: columns})
+	}
+	for _, ref := range cell.ExternalRefs {
+		if ref == "" || seen[strings.ToLower(ref)] {
+			continue
+		}
+		seen[strings.ToLower(ref)] = true
+		tables = append(tables, ParseContextSchemaTable{Name: ref})
+	}
+	return tables
+}
+
+// cellAssetID encodes a cell file path into the asset id the parse-context
+// resolver expects (a workspace-relative, slash-encoded path).
+func (s *NotebookService) cellAssetID(cell *notebook.Cell) string {
+	rel, err := filepath.Rel(s.deps.WorkspaceRoot, cell.Path)
+	if err != nil {
+		return ""
+	}
+	return EncodeID(filepath.ToSlash(rel))
+}
+
+// newRunner builds a cell runner sharing the service's parser, store, fetcher,
+// and Python materializer.
+func (s *NotebookService) newRunner(renderSQL func(string) (string, error), environment string) *notebook.Runner {
+	return &notebook.Runner{
+		Store:              s.store,
+		RenameTables:       s.renameTables,
+		RenderSQL:          renderSQL,
+		Fetcher:            &pipelineSourceFetcher{service: s, environment: environment},
+		PythonMaterializer: s.materializePythonCell,
+	}
+}

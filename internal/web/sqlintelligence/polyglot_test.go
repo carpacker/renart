@@ -20,6 +20,7 @@ func TestParseContextWithSchemaPolyglotExtractsTablesColumnsAndDiagnostics(t *te
 
 	assert.Equal(t, "select", parseContext.QueryKind)
 	assert.True(t, parseContext.IsSingleSelect)
+	assert.True(t, parseContext.IsReadOnlyResult)
 	require.Len(t, parseContext.Tables, 2)
 	tablesByName := map[string]ParseContextTable{}
 	for _, table := range parseContext.Tables {
@@ -121,4 +122,30 @@ func diagnosticMessages(diagnostics []ParseContextDiagnostic) []string {
 		result = append(result, diagnostic.Message)
 	}
 	return result
+}
+
+func TestParseContextReadOnlyResultClassification(t *testing.T) {
+	cases := []struct {
+		name         string
+		query        string
+		singleSelect bool
+		readOnly     bool
+	}{
+		{"plain select", "select 1 as n", true, true},
+		{"cte select", "with t as (select 1 as n) select * from t", true, true},
+		{"union all", "select 1 as n union all select 2", false, true},
+		{"intersect", "select 1 as n intersect select 1", false, true},
+		{"except", "select 1 as n except select 2", false, true},
+		{"create table", "create table t as select 1 as n", false, false},
+		{"insert", "insert into t values (1)", false, false},
+		{"multi statement", "select 1; select 2", false, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			pc, err := ParseContextWithSchemaPolyglot(tc.query, "duckdb", Schema{})
+			require.NoError(t, err)
+			assert.Equal(t, tc.singleSelect, pc.IsSingleSelect, "IsSingleSelect")
+			assert.Equal(t, tc.readOnly, pc.IsReadOnlyResult, "IsReadOnlyResult")
+		})
+	}
 }

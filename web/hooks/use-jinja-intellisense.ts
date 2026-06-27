@@ -13,6 +13,41 @@ import {
 import { selectedExecutionTimeWindowAtom } from "@/lib/atoms/domains/workspace";
 import { WebAsset } from "@/lib/types";
 
+// One global Jinja provider set per Monaco, shared across editors. Each editor
+// registers its render-result getter by model URI; the providers resolve the
+// getter for the model they run on. Registering per editor (as before) meant N
+// mounted cell editors produced N duplicated Jinja suggestions.
+const jinjaRenderGetters = new Map<string, () => JinjaRenderResponse | null>();
+const jinjaProviderRegistry = new Map<
+  typeof MonacoNS,
+  { disposable: MonacoNS.IDisposable; refs: number }
+>();
+
+function acquireJinjaProviders(monaco: typeof MonacoNS): () => void {
+  let registration = jinjaProviderRegistry.get(monaco);
+  if (!registration) {
+    registration = {
+      disposable: registerJinjaProviders(monaco, (model) =>
+        jinjaRenderGetters.get(model.uri.toString())?.() ?? null,
+      ),
+      refs: 0,
+    };
+    jinjaProviderRegistry.set(monaco, registration);
+  }
+  registration.refs += 1;
+  return () => {
+    const current = jinjaProviderRegistry.get(monaco);
+    if (!current) {
+      return;
+    }
+    current.refs -= 1;
+    if (current.refs <= 0) {
+      current.disposable.dispose();
+      jinjaProviderRegistry.delete(monaco);
+    }
+  };
+}
+
 export function useJinjaIntellisense(
   monaco: typeof MonacoNS | null,
   editor: MonacoNS.editor.IStandaloneCodeEditor | null,
@@ -28,10 +63,17 @@ export function useJinjaIntellisense(
   const spanKey = useMemo(() => JSON.stringify(parseJinjaSpans(content).map((span) => [span.startOffset, span.endOffset, span.content])), [content]);
 
   useEffect(() => {
-    if (!monaco) return;
-    const disposable = registerJinjaProviders(monaco, () => renderResultRef.current);
-    return () => disposable.dispose();
-  }, [monaco]);
+    if (!monaco || !editor) return;
+    const model = editor.getModel();
+    if (!model) return;
+    const uri = model.uri.toString();
+    jinjaRenderGetters.set(uri, () => renderResultRef.current);
+    const release = acquireJinjaProviders(monaco);
+    return () => {
+      jinjaRenderGetters.delete(uri);
+      release();
+    };
+  }, [monaco, editor]);
 
   useEffect(() => {
     if (!assetId || !isSqlAsset || !content.includes("{")) {

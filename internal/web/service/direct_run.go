@@ -35,10 +35,13 @@ func (e *HybridBruinExecutor) RunAsset(ctx context.Context, req RunAssetRequest,
 	if _, err := selectConfigEnvironment(pp.Config, req.Environment); err != nil {
 		return nil, fmt.Errorf("failed to use the environment '%s': %w", req.Environment, err)
 	}
-
 	manager, err := e.directConnectionManager(ctx, pp.Config)
 	if err != nil {
 		return nil, err
+	}
+
+	if isSlingAsset(pp.Asset) {
+		return e.runSlingAsset(ctx, pp.Asset, manager, onChunk)
 	}
 
 	runID := newRenartRunID()
@@ -55,6 +58,9 @@ func (e *HybridBruinExecutor) RunAsset(ctx context.Context, req RunAssetRequest,
 	renderer, err := buildDirectRunAssetRenderer(pp, timeWindow, runID)
 	if err != nil {
 		return nil, err
+	}
+	if isAPIAsset(pp.Asset) {
+		return e.runAPIAsset(runCtx, pp.Pipeline, pp.Asset, renderer, manager, onChunk)
 	}
 
 	mainExecutors, err := buildDirectMainExecutors(manager, renderer, parser, pp.Pipeline)
@@ -236,14 +242,22 @@ func (e *HybridBruinExecutor) RunPipeline(ctx context.Context, req RunPipelineRe
 			taskStartedAt := time.Now()
 			emitDirectRunAssetEvent(req.AssetEvent, instance, "running", taskStartedAt, time.Time{}, nil)
 			writeDirectRunLifecycle(printer, instance, nil, true, 0)
-			if err := seq.RunSingleTask(runCtx, instance); err != nil {
+			var runErr error
+			if isAPIAsset(instance.GetAsset()) {
+				_, runErr = e.runAPIAsset(runCtx, foundPipeline, instance.GetAsset(), renderer, manager, func(chunk []byte) { _, _ = printer.Write(chunk) })
+			} else if isSlingAsset(instance.GetAsset()) {
+				_, runErr = e.runSlingAsset(ctx, instance.GetAsset(), manager, func(chunk []byte) { _, _ = printer.Write(chunk) })
+			} else {
+				runErr = seq.RunSingleTask(runCtx, instance)
+			}
+			if runErr != nil {
 				instance.MarkAs(scheduler.Failed)
-				results = append(results, &scheduler.TaskExecutionResult{Instance: instance, Error: err})
-				emitDirectRunAssetEvent(req.AssetEvent, instance, "failed", taskStartedAt, time.Now(), err)
-				writeDirectRunLifecycle(printer, instance, err, false, time.Since(taskStartedAt))
+				results = append(results, &scheduler.TaskExecutionResult{Instance: instance, Error: runErr})
+				emitDirectRunAssetEvent(req.AssetEvent, instance, "failed", taskStartedAt, time.Now(), runErr)
+				writeDirectRunLifecycle(printer, instance, runErr, false, time.Since(taskStartedAt))
 				writeDirectRunSummary(printer, buildDirectRunSummary(results, time.Since(startedAt)))
 				_ = e.saveDirectRunLog(ctx, foundPipeline, s, runID, req.Environment, timeWindow, []string{"renart", "run", req.Target})
-				return printer.buffer.Bytes(), err
+				return printer.buffer.Bytes(), runErr
 			}
 			instance.MarkAs(scheduler.Succeeded)
 			results = append(results, &scheduler.TaskExecutionResult{Instance: instance, Error: nil})
@@ -400,6 +414,8 @@ var directRunAssetTypes = map[pipeline.AssetType]struct{}{
 	pipeline.AssetTypeS3KeySensor:             {},
 	pipeline.AssetTypePython:                  {},
 	pipeline.AssetTypeIngestr:                 {},
+	pipeline.AssetType(slingAssetType):        {},
+	pipeline.AssetType(apiAssetType):          {},
 }
 
 func allDirectRunPipelineDependenciesSucceeded(instance scheduler.TaskInstance) bool {

@@ -35,7 +35,7 @@ func TestOnboardingImportDatabaseReturnsSchemaAssetPaths(t *testing.T) {
 	assert.Contains(t, string(contents), "name: analytics")
 }
 
-func TestCreateDuckDBQuickstartCreatesBruinDefaultAssetsAndDatabaseFile(t *testing.T) {
+func TestCreateDuckDBQuickstartCreatesSlingChessAssetsAndDatabaseFile(t *testing.T) {
 	t.Parallel()
 
 	workspaceRoot := t.TempDir()
@@ -62,19 +62,29 @@ func TestCreateDuckDBQuickstartCreatesBruinDefaultAssetsAndDatabaseFile(t *testi
 	configContents, err := os.ReadFile(filepath.Join(workspaceRoot, ".bruin.yml"))
 	require.NoError(t, err)
 	assert.Contains(t, string(configContents), "duckdb-files/chess_playground.duckdb")
-	assert.Contains(t, string(configContents), "chess-default")
+	assert.NotContains(t, string(configContents), "chess-default")
 
 	playersAsset, err := os.ReadFile(filepath.Join(workspaceRoot, "quickstart", "assets", "quickstart", "players.asset.yml"))
 	require.NoError(t, err)
-	assert.NotContains(t, string(playersAsset), "name:")
-	assert.Contains(t, string(playersAsset), "type: ingestr")
-	assert.Contains(t, string(playersAsset), "source_connection: chess-default")
-	assert.Contains(t, string(playersAsset), "source_table: profiles")
+	assert.NotContains(t, string(playersAsset), "\nname:")
+	assert.Contains(t, string(playersAsset), "type: api")
+	assert.Contains(t, string(playersAsset), "parameters:")
+	assert.Contains(t, string(playersAsset), "https://api.chess.com/pub/player/{{ username }}")
+	assert.NotContains(t, string(playersAsset), "destination:")
+	assert.NotContains(t, string(playersAsset), "object: quickstart.players")
+	assert.NotContains(t, string(playersAsset), "mode: full-refresh")
+	assert.NotContains(t, string(playersAsset), "MagnusCarlsen")
 
 	gamesAsset, err := os.ReadFile(filepath.Join(workspaceRoot, "quickstart", "assets", "quickstart", "games.asset.yml"))
 	require.NoError(t, err)
-	assert.NotContains(t, string(gamesAsset), "name:")
-	assert.Contains(t, string(gamesAsset), "source_table: games")
+	assert.NotContains(t, string(gamesAsset), "\nname:")
+	assert.Contains(t, string(gamesAsset), "type: api")
+	assert.Contains(t, string(gamesAsset), "parameters:")
+	assert.Contains(t, string(gamesAsset), "https://api.chess.com/pub/player/{{ username }}/games/")
+	assert.NotContains(t, string(gamesAsset), "destination:")
+	assert.NotContains(t, string(gamesAsset), "object: quickstart.games")
+	assert.NotContains(t, string(gamesAsset), "mode: full-refresh")
+	assert.NotContains(t, string(gamesAsset), "MagnusCarlsen")
 
 	statsAsset, err := os.ReadFile(filepath.Join(workspaceRoot, "quickstart", "assets", "quickstart", "player_stats.sql"))
 	require.NoError(t, err)
@@ -83,8 +93,8 @@ func TestCreateDuckDBQuickstartCreatesBruinDefaultAssetsAndDatabaseFile(t *testi
 	assert.Contains(t, string(statsAsset), "depends:")
 	assert.Contains(t, string(statsAsset), "- quickstart.players")
 	assert.Contains(t, string(statsAsset), "- quickstart.games")
-	assert.Contains(t, string(statsAsset), "players_white")
-	assert.Contains(t, string(statsAsset), "players_black")
+	assert.Contains(t, string(statsAsset), "white_username")
+	assert.Contains(t, string(statsAsset), "black_username")
 	assert.Contains(t, string(statsAsset), "games_white")
 	assert.Contains(t, string(statsAsset), "games_black")
 	assert.NotContains(t, string(statsAsset), "columns:")

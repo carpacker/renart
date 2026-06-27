@@ -3,27 +3,35 @@ import { useAtomValue, useSetAtom } from "jotai";
 import {
   Group as PanelGroup,
   Panel,
+  type PanelImperativeHandle,
   Separator as PanelResizeHandle,
 } from "react-resizable-panels";
 import {
   Activity,
   AlertTriangle,
+  Bell,
+  BookOpen,
   Check,
   CheckCircle2,
+  ChevronDown,
   ChevronRight,
   ChevronsUpDown,
+  ChevronUp,
   Circle,
   ClipboardCheck,
   Columns2,
   Cpu,
   Database,
+  Download,
   Eye,
   FileCode,
   GitBranch,
+  Globe,
   GitCompare,
   Hammer,
   History,
   Layers,
+  Loader2,
   MoreHorizontal,
   Network,
   Package,
@@ -31,13 +39,14 @@ import {
   PanelRight,
   Play,
   Plus,
+  RotateCw,
   Search,
   Sliders,
   Table2,
   Terminal,
   XCircle,
 } from "lucide-react";
-import { ComponentType, ReactNode, createContext, useContext, useEffect, useMemo, useState } from "react";
+import { ComponentType, ReactNode, createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 
 import { Badge } from "@/components/ui/badge";
 import { ButtonGroup } from "@/components/ui/button-group";
@@ -67,6 +76,9 @@ import {
 } from "@/components/ui/delimited-card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { createAsset, deleteAsset } from "@/lib/api-assets";
+import { buildCreateAssetInput, buildSuggestedAssetName } from "@/lib/workspace-shell-helpers";
+import type { NewAssetKind } from "@/components/new-asset-node";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
@@ -75,7 +87,10 @@ import { AssetInspectView } from "@/components/asset-inspect-view";
 import { InspectWarningCard } from "@/components/inspect-warning-card";
 import { WorkspaceMaterializeOutputView } from "@/components/workspace-materialize-output-view";
 import { Spinner } from "@/components/ui/spinner";
-import { materializeAssetStream, runSQLQuery } from "@/lib/api";
+import { runSQLQuery } from "@/lib/api";
+import type { MaterializeStreamPayload } from "@/lib/api-core";
+import { typeCheckPipeline, type PipelineTypeCheckReport } from "@/lib/api-pipelines";
+import { createNotebook } from "@/lib/api-notebooks";
 import type { AssetStaleness } from "@/lib/api-staleness";
 import { isSqlAssetType } from "@/lib/asset-types";
 import { editorDraftAtom } from "@/lib/atoms/domains/editor";
@@ -94,7 +109,8 @@ import { useAssetResults } from "@/hooks/use-asset-results";
 import { useSelectedEnvironmentPolicy } from "@/hooks/use-environment-policy";
 import { useIsMobile } from "@/hooks/use-mobile";
 import { usePipelineDeploy, type PipelineDeployState } from "@/hooks/use-pipeline-deploy";
-import { usePipelineStaleness } from "@/hooks/use-pipeline-staleness";
+import { isStaleStatus, usePipelineStaleness } from "@/hooks/use-pipeline-staleness";
+import type { MaterializeScope } from "@/lib/materialize-scope";
 import { labelForRedesignMaterializationState, useRedesignAssetMaterializationStatus } from "@/hooks/use-redesign-asset-materialization-status";
 
 import {
@@ -119,11 +135,14 @@ import {
 } from "./redesign-data";
 import { RedesignAdhocEditor, useAdhocQueryDraft } from "./adhoc-editor";
 import { RedesignAssetEditor } from "./asset-editor";
+import { AssetGuidedCards } from "./asset-guided-cards";
+import { AssetYamlEditor } from "./asset-yaml-editor";
+import { SlingParametersEditor } from "./sling-parameters-editor";
 import { RedesignLineageCanvas, assetDisplayName, assetGroupName, assetNameParts, type RedesignLineageCanvasAsset } from "./lineage-canvas";
 import { IntegrationBadge, RedesignPage, RedesignPanel, SectionCard, SeverityIcon, SimpleTable, StalenessBadge, StatusPill, stalenessDotClassName, stalenessLabel } from "./redesign-primitives";
 
 export type RedesignBuildView = "canvas" | "split" | "code";
-export type RedesignResultTab = "inspect" | "materialize" | "query" | "tests" | "diagnostics" | "metadata" | "shell" | "history";
+export type RedesignResultTab = "inspect" | "materialize" | "query" | "typecheck" | "tests" | "diagnostics" | "metadata" | "shell" | "history";
 export type RedesignEditorMode = "asset" | "adhoc";
 
 export type RedesignBuildSearch = {
@@ -132,7 +151,7 @@ export type RedesignBuildSearch = {
   variant?: string;
 };
 
-const resultTabs: RedesignResultTab[] = ["inspect", "materialize", "query", "tests", "diagnostics", "metadata", "shell", "history"];
+const resultTabs: RedesignResultTab[] = ["inspect", "materialize", "query", "typecheck", "tests", "diagnostics", "metadata", "shell", "history"];
 const editorModes: RedesignEditorMode[] = ["asset", "adhoc"];
 const variantIds = pipelineVariants.map((variant) => variant.id);
 
@@ -171,6 +190,11 @@ type BuildContextValue = {
   addDependency: (dependency: string) => void;
   selectAsset: (assetId: string) => void;
   goToAsset: (pipelineId: string, assetId: string) => void;
+  runAssetById: (assetId: string) => void;
+  deleteAssetById: (assetId: string) => Promise<void>;
+  goToCatalog: (assetId?: string) => void;
+  openNewAsset: () => void;
+  createDownstreamAsset: (source: { id: string; name: string }) => void;
   openBottom: (tab: RedesignResultTab) => void;
   materializeSelectedAsset: () => void;
   inspectSelectedAsset: () => void;
@@ -323,6 +347,10 @@ export function RedesignBuildPage({
     () => activePipeline ? assetsForPipeline(activePipeline) : fallbackBuildAssets(),
     [activePipeline]
   );
+  const existingAssetNames = useMemo(
+    () => new Set((activePipeline?.assets ?? []).map((asset) => asset.name)),
+    [activePipeline?.assets]
+  );
   const materializationAssets = useMemo(
     () => pipelineAssets.map((asset) => ({
       id: asset.id,
@@ -354,6 +382,37 @@ export function RedesignBuildPage({
     })),
     [materializationStatusByAssetId, pipelineAssets, staleness.byAssetName]
   );
+  // Transitive stale upstreams of an asset, walked over the dependency graph.
+  // Materializing an asset while these are stale reads their outdated tables, so
+  // the asset cannot become fresh — we warn before building (§9 / §17).
+  const assetsByName = useMemo(() => {
+    const map = new Map<string, WebAsset>();
+    for (const asset of activePipeline?.assets ?? []) {
+      map.set(asset.name, asset);
+    }
+    return map;
+  }, [activePipeline?.assets]);
+  const staleUpstreamsOf = useCallback(
+    (assetName: string): string[] => {
+      const stale: string[] = [];
+      const seen = new Set<string>();
+      const walk = (name: string) => {
+        const asset = assetsByName.get(name);
+        if (!asset) return;
+        for (const upstream of asset.upstreams ?? []) {
+          if (seen.has(upstream)) continue;
+          seen.add(upstream);
+          const status = staleness.byAssetName[upstream];
+          if (status && isStaleStatus(status.status)) stale.push(upstream);
+          walk(upstream);
+        }
+      };
+      walk(assetName);
+      return stale;
+    },
+    [assetsByName, staleness.byAssetName]
+  );
+  const [staleBuildPrompt, setStaleBuildPrompt] = useState<{ assetId: string; assetName: string; staleUpstreams: string[] } | null>(null);
   const firstAssetId = displayedPipelineAssets[0]?.id ?? "revenue_daily";
   const [visualSelectedAssetId, setVisualSelectedAssetId] = useState(selectedAssetId ?? firstAssetId);
   const effectiveSelectedAssetId = visualSelectedAssetId ?? selectedAssetId ?? firstAssetId;
@@ -361,12 +420,28 @@ export function RedesignBuildPage({
   const [explorerOpen, setExplorerOpen] = useState(false);
   const [inspectorOpen, setInspectorOpen] = useState(false);
   const [newAssetOpen, setNewAssetOpen] = useState(false);
+  const [downstreamSource, setDownstreamSource] = useState<{ id: string; name: string } | null>(null);
   const [pipelineSettingsOpen, setPipelineSettingsOpen] = useState(false);
   const [planOpen, setPlanOpen] = useState(false);
   const [buildStaleOpen, setBuildStaleOpen] = useState(false);
   const [addedDependencies, setAddedDependencies] = useState<string[]>([]);
   const [history, setHistory] = useState<Array<{ id: number; kind: string; target: string; status: string; time: string; variant: string }>>([]);
   const declaredDependencies = [...pipelineDependencies, ...addedDependencies];
+  const [typeCheckReport, setTypeCheckReport] = useState<PipelineTypeCheckReport | null>(null);
+  const [typeCheckLoading, setTypeCheckLoading] = useState(false);
+  const resultsPanelRef = useRef<PanelImperativeHandle | null>(null);
+  const [resultsCollapsed, setResultsCollapsed] = useState(false);
+  const toggleResultsPanel = () => {
+    const panel = resultsPanelRef.current;
+    if (!panel) {
+      return;
+    }
+    if (panel.isCollapsed()) {
+      panel.expand();
+    } else {
+      panel.collapse();
+    }
+  };
 
   useEffect(() => {
     setVisualSelectedAssetId(selectedAssetId ?? firstAssetId);
@@ -402,6 +477,8 @@ export function RedesignBuildPage({
 
   const openBottom = (tab: RedesignResultTab) => {
     onResultTabChange?.(tab);
+    // Make sure the results are visible when something routes output here.
+    resultsPanelRef.current?.expand();
   };
   const addDependency = (dependency: string) => {
     setAddedDependencies((current) => current.includes(dependency) ? current : [...current, dependency]);
@@ -409,6 +486,34 @@ export function RedesignBuildPage({
   const logHistory = (kind: string, target: string) => {
     setHistory((current) => [{ id: Date.now(), kind, target, status: "success", time: new Date().toLocaleTimeString(), variant }, ...current].slice(0, 20));
   };
+  const runTypeCheck = useCallback(async (openTab = false) => {
+    if (!activePipeline) {
+      return;
+    }
+    if (openTab) {
+      openBottom("typecheck");
+    }
+    setTypeCheckLoading(true);
+    try {
+      const report = await typeCheckPipeline(activePipeline.id, {
+        startDate: selectedExecutionTimeWindow?.start,
+        endDate: selectedExecutionTimeWindow?.end,
+      });
+      setTypeCheckReport(report);
+    } catch {
+      setTypeCheckReport(null);
+    } finally {
+      setTypeCheckLoading(false);
+    }
+  }, [activePipeline, selectedExecutionTimeWindow?.start, selectedExecutionTimeWindow?.end]);
+  // Run the type check once per pipeline so the notification badge reflects the
+  // current state; the user can re-run from the bell to pick up edits.
+  useEffect(() => {
+    if (!activePipeline) {
+      return;
+    }
+    void runTypeCheck(false);
+  }, [activePipeline?.id, runTypeCheck]);
   const runAction = () => {
     if (!activePipeline) {
       return;
@@ -417,14 +522,27 @@ export function RedesignBuildPage({
     openBottom("materialize");
     void assetResults.runMaterializePipeline(activePipeline.id);
   };
+  const runMaterialize = (assetId: string, name: string, scope: MaterializeScope = "asset") => {
+    logHistory("materialize", name);
+    openBottom("materialize");
+    void assetResults.runMaterializeForAsset(assetId, scope);
+  };
+  // Guarded materialize: if the asset depends on stale upstreams, prompt before
+  // building (the build would read outdated upstream data and stay stale).
+  const requestMaterialize = (assetId: string, name: string) => {
+    const stale = staleUpstreamsOf(name);
+    if (stale.length > 0) {
+      setStaleBuildPrompt({ assetId, assetName: name, staleUpstreams: stale });
+      return;
+    }
+    runMaterialize(assetId, name);
+  };
   const materializeSelectedAsset = () => {
     const workspaceAsset = selectedAsset?.workspaceAsset;
     if (!activePipeline || !workspaceAsset) {
       return;
     }
-    logHistory("materialize", selectedAsset.name);
-    openBottom("materialize");
-    void assetResults.runMaterializeForAsset(workspaceAsset.id);
+    requestMaterialize(workspaceAsset.id, selectedAsset.name);
   };
   const inspectSelectedAsset = () => {
     const workspaceAsset = selectedAsset?.workspaceAsset;
@@ -522,6 +640,25 @@ export function RedesignBuildPage({
       search: { ...buildSearch, editor: "asset" },
     });
   };
+  const runAssetById = (assetId: string) => {
+    const target = displayedPipelineAssets.find((asset) => asset.id === assetId);
+    const workspaceAsset = target?.workspaceAsset;
+    if (!activePipeline || !workspaceAsset) {
+      return;
+    }
+    setVisualSelectedAssetId(assetId);
+    requestMaterialize(workspaceAsset.id, target?.name ?? assetId);
+  };
+  const deleteAssetById = async (assetId: string) => {
+    if (!activePipeline) {
+      return;
+    }
+    // The workspace event stream refreshes the atom once the file is gone.
+    await deleteAsset(activePipeline.id, assetId);
+  };
+  const goToCatalog = (assetId?: string) => {
+    void navigate({ to: "/redesign/catalog", search: assetId ? { asset: assetId } : {} });
+  };
   // The ad hoc editor only renders in the code/split editor panes, so opening
   // it from the explorer also navigates to the code view.
   const openAdhoc = () => {
@@ -531,6 +668,14 @@ export function RedesignBuildPage({
       params: { pipelineId, assetId: effectiveSelectedAssetId },
       search: { ...buildSearch, editor: "adhoc" },
     });
+  };
+  const openNewAsset = () => {
+    setDownstreamSource(null);
+    setNewAssetOpen(true);
+  };
+  const createDownstreamAsset = (source: { id: string; name: string }) => {
+    setDownstreamSource(source);
+    setNewAssetOpen(true);
   };
   const buildContext: BuildContextValue = {
     pipelineId,
@@ -545,6 +690,11 @@ export function RedesignBuildPage({
     addDependency,
     selectAsset,
     goToAsset,
+    runAssetById,
+    deleteAssetById,
+    goToCatalog,
+    openNewAsset,
+    createDownstreamAsset,
     openBottom,
     materializeSelectedAsset,
     inspectSelectedAsset,
@@ -570,11 +720,13 @@ export function RedesignBuildPage({
         historyCount={history.length}
         onOpenExplorer={() => setExplorerOpen(true)}
         onOpenInspector={() => setInspectorOpen(true)}
-        onOpenDiagnostics={() => openBottom("diagnostics")}
         onOpenHistory={() => openBottom("history")}
         onOpenPlan={() => setPlanOpen(true)}
         onVariantChange={onVariantChange}
         onRun={runAction}
+        typeCheckReport={typeCheckReport}
+        typeCheckLoading={typeCheckLoading}
+        onTypeCheck={() => void runTypeCheck(true)}
         staleCount={staleness.staleAssets.length}
         onBuildStale={() => setBuildStaleOpen(true)}
         deployState={deployState}
@@ -593,39 +745,63 @@ export function RedesignBuildPage({
           />
         </RedesignPanel>
 
-        <div className="flex min-h-0 flex-col gap-3">
-          <RedesignPanel className="relative flex min-h-0 flex-1 overflow-hidden">
-            <DelimitedCardContent className="h-full min-h-0 flex-1 p-0">
-              <Outlet />
-            </DelimitedCardContent>
-            {view !== "code" ? (
-              <FloatingViewSwitcher
-                pipelineId={pipelineId}
-                selectedAssetId={effectiveSelectedAssetId}
-                currentView={view}
-                search={buildSearch}
-              />
-            ) : null}
-          </RedesignPanel>
-
-          <ResultsPanel
-            activeTab={resultTab}
-            onTabChange={openBottom}
-            variant={variant}
-            history={history}
-            onHistoryOpen={(tab) => openBottom(tab)}
-            inspectResult={assetResults.inspectResult}
-            inspectLoading={assetResults.inspectLoading}
-            canLoadMoreInspectRows={assetResults.canLoadMoreInspectRows}
-            onLoadMoreInspectRows={assetResults.loadMoreInspectRows}
-            selectedMaterializeEntry={assetResults.selectedMaterializeEntry}
-            materializeOutputHtml={assetResults.materializeOutputHtml}
-            pipelineMaterializeLoading={assetResults.pipelineMaterializeLoading}
-            adhocResult={adhocResult}
-            adhocRenderedQuery={adhocRenderedQuery}
-            adhocLoading={adhocLoading}
+        <PanelGroup orientation="vertical" className="h-full min-h-0">
+          <Panel minSize="120px" className="min-h-0">
+            <RedesignPanel className="relative flex h-full min-h-0 overflow-hidden">
+              <DelimitedCardContent className="h-full min-h-0 flex-1 p-0">
+                <Outlet />
+              </DelimitedCardContent>
+              {view !== "code" ? (
+                <FloatingViewSwitcher
+                  pipelineId={pipelineId}
+                  selectedAssetId={effectiveSelectedAssetId}
+                  currentView={view}
+                  search={buildSearch}
+                  onNewAsset={openNewAsset}
+                />
+              ) : null}
+            </RedesignPanel>
+          </Panel>
+          <PanelResizeHandle
+            className={cn(
+              "my-1.5 h-1.5 shrink-0 cursor-row-resize rounded-full bg-border transition-colors hover:bg-primary/40",
+              resultsCollapsed && "pointer-events-none opacity-0"
+            )}
           />
-        </div>
+          <Panel
+            collapsible
+            collapsedSize="38px"
+            minSize="120px"
+            defaultSize="224px"
+            panelRef={resultsPanelRef}
+            onResize={() => setResultsCollapsed(Boolean(resultsPanelRef.current?.isCollapsed()))}
+            className="min-h-0"
+          >
+            <ResultsPanel
+              activeTab={resultTab}
+              onTabChange={openBottom}
+              collapsed={resultsCollapsed}
+              onToggleCollapse={toggleResultsPanel}
+              variant={variant}
+              history={history}
+              typeCheckReport={typeCheckReport}
+              typeCheckLoading={typeCheckLoading}
+              onRunTypeCheck={() => void runTypeCheck(false)}
+              onSelectAsset={selectAsset}
+              onHistoryOpen={(tab) => openBottom(tab)}
+              inspectResult={assetResults.inspectResult}
+              inspectLoading={assetResults.inspectLoading}
+              canLoadMoreInspectRows={assetResults.canLoadMoreInspectRows}
+              onLoadMoreInspectRows={assetResults.loadMoreInspectRows}
+              selectedMaterializeEntry={assetResults.selectedMaterializeEntry}
+              materializeOutputHtml={assetResults.materializeOutputHtml}
+              pipelineMaterializeLoading={assetResults.pipelineMaterializeLoading}
+              adhocResult={adhocResult}
+              adhocRenderedQuery={adhocRenderedQuery}
+              adhocLoading={adhocLoading}
+            />
+          </Panel>
+        </PanelGroup>
 
         <RedesignPanel className="hidden min-h-0 xl:flex xl:flex-col">
           <Inspector asset={selectedAsset} declaredDependencies={declaredDependencies} addedDependencies={addedDependencies} onAddDependency={addDependency} onOpenPipelineSettings={() => setPipelineSettingsOpen(true)} onOpenResults={openBottom} />
@@ -653,14 +829,65 @@ export function RedesignBuildPage({
         </SheetContent>
       </Sheet>
 
-      <NewAssetDialog open={newAssetOpen} onOpenChange={setNewAssetOpen} />
+      <NewAssetDialog
+        open={newAssetOpen}
+        onOpenChange={(open) => {
+          setNewAssetOpen(open);
+          if (!open) {
+            setDownstreamSource(null);
+          }
+        }}
+        pipelineId={activePipeline?.id}
+        pipelineName={activePipeline?.name}
+        existingAssetNames={existingAssetNames}
+        downstreamSource={downstreamSource}
+        onCreated={(assetId) => goToAsset(activePipeline?.id ?? pipelineId, assetId)}
+      />
       <PipelineSettingsDialog open={pipelineSettingsOpen} onOpenChange={setPipelineSettingsOpen} pipelineId={pipelineId} />
       <PlanDialog open={planOpen} onOpenChange={setPlanOpen} />
+      <Dialog open={staleBuildPrompt !== null} onOpenChange={(open) => { if (!open) setStaleBuildPrompt(null); }}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2"><AlertTriangle className="size-4 text-amber-500" />Upstream is out of date</DialogTitle>
+            <DialogDescription>
+              <span className="font-mono">{staleBuildPrompt?.assetName}</span> depends on {staleBuildPrompt?.staleUpstreams.length} stale upstream{staleBuildPrompt?.staleUpstreams.length === 1 ? "" : "s"}. Building now reads their outdated tables, so this asset will stay stale until its upstreams are current. Build the upstreams first to get an up-to-date result.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="max-h-40 space-y-1 overflow-y-auto rounded-md border p-2 font-mono text-xs">
+            {staleBuildPrompt?.staleUpstreams.map((name) => (
+              <div key={name} className="flex items-center gap-1.5"><span className="size-1.5 rounded-full bg-amber-500" />{name}</div>
+            ))}
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setStaleBuildPrompt(null)}>Cancel</Button>
+            <Button
+              variant="outline"
+              onClick={() => {
+                if (staleBuildPrompt) runMaterialize(staleBuildPrompt.assetId, staleBuildPrompt.assetName, "asset");
+                setStaleBuildPrompt(null);
+              }}
+            >
+              Build anyway
+            </Button>
+            <Button
+              onClick={() => {
+                if (staleBuildPrompt) runMaterialize(staleBuildPrompt.assetId, staleBuildPrompt.assetName, "asset_with_upstreams");
+                setStaleBuildPrompt(null);
+              }}
+            >
+              <Hammer className="size-4" />Build upstreams first
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
       <BuildStaleDialog
         open={buildStaleOpen}
         onOpenChange={setBuildStaleOpen}
         staleAssets={staleness.staleAssets}
         pipelineAssets={displayedPipelineAssets}
+        onBuildAsset={(assetId, options) =>
+          assetResults.runMaterializeForAsset(assetId, "asset", undefined, options)
+        }
         onCompleted={() => {
           logHistory("build stale", `${staleness.staleAssets.length} assets`);
           openBottom("materialize");
@@ -682,7 +909,6 @@ function BuildTopBar({
   historyCount,
   onOpenExplorer,
   onOpenInspector,
-  onOpenDiagnostics,
   onOpenHistory,
   onOpenPlan,
   onVariantChange,
@@ -691,6 +917,9 @@ function BuildTopBar({
   onBuildStale,
   deployState,
   executionBlocked = false,
+  typeCheckReport,
+  typeCheckLoading = false,
+  onTypeCheck,
 }: {
   pipelineId: string;
   pipelineLabel: string;
@@ -702,7 +931,6 @@ function BuildTopBar({
   historyCount: number;
   onOpenExplorer: () => void;
   onOpenInspector: () => void;
-  onOpenDiagnostics: () => void;
   onOpenHistory: () => void;
   onOpenPlan: () => void;
   onVariantChange?: (variant: string) => void;
@@ -711,6 +939,9 @@ function BuildTopBar({
   onBuildStale?: () => void;
   deployState?: PipelineDeployState;
   executionBlocked?: boolean;
+  typeCheckReport?: PipelineTypeCheckReport | null;
+  typeCheckLoading?: boolean;
+  onTypeCheck?: () => void;
 }) {
   const search: RedesignBuildSearch = { result: resultTab, editor: editorMode, variant };
 
@@ -771,13 +1002,8 @@ function BuildTopBar({
           <Terminal className="size-3.5" /> Ad-hoc
         </Link>
       </Button>
-      <Button variant="outline" size="sm" onClick={onOpenDiagnostics}>
-        <Activity className="size-3.5" /> Diagnostics <span className="rounded-full bg-red-500 px-1 text-[10px] text-white">4</span>
-      </Button>
-      <Button variant="outline" size="sm" onClick={onOpenPlan}>
-        <ClipboardCheck className="size-3.5" /> Plan
-      </Button>
       {historyCount > 0 ? <Button variant="ghost" size="sm" onClick={onOpenHistory}><History className="size-3.5" />{historyCount}</Button> : null}
+      <TypeCheckBell report={typeCheckReport} loading={typeCheckLoading} onClick={onTypeCheck} />
       {staleCount > 0 ? (
         <Button
           variant="outline"
@@ -803,19 +1029,71 @@ function BuildTopBar({
   );
 }
 
+// TypeCheckBell is the repurposed notification bell: it shows the pipeline
+// type-check status as a badge and opens the Type check results tab on click.
+function TypeCheckBell({
+  report,
+  loading,
+  onClick,
+}: {
+  report?: PipelineTypeCheckReport | null;
+  loading?: boolean;
+  onClick?: () => void;
+}) {
+  const errors = report?.summary.errors ?? 0;
+  const warnings = report?.summary.warnings ?? 0;
+  const total = errors + warnings;
+  const title = loading
+    ? "Type checking…"
+    : report
+      ? `Type check: ${errors} error${errors === 1 ? "" : "s"}, ${warnings} warning${warnings === 1 ? "" : "s"}`
+      : "Run type check";
+  return (
+    <Button
+      variant="ghost"
+      size="icon-sm"
+      className="relative"
+      onClick={onClick}
+      aria-label="Type check"
+      title={title}
+    >
+      {loading ? <Loader2 className="size-4 animate-spin" /> : <Bell className="size-4" />}
+      {!loading && total > 0 ? (
+        <span
+          className={cn(
+            "absolute -right-1 -top-1 flex h-3.5 min-w-3.5 items-center justify-center rounded-full px-1 text-[9px] font-semibold text-white",
+            errors > 0 ? "bg-red-500" : "bg-amber-500"
+          )}
+        >
+          {total > 99 ? "99+" : total}
+        </span>
+      ) : null}
+    </Button>
+  );
+}
+
 function FloatingViewSwitcher({
   pipelineId,
   selectedAssetId,
   currentView,
   search,
+  onNewAsset,
 }: {
   pipelineId: string;
   selectedAssetId: string;
   currentView: RedesignBuildView;
   search: RedesignBuildSearch;
+  onNewAsset?: () => void;
 }) {
   return (
-    <BuildViewButtonGroup pipelineId={pipelineId} selectedAssetId={selectedAssetId} currentView={currentView} search={search} className="absolute right-1 top-1 z-20 rounded-lg border bg-background/90 shadow-sm backdrop-blur" />
+    <div className="absolute right-1 top-1 z-20 flex items-center gap-2">
+      {onNewAsset ? (
+        <Button size="sm" onClick={onNewAsset} className="shadow-sm">
+          <Plus className="size-3.5" /> New asset
+        </Button>
+      ) : null}
+      <BuildViewButtonGroup pipelineId={pipelineId} selectedAssetId={selectedAssetId} currentView={currentView} search={search} className="rounded-lg border bg-background/90 shadow-sm backdrop-blur" />
+    </div>
   );
 }
 
@@ -898,13 +1176,33 @@ function Explorer({
   onPipelineSettings: () => void;
 }) {
   const workspace = useAtomValue(workspaceAtom);
+  const navigate = useNavigate();
   const pipelineGroup = objectGroups.find((group) => group.id === "pipeline");
+  const notebookGroup = objectGroups.find((group) => group.id === "notebook");
   const PipelineIcon = pipelineGroup?.icon ?? Layers;
+  const NotebookIcon = notebookGroup?.icon ?? BookOpen;
   const { declaredDependencies, pipelineAssets } = useBuildContext();
   const adhocActive = buildSearch.editor === "adhoc";
   const pipelineItems = workspace?.pipelines.length
     ? workspace.pipelines
     : [{ id: "simple", name: "simple", path: "", assets: [] } satisfies WebPipeline];
+  const notebookItems = workspace?.notebooks ?? [];
+  const [creatingNotebook, setCreatingNotebook] = useState(false);
+  const handleCreateNotebook = async () => {
+    const title = window.prompt("New notebook title", "Exploration");
+    if (title === null) {
+      return;
+    }
+    setCreatingNotebook(true);
+    try {
+      const created = await createNotebook({ title: title.trim() || "Untitled" });
+      await navigate({ to: "/redesign/notebooks/$notebookId", params: { notebookId: created.id } });
+    } catch {
+      // Surfaced on the notebook page; keep the explorer quiet.
+    } finally {
+      setCreatingNotebook(false);
+    }
+  };
   const assetsByGroup = pipelineAssets.reduce<Record<string, BuildAsset[]>>((groups, asset) => {
     const group = assetGroupName(asset);
     groups[group] = [...(groups[group] ?? []), asset];
@@ -974,6 +1272,32 @@ function Explorer({
           <button onClick={onNewAsset} className="mt-2 flex h-8 w-full items-center gap-2 rounded-md border border-dashed px-2 text-left text-xs text-muted-foreground hover:bg-muted">
             <Plus className="size-3.5" /> New asset
           </button>
+
+          <ExplorerSection label={notebookGroup?.label ?? "Notebooks"} icon={NotebookIcon} count={notebookItems.length}>
+            {notebookItems.length > 0 ? (
+              notebookItems.map((notebook) => (
+                <Link
+                  key={notebook.id}
+                  to="/redesign/notebooks/$notebookId"
+                  params={{ notebookId: notebook.id }}
+                  className="flex h-7 w-full items-center gap-1.5 rounded-md px-2 text-left font-mono text-xs text-muted-foreground hover:bg-muted"
+                  activeProps={{ className: "bg-muted text-foreground" }}
+                >
+                  <NotebookIcon className="size-3.5 text-primary" />
+                  <span className="truncate">{notebook.title || notebook.path || notebook.id}</span>
+                </Link>
+              ))
+            ) : (
+              <div className="px-2 py-1 text-xs text-muted-foreground">No notebooks yet.</div>
+            )}
+          </ExplorerSection>
+          <button
+            onClick={() => void handleCreateNotebook()}
+            disabled={creatingNotebook}
+            className="mt-1 flex h-8 w-full items-center gap-2 rounded-md border border-dashed px-2 text-left text-xs text-muted-foreground hover:bg-muted disabled:opacity-50"
+          >
+            <Plus className="size-3.5" /> New notebook
+          </button>
         </div>
       </ScrollArea>
     </>
@@ -1037,8 +1361,24 @@ function AssetButton({
 }
 
 function PipelineCanvas({ selectedAssetId, onAssetSelect }: { pipelineId: string; selectedAssetId: string; onAssetSelect: (assetId: string) => void }) {
-  const { pipelineAssets } = useBuildContext();
-  return <RedesignLineageCanvas assets={pipelineAssets} selectedAssetId={selectedAssetId} onAssetSelect={onAssetSelect} />;
+  const { pipelineAssets, createDownstreamAsset, runAssetById, deleteAssetById, goToCatalog } = useBuildContext();
+  return (
+    <RedesignLineageCanvas
+      assets={pipelineAssets}
+      selectedAssetId={selectedAssetId}
+      onAssetSelect={onAssetSelect}
+      onRunAsset={runAssetById}
+      onDeleteAsset={deleteAssetById}
+      onGoToAsset={(assetId) => goToCatalog(assetId)}
+      goToLabel="Open in catalog"
+      onCreateDownstream={(assetId) => {
+        const source = pipelineAssets.find((asset) => asset.id === assetId);
+        if (source) {
+          createDownstreamAsset({ id: source.id, name: source.name });
+        }
+      }}
+    />
+  );
 }
 
 export function RedesignBuildCanvasView() {
@@ -1091,12 +1431,22 @@ function EditorWorkspace({
   const isMobile = useIsMobile();
   const editorOnly = view === "code";
   const showActionLabels = editorOnly && !isMobile;
+  // Asset-properties cards live in an on-demand side sheet (overlay) rather than
+  // an inline panel, so they never steal editor width on desktop and stay
+  // reachable on mobile. Closed by default.
+  const [metadataOpen, setMetadataOpen] = useState(false);
+  // Two presentations of the same editable metadata: focused cards, or an
+  // interactive YAML-shaped view. Both drive the same asset API.
+  const [propsView, setPropsView] = useState<"cards" | "yaml">("cards");
 
   if (adhoc) {
     return <AdhocEditor showActionLabels={showActionLabels} />;
   }
 
-  const missingDependencies = asset.kind === "python" ? missingPythonDependencies(asset, declaredDependencies) : [];
+  // Real workspace assets get the live missing-dependency banner from
+  // RedesignAssetEditor (driven by the asset's actual requirements.txt); this
+  // mock affordance only covers the demo/sample assets that have no editor.
+  const missingDependencies = !asset.workspaceAsset && asset.kind === "python" ? missingPythonDependencies(asset, declaredDependencies) : [];
   const actionLabel = asset.kind === "source" ? "Validate" : asset.kind === "ingestr" || asset.kind === "sling" ? "Run" : "Materialize";
   const filename = asset.path ?? `${asset.dir ? `${asset.dir}/` : ""}${asset.name}${kindMeta[asset.kind].ext}`;
 
@@ -1115,6 +1465,20 @@ function EditorWorkspace({
           inspectDisabled={inspectLoading || !asset.workspaceAsset}
           inspectLoading={inspectLoading}
         />
+        {asset.workspaceAsset ? (
+          <Button
+            variant="ghost"
+            size="xs"
+            className={metadataOpen ? "text-foreground" : "text-muted-foreground"}
+            onClick={() => setMetadataOpen((open) => !open)}
+            title="Asset properties"
+            aria-label="Asset properties"
+            aria-pressed={metadataOpen}
+          >
+            <PanelRight className="size-3.5" />
+            {showActionLabels ? <span className="ml-1">Properties</span> : null}
+          </Button>
+        ) : null}
         {editorOnly ? (
           <BuildViewButtonGroup pipelineId={pipelineId} selectedAssetId={selectedAssetId} currentView={view} search={buildSearch} />
         ) : null}
@@ -1124,21 +1488,58 @@ function EditorWorkspace({
           <AlertTriangle className="size-3" />{missingDependencies.length} not in deps
         </Button>
       ) : null}
+      <div className="flex min-h-0 flex-1">
+        <div className="flex min-w-0 flex-1 flex-col">
+          {asset.workspaceAsset && asset.pipelineId && asset.workspaceAsset.type.toLowerCase() === "sling" ? (
+            <SlingParametersEditor asset={asset.workspaceAsset} pipelineId={asset.pipelineId} />
+          ) : asset.workspaceAsset && asset.pipelineId ? (
+            <RedesignAssetEditor
+              asset={asset.workspaceAsset}
+              pipelineId={asset.pipelineId}
+              onInspect={inspectSelectedAsset}
+              onGoToAsset={goToAsset}
+            />
+          ) : (
+            <CodeBlock
+              lines={editorLinesFor(asset)}
+              asset={asset}
+              declaredDependencies={declaredDependencies}
+              onAddDependency={addDependency}
+            />
+          )}
+        </div>
+      </div>
       {asset.workspaceAsset && asset.pipelineId ? (
-        <RedesignAssetEditor
-          asset={asset.workspaceAsset}
-          pipelineId={asset.pipelineId}
-          onInspect={inspectSelectedAsset}
-          onGoToAsset={goToAsset}
-        />
-      ) : (
-        <CodeBlock
-          lines={editorLinesFor(asset)}
-          asset={asset}
-          declaredDependencies={declaredDependencies}
-          onAddDependency={addDependency}
-        />
-      )}
+        <Sheet open={metadataOpen} onOpenChange={setMetadataOpen}>
+          <SheetContent side="right" className="flex w-full flex-col gap-0 p-0 sm:max-w-md">
+            <SheetTitle className="sr-only">Asset properties</SheetTitle>
+            <div className="flex shrink-0 items-center gap-2 border-b py-2 pl-3 pr-12">
+              <span className="text-xs font-medium text-muted-foreground">Asset properties</span>
+              <div className="ml-auto flex overflow-hidden rounded-md border text-[11px]">
+                {(["cards", "yaml"] as const).map((option) => (
+                  <button
+                    key={option}
+                    type="button"
+                    className={cn(
+                      "px-2 py-0.5 capitalize transition-colors",
+                      propsView === option ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted"
+                    )}
+                    aria-pressed={propsView === option}
+                    onClick={() => setPropsView(option)}
+                  >
+                    {option}
+                  </button>
+                ))}
+              </div>
+            </div>
+            {propsView === "cards" ? (
+              <AssetGuidedCards asset={asset.workspaceAsset} pipelineId={asset.pipelineId} />
+            ) : (
+              <AssetYamlEditor asset={asset.workspaceAsset} pipelineId={asset.pipelineId} />
+            )}
+          </SheetContent>
+        </Sheet>
+      ) : null}
     </div>
   );
 }
@@ -1287,8 +1688,14 @@ function CodeBlock({
 function ResultsPanel({
   activeTab,
   onTabChange,
+  collapsed,
+  onToggleCollapse,
   variant,
   history,
+  typeCheckReport,
+  typeCheckLoading,
+  onRunTypeCheck,
+  onSelectAsset,
   onHistoryOpen,
   inspectResult,
   inspectLoading,
@@ -1303,8 +1710,14 @@ function ResultsPanel({
 }: {
   activeTab: RedesignResultTab;
   onTabChange: (tab: RedesignResultTab) => void;
+  collapsed: boolean;
+  onToggleCollapse: () => void;
   variant: string;
   history: Array<{ id: number; kind: string; target: string; status: string; time: string; variant: string }>;
+  typeCheckReport?: PipelineTypeCheckReport | null;
+  typeCheckLoading?: boolean;
+  onRunTypeCheck?: () => void;
+  onSelectAsset?: (assetId: string) => void;
   onHistoryOpen: (tab: RedesignResultTab) => void;
   inspectResult: AssetInspectResponse | null;
   inspectLoading: boolean;
@@ -1318,21 +1731,36 @@ function ResultsPanel({
   adhocLoading: boolean;
 }) {
   return (
-    <RedesignPanel className="h-56 shrink-0">
+    <RedesignPanel className="flex h-full min-h-0 flex-col">
         <Tabs value={activeTab} onValueChange={(value) => { if (resultTabs.includes(value as RedesignResultTab)) onTabChange(value as RedesignResultTab); }} className="flex h-full min-h-0 flex-col">
-        <DelimitedCardHeader className="min-h-9 py-1">
+        <DelimitedCardHeader className="min-h-9 gap-1 py-1">
           <ScrollArea className="min-w-0 flex-1" horizontalScrollBarClassName="hidden" viewportClassName="w-full">
             <TabsList className={scrollableTabsListClass}>
               <TabsTrigger value="inspect" className={scrollableTabsTriggerClass}><Table2 className="size-3.5" />Inspect</TabsTrigger>
               <TabsTrigger value="materialize" className={scrollableTabsTriggerClass}><Hammer className="size-3.5" />Materialize</TabsTrigger>
               <TabsTrigger value="query" className={scrollableTabsTriggerClass}><Terminal className="size-3.5" />Query</TabsTrigger>
-              <TabsTrigger value="tests" className={scrollableTabsTriggerClass}><ClipboardCheck className="size-3.5" />Tests</TabsTrigger>
-              <TabsTrigger value="diagnostics" className={scrollableTabsTriggerClass}><Activity className="size-3.5" />Diagnostics</TabsTrigger>
-              <TabsTrigger value="metadata" className={scrollableTabsTriggerClass}><GitCompare className="size-3.5" />Metadata</TabsTrigger>
-              <TabsTrigger value="shell" className={scrollableTabsTriggerClass}><Terminal className="size-3.5" />Shell</TabsTrigger>
+              <TabsTrigger value="typecheck" className={scrollableTabsTriggerClass}>
+                <Bell className="size-3.5" />Type check
+                {typeCheckReport && typeCheckReport.summary.errors + typeCheckReport.summary.warnings > 0 ? (
+                  <span className={cn(
+                    "ml-1 rounded-full px-1 text-[10px] text-white",
+                    typeCheckReport.summary.errors > 0 ? "bg-red-500" : "bg-amber-500"
+                  )}>{typeCheckReport.summary.errors + typeCheckReport.summary.warnings}</span>
+                ) : null}
+              </TabsTrigger>
               <TabsTrigger value="history" className={scrollableTabsTriggerClass}><History className="size-3.5" />History{history.length > 0 ? <span className="ml-1 text-[10px] text-muted-foreground">{history.length}</span> : null}</TabsTrigger>
             </TabsList>
           </ScrollArea>
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            className="shrink-0"
+            onClick={onToggleCollapse}
+            aria-label={collapsed ? "Expand results panel" : "Collapse results panel"}
+            title={collapsed ? "Expand" : "Collapse"}
+          >
+            {collapsed ? <ChevronUp className="size-3.5" /> : <ChevronDown className="size-3.5" />}
+          </Button>
         </DelimitedCardHeader>
         <TabsContent value="inspect" className="flex min-h-0 flex-1 flex-col overflow-hidden p-0">
           {inspectLoading && !inspectResult ? (
@@ -1394,6 +1822,9 @@ function ResultsPanel({
         <TabsContent value="diagnostics" className="min-h-0 flex-1 overflow-auto p-0"><DiagnosticsList /></TabsContent>
         <TabsContent value="metadata" className="min-h-0 flex-1 overflow-auto p-0"><MetadataPanel /></TabsContent>
         <TabsContent value="shell" className="min-h-0 flex-1 overflow-hidden p-0"><ShellPanel variant={variant} /></TabsContent>
+        <TabsContent value="typecheck" className="min-h-0 flex-1 overflow-auto p-0">
+          <TypeCheckPanel report={typeCheckReport ?? null} loading={Boolean(typeCheckLoading)} onRun={onRunTypeCheck} onSelectAsset={onSelectAsset} />
+        </TabsContent>
         <TabsContent value="history" className="min-h-0 flex-1 overflow-auto p-0"><HistoryPanel history={history} onOpen={onHistoryOpen} /></TabsContent>
       </Tabs>
     </RedesignPanel>
@@ -1468,6 +1899,80 @@ function ResultsEmpty({ label }: { label: string }) {
   return (
     <div className="flex h-full min-h-0 items-center justify-center bg-background px-4 text-center text-xs text-muted-foreground">
       {label}
+    </div>
+  );
+}
+
+function TypeCheckPanel({
+  report,
+  loading,
+  onRun,
+  onSelectAsset,
+}: {
+  report: PipelineTypeCheckReport | null;
+  loading: boolean;
+  onRun?: () => void;
+  onSelectAsset?: (assetId: string) => void;
+}) {
+  if (loading && !report) {
+    return <ResultsLoading label="Type checking pipeline…" />;
+  }
+  if (!report) {
+    return (
+      <div className="flex h-full min-h-0 flex-col items-center justify-center gap-3 bg-background text-xs text-muted-foreground">
+        <span>Type check assets for column and type errors.</span>
+        <Button size="sm" variant="outline" onClick={onRun}><Bell className="size-3.5" />Run type check</Button>
+      </div>
+    );
+  }
+
+  const flagged = report.assets.filter((asset) => asset.findings.length > 0);
+  const checkedAt = report.start_date ? new Date(report.start_date) : null;
+
+  return (
+    <div className="flex h-full min-h-0 flex-col bg-background">
+      <div className="flex shrink-0 items-center gap-2 border-b px-3 py-1.5 text-xs">
+        <span className="inline-flex items-center gap-1 text-red-600 dark:text-red-400"><XCircle className="size-3.5" />{report.summary.errors}</span>
+        <span className="inline-flex items-center gap-1 text-amber-600 dark:text-amber-400"><AlertTriangle className="size-3.5" />{report.summary.warnings}</span>
+        <span className="text-muted-foreground">{report.summary.assets} asset{report.summary.assets === 1 ? "" : "s"} checked</span>
+        {checkedAt ? <span className="hidden text-muted-foreground/70 sm:inline">· window {checkedAt.toISOString().slice(0, 10)}</span> : null}
+        <Button size="xs" variant="outline" className="ml-auto" onClick={onRun} disabled={loading}>
+          {loading ? <Loader2 className="size-3 animate-spin" /> : <RotateCw className="size-3" />}Re-run
+        </Button>
+      </div>
+      <div className="min-h-0 flex-1 overflow-auto p-2">
+        {flagged.length === 0 ? (
+          <div className="flex items-center gap-2 px-2 py-3 text-xs text-emerald-600 dark:text-emerald-400">
+            <CheckCircle2 className="size-4" />No type errors found across {report.summary.assets} asset{report.summary.assets === 1 ? "" : "s"}.
+          </div>
+        ) : (
+          <div className="space-y-2">
+            {flagged.map((asset) => (
+              <div key={asset.name} className="rounded-md border">
+                <button
+                  type="button"
+                  className="flex w-full items-center gap-2 border-b bg-muted/30 px-2.5 py-1.5 text-left text-xs hover:bg-muted disabled:cursor-default"
+                  onClick={() => asset.id && onSelectAsset?.(asset.id)}
+                  disabled={!asset.id}
+                >
+                  {asset.status === "error" ? <XCircle className="size-3.5 shrink-0 text-red-500" /> : <AlertTriangle className="size-3.5 shrink-0 text-amber-500" />}
+                  <span className="min-w-0 flex-1 truncate font-mono font-medium">{asset.name}</span>
+                  <span className="shrink-0 text-[10px] text-muted-foreground">{asset.type}</span>
+                </button>
+                <ul className="divide-y">
+                  {asset.findings.map((finding, index) => (
+                    <li key={index} className="flex items-start gap-2 px-2.5 py-1.5 text-xs">
+                      {finding.severity === "error" ? <XCircle className="mt-0.5 size-3.5 shrink-0 text-red-500" /> : <AlertTriangle className="mt-0.5 size-3.5 shrink-0 text-amber-500" />}
+                      <span className="min-w-0 flex-1">{finding.message}</span>
+                      {finding.line ? <span className="shrink-0 font-mono text-[10px] text-muted-foreground">L{finding.line}:C{finding.column}</span> : null}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
     </div>
   );
 }
@@ -2103,44 +2608,183 @@ function SchemaStatus({ status }: { status: string }) {
   return <Badge variant="outline" className="bg-sky-50 text-sky-700"><Plus className="size-3" />extra</Badge>;
 }
 
-function NewAssetDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (open: boolean) => void }) {
-  const [kind, setKind] = useState<keyof typeof kindMeta>("sql");
-  const kinds = Object.entries(kindMeta) as Array<[keyof typeof kindMeta, typeof kindMeta[keyof typeof kindMeta]]>;
+// Asset kinds the creation dialog can produce, mapped to real backend create
+// calls. Standalone: SQL/Python transforms, "HTTP API" (Bruin api asset) and
+// "Load" (Bruin sling asset). Downstream (created from a canvas node): SQL,
+// Python (via the Bruin Python SDK) and Sling, each depending on the source.
+type AssetKindOption = {
+  id: NewAssetKind;
+  label: string;
+  description: string;
+  icon: ComponentType<{ className?: string }>;
+};
+
+const CREATABLE_ASSETS: AssetKindOption[] = [
+  { id: "sql", label: "SQL asset", description: "Transform with a SELECT", icon: FileCode },
+  { id: "python", label: "Python asset", description: "Custom Python transform", icon: Cpu },
+  { id: "api", label: "HTTP API", description: "Pull records from an HTTP API endpoint", icon: Globe },
+  { id: "sling", label: "Load", description: "Replicate data between connections with Sling", icon: Download },
+];
+
+const DOWNSTREAM_ASSETS: AssetKindOption[] = [
+  { id: "sql", label: "SQL", description: "select * from the upstream table", icon: FileCode },
+  { id: "python", label: "Python", description: "Read the upstream via the Bruin Python SDK", icon: Cpu },
+  { id: "sling", label: "Sling", description: "Replicate downstream with Sling", icon: Download },
+];
+
+// A downstream asset reuses the source's prefix and appends _downstream, kept
+// unique against existing names (the backend also requires a prefixed name).
+function suggestDownstreamName(sourceName: string, existing: Set<string>): string {
+  const parts = sourceName.split(".").filter(Boolean);
+  const leaf = parts.pop() ?? "asset";
+  const prefix = parts.join(".");
+  const base = prefix ? `${prefix}.${leaf}_downstream` : `${leaf}_downstream`;
+  if (!existing.has(base)) {
+    return base;
+  }
+  let index = 2;
+  while (existing.has(`${base}_${index}`)) {
+    index += 1;
+  }
+  return `${base}_${index}`;
+}
+
+function NewAssetDialog({
+  open,
+  onOpenChange,
+  pipelineId,
+  pipelineName,
+  existingAssetNames,
+  downstreamSource,
+  onCreated,
+}: {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  pipelineId?: string;
+  pipelineName?: string;
+  existingAssetNames: Set<string>;
+  downstreamSource?: { id: string; name: string } | null;
+  onCreated?: (assetId: string) => void;
+}) {
+  const [kind, setKind] = useState<NewAssetKind>("sql");
+  const [name, setName] = useState("");
+  const [creating, setCreating] = useState(false);
+  const [error, setError] = useState("");
+
+  const isDownstream = Boolean(downstreamSource);
+  const options = isDownstream ? DOWNSTREAM_ASSETS : CREATABLE_ASSETS;
+  const selected = options.find((option) => option.id === kind) ?? options[0];
+
+  // Seed a unique, prefixed name suggestion (the backend requires a prefix).
+  const suggestedName = useMemo(() => {
+    if (isDownstream && downstreamSource) {
+      return suggestDownstreamName(downstreamSource.name, existingAssetNames);
+    }
+    return buildSuggestedAssetName(selected.id, existingAssetNames, pipelineName);
+  }, [isDownstream, downstreamSource, selected.id, existingAssetNames, pipelineName]);
+
+  // Reset to a valid kind whenever the dialog (or its mode) opens.
+  useEffect(() => {
+    if (open) {
+      setKind("sql");
+      setError("");
+    }
+  }, [open, isDownstream]);
+  useEffect(() => {
+    if (open) {
+      setName(suggestedName);
+    }
+  }, [open, suggestedName]);
+
+  const create = async () => {
+    const trimmed = name.trim();
+    if (!trimmed) {
+      setError("Asset name is required.");
+      return;
+    }
+    if (!pipelineId) {
+      setError("Select a pipeline before creating an asset.");
+      return;
+    }
+    if (existingAssetNames.has(trimmed)) {
+      setError(`An asset named "${trimmed}" already exists.`);
+      return;
+    }
+    const input =
+      isDownstream && downstreamSource
+        ? selected.id === "sql"
+          ? { name: trimmed, source_asset_id: downstreamSource.id }
+          : { name: trimmed, source_asset_id: downstreamSource.id, type: selected.id }
+        : buildCreateAssetInput(trimmed, selected.id);
+    setCreating(true);
+    setError("");
+    try {
+      const response = await createAsset(pipelineId, input);
+      onOpenChange(false);
+      if (response.asset_id) {
+        onCreated?.(response.asset_id);
+      }
+    } catch (caught) {
+      setError(String(caught));
+    } finally {
+      setCreating(false);
+    }
+  };
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-2xl">
+      <DialogContent className="flex max-h-[90dvh] max-w-2xl flex-col overflow-hidden">
         <DialogHeader>
-          <DialogTitle className="flex items-center gap-2"><Plus className="size-4 text-primary" />New asset</DialogTitle>
-          <DialogDescription>Static creation wizard preview for the redesign.</DialogDescription>
+          <DialogTitle className="flex items-center gap-2"><Plus className="size-4 text-primary" />{isDownstream ? "New downstream asset" : "New asset"}</DialogTitle>
+          <DialogDescription>
+            {isDownstream && downstreamSource ? (
+              <>Depends on <span className="font-mono">{downstreamSource.name}</span>.</>
+            ) : (
+              <>Create an asset in {pipelineName ? <span className="font-mono">{pipelineName}</span> : "this pipeline"}.</>
+            )}
+          </DialogDescription>
         </DialogHeader>
-        <div className="grid gap-5">
-          <div className="grid gap-2 sm:grid-cols-3">
-            {["duckdb-default", "bq-prod", "stripe"].map((connection) => (
-              <button key={connection} className="rounded-lg border p-3 text-left text-sm hover:bg-muted">
-                <Database className="mb-2 size-4 text-muted-foreground" />
-                <span className="font-mono">{connection}</span>
-              </button>
-            ))}
-          </div>
+        <div className="grid min-h-0 flex-1 gap-5 overflow-y-auto">
           <div className="grid gap-2 sm:grid-cols-2">
-            {kinds.map(([id, meta]) => (
-              <button key={id} className={cn("rounded-lg border p-3 text-left hover:bg-muted", kind === id ? "border-primary ring-1 ring-primary" : null)} onClick={() => setKind(id)}>
-                <meta.icon className="size-5 text-primary" />
-                <div className="mt-2 font-medium">{meta.label}</div>
-                <div className="text-xs text-muted-foreground">{meta.description}</div>
+            {options.map((option) => (
+              <button
+                key={option.id}
+                type="button"
+                className={cn("rounded-lg border p-3 text-left hover:bg-muted", selected.id === option.id ? "border-primary ring-1 ring-primary" : null)}
+                onClick={() => setKind(option.id)}
+              >
+                <option.icon className="size-5 text-primary" />
+                <div className="mt-2 font-medium">{option.label}</div>
+                <div className="text-xs text-muted-foreground">{option.description}</div>
               </button>
             ))}
           </div>
           <div className="grid gap-2">
-            <Label>Asset name</Label>
-            <Input className="font-mono" placeholder="my_asset" />
-            <p className="text-xs text-muted-foreground">Creates <span className="font-mono">assets/my_asset{kindMeta[kind].ext}</span>.</p>
+            <Label htmlFor="new-asset-name">Asset name</Label>
+            <Input
+              id="new-asset-name"
+              className="font-mono"
+              placeholder="analytics.my_asset"
+              value={name}
+              onChange={(event) => setName(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === "Enter" && !creating) {
+                  void create();
+                }
+              }}
+              autoFocus
+            />
+            <p className="text-xs text-muted-foreground">Use a <span className="font-mono">prefix.name</span> to group it under <span className="font-mono">assets/prefix/</span>.</p>
           </div>
+          {error ? (
+            <div className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700 dark:border-red-500/25 dark:bg-red-500/10 dark:text-red-300">{error}</div>
+          ) : null}
         </div>
         <DialogFooter>
-          <Button variant="outline" onClick={() => onOpenChange(false)}>Cancel</Button>
-          <Button onClick={() => onOpenChange(false)}><CheckCircle2 className="size-4" />Create</Button>
+          <Button variant="outline" onClick={() => onOpenChange(false)} disabled={creating}>Cancel</Button>
+          <Button onClick={() => void create()} disabled={creating || !pipelineId}>
+            {creating ? <Spinner className="size-4" /> : <CheckCircle2 className="size-4" />}Create
+          </Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>
@@ -2286,15 +2930,19 @@ function BuildStaleDialog({
   onOpenChange,
   staleAssets,
   pipelineAssets,
+  onBuildAsset,
   onCompleted,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   staleAssets: AssetStaleness[];
   pipelineAssets: BuildAsset[];
+  onBuildAsset: (
+    assetId: string,
+    options: { assetName?: string; timeWindow?: { start: string; end: string } | null }
+  ) => Promise<MaterializeStreamPayload | null>;
   onCompleted: () => void;
 }) {
-  const selectedEnvironment = useAtomValue(selectedEnvironmentAtom);
   const [progress, setProgress] = useState<Record<string, BuildStaleProgress>>({});
   const [building, setBuilding] = useState(false);
 
@@ -2320,13 +2968,20 @@ function BuildStaleDialog({
       if (!encodedAssetId) continue;
       setProgress((current) => ({ ...current, [stale.asset_name]: "running" }));
       try {
-        const windows = stale.gaps?.length
+        // A null window means "build the whole asset"; gaps build only the
+        // uncovered intervals. Each build streams into the materialize history
+        // panel via onBuildAsset so progress is visible in the output.
+        const windows: ({ start: string; end: string } | null)[] = stale.gaps?.length
           ? stale.gaps.map((gap) => ({ start: gap.start, end: gap.end }))
-          : [undefined];
+          : [null];
+        let failed = false;
         for (const timeWindow of windows) {
-          await materializeAssetStream(encodedAssetId, {}, { environment: selectedEnvironment, timeWindow });
+          const result = await onBuildAsset(encodedAssetId, { assetName: stale.asset_name, timeWindow });
+          if (!result || result.status !== "ok") {
+            failed = true;
+          }
         }
-        setProgress((current) => ({ ...current, [stale.asset_name]: "done" }));
+        setProgress((current) => ({ ...current, [stale.asset_name]: failed ? "failed" : "done" }));
       } catch {
         setProgress((current) => ({ ...current, [stale.asset_name]: "failed" }));
       }

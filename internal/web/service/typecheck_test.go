@@ -1,0 +1,294 @@
+package service
+
+import (
+	"context"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/bruin-data/bruin/pkg/pipeline"
+	"github.com/spf13/afero"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+)
+
+// writeTypeCheckWorkspace lays out a minimal bruin workspace (a `.git` marker, a
+// `.bruin.yml`, a pipeline.yml, and the given asset files keyed by their path
+// relative to the assets dir) and returns the loaded pipeline plus the
+// workspace root.
+func writeTypeCheckWorkspace(t *testing.T, pipelineYML string, assets map[string]string) (*pipeline.Pipeline, string) {
+	t.Helper()
+
+	workspaceRoot := t.TempDir()
+	pipelineRoot := filepath.Join(workspaceRoot, "analytics")
+	assetsRoot := filepath.Join(pipelineRoot, "assets")
+	require.NoError(t, os.MkdirAll(filepath.Join(workspaceRoot, ".git"), 0o755))
+	require.NoError(t, os.MkdirAll(assetsRoot, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(workspaceRoot, ".bruin.yml"), []byte(strings.TrimSpace(`
+default_environment: default
+environments:
+  default:
+    connections:
+      duckdb:
+        - name: duckdb-default
+          path: local.db
+`)+"\n"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(pipelineRoot, "pipeline.yml"), []byte(strings.TrimSpace(pipelineYML)+"\n"), 0o644))
+
+	for name, content := range assets {
+		path := filepath.Join(assetsRoot, name)
+		require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
+		require.NoError(t, os.WriteFile(path, []byte(strings.TrimSpace(content)+"\n"), 0o644))
+	}
+
+	parsed, err := NewRenartPipelineBuilder(afero.NewOsFs()).
+		CreatePipelineFromPath(context.Background(), pipelineRoot, pipeline.WithMutate())
+	require.NoError(t, err)
+	return parsed, workspaceRoot
+}
+
+func runTypeCheck(t *testing.T, parsed *pipeline.Pipeline, workspaceRoot string) TypeCheckReport {
+	t.Helper()
+	tw, err := ResolveExecutionTimeWindow(string(parsed.Schedule), "", "", time.Now().UTC())
+	require.NoError(t, err)
+	return CheckPipeline(context.Background(), afero.NewOsFs(), parsed, workspaceRoot, tw)
+}
+
+func findAsset(t *testing.T, report TypeCheckReport, name string) TypeCheckAsset {
+	t.Helper()
+	for _, asset := range report.Assets {
+		if asset.Name == name {
+			return asset
+		}
+	}
+	t.Fatalf("asset %q not found in report (have %d assets)", name, len(report.Assets))
+	return TypeCheckAsset{}
+}
+
+func hasFinding(asset TypeCheckAsset, severity, substring string) bool {
+	for _, finding := range asset.Findings {
+		if finding.Severity == severity && strings.Contains(finding.Message, substring) {
+			return true
+		}
+	}
+	return false
+}
+
+func TestCheckPipelineFlagsUnresolvedColumnAgainstKnownUpstream(t *testing.T) {
+	t.Parallel()
+	parsed, root := writeTypeCheckWorkspace(t, "name: analytics", map[string]string{
+		"up.sql": `
+/* @bruin
+name: analytics.up
+type: duckdb.sql
+materialization:
+  type: table
+columns:
+  - name: id
+    type: BIGINT
+  - name: amount
+    type: DOUBLE
+@bruin */
+select 1 as id, 2.0 as amount
+`,
+		"down.sql": `
+/* @bruin
+name: analytics.down
+type: duckdb.sql
+materialization:
+  type: view
+depends:
+  - analytics.up
+@bruin */
+select id, missing_column from analytics.up
+`,
+	})
+
+	report := runTypeCheck(t, parsed, root)
+
+	down := findAsset(t, report, "analytics.down")
+	assert.Equal(t, typeCheckStatusError, down.Status)
+	assert.True(t, hasFinding(down, typeCheckSeverityError, "Unresolved column: missing_column"),
+		"expected unresolved-column error, got %+v", down.Findings)
+
+	up := findAsset(t, report, "analytics.up")
+	assert.Equal(t, typeCheckStatusOK, up.Status)
+	assert.Empty(t, up.Findings)
+
+	// A genuine error must report a 1-based location into the rendered SQL.
+	require.NotEmpty(t, down.Findings)
+	assert.Greater(t, down.Findings[0].Line, 0)
+	assert.Equal(t, typeCheckStatusError, report.Status)
+}
+
+func TestCheckPipelineWarnsForUndeclaredNonSQLAssets(t *testing.T) {
+	t.Parallel()
+	parsed, root := writeTypeCheckWorkspace(t, "name: analytics", map[string]string{
+		"loader.py": `
+""" @bruin
+name: analytics.loader
+type: python
+@bruin """
+print("hi")
+`,
+	})
+
+	report := runTypeCheck(t, parsed, root)
+
+	loader := findAsset(t, report, "analytics.loader")
+	assert.Equal(t, typeCheckStatusWarning, loader.Status)
+	assert.True(t, hasFinding(loader, typeCheckSeverityWarning, "Declares no columns"),
+		"expected missing-columns warning, got %+v", loader.Findings)
+	assert.Equal(t, 1, report.Summary.Warnings)
+	assert.Equal(t, 0, report.Summary.Errors)
+}
+
+func TestCheckPipelineDoesNotWarnWhenNonSQLDeclaresColumns(t *testing.T) {
+	t.Parallel()
+	parsed, root := writeTypeCheckWorkspace(t, "name: analytics", map[string]string{
+		"loader.py": `
+""" @bruin
+name: analytics.loader
+type: python
+columns:
+  - name: id
+    type: BIGINT
+@bruin """
+print("hi")
+`,
+	})
+
+	report := runTypeCheck(t, parsed, root)
+	loader := findAsset(t, report, "analytics.loader")
+	assert.Equal(t, typeCheckStatusOK, loader.Status)
+	assert.Empty(t, loader.Findings)
+}
+
+func TestCheckPipelineSuppressesCascadeFromUndeclaredUpstream(t *testing.T) {
+	t.Parallel()
+	parsed, root := writeTypeCheckWorkspace(t, "name: analytics", map[string]string{
+		"loader.py": `
+""" @bruin
+name: analytics.loader
+type: python
+@bruin """
+print("hi")
+`,
+		"down.sql": `
+/* @bruin
+name: analytics.down
+type: duckdb.sql
+materialization:
+  type: view
+depends:
+  - analytics.loader
+@bruin */
+select some_unknowable_column from analytics.loader
+`,
+	})
+
+	report := runTypeCheck(t, parsed, root)
+
+	// The producer is warned about; the consumer must NOT be hard-errored for
+	// columns we cannot verify against an undeclared upstream.
+	loader := findAsset(t, report, "analytics.loader")
+	assert.Equal(t, typeCheckStatusWarning, loader.Status)
+
+	down := findAsset(t, report, "analytics.down")
+	assert.Equal(t, typeCheckStatusOK, down.Status, "unexpected findings: %+v", down.Findings)
+	assert.Equal(t, 0, report.Summary.Errors)
+}
+
+func TestCheckPipelineRendersJinjaVariablesAndDates(t *testing.T) {
+	t.Parallel()
+	parsed, root := writeTypeCheckWorkspace(t, `
+name: analytics
+variables:
+  threshold:
+    type: integer
+    default: 100
+`, map[string]string{
+		"up.sql": `
+/* @bruin
+name: analytics.up
+type: duckdb.sql
+materialization:
+  type: table
+columns:
+  - name: id
+    type: BIGINT
+  - name: amount
+    type: DOUBLE
+@bruin */
+select 1 as id, 2.0 as amount
+`,
+		// Uses a pipeline variable and a date macro; if either failed to render
+		// the query would be invalid SQL and produce a finding.
+		"down.sql": `
+/* @bruin
+name: analytics.down
+type: duckdb.sql
+materialization:
+  type: view
+depends:
+  - analytics.up
+@bruin */
+select id, amount from analytics.up
+where amount > {{ var.threshold }} and '{{ start_date }}' <= '{{ end_date }}'
+`,
+	})
+
+	report := runTypeCheck(t, parsed, root)
+	down := findAsset(t, report, "analytics.down")
+	assert.Equal(t, typeCheckStatusOK, down.Status, "unexpected findings (Jinja likely unrendered): %+v", down.Findings)
+}
+
+func TestCheckPipelineIgnoresTableValuedFunctionColumns(t *testing.T) {
+	t.Parallel()
+	parsed, root := writeTypeCheckWorkspace(t, "name: analytics", map[string]string{
+		// `range` is the implicit output column of DuckDB's range() table
+		// function — the parser cannot introspect it, so it must not be flagged.
+		"times.sql": `
+/* @bruin
+name: analytics.times
+type: duckdb.sql
+materialization:
+  type: view
+columns:
+  - name: t
+    type: BIGINT
+@bruin */
+select range as t from range(1, 11, 1)
+`,
+	})
+
+	report := runTypeCheck(t, parsed, root)
+	times := findAsset(t, report, "analytics.times")
+	assert.Equal(t, typeCheckStatusOK, times.Status, "unexpected findings: %+v", times.Findings)
+}
+
+func TestCheckPipelineReportsAssetIDs(t *testing.T) {
+	t.Parallel()
+	parsed, root := writeTypeCheckWorkspace(t, "name: analytics", map[string]string{
+		"up.sql": `
+/* @bruin
+name: analytics.up
+type: duckdb.sql
+materialization:
+  type: table
+columns:
+  - name: id
+    type: BIGINT
+@bruin */
+select 1 as id
+`,
+	})
+
+	report := runTypeCheck(t, parsed, root)
+	up := findAsset(t, report, "analytics.up")
+	// The report ID must match the workspace asset-id encoding so the UI can map
+	// findings back to canvas nodes.
+	assert.Equal(t, EncodeID("analytics/assets/up.sql"), up.ID)
+}

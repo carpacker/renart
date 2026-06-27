@@ -253,8 +253,51 @@ body > .parameter-hints-widget {
   filter: drop-shadow(0 0 7px var(--primary));
 }
 
+.react-flow__controls {
+  overflow: hidden;
+  border: 1px solid var(--border);
+  background: var(--card);
+  color: var(--foreground);
+}
+
+.react-flow__controls-button {
+  border-bottom: 1px solid var(--border);
+  background: var(--card);
+  color: var(--foreground);
+}
+
+.react-flow__controls-button:hover {
+  background: var(--muted);
+}
+
+.react-flow__controls-button svg {
+  fill: currentColor;
+}
+
 .asset-node-hidden-handle {
   opacity: 0;
+}
+
+/* Diagonal hatch for stale notebook cell headers: a neutral gray overlay on
+   top of the header's muted background, so the stripes read in both themes. */
+.notebook-stale-hatch {
+  background-image: repeating-linear-gradient(
+    -45deg,
+    rgba(100, 116, 139, 0.16) 0,
+    rgba(100, 116, 139, 0.16) 6px,
+    transparent 6px,
+    transparent 12px
+  );
+}
+
+.dark .notebook-stale-hatch {
+  background-image: repeating-linear-gradient(
+    -45deg,
+    rgba(148, 163, 184, 0.12) 0,
+    rgba(148, 163, 184, 0.12) 6px,
+    transparent 6px,
+    transparent 12px
+  );
 }
 
 @layer base {
@@ -346,4 +389,10 @@ body > .parameter-hints-widget {
 .font-console {
   font-family: var(--font-console);
   font-variation-settings: "wdth" 75;
+}
+
+/* Matches Monaco's default editor font stack so structured/code-shaped views
+   (e.g. the interactive YAML asset view) read like the editor itself. */
+.font-monaco {
+  font-family: Menlo, Monaco, "Courier New", monospace;
 }

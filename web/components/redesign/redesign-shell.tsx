@@ -1,5 +1,5 @@
 import { Link, Outlet, useLocation, useParams } from "@tanstack/react-router";
-import { Bell, Bot, Boxes, Building2, Check, ChevronDown, Cloud, CreditCard, FileCode, GitBranch, GitCommit, Loader2, Lock, LogOut, Plus, RefreshCw, Search, Send, Settings, Sparkles, User, Users, Clock } from "lucide-react";
+import { Bell, BookOpen, Bot, Boxes, Building2, Check, ChevronDown, ChevronRight, Cloud, CreditCard, FileCode, GitBranch, GitCommit, Loader2, Lock, LogOut, Plus, RefreshCw, Send, Settings, Sparkles, User, Users, Clock } from "lucide-react";
 import { ReactNode, useEffect, useMemo, useState } from "react";
 import { useAtomValue, useSetAtom } from "jotai";
 
@@ -18,22 +18,32 @@ import { Separator } from "@/components/ui/separator";
 import { Sheet, SheetContent, SheetDescription, SheetFooter, SheetHeader, SheetTitle, SheetTrigger } from "@/components/ui/sheet";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { useSourceControl } from "@/hooks/use-source-control";
+import { useWorkspaceTheme } from "@/hooks/use-workspace-theme";
 import { useWorkspaceSettingsData } from "@/hooks/use-workspace-settings-data";
 import { useWorkspaceSync } from "@/hooks/use-workspace-sync";
 import { selectedEnvironmentAtom, selectedEnvironmentOverrideAtom, selectedExecutionTimeWindowAtom, workspaceAtom } from "@/lib/atoms/domains/workspace";
 import { findExecutionTimeOption, getExecutionTimeOptions } from "@/lib/execution-time";
-import type { SourceControlChange } from "@/lib/types";
+import { redesignFeatureFlags } from "@/lib/redesign-feature-flags";
+import type { SourceControlChange, WebNotebook } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
+import { RedesignCommandPalette } from "./redesign-command-palette";
 import { navItems } from "./redesign-data";
 import { NavLinkButton } from "./redesign-primitives";
 
+// Stage/unstage row actions reveal on hover on pointer devices, but touch
+// devices have no hover state — so always show them where hover isn't
+// available (and on keyboard focus).
+const revealRowActionClass =
+  "opacity-100 focus-visible:opacity-100 [@media(hover:hover)]:opacity-0 [@media(hover:hover)]:group-hover:opacity-100 [@media(hover:hover)]:group-focus-within:opacity-100";
+
 export function RedesignShell() {
   useWorkspaceSync();
+  useWorkspaceTheme();
   const sourceControl = useSourceControl();
 
   return (
-    <div className="flex h-screen min-h-0 flex-col bg-zinc-100 text-zinc-950">
+    <div className="flex h-screen min-h-0 flex-col bg-muted/40 text-foreground">
       <header className="flex h-12 shrink-0 items-center border-b border-zinc-800 bg-zinc-950 px-2 text-zinc-100 sm:px-3">
         <Link to="/redesign" className="flex items-center gap-2 pr-2 sm:pr-3">
           <div className="flex size-7 items-center justify-center rounded-lg bg-primary text-sm font-bold text-primary-foreground">R</div>
@@ -96,54 +106,58 @@ export function RedesignShell() {
           </SheetTrigger>
           <GitSheet sourceControl={sourceControl} />
         </Sheet>
-        <Button variant="ghost" size="icon" className="size-8 text-zinc-400 hover:bg-zinc-800 hover:text-white">
-          <Search className="size-4" />
-        </Button>
-        <Button variant="ghost" size="icon" className="size-8 text-zinc-400 hover:bg-zinc-800 hover:text-white">
-          <Bell className="size-4" />
-        </Button>
-        <Sheet>
-          <SheetTrigger asChild>
-            <Button variant="ghost" size="icon" className="size-8 text-zinc-400 hover:bg-zinc-800 hover:text-white">
-              <Sparkles className="size-4" />
-            </Button>
-          </SheetTrigger>
-          <AiSheet />
-        </Sheet>
-        <DropdownMenu>
-          <DropdownMenuTrigger asChild>
-            <Button variant="ghost" size="icon" className="size-8 rounded-full bg-teal-600 text-white hover:bg-teal-700">
-              <User className="size-4" />
-            </Button>
-          </DropdownMenuTrigger>
-          <DropdownMenuContent align="end" className="w-60">
-            <div className="px-2 py-2">
-              <div className="text-sm font-medium">Jane Doe</div>
-              <div className="text-xs text-muted-foreground">jane@acme.io · Owner</div>
-            </div>
-            <DropdownMenuSeparator />
-            <DropdownMenuItem asChild>
-              <Link to="/redesign/account/profile"><User className="size-4" />Account settings</Link>
-            </DropdownMenuItem>
-            <DropdownMenuItem asChild>
-              <Link to="/redesign/account/members"><Users className="size-4" />Members & permissions</Link>
-            </DropdownMenuItem>
-            <DropdownMenuItem asChild>
-              <Link to="/redesign/account/billing"><CreditCard className="size-4" />Billing</Link>
-            </DropdownMenuItem>
-            <DropdownMenuSeparator />
-            <DropdownMenuItem>
-              <LogOut className="size-4" />Sign out
-            </DropdownMenuItem>
-          </DropdownMenuContent>
-        </DropdownMenu>
+        <RedesignCommandPalette />
+        {redesignFeatureFlags.notifications ? (
+          <Button variant="ghost" size="icon" className="size-8 text-zinc-400 hover:bg-zinc-800 hover:text-white">
+            <Bell className="size-4" />
+          </Button>
+        ) : null}
+        {redesignFeatureFlags.aiChat ? (
+          <Sheet>
+            <SheetTrigger asChild>
+              <Button variant="ghost" size="icon" className="size-8 text-zinc-400 hover:bg-zinc-800 hover:text-white">
+                <Sparkles className="size-4" />
+              </Button>
+            </SheetTrigger>
+            <AiSheet />
+          </Sheet>
+        ) : null}
+        {redesignFeatureFlags.profileMenu ? (
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button variant="ghost" size="icon" className="size-8 rounded-full bg-teal-600 text-white hover:bg-teal-700">
+                <User className="size-4" />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="w-60">
+              <div className="px-2 py-2">
+                <div className="text-sm font-medium">Jane Doe</div>
+                <div className="text-xs text-muted-foreground">jane@acme.io · Owner</div>
+              </div>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem asChild>
+                <Link to="/redesign/account/profile"><User className="size-4" />Account settings</Link>
+              </DropdownMenuItem>
+              <DropdownMenuItem asChild>
+                <Link to="/redesign/account/members"><Users className="size-4" />Members & permissions</Link>
+              </DropdownMenuItem>
+              <DropdownMenuItem asChild>
+                <Link to="/redesign/account/billing"><CreditCard className="size-4" />Billing</Link>
+              </DropdownMenuItem>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem>
+                <LogOut className="size-4" />Sign out
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+        ) : null}
       </header>
 
       <main className="min-h-0 flex-1 overflow-hidden">
         <Outlet />
       </main>
 
-      <nav className="grid h-14 shrink-0 grid-cols-4 border-t bg-white md:hidden">
+      <nav className="grid h-14 shrink-0 grid-cols-5 border-t bg-background md:hidden">
         {navItems.map((item) => (
           <Link key={item.to} to={item.to} activeOptions={{ exact: item.to === "/redesign" }} activeProps={{ className: "text-primary" }} className="flex flex-col items-center justify-center gap-0.5 text-[10px] text-muted-foreground">
             <item.icon className="size-4" />
@@ -205,12 +219,12 @@ function RedesignExecutionSelector() {
         <Button
           aria-label="Execution context"
           title={selectedPolicy?.protected ? `Environment ${environmentLabel} is protected: interactive execution is disabled` : undefined}
-          className={`mx-1 hidden h-7 min-w-0 items-center gap-1.5 rounded-full border py-0 pl-1 pr-2 text-xs md:flex ${selectedPolicy?.protected ? "border-red-700 bg-red-950 text-red-100 hover:bg-red-900 hover:text-white" : "border-zinc-700 bg-zinc-950 text-zinc-200 hover:bg-zinc-800 hover:text-white"}`}
+          className={`mx-1 flex h-7 min-w-0 items-center gap-1.5 rounded-full border py-0 pl-1 pr-2 text-xs ${selectedPolicy?.protected ? "border-red-700 bg-red-950 text-red-100 hover:bg-red-900 hover:text-white" : "border-zinc-700 bg-zinc-950 text-zinc-200 hover:bg-zinc-800 hover:text-white"}`}
         >
           <span className={`flex size-5 shrink-0 items-center justify-center rounded-full text-[10px] font-bold uppercase text-zinc-900 ${selectedPolicy?.protected ? "bg-red-500 text-white" : "bg-amber-500"}`}>
             {selectedPolicy?.protected ? <Lock className="size-3" /> : environmentLabel.slice(0, 1)}
           </span>
-          <span className="max-w-24 truncate font-mono">{environmentLabel}</span>
+          <span className="max-w-20 truncate font-mono sm:max-w-24">{environmentLabel}</span>
           {isBuildPage ? <span className="hidden min-w-0 items-center gap-1 text-zinc-400 lg:flex"><Clock className="size-3" /> <span className="max-w-28 truncate">{selectedOption?.label ?? "Latest"}</span></span> : null}
           <ChevronDown className="size-3 text-zinc-500" />
         </Button>
@@ -269,11 +283,18 @@ function AiSheet() {
 }
 
 function GitSheet({ sourceControl }: { sourceControl: ReturnType<typeof useSourceControl> }) {
-  const { repository, branches, loading, busy, diffLoading, diff, error, refresh, loadDiff, stage, unstage, checkout, commit } = sourceControl;
+  const { repository, branches, loading, busy, diffLoading, diff, error, refresh, loadDiff, loadDiffGroup, stage, unstage, checkout, commit } = sourceControl;
   const [message, setMessage] = useState("");
+  const workspace = useAtomValue(workspaceAtom);
   const changes = repository?.changes ?? [];
   const stagedChanges = changes.filter((change) => change.staged);
   const unstagedChanges = changes.filter((change) => !change.staged);
+  // A notebook is a folder of files (notebook.yml + cell .sql files); collapse
+  // each one into a single entry so its diffs read as one unit.
+  const notebookFolders = useMemo(
+    () => buildNotebookFolders(changes, workspace?.notebooks ?? []),
+    [changes, workspace?.notebooks]
+  );
   const changedCount = changes.length;
   const branch = repository?.branch || "unknown";
   const showDiffPane = diffLoading || Boolean(diff);
@@ -326,8 +347,28 @@ function GitSheet({ sourceControl }: { sourceControl: ReturnType<typeof useSourc
               {busy ? <Loader2 className="size-4 animate-spin" /> : <GitCommit className="size-4" />}Commit {stagedChanges.length} file{stagedChanges.length === 1 ? "" : "s"}
             </Button>
           </div>
-          <ChangeGroup title={`Staged · ${stagedChanges.length}`} changes={stagedChanges} actionLabel="Unstage" busy={busy} selectedPath={diff?.staged ? diff.path : ""} onSelect={(path) => void loadDiff(path, true)} onAction={(path) => void unstage([path])} />
-          <ChangeGroup title={`Changes · ${unstagedChanges.length}`} changes={unstagedChanges} actionLabel="Stage" busy={busy} selectedPath={!diff?.staged ? diff?.path : ""} onSelect={(path) => void loadDiff(path, false)} onAction={(path) => void stage([path])} />
+          <ChangeGroup
+            title={`Staged · ${stagedChanges.length}`}
+            changes={stagedChanges}
+            actionLabel="Unstage"
+            busy={busy}
+            notebookFolders={notebookFolders}
+            selectedPath={diff?.staged ? diff.path : ""}
+            onSelect={(path) => void loadDiff(path, true)}
+            onSelectGroup={(paths, label) => void loadDiffGroup(paths, true, label)}
+            onAction={(paths) => void unstage(paths)}
+          />
+          <ChangeGroup
+            title={`Changes · ${unstagedChanges.length}`}
+            changes={unstagedChanges}
+            actionLabel="Stage"
+            busy={busy}
+            notebookFolders={notebookFolders}
+            selectedPath={!diff?.staged ? diff?.path : ""}
+            onSelect={(path) => void loadDiff(path, false)}
+            onSelectGroup={(paths, label) => void loadDiffGroup(paths, false, label)}
+            onAction={(paths) => void stage(paths)}
+          />
           {changedCount > 0 ? (
             <div className="grid grid-cols-2 gap-2">
               <Button variant="outline" size="sm" disabled={busy || unstagedChanges.length === 0} onClick={() => void stage(unstagedChanges.map((change) => change.path))}>Stage all</Button>
@@ -341,21 +382,138 @@ function GitSheet({ sourceControl }: { sourceControl: ReturnType<typeof useSourc
   );
 }
 
-function ChangeGroup({ title, changes, actionLabel, busy, selectedPath, onSelect, onAction }: { title: string; changes: SourceControlChange[]; actionLabel: string; busy: boolean; selectedPath?: string; onSelect: (path: string) => void; onAction: (path: string) => void }) {
+// Map of on-disk notebook folder path → display title. Folders are detected
+// from changed `notebook.yml` manifests (authoritative, carries the real
+// prefix) and from the loaded workspace notebooks (matched by suffix so it
+// works even when the workspace root sits below the git root).
+function buildNotebookFolders(changes: SourceControlChange[], notebooks: WebNotebook[]): Map<string, string> {
+  const folders = new Map<string, string>();
+  const manifestSuffix = "/notebook.yml";
+
+  for (const change of changes) {
+    if (change.path.endsWith(manifestSuffix)) {
+      const folder = change.path.slice(0, -manifestSuffix.length);
+      folders.set(folder, folder.split("/").pop() || folder);
+    }
+  }
+
+  for (const notebook of notebooks) {
+    const notebookPath = notebook.path.replace(/\/+$/, "");
+    if (!notebookPath) {
+      continue;
+    }
+    if (folders.has(notebookPath)) {
+      folders.set(notebookPath, notebook.title);
+      continue;
+    }
+    // Recover the real folder (with any git-root prefix) from a change beneath
+    // this notebook, then prefer the human title.
+    const needle = `${notebookPath}/`;
+    for (const change of changes) {
+      const index = change.path.indexOf(needle);
+      if (index === 0 || (index > 0 && change.path[index - 1] === "/")) {
+        folders.set(change.path.slice(0, index + notebookPath.length), notebook.title);
+        break;
+      }
+    }
+  }
+
+  return folders;
+}
+
+function notebookFolderForPath(path: string, folders: Map<string, string>): string | null {
+  for (const folder of folders.keys()) {
+    if (path === folder || path.startsWith(`${folder}/`)) {
+      return folder;
+    }
+  }
+  return null;
+}
+
+function ChangeGroup({ title, changes, actionLabel, busy, notebookFolders, selectedPath, onSelect, onSelectGroup, onAction }: { title: string; changes: SourceControlChange[]; actionLabel: string; busy: boolean; notebookFolders: Map<string, string>; selectedPath?: string; onSelect: (path: string) => void; onSelectGroup: (paths: string[], label: string) => void; onAction: (paths: string[]) => void }) {
+  const [expanded, setExpanded] = useState<Set<string>>(new Set());
+
   if (changes.length === 0) {
     return null;
   }
+
+  // Partition into notebook groups (in first-seen order) and loose files.
+  const groupOrder: string[] = [];
+  const grouped = new Map<string, SourceControlChange[]>();
+  const loose: SourceControlChange[] = [];
+  for (const change of changes) {
+    const folder = notebookFolderForPath(change.path, notebookFolders);
+    if (folder) {
+      if (!grouped.has(folder)) {
+        grouped.set(folder, []);
+        groupOrder.push(folder);
+      }
+      grouped.get(folder)!.push(change);
+    } else {
+      loose.push(change);
+    }
+  }
+
+  const toggle = (folder: string) => {
+    setExpanded((current) => {
+      const next = new Set(current);
+      if (next.has(folder)) {
+        next.delete(folder);
+      } else {
+        next.add(folder);
+      }
+      return next;
+    });
+  };
+
   return (
     <div>
       <div className="mb-2 text-xs font-semibold uppercase text-muted-foreground">{title}</div>
-      {changes.map((change) => (
-        <div key={`${title}-${change.path}`} className={`group flex min-h-8 items-center gap-2 rounded-md px-2 hover:bg-muted ${selectedPath === change.path ? "bg-muted" : ""}`}>
-          <FileCode className="size-3.5 shrink-0 text-primary" />
-          <button className="min-w-0 flex-1 truncate text-left font-mono text-xs" onClick={() => onSelect(change.path)}>{change.path}</button>
-          <span className="font-mono text-xs text-amber-600">{sourceControlStatusLabel(change)}</span>
-          <Button variant="ghost" size="xs" className="opacity-0 group-hover:opacity-100" disabled={busy} onClick={() => onAction(change.path)}>{actionLabel}</Button>
-        </div>
+      {groupOrder.map((folder) => {
+        const folderChanges = grouped.get(folder)!;
+        const paths = folderChanges.map((change) => change.path);
+        const isOpen = expanded.has(folder);
+        return (
+          <div key={`${title}-nb-${folder}`}>
+            <div className={`group flex min-h-8 items-center gap-1 rounded-md px-1 hover:bg-muted ${selectedPath === folder ? "bg-muted" : ""}`}>
+              <button className="flex size-5 shrink-0 items-center justify-center text-muted-foreground" onClick={() => toggle(folder)} title={isOpen ? "Collapse" : "Expand"}>
+                {isOpen ? <ChevronDown className="size-3.5" /> : <ChevronRight className="size-3.5" />}
+              </button>
+              <BookOpen className="size-3.5 shrink-0 text-primary" />
+              <button className="flex min-w-0 flex-1 items-baseline gap-1.5 truncate text-left" onClick={() => onSelectGroup(paths, folder)}>
+                <span className="truncate text-xs font-medium">{notebookFolders.get(folder)}</span>
+                <span className="shrink-0 text-[11px] text-muted-foreground">{folderChanges.length} file{folderChanges.length === 1 ? "" : "s"}</span>
+              </button>
+              <Button variant="ghost" size="xs" className={revealRowActionClass} disabled={busy} onClick={() => onAction(paths)}>{actionLabel} all</Button>
+            </div>
+            {isOpen ? (
+              <div className="ml-4 border-l pl-1">
+                {folderChanges.map((change) => (
+                  <ChangeFileRow key={`${title}-${change.path}`} change={change} actionLabel={actionLabel} busy={busy} selected={selectedPath === change.path} onSelect={onSelect} onAction={onAction} displayPath={notebookRelativePath(change.path, folder)} />
+                ))}
+              </div>
+            ) : null}
+          </div>
+        );
+      })}
+      {loose.map((change) => (
+        <ChangeFileRow key={`${title}-${change.path}`} change={change} actionLabel={actionLabel} busy={busy} selected={selectedPath === change.path} onSelect={onSelect} onAction={onAction} displayPath={change.path} />
       ))}
+    </div>
+  );
+}
+
+function notebookRelativePath(path: string, folder: string): string {
+  return path.startsWith(`${folder}/`) ? path.slice(folder.length + 1) : path;
+}
+
+function ChangeFileRow({ change, actionLabel, busy, selected, onSelect, onAction, displayPath }: { change: SourceControlChange; actionLabel: string; busy: boolean; selected: boolean; onSelect: (path: string) => void; onAction: (paths: string[]) => void; displayPath: string }) {
+  return (
+    <div className={`group flex min-h-8 items-center gap-2 rounded-md px-2 hover:bg-muted ${selected ? "bg-muted" : ""}`}>
+      <FileCode className="size-3.5 shrink-0 text-primary" />
+      <button className="min-w-0 flex-1 truncate text-left font-mono text-xs" onClick={() => onSelect(change.path)}>{displayPath}</button>
+      <span className="font-mono text-xs text-amber-600">{sourceControlStatusLabel(change)}</span>
+      <Button variant="ghost" size="xs" className={revealRowActionClass} disabled={busy} onClick={() => onAction([change.path])}>{actionLabel}</Button>
     </div>
   );
 }

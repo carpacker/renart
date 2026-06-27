@@ -37,7 +37,7 @@ export const SEED_ASSET_TYPES = [
   "vertica.seed",
 ] as const;
 
-export const NON_SQL_ASSET_TYPES = ["python", "ingestr", "r"] as const;
+export const NON_SQL_ASSET_TYPES = ["python", "ingestr", "sling", "api", "r"] as const;
 
 const CONNECTION_TYPE_TO_ASSET_TYPE: Record<string, string> = {
   athena: "athena.sql",

@@ -29,6 +29,8 @@ import type {
   SqlQueryResponse,
   WebAsset as GeneratedWebAsset,
   WebPipelineConfigResponse as GeneratedWebPipelineConfigResponse,
+  WebNotebook as GeneratedWebNotebook,
+  WebNotebookBlock,
   WebPipeline as GeneratedWebPipeline,
   WebUpdatePipelineConfigRequest as GeneratedWebUpdatePipelineConfigRequest,
   WebColumn,
@@ -61,6 +63,7 @@ export type {
   SqlPathSuggestionsResponse,
   SqlQueryResponse,
   WebColumn,
+  WebNotebookBlock,
   WebColumnCheck,
   WorkspaceConfigConnection,
   WorkspaceConfigEnvironment,
@@ -107,8 +110,13 @@ export type WebPipeline = Omit<GeneratedWebPipeline, "assets"> & {
   assets: WebAsset[];
 };
 
-export type WorkspaceState = Omit<GeneratedWorkspaceState, "pipelines"> & {
+export type WebNotebook = Omit<GeneratedWebNotebook, "cells"> & {
+  cells: WebAsset[];
+};
+
+export type WorkspaceState = Omit<GeneratedWorkspaceState, "pipelines" | "notebooks"> & {
   pipelines: WebPipeline[];
+  notebooks?: WebNotebook[];
 };
 
 export type WorkspaceEvent = Omit<GeneratedWorkspaceEvent, "workspace"> & {

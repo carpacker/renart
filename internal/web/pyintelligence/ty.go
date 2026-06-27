@@ -5,8 +5,11 @@ import (
 	"embed"
 	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strconv"
 	"sync"
+	"sync/atomic"
 
 	"renart/internal/web/profiling"
 
@@ -142,7 +145,6 @@ type GotoTarget struct {
 type runtimeState struct {
 	runtime  wazero.Runtime
 	compiled wazero.CompiledModule
-	module   api.Module
 	err      error
 }
 
@@ -151,7 +153,39 @@ var state struct {
 	data runtimeState
 }
 
-var executionMu sync.Mutex
+var (
+	executionMu     sync.Mutex
+	tyModule        api.Module // guarded by executionMu; recycled to bound memory
+	tyInstanceCount uint64
+)
+
+// currentTyModuleLocked returns the shared ty module instance, instantiating it
+// on first use (or after a Recycle). The caller must hold executionMu.
+func currentTyModuleLocked(ctx context.Context, initialized runtimeState) (api.Module, error) {
+	if tyModule != nil {
+		return tyModule, nil
+	}
+	instanceID := atomic.AddUint64(&tyInstanceCount, 1)
+	module, err := initialized.runtime.InstantiateModule(ctx, initialized.compiled, wazero.NewModuleConfig().WithName(fmt.Sprintf("ty-%d", instanceID)))
+	if err != nil {
+		return nil, fmt.Errorf("instantiate ty wasm: %w", err)
+	}
+	tyModule = module
+	return tyModule, nil
+}
+
+// Recycle closes the shared ty module so the next call instantiates a fresh one,
+// reclaiming the WASM linear memory that only ever grows across calls. Any
+// per-session state cached in the module (mounted package stubs) is lost, so
+// callers must also reset their session tracking so those files are re-sent.
+func Recycle() {
+	executionMu.Lock()
+	defer executionMu.Unlock()
+	if tyModule != nil {
+		_ = tyModule.Close(context.Background())
+		tyModule = nil
+	}
+}
 
 func Format(ctx context.Context, req Request) (FormatResponse, error) {
 	var resp FormatResponse
@@ -227,11 +261,21 @@ func call(ctx context.Context, functionName string, req Request, response any) e
 	}
 	execCtx := context.WithoutCancel(ctx)
 
-	memory := initialized.module.Memory()
-	alloc := initialized.module.ExportedFunction("ty_alloc")
-	dealloc := initialized.module.ExportedFunction("ty_dealloc")
-	freeResult := initialized.module.ExportedFunction("ty_result_free")
-	fn := initialized.module.ExportedFunction(functionName)
+	// Reuse a long-lived module instance: ty caches per-session state (mounted
+	// package stubs) inside the module across calls, so each call cannot get a
+	// fresh instance. Its WASM linear memory only grows, so callers recycle it
+	// periodically via Recycle() to bound memory (see the service's session
+	// reset). Guarded by executionMu, held for the whole call.
+	module, err := currentTyModuleLocked(execCtx, initialized)
+	if err != nil {
+		return err
+	}
+
+	memory := module.Memory()
+	alloc := module.ExportedFunction("ty_alloc")
+	dealloc := module.ExportedFunction("ty_dealloc")
+	freeResult := module.ExportedFunction("ty_result_free")
+	fn := module.ExportedFunction(functionName)
 	if memory == nil || alloc == nil || dealloc == nil || freeResult == nil || fn == nil {
 		return fmt.Errorf("ty wasm missing required exports")
 	}
@@ -274,9 +318,37 @@ func call(ctx context.Context, functionName string, req Request, response any) e
 	return nil
 }
 
+var (
+	tyCacheOnce sync.Once
+	tyCache     wazero.CompilationCache
+)
+
+// tyRuntimeConfig returns a runtime config backed by a shared on-disk
+// compilation cache, so compiling the 18MB ty wasm with the optimizing compiler
+// is paid once per machine instead of once per process.
+func tyRuntimeConfig() wazero.RuntimeConfig {
+	config := wazero.NewRuntimeConfig()
+	tyCacheOnce.Do(func() {
+		base, err := os.UserCacheDir()
+		if err != nil || base == "" {
+			base = os.TempDir()
+		}
+		dir := filepath.Join(base, "renart", "wazero-cache")
+		if mkErr := os.MkdirAll(dir, 0o755); mkErr == nil {
+			if cache, cacheErr := wazero.NewCompilationCacheWithDir(dir); cacheErr == nil {
+				tyCache = cache
+			}
+		}
+	})
+	if tyCache != nil {
+		config = config.WithCompilationCache(tyCache)
+	}
+	return config
+}
+
 func initRuntime(ctx context.Context) runtimeState {
 	state.once.Do(func() {
-		runtime := wazero.NewRuntime(ctx)
+		runtime := wazero.NewRuntimeWithConfig(ctx, tyRuntimeConfig())
 		if _, err := wasi_snapshot_preview1.Instantiate(ctx, runtime); err != nil {
 			state.data = runtimeState{err: fmt.Errorf("instantiate WASI: %w", err)}
 			_ = runtime.Close(ctx)
@@ -294,14 +366,9 @@ func initRuntime(ctx context.Context) runtimeState {
 			_ = runtime.Close(ctx)
 			return
 		}
-		module, err := runtime.InstantiateModule(ctx, compiled, wazero.NewModuleConfig())
-		if err != nil {
-			state.data = runtimeState{err: fmt.Errorf("instantiate ty wasm: %w", err)}
-			_ = compiled.Close(ctx)
-			_ = runtime.Close(ctx)
-			return
-		}
-		state.data = runtimeState{runtime: runtime, compiled: compiled, module: module}
+		// Modules are instantiated per call (and closed) to bound linear-memory
+		// growth; the runtime and compiled module are the shared, reused state.
+		state.data = runtimeState{runtime: runtime, compiled: compiled}
 	})
 	return state.data
 }

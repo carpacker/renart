@@ -18,6 +18,7 @@ import (
 	"github.com/spf13/afero"
 	"renart/internal/web/identity"
 	"renart/internal/web/model"
+	"renart/internal/web/notebook"
 	"renart/internal/web/policy"
 )
 
@@ -105,12 +106,18 @@ func (s *WorkspaceService) WorkspaceRoot() string {
 
 // NewPipelineBuilder creates a new pipeline builder.
 func (s *WorkspaceService) NewPipelineBuilder() *pipeline.Builder {
-	osFS := afero.NewOsFs()
+	return NewRenartPipelineBuilder(afero.NewOsFs())
+}
+
+func NewRenartPipelineBuilder(fs afero.Fs) *pipeline.Builder {
+	if fs == nil {
+		fs = afero.NewOsFs()
+	}
 	return pipeline.NewBuilder(
 		BuilderConfig,
-		pipeline.CreateTaskFromYamlDefinition(osFS),
-		pipeline.CreateTaskFromFileComments(osFS),
-		osFS,
+		apiAwareYamlTaskCreator(fs),
+		pipeline.CreateTaskFromFileComments(fs),
+		fs,
 		DefaultGlossaryReader,
 		jinja.VariantRendererFactory,
 	)
@@ -228,35 +235,100 @@ func (s *WorkspaceService) ComputeState(ctx context.Context) (model.WorkspaceSta
 			}
 
 			connectionName := ""
-			if conn, connErr := parsed.GetConnectionNameForAsset(asset); connErr == nil {
+			if isAPIAsset(asset) {
+				if conn, connErr := apiConnectionNameForAsset(asset, parsed); connErr == nil {
+					connectionName = conn
+				}
+			} else if conn, connErr := parsed.GetConnectionNameForAsset(asset); connErr == nil {
 				connectionName = conn
+			}
+			parameters := asset.Parameters
+			if isSlingAsset(asset) {
+				if summary := slingSummaryParameters(content); len(summary) > 0 {
+					parameters = summary
+				}
+			} else if isAPIAsset(asset) {
+				if summary := apiSummaryParameters(content, asset, parsed); len(summary) > 0 {
+					parameters = summary
+				}
 			}
 
 			declaredMatType := string(asset.Materialization.Type)
+			columns := asset.Columns
+			if isAPIAsset(asset) && len(columns) == 0 {
+				columns = apiResponseFieldColumns(asset)
+			}
 
 			pSummary.Assets = append(pSummary.Assets, model.Asset{
-				ID:                  EncodeID(filepath.ToSlash(relAssetPath)),
-				Name:                asset.Name,
-				Type:                string(asset.Type),
-				Path:                filepath.ToSlash(relAssetPath),
-				Content:             content,
-				Upstreams:           upstreams,
-				Parameters:          asset.Parameters,
-				Meta:                asset.Meta,
-				Columns:             PipelineColumnsToModelColumns(asset.Columns),
-				Connection:          connectionName,
-				MaterializationType: declaredMatType,
-				IsMaterialized:      false,
+				ID:                      EncodeID(filepath.ToSlash(relAssetPath)),
+				Name:                    asset.Name,
+				Type:                    string(asset.Type),
+				Path:                    filepath.ToSlash(relAssetPath),
+				Content:                 content,
+				Upstreams:               upstreams,
+				Parameters:              parameters,
+				Meta:                    asset.Meta,
+				Columns:                 PipelineColumnsToModelColumns(columns),
+				Connection:              connectionName,
+				MaterializationType:     declaredMatType,
+				MaterializationStrategy: string(asset.Materialization.Strategy),
+				IncrementalKey:          asset.Materialization.IncrementalKey,
+				Owner:                   asset.Owner,
+				Tags:                    asset.Tags,
+				IsMaterialized:          false,
+				Class:                   notebook.ClassPipeline,
 			})
 		}
 
 		state.Pipelines = append(state.Pipelines, pSummary)
 	}
 
+	s.appendNotebooks(&state)
+	validateAssetClassDirection(&state)
+
 	state.Metadata["pipeline_definition_files"] = PipelineDefinitionFiles
 	state.Metadata["asset_directories"] = AssetsDirectoryNames
 
 	return state, nil
+}
+
+// validateAssetClassDirection enforces the dependency direction rule: a
+// pipeline asset depending on a notebook cell is an error, not a warning
+// (promote the cell first). Notebook → pipeline dependencies are fine.
+func validateAssetClassDirection(state *model.WorkspaceState) {
+	if len(state.Notebooks) == 0 {
+		return
+	}
+
+	pipelineAssetNames := make(map[string]bool)
+	for _, p := range state.Pipelines {
+		for _, asset := range p.Assets {
+			pipelineAssetNames[strings.ToLower(asset.Name)] = true
+		}
+	}
+
+	cellNames := make(map[string]string)
+	for _, nb := range state.Notebooks {
+		for _, cell := range nb.Cells {
+			cellNames[strings.ToLower(cell.Name)] = nb.Title
+		}
+	}
+
+	for _, p := range state.Pipelines {
+		for _, asset := range p.Assets {
+			for _, upstream := range asset.Upstreams {
+				key := strings.ToLower(upstream)
+				if pipelineAssetNames[key] {
+					continue
+				}
+				if nbTitle, ok := cellNames[key]; ok {
+					state.Errors = append(state.Errors, fmt.Sprintf(
+						"%s: pipeline assets cannot depend on notebook cells (%q is a cell of notebook %q); promote the cell first",
+						asset.Name, upstream, nbTitle))
+				}
+			}
+		}
+	}
 }
 
 // pipelineDefinitionFilePath returns the pipeline.yml path for a parsed
@@ -275,9 +347,59 @@ func pipelineDefinitionFilePath(parsed *pipeline.Pipeline, pipelineDir string) s
 	return filepath.Join(pipelineDir, PipelineDefinitionFiles[0])
 }
 
-// ResolveAssetByID finds an asset by its encoded ID.
+// ResolveAssetByID finds an asset by its encoded ID. Pipeline assets resolve
+// through the pipeline resolver; notebook cells (which live outside any
+// pipeline) resolve against their notebook folder, so the same SQL
+// intelligence endpoints — parse-context, formatting, path suggestions —
+// work for cells unchanged.
 func (s *WorkspaceService) ResolveAssetByID(ctx context.Context, assetID string) (string, *pipeline.Pipeline, *pipeline.Asset, error) {
-	return s.resolver().ResolveAssetByID(ctx, assetID)
+	relPath, parsed, asset, err := s.resolver().ResolveAssetByID(ctx, assetID)
+	if err == nil {
+		return relPath, parsed, asset, nil
+	}
+
+	if cellRel, cellPipeline, cellAsset, cellErr := s.resolveNotebookCellByID(assetID); cellErr == nil {
+		return cellRel, cellPipeline, cellAsset, nil
+	}
+	return "", nil, nil, err
+}
+
+// resolveNotebookCellByID resolves a notebook cell file to its asset plus a
+// synthetic pipeline whose assets are the notebook's cells (so dialect and
+// sibling-column resolution behave like a normal pipeline).
+func (s *WorkspaceService) resolveNotebookCellByID(assetID string) (string, *pipeline.Pipeline, *pipeline.Asset, error) {
+	relAssetPath, err := DecodeID(assetID)
+	if err != nil {
+		return "", nil, nil, err
+	}
+	absAssetPath := filepath.Join(s.workspaceRoot, filepath.FromSlash(relAssetPath))
+
+	dir := filepath.Dir(absAssetPath)
+	if _, statErr := os.Stat(filepath.Join(dir, notebook.ManifestFileName)); statErr != nil {
+		return "", nil, nil, ErrAssetNotFound
+	}
+
+	fs := afero.NewOsFs()
+	loader := notebook.NewLoader(fs, pipeline.CreateTaskFromFileComments(fs), nil)
+	nb, err := loader.Load(dir)
+	if err != nil {
+		return "", nil, nil, err
+	}
+
+	assets := make([]*pipeline.Asset, 0, len(nb.Cells))
+	var target *pipeline.Asset
+	for _, cell := range nb.Cells {
+		assets = append(assets, cell.Asset)
+		if filepath.Clean(cell.Path) == filepath.Clean(absAssetPath) {
+			target = cell.Asset
+		}
+	}
+	if target == nil {
+		return "", nil, nil, ErrAssetNotFound
+	}
+
+	synthetic := &pipeline.Pipeline{Name: nb.Title, Assets: assets}
+	return filepath.ToSlash(relAssetPath), synthetic, target, nil
 }
 
 // ErrAssetNotFound is returned when an asset cannot be found.

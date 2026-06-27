@@ -137,7 +137,7 @@ export function jinjaSpanAtPosition(model: MonacoNS.editor.ITextModel, position:
 
 export function registerJinjaProviders(
   monaco: Monaco,
-  getRenderResult: () => JinjaRenderResponse | null,
+  getRenderResult: (model: MonacoNS.editor.ITextModel) => JinjaRenderResponse | null,
 ): MonacoNS.IDisposable {
   const disposables: MonacoNS.IDisposable[] = [];
 
@@ -162,7 +162,7 @@ export function registerJinjaProviders(
         endLineNumber: position.lineNumber,
         endColumn: position.column,
       });
-      const renderResult = getRenderResult();
+      const renderResult = getRenderResult(model);
       const variables = renderResult?.variables ?? [];
 
       if (/\|\s*[A-Za-z_]*$/.test(before)) {
@@ -192,7 +192,7 @@ export function registerJinjaProviders(
     provideHover(model, position) {
       const span = jinjaSpanAtPosition(model, position);
       if (!span) return null;
-      const rendered = getRenderResult()?.spans.find(
+      const rendered = getRenderResult(model)?.spans.find(
         (candidate) => candidate.start_line === span.startLine && candidate.start_column === span.startColumn,
       );
       const contents = [

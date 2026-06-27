@@ -12,6 +12,8 @@ import {
 import {
   registerSQLProviders,
   resolveTableAtPosition,
+  RemoteSQLResolver,
+  SQLProviderEntry,
 } from "@/lib/monaco-sql-providers";
 import { findTableByIdentifier, resolveConnection, SchemaTable } from "@/lib/sql-schema";
 import { SqlParseContextDiagnostic, WebAsset, WorkspaceState } from "@/lib/types";
@@ -485,6 +487,42 @@ function remoteTablesForConnection(
   return tablesByScope[`${connectionName}::${environment ?? ""}`] ?? [];
 }
 
+// The "sql" providers are global per Monaco, so they must be registered once
+// and shared — not once per editor. Each editor registers its per-model state
+// in `sqlProviderEntries`; the providers resolve the entry for the model they
+// are invoked on. Without this, N mounted cell editors register N provider
+// sets, multiplying suggestions and leaking one cell's tables into another.
+const sqlProviderEntries = new Map<string, SQLProviderEntry>();
+const sqlProviderRegistry = new Map<
+  typeof MonacoNS,
+  { disposable: MonacoNS.IDisposable; refs: number }
+>();
+
+function acquireSQLProviders(monaco: typeof MonacoNS): () => void {
+  let registration = sqlProviderRegistry.get(monaco);
+  if (!registration) {
+    registration = {
+      disposable: registerSQLProviders(monaco, (model) =>
+        sqlProviderEntries.get(model.uri.toString()) ?? null,
+      ),
+      refs: 0,
+    };
+    sqlProviderRegistry.set(monaco, registration);
+  }
+  registration.refs += 1;
+  return () => {
+    const current = sqlProviderRegistry.get(monaco);
+    if (!current) {
+      return;
+    }
+    current.refs -= 1;
+    if (current.refs <= 0) {
+      current.disposable.dispose();
+      sqlProviderRegistry.delete(monaco);
+    }
+  };
+}
+
 /**
  * React hook that registers Monaco SQL completion / definition / hover
  * providers scoped to the given schema tables.
@@ -558,11 +596,15 @@ export function useSQLIntellisense(
   });
 
   useEffect(() => {
-    if (!monaco) {
+    if (!monaco || !editor) {
+      return;
+    }
+    const model = editor.getModel();
+    if (!model) {
       return;
     }
 
-    const disposable = registerSQLProviders(monaco, providerTablesRef.current, providerUpstreamNamesRef.current, {
+    const remoteResolver: RemoteSQLResolver = {
       getParseContext: () => {
         return latestStateRef.current.activeParseContext;
       },
@@ -779,12 +821,25 @@ export function useSQLIntellisense(
           sortText: suggestion.kind === "directory" ? "0" : "1",
         }));
       },
-    }, providerTableContextRef.current);
+    };
+
+    // Register this editor's per-model state, and share one global provider
+    // set across all editors (refcounted). Getters read live refs so renames
+    // and schema changes are picked up without re-registering.
+    const uri = model.uri.toString();
+    sqlProviderEntries.set(uri, {
+      getTables: () => providerTablesRef.current,
+      getUpstreamNames: () => providerUpstreamNamesRef.current,
+      getTableSuggestionContext: () => providerTableContextRef.current,
+      remoteResolver,
+    });
+    const release = acquireSQLProviders(monaco);
 
     return () => {
-      disposable.dispose();
+      sqlProviderEntries.delete(uri);
+      release();
     };
-  }, [loadSQLDiscoveryColumns, loadSQLDiscoveryTables, monaco]);
+  }, [editor, loadSQLDiscoveryColumns, loadSQLDiscoveryTables, monaco]);
 
   useEffect(() => {
     if (!editor || tables.length === 0) {

@@ -5,7 +5,7 @@ import type { SqlParseContextColumn, SqlParseContextTable } from "@/lib/types";
 
 type Monaco = typeof MonacoNS;
 
-type RemoteSQLResolver = {
+export type RemoteSQLResolver = {
   getParseContext?: () => {
     tables?: SqlParseContextTable[];
     columns?: SqlParseContextColumn[];
@@ -36,11 +36,25 @@ type RemoteSQLResolver = {
   }): Promise<MonacoNS.languages.CompletionItem[]>;
 };
 
-type TableSuggestionContext = {
+export type TableSuggestionContext = {
   currentPipelineId?: string | null;
   currentSchemaName?: string | null;
   currentTableName?: string | null;
   remoteTableNames?: string[];
+};
+
+// Per-editor state resolved at provider-call time by model URI. The "sql"
+// language providers are global (one set per Monaco), so when several editors
+// are mounted at once (notebook cells), each provider must look up the state
+// of the model being edited — otherwise every editor's state contributes to
+// every other editor (duplicated suggestions, columns from unreferenced
+// cells). Getters keep the state live so renames are reflected without
+// re-registering.
+export type SQLProviderEntry = {
+  getTables: () => SchemaTable[];
+  getUpstreamNames: () => string[];
+  getTableSuggestionContext: () => TableSuggestionContext | undefined;
+  remoteResolver?: RemoteSQLResolver;
 };
 
 type SemanticTokenType = "schema" | "table" | "column" | "alias";
@@ -1170,10 +1184,7 @@ export function resolveTableAtPosition(
 
 export function registerSQLProviders(
   monaco: Monaco,
-  tables: SchemaTable[],
-  upstreamNames: string[],
-  remoteResolver?: RemoteSQLResolver,
-  tableSuggestionContext?: TableSuggestionContext,
+  resolveEntry: (model: MonacoNS.editor.ITextModel) => SQLProviderEntry | null,
 ): MonacoNS.IDisposable {
   const disposables: MonacoNS.IDisposable[] = [];
 
@@ -1186,8 +1197,9 @@ export function registerSQLProviders(
         };
       },
       provideDocumentSemanticTokens(model) {
+        const entry = resolveEntry(model);
         return {
-          data: buildSemanticTokens(model, tables),
+          data: buildSemanticTokens(model, entry?.getTables() ?? []),
         };
       },
       releaseDocumentSemanticTokens() {},
@@ -1202,6 +1214,14 @@ export function registerSQLProviders(
         model: MonacoNS.editor.ITextModel,
         position: MonacoNS.Position,
       ) {
+        const entry = resolveEntry(model);
+        if (!entry) {
+          return { suggestions: [] };
+        }
+        const tables = entry.getTables();
+        const upstreamNames = entry.getUpstreamNames();
+        const remoteResolver = entry.remoteResolver;
+        const tableSuggestionContext = entry.getTableSuggestionContext();
         if (isInsideJinjaSpan(model, position)) {
           return { suggestions: [] };
         }
@@ -1475,6 +1495,12 @@ export function registerSQLProviders(
         model: MonacoNS.editor.ITextModel,
         position: MonacoNS.Position,
       ) {
+        const entry = resolveEntry(model);
+        if (!entry) {
+          return null;
+        }
+        const tables = entry.getTables();
+        const remoteResolver = entry.remoteResolver;
         const wordInfo = model.getWordAtPosition(position);
         const range = wordInfo
           ? new monaco.Range(
@@ -1543,6 +1569,12 @@ export function registerSQLProviders(
         model: MonacoNS.editor.ITextModel,
         position: MonacoNS.Position,
       ) {
+        const entry = resolveEntry(model);
+        if (!entry) {
+          return null;
+        }
+        const tables = entry.getTables();
+        const remoteResolver = entry.remoteResolver;
         const identifier = identifierAtPosition(model, position);
         if (!identifier) {
           const parseContext = remoteResolver?.getParseContext?.() ?? null;

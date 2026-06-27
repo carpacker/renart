@@ -277,22 +277,26 @@ function estimateNodeSize(
   isLoading: boolean
 ) {
   const maxWidth = maxNodeWidth();
-  const isIngestrAsset = assetType.trim().toLowerCase() === "ingestr";
+  const normalizedAssetType = assetType.trim().toLowerCase();
+  const isTransferAsset =
+    normalizedAssetType === "ingestr" ||
+    normalizedAssetType === "sling" ||
+    normalizedAssetType === "api";
 
   if (!mode) {
     return clampNodeWidth(
-      isIngestrAsset
-      ? { width: 320, height: 150 }
-      : { width: 260, height: 126 },
+      isTransferAsset
+        ? { width: 320, height: 150 }
+        : { width: 260, height: 126 },
       maxWidth
     );
   }
 
   if (mode === "chart") {
     return clampNodeWidth(
-      isIngestrAsset
-      ? { width: 400, height: 304 }
-      : { width: 380, height: 280 },
+      isTransferAsset
+        ? { width: 400, height: 304 }
+        : { width: 380, height: 280 },
       maxWidth
     );
   }
@@ -300,25 +304,25 @@ function estimateNodeSize(
   if (isLoading) {
     if (mode === "table") {
       return clampNodeWidth(
-        isIngestrAsset
-        ? { width: 440, height: 260 }
-        : { width: 420, height: 230 },
+        isTransferAsset
+          ? { width: 440, height: 260 }
+          : { width: 420, height: 230 },
         maxWidth
       );
     }
     return clampNodeWidth(
-      isIngestrAsset
-      ? { width: 440, height: 270 }
-      : { width: 420, height: 240 },
+      isTransferAsset
+        ? { width: 440, height: 270 }
+        : { width: 420, height: 240 },
       maxWidth
     );
   }
 
   if (!inspect) {
     return clampNodeWidth(
-      isIngestrAsset
-      ? { width: 320, height: 150 }
-      : { width: 260, height: 126 },
+      isTransferAsset
+        ? { width: 320, height: 150 }
+        : { width: 260, height: 126 },
       maxWidth
     );
   }
@@ -327,24 +331,30 @@ function estimateNodeSize(
     const sampledRows = inspect.rows.slice(0, 8);
     const estimatedWidth = estimateTableWidth(inspect.columns, sampledRows);
     const rowCount = Math.min(8, inspect.rows.length);
-    return clampNodeWidth({
-      width: isIngestrAsset ? Math.max(340, estimatedWidth) : estimatedWidth,
-      height: Math.min(
-        420,
-        Math.max(isIngestrAsset ? 210 : 170, 96 + rowCount * 28)
-      ),
-    }, maxWidth);
+    return clampNodeWidth(
+      {
+        width: isTransferAsset ? Math.max(340, estimatedWidth) : estimatedWidth,
+        height: Math.min(
+          420,
+          Math.max(isTransferAsset ? 210 : 170, 96 + rowCount * 28)
+        ),
+      },
+      maxWidth
+    );
   }
 
   const textLength = JSON.stringify(inspect.rows[0] ?? {}).length;
   const estimatedLines = Math.max(6, Math.min(22, Math.ceil(textLength / 56)));
-  return clampNodeWidth({
-    width: isIngestrAsset ? 440 : 420,
-    height: Math.min(
-      500,
-      Math.max(isIngestrAsset ? 214 : 190, 90 + estimatedLines * 18)
-    ),
-  }, maxWidth);
+  return clampNodeWidth(
+    {
+      width: isTransferAsset ? 440 : 420,
+      height: Math.min(
+        500,
+        Math.max(isTransferAsset ? 214 : 190, 90 + estimatedLines * 18)
+      ),
+    },
+    maxWidth
+  );
 }
 
 function maxNodeWidth() {

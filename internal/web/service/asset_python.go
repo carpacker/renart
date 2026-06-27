@@ -339,13 +339,24 @@ func (s *AssetService) pythonTySessionFilesForRequest(sessionID, sessionFingerpr
 	return files
 }
 
+// pythonTyRecycleEvery bounds the ty WASM module's monotonic linear-memory
+// growth: after this many calls the module is recycled (see pyintelligence.
+// Recycle) and the session tracking is cleared so package stubs are re-sent
+// into the fresh instance.
+const pythonTyRecycleEvery = 200
+
 func (s *AssetService) markPythonTySessionFilesReady(sessionID, sessionFingerprint string) {
-	if sessionID == "" || sessionFingerprint == "" {
-		return
-	}
 	s.pythonTySessionMu.Lock()
-	s.pythonTySessionFiles[sessionID] = sessionFingerprint
-	s.pythonTySessionMu.Unlock()
+	defer s.pythonTySessionMu.Unlock()
+	if sessionID != "" && sessionFingerprint != "" {
+		s.pythonTySessionFiles[sessionID] = sessionFingerprint
+	}
+	s.pythonTyCallCount++
+	if s.pythonTyCallCount >= pythonTyRecycleEvery {
+		pyintelligence.Recycle()
+		s.pythonTySessionFiles = make(map[string]string)
+		s.pythonTyCallCount = 0
+	}
 }
 
 func (s *AssetService) resolvePythonAssetPath(assetID string) (string, string, *APIError) {
@@ -638,24 +649,31 @@ func pythonRequestedModules(content string) map[string]bool {
 }
 
 func (s *AssetService) pythonDependencyNames(absAssetPath string) []string {
-	requirementsPath := nearestPythonDependencyFile(filepath.Dir(absAssetPath), s.deps.WorkspaceRoot, "requirements.txt")
-	if requirementsPath != "" {
-		bytes, err := os.ReadFile(requirementsPath)
-		if err != nil {
-			return nil
+	startDir := filepath.Dir(absAssetPath)
+	names := []string{}
+	seen := map[string]bool{}
+	add := func(list []string) {
+		for _, name := range list {
+			if name != "" && !seen[name] {
+				seen[name] = true
+				names = append(names, name)
+			}
 		}
-		return dependencyNamesFromRequirements(string(bytes))
 	}
-
-	pyprojectPath := nearestPythonDependencyFile(filepath.Dir(absAssetPath), s.deps.WorkspaceRoot, "pyproject.toml")
-	if pyprojectPath == "" {
-		return nil
+	// pyproject.toml is the standard; a legacy requirements.txt is still read so
+	// declared names from either file count (union), which keeps existing
+	// pipelines and intellisense working during the transition.
+	if pyprojectPath := nearestPythonDependencyFile(startDir, s.deps.WorkspaceRoot, pyprojectFile); pyprojectPath != "" {
+		if bytes, err := os.ReadFile(pyprojectPath); err == nil {
+			add(dependencyNamesFromPyproject(string(bytes)))
+		}
 	}
-	bytes, err := os.ReadFile(pyprojectPath)
-	if err != nil {
-		return nil
+	if requirementsPath := nearestPythonDependencyFile(startDir, s.deps.WorkspaceRoot, "requirements.txt"); requirementsPath != "" {
+		if bytes, err := os.ReadFile(requirementsPath); err == nil {
+			add(dependencyNamesFromRequirements(string(bytes)))
+		}
 	}
-	return dependencyNamesFromPyproject(string(bytes))
+	return names
 }
 
 func dependencyNamesFromRequirements(content string) []string {
@@ -740,6 +758,13 @@ func (s *AssetService) pythonPackageSearchRoots(relAssetPath string) []string {
 				filepath.Join(base, "venv", "lib", "python*", "site-packages"),
 			)
 		}
+		// Notebook cells run in a per-notebook uv venv kept outside the
+		// (git-tracked) notebook folder, so it is not reachable from assetDir's
+		// .venv glob above. Mount its site-packages so ty resolves imports of
+		// notebook dependencies instead of flagging them as unresolved.
+		roots = appendPythonSitePackageGlobs(roots,
+			filepath.Join(notebookVenvDir(workspaceRoot, assetDir), "lib", "python*", "site-packages"),
+		)
 	}
 	if home, err := os.UserHomeDir(); err == nil {
 		roots = appendPythonSitePackageGlobs(roots,

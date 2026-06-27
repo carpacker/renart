@@ -10,6 +10,7 @@ import "reactflow/dist/style.css";
 import { WorkspaceAssetDialogs } from "@/components/workspace-asset-dialogs";
 import { WorkspaceMainContent } from "@/components/workspace-main-content";
 import { WorkspacePageEffects } from "@/components/workspace-page-effects";
+import type { NewAssetKind } from "@/components/new-asset-node";
 import {
   AssetConfigForm,
   WorkspaceEditorPane,
@@ -132,7 +133,7 @@ export function WorkspacePage() {
   const onboardingHelp = { target: null as null | string };
 
   const buildCreateAssetInputForWorkspace = useCallback(
-    (name: string, kind: "sql" | "python" | "ingestr") =>
+    (name: string, kind: NewAssetKind) =>
       buildCreateAssetInput(name, kind, assetActions.defaultSqlAssetType),
     [assetActions.defaultSqlAssetType]
   );
@@ -308,7 +309,7 @@ export function WorkspacePage() {
       return {
         step: 0,
         title: "Start with the players asset",
-        body: "This ingestr asset loads chess player data. Click the quickstart.players node to inspect it.",
+        body: "This API asset loads Chess.com player data. Click the quickstart.players node to inspect it.",
         onSkip: dismissQuickstartTour,
       };
     }
@@ -358,7 +359,7 @@ export function WorkspacePage() {
     return {
       step: 5,
       title: "See the configured connections",
-      body: "The quickstart added DuckDB and chess connections. Open Environments to inspect them, then come back to the workspace anytime.",
+        body: "The quickstart added a DuckDB connection and project-local API source assets. Open Environments to inspect DuckDB, then come back to the workspace anytime.",
       actionLabel: "Open Environments",
       onAction: () => {
         onboarding.setEnvironmentStepActive(true);

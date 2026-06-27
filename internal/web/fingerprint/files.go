@@ -13,7 +13,7 @@ import (
 // lockfileNames are checked nearest-first from the asset's directory up to
 // the pipeline root; the first hit wins (mirrors how Bruin resolves Python
 // dependencies).
-var lockfileNames = []string{"uv.lock", "requirements.txt"}
+var lockfileNames = []string{"uv.lock", "requirements.txt", "pyproject.toml"}
 
 // sharedDirName is the designated shared-code directory under the pipeline
 // root. One coarse hash covers it: any change there invalidates every Python

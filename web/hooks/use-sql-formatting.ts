@@ -6,7 +6,10 @@ import type * as MonacoNS from "monaco-editor";
 
 import { formatSQLAsset } from "@/lib/api";
 import { isSqlAssetType } from "@/lib/asset-types";
-import { editorDraftAtom } from "@/lib/atoms/domains/editor";
+import {
+  editorDraftAtom,
+  editorProgrammaticContentAtom,
+} from "@/lib/atoms/domains/editor";
 import { WebAsset } from "@/lib/types";
 
 export function useSQLFormatting(
@@ -15,6 +18,9 @@ export function useSQLFormatting(
   monaco: typeof MonacoNS | null,
 ) {
   const setEditorDraft = useSetAtom(editorDraftAtom);
+  const setEditorProgrammaticContent = useSetAtom(
+    editorProgrammaticContentAtom
+  );
   const isSqlAsset = useMemo(() => {
     if (!asset) {
       return false;
@@ -38,13 +44,39 @@ export function useSQLFormatting(
           return;
         }
 
+        if (editor.getValue() !== response.content) {
+          const model = editor.getModel();
+          if (model) {
+            editor.executeEdits("format-sql", [
+              {
+                range: model.getFullModelRange(),
+                text: response.content,
+                forceMoveMarkers: true,
+              },
+            ]);
+          }
+        }
+
         setEditorDraft((previous) => ({
           ...previous,
           [asset.id]: response.content,
         }));
+        setEditorProgrammaticContent((previous) => ({
+          ...previous,
+          [asset.id]: {
+            content: response.content,
+            revision: (previous[asset.id]?.revision ?? 0) + 1,
+          },
+        }));
       })
       .catch(() => undefined);
-  }, [asset?.id, editor, isSqlAsset, setEditorDraft]);
+  }, [
+    asset?.id,
+    editor,
+    isSqlAsset,
+    setEditorDraft,
+    setEditorProgrammaticContent,
+  ]);
 
   useEffect(() => {
     if (!editor || !monaco || !isSqlAsset) {

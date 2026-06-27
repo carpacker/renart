@@ -1,11 +1,28 @@
-import { useEffect, useMemo, useState } from "react";
-import { Background, Controls, Handle, Position, ReactFlow, type Edge, type Node, type NodeProps, type NodeTypes } from "reactflow";
+import { ArrowUpRight, Play, Plus, Trash2 } from "lucide-react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { Background, Controls, Handle, Position, ReactFlow, useReactFlow, type Edge, type Node, type NodeProps, type NodeTypes } from "reactflow";
 import "reactflow/dist/style.css";
 
+import { Button } from "@/components/ui/button";
+import {
+  ContextMenu,
+  ContextMenuContent,
+  ContextMenuItem,
+  ContextMenuSeparator,
+  ContextMenuTrigger,
+} from "@/components/ui/context-menu";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { computeRedesignLineageLayout, type RedesignLineageLayoutEdge } from "@/lib/redesign-lineage-layout";
 
 import type { RedesignAsset } from "./redesign-data";
-import { AssetNode } from "./redesign-primitives";
+import { AssetNode, AssetNodeMenuItems, type AssetNodeAction } from "./redesign-primitives";
 
 export type RedesignLineageCanvasAsset = RedesignAsset & {
   displayName?: string;
@@ -20,6 +37,8 @@ type AssetNodeData = {
   selected: boolean;
   dimmed: boolean;
   onSelect?: (assetId: string) => void;
+  onCreateDownstream?: (assetId: string) => void;
+  actions?: AssetNodeAction[];
 };
 
 type PrefixGroupNodeData = {
@@ -67,18 +86,56 @@ function AssetFlowNode({ data }: NodeProps<AssetNodeData>) {
     ...data.asset,
     name: assetDisplayName(data.asset),
   };
+  const actions = data.actions;
+
+  const card = (
+    <div
+      role="button"
+      tabIndex={0}
+      className="cursor-pointer text-left outline-none"
+      onClick={() => data.onSelect?.(data.asset.id)}
+      onKeyDown={(event) => {
+        if (event.key === "Enter" || event.key === " ") {
+          event.preventDefault();
+          data.onSelect?.(data.asset.id);
+        }
+      }}
+    >
+      <AssetNode asset={displayAsset} selected={data.selected} actions={actions} />
+    </div>
+  );
 
   return (
-    <button
-      type="button"
-      className="text-left transition-opacity"
-      style={{ opacity: data.dimmed ? 0.18 : 1 }}
-      onClick={() => data.onSelect?.(data.asset.id)}
-    >
+    <div className="group relative transition-opacity" style={{ opacity: data.dimmed ? 0.18 : 1 }}>
       <Handle className="asset-node-hidden-handle" type="target" position={Position.Left} />
-      <AssetNode asset={displayAsset} selected={data.selected} />
+      {actions && actions.length > 0 ? (
+        <ContextMenu>
+          <ContextMenuTrigger>{card}</ContextMenuTrigger>
+          <ContextMenuContent>
+            <ContextMenuItem disabled className="font-mono text-xs">{assetDisplayName(data.asset)}</ContextMenuItem>
+            <ContextMenuSeparator />
+            <AssetNodeMenuItems actions={actions} ItemComponent={ContextMenuItem} SeparatorComponent={ContextMenuSeparator} />
+          </ContextMenuContent>
+        </ContextMenu>
+      ) : (
+        card
+      )}
       <Handle className="asset-node-hidden-handle" type="source" position={Position.Right} />
-    </button>
+      {data.onCreateDownstream ? (
+        <button
+          type="button"
+          title="Create downstream asset"
+          aria-label="Create downstream asset"
+          className="absolute -right-3.5 top-1/2 hidden size-7 -translate-y-1/2 items-center justify-center rounded-full border bg-background text-muted-foreground shadow-sm transition-colors hover:bg-primary hover:text-primary-foreground group-hover:flex"
+          onClick={(event) => {
+            event.stopPropagation();
+            data.onCreateDownstream?.(data.asset.id);
+          }}
+        >
+          <Plus className="size-4" />
+        </button>
+      ) : null}
+    </div>
   );
 }
 
@@ -86,6 +143,34 @@ const nodeTypes = {
   prefixGroup: PrefixGroupFlowNode,
   lineageAsset: AssetFlowNode,
 } satisfies NodeTypes;
+
+// Pans/zooms the viewport onto an asset when it is targeted from outside the
+// canvas (e.g. routing here from the build view). Runs only when the id changes
+// so it never fights the user's own panning.
+function ViewportFocus({ assetId, nodes }: { assetId?: string; nodes: Node[] }) {
+  const { setCenter } = useReactFlow();
+  const lastFocused = useRef<string | null>(null);
+
+  useEffect(() => {
+    if (!assetId) {
+      lastFocused.current = null;
+      return;
+    }
+    if (lastFocused.current === assetId) {
+      return;
+    }
+    const node = nodes.find((candidate) => candidate.id === assetId);
+    if (!node) {
+      return;
+    }
+    lastFocused.current = assetId;
+    const width = node.width ?? 232;
+    const height = node.height ?? 120;
+    setCenter(node.position.x + width / 2, node.position.y + height / 2, { zoom: 1, duration: 600 });
+  }, [assetId, nodes, setCenter]);
+
+  return null;
+}
 
 function derivedEdges(assets: RedesignLineageCanvasAsset[], links?: RedesignLineageLayoutEdge[]) {
   if (links) return links;
@@ -135,14 +220,28 @@ export function RedesignLineageCanvas({
   assets,
   links,
   selectedAssetId,
+  focusAssetId,
   onAssetSelect,
+  onCreateDownstream,
+  onRunAsset,
+  onDeleteAsset,
+  onGoToAsset,
+  goToLabel,
 }: {
   assets: RedesignLineageCanvasAsset[];
   links?: RedesignLineageLayoutEdge[];
   selectedAssetId?: string;
+  focusAssetId?: string;
   onAssetSelect?: (assetId: string) => void;
+  onCreateDownstream?: (assetId: string) => void;
+  onRunAsset?: (assetId: string) => void;
+  onDeleteAsset?: (assetId: string) => void;
+  onGoToAsset?: (assetId: string) => void;
+  goToLabel?: string;
 }) {
   const [lineageAssetId, setLineageAssetId] = useState<string | null>(null);
+  const [pendingDelete, setPendingDelete] = useState<{ id: string; name: string } | null>(null);
+  const [deleteLoading, setDeleteLoading] = useState(false);
 
   useEffect(() => {
     setLineageAssetId((current) => current && current !== selectedAssetId ? null : current);
@@ -192,29 +291,50 @@ export function RedesignLineageCanvas({
       };
     });
 
-    const assetNodes: Node<AssetNodeData>[] = assets.map((asset) => ({
-      id: asset.id,
-      type: "lineageAsset",
-      position: layout.positions.get(asset.id) ?? { x: asset.x, y: asset.y },
-      data: {
-        asset,
-        selected: asset.id === visuallySelectedAssetId,
-        dimmed: Boolean(lineage && !lineage.all.has(asset.id)),
-        onSelect: (assetId) => {
-          if (!onAssetSelect) {
-            setLineageAssetId((current) => current === assetId ? null : assetId);
-            return;
-          }
-          if (assetId === selectedAssetId) {
-            setLineageAssetId((current) => current === assetId ? null : assetId);
-            return;
-          }
-          setLineageAssetId(null);
-          onAssetSelect(assetId);
+    const assetNodes: Node<AssetNodeData>[] = assets.map((asset) => {
+      const actions: AssetNodeAction[] = [];
+      if (onRunAsset) {
+        actions.push({ key: "run", label: "Run", icon: Play, onSelect: () => onRunAsset(asset.id) });
+      }
+      if (onGoToAsset) {
+        actions.push({ key: "go-to", label: goToLabel ?? "Open", icon: ArrowUpRight, onSelect: () => onGoToAsset(asset.id) });
+      }
+      if (onDeleteAsset) {
+        actions.push({
+          key: "delete",
+          label: "Delete",
+          icon: Trash2,
+          destructive: true,
+          separatorBefore: actions.length > 0,
+          onSelect: () => setPendingDelete({ id: asset.id, name: assetDisplayName(asset) }),
+        });
+      }
+      return {
+        id: asset.id,
+        type: "lineageAsset",
+        position: layout.positions.get(asset.id) ?? { x: asset.x, y: asset.y },
+        data: {
+          asset,
+          selected: asset.id === visuallySelectedAssetId,
+          dimmed: Boolean(lineage && !lineage.all.has(asset.id)),
+          onSelect: (assetId) => {
+            if (!onAssetSelect) {
+              setLineageAssetId((current) => current === assetId ? null : assetId);
+              return;
+            }
+            if (assetId === selectedAssetId) {
+              setLineageAssetId((current) => current === assetId ? null : assetId);
+              return;
+            }
+            setLineageAssetId(null);
+            onAssetSelect(assetId);
+          },
+          onCreateDownstream,
+          actions: actions.length > 0 ? actions : undefined,
         },
-      },
-      zIndex: 2,
-    }));
+        zIndex: 2,
+      };
+    });
 
     const edges: Edge[] = graphEdges.map((edge) => {
       const active = Boolean(lineage && lineage.all.has(edge.source) && lineage.all.has(edge.target));
@@ -231,10 +351,10 @@ export function RedesignLineageCanvas({
     });
 
     return { nodes: [...groupNodes, ...assetNodes], edges };
-  }, [assets, lineageAssetId, links, onAssetSelect, selectedAssetId]);
+  }, [assets, goToLabel, lineageAssetId, links, onAssetSelect, onCreateDownstream, onDeleteAsset, onGoToAsset, onRunAsset, selectedAssetId]);
 
   return (
-    <div className="h-full min-h-0 bg-zinc-100">
+    <div className="relative h-full min-h-0 bg-muted/40">
       <ReactFlow
         nodes={nodes}
         edges={edges}
@@ -245,9 +365,50 @@ export function RedesignLineageCanvas({
         panActivationKeyCode={null}
         proOptions={{ hideAttribution: true }}
       >
-        <Background gap={22} size={1} color="rgba(0,0,0,0.08)" />
+        <Background gap={22} size={1} color="var(--border)" />
         <Controls position="bottom-left" />
+        <ViewportFocus assetId={focusAssetId} nodes={nodes} />
       </ReactFlow>
+      <Dialog
+        open={Boolean(pendingDelete)}
+        onOpenChange={(open) => {
+          if (!open && !deleteLoading) {
+            setPendingDelete(null);
+          }
+        }}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Delete asset?</DialogTitle>
+            <DialogDescription>
+              This will permanently delete{" "}
+              {pendingDelete ? <span className="font-mono">{pendingDelete.name}</span> : "this asset"} from the pipeline.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button type="button" variant="outline" disabled={deleteLoading} onClick={() => setPendingDelete(null)}>
+              Cancel
+            </Button>
+            <Button
+              type="button"
+              variant="destructive"
+              disabled={deleteLoading}
+              onClick={() => {
+                if (!pendingDelete) {
+                  return;
+                }
+                setDeleteLoading(true);
+                void Promise.resolve(onDeleteAsset?.(pendingDelete.id)).finally(() => {
+                  setDeleteLoading(false);
+                  setPendingDelete(null);
+                });
+              }}
+            >
+              {deleteLoading ? "Deleting..." : "Delete"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

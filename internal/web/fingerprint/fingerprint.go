@@ -220,6 +220,83 @@ func (e *Engine) fingerprintAsset(asset *pipeline.Asset, p *pipeline.Pipeline, p
 	}, nil
 }
 
+// AchievedFingerprints computes the fingerprint of the data each just-succeeded
+// asset actually produced — its "achieved" fingerprint, as opposed to the
+// "target" fingerprint DAG returns. The two are identical except that each
+// upstream contributes the fingerprint physically present when the asset read
+// it: an upstream rebuilt in the same run contributes its freshly-achieved
+// fingerprint (computed here in topo order), while an upstream not rebuilt
+// contributes its last recorded fingerprint via latestAchieved.
+//
+// This is what the materialization log must persist. Recording the target
+// fingerprint instead marks a downstream fresh even when it was built on a
+// stale upstream — the precise silent-stale-data failure the staleness system
+// exists to prevent (materialize C while B is stale: C read old B, so C is not
+// current and must stay stale until rerun). Freshness is then simply
+// achieved == target: an asset is fresh iff its own content/config/vars are
+// current and every upstream it consumed is that upstream's current target.
+//
+// targets must be DAG(p, vars) for the same pipeline and vars, so the
+// own-content and consumed-vars sub-hashes line up with the target computation;
+// when an upstream's achieved fingerprint equals its target (a fresh upstream),
+// the achieved and target fingerprints of the downstream coincide exactly.
+func (e *Engine) AchievedFingerprints(
+	p *pipeline.Pipeline,
+	targets map[string]Result,
+	succeeded map[string]bool,
+	latestAchieved func(assetID string) (Fingerprint, bool),
+) (map[string]Fingerprint, error) {
+	if p == nil {
+		return nil, fmt.Errorf("fingerprint: pipeline is nil")
+	}
+	pipelineUUID := strings.TrimSpace(p.LegacyID)
+	if pipelineUUID == "" {
+		return nil, fmt.Errorf("fingerprint: pipeline %q has no stable id", p.Name)
+	}
+	ordered, err := topoSort(p)
+	if err != nil {
+		return nil, err
+	}
+	inPipeline := make(map[string]struct{}, len(p.Assets))
+	for _, asset := range p.Assets {
+		inPipeline[asset.Name] = struct{}{}
+	}
+
+	achieved := make(map[string]Fingerprint, len(ordered))
+	for _, asset := range ordered {
+		assetID := identity.AssetID(pipelineUUID, asset.Name)
+		if !succeeded[assetID] {
+			continue
+		}
+		result, ok := targets[assetID]
+		if !ok {
+			return nil, fmt.Errorf("fingerprint: achieved: no target fingerprint for %s", asset.Name)
+		}
+		parts := make([]string, 0, len(asset.Upstreams))
+		for _, upstream := range asset.Upstreams {
+			if _, ok := inPipeline[upstream.Value]; !ok {
+				parts = append(parts, "ext:"+upstream.Type+":"+upstream.Value)
+				continue
+			}
+			upID := identity.AssetID(pipelineUUID, upstream.Value)
+			if fp, ok := achieved[upID]; ok {
+				parts = append(parts, "up:"+string(fp))
+			} else if fp, ok := latestAchieved(upID); ok {
+				parts = append(parts, "up:"+string(fp))
+			} else {
+				// The upstream has never materialized in this environment, so the
+				// asset read no current upstream data. Keep this distinct from the
+				// target's "up:"+fingerprint so the asset stays stale until rerun.
+				parts = append(parts, "up-unbuilt:"+upstream.Value)
+			}
+		}
+		sort.Strings(parts)
+		hashParts := append([]string{Version, string(result.OwnContent), result.ConsumedVarsHash}, parts...)
+		achieved[assetID] = Fingerprint(Version + ":" + hashHex(hashParts...))
+	}
+	return achieved, nil
+}
+
 // upstreamHashParts returns the sorted upstream contribution: resolved
 // assets contribute their fingerprints, external dependencies (URIs, assets
 // outside this pipeline) contribute a stable token of their name.

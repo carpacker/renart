@@ -28,6 +28,10 @@ type ErrorResponseBody struct {
 type (
 	CreateAssetRequest           = service.CreateAssetParams
 	UpdateAssetRequest           = service.AssetUpdateRequest
+	WorkspaceColumn              = service.WorkspaceColumn
+	ColumnReconcileResult        = service.ColumnReconcileResult
+	AssetTransaction             = service.AssetTransaction
+	AssetTransactionResult       = service.AssetTransactionResult
 	FormatSQLAssetRequest        = service.FormatSQLAssetRequest
 	FormatSQLAssetResponse       = service.FormatSQLAssetResponse
 	FormatPythonAssetRequest     = service.FormatPythonAssetRequest
@@ -50,6 +54,8 @@ type (
 	PythonSignatureParameter     = service.PythonSignatureParameter
 	PythonGotoDefinitionResponse = service.PythonGotoDefinitionResponse
 	PythonGotoTarget             = service.PythonGotoTarget
+	PythonDepsResponse           = service.PythonDepsResponse
+	AddPythonDependencyRequest   = service.AddPythonDependencyRequest
 	AssetMutationResponse        = service.AssetMutationResponse
 	StatusResponse               = service.StatusResponse
 )
@@ -65,6 +71,9 @@ type AssetHandlers interface {
 	PythonHover(ctx context.Context, assetID string, req PythonPositionRequest) (PythonHoverResponse, *APIError)
 	PythonSignatureHelp(ctx context.Context, assetID string, req PythonPositionRequest) (PythonSignatureHelpResponse, *APIError)
 	PythonGotoDefinition(ctx context.Context, assetID string, req PythonPositionRequest) (PythonGotoDefinitionResponse, *APIError)
+	PythonDeps(assetID string) (PythonDepsResponse, *APIError)
+	AddPythonDependency(ctx context.Context, assetID string, req AddPythonDependencyRequest) (PythonDepsResponse, *APIError)
+	ApplyAssetTransaction(ctx context.Context, assetID string, tx AssetTransaction) (AssetTransactionResult, *APIError)
 }
 
 type AssetsAPI struct {
@@ -82,6 +91,9 @@ func RegisterAssetRoutes(router chi.Router, handlers *AssetsAPI) {
 	router.Post("/api/assets/{assetID}/python-hover", handlers.HandlePythonHover)
 	router.Post("/api/assets/{assetID}/python-signature-help", handlers.HandlePythonSignatureHelp)
 	router.Post("/api/assets/{assetID}/python-goto-definition", handlers.HandlePythonGotoDefinition)
+	router.Get("/api/assets/{assetID}/python-deps", handlers.HandlePythonDeps)
+	router.Post("/api/assets/{assetID}/python-deps", handlers.HandleAddPythonDependency)
+	router.Post("/api/assets/{assetID}/transactions", handlers.HandleApplyAssetTransaction)
 }
 
 func (h *AssetsAPI) HandleCreateAsset(w http.ResponseWriter, r *http.Request) {
@@ -105,6 +117,20 @@ func (h *AssetsAPI) HandleUpdateAsset(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	resp, apiErr := h.Service.Update(r.Context(), chi.URLParam(r, "assetID"), req)
+	if apiErr != nil {
+		writeAPIError(w, apiErr)
+		return
+	}
+	webapi.WriteJSON(w, http.StatusOK, resp)
+}
+
+func (h *AssetsAPI) HandleApplyAssetTransaction(w http.ResponseWriter, r *http.Request) {
+	var tx AssetTransaction
+	if err := json.NewDecoder(r.Body).Decode(&tx); err != nil {
+		webapi.WriteBadRequest(w, "invalid_request_body", err.Error())
+		return
+	}
+	resp, apiErr := h.Service.ApplyAssetTransaction(r.Context(), chi.URLParam(r, "assetID"), tx)
 	if apiErr != nil {
 		writeAPIError(w, apiErr)
 		return
@@ -212,6 +238,29 @@ func (h *AssetsAPI) HandlePythonGotoDefinition(w http.ResponseWriter, r *http.Re
 		return
 	}
 	resp, apiErr := h.Service.PythonGotoDefinition(r.Context(), chi.URLParam(r, "assetID"), req)
+	if apiErr != nil {
+		writeAPIError(w, apiErr)
+		return
+	}
+	webapi.WriteJSON(w, http.StatusOK, resp)
+}
+
+func (h *AssetsAPI) HandlePythonDeps(w http.ResponseWriter, r *http.Request) {
+	resp, apiErr := h.Service.PythonDeps(chi.URLParam(r, "assetID"))
+	if apiErr != nil {
+		writeAPIError(w, apiErr)
+		return
+	}
+	webapi.WriteJSON(w, http.StatusOK, resp)
+}
+
+func (h *AssetsAPI) HandleAddPythonDependency(w http.ResponseWriter, r *http.Request) {
+	var req AddPythonDependencyRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		webapi.WriteBadRequest(w, "invalid_request_body", err.Error())
+		return
+	}
+	resp, apiErr := h.Service.AddPythonDependency(r.Context(), chi.URLParam(r, "assetID"), req)
 	if apiErr != nil {
 		writeAPIError(w, apiErr)
 		return

@@ -59,6 +59,37 @@ func (r *Recorder) HandleRunCompleted(event bus.RunCompleted) {
 	}
 	varsHash := fingerprint.AllVarsHash(vars)
 
+	// Record each asset's *achieved* fingerprint — the data it actually
+	// produced, folding in the fingerprint of each upstream as physically read
+	// — not the current target. Materializing a downstream while an upstream is
+	// stale must record as stale, not silently fresh. latest holds each asset's
+	// pre-run fingerprint (this run's facts are not yet written), so an upstream
+	// not rebuilt here contributes its old fingerprint; one rebuilt here
+	// contributes its fresh achieved fingerprint via topo order.
+	succeeded := make(map[string]bool, len(event.Assets))
+	assetIDs := make([]string, 0, len(results))
+	for id := range results {
+		assetIDs = append(assetIDs, id)
+	}
+	for _, assetRun := range event.Assets {
+		if assetRun.Status == "succeeded" {
+			succeeded[assetRun.AssetID] = true
+		}
+	}
+	latest, err := r.store.LatestFingerprint(ctx, assetIDs, event.Environment)
+	if err != nil {
+		r.warn("failed to load latest fingerprints for materialization log", event.PipelineUUID, err)
+		return
+	}
+	achieved, err := r.engine.AchievedFingerprints(parsed, results, succeeded, func(id string) (fingerprint.Fingerprint, bool) {
+		fp, ok := latest[id]
+		return fingerprint.Fingerprint(fp), ok
+	})
+	if err != nil {
+		r.warn("failed to compute achieved fingerprints for materialization log", event.PipelineUUID, err)
+		return
+	}
+
 	for _, assetRun := range event.Assets {
 		if assetRun.Status != "succeeded" {
 			continue
@@ -67,10 +98,14 @@ func (r *Recorder) HandleRunCompleted(event bus.RunCompleted) {
 		if !ok {
 			continue
 		}
+		achievedFP, ok := achieved[assetRun.AssetID]
+		if !ok {
+			continue
+		}
 		materialization := Materialization{
 			AssetID:        assetRun.AssetID,
 			Environment:    event.Environment,
-			Fingerprint:    string(result.FP),
+			Fingerprint:    string(achievedFP),
 			OwnContent:     string(result.OwnContent),
 			VarsHash:       varsHash,
 			RunID:          event.RunID,

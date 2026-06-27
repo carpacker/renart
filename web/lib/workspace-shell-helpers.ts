@@ -10,6 +10,8 @@ export function buildSuggestedAssetName(
     sql: `${pipelinePrefix}.my_sql_asset_`,
     python: `${pipelinePrefix}.my_python_asset_`,
     ingestr: `${pipelinePrefix}.my_ingestr_asset_`,
+    sling: `${pipelinePrefix}.my_sling_asset_`,
+    api: `${pipelinePrefix}.my_api_asset_`,
   };
 
   const prefix = prefixByKind[kind];
@@ -59,6 +61,49 @@ parameters:
     };
   }
 
+  if (kind === "sling") {
+    const leaf = name.split(".").pop() ?? "asset";
+    return {
+      name,
+      type: "sling",
+      path,
+      content: `source: your_source_connection
+target: your_target_connection
+
+defaults:
+  mode: full-refresh
+  object: public.${leaf}
+
+streams:
+  your_source_stream:
+    object: public.${leaf}
+`,
+    };
+  }
+
+  if (kind === "api") {
+    return {
+      name,
+      type: "api",
+      path,
+      // Defaults to a free, no-auth sample API that returns a JSON array, so the
+      // asset materializes out of the box; swap in your own endpoint.
+      content: `type: api
+
+parameters:
+  request:
+    url: https://jsonplaceholder.typicode.com/users
+    method: GET
+    headers:
+      Accept: application/json
+
+  # The response is a JSON array, so records_path is the root ("").
+  response:
+    records_path: ""
+`,
+    };
+  }
+
   return {
     name,
     type: preferredSqlAssetType,
@@ -72,6 +117,8 @@ function buildAssetPathFromName(name: string, kind: NewAssetKind): string {
     sql: ".sql",
     python: ".py",
     ingestr: ".asset.yml",
+    sling: ".asset.yml",
+    api: ".asset.yml",
   };
   const leaf = parts.pop() ?? "asset";
   return ["assets", ...parts, `${leaf}${extensionByKind[kind]}`].join("/");
@@ -115,21 +162,6 @@ left join segment_map
     on customers.customer_id = segment_map.customer_id
 order by customers.customer_id
 `;
-}
-
-function slugifyAssetName(input: string): string {
-  const normalized = input.trim().toLowerCase();
-  if (!normalized) {
-    return "asset";
-  }
-
-  const slug = normalized
-    .replace(/[^a-z0-9\s_-]/g, "")
-    .replace(/[\s_]+/g, "_")
-    .replace(/-+/g, "_")
-    .replace(/^-|-$/g, "");
-
-  return slug || "asset";
 }
 
 function slugifyPipelinePrefix(input?: string | null): string {

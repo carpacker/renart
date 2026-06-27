@@ -17,7 +17,6 @@ import (
 	"github.com/bruin-data/bruin/pkg/config"
 	"github.com/bruin-data/bruin/pkg/connection"
 	"github.com/bruin-data/bruin/pkg/git"
-	"github.com/bruin-data/bruin/pkg/jinja"
 	"github.com/bruin-data/bruin/pkg/pipeline"
 	"github.com/bruin-data/bruin/pkg/telemetry"
 	"github.com/go-chi/chi/v5"
@@ -28,8 +27,8 @@ import (
 	"renart/internal/web/events"
 	"renart/internal/web/fingerprint"
 	"renart/internal/web/freshness"
-	"renart/internal/web/matlog"
 	webhttpapi "renart/internal/web/httpapi"
+	"renart/internal/web/matlog"
 	"renart/internal/web/policy"
 	webscheduler "renart/internal/web/scheduler"
 	"renart/internal/web/service"
@@ -56,10 +55,12 @@ type webServer struct {
 	executionSvc     *service.ExecutionService
 	assetSvc         *service.AssetService
 	sqlSvc           *service.SQLService
+	slingSvc         *service.SlingService
 	suggestionsSvc   *service.SuggestionsService
 	parseContextSvc  *service.ParseContextService
 	jinjaRenderSvc   *service.JinjaRenderService
 	runSvc           *service.RunService
+	notebookSvc      *service.NotebookService
 	onboardingSvc    *service.OnboardingService
 	sourceControlSvc *service.SourceControlService
 	schedulerSvc     *webscheduler.Service
@@ -261,10 +262,16 @@ func (s *webServer) registerRoutes(router chi.Router) {
 	webhttpapi.RegisterAssetColumnRoutes(router, &webhttpapi.AssetColumnsAPI{Service: s.assetSvc})
 	webhttpapi.RegisterPipelineExecutionRoutes(router, &webhttpapi.PipelineExecutionAPI{Service: s.executionSvc})
 	webhttpapi.RegisterSQLRoutes(router, &webhttpapi.SQLAPI{Service: s.sqlSvc})
+	webhttpapi.RegisterSlingRoutes(router, &webhttpapi.SlingAPI{Service: s.slingSvc})
 	webhttpapi.RegisterSuggestionRoutes(router, &webhttpapi.SuggestionsAPI{Service: s.suggestionsSvc})
 	webhttpapi.RegisterParseContextRoutes(router, &webhttpapi.ParseContextAPI{Service: s.parseContextSvc})
 	webhttpapi.RegisterJinjaRenderRoutes(router, &webhttpapi.JinjaRenderAPI{Service: s.jinjaRenderSvc})
 	webhttpapi.RegisterRunRoutes(router, &webhttpapi.RunAPI{Service: s.runSvc})
+	webhttpapi.RegisterNotebookRoutes(router, &webhttpapi.NotebookAPI{Service: s.notebookSvc})
+	webhttpapi.RegisterPythonPackageRoutes(router, &webhttpapi.PythonPackagesAPI{Search: service.SearchPyPIPackages})
+	// Warm the PyPI package index in the background so the first dependency
+	// search does not pay the download cost.
+	service.WarmPyPIIndex(context.Background())
 	webhttpapi.RegisterSchedulerRoutes(router, &webhttpapi.SchedulerAPI{Service: s})
 	webhttpapi.RegisterEnvScheduleRoutes(router, &webhttpapi.EnvSchedulesAPI{
 		Service:             s.schedulerSvc,
@@ -294,15 +301,7 @@ func (s *webServer) refreshWorkspace(ctx context.Context) error {
 }
 
 func (s *webServer) newPipelineBuilder() *pipeline.Builder {
-	osFS := afero.NewOsFs()
-	return pipeline.NewBuilder(
-		service.BuilderConfig,
-		pipeline.CreateTaskFromYamlDefinition(osFS),
-		pipeline.CreateTaskFromFileComments(osFS),
-		osFS,
-		service.DefaultGlossaryReader,
-		jinja.VariantRendererFactory,
-	)
+	return service.NewRenartPipelineBuilder(afero.NewOsFs())
 }
 
 func resolveConfigFilePath(workspaceRoot string) string {
@@ -739,6 +738,10 @@ func (s *webServer) pushWorkspaceUpdateImmediateWithChangedIDs(ctx context.Conte
 	s.workspaceCoord.PushUpdateImmediateWithChangedIDs(ctx, eventType, eventPath, changedAssetIDs)
 }
 
+func (s *webServer) pushAssetContentUpdateImmediate(eventType, eventPath string, changedAssetIDs []string, content string) {
+	s.workspaceCoord.PushAssetContentUpdateImmediate(eventType, eventPath, changedAssetIDs, content)
+}
+
 // findDirectlyChangedAssetIDs returns only the asset IDs whose source file
 // matches the given event path. No downstream expansion — used for file-edit
 // events where only the edited asset's inspect result would change (its SQL
@@ -812,6 +815,6 @@ func defaultDerivedSQLAssetContent(assetName, assetType, assetPath, sourceAssetN
 	return service.DefaultDerivedSQLAssetContent(assetName, assetType, assetPath, sourceAssetName, connectionName)
 }
 
-func ensurePythonRequirementsFile(absAssetPath, assetType, relAssetPath string) error {
-	return service.EnsurePythonRequirementsFile(absAssetPath, assetType, relAssetPath)
+func ensurePythonProjectFile(absAssetPath, assetType, relAssetPath string) error {
+	return service.EnsurePythonProjectFile(absAssetPath, assetType, relAssetPath)
 }

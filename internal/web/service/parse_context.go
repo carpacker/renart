@@ -82,16 +82,17 @@ type ParseContextColumn struct {
 }
 
 type ParseContextResult struct {
-	Status         string                   `json:"status"`
-	AssetID        string                   `json:"asset_id"`
-	Dialect        string                   `json:"dialect,omitempty"`
-	QueryKind      string                   `json:"query_kind,omitempty"`
-	IsSingleSelect bool                     `json:"is_single_select"`
-	Tables         []ParseContextTable      `json:"tables"`
-	Columns        []ParseContextColumn     `json:"columns"`
-	Diagnostics    []ParseContextDiagnostic `json:"diagnostics,omitempty"`
-	Errors         []string                 `json:"errors,omitempty"`
-	Error          string                   `json:"error,omitempty"`
+	Status           string                   `json:"status"`
+	AssetID          string                   `json:"asset_id"`
+	Dialect          string                   `json:"dialect,omitempty"`
+	QueryKind        string                   `json:"query_kind,omitempty"`
+	IsSingleSelect   bool                     `json:"is_single_select"`
+	IsReadOnlyResult bool                     `json:"is_read_only_result"`
+	Tables           []ParseContextTable      `json:"tables"`
+	Columns          []ParseContextColumn     `json:"columns"`
+	Diagnostics      []ParseContextDiagnostic `json:"diagnostics,omitempty"`
+	Errors           []string                 `json:"errors,omitempty"`
+	Error            string                   `json:"error,omitempty"`
 }
 
 type ParseContextDependencies struct {
@@ -143,15 +144,16 @@ func (s *ParseContextService) Parse(ctx context.Context, assetID, content string
 	}
 
 	return ParseContextResult{
-		Status:         "ok",
-		AssetID:        assetID,
-		Dialect:        dialect,
-		QueryKind:      parseContext.QueryKind,
-		IsSingleSelect: parseContext.IsSingleSelect,
-		Tables:         ParseContextTablesFromParser(parseContext.Tables),
-		Columns:        ParseContextColumnsFromParser(parseContext.Columns),
-		Diagnostics:    ParseContextDiagnosticsFromParser(parseContext.Diagnostics),
-		Errors:         parseContext.Errors,
+		Status:           "ok",
+		AssetID:          assetID,
+		Dialect:          dialect,
+		QueryKind:        parseContext.QueryKind,
+		IsSingleSelect:   parseContext.IsSingleSelect,
+		IsReadOnlyResult: parseContext.IsReadOnlyResult,
+		Tables:           ParseContextTablesFromParser(parseContext.Tables),
+		Columns:          ParseContextColumnsFromParser(parseContext.Columns),
+		Diagnostics:      ParseContextDiagnosticsFromParser(parseContext.Diagnostics),
+		Errors:           parseContext.Errors,
 	}, nil
 }
 
@@ -276,9 +278,11 @@ func BuildParseContextSchema(asset *pipeline.Asset, suggestionTables []ParseCont
 			columns[column.Name] = strings.TrimSpace(column.Type)
 		}
 
-		if len(columns) > 0 {
-			schema[table.Name] = columns
-		}
+		// Register the table even with no columns: the frontend only sends
+		// tables it knows exist (pipeline assets a notebook cell can read,
+		// including non-SQL ones with no declared columns), so references to
+		// them must resolve. Column checks against it stay lenient.
+		schema[table.Name] = columns
 	}
 
 	if asset != nil && strings.TrimSpace(asset.Name) != "" && len(asset.Columns) > 0 {
@@ -337,13 +341,50 @@ func ApplyAssetSQLDefinitionColumns(parsedPipeline *pipeline.Pipeline, currentAs
 		if currentAsset != nil && strings.EqualFold(strings.TrimSpace(asset.Name), strings.TrimSpace(currentAsset.Name)) {
 			continue
 		}
-		if _, err := AssetTypeToDialect(asset.Type); err != nil {
+		if isAPIAsset(asset) {
+			declaredColumns := apiResponseFieldColumns(asset)
+			if len(declaredColumns) == 0 {
+				continue
+			}
+			schemaColumns := schema[asset.Name]
+			if schemaColumns == nil {
+				schemaColumns = map[string]string{}
+			}
+			sourceColumns := sources[asset.Name]
+			if sourceColumns == nil {
+				sourceColumns = map[string][]string{}
+			}
+			for _, column := range declaredColumns {
+				columnName := strings.TrimSpace(column.Name)
+				if columnName == "" {
+					continue
+				}
+				if _, exists := schemaColumns[columnName]; !exists {
+					schemaColumns[columnName] = strings.TrimSpace(column.Type)
+				}
+				sourceColumns[columnName] = mergeStringSlices(sourceColumns[columnName], []string{"workspace-load"})
+			}
+			schema[asset.Name] = schemaColumns
+			sources[asset.Name] = sourceColumns
 			continue
 		}
 
+		// SQL definition columns can only be read from SQL assets; non-SQL
+		// assets (Python, ingestr, ...) that materialize a table are still
+		// valid references and must be registered below.
 		declaredColumns := asset.Columns
-		definitionColumns := ExtractSQLDefinitionColumns(asset.ExecutableFile.Content)
+		var definitionColumns []string
+		if _, err := AssetTypeToDialect(asset.Type); err == nil {
+			definitionColumns = ExtractSQLDefinitionColumns(asset.ExecutableFile.Content)
+		}
 		if len(declaredColumns) == 0 && len(definitionColumns) == 0 {
+			// The asset is still a real table even when its columns cannot be
+			// inferred (a `select *` SQL cell, or a Python asset). Register it
+			// with no columns so references to it are not flagged "unresolved";
+			// column checks against it simply stay lenient.
+			if _, exists := schema[asset.Name]; !exists {
+				schema[asset.Name] = map[string]string{}
+			}
 			continue
 		}
 

@@ -1,0 +1,986 @@
+package service
+
+import (
+	"context"
+	"fmt"
+	"net/http"
+	"os"
+	"path/filepath"
+	"regexp"
+	"strings"
+	"sync"
+	"time"
+
+	"github.com/bruin-data/bruin/pkg/jinja"
+	"github.com/bruin-data/bruin/pkg/pipeline"
+	"github.com/bruin-data/bruin/pkg/sqlparser"
+	"github.com/spf13/afero"
+	"renart/internal/web/model"
+	"renart/internal/web/notebook"
+)
+
+// NotebookDependencies wires the notebook service into the rest of the app.
+type NotebookDependencies struct {
+	WorkspaceRoot string
+	ConfigPath    string
+	// CurrentState returns the latest workspace state (for pipeline asset
+	// lookups when importing upstream data).
+	CurrentState func() model.WorkspaceState
+	// RunConnectionQuery executes a query on a named connection; used as
+	// the generic import fetch backend.
+	RunConnectionQuery func(ctx context.Context, connection, environment, query string) ([]string, []map[string]any, error)
+	// PushWorkspaceUpdate triggers a workspace refresh + SSE push after
+	// mutations (optional).
+	PushWorkspaceUpdate func(ctx context.Context, eventType, eventPath string)
+	// ValidateSQL runs the shared parse-context validator for a cell against
+	// the given sibling schema, used by server-side auto-recompute to decide
+	// which cells are safe to run. Optional (auto-recompute is disabled if nil).
+	ValidateSQL func(ctx context.Context, assetID, content string, schemaTables []ParseContextSchemaTable) (ParseContextResult, *APIError)
+	// PublishEvent pushes a payload on the workspace SSE stream (notebook
+	// runtime events). Optional.
+	PublishEvent func(payload any)
+}
+
+// NotebookService implements notebook CRUD and cell execution on top of the
+// notebook package.
+type NotebookService struct {
+	deps  NotebookDependencies
+	store *notebook.SessionStore
+
+	// SQL parser (embedded Python/sqlglot) is expensive to start (~hundreds of
+	// ms), so it is created lazily and reused across every load and run instead
+	// of being spun up per operation.
+	parserMu     sync.Mutex
+	cachedParser *sqlparser.SQLParser
+
+	// runtimes holds per-notebook recompute state (staleness, last results,
+	// the auto-recompute toggle) for server-driven auto-recompute.
+	runtimes *notebookRuntimes
+}
+
+// ensureParserLocked returns the shared parser, creating it on first use. The
+// caller must hold parserMu.
+func (s *NotebookService) ensureParserLocked() (*sqlparser.SQLParser, error) {
+	if s.cachedParser == nil {
+		parser, err := sqlparser.NewSQLParser(false)
+		if err != nil {
+			return nil, err
+		}
+		s.cachedParser = parser
+	}
+	return s.cachedParser, nil
+}
+
+// renameTables rewrites cell table references using the shared parser.
+// Serialized because the embedded-Python parser is not concurrency safe;
+// notebook work is interactive and low-concurrency.
+func (s *NotebookService) renameTables(sqlText, dialect string, mapping map[string]string) (string, error) {
+	s.parserMu.Lock()
+	defer s.parserMu.Unlock()
+	parser, err := s.ensureParserLocked()
+	if err != nil {
+		return "", err
+	}
+	return parser.RenameTables(sqlText, dialect, mapping)
+}
+
+// newNotebookJinjaRenderer builds a Jinja renderer for a run's execution
+// window. A notebook is not a pipeline, so it renders with date windows only
+// (no pipeline variables or macros) — the same constructs the editor preview
+// resolves for date-driven cells. start/end are RFC3339; empty uses the
+// default daily window.
+func (s *NotebookService) newNotebookJinjaRenderer(start, end string) (func(string) (string, error), error) {
+	now := time.Now().UTC()
+	window, err := ResolveExecutionTimeWindow("", start, end, now)
+	if err != nil {
+		return nil, err
+	}
+	renderer := jinja.NewRendererWithStartEndDatesAndMacros(
+		&window.Start, &window.End, &now, "renart-notebook", "renart-notebook-run", nil, "",
+	)
+	return renderer.Render, nil
+}
+
+// usedTables extracts referenced tables for dependency derivation using the
+// shared parser.
+func (s *NotebookService) usedTables(sqlText, assetType string) ([]string, error) {
+	dialect, dialectErr := sqlparser.AssetTypeToDialect(pipeline.AssetType(assetType))
+	if dialectErr != nil || dialect == "" {
+		dialect = "duckdb"
+	}
+	s.parserMu.Lock()
+	defer s.parserMu.Unlock()
+	parser, err := s.ensureParserLocked()
+	if err != nil {
+		return nil, err
+	}
+	return parser.UsedTables(sqlText, dialect)
+}
+
+// NewNotebookService constructs the service; session DBs live under
+// .renart/notebooks in the workspace.
+func NewNotebookService(deps NotebookDependencies) *NotebookService {
+	return &NotebookService{
+		deps:     deps,
+		store:    notebook.NewSessionStore(filepath.Join(deps.WorkspaceRoot, ".renart", "notebooks")),
+		runtimes: newNotebookRuntimes(),
+	}
+}
+
+// SessionStore exposes the store for startup sweeps.
+func (s *NotebookService) SessionStore() *notebook.SessionStore {
+	return s.store
+}
+
+// SweepSessions removes session DB files for notebooks that no longer
+// exist; called once at startup.
+func (s *NotebookService) SweepSessions() ([]string, error) {
+	fs := afero.NewOsFs()
+	dirs, err := notebook.Discover(fs, s.deps.WorkspaceRoot)
+	if err != nil {
+		return nil, err
+	}
+	active := make(map[string]bool, len(dirs))
+	for _, dir := range dirs {
+		if uuid, _, idErr := notebook.EnsureNotebookID(fs, filepath.Join(dir, notebook.ManifestFileName)); idErr == nil {
+			active[uuid] = true
+		}
+	}
+	return s.store.Sweep(active)
+}
+
+func (s *NotebookService) newLoader() (*notebook.Loader, func()) {
+	fs := afero.NewOsFs()
+	// Reuse the shared parser instead of spinning up a fresh embedded-Python
+	// instance per load; cleanup is a no-op (the parser outlives the loader).
+	return notebook.NewLoader(fs, pipeline.CreateTaskFromFileComments(fs), s.usedTables), func() {}
+}
+
+// resolveDir maps an encoded notebook ID to its absolute folder, verifying
+// it stays inside the workspace and is a notebook.
+func (s *NotebookService) resolveDir(notebookID string) (string, *APIError) {
+	relDir, err := DecodeID(notebookID)
+	if err != nil {
+		return "", &APIError{Status: http.StatusBadRequest, Code: "invalid_notebook_id", Message: "invalid notebook id"}
+	}
+	absDir := filepath.Join(s.deps.WorkspaceRoot, filepath.FromSlash(relDir))
+	cleanRoot := filepath.Clean(s.deps.WorkspaceRoot)
+	if absDir != cleanRoot && !strings.HasPrefix(absDir, cleanRoot+string(filepath.Separator)) {
+		return "", &APIError{Status: http.StatusBadRequest, Code: "invalid_notebook_id", Message: "notebook path escapes the workspace"}
+	}
+	if _, statErr := os.Stat(filepath.Join(absDir, notebook.ManifestFileName)); statErr != nil {
+		return "", &APIError{Status: http.StatusNotFound, Code: "notebook_not_found", Message: "notebook not found"}
+	}
+	return absDir, nil
+}
+
+func (s *NotebookService) load(notebookID string) (*notebook.Notebook, *APIError) {
+	absDir, apiErr := s.resolveDir(notebookID)
+	if apiErr != nil {
+		return nil, apiErr
+	}
+	loader, cleanup := s.newLoader()
+	defer cleanup()
+	nb, err := loader.Load(absDir)
+	if err != nil {
+		return nil, &APIError{Status: http.StatusBadRequest, Code: "notebook_load_failed", Message: err.Error()}
+	}
+	return nb, nil
+}
+
+// Get returns the notebook in API shape, loaded fresh from disk.
+func (s *NotebookService) Get(notebookID string) (model.Notebook, *APIError) {
+	nb, apiErr := s.load(notebookID)
+	if apiErr != nil {
+		return model.Notebook{}, apiErr
+	}
+	return s.toModel(nb), nil
+}
+
+func (s *NotebookService) toModel(nb *notebook.Notebook) model.Notebook {
+	workspace := &WorkspaceService{workspaceRoot: s.deps.WorkspaceRoot}
+	return workspace.notebookToModel(nb)
+}
+
+var notebookSlugSanitizer = regexp.MustCompile(`[^a-z0-9_-]+`)
+
+// CreateNotebookRequest creates a new notebook folder.
+type CreateNotebookRequest struct {
+	Title string `json:"title"`
+	Path  string `json:"path,omitempty"`
+}
+
+// Create makes a new notebook folder with a manifest (no cells yet).
+func (s *NotebookService) Create(req CreateNotebookRequest) (model.Notebook, *APIError) {
+	title := strings.TrimSpace(req.Title)
+	if title == "" {
+		title = "untitled"
+	}
+
+	relDir := strings.TrimSpace(req.Path)
+	if relDir == "" {
+		slug := notebookSlugSanitizer.ReplaceAllString(strings.ToLower(title), "-")
+		slug = strings.Trim(slug, "-")
+		if slug == "" {
+			slug = "untitled"
+		}
+		relDir = filepath.ToSlash(filepath.Join("notebooks", slug))
+	}
+
+	absDir := filepath.Join(s.deps.WorkspaceRoot, filepath.FromSlash(relDir))
+	if _, err := os.Stat(filepath.Join(absDir, notebook.ManifestFileName)); err == nil {
+		return model.Notebook{}, &APIError{Status: http.StatusConflict, Code: "notebook_exists", Message: fmt.Sprintf("a notebook already exists at %s", relDir)}
+	}
+	if err := os.MkdirAll(absDir, 0o755); err != nil {
+		return model.Notebook{}, &APIError{Status: http.StatusInternalServerError, Code: "notebook_create_failed", Message: err.Error()}
+	}
+
+	// Seed a small example cell so a new notebook is immediately runnable.
+	exampleID := notebook.NewCellID()
+	exampleContent := fmt.Sprintf(
+		"/* @bruin\nid: %s\ntype: %s\nclass: %s\n@bruin */\n\nselect 'hello' as greeting, 42 as answer\n",
+		exampleID, notebook.DefaultCellType, notebook.ClassNotebook)
+	if err := os.WriteFile(filepath.Join(absDir, "example.sql"), []byte(exampleContent), 0o644); err != nil {
+		return model.Notebook{}, &APIError{Status: http.StatusInternalServerError, Code: "notebook_create_failed", Message: err.Error()}
+	}
+	manifest := fmt.Sprintf("title: %s\nblocks:\n  - cell: %s\n", title, exampleID)
+	if err := os.WriteFile(filepath.Join(absDir, notebook.ManifestFileName), []byte(manifest), 0o644); err != nil {
+		return model.Notebook{}, &APIError{Status: http.StatusInternalServerError, Code: "notebook_create_failed", Message: err.Error()}
+	}
+
+	encodedID := EncodeID(filepath.ToSlash(relDir))
+	result, apiErr := s.Get(encodedID)
+	if apiErr != nil {
+		return model.Notebook{}, apiErr
+	}
+	s.pushUpdate(absDir)
+	return result, nil
+}
+
+// Delete removes the notebook folder and its session database. Cleanup is
+// "delete the file" — nothing else to reconcile for the DuckDB target.
+func (s *NotebookService) Delete(notebookID string) *APIError {
+	nb, apiErr := s.load(notebookID)
+	if apiErr != nil {
+		return apiErr
+	}
+	if err := os.RemoveAll(nb.Dir); err != nil {
+		return &APIError{Status: http.StatusInternalServerError, Code: "notebook_delete_failed", Message: err.Error()}
+	}
+	if err := s.store.Remove(nb.UUID); err != nil {
+		return &APIError{Status: http.StatusInternalServerError, Code: "notebook_session_delete_failed", Message: err.Error()}
+	}
+	s.pushUpdate(nb.Dir)
+	return nil
+}
+
+// CloseSession deletes the notebook's session database file (the default
+// close-notebook cleanup); the notebook itself is untouched.
+func (s *NotebookService) CloseSession(notebookID string) *APIError {
+	nb, apiErr := s.load(notebookID)
+	if apiErr != nil {
+		return apiErr
+	}
+	if err := s.store.Remove(nb.UUID); err != nil {
+		return &APIError{Status: http.StatusInternalServerError, Code: "notebook_session_delete_failed", Message: err.Error()}
+	}
+	return nil
+}
+
+var cellNamePattern = regexp.MustCompile(`^\w+$`)
+
+// CreateCellRequest adds a cell to a notebook.
+type CreateCellRequest struct {
+	Name string `json:"name,omitempty"`
+	// Language selects the cell kind: "sql" (default) or "python".
+	Language string `json:"language,omitempty"`
+}
+
+// CreateCell writes a new cell file and appends it to the blocks.
+func (s *NotebookService) CreateCell(notebookID string, req CreateCellRequest) (model.Notebook, *APIError) {
+	nb, apiErr := s.load(notebookID)
+	if apiErr != nil {
+		return model.Notebook{}, apiErr
+	}
+
+	name := strings.TrimSpace(req.Name)
+	if name == "" {
+		name = nextCellAutoname(nb)
+	}
+	if !cellNamePattern.MatchString(name) {
+		return model.Notebook{}, &APIError{Status: http.StatusBadRequest, Code: "invalid_cell_name", Message: "cell names may only contain letters, digits, and underscores"}
+	}
+	if nb.CellByName(name) != nil {
+		return model.Notebook{}, &APIError{Status: http.StatusConflict, Code: "cell_exists", Message: fmt.Sprintf("a cell named %q already exists", name)}
+	}
+	if conflict := s.pipelineAssetByName(name); conflict != nil {
+		return model.Notebook{}, &APIError{Status: http.StatusConflict, Code: "cell_name_collides", Message: fmt.Sprintf("%q is already a pipeline asset name", name)}
+	}
+
+	cellID := notebook.NewCellID()
+	for nb.CellByID(cellID) != nil {
+		cellID = notebook.NewCellID()
+	}
+	python := strings.EqualFold(strings.TrimSpace(req.Language), "python")
+	ext, template := ".sql", notebook.CellFileTemplate(cellID)
+	if python {
+		ext, template = ".py", notebook.PythonCellFileTemplate(cellID)
+	}
+	path := filepath.Join(nb.Dir, name+ext)
+	if err := os.WriteFile(path, []byte(template), 0o644); err != nil {
+		return model.Notebook{}, &APIError{Status: http.StatusInternalServerError, Code: "cell_create_failed", Message: err.Error()}
+	}
+
+	nb.Blocks = append(nb.Blocks, notebook.Block{Cell: cellID})
+	if err := notebook.SaveManifest(afero.NewOsFs(), nb); err != nil {
+		return model.Notebook{}, &APIError{Status: http.StatusInternalServerError, Code: "cell_create_failed", Message: err.Error()}
+	}
+
+	s.pushUpdate(path)
+	return s.Get(notebookID)
+}
+
+// RenameCell renames a cell's display name: it rewrites references in
+// sibling cells (span splice, formatting preserved), moves the cell file,
+// and drops the old session object. Zero fingerprints change (invariant 1),
+// so nothing goes stale and the warehouse is untouched.
+func (s *NotebookService) RenameCell(notebookID, cellID, newName string) (model.Notebook, *APIError) {
+	nb, apiErr := s.load(notebookID)
+	if apiErr != nil {
+		return model.Notebook{}, apiErr
+	}
+	cell := nb.CellByID(cellID)
+	if cell == nil {
+		return model.Notebook{}, &APIError{Status: http.StatusNotFound, Code: "cell_not_found", Message: "cell not found"}
+	}
+
+	newName = strings.TrimSpace(newName)
+	pipelineNames := s.pipelineAssetNameSet()
+	if message := notebook.ValidateCellName(nb, newName, cellID, pipelineNames); message != "" {
+		return model.Notebook{}, &APIError{Status: http.StatusConflict, Code: "invalid_cell_name", Message: message}
+	}
+
+	edits, err := notebook.PlanRename(nb, cellID, newName)
+	if err != nil {
+		return model.Notebook{}, &APIError{Status: http.StatusBadRequest, Code: "rename_failed", Message: err.Error()}
+	}
+
+	// Apply content rewrites first, then the file move, so a failure midway
+	// never leaves a dangling rename with stale references.
+	for _, edit := range edits {
+		if edit.NewContent != "" {
+			if writeErr := os.WriteFile(edit.Path, []byte(edit.NewContent), 0o644); writeErr != nil {
+				return model.Notebook{}, &APIError{Status: http.StatusInternalServerError, Code: "rename_failed", Message: writeErr.Error()}
+			}
+		}
+	}
+	for _, edit := range edits {
+		if edit.NewPath != "" {
+			if renameErr := os.Rename(edit.Path, edit.NewPath); renameErr != nil {
+				return model.Notebook{}, &APIError{Status: http.StatusInternalServerError, Code: "rename_failed", Message: renameErr.Error()}
+			}
+		}
+	}
+
+	// The renamed cell's session view is named by ID, so it survives; but a
+	// stale object under the *old* name never existed (objects are
+	// cell_<id>). Nothing to drop.
+
+	s.pushUpdate(cell.Path)
+	return s.Get(notebookID)
+}
+
+// UpdateCell replaces a cell file's content. The frontmatter id is forced
+// back to the cell's durable id — identity is not editable.
+func (s *NotebookService) UpdateCell(notebookID, cellID, content string) (model.Notebook, *APIError) {
+	nb, apiErr := s.load(notebookID)
+	if apiErr != nil {
+		return model.Notebook{}, apiErr
+	}
+	cell := nb.CellByID(cellID)
+	if cell == nil {
+		return model.Notebook{}, &APIError{Status: http.StatusNotFound, Code: "cell_not_found", Message: "cell not found"}
+	}
+
+	normalized := notebook.NormalizeCellID(content, cellID, notebook.IsPythonCell(cell))
+	if err := os.WriteFile(cell.Path, []byte(normalized), 0o644); err != nil {
+		return model.Notebook{}, &APIError{Status: http.StatusInternalServerError, Code: "cell_update_failed", Message: err.Error()}
+	}
+
+	s.pushUpdate(cell.Path)
+	// Reload against the new content so the dependency graph (and thus the
+	// descendant closure marked stale) reflects this edit, then trigger
+	// server-side recompute.
+	if fresh, freshErr := s.load(notebookID); freshErr == nil {
+		s.onCellChanged(notebookID, fresh, cellID)
+	}
+	return s.Get(notebookID)
+}
+
+// DeleteCell removes the cell file, its block entry, and its materialized
+// session objects.
+func (s *NotebookService) DeleteCell(notebookID, cellID string) (model.Notebook, *APIError) {
+	nb, apiErr := s.load(notebookID)
+	if apiErr != nil {
+		return model.Notebook{}, apiErr
+	}
+	cell := nb.CellByID(cellID)
+	if cell == nil {
+		return model.Notebook{}, &APIError{Status: http.StatusNotFound, Code: "cell_not_found", Message: "cell not found"}
+	}
+
+	if err := os.Remove(cell.Path); err != nil && !os.IsNotExist(err) {
+		return model.Notebook{}, &APIError{Status: http.StatusInternalServerError, Code: "cell_delete_failed", Message: err.Error()}
+	}
+
+	blocks := make([]notebook.Block, 0, len(nb.Blocks))
+	for _, block := range nb.Blocks {
+		if block.Cell == cellID {
+			continue
+		}
+		blocks = append(blocks, block)
+	}
+	nb.Blocks = blocks
+	remaining := make([]*notebook.Cell, 0, len(nb.Cells))
+	for _, candidate := range nb.Cells {
+		if candidate.ID != cellID {
+			remaining = append(remaining, candidate)
+		}
+	}
+	nb.Cells = remaining
+	if err := notebook.SaveManifest(afero.NewOsFs(), nb); err != nil {
+		return model.Notebook{}, &APIError{Status: http.StatusInternalServerError, Code: "cell_delete_failed", Message: err.Error()}
+	}
+
+	_ = s.store.DropCellObjects(nb.UUID, cellID)
+
+	s.pushUpdate(cell.Path)
+	s.forgetCell(notebookID, nb.UUID, cellID)
+	return s.Get(notebookID)
+}
+
+// UpdateBlocks replaces the notebook's ordered blocks (markdown edits and
+// reordering). Cell blocks must reference existing cells; every cell must
+// remain referenced exactly once.
+func (s *NotebookService) UpdateBlocks(notebookID string, blocks []model.NotebookBlock) (model.Notebook, *APIError) {
+	nb, apiErr := s.load(notebookID)
+	if apiErr != nil {
+		return model.Notebook{}, apiErr
+	}
+
+	seen := map[string]bool{}
+	next := make([]notebook.Block, 0, len(blocks))
+	for _, block := range blocks {
+		if block.Cell != "" {
+			if nb.CellByID(block.Cell) == nil {
+				return model.Notebook{}, &APIError{Status: http.StatusBadRequest, Code: "unknown_cell", Message: fmt.Sprintf("block references unknown cell %q", block.Cell)}
+			}
+			if seen[block.Cell] {
+				return model.Notebook{}, &APIError{Status: http.StatusBadRequest, Code: "duplicate_cell_block", Message: fmt.Sprintf("cell %q appears more than once", block.Cell)}
+			}
+			seen[block.Cell] = true
+		}
+		next = append(next, notebook.Block{Cell: block.Cell, Markdown: block.Markdown})
+	}
+	for _, cell := range nb.Cells {
+		if !seen[cell.ID] {
+			next = append(next, notebook.Block{Cell: cell.ID})
+		}
+	}
+
+	nb.Blocks = next
+	if err := notebook.SaveManifest(afero.NewOsFs(), nb); err != nil {
+		return model.Notebook{}, &APIError{Status: http.StatusInternalServerError, Code: "blocks_update_failed", Message: err.Error()}
+	}
+
+	s.pushUpdate(filepath.Join(nb.Dir, notebook.ManifestFileName))
+	return s.Get(notebookID)
+}
+
+// PromoteCellRequest promotes a notebook cell to a pipeline asset.
+type PromoteCellRequest struct {
+	// PipelineID is the encoded id of the destination pipeline.
+	PipelineID string `json:"pipeline_id"`
+	// TargetName is the real asset name (schema.table) in the pipeline.
+	TargetName string `json:"target_name"`
+	// IncludeUpstream also promotes the cell's transitive upstream cells.
+	IncludeUpstream bool `json:"include_upstream,omitempty"`
+	// IncludeDownstream also promotes the cell's transitive downstream cells.
+	IncludeDownstream bool `json:"include_downstream,omitempty"`
+}
+
+// PromoteCellResult reports the outcome of a promotion.
+type PromoteCellResult struct {
+	Status         string         `json:"status"`
+	AssetPath      string         `json:"asset_path"`
+	AssetPaths     []string       `json:"asset_paths,omitempty"`
+	PromotedCount  int            `json:"promoted_count"`
+	DialectWarning string         `json:"dialect_warning,omitempty"`
+	Notebook       model.Notebook `json:"notebook"`
+}
+
+// PromoteCell moves a cell into a pipeline as a real asset: it writes the
+// pipeline asset file, rewrites references in the remaining cells to point at
+// the new asset, removes the cell file and its manifest block, and reports a
+// dialect-mismatch warning when the target connection is not DuckDB. The
+// promoted asset is never_built in pipeline envs (its fingerprint changed),
+// which is the correct prompt to build and deploy it.
+func (s *NotebookService) PromoteCell(notebookID, cellID string, req PromoteCellRequest) (PromoteCellResult, *APIError) {
+	nb, apiErr := s.load(notebookID)
+	if apiErr != nil {
+		return PromoteCellResult{}, apiErr
+	}
+	cell := nb.CellByID(cellID)
+	if cell == nil {
+		return PromoteCellResult{}, &APIError{Status: http.StatusNotFound, Code: "cell_not_found", Message: "cell not found"}
+	}
+
+	target, assetType, dialect, pErr := s.resolvePromotionTarget(req.PipelineID)
+	if pErr != nil {
+		return PromoteCellResult{}, pErr
+	}
+	pipelineDir := filepath.Join(s.deps.WorkspaceRoot, filepath.FromSlash(target.Path))
+
+	// Build the cell set: the primary cell, plus its upstream and/or
+	// downstream closure when requested. Each gets a target name derived from
+	// the primary's schema so the promoted assets share a namespace.
+	targets, pErr := s.promotionTargets(nb, cell, req)
+	if pErr != nil {
+		return PromoteCellResult{}, pErr
+	}
+	if collision := promotionNameCollision(target, targets); collision != nil {
+		return PromoteCellResult{}, collision
+	}
+
+	plan, err := notebook.PlanPromoteCells(nb, targets, filepath.Join(pipelineDir, "assets"), assetType, dialect)
+	if err != nil {
+		return PromoteCellResult{}, &APIError{Status: http.StatusBadRequest, Code: "promote_failed", Message: err.Error()}
+	}
+
+	// Refuse before writing anything if any destination file already exists,
+	// so a partial promotion never leaves orphaned asset files behind.
+	for _, asset := range plan.Assets {
+		if err := os.MkdirAll(filepath.Dir(asset.Path), 0o755); err != nil {
+			return PromoteCellResult{}, &APIError{Status: http.StatusInternalServerError, Code: "promote_failed", Message: err.Error()}
+		}
+		if _, statErr := os.Stat(asset.Path); statErr == nil {
+			return PromoteCellResult{}, &APIError{Status: http.StatusConflict, Code: "asset_exists", Message: fmt.Sprintf("an asset file already exists at %s", asset.Path)}
+		}
+	}
+	for _, asset := range plan.Assets {
+		if err := os.WriteFile(asset.Path, []byte(asset.Content), 0o644); err != nil {
+			return PromoteCellResult{}, &APIError{Status: http.StatusInternalServerError, Code: "promote_failed", Message: err.Error()}
+		}
+	}
+	for _, edit := range plan.ReferenceEdits {
+		if writeErr := os.WriteFile(edit.Path, []byte(edit.NewContent), 0o644); writeErr != nil {
+			return PromoteCellResult{}, &APIError{Status: http.StatusInternalServerError, Code: "promote_failed", Message: writeErr.Error()}
+		}
+	}
+	for _, removePath := range plan.RemoveCellPaths {
+		if err := os.Remove(removePath); err != nil && !os.IsNotExist(err) {
+			return PromoteCellResult{}, &APIError{Status: http.StatusInternalServerError, Code: "promote_failed", Message: err.Error()}
+		}
+	}
+
+	// Drop the promoted cells from the manifest and their session objects.
+	promoted := map[string]bool{}
+	for _, blockID := range plan.RemoveBlockIDs {
+		promoted[blockID] = true
+	}
+	blocks := make([]notebook.Block, 0, len(nb.Blocks))
+	for _, block := range nb.Blocks {
+		if block.Cell != "" && promoted[block.Cell] {
+			continue
+		}
+		blocks = append(blocks, block)
+	}
+	nb.Blocks = blocks
+	remaining := make([]*notebook.Cell, 0, len(nb.Cells))
+	for _, candidate := range nb.Cells {
+		if !promoted[candidate.ID] {
+			remaining = append(remaining, candidate)
+		}
+	}
+	nb.Cells = remaining
+	if err := notebook.SaveManifest(afero.NewOsFs(), nb); err != nil {
+		return PromoteCellResult{}, &APIError{Status: http.StatusInternalServerError, Code: "promote_failed", Message: err.Error()}
+	}
+	for blockID := range promoted {
+		_ = s.store.DropCellObjects(nb.UUID, blockID)
+	}
+
+	assetPaths := make([]string, 0, len(plan.Assets))
+	for _, asset := range plan.Assets {
+		relAssetPath, relErr := filepath.Rel(s.deps.WorkspaceRoot, asset.Path)
+		if relErr != nil {
+			relAssetPath = asset.Path
+		}
+		assetPaths = append(assetPaths, filepath.ToSlash(relAssetPath))
+	}
+	if len(plan.Assets) > 0 {
+		s.pushUpdate(plan.Assets[0].Path)
+	}
+	updated, apiErr := s.Get(notebookID)
+	if apiErr != nil {
+		return PromoteCellResult{}, apiErr
+	}
+
+	primaryPath := ""
+	if len(assetPaths) > 0 {
+		primaryPath = assetPaths[0]
+	}
+	return PromoteCellResult{
+		Status:         "ok",
+		AssetPath:      primaryPath,
+		AssetPaths:     assetPaths,
+		PromotedCount:  len(plan.Assets),
+		DialectWarning: plan.DialectWarning,
+		Notebook:       updated,
+	}, nil
+}
+
+// promotionTargets builds the ordered promote set for the request: the primary
+// cell plus its upstream and/or downstream closure. Co-promoted cells take a
+// name in the primary target's schema (e.g. primary "marts.revenue" → upstream
+// "base" becomes "marts.base").
+func (s *NotebookService) promotionTargets(nb *notebook.Notebook, primary *notebook.Cell, req PromoteCellRequest) ([]notebook.PromoteTarget, *APIError) {
+	primaryName := strings.TrimSpace(req.TargetName)
+	if primaryName == "" {
+		return nil, &APIError{Status: http.StatusBadRequest, Code: "promote_failed", Message: "a target asset name is required"}
+	}
+
+	schemaPrefix := ""
+	if idx := strings.LastIndex(primaryName, "."); idx >= 0 {
+		schemaPrefix = primaryName[:idx+1]
+	}
+
+	cells := []*notebook.Cell{primary}
+	if req.IncludeUpstream {
+		cells = append(cells, notebook.Ancestors(nb, primary)...)
+	}
+	if req.IncludeDownstream {
+		cells = append(cells, notebook.Descendants(nb, primary)...)
+	}
+
+	seen := map[string]bool{}
+	targets := make([]notebook.PromoteTarget, 0, len(cells))
+	for _, cell := range cells {
+		if seen[cell.ID] {
+			continue
+		}
+		seen[cell.ID] = true
+		name := schemaPrefix + cell.Asset.Name
+		if cell.ID == primary.ID {
+			name = primaryName
+		}
+		targets = append(targets, notebook.PromoteTarget{CellID: cell.ID, TargetName: name})
+	}
+	return targets, nil
+}
+
+// promotionNameCollision rejects target names that clash with each other or
+// with an existing asset in the destination pipeline.
+func promotionNameCollision(target *model.Pipeline, targets []notebook.PromoteTarget) *APIError {
+	seen := map[string]bool{}
+	for _, t := range targets {
+		key := strings.ToLower(t.TargetName)
+		if seen[key] {
+			return &APIError{Status: http.StatusConflict, Code: "asset_exists", Message: fmt.Sprintf("two promoted cells would both be named %q", t.TargetName)}
+		}
+		seen[key] = true
+		for _, asset := range target.Assets {
+			if strings.EqualFold(asset.Name, t.TargetName) {
+				return &APIError{Status: http.StatusConflict, Code: "asset_exists", Message: fmt.Sprintf("pipeline already has an asset named %q", t.TargetName)}
+			}
+		}
+	}
+	return nil
+}
+
+// resolvePromotionTarget finds the destination pipeline and the asset
+// type/dialect to write. Name-collision checks are handled separately, once
+// the full promote set (and its names) is known.
+func (s *NotebookService) resolvePromotionTarget(pipelineID string) (target *model.Pipeline, assetType, dialect string, apiErr *APIError) {
+	if s.deps.CurrentState == nil {
+		return nil, "", "", &APIError{Status: http.StatusInternalServerError, Code: "promote_failed", Message: "workspace state unavailable"}
+	}
+	state := s.deps.CurrentState()
+	for index := range state.Pipelines {
+		if state.Pipelines[index].ID == pipelineID {
+			target = &state.Pipelines[index]
+			break
+		}
+	}
+	if target == nil {
+		return nil, "", "", &APIError{Status: http.StatusNotFound, Code: "pipeline_not_found", Message: "destination pipeline not found"}
+	}
+
+	// Pick the dialect from the pipeline's existing SQL assets (they share a
+	// default connection); fall back to DuckDB.
+	assetType = "duckdb.sql"
+	for _, asset := range target.Assets {
+		if strings.HasSuffix(strings.ToLower(asset.Type), ".sql") {
+			assetType = asset.Type
+			break
+		}
+	}
+	dialect = "duckdb"
+	if parsed, dErr := sqlparser.AssetTypeToDialect(pipeline.AssetType(assetType)); dErr == nil && parsed != "" {
+		dialect = parsed
+	}
+
+	return target, assetType, dialect, nil
+}
+
+// RunNotebookRequest selects which cells to execute.
+type RunNotebookRequest struct {
+	// All runs every cell in dependency order.
+	All bool `json:"all,omitempty"`
+	// From runs the given cell and its descendants (run-from-here).
+	From string `json:"from,omitempty"`
+	// Cells runs exactly these cells (plus any ancestors whose session
+	// objects do not exist yet), in dependency order.
+	Cells []string `json:"cells,omitempty"`
+	// RefreshImports forces re-fetching cached upstream imports.
+	RefreshImports bool `json:"refresh_imports,omitempty"`
+	// Environment selects the connection environment for imports.
+	Environment string `json:"environment,omitempty"`
+	// StartDate/EndDate are the RFC3339 Jinja execution window. Empty falls
+	// back to the default daily window, matching the editor's preview.
+	StartDate string `json:"start_date,omitempty"`
+	EndDate   string `json:"end_date,omitempty"`
+}
+
+// RunNotebookResult is the batch outcome.
+type RunNotebookResult struct {
+	Status  string                   `json:"status"`
+	Results []notebook.CellRunResult `json:"results"`
+}
+
+// Run executes the selected cells in the notebook's session.
+func (s *NotebookService) Run(ctx context.Context, notebookID string, req RunNotebookRequest) (RunNotebookResult, *APIError) {
+	nb, apiErr := s.load(notebookID)
+	if apiErr != nil {
+		return RunNotebookResult{}, apiErr
+	}
+
+	cells, selectErr := s.selectRunCells(nb, req)
+	if selectErr != nil {
+		return RunNotebookResult{}, selectErr
+	}
+	if len(cells) == 0 {
+		return RunNotebookResult{Status: "ok", Results: []notebook.CellRunResult{}}, nil
+	}
+
+	renderSQL, renderErr := s.newNotebookJinjaRenderer(req.StartDate, req.EndDate)
+	if renderErr != nil {
+		return RunNotebookResult{}, &APIError{Status: http.StatusBadRequest, Code: "invalid_time_window", Message: renderErr.Error()}
+	}
+
+	runner := s.newRunner(renderSQL, req.Environment)
+
+	results, runErr := runner.RunCells(ctx, nb, cells, notebook.RunOptions{RefreshImports: req.RefreshImports})
+	if runErr != nil {
+		// A cancelled run (client aborted, ctx done) is not a server error.
+		if ctx.Err() != nil {
+			return RunNotebookResult{Status: "cancelled", Results: []notebook.CellRunResult{}}, nil
+		}
+		return RunNotebookResult{}, &APIError{Status: http.StatusInternalServerError, Code: "notebook_run_failed", Message: runErr.Error()}
+	}
+
+	// Fold a manual run into the runtime so the server stays the source of
+	// truth, then push the update to any other open tabs.
+	rt := s.runtimes.get(nb.UUID)
+	s.recordResults(rt, results)
+	s.publishRuntimeResultsDelta(notebookID, nb.UUID, results)
+	// A manual run may unblock downstream cells (their upstream is now fresh);
+	// let auto-recompute pick them up if it is on.
+	rt.mu.Lock()
+	auto := rt.autoRecompute
+	rt.mu.Unlock()
+	if auto {
+		s.scheduleRecompute(notebookID, nb.UUID)
+	}
+
+	status := "ok"
+	for _, result := range results {
+		if result.Status != notebook.CellRunOK {
+			status = "error"
+			break
+		}
+	}
+	return RunNotebookResult{Status: status, Results: results}, nil
+}
+
+// publishRuntimeResultsDelta recomputes the auto-pending closure and pushes a
+// results delta — used after a manual run so all clients converge.
+func (s *NotebookService) publishRuntimeResultsDelta(notebookID, uuid string, results []notebook.CellRunResult) {
+	nb, apiErr := s.load(notebookID)
+	if apiErr != nil {
+		return
+	}
+	rt := s.runtimes.get(uuid)
+	closure := computeAutoRecomputeClosure(s.buildAutoCells(nb, rt))
+	delta := make(map[string]notebook.CellRunResult, len(results))
+	for _, result := range results {
+		delta[result.CellID] = result
+	}
+	s.publishRuntime(notebookID, uuid, sortedKeys(closure), nil, delta)
+}
+
+// selectRunCells turns the request into an ordered execution list.
+func (s *NotebookService) selectRunCells(nb *notebook.Notebook, req RunNotebookRequest) ([]*notebook.Cell, *APIError) {
+	ordered := notebook.TopoOrder(nb)
+	if req.All || (req.From == "" && len(req.Cells) == 0) {
+		return ordered, nil
+	}
+
+	wanted := map[string]bool{}
+	if req.From != "" {
+		from := nb.CellByID(req.From)
+		if from == nil {
+			return nil, &APIError{Status: http.StatusNotFound, Code: "cell_not_found", Message: fmt.Sprintf("cell %q not found", req.From)}
+		}
+		wanted[from.ID] = true
+		for _, descendant := range notebook.Descendants(nb, from) {
+			wanted[descendant.ID] = true
+		}
+	}
+	for _, cellID := range req.Cells {
+		cell := nb.CellByID(cellID)
+		if cell == nil {
+			return nil, &APIError{Status: http.StatusNotFound, Code: "cell_not_found", Message: fmt.Sprintf("cell %q not found", cellID)}
+		}
+		wanted[cell.ID] = true
+	}
+
+	// Pull in ancestors whose session objects are missing, so a first run
+	// of a downstream cell does not fail on absent views.
+	existing, existErr := s.store.ExistingCellObjects(nb.UUID)
+	if existErr != nil {
+		existing = map[string]bool{}
+	}
+	for _, cell := range nb.Cells {
+		if !wanted[cell.ID] {
+			continue
+		}
+		for _, ancestor := range notebook.Ancestors(nb, cell) {
+			if !wanted[ancestor.ID] && !existing[notebook.CellObjectName(ancestor.ID)] {
+				wanted[ancestor.ID] = true
+			}
+		}
+	}
+
+	result := make([]*notebook.Cell, 0, len(wanted))
+	for _, cell := range ordered {
+		if wanted[cell.ID] {
+			result = append(result, cell)
+		}
+	}
+	return result, nil
+}
+
+func nextCellAutoname(nb *notebook.Notebook) string {
+	for index := len(nb.Cells) + 1; ; index++ {
+		candidate := fmt.Sprintf("cell_%d", index)
+		if nb.CellByName(candidate) == nil {
+			return candidate
+		}
+	}
+}
+
+func (s *NotebookService) pipelineAssetNameSet() map[string]bool {
+	names := map[string]bool{}
+	if s.deps.CurrentState == nil {
+		return names
+	}
+	for _, p := range s.deps.CurrentState().Pipelines {
+		for _, asset := range p.Assets {
+			names[strings.ToLower(asset.Name)] = true
+		}
+	}
+	return names
+}
+
+func (s *NotebookService) pipelineAssetByName(name string) *model.Asset {
+	if s.deps.CurrentState == nil {
+		return nil
+	}
+	state := s.deps.CurrentState()
+	for _, p := range state.Pipelines {
+		for index := range p.Assets {
+			if strings.EqualFold(p.Assets[index].Name, name) {
+				return &p.Assets[index]
+			}
+		}
+	}
+	return nil
+}
+
+func (s *NotebookService) pushUpdate(path string) {
+	if s.deps.PushWorkspaceUpdate != nil {
+		s.deps.PushWorkspaceUpdate(context.Background(), "workspace.changed", path)
+	}
+}
+
+// pipelineSourceFetcher resolves external cell references against pipeline
+// assets: DuckDB-backed assets are imported zero-copy via ATTACH, anything
+// else is fetched through its connection with a row cap. This is the
+// swappable read path the cloud gateway will later implement.
+type pipelineSourceFetcher struct {
+	service     *NotebookService
+	environment string
+}
+
+func (f *pipelineSourceFetcher) LocalDuckDBPath(_ context.Context, ref string) (string, bool) {
+	asset := f.service.pipelineAssetByName(ref)
+	if asset == nil || asset.Connection == "" {
+		return "", false
+	}
+
+	cfg, err := loadSelectedConfig(f.service.deps.ConfigPath, f.environment)
+	if err != nil || cfg.SelectedEnvironment == nil || cfg.SelectedEnvironment.Connections == nil {
+		return "", false
+	}
+	for _, connection := range cfg.SelectedEnvironment.Connections.DuckDB {
+		if !strings.EqualFold(connection.Name, asset.Connection) {
+			continue
+		}
+		path := connection.Path
+		if path == "" {
+			return "", false
+		}
+		if !filepath.IsAbs(path) {
+			path = filepath.Join(f.service.deps.WorkspaceRoot, path)
+		}
+		return path, true
+	}
+	return "", false
+}
+
+func (f *pipelineSourceFetcher) Fetch(ctx context.Context, ref string, limit int) ([]string, [][]any, error) {
+	asset := f.service.pipelineAssetByName(ref)
+	if asset == nil || asset.Connection == "" {
+		return nil, nil, notebook.ErrUnknownSource
+	}
+	if f.service.deps.RunConnectionQuery == nil {
+		return nil, nil, fmt.Errorf("no connection query backend configured")
+	}
+
+	query := fmt.Sprintf("select * from %s limit %d", QuoteQualifiedIdentifier(asset.Name), limit)
+	columns, rows, err := f.service.deps.RunConnectionQuery(ctx, asset.Connection, f.environment, query)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	ordered := make([][]any, 0, len(rows))
+	for _, row := range rows {
+		values := make([]any, len(columns))
+		for index, column := range columns {
+			values[index] = row[column]
+		}
+		ordered = append(ordered, values)
+	}
+	return columns, ordered, nil
+}

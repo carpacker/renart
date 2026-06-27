@@ -48,6 +48,49 @@ export async function getPipelineConfig(pipelineId: string) {
 	});
 }
 
+export type PipelineTypeCheckFinding = {
+	severity: "error" | "warning";
+	message: string;
+	line?: number;
+	column?: number;
+	end_line?: number;
+	end_column?: number;
+};
+
+export type PipelineTypeCheckAsset = {
+	id?: string;
+	name: string;
+	type: string;
+	dialect?: string;
+	status: "ok" | "warning" | "error";
+	findings: PipelineTypeCheckFinding[];
+};
+
+export type PipelineTypeCheckReport = {
+	status: "ok" | "warning" | "error";
+	pipeline_id?: string;
+	pipeline_name: string;
+	start_date?: string;
+	end_date?: string;
+	assets: PipelineTypeCheckAsset[];
+	summary: { assets: number; errors: number; warnings: number };
+};
+
+/** Type-checks every asset in a pipeline (SQL columns/types + missing column declarations). */
+export async function typeCheckPipeline(
+	pipelineId: string,
+	options?: { startDate?: string; endDate?: string }
+) {
+	const query = buildQueryString({
+		start_date: options?.startDate,
+		end_date: options?.endDate,
+	});
+	return fetchJSON<PipelineTypeCheckReport>(
+		`/api/pipelines/${pipelineId}/type-check${query}`,
+		{ method: "GET", cache: "no-store" }
+	);
+}
+
 export async function updatePipelineConfig(
 	pipelineId: string,
 	input: UpdatePipelineConfigRequest

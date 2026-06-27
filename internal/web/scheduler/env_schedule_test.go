@@ -191,6 +191,9 @@ func TestMigrateLegacySchedules(t *testing.T) {
 				{PipelineID: "encoded-enabled", PipelineUUID: "uuid-enabled", PipelineName: "a", Schedule: "@hourly", Timezone: "UTC", Catchup: true},
 				{PipelineID: "encoded-disabled", PipelineUUID: "uuid-disabled", PipelineName: "b", Schedule: "@daily", Timezone: "UTC"},
 				{PipelineID: "encoded-unscheduled", PipelineUUID: "uuid-unscheduled", PipelineName: "c"},
+				// No explicit schedule_enabled row: a config-defined schedule is
+				// enabled by default (the legacy Enabled = schedule != "" rule).
+				{PipelineID: "encoded-config", PipelineUUID: "uuid-config", PipelineName: "d", Schedule: "@daily", Timezone: "UTC"},
 			}, nil
 		},
 		DefaultEnvironment: func() string { return "dev" },
@@ -200,18 +203,30 @@ func TestMigrateLegacySchedules(t *testing.T) {
 
 	rows, err := store.ListEnvSchedules(ctx)
 	require.NoError(t, err)
-	require.Len(t, rows, 1)
-	migrated := rows[0]
-	assert.Equal(t, "uuid-enabled", migrated.PipelineUUID)
+	require.Len(t, rows, 2)
+	byUUID := make(map[string]EnvSchedule, len(rows))
+	for _, row := range rows {
+		byUUID[row.PipelineUUID] = row
+	}
+
+	migrated := byUUID["uuid-enabled"]
 	assert.Equal(t, "dev", migrated.Environment)
 	assert.Equal(t, "@hourly", migrated.Cron)
 	assert.Equal(t, CatchupRunOnce, migrated.CatchupPolicy)
 	assert.Equal(t, ScheduleStatusActive, migrated.Status)
 	assert.Empty(t, migrated.SnapshotVersionID, "migrated rows fall back to latest-snapshot-or-working-tree")
 
+	// The config-only pipeline (schedule string, no explicit enabled row) is
+	// migrated as active; the explicitly-disabled one stays out.
+	config := byUUID["uuid-config"]
+	assert.Equal(t, "@daily", config.Cron)
+	assert.Equal(t, ScheduleStatusActive, config.Status)
+	_, disabledMigrated := byUUID["uuid-disabled"]
+	assert.False(t, disabledMigrated, "explicitly disabled schedule must not migrate")
+
 	// Migration is one-shot: a second call must not duplicate or resurrect.
 	require.NoError(t, service.migrateLegacySchedules(ctx))
 	rows, err = store.ListEnvSchedules(ctx)
 	require.NoError(t, err)
-	assert.Len(t, rows, 1)
+	assert.Len(t, rows, 2)
 }

@@ -48,6 +48,8 @@ export function useWorkspaceDerivedState({
         existingAssetNames,
         pipelineName
       ),
+      sling: buildSuggestedAssetName("sling", existingAssetNames, pipelineName),
+      api: buildSuggestedAssetName("api", existingAssetNames, pipelineName),
     };
   }, [enrichedPipeline?.name, existingAssetNames]);
 

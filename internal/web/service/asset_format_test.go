@@ -76,6 +76,39 @@ select old_value from source_table
 	assert.Equal(t, []string{assetID}, pushedIDs)
 }
 
+func TestAssetServiceFormatSQLUsesAssetContentWorkspaceUpdateWhenAvailable(t *testing.T) {
+	workspaceRoot := t.TempDir()
+	assetPath := filepath.Join("analytics", "assets", "customers.sql")
+	absAssetPath := filepath.Join(workspaceRoot, assetPath)
+	require.NoError(t, os.MkdirAll(filepath.Dir(absAssetPath), 0o755))
+	require.NoError(t, os.WriteFile(absAssetPath, []byte("select old_value from source_table\n"), 0o644))
+
+	var contentEvent string
+	var updateContent string
+	var syncCalled bool
+	service := NewAssetService(AssetDependencies{
+		WorkspaceRoot:   workspaceRoot,
+		SuppressWatcher: func(string) {},
+		PushWorkspaceUpdateImmediateWithChangedIDs: func(context.Context, string, string, []string) {
+			syncCalled = true
+		},
+		PushAssetContentUpdateImmediate: func(event, _ string, _ []string, content string) {
+			contentEvent = event
+			updateContent = content
+		},
+	})
+
+	assetID := EncodeID(assetPath)
+	response, apiErr := service.FormatSQL(context.Background(), assetID, FormatSQLAssetRequest{
+		Content: "select a from t",
+	})
+	require.Nil(t, apiErr)
+	assert.Equal(t, "ok", response.Status)
+	assert.Equal(t, "asset.updated", contentEvent)
+	assert.Equal(t, response.Content, updateContent)
+	assert.False(t, syncCalled)
+}
+
 func TestAssetServiceFormatPythonUsesTyAndPersistsExecutableContent(t *testing.T) {
 	workspaceRoot := t.TempDir()
 	pipelineRoot := filepath.Join(workspaceRoot, "analytics")

@@ -1,6 +1,6 @@
 import { createFileRoute } from "@tanstack/react-router";
 
-import { RedesignNotebookPage } from "@/components/redesign/object-pages";
+import { RedesignNotebookLivePage } from "@/components/redesign/notebook-page";
 
 export const Route = createFileRoute("/redesign/notebooks/$notebookId")({
   component: RedesignNotebookRoute,
@@ -8,5 +8,5 @@ export const Route = createFileRoute("/redesign/notebooks/$notebookId")({
 
 function RedesignNotebookRoute() {
   const { notebookId } = Route.useParams();
-  return <RedesignNotebookPage notebookId={notebookId} />;
+  return <RedesignNotebookLivePage notebookId={notebookId} />;
 }

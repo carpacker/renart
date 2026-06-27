@@ -49,6 +49,14 @@ function mergeWorkspaceWithPreservedContent(
         columns:
           asset.columns ??
           (isChangedAsset ? asset.columns : currentAsset.columns),
+        // These clear to empty (e.g. removing the last tag, blanking the owner).
+        // The backend omits empty values, so for a changed asset we must take the
+        // incoming (absent) value rather than let the spread keep the stale one.
+        tags: asset.tags ?? (isChangedAsset ? asset.tags : currentAsset.tags),
+        owner: asset.owner ?? (isChangedAsset ? asset.owner : currentAsset.owner),
+        incremental_key:
+          asset.incremental_key ??
+          (isChangedAsset ? asset.incremental_key : currentAsset.incremental_key),
       };
     }),
   }));

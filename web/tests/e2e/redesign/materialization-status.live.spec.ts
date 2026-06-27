@@ -24,6 +24,11 @@ test.describe("redesign materialization status live", () => {
   test.use({ fixtureName: "basic-workspace" });
 
   test("updates canvas asset status from running to terminal without refresh", async ({ liveApp, page, request }) => {
+    // This exercises live status transitions on the React Flow lineage canvas, a
+    // desktop affordance: on a phone viewport the canvas doesn't surface a node's
+    // terminal status the way this assertion needs.
+    test.skip(test.info().project.name.includes("mobile"), "Canvas status transitions are a desktop affordance.");
+
     await addSlowDuckDbAsset(liveApp.workspaceDir);
 
     await page.goto(`${liveApp.baseURL}/redesign/catalog`);

@@ -1,6 +1,6 @@
 "use client";
 
-import { Database, Hammer, Workflow } from "lucide-react";
+import { Boxes, Database, Globe, Hammer, Workflow } from "lucide-react";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { Handle, NodeProps, Position } from "reactflow";
 
@@ -8,7 +8,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 
-export type NewAssetKind = "sql" | "python" | "ingestr";
+export type NewAssetKind = "sql" | "python" | "ingestr" | "sling" | "api";
 
 export type NewAssetNodeData = {
   name: string;
@@ -68,7 +68,7 @@ export function NewAssetNode({ data }: NodeProps<NewAssetNodeData>) {
           }
           value={data.kind}
         >
-          <TabsList className="nodrag mb-2 grid w-full grid-cols-3">
+          <TabsList className="nodrag mb-2 grid w-full grid-cols-5">
             <TabsTrigger className="nodrag" value="sql">
               <Database className="mr-1 size-3.5 text-emerald-600" />
               SQL
@@ -80,6 +80,14 @@ export function NewAssetNode({ data }: NodeProps<NewAssetNodeData>) {
             <TabsTrigger className="nodrag" value="ingestr">
               <Workflow className="mr-1 size-3.5 text-sky-600" />
               Ingestr
+            </TabsTrigger>
+            <TabsTrigger className="nodrag" value="sling">
+              <Boxes className="mr-1 size-3.5 text-violet-600" />
+              Sling
+            </TabsTrigger>
+            <TabsTrigger className="nodrag" value="api">
+              <Globe className="mr-1 size-3.5 text-cyan-600" />
+              API
             </TabsTrigger>
           </TabsList>
         </Tabs>

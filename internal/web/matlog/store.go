@@ -320,6 +320,43 @@ func (s *Store) LatestOwnContent(ctx context.Context, assetIDs []string, environ
 	return result, rows.Err()
 }
 
+// LatestFingerprint returns, per asset, the fingerprint recorded at its most
+// recent materialization in the environment (across all fingerprints and vars
+// hashes). This is the identity of the data physically present in the asset's
+// table — what a downstream reads when it materializes — and is folded into
+// the downstream's achieved fingerprint so a build on a stale upstream records
+// as stale.
+func (s *Store) LatestFingerprint(ctx context.Context, assetIDs []string, environment string) (map[string]string, error) {
+	if len(assetIDs) == 0 {
+		return map[string]string{}, nil
+	}
+	query := `
+		SELECT asset_id, fingerprint FROM renart_materializations
+		WHERE environment = ? AND asset_id IN (?` + repeatPlaceholder(len(assetIDs)-1) + `)
+		ORDER BY materialized_at ASC`
+	args := make([]any, 0, len(assetIDs)+1)
+	args = append(args, environment)
+	for _, id := range assetIDs {
+		args = append(args, id)
+	}
+	rows, err := s.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	// Ascending order means the last row scanned per asset is the latest.
+	result := make(map[string]string)
+	for rows.Next() {
+		var assetID, fingerprint string
+		if err := rows.Scan(&assetID, &fingerprint); err != nil {
+			return nil, err
+		}
+		result[assetID] = fingerprint
+	}
+	return result, rows.Err()
+}
+
 // Prune deletes raw materialization facts older than the cutoff. Coverage
 // rows are the durable summary and are never pruned here.
 func (s *Store) Prune(ctx context.Context, olderThan time.Time) (int64, error) {

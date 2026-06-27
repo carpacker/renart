@@ -118,6 +118,27 @@ export function useSourceControl() {
     }
   }, []);
 
+  // Load and concatenate the diffs of several files (a notebook folder) into a
+  // single patch, so one selection shows every changed file in the group.
+  const loadDiffGroup = useCallback(async (paths: string[], staged: boolean, label: string) => {
+    setDiffLoading(true);
+    setError("");
+    try {
+      const responses = await Promise.all(paths.map((path) => getSourceControlDiff(path, staged)));
+      const patch = responses
+        .map((response, index) => {
+          const fragment = response.status === "ok" ? response.diff.patch?.trim() : "";
+          return fragment ? fragment : `# ${paths[index]} (no textual diff)`;
+        })
+        .join("\n\n");
+      setDiff({ path: label, staged, patch });
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to load diff");
+    } finally {
+      setDiffLoading(false);
+    }
+  }, []);
+
   useEffect(() => {
     void refresh();
   }, [refresh]);
@@ -132,6 +153,7 @@ export function useSourceControl() {
     error,
     refresh,
     loadDiff,
+    loadDiffGroup,
     stage,
     unstage,
     checkout,

@@ -1,7 +1,7 @@
 "use client";
 
 import type * as MonacoNS from "monaco-editor";
-import { useEffect, useRef } from "react";
+import { useEffect } from "react";
 
 import {
   formatPythonAsset,
@@ -22,28 +22,51 @@ import type {
 
 const pythonMarkerOwner = "bruin-python-ty";
 
-export function usePythonIntellisense(
-  monaco: typeof MonacoNS | null,
-  editor: MonacoNS.editor.IStandaloneCodeEditor | null,
-  asset: WebAsset | null,
-  content: string,
-) {
-  const assetRef = useRef<WebAsset | null>(null);
-  const isPythonAsset = !!asset?.path.toLowerCase().endsWith(".py");
+// The "python" providers are global per Monaco, so they are registered once and
+// resolve each editor's asset by model URI — registering per editor would let
+// one cell's asset answer another cell's completion/hover (and multiply them).
+const pythonAssetEntries = new Map<string, WebAsset>();
+const pythonProviderRegistry = new Map<
+  typeof MonacoNS,
+  { disposable: MonacoNS.IDisposable; refs: number }
+>();
 
-  useEffect(() => {
-    assetRef.current = asset;
-  }, [asset]);
-
-  useEffect(() => {
-    if (!monaco) {
+function acquirePythonProviders(monaco: typeof MonacoNS): () => void {
+  let registration = pythonProviderRegistry.get(monaco);
+  if (!registration) {
+    registration = {
+      disposable: registerPythonProviders(monaco, (model) =>
+        pythonAssetEntries.get(model.uri.toString()) ?? null,
+      ),
+      refs: 0,
+    };
+    pythonProviderRegistry.set(monaco, registration);
+  }
+  registration.refs += 1;
+  return () => {
+    const current = pythonProviderRegistry.get(monaco);
+    if (!current) {
       return;
     }
+    current.refs -= 1;
+    if (current.refs <= 0) {
+      current.disposable.dispose();
+      pythonProviderRegistry.delete(monaco);
+    }
+  };
+}
+
+function registerPythonProviders(
+  monaco: typeof MonacoNS,
+  resolveAsset: (model: MonacoNS.editor.ITextModel) => WebAsset | null,
+): MonacoNS.IDisposable {
+  const isPython = (asset: WebAsset | null): asset is WebAsset =>
+    !!asset?.id && asset.path.toLowerCase().endsWith(".py");
 
     const formatting = monaco.languages.registerDocumentFormattingEditProvider("python", {
       async provideDocumentFormattingEdits(model) {
-        const currentAsset = assetRef.current;
-        if (!currentAsset?.id || !currentAsset.path.toLowerCase().endsWith(".py")) {
+        const currentAsset = resolveAsset(model);
+        if (!isPython(currentAsset)) {
           return [];
         }
 
@@ -65,8 +88,8 @@ export function usePythonIntellisense(
     const completions = monaco.languages.registerCompletionItemProvider("python", {
       triggerCharacters: ["."],
       async provideCompletionItems(model, position, context, token) {
-        const currentAsset = assetRef.current;
-        if (!currentAsset?.id || !currentAsset.path.toLowerCase().endsWith(".py")) {
+        const currentAsset = resolveAsset(model);
+        if (!isPython(currentAsset)) {
           return { suggestions: [] };
         }
 
@@ -111,8 +134,8 @@ export function usePythonIntellisense(
 
     const hover = monaco.languages.registerHoverProvider("python", {
       async provideHover(model, position, token) {
-        const currentAsset = assetRef.current;
-        if (!currentAsset?.id || !currentAsset.path.toLowerCase().endsWith(".py")) {
+        const currentAsset = resolveAsset(model);
+        if (!isPython(currentAsset)) {
           return null;
         }
         const controller = new AbortController();
@@ -142,8 +165,8 @@ export function usePythonIntellisense(
       signatureHelpTriggerCharacters: ["(", ","],
       signatureHelpRetriggerCharacters: [","],
       async provideSignatureHelp(model, position, token) {
-        const currentAsset = assetRef.current;
-        if (!currentAsset?.id || !currentAsset.path.toLowerCase().endsWith(".py")) {
+        const currentAsset = resolveAsset(model);
+        if (!isPython(currentAsset)) {
           return null;
         }
         const controller = new AbortController();
@@ -171,8 +194,8 @@ export function usePythonIntellisense(
 
     const definition = monaco.languages.registerDefinitionProvider("python", {
       async provideDefinition(model, position, token) {
-        const currentAsset = assetRef.current;
-        if (!currentAsset?.id || !currentAsset.path.toLowerCase().endsWith(".py")) {
+        const currentAsset = resolveAsset(model);
+        if (!isPython(currentAsset)) {
           return [];
         }
         const controller = new AbortController();
@@ -195,14 +218,48 @@ export function usePythonIntellisense(
       },
     });
 
-    return () => {
+  return {
+    dispose() {
       formatting.dispose();
       completions.dispose();
       hover.dispose();
       signature.dispose();
       definition.dispose();
+    },
+  };
+}
+
+export function usePythonIntellisense(
+  monaco: typeof MonacoNS | null,
+  editor: MonacoNS.editor.IStandaloneCodeEditor | null,
+  asset: WebAsset | null,
+  content: string,
+) {
+  const isPythonAsset = !!asset?.id && asset.path.toLowerCase().endsWith(".py");
+
+  // Register this editor's asset by model URI and acquire the shared global
+  // providers. The providers resolve the asset for whichever model they run on,
+  // so a single registration serves every mounted Python editor.
+  useEffect(() => {
+    if (!monaco || !editor) {
+      return;
+    }
+    const model = editor.getModel();
+    if (!model) {
+      return;
+    }
+    const uri = model.uri.toString();
+    const release = acquirePythonProviders(monaco);
+    if (asset?.id && isPythonAsset) {
+      pythonAssetEntries.set(uri, asset);
+    } else {
+      pythonAssetEntries.delete(uri);
+    }
+    return () => {
+      pythonAssetEntries.delete(uri);
+      release();
     };
-  }, [monaco]);
+  }, [monaco, editor, asset, isPythonAsset]);
 
   useEffect(() => {
     if (!monaco || !editor || !asset?.id || !isPythonAsset) {

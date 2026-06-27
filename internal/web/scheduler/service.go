@@ -183,6 +183,7 @@ func (s *Service) Start(ctx context.Context) error {
 		return nil
 	}
 	s.schedulerOn = true
+	s.recoverOrphanedRuns(ctx)
 	if err := s.Reconcile(ctx); err != nil {
 		s.schedulerOn = false
 		_ = s.lock.Unlock()
@@ -195,6 +196,25 @@ func (s *Service) Start(ctx context.Context) error {
 		s.Stop()
 	}()
 	return nil
+}
+
+// orphanedRunError explains a run that was reconciled after an unclean stop.
+const orphanedRunError = "interrupted: the server stopped while this run was executing"
+
+// recoverOrphanedRuns fails any run left "running" by a previous process that
+// was killed mid-execution (otherwise it would stay running forever), and
+// notifies listeners so open run views update.
+func (s *Service) recoverOrphanedRuns(ctx context.Context) {
+	ids, err := s.store.FailOrphanedRuns(ctx, orphanedRunError)
+	if err != nil {
+		slog.Warn("failed to reconcile orphaned pipeline runs", "error", err)
+		return
+	}
+	for _, id := range ids {
+		if run, _, _, getErr := s.store.Get(ctx, id); getErr == nil {
+			s.publishRunEvent("run.finished", run)
+		}
+	}
 }
 
 func (s *Service) Stop() {
@@ -349,7 +369,16 @@ func (s *Service) migrateLegacySchedules(ctx context.Context) error {
 		if err != nil {
 			return err
 		}
-		if !ok || !enabled || strings.TrimSpace(item.Schedule) == "" || item.PipelineUUID == "" {
+		// The schedule_enabled flag is an explicit *override*: when set it wins,
+		// but its absence means the legacy default — a pipeline with a schedule
+		// string is enabled (mirroring PipelineService.GetSchedule, where
+		// Enabled = schedule != ""). Requiring an explicit row would skip every
+		// config-defined schedule, since nothing writes that flag outside tests,
+		// leaving the redesign Schedules page permanently empty.
+		if ok && !enabled {
+			continue
+		}
+		if strings.TrimSpace(item.Schedule) == "" || item.PipelineUUID == "" {
 			continue
 		}
 		policy := CatchupSkip

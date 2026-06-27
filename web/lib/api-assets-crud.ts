@@ -36,8 +36,13 @@ export async function updateAsset(
     type?: string;
     content?: string;
     materialization_type?: string;
+    materialization_strategy?: string;
+    incremental_key?: string;
+    owner?: string;
+    tags?: string[];
     meta?: Record<string, string>;
     upstreams?: string[];
+    parameters?: Record<string, string>;
   }
 ) {
   return fetchJSONWithBody<Record<string, string>>(
@@ -69,6 +74,30 @@ export async function formatPythonAsset(assetId: string, content: string) {
     `/api/assets/${assetId}/format-python`,
     "POST",
     { content },
+  );
+}
+
+export type AssetPythonDeps = {
+  status: "ok" | "error";
+  asset_id: string;
+  dependencies: string[];
+  installed_modules: string[];
+};
+
+/** Declared dependencies and installed import names for a Python asset. */
+export async function getAssetPythonDeps(assetId: string, signal?: AbortSignal) {
+  return fetchJSON<AssetPythonDeps>(
+    `/api/assets/${assetId}/python-deps`,
+    signal ? { signal } : undefined,
+  );
+}
+
+/** Add a package to the Python asset's pyproject.toml; returns refreshed deps. */
+export async function addAssetPythonDependency(assetId: string, pkg: string) {
+  return fetchJSONWithBody<AssetPythonDeps>(
+    `/api/assets/${assetId}/python-deps`,
+    "POST",
+    { package: pkg },
   );
 }
 

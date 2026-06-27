@@ -146,12 +146,13 @@ func ParseContextWithSchemaPolyglot(query, dialect string, schema Schema, column
 	columns := extractPolyglotColumns(query, ast, tokenResp.Tokens, aliasToTable, tables)
 
 	return &ParseContext{
-		QueryKind:      polyglotQueryKind(ast),
-		IsSingleSelect: len(ast) == 1 && polyglotQueryKind(ast) == "select",
-		Tables:         tables,
-		Columns:        columns,
-		Diagnostics:    polyglotDiagnostics(query, tokenResp.Tokens, validateResp.Errors, tables, columns, validationSchema, ctes, sourceMethods, polyglotSelectAliases(ast), polyglotDescribeColumns(query)),
-		Errors:         []string{},
+		QueryKind:        polyglotQueryKind(ast),
+		IsSingleSelect:   len(ast) == 1 && polyglotQueryKind(ast) == "select",
+		IsReadOnlyResult: polyglotIsReadOnlyResult(ast),
+		Tables:           tables,
+		Columns:          columns,
+		Diagnostics:      polyglotDiagnostics(query, tokenResp.Tokens, validateResp.Errors, tables, columns, validationSchema, ctes, sourceMethods, polyglotSelectAliases(ast), polyglotDescribeColumns(query)),
+		Errors:           []string{},
 	}, nil
 }
 
@@ -185,8 +186,9 @@ func recoverPolyglotCallLikeSubquery(query, parseError string) *ParseContext {
 	name := query[match[2]:match[3]]
 	rangeInfo := rangeFromOffsets(query, match[2], match[3])
 	return &ParseContext{
-		QueryKind:      "select",
-		IsSingleSelect: true,
+		QueryKind:        "select",
+		IsSingleSelect:   true,
+		IsReadOnlyResult: true,
 		Diagnostics: []ParseContextDiagnostic{{
 			Message:  "Unresolved column: " + name,
 			Severity: "error",
@@ -459,6 +461,21 @@ func polyglotQueryKind(ast []map[string]any) string {
 		return strings.ToLower(key)
 	}
 	return "unknown"
+}
+
+// readOnlyResultKinds are the top-level statement kinds that produce a result
+// set without side effects, so they are safe to auto-recompute.
+var readOnlyResultKinds = map[string]bool{
+	"select":    true,
+	"union":     true,
+	"intersect": true,
+	"except":    true,
+}
+
+// polyglotIsReadOnlyResult reports whether the parsed query is a single
+// read-only result statement (a SELECT, CTE-wrapped SELECT, or set operation).
+func polyglotIsReadOnlyResult(ast []map[string]any) bool {
+	return len(ast) == 1 && readOnlyResultKinds[polyglotQueryKind(ast)]
 }
 
 func extractPolyglotTables(query string, ast []map[string]any, tokens []polyglotToken, schema Schema, ctes map[string]polyglotCTE) []ParseContextTable {

@@ -481,7 +481,6 @@ func (s *OnboardingService) CreateDuckDBQuickstart(ctx context.Context, req Onbo
 	if duckDBConnectionName == "" {
 		duckDBConnectionName = "duckdb-default"
 	}
-	chessConnectionName := "chess-default"
 	pipelineName := strings.Trim(strings.TrimSpace(req.PipelineName), `/\\`)
 	if pipelineName == "" {
 		pipelineName = "quickstart"
@@ -512,7 +511,7 @@ func (s *OnboardingService) CreateDuckDBQuickstart(ctx context.Context, req Onbo
 		if err := cfg.DeleteConnection(environmentName, duckDBConnectionName); err != nil && !strings.Contains(err.Error(), "does not exist") {
 			return OnboardingImportResult{Status: "error", Error: err.Error(), HTTPCode: 400}
 		}
-		if err := cfg.DeleteConnection(environmentName, chessConnectionName); err != nil && !strings.Contains(err.Error(), "does not exist") {
+		if err := cfg.DeleteConnection(environmentName, "chess-default"); err != nil && !strings.Contains(err.Error(), "does not exist") {
 			return OnboardingImportResult{Status: "error", Error: err.Error(), HTTPCode: 400}
 		}
 	}
@@ -530,20 +529,6 @@ func (s *OnboardingService) CreateDuckDBQuickstart(ctx context.Context, req Onbo
 	if err := cfg.AddConnection(environmentName, duckDBConnectionName, "duckdb", map[string]any{"path": databasePath}); err != nil {
 		return OnboardingImportResult{Status: "error", Error: err.Error(), HTTPCode: 400}
 	}
-	if err := cfg.AddConnection(environmentName, chessConnectionName, "chess", map[string]any{"players": []string{
-		"FabianoCaruana",
-		"Hikaru",
-		"MagnusCarlsen",
-		"GothamChess",
-		"DanielNaroditsky",
-		"AnishGiri",
-		"Firouzja2003",
-		"LevonAronian",
-		"WesleySo",
-		"GarryKasparov",
-	}}); err != nil {
-		return OnboardingImportResult{Status: "error", Error: err.Error(), HTTPCode: 400}
-	}
 	if _, err := configService.Persist(cfg); err != nil {
 		return OnboardingImportResult{Status: "error", Error: err.Error(), HTTPCode: 500}
 	}
@@ -558,8 +543,8 @@ func (s *OnboardingService) CreateDuckDBQuickstart(ctx context.Context, req Onbo
 
 	files := map[string]string{
 		"pipeline.yml": quickstartPipelineYAML(filepath.Base(relPipelinePath), duckDBConnectionName),
-		filepath.Join("assets", "quickstart", "players.asset.yml"):  quickstartPlayersAssetYAML(chessConnectionName),
-		filepath.Join("assets", "quickstart", "games.asset.yml"):    quickstartGamesAssetYAML(chessConnectionName),
+		filepath.Join("assets", "quickstart", "players.asset.yml"):  quickstartPlayersAPIYAML(),
+		filepath.Join("assets", "quickstart", "games.asset.yml"):    quickstartGamesAPIYAML(),
 		filepath.Join("assets", "quickstart", "player_stats.sql"):   quickstartPlayerStatsSQL(),
 		filepath.Join("assets", "quickstart", "my_python_asset.py"): quickstartPythonAsset(),
 	}
@@ -636,24 +621,84 @@ func quickstartPipelineYAML(name, connectionName string) string {
 	return fmt.Sprintf("name: %s\nschedule: daily\nstart_date: \"2024-01-01\"\n\ndefault_connections:\n  duckdb: %s\n", name, connectionName)
 }
 
-func quickstartPlayersAssetYAML(connectionName string) string {
-	return fmt.Sprintf(`type: ingestr
+func quickstartPlayersAPIYAML() string {
+	return `type: api
 
 parameters:
-  destination: duckdb
-  source_connection: %s
-  source_table: profiles
-`, connectionName)
+  request:
+    url: https://api.chess.com/pub/player/{{ username }}
+    method: GET
+    headers:
+      Accept: application/json
+      User-Agent: Renart Quickstart
+
+  iterate:
+    as: username
+    over:
+      - FabianoCaruana
+      - Hikaru
+      - GothamChess
+      - DanielNaroditsky
+      - AnishGiri
+      - Firouzja2003
+      - LevonAronian
+      - WesleySo
+      - GarryKasparov
+
+  response:
+    fields:
+      username: username
+      name: name
+      title: title
+      country: country
+      followers: followers
+      joined: joined
+      last_online: last_online
+      player_id: player_id
+      url: url
+`
 }
 
-func quickstartGamesAssetYAML(connectionName string) string {
-	return fmt.Sprintf(`type: ingestr
+func quickstartGamesAPIYAML() string {
+	return `type: api
 
 parameters:
-  source_connection: %s
-  source_table: games
-  destination: duckdb
-`, connectionName)
+  request:
+    url: https://api.chess.com/pub/player/{{ username }}/games/2024/01
+    method: GET
+    headers:
+      Accept: application/json
+      User-Agent: Renart Quickstart
+
+  iterate:
+    as: username
+    over:
+      - FabianoCaruana
+      - Hikaru
+      - GothamChess
+      - DanielNaroditsky
+      - AnishGiri
+      - Firouzja2003
+      - LevonAronian
+      - WesleySo
+      - GarryKasparov
+
+  response:
+    records_path: games
+    fields:
+      url: url
+      pgn: pgn
+      time_control: time_control
+      end_time: end_time
+      rated: rated
+      rules: rules
+      white_username: white.username
+      white_result: white.result
+      white_rating: white.rating
+      black_username: black.username
+      black_result: black.result
+      black_rating: black.rating
+`
 }
 
 func quickstartPlayerStatsSQL() string {
@@ -666,27 +711,37 @@ depends:
   - quickstart.games
 @bruin */
 
-WITH players_white AS (
-    SELECT white->>'@id' AS player_id
-    FROM quickstart.games
+WITH players AS (
+    SELECT
+        lower(username) AS player_username,
+        username,
+        coalesce(nullif(name, ''), username) AS name,
+        title,
+        country
+    FROM quickstart.players
 ),
 
-players_black AS (
-    SELECT black->>'@id' AS player_id
+games AS (
+    SELECT
+        lower(white_username) AS white_username,
+        lower(black_username) AS black_username,
+        white_result,
+        black_result
     FROM quickstart.games
 )
 
 SELECT
-    name,
-    (
-        SELECT count(*) FROM players_white
-        WHERE quickstart.players.aid = players_white.player_id
-    ) AS games_white,
-    (
-        SELECT count(*) FROM players_black
-        WHERE quickstart.players.aid = players_black.player_id
-    ) as games_black
-FROM quickstart.players
+    players.name,
+    players.username,
+    players.title,
+    players.country,
+    coalesce(sum(CASE WHEN games.white_username = players.player_username THEN 1 ELSE 0 END), 0) AS games_white,
+    coalesce(sum(CASE WHEN games.black_username = players.player_username THEN 1 ELSE 0 END), 0) AS games_black
+FROM players
+LEFT JOIN games
+    ON players.player_username IN (games.white_username, games.black_username)
+GROUP BY players.name, players.username, players.title, players.country
+ORDER BY games_white + games_black DESC, players.name
 `
 }
 

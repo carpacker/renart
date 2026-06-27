@@ -7,7 +7,6 @@ import {
   ClipboardCheck,
   Cloud,
   Cpu,
-  Database,
   FileCode,
   Hammer,
   LayoutDashboard,
@@ -36,6 +35,7 @@ export const integrations: Record<string, string> = {
 export const navItems = [
   { to: "/redesign", label: "Build", icon: Hammer },
   { to: "/redesign/catalog", label: "Catalog", icon: Network },
+  { to: "/redesign/notebooks", label: "Notebooks", icon: BookOpen },
   { to: "/redesign/runs", label: "Runs", icon: Play },
   { to: "/redesign/schedules", label: "Schedules", icon: Calendar },
 ] as const;

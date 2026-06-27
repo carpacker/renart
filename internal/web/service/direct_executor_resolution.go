@@ -63,14 +63,7 @@ func getDirectPipelineAndAsset(ctx context.Context, workspaceRoot, inputPath str
 		return nil, err
 	}
 	resolver := NewWorkspaceResolver(workspaceRoot, func(ctx context.Context, pipelinePath string) (*pipeline.Pipeline, error) {
-		builder := pipeline.NewBuilder(
-			BuilderConfig,
-			pipeline.CreateTaskFromYamlDefinition(fs),
-			pipeline.CreateTaskFromFileComments(fs),
-			fs,
-			DefaultGlossaryReader,
-			jinja.VariantRendererFactory,
-		)
+		builder := NewRenartPipelineBuilder(fs)
 		return builder.CreatePipelineFromPath(ctx, pipelinePath, pipeline.WithMutate())
 	})
 	_, foundPipeline, asset, err := resolver.ResolveAssetByPath(ctx, "", resolvedInputPath)

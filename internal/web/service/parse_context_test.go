@@ -679,6 +679,44 @@ func TestParseContextService_SQLDefinitionColumnsFromResolvedPipelineWarnWhenMis
 	}
 }
 
+func TestParseContextService_APIResponseFieldsResolveWorkspaceAssets(t *testing.T) {
+	t.Parallel()
+
+	parsedPipeline := &pipeline.Pipeline{Assets: []*pipeline.Asset{
+		{
+			Name: "quickstart.games",
+			Type: pipeline.AssetType(apiAssetType),
+			ExecutableFile: pipeline.ExecutableFile{Content: `type: api
+
+parameters:
+  request:
+    url: https://example.invalid/games
+  response:
+    fields:
+      white_username: white.username
+      black_username: black.username
+`},
+		},
+	}}
+	service := NewParseContextService(ParseContextDependencies{
+		ResolveAssetByID: func(_ context.Context, _ string) (string, *pipeline.Pipeline, *pipeline.Asset, error) {
+			return "", parsedPipeline, &pipeline.Asset{Type: pipeline.AssetTypeDuckDBQuery}, nil
+		},
+	})
+
+	result, apiError := service.Parse(
+		context.Background(),
+		"asset-id",
+		`select white_username, black_username from quickstart.games`,
+		nil,
+	)
+	require.Nil(t, apiError)
+	assert.Empty(t, result.Errors)
+	diagnostics := diagnosticMessagesFromService(result.Diagnostics)
+	assert.NotContains(t, diagnostics, "Unresolved table: quickstart.games")
+	assert.NotContains(t, diagnostics, "Unresolved column: white_username")
+}
+
 func TestParseContextService_SQLDefinitionColumnsWarnWhenMissingFromMaterializedWorkspaceColumns(t *testing.T) {
 	t.Parallel()
 

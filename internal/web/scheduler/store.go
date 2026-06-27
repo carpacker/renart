@@ -138,6 +138,53 @@ func (s *Store) AppendLog(ctx context.Context, id string, line LogLine) error {
 	return s.queries.AppendRunLog(ctx, storedb.AppendRunLogParams{RunID: id, At: formatTime(line.At), Line: line.Line})
 }
 
+// FailOrphanedRuns reconciles runs left mid-flight by a previous process (e.g.
+// the server was killed while executing tasks): every run still marked running
+// is finished as failed and its open steps are closed. Returns the reconciled
+// run IDs. Queued runs are left untouched — the job queue may still pick them
+// up.
+func (s *Store) FailOrphanedRuns(ctx context.Context, reason string) ([]string, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT id FROM pipeline_runs WHERE status = ?`, string(RunStatusRunning))
+	if err != nil {
+		return nil, err
+	}
+	var ids []string
+	for rows.Next() {
+		var id string
+		if scanErr := rows.Scan(&id); scanErr != nil {
+			_ = rows.Close()
+			return nil, scanErr
+		}
+		ids = append(ids, id)
+	}
+	if closeErr := rows.Close(); closeErr != nil {
+		return nil, closeErr
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if len(ids) == 0 {
+		return nil, nil
+	}
+
+	now := formatTime(time.Now().UTC())
+	if _, err := s.db.ExecContext(ctx,
+		`UPDATE pipeline_run_steps
+		 SET status = ?, finished_at = ?, error = CASE WHEN error IS NULL OR error = '' THEN ? ELSE error END
+		 WHERE finished_at IS NULL AND run_id IN (SELECT id FROM pipeline_runs WHERE status = ?)`,
+		string(RunStatusFailed), now, reason, string(RunStatusRunning),
+	); err != nil {
+		return nil, err
+	}
+	if _, err := s.db.ExecContext(ctx,
+		`UPDATE pipeline_runs SET status = ?, finished_at = ?, error = ? WHERE status = ?`,
+		string(RunStatusFailed), now, reason, string(RunStatusRunning),
+	); err != nil {
+		return nil, err
+	}
+	return ids, nil
+}
+
 func (s *Store) Finish(ctx context.Context, id string, status RunStatus, runErr error) error {
 	message := ""
 	if runErr != nil {
