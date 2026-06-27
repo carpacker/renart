@@ -44,6 +44,7 @@ export type WebAsset = {
   class?: string;
   cell_id?: string;
   external_refs?: string[];
+  parse_error?: string;
 };
 
 export type WebPipeline = {

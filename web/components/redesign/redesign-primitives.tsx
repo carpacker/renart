@@ -202,15 +202,29 @@ export function AssetNode({
   const meta = kindMeta[asset.kind];
   const Icon = meta.icon;
   const statusMeta = assetNodeStatusMeta(asset.status);
+  const hasParseError = Boolean(asset.parseError);
   return (
     <div
       className={cn(
         "w-58 overflow-hidden rounded-xl border-2 bg-card text-left shadow-sm transition hover:border-primary/60",
-        selected ? "border-primary" : "border-border"
+        hasParseError
+          ? "border-red-400 dark:border-red-500/70"
+          : selected
+            ? "border-primary"
+            : "border-border"
       )}
     >
-      <div className="flex h-8 items-center gap-1.5 border-b bg-muted/30 px-2.5">
-        <Icon className="size-3.5 text-muted-foreground" />
+      <div
+        className={cn(
+          "flex h-8 items-center gap-1.5 border-b bg-muted/30 px-2.5",
+          hasParseError && "bg-red-50 dark:bg-red-500/10"
+        )}
+      >
+        {hasParseError ? (
+          <AlertTriangle className="size-3.5 shrink-0 text-red-500" />
+        ) : (
+          <Icon className="size-3.5 text-muted-foreground" />
+        )}
         <span className="min-w-0 flex-1 truncate font-mono text-xs font-medium">{asset.name}</span>
         {actions && actions.length > 0 ? (
           <DropdownMenu>
@@ -230,13 +244,22 @@ export function AssetNode({
         )}
       </div>
       <div className="space-y-2 p-2.5">
-        <p className="truncate text-[11px] text-muted-foreground">{asset.description}</p>
+        <p className="truncate text-[11px] text-muted-foreground" title={asset.parseError}>
+          {hasParseError ? asset.parseError : asset.description}
+        </p>
         <div className="flex items-center justify-between gap-1.5">
-          <span className={cn("truncate rounded px-1.5 py-0.5 text-[10px]", statusMeta.className)}>
-            {statusMeta.label} · {asset.materializedAt}
-          </span>
+          {hasParseError ? (
+            <span className="inline-flex items-center gap-1 truncate rounded bg-red-100 px-1.5 py-0.5 text-[10px] text-red-700 dark:bg-red-500/15 dark:text-red-300">
+              <AlertTriangle className="size-2.5" />
+              Parse error
+            </span>
+          ) : (
+            <span className={cn("truncate rounded px-1.5 py-0.5 text-[10px]", statusMeta.className)}>
+              {statusMeta.label} · {asset.materializedAt}
+            </span>
+          )}
           <div className="flex items-center gap-1.5">
-            <StalenessBadge staleness={asset.staleness} />
+            {!hasParseError ? <StalenessBadge staleness={asset.staleness} /> : null}
             <IntegrationBadge name={asset.integration} />
           </div>
         </div>

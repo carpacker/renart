@@ -89,6 +89,9 @@ export type RedesignAsset = {
   status: "ok" | "overdue" | "unknown" | "pending" | "success" | "failed";
   materializedAt: string;
   staleness?: AssetStaleness;
+  // Set when the asset file failed to parse; the node renders an error state and
+  // the editor shows the message so the user can fix it in place.
+  parseError?: string;
   x: number;
   y: number;
 };

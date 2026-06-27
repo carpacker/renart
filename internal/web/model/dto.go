@@ -33,6 +33,10 @@ type Asset struct {
 	// ExternalRefs lists referenced table names that are not sibling cells
 	// (pipeline assets or warehouse tables); notebook cells only.
 	ExternalRefs []string `json:"external_refs,omitempty"`
+	// ParseError is set when the asset file could not be parsed. The asset is
+	// still surfaced (with its raw content) so the pipeline stays visible and the
+	// user can open and fix it, rather than the whole pipeline disappearing.
+	ParseError string `json:"parse_error,omitempty"`
 }
 
 // Column represents a column in an asset.

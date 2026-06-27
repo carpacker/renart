@@ -250,6 +250,7 @@ function assetDisplayFields(asset: WebAsset, pipeline: WebPipeline): Omit<BuildA
     imports: importsFromContent(asset.content),
     status: asset.is_materialized ? "success" : "pending",
     materializedAt: asset.is_materialized ? "current" : "not materialized",
+    parseError: asset.parse_error,
   };
 }
 
@@ -1490,6 +1491,15 @@ function EditorWorkspace({
       ) : null}
       <div className="flex min-h-0 flex-1">
         <div className="flex min-w-0 flex-1 flex-col">
+          {asset.workspaceAsset?.parse_error ? (
+            <div className="flex items-start gap-2 border-b border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700 dark:border-red-500/30 dark:bg-red-500/10 dark:text-red-300">
+              <AlertTriangle className="mt-0.5 size-3.5 shrink-0" />
+              <div className="min-w-0">
+                <span className="font-medium">This asset could not be parsed.</span> Fix the file below to restore it.
+                <pre className="mt-1 overflow-x-auto whitespace-pre-wrap font-mono text-[11px] opacity-80">{asset.workspaceAsset.parse_error}</pre>
+              </div>
+            </div>
+          ) : null}
           {asset.workspaceAsset && asset.pipelineId && asset.workspaceAsset.type.toLowerCase() === "sling" ? (
             <SlingParametersEditor asset={asset.workspaceAsset} pipelineId={asset.pipelineId} />
           ) : asset.workspaceAsset && asset.pipelineId ? (

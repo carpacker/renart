@@ -176,8 +176,16 @@ func (s *WorkspaceService) ComputeState(ctx context.Context) (model.WorkspaceSta
 	for _, pPath := range pipelinePaths {
 		parsed, parseErr := builder.CreatePipelineFromPath(ctx, pPath, pipeline.WithMutate())
 		if parseErr != nil {
+			// A single unparseable asset must not hide the whole pipeline. Retry
+			// with a tolerant builder that turns the broken asset into a placeholder
+			// (carrying its error) so the pipeline and its other assets stay visible
+			// and the user can open and fix the offending file.
+			recovered, recoverErr := NewRenartTolerantPipelineBuilder(fs).CreatePipelineFromPath(ctx, pPath, pipeline.WithMutate())
 			state.Errors = append(state.Errors, pPath+": "+parseErr.Error())
-			continue
+			if recoverErr != nil || recovered == nil {
+				continue
+			}
+			parsed = recovered
 		}
 
 		relPipelinePath, relErr := filepath.Rel(s.workspaceRoot, pPath)
@@ -259,6 +267,22 @@ func (s *WorkspaceService) ComputeState(ctx context.Context) (model.WorkspaceSta
 				columns = apiResponseFieldColumns(asset)
 			}
 
+			// A placeholder emitted by the tolerant builder carries its parse error
+			// in meta; lift it into a first-class field and keep it out of the meta map.
+			assetMeta := asset.Meta
+			parseError := ""
+			if msg, ok := assetMeta[parseErrorMetaKey]; ok {
+				parseError = msg
+				cleaned := make(pipeline.EmptyStringMap, len(assetMeta))
+				for key, value := range assetMeta {
+					if key == parseErrorMetaKey {
+						continue
+					}
+					cleaned[key] = value
+				}
+				assetMeta = cleaned
+			}
+
 			pSummary.Assets = append(pSummary.Assets, model.Asset{
 				ID:                      EncodeID(filepath.ToSlash(relAssetPath)),
 				Name:                    asset.Name,
@@ -267,7 +291,7 @@ func (s *WorkspaceService) ComputeState(ctx context.Context) (model.WorkspaceSta
 				Content:                 content,
 				Upstreams:               upstreams,
 				Parameters:              parameters,
-				Meta:                    asset.Meta,
+				Meta:                    assetMeta,
 				Columns:                 PipelineColumnsToModelColumns(columns),
 				Connection:              connectionName,
 				MaterializationType:     declaredMatType,
@@ -277,6 +301,7 @@ func (s *WorkspaceService) ComputeState(ctx context.Context) (model.WorkspaceSta
 				Tags:                    asset.Tags,
 				IsMaterialized:          false,
 				Class:                   notebook.ClassPipeline,
+				ParseError:              parseError,
 			})
 		}
 
