@@ -1,0 +1,70 @@
+---
+title: Organising assets into folders
+description: "How Renart turns the folders under assets/ into pipeline layers and asset names."
+---
+{/* Diátaxis mode: Explanation. See architecture/renart-docs-framework.md for the template. */}
+import { Aside } from '@astrojs/starlight/components';
+
+A pipeline groups its assets by **folder**, not by a naming prefix. The subfolders
+you create under a pipeline's `assets/` directory become the layers you see on the
+canvas, and they decide each asset's name.
+
+## Folders become layers
+
+In the demo pipeline, the assets live in three folders:
+
+```
+acme_shop/
+  assets/
+    raw/        # four CSV seeds
+    staging/    # four cleaning views
+    marts/      # the tables you query
+```
+
+On the [pipeline canvas](/docs/workspace/pipeline-canvas/) those folders render as
+labelled group boxes — `raw`, `staging`, `marts` — with a count of how many assets
+each holds. The Explorer shows the same folders. Move an asset to a different
+folder and it moves to that group; there's no separate setting to keep in sync.
+
+## Folders decide the name
+
+An asset's name is its path under `assets/`, with the folders joined by dots. So:
+
+| File | Asset name |
+| --- | --- |
+| `assets/raw/customers.asset.yml` | `raw.customers` |
+| `assets/staging/customers.sql` | `staging.customers` |
+| `assets/marts/customer_revenue.sql` | `marts.customer_revenue` |
+
+That's why the same leaf name can appear in more than one layer: `raw.customers`
+and `staging.customers` are different assets because they sit in different folders.
+The first segment of the name (`raw`, `staging`, `marts`) is also the schema the
+asset materialises into, so the layout you choose on disk is the layout you get in
+the warehouse.
+
+<Aside type="tip" title="No prefixes needed">
+You don't need `raw_`, `stg_`, or `mart_` prefixes on file names. The folder already
+carries that meaning, and Renart reads it for you.
+</Aside>
+
+## Referencing across layers
+
+Because the folder is part of the name, you refer to an upstream asset by its full
+name in SQL and in `depends`:
+
+```sql
+SELECT * FROM raw.customers     -- staging/customers.sql reads the raw layer
+SELECT * FROM staging.customers -- marts read the staging layer
+```
+
+Renart infers most of these links from your SQL — see
+[Dependencies](/docs/editing-assets/dependencies/).
+
+## Related
+
+- [The pipeline canvas](/docs/workspace/pipeline-canvas/) — where the folder groups
+  appear.
+- [Identity, owners & tags](/docs/editing-assets/identity-owners-tags/) — overriding
+  the inferred name and setting an explicit one.
+- [How Renart works](/docs/introduction/how-renart-works/) — why everything is a
+  file on disk.

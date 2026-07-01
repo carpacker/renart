@@ -1,0 +1,12 @@
+name: raw.order_items
+type: duckdb.seed
+description: Raw order line items loaded from a CSV seed.
+parameters:
+  path: ./order_items.csv
+columns:
+  - name: order_id
+    type: integer
+  - name: product_id
+    type: integer
+  - name: quantity
+    type: integer

@@ -1,7 +1,9 @@
 # Renart User-Facing Documentation — Concept & Plan
 
-Status: proposal. This document defines how we structure, write, and grow the
-user-facing docs at `docs/` (Astro Starlight, served at getrenart.com/docs).
+Status: active (decisions in §9 locked with the user). This document defines what
+we build and in what order for the user-facing docs at `docs/` (Astro Starlight,
+served at getrenart.com/docs). The companion `renart-docs-framework.md` defines the
+authoring contract (voice, templates, conventions, the docs gate).
 
 ---
 
@@ -10,21 +12,24 @@ user-facing docs at `docs/` (Astro Starlight, served at getrenart.com/docs).
 The docs must let a data/analytics engineer go from "never heard of Renart" to
 "running, editing, and trusting a real pipeline" without reading the source. They
 cover the **product** (the web app + CLI), not the codebase (that lives in
-`architecture/*`). They sit *next to* Bruin's own docs: Renart docs explain the
-Renart experience and link out to Bruin for the underlying asset/connection model
-rather than re-documenting it.
+`architecture/*`). They teach **Renart's own model in Renart's own words** and do
+not require the reader to know Bruin: Bruin is mentioned only where it is
+load-bearing (file-compatibility, CLI interop, a few credential shapes we defer on)
+and linked rather than taught.
 
 Non-goals: API/internal architecture reference (kept in `architecture/`), and
-re-explaining Bruin concepts Bruin already documents well.
+teaching Bruin. We reduce Bruin's presence overall — see §9.1.
 
 ## 2. Audience & jobs-to-be-done
 
-Primary persona (from the README): data engineers, analytics engineers, and
-technical data users who want a visual, Git-native way to work on Bruin pipelines.
+Primary persona: data engineers, analytics engineers, and technical data users who
+want a visual, Git-native way to build and run data pipelines. **We assume no prior
+Bruin knowledge** — many readers will meet the underlying engine for the first time
+through Renart, and the docs must carry them without that background.
 
 Three reader modes the IA must serve simultaneously:
 
-- **Evaluator** — "Is this for me, and how is it different from the Bruin CLI / a
+- **Evaluator** — "Is this for me, and how is it different from a CLI tool or a
   dashboard?" Needs orientation, concepts, and a fast win.
 - **New user** — "Get me running on my own repo." Needs install + guided tutorials.
 - **Working user** — "How do I do X right now?" Needs short, findable, task-shaped
@@ -36,35 +41,31 @@ Today `docs/` has two sidebar groups — **Introduction** (Overview, Concepts, W
 Renart Is For, Renart for Bruin Users) and **Getting Started** (Installation,
 Quickstart, Running Renart). Tone is excellent: clear, concept-first, concise.
 
+The current Bruin-User framing (a dedicated "Renart for Bruin Users" page, Bruin
+assumed) is **out of step with the locked audience decision** (§9.1): we now assume
+no Bruin knowledge. That page becomes a short, optional "Renart & the Bruin CLI"
+interop note rather than a load-bearing bridge, and Bruin references thin out
+across the set.
+
 Gap: it stops at "you can start Renart." Nothing documents the actual product
 surface — the canvas, the asset editor/workbench, inspect, materialize, asset
-types (SQL/Python/API/Sling/ingestr/seed), connections & environments, notebooks,
+types (SQL/Python/API/Sling/seed), connections & environments, notebooks,
 scheduling, type-checking, runs/staleness, or the CLI beyond `renart web`. That is
 the bulk of what users need and exactly what's grown most on the redesign branch.
 
 ## 4. Documentation philosophy
 
-Adopt **Diátaxis** (the four-mode model) so every page has one job and authors
-know where new content goes. The four modes, mapped to Renart:
+We adopt **Diátaxis** (the four-mode model) so every page has one job. The full
+authoring contract — the four modes, voice & tone, page templates, terminology,
+screenshots, and the review checklist — lives in `renart-docs-framework.md`. The
+load-bearing points for the IA below:
 
-| Mode | Reader is… | Renart content | Example |
-| --- | --- | --- | --- |
-| **Tutorial** | learning by doing | Getting Started, "build your first pipeline" | Quickstart |
-| **How-to** | accomplishing a task | Workflow guides | "Add a manual dependency", "Load a CSV with Sling" |
-| **Reference** | confirming a fact | CLI flags, asset file format, shortcuts | `renart type-check` flags |
-| **Explanation** | understanding *why* | Concepts, the Git-native model | "How Renart relates to Bruin" |
-
-Rules that fall out of this:
-- A page never mixes modes. A how-to that starts explaining theory splits into a
-  how-to + a linked explanation.
-- **Terminology is fixed to the product's own words** — Build, Catalog, Inspect,
-  Materialize, asset, connection, environment, workbench. The docs must use the
-  exact labels the UI uses; a glossary entry per term anchors them.
-- Every how-to is **task-titled** ("Materialize a pipeline", not "Materialization")
-  and ends in a verifiable outcome.
-- **Don't duplicate Bruin.** When a topic is really a Bruin concept (asset YAML
-  fields, connection credential shapes), state the Renart-specific part and link to
-  Bruin docs for the canonical reference.
+- A page never mixes modes (tutorial / how-to / reference / explanation).
+- **Terminology is fixed to the product's own words** (Build, Catalog, Inspect,
+  Materialize, asset, connection, environment, workbench), with a glossary anchor.
+- Every how-to is **task-titled** and ends in a verifiable outcome.
+- **No Bruin tax.** Teach Renart's model directly; mention Bruin only where
+  load-bearing and link out rather than teaching it (§9.1).
 
 ## 5. Proposed information architecture
 
@@ -76,14 +77,18 @@ succeed without it), **P1** = core workflows, **P2** = depth/polish.
 - Concepts / glossary — pipeline, asset, canvas, inspect, materialize, connection,
   environment, workbench, staleness **[P0, expand existing]**
 - Who Renart is for **[P0, exists]**
-- Renart & Bruin — relationship, when to use the CLI vs the UI, file-compat
-  promise **[P0, exists as "Renart for Bruin Users"]**
-- How Renart works — the Git-native file model, "every edit is a file change" **[P1]**
+- How Renart works — the Git-native file model, "every edit is a file change",
+  the file-compat promise **[P1]**
+- Renart & the Bruin CLI — *optional* short interop note: edits are plain files the
+  `bruin` CLI can also run; when you'd reach for the CLI. Demoted from the old
+  "Renart for Bruin Users" bridge to keep with the no-Bruin-assumption audience
+  **[P2, rework existing]**
 
 ### Getting Started *(Tutorial)*
 - Installation **[P0, exists]**
-- Quickstart — open the bundled example, read the canvas, inspect, materialize, in
-  ~5 min **[P0, exists — tighten to a single happy path]**
+- Quickstart — open the docs demo project (`docs/demo-project`, `acme_shop`), read
+  the canvas, inspect, materialize, in ~5 min **[P0, exists — retarget onto the demo
+  project and tighten to a single happy path]**
 - Build your first pipeline — longer guided tutorial on the reader's own repo:
   add a connection, create a SQL asset, add a downstream, run it **[P1]**
 - Running Renart — ports, fallback, flags, opening a project **[P0, exists]**
@@ -115,8 +120,10 @@ succeed without it), **P1** = core workflows, **P2** = depth/polish.
 - Load (Sling) assets — source/target connections, the `local` file option, path
   & stream autocomplete (`sling conns discover`), modes, automatic upstream &
   column inference **[P1, new feature — author alongside the code]**
-- Ingestr assets **[P2]**
 - Seeds **[P2]**
+
+*Ingestr assets are intentionally out of scope for the docs for now (decision in
+§9), so they are not listed as an asset type to document.*
 
 ### Connections & Environments *(How-to)*
 - Managing connections — add, edit, test **[P1]**
@@ -154,33 +161,27 @@ succeed without it), **P1** = core workflows, **P2** = depth/polish.
 
 ## 6. Page templates & conventions
 
-Author every page from a fixed skeleton so pages stay scannable and uniform.
+The page skeletons (how-to / reference / tutorial / explanation), frontmatter,
+callouts, cross-linking, and the full screenshot guidance live in
+`renart-docs-framework.md`. The IA-relevant headlines:
 
-- **How-to:** one-line goal → prerequisites → numbered steps → "Result" → "Related".
-- **Reference:** terse, table-first, no narrative.
-- **Tutorial:** narrative, one happy path, every step verifiable, no branching.
-- **Explanation:** prose, diagrams allowed, links to the how-tos it motivates.
-
-Conventions:
-- **Frontmatter** `title` + `description` on every page (already the norm); the
-  `description` is the SEO/serp line.
-- **Screenshots** are first-class but costly to maintain. Standardize on the
-  bundled example project for every screenshot so they're reproducible, and script
-  capture where possible (a `make docs-screenshots` target already exists — extend
-  it). Annotate UI shots; keep them few and high-value. Prefer short GIFs/video
-  only for genuinely motion-based flows (canvas, inspect).
-- **Code/CLI blocks** copy-paste runnable against the example project.
-- **Callouts** (Starlight asides) for the file-compat promise and destructive
-  actions (materialize side effects, full-refresh).
-- **Cross-links** every page to its Diátaxis siblings ("Related") and to Bruin
-  where relevant.
+- **Four fixed skeletons**, one per Diátaxis mode; pages never mix them.
+- **Screenshots are hand-curated** (decision §9.3): deliberately composed against
+  the **docs demo project** (`docs/demo-project`, the `acme_shop` pipeline — a
+  purpose-built coherent example), cropped, alt-texted, annotated only when it adds
+  clarity. No auto-capture harness. Few and high-value; motion (GIF/MP4) only for
+  genuinely motion-based flows (canvas, Inspect).
+- **Code/CLI blocks** copy-paste runnable against the docs demo project.
+- **Callouts** for the file-compat promise and destructive/side-effecting actions.
 - **One H1 per page**, sentence-case headings matching UI labels.
 
 ## 7. Cross-cutting decisions
 
-- **Bruin boundary.** Maintain a single "Renart & Bruin" explanation page as the
-  canonical statement of the split, and link to it rather than re-litigating it
-  per page. Every asset-type page names the Bruin doc it defers to.
+- **Bruin boundary.** We teach Renart's model directly and assume no Bruin
+  knowledge (§9.1). Bruin appears only where load-bearing; a single optional
+  "Renart & the Bruin CLI" interop note carries the file-compat/CLI story, and the
+  rare page that genuinely defers (a specific credential shape) links the exact
+  Bruin doc rather than restating it.
 - **Versioning.** Renart is pre-1.0 and fast-moving. Start *unversioned* (docs
   track `main`); add Starlight versioning only once releases stabilize. Record a
   "docs reflect vX" note in the footer.
@@ -190,8 +191,12 @@ Conventions:
   helpful?" so gaps surface from real readers.
 - **Accessibility & SEO.** Alt text on every image (the canvas shots especially),
   descriptive `description` frontmatter, keep the existing structured-data/OG setup.
-- **Contribution guide.** A short `docs/CONTRIBUTING`-style page: Diátaxis rules,
-  the page skeletons, the screenshot convention, and "use the UI's exact words."
+- **Contribution guide.** The authoring contract is `renart-docs-framework.md`
+  (Diátaxis rules, page skeletons, screenshot convention, "use the UI's exact
+  words", the docs gate). A short `docs/`-internal contributor page can summarise it
+  and link there rather than restating it.
+- **Ownership / docs gate.** A user-facing change ships with its docs, enforced by a
+  "docs touched?" PR checkbox (§9.5, detailed in the framework doc §7).
 
 ## 8. Phased rollout
 
@@ -212,19 +217,24 @@ explanation, shortcuts, config reference, deploy/standalone, richer media.
 Sequence within a phase by **reader frequency**, not by how interesting the
 feature is to us: install → quickstart → editing → connections → run → validate.
 
-## 9. Open questions (need a decision)
+## 9. Decisions (locked with the user)
 
-1. **Audience breadth.** Do we assume the reader already knows Bruin, or support a
-   Bruin-newcomer path? This changes how much Bruin we restate. *(Recommendation:
-   assume light Bruin familiarity; one "Renart & Bruin" page bridges newcomers.)*
-2. **Docs vs. in-app help.** How much lives in docs vs. inline tooltips/empty
-   states in the app? Propose: docs own conceptual + multi-step; the app owns
-   field-level hints.
-3. **Screenshot maintenance budget.** Auto-captured against the example, or
-   hand-curated? Auto is cheaper long-term but needs the capture harness extended.
-4. **Versioning trigger.** Which release turns on doc versioning?
-5. **Ownership.** Who owns docs freshness as features land (a "docs touched?" PR
-   checkbox)?
+1. **Audience breadth → assume zero Bruin knowledge.** We teach Renart's own model
+   in Renart's own words and reduce Bruin's presence across the docs. Bruin appears
+   only where load-bearing (file-compat, CLI interop, a few credential shapes) and
+   is linked, not taught. The old "Renart for Bruin Users" bridge is demoted to an
+   optional interop note (§3, §5).
+2. **Docs vs. in-app help → docs own conceptual + multi-step; the app owns
+   field-level hints.** A single field's meaning is a tooltip; a multi-step flow or
+   a "what/why" is a docs page. (Framework doc §0.2.)
+3. **Screenshots → hand-curated.** Deliberately composed against the docs demo
+   project (`docs/demo-project`, the `acme_shop` pipeline — a purpose-built coherent
+   example, not a personal playground), cropped, alt-texted, annotated only when
+   useful. No auto-capture harness. (Framework doc §5.)
+4. **Versioning → unversioned for now.** Docs track `main`; turn on Starlight
+   versioning later once releases stabilise (trigger TBD at that point).
+5. **Ownership → a "docs touched?" gate.** A PR checkbox marks user-facing changes
+   as docs-updated (or N/A with a reason); reviewers enforce it. (Framework doc §7.)
 
 ## 10. Success criteria
 

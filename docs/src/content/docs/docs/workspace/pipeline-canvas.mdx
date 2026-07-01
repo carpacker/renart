@@ -1,0 +1,76 @@
+---
+title: The pipeline canvas
+description: "Read your pipeline's lineage on the canvas, navigate it, and open or create assets from it."
+---
+{/* Diátaxis mode: How-to. See architecture/renart-docs-framework.md for the template. */}
+import { Image } from 'astro:assets';
+import canvas from '../../../../assets/docs/workspace/pipeline-canvas.png';
+
+The pipeline canvas is the main screen in **Build**. It shows every asset in a
+pipeline as a node, with arrows for how data flows between them, so you can read
+the whole pipeline at a glance and jump straight to the piece you want to work on.
+
+<Image src={canvas} alt="The pipeline canvas showing the acme_shop demo pipeline grouped into three labelled columns by folder — raw (four CSV seeds), staging (four cleaning views), and marts (order_items_enriched, customer_revenue, daily_revenue) — with lineage arrows flowing left to right between the asset nodes and zoom, fit, and lock controls at the bottom left." />
+
+The canvas isn't an exported diagram — it's the live workspace. Everything you see
+is a real file in your project, and the layout updates as you edit.
+
+## Read an asset node
+
+Each node summarizes one asset:
+
+- **Name** and a type icon in the header (SQL, Python, API, Load, and so on).
+- The **file path** the asset lives at.
+- **Status badges** — whether the asset's output is fresh, stale, missing, or never
+  built, plus its connection (for example `duckdb-default`).
+
+A node with a coloured border is the one you currently have selected; its details
+open in the panel on the right.
+
+## Read the layout
+
+Assets are grouped into labelled boxes by the folder they live in under `assets/`.
+In the demo pipeline that's `raw`, `staging`, and `marts` — so the canvas mirrors
+the folders in the Explorer, and the count next to each label is how many assets
+that folder holds. Renart uses these folders, not a naming prefix, to organise a
+pipeline into layers: an asset in `assets/staging/` is named `staging.<name>`. See
+[Organising assets into folders](/docs/editing-assets/organising-assets/).
+
+## Follow the lineage
+
+Arrows point from an **upstream** asset to the **downstream** asset that depends on
+it. Read left-to-right (or top-down) to see how raw inputs become finished tables.
+Renart works out most of these links for you from the asset's code; you can also
+add links by hand. To learn how that inference works and how to override it, see
+[Dependencies](/docs/editing-assets/dependencies/).
+
+## Navigate the canvas
+
+- **Pan** by dragging an empty part of the canvas.
+- **Zoom** with the scroll wheel, or the **+ / −** buttons at the bottom left.
+- **Fit the whole pipeline** into view with the frame button beneath them.
+- **Lock** the layout with the padlock button to avoid moving nodes by accident.
+- The view toggles at the top right switch between the canvas, a split view, and a
+  code view of the same pipeline.
+
+## Open an asset
+
+Click any node to select it and open its details on the right. From there you can
+open the full editor to change the asset's code and metadata — see
+[The asset editor](/docs/editing-assets/asset-editor/).
+
+## Create an asset
+
+- Use **+ New asset** at the top right to add an asset to the pipeline.
+- To branch off existing work, open a node's **⋯** menu and create a downstream
+  asset; the new asset starts with a dependency on the one you came from.
+
+## Related
+
+- [Tour of the interface](/docs/workspace/interface-tour/) — where the canvas sits
+  in the app.
+- [The asset editor](/docs/editing-assets/asset-editor/) — edit what a node
+  contains.
+- [Dependencies](/docs/editing-assets/dependencies/) — how the arrows are derived.
+- [How Renart works](/docs/introduction/how-renart-works/) — why the canvas maps to
+  files.

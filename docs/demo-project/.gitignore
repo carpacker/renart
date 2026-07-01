@@ -1,0 +1,8 @@
+# Generated when the pipeline runs — not source. The DuckDB file and run logs are
+# rebuilt by materializing the pipeline, so they stay out of version control.
+# .bruin.yml IS tracked here on purpose: it only points at a local DuckDB file and
+# carries no secrets, so the demo is reproducible out of the box.
+*.duckdb
+*.duckdb.wal
+logs/
+.renart/

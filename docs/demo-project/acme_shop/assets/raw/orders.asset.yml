@@ -1,0 +1,12 @@
+name: raw.orders
+type: duckdb.seed
+description: Raw order headers loaded from a CSV seed.
+parameters:
+  path: ./orders.csv
+columns:
+  - name: order_id
+    type: integer
+  - name: customer_id
+    type: integer
+  - name: ordered_at
+    type: varchar

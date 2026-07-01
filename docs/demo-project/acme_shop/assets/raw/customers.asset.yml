@@ -1,0 +1,14 @@
+name: raw.customers
+type: duckdb.seed
+description: Raw customer records loaded from a CSV seed.
+parameters:
+  path: ./customers.csv
+columns:
+  - name: customer_id
+    type: integer
+  - name: customer_name
+    type: varchar
+  - name: country
+    type: varchar
+  - name: signup_date
+    type: varchar

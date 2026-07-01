@@ -1,0 +1,9 @@
+id: 247723b3-6cc7-4f0c-bc04-0ff7116df48f
+name: acme_shop
+schedule: daily
+start_date: "2025-01-01"
+default_connections:
+  duckdb: duckdb-default
+concurrency: 1
+timezone: UTC
+catchup: false

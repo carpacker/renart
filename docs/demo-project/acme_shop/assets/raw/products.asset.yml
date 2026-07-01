@@ -1,0 +1,14 @@
+name: raw.products
+type: duckdb.seed
+description: Raw product catalog loaded from a CSV seed.
+parameters:
+  path: ./products.csv
+columns:
+  - name: product_id
+    type: integer
+  - name: product_name
+    type: varchar
+  - name: category
+    type: varchar
+  - name: unit_price
+    type: double
