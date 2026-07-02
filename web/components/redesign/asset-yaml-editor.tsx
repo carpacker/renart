@@ -15,6 +15,7 @@ import {
   CommandList,
 } from "@/components/ui/command";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { ScrollArea } from "@/components/ui/scroll-area";
 import {
   Select,
   SelectContent,
@@ -56,12 +57,14 @@ export function AssetYamlEditor({ asset, pipelineId }: { asset: WebAsset; pipeli
   );
 
   return (
-    <div className="font-monaco min-h-0 flex-1 overflow-y-auto bg-background p-3 text-[13px] leading-6">
-      <IdentitySection asset={asset} pipelineId={pipelineId} />
-      <MaterializationSection asset={asset} pipelineId={pipelineId} isSql={isSql} />
-      <DependsSection asset={asset} />
-      <ColumnsSection asset={asset} isSql={isSql} />
-    </div>
+    <ScrollArea className="min-h-0 flex-1 bg-background">
+      <div className="font-monaco p-3 text-[13px] leading-6">
+        <IdentitySection asset={asset} pipelineId={pipelineId} />
+        <MaterializationSection asset={asset} pipelineId={pipelineId} isSql={isSql} />
+        <DependsSection asset={asset} />
+        <ColumnsSection asset={asset} isSql={isSql} />
+      </div>
+    </ScrollArea>
   );
 }
 

@@ -15,7 +15,6 @@ import {
   CheckCircle2,
   ChevronDown,
   ChevronRight,
-  ChevronsUpDown,
   ChevronUp,
   Circle,
   ClipboardCheck,
@@ -33,7 +32,6 @@ import {
   Layers,
   Loader2,
   MoreHorizontal,
-  Network,
   Package,
   PanelLeft,
   PanelRight,
@@ -59,7 +57,6 @@ import {
   BreadcrumbSeparator,
 } from "@/components/ui/breadcrumb";
 import { Button } from "@/components/ui/button";
-import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList } from "@/components/ui/command";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import {
   DropdownMenu,
@@ -79,7 +76,6 @@ import { Label } from "@/components/ui/label";
 import { createAsset, deleteAsset } from "@/lib/api-assets";
 import { buildCreateAssetInput, buildSuggestedAssetName } from "@/lib/workspace-shell-helpers";
 import type { NewAssetKind } from "@/components/new-asset-node";
-import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -139,7 +135,7 @@ import { AssetGuidedCards } from "./asset-guided-cards";
 import { AssetYamlEditor } from "./asset-yaml-editor";
 import { SlingParametersEditor } from "./sling-parameters-editor";
 import { RedesignLineageCanvas, assetDisplayName, assetGroupName, assetNameParts, type RedesignLineageCanvasAsset } from "./lineage-canvas";
-import { IntegrationBadge, RedesignPage, RedesignPanel, SectionCard, SeverityIcon, SimpleTable, StalenessBadge, StatusPill, stalenessDotClassName, stalenessLabel } from "./redesign-primitives";
+import { RedesignPage, RedesignPanel, SeverityIcon, SimpleTable, StalenessBadge, StatusPill, stalenessDotClassName, stalenessLabel } from "./redesign-primitives";
 
 export type RedesignBuildView = "canvas" | "split" | "code";
 export type RedesignResultTab = "inspect" | "materialize" | "query" | "typecheck" | "tests" | "diagnostics" | "metadata" | "shell" | "history";
@@ -195,6 +191,7 @@ type BuildContextValue = {
   goToCatalog: (assetId?: string) => void;
   openNewAsset: () => void;
   createDownstreamAsset: (source: { id: string; name: string }) => void;
+  openInspector: () => void;
   openBottom: (tab: RedesignResultTab) => void;
   materializeSelectedAsset: () => void;
   inspectSelectedAsset: () => void;
@@ -696,6 +693,7 @@ export function RedesignBuildPage({
     goToCatalog,
     openNewAsset,
     createDownstreamAsset,
+    openInspector: () => setInspectorOpen(true),
     openBottom,
     materializeSelectedAsset,
     inspectSelectedAsset,
@@ -805,7 +803,7 @@ export function RedesignBuildPage({
         </PanelGroup>
 
         <RedesignPanel className="hidden min-h-0 xl:flex xl:flex-col">
-          <Inspector asset={selectedAsset} declaredDependencies={declaredDependencies} addedDependencies={addedDependencies} onAddDependency={addDependency} onOpenPipelineSettings={() => setPipelineSettingsOpen(true)} onOpenResults={openBottom} />
+          <Inspector asset={selectedAsset} />
         </RedesignPanel>
       </div>
 
@@ -825,8 +823,8 @@ export function RedesignBuildPage({
       </Sheet>
       <Sheet open={inspectorOpen} onOpenChange={setInspectorOpen}>
         <SheetContent side="right" className="w-[22rem] gap-0 p-0 sm:max-w-[22rem]">
-          <SheetTitle className="sr-only">Inspector</SheetTitle>
-          <Inspector asset={selectedAsset} declaredDependencies={declaredDependencies} addedDependencies={addedDependencies} onAddDependency={addDependency} onOpenPipelineSettings={() => setPipelineSettingsOpen(true)} onOpenResults={openBottom} />
+          <SheetTitle className="sr-only">Asset properties</SheetTitle>
+          <Inspector asset={selectedAsset} />
         </SheetContent>
       </Sheet>
 
@@ -1423,6 +1421,7 @@ function EditorWorkspace({
     addDependency,
     goToAsset,
     openBottom,
+    openInspector,
     materializeSelectedAsset,
     inspectSelectedAsset,
     materializeLoading,
@@ -1432,14 +1431,6 @@ function EditorWorkspace({
   const isMobile = useIsMobile();
   const editorOnly = view === "code";
   const showActionLabels = editorOnly && !isMobile;
-  // Asset-properties cards live in an on-demand side sheet (overlay) rather than
-  // an inline panel, so they never steal editor width on desktop and stay
-  // reachable on mobile. Closed by default.
-  const [metadataOpen, setMetadataOpen] = useState(false);
-  // Two presentations of the same editable metadata: focused cards, or an
-  // interactive YAML-shaped view. Both drive the same asset API.
-  const [propsView, setPropsView] = useState<"cards" | "yaml">("cards");
-
   if (adhoc) {
     return <AdhocEditor showActionLabels={showActionLabels} />;
   }
@@ -1470,11 +1461,10 @@ function EditorWorkspace({
           <Button
             variant="ghost"
             size="xs"
-            className={metadataOpen ? "text-foreground" : "text-muted-foreground"}
-            onClick={() => setMetadataOpen((open) => !open)}
+            className="text-muted-foreground xl:hidden"
+            onClick={openInspector}
             title="Asset properties"
             aria-label="Asset properties"
-            aria-pressed={metadataOpen}
           >
             <PanelRight className="size-3.5" />
             {showActionLabels ? <span className="ml-1">Properties</span> : null}
@@ -1519,37 +1509,6 @@ function EditorWorkspace({
           )}
         </div>
       </div>
-      {asset.workspaceAsset && asset.pipelineId ? (
-        <Sheet open={metadataOpen} onOpenChange={setMetadataOpen}>
-          <SheetContent side="right" className="flex w-full flex-col gap-0 p-0 sm:max-w-md">
-            <SheetTitle className="sr-only">Asset properties</SheetTitle>
-            <div className="flex shrink-0 items-center gap-2 border-b py-2 pl-3 pr-12">
-              <span className="text-xs font-medium text-muted-foreground">Asset properties</span>
-              <div className="ml-auto flex overflow-hidden rounded-md border text-[11px]">
-                {(["cards", "yaml"] as const).map((option) => (
-                  <button
-                    key={option}
-                    type="button"
-                    className={cn(
-                      "px-2 py-0.5 capitalize transition-colors",
-                      propsView === option ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted"
-                    )}
-                    aria-pressed={propsView === option}
-                    onClick={() => setPropsView(option)}
-                  >
-                    {option}
-                  </button>
-                ))}
-              </div>
-            </div>
-            {propsView === "cards" ? (
-              <AssetGuidedCards asset={asset.workspaceAsset} pipelineId={asset.pipelineId} />
-            ) : (
-              <AssetYamlEditor asset={asset.workspaceAsset} pipelineId={asset.pipelineId} />
-            )}
-          </SheetContent>
-        </Sheet>
-      ) : null}
     </div>
   );
 }
@@ -2052,494 +2011,54 @@ function HistoryPanel({
   );
 }
 
-function Inspector({
-  asset,
-  declaredDependencies,
-  addedDependencies,
-  onAddDependency,
-  onOpenPipelineSettings,
-  onOpenResults,
-}: {
-  asset: BuildAsset;
-  declaredDependencies: string[];
-  addedDependencies: string[];
-  onAddDependency: (dependency: string) => void;
-  onOpenPipelineSettings: () => void;
-  onOpenResults: (tab: RedesignResultTab) => void;
-}) {
-  const missingDependencies = asset.kind === "python" ? missingPythonDependencies(asset, declaredDependencies) : [];
-  const [fullEditorOpen, setFullEditorOpen] = useState(false);
+function Inspector({ asset }: { asset: BuildAsset }) {
+  // The inspector is the asset properties editor: two presentations of the same
+  // editable metadata — focused cards, or an interactive YAML-shaped view — both
+  // driving the same asset API + transactions.
+  const [propsView, setPropsView] = useState<"cards" | "yaml">("cards");
+  const workspaceAsset = asset.workspaceAsset;
+  const editable = Boolean(workspaceAsset && asset.pipelineId);
+
   return (
-    <>
-      <DelimitedCardHeader>
-        <Sliders className="size-4 text-primary" />
-        <div className="min-w-0">
-          <DelimitedCardTitle>{asset.name}</DelimitedCardTitle>
+    <div className="flex h-full min-h-0 flex-col">
+      <div className="flex shrink-0 items-center gap-2 border-b px-3 py-2">
+        <Sliders className="size-4 shrink-0 text-primary" />
+        <div className="min-w-0 flex-1">
+          <div className="truncate font-monaco text-xs font-medium">{asset.name}</div>
           <p className="truncate text-[11px] text-muted-foreground">{asset.path ?? "asset"} · {asset.integration}</p>
         </div>
-      </DelimitedCardHeader>
-      <Tabs defaultValue="config" className="min-h-0 flex-1">
-        <ScrollArea className="mx-3 mt-3 max-w-[calc(100%-1.5rem)]" horizontalScrollBarClassName="hidden" viewportClassName="w-full">
-          <TabsList className={scrollableTabsListClass}>
-            <TabsTrigger value="config" className={scrollableTabsTriggerClass}>Config</TabsTrigger>
-            <TabsTrigger value="deps" className={scrollableTabsTriggerClass}>Lineage</TabsTrigger>
-            <TabsTrigger value="tests" className={scrollableTabsTriggerClass}>Tests</TabsTrigger>
-            <TabsTrigger value="schema" className={scrollableTabsTriggerClass}>Schema</TabsTrigger>
-            <TabsTrigger value="preview" className={scrollableTabsTriggerClass}>Preview</TabsTrigger>
-            {asset.kind === "python" ? <TabsTrigger value="python" className={scrollableTabsTriggerClass}>Python</TabsTrigger> : null}
-          </TabsList>
-        </ScrollArea>
-        <ScrollArea className="min-h-0 flex-1">
-          <TabsContent value="config" className="space-y-4 p-3 text-sm">
-            <div className="space-y-3 text-xs">
-              <div className="flex items-center justify-between">
-                <span className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Definition</span>
-                <Button variant="outline" size="xs" onClick={() => setFullEditorOpen(true)}><Sliders className="size-3" />Edit</Button>
-              </div>
-              <Field label="Name" value={asset.workspaceAsset?.name ?? (asset.dir ? `${asset.dir}.${asset.name}` : asset.name)} />
-              <Field label="Type" value={asset.type ?? kindMeta[asset.kind].label} />
-              <Field label="Materialization" value={asset.workspaceAsset?.materialization_type || (asset.kind === "source" ? "none" : "view")} />
-              <Field label="Owner" value="team@acme.io" />
-              <div className="flex items-center justify-between"><span className="text-muted-foreground">Connection</span><IntegrationBadge name={asset.connection || asset.integration} /></div>
-              <div className="flex items-center justify-between"><span className="text-muted-foreground">Tags</span><span className="rounded-md border px-1.5 py-0.5 text-[11px]">core</span></div>
-              <label className="block space-y-1.5">
-                <span className="text-xs text-muted-foreground">Description</span>
-                <Input defaultValue={asset.description} />
-              </label>
-              <Button
-                variant="link"
-                size="xs"
-                className="h-auto w-full justify-start whitespace-normal p-0 text-left leading-snug"
-                onClick={() => setFullEditorOpen(true)}
+        {editable ? (
+          <div className="flex shrink-0 overflow-hidden rounded-md border text-[11px]">
+            {(["cards", "yaml"] as const).map((option) => (
+              <button
+                key={option}
+                type="button"
+                className={cn(
+                  "px-2 py-0.5 capitalize transition-colors",
+                  propsView === option ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted"
+                )}
+                aria-pressed={propsView === option}
+                onClick={() => setPropsView(option)}
               >
-                Open full editor: depends, columns, checks, hooks, meta, raw YAML
-              </Button>
-            </div>
-          </TabsContent>
-          <TabsContent value="deps" className="space-y-4 p-3 text-sm">
-            <div className="space-y-4">
-              <div>
-                <div className="mb-2 flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground"><Network className="size-3.5" />Upstream</div>
-                <DependencyList names={asset.upstreams?.length ? asset.upstreams : ["No upstream assets"]} />
-              </div>
-              <div>
-                <div className="mb-2 flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground"><Network className="size-3.5" />Downstream</div>
-                <DependencyList names={["predicted_orders", "model_revenue"]} />
-              </div>
-            </div>
-          </TabsContent>
-          <TabsContent value="tests" className="p-3"><UnitTests compact onOpenResults={() => onOpenResults("tests")} /></TabsContent>
-          <TabsContent value="schema" className="p-3"><MetadataPanel compact onFull={() => onOpenResults("metadata")} /></TabsContent>
-          <TabsContent value="preview" className="space-y-3 p-3 text-sm">
-            <ToggleCard title="Show data preview on node" description="Render sample rows in the canvas card." />
-            <label className="block space-y-1.5 text-xs text-muted-foreground">Row limit<Input defaultValue="5" /></label>
-          </TabsContent>
-          <TabsContent value="python" className="space-y-3 p-3">
-            <SectionCard title="Requirements" icon={Cpu}>
-              <div className="space-y-3">
-                <SimpleTable columns={["Package", "Status"]} rows={declaredDependencies.map((dependency) => [<span key={dependency} className="font-mono">{dependency}</span>, addedDependencies.includes(dependency) ? "added in editor" : "declared"])} />
-                {missingDependencies.length > 0 ? (
-                  <div className="rounded-lg border border-amber-300 bg-amber-50 p-2 text-xs text-amber-800">
-                    <div className="mb-2 flex items-center gap-1.5 font-medium"><AlertTriangle className="size-3.5" />Missing imports</div>
-                    <div className="space-y-1">
-                      {missingDependencies.map((dependency) => (
-                        <div key={dependency} className="flex items-center gap-2">
-                          <span className="min-w-0 flex-1 truncate font-mono">{dependency}</span>
-                          <Button size="xs" variant="outline" className="h-6" onClick={() => onAddDependency(dependency)}>Add</Button>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                ) : <p className="text-xs text-muted-foreground">All detected imports are covered by pipeline dependencies.</p>}
-                <Button variant="outline" size="xs" onClick={onOpenPipelineSettings}><Package className="size-3" />Manage pipeline deps</Button>
-              </div>
-            </SectionCard>
-          </TabsContent>
-        </ScrollArea>
-      </Tabs>
-      <FullAssetEditorDialog open={fullEditorOpen} onOpenChange={setFullEditorOpen} asset={asset} />
-    </>
-  );
-}
-
-function FullAssetEditorDialog({
-  open,
-  onOpenChange,
-  asset,
-}: {
-  open: boolean;
-  onOpenChange: (open: boolean) => void;
-  asset: BuildAsset;
-}) {
-  const typeByKind: Record<string, string> = {
-    sql: "duckdb.sql",
-    python: "python",
-    ingestr: "ingestr",
-    sling: "ingestr",
-    source: "duckdb.source",
-    unittest: "duckdb.sql",
-  };
-  const ext = kindMeta[asset.kind].ext;
-  const inline = asset.kind === "sql" || asset.kind === "python";
-  const wrap = asset.kind === "sql" ? ["/* @bruin", "@bruin */"] : asset.kind === "python" ? ['\"\"\" @bruin', '@bruin \"\"\"'] : null;
-  const file = inline ? `assets/${asset.dir ?? "marts"}/${asset.name}${ext}` : `assets/${asset.dir ?? "marts"}/${asset.name}.asset.yml`;
-  const type = typeByKind[asset.kind] ?? "duckdb.sql";
-  const [name, setName] = useState(asset.dir ? `${asset.dir}.${asset.name}` : asset.name);
-  const [description, setDescription] = useState(asset.description);
-  const [owner, setOwner] = useState("team@acme.io");
-  const [tags, setTags] = useState(["core"]);
-  const [domains, setDomains] = useState(["sales"]);
-  const [metaPairs, setMetaPairs] = useState<Array<[string, string]>>([["sla", "99.9%"]]);
-  const [dependencies, setDependencies] = useState<Array<{ asset: string; mode: string }>>(asset.kind === "sql" ? [{ asset: "orders_cleaned", mode: "full" }] : []);
-  const [materialization, setMaterialization] = useState(asset.kind === "source" || asset.kind === "python" ? "none" : "view");
-  const [strategy, setStrategy] = useState("create+replace");
-  const [objectName, setObjectName] = useState(asset.name);
-  const [partitionBy, setPartitionBy] = useState("day");
-  const [incrementalKey, setIncrementalKey] = useState("created_at");
-  const [clusterBy, setClusterBy] = useState("region");
-  const [intervalStart, setIntervalStart] = useState("");
-  const [intervalEnd, setIntervalEnd] = useState("");
-  const [cooldown, setCooldown] = useState("300");
-  const [retries, setRetries] = useState("2");
-  const [retryDelay, setRetryDelay] = useState("30s");
-  const [timeout, setTimeoutValue] = useState("15m");
-  const [priority, setPriority] = useState("normal");
-  const [hooks, setHooks] = useState<Array<{ phase: string; command: string }>>([
-    { phase: "pre", command: "query: \"INSTALL httpfs\"" },
-    { phase: "post", command: "query: \"SET s3_region=''\"" },
-  ]);
-  const [columns, setColumns] = useState<Array<{ name: string; type: string; description: string; checks: string }>>(schemaRows.map((row) => ({ name: row.name, type: row.declared, description: row.description, checks: row.status === "match" ? "not_null" : "" })));
-  const [customChecks, setCustomChecks] = useState<Array<{ name: string; query: string }>>([
-    { name: "positive_revenue", query: "select * from revenue_daily where revenue < 0" },
-  ]);
-  const yaml = buildDefinitionYaml({ name, type, description, owner, tags, domains, metaPairs, dependencies, materialization, strategy, objectName, partitionBy, incrementalKey, clusterBy, intervalStart, intervalEnd, cooldown, retries, retryDelay, timeout, priority, hooks, columns, customChecks });
-
-  return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="flex h-[90dvh] max-h-[90dvh] w-[94vw] flex-col overflow-hidden p-0 sm:max-w-2xl">
-        <DialogHeader className="mb-0 flex h-14 shrink-0 justify-center border-b px-5 py-0">
-          <DialogTitle className="flex min-w-0 items-center gap-2 text-base">
-            <Sliders className="size-4 text-primary" />
-            <span className="shrink-0">Edit definition</span>
-            <span className="min-w-0 truncate font-mono text-xs font-normal text-muted-foreground">· {name}</span>
-          </DialogTitle>
-          <DialogDescription className="sr-only">Edit asset definition form fields or raw Bruin YAML.</DialogDescription>
-        </DialogHeader>
-        <Tabs defaultValue="form" className="min-h-0 flex-1 gap-0">
-          <div className="flex h-11 shrink-0 items-center gap-3 border-b px-5">
-            <TabsList>
-              <TabsTrigger value="form">Form</TabsTrigger>
-              <TabsTrigger value="yaml">YAML</TabsTrigger>
-            </TabsList>
-            <div className="min-w-0 flex-1 truncate text-right font-mono text-[11px] text-muted-foreground">
-              {inline ? "inline in " : ""}{file}
-            </div>
+                {option}
+              </button>
+            ))}
           </div>
-          <TabsContent value="form" className="m-0 min-h-0 flex-1 overflow-hidden data-[state=inactive]:hidden">
-            <ScrollArea className="h-[calc(90dvh-9.5rem)]" viewportClassName="h-full">
-              <div className="flex flex-col gap-5 p-5">
-                <EditorSection title="Identity">
-                  <EditorTextField label="Name (schema.table)" value={name} onChange={setName} className="font-mono" />
-                  <div className="grid gap-2 sm:grid-cols-2">
-                    <EditorSelectField label="Type" value={type} options={[type]} />
-                    <EditorSelectField label="Connection" value="duckdb-default" options={["duckdb-default", "bq-prod", "stripe"]} />
-                  </div>
-                  <EditorTextField label="Owner" value={owner} onChange={setOwner} />
-                  <EditorTextareaField label="Description" value={description} onChange={setDescription} />
-                </EditorSection>
-
-                <EditorSection title="Classification">
-                  <MultiSelectCombobox label="Tags" items={tags} options={["core", "finance", "daily", "source", "ml", "quality"]} onChange={setTags} />
-                  <MultiSelectCombobox label="Domains" items={domains} options={["sales", "marketing", "product", "finance", "ops"]} onChange={setDomains} />
-                  <KeyValueEditor pairs={metaPairs} onChange={setMetaPairs} />
-                </EditorSection>
-
-                <EditorSection title="Dependencies">
-                  <DependencyRows dependencies={dependencies} onChange={setDependencies} />
-                </EditorSection>
-
-                <EditorSection title="Materialization">
-                  <div className="grid gap-2 sm:grid-cols-2">
-                    <EditorSelectField label="Type" value={materialization} options={["none", "view", "table"]} onChange={setMaterialization} />
-                    {materialization === "table" ? <EditorSelectField label="Strategy" value={strategy} options={["create+replace", "append", "merge", "delete+insert", "time_interval"]} onChange={setStrategy} /> : null}
-                    <EditorTextField label="Object name" value={objectName} onChange={setObjectName} className="font-mono" />
-                    <EditorTextField label="Partition by" value={partitionBy} onChange={setPartitionBy} className="font-mono" />
-                    <EditorTextField label="Incremental key" value={incrementalKey} onChange={setIncrementalKey} className="font-mono" />
-                    <EditorTextField label="Cluster by" value={clusterBy} onChange={setClusterBy} className="font-mono" />
-                  </div>
-                </EditorSection>
-
-                <EditorSection title="Scheduling & retries">
-                  <div className="grid gap-2 sm:grid-cols-3">
-                    <EditorTextField label="Interval start" value={intervalStart} onChange={setIntervalStart} placeholder="-2h" className="font-mono" />
-                    <EditorTextField label="Interval end" value={intervalEnd} onChange={setIntervalEnd} placeholder="1h" className="font-mono" />
-                    <EditorTextField label="Rerun cooldown (s)" value={cooldown} onChange={setCooldown} className="font-mono" />
-                    <EditorTextField label="Retries" value={retries} onChange={setRetries} className="font-mono" />
-                    <EditorTextField label="Retry delay" value={retryDelay} onChange={setRetryDelay} className="font-mono" />
-                    <EditorTextField label="Timeout" value={timeout} onChange={setTimeoutValue} className="font-mono" />
-                    <EditorSelectField label="Priority" value={priority} options={["low", "normal", "high", "critical"]} onChange={setPriority} />
-                  </div>
-                </EditorSection>
-
-                <EditorSection title="Hooks">
-                  <HookRows hooks={hooks} onChange={setHooks} />
-                </EditorSection>
-
-                <EditorSection title="Columns & checks">
-                  <ColumnRows columns={columns} onChange={setColumns} />
-                  <CustomCheckRows checks={customChecks} onChange={setCustomChecks} />
-                </EditorSection>
-              </div>
-            </ScrollArea>
-          </TabsContent>
-          <TabsContent value="yaml" className="m-0 min-h-0 flex-1 overflow-hidden data-[state=inactive]:hidden">
-            <ScrollArea className="h-[calc(90dvh-9.5rem)]" viewportClassName="h-full">
-              <div className="p-5">
-                <div className="mb-2 text-[11px] text-muted-foreground">
-                  {inline ? "Written inline at the top of " : "Stored as "}<span className="font-mono">{file}</span>{inline ? " between the @bruin markers." : "."}
-                </div>
-                <pre className="overflow-auto rounded-lg bg-zinc-950 p-3 font-mono text-xs leading-relaxed text-zinc-100">
-                  {wrap ? <div className="text-zinc-500">{wrap[0]}</div> : null}
-                  <div className="whitespace-pre">{yaml}</div>
-                  {wrap ? <div className="text-zinc-500">{wrap[1]}</div> : null}
-                  {inline ? <div className="whitespace-pre text-zinc-600">{"\n"}{asset.kind === "python" ? "# python code follows..." : "SELECT ..."}</div> : null}
-                </pre>
-              </div>
-            </ScrollArea>
-          </TabsContent>
-        </Tabs>
-        <DialogFooter className="mt-0 shrink-0 border-t px-5 py-3">
-          <Button variant="outline" onClick={() => onOpenChange(false)}>Cancel</Button>
-          <Button onClick={() => onOpenChange(false)}><CheckCircle2 className="size-4" />Save definition</Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
-  );
-}
-
-function EditorSection({ title, children }: { title: string; children: ReactNode }) {
-  return (
-    <div>
-      <div className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">{title}</div>
-      <div className="flex flex-col gap-2.5">{children}</div>
-    </div>
-  );
-}
-
-function EditorTextField({ label, value, onChange, placeholder, className }: { label: string; value: string; onChange: (value: string) => void; placeholder?: string; className?: string }) {
-  return (
-    <label className="block space-y-1.5">
-      <span className="text-xs font-medium text-muted-foreground">{label}</span>
-      <Input value={value} onChange={(event) => onChange(event.target.value)} placeholder={placeholder} className={className} />
-    </label>
-  );
-}
-
-function EditorTextareaField({ label, value, onChange }: { label: string; value: string; onChange: (value: string) => void }) {
-  return (
-    <label className="block space-y-1.5">
-      <span className="text-xs font-medium text-muted-foreground">{label}</span>
-      <textarea className="min-h-20 w-full resize-none rounded-md border bg-background px-3 py-2 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring" value={value} onChange={(event) => onChange(event.target.value)} />
-    </label>
-  );
-}
-
-function EditorSelectField({ label, value, options, onChange }: { label: string; value: string; options: string[]; onChange?: (value: string) => void }) {
-  return (
-    <label className="block space-y-1.5">
-      <span className="text-xs font-medium text-muted-foreground">{label}</span>
-      <select value={value} onChange={(event) => onChange?.(event.target.value)} className="h-9 w-full rounded-md border bg-background px-2 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring">
-        {options.map((option) => <option key={option} value={option}>{option}</option>)}
-      </select>
-    </label>
-  );
-}
-
-function MultiSelectCombobox({ label, items, options, onChange }: { label: string; items: string[]; options: string[]; onChange: (items: string[]) => void }) {
-  const [open, setOpen] = useState(false);
-  const toggleItem = (item: string) => {
-    onChange(items.includes(item) ? items.filter((value) => value !== item) : [...items, item]);
-  };
-
-  return (
-    <div className="space-y-1.5">
-      <span className="text-xs font-medium text-muted-foreground">{label}</span>
-      <div className="flex flex-wrap gap-1.5 rounded-md border bg-background p-1.5">
-        {items.map((item) => (
-          <Badge key={item} variant="outline" className="gap-1 font-mono">
-            {item}
-            <button className="text-muted-foreground hover:text-foreground" onClick={() => toggleItem(item)} type="button">×</button>
-          </Badge>
-        ))}
-        <Popover open={open} onOpenChange={setOpen}>
-          <PopoverTrigger asChild>
-            <Button variant="outline" size="xs" className="h-6 border-dashed">
-              + add <ChevronsUpDown className="size-3" />
-            </Button>
-          </PopoverTrigger>
-          <PopoverContent className="w-72">
-            <Command>
-              <CommandInput placeholder={`Search ${label.toLowerCase()}...`} />
-              <CommandList>
-                <CommandEmpty>No option found.</CommandEmpty>
-                <CommandGroup>
-                  {options.map((option) => {
-                    const selected = items.includes(option);
-                    return (
-                      <CommandItem key={option} value={option} onSelect={() => toggleItem(option)} data-checked={selected}>
-                        <Check className={cn("size-4", selected ? "opacity-100" : "opacity-0")} />
-                        <span className="font-mono">{option}</span>
-                      </CommandItem>
-                    );
-                  })}
-                </CommandGroup>
-              </CommandList>
-            </Command>
-          </PopoverContent>
-        </Popover>
+        ) : null}
       </div>
-    </div>
-  );
-}
-
-function KeyValueEditor({ pairs, onChange }: { pairs: Array<[string, string]>; onChange: (pairs: Array<[string, string]>) => void }) {
-  return (
-    <label className="block space-y-1.5">
-      <span className="text-xs font-medium text-muted-foreground">Meta (key / value)</span>
-      <div className="space-y-1.5">
-        {pairs.map(([key, value], index) => (
-          <div key={index} className="flex items-center gap-1.5">
-            <Input value={key} onChange={(event) => onChange(pairs.map((pair, pairIndex) => pairIndex === index ? [event.target.value, pair[1]] : pair))} placeholder="key" className="h-7 flex-1 font-mono text-xs" />
-            <Input value={value} onChange={(event) => onChange(pairs.map((pair, pairIndex) => pairIndex === index ? [pair[0], event.target.value] : pair))} placeholder="value" className="h-7 flex-1 font-mono text-xs" />
-            <Button variant="ghost" size="icon-sm" onClick={() => onChange(pairs.filter((_, pairIndex) => pairIndex !== index))}><XCircle className="size-3.5" /></Button>
-          </div>
-        ))}
-        <Button variant="outline" size="xs" className="h-6 border-dashed" onClick={() => onChange([...pairs, ["", ""]])}>+ add pair</Button>
-      </div>
-    </label>
-  );
-}
-
-function DependencyRows({ dependencies, onChange }: { dependencies: Array<{ asset: string; mode: string }>; onChange: (dependencies: Array<{ asset: string; mode: string }>) => void }) {
-  return (
-    <div className="space-y-1.5">
-      {dependencies.map((dependency, index) => (
-        <div key={index} className="flex items-center gap-1.5">
-          <Input value={dependency.asset} onChange={(event) => onChange(dependencies.map((item, itemIndex) => itemIndex === index ? { ...item, asset: event.target.value } : item))} placeholder="upstream_asset" className="h-7 flex-1 font-mono text-xs" />
-          <select value={dependency.mode} onChange={(event) => onChange(dependencies.map((item, itemIndex) => itemIndex === index ? { ...item, mode: event.target.value } : item))} className="h-7 rounded-md border bg-background px-1.5 text-xs outline-none focus-visible:ring-2 focus-visible:ring-ring">
-            <option value="full">full</option>
-            <option value="symbolic">symbolic</option>
-          </select>
-          <Button variant="ghost" size="icon-sm" onClick={() => onChange(dependencies.filter((_, itemIndex) => itemIndex !== index))}><XCircle className="size-3.5" /></Button>
+      {editable && workspaceAsset && asset.pipelineId ? (
+        propsView === "cards" ? (
+          <AssetGuidedCards asset={workspaceAsset} pipelineId={asset.pipelineId} />
+        ) : (
+          <AssetYamlEditor asset={workspaceAsset} pipelineId={asset.pipelineId} />
+        )
+      ) : (
+        <div className="flex min-h-0 flex-1 items-center justify-center p-6 text-center text-xs text-muted-foreground">
+          Properties become editable once this asset is saved to the pipeline.
         </div>
-      ))}
-      <Button variant="outline" size="xs" className="h-6 border-dashed" onClick={() => onChange([...dependencies, { asset: "", mode: "full" }])}>+ add dependency</Button>
+      )}
     </div>
   );
-}
-
-function HookRows({ hooks, onChange }: { hooks: Array<{ phase: string; command: string }>; onChange: (hooks: Array<{ phase: string; command: string }>) => void }) {
-  return (
-    <div className="space-y-1.5">
-      {hooks.map((hook, index) => (
-        <div key={index} className="grid items-center gap-1.5 sm:grid-cols-[7rem_minmax(0,1fr)_2rem]">
-          <select value={hook.phase} onChange={(event) => onChange(hooks.map((item, itemIndex) => itemIndex === index ? { ...item, phase: event.target.value } : item))} className="h-8 rounded-md border bg-background px-2 text-xs outline-none focus-visible:ring-2 focus-visible:ring-ring">
-            <option value="pre">pre</option>
-            <option value="post">post</option>
-            <option value="on_failure">on_failure</option>
-          </select>
-          <Input value={hook.command} onChange={(event) => onChange(hooks.map((item, itemIndex) => itemIndex === index ? { ...item, command: event.target.value } : item))} className="h-8 font-mono text-xs" />
-          <Button variant="ghost" size="icon-sm" onClick={() => onChange(hooks.filter((_, itemIndex) => itemIndex !== index))}><XCircle className="size-3.5" /></Button>
-        </div>
-      ))}
-      <Button variant="outline" size="xs" className="h-6 w-fit border-dashed" onClick={() => onChange([...hooks, { phase: "pre", command: "query: \"select 1\"" }])}><Plus className="size-3" />add hook</Button>
-    </div>
-  );
-}
-
-function ColumnRows({ columns, onChange }: { columns: Array<{ name: string; type: string; description: string; checks: string }>; onChange: (columns: Array<{ name: string; type: string; description: string; checks: string }>) => void }) {
-  return (
-    <div className="space-y-1.5">
-      <div className="grid gap-1.5 text-[10px] font-semibold uppercase text-muted-foreground sm:grid-cols-[1fr_7rem_1fr_7rem_2rem]"><span>Name</span><span>Type</span><span>Description</span><span>Checks</span><span /></div>
-      {columns.map((column, index) => (
-        <div key={index} className="grid items-center gap-1.5 sm:grid-cols-[1fr_7rem_1fr_7rem_2rem]">
-          <Input value={column.name} onChange={(event) => onChange(columns.map((item, itemIndex) => itemIndex === index ? { ...item, name: event.target.value } : item))} className="h-8 font-mono text-xs" />
-          <Input value={column.type} onChange={(event) => onChange(columns.map((item, itemIndex) => itemIndex === index ? { ...item, type: event.target.value } : item))} className="h-8 font-mono text-xs" />
-          <Input value={column.description} onChange={(event) => onChange(columns.map((item, itemIndex) => itemIndex === index ? { ...item, description: event.target.value } : item))} className="h-8 text-xs" />
-          <Input value={column.checks} onChange={(event) => onChange(columns.map((item, itemIndex) => itemIndex === index ? { ...item, checks: event.target.value } : item))} placeholder="not_null" className="h-8 font-mono text-xs" />
-          <Button variant="ghost" size="icon-sm" onClick={() => onChange(columns.filter((_, itemIndex) => itemIndex !== index))}><XCircle className="size-3.5" /></Button>
-        </div>
-      ))}
-      <Button variant="outline" size="xs" className="h-6 w-fit border-dashed" onClick={() => onChange([...columns, { name: "", type: "", description: "", checks: "" }])}><Plus className="size-3" />add column</Button>
-    </div>
-  );
-}
-
-function CustomCheckRows({ checks, onChange }: { checks: Array<{ name: string; query: string }>; onChange: (checks: Array<{ name: string; query: string }>) => void }) {
-  return (
-    <div className="space-y-1.5">
-      <div className="text-xs font-medium text-muted-foreground">Custom SQL checks</div>
-      {checks.map((check, index) => (
-        <div key={index} className="grid items-start gap-1.5 sm:grid-cols-[10rem_minmax(0,1fr)_2rem]">
-          <Input value={check.name} onChange={(event) => onChange(checks.map((item, itemIndex) => itemIndex === index ? { ...item, name: event.target.value } : item))} className="h-8 font-mono text-xs" />
-          <textarea value={check.query} onChange={(event) => onChange(checks.map((item, itemIndex) => itemIndex === index ? { ...item, query: event.target.value } : item))} className="min-h-16 rounded-md border bg-background px-2 py-1.5 font-mono text-xs outline-none focus-visible:ring-2 focus-visible:ring-ring" />
-          <Button variant="ghost" size="icon-sm" onClick={() => onChange(checks.filter((_, itemIndex) => itemIndex !== index))}><XCircle className="size-3.5" /></Button>
-        </div>
-      ))}
-      <Button variant="outline" size="xs" className="h-6 w-fit border-dashed" onClick={() => onChange([...checks, { name: "new_check", query: "select * from " }])}><Plus className="size-3" />add custom check</Button>
-    </div>
-  );
-}
-
-function buildDefinitionYaml({ name, type, description, owner, tags, domains, metaPairs, dependencies, materialization, strategy, objectName, partitionBy, incrementalKey, clusterBy, intervalStart, intervalEnd, cooldown, retries, retryDelay, timeout, priority, hooks, columns, customChecks }: { name: string; type: string; description: string; owner: string; tags: string[]; domains: string[]; metaPairs: Array<[string, string]>; dependencies: Array<{ asset: string; mode: string }>; materialization: string; strategy: string; objectName: string; partitionBy: string; incrementalKey: string; clusterBy: string; intervalStart: string; intervalEnd: string; cooldown: string; retries: string; retryDelay: string; timeout: string; priority: string; hooks: Array<{ phase: string; command: string }>; columns: Array<{ name: string; type: string; description: string; checks: string }>; customChecks: Array<{ name: string; query: string }> }) {
-  const lines = [`name: ${name}`, `type: ${type}`, `owner: ${owner}`];
-  if (description) lines.push(`description: ${description}`);
-  if (tags.length) lines.push(`tags: [${tags.join(", ")}]`);
-  if (domains.length) lines.push(`domains: [${domains.join(", ")}]`);
-  if (metaPairs.length) {
-    lines.push("meta:");
-    metaPairs.forEach(([key, value]) => lines.push(`  ${key}: ${value}`));
-  }
-  if (dependencies.length) {
-    lines.push("depends:");
-    dependencies.forEach((dependency) => lines.push(dependency.mode === "symbolic" ? `  - asset: ${dependency.asset}\n    mode: symbolic` : `  - ${dependency.asset}`));
-  }
-  lines.push("materialization:", `  type: ${materialization}`);
-  if (materialization === "table") lines.push(`  strategy: ${strategy}`);
-  if (objectName) lines.push(`  object: ${objectName}`);
-  if (partitionBy) lines.push(`  partition_by: ${partitionBy}`);
-  if (incrementalKey) lines.push(`  incremental_key: ${incrementalKey}`);
-  if (clusterBy) lines.push(`  cluster_by: [${clusterBy}]`);
-  if (intervalStart || intervalEnd) lines.push("interval_modifiers:", `  start: ${intervalStart || "-"}`, `  end: ${intervalEnd || "-"}`);
-  if (cooldown !== "300") lines.push(`rerun_cooldown: ${cooldown}`);
-  if (retries) lines.push("retries:", `  count: ${retries}`, `  delay: ${retryDelay}`);
-  if (timeout) lines.push(`timeout: ${timeout}`);
-  if (priority !== "normal") lines.push(`priority: ${priority}`);
-  if (hooks.length) {
-    lines.push("hooks:");
-    hooks.forEach((hook) => lines.push(`  ${hook.phase}:`, `    - ${hook.command}`));
-  }
-  if (columns.length) {
-    lines.push("columns:");
-    columns.forEach((column) => {
-      lines.push(`  - name: ${column.name}`, `    type: ${column.type}`);
-      if (column.description) lines.push(`    description: ${column.description}`);
-      if (column.checks) lines.push("    checks:", ...column.checks.split(",").map((check) => `      - name: ${check.trim()}`));
-    });
-  }
-  if (customChecks.length) {
-    lines.push("custom_checks:");
-    customChecks.forEach((check) => lines.push(`  - name: ${check.name}`, "    query: |", ...check.query.split("\n").map((line) => `      ${line}`)));
-  }
-  return lines.join("\n");
-}
-
-function Field({ label, value }: { label: string; value: string }) {
-  return <div className="flex items-center justify-between gap-3"><span className="text-muted-foreground">{label}</span><span className="font-mono">{value}</span></div>;
-}
-
-function DependencyList({ names }: { names: string[] }) {
-  return <div className="space-y-1 font-mono text-xs">{names.map((name) => <div key={name} className="rounded-md bg-muted px-2 py-1">{name}</div>)}</div>;
 }
 
 function ToggleCard({ title, description }: { title: string; description: string }) {

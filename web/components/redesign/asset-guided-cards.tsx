@@ -25,12 +25,14 @@ import {
   columnStatus,
   parseAssetProvenance,
 } from "@/lib/asset-provenance";
+import { ScrollArea } from "@/components/ui/scroll-area";
 import { NON_SQL_ASSET_TYPES, SQL_ASSET_TYPES } from "@/lib/asset-types";
+import { cn } from "@/lib/utils";
 import { WebAsset, WebColumn } from "@/lib/types";
 
 /**
  * Guided metadata cards for the redesign asset editor (§13–14 of the asset
- * editing concept). Renders focused, editable cards beside the SQL editor so
+ * editing concept). Renders focused, editable sections beside the SQL editor so
  * users edit asset intent without touching raw YAML; every edit flows through
  * the asset API, and the workspace SSE stream refreshes the asset prop.
  */
@@ -39,42 +41,40 @@ export function AssetGuidedCards({ asset, pipelineId }: { asset: WebAsset; pipel
     () => asset.path?.toLowerCase().endsWith(".sql") ?? asset.type.toLowerCase().includes("sql"),
     [asset.path, asset.type]
   );
-  const depCount = asset.upstreams?.length ?? 0;
-  const colCount = asset.columns?.length ?? 0;
 
   return (
-    <div className="flex h-full min-h-0 w-full flex-col bg-background">
-      <div className="flex shrink-0 flex-wrap items-center gap-1.5 border-b px-3 py-2 text-[11px] text-muted-foreground">
-        <span className="mr-1 truncate font-mono text-xs font-medium text-foreground">{asset.name}</span>
-        <Chip>{asset.type}</Chip>
-        {asset.materialization_type ? <Chip>{materializationLabel(asset)}</Chip> : null}
-        <Chip>{depCount} {depCount === 1 ? "dep" : "deps"}</Chip>
-        <Chip>{colCount} {colCount === 1 ? "col" : "cols"}</Chip>
-      </div>
-      <div className="min-h-0 flex-1 space-y-3 overflow-y-auto p-3">
+    <ScrollArea className="min-h-0 w-full flex-1">
+      <div className="space-y-3 p-3">
         <IdentityCard asset={asset} pipelineId={pipelineId} />
         <MaterializationCard asset={asset} pipelineId={pipelineId} isSql={isSql} />
         <DependenciesCard asset={asset} />
         <ColumnsCard asset={asset} />
         <QualityChecksCard asset={asset} />
       </div>
-    </div>
+    </ScrollArea>
   );
 }
 
-function Chip({ children }: { children: React.ReactNode }) {
+/**
+ * A single flat card. One border, an eyebrow title, and space for its
+ * controls — no nested boxes, so a stack of cards reads calmly.
+ */
+function GuidedCard({
+  title,
+  action,
+  children,
+}: {
+  title: string;
+  action?: React.ReactNode;
+  children: React.ReactNode;
+}) {
   return (
-    <span className="inline-flex items-center rounded-full border bg-background px-2 py-0.5 font-medium">
+    <section className="space-y-2.5 rounded-lg border bg-card p-3">
+      <div className="flex min-h-5 items-center justify-between gap-2">
+        <h3 className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">{title}</h3>
+        {action}
+      </div>
       {children}
-    </span>
-  );
-}
-
-function GuidedCard({ title, children }: { title: string; children: React.ReactNode }) {
-  return (
-    <section className="rounded-lg border bg-background p-3">
-      <h3 className="mb-2 text-xs font-semibold text-foreground">{title}</h3>
-      <div className="space-y-2.5">{children}</div>
     </section>
   );
 }
@@ -91,6 +91,7 @@ function IdentityCard({ asset, pipelineId }: { asset: WebAsset; pipelineId: stri
     <GuidedCard title="Identity">
       <FieldRow label="Name">
         <CommitInput
+          mono
           value={asset.name}
           placeholder="analytics.orders"
           onCommit={(name) => {
@@ -200,6 +201,7 @@ function MaterializationCard({ asset, pipelineId, isSql }: { asset: WebAsset; pi
       {selected.value === "incremental" ? (
         <FieldRow label="Incremental key">
           <CommitInput
+            mono
             value={asset.incremental_key ?? ""}
             placeholder="loaded_at"
             onCommit={(key) => {
@@ -224,11 +226,17 @@ function DependenciesCard({ asset }: { asset: WebAsset }) {
     void applyAssetTransaction(asset.id, tx);
   };
 
+  const addDependency = () => {
+    if (!adding.trim()) return;
+    apply({ type: "dependency.manual.add", dependency: { asset: adding.trim() } });
+    setAdding("");
+  };
+
+  const isEmpty = inferred.length === 0 && manual.length === 0 && ignored.length === 0;
+
   return (
     <GuidedCard title="Dependencies">
-      {inferred.length === 0 && manual.length === 0 && ignored.length === 0 ? (
-        <p className="text-[11px] text-muted-foreground">No dependencies.</p>
-      ) : null}
+      {isEmpty ? <p className="text-[11px] text-muted-foreground">No dependencies yet.</p> : null}
 
       {inferred.length > 0 ? (
         <DepSection label="Inferred from SQL">
@@ -274,28 +282,17 @@ function DependenciesCard({ asset }: { asset: WebAsset }) {
         </DepSection>
       ) : null}
 
-      <div className="flex items-center gap-1.5 pt-1">
+      <div className="flex items-center gap-1.5">
         <Input
           className="h-7 text-xs"
           placeholder="Add dependency (asset name)"
           value={adding}
           onChange={(e) => setAdding(e.target.value)}
           onKeyDown={(e) => {
-            if (e.key === "Enter" && adding.trim()) {
-              apply({ type: "dependency.manual.add", dependency: { asset: adding.trim() } });
-              setAdding("");
-            }
+            if (e.key === "Enter") addDependency();
           }}
         />
-        <Button
-          variant="outline"
-          size="xs"
-          disabled={!adding.trim()}
-          onClick={() => {
-            apply({ type: "dependency.manual.add", dependency: { asset: adding.trim() } });
-            setAdding("");
-          }}
-        >
+        <Button variant="outline" size="xs" disabled={!adding.trim()} onClick={addDependency}>
           <Plus className="size-3" />
         </Button>
       </div>
@@ -305,9 +302,9 @@ function DependenciesCard({ asset }: { asset: WebAsset }) {
 
 function DepSection({ label, children }: { label: string; children: React.ReactNode }) {
   return (
-    <div className="space-y-1">
-      <div className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground">{label}</div>
-      {children}
+    <div className="space-y-0.5">
+      <div className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground/70">{label}</div>
+      <div className="divide-y rounded-md border">{children}</div>
     </div>
   );
 }
@@ -328,16 +325,17 @@ function DepRow({
   onAction: () => void;
 }) {
   return (
-    <div className="group flex items-center gap-1.5 text-xs">
-      <span className={`min-w-0 flex-1 truncate font-mono ${muted ? "text-muted-foreground line-through" : ""}`}>
+    <div className="group flex items-center gap-1.5 px-2 py-1 text-xs">
+      <span className={cn("min-w-0 flex-1 truncate font-monaco", muted && "text-muted-foreground line-through")}>
         {name}
       </span>
       {badge ? <span className="rounded bg-muted px-1 text-[10px] text-muted-foreground">{badge}</span> : null}
       <Button
         variant="ghost"
         size="xs"
-        className="h-6 px-1.5 text-muted-foreground opacity-0 group-hover:opacity-100 focus-visible:opacity-100"
+        className="size-6 shrink-0 p-0 text-muted-foreground opacity-0 group-hover:opacity-100 focus-visible:opacity-100"
         title={actionLabel}
+        aria-label={actionLabel}
         onClick={onAction}
       >
         {actionIcon}
@@ -393,9 +391,9 @@ function ColumnsCard({ asset }: { asset: WebAsset }) {
   };
 
   return (
-    <GuidedCard title="Columns">
-      <div className="flex items-center justify-between">
-        <span className="text-[11px] text-muted-foreground">{columns.length} columns</span>
+    <GuidedCard
+      title="Columns"
+      action={
         <Button
           variant="outline"
           size="xs"
@@ -403,18 +401,18 @@ function ColumnsCard({ asset }: { asset: WebAsset }) {
           onClick={refreshFromDefinition}
           title="Derive columns from the SQL definition and upstream assets"
         >
-          <RefreshCw className={`size-3 ${refreshing ? "animate-spin" : ""}`} />
+          <RefreshCw className={cn("size-3", refreshing && "animate-spin")} />
           Refresh
         </Button>
-      </div>
-
+      }
+    >
       {error ? <p className="text-[11px] text-destructive">{error}</p> : null}
 
       {reconcileItems.map((item) => {
         const def = columns.find((c) => c.name.toLowerCase() === item.column.toLowerCase());
         return (
-          <div key={item.column} className="rounded-md border border-amber-300 bg-amber-50 p-2 text-[11px] dark:bg-amber-950/30">
-            <div className="font-medium text-amber-900 dark:text-amber-200">{item.column}</div>
+          <div key={item.column} className="rounded-md border border-amber-300 bg-amber-50 p-2 text-[11px] dark:border-amber-500/40 dark:bg-amber-950/30">
+            <div className="font-monaco font-medium text-amber-900 dark:text-amber-200">{item.column}</div>
             <div className="mb-1.5 text-amber-700 dark:text-amber-300">{item.detail}</div>
             <div className="flex gap-1.5">
               {def ? (
@@ -431,9 +429,9 @@ function ColumnsCard({ asset }: { asset: WebAsset }) {
       })}
 
       {columns.length === 0 ? (
-        <p className="text-[11px] text-muted-foreground">No columns. Refresh to infer from the warehouse.</p>
+        <p className="text-[11px] text-muted-foreground">No columns. Refresh to infer them from the definition.</p>
       ) : (
-        <div className="space-y-2">
+        <div className="divide-y rounded-md border">
           {columns.map((column) => (
             <ColumnRow
               key={column.name}
@@ -523,7 +521,7 @@ function QualityChecksCard({ asset }: { asset: WebAsset }) {
       ) : null}
       {columnsWithChecks.map((col) => (
         <div key={col.name} className="space-y-1">
-          <div className="font-mono text-[11px] text-foreground">{col.name}</div>
+          <div className="font-monaco text-[11px] text-foreground">{col.name}</div>
           <div className="flex flex-wrap gap-1">
             {(col.checks ?? []).map((check, index) => (
               <span
@@ -544,7 +542,7 @@ function QualityChecksCard({ asset }: { asset: WebAsset }) {
           </div>
         </div>
       ))}
-      <div className="space-y-1.5 pt-1">
+      <div className="space-y-1.5">
         <div className="flex items-center gap-1.5">
           <Select value={column} onValueChange={setColumn}>
             <SelectTrigger className="h-7 text-xs"><SelectValue placeholder="Column" /></SelectTrigger>
@@ -594,28 +592,34 @@ function ColumnRow({
   onDrop: () => void;
 }) {
   return (
-    <div className="group rounded-md border bg-muted/20 p-2">
+    <div className="group px-2.5 py-2">
       <div className="flex items-center gap-1.5">
-        <span className="min-w-0 flex-1 truncate font-mono text-xs">{column.name}</span>
+        <span className="min-w-0 flex-1 truncate font-monaco text-xs">{column.name}</span>
         <ColumnStatusBadge status={status} primaryKey={column.primary_key} />
         <Button
           variant="ghost"
           size="xs"
-          className="h-6 px-1.5 text-muted-foreground opacity-0 group-hover:opacity-100 focus-visible:opacity-100"
+          className="size-6 shrink-0 p-0 text-muted-foreground opacity-0 group-hover:opacity-100 focus-visible:opacity-100"
           title="Remove column"
+          aria-label={`Remove ${column.name}`}
           onClick={onDrop}
         >
           <Trash2 className="size-3" />
         </Button>
       </div>
-      <div className="mt-1.5 grid grid-cols-[auto_1fr] items-center gap-x-2 gap-y-1">
-        <Label className="text-[10px] text-muted-foreground">Type</Label>
-        <CommitInput value={column.type ?? ""} placeholder="text" onCommit={onCommitType} />
-        <Label className="text-[10px] text-muted-foreground">Desc</Label>
+      <div className="mt-1 flex items-center gap-1.5">
+        <CommitInput
+          mono
+          value={column.type ?? ""}
+          placeholder="type"
+          onCommit={onCommitType}
+          className="h-7 w-28 shrink-0"
+        />
         <CommitInput
           value={column.description ?? ""}
           placeholder="describe this column"
           onCommit={onCommitDescription}
+          className="h-7 flex-1"
         />
       </div>
     </div>
@@ -641,7 +645,7 @@ function ColumnStatusBadge({
           pk
         </span>
       ) : null}
-      <span className={`rounded px-1 text-[10px] ${styles[status] ?? styles.inferred}`}>{status}</span>
+      <span className={cn("rounded px-1 text-[10px]", styles[status] ?? styles.inferred)}>{status}</span>
     </span>
   );
 }
@@ -650,7 +654,7 @@ function ColumnStatusBadge({
 
 function FieldRow({ label, children }: { label: string; children: React.ReactNode }) {
   return (
-    <div className="grid gap-1">
+    <div className="grid grid-cols-[5.5rem_1fr] items-center gap-2">
       <Label className="text-[11px] text-muted-foreground">{label}</Label>
       {children}
     </div>
@@ -665,17 +669,21 @@ function CommitInput({
   value,
   placeholder,
   onCommit,
+  mono,
+  className,
 }: {
   value: string;
   placeholder?: string;
   onCommit: (value: string) => void;
+  mono?: boolean;
+  className?: string;
 }) {
   const [draft, setDraft] = useState(value);
   useEffect(() => setDraft(value), [value]);
 
   return (
     <Input
-      className="h-8 text-xs"
+      className={cn("h-8 text-xs", mono && "font-monaco", className)}
       value={draft}
       placeholder={placeholder}
       onChange={(e) => setDraft(e.target.value)}
@@ -687,9 +695,4 @@ function CommitInput({
       }}
     />
   );
-}
-
-function materializationLabel(asset: WebAsset): string {
-  const option = currentMaterializationOption(asset);
-  return option.value === "none" ? "no materialization" : option.label.toLowerCase();
 }
