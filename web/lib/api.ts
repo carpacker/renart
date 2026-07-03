@@ -6,4 +6,5 @@ export * from "@/lib/api-pipelines";
 export * from "@/lib/api-scheduler";
 export * from "@/lib/api-source-control";
 export * from "@/lib/api-sql";
+export * from "@/lib/api-sql-lsp";
 export * from "@/lib/api-workspace";

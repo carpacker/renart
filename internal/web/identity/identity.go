@@ -59,7 +59,7 @@ func pipelineIDFromYAML(content []byte) string {
 
 // AssetID derives the durable asset identifier from the owning pipeline's
 // UUID and the asset name. Accepted v1 limitation: renaming an asset orphans
-// its history (see architecture/renart-staleness-implementation-plan.md).
+// its history (see architecture/staleness.md).
 func AssetID(pipelineUUID, assetName string) string {
 	return pipelineUUID + ":" + assetName
 }

@@ -3,7 +3,7 @@
 // cell. Cells are class-tagged assets in a notebook namespace; everything
 // that parses, fingerprints, or renders assets operates on them unchanged.
 //
-// See architecture/renart-notebooks-implementation-plan.md. Core invariants:
+// See architecture/notebooks.md. Core invariants:
 //  1. No logical name ever enters a fingerprint (cell identity is the
 //     frontmatter id, not the filename).
 //  2. Every asset carries a class (pipeline | notebook); dependency

@@ -43,22 +43,12 @@ function buildValueSuggestionQuery(
   const escapedPrefix = trimmedPrefix.replaceAll("'", "''");
   const normalizedAssetType = assetType?.toLowerCase() ?? "";
 
-  switch (normalizedAssetType) {
-    case "duckdb.sql":
-    case "pg.sql":
-    case "rs.sql":
-    case "bq.sql":
-    case "sf.sql":
-    case "athena.sql":
-    case "databricks.sql":
-    case "ms.sql":
-    case "synapse.sql":
-    case "my.sql":
-    default:
-      return trimmedPrefix
-        ? `select distinct ${quotedColumn} as value from ${quotedTable} where lower(cast(${quotedColumn} as varchar)) like lower('%${escapedPrefix}%') order by 1 limit 10`
-        : `select distinct ${quotedColumn} as value from ${quotedTable} order by 1 limit 10`;
+  if (normalizedAssetType !== "duckdb.sql") {
+    return "";
   }
+  return trimmedPrefix
+    ? `select distinct ${quotedColumn} as value from ${quotedTable} where lower(cast(${quotedColumn} as varchar)) like lower('%${escapedPrefix}%') order by 1 limit 10`
+    : `select distinct ${quotedColumn} as value from ${quotedTable} order by 1 limit 10`;
 }
 
 function quoteSQLIdentifier(identifier: string) {
@@ -541,6 +531,12 @@ export function useSQLIntellisense(
   environment?: string,
   onGoToAsset?: (pipelineId: string, assetId: string) => void,
   inspectDiagnosticSnapshot?: InspectDiagnosticSnapshot | null,
+  options?: {
+    registerGlobalProviders?: boolean;
+    registerLegacyDiagnosticProviders?: boolean;
+    registerParseContextMarkers?: boolean;
+    registerSemanticDecorations?: boolean;
+  },
 ) {
   const workspace = useAtomValue(workspaceAtom);
   const sqlDiscoveryCache = useAtomValue(sqlDiscoveryCacheAtom);
@@ -560,7 +556,12 @@ export function useSQLIntellisense(
       ? parseContext
       : lastGoodParseContextRef.current;
   const parseContextKey = useMemo(() => JSON.stringify(activeParseContext ?? null), [activeParseContext]);
-  useSQLSemanticDecorations(editor, activeParseContext);
+  const registerGlobalProviders = options?.registerGlobalProviders ?? true;
+  const registerLegacyDiagnosticProviders = options?.registerLegacyDiagnosticProviders ?? true;
+  const registerParseContextMarkers = options?.registerParseContextMarkers ?? true;
+  const registerSemanticDecorations = options?.registerSemanticDecorations ?? true;
+
+  useSQLSemanticDecorations(registerSemanticDecorations ? editor : null, activeParseContext);
 
   const connectionName =
     asset && workspace ? resolveConnection(asset, workspace.connections ?? {}) : null;
@@ -596,7 +597,7 @@ export function useSQLIntellisense(
   });
 
   useEffect(() => {
-    if (!monaco || !editor) {
+    if (!registerGlobalProviders || !monaco || !editor) {
       return;
     }
     const model = editor.getModel();
@@ -732,7 +733,7 @@ export function useSQLIntellisense(
         insideQuotes,
       }) {
         const { activeParseContext, asset, connectionName, environment } = latestStateRef.current;
-        if (!connectionName || !activeParseContext) {
+        if (!connectionName || !activeParseContext || asset?.type?.toLowerCase() !== "duckdb.sql") {
           return [];
         }
 
@@ -759,6 +760,9 @@ export function useSQLIntellisense(
           quotedColumn,
           trimmedPrefix,
         );
+        if (!valueQuery) {
+          return [];
+        }
 
         try {
           const payload = await fetchJSON<{
@@ -839,7 +843,7 @@ export function useSQLIntellisense(
       sqlProviderEntries.delete(uri);
       release();
     };
-  }, [editor, loadSQLDiscoveryColumns, loadSQLDiscoveryTables, monaco]);
+  }, [editor, loadSQLDiscoveryColumns, loadSQLDiscoveryTables, monaco, registerGlobalProviders]);
 
   useEffect(() => {
     if (!editor || tables.length === 0) {
@@ -881,7 +885,7 @@ export function useSQLIntellisense(
   }, [editor, tables]);
 
   useEffect(() => {
-    if (!editor || !monaco) {
+    if (!registerParseContextMarkers || !editor || !monaco) {
       return;
     }
 
@@ -959,10 +963,10 @@ export function useSQLIntellisense(
     return () => {
       monaco.editor.setModelMarkers(model, "bruin-sql-parse-context", []);
     };
-  }, [asset, editor, inspectDiagnosticSnapshot, monaco, parseContextKey, tables]);
+  }, [asset, editor, inspectDiagnosticSnapshot, monaco, parseContextKey, registerParseContextMarkers, tables]);
 
   useEffect(() => {
-    if (!editor || !monaco) {
+    if (!registerLegacyDiagnosticProviders || !editor || !monaco) {
       return;
     }
 
@@ -1055,10 +1059,10 @@ export function useSQLIntellisense(
     });
 
     return () => disposable.dispose();
-  }, [editor, monaco]);
+  }, [editor, monaco, registerLegacyDiagnosticProviders]);
 
   useEffect(() => {
-    if (!editor || !monaco) {
+    if (!registerLegacyDiagnosticProviders || !editor || !monaco) {
       return;
     }
 
@@ -1116,5 +1120,5 @@ export function useSQLIntellisense(
     });
 
     return () => disposable.dispose();
-  }, [editor, monaco]);
+  }, [editor, monaco, registerLegacyDiagnosticProviders]);
 }

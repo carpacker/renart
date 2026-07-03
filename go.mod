@@ -17,6 +17,7 @@ require (
 	github.com/spf13/afero v1.15.0
 	github.com/stretchr/testify v1.11.1
 	github.com/tetratelabs/wazero v1.12.0
+	github.com/tobilg/polyglot/packages/go v0.5.10
 	github.com/urfave/cli/v3 v3.9.0
 	github.com/wailsapp/wails/v2 v2.12.0
 	go.uber.org/zap v1.28.0
@@ -65,6 +66,7 @@ require (
 	github.com/cenkalti/backoff/v5 v5.0.3 // indirect
 	github.com/clipperhouse/uax29/v2 v2.7.0 // indirect
 	github.com/columnar-tech/dbc v0.3.0 // indirect
+	github.com/ebitengine/purego v0.10.0 // indirect
 	github.com/go-faster/jx v1.2.0 // indirect
 	github.com/go-faster/yaml v0.4.6 // indirect
 	github.com/go-ole/go-ole v1.3.0 // indirect

@@ -2,7 +2,7 @@
 
 Status: active. This is the authoring contract for everything under `docs/`
 (Astro Starlight, served at getrenart.com/docs). The companion
-`renart-user-docs-concept.md` defines *what* to build (the information
+`../plans/user-docs-rollout.md` defines *what* to build (the information
 architecture and rollout); this defines *how* to write it. If you are writing or
 reviewing a docs page, this is the checklist.
 
@@ -238,5 +238,5 @@ Before approving a docs PR, confirm:
 
 ---
 
-*Companion: `renart-user-docs-concept.md` (information architecture, page
+*Companion: `../plans/user-docs-rollout.md` (information architecture, page
 inventory, and phased rollout).*

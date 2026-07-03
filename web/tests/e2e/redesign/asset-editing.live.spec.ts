@@ -248,7 +248,7 @@ select customer_id, upper(customer_name) as shout from analytics.customers
     // Wait for the sheet to settle (cards render first), then switch views.
     const dialog = page.getByRole("dialog", { name: "Asset properties" });
     await expect(dialog.getByRole("heading", { name: "Identity" })).toBeVisible({ timeout: 15000 });
-    const yamlToggle = dialog.getByRole("button", { name: "yaml", exact: true });
+    const yamlToggle = dialog.getByRole("button", { name: "YAML", exact: true });
     await yamlToggle.click();
     await expect(yamlToggle).toHaveAttribute("aria-pressed", "true");
 

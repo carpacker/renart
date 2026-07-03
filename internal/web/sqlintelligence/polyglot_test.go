@@ -76,6 +76,21 @@ FROM quickstart.players`
 	assert.Empty(t, parseContext.Diagnostics)
 }
 
+func TestParseContextWithSchemaPolyglotResolvesScalarSubqueryColumnsInLocalScope(t *testing.T) {
+	query := `SELECT
+  *,
+  (select first(range) from example.my_sql_asset_2)
+FROM example.my_sql_asset_3`
+
+	parseContext, err := ParseContextWithSchemaPolyglot(query, "duckdb", Schema{
+		"example.my_sql_asset_2": {"range": "BIGINT"},
+		"example.my_sql_asset_3": {"range": "BIGINT"},
+	})
+	require.NoError(t, err)
+
+	assert.NotContains(t, diagnosticMessages(parseContext.Diagnostics), "Unresolved column: range")
+}
+
 func TestParseContextWithSchemaPolyglotReportsUnknownTable(t *testing.T) {
 	parseContext, err := ParseContextWithSchemaPolyglot(
 		"select * from analytics.ordrs",

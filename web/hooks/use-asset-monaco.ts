@@ -10,6 +10,7 @@ import { useJinjaIntellisense } from "@/hooks/use-jinja-intellisense";
 import { usePythonIntellisense } from "@/hooks/use-python-intellisense";
 import { useSQLFormatting } from "@/hooks/use-sql-formatting";
 import { useSQLIntellisense } from "@/hooks/use-sql-intellisense";
+import { useSQLLSP } from "@/hooks/use-sql-lsp";
 import { useYAMLIntellisense } from "@/hooks/use-yaml-intellisense";
 import {
   registerAssetColumnsAtom,
@@ -71,8 +72,15 @@ export function useAssetMonaco({
     asset?.upstreams ?? [],
     selectedEnvironment,
     onGoToAsset,
-    inspectDiagnosticSnapshot
+    inspectDiagnosticSnapshot,
+    {
+      registerGlobalProviders: false,
+      registerLegacyDiagnosticProviders: false,
+      registerParseContextMarkers: false,
+      registerSemanticDecorations: false,
+    },
   );
+  useSQLLSP(monacoInstance, editorInstance, asset, editorValue, schemaTables, onGoToAsset);
   useJinjaIntellisense(monacoInstance, editorInstance, asset, editorValue);
   usePythonIntellisense(monacoInstance, editorInstance, asset, editorValue);
   useYAMLIntellisense(monacoInstance, editorInstance, asset);

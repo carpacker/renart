@@ -254,6 +254,13 @@ func newWebServer(ctx context.Context, cfg serverConfig, logger *zap.Logger) (*w
 	server.parseContextSvc = service.NewParseContextService(service.ParseContextDependencies{
 		ResolveAssetByID: server.resolveAssetByID,
 	})
+	server.sqlLSPSvc = service.NewSQLLSPService(service.SQLLSPDependencies{
+		WorkspaceRoot: absRoot,
+		CurrentState: func() service.WorkspaceState {
+			return server.currentState()
+		},
+		PolyglotClient: service.NewLazyPolyglotClient(),
+	})
 	sqlformat.PrewarmPolyglotCompiler()
 	server.jinjaRenderSvc = service.NewJinjaRenderService(service.JinjaRenderDependencies{
 		ResolveAssetByID: server.resolveAssetByID,

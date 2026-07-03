@@ -1,5 +1,15 @@
 # Materialization strategies: current support and a plan to reach parity with bruin
 
+> **Status (2026-07):** Phase 1 is partially implemented — `materialization_strategy`
+> and `incremental_key` are in the asset DTO (`model/dto.go`) and the patch API
+> (`service/asset.go`), populated in `workspace.go`. Still missing from Phase 1:
+> `partition_by`, `cluster_by`, `time_granularity`. Phases 2 (full refresh /
+> backfill; run paths still hardcode `RunConfigFullRefresh = false`) and 3
+> (capability-aware editor) are not started. Per-asset-type gaps (sling/api
+> assets ignore `Materialization`, `primary_key` is not editable, python needs
+> `materialize()` + ingestr) are analyzed in the companion
+> `materialization-per-asset-type.md`, which carries the active plan for them.
+
 Exploration only — no implementation. Goal: map what bruin's materialization model
 offers, what renart already supports (often more than it looks), and what we'd build
 to expose incremental / time-based / merge / SCD-2 materializations through renart's

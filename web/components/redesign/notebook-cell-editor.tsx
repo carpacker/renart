@@ -8,6 +8,7 @@ import { AssetCodeEditor } from "@/components/asset-code-editor";
 import { useJinjaIntellisense } from "@/hooks/use-jinja-intellisense";
 import { usePythonIntellisense } from "@/hooks/use-python-intellisense";
 import { useSQLIntellisense } from "@/hooks/use-sql-intellisense";
+import { useSQLLSP } from "@/hooks/use-sql-lsp";
 import { useVizIntellisense } from "@/hooks/use-viz-intellisense";
 import { useWorkspaceTheme } from "@/hooks/use-workspace-theme";
 import { formatSQLAsset } from "@/lib/api";
@@ -147,7 +148,17 @@ export function NotebookCellMonaco({
     cell.upstreams ?? [],
     environment,
     onGoToAsset,
+    undefined,
+    // The SQL language server below owns diagnostics and decorations, same
+    // split as the asset editor; intellisense keeps schema-aware completion.
+    {
+      registerGlobalProviders: false,
+      registerLegacyDiagnosticProviders: false,
+      registerParseContextMarkers: false,
+      registerSemanticDecorations: false,
+    },
   );
+  useSQLLSP(sqlMonaco, sqlEditor, cell, value, schemaTables, onGoToAsset);
   useJinjaIntellisense(sqlMonaco, sqlEditor, cell, value);
   useVizIntellisense(sqlMonaco, sqlEditor, value, resultColumns);
 

@@ -13,7 +13,7 @@ import (
 // staleness and last results, and — when auto-recompute is on — recomputes the
 // safe-to-run cells itself after every save, streaming results to clients over
 // SSE. This replaces the per-wave save/parse/run round-trips the client used to
-// orchestrate (see architecture/renart-notebook-backend-autorecompute.md).
+// orchestrate (see architecture/notebooks.md).
 
 const (
 	notebookRuntimeEventType = "notebook.runtime"

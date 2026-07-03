@@ -44,7 +44,7 @@ export function AssetGuidedCards({ asset, pipelineId }: { asset: WebAsset; pipel
 
   return (
     <ScrollArea className="min-h-0 w-full flex-1">
-      <div className="space-y-3 p-3">
+      <div className="divide-y px-3">
         <IdentityCard asset={asset} pipelineId={pipelineId} />
         <MaterializationCard asset={asset} pipelineId={pipelineId} isSql={isSql} />
         <DependenciesCard asset={asset} />
@@ -56,8 +56,9 @@ export function AssetGuidedCards({ asset, pipelineId }: { asset: WebAsset; pipel
 }
 
 /**
- * A single flat card. One border, an eyebrow title, and space for its
- * controls — no nested boxes, so a stack of cards reads calmly.
+ * A borderless section: an eyebrow title and its controls, separated from the
+ * next section by a hairline divider (the parent's divide-y) rather than a card,
+ * so a stack of sections reads as one calm form instead of nested boxes.
  */
 function GuidedCard({
   title,
@@ -69,7 +70,7 @@ function GuidedCard({
   children: React.ReactNode;
 }) {
   return (
-    <section className="space-y-2.5 rounded-lg border bg-card p-3">
+    <section className="space-y-2.5 py-4">
       <div className="flex min-h-5 items-center justify-between gap-2">
         <h3 className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">{title}</h3>
         {action}

@@ -2011,43 +2011,55 @@ function HistoryPanel({
   );
 }
 
+const PROPERTY_VIEWS = [
+  { value: "form", label: "Form" },
+  { value: "yaml", label: "YAML" },
+] as const;
+
+type PropertyView = (typeof PROPERTY_VIEWS)[number]["value"];
+
 function Inspector({ asset }: { asset: BuildAsset }) {
   // The inspector is the asset properties editor: two presentations of the same
-  // editable metadata — focused cards, or an interactive YAML-shaped view — both
+  // editable metadata — a guided form, or an interactive YAML-shaped view — both
   // driving the same asset API + transactions.
-  const [propsView, setPropsView] = useState<"cards" | "yaml">("cards");
+  const [propsView, setPropsView] = useState<PropertyView>("form");
   const workspaceAsset = asset.workspaceAsset;
   const editable = Boolean(workspaceAsset && asset.pipelineId);
+
+  // Title: the asset's own (leaf) name; subtitle: its namespace and integration.
+  // The file path is intentionally omitted — it just repeats those two.
+  const { prefix, title } = assetNameParts(asset.name);
+  const subtitle = [prefix, asset.type ?? asset.integration].filter(Boolean).join(" · ");
 
   return (
     <div className="flex h-full min-h-0 flex-col">
       <div className="flex shrink-0 items-center gap-2 border-b px-3 py-2">
         <Sliders className="size-4 shrink-0 text-primary" />
         <div className="min-w-0 flex-1">
-          <div className="truncate font-monaco text-xs font-medium">{asset.name}</div>
-          <p className="truncate text-[11px] text-muted-foreground">{asset.path ?? "asset"} · {asset.integration}</p>
+          <div className="truncate font-monaco text-[13px] font-medium">{title}</div>
+          {subtitle ? <p className="truncate text-[11px] text-muted-foreground">{subtitle}</p> : null}
         </div>
         {editable ? (
           <div className="flex shrink-0 overflow-hidden rounded-md border text-[11px]">
-            {(["cards", "yaml"] as const).map((option) => (
+            {PROPERTY_VIEWS.map((option) => (
               <button
-                key={option}
+                key={option.value}
                 type="button"
                 className={cn(
-                  "px-2 py-0.5 capitalize transition-colors",
-                  propsView === option ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted"
+                  "px-2 py-0.5 transition-colors",
+                  propsView === option.value ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted"
                 )}
-                aria-pressed={propsView === option}
-                onClick={() => setPropsView(option)}
+                aria-pressed={propsView === option.value}
+                onClick={() => setPropsView(option.value)}
               >
-                {option}
+                {option.label}
               </button>
             ))}
           </div>
         ) : null}
       </div>
       {editable && workspaceAsset && asset.pipelineId ? (
-        propsView === "cards" ? (
+        propsView === "form" ? (
           <AssetGuidedCards asset={workspaceAsset} pipelineId={asset.pipelineId} />
         ) : (
           <AssetYamlEditor asset={workspaceAsset} pipelineId={asset.pipelineId} />

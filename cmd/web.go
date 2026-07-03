@@ -58,6 +58,7 @@ type webServer struct {
 	slingSvc         *service.SlingService
 	suggestionsSvc   *service.SuggestionsService
 	parseContextSvc  *service.ParseContextService
+	sqlLSPSvc        *service.SQLLSPService
 	jinjaRenderSvc   *service.JinjaRenderService
 	runSvc           *service.RunService
 	notebookSvc      *service.NotebookService
@@ -265,6 +266,7 @@ func (s *webServer) registerRoutes(router chi.Router) {
 	webhttpapi.RegisterSlingRoutes(router, &webhttpapi.SlingAPI{Service: s.slingSvc})
 	webhttpapi.RegisterSuggestionRoutes(router, &webhttpapi.SuggestionsAPI{Service: s.suggestionsSvc})
 	webhttpapi.RegisterParseContextRoutes(router, &webhttpapi.ParseContextAPI{Service: s.parseContextSvc})
+	webhttpapi.RegisterSQLLSPRoutes(router, &webhttpapi.SQLLSPAPI{Service: s.sqlLSPSvc})
 	webhttpapi.RegisterJinjaRenderRoutes(router, &webhttpapi.JinjaRenderAPI{Service: s.jinjaRenderSvc})
 	webhttpapi.RegisterRunRoutes(router, &webhttpapi.RunAPI{Service: s.runSvc})
 	webhttpapi.RegisterNotebookRoutes(router, &webhttpapi.NotebookAPI{Service: s.notebookSvc})

@@ -25,6 +25,7 @@ func main() {
 			cmd.Fp(),
 			cmd.Deploy(),
 			cmd.TypeCheck(),
+			cmd.SQLLSP(),
 			cmd.WarmCache(),
 		},
 		DisableSliceFlagSeparator: true,

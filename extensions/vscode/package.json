@@ -1,0 +1,55 @@
+{
+  "name": "renart-sql-lsp",
+  "displayName": "Renart SQL LSP",
+  "description": "SQL language server support for dbt and Bruin data pipeline projects.",
+  "version": "0.1.0",
+  "publisher": "renart",
+  "engines": {
+    "vscode": "^1.96.0"
+  },
+  "categories": ["Programming Languages"],
+  "activationEvents": [
+    "onLanguage:sql",
+    "workspaceContains:dbt_project.yml",
+    "workspaceContains:dbt_project.yaml",
+    "workspaceContains:**/pipeline.yml",
+    "workspaceContains:**/pipeline.yaml"
+  ],
+  "main": "./dist/extension.js",
+  "contributes": {
+    "configuration": {
+      "title": "Renart SQL LSP",
+      "properties": {
+        "renartSqlLsp.serverPath": {
+          "type": "string",
+          "default": "renart",
+          "description": "Path to the Renart executable that provides the sql-lsp command."
+        },
+        "renartSqlLsp.disablePolyglotDownload": {
+          "type": "boolean",
+          "default": false,
+          "description": "Disable automatic Polyglot native library download by the SQL language server."
+        },
+        "renartSqlLsp.polyglotCacheDir": {
+          "type": "string",
+          "default": "",
+          "description": "Optional cache directory for downloaded Polyglot native libraries."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "build": "tsc -p .",
+    "watch": "tsc -w -p .",
+    "typecheck": "tsc --noEmit -p ."
+  },
+  "dependencies": {
+    "vscode-languageclient": "^9.0.1"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.5",
+    "@types/vscode": "^1.96.0",
+    "typescript": "^5.9.3"
+  }
+}
+

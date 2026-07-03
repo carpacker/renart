@@ -573,21 +573,44 @@ func extractPolyglotColumns(query string, ast []map[string]any, tokens []polyglo
 }
 
 func resolveUnqualifiedPolyglotColumn(columnName string, tables []ParseContextTable, columnOffset int) string {
-	resolved := ""
+	type match struct {
+		name      string
+		scopeSize int
+	}
+	var matches []match
 	for _, table := range tables {
 		if columnOffset >= 0 && table.ScopeRange != nil && (columnOffset < table.ScopeRange.Start || columnOffset > table.ScopeRange.End) {
 			continue
 		}
 		for _, column := range table.Columns {
 			if strings.EqualFold(column.Name, columnName) {
-				if resolved != "" && !strings.EqualFold(resolved, table.ResolvedName) {
-					return ""
+				scopeSize := 1 << 30
+				if table.ScopeRange != nil {
+					scopeSize = table.ScopeRange.End - table.ScopeRange.Start
 				}
-				resolved = table.ResolvedName
+				matches = append(matches, match{name: table.ResolvedName, scopeSize: scopeSize})
 			}
 		}
 	}
-	return resolved
+	if len(matches) == 0 {
+		return ""
+	}
+	sort.Slice(matches, func(i, j int) bool {
+		if matches[i].scopeSize == matches[j].scopeSize {
+			return matches[i].name < matches[j].name
+		}
+		return matches[i].scopeSize < matches[j].scopeSize
+	})
+	best := matches[0]
+	for _, candidate := range matches[1:] {
+		if candidate.scopeSize != best.scopeSize {
+			break
+		}
+		if !strings.EqualFold(candidate.name, best.name) {
+			return ""
+		}
+	}
+	return best.name
 }
 
 func resolveThreePartPolyglotColumn(query string, tokens []polyglotToken, qualifier, name string, tables []ParseContextTable, usedStarts map[int]bool) (string, string, []ParseContextPart) {

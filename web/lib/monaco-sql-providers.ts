@@ -1,7 +1,7 @@
 import type * as MonacoNS from "monaco-editor";
 
 import { SchemaTable, findTableByIdentifier } from "@/lib/sql-schema";
-import type { SqlParseContextColumn, SqlParseContextTable } from "@/lib/types";
+import type { SqlParseContextColumn, SqlParseContextRange, SqlParseContextTable } from "@/lib/types";
 
 type Monaco = typeof MonacoNS;
 
@@ -398,6 +398,73 @@ function findParserCTEColumnDefinitionRange(
   return rangeEntry?.[1] ?? null;
 }
 
+function parserRangeToMonaco(
+  monaco: Monaco,
+  range: SqlParseContextRange,
+) {
+  return new monaco.Range(range.line, range.col, range.end_line, range.end_col);
+}
+
+function findParserDefinitionRange(
+  parseContext: ReturnType<NonNullable<RemoteSQLResolver["getParseContext"]>>,
+  identifier: string | null,
+) {
+  if (!parseContext || !identifier) {
+    return null;
+  }
+
+  const normalizedIdentifier = identifier.trim().toLowerCase();
+  if (!normalizedIdentifier) {
+    return null;
+  }
+
+  const cteColumnRange = findParserCTEColumnDefinitionRange(parseContext, normalizedIdentifier);
+  if (cteColumnRange) {
+    return cteColumnRange;
+  }
+
+  const dotIndex = normalizedIdentifier.lastIndexOf(".");
+  const tableIdentifier = dotIndex > 0 ? normalizedIdentifier.slice(0, dotIndex) : "";
+  const columnName = dotIndex > 0 ? normalizedIdentifier.slice(dotIndex + 1) : normalizedIdentifier;
+
+  const directColumn = (parseContext.columns ?? []).find((column) => {
+    const columnPart = column.parts.findLast((part) => part.kind === "column");
+    if (dotIndex > 0) {
+      return (
+        column.qualifier?.trim().toLowerCase() === tableIdentifier &&
+        columnPart?.name.trim().toLowerCase() === columnName
+      );
+    }
+    return column.name.trim().toLowerCase() === normalizedIdentifier;
+  });
+
+  const resolvedTableName = directColumn?.resolved_table;
+  if (resolvedTableName) {
+    const sourceTable = (parseContext.tables ?? []).find((table) =>
+      table.source_kind === "cte" &&
+      (table.name.trim().toLowerCase() === resolvedTableName.trim().toLowerCase() ||
+        table.alias?.trim().toLowerCase() === resolvedTableName.trim().toLowerCase() ||
+        table.resolved_name?.trim().toLowerCase() === resolvedTableName.trim().toLowerCase()),
+    );
+    const columnPart = directColumn.parts.findLast((part) => part.kind === "column");
+    if (sourceTable?.column_ranges && columnPart) {
+      const rangeEntry = Object.entries(sourceTable.column_ranges).find(
+        ([name]) => name.toLowerCase() === columnPart.name.toLowerCase(),
+      );
+      if (rangeEntry?.[1]) {
+        return rangeEntry[1];
+      }
+    }
+  }
+
+  const tableEntry = (parseContext.tables ?? []).find((table) =>
+    table.name.trim().toLowerCase() === normalizedIdentifier ||
+    table.alias?.trim().toLowerCase() === normalizedIdentifier ||
+    table.resolved_name?.trim().toLowerCase() === normalizedIdentifier,
+  );
+  return tableEntry?.alias_range ?? tableEntry?.parts.find((part) => part.kind === "table")?.range ?? null;
+}
+
 function collectParserTableColumnSuggestions(
   monaco: Monaco,
   columns: Array<{ name: string; type?: string }>,
@@ -671,22 +738,13 @@ function collectColumnSuggestions(
 function collectParserScopedColumnSuggestions(
   monaco: Monaco,
   tables: SchemaTable[],
-  parseContext: ReturnType<NonNullable<RemoteSQLResolver["getParseContext"]>>,
-  position: MonacoNS.Position,
+  parserTables: SqlParseContextTable[],
   range: MonacoNS.IRange,
 ): MonacoNS.languages.CompletionItem[] {
   const suggestions: MonacoNS.languages.CompletionItem[] = [];
   const seen = new Set<string>();
 
-  for (const table of parseContext?.tables ?? []) {
-    if (table.source_kind === "cte_source") {
-      continue;
-    }
-
-    if (table.scope_range && !isPositionInParserRange(position, table.scope_range)) {
-      continue;
-    }
-
+  for (const table of parserTables) {
     const parserColumns = Object.entries(table.columns ?? {}).map(([name, type]) => ({ name, type }));
     const resolvedTable =
       findTableByIdentifier(tables, table.resolved_name ?? table.name) ??
@@ -713,6 +771,31 @@ function collectParserScopedColumnSuggestions(
   }
 
   return suggestions;
+}
+
+function parserTablesInScope(
+  parseContext: ReturnType<NonNullable<RemoteSQLResolver["getParseContext"]>>,
+  position: MonacoNS.Position,
+  currentStatementText?: string,
+) {
+  const normalizedStatement = currentStatementText?.toLowerCase() ?? "";
+  return (parseContext?.tables ?? []).filter((table) => {
+    if (table.source_kind === "cte_source") {
+      return false;
+    }
+
+    if (table.scope_range && !isPositionInParserRange(position, table.scope_range)) {
+      return false;
+    }
+
+    if (!normalizedStatement) {
+      return true;
+    }
+
+    return [table.alias, table.name, table.resolved_name]
+      .filter(Boolean)
+      .some((identifier) => normalizedStatement.includes(identifier!.toLowerCase()));
+  });
 }
 
 function isPositionInParserRange(
@@ -887,6 +970,74 @@ function getCompletionContext(sqlTextBeforeCursor: string): {
     default:
       return { inTableCtx: false, inColumnCtx: false };
   }
+}
+
+function currentTopLevelSelectText(sqlTextBeforeCursor: string) {
+  const sanitized = stripSQLCommentsAndStrings(sqlTextBeforeCursor);
+  let depth = 0;
+  let start = 0;
+  const tokenPattern = /\b([a-zA-Z_][\w]*)\b|([();])/g;
+
+  for (const match of sanitized.matchAll(tokenPattern)) {
+    const word = match[1]?.toLowerCase();
+    const punctuation = match[2];
+    const index = match.index ?? 0;
+
+    if (punctuation === "(") {
+      depth++;
+      continue;
+    }
+    if (punctuation === ")") {
+      depth = Math.max(0, depth - 1);
+      continue;
+    }
+    if (punctuation === ";" && depth === 0) {
+      start = index + 1;
+      continue;
+    }
+    if (word === "union" && depth === 0) {
+      start = index + match[0].length;
+    }
+  }
+
+  return sqlTextBeforeCursor.slice(start);
+}
+
+function currentTopLevelSelectStatementText(sqlText: string, cursorOffset: number) {
+  const before = currentTopLevelSelectText(sqlText.slice(0, cursorOffset));
+  const start = cursorOffset - before.length;
+  const sanitized = stripSQLCommentsAndStrings(sqlText);
+  let depth = 0;
+  const tokenPattern = /\b([a-zA-Z_][\w]*)\b|([();])/g;
+
+  for (const match of sanitized.matchAll(tokenPattern)) {
+    const index = match.index ?? 0;
+    if (index < cursorOffset) {
+      const punctuation = match[2];
+      if (punctuation === "(") {
+        depth++;
+      } else if (punctuation === ")") {
+        depth = Math.max(0, depth - 1);
+      }
+      continue;
+    }
+
+    const word = match[1]?.toLowerCase();
+    const punctuation = match[2];
+    if (punctuation === "(") {
+      depth++;
+      continue;
+    }
+    if (punctuation === ")") {
+      depth = Math.max(0, depth - 1);
+      continue;
+    }
+    if ((punctuation === ";" || word === "union") && depth === 0) {
+      return sqlText.slice(start, index);
+    }
+  }
+
+  return sqlText.slice(start);
 }
 
 function getQuotedPathContext(
@@ -1257,13 +1408,18 @@ export function registerSQLProviders(
           endLineNumber: position.lineNumber,
           endColumn: position.column,
         });
+        const currentSelectTextBeforeCursor = currentTopLevelSelectText(sqlTextBeforeCursor);
+        const currentSelectStatementText = currentTopLevelSelectStatementText(
+          model.getValue(),
+          model.getOffsetAt(position),
+        );
         const parseContext = remoteResolver?.getParseContext?.() ?? null;
         const aliasMap = parseContext?.tables?.length
           ? buildParserAliasMap(tables, parseContext)
-          : buildAliasMap(sqlTextBeforeCursor, tables);
+          : buildAliasMap(currentSelectTextBeforeCursor, tables);
+        const scopedParserTables = parserTablesInScope(parseContext, position, currentSelectStatementText);
         const parserReferencedNames = new Set(
-          (parseContext?.tables ?? [])
-            .filter((table) => table.source_kind !== "cte_source")
+          scopedParserTables
             .flatMap((table) => [
               table.name.toLowerCase(),
               (table.resolved_name ?? "").toLowerCase(),
@@ -1388,8 +1544,7 @@ export function registerSQLProviders(
           const parserScopedColumnSuggestions = collectParserScopedColumnSuggestions(
             monaco,
             tables,
-            parseContext,
-            position,
+            scopedParserTables,
             range,
           );
           suggestions.push(...parserScopedColumnSuggestions);
@@ -1519,16 +1674,11 @@ export function registerSQLProviders(
         const identifier = identifierAtPosition(model, position);
         const fullIdentifier = identifierInfoAtPosition(model, position)?.identifier ?? identifier;
         const parseContext = remoteResolver?.getParseContext?.() ?? null;
-        const cteColumnRange = findParserCTEColumnDefinitionRange(parseContext, fullIdentifier);
-        if (cteColumnRange) {
+        const parserDefinitionRange = findParserDefinitionRange(parseContext, fullIdentifier);
+        if (parserDefinitionRange) {
           return {
             uri: model.uri,
-            range: new monaco.Range(
-              cteColumnRange.line,
-              cteColumnRange.col,
-              cteColumnRange.end_line,
-              cteColumnRange.end_col,
-            ),
+            range: parserRangeToMonaco(monaco, parserDefinitionRange),
           };
         }
 
@@ -1540,12 +1690,7 @@ export function registerSQLProviders(
           if (aliasEntry?.alias_range) {
             return {
               uri: model.uri,
-              range: new monaco.Range(
-                aliasEntry.alias_range.line,
-                aliasEntry.alias_range.col,
-                aliasEntry.alias_range.end_line,
-                aliasEntry.alias_range.end_col,
-              ),
+              range: parserRangeToMonaco(monaco, aliasEntry.alias_range),
             };
           }
         }

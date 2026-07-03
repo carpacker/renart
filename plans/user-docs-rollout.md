@@ -2,7 +2,7 @@
 
 Status: active (decisions in §9 locked with the user). This document defines what
 we build and in what order for the user-facing docs at `docs/` (Astro Starlight,
-served at getrenart.com/docs). The companion `renart-docs-framework.md` defines the
+served at getrenart.com/docs). The companion `../architecture/docs-framework.md` defines the
 authoring contract (voice, templates, conventions, the docs gate).
 
 ---
@@ -57,7 +57,7 @@ the bulk of what users need and exactly what's grown most on the redesign branch
 
 We adopt **Diátaxis** (the four-mode model) so every page has one job. The full
 authoring contract — the four modes, voice & tone, page templates, terminology,
-screenshots, and the review checklist — lives in `renart-docs-framework.md`. The
+screenshots, and the review checklist — lives in `../architecture/docs-framework.md`. The
 load-bearing points for the IA below:
 
 - A page never mixes modes (tutorial / how-to / reference / explanation).
@@ -105,7 +105,7 @@ succeed without it), **P1** = core workflows, **P2** = depth/polish.
 - The asset workbench — guided cards vs the YAML view, when to use each **[P1]**
 - Identity, owners & tags **[P2]**
 - Materialization strategies — none/view/table/append/merge/incremental, with a
-  decision table **[P1]** (links to `renart-materialization-strategies.md`)
+  decision table **[P1]** (links to `materialization-strategies.md`)
 - Dependencies — inferred vs manual, ignoring, reconciliation prompts **[P1]**
 - Columns — inferred vs manual, types, descriptions, refresh-from-definition **[P1]**
 - Quality checks — adding/removing Bruin column checks **[P2]**
@@ -163,7 +163,7 @@ succeed without it), **P1** = core workflows, **P2** = depth/polish.
 
 The page skeletons (how-to / reference / tutorial / explanation), frontmatter,
 callouts, cross-linking, and the full screenshot guidance live in
-`renart-docs-framework.md`. The IA-relevant headlines:
+`../architecture/docs-framework.md`. The IA-relevant headlines:
 
 - **Four fixed skeletons**, one per Diátaxis mode; pages never mix them.
 - **Screenshots are hand-curated** (decision §9.3): deliberately composed against
@@ -191,7 +191,7 @@ callouts, cross-linking, and the full screenshot guidance live in
   helpful?" so gaps surface from real readers.
 - **Accessibility & SEO.** Alt text on every image (the canvas shots especially),
   descriptive `description` frontmatter, keep the existing structured-data/OG setup.
-- **Contribution guide.** The authoring contract is `renart-docs-framework.md`
+- **Contribution guide.** The authoring contract is `../architecture/docs-framework.md`
   (Diátaxis rules, page skeletons, screenshot convention, "use the UI's exact
   words", the docs gate). A short `docs/`-internal contributor page can summarise it
   and link there rather than restating it.

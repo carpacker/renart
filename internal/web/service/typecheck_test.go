@@ -269,6 +269,58 @@ select range as t from range(1, 11, 1)
 	assert.Equal(t, typeCheckStatusOK, times.Status, "unexpected findings: %+v", times.Findings)
 }
 
+func TestCheckPipelineIgnoresResolvableScalarSubqueryColumnDiagnostic(t *testing.T) {
+	t.Parallel()
+	parsed, root := writeTypeCheckWorkspace(t, "name: analytics", map[string]string{
+		"up.sql": `
+/* @bruin
+name: analytics.up
+type: duckdb.sql
+materialization:
+  type: view
+columns:
+  - name: range
+    type: BIGINT
+@bruin */
+select range from range(1, 11, 1)
+`,
+		"outer.sql": `
+/* @bruin
+name: analytics.outer
+type: duckdb.sql
+materialization:
+  type: view
+columns:
+  - name: range
+    type: BIGINT
+@bruin */
+select range from range(1, 11, 1)
+`,
+		"down.sql": `
+/* @bruin
+name: analytics.down
+type: duckdb.sql
+materialization:
+  type: view
+depends:
+  - analytics.up
+  - analytics.outer
+columns:
+  - name: range
+    type: BIGINT
+@bruin */
+select
+  *,
+  (select first(range) from analytics.up)
+from analytics.outer
+`,
+	})
+
+	report := runTypeCheck(t, parsed, root)
+	down := findAsset(t, report, "analytics.down")
+	assert.Equal(t, typeCheckStatusOK, down.Status, "unexpected findings: %+v", down.Findings)
+}
+
 func TestCheckPipelineReportsAssetIDs(t *testing.T) {
 	t.Parallel()
 	parsed, root := writeTypeCheckWorkspace(t, "name: analytics", map[string]string{

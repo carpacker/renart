@@ -2,7 +2,8 @@
 // bruin-compatible record of which parts of an asset's Bruin definition renart
 // generated (from SQL) versus what the user authored or overrode.
 //
-// The model mirrors §6 of architecture/renart-asset-editing-concept.md, but is
+// The model mirrors the compact provenance schema in
+// architecture/asset-editing.md, but is
 // stored as flat string keys under the asset's `meta` map rather than as a
 // nested `meta.renart` block: bruin parses `meta` as map[string]string
 // (pkg/pipeline/yaml.go), so a nested block would not round-trip through bruin

@@ -228,7 +228,7 @@ export function RedesignNotebookLivePage({ notebookId }: { notebookId: string })
   // Staleness, results, the running set, and which stale cells will auto-update
   // are all owned by the server now; the client renders what the runtime SSE
   // stream (and the initial snapshot) report. See
-  // architecture/renart-notebook-backend-autorecompute.md.
+  // architecture/notebooks.md.
   const [results, setResults] = useState<Record<string, NotebookCellRunResult>>({});
   const [staleCells, setStaleCells] = useState<Set<string>>(new Set());
   const [autoPending, setAutoPending] = useState<Set<string>>(new Set());

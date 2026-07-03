@@ -420,6 +420,80 @@ select 1 as plumbus, 2 as blabli
       );
   });
 
+  test("uses SQL LSP completions in the Monaco SQL editor", async ({
+    liveApp,
+    page,
+  }) => {
+    test.skip(test.info().project.name.includes("mobile"), "Desktop suggest widget exposes stable Monaco completion DOM.");
+
+    await page.goto(`${liveApp.baseURL}/`);
+    await openCustomersEditor(page, liveApp.baseURL);
+    await replaceEditorContentByInsertText(page, "select o.\nfrom analytics.orders o");
+    await setEditorPositionAfterText(page, "o.");
+
+    const completionResponse = await page.request.post(`${liveApp.baseURL}/api/sql/lsp/completions`, {
+      data: {
+        asset_id: "YW5hbHl0aWNzL2Fzc2V0cy9hbmFseXRpY3MvY3VzdG9tZXJzLnNxbA",
+        content: "select o.\nfrom analytics.orders o",
+        position: { line: 0, character: "select o.".length },
+      },
+    });
+    await page.keyboard.press("ControlOrMeta+Space");
+    const body = await completionResponse.json() as {
+      status?: string;
+      completions?: Array<{ label?: string }>;
+    };
+
+    expect(body.status).toBe("ok");
+    expect(body.completions ?? []).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ label: "total_amount" }),
+        expect.objectContaining({ label: "order_id" }),
+      ])
+    );
+    await expectVisibleSuggestText(page, "total_amount");
+  });
+
+  test("maps SQL LSP rendered-template diagnostics back into Monaco", async ({
+    liveApp,
+    page,
+  }) => {
+    test.skip(test.info().project.name.includes("mobile"), "Monaco diagnostics are only stable in the desktop editor.");
+
+    await page.goto(`${liveApp.baseURL}/`);
+    await openCustomersEditor(page, liveApp.baseURL);
+
+    const diagnosticsResponse = page.waitForResponse(
+      (response) =>
+        response.url().includes("/api/sql/lsp/diagnostics") &&
+        response.request().method() === "POST" &&
+        (response.request().postData() ?? "").includes("missing_orders"),
+      { timeout: 15000 }
+    );
+    await replaceEditorContentByInsertText(page, 'select *\nfrom {{ ref("missing_orders") }} m');
+    const response = await diagnosticsResponse;
+    const body = await response.json() as {
+      status?: string;
+      diagnostics?: Array<{ message?: string; range?: { start?: { line?: number; character?: number } } }>;
+    };
+
+    expect(body.status).toBe("ok");
+    expect(body.diagnostics ?? []).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          message: "Unresolved relation: missing_orders",
+          range: expect.objectContaining({
+            start: expect.objectContaining({ line: 1, character: 5 }),
+          }),
+        }),
+      ])
+    );
+
+    await expect
+      .poll(async () => getEditorMarkerMessages(page), { timeout: 15000 })
+      .toEqual(expect.arrayContaining([expect.stringContaining("Unresolved relation: missing_orders")]));
+  });
+
   test("shows latest inspect SQL error as Monaco diagnostics while content is unchanged", async ({
     liveApp,
     page,
