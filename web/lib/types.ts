@@ -40,6 +40,7 @@ import type {
   WorkspaceConfigEnvironment,
   WorkspaceConfigFieldDef as GeneratedWorkspaceConfigFieldDef,
   WorkspaceConfigResponse as GeneratedWorkspaceConfigResponse,
+  WorkspaceEnvironmentPolicyResponse as GeneratedWorkspaceEnvironmentPolicyResponse,
   WorkspaceEvent as GeneratedWorkspaceEvent,
   WorkspaceState as GeneratedWorkspaceState,
 } from "@/lib/generated/api-types";
@@ -91,6 +92,13 @@ export type WorkspaceConfigResponse = Omit<
 > & {
   status: "ok" | "error";
   connection_types: WorkspaceConfigConnectionType[];
+};
+
+export type WorkspaceEnvironmentPolicyResponse = Omit<
+  GeneratedWorkspaceEnvironmentPolicyResponse,
+  "status"
+> & {
+  status: "ok" | "error";
 };
 
 export type OnboardingDiscoveryResponse = Omit<GeneratedOnboardingDiscoveryResponse, "status"> & {

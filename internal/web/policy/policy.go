@@ -13,6 +13,7 @@ package policy
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"sync"
 	"time"
 
@@ -64,6 +65,28 @@ func Load(path string) (Config, error) {
 	return cfg, nil
 }
 
+// Save writes the environment policy file, creating its parent directory when
+// needed. Zero policies are omitted so clearing every flag removes the
+// environment from the policy file without affecting Bruin config.
+func Save(path string, cfg Config) error {
+	cleaned := Config{Environments: map[string]EnvironmentPolicy{}}
+	for name, envPolicy := range cfg.Environments {
+		if name == "" || envPolicy.Zero() {
+			continue
+		}
+		cleaned.Environments[name] = envPolicy
+	}
+
+	data, err := yaml.Marshal(cleaned)
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
+	}
+	return os.WriteFile(path, data, 0o644)
+}
+
 // Loader caches the policy file, revalidated by stat so edits apply without
 // a restart.
 type Loader struct {
@@ -78,6 +101,10 @@ type Loader struct {
 
 func NewLoader(path string) *Loader {
 	return &Loader{path: path}
+}
+
+func (l *Loader) Path() string {
+	return l.path
 }
 
 func (l *Loader) Config() Config {
@@ -113,6 +140,39 @@ func (l *Loader) Config() Config {
 
 func (l *Loader) For(environment string) EnvironmentPolicy {
 	return l.Config().For(environment)
+}
+
+func (l *Loader) Set(environment string, envPolicy EnvironmentPolicy) (Config, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	cfg, err := Load(l.path)
+	if err != nil {
+		return Config{}, err
+	}
+	if cfg.Environments == nil {
+		cfg.Environments = map[string]EnvironmentPolicy{}
+	}
+	if envPolicy.Zero() {
+		delete(cfg.Environments, environment)
+	} else {
+		cfg.Environments[environment] = envPolicy
+	}
+	if err := Save(l.path, cfg); err != nil {
+		return Config{}, err
+	}
+
+	info, statErr := os.Stat(l.path)
+	if statErr == nil {
+		l.modTime = info.ModTime()
+		l.size = info.Size()
+	} else {
+		l.modTime = time.Time{}
+		l.size = 0
+	}
+	l.cfg = cfg
+	l.loaded = true
+	return cfg, nil
 }
 
 // RunRequest describes one execution attempt for policy evaluation.

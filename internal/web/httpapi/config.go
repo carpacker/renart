@@ -9,6 +9,7 @@ import (
 	"github.com/bruin-data/bruin/pkg/config"
 	"github.com/go-chi/chi/v5"
 	webapi "renart/internal/web/api"
+	"renart/internal/web/policy"
 	"renart/internal/web/service"
 )
 
@@ -18,6 +19,7 @@ type ConfigChangePublisher interface {
 
 type ConfigHandlers struct {
 	Service   *service.ConfigService
+	Policies  *policy.Loader
 	Publisher ConfigChangePublisher
 }
 
@@ -58,6 +60,10 @@ type DeleteWorkspaceConnectionRequest struct {
 	Name            string `json:"name"`
 }
 
+type UpdateWorkspaceProjectRequest struct {
+	Name string `json:"name"`
+}
+
 type TestWorkspaceConnectionRequest struct {
 	EnvironmentName string         `json:"environment_name"`
 	CurrentName     string         `json:"current_name,omitempty"`
@@ -68,6 +74,9 @@ type TestWorkspaceConnectionRequest struct {
 
 func RegisterConfigRoutes(router chi.Router, handlers *ConfigHandlers) {
 	router.Get("/api/config", handlers.HandleGetWorkspaceConfig)
+	router.Put("/api/config/project", handlers.HandleUpdateWorkspaceProject)
+	router.Get("/api/config/environment-policies/{environment}", handlers.HandleGetEnvironmentPolicy)
+	router.Put("/api/config/environment-policies/{environment}", handlers.HandleUpdateEnvironmentPolicy)
 	router.Post("/api/config/environments", handlers.HandleCreateWorkspaceEnvironment)
 	router.Put("/api/config/environments", handlers.HandleUpdateWorkspaceEnvironment)
 	router.Post("/api/config/environments/clone", handlers.HandleCloneWorkspaceEnvironment)
@@ -86,6 +95,83 @@ func (h *ConfigHandlers) HandleGetWorkspaceConfig(w http.ResponseWriter, _ *http
 	}
 
 	webapi.WriteJSON(w, http.StatusOK, h.Service.BuildResponse(configPath, cfg))
+}
+
+func (h *ConfigHandlers) HandleUpdateWorkspaceProject(w http.ResponseWriter, r *http.Request) {
+	var req UpdateWorkspaceProjectRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		webapi.WriteBadRequest(w, "invalid_request_body", err.Error())
+		return
+	}
+	name := strings.TrimSpace(req.Name)
+	if name == "" {
+		webapi.WriteBadRequest(w, "missing_project_name", "project name is required")
+		return
+	}
+
+	if _, err := h.Service.RenameProject(name); err != nil {
+		webapi.WriteInternalError(w, "project_rename_failed", err.Error())
+		return
+	}
+	if h.Publisher != nil {
+		h.Publisher.ConfigChanged(r.Context(), ".renart/project.yml", "config.updated")
+	}
+
+	cfg, configPath, err := h.Service.LoadForEditing()
+	if err != nil {
+		webapi.WriteJSON(w, http.StatusOK, h.Service.BuildParseErrorResponse(err))
+		return
+	}
+	webapi.WriteJSON(w, http.StatusOK, h.Service.BuildResponse(configPath, cfg))
+}
+
+func (h *ConfigHandlers) HandleGetEnvironmentPolicy(w http.ResponseWriter, r *http.Request) {
+	environment := strings.TrimSpace(chi.URLParam(r, "environment"))
+	if environment == "" {
+		webapi.WriteBadRequest(w, "missing_environment", "environment is required")
+		return
+	}
+	if h.Policies == nil {
+		webapi.WriteInternalError(w, "policy_loader_missing", "environment policy loader is not configured")
+		return
+	}
+
+	webapi.WriteJSON(w, http.StatusOK, service.WorkspaceEnvironmentPolicyResponse{
+		Status:      "ok",
+		Environment: environment,
+		Policy:      h.Policies.For(environment),
+	})
+}
+
+func (h *ConfigHandlers) HandleUpdateEnvironmentPolicy(w http.ResponseWriter, r *http.Request) {
+	environment := strings.TrimSpace(chi.URLParam(r, "environment"))
+	if environment == "" {
+		webapi.WriteBadRequest(w, "missing_environment", "environment is required")
+		return
+	}
+	if h.Policies == nil {
+		webapi.WriteInternalError(w, "policy_loader_missing", "environment policy loader is not configured")
+		return
+	}
+
+	var req policy.EnvironmentPolicy
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		webapi.WriteBadRequest(w, "invalid_request_body", err.Error())
+		return
+	}
+	if _, err := h.Policies.Set(environment, req); err != nil {
+		webapi.WriteInternalError(w, "environment_policy_persist_failed", err.Error())
+		return
+	}
+	if h.Publisher != nil {
+		h.Publisher.ConfigChanged(r.Context(), ".renart/environments.yml", "config.updated")
+	}
+
+	webapi.WriteJSON(w, http.StatusOK, service.WorkspaceEnvironmentPolicyResponse{
+		Status:      "ok",
+		Environment: environment,
+		Policy:      h.Policies.For(environment),
+	})
 }
 
 func (h *ConfigHandlers) HandleCreateWorkspaceEnvironment(w http.ResponseWriter, r *http.Request) {
@@ -138,6 +224,16 @@ func (h *ConfigHandlers) HandleUpdateWorkspaceEnvironment(w http.ResponseWriter,
 		cfg.DefaultEnvironmentName = nextName
 	}
 
+	// Renaming must carry the renart policy along, otherwise the guardrails
+	// silently stay behind under the old name.
+	if h.Policies != nil && nextName != currentName {
+		if envPolicy := h.Policies.For(currentName); !envPolicy.Zero() {
+			if _, err := h.Policies.Set(nextName, envPolicy); err == nil {
+				_, _ = h.Policies.Set(currentName, policy.EnvironmentPolicy{})
+			}
+		}
+	}
+
 	h.persistAndRespond(r.Context(), w, cfg, configPath)
 }
 
@@ -157,6 +253,14 @@ func (h *ConfigHandlers) HandleCloneWorkspaceEnvironment(w http.ResponseWriter, 
 	if err := cfg.CloneEnvironment(strings.TrimSpace(req.SourceName), strings.TrimSpace(req.TargetName), strings.TrimSpace(req.SchemaPrefix)); err != nil {
 		webapi.WriteBadRequest(w, "environment_clone_failed", err.Error())
 		return
+	}
+
+	// Clones inherit the source's guardrails; erring on the protected side
+	// beats silently dropping a protection flag.
+	if h.Policies != nil {
+		if envPolicy := h.Policies.For(strings.TrimSpace(req.SourceName)); !envPolicy.Zero() {
+			_, _ = h.Policies.Set(strings.TrimSpace(req.TargetName), envPolicy)
+		}
 	}
 	if req.SetAsDefault {
 		cfg.DefaultEnvironmentName = strings.TrimSpace(req.TargetName)
@@ -181,6 +285,9 @@ func (h *ConfigHandlers) HandleDeleteWorkspaceEnvironment(w http.ResponseWriter,
 	if err := cfg.DeleteEnvironment(strings.TrimSpace(req.Name)); err != nil {
 		webapi.WriteBadRequest(w, "environment_delete_failed", err.Error())
 		return
+	}
+	if h.Policies != nil && !h.Policies.For(strings.TrimSpace(req.Name)).Zero() {
+		_, _ = h.Policies.Set(strings.TrimSpace(req.Name), policy.EnvironmentPolicy{})
 	}
 
 	h.persistAndRespond(r.Context(), w, cfg, configPath)

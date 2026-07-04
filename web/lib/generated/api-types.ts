@@ -128,11 +128,20 @@ export type WorkspaceConfigEnvironment = {
 export type WorkspaceConfigResponse = {
   status: string;
   path: string;
+  workspace_path?: string;
+  project_id?: string;
+  project_name?: string;
   default_environment?: string;
   selected_environment?: string;
   environments: WorkspaceConfigEnvironment[];
   connection_types: WorkspaceConfigConnectionType[];
   parse_error?: string;
+};
+
+export type WorkspaceEnvironmentPolicyResponse = {
+  status: string;
+  environment: string;
+  policy: EnvironmentPolicy;
 };
 
 export type OnboardingImportFormState = {

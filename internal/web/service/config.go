@@ -11,6 +11,8 @@ import (
 
 	"github.com/bruin-data/bruin/pkg/config"
 	"github.com/spf13/afero"
+	"renart/internal/web/identity"
+	"renart/internal/web/policy"
 )
 
 type WorkspaceConfigFieldDef struct {
@@ -44,11 +46,20 @@ type WorkspaceConfigEnvironment struct {
 type WorkspaceConfigResponse struct {
 	Status              string                          `json:"status"`
 	Path                string                          `json:"path"`
+	WorkspacePath       string                          `json:"workspace_path,omitempty"`
+	ProjectID           string                          `json:"project_id,omitempty"`
+	ProjectName         string                          `json:"project_name,omitempty"`
 	DefaultEnvironment  string                          `json:"default_environment,omitempty"`
 	SelectedEnvironment string                          `json:"selected_environment,omitempty"`
 	Environments        []WorkspaceConfigEnvironment    `json:"environments"`
 	ConnectionTypes     []WorkspaceConfigConnectionType `json:"connection_types"`
 	ParseError          string                          `json:"parse_error,omitempty"`
+}
+
+type WorkspaceEnvironmentPolicyResponse struct {
+	Status      string                   `json:"status"`
+	Environment string                   `json:"environment"`
+	Policy      policy.EnvironmentPolicy `json:"policy"`
 }
 
 type UpsertWorkspaceConnectionParams struct {
@@ -84,6 +95,38 @@ func (s *ConfigService) ConfigPath() string {
 	return s.configPath
 }
 
+func (s *ConfigService) projectYmlPath() string {
+	return filepath.Join(s.workspaceRoot, ".renart", "project.yml")
+}
+
+func (s *ConfigService) defaultProjectName() string {
+	return filepath.Base(filepath.Clean(s.workspaceRoot))
+}
+
+// ProjectIdentity self-assigns .renart/project.yml on first use. Errors
+// degrade to a nameless-but-usable identity so a corrupt project.yml never
+// takes the config API down.
+func (s *ConfigService) ProjectIdentity() identity.Project {
+	project, err := identity.EnsureProject(afero.NewOsFs(), s.projectYmlPath(), s.defaultProjectName())
+	if err != nil {
+		return identity.Project{Name: s.defaultProjectName()}
+	}
+	return project
+}
+
+func (s *ConfigService) RenameProject(name string) (identity.Project, error) {
+	fs := afero.NewOsFs()
+	project, err := identity.EnsureProject(fs, s.projectYmlPath(), s.defaultProjectName())
+	if err != nil {
+		return identity.Project{}, err
+	}
+	project.Name = name
+	if err := identity.SaveProject(fs, s.projectYmlPath(), project); err != nil {
+		return identity.Project{}, err
+	}
+	return project, nil
+}
+
 func (s *ConfigService) LoadForEditing() (*config.Config, string, error) {
 	cfg, err := config.LoadOrCreateWithoutPathAbsolutization(afero.NewOsFs(), s.configPath)
 	if err != nil {
@@ -110,9 +153,13 @@ func (s *ConfigService) Persist(cfg *config.Config) (string, error) {
 }
 
 func (s *ConfigService) BuildResponse(configPath string, cfg *config.Config) WorkspaceConfigResponse {
+	project := s.ProjectIdentity()
 	response := WorkspaceConfigResponse{
 		Status:              "ok",
 		Path:                filepath.Base(configPath),
+		WorkspacePath:       filepath.Clean(s.workspaceRoot),
+		ProjectID:           project.ID,
+		ProjectName:         project.Name,
 		DefaultEnvironment:  cfg.DefaultEnvironmentName,
 		SelectedEnvironment: cfg.SelectedEnvironmentName,
 		Environments:        []WorkspaceConfigEnvironment{},
@@ -134,9 +181,13 @@ func (s *ConfigService) BuildResponse(configPath string, cfg *config.Config) Wor
 }
 
 func (s *ConfigService) BuildParseErrorResponse(parseErr error) WorkspaceConfigResponse {
+	project := s.ProjectIdentity()
 	return WorkspaceConfigResponse{
 		Status:          "ok",
 		Path:            filepath.Base(s.configPath),
+		WorkspacePath:   filepath.Clean(s.workspaceRoot),
+		ProjectID:       project.ID,
+		ProjectName:     project.Name,
 		Environments:    []WorkspaceConfigEnvironment{},
 		ConnectionTypes: BuildWorkspaceConfigConnectionTypes(),
 		ParseError:      parseErr.Error(),

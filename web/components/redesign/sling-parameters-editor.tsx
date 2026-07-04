@@ -102,7 +102,7 @@ export function SlingParametersEditor({ asset, pipelineId }: { asset: WebAsset; 
 
   return (
     <div className="font-monaco min-h-0 flex-1 overflow-y-auto bg-background p-3 text-[13px] leading-6">
-      <Comment>Sling moves data between two bruin connections.</Comment>
+      <Comment>Sling moves data between two configured connections.</Comment>
       <Comment>Source and target can each be a database, storage bucket, or file.</Comment>
       <Line>
         <Key>type</Key>

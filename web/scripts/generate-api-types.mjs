@@ -23,6 +23,7 @@ const sources = [
       "WorkspaceConfigConnection",
       "WorkspaceConfigEnvironment",
       "WorkspaceConfigResponse",
+      "WorkspaceEnvironmentPolicyResponse",
     ],
   },
   {
@@ -93,6 +94,7 @@ const scalarMap = new Map([
   ["float64", "number"],
   ["time.Time", "string"],
   ["any", "unknown"],
+  ["policy.EnvironmentPolicy", "EnvironmentPolicy"],
 ]);
 
 const renameMap = new Map([

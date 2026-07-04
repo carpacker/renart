@@ -1,10 +1,37 @@
 import { fetchJSON, fetchJSONWithBody } from "@/lib/api-core";
-import { WorkspaceConfigResponse } from "@/lib/types";
+import type { EnvironmentPolicy } from "@/lib/generated/api-types";
+import { WorkspaceConfigResponse, WorkspaceEnvironmentPolicyResponse } from "@/lib/types";
 
 export async function getWorkspaceConfig(): Promise<WorkspaceConfigResponse> {
   return fetchJSON<WorkspaceConfigResponse>("/api/config", {
     cache: "no-store",
   });
+}
+
+export async function updateWorkspaceProject(input: {
+  name: string;
+}): Promise<WorkspaceConfigResponse> {
+  return fetchJSONWithBody<WorkspaceConfigResponse>("/api/config/project", "PUT", input);
+}
+
+export async function getWorkspaceEnvironmentPolicy(
+  environment: string
+): Promise<WorkspaceEnvironmentPolicyResponse> {
+  return fetchJSON<WorkspaceEnvironmentPolicyResponse>(
+    `/api/config/environment-policies/${encodeURIComponent(environment)}`,
+    { cache: "no-store" }
+  );
+}
+
+export async function updateWorkspaceEnvironmentPolicy(
+  environment: string,
+  policy: EnvironmentPolicy
+): Promise<WorkspaceEnvironmentPolicyResponse> {
+  return fetchJSONWithBody<WorkspaceEnvironmentPolicyResponse>(
+    `/api/config/environment-policies/${encodeURIComponent(environment)}`,
+    "PUT",
+    policy
+  );
 }
 
 export async function createWorkspaceEnvironment(input: {

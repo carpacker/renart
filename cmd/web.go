@@ -256,7 +256,7 @@ func listenWithDefaultPortFallback(host string, port int) (net.Listener, string,
 
 func (s *webServer) registerRoutes(router chi.Router) {
 	webhttpapi.RegisterWorkspaceRoutes(router, &webhttpapi.WorkspaceHandlers{Reader: s})
-	webhttpapi.RegisterConfigRoutes(router, &webhttpapi.ConfigHandlers{Service: s.configSvc, Publisher: s})
+	webhttpapi.RegisterConfigRoutes(router, &webhttpapi.ConfigHandlers{Service: s.configSvc, Policies: s.policyLoader, Publisher: s})
 	webhttpapi.RegisterPipelineRoutes(router, &webhttpapi.PipelineHandlers{Service: s.pipelineSvc, Publisher: s})
 	webhttpapi.RegisterExecutionRoutes(router, &webhttpapi.ExecutionAPI{Service: s.executionSvc})
 	webhttpapi.RegisterAssetRoutes(router, &webhttpapi.AssetsAPI{Service: s.assetSvc})

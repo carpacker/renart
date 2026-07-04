@@ -10,13 +10,18 @@ import {
   deleteWorkspaceConnection,
   deleteWorkspaceEnvironment,
   getWorkspaceConfig,
+  getWorkspaceEnvironmentPolicy,
+  updateWorkspaceEnvironmentPolicy,
   updateWorkspaceConnection,
   updateWorkspaceEnvironment,
+  updateWorkspaceProject,
 } from "@/lib/api";
 import { atom } from "jotai";
+import type { EnvironmentPolicy } from "@/lib/generated/api-types";
 import { WorkspaceConfigResponse } from "@/lib/types";
 
 const workspaceConfigAtom = atom<WorkspaceConfigResponse | null>(null);
+const workspaceEnvironmentPoliciesAtom = atom<Record<string, EnvironmentPolicy>>({});
 const workspaceConfigLoadingAtom = atom(false);
 const workspaceConfigBusyAtom = atom(false);
 const workspaceConfigStatusMessageAtom = atom<string | null>(null);
@@ -26,6 +31,9 @@ let workspaceConfigLoadPromise: Promise<void> | null = null;
 
 export function useWorkspaceSettingsData() {
   const [workspaceConfig, setWorkspaceConfig] = useAtom(workspaceConfigAtom);
+  const [workspaceEnvironmentPolicies, setWorkspaceEnvironmentPolicies] = useAtom(
+    workspaceEnvironmentPoliciesAtom
+  );
   const [workspaceConfigLoading, setWorkspaceConfigLoading] = useAtom(
     workspaceConfigLoadingAtom
   );
@@ -126,6 +134,15 @@ export function useWorkspaceSettingsData() {
     []
   );
 
+  const handleUpdateWorkspaceProject = useCallback(
+    (input: { name: string }) =>
+      runWorkspaceConfigMutation(
+        () => updateWorkspaceProject(input),
+        `Project renamed to "${input.name}".`
+      ),
+    [runWorkspaceConfigMutation]
+  );
+
   const handleCreateWorkspaceEnvironment = useCallback(
     (input: {
       name: string;
@@ -214,6 +231,52 @@ export function useWorkspaceSettingsData() {
     [runWorkspaceConfigMutation]
   );
 
+  const loadWorkspaceEnvironmentPolicy = useCallback(
+    async (environment: string) => {
+      const response = await getWorkspaceEnvironmentPolicy(environment);
+      setWorkspaceEnvironmentPolicies((current) => ({
+        ...current,
+        [response.environment]: response.policy,
+      }));
+      return response.policy;
+    },
+    [setWorkspaceEnvironmentPolicies]
+  );
+
+  const handleUpdateWorkspaceEnvironmentPolicy = useCallback(
+    async (environment: string, policy: EnvironmentPolicy) => {
+      setWorkspaceConfigBusy(true);
+      setWorkspaceConfigStatusMessage(null);
+      setWorkspaceConfigStatusTone(null);
+      try {
+        const response = await updateWorkspaceEnvironmentPolicy(environment, policy);
+        setWorkspaceEnvironmentPolicies((current) => ({
+          ...current,
+          [response.environment]: response.policy,
+        }));
+        setWorkspaceConfigStatusMessage(`Policy for "${environment}" saved.`);
+        setWorkspaceConfigStatusTone("success");
+        return response.policy;
+      } catch (error) {
+        setWorkspaceConfigStatusMessage(
+          error instanceof Error
+            ? error.message
+            : "Environment policy update failed."
+        );
+        setWorkspaceConfigStatusTone("error");
+        throw error;
+      } finally {
+        setWorkspaceConfigBusy(false);
+      }
+    },
+    [
+      setWorkspaceConfigBusy,
+      setWorkspaceConfigStatusMessage,
+      setWorkspaceConfigStatusTone,
+      setWorkspaceEnvironmentPolicies,
+    ]
+  );
+
   return {
     fallbackConfigEnvironment,
     handleCloneWorkspaceEnvironment,
@@ -223,8 +286,12 @@ export function useWorkspaceSettingsData() {
     handleDeleteWorkspaceEnvironment,
     handleUpdateWorkspaceConnection,
     handleUpdateWorkspaceEnvironment,
+    handleUpdateWorkspaceEnvironmentPolicy,
+    handleUpdateWorkspaceProject,
+    loadWorkspaceEnvironmentPolicy,
     loadWorkspaceConfig,
     normalizedConfigEnvironments,
+    workspaceEnvironmentPolicies,
     workspaceConfig,
     workspaceConfigBusy,
     workspaceConfigLoading,

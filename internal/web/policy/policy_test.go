@@ -36,6 +36,37 @@ environments:
 	assert.True(t, cfg.For("dev").Zero())
 }
 
+func TestSaveOmitsZeroPolicies(t *testing.T) {
+	t.Parallel()
+	path := filepath.Join(t.TempDir(), ".renart", "environments.yml")
+
+	require.NoError(t, Save(path, Config{Environments: map[string]EnvironmentPolicy{
+		"prod": {Protected: true},
+		"dev":  {},
+	}}))
+
+	cfg, err := Load(path)
+	require.NoError(t, err)
+	assert.Equal(t, EnvironmentPolicy{Protected: true}, cfg.For("prod"))
+	assert.True(t, cfg.For("dev").Zero())
+}
+
+func TestLoaderSetPersistsPolicy(t *testing.T) {
+	t.Parallel()
+	path := filepath.Join(t.TempDir(), ".renart", "environments.yml")
+	loader := NewLoader(path)
+
+	cfg, err := loader.Set("prod", EnvironmentPolicy{Protected: true, ConfirmDestructive: true})
+	require.NoError(t, err)
+	assert.Equal(t, EnvironmentPolicy{Protected: true, ConfirmDestructive: true}, cfg.For("prod"))
+	assert.Equal(t, EnvironmentPolicy{Protected: true, ConfirmDestructive: true}, loader.For("prod"))
+
+	cfg, err = loader.Set("prod", EnvironmentPolicy{})
+	require.NoError(t, err)
+	assert.True(t, cfg.For("prod").Zero())
+	assert.True(t, loader.For("prod").Zero())
+}
+
 func TestCheckProtectedBlocksInteractiveOnly(t *testing.T) {
 	t.Parallel()
 	p := EnvironmentPolicy{Protected: true}

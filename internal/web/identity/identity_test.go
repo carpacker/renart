@@ -80,3 +80,43 @@ func TestAssetIDRoundTrip(t *testing.T) {
 	_, _, ok = SplitAssetID("missing-asset:")
 	assert.False(t, ok)
 }
+
+func TestEnsureProjectSelfAssignsOnFirstOpen(t *testing.T) {
+	t.Parallel()
+	fs := afero.NewMemMapFs()
+
+	project, err := EnsureProject(fs, "/w/.renart/project.yml", "data_platform")
+	require.NoError(t, err)
+	require.NoError(t, uuid.Validate(project.ID))
+	assert.Equal(t, "data_platform", project.Name)
+
+	// Second open returns the same identity without rewriting.
+	again, err := EnsureProject(fs, "/w/.renart/project.yml", "other-default")
+	require.NoError(t, err)
+	assert.Equal(t, project, again)
+}
+
+func TestEnsureProjectAssignsIDToExistingFileKeepingName(t *testing.T) {
+	t.Parallel()
+	fs := afero.NewMemMapFs()
+	require.NoError(t, afero.WriteFile(fs, "/w/.renart/project.yml", []byte("name: my project\n"), 0o644))
+
+	project, err := EnsureProject(fs, "/w/.renart/project.yml", "dirname")
+	require.NoError(t, err)
+	require.NoError(t, uuid.Validate(project.ID))
+	assert.Equal(t, "my project", project.Name)
+}
+
+func TestEnsureProjectLeavesUnparseableFileUntouched(t *testing.T) {
+	t.Parallel()
+	fs := afero.NewMemMapFs()
+	corrupt := "id: [unclosed\n"
+	require.NoError(t, afero.WriteFile(fs, "/w/.renart/project.yml", []byte(corrupt), 0o644))
+
+	_, err := EnsureProject(fs, "/w/.renart/project.yml", "dirname")
+	require.Error(t, err)
+
+	content, err := afero.ReadFile(fs, "/w/.renart/project.yml")
+	require.NoError(t, err)
+	assert.Equal(t, corrupt, string(content))
+}
