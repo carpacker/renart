@@ -144,6 +144,41 @@ export type WorkspaceEnvironmentPolicyResponse = {
   policy: EnvironmentPolicy;
 };
 
+export type ProjectInfo = {
+  id: string;
+  name: string;
+  path: string;
+  type: string;
+  last_opened_at: string;
+  open: boolean;
+  exists: boolean;
+  default: boolean;
+};
+
+export type ProjectListResponse = {
+  status: string;
+  default_project_id: string;
+  projects: ProjectInfo[];
+};
+
+export type OpenProjectResponse = {
+  status: string;
+  project: ProjectInfo;
+};
+
+export type BrowseDirEntry = {
+  name: string;
+  path: string;
+  is_project: boolean;
+};
+
+export type BrowseDirsResponse = {
+  status: string;
+  path: string;
+  parent?: string;
+  entries: BrowseDirEntry[];
+};
+
 export type OnboardingImportFormState = {
   database?: string;
   pipeline_name?: string;

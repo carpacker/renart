@@ -1,5 +1,5 @@
 import { Link, Outlet, useLocation, useParams } from "@tanstack/react-router";
-import { Bell, BookOpen, Bot, Boxes, Building2, Check, ChevronDown, ChevronRight, Cloud, CreditCard, FileCode, GitBranch, GitCommit, Loader2, Lock, LogOut, Plus, RefreshCw, Send, Settings, Sparkles, User, Users, Clock } from "lucide-react";
+import { Bell, BookOpen, Bot, Boxes, Check, ChevronDown, ChevronRight, CreditCard, FileCode, GitBranch, GitCommit, Loader2, Lock, LogOut, RefreshCw, Send, Sparkles, User, Users, Clock } from "lucide-react";
 import { ReactNode, useEffect, useMemo, useState } from "react";
 import { useAtomValue, useSetAtom } from "jotai";
 
@@ -27,6 +27,7 @@ import { redesignFeatureFlags } from "@/lib/redesign-feature-flags";
 import type { SourceControlChange, WebNotebook } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
+import { ProjectSwitcher } from "./project-switcher";
 import { RedesignCommandPalette } from "./redesign-command-palette";
 import { navItems } from "./redesign-data";
 import { NavLinkButton } from "./redesign-primitives";
@@ -50,39 +51,7 @@ export function RedesignShell() {
           <span className="hidden font-semibold tracking-tight sm:inline">Renart</span>
         </Link>
 
-        <DropdownMenu>
-          <DropdownMenuTrigger asChild>
-            <Button variant="outline" size="sm" className="h-7 border-zinc-800 bg-zinc-950 px-2 text-zinc-200 hover:bg-zinc-800 hover:text-white">
-              <Building2 className="size-3.5 text-zinc-400" />
-              <span className="max-w-32 truncate font-medium sm:max-w-44">data_platform</span>
-              <Cloud className="size-3 text-primary" />
-              <ChevronDown className="size-3 text-zinc-500" />
-            </Button>
-          </DropdownMenuTrigger>
-          <DropdownMenuContent align="start" className="w-64">
-            <DropdownMenuLabel>Projects</DropdownMenuLabel>
-            <DropdownMenuItem>
-              <Building2 className="size-4" />
-              <span className="flex-1">data_platform</span>
-              <Cloud className="size-3.5 text-primary" />
-              <Check className="size-3.5" />
-            </DropdownMenuItem>
-            <DropdownMenuItem>
-              <Building2 className="size-4" />
-              <span className="flex-1">marketing_analytics</span>
-            </DropdownMenuItem>
-            <DropdownMenuSeparator />
-            <DropdownMenuItem asChild>
-              <Link to="/redesign/project/general"><Settings className="size-4" />Project settings</Link>
-            </DropdownMenuItem>
-            <DropdownMenuItem>
-              <Plus className="size-4" />New project
-            </DropdownMenuItem>
-            <DropdownMenuItem asChild>
-              <Link to="/redesign/account/workspaces"><Cloud className="size-4" />Connect cloud workspace</Link>
-            </DropdownMenuItem>
-          </DropdownMenuContent>
-        </DropdownMenu>
+        <ProjectSwitcher />
 
         <Separator orientation="vertical" className="mx-2 hidden h-5 bg-zinc-800 md:block" />
 

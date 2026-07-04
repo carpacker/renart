@@ -124,13 +124,19 @@ func Web() *cli.Command {
 			}
 			defer func() { _ = logger.Sync() }()
 
-			server, cleanup, err := newWebServer(ctx, cfg, logger)
+			defaultRuntime, err := newProjectRuntime(ctx, logger, cfg)
 			if err != nil {
 				return err
 			}
-			defer cleanup()
+			defer defaultRuntime.cleanup()
 
-			router := server.buildRouter()
+			manager, err := newProjectManager(ctx, logger, cfg, defaultRuntime)
+			if err != nil {
+				return err
+			}
+			defer manager.closeAll()
+
+			router := buildRootRouter(manager, defaultRuntime)
 
 			host := c.String("host")
 			port := c.Int("port")

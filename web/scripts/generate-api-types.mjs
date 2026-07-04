@@ -27,6 +27,16 @@ const sources = [
     ],
   },
   {
+    file: resolve(repoRoot, "internal", "web", "httpapi", "projects.go"),
+    types: [
+      "ProjectInfo",
+      "ProjectListResponse",
+      "OpenProjectResponse",
+      "BrowseDirEntry",
+      "BrowseDirsResponse",
+    ],
+  },
+  {
     file: resolve(repoRoot, "internal", "web", "service", "onboarding.go"),
     types: [
       "OnboardingImportFormState",

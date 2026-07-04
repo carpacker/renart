@@ -1,5 +1,6 @@
 "use client";
 
+import { projectApiPath } from "@/lib/project-context";
 import { useNavigate } from "@tanstack/react-router";
 import { useAtomValue } from "jotai";
 import {
@@ -403,7 +404,7 @@ export function RedesignNotebookLivePage({ notebookId }: { notebookId: string })
       })
       .catch(() => undefined);
 
-    const source = new EventSource("/api/events");
+    const source = new EventSource(projectApiPath("/api/events"));
     source.onmessage = (event) => {
       try {
         const payload = JSON.parse(event.data) as Partial<NotebookRuntimeEvent>;

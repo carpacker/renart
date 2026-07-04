@@ -1,3 +1,4 @@
+import { projectApiPath } from "@/lib/project-context";
 import {
   getResponseErrorMessage,
   MaterializeStreamPayload,
@@ -69,7 +70,7 @@ export async function streamMaterialization(
   },
   endedMessage: string
 ) {
-  const res = await fetch(path, {
+  const res = await fetch(projectApiPath(path), {
     method: "POST",
     headers: {
       Accept: "text/event-stream",

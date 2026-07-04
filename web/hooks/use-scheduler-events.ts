@@ -1,3 +1,4 @@
+import { projectApiPath } from "@/lib/project-context";
 import { useSetAtom } from "jotai";
 import { useEffect } from "react";
 
@@ -17,7 +18,7 @@ export function useSchedulerEvents() {
   const setSchedulerRunEvent = useSetAtom(schedulerRunEventAtom);
 
   useEffect(() => {
-    const source = new EventSource("/api/events");
+    const source = new EventSource(projectApiPath("/api/events"));
     source.onmessage = (event) => {
       try {
         const payload = JSON.parse(event.data) as unknown;

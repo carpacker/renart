@@ -1,3 +1,4 @@
+import { projectApiPath } from "@/lib/project-context";
 import { AssetInspectResponse, OperationMetadata } from "@/lib/types";
 import { extractInspectErrorText } from "@/lib/inspect-errors";
 
@@ -73,8 +74,14 @@ export function buildQueryString(
   return query ? `?${query}` : "";
 }
 
+// resolveInput routes string /api paths through the per-tab project pin so
+// every caller of these helpers targets the right project runtime.
+function resolveInput(input: RequestInfo | URL): RequestInfo | URL {
+  return typeof input === "string" ? projectApiPath(input) : input;
+}
+
 export async function fetchJSON<T>(input: RequestInfo | URL, init?: RequestInit) {
-  const res = await fetch(input, init);
+  const res = await fetch(resolveInput(input), init);
   return readJSON<T>(res);
 }
 
@@ -104,7 +111,7 @@ export async function readTextOrThrow(res: Response) {
 }
 
 export async function fetchText(input: RequestInfo | URL, init?: RequestInit) {
-  const res = await fetch(input, init);
+  const res = await fetch(resolveInput(input), init);
   const text = await readTextOrThrow(res);
 
   return { res, text };
