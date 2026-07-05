@@ -54,11 +54,9 @@ import {
 import { Checkbox } from "@/components/ui/checkbox";
 import { Label } from "@/components/ui/label";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { Spinner } from "@/components/ui/spinner";
 import {
   cancelNotebookRun,
   closeNotebookSession,
-  createNotebook,
   createNotebookCell,
   deleteNotebook,
   deleteNotebookCell,
@@ -83,6 +81,7 @@ import { WebAsset, WebNotebook, WebNotebookBlock } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
 import { MissingPythonDepsBanner } from "./missing-python-deps";
+import { NewNotebookDialog } from "./new-notebook-dialog";
 import { buildNotebookSchemaTables, NotebookCellMonaco } from "./notebook-cell-editor";
 import { applyVizKind } from "./notebook-viz-directive";
 import { NotebookVizRenderer } from "./notebook-viz";
@@ -108,39 +107,18 @@ export function RedesignNotebooksIndexPage() {
   const workspace = useAtomValue(workspaceAtom);
   const navigate = useNavigate();
   const notebooks = workspace?.notebooks ?? [];
-  const [creating, setCreating] = useState(false);
-  const [error, setError] = useState("");
-
-  const handleCreate = async () => {
-    const title = window.prompt("New notebook title", "Exploration");
-    if (title === null) {
-      return;
-    }
-    setCreating(true);
-    setError("");
-    try {
-      const created = await createNotebook({ title: title.trim() || "Untitled" });
-      void navigate({ to: "/redesign/notebooks/$notebookId", params: { notebookId: created.id } });
-    } catch (createError) {
-      setError(String(createError));
-    } finally {
-      setCreating(false);
-    }
-  };
+  const [newNotebookOpen, setNewNotebookOpen] = useState(false);
 
   return (
     <RedesignPage>
       <PageHeader
         title="Notebooks"
         actions={(
-          <Button size="sm" disabled={creating} onClick={() => void handleCreate()}>
-            {creating ? <Spinner className="size-3.5" /> : <Plus className="size-3.5" />}New notebook
+          <Button size="sm" onClick={() => setNewNotebookOpen(true)}>
+            <Plus className="size-3.5" />New notebook
           </Button>
         )}
       />
-      {error ? (
-        <div className="mx-3 mb-2 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-800 dark:border-red-500/25 dark:bg-red-500/10 dark:text-red-200">{error}</div>
-      ) : null}
       <div className="min-h-0 flex-1 overflow-auto px-3 pb-3">
         {/* my-auto centers the (usually short) content vertically; long lists
             grow past the viewport and scroll normally. */}
@@ -198,6 +176,7 @@ export function RedesignNotebooksIndexPage() {
           )}
         </div>
       </div>
+      <NewNotebookDialog open={newNotebookOpen} onOpenChange={setNewNotebookOpen} />
     </RedesignPage>
   );
 }

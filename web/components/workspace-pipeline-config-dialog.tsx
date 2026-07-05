@@ -35,6 +35,7 @@ import {
 import { useIsMobile } from "@/hooks/use-mobile";
 import { useWorkspaceTheme } from "@/hooks/use-workspace-theme";
 import { getPipelineConfig, updatePipelineConfig } from "@/lib/api-pipelines";
+import { copyTextToClipboard } from "@/lib/copy-to-clipboard";
 import {
   getPipelineScheduleCompletionItems,
   isValidPipelineSchedule,
@@ -286,8 +287,11 @@ export function WorkspacePipelineConfigDialogLayout({
     }
     setCopying(true);
     try {
-      await navigator.clipboard.writeText(yamlPreview);
-      setSaveMessage("Copied YAML preview");
+      if (await copyTextToClipboard(yamlPreview)) {
+        setSaveMessage("Copied YAML preview");
+      } else {
+        setError("Failed to copy YAML preview.");
+      }
     } catch {
       setError("Failed to copy YAML preview.");
     } finally {

@@ -1,6 +1,7 @@
 package service
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -11,6 +12,68 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func TestSourceControlStatusWithoutRepository(t *testing.T) {
+	service := NewSourceControlService(t.TempDir())
+
+	status, err := service.Status(t.Context())
+	require.NoError(t, err)
+	assert.False(t, status.HasRepository)
+	assert.True(t, status.Clean)
+	assert.Empty(t, status.Branch)
+	assert.Empty(t, status.Changes)
+}
+
+func TestSourceControlInitCreatesRepositoryAndGitignore(t *testing.T) {
+	workspaceRoot := t.TempDir()
+	service := NewSourceControlService(workspaceRoot)
+
+	status, err := service.Init(t.Context())
+	require.NoError(t, err)
+
+	assert.True(t, status.HasRepository)
+	assert.Equal(t, "main", status.Branch)
+	assert.DirExists(t, filepath.Join(workspaceRoot, ".git"))
+	gitignore, err := os.ReadFile(filepath.Join(workspaceRoot, ".gitignore"))
+	require.NoError(t, err)
+	for _, expected := range []string{
+		".renart/state.db*",
+		"logs/",
+		"duckdb-files/",
+		".env",
+		"__pycache__/",
+		".DS_Store",
+	} {
+		assert.Contains(t, string(gitignore), expected)
+	}
+	assert.NotContains(t, "\n"+string(gitignore)+"\n", "\n.renart/\n")
+}
+
+func TestSourceControlInitExistingRepositoryErrors(t *testing.T) {
+	workspaceRoot := t.TempDir()
+	_, err := git.PlainInit(workspaceRoot, false)
+	require.NoError(t, err)
+
+	service := NewSourceControlService(workspaceRoot)
+	_, err = service.Init(t.Context())
+	require.Error(t, err)
+	assert.True(t, errors.Is(err, git.ErrRepositoryAlreadyExists))
+}
+
+func TestSourceControlInitDoesNotOverwriteExistingGitignore(t *testing.T) {
+	workspaceRoot := t.TempDir()
+	const existing = "custom/\n"
+	require.NoError(t, os.WriteFile(filepath.Join(workspaceRoot, ".gitignore"), []byte(existing), 0o644))
+
+	service := NewSourceControlService(workspaceRoot)
+	_, err := service.Init(t.Context())
+	require.NoError(t, err)
+
+	gitignore, err := os.ReadFile(filepath.Join(workspaceRoot, ".gitignore"))
+	require.NoError(t, err)
+	assert.Equal(t, existing, string(gitignore))
+	assert.NotContains(t, string(gitignore), ".renart/state.db*")
+}
 
 func TestSourceControlUnstageWithoutCommitHistory(t *testing.T) {
 	workspaceRoot := t.TempDir()

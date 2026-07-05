@@ -20,6 +20,10 @@ export async function getSourceControlDiff(path: string, staged: boolean) {
   return fetchJSON<SourceControlDiffResponse>(`/api/source-control/diff?${params.toString()}`);
 }
 
+export async function initSourceControlRepository() {
+  return fetchJSONWithBody<SourceControlActionResponse>("/api/source-control/init", "POST", {});
+}
+
 export async function stageSourceControlPaths(paths: string[]) {
   return fetchJSONWithBody<SourceControlActionResponse>("/api/source-control/stage", "POST", { paths });
 }

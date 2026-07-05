@@ -2,8 +2,10 @@ package service
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
+	"os"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -21,9 +23,10 @@ type SourceControlService struct {
 }
 
 type SourceControlStatus struct {
-	Branch  string                `json:"branch"`
-	Clean   bool                  `json:"clean"`
-	Changes []SourceControlChange `json:"changes"`
+	HasRepository bool                  `json:"has_repository"`
+	Branch        string                `json:"branch"`
+	Clean         bool                  `json:"clean"`
+	Changes       []SourceControlChange `json:"changes"`
 }
 
 type SourceControlChange struct {
@@ -51,16 +54,17 @@ func NewSourceControlService(workspaceRoot string) *SourceControlService {
 func (s *SourceControlService) Status(ctx context.Context) (SourceControlStatus, error) {
 	repo, worktree, err := s.open()
 	if err != nil {
+		if errors.Is(err, git.ErrRepositoryNotExists) {
+			return SourceControlStatus{HasRepository: false, Clean: true, Changes: []SourceControlChange{}}, nil
+		}
 		return SourceControlStatus{}, err
 	}
 	status, err := worktree.Status()
 	if err != nil {
 		return SourceControlStatus{}, err
 	}
-	result := SourceControlStatus{Clean: status.IsClean()}
-	if head, err := repo.Head(); err == nil {
-		result.Branch = head.Name().Short()
-	}
+	result := SourceControlStatus{HasRepository: true, Clean: status.IsClean(), Changes: []SourceControlChange{}}
+	result.Branch = currentBranch(repo)
 	for path, item := range status {
 		staging := normalizeStatusCode(item.Staging)
 		worktreeStatus := normalizeStatusCode(item.Worktree)
@@ -103,6 +107,9 @@ func (s *SourceControlService) Diff(path string, staged bool) (SourceControlDiff
 func (s *SourceControlService) Branches(ctx context.Context) ([]string, error) {
 	repo, _, err := s.open()
 	if err != nil {
+		if errors.Is(err, git.ErrRepositoryNotExists) {
+			return []string{}, nil
+		}
 		return nil, err
 	}
 	iter, err := repo.Branches()
@@ -121,6 +128,21 @@ func (s *SourceControlService) Branches(ctx context.Context) ([]string, error) {
 	sort.Strings(branches)
 	_ = ctx
 	return branches, nil
+}
+
+func (s *SourceControlService) Init(ctx context.Context) (SourceControlStatus, error) {
+	_, err := git.PlainInitWithOptions(s.workspaceRoot, &git.PlainInitOptions{
+		InitOptions: git.InitOptions{
+			DefaultBranch: plumbing.NewBranchReferenceName("main"),
+		},
+	})
+	if err != nil {
+		return SourceControlStatus{}, err
+	}
+	if err := s.writeDefaultGitignore(); err != nil {
+		return SourceControlStatus{}, err
+	}
+	return s.Status(ctx)
 }
 
 func (s *SourceControlService) Stage(paths []string) error {
@@ -218,6 +240,23 @@ func (s *SourceControlService) open() (*git.Repository, *git.Worktree, error) {
 	return repo, worktree, nil
 }
 
+func (s *SourceControlService) writeDefaultGitignore() error {
+	path := filepath.Join(s.workspaceRoot, ".gitignore")
+	if _, err := os.Stat(path); err == nil {
+		return nil
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	const contents = `.renart/state.db*
+logs/
+duckdb-files/
+.env
+__pycache__/
+.DS_Store
+`
+	return os.WriteFile(path, []byte(contents), 0o644)
+}
+
 func commitAuthor(repo *git.Repository) *object.Signature {
 	name := "Renart"
 	email := "renart@localhost"
@@ -226,6 +265,17 @@ func commitAuthor(repo *git.Repository) *object.Signature {
 		email = cfg.User.Email
 	}
 	return &object.Signature{Name: name, Email: email, When: time.Now()}
+}
+
+func currentBranch(repo *git.Repository) string {
+	if head, err := repo.Head(); err == nil {
+		return head.Name().Short()
+	}
+	ref, err := repo.Storer.Reference(plumbing.HEAD)
+	if err != nil || ref.Type() != plumbing.SymbolicReference {
+		return ""
+	}
+	return ref.Target().Short()
 }
 
 func cleanGitPath(path string) (string, error) {

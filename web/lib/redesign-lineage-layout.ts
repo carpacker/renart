@@ -51,6 +51,25 @@ const ROW_GAP = 124;
 const COL_GAP = 90;
 const LEFT_PAD = 40;
 const TOP_PAD = 96;
+const LARGE_GRAPH_NODE_THRESHOLD = 800;
+const LARGE_GRAPH_EDGE_THRESHOLD = 4000;
+
+type LayeredLayoutItem = {
+  id: string;
+  realId: string | null;
+  rank: number;
+  stableIndex: number;
+};
+
+type LayeredLayoutEdge = {
+  source: string;
+  target: string;
+};
+
+type CrossingReductionOptions = {
+  graphNodeCount: number;
+  graphEdgeCount: number;
+};
 
 function graphFor(nodes: RedesignLineageLayoutNode[], edges: RedesignLineageLayoutEdge[]): Graph {
   const nodeIds = new Set(nodes.map((node) => node.id));
@@ -208,36 +227,316 @@ function recommendLayout(graph: Graph, analysis: Analysis): RedesignLineageLayou
   return { id, reason: reasons[id], scores };
 }
 
-function orderWithinRanks(ranks: string[][], analysis: Analysis) {
-  const position = new Map<string, number>();
-  ranks.forEach((rank, rankIndex) => rank.forEach((id, index) => position.set(id, rankIndex * 1000 + index)));
-  const sortRank = (rank: string[], neighborsOf: (id: string) => string[]) => {
-    const scored = rank.map((id) => {
-      const neighbors = neighborsOf(id).map((neighbor) => position.get(neighbor)).filter((value): value is number => value !== undefined);
-      return { id, score: neighbors.length ? neighbors.reduce((sum, value) => sum + value, 0) / neighbors.length : position.get(id) ?? 0 };
-    });
-    scored.sort((a, b) => a.score - b.score || a.id.localeCompare(b.id));
-    scored.forEach((item, index) => position.set(item.id, index));
-    return scored.map((item) => item.id);
+function crossingReductionLimits({ graphNodeCount, graphEdgeCount }: CrossingReductionOptions) {
+  const large = graphNodeCount > LARGE_GRAPH_NODE_THRESHOLD || graphEdgeCount > LARGE_GRAPH_EDGE_THRESHOLD;
+  return {
+    orderSweeps: large ? 2 : 8,
+    transposeSweeps: large ? 1 : 6,
   };
+}
 
-  for (let iteration = 0; iteration < 4; iteration++) {
-    for (let rank = 1; rank < ranks.length; rank++) ranks[rank] = sortRank(ranks[rank], (id) => analysis.preds.get(id) ?? []);
-    for (let rank = ranks.length - 2; rank >= 0; rank--) ranks[rank] = sortRank(ranks[rank], (id) => analysis.succs.get(id) ?? []);
+function rankPositionMap(ranks: LayeredLayoutItem[][]) {
+  const positions = new Map<string, number>();
+  ranks.forEach((rank) => rank.forEach((item, index) => positions.set(item.id, index)));
+  return positions;
+}
+
+function buildLayeredAdjacency(edges: LayeredLayoutEdge[]) {
+  const preds = new Map<string, string[]>();
+  const succs = new Map<string, string[]>();
+  edges.forEach((edge) => {
+    succs.set(edge.source, [...(succs.get(edge.source) ?? []), edge.target]);
+    preds.set(edge.target, [...(preds.get(edge.target) ?? []), edge.source]);
+  });
+  return { preds, succs };
+}
+
+function countInversions(values: number[]) {
+  if (values.length < 2) return 0;
+  let inversions = 0;
+  let source = values.slice();
+  let target = new Array<number>(values.length);
+  for (let width = 1; width < values.length; width *= 2) {
+    for (let start = 0; start < values.length; start += width * 2) {
+      const mid = Math.min(start + width, values.length);
+      const end = Math.min(start + width * 2, values.length);
+      let left = start;
+      let right = mid;
+      let out = start;
+      while (left < mid && right < end) {
+        if (source[left] <= source[right]) {
+          target[out] = source[left];
+          left += 1;
+        } else {
+          target[out] = source[right];
+          inversions += mid - left;
+          right += 1;
+        }
+        out += 1;
+      }
+      while (left < mid) {
+        target[out] = source[left];
+        left += 1;
+        out += 1;
+      }
+      while (right < end) {
+        target[out] = source[right];
+        right += 1;
+        out += 1;
+      }
+    }
+    const swap = source;
+    source = target;
+    target = swap;
   }
+  return inversions;
+}
+
+function countBilayerCrossings(edges: LayeredLayoutEdge[], upperPositions: Map<string, number>, lowerPositions: Map<string, number>) {
+  const orderedTargets = edges
+    .map((edge) => {
+      const sourcePosition = upperPositions.get(edge.source);
+      const targetPosition = lowerPositions.get(edge.target);
+      if (sourcePosition === undefined || targetPosition === undefined) return null;
+      return { sourcePosition, targetPosition };
+    })
+    .filter((edge): edge is { sourcePosition: number; targetPosition: number } => edge !== null)
+    .sort((a, b) => a.sourcePosition - b.sourcePosition || a.targetPosition - b.targetPosition);
+  return countInversions(orderedTargets.map((edge) => edge.targetPosition));
+}
+
+function edgesBetweenRanks(edges: LayeredLayoutEdge[], ranks: LayeredLayoutItem[][]) {
+  const rankById = new Map<string, number>();
+  ranks.forEach((rank, rankIndex) => rank.forEach((item) => rankById.set(item.id, rankIndex)));
+  const byRank = Array.from({ length: Math.max(0, ranks.length - 1) }, () => [] as LayeredLayoutEdge[]);
+  edges.forEach((edge) => {
+    const sourceRank = rankById.get(edge.source);
+    const targetRank = rankById.get(edge.target);
+    if (sourceRank === undefined || targetRank === undefined || targetRank !== sourceRank + 1) return;
+    byRank[sourceRank]?.push(edge);
+  });
+  return byRank;
+}
+
+function countAdjacentRankCrossings(ranks: LayeredLayoutItem[][], edgesByRank: LayeredLayoutEdge[][], rankIndex: number) {
+  if (rankIndex < 0 || rankIndex >= edgesByRank.length) return 0;
+  const upper = new Map(ranks[rankIndex].map((item, index) => [item.id, index]));
+  const lower = new Map(ranks[rankIndex + 1].map((item, index) => [item.id, index]));
+  return countBilayerCrossings(edgesByRank[rankIndex], upper, lower);
+}
+
+function crossingWindow(ranks: LayeredLayoutItem[][], edgesByRank: LayeredLayoutEdge[][], rankIndex: number) {
+  return countAdjacentRankCrossings(ranks, edgesByRank, rankIndex - 1) + countAdjacentRankCrossings(ranks, edgesByRank, rankIndex);
+}
+
+function median(values: number[]) {
+  if (!values.length) return null;
+  const sorted = values.slice().sort((a, b) => a - b);
+  const middle = Math.floor(sorted.length / 2);
+  if (sorted.length % 2) return sorted[middle];
+  return (sorted[middle - 1] + sorted[middle]) / 2;
+}
+
+function sortLayeredRankByNeighbors(
+  rank: LayeredLayoutItem[],
+  positions: Map<string, number>,
+  neighborsOf: (id: string) => string[],
+) {
+  const previousPosition = new Map(rank.map((item, index) => [item.id, index]));
+  return rank
+    .map((item) => {
+      const neighborPositions = neighborsOf(item.id)
+        .map((neighbor) => positions.get(neighbor))
+        .filter((value): value is number => value !== undefined);
+      return {
+        item,
+        score: median(neighborPositions),
+        previous: previousPosition.get(item.id) ?? 0,
+      };
+    })
+    .sort((a, b) => {
+      if (a.score !== null && b.score !== null && a.score !== b.score) return a.score - b.score;
+      if (a.score !== null && b.score === null) return -1;
+      if (a.score === null && b.score !== null) return 1;
+      return a.previous - b.previous || a.item.stableIndex - b.item.stableIndex || a.item.id.localeCompare(b.item.id);
+    })
+    .map((entry) => entry.item);
+}
+
+function transposeLayeredRanks(ranks: LayeredLayoutItem[][], edgesByRank: LayeredLayoutEdge[][], maxSweeps: number) {
+  for (let sweep = 0; sweep < maxSweeps; sweep++) {
+    let improved = false;
+    for (let rankIndex = 0; rankIndex < ranks.length; rankIndex++) {
+      const rank = ranks[rankIndex];
+      for (let index = 0; index < rank.length - 1; index++) {
+        const before = crossingWindow(ranks, edgesByRank, rankIndex);
+        const left = rank[index];
+        rank[index] = rank[index + 1];
+        rank[index + 1] = left;
+        const after = crossingWindow(ranks, edgesByRank, rankIndex);
+        if (after < before) improved = true;
+        else {
+          rank[index + 1] = rank[index];
+          rank[index] = left;
+        }
+      }
+    }
+    if (!improved) break;
+  }
+}
+
+function minimizeLayeredCrossings(ranks: LayeredLayoutItem[][], edges: LayeredLayoutEdge[], options: CrossingReductionOptions) {
+  const limits = crossingReductionLimits(options);
+  const { preds, succs } = buildLayeredAdjacency(edges);
+  const edgesByRank = edgesBetweenRanks(edges, ranks);
+
+  for (let iteration = 0; iteration < limits.orderSweeps; iteration++) {
+    let positions = rankPositionMap(ranks);
+    for (let rank = 1; rank < ranks.length; rank++) {
+      ranks[rank] = sortLayeredRankByNeighbors(ranks[rank], positions, (id) => preds.get(id) ?? []);
+      positions = rankPositionMap(ranks);
+    }
+    positions = rankPositionMap(ranks);
+    for (let rank = ranks.length - 2; rank >= 0; rank--) {
+      ranks[rank] = sortLayeredRankByNeighbors(ranks[rank], positions, (id) => succs.get(id) ?? []);
+      positions = rankPositionMap(ranks);
+    }
+  }
+
+  transposeLayeredRanks(ranks, edgesByRank, limits.transposeSweeps);
   return ranks;
+}
+
+function orderWithinRanks(ranks: string[][], graph: Graph) {
+  let stableIndex = 0;
+  const layeredRanks: LayeredLayoutItem[][] = ranks.map((rank, rankIndex) =>
+    rank
+      .slice()
+      .map((id) => ({ id, realId: id, rank: rankIndex, stableIndex: stableIndex++ })),
+  );
+  const layeredEdges: LayeredLayoutEdge[] = [];
+  const rankById = new Map<string, number>();
+  layeredRanks.forEach((rank, rankIndex) => rank.forEach((item) => rankById.set(item.id, rankIndex)));
+
+  graph.edges
+    .slice()
+    .sort((a, b) => a.key.localeCompare(b.key))
+    .forEach((edge) => {
+      const sourceRank = rankById.get(edge.source);
+      const targetRank = rankById.get(edge.target);
+      if (sourceRank === undefined || targetRank === undefined || targetRank <= sourceRank) return;
+      let previous = edge.source;
+      for (let rank = sourceRank + 1; rank < targetRank; rank++) {
+        const virtualId = `__virtual:${edge.key}:${rank}`;
+        layeredRanks[rank].push({ id: virtualId, realId: null, rank, stableIndex: stableIndex++ });
+        layeredEdges.push({ source: previous, target: virtualId });
+        previous = virtualId;
+      }
+      layeredEdges.push({ source: previous, target: edge.target });
+  });
+
+  minimizeLayeredCrossings(layeredRanks, layeredEdges, { graphNodeCount: graph.nodes.length, graphEdgeCount: graph.edges.length });
+  return layeredRanks.map((rank) => rank.map((item) => item.id));
+}
+
+function orderBandCells(
+  cells: Map<string, Required<RedesignLineageLayoutNode>[]>,
+  graph: Graph,
+  analysis: Analysis,
+  maxRank: number,
+) {
+  let stableIndex = 0;
+  const cellItems = new Map<string, LayeredLayoutItem[]>();
+  analysis.layerOrder.forEach((layer) => {
+    for (let rank = 0; rank <= maxRank; rank++) {
+      const key = `${layer}\u0000${rank}`;
+      const items = (cells.get(key) ?? [])
+        .slice()
+        .sort((a, b) => a.id.localeCompare(b.id))
+        .map((node) => ({ id: node.id, realId: node.id, rank, stableIndex: stableIndex++ }));
+      cellItems.set(key, items);
+    }
+  });
+
+  const limits = crossingReductionLimits({ graphNodeCount: graph.nodes.length, graphEdgeCount: graph.edges.length });
+  const rankById = new Map(graph.nodes.map((node) => [node.id, analysis.nodeRank.get(node.id) ?? 0]));
+  const orderedEdges = graph.edges
+    .filter((edge) => {
+      const sourceRank = rankById.get(edge.source);
+      const targetRank = rankById.get(edge.target);
+      return sourceRank !== undefined && targetRank !== undefined && targetRank === sourceRank + 1;
+    })
+    .sort((a, b) => a.key.localeCompare(b.key));
+  const { preds, succs } = buildLayeredAdjacency(orderedEdges);
+
+  const allRanks = () => {
+    const ranks = Array.from({ length: maxRank + 1 }, () => [] as LayeredLayoutItem[]);
+    analysis.layerOrder.forEach((layer) => {
+      for (let rank = 0; rank <= maxRank; rank++) ranks[rank].push(...(cellItems.get(`${layer}\u0000${rank}`) ?? []));
+    });
+    return ranks;
+  };
+  const allEdgesByRank = () => edgesBetweenRanks(orderedEdges, allRanks());
+  const allCrossings = (rank: number) => crossingWindow(allRanks(), allEdgesByRank(), rank);
+  const positions = () => rankPositionMap(allRanks());
+
+  for (let iteration = 0; iteration < limits.orderSweeps; iteration++) {
+    let currentPositions = positions();
+    for (let rank = 1; rank <= maxRank; rank++) {
+      analysis.layerOrder.forEach((layer) => {
+        const key = `${layer}\u0000${rank}`;
+        cellItems.set(key, sortLayeredRankByNeighbors(cellItems.get(key) ?? [], currentPositions, (id) => preds.get(id) ?? []));
+      });
+      currentPositions = positions();
+    }
+    currentPositions = positions();
+    for (let rank = maxRank - 1; rank >= 0; rank--) {
+      analysis.layerOrder.forEach((layer) => {
+        const key = `${layer}\u0000${rank}`;
+        cellItems.set(key, sortLayeredRankByNeighbors(cellItems.get(key) ?? [], currentPositions, (id) => succs.get(id) ?? []));
+      });
+      currentPositions = positions();
+    }
+  }
+
+  for (let sweep = 0; sweep < limits.transposeSweeps; sweep++) {
+    let improved = false;
+    analysis.layerOrder.forEach((layer) => {
+      for (let rank = 0; rank <= maxRank; rank++) {
+        const key = `${layer}\u0000${rank}`;
+        const items = cellItems.get(key) ?? [];
+        for (let index = 0; index < items.length - 1; index++) {
+          const before = allCrossings(rank);
+          const left = items[index];
+          items[index] = items[index + 1];
+          items[index + 1] = left;
+          const after = allCrossings(rank);
+          if (after < before) improved = true;
+          else {
+            items[index + 1] = items[index];
+            items[index] = left;
+          }
+        }
+      }
+    });
+    if (!improved) break;
+  }
+
+  return cellItems;
 }
 
 function placeColumns(ranks: string[][], graph: Graph) {
   const positions = new Map<string, { x: number; y: number }>();
+  const nodeById = new Map(graph.nodes.map((node) => [node.id, node]));
   const maxRows = Math.max(1, ...ranks.map((rank) => rank.length));
   let x = LEFT_PAD;
   ranks.forEach((rank) => {
-    const maxWidth = Math.max(DEFAULT_NODE_WIDTH, ...rank.map((id) => graph.nodes.find((node) => node.id === id)?.width ?? DEFAULT_NODE_WIDTH));
+    const maxWidth = Math.max(DEFAULT_NODE_WIDTH, ...rank.map((id) => nodeById.get(id)?.width ?? DEFAULT_NODE_WIDTH));
     const startY = TOP_PAD + ((maxRows - rank.length) * ROW_GAP) / 2;
     rank.forEach((id, index) => {
-      const node = graph.nodes.find((candidate) => candidate.id === id);
-      positions.set(id, { x: x + (maxWidth - (node?.width ?? DEFAULT_NODE_WIDTH)) / 2, y: startY + index * ROW_GAP });
+      const node = nodeById.get(id);
+      if (!node) return;
+      positions.set(id, { x: x + (maxWidth - node.width) / 2, y: startY + index * ROW_GAP });
     });
     x += maxWidth + COL_GAP;
   });
@@ -247,7 +546,7 @@ function placeColumns(ranks: string[][], graph: Graph) {
 function layoutStrict(graph: Graph, analysis: Analysis) {
   const ranks = analysis.layerOrder.map(() => [] as string[]);
   graph.nodes.forEach((node) => ranks[analysis.layerIndex.get(node.layer) ?? 0].push(node.id));
-  return placeColumns(orderWithinRanks(ranks, analysis), graph);
+  return placeColumns(orderWithinRanks(ranks, graph), graph);
 }
 
 function layoutBands(graph: Graph, analysis: Analysis) {
@@ -263,6 +562,18 @@ function layoutBands(graph: Graph, analysis: Analysis) {
     x += width + COL_GAP;
   });
 
+  const cells = new Map<string, Required<RedesignLineageLayoutNode>[]>();
+  analysis.layerOrder.forEach((layer) => {
+    graph.nodes
+      .filter((node) => node.layer === layer)
+      .forEach((node) => {
+        const rank = analysis.nodeRank.get(node.id) ?? 0;
+        const key = `${layer}\u0000${rank}`;
+        cells.set(key, [...(cells.get(key) ?? []), node]);
+      });
+  });
+  const cellItems = orderBandCells(cells, graph, analysis, maxRank);
+
   const positions = new Map<string, { x: number; y: number }>();
   let y = 54;
   analysis.layerOrder.forEach((layer) => {
@@ -273,10 +584,13 @@ function layoutBands(graph: Graph, analysis: Analysis) {
       const rank = analysis.nodeRank.get(node.id) ?? 0;
       byRank.set(rank, [...(byRank.get(rank) ?? []), node]);
     });
-    byRank.forEach((nodes) => nodes.sort((a, b) => a.id.localeCompare(b.id)));
     const rows = Math.max(1, ...[...byRank.values()].map((nodes) => nodes.length));
     byRank.forEach((nodes, rank) => {
-      nodes.forEach((node, index) => {
+      const orderedIds = cellItems.get(`${layer}\u0000${rank}`)?.map((item) => item.id) ?? nodes.map((node) => node.id);
+      const nodeById = new Map(nodes.map((node) => [node.id, node]));
+      orderedIds.forEach((id, index) => {
+        const node = nodeById.get(id);
+        if (!node) return;
         positions.set(node.id, { x: columnX[rank] + (columnWidths[rank] - node.width) / 2, y: y + 42 + index * ROW_GAP });
       });
     });

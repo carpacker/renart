@@ -252,7 +252,7 @@ function AiSheet() {
 }
 
 function GitSheet({ sourceControl }: { sourceControl: ReturnType<typeof useSourceControl> }) {
-  const { repository, branches, loading, busy, diffLoading, diff, error, refresh, loadDiff, loadDiffGroup, stage, unstage, checkout, commit } = sourceControl;
+  const { repository, branches, loading, busy, diffLoading, diff, error, refresh, loadDiff, loadDiffGroup, stage, unstage, checkout, initRepository, commit } = sourceControl;
   const [message, setMessage] = useState("");
   const workspace = useAtomValue(workspaceAtom);
   const changes = repository?.changes ?? [];
@@ -266,12 +266,47 @@ function GitSheet({ sourceControl }: { sourceControl: ReturnType<typeof useSourc
   );
   const changedCount = changes.length;
   const branch = repository?.branch || "unknown";
-  const showDiffPane = diffLoading || Boolean(diff);
+  const hasRepository = repository?.has_repository ?? true;
+  const showDiffPane = hasRepository && (diffLoading || Boolean(diff));
 
   const submitCommit = async () => {
     await commit(message);
     setMessage("");
   };
+
+  if (!hasRepository) {
+    return (
+      <SheetContent className="gap-0 p-0 !max-w-none !w-full sm:!w-[28rem]">
+        <SheetHeader className="pr-12">
+          <SheetTitle className="flex items-center gap-2"><GitBranch className="size-4 text-primary" />Source control</SheetTitle>
+          <SheetDescription>Review, stage, and commit local workspace changes.</SheetDescription>
+        </SheetHeader>
+        <div className="min-h-0 flex-1 overflow-auto p-4 pt-0 text-sm">
+          <div className="space-y-4">
+            <div className="flex justify-end">
+              <Button variant="ghost" size="icon-sm" disabled={busy || loading} onClick={() => void refresh()}>
+                {loading ? <Loader2 className="size-3.5 animate-spin" /> : <RefreshCw className="size-3.5" />}
+              </Button>
+            </div>
+            {error ? <div className="rounded-md border border-red-200 bg-red-50 p-2 text-xs text-red-700">{error}</div> : null}
+            <div className="flex min-h-80 flex-col items-center justify-center gap-4 rounded-lg border border-dashed p-8 text-center">
+              <div className="flex size-12 items-center justify-center rounded-full bg-muted">
+                <GitBranch className="size-6 text-primary" />
+              </div>
+              <div className="space-y-1">
+                <p className="text-sm font-medium">This project is not a git repository yet.</p>
+                <p className="text-xs text-muted-foreground">Initializing creates a .gitignore for local runtime files.</p>
+              </div>
+              <Button disabled={busy || loading} onClick={() => void initRepository()}>
+                {busy ? <Loader2 className="size-4 animate-spin" /> : <GitBranch className="size-4" />}
+                Initialize repository
+              </Button>
+            </div>
+          </div>
+        </div>
+      </SheetContent>
+    );
+  }
 
   return (
     <SheetContent className={cn("gap-0 p-0 !max-w-none", showDiffPane ? "!w-[calc(100vw-1rem)] sm:!w-[96vw] xl:!w-[72rem]" : "!w-full sm:!w-[28rem]")}>

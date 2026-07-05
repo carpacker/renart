@@ -89,7 +89,6 @@ import { runSQLQuery } from "@/lib/api";
 import type { MaterializeStreamPayload } from "@/lib/api-core";
 import type { StreamAssetEvent } from "@/lib/api-streams";
 import { typeCheckPipeline, type PipelineTypeCheckReport } from "@/lib/api-pipelines";
-import { createNotebook } from "@/lib/api-notebooks";
 import type { AssetStaleness } from "@/lib/api-staleness";
 import { isSqlAssetType } from "@/lib/asset-types";
 import { editorDraftAtom } from "@/lib/atoms/domains/editor";
@@ -104,6 +103,7 @@ import { renderJinjaAsset } from "@/lib/jinja-intellisense";
 import { resolveConnection } from "@/lib/sql-schema";
 import type { AssetInspectResponse, SqlQueryResponse, WebAsset, WebPipeline } from "@/lib/types";
 import { cn } from "@/lib/utils";
+import { copyTextToClipboard } from "@/lib/copy-to-clipboard";
 import { useAssetResults } from "@/hooks/use-asset-results";
 import { useSelectedEnvironmentPolicy } from "@/hooks/use-environment-policy";
 import { useIsMobile } from "@/hooks/use-mobile";
@@ -136,8 +136,10 @@ import { RedesignAdhocEditor, useAdhocQueryDraft } from "./adhoc-editor";
 import { RedesignAssetEditor } from "./asset-editor";
 import { AssetGuidedCards } from "./asset-guided-cards";
 import { AssetYamlEditor } from "./asset-yaml-editor";
+import { SqlPreview } from "./sql-preview";
 import { SlingParametersEditor } from "./sling-parameters-editor";
 import { RedesignLineageCanvas, assetDisplayName, assetGroupName, assetNameParts, type RedesignLineageCanvasAsset } from "./lineage-canvas";
+import { NewNotebookDialog } from "./new-notebook-dialog";
 import { RedesignPage, RedesignPanel, SeverityIcon, SimpleTable, StalenessBadge, StatusPill, stalenessDotClassName, stalenessLabel } from "./redesign-primitives";
 
 export type RedesignBuildView = "canvas" | "split" | "code";
@@ -1256,7 +1258,6 @@ function Explorer({
   onPipelineSettings: () => void;
 }) {
   const workspace = useAtomValue(workspaceAtom);
-  const navigate = useNavigate();
   const pipelineGroup = objectGroups.find((group) => group.id === "pipeline");
   const notebookGroup = objectGroups.find((group) => group.id === "notebook");
   const PipelineIcon = pipelineGroup?.icon ?? Layers;
@@ -1267,22 +1268,7 @@ function Explorer({
     ? workspace.pipelines
     : [{ id: "simple", name: "simple", path: "", assets: [] } satisfies WebPipeline];
   const notebookItems = workspace?.notebooks ?? [];
-  const [creatingNotebook, setCreatingNotebook] = useState(false);
-  const handleCreateNotebook = async () => {
-    const title = window.prompt("New notebook title", "Exploration");
-    if (title === null) {
-      return;
-    }
-    setCreatingNotebook(true);
-    try {
-      const created = await createNotebook({ title: title.trim() || "Untitled" });
-      await navigate({ to: "/redesign/notebooks/$notebookId", params: { notebookId: created.id } });
-    } catch {
-      // Surfaced on the notebook page; keep the explorer quiet.
-    } finally {
-      setCreatingNotebook(false);
-    }
-  };
+  const [newNotebookOpen, setNewNotebookOpen] = useState(false);
   const assetsByGroup = pipelineAssets.reduce<Record<string, BuildAsset[]>>((groups, asset) => {
     const group = assetGroupName(asset);
     groups[group] = [...(groups[group] ?? []), asset];
@@ -1378,14 +1364,14 @@ function Explorer({
             )}
           </ExplorerSection>
           <button
-            onClick={() => void handleCreateNotebook()}
-            disabled={creatingNotebook}
+            onClick={() => setNewNotebookOpen(true)}
             className="mt-1 flex h-8 w-full items-center gap-2 rounded-md border border-dashed px-2 text-left text-xs text-muted-foreground hover:bg-muted disabled:opacity-50"
           >
             <Plus className="size-3.5" /> New notebook
           </button>
         </div>
       </ScrollArea>
+      <NewNotebookDialog open={newNotebookOpen} onOpenChange={setNewNotebookOpen} />
     </>
   );
 }
@@ -1899,12 +1885,9 @@ function RenderedQueryDisclosure({ query }: { query?: string | null }) {
   }
 
   const copyQuery = async () => {
-    try {
-      await navigator.clipboard.writeText(trimmed);
+    if (await copyTextToClipboard(trimmed)) {
       setCopied(true);
       window.setTimeout(() => setCopied(false), 1400);
-    } catch {
-      // Clipboard access denied; nothing to do.
     }
   };
 
@@ -1934,9 +1917,7 @@ function RenderedQueryDisclosure({ query }: { query?: string | null }) {
           {copied ? "copied" : "copy"}
         </Button>
       </div>
-      {open ? (
-        <pre className="max-h-28 overflow-auto whitespace-pre-wrap border-t bg-background px-2 py-1.5 font-mono text-[11px]">{trimmed}</pre>
-      ) : null}
+      {open ? <SqlPreview query={trimmed} /> : null}
     </div>
   );
 }

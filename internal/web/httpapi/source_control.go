@@ -29,6 +29,7 @@ func RegisterSourceControlRoutes(router chi.Router, handlers *SourceControlAPI) 
 	router.Get("/api/source-control/status", handlers.HandleStatus)
 	router.Get("/api/source-control/branches", handlers.HandleBranches)
 	router.Get("/api/source-control/diff", handlers.HandleDiff)
+	router.Post("/api/source-control/init", handlers.HandleInit)
 	router.Post("/api/source-control/stage", handlers.HandleStage)
 	router.Post("/api/source-control/unstage", handlers.HandleUnstage)
 	router.Post("/api/source-control/checkout", handlers.HandleCheckout)
@@ -51,6 +52,15 @@ func (h *SourceControlAPI) HandleBranches(w http.ResponseWriter, r *http.Request
 		return
 	}
 	webapi.WriteJSON(w, http.StatusOK, map[string]any{"status": "ok", "branches": branches})
+}
+
+func (h *SourceControlAPI) HandleInit(w http.ResponseWriter, r *http.Request) {
+	status, err := h.Service.Init(r.Context())
+	if err != nil {
+		webapi.WriteBadRequest(w, "source_control_init_failed", err.Error())
+		return
+	}
+	webapi.WriteJSON(w, http.StatusOK, map[string]any{"status": "ok", "repository": status})
 }
 
 func (h *SourceControlAPI) HandleDiff(w http.ResponseWriter, r *http.Request) {

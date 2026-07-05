@@ -209,6 +209,7 @@ export type SourceControlChange = {
 };
 
 export type SourceControlRepository = {
+  has_repository: boolean;
   branch: string;
   clean: boolean;
   changes: SourceControlChange[];

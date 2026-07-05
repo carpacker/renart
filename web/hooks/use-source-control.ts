@@ -6,6 +6,7 @@ import {
   getSourceControlBranches,
   getSourceControlDiff,
   getSourceControlStatus,
+  initSourceControlRepository,
   stageSourceControlPaths,
   unstageSourceControlPaths,
 } from "@/lib/api";
@@ -24,13 +25,16 @@ export function useSourceControl() {
     setLoading(true);
     setError("");
     try {
-      const [statusResponse, branchesResponse] = await Promise.all([
-        getSourceControlStatus(),
-        getSourceControlBranches(),
-      ]);
+      const statusResponse = await getSourceControlStatus();
       if (statusResponse.status === "ok") {
         setRepository(statusResponse.repository);
+        if (!statusResponse.repository.has_repository) {
+          setBranches([]);
+          setDiff(null);
+          return;
+        }
       }
+      const branchesResponse = await getSourceControlBranches();
       if (branchesResponse.status === "ok") {
         setBranches(branchesResponse.branches ?? []);
       }
@@ -56,7 +60,7 @@ export function useSourceControl() {
     } finally {
       setBusy(false);
     }
-  }, [refresh]);
+  }, []);
 
   const updateChanges = useCallback((paths: string[], update: (change: SourceControlChange) => SourceControlChange | null) => {
     const wanted = new Set(paths);
@@ -92,6 +96,15 @@ export function useSourceControl() {
   const checkout = useCallback(async (branch: string) => {
     await run(() => checkoutSourceControlBranch(branch));
     setRepository((current) => current ? { ...current, branch } : current);
+  }, [run]);
+
+  const initRepository = useCallback(async () => {
+    await run(() => initSourceControlRepository());
+    setDiff(null);
+    const branchesResponse = await getSourceControlBranches();
+    if (branchesResponse.status === "ok") {
+      setBranches(branchesResponse.branches ?? []);
+    }
   }, [run]);
 
   const commit = useCallback(async (message: string) => {
@@ -157,6 +170,7 @@ export function useSourceControl() {
     stage,
     unstage,
     checkout,
+    initRepository,
     commit,
   };
 }
