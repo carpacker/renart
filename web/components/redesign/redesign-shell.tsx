@@ -44,7 +44,9 @@ export function RedesignShell() {
   const sourceControl = useSourceControl();
 
   return (
-    <div className="flex h-screen min-h-0 flex-col bg-muted/40 text-foreground">
+    // h-dvh (not h-screen): 100vh is the *largest* mobile viewport, so the
+    // bottom nav slides out of sight while the browser chrome is visible.
+    <div className="flex h-dvh min-h-0 flex-col bg-muted/40 text-foreground">
       <header className="flex h-12 shrink-0 items-center border-b border-zinc-800 bg-zinc-950 px-2 text-zinc-100 sm:px-3">
         <Link to="/redesign" className="flex items-center gap-2 pr-2 sm:pr-3">
           <div className="flex size-7 items-center justify-center rounded-lg bg-primary text-sm font-bold text-primary-foreground">R</div>
@@ -126,7 +128,7 @@ export function RedesignShell() {
         <Outlet />
       </main>
 
-      <nav className="grid h-14 shrink-0 grid-cols-5 border-t bg-background md:hidden">
+      <nav className="grid h-14 shrink-0 grid-cols-5 border-t bg-background pb-[env(safe-area-inset-bottom)] md:hidden">
         {navItems.map((item) => (
           <Link key={item.to} to={item.to} activeOptions={{ exact: item.to === "/redesign" }} activeProps={{ className: "text-primary" }} className="flex flex-col items-center justify-center gap-0.5 text-[10px] text-muted-foreground">
             <item.icon className="size-4" />
