@@ -1288,7 +1288,9 @@ function Explorer({
           <span>Filter assets...</span>
         </div>
       </div>
-      <ScrollArea className="min-h-0 flex-1">
+      {/* Force Radix's inline `display: table` content wrapper to block so long
+          asset names truncate instead of widening the sidebar horizontally. */}
+      <ScrollArea className="min-h-0 flex-1" horizontalScrollBarClassName="hidden" viewportClassName="[&>div]:!block">
         <div className="space-y-2 p-2">
           <ExplorerSection label={pipelineGroup?.label ?? "Pipelines"} icon={PipelineIcon} count={pipelineItems.length}>
               {pipelineItems.map((item) => {
