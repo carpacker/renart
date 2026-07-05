@@ -124,19 +124,19 @@ export function IntegrationBadge({ name }: { name: string }) {
 
 export function StatusPill({ status }: { status: string }) {
   if (status === "success" || status === "pass" || status === "ok") {
-    return <span className="inline-flex items-center gap-1 rounded-full bg-emerald-100 px-1.5 py-0.5 text-[11px] text-emerald-700"><CheckCircle2 className="size-3" />Success</span>;
+    return <span className="inline-flex items-center gap-1 rounded-full bg-emerald-100 px-1.5 py-0.5 text-[11px] text-emerald-700 dark:bg-emerald-500/15 dark:text-emerald-300"><CheckCircle2 className="size-3" />Success</span>;
   }
   if (status === "failed" || status === "fail" || status === "overdue") {
-    return <span className="inline-flex items-center gap-1 rounded-full bg-red-100 px-1.5 py-0.5 text-[11px] text-red-700"><XCircle className="size-3" />Failed</span>;
+    return <span className="inline-flex items-center gap-1 rounded-full bg-red-100 px-1.5 py-0.5 text-[11px] text-red-700 dark:bg-red-500/15 dark:text-red-300"><XCircle className="size-3" />Failed</span>;
   }
   if (status === "running") {
-    return <span className="inline-flex items-center gap-1 rounded-full bg-amber-100 px-1.5 py-0.5 text-[11px] text-amber-700"><Loader2 className="size-3 animate-spin" />Running</span>;
+    return <span className="inline-flex items-center gap-1 rounded-full bg-amber-100 px-1.5 py-0.5 text-[11px] text-amber-700 dark:bg-amber-500/15 dark:text-amber-300"><Loader2 className="size-3 animate-spin" />Running</span>;
   }
   if (status === "queued") {
-    return <span className="inline-flex items-center gap-1 rounded-full bg-sky-100 px-1.5 py-0.5 text-[11px] text-sky-700"><Circle className="size-3" />Queued</span>;
+    return <span className="inline-flex items-center gap-1 rounded-full bg-sky-100 px-1.5 py-0.5 text-[11px] text-sky-700 dark:bg-sky-500/15 dark:text-sky-300"><Circle className="size-3" />Queued</span>;
   }
   if (status === "cancelled") {
-    return <span className="inline-flex items-center gap-1 rounded-full bg-zinc-200 px-1.5 py-0.5 text-[11px] text-zinc-700"><Circle className="size-3" />Cancelled</span>;
+    return <span className="inline-flex items-center gap-1 rounded-full bg-zinc-200 px-1.5 py-0.5 text-[11px] text-zinc-700 dark:bg-zinc-500/15 dark:text-zinc-300"><Circle className="size-3" />Cancelled</span>;
   }
   return <span className="inline-flex items-center gap-1 rounded-full bg-muted px-1.5 py-0.5 text-[11px] text-muted-foreground"><Circle className="size-3" />Idle</span>;
 }

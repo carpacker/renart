@@ -1549,7 +1549,7 @@ function EditorWorkspace({
         ) : null}
       </EditorFilenameHeader>
       {missingDependencies.length > 0 ? (
-        <Button variant="outline" size="xs" className="absolute left-3 top-9 z-20 border-amber-300 bg-amber-50 text-amber-700 shadow-sm hover:bg-amber-100" onClick={() => openBottom("diagnostics")}>
+        <Button variant="outline" size="xs" className="absolute left-3 top-9 z-20 border-amber-300 bg-amber-50 text-amber-700 shadow-sm hover:bg-amber-100 dark:border-amber-500/40 dark:bg-amber-500/10 dark:text-amber-300 dark:hover:bg-amber-500/20" onClick={() => openBottom("diagnostics")}>
           <AlertTriangle className="size-3" />{missingDependencies.length} not in deps
         </Button>
       ) : null}
@@ -1716,7 +1716,7 @@ function CodeBlock({
             <span className={cn("w-11 shrink-0 select-none pr-3 text-right", missing ? "text-amber-400" : "text-zinc-500")}>{index + 1}</span>
             <pre className="min-w-0 whitespace-pre">{line}</pre>
             {missing && dependency ? (
-              <Button variant="outline" size="xs" className="ml-3 h-5 border-amber-300 bg-amber-50 px-1.5 text-[10px] text-amber-700 hover:bg-amber-100" onClick={() => onAddDependency?.(dependency)}>
+              <Button variant="outline" size="xs" className="ml-3 h-5 border-amber-300 bg-amber-50 px-1.5 text-[10px] text-amber-700 hover:bg-amber-100 dark:border-amber-500/40 dark:bg-amber-500/10 dark:text-amber-300 dark:hover:bg-amber-500/20" onClick={() => onAddDependency?.(dependency)}>
                 <Package className="size-3" />add {dependency}
               </Button>
             ) : null}
@@ -2159,8 +2159,8 @@ function UnitTests({ compact, onOpenResults }: { compact?: boolean; onOpenResult
     <div className="space-y-2">
       <div className="flex items-center gap-2">
         <span className="text-xs font-medium">Unit tests</span>
-        <Badge variant="outline" className="bg-emerald-50 text-emerald-700">2 passed</Badge>
-        <Badge variant="outline" className="bg-red-50 text-red-700">1 failed</Badge>
+        <Badge variant="outline" className="bg-emerald-50 text-emerald-700 dark:bg-emerald-500/10 dark:text-emerald-300">2 passed</Badge>
+        <Badge variant="outline" className="bg-red-50 text-red-700 dark:bg-red-500/10 dark:text-red-300">1 failed</Badge>
         <Button variant="outline" size="xs" className="ml-auto"><Plus className="size-3" />New</Button>
         <Button size="xs" onClick={onOpenResults}><Play className="size-3" />Run all</Button>
       </div>
