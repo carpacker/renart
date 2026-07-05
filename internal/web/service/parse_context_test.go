@@ -549,7 +549,7 @@ select range, schabla, (select test from quickstart.test), bla from blub`,
 	assert.Empty(t, parseContext.Errors)
 	warnings := warningDiagnostics(parseContext.Diagnostics)
 	require.Len(t, warnings, 1)
-	assert.Equal(t, "Column 'bla' is defined in the Bruin asset 'quickstart.range_100', but it has not been materialized yet.", warnings[0].Message)
+	assert.Equal(t, "Column 'bla' is defined in the asset 'quickstart.range_100', but it has not been materialized yet.", warnings[0].Message)
 	require.NotNil(t, warnings[0].Range)
 	assert.Equal(t, 3, warnings[0].Range.Line)
 	assert.Equal(t, 60, warnings[0].Range.Col)
@@ -594,7 +594,7 @@ select range, schabla, (select test from quickstart.test), bla from blub`,
 	)
 	require.Nil(t, apiError)
 	assert.Empty(t, result.Errors)
-	assert.Contains(t, diagnosticMessagesFromService(result.Diagnostics), "Column 'bla' is defined in the Bruin asset 'quickstart.range_100', but it has not been materialized yet.")
+	assert.Contains(t, diagnosticMessagesFromService(result.Diagnostics), "Column 'bla' is defined in the asset 'quickstart.range_100', but it has not been materialized yet.")
 	for _, diagnostic := range result.Diagnostics {
 		assert.NotEqual(t, "Unresolved column: bla", diagnostic.Message)
 	}
@@ -639,7 +639,7 @@ select bla from blub`,
 	)
 	require.Nil(t, apiError)
 	assert.Empty(t, result.Errors)
-	assert.Contains(t, diagnosticMessagesFromService(result.Diagnostics), "Column 'bla' is defined in the Bruin asset 'quickstart.range_100', but it has not been materialized yet.")
+	assert.Contains(t, diagnosticMessagesFromService(result.Diagnostics), "Column 'bla' is defined in the asset 'quickstart.range_100', but it has not been materialized yet.")
 }
 
 func TestParseContextService_SQLDefinitionColumnsFromResolvedPipelineWarnWhenMissingFromDiscoveredTable(t *testing.T) {
@@ -675,7 +675,7 @@ func TestParseContextService_SQLDefinitionColumnsFromResolvedPipelineWarnWhenMis
 	)
 	require.Nil(t, apiError)
 	assert.Empty(t, result.Errors)
-	assert.Contains(t, diagnosticMessagesFromService(result.Diagnostics), "Column 'blabli' is defined in the Bruin asset 'quickstart.unmaterialized_asset', but it has not been materialized yet.")
+	assert.Contains(t, diagnosticMessagesFromService(result.Diagnostics), "Column 'blabli' is defined in the asset 'quickstart.unmaterialized_asset', but it has not been materialized yet.")
 	for _, diagnostic := range result.Diagnostics {
 		assert.NotEqual(t, "Unresolved column: blabli", diagnostic.Message)
 	}
@@ -813,7 +813,7 @@ func TestParseContextService_SQLDefinitionColumnsWarnWhenMissingFromMaterialized
 	)
 	require.Nil(t, apiError)
 	assert.Empty(t, result.Errors)
-	assert.Contains(t, diagnosticMessagesFromService(result.Diagnostics), "Column 'blabli' is defined in the Bruin asset 'quickstart.unmaterialized_asset', but it has not been materialized yet.")
+	assert.Contains(t, diagnosticMessagesFromService(result.Diagnostics), "Column 'blabli' is defined in the asset 'quickstart.unmaterialized_asset', but it has not been materialized yet.")
 	for _, diagnostic := range result.Diagnostics {
 		assert.NotEqual(t, "Unresolved column: blabli", diagnostic.Message)
 	}

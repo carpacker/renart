@@ -457,7 +457,7 @@ def should_warn_unmaterialized_column(metadata):
 
 def build_unmaterialized_column_message(column_name, metadata):
     origin_table = metadata.get("origin_table") or "an upstream Bruin asset"
-    return f"Column '{column_name}' is defined in the Bruin asset '{origin_table}', but it has not been materialized yet."
+    return f"Column '{column_name}' is defined in the asset '{origin_table}', but it has not been materialized yet."
 
 
 def is_path_like_table_reference(table_name, dialect):

@@ -1063,7 +1063,7 @@ func polyglotUnmaterializedColumnWarnings(columns []ParseContextColumn, ctes map
 			originTable = "an upstream Bruin asset"
 		}
 		warnings = append(warnings, ParseContextDiagnostic{
-			Message:  fmt.Sprintf("Column '%s' is defined in the Bruin asset '%s', but it has not been materialized yet.", column.Name, originTable),
+			Message:  fmt.Sprintf("Column '%s' is defined in the asset '%s', but it has not been materialized yet.", column.Name, originTable),
 			Severity: "warning",
 			Range:    rangeInfo,
 		})

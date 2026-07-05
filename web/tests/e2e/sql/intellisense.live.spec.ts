@@ -277,7 +277,7 @@ test.describe("sql intellisense live", () => {
         expect.objectContaining({
           severity: "warning",
           message:
-            "Column 'bla' is defined in the Bruin asset 'quickstart.range_100', but it has not been materialized yet.",
+            "Column 'bla' is defined in the asset 'quickstart.range_100', but it has not been materialized yet.",
         }),
       ])
     );
@@ -305,7 +305,7 @@ test.describe("sql intellisense live", () => {
       "analytics/assets/analytics/query_unmaterialized.sql"
     ).toString("base64");
     const warningMessage =
-      "Column 'blabli' is defined in the Bruin asset 'analytics.unmaterialized_asset', but it has not been materialized yet.";
+      "Column 'blabli' is defined in the asset 'analytics.unmaterialized_asset', but it has not been materialized yet.";
 
     await mkdir(assetDir, { recursive: true });
     await writeFile(
