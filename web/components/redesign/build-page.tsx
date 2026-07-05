@@ -2240,7 +2240,7 @@ const CREATABLE_ASSETS: AssetKindOption[] = [
 
 const DOWNSTREAM_ASSETS: AssetKindOption[] = [
   { id: "sql", label: "SQL", description: "select * from the upstream table", icon: FileCode },
-  { id: "python", label: "Python", description: "Read the upstream via the Bruin Python SDK", icon: Cpu },
+  { id: "python", label: "Python", description: "Read the upstream table from Python", icon: Cpu },
   { id: "sling", label: "Sling", description: "Replicate downstream with Sling", icon: Download },
 ];
 
@@ -2655,7 +2655,7 @@ function PipelineVariantsPanel() {
           ])}
         />
       </div>
-      <p className="text-xs text-muted-foreground">One <span className="font-mono">pipeline.yml</span> renders multiple concrete pipelines. Run with <span className="font-mono">bruin run --variant &lt;name&gt;</span>, or pick a variant from the Build toolbar.</p>
+      <p className="text-xs text-muted-foreground">One <span className="font-mono">pipeline.yml</span> renders multiple concrete pipelines. Run with <span className="font-mono">renart run --variant &lt;name&gt;</span>, or pick a variant from the Build toolbar.</p>
     </div>
   );
 }

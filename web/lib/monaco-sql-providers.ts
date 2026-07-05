@@ -1910,7 +1910,7 @@ export function registerSQLProviders(
 
         const parts: string[] = [`**${resolvedTable.name}**`];
         if (resolvedTable.isBruinAsset) {
-          parts.push("_Bruin Asset_ — Ctrl+Click to navigate");
+          parts.push("_Asset_ — Ctrl+Click to navigate");
         }
         if (resolvedTable.assetPath) {
           parts.push(`Defined by: \`${resolvedTable.assetPath}\``);

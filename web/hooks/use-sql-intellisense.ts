@@ -648,7 +648,7 @@ export function useSQLIntellisense(
               (candidate) => candidate.name.toLowerCase() === table.name.toLowerCase(),
             );
             const description = matchingAsset
-              ? `Remote table + Bruin asset (${matchingAsset.assetPath ?? matchingAsset.name})`
+              ? `Remote table + asset (${matchingAsset.assetPath ?? matchingAsset.name})`
               : "Remote table";
 
             const currentSchemaName = schemaNameFromAssetName(latestStateRef.current.asset?.name)?.toLowerCase() ?? null;
