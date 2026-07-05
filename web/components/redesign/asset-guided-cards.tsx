@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 
-import { Ban, Plus, RefreshCw, RotateCcw, Trash2, X } from "lucide-react";
+import { Ban, KeyRound, Plus, RefreshCw, RotateCcw, Trash2, X } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -391,6 +391,15 @@ function ColumnsCard({ asset }: { asset: WebAsset }) {
     );
   };
 
+  // primary_key counts as user metadata (columnHasUserMetadata on the server),
+  // so a plain columns update survives refresh-from-definition merges.
+  const togglePrimaryKey = (column: WebColumn) => {
+    const nextColumns = columns.map((c) =>
+      c.name.toLowerCase() === column.name.toLowerCase() ? { ...c, primary_key: !c.primary_key } : c
+    );
+    void updateAssetColumns(asset.id, nextColumns);
+  };
+
   return (
     <GuidedCard
       title="Columns"
@@ -440,6 +449,7 @@ function ColumnsCard({ asset }: { asset: WebAsset }) {
               status={columnStatus(column.name, provenance)}
               onCommitType={(type) => commitType(column, type)}
               onCommitDescription={(description) => setDescription(column.name, description)}
+              onTogglePrimaryKey={() => togglePrimaryKey(column)}
               onDrop={() => dropColumn(column.name)}
             />
           ))}
@@ -584,12 +594,14 @@ function ColumnRow({
   status,
   onCommitType,
   onCommitDescription,
+  onTogglePrimaryKey,
   onDrop,
 }: {
   column: WebColumn;
   status: ReturnType<typeof columnStatus>;
   onCommitType: (type: string) => void;
   onCommitDescription: (description: string) => void;
+  onTogglePrimaryKey: () => void;
   onDrop: () => void;
 }) {
   return (
@@ -597,6 +609,21 @@ function ColumnRow({
       <div className="flex items-center gap-1.5">
         <span className="min-w-0 flex-1 truncate font-monaco text-xs">{column.name}</span>
         <ColumnStatusBadge status={status} primaryKey={column.primary_key} />
+        <Button
+          variant="ghost"
+          size="xs"
+          className={cn(
+            "size-6 shrink-0 p-0",
+            column.primary_key
+              ? "text-amber-600 dark:text-amber-400"
+              : "text-muted-foreground opacity-0 group-hover:opacity-100 focus-visible:opacity-100"
+          )}
+          title={column.primary_key ? "Unset primary key" : "Set as primary key"}
+          aria-label={`${column.primary_key ? "Unset" : "Set"} ${column.name} as primary key`}
+          onClick={onTogglePrimaryKey}
+        >
+          <KeyRound className="size-3" />
+        </Button>
         <Button
           variant="ghost"
           size="xs"

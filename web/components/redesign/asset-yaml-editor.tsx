@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 
 import { useAtomValue } from "jotai";
-import { Boxes, Check, Database, Loader2, Plus, X } from "lucide-react";
+import { Boxes, Check, Database, KeyRound, Loader2, Plus, X } from "lucide-react";
 
 import { cn } from "@/lib/utils";
 import {
@@ -458,6 +458,10 @@ function ColumnsSection({ asset, isSql }: { asset: WebAsset; isSql: boolean }) {
     const next: WebColumn[] = columns.map((column) => (column.name === name ? { ...column, type } : column));
     void updateAssetColumns(asset.id, next);
   };
+  const setColumnPrimaryKey = (name: string, primaryKey: boolean) => {
+    const next: WebColumn[] = columns.map((column) => (column.name === name ? { ...column, primary_key: primaryKey } : column));
+    void updateAssetColumns(asset.id, next);
+  };
 
   const existingNames = useMemo(() => new Set(columns.map((column) => column.name.toLowerCase())), [columns]);
   // Columns the user has dropped/ignored — shown commented-out so they can be restored.
@@ -477,6 +481,7 @@ function ColumnsSection({ asset, isSql }: { asset: WebAsset; isSql: boolean }) {
           key={column.name}
           column={column}
           onSetType={setColumnType}
+          onSetPrimaryKey={setColumnPrimaryKey}
           apply={apply}
           onRemove={() => apply({ type: "column.inferred.drop", column: column.name })}
         />
@@ -572,11 +577,13 @@ function ImportColumnsButton({ asset }: { asset: WebAsset }) {
 function ColumnEntry({
   column,
   onSetType,
+  onSetPrimaryKey,
   apply,
   onRemove,
 }: {
   column: WebColumn;
   onSetType: (name: string, type: string) => void;
+  onSetPrimaryKey: (name: string, primaryKey: boolean) => void;
   apply: (tx: Parameters<typeof applyAssetTransaction>[1]) => void;
   onRemove: () => void;
 }) {
@@ -606,6 +613,24 @@ function ColumnEntry({
         <Key>type</Key>
         <InlineText value={column.type ?? ""} placeholder="VARCHAR" onCommit={(type) => { if (type !== (column.type ?? "")) onSetType(column.name, type); }} />
       </Line>
+      {column.primary_key ? (
+        <Line depth={3}>
+          <Key>primary_key</Key>
+          <span className="flex-1 text-foreground">true</span>
+          <RemoveButton label={`Unset primary key on ${column.name}`} onClick={() => onSetPrimaryKey(column.name, false)} />
+        </Line>
+      ) : (
+        <Line depth={3}>
+          <button
+            type="button"
+            className="font-monaco flex items-center gap-1 rounded-sm px-1 text-[11px] text-muted-foreground hover:bg-muted hover:text-foreground"
+            onClick={() => onSetPrimaryKey(column.name, true)}
+          >
+            <KeyRound className="size-3" />
+            set as primary key…
+          </button>
+        </Line>
+      )}
       <Line depth={3}>
         <Key>checks</Key>
       </Line>
