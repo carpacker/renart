@@ -109,6 +109,17 @@ func (s *NotebookService) runRecomputePass(notebookID, uuid string) {
 			// Superseded by an edit; loop with the new state.
 			continue
 		}
+		if len(results) == 0 {
+			// The wave failed wholesale (runner error, no per-cell results).
+			// Park its cells like individual failures, otherwise the next
+			// iteration recomputes the identical wave and loops forever.
+			rt.mu.Lock()
+			for _, id := range wave {
+				rt.autoFailed[id] = true
+			}
+			rt.mu.Unlock()
+			continue
+		}
 		s.recordResults(rt, results)
 		delta := make(map[string]notebook.CellRunResult, len(results))
 		for _, result := range results {
@@ -187,7 +198,9 @@ func (s *NotebookService) buildAutoCells(nb *notebook.Notebook, rt *notebookRunt
 		stale[id] = rt.stale[id]
 	}
 	ranOk := map[string]bool{}
+	hasResult := map[string]bool{}
 	for id, result := range rt.results {
+		hasResult[id] = true
 		ranOk[id] = result.Status == notebook.CellRunOK
 	}
 	autoFailed := make(map[string]bool, len(rt.autoFailed))
@@ -201,13 +214,24 @@ func (s *NotebookService) buildAutoCells(nb *notebook.Notebook, rt *notebookRunt
 		nameToID[strings.ToLower(cell.Asset.Name)] = cell.ID
 	}
 
+	// The runtime maps are in-memory only. After a server restart a cell that
+	// materialized in an earlier session has no result entry, so its downstreams
+	// would never become eligible (their upstream reads as never-run) and an
+	// edited cell could never recompute. A persisted session object from a
+	// previous run counts as fresh — the same trust the manual-run path applies
+	// when it skips ancestors whose objects already exist.
+	existingObjects, existErr := s.store.ExistingCellObjects(nb.UUID)
+	if existErr != nil {
+		existingObjects = map[string]bool{}
+	}
+
 	out := make([]autoCellInfo, 0, len(nb.Cells))
 	for _, cell := range nb.Cells {
 		isPython := notebook.IsPythonCell(cell)
 		info := autoCellInfo{
 			cellID:     cell.ID,
 			stale:      stale[cell.ID],
-			ranOk:      ranOk[cell.ID],
+			ranOk:      ranOk[cell.ID] || (!hasResult[cell.ID] && existingObjects[notebook.CellObjectName(cell.ID)]),
 			isPython:   isPython,
 			autoFailed: autoFailed[cell.ID],
 		}
