@@ -132,7 +132,6 @@ export function RedesignNotebooksIndexPage() {
     <RedesignPage>
       <PageHeader
         title="Notebooks"
-        subtitle="Exploratory SQL against a local DuckDB session — promote cells to pipelines when ready"
         actions={(
           <Button size="sm" disabled={creating} onClick={() => void handleCreate()}>
             {creating ? <Spinner className="size-3.5" /> : <Plus className="size-3.5" />}New notebook
@@ -143,43 +142,61 @@ export function RedesignNotebooksIndexPage() {
         <div className="mx-3 mb-2 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-800 dark:border-red-500/25 dark:bg-red-500/10 dark:text-red-200">{error}</div>
       ) : null}
       <div className="min-h-0 flex-1 overflow-auto px-3 pb-3">
-        {notebooks.length === 0 ? (
-          <div className="mx-auto mt-12 max-w-md rounded-xl border border-dashed p-8 text-center">
-            <BookOpen className="mx-auto mb-3 size-8 text-muted-foreground" />
-            <div className="text-sm font-medium">No notebooks yet</div>
-            <p className="mt-1 text-xs text-muted-foreground">
-              Notebooks are folders of SQL cells that run in a disposable local DuckDB session.
-            </p>
-            <Button size="sm" className="mt-4" disabled={creating} onClick={() => void handleCreate()}>
-              <Plus className="size-3.5" />New notebook
-            </Button>
-          </div>
-        ) : (
-          <div className="mx-auto grid max-w-5xl gap-3 sm:grid-cols-2 lg:grid-cols-3">
-            {notebooks.map((notebook) => (
-              <button
-                key={notebook.id}
-                type="button"
-                onClick={() => void navigate({ to: "/redesign/notebooks/$notebookId", params: { notebookId: notebook.id } })}
-                className="flex flex-col gap-2 rounded-xl border bg-card p-4 text-left transition-colors hover:border-primary/40 hover:bg-muted/40"
-              >
-                <div className="flex items-center gap-2">
-                  <BookOpen className="size-4 text-primary" />
-                  <span className="min-w-0 flex-1 truncate font-medium">{notebook.title}</span>
-                </div>
-                <div className="font-mono text-[11px] text-muted-foreground">{notebook.path}</div>
-                <div className="mt-1 flex items-center gap-2 text-[11px] text-muted-foreground">
-                  <span>{notebook.cells.length} cell{notebook.cells.length === 1 ? "" : "s"}</span>
-                  {notebook.problems?.length ? (
-                    <span className="inline-flex items-center gap-1 text-amber-600 dark:text-amber-400">
-                      <AlertTriangle className="size-3" />{notebook.problems.length}
+        {/* my-auto centers the (usually short) content vertically; long lists
+            grow past the viewport and scroll normally. */}
+        <div className="flex min-h-full flex-col">
+          {notebooks.length === 0 ? (
+            <div className="mx-auto my-auto w-full max-w-md rounded-xl border border-dashed p-8 text-center">
+              <BookOpen className="mx-auto mb-3 size-8 text-muted-foreground" />
+              <div className="text-sm font-medium">No notebooks yet</div>
+              <p className="mt-1 text-xs text-muted-foreground">
+                Notebooks are folders of SQL cells that run in a disposable local DuckDB session.
+              </p>
+              <Button size="sm" className="mt-4" disabled={creating} onClick={() => void handleCreate()}>
+                <Plus className="size-3.5" />New notebook
+              </Button>
+            </div>
+          ) : (
+            <div className="mx-auto my-auto w-full max-w-2xl py-6">
+              <p className="mb-3 px-1 text-xs text-muted-foreground">
+                Exploratory SQL against a local DuckDB session — promote cells to pipelines when ready.
+              </p>
+              <div className="divide-y overflow-hidden rounded-xl border bg-card">
+                {notebooks.map((notebook) => (
+                  <button
+                    key={notebook.id}
+                    type="button"
+                    onClick={() => void navigate({ to: "/redesign/notebooks/$notebookId", params: { notebookId: notebook.id } })}
+                    className="flex w-full items-center gap-3 px-4 py-3 text-left transition-colors hover:bg-muted/50"
+                  >
+                    <BookOpen className="size-4 shrink-0 text-primary" />
+                    <span className="min-w-0 flex-1">
+                      <span className="block truncate text-sm font-medium">{notebook.title}</span>
+                      <span className="block truncate font-mono text-[11px] text-muted-foreground">{notebook.path}</span>
                     </span>
-                  ) : null}
-                </div>
+                    {notebook.problems?.length ? (
+                      <span className="inline-flex shrink-0 items-center gap-1 text-[11px] text-amber-600 dark:text-amber-400">
+                        <AlertTriangle className="size-3" />{notebook.problems.length}
+                      </span>
+                    ) : null}
+                    <span className="shrink-0 text-[11px] text-muted-foreground">
+                      {notebook.cells.length} cell{notebook.cells.length === 1 ? "" : "s"}
+                    </span>
+                    <ChevronRight className="size-4 shrink-0 text-muted-foreground" />
+                  </button>
+                ))}
+              </div>
+              <button
+                type="button"
+                disabled={creating}
+                onClick={() => void handleCreate()}
+                className="mt-3 flex h-9 w-full items-center justify-center gap-2 rounded-xl border border-dashed text-xs text-muted-foreground transition-colors hover:bg-muted/50 disabled:opacity-50"
+              >
+                <Plus className="size-3.5" /> New notebook
               </button>
-            ))}
-          </div>
-        )}
+            </div>
+          )}
+        </div>
       </div>
     </RedesignPage>
   );

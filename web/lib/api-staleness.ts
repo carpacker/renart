@@ -1,4 +1,5 @@
-import { fetchJSON } from "@/lib/api-core";
+import { fetchJSON, type MaterializeStreamPayload } from "@/lib/api-core";
+import { streamMaterialization, type StreamAssetEvent } from "@/lib/api-streams";
 
 export type AssetStalenessStatus =
   | "fresh"
@@ -41,6 +42,30 @@ export type StalenessUpdatedEvent = {
   end?: string;
   assets: AssetStaleness[];
 };
+
+// buildStalePipelineStream runs the server-side "build stale assets"
+// operation: the server recomputes the stale set for this selection and
+// rebuilds it in one streamed run (topological order, single combined log).
+export async function buildStalePipelineStream(
+  pipelineId: string,
+  handlers: {
+    onChunk?: (chunk: string) => void;
+    onDone?: (payload: MaterializeStreamPayload) => void;
+    onAssetEvent?: (event: StreamAssetEvent) => void;
+  },
+  options: { environment?: string; start?: string; end?: string } = {}
+) {
+  const params = new URLSearchParams();
+  if (options.environment) params.set("environment", options.environment);
+  if (options.start) params.set("start", options.start);
+  if (options.end) params.set("end", options.end);
+  const query = params.toString();
+  return streamMaterialization(
+    `/api/pipelines/${pipelineId}/build-stale/stream${query ? `?${query}` : ""}`,
+    handlers,
+    "Stale build stream ended unexpectedly."
+  );
+}
 
 export async function getPipelineStaleness(
   pipelineId: string,

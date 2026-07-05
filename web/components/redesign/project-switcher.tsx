@@ -80,8 +80,15 @@ export function ProjectSwitcher() {
           {(directory?.projects ?? []).map((project) => (
             <DropdownMenuItem
               key={project.id}
-              disabled={!project.exists}
-              onSelect={() => {
+              // Missing directories stay interactive (not `disabled`) so the
+              // remove button still receives clicks; selecting them is a no-op
+              // that keeps the menu open.
+              className={cn(!project.exists && "opacity-70")}
+              onSelect={(event) => {
+                if (!project.exists) {
+                  event.preventDefault();
+                  return;
+                }
                 if (project.id !== currentProjectId && directory) {
                   switchToProject(project.id, directory.default_project_id);
                 }
@@ -100,6 +107,7 @@ export function ProjectSwitcher() {
                   type="button"
                   className="rounded p-1 hover:bg-muted"
                   title="Remove from list"
+                  aria-label={`Remove ${project.name} from list`}
                   onClick={(event) => {
                     event.stopPropagation();
                     void removeProject(project.id).then(setDirectory).catch(() => {});

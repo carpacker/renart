@@ -4,11 +4,19 @@ import {
   MaterializeStreamPayload,
 } from "@/lib/api-core";
 
+export type StreamAssetEvent = {
+  asset_name?: string;
+  status?: string;
+  step?: number;
+  total?: number;
+};
+
 export async function readSSEStream(
   res: Response,
   handlers: {
     onChunk?: (chunk: string) => void;
     onDone?: (payload: MaterializeStreamPayload) => void;
+    onAssetEvent?: (event: StreamAssetEvent) => void;
   },
   endedMessage: string
 ) {
@@ -44,6 +52,10 @@ export async function readSSEStream(
         handlers.onChunk?.(parsed.data.chunk);
       }
 
+      if (parsed.event === "asset") {
+        handlers.onAssetEvent?.(parsed.data as StreamAssetEvent);
+      }
+
       if (parsed.event === "done") {
         donePayload = parsed.data;
         handlers.onDone?.(parsed.data);
@@ -67,6 +79,7 @@ export async function streamMaterialization(
   handlers: {
     onChunk?: (chunk: string) => void;
     onDone?: (payload: MaterializeStreamPayload) => void;
+    onAssetEvent?: (event: StreamAssetEvent) => void;
   },
   endedMessage: string
 ) {

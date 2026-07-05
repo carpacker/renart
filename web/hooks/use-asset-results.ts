@@ -19,6 +19,8 @@ import {
 } from "@/lib/atoms/domains/workspace";
 import { useAssetInspect } from "@/hooks/use-asset-inspect";
 import { materializeAssetStream, materializePipelineStream, triggerPipelineRun } from "@/lib/api";
+import { buildStalePipelineStream } from "@/lib/api-staleness";
+import type { StreamAssetEvent } from "@/lib/api-streams";
 import { MaterializeScope, labelForMaterializeScope } from "@/lib/materialize-scope";
 import { AssetInspectResponse, WebAsset } from "@/lib/types";
 
@@ -625,6 +627,98 @@ export function useAssetResults() {
     }
   }, [pipeline, selectedEnvironment, selectedExecutionTimeWindow, setChangedAssetIds]);
 
+  // runBuildStale delegates the whole "build stale assets" operation to the
+  // server: one streamed run in dependency order, one history entry, one log.
+  const runBuildStale = useCallback(async (
+    targetPipelineId: string,
+    options?: {
+      assetIds?: string[];
+      onAssetEvent?: (event: StreamAssetEvent) => void;
+    }
+  ) => {
+    const entryId = createMaterializeHistoryId();
+    const startedAt = Date.now();
+    const label = pipeline?.name ? `Build stale: ${pipeline.name}` : "Build stale assets";
+    const staleMaterializingIds = options?.assetIds ?? [];
+    const baseEntry = () =>
+      createMaterializeEntry({
+        id: entryId,
+        kind: "batch",
+        label,
+        pipelineId: targetPipelineId,
+        pipelineName: pipeline?.name ?? null,
+        loading: true,
+        createdAt: startedAt,
+        timeWindow: selectedExecutionTimeWindow,
+      });
+
+    setPipelineMaterializeLoading(true);
+    setMaterializingAssetIds((previous: Set<string>) => new Set([...previous, ...staleMaterializingIds]));
+    upsertMaterializeEntry(entryId, () => ({ ...baseEntry() }));
+
+    try {
+      const result = await buildStalePipelineStream(targetPipelineId, {
+        onChunk: (chunk) => {
+          upsertMaterializeEntry(entryId, (previous) => ({
+            ...(previous ?? baseEntry()),
+            output: (previous?.output ?? "") + chunk,
+            loading: true,
+            updatedAt: Date.now(),
+          }));
+        },
+        onAssetEvent: options?.onAssetEvent,
+      }, {
+        environment: selectedEnvironment,
+        start: selectedExecutionTimeWindow?.start,
+        end: selectedExecutionTimeWindow?.end,
+      });
+
+      upsertMaterializeEntry(entryId, (previous) => ({
+        ...(previous ?? baseEntry()),
+        output: result.output ?? previous?.output ?? "",
+        status: result.status ?? "error",
+        error: result.error ?? "",
+        loading: false,
+        updatedAt: Date.now(),
+      }));
+
+      const affectedIds = result.changed_asset_ids ?? [];
+      if (affectedIds.length > 0) {
+        setChangedAssetIds((prev: Set<string>) => {
+          const next = new Set(prev);
+          for (const id of affectedIds) {
+            next.add(id);
+          }
+          return next;
+        });
+      }
+
+      return result;
+    } catch (error) {
+      upsertMaterializeEntry(entryId, (previous) => ({
+        ...(previous ?? baseEntry()),
+        output:
+          (previous?.output ?? "") +
+          (previous?.output ? "\n" : "") +
+          String(error),
+        status: "error",
+        error: String(error),
+        loading: false,
+        updatedAt: Date.now(),
+      }));
+      return null;
+    } finally {
+      setPipelineMaterializeLoading(false);
+      setMaterializingAssetIds((previous: Set<string>) => {
+        const next = new Set(previous);
+        for (const id of staleMaterializingIds) {
+          next.delete(id);
+        }
+        return next;
+      });
+    }
+  }, [pipeline, selectedEnvironment, selectedExecutionTimeWindow, setChangedAssetIds]);
+
   const setMaterializeBatchResult = (
     output: string,
     status: "ok" | "error",
@@ -698,6 +792,7 @@ export function useAssetResults() {
     runInspectForAsset,
     runMaterializeForAsset,
     runMaterializePipeline,
+    runBuildStale,
     setMaterializeBatchResult,
     clearResultsAfterDelete,
   };

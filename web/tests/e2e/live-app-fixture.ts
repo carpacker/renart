@@ -179,7 +179,14 @@ export const liveTest = base.extend<{
       ],
       {
         cwd: repoRoot,
-        env: { ...process.env, ...liveAppEnv },
+        // Point the global project registry into the throwaway workspace so
+        // test runs never touch (or leave temp entries in) the user's real
+        // ~/.config/renart/projects.json. It dies with the workspace dir.
+        env: {
+          ...process.env,
+          RENART_PROJECTS_REGISTRY: join(workspaceDir, ".renart", "projects.json"),
+          ...liveAppEnv,
+        },
         stdio: "inherit",
       }
     );
@@ -217,7 +224,14 @@ export async function startLiveServer(workspaceDir: string): Promise<SpawnedServ
   const child = spawn(
     binaryPath,
     ["web", "--host", host, "--port", String(port), "--static-dir", staticDir, "--watch-mode", "poll", "--no-open", workspaceDir],
-    { cwd: repoRoot, env: process.env, stdio: "inherit" }
+    {
+      cwd: repoRoot,
+      env: {
+        ...process.env,
+        RENART_PROJECTS_REGISTRY: join(workspaceDir, ".renart", "projects.json"),
+      },
+      stdio: "inherit",
+    }
   );
   await waitForServer(baseURL);
   return { baseURL, child };

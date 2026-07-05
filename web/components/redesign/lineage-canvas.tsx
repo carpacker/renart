@@ -1,6 +1,6 @@
 import { ArrowUpRight, Play, Plus, Trash2 } from "lucide-react";
-import { useEffect, useMemo, useRef, useState } from "react";
-import { Background, Controls, Handle, Position, ReactFlow, useReactFlow, type Edge, type Node, type NodeProps, type NodeTypes } from "reactflow";
+import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent } from "react";
+import { Background, Controls, Handle, Position, ReactFlow, useReactFlow, type Edge, type Node, type NodeProps, type NodeTypes, type ReactFlowInstance } from "reactflow";
 import "reactflow/dist/style.css";
 
 import { Button } from "@/components/ui/button";
@@ -223,6 +223,7 @@ export function RedesignLineageCanvas({
   focusAssetId,
   onAssetSelect,
   onCreateDownstream,
+  onCreateAsset,
   onRunAsset,
   onDeleteAsset,
   onGoToAsset,
@@ -234,6 +235,9 @@ export function RedesignLineageCanvas({
   focusAssetId?: string;
   onAssetSelect?: (assetId: string) => void;
   onCreateDownstream?: (assetId: string) => void;
+  // Right-click on the canvas offers "New asset"; when the click lands inside
+  // a prefix group box, that prefix is passed along as the default.
+  onCreateAsset?: (options: { prefix?: string }) => void;
   onRunAsset?: (assetId: string) => void;
   onDeleteAsset?: (assetId: string) => void;
   onGoToAsset?: (assetId: string) => void;
@@ -242,6 +246,9 @@ export function RedesignLineageCanvas({
   const [lineageAssetId, setLineageAssetId] = useState<string | null>(null);
   const [pendingDelete, setPendingDelete] = useState<{ id: string; name: string } | null>(null);
   const [deleteLoading, setDeleteLoading] = useState(false);
+  const containerRef = useRef<HTMLDivElement | null>(null);
+  const [flowInstance, setFlowInstance] = useState<ReactFlowInstance | null>(null);
+  const [paneMenu, setPaneMenu] = useState<{ x: number; y: number; prefix?: string } | null>(null);
 
   useEffect(() => {
     setLineageAssetId((current) => current && current !== selectedAssetId ? null : current);
@@ -353,8 +360,44 @@ export function RedesignLineageCanvas({
     return { nodes: [...groupNodes, ...assetNodes], edges };
   }, [assets, goToLabel, lineageAssetId, links, onAssetSelect, onCreateDownstream, onDeleteAsset, onGoToAsset, onRunAsset, selectedAssetId]);
 
+  const handlePaneContextMenu = useCallback(
+    (event: ReactMouseEvent | MouseEvent) => {
+      if (!onCreateAsset) {
+        return;
+      }
+      event.preventDefault();
+      const container = containerRef.current;
+      if (!container) {
+        return;
+      }
+      const bounds = container.getBoundingClientRect();
+      // Hit-test the prefix group boxes to default the new asset's prefix.
+      let prefix: string | undefined;
+      const flowPosition = flowInstance?.screenToFlowPosition({ x: event.clientX, y: event.clientY });
+      if (flowPosition) {
+        for (const node of nodes) {
+          if (node.type !== "prefixGroup") continue;
+          const data = node.data as PrefixGroupNodeData;
+          if (
+            flowPosition.x >= node.position.x &&
+            flowPosition.x <= node.position.x + data.width &&
+            flowPosition.y >= node.position.y &&
+            flowPosition.y <= node.position.y + data.height
+          ) {
+            if (data.label && data.label !== "root" && data.label !== "ASSETS") {
+              prefix = data.label;
+            }
+            break;
+          }
+        }
+      }
+      setPaneMenu({ x: event.clientX - bounds.left, y: event.clientY - bounds.top, prefix });
+    },
+    [flowInstance, nodes, onCreateAsset]
+  );
+
   return (
-    <div className="relative h-full min-h-0 bg-muted/40">
+    <div ref={containerRef} className="relative h-full min-h-0 bg-muted/40">
       <ReactFlow
         nodes={nodes}
         edges={edges}
@@ -364,11 +407,51 @@ export function RedesignLineageCanvas({
         deleteKeyCode={null}
         panActivationKeyCode={null}
         proOptions={{ hideAttribution: true }}
+        onInit={setFlowInstance}
+        onPaneContextMenu={handlePaneContextMenu}
+        onPaneClick={() => setPaneMenu(null)}
+        onMoveStart={() => setPaneMenu(null)}
       >
         <Background gap={22} size={1} color="var(--border)" />
         <Controls position="bottom-left" />
         <ViewportFocus assetId={focusAssetId} nodes={nodes} />
       </ReactFlow>
+      {paneMenu && onCreateAsset ? (
+        <>
+          {/* Click-away layer: any interaction outside the menu dismisses it. */}
+          <div
+            className="absolute inset-0 z-30"
+            onClick={() => setPaneMenu(null)}
+            onContextMenu={(event) => {
+              event.preventDefault();
+              setPaneMenu(null);
+            }}
+          />
+          <div
+            className="absolute z-40 min-w-44 rounded-md border bg-popover p-1 text-popover-foreground shadow-md"
+            style={{ left: paneMenu.x, top: paneMenu.y }}
+          >
+            <button
+              type="button"
+              className="flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-left text-xs hover:bg-accent hover:text-accent-foreground"
+              onClick={() => {
+                const prefix = paneMenu.prefix;
+                setPaneMenu(null);
+                onCreateAsset({ prefix });
+              }}
+            >
+              <Plus className="size-3.5" />
+              {paneMenu.prefix ? (
+                <span className="min-w-0 truncate">
+                  New asset in <span className="font-mono">{paneMenu.prefix}</span>
+                </span>
+              ) : (
+                "New asset"
+              )}
+            </button>
+          </div>
+        </>
+      ) : null}
       <Dialog
         open={Boolean(pendingDelete)}
         onOpenChange={(open) => {

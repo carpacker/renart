@@ -291,6 +291,11 @@ func (s *webServer) registerRoutes(router chi.Router) {
 		Service:             s.stalenessSvc,
 		ResolvePipelineUUID: s.findPipelineUUIDByID,
 	})
+	webhttpapi.RegisterBuildStaleRoutes(router, &webhttpapi.BuildStaleAPI{
+		Staleness:           s.stalenessSvc,
+		ResolvePipelineUUID: s.findPipelineUUIDByID,
+		Execution:           s.executionSvc,
+	})
 	webhttpapi.RegisterDeployRoutes(router, &webhttpapi.DeployAPI{
 		Snapshots:       s.snapshotStore,
 		ResolvePipeline: s.resolvePipelineForDeploy,

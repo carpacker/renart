@@ -24,6 +24,7 @@ import {
   Download,
   Eye,
   FileCode,
+  FolderPlus,
   GitBranch,
   Globe,
   GitCompare,
@@ -74,6 +75,7 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { createAsset, deleteAsset } from "@/lib/api-assets";
+import { createPipeline } from "@/lib/api-pipelines";
 import { buildCreateAssetInput, buildSuggestedAssetName } from "@/lib/workspace-shell-helpers";
 import type { NewAssetKind } from "@/components/new-asset-node";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -85,6 +87,7 @@ import { WorkspaceMaterializeOutputView } from "@/components/workspace-materiali
 import { Spinner } from "@/components/ui/spinner";
 import { runSQLQuery } from "@/lib/api";
 import type { MaterializeStreamPayload } from "@/lib/api-core";
+import type { StreamAssetEvent } from "@/lib/api-streams";
 import { typeCheckPipeline, type PipelineTypeCheckReport } from "@/lib/api-pipelines";
 import { createNotebook } from "@/lib/api-notebooks";
 import type { AssetStaleness } from "@/lib/api-staleness";
@@ -190,6 +193,7 @@ type BuildContextValue = {
   deleteAssetById: (assetId: string) => Promise<void>;
   goToCatalog: (assetId?: string) => void;
   openNewAsset: () => void;
+  openNewAssetInGroup: (prefix?: string) => void;
   createDownstreamAsset: (source: { id: string; name: string }) => void;
   openInspector: () => void;
   openBottom: (tab: RedesignResultTab) => void;
@@ -242,7 +246,9 @@ function assetDisplayFields(asset: WebAsset, pipeline: WebPipeline): Omit<BuildA
     kind: kindForAssetType(asset.type),
     group: prefix ?? "ASSETS",
     integration: integrationForAsset(asset),
-    description: asset.meta?.description ?? asset.path,
+    // No path fallback: the node header already carries the name and the
+    // inspector shows the file; repeating the path on every node is noise.
+    description: asset.meta?.description ?? "",
     dir: assetDirectory(asset.path, pipeline.path),
     imports: importsFromContent(asset.content),
     status: asset.is_materialized ? "success" : "pending",
@@ -418,6 +424,12 @@ export function RedesignBuildPage({
   const [explorerOpen, setExplorerOpen] = useState(false);
   const [inspectorOpen, setInspectorOpen] = useState(false);
   const [newAssetOpen, setNewAssetOpen] = useState(false);
+  const [newAssetPrefix, setNewAssetPrefix] = useState<string | null>(null);
+  const [newPipelineOpen, setNewPipelineOpen] = useState(false);
+  const [newFolderOpen, setNewFolderOpen] = useState(false);
+  // Path of a pipeline just created here; once the workspace SSE update lists
+  // it, we navigate onto it (the create response carries no ID).
+  const [pendingPipelinePath, setPendingPipelinePath] = useState<string | null>(null);
   const [downstreamSource, setDownstreamSource] = useState<{ id: string; name: string } | null>(null);
   const [pipelineSettingsOpen, setPipelineSettingsOpen] = useState(false);
   const [planOpen, setPlanOpen] = useState(false);
@@ -472,6 +484,24 @@ export function RedesignBuildPage({
       replace: true,
     });
   }, [activePipeline, buildSearch, navigate, workspace?.pipelines]);
+
+  useEffect(() => {
+    if (!pendingPipelinePath || !workspace?.pipelines?.length) {
+      return;
+    }
+    const normalized = pendingPipelinePath.replace(/^\.?\//, "").replace(/\/+$/, "");
+    const created = workspace.pipelines.find(
+      (item) => item.path === normalized || item.path.startsWith(`${normalized}/`)
+    );
+    if (created) {
+      setPendingPipelinePath(null);
+      void navigate({
+        to: "/redesign/pipelines/$pipelineId/canvas",
+        params: { pipelineId: created.id },
+        search: buildSearch,
+      });
+    }
+  }, [buildSearch, navigate, pendingPipelinePath, workspace?.pipelines]);
 
   const openBottom = (tab: RedesignResultTab) => {
     onResultTabChange?.(tab);
@@ -658,9 +688,18 @@ export function RedesignBuildPage({
     void navigate({ to: "/redesign/catalog", search: assetId ? { asset: assetId } : {} });
   };
   // The ad hoc editor only renders in the code/split editor panes, so opening
-  // it from the explorer also navigates to the code view.
+  // it from the explorer also navigates to the code view. Clicking again while
+  // ad-hoc is active toggles back to editing the current asset.
   const openAdhoc = () => {
     setExplorerOpen(false);
+    if (editorMode === "adhoc") {
+      void navigate({
+        to: redesignAssetViewPath(view),
+        params: { pipelineId, assetId: effectiveSelectedAssetId },
+        search: { ...buildSearch, editor: "asset" },
+      });
+      return;
+    }
     void navigate({
       to: redesignAssetViewPath("code"),
       params: { pipelineId, assetId: effectiveSelectedAssetId },
@@ -669,10 +708,19 @@ export function RedesignBuildPage({
   };
   const openNewAsset = () => {
     setDownstreamSource(null);
+    setNewAssetPrefix(null);
+    setNewAssetOpen(true);
+  };
+  // Canvas right-click entry point: seeds the dialog's name suggestion with
+  // the prefix group the click landed in.
+  const openNewAssetInGroup = (prefix?: string) => {
+    setDownstreamSource(null);
+    setNewAssetPrefix(prefix ?? null);
     setNewAssetOpen(true);
   };
   const createDownstreamAsset = (source: { id: string; name: string }) => {
     setDownstreamSource(source);
+    setNewAssetPrefix(null);
     setNewAssetOpen(true);
   };
   const buildContext: BuildContextValue = {
@@ -692,6 +740,7 @@ export function RedesignBuildPage({
     deleteAssetById,
     goToCatalog,
     openNewAsset,
+    openNewAssetInGroup,
     createDownstreamAsset,
     openInspector: () => setInspectorOpen(true),
     openBottom,
@@ -739,7 +788,9 @@ export function RedesignBuildPage({
             buildSearch={buildSearch}
             onAssetSelect={selectAsset}
             onAdhoc={openAdhoc}
-            onNewAsset={() => setNewAssetOpen(true)}
+            onNewAsset={openNewAsset}
+            onNewPipeline={() => setNewPipelineOpen(true)}
+            onNewFolder={() => setNewFolderOpen(true)}
             onPipelineSettings={() => setPipelineSettingsOpen(true)}
           />
         </RedesignPanel>
@@ -816,7 +867,9 @@ export function RedesignBuildPage({
             buildSearch={buildSearch}
             onAssetSelect={selectAsset}
             onAdhoc={openAdhoc}
-            onNewAsset={() => setNewAssetOpen(true)}
+            onNewAsset={openNewAsset}
+            onNewPipeline={() => setNewPipelineOpen(true)}
+            onNewFolder={() => setNewFolderOpen(true)}
             onPipelineSettings={() => setPipelineSettingsOpen(true)}
           />
         </SheetContent>
@@ -834,13 +887,30 @@ export function RedesignBuildPage({
           setNewAssetOpen(open);
           if (!open) {
             setDownstreamSource(null);
+            setNewAssetPrefix(null);
           }
         }}
         pipelineId={activePipeline?.id}
         pipelineName={activePipeline?.name}
         existingAssetNames={existingAssetNames}
         downstreamSource={downstreamSource}
+        namePrefix={newAssetPrefix}
         onCreated={(assetId) => goToAsset(activePipeline?.id ?? pipelineId, assetId)}
+      />
+      <NewPipelineDialog
+        open={newPipelineOpen}
+        onOpenChange={setNewPipelineOpen}
+        existingPaths={new Set((workspace?.pipelines ?? []).map((item) => item.path))}
+        onCreated={(path) => setPendingPipelinePath(path)}
+      />
+      <NewFolderDialog
+        open={newFolderOpen}
+        onOpenChange={setNewFolderOpen}
+        pipelineName={activePipeline?.name}
+        onConfirm={(prefix) => {
+          setNewFolderOpen(false);
+          openNewAssetInGroup(prefix);
+        }}
       />
       <PipelineSettingsDialog open={pipelineSettingsOpen} onOpenChange={setPipelineSettingsOpen} pipelineId={pipelineId} />
       <PlanDialog open={planOpen} onOpenChange={setPlanOpen} />
@@ -883,13 +953,14 @@ export function RedesignBuildPage({
         open={buildStaleOpen}
         onOpenChange={setBuildStaleOpen}
         staleAssets={staleness.staleAssets}
-        pipelineAssets={displayedPipelineAssets}
-        onBuildAsset={(assetId, options) =>
-          assetResults.runMaterializeForAsset(assetId, "asset", undefined, options)
-        }
-        onCompleted={() => {
+        onBuild={(onAssetEvent) => {
           logHistory("build stale", `${staleness.staleAssets.length} assets`);
           openBottom("materialize");
+          const idByName = new Map(displayedPipelineAssets.map((asset) => [asset.name, asset.id]));
+          const assetIds = staleness.staleAssets
+            .map((stale) => idByName.get(stale.asset_name))
+            .filter((id): id is string => Boolean(id));
+          return assetResults.runBuildStale(activePipeline?.id ?? pipelineId, { assetIds, onAssetEvent });
         }}
       />
     </RedesignPage>
@@ -991,13 +1062,19 @@ function BuildTopBar({
           <DropdownMenuItem onSelect={onOpenPlan}><ClipboardCheck className="size-4" />Review impact plan</DropdownMenuItem>
         </DropdownMenuContent>
       </DropdownMenu>
+      {/* Toggle: a second click leaves ad-hoc mode and returns to the asset. */}
       <Button
         asChild
         variant={editorMode === "adhoc" ? "secondary" : "outline"}
         size="sm"
         className={cn("hidden lg:inline-flex", editorMode === "adhoc" ? "text-primary ring-1 ring-primary/30" : null)}
       >
-        <Link to="/redesign/pipelines/$pipelineId/assets/$assetId/code" params={{ pipelineId, assetId: selectedAssetId }} search={{ result: resultTab, editor: "adhoc", variant }}>
+        <Link
+          to="/redesign/pipelines/$pipelineId/assets/$assetId/code"
+          params={{ pipelineId, assetId: selectedAssetId }}
+          search={{ result: resultTab, editor: editorMode === "adhoc" ? "asset" : "adhoc", variant }}
+          aria-pressed={editorMode === "adhoc"}
+        >
           <Terminal className="size-3.5" /> Ad-hoc
         </Link>
       </Button>
@@ -1164,6 +1241,8 @@ function Explorer({
   onAssetSelect,
   onAdhoc,
   onNewAsset,
+  onNewPipeline,
+  onNewFolder,
   onPipelineSettings,
 }: {
   pipelineId: string;
@@ -1172,6 +1251,8 @@ function Explorer({
   onAssetSelect: (assetId: string) => void;
   onAdhoc: () => void;
   onNewAsset: () => void;
+  onNewPipeline: () => void;
+  onNewFolder: () => void;
   onPipelineSettings: () => void;
 }) {
   const workspace = useAtomValue(workspaceAtom);
@@ -1249,6 +1330,9 @@ function Explorer({
                           </div>
                         )) : <div className="px-2 py-1 text-xs text-muted-foreground">No assets found.</div>}
                         <div className="mt-1 border-t pt-1">
+                          <button className="flex h-7 w-full items-center gap-1.5 rounded-md px-2 text-left font-mono text-xs text-muted-foreground hover:bg-muted" onClick={onNewFolder}>
+                            <FolderPlus className="size-3.5" /> New folder
+                          </button>
                           <button
                             className={cn(
                               "flex h-7 w-full items-center gap-1.5 rounded-md px-2 text-left font-mono text-xs hover:bg-muted",
@@ -1270,6 +1354,9 @@ function Explorer({
             </ExplorerSection>
           <button onClick={onNewAsset} className="mt-2 flex h-8 w-full items-center gap-2 rounded-md border border-dashed px-2 text-left text-xs text-muted-foreground hover:bg-muted">
             <Plus className="size-3.5" /> New asset
+          </button>
+          <button onClick={onNewPipeline} className="mt-1 flex h-8 w-full items-center gap-2 rounded-md border border-dashed px-2 text-left text-xs text-muted-foreground hover:bg-muted">
+            <Plus className="size-3.5" /> New pipeline
           </button>
 
           <ExplorerSection label={notebookGroup?.label ?? "Notebooks"} icon={NotebookIcon} count={notebookItems.length}>
@@ -1360,7 +1447,7 @@ function AssetButton({
 }
 
 function PipelineCanvas({ selectedAssetId, onAssetSelect }: { pipelineId: string; selectedAssetId: string; onAssetSelect: (assetId: string) => void }) {
-  const { pipelineAssets, createDownstreamAsset, runAssetById, deleteAssetById, goToCatalog } = useBuildContext();
+  const { pipelineAssets, createDownstreamAsset, openNewAssetInGroup, runAssetById, deleteAssetById, goToCatalog } = useBuildContext();
   return (
     <RedesignLineageCanvas
       assets={pipelineAssets}
@@ -1370,6 +1457,7 @@ function PipelineCanvas({ selectedAssetId, onAssetSelect }: { pipelineId: string
       onDeleteAsset={deleteAssetById}
       onGoToAsset={(assetId) => goToCatalog(assetId)}
       goToLabel="Open in catalog"
+      onCreateAsset={({ prefix }) => openNewAssetInGroup(prefix)}
       onCreateDownstream={(assetId) => {
         const source = pipelineAssets.find((asset) => asset.id === assetId);
         if (source) {
@@ -2190,6 +2278,17 @@ function suggestDownstreamName(sourceName: string, existing: Set<string>): strin
   return `${base}_${index}`;
 }
 
+// suggestPrefixedAssetName seeds a unique name under an explicit prefix
+// (from the canvas prefix-group the user right-clicked in).
+function suggestPrefixedAssetName(kind: NewAssetKind, prefix: string, existing: Set<string>): string {
+  const base = `${prefix}.my_${kind}_asset_`;
+  let index = 1;
+  while (existing.has(`${base}${index}`)) {
+    index += 1;
+  }
+  return `${base}${index}`;
+}
+
 function NewAssetDialog({
   open,
   onOpenChange,
@@ -2197,6 +2296,7 @@ function NewAssetDialog({
   pipelineName,
   existingAssetNames,
   downstreamSource,
+  namePrefix,
   onCreated,
 }: {
   open: boolean;
@@ -2205,6 +2305,7 @@ function NewAssetDialog({
   pipelineName?: string;
   existingAssetNames: Set<string>;
   downstreamSource?: { id: string; name: string } | null;
+  namePrefix?: string | null;
   onCreated?: (assetId: string) => void;
 }) {
   const [kind, setKind] = useState<NewAssetKind>("sql");
@@ -2221,8 +2322,11 @@ function NewAssetDialog({
     if (isDownstream && downstreamSource) {
       return suggestDownstreamName(downstreamSource.name, existingAssetNames);
     }
+    if (namePrefix) {
+      return suggestPrefixedAssetName(selected.id, namePrefix, existingAssetNames);
+    }
     return buildSuggestedAssetName(selected.id, existingAssetNames, pipelineName);
-  }, [isDownstream, downstreamSource, selected.id, existingAssetNames, pipelineName]);
+  }, [isDownstream, downstreamSource, namePrefix, selected.id, existingAssetNames, pipelineName]);
 
   // Reset to a valid kind whenever the dialog (or its mode) opens.
   useEffect(() => {
@@ -2325,6 +2429,191 @@ function NewAssetDialog({
           <Button variant="outline" onClick={() => onOpenChange(false)} disabled={creating}>Cancel</Button>
           <Button onClick={() => void create()} disabled={creating || !pipelineId}>
             {creating ? <Spinner className="size-4" /> : <CheckCircle2 className="size-4" />}Create
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+// NewPipelineDialog creates a pipeline directory (pipeline.yml + assets/) at
+// the given workspace-relative path; the workspace SSE update then lists it
+// and the page navigates onto it.
+function NewPipelineDialog({
+  open,
+  onOpenChange,
+  existingPaths,
+  onCreated,
+}: {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  existingPaths: Set<string>;
+  onCreated: (path: string) => void;
+}) {
+  const [path, setPath] = useState("");
+  const [name, setName] = useState("");
+  const [creating, setCreating] = useState(false);
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    if (open) {
+      setPath("");
+      setName("");
+      setError("");
+    }
+  }, [open]);
+
+  const create = async () => {
+    const trimmedPath = path.trim().replace(/^\/+|\/+$/g, "");
+    if (!trimmedPath) {
+      setError("Pipeline directory is required.");
+      return;
+    }
+    if (/\s/.test(trimmedPath) || trimmedPath.includes("..")) {
+      setError("Use a relative directory path without spaces.");
+      return;
+    }
+    if ([...existingPaths].some((existing) => existing === trimmedPath || existing.startsWith(`${trimmedPath}/`))) {
+      setError(`A pipeline already exists at "${trimmedPath}".`);
+      return;
+    }
+    setCreating(true);
+    setError("");
+    try {
+      await createPipeline({ path: trimmedPath, name: name.trim() || undefined });
+      onOpenChange(false);
+      onCreated(trimmedPath);
+    } catch (caught) {
+      setError(String(caught));
+    } finally {
+      setCreating(false);
+    }
+  };
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="max-w-md">
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2"><Plus className="size-4 text-primary" />New pipeline</DialogTitle>
+          <DialogDescription>
+            Creates a directory with a <span className="font-mono">pipeline.yml</span> and an empty <span className="font-mono">assets/</span> folder.
+          </DialogDescription>
+        </DialogHeader>
+        <div className="grid gap-4">
+          <div className="grid gap-2">
+            <Label htmlFor="new-pipeline-path">Directory</Label>
+            <Input
+              id="new-pipeline-path"
+              className="font-mono"
+              placeholder="marketing_pipeline"
+              value={path}
+              onChange={(event) => setPath(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === "Enter" && !creating) {
+                  void create();
+                }
+              }}
+              autoFocus
+            />
+          </div>
+          <div className="grid gap-2">
+            <Label htmlFor="new-pipeline-name">Display name (optional)</Label>
+            <Input
+              id="new-pipeline-name"
+              placeholder="Marketing"
+              value={name}
+              onChange={(event) => setName(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === "Enter" && !creating) {
+                  void create();
+                }
+              }}
+            />
+          </div>
+          {error ? (
+            <div className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700 dark:border-red-500/25 dark:bg-red-500/10 dark:text-red-300">{error}</div>
+          ) : null}
+        </div>
+        <DialogFooter>
+          <Button variant="outline" onClick={() => onOpenChange(false)} disabled={creating}>Cancel</Button>
+          <Button onClick={() => void create()} disabled={creating}>
+            {creating ? <Spinner className="size-4" /> : <CheckCircle2 className="size-4" />}Create
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+// NewFolderDialog asks for a folder (prefix) name and chains into the asset
+// dialog: folders are asset-name prefixes (assets/<folder>/), so a folder
+// appears once its first asset is created inside it.
+function NewFolderDialog({
+  open,
+  onOpenChange,
+  pipelineName,
+  onConfirm,
+}: {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  pipelineName?: string;
+  onConfirm: (prefix: string) => void;
+}) {
+  const [folder, setFolder] = useState("");
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    if (open) {
+      setFolder("");
+      setError("");
+    }
+  }, [open]);
+
+  const confirm = () => {
+    const trimmed = folder.trim().replace(/^\.+|\.+$/g, "");
+    if (!trimmed) {
+      setError("Folder name is required.");
+      return;
+    }
+    if (!/^[a-z0-9_]+(\.[a-z0-9_]+)*$/i.test(trimmed)) {
+      setError("Use letters, digits and underscores; separate nested folders with dots.");
+      return;
+    }
+    onConfirm(trimmed);
+  };
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="max-w-md">
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2"><FolderPlus className="size-4 text-primary" />New folder</DialogTitle>
+          <DialogDescription>
+            Folders group assets under <span className="font-mono">assets/&lt;folder&gt;/</span>{pipelineName ? <> in <span className="font-mono">{pipelineName}</span></> : null}. The folder is created together with its first asset.
+          </DialogDescription>
+        </DialogHeader>
+        <div className="grid gap-2">
+          <Label htmlFor="new-folder-name">Folder name</Label>
+          <Input
+            id="new-folder-name"
+            className="font-mono"
+            placeholder="analytics"
+            value={folder}
+            onChange={(event) => setFolder(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === "Enter") {
+                confirm();
+              }
+            }}
+            autoFocus
+          />
+          {error ? (
+            <div className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700 dark:border-red-500/25 dark:bg-red-500/10 dark:text-red-300">{error}</div>
+          ) : null}
+        </div>
+        <DialogFooter>
+          <Button variant="outline" onClick={() => onOpenChange(false)}>Cancel</Button>
+          <Button onClick={confirm}>
+            <FolderPlus className="size-4" />Choose first asset
           </Button>
         </DialogFooter>
       </DialogContent>
@@ -2461,39 +2750,25 @@ function DeployButton({ deployState }: { deployState: PipelineDeployState }) {
   );
 }
 
-type BuildStaleProgress = "pending" | "running" | "done" | "failed";
+type BuildStaleProgress = "pending" | "running" | "done" | "failed" | "skipped";
 
-// BuildStaleDialog compiles the stale set into a build plan: every stale
-// asset, and for partially-covered incrementals exactly the uncovered gap
-// intervals. Building runs the real materialize stream per asset/gap.
+// BuildStaleDialog previews the stale set and hands the whole build to the
+// server, which recomputes the plan (every stale asset; for partially-covered
+// incrementals exactly the uncovered gap intervals), builds it in dependency
+// order as one streamed run, and reports per-asset progress events back here.
 function BuildStaleDialog({
   open,
   onOpenChange,
   staleAssets,
-  pipelineAssets,
-  onBuildAsset,
-  onCompleted,
+  onBuild,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   staleAssets: AssetStaleness[];
-  pipelineAssets: BuildAsset[];
-  onBuildAsset: (
-    assetId: string,
-    options: { assetName?: string; timeWindow?: { start: string; end: string } | null }
-  ) => Promise<MaterializeStreamPayload | null>;
-  onCompleted: () => void;
+  onBuild: (onAssetEvent: (event: StreamAssetEvent) => void) => Promise<MaterializeStreamPayload | null>;
 }) {
   const [progress, setProgress] = useState<Record<string, BuildStaleProgress>>({});
   const [building, setBuilding] = useState(false);
-
-  const assetIdByName = useMemo(() => {
-    const map = new Map<string, string>();
-    for (const asset of pipelineAssets) {
-      map.set(asset.name, asset.id);
-    }
-    return map;
-  }, [pipelineAssets]);
 
   useEffect(() => {
     if (!open) {
@@ -2504,31 +2779,26 @@ function BuildStaleDialog({
 
   const buildAll = async () => {
     setBuilding(true);
-    for (const stale of staleAssets) {
-      const encodedAssetId = assetIdByName.get(stale.asset_name);
-      if (!encodedAssetId) continue;
-      setProgress((current) => ({ ...current, [stale.asset_name]: "running" }));
-      try {
-        // A null window means "build the whole asset"; gaps build only the
-        // uncovered intervals. Each build streams into the materialize history
-        // panel via onBuildAsset so progress is visible in the output.
-        const windows: ({ start: string; end: string } | null)[] = stale.gaps?.length
-          ? stale.gaps.map((gap) => ({ start: gap.start, end: gap.end }))
-          : [null];
-        let failed = false;
-        for (const timeWindow of windows) {
-          const result = await onBuildAsset(encodedAssetId, { assetName: stale.asset_name, timeWindow });
-          if (!result || result.status !== "ok") {
-            failed = true;
-          }
+    setProgress({});
+    try {
+      await onBuild((event) => {
+        if (!event.asset_name || !event.status) {
+          return;
         }
-        setProgress((current) => ({ ...current, [stale.asset_name]: failed ? "failed" : "done" }));
-      } catch {
-        setProgress((current) => ({ ...current, [stale.asset_name]: "failed" }));
-      }
+        const mapped: BuildStaleProgress =
+          event.status === "running"
+            ? "running"
+            : event.status === "succeeded"
+              ? "done"
+              : event.status === "skipped"
+                ? "skipped"
+                : "failed";
+        const assetName = event.asset_name;
+        setProgress((current) => ({ ...current, [assetName]: mapped }));
+      });
+    } finally {
+      setBuilding(false);
     }
-    setBuilding(false);
-    onCompleted();
   };
 
   return (
@@ -2537,7 +2807,7 @@ function BuildStaleDialog({
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2"><Hammer className="size-4 text-primary" />Build stale assets</DialogTitle>
           <DialogDescription>
-            {staleAssets.length} asset{staleAssets.length === 1 ? "" : "s"} out of date for this environment and time range. Partial incrementals rebuild only the uncovered gaps.
+            {staleAssets.length} asset{staleAssets.length === 1 ? "" : "s"} out of date for this environment and time range. The server builds them in dependency order as one run; partial incrementals rebuild only the uncovered gaps.
           </DialogDescription>
         </DialogHeader>
         <div className="max-h-80 space-y-1 overflow-y-auto">
@@ -2550,6 +2820,7 @@ function BuildStaleDialog({
               ) : null}
               {progress[stale.asset_name] === "running" ? <span className="text-[10px] text-sky-600">building…</span> : null}
               {progress[stale.asset_name] === "done" ? <Check className="size-3.5 text-emerald-600" /> : null}
+              {progress[stale.asset_name] === "skipped" ? <span className="text-[10px] text-muted-foreground" title="Skipped: a stale upstream failed">skipped</span> : null}
               {progress[stale.asset_name] === "failed" ? <XCircle className="size-3.5 text-red-600" /> : null}
             </div>
           ))}

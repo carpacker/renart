@@ -3,6 +3,7 @@ import {
   AlertTriangle,
   CheckCircle2,
   Circle,
+  History,
   Loader2,
   MoreHorizontal,
   XCircle,
@@ -244,24 +245,43 @@ export function AssetNode({
         )}
       </div>
       <div className="space-y-2 p-2.5">
-        <p className="truncate text-[11px] text-muted-foreground" title={asset.parseError}>
-          {hasParseError ? asset.parseError : asset.description}
-        </p>
-        <div className="flex items-center justify-between gap-1.5">
+        {hasParseError ? (
+          <p className="truncate text-[11px] text-muted-foreground" title={asset.parseError}>{asset.parseError}</p>
+        ) : asset.description ? (
+          <p className="truncate text-[11px] text-muted-foreground">{asset.description}</p>
+        ) : null}
+        {/* One status row: freshness is the (only) colored badge; the last
+            build is a muted timestamp so two green pills never sit side by
+            side. Live run states (running/failed) replace the timestamp. */}
+        <div className="flex items-center gap-1.5">
           {hasParseError ? (
-            <span className="inline-flex items-center gap-1 truncate rounded bg-red-100 px-1.5 py-0.5 text-[10px] text-red-700 dark:bg-red-500/15 dark:text-red-300">
-              <AlertTriangle className="size-2.5" />
+            <span className="inline-flex min-w-0 flex-1 items-center gap-1 truncate rounded bg-red-100 px-1.5 py-0.5 text-[10px] text-red-700 dark:bg-red-500/15 dark:text-red-300">
+              <AlertTriangle className="size-2.5 shrink-0" />
               Parse error
             </span>
           ) : (
-            <span className={cn("truncate rounded px-1.5 py-0.5 text-[10px]", statusMeta.className)}>
-              {statusMeta.label} · {asset.materializedAt}
-            </span>
+            <>
+              <StalenessBadge staleness={asset.staleness} className="shrink-0" />
+              {asset.status === "pending" || asset.status === "failed" || asset.status === "overdue" ? (
+                <span
+                  className={cn("shrink-0 truncate rounded px-1.5 py-0.5 text-[10px]", statusMeta.className)}
+                  title={asset.materializedAt ? `Last build: ${asset.materializedAt}` : undefined}
+                >
+                  {statusMeta.label}
+                </span>
+              ) : asset.materializedAt ? (
+                <span
+                  className="inline-flex min-w-0 items-center gap-1 truncate text-[10px] text-muted-foreground"
+                  title={`Last built: ${asset.materializedAt}`}
+                >
+                  <History className="size-2.5 shrink-0" />
+                  <span className="truncate">{asset.materializedAt}</span>
+                </span>
+              ) : null}
+              <span className="min-w-0 flex-1" />
+            </>
           )}
-          <div className="flex items-center gap-1.5">
-            {!hasParseError ? <StalenessBadge staleness={asset.staleness} /> : null}
-            <IntegrationBadge name={asset.integration} />
-          </div>
+          <IntegrationBadge name={asset.integration} />
         </div>
       </div>
     </div>

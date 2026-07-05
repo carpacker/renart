@@ -92,7 +92,18 @@ the downstream cone), `RunCompleted` (flip the touched assets).
 | `missing` | log says fresh, async verification couldn't find the table |
 
 Unsaved editor buffers get a purely-frontend "modified" dot; the service only
-sees saved state. The Build-stale action compiles the stale set into a plan.
+sees saved state.
+
+The Build-stale action is server-side: `POST
+/api/pipelines/{id}/build-stale/stream` (`httpapi/build_stale.go`) recomputes
+the stale set for the selection, compiles it into a plan (every non-fresh
+asset; for partials exactly the uncovered gap intervals), and
+`ExecutionService.MaterializeStaleAssetsStream` builds it in topological order
+as one SSE-streamed run — one combined log, per-asset `asset` progress events,
+one `RunCompleted` bus emit per built window (so coverage and achieved
+fingerprints reflect exactly what ran, and downstreams built later in the same
+plan already see the fresh upstream fingerprints). Assets downstream of a
+failed plan member are skipped rather than built stale.
 
 ## 5. Snapshots and deploy (`internal/web/snapshot`, `renart deploy`)
 
