@@ -112,6 +112,7 @@ export function NotebookCellMonaco({
   onRun,
   onRename,
   onGoToAsset,
+  onGoToCell,
 }: {
   cell: WebAsset;
   value: string;
@@ -123,6 +124,7 @@ export function NotebookCellMonaco({
   onRun: () => void;
   onRename: () => void;
   onGoToAsset?: (pipelineId: string, assetId: string) => void;
+  onGoToCell?: (cellId: string) => void;
 }) {
   const { monacoTheme } = useWorkspaceTheme();
   const [monacoInstance, setMonacoInstance] = useState<Monaco | null>(null);
@@ -150,15 +152,16 @@ export function NotebookCellMonaco({
     onGoToAsset,
     undefined,
     // The SQL language server below owns diagnostics and decorations, same
-    // split as the asset editor; intellisense keeps schema-aware completion.
+    // split as the asset editor; the shared global providers stay on so cells
+    // get schema-aware table/column completion (sibling cells + pipeline
+    // assets from schemaTables) exactly like the asset editor.
     {
-      registerGlobalProviders: false,
       registerLegacyDiagnosticProviders: false,
       registerParseContextMarkers: false,
       registerSemanticDecorations: false,
     },
   );
-  useSQLLSP(sqlMonaco, sqlEditor, cell, value, schemaTables, onGoToAsset);
+  useSQLLSP(sqlMonaco, sqlEditor, cell, value, schemaTables, onGoToAsset, onGoToCell);
   useJinjaIntellisense(sqlMonaco, sqlEditor, cell, value);
   useVizIntellisense(sqlMonaco, sqlEditor, value, resultColumns);
 

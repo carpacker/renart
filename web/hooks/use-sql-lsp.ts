@@ -43,6 +43,9 @@ export function useSQLLSP(
   sqlContent: string,
   schemaTables: SchemaTable[],
   onGoToAsset?: (pipelineId: string, assetId: string) => void,
+  // Notebook cells resolve to sibling cells too; those have no pipeline, so
+  // navigation goes through this callback (scroll/focus the cell card).
+  onGoToCell?: (cellId: string) => void,
 ) {
   const workspace = useAtomValue(workspaceAtom);
   const selectedEnvironment = useAtomValue(selectedEnvironmentAtom);
@@ -264,8 +267,13 @@ export function useSQLLSP(
           return;
         }
         const target = findWorkspaceAsset(workspace, assetLocation.asset_id);
-        if (target?.pipeline && target.asset.id !== asset.id) {
+        if (!target || target.asset.id === asset.id) {
+          return;
+        }
+        if (target.pipeline) {
           onGoToAsset?.(target.pipeline.id, target.asset.id);
+        } else if (target.asset.cell_id) {
+          onGoToCell?.(target.asset.cell_id);
         }
       }).catch(() => undefined);
     });
@@ -447,6 +455,7 @@ export function useSQLLSP(
     loadRemoteTables,
     monaco,
     onGoToAsset,
+    onGoToCell,
     parseContext,
     schemaTables,
     selectedEnvironment,

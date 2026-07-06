@@ -455,6 +455,23 @@ export function RedesignNotebookLivePage({ notebookId }: { notebookId: string })
     [mutate, notebookId]
   );
 
+  // Ctrl+Click / F12 targets: pipeline assets open in the build page, sibling
+  // cells scroll into view within this notebook.
+  const goToAsset = useCallback(
+    (pipelineId: string, assetId: string) => {
+      void navigate({
+        to: "/redesign/pipelines/$pipelineId/assets/$assetId/canvas",
+        params: { pipelineId, assetId },
+      });
+    },
+    [navigate]
+  );
+  const goToCell = useCallback((cellId: string) => {
+    document
+      .querySelector(`[data-notebook-cell-id="${cellId}"]`)
+      ?.scrollIntoView({ behavior: "smooth", block: "center" });
+  }, []);
+
   const pipelines = workspace?.pipelines ?? [];
   const promoteCell = useCallback(
     (cell: WebAsset) => {
@@ -629,8 +646,8 @@ export function RedesignNotebookLivePage({ notebookId }: { notebookId: string })
                   return null;
                 }
                 return (
+                  <div key={block.cell} data-notebook-cell-id={block.cell}>
                   <NotebookCellCard
-                    key={block.cell}
                     cell={cell}
                     cells={notebook.cells}
                     dependencies={dependencies}
@@ -655,7 +672,10 @@ export function RedesignNotebookLivePage({ notebookId }: { notebookId: string })
                     onSaveBody={(body) => saveCellBody(cell, body)}
                     autoCommit={autoRecompute}
                     pendingAuto={autoPending.has(block.cell ?? "")}
+                    onGoToAsset={goToAsset}
+                    onGoToCell={goToCell}
                   />
+                  </div>
                 );
               })()
             ) : (
@@ -728,6 +748,8 @@ function NotebookCellCard({
   onSaveBody,
   autoCommit,
   pendingAuto,
+  onGoToAsset,
+  onGoToCell,
 }: {
   cell: WebAsset;
   cells: WebAsset[];
@@ -750,6 +772,8 @@ function NotebookCellCard({
   autoCommit: boolean;
   /** Stale, but auto-recompute will refresh it on its own — don't flag it stale. */
   pendingAuto: boolean;
+  onGoToAsset?: (pipelineId: string, assetId: string) => void;
+  onGoToCell?: (cellId: string) => void;
 }) {
   const workspace = useAtomValue(workspaceAtom);
   const selectedEnvironment = useAtomValue(selectedEnvironmentAtom);
@@ -936,6 +960,8 @@ function NotebookCellCard({
           onCommit={commit}
           onRun={onRun}
           onRename={() => setRenaming(true)}
+          onGoToAsset={onGoToAsset}
+          onGoToCell={onGoToCell}
         />
         <MissingPythonDepsBanner missingImports={missingDeps} onAddDependency={onAddDependency} />
         {result?.status === "error" ? (
