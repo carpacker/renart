@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/bruin-data/bruin/pkg/config"
+	"github.com/bruin-data/bruin/pkg/pipeline"
 	"github.com/spf13/afero"
 	"renart/internal/web/identity"
 	"renart/internal/web/policy"
@@ -25,6 +26,10 @@ type WorkspaceConfigFieldDef struct {
 type WorkspaceConfigConnectionType struct {
 	TypeName string                    `json:"type_name"`
 	Fields   []WorkspaceConfigFieldDef `json:"fields"`
+	// Category is "warehouse" for connection types that can run SQL assets;
+	// everything else (ingestr source connections, SaaS APIs) is "source".
+	// The UI hides "source" types unless the ingestr feature is enabled.
+	Category string `json:"category"`
 }
 
 type WorkspaceConfigConnection struct {
@@ -53,6 +58,7 @@ type WorkspaceConfigResponse struct {
 	SelectedEnvironment string                          `json:"selected_environment,omitempty"`
 	Environments        []WorkspaceConfigEnvironment    `json:"environments"`
 	ConnectionTypes     []WorkspaceConfigConnectionType `json:"connection_types"`
+	Features            map[string]bool                 `json:"features,omitempty"`
 	ParseError          string                          `json:"parse_error,omitempty"`
 }
 
@@ -127,6 +133,32 @@ func (s *ConfigService) RenameProject(name string) (identity.Project, error) {
 	return project, nil
 }
 
+// SetProjectFeatures merges the given feature flags into .renart/project.yml.
+func (s *ConfigService) SetProjectFeatures(features map[string]bool) (identity.Project, error) {
+	fs := afero.NewOsFs()
+	project, err := identity.EnsureProject(fs, s.projectYmlPath(), s.defaultProjectName())
+	if err != nil {
+		return identity.Project{}, err
+	}
+	if project.Features == nil {
+		project.Features = map[string]bool{}
+	}
+	for name, enabled := range features {
+		if enabled {
+			project.Features[name] = true
+		} else {
+			delete(project.Features, name)
+		}
+	}
+	if len(project.Features) == 0 {
+		project.Features = nil
+	}
+	if err := identity.SaveProject(fs, s.projectYmlPath(), project); err != nil {
+		return identity.Project{}, err
+	}
+	return project, nil
+}
+
 func (s *ConfigService) LoadForEditing() (*config.Config, string, error) {
 	cfg, err := config.LoadOrCreateWithoutPathAbsolutization(afero.NewOsFs(), s.configPath)
 	if err != nil {
@@ -164,6 +196,7 @@ func (s *ConfigService) BuildResponse(configPath string, cfg *config.Config) Wor
 		SelectedEnvironment: cfg.SelectedEnvironmentName,
 		Environments:        []WorkspaceConfigEnvironment{},
 		ConnectionTypes:     BuildWorkspaceConfigConnectionTypes(),
+		Features:            project.Features,
 	}
 
 	environmentNames := cfg.GetEnvironmentNames()
@@ -190,6 +223,7 @@ func (s *ConfigService) BuildParseErrorResponse(parseErr error) WorkspaceConfigR
 		ProjectName:     project.Name,
 		Environments:    []WorkspaceConfigEnvironment{},
 		ConnectionTypes: BuildWorkspaceConfigConnectionTypes(),
+		Features:        project.Features,
 		ParseError:      parseErr.Error(),
 	}
 }
@@ -334,7 +368,22 @@ func (s *ConfigService) prepareDraftConnection(cfg *config.Config, params TestWo
 	return cfg.AddConnection(environmentName, name, typeName, values)
 }
 
+// warehouseConnectionTypes is the set of connection types that can run SQL
+// assets, derived from bruin's asset-type→connection mapping. These are the
+// connection types the UI always offers; the rest are ingestr/SaaS source
+// connections hidden behind the ingestr feature flag.
+func warehouseConnectionTypes() map[string]bool {
+	out := map[string]bool{}
+	for assetType, connectionType := range pipeline.AssetTypeConnectionMapping {
+		if strings.HasSuffix(string(assetType), ".sql") {
+			out[connectionType] = true
+		}
+	}
+	return out
+}
+
 func BuildWorkspaceConfigConnectionTypes() []WorkspaceConfigConnectionType {
+	warehouse := warehouseConnectionTypes()
 	connectionsType := reflect.TypeFor[config.Connections]()
 	items := make([]WorkspaceConfigConnectionType, 0, connectionsType.NumField())
 	for index := 0; index < connectionsType.NumField(); index++ {
@@ -359,9 +408,14 @@ func BuildWorkspaceConfigConnectionTypes() []WorkspaceConfigConnectionType {
 			continue
 		}
 
+		category := "source"
+		if warehouse[typeName] {
+			category = "warehouse"
+		}
 		items = append(items, WorkspaceConfigConnectionType{
 			TypeName: typeName,
 			Fields:   buildWorkspaceConfigFieldDefs(elementType),
+			Category: category,
 		})
 	}
 

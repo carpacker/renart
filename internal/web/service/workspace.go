@@ -152,6 +152,10 @@ func (s *WorkspaceService) ComputeState(ctx context.Context) (model.WorkspaceSta
 		}
 	}
 
+	if project, projectErr := identity.LoadProject(fs, filepath.Join(s.workspaceRoot, ".renart", "project.yml")); projectErr == nil {
+		state.Features = project.Features
+	}
+
 	if policyConfig, policyErr := policy.Load(filepath.Join(s.workspaceRoot, ".renart", "environments.yml")); policyErr == nil && len(policyConfig.Environments) > 0 {
 		state.EnvironmentPolicies = make(map[string]model.EnvironmentPolicy, len(policyConfig.Environments))
 		for name, envPolicy := range policyConfig.Environments {

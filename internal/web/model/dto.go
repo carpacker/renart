@@ -120,7 +120,10 @@ type WorkspaceState struct {
 	Connections         map[string]string            `json:"connections"`
 	SelectedEnvironment string                       `json:"selected_environment"`
 	EnvironmentPolicies map[string]EnvironmentPolicy `json:"environment_policies,omitempty"`
-	Errors              []string                     `json:"errors"`
+	// Features are project-scoped feature flags from .renart/project.yml
+	// (e.g. "ingestr" re-enables ingestr surfaces in the UI).
+	Features map[string]bool `json:"features,omitempty"`
+	Errors   []string        `json:"errors"`
 	UpdatedAt           time.Time                    `json:"updated_at"`
 	Metadata            map[string][]string          `json:"metadata"`
 	Revision            int64                        `json:"revision,omitempty"`

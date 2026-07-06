@@ -27,6 +27,7 @@ import {
 } from "@/lib/asset-provenance";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { NON_SQL_ASSET_TYPES, SQL_ASSET_TYPES } from "@/lib/asset-types";
+import { useIngestrEnabled } from "@/lib/features";
 import { cn } from "@/lib/utils";
 import { WebAsset, WebColumn } from "@/lib/types";
 
@@ -83,9 +84,13 @@ function GuidedCard({
 // --- Identity card (§14.1) ---
 
 function IdentityCard({ asset, pipelineId }: { asset: WebAsset; pipelineId: string }) {
+  const ingestrEnabled = useIngestrEnabled();
   const assetTypes = useMemo(
-    () => Array.from(new Set([...SQL_ASSET_TYPES, ...NON_SQL_ASSET_TYPES, asset.type])).sort(),
-    [asset.type]
+    () =>
+      Array.from(new Set([...SQL_ASSET_TYPES, ...NON_SQL_ASSET_TYPES, asset.type]))
+        .filter((type) => ingestrEnabled || type !== "ingestr" || type === asset.type)
+        .sort(),
+    [asset.type, ingestrEnabled]
   );
 
   return (

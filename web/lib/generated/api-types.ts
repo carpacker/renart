@@ -86,6 +86,7 @@ export type WorkspaceState = {
   connections: Record<string, string>;
   selected_environment: string;
   environment_policies?: Record<string, EnvironmentPolicy>;
+  features?: Record<string, boolean>;
   errors: string[];
   updated_at: string;
   metadata: Record<string, string[]>;
@@ -110,6 +111,7 @@ export type WorkspaceConfigFieldDef = {
 export type WorkspaceConfigConnectionType = {
   type_name: string;
   fields: WorkspaceConfigFieldDef[];
+  category: string;
 };
 
 export type WorkspaceConfigConnection = {
@@ -135,6 +137,7 @@ export type WorkspaceConfigResponse = {
   selected_environment?: string;
   environments: WorkspaceConfigEnvironment[];
   connection_types: WorkspaceConfigConnectionType[];
+  features?: Record<string, boolean>;
   parse_error?: string;
 };
 

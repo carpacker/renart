@@ -64,6 +64,23 @@ func pipelineIDFromYAML(content []byte) string {
 type Project struct {
 	ID   string `yaml:"id"`
 	Name string `yaml:"name,omitempty"`
+	// Features are project-scoped feature flags (e.g. "ingestr" re-enables
+	// the ingestr connection types and asset options for bruin users).
+	Features map[string]bool `yaml:"features,omitempty"`
+}
+
+// LoadProject reads .renart/project.yml without side effects (no UUID
+// self-assignment, no writes). Missing or unparsable files return an error.
+func LoadProject(fs afero.Fs, projectYmlPath string) (Project, error) {
+	content, err := afero.ReadFile(fs, projectYmlPath)
+	if err != nil {
+		return Project{}, err
+	}
+	var project Project
+	if err := yaml.Unmarshal(content, &project); err != nil {
+		return Project{}, fmt.Errorf("parse %s: %w", projectYmlPath, err)
+	}
+	return project, nil
 }
 
 // EnsureProject returns the project identity from projectYmlPath,

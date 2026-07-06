@@ -47,6 +47,7 @@ import { useWorkspaceConnectionForm } from "@/hooks/use-workspace-connection-for
 import { useWorkspaceEnvironmentForm } from "@/hooks/use-workspace-environment-form";
 import { useWorkspaceSettingsData } from "@/hooks/use-workspace-settings-data";
 import { testWorkspaceConnection } from "@/lib/api";
+import { useIngestrEnabled, visibleConnectionTypes } from "@/lib/features";
 import type { EnvironmentPolicy } from "@/lib/generated/api-types";
 import { buildConnectionFieldDefaults } from "@/lib/settings-form-utils";
 import type { WorkspaceConfigConnection, WorkspaceConfigEnvironment } from "@/lib/types";
@@ -228,6 +229,25 @@ export function RedesignProjectGeneralPage() {
           <ReadonlyField label="Workspace path" value={workspaceConfig?.workspace_path || "Loading..."} mono />
           <ReadonlyField label="Config file" value={workspaceConfig?.path || ".bruin.yml"} mono />
         </PlainFieldGroup>
+      </SettingsCard>
+      <SettingsCard title="Features">
+        <div className="flex items-center justify-between gap-4">
+          <div>
+            <Label>Ingestr sources</Label>
+            <p className="mt-1 text-xs text-muted-foreground">
+              Offer ingestr source connection types and asset options. Off by default;
+              pipelines that already contain ingestr assets keep working either way.
+            </p>
+          </div>
+          <Switch
+            checked={Boolean(workspaceConfig?.features?.ingestr)}
+            disabled={workspaceConfigBusy || workspaceConfigLoading}
+            onCheckedChange={(checked) =>
+              void handleUpdateWorkspaceProject({ features: { ingestr: checked } })
+            }
+            aria-label="Enable ingestr sources"
+          />
+        </div>
       </SettingsCard>
       <SettingsCard
         title="Default environment"
@@ -698,12 +718,27 @@ function ConnectionSheet({
     workspaceConfigStatusTone,
   } = settings;
   const mode = state?.mode ?? "edit";
+  const ingestrEnabled = useIngestrEnabled(workspaceConfig);
   // Stable identity matters: this array is an effect dependency inside
   // useWorkspaceConnectionForm, and a fresh [] per render loops the effect.
-  const connectionTypes = useMemo(
-    () => workspaceConfig?.connection_types ?? [],
-    [workspaceConfig?.connection_types]
-  );
+  // Ingestr/SaaS source types are hidden unless the feature is on, but the
+  // type of the connection being edited always stays selectable.
+  const editedConnectionType = state?.mode === "edit"
+    ? workspaceConfig?.environments
+        ?.find((environment) => environment.name === state.environment)
+        ?.connections.find((connection) => connection.name === state.connection)?.type
+    : undefined;
+  const connectionTypes = useMemo(() => {
+    const all = workspaceConfig?.connection_types ?? [];
+    const visible = visibleConnectionTypes(all, ingestrEnabled);
+    if (editedConnectionType && !visible.some((type) => type.type_name === editedConnectionType)) {
+      const edited = all.find((type) => type.type_name === editedConnectionType);
+      if (edited) {
+        return [...visible, edited];
+      }
+    }
+    return visible;
+  }, [editedConnectionType, ingestrEnabled, workspaceConfig?.connection_types]);
   const [validateBusy, setValidateBusy] = useState(false);
   const [validateMessage, setValidateMessage] = useState<string | null>(null);
   const [validateTone, setValidateTone] = useState<"error" | "success" | null>(null);

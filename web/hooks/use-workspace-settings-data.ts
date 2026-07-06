@@ -135,10 +135,10 @@ export function useWorkspaceSettingsData() {
   );
 
   const handleUpdateWorkspaceProject = useCallback(
-    (input: { name: string }) =>
+    (input: { name?: string; features?: Record<string, boolean> }) =>
       runWorkspaceConfigMutation(
         () => updateWorkspaceProject(input),
-        `Project renamed to "${input.name}".`
+        input.name ? `Project renamed to "${input.name}".` : "Project settings updated."
       ),
     [runWorkspaceConfigMutation]
   );

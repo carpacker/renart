@@ -61,7 +61,8 @@ type DeleteWorkspaceConnectionRequest struct {
 }
 
 type UpdateWorkspaceProjectRequest struct {
-	Name string `json:"name"`
+	Name     string          `json:"name"`
+	Features map[string]bool `json:"features,omitempty"`
 }
 
 type TestWorkspaceConnectionRequest struct {
@@ -104,14 +105,22 @@ func (h *ConfigHandlers) HandleUpdateWorkspaceProject(w http.ResponseWriter, r *
 		return
 	}
 	name := strings.TrimSpace(req.Name)
-	if name == "" {
-		webapi.WriteBadRequest(w, "missing_project_name", "project name is required")
+	if name == "" && req.Features == nil {
+		webapi.WriteBadRequest(w, "missing_project_name", "project name or features are required")
 		return
 	}
 
-	if _, err := h.Service.RenameProject(name); err != nil {
-		webapi.WriteInternalError(w, "project_rename_failed", err.Error())
-		return
+	if name != "" {
+		if _, err := h.Service.RenameProject(name); err != nil {
+			webapi.WriteInternalError(w, "project_rename_failed", err.Error())
+			return
+		}
+	}
+	if req.Features != nil {
+		if _, err := h.Service.SetProjectFeatures(req.Features); err != nil {
+			webapi.WriteInternalError(w, "project_update_failed", err.Error())
+			return
+		}
 	}
 	if h.Publisher != nil {
 		h.Publisher.ConfigChanged(r.Context(), ".renart/project.yml", "config.updated")

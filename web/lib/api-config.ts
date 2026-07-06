@@ -9,7 +9,8 @@ export async function getWorkspaceConfig(): Promise<WorkspaceConfigResponse> {
 }
 
 export async function updateWorkspaceProject(input: {
-  name: string;
+  name?: string;
+  features?: Record<string, boolean>;
 }): Promise<WorkspaceConfigResponse> {
   return fetchJSONWithBody<WorkspaceConfigResponse>("/api/config/project", "PUT", input);
 }

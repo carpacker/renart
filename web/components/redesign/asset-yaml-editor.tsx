@@ -29,6 +29,7 @@ import { updateAssetColumns } from "@/lib/api-assets-columns";
 import { getSQLTableColumns } from "@/lib/api-sql-discovery";
 import { classifyDependencies, parseAssetProvenance } from "@/lib/asset-provenance";
 import { NON_SQL_ASSET_TYPES, SQL_ASSET_TYPES } from "@/lib/asset-types";
+import { useIngestrEnabled } from "@/lib/features";
 import { selectedEnvironmentAtom, workspaceAtom } from "@/lib/atoms/workspace";
 import { WebAsset, WebColumn } from "@/lib/types";
 
@@ -203,9 +204,13 @@ export function RemoveButton({ label, onClick }: { label: string; onClick: () =>
 // --- Sections ---
 
 function IdentitySection({ asset, pipelineId }: { asset: WebAsset; pipelineId: string }) {
+  const ingestrEnabled = useIngestrEnabled();
   const assetTypes = useMemo(
-    () => Array.from(new Set([...SQL_ASSET_TYPES, ...NON_SQL_ASSET_TYPES, asset.type])).sort(),
-    [asset.type]
+    () =>
+      Array.from(new Set([...SQL_ASSET_TYPES, ...NON_SQL_ASSET_TYPES, asset.type]))
+        .filter((type) => ingestrEnabled || type !== "ingestr" || type === asset.type)
+        .sort(),
+    [asset.type, ingestrEnabled]
   );
   const tags = asset.tags ?? [];
 
