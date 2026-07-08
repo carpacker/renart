@@ -65,6 +65,8 @@ test.describe("app build editor live", () => {
     liveApp,
     page,
   }) => {
+    test.skip(test.info().project.name.includes("mobile"), "Ctrl+click navigation is a desktop mouse/keyboard affordance.");
+
     await writeFile(
       join(
         liveApp.workspaceDir,

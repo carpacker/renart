@@ -35,16 +35,24 @@ test.describe("app materialization status live", () => {
     await expect(page.getByLabel("Execution context")).toBeVisible({ timeout: 15000 });
     await expect(page.getByLabel("Time range")).toHaveCount(0);
     await expect(page.getByText("slow_status", { exact: true })).toBeVisible({ timeout: 15000 });
+    const slowStatusAssetId = Buffer.from("analytics/assets/analytics/slow_status.sql").toString("base64url");
+    const slowStatusNode = page.getByTestId(`rf__node-${slowStatusAssetId}`);
 
     const triggerResponse = await triggerAnalyticsPipeline(liveApp, request);
 
-    await expect(page.getByText("Running · running").first()).toBeVisible({ timeout: 30000 });
+    await expect(slowStatusNode.getByText("Running", { exact: true })).toBeVisible({ timeout: 30000 });
 
     const detail = await waitForRunDetail(liveApp, request, triggerResponse.run.id, (current) => ["success", "failed", "cancelled"].includes(current.run.status));
-    expect(detail.steps?.some((step) => step.asset === "analytics.slow_status")).toBe(true);
+    const slowStatusStep = detail.steps?.find((step) => step.asset === "analytics.slow_status");
+    expect(slowStatusStep).toBeTruthy();
 
-    await expect(page.getByText("Running · running")).toHaveCount(0, { timeout: 30000 });
-    await expect(page.locator("span:visible", { hasText: /^(Materialized|Failed) · / }).first()).toBeVisible({ timeout: 30000 });
+    await expect(slowStatusNode.getByText("Running", { exact: true })).toHaveCount(0, { timeout: 30000 });
+    if (slowStatusStep?.status === "success") {
+      await expect(slowStatusNode.getByText("no run yet", { exact: true })).toHaveCount(0, { timeout: 30000 });
+      await expect(slowStatusNode.locator('[title^="Last built:"]').first()).toBeVisible({ timeout: 30000 });
+    } else {
+      await expect(slowStatusNode.getByText("Failed", { exact: true })).toBeVisible({ timeout: 30000 });
+    }
   });
 });
 

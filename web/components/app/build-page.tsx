@@ -1191,7 +1191,16 @@ function BuildTopBar({
       >
         {inspectorCollapsed ? <PanelRightOpen className="size-3.5" /> : <PanelRightClose className="size-3.5" />}
       </Button>
-      <Button variant="ghost" size="sm" className="xl:hidden" onClick={onOpenInspector}><PanelRight className="size-3.5" /></Button>
+      <Button
+        variant="ghost"
+        size="sm"
+        className="xl:hidden"
+        onClick={onOpenInspector}
+        title="Asset properties"
+        aria-label="Asset properties"
+      >
+        <PanelRight className="size-3.5" />
+      </Button>
     </div>
   );
 }
@@ -2205,8 +2214,8 @@ function Inspector({ asset }: { asset: BuildAsset }) {
   const subtitle = [prefix, asset.type ?? asset.integration].filter(Boolean).join(" · ");
 
   return (
-    <div className="flex h-full min-h-0 flex-col">
-      <div className="flex shrink-0 items-center gap-2 border-b px-3 py-2">
+    <div data-testid="asset-inspector" className="flex h-full min-h-0 flex-col">
+      <div className="flex shrink-0 items-center gap-2 border-b px-3 py-2 pr-12">
         <Sliders className="size-4 shrink-0 text-primary" />
         <div className="min-w-0 flex-1">
           <div className="truncate font-monaco text-[13px] font-medium">{title}</div>

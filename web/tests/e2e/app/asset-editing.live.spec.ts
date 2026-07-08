@@ -1,4 +1,4 @@
-import { expect } from "@playwright/test";
+import { expect, type Locator, type Page } from "@playwright/test";
 
 import { liveTest as test, type LiveApp } from "../live-app-fixture";
 
@@ -46,6 +46,20 @@ async function pollAsset(
   return found;
 }
 
+async function openAssetProperties(page: Page): Promise<Locator> {
+  const inspector = page.locator('[data-testid="asset-inspector"]:visible').first();
+  if (!(await inspector.isVisible().catch(() => false))) {
+    const trigger = page
+      .getByRole("button", { name: "Asset properties" })
+      .or(page.getByRole("button", { name: "Show properties" }))
+      .first();
+    await expect(trigger).toBeVisible({ timeout: 15000 });
+    await trigger.click();
+  }
+  await expect(inspector).toBeVisible({ timeout: 15000 });
+  return inspector;
+}
+
 test.describe("app asset editing workbench live", () => {
   test.use({ fixtureName: "configured-workspace" });
 
@@ -53,29 +67,27 @@ test.describe("app asset editing workbench live", () => {
     await page.goto(`${liveApp.baseURL}/pipelines/${pipelineId}/assets/${customersAssetId}/code`);
     await expect(page.locator(".monaco-editor").first()).toBeVisible({ timeout: 15000 });
 
-    // The asset-properties cards live in an on-demand side sheet (works on both
-    // desktop and mobile); open it from the editor header.
-    await page.getByRole("button", { name: "Asset properties" }).click();
+    const properties = await openAssetProperties(page);
 
     // The guided metadata panel renders its focused cards.
-    await expect(page.getByRole("heading", { name: "Identity" })).toBeVisible({ timeout: 15000 });
-    await expect(page.getByRole("heading", { name: "Materialization" })).toBeVisible();
-    await expect(page.getByRole("heading", { name: "Dependencies" })).toBeVisible();
-    await expect(page.getByRole("heading", { name: "Columns" })).toBeVisible();
+    await expect(properties.getByRole("heading", { name: "Identity" })).toBeVisible({ timeout: 15000 });
+    await expect(properties.getByRole("heading", { name: "Materialization" })).toBeVisible();
+    await expect(properties.getByRole("heading", { name: "Dependencies" })).toBeVisible();
+    await expect(properties.getByRole("heading", { name: "Columns" })).toBeVisible();
 
     // Add a manual dependency via the Dependencies card.
     const txResponse = page.waitForResponse(
       (r) => r.url().includes(`/api/assets/${customersAssetId}/transactions`) && r.ok(),
       { timeout: 15000 },
     );
-    const input = page.getByPlaceholder("Add dependency (asset name)");
+    const input = properties.getByPlaceholder("Add dependency (asset name)");
     await input.fill("analytics.orders");
     await input.press("Enter");
     await txResponse;
 
     // It surfaces under Manual and is written to the asset's provenance.
-    await expect(page.getByText("Manual")).toBeVisible({ timeout: 15000 });
-    await expect(page.getByText("analytics.orders").first()).toBeVisible();
+    await expect(properties.getByText("Manual")).toBeVisible({ timeout: 15000 });
+    await expect(properties.getByText("analytics.orders").first()).toBeVisible();
 
     const customers = await pollAsset(liveApp, page.request, "analytics.customers", (a) =>
       a.upstreams.includes("analytics.orders"),
@@ -243,22 +255,21 @@ select customer_id, upper(customer_name) as shout from analytics.customers
   test("interactive YAML view renders the metadata and edits a tag", async ({ liveApp, page }) => {
     await page.goto(`${liveApp.baseURL}/pipelines/${pipelineId}/assets/${customersAssetId}/code`);
     await expect(page.locator(".monaco-editor").first()).toBeVisible({ timeout: 15000 });
-    await page.getByRole("button", { name: "Asset properties" }).click();
+    const properties = await openAssetProperties(page);
 
-    // Wait for the sheet to settle (cards render first), then switch views.
-    const dialog = page.getByRole("dialog", { name: "Asset properties" });
-    await expect(dialog.getByRole("heading", { name: "Identity" })).toBeVisible({ timeout: 15000 });
-    const yamlToggle = dialog.getByRole("button", { name: "YAML", exact: true });
+    // Wait for the properties surface to settle (cards render first), then switch views.
+    await expect(properties.getByRole("heading", { name: "Identity" })).toBeVisible({ timeout: 15000 });
+    const yamlToggle = properties.getByRole("button", { name: "YAML", exact: true });
     await yamlToggle.click();
     await expect(yamlToggle).toHaveAttribute("aria-pressed", "true");
 
     // It renders the metadata as YAML keys.
-    await expect(dialog.getByText("depends:", { exact: true })).toBeVisible({ timeout: 15000 });
-    await expect(dialog.getByText("columns:", { exact: true })).toBeVisible();
-    await expect(dialog.getByText("tags:", { exact: true })).toBeVisible();
+    await expect(properties.getByText("depends:", { exact: true })).toBeVisible({ timeout: 15000 });
+    await expect(properties.getByText("columns:", { exact: true })).toBeVisible();
+    await expect(properties.getByText("tags:", { exact: true })).toBeVisible();
 
     // Adding a tag through the YAML list input persists it.
-    const input = page.getByPlaceholder("add tag");
+    const input = properties.getByPlaceholder("add tag");
     await input.fill("daily");
     await input.press("Enter");
 
@@ -269,13 +280,13 @@ select customer_id, upper(customer_name) as shout from analytics.customers
 
     // Removing the last tag must clear it from the live view, not only after a
     // refresh (the workspace SSE merge omits empty fields).
-    await dialog.getByRole("button", { name: "Remove tag daily" }).click();
-    await expect(dialog.getByRole("button", { name: "Remove tag daily" })).toBeHidden({ timeout: 15000 });
+    await properties.getByRole("button", { name: "Remove tag daily" }).click();
+    await expect(properties.getByRole("button", { name: "Remove tag daily" })).toBeHidden({ timeout: 15000 });
     const cleared = await pollAsset(liveApp, page.request, "analytics.customers", (a) => (a.tags ?? []).length === 0);
     expect(cleared.tags ?? []).not.toContain("daily");
 
     // A custom column can be added directly from the columns list.
-    const addColumn = dialog.getByPlaceholder("add column");
+    const addColumn = properties.getByPlaceholder("add column");
     await addColumn.fill("region");
     await addColumn.press("Enter");
     const withColumn = await pollAsset(liveApp, page.request, "analytics.customers", (a) =>
@@ -285,16 +296,16 @@ select customer_id, upper(customer_name) as shout from analytics.customers
 
     // The check dropdown stays collapsed behind an "add check…" affordance until
     // the user opts in (no bare dropdown with nothing selected).
-    const addCheck = dialog.getByRole("button", { name: "add check…" }).first();
+    const addCheck = properties.getByRole("button", { name: "add check…" }).first();
     await expect(addCheck).toBeVisible({ timeout: 15000 });
     await addCheck.click();
-    await expect(dialog.getByRole("button", { name: /Confirm check on region/ })).toBeVisible();
+    await expect(properties.getByRole("button", { name: /Confirm check on region/ })).toBeVisible();
 
     // Existing assets are offered as dependency proposals.
-    await expect(dialog.getByRole("button", { name: "pick from existing assets…" })).toBeVisible();
+    await expect(properties.getByRole("button", { name: "pick from existing assets…" })).toBeVisible();
 
     // A column can be removed/ignored, after which it is no longer on the asset.
-    await dialog.getByRole("button", { name: "Remove column region" }).click();
+    await properties.getByRole("button", { name: "Remove column region" }).click();
     const withoutColumn = await pollAsset(liveApp, page.request, "analytics.customers", (a) =>
       !(a.columns ?? []).some((c) => c.name === "region"),
     );
@@ -311,9 +322,9 @@ select customer_id, upper(customer_name) as shout from analytics.customers
 
     await page.goto(`${liveApp.baseURL}/pipelines/${pipelineId}/assets/${customersAssetId}/code`);
     await expect(page.locator(".monaco-editor").first()).toBeVisible({ timeout: 15000 });
-    await page.getByRole("button", { name: "Asset properties" }).click();
+    const properties = await openAssetProperties(page);
 
-    const card = page.locator("section").filter({ has: page.getByRole("heading", { name: "Quality checks" }) });
+    const card = properties.locator("section").filter({ hasText: "Quality checks" });
     await expect(card.getByRole("heading", { name: "Quality checks" })).toBeVisible({ timeout: 15000 });
 
     // Pick the column (the check name defaults to not_null) and add the check.
