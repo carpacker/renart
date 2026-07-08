@@ -35,6 +35,7 @@ export async function updateAsset(
     name?: string;
     type?: string;
     content?: string;
+    connection?: string;
     materialization_type?: string;
     materialization_strategy?: string;
     incremental_key?: string;

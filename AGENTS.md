@@ -1,246 +1,145 @@
-### Project Context: Renart
+# AGENTS.md
 
-## Overview
+Orientation for agents working in this repository. This is a map and a set of
+rules — depth lives in [`architecture/`](architecture/) (current state) and
+[`plans/`](plans/) (in-flight work). Read the relevant doc there before making
+non-trivial changes.
 
-Renart is the git-native data pipeline IDE for Bruin projects.
+## Positioning
 
-It is aimed at data engineers, analytics engineers, and technical data users who want a fast visual way to edit, inspect, run, and understand version-controlled data pipelines while staying inside a Git-backed project.
-
-Renart should feel meaningfully different from a code-first workflow:
-
-- Bruin CLI is for a more coding-oriented, terminal-first experience
-- Renart is a Git-native IDE for visually editing, inspecting, and executing those same projects
-- The canvas should make assets, dependencies, lineage, and data flow easier to understand at a glance
-- The UI should stay comfortable for users who expect filesystem and Git history to remain the source of accountability
-
-## Product Positioning
+Renart is the all-in-one **data pipeline IDE**, and it runs entirely inside the
+user's Git repository. It gives version-controlled data pipelines a visual
+editing environment — a pipeline canvas, DAG-aware SQL intelligence, notebooks,
+inspect/materialize, and per-environment schedules — while keeping the
+filesystem and Git as the source of truth. It is local-first: no hosted control
+plane, no sign-up, no data leaving the user's environment. Pipelines run against
+the user's own platform (DuckDB, Postgres, Snowflake, BigQuery, Redshift, …) via
+the open-source Bruin execution engine.
 
 When making product or UX decisions, preserve this direction:
 
-- Renart is a git-native data pipeline IDE for people building data pipelines that remain version-controllable
-- Renart presents assets, dependencies, lineage, and data flow on a canvas instead of forcing users to reason only from YAML and SQL files
-- Renart is a fast visual alternative to pure file editing while preserving the underlying Bruin project files
-- Renart should help users move quickly, not add ceremony
-- AI-enhanced and visual workflows should feel like a strength of the product, not an afterthought
+- Present assets, dependencies, lineage, and data flow on a canvas instead of
+  forcing users to reason only from YAML and SQL files.
+- Be a fast visual way to build pipelines that stay version-controllable — every
+  visual change is a plain, reviewable diff.
+- Help users move quickly; don't add ceremony, and don't collapse the product
+  into a generic CRUD dashboard.
+- Keep it legible for data engineers, analytics engineers, and technical data
+  users working in Git-backed projects.
 
-## Runtime Model
+Renart and the Bruin CLI work on the same project files; the CLI stays the
+right tool for terminal-first, code-first work. Don't position Renart as a
+replacement project format or a separate runtime.
 
-### Single source of truth
+### Where it's headed
 
-The filesystem is authoritative.
+The longer-term goal is for Renart to be not just the IDE but a complete,
+local-first data platform: pipelines, notebooks, pipeline documentation,
+dashboards, reports, and AI agents, all grounded in the same version-controlled
+files. Let this direction inform architecture and internal design decisions.
 
-Frontend state exists for responsiveness and interaction flow, but workspace state coming back from the backend wins if there is a conflict.
+**But be humble — underpromise and overdeliver.** User-facing surfaces (the
+landing page, `docs/`, `README.md`, in-app copy) describe **only** what already
+works and is established. Never mention planned, aspirational, or partially
+working capabilities to users. In-flight work lives in [`plans/`](plans/); it
+does not surface to users until it ships and is solid.
 
-### How data flows
+## Repo layout
 
-1. The Go server watches workspace files.
-2. The frontend loads initial state from `/api/workspace`.
-3. The frontend subscribes to `/api/events` through SSE.
-4. Filesystem-changing actions go through Go endpoints under `/api/...`.
-5. SSE reconciles the final state after writes, CLI usage, or outside file edits.
+```
+main.go, cmd/           urfave/cli entrypoint + command wiring
+internal/web/           the Go server: httpapi, service, scheduler, events,
+                        watch, plus intelligence/staleness/notebook packages
+internal/sqllsp/        SQL language-server core
+web/                    static React frontend, embedded into the Go binary
+docs/                   user-facing docs (Astro + Starlight)
+architecture/           current-state architecture docs (see below)
+plans/                  in-flight design docs / proposals
+example/                sample workspaces used by tooling and tests
+```
 
-### Important sync rule
+## Runtime model (the non-negotiables)
 
-Do not add polling for workspace changes. Use SSE-driven updates.
+- **The filesystem is authoritative.** Frontend state exists for responsiveness;
+  workspace state from the backend wins on conflict. Don't treat Jotai as
+  persistent truth.
+- **One server, one workspace root**, started inside a Git repository. Don't
+  loosen the Git-backed-project assumption to make a flow look easier.
+- **Sync is SSE, not polling.** The frontend loads `/api/workspace`, subscribes
+  to `/api/events`, and file-changing actions go through Go endpoints under
+  `/api/...`; SSE reconciles the final state after writes, CLI usage, or outside
+  edits. Never add polling for workspace refresh.
+- **All filesystem writes go through the Go server.** Don't bypass it, and don't
+  add Node.js-only API routes — there is no Node runtime in production.
+- **Inspect is a safe preview path.** Plain-SQL inspect/query must stay read-only
+  (single `SELECT`); materialization is the path for side-effecting SQL. When the
+  direct execution path can't confidently match Bruin behavior, fall back to CLI
+  semantics.
 
-### Repository requirement
+## Stack at a glance
 
-Renart should be started inside a Git repository.
+- **Backend:** Go HTTP server (transport `httpapi` → domain `service` → Bruin
+  packages), River + SQLite scheduler, SSE hub, fsnotify watcher. Durable state
+  in `.renart/state.db`; user-authored files stay plain Bruin files. SQL/Python
+  intelligence and SQL formatting run as embedded wasm engines under wazero.
+  Full detail: [architecture/backend.md](architecture/backend.md).
+- **Frontend:** React 19 + TypeScript, TanStack Router, Vite, Tailwind + shadcn,
+  React Flow canvas, Monaco editor, Jotai/SWR state. Full detail:
+  [architecture/frontend.md](architecture/frontend.md).
 
-If a user flow depends on workspace discovery or project semantics, prefer solutions that continue to assume a Git-backed project rather than silently loosening that model.
+## Where things are documented
 
-## Current Stack
+**[`architecture/`](architecture/)** — how it works today. Read before changing
+the corresponding subsystem:
 
-- **Backend:** Go HTTP server using Bruin packages for project parsing, config, execution, and persistence
-- **Frontend:** React 19.2 + TypeScript 5.9
-- **Routing:** TanStack Router
-- **Build Tool:** Vite 8 via `rolldown-vite`
-- **Styling:** Tailwind CSS v4 + shadcn/ui + Radix primitives + Base UI where used
-- **Canvas / DAG:** React Flow
-- **Editor:** Monaco via `@monaco-editor/react`
-- **State:** Jotai plus SWR where hooks already use remote cache semantics
-- **Forms:** React Hook Form and TanStack Form where already adopted
-- **Charts:** Recharts
-- **Panels:** `react-resizable-panels`
-- **Tables:** `@tanstack/react-virtual`
-- **Command UI:** `cmdk`
-- **Icons:** `lucide-react` and `react-icons`
-- **Markdown:** `react-markdown`
-- **Realtime Sync:** Server-Sent Events (SSE)
-- **Docs:** Astro Starlight in `docs/`
+| Doc | Covers |
+| --- | --- |
+| [backend.md](architecture/backend.md) | Go backend: layering, runtime model, execution, conventions |
+| [frontend.md](architecture/frontend.md) | Web app: stack, routing, app shell, hooks, libs, layout rules |
+| [staleness.md](architecture/staleness.md) | Fingerprints, materialization facts/coverage, staleness, deploy snapshots, per-env schedules |
+| [notebooks.md](architecture/notebooks.md) | Notebook folder format, sessions, rename engine, `@viz`, promotion |
+| [asset-editing.md](architecture/asset-editing.md) | Asset workbench: ownership model, `assetmeta` provenance, reconciliation, transaction API |
+| [sql-lsp.md](architecture/sql-lsp.md) | SQL language server: canonical graph, engine, caching, column inference |
+| [docs-framework.md](architecture/docs-framework.md) | Authoring contract for the user docs under `docs/` |
 
-## Local Tooling
+**[`plans/`](plans/)** — proposals and implementation plans for work that has
+**not** shipped (or only partially). When a plan lands, fold the as-built reality
+into the relevant `architecture/` doc and delete the plan; git history keeps the
+original. Check `plans/README.md` for the current index and status.
 
-- Go is installed at `/usr/local/go`. If `go` is not on `PATH`, use `/usr/local/go/bin/go`.
+## Working guidance
 
-## Frontend Learnings
+- Prefer updating existing hooks/components/services over introducing parallel
+  state systems; keep changes small and concrete.
+- Use Bruin Go packages and Renart service helpers for filesystem-changing
+  operations rather than shelling out, unless a flow intentionally falls back to
+  CLI semantics.
+- Keep the one-DTO-set / one-error-type / one-response-envelope conventions
+  (see backend.md §5). When a Go DTO changes, regenerate the web API types.
+- If a change touches both full inspect views and node previews, update both. If
+  it changes asset creation or execution semantics, verify frontend behavior and
+  backend results.
+- Keep layouts shrink-safe (`min-w-0`, truncation, overflow control). Prefer
+  `pnpm` over `npm`. Favor user-facing clarity over internal cleverness in
+  Renart-specific docs and UI copy.
+- Commit when asked, but **never push** — leave pushing to the maintainer.
 
-When working on `renart/web`, preserve the component and routing patterns the app already uses.
+## Local tooling
 
-### Cards
-
-- Prefer the shared shadcn card primitives from `renart/web/components/ui/card.tsx` for panelized UI.
-- Do not build ad hoc "card" wrappers out of plain `div`s with repeated `rounded-* border bg-card shadow-*` class stacks when the intent is a card.
-- If a page needs a header/body split, use `Card`, `CardHeader`, `CardTitle`, `CardDescription`, and `CardContent` instead of hand-rolled section shells.
-
-### TanStack Router
-
-- For hierarchical URLs that should not visually nest parent pages, use pathful layout routes with `route.tsx` plus leaf `index.tsx` files.
-- Example pattern for settings-style pages:
-  - `foo/route.tsx` for the non-visual parent route that renders `<Outlet />`
-  - `foo/index.tsx` for `/foo`
-  - `foo/$id/route.tsx` for the non-visual branch route
-  - `foo/$id/index.tsx` for `/foo/$id`
-- Avoid underscore-flattened route hacks when the goal is simply to prevent a visible parent page from rendering around its children.
-- Avoid putting visible page UI in a route file that also needs to host child routes unless you explicitly want nested rendering.
-- After changing route files, regenerate the TanStack route tree by running the Renart web build so `src/routeTree.gen.ts` matches the filesystem routes.
-
-## App Shape
-
-### Entry points
-
-- [web/src/main.tsx](web/src/main.tsx)
-- [web/src/router.tsx](web/src/router.tsx)
-- [web/src/providers.tsx](web/src/providers.tsx)
-
-### Main workspace shell
-
-The primary UI is rendered by [web/components/workspace-shell.tsx](web/components/workspace-shell.tsx).
-
-It coordinates:
-
-- workspace synchronization
-- canvas nodes and edges
-- selection state
-- onboarding and help state
-- create/delete flows
-- inspect and materialize results
-- debounced asset saving
-- persisted node positions
-- sidebar, canvas, editor, and results layout
-
-### Key visual areas
-
-- [web/components/workspace-sidebar.tsx](web/components/workspace-sidebar.tsx)
-- [web/components/workspace-canvas-pane.tsx](web/components/workspace-canvas-pane.tsx)
-- [web/components/workspace-editor-pane.tsx](web/components/workspace-editor-pane.tsx)
-- [web/components/workspace-results-panel.tsx](web/components/workspace-results-panel.tsx)
-- [web/components/workspace-dialogs.tsx](web/components/workspace-dialogs.tsx)
-
-### Backend service shape
-
-The Go backend is organized around small HTTP handler packages in `internal/web/httpapi` and service code in `internal/web/service`.
-
-Important service files include:
-
-- `workspace.go`, `workspace_coordinator.go`, and `workspace_resolver.go` for workspace loading, SSE-oriented coordination, path safety, and ID resolution
-- `asset.go`, `asset_naming.go`, `asset_dependencies.go`, `asset_format.go`, and `asset_type.go` for asset CRUD, inferred naming, dependency reconciliation, SQL formatting, and Bruin asset type mapping
-- `execution.go`, `run.go`, and `pipeline_execution.go` for inspect, materialize, run, freshness, and streaming execution flows
-- `direct_executor.go`, `direct_run.go`, `direct_query.go`, `direct_executor_registry.go`, `direct_executor_import.go`, `direct_executor_resolution.go`, `direct_executor_patches.go`, `direct_asset_patches.go`, and `direct_run_formatting.go` for embedded/direct execution, query, import, patch, and output formatting support
-- `config_runtime.go`, `query_result.go`, and `db_discovery.go` for shared config/runtime, query result envelopes, and database object discovery helpers
-- `onboarding.go`, `config.go`, `sql.go`, `parse_context.go`, `jinja_render.go`, and `suggestions.go` for onboarding, config editing, SQL discovery/intellisense, Jinja rendering, and UI suggestions
-
-## Core UX Behaviors To Preserve
-
-- live SSE synchronization for workspace changes
-- debounced asset saves instead of write-on-every-keystroke
-- visual-first node creation from canvas interactions
-- downstream asset creation directly from asset nodes
-- inline asset and pipeline editing flows
-- inspect and materialize states that replace stale output immediately
-- canvas-first understanding of lineage and dependencies
-- editor and visualization flows that still respect the underlying workspace files
-- mobile-safe and desktop-safe interactions where supported today
-
-## Inspect and Execution Rules
-
-- Inspect is a safe preview path and should stay conservative
-- Plain SQL inspect/query execution must not run write-capable SQL
-- Inspect for plain SQL assets should stay limited to read-only single `SELECT` queries
-- Materialization is the path for executing SQL that produces side effects
-- When direct execution cannot confidently match Bruin behavior, prefer explicit CLI fallback
-
-## Current API Surface
-
-Frontend code already uses Go endpoints including:
-
-- `GET /api/workspace`
-- `GET /api/events`
-- `GET /api/config`
-- `POST /api/config/environments`
-- `PUT /api/config/environments`
-- `POST /api/config/environments/clone`
-- `DELETE /api/config/environments`
-- `POST /api/config/connections`
-- `PUT /api/config/connections`
-- `DELETE /api/config/connections`
-- `POST /api/config/connections/test`
-- `POST /api/pipelines`
-- `PUT /api/pipelines`
-- `GET /api/pipelines/:pipelineId/config`
-- `PUT /api/pipelines/:pipelineId/config`
-- `DELETE /api/pipelines/:pipelineId`
-- `POST /api/pipelines/:pipelineId/assets`
-- `PUT /api/pipelines/:pipelineId/assets/:assetId`
-- `DELETE /api/pipelines/:pipelineId/assets/:assetId`
-- `POST /api/assets/:assetId/format-sql`
-- `GET /api/assets/:assetId/inspect`
-- `POST /api/assets/:assetId/materialize/stream`
-- `GET /api/pipelines/:pipelineId/materialization`
-- `POST /api/pipelines/:pipelineId/materialize/stream`
-- `POST /api/run`
-- `GET /api/assets/freshness`
-- `GET /api/assets/:assetId/columns/infer`
-- `PUT /api/assets/:assetId/columns`
-- `POST /api/assets/:assetId/fill-columns-from-db`
-- `POST /api/assets/:assetId/render-jinja`
-- `GET /api/assets/:assetId/sql-path-suggestions`
-- `GET /api/ingestr/suggestions`
-- `POST /api/sql/parse-context`
-- `POST /api/sql/column-values`
-- `GET /api/sql/databases`
-- `GET /api/sql/tables`
-- `GET /api/sql/table-columns`
-- `GET /api/onboarding/state`
-- `PUT /api/onboarding/state`
-- `POST /api/onboarding/import`
-- `POST /api/onboarding/quickstart`
-- `POST /api/onboarding/discovery`
-- `GET /api/onboarding/path-suggestions`
-
-Do not introduce frontend assumptions that require a separate Node backend runtime.
-
-## Practical Guidance For Agents
-
-- Prefer updating existing hooks and components over introducing parallel state systems
-- Keep layouts shrink-safe with `min-w-0`, truncation, and overflow control
-- If a change affects both full inspect views and node previews, update both
-- If a feature changes asset creation or execution semantics, verify both frontend behavior and backend results
-- Prefer Bruin Go packages and Renart service helpers over shelling out unless the behavior intentionally falls back to CLI semantics
-- Keep typed service responses/errors and shared workspace resolution patterns rather than reintroducing ad hoc maps or path decoding
-- Prefer `pnpm` over `npm` when both are available
-- Keep changes small and concrete when possible
-- Favor user-facing clarity over internal cleverness in Renart-specific docs and UI copy
-
-## Do
-
-- Use Bruin and Renart backend APIs as the path for filesystem-changing operations
-- Let SSE reconcile final workspace state
-- Preserve the distinction between code-first CLI work and git-native visual IDE work
-- Keep the product legible for data engineers and technical data users working in Git-backed projects
-
-## Do Not
-
-- Do not add polling for workspace refresh
-- Do not bypass the Go server for filesystem writes
-- Do not treat Jotai as persistent truth
-- Do not add Node-only server routes as if Renart were a separate fullstack JS app
-- Do not collapse the product into a generic CRUD dashboard
-- Do not weaken the Git-backed project assumption to make flows appear easier
+- Go is at `/usr/local/go`. If `go` is not on `PATH`, use `/usr/local/go/bin/go`.
+- **Hot-reload dev:** `make dev` (or `scripts/dev.sh [workspace]`) runs the Go
+  backend under [`air`](https://github.com/air-verse/air) (rebuild + restart on
+  any `.go` change, `.air.toml`) and the Vite frontend with HMR together. Open
+  the printed Vite URL (`:5173`); it proxies `/api` to the backend (`:3000`).
+  The backend builds with `-tags webdev` so it needs no `web/dist` — see
+  `web/embed_dev.go`. Defaults to the `example/example` workspace; override with
+  `make dev WORKSPACE=path` or `BACKEND_PORT` / `FRONTEND_PORT` env vars. air is
+  installed on first run if missing.
 
 ## Validation
 
-- Validate frontend changes with `corepack pnpm build` in `renart/web`
-- Validate Renart backend work with the relevant Go tests
-- Validate docs changes with `corepack pnpm build` in `renart/docs` when touching the Starlight site
-- When relevant, validate the local live flow with `go build .` in `renart/` and `corepack pnpm test:e2e:live` in `renart/web`
+- Backend: `go build ./...`, `go vet ./...`, `go test ./...`.
+- Frontend: `pnpm build` in `web/`.
+- Docs: `pnpm build` in `docs/` when touching the Starlight site.
+- Live flow (workspace sync / canvas / inspect / materialize / Monaco):
+  `go build .` in the repo root and `corepack pnpm test:e2e:live` in `web/`.

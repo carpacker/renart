@@ -69,6 +69,68 @@ parameters:
 	assert.Equal(t, "string", byName["username"])
 }
 
+// An API asset's `parameters:` is a nested request/response spec, which bruin's
+// stock YAML reader (parameters = map[string]string) can't parse. The api-aware
+// creator must still load the workbench-managed fields (columns, owner, …) from
+// the file so edits like dropping a column round-trip instead of being masked by
+// fresh inference in the workspace preview.
+func TestAPIAwareCreatorLoadsFileColumnsDespiteNestedParameters(t *testing.T) {
+	fs := afero.NewMemMapFs()
+	path := "/ws/analytics/assets/weather.asset.yml"
+	content := `type: api
+parameters:
+  request:
+    url: https://api.weather.gov/alerts
+    method: GET
+  response:
+    records_path: ".features"
+owner: data@company.com
+columns:
+  - name: id
+    type: string
+  - name: geometry
+    type: json
+meta:
+  renart_col_drop: geometry
+`
+	require.NoError(t, afero.WriteFile(fs, path, []byte(content), 0o644))
+
+	asset, err := apiAwareYamlTaskCreator(fs)(path)
+	require.NoError(t, err)
+
+	names := make([]string, 0, len(asset.Columns))
+	for _, column := range asset.Columns {
+		names = append(names, column.Name)
+	}
+	assert.ElementsMatch(t, []string{"id", "geometry"}, names, "file columns must load through the nested parameters spec")
+	assert.Equal(t, "data@company.com", asset.Owner)
+}
+
+// When an API asset carries no declared columns, the workspace preview falls back
+// to spec inference — but a column the user explicitly dropped must not reappear.
+func TestAPIInferredColumnsForDisplayRespectsDrops(t *testing.T) {
+	asset := &pipeline.Asset{
+		Type: pipeline.AssetType(apiAssetType),
+		Meta: pipeline.EmptyStringMap{"renart_col_drop": "b"},
+		ExecutableFile: pipeline.ExecutableFile{Content: `type: api
+parameters:
+  request:
+    url: https://api.example.com/x
+  response:
+    fields:
+      a: string
+      b: string
+      c: string
+`},
+	}
+
+	names := make([]string, 0)
+	for _, column := range apiInferredColumnsForDisplay(context.Background(), asset) {
+		names = append(names, column.Name)
+	}
+	assert.ElementsMatch(t, []string{"a", "c"}, names, "dropped column must not reappear via inference fallback")
+}
+
 func TestWriteAPIAssetCSVValidatesResponseAgainstOpenAPI(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
@@ -112,7 +174,7 @@ paths:
 	assert.Contains(t, err.Error(), "$.data.rating expected integer")
 }
 
-func TestHybridBruinExecutorRunsAPIAssetThroughSlingWithBruinTargetConnection(t *testing.T) {
+func TestHybridBruinExecutorRunsAPIAssetThroughLoadWithBruinTargetConnection(t *testing.T) {
 	workspaceRoot := t.TempDir()
 	require.NoError(t, os.MkdirAll(filepath.Join(workspaceRoot, ".git"), 0o755))
 	fakeUv := filepath.Join(workspaceRoot, "fake-uv")

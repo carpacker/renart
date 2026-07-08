@@ -49,6 +49,7 @@ func (h *ExecutionAPI) HandleInspectAsset(w http.ResponseWriter, r *http.Request
 		"raw_output":                             result.RawOutput,
 		"operation":                              result.Operation,
 		"error":                                  result.Error,
+		"info":                                   result.Info,
 		"missing_upstream_asset_ids":             result.MissingUpstreamAssetIDs,
 		"missing_upstream_asset_names":           result.MissingUpstreamAssetNames,
 		"missing_upstream_assets_materializable": result.MissingUpstreamAssetsMaterializable,

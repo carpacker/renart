@@ -118,7 +118,7 @@ export type WorkspaceConfigConnection = {
   name: string;
   type: string;
   values: Record<string, unknown>;
-  sling_category?: string;
+  load_category?: string;
 };
 
 export type WorkspaceConfigEnvironment = {
@@ -239,6 +239,24 @@ export type IngestrSuggestionsResponse = {
 export type SqlPathSuggestionsResponse = {
   status: string;
   suggestions: IngestrSuggestion[];
+  error?: string;
+};
+
+export type OpenAPIEndpointSuggestion = {
+  url: string;
+  method: string;
+  summary?: string;
+};
+
+export type OpenAPIRecordsPathSuggestion = {
+  path: string;
+  detail?: string;
+};
+
+export type OpenAPISuggestionsResult = {
+  status: string;
+  request_urls: OpenAPIEndpointSuggestion[];
+  records_paths: OpenAPIRecordsPathSuggestion[];
   error?: string;
 };
 
@@ -372,6 +390,7 @@ export type AssetInspectResponse = {
   raw_output: string;
   operation: OperationMetadata;
   error?: string;
+  info?: string;
   missing_upstream_asset_ids?: string[];
   missing_upstream_asset_names?: string[];
   missing_upstream_assets_materializable?: boolean;

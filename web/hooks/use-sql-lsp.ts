@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 import type * as MonacoNS from "monaco-editor";
 import { useAtomValue, useSetAtom } from "jotai";
 
@@ -56,6 +56,33 @@ export function useSQLLSP(
     ? resolveConnection(asset, workspace.connections ?? {})
     : null;
 
+  // The Monaco providers below are registered once per (editor, asset) and read
+  // their live inputs through this ref. Keeping them off the effect's dependency
+  // list means an SSE workspace update (which changes `workspace`,
+  // `parseContext`, `schemaTables`, …) refreshes the data the providers see
+  // without disposing and re-registering them — re-registration would drop the
+  // selection in an open suggestion widget.
+  const providerStateRef = useRef({
+    asset,
+    workspace,
+    connectionName,
+    schemaTables,
+    selectedEnvironment,
+    parseContext,
+    onGoToAsset,
+    onGoToCell,
+  });
+  providerStateRef.current = {
+    asset,
+    workspace,
+    connectionName,
+    schemaTables,
+    selectedEnvironment,
+    parseContext,
+    onGoToAsset,
+    onGoToCell,
+  };
+
   useEffect(() => {
     if (!monaco || !editor || !asset || !isSQLAsset(asset)) {
       return;
@@ -70,6 +97,11 @@ export function useSQLLSP(
       triggerCharacters: [".", "/", "\"", "'"],
       async provideCompletionItems(currentModel, position) {
         if (currentModel.uri.toString() !== modelURI) {
+          return { suggestions: [] };
+        }
+        const { asset, connectionName, parseContext, schemaTables, selectedEnvironment } =
+          providerStateRef.current;
+        if (!asset) {
           return { suggestions: [] };
         }
         const pathContext = getQuotedPathContext(currentModel.getLineContent(position.lineNumber), position);
@@ -133,7 +165,10 @@ export function useSQLLSP(
           }
         }
         const dotPrefix = parseDotPrefix(textBeforeCursor);
-        if (dotPrefix && connectionName) {
+        // A `schema.` in a FROM/JOIN position is a relation qualifier, not an
+        // alias whose columns we should fetch from the warehouse — let the LSP
+        // relation completions handle it (and don't hit /api/sql/table-columns).
+        if (dotPrefix && connectionName && !isRelationDotContext(currentModel, position)) {
           const remoteTableName = resolveRemoteTableName(dotPrefix.tablePart, schemaTables, parseContext) ?? dotPrefix.tablePart;
           const columns = await loadRemoteColumns({
             connection: connectionName,
@@ -175,8 +210,11 @@ export function useSQLLSP(
           position.lineNumber,
           word.endColumn,
         );
+        // Keep column (5), relation/asset (18) and keyword (2) completions from
+        // the LSP; drop anything else. Keywords sort last (see the engine's "z"
+        // SortText) so schema-aware suggestions stay on top.
         const lspSuggestions = (response.completions ?? [])
-            .filter((item) => item.kind === 5)
+            .filter((item) => item.kind === 5 || item.kind === 18 || item.kind === 2)
             .map((item) => completionToMonaco(monaco, item, range));
         if (connectionName && isTableCompletionContext(currentModel, position)) {
           const remoteTables = await loadRemoteTables({
@@ -212,6 +250,10 @@ export function useSQLLSP(
     const definition = monaco.languages.registerDefinitionProvider("sql", {
       async provideDefinition(currentModel, position) {
         if (currentModel.uri.toString() !== modelURI) {
+          return [];
+        }
+        const { asset, workspace } = providerStateRef.current;
+        if (!asset) {
           return [];
         }
         if (isInsideJinjaBlock(currentModel.getValue(), currentModel.getOffsetAt(position))) {
@@ -252,6 +294,10 @@ export function useSQLLSP(
       if (!position) {
         return;
       }
+      const { asset, workspace, onGoToAsset, onGoToCell } = providerStateRef.current;
+      if (!asset) {
+        return;
+      }
       if (isInsideJinjaBlock(model.getValue(), model.getOffsetAt(position))) {
         return;
       }
@@ -281,6 +327,10 @@ export function useSQLLSP(
     const references = monaco.languages.registerReferenceProvider("sql", {
       async provideReferences(currentModel, position, context) {
         if (currentModel.uri.toString() !== modelURI) {
+          return [];
+        }
+        const { asset, workspace } = providerStateRef.current;
+        if (!asset) {
           return [];
         }
         const response = await getSQLLSPReferences({
@@ -447,20 +497,10 @@ export function useSQLLSP(
       formatting.dispose();
       signature.dispose();
     };
-  }, [
-    asset,
-    connectionName,
-    editor,
-    loadRemoteColumns,
-    loadRemoteTables,
-    monaco,
-    onGoToAsset,
-    onGoToCell,
-    parseContext,
-    schemaTables,
-    selectedEnvironment,
-    workspace,
-  ]);
+    // Register once per (editor, asset); live inputs (workspace, parseContext,
+    // schemaTables, connection, environment, callbacks) are read from
+    // providerStateRef so an SSE update does not re-register the providers.
+  }, [monaco, editor, asset?.id, loadRemoteColumns, loadRemoteTables]);
 
   useEffect(() => {
     if (!monaco || !editor || !asset || !isSQLAsset(asset)) {
@@ -911,6 +951,21 @@ function formatSQLValueCompletion(value: string | number | boolean | null, insid
   return String(value ?? "NULL");
 }
 
+function isRelationDotContext(
+  model: MonacoNS.editor.ITextModel,
+  position: MonacoNS.Position,
+) {
+  const textBeforeCursor = model
+    .getValueInRange({
+      startLineNumber: 1,
+      startColumn: 1,
+      endLineNumber: position.lineNumber,
+      endColumn: position.column,
+    })
+    .replace(/'[^']*'|"[^"]*"/g, " ");
+  return /\b(?:from|join|into|update)\s+[\w.]+\.\s*$/i.test(textBeforeCursor);
+}
+
 function isTableCompletionContext(
   model: MonacoNS.editor.ITextModel,
   position: MonacoNS.Position,
@@ -991,7 +1046,7 @@ function completionToMonaco(
 function completionKindToMonaco(monaco: typeof MonacoNS, kind?: number) {
   switch (kind) {
     case 2:
-      return monaco.languages.CompletionItemKind.Function;
+      return monaco.languages.CompletionItemKind.Keyword;
     case 5:
       return monaco.languages.CompletionItemKind.Field;
     case 18:

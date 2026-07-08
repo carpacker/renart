@@ -146,7 +146,7 @@ export default defineConfig({
             { label: 'SQL Assets', slug: 'docs/asset-types/sql-assets' },
             { label: 'Python Assets', slug: 'docs/asset-types/python-assets' },
             { label: 'HTTP API Assets', slug: 'docs/asset-types/http-api-assets' },
-            { label: 'Load (Sling) Assets', slug: 'docs/asset-types/load-sling-assets' },
+            { label: 'Load Assets', slug: 'docs/asset-types/load-assets' },
             { label: 'Seeds', slug: 'docs/asset-types/seeds' },
           ],
         },

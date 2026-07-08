@@ -11,7 +11,7 @@
     "durationMs": 2800,
     "paddingMs": 700,
     "subtitle": "Create a pipeline from scratch, write the SQL, and watch the graph connect itself",
-    "text": "Hi I'm Lukas and I created a nice data visualization tool on top of bruin. It's called Renart. You can use it as a notebook tool or as a visual pipeline builder that still allows for version controlling your pipeline definitions."
+    "text": "This is Renart, the all-in-one data pipeline IDE. You can use it as a notebook for ad-hoc analysis, or as a visual pipeline builder — and everything you do stays as version-controlled files in your own repository."
   },
   "viewport": {
     "width": 1440,

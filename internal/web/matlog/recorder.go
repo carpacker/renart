@@ -119,6 +119,28 @@ func (r *Recorder) HandleRunCompleted(event bus.RunCompleted) {
 			r.warn("failed to record materialization", assetRun.AssetID, err)
 		}
 	}
+
+	// Record the latest run attempt (success or failure) per asset. The facts
+	// above only capture successes; this lets the staleness service tell an
+	// untested edit from a run that was attempted and failed, and surface an
+	// unchanged asset whose last run failed. Fingerprint is the target of what
+	// ran, compared later against the asset's current fingerprint.
+	for _, assetRun := range event.Assets {
+		result, ok := results[assetRun.AssetID]
+		if !ok {
+			continue
+		}
+		if err := r.store.RecordRun(ctx, AssetRunRecord{
+			AssetID:     assetRun.AssetID,
+			Environment: event.Environment,
+			Fingerprint: string(result.FP),
+			Status:      assetRun.Status,
+			RunID:       event.RunID,
+			RanAt:       event.CompletedAt,
+		}); err != nil {
+			r.warn("failed to record run attempt", assetRun.AssetID, err)
+		}
+	}
 }
 
 func (r *Recorder) warn(message, subject string, err error) {

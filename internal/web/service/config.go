@@ -36,10 +36,10 @@ type WorkspaceConfigConnection struct {
 	Name   string         `json:"name"`
 	Type   string         `json:"type"`
 	Values map[string]any `json:"values"`
-	// SlingCategory is "database", "storage", "file" for connections a Sling
-	// asset can move data between, or "" for connections that are not Sling-movable
+	// LoadCategory is "database", "storage", "file" for connections a Load
+	// asset can move data between, or "" for connections that are not Load-movable
 	// data stores. The asset editor's source/target pickers filter on it.
-	SlingCategory string `json:"sling_category,omitempty"`
+	LoadCategory string `json:"load_category,omitempty"`
 }
 
 type WorkspaceConfigEnvironment struct {
@@ -533,7 +533,7 @@ func buildWorkspaceConfigConnections(connections *config.Connections) []Workspac
 				Name:          named.GetName(),
 				Type:          typeName,
 				Values:        buildWorkspaceConfigConnectionValues(connectionInterface, typeName),
-				SlingCategory: slingConnectionCategory(typeName),
+				LoadCategory: loadConnectionCategory(typeName),
 			})
 		}
 	}

@@ -255,8 +255,8 @@ func (s *WorkspaceService) ComputeState(ctx context.Context) (model.WorkspaceSta
 				connectionName = conn
 			}
 			parameters := asset.Parameters
-			if isSlingAsset(asset) {
-				if summary := slingSummaryParameters(content); len(summary) > 0 {
+			if isLoadAsset(asset) {
+				if summary := loadSummaryParameters(content); len(summary) > 0 {
 					parameters = summary
 				}
 			} else if isAPIAsset(asset) {
@@ -268,7 +268,7 @@ func (s *WorkspaceService) ComputeState(ctx context.Context) (model.WorkspaceSta
 			declaredMatType := string(asset.Materialization.Type)
 			columns := asset.Columns
 			if isAPIAsset(asset) && len(columns) == 0 {
-				columns = apiResponseFieldColumns(ctx, asset)
+				columns = apiInferredColumnsForDisplay(ctx, asset)
 			}
 
 			// A placeholder emitted by the tolerant builder carries its parse error

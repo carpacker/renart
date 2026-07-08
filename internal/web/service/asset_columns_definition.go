@@ -67,10 +67,10 @@ func (s *AssetService) RefreshAssetColumnsFromDefinition(ctx context.Context, as
 
 	var inferred []WorkspaceColumn
 	var apiErr *APIError
-	if isSlingAsset(asset) {
-		// Sling assets mirror their upstream's declared columns rather than a SQL
+	if isLoadAsset(asset) {
+		// Load assets mirror their upstream's declared columns rather than a SQL
 		// projection.
-		inferred, apiErr = s.inferSlingColumnsFromUpstream(parsedPipeline, asset)
+		inferred, apiErr = s.inferLoadColumnsFromUpstream(parsedPipeline, asset)
 	} else {
 		inferred, apiErr = s.InferAssetColumnsFromDefinition(ctx, assetID)
 	}

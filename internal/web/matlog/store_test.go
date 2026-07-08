@@ -25,6 +25,34 @@ func ts(hour int) time.Time {
 	return time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC).Add(time.Duration(hour) * time.Hour)
 }
 
+func TestRecordRunUpsertsLatestAttempt(t *testing.T) {
+	store := openTestStore(t)
+	ctx := context.Background()
+
+	require.NoError(t, store.RecordRun(ctx, matlog.AssetRunRecord{
+		AssetID: "p:a", Environment: "dev", Fingerprint: "fp1", Status: "failed", RanAt: ts(1),
+	}))
+	runs, err := store.LastRuns(ctx, []string{"p:a"}, "dev")
+	require.NoError(t, err)
+	assert.Equal(t, "failed", runs["p:a"].Status)
+	assert.Equal(t, "fp1", runs["p:a"].Fingerprint)
+
+	// A later run of either outcome overwrites the previous row (one per key), so
+	// a success clears the prior failure.
+	require.NoError(t, store.RecordRun(ctx, matlog.AssetRunRecord{
+		AssetID: "p:a", Environment: "dev", Fingerprint: "fp2", Status: "succeeded", RanAt: ts(2),
+	}))
+	runs, err = store.LastRuns(ctx, []string{"p:a"}, "dev")
+	require.NoError(t, err)
+	assert.Equal(t, "succeeded", runs["p:a"].Status)
+	assert.Equal(t, "fp2", runs["p:a"].Fingerprint)
+
+	// Attempts are environment-scoped.
+	other, err := store.LastRuns(ctx, []string{"p:a"}, "prod")
+	require.NoError(t, err)
+	assert.Empty(t, other)
+}
+
 func interval(startHour, endHour int) (start, end *time.Time) {
 	s, e := ts(startHour), ts(endHour)
 	return &s, &e

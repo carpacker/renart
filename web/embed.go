@@ -1,3 +1,5 @@
+//go:build !webdev
+
 package web
 
 import (

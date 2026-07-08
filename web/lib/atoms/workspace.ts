@@ -21,6 +21,12 @@ export type WorkspaceSyncSource = {
 
 export const workspaceAtom = atom<WorkspaceState | null>(null);
 export const workspaceSyncSourceAtom = atom<WorkspaceSyncSource | null>(null);
+
+// Tracks whether the Go server is reachable. The SSE stream is the signal:
+// `onopen` means connected, a sustained error means the server went away. We
+// start optimistic so the offline overlay only appears once we actually lose
+// the connection.
+export const serverOnlineAtom = atom<boolean>(true);
 export const selectedEnvironmentOverrideAtom = atom<string | undefined>(undefined);
 export const selectedEnvironmentAtom = atom<string | undefined>((get) =>
 	get(selectedEnvironmentOverrideAtom) || get(workspaceAtom)?.selected_environment || undefined

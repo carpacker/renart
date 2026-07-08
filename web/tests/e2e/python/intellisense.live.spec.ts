@@ -6,6 +6,8 @@ import { liveTest as test } from "../live-app-fixture";
 
 const pythonAssetPath = "analytics/assets/analytics/typecheck_task.py";
 const pythonAssetName = "analytics.typecheck_task";
+const pipelineId = Buffer.from("analytics").toString("base64url");
+const pythonAssetId = Buffer.from(pythonAssetPath).toString("base64url");
 
 test.describe("python intellisense live", () => {
   test.use({ fixtureName: "configured-workspace" });
@@ -68,9 +70,11 @@ df = pd.DataFrame({"a": [1]})
       "utf8"
     );
 
-    await page.goto(`${liveApp.baseURL}/`);
-    const workspaceAsset = await waitForWorkspaceAsset(page, pythonAssetName);
-    await openPythonEditor(page, liveApp.baseURL, workspaceAsset);
+    await waitForWorkspaceAsset(page, liveApp.baseURL, pythonAssetName);
+    await openAssetEditor(page, liveApp.baseURL, {
+      assetId: pythonAssetId,
+      contentToken: "returns_int",
+    });
 
     await expect
       .poll(async () => await getPythonTyMarkers(page), { timeout: 15000 })
@@ -101,67 +105,43 @@ df = pd.DataFrame({"a": [1]})
   });
 });
 
-async function openPythonEditor(
+async function openAssetEditor(
   page: Page,
   baseURL: string,
-  workspaceAsset: { pipelineId: string; assetId: string }
+  options: { assetId: string; contentToken: string }
 ) {
-  const assetURL = `${baseURL}/?pipeline=${encodeURIComponent(
-    workspaceAsset.pipelineId
-  )}&asset=${encodeURIComponent(workspaceAsset.assetId)}`;
-  await page.goto(assetURL);
-
-  if (test.info().project.name.includes("mobile")) {
-    const editorDialog = page.getByRole("dialog", { name: "Asset Editor" });
-    if (!(await editorDialog.isVisible().catch(() => false))) {
-      const editButton = page.getByRole("button", { name: "Edit asset" });
-      if (await editButton.isVisible().catch(() => false)) {
-        await editButton.click();
-      }
-    }
-    await expect(editorDialog).toBeVisible({ timeout: 15000 });
-  }
-
-  await expect(page.getByTestId("editor-asset-name")).toHaveText(pythonAssetName, {
-    timeout: 15000,
-  });
-  await waitForEditorReady(page);
+  await page.goto(
+    `${baseURL}/pipelines/${pipelineId}/assets/${options.assetId}/code`
+  );
+  await waitForEditorReady(page, options.contentToken);
 }
 
-async function waitForWorkspaceAsset(page: Page, assetName: string) {
-  let foundAsset: { pipelineId: string; assetId: string } | null = null;
+async function waitForWorkspaceAsset(page: Page, baseURL: string, assetName: string) {
   await expect
-    .poll(async () => {
-      foundAsset = await page.evaluate(async (targetAssetName) => {
-        const response = await fetch("/api/workspace", { cache: "no-store" });
-        const workspace = (await response.json()) as {
-          pipelines?: Array<{ id?: string; assets?: Array<{ id?: string; name?: string }> }>;
-        };
-
-        for (const pipeline of workspace.pipelines ?? []) {
-          for (const asset of pipeline.assets ?? []) {
-            if (pipeline.id && asset.id && asset.name === targetAssetName) {
-              return { pipelineId: pipeline.id, assetId: asset.id };
-            }
-          }
+    .poll(
+      async () => {
+        const response = await page.request.get(`${baseURL}/api/workspace`);
+        if (!response.ok()) {
+          return false;
         }
-
-        return null;
-      }, assetName);
-      return foundAsset?.assetId ?? null;
-    }, { timeout: 15000 })
-    .not.toBeNull();
-
-  if (!foundAsset) {
-    throw new Error(`Workspace asset not found: ${assetName}`);
-  }
-  return foundAsset;
+        const workspace = (await response.json()) as {
+          pipelines?: Array<{ assets?: Array<{ name?: string }> }>;
+        };
+        return (workspace.pipelines ?? []).some((pipeline) =>
+          (pipeline.assets ?? []).some((asset) => asset.name === assetName)
+        );
+      },
+      { timeout: 15000 }
+    )
+    .toBe(true);
 }
 
-async function waitForEditorReady(page: Page) {
+async function waitForEditorReady(page: Page, contentToken: string) {
   const editor = page.locator(".monaco-editor").first();
   await expect(editor).toBeVisible({ timeout: 15000 });
-  await expect(page.locator(".view-lines").first()).toBeVisible({ timeout: 15000 });
+  await expect(page.locator(".view-lines").first()).toContainText(contentToken, {
+    timeout: 15000,
+  });
   return editor;
 }
 

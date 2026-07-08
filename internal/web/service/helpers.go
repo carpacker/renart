@@ -145,8 +145,8 @@ func normalizeExecutableContent(content string) string {
 
 // DefaultAssetContent generates default content for a new asset.
 func DefaultAssetContent(assetName, assetType, assetPath string) string {
-	if isSlingAssetType(assetType) {
-		return defaultSlingAssetContent(assetName)
+	if isLoadAssetType(assetType) {
+		return defaultLoadAssetContent(assetName)
 	}
 	if isAPIAssetType(assetType) {
 		return defaultAPIAssetContent(assetName)

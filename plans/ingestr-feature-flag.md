@@ -27,7 +27,7 @@ payload) as `features: { ingestr: bool }`; effective visibility =
 - catalog filters / integration badges (`catalog-page.tsx`),
 - YAML/intellisense suggestions for `type:` values
   (`use-yaml-intellisense.ts`, suggestion catalog),
-- sling/ingestr parameter editors stay (they only render for existing
+- load/ingestr parameter editors stay (they only render for existing
   assets).
 
 ## Mechanics

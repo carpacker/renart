@@ -5,8 +5,8 @@ Concept only — no implementation. Companion to
 the DTO/patch API now carry `materialization_strategy` + `incremental_key`, and the
 workbench sheet shows a Materialization card for every asset type). This document
 covers the next problem: **the UI lets users configure materialization on sql,
-python, sling and api assets, but only a subset of the offered modes executes
-correctly — and for sling/api none of it is wired to the run path at all.**
+python, load and api assets, but only a subset of the offered modes executes
+correctly — and for load/api none of it is wired to the run path at all.**
 
 The UI currently offers (`MATERIALIZATION_OPTIONS`, `asset-guided-cards.tsx:151`):
 `none`, `view` (SQL only), `table (create+replace)`, `append`, `merge`,
@@ -59,24 +59,24 @@ to an Arrow file and uploaded with **ingestr** (`uv tool run ingestr ingest
   for the common single-warehouse workspace.
 
 Note: this path ships **ingestr** (installed on the user's machine via uv at run
-time). Renart deliberately avoided ingestr for sling assets (license); using
+time). Renart deliberately avoided ingestr for load assets (license); using
 bruin's stock python operator means python-materialized assets pull it in anyway.
 Decision needed: accept (it's upstream bruin behavior) or, later, replace the
 upload leg with the sling bridge (Arrow → CSV → `sling run`, same as api assets).
 
-### Sling — materialization is parsed, persisted, and completely ignored
+### Load — materialization is parsed, persisted, and completely ignored
 
-`runSlingAsset` (`service/sling.go:345`) builds
+`runLoadAsset` (`service/load.go:345`) builds
 `sling run --src-conn/--src-stream/--tgt-conn/--tgt-object [--mode <params.mode>]`
 purely from the flat `parameters`; `asset.Materialization` is never read. Two
 consequences:
 
-- The Materialization card and the sling editor's own `mode` select
-  (`sling-parameters-editor.tsx:169`) are **two disconnected controls**; only
+- The Materialization card and the load editor's own `mode` select
+  (`load-parameters-editor.tsx:169`) are **two disconnected controls**; only
   `mode` does anything.
 - Even `mode` is only half-wired: sling's `incremental` mode requires
   `--primary-key` and/or `--update-key`, which renart never passes
-  (`slingModeArgsFromParams` emits `--mode` only), so incremental sling runs fail
+  (`loadModeArgsFromParams` emits `--mode` only), so incremental sling runs fail
   outright.
 
 ### HTTP API — always full-refresh, everything else is a no-op
@@ -103,7 +103,7 @@ is removed, and the api spec's dead `load.mode` is dropped from the parse struct
 ### 2.2 Shared bruin→sling strategy mapping (fixes sling + api at once)
 
 Both sling and api assets load through the sling CLI, so one helper in
-`service/sling.go` covers both run paths:
+`service/load.go` covers both run paths:
 
 ```go
 // slingMaterializationArgs maps asset.Materialization (+ primary-key columns)
@@ -118,9 +118,9 @@ func slingMaterializationArgs(asset *pipeline.Asset) ([]string, error)
 | `table` + `append`, incremental_key set| `--mode incremental --update-key <incremental_key>`          | append only rows newer than max(key) — sling's append-new semantics |
 | `table` + `append`, no incremental_key | `--mode snapshot`                                            | sling's append-everything mode; adds a `_sling_loaded_at` column — must be documented in the card's helper text |
 | `table` + `merge`                      | `--mode incremental --primary-key <pk1,pk2,…>` + optional `--update-key <incremental_key>` | PKs from `asset.ColumnNamesWithPrimaryKey()`; validation error if empty. With update-key sling merges only new/changed rows; without, full scan + upsert |
-| `view`, `time_interval`, `delete+insert`, `ddl`, scd2 | **rejected** (validation error at save and at run) | no sling equivalent; UI never offers them for sling/api |
+| `view`, `time_interval`, `delete+insert`, `ddl`, scd2 | **rejected** (validation error at save and at run) | no sling equivalent; UI never offers them for load/api |
 
-`runSlingAsset` replaces `slingModeArgsFromParams` with: explicit full-refresh
+`runLoadAsset` replaces `loadModeArgsFromParams` with: explicit full-refresh
 from run context wins → else `slingMaterializationArgs` → else legacy
 `params.Mode` passthrough. `runAPIAsset` appends the same helper's output instead
 of `slingRunModeArgs(ctx)` alone.
@@ -143,7 +143,7 @@ naming the asset kind):
 | delete+insert²             | ✓   | ✓      | –     | –   |
 | incremental (time_interval)| ✓   | –³     | –     | –   |
 
-¹ for sling/api "none" *is* full-refresh (a loader always writes a table), so the
+¹ for load/api "none" *is* full-refresh (a loader always writes a table), so the
 matrix shows only "table (replace)" as the default instead of a misleading "none".
 ² new options worth adding while we're here — both already execute via bruin's SQL
 materializer, and truncate maps cleanly to sling.
@@ -167,7 +167,7 @@ materializer, and truncate maps cleanly to sling.
 Bruin's SQL materializers already produce clear errors; add equivalents where
 renart owns the path:
 
-- `runSlingAsset`/`runAPIAsset`: fail fast with actionable messages
+- `runLoadAsset`/`runAPIAsset`: fail fast with actionable messages
   ("merge materialization needs at least one primary-key column") *before*
   spawning sling.
 - Python: on save, reject `time_interval`/`view` for python assets; optionally
@@ -178,10 +178,10 @@ renart owns the path:
 ### 2.6 Coverage/staleness interplay (small, verify only)
 
 `matlog/recorder.go:IntervalAware` keys off strategy/incremental_key, so once
-sling/api assets carry real strategies, their runs will start recording
+load/api assets carry real strategies, their runs will start recording
 interval rows stamped with the run window. Sling doesn't actually filter by that
 window (its incremental state is max-of-key, not the renart window), so coverage
-intervals would be cosmetic-but-wrong. Simplest rule: treat sling/api assets as
+intervals would be cosmetic-but-wrong. Simplest rule: treat load/api assets as
 non-interval-aware (single "built" marker) regardless of strategy — one guard in
 `IntervalAware`.
 
@@ -192,7 +192,7 @@ non-interval-aware (single "built" marker) regardless of strategy — one guard 
 **Phase 1 — sling + api execute their materialization (the actual bug report).**
 `slingMaterializationArgs` + wiring in both run paths + fail-fast validation +
 unit tests on the flag mapping (table above, incl. PK join and legacy `mode`
-fallback). Remove the sling editor's mode select; keep `mode` param read-only
+fallback). Remove the load editor's mode select; keep `mode` param read-only
 back-compat. Deliverable check: duckdb live e2e — sling csv→duckdb and an api
 asset, each run twice under `merge` (assert no duplicate rows) and `append`
 (assert row count grows).
@@ -216,7 +216,7 @@ Phase 2.
 
 - **Append semantics for loaders**: is `snapshot` (with its `_sling_loaded_at`
   extra column) acceptable as "append without incremental key", or should
-  keyless append be rejected for sling/api? Snapshot is more useful; the extra
+  keyless append be rejected for load/api? Snapshot is more useful; the extra
   column may surprise schema-sensitive downstreams.
 - **Existing sling assets with `mode` set**: migrate on next save (derive
   materialization from mode, drop the param) or leave until touched? Proposal:
@@ -228,8 +228,8 @@ Phase 2.
 
 ## 5. Key files
 
-- Run paths: `internal/web/service/sling.go` (`runSlingAsset`,
-  `slingModeArgsFromParams` → replace), `internal/web/service/api_asset.go`
+- Run paths: `internal/web/service/load.go` (`runLoadAsset`,
+  `loadModeArgsFromParams` → replace), `internal/web/service/api_asset.go`
   (`runAPIAsset`), `internal/web/service/direct_executor_registry.go` (SQL +
   python operators; nothing to change for their engines).
 - Model/validation: `internal/web/service/asset.go` (`AssetUpdateRequest`,
@@ -239,7 +239,7 @@ Phase 2.
 - Frontend: `web/components/redesign/asset-guided-cards.tsx`
   (`MATERIALIZATION_OPTIONS` → per-type matrix, granularity select, merge-key
   blocker), `web/components/redesign/asset-yaml-editor.tsx` (same options),
-  `web/components/redesign/sling-parameters-editor.tsx` (drop mode select).
+  `web/components/redesign/load-parameters-editor.tsx` (drop mode select).
 - Bruin references: `pkg/python/materialization_mapping.go` (python strategy
   set), `pkg/python/uv.go:346` (`runWithMaterialization`),
   `pkg/<warehouse>/materialization.go` (SQL validation),

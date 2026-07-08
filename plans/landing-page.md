@@ -40,4 +40,4 @@ and trust your pipelines — one local binary, your files, no platform.
 
 ## Blocked on
 
-Lukas' answers to questions.md #1–#3 (direction, media regen, "stainless").
+The maintainer's answers to questions.md #1–#3 (direction, media regen, "stainless").

@@ -259,7 +259,12 @@ export function usePythonIntellisense(
       pythonAssetEntries.delete(uri);
       release();
     };
-  }, [monaco, editor, asset, isPythonAsset]);
+    // Keyed on asset?.id (not the asset object): a workspace/SSE update mints a
+    // new asset object with the same id, and re-running this effect would
+    // release+re-acquire the shared providers, firing the completion registry's
+    // onDidChange and resetting any open suggestion widget (including SQL's,
+    // since the registry is shared across languages).
+  }, [monaco, editor, asset?.id, isPythonAsset]);
 
   useEffect(() => {
     if (!monaco || !editor || !asset?.id || !isPythonAsset) {

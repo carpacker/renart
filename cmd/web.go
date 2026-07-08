@@ -55,7 +55,7 @@ type webServer struct {
 	executionSvc     *service.ExecutionService
 	assetSvc         *service.AssetService
 	sqlSvc           *service.SQLService
-	slingSvc         *service.SlingService
+	loadSvc         *service.LoadService
 	suggestionsSvc   *service.SuggestionsService
 	parseContextSvc  *service.ParseContextService
 	sqlLSPSvc        *service.SQLLSPService
@@ -269,7 +269,7 @@ func (s *webServer) registerRoutes(router chi.Router) {
 	webhttpapi.RegisterAssetColumnRoutes(router, &webhttpapi.AssetColumnsAPI{Service: s.assetSvc})
 	webhttpapi.RegisterPipelineExecutionRoutes(router, &webhttpapi.PipelineExecutionAPI{Service: s.executionSvc})
 	webhttpapi.RegisterSQLRoutes(router, &webhttpapi.SQLAPI{Service: s.sqlSvc})
-	webhttpapi.RegisterSlingRoutes(router, &webhttpapi.SlingAPI{Service: s.slingSvc})
+	webhttpapi.RegisterLoadRoutes(router, &webhttpapi.LoadAPI{Service: s.loadSvc})
 	webhttpapi.RegisterSuggestionRoutes(router, &webhttpapi.SuggestionsAPI{Service: s.suggestionsSvc})
 	webhttpapi.RegisterParseContextRoutes(router, &webhttpapi.ParseContextAPI{Service: s.parseContextSvc})
 	webhttpapi.RegisterSQLLSPRoutes(router, &webhttpapi.SQLLSPAPI{Service: s.sqlLSPSvc})

@@ -28,11 +28,11 @@ function RootComponent() {
 
 function getDocumentTitle(pathname: string) {
   if (pathname.includes("/connections")) {
-    return "Connections · Settings · Renart";
+    return "Connections · Settings · renart";
   }
 
   if (pathname.startsWith("/settings")) {
-    return "Environments · Settings · Renart";
+    return "Environments · Settings · renart";
   }
 
   return null;

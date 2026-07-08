@@ -54,6 +54,12 @@ export function AssetCodeEditor({
       fixedOverflowWidgets: true,
       quickSuggestions: true,
       suggestOnTriggerCharacters: true,
+      // Track the container via Monaco's own ResizeObserver. Without this the
+      // editor only re-measures on a window resize, so when a sibling (e.g. the
+      // parse-error banner) appears and shrinks the container, Monaco keeps its
+      // stale height and overflows — which oscillates a scrollbar until the
+      // window is resized.
+      automaticLayout: true,
     }),
     [],
   );
@@ -68,7 +74,7 @@ export function AssetCodeEditor({
 
   return (
     <div
-      className={`relative ${
+      className={`relative overflow-hidden ${
         containerClassName ?? `${mobile ? "min-h-[240px]" : "h-[55%]"} border-b`
       } ${
         helpMode && editorHighlighted ? "ring-2 ring-primary/70 ring-inset" : ""

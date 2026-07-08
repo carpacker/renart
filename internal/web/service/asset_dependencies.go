@@ -219,23 +219,23 @@ func reconcileSQLAssetDependencies(ctx context.Context, asset *pipeline.Asset, p
 	return reconcileSQLAssetDependenciesFS(ctx, afero.NewOsFs(), asset, parsedPipeline, sqlParserInstance, renderer)
 }
 
-// reconcileSlingAssetDependencies auto-infers a Sling asset's upstream from its
+// reconcileLoadAssetDependencies auto-infers a Load asset's upstream from its
 // source mapping: when source_table (or a single declared upstream) resolves to
 // an existing asset, that asset is recorded as an *inferred* dependency. User
 // edits (manual adds / ignores) are preserved through the same assetmeta model
 // the SQL path uses.
-func (s *AssetService) reconcileSlingAssetDependencies(ctx context.Context, relAssetPath string) error {
+func (s *AssetService) reconcileLoadAssetDependencies(ctx context.Context, relAssetPath string) error {
 	assetID := EncodeID(filepath.ToSlash(relAssetPath))
 	_, parsedPipeline, asset, err := s.deps.ResolveAssetByID(ctx, assetID)
 	if err != nil {
 		return err
 	}
-	if !isSlingAsset(asset) || parsedPipeline == nil {
+	if !isLoadAsset(asset) || parsedPipeline == nil {
 		return nil
 	}
 
 	inferred := make([]pipeline.Upstream, 0, 1)
-	if source := resolveSlingSourceAsset(parsedPipeline, asset); source != nil {
+	if source := resolveLoadSourceAsset(parsedPipeline, asset); source != nil {
 		sourceName := strings.TrimSpace(source.Name)
 		if sourceName != "" && !strings.EqualFold(sourceName, strings.TrimSpace(asset.Name)) {
 			inferred = append(inferred, pipeline.Upstream{Type: "asset", Value: sourceName, Mode: pipeline.UpstreamModeFull})
@@ -252,7 +252,7 @@ func (s *AssetService) reconcileSlingAssetDependencies(ctx context.Context, relA
 	asset.Meta = pipeline.EmptyStringMap(next.Apply(asset.Meta))
 
 	if apiErr := s.persistYAMLAssetPreservingInferredName(asset); apiErr != nil {
-		return fmt.Errorf("persist sling dependencies for %q: %s", asset.Name, apiErr.Message)
+		return fmt.Errorf("persist load dependencies for %q: %s", asset.Name, apiErr.Message)
 	}
 	return nil
 }

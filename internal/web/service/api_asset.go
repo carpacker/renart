@@ -20,6 +20,8 @@ import (
 	"github.com/bruin-data/bruin/pkg/pipeline"
 	"github.com/spf13/afero"
 	"gopkg.in/yaml.v3"
+
+	"renart/internal/web/service/assetmeta"
 )
 
 const apiAssetType = "api"
@@ -141,14 +143,19 @@ func apiAwareYamlTaskCreator(fs afero.Fs) pipeline.TaskCreator {
 		}
 		// The narrow API definition struct intentionally omits the fields renart's
 		// asset workbench edits (columns, owner, tags, description, materialization).
-		// Parse them with the stock YAML reader so they load — and therefore survive
-		// a save — instead of being silently dropped.
-		if stockAsset, stockErr := stock(filePath); stockErr == nil && stockAsset != nil {
-			asset.Columns = stockAsset.Columns
-			asset.Owner = stockAsset.Owner
-			asset.Tags = stockAsset.Tags
-			asset.Description = stockAsset.Description
-			asset.Materialization = stockAsset.Materialization
+		// Bruin's stock reader parses them, but it models `parameters:` as flat
+		// map[string]string and errors on an API asset's nested request/response
+		// spec — which would silently drop these fields (so a dropped column, an
+		// edited owner, etc. never round-trips). Parse them from a copy of the file
+		// with `parameters` stripped so they load and survive a save.
+		if stripped, stripErr := stripYAMLTopLevelKey(content, "parameters"); stripErr == nil {
+			if metaAsset, metaErr := pipeline.ConvertYamlToTask(stripped); metaErr == nil && metaAsset != nil {
+				asset.Columns = metaAsset.Columns
+				asset.Owner = metaAsset.Owner
+				asset.Tags = metaAsset.Tags
+				asset.Description = metaAsset.Description
+				asset.Materialization = metaAsset.Materialization
+			}
 		}
 		return asset, nil
 	}
@@ -269,6 +276,34 @@ func apiTargetObjectName(asset *pipeline.Asset, spec nativeAPISpec) string {
 	return strings.TrimSpace(spec.Load.Object)
 }
 
+// apiInferredColumnsForDisplay returns an API asset's spec-inferred columns for
+// the workspace preview, minus any the user has explicitly dropped
+// (renart_col_drop). The preview only falls back to inference when the asset
+// carries no declared columns yet, so honouring drops here keeps a dropped
+// column from reappearing once the file's column set is emptied out.
+func apiInferredColumnsForDisplay(ctx context.Context, asset *pipeline.Asset) []pipeline.Column {
+	columns := apiResponseFieldColumns(ctx, asset)
+	if len(columns) == 0 || asset == nil {
+		return columns
+	}
+	dropped := assetmeta.Parse(asset.Meta).ColDrop
+	if len(dropped) == 0 {
+		return columns
+	}
+	dropSet := make(map[string]bool, len(dropped))
+	for _, name := range dropped {
+		dropSet[strings.ToLower(strings.TrimSpace(name))] = true
+	}
+	filtered := make([]pipeline.Column, 0, len(columns))
+	for _, column := range columns {
+		if dropSet[strings.ToLower(strings.TrimSpace(column.Name))] {
+			continue
+		}
+		filtered = append(filtered, column)
+	}
+	return filtered
+}
+
 func apiResponseFieldColumns(ctx context.Context, asset *pipeline.Asset) []pipeline.Column {
 	if asset == nil {
 		return nil
@@ -335,7 +370,7 @@ func (e *HybridBruinExecutor) runAPIAsset(ctx context.Context, pl *pipeline.Pipe
 	if targetObject == "" {
 		return nil, errors.New("api asset target object could not be inferred from asset name")
 	}
-	targetConn, err := slingConnectionURI(manager, connectionName)
+	targetConn, err := loadConnectionURI(manager, connectionName)
 	if err != nil {
 		return nil, err
 	}
@@ -365,8 +400,8 @@ func (e *HybridBruinExecutor) runAPIAsset(ctx context.Context, pl *pipeline.Pipe
 		"--tgt-object",
 		targetObject,
 	}
-	args = append(args, slingRunModeArgs(ctx)...)
-	cmdName, cmdArgs, err := slingCommand(ctx, args, writer)
+	args = append(args, loadRunModeArgs(ctx)...)
+	cmdName, cmdArgs, err := loadCommand(ctx, args, writer)
 	if err != nil {
 		return writer.buffer.Bytes(), err
 	}

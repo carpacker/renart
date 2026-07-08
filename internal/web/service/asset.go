@@ -16,6 +16,7 @@ type AssetUpdateRequest struct {
 	Name                    *string           `json:"name,omitempty"`
 	Type                    *string           `json:"type,omitempty"`
 	Content                 *string           `json:"content,omitempty"`
+	Connection              *string           `json:"connection,omitempty"`
 	MaterializationType     *string           `json:"materialization_type,omitempty"`
 	MaterializationStrategy *string           `json:"materialization_strategy,omitempty"`
 	IncrementalKey          *string           `json:"incremental_key,omitempty"`
@@ -330,7 +331,7 @@ func (s *AssetService) Create(ctx context.Context, pipelineID string, req Create
 		}
 	}
 
-	// Sling assets are now a single flat-parameter .asset.yml (the DefaultAsset/
+	// Load assets are now a single flat-parameter .asset.yml (the DefaultAsset/
 	// DerivedAsset content producers emit that shape), so they write like any
 	// other single-file asset — no .sling.yml replication sidecar.
 	if err := afero.WriteFile(fs, absAssetPath, []byte(content), 0o644); err != nil {
@@ -363,10 +364,10 @@ func (s *AssetService) Create(ctx context.Context, pipelineID string, req Create
 		if err := s.reconcileSQLAssetDependencies(ctx, assetPath); err != nil {
 			return AssetMutationResponse{}, newAPIError(500, "asset_dependency_reconcile_failed", err.Error())
 		}
-	} else if isSlingAssetType(assetType) {
+	} else if isLoadAssetType(assetType) {
 		// Auto-infer the upstream from the source mapping (best-effort: a newly
 		// created skeleton often has no resolvable source yet).
-		if err := s.reconcileSlingAssetDependencies(ctx, assetPath); err != nil {
+		if err := s.reconcileLoadAssetDependencies(ctx, assetPath); err != nil {
 			_ = err
 		}
 	}
@@ -422,16 +423,16 @@ func (s *AssetService) Update(ctx context.Context, assetID string, req AssetUpda
 	// node-preserving codec, so we skip the executable-file rewrite below (which
 	// would clobber the codec's output for api assets whose definition == executable).
 	persistedViaCodec := false
-	slingAssetUpdated := false
+	loadAssetUpdated := false
 
-	if req.Name != nil || req.Type != nil || req.MaterializationType != nil || req.MaterializationStrategy != nil || req.IncrementalKey != nil || req.Owner != nil || req.Tags != nil || req.Meta != nil || req.Upstreams != nil || req.Parameters != nil {
+	if req.Name != nil || req.Type != nil || req.Connection != nil || req.MaterializationType != nil || req.MaterializationStrategy != nil || req.IncrementalKey != nil || req.Owner != nil || req.Tags != nil || req.Meta != nil || req.Upstreams != nil || req.Parameters != nil {
 		_, parsedPipeline, asset, resolveErr := s.deps.ResolveAssetByID(ctx, assetID)
 		if resolveErr != nil {
 			return AssetMutationResponse{}, newAPIError(400, "asset_resolve_failed", resolveErr.Error())
 		}
-		if isSlingAsset(asset) {
+		if isLoadAsset(asset) {
 			originalHadExplicitName = true
-			slingAssetUpdated = true
+			loadAssetUpdated = true
 		}
 
 		originalAssetName := asset.Name
@@ -471,6 +472,9 @@ func (s *AssetService) Update(ctx context.Context, assetID string, req AssetUpda
 		}
 		if req.IncrementalKey != nil {
 			asset.Materialization.IncrementalKey = strings.TrimSpace(*req.IncrementalKey)
+		}
+		if req.Connection != nil {
+			asset.Connection = strings.TrimSpace(*req.Connection)
 		}
 		if req.Owner != nil {
 			asset.Owner = strings.TrimSpace(*req.Owner)
@@ -514,7 +518,7 @@ func (s *AssetService) Update(ctx context.Context, assetID string, req AssetUpda
 			asset.Parameters = nextParameters
 		}
 		if isYAMLDefinedAsset(asset) {
-			// api/sling/ingestr/plain-yaml: overlay managed fields onto the
+			// api/load/ingestr/plain-yaml: overlay managed fields onto the
 			// definition file, preserving the request spec, sling replication
 			// config and any other unmanaged content (and columns, which the old
 			// per-type writers silently dropped).
@@ -547,7 +551,7 @@ func (s *AssetService) Update(ctx context.Context, assetID string, req AssetUpda
 			return AssetMutationResponse{}, newAPIError(500, "asset_read_failed", err.Error())
 		}
 		mergedContent := desiredExecutable
-		if !isSlingExecutablePath(relAssetPath) && !isAPIExecutablePath(relAssetPath) {
+		if !isLoadExecutablePath(relAssetPath) && !isAPIExecutablePath(relAssetPath) {
 			mergedContent = MergeExecutableContent(string(latestBytes), desiredExecutable)
 		}
 		if err := afero.WriteFile(fs, absAssetPath, []byte(mergedContent), 0o644); err != nil {
@@ -569,10 +573,10 @@ func (s *AssetService) Update(ctx context.Context, assetID string, req AssetUpda
 			s.ScheduleSQLPatches(relAssetPath)
 		}
 	}
-	if slingAssetUpdated {
+	if loadAssetUpdated {
 		// Re-infer the sling upstream from the (possibly edited) source mapping.
 		// Best-effort: a save with an unresolved source should still succeed.
-		if err := s.reconcileSlingAssetDependencies(ctx, relAssetPath); err != nil {
+		if err := s.reconcileLoadAssetDependencies(ctx, relAssetPath); err != nil {
 			_ = err
 		}
 	}
@@ -622,9 +626,9 @@ func (s *AssetService) Delete(ctx context.Context, assetID string) (StatusRespon
 	}
 	pathsToRemove := []string{absAssetPath}
 	pathsToSuppress := []string{filepath.ToSlash(relAssetPath)}
-	if isSlingExecutablePath(relAssetPath) && s.deps.ResolveAssetByID != nil {
+	if isLoadExecutablePath(relAssetPath) && s.deps.ResolveAssetByID != nil {
 		resolvedRelPath, _, asset, resolveErr := s.deps.ResolveAssetByID(ctx, assetID)
-		if resolveErr == nil && isSlingAsset(asset) && asset.DefinitionFile.Path != "" {
+		if resolveErr == nil && isLoadAsset(asset) && asset.DefinitionFile.Path != "" {
 			pathsToRemove = appendUniqueStrings(pathsToRemove, asset.DefinitionFile.Path)
 			if relDefinitionPath, relErr := filepath.Rel(s.deps.WorkspaceRoot, asset.DefinitionFile.Path); relErr == nil {
 				pathsToSuppress = appendUniqueStrings(pathsToSuppress, filepath.ToSlash(relDefinitionPath))
@@ -649,7 +653,7 @@ func (s *AssetService) Delete(ctx context.Context, assetID string) (StatusRespon
 func extensionForAssetType(assetType string) string {
 	lowered := strings.ToLower(strings.TrimSpace(assetType))
 	switch {
-	case isSlingAssetType(lowered):
+	case isLoadAssetType(lowered):
 		return ".asset.yml"
 	case isAPIAssetType(lowered):
 		return ".asset.yml"
@@ -782,10 +786,10 @@ func DefaultDerivedSQLAssetContent(assetName, assetType, assetPath, sourceAssetN
 		return fmt.Sprintf("\"\"\" @bruin\n\nname: %s\ntype: python\n%smaterialization:\n  type: table\n\ndepends:\n  - %s\n\n@bruin \"\"\"\n\nfrom bruin import query\n\n\ndef materialize():\n    return query(\"select * from %s\")\n", assetName, connectionLine, sourceAssetName, queryTarget)
 	}
 
-	// Sling downstream: a single flat-parameter .asset.yml that reads the upstream
+	// Load downstream: a single flat-parameter .asset.yml that reads the upstream
 	// asset as its source. bruin parses `parameters` as flat strings, so the whole
 	// replication intent stays in one bruin-loadable file (no .sling.yml sidecar).
-	if isSlingAssetType(assetType) {
+	if isLoadAssetType(assetType) {
 		object := assetNameLeafPath(assetName)
 		if strings.TrimSpace(object) == "" {
 			object = "asset"
@@ -794,7 +798,7 @@ func DefaultDerivedSQLAssetContent(assetName, assetType, assetPath, sourceAssetN
 		if sourceConnection == "" {
 			sourceConnection = "your_source_connection"
 		}
-		return fmt.Sprintf("type: sling\n\ndepends:\n  - %s\n\nparameters:\n  source_connection: %s\n  source_table: %s\n  destination_connection: your_destination_connection\n  destination_table: public.%s\n  mode: full-refresh\n", sourceAssetName, sourceConnection, sourceAssetName, object)
+		return fmt.Sprintf("type: load\n\ndepends:\n  - %s\n\nparameters:\n  source_connection: %s\n  source_table: %s\n  destination_connection: your_destination_connection\n  destination_table: public.%s\n  mode: full-refresh\n", sourceAssetName, sourceConnection, sourceAssetName, object)
 	}
 
 	header := fmt.Sprintf("/* @bruin\n\ntype: %s\nmaterialization:\n  type: view\n\n@bruin */\n\n", assetType)

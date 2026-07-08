@@ -152,4 +152,4 @@ prompt to build it.
 parser), import cache + attach fast path, rename invariance, viz parser,
 promotion planning. `internal/web/service` covers ComputeState loading +
 direction rule, CRUD/run lifecycle, autorecompute eligibility, promotion.
-`web/tests/e2e/redesign/notebooks.live.spec.ts` drives the real server.
+`web/tests/e2e/app/notebooks.live.spec.ts` drives the real server.

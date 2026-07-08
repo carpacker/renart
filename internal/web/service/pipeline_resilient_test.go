@@ -23,7 +23,7 @@ func TestComputeStateKeepsPipelineWhenAnAssetFailsToParse(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(pipelineRoot, "assets/good.sql"),
 		[]byte("/* @bruin\nname: analytics.good\ntype: duckdb.sql\n@bruin */\nselect 1\n"), 0o644))
 	// A broken asset: tab-indented YAML, which is invalid and fails to parse.
-	brokenContent := "name: analytics.broken\ntype: sling\nparameters:\n\tobject: x\n"
+	brokenContent := "name: analytics.broken\ntype: load\nparameters:\n\tobject: x\n"
 	require.NoError(t, os.WriteFile(filepath.Join(pipelineRoot, "assets/broken.asset.yml"), []byte(brokenContent), 0o644))
 
 	workspace := NewWorkspaceService(workspaceRoot, filepath.Join(workspaceRoot, ".bruin.yml"))

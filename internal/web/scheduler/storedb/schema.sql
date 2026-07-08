@@ -85,6 +85,18 @@ CREATE TABLE IF NOT EXISTS renart_coverage (
 CREATE INDEX IF NOT EXISTS idx_renart_coverage_selection ON renart_coverage
     (environment, vars_hash, asset_id);
 
+-- Most recent run attempt per (asset, environment), success or failure;
+-- upserted so a later run overwrites the previous outcome.
+CREATE TABLE IF NOT EXISTS renart_asset_runs (
+    asset_id     TEXT NOT NULL,
+    environment  TEXT NOT NULL,
+    fingerprint  TEXT NOT NULL,
+    status       TEXT NOT NULL,
+    run_id       TEXT NOT NULL DEFAULT '',
+    ran_at       TEXT NOT NULL,
+    PRIMARY KEY (asset_id, environment)
+);
+
 -- Snapshot store (queried by the snapshot package directly, not sqlc).
 CREATE TABLE IF NOT EXISTS renart_blobs (
     hash    TEXT PRIMARY KEY,

@@ -5,7 +5,7 @@
 > (`service/asset.go`), populated in `workspace.go`. Still missing from Phase 1:
 > `partition_by`, `cluster_by`, `time_granularity`. Phases 2 (full refresh /
 > backfill; run paths still hardcode `RunConfigFullRefresh = false`) and 3
-> (capability-aware editor) are not started. Per-asset-type gaps (sling/api
+> (capability-aware editor) are not started. Per-asset-type gaps (load/api
 > assets ignore `Materialization`, `primary_key` is not editable, python needs
 > `materialize()` + ingestr) are analyzed in the companion
 > `materialization-per-asset-type.md`, which carries the active plan for them.

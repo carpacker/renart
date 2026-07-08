@@ -8,6 +8,7 @@ package staleness
 import (
 	"context"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -57,6 +58,15 @@ type AssetStatus struct {
 	TotalSeconds       float64    `json:"total_seconds,omitempty"`
 	Gaps               []Interval `json:"gaps,omitempty"` // uncovered sub-ranges, the Build-stale plan input
 	LastMaterializedAt *time.Time `json:"last_materialized_at,omitempty"`
+	// Last run attempt (success or failure), orthogonal to the base Status.
+	// Together with the base status and the current fingerprint they let the UI
+	// tell an untested edit from a run that failed, and an unchanged asset whose
+	// last run failed. LastRunOnCurrentContent is true when the last run's
+	// fingerprint matches the asset's current fingerprint (i.e. the run was on
+	// the content still on disk).
+	LastRunStatus           string     `json:"last_run_status,omitempty"` // "succeeded" | "failed"
+	LastRunAt               *time.Time `json:"last_run_at,omitempty"`
+	LastRunOnCurrentContent bool       `json:"last_run_on_current_content,omitempty"`
 }
 
 // Selection identifies what the user is looking at.
@@ -240,6 +250,10 @@ func (s *Service) compute(ctx context.Context, selection Selection) ([]AssetStat
 	if err != nil {
 		return nil, err
 	}
+	lastRuns, err := s.deps.Store.LastRuns(ctx, assetIDs, selection.Environment)
+	if err != nil {
+		return nil, err
+	}
 
 	s.mu.Lock()
 	missing := s.missingByPanel[verifyKey(selection)]
@@ -254,12 +268,46 @@ func (s *Service) compute(ctx context.Context, selection Selection) ([]AssetStat
 			continue
 		}
 		status := classify(asset, assetID, result, coverage[assetID], anyBuilt[assetID], lastOwnContent[assetID], selectedRange)
-		if status.Status == StatusFresh && missing != nil && missing[asset.Name] {
+		applyLastRun(&status, lastRuns[assetID], result)
+		if status.Status == StatusFresh && missing != nil && missing[asset.Name] && verifiableByName(asset) {
 			status.Status = StatusMissing
 		}
 		statuses = append(statuses, status)
 	}
 	return statuses, nil
+}
+
+// verifiableByName reports whether an asset's freshness can be confirmed by
+// looking up a warehouse object named after the asset — the assumption the
+// trust-but-verify pass makes. It holds for SQL and seed assets. It does NOT
+// hold for load (sling) or python assets: a load asset writes to an arbitrary
+// destination (a local file like `./out.csv`, or a `destination_table` that
+// doesn't match the asset name), and a python asset runs an arbitrary script
+// that may write nothing (or a differently-named object). The name-based lookup
+// always reports those missing, so skip the downgrade — their freshness rests on
+// the run fact alone.
+func verifiableByName(asset *pipeline.Asset) bool {
+	switch strings.ToLower(strings.TrimSpace(string(asset.Type))) {
+	case "load", "python":
+		return false
+	}
+	return true
+}
+
+// applyLastRun layers the most recent run attempt onto the base classification.
+// It is orthogonal to the base status: a fresh asset can still carry a failed
+// last run (an unchanged re-run that failed), and for an edited asset it records
+// whether the failing run was on the content still on disk.
+func applyLastRun(status *AssetStatus, lastRun matlog.AssetRunRecord, result fingerprint.Result) {
+	if lastRun.Status == "" {
+		return
+	}
+	status.LastRunStatus = lastRun.Status
+	if !lastRun.RanAt.IsZero() {
+		at := lastRun.RanAt
+		status.LastRunAt = &at
+	}
+	status.LastRunOnCurrentContent = lastRun.Fingerprint == string(result.FP)
 }
 
 func classify(asset *pipeline.Asset, assetID string, result fingerprint.Result, rows []matlog.CoverageRow, anyBuilt bool, lastOwnContent string, selectedRange *Interval) AssetStatus {

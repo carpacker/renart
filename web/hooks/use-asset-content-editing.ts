@@ -17,7 +17,7 @@ export type SaveSelectedAssetResult = false | "saved" | "already-saved";
 /**
  * Content-editing state for an asset: the draft-aware editor value,
  * debounced writes to the backend on change, and an explicit save for the
- * Ctrl/Cmd+S path. Shared by the workspace editor pane and the redesign
+ * Ctrl/Cmd+S path. Shared by the workspace editor pane and the app
  * build editor.
  */
 export function useAssetContentEditing({

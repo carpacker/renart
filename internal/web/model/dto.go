@@ -326,6 +326,7 @@ type InspectResult struct {
 	RawOutput                           string            `json:"raw_output"`
 	Operation                           OperationMetadata `json:"operation"`
 	Error                               string            `json:"error,omitempty"`
+	Info                                string            `json:"info,omitempty"`
 	MissingUpstreamAssetIDs             []string          `json:"missing_upstream_asset_ids,omitempty"`
 	MissingUpstreamAssetNames           []string          `json:"missing_upstream_asset_names,omitempty"`
 	MissingUpstreamAssetsMaterializable bool              `json:"missing_upstream_assets_materializable,omitempty"`

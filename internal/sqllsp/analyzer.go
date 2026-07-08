@@ -102,15 +102,29 @@ func (e *Engine) Diagnostics(doc TextDocumentItem) []Diagnostic {
 	projection := e.renderDocument(doc)
 	analysis := analyzeSQLWithResolver(projection.doc.Text, e)
 	diagnostics := e.polyglotDiagnostics(projection.doc)
+	currentAsset := e.assetForURI(doc.URI)
 	for _, use := range analysis.relations {
-		_, isCTE := analysis.ctes[strings.ToLower(use.name)]
-		if !isCTE && e.resolveRelation(use.name) == nil && !strings.HasPrefix(use.name, "{{") {
+		if _, isCTE := analysis.ctes[strings.ToLower(use.name)]; isCTE || strings.HasPrefix(use.name, "{{") {
+			continue
+		}
+		resolved := e.resolveRelation(use.name)
+		if resolved == nil {
 			diagnostics = append(diagnostics, Diagnostic{
 				Range:    RangeFromOffsets(projection.doc.Text, use.start, use.end),
 				Severity: diagnosticSeverityError,
 				Code:     "unresolved-relation",
 				Source:   "renart-sql-lsp",
 				Message:  "Unresolved relation: " + use.name,
+			})
+			continue
+		}
+		if currentAsset != nil && resolved.AssetID != "" && resolved.AssetID == currentAsset.ID {
+			diagnostics = append(diagnostics, Diagnostic{
+				Range:    RangeFromOffsets(projection.doc.Text, use.start, use.end),
+				Severity: diagnosticSeverityError,
+				Code:     "circular-dependency",
+				Source:   "renart-sql-lsp",
+				Message:  "Circular dependency: asset '" + currentAsset.Name + "' references itself.",
 			})
 		}
 	}
@@ -415,6 +429,15 @@ func (e *Engine) dialectForDocument(doc TextDocumentItem) string {
 	return "generic"
 }
 
+func (e *Engine) assetForURI(uri URI) *AssetNode {
+	for i := range e.graph.Assets {
+		if e.graph.Assets[i].URI == uri {
+			return &e.graph.Assets[i]
+		}
+	}
+	return nil
+}
+
 func (e *Engine) Complete(doc TextDocumentItem, pos Position) []CompletionItem {
 	offset := ByteOffset(doc.Text, pos)
 	if inTemplateRef(doc.Text, offset) {
@@ -427,6 +450,14 @@ func (e *Engine) Complete(doc TextDocumentItem, pos Position) []CompletionItem {
 	}
 	analysis := analyzeSQLWithResolver(projection.doc.Text, e)
 	if qualifier, ok := qualifierBeforeDot(projection.doc.Text, renderedOffset); ok {
+		// `from schema.` (or join/into/update) is a relation position, not an
+		// alias.column one: offer the relations in that schema rather than the
+		// columns of a table literally named `schema`.
+		if relationDotPosition(projection.doc.Text, renderedOffset) {
+			if items := e.relationCompletionsInSchema(qualifier); len(items) > 0 {
+				return items
+			}
+		}
 		return columnCompletions(e.columnsForQualifier(analysis, qualifier))
 	}
 	if relationPosition(projection.doc.Text, renderedOffset) {
@@ -1255,10 +1286,64 @@ func (e *Engine) relationCompletions() []CompletionItem {
 	return items
 }
 
+// relationCompletionsInSchema returns the relations qualified by schema (e.g.
+// `analytics.` -> analytics.customers, analytics.orders). InsertText is only the
+// part after the schema dot so completing after an already-typed `schema.` does
+// not duplicate the qualifier.
+func (e *Engine) relationCompletionsInSchema(schema string) []CompletionItem {
+	trimmed := strings.TrimSpace(schema)
+	if trimmed == "" {
+		return nil
+	}
+	prefix := strings.ToLower(trimmed) + "."
+	items := make([]CompletionItem, 0)
+	for _, relation := range e.graph.Relations {
+		if !strings.HasPrefix(strings.ToLower(relation.Name), prefix) {
+			continue
+		}
+		items = append(items, CompletionItem{
+			Label:      relation.Name,
+			Kind:       completionKindReference,
+			Detail:     "relation",
+			InsertText: relation.Name[len(prefix):],
+		})
+	}
+	sortCompletionItems(items)
+	return items
+}
+
+// relationDotPosition reports whether the cursor sits right after `<ident>.` in a
+// relation position (from/join/into/update <ident>.), so a schema qualifier
+// should complete to relations rather than a table's columns.
+func relationDotPosition(text string, offset int) bool {
+	prefix := strings.ToLower(text[:min(offset, len(text))])
+	tokens := wordPattern.FindAllString(prefix, -1)
+	if len(tokens) < 2 {
+		return false
+	}
+	keyword := tokens[len(tokens)-2]
+	return keyword == "from" || keyword == "join" || keyword == "into" || keyword == "update"
+}
+
+// sqlKeywordCompletionLabels are the clause and operator keywords offered in a
+// general statement position. They sort after columns and relations (see the
+// "z" SortText prefix) so schema-aware suggestions always win. Kept lowercase to
+// match the project's SQL style; functions are intentionally excluded (they are
+// served through hover/signature help, not keyword completion).
+var sqlKeywordCompletionLabels = []string{
+	"select", "distinct", "from", "where", "group by", "having", "order by",
+	"limit", "offset", "as", "on", "using", "with",
+	"join", "inner join", "left join", "right join", "full join", "cross join",
+	"lateral", "union", "union all", "intersect", "except",
+	"and", "or", "not", "in", "exists", "between", "like", "ilike",
+	"is null", "is not null", "case", "when", "then", "else", "end",
+	"asc", "desc", "nulls first", "nulls last",
+	"over", "partition by", "qualify",
+}
+
 func (e *Engine) keywordCompletions() []CompletionItem {
-	labels := []string{"select", "from", "where", "join", "on", "group by", "order by", "limit"}
-	items := make([]CompletionItem, 0, len(labels))
-	for i, label := range labels {
+	items := make([]CompletionItem, 0, len(sqlKeywordCompletionLabels))
+	for i, label := range sqlKeywordCompletionLabels {
 		items = append(items, CompletionItem{Label: label, Kind: completionKindMethod, SortText: fmt.Sprintf("z%02d", i)})
 	}
 	return items

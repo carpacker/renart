@@ -357,6 +357,76 @@ func (s *Store) LatestFingerprint(ctx context.Context, assetIDs []string, enviro
 	return result, rows.Err()
 }
 
+// AssetRunRecord is the most recent run attempt for one asset in one
+// environment — success or failure. It distinguishes an untested edit from a run
+// that was attempted and failed, and surfaces an unchanged asset whose last run
+// failed.
+type AssetRunRecord struct {
+	AssetID     string
+	Environment string
+	// Fingerprint is the target fingerprint of the content that ran, compared
+	// against the asset's current fingerprint to tell whether the failing run
+	// was on the content still on disk.
+	Fingerprint string
+	Status      string // "succeeded" | "failed"
+	RunID       string
+	RanAt       time.Time
+}
+
+// RecordRun upserts the latest run attempt for an asset+environment. A later run
+// of either outcome overwrites the previous row, so a success naturally clears a
+// prior failure.
+func (s *Store) RecordRun(ctx context.Context, r AssetRunRecord) error {
+	if r.AssetID == "" || r.Fingerprint == "" || r.Status == "" {
+		return fmt.Errorf("matlog: asset_id, fingerprint and status are required")
+	}
+	if r.RanAt.IsZero() {
+		r.RanAt = time.Now().UTC()
+	}
+	_, err := s.db.ExecContext(ctx, `
+		INSERT INTO renart_asset_runs
+			(asset_id, environment, fingerprint, status, run_id, ran_at)
+		VALUES (?, ?, ?, ?, ?, ?)
+		ON CONFLICT (asset_id, environment)
+		DO UPDATE SET fingerprint = excluded.fingerprint, status = excluded.status,
+			run_id = excluded.run_id, ran_at = excluded.ran_at`,
+		r.AssetID, r.Environment, r.Fingerprint, r.Status, r.RunID, formatTime(r.RanAt))
+	return err
+}
+
+// LastRuns returns the most recent run attempt per asset in the environment.
+func (s *Store) LastRuns(ctx context.Context, assetIDs []string, environment string) (map[string]AssetRunRecord, error) {
+	if len(assetIDs) == 0 {
+		return map[string]AssetRunRecord{}, nil
+	}
+	query := `
+		SELECT asset_id, fingerprint, status, run_id, ran_at FROM renart_asset_runs
+		WHERE environment = ? AND asset_id IN (?` + repeatPlaceholder(len(assetIDs)-1) + `)`
+	args := make([]any, 0, len(assetIDs)+1)
+	args = append(args, environment)
+	for _, id := range assetIDs {
+		args = append(args, id)
+	}
+	rows, err := s.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	result := make(map[string]AssetRunRecord)
+	for rows.Next() {
+		var rec AssetRunRecord
+		var ranAt string
+		if err := rows.Scan(&rec.AssetID, &rec.Fingerprint, &rec.Status, &rec.RunID, &ranAt); err != nil {
+			return nil, err
+		}
+		rec.Environment = environment
+		rec.RanAt = parseTime(ranAt)
+		result[rec.AssetID] = rec
+	}
+	return result, rows.Err()
+}
+
 // Prune deletes raw materialization facts older than the cutoff. Coverage
 // rows are the durable summary and are never pruned here.
 func (s *Store) Prune(ctx context.Context, olderThan time.Time) (int64, error) {

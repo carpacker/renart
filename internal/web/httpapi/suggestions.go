@@ -13,6 +13,7 @@ import (
 type SuggestionsHandlers interface {
 	Ingestr(ctx context.Context, connectionName, prefix, environment string) (service.IngestrSuggestionsResult, *service.APIError)
 	SQLPath(ctx context.Context, assetID, prefix, environment string) (service.SQLPathSuggestionsResult, *service.APIError)
+	OpenAPISuggestions(ctx context.Context, openapiURL, requestURL, method string) (service.OpenAPISuggestionsResult, *service.APIError)
 }
 
 type SuggestionsAPI struct {
@@ -22,6 +23,7 @@ type SuggestionsAPI struct {
 func RegisterSuggestionRoutes(router chi.Router, handlers *SuggestionsAPI) {
 	router.Get("/api/ingestr/suggestions", handlers.HandleGetIngestrSuggestions)
 	router.Get("/api/assets/{assetID}/sql-path-suggestions", handlers.HandleGetSQLPathSuggestions)
+	router.Get("/api/api-assets/openapi-suggestions", handlers.HandleGetOpenAPISuggestions)
 }
 
 func (h *SuggestionsAPI) HandleGetIngestrSuggestions(w http.ResponseWriter, r *http.Request) {
@@ -34,6 +36,23 @@ func (h *SuggestionsAPI) HandleGetIngestrSuggestions(w http.ResponseWriter, r *h
 	}
 
 	result, apiErr := h.Service.Ingestr(r.Context(), connectionName, prefix, environment)
+	if apiErr != nil {
+		webapi.WriteJSON(w, apiErr.Status, map[string]any{
+			"status": "error",
+			"error":  map[string]string{"code": apiErr.Code, "message": apiErr.Message},
+		})
+		return
+	}
+
+	webapi.WriteJSON(w, http.StatusOK, result)
+}
+
+func (h *SuggestionsAPI) HandleGetOpenAPISuggestions(w http.ResponseWriter, r *http.Request) {
+	openapiURL := strings.TrimSpace(r.URL.Query().Get("openapi_url"))
+	requestURL := strings.TrimSpace(r.URL.Query().Get("request_url"))
+	method := strings.TrimSpace(r.URL.Query().Get("method"))
+
+	result, apiErr := h.Service.OpenAPISuggestions(r.Context(), openapiURL, requestURL, method)
 	if apiErr != nil {
 		webapi.WriteJSON(w, apiErr.Status, map[string]any{
 			"status": "error",

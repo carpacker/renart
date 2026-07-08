@@ -146,3 +146,28 @@ Design notes, in decreasing order of importance:
 `schema.yml`), serves LSP over stdio, and reloads the graph on
 `workspace/didChangeWatchedFiles`. A missing graph degrades to syntax-only
 analysis. Message size is capped at 64 MiB (`maxMessageBytes`).
+
+## 6. Completion & diagnostic surface (web editor)
+
+The app's Monaco asset editor (`web/components/app/asset-editor.tsx`) drives SQL
+intellisense **entirely through the LSP** (`web/hooks/use-sql-lsp.ts`); the older
+client-side parse-context providers are deliberately disabled, so the LSP is the
+single source of truth.
+
+- **Completions** by context: column fields (after an alias `.`), relations —
+  workspace assets and, in a `from schema.` position,
+  `relationCompletionsInSchema` returns schema-stripped inserts — and clause
+  **keywords** (`keywordCompletions`, sorted last via a `z` SortText so
+  schema-aware items win). The client keeps only kinds it renders (columns,
+  relations, keywords). Purely-remote warehouse tables (no backing asset) are
+  not yet completed from the LSP — see `plans/remote-table-intellisense.md`.
+- **Diagnostics**: unresolved relation / alias / column (column checks only fire
+  when the relation's columns are known from asset SQL or declared metadata),
+  **circular self-reference** (a used relation that resolves to the current
+  asset), rendered-template diagnostics, and polyglot syntax errors. Column-not-
+  materialized warnings and inspect-error markers are intentionally not surfaced
+  in this editor.
+- **Monaco gotcha**: the completion registry is shared across languages, so the
+  python/yaml completion providers must register once (keyed on `asset?.id`,
+  live state via a ref) — re-registering them on a workspace/SSE update
+  re-triggers any open SQL suggestion widget and drops its selection.

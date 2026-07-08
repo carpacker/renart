@@ -1,26 +1,24 @@
 # Renart
 
-Renart is an IDE for git-native data pipelines.
+Renart is the all-in-one data pipeline IDE — open source, and it runs entirely inside your Git repository.
 
-It gives your data pipelines a visual editing environment with a pipeline canvas, IntelliSense, SQL validation, inspect flows, and materialization while keeping the filesystem and Git as the source of truth. Built on top of Bruin.
+Write SQL that knows your DAG, explore data in notebooks, preview and materialize assets, and put pipelines on a schedule — without standing up a hosted control plane, signing up for anything, or sending your data anywhere.
 
 ![Renart pipeline canvas and editor](docs/public/landing/feature-dag-canvas.png)
 
-## Why Renart Exists
+## What you get
 
-Most data pipeline tools make you choose between a visual interface and real version-controlled files. Renart is built to avoid that tradeoff. Every visual edit is a file change, every canvas view reflects your actual pipeline structure, and the CLI can keep working alongside the UI.
+- **A pipeline canvas.** See assets, dependencies, and lineage at a glance instead of reconstructing them from YAML and SQL by hand.
+- **SQL that knows your pipeline.** The editor is grounded in your actual DAG: IntelliSense suggests columns from upstream assets and validation flags unresolved references while you type, so a broken column shows up in the editor, not in tomorrow's failed run.
+- **Notebooks that graduate into pipelines.** Query your data ad hoc and see tables and charts inline. When a cell earns a permanent place, promote it into a real pipeline asset — same repo, same review flow.
+- **Preview, then materialize.** Inspect any asset with no side effects, then materialize it explicitly when you're sure.
+- **Schedules without an orchestrator.** Put a pipeline on a schedule per environment and Renart runs it against DuckDB, Postgres, Snowflake, BigQuery, Redshift, and more. Nothing separate to deploy and babysit.
+- **Freshness you can see.** Renart fingerprints every asset — its code, its dependencies, its outputs — and shows what's fresh, stale, or missing on the canvas. Rerun what changed, skip what didn't.
+- **Every change is a reviewable diff.** Moving a node, renaming an asset, or changing a materialization all land as plain file changes your team can branch, review, and revert like any other code.
 
-## Who Renart Is For
+## Who it's for
 
-Renart is for data engineers, analytics engineers, and technical data users who want to understand and change real pipeline structures without losing the benefits of version-controlled project files.
-
-Use Renart when you want:
-
-- a canvas-first view of assets, dependencies, and data flow
-- editor workflows that still write normal Bruin project files
-- safe inspect flows for previewing SQL results
-- explicit materialization flows for running assets
-- a Git-friendly alternative to a generic pipeline dashboard
+Renart is for data engineers, analytics engineers, and technical data users who want a fast visual way to build and understand pipelines without giving up version-controlled project files.
 
 ## Install
 
@@ -28,83 +26,39 @@ Use Renart when you want:
 curl -LsSf getrenart.com/install.sh | sh
 ```
 
-Then start Renart inside a Git repository that contains, or will contain, a Bruin project:
+Then start Renart inside a Git repository:
 
 ```bash
 renart web
 ```
 
-Renart starts on `127.0.0.1:8080` by default. If that port is unavailable, it picks the next available fallback port and prints the URL.
+Renart opens on `127.0.0.1:8080` by default. If that port is taken it picks the next free one and prints the URL. Everything it stores stays in your repository — no hosted service, no account, no data leaving your environment.
 
 ## Documentation
 
-The documentation site lives in `docs/`.
+Full docs live at [getrenart.com](https://getrenart.com) and in `docs/`. To run them locally:
 
 ```bash
 make docs-dev
 ```
 
-The production docs build is fully static and can be served by Caddy:
-
-```bash
-make docs-docker
-make docs-docker-run
-```
-
 ## Development
 
-Renart is a Go server plus a static React frontend embedded into the binary.
+Renart is a single Go binary with an embedded React frontend. It runs on the open-source [Bruin](https://github.com/bruin-data/bruin) execution engine and keeps everything on disk as plain, diffable files.
 
-- Backend: Go HTTP server
-- Frontend: React, TypeScript, Vite, TanStack Router, Tailwind CSS, Monaco, React Flow
-- Docs: Astro and Starlight
-- Runtime sync: filesystem watcher plus Server-Sent Events
-
-Useful targets:
+- **Backend:** Go HTTP server
+- **Frontend:** React, TypeScript, Vite, TanStack Router, Tailwind CSS, Monaco, React Flow
+- **Docs:** Astro + Starlight
+- **Sync:** filesystem watcher plus Server-Sent Events
 
 ```bash
-make help
-make build
-make check
-make web-build
-make docs-build
-make landing-media
-make docs-screenshots
+make help    # list targets
+make build   # build the binary
+make check   # run the checks
 ```
 
-Direct command equivalents:
-
-```bash
-/usr/local/go/bin/go build .
-corepack pnpm --dir web build
-corepack pnpm --dir docs build
-```
-
-## Architecture Principles
-
-- The filesystem is authoritative.
-- Git-backed project workspaces are the normal operating model.
-- Frontend state exists for responsiveness, not persistence.
-- File-changing actions go through the Go server APIs.
-- Workspace changes reconcile through Server-Sent Events, not polling.
-- Bruin compatibility matters more than clever internal shortcuts.
-
-## Contributing
-
-Contributions should preserve Renart's positioning as an IDE for git-native data pipelines: visual and direct, but still grounded in real files, real Bruin project semantics, and reviewable Git diffs.
-
-Before opening a PR, run the relevant checks:
-
-```bash
-make check
-```
-
-For frontend changes, also consider live flow coverage when the behavior touches workspace sync, canvas interactions, inspect/materialize, or Monaco editor behavior:
-
-```bash
-make web-test-live
-```
+Contributing and architecture notes live in [`AGENTS.md`](AGENTS.md), with deeper current-state docs in [`architecture/`](architecture/) and in-flight design work in [`plans/`](plans/). Run `make check` before opening a PR.
 
 ## License
 
-Renart is licensed under Apache License 2.0. See `LICENSE`.
+Renart is licensed under the Apache License 2.0. See [`LICENSE`](LICENSE).

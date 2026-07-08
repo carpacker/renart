@@ -35,7 +35,7 @@ func TestOnboardingImportDatabaseReturnsSchemaAssetPaths(t *testing.T) {
 	assert.Contains(t, string(contents), "name: analytics")
 }
 
-func TestCreateDuckDBQuickstartCreatesSlingChessAssetsAndDatabaseFile(t *testing.T) {
+func TestCreateDuckDBQuickstartCreatesLoadChessAssetsAndDatabaseFile(t *testing.T) {
 	t.Parallel()
 
 	workspaceRoot := t.TempDir()

@@ -10,7 +10,7 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// YAML-defined assets (api, sling, ingestr, plain `.asset.yml`, and any future
+// YAML-defined assets (api, load, ingestr, plain `.asset.yml`, and any future
 // kind such as dbt) all round-trip through a single node-preserving codec: on
 // write, renart replaces only the keys it manages and leaves everything else in
 // the file untouched — the API request `parameters` spec, the sling `run`
@@ -39,12 +39,12 @@ var baseManagedYAMLAssetKeys = []string{
 }
 
 // managedYAMLAssetKeys returns the managed keys for a specific asset. `parameters`
-// is managed only for Sling assets, whose replication intent renart edits as flat
+// is managed only for Load assets, whose replication intent renart edits as flat
 // string parameters. For API assets `parameters` holds a nested request/response
 // spec that renart does NOT model, so it stays preserved-but-unmanaged — managing
 // it there would delete the spec on the next write.
 func managedYAMLAssetKeys(asset *pipeline.Asset) []string {
-	if isSlingAsset(asset) {
+	if isLoadAsset(asset) {
 		return append(append([]string{}, baseManagedYAMLAssetKeys...), "parameters")
 	}
 	return baseManagedYAMLAssetKeys
@@ -65,7 +65,7 @@ func isYAMLDefinedAsset(asset *pipeline.Asset) bool {
 
 // persistYAMLAssetDefinition writes a YAML-defined asset by overlaying renart's
 // managed fields onto the existing definition file, preserving all unmanaged
-// content. It is the single write path for api/sling/ingestr/plain-yaml assets.
+// content. It is the single write path for api/load/ingestr/plain-yaml assets.
 func persistYAMLAssetDefinition(fs afero.Fs, asset *pipeline.Asset) error {
 	if asset == nil {
 		return fmt.Errorf("asset is required")
@@ -149,6 +149,30 @@ func canonicalManagedMapping(asset *pipeline.Asset) (map[string]*yaml.Node, erro
 		}
 	}
 	return managed, nil
+}
+
+// stripYAMLTopLevelKey returns the document with a single top-level key removed,
+// preserving ordering and comments of everything else. It lets callers hand the
+// rest of an asset definition to a parser that can't tolerate that key's shape —
+// notably bruin's stock reader, which models `parameters:` as map[string]string
+// and errors on an API asset's nested request/response spec.
+func stripYAMLTopLevelKey(content []byte, key string) ([]byte, error) {
+	var doc yaml.Node
+	if err := yaml.Unmarshal(content, &doc); err != nil {
+		return nil, err
+	}
+	deleteMappingKey(documentMappingNode(&doc), key)
+
+	out := bytes.NewBuffer(nil)
+	enc := yaml.NewEncoder(out)
+	enc.SetIndent(2)
+	if err := enc.Encode(&doc); err != nil {
+		return nil, err
+	}
+	if err := enc.Close(); err != nil {
+		return nil, err
+	}
+	return out.Bytes(), nil
 }
 
 // documentMappingNode returns the root mapping node of a YAML document, turning

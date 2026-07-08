@@ -24,6 +24,13 @@ export type AssetStaleness = {
   total_seconds?: number;
   gaps?: StalenessInterval[];
   last_materialized_at?: string;
+  // Most recent run attempt, orthogonal to `status`. Together they distinguish an
+  // untested edit from an edit that was run and failed, and surface unchanged code
+  // whose last run failed. `last_run_on_current_content` is true when that run was
+  // on the content currently on disk.
+  last_run_status?: "succeeded" | "failed";
+  last_run_at?: string;
+  last_run_on_current_content?: boolean;
 };
 
 export type PipelineStalenessResponse = {

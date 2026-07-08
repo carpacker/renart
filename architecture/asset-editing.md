@@ -106,7 +106,7 @@ order then manual/preserved ones, no timestamps or UI state in committed
 metadata (the node-preserving YAML codec in `service/asset_yaml_codec.go`
 round-trips unknown fields).
 
-## 6. UI (`web/components/redesign/`)
+## 6. UI (`web/components/app/`)
 
 - **Guided cards** (`asset-guided-cards.tsx`), rendered in the inspector
   sidebar next to the SQL editor: identity, materialization, dependencies

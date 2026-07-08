@@ -279,7 +279,7 @@ export type OnboardingImportSummary = {
 };
 
 export type AssetInspectResponse = GeneratedAssetInspectResponse & {
-  status: "ok" | "error";
+  status: "ok" | "error" | "info";
   operation?: OperationMetadata;
   warning?: string;
   missing_upstream_asset_ids?: string[];

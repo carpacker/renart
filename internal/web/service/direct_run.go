@@ -40,8 +40,8 @@ func (e *HybridBruinExecutor) RunAsset(ctx context.Context, req RunAssetRequest,
 		return nil, err
 	}
 
-	if isSlingAsset(pp.Asset) {
-		return e.runSlingAsset(ctx, pp.Asset, manager, onChunk)
+	if isLoadAsset(pp.Asset) {
+		return e.runLoadAsset(ctx, pp.Asset, manager, onChunk)
 	}
 
 	runID := newRenartRunID()
@@ -245,8 +245,8 @@ func (e *HybridBruinExecutor) RunPipeline(ctx context.Context, req RunPipelineRe
 			var runErr error
 			if isAPIAsset(instance.GetAsset()) {
 				_, runErr = e.runAPIAsset(runCtx, foundPipeline, instance.GetAsset(), renderer, manager, func(chunk []byte) { _, _ = printer.Write(chunk) })
-			} else if isSlingAsset(instance.GetAsset()) {
-				_, runErr = e.runSlingAsset(ctx, instance.GetAsset(), manager, func(chunk []byte) { _, _ = printer.Write(chunk) })
+			} else if isLoadAsset(instance.GetAsset()) {
+				_, runErr = e.runLoadAsset(ctx, instance.GetAsset(), manager, func(chunk []byte) { _, _ = printer.Write(chunk) })
 			} else {
 				runErr = seq.RunSingleTask(runCtx, instance)
 			}
@@ -414,7 +414,7 @@ var directRunAssetTypes = map[pipeline.AssetType]struct{}{
 	pipeline.AssetTypeS3KeySensor:             {},
 	pipeline.AssetTypePython:                  {},
 	pipeline.AssetTypeIngestr:                 {},
-	pipeline.AssetType(slingAssetType):        {},
+	pipeline.AssetType(loadAssetType):        {},
 	pipeline.AssetType(apiAssetType):          {},
 }
 

@@ -8,6 +8,20 @@ import react from "@vitejs/plugin-react";
 const require = createRequire(import.meta.url);
 const PROXY_TARGET = process.env.PROXY_TARGET ?? "http://127.0.0.1:3000"
 
+// The backend's SameOriginGuard rejects state-changing requests whose Origin
+// doesn't match its Host. `changeOrigin` already rewrites the forwarded Host to
+// the proxy target, but leaves the browser's Origin intact — so when the app is
+// reached from another machine (HOST=0.0.0.0), Origin (dev-machine IP) and Host
+// (proxy target) disagree and POSTs are rejected. The dev proxy is effectively
+// same-origin to the backend, so align the forwarded Origin with the target.
+const alignProxyOrigin: import("vite").ProxyOptions["configure"] = (proxy) => {
+  proxy.on("proxyReq", (proxyReq) => {
+    if (proxyReq.getHeader("origin")) {
+      proxyReq.setHeader("origin", PROXY_TARGET);
+    }
+  });
+};
+
 function prepareMonacoAssetsPlugin(): Plugin {
   let hasPreparedAssets = false;
 
@@ -107,18 +121,21 @@ export default defineConfig({
       "^/api/pipelines/.*/materialize/stream$": {
         target: PROXY_TARGET,
         changeOrigin: true,
+        configure: alignProxyOrigin,
         timeout: 0,
         proxyTimeout: 0,
       },
       "^/api/assets/.*/materialize/stream$": {
         target: PROXY_TARGET,
         changeOrigin: true,
+        configure: alignProxyOrigin,
         timeout: 0,
         proxyTimeout: 0,
       },
       "/api": {
         target: PROXY_TARGET,
         changeOrigin: true,
+        configure: alignProxyOrigin,
         ws: true,
       },
     },

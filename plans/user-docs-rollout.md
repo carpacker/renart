@@ -49,7 +49,7 @@ across the set.
 
 Gap: it stops at "you can start Renart." Nothing documents the actual product
 surface — the canvas, the asset editor/workbench, inspect, materialize, asset
-types (SQL/Python/API/Sling/seed), connections & environments, notebooks,
+types (SQL/Python/API/Load/seed), connections & environments, notebooks,
 scheduling, type-checking, runs/staleness, or the CLI beyond `renart web`. That is
 the bulk of what users need and exactly what's grown most on the redesign branch.
 
@@ -117,7 +117,7 @@ succeed without it), **P1** = core workflows, **P2** = depth/polish.
 - SQL assets **[P1]**
 - Python assets — the Bruin Python SDK, pyproject **[P2]**
 - HTTP API assets **[P2]**
-- Load (Sling) assets — source/target connections, the `local` file option, path
+- Load assets — source/target connections, the `local` file option, path
   & stream autocomplete (`sling conns discover`), modes, automatic upstream &
   column inference **[P1, new feature — author alongside the code]**
 - Seeds **[P2]**
@@ -207,7 +207,7 @@ nav.
 
 **Phase 1 — The P0/P1 spine.** The path a user actually walks: expand Concepts;
 "Build your first pipeline" tutorial; canvas; asset editor + workbench;
-materialization/dependencies/columns how-tos; SQL + Load(Sling) asset pages;
+materialization/dependencies/columns how-tos; SQL + Load asset pages;
 connections & environments; type-checking; CLI reference; troubleshooting. This is
 the launchable doc set.
 

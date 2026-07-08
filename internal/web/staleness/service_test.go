@@ -111,6 +111,37 @@ func (f *fixture) recordRun(t *testing.T, environment string, window *Interval, 
 			m.IntervalEnd = &window.End
 		}
 		require.NoError(t, f.store.Record(context.Background(), m))
+		// The real recorder also upserts a "succeeded" run attempt at the target
+		// fingerprint alongside the coverage fact; mirror that here.
+		require.NoError(t, f.store.RecordRun(context.Background(), matlog.AssetRunRecord{
+			AssetID:     assetID,
+			Environment: environment,
+			Fingerprint: string(result.FP),
+			Status:      "succeeded",
+			RunID:       "run",
+			RanAt:       time.Now().UTC(),
+		}))
+	}
+}
+
+// recordRunAttempt upserts the latest run attempt (any outcome) for the named
+// assets at their current fingerprint, exactly as the matlog recorder does for a
+// failed run — no coverage fact is written.
+func (f *fixture) recordRunAttempt(t *testing.T, environment, status string, assetNames ...string) {
+	t.Helper()
+	vars := fingerprint.EffectiveVars(f.pipeline, nil)
+	results, err := f.engine.DAG(f.pipeline, vars)
+	require.NoError(t, err)
+	for _, name := range assetNames {
+		assetID := identity.AssetID("p", name)
+		require.NoError(t, f.store.RecordRun(context.Background(), matlog.AssetRunRecord{
+			AssetID:     assetID,
+			Environment: environment,
+			Fingerprint: string(results[assetID].FP),
+			Status:      status,
+			RunID:       "run",
+			RanAt:       time.Now().UTC(),
+		}))
 	}
 }
 
@@ -138,6 +169,51 @@ func TestNeverBuiltThenFresh(t *testing.T) {
 
 	f.recordRun(t, "dev", nil, "a")
 	assert.Equal(t, StatusFresh, f.statuses(t, "dev", nil, nil)["a"].Status)
+}
+
+// State 1: you edited the asset, ran that exact edit, and it failed. Base status
+// stays stale_edited, but the failed run is on the current content.
+func TestEditedThenRunFailedOnCurrentContent(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t, sqlAsset("a", "select 1"))
+	f.recordRun(t, "dev", nil, "a") // fresh at the original content
+
+	f.pipeline.Assets[0].ExecutableFile.Content = "select 1, 2" // edit
+	f.recordRunAttempt(t, "dev", "failed", "a")                 // run the edit → fails
+
+	s := f.statuses(t, "dev", nil, nil)["a"]
+	assert.Equal(t, StatusStaleEdited, s.Status)
+	assert.Equal(t, "failed", s.LastRunStatus)
+	assert.True(t, s.LastRunOnCurrentContent, "the failing run was on the edited content")
+}
+
+// State 2: you edited the asset but have not run it since. Base is stale_edited,
+// and the last run (the old success) is not on the current content.
+func TestEditedButNotRunSinceEdit(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t, sqlAsset("a", "select 1"))
+	f.recordRun(t, "dev", nil, "a") // fresh at the original content
+
+	f.pipeline.Assets[0].ExecutableFile.Content = "select 1, 2" // edit, no re-run
+
+	s := f.statuses(t, "dev", nil, nil)["a"]
+	assert.Equal(t, StatusStaleEdited, s.Status)
+	assert.Equal(t, "succeeded", s.LastRunStatus)
+	assert.False(t, s.LastRunOnCurrentContent, "the last run was the pre-edit build")
+}
+
+// State 3: the content is unchanged (still fresh from an earlier build), but the
+// most recent run at that same content failed.
+func TestUnchangedContentButLastRunFailed(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t, sqlAsset("a", "select 1"))
+	f.recordRun(t, "dev", nil, "a")             // fresh
+	f.recordRunAttempt(t, "dev", "failed", "a") // re-run same content → fails
+
+	s := f.statuses(t, "dev", nil, nil)["a"]
+	assert.Equal(t, StatusFresh, s.Status, "coverage still proves an earlier build")
+	assert.Equal(t, "failed", s.LastRunStatus)
+	assert.True(t, s.LastRunOnCurrentContent)
 }
 
 func TestEditFlipsAssetAndCone(t *testing.T) {
@@ -361,6 +437,73 @@ func TestVerificationDowngradesToMissing(t *testing.T) {
 			}
 		case <-deadline:
 			t.Fatal("asset never downgraded to missing")
+		}
+	}
+}
+
+func TestLoadAssetNotDowngradedToMissing(t *testing.T) {
+	t.Parallel()
+	schedStore, err := scheduler.OpenStore(filepath.Join(t.TempDir(), "state.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = schedStore.Close() })
+
+	store := matlog.NewStore(schedStore.DB())
+	engine := fingerprint.NewEngine()
+	load := &pipeline.Asset{
+		Name: "example.to_csv",
+		Type: "load",
+		ExecutableFile: pipeline.ExecutableFile{
+			Path:    "/w/p/assets/to_csv.asset.yml",
+			Content: "type: load\nparameters:\n  destination_connection: local\n  destination_table: ./out.csv\n",
+		},
+	}
+	p := &pipeline.Pipeline{
+		LegacyID:       "p",
+		Name:           "test",
+		DefinitionFile: pipeline.DefinitionFile{Path: "/w/p/pipeline.yml"},
+		Assets:         []*pipeline.Asset{load},
+	}
+
+	pushed := make(chan any, 16)
+	service := New(Dependencies{
+		Store:   store,
+		Engine:  engine,
+		Resolve: func(ctx context.Context, uuid string) (*pipeline.Pipeline, error) { return p, nil },
+		Publish: func(event any) { pushed <- event },
+		// The warehouse has no table named after the load asset (it wrote a csv).
+		Verify: func(ctx context.Context, selection Selection, assetNames []string) (map[string]bool, error) {
+			return map[string]bool{"example.to_csv": false}, nil
+		},
+	})
+
+	vars := fingerprint.EffectiveVars(p, nil)
+	results, err := engine.DAG(p, vars)
+	require.NoError(t, err)
+	result, ok := results["p:example.to_csv"]
+	require.True(t, ok)
+	require.NoError(t, store.Record(context.Background(), matlog.Materialization{
+		AssetID: "p:example.to_csv", Environment: "dev",
+		Fingerprint: string(result.FP), OwnContent: string(result.OwnContent),
+		VarsHash: fingerprint.AllVarsHash(vars), RunID: "run", MaterializedAt: time.Now().UTC(),
+	}))
+
+	selection := Selection{PipelineUUID: "p", Environment: "dev"}
+	statuses, err := service.Statuses(context.Background(), selection)
+	require.NoError(t, err)
+	require.Len(t, statuses, 1)
+	assert.Equal(t, StatusFresh, statuses[0].Status)
+
+	// The verifier reports it missing and republishes, but a load asset must stay
+	// fresh — its freshness rests on the run fact, not a warehouse-table lookup.
+	deadline := time.After(2 * time.Second)
+	for {
+		select {
+		case event := <-pushed:
+			payload := event.(map[string]any)
+			republished := payload["assets"].([]AssetStatus)
+			assert.Equal(t, StatusFresh, republished[0].Status)
+		case <-deadline:
+			return
 		}
 	}
 }

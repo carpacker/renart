@@ -28,6 +28,7 @@ type InspectResult struct {
 	RawOutput                           string
 	Operation                           OperationMetadata
 	Error                               string
+	Info                                string
 	MissingUpstreamAssetIDs             []string
 	MissingUpstreamAssetNames           []string
 	MissingUpstreamAssetsMaterializable bool
@@ -323,16 +324,46 @@ func (s *ExecutionService) inspectMaterializedNonSQLAsset(ctx context.Context, a
 		return InspectResult{}, false
 	}
 
-	connectionName, err := parsedPipeline.GetConnectionNameForAsset(asset)
-	if isAPIAsset(asset) {
-		connectionName, err = apiConnectionNameForAsset(asset, parsedPipeline)
-	}
-	if err != nil || strings.TrimSpace(connectionName) == "" {
-		return InspectResult{}, false
+	rowLimit := normalizeInspectLimit(limit)
+
+	// A non-SQL asset (python, api, load) is inspected by previewing the table it
+	// materializes into. For load assets the destination is a flat parameter; for
+	// python/api it's the asset's own connection + name.
+	var connectionName, tableName string
+	if isLoadAsset(asset) {
+		params := loadParamsFromAsset(asset)
+		if isLocalLoadConnection(params.DestinationConnection) {
+			// A load asset that writes to a local file (e.g. ./data.csv) has no
+			// queryable table — surface an informational note rather than an error.
+			return InspectResult{
+				Status:     "info",
+				Columns:    []string{},
+				Rows:       []map[string]any{},
+				Operation:  queryAssetOperation(relAssetPath, limit, environment, ""),
+				Info:       fmt.Sprintf("This load asset writes to a local file (%s), which can't be previewed. Point the destination at a connection to inspect the loaded data.", strings.TrimSpace(params.DestinationTable)),
+				HTTPStatus: 200,
+			}, true
+		}
+		if strings.TrimSpace(params.DestinationConnection) == "" {
+			return InspectResult{}, false
+		}
+		connectionName = params.DestinationConnection
+		tableName = strings.TrimSpace(params.DestinationTable)
+		if tableName == "" {
+			tableName = asset.Name
+		}
+	} else {
+		connectionName, err = parsedPipeline.GetConnectionNameForAsset(asset)
+		if isAPIAsset(asset) {
+			connectionName, err = apiConnectionNameForAsset(asset, parsedPipeline)
+		}
+		if err != nil || strings.TrimSpace(connectionName) == "" {
+			return InspectResult{}, false
+		}
+		tableName = asset.Name
 	}
 
-	rowLimit := normalizeInspectLimit(limit)
-	query := fmt.Sprintf("select * from %s limit %d", asset.Name, rowLimit)
+	query := fmt.Sprintf("select * from %s limit %d", tableName, rowLimit)
 	operation := queryConnectionOperation(connectionName, query, environment)
 	operation.AssetPath = relAssetPath
 	operation.Target = relAssetPath
@@ -537,6 +568,30 @@ func (s *ExecutionService) MaterializeAssetStream(ctx context.Context, assetID, 
 			s.emitRunCompleted("", pipelineView.UUID, environment, timeWindow, now, runAssets)
 		}
 		changedAssetIDs = s.deps.FindInspectIDs(assetIDsToRefresh...)
+	} else {
+		// The run failed. Emit a RunCompleted marking the attempted assets as
+		// failed so the matlog recorder persists a failed run attempt. Coverage
+		// (success facts) stays untouched, but staleness can now tell "edited and
+		// the run failed" from "edited, not run yet", and surface an unchanged
+		// asset whose last run failed.
+		now := time.Now().UTC()
+		pipelineView, pipelineFound := s.findPipelineViewForAsset(assetID)
+		if pipelineFound {
+			runAssets := make([]bus.AssetRun, 0, len(assetNamesToRecord))
+			for _, assetName := range assetNamesToRecord {
+				if assetName == "" {
+					continue
+				}
+				runAssets = append(runAssets, bus.AssetRun{
+					AssetID:   identity.AssetID(pipelineView.UUID, assetName),
+					AssetName: assetName,
+					Status:    "failed",
+				})
+			}
+			if len(runAssets) > 0 {
+				s.emitRunCompleted("", pipelineView.UUID, environment, timeWindow, now, runAssets)
+			}
+		}
 	}
 
 	status := "ok"

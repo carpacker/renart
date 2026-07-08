@@ -499,10 +499,7 @@ func TestDirectRunAssetWithCustomChecksDoesNotFallbackToCLI(t *testing.T) {
 func TestDirectFormatAssetMatchesCLIFormatting(t *testing.T) {
 	t.Parallel()
 
-	bruinBinary := os.Getenv("BRUIN_COMPAT_BINARY")
-	if strings.TrimSpace(bruinBinary) == "" {
-		bruinBinary = filepath.Join("/home/lukas/git/bruin", "bruin")
-	}
+	bruinBinary := strings.TrimSpace(os.Getenv("BRUIN_COMPAT_BINARY"))
 	if _, err := os.Stat(bruinBinary); err != nil {
 		t.Skip("compatibility binary not available")
 	}
@@ -837,10 +834,7 @@ func TestDirectRunIngestrAssetFailureMatchesCLIErrorSemantics(t *testing.T) {
 func compatBruinBinary(t *testing.T) string {
 	t.Helper()
 
-	bruinBinary := os.Getenv("BRUIN_COMPAT_BINARY")
-	if strings.TrimSpace(bruinBinary) == "" {
-		bruinBinary = filepath.Join("/home/lukas/git/bruin", "bruin")
-	}
+	bruinBinary := strings.TrimSpace(os.Getenv("BRUIN_COMPAT_BINARY"))
 	if _, err := os.Stat(bruinBinary); err != nil {
 		t.Skip("compatibility binary not available")
 	}

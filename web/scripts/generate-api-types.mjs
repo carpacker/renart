@@ -51,6 +51,14 @@ const sources = [
     types: ["SuggestionItem", "IngestrSuggestionsResult", "SQLPathSuggestionsResult"],
   },
   {
+    file: resolve(repoRoot, "internal", "web", "service", "api_openapi_suggestions.go"),
+    types: [
+      "OpenAPIEndpointSuggestion",
+      "OpenAPIRecordsPathSuggestion",
+      "OpenAPISuggestionsResult",
+    ],
+  },
+  {
     file: resolve(repoRoot, "internal", "web", "service", "sql.go"),
     types: [
       "SQLDiscoveryTableItem",

@@ -70,7 +70,7 @@ func (s *AssetService) ReconcileAssetColumns(ctx context.Context, assetID string
 // that bruin re-adds for assets whose name is inferred from their path (so the
 // reconcile does not introduce a spurious explicit name).
 func (s *AssetService) persistAssetPreservingInferredName(asset *pipeline.Asset, parsedPipeline *pipeline.Pipeline) *APIError {
-	// YAML-defined assets (api/sling/ingestr/plain-yaml) round-trip through the
+	// YAML-defined assets (api/load/ingestr/plain-yaml) round-trip through the
 	// node-preserving codec so editing metadata never clobbers the request spec,
 	// the sling replication config, or any other unmanaged content. bruin's
 	// Persist would instead rewrite the executable file from scratch.

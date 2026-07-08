@@ -24,21 +24,57 @@ var openAPIDocumentCache sync.Map
 type openAPIDocument struct {
 	OpenAPI     string                                 `yaml:"openapi"`
 	Swagger     string                                 `yaml:"swagger"`
+	Servers     []openAPIServer                        `yaml:"servers"`
+	Host        string                                 `yaml:"host"`     // swagger 2.0
+	BasePath    string                                 `yaml:"basePath"` // swagger 2.0
+	Schemes     []string                               `yaml:"schemes"`  // swagger 2.0
 	Paths       map[string]map[string]openAPIOperation `yaml:"paths"`
 	Components  openAPIComponents                      `yaml:"components"`
 	Definitions map[string]*openAPISchema              `yaml:"definitions"`
+	// Responses holds swagger 2.0 top-level shared responses (`#/responses/...`).
+	Responses map[string]*openAPIResponse `yaml:"responses"`
+}
+
+type openAPIServer struct {
+	URL         string `yaml:"url"`
+	Description string `yaml:"description"`
 }
 
 type openAPIComponents struct {
 	Schemas map[string]*openAPISchema `yaml:"schemas"`
+	// Responses holds OpenAPI 3.x shared responses (`#/components/responses/...`).
+	Responses map[string]*openAPIResponse `yaml:"responses"`
 }
 
 type openAPIOperation struct {
 	OperationID string                     `yaml:"operationId"`
+	Summary     string                     `yaml:"summary"`
+	Description string                     `yaml:"description"`
 	Responses   map[string]openAPIResponse `yaml:"responses"`
 }
 
+// UnmarshalYAML tolerates OpenAPI path-item keys that are not operations. A path
+// item mixes HTTP methods (get/post/…) with `parameters` (a sequence),
+// `servers` (a sequence), and `$ref`/`summary`/`description` (scalars). Those
+// share the `map[string]openAPIOperation` value type, so without this a
+// path-level `parameters:` list fails the whole document with "cannot unmarshal
+// !!seq into service.openAPIOperation". Non-mapping nodes decode into an empty
+// operation and are ignored by the method/operationId lookup.
+func (o *openAPIOperation) UnmarshalYAML(node *yaml.Node) error {
+	if node.Kind != yaml.MappingNode {
+		return nil
+	}
+	type rawOperation openAPIOperation
+	var raw rawOperation
+	if err := node.Decode(&raw); err != nil {
+		return err
+	}
+	*o = openAPIOperation(raw)
+	return nil
+}
+
 type openAPIResponse struct {
+	Ref     string                      `yaml:"$ref"`
 	Content map[string]openAPIMediaType `yaml:"content"`
 	Schema  *openAPISchema              `yaml:"schema"`
 }
@@ -202,6 +238,10 @@ func (doc *openAPIDocument) responseSchema(spec nativeAPISpec, requestURL string
 		return nil, nil
 	}
 	response := selectOpenAPIResponse(op.Responses, spec.OpenAPI.ResponseStatus)
+	if response == nil {
+		return nil, nil
+	}
+	response = doc.resolveResponse(response, nil)
 	if response == nil {
 		return nil, nil
 	}
@@ -398,6 +438,37 @@ func (doc *openAPIDocument) arrayItemSchema(schema *openAPISchema) *openAPISchem
 	return resolved
 }
 
+// resolveResponse follows a response object's `$ref` to a shared response
+// component. OpenAPI 3.x keeps these under `#/components/responses/...` and
+// swagger 2.0 under `#/responses/...`; a per-operation `200: {$ref: ...}` is
+// common (weather.gov does this), and without resolution the response has no
+// content and yields no schema.
+func (doc *openAPIDocument) resolveResponse(response *openAPIResponse, seen map[string]bool) *openAPIResponse {
+	if response == nil {
+		return nil
+	}
+	ref := strings.TrimSpace(response.Ref)
+	if ref == "" {
+		return response
+	}
+	if seen == nil {
+		seen = map[string]bool{}
+	}
+	if seen[ref] {
+		return response
+	}
+	seen[ref] = true
+	if strings.HasPrefix(ref, "#/components/responses/") {
+		name := strings.TrimPrefix(ref, "#/components/responses/")
+		return doc.resolveResponse(doc.Components.Responses[name], seen)
+	}
+	if strings.HasPrefix(ref, "#/responses/") {
+		name := strings.TrimPrefix(ref, "#/responses/")
+		return doc.resolveResponse(doc.Responses[name], seen)
+	}
+	return response
+}
+
 func (doc *openAPIDocument) resolveSchema(schema *openAPISchema, seen map[string]bool) *openAPISchema {
 	if schema == nil {
 		return nil
@@ -430,18 +501,85 @@ func (doc *openAPIDocument) schemaProperties(schema *openAPISchema) map[string]*
 		return nil
 	}
 	properties := map[string]*openAPISchema{}
+	// A property defined in more than one allOf branch (or in a branch and the
+	// schema's own properties) is deep-merged, not overwritten — OpenAPI allOf
+	// semantics. Weather.gov's AlertCollectionGeoJson, for example, defines
+	// `features` in a base branch (items → GeoJsonFeature) and narrows it in a
+	// second branch (items → { properties: Alert }); last-write-wins would drop
+	// the base feature's id/type/geometry and leave a lone `properties` column.
+	mergeProperty := func(name string, property *openAPISchema) {
+		if existing, ok := properties[name]; ok {
+			properties[name] = doc.mergeSchemas(existing, property, 0)
+			return
+		}
+		properties[name] = property
+	}
 	for _, part := range resolved.AllOf {
 		for name, property := range doc.schemaProperties(part) {
-			properties[name] = property
+			mergeProperty(name, property)
 		}
 	}
 	for name, property := range resolved.Properties {
-		properties[name] = property
+		mergeProperty(name, property)
 	}
 	if len(properties) == 0 {
 		return nil
 	}
 	return properties
+}
+
+const maxSchemaMergeDepth = 32
+
+// mergeSchemas combines two schemas that describe the same value (overlapping
+// allOf branches or a base/override pair), returning a new schema whose
+// properties and array items are recursively merged. The depth guard stops
+// runaway recursion on self-referential specs (e.g. GeoJSON geometry
+// collections).
+func (doc *openAPIDocument) mergeSchemas(a, b *openAPISchema, depth int) *openAPISchema {
+	left := doc.resolveSchema(a, nil)
+	right := doc.resolveSchema(b, nil)
+	if left == nil {
+		return right
+	}
+	if right == nil {
+		return left
+	}
+	if depth >= maxSchemaMergeDepth {
+		return left
+	}
+
+	merged := &openAPISchema{
+		Type:     left.Type,
+		Format:   left.Format,
+		Nullable: left.Nullable || right.Nullable,
+	}
+	if len(schemaTypes(left)) == 0 {
+		merged.Type = right.Type
+	}
+	if merged.Format == "" {
+		merged.Format = right.Format
+	}
+	merged.Required = append(append([]string{}, left.Required...), right.Required...)
+
+	properties := map[string]*openAPISchema{}
+	for name, property := range doc.schemaProperties(left) {
+		properties[name] = property
+	}
+	for name, property := range doc.schemaProperties(right) {
+		if existing, ok := properties[name]; ok {
+			properties[name] = doc.mergeSchemas(existing, property, depth+1)
+			continue
+		}
+		properties[name] = property
+	}
+	if len(properties) > 0 {
+		merged.Properties = properties
+	}
+
+	if left.Items != nil || right.Items != nil {
+		merged.Items = doc.mergeSchemas(left.Items, right.Items, depth+1)
+	}
+	return merged
 }
 
 func (doc *openAPIDocument) columnType(schema *openAPISchema) string {
@@ -471,6 +609,12 @@ func (doc *openAPIDocument) columnType(schema *openAPISchema) string {
 		}
 	}
 	if len(doc.schemaProperties(resolved)) > 0 || resolved.Items != nil {
+		return "json"
+	}
+	// Composed schemas (oneOf/anyOf, e.g. GeoJSON geometry) carry no single
+	// scalar type but still serialize as a nested object → treat as json rather
+	// than leaving the column untyped.
+	if len(resolved.OneOf) > 0 || len(resolved.AnyOf) > 0 || len(resolved.AllOf) > 0 {
 		return "json"
 	}
 	return ""

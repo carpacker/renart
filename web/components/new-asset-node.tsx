@@ -8,7 +8,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 
-export type NewAssetKind = "sql" | "python" | "ingestr" | "sling" | "api";
+export type NewAssetKind = "sql" | "python" | "ingestr" | "load" | "api";
 
 export type NewAssetNodeData = {
   name: string;
@@ -81,9 +81,9 @@ export function NewAssetNode({ data }: NodeProps<NewAssetNodeData>) {
               <Workflow className="mr-1 size-3.5 text-sky-600" />
               Ingestr
             </TabsTrigger>
-            <TabsTrigger className="nodrag" value="sling">
+            <TabsTrigger className="nodrag" value="load">
               <Boxes className="mr-1 size-3.5 text-violet-600" />
-              Sling
+              Load
             </TabsTrigger>
             <TabsTrigger className="nodrag" value="api">
               <Globe className="mr-1 size-3.5 text-cyan-600" />

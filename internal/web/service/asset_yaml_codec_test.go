@@ -9,11 +9,11 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-func TestPersistYAMLAssetDefinitionPreservesSlingConfigSibling(t *testing.T) {
+func TestPersistYAMLAssetDefinitionPreservesLoadConfigSibling(t *testing.T) {
 	fs := afero.NewMemMapFs()
 	definition := `name: example.thing
 run: thing.sling.yml
-type: sling
+type: load
 `
 	if err := afero.WriteFile(fs, "/p/assets/thing.asset.yml", []byte(definition), 0o644); err != nil {
 		t.Fatal(err)
@@ -25,7 +25,7 @@ type: sling
 
 	asset := &pipeline.Asset{
 		Name:           "example.thing",
-		Type:           "sling",
+		Type:           "load",
 		DefinitionFile: pipeline.TaskDefinitionFile{Path: "/p/assets/thing.asset.yml"},
 		ExecutableFile: pipeline.ExecutableFile{Path: "/p/assets/thing.sling.yml"},
 		Upstreams:      []pipeline.Upstream{{Type: "asset", Value: "example.upstream", Mode: pipeline.UpstreamModeFull}},
@@ -122,11 +122,11 @@ columns:
 	}
 }
 
-func TestMergeYAMLAssetDefinitionManagesSlingFlatParameters(t *testing.T) {
-	// A flat-parameter Sling asset: renart owns `parameters`, so an edited
+func TestMergeYAMLAssetDefinitionManagesLoadFlatParameters(t *testing.T) {
+	// A flat-parameter Load asset: renart owns `parameters`, so an edited
 	// source_table must be written while unrelated keys survive.
 	existing := `name: example.move_users
-type: sling
+type: load
 parameters:
   source_connection: postgres_prod
   source_table: public.users
@@ -137,7 +137,7 @@ custom_key: keep-me
 `
 	asset := &pipeline.Asset{
 		Name:           "example.move_users",
-		Type:           "sling",
+		Type:           "load",
 		ExecutableFile: pipeline.ExecutableFile{Path: "/x/move_users.asset.yml"},
 		Parameters: pipeline.EmptyStringMap{
 			"source_connection":      "postgres_prod",
@@ -172,7 +172,7 @@ custom_key: keep-me
 
 func TestMergeYAMLAssetDefinitionClearsRemovedKeys(t *testing.T) {
 	existing := `name: example.thing
-type: sling
+type: load
 run: thing.sling.yml
 owner: old@example.com
 tags:
@@ -183,7 +183,7 @@ depends:
 	// The asset no longer carries owner/tags/depends.
 	asset := &pipeline.Asset{
 		Name:           "example.thing",
-		Type:           "sling",
+		Type:           "load",
 		ExecutableFile: pipeline.ExecutableFile{Path: "/x/thing.sling.yml"},
 	}
 

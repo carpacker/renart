@@ -75,6 +75,13 @@ they fingerprint the executed snapshot). Partially failed pipeline runs record
 no facts for the assets that did succeed; they read as stale and a rebuild
 repairs it.
 
+**Last run attempt.** Facts only capture successes, so the recorder also upserts
+`renart_asset_runs` — one row per `(asset, environment)` with the target
+fingerprint, `succeeded|failed`, and timestamp (a later run overwrites it, so a
+success clears a prior failure). Interactive materialize emits a failed
+`RunCompleted` on error (`MaterializeAssetStream`) so the failure is persisted;
+the pipeline-run path still records nothing on failure (accepted, as above).
+
 ## 4. Staleness service and UI (`internal/web/staleness`)
 
 In-memory status map per current selection (env, range, vars), exposed at
@@ -91,8 +98,24 @@ the downstream cone), `RunCompleted` (flip the touched assets).
 | `never_built` | no row for this asset in this env at any fingerprint |
 | `missing` | log says fresh, async verification couldn't find the table |
 
+The `missing` downgrade only applies to assets whose output is a warehouse
+object named after the asset (`verifiableByName`: SQL, seed). Load (sling) and
+python assets write to arbitrary destinations — a local file, a
+`destination_table` that doesn't match the asset name, or nothing — so the
+name-based lookup would always report them missing; they are skipped and rest on
+the run fact alone.
+
 Unsaved editor buffers get a purely-frontend "modified" dot; the service only
 sees saved state.
+
+Each `AssetStatus` also carries the last run attempt (`last_run_status`,
+`last_run_at`, `last_run_on_current_content` — the latter true when the run's
+fingerprint matches the asset's current one) from `renart_asset_runs`,
+orthogonal to the base `status`. The frontend composes them
+(`resolveFreshnessDisplay`): base ∈ {`stale_edited`,`never_built`} + a failed run
+on the current content → **Build failed**; `fresh` + a failed run on the current
+content → **Run failed** (unchanged code, latest run failed); otherwise the base
+label. This distinguishes an untested edit from an edit that was run and failed.
 
 The Build-stale action is server-side: `POST
 /api/pipelines/{id}/build-stale/stream` (`httpapi/build_stale.go`) recomputes

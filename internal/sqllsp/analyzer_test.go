@@ -989,6 +989,113 @@ from {{ ref("orders") }} o`}
 	}
 }
 
+func TestEngineFlagsSelfReferenceAsCircularDependency(t *testing.T) {
+	engine := NewEngine(CanonicalGraph{
+		Version: 1,
+		Assets: []AssetNode{{
+			ID:              "asset:analytics.customers",
+			Name:            "analytics.customers",
+			URI:             "file:///customers.sql",
+			OutputRelations: []string{"relation:analytics.customers"},
+		}},
+		Relations: []RelationNode{{
+			ID:      "relation:analytics.customers",
+			Name:    "analytics.customers",
+			AssetID: "asset:analytics.customers",
+		}},
+	})
+
+	doc := TextDocumentItem{URI: "file:///customers.sql", Text: "select *\nfrom analytics.customers"}
+
+	var found bool
+	for _, diagnostic := range engine.Diagnostics(doc) {
+		if diagnostic.Code == "circular-dependency" {
+			found = true
+			if !strings.Contains(diagnostic.Message, "analytics.customers") {
+				t.Fatalf("circular-dependency message missing asset name: %q", diagnostic.Message)
+			}
+		}
+		if diagnostic.Code == "unresolved-relation" {
+			t.Fatalf("self-reference should not be an unresolved relation: %#v", diagnostic)
+		}
+	}
+	if !found {
+		t.Fatalf("expected a circular-dependency diagnostic for a self-referencing asset")
+	}
+}
+
+func TestEngineDoesNotFlagUpstreamReferenceAsCircular(t *testing.T) {
+	engine := NewEngine(CanonicalGraph{
+		Version: 1,
+		Assets: []AssetNode{
+			{ID: "asset:analytics.customers", Name: "analytics.customers", URI: "file:///customers.sql", OutputRelations: []string{"relation:analytics.customers"}},
+			{ID: "asset:analytics.orders", Name: "analytics.orders", URI: "file:///orders.sql", OutputRelations: []string{"relation:analytics.orders"}},
+		},
+		Relations: []RelationNode{
+			{ID: "relation:analytics.customers", Name: "analytics.customers", AssetID: "asset:analytics.customers"},
+			{ID: "relation:analytics.orders", Name: "analytics.orders", AssetID: "asset:analytics.orders"},
+		},
+	})
+
+	doc := TextDocumentItem{URI: "file:///customers.sql", Text: "select *\nfrom analytics.orders"}
+
+	for _, diagnostic := range engine.Diagnostics(doc) {
+		if diagnostic.Code == "circular-dependency" {
+			t.Fatalf("referencing a different asset must not be circular: %#v", diagnostic)
+		}
+	}
+}
+
+func TestEngineCompletesRelationsForSchemaQualifierInFromClause(t *testing.T) {
+	engine := NewEngine(CanonicalGraph{
+		Version: 1,
+		Relations: []RelationNode{
+			{ID: "r1", Name: "analytics.customers"},
+			{ID: "r2", Name: "analytics.orders"},
+			{ID: "r3", Name: "marts.summary"},
+		},
+	})
+
+	doc := TextDocumentItem{URI: "file:///query.sql", Text: "select * from analytics."}
+	items := engine.Complete(doc, Position{Line: 0, Character: len("select * from analytics.")})
+
+	labels := completionLabels(items)
+	if !slices.Contains(labels, "analytics.customers") || !slices.Contains(labels, "analytics.orders") {
+		t.Fatalf("expected analytics.* relations, got %#v", labels)
+	}
+	if slices.Contains(labels, "marts.summary") {
+		t.Fatalf("did not expect out-of-schema relation marts.summary, got %#v", labels)
+	}
+	for _, item := range items {
+		if item.Label == "analytics.customers" && item.InsertText != "customers" {
+			t.Fatalf("expected schema-stripped insert text 'customers', got %q", item.InsertText)
+		}
+	}
+}
+
+func TestEngineOffersKeywordCompletionsInGeneralPosition(t *testing.T) {
+	engine := NewEngine(CanonicalGraph{
+		Version:   1,
+		Relations: []RelationNode{{ID: "r1", Name: "analytics.customers"}},
+	})
+
+	doc := TextDocumentItem{URI: "file:///query.sql", Text: "select 1\nfrom analytics.customers\n"}
+	items := engine.Complete(doc, Position{Line: 2, Character: 0})
+
+	labels := completionLabels(items)
+	for _, keyword := range []string{"where", "group by", "left join", "qualify"} {
+		if !slices.Contains(labels, keyword) {
+			t.Fatalf("expected keyword %q in general-position completions, got %#v", keyword, labels)
+		}
+	}
+	// Keywords must sort after schema-aware suggestions.
+	for _, item := range items {
+		if item.Kind == completionKindMethod && !strings.HasPrefix(item.SortText, "z") {
+			t.Fatalf("keyword %q should sort last (z-prefixed), got SortText %q", item.Label, item.SortText)
+		}
+	}
+}
+
 func completionLabels(items []CompletionItem) []string {
 	labels := make([]string, 0, len(items))
 	for _, item := range items {

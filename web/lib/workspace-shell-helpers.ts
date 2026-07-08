@@ -10,7 +10,7 @@ export function buildSuggestedAssetName(
     sql: `${pipelinePrefix}.my_sql_asset_`,
     python: `${pipelinePrefix}.my_python_asset_`,
     ingestr: `${pipelinePrefix}.my_ingestr_asset_`,
-    sling: `${pipelinePrefix}.my_sling_asset_`,
+    load: `${pipelinePrefix}.my_load_asset_`,
     api: `${pipelinePrefix}.my_api_asset_`,
   };
 
@@ -30,7 +30,8 @@ export function normalizeAssetName(input: string): string {
 export function buildCreateAssetInput(
   name: string,
   kind: NewAssetKind,
-  preferredSqlAssetType = "duckdb.sql"
+  preferredSqlAssetType = "duckdb.sql",
+  connection?: string
 ): {
   name: string;
   type: string;
@@ -61,11 +62,11 @@ parameters:
     };
   }
 
-  if (kind === "sling") {
+  if (kind === "load") {
     const leaf = name.split(".").pop() ?? "asset";
     return {
       name,
-      type: "sling",
+      type: "load",
       path,
       content: `source: your_source_connection
 target: your_target_connection
@@ -82,6 +83,9 @@ streams:
   }
 
   if (kind === "api") {
+    // An explicit target connection is optional; when omitted the asset falls
+    // back to the pipeline's default connection.
+    const connectionLine = connection?.trim() ? `connection: ${connection.trim()}\n` : "";
     return {
       name,
       type: "api",
@@ -89,7 +93,7 @@ streams:
       // Defaults to a free, no-auth sample API with an OpenAPI spec, so Renart
       // can infer columns and validate records out of the box.
       content: `type: api
-
+${connectionLine}
 parameters:
   openapi:
     url: https://petstore3.swagger.io/api/v3/openapi.json
@@ -119,7 +123,7 @@ function buildAssetPathFromName(name: string, kind: NewAssetKind): string {
     sql: ".sql",
     python: ".py",
     ingestr: ".asset.yml",
-    sling: ".asset.yml",
+    load: ".asset.yml",
     api: ".asset.yml",
   };
   const leaf = parts.pop() ?? "asset";

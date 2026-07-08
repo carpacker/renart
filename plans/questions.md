@@ -1,6 +1,6 @@
 # Open questions
 
-Shared scratchpad for things that need Lukas' input. Tasks with open
+Shared scratchpad for things that need the maintainer's input. Tasks with open
 questions are skipped (per instruction), everything else proceeds.
 Answer inline and delete entries as they resolve.
 

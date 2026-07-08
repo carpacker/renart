@@ -4,7 +4,8 @@ import { useAtomValue, useSetAtom } from "jotai";
 import { useEffect, useRef, type MutableRefObject } from "react";
 import type * as MonacoNS from "monaco-editor";
 
-import { getIngestrSuggestions } from "@/lib/api";
+import { getIngestrSuggestions, getOpenAPISuggestions } from "@/lib/api";
+import type { OpenAPISuggestionsResult } from "@/lib/generated/api-types";
 import {
   connectionSuggestionsAtom,
   getIngestrTableSuggestionsFromCatalog,
@@ -67,6 +68,18 @@ export function useYAMLIntellisense(
   const selectedEnvironment = useAtomValue(selectedEnvironmentAtom);
   const registerConnectionTables = useSetAtom(registerConnectionTablesAtom);
   const cacheRef = useRef(new Map<string, Promise<Array<{ value: string; detail?: string; kind?: string }>>>());
+  // OpenAPI spec fetches are relatively expensive and stable per (spec URL,
+  // request URL, method); cache the in-flight/settled result so keystroke-driven
+  // completion requests don't refetch.
+  const openapiCacheRef = useRef(new Map<string, Promise<OpenAPISuggestionsResult | null>>());
+
+  // The completion provider reads its live inputs through this ref so an SSE
+  // update (which changes catalog/connections/asset) does not re-register it.
+  // Re-registering fires the shared completion registry's onDidChange and resets
+  // any open suggestion widget — including the SQL editor's, since the registry
+  // spans all languages.
+  const yamlStateRef = useRef({ asset, catalog, connections, selectedEnvironment, registerConnectionTables });
+  yamlStateRef.current = { asset, catalog, connections, selectedEnvironment, registerConnectionTables };
 
   useEffect(() => {
     if (!monaco) {
@@ -79,13 +92,17 @@ export function useYAMLIntellisense(
         model: MonacoNS.editor.ITextModel,
         position: MonacoNS.Position
       ) => {
+        const { asset, catalog, connections, selectedEnvironment, registerConnectionTables } =
+          yamlStateRef.current;
         if (!asset || !isYamlPath(asset.path)) {
           return { suggestions: [] };
         }
 
         const content = model.getValue();
         const isIngestr = isIngestrYaml(content);
-        const isAPI = isAPIYaml(content);
+        // The API asset editor scopes the buffer to the `parameters:` block, so
+        // `type: api` isn't in view — fall back to the asset's own type.
+        const isAPI = isAPIYaml(content) || asset.type.toLowerCase() === "api";
         if (!isIngestr && !isAPI) {
           return { suggestions: [] };
         }
@@ -93,6 +110,15 @@ export function useYAMLIntellisense(
         const fieldContext = getYamlFieldContext(monaco, model, position);
         if (fieldContext) {
           if (isAPI) {
+            const openapiDriven = await buildAPIOpenAPIValueSuggestions({
+              cacheRef: openapiCacheRef,
+              content,
+              fieldContext,
+              monaco,
+            });
+            if (openapiDriven) {
+              return { suggestions: openapiDriven };
+            }
             return { suggestions: buildAPIValueSuggestions({ fieldContext, monaco }) };
           }
 
@@ -126,7 +152,7 @@ export function useYAMLIntellisense(
     return () => {
       disposable.dispose();
     };
-  }, [asset, catalog, connections, monaco, registerConnectionTables, selectedEnvironment]);
+  }, [monaco]);
 
   useEffect(() => {
     if (!monaco || !editor || !asset || !isYamlPath(asset.path)) {
@@ -210,6 +236,130 @@ function buildAPIValueSuggestions({
       range: fieldContext.range,
     })
   );
+}
+
+// buildAPIOpenAPIValueSuggestions resolves live completions for the two
+// spec-driven fields — `request.url` (the OpenAPI paths) and
+// `response.records_path` (record locations in the selected endpoint's response
+// schema). Returns null when the field isn't spec-driven or no OpenAPI URL is
+// set yet, so the caller falls back to the static sample suggestions.
+async function buildAPIOpenAPIValueSuggestions({
+  cacheRef,
+  content,
+  fieldContext,
+  monaco,
+}: {
+  cacheRef: MutableRefObject<Map<string, Promise<OpenAPISuggestionsResult | null>>>;
+  content: string;
+  fieldContext: YamlFieldContext;
+  monaco: typeof MonacoNS;
+}): Promise<MonacoNS.languages.CompletionItem[] | null> {
+  const isRequestURL =
+    pathEndsWith(fieldContext.path, ["parameters", "request"]) && fieldContext.key === "url";
+  const isRecordsPath =
+    pathEndsWith(fieldContext.path, ["parameters", "response"]) && fieldContext.key === "records_path";
+  if (!isRequestURL && !isRecordsPath) {
+    return null;
+  }
+
+  const { openapiUrl, requestUrl, method } = parseAPIYaml(content);
+  if (!openapiUrl) {
+    return null;
+  }
+
+  const result = await fetchOpenAPISuggestionsCached(cacheRef, { openapiUrl, requestUrl, method });
+  if (!result) {
+    return null;
+  }
+
+  if (isRequestURL) {
+    if (result.request_urls.length === 0) {
+      return null;
+    }
+    return result.request_urls.map((item) =>
+      toCompletionItem(monaco, {
+        detail: [item.method, item.summary].filter(Boolean).join(" · ") || undefined,
+        insertText: quoteValueIfNeeded(item.url, fieldContext.quoted),
+        kind: monaco.languages.CompletionItemKind.Value,
+        label: item.url,
+        range: fieldContext.range,
+      })
+    );
+  }
+
+  if (result.records_paths.length === 0) {
+    return null;
+  }
+  return result.records_paths.map((item) => {
+    const isRoot = item.path === "";
+    return toCompletionItem(monaco, {
+      detail: item.detail,
+      insertText: isRoot ? '""' : quoteValueIfNeeded(item.path, fieldContext.quoted),
+      kind: isRoot
+        ? monaco.languages.CompletionItemKind.Value
+        : monaco.languages.CompletionItemKind.Field,
+      label: isRoot ? '""' : item.path,
+      range: fieldContext.range,
+    });
+  });
+}
+
+function fetchOpenAPISuggestionsCached(
+  cacheRef: MutableRefObject<Map<string, Promise<OpenAPISuggestionsResult | null>>>,
+  args: { openapiUrl: string; requestUrl: string; method: string }
+): Promise<OpenAPISuggestionsResult | null> {
+  const key = [args.openapiUrl, args.requestUrl, args.method].join("::");
+  const existing = cacheRef.current.get(key);
+  if (existing) {
+    return existing;
+  }
+  const pending = getOpenAPISuggestions({
+    openapiUrl: args.openapiUrl,
+    requestUrl: args.requestUrl || undefined,
+    method: args.method || undefined,
+  }).catch(() => null);
+  cacheRef.current.set(key, pending);
+  return pending;
+}
+
+// parseAPIYaml pulls the three spec-driven values out of an API asset by
+// tracking indentation into a key path — enough to reach parameters.openapi.url,
+// parameters.request.url, and parameters.request.method without a full YAML
+// parse (the buffer may be mid-edit / invalid).
+function parseAPIYaml(content: string): { openapiUrl: string; requestUrl: string; method: string } {
+  const stack: Array<{ indent: number; key: string }> = [];
+  let openapiUrl = "";
+  let requestUrl = "";
+  let method = "";
+
+  for (const line of content.split(/\r?\n/)) {
+    const match = line.match(/^(\s*)([A-Za-z_][\w-]*):(\s*)(.*)$/);
+    if (!match) {
+      continue;
+    }
+    const indent = match[1].length;
+    const key = match[2];
+    const value = normalizeYamlValue(match[4] ?? "");
+
+    while (stack.length > 0 && stack[stack.length - 1].indent >= indent) {
+      stack.pop();
+    }
+    const joined = [...stack.map((entry) => entry.key), key].join(".");
+
+    if (value === "") {
+      stack.push({ indent, key });
+      continue;
+    }
+    if (joined === "parameters.openapi.url") {
+      openapiUrl = value;
+    } else if (joined === "parameters.request.url") {
+      requestUrl = value;
+    } else if (joined === "parameters.request.method") {
+      method = value;
+    }
+  }
+
+  return { openapiUrl, requestUrl, method };
 }
 
 function apiKeySnippetsForPath(path: string[]): APIKeySuggestion[] {

@@ -59,7 +59,7 @@ backend surface (policy):
   that Bruin's own config parsing is never at risk.
 - **Connections**: port the schema-driven form + test-connection flow from the
   old UI components into the redesign look; group by environment; show the
-  `sling_category` badge where relevant. Delete the old `_workspace` settings
+  `load_category` badge where relevant. Delete the old `_workspace` settings
   panes once parity lands (they're the last consumers).
 - **Protected-environment affordance**: environments with `protected: true`
   render with the distinct treatment the staleness design promised (red env

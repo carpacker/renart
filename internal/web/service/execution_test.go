@@ -372,6 +372,66 @@ func TestExecutionServiceInspectNonSQLAssetQueriesMaterializedTable(t *testing.T
 	assert.Equal(t, []map[string]any{{"customer_id": float64(1)}}, result.Rows)
 }
 
+func TestExecutionServiceInspectLoadAssetQueriesDestinationConnection(t *testing.T) {
+	t.Parallel()
+
+	executor := &stubExecutionExecutor{
+		queryConnOutput: []byte(`{"columns":["id"],"rows":[{"id":7}]}`),
+	}
+	svc := NewExecutionService(ExecutionDependencies{
+		Executor: executor,
+		ResolveAssetByID: func(context.Context, string) (string, *pipeline.Pipeline, *pipeline.Asset, error) {
+			return "analytics/assets/load_orders.asset.yml", &pipeline.Pipeline{}, &pipeline.Asset{
+				Name: "analytics.orders",
+				Type: pipeline.AssetType(loadAssetType),
+				Parameters: map[string]string{
+					"source_connection":      "postgres-prod",
+					"source_table":           "public.orders",
+					"destination_connection": "duckdb-default",
+					"destination_table":      "analytics.orders",
+				},
+			}, nil
+		},
+	})
+
+	result := svc.InspectAsset(context.Background(), EncodeID("analytics/assets/load_orders.asset.yml"), "25", "", "", "")
+
+	require.Len(t, executor.queryConnReqs, 1)
+	assert.Equal(t, "duckdb-default", executor.queryConnReqs[0].ConnectionName)
+	assert.Equal(t, "select * from analytics.orders limit 25", executor.queryConnReqs[0].Query)
+	assert.Equal(t, "ok", result.Status)
+	assert.Equal(t, []string{"id"}, result.Columns)
+}
+
+func TestExecutionServiceInspectLoadAssetToLocalFileReturnsInfo(t *testing.T) {
+	t.Parallel()
+
+	executor := &stubExecutionExecutor{}
+	svc := NewExecutionService(ExecutionDependencies{
+		Executor: executor,
+		ResolveAssetByID: func(context.Context, string) (string, *pipeline.Pipeline, *pipeline.Asset, error) {
+			return "analytics/assets/load_local.asset.yml", &pipeline.Pipeline{}, &pipeline.Asset{
+				Name: "analytics.local_dump",
+				Type: pipeline.AssetType(loadAssetType),
+				Parameters: map[string]string{
+					"source_connection":      "duckdb-default",
+					"source_table":           "analytics.orders",
+					"destination_connection": "local",
+					"destination_table":      "./blub.csv",
+				},
+			}, nil
+		},
+	})
+
+	result := svc.InspectAsset(context.Background(), EncodeID("analytics/assets/load_local.asset.yml"), "25", "", "", "")
+
+	assert.Equal(t, "info", result.Status)
+	assert.Equal(t, 200, result.HTTPStatus)
+	assert.Contains(t, result.Info, "./blub.csv")
+	assert.Empty(t, result.Error)
+	assert.Empty(t, executor.queryConnReqs, "a local-file load asset must not run a connection query")
+}
+
 func TestExecutionServiceInspectNonSQLAssetReportsMissingMaterializedTable(t *testing.T) {
 	t.Parallel()
 

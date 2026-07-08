@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -258,6 +259,57 @@ select 1 as order_id
 	assert.NotEmpty(t, asset.Meta[assetmeta.KeySigDeps])
 	_, hasLegacy := asset.Meta[assetmeta.KeyLegacyInferredUpstreams]
 	assert.False(t, hasLegacy)
+}
+
+func TestAssetServiceUpdateSetsAndClearsAPIAssetConnection(t *testing.T) {
+	workspaceRoot := t.TempDir()
+	require.NoError(t, exec.Command("git", "-C", workspaceRoot, "init").Run())
+	pipelineRoot := filepath.Join(workspaceRoot, "analytics")
+	assetsRoot := filepath.Join(pipelineRoot, "assets")
+	require.NoError(t, os.MkdirAll(assetsRoot, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(pipelineRoot, "pipeline.yml"), []byte("name: analytics\ndefault_connections:\n  duckdb: duckdb-default\n"), 0o644))
+	assetPath := filepath.Join(assetsRoot, "weather.asset.yml")
+	require.NoError(t, os.WriteFile(assetPath, []byte(strings.TrimSpace(`
+type: api
+parameters:
+  request:
+    url: https://api.weather.gov/alerts
+    method: GET
+  response:
+    records_path: ".features"
+`)+"\n"), 0o644))
+
+	// The API asset carries a nested `parameters:` spec, so resolution needs the
+	// api-aware builder (the stock reader errors on the nested maps).
+	resolver := NewWorkspaceResolver(workspaceRoot, func(ctx context.Context, pipelinePath string) (*pipeline.Pipeline, error) {
+		return NewRenartPipelineBuilder(nil).CreatePipelineFromPath(ctx, pipelinePath, pipeline.WithMutate())
+	})
+	service := NewAssetService(AssetDependencies{
+		WorkspaceRoot:    workspaceRoot,
+		ResolveAssetByID: resolver.ResolveAssetByID,
+		SuppressWatcher:  func(string) {},
+		PushWorkspaceUpdateImmediateWithChangedIDs: func(context.Context, string, string, []string) {},
+	})
+	assetID := EncodeID("analytics/assets/weather.asset.yml")
+
+	connection := "duckdb-default"
+	_, apiErr := service.Update(context.Background(), assetID, AssetUpdateRequest{Connection: &connection})
+	require.Nil(t, apiErr)
+
+	content, err := os.ReadFile(assetPath)
+	require.NoError(t, err)
+	assert.Contains(t, string(content), "connection: duckdb-default")
+	// The unmanaged request spec must survive the write.
+	assert.Contains(t, string(content), "records_path")
+
+	// Clearing it removes the key again.
+	empty := ""
+	_, apiErr = service.Update(context.Background(), assetID, AssetUpdateRequest{Connection: &empty})
+	require.Nil(t, apiErr)
+	content, err = os.ReadFile(assetPath)
+	require.NoError(t, err)
+	assert.NotContains(t, string(content), "connection:")
+	assert.Contains(t, string(content), "records_path")
 }
 
 func TestAssetServiceUpdatePersistsManualUpstreamsInHeader(t *testing.T) {

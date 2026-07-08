@@ -131,6 +131,9 @@ __pycache__/
 dist/
 *.pyc
 
+# air hot-reload build output (see .air.toml)
+tmp/
+
 logs/*.log
 
 docs/.vitepress/dist

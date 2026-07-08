@@ -5,6 +5,7 @@ import { useAtomValue, useSetAtom } from "jotai";
 import { useEffect } from "react";
 
 import {
+  serverOnlineAtom,
   workspaceAtom,
   workspaceSyncSourceAtom,
 } from "@/lib/atoms/domains/workspace";
@@ -50,14 +51,18 @@ function mergeWorkspaceWithPreservedContent(
         columns:
           asset.columns ??
           (isChangedAsset ? asset.columns : currentAsset.columns),
-        // These clear to empty (e.g. removing the last tag, blanking the owner).
-        // The backend omits empty values, so for a changed asset we must take the
-        // incoming (absent) value rather than let the spread keep the stale one.
+        // These clear to empty (e.g. removing the last tag, blanking the owner,
+        // or fixing a syntax error so the asset parses again). The backend omits
+        // empty values, so for a changed asset we must take the incoming (absent)
+        // value rather than let the spread keep the stale one.
         tags: asset.tags ?? (isChangedAsset ? asset.tags : currentAsset.tags),
         owner: asset.owner ?? (isChangedAsset ? asset.owner : currentAsset.owner),
         incremental_key:
           asset.incremental_key ??
           (isChangedAsset ? asset.incremental_key : currentAsset.incremental_key),
+        parse_error:
+          asset.parse_error ??
+          (isChangedAsset ? asset.parse_error : currentAsset.parse_error),
       };
     }),
   }));
@@ -102,24 +107,63 @@ export function useWorkspaceSync() {
   const setSchedulerRunEvent = useSetAtom(schedulerRunEventAtom);
   const setStalenessEvent = useSetAtom(stalenessEventAtom);
   const setWorkspaceSyncSource = useSetAtom(workspaceSyncSourceAtom);
+  const setServerOnline = useSetAtom(serverOnlineAtom);
 
   useEffect(() => {
     let mounted = true;
+    // The SSE stream drives the online/offline signal. A dropped connection
+    // fires `onerror` repeatedly while EventSource retries; we wait out a short
+    // grace period before declaring the server offline so a quick reconnect (or
+    // a server restart) doesn't flash the overlay. On reconnect we reload the
+    // workspace so state that changed while we were away is picked up.
+    let offlineTimer: ReturnType<typeof setTimeout> | null = null;
+    let offline = false;
 
-    getWorkspace()
-      .then((data) => {
-        if (mounted) {
+    const clearOfflineTimer = () => {
+      if (offlineTimer) {
+        clearTimeout(offlineTimer);
+        offlineTimer = null;
+      }
+    };
+
+    const reloadWorkspace = () => {
+      getWorkspace()
+        .then((data) => {
+          if (!mounted) return;
           setWorkspace(data);
           setWorkspaceSyncSource({
             method: "workspace-load",
             recordedAt: new Date().toISOString(),
             revision: data.revision,
           });
-        }
-      })
-      .catch(() => undefined);
+        })
+        .catch(() => undefined);
+    };
+
+    const markOnline = () => {
+      clearOfflineTimer();
+      if (!mounted) return;
+      setServerOnline(true);
+      if (offline) {
+        offline = false;
+        reloadWorkspace();
+      }
+    };
+
+    const markOfflineSoon = () => {
+      if (offline || offlineTimer) return;
+      offlineTimer = setTimeout(() => {
+        offlineTimer = null;
+        offline = true;
+        if (mounted) setServerOnline(false);
+      }, 4000);
+    };
+
+    reloadWorkspace();
 
     const source = new EventSource(projectApiPath("/api/events"));
+    source.onopen = markOnline;
+    source.onerror = markOfflineSoon;
     source.onmessage = (event) => {
       try {
         const payload = JSON.parse(event.data) as unknown;
@@ -174,9 +218,10 @@ export function useWorkspaceSync() {
 
     return () => {
       mounted = false;
+      clearOfflineTimer();
       source.close();
     };
-  }, [setSchedulerRunEvent, setStalenessEvent, setWorkspace, setWorkspaceSyncSource]);
+  }, [setSchedulerRunEvent, setServerOnline, setStalenessEvent, setWorkspace, setWorkspaceSyncSource]);
 
   return workspace as WorkspaceState | null;
 }

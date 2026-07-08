@@ -1,0 +1,29 @@
+# Backend hot-reload config for `air` (https://github.com/air-verse/air).
+# Rebuilds and restarts the Renart server whenever a .go file changes.
+#
+# Run args (which workspace, port, host) are appended by the launcher, e.g.
+#   air -- web --no-open --port 3000 example/example
+# so this file stays workspace-agnostic. Use scripts/dev.sh / `make dev` to run
+# it alongside the Vite frontend; see AGENTS.md.
+root = "."
+tmp_dir = "tmp"
+
+[build]
+  # webdev tag skips embedding web/dist, so the backend rebuilds without a
+  # frontend build present (Vite serves the UI in dev).
+  cmd = "go build -tags webdev -o ./tmp/renart-dev ."
+  bin = "./tmp/renart-dev"
+  include_ext = ["go"]
+  exclude_dir = ["web", "docs", "tmp", "dist", "node_modules", ".git", "logs", "example", ".renart"]
+  exclude_regex = ["_test\\.go$"]
+  # Coalesce bursts of saves; wait for the build before restarting.
+  delay = 400
+  stop_on_error = true
+  send_interrupt = true
+  kill_delay = "2s"
+
+[misc]
+  clean_on_exit = true
+
+[log]
+  time = true

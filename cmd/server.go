@@ -222,7 +222,7 @@ func newWebServer(ctx context.Context, cfg serverConfig, logger *zap.Logger) (*w
 		RunConnectionQuery:   server.executionSvc.RunConnectionQueryForEnvironment,
 	})
 
-	server.slingSvc = service.NewSlingService(service.SlingDependencies{
+	server.loadSvc = service.NewLoadService(service.LoadDependencies{
 		WorkspaceRoot:        absRoot,
 		NewConnectionManager: server.newConnectionManager,
 	})

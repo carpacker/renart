@@ -5,10 +5,11 @@ DOCS_IMAGE ?= renart-docs:local
 RENART_VERSION ?= $(shell git describe --tags --abbrev=0 2>/dev/null || echo local)
 RENART_COMMIT ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo unknown)
 
-.PHONY: help build test check go-build go-test standalone-build web-install web-build web-typecheck web-test-live web-sync-polyglot-wasm docs-install docs-build docs-dev docs-preview docs-screenshots landing-media docs-docker docs-docker-run sync-install clean
+.PHONY: help dev build test check go-build go-test standalone-build web-install web-build web-typecheck web-test-live web-sync-polyglot-wasm docs-install docs-build docs-dev docs-preview docs-screenshots landing-media docs-docker docs-docker-run sync-install clean
 
 help:
 	@printf "Renart build targets\n\n"
+	@printf "  make dev               Hot-reload dev servers (Go backend + Vite frontend)\n"
 	@printf "  make build             Build Go binary, web app, and docs\n"
 	@printf "  make check             Run Go tests plus web/docs builds\n"
 	@printf "  make go-build          Build Renart CLI\n"
@@ -26,6 +27,10 @@ help:
 	@printf "  make docs-docker-run   Serve docs image on http://127.0.0.1:8099\n"
 
 build: go-build web-build docs-build
+
+# Hot-reload dev environment. Override the workspace with WORKSPACE=path.
+dev:
+	./scripts/dev.sh $(WORKSPACE)
 
 check: go-test web-build docs-build
 

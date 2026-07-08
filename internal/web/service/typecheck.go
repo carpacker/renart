@@ -98,7 +98,7 @@ type TypeCheckReport struct {
 // built from the other assets' declared and inferable columns — surfacing
 // unresolved tables/columns and type errors. For non-SQL assets that produce a
 // table but whose schema cannot be inferred from their definition (Python,
-// ingestr, Sling, or API assets without response fields/OpenAPI metadata) it
+// ingestr, Load, or API assets without response fields/OpenAPI metadata) it
 // warns when no columns are declared, since that breaks downstream type
 // checking.
 //
@@ -219,7 +219,7 @@ func checkAsset(ctx context.Context, fs afero.Fs, pp *pipeline.Pipeline, workspa
 			continue
 		}
 		// When the query reads from an upstream whose schema we cannot infer
-		// (an undeclared Python/API/Sling asset, already flagged on the producer),
+		// (an undeclared Python/API/Load asset, already flagged on the producer),
 		// we cannot verify column references against it — so suppress the
 		// cascading "unresolved column/table" errors rather than blaming the
 		// consumer for the producer's missing column declarations.
@@ -372,7 +372,7 @@ func assetReportID(workspaceRoot string, asset *pipeline.Asset) string {
 }
 
 func nonSQLColumnsExpected(asset *pipeline.Asset) bool {
-	if isAPIAsset(asset) || isSlingAsset(asset) {
+	if isAPIAsset(asset) || isLoadAsset(asset) {
 		return true
 	}
 	assetType := strings.ToLower(string(asset.Type))
