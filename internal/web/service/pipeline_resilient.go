@@ -2,6 +2,7 @@ package service
 
 import (
 	"path/filepath"
+	"strings"
 
 	"github.com/bruin-data/bruin/pkg/jinja"
 	"github.com/bruin-data/bruin/pkg/pipeline"
@@ -33,10 +34,16 @@ func errorTolerantTaskCreator(fs afero.Fs, inner pipeline.TaskCreator) pipeline.
 		if absErr != nil {
 			absPath = filePath
 		}
+		name := rawTopLevelYAMLScalar(content, "name")
+		assetType := rawTopLevelYAMLScalar(content, "type")
 
-		// Name is intentionally left empty: the SetNameFromPath mutator derives the
-		// asset's real name from its path, so a fixed asset keeps a stable name.
+		// When the broken file still has simple top-level name/type scalars, keep
+		// them on the placeholder so the UI can preserve the right canvas/editor
+		// affordances while the user fixes an unrelated YAML syntax error. If name
+		// is absent, SetNameFromPath still derives a stable fallback from the path.
 		return &pipeline.Asset{
+			Name: name,
+			Type: pipeline.AssetType(assetType),
 			Meta: pipeline.EmptyStringMap{parseErrorMetaKey: err.Error()},
 			ExecutableFile: pipeline.ExecutableFile{
 				Name:    filepath.Base(absPath),
@@ -45,6 +52,31 @@ func errorTolerantTaskCreator(fs afero.Fs, inner pipeline.TaskCreator) pipeline.
 			},
 		}, nil
 	}
+}
+
+func rawTopLevelYAMLScalar(content, key string) string {
+	prefix := key + ":"
+	for _, line := range strings.Split(content, "\n") {
+		if strings.TrimSpace(line) == "" || strings.HasPrefix(strings.TrimSpace(line), "#") {
+			continue
+		}
+		if strings.TrimLeft(line, " \t") != line {
+			continue
+		}
+		trimmed := strings.TrimSpace(line)
+		if !strings.HasPrefix(trimmed, prefix) {
+			continue
+		}
+		value := strings.TrimSpace(strings.TrimPrefix(trimmed, prefix))
+		if value == "" || strings.HasPrefix(value, "{") || strings.HasPrefix(value, "[") {
+			return ""
+		}
+		if comment := strings.Index(value, " #"); comment >= 0 {
+			value = strings.TrimSpace(value[:comment])
+		}
+		return strings.Trim(value, `"'`)
+	}
+	return ""
 }
 
 // NewRenartTolerantPipelineBuilder builds pipelines that survive individual asset

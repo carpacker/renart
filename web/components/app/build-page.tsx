@@ -86,6 +86,7 @@ import { buildCreateAssetInput, buildSuggestedAssetName } from "@/lib/workspace-
 import type { NewAssetKind } from "@/components/new-asset-node";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
+import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { AssetInspectView } from "@/components/asset-inspect-view";
 import { InspectWarningCard } from "@/components/inspect-warning-card";
@@ -155,6 +156,7 @@ import { ErrorBoundary } from "@/components/ui/error-boundary";
 import { SqlPreview } from "./sql-preview";
 import { LoadParametersEditor } from "./load-parameters-editor";
 import { AppLineageCanvas, assetDisplayName, assetGroupName, assetNameParts, type AppLineageCanvasAsset } from "./lineage-canvas";
+import { MultiValueInput } from "./multi-value-input";
 import { NewNotebookDialog } from "./new-notebook-dialog";
 import { AppPage, AppPanel, SeverityIcon, SimpleTable, StalenessBadge, StatusPill, stalenessDotClassName, stalenessLabel } from "./app-primitives";
 
@@ -813,6 +815,7 @@ export function AppBuildPage({
         pipelineLabel={activePipeline?.name ?? pipelineId}
         selectedAsset={selectedAsset}
         selectedAssetId={effectiveSelectedAssetId}
+        assetCrumbLoading={!selectedAsset.workspaceAsset}
         resultTab={resultTab}
         editorMode={editorMode}
         variant={variant}
@@ -1034,6 +1037,7 @@ function BuildTopBar({
   pipelineLabel,
   selectedAsset,
   selectedAssetId,
+  assetCrumbLoading = false,
   resultTab,
   editorMode,
   variant,
@@ -1060,6 +1064,7 @@ function BuildTopBar({
   pipelineLabel: string;
   selectedAsset: BuildAsset;
   selectedAssetId: string;
+  assetCrumbLoading?: boolean;
   resultTab: AppResultTab;
   editorMode: AppEditorMode;
   variant: string;
@@ -1117,7 +1122,11 @@ function BuildTopBar({
           </BreadcrumbItem>
           <BreadcrumbSeparator />
           <BreadcrumbItem className="min-w-0">
-            <BreadcrumbPage className="truncate font-mono">{selectedAsset.name}</BreadcrumbPage>
+            {assetCrumbLoading ? (
+              <Skeleton className="h-4 w-32" aria-label="Loading asset" />
+            ) : (
+              <BreadcrumbPage className="truncate font-mono">{selectedAsset.name}</BreadcrumbPage>
+            )}
           </BreadcrumbItem>
         </BreadcrumbList>
       </Breadcrumb>
@@ -2918,8 +2927,8 @@ function PipelineSettingsSectionBody({
       <>
         <SettingsTextField label="Pipeline name" value={draft.name} onChange={(value) => update("name", value)} placeholder="my_pipeline" />
         <SettingsTextField label="Owner" value={draft.owner} onChange={(value) => update("owner", value)} placeholder="team@acme.io" />
-        <SettingsTextField label="Tags" value={draft.tags.join(", ")} onChange={(value) => update("tags", splitList(value))} placeholder="daily, finance" hint="Comma-separated." />
-        <SettingsTextField label="Domains" value={draft.domains.join(", ")} onChange={(value) => update("domains", splitList(value))} placeholder="marketing, sales" hint="Comma-separated." />
+        <SettingsMultiValueField label="Tags" value={draft.tags} onChange={(value) => update("tags", value)} placeholder="Add tag" />
+        <SettingsMultiValueField label="Domains" value={draft.domains} onChange={(value) => update("domains", value)} placeholder="Add domain" />
         <div className="grid grid-cols-2 gap-3">
           <SettingsNumberField label="Retries" value={draft.retries} onChange={(value) => update("retries", value ?? 0)} />
           <SettingsNumberField label="Concurrency" value={draft.concurrency} onChange={(value) => update("concurrency", value ?? 0)} />
@@ -3052,6 +3061,15 @@ function SettingsTextField({ label, value, onChange, placeholder, hint, classNam
   );
 }
 
+function SettingsMultiValueField({ label, value, onChange, placeholder }: { label: string; value: string[]; onChange: (value: string[]) => void; placeholder?: string }) {
+  return (
+    <label className="block space-y-1.5">
+      <span className="text-xs font-medium text-muted-foreground">{label}</span>
+      <MultiValueInput value={value} onChange={onChange} placeholder={placeholder} />
+    </label>
+  );
+}
+
 function SettingsNumberField({ label, value, onChange, hint }: { label: string; value?: number; onChange: (value: number | undefined) => void; hint?: string }) {
   return (
     <label className="block space-y-1.5">
@@ -3087,10 +3105,6 @@ function SettingsToggleField({ label, description, checked, onChange, compact }:
       <Switch checked={checked} onCheckedChange={onChange} />
     </div>
   );
-}
-
-function splitList(value: string): string[] {
-  return value.split(",").map((item) => item.trim()).filter(Boolean);
 }
 
 function replaceAt<T>(list: T[], index: number, value: T): T[] {

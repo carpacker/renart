@@ -38,7 +38,7 @@ function catalogAssetFromWorkspace(asset: WebAsset, pipeline: WebPipeline): AppL
     kind: kindForAssetType(asset.type),
     group: prefix ?? "ASSETS",
     integration: integrationForAsset(asset),
-    description: asset.meta?.description ?? asset.path,
+    description: asset.meta?.description ?? "",
     dir: assetDirectory(asset.path, pipeline.path),
     status: asset.is_materialized ? "success" : "pending",
     materializedAt: asset.is_materialized ? "current" : "not materialized",

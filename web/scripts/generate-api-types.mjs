@@ -55,6 +55,7 @@ const sources = [
     types: [
       "OpenAPIEndpointSuggestion",
       "OpenAPIRecordsPathSuggestion",
+      "OpenAPIResponsePathSuggestion",
       "OpenAPISuggestionsResult",
     ],
   },

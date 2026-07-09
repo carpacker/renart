@@ -72,3 +72,21 @@ export function spliceParametersText(content: string, editedBlock: string): stri
   const next = [...lines.slice(0, span.start), ...blockLines, ...lines.slice(span.end)];
   return next.join("\n");
 }
+
+/**
+ * Cheap mid-edit guard for metadata sync. Monaco users commonly pause after
+ * typing an intended mapping key such as `fields` before adding `:`; that is
+ * not useful input for server-side column inference yet.
+ */
+export function hasIncompletePlainYAMLKeyLine(content: string): boolean {
+  return content.split("\n").some((line) => {
+    const trimmed = line.trim();
+    if (trimmed === "" || trimmed.startsWith("#") || trimmed.startsWith("-")) {
+      return false;
+    }
+    if (trimmed.includes(":")) {
+      return false;
+    }
+    return /^[A-Za-z_][A-Za-z0-9_-]*$/.test(trimmed);
+  });
+}

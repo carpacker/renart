@@ -12,6 +12,19 @@ export async function inferAssetColumns(assetId: string) {
   });
 }
 
+export async function inferAPIAsset(assetId: string) {
+  return fetchJSON<{
+    status: string;
+    request_url: string;
+    records_path: string;
+    records_count: number;
+    records_paths: Array<{ path: string; detail?: string }>;
+    columns: WebColumn[];
+  }>(`/api/assets/${assetId}/api-infer`, {
+    method: "POST",
+  });
+}
+
 export async function updateAssetColumns(
   assetId: string,
   columns: WebColumn[]

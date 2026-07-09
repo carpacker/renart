@@ -1,6 +1,7 @@
 package service
 
 import (
+	"context"
 	"testing"
 
 	"gopkg.in/yaml.v3"
@@ -23,6 +24,13 @@ paths:
                 properties:
                   title:
                     type: string
+                  pagination:
+                    type: object
+                    properties:
+                      next:
+                        type: string
+                      has_more:
+                        type: boolean
                   features:
                     type: array
                     items:
@@ -79,6 +87,26 @@ func TestRequestURLBaseFallsBackToSpecOrigin(t *testing.T) {
 	}
 }
 
+func TestOpenAPISuggestionsReturnsEmptyArraysWithoutOpenAPIURL(t *testing.T) {
+	service := SuggestionsService{}
+	result, apiErr := service.OpenAPISuggestions(context.Background(), "", "", "")
+	if apiErr != nil {
+		t.Fatalf("OpenAPISuggestions failed: %v", apiErr)
+	}
+	if result.Status != "ok" {
+		t.Fatalf("status = %q, want ok", result.Status)
+	}
+	if result.RequestURLs == nil {
+		t.Fatal("RequestURLs is nil, want an empty slice")
+	}
+	if result.RecordsPaths == nil {
+		t.Fatal("RecordsPaths is nil, want an empty slice")
+	}
+	if result.ResponsePaths == nil {
+		t.Fatal("ResponsePaths is nil, want an empty slice")
+	}
+}
+
 func TestRecordsPathSuggestionsSurfaceArrays(t *testing.T) {
 	doc := suggestionsDoc(t)
 	paths := doc.recordsPathSuggestions("https://api.example.test/alerts", "GET")
@@ -103,5 +131,21 @@ func TestRecordsPathSuggestionsEmptyWithoutRequestURL(t *testing.T) {
 	doc := suggestionsDoc(t)
 	if got := doc.recordsPathSuggestions("", "GET"); got != nil {
 		t.Fatalf("expected nil without a request URL, got %+v", got)
+	}
+}
+
+func TestResponsePathSuggestionsSurfaceScalarPaths(t *testing.T) {
+	doc := suggestionsDoc(t)
+	paths := doc.responsePathSuggestions("https://api.example.test/alerts", "GET")
+
+	byPath := map[string]string{}
+	for _, suggestion := range paths {
+		byPath[suggestion.Path] = suggestion.Detail
+	}
+	if byPath["pagination.next"] != "string" {
+		t.Fatalf("pagination.next suggestion = %q, want string; all paths: %+v", byPath["pagination.next"], paths)
+	}
+	if byPath["pagination.has_more"] != "boolean" {
+		t.Fatalf("pagination.has_more suggestion = %q, want boolean; all paths: %+v", byPath["pagination.has_more"], paths)
 	}
 }

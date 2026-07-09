@@ -1,6 +1,7 @@
 package service
 
 import (
+	"strings"
 	"testing"
 
 	"gopkg.in/yaml.v3"
@@ -122,6 +123,50 @@ components:
 	}
 }
 
+func TestOpenAPIOperationMatchesServerBasePath(t *testing.T) {
+	const spec = `
+openapi: 3.0.0
+servers:
+  - url: https://api.example.test/v4
+paths:
+  /anime:
+    get:
+      operationId: getAnimeSearch
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      type: object
+`
+	var doc openAPIDocument
+	if err := yaml.Unmarshal([]byte(spec), &doc); err != nil {
+		t.Fatalf("unmarshal failed: %v", err)
+	}
+
+	nativeSpec := nativeAPISpec{}
+	nativeSpec.Request.URL = "https://api.example.test/v4/anime?q=naruto"
+	nativeSpec.Request.Method = "GET"
+
+	schema, err := doc.responseSchema(nativeSpec, nativeSpec.Request.URL)
+	if err != nil {
+		t.Fatalf("responseSchema returned error: %v", err)
+	}
+	if schema == nil {
+		t.Fatal("response schema was nil")
+	}
+
+	recordsPaths := doc.recordsPathSuggestions(nativeSpec.Request.URL, nativeSpec.Request.Method)
+	if !containsRecordsPath(recordsPaths, "data") {
+		t.Fatalf("records paths did not include data: %+v", recordsPaths)
+	}
+}
+
 // When a property is defined across several allOf branches (a base object plus
 // a narrowing override — the GeoJSON feature-collection shape), the record
 // schema at a records_path must deep-merge them. Last-write-wins used to keep
@@ -207,6 +252,62 @@ components:
 	if got := doc.columnType(properties["geometry"]); got != "json" {
 		t.Fatalf("geometry column type = %q, want json", got)
 	}
+}
+
+func TestOpenAPIValidationAllowsNullOptionalProperty(t *testing.T) {
+	doc := &openAPIDocument{}
+	schema := &openAPISchema{
+		Type:     "object",
+		Required: []string{"id"},
+		Properties: map[string]*openAPISchema{
+			"id":          {Type: "string"},
+			"description": {Type: "string"},
+		},
+	}
+
+	messages := doc.validateValue(map[string]any{
+		"id":          "alert-1",
+		"description": nil,
+	}, schema, "$", nil)
+	if len(messages) > 0 {
+		t.Fatalf("optional null should validate as absent, got %v", messages)
+	}
+}
+
+func TestOpenAPIValidationRejectsNullRequiredProperty(t *testing.T) {
+	doc := &openAPIDocument{}
+	schema := &openAPISchema{
+		Type:     "object",
+		Required: []string{"description"},
+		Properties: map[string]*openAPISchema{
+			"description": {Type: "string"},
+		},
+	}
+
+	messages := doc.validateValue(map[string]any{
+		"description": nil,
+	}, schema, "$", nil)
+	if !containsValidationMessage(messages, "$.description is null") {
+		t.Fatalf("required null should fail validation, got %v", messages)
+	}
+}
+
+func containsValidationMessage(messages []string, want string) bool {
+	for _, message := range messages {
+		if strings.Contains(message, want) {
+			return true
+		}
+	}
+	return false
+}
+
+func containsRecordsPath(paths []OpenAPIRecordsPathSuggestion, want string) bool {
+	for _, path := range paths {
+		if path.Path == want {
+			return true
+		}
+	}
+	return false
 }
 
 func keysOf(m map[string]*openAPISchema) []string {

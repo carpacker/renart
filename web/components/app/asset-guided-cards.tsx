@@ -33,6 +33,7 @@ import { NON_SQL_ASSET_TYPES, SQL_ASSET_TYPES } from "@/lib/asset-types";
 import { useIngestrEnabled } from "@/lib/features";
 import { cn } from "@/lib/utils";
 import { WebAsset, WebColumn } from "@/lib/types";
+import { MultiValueInput } from "./multi-value-input";
 
 /**
  * Guided metadata cards for the app asset editor (§13–14 of the asset
@@ -148,6 +149,16 @@ function IdentityCard({ asset, pipelineId }: { asset: WebAsset; pipelineId: stri
     [asset.type, ingestrEnabled]
   );
 
+  const updateMetaDescription = (description: string) => {
+    const nextMeta = { ...(asset.meta ?? {}) };
+    if (description.trim()) {
+      nextMeta.description = description.trim();
+    } else {
+      delete nextMeta.description;
+    }
+    void updateAsset(pipelineId, asset.id, { meta: nextMeta });
+  };
+
   return (
     <GuidedCard title="Identity">
       <FieldRow label="Name">
@@ -191,13 +202,23 @@ function IdentityCard({ asset, pipelineId }: { asset: WebAsset; pipelineId: stri
           }}
         />
       </FieldRow>
-      <FieldRow label="Tags">
+      <FieldRow label="Description">
         <CommitInput
-          value={(asset.tags ?? []).join(", ")}
-          placeholder="finance, daily"
-          onCommit={(raw) => {
-            const tags = raw.split(",").map((t) => t.trim()).filter(Boolean);
-            if (tags.join(",") !== (asset.tags ?? []).join(",")) {
+          value={asset.meta?.description ?? ""}
+          placeholder="What this asset produces"
+          onCommit={(description) => {
+            if (description !== (asset.meta?.description ?? "")) {
+              updateMetaDescription(description);
+            }
+          }}
+        />
+      </FieldRow>
+      <FieldRow label="Tags">
+        <MultiValueInput
+          value={asset.tags ?? []}
+          placeholder="Add tag"
+          onChange={(tags) => {
+            if (tags.join("\n") !== (asset.tags ?? []).join("\n")) {
               void updateAsset(pipelineId, asset.id, { tags });
             }
           }}

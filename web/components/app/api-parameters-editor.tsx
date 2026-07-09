@@ -7,7 +7,7 @@ import { useAssetMonaco } from "@/hooks/use-asset-monaco";
 import { useDebouncedAssetSave } from "@/hooks/use-debounced-asset-save";
 import { useWorkspaceTheme } from "@/hooks/use-workspace-theme";
 import { refreshAssetColumnsFromDefinition } from "@/lib/api-asset-transactions";
-import { extractParametersText, spliceParametersText } from "@/lib/api-parameters-yaml";
+import { extractParametersText, hasIncompletePlainYAMLKeyLine, spliceParametersText } from "@/lib/api-parameters-yaml";
 import { WebAsset } from "@/lib/types";
 
 /**
@@ -73,6 +73,10 @@ export function ApiParametersEditor({
       // Keep inferred columns in sync with the edited request/response spec.
       if (columnsTimerRef.current) {
         clearTimeout(columnsTimerRef.current);
+        columnsTimerRef.current = null;
+      }
+      if (hasIncompletePlainYAMLKeyLine(next)) {
+        return;
       }
       const assetId = asset.id;
       columnsTimerRef.current = setTimeout(() => {

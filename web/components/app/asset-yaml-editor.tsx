@@ -217,6 +217,15 @@ function IdentitySection({ asset, pipelineId }: { asset: WebAsset; pipelineId: s
   const setTags = (next: string[]) => {
     void updateAsset(pipelineId, asset.id, { tags: next });
   };
+  const setMetaDescription = (description: string) => {
+    const nextMeta = { ...(asset.meta ?? {}) };
+    if (description.trim()) {
+      nextMeta.description = description.trim();
+    } else {
+      delete nextMeta.description;
+    }
+    void updateAsset(pipelineId, asset.id, { meta: nextMeta });
+  };
 
   return (
     <>
@@ -247,6 +256,18 @@ function IdentitySection({ asset, pipelineId }: { asset: WebAsset; pipelineId: s
           placeholder="team@company.com"
           onCommit={(owner) => {
             if (owner !== (asset.owner ?? "")) void updateAsset(pipelineId, asset.id, { owner });
+          }}
+        />
+      </Line>
+      <Line>
+        <Key>description</Key>
+        <InlineText
+          value={asset.meta?.description ?? ""}
+          placeholder="What this asset produces"
+          onCommit={(description) => {
+            if (description !== (asset.meta?.description ?? "")) {
+              setMetaDescription(description);
+            }
           }}
         />
       </Line>

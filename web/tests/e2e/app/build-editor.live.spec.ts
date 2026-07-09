@@ -135,4 +135,42 @@ select customer_id, customer_name from analytics.customers
       { timeout: 15000 }
     );
   });
+
+  test("pipeline settings tags and domains use chips that allow commas", async ({
+    liveApp,
+    page,
+  }) => {
+    test.skip(test.info().project.name.includes("mobile"), "Pipeline settings dialog coverage is desktop-only.");
+
+    await page.goto(`${liveApp.baseURL}/pipelines/${pipelineId}/assets/${customersAssetId}/code`);
+    await expect(page.locator(".monaco-editor").first()).toBeVisible({ timeout: 15000 });
+
+    await page.getByRole("button", { name: "Pipeline settings" }).click();
+    const dialog = page.getByRole("dialog", { name: /Pipeline settings/ });
+    await expect(dialog).toBeVisible({ timeout: 15000 });
+
+    await dialog.getByRole("textbox", { name: "Tags" }).fill("finance, north");
+    await dialog.getByRole("textbox", { name: "Tags" }).press("Enter");
+    await expect(dialog.getByText("finance, north")).toBeVisible();
+
+    await dialog.getByRole("textbox", { name: "Domains" }).fill("sales, enterprise");
+    await dialog.getByRole("textbox", { name: "Domains" }).press("Enter");
+    await expect(dialog.getByText("sales, enterprise")).toBeVisible();
+
+    const saveResponse = page.waitForResponse(
+      (response) =>
+        response.url().includes(`/api/pipelines/${pipelineId}/config`) &&
+        response.request().method() === "PUT" &&
+        response.ok(),
+      { timeout: 15000 }
+    );
+    await page.getByRole("button", { name: "Save changes" }).click();
+    await saveResponse;
+
+    const configResponse = await page.request.get(`${liveApp.baseURL}/api/pipelines/${pipelineId}/config`);
+    expect(configResponse.ok()).toBe(true);
+    const config = await configResponse.json() as { tags?: string[]; domains?: string[] };
+    expect(config.tags).toContain("finance, north");
+    expect(config.domains).toContain("sales, enterprise");
+  });
 });

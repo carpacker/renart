@@ -52,6 +52,8 @@ func TestComputeStateKeepsPipelineWhenAnAssetFailsToParse(t *testing.T) {
 	// The broken asset is surfaced (not dropped) with its error and raw content,
 	// and the internal meta key is not leaked.
 	require.NotNil(t, broken, "the unparseable asset should still be present, flagged")
+	assert.Equal(t, "analytics.broken", broken.Name)
+	assert.Equal(t, "load", broken.Type)
 	assert.NotEmpty(t, broken.ParseError)
 	assert.Contains(t, broken.Content, "analytics.broken")
 	_, leaked := broken.Meta[parseErrorMetaKey]

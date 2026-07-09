@@ -253,10 +253,16 @@ export type OpenAPIRecordsPathSuggestion = {
   detail?: string;
 };
 
+export type OpenAPIResponsePathSuggestion = {
+  path: string;
+  detail?: string;
+};
+
 export type OpenAPISuggestionsResult = {
   status: string;
   request_urls: OpenAPIEndpointSuggestion[];
   records_paths: OpenAPIRecordsPathSuggestion[];
+  response_paths: OpenAPIResponsePathSuggestion[];
   error?: string;
 };
 

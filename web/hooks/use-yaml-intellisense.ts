@@ -23,6 +23,9 @@ type YamlFieldContext = {
   normalizedValue: string;
   path: string[];
   quoted: boolean;
+  quote: "\"" | "'" | null;
+  rawValue: string;
+  replaceQuotedContentOnly: boolean;
   range: MonacoNS.IRange;
 };
 
@@ -52,6 +55,15 @@ type APIKeySuggestion = {
 type APIValueSuggestion = {
   value: string;
   detail?: string;
+};
+
+type OpenAPIResponsePathSuggestion = {
+  path: string;
+  detail?: string;
+};
+
+type OpenAPISuggestionsWithResponsePaths = OpenAPISuggestionsResult & {
+  response_paths?: OpenAPIResponsePathSuggestion[];
 };
 
 const SUPPORTED_DESTINATIONS = ["postgres", "duckdb", "s3"];
@@ -230,7 +242,8 @@ function buildAPIValueSuggestions({
   return values.map((item) =>
     toCompletionItem(monaco, {
       detail: item.detail,
-      insertText: quoteValueIfNeeded(item.value, fieldContext.quoted),
+      filterText: filterTextForCurrentYamlValue(fieldContext, item.value),
+      insertText: insertTextForYamlValue(item.value, fieldContext),
       kind: monaco.languages.CompletionItemKind.Value,
       label: item.value,
       range: fieldContext.range,
@@ -241,8 +254,9 @@ function buildAPIValueSuggestions({
 // buildAPIOpenAPIValueSuggestions resolves live completions for the two
 // spec-driven fields — `request.url` (the OpenAPI paths) and
 // `response.records_path` (record locations in the selected endpoint's response
-// schema). Returns null when the field isn't spec-driven or no OpenAPI URL is
-// set yet, so the caller falls back to the static sample suggestions.
+// schema), plus pagination response paths. Returns null when the field isn't
+// spec-driven or no OpenAPI URL is set yet, so the caller falls back to the
+// static sample suggestions.
 async function buildAPIOpenAPIValueSuggestions({
   cacheRef,
   content,
@@ -258,7 +272,9 @@ async function buildAPIOpenAPIValueSuggestions({
     pathEndsWith(fieldContext.path, ["parameters", "request"]) && fieldContext.key === "url";
   const isRecordsPath =
     pathEndsWith(fieldContext.path, ["parameters", "response"]) && fieldContext.key === "records_path";
-  if (!isRequestURL && !isRecordsPath) {
+  const isNextURLPath =
+    pathEndsWith(fieldContext.path, ["parameters", "pagination"]) && fieldContext.key === "next_url_path";
+  if (!isRequestURL && !isRecordsPath && !isNextURLPath) {
     return null;
   }
 
@@ -271,15 +287,20 @@ async function buildAPIOpenAPIValueSuggestions({
   if (!result) {
     return null;
   }
+  const typedResult = result as OpenAPISuggestionsWithResponsePaths;
+  const requestURLs = Array.isArray(typedResult.request_urls) ? typedResult.request_urls : [];
+  const recordsPaths = Array.isArray(typedResult.records_paths) ? typedResult.records_paths : [];
+  const responsePaths = Array.isArray(typedResult.response_paths) ? typedResult.response_paths : [];
 
   if (isRequestURL) {
-    if (result.request_urls.length === 0) {
+    if (requestURLs.length === 0) {
       return null;
     }
-    return result.request_urls.map((item) =>
+    return requestURLs.map((item) =>
       toCompletionItem(monaco, {
         detail: [item.method, item.summary].filter(Boolean).join(" · ") || undefined,
-        insertText: quoteValueIfNeeded(item.url, fieldContext.quoted),
+        filterText: filterTextForCurrentYamlValue(fieldContext, item.url),
+        insertText: insertTextForYamlValue(item.url, fieldContext),
         kind: monaco.languages.CompletionItemKind.Value,
         label: item.url,
         range: fieldContext.range,
@@ -287,14 +308,33 @@ async function buildAPIOpenAPIValueSuggestions({
     );
   }
 
-  if (result.records_paths.length === 0) {
+  if (isNextURLPath) {
+    const stringPaths = responsePaths.filter((item) => !item.detail || item.detail.includes("string"));
+    if (stringPaths.length === 0) {
+      return null;
+    }
+    return stringPaths.map((item) =>
+      toCompletionItem(monaco, {
+        detail: item.detail,
+        filterText: filterTextForCurrentYamlValue(fieldContext, item.path),
+        insertText: insertTextForYamlValue(item.path, fieldContext),
+        kind: monaco.languages.CompletionItemKind.Field,
+        label: item.path,
+        range: fieldContext.range,
+      })
+    );
+  }
+
+  if (recordsPaths.length === 0) {
     return null;
   }
-  return result.records_paths.map((item) => {
+
+  return recordsPaths.map((item) => {
     const isRoot = item.path === "";
     return toCompletionItem(monaco, {
       detail: item.detail,
-      insertText: isRoot ? '""' : quoteValueIfNeeded(item.path, fieldContext.quoted),
+      filterText: filterTextForCurrentYamlValue(fieldContext, item.path),
+      insertText: isRoot ? insertTextForYamlValue('""', fieldContext) : insertTextForYamlValue(item.path, fieldContext),
       kind: isRoot
         ? monaco.languages.CompletionItemKind.Value
         : monaco.languages.CompletionItemKind.Field,
@@ -323,9 +363,9 @@ function fetchOpenAPISuggestionsCached(
 }
 
 // parseAPIYaml pulls the three spec-driven values out of an API asset by
-// tracking indentation into a key path — enough to reach parameters.openapi.url,
-// parameters.request.url, and parameters.request.method without a full YAML
-// parse (the buffer may be mid-edit / invalid).
+// tracking indentation into a key path — enough to reach OpenAPI URL aliases,
+// request.url, and method overrides without a full YAML parse (the buffer may
+// be mid-edit / invalid).
 function parseAPIYaml(content: string): { openapiUrl: string; requestUrl: string; method: string } {
   const stack: Array<{ indent: number; key: string }> = [];
   let openapiUrl = "";
@@ -350,11 +390,11 @@ function parseAPIYaml(content: string): { openapiUrl: string; requestUrl: string
       stack.push({ indent, key });
       continue;
     }
-    if (joined === "parameters.openapi.url") {
+    if (joined === "parameters.openapi.url" || joined === "parameters.openapi_url" || joined === "openapi.url" || joined === "openapi_url") {
       openapiUrl = value;
     } else if (joined === "parameters.request.url") {
       requestUrl = value;
-    } else if (joined === "parameters.request.method") {
+    } else if (joined === "parameters.request.method" || joined === "parameters.openapi.method" || joined === "openapi.method") {
       method = value;
     }
   }
@@ -379,6 +419,8 @@ function apiKeySnippetsForPath(path: string[]): APIKeySuggestion[] {
       { label: "request", detail: "HTTP request", insertText: "request:\n  url: ${1:" + API_EXAMPLE_REQUEST_URL + "}\n  method: GET\n  headers:\n    Accept: application/json" },
       { label: "response", detail: "Response shape", insertText: "response:\n  records_path: ${1:\"\"}" },
       { label: "iterate", detail: "Repeat request over values", insertText: "iterate:\n  as: ${1:item}\n  over:\n    - ${2:value}" },
+      { label: "auth", detail: "HTTP authentication", insertText: "auth:\n  type: ${1:bearer}\n  token: ${2:{{ env.API_TOKEN }}}" },
+      { label: "pagination", detail: "HTTP pagination", insertText: "pagination:\n  type: ${1:page_number}\n  page_param: ${2:page}\n  start_page: 1\n  max_pages: ${3:10}" },
       { label: "load", detail: "Load override", insertText: "load:\n  target: ${1:duckdb-default}\n  object: ${2:schema.table}" },
     ];
   }
@@ -398,6 +440,8 @@ function apiKeySnippetsForPath(path: string[]): APIKeySuggestion[] {
       { label: "url", detail: "HTTP URL", insertText: "url: ${1:" + API_EXAMPLE_REQUEST_URL + "}" },
       { label: "method", detail: "HTTP method", insertText: "method: ${1:GET}" },
       { label: "headers", detail: "HTTP headers", insertText: "headers:\n  Accept: application/json" },
+      { label: "params", detail: "Query parameters", insertText: "params:\n  ${1:name}: ${2:value}" },
+      { label: "body", detail: "JSON request body", insertText: "body:\n  ${1:name}: ${2:value}" },
     ];
   }
 
@@ -405,6 +449,35 @@ function apiKeySnippetsForPath(path: string[]): APIKeySuggestion[] {
     return [
       { label: "records_path", detail: "Dot path to records", insertText: "records_path: ${1:\"\"}" },
       { label: "fields", detail: "Output field mapping", insertText: "fields:\n  ${1:column_name}: ${2:json.path}" },
+    ];
+  }
+
+  if (pathEndsWith(path, ["parameters", "auth"])) {
+    return [
+      { label: "type", insertText: "type: ${1:bearer}" },
+      { label: "token", insertText: "token: ${1:{{ env.API_TOKEN }}}" },
+      { label: "username", insertText: "username: ${1:username}" },
+      { label: "password", insertText: "password: ${1:{{ env.API_PASSWORD }}}" },
+      { label: "name", insertText: "name: ${1:X-API-Key}" },
+      { label: "value", insertText: "value: ${1:{{ env.API_KEY }}}" },
+      { label: "in", insertText: "in: ${1:header}" },
+    ];
+  }
+
+  if (pathEndsWith(path, ["parameters", "pagination"])) {
+    return [
+      { label: "type", insertText: "type: ${1:page_number}" },
+      { label: "max_pages", insertText: "max_pages: ${1:10}" },
+      { label: "page_param", insertText: "page_param: ${1:page}" },
+      { label: "start_page", insertText: "start_page: ${1:1}" },
+      { label: "offset_param", insertText: "offset_param: ${1:offset}" },
+      { label: "limit_param", insertText: "limit_param: ${1:limit}" },
+      { label: "limit", insertText: "limit: ${1:100}" },
+      { label: "cursor_param", insertText: "cursor_param: ${1:cursor}" },
+      { label: "cursor_path", insertText: "cursor_path: ${1:pagination.next_cursor}" },
+      { label: "next_url_path", insertText: "next_url_path: ${1:pagination.next_url}" },
+      { label: "next_url_header", insertText: "next_url_header: ${1:Link}" },
+      { label: "has_more_path", insertText: "has_more_path: ${1:pagination.has_next_page}" },
     ];
   }
 
@@ -444,6 +517,22 @@ function apiValueSuggestionsForField(fieldContext: YamlFieldContext): APIValueSu
       { value: "data", detail: "common records property" },
       { value: "items", detail: "common records property" },
       { value: "results", detail: "common records property" },
+    ];
+  }
+  if (pathEndsWith(fieldContext.path, ["parameters", "auth"]) && fieldContext.key === "type") {
+    return ["bearer", "basic", "api_key"].map((value) => ({ value, detail: "auth type" }));
+  }
+  if (pathEndsWith(fieldContext.path, ["parameters", "auth"]) && fieldContext.key === "in") {
+    return ["header", "query"].map((value) => ({ value, detail: "api key location" }));
+  }
+  if (pathEndsWith(fieldContext.path, ["parameters", "pagination"]) && fieldContext.key === "type") {
+    return ["page_number", "offset", "cursor", "next_url"].map((value) => ({ value, detail: "pagination strategy" }));
+  }
+  if (pathEndsWith(fieldContext.path, ["parameters", "pagination"]) && fieldContext.key === "next_url_path") {
+    return [
+      { value: "pagination.next", detail: "common next URL property" },
+      { value: "links.next", detail: "common next URL property" },
+      { value: "next", detail: "common next URL property" },
     ];
   }
   return [];
@@ -621,12 +710,14 @@ function toCompletionItem(
     range: MonacoNS.IRange;
     kind: MonacoNS.languages.CompletionItemKind;
     detail?: string;
+    filterText?: string;
     insertText?: string;
     insertTextRules?: MonacoNS.languages.CompletionItemInsertTextRule;
   }
 ): MonacoNS.languages.CompletionItem {
   return {
     detail: item.detail,
+    filterText: item.filterText,
     insertText: item.insertText ?? item.label,
     insertTextRules: item.insertTextRules,
     kind: item.kind,
@@ -670,19 +761,34 @@ function getYamlFieldContext(
 
   const rawValue = match[4] ?? "";
   const valueStartOffset = colonIndex + 1 + match[3].length;
+  const quotedValue = quotedValueInfo(rawValue);
+  const innerStartColumn = quotedValue ? valueStartOffset + 2 : null;
+  const innerEndColumn = quotedValue ? valueStartOffset + quotedValue.contentEndOffset + 1 : null;
+  const replaceQuotedContentOnly =
+    quotedValue !== null &&
+    innerStartColumn !== null &&
+    innerEndColumn !== null &&
+    position.column >= innerStartColumn &&
+    position.column <= innerEndColumn;
+  const range = replaceQuotedContentOnly
+    ? new monaco.Range(position.lineNumber, innerStartColumn, position.lineNumber, innerEndColumn)
+    : new monaco.Range(
+        position.lineNumber,
+        valueStartOffset + 1,
+        position.lineNumber,
+        lineText.length + 1
+      );
 
   return {
     inParameters: isInsideParameters(model, position.lineNumber),
     key: match[2],
     normalizedValue: normalizeYamlValue(rawValue),
     path: yamlParentPath(model, position.lineNumber, match[1].length),
-    quoted: startsWithQuote(rawValue),
-    range: new monaco.Range(
-      position.lineNumber,
-      valueStartOffset + 1,
-      position.lineNumber,
-      lineText.length + 1
-    ),
+    quoted: quotedValue !== null,
+    quote: quotedValue?.quote ?? null,
+    rawValue,
+    replaceQuotedContentOnly,
+    range,
   };
 }
 
@@ -827,9 +933,50 @@ function quoteValueIfNeeded(value: string, quoted: boolean) {
   return quoted ? `'${value}'` : value;
 }
 
-function startsWithQuote(value: string) {
-  const trimmed = value.trim();
-  return trimmed.startsWith("\"") || trimmed.startsWith("'");
+function insertTextForYamlValue(value: string, fieldContext: YamlFieldContext) {
+  if (isEmptyQuotedLiteral(value)) {
+    return fieldContext.replaceQuotedContentOnly ? "" : value;
+  }
+  if (fieldContext.replaceQuotedContentOnly) {
+    return value;
+  }
+  if (!fieldContext.quoted) {
+    return value;
+  }
+  const quote = fieldContext.quote ?? "'";
+  return quote + value.replaceAll(quote, "\\" + quote) + quote;
+}
+
+function filterTextForCurrentYamlValue(fieldContext: YamlFieldContext, value: string) {
+  if (!fieldContext.quoted || fieldContext.replaceQuotedContentOnly) {
+    return undefined;
+  }
+  const rawValue = fieldContext.rawValue.trim();
+  if (fieldContext.normalizedValue === "" && isEmptyQuotedLiteral(rawValue)) {
+    return rawValue;
+  }
+  const quote = fieldContext.quote;
+  if (!quote) {
+    return undefined;
+  }
+  return isEmptyQuotedLiteral(value) || value === "" ? quote + quote : quote + value + quote;
+}
+
+function isEmptyQuotedLiteral(value: string) {
+  return value === "\"\"" || value === "''";
+}
+
+function quotedValueInfo(value: string): { quote: "\"" | "'"; contentEndOffset: number } | null {
+  if (value[0] !== "\"" && value[0] !== "'") {
+    return null;
+  }
+  const quote = value[0];
+  for (let index = 1; index < value.length; index += 1) {
+    if (value[index] === quote && value[index - 1] !== "\\") {
+      return { quote, contentEndOffset: index };
+    }
+  }
+  return { quote, contentEndOffset: value.length };
 }
 
 function isIngestrYaml(content: string) {

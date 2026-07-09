@@ -23,16 +23,25 @@ type OpenAPIRecordsPathSuggestion struct {
 	Detail string `json:"detail,omitempty"`
 }
 
-// OpenAPISuggestionsResult feeds the API-asset editor's intellisense for the
-// `request.url` and `response.records_path` fields.
+// OpenAPIResponsePathSuggestion is one dot-path candidate into the selected
+// endpoint's response schema for pagination cursors, next URLs, and flags.
+type OpenAPIResponsePathSuggestion struct {
+	Path   string `json:"path"`
+	Detail string `json:"detail,omitempty"`
+}
+
+// OpenAPISuggestionsResult feeds the API-asset editor's intellisense for
+// OpenAPI-backed request URLs and response dot-path fields.
 type OpenAPISuggestionsResult struct {
-	Status       string                         `json:"status"`
-	RequestURLs  []OpenAPIEndpointSuggestion    `json:"request_urls"`
-	RecordsPaths []OpenAPIRecordsPathSuggestion `json:"records_paths"`
-	Error        string                         `json:"error,omitempty"`
+	Status        string                          `json:"status"`
+	RequestURLs   []OpenAPIEndpointSuggestion     `json:"request_urls"`
+	RecordsPaths  []OpenAPIRecordsPathSuggestion  `json:"records_paths"`
+	ResponsePaths []OpenAPIResponsePathSuggestion `json:"response_paths"`
+	Error         string                          `json:"error,omitempty"`
 }
 
 const maxRecordsPathDepth = 4
+const maxResponsePathDepth = 5
 
 // OpenAPISuggestions fetches (cached) the OpenAPI document at openapiURL and
 // derives editor completions: the list of request URLs from the spec's paths,
@@ -41,21 +50,31 @@ const maxRecordsPathDepth = 4
 // result so the caller can pass through whatever the asset currently has.
 func (s *SuggestionsService) OpenAPISuggestions(ctx context.Context, openapiURL, requestURL, method string) (OpenAPISuggestionsResult, *APIError) {
 	openapiURL = strings.TrimSpace(openapiURL)
+	result := OpenAPISuggestionsResult{
+		Status:        "ok",
+		RequestURLs:   []OpenAPIEndpointSuggestion{},
+		RecordsPaths:  []OpenAPIRecordsPathSuggestion{},
+		ResponsePaths: []OpenAPIResponsePathSuggestion{},
+	}
 	if openapiURL == "" {
-		return OpenAPISuggestionsResult{Status: "ok"}, nil
+		return result, nil
 	}
 	doc, err := fetchOpenAPIDocument(ctx, openapiURL)
 	if err != nil {
 		return OpenAPISuggestionsResult{}, &APIError{Status: 400, Code: "openapi_fetch_failed", Message: err.Error()}
 	}
 	if doc == nil {
-		return OpenAPISuggestionsResult{Status: "ok"}, nil
+		return result, nil
 	}
 
-	result := OpenAPISuggestionsResult{
-		Status:       "ok",
-		RequestURLs:  doc.requestURLSuggestions(openapiURL),
-		RecordsPaths: doc.recordsPathSuggestions(requestURL, method),
+	if requestURLs := doc.requestURLSuggestions(openapiURL); requestURLs != nil {
+		result.RequestURLs = requestURLs
+	}
+	if recordsPaths := doc.recordsPathSuggestions(requestURL, method); recordsPaths != nil {
+		result.RecordsPaths = recordsPaths
+	}
+	if responsePaths := doc.responsePathSuggestions(requestURL, method); responsePaths != nil {
+		result.ResponsePaths = responsePaths
 	}
 	return result, nil
 }
@@ -179,6 +198,32 @@ func (doc *openAPIDocument) recordsPathSuggestions(requestURL, method string) []
 	return suggestions
 }
 
+func (doc *openAPIDocument) responsePathSuggestions(requestURL, method string) []OpenAPIResponsePathSuggestion {
+	spec := nativeAPISpec{}
+	spec.Request.URL = strings.TrimSpace(requestURL)
+	spec.Request.Method = strings.TrimSpace(method)
+	if spec.Request.URL == "" {
+		return nil
+	}
+
+	schema, err := doc.responseSchema(spec, spec.Request.URL)
+	if err != nil || schema == nil {
+		return nil
+	}
+
+	seen := map[string]bool{}
+	suggestions := make([]OpenAPIResponsePathSuggestion, 0, 16)
+	add := func(path, detail string) {
+		if path == "" || seen[path] {
+			return
+		}
+		seen[path] = true
+		suggestions = append(suggestions, OpenAPIResponsePathSuggestion{Path: path, Detail: detail})
+	}
+	doc.walkResponsePaths(schema, nil, 0, add)
+	return suggestions
+}
+
 // walkRecordsPaths surfaces every dot path whose value is an array — the shape
 // records_path is meant to point at (each array element becomes one record) —
 // descending through nested objects and array items up to a bounded depth.
@@ -208,6 +253,54 @@ func (doc *openAPIDocument) walkRecordsPaths(schema *openAPISchema, prefix []str
 			doc.walkRecordsPaths(property, path, depth+1, add)
 		}
 	}
+}
+
+func (doc *openAPIDocument) walkResponsePaths(schema *openAPISchema, prefix []string, depth int, add func(path, detail string)) {
+	if depth >= maxResponsePathDepth {
+		return
+	}
+	properties := doc.schemaProperties(schema)
+	names := make([]string, 0, len(properties))
+	for name := range properties {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+
+	for _, name := range names {
+		property := doc.resolveSchema(properties[name], nil)
+		path := append(append([]string{}, prefix...), name)
+		joined := strings.Join(path, ".")
+
+		if schemaHasType(property, "array") {
+			add(joined, "array")
+			doc.walkResponsePaths(doc.arrayItemSchema(property), path, depth+1, add)
+			continue
+		}
+		if detail := responsePathDetail(doc, property); detail != "" {
+			add(joined, detail)
+		}
+		if len(doc.schemaProperties(property)) > 0 {
+			doc.walkResponsePaths(property, path, depth+1, add)
+		}
+	}
+}
+
+func responsePathDetail(doc *openAPIDocument, schema *openAPISchema) string {
+	resolved := doc.resolveSchema(schema, nil)
+	if resolved == nil {
+		return ""
+	}
+	types := schemaTypes(resolved)
+	if len(types) == 0 {
+		if len(doc.schemaProperties(resolved)) > 0 {
+			return "object"
+		}
+		if resolved.Items != nil {
+			return "array"
+		}
+		return ""
+	}
+	return strings.Join(types, "/")
 }
 
 func recordItemLabel(doc *openAPIDocument, schema *openAPISchema) string {

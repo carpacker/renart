@@ -17,7 +17,7 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-const maxOpenAPISpecBytes = 5 << 20
+const maxOpenAPISpecBytes = 20 << 20
 
 var openAPIDocumentCache sync.Map
 
@@ -305,20 +305,96 @@ func (doc *openAPIDocument) operation(spec nativeAPISpec, requestURL string) (*o
 		return nil, errors.New("OpenAPI path could not be inferred from request.url")
 	}
 
-	if methods, ok := doc.Paths[path]; ok {
-		if op, ok := methods[method]; ok {
-			return &op, nil
+	for _, candidatePath := range doc.operationPathCandidates(path) {
+		if methods, ok := doc.Paths[candidatePath]; ok {
+			if op, ok := methods[method]; ok {
+				return &op, nil
+			}
 		}
 	}
-	for template, methods := range doc.Paths {
-		if !openAPIPathMatches(template, path) {
-			continue
-		}
-		if op, ok := methods[method]; ok {
-			return &op, nil
+	for _, candidatePath := range doc.operationPathCandidates(path) {
+		for template, methods := range doc.Paths {
+			if !openAPIPathMatches(template, candidatePath) {
+				continue
+			}
+			if op, ok := methods[method]; ok {
+				return &op, nil
+			}
 		}
 	}
 	return nil, fmt.Errorf("OpenAPI operation %s %s was not found", strings.ToUpper(method), path)
+}
+
+func (doc *openAPIDocument) operationPathCandidates(path string) []string {
+	path = normalizeOpenAPIPath(path)
+	candidates := []string{path}
+	seen := map[string]bool{path: true}
+	add := func(candidate string) {
+		candidate = normalizeOpenAPIPath(candidate)
+		if candidate == "" || seen[candidate] {
+			return
+		}
+		seen[candidate] = true
+		candidates = append(candidates, candidate)
+	}
+
+	for _, server := range doc.Servers {
+		serverPath := openAPIServerPath(server.URL)
+		if serverPath == "" || serverPath == "/" {
+			continue
+		}
+		if stripped, ok := stripOpenAPIPathPrefix(path, serverPath); ok {
+			add(stripped)
+		}
+	}
+	if strings.TrimSpace(doc.BasePath) != "" {
+		basePath := normalizeOpenAPIPath(doc.BasePath)
+		if stripped, ok := stripOpenAPIPathPrefix(path, basePath); ok {
+			add(stripped)
+		}
+	}
+	return candidates
+}
+
+func stripOpenAPIPathPrefix(path, prefix string) (string, bool) {
+	path = normalizeOpenAPIPath(path)
+	prefix = normalizeOpenAPIPath(prefix)
+	if prefix == "" || prefix == "/" || path == prefix {
+		return "/", path == prefix
+	}
+	if !strings.HasPrefix(path, prefix+"/") {
+		return "", false
+	}
+	return strings.TrimPrefix(path, prefix), true
+}
+
+func normalizeOpenAPIPath(path string) string {
+	trimmed := strings.TrimSpace(path)
+	if trimmed == "" {
+		return ""
+	}
+	if !strings.HasPrefix(trimmed, "/") {
+		trimmed = "/" + trimmed
+	}
+	if len(trimmed) > 1 {
+		trimmed = strings.TrimRight(trimmed, "/")
+	}
+	return trimmed
+}
+
+func openAPIServerPath(rawURL string) string {
+	rawURL = strings.TrimSpace(rawURL)
+	if rawURL == "" {
+		return ""
+	}
+	if strings.HasPrefix(rawURL, "/") {
+		return normalizeOpenAPIPath(rawURL)
+	}
+	parsed, err := neturl.Parse(rawURL)
+	if err != nil {
+		return ""
+	}
+	return normalizeOpenAPIPath(parsed.Path)
 }
 
 func selectOpenAPIResponse(responses map[string]openAPIResponse, preferredStatus string) *openAPIResponse {
@@ -741,6 +817,13 @@ func (doc *openAPIDocument) validateObject(object map[string]any, schema *openAP
 	for name, property := range properties {
 		value, ok := object[name]
 		if !ok {
+			continue
+		}
+		if value == nil && !required[name] {
+			// Many public APIs emit null for optional response fields even when
+			// the OpenAPI schema only models the non-null value shape. Treating
+			// optional null as absent keeps ingestion resilient without weakening
+			// required field validation.
 			continue
 		}
 		messages = append(messages, doc.validateValue(value, property, path+"."+name, seen)...)

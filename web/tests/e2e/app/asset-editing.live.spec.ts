@@ -75,6 +75,32 @@ test.describe("app asset editing workbench live", () => {
     await expect(properties.getByRole("heading", { name: "Dependencies" })).toBeVisible();
     await expect(properties.getByRole("heading", { name: "Columns" })).toBeVisible();
 
+    const descriptionInput = properties.getByPlaceholder("What this asset produces");
+    await descriptionInput.fill("Customer profile records");
+    const descriptionResponse = page.waitForResponse(
+      (r) => r.url().includes(`/api/pipelines/${pipelineId}/assets/${customersAssetId}`) && r.request().method() === "PUT" && r.ok(),
+      { timeout: 15000 },
+    );
+    await descriptionInput.press("Enter");
+    await descriptionResponse;
+    const withDescription = await pollAsset(liveApp, page.request, "analytics.customers", (a) =>
+      a.meta?.description === "Customer profile records",
+    );
+    expect(withDescription.meta?.description).toBe("Customer profile records");
+
+    const tagInput = properties.getByPlaceholder("Add tag");
+    await tagInput.fill("finance, north");
+    const tagResponse = page.waitForResponse(
+      (r) => r.url().includes(`/api/pipelines/${pipelineId}/assets/${customersAssetId}`) && r.request().method() === "PUT" && r.ok(),
+      { timeout: 15000 },
+    );
+    await tagInput.press("Enter");
+    await tagResponse;
+    const withCommaTag = await pollAsset(liveApp, page.request, "analytics.customers", (a) =>
+      (a.tags ?? []).includes("finance, north"),
+    );
+    expect(withCommaTag.tags).toContain("finance, north");
+
     // Add a manual dependency via the Dependencies card.
     const txResponse = page.waitForResponse(
       (r) => r.url().includes(`/api/assets/${customersAssetId}/transactions`) && r.ok(),

@@ -12,6 +12,7 @@ import (
 type AssetColumnsHandlers interface {
 	FillColumnsFromDB(ctx context.Context, assetID string) (int, map[string]any, *APIError)
 	InferAssetColumns(ctx context.Context, assetID string) (int, map[string]any, *APIError)
+	InferAPIAsset(ctx context.Context, assetID string) (int, map[string]any, *APIError)
 	UpdateAssetColumns(ctx context.Context, assetID string, columns []any) (StatusResponse, *APIError)
 	ReconcileAssetColumns(ctx context.Context, assetID string, inferred []WorkspaceColumn) (ColumnReconcileResult, *APIError)
 	RefreshAssetColumnsFromDefinition(ctx context.Context, assetID string) (ColumnReconcileResult, *APIError)
@@ -34,6 +35,7 @@ type ReconcileAssetColumnsRequest struct {
 func RegisterAssetColumnRoutes(router chi.Router, handlers *AssetColumnsAPI) {
 	router.Post("/api/assets/{assetID}/fill-columns-from-db", handlers.HandleFillColumnsFromDB)
 	router.Get("/api/assets/{assetID}/columns/infer", handlers.HandleInferAssetColumns)
+	router.Post("/api/assets/{assetID}/api-infer", handlers.HandleInferAPIAsset)
 	router.Put("/api/assets/{assetID}/columns", handlers.HandleUpdateAssetColumns)
 	router.Post("/api/assets/{assetID}/columns/reconcile", handlers.HandleReconcileAssetColumns)
 	router.Post("/api/assets/{assetID}/columns/refresh-from-definition", handlers.HandleRefreshAssetColumnsFromDefinition)
@@ -50,6 +52,15 @@ func (h *AssetColumnsAPI) HandleFillColumnsFromDB(w http.ResponseWriter, r *http
 
 func (h *AssetColumnsAPI) HandleInferAssetColumns(w http.ResponseWriter, r *http.Request) {
 	status, body, apiErr := h.Service.InferAssetColumns(r.Context(), chi.URLParam(r, "assetID"))
+	if apiErr != nil {
+		writeAPIError(w, apiErr)
+		return
+	}
+	webapi.WriteJSON(w, status, body)
+}
+
+func (h *AssetColumnsAPI) HandleInferAPIAsset(w http.ResponseWriter, r *http.Request) {
+	status, body, apiErr := h.Service.InferAPIAsset(r.Context(), chi.URLParam(r, "assetID"))
 	if apiErr != nil {
 		writeAPIError(w, apiErr)
 		return
