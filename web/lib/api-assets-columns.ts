@@ -4,6 +4,7 @@ import {
   fetchParsedText,
   FillColumnsFromDBResponse,
 } from "@/lib/api-core";
+import type { APIInferResult } from "@/lib/generated/api-types";
 import { InferColumnsResponse, WebColumn } from "@/lib/types";
 
 export async function inferAssetColumns(assetId: string) {
@@ -13,14 +14,7 @@ export async function inferAssetColumns(assetId: string) {
 }
 
 export async function inferAPIAsset(assetId: string) {
-  return fetchJSON<{
-    status: string;
-    request_url: string;
-    records_path: string;
-    records_count: number;
-    records_paths: Array<{ path: string; detail?: string }>;
-    columns: WebColumn[];
-  }>(`/api/assets/${assetId}/api-infer`, {
+  return fetchJSON<APIInferResult>(`/api/assets/${assetId}/api-infer`, {
     method: "POST",
   });
 }

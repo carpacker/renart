@@ -63,10 +63,12 @@ import {
   BreadcrumbSeparator,
 } from "@/components/ui/breadcrumb";
 import { Button } from "@/components/ui/button";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import {
   DropdownMenu,
   DropdownMenuContent,
+  DropdownMenuGroup,
   DropdownMenuItem,
   DropdownMenuLabel,
   DropdownMenuSeparator,
@@ -79,10 +81,20 @@ import {
 } from "@/components/ui/delimited-card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import {
+  Field,
+  FieldDescription,
+  FieldGroup,
+  FieldLabel,
+} from "@/components/ui/field";
 import { Switch } from "@/components/ui/switch";
 import { createAsset, deleteAsset } from "@/lib/api-assets";
 import { createPipeline, getPipelineConfig, updatePipelineConfig } from "@/lib/api-pipelines";
 import { buildCreateAssetInput, buildSuggestedAssetName } from "@/lib/workspace-shell-helpers";
+import {
+  API_ASSET_TEMPLATES,
+  type APIAssetTemplateId,
+} from "@/lib/api-asset-templates";
 import type { NewAssetKind } from "@/components/new-asset-node";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
@@ -117,6 +129,7 @@ import { useSelectedEnvironmentPolicy } from "@/hooks/use-environment-policy";
 import {
   Select,
   SelectContent,
+  SelectGroup,
   SelectItem,
   SelectTrigger,
   SelectValue,
@@ -219,6 +232,7 @@ type BuildContextValue = {
   openInspector: () => void;
   openBottom: (tab: AppResultTab) => void;
   materializeSelectedAsset: () => void;
+  fullRefreshSelectedAsset: () => void;
   inspectSelectedAsset: () => void;
   runAdhocQuery: () => void;
   adhocContextAsset: WebAsset | null;
@@ -370,34 +384,23 @@ export function AppBuildPage({
   const navigate = useNavigate();
   const location = useLocation();
   const view = appBuildViewFromPath(location.pathname);
-  const buildSearch: AppBuildSearch = useMemo(
-    () => ({ result: resultTab, editor: editorMode, variant }),
-    [editorMode, resultTab, variant]
-  );
+  const buildSearch: AppBuildSearch = useMemo(() => ({ result: resultTab, editor: editorMode, variant }), [editorMode, resultTab, variant]);
   // Until the workspace has loaded (e.g. right after a page refresh) there is no
   // real pipeline to render; the derived assets fall back to placeholder demo
   // data, so we show a loading state over the content area instead.
   const isWorkspaceLoading = !workspace;
-  const activePipeline = useMemo(
-    () => workspace?.pipelines.find((pipeline) => pipeline.id === pipelineId),
-    [pipelineId, workspace?.pipelines]
-  );
-  const pipelineAssets = useMemo(
-    () => activePipeline ? assetsForPipeline(activePipeline) : fallbackBuildAssets(),
-    [activePipeline]
-  );
-  const existingAssetNames = useMemo(
-    () => new Set((activePipeline?.assets ?? []).map((asset) => asset.name)),
-    [activePipeline?.assets]
-  );
+  const activePipeline = useMemo(() => workspace?.pipelines.find((pipeline) => pipeline.id === pipelineId), [pipelineId, workspace?.pipelines]);
+  const pipelineAssets = useMemo(() => (activePipeline ? assetsForPipeline(activePipeline) : fallbackBuildAssets()), [activePipeline]);
+  const existingAssetNames = useMemo(() => new Set((activePipeline?.assets ?? []).map((asset) => asset.name)), [activePipeline?.assets]);
   const materializationAssets = useMemo(
-    () => pipelineAssets.map((asset) => ({
-      id: asset.id,
-      name: asset.name,
-      pipelineId: asset.pipelineId,
-      isMaterialized: asset.workspaceAsset?.is_materialized ?? (asset.status === "success" || asset.status === "ok"),
-    })),
-    [pipelineAssets]
+    () =>
+      pipelineAssets.map((asset) => ({
+        id: asset.id,
+        name: asset.name,
+        pipelineId: asset.pipelineId,
+        isMaterialized: asset.workspaceAsset?.is_materialized ?? (asset.status === "success" || asset.status === "ok"),
+      })),
+    [pipelineAssets],
   );
   const materializationStatusByAssetId = useAppAssetMaterializationStatus(materializationAssets);
   const staleness = usePipelineStaleness(activePipeline?.id);
@@ -413,13 +416,14 @@ export function AppBuildPage({
   const [adhocLoading, setAdhocLoading] = useState(false);
   const [adhocQuery] = useAdhocQueryDraft(pipelineId);
   const displayedPipelineAssets = useMemo(
-    () => pipelineAssets.map((asset) => ({
-      ...asset,
-      status: materializationStatusByAssetId[asset.id]?.status ?? asset.status,
-      materializedAt: labelForAppMaterializationState(materializationStatusByAssetId[asset.id]),
-      staleness: staleness.byAssetName[asset.name],
-    })),
-    [materializationStatusByAssetId, pipelineAssets, staleness.byAssetName]
+    () =>
+      pipelineAssets.map((asset) => ({
+        ...asset,
+        status: materializationStatusByAssetId[asset.id]?.status ?? asset.status,
+        materializedAt: labelForAppMaterializationState(materializationStatusByAssetId[asset.id]),
+        staleness: staleness.byAssetName[asset.name],
+      })),
+    [materializationStatusByAssetId, pipelineAssets, staleness.byAssetName],
   );
   // Transitive stale upstreams of an asset, walked over the dependency graph.
   // Materializing an asset while these are stale reads their outdated tables, so
@@ -449,9 +453,13 @@ export function AppBuildPage({
       walk(assetName);
       return stale;
     },
-    [assetsByName, staleness.byAssetName]
+    [assetsByName, staleness.byAssetName],
   );
-  const [staleBuildPrompt, setStaleBuildPrompt] = useState<{ assetId: string; assetName: string; staleUpstreams: string[] } | null>(null);
+  const [staleBuildPrompt, setStaleBuildPrompt] = useState<{
+    assetId: string;
+    assetName: string;
+    staleUpstreams: string[];
+  } | null>(null);
   const firstAssetId = displayedPipelineAssets[0]?.id ?? "revenue_daily";
   const [visualSelectedAssetId, setVisualSelectedAssetId] = useState(selectedAssetId ?? firstAssetId);
   const effectiveSelectedAssetId = visualSelectedAssetId ?? selectedAssetId ?? firstAssetId;
@@ -477,7 +485,10 @@ export function AppBuildPage({
   // Path of a pipeline just created here; once the workspace SSE update lists
   // it, we navigate onto it (the create response carries no ID).
   const [pendingPipelinePath, setPendingPipelinePath] = useState<string | null>(null);
-  const [downstreamSource, setDownstreamSource] = useState<{ id: string; name: string } | null>(null);
+  const [downstreamSource, setDownstreamSource] = useState<{
+    id: string;
+    name: string;
+  } | null>(null);
   const [pipelineSettingsOpen, setPipelineSettingsOpen] = useState(false);
   const [pipelineSettingsSection, setPipelineSettingsSection] = useState<PipelineSettingsSection | undefined>(undefined);
   const openPipelineSettings = (section?: PipelineSettingsSection) => {
@@ -487,7 +498,16 @@ export function AppBuildPage({
   const [planOpen, setPlanOpen] = useState(false);
   const [buildStaleOpen, setBuildStaleOpen] = useState(false);
   const [addedDependencies, setAddedDependencies] = useState<string[]>([]);
-  const [history, setHistory] = useState<Array<{ id: number; kind: string; target: string; status: string; time: string; variant: string }>>([]);
+  const [history, setHistory] = useState<
+    Array<{
+      id: number;
+      kind: string;
+      target: string;
+      status: string;
+      time: string;
+      variant: string;
+    }>
+  >([]);
   const declaredDependencies = [...pipelineDependencies, ...addedDependencies];
   const [typeCheckReport, setTypeCheckReport] = useState<PipelineTypeCheckReport | null>(null);
   const [typeCheckLoading, setTypeCheckLoading] = useState(false);
@@ -542,9 +562,7 @@ export function AppBuildPage({
       return;
     }
     const normalized = pendingPipelinePath.replace(/^\.?\//, "").replace(/\/+$/, "");
-    const created = workspace.pipelines.find(
-      (item) => item.path === normalized || item.path.startsWith(`${normalized}/`)
-    );
+    const created = workspace.pipelines.find((item) => item.path === normalized || item.path.startsWith(`${normalized}/`));
     if (created) {
       setPendingPipelinePath(null);
       void navigate({
@@ -561,31 +579,46 @@ export function AppBuildPage({
     resultsPanelRef.current?.expand();
   };
   const addDependency = (dependency: string) => {
-    setAddedDependencies((current) => current.includes(dependency) ? current : [...current, dependency]);
+    setAddedDependencies((current) => (current.includes(dependency) ? current : [...current, dependency]));
   };
   const logHistory = (kind: string, target: string) => {
-    setHistory((current) => [{ id: Date.now(), kind, target, status: "success", time: new Date().toLocaleTimeString(), variant }, ...current].slice(0, 20));
+    setHistory((current) =>
+      [
+        {
+          id: Date.now(),
+          kind,
+          target,
+          status: "success",
+          time: new Date().toLocaleTimeString(),
+          variant,
+        },
+        ...current,
+      ].slice(0, 20),
+    );
   };
-  const runTypeCheck = useCallback(async (openTab = false) => {
-    if (!activePipeline) {
-      return;
-    }
-    if (openTab) {
-      openBottom("typecheck");
-    }
-    setTypeCheckLoading(true);
-    try {
-      const report = await typeCheckPipeline(activePipeline.id, {
-        startDate: selectedExecutionTimeWindow?.start,
-        endDate: selectedExecutionTimeWindow?.end,
-      });
-      setTypeCheckReport(report);
-    } catch {
-      setTypeCheckReport(null);
-    } finally {
-      setTypeCheckLoading(false);
-    }
-  }, [activePipeline, selectedExecutionTimeWindow?.start, selectedExecutionTimeWindow?.end]);
+  const runTypeCheck = useCallback(
+    async (openTab = false) => {
+      if (!activePipeline) {
+        return;
+      }
+      if (openTab) {
+        openBottom("typecheck");
+      }
+      setTypeCheckLoading(true);
+      try {
+        const report = await typeCheckPipeline(activePipeline.id, {
+          startDate: selectedExecutionTimeWindow?.start,
+          endDate: selectedExecutionTimeWindow?.end,
+        });
+        setTypeCheckReport(report);
+      } catch {
+        setTypeCheckReport(null);
+      } finally {
+        setTypeCheckLoading(false);
+      }
+    },
+    [activePipeline, selectedExecutionTimeWindow?.start, selectedExecutionTimeWindow?.end],
+  );
   // Run the type check once per pipeline so the notification badge reflects the
   // current state; the user can re-run from the bell to pick up edits.
   useEffect(() => {
@@ -624,6 +657,18 @@ export function AppBuildPage({
     }
     requestMaterialize(workspaceAsset.id, selectedAsset.name);
   };
+  const fullRefreshSelectedAsset = () => {
+    const workspaceAsset = selectedAsset?.workspaceAsset;
+    if (!activePipeline || !workspaceAsset) {
+      return;
+    }
+    logHistory("materialize", `${selectedAsset.name} (full refresh)`);
+    openBottom("materialize");
+    void assetResults.runMaterializeForAsset(workspaceAsset.id, "asset", undefined, {
+      assetName: selectedAsset.name,
+      fullRefresh: true,
+    });
+  };
   const inspectSelectedAsset = () => {
     const workspaceAsset = selectedAsset?.workspaceAsset;
     if (!activePipeline || !workspaceAsset) {
@@ -631,17 +676,13 @@ export function AppBuildPage({
     }
     logHistory("inspect", selectedAsset.name);
     openBottom("inspect");
-    void assetResults.runInspectForAsset(
-      workspaceAsset.id,
-      editorDraft[workspaceAsset.id] ?? workspaceAsset.content
-    );
+    void assetResults.runInspectForAsset(workspaceAsset.id, editorDraft[workspaceAsset.id] ?? workspaceAsset.content);
   };
   // SQL context for the ad hoc editor: the selected asset when it is SQL,
   // otherwise the first SQL asset of the pipeline (dialect + connection).
   const adhocContextAsset = useMemo(() => {
     const candidates = activePipeline?.assets ?? [];
-    const isSql = (asset: WebAsset) =>
-      isSqlAssetType(asset.type) || asset.path.toLowerCase().endsWith(".sql");
+    const isSql = (asset: WebAsset) => isSqlAssetType(asset.type) || asset.path.toLowerCase().endsWith(".sql");
     const selected = candidates.find((asset) => asset.id === effectiveSelectedAssetId);
     if (selected && isSql(selected)) {
       return selected;
@@ -653,9 +694,7 @@ export function AppBuildPage({
       return;
     }
     openBottom("query");
-    const connection = adhocContextAsset
-      ? resolveConnection(adhocContextAsset, workspace?.connections ?? {})
-      : null;
+    const connection = adhocContextAsset ? resolveConnection(adhocContextAsset, workspace?.connections ?? {}) : null;
     if (!connection || !adhocContextAsset) {
       setAdhocRenderedQuery(null);
       setAdhocResult({
@@ -703,7 +742,12 @@ export function AppBuildPage({
       });
       setAdhocResult(result);
     } catch (error) {
-      setAdhocResult({ status: "error", columns: [], rows: [], error: String(error) });
+      setAdhocResult({
+        status: "error",
+        columns: [],
+        rows: [],
+        error: String(error),
+      });
     } finally {
       setAdhocLoading(false);
     }
@@ -737,7 +781,10 @@ export function AppBuildPage({
     await deleteAsset(activePipeline.id, assetId);
   };
   const goToCatalog = (assetId?: string) => {
-    void navigate({ to: "/catalog", search: assetId ? { asset: assetId } : {} });
+    void navigate({
+      to: "/catalog",
+      search: assetId ? { asset: assetId } : {},
+    });
   };
   // The ad hoc editor only renders in the code/split editor panes, so opening
   // it from the explorer also navigates to the code view. Clicking again while
@@ -798,6 +845,7 @@ export function AppBuildPage({
     openInspector: () => setInspectorOpen(true),
     openBottom,
     materializeSelectedAsset,
+    fullRefreshSelectedAsset,
     inspectSelectedAsset,
     runAdhocQuery,
     adhocContextAsset,
@@ -809,39 +857,115 @@ export function AppBuildPage({
 
   return (
     <BuildContext.Provider value={buildContext}>
-    <AppPage>
-      <BuildTopBar
-        pipelineId={pipelineId}
-        pipelineLabel={activePipeline?.name ?? pipelineId}
-        selectedAsset={selectedAsset}
-        selectedAssetId={effectiveSelectedAssetId}
-        assetCrumbLoading={!selectedAsset.workspaceAsset}
-        resultTab={resultTab}
-        editorMode={editorMode}
-        variant={variant}
-        historyCount={history.length}
-        onOpenExplorer={() => setExplorerOpen(true)}
-        onOpenInspector={() => setInspectorOpen(true)}
-        explorerCollapsed={explorerCollapsed}
-        inspectorCollapsed={inspectorCollapsed}
-        onToggleExplorer={() => setExplorerCollapsed((value) => !value)}
-        onToggleInspector={() => setInspectorCollapsed((value) => !value)}
-        onOpenHistory={() => openBottom("history")}
-        onOpenPlan={() => setPlanOpen(true)}
-        onVariantChange={onVariantChange}
-        onRun={runAction}
-        typeCheckReport={typeCheckReport}
-        typeCheckLoading={typeCheckLoading}
-        onTypeCheck={() => void runTypeCheck(true)}
-        staleCount={staleness.staleAssets.length}
-        onBuildStale={() => setBuildStaleOpen(true)}
-        deployState={deployState}
-        executionBlocked={executionBlocked}
-      />
-      {isWorkspaceLoading ? <BuildLoadingState /> : (
-      <div className={cn("grid min-h-0 flex-1 grid-cols-1 gap-3 px-3 pb-3", sidePanelGridColsClass)}>
-        {!explorerCollapsed ? (
-          <AppPanel className="hidden min-h-0 xl:flex xl:flex-col">
+      <AppPage>
+        <BuildTopBar
+          pipelineId={pipelineId}
+          pipelineLabel={activePipeline?.name ?? pipelineId}
+          selectedAsset={selectedAsset}
+          selectedAssetId={effectiveSelectedAssetId}
+          assetCrumbLoading={!selectedAsset.workspaceAsset}
+          resultTab={resultTab}
+          editorMode={editorMode}
+          variant={variant}
+          historyCount={history.length}
+          onOpenExplorer={() => setExplorerOpen(true)}
+          onOpenInspector={() => setInspectorOpen(true)}
+          explorerCollapsed={explorerCollapsed}
+          inspectorCollapsed={inspectorCollapsed}
+          onToggleExplorer={() => setExplorerCollapsed((value) => !value)}
+          onToggleInspector={() => setInspectorCollapsed((value) => !value)}
+          onOpenHistory={() => openBottom("history")}
+          onOpenPlan={() => setPlanOpen(true)}
+          onVariantChange={onVariantChange}
+          onRun={runAction}
+          typeCheckReport={typeCheckReport}
+          typeCheckLoading={typeCheckLoading}
+          onTypeCheck={() => void runTypeCheck(true)}
+          staleCount={staleness.staleAssets.length}
+          onBuildStale={() => setBuildStaleOpen(true)}
+          deployState={deployState}
+          executionBlocked={executionBlocked}
+        />
+        {isWorkspaceLoading ? (
+          <BuildLoadingState />
+        ) : (
+          <div className={cn("grid min-h-0 flex-1 grid-cols-1 gap-3 px-3 pb-3", sidePanelGridColsClass)}>
+            {!explorerCollapsed ? (
+              <AppPanel className="hidden min-h-0 xl:flex xl:flex-col">
+                <Explorer
+                  pipelineId={pipelineId}
+                  selectedAssetId={effectiveSelectedAssetId}
+                  buildSearch={buildSearch}
+                  onAssetSelect={selectAsset}
+                  onAdhoc={openAdhoc}
+                  onNewAsset={openNewAsset}
+                  onNewPipeline={() => setNewPipelineOpen(true)}
+                  onNewFolder={() => setNewFolderOpen(true)}
+                  onPipelineSettings={() => openPipelineSettings()}
+                />
+              </AppPanel>
+            ) : null}
+
+            <PanelGroup orientation="vertical" className="h-full min-h-0">
+              <Panel minSize="120px" className="min-h-0">
+                <AppPanel className="relative flex h-full min-h-0 overflow-hidden">
+                  <DelimitedCardContent className="h-full min-h-0 flex-1 p-0">
+                    <Outlet />
+                  </DelimitedCardContent>
+                  {view !== "code" ? (
+                    <FloatingViewSwitcher pipelineId={pipelineId} selectedAssetId={effectiveSelectedAssetId} currentView={view} search={buildSearch} onNewAsset={openNewAsset} />
+                  ) : null}
+                </AppPanel>
+              </Panel>
+              <PanelResizeHandle
+                className={cn("my-1.5 h-1.5 shrink-0 cursor-row-resize rounded-full bg-border transition-colors hover:bg-primary/40", resultsCollapsed && "pointer-events-none opacity-0")}
+              />
+              <Panel
+                collapsible
+                collapsedSize="38px"
+                minSize="120px"
+                defaultSize="224px"
+                panelRef={resultsPanelRef}
+                onResize={() => setResultsCollapsed(Boolean(resultsPanelRef.current?.isCollapsed()))}
+                className="min-h-0"
+              >
+                <ResultsPanel
+                  activeTab={resultTab}
+                  onTabChange={openBottom}
+                  collapsed={resultsCollapsed}
+                  onToggleCollapse={toggleResultsPanel}
+                  variant={variant}
+                  history={history}
+                  typeCheckReport={typeCheckReport}
+                  typeCheckLoading={typeCheckLoading}
+                  onRunTypeCheck={() => void runTypeCheck(false)}
+                  onSelectAsset={selectAsset}
+                  onHistoryOpen={(tab) => openBottom(tab)}
+                  inspectResult={assetResults.inspectResult}
+                  inspectLoading={assetResults.inspectLoading}
+                  canLoadMoreInspectRows={assetResults.canLoadMoreInspectRows}
+                  onLoadMoreInspectRows={assetResults.loadMoreInspectRows}
+                  selectedMaterializeEntry={assetResults.selectedMaterializeEntry}
+                  materializeOutputHtml={assetResults.materializeOutputHtml}
+                  pipelineMaterializeLoading={assetResults.pipelineMaterializeLoading}
+                  adhocResult={adhocResult}
+                  adhocRenderedQuery={adhocRenderedQuery}
+                  adhocLoading={adhocLoading}
+                />
+              </Panel>
+            </PanelGroup>
+
+            {!inspectorCollapsed ? (
+              <AppPanel className="hidden min-h-0 xl:flex xl:flex-col">
+                <Inspector asset={selectedAsset} />
+              </AppPanel>
+            ) : null}
+          </div>
+        )}
+
+        <Sheet open={explorerOpen} onOpenChange={setExplorerOpen}>
+          <SheetContent side="left" className="w-80 gap-0 p-0 sm:max-w-80">
+            <SheetTitle className="sr-only">Explorer</SheetTitle>
             <Explorer
               pipelineId={pipelineId}
               selectedAssetId={effectiveSelectedAssetId}
@@ -853,181 +977,112 @@ export function AppBuildPage({
               onNewFolder={() => setNewFolderOpen(true)}
               onPipelineSettings={() => openPipelineSettings()}
             />
-          </AppPanel>
-        ) : null}
-
-        <PanelGroup orientation="vertical" className="h-full min-h-0">
-          <Panel minSize="120px" className="min-h-0">
-            <AppPanel className="relative flex h-full min-h-0 overflow-hidden">
-              <DelimitedCardContent className="h-full min-h-0 flex-1 p-0">
-                <Outlet />
-              </DelimitedCardContent>
-              {view !== "code" ? (
-                <FloatingViewSwitcher
-                  pipelineId={pipelineId}
-                  selectedAssetId={effectiveSelectedAssetId}
-                  currentView={view}
-                  search={buildSearch}
-                  onNewAsset={openNewAsset}
-                />
-              ) : null}
-            </AppPanel>
-          </Panel>
-          <PanelResizeHandle
-            className={cn(
-              "my-1.5 h-1.5 shrink-0 cursor-row-resize rounded-full bg-border transition-colors hover:bg-primary/40",
-              resultsCollapsed && "pointer-events-none opacity-0"
-            )}
-          />
-          <Panel
-            collapsible
-            collapsedSize="38px"
-            minSize="120px"
-            defaultSize="224px"
-            panelRef={resultsPanelRef}
-            onResize={() => setResultsCollapsed(Boolean(resultsPanelRef.current?.isCollapsed()))}
-            className="min-h-0"
-          >
-            <ResultsPanel
-              activeTab={resultTab}
-              onTabChange={openBottom}
-              collapsed={resultsCollapsed}
-              onToggleCollapse={toggleResultsPanel}
-              variant={variant}
-              history={history}
-              typeCheckReport={typeCheckReport}
-              typeCheckLoading={typeCheckLoading}
-              onRunTypeCheck={() => void runTypeCheck(false)}
-              onSelectAsset={selectAsset}
-              onHistoryOpen={(tab) => openBottom(tab)}
-              inspectResult={assetResults.inspectResult}
-              inspectLoading={assetResults.inspectLoading}
-              canLoadMoreInspectRows={assetResults.canLoadMoreInspectRows}
-              onLoadMoreInspectRows={assetResults.loadMoreInspectRows}
-              selectedMaterializeEntry={assetResults.selectedMaterializeEntry}
-              materializeOutputHtml={assetResults.materializeOutputHtml}
-              pipelineMaterializeLoading={assetResults.pipelineMaterializeLoading}
-              adhocResult={adhocResult}
-              adhocRenderedQuery={adhocRenderedQuery}
-              adhocLoading={adhocLoading}
-            />
-          </Panel>
-        </PanelGroup>
-
-        {!inspectorCollapsed ? (
-          <AppPanel className="hidden min-h-0 xl:flex xl:flex-col">
+          </SheetContent>
+        </Sheet>
+        <Sheet open={inspectorOpen} onOpenChange={setInspectorOpen}>
+          <SheetContent side="right" className="w-[22rem] gap-0 p-0 sm:max-w-[22rem]">
+            <SheetTitle className="sr-only">Asset properties</SheetTitle>
             <Inspector asset={selectedAsset} />
-          </AppPanel>
-        ) : null}
-      </div>
-      )}
+          </SheetContent>
+        </Sheet>
 
-      <Sheet open={explorerOpen} onOpenChange={setExplorerOpen}>
-        <SheetContent side="left" className="w-80 gap-0 p-0 sm:max-w-80">
-          <SheetTitle className="sr-only">Explorer</SheetTitle>
-          <Explorer
-            pipelineId={pipelineId}
-            selectedAssetId={effectiveSelectedAssetId}
-            buildSearch={buildSearch}
-            onAssetSelect={selectAsset}
-            onAdhoc={openAdhoc}
-            onNewAsset={openNewAsset}
-            onNewPipeline={() => setNewPipelineOpen(true)}
-            onNewFolder={() => setNewFolderOpen(true)}
-            onPipelineSettings={() => openPipelineSettings()}
-          />
-        </SheetContent>
-      </Sheet>
-      <Sheet open={inspectorOpen} onOpenChange={setInspectorOpen}>
-        <SheetContent side="right" className="w-[22rem] gap-0 p-0 sm:max-w-[22rem]">
-          <SheetTitle className="sr-only">Asset properties</SheetTitle>
-          <Inspector asset={selectedAsset} />
-        </SheetContent>
-      </Sheet>
-
-      <NewAssetDialog
-        open={newAssetOpen}
-        onOpenChange={(open) => {
-          setNewAssetOpen(open);
-          if (!open) {
-            setDownstreamSource(null);
-            setNewAssetPrefix(null);
-          }
-        }}
-        pipelineId={activePipeline?.id}
-        pipelineName={activePipeline?.name}
-        existingAssetNames={existingAssetNames}
-        downstreamSource={downstreamSource}
-        namePrefix={newAssetPrefix}
-        onCreated={(assetId) => goToAsset(activePipeline?.id ?? pipelineId, assetId)}
-      />
-      <NewPipelineDialog
-        open={newPipelineOpen}
-        onOpenChange={setNewPipelineOpen}
-        existingPaths={new Set((workspace?.pipelines ?? []).map((item) => item.path))}
-        onCreated={(path) => setPendingPipelinePath(path)}
-      />
-      <NewFolderDialog
-        open={newFolderOpen}
-        onOpenChange={setNewFolderOpen}
-        pipelineName={activePipeline?.name}
-        onConfirm={(prefix) => {
-          setNewFolderOpen(false);
-          openNewAssetInGroup(prefix);
-        }}
-      />
-      <PipelineSettingsDialog open={pipelineSettingsOpen} onOpenChange={setPipelineSettingsOpen} pipelineId={pipelineId} initialSection={pipelineSettingsSection} />
-      <PlanDialog open={planOpen} onOpenChange={setPlanOpen} />
-      <Dialog open={staleBuildPrompt !== null} onOpenChange={(open) => { if (!open) setStaleBuildPrompt(null); }}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle className="flex items-center gap-2"><AlertTriangle className="size-4 text-amber-500" />Upstream is out of date</DialogTitle>
-            <DialogDescription>
-              <span className="font-mono">{staleBuildPrompt?.assetName}</span> depends on {staleBuildPrompt?.staleUpstreams.length} stale upstream{staleBuildPrompt?.staleUpstreams.length === 1 ? "" : "s"}. Building now reads their outdated tables, so this asset will stay stale until its upstreams are current. Build the upstreams first to get an up-to-date result.
-            </DialogDescription>
-          </DialogHeader>
-          <div className="max-h-40 space-y-1 overflow-y-auto rounded-md border p-2 font-mono text-xs">
-            {staleBuildPrompt?.staleUpstreams.map((name) => (
-              <div key={name} className="flex items-center gap-1.5"><span className="size-1.5 rounded-full bg-amber-500" />{name}</div>
-            ))}
-          </div>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setStaleBuildPrompt(null)}>Cancel</Button>
-            <Button
-              variant="outline"
-              onClick={() => {
-                if (staleBuildPrompt) runMaterialize(staleBuildPrompt.assetId, staleBuildPrompt.assetName, "asset");
-                setStaleBuildPrompt(null);
-              }}
-            >
-              Build anyway
-            </Button>
-            <Button
-              onClick={() => {
-                if (staleBuildPrompt) runMaterialize(staleBuildPrompt.assetId, staleBuildPrompt.assetName, "asset_with_upstreams");
-                setStaleBuildPrompt(null);
-              }}
-            >
-              <Hammer className="size-4" />Build upstreams first
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-      <BuildStaleDialog
-        open={buildStaleOpen}
-        onOpenChange={setBuildStaleOpen}
-        staleAssets={staleness.staleAssets}
-        onBuild={(onAssetEvent) => {
-          logHistory("build stale", `${staleness.staleAssets.length} assets`);
-          openBottom("materialize");
-          const idByName = new Map(displayedPipelineAssets.map((asset) => [asset.name, asset.id]));
-          const assetIds = staleness.staleAssets
-            .map((stale) => idByName.get(stale.asset_name))
-            .filter((id): id is string => Boolean(id));
-          return assetResults.runBuildStale(activePipeline?.id ?? pipelineId, { assetIds, onAssetEvent });
-        }}
-      />
-    </AppPage>
+        <NewAssetDialog
+          open={newAssetOpen}
+          onOpenChange={(open) => {
+            setNewAssetOpen(open);
+            if (!open) {
+              setDownstreamSource(null);
+              setNewAssetPrefix(null);
+            }
+          }}
+          pipelineId={activePipeline?.id}
+          pipelineName={activePipeline?.name}
+          existingAssetNames={existingAssetNames}
+          downstreamSource={downstreamSource}
+          namePrefix={newAssetPrefix}
+          onCreated={(assetId) => goToAsset(activePipeline?.id ?? pipelineId, assetId)}
+        />
+        <NewPipelineDialog
+          open={newPipelineOpen}
+          onOpenChange={setNewPipelineOpen}
+          existingPaths={new Set((workspace?.pipelines ?? []).map((item) => item.path))}
+          onCreated={(path) => setPendingPipelinePath(path)}
+        />
+        <NewFolderDialog
+          open={newFolderOpen}
+          onOpenChange={setNewFolderOpen}
+          pipelineName={activePipeline?.name}
+          onConfirm={(prefix) => {
+            setNewFolderOpen(false);
+            openNewAssetInGroup(prefix);
+          }}
+        />
+        <PipelineSettingsDialog open={pipelineSettingsOpen} onOpenChange={setPipelineSettingsOpen} pipelineId={pipelineId} initialSection={pipelineSettingsSection} />
+        <PlanDialog open={planOpen} onOpenChange={setPlanOpen} />
+        <Dialog
+          open={staleBuildPrompt !== null}
+          onOpenChange={(open) => {
+            if (!open) setStaleBuildPrompt(null);
+          }}
+        >
+          <DialogContent>
+            <DialogHeader>
+              <DialogTitle className="flex items-center gap-2">
+                <AlertTriangle className="size-4 text-amber-500" />
+                Upstream is out of date
+              </DialogTitle>
+              <DialogDescription>
+                <span className="font-mono">{staleBuildPrompt?.assetName}</span> depends on {staleBuildPrompt?.staleUpstreams.length} stale upstream
+                {staleBuildPrompt?.staleUpstreams.length === 1 ? "" : "s"}. Building now reads their outdated tables, so this asset will stay stale until its upstreams are current. Build the upstreams
+                first to get an up-to-date result.
+              </DialogDescription>
+            </DialogHeader>
+            <div className="max-h-40 space-y-1 overflow-y-auto rounded-md border p-2 font-mono text-xs">
+              {staleBuildPrompt?.staleUpstreams.map((name) => (
+                <div key={name} className="flex items-center gap-1.5">
+                  <span className="size-1.5 rounded-full bg-amber-500" />
+                  {name}
+                </div>
+              ))}
+            </div>
+            <DialogFooter>
+              <Button variant="outline" onClick={() => setStaleBuildPrompt(null)}>
+                Cancel
+              </Button>
+              <Button
+                variant="outline"
+                onClick={() => {
+                  if (staleBuildPrompt) runMaterialize(staleBuildPrompt.assetId, staleBuildPrompt.assetName, "asset");
+                  setStaleBuildPrompt(null);
+                }}
+              >
+                Build anyway
+              </Button>
+              <Button
+                onClick={() => {
+                  if (staleBuildPrompt) runMaterialize(staleBuildPrompt.assetId, staleBuildPrompt.assetName, "asset_with_upstreams");
+                  setStaleBuildPrompt(null);
+                }}
+              >
+                <Hammer className="size-4" />
+                Build upstreams first
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+        <BuildStaleDialog
+          open={buildStaleOpen}
+          onOpenChange={setBuildStaleOpen}
+          staleAssets={staleness.staleAssets}
+          onBuild={(onAssetEvent) => {
+            logHistory("build stale", `${staleness.staleAssets.length} assets`);
+            openBottom("materialize");
+            const idByName = new Map(displayedPipelineAssets.map((asset) => [asset.name, asset.id]));
+            const assetIds = staleness.staleAssets.map((stale) => idByName.get(stale.asset_name)).filter((id): id is string => Boolean(id));
+            return assetResults.runBuildStale(activePipeline?.id ?? pipelineId, { assetIds, onAssetEvent });
+          }}
+        />
+      </AppPage>
     </BuildContext.Provider>
   );
 }
@@ -1091,7 +1146,9 @@ function BuildTopBar({
 
   return (
     <div className="flex min-h-12 shrink-0 items-center gap-2 px-3">
-      <Button variant="ghost" size="sm" className="xl:hidden" onClick={onOpenExplorer}><PanelLeft className="size-3.5" /></Button>
+      <Button variant="ghost" size="sm" className="xl:hidden" onClick={onOpenExplorer}>
+        <PanelLeft className="size-3.5" />
+      </Button>
       <Button
         variant="ghost"
         size="sm"
@@ -1117,23 +1174,22 @@ function BuildTopBar({
           <BreadcrumbSeparator />
           <BreadcrumbItem className="min-w-0">
             <BreadcrumbLink asChild className="truncate font-mono">
-              <Link to="/pipelines/$pipelineId/canvas" params={{ pipelineId }} search={search}>{pipelineLabel}</Link>
+              <Link to="/pipelines/$pipelineId/canvas" params={{ pipelineId }} search={search}>
+                {pipelineLabel}
+              </Link>
             </BreadcrumbLink>
           </BreadcrumbItem>
           <BreadcrumbSeparator />
           <BreadcrumbItem className="min-w-0">
-            {assetCrumbLoading ? (
-              <Skeleton className="h-4 w-32" aria-label="Loading asset" />
-            ) : (
-              <BreadcrumbPage className="truncate font-mono">{selectedAsset.name}</BreadcrumbPage>
-            )}
+            {assetCrumbLoading ? <Skeleton className="h-4 w-32" aria-label="Loading asset" /> : <BreadcrumbPage className="truncate font-mono">{selectedAsset.name}</BreadcrumbPage>}
           </BreadcrumbItem>
         </BreadcrumbList>
       </Breadcrumb>
       <DropdownMenu>
         <DropdownMenuTrigger asChild>
           <Button variant="outline" size="sm" className={cn("hidden font-mono lg:inline-flex", variant !== "default" ? "text-primary" : null)}>
-            <GitBranch className="size-3.5" />{variant}
+            <GitBranch className="size-3.5" />
+            {variant}
           </Button>
         </DropdownMenuTrigger>
         <DropdownMenuContent align="end" className="w-64">
@@ -1143,12 +1199,17 @@ function BuildTopBar({
               <GitBranch className="size-4" />
               <div className="min-w-0 flex-1">
                 <div className="truncate font-mono text-xs">{item.id}</div>
-                <div className="truncate font-mono text-[10px] text-muted-foreground">{renderedPipelineName(item.id)} · {renderedPipelineSchedule(item.id)}</div>
+                <div className="truncate font-mono text-[10px] text-muted-foreground">
+                  {renderedPipelineName(item.id)} · {renderedPipelineSchedule(item.id)}
+                </div>
               </div>
             </DropdownMenuItem>
           ))}
           <DropdownMenuSeparator />
-          <DropdownMenuItem onSelect={onOpenPlan}><ClipboardCheck className="size-4" />Review impact plan</DropdownMenuItem>
+          <DropdownMenuItem onSelect={onOpenPlan}>
+            <ClipboardCheck className="size-4" />
+            Review impact plan
+          </DropdownMenuItem>
         </DropdownMenuContent>
       </DropdownMenu>
       {/* Toggle: a second click leaves ad-hoc mode and returns to the asset. */}
@@ -1167,7 +1228,12 @@ function BuildTopBar({
           <Terminal className="size-3.5" /> Ad-hoc
         </Link>
       </Button>
-      {historyCount > 0 ? <Button variant="ghost" size="sm" onClick={onOpenHistory}><History className="size-3.5" />{historyCount}</Button> : null}
+      {historyCount > 0 ? (
+        <Button variant="ghost" size="sm" onClick={onOpenHistory}>
+          <History className="size-3.5" />
+          {historyCount}
+        </Button>
+      ) : null}
       <TypeCheckBell report={typeCheckReport} loading={typeCheckLoading} onClick={onTypeCheck} />
       {staleCount > 0 ? (
         <Button
@@ -1200,14 +1266,7 @@ function BuildTopBar({
       >
         {inspectorCollapsed ? <PanelRightOpen className="size-3.5" /> : <PanelRightClose className="size-3.5" />}
       </Button>
-      <Button
-        variant="ghost"
-        size="sm"
-        className="xl:hidden"
-        onClick={onOpenInspector}
-        title="Asset properties"
-        aria-label="Asset properties"
-      >
+      <Button variant="ghost" size="sm" className="xl:hidden" onClick={onOpenInspector} title="Asset properties" aria-label="Asset properties">
         <PanelRight className="size-3.5" />
       </Button>
     </div>
@@ -1607,6 +1666,7 @@ function EditorWorkspace({
     openBottom,
     openInspector,
     materializeSelectedAsset,
+  fullRefreshSelectedAsset,
     inspectSelectedAsset,
     materializeLoading,
     inspectLoading,
@@ -1634,6 +1694,7 @@ function EditorWorkspace({
           showLabels={showActionLabels}
           showInspect={asset.kind !== "source"}
           onRun={materializeSelectedAsset}
+      onFullRefresh={asset.workspaceAsset?.type.toLowerCase() === "api" ? fullRefreshSelectedAsset : undefined}
           onInspect={inspectSelectedAsset}
           runDisabled={materializeLoading || executionBlocked || !asset.workspaceAsset}
           runBlockedReason={executionBlocked ? "This environment is protected: interactive execution is disabled" : undefined}
@@ -1720,6 +1781,7 @@ function EditorActionButtons({
   showInspect,
   onRun,
   onInspect,
+  onFullRefresh,
   runDisabled = false,
   runBlockedReason,
   runLoading = false,
@@ -1731,6 +1793,7 @@ function EditorActionButtons({
   showInspect: boolean;
   onRun: () => void;
   onInspect: () => void;
+  onFullRefresh?: () => void;
   runDisabled?: boolean;
   runBlockedReason?: string;
   runLoading?: boolean;
@@ -1741,25 +1804,34 @@ function EditorActionButtons({
   const inspectLabel = inspectLoading ? "Loading..." : "Inspect";
   return (
     <>
-      <Button
-        size={showLabels ? "sm" : "icon-sm"}
-        onClick={onRun}
-        disabled={runDisabled}
-        aria-label={actionLabel}
-        title={runBlockedReason ?? actionLabel}
-      >
-        <Hammer className="size-3.5" />
-        {showLabels ? runLabel : <span className="sr-only">{runLabel}</span>}
-      </Button>
+      {onFullRefresh ? (
+        <ButtonGroup>
+          <Button size={showLabels ? "sm" : "icon-sm"} onClick={onRun} disabled={runDisabled} aria-label={actionLabel} title={runBlockedReason ?? actionLabel}>
+            <Hammer data-icon="inline-start" />
+            {showLabels ? runLabel : <span className="sr-only">{runLabel}</span>}
+          </Button>
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button variant="outline" size="icon-sm" disabled={runDisabled} aria-label="Materialization options">
+                <ChevronDown />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end">
+              <DropdownMenuGroup>
+                <DropdownMenuLabel>Materialization</DropdownMenuLabel>
+                <DropdownMenuItem onClick={onFullRefresh}>Full refresh</DropdownMenuItem>
+              </DropdownMenuGroup>
+            </DropdownMenuContent>
+          </DropdownMenu>
+        </ButtonGroup>
+      ) : (
+        <Button size={showLabels ? "sm" : "icon-sm"} onClick={onRun} disabled={runDisabled} aria-label={actionLabel} title={runBlockedReason ?? actionLabel}>
+          <Hammer data-icon="inline-start" />
+          {showLabels ? runLabel : <span className="sr-only">{runLabel}</span>}
+        </Button>
+      )}
       {showInspect ? (
-        <Button
-          variant="outline"
-          size={showLabels ? "sm" : "icon-sm"}
-          onClick={onInspect}
-          disabled={inspectDisabled}
-          aria-label="Inspect"
-          title="Inspect"
-        >
+        <Button variant="outline" size={showLabels ? "sm" : "icon-sm"} onClick={onInspect} disabled={inspectDisabled} aria-label="Inspect" title="Inspect">
           <Eye className="size-3.5" />
           {showLabels ? inspectLabel : <span className="sr-only">{inspectLabel}</span>}
         </Button>
@@ -1769,40 +1841,18 @@ function EditorActionButtons({
 }
 
 function AdhocEditor({ showActionLabels }: { showActionLabels: boolean }) {
-  const {
-    pipelineId,
-    selectedAssetId,
-    view,
-    buildSearch,
-    adhocContextAsset,
-    adhocLoading,
-    runAdhocQuery,
-    goToAsset,
-  } = useBuildContext();
+  const { pipelineId, selectedAssetId, view, buildSearch, adhocContextAsset, adhocLoading, runAdhocQuery, goToAsset } = useBuildContext();
   return (
     <div className="relative flex h-full min-h-0 flex-col">
       <EditorFilenameHeader filename="Ad-hoc query">
-        <Button
-          size={showActionLabels ? "sm" : "icon-sm"}
-          onClick={runAdhocQuery}
-          disabled={adhocLoading || !adhocContextAsset}
-          aria-label="Run"
-          title="Run (⌘ + ↵)"
-        >
+        <Button size={showActionLabels ? "sm" : "icon-sm"} onClick={runAdhocQuery} disabled={adhocLoading || !adhocContextAsset} aria-label="Run" title="Run (⌘ + ↵)">
           <Play className="size-3.5" />
-          {showActionLabels ? (adhocLoading ? "Running..." : "Run") : <span className="sr-only">Run</span>}
+          {showActionLabels ? adhocLoading ? "Running..." : "Run" : <span className="sr-only">Run</span>}
         </Button>
-        {view === "code" ? (
-          <BuildViewButtonGroup pipelineId={pipelineId} selectedAssetId={selectedAssetId} currentView={view} search={buildSearch} />
-        ) : null}
+        {view === "code" ? <BuildViewButtonGroup pipelineId={pipelineId} selectedAssetId={selectedAssetId} currentView={view} search={buildSearch} /> : null}
       </EditorFilenameHeader>
       {adhocContextAsset ? (
-        <AppAdhocEditor
-          pipelineId={pipelineId}
-          contextAsset={adhocContextAsset}
-          onRunQuery={runAdhocQuery}
-          onGoToAsset={goToAsset}
-        />
+        <AppAdhocEditor pipelineId={pipelineId} contextAsset={adhocContextAsset} onRunQuery={runAdhocQuery} onGoToAsset={goToAsset} />
       ) : (
         <CodeBlock lines={["select * from revenue_daily limit 100;"]} />
       )}
@@ -1830,15 +1880,21 @@ function CodeBlock({
           const dependency = importName ? packageForImport(importName) : null;
           const missing = Boolean(dependency && !declaredDependencies.includes(dependency));
           return (
-          <div key={index} className={cn("flex min-h-5 items-center", missing ? "bg-amber-500/10 shadow-[inset_2px_0_0_#f59e0b]" : null)}>
-            <span className={cn("w-11 shrink-0 select-none pr-3 text-right", missing ? "text-amber-400" : "text-zinc-500")}>{index + 1}</span>
-            <pre className="min-w-0 whitespace-pre">{line}</pre>
-            {missing && dependency ? (
-              <Button variant="outline" size="xs" className="ml-3 h-5 border-amber-300 bg-amber-50 px-1.5 text-[10px] text-amber-700 hover:bg-amber-100 dark:border-amber-500/40 dark:bg-amber-500/10 dark:text-amber-300 dark:hover:bg-amber-500/20" onClick={() => onAddDependency?.(dependency)}>
-                <Package className="size-3" />add {dependency}
-              </Button>
-            ) : null}
-          </div>
+            <div key={index} className={cn("flex min-h-5 items-center", missing ? "bg-amber-500/10 shadow-[inset_2px_0_0_#f59e0b]" : null)}>
+              <span className={cn("w-11 shrink-0 select-none pr-3 text-right", missing ? "text-amber-400" : "text-zinc-500")}>{index + 1}</span>
+              <pre className="min-w-0 whitespace-pre">{line}</pre>
+              {missing && dependency ? (
+                <Button
+                  variant="outline"
+                  size="xs"
+                  className="ml-3 h-5 border-amber-300 bg-amber-50 px-1.5 text-[10px] text-amber-700 hover:bg-amber-100 dark:border-amber-500/40 dark:bg-amber-500/10 dark:text-amber-300 dark:hover:bg-amber-500/20"
+                  onClick={() => onAddDependency?.(dependency)}
+                >
+                  <Package className="size-3" />
+                  add {dependency}
+                </Button>
+              ) : null}
+            </div>
           );
         })}
       </div>
@@ -2416,6 +2472,7 @@ function NewAssetDialog({
   const [kind, setKind] = useState<NewAssetKind>("sql");
   const [name, setName] = useState("");
   const [connection, setConnection] = useState("");
+  const [apiTemplate, setAPITemplate] = useState<APIAssetTemplateId>("openapi");
   const [creating, setCreating] = useState(false);
   const [error, setError] = useState("");
 
@@ -2445,6 +2502,7 @@ function NewAssetDialog({
     if (open) {
       setKind("sql");
       setConnection("");
+      setAPITemplate("openapi");
       setError("");
     }
   }, [open, isDownstream]);
@@ -2473,7 +2531,7 @@ function NewAssetDialog({
         ? selected.id === "sql"
           ? { name: trimmed, source_asset_id: downstreamSource.id }
           : { name: trimmed, source_asset_id: downstreamSource.id, type: selected.id }
-        : buildCreateAssetInput(trimmed, selected.id, undefined, connection);
+        : buildCreateAssetInput(trimmed, selected.id, undefined, connection, apiTemplate);
     setCreating(true);
     setError("");
     try {
@@ -2535,24 +2593,48 @@ function NewAssetDialog({
             <p className="text-xs text-muted-foreground">Use a <span className="font-mono">prefix.name</span> to group it under <span className="font-mono">assets/prefix/</span>.</p>
           </div>
           {selected.id === "api" ? (
-            <div className="grid gap-2">
-              <Label htmlFor="new-asset-connection">Destination connection</Label>
-              <Select value={connection || AUTO_CONNECTION_VALUE} onValueChange={(value) => setConnection(value === AUTO_CONNECTION_VALUE ? "" : value)}>
-                <SelectTrigger id="new-asset-connection">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value={AUTO_CONNECTION_VALUE}>Auto (pipeline default)</SelectItem>
-                  {connectionNames.map((connectionName) => (
-                    <SelectItem key={connectionName} value={connectionName}>{connectionName}</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-              <p className="text-xs text-muted-foreground">Where the fetched records are loaded. You can change this later.</p>
-            </div>
+            <FieldGroup>
+              <Field>
+                <FieldLabel htmlFor="new-api-template">API source</FieldLabel>
+                <Select value={apiTemplate} onValueChange={(value) => setAPITemplate(value as APIAssetTemplateId)}>
+                  <SelectTrigger id="new-api-template">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectGroup>
+                      {API_ASSET_TEMPLATES.map((template) => (
+                        <SelectItem key={template.id} value={template.id}>{template.label}</SelectItem>
+                      ))}
+                    </SelectGroup>
+                  </SelectContent>
+                </Select>
+                <FieldDescription>{API_ASSET_TEMPLATES.find((template) => template.id === apiTemplate)?.description}</FieldDescription>
+              </Field>
+              <Field>
+                <FieldLabel htmlFor="new-asset-connection">Destination connection</FieldLabel>
+                <Select value={connection || AUTO_CONNECTION_VALUE} onValueChange={(value) => setConnection(value === AUTO_CONNECTION_VALUE ? "" : value)}>
+                  <SelectTrigger id="new-asset-connection">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectGroup>
+                      <SelectItem value={AUTO_CONNECTION_VALUE}>Auto (pipeline default)</SelectItem>
+                      {connectionNames.map((connectionName) => (
+                        <SelectItem key={connectionName} value={connectionName}>{connectionName}</SelectItem>
+                      ))}
+                    </SelectGroup>
+                  </SelectContent>
+                </Select>
+                <FieldDescription>Where fetched records are loaded. You can change this later.</FieldDescription>
+              </Field>
+            </FieldGroup>
           ) : null}
           {error ? (
-            <div className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700 dark:border-red-500/25 dark:bg-red-500/10 dark:text-red-300">{error}</div>
+            <Alert variant="destructive">
+              <AlertTriangle />
+              <AlertTitle>Could not create asset</AlertTitle>
+              <AlertDescription>{error}</AlertDescription>
+            </Alert>
           ) : null}
         </div>
         <DialogFooter>

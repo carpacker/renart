@@ -179,6 +179,30 @@ func TestDifferentFingerprintsDoNotMerge(t *testing.T) {
 	assert.Len(t, rows, 2)
 }
 
+func TestDifferentVariableVariantsDoNotMergeCoverage(t *testing.T) {
+	t.Parallel()
+	store := openTestStore(t)
+	ctx := context.Background()
+	for i, varsHash := range []string{"region-eu", "region-us"} {
+		start, end := interval(i, i+1)
+		require.NoError(t, store.Record(ctx, matlog.Materialization{
+			AssetID: "p:a", Environment: "prod", Fingerprint: "v1:same", VarsHash: varsHash,
+			IntervalStart: start, IntervalEnd: end, RunID: "run", MaterializedAt: ts(i),
+		}))
+	}
+	eu, err := store.Coverage(ctx, []string{"p:a"}, "prod", "region-eu")
+	require.NoError(t, err)
+	require.Len(t, eu["p:a"], 1)
+	assert.Equal(t, ts(0), *eu["p:a"][0].IntervalStart)
+	assert.Equal(t, ts(1), *eu["p:a"][0].IntervalEnd)
+
+	us, err := store.Coverage(ctx, []string{"p:a"}, "prod", "region-us")
+	require.NoError(t, err)
+	require.Len(t, us["p:a"], 1)
+	assert.Equal(t, ts(1), *us["p:a"][0].IntervalStart)
+	assert.Equal(t, ts(2), *us["p:a"][0].IntervalEnd)
+}
+
 func TestHasAnyCoverageIgnoresFingerprintAndVars(t *testing.T) {
 	t.Parallel()
 	store := openTestStore(t)

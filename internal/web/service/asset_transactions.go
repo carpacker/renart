@@ -91,6 +91,9 @@ func (s *AssetService) ApplyAssetTransaction(ctx context.Context, assetID string
 	meta.Version = assetmeta.SchemaVersion
 	meta.Generator = assetmeta.GeneratorVersion
 	asset.Meta = pipeline.EmptyStringMap(meta.Apply(asset.Meta))
+	if apiErr := loaderMaterializationAPIError(asset); apiErr != nil {
+		return AssetTransactionResult{}, apiErr
+	}
 
 	if apiErr := s.persistAssetPreservingInferredName(asset, parsedPipeline); apiErr != nil {
 		return AssetTransactionResult{}, apiErr

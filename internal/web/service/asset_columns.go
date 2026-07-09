@@ -178,8 +178,11 @@ func (s *AssetService) UpdateAssetColumns(ctx context.Context, assetID string, c
 	}
 
 	asset.Columns = ModelColumnsToPipelineColumns(parsedColumns)
-	if err := asset.Persist(s.fs(), parsedPipeline); err != nil {
-		return StatusResponse{}, internalError("asset_persist_failed", err.Error())
+	if apiErr := loaderMaterializationAPIError(asset); apiErr != nil {
+		return StatusResponse{}, apiErr
+	}
+	if apiErr := s.persistAssetPreservingInferredName(asset, parsedPipeline); apiErr != nil {
+		return StatusResponse{}, apiErr
 	}
 
 	if relAssetPath, decodeErr := DecodeID(assetID); decodeErr == nil {

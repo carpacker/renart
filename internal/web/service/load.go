@@ -290,6 +290,42 @@ func loadRunModeArgs(ctx context.Context) []string {
 	return []string{"--mode", "full-refresh"}
 }
 
+// slingMaterializationArgs maps Renart/Bruin materialization intent to Sling's
+// loader flags. This is shared by native Load and HTTP API assets so the
+// workbench never offers a strategy that silently executes as full refresh.
+func slingMaterializationArgs(ctx context.Context, asset *pipeline.Asset) ([]string, error) {
+	if args := loadRunModeArgs(ctx); len(args) > 0 {
+		return args, nil
+	}
+	if asset == nil {
+		return nil, errors.New("asset is required to resolve materialization")
+	}
+	strategy := strings.ToLower(strings.TrimSpace(string(asset.Materialization.Strategy)))
+	switch strategy {
+	case "", "create+replace", "create_replace", "full-refresh", "full_refresh":
+		return nil, nil
+	case "truncate+insert", "truncate_insert", "truncate":
+		return []string{"--mode", "truncate"}, nil
+	case "append":
+		if key := strings.TrimSpace(asset.Materialization.IncrementalKey); key != "" {
+			return []string{"--mode", "incremental", "--update-key", key}, nil
+		}
+		return []string{"--mode", "snapshot"}, nil
+	case "merge":
+		primaryKeys := asset.ColumnNamesWithPrimaryKey()
+		if len(primaryKeys) == 0 {
+			return nil, errors.New("merge materialization needs at least one primary-key column")
+		}
+		args := []string{"--mode", "incremental", "--primary-key", strings.Join(primaryKeys, ",")}
+		if key := strings.TrimSpace(asset.Materialization.IncrementalKey); key != "" {
+			args = append(args, "--update-key", key)
+		}
+		return args, nil
+	default:
+		return nil, fmt.Errorf("materialization strategy %q is not supported for %s assets", strategy, asset.Type)
+	}
+}
+
 func newStreamingCommand(ctx context.Context, name string, args []string, dir string, writer io.Writer) *exec.Cmd {
 	cmd := exec.CommandContext(ctx, name, args...)
 	cmd.Dir = dir
@@ -368,7 +404,14 @@ func (e *HybridBruinExecutor) runLoadAsset(ctx context.Context, asset *pipeline.
 
 	args := append([]string{"run"}, srcArgs...)
 	args = append(args, tgtArgs...)
-	args = append(args, loadModeArgsFromParams(ctx, params)...)
+	modeArgs, err := slingMaterializationArgs(ctx, asset)
+	if err != nil {
+		return writer.buffer.Bytes(), err
+	}
+	if len(modeArgs) == 0 && strings.TrimSpace(string(asset.Materialization.Strategy)) == "" {
+		modeArgs = loadModeArgsFromParams(ctx, params)
+	}
+	args = append(args, modeArgs...)
 
 	cmdName, cmdArgs, err := loadCommand(ctx, args, writer)
 	if err != nil {

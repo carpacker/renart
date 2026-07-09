@@ -1,10 +1,11 @@
 "use client";
 
-import { Play } from "lucide-react";
+import { AlertTriangle, Play } from "lucide-react";
 import { useEffect, useRef } from "react";
 
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Spinner } from "@/components/ui/spinner";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { MaterializeHistoryEntry } from "@/lib/atoms/results";
 
 export function WorkspaceMaterializeOutputView({
@@ -66,6 +67,17 @@ export function WorkspaceMaterializeOutputView({
                 Materialization failed
                 {entry.error ? `: ${entry.error}` : ""}
               </div>
+            ) : null}
+            {entry.warnings && entry.warnings.length > 0 ? (
+              <Alert>
+                <AlertTriangle />
+                <AlertTitle>Completed with warnings</AlertTitle>
+                <AlertDescription>
+                  {entry.warnings.map((warning) => (
+                    <p key={warning}>{warning}</p>
+                  ))}
+                </AlertDescription>
+              </Alert>
             ) : null}
             <pre
               className="font-console whitespace-pre-wrap text-[11px]"

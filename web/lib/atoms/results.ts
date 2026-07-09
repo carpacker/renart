@@ -17,6 +17,7 @@ export type MaterializeHistoryEntry = {
   output: string;
   status: "ok" | "error" | null;
   error: string;
+  warnings?: string[];
   loading: boolean;
   createdAt: number;
   updatedAt: number;

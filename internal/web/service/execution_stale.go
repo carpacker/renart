@@ -132,7 +132,7 @@ func (s *ExecutionService) MaterializeStaleAssetsStream(
 			logLine(fmt.Sprintf("\n━━ Building %s (%d/%d)%s ━━\n", asset.Name, index+1, total, suffix))
 
 			run := func() ([]byte, error) {
-				return s.runSingleAssetMaterialization(ctx, assetPath, environment, window, onChunk)
+				return s.runSingleAssetMaterialization(ctx, assetPath, environment, window, false, onChunk)
 			}
 			var output []byte
 			var runErr error

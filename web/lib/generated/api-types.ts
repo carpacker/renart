@@ -266,6 +266,21 @@ export type OpenAPISuggestionsResult = {
   error?: string;
 };
 
+export type APIRecordsPathSample = {
+  path: string;
+  detail?: string;
+};
+
+export type APIInferResult = {
+  status: string;
+  request_url: string;
+  records_path: string;
+  records_count: number;
+  records_paths: APIRecordsPathSample[];
+  columns: WebColumn[];
+  warnings: string[];
+};
+
 export type SqlDiscoveryTable = {
   name: string;
   short_name: string;

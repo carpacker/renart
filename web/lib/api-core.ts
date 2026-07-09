@@ -15,6 +15,7 @@ export type MaterializeStreamPayload = {
   exit_code?: number;
   changed_asset_ids?: string[];
   materialized_at?: string;
+   warnings?: string[];
   chunk?: string;
   run_scope?: string;
 };

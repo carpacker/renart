@@ -7,12 +7,13 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	webapi "renart/internal/web/api"
+	"renart/internal/web/service"
 )
 
 type AssetColumnsHandlers interface {
 	FillColumnsFromDB(ctx context.Context, assetID string) (int, map[string]any, *APIError)
 	InferAssetColumns(ctx context.Context, assetID string) (int, map[string]any, *APIError)
-	InferAPIAsset(ctx context.Context, assetID string) (int, map[string]any, *APIError)
+	InferAPIAsset(ctx context.Context, assetID string) (int, service.APIInferResult, *APIError)
 	UpdateAssetColumns(ctx context.Context, assetID string, columns []any) (StatusResponse, *APIError)
 	ReconcileAssetColumns(ctx context.Context, assetID string, inferred []WorkspaceColumn) (ColumnReconcileResult, *APIError)
 	RefreshAssetColumnsFromDefinition(ctx context.Context, assetID string) (ColumnReconcileResult, *APIError)

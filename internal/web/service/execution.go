@@ -45,6 +45,7 @@ type MaterializeResult struct {
 	ExitCode        int
 	ChangedAssetIDs []string
 	MaterializedAt  *time.Time
+	Warnings        []string
 }
 
 type MaterializeScope string
@@ -483,7 +484,8 @@ func extractInspectRawOutput(output []byte) string {
 	return trimmed
 }
 
-func (s *ExecutionService) MaterializeAssetStream(ctx context.Context, assetID, environment, scope, startDate, endDate string, onChunk func([]byte)) MaterializeResult {
+func (s *ExecutionService) MaterializeAssetStream(ctx context.Context, assetID, environment, scope, startDate, endDate string, fullRefresh bool, onChunk func([]byte)) MaterializeResult {
+	ctx, warnings := withExecutionWarnings(ctx)
 	if err := s.checkRunPolicy(policy.RunRequest{Environment: environment, Interactive: true}); err != nil {
 		return MaterializeResult{Status: "error", Error: err.Error(), ExitCode: 1}
 	}
@@ -513,7 +515,7 @@ func (s *ExecutionService) MaterializeAssetStream(ctx context.Context, assetID, 
 	assetNamesToRecord := make([]string, 0, 1)
 	run := func() error {
 		var runErr error
-		output, runErr = s.runSingleAssetMaterialization(ctx, relAssetPath, environment, timeWindow, onChunk)
+		output, runErr = s.runSingleAssetMaterialization(ctx, relAssetPath, environment, timeWindow, fullRefresh, onChunk)
 		return runErr
 	}
 	if normalizedScope != MaterializeScopeAsset {
@@ -527,7 +529,7 @@ func (s *ExecutionService) MaterializeAssetStream(ctx context.Context, assetID, 
 		assetNamesToRecord = scoped.AssetNames
 		run = func() error {
 			var runErr error
-			output, runErr = s.runScopedAssetMaterialization(ctx, scoped.AssetPaths, environment, timeWindow, onChunk)
+			output, runErr = s.runScopedAssetMaterialization(ctx, scoped.AssetPaths, environment, timeWindow, fullRefresh, onChunk)
 			return runErr
 		}
 	} else if assetName := s.deps.ResolveAssetNameByID(assetID); assetName != "" {
@@ -618,17 +620,18 @@ func (s *ExecutionService) MaterializeAssetStream(ctx context.Context, assetID, 
 		ExitCode:        exitCode,
 		ChangedAssetIDs: coalesceMaterializedAssetIDs(changedAssetIDs, materializedAssetIDs),
 		MaterializedAt:  materializedAt,
+		Warnings:        warnings.snapshot(),
 	}
 }
 
-func (s *ExecutionService) runSingleAssetMaterialization(ctx context.Context, assetPath, environment string, timeWindow ExecutionTimeWindow, onChunk func([]byte)) ([]byte, error) {
-	return s.deps.Executor.RunAsset(ctx, RunAssetRequest{AssetPath: assetPath, Environment: environment, StartDate: timeWindow.StartRFC3339(), EndDate: timeWindow.EndRFC3339()}, onChunk)
+func (s *ExecutionService) runSingleAssetMaterialization(ctx context.Context, assetPath, environment string, timeWindow ExecutionTimeWindow, fullRefresh bool, onChunk func([]byte)) ([]byte, error) {
+	return s.deps.Executor.RunAsset(ctx, RunAssetRequest{AssetPath: assetPath, Environment: environment, StartDate: timeWindow.StartRFC3339(), EndDate: timeWindow.EndRFC3339(), FullRefresh: fullRefresh}, onChunk)
 }
 
-func (s *ExecutionService) runScopedAssetMaterialization(ctx context.Context, assetPaths []string, environment string, timeWindow ExecutionTimeWindow, onChunk func([]byte)) ([]byte, error) {
+func (s *ExecutionService) runScopedAssetMaterialization(ctx context.Context, assetPaths []string, environment string, timeWindow ExecutionTimeWindow, fullRefresh bool, onChunk func([]byte)) ([]byte, error) {
 	var combined bytes.Buffer
 	for _, assetPath := range assetPaths {
-		chunkOutput, err := s.runSingleAssetMaterialization(ctx, assetPath, environment, timeWindow, onChunk)
+		chunkOutput, err := s.runSingleAssetMaterialization(ctx, assetPath, environment, timeWindow, fullRefresh, onChunk)
 		if len(chunkOutput) > 0 {
 			_, _ = combined.Write(chunkOutput)
 		}
@@ -922,23 +925,24 @@ func (s *ExecutionService) GetPipelineMaterialization(ctx context.Context, pipel
 	return PipelineMaterializationResponse{PipelineID: pipelineID, Assets: assets}, nil
 }
 
-func (s *ExecutionService) MaterializePipelineStream(ctx context.Context, pipelineID, environment string, dryRun bool, startDate, endDate string, onChunk func([]byte)) MaterializeResult {
-	return s.MaterializePipelineStreamWithAssetEvents(ctx, pipelineID, environment, dryRun, startDate, endDate, onChunk, nil)
+func (s *ExecutionService) MaterializePipelineStream(ctx context.Context, pipelineID, environment string, dryRun, fullRefresh bool, startDate, endDate string, onChunk func([]byte)) MaterializeResult {
+	return s.MaterializePipelineStreamWithAssetEvents(ctx, pipelineID, environment, dryRun, fullRefresh, startDate, endDate, onChunk, nil)
 }
 
-func (s *ExecutionService) MaterializePipelineStreamWithAssetEvents(ctx context.Context, pipelineID, environment string, dryRun bool, startDate, endDate string, onChunk func([]byte), onAssetEvent func(ExecutionAssetEvent)) MaterializeResult {
-	return s.MaterializePipelineStreamForRun(ctx, "", pipelineID, environment, dryRun, startDate, endDate, onChunk, onAssetEvent)
+func (s *ExecutionService) MaterializePipelineStreamWithAssetEvents(ctx context.Context, pipelineID, environment string, dryRun, fullRefresh bool, startDate, endDate string, onChunk func([]byte), onAssetEvent func(ExecutionAssetEvent)) MaterializeResult {
+	return s.MaterializePipelineStreamForRun(ctx, "", pipelineID, environment, dryRun, fullRefresh, startDate, endDate, onChunk, onAssetEvent)
 }
 
 // MaterializePipelineStreamForRun is the variant used by the scheduler: the
 // run ID is threaded through so the RunCompleted bus event attributes
 // materializations to the scheduler run record.
-func (s *ExecutionService) MaterializePipelineStreamForRun(ctx context.Context, runID, pipelineID, environment string, dryRun bool, startDate, endDate string, onChunk func([]byte), onAssetEvent func(ExecutionAssetEvent)) MaterializeResult {
+func (s *ExecutionService) MaterializePipelineStreamForRun(ctx context.Context, runID, pipelineID, environment string, dryRun, fullRefresh bool, startDate, endDate string, onChunk func([]byte), onAssetEvent func(ExecutionAssetEvent)) MaterializeResult {
 	return s.MaterializePipelineRun(ctx, PipelineRunSpec{
 		RunID:       runID,
 		PipelineID:  pipelineID,
 		Environment: environment,
 		DryRun:      dryRun,
+		FullRefresh: fullRefresh,
 		StartDate:   startDate,
 		EndDate:     endDate,
 	}, onChunk, onAssetEvent)
@@ -952,6 +956,7 @@ type PipelineRunSpec struct {
 	PipelineID        string
 	Environment       string
 	DryRun            bool
+	FullRefresh       bool
 	StartDate         string
 	EndDate           string
 	SnapshotDir       string
@@ -962,6 +967,7 @@ type PipelineRunSpec struct {
 }
 
 func (s *ExecutionService) MaterializePipelineRun(ctx context.Context, spec PipelineRunSpec, onChunk func([]byte), onAssetEvent func(ExecutionAssetEvent)) MaterializeResult {
+	ctx, warnings := withExecutionWarnings(ctx)
 	// Build-mode pipeline runs have no scheduler run ID and execute the
 	// working tree; scheduler-dispatched runs carry both.
 	if err := s.checkRunPolicy(policy.RunRequest{
@@ -992,6 +998,7 @@ func (s *ExecutionService) MaterializePipelineRun(ctx context.Context, spec Pipe
 		EndDate:     timeWindow.EndRFC3339(),
 		AssetEvent:  onAssetEvent,
 		ConfigPath:  spec.ConfigPath,
+		FullRefresh: spec.FullRefresh,
 	}, onChunk)
 
 	changedAssetIDs := make([]string, 0)
@@ -1037,6 +1044,7 @@ func (s *ExecutionService) MaterializePipelineRun(ctx context.Context, spec Pipe
 		ExitCode:        exitCode,
 		ChangedAssetIDs: changedAssetIDs,
 		MaterializedAt:  materializedAt,
+		Warnings:        warnings.snapshot(),
 	}
 }
 

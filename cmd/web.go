@@ -55,7 +55,7 @@ type webServer struct {
 	executionSvc     *service.ExecutionService
 	assetSvc         *service.AssetService
 	sqlSvc           *service.SQLService
-	loadSvc         *service.LoadService
+	loadSvc          *service.LoadService
 	suggestionsSvc   *service.SuggestionsService
 	parseContextSvc  *service.ParseContextService
 	sqlLSPSvc        *service.SQLLSPService

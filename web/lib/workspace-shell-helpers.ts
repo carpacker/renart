@@ -1,4 +1,8 @@
 import { NewAssetKind } from "@/components/new-asset-node";
+import {
+  buildAPIAssetTemplate,
+  type APIAssetTemplateId,
+} from "@/lib/api-asset-templates";
 
 export function buildSuggestedAssetName(
   kind: NewAssetKind,
@@ -31,7 +35,8 @@ export function buildCreateAssetInput(
   name: string,
   kind: NewAssetKind,
   preferredSqlAssetType = "duckdb.sql",
-  connection?: string
+  connection?: string,
+  apiTemplate: APIAssetTemplateId = "openapi",
 ): {
   name: string;
   type: string;
@@ -83,30 +88,11 @@ streams:
   }
 
   if (kind === "api") {
-    // An explicit target connection is optional; when omitted the asset falls
-    // back to the pipeline's default connection.
-    const connectionLine = connection?.trim() ? `connection: ${connection.trim()}\n` : "";
     return {
       name,
       type: "api",
       path,
-      // Defaults to a free, no-auth sample API with an OpenAPI spec, so Renart
-      // can infer columns and validate records out of the box.
-      content: `type: api
-${connectionLine}
-parameters:
-  openapi:
-    url: https://petstore3.swagger.io/api/v3/openapi.json
-
-  request:
-    url: https://petstore3.swagger.io/api/v3/pet/findByStatus?status=available
-    method: GET
-    headers:
-      Accept: application/json
-
-  response:
-    records_path: ""
-`,
+      content: buildAPIAssetTemplate(apiTemplate, connection),
     };
   }
 

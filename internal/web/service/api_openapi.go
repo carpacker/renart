@@ -18,8 +18,14 @@ import (
 )
 
 const maxOpenAPISpecBytes = 20 << 20
+const openAPIDocumentCacheTTL = 10 * time.Minute
 
 var openAPIDocumentCache sync.Map
+
+type openAPIDocumentCacheEntry struct {
+	document  *openAPIDocument
+	fetchedAt time.Time
+}
 
 type openAPIDocument struct {
 	OpenAPI     string                                 `yaml:"openapi"`
@@ -189,15 +195,29 @@ func apiOpenAPIURL(spec nativeAPISpec) string {
 	return strings.TrimSpace(spec.OpenAPIURL)
 }
 
+func apiOpenAPIValidationMode(spec nativeAPISpec) (string, error) {
+	mode := strings.ToLower(strings.TrimSpace(spec.OpenAPI.Validation))
+	if mode == "" {
+		return "warn", nil
+	}
+	switch mode {
+	case "off", "warn", "error":
+		return mode, nil
+	default:
+		return "", fmt.Errorf("openapi.validation must be off, warn, or error, got %q", spec.OpenAPI.Validation)
+	}
+}
+
 func fetchOpenAPIDocument(ctx context.Context, specURL string) (*openAPIDocument, error) {
 	specURL = strings.TrimSpace(specURL)
 	if specURL == "" {
 		return nil, nil
 	}
 	if cached, ok := openAPIDocumentCache.Load(specURL); ok {
-		if doc, ok := cached.(*openAPIDocument); ok {
-			return doc, nil
+		if entry, ok := cached.(openAPIDocumentCacheEntry); ok && entry.document != nil && time.Since(entry.fetchedAt) < openAPIDocumentCacheTTL {
+			return entry.document, nil
 		}
+		openAPIDocumentCache.Delete(specURL)
 	}
 
 	client := &http.Client{Timeout: 10 * time.Second}
@@ -225,7 +245,7 @@ func fetchOpenAPIDocument(ctx context.Context, specURL string) (*openAPIDocument
 	if err := yaml.Unmarshal(body, &doc); err != nil {
 		return nil, err
 	}
-	openAPIDocumentCache.Store(specURL, &doc)
+	openAPIDocumentCache.Store(specURL, openAPIDocumentCacheEntry{document: &doc, fetchedAt: time.Now()})
 	return &doc, nil
 }
 

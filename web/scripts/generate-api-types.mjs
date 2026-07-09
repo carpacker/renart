@@ -60,6 +60,10 @@ const sources = [
     ],
   },
   {
+    file: resolve(repoRoot, "internal", "web", "service", "api_asset.go"),
+    types: ["APIRecordsPathSample", "APIInferResult"],
+  },
+  {
     file: resolve(repoRoot, "internal", "web", "service", "sql.go"),
     types: [
       "SQLDiscoveryTableItem",
@@ -141,6 +145,7 @@ const renameMap = new Map([
   ["InspectResult", "AssetInspectResponse"],
   ["InferColumnsResult", "InferColumnsResponse"],
   ["Column", "WebColumn"],
+	["WorkspaceColumn", "WebColumn"],
   ["PipelineConfigResponse", "WebPipelineConfigResponse"],
   ["UpdatePipelineConfigRequest", "WebUpdatePipelineConfigRequest"],
 ]);

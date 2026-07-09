@@ -34,22 +34,9 @@ touch it further:
    the model for "demo projects", and how many do you want (I'd do 2:
    analytics-on-API demo + a pure-DuckDB/CSV demo)?
 
-## HTTP API assets
-
-6. Your message was cut off mid-sentence: "please pick a few of the dlt
-   sources (only the saas/api ones) and re-implement th…" — I assume "them as
-   renart http api asset templates/examples". Confirm, and name any must-have
-   sources (I'd start with: pokeapi-style public REST for tests, plus
-   personio/pipedrive-style token-auth pagination patterns).
-7. Scope check: (c) says "build the same kind of assets with the http api
-   assets that can be built with ingestr or dlt" — full dlt parity (incremental
-   state, child tables, schema contracts) is a large engine build. Is the
-   near-term bar "typed, paginated, incremental-by-cursor REST extraction into
-   the warehouse" without child-table flattening?
-
 ## Ingestr feature flag
 
-8. Where should the flag live? Options: (a) `.renart/project.yml` setting
+6. Where should the flag live? Options: (a) `.renart/project.yml` setting
    surfaced in Project settings (per-project, my preference — bruin imports
    are per-project), (b) env var / CLI flag, (c) localStorage-only UI toggle.
    → Proceeding with (a) + auto-enable when the pipeline already contains

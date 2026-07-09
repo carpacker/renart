@@ -14,6 +14,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -27,6 +28,7 @@ import (
 )
 
 const apiAssetType = "api"
+const maxAPIResponseBytes = 25 << 20
 
 type nativeAPISpec struct {
 	Name       string              `yaml:"name"`
@@ -49,6 +51,7 @@ type nativeAPIOpenAPI struct {
 	Method         string `yaml:"method"`
 	OperationID    string `yaml:"operation_id"`
 	ResponseStatus string `yaml:"response_status"`
+	Validation     string `yaml:"validation"`
 }
 
 type nativeAPIRequest struct {
@@ -112,9 +115,19 @@ type nativeAPIAssetDefinition struct {
 	Parameters map[string]any    `yaml:"parameters"`
 }
 
-type apiSampleRecordsPath struct {
+type APIRecordsPathSample struct {
 	Path   string `json:"path"`
 	Detail string `json:"detail,omitempty"`
+}
+
+type APIInferResult struct {
+	Status       string                 `json:"status"`
+	RequestURL   string                 `json:"request_url"`
+	RecordsPath  string                 `json:"records_path"`
+	RecordsCount int                    `json:"records_count"`
+	RecordsPaths []APIRecordsPathSample `json:"records_paths"`
+	Columns      []WorkspaceColumn      `json:"columns"`
+	Warnings     []string               `json:"warnings"`
 }
 
 type apiColumnSample struct {
@@ -256,18 +269,24 @@ func apiAwareYamlTaskCreator(fs afero.Fs) pipeline.TaskCreator {
 func defaultAPIAssetContent(assetName string) string {
 	return `type: api
 
+materialization:
+  type: table
+  strategy: create+replace
+
 parameters:
   openapi:
-    url: https://petstore3.swagger.io/api/v3/openapi.json
+    url: https://api.weather.gov/openapi.json
+    validation: warn
 
   request:
-    url: https://petstore3.swagger.io/api/v3/pet/findByStatus?status=available
+    url: https://api.weather.gov/alerts/active?area=CA
     method: GET
     headers:
-      Accept: application/json
+      Accept: application/geo+json
+      User-Agent: Renart/alpha (https://getrenart.com)
 
   response:
-    records_path: ""
+    records_path: features
 `
 }
 
@@ -422,29 +441,29 @@ func apiResponseFieldColumns(ctx context.Context, asset *pipeline.Asset) []pipel
 	return columns
 }
 
-func (s *AssetService) InferAPIAsset(ctx context.Context, assetID string) (int, map[string]any, *APIError) {
+func (s *AssetService) InferAPIAsset(ctx context.Context, assetID string) (int, APIInferResult, *APIError) {
 	_, parsedPipeline, asset, err := s.deps.ResolveAssetByID(ctx, assetID)
 	if err != nil {
-		return 0, nil, badRequestError("asset_resolve_failed", err.Error())
+		return 0, APIInferResult{}, badRequestError("asset_resolve_failed", err.Error())
 	}
 	if !isAPIAsset(asset) {
-		return 0, nil, badRequestError("unsupported_asset_type", "api-infer is supported for api assets only")
+		return 0, APIInferResult{}, badRequestError("unsupported_asset_type", "api-infer is supported for api assets only")
 	}
 
 	content := asset.ExecutableFile.Content
 	if strings.TrimSpace(content) == "" && strings.TrimSpace(asset.ExecutableFile.Path) != "" {
 		bytes, readErr := os.ReadFile(asset.ExecutableFile.Path)
 		if readErr != nil {
-			return 0, nil, badRequestError("asset_read_failed", readErr.Error())
+			return 0, APIInferResult{}, badRequestError("asset_read_failed", readErr.Error())
 		}
 		content = string(bytes)
 	}
 	spec, _, err := parseNativeAPIAssetSpec(content, asset, parsedPipeline)
 	if err != nil {
-		return 0, nil, badRequestError("api_spec_parse_failed", err.Error())
+		return 0, APIInferResult{}, badRequestError("api_spec_parse_failed", err.Error())
 	}
 	if strings.TrimSpace(spec.Request.URL) == "" {
-		return 0, nil, badRequestError("api_request_url_required", "api asset request.url is required")
+		return 0, APIInferResult{}, badRequestError("api_request_url_required", "api asset request.url is required")
 	}
 
 	pipelineName := ""
@@ -461,17 +480,18 @@ func (s *AssetService) InferAPIAsset(ctx context.Context, assetID string) (int, 
 	}
 	decoded, requestURL, err := sampleAPIAssetResponse(ctx, renderer, spec)
 	if err != nil {
-		return 0, nil, badRequestError("api_sample_failed", err.Error())
+		return 0, APIInferResult{}, badRequestError("api_sample_failed", err.Error())
 	}
 	records := recordsAtPath(decoded, spec.Response.RecordsPath)
 	columns := workspaceColumnsFromSampleRecords(records)
-	return http.StatusOK, map[string]any{
-		"status":        "ok",
-		"request_url":   requestURL,
-		"records_path":  spec.Response.RecordsPath,
-		"records_count": len(records),
-		"records_paths": sampleRecordsPathSuggestions(decoded),
-		"columns":       columns,
+	warnings := make([]string, 0, 1)
+	if path := strings.TrimSpace(spec.Response.RecordsPath); path != "" && valueAtPath(decoded, path) == nil {
+		warnings = append(warnings, fmt.Sprintf("response.records_path %q did not resolve in the sampled response", path))
+	}
+	return http.StatusOK, APIInferResult{
+		Status: "ok", RequestURL: requestURL, RecordsPath: spec.Response.RecordsPath,
+		RecordsCount: len(records), RecordsPaths: sampleRecordsPathSuggestions(decoded),
+		Columns: columns, Warnings: warnings,
 	}, nil
 }
 
@@ -545,7 +565,11 @@ func (e *HybridBruinExecutor) runAPIAsset(ctx context.Context, pl *pipeline.Pipe
 		"--tgt-object",
 		targetObject,
 	}
-	args = append(args, loadRunModeArgs(ctx)...)
+	materializationArgs, err := slingMaterializationArgs(ctx, asset)
+	if err != nil {
+		return writer.buffer.Bytes(), err
+	}
+	args = append(args, materializationArgs...)
 	cmdName, cmdArgs, err := loadCommand(ctx, args, writer)
 	if err != nil {
 		return writer.buffer.Bytes(), err
@@ -580,18 +604,33 @@ func writeAPIAssetCSV(ctx context.Context, renderer *jinja.Renderer, spec native
 		renderer.SetContextValue("start_year", start.Format("2006"))
 		renderer.SetContextValue("start_month", start.Format("01"))
 	}
-	rows := make([]map[string]any, 0)
-	openAPIValidator, err := newAPIOpenAPIValidator(ctx, spec)
+	validationMode, err := apiOpenAPIValidationMode(spec)
 	if err != nil {
 		return 0, err
 	}
+	var openAPIValidator *apiOpenAPIValidator
+	if validationMode != "off" {
+		openAPIValidator, err = newAPIOpenAPIValidator(ctx, spec)
+		if err != nil {
+			if validationMode == "error" {
+				return 0, err
+			}
+			warning := "OpenAPI validation skipped: " + err.Error()
+			addExecutionWarning(ctx, warning)
+			if output != nil {
+				_, _ = fmt.Fprintf(output, "WARNING: %s\n", warning)
+			}
+		}
+	}
 	fieldNames := sortedFieldNames(spec.Response.Fields)
+	headerWritten := false
+	count := 0
 	for _, item := range items {
 		renderer.SetContextValue(itemName, item)
 		renderer.SetContextValue("item", item)
 		baseURL, err := renderer.Render(spec.Request.URL)
 		if err != nil {
-			return len(rows), err
+			return count, err
 		}
 		method := strings.TrimSpace(spec.Request.Method)
 		if method == "" {
@@ -599,31 +638,26 @@ func writeAPIAssetCSV(ctx context.Context, renderer *jinja.Renderer, spec native
 		}
 		baseParams, err := renderedRequestParams(renderer, spec.Request.Params)
 		if err != nil {
-			return len(rows), err
+			return count, err
 		}
 		pageState := newAPIPaginationState(spec.Pagination)
 		nextURL := strings.TrimSpace(baseURL)
 		for {
 			requestURL, pageParams, err := pageState.request(nextURL, baseParams)
 			if err != nil {
-				return len(rows), err
+				return count, err
 			}
 			req, err := newAPIHTTPRequest(ctx, renderer, spec, method, requestURL, pageParams)
 			if err != nil {
-				return len(rows), err
+				return count, err
 			}
 
-			resp, err := client.Do(req)
+			resp, body, err := doAPIRequest(ctx, client, req)
 			if err != nil {
-				return len(rows), err
-			}
-			body, readErr := io.ReadAll(resp.Body)
-			_ = resp.Body.Close()
-			if readErr != nil {
-				return len(rows), readErr
+				return count, err
 			}
 			if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-				return len(rows), fmt.Errorf("api request to %s failed with status %d: %s", req.URL.String(), resp.StatusCode, strings.TrimSpace(string(body)))
+				return count, fmt.Errorf("api request to %s failed with status %d: %s", req.URL.String(), resp.StatusCode, strings.TrimSpace(string(body)))
 			}
 			if output != nil {
 				_, _ = fmt.Fprintf(output, "Fetched %s\n", req.URL.String())
@@ -631,11 +665,18 @@ func writeAPIAssetCSV(ctx context.Context, renderer *jinja.Renderer, spec native
 
 			var decoded any
 			if err := json.Unmarshal(body, &decoded); err != nil {
-				return len(rows), err
+				return count, err
 			}
 			if openAPIValidator != nil {
 				if err := openAPIValidator.Validate(decoded, req.URL.String()); err != nil {
-					return len(rows), err
+					if validationMode == "error" {
+						return count, err
+					}
+					warning := err.Error()
+					addExecutionWarning(ctx, warning)
+					if output != nil {
+						_, _ = fmt.Fprintf(output, "WARNING: %s\n", warning)
+					}
 				}
 			}
 			records := recordsAtPath(decoded, spec.Response.RecordsPath)
@@ -658,12 +699,25 @@ func writeAPIAssetCSV(ctx context.Context, renderer *jinja.Renderer, spec native
 					}
 					sort.Strings(fieldNames)
 				}
-				rows = append(rows, out)
+				if !headerWritten {
+					if err := writer.Write(fieldNames); err != nil {
+						return count, err
+					}
+					headerWritten = true
+				}
+				row := make([]string, 0, len(fieldNames))
+				for _, fieldName := range fieldNames {
+					row = append(row, csvFieldValue(out[fieldName]))
+				}
+				if err := writer.Write(row); err != nil {
+					return count, err
+				}
+				count++
 			}
 
 			next, ok, err := pageState.next(resp, decoded, req.URL.String(), len(records))
 			if err != nil {
-				return len(rows), err
+				return count, err
 			}
 			if !ok {
 				break
@@ -671,25 +725,11 @@ func writeAPIAssetCSV(ctx context.Context, renderer *jinja.Renderer, spec native
 			nextURL = next
 		}
 	}
-	if len(fieldNames) == 0 {
-		return 0, nil
-	}
-	if err := writer.Write(fieldNames); err != nil {
-		return 0, err
-	}
-	for _, row := range rows {
-		record := make([]string, 0, len(fieldNames))
-		for _, fieldName := range fieldNames {
-			record = append(record, csvFieldValue(row[fieldName]))
-		}
-		if err := writer.Write(record); err != nil {
-			return 0, err
-		}
-	}
+	writer.Flush()
 	if err := writer.Error(); err != nil {
-		return 0, err
+		return count, err
 	}
-	return len(rows), nil
+	return count, nil
 }
 
 func sampleAPIAssetResponse(ctx context.Context, renderer *jinja.Renderer, spec nativeAPISpec) (any, string, error) {
@@ -725,14 +765,9 @@ func sampleAPIAssetResponse(ctx context.Context, renderer *jinja.Renderer, spec 
 	if err != nil {
 		return nil, "", err
 	}
-	resp, err := (&http.Client{Timeout: 30 * time.Second}).Do(req)
+	resp, body, err := doAPIRequest(ctx, &http.Client{Timeout: 30 * time.Second}, req)
 	if err != nil {
 		return nil, "", err
-	}
-	body, readErr := io.ReadAll(resp.Body)
-	_ = resp.Body.Close()
-	if readErr != nil {
-		return nil, "", readErr
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return nil, "", fmt.Errorf("api request to %s failed with status %d: %s", req.URL.String(), resp.StatusCode, strings.TrimSpace(string(body)))
@@ -744,15 +779,71 @@ func sampleAPIAssetResponse(ctx context.Context, renderer *jinja.Renderer, spec 
 	return decoded, req.URL.String(), nil
 }
 
-func sampleRecordsPathSuggestions(decoded any) []apiSampleRecordsPath {
-	suggestions := make([]apiSampleRecordsPath, 0, 8)
+func doAPIRequest(ctx context.Context, client *http.Client, req *http.Request) (*http.Response, []byte, error) {
+	const attempts = 3
+	for attempt := 1; attempt <= attempts; attempt++ {
+		current := req
+		if attempt > 1 {
+			current = req.Clone(ctx)
+		}
+		resp, err := client.Do(current)
+		if err != nil {
+			return nil, nil, err
+		}
+		body, readErr := io.ReadAll(io.LimitReader(resp.Body, maxAPIResponseBytes+1))
+		_ = resp.Body.Close()
+		if readErr != nil {
+			return nil, nil, readErr
+		}
+		if len(body) > maxAPIResponseBytes {
+			return nil, nil, fmt.Errorf("api response from %s exceeds the %d MiB per-page limit", req.URL.String(), maxAPIResponseBytes>>20)
+		}
+		retryable := strings.EqualFold(req.Method, http.MethodGet) && (resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode >= 500)
+		if !retryable || attempt == attempts {
+			return resp, body, nil
+		}
+		delay := apiRetryDelay(resp.Header.Get("Retry-After"), attempt)
+		timer := time.NewTimer(delay)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return nil, nil, ctx.Err()
+		case <-timer.C:
+		}
+	}
+	return nil, nil, errors.New("api request retries exhausted")
+}
+
+func apiRetryDelay(retryAfter string, attempt int) time.Duration {
+	if seconds, err := strconv.Atoi(strings.TrimSpace(retryAfter)); err == nil && seconds >= 0 {
+		delay := time.Duration(seconds) * time.Second
+		if delay > 5*time.Second {
+			return 5 * time.Second
+		}
+		return delay
+	}
+	if at, err := http.ParseTime(strings.TrimSpace(retryAfter)); err == nil {
+		delay := time.Until(at)
+		if delay < 0 {
+			return 0
+		}
+		if delay > 5*time.Second {
+			return 5 * time.Second
+		}
+		return delay
+	}
+	return time.Duration(attempt) * 100 * time.Millisecond
+}
+
+func sampleRecordsPathSuggestions(decoded any) []APIRecordsPathSample {
+	suggestions := make([]APIRecordsPathSample, 0, 8)
 	seen := map[string]bool{}
 	add := func(path, detail string) {
 		if seen[path] {
 			return
 		}
 		seen[path] = true
-		suggestions = append(suggestions, apiSampleRecordsPath{Path: path, Detail: detail})
+		suggestions = append(suggestions, APIRecordsPathSample{Path: path, Detail: detail})
 	}
 	add("", sampleValueDetail(decoded))
 	walkSampleRecordsPaths(decoded, nil, 0, add)

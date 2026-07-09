@@ -21,6 +21,5 @@ the original.
 | [remote-table-intellisense.md](remote-table-intellisense.md) | proposal — surface warehouse tables with no backing asset via the LSP |
 | [onboarding-projects.md](onboarding-projects.md) | proposed — first-run onboarding + demo/import/empty project creation |
 | [docs-overhaul.md](docs-overhaul.md) | proposed — collapse mocked docs to ~15 real pages |
-| [http-api-assets.md](http-api-assets.md) | proposed — OpenAPI infer/validate, records_path intellisense, dlt-parity sources |
 | [landing-page.md](landing-page.md) | awaiting feedback — landing story + media regen proposal |
 | [questions.md](questions.md) | open questions for the maintainer |

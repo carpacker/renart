@@ -103,7 +103,7 @@ than hand-rolled `div` shells.
   (`/api/sql/lsp/*`) — completions, diagnostics, definition, hover, rename. See
   [sql-lsp.md](sql-lsp.md).
 - [use-asset-results.ts](../web/hooks/use-asset-results.ts): inspect and materialize
-  flows.
+  flows, including API-asset full refresh.
 - [use-app-asset-materialization-status.ts](../web/hooks/use-app-asset-materialization-status.ts):
   freshness / materialization enrichment.
 - [use-pipeline-staleness.ts](../web/hooks/use-pipeline-staleness.ts),
@@ -131,6 +131,11 @@ than hand-rolled `div` shells.
   metadata parsing.
 - [lib/sql-schema.ts](../web/lib/sql-schema.ts): schema context for SQL
   intellisense.
+- [lib/api-asset-templates.ts](../web/lib/api-asset-templates.ts): the three
+  pattern-focused HTTP API starters used by the New asset dialog. API assets
+  also have sampled response inference, OpenAPI/path diagnostics, and persisted
+  cursor controls in the guided editor; see
+  [http-api-assets.md](http-api-assets.md).
 
 ## 6. Visualization metadata
 

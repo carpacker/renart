@@ -1,6 +1,7 @@
 package service
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"net/http"
@@ -8,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/bruin-data/bruin/pkg/jinja"
 	"github.com/bruin-data/bruin/pkg/pipeline"
@@ -129,6 +131,53 @@ func TestAPIAwareCreatorInfersAPIAssetWithoutExplicitType(t *testing.T) {
 	assert.Equal(t, content, asset.ExecutableFile.Content)
 }
 
+func TestUpdateAPIAssetColumnsPreservesNestedRequestSpec(t *testing.T) {
+	workspaceRoot := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(workspaceRoot, ".git"), 0o755))
+	pipelineRoot := filepath.Join(workspaceRoot, "analytics")
+	require.NoError(t, os.MkdirAll(filepath.Join(pipelineRoot, "assets"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(pipelineRoot, "pipeline.yml"), []byte("name: analytics\n"), 0o644))
+	assetPath := filepath.Join(pipelineRoot, "assets/orders.asset.yml")
+	require.NoError(t, os.WriteFile(assetPath, []byte(`name: analytics.orders
+type: api
+materialization:
+  type: table
+  strategy: merge
+parameters:
+  request:
+    url: https://api.example.com/orders
+    headers:
+      X-Example: keep-me
+  response:
+    records_path: data
+columns:
+  - name: old
+    type: string
+`), 0o644))
+
+	resolver := NewWorkspaceResolver(workspaceRoot, func(ctx context.Context, pipelinePath string) (*pipeline.Pipeline, error) {
+		return NewRenartPipelineBuilder(afero.NewOsFs()).CreatePipelineFromPath(ctx, pipelinePath, pipeline.WithMutate())
+	})
+	service := NewAssetService(AssetDependencies{
+		Fs: afero.NewOsFs(), WorkspaceRoot: workspaceRoot, ResolveAssetByID: resolver.ResolveAssetByID,
+		SuppressWatcher: func(string) {}, PushWorkspaceUpdateImmediate: func(context.Context, string, string) {},
+	})
+	status, apiErr := service.UpdateAssetColumns(context.Background(), EncodeID("analytics/assets/orders.asset.yml"), []any{
+		map[string]any{"name": "id", "type": "integer", "primary_key": true},
+		map[string]any{"name": "updated_at", "type": "timestamp"},
+	})
+	require.Nil(t, apiErr)
+	assert.Equal(t, "ok", status.Status)
+
+	content, err := os.ReadFile(assetPath)
+	require.NoError(t, err)
+	assert.Contains(t, string(content), "url: https://api.example.com/orders")
+	assert.Contains(t, string(content), "X-Example: keep-me")
+	assert.Contains(t, string(content), "records_path: data")
+	assert.Contains(t, string(content), "primary_key: true")
+	assert.NotContains(t, string(content), "name: old")
+}
+
 func TestWorkspaceServiceLoadsAPIShapedAssetWithoutExplicitType(t *testing.T) {
 	workspaceRoot := t.TempDir()
 	require.NoError(t, os.MkdirAll(filepath.Join(workspaceRoot, ".git"), 0o755))
@@ -218,13 +267,13 @@ parameters:
 	status, body, apiErr := service.InferAPIAsset(context.Background(), EncodeID("analytics/assets/people.asset.yml"))
 	require.Nil(t, apiErr)
 	assert.Equal(t, http.StatusOK, status)
-	assert.Equal(t, "data", body["records_path"])
-	assert.Equal(t, 1, body["records_count"])
+	assert.Equal(t, "data", body.RecordsPath)
+	assert.Equal(t, 1, body.RecordsCount)
 
-	paths := body["records_paths"].([]apiSampleRecordsPath)
+	paths := body.RecordsPaths
 	assert.True(t, containsSampleRecordsPath(paths, "data"))
 
-	columns := body["columns"].([]WorkspaceColumn)
+	columns := body.Columns
 	byName := map[string]string{}
 	for _, column := range columns {
 		byName[column.Name] = column.Type
@@ -267,7 +316,7 @@ paths:
 	defer server.Close()
 
 	spec := nativeAPISpec{
-		OpenAPI:  nativeAPIOpenAPI{URL: server.URL + "/openapi.yaml"},
+		OpenAPI:  nativeAPIOpenAPI{URL: server.URL + "/openapi.yaml", Validation: "error"},
 		Request:  nativeAPIRequest{URL: server.URL + "/player/Hikaru", Method: http.MethodGet},
 		Response: nativeAPIResponse{RecordsPath: "data"},
 	}
@@ -275,6 +324,88 @@ paths:
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "api response does not match OpenAPI schema")
 	assert.Contains(t, err.Error(), "$.data.rating expected integer")
+}
+
+func TestWriteAPIAssetCSVWarnsByDefaultOnOpenAPIMismatch(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/openapi.yaml":
+			_, _ = w.Write([]byte(`openapi: 3.0.3
+paths:
+  /players:
+    get:
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      type: object
+                      required: [rating]
+                      properties:
+                        rating:
+                          type: integer
+`))
+		case "/players":
+			_, _ = w.Write([]byte(`{"data":[{"rating":"not-an-integer"}]}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	ctx, warnings := withExecutionWarnings(context.Background())
+	var output bytes.Buffer
+	spec := nativeAPISpec{
+		OpenAPI:  nativeAPIOpenAPI{URL: server.URL + "/openapi.yaml"},
+		Request:  nativeAPIRequest{URL: server.URL + "/players"},
+		Response: nativeAPIResponse{RecordsPath: "data"},
+	}
+	count, err := writeAPIAssetCSV(ctx, jinja.NewRendererWithYesterday("quickstart", "test"), spec, filepath.Join(t.TempDir(), "players.csv"), &output)
+	require.NoError(t, err)
+	assert.Equal(t, 1, count)
+	assert.Contains(t, output.String(), "WARNING:")
+	assert.Len(t, warnings.snapshot(), 1)
+	assert.Contains(t, warnings.snapshot()[0], "expected integer")
+}
+
+func TestWriteAPIAssetCSVRejectsInvalidOpenAPIValidationMode(t *testing.T) {
+	spec := nativeAPISpec{
+		OpenAPI: nativeAPIOpenAPI{Validation: "sometimes"},
+		Request: nativeAPIRequest{URL: "https://api.example.com/items"},
+	}
+	_, err := writeAPIAssetCSV(context.Background(), jinja.NewRendererWithYesterday("quickstart", "test"), spec, filepath.Join(t.TempDir(), "items.csv"), nil)
+	require.ErrorContains(t, err, "openapi.validation must be off, warn, or error")
+}
+
+func TestWriteAPIAssetCSVRendersExecutionWindowParams(t *testing.T) {
+	start := time.Date(2026, 7, 9, 8, 0, 0, 0, time.UTC)
+	end := time.Date(2026, 7, 9, 9, 0, 0, 0, time.UTC)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, "2026-07-09T08:00:00.000000Z", r.URL.Query().Get("updated_since"))
+		assert.Equal(t, "2026-07-09T09:00:00.000000Z", r.URL.Query().Get("updated_before"))
+		_, _ = w.Write([]byte(`{"data":[{"id":1}]}`))
+	}))
+	defer server.Close()
+
+	renderer := jinja.NewRendererWithStartEndDates(&start, &end, &end, "quickstart", "test", nil)
+	spec := nativeAPISpec{
+		Request: nativeAPIRequest{
+			URL: server.URL,
+			Params: map[string]any{
+				"updated_since":  "{{ start_timestamp }}",
+				"updated_before": "{{ end_timestamp }}",
+			},
+		},
+		Response: nativeAPIResponse{RecordsPath: "data"},
+	}
+	count, err := writeAPIAssetCSV(context.Background(), renderer, spec, filepath.Join(t.TempDir(), "records.csv"), nil)
+	require.NoError(t, err)
+	assert.Equal(t, 1, count)
 }
 
 func TestWriteAPIAssetCSVAllowsNullOptionalOpenAPIFields(t *testing.T) {
@@ -496,7 +627,7 @@ parameters:
 	assert.NotContains(t, string(output), "--mode full-refresh")
 }
 
-func containsSampleRecordsPath(paths []apiSampleRecordsPath, want string) bool {
+func containsSampleRecordsPath(paths []APIRecordsPathSample, want string) bool {
 	for _, path := range paths {
 		if path.Path == want {
 			return true

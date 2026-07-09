@@ -517,6 +517,9 @@ func (s *AssetService) Update(ctx context.Context, assetID string, req AssetUpda
 			}
 			asset.Parameters = nextParameters
 		}
+		if apiErr := loaderMaterializationAPIError(asset); apiErr != nil {
+			return AssetMutationResponse{}, apiErr
+		}
 		if isYAMLDefinedAsset(asset) {
 			// api/load/ingestr/plain-yaml: overlay managed fields onto the
 			// definition file, preserving the request spec, sling replication

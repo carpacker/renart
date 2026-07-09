@@ -23,9 +23,9 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { applyAssetTransaction, reconcileAssetColumns, refreshAssetColumnsFromDefinition } from "@/lib/api-asset-transactions";
+import { applyAssetTransaction, reconcileAssetColumns } from "@/lib/api-asset-transactions";
 import { updateAsset } from "@/lib/api-assets";
-import { updateAssetColumns } from "@/lib/api-assets-columns";
+import { inferAPIAsset, updateAssetColumns } from "@/lib/api-assets-columns";
 import { getSQLTableColumns } from "@/lib/api-sql-discovery";
 import { classifyDependencies, parseAssetProvenance } from "@/lib/asset-provenance";
 import { NON_SQL_ASSET_TYPES, SQL_ASSET_TYPES } from "@/lib/asset-types";
@@ -294,9 +294,15 @@ function IdentitySection({ asset, pipelineId }: { asset: WebAsset; pipelineId: s
 
 function MaterializationSection({ asset, pipelineId, isSql }: { asset: WebAsset; pipelineId: string; isSql: boolean }) {
   const selected = currentMaterializationOption(asset);
-  // Only SQL assets can materialize as a view; everything else (api/load/ingestr)
-  // shares the same table/append/merge/incremental strategies.
-  const options = isSql ? MATERIALIZATION_OPTIONS : MATERIALIZATION_OPTIONS.filter((option) => option.value !== "view");
+  const isAPI = asset.type.toLowerCase() === "api";
+  const selectedValue = isAPI && selected.value === "none" ? "table" : selected.value;
+  const options = isSql
+    ? MATERIALIZATION_OPTIONS
+    : MATERIALIZATION_OPTIONS.filter((option) =>
+        isAPI
+          ? ["table", "truncate", "append", "merge"].includes(option.value)
+          : option.value !== "view" && option.value !== "incremental"
+      );
   return (
     <>
       <Line className="mt-1">
@@ -305,7 +311,7 @@ function MaterializationSection({ asset, pipelineId, isSql }: { asset: WebAsset;
       <Line depth={1}>
         <Key>type</Key>
         <InlineSelect
-          value={selected.value}
+          value={selectedValue}
           options={options.map((option) => ({ value: option.value, label: option.label }))}
           onChange={(value) => {
             const option = MATERIALIZATION_OPTIONS.find((o) => o.value === value);
@@ -555,8 +561,16 @@ function ImportColumnsButton({ asset }: { asset: WebAsset }) {
     setLoading(true);
     setError(null);
     if (isAPIAsset) {
-      refreshAssetColumnsFromDefinition(asset.id)
-        .catch((err) => setError(err instanceof Error ? err.message : "Failed to infer columns from OpenAPI"))
+      inferAPIAsset(asset.id)
+        .then(async (sample) => {
+          if (sample.columns.length === 0) {
+            setError(sample.warnings[0] ?? "No columns found in the sampled response");
+            return;
+          }
+          await reconcileAssetColumns(asset.id, sample.columns);
+          if (sample.warnings.length > 0) setError(sample.warnings.join(" "));
+        })
+        .catch((err) => setError(err instanceof Error ? err.message : "Failed to sample the API response"))
         .finally(() => setLoading(false));
       return;
     }
@@ -592,7 +606,7 @@ function ImportColumnsButton({ asset }: { asset: WebAsset }) {
           className="font-monaco flex items-center gap-1 rounded-sm px-1 text-[11px] text-muted-foreground hover:bg-muted hover:text-foreground disabled:opacity-50"
         >
           {loading ? <Loader2 className="size-3 animate-spin" /> : <Database className="size-3" />}
-          {isAPIAsset ? "infer columns from OpenAPI" : "import columns from warehouse"}
+          {isAPIAsset ? "test response and infer columns" : "import columns from warehouse"}
         </button>
       </Line>
       {error ? <Comment depth={1}>{error}</Comment> : null}

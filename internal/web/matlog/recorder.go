@@ -2,6 +2,9 @@ package matlog
 
 import (
 	"context"
+	"os"
+	"regexp"
+	"strings"
 	"time"
 
 	"github.com/bruin-data/bruin/pkg/pipeline"
@@ -9,6 +12,8 @@ import (
 	"renart/internal/web/bus"
 	"renart/internal/web/fingerprint"
 )
+
+var executionWindowReference = regexp.MustCompile(`(?i)\{\{[-\s]*(?:start|end)_(?:date|date_nodash|datetime|timestamp)\b`)
 
 // PipelineResolver loads the parsed pipeline for a stable pipeline UUID.
 type PipelineResolver func(ctx context.Context, pipelineUUID string) (*pipeline.Pipeline, error)
@@ -153,6 +158,12 @@ func (r *Recorder) warn(message, subject string, err error) {
 // (coverage tracks its intervals) as opposed to full refresh (coverage
 // tracks a single "built" marker).
 func IntervalAware(asset *pipeline.Asset) bool {
+	if asset == nil {
+		return false
+	}
+	if strings.EqualFold(strings.TrimSpace(string(asset.Type)), "api") && executionWindowReference.MatchString(apiAssetContent(asset)) {
+		return true
+	}
 	if asset.Materialization.IncrementalKey != "" {
 		return true
 	}
@@ -164,4 +175,21 @@ func IntervalAware(asset *pipeline.Asset) bool {
 	default:
 		return false
 	}
+}
+
+func apiAssetContent(asset *pipeline.Asset) string {
+	if asset == nil {
+		return ""
+	}
+	if asset.ExecutableFile.Content != "" {
+		return asset.ExecutableFile.Content
+	}
+	path := asset.ExecutableFile.Path
+	if path == "" {
+		path = asset.DefinitionFile.Path
+	}
+	if data, err := os.ReadFile(path); err == nil {
+		return string(data)
+	}
+	return ""
 }

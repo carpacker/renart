@@ -108,12 +108,13 @@ export async function materializePipelineStream(
     onChunk?: (chunk: string) => void;
     onDone?: (payload: MaterializeStreamPayload) => void;
   },
-  options?: { environment?: string; dryRun?: boolean; timeWindow?: { start: string; end: string } }
+  options?: { environment?: string; dryRun?: boolean; fullRefresh?: boolean; timeWindow?: { start: string; end: string } }
 ) {
   return streamMaterialization(
     `/api/pipelines/${pipelineId}/materialize/stream${buildQueryString({
       environment: options?.environment,
       dry_run: options?.dryRun ? "true" : undefined,
+      full_refresh: options?.fullRefresh ? "true" : undefined,
       start_date: options?.timeWindow?.start,
       end_date: options?.timeWindow?.end,
     })}`,

@@ -35,7 +35,7 @@ export async function materializeAssetStream(
     onChunk?: (chunk: string) => void;
     onDone?: (payload: MaterializeStreamPayload) => void;
   },
-  options?: { environment?: string; scope?: MaterializeScope; timeWindow?: { start: string; end: string } }
+  options?: { environment?: string; scope?: MaterializeScope; timeWindow?: { start: string; end: string }; fullRefresh?: boolean }
 ) {
   return streamMaterialization(
     `/api/assets/${assetId}/materialize/stream${buildQueryString({
@@ -43,6 +43,7 @@ export async function materializeAssetStream(
       scope: options?.scope,
       start_date: options?.timeWindow?.start,
       end_date: options?.timeWindow?.end,
+    full_refresh: options?.fullRefresh ? "true" : undefined,
     })}`,
     handlers,
     "Asset materialization stream ended unexpectedly."

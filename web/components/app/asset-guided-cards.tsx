@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 
 import { useAtomValue } from "jotai";
-import { Ban, KeyRound, Plus, RefreshCw, RotateCcw, Trash2, X } from "lucide-react";
+import { Ban, Database, KeyRound, Plus, RefreshCw, RotateCcw, Trash2, X } from "lucide-react";
 
 import { workspaceAtom } from "@/lib/atoms/domains/workspace";
 
@@ -13,6 +13,7 @@ import { Label } from "@/components/ui/label";
 import {
   Select,
   SelectContent,
+  SelectGroup,
   SelectItem,
   SelectTrigger,
   SelectValue,
@@ -20,9 +21,12 @@ import {
 import {
   AssetReconcileItem,
   applyAssetTransaction,
+  reconcileAssetColumns,
   refreshAssetColumnsFromDefinition,
 } from "@/lib/api-asset-transactions";
 import { updateAsset, updateAssetColumns } from "@/lib/api-assets";
+import { inferAPIAsset } from "@/lib/api-assets-columns";
+import type { APIInferResult } from "@/lib/generated/api-types";
 import {
   classifyDependencies,
   columnStatus,
@@ -75,7 +79,7 @@ function GuidedCard({
   children: React.ReactNode;
 }) {
   return (
-    <section className="space-y-2.5 py-4">
+    <section className="flex flex-col gap-2.5 py-4">
       <div className="flex min-h-5 items-center justify-between gap-2">
         <h3 className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">{title}</h3>
         {action}
@@ -236,6 +240,7 @@ export const MATERIALIZATION_OPTIONS: MaterializationOption[] = [
   { value: "none", label: "None (run only)", type: "", strategy: "" },
   { value: "view", label: "View", type: "view", strategy: "" },
   { value: "table", label: "Table (replace)", type: "table", strategy: "create+replace" },
+  { value: "truncate", label: "Table (truncate)", type: "table", strategy: "truncate+insert" },
   { value: "append", label: "Append rows", type: "table", strategy: "append" },
   { value: "merge", label: "Merge by key", type: "table", strategy: "merge" },
   { value: "incremental", label: "Incremental (time interval)", type: "table", strategy: "time_interval" },
@@ -252,14 +257,17 @@ export function currentMaterializationOption(asset: WebAsset): MaterializationOp
 
 function MaterializationCard({ asset, pipelineId, isSql }: { asset: WebAsset; pipelineId: string; isSql: boolean }) {
   const selected = currentMaterializationOption(asset);
-  // Only SQL assets can materialize as a view.
-  const options = isSql ? MATERIALIZATION_OPTIONS : MATERIALIZATION_OPTIONS.filter((option) => option.value !== "view");
+  const isAPI = asset.type.toLowerCase() === "api";
+  const selectedValue = isAPI && selected.value === "none" ? "table" : selected.value;
+  const options = isSql
+    ? MATERIALIZATION_OPTIONS
+    : MATERIALIZATION_OPTIONS.filter((option) => (isAPI ? ["table", "truncate", "append", "merge"].includes(option.value) : option.value !== "view" && option.value !== "incremental"));
 
   return (
     <GuidedCard title="Materialization">
       <FieldRow label="Write behavior">
         <Select
-          value={selected.value}
+          value={selectedValue}
           onValueChange={(value) => {
             const option = MATERIALIZATION_OPTIONS.find((o) => o.value === value);
             if (!option) return;
@@ -273,11 +281,13 @@ function MaterializationCard({ asset, pipelineId, isSql }: { asset: WebAsset; pi
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
-            {options.map((option) => (
-              <SelectItem key={option.value} value={option.value}>
-                {option.label}
-              </SelectItem>
-            ))}
+            <SelectGroup>
+              {options.map((option) => (
+                <SelectItem key={option.value} value={option.value}>
+                  {option.label}
+                </SelectItem>
+              ))}
+            </SelectGroup>
           </SelectContent>
         </Select>
       </FieldRow>
@@ -289,7 +299,9 @@ function MaterializationCard({ asset, pipelineId, isSql }: { asset: WebAsset; pi
             placeholder="loaded_at"
             onCommit={(key) => {
               if (key !== (asset.incremental_key ?? "")) {
-                void updateAsset(pipelineId, asset.id, { incremental_key: key });
+                void updateAsset(pipelineId, asset.id, {
+                  incremental_key: key,
+                });
               }
             }}
           />
@@ -311,7 +323,10 @@ function DependenciesCard({ asset }: { asset: WebAsset }) {
 
   const addDependency = () => {
     if (!adding.trim()) return;
-    apply({ type: "dependency.manual.add", dependency: { asset: adding.trim() } });
+    apply({
+      type: "dependency.manual.add",
+      dependency: { asset: adding.trim() },
+    });
     setAdding("");
   };
 
@@ -329,7 +344,12 @@ function DependenciesCard({ asset }: { asset: WebAsset }) {
               name={dep.name}
               actionLabel="Ignore"
               actionIcon={<Ban className="size-3" />}
-              onAction={() => apply({ type: "dependency.inferred.ignore", dependency_key: dep.key })}
+              onAction={() =>
+                apply({
+                  type: "dependency.inferred.ignore",
+                  dependency_key: dep.key,
+                })
+              }
             />
           ))}
         </DepSection>
@@ -344,7 +364,12 @@ function DependenciesCard({ asset }: { asset: WebAsset }) {
               badge={dep.mode === "symbolic" ? "symbolic" : undefined}
               actionLabel="Remove"
               actionIcon={<Trash2 className="size-3" />}
-              onAction={() => apply({ type: "dependency.manual.remove", dependency_key: dep.key })}
+              onAction={() =>
+                apply({
+                  type: "dependency.manual.remove",
+                  dependency_key: dep.key,
+                })
+              }
             />
           ))}
         </DepSection>
@@ -359,7 +384,12 @@ function DependenciesCard({ asset }: { asset: WebAsset }) {
               muted
               actionLabel="Restore"
               actionIcon={<RotateCcw className="size-3" />}
-              onAction={() => apply({ type: "dependency.inferred.restore", dependency_key: dep.key })}
+              onAction={() =>
+                apply({
+                  type: "dependency.inferred.restore",
+                  dependency_key: dep.key,
+                })
+              }
             />
           ))}
         </DepSection>
@@ -383,35 +413,27 @@ function DependenciesCard({ asset }: { asset: WebAsset }) {
   );
 }
 
-function DepSection({ label, children }: { label: string; children: React.ReactNode }) {
+function DepSection({
+  label,
+  children,
+}: {
+  label: string;
+  children: React.ReactNode;
+}) {
   return (
     <div className="space-y-0.5">
-      <div className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground/70">{label}</div>
+      <div className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground/70">
+        {label}
+      </div>
       <div className="divide-y rounded-md border">{children}</div>
     </div>
   );
 }
 
-function DepRow({
-  name,
-  badge,
-  muted,
-  actionLabel,
-  actionIcon,
-  onAction,
-}: {
-  name: string;
-  badge?: string;
-  muted?: boolean;
-  actionLabel: string;
-  actionIcon: React.ReactNode;
-  onAction: () => void;
-}) {
+function DepRow({ name, badge, muted, actionLabel, actionIcon, onAction }: { name: string; badge?: string; muted?: boolean; actionLabel: string; actionIcon: React.ReactNode; onAction: () => void }) {
   return (
     <div className="group flex items-center gap-1.5 px-2 py-1 text-xs">
-      <span className={cn("min-w-0 flex-1 truncate font-monaco", muted && "text-muted-foreground line-through")}>
-        {name}
-      </span>
+      <span className={cn("min-w-0 flex-1 truncate font-monaco", muted && "text-muted-foreground line-through")}>{name}</span>
       {badge ? <span className="rounded bg-muted px-1 text-[10px] text-muted-foreground">{badge}</span> : null}
       <Button
         variant="ghost"
@@ -430,6 +452,7 @@ function DepRow({
 // --- Columns card (§14.4) ---
 
 function ColumnsCard({ asset }: { asset: WebAsset }) {
+  const isAPI = asset.type.toLowerCase() === "api";
   const provenance = useMemo(() => parseAssetProvenance(asset.meta), [asset.meta]);
   const columns = asset.columns ?? [];
   // Columns the user has ignored (renart_col_drop) that aren't currently present.
@@ -440,11 +463,16 @@ function ColumnsCard({ asset }: { asset: WebAsset }) {
   const [reconcileItems, setReconcileItems] = useState<AssetReconcileItem[]>([]);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [apiSample, setAPISample] = useState<APIInferResult | null>(null);
 
   const refreshFromDefinition = async () => {
     setRefreshing(true);
     setError(null);
     try {
+      if (isAPI) {
+        setAPISample(await inferAPIAsset(asset.id));
+        return;
+      }
       const result = await refreshAssetColumnsFromDefinition(asset.id);
       setReconcileItems(result.reconcile_items ?? []);
     } catch (e) {
@@ -455,35 +483,45 @@ function ColumnsCard({ asset }: { asset: WebAsset }) {
   };
 
   const setDescription = (column: string, description: string) => {
-    void applyAssetTransaction(asset.id, { type: "column.description.set", column, description });
+    void applyAssetTransaction(asset.id, {
+      type: "column.description.set",
+      column,
+      description,
+    });
   };
 
   const dropColumn = (column: string) => {
-    void applyAssetTransaction(asset.id, { type: "column.inferred.drop", column });
+    void applyAssetTransaction(asset.id, {
+      type: "column.inferred.drop",
+      column,
+    });
     setReconcileItems((items) => items.filter((i) => i.column.toLowerCase() !== column.toLowerCase()));
   };
 
   const keepAsManual = (column: string, def: WebColumn) => {
-    void applyAssetTransaction(asset.id, { type: "column.manual.add", column_def: def });
+    void applyAssetTransaction(asset.id, {
+      type: "column.manual.add",
+      column_def: def,
+    });
     setReconcileItems((items) => items.filter((i) => i.column.toLowerCase() !== column.toLowerCase()));
   };
 
   const commitType = (column: WebColumn, nextType: string) => {
     if (nextType === (column.type ?? "")) return;
-    const nextColumns = columns.map((c) =>
-      c.name.toLowerCase() === column.name.toLowerCase() ? { ...c, type: nextType } : c
-    );
+    const nextColumns = columns.map((c) => (c.name.toLowerCase() === column.name.toLowerCase() ? { ...c, type: nextType } : c));
     void updateAssetColumns(asset.id, nextColumns).then(() =>
-      applyAssetTransaction(asset.id, { type: "column.field.own", column: column.name, field: "type" })
+      applyAssetTransaction(asset.id, {
+        type: "column.field.own",
+        column: column.name,
+        field: "type",
+      }),
     );
   };
 
   // primary_key counts as user metadata (columnHasUserMetadata on the server),
   // so a plain columns update survives refresh-from-definition merges.
   const togglePrimaryKey = (column: WebColumn) => {
-    const nextColumns = columns.map((c) =>
-      c.name.toLowerCase() === column.name.toLowerCase() ? { ...c, primary_key: !c.primary_key } : c
-    );
+    const nextColumns = columns.map((c) => (c.name.toLowerCase() === column.name.toLowerCase() ? { ...c, primary_key: !c.primary_key } : c));
     void updateAssetColumns(asset.id, nextColumns);
   };
 
@@ -496,14 +534,41 @@ function ColumnsCard({ asset }: { asset: WebAsset }) {
           size="xs"
           disabled={refreshing}
           onClick={refreshFromDefinition}
-          title="Derive columns from the SQL definition and upstream assets"
+          title={isAPI ? "Fetch one response page and infer its record shape" : "Derive columns from the definition and upstream assets"}
         >
-          <RefreshCw className={cn("size-3", refreshing && "animate-spin")} />
-          Refresh
+          {isAPI ? <Database data-icon="inline-start" /> : <RefreshCw data-icon="inline-start" className={cn(refreshing && "animate-spin")} />}
+          {isAPI ? "Test response" : "Refresh"}
         </Button>
       }
     >
       {error ? <p className="text-[11px] text-destructive">{error}</p> : null}
+      {apiSample ? (
+        <div className="flex flex-col gap-1.5 rounded-md border bg-muted/30 p-2 text-[11px]">
+          <p>
+            Found {apiSample.records_count} records and {apiSample.columns.length} columns.
+          </p>
+          {apiSample.warnings.map((warning) => (
+            <p key={warning} className="text-destructive">
+              {warning}
+            </p>
+          ))}
+          {apiSample.columns.length > 0 ? (
+            <Button
+              variant="outline"
+              size="xs"
+              className="self-start"
+              onClick={() => {
+                void reconcileAssetColumns(asset.id, apiSample.columns).then((result) => {
+                  setReconcileItems(result.reconcile_items ?? []);
+                  setAPISample(null);
+                });
+              }}
+            >
+              Apply inferred columns
+            </Button>
+          ) : null}
+        </div>
+      ) : null}
 
       {reconcileItems.map((item) => {
         const def = columns.find((c) => c.name.toLowerCase() === item.column.toLowerCase());
@@ -552,7 +617,12 @@ function ColumnsCard({ asset }: { asset: WebAsset }) {
               muted
               actionLabel="Restore"
               actionIcon={<RotateCcw className="size-3" />}
-              onAction={() => applyAssetTransaction(asset.id, { type: "column.inferred.restore", column: name })}
+              onAction={() =>
+                applyAssetTransaction(asset.id, {
+                  type: "column.inferred.restore",
+                  column: name,
+                })
+              }
             />
           ))}
         </DepSection>
@@ -566,22 +636,15 @@ function ColumnsCard({ asset }: { asset: WebAsset }) {
 // The standard Bruin column checks. Value-bearing ones take an argument
 // (accepted_values a list, min/max a number, pattern a regex); the rest are
 // presence assertions.
-export const COLUMN_CHECK_NAMES = [
-  "not_null",
-  "unique",
-  "positive",
-  "non_negative",
-  "negative",
-  "accepted_values",
-  "pattern",
-  "min",
-  "max",
-] as const;
+export const COLUMN_CHECK_NAMES = ["not_null", "unique", "positive", "non_negative", "negative", "accepted_values", "pattern", "min", "max"] as const;
 export const VALUE_CHECKS = new Set(["accepted_values", "pattern", "min", "max"]);
 
 export function checkValueFor(checkName: string, raw: string): unknown {
   if (checkName === "accepted_values") {
-    return raw.split(",").map((part) => part.trim()).filter(Boolean);
+    return raw
+      .split(",")
+      .map((part) => part.trim())
+      .filter(Boolean);
   }
   if (checkName === "min" || checkName === "max") {
     const parsed = Number(raw);
@@ -629,19 +692,15 @@ function QualityChecksCard({ asset }: { asset: WebAsset }) {
 
   return (
     <GuidedCard title="Quality checks">
-      {columnsWithChecks.length === 0 ? (
-        <p className="text-[11px] text-muted-foreground">No checks yet.</p>
-      ) : null}
+      {columnsWithChecks.length === 0 ? <p className="text-[11px] text-muted-foreground">No checks yet.</p> : null}
       {columnsWithChecks.map((col) => (
         <div key={col.name} className="space-y-1">
           <div className="font-monaco text-[11px] text-foreground">{col.name}</div>
           <div className="flex flex-wrap gap-1">
             {(col.checks ?? []).map((check, index) => (
-              <span
-                key={`${check.name}-${index}`}
-                className="inline-flex items-center gap-1 rounded-full border bg-muted/40 px-2 py-0.5 text-[10px]"
-              >
-                {check.name}{formatCheckValue(check.value)}
+              <span key={`${check.name}-${index}`} className="inline-flex items-center gap-1 rounded-full border bg-muted/40 px-2 py-0.5 text-[10px]">
+                {check.name}
+                {formatCheckValue(check.value)}
                 <button
                   type="button"
                   className="text-muted-foreground hover:text-foreground"
@@ -658,18 +717,28 @@ function QualityChecksCard({ asset }: { asset: WebAsset }) {
       <div className="space-y-1.5">
         <div className="flex items-center gap-1.5">
           <Select value={column} onValueChange={setColumn}>
-            <SelectTrigger className="h-7 text-xs"><SelectValue placeholder="Column" /></SelectTrigger>
+            <SelectTrigger className="h-7 text-xs">
+              <SelectValue placeholder="Column" />
+            </SelectTrigger>
             <SelectContent>
-              {columns.filter((col) => col.name).map((col) => (
-                <SelectItem key={col.name} value={col.name}>{col.name}</SelectItem>
-              ))}
+              {columns
+                .filter((col) => col.name)
+                .map((col) => (
+                  <SelectItem key={col.name} value={col.name}>
+                    {col.name}
+                  </SelectItem>
+                ))}
             </SelectContent>
           </Select>
           <Select value={checkName} onValueChange={setCheckName}>
-            <SelectTrigger className="h-7 text-xs"><SelectValue /></SelectTrigger>
+            <SelectTrigger className="h-7 text-xs">
+              <SelectValue />
+            </SelectTrigger>
             <SelectContent>
               {COLUMN_CHECK_NAMES.map((name) => (
-                <SelectItem key={name} value={name}>{name}</SelectItem>
+                <SelectItem key={name} value={name}>
+                  {name}
+                </SelectItem>
               ))}
             </SelectContent>
           </Select>
@@ -680,11 +749,14 @@ function QualityChecksCard({ asset }: { asset: WebAsset }) {
             placeholder={checkName === "accepted_values" ? "a, b, c" : checkName === "pattern" ? "regex" : "number"}
             value={value}
             onChange={(event) => setValue(event.target.value)}
-            onKeyDown={(event) => { if (event.key === "Enter") addCheck(); }}
+            onKeyDown={(event) => {
+              if (event.key === "Enter") addCheck();
+            }}
           />
         ) : null}
         <Button variant="outline" size="xs" disabled={!column} onClick={addCheck}>
-          <Plus className="size-3" />Add check
+          <Plus className="size-3" />
+          Add check
         </Button>
       </div>
     </GuidedCard>

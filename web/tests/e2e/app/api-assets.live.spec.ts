@@ -27,6 +27,8 @@ const paginatedAPIAssetPath = "analytics/assets/analytics/paginated_api.asset.ym
 const paginatedAPIAssetId = Buffer.from(paginatedAPIAssetPath).toString("base64url");
 const postAPIAssetPath = "analytics/assets/analytics/post_api.asset.yml";
 const postAPIAssetId = Buffer.from(postAPIAssetPath).toString("base64url");
+const windowedAPIAssetPath = "analytics/assets/analytics/windowed_api.asset.yml";
+const windowedAPIAssetId = Buffer.from(windowedAPIAssetPath).toString("base64url");
 
 test.describe("app API assets live", () => {
   test.use({ fixtureName: "configured-workspace" });
@@ -419,6 +421,78 @@ parameters:
       await new Promise<void>((resolve) => apiServer.server.close(() => resolve()));
     }
   });
+
+  test("execution windows support replay and historical backfills through merge", async ({ liveApp, page }) => {
+    const apiServer = await startAPIExecutionServer();
+    try {
+      await writeFile(
+        join(liveApp.workspaceDir, windowedAPIAssetPath),
+        `name: analytics.windowed_api
+type: api
+materialization:
+  type: table
+  strategy: merge
+
+parameters:
+  request:
+    url: ${apiServer.url}/windowed-items
+    method: GET
+    params:
+      updated_since: "{{ start_timestamp }}"
+      updated_before: "{{ end_timestamp }}"
+  response:
+    records_path: data
+
+columns:
+  - name: id
+    type: integer
+    primary_key: true
+  - name: updated_at
+    type: timestamp
+`,
+        "utf8"
+      );
+      await waitForWorkspaceAsset(page, liveApp.baseURL, windowedAPIAssetId);
+
+      const newer = await materializeAsset(page, liveApp.baseURL, windowedAPIAssetId, {
+        start: "2026-07-09T09:00:00Z",
+        end: "2026-07-09T10:00:00Z",
+      });
+      expect(newer.status).toBe("ok");
+
+      const backfill = await materializeAsset(page, liveApp.baseURL, windowedAPIAssetId, {
+        start: "2026-07-09T08:00:00Z",
+        end: "2026-07-09T09:00:00Z",
+      });
+      expect(backfill.status).toBe("ok");
+
+      const replay = await materializeAsset(page, liveApp.baseURL, windowedAPIAssetId, {
+        start: "2026-07-09T08:00:00Z",
+        end: "2026-07-09T09:00:00Z",
+      });
+      expect(replay.status).toBe("ok");
+
+      const refreshed = await materializeAsset(page, liveApp.baseURL, windowedAPIAssetId, {
+        fullRefresh: true,
+        start: "2026-07-09T08:00:00Z",
+        end: "2026-07-09T10:00:00Z",
+      });
+      expect(refreshed.status).toBe("ok");
+      expect(apiServer.windowRequests).toEqual([
+        { start: "2026-07-09T09:00:00.000000Z", end: "2026-07-09T10:00:00.000000Z" },
+        { start: "2026-07-09T08:00:00.000000Z", end: "2026-07-09T09:00:00.000000Z" },
+        { start: "2026-07-09T08:00:00.000000Z", end: "2026-07-09T09:00:00.000000Z" },
+        { start: "2026-07-09T08:00:00.000000Z", end: "2026-07-09T10:00:00.000000Z" },
+      ]);
+
+      const inspect = await page.request.get(`${liveApp.baseURL}/api/assets/${windowedAPIAssetId}/inspect?limit=10`);
+      expect(inspect.ok()).toBe(true);
+      const body = await inspect.json() as { rows?: Array<Record<string, unknown>> };
+      expect((body.rows ?? []).map((row) => String(row.id)).sort()).toEqual(["1", "2"]);
+    } finally {
+      await new Promise<void>((resolve) => apiServer.server.close(() => resolve()));
+    }
+  });
 });
 
 async function waitForWorkspaceAsset(page: import("@playwright/test").Page, baseURL: string, assetId: string) {
@@ -493,8 +567,19 @@ async function setEditorContentAtYamlField(page: import("@playwright/test").Page
   }, { content, cursorAfter, fieldName });
 }
 
-async function materializeAsset(page: import("@playwright/test").Page, baseURL: string, assetId: string) {
-  const response = await page.request.post(`${baseURL}/api/assets/${assetId}/materialize/stream?environment=default`);
+async function materializeAsset(
+  page: import("@playwright/test").Page,
+  baseURL: string,
+  assetId: string,
+  options: { fullRefresh?: boolean; start?: string; end?: string } = {},
+) {
+  const query = new URLSearchParams({ environment: "default" });
+  if (options.fullRefresh) query.set("full_refresh", "true");
+  if (options.start) query.set("start_date", options.start);
+  if (options.end) query.set("end_date", options.end);
+  const response = await page.request.post(
+    `${baseURL}/api/assets/${assetId}/materialize/stream?${query.toString()}`
+  );
   expect(response.ok()).toBe(true);
   const text = await response.text();
   const doneLine = text
@@ -508,6 +593,7 @@ async function materializeAsset(page: import("@playwright/test").Page, baseURL: 
     status: string;
     output: string;
     error?: string;
+    warnings?: string[];
   };
 }
 
@@ -609,10 +695,12 @@ async function startAPIExecutionServer(): Promise<{
   pageRequests: string[];
   postBodies: Array<Record<string, unknown>>;
   authHeaders: string[];
+  windowRequests: Array<{ start: string; end: string }>;
 }> {
   const pageRequests: string[] = [];
   const postBodies: Array<Record<string, unknown>> = [];
   const authHeaders: string[] = [];
+  const windowRequests: Array<{ start: string; end: string }> = [];
   const server = createServer((req, res) => {
     if (!req.url) {
       res.writeHead(400).end();
@@ -652,6 +740,29 @@ async function startAPIExecutionServer(): Promise<{
       });
       return;
     }
+    if (url.pathname === "/windowed-items") {
+      const start = url.searchParams.get("updated_since") ?? "";
+      const end = url.searchParams.get("updated_before") ?? "";
+      windowRequests.push({ start, end });
+      res.setHeader("content-type", "application/json");
+      if (start === "2026-07-09T08:00:00.000000Z" && end === "2026-07-09T09:00:00.000000Z") {
+        res.end(JSON.stringify({ data: [{ id: 1, updated_at: "2026-07-09T09:00:00Z" }] }));
+        return;
+      }
+      if (start === "2026-07-09T09:00:00.000000Z" && end === "2026-07-09T10:00:00.000000Z") {
+        res.end(JSON.stringify({ data: [{ id: 2, updated_at: "2026-07-09T10:00:00Z" }] }));
+        return;
+      }
+      if (start === "2026-07-09T08:00:00.000000Z" && end === "2026-07-09T10:00:00.000000Z") {
+        res.end(JSON.stringify({ data: [
+          { id: 1, updated_at: "2026-07-09T09:00:00Z" },
+          { id: 2, updated_at: "2026-07-09T10:00:00Z" },
+        ] }));
+        return;
+      }
+      res.writeHead(400).end(JSON.stringify({ error: "unexpected execution window" }));
+      return;
+    }
     res.writeHead(404).end();
   });
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
@@ -659,5 +770,5 @@ async function startAPIExecutionServer(): Promise<{
   if (!address || typeof address === "string") {
     throw new Error("API execution test server did not start on a TCP port");
   }
-  return { server, url: `http://127.0.0.1:${address.port}`, pageRequests, postBodies, authHeaders };
+  return { server, url: `http://127.0.0.1:${address.port}`, pageRequests, postBodies, authHeaders, windowRequests };
 }

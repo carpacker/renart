@@ -40,10 +40,6 @@ func (e *HybridBruinExecutor) RunAsset(ctx context.Context, req RunAssetRequest,
 		return nil, err
 	}
 
-	if isLoadAsset(pp.Asset) {
-		return e.runLoadAsset(ctx, pp.Asset, manager, onChunk)
-	}
-
 	runID := newRenartRunID()
 	timeWindow, err := ResolveExecutionTimeWindow(string(pp.Pipeline.Schedule), req.StartDate, req.EndDate, time.Now().UTC())
 	if err != nil {
@@ -54,6 +50,7 @@ func (e *HybridBruinExecutor) RunAsset(ctx context.Context, req RunAssetRequest,
 		return nil, err
 	}
 	defer cleanup()
+	runCtx = context.WithValue(runCtx, pipeline.RunConfigFullRefresh, req.FullRefresh)
 
 	renderer, err := buildDirectRunAssetRenderer(pp, timeWindow, runID)
 	if err != nil {
@@ -61,6 +58,9 @@ func (e *HybridBruinExecutor) RunAsset(ctx context.Context, req RunAssetRequest,
 	}
 	if isAPIAsset(pp.Asset) {
 		return e.runAPIAsset(runCtx, pp.Pipeline, pp.Asset, renderer, manager, onChunk)
+	}
+	if isLoadAsset(pp.Asset) {
+		return e.runLoadAsset(runCtx, pp.Asset, manager, onChunk)
 	}
 
 	mainExecutors, err := buildDirectMainExecutors(manager, renderer, parser, pp.Pipeline)
@@ -192,6 +192,7 @@ func (e *HybridBruinExecutor) RunPipeline(ctx context.Context, req RunPipelineRe
 		return nil, err
 	}
 	defer cleanup()
+	runCtx = context.WithValue(runCtx, pipeline.RunConfigFullRefresh, req.FullRefresh)
 	renderer, err := buildDirectRunAssetRenderer(pp, timeWindow, runID)
 	if err != nil {
 		return nil, err
@@ -246,7 +247,7 @@ func (e *HybridBruinExecutor) RunPipeline(ctx context.Context, req RunPipelineRe
 			if isAPIAsset(instance.GetAsset()) {
 				_, runErr = e.runAPIAsset(runCtx, foundPipeline, instance.GetAsset(), renderer, manager, func(chunk []byte) { _, _ = printer.Write(chunk) })
 			} else if isLoadAsset(instance.GetAsset()) {
-				_, runErr = e.runLoadAsset(ctx, instance.GetAsset(), manager, func(chunk []byte) { _, _ = printer.Write(chunk) })
+				_, runErr = e.runLoadAsset(runCtx, instance.GetAsset(), manager, func(chunk []byte) { _, _ = printer.Write(chunk) })
 			} else {
 				runErr = seq.RunSingleTask(runCtx, instance)
 			}
@@ -414,7 +415,7 @@ var directRunAssetTypes = map[pipeline.AssetType]struct{}{
 	pipeline.AssetTypeS3KeySensor:             {},
 	pipeline.AssetTypePython:                  {},
 	pipeline.AssetTypeIngestr:                 {},
-	pipeline.AssetType(loadAssetType):        {},
+	pipeline.AssetType(loadAssetType):         {},
 	pipeline.AssetType(apiAssetType):          {},
 }
 

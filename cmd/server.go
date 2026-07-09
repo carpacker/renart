@@ -151,7 +151,8 @@ func newWebServer(ctx context.Context, cfg serverConfig, logger *zap.Logger) (*w
 		logger:        logger,
 	}
 
-	server.executor = service.NewHybridBruinExecutor(absRoot, "", server.newConnectionManager, server.newPipelineBuilder)
+	hybridExecutor := service.NewHybridBruinExecutor(absRoot, "", server.newConnectionManager, server.newPipelineBuilder)
+	server.executor = hybridExecutor
 	server.policyLoader = policy.NewLoader(filepath.Join(absRoot, ".renart", "environments.yml"))
 
 	server.executionSvc = service.NewExecutionService(service.ExecutionDependencies{
@@ -275,7 +276,6 @@ func newWebServer(ctx context.Context, cfg serverConfig, logger *zap.Logger) (*w
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to initialize scheduler store: %w", err)
 	}
-
 	server.fingerprintEngine = fingerprint.NewEngine()
 	server.matlogStore = matlog.NewStore(server.schedulerStore.DB())
 	server.snapshotStore = snapshot.NewStore(server.schedulerStore.DB())

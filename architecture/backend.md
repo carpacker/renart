@@ -77,6 +77,11 @@ persistence/migrations, `Service` owns orchestration (catch-up windows,
 uniqueness via `river:"unique"`), and execution is injected as a plain
 `Runner` function.
 
+HTTP API assets use a native streaming extractor followed by Sling for the
+warehouse write. OpenAPI inference, pagination, validation warnings, and
+HTTP API extraction and execution-window behavior are documented in
+[http-api-assets.md](http-api-assets.md).
+
 ## 5. Conventions
 
 - **One DTO set.** `internal/web/model` owns workspace DTOs, `service` owns

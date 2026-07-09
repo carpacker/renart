@@ -28,6 +28,53 @@ func TestLoadRunEnvIncludesResolvedIntervalDates(t *testing.T) {
 	assert.Contains(t, env, "END_DATE=2024-01-02T03:04:05Z")
 }
 
+func TestSlingMaterializationArgs(t *testing.T) {
+	t.Parallel()
+
+	primaryKey := pipeline.Column{Name: "id", PrimaryKey: true}
+	tests := []struct {
+		name     string
+		strategy string
+		key      string
+		columns  []pipeline.Column
+		want     []string
+		wantErr  string
+	}{
+		{name: "replace is Sling default", strategy: "create+replace"},
+		{name: "truncate", strategy: "truncate+insert", want: []string{"--mode", "truncate"}},
+		{name: "append snapshot", strategy: "append", want: []string{"--mode", "snapshot"}},
+		{name: "append with update key", strategy: "append", key: "updated_at", want: []string{"--mode", "incremental", "--update-key", "updated_at"}},
+		{name: "merge", strategy: "merge", key: "updated_at", columns: []pipeline.Column{primaryKey}, want: []string{"--mode", "incremental", "--primary-key", "id", "--update-key", "updated_at"}},
+		{name: "merge needs primary key", strategy: "merge", wantErr: "primary-key"},
+		{name: "reject unsupported", strategy: "time_interval", wantErr: "not supported"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			asset := &pipeline.Asset{Type: pipeline.AssetType("api"), Columns: tt.columns}
+			asset.Materialization.Strategy = pipeline.MaterializationStrategy(tt.strategy)
+			asset.Materialization.IncrementalKey = tt.key
+			got, err := slingMaterializationArgs(context.Background(), asset)
+			if tt.wantErr != "" {
+				require.ErrorContains(t, err, tt.wantErr)
+				return
+			}
+			require.NoError(t, err)
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}
+
+func TestSlingMaterializationArgsFullRefreshOverridesStrategy(t *testing.T) {
+	t.Parallel()
+	ctx := context.WithValue(context.Background(), pipeline.RunConfigFullRefresh, true)
+	asset := &pipeline.Asset{Type: pipeline.AssetType("api")}
+	asset.Materialization.Strategy = pipeline.MaterializationStrategy("merge")
+
+	args, err := slingMaterializationArgs(ctx, asset)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"--mode", "full-refresh"}, args)
+}
+
 func TestAssetServiceCreateLoadAssetWritesFlatParamDefinition(t *testing.T) {
 	workspaceRoot := t.TempDir()
 	pipelineRoot := filepath.Join(workspaceRoot, "analytics")

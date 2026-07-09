@@ -325,7 +325,7 @@ export function useAssetResults() {
     assetId: string,
     scope: MaterializeScope = "asset",
     refresh?: () => Promise<void> | void,
-    overrides?: { assetName?: string; timeWindow?: { start: string; end: string } | null }
+    overrides?: { assetName?: string; timeWindow?: { start: string; end: string } | null; fullRefresh?: boolean }
   ) => {
     const entryId = createMaterializeHistoryId();
     const startedAt = Date.now();
@@ -339,9 +339,10 @@ export function useAssetResults() {
       null;
     const entryTimeWindow =
       overrides?.timeWindow !== undefined ? overrides.timeWindow : selectedExecutionTimeWindow;
+    const actionLabel = overrides?.fullRefresh ? "Full refresh" : labelForMaterializeScope(scope);
     const materializeLabel = targetAssetName
-      ? `${labelForMaterializeScope(scope)}: ${targetAssetName}`
-      : labelForMaterializeScope(scope);
+      ? `${actionLabel}: ${targetAssetName}`
+      : actionLabel;
     const scopedMaterializingIds = resolveScopedMaterializingAssetIds(
       pipeline?.assets ?? [],
       assetId,
@@ -366,28 +367,37 @@ export function useAssetResults() {
     }));
 
     try {
-      const result = await materializeAssetStream(assetId, {
-        onChunk: (chunk) => {
-          upsertMaterializeEntry(entryId, (previous) => ({
-            ...(previous ??
-              createMaterializeEntry({
-                id: entryId,
-                kind: "asset",
-                label: materializeLabel,
-                assetId,
-                assetName: targetAssetName,
-                pipelineId: pipelineId ?? null,
-                pipelineName: pipeline?.name ?? null,
-                loading: true,
-                createdAt: startedAt,
-                timeWindow: entryTimeWindow,
-              })),
-            output: (previous?.output ?? "") + chunk,
-            loading: true,
-            updatedAt: Date.now(),
-          }));
+      const result = await materializeAssetStream(
+        assetId,
+        {
+          onChunk: (chunk) => {
+            upsertMaterializeEntry(entryId, (previous) => ({
+              ...(previous ??
+                createMaterializeEntry({
+                  id: entryId,
+                  kind: "asset",
+                  label: materializeLabel,
+                  assetId,
+                  assetName: targetAssetName,
+                  pipelineId: pipelineId ?? null,
+                  pipelineName: pipeline?.name ?? null,
+                  loading: true,
+                  createdAt: startedAt,
+                  timeWindow: entryTimeWindow,
+                })),
+              output: (previous?.output ?? "") + chunk,
+              loading: true,
+              updatedAt: Date.now(),
+            }));
+          },
         },
-        }, { environment: selectedEnvironment, scope, timeWindow: entryTimeWindow ?? undefined });
+        {
+          environment: selectedEnvironment,
+          scope,
+          timeWindow: entryTimeWindow ?? undefined,
+          fullRefresh: overrides?.fullRefresh,
+        }
+      );
       upsertMaterializeEntry(entryId, (previous) => ({
         ...(previous ??
           createMaterializeEntry({
@@ -405,6 +415,7 @@ export function useAssetResults() {
         output: result.output ?? previous?.output ?? "",
         status: result.status ?? "error",
         error: result.error ?? "",
+        warnings: result.warnings ?? [],
         loading: false,
         updatedAt: Date.now(),
       }));
@@ -569,6 +580,7 @@ export function useAssetResults() {
         output: result.output ?? previous?.output ?? "",
         status: result.status ?? "error",
         error: result.error ?? "",
+        warnings: result.warnings ?? [],
         loading: false,
         updatedAt: Date.now(),
       }));
@@ -678,6 +690,7 @@ export function useAssetResults() {
         output: result.output ?? previous?.output ?? "",
         status: result.status ?? "error",
         error: result.error ?? "",
+        warnings: result.warnings ?? [],
         loading: false,
         updatedAt: Date.now(),
       }));

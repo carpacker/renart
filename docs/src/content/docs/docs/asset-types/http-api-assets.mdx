@@ -1,12 +1,128 @@
 ---
 title: HTTP API assets
-description: "Pull data from an HTTP API, including from an OpenAPI spec."
+description: "Create a version-controlled asset that pulls paginated JSON records from an HTTP API into your warehouse"
 ---
 {/* Diátaxis mode: How-to. See architecture/docs-framework.md for the template. */}
-import { Aside } from '@astrojs/starlight/components';
 
-<Aside type="note" title="In progress">
-This page is being written as part of the docs build-out.
-</Aside>
+# Pull data from an HTTP API
 
-Covers configuring an asset that pulls data from an HTTP API or an OpenAPI specification.
+Use an HTTP API asset when an endpoint returns JSON records that you want as a
+version-controlled table in your pipeline.
+
+## Before you start
+
+- Add the destination warehouse connection to the active environment.
+- Keep API tokens in environment variables. Do not paste secrets into the asset
+  file.
+
+## Create the asset
+
+1. Open **Build** and click **New asset**.
+2. Select **HTTP API**.
+3. Choose a starter:
+   - **OpenAPI starter** uses public weather alerts to demonstrate schema
+     inference and response validation.
+   - **Paginated REST** demonstrates body-provided next-page URLs with a public
+     API.
+   - **Pipedrive Deals** demonstrates API-key authentication, cursor pagination,
+     execution-window filtering, and replay-safe merge.
+4. Select the destination connection and click **Create asset**.
+5. Edit the request and response paths in the API editor. The OpenAPI starter,
+   for example, begins with:
+
+```yaml
+parameters:
+  openapi:
+    url: https://api.weather.gov/openapi.json
+    validation: warn
+
+  request:
+    url: https://api.weather.gov/alerts/active?area=CA
+    method: GET
+    headers:
+      Accept: application/geo+json
+      User-Agent: Renart/alpha (https://getrenart.com)
+
+  response:
+    records_path: features
+```
+
+The editor suggests request and response paths when an OpenAPI document is
+available. Save the asset after changing its YAML.
+
+## Test the response and add columns
+
+1. Open the asset's **Columns** section.
+2. Click **Test response**. Renart fetches one page and reports the record count,
+   inferred columns, and any path warnings.
+3. Click **Apply inferred columns** to write the columns into the asset file.
+4. Review types and mark the stable identifier as a primary key before choosing
+   **Merge by key**.
+
+Column inference is explicit: testing an endpoint does not change the file until
+you apply the result.
+
+## Configure pagination
+
+Add one pagination block that matches the API:
+
+| API pattern | `pagination.type` | Key fields |
+| --- | --- | --- |
+| Response contains the next URL | `next_url` | `next_url_path` |
+| HTTP `Link` header contains the next URL | `next_url` | `next_url_header` |
+| Response returns a cursor | `cursor` | `cursor_param`, `cursor_path` |
+| Request increments a page number | `page_number` | `page_param`, `start_page` |
+| Request increments an offset | `offset` | `offset_param`, `limit_param`, `limit` |
+
+Set `max_pages` to bound each run.
+
+## Configure a windowed load
+
+When an API can filter by update time, pass the selected run window through the
+standard Jinja values. Use **Merge by key** and at least one primary-key column
+so rerunning or overlapping a window does not duplicate rows:
+
+```yaml
+materialization:
+  type: table
+  strategy: merge
+
+parameters:
+  request:
+    url: https://api.example.com/records
+    params:
+      updated_since: "{{ start_timestamp }}"
+      updated_before: "{{ end_timestamp }}"
+
+columns:
+  - name: id
+    type: integer
+    primary_key: true
+```
+
+The materialization time window controls these values. You can rerun the same
+window or select an older range for a backfill; successful windows contribute to
+the asset's interval coverage. Renart does not maintain a separate source cursor,
+so different environments and variable-based pipeline variants do not share a
+mutable position. Cursor pagination still works within each run.
+
+## Choose OpenAPI validation
+
+| Value | Run behavior |
+| --- | --- |
+| `warn` | Default. Report schema mismatches and continue loading. |
+| `error` | Stop the run when the response does not match the selected schema. |
+| `off` | Do not fetch or validate the OpenAPI schema during the run. |
+
+## Result
+
+The API request, schema, pagination, and materialization settings are plain YAML
+changes you can review and commit. Materializing the asset writes one warehouse
+table. Nested arrays stay as JSON values; HTTP API assets do not create child
+tables.
+
+## Related
+
+- [Choose an asset type](./choosing-an-asset-type/)
+- [Materialization strategies](../editing-assets/materialization/)
+- [Manage connections](../connections-environments/managing-connections/)

@@ -50,6 +50,9 @@ func (s *AssetService) ReconcileAssetColumns(ctx context.Context, assetID string
 	})
 	asset.Columns = final
 	asset.Meta = pipeline.EmptyStringMap(next.Apply(asset.Meta))
+	if apiErr := loaderMaterializationAPIError(asset); apiErr != nil {
+		return ColumnReconcileResult{}, apiErr
+	}
 
 	if apiErr := s.persistAssetPreservingInferredName(asset, parsedPipeline); apiErr != nil {
 		return ColumnReconcileResult{}, apiErr
