@@ -3,13 +3,22 @@
 import { useEffect, useMemo, useState } from "react";
 
 import { useAtomValue } from "jotai";
-import { Ban, Database, KeyRound, Plus, RefreshCw, RotateCcw, Trash2, X } from "lucide-react";
+import { Ban, Check, ChevronsUpDown, Database, KeyRound, Plus, RefreshCw, RotateCcw, Trash2, X } from "lucide-react";
 
 import { workspaceAtom } from "@/lib/atoms/domains/workspace";
 
 import { Button } from "@/components/ui/button";
+import {
+  Command,
+  CommandEmpty,
+  CommandGroup,
+  CommandInput,
+  CommandItem,
+  CommandList,
+} from "@/components/ui/command";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import {
   Select,
   SelectContent,
@@ -255,13 +264,101 @@ export function currentMaterializationOption(asset: WebAsset): MaterializationOp
   return byStrategy ?? MATERIALIZATION_OPTIONS[2];
 }
 
-function MaterializationCard({ asset, pipelineId, isSql }: { asset: WebAsset; pipelineId: string; isSql: boolean }) {
+export function materializationEditorState(asset: WebAsset, isSql: boolean) {
   const selected = currentMaterializationOption(asset);
-  const isAPI = asset.type.toLowerCase() === "api";
-  const selectedValue = isAPI && selected.value === "none" ? "table" : selected.value;
-  const options = isSql
-    ? MATERIALIZATION_OPTIONS
-    : MATERIALIZATION_OPTIONS.filter((option) => (isAPI ? ["table", "truncate", "append", "merge"].includes(option.value) : option.value !== "view" && option.value !== "incremental"));
+  const type = asset.type.toLowerCase();
+  const isSlingBacked = type === "api" || type === "load";
+  return {
+    selected,
+    isSlingBacked,
+    selectedValue: isSlingBacked && selected.value === "none" ? "table" : selected.value,
+    options: isSql
+      ? MATERIALIZATION_OPTIONS
+      : MATERIALIZATION_OPTIONS.filter((option) =>
+          isSlingBacked
+            ? ["table", "truncate", "append", "merge"].includes(option.value)
+            : option.value !== "view" && option.value !== "incremental",
+        ),
+  };
+}
+
+export function ColumnCombobox({
+  columns,
+  value,
+  placeholder,
+  className,
+  onChange,
+}: {
+  columns: WebColumn[];
+  value: string;
+  placeholder: string;
+  className?: string;
+  onChange: (value: string) => void;
+}) {
+  const items = columns.map((column) => column.name).filter(Boolean);
+  const [open, setOpen] = useState(false);
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
+        <Button
+          variant="outline"
+          role="combobox"
+          aria-expanded={open}
+          className={cn("w-full min-w-0 justify-between font-monaco font-normal", className)}
+        >
+          <span className="truncate">{value || (items.length === 0 ? "Add or infer columns first" : placeholder)}</span>
+          <ChevronsUpDown data-icon="inline-end" />
+        </Button>
+      </PopoverTrigger>
+      <PopoverContent align="start" className="w-[var(--radix-popover-trigger-width)] p-0">
+        <Command>
+          <CommandInput placeholder="Search columns…" />
+          <CommandList>
+            <CommandEmpty>{items.length === 0 ? "No declared columns. Add or infer columns first." : "No matching column."}</CommandEmpty>
+            <CommandGroup>
+              {value ? (
+                <CommandItem
+                  value="__clear_update_key__"
+                  onSelect={() => {
+                    onChange("");
+                    setOpen(false);
+                  }}
+                >
+                  No update key
+                </CommandItem>
+              ) : null}
+              {items.map((item) => (
+                <CommandItem
+                  key={item}
+                  value={item}
+                  onSelect={() => {
+                    onChange(item);
+                    setOpen(false);
+                  }}
+                >
+                  <Check className={cn(value === item ? "opacity-100" : "opacity-0")} />
+                  {item}
+                </CommandItem>
+              ))}
+            </CommandGroup>
+          </CommandList>
+        </Command>
+      </PopoverContent>
+    </Popover>
+  );
+}
+
+function MaterializationCard({ asset, pipelineId, isSql }: { asset: WebAsset; pipelineId: string; isSql: boolean }) {
+  const { selected, isSlingBacked, selectedValue, options } = materializationEditorState(asset, isSql);
+  const primaryKeys = (asset.columns ?? []).filter((column) => column.primary_key).map((column) => column.name);
+  const [error, setError] = useState("");
+
+  const save = (input: Parameters<typeof updateAsset>[2]) => {
+    setError("");
+    void updateAsset(pipelineId, asset.id, input).catch((cause) => {
+      setError(cause instanceof Error ? cause.message : "Could not update materialization");
+    });
+  };
 
   return (
     <GuidedCard title="Materialization">
@@ -271,7 +368,7 @@ function MaterializationCard({ asset, pipelineId, isSql }: { asset: WebAsset; pi
           onValueChange={(value) => {
             const option = MATERIALIZATION_OPTIONS.find((o) => o.value === value);
             if (!option) return;
-            void updateAsset(pipelineId, asset.id, {
+            save({
               materialization_type: option.type,
               materialization_strategy: option.strategy,
             });
@@ -291,15 +388,15 @@ function MaterializationCard({ asset, pipelineId, isSql }: { asset: WebAsset; pi
           </SelectContent>
         </Select>
       </FieldRow>
-      {selected.value === "incremental" ? (
-        <FieldRow label="Incremental key">
-          <CommitInput
-            mono
+      {selected.value === "incremental" || (isSlingBacked && ["append", "merge"].includes(selected.value)) ? (
+        <FieldRow label={selected.value === "incremental" ? "Incremental key" : "Update key (optional)"}>
+          <ColumnCombobox
+            columns={asset.columns ?? []}
             value={asset.incremental_key ?? ""}
-            placeholder="loaded_at"
-            onCommit={(key) => {
+            placeholder={selected.value === "incremental" ? "loaded_at" : "updated_at"}
+            onChange={(key) => {
               if (key !== (asset.incremental_key ?? "")) {
-                void updateAsset(pipelineId, asset.id, {
+                save({
                   incremental_key: key,
                 });
               }
@@ -307,6 +404,14 @@ function MaterializationCard({ asset, pipelineId, isSql }: { asset: WebAsset; pi
           />
         </FieldRow>
       ) : null}
+      {selected.value === "merge" ? (
+        <p className={cn("text-[11px]", primaryKeys.length === 0 ? "text-destructive" : "text-muted-foreground")}>
+          {primaryKeys.length === 0
+            ? "Merge needs at least one primary-key column. Set one with the key control in Columns."
+            : `Primary key${primaryKeys.length === 1 ? "" : "s"}: ${primaryKeys.join(", ")}`}
+        </p>
+      ) : null}
+      {error ? <p className="text-[11px] text-destructive">{error}</p> : null}
     </GuidedCard>
   );
 }
@@ -453,6 +558,7 @@ function DepRow({ name, badge, muted, actionLabel, actionIcon, onAction }: { nam
 
 function ColumnsCard({ asset }: { asset: WebAsset }) {
   const isAPI = asset.type.toLowerCase() === "api";
+  const isSQLMerge = asset.type.toLowerCase().includes("sql") && asset.materialization_strategy?.toLowerCase() === "merge";
   const provenance = useMemo(() => parseAssetProvenance(asset.meta), [asset.meta]);
   const columns = asset.columns ?? [];
   // Columns the user has ignored (renart_col_drop) that aren't currently present.
@@ -522,6 +628,17 @@ function ColumnsCard({ asset }: { asset: WebAsset }) {
   // so a plain columns update survives refresh-from-definition merges.
   const togglePrimaryKey = (column: WebColumn) => {
     const nextColumns = columns.map((c) => (c.name.toLowerCase() === column.name.toLowerCase() ? { ...c, primary_key: !c.primary_key } : c));
+    void updateAssetColumns(asset.id, nextColumns);
+  };
+
+  const toggleUpdateOnMerge = (column: WebColumn) => {
+    const nextColumns = columns.map((c) => (c.name.toLowerCase() === column.name.toLowerCase() ? { ...c, update_on_merge: !c.update_on_merge } : c));
+    void updateAssetColumns(asset.id, nextColumns);
+  };
+
+  const commitMergeSQL = (column: WebColumn, mergeSQL: string) => {
+    if (mergeSQL === (column.merge_sql ?? "")) return;
+    const nextColumns = columns.map((c) => (c.name.toLowerCase() === column.name.toLowerCase() ? { ...c, merge_sql: mergeSQL } : c));
     void updateAssetColumns(asset.id, nextColumns);
   };
 
@@ -602,6 +719,9 @@ function ColumnsCard({ asset }: { asset: WebAsset }) {
               onCommitType={(type) => commitType(column, type)}
               onCommitDescription={(description) => setDescription(column.name, description)}
               onTogglePrimaryKey={() => togglePrimaryKey(column)}
+              showMergeFields={isSQLMerge}
+              onToggleUpdateOnMerge={() => toggleUpdateOnMerge(column)}
+              onCommitMergeSQL={(mergeSQL) => commitMergeSQL(column, mergeSQL)}
               onDrop={() => dropColumn(column.name)}
             />
           ))}
@@ -769,6 +889,9 @@ function ColumnRow({
   onCommitType,
   onCommitDescription,
   onTogglePrimaryKey,
+  showMergeFields,
+  onToggleUpdateOnMerge,
+  onCommitMergeSQL,
   onDrop,
 }: {
   column: WebColumn;
@@ -776,6 +899,9 @@ function ColumnRow({
   onCommitType: (type: string) => void;
   onCommitDescription: (description: string) => void;
   onTogglePrimaryKey: () => void;
+  showMergeFields: boolean;
+  onToggleUpdateOnMerge: () => void;
+  onCommitMergeSQL: (mergeSQL: string) => void;
   onDrop: () => void;
 }) {
   return (
@@ -824,6 +950,28 @@ function ColumnRow({
           className="h-7 flex-1"
         />
       </div>
+      {showMergeFields ? (
+        <div className="mt-1.5 flex min-w-0 items-center gap-1.5">
+          <Button
+            variant={column.update_on_merge ? "secondary" : "outline"}
+            size="xs"
+            title="Update this column when a primary-key match is found"
+            aria-label={`${column.update_on_merge ? "Do not update" : "Update"} ${column.name} on merge`}
+            aria-pressed={Boolean(column.update_on_merge)}
+            onClick={onToggleUpdateOnMerge}
+          >
+            <RefreshCw data-icon="inline-start" />
+            Update on merge
+          </Button>
+          <CommitInput
+            mono
+            value={column.merge_sql ?? ""}
+            placeholder="merge SQL (optional)"
+            onCommit={onCommitMergeSQL}
+            className="h-7 min-w-0 flex-1"
+          />
+        </div>
+      ) : null}
     </div>
   );
 }

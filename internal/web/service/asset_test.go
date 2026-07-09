@@ -261,7 +261,7 @@ select 1 as order_id
 	assert.False(t, hasLegacy)
 }
 
-func TestAssetServiceUpdateSetsAndClearsAPIAssetConnection(t *testing.T) {
+func TestAssetServiceUpdateAllowsIncompleteAPIAssetEdits(t *testing.T) {
 	workspaceRoot := t.TempDir()
 	require.NoError(t, exec.Command("git", "-C", workspaceRoot, "init").Run())
 	pipelineRoot := filepath.Join(workspaceRoot, "analytics")
@@ -285,9 +285,10 @@ parameters:
 		return NewRenartPipelineBuilder(nil).CreatePipelineFromPath(ctx, pipelinePath, pipeline.WithMutate())
 	})
 	service := NewAssetService(AssetDependencies{
-		WorkspaceRoot:    workspaceRoot,
-		ResolveAssetByID: resolver.ResolveAssetByID,
-		SuppressWatcher:  func(string) {},
+		WorkspaceRoot:                              workspaceRoot,
+		ResolveAssetByID:                           resolver.ResolveAssetByID,
+		SuppressWatcher:                            func(string) {},
+		PushWorkspaceUpdateImmediate:               func(context.Context, string, string) {},
 		PushWorkspaceUpdateImmediateWithChangedIDs: func(context.Context, string, string, []string) {},
 	})
 	assetID := EncodeID("analytics/assets/weather.asset.yml")
@@ -310,6 +311,41 @@ parameters:
 	require.NoError(t, err)
 	assert.NotContains(t, string(content), "connection:")
 	assert.Contains(t, string(content), "records_path")
+
+	// Selecting merge and marking the primary key are separate UI writes. The
+	// first write must persist even though the asset is not executable until the
+	// second one supplies a primary-key column.
+	materializationType := "table"
+	materializationStrategy := "merge"
+	updateKey := "updated_at"
+	_, apiErr = service.Update(context.Background(), assetID, AssetUpdateRequest{
+		MaterializationType:     &materializationType,
+		MaterializationStrategy: &materializationStrategy,
+		IncrementalKey:          &updateKey,
+	})
+	require.Nil(t, apiErr)
+	content, err = os.ReadFile(assetPath)
+	require.NoError(t, err)
+	assert.Contains(t, string(content), "type: table")
+	assert.Contains(t, string(content), "strategy: merge")
+	assert.Contains(t, string(content), "incremental_key: updated_at")
+
+	// Both metadata editors persist column merge keys through this endpoint.
+	_, apiErr = service.UpdateAssetColumns(context.Background(), assetID, []any{
+		map[string]any{"name": "id", "type": "integer", "primary_key": true},
+		map[string]any{"name": "updated_at", "type": "timestamp"},
+	})
+	require.Nil(t, apiErr)
+
+	content, err = os.ReadFile(assetPath)
+	require.NoError(t, err)
+	assert.Contains(t, string(content), "primary_key: true")
+
+	_, _, updatedAsset, resolveErr := resolver.ResolveAssetByID(context.Background(), assetID)
+	require.NoError(t, resolveErr)
+	args, materializationErr := slingMaterializationArgs(context.Background(), updatedAsset)
+	require.NoError(t, materializationErr)
+	assert.Equal(t, []string{"--mode", "incremental", "--primary-key", "id", "--update-key", "updated_at"}, args)
 }
 
 func TestAssetServiceUpdatePersistsManualUpstreamsInHeader(t *testing.T) {

@@ -112,14 +112,18 @@ round-trips unknown fields).
   sidebar next to the SQL editor: identity, materialization, dependencies
   (inferred / manual / ignored, with ignore/restore/remove actions), a column
   workbench (status markers for inferred/manual/stale/type-overridden,
-  checks, descriptions), and reconcile prompts. Every edit flows through the
-  transaction API; the workspace SSE stream refreshes the asset.
+  checks, descriptions), and reconcile prompts. Merge editing includes
+  column-scoped primary keys, `update_on_merge`, custom `merge_sql`, and a
+  column-backed update-key combobox for Sling-backed assets. Load and API
+  assets only offer Sling-compatible replace, truncate, append, and merge
+  strategies. Every edit flows through the transaction/API write paths; the
+  workspace SSE stream refreshes the asset.
 - **Provenance classification client-side** (`lib/asset-provenance.ts`)
   mirrors the flat-key schema for display (source chips: "inferred from SQL" /
   "manual").
 - **Expert YAML mode** (`asset-yaml-editor.tsx`): edit the real definition
-  with pickers/completion for connections and columns; parsed and validated
-  before write.
+  with the same materialization/key controls plus pickers/completion for
+  connections and columns; parsed and validated before write.
 - Column refresh actions: re-infer from SQL
   (`/columns/refresh-from-definition`), fill from warehouse
   (`/fill-columns-from-db`), reconcile (`/columns/reconcile`).

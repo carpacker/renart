@@ -1,12 +1,9 @@
 # Materialization per asset type: making every offered mode actually work
 
-Concept only — no implementation. Companion to
-`materialization-strategies.md` (SQL-focused, partially implemented since:
-the DTO/patch API now carry `materialization_strategy` + `incremental_key`, and the
-workbench sheet shows a Materialization card for every asset type). This document
-covers the next problem: **the UI lets users configure materialization on sql,
-python, load and api assets, but only a subset of the offered modes executes
-correctly — and for load/api none of it is wired to the run path at all.**
+Status: in progress. The Sling-backed Load/API execution mapping, capability
+filters, full-refresh action, editable merge metadata, update-key combobox, and
+type-check diagnostics described below are implemented. SQL time granularity,
+Python capability cleanup, and the open questions in §4 remain.
 
 The UI currently offers (`MATERIALIZATION_OPTIONS`, `asset-guided-cards.tsx:151`):
 `none`, `view` (SQL only), `table (create+replace)`, `append`, `merge`,
@@ -64,30 +61,14 @@ bruin's stock python operator means python-materialized assets pull it in anyway
 Decision needed: accept (it's upstream bruin behavior) or, later, replace the
 upload leg with the sling bridge (Arrow → CSV → `sling run`, same as api assets).
 
-### Load — materialization is parsed, persisted, and completely ignored
+### Load and HTTP API — Sling-backed materialization is implemented
 
-`runLoadAsset` (`service/load.go:345`) builds
-`sling run --src-conn/--src-stream/--tgt-conn/--tgt-object [--mode <params.mode>]`
-purely from the flat `parameters`; `asset.Materialization` is never read. Two
-consequences:
-
-- The Materialization card and the load editor's own `mode` select
-  (`load-parameters-editor.tsx:169`) are **two disconnected controls**; only
-  `mode` does anything.
-- Even `mode` is only half-wired: sling's `incremental` mode requires
-  `--primary-key` and/or `--update-key`, which renart never passes
-  (`loadModeArgsFromParams` emits `--mode` only), so incremental sling runs fail
-  outright.
-
-### HTTP API — always full-refresh, everything else is a no-op
-
-`runAPIAsset` (`service/api_asset.go:298`) fetches → CSV → `sling run
---src-stream file://…csv --tgt-conn … --tgt-object …` with mode args only from the
-(always-false) full-refresh context. Sling's default mode is `full-refresh`, so an
-api asset always behaves like `create+replace` regardless of configuration —
-"Table (replace)" works by accident; `append`, `merge`, `time_interval` configure
-fine and change nothing. (The spec's `load.mode` field is parsed into
-`nativeAPILoad.Mode` but never used — dead surface to remove.)
+Both paths use `slingMaterializationArgs`: replace uses Sling's default
+full-refresh behavior, truncate uses `--mode truncate`, append uses snapshot or
+incremental with an update key, and merge uses incremental with one or more
+primary keys plus an optional update key. The Form and YAML metadata views share
+one capability filter and only offer those four strategies. Unsupported values
+are rejected by the backend and reported by pipeline type check.
 
 ---
 
@@ -155,12 +136,10 @@ materializer, and truncate maps cleanly to sling.
   a Date/Timestamp select that appears only when `time_interval` is chosen
   (default it from the incremental-key column's declared type when available).
   Without this, the SQL time_interval option stays broken.
-- **Primary keys**: make the key badge in the Columns card an editable toggle
-  backed by a new semantic transaction (`column.primary_key.set` /
-  `.unset` in `asset_transactions.go`). When `merge` is selected and no column has
-  a primary key, the Materialization card shows an inline blocker linking to the
-  Columns card ("Merge needs at least one key column") — same validation the
-  backend enforces. This unblocks merge for **all four** asset types.
+- **Primary keys (implemented)**: both metadata views edit column-scoped
+  `primary_key`; the guided view shows an inline blocker until one is set. SQL
+  merge also exposes `update_on_merge` and `merge_sql`; Sling-backed merge/append
+  exposes a column-backed update-key combobox.
 
 ### 2.5 Run-time guardrails
 
@@ -189,7 +168,7 @@ non-interval-aware (single "built" marker) regardless of strategy — one guard 
 
 ## 3. Phased plan
 
-**Phase 1 — sling + api execute their materialization (the actual bug report).**
+**Phase 1 — complete: sling + api execute their materialization.**
 `slingMaterializationArgs` + wiring in both run paths + fail-fast validation +
 unit tests on the flag mapping (table above, incl. PK join and legacy `mode`
 fallback). Remove the load editor's mode select; keep `mode` param read-only
@@ -197,7 +176,7 @@ back-compat. Deliverable check: duckdb live e2e — sling csv→duckdb and an ap
 asset, each run twice under `merge` (assert no duplicate rows) and `append`
 (assert row count grows).
 
-**Phase 2 — capability matrix + the two blocking editors.** Per-type options in
+**Phase 2 — partially complete: capability matrix + blocking editors.** Per-type options in
 the card/YAML view, backend validation in `updateAsset` + transactions,
 `time_granularity` field end-to-end (api-types regen), `column.primary_key.set`
 transaction + editable key toggle. This makes SQL `time_interval` and merge (all
@@ -244,4 +223,3 @@ Phase 2.
   set), `pkg/python/uv.go:346` (`runWithMaterialization`),
   `pkg/<warehouse>/materialization.go` (SQL validation),
   `pipeline.Asset.ColumnNamesWithPrimaryKey`.
-

@@ -1,16 +1,17 @@
 package service
 
 import (
-	"context"
 	"fmt"
 	"strings"
 
 	"github.com/bruin-data/bruin/pkg/pipeline"
 )
 
-// validateLoaderMaterialization keeps file-editing APIs aligned with the
-// execution contract for Load and HTTP API assets. Raw YAML saves can still be
-// temporarily incomplete while the user types; execution repeats this check.
+// validateLoaderMaterialization rejects modes that can never execute for Load
+// and HTTP API assets while allowing temporarily incomplete edit states. In
+// particular, users must be able to select merge before marking a column as a
+// primary key. Execution calls slingMaterializationArgs, which enforces that
+// prerequisite before starting the loader.
 func validateLoaderMaterialization(asset *pipeline.Asset) error {
 	if asset == nil || (!isAPIAsset(asset) && !isLoadAsset(asset)) {
 		return nil
@@ -19,8 +20,14 @@ func validateLoaderMaterialization(asset *pipeline.Asset) error {
 	if materializationType != "" && materializationType != "table" {
 		return fmt.Errorf("materialization type %q is not supported for %s assets", materializationType, asset.Type)
 	}
-	_, err := slingMaterializationArgs(context.Background(), asset)
-	return err
+	strategy := strings.ToLower(strings.TrimSpace(string(asset.Materialization.Strategy)))
+	switch strategy {
+	case "", "create+replace", "create_replace", "full-refresh", "full_refresh",
+		"truncate+insert", "truncate_insert", "truncate", "append", "merge":
+		return nil
+	default:
+		return fmt.Errorf("materialization strategy %q is not supported for %s assets", strategy, asset.Type)
+	}
 }
 
 func loaderMaterializationAPIError(asset *pipeline.Asset) *APIError {

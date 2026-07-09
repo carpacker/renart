@@ -75,6 +75,18 @@ func TestSlingMaterializationArgsFullRefreshOverridesStrategy(t *testing.T) {
 	assert.Equal(t, []string{"--mode", "full-refresh"}, args)
 }
 
+func TestValidateLoaderMaterializationAllowsIncompleteMergeDuringEditing(t *testing.T) {
+	t.Parallel()
+
+	asset := &pipeline.Asset{Type: pipeline.AssetType("api")}
+	asset.Materialization.Type = pipeline.MaterializationTypeTable
+	asset.Materialization.Strategy = pipeline.MaterializationStrategyMerge
+
+	require.NoError(t, validateLoaderMaterialization(asset))
+	_, err := slingMaterializationArgs(context.Background(), asset)
+	require.ErrorContains(t, err, "primary-key")
+}
+
 func TestAssetServiceCreateLoadAssetWritesFlatParamDefinition(t *testing.T) {
 	workspaceRoot := t.TempDir()
 	pipelineRoot := filepath.Join(workspaceRoot, "analytics")

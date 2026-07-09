@@ -19,6 +19,7 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import {
   Select,
   SelectContent,
+  SelectGroup,
   SelectItem,
   SelectTrigger,
   SelectValue,
@@ -35,11 +36,12 @@ import { WebAsset, WebColumn } from "@/lib/types";
 
 import {
   COLUMN_CHECK_NAMES,
+  ColumnCombobox,
   MATERIALIZATION_OPTIONS,
   VALUE_CHECKS,
   checkValueFor,
-  currentMaterializationOption,
   formatCheckValue,
+  materializationEditorState,
 } from "./asset-guided-cards";
 
 /**
@@ -143,11 +145,13 @@ export function InlineSelect({
         <SelectValue placeholder={placeholder} />
       </SelectTrigger>
       <SelectContent>
-        {options.map((option) => (
-          <SelectItem key={option.value} value={option.value} className="font-monaco text-xs">
-            {option.label}
-          </SelectItem>
-        ))}
+        <SelectGroup>
+          {options.map((option) => (
+            <SelectItem key={option.value} value={option.value} className="font-monaco text-xs">
+              {option.label}
+            </SelectItem>
+          ))}
+        </SelectGroup>
       </SelectContent>
     </Select>
   );
@@ -293,16 +297,15 @@ function IdentitySection({ asset, pipelineId }: { asset: WebAsset; pipelineId: s
 }
 
 function MaterializationSection({ asset, pipelineId, isSql }: { asset: WebAsset; pipelineId: string; isSql: boolean }) {
-  const selected = currentMaterializationOption(asset);
-  const isAPI = asset.type.toLowerCase() === "api";
-  const selectedValue = isAPI && selected.value === "none" ? "table" : selected.value;
-  const options = isSql
-    ? MATERIALIZATION_OPTIONS
-    : MATERIALIZATION_OPTIONS.filter((option) =>
-        isAPI
-          ? ["table", "truncate", "append", "merge"].includes(option.value)
-          : option.value !== "view" && option.value !== "incremental"
-      );
+  const { selected, isSlingBacked, selectedValue, options } = materializationEditorState(asset, isSql);
+  const primaryKeys = (asset.columns ?? []).filter((column) => column.primary_key).map((column) => column.name);
+  const [error, setError] = useState("");
+  const save = (input: Parameters<typeof updateAsset>[2]) => {
+    setError("");
+    void updateAsset(pipelineId, asset.id, input).catch((cause) => {
+      setError(cause instanceof Error ? cause.message : "Could not update materialization");
+    });
+  };
   return (
     <>
       <Line className="mt-1">
@@ -316,25 +319,35 @@ function MaterializationSection({ asset, pipelineId, isSql }: { asset: WebAsset;
           onChange={(value) => {
             const option = MATERIALIZATION_OPTIONS.find((o) => o.value === value);
             if (!option) return;
-            void updateAsset(pipelineId, asset.id, {
+            save({
               materialization_type: option.type,
               materialization_strategy: option.strategy,
             });
           }}
         />
       </Line>
-      {selected.value === "incremental" ? (
+      {selected.value === "incremental" || (isSlingBacked && ["append", "merge"].includes(selected.value)) ? (
         <Line depth={1}>
           <Key>incremental_key</Key>
-          <InlineText
+          <ColumnCombobox
+            columns={asset.columns ?? []}
             value={asset.incremental_key ?? ""}
-            placeholder="loaded_at"
-            onCommit={(key) => {
-              if (key !== (asset.incremental_key ?? "")) void updateAsset(pipelineId, asset.id, { incremental_key: key });
+            placeholder={selected.value === "incremental" ? "loaded_at" : "updated_at (optional)"}
+            className="h-6 min-w-40 border-none bg-muted/40 shadow-none"
+            onChange={(key) => {
+              if (key !== (asset.incremental_key ?? "")) save({ incremental_key: key });
             }}
           />
         </Line>
       ) : null}
+      {selected.value === "merge" ? (
+        <Comment depth={2}>
+          {primaryKeys.length === 0
+            ? "merge needs a primary_key column — set one under columns below"
+            : `primary key${primaryKeys.length === 1 ? "" : "s"}: ${primaryKeys.join(", ")}`}
+        </Comment>
+      ) : null}
+      {error ? <Comment depth={2}>{error}</Comment> : null}
     </>
   );
 }
@@ -483,6 +496,7 @@ function AssetDependencyPicker({
 
 function ColumnsSection({ asset, isSql }: { asset: WebAsset; isSql: boolean }) {
   const columns = asset.columns ?? [];
+  const isSQLMerge = isSql && asset.materialization_strategy?.toLowerCase() === "merge";
   const apply = (tx: Parameters<typeof applyAssetTransaction>[1]) => {
     void applyAssetTransaction(asset.id, tx);
   };
@@ -492,6 +506,14 @@ function ColumnsSection({ asset, isSql }: { asset: WebAsset; isSql: boolean }) {
   };
   const setColumnPrimaryKey = (name: string, primaryKey: boolean) => {
     const next: WebColumn[] = columns.map((column) => (column.name === name ? { ...column, primary_key: primaryKey } : column));
+    void updateAssetColumns(asset.id, next);
+  };
+  const setColumnUpdateOnMerge = (name: string, updateOnMerge: boolean) => {
+    const next: WebColumn[] = columns.map((column) => (column.name === name ? { ...column, update_on_merge: updateOnMerge } : column));
+    void updateAssetColumns(asset.id, next);
+  };
+  const setColumnMergeSQL = (name: string, mergeSQL: string) => {
+    const next: WebColumn[] = columns.map((column) => (column.name === name ? { ...column, merge_sql: mergeSQL } : column));
     void updateAssetColumns(asset.id, next);
   };
 
@@ -514,6 +536,9 @@ function ColumnsSection({ asset, isSql }: { asset: WebAsset; isSql: boolean }) {
           column={column}
           onSetType={setColumnType}
           onSetPrimaryKey={setColumnPrimaryKey}
+          showMergeFields={isSQLMerge}
+          onSetUpdateOnMerge={setColumnUpdateOnMerge}
+          onSetMergeSQL={setColumnMergeSQL}
           apply={apply}
           onRemove={() => apply({ type: "column.inferred.drop", column: column.name })}
         />
@@ -618,12 +643,18 @@ function ColumnEntry({
   column,
   onSetType,
   onSetPrimaryKey,
+  showMergeFields,
+  onSetUpdateOnMerge,
+  onSetMergeSQL,
   apply,
   onRemove,
 }: {
   column: WebColumn;
   onSetType: (name: string, type: string) => void;
   onSetPrimaryKey: (name: string, primaryKey: boolean) => void;
+  showMergeFields: boolean;
+  onSetUpdateOnMerge: (name: string, updateOnMerge: boolean) => void;
+  onSetMergeSQL: (name: string, mergeSQL: string) => void;
   apply: (tx: Parameters<typeof applyAssetTransaction>[1]) => void;
   onRemove: () => void;
 }) {
@@ -664,6 +695,7 @@ function ColumnEntry({
           <button
             type="button"
             className="font-monaco flex items-center gap-1 rounded-sm px-1 text-[11px] text-muted-foreground hover:bg-muted hover:text-foreground"
+            aria-label={`Set ${column.name} as primary key`}
             onClick={() => onSetPrimaryKey(column.name, true)}
           >
             <KeyRound className="size-3" />
@@ -671,6 +703,38 @@ function ColumnEntry({
           </button>
         </Line>
       )}
+      {showMergeFields ? (
+        <>
+          {column.update_on_merge ? (
+            <Line depth={3}>
+              <Key>update_on_merge</Key>
+              <span className="flex-1 text-foreground">true</span>
+              <RemoveButton label={`Do not update ${column.name} on merge`} onClick={() => onSetUpdateOnMerge(column.name, false)} />
+            </Line>
+          ) : (
+            <Line depth={3}>
+              <button
+                type="button"
+                className="font-monaco flex items-center gap-1 rounded-sm px-1 text-[11px] text-muted-foreground hover:bg-muted hover:text-foreground"
+                aria-label={`Update ${column.name} on merge`}
+                onClick={() => onSetUpdateOnMerge(column.name, true)}
+              >
+                update on merge…
+              </button>
+            </Line>
+          )}
+          <Line depth={3}>
+            <Key>merge_sql</Key>
+            <InlineText
+              value={column.merge_sql ?? ""}
+              placeholder="optional expression"
+              onCommit={(mergeSQL) => {
+                if (mergeSQL !== (column.merge_sql ?? "")) onSetMergeSQL(column.name, mergeSQL);
+              }}
+            />
+          </Line>
+        </>
+      ) : null}
       <Line depth={3}>
         <Key>checks</Key>
       </Line>

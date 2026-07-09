@@ -82,6 +82,12 @@ warehouse write. OpenAPI inference, pagination, validation warnings, and
 HTTP API extraction and execution-window behavior are documented in
 [http-api-assets.md](http-api-assets.md).
 
+Pipeline type checks also validate materialization configuration: supported
+loader strategies, required merge primary keys, declared incremental/update
+keys, time-interval prerequisites, and merge-only column metadata. Editing may
+temporarily persist an incomplete merge so multi-step form changes are possible;
+type check and execution surface the incomplete state until it is resolved.
+
 ## 5. Conventions
 
 - **One DTO set.** `internal/web/model` owns workspace DTOs, `service` owns

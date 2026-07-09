@@ -1,10 +1,14 @@
 import { expect, type Locator, type Page } from "@playwright/test";
+import { writeFile } from "node:fs/promises";
+import { join } from "node:path";
 
 import { liveTest as test, type LiveApp } from "../live-app-fixture";
 
 const pipelineId = Buffer.from("analytics").toString("base64url");
 const customersAssetId = Buffer.from("analytics/assets/analytics/customers.sql").toString("base64url");
 const downstreamAssetId = Buffer.from("analytics/assets/analytics/downstream.sql").toString("base64url");
+const loadAssetPath = "analytics/assets/analytics/orders_load.asset.yml";
+const loadAssetId = Buffer.from(loadAssetPath).toString("base64url");
 
 type WorkspaceAsset = {
   id: string;
@@ -12,7 +16,15 @@ type WorkspaceAsset = {
   upstreams: string[];
   meta?: Record<string, string>;
   tags?: string[];
-  columns?: Array<{ name: string; type?: string }>;
+  materialization_strategy?: string;
+  incremental_key?: string;
+  columns?: Array<{
+    name: string;
+    type?: string;
+    primary_key?: boolean;
+    update_on_merge?: boolean;
+    merge_sql?: string;
+  }>;
 };
 type WorkspaceResponse = { pipelines: Array<{ id: string; assets: WorkspaceAsset[] }> };
 
@@ -119,6 +131,179 @@ test.describe("app asset editing workbench live", () => {
       a.upstreams.includes("analytics.orders"),
     );
     expect(customers.meta?.renart_dep_add).toContain("a:analytics.orders#full");
+  });
+
+  test("merge metadata is editable through both form and YAML views", async ({ liveApp, page }) => {
+    const declareColumns = await page.request.put(`${liveApp.baseURL}/api/assets/${customersAssetId}/columns`, {
+      data: {
+        columns: [
+          { name: "customer_id", type: "integer" },
+          { name: "customer_name", type: "varchar" },
+        ],
+      },
+    });
+    expect(declareColumns.ok()).toBe(true);
+
+    await page.goto(`${liveApp.baseURL}/pipelines/${pipelineId}/assets/${customersAssetId}/code`);
+    await expect(page.locator(".monaco-editor").first()).toBeVisible({ timeout: 15000 });
+    const properties = await openAssetProperties(page);
+    const materialization = properties.getByRole("heading", { name: "Materialization" }).locator("../..");
+
+    const strategyResponse = page.waitForResponse(
+      (response) => response.url().includes(`/api/pipelines/${pipelineId}/assets/${customersAssetId}`) && response.request().method() === "PUT" && response.ok(),
+      { timeout: 15000 },
+    );
+    await materialization.getByRole("combobox").click();
+    await page.getByRole("option", { name: "Merge by key" }).click();
+    await strategyResponse;
+    await expect(materialization.getByText(/Merge needs at least one primary-key column/)).toBeVisible({ timeout: 15000 });
+
+    const invalidTypeCheck = await page.request.get(`${liveApp.baseURL}/api/pipelines/${pipelineId}/type-check`);
+    expect(invalidTypeCheck.ok()).toBe(true);
+    const invalidReport = await invalidTypeCheck.json() as {
+      assets: Array<{ name: string; findings: Array<{ message: string }> }>;
+    };
+    expect(
+      invalidReport.assets
+        .find((asset) => asset.name === "analytics.customers")
+        ?.findings.some((finding) => finding.message.includes("primary-key")),
+    ).toBe(true);
+
+    const primaryKeyResponse = page.waitForResponse(
+      (response) => response.url().includes(`/api/assets/${customersAssetId}/columns`) && response.request().method() === "PUT" && response.ok(),
+      { timeout: 15000 },
+    );
+    await properties.getByRole("button", { name: "Set customer_id as primary key" }).click();
+    await primaryKeyResponse;
+
+    const updateOnMergeResponse = page.waitForResponse(
+      (response) => response.url().includes(`/api/assets/${customersAssetId}/columns`) && response.request().method() === "PUT" && response.ok(),
+      { timeout: 15000 },
+    );
+    await properties.getByRole("button", { name: "Update customer_name on merge" }).click();
+    await updateOnMergeResponse;
+
+    const mergeSQLResponse = page.waitForResponse(
+      (response) => response.url().includes(`/api/assets/${customersAssetId}/columns`) && response.request().method() === "PUT" && response.ok(),
+      { timeout: 15000 },
+    );
+    const mergeSQL = properties.getByPlaceholder("merge SQL (optional)").nth(1);
+    await mergeSQL.fill("COALESCE(source.customer_name, target.customer_name)");
+    await mergeSQL.press("Enter");
+    await mergeSQLResponse;
+
+    const configured = await pollAsset(liveApp, page.request, "analytics.customers", (asset) => {
+      const id = asset.columns?.find((column) => column.name === "customer_id");
+      const name = asset.columns?.find((column) => column.name === "customer_name");
+      return asset.materialization_strategy === "merge"
+        && id?.primary_key === true
+        && name?.update_on_merge === true
+        && name.merge_sql === "COALESCE(source.customer_name, target.customer_name)";
+    });
+    expect(configured.materialization_strategy).toBe("merge");
+
+    await properties.getByRole("button", { name: "YAML" }).click();
+    await expect(properties.getByText("primary_key:", { exact: true })).toBeVisible();
+    await expect(properties.getByText("update_on_merge:", { exact: true })).toBeVisible();
+    await expect(properties.locator('input[value="COALESCE(source.customer_name, target.customer_name)"]')).toBeVisible();
+
+    const unsetResponse = page.waitForResponse(
+      (response) => response.url().includes(`/api/assets/${customersAssetId}/columns`) && response.request().method() === "PUT" && response.ok(),
+      { timeout: 15000 },
+    );
+    await properties.getByRole("button", { name: "Unset primary key on customer_id" }).click();
+    await unsetResponse;
+    await expect(properties.getByRole("button", { name: "Set customer_id as primary key" })).toBeVisible({ timeout: 15000 });
+
+    const yamlKeyResponse = page.waitForResponse(
+      (response) => response.url().includes(`/api/assets/${customersAssetId}/columns`) && response.request().method() === "PUT" && response.ok(),
+      { timeout: 15000 },
+    );
+    await properties.getByRole("button", { name: "Set customer_name as primary key" }).click();
+    await yamlKeyResponse;
+
+    const yamlConfigured = await pollAsset(liveApp, page.request, "analytics.customers", (asset) => {
+      const keys = (asset.columns ?? []).filter((column) => column.primary_key).map((column) => column.name);
+      return keys.length === 1 && keys[0] === "customer_name";
+    });
+    expect((yamlConfigured.columns ?? []).filter((column) => column.primary_key).map((column) => column.name)).toEqual(["customer_name"]);
+  });
+
+  test("load asset editors only offer Sling-compatible materializations", async ({ liveApp, page }) => {
+    await writeFile(
+      join(liveApp.workspaceDir, loadAssetPath),
+      `name: analytics.orders_load
+type: load
+parameters:
+  source_connection: duckdb-default
+  source_table: analytics.orders
+  destination_connection: duckdb-default
+  destination_table: analytics.orders_load
+`,
+      "utf8",
+    );
+    await pollAsset(liveApp, page.request, "analytics.orders_load", () => true);
+
+    await page.goto(`${liveApp.baseURL}/pipelines/${pipelineId}/assets/${loadAssetId}/code`);
+    const properties = await openAssetProperties(page);
+    const materialization = properties.getByRole("heading", { name: "Materialization" }).locator("../..");
+
+    const expectSlingOptions = async () => {
+      await expect(page.getByRole("option", { name: "Table (replace)" })).toBeVisible();
+      await expect(page.getByRole("option", { name: "Table (truncate)" })).toBeVisible();
+      await expect(page.getByRole("option", { name: "Append rows" })).toBeVisible();
+      await expect(page.getByRole("option", { name: "Merge by key" })).toBeVisible();
+      await expect(page.getByRole("option", { name: "None (run only)" })).toHaveCount(0);
+      await expect(page.getByRole("option", { name: "View" })).toHaveCount(0);
+      await expect(page.getByRole("option", { name: "Incremental (time interval)" })).toHaveCount(0);
+    };
+
+    await materialization.getByRole("combobox").click();
+    await expectSlingOptions();
+    const mergeResponse = page.waitForResponse(
+      (response) => response.url().includes(`/api/pipelines/${pipelineId}/assets/${loadAssetId}`) && response.request().method() === "PUT" && response.ok(),
+      { timeout: 15000 },
+    );
+    await page.getByRole("option", { name: "Merge by key" }).click();
+    await mergeResponse;
+
+    const emptyUpdateKey = materialization.getByRole("combobox").nth(1);
+    await emptyUpdateKey.click();
+    await expect(page.getByText("No declared columns. Add or infer columns first.")).toBeVisible();
+    await page.keyboard.press("Escape");
+
+    const declareColumns = await page.request.put(`${liveApp.baseURL}/api/assets/${loadAssetId}/columns`, {
+      data: {
+        columns: [
+          { name: "id", type: "integer" },
+          { name: "updated_at", type: "timestamp" },
+        ],
+      },
+    });
+    expect(declareColumns.ok()).toBe(true);
+    await pollAsset(liveApp, page.request, "analytics.orders_load", (asset) => (asset.columns ?? []).length === 2);
+    await expect(properties.getByRole("button", { name: "Set id as primary key" })).toBeVisible({ timeout: 15000 });
+
+    const updateKeyResponse = page.waitForResponse(
+      (response) => response.url().includes(`/api/pipelines/${pipelineId}/assets/${loadAssetId}`) && response.request().method() === "PUT" && response.ok(),
+      { timeout: 15000 },
+    );
+    const updateKey = materialization.getByRole("combobox").nth(1);
+    await updateKey.click();
+    await page.getByPlaceholder("Search columns…").fill("updated");
+    await page.getByRole("option", { name: "updated_at" }).click();
+    await updateKeyResponse;
+    const configured = await pollAsset(liveApp, page.request, "analytics.orders_load", (asset) =>
+      asset.materialization_strategy === "merge" && asset.incremental_key === "updated_at",
+    );
+    expect(configured.incremental_key).toBe("updated_at");
+
+    await properties.getByRole("button", { name: "YAML" }).click();
+    await properties.getByRole("combobox").nth(1).click();
+    await expectSlingOptions();
+    await page.keyboard.press("Escape");
+    const yamlUpdateKey = properties.getByText("incremental_key:", { exact: true }).locator("..").getByRole("combobox");
+    await expect(yamlUpdateKey).toContainText("updated_at");
   });
 
   test("materializing an asset on a stale upstream warns before building", async ({ liveApp, page }) => {

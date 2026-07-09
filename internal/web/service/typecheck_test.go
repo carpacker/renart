@@ -344,3 +344,55 @@ select 1 as id
 	// findings back to canvas nodes.
 	assert.Equal(t, EncodeID("analytics/assets/up.sql"), up.ID)
 }
+
+func TestMaterializationTypeCheckFindings(t *testing.T) {
+	t.Parallel()
+
+	t.Run("merge and update key errors", func(t *testing.T) {
+		asset := &pipeline.Asset{
+			Type:    pipeline.AssetType("api"),
+			Columns: []pipeline.Column{{Name: "id", Type: "integer"}},
+			Materialization: pipeline.Materialization{
+				Type:           pipeline.MaterializationTypeTable,
+				Strategy:       pipeline.MaterializationStrategyMerge,
+				IncrementalKey: "updated_at",
+			},
+		}
+
+		findings := materializationTypeCheckFindings(asset)
+		assert.Len(t, findings, 2)
+		assert.Contains(t, findings[0].Message, "primary-key")
+		assert.Contains(t, findings[1].Message, "updated_at is not declared")
+	})
+
+	t.Run("valid sling merge", func(t *testing.T) {
+		asset := &pipeline.Asset{
+			Type: pipeline.AssetType("load"),
+			Columns: []pipeline.Column{
+				{Name: "id", Type: "integer", PrimaryKey: true},
+				{Name: "updated_at", Type: "timestamp"},
+			},
+			Materialization: pipeline.Materialization{
+				Type:           pipeline.MaterializationTypeTable,
+				Strategy:       pipeline.MaterializationStrategyMerge,
+				IncrementalKey: "updated_at",
+			},
+		}
+
+		assert.Empty(t, materializationTypeCheckFindings(asset))
+	})
+
+	t.Run("unsupported sling strategy", func(t *testing.T) {
+		asset := &pipeline.Asset{
+			Type: pipeline.AssetType("load"),
+			Materialization: pipeline.Materialization{
+				Type:     pipeline.MaterializationTypeTable,
+				Strategy: pipeline.MaterializationStrategyTimeInterval,
+			},
+		}
+
+		findings := materializationTypeCheckFindings(asset)
+		require.Len(t, findings, 1)
+		assert.Contains(t, findings[0].Message, "not supported")
+	})
+}

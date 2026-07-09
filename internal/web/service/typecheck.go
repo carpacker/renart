@@ -159,6 +159,7 @@ func checkAsset(ctx context.Context, fs afero.Fs, pp *pipeline.Pipeline, workspa
 		Type:     string(asset.Type),
 		Findings: []TypeCheckFinding{},
 	}
+	ac.Findings = append(ac.Findings, materializationTypeCheckFindings(asset)...)
 
 	dialect, dialectErr := AssetTypeToDialect(asset.Type)
 	if dialectErr != nil {
@@ -237,6 +238,55 @@ func checkAsset(ctx context.Context, fs afero.Fs, pp *pipeline.Pipeline, workspa
 
 	ac.Status = statusFromFindings(ac.Findings)
 	return ac
+}
+
+func materializationTypeCheckFindings(asset *pipeline.Asset) []TypeCheckFinding {
+	if asset == nil {
+		return nil
+	}
+	findings := make([]TypeCheckFinding, 0, 3)
+	addError := func(message string) {
+		findings = append(findings, TypeCheckFinding{Severity: typeCheckSeverityError, Message: message})
+	}
+
+	strategy := strings.ToLower(strings.TrimSpace(string(asset.Materialization.Strategy)))
+	if isAPIAsset(asset) || isLoadAsset(asset) {
+		if err := validateLoaderMaterialization(asset); err != nil {
+			addError("Invalid materialization: " + err.Error())
+			return findings
+		}
+	}
+
+	if strategy == "merge" && len(asset.ColumnNamesWithPrimaryKey()) == 0 {
+		addError("Invalid materialization: merge needs at least one primary-key column")
+	}
+
+	incrementalKey := strings.TrimSpace(asset.Materialization.IncrementalKey)
+	if incrementalKey != "" && !assetHasColumn(asset, incrementalKey) {
+		addError("Invalid materialization: incremental/update key " + incrementalKey + " is not declared as a column")
+	}
+	if (strategy == "time_interval" || strategy == "delete+insert" || strategy == "delete_insert") && incrementalKey == "" {
+		addError("Invalid materialization: strategy " + strategy + " needs an incremental key")
+	}
+	if strategy == "time_interval" && strings.TrimSpace(string(asset.Materialization.TimeGranularity)) == "" {
+		addError("Invalid materialization: time_interval needs a time granularity")
+	}
+
+	for _, column := range asset.Columns {
+		if strategy != "merge" && (column.UpdateOnMerge || strings.TrimSpace(column.MergeSQL) != "") {
+			addError("Invalid materialization: column " + column.Name + " has merge-only metadata but the strategy is not merge")
+		}
+	}
+	return findings
+}
+
+func assetHasColumn(asset *pipeline.Asset, name string) bool {
+	for _, column := range asset.Columns {
+		if strings.EqualFold(strings.TrimSpace(column.Name), strings.TrimSpace(name)) {
+			return true
+		}
+	}
+	return false
 }
 
 // assetsWithKnownSchema maps each asset name (lower-cased) to whether its output
