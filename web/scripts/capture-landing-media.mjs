@@ -484,7 +484,7 @@ async function captureAll(notebookId) {
       // hide the toast the half-typed query triggers
       await page.evaluate(() => {
         for (const el of Array.from(document.querySelectorAll("div"))) {
-          if (el.textContent?.startsWith("Preview Failed") && el.clientHeight > 0 && el.clientHeight < 300) {
+          if (el.textContent?.startsWith("Preview failed") && el.clientHeight > 0 && el.clientHeight < 300) {
             el.style.visibility = "hidden";
             break;
           }
