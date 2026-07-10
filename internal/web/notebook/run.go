@@ -245,9 +245,8 @@ func (r *Runner) runOne(ctx context.Context, session *Session, nb *Notebook, cel
 	}
 
 	// Only invoke the SQL parser when the cell actually references a name we
-	// need to rewrite. RenameTables drives an embedded-Python sqlglot parser
-	// (~300ms/call), so skipping it for cells that reference nothing — the
-	// common case for source/leaf cells — makes a simple cell run instant.
+	// need to rewrite. Skipping it for cells that reference nothing — the common
+	// case for source/leaf cells — avoids unnecessary parse and rewrite work.
 	rewritten := strings.TrimRight(strings.TrimSpace(content), ";")
 	if referencesAnyMappedName(content, mapping) {
 		renamed, err := r.RenameTables(content, "duckdb", mapping)

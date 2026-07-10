@@ -1666,7 +1666,7 @@ function EditorWorkspace({
     openBottom,
     openInspector,
     materializeSelectedAsset,
-  fullRefreshSelectedAsset,
+    fullRefreshSelectedAsset,
     inspectSelectedAsset,
     materializeLoading,
     inspectLoading,
@@ -1694,7 +1694,7 @@ function EditorWorkspace({
           showLabels={showActionLabels}
           showInspect={asset.kind !== "source"}
           onRun={materializeSelectedAsset}
-      onFullRefresh={asset.workspaceAsset?.type.toLowerCase() === "api" ? fullRefreshSelectedAsset : undefined}
+          onFullRefresh={asset.workspaceAsset?.type.toLowerCase() === "api" ? fullRefreshSelectedAsset : undefined}
           onInspect={inspectSelectedAsset}
           runDisabled={materializeLoading || executionBlocked || !asset.workspaceAsset}
           runBlockedReason={executionBlocked ? "This environment is protected: interactive execution is disabled" : undefined}

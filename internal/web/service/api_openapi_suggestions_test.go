@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"gopkg.in/yaml.v3"
@@ -11,10 +12,44 @@ const suggestionsSpec = `
 openapi: 3.0.0
 servers:
   - url: https://api.example.test
+components:
+  parameters:
+    AlertArea:
+      name: area
+      in: query
+      description: State or marine area code
+      schema:
+        type: array
+        items:
+          $ref: '#/components/schemas/AreaCode'
+  schemas:
+    AreaCode:
+      oneOf:
+        - $ref: '#/components/schemas/StateCode'
+        - $ref: '#/components/schemas/MarineCode'
+    StateCode:
+      type: string
+      enum: [CA, NY]
+    MarineCode:
+      type: string
+      enum: [AM, PZ]
 paths:
   /alerts:
+    parameters:
+      - name: status
+        in: query
+        required: true
+        schema:
+          type: string
+          enum: [actual, test]
     get:
       summary: Returns all alerts
+      parameters:
+        - $ref: '#/components/parameters/AlertArea'
+        - name: limit
+          in: query
+          schema:
+            type: integer
       responses:
         "200":
           content:
@@ -102,8 +137,37 @@ func TestOpenAPISuggestionsReturnsEmptyArraysWithoutOpenAPIURL(t *testing.T) {
 	if result.RecordsPaths == nil {
 		t.Fatal("RecordsPaths is nil, want an empty slice")
 	}
+	if result.QueryParameters == nil {
+		t.Fatal("QueryParameters is nil, want an empty slice")
+	}
 	if result.ResponsePaths == nil {
 		t.Fatal("ResponsePaths is nil, want an empty slice")
+	}
+}
+
+func TestQueryParameterSuggestionsResolveRefsEnumsAndPathParameters(t *testing.T) {
+	doc := suggestionsDoc(t)
+	parameters := doc.queryParameterSuggestions("https://api.example.test/alerts?status=actual", "GET")
+
+	byName := map[string]OpenAPIQueryParameterSuggestion{}
+	for _, parameter := range parameters {
+		byName[parameter.Name] = parameter
+	}
+	if len(byName) != 3 {
+		t.Fatalf("expected area, limit, and status suggestions, got %+v", parameters)
+	}
+	area := byName["area"]
+	if area.Type != "array of string" {
+		t.Fatalf("area type = %q, want array of string", area.Type)
+	}
+	if got := strings.Join(area.Values, ","); got != "AM,CA,NY,PZ" {
+		t.Fatalf("area values = %q", got)
+	}
+	if !byName["status"].Required {
+		t.Fatal("path-level required status parameter was not preserved")
+	}
+	if got := strings.Join(byName["status"].Values, ","); got != "actual,test" {
+		t.Fatalf("status values = %q", got)
 	}
 }
 

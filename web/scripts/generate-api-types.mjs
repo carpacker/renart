@@ -54,6 +54,7 @@ const sources = [
     file: resolve(repoRoot, "internal", "web", "service", "api_openapi_suggestions.go"),
     types: [
       "OpenAPIEndpointSuggestion",
+      "OpenAPIQueryParameterSuggestion",
       "OpenAPIRecordsPathSuggestion",
       "OpenAPIResponsePathSuggestion",
       "OpenAPISuggestionsResult",
@@ -145,7 +146,7 @@ const renameMap = new Map([
   ["InspectResult", "AssetInspectResponse"],
   ["InferColumnsResult", "InferColumnsResponse"],
   ["Column", "WebColumn"],
-	["WorkspaceColumn", "WebColumn"],
+  ["WorkspaceColumn", "WebColumn"],
   ["PipelineConfigResponse", "WebPipelineConfigResponse"],
   ["UpdatePipelineConfigRequest", "WebUpdatePipelineConfigRequest"],
 ]);

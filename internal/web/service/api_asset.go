@@ -3,7 +3,6 @@ package service
 import (
 	"bytes"
 	"context"
-	"encoding/csv"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -29,6 +28,7 @@ import (
 
 const apiAssetType = "api"
 const maxAPIResponseBytes = 25 << 20
+const apiJSONLSourceOptions = `{"format":"jsonlines","flatten":1}`
 
 type nativeAPISpec struct {
 	Name       string              `yaml:"name"`
@@ -549,8 +549,8 @@ func (e *HybridBruinExecutor) runAPIAsset(ctx context.Context, pl *pipeline.Pipe
 		return nil, err
 	}
 	defer func() { _ = os.RemoveAll(tmpDir) }()
-	csvPath := filepath.Join(tmpDir, assetPathSafeName(asset.Name)+".csv")
-	count, err := writeAPIAssetCSV(ctx, renderer, spec, csvPath, writer)
+	jsonlPath := filepath.Join(tmpDir, assetPathSafeName(asset.Name)+".jsonl")
+	count, err := writeAPIAssetJSONL(ctx, renderer, spec, jsonlPath, writer)
 	if err != nil {
 		return writer.buffer.Bytes(), err
 	}
@@ -559,7 +559,9 @@ func (e *HybridBruinExecutor) runAPIAsset(ctx context.Context, pl *pipeline.Pipe
 	args := []string{
 		"run",
 		"--src-stream",
-		"file://" + filepath.ToSlash(csvPath),
+		"file://" + filepath.ToSlash(jsonlPath),
+		"--src-options",
+		apiJSONLSourceOptions,
 		"--tgt-conn",
 		targetConn,
 		"--tgt-object",
@@ -581,14 +583,13 @@ func (e *HybridBruinExecutor) runAPIAsset(ctx context.Context, pl *pipeline.Pipe
 	return writer.buffer.Bytes(), nil
 }
 
-func writeAPIAssetCSV(ctx context.Context, renderer *jinja.Renderer, spec nativeAPISpec, path string, output io.Writer) (int, error) {
+func writeAPIAssetJSONL(ctx context.Context, renderer *jinja.Renderer, spec nativeAPISpec, path string, output io.Writer) (int, error) {
 	file, err := os.Create(path)
 	if err != nil {
 		return 0, err
 	}
 	defer func() { _ = file.Close() }()
-	writer := csv.NewWriter(file)
-	defer writer.Flush()
+	encoder := json.NewEncoder(file)
 
 	items := spec.Iterate.Over
 	if len(items) == 0 {
@@ -622,8 +623,6 @@ func writeAPIAssetCSV(ctx context.Context, renderer *jinja.Renderer, spec native
 			}
 		}
 	}
-	fieldNames := sortedFieldNames(spec.Response.Fields)
-	headerWritten := false
 	count := 0
 	for _, item := range items {
 		renderer.SetContextValue(itemName, item)
@@ -647,20 +646,20 @@ func writeAPIAssetCSV(ctx context.Context, renderer *jinja.Renderer, spec native
 			if err != nil {
 				return count, err
 			}
-			req, err := newAPIHTTPRequest(ctx, renderer, spec, method, requestURL, pageParams)
+			req, displayURL, err := newAPIHTTPRequest(ctx, renderer, spec, method, requestURL, pageParams)
 			if err != nil {
 				return count, err
 			}
 
-			resp, body, err := doAPIRequest(ctx, client, req)
+			resp, body, err := doAPIRequest(ctx, client, req, displayURL)
 			if err != nil {
 				return count, err
 			}
 			if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-				return count, fmt.Errorf("api request to %s failed with status %d: %s", req.URL.String(), resp.StatusCode, strings.TrimSpace(string(body)))
+				return count, fmt.Errorf("api request to %s failed with status %d: %s", displayURL, resp.StatusCode, strings.TrimSpace(string(body)))
 			}
 			if output != nil {
-				_, _ = fmt.Fprintf(output, "Fetched %s\n", req.URL.String())
+				_, _ = fmt.Fprintf(output, "Fetched %s\n", displayURL)
 			}
 
 			var decoded any
@@ -668,7 +667,7 @@ func writeAPIAssetCSV(ctx context.Context, renderer *jinja.Renderer, spec native
 				return count, err
 			}
 			if openAPIValidator != nil {
-				if err := openAPIValidator.Validate(decoded, req.URL.String()); err != nil {
+				if err := openAPIValidator.Validate(decoded, displayURL); err != nil {
 					if validationMode == "error" {
 						return count, err
 					}
@@ -693,23 +692,7 @@ func writeAPIAssetCSV(ctx context.Context, renderer *jinja.Renderer, spec native
 				} else {
 					out = map[string]any{"value": record}
 				}
-				if len(fieldNames) == 0 {
-					for key := range out {
-						fieldNames = append(fieldNames, key)
-					}
-					sort.Strings(fieldNames)
-				}
-				if !headerWritten {
-					if err := writer.Write(fieldNames); err != nil {
-						return count, err
-					}
-					headerWritten = true
-				}
-				row := make([]string, 0, len(fieldNames))
-				for _, fieldName := range fieldNames {
-					row = append(row, csvFieldValue(out[fieldName]))
-				}
-				if err := writer.Write(row); err != nil {
+				if err := encoder.Encode(out); err != nil {
 					return count, err
 				}
 				count++
@@ -724,10 +707,6 @@ func writeAPIAssetCSV(ctx context.Context, renderer *jinja.Renderer, spec native
 			}
 			nextURL = next
 		}
-	}
-	writer.Flush()
-	if err := writer.Error(); err != nil {
-		return count, err
 	}
 	return count, nil
 }
@@ -761,33 +740,54 @@ func sampleAPIAssetResponse(ctx context.Context, renderer *jinja.Renderer, spec 
 	if method == "" {
 		method = http.MethodGet
 	}
-	req, err := newAPIHTTPRequest(ctx, renderer, spec, method, requestURL, params)
+	req, displayURL, err := newAPIHTTPRequest(ctx, renderer, spec, method, requestURL, params)
 	if err != nil {
 		return nil, "", err
 	}
-	resp, body, err := doAPIRequest(ctx, &http.Client{Timeout: 30 * time.Second}, req)
+	resp, body, err := doAPIRequest(ctx, &http.Client{Timeout: 30 * time.Second}, req, displayURL)
 	if err != nil {
 		return nil, "", err
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, "", fmt.Errorf("api request to %s failed with status %d: %s", req.URL.String(), resp.StatusCode, strings.TrimSpace(string(body)))
+		return nil, "", fmt.Errorf("api request to %s failed with status %d: %s", displayURL, resp.StatusCode, strings.TrimSpace(string(body)))
 	}
+	// UseNumber keeps the source JSON literal, so column inference can tell
+	// `10` (integer) from `10.0` (float) — float64 collapses both to a whole
+	// number and would infer integer for a float column whose sampled values
+	// happen to be whole.
+	decoder := json.NewDecoder(bytes.NewReader(body))
+	decoder.UseNumber()
 	var decoded any
-	if err := json.Unmarshal(body, &decoded); err != nil {
+	if err := decoder.Decode(&decoded); err != nil {
 		return nil, "", err
 	}
-	return decoded, req.URL.String(), nil
+	return decoded, displayURL, nil
 }
 
-func doAPIRequest(ctx context.Context, client *http.Client, req *http.Request) (*http.Response, []byte, error) {
+func doAPIRequest(ctx context.Context, client *http.Client, req *http.Request, displayURL string) (*http.Response, []byte, error) {
 	const attempts = 3
 	for attempt := 1; attempt <= attempts; attempt++ {
 		current := req
 		if attempt > 1 {
 			current = req.Clone(ctx)
+			// Clone copies the already-consumed Body reader; rewind it so a
+			// retried request does not go out with an empty body.
+			if req.GetBody != nil {
+				rewound, bodyErr := req.GetBody()
+				if bodyErr != nil {
+					return nil, nil, bodyErr
+				}
+				current.Body = rewound
+			}
 		}
 		resp, err := client.Do(current)
 		if err != nil {
+			// url.Error's message embeds the full request URL, credentials
+			// included; rewrap with the redacted display URL instead.
+			var urlErr *neturl.Error
+			if errors.As(err, &urlErr) {
+				return nil, nil, fmt.Errorf("api request to %s failed: %w", displayURL, urlErr.Err)
+			}
 			return nil, nil, err
 		}
 		body, readErr := io.ReadAll(io.LimitReader(resp.Body, maxAPIResponseBytes+1))
@@ -796,7 +796,7 @@ func doAPIRequest(ctx context.Context, client *http.Client, req *http.Request) (
 			return nil, nil, readErr
 		}
 		if len(body) > maxAPIResponseBytes {
-			return nil, nil, fmt.Errorf("api response from %s exceeds the %d MiB per-page limit", req.URL.String(), maxAPIResponseBytes>>20)
+			return nil, nil, fmt.Errorf("api response from %s exceeds the %d MiB per-page limit", displayURL, maxAPIResponseBytes>>20)
 		}
 		retryable := strings.EqualFold(req.Method, http.MethodGet) && (resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode >= 500)
 		if !retryable || attempt == attempts {
@@ -944,6 +944,11 @@ func sampleColumnType(value any) string {
 	switch typed := value.(type) {
 	case bool:
 		return "boolean"
+	case json.Number:
+		if strings.ContainsAny(typed.String(), ".eE") {
+			return "float"
+		}
+		return "integer"
 	case float64:
 		if math.Trunc(typed) == typed {
 			return "integer"
@@ -964,15 +969,79 @@ func sampleColumnType(value any) string {
 	}
 }
 
-func newAPIHTTPRequest(ctx context.Context, renderer *jinja.Renderer, spec nativeAPISpec, method, requestURL string, params map[string]string) (*http.Request, error) {
+// sensitiveQueryParamNames are masked in displayed URLs regardless of the
+// asset's auth configuration, as defense in depth for credentials placed
+// directly in request.params or the URL instead of the auth block.
+var sensitiveQueryParamNames = map[string]bool{
+	"access_token":  true,
+	"api_key":       true,
+	"api_token":     true,
+	"apikey":        true,
+	"auth":          true,
+	"authorization": true,
+	"client_secret": true,
+	"key":           true,
+	"password":      true,
+	"secret":        true,
+	"sig":           true,
+	"signature":     true,
+	"token":         true,
+}
+
+// redactedURLString renders a URL for run output, error messages, and API
+// responses: the configured query auth parameter and well-known sensitive
+// parameter names keep their name but have their value replaced with
+// REDACTED (chosen over *** because it survives query encoding unmangled).
+// Run output is persisted in run history, so the real URL must never be
+// printed once auth has been applied to it.
+func redactedURLString(u *neturl.URL, authQueryParam string) string {
+	if u == nil {
+		return ""
+	}
+	query := u.Query()
+	changed := false
+	for name := range query {
+		if name == authQueryParam || sensitiveQueryParamNames[strings.ToLower(name)] {
+			query.Set(name, "REDACTED")
+			changed = true
+		}
+	}
+	if !changed {
+		return u.String()
+	}
+	clone := *u
+	clone.RawQuery = query.Encode()
+	return clone.String()
+}
+
+// apiAuthQueryParamName returns the query parameter that applyAPIAuth will
+// write the credential into, or "" when auth does not use the query string.
+func apiAuthQueryParamName(auth nativeAPIAuth) string {
+	switch strings.ToLower(strings.TrimSpace(auth.Type)) {
+	case "api_key", "apikey":
+	default:
+		return ""
+	}
+	switch strings.ToLower(strings.TrimSpace(auth.In)) {
+	case "query", "param", "params":
+		return strings.TrimSpace(auth.Name)
+	default:
+		return ""
+	}
+}
+
+// newAPIHTTPRequest builds the outgoing request and a redacted display URL.
+// Callers must print the display URL, never req.URL, because applyAPIAuth may
+// have written the credential into the query string.
+func newAPIHTTPRequest(ctx context.Context, renderer *jinja.Renderer, spec nativeAPISpec, method, requestURL string, params map[string]string) (*http.Request, string, error) {
 	finalURL, err := urlWithQueryParams(requestURL, params)
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 
 	body, hasBody, err := renderedRequestBody(renderer, spec.Request.Body)
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	var bodyReader io.Reader
 	if hasBody {
@@ -980,13 +1049,13 @@ func newAPIHTTPRequest(ctx context.Context, renderer *jinja.Renderer, spec nativ
 	}
 	req, err := http.NewRequestWithContext(ctx, method, finalURL, bodyReader)
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 
 	for key, value := range spec.Request.Headers {
 		renderedValue, renderErr := renderer.Render(value)
 		if renderErr != nil {
-			return nil, renderErr
+			return nil, "", renderErr
 		}
 		req.Header.Set(key, renderedValue)
 	}
@@ -994,9 +1063,9 @@ func newAPIHTTPRequest(ctx context.Context, renderer *jinja.Renderer, spec nativ
 		req.Header.Set("Content-Type", "application/json")
 	}
 	if err := applyAPIAuth(renderer, req, spec.Auth); err != nil {
-		return nil, err
+		return nil, "", err
 	}
-	return req, nil
+	return req, redactedURLString(req.URL, apiAuthQueryParamName(spec.Auth)), nil
 }
 
 func renderedRequestParams(renderer *jinja.Renderer, params map[string]any) (map[string]string, error) {
@@ -1345,23 +1414,6 @@ func sortedFieldNames(fields map[string]string) []string {
 	}
 	sort.Strings(names)
 	return names
-}
-
-func csvFieldValue(value any) string {
-	switch typed := value.(type) {
-	case nil:
-		return ""
-	case string:
-		return typed
-	case float64, bool:
-		return fmt.Sprint(typed)
-	default:
-		encoded, err := json.Marshal(typed)
-		if err != nil {
-			return fmt.Sprint(typed)
-		}
-		return string(encoded)
-	}
 }
 
 func recordsAtPath(input any, path string) []any {

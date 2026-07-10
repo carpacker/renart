@@ -32,7 +32,7 @@ Completed or substantially completed:
 - settings route files have been migrated to directory-style organization under `web/src/routes/_workspace/settings/`
 - `web/lib/api.ts` now has clearer internal helpers for text parsing, parsed text responses, and materialize stream handling
 - Package G groundwork now includes SQL document formatting and semantic schema/table/column highlighting in Monaco
-- Package G phase 1/2 draft now includes a sqlglot-backed parse-context API plus Monaco consumption of parser-derived table/alias/column ranges
+- Package G phase 1/2 draft now includes a parser-backed parse-context API plus Monaco consumption of parser-derived table/alias/column ranges
 - Package G phase 3 is partially underway with parser-backed unresolved-reference diagnostics, parser alias-aware hover/completion, and initial parser-scoped value suggestions
 
 Still active / remaining:

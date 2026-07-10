@@ -248,6 +248,14 @@ export type OpenAPIEndpointSuggestion = {
   summary?: string;
 };
 
+export type OpenAPIQueryParameterSuggestion = {
+  name: string;
+  description?: string;
+  type?: string;
+  required?: boolean;
+  values: string[];
+};
+
 export type OpenAPIRecordsPathSuggestion = {
   path: string;
   detail?: string;
@@ -261,6 +269,7 @@ export type OpenAPIResponsePathSuggestion = {
 export type OpenAPISuggestionsResult = {
   status: string;
   request_urls: OpenAPIEndpointSuggestion[];
+  query_parameters: OpenAPIQueryParameterSuggestion[];
   records_paths: OpenAPIRecordsPathSuggestion[];
   response_paths: OpenAPIResponsePathSuggestion[];
   error?: string;

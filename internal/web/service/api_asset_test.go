@@ -1,6 +1,7 @@
 package service
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -236,7 +237,7 @@ parameters:
 func TestInferAPIAssetSamplesResponseColumnsAndRecordPaths(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		assert.Equal(t, "/search", r.URL.Path)
-		_, _ = w.Write([]byte(`{"data":[{"id":1,"active":true,"created_at":"2026-07-09T08:00:00Z"}]}`))
+		_, _ = w.Write([]byte(`{"data":[{"id":1,"active":true,"score":10.0,"created_at":"2026-07-09T08:00:00Z"}]}`))
 	}))
 	defer server.Close()
 
@@ -281,9 +282,12 @@ parameters:
 	assert.Equal(t, "boolean", byName["active"])
 	assert.Equal(t, "timestamp", byName["created_at"])
 	assert.Equal(t, "integer", byName["id"])
+	// A whole-valued float literal must stay float: `10.0` samples must not
+	// narrow the column to integer.
+	assert.Equal(t, "float", byName["score"])
 }
 
-func TestWriteAPIAssetCSVValidatesResponseAgainstOpenAPI(t *testing.T) {
+func TestWriteAPIAssetJSONLValidatesResponseAgainstOpenAPI(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/openapi.yaml":
@@ -320,13 +324,13 @@ paths:
 		Request:  nativeAPIRequest{URL: server.URL + "/player/Hikaru", Method: http.MethodGet},
 		Response: nativeAPIResponse{RecordsPath: "data"},
 	}
-	_, err := writeAPIAssetCSV(context.Background(), jinja.NewRendererWithYesterday("quickstart", "test"), spec, filepath.Join(t.TempDir(), "players.csv"), nil)
+	_, err := writeAPIAssetJSONL(context.Background(), jinja.NewRendererWithYesterday("quickstart", "test"), spec, filepath.Join(t.TempDir(), "players.jsonl"), nil)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "api response does not match OpenAPI schema")
 	assert.Contains(t, err.Error(), "$.data.rating expected integer")
 }
 
-func TestWriteAPIAssetCSVWarnsByDefaultOnOpenAPIMismatch(t *testing.T) {
+func TestWriteAPIAssetJSONLWarnsByDefaultOnOpenAPIMismatch(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/openapi.yaml":
@@ -365,7 +369,7 @@ paths:
 		Request:  nativeAPIRequest{URL: server.URL + "/players"},
 		Response: nativeAPIResponse{RecordsPath: "data"},
 	}
-	count, err := writeAPIAssetCSV(ctx, jinja.NewRendererWithYesterday("quickstart", "test"), spec, filepath.Join(t.TempDir(), "players.csv"), &output)
+	count, err := writeAPIAssetJSONL(ctx, jinja.NewRendererWithYesterday("quickstart", "test"), spec, filepath.Join(t.TempDir(), "players.jsonl"), &output)
 	require.NoError(t, err)
 	assert.Equal(t, 1, count)
 	assert.Contains(t, output.String(), "WARNING:")
@@ -373,16 +377,16 @@ paths:
 	assert.Contains(t, warnings.snapshot()[0], "expected integer")
 }
 
-func TestWriteAPIAssetCSVRejectsInvalidOpenAPIValidationMode(t *testing.T) {
+func TestWriteAPIAssetJSONLRejectsInvalidOpenAPIValidationMode(t *testing.T) {
 	spec := nativeAPISpec{
 		OpenAPI: nativeAPIOpenAPI{Validation: "sometimes"},
 		Request: nativeAPIRequest{URL: "https://api.example.com/items"},
 	}
-	_, err := writeAPIAssetCSV(context.Background(), jinja.NewRendererWithYesterday("quickstart", "test"), spec, filepath.Join(t.TempDir(), "items.csv"), nil)
+	_, err := writeAPIAssetJSONL(context.Background(), jinja.NewRendererWithYesterday("quickstart", "test"), spec, filepath.Join(t.TempDir(), "items.jsonl"), nil)
 	require.ErrorContains(t, err, "openapi.validation must be off, warn, or error")
 }
 
-func TestWriteAPIAssetCSVRendersExecutionWindowParams(t *testing.T) {
+func TestWriteAPIAssetJSONLRendersExecutionWindowParams(t *testing.T) {
 	start := time.Date(2026, 7, 9, 8, 0, 0, 0, time.UTC)
 	end := time.Date(2026, 7, 9, 9, 0, 0, 0, time.UTC)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -403,12 +407,12 @@ func TestWriteAPIAssetCSVRendersExecutionWindowParams(t *testing.T) {
 		},
 		Response: nativeAPIResponse{RecordsPath: "data"},
 	}
-	count, err := writeAPIAssetCSV(context.Background(), renderer, spec, filepath.Join(t.TempDir(), "records.csv"), nil)
+	count, err := writeAPIAssetJSONL(context.Background(), renderer, spec, filepath.Join(t.TempDir(), "records.jsonl"), nil)
 	require.NoError(t, err)
 	assert.Equal(t, 1, count)
 }
 
-func TestWriteAPIAssetCSVAllowsNullOptionalOpenAPIFields(t *testing.T) {
+func TestWriteAPIAssetJSONLAllowsNullOptionalOpenAPIFields(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/openapi.yaml":
@@ -444,23 +448,66 @@ paths:
 	}))
 	defer server.Close()
 
-	csvPath := filepath.Join(t.TempDir(), "alerts.csv")
+	jsonlPath := filepath.Join(t.TempDir(), "alerts.jsonl")
 	spec := nativeAPISpec{
 		OpenAPI:  nativeAPIOpenAPI{URL: server.URL + "/openapi.yaml"},
 		Request:  nativeAPIRequest{URL: server.URL + "/alerts", Method: http.MethodGet},
 		Response: nativeAPIResponse{RecordsPath: "features"},
 	}
-	count, err := writeAPIAssetCSV(context.Background(), jinja.NewRendererWithYesterday("quickstart", "test"), spec, csvPath, nil)
+	count, err := writeAPIAssetJSONL(context.Background(), jinja.NewRendererWithYesterday("quickstart", "test"), spec, jsonlPath, nil)
 	require.NoError(t, err)
 	assert.Equal(t, 1, count)
 
-	content, err := os.ReadFile(csvPath)
+	content, err := os.ReadFile(jsonlPath)
 	require.NoError(t, err)
 	assert.Contains(t, string(content), "properties")
-	assert.Contains(t, string(content), `""description"":null`)
+	assert.Contains(t, string(content), `"description":null`)
 }
 
-func TestWriteAPIAssetCSVSupportsRequestBodyAndAuth(t *testing.T) {
+func TestWriteAPIAssetJSONLPreservesTopLevelNullsForSling(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"features":[{"id":"alert-1","geometry":null,"properties":{"severity":"Severe"}},{"id":"alert-2","properties":{"severity":"Moderate"}}]}`))
+	}))
+	defer server.Close()
+
+	jsonlPath := filepath.Join(t.TempDir(), "alerts.jsonl")
+	spec := nativeAPISpec{
+		Request: nativeAPIRequest{URL: server.URL},
+		Response: nativeAPIResponse{
+			RecordsPath: "features",
+			Fields: map[string]string{
+				"geometry":   "geometry",
+				"id":         "id",
+				"properties": "properties",
+			},
+		},
+	}
+	count, err := writeAPIAssetJSONL(context.Background(), jinja.NewRendererWithYesterday("quickstart", "test"), spec, jsonlPath, nil)
+	require.NoError(t, err)
+	assert.Equal(t, 2, count)
+
+	file, err := os.Open(jsonlPath)
+	require.NoError(t, err)
+	defer func() { _ = file.Close() }()
+	records := make([]map[string]any, 0, 2)
+	scanner := bufio.NewScanner(file)
+	for scanner.Scan() {
+		var record map[string]any
+		require.NoError(t, json.Unmarshal(scanner.Bytes(), &record))
+		records = append(records, record)
+	}
+	require.NoError(t, scanner.Err())
+	require.Len(t, records, 2)
+	geometry, exists := records[0]["geometry"]
+	assert.True(t, exists)
+	assert.Nil(t, geometry, "an explicit source null must remain JSON null")
+	geometry, exists = records[1]["geometry"]
+	assert.True(t, exists)
+	assert.Nil(t, geometry, "a missing mapped column must remain JSON null")
+	assert.Equal(t, map[string]any{"severity": "Severe"}, records[0]["properties"])
+}
+
+func TestWriteAPIAssetJSONLSupportsRequestBodyAndAuth(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		assert.Equal(t, http.MethodPost, r.Method)
 		assert.Equal(t, "Bearer test-token", r.Header.Get("Authorization"))
@@ -492,17 +539,67 @@ func TestWriteAPIAssetCSVSupportsRequestBodyAndAuth(t *testing.T) {
 		},
 	}
 
-	csvPath := filepath.Join(t.TempDir(), "people.csv")
-	count, err := writeAPIAssetCSV(context.Background(), jinja.NewRendererWithYesterday("quickstart", "test"), spec, csvPath, nil)
+	jsonlPath := filepath.Join(t.TempDir(), "people.jsonl")
+	count, err := writeAPIAssetJSONL(context.Background(), jinja.NewRendererWithYesterday("quickstart", "test"), spec, jsonlPath, nil)
 	require.NoError(t, err)
 	assert.Equal(t, 1, count)
-	content, err := os.ReadFile(csvPath)
+	content, err := os.ReadFile(jsonlPath)
 	require.NoError(t, err)
-	assert.Contains(t, string(content), "id,name")
-	assert.Contains(t, string(content), "1,Ada")
+	assert.JSONEq(t, `{"id":1,"name":"Ada"}`, string(content))
 }
 
-func TestWriteAPIAssetCSVPaginatesByPageNumber(t *testing.T) {
+// Run output is persisted in run history, so URLs printed there must never
+// carry query-string credentials — neither the configured auth parameter nor
+// well-known sensitive names placed directly in request.params.
+func TestWriteAPIAssetJSONLRedactsQueryCredentialsInOutput(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, "secret-token", r.URL.Query().Get("api_token"), "the real request must carry the credential")
+		assert.Equal(t, "param-secret", r.URL.Query().Get("access_token"))
+		_, _ = w.Write([]byte(`{"data":[{"id":1}]}`))
+	}))
+	defer server.Close()
+
+	spec := nativeAPISpec{
+		Request: nativeAPIRequest{
+			URL:    server.URL + "/deals",
+			Params: map[string]any{"access_token": "param-secret", "cursor_hint": "keep-me"},
+		},
+		Auth:     nativeAPIAuth{Type: "api_key", Name: "api_token", Value: "secret-token", In: "query"},
+		Response: nativeAPIResponse{RecordsPath: "data"},
+	}
+
+	var output bytes.Buffer
+	count, err := writeAPIAssetJSONL(context.Background(), jinja.NewRendererWithYesterday("quickstart", "test"), spec, filepath.Join(t.TempDir(), "deals.jsonl"), &output)
+	require.NoError(t, err)
+	assert.Equal(t, 1, count)
+	assert.Contains(t, output.String(), "api_token=REDACTED")
+	assert.Contains(t, output.String(), "access_token=REDACTED")
+	assert.Contains(t, output.String(), "cursor_hint=keep-me")
+	assert.NotContains(t, output.String(), "secret-token")
+	assert.NotContains(t, output.String(), "param-secret")
+}
+
+// Error messages surface in the UI and run history like output does; a failed
+// request must not echo query credentials back through the error string.
+func TestWriteAPIAssetJSONLRedactsQueryCredentialsInErrors(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		http.Error(w, "nope", http.StatusForbidden)
+	}))
+	defer server.Close()
+
+	spec := nativeAPISpec{
+		Request:  nativeAPIRequest{URL: server.URL + "/deals"},
+		Auth:     nativeAPIAuth{Type: "api_key", Name: "api_token", Value: "secret-token", In: "query"},
+		Response: nativeAPIResponse{RecordsPath: "data"},
+	}
+
+	_, err := writeAPIAssetJSONL(context.Background(), jinja.NewRendererWithYesterday("quickstart", "test"), spec, filepath.Join(t.TempDir(), "deals.jsonl"), nil)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "api_token=REDACTED")
+	assert.NotContains(t, err.Error(), "secret-token")
+}
+
+func TestWriteAPIAssetJSONLPaginatesByPageNumber(t *testing.T) {
 	requestedPages := make([]string, 0, 2)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		page := r.URL.Query().Get("page")
@@ -524,18 +621,18 @@ func TestWriteAPIAssetCSVPaginatesByPageNumber(t *testing.T) {
 		Pagination: nativeAPIPagination{Type: "page_number", PageParam: "page", StartPage: 1, HasMorePath: "pagination.has_next_page", MaxPages: 5},
 	}
 
-	csvPath := filepath.Join(t.TempDir(), "items.csv")
-	count, err := writeAPIAssetCSV(context.Background(), jinja.NewRendererWithYesterday("quickstart", "test"), spec, csvPath, nil)
+	jsonlPath := filepath.Join(t.TempDir(), "items.jsonl")
+	count, err := writeAPIAssetJSONL(context.Background(), jinja.NewRendererWithYesterday("quickstart", "test"), spec, jsonlPath, nil)
 	require.NoError(t, err)
 	assert.Equal(t, 2, count)
 	assert.Equal(t, []string{"1", "2"}, requestedPages)
-	content, err := os.ReadFile(csvPath)
+	content, err := os.ReadFile(jsonlPath)
 	require.NoError(t, err)
 	assert.Contains(t, string(content), "1")
 	assert.Contains(t, string(content), "2")
 }
 
-func TestWriteAPIAssetCSVPaginatesByLinkHeader(t *testing.T) {
+func TestWriteAPIAssetJSONLPaginatesByLinkHeader(t *testing.T) {
 	serverURL := ""
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/items" {
@@ -561,11 +658,11 @@ func TestWriteAPIAssetCSVPaginatesByLinkHeader(t *testing.T) {
 		Pagination: nativeAPIPagination{Type: "next_url", NextURLHeader: "Link", MaxPages: 5},
 	}
 
-	csvPath := filepath.Join(t.TempDir(), "items.csv")
-	count, err := writeAPIAssetCSV(context.Background(), jinja.NewRendererWithYesterday("quickstart", "test"), spec, csvPath, nil)
+	jsonlPath := filepath.Join(t.TempDir(), "items.jsonl")
+	count, err := writeAPIAssetJSONL(context.Background(), jinja.NewRendererWithYesterday("quickstart", "test"), spec, jsonlPath, nil)
 	require.NoError(t, err)
 	assert.Equal(t, 2, count)
-	content, err := os.ReadFile(csvPath)
+	content, err := os.ReadFile(jsonlPath)
 	require.NoError(t, err)
 	assert.Contains(t, string(content), "1")
 	assert.Contains(t, string(content), "2")
@@ -621,10 +718,92 @@ parameters:
 	require.NoError(t, err)
 	assert.Contains(t, string(output), "Fetched 1 records from API asset quickstart.players")
 	assert.Contains(t, string(output), "uv tool run --no-config --python 3.11 --from sling-test-package sling run --src-stream file://")
+	assert.Contains(t, string(output), ".jsonl")
+	assert.Contains(t, string(output), "--src-options "+apiJSONLSourceOptions)
 	assert.Contains(t, string(output), "--tgt-conn duckdb:///")
 	assert.Contains(t, string(output), "/duckdb-files/chess.duckdb")
 	assert.Contains(t, string(output), "--tgt-object quickstart.players")
 	assert.NotContains(t, string(output), "--mode full-refresh")
+}
+
+func TestSlingIntegrationMergesNullableAPIJSONColumn(t *testing.T) {
+	if os.Getenv("RENART_RUN_SLING_INTEGRATION") != "1" {
+		t.Skip("set RENART_RUN_SLING_INTEGRATION=1 to run the real Sling integration")
+	}
+
+	requestCount := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		requestCount++
+		if requestCount == 1 {
+			_, _ = w.Write([]byte(`{"features":[{"id":"alert-1","geometry":{"type":"Point","coordinates":[1,2]}},{"id":"alert-2","geometry":{"type":"Point","coordinates":[3,4]}}]}`))
+			return
+		}
+		_, _ = w.Write([]byte(`{"features":[{"id":"alert-1","geometry":null},{"id":"alert-2","geometry":null}]}`))
+	}))
+	defer server.Close()
+
+	workspaceRoot := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(workspaceRoot, ".git"), 0o755))
+	require.NoError(t, os.MkdirAll(filepath.Join(workspaceRoot, "duckdb-files"), 0o755))
+	pipelineRoot := filepath.Join(workspaceRoot, "quickstart")
+	require.NoError(t, os.MkdirAll(filepath.Join(pipelineRoot, "assets"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(workspaceRoot, ".bruin.yml"), []byte("environments:\n  default:\n    connections:\n      duckdb:\n        - name: duckdb-default\n          path: duckdb-files/test.duckdb\n"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(pipelineRoot, "pipeline.yml"), []byte("name: quickstart\ndefault_connections:\n  duckdb: duckdb-default\n"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(pipelineRoot, "assets/alerts.asset.yml"), []byte(`name: quickstart.alerts
+type: api
+materialization:
+  type: table
+  strategy: merge
+parameters:
+  request:
+    url: `+server.URL+`
+  response:
+    records_path: features
+columns:
+  - name: id
+    type: string
+    primary_key: true
+  - name: geometry
+    type: json
+`), 0o644))
+
+	executor := NewHybridBruinExecutor(
+		workspaceRoot,
+		"bruin",
+		nil,
+		func() *pipeline.Builder { return NewRenartPipelineBuilder(afero.NewOsFs()) },
+	)
+	request := RunAssetRequest{AssetPath: "quickstart/assets/alerts.asset.yml", Environment: "default"}
+	fullRefreshRequest := request
+	fullRefreshRequest.FullRefresh = true
+	firstOutput, err := executor.RunAsset(context.Background(), fullRefreshRequest, nil)
+	require.NoError(t, err, string(firstOutput))
+
+	databasePath := filepath.Join(workspaceRoot, "duckdb-files/test.duckdb")
+	queryTarget := func() string {
+		var queryOutput bytes.Buffer
+		commandName, commandArgs, commandErr := loadCommand(context.Background(), []string{
+			"run",
+			"--src-conn", "duckdb:///" + filepath.ToSlash(databasePath),
+			"--src-stream", "select id, geometry from quickstart.alerts order by id",
+			"--stdout",
+		}, &queryOutput)
+		require.NoError(t, commandErr)
+		queryWriter := &streamCaptureWriter{buffer: &queryOutput}
+		command := newStreamingCommand(context.Background(), commandName, commandArgs, workspaceRoot, queryWriter)
+		require.NoError(t, runStreamingCommand(command, queryWriter), queryOutput.String())
+		return queryOutput.String()
+	}
+
+	initialRows := queryTarget()
+	assert.Contains(t, initialRows, `""type"":""Point""`, "nested geometry must remain a JSON field")
+
+	secondOutput, err := executor.RunAsset(context.Background(), request, nil)
+	require.NoError(t, err, string(secondOutput))
+	assert.Equal(t, 2, requestCount)
+	mergedRows := queryTarget()
+	assert.Contains(t, mergedRows, "alert-1")
+	assert.Contains(t, mergedRows, "alert-2")
 }
 
 func containsSampleRecordsPath(paths []APIRecordsPathSample, want string) bool {

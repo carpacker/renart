@@ -79,9 +79,26 @@ export function spliceParametersText(content: string, editedBlock: string): stri
  * not useful input for server-side column inference yet.
  */
 export function hasIncompletePlainYAMLKeyLine(content: string): boolean {
+  // Lines inside a block scalar (`key: |` / `key: >`) are literal content, not
+  // mapping keys — a bare word there must not read as an incomplete key.
+  let blockScalarIndent = -1;
   return content.split("\n").some((line) => {
     const trimmed = line.trim();
-    if (trimmed === "" || trimmed.startsWith("#") || trimmed.startsWith("-")) {
+    if (trimmed === "") {
+      return false;
+    }
+    const indent = line.length - line.trimStart().length;
+    if (blockScalarIndent >= 0) {
+      if (indent > blockScalarIndent) {
+        return false;
+      }
+      blockScalarIndent = -1;
+    }
+    if (/^[^#\s][^:]*:\s*[|>][+-]?\d*\s*(#.*)?$/.test(trimmed)) {
+      blockScalarIndent = indent;
+      return false;
+    }
+    if (trimmed.startsWith("#") || trimmed.startsWith("-")) {
       return false;
     }
     if (trimmed.includes(":")) {

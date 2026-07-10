@@ -28,15 +28,17 @@ type openAPIDocumentCacheEntry struct {
 }
 
 type openAPIDocument struct {
-	OpenAPI     string                                 `yaml:"openapi"`
-	Swagger     string                                 `yaml:"swagger"`
-	Servers     []openAPIServer                        `yaml:"servers"`
-	Host        string                                 `yaml:"host"`     // swagger 2.0
-	BasePath    string                                 `yaml:"basePath"` // swagger 2.0
-	Schemes     []string                               `yaml:"schemes"`  // swagger 2.0
-	Paths       map[string]map[string]openAPIOperation `yaml:"paths"`
-	Components  openAPIComponents                      `yaml:"components"`
-	Definitions map[string]*openAPISchema              `yaml:"definitions"`
+	OpenAPI     string                     `yaml:"openapi"`
+	Swagger     string                     `yaml:"swagger"`
+	Servers     []openAPIServer            `yaml:"servers"`
+	Host        string                     `yaml:"host"`     // swagger 2.0
+	BasePath    string                     `yaml:"basePath"` // swagger 2.0
+	Schemes     []string                   `yaml:"schemes"`  // swagger 2.0
+	Paths       map[string]openAPIPathItem `yaml:"paths"`
+	Components  openAPIComponents          `yaml:"components"`
+	Definitions map[string]*openAPISchema  `yaml:"definitions"`
+	// Parameters holds Swagger 2.0 top-level reusable parameters.
+	Parameters map[string]*openAPIParameter `yaml:"parameters"`
 	// Responses holds swagger 2.0 top-level shared responses (`#/responses/...`).
 	Responses map[string]*openAPIResponse `yaml:"responses"`
 }
@@ -47,7 +49,8 @@ type openAPIServer struct {
 }
 
 type openAPIComponents struct {
-	Schemas map[string]*openAPISchema `yaml:"schemas"`
+	Schemas    map[string]*openAPISchema    `yaml:"schemas"`
+	Parameters map[string]*openAPIParameter `yaml:"parameters"`
 	// Responses holds OpenAPI 3.x shared responses (`#/components/responses/...`).
 	Responses map[string]*openAPIResponse `yaml:"responses"`
 }
@@ -56,27 +59,53 @@ type openAPIOperation struct {
 	OperationID string                     `yaml:"operationId"`
 	Summary     string                     `yaml:"summary"`
 	Description string                     `yaml:"description"`
+	Parameters  []openAPIParameter         `yaml:"parameters"`
 	Responses   map[string]openAPIResponse `yaml:"responses"`
 }
 
-// UnmarshalYAML tolerates OpenAPI path-item keys that are not operations. A path
-// item mixes HTTP methods (get/post/…) with `parameters` (a sequence),
-// `servers` (a sequence), and `$ref`/`summary`/`description` (scalars). Those
-// share the `map[string]openAPIOperation` value type, so without this a
-// path-level `parameters:` list fails the whole document with "cannot unmarshal
-// !!seq into service.openAPIOperation". Non-mapping nodes decode into an empty
-// operation and are ignored by the method/operationId lookup.
-func (o *openAPIOperation) UnmarshalYAML(node *yaml.Node) error {
+type openAPIPathItem struct {
+	Operations map[string]openAPIOperation
+	Parameters []openAPIParameter
+}
+
+// UnmarshalYAML separates path-level parameters from HTTP operations while
+// ignoring the other legal path-item fields ($ref, servers, summary, ...).
+func (item *openAPIPathItem) UnmarshalYAML(node *yaml.Node) error {
+	item.Operations = map[string]openAPIOperation{}
 	if node.Kind != yaml.MappingNode {
 		return nil
 	}
-	type rawOperation openAPIOperation
-	var raw rawOperation
-	if err := node.Decode(&raw); err != nil {
-		return err
+	for index := 0; index+1 < len(node.Content); index += 2 {
+		key := strings.ToLower(strings.TrimSpace(node.Content[index].Value))
+		value := node.Content[index+1]
+		if key == "parameters" {
+			if err := value.Decode(&item.Parameters); err != nil {
+				return err
+			}
+			continue
+		}
+		if !isOpenAPIMethod(key) {
+			continue
+		}
+		var operation openAPIOperation
+		if err := value.Decode(&operation); err != nil {
+			return err
+		}
+		item.Operations[key] = operation
 	}
-	*o = openAPIOperation(raw)
 	return nil
+}
+
+type openAPIParameter struct {
+	Ref         string         `yaml:"$ref"`
+	Name        string         `yaml:"name"`
+	In          string         `yaml:"in"`
+	Description string         `yaml:"description"`
+	Required    bool           `yaml:"required"`
+	Type        string         `yaml:"type"` // Swagger 2.0
+	Enum        []any          `yaml:"enum"` // Swagger 2.0
+	Items       *openAPISchema `yaml:"items"`
+	Schema      *openAPISchema `yaml:"schema"`
 }
 
 type openAPIResponse struct {
@@ -101,6 +130,7 @@ type openAPISchema struct {
 	AnyOf                []*openAPISchema          `yaml:"anyOf"`
 	OneOf                []*openAPISchema          `yaml:"oneOf"`
 	AdditionalProperties any                       `yaml:"additionalProperties"`
+	Enum                 []any                     `yaml:"enum"`
 }
 
 type apiOpenAPIValidator struct {
@@ -290,6 +320,11 @@ func (doc *openAPIDocument) responseSchema(spec nativeAPISpec, requestURL string
 }
 
 func (doc *openAPIDocument) operation(spec nativeAPISpec, requestURL string) (*openAPIOperation, error) {
+	operation, _, err := doc.operationMatch(spec, requestURL)
+	return operation, err
+}
+
+func (doc *openAPIDocument) operationMatch(spec nativeAPISpec, requestURL string) (*openAPIOperation, *openAPIPathItem, error) {
 	operationID := strings.TrimSpace(spec.OpenAPI.OperationID)
 	method := strings.ToLower(strings.TrimSpace(spec.OpenAPI.Method))
 	if method == "" {
@@ -301,17 +336,17 @@ func (doc *openAPIDocument) operation(spec nativeAPISpec, requestURL string) (*o
 	method = strings.ToLower(method)
 
 	if operationID != "" {
-		for _, methods := range doc.Paths {
-			for candidateMethod, op := range methods {
+		for _, pathItem := range doc.Paths {
+			for candidateMethod, op := range pathItem.Operations {
 				if !isOpenAPIMethod(candidateMethod) {
 					continue
 				}
 				if op.OperationID == operationID {
-					return &op, nil
+					return &op, &pathItem, nil
 				}
 			}
 		}
-		return nil, fmt.Errorf("OpenAPI operation_id %q was not found", operationID)
+		return nil, nil, fmt.Errorf("OpenAPI operation_id %q was not found", operationID)
 	}
 
 	path := strings.TrimSpace(spec.OpenAPI.Path)
@@ -322,27 +357,27 @@ func (doc *openAPIDocument) operation(spec nativeAPISpec, requestURL string) (*o
 		path = requestPath(spec.Request.URL)
 	}
 	if path == "" {
-		return nil, errors.New("OpenAPI path could not be inferred from request.url")
+		return nil, nil, errors.New("OpenAPI path could not be inferred from request.url")
 	}
 
 	for _, candidatePath := range doc.operationPathCandidates(path) {
-		if methods, ok := doc.Paths[candidatePath]; ok {
-			if op, ok := methods[method]; ok {
-				return &op, nil
+		if pathItem, ok := doc.Paths[candidatePath]; ok {
+			if op, ok := pathItem.Operations[method]; ok {
+				return &op, &pathItem, nil
 			}
 		}
 	}
 	for _, candidatePath := range doc.operationPathCandidates(path) {
-		for template, methods := range doc.Paths {
+		for template, pathItem := range doc.Paths {
 			if !openAPIPathMatches(template, candidatePath) {
 				continue
 			}
-			if op, ok := methods[method]; ok {
-				return &op, nil
+			if op, ok := pathItem.Operations[method]; ok {
+				return &op, &pathItem, nil
 			}
 		}
 	}
-	return nil, fmt.Errorf("OpenAPI operation %s %s was not found", strings.ToUpper(method), path)
+	return nil, nil, fmt.Errorf("OpenAPI operation %s %s was not found", strings.ToUpper(method), path)
 }
 
 func (doc *openAPIDocument) operationPathCandidates(path string) []string {

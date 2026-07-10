@@ -110,9 +110,9 @@ type check and execution surface the incomplete state until it is resolved.
 
 ## 6. Embedded engines & memory
 
-SQL intelligence (parse/lineage/validation) runs on an embedded wasm build of
-sqlglot (`sqlintelligence`, "polyglot" engine); Python intelligence runs ty as
-wasm (`pyintelligence`); SQL formatting is a wasm formatter (`sqlformat`).
+SQL intelligence (parse/lineage/validation) and formatting run on the embedded
+Polyglot SQL wasm engine (`sqlintelligence`, `sqlformat`); Python intelligence
+runs ty as wasm (`pyintelligence`).
 All run under wazero with an on-disk compilation cache (`renart warm`
 pre-warms it). RSS is dominated by these engines; retiring the interpreter
 fallback + the disk cache brought idle memory to roughly 360 MB.

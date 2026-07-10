@@ -47,9 +47,8 @@ type NotebookService struct {
 	deps  NotebookDependencies
 	store *notebook.SessionStore
 
-	// SQL parser (embedded Python/sqlglot) is expensive to start (~hundreds of
-	// ms), so it is created lazily and reused across every load and run instead
-	// of being spun up per operation.
+	// Bruin's SQL parser is created lazily and reused across every load and run
+	// instead of being spun up per operation.
 	parserMu     sync.Mutex
 	cachedParser *sqlparser.SQLParser
 

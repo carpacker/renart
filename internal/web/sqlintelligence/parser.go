@@ -1,10 +1,5 @@
 package sqlintelligence
 
-import (
-	"os"
-	"strings"
-)
-
 type Schema map[string]map[string]string
 
 type SchemaColumnSourceMethods map[string]map[string][]string
@@ -81,8 +76,5 @@ type parseContextResponse struct {
 }
 
 func ParseContextWithSchema(query, dialect string, schema Schema, columnSourceMethods ...SchemaColumnSourceMethods) (*ParseContext, error) {
-	if !strings.EqualFold(os.Getenv("RENART_SQL_PARSER"), "python") {
-		return ParseContextWithSchemaPolyglot(query, dialect, schema, columnSourceMethods...)
-	}
-	return ParseContextWithSchemaPython(query, dialect, schema, columnSourceMethods...)
+	return ParseContextWithSchemaPolyglot(query, dialect, schema, columnSourceMethods...)
 }

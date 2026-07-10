@@ -36,13 +36,13 @@ paths:
 		t.Fatalf("unmarshal failed: %v", err)
 	}
 
-	methods, ok := doc.Paths["/alerts"]
+	pathItem, ok := doc.Paths["/alerts"]
 	if !ok {
 		t.Fatal("path /alerts was not parsed")
 	}
-	get, ok := methods["get"]
+	get, ok := pathItem.Operations["get"]
 	if !ok {
-		t.Fatalf("get operation missing; parsed keys: %+v", methods)
+		t.Fatalf("get operation missing; parsed keys: %+v", pathItem.Operations)
 	}
 	if get.OperationID != "listAlerts" {
 		t.Fatalf("operationId = %q, want listAlerts", get.OperationID)
@@ -51,8 +51,11 @@ paths:
 		t.Fatal("get responses were not parsed")
 	}
 
-	// The non-operation keys decoded into empty operations; the lookup ignores
-	// them because they are not HTTP methods.
+	if len(pathItem.Parameters) != 2 || pathItem.Parameters[1].Name != "area" {
+		t.Fatalf("path parameters were not preserved: %+v", pathItem.Parameters)
+	}
+
+	// Non-operation keys stay out of the operation map.
 	if isOpenAPIMethod("parameters") || isOpenAPIMethod("summary") {
 		t.Fatal("parameters/summary must not count as OpenAPI methods")
 	}

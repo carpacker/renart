@@ -155,6 +155,107 @@ parameters:
     }
   });
 
+  test("OpenAPI request URL completes query parameter names and enum values", async ({ liveApp, page }) => {
+    const specServer = await startRecordsPathOpenAPIServer();
+    try {
+      const requestURL = "https://api.example.com/players/Ada?";
+      const editorContent = `parameters:
+  openapi:
+    url: ${specServer.url}/openapi.yaml
+  request:
+    url: ${requestURL}
+    method: GET
+  response:
+    records_path: data
+`;
+      const assetContent = `name: analytics.players_api
+type: api
+
+${editorContent}`;
+      await writeFile(join(liveApp.workspaceDir, apiAssetPath), assetContent, "utf8");
+      await waitForWorkspaceAssetContent(page, liveApp.baseURL, apiAssetId, specServer.url);
+
+      const suggestionsURL = new URL("/api/api-assets/openapi-suggestions", liveApp.baseURL);
+      suggestionsURL.searchParams.set("openapi_url", `${specServer.url}/openapi.yaml`);
+      suggestionsURL.searchParams.set("request_url", requestURL);
+      suggestionsURL.searchParams.set("method", "GET");
+      const response = await page.request.get(suggestionsURL.toString());
+      expect(response.ok()).toBe(true);
+      const body = (await response.json()) as {
+        query_parameters?: Array<{ name: string; values: string[] }>;
+      };
+      expect(body.query_parameters).toContainEqual(
+        expect.objectContaining({ name: "area", values: expect.arrayContaining(["CA", "NY"]) }),
+      );
+
+      await page.goto(`${liveApp.baseURL}/pipelines/${pipelineId}/assets/${apiAssetId}/code`);
+      await expect(page.locator(".monaco-editor").first()).toBeVisible({ timeout: 15000 });
+      await setEditorContentAtYamlField(page, editorContent, requestURL, "?");
+      await page.keyboard.press("ControlOrMeta+Space");
+
+      let suggestWidget = page.locator(".suggest-widget.visible").first();
+      await expect(suggestWidget.getByText("area", { exact: true })).toBeVisible({ timeout: 15000 });
+      await suggestWidget.getByText("area", { exact: true }).click();
+      await expect.poll(() => monacoEditorValue(page)).toContain(`${requestURL}area=`);
+
+      await page.keyboard.press("Escape");
+      await page.keyboard.press("ControlOrMeta+Space");
+      suggestWidget = page.locator(".suggest-widget.visible").first();
+      await expect(suggestWidget.getByText("CA", { exact: true })).toBeVisible({ timeout: 15000 });
+      await suggestWidget.getByText("CA", { exact: true }).click();
+      await expect.poll(() => monacoEditorValue(page)).toContain(`${requestURL}area=CA`);
+
+      await page.keyboard.insertText("&");
+      await page.keyboard.press("ControlOrMeta+Space");
+      suggestWidget = page.locator(".suggest-widget.visible").first();
+      await expect(suggestWidget.getByText("severity", { exact: true })).toBeVisible({ timeout: 15000 });
+      await expect(suggestWidget.getByText("area", { exact: true })).toHaveCount(0);
+    } finally {
+      await new Promise<void>((resolve) => specServer.server.close(() => resolve()));
+    }
+  });
+
+  test("OpenAPI request URL completes partial and comma-separated query values", async ({ liveApp, page }) => {
+    const specServer = await startRecordsPathOpenAPIServer();
+    try {
+      const requestURL = "https://api.example.com/players/Ada?area=C";
+      const editorContent = `parameters:
+  openapi:
+    url: ${specServer.url}/openapi.yaml
+  request:
+    url: "${requestURL}"
+    method: GET
+  response:
+    records_path: data
+`;
+      const assetContent = `name: analytics.players_api
+type: api
+
+${editorContent}`;
+      await writeFile(join(liveApp.workspaceDir, apiAssetPath), assetContent, "utf8");
+      await waitForWorkspaceAssetContent(page, liveApp.baseURL, apiAssetId, specServer.url);
+
+      await page.goto(`${liveApp.baseURL}/pipelines/${pipelineId}/assets/${apiAssetId}/code`);
+      await expect(page.locator(".monaco-editor").first()).toBeVisible({ timeout: 15000 });
+      await setEditorContentAtYamlField(page, editorContent, requestURL, "area=C");
+
+      await page.keyboard.press("ControlOrMeta+Space");
+      let suggestWidget = page.locator(".suggest-widget.visible").first();
+      await expect(suggestWidget.getByText("CA", { exact: true })).toBeVisible({ timeout: 15000 });
+      await suggestWidget.getByText("CA", { exact: true }).click();
+      await expect.poll(() => monacoEditorValue(page)).toContain("?area=CA");
+
+      await page.keyboard.insertText(",N");
+      await page.keyboard.press("ControlOrMeta+Space");
+      suggestWidget = page.locator(".suggest-widget.visible").first();
+      await expect(suggestWidget.getByText("NY", { exact: true })).toBeVisible({ timeout: 15000 });
+      await suggestWidget.getByText("NY", { exact: true }).click();
+      await expect.poll(() => monacoEditorValue(page)).toContain("?area=CA,NY");
+    } finally {
+      await new Promise<void>((resolve) => specServer.server.close(() => resolve()));
+    }
+  });
+
   test("OpenAPI records_path suggestions complete inside an existing quoted value", async ({ liveApp, page }) => {
     const specServer = await startRecordsPathOpenAPIServer();
     try {
@@ -530,6 +631,13 @@ async function replaceEditorContent(page: import("@playwright/test").Page, conte
   await page.keyboard.insertText(content);
 }
 
+async function monacoEditorValue(page: import("@playwright/test").Page) {
+  return page.evaluate(() => {
+    const monaco = (window as typeof window & { monaco?: any }).monaco;
+    return monaco?.editor.getEditors?.()[0]?.getModel?.()?.getValue?.() ?? "";
+  });
+}
+
 async function setEditorContentAtYamlField(page: import("@playwright/test").Page, content: string, fieldName: string, cursorAfter?: string) {
   await page.waitForFunction(
     () => {
@@ -645,6 +753,14 @@ async function startRecordsPathOpenAPIServer(): Promise<{ server: Server; url: s
 paths:
   /players/{username}:
     get:
+      parameters:
+        - $ref: '#/components/parameters/AlertArea'
+        - name: severity
+          in: query
+          description: Alert severity
+          schema:
+            type: string
+            enum: [extreme, severe, moderate]
       responses:
         "200":
           content:
@@ -679,6 +795,22 @@ paths:
                         type: string
                       has_more:
                         type: boolean
+components:
+  parameters:
+    AlertArea:
+      name: area
+      in: query
+      description: State or marine area code
+      style: form
+      explode: false
+      schema:
+        type: array
+        items:
+          $ref: '#/components/schemas/AreaCode'
+  schemas:
+    AreaCode:
+      type: string
+      enum: [CA, NY, TX]
 `);
   });
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));

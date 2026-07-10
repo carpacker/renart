@@ -4,7 +4,7 @@ Status: current state.
 
 HTTP API assets fetch JSON records and load them into the asset's warehouse
 table. They are plain Bruin-compatible YAML assets (`type: api`); Renart owns
-the HTTP extraction path and delegates the CSV-to-warehouse write to Sling.
+the HTTP extraction path and delegates the JSONL-to-warehouse write to Sling.
 
 ## 1. Asset contract
 
@@ -29,10 +29,11 @@ as JSON fields; Renart does not create child tables from nested arrays.
 ## 2. Execution
 
 `HybridBruinExecutor.runAPIAsset` parses the spec, resolves Jinja values and the
-target connection, streams each response page into a temporary CSV, and invokes
-Sling for the warehouse write. Per-page response bodies are capped at 25 MiB.
-GET requests retry `429` and `5xx` responses up to three attempts and honour a
-capped `Retry-After`; mutating methods are not retried automatically.
+target connection, streams each response page into a temporary JSON Lines file,
+and invokes Sling for the warehouse write. JSONL preserves source nulls and
+nested JSON values without CSV coercion. Per-page response bodies are capped at
+25 MiB. GET requests retry `429` and `5xx` responses up to three attempts and
+honour a capped `Retry-After`; mutating methods are not retried automatically.
 
 Materialization intent maps to Sling as follows:
 
@@ -84,7 +85,10 @@ suggestions.
 returns the request URL, candidate record paths, record count, inferred columns,
 and warnings. Applying columns is an explicit user action. The YAML editor also
 offers schema-backed completions and diagnostics for unresolved response and
-pagination paths.
+pagination paths. Inside `request.url`, OpenAPI operation parameters are
+completed after `?`/`&`; enum-backed parameter values are completed after `=`
+(including comma-separated array values), and parameters already present in
+the URL are omitted from subsequent name suggestions.
 
 Run-time validation defaults to `warn`: mismatches appear in streaming output
 and in the typed completion warning list without blocking the load. `error`

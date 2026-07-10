@@ -5,7 +5,7 @@ import { useEffect, useRef, type MutableRefObject } from "react";
 import type * as MonacoNS from "monaco-editor";
 
 import { getIngestrSuggestions, getOpenAPISuggestions } from "@/lib/api";
-import type { OpenAPISuggestionsResult } from "@/lib/generated/api-types";
+import type { OpenAPIQueryParameterSuggestion, OpenAPISuggestionsResult } from "@/lib/generated/api-types";
 import {
   connectionSuggestionsAtom,
   getIngestrTableSuggestionsFromCatalog,
@@ -18,6 +18,8 @@ import { selectedEnvironmentAtom } from "@/lib/atoms/domains/workspace";
 import { WebAsset } from "@/lib/types";
 
 type YamlFieldContext = {
+  contentStartColumn: number;
+  cursorOffset: number;
   key: string;
   inParameters: boolean;
   normalizedValue: string;
@@ -119,7 +121,7 @@ export function useYAMLIntellisense(monaco: typeof MonacoNS | null, editor: Mona
     }
 
     const disposable = monaco.languages.registerCompletionItemProvider("yaml", {
-      triggerCharacters: [":", "/", ".", "_"],
+      triggerCharacters: [":", "/", ".", "_", "?", "&", "=", ","],
       provideCompletionItems: async (model: MonacoNS.editor.ITextModel, position: MonacoNS.Position) => {
         const { asset, catalog, connections, selectedEnvironment, registerConnectionTables } = yamlStateRef.current;
         if (!asset || !isYamlPath(asset.path)) {
@@ -215,9 +217,13 @@ export function useYAMLIntellisense(monaco: typeof MonacoNS | null, editor: Mona
       if (parsed.validationMode && !["off", "warn", "error"].includes(parsed.validationMode)) {
         addMarker("parameters.openapi.validation", "OpenAPI validation must be off, warn, or error.");
       }
-      if (parsed.openapiUrl && parsed.requestUrl) {
-        const result = await fetchOpenAPISuggestionsCached(openapiCacheRef, parsed);
-        if (currentVersion !== version || !result) return;
+      // A failed suggestions fetch must still fall through to setModelMarkers:
+      // returning early would leave markers from a previous pass on screen
+      // after the user fixes the field.
+      const result =
+        parsed.openapiUrl && parsed.requestUrl ? await fetchOpenAPISuggestionsCached(openapiCacheRef, parsed) : null;
+      if (currentVersion !== version) return;
+      if (result) {
         const typed = result as OpenAPISuggestionsWithResponsePaths;
         const recordPaths = new Set((typed.records_paths ?? []).map((item) => item.path));
         const responsePaths = typed.response_paths ?? [];
@@ -329,8 +335,8 @@ function buildAPIValueSuggestions({ fieldContext, monaco }: { fieldContext: Yaml
   );
 }
 
-// buildAPIOpenAPIValueSuggestions resolves live completions for the two
-// spec-driven fields — `request.url` (the OpenAPI paths) and
+// buildAPIOpenAPIValueSuggestions resolves live completions for spec-driven
+// fields — `request.url` (OpenAPI paths plus query names/enum values) and
 // `response.records_path` (record locations in the selected endpoint's response
 // schema), plus pagination response paths. Returns null when the field isn't
 // spec-driven or no OpenAPI URL is set yet, so the caller falls back to the
@@ -374,6 +380,10 @@ async function buildAPIOpenAPIValueSuggestions({
   const responsePaths = Array.isArray(typedResult.response_paths) ? typedResult.response_paths : [];
 
   if (isRequestURL) {
+    const querySuggestions = buildAPIRequestURLQuerySuggestions(monaco, fieldContext, typedResult.query_parameters ?? []);
+    if (querySuggestions) {
+      return querySuggestions;
+    }
     if (requestURLs.length === 0) {
       return null;
     }
@@ -431,18 +441,118 @@ function fetchOpenAPISuggestionsCached(
   cacheRef: MutableRefObject<Map<string, Promise<OpenAPISuggestionsResult | null>>>,
   args: { openapiUrl: string; requestUrl: string; method: string },
 ): Promise<OpenAPISuggestionsResult | null> {
-  const key = [args.openapiUrl, args.requestUrl, args.method].join("::");
+  // Query-string edits don't change the selected OpenAPI operation. Keying and
+  // fetching by the URL without its query avoids a new spec request/cache entry
+  // for every character typed after `?`.
+  const requestUrl = requestURLWithoutQuery(args.requestUrl);
+  const key = [args.openapiUrl, requestUrl, args.method].join("::");
   const existing = cacheRef.current.get(key);
   if (existing) {
     return existing;
   }
   const pending = getOpenAPISuggestions({
     openapiUrl: args.openapiUrl,
-    requestUrl: args.requestUrl || undefined,
+    requestUrl: requestUrl || undefined,
     method: args.method || undefined,
   }).catch(() => null);
   cacheRef.current.set(key, pending);
   return pending;
+}
+
+function requestURLWithoutQuery(value: string) {
+  const query = value.indexOf("?");
+  const fragment = value.indexOf("#");
+  const end = [query, fragment].filter((index) => index >= 0).reduce((current, index) => Math.min(current, index), value.length);
+  return value.slice(0, end);
+}
+
+function buildAPIRequestURLQuerySuggestions(
+  monaco: typeof MonacoNS,
+  fieldContext: YamlFieldContext,
+  parameters: OpenAPIQueryParameterSuggestion[],
+): MonacoNS.languages.CompletionItem[] | null {
+  const value = fieldContext.normalizedValue;
+  const cursor = Math.max(0, Math.min(fieldContext.cursorOffset, value.length));
+  const queryStart = value.indexOf("?");
+  if (queryStart < 0 || cursor <= queryStart) {
+    return null;
+  }
+
+  const fragmentStart = value.indexOf("#", queryStart + 1);
+  const queryEnd = fragmentStart >= 0 ? fragmentStart : value.length;
+  if (cursor > queryEnd) {
+    return null;
+  }
+
+  const segmentStart = Math.max(queryStart + 1, value.lastIndexOf("&", cursor - 1) + 1);
+  const nextAmpersand = value.indexOf("&", cursor);
+  const segmentEnd = nextAmpersand >= 0 && nextAmpersand < queryEnd ? nextAmpersand : queryEnd;
+  const segment = value.slice(segmentStart, segmentEnd);
+  const equals = segment.indexOf("=");
+  const used = new Set(
+    value
+      .slice(queryStart + 1, queryEnd)
+      .split("&")
+      .map((part) => decodeURLComponent(part.split("=", 1)[0] ?? ""))
+      .filter(Boolean),
+  );
+
+  const range = (start: number, end: number) =>
+    new monaco.Range(
+      fieldContext.range.startLineNumber,
+      fieldContext.contentStartColumn + start,
+      fieldContext.range.startLineNumber,
+      fieldContext.contentStartColumn + end,
+    );
+
+  if (equals < 0 || cursor <= segmentStart + equals) {
+    const currentName = decodeURLComponent(equals >= 0 ? segment.slice(0, equals) : segment);
+    used.delete(currentName);
+    const nameEnd = equals >= 0 ? segmentStart + equals : segmentEnd;
+    return parameters
+      .filter((parameter) => !used.has(parameter.name))
+      .map((parameter) =>
+        toCompletionItem(monaco, {
+          detail: ["query parameter", parameter.required ? "required" : "optional", parameter.type, parameter.description]
+            .filter(Boolean)
+            .join(" · "),
+          insertText: `${encodeURIComponent(parameter.name)}=`,
+          kind: monaco.languages.CompletionItemKind.Property,
+          label: parameter.name,
+          range: range(segmentStart, nameEnd),
+        }),
+      );
+  }
+
+  const name = decodeURLComponent(segment.slice(0, equals));
+  const parameter = parameters.find((candidate) => candidate.name === name);
+  if (!parameter || parameter.values.length === 0) {
+    return [];
+  }
+
+  const valueStart = segmentStart + equals + 1;
+  const valueBeforeCursor = value.slice(valueStart, cursor);
+  const lastComma = valueBeforeCursor.lastIndexOf(",");
+  const tokenStart = valueStart + lastComma + 1;
+  const nextComma = value.indexOf(",", cursor);
+  const tokenEnd = nextComma >= 0 && nextComma < segmentEnd ? nextComma : segmentEnd;
+  return parameter.values.map((candidate) =>
+    toCompletionItem(monaco, {
+      detail: parameter.description || `${parameter.name} value`,
+      insertText: encodeURIComponent(candidate),
+      kind: monaco.languages.CompletionItemKind.EnumMember,
+      label: candidate,
+      range: range(tokenStart, tokenEnd),
+    }),
+  );
+}
+
+function decodeURLComponent(value: string) {
+  try {
+    return decodeURIComponent(value);
+  } catch {
+    return value;
+  }
 }
 
 // parseAPIYaml pulls the three spec-driven values out of an API asset by
@@ -965,8 +1075,11 @@ function getYamlFieldContext(
         position.lineNumber,
         lineText.length + 1
       );
+  const contentStartColumn = replaceQuotedContentOnly && innerStartColumn !== null ? innerStartColumn : valueStartOffset + 1;
 
   return {
+    contentStartColumn,
+    cursorOffset: Math.max(0, position.column - contentStartColumn),
     inParameters: isInsideParameters(model, position.lineNumber),
     key: match[2],
     normalizedValue: normalizeYamlValue(rawValue),
