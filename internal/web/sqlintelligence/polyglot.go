@@ -502,6 +502,12 @@ func extractPolyglotTables(query string, ast []map[string]any, tokens []polyglot
 		sourceKind := "table"
 		resolvedName := fullName
 		columns := schemaColumns(schema[fullName])
+		if _, known := schema[fullName]; !known {
+			if qualified := qualifiedSchemaTableForShortName(schema, fullName); qualified != "" {
+				resolvedName = qualified
+				columns = schemaColumns(schema[qualified])
+			}
+		}
 		var columnRanges map[string]ParseContextRange
 		if cte, ok := ctes[strings.ToLower(fullName)]; ok {
 			sourceKind = "cte"
@@ -527,6 +533,28 @@ func extractPolyglotTables(query string, ast []map[string]any, tokens []polyglot
 	})
 	sortPolyglotTablesBySource(tables)
 	return tables
+}
+
+// qualifiedSchemaTableForShortName resolves an unqualified table reference to
+// the unique schema entry whose last path segment matches (e.g. "accounts" →
+// "public.accounts"), the way engines resolve tables via the search path.
+// Ambiguous short names (present in more than one schema) stay unresolved.
+func qualifiedSchemaTableForShortName(schema Schema, shortName string) string {
+	if shortName == "" || strings.Contains(shortName, ".") {
+		return ""
+	}
+	var match string
+	for tableName := range schema {
+		lastDot := strings.LastIndex(tableName, ".")
+		if lastDot < 0 || !strings.EqualFold(tableName[lastDot+1:], shortName) {
+			continue
+		}
+		if match != "" {
+			return ""
+		}
+		match = tableName
+	}
+	return match
 }
 
 func extractPolyglotColumns(query string, ast []map[string]any, tokens []polyglotToken, aliasToTable map[string]string, tables []ParseContextTable) []ParseContextColumn {
@@ -863,6 +891,9 @@ func polyglotDiagnostics(query string, tokens []polyglotToken, errors []polyglot
 		message := item.Message
 		if strings.EqualFold(item.Code, "E200") && len(match) > 1 {
 			if isDuckDBPathTable(match[1]) {
+				continue
+			}
+			if qualifiedSchemaTableForShortName(schema, match[1]) != "" {
 				continue
 			}
 			message = "Unresolved table: " + match[1]

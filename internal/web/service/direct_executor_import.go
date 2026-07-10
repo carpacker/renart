@@ -9,6 +9,8 @@ import (
 	"strings"
 	"time"
 
+	"renart/internal/web/sqlformat"
+
 	"github.com/bruin-data/bruin/pkg/ansisql"
 	"github.com/bruin-data/bruin/pkg/mssql"
 	"github.com/bruin-data/bruin/pkg/oracle"
@@ -154,9 +156,27 @@ func (e *HybridBruinExecutor) ImportDatabase(ctx context.Context, req ImportData
 	return json.Marshal(response)
 }
 
+// formatImportedViewDefinition cleans up engine-extracted view SQL (e.g.
+// pg_get_viewdef output with its odd indentation and trailing semicolon) so
+// imported assets read like hand-written ones. Falls back to the trimmed
+// original if the formatter rejects the statement.
+func formatImportedViewDefinition(ctx context.Context, definition string, assetType pipeline.AssetType) string {
+	trimmed := strings.TrimSuffix(strings.TrimSpace(definition), ";")
+	formatted, err := sqlformat.Format(ctx, trimmed, sqlFormatDialectForAssetType(assetType))
+	if err != nil || strings.TrimSpace(formatted) == "" {
+		return trimmed
+	}
+	return strings.TrimSpace(formatted)
+}
+
 func createDirectImportedAsset(ctx context.Context, assetsPath, schemaName, tableName string, assetType pipeline.AssetType, conn interface{}, fillColumns bool, table *ansisql.DBTable) (*pipeline.Asset, string) {
 	schemaFolder := filepath.Join(assetsPath, strings.ToLower(schemaName))
 	isView := table.Type == ansisql.DBTableTypeView && table.ViewDefinition != ""
+
+	actualAssetType := assetType
+	if isView {
+		actualAssetType = convertDirectSourceTypeToQueryType(assetType)
+	}
 
 	var fileName, filePath string
 	var materializationType pipeline.MaterializationType
@@ -165,16 +185,11 @@ func createDirectImportedAsset(ctx context.Context, assetsPath, schemaName, tabl
 	if isView {
 		fileName = strings.ToLower(tableName) + ".sql"
 		filePath = filepath.Join(schemaFolder, fileName)
-		content = table.ViewDefinition
+		content = formatImportedViewDefinition(ctx, table.ViewDefinition, actualAssetType)
 		materializationType = pipeline.MaterializationTypeView
 	} else {
 		fileName = strings.ToLower(tableName) + ".asset.yml"
 		filePath = filepath.Join(schemaFolder, fileName)
-	}
-
-	actualAssetType := assetType
-	if isView {
-		actualAssetType = convertDirectSourceTypeToQueryType(assetType)
 	}
 
 	assetName := fmt.Sprintf("%s.%s", strings.ToLower(schemaName), strings.ToLower(tableName))

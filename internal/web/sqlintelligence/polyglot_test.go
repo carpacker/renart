@@ -91,6 +91,39 @@ FROM example.my_sql_asset_3`
 	assert.NotContains(t, diagnosticMessages(parseContext.Diagnostics), "Unresolved column: range")
 }
 
+func TestParseContextWithSchemaPolyglotResolvesUnqualifiedTableToUniqueSchemaEntry(t *testing.T) {
+	// pg_get_viewdef drops the schema for tables on the search path, so
+	// imported views reference "accounts" while the asset is "public.accounts".
+	parseContext, err := ParseContextWithSchemaPolyglot(
+		"select id, user_id from accounts",
+		"postgres",
+		Schema{
+			"public.accounts": {"id": "text", "user_id": "text"},
+			"public.users":    {"id": "text", "email": "text"},
+		},
+	)
+	require.NoError(t, err)
+
+	assert.Empty(t, parseContext.Diagnostics)
+	require.Len(t, parseContext.Tables, 1)
+	assert.Equal(t, "accounts", parseContext.Tables[0].Name)
+	assert.Equal(t, "public.accounts", parseContext.Tables[0].ResolvedName)
+}
+
+func TestParseContextWithSchemaPolyglotKeepsAmbiguousUnqualifiedTableUnresolved(t *testing.T) {
+	parseContext, err := ParseContextWithSchemaPolyglot(
+		"select id from accounts",
+		"postgres",
+		Schema{
+			"public.accounts": {"id": "text"},
+			"audit.accounts":  {"id": "text"},
+		},
+	)
+	require.NoError(t, err)
+
+	assert.Contains(t, diagnosticMessages(parseContext.Diagnostics), "Unresolved table: accounts")
+}
+
 func TestParseContextWithSchemaPolyglotReportsUnknownTable(t *testing.T) {
 	parseContext, err := ParseContextWithSchemaPolyglot(
 		"select * from analytics.ordrs",
