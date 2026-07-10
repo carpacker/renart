@@ -19,7 +19,6 @@ the original.
 | [notebook-intellisense.md](notebook-intellisense.md) | in progress — asset/cell completion + go-to-definition in notebooks |
 | [ingestr-feature-flag.md](ingestr-feature-flag.md) | in progress — hide ingestr surfaces behind a project flag |
 | [remote-table-intellisense.md](remote-table-intellisense.md) | proposal — surface warehouse tables with no backing asset via the LSP |
-| [onboarding-projects.md](onboarding-projects.md) | proposed — first-run onboarding + demo/import/empty project creation |
 | [docs-overhaul.md](docs-overhaul.md) | proposed — collapse mocked docs to ~15 real pages |
 | [landing-page.md](landing-page.md) | awaiting feedback — landing story + media regen proposal |
 | [questions.md](questions.md) | open questions for the maintainer |

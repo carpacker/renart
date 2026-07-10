@@ -169,6 +169,22 @@ export type OpenProjectResponse = {
   project: ProjectInfo;
 };
 
+export type CreateProjectRequest = {
+  template: string;
+  name?: string;
+  parent_dir?: string;
+  path?: string;
+};
+
+export type CreateProjectResponse = {
+  status: string;
+  project: ProjectInfo;
+  pipeline_id: string;
+  pipeline_path: string;
+  files: string[];
+  git_initialized: boolean;
+};
+
 export type BrowseDirEntry = {
   name: string;
   path: string;
@@ -180,6 +196,20 @@ export type BrowseDirsResponse = {
   path: string;
   parent?: string;
   entries: BrowseDirEntry[];
+};
+
+export type ProjectTemplateInfo = {
+  id: string;
+  title: string;
+  description: string;
+  offline: boolean;
+  pipeline_name: string;
+  asset_names: string[];
+};
+
+export type ProjectTemplatesResponse = {
+  status: string;
+  templates: ProjectTemplateInfo[];
 };
 
 export type OnboardingImportFormState = {

@@ -7,6 +7,7 @@ import {
   Cloud,
   Folder,
   FolderOpen,
+  FolderPlus,
   FolderSearch,
   LoaderCircle,
   Settings,
@@ -119,6 +120,9 @@ export function ProjectSwitcher() {
             </DropdownMenuItem>
           ))}
           <DropdownMenuSeparator />
+          <DropdownMenuItem asChild>
+            <Link to="/welcome" search={{ new: true }}><FolderPlus className="size-4" />New project...</Link>
+          </DropdownMenuItem>
           <DropdownMenuItem onSelect={() => setBrowseOpen(true)}>
             <FolderSearch className="size-4" />
             Open project...

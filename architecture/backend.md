@@ -54,6 +54,19 @@ Concurrent file writes are serialized by a per-file lock in the asset write
 path (fast successive edits used to race read-modify-write cycles and drop
 content).
 
+**Projects.** One process hosts many projects: a global registry
+(`~/.config/renart/projects.json`; `RENART_PROJECTS_REGISTRY` overrides for
+tests) plus one lazily-opened per-project runtime each, mounted at
+`/api/projects/{id}/*` (`cmd/projects.go`); the argv root stays aliased at the
+unprefixed `/api/*`. `POST /api/projects` scaffolds a project from a template
+(`service.ScaffoldProject`: `demo:chess` — native `type: api` chess.com
+assets, `demo:retail` — offline SQL-only demo, `empty`, `bare` for the import
+flow) — pipeline files, a `duckdb-default` connection, default .gitignore
+patterns, `.renart/project.yml` identity, and `git init` + an initial commit
+when the target has no repository — then opens/registers the project and
+refreshes its workspace. `GET /api/projects/templates` lists the templates
+for the welcome UI.
+
 ## 3. Persistence
 
 All durable state lives in SQLite at `.renart/state.db` inside the workspace

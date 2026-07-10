@@ -25,14 +25,10 @@ touch it further:
 ## Onboarding / new-project flows
 
 4. "there's already a concept design available" — I could not find an
-   onboarding concept in the repo (no mockup file, no plan doc; the existing
-   `/onboarding` routes are the old connection-first flow). Where does the
-   concept live (Figma link, HTML file, branch)?
-   → Proceeding meanwhile with plans/onboarding-projects.md based on your
-   three-option brief; the visual port can follow once the concept surfaces.
-5. Demo projects: is the chess-based quickstart (players/games/player_stats)
-   the model for "demo projects", and how many do you want (I'd do 2:
-   analytics-on-API demo + a pure-DuckDB/CSV demo)?
+   onboarding concept in the repo. The `/welcome` flow shipped with plain
+   shadcn components (maintainer confirmed proceeding); if a visual concept
+   surfaces later, restyle `web/components/app/welcome-page.tsx` to match.
+   (Demo question resolved: chess API demo + offline retail demo shipped.)
 
 ## Ingestr feature flag
 

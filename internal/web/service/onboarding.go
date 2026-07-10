@@ -545,7 +545,7 @@ func (s *OnboardingService) CreateDuckDBQuickstart(ctx context.Context, req Onbo
 		"pipeline.yml": quickstartPipelineYAML(filepath.Base(relPipelinePath), duckDBConnectionName),
 		filepath.Join("assets", "quickstart", "players.asset.yml"):  quickstartPlayersAPIYAML(),
 		filepath.Join("assets", "quickstart", "games.asset.yml"):    quickstartGamesAPIYAML(),
-		filepath.Join("assets", "quickstart", "player_stats.sql"):   quickstartPlayerStatsSQL(),
+		filepath.Join("assets", "quickstart", "player_stats.sql"):   quickstartPlayerStatsSQL("quickstart"),
 		filepath.Join("assets", "quickstart", "my_python_asset.py"): quickstartPythonAsset(),
 	}
 	for relPath, content := range files {
@@ -701,14 +701,14 @@ parameters:
 `
 }
 
-func quickstartPlayerStatsSQL() string {
+func quickstartPlayerStatsSQL(schema string) string {
 	return `/* @bruin
 type: duckdb.sql
 materialization:
   type: table
 depends:
-  - quickstart.players
-  - quickstart.games
+  - ` + schema + `.players
+  - ` + schema + `.games
 @bruin */
 
 WITH players AS (
@@ -718,7 +718,7 @@ WITH players AS (
         coalesce(nullif(name, ''), username) AS name,
         title,
         country
-    FROM quickstart.players
+    FROM ` + schema + `.players
 ),
 
 games AS (
@@ -727,7 +727,7 @@ games AS (
         lower(black_username) AS black_username,
         white_result,
         black_result
-    FROM quickstart.games
+    FROM ` + schema + `.games
 )
 
 SELECT

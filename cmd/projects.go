@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"sync"
@@ -19,6 +20,7 @@ import (
 	webhttpapi "renart/internal/web/httpapi"
 	"renart/internal/web/identity"
 	"renart/internal/web/registry"
+	"renart/internal/web/service"
 )
 
 // projectRuntime is one open project: the fully wired per-root server plus
@@ -134,6 +136,144 @@ func (m *projectManager) OpenProject(path string) (webhttpapi.ProjectInfo, error
 		Exists:       true,
 		Default:      rt.id == m.defaultID,
 	}, nil
+}
+
+// CreateProject scaffolds a project from a template and registers it. Path
+// selects an existing directory (e.g. the current empty workspace);
+// otherwise a new directory named req.Name is created under req.ParentDir
+// (defaulting to the default project's parent directory) and gets its own
+// git repository.
+func (m *projectManager) CreateProject(req webhttpapi.CreateProjectRequest) (webhttpapi.CreateProjectResponse, error) {
+	var target, configPath string
+	newRepository := false
+
+	if strings.TrimSpace(req.Path) != "" {
+		absTarget, err := filepath.Abs(strings.TrimSpace(req.Path))
+		if err != nil {
+			return webhttpapi.CreateProjectResponse{}, err
+		}
+		info, err := os.Stat(absTarget)
+		if err != nil {
+			return webhttpapi.CreateProjectResponse{}, err
+		}
+		if !info.IsDir() {
+			return webhttpapi.CreateProjectResponse{}, fmt.Errorf("%s is not a directory", absTarget)
+		}
+		target = absTarget
+		configPath = resolveConfigFilePath(target)
+	} else {
+		name := strings.TrimSpace(req.Name)
+		if err := validateProjectDirName(name); err != nil {
+			return webhttpapi.CreateProjectResponse{}, err
+		}
+		parent, err := m.resolveCreateParentDir(req.ParentDir)
+		if err != nil {
+			return webhttpapi.CreateProjectResponse{}, err
+		}
+		target = filepath.Join(parent, name)
+		if _, err := os.Stat(target); err == nil {
+			return webhttpapi.CreateProjectResponse{}, fmt.Errorf("%s already exists", target)
+		} else if !os.IsNotExist(err) {
+			return webhttpapi.CreateProjectResponse{}, err
+		}
+		// The new directory becomes its own repository, so its config
+		// belongs at its root even when an enclosing repo exists.
+		configPath = filepath.Join(target, ".bruin.yml")
+		newRepository = true
+	}
+
+	scaffold, err := service.ScaffoldProject(service.ScaffoldProjectRequest{
+		TargetDir:     target,
+		ConfigPath:    configPath,
+		Template:      req.Template,
+		NewRepository: newRepository,
+	})
+	if err != nil {
+		return webhttpapi.CreateProjectResponse{}, err
+	}
+
+	rt, err := m.openPath(target)
+	if err != nil {
+		return webhttpapi.CreateProjectResponse{}, err
+	}
+	// An in-place scaffold lands in an already-open runtime whose workspace
+	// predates the new files; refresh now so the response is immediately
+	// reflected by /api/workspace instead of waiting on the file watcher.
+	if err := rt.server.refreshWorkspace(m.ctx); err != nil {
+		m.logger.Warn("failed to refresh workspace after project scaffold", zap.Error(err))
+	}
+	info := webhttpapi.ProjectInfo{
+		ID:           rt.id,
+		Name:         rt.name,
+		Path:         rt.root,
+		Type:         "local",
+		LastOpenedAt: time.Now().UTC(),
+		Open:         true,
+		Exists:       true,
+		Default:      rt.id == m.defaultID,
+	}
+
+	return webhttpapi.CreateProjectResponse{
+		Status:         "ok",
+		Project:        info,
+		PipelineID:     scaffold.PipelineID,
+		PipelinePath:   scaffold.PipelinePath,
+		Files:          scaffold.Files,
+		GitInitialized: scaffold.GitInitialized,
+	}, nil
+}
+
+// resolveCreateParentDir picks the directory a new project is created in:
+// the caller's choice, else next to the default project, else the home dir.
+func (m *projectManager) resolveCreateParentDir(parentDir string) (string, error) {
+	parent := strings.TrimSpace(parentDir)
+	if parent == "" {
+		m.mu.Lock()
+		defaultRuntime := m.runtimes[m.defaultID]
+		m.mu.Unlock()
+		if defaultRuntime != nil {
+			parent = filepath.Dir(defaultRuntime.root)
+		}
+	}
+	if parent == "" {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return "", err
+		}
+		parent = home
+	}
+	absParent, err := filepath.Abs(parent)
+	if err != nil {
+		return "", err
+	}
+	info, err := os.Stat(absParent)
+	if err != nil {
+		return "", err
+	}
+	if !info.IsDir() {
+		return "", fmt.Errorf("%s is not a directory", absParent)
+	}
+	return absParent, nil
+}
+
+func validateProjectDirName(name string) error {
+	if name == "" {
+		return fmt.Errorf("project name is required")
+	}
+	if len(name) > 100 {
+		return fmt.Errorf("project name is too long")
+	}
+	if name == "." || name == ".." || strings.HasPrefix(name, ".") {
+		return fmt.Errorf("project name must not start with a dot")
+	}
+	for _, r := range name {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9', r == '-', r == '_', r == '.':
+		default:
+			return fmt.Errorf("project name may only contain letters, digits, dots, dashes and underscores")
+		}
+	}
+	return nil
 }
 
 func (m *projectManager) openPath(path string) (*projectRuntime, error) {

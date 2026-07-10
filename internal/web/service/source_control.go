@@ -240,6 +240,14 @@ func (s *SourceControlService) open() (*git.Repository, *git.Worktree, error) {
 	return repo, worktree, nil
 }
 
+const defaultGitignoreContents = `.renart/state.db*
+logs/
+duckdb-files/
+.env
+__pycache__/
+.DS_Store
+`
+
 func (s *SourceControlService) writeDefaultGitignore() error {
 	path := filepath.Join(s.workspaceRoot, ".gitignore")
 	if _, err := os.Stat(path); err == nil {
@@ -247,14 +255,7 @@ func (s *SourceControlService) writeDefaultGitignore() error {
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
-	const contents = `.renart/state.db*
-logs/
-duckdb-files/
-.env
-__pycache__/
-.DS_Store
-`
-	return os.WriteFile(path, []byte(contents), 0o644)
+	return os.WriteFile(path, []byte(defaultGitignoreContents), 0o644)
 }
 
 func commitAuthor(repo *git.Repository) *object.Signature {

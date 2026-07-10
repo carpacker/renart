@@ -47,7 +47,17 @@ File-based routes under [src/routes](../web/src/routes):
   a pathless layout route that renders the app shell.
 - Pages live under [src/routes/_shell](../web/src/routes/_shell): the build IDE at
   `/pipelines/$pipelineId/...`, plus `catalog`, `notebooks`, `runs`, `schedules`,
-  `project` (settings), `account`, `dashboards`. `/` redirects into the build view.
+  `project` (settings), `account`, `dashboards`. `/` waits for the workspace,
+  then redirects to the first pipeline's canvas — or to `/welcome` when the
+  workspace has no pipelines.
+- [welcome.tsx](../web/src/routes/welcome.tsx) (`/welcome`, outside the shell)
+  is the first-run onboarding and new-project wizard
+  ([welcome-page.tsx](../web/components/app/welcome-page.tsx)): demo / import /
+  empty flows against `POST /api/projects`, with `?new=1` (the project
+  switcher's "New project...") forcing creation of a fresh directory instead of
+  scaffolding into the current empty workspace. Demo creation bootstraps the
+  workspace with the `build-stale/stream` run (fresh assets are all
+  `never_built`) and renders its per-asset SSE progress.
 - `redesign.$.tsx` / `redesign.index.tsx` redirect legacy `/redesign/*` bookmarks
   to the root paths — the only place the old "redesign" name survives.
 - The route tree is generated into
@@ -81,7 +91,8 @@ not underscore-flattened route hacks.
   [runs-page.tsx](../web/components/app/runs-page.tsx),
   [schedules-page.tsx](../web/components/app/schedules-page.tsx),
   [settings-pages.tsx](../web/components/app/settings-pages.tsx),
-  [object-pages.tsx](../web/components/app/object-pages.tsx).
+  [object-pages.tsx](../web/components/app/object-pages.tsx),
+  [welcome-page.tsx](../web/components/app/welcome-page.tsx).
 
 All feature UI lives under `components/app/`; shared primitives under
 `components/ui/`. Prefer the shared shadcn card primitives

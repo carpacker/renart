@@ -11,6 +11,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	webapi "renart/internal/web/api"
+	"renart/internal/web/service"
 )
 
 // ProjectInfo describes one project known to this server: a registry entry
@@ -41,6 +42,26 @@ type OpenProjectResponse struct {
 	Project ProjectInfo `json:"project"`
 }
 
+// CreateProjectRequest scaffolds a new project from a template. Either Path
+// (scaffold into an existing directory, e.g. the current empty workspace) or
+// ParentDir+Name (create a fresh directory) selects the target.
+type CreateProjectRequest struct {
+	Template  string `json:"template"`
+	Name      string `json:"name,omitempty"`
+	ParentDir string `json:"parent_dir,omitempty"`
+	Path      string `json:"path,omitempty"`
+}
+
+type CreateProjectResponse struct {
+	Status         string      `json:"status"`
+	Project        ProjectInfo `json:"project"`
+	PipelineID     string      `json:"pipeline_id"`
+	PipelinePath   string      `json:"pipeline_path"`
+	Files          []string    `json:"files"`
+	GitInitialized bool        `json:"git_initialized"`
+}
+
+
 type BrowseDirEntry struct {
 	Name      string `json:"name"`
 	Path      string `json:"path"`
@@ -58,6 +79,7 @@ type BrowseDirsResponse struct {
 type ProjectDirectory interface {
 	ListProjects() ProjectListResponse
 	OpenProject(path string) (ProjectInfo, error)
+	CreateProject(req CreateProjectRequest) (CreateProjectResponse, error)
 	RemoveProject(id string) error
 }
 
@@ -67,9 +89,41 @@ type ProjectsAPI struct {
 
 func RegisterProjectRoutes(router chi.Router, api *ProjectsAPI) {
 	router.Get("/api/projects", api.HandleListProjects)
+	router.Post("/api/projects", api.HandleCreateProject)
+	router.Get("/api/projects/templates", api.HandleProjectTemplates)
 	router.Post("/api/projects/open", api.HandleOpenProject)
 	router.Get("/api/projects/browse", api.HandleBrowseDirs)
 	router.Delete("/api/projects/{projectID}", api.HandleRemoveProject)
+}
+
+func (a *ProjectsAPI) HandleProjectTemplates(w http.ResponseWriter, _ *http.Request) {
+	webapi.WriteJSON(w, http.StatusOK, service.ProjectTemplatesResponse{
+		Status:    "ok",
+		Templates: service.ProjectTemplates(),
+	})
+}
+
+func (a *ProjectsAPI) HandleCreateProject(w http.ResponseWriter, r *http.Request) {
+	var req CreateProjectRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		webapi.WriteBadRequest(w, "invalid_request_body", err.Error())
+		return
+	}
+	if strings.TrimSpace(req.Template) == "" {
+		webapi.WriteBadRequest(w, "missing_template", "template is required")
+		return
+	}
+	if strings.TrimSpace(req.Path) == "" && strings.TrimSpace(req.Name) == "" {
+		webapi.WriteBadRequest(w, "missing_target", "either path or name is required")
+		return
+	}
+
+	response, err := a.Directory.CreateProject(req)
+	if err != nil {
+		webapi.WriteBadRequest(w, "project_create_failed", err.Error())
+		return
+	}
+	webapi.WriteJSON(w, http.StatusOK, response)
 }
 
 func (a *ProjectsAPI) HandleListProjects(w http.ResponseWriter, _ *http.Request) {

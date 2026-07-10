@@ -32,9 +32,15 @@ const sources = [
       "ProjectInfo",
       "ProjectListResponse",
       "OpenProjectResponse",
+      "CreateProjectRequest",
+      "CreateProjectResponse",
       "BrowseDirEntry",
       "BrowseDirsResponse",
     ],
+  },
+  {
+    file: resolve(repoRoot, "internal", "web", "service", "project_scaffold.go"),
+    types: ["ProjectTemplateInfo", "ProjectTemplatesResponse"],
   },
   {
     file: resolve(repoRoot, "internal", "web", "service", "onboarding.go"),

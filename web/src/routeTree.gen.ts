@@ -9,6 +9,7 @@
 // Additionally, you should also exclude this file from your linter and/or formatter to prevent it from being checked or modified.
 
 import { Route as rootRouteImport } from './routes/__root'
+import { Route as WelcomeRouteImport } from './routes/welcome'
 import { Route as ShellRouteImport } from './routes/_shell'
 import { Route as RedesignIndexRouteImport } from './routes/redesign.index'
 import { Route as ShellIndexRouteImport } from './routes/_shell/index'
@@ -43,6 +44,11 @@ import { Route as ShellPipelinesPipelineIdAssetsAssetIdSplitRouteImport } from '
 import { Route as ShellPipelinesPipelineIdAssetsAssetIdCodeRouteImport } from './routes/_shell/pipelines/$pipelineId/assets/$assetId/code'
 import { Route as ShellPipelinesPipelineIdAssetsAssetIdCanvasRouteImport } from './routes/_shell/pipelines/$pipelineId/assets/$assetId/canvas'
 
+const WelcomeRoute = WelcomeRouteImport.update({
+  id: '/welcome',
+  path: '/welcome',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const ShellRoute = ShellRouteImport.update({
   id: '/_shell',
   getParentRoute: () => rootRouteImport,
@@ -223,6 +229,7 @@ const ShellPipelinesPipelineIdAssetsAssetIdCanvasRoute =
 
 export interface FileRoutesByFullPath {
   '/': typeof ShellIndexRoute
+  '/welcome': typeof WelcomeRoute
   '/account': typeof ShellAccountRouteRouteWithChildren
   '/project': typeof ShellProjectRouteRouteWithChildren
   '/runs': typeof ShellRunsRouteRouteWithChildren
@@ -256,6 +263,7 @@ export interface FileRoutesByFullPath {
   '/pipelines/$pipelineId/assets/$assetId/': typeof ShellPipelinesPipelineIdAssetsAssetIdIndexRoute
 }
 export interface FileRoutesByTo {
+  '/welcome': typeof WelcomeRoute
   '/catalog': typeof ShellCatalogRoute
   '/schedules': typeof ShellSchedulesRoute
   '/redesign/$': typeof RedesignSplatRoute
@@ -287,6 +295,7 @@ export interface FileRoutesByTo {
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/_shell': typeof ShellRouteWithChildren
+  '/welcome': typeof WelcomeRoute
   '/_shell/account': typeof ShellAccountRouteRouteWithChildren
   '/_shell/project': typeof ShellProjectRouteRouteWithChildren
   '/_shell/runs': typeof ShellRunsRouteRouteWithChildren
@@ -324,6 +333,7 @@ export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
   fullPaths:
     | '/'
+    | '/welcome'
     | '/account'
     | '/project'
     | '/runs'
@@ -357,6 +367,7 @@ export interface FileRouteTypes {
     | '/pipelines/$pipelineId/assets/$assetId/'
   fileRoutesByTo: FileRoutesByTo
   to:
+    | '/welcome'
     | '/catalog'
     | '/schedules'
     | '/redesign/$'
@@ -387,6 +398,7 @@ export interface FileRouteTypes {
   id:
     | '__root__'
     | '/_shell'
+    | '/welcome'
     | '/_shell/account'
     | '/_shell/project'
     | '/_shell/runs'
@@ -423,12 +435,20 @@ export interface FileRouteTypes {
 }
 export interface RootRouteChildren {
   ShellRoute: typeof ShellRouteWithChildren
+  WelcomeRoute: typeof WelcomeRoute
   RedesignSplatRoute: typeof RedesignSplatRoute
   RedesignIndexRoute: typeof RedesignIndexRoute
 }
 
 declare module '@tanstack/react-router' {
   interface FileRoutesByPath {
+    '/welcome': {
+      id: '/welcome'
+      path: '/welcome'
+      fullPath: '/welcome'
+      preLoaderRoute: typeof WelcomeRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/_shell': {
       id: '/_shell'
       path: ''
@@ -791,6 +811,7 @@ const ShellRouteWithChildren = ShellRoute._addFileChildren(ShellRouteChildren)
 
 const rootRouteChildren: RootRouteChildren = {
   ShellRoute: ShellRouteWithChildren,
+  WelcomeRoute: WelcomeRoute,
   RedesignSplatRoute: RedesignSplatRoute,
   RedesignIndexRoute: RedesignIndexRoute,
 }
