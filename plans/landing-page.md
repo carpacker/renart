@@ -1,43 +1,59 @@
-# Landing page overhaul — proposal for iteration
+# Landing page overhaul
 
-Status: awaiting feedback (questions.md #1–#3) — an implementation is already
-committed at `71afe30`; this doc is the story I propose to keep/sharpen.
+Status: **implemented** (July 2026, `redesign` branch) — full visual redesign of
+`docs/src/pages/index.astro` plus all-new media. This doc records the story the
+page tells and how the media was produced, for the next regeneration.
 
 ## The story (one sentence)
 
 Renart is the all-in-one, git-native data pipeline IDE: write, run, schedule,
 and trust your pipelines — one local binary, your files, no platform.
 
-## Arc (as committed, proposed to keep)
+## Arc (as shipped)
 
-1. **Hero** — headline + live canvas round-trip video
-   (`hero-canvas-roundtrip.webm`). CTA: install one-liner + quickstart link.
-2. **One tool, the whole lifecycle** — four scenes, each = screenshot + copy:
-   - *Write* — SQL editor that knows your pipeline (asset-aware
-     intellisense, jump-to-definition, type checking),
-   - *Explore* — notebooks with per-notebook DuckDB sessions, promote cells
-     into the pipeline,
-   - *Ship* — from first run to production cron: runs page, schedules,
-     env-aware execution,
-   - *Trust* — staleness tracking: fingerprints know what's fresh, rebuild
-     only what isn't.
-3. **The parts you'd otherwise bolt on** — run history, lineage/docs by
-   default, reviewable diffs (git-native), quality checks with the asset.
-4. **Manifesto strip** — why local-first + git beats a SaaS control plane.
-5. **Principles** — one binary, your machine, your files.
-6. **Final CTA** — install → scheduled pipeline in one sitting.
+1. **Hero** — serif headline ("The all-in-one data pipeline IDE") + subline
+   naming the pillars (editor · scheduler · freshness monitor, notebooks and
+   lineage built in). CTAs: Get started, docs, install one-liner.
+   Media: `hero-workspace.webp` (editor + canvas + workbench, staging.orders).
+2. **Marquee** — "runs on the stack you already have" logo strip.
+3. **The lifecycle** — four alternating screenshot+copy rows:
+   - *01 Build* — SQL editor grounded in the DAG (intellisense over upstream
+     columns), `lifecycle-build.webp`;
+   - *02 Explore* — notebook with table + charts, cell-actions menu open on
+     "Promote to pipeline", `lifecycle-notebook.webp`;
+   - *03 Run* — schedules page with the New-schedule dialog open (pipeline,
+     environment, cron, timezone, catch-up, deploy toggle),
+     `lifecycle-schedules.webp`;
+   - *04 Trust* — canvas with all four staleness badges (Fresh / Edited /
+     Upstream changed / Never built), `lifecycle-staleness.webp`.
+4. **Bento** — runs & history (failed-run detail with the SQL error in the
+   event log, `feature-runs.webp`), catalog with lineage highlight
+   (`feature-catalog.webp`), git-native diffs, quality checks.
+5. **Manifesto strip** — "your data stack should not be five tools duct-taped
+   together."
+6. **Principles** — one binary, your machine, your files (checklist grid).
+7. **Final CTA** — install → scheduled pipeline in one sitting. Footer.
 
-## Proposed changes on top of 71afe30
+## How the media was made
 
-- Regenerate all media with the current UI (recolored icon, dark-mode fixes,
-  truncated sidebar) via `pnpm landing:media`; add a staleness-badge close-up
-  shot for the *Trust* scene (currently text-only).
-- Copy pass: tighten hero subline to name the three pillars explicitly
-  (IDE · scheduler · freshness tracking); remove any remaining bruin
-  references except a single "works with existing bruin projects" nod in the
-  FAQ/footer if desired.
-- OG image refresh with the new icon color.
+- `make landing-media` regenerates everything. It runs
+  `web/scripts/capture-landing-media.mjs` (workspace content in
+  `web/scripts/landing-media-workspace.mjs`), which builds the demo state
+  end-to-end and writes the webp files + og-image into
+  `docs/public/landing/`.
+- The demo state: a 10-asset `acme` pipeline (raw → staging → mart), an
+  hourly `marketing` pipeline, seeded DuckDB data, recorded runs (including
+  one failed scheduled run with a binder error), env schedules on default +
+  production, a run notebook with @viz charts, and a staged staleness mix
+  applied last (edited staging asset → stale marts + one never-built asset).
+- Captured with Playwright at deviceScaleFactor 2, dark theme, viewport
+  1400×900 (14:9); hero at 1920×1080, bento shots at 1200×675, the schedules
+  dialog shot at 1176×756 so the dialog fills the frame. Converted to webp
+  q92 via sharp (from docs/). OG image is a 1200×675 PNG.
+- If a capture changes dimensions, update the matching `<img>`
+  width/height in `docs/src/pages/index.astro`.
 
-## Blocked on
+## Deliberately left out (for now)
 
-The maintainer's answers to questions.md #1–#3 (direction, media regen, "stainless").
+- Onboarding/welcome flow — still being built on
+  `worktree-onboarding-projects`; fold it in once it lands.

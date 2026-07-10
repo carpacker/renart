@@ -8,7 +8,7 @@ const installCommand = 'curl -LsSf getrenart.com/install.sh | sh';
 const siteUrl = 'https://getrenart.com';
 const pageTitle = 'Renart - The all-in-one data pipeline IDE';
 const pageDescription = 'Renart is an all-in-one, open-source data pipeline IDE: editor, canvas, notebooks, scheduler, and staleness tracking in a single local binary. Pipelines are plain files in your git repo, running on the warehouse you already use.';
-const socialImage = `${siteUrl}/landing/feature-dag-canvas.png`;
+const socialImage = `${siteUrl}/landing/og-image.png`;
 const trackingHead = import.meta.env.PUBLIC_RENART_TRACKING_HEAD?.trim() || '{{env "RENART_TRACKING_HEAD"}}';
 
 function readGitValue(command: string, fallback: string) {
@@ -114,7 +114,7 @@ const stackItems = ['DuckDB', 'Postgres', 'Snowflake', 'BigQuery', 'Redshift', '
     <meta name="description" content={pageDescription} />
     <meta name="application-name" content="Renart" />
     <meta name="apple-mobile-web-app-title" content="Renart" />
-    <meta name="theme-color" content="#0f172a" />
+    <meta name="theme-color" content="#0b0d0c" />
     <meta name="robots" content="index, follow" />
     <meta name="keywords" content="Renart, data pipeline IDE, data pipeline scheduler, staleness tracking, data lineage, SQL notebooks, git-native data pipelines, data engineering, analytics engineering" />
     <meta name="author" content="Renart" />
@@ -130,12 +130,12 @@ const stackItems = ['DuckDB', 'Postgres', 'Snowflake', 'BigQuery', 'Redshift', '
     <meta property="og:image" content={socialImage} />
     <meta property="og:image:width" content="1200" />
     <meta property="og:image:height" content="675" />
-    <meta property="og:image:alt" content="Renart pipeline canvas showing connected assets" />
+    <meta property="og:image:alt" content="The Renart workspace: pipeline canvas with freshness badges next to a SQL editor" />
     <meta name="twitter:card" content="summary_large_image" />
     <meta name="twitter:title" content={pageTitle} />
     <meta name="twitter:description" content={pageDescription} />
     <meta name="twitter:image" content={socialImage} />
-    <meta name="twitter:image:alt" content="Renart pipeline canvas showing connected assets" />
+    <meta name="twitter:image:alt" content="The Renart workspace: pipeline canvas with freshness badges next to a SQL editor" />
     <script is:inline type="application/ld+json" set:html={landingStructuredData}></script>
     <Fragment set:html={trackingHead} />
     <title>{pageTitle}</title>
@@ -182,7 +182,7 @@ const stackItems = ['DuckDB', 'Postgres', 'Snowflake', 'BigQuery', 'Redshift', '
         </h1>
 
         <p class="hero-sub">
-          Load, transform, schedule, and verify your data from one open-source IDE — with notebooks, lineage, and staleness tracking built in. Your pipeline is plain files in your git repo, running on the warehouse you already use. No glue code, no cloud.
+          The editor, the scheduler, and the freshness monitor — one open-source IDE for the whole pipeline lifecycle, with notebooks and lineage built in. Your pipeline is plain files in your git repo, running on the warehouse you already use. No glue code, no cloud.
         </p>
 
         <div class="ctas">
@@ -201,18 +201,15 @@ const stackItems = ['DuckDB', 'Postgres', 'Snowflake', 'BigQuery', 'Redshift', '
           </button>
         </div>
 
-        <!-- SCREENSHOT TODO (landing/hero-workspace.png, 1920x1080):
-          The full Renart workspace at its best. Pipeline canvas on the left with roughly
-          10 connected assets across a few layers (ingestion -> staging -> marts), each node
-          showing its fresh/stale status badge with a visible mix of states. Monaco editor
-          on the right with a SQL asset open (realistic query, some columns visible).
-          Bottom or side run panel visible. Dark theme, tidy layout, no dev tools. -->
         <div class="hero-media">
-          <div class="shot" role="img" aria-label="Placeholder for a screenshot of the full Renart workspace">
-            <span class="shot-tag">screenshot placeholder</span>
-            <p>Full workspace: pipeline canvas on the left with ~10 connected assets showing fresh/stale status badges, Monaco editor on the right with a SQL asset open, run panel visible.</p>
-            <code>landing/hero-workspace.png</code>
-          </div>
+          <img
+            src="/landing/hero-workspace.webp"
+            alt="The Renart workspace: a SQL editor and live pipeline canvas side by side, with fresh and edited status badges on assets, inferred dependencies, and a query preview panel"
+            width="1920"
+            height="1080"
+            loading="eager"
+            fetchpriority="high"
+          />
         </div>
       </section>
 
@@ -239,17 +236,14 @@ const stackItems = ['DuckDB', 'Postgres', 'Snowflake', 'BigQuery', 'Redshift', '
               <h3>Write SQL that knows your pipeline</h3>
               <p>The editor is grounded in your actual DAG. IntelliSense suggests columns from upstream assets, and validation flags unresolved references while you type — so a broken column shows up in the editor, not in tomorrow's failed run.</p>
             </div>
-            <!-- SCREENSHOT TODO (landing/lifecycle-build.png, ~1400x900):
-              Monaco editor with an open completion popup listing column suggestions coming
-              from an upstream asset (names should look plausible: order_id, customer_id,
-              total_amount...). Elsewhere in the same file, one red squiggle under an
-              unresolved column with its hover diagnostic visible. Crop to the editor pane. -->
             <div class="life-media">
-              <div class="shot" role="img" aria-label="Placeholder for a screenshot of SQL IntelliSense and validation">
-                <span class="shot-tag">screenshot placeholder</span>
-                <p>Editor with a completion popup suggesting columns from an upstream asset, plus one unresolved-column diagnostic with its hover message visible.</p>
-                <code>landing/lifecycle-build.png</code>
-              </div>
+              <img
+                src="/landing/lifecycle-build.webp"
+                alt="The Renart editor mid-keystroke: a completion popup lists columns from the upstream raw.customers table, with the column's type shown inline"
+                width="1400"
+                height="900"
+                loading="lazy"
+              />
             </div>
           </article>
 
@@ -259,16 +253,14 @@ const stackItems = ['DuckDB', 'Postgres', 'Snowflake', 'BigQuery', 'Redshift', '
               <h3>Prototype in a notebook, promote what works</h3>
               <p>Every project has SQL notebooks for ad-hoc analysis: query your data and see tables and charts inline. When a query earns a permanent place, promote the cell into a real pipeline asset — same repo, same review flow as everything else.</p>
             </div>
-            <!-- SCREENSHOT TODO (landing/lifecycle-notebook.png, ~1400x900):
-              A Renart notebook with 2-3 cells: a SQL query cell with its result table
-              rendered below it, a chart cell (@viz) showing a simple visualization, and the
-              promote-to-asset action visible (menu open or button in view). -->
             <div class="life-media">
-              <div class="shot" role="img" aria-label="Placeholder for a screenshot of a SQL notebook">
-                <span class="shot-tag">screenshot placeholder</span>
-                <p>Notebook with a query cell and its result table, a chart cell, and the promote-to-asset action visible.</p>
-                <code>landing/lifecycle-notebook.png</code>
-              </div>
+              <img
+                src="/landing/lifecycle-notebook.webp"
+                alt="A Renart SQL notebook: a query cell with its result table, a chart cell rendering a revenue line chart, and the cell menu open on the Promote to pipeline action"
+                width="1400"
+                height="900"
+                loading="lazy"
+              />
             </div>
           </article>
 
@@ -278,16 +270,14 @@ const stackItems = ['DuckDB', 'Postgres', 'Snowflake', 'BigQuery', 'Redshift', '
               <h3>From first run to production cron</h3>
               <p>Preview any asset without side effects, then materialize it explicitly when you're sure. Put the pipeline on a schedule per environment and Renart executes it against your platform of choice — DuckDB, Postgres, Snowflake, BigQuery, and more. No separate orchestrator to deploy and babysit.</p>
             </div>
-            <!-- SCREENSHOT TODO (landing/lifecycle-schedules.png, ~1400x900):
-              The schedules page listing 2-4 schedules with their cron expressions, target
-              environments, enabled state, and next-run times. At least one schedule should
-              show a recent successful run. -->
             <div class="life-media">
-              <div class="shot" role="img" aria-label="Placeholder for a screenshot of the schedules page">
-                <span class="shot-tag">screenshot placeholder</span>
-                <p>Schedules page listing schedules with cron expressions, target environments, and next-run times.</p>
-                <code>landing/lifecycle-schedules.png</code>
-              </div>
+              <img
+                src="/landing/lifecycle-schedules.webp"
+                alt="Creating a schedule in Renart: a dialog with pipeline, environment, cron, timezone, and catch-up policy fields over a list of existing schedules with their runs plotted on a timeline"
+                width="1176"
+                height="756"
+                loading="lazy"
+              />
             </div>
           </article>
 
@@ -297,16 +287,14 @@ const stackItems = ['DuckDB', 'Postgres', 'Snowflake', 'BigQuery', 'Redshift', '
               <h3>Know what's fresh — rerun only what isn't</h3>
               <p>Renart fingerprints every asset: its code, its dependencies, its outputs. The canvas shows what's fresh, stale, or missing at a glance, and an upstream change tells you exactly what it invalidates downstream. Rerun what changed, skip what didn't.</p>
             </div>
-            <!-- SCREENSHOT TODO (landing/lifecycle-staleness.png, ~1400x900):
-              Canvas zoomed on a subgraph of 5-8 assets with a visible mix of fresh, stale,
-              and missing status badges. One stale node selected, with the panel/tooltip
-              explaining why it is stale (upstream change) visible. -->
             <div class="life-media">
-              <div class="shot" role="img" aria-label="Placeholder for a screenshot of staleness tracking on the canvas">
-                <span class="shot-tag">screenshot placeholder</span>
-                <p>Canvas subgraph with mixed fresh/stale/missing badges; one stale node selected, showing why it is stale.</p>
-                <code>landing/lifecycle-staleness.png</code>
-              </div>
+              <img
+                src="/landing/lifecycle-staleness.webp"
+                alt="The Renart pipeline canvas after an edit: the changed staging asset is marked Edited, its downstream marts are marked Upstream changed, a new asset shows Never built, and untouched assets stay Fresh"
+                width="1400"
+                height="900"
+                loading="lazy"
+              />
             </div>
           </article>
         </div>
@@ -318,16 +306,14 @@ const stackItems = ['DuckDB', 'Postgres', 'Snowflake', 'BigQuery', 'Redshift', '
 
         <div class="bento">
           <article class="card span-3">
-            <!-- SCREENSHOT TODO (landing/feature-runs.png, ~1200x675):
-              Runs & history view: a list of recent runs (manual and scheduled) with
-              per-asset statuses, durations, and at least one expanded run showing
-              per-asset detail. A mix of success and one failure makes it credible. -->
             <div class="card-visual">
-              <div class="shot shot--fill" role="img" aria-label="Placeholder for a screenshot of the runs history view">
-                <span class="shot-tag">screenshot placeholder</span>
-                <p>Runs history: recent manual and scheduled runs with per-asset status, duration, and logs.</p>
-                <code>landing/feature-runs.png</code>
-              </div>
+              <img
+                src="/landing/feature-runs.webp"
+                alt="A failed run in Renart: a per-asset execution timeline with one asset in red, and the event log pinpointing the exact SQL error that stopped the run"
+                width="1200"
+                height="675"
+                loading="lazy"
+              />
             </div>
             <div class="card-content">
               <div class="card-tag">Runs &amp; history</div>
@@ -337,20 +323,19 @@ const stackItems = ['DuckDB', 'Postgres', 'Snowflake', 'BigQuery', 'Redshift', '
           </article>
 
           <article class="card span-3">
-            <!-- SCREENSHOT TODO (landing/feature-catalog.png, ~1200x675):
-              Asset catalog view: searchable list of assets with columns, owners, and tags
-              visible. One asset expanded or selected to show its column documentation. -->
             <div class="card-visual">
-              <div class="shot shot--fill" role="img" aria-label="Placeholder for a screenshot of the asset catalog">
-                <span class="shot-tag">screenshot placeholder</span>
-                <p>Asset catalog: searchable asset list with columns, owners, and tags; one asset opened to show column docs.</p>
-                <code>landing/feature-catalog.png</code>
-              </div>
+              <img
+                src="/landing/feature-catalog.webp"
+                alt="The Renart catalog: lineage across every pipeline in the workspace, with one asset selected and its upstream path highlighted through the graph"
+                width="1200"
+                height="675"
+                loading="lazy"
+              />
             </div>
             <div class="card-content">
               <div class="card-tag">Catalog</div>
               <h3>Your pipeline, documented by default</h3>
-              <p>A searchable catalog of every asset with its columns, owners, and tags — generated from the files themselves, so it can't drift out of date.</p>
+              <p>A catalog of every asset across every pipeline — columns, owners, tags, and lineage, generated from the files themselves. Select an asset and trace exactly what feeds it.</p>
             </div>
           </article>
 
@@ -472,6 +457,38 @@ const stackItems = ['DuckDB', 'Postgres', 'Snowflake', 'BigQuery', 'Redshift', '
           window.__renartToastTimeout = window.setTimeout(() => toast?.classList.remove('show'), 1600);
         });
       });
+
+      (() => {
+        if (window.matchMedia('(prefers-reduced-motion: reduce)').matches || !('IntersectionObserver' in window)) {
+          return;
+        }
+        const targets = document.querySelectorAll(
+          ['.block .eyebrow', '.block .h2', '.block .lede', '.life-row', '.bento .card', '.manifesto blockquote', '.manifesto .attrib', '.plist', '.final h2', '.final p', '.final .ctas', '.final .install'].join(', ')
+        );
+        const observer = new IntersectionObserver(
+          (entries) => {
+            for (const entry of entries) {
+              if (entry.isIntersecting) {
+                entry.target.classList.add('in');
+                observer.unobserve(entry.target);
+              }
+            }
+          },
+          { rootMargin: '0px 0px -8% 0px', threshold: 0.1 }
+        );
+        targets.forEach((el, index) => {
+          // Leave anything already on screen alone so nothing flashes at load.
+          if (el.getBoundingClientRect().top < window.innerHeight * 0.9) {
+            return;
+          }
+          // Stagger cards within the bento grid; everything else reveals on its own.
+          if (el.matches('.bento .card')) {
+            el.style.setProperty('--reveal-delay', `${(index % 4) * 70}ms`);
+          }
+          el.classList.add('reveal');
+          observer.observe(el);
+        });
+      })();
     </script>
   </body>
 </html>
@@ -696,29 +713,7 @@ const stackItems = ['DuckDB', 'Postgres', 'Snowflake', 'BigQuery', 'Redshift', '
     pointer-events: none;
     box-shadow: inset 0 1px 0 var(--accent-soft-2);
   }
-  .hero-media .shot { position: absolute; inset: 0; border: 0; border-radius: 0; }
-
-  .shot {
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    justify-content: center;
-    gap: 10px;
-    width: 100%;
-    height: 100%;
-    min-height: 220px;
-    padding: 28px;
-    text-align: center;
-    border: 1px dashed var(--line-3);
-    border-radius: var(--r-4);
-    background:
-      repeating-linear-gradient(-45deg, transparent 0 14px, rgba(255, 255, 255, 0.015) 14px 28px),
-      var(--bg-1);
-  }
-  .shot-tag { font-family: var(--mono); font-size: 10px; color: var(--accent); text-transform: uppercase; letter-spacing: 0.14em; }
-  .shot p { margin: 0; max-width: 46ch; font-size: 13px; line-height: 1.55; color: var(--fg-3); text-wrap: pretty; }
-  .shot code { font-size: 11px; color: var(--fg-4); }
-  .shot--fill { border: 0; border-radius: 0; }
+  .hero-media img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; display: block; }
 
   .marquee-wrap { margin: 96px 0 0; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); overflow: hidden; background: var(--bg); position: relative; }
   .marquee-wrap::before, .marquee-wrap::after { content: ''; position: absolute; top: 0; bottom: 0; width: 120px; z-index: 2; pointer-events: none; }
@@ -743,12 +738,34 @@ const stackItems = ['DuckDB', 'Postgres', 'Snowflake', 'BigQuery', 'Redshift', '
   .life-row--rev .life-media { order: 1; }
   .life-copy h3 { font-size: 24px; font-weight: 500; letter-spacing: -0.015em; margin: 0 0 12px; }
   .life-copy p { font-size: 15px; color: var(--fg-2); line-height: 1.6; margin: 0; text-wrap: pretty; }
-  .life-media { aspect-ratio: 16 / 10; }
+  .life-media {
+    aspect-ratio: 14 / 9;
+    border: 1px solid var(--line-2);
+    border-radius: var(--r-4);
+    background: var(--bg-1);
+    overflow: hidden;
+    box-shadow: var(--shadow-card);
+    position: relative;
+    transition: border-color 0.25s, box-shadow 0.25s;
+  }
+  .life-media::before {
+    content: '';
+    position: absolute;
+    inset: -1px;
+    border-radius: inherit;
+    pointer-events: none;
+    z-index: 1;
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.05);
+  }
+  .life-media:hover { border-color: var(--line-3); box-shadow: var(--shadow-pop); }
+  .life-media img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; display: block; }
 
   .bento { margin-top: 56px; display: grid; grid-template-columns: repeat(6, 1fr); grid-auto-rows: minmax(240px, auto); gap: 20px; }
   .card { border: 1px solid var(--line); border-radius: var(--r-4); background: var(--bg-1); overflow: hidden; display: flex; flex-direction: column; position: relative; transition: border-color 0.2s; }
   .card:hover { border-color: var(--line-2); }
   .card-visual { flex: none; aspect-ratio: 16 / 9; background: var(--bg); border-bottom: 1px solid var(--line); position: relative; overflow: hidden; }
+  .card-visual img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; display: block; transition: transform 0.5s ease; }
+  .card:hover .card-visual img { transform: scale(1.015); }
   .card--text { justify-content: center; }
   .card-content { padding: 22px 24px 24px; }
   .card-tag { font-family: var(--mono); font-size: 10.5px; color: var(--accent); text-transform: uppercase; letter-spacing: 0.1em; margin-bottom: 10px; }
@@ -785,6 +802,17 @@ const stackItems = ['DuckDB', 'Postgres', 'Snowflake', 'BigQuery', 'Redshift', '
   .meta { display: flex; gap: 16px; align-items: center; }
   .toast { position: fixed; bottom: 24px; left: 50%; transform: translate(-50%, 12px); background: var(--bg-2); color: var(--accent); border: 1px solid var(--accent-soft-2); font-family: var(--mono); font-size: 12px; padding: 8px 14px; border-radius: var(--r-2); box-shadow: var(--shadow-pop); z-index: 1000; opacity: 0; pointer-events: none; transition: opacity 0.2s, transform 0.2s; }
   .toast.show { opacity: 1; transform: translate(-50%, 0); }
+
+  /* Scroll reveal: the hidden state only exists once JS tags an element with
+     .reveal, so content stays visible without JavaScript. */
+  .reveal { opacity: 0; transform: translateY(18px); transition: opacity 0.65s cubic-bezier(0.22, 1, 0.36, 1), transform 0.65s cubic-bezier(0.22, 1, 0.36, 1); transition-delay: var(--reveal-delay, 0s); }
+  .reveal.in { opacity: 1; transform: none; }
+  @media (prefers-reduced-motion: reduce) {
+    html { scroll-behavior: auto; }
+    .reveal { opacity: 1; transform: none; transition: none; }
+    .marquee { animation: none; flex-wrap: wrap; justify-content: center; width: auto; }
+    .card-visual img, .card:hover .card-visual img { transition: none; transform: none; }
+  }
 
   @media (max-width: 1100px) {
     .bento { grid-template-columns: repeat(2, 1fr); }

@@ -3,7 +3,7 @@ import starlight from '@astrojs/starlight';
 import starlightThemeRapide from 'starlight-theme-rapide';
 
 const site = 'https://getrenart.com';
-const socialImage = `${site}/landing/feature-dag-canvas.png`;
+const socialImage = `${site}/landing/og-image.png`;
 const siteDescription = 'Renart is the git-native data pipeline IDE for Bruin projects: a visual canvas, editor, inspect, and execution workflow for version-controlled pipelines.';
 const docsDescription = 'Documentation for Renart, the git-native data pipeline IDE for visually editing, inspecting, running, and understanding Bruin projects.';
 

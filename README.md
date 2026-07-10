@@ -4,7 +4,7 @@ Renart is the all-in-one data pipeline IDE — open source, and it runs entirely
 
 Write SQL that knows your DAG, explore data in notebooks, preview and materialize assets, and put pipelines on a schedule — without standing up a hosted control plane, signing up for anything, or sending your data anywhere.
 
-![Renart pipeline canvas and editor](docs/public/landing/feature-dag-canvas.png)
+![Renart pipeline canvas and editor](docs/public/landing/hero-workspace.webp)
 
 ## What you get
 
