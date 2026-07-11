@@ -31,8 +31,9 @@ const guiHelperName = "renart-gui"
 func Standalone() *cli.Command {
 	return &cli.Command{
 		Name:      "standalone",
-		Usage:     "run Renart as a standalone desktop app",
+		Usage:     "run Renart as a desktop app",
 		ArgsUsage: "[workspace root]",
+		Category:  categoryIDE,
 		Flags: append(serverFlags(),
 			&cli.IntFlag{
 				Name:  "port",

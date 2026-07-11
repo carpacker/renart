@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"path/filepath"
 	"time"
 
 	"github.com/bruin-data/bruin/pkg/pipeline"
@@ -23,8 +22,10 @@ func TypeCheck() *cli.Command {
 	return &cli.Command{
 		Name:      "type-check",
 		Usage:     "type-check a pipeline's assets (SQL columns/types + missing column declarations)",
-		ArgsUsage: "<pipeline directory>",
+		ArgsUsage: "[pipeline name or directory]",
+		Category:  categoryPipeline,
 		Flags: []cli.Flag{
+			workspaceFlag(),
 			&cli.StringFlag{
 				Name:  "start-date",
 				Usage: "ISO start date used for the Jinja date context (defaults to the pipeline schedule)",
@@ -43,11 +44,7 @@ func TypeCheck() *cli.Command {
 			},
 		},
 		Action: func(ctx context.Context, c *cli.Command) error {
-			target := c.Args().Get(0)
-			if target == "" {
-				target = "."
-			}
-			absTarget, err := filepath.Abs(target)
+			absTarget, err := resolvePipelineTarget(c)
 			if err != nil {
 				return err
 			}

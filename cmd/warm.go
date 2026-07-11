@@ -22,9 +22,8 @@ import (
 // almost immediately and stay lean.
 func WarmCache() *cli.Command {
 	return &cli.Command{
-		Name:   "warm-cache",
-		Usage:  "compile the embedded WASM modules into the on-disk cache, then exit",
-		Hidden: true,
+		Name:  "warm-cache",
+		Usage: "compile the embedded WASM modules into the on-disk cache, then exit",
 		Action: func(ctx context.Context, _ *cli.Command) error {
 			return warmWasmCaches(ctx)
 		},

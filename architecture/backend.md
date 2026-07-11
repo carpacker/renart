@@ -6,13 +6,13 @@ refactor items from that review are done except where noted in §6.
 ## 1. Shape
 
 ```
-main.go → urfave/cli commands (cmd/)
-  web         run the HTTP server against a workspace root
-  standalone  same server + native window via the renart-gui helper binary
-  fp          print a pipeline's fingerprint DAG (debug)
-  deploy      snapshot a pipeline for scheduled execution
-  type-check  render + type-check a pipeline's assets
-  warm        pre-warm the wasm compile / format caches
+main.go → cmd.Root() → urfave/cli commands (cmd/)
+  web         run the HTTP server against a workspace root       (IDE)
+  standalone  same server + native window via renart-gui helper  (IDE)
+  deploy      snapshot a pipeline for scheduled execution        (Pipeline)
+  type-check  render + type-check a pipeline's assets            (Pipeline)
+  debug       hidden group: fp (fingerprint DAG), sql-lsp
+              (stdio LSP), warm-cache (wasm compile caches)
 
 cmd/server.go  flags → serverConfig → wiring (services, watcher, scheduler)
 cmd/web.go     route registration + a thin webServer adapter
@@ -131,7 +131,7 @@ type check and execution surface the incomplete state until it is resolved.
 SQL intelligence (parse/lineage/validation) and formatting run on the embedded
 Polyglot SQL wasm engine (`sqlintelligence`, `sqlformat`); Python intelligence
 runs ty as wasm (`pyintelligence`).
-All run under wazero with an on-disk compilation cache (`renart warm`
+All run under wazero with an on-disk compilation cache (`renart debug warm-cache`
 pre-warms it). RSS is dominated by these engines; retiring the interpreter
 fallback + the disk cache brought idle memory to roughly 360 MB.
 

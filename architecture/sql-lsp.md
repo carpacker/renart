@@ -2,7 +2,7 @@
 
 Status: current state (built on the `sql-language-server` branch, July 2026).
 A Go implementation in `internal/sqllsp` serving two frontends: a stdio
-JSON-RPC LSP server (`renart sql-lsp`) for external editors, and HTTP
+JSON-RPC LSP server (`renart debug sql-lsp`) for external editors, and HTTP
 endpoints (`/api/sql/lsp/*`) consumed by the web UI's Monaco editors —
 including notebook cells.
 
@@ -141,7 +141,7 @@ Design notes, in decreasing order of importance:
 
 ## 5. stdio server
 
-`renart sql-lsp` (`cmd/sqllsp.go`) loads the graph from the workspace folder
+`renart debug sql-lsp` (`cmd/sqllsp.go`) loads the graph from the workspace folder
 (`LoadGraphFromDir` understands bruin pipelines and dbt projects incl.
 `schema.yml`), serves LSP over stdio, and reloads the graph on
 `workspace/didChangeWatchedFiles`. A missing graph degrades to syntax-only

@@ -23,7 +23,7 @@ function warmWasmCache() {
     return;
   }
   try {
-    execFileSync(binaryPath, ["warm-cache"], {
+    execFileSync(binaryPath, ["debug", "warm-cache"], {
       stdio: "ignore",
       timeout: 6 * 60 * 1000,
     });

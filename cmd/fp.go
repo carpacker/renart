@@ -22,17 +22,14 @@ import (
 func Fp() *cli.Command {
 	return &cli.Command{
 		Name:      "fp",
-		Usage:     "print the fingerprint DAG of a pipeline (debug)",
-		ArgsUsage: "<pipeline directory>",
+		Usage:     "print the fingerprint DAG of a pipeline",
+		ArgsUsage: "[pipeline name or directory]",
 		Flags: []cli.Flag{
+			workspaceFlag(),
 			&cli.BoolFlag{Name: "json", Usage: "emit JSON instead of a table"},
 		},
 		Action: func(ctx context.Context, c *cli.Command) error {
-			target := c.Args().Get(0)
-			if target == "" {
-				target = "."
-			}
-			absTarget, err := filepath.Abs(target)
+			absTarget, err := resolvePipelineTarget(c)
 			if err != nil {
 				return err
 			}

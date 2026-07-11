@@ -20,25 +20,13 @@ func Deploy() *cli.Command {
 	return &cli.Command{
 		Name:      "deploy",
 		Usage:     "snapshot a pipeline so scheduled runs execute the deployed version",
-		ArgsUsage: "<pipeline directory>",
+		ArgsUsage: "[pipeline name or directory]",
+		Category:  categoryPipeline,
 		Flags: []cli.Flag{
-			&cli.StringFlag{
-				Name:  "workspace",
-				Value: ".",
-				Usage: "workspace root holding the .renart state directory",
-			},
-			&cli.StringFlag{
-				Name:  "scheduler-state",
-				Value: ".renart/state.db",
-				Usage: "local scheduler SQLite state path, relative to the workspace root",
-			},
+			workspaceFlag(),
 		},
 		Action: func(ctx context.Context, c *cli.Command) error {
-			target := c.Args().Get(0)
-			if target == "" {
-				target = "."
-			}
-			absTarget, err := filepath.Abs(target)
+			absTarget, err := resolvePipelineTarget(c)
 			if err != nil {
 				return err
 			}
@@ -59,14 +47,15 @@ func Deploy() *cli.Command {
 				fmt.Fprintf(os.Stderr, "notice: assigned stable id %s to %s\n", pipelineUUID, pipelineYml)
 			}
 
-			workspaceRoot, err := filepath.Abs(c.String("workspace"))
+			cwd, err := os.Getwd()
 			if err != nil {
 				return err
 			}
-			statePath := c.String("scheduler-state")
-			if !filepath.IsAbs(statePath) {
-				statePath = filepath.Join(workspaceRoot, statePath)
+			workspaceRoot, err := findWorkspaceRoot(c.String("workspace"), cwd)
+			if err != nil {
+				return err
 			}
+			statePath := filepath.Join(workspaceRoot, ".renart", "state.db")
 			store, err := webscheduler.OpenStore(statePath)
 			if err != nil {
 				return fmt.Errorf("failed to open state store at %s: %w", statePath, err)
