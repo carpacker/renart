@@ -1,6 +1,6 @@
 # Docs for the alpha release
 
-Status: active — target is the alpha release on Tuesday 2026-07-14.
+Status: implemented 2026-07-11 — for the alpha release on Tuesday 2026-07-14.
 Consolidates and supersedes `docs-overhaul.md` and `user-docs-rollout.md`
 (both deleted; git keeps them). The middle ground: the rollout plan's IA,
 conventions, and authoring contract survive, at the overhaul's scope —
@@ -87,5 +87,7 @@ dark theme, deviceScaleFactor 2, webp).
 - `pnpm build` in `docs/` green; no sidebar entry or link points to a
   deleted stub.
 - `grep -ri bruin docs/src/content` returns only the interop page + the
-  file-format/config reference.
+  file-format/config reference in prose; the `@bruin` header markers inside
+  code samples on the SQL/Python pages are the file syntax itself, not
+  prose, and are fine.
 - `make docs-media` regenerates every referenced image from scratch.

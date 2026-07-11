@@ -1,12 +1,71 @@
 ---
 title: Asset file format
-description: "The Renart-managed keys in an asset file."
+description: The structured header every asset file carries, key by key.
 ---
-{/* Diátaxis mode: Reference. See architecture/docs-framework.md for the template. */}
-import { Aside } from '@astrojs/starlight/components';
 
-<Aside type="note" title="In progress">
-This page is being written as part of the docs build-out.
-</Aside>
+Every asset is a file with a structured YAML header and (for code assets) a
+body. SQL assets carry the header in a `/* @bruin … @bruin */` comment,
+Python assets in a `""" @bruin … @bruin """` docstring, and definition-only
+assets (sources, seeds) are plain `.asset.yml` files with the same keys.
 
-Documents the asset file keys Renart manages.
+The editor's workbench is a form view over exactly this header — editing
+either one produces the same file change.
+
+```sql
+/* @bruin
+name: mart.daily_revenue
+type: duckdb.sql
+owner: analytics@acme.dev
+description: "Revenue per calendar day"
+tags:
+  - mart
+  - finance
+materialization:
+  type: table
+depends:
+  - staging.orders
+columns:
+  - name: order_date
+    type: DATE
+    description: "Calendar date"
+    primary_key: true
+    checks:
+      - name: not_null
+      - name: unique
+  - name: revenue
+    type: DOUBLE
+    checks:
+      - name: positive
+@bruin */
+
+SELECT ...
+```
+
+## Keys
+
+| Key | Meaning |
+| --- | --- |
+| `name` | The asset's identity, usually `<folder>.<file>` (for example `staging.orders`). Downstream SQL references this name. |
+| `type` | Engine and kind: `duckdb.sql`, `pg.sql`, `sf.sql`, `bq.sql`, `python`, source types, and so on. |
+| `owner` | Free-form owner string, shown in the workbench and catalog. |
+| `description` | What the asset produces. |
+| `tags` | Labels for search and grouping. |
+| `materialization` | Write behavior when the asset runs: `type: view`, `type: table` (replace), or incremental strategies with their options. |
+| `depends` | Explicit upstream asset names. Renart infers most dependencies from SQL; entries here add relationships the code can't express. |
+| `columns` | Declared output columns: `name`, `type`, `description`, `primary_key`, and `checks`. |
+| `columns[].checks` | Quality checks that travel with the asset and run with the pipeline: `not_null`, `unique`, `positive`, `accepted_values` (with `value:`), and custom SQL checks. |
+| `meta` | Free-form key/value strings. Renart uses `meta` keys to remember UI state such as a preferred chart type, and to track the provenance of values it wrote itself. |
+
+## The project around the asset
+
+- `pipeline.yml` — the pipeline's name, schedule cadence, start date, and
+  default connections.
+- The **project config file** (`.bruin.yml` at the workspace root) — the
+  environments and connections the assets run against. In UI copy this is
+  simply "the project config".
+- `.renart/` — local state such as the scheduler database and deployed
+  snapshots; safe to gitignore.
+
+Because assets are plain files with one header vocabulary, the same
+project remains usable by other tooling that understands the format — see
+[Renart & the Bruin CLI](/docs/bruin-cli-and-renart/).

@@ -1,31 +1,31 @@
 ---
-title: Renart for Bruin Users
-description: What Renart adds to Bruin CLI workflows.
+title: Renart & the Bruin CLI
+description: Renart projects are plain files the open-source Bruin CLI can also run.
 ---
 
-Renart and the Bruin CLI work on the same project files. If you already use Bruin from your terminal, Renart is not a replacement project format or a separate runtime. It is an IDE layer for the same assets, pipelines, and repository.
+Renart runs on the open-source [Bruin](https://github.com/bruin-data/bruin)
+execution engine, and a Renart project is a valid Bruin project: the same
+asset files, the same pipeline definitions, the same config. You don't need
+to know Bruin to use Renart — but the compatibility is a deliberate
+promise.
 
-## Keep Using Bruin CLI
+## What that buys you
 
-Bruin CLI remains the right tool when you want a coding-oriented, terminal-first experience.
+- **No lock-in.** Assets are ordinary `.sql`, `.py`, and `.yml` files. If
+  you stop using Renart, the project still runs.
+- **Terminal interop.** Anything the `bruin` CLI can do — run a pipeline
+  from a script, execute in a container — works against the same
+  repository, unchanged.
+- **Existing projects just open.** If you already have a Bruin project,
+  `renart web` in that repository gives you the canvas, editor, staleness
+  tracking, and schedules on top of it.
 
-Typical cases:
+## When you'd reach for the CLI
 
-- editing files directly in your editor
-- running commands from the terminal
-- working in a script-heavy or automation-heavy loop
+Renart covers editing, previewing, materializing, scheduling, and history.
+The `bruin` CLI remains useful for scripted or containerized execution in
+environments where you wouldn't run a UI. Both operate on the same files,
+so mixing them is safe.
 
-## Use Renart For Visual Work
-
-Renart is a better fit when you want to see and change the pipeline structure directly.
-
-Typical cases:
-
-- exploring a pipeline on the pipeline canvas
-- understanding dependencies and lineage quickly
-- editing assets with more context around them
-- inspecting and running work without leaving the workspace view
-
-## Same Project Model
-
-Both tools work against the same underlying files. Renart reads workspace state from disk, sends file-changing actions through the local Go server, and reconciles external edits back into the UI. You can keep terminal commands, editor workflows, and Git review practices in place while using Renart for canvas-first editing and inspection.
+For the file format itself, see the
+[asset file format](/docs/reference/asset-file-format/).
