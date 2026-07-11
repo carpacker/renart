@@ -9,8 +9,12 @@ refactor items from that review are done except where noted in §6.
 main.go → cmd.Root() → urfave/cli commands (cmd/)
   web         run the HTTP server against a workspace root       (IDE)
   standalone  same server + native window via renart-gui helper  (IDE)
+  run         run a pipeline or asset; delegates to a live
+              server, else executes in-process                   (Pipeline)
+  ls          list pipelines/assets                              (Pipeline)
   deploy      snapshot a pipeline for scheduled execution        (Pipeline)
   type-check  render + type-check a pipeline's assets            (Pipeline)
+  init        scaffold a project from the welcome templates      (Project)
   debug       hidden group: fp (fingerprint DAG), sql-lsp
               (stdio LSP), warm-cache (wasm compile caches)
 
@@ -71,6 +75,27 @@ surfaces the UI hides by default — `/api/config` filters ingestr source
 connection types out unless the flag is set, and the frontend
 (`web/lib/features.ts`) additionally shows them when the workspace already
 contains ingestr assets.
+
+**CLI ↔ server (delegate-or-embed).** Pipeline commands resolve their
+workspace git-style (walk up to `.bruin.yml` → `.renart` → repo root;
+`cmd/workspace.go`) and their target as a pipeline name, asset name, or
+path. `renart run` then delegates to a live server when one has the
+workspace open: servers write `.renart/server.json` (pid, project-mount API
+base, session token) into every open project root — removed on graceful
+shutdown; `web`/`standalone` trap SIGINT/SIGTERM for exactly this — and
+expose `GET /api/health`. `internal/clientapi` reads the file, health-checks
+it fast (a stale file falls back to embedded mode in under a second,
+comparing symlink-resolved roots), and streams the same materialize SSE
+endpoints the UI uses, authenticating with the token
+(`SameOriginGuardWithToken`; `RENART_SERVER`/`RENART_TOKEN` pin a server,
+`--local` forces embedded). Delegation means one process owns all
+DuckDB/SQLite writes — DuckDB is single-writer per file across processes —
+and the UI's staleness/run history update live. Embedded mode boots the same
+graph headless (`serverConfig.headless`: no static assets, watcher, or
+fingerprint pre-warm) and **never starts the River scheduler** (two
+schedulers on one state DB would duplicate runs); run facts still land in
+`.renart/state.db`. The visible command surface is pinned by
+`cmd/root_test.go`.
 
 ## 3. Persistence
 

@@ -206,8 +206,9 @@ avoids "works on my machine" drift and makes the compile oracle reliable.
   no (v1). Same parking decision as notebook Python cells.
 - **Two sources of truth for runs**: users will keep running `dbt` in their
   own terminal. Watching `target/run_results.json` for external runs keeps
-  staleness honest — and the CLI-terminal from `plans/cli-v1.md` makes
-  running dbt *inside* renart natural.
+  staleness honest. (A web-UI terminal — dropped from the shipped CLI v1,
+  design in git history at `plans/cli-v1.md` — would make running dbt
+  *inside* renart natural if it ever lands.)
 - **Scope creep toward "renart is a dbt replacement"**: the boundary is
   fixed — dbt executes, renart never renders dbt SQL for execution purposes.
 

@@ -10,7 +10,6 @@ the original.
 
 | Doc | Status |
 | --- | --- |
-| [cli-v1.md](cli-v1.md) | proposed — a clean CLI surface + `renart run`, standalone and inside a web-UI terminal |
 | [dbt-assets.md](dbt-assets.md) | evaluation — enabling renart intelligence on existing dbt projects |
 | [materialization-strategies.md](materialization-strategies.md) | in progress — Phase 1 partially landed |
 | [materialization-per-asset-type.md](materialization-per-asset-type.md) | proposed — make every offered materialization mode execute on sql/python/load/api assets |
@@ -19,6 +18,6 @@ the original.
 
 Recently folded away (git history keeps them): `docs-alpha.md` and
 `landing-page.md` → `architecture/docs.md`; `notebook-intellisense.md` →
-`architecture/sql-lsp.md`; `ingestr-feature-flag.md` and
-`project-settings-and-workspaces.md` → `architecture/backend.md` +
-`architecture/frontend.md`.
+`architecture/sql-lsp.md`; `ingestr-feature-flag.md`,
+`project-settings-and-workspaces.md`, and `cli-v1.md` →
+`architecture/backend.md` + `architecture/frontend.md`.
