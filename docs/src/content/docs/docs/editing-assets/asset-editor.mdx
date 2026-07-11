@@ -20,7 +20,7 @@ run.
 - **IntelliSense** completes table names from the pipeline and column names
   from the actual upstream assets, with their types.
 - **Validation** flags unresolved tables and columns inline as you type.
-- **Format SQL** reformats the statement without touching the header.
+- **Format SQL** reformats the query in place.
 - Edits **autosave to the file on disk** — the file in your repository is
   always what you see in the editor.
 
@@ -40,8 +40,7 @@ The results panel under the editor follows the selected asset:
 ## The workbench
 
 To the right of the editor, the workbench shows the asset's metadata as
-editable cards — the same information as the file header, in form view or
-raw YAML:
+editable cards:
 
 - **Identity** — name, type, owner, description, tags.
 - **Materialization** — write behavior (for example view, or table with
@@ -51,5 +50,6 @@ raw YAML:
 - **Columns** — names, types, descriptions, and checks; refresh them from
   the asset's definition after the SQL changes.
 
-Changes made in the workbench are written back into the asset file's
-header, so a form edit and a text edit are the same change in review.
+Like everything in Renart, workbench edits land as plain file changes in
+your repository, so a form edit and a code edit look the same in review —
+see [how it works](/docs/how-it-works/).

@@ -1,0 +1,64 @@
+---
+title: How it works
+description: Everything you do in the UI is stored as plain files in your git repository.
+---
+
+Renart looks and feels like a visual tool — a canvas, an editor, forms for
+metadata. Underneath, there is no application database holding your work.
+Everything you create in the UI is stored as ordinary files in your git
+repository, and those files are the single source of truth.
+
+## Assets are files
+
+Every asset is one file in your repository. For a SQL asset that file
+contains the query you write in the editor, plus the metadata you manage in
+the workbench — name, description, columns, quality checks, materialization
+— encoded in a structured section of the same file. Renart maintains that
+encoding for you: when you rename an asset, add a check, or change the
+materialization in the UI, Renart rewrites the file.
+
+You never need to manage that encoding by hand — the editor and the
+workbench are the interface. But because it lives in a plain file, every
+change you make in the UI shows up as a readable diff. Adding a `not_null`
+check to a column in the workbench, for example, produces a file change
+like:
+
+```diff
+   columns:
+     - name: order_id
+       type: INTEGER
++      checks:
++        - name: not_null
+```
+
+## The project is a folder
+
+The rest of what you see in the UI maps to files the same way:
+
+- A **pipeline** is a folder of asset files, with a `pipeline.yml` holding
+  the pipeline's name and defaults.
+- **Connections and environments** from Project settings live in the
+  project config file at the workspace root.
+- **Notebooks** are folders of cell files.
+- Local state that shouldn't be shared — the scheduler database, deployed
+  snapshots — lives in `.renart/`, which is safe to gitignore.
+
+## Why it's built this way
+
+- **Review and revert.** A visual edit — moving a node, adding a check,
+  changing a schedule's pipeline — is a file change you can diff, review in
+  a pull request, and revert like any other code.
+- **Branching works.** Pipeline work happens on branches, the same as the
+  rest of your repository. Two people can work on different assets and
+  merge.
+- **Nothing is trapped.** If you stop using Renart, your queries, metadata,
+  and pipeline structure are still there as readable files. There is no
+  export step because there was never an import step.
+- **Tools compose.** grep, code review, CI, backups — anything that works
+  on files works on your pipelines.
+
+## Related
+
+- [Concepts](/docs/concepts/) — the vocabulary the UI uses.
+- [The asset editor](/docs/editing-assets/asset-editor/) — where these
+  files get edited in practice.

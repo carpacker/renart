@@ -42,28 +42,8 @@ renart type-check [options] <pipeline directory>
 | `--strict` | Also fail on warnings. |
 | `--start-date`, `--end-date` | ISO dates for the template date context (default: the pipeline schedule). |
 
-## renart deploy
-
-Snapshots a pipeline so scheduled runs execute the deployed version
-instead of the working tree.
-
-```bash
-renart deploy [options] <pipeline directory>
-```
-
-| Flag | Default | Meaning |
-| --- | --- | --- |
-| `--workspace` | `.` | Workspace root holding the `.renart` state directory. |
-| `--scheduler-state` | `.renart/state.db` | Scheduler state path, relative to the workspace root. |
-
 ## renart standalone
 
 Runs Renart as a standalone desktop app (an embedded server plus a native
 window). Takes the same watcher and scheduler flags as `renart web`; `--port`
 defaults to `0`, which picks a free loopback port.
-
-## Other commands
-
-- `renart sql-lsp` — the Renart SQL language server over stdio, for editor
-  integrations.
-- `renart fp` — prints a pipeline's fingerprint DAG (debugging staleness).

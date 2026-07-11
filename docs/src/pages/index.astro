@@ -3,7 +3,6 @@ import { execSync } from 'node:child_process';
 import { Font } from 'astro:assets';
 
 const repoUrl = 'https://github.com/renart-data/renart';
-const bruinUrl = 'https://github.com/bruin-data/bruin';
 const installCommand = 'curl -LsSf getrenart.com/install.sh | sh';
 const siteUrl = 'https://getrenart.com';
 const pageTitle = 'Renart - The all-in-one data pipeline IDE';
@@ -376,7 +375,7 @@ const stackItems = ['DuckDB', 'Postgres', 'Snowflake', 'BigQuery', 'Redshift', '
           <div class="prow"><span class="check">✓</span><span><b>No account, no cloud.</b> No hosted control plane, no sign-up, no data leaving your environment.</span></div>
           <div class="prow"><span class="check">✓</span><span><b>Your platform, your choice.</b> Run pipelines on DuckDB, Postgres, Snowflake, BigQuery, Redshift, and more.</span></div>
           <div class="prow"><span class="check">✓</span><span><b>Everything is readable text.</b> The entire pipeline definition is human-readable, diffable files — nothing hides in a database.</span></div>
-          <div class="prow"><span class="check">✓</span><span><b>No lock-in.</b> Assets are ordinary <code>.sql</code>, <code>.py</code>, and <code>.yml</code> files, compatible with the <a href={bruinUrl}>Bruin</a> CLI.</span></div>
+          <div class="prow"><span class="check">✓</span><span><b>No lock-in.</b> Assets are ordinary <code>.sql</code>, <code>.py</code>, and <code>.yml</code> files — if you stop using Renart, your pipelines are still right there.</span></div>
           <div class="prow"><span class="check">✓</span><span><b>Open source.</b> Apache 2.0, developed in the open.</span></div>
         </div>
       </section>
