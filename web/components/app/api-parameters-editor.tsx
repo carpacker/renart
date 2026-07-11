@@ -46,6 +46,18 @@ export function ApiParametersEditor({
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const columnsTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
+  // A direct navigation can mount this editor before the workspace content
+  // model has the asset's file content, seeding an empty block that would
+  // otherwise stick forever. Re-seed when content arrives, but never over
+  // unsaved keystrokes.
+  useEffect(() => {
+    if (pendingBlockRef.current !== null || saveTimerRef.current) {
+      return;
+    }
+    const next = extractParametersText(asset.content);
+    setBlock((current) => (current === "" && next !== "" ? next : current));
+  }, [asset.content]);
+
   const flushSave = useCallback(() => {
     if (saveTimerRef.current) {
       clearTimeout(saveTimerRef.current);
