@@ -8,12 +8,13 @@
 // Env overrides: RENART_DOCS_MEDIA_DIR (output dir), RENART_DOCS_MEDIA_PORT,
 // GO_BIN, RENART_KEEP_LANDING_WORKSPACE=1.
 import { chromium } from "@playwright/test";
-import { mkdir } from "node:fs/promises";
+import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import {
   ACME,
   STAGING_ORDERS,
   convertShotsToWebp,
+  id,
   launchStagedDemo,
   makeCapture,
   repoRoot,
@@ -129,6 +130,137 @@ try {
     await shot(page, "catalog");
   });
 
+  // --- per-asset-type editor shots ------------------------------------------
+  // The staged acme project is all SQL, so the Python/Load/API shots first
+  // create their assets through the same API the UI's "New asset" flow uses.
+  // This happens after the canvas/catalog shots so the DAG captures stay
+  // unchanged.
+  console.log("creating asset-type demo assets…");
+  await mkdir(path.join(demo.workspaceDir, "acme", "data"), { recursive: true });
+  await writeFile(
+    path.join(demo.workspaceDir, "acme", "data", "exchange_rates.csv"),
+    [
+      "day,currency,rate_to_usd",
+      "2026-07-08,EUR,1.09",
+      "2026-07-08,GBP,1.27",
+      "2026-07-09,EUR,1.08",
+      "2026-07-09,GBP,1.28",
+      "",
+    ].join("\n")
+  );
+
+  const pythonAsset = await demo.api(`/api/pipelines/${ACME}/assets`, {
+    method: "POST",
+    body: {
+      name: "mart.customer_segments",
+      type: "python",
+      path: "assets/mart/customer_segments.py",
+    },
+  });
+  await demo.api(`/api/pipelines/${ACME}/assets/${pythonAsset.asset_id}`, {
+    method: "PUT",
+    body: {
+      content: [
+        "def materialize():",
+        "    return [",
+        '        {"segment": "Enterprise", "min_orders": 12, "discount": 0.15},',
+        '        {"segment": "Regular", "min_orders": 4, "discount": 0.05},',
+        '        {"segment": "Occasional", "min_orders": 0, "discount": 0.0},',
+        "    ]",
+        "",
+      ].join("\n"),
+    },
+  });
+
+  // Load asset: created without content so the backend writes its canonical
+  // flat-parameter skeleton (with type: load), then filled in the way the
+  // form editor writes parameters (local CSV -> the warehouse connection).
+  const loadAsset = await demo.api(`/api/pipelines/${ACME}/assets`, {
+    method: "POST",
+    body: {
+      name: "raw.exchange_rates",
+      type: "load",
+      path: "assets/raw/exchange_rates.asset.yml",
+    },
+  });
+  await demo.api(`/api/pipelines/${ACME}/assets/${loadAsset.asset_id}`, {
+    method: "PUT",
+    body: {
+      parameters: {
+        source_connection: "local",
+        source_table: "data/exchange_rates.csv",
+        destination_connection: "duckdb-default",
+        destination_table: "raw.exchange_rates",
+        mode: "full-refresh",
+      },
+    },
+  });
+
+  // API asset: created without content so the backend writes its OpenAPI
+  // starter skeleton (weather alerts request + records_path).
+  const apiAsset = await demo.api(`/api/pipelines/${ACME}/assets`, {
+    method: "POST",
+    body: {
+      name: "raw.weather_alerts",
+      type: "api",
+      path: "assets/raw/weather_alerts.asset.yml",
+    },
+  });
+
+  // Let the workspace model pick up the three new assets before capturing.
+  {
+    const deadline = Date.now() + 60_000;
+    for (;;) {
+      const workspace = await demo.api("/api/workspace").catch(() => null);
+      const names = JSON.stringify(workspace ?? {});
+      if (
+        names.includes("customer_segments") &&
+        names.includes("exchange_rates") &&
+        names.includes("weather_alerts")
+      ) {
+        break;
+      }
+      if (Date.now() > deadline) {
+        throw new Error("new asset-type assets were not discovered in time");
+      }
+      await new Promise((resolve) => setTimeout(resolve, 1000));
+    }
+  }
+
+  // sql-asset: a mart query in the code view with the workbench alongside
+  await withPage({ width: 1400, height: 900 }, async (page) => {
+    await goto(page, `/pipelines/${ACME}/assets/${id("acme/assets/mart/daily_revenue.sql")}/code`, 5000);
+    await shot(page, "sql-asset");
+  });
+
+  // The three new assets have never been built, so the results panel would
+  // show a preview-failed card; collapse it to keep the shots on the editor.
+  const collapseResults = async (page) => {
+    await page.getByRole("button", { name: "Collapse results panel" }).click().catch(() => {});
+    await page.waitForTimeout(600);
+  };
+
+  // python-asset: the materialize() contract in the code view
+  await withPage({ width: 1400, height: 900 }, async (page) => {
+    await goto(page, `/pipelines/${ACME}/assets/${pythonAsset.asset_id}/code`, 5000);
+    await collapseResults(page);
+    await shot(page, "python-asset");
+  });
+
+  // load-asset: the form editor with source/destination/mode filled in
+  await withPage({ width: 1400, height: 900 }, async (page) => {
+    await goto(page, `/pipelines/${ACME}/assets/${loadAsset.asset_id}/code`, 5000);
+    await collapseResults(page);
+    await shot(page, "load-asset");
+  });
+
+  // api-asset: the OpenAPI starter in the API editor
+  await withPage({ width: 1400, height: 900 }, async (page) => {
+    await goto(page, `/pipelines/${ACME}/assets/${apiAsset.asset_id}/code`, 5000);
+    await collapseResults(page);
+    await shot(page, "api-asset");
+  });
+
   await browser.close();
   browser = undefined;
 
@@ -141,6 +273,10 @@ try {
     "schedules",
     "run-detail",
     "catalog",
+    "sql-asset",
+    "python-asset",
+    "load-asset",
+    "api-asset",
   ]);
   console.log(`\nDocs media written to ${outputDir}`);
   console.log("If a capture changed size, update the width/height where the image is referenced.");
