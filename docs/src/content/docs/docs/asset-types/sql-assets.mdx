@@ -3,28 +3,31 @@ title: SQL assets
 description: Transform data with a SQL query that Renart validates and materializes.
 ---
 
-A SQL asset is a `.sql` file: a structured header describing the asset,
-followed by the query that produces it.
+A SQL asset is a query that produces one table or view. You write the
+`SELECT`; Renart handles where the result lands, when it runs, and how it
+connects to the rest of the pipeline.
+
+<img
+  src="/docs-media/sql-asset.webp"
+  alt="A SQL asset open in the editor: the query on the left, the workbench with identity, materialization, and column cards on the right"
+  width="2800"
+  height="1800"
+/>
+
+## Create one
+
+On the canvas, add an asset and choose **SQL**. Name it
+`<folder>.<name>` — for example `staging.orders` — and that name is how
+downstream queries reference it.
+
+## Write the query
+
+The editor knows your pipeline: completions offer upstream tables and
+their columns with types, unresolved references are flagged as you type,
+and **Format SQL** keeps the style consistent. A typical asset is just a
+query:
 
 ```sql
-/* @bruin
-name: staging.orders
-type: duckdb.sql
-owner: analytics@acme.dev
-materialization:
-  type: table
-depends:
-  - raw.orders
-  - raw.customers
-columns:
-  - name: order_id
-    type: INTEGER
-    primary_key: true
-    checks:
-      - name: not_null
-      - name: unique
-@bruin */
-
 SELECT
     o.order_id,
     o.customer_id,
@@ -37,33 +40,32 @@ JOIN raw.customers c USING (customer_id)
 WHERE o.status != 'refunded'
 ```
 
-The `type` names the engine and dialect — for example `duckdb.sql`,
-`pg.sql`, `sf.sql`, `bq.sql`, or `rs.sql`. The full header vocabulary is in
-the [asset file format](/docs/reference/asset-file-format/).
+Referencing `raw.orders` in `FROM` or `JOIN` is all it takes to depend on
+it — Renart infers the dependency and draws the edge on the canvas.
+Unqualified names resolve to the matching asset when it's unambiguous. For
+relationships the SQL can't express, add a manual dependency in the
+workbench's **Dependencies** card.
 
-## Dependencies come from the query
+## Metadata in the workbench
 
-Referencing `raw.orders` in `FROM` or `JOIN` is enough — Renart infers the
-dependency and draws the edge on the canvas. Unqualified names resolve to
-the matching asset when it's unambiguous. You only add manual dependencies
-(in the workbench) for relationships the SQL can't express.
+Everything about the asset that isn't the query lives in the workbench
+cards next to the editor:
 
-## Materialization
+- **Identity** — name, owner, description, tags.
+- **Materialization** — whether the asset writes a view, replaces a table
+  each run, or updates incrementally.
+- **Columns** — names, types, descriptions, and quality checks such as
+  `not_null` or `unique`; refresh them from the query after the SQL
+  changes.
 
-The `materialization` block controls the write behavior when the asset
-runs: a `view`, a `table` that's replaced each run, or incremental
-strategies for large tables. The workbench edits the same block as a form.
+## Check it before it runs
 
-## Validation and type checking
-
-The editor validates references against your actual pipeline as you type,
-and the **Type check** tab (or [`renart type-check`](/docs/reference/cli/)
-in CI) verifies that the declared columns match what the query actually
-produces.
+**Inspect** previews the query's result without writing anything. The
+**Type check** tab verifies that the declared columns match what the query
+actually produces — the same check `renart type-check` runs in CI.
 
 ## Related
 
 - [The asset editor](/docs/editing-assets/asset-editor/) — IntelliSense,
-  previews, the workbench.
-- [Asset file format](/docs/reference/asset-file-format/) — every header
-  key.
+  previews, the workbench in detail.
+- [How it works](/docs/how-it-works/) — where all of this is stored.

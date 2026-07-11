@@ -131,6 +131,7 @@ export default defineConfig({
           items: [
             { label: 'SQL assets', slug: 'docs/asset-types/sql-assets' },
             { label: 'Python assets', slug: 'docs/asset-types/python-assets' },
+            { label: 'Load assets', slug: 'docs/asset-types/load-assets' },
             { label: 'HTTP API assets', slug: 'docs/asset-types/http-api-assets' },
           ],
         },

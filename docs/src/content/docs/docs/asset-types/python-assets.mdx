@@ -3,36 +3,52 @@ title: Python assets
 description: Run Python transformations with managed dependencies.
 ---
 
-A Python asset is a `.py` file with the same kind of structured header as a
-SQL asset, carried in a docstring:
+A Python asset runs a script as part of the pipeline — for anything SQL
+can't express: calling a library, scoring a model, reshaping data with
+pandas.
+
+<img
+  src="/docs-media/python-asset.webp"
+  alt="A Python asset open in the editor: a materialize() function returning a DataFrame, with the workbench alongside"
+  width="2800"
+  height="1800"
+/>
+
+## Create one
+
+On the canvas, add an asset and choose **Python**. The asset starts with a
+`materialize()` function — that's the contract:
 
 ```python
-""" @bruin
-name: mart.scores
-type: python
-depends:
-  - mart.daily_summary
-@bruin """
+import pandas as pd
+
 
 def materialize():
-    # return rows for the asset's output table
-    return [
-        {"day": "2026-07-01", "score": 0.87},
-        {"day": "2026-07-02", "score": 0.91},
-    ]
+    return pd.DataFrame(
+        [
+            {"customer_id": 1, "customer_name": "Ada Lovelace"},
+            {"customer_id": 2, "customer_name": "Grace Hopper"},
+            {"customer_id": 3, "customer_name": "Katherine Johnson"},
+        ]
+    )
 ```
 
-Declare a `materialize()` function that returns the asset's output; Renart
-runs the file when the asset materializes and writes the result to the
-target, like any other asset. `depends` links it into the pipeline so it
-runs after its upstreams and shows up in the lineage.
+When the asset materializes, Renart runs the file and writes whatever
+`materialize()` returns — a DataFrame or a list of dicts — to the target
+table, like any other asset.
 
-## Dependencies
+## Dependencies and lineage
 
-Python assets use the project's local virtualenv. Declare packages in the
-project's `requirements.txt` (or `pyproject.toml`); the editor compares
-your imports against what's declared and installed, and flags anything
-missing — the same way notebooks do.
+Renart can't infer upstreams from Python the way it does from SQL. Declare
+them in the workbench's **Dependencies** card; the asset then runs after
+its upstreams and appears in the lineage like every other node.
+
+## Packages
+
+Python assets run in the project's local virtualenv. When you import a
+package that isn't declared yet, the editor shows a banner offering to add
+it to the project's dependencies with one click — the same flow notebooks
+use.
 
 ## Editing support
 
@@ -42,6 +58,7 @@ results panel.
 
 ## Related
 
-- [SQL assets](/docs/asset-types/sql-assets/) — the same header, different
-  body.
-- [Asset file format](/docs/reference/asset-file-format/).
+- [SQL assets](/docs/asset-types/sql-assets/) — the default choice when a
+  query can do the job.
+- [Notebooks](/docs/notebooks/overview/) — for exploration before the
+  logic earns a place in the pipeline.

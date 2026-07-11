@@ -2,12 +2,17 @@
 title: HTTP API assets
 description: "Create a version-controlled asset that pulls paginated JSON records from an HTTP API into your warehouse"
 ---
-{/* Diátaxis mode: How-to. See architecture/docs-framework.md for the template. */}
-
-# Pull data from an HTTP API
+{/* Diátaxis mode: How-to. See architecture/docs.md for the template. */}
 
 Use an HTTP API asset when an endpoint returns JSON records that you want as a
 version-controlled table in your pipeline.
+
+<img
+  src="/docs-media/api-asset.webp"
+  alt="An HTTP API asset open in the editor: request URL, response records path, and pagination settings, with the workbench alongside"
+  width="2800"
+  height="1800"
+/>
 
 ## Before you start
 
@@ -123,6 +128,8 @@ tables.
 
 ## Related
 
-- [Choose an asset type](./choosing-an-asset-type/)
-- [Materialization strategies](../editing-assets/materialization/)
-- [Manage connections](../connections-environments/managing-connections/)
+- [Load assets](/docs/asset-types/load-assets/) — when the source is a
+  database, bucket, or file rather than an API.
+- [The asset editor](/docs/editing-assets/asset-editor/) — columns,
+  materialization, and checks in the workbench.
+- [Managing connections](/docs/connections-environments/managing-connections/)
