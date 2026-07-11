@@ -1,30 +1,41 @@
 ---
 title: Overview
-description: Renart is the IDE for git-native data pipelines.
+description: Renart is the all-in-one data pipeline IDE — open source, running entirely inside your git repository.
 ---
 
-Renart is the IDE for git-native data pipelines.
+Renart is the all-in-one data pipeline IDE. It combines the editor, the
+scheduler, and the freshness monitor in one open-source tool that runs
+entirely inside your git repository — your pipeline is plain files, running
+on the warehouse you already use.
 
-It is designed for people who want to inspect, edit, and run pipelines quickly while keeping the underlying project in version-controlled files.
+<img
+  src="/docs-media/workspace-overview.webp"
+  alt="The Renart workspace: file explorer, SQL editor, pipeline canvas with freshness badges, a data preview, and the asset workbench in one view"
+  width="3200"
+  height="2000"
+/>
 
-## Good fit for
+## What you get
 
-- Data engineers building pipelines
-- Analytics engineers working in SQL-heavy projects
-- Technical data users who want a more visual workflow around git-native pipeline projects
+- **A pipeline canvas** that shows assets, dependencies, and freshness at a
+  glance instead of making you reconstruct them from files by hand.
+- **An editor that knows your pipeline.** IntelliSense suggests columns from
+  upstream assets and validation flags unresolved references while you type.
+- **Preview, then materialize.** Inspect any asset with no side effects, and
+  materialize it explicitly when you're sure.
+- **Schedules without an orchestrator.** Put a pipeline on a per-environment
+  cron and Renart runs it — nothing separate to deploy.
+- **Notebooks** for ad-hoc analysis, with inline tables and charts, that can
+  promote a cell into a real pipeline asset.
+- **Freshness you can see.** Renart fingerprints every asset and shows what's
+  fresh, edited, stale, or never built, right on the canvas.
 
-## What Renart helps with
-
-- Seeing assets, dependencies, lineage, and data flow on a canvas
-- Editing pipelines faster than working only through YAML and SQL files
-- Running inspect and materialization flows from the same workspace view
-- Staying close to real project files that work well with Git
+Everything Renart does ends up as an ordinary file change in your repository
+— diffable, reviewable, revertible.
 
 ## Start here
 
-- [Who Renart Is For](/docs/who-renart-is-for/)
-- [Concepts](/docs/concepts/)
-- [Renart for Bruin Users](/docs/bruin-cli-and-renart/)
-- [Installation](/docs/installation/)
-- [Quickstart](/docs/quickstart/)
-- [Running Renart](/docs/running-renart/)
+1. [Installation](/docs/installation/)
+2. [Quickstart](/docs/quickstart/) — from install to a scheduled pipeline
+3. [Concepts](/docs/concepts/) — the model behind the UI
+4. [Tour of the interface](/docs/workspace/interface-tour/)

@@ -1,30 +1,75 @@
 ---
 title: Concepts
-description: The core Renart and Bruin concepts used throughout the docs.
+description: The handful of terms behind everything in Renart.
 ---
 
-Renart is easiest to understand as an IDE for a Git repository that contains a Bruin data pipeline project. The UI is visual, but the project remains file-based.
+Renart is an IDE for a git repository that contains data pipelines. The UI
+is visual, but the project stays file-based: every concept below maps to
+files you can read, diff, and commit.
+
+## Project
+
+A project is a git repository (or a folder inside one) holding pipelines
+plus a project config file with connections and environments. The
+repository is the source of truth — Renart has no database of its own for
+pipeline definitions.
 
 ## Pipeline
 
-A pipeline is the collection of data work you run and review together. In Renart, a pipeline appears on the pipeline canvas so you can see how assets depend on each other.
+A pipeline is a folder of assets that run and get reviewed together, with a
+`pipeline.yml` for its name, schedule cadence, and defaults. A workspace
+can hold several pipelines; the project switcher and catalog span all of
+them.
 
 ## Asset
 
-An asset is one unit of pipeline work. It can be a SQL transformation, a Python asset, an ingestion asset, or another Bruin-supported asset type. On the canvas, each asset appears as a node, but the asset itself still lives as a real project file.
+An asset is one unit of work: a SQL transformation, a Python script, an
+HTTP API call. Each asset is a file — SQL assets are `.sql` files with a
+small structured header for identity, columns, and checks. On the canvas an
+asset is a node; in the editor it's code plus a workbench of its metadata.
 
-## Pipeline Canvas
+## Dependencies & lineage
 
-The pipeline canvas is the visual surface for understanding dependencies and lineage. It is not an exported diagram. It is the main workspace for opening assets, inspecting results, and creating downstream work.
+Renart infers dependencies from your SQL (`FROM staging.orders` makes
+`staging.orders` an upstream) and draws them as edges on the canvas. The
+catalog extends that lineage across every pipeline in the project.
 
-## Inspect
+<img
+  src="/docs-media/catalog.webp"
+  alt="The catalog: cross-pipeline lineage with one asset selected and its upstream path highlighted"
+  width="2800"
+  height="1800"
+/>
 
-Inspect is the safe preview path. Use it when you want to see what a SQL asset returns without treating that action as a full pipeline run.
+## Inspect vs. materialize
 
-## Materialize
+**Inspect** is the safe path: preview what an asset returns, with no side
+effects. **Materialize** is the explicit path: execute the asset (or the
+pipeline) and write its output to the target system. You'll spend most of
+your time inspecting and materialize deliberately.
 
-Materialize is the explicit run path. Use it when you want an asset or pipeline to execute and produce its intended side effects in the target system.
+## Staleness
 
-## Git-Native
+Renart fingerprints every asset — its code, its dependencies, its outputs —
+and compares that against what was last materialized. The canvas shows the
+result on each node: **Fresh**, **Edited** (this asset changed), **Upstream
+changed** (something it reads from changed), or **Never built**. "Build
+stale" rebuilds only what the fingerprints say is out of date.
 
-Git-native means the repository remains the source of truth. Renart can make visual edits, but those edits become normal file changes that your team can diff, review, and commit.
+## Environment
+
+An environment is a named set of connections (for example `default` and
+`production`) defined in the project config. The same pipeline can preview,
+materialize, and run on a schedule against different environments.
+
+## Notebook
+
+A notebook is a folder of SQL cells that runs in its own local DuckDB
+session — a scratchpad with tables and charts inline. When a cell earns a
+permanent place, promote it into a pipeline asset.
+
+## Git-native
+
+Every visual edit — moving a node, renaming an asset, changing a
+materialization — lands as a plain file change. Branch, review, and revert
+pipeline work like any other code.

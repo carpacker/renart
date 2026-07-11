@@ -1,16 +1,46 @@
 ---
 title: Installation
-description: Install Renart.
+description: Install Renart and start it inside a git repository.
 ---
 
-Install Renart with:
+Install Renart with the one-line installer:
 
 ```bash
 curl -LsSf getrenart.com/install.sh | sh
 ```
 
-## Important
+This installs a single `renart` binary — the web UI, the scheduler, and the
+CLI are all inside it. There is no service to stand up and no account to
+create.
 
-Start Renart inside a Git repository.
+## Start Renart
 
-Renart is designed around git-native pipeline workspaces, and some workspace flows expect that repository context to exist.
+Start Renart inside a git repository:
+
+```bash
+renart web
+```
+
+Renart opens on `127.0.0.1:8080` by default. If that port is taken it picks
+the next free one and prints the URL. To choose the address yourself:
+
+```bash
+renart web --host 127.0.0.1 --port 9000 --no-open
+```
+
+You can also point it at a workspace explicitly: `renart web path/to/repo`.
+
+:::note[Renart needs a git repository]
+Renart is built around git-native workspaces: every edit it makes is a plain
+file change you can diff and commit. If the directory has no repository yet,
+the first-run setup can initialize one for you.
+:::
+
+## First run
+
+If the workspace has no pipelines yet, Renart opens the welcome screen,
+where you can start from a demo project, import existing warehouse tables,
+or start empty. The [quickstart](/docs/quickstart/) walks through it.
+
+The full set of flags (watch modes, TLS, the scheduler) is in the
+[CLI reference](/docs/reference/cli/).

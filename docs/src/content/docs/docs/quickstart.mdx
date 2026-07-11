@@ -1,46 +1,66 @@
 ---
 title: Quickstart
-description: Create and run a local DuckDB sample pipeline in Renart.
+description: From install to a running, scheduled pipeline in one sitting.
 ---
 
-The fastest way to try Renart is the DuckDB quickstart. It creates the Bruin chess sample project in your current Git workspace, adds local DuckDB and chess connections, and materializes the sample pipeline from the Renart onboarding flow.
+This walks you from an empty repository to a materialized, scheduled
+pipeline using the built-in demo project. It runs locally against DuckDB —
+no warehouse or credentials needed.
 
-## Start Renart
-
-Open Renart from an empty git-native workspace:
+## 1. Start Renart
 
 ```bash
+mkdir my-pipelines && cd my-pipelines && git init
 renart web
 ```
 
-If the workspace has no pipelines or connections yet, Renart opens onboarding automatically.
+Since the workspace has no pipelines yet, Renart opens the welcome screen
+with three options: **Start from a demo**, **Import existing tables**, and
+**Start empty**.
 
-## Choose The Quickstart
+## 2. Create the demo project
 
-On the welcome screen, click **Create playground** in the quickstart card. Renart creates and runs the sample, then opens the workspace canvas directly.
+Choose **Start from a demo** and pick the retail demo — a small SQL
+pipeline (raw customers and orders feeding analytics tables) that runs
+entirely offline. Renart scaffolds the project files, creates a local
+DuckDB connection, and runs the pipeline once so you land in a workspace
+with real data in it.
 
-![Renart onboarding quickstart card with a chess DAG preview](/quickstart-onboarding.png)
+Everything it created is plain files — run `git status` to see the whole
+project.
 
-## Explore The Pipeline
+## 3. Read the canvas
 
-Use the canvas tour to inspect the sample data flow:
+<img
+  src="/docs-media/pipeline-canvas.webp"
+  alt="The pipeline canvas: assets grouped by folder with dependency edges and freshness badges on each node"
+  width="2800"
+  height="1800"
+/>
 
-![Renart quickstart workspace canvas with chess assets](/quickstart-workspace.png)
+The **Build** view shows your pipeline as a canvas: each node is an asset,
+each edge a dependency, and the badge on every node tells you whether it's
+fresh or needs a rebuild. Click any asset to open it in the editor with its
+workbench alongside.
 
-- `quickstart.players` is an ingestr asset that loads chess player profiles into DuckDB.
-- `quickstart.games` is an ingestr asset that loads chess games into DuckDB.
-- `quickstart.player_stats` is a SQL asset that joins players to games and aggregates player counts.
-- `quickstart.my_python_asset` is a tiny Python asset included in the Bruin default template.
+## 4. Preview and materialize
 
-The pipeline has already been materialized, so the DuckDB database contains the sample tables.
+Select an asset and use **Inspect** in the results panel to preview the
+data it produces — previews have no side effects. When you change its SQL,
+the asset's badge flips to **Edited** and its downstreams to **Upstream
+changed**; the **Build stale** button rebuilds exactly what changed and
+nothing else.
 
-## Next Steps
+## 5. Put it on a schedule
 
-Use the quickstart as a safe local playground:
+Open **Schedules** and click **New schedule**. Pick the pipeline, an
+environment, a cron expression, and a timezone — Renart deploys a snapshot
+of the working tree and runs it on that cadence. Runs land in the **Runs**
+view with per-asset timing and logs.
 
-- edit the SQL assets and watch Renart save the underlying files
-- materialize the pipeline again from the workspace
-- create a downstream asset from the canvas
-- replace the sample SQL with your own DuckDB queries
+## Next steps
 
-If you already have warehouse tables, go back through onboarding and choose **Import an existing warehouse** instead.
+- [Concepts](/docs/concepts/) — the model you just used, in five terms
+- [Tour of the interface](/docs/workspace/interface-tour/)
+- [Managing connections](/docs/connections-environments/managing-connections/)
+  to point Renart at your own warehouse
