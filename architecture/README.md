@@ -20,8 +20,8 @@ in the plan.
 | [notebooks.md](notebooks.md) | Notebook folder format, sessions, rename engine, `@viz`, server-driven auto-recompute, promotion |
 | [asset-editing.md](asset-editing.md) | Asset workbench: ownership model, `assetmeta` provenance keys, reconciliation, transaction API |
 | [sql-lsp.md](sql-lsp.md) | SQL language server: canonical graph, engine, web service caching, notebook cell scoping, column-inference fixpoint |
-| [docs-framework.md](docs-framework.md) | Authoring contract for the user docs under `docs/` |
+| [docs.md](docs.md) | Authoring contract for the user docs under `docs/` |
 
 Agent orientation and repo-wide rules live in the top-level [`AGENTS.md`](../AGENTS.md);
-the user-facing product docs live under `docs/` (see docs-framework.md for how
+the user-facing product docs live under `docs/` (see docs.md for how
 those are written).

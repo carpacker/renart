@@ -17,7 +17,9 @@ them.
 1. `index` — docs landing: what Renart is, the one-screenshot pitch
 2. `concepts` — project / pipeline / asset / materialization / staleness /
    notebook; filesystem + git as the source of truth
-3. `bruin-cli-and-renart` — the one page allowed to discuss bruin interop
+3. `how-it-works` — the high-level "everything you do in the UI is stored
+   as plain files" explanation (diffs, review, no lock-in); the only place
+   the on-disk encoding is discussed
 
 **Getting started**
 4. `installation` — install one-liner, git-repo requirement, ports/flags
@@ -35,20 +37,22 @@ them.
 9. `editing-assets/asset-editor` — editor + workbench in one page: Monaco,
    IntelliSense/validation, columns, materialization, quality-check basics
 
-**Asset types**
+**Asset types** (each written UI-first — the editor surface the user sees,
+not the file format — and each with its own screenshot)
 10. `asset-types/sql-assets`
 11. `asset-types/python-assets`
-12. `asset-types/http-api-assets` (already real)
+12. `asset-types/load-assets` — the form-based load editor
+13. `asset-types/http-api-assets`
 
 **Notebooks & scheduling**
-13. `notebooks/overview` — folds working-in-a-notebook + promoting-cells
-14. `scheduling/overview` — folds creating-schedules; env schedules,
+14. `notebooks/overview` — folds working-in-a-notebook + promoting-cells
+15. `scheduling/overview` — folds creating-schedules; env schedules,
     deploy-and-pin
 
 **Connections & reference**
-15. `connections-environments/managing-connections` — folds environments
-16. `reference/cli` — real flags from `renart --help`
-17. `reference/asset-file-format` — the managed keys + `renart_*` meta
+16. `connections-environments/managing-connections` — folds environments
+17. `reference/cli` — the commands a web-UI user touches (`web`,
+    `type-check`, `standalone`), flags from `renart --help`
 
 ## Conventions (carried over from the rollout plan)
 
@@ -57,14 +61,14 @@ them.
   explanation + how-to together — that's fine at this size; split later.
 - **Terminology matches the UI 1:1** (Build, Catalog, Inspect, Materialize,
   asset, connection, environment, workbench). Sentence-case headings.
-- **Bruin policy:** "asset", "pipeline", "project config" — never "bruin
-  asset". `grep -i bruin` over docs content may hit only
-  `bruin-cli-and-renart.mdx` and the asset-file-format/config reference
-  (where the literal `.bruin.yml` filename is introduced as "the project
-  config file").
+- **No bruin, anywhere:** no compatibility claims, no interop page, no
+  `@bruin` header samples. `grep -ri bruin docs/src` must be empty.
+- **Web-UI-first:** nothing that only makes sense to someone hand-editing
+  files. Asset pages document the editor surfaces; the on-disk story lives
+  in `how-it-works` as a property, not an interface.
 - Code/CLI blocks are copy-paste runnable against the demo workspace.
 - Unversioned; docs track main. Feedback loop + docs gate unchanged
-  (see `architecture/docs-framework.md` for the authoring contract).
+  (see `architecture/docs.md` for the authoring contract).
 
 ## Screenshots: scripted, landing-page quality
 
@@ -80,14 +84,17 @@ dark theme, deviceScaleFactor 2, webp).
 - Output goes to `docs/public/docs-media/*.webp`; pages reference them with
   explicit width/height and real alt text.
 - Screenshots are few and load-bearing: one per page where it earns its
-  place, not decoration.
+  place, not decoration. Each asset-type page gets its own editor shot
+  (`sql-asset`, `python-asset`, `load-asset`, `api-asset`); the script
+  creates the Python/Load/API assets through the same HTTP API the UI's
+  "New asset" flow uses, after the DAG-wide shots so the canvas captures
+  stay stable.
 
 ## Verification
 
 - `pnpm build` in `docs/` green; no sidebar entry or link points to a
   deleted stub.
-- `grep -ri bruin docs/src/content` returns only the interop page + the
-  file-format/config reference in prose; the `@bruin` header markers inside
-  code samples on the SQL/Python pages are the file syntax itself, not
-  prose, and are fine.
+- `grep -ri bruin docs/src` comes back empty.
+- Every page reads correctly for a user who only ever uses the web UI: no
+  instruction assumes hand-editing asset files.
 - `make docs-media` regenerates every referenced image from scratch.

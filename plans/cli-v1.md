@@ -183,7 +183,7 @@ immediately want `git`, `ls`, `dbt`, etc. alongside `renart`.
    and independently shippable.
 2. **Terminal view** (PTY, WebSocket, xterm.js dock, env injection).
 3. **Polish:** `renart ls`, `--json` event stream, version-skew warning,
-   docs (new CLI reference section per `architecture/docs-framework.md`).
+   docs (new CLI reference section per `architecture/docs.md`).
 
 Verification: e2e that starts a server, runs `renart run` in client mode and
 asserts the run appears in `/api/runs` + staleness flips; an embedded-mode

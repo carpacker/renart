@@ -1,10 +1,10 @@
-# Renart Docs Framework — How We Write the User Docs
+# Renart Docs — How We Write the User Docs
 
 Status: active. This is the authoring contract for everything under `docs/`
 (Astro Starlight, served at getrenart.com/docs). The companion
-`../plans/user-docs-rollout.md` defines *what* to build (the information
-architecture and rollout); this defines *how* to write it. If you are writing or
-reviewing a docs page, this is the checklist.
+`../plans/docs-alpha.md` defines *what* to build (the page set); this defines
+*how* to write it. If you are writing or reviewing a docs page, this is the
+checklist.
 
 The locked decisions (§0) are the non-negotiable part. The rest is craft guidance.
 
@@ -15,27 +15,38 @@ The locked decisions (§0) are the non-negotiable part. The rest is craft guidan
 These were decided with the user and govern every page. Don't re-litigate them in
 a PR; change them here first if they need to change.
 
-1. **Audience: assume zero Bruin knowledge.** The reader is a data/analytics
-   engineer who has never heard of Bruin. We teach **Renart's own model** in
-   Renart's own words. Minimise Bruin overall: don't make the reader learn Bruin to
-   use Renart. Mention Bruin only where it's load-bearing (the file-compatibility
-   promise, the CLI interop, credential shapes we genuinely defer on) and link out
-   instead of teaching it. "Renart is built on Bruin" is a footnote, not a prologue.
-2. **Docs vs. in-app help — the line.** Docs own **conceptual and multi-step**
+1. **No bruin, anywhere.** The docs — and the landing page, and the site
+   metadata — never mention bruin: not as a compatibility promise, not as
+   "built on". There is no guaranteed bruin compatibility, so we don't imply
+   one. We teach **Renart's own model** in Renart's own words. `grep -ri bruin
+   docs/src` must come back empty (per decision 2, code samples don't show raw
+   metadata headers, so the `@bruin` marker never appears either).
+2. **Web-UI-first.** Nothing in the docs may require — or suggest — editing an
+   asset's metadata encoding by hand. Users see the SQL editor, the Python
+   editor, the Load form, the API editor, and the workbench; the docs describe
+   those surfaces in the UI's own vocabulary. That everything is *stored* as
+   plain files is explained once, at a high level, on the **How it works**
+   page (readable diffs, review, no lock-in) — as a property of the product,
+   never as an editing interface. Code samples show what the user types in the
+   editor (the query, the `materialize()` body), not file headers. If a
+   sentence only helps someone hand-editing files, it doesn't belong in the
+   user docs.
+3. **Docs vs. in-app help — the line.** Docs own **conceptual and multi-step**
    content (what a thing is, why it exists, how to complete a task end to end). The
    **app** owns **field-level hints** (a tooltip on one input, an empty-state
    nudge, an inline validation message). If you're tempted to document a single
    field's meaning in prose, that's an in-app tooltip, not a docs page. If you're
    tempted to put a five-step flow in a tooltip, that's a how-to.
-3. **Screenshots are hand-curated.** No auto-capture harness. Each image is
-   deliberately composed against the **docs demo project** (`docs/demo-project`, the
-   `acme_shop` pipeline — a purpose-built, coherent example, not anyone's personal
-   playground), cropped, and (where useful) annotated. Quality over coverage — a few
-   excellent shots beat many mechanical ones. See §5.
-4. **Versioning: unversioned for now.** Docs track `main`. No Starlight versioning
+4. **Screenshots are scripted.** `make docs-media` regenerates every docs
+   screenshot from scratch against a staged demo workspace (the acme project
+   from `web/scripts/landing-media-workspace.mjs`), and `make landing-media`
+   does the same for the landing page. Never hand-capture: a shipped image is
+   always the verbatim output of the script, so it can be regenerated after
+   any UI change. See §5.
+5. **Versioning: unversioned for now.** Docs track `main`. No Starlight versioning
    yet. Revisit when releases stabilise (the trigger lives in the concept doc, not
    here).
-5. **Ownership: a "docs touched?" gate.** A user-facing change ships with its docs.
+6. **Ownership: a "docs touched?" gate.** A user-facing change ships with its docs.
    PRs carry a docs checkbox (§7); reviewers enforce it.
 
 ## 1. The four modes (Diátaxis)
@@ -47,7 +58,7 @@ don't know where content goes, you've usually got two pages fused together.
 | --- | --- | --- | --- |
 | **Tutorial** | learn by doing, build confidence | one guided happy path, every step verifiable, no choices | Quickstart; "Build your first pipeline" |
 | **How-to** | get a specific task done now | goal → steps → result, assumes context | "Materialize a pipeline", "Load a CSV with a Load asset" |
-| **Reference** | confirm a fact fast | terse, table-first, no narrative | CLI flags, asset file keys, shortcuts |
+| **Reference** | confirm a fact fast | terse, table-first, no narrative | CLI flags, load modes, check names |
 | **Explanation** | understand why/how it fits | prose, diagrams, no steps | Concepts; "How Renart stores everything as files" |
 
 Litmus test before writing: **"Is the reader learning, doing, looking up, or
@@ -66,8 +77,9 @@ understanding?"** That answer is the page type. Put it in the frontmatter intent
   understands, delete it.
 - **Concrete over abstract.** Name the real button, the real file, the real menu.
   Use the example project's real asset names.
-- **No Bruin tax.** Never require the reader to know a Bruin term to follow a
-  sentence. If a Bruin word is unavoidable, define it in one clause and move on.
+- **The UI is the interface.** Describe what the reader clicks and types in
+  the product, not the files it produces. "Add a `not_null` check in the
+  Columns card", not "add a `checks:` entry".
 - **Confident, not salesy.** State what Renart does. Skip adjectives like
   "powerful", "seamless", "blazing".
 
@@ -142,40 +154,34 @@ can't carry. No tutorials, no motivation.>
 No step lists — link to the how-tos this motivates instead.>
 ```
 
-## 5. Screenshots (hand-curated)
+## 5. Screenshots (scripted)
 
-Screenshots are first-class and deliberately made. The bar is "would this look good
-in a product tour".
+Screenshots are first-class and generated, never hand-captured. The bar is
+"would this look good in a product tour" — and the way we hold it is that
+every shipped image is the verbatim output of a script.
 
-- **Always the docs demo project** (`docs/demo-project`, the `acme_shop`
-  pipeline): a small, coherent e-commerce analytics pipeline, organised into folders
-  under `assets/` — `raw/` (four CSV **seeds**) → `staging/` (four cleaning views) →
-  `marts/` (`order_items_enriched`, `customer_revenue`, `daily_revenue`). Renart uses
-  the folder as the layer, so assets are named `raw.*`, `staging.*`, `marts.*` (no
-  `raw_`/`stg_` prefixes), and the canvas groups them into labelled columns. It runs
-  entirely on local DuckDB, so it's reproducible and readers can follow along on
-  identical data.
-  Never screenshot a personal or throwaway workspace. To get real data into Inspect
-  shots, open the project and materialize the pipeline first.
-- **Clean, consistent capture.** Same theme (pick one — default light unless the
-  feature is dark-specific), same viewport width, no stray dev overlays, no
-  half-loaded states. Crop to the relevant surface; don't dump the whole 1440px
-  window when the point is one panel.
-- **Annotate when it adds clarity** — a single accent-colour box or arrow on the
-  thing the step refers to. Keep annotations sparse and consistent (one colour, one
-  weight). Don't annotate decoratively.
-- **Few and high-value.** A screenshot earns its place by orienting the reader or
-  proving a result. Don't illustrate every step; illustrate the ones where "am I in
-  the right place?" is the question.
-- **Motion only when motion is the point.** The canvas, Inspect, a reconcile
-  prompt — a short muted GIF/MP4 can beat three stills. Otherwise prefer a still.
-- **Storage & naming.** Live with the page (e.g. `docs/src/assets/<area>/<page>-<n>.png`),
-  kebab-case, descriptive. Keep source crops out of the bundle.
-- **Every image needs alt text** describing what it shows (not "screenshot"). The
-  canvas shots especially — describe the lineage being shown.
-- **Maintenance.** When the UI changes a surface, recapture in the same PR. Because
-  capture is manual, keep a short note per page of *what* state produced the shot
-  (which pipeline/asset, which view) so it's reproducible by hand later.
+- **Two pipelines, one staged demo.** `make landing-media` regenerates
+  `docs/public/landing/*`, `make docs-media` regenerates
+  `docs/public/docs-media/*`. Both run Playwright against the same staged
+  acme workspace (`web/scripts/landing-media-workspace.mjs` +
+  `web/scripts/demo-media-lib.mjs`): a coherent e-commerce project with real
+  materialized data, run history including one failed run, schedules, a
+  notebook, and staleness states — so no shot is ever empty or half-loaded.
+- **Adding a shot** means adding a capture block to
+  `web/scripts/capture-docs-media.mjs` (viewport, navigation, interactions,
+  `shot(page, "name")`), not opening a browser by hand. If the shot needs
+  state the staged demo lacks (an asset type, a dialog), the script creates
+  it through the same HTTP API the UI uses, after the DAG-wide shots so the
+  canvas captures stay stable.
+- **One look.** Dark theme, `deviceScaleFactor: 2`, webp output; pages embed
+  images with explicit `width`/`height` matching the emitted file.
+- **Few and high-value.** A screenshot earns its place by orienting the reader
+  or proving a result — roughly one per page, not one per step.
+- **Every image needs alt text** describing what it shows (not "screenshot").
+  The canvas shots especially — describe the lineage being shown.
+- **Maintenance.** When the UI changes a surface, rerun the make target in the
+  same PR and commit the regenerated images. If a capture's dimensions change,
+  update the `width`/`height` where the image is referenced.
 
 ## 6. Conventions
 
@@ -188,17 +194,13 @@ in a product tour".
   command and, where it clarifies, the expected output. Use real paths
   (`example/example`), not `<your-project>` unless the value is genuinely the
   reader's.
-- **Callouts (Starlight asides)** for two things especially: the
-  file-compatibility promise ("every edit is a plain file change you can commit")
-  and destructive/side-effecting actions (materialize writes to the warehouse;
+- **Callouts (Starlight asides)** for two things especially: the git-native
+  property ("every edit is a plain file change you can commit") and
+  destructive/side-effecting actions (materialize writes to the warehouse;
   full-refresh). Use `:::caution`/`:::note`/`:::tip` sparingly and meaningfully.
 - **Cross-link to siblings.** Every page links to its Diátaxis neighbours under
   "Related" and to the one concept it rests on. How-tos link up to the explanation;
   explanations link down to the how-tos.
-- **Link out to Bruin rarely and precisely.** Only for the canonical reference of
-  something we deliberately don't restate (a specific connection's credential
-  fields). Link the exact page, name what the reader will find there, and keep the
-  Renart-specific part in our docs.
 - **Lists over paragraphs** for anything enumerable. **Tables** for anything with
   parallel structure (flags, options, comparisons).
 
@@ -221,15 +223,17 @@ A user-facing change is not done until its docs are. Operationally:
 Before approving a docs PR, confirm:
 
 - [ ] **One mode.** The page is purely tutorial / how-to / reference / explanation.
-- [ ] **No Bruin tax.** A Bruin-newcomer can follow it; Bruin appears only where
-      load-bearing and is linked, not taught.
+- [ ] **No bruin.** `grep -ri bruin` over the page comes back empty.
+- [ ] **Web-UI-first.** Every instruction works for a reader who only ever
+      uses the web UI; no hand-editing of metadata, no raw file headers in
+      samples.
 - [ ] **UI words.** Terminology and capitalisation match the product 1:1; first use
       of each term links to the glossary.
 - [ ] **Task-titled** (how-tos) and ends in a verifiable result.
 - [ ] **Frontmatter** `title` + `description` present and reader-useful.
 - [ ] **Runnable** code/CLI against the example project.
-- [ ] **Screenshots** (if any) are example-project, clean, cropped, alt-texted, and
-      reproducible per the page's capture note.
+- [ ] **Screenshots** (if any) come out of `make docs-media`, are alt-texted,
+      and their capture block lives in the script.
 - [ ] **Cross-links** to Diátaxis siblings + the resting concept.
 - [ ] **Right place / right scope** — not a tooltip masquerading as a page, nor a
       flow crammed into reference.
@@ -238,5 +242,5 @@ Before approving a docs PR, confirm:
 
 ---
 
-*Companion: `../plans/user-docs-rollout.md` (information architecture, page
-inventory, and phased rollout).*
+*Companion: `../plans/docs-alpha.md` (the shipped alpha page set and its
+verification gates).*

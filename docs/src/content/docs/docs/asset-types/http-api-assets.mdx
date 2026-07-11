@@ -17,8 +17,8 @@ version-controlled table in your pipeline.
 ## Before you start
 
 - Add the destination warehouse connection to the active environment.
-- Keep API tokens in environment variables. Do not paste secrets into the asset
-  file.
+- Keep API tokens in environment variables. Do not paste secrets into the
+  asset — it's committed to your repository.
 
 ## Create the asset
 
@@ -60,7 +60,7 @@ available. Save the asset after changing its YAML.
 1. Open the asset's **Columns** section.
 2. Click **Test response**. Renart fetches one page and reports the record count,
    inferred columns, and any path warnings.
-3. Click **Apply inferred columns** to write the columns into the asset file.
+3. Click **Apply inferred columns** to write the columns into the asset.
 4. Review types and mark the stable identifier as a primary key before choosing
    **Merge by key**.
 
