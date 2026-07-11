@@ -3,7 +3,7 @@ module renart
 go 1.26
 
 require (
-	github.com/bruin-data/bruin v0.11.656
+	github.com/bruin-data/bruin v0.11.676
 	github.com/fatih/color v1.19.0
 	github.com/fsnotify/fsnotify v1.10.1
 	github.com/go-chi/chi/v5 v5.3.1
@@ -297,3 +297,5 @@ require (
 	gotest.tools/gotestsum v1.8.2 // indirect
 	howett.net/plist v1.0.2-0.20250314012144-ee69052608d9 // indirect
 )
+
+replace github.com/bruin-data/bruin/semantic-engine v0.0.0 => github.com/bruin-data/bruin/semantic-engine v0.0.0-20260710143449-a08e65067eda

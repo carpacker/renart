@@ -86,7 +86,10 @@ func (s *NotebookService) materializePythonCell(ctx context.Context, cell *noteb
 	ensureNotebookPyproject(notebookDir)
 
 	connections := &config.Connections{
-		DuckDB: []config.DuckDBConnection{{Name: notebookSessionConnName, Path: destPath}},
+		DuckDB: []config.DuckDBConnection{{
+			ConnectionMetadata: config.ConnectionMetadata{Name: notebookSessionConnName},
+			Path:               destPath,
+		}},
 	}
 	cfg := &config.Config{
 		SelectedEnvironmentName: "default",
