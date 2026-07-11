@@ -5,7 +5,7 @@ DOCS_IMAGE ?= renart-docs:local
 RENART_VERSION ?= $(shell git describe --tags --abbrev=0 2>/dev/null || echo local)
 RENART_COMMIT ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo unknown)
 
-.PHONY: help dev build test check go-build go-test standalone-build web-install web-build web-typecheck web-test-live web-sync-polyglot-wasm docs-install docs-build docs-dev docs-preview docs-screenshots landing-media docs-docker docs-docker-run sync-install clean
+.PHONY: help dev build test check go-build go-test standalone-build web-install web-build web-typecheck web-test-live web-sync-polyglot-wasm docs-install docs-build docs-dev docs-preview docs-screenshots landing-media docs-media docs-docker docs-docker-run sync-install clean
 
 help:
 	@printf "Renart build targets\n\n"
@@ -23,6 +23,7 @@ help:
 	@printf "  make docs-dev          Start docs dev server\n"
 	@printf "  make docs-screenshots  Regenerate docs quickstart screenshots\n"
 	@printf "  make landing-media     Regenerate landing media\n"
+	@printf "  make docs-media        Regenerate docs screenshots\n"
 	@printf "  make docs-docker       Build Caddy docs image\n"
 	@printf "  make docs-docker-run   Serve docs image on http://127.0.0.1:8099\n"
 
@@ -80,6 +81,9 @@ docs-screenshots:
 
 landing-media:
 	$(PNPM) --dir web landing:media
+
+docs-media:
+	$(PNPM) --dir web docs:media
 
 sync-install:
 	cp install.sh docs/public/install.sh
