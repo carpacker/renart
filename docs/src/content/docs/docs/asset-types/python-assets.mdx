@@ -1,12 +1,47 @@
 ---
 title: Python assets
-description: "Run Python transformations with managed dependencies."
+description: Run Python transformations with managed dependencies.
 ---
-{/* Diátaxis mode: How-to. See architecture/docs-framework.md for the template. */}
-import { Aside } from '@astrojs/starlight/components';
 
-<Aside type="note" title="In progress">
-This page is being written as part of the docs build-out.
-</Aside>
+A Python asset is a `.py` file with the same kind of structured header as a
+SQL asset, carried in a docstring:
 
-Covers creating a Python asset and managing its dependencies.
+```python
+""" @bruin
+name: mart.scores
+type: python
+depends:
+  - mart.daily_summary
+@bruin """
+
+def materialize():
+    # return rows for the asset's output table
+    return [
+        {"day": "2026-07-01", "score": 0.87},
+        {"day": "2026-07-02", "score": 0.91},
+    ]
+```
+
+Declare a `materialize()` function that returns the asset's output; Renart
+runs the file when the asset materializes and writes the result to the
+target, like any other asset. `depends` links it into the pipeline so it
+runs after its upstreams and shows up in the lineage.
+
+## Dependencies
+
+Python assets use the project's local virtualenv. Declare packages in the
+project's `requirements.txt` (or `pyproject.toml`); the editor compares
+your imports against what's declared and installed, and flags anything
+missing — the same way notebooks do.
+
+## Editing support
+
+The editor gives Python assets diagnostics, completions, hover, and
+go-to-definition, alongside the usual Inspect/Materialize flow in the
+results panel.
+
+## Related
+
+- [SQL assets](/docs/asset-types/sql-assets/) — the same header, different
+  body.
+- [Asset file format](/docs/reference/asset-file-format/).

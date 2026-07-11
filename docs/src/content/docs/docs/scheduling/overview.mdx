@@ -1,12 +1,49 @@
 ---
-title: Scheduling overview
-description: "How scheduled runs work in Renart."
+title: Scheduling
+description: Put a pipeline on a per-environment cron without a separate orchestrator.
 ---
-{/* Diátaxis mode: Explanation. See architecture/docs-framework.md for the template. */}
-import { Aside } from '@astrojs/starlight/components';
 
-<Aside type="note" title="In progress">
-This page is being written as part of the docs build-out.
-</Aside>
+Renart schedules pipelines itself — there is no separate orchestrator to
+deploy and babysit. One schedule exists per pipeline and environment, and
+scheduled runs execute the pipeline's **deployed snapshot**, not whatever
+happens to be in your working tree.
 
-Explains how scheduling works in Renart.
+<img
+  src="/docs-media/schedules.webp"
+  alt="The Schedules view: three schedules across default and production environments, each with its cron cadence, last success, and recent and upcoming runs plotted on a timeline"
+  width="2800"
+  height="1520"
+/>
+
+## Create a schedule
+
+In **Schedules**, click **New schedule** and pick:
+
+- the **pipeline** and the **environment** to run against;
+- a **cron** expression and **timezone** (for example `0 7 * * 1-5` in
+  `Europe/Berlin`);
+- a **catch-up policy** — skip missed intervals, or run once to catch up
+  after downtime.
+
+Creating a schedule for an environment without a deployed snapshot offers
+to **deploy the working tree now and pin this schedule to it**.
+
+## Snapshots keep schedules stable
+
+Deploying records a snapshot of the pipeline as it is; the schedule runs
+that snapshot until you redeploy. You can keep editing — and even break —
+the working tree without affecting tonight's run. When you're ready,
+**Redeploy** picks up your changes (or use
+[`renart deploy`](/docs/reference/cli/) from CI).
+
+## Managing schedules
+
+Each row in the Schedules view shows the cadence, the last success, and a
+timeline of recent and upcoming runs. From the row you can pause the
+schedule with the toggle, skip the next interval, or **Run** it now.
+Scheduled runs land in [Runs & history](/docs/workspace/runs-and-history/)
+like any other run.
+
+The scheduler runs inside `renart web`. For an always-on machine, the same
+scheduler is available headless — see the
+[CLI reference](/docs/reference/cli/).

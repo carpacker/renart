@@ -1,12 +1,48 @@
 ---
-title: Notebooks overview
-description: "What notebooks are and how their per-notebook DuckDB sessions work."
+title: Notebooks
+description: SQL scratchpads with inline tables and charts that can graduate into pipeline assets.
 ---
-{/* Diátaxis mode: Explanation. See architecture/docs-framework.md for the template. */}
-import { Aside } from '@astrojs/starlight/components';
 
-<Aside type="note" title="In progress">
-This page is being written as part of the docs build-out.
-</Aside>
+Notebooks are where analysis starts before it deserves a place in the
+pipeline. Each notebook is a folder of SQL cells that runs in its own local
+DuckDB session, reading the tables your pipeline has materialized — so you
+can explore freely without touching pipeline state.
 
-Explains what notebooks are and how each notebook gets its own DuckDB session.
+<img
+  src="/docs-media/notebook.webp"
+  alt="A notebook with a table result and a line chart from a @viz cell; the cell's actions menu is open showing Run from here, Rename cell, Promote to pipeline, and Delete cell"
+  width="2800"
+  height="1800"
+/>
+
+## Cells
+
+Each cell is a named SQL query. Run one cell, run from a cell downward, or
+**Run all**. Results render inline as a table, with view toggles for bar,
+line, area, and pie charts.
+
+## Charts with @viz
+
+Pin a cell's default visualization with a `@viz` comment on its first line:
+
+```sql
+-- @viz(line, x: order_date, y: revenue)
+SELECT order_date, ROUND(revenue, 2) AS revenue
+FROM mart.daily_revenue
+ORDER BY order_date
+```
+
+The arguments are `key: value` pairs — the chart kind first, then the
+columns to map.
+
+## Promote a cell to the pipeline
+
+When a query earns a permanent place, open the cell's actions menu and
+choose **Promote to pipeline**. The cell becomes a real SQL asset in the
+pipeline you pick — same repo, same review flow as everything else.
+
+## Files like everything else
+
+A notebook lives in your repository as a folder of `.sql` cell files, so
+notebooks are versioned, diffable, and reviewable exactly like pipeline
+code.

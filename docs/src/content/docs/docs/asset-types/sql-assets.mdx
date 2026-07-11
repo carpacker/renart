@@ -1,12 +1,69 @@
 ---
 title: SQL assets
-description: "Transform data with a SQL query that Renart validates and materializes."
+description: Transform data with a SQL query that Renart validates and materializes.
 ---
-{/* Diátaxis mode: How-to. See architecture/docs-framework.md for the template. */}
-import { Aside } from '@astrojs/starlight/components';
 
-<Aside type="note" title="In progress">
-This page is being written as part of the docs build-out.
-</Aside>
+A SQL asset is a `.sql` file: a structured header describing the asset,
+followed by the query that produces it.
 
-Covers creating and configuring a SQL asset: the query, validation, and materialization.
+```sql
+/* @bruin
+name: staging.orders
+type: duckdb.sql
+owner: analytics@acme.dev
+materialization:
+  type: table
+depends:
+  - raw.orders
+  - raw.customers
+columns:
+  - name: order_id
+    type: INTEGER
+    primary_key: true
+    checks:
+      - name: not_null
+      - name: unique
+@bruin */
+
+SELECT
+    o.order_id,
+    o.customer_id,
+    c.customer_name,
+    o.order_date,
+    o.status,
+    o.total_amount
+FROM raw.orders o
+JOIN raw.customers c USING (customer_id)
+WHERE o.status != 'refunded'
+```
+
+The `type` names the engine and dialect — for example `duckdb.sql`,
+`pg.sql`, `sf.sql`, `bq.sql`, or `rs.sql`. The full header vocabulary is in
+the [asset file format](/docs/reference/asset-file-format/).
+
+## Dependencies come from the query
+
+Referencing `raw.orders` in `FROM` or `JOIN` is enough — Renart infers the
+dependency and draws the edge on the canvas. Unqualified names resolve to
+the matching asset when it's unambiguous. You only add manual dependencies
+(in the workbench) for relationships the SQL can't express.
+
+## Materialization
+
+The `materialization` block controls the write behavior when the asset
+runs: a `view`, a `table` that's replaced each run, or incremental
+strategies for large tables. The workbench edits the same block as a form.
+
+## Validation and type checking
+
+The editor validates references against your actual pipeline as you type,
+and the **Type check** tab (or [`renart type-check`](/docs/reference/cli/)
+in CI) verifies that the declared columns match what the query actually
+produces.
+
+## Related
+
+- [The asset editor](/docs/editing-assets/asset-editor/) — IntelliSense,
+  previews, the workbench.
+- [Asset file format](/docs/reference/asset-file-format/) — every header
+  key.

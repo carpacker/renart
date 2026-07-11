@@ -1,12 +1,42 @@
 ---
 title: Managing connections
-description: "Add, edit, and test the connections your assets use."
+description: Point Renart at your warehouses and organize them into environments.
 ---
-{/* Diátaxis mode: How-to. See architecture/docs-framework.md for the template. */}
-import { Aside } from '@astrojs/starlight/components';
 
-<Aside type="note" title="In progress">
-This page is being written as part of the docs build-out.
-</Aside>
+A **connection** tells Renart how to reach a data platform — a local DuckDB
+file, a Postgres database, a Snowflake account. An **environment** is a
+named set of connections (for example `default` and `production`) so the
+same pipeline can run against different targets.
 
-Shows how to add, edit, and test a connection.
+Both live in the project config file in your repository, and both are
+editable in the UI: open the project switcher and choose **Project
+settings**, then the **Environments** and **Connections** sections.
+
+## Add a connection
+
+In **Project settings → Connections**, add a connection with a name (for
+example `duckdb-default` or `pg-prod`) and its credentials. Assets refer to
+connections by name — the workbench shows which connection an asset runs
+against, and the pipeline's defaults live in `pipeline.yml`.
+
+## Environments
+
+In **Project settings → Environments**, define one entry per target. Each
+environment maps connection names to concrete credentials, so switching the
+environment picker in the top bar swaps the whole workspace — previews,
+materializations, and ad-hoc queries — onto that target. Schedules are also
+per environment: the same pipeline can run nightly against `default` and on
+weekday mornings against `production`.
+
+## Supported platforms
+
+Renart executes against the warehouses supported by its execution engine,
+including DuckDB, Postgres, Snowflake, BigQuery, Redshift, and more. The
+demo projects use DuckDB, which needs no credentials at all — a good way to
+try the workflow before pointing at shared infrastructure.
+
+:::caution[Credentials live in the project config]
+The project config file holds connection credentials. Keep secrets out of
+the repository — use environment-variable references where your platform
+supports them, and gitignore what must stay local.
+:::
