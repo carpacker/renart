@@ -140,7 +140,7 @@ func (s *BruinFileExecutionLogSink) SaveRunLog(_ context.Context, record RunLogR
 		return errors.Wrap(err, "failed to add logs/runs to .gitignore")
 	}
 	statePath := filepath.Join(s.workspaceRoot, "logs", "runs", record.Pipeline.Name)
-	return record.Scheduler.SavePipelineState(s.fs, record.Cmdline, record.RunConfig, record.RunID, statePath)
+	return record.Scheduler.SavePipelineState(s.fs, record.Cmdline, record.RunConfig, "", 0, record.RunID, statePath)
 }
 
 func (s *BruinFileExecutionLogSink) ensureGitignore(pattern string) error {

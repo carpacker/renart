@@ -7,7 +7,9 @@
   "engines": {
     "vscode": "^1.96.0"
   },
-  "categories": ["Programming Languages"],
+  "categories": [
+    "Programming Languages"
+  ],
   "activationEvents": [
     "onLanguage:sql",
     "workspaceContains:dbt_project.yml",
@@ -44,12 +46,11 @@
     "typecheck": "tsc --noEmit -p ."
   },
   "dependencies": {
-    "vscode-languageclient": "^9.0.1"
+    "vscode-languageclient": "^10.1.0"
   },
   "devDependencies": {
-    "@types/node": "^22.10.5",
-    "@types/vscode": "^1.96.0",
-    "typescript": "^5.9.3"
+    "@types/node": "^26.1.1",
+    "@types/vscode": "^1.125.0",
+    "typescript": "^7.0.2"
   }
 }
-

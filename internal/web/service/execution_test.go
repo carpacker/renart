@@ -355,7 +355,7 @@ func TestExecutionServiceInspectNonSQLAssetQueriesMaterializedTable(t *testing.T
 				}, &pipeline.Asset{
 					Name: "analytics.customers",
 					Type: pipeline.AssetTypeIngestr,
-					Parameters: map[string]string{
+					Parameters: pipeline.ParameterMap{
 						"destination": "duckdb",
 					},
 				}, nil
@@ -384,7 +384,7 @@ func TestExecutionServiceInspectLoadAssetQueriesDestinationConnection(t *testing
 			return "analytics/assets/load_orders.asset.yml", &pipeline.Pipeline{}, &pipeline.Asset{
 				Name: "analytics.orders",
 				Type: pipeline.AssetType(loadAssetType),
-				Parameters: map[string]string{
+				Parameters: pipeline.ParameterMap{
 					"source_connection":      "postgres-prod",
 					"source_table":           "public.orders",
 					"destination_connection": "duckdb-default",
@@ -413,7 +413,7 @@ func TestExecutionServiceInspectLoadAssetToLocalFileReturnsInfo(t *testing.T) {
 			return "analytics/assets/load_local.asset.yml", &pipeline.Pipeline{}, &pipeline.Asset{
 				Name: "analytics.local_dump",
 				Type: pipeline.AssetType(loadAssetType),
-				Parameters: map[string]string{
+				Parameters: pipeline.ParameterMap{
 					"source_connection":      "duckdb-default",
 					"source_table":           "analytics.orders",
 					"destination_connection": "local",

@@ -82,10 +82,10 @@ export function extractMissingReferencedObjects(value: string | undefined): stri
   }
 
   const patterns = [
-    /table with name ([a-zA-Z0-9_.\"]+) does not exist/gi,
-    /relation ([a-zA-Z0-9_.\"]+) does not exist/gi,
-    /no such table:?\s*([a-zA-Z0-9_.\"]+)/gi,
-    /object ([a-zA-Z0-9_.\"]+) does not exist/gi,
+    /table with name ([a-zA-Z0-9_."]+) does not exist/gi,
+    /relation ([a-zA-Z0-9_."]+) does not exist/gi,
+    /no such table:?\s*([a-zA-Z0-9_."]+)/gi,
+    /object ([a-zA-Z0-9_."]+) does not exist/gi,
   ];
   const result = new Set<string>();
 

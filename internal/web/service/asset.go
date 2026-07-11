@@ -507,7 +507,7 @@ func (s *AssetService) Update(ctx context.Context, assetID string, req AssetUpda
 			applyManualAssetUpstreams(asset, parsedPipeline, req.Upstreams)
 		}
 		if req.Parameters != nil {
-			nextParameters := pipeline.EmptyStringMap{}
+			nextParameters := pipeline.ParameterMap{}
 			for rawKey, rawValue := range req.Parameters {
 				key := strings.TrimSpace(rawKey)
 				if key == "" {
@@ -740,7 +740,8 @@ func deriveSQLAssetTypeForSource(sourceAsset *pipeline.Asset, parsedPipeline *pi
 			return assetType
 		}
 		if strings.EqualFold(assetType, "ingestr") {
-			destination := strings.TrimSpace(sourceAsset.Parameters["destination"])
+			destination, _ := sourceAsset.Parameters.GetString("destination")
+			destination = strings.TrimSpace(destination)
 			if destination != "" {
 				if assetType, ok := sqlAssetTypeForIngestrDestination(destination); ok {
 					return assetType
@@ -749,7 +750,8 @@ func deriveSQLAssetTypeForSource(sourceAsset *pipeline.Asset, parsedPipeline *pi
 					return assetType
 				}
 			}
-			destinationConnection := strings.TrimSpace(sourceAsset.Parameters["destination_connection"])
+			destinationConnection, _ := sourceAsset.Parameters.GetString("destination_connection")
+			destinationConnection = strings.TrimSpace(destinationConnection)
 			if assetType, ok := sqlAssetTypeForConnectionName(parsedPipeline, destinationConnection); ok {
 				return assetType
 			}

@@ -1628,7 +1628,6 @@ export function registerSQLProviders(
             typeof suggestion.label === "string"
               ? suggestion.label
               : suggestion.label.label;
-          const detail = typeof suggestion.detail === "string" ? suggestion.detail : "";
           const insertText = typeof suggestion.insertText === "string" ? suggestion.insertText : "";
           const key = `${label.toLowerCase()}::${suggestion.kind}::${insertText.toLowerCase()}`;
           if (seen.has(key)) {

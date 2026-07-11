@@ -194,9 +194,19 @@ func (s *PipelineService) UpdateConfig(ctx context.Context, pipelineID string, r
 	parsed.Tags = normalizeStringArray(req.Tags)
 	parsed.Domains = normalizeStringArray(req.Domains)
 	parsed.DefaultConnections = buildDefaultConnections(req.DefaultConnections)
-	parsed.Catchup = req.Catchup
+	previousCatchup := parsed.Catchup
+	parsed.Catchup = pipeline.CatchupNone
+	if req.Catchup {
+		parsed.Catchup = pipeline.CatchupActive
+		if previousCatchup == pipeline.CatchupAll {
+			parsed.Catchup = pipeline.CatchupAll
+		}
+	}
 	parsed.MetadataPush = pipeline.MetadataPush{BigQuery: req.MetadataPushBigQuery}
-	parsed.Retries = req.Retries
+	parsed.Retries = nil
+	if req.Retries != 0 {
+		parsed.Retries = &req.Retries
+	}
 	parsed.Concurrency = max(req.Concurrency, 1)
 	parsed.MaxActiveSteps = normalizeOptionalInt(req.MaxActiveSteps)
 	parsed.Notifications = buildNotifications(req.NotificationsSlack, req.NotificationsTeams)
@@ -398,9 +408,9 @@ func buildPipelineConfigResponse(pipelineID, relPath string, parsed *pipeline.Pi
 		Tags:                 []string(parsed.Tags),
 		Domains:              []string(parsed.Domains),
 		DefaultConnections:   defaultConnections,
-		Catchup:              parsed.Catchup,
+		Catchup:              parsed.Catchup != pipeline.CatchupNone,
 		MetadataPushBigQuery: parsed.MetadataPush.BigQuery,
-		Retries:              parsed.Retries,
+		Retries:              optionalIntValue(parsed.Retries),
 		Concurrency:          parsed.Concurrency,
 		MaxActiveSteps:       parsed.MaxActiveSteps,
 		NotificationsSlack:   buildSlackNotificationResponse(parsed.Notifications),
@@ -675,6 +685,13 @@ func normalizeOptionalInt(value *int) *int {
 	}
 	copyValue := *value
 	return &copyValue
+}
+
+func optionalIntValue(value *int) int {
+	if value == nil {
+		return 0
+	}
+	return *value
 }
 
 func max(value, floor int) int {

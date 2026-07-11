@@ -1,4 +1,3 @@
-import { IngestrSuggestion } from "@/lib/types";
 import { SchemaColumn } from "@/lib/sql-schema";
 
 export type SuggestionObservationMethod =

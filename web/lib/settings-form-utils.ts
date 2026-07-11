@@ -1,6 +1,5 @@
 import {
   WorkspaceConfigConnection,
-  WorkspaceConfigConnectionType,
   WorkspaceConfigEnvironment,
   WorkspaceConfigResponse,
 } from "@/lib/types";

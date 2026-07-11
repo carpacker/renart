@@ -4,10 +4,7 @@ import { useEffect, useMemo, useRef } from "react";
 import type * as MonacoNS from "monaco-editor";
 
 import {
-  getSQLDatabases,
   getSQLPathSuggestions,
-  getSQLTableColumns,
-  getSQLTables,
 } from "@/lib/api";
 import {
   registerSQLProviders,
@@ -58,7 +55,7 @@ function quoteSQLIdentifier(identifier: string) {
       (part) =>
         `"${part
           .trim()
-          .replace(/^[\[\]"'`]+|[\[\]"'`]+$/g, "")
+          .replace(/^[[\]"'`]+|[[\]"'`]+$/g, "")
           .replaceAll('"', '""')}"`,
     )
     .join(".");
@@ -459,10 +456,6 @@ function positionInRange(position: MonacoNS.Position, range: MonacoNS.IRange) {
     return false;
   }
   return true;
-}
-
-function formatAvailableColumnsMarkdown(columns: string[]) {
-  return `(${columns.slice(0,5).map((column) => `\`${column}\``).join(", ")}${columns.length > 5 ? '...' : ''})`;
 }
 
 function remoteTablesForConnection(

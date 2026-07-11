@@ -1,6 +1,6 @@
 import { atom } from "jotai";
 
-import { SchemaColumn, SchemaTable } from "@/lib/sql-schema";
+import { SchemaTable } from "@/lib/sql-schema";
 
 import { materializationByAssetIdAtom } from "./materialization";
 import { selectedAssetDataAtom } from "./selection";
@@ -34,7 +34,6 @@ import {
   RegisterConnectionDatabasesPayload,
   RegisterConnectionTablesPayload,
   RegisterRemoteTableColumnsPayload,
-  RemoteTableSuggestionEntry,
   SuggestionCatalogState,
   SuggestionDatabaseState,
   SuggestionTableState,

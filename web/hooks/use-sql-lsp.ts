@@ -938,7 +938,7 @@ function quoteSQLIdentifier(identifier: string) {
       (part) =>
         `"${part
           .trim()
-          .replace(/^[\[\]"'`]+|[\[\]"'`]+$/g, "")
+          .replace(/^[[\]"'`]+|[[\]"'`]+$/g, "")
           .replaceAll('"', '""')}"`,
     )
     .join(".");

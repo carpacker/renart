@@ -80,8 +80,8 @@ columns:
     type: INTEGER
 `
 	asset := &pipeline.Asset{
-		Name: "example.my_api_asset_2",
-		Type: "api",
+		Name:           "example.my_api_asset_2",
+		Type:           "api",
 		ExecutableFile: pipeline.ExecutableFile{Path: "/x/my_api_asset_2.asset.yml"},
 		Columns: []pipeline.Column{
 			{Name: "id", Type: "INTEGER"},
@@ -139,7 +139,7 @@ custom_key: keep-me
 		Name:           "example.move_users",
 		Type:           "load",
 		ExecutableFile: pipeline.ExecutableFile{Path: "/x/move_users.asset.yml"},
-		Parameters: pipeline.EmptyStringMap{
+		Parameters: pipeline.ParameterMap{
 			"source_connection":      "postgres_prod",
 			"source_table":           "public.customers", // edited
 			"destination_connection": "duckdb_default",

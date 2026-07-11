@@ -139,6 +139,7 @@ export const liveTest = base.extend<{
     }
   },
   liveApp: async ({ fixtureName, livePostgres, liveAppEnv }, use) => {
+    void livePostgres;
     if (!existsSync(binaryPath)) {
       throw new Error(
         `Renart binary not found at ${binaryPath}. Build it first or set BRUIN_E2E_BINARY.`
@@ -451,7 +452,7 @@ async function ensurePostgresDatabase(containerName: string, user: string, datab
       return;
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      if (message.includes(`database \"${database}\" already exists`)) {
+      if (message.includes(`database "${database}" already exists`)) {
         return;
       }
       await new Promise((resolveDelay) => setTimeout(resolveDelay, 500));

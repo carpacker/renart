@@ -420,7 +420,7 @@ type fingerprintedConfig struct {
 	Type              string                     `json:"type"`
 	Connection        string                     `json:"connection"`
 	Materialization   pipeline.Materialization   `json:"materialization"`
-	Parameters        map[string]string          `json:"parameters,omitempty"`
+	Parameters        pipeline.ParameterMap      `json:"parameters,omitempty"`
 	Image             string                     `json:"image,omitempty"`
 	Instance          string                     `json:"instance,omitempty"`
 	IntervalModifiers pipeline.IntervalModifiers `json:"interval_modifiers"`

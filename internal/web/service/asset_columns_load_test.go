@@ -15,7 +15,7 @@ func TestResolveLoadSourceAssetBySourceTable(t *testing.T) {
 	loadAsset := &pipeline.Asset{
 		Name:       "staging.users",
 		Type:       "load",
-		Parameters: pipeline.EmptyStringMap{"source_table": "raw.users"},
+		Parameters: pipeline.ParameterMap{"source_table": "raw.users"},
 	}
 	pl := &pipeline.Pipeline{Assets: []*pipeline.Asset{source, other, loadAsset}}
 
@@ -50,7 +50,7 @@ func TestInferLoadColumnsFromUpstream(t *testing.T) {
 	loadAsset := &pipeline.Asset{
 		Name:       "staging.users",
 		Type:       "load",
-		Parameters: pipeline.EmptyStringMap{"source_table": "raw.users"},
+		Parameters: pipeline.ParameterMap{"source_table": "raw.users"},
 	}
 	pl := &pipeline.Pipeline{Assets: []*pipeline.Asset{source, loadAsset}}
 

@@ -100,7 +100,10 @@ func loadParamsFromAsset(asset *pipeline.Asset) loadRunParams {
 	if asset == nil {
 		return params
 	}
-	get := func(key string) string { return strings.TrimSpace(asset.Parameters[key]) }
+	get := func(key string) string {
+		value, _ := asset.Parameters.GetString(key)
+		return strings.TrimSpace(value)
+	}
 	params.SourceConnection = get(loadParamSourceConnection)
 	params.SourceTable = get(loadParamSourceTable)
 	params.DestinationConnection = get(loadParamDestinationConnection)

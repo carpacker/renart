@@ -1,5 +1,5 @@
 import { parseQualifiedTableName, resolveConnection, SchemaColumn } from "@/lib/sql-schema";
-import { IngestrSuggestion, WebAsset, WebColumn, WorkspaceState } from "@/lib/types";
+import { WebAsset, WebColumn, WorkspaceState } from "@/lib/types";
 
 import { MaterializationByAssetId } from "./materialization";
 import {

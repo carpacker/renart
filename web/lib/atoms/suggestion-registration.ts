@@ -4,7 +4,6 @@ import {
   DynamicAssetColumnObservation,
   DynamicRemoteDatabaseObservation,
   DynamicRemoteTableColumnObservation,
-  DynamicRemoteTableObservation,
   DynamicSuggestionState,
   RegisterAssetColumnsPayload,
   RegisterConnectionTablesPayload,

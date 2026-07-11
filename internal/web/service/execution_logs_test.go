@@ -117,7 +117,7 @@ func TestBruinFileExecutionLogSinkDelegatesRunLogsToBruinScheduler(t *testing.T)
 	bruinScheduler := scheduler.NewScheduler(zap.NewNop().Sugar(), foundPipeline, runID)
 	bruinScheduler.MarkAll(scheduler.Succeeded)
 	bruinStatePath := filepath.Join(workspaceRoot, "expected", "logs", "runs", foundPipeline.Name)
-	require.NoError(t, bruinScheduler.SavePipelineState(fs, cmdline, runConfig, runID, bruinStatePath))
+	require.NoError(t, bruinScheduler.SavePipelineState(fs, cmdline, runConfig, "", 0, runID, bruinStatePath))
 
 	renartState := readPipelineStateForTest(t, fs, filepath.Join(workspaceRoot, "logs", "runs", foundPipeline.Name, runID+".json"))
 	bruinState := readPipelineStateForTest(t, fs, filepath.Join(bruinStatePath, runID+".json"))

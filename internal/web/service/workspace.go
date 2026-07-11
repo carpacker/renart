@@ -254,7 +254,7 @@ func (s *WorkspaceService) ComputeState(ctx context.Context) (model.WorkspaceSta
 			} else if conn, connErr := parsed.GetConnectionNameForAsset(asset); connErr == nil {
 				connectionName = conn
 			}
-			parameters := asset.Parameters
+			parameters := parameterStrings(asset.Parameters)
 			if isLoadAsset(asset) {
 				if summary := loadSummaryParameters(content); len(summary) > 0 {
 					parameters = summary
@@ -319,6 +319,16 @@ func (s *WorkspaceService) ComputeState(ctx context.Context) (model.WorkspaceSta
 	state.Metadata["asset_directories"] = AssetsDirectoryNames
 
 	return state, nil
+}
+
+func parameterStrings(parameters pipeline.ParameterMap) map[string]string {
+	result := make(map[string]string, len(parameters))
+	for key := range parameters {
+		if value, ok := parameters.GetString(key); ok {
+			result[key] = value
+		}
+	}
+	return result
 }
 
 // validateAssetClassDirection enforces the dependency direction rule: a

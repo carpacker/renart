@@ -119,7 +119,7 @@ func TestDeriveSQLAssetTypeForIngestrSourceUsesDestinationType(t *testing.T) {
 
 	assetType := deriveSQLAssetTypeForSource(&pipeline.Asset{
 		Type:       pipeline.AssetType("ingestr"),
-		Parameters: map[string]string{"destination": "duckdb"},
+		Parameters: pipeline.ParameterMap{"destination": "duckdb"},
 	}, nil, "duckdb-default")
 
 	assert.Equal(t, "duckdb.sql", assetType)
@@ -130,7 +130,7 @@ func TestDeriveSQLAssetTypeForIngestrSourceMapsDestinationConnectionName(t *test
 
 	assetType := deriveSQLAssetTypeForSource(&pipeline.Asset{
 		Type:       pipeline.AssetType("ingestr"),
-		Parameters: map[string]string{"destination": "duckdb-default"},
+		Parameters: pipeline.ParameterMap{"destination": "duckdb-default"},
 	}, &pipeline.Pipeline{
 		DefaultConnections: pipeline.EmptyStringMap{"duckdb": "duckdb-default"},
 	}, "duckdb-default")
@@ -143,7 +143,7 @@ func TestDeriveSQLAssetTypeForIngestrSourceMapsDestinationConnectionField(t *tes
 
 	assetType := deriveSQLAssetTypeForSource(&pipeline.Asset{
 		Type:       pipeline.AssetType("ingestr"),
-		Parameters: map[string]string{"destination_connection": "warehouse"},
+		Parameters: pipeline.ParameterMap{"destination_connection": "warehouse"},
 	}, &pipeline.Pipeline{
 		DefaultConnections: pipeline.EmptyStringMap{"snowflake": "warehouse"},
 	}, "warehouse")
