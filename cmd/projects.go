@@ -16,6 +16,7 @@ import (
 	"github.com/spf13/afero"
 	"go.uber.org/zap"
 
+	"renart/internal/clientapi"
 	webapi "renart/internal/web/api"
 	webhttpapi "renart/internal/web/httpapi"
 	"renart/internal/web/identity"
@@ -47,6 +48,18 @@ type projectManager struct {
 	mu        sync.Mutex
 	defaultID string
 	runtimes  map[string]*projectRuntime
+	// discovery, when set, makes the manager maintain .renart/server.json in
+	// every open project root so the CLI can find and delegate to this
+	// server (plans/cli-v1.md §2.1).
+	discovery *serverDiscovery
+}
+
+// serverDiscovery is the listen-address material for the discovery files;
+// it exists only after the HTTP listener is bound.
+type serverDiscovery struct {
+	baseURL   string
+	token     string
+	startedAt time.Time
 }
 
 // registryPath resolves the projects.json location; RENART_PROJECTS_REGISTRY
@@ -80,15 +93,6 @@ func newProjectManager(ctx context.Context, logger *zap.Logger, baseCfg serverCo
 // carries only routes (no middleware): the root router's middleware stack
 // already ran by the time requests are rewritten into it.
 func newProjectRuntime(ctx context.Context, logger *zap.Logger, cfg serverConfig) (*projectRuntime, error) {
-	project, err := identity.EnsureProject(
-		afero.NewOsFs(),
-		filepath.Join(cfg.workspaceRoot, ".renart", "project.yml"),
-		filepath.Base(cfg.workspaceRoot),
-	)
-	if err != nil {
-		return nil, err
-	}
-
 	server, cleanup, err := newWebServer(ctx, cfg, logger)
 	if err != nil {
 		return nil, err
@@ -98,8 +102,8 @@ func newProjectRuntime(ctx context.Context, logger *zap.Logger, cfg serverConfig
 	server.registerRoutes(router)
 
 	return &projectRuntime{
-		id:      project.ID,
-		name:    project.Name,
+		id:      server.projectID,
+		name:    server.projectName,
 		root:    cfg.workspaceRoot,
 		server:  server,
 		router:  router,
@@ -321,6 +325,7 @@ func (m *projectManager) openPath(path string) (*projectRuntime, error) {
 	}
 	m.runtimes[rt.id] = rt
 	m.record(rt)
+	m.writeDiscoveryFileLocked(rt)
 	m.logger.Info("opened project runtime",
 		zap.String("project_id", rt.id),
 		zap.String("root", rt.root),
@@ -438,11 +443,11 @@ func (m *projectManager) mountProjectRoutes(router chi.Router) {
 // buildRootRouter assembles the process-level router: middleware, project
 // directory routes, per-project mounts, and the default project's routes
 // (API alias + static assets) at the root.
-func buildRootRouter(manager *projectManager, defaultRuntime *projectRuntime) chi.Router {
+func buildRootRouter(manager *projectManager, defaultRuntime *projectRuntime, sessionToken string) chi.Router {
 	router := chi.NewRouter()
 	router.Use(
 		webhttpapi.Recoverer(defaultRuntime.server.logger),
-		webhttpapi.SameOriginGuard(),
+		webhttpapi.SameOriginGuardWithToken(sessionToken),
 		webhttpapi.RequestLogger(defaultRuntime.server.logger),
 	)
 	manager.mountProjectRoutes(router)
@@ -461,5 +466,53 @@ func (m *projectManager) closeAll() {
 		}
 		rt.cleanup()
 		delete(m.runtimes, id)
+	}
+}
+
+// EnableDiscovery starts maintaining .renart/server.json in every open (and
+// subsequently opened) project root. Call once the listener is bound.
+func (m *projectManager) EnableDiscovery(baseURL, token string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.discovery = &serverDiscovery{baseURL: baseURL, token: token, startedAt: time.Now().UTC()}
+	for _, rt := range m.runtimes {
+		m.writeDiscoveryFileLocked(rt)
+	}
+}
+
+// DisableDiscovery removes the discovery files this server wrote; defer it
+// next to the runtime cleanups so a graceful shutdown leaves no stale file.
+func (m *projectManager) DisableDiscovery() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.discovery == nil {
+		return
+	}
+	for _, rt := range m.runtimes {
+		clientapi.RemoveServerFile(rt.root)
+	}
+	m.discovery = nil
+}
+
+// writeDiscoveryFileLocked records this server in rt's workspace. The API
+// base is the project mount, so the CLI addresses the right runtime no
+// matter which project it discovered. Best-effort: a read-only workspace
+// just misses out on delegation.
+func (m *projectManager) writeDiscoveryFileLocked(rt *projectRuntime) {
+	if m.discovery == nil {
+		return
+	}
+	err := clientapi.WriteServerFile(rt.root, clientapi.ServerFile{
+		PID:           os.Getpid(),
+		BaseURL:       m.discovery.baseURL,
+		APIBaseURL:    m.discovery.baseURL + "/api/projects/" + rt.id,
+		ProjectID:     rt.id,
+		WorkspaceRoot: rt.root,
+		Version:       buildVersion,
+		Token:         m.discovery.token,
+		StartedAt:     m.discovery.startedAt,
+	})
+	if err != nil {
+		m.logger.Warn("failed to write server discovery file", zap.String("root", rt.root), zap.Error(err))
 	}
 }

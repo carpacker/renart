@@ -31,8 +31,11 @@ func Root(version string) *cli.Command {
 		Commands: []*cli.Command{
 			Web(),
 			Standalone(),
+			Run(),
+			Ls(),
 			TypeCheck(),
 			Deploy(),
+			Init(),
 			Debug(),
 		},
 		DisableSliceFlagSeparator: true,

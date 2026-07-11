@@ -2,6 +2,8 @@ package cmd
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"fmt"
 	"net/http"
 	"os"
@@ -19,6 +21,7 @@ import (
 	"renart/internal/web/fingerprint"
 	"renart/internal/web/freshness"
 	webhttpapi "renart/internal/web/httpapi"
+	"renart/internal/web/identity"
 	"renart/internal/web/matlog"
 	"renart/internal/web/policy"
 	webscheduler "renart/internal/web/scheduler"
@@ -42,6 +45,12 @@ type serverConfig struct {
 	watchPoll          time.Duration
 	schedulerEnabled   bool
 	schedulerStatePath string
+	// headless is the embedded-CLI mode (plans/cli-v1.md §2.4): the same
+	// service graph without the pieces only a long-lived UI server needs —
+	// no static assets, no filesystem watcher, no fingerprint pre-warm (and
+	// callers keep the scheduler off so two River schedulers never share a
+	// state DB).
+	headless bool
 }
 
 // serverFlags returns the CLI flags shared by every mode that boots the
@@ -135,7 +144,20 @@ func serverConfigFromCommand(c *cli.Command) (serverConfig, error) {
 func newWebServer(ctx context.Context, cfg serverConfig, logger *zap.Logger) (*webServer, func(), error) {
 	absRoot := cfg.workspaceRoot
 
+	// Every served workspace gets a stable identity; the health endpoint and
+	// discovery file report it so CLI clients can address the right project.
+	project, err := identity.EnsureProject(
+		afero.NewOsFs(),
+		filepath.Join(absRoot, ".renart", "project.yml"),
+		filepath.Base(absRoot),
+	)
+	if err != nil {
+		return nil, nil, err
+	}
+
 	server := &webServer{
+		projectID:   project.ID,
+		projectName: project.Name,
 		workspaceRoot: absRoot,
 		staticDir:     cfg.staticDir,
 		watchMode:     cfg.watchMode,
@@ -271,7 +293,6 @@ func newWebServer(ctx context.Context, cfg serverConfig, logger *zap.Logger) (*w
 	server.onboardingSvc = service.NewOnboardingService(absRoot, resolveConfigFilePath(absRoot), server.executor)
 	server.sourceControlSvc = service.NewSourceControlService(absRoot)
 
-	var err error
 	server.schedulerStore, err = webscheduler.OpenStore(cfg.schedulerStatePath)
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to initialize scheduler store: %w", err)
@@ -395,16 +416,18 @@ func newWebServer(ctx context.Context, cfg serverConfig, logger *zap.Logger) (*w
 		Events:           server.eventBus,
 	})
 
-	embeddedStaticFS, err := webui.DistFS()
-	if err != nil {
-		logger.Warn("embedded web assets unavailable, falling back to static dir", zap.Error(err))
-		embeddedStaticFS = nil
-	}
+	if !cfg.headless {
+		embeddedStaticFS, distErr := webui.DistFS()
+		if distErr != nil {
+			logger.Warn("embedded web assets unavailable, falling back to static dir", zap.Error(distErr))
+			embeddedStaticFS = nil
+		}
 
-	server.staticHandler, err = webstatic.NewHandler(embeddedStaticFS, cfg.staticDir)
-	if err != nil {
-		server.schedulerStore.Close()
-		return nil, nil, fmt.Errorf("failed to initialize static asset handler: %w", err)
+		server.staticHandler, err = webstatic.NewHandler(embeddedStaticFS, cfg.staticDir)
+		if err != nil {
+			server.schedulerStore.Close()
+			return nil, nil, fmt.Errorf("failed to initialize static asset handler: %w", err)
+		}
 	}
 
 	// Bootstrap materialization timestamps from existing run logs.
@@ -425,10 +448,12 @@ func newWebServer(ctx context.Context, cfg serverConfig, logger *zap.Logger) (*w
 		logger.Info("removed stale notebook sessions", zap.Strings("notebooks", removed))
 	}
 
-	// Warm the fingerprint engine's formatter cache off the request path:
-	// the first SQL normalization per asset costs tens of milliseconds in
-	// the wasm formatter, and the first staleness fetch should not pay it.
-	go server.warmFingerprintCache(ctx)
+	if !cfg.headless {
+		// Warm the fingerprint engine's formatter cache off the request path:
+		// the first SQL normalization per asset costs tens of milliseconds in
+		// the wasm formatter, and the first staleness fetch should not pay it.
+		go server.warmFingerprintCache(ctx)
+	}
 
 	if cfg.schedulerEnabled {
 		if err := server.schedulerSvc.Start(ctx); err != nil {
@@ -436,16 +461,18 @@ func newWebServer(ctx context.Context, cfg serverConfig, logger *zap.Logger) (*w
 		}
 	}
 
-	go watch.New(watch.Config{
-		WorkspaceRoot: absRoot,
-		Mode:          cfg.watchMode,
-		PollInterval:  cfg.watchPoll,
-	}, func(ctx context.Context, eventType, eventPath string) {
-		if server.isWatcherSuppressed(eventPath) {
-			return
-		}
-		server.pushWorkspaceUpdate(ctx, eventType, eventPath)
-	}).Start(ctx)
+	if !cfg.headless {
+		go watch.New(watch.Config{
+			WorkspaceRoot: absRoot,
+			Mode:          cfg.watchMode,
+			PollInterval:  cfg.watchPoll,
+		}, func(ctx context.Context, eventType, eventPath string) {
+			if server.isWatcherSuppressed(eventPath) {
+				return
+			}
+			server.pushWorkspaceUpdate(ctx, eventType, eventPath)
+		}).Start(ctx)
+	}
 
 	cleanup := func() {
 		server.schedulerSvc.Stop()
@@ -457,15 +484,27 @@ func newWebServer(ctx context.Context, cfg serverConfig, logger *zap.Logger) (*w
 
 // buildRouter assembles the chi router with the standard middleware stack
 // and all API routes.
-func (s *webServer) buildRouter() chi.Router {
+func (s *webServer) buildRouter(sessionToken string) chi.Router {
 	router := chi.NewRouter()
 	router.Use(
 		webhttpapi.Recoverer(s.logger),
-		webhttpapi.SameOriginGuard(),
+		webhttpapi.SameOriginGuardWithToken(sessionToken),
 		webhttpapi.RequestLogger(s.logger),
 	)
 	s.registerRoutes(router)
 	return router
+}
+
+// newSessionToken mints the per-process secret written into the discovery
+// files; CLI requests present it to bypass the Origin guard explicitly.
+func newSessionToken() string {
+	raw := make([]byte, 32)
+	if _, err := rand.Read(raw); err != nil {
+		// Token auth is an additive trust path; without entropy we simply
+		// don't offer it and requests fall back to the no-Origin allowance.
+		return ""
+	}
+	return hex.EncodeToString(raw)
 }
 
 // newHTTPServer returns the http.Server used by both modes.

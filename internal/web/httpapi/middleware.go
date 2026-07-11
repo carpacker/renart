@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"crypto/subtle"
 	"net"
 	"net/http"
 	"net/url"
@@ -103,8 +104,27 @@ func Recoverer(logger *zap.Logger) func(http.Handler) http.Handler {
 // Browsers attach an Origin header to cross-origin requests; non-browser
 // clients (curl, CLI integrations) send none and remain unaffected.
 func SameOriginGuard() func(http.Handler) http.Handler {
+	return SameOriginGuardWithToken("")
+}
+
+// SameOriginGuardWithToken is SameOriginGuard plus an explicit session-token
+// bypass: requests carrying the server's token (Authorization: Bearer or
+// X-Renart-Token) are trusted regardless of Origin. The CLI sends the token
+// from .renart/server.json so its trust no longer rests on the accident of
+// having no Origin header (plans/cli-v1.md §2.3). A presented-but-wrong
+// token is rejected outright.
+func SameOriginGuardWithToken(token string) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if presented := requestSessionToken(r); presented != "" {
+				if token != "" && subtle.ConstantTimeCompare([]byte(presented), []byte(token)) == 1 {
+					next.ServeHTTP(w, r)
+					return
+				}
+				webapi.WriteError(w, http.StatusForbidden, "invalid_session_token", "invalid session token")
+				return
+			}
+
 			switch r.Method {
 			case http.MethodGet, http.MethodHead, http.MethodOptions:
 				next.ServeHTTP(w, r)
@@ -135,4 +155,15 @@ func SameOriginGuard() func(http.Handler) http.Handler {
 			webapi.WriteError(w, http.StatusForbidden, "cross_origin_rejected", "cross-origin request rejected")
 		})
 	}
+}
+
+// requestSessionToken extracts a presented session token from the request:
+// Authorization: Bearer <token> or the X-Renart-Token header.
+func requestSessionToken(r *http.Request) string {
+	if auth := r.Header.Get("Authorization"); auth != "" {
+		if rest, ok := strings.CutPrefix(auth, "Bearer "); ok {
+			return strings.TrimSpace(rest)
+		}
+	}
+	return strings.TrimSpace(r.Header.Get("X-Renart-Token"))
 }

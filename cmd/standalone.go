@@ -8,13 +8,16 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"runtime"
+	"syscall"
 	"time"
 
 	"github.com/bruin-data/bruin/pkg/telemetry"
 	"github.com/urfave/cli/v3"
 	"go.uber.org/zap"
+	"renart/internal/clientapi"
 )
 
 const guiHelperName = "renart-gui"
@@ -60,6 +63,11 @@ func Standalone() *cli.Command {
 }
 
 func runStandalone(ctx context.Context, c *cli.Command) error {
+	// As in `renart web`: shut down on the first signal so the deferred
+	// cleanups (discovery file, scheduler) run.
+	ctx, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
 	helperPath, err := locateGUIHelper(c.String("gui-binary"))
 	if err != nil {
 		return err
@@ -90,7 +98,24 @@ func runStandalone(ctx context.Context, c *cli.Command) error {
 
 	address := listener.Addr().String()
 	appURL := "http://" + address + "/"
-	httpServer := newHTTPServer(address, server.buildRouter())
+	sessionToken := newSessionToken()
+	httpServer := newHTTPServer(address, server.buildRouter(sessionToken))
+
+	// Single-project discovery: the CLI delegates to this server while the
+	// desktop app is open. The workspace is served unprefixed here.
+	if err := clientapi.WriteServerFile(cfg.workspaceRoot, clientapi.ServerFile{
+		PID:           os.Getpid(),
+		BaseURL:       "http://" + address,
+		APIBaseURL:    "http://" + address + "/api",
+		ProjectID:     server.projectID,
+		WorkspaceRoot: cfg.workspaceRoot,
+		Version:       buildVersion,
+		Token:         sessionToken,
+		StartedAt:     time.Now().UTC(),
+	}); err != nil {
+		logger.Warn("failed to write server discovery file", zap.Error(err))
+	}
+	defer clientapi.RemoveServerFile(cfg.workspaceRoot)
 
 	serveErr := make(chan error, 1)
 	go func() {

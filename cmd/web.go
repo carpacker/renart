@@ -7,11 +7,13 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"runtime"
 	"sort"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/bruin-data/bruin/pkg/config"
@@ -45,6 +47,8 @@ type workspaceState = service.WorkspaceState
 
 type webServer struct {
 	workspaceRoot    string
+	projectID        string
+	projectName      string
 	staticDir        string
 	staticHandler    http.Handler
 	watchMode        string
@@ -114,6 +118,12 @@ func Web() *cli.Command {
 			},
 		),
 		Action: func(ctx context.Context, c *cli.Command) error {
+			// Ctrl-C / SIGTERM cancel the context so the deferred cleanups
+			// actually run (discovery-file removal, scheduler drain); a
+			// second signal falls back to the default hard kill.
+			ctx, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
+			defer stop()
+
 			cfg, err := serverConfigFromCommand(c)
 			if err != nil {
 				return err
@@ -137,7 +147,8 @@ func Web() *cli.Command {
 			}
 			defer manager.closeAll()
 
-			router := buildRootRouter(manager, defaultRuntime)
+			sessionToken := newSessionToken()
+			router := buildRootRouter(manager, defaultRuntime, sessionToken)
 
 			host := c.String("host")
 			port := c.Int("port")
@@ -163,11 +174,14 @@ func Web() *cli.Command {
 				fmt.Printf("Renart listening on http://%s\n", address)
 			}
 
+			scheme := "http"
+			if tlsCert != "" {
+				scheme = "https"
+			}
+			manager.EnableDiscovery(scheme+"://"+loopbackAddress(address), sessionToken)
+			defer manager.DisableDiscovery()
+
 			if !c.Bool("no-open") {
-				scheme := "http"
-				if tlsCert != "" {
-					scheme = "https"
-				}
 				go openBrowserWhenReachable(ctx, scheme+"://"+address, address)
 			}
 
@@ -192,6 +206,20 @@ func Web() *cli.Command {
 		Before: telemetry.BeforeCommand,
 		After:  telemetry.AfterCommand,
 	}
+}
+
+// loopbackAddress rewrites a wildcard listen address into one a local CLI
+// can actually dial (0.0.0.0/:: bind still means loopback for local
+// clients); concrete hosts pass through.
+func loopbackAddress(address string) string {
+	host, port, err := net.SplitHostPort(address)
+	if err != nil {
+		return address
+	}
+	if host == "" || host == "0.0.0.0" || host == "::" {
+		return net.JoinHostPort("127.0.0.1", port)
+	}
+	return address
 }
 
 func openBrowserWhenReachable(ctx context.Context, url, address string) {
@@ -262,6 +290,13 @@ func listenWithDefaultPortFallback(host string, port int) (net.Listener, string,
 }
 
 func (s *webServer) registerRoutes(router chi.Router) {
+	webhttpapi.RegisterHealthRoutes(router, func() webhttpapi.HealthInfo {
+		return webhttpapi.HealthInfo{
+			Version:       buildVersion,
+			WorkspaceRoot: s.workspaceRoot,
+			ProjectID:     s.projectID,
+		}
+	})
 	webhttpapi.RegisterWorkspaceRoutes(router, &webhttpapi.WorkspaceHandlers{Reader: s})
 	webhttpapi.RegisterConfigRoutes(router, &webhttpapi.ConfigHandlers{Service: s.configSvc, Policies: s.policyLoader, Publisher: s})
 	webhttpapi.RegisterPipelineRoutes(router, &webhttpapi.PipelineHandlers{Service: s.pipelineSvc, Publisher: s})

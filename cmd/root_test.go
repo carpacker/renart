@@ -18,8 +18,11 @@ func TestRootSurface(t *testing.T) {
 	wantVisible := map[string]string{
 		"web":        categoryIDE,
 		"standalone": categoryIDE,
+		"run":        categoryPipeline,
+		"ls":         categoryPipeline,
 		"type-check": categoryPipeline,
 		"deploy":     categoryPipeline,
+		"init":       categoryProject,
 	}
 	wantHidden := map[string]bool{
 		"debug": true,
