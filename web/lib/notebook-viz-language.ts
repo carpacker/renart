@@ -176,14 +176,22 @@ export function vizDiagnostics(content: string, resultColumns: string[] = []): V
     seenDirective = true;
 
     if (open < 0 || close < 0) {
-      diagnostics.push({ ...span, severity: "error", message: "malformed @viz directive: expected @viz(kind, ...)" });
+      diagnostics.push({
+        ...span,
+        severity: "error",
+        message: "malformed @viz directive: expected @viz(kind, ...)",
+      });
       return;
     }
 
     const inner = line.slice(open + 1, close);
     const parts = splitDirectiveArgs(inner);
     if (parts.length === 0 || parts[0].trim() === "") {
-      diagnostics.push({ ...span, severity: "error", message: "@viz requires a kind: table, bar, line, area, pie, or kpi" });
+      diagnostics.push({
+        ...span,
+        severity: "error",
+        message: "@viz requires a kind: table, bar, line, area, pie, or kpi",
+      });
       return;
     }
 
@@ -205,21 +213,33 @@ export function vizDiagnostics(content: string, resultColumns: string[] = []): V
       }
       const colon = pair.indexOf(":");
       if (colon < 0) {
-        diagnostics.push({ ...span, severity: "error", message: `expected key:value, got "${pair}"` });
+        diagnostics.push({
+          ...span,
+          severity: "error",
+          message: `expected key:value, got "${pair}"`,
+        });
         continue;
       }
       const key = pair.slice(0, colon).trim();
       const value = pair.slice(colon + 1).trim();
       const known = KNOWN_VIZ_KEYS[kind];
       if (known && !known.includes(key)) {
-        diagnostics.push({ ...span, severity: "warning", message: `unknown key "${key}" for ${kind} charts` });
+        diagnostics.push({
+          ...span,
+          severity: "warning",
+          message: `unknown key "${key}" for ${kind} charts`,
+        });
       }
       options[key] = value;
     }
 
     for (const required of REQUIRED_VIZ_KEYS[kind] ?? []) {
       if (!(required in options)) {
-        diagnostics.push({ ...span, severity: "error", message: `${kind} charts require "${required}"` });
+        diagnostics.push({
+          ...span,
+          severity: "error",
+          message: `${kind} charts require "${required}"`,
+        });
       }
     }
 
@@ -230,7 +250,11 @@ export function vizDiagnostics(content: string, resultColumns: string[] = []): V
         }
         for (const column of columnRefs(options[key])) {
           if (column && !present.has(column.toLowerCase())) {
-            diagnostics.push({ ...span, severity: "warning", message: `column "${column}" not in result` });
+            diagnostics.push({
+              ...span,
+              severity: "warning",
+              message: `column "${column}" not in result`,
+            });
           }
         }
       }

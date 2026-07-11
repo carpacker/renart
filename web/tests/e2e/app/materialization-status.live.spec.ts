@@ -23,11 +23,18 @@ type RunDetailResponse = {
 test.describe("app materialization status live", () => {
   test.use({ fixtureName: "basic-workspace" });
 
-  test("updates canvas asset status from running to terminal without refresh", async ({ liveApp, page, request }) => {
+  test("updates canvas asset status from running to terminal without refresh", async ({
+    liveApp,
+    page,
+    request,
+  }) => {
     // This exercises live status transitions on the React Flow lineage canvas, a
     // desktop affordance: on a phone viewport the canvas doesn't surface a node's
     // terminal status the way this assertion needs.
-    test.skip(test.info().project.name.includes("mobile"), "Canvas status transitions are a desktop affordance.");
+    test.skip(
+      test.info().project.name.includes("mobile"),
+      "Canvas status transitions are a desktop affordance.",
+    );
 
     await addSlowDuckDbAsset(liveApp.workspaceDir);
 
@@ -35,23 +42,37 @@ test.describe("app materialization status live", () => {
     await expect(page.getByLabel("Execution context")).toBeVisible({ timeout: 15000 });
     await expect(page.getByLabel("Time range")).toHaveCount(0);
     await expect(page.getByText("slow_status", { exact: true })).toBeVisible({ timeout: 15000 });
-    const slowStatusAssetId = Buffer.from("analytics/assets/analytics/slow_status.sql").toString("base64url");
+    const slowStatusAssetId = Buffer.from("analytics/assets/analytics/slow_status.sql").toString(
+      "base64url",
+    );
     const slowStatusNode = page.getByTestId(`rf__node-${slowStatusAssetId}`);
 
     const triggerResponse = await triggerAnalyticsPipeline(liveApp, request);
 
-    await expect(slowStatusNode.getByText("Running", { exact: true })).toBeVisible({ timeout: 30000 });
+    await expect(slowStatusNode.getByText("Running", { exact: true })).toBeVisible({
+      timeout: 30000,
+    });
 
-    const detail = await waitForRunDetail(liveApp, request, triggerResponse.run.id, (current) => ["success", "failed", "cancelled"].includes(current.run.status));
+    const detail = await waitForRunDetail(liveApp, request, triggerResponse.run.id, (current) =>
+      ["success", "failed", "cancelled"].includes(current.run.status),
+    );
     const slowStatusStep = detail.steps?.find((step) => step.asset === "analytics.slow_status");
     expect(slowStatusStep).toBeTruthy();
 
-    await expect(slowStatusNode.getByText("Running", { exact: true })).toHaveCount(0, { timeout: 30000 });
+    await expect(slowStatusNode.getByText("Running", { exact: true })).toHaveCount(0, {
+      timeout: 30000,
+    });
     if (slowStatusStep?.status === "success") {
-      await expect(slowStatusNode.getByText("no run yet", { exact: true })).toHaveCount(0, { timeout: 30000 });
-      await expect(slowStatusNode.locator('[title^="Last built:"]').first()).toBeVisible({ timeout: 30000 });
+      await expect(slowStatusNode.getByText("no run yet", { exact: true })).toHaveCount(0, {
+        timeout: 30000,
+      });
+      await expect(slowStatusNode.locator('[title^="Last built:"]').first()).toBeVisible({
+        timeout: 30000,
+      });
     } else {
-      await expect(slowStatusNode.getByText("Failed", { exact: true })).toBeVisible({ timeout: 30000 });
+      await expect(slowStatusNode.getByText("Failed", { exact: true })).toBeVisible({
+        timeout: 30000,
+      });
     }
   });
 });
@@ -75,15 +96,20 @@ from range(50000000) as t(i)
 async function triggerAnalyticsPipeline(liveApp: LiveApp, request: APIRequestContext) {
   const scheduleResponse = await request.get(`${liveApp.baseURL}/api/schedules`);
   expect(scheduleResponse.ok()).toBe(true);
-  const schedules = await scheduleResponse.json() as ScheduleResponse;
-  const pipeline = schedules.schedules.find((item) => item.pipeline_name === "analytics") ?? schedules.schedules[0];
+  const schedules = (await scheduleResponse.json()) as ScheduleResponse;
+  const pipeline =
+    schedules.schedules.find((item) => item.pipeline_name === "analytics") ??
+    schedules.schedules[0];
   expect(pipeline).toBeTruthy();
 
-  const triggerResponse = await request.post(`${liveApp.baseURL}/api/pipelines/${encodeURIComponent(pipeline.pipeline_id)}/trigger`, {
-    data: { trigger: "manual" },
-  });
+  const triggerResponse = await request.post(
+    `${liveApp.baseURL}/api/pipelines/${encodeURIComponent(pipeline.pipeline_id)}/trigger`,
+    {
+      data: { trigger: "manual" },
+    },
+  );
   expect(triggerResponse.ok()).toBe(true);
-  const triggered = await triggerResponse.json() as TriggerResponse;
+  const triggered = (await triggerResponse.json()) as TriggerResponse;
   expect(triggered.run.id).toBeTruthy();
   return triggered;
 }
@@ -99,7 +125,7 @@ async function waitForRunDetail(
   while (Date.now() < deadline) {
     const response = await request.get(`${liveApp.baseURL}/api/runs/${encodeURIComponent(runId)}`);
     if (response.ok()) {
-      const detail = await response.json() as RunDetailResponse;
+      const detail = (await response.json()) as RunDetailResponse;
       lastDetail = detail;
       if (detail.status === "ok" && predicate(detail)) {
         return detail;

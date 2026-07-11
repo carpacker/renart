@@ -1,0 +1,11 @@
+{
+  "$schema": "./node_modules/oxfmt/configuration_schema.json",
+  "ignorePatterns": [
+    "dist/**",
+    "out/**",
+    "build/**",
+    "node_modules/**",
+    "src/routeTree.gen.ts",
+    "lib/generated/**"
+  ]
+}

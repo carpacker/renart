@@ -21,7 +21,7 @@ import {
 } from "./demo-media-lib.mjs";
 
 const outputDir = path.resolve(
-  process.env.RENART_DOCS_MEDIA_DIR ?? path.join(repoRoot, "docs", "public", "docs-media")
+  process.env.RENART_DOCS_MEDIA_DIR ?? path.join(repoRoot, "docs", "public", "docs-media"),
 );
 const port = Number(process.env.RENART_DOCS_MEDIA_PORT ?? "18184");
 
@@ -52,11 +52,21 @@ try {
       .click()
       .catch(() => console.log("could not select customer_ltv node"));
     await page.waitForTimeout(1000);
-    await page.getByRole("button", { name: "Hide explorer" }).click().catch(() => {});
+    await page
+      .getByRole("button", { name: "Hide explorer" })
+      .click()
+      .catch(() => {});
     await page.waitForTimeout(600);
-    await page.getByRole("button", { name: "Collapse results panel" }).click().catch(() => {});
+    await page
+      .getByRole("button", { name: "Collapse results panel" })
+      .click()
+      .catch(() => {});
     await page.waitForTimeout(600);
-    await page.locator(".react-flow__controls-fitview").first().click().catch(() => {});
+    await page
+      .locator(".react-flow__controls-fitview")
+      .first()
+      .click()
+      .catch(() => {});
     await page.waitForTimeout(1200);
     await shot(page, "pipeline-canvas");
   });
@@ -76,7 +86,11 @@ try {
     await page.waitForTimeout(1200);
     await page.evaluate(() => {
       for (const el of Array.from(document.querySelectorAll("div"))) {
-        if (el.textContent?.startsWith("Preview failed") && el.clientHeight > 0 && el.clientHeight < 300) {
+        if (
+          el.textContent?.startsWith("Preview failed") &&
+          el.clientHeight > 0 &&
+          el.clientHeight < 300
+        ) {
           el.style.visibility = "hidden";
           break;
         }
@@ -97,7 +111,7 @@ try {
     await goto(page, `/notebooks/${demo.notebookId}`, 5000);
     await page.evaluate(() => {
       const scroller = Array.from(document.querySelectorAll("*")).find(
-        (el) => el.scrollHeight > el.clientHeight + 100 && el.clientHeight > 400
+        (el) => el.scrollHeight > el.clientHeight + 100 && el.clientHeight > 400,
       );
       (scroller ?? document.scrollingElement).scrollTop = 760;
     });
@@ -146,7 +160,7 @@ try {
       "2026-07-09,EUR,1.08",
       "2026-07-09,GBP,1.28",
       "",
-    ].join("\n")
+    ].join("\n"),
   );
 
   const pythonAsset = await demo.api(`/api/pipelines/${ACME}/assets`, {
@@ -229,14 +243,21 @@ try {
 
   // sql-asset: a mart query in the code view with the workbench alongside
   await withPage({ width: 1400, height: 900 }, async (page) => {
-    await goto(page, `/pipelines/${ACME}/assets/${id("acme/assets/mart/daily_revenue.sql")}/code`, 5000);
+    await goto(
+      page,
+      `/pipelines/${ACME}/assets/${id("acme/assets/mart/daily_revenue.sql")}/code`,
+      5000,
+    );
     await shot(page, "sql-asset");
   });
 
   // The three new assets have never been built, so the results panel would
   // show a preview-failed card; collapse it to keep the shots on the editor.
   const collapseResults = async (page) => {
-    await page.getByRole("button", { name: "Collapse results panel" }).click().catch(() => {});
+    await page
+      .getByRole("button", { name: "Collapse results panel" })
+      .click()
+      .catch(() => {});
     await page.waitForTimeout(600);
   };
 

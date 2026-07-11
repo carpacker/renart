@@ -1,20 +1,20 @@
-"use client"
+"use client";
 
-import * as React from "react"
-import { Dialog as DialogPrimitive } from "radix-ui"
+import * as React from "react";
+import { Dialog as DialogPrimitive } from "radix-ui";
 
-import { cn } from "@/lib/utils"
+import { cn } from "@/lib/utils";
 
 function Dialog({ ...props }: React.ComponentProps<typeof DialogPrimitive.Root>) {
-  return <DialogPrimitive.Root data-slot="dialog" {...props} />
+  return <DialogPrimitive.Root data-slot="dialog" {...props} />;
 }
 
 function DialogTrigger({ ...props }: React.ComponentProps<typeof DialogPrimitive.Trigger>) {
-  return <DialogPrimitive.Trigger data-slot="dialog-trigger" {...props} />
+  return <DialogPrimitive.Trigger data-slot="dialog-trigger" {...props} />;
 }
 
 function DialogPortal({ ...props }: React.ComponentProps<typeof DialogPrimitive.Portal>) {
-  return <DialogPrimitive.Portal data-slot="dialog-portal" {...props} />
+  return <DialogPrimitive.Portal data-slot="dialog-portal" {...props} />;
 }
 
 function DialogOverlay({
@@ -30,7 +30,7 @@ function DialogOverlay({
       )}
       {...props}
     />
-  )
+  );
 }
 
 function DialogContent({
@@ -51,32 +51,34 @@ function DialogContent({
         )}
         onInteractOutside={(event) => {
           if (isComboboxOutsideInteraction(event)) {
-            event.preventDefault()
-            return
+            event.preventDefault();
+            return;
           }
-          onInteractOutside?.(event)
+          onInteractOutside?.(event);
         }}
         onPointerDownOutside={(event) => {
           if (isComboboxOutsideInteraction(event)) {
-            event.preventDefault()
-            return
+            event.preventDefault();
+            return;
           }
-          onPointerDownOutside?.(event)
+          onPointerDownOutside?.(event);
         }}
         {...props}
       >
         {children}
       </DialogPrimitive.Content>
     </DialogPortal>
-  )
+  );
 }
 
 function isComboboxOutsideInteraction(event: { target: EventTarget | null }) {
-  return event.target instanceof HTMLElement && !!event.target.closest("[data-slot=combobox-content]")
+  return (
+    event.target instanceof HTMLElement && !!event.target.closest("[data-slot=combobox-content]")
+  );
 }
 
 function DialogHeader({ className, ...props }: React.ComponentProps<"div">) {
-  return <div data-slot="dialog-header" className={cn("mb-2", className)} {...props} />
+  return <div data-slot="dialog-header" className={cn("mb-2", className)} {...props} />;
 }
 
 function DialogFooter({ className, ...props }: React.ComponentProps<"div">) {
@@ -86,20 +88,17 @@ function DialogFooter({ className, ...props }: React.ComponentProps<"div">) {
       className={cn("mt-4 flex items-center justify-end gap-2", className)}
       {...props}
     />
-  )
+  );
 }
 
-function DialogTitle({
-  className,
-  ...props
-}: React.ComponentProps<typeof DialogPrimitive.Title>) {
+function DialogTitle({ className, ...props }: React.ComponentProps<typeof DialogPrimitive.Title>) {
   return (
     <DialogPrimitive.Title
       data-slot="dialog-title"
       className={cn("text-sm font-semibold", className)}
       {...props}
     />
-  )
+  );
 }
 
 function DialogDescription({
@@ -112,7 +111,7 @@ function DialogDescription({
       className={cn("mt-1 text-sm text-muted-foreground", className)}
       {...props}
     />
-  )
+  );
 }
 
 export {
@@ -123,4 +122,4 @@ export {
   DialogFooter,
   DialogTitle,
   DialogDescription,
-}
+};

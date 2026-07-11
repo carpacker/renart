@@ -114,7 +114,10 @@ export function parseJinjaSpans(text: string): JinjaSpan[] {
   return spans;
 }
 
-function readJinjaOpener(text: string, offset: number): { type: JinjaSpanType; close: string } | null {
+function readJinjaOpener(
+  text: string,
+  offset: number,
+): { type: JinjaSpanType; close: string } | null {
   if (text.startsWith("{{", offset)) return { type: "expression", close: "}}" };
   if (text.startsWith("{%", offset)) return { type: "statement", close: "%}" };
   if (text.startsWith("{#", offset)) return { type: "comment", close: "#}" };
@@ -128,11 +131,16 @@ function advancePosition(char: string, line: number, column: number) {
   return { line, column: column + 1 };
 }
 
-export function jinjaSpanAtPosition(model: MonacoNS.editor.ITextModel, position: MonacoNS.Position) {
+export function jinjaSpanAtPosition(
+  model: MonacoNS.editor.ITextModel,
+  position: MonacoNS.Position,
+) {
   const offset = model.getOffsetAt(position);
-  return parseJinjaSpans(model.getValue()).find(
-    (span) => offset >= span.startOffset && offset <= span.endOffset,
-  ) ?? null;
+  return (
+    parseJinjaSpans(model.getValue()).find(
+      (span) => offset >= span.startOffset && offset <= span.endOffset,
+    ) ?? null
+  );
 }
 
 export function registerJinjaProviders(
@@ -141,80 +149,94 @@ export function registerJinjaProviders(
 ): MonacoNS.IDisposable {
   const disposables: MonacoNS.IDisposable[] = [];
 
-  disposables.push(monaco.languages.registerCompletionItemProvider("sql", {
-    triggerCharacters: ["{", ".", "|", "%", " "],
-    provideCompletionItems(model, position) {
-      const span = jinjaSpanAtPosition(model, position);
-      if (!span || span.type === "comment") {
-        return { suggestions: [] };
-      }
+  disposables.push(
+    monaco.languages.registerCompletionItemProvider("sql", {
+      triggerCharacters: ["{", ".", "|", "%", " "],
+      provideCompletionItems(model, position) {
+        const span = jinjaSpanAtPosition(model, position);
+        if (!span || span.type === "comment") {
+          return { suggestions: [] };
+        }
 
-      const word = model.getWordUntilPosition(position);
-      const range = {
-        startLineNumber: position.lineNumber,
-        endLineNumber: position.lineNumber,
-        startColumn: word.startColumn,
-        endColumn: word.endColumn,
-      };
-      const before = model.getValueInRange({
-        startLineNumber: span.startLine,
-        startColumn: span.startColumn,
-        endLineNumber: position.lineNumber,
-        endColumn: position.column,
-      });
-      const renderResult = getRenderResult(model);
-      const variables = renderResult?.variables ?? [];
+        const word = model.getWordUntilPosition(position);
+        const range = {
+          startLineNumber: position.lineNumber,
+          endLineNumber: position.lineNumber,
+          startColumn: word.startColumn,
+          endColumn: word.endColumn,
+        };
+        const before = model.getValueInRange({
+          startLineNumber: span.startLine,
+          startColumn: span.startColumn,
+          endLineNumber: position.lineNumber,
+          endColumn: position.column,
+        });
+        const renderResult = getRenderResult(model);
+        const variables = renderResult?.variables ?? [];
 
-      if (/\|\s*[A-Za-z_]*$/.test(before)) {
-        return { suggestions: filterSuggestions(monaco, range) };
-      }
+        if (/\|\s*[A-Za-z_]*$/.test(before)) {
+          return { suggestions: filterSuggestions(monaco, range) };
+        }
 
-      if (/\bvar\.[A-Za-z_]*$/.test(before)) {
-        return { suggestions: variablePropertySuggestions(monaco, variables, range) };
-      }
+        if (/\bvar\.[A-Za-z_]*$/.test(before)) {
+          return { suggestions: variablePropertySuggestions(monaco, variables, range) };
+        }
 
-      if (span.type === "statement") {
-        const statementBefore = before.replace(/^\{%[-]?\s*/, "");
-        const suggestions = statementExpressionSuggestions(monaco, variables, renderResult?.macros ?? [], range, statementBefore);
-        return { suggestions };
-      }
+        if (span.type === "statement") {
+          const statementBefore = before.replace(/^\{%[-]?\s*/, "");
+          const suggestions = statementExpressionSuggestions(
+            monaco,
+            variables,
+            renderResult?.macros ?? [],
+            range,
+            statementBefore,
+          );
+          return { suggestions };
+        }
 
-      return {
-        suggestions: [
-          ...builtinVariableSuggestions(monaco, range),
-          ...macroSuggestions(monaco, renderResult?.macros ?? [], range),
-        ],
-      };
-    },
-  }));
+        return {
+          suggestions: [
+            ...builtinVariableSuggestions(monaco, range),
+            ...macroSuggestions(monaco, renderResult?.macros ?? [], range),
+          ],
+        };
+      },
+    }),
+  );
 
-  disposables.push(monaco.languages.registerHoverProvider("sql", {
-    provideHover(model, position) {
-      const span = jinjaSpanAtPosition(model, position);
-      if (!span) return null;
-      const rendered = getRenderResult(model)?.spans.find(
-        (candidate) => candidate.start_line === span.startLine && candidate.start_column === span.startColumn,
-      );
-      const contents = [
-        { value: span.type === "expression" ? "**Jinja expression**" : "**Jinja statement**" },
-        { value: `\`${span.content}\`` },
-      ];
-      if (rendered?.rendered_text) {
-        contents.push({ value: `Rendered: \`${rendered.rendered_text}\`` });
-      } else if (rendered?.error) {
-        contents.push({ value: `Render error: \`${rendered.error}\`` });
-      }
-      return {
-        range: new monaco.Range(span.startLine, span.startColumn, span.endLine, span.endColumn),
-        contents,
-      };
-    },
-  }));
+  disposables.push(
+    monaco.languages.registerHoverProvider("sql", {
+      provideHover(model, position) {
+        const span = jinjaSpanAtPosition(model, position);
+        if (!span) return null;
+        const rendered = getRenderResult(model)?.spans.find(
+          (candidate) =>
+            candidate.start_line === span.startLine && candidate.start_column === span.startColumn,
+        );
+        const contents = [
+          { value: span.type === "expression" ? "**Jinja expression**" : "**Jinja statement**" },
+          { value: `\`${span.content}\`` },
+        ];
+        if (rendered?.rendered_text) {
+          contents.push({ value: `Rendered: \`${rendered.rendered_text}\`` });
+        } else if (rendered?.error) {
+          contents.push({ value: `Render error: \`${rendered.error}\`` });
+        }
+        return {
+          range: new monaco.Range(span.startLine, span.startColumn, span.endLine, span.endColumn),
+          contents,
+        };
+      },
+    }),
+  );
 
   return { dispose: () => disposables.forEach((disposable) => disposable.dispose()) };
 }
 
-function builtinVariableSuggestions(monaco: Monaco, range: MonacoNS.IRange): MonacoNS.languages.CompletionItem[] {
+function builtinVariableSuggestions(
+  monaco: Monaco,
+  range: MonacoNS.IRange,
+): MonacoNS.languages.CompletionItem[] {
   return [
     ["start_date", "Run start date"],
     ["end_date", "Run end date"],
@@ -230,7 +252,10 @@ function builtinVariableSuggestions(monaco: Monaco, range: MonacoNS.IRange): Mon
     ["var", "Pipeline variables"],
   ].map(([label, detail]) => ({
     label,
-    kind: label === "var" ? monaco.languages.CompletionItemKind.Module : monaco.languages.CompletionItemKind.Variable,
+    kind:
+      label === "var"
+        ? monaco.languages.CompletionItemKind.Module
+        : monaco.languages.CompletionItemKind.Variable,
     detail,
     insertText: label,
     range,
@@ -238,7 +263,11 @@ function builtinVariableSuggestions(monaco: Monaco, range: MonacoNS.IRange): Mon
   }));
 }
 
-function variablePropertySuggestions(monaco: Monaco, variables: JinjaRenderVariable[], range: MonacoNS.IRange) {
+function variablePropertySuggestions(
+  monaco: Monaco,
+  variables: JinjaRenderVariable[],
+  range: MonacoNS.IRange,
+) {
   return variables.map((variable) => ({
     label: variable.name,
     kind: monaco.languages.CompletionItemKind.Variable,
@@ -250,7 +279,11 @@ function variablePropertySuggestions(monaco: Monaco, variables: JinjaRenderVaria
   }));
 }
 
-function variableNamespaceSuggestions(monaco: Monaco, variables: JinjaRenderVariable[], range: MonacoNS.IRange) {
+function variableNamespaceSuggestions(
+  monaco: Monaco,
+  variables: JinjaRenderVariable[],
+  range: MonacoNS.IRange,
+) {
   return variables.map((variable) => ({
     label: `var.${variable.name}`,
     kind: monaco.languages.CompletionItemKind.Variable,
@@ -289,13 +322,13 @@ function statementExpressionSuggestions(
     return expressionSuggestions;
   }
 
-  return [
-    ...statementSuggestions(monaco, range),
-    ...expressionSuggestions,
-  ];
+  return [...statementSuggestions(monaco, range), ...expressionSuggestions];
 }
 
-function filterSuggestions(monaco: Monaco, range: MonacoNS.IRange): MonacoNS.languages.CompletionItem[] {
+function filterSuggestions(
+  monaco: Monaco,
+  range: MonacoNS.IRange,
+): MonacoNS.languages.CompletionItem[] {
   return [
     ["add_days", "add_days(${1:0})", "Add/subtract days"],
     ["add_hours", "add_hours(${1:0})", "Add/subtract hours"],
@@ -316,7 +349,9 @@ function filterSuggestions(monaco: Monaco, range: MonacoNS.IRange): MonacoNS.lan
     kind: monaco.languages.CompletionItemKind.Function,
     detail,
     insertText,
-    insertTextRules: insertText.includes("${") ? monaco.languages.CompletionItemInsertTextRule.InsertAsSnippet : undefined,
+    insertTextRules: insertText.includes("${")
+      ? monaco.languages.CompletionItemInsertTextRule.InsertAsSnippet
+      : undefined,
     range,
     sortText: `0${label}`,
   }));
@@ -334,8 +369,23 @@ function macroSuggestions(monaco: Monaco, macros: JinjaRenderMacro[], range: Mon
   }));
 }
 
-function statementSuggestions(monaco: Monaco, range: MonacoNS.IRange): MonacoNS.languages.CompletionItem[] {
-  return ["if", "elif", "else", "endif", "for", "endfor", "set", "raw", "endraw", "macro", "endmacro"].map((label) => ({
+function statementSuggestions(
+  monaco: Monaco,
+  range: MonacoNS.IRange,
+): MonacoNS.languages.CompletionItem[] {
+  return [
+    "if",
+    "elif",
+    "else",
+    "endif",
+    "for",
+    "endfor",
+    "set",
+    "raw",
+    "endraw",
+    "macro",
+    "endmacro",
+  ].map((label) => ({
     label,
     kind: monaco.languages.CompletionItemKind.Keyword,
     insertText: label,

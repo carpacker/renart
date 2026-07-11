@@ -60,7 +60,7 @@ export async function buildStalePipelineStream(
     onDone?: (payload: MaterializeStreamPayload) => void;
     onAssetEvent?: (event: StreamAssetEvent) => void;
   },
-  options: { environment?: string; start?: string; end?: string } = {}
+  options: { environment?: string; start?: string; end?: string } = {},
 ) {
   const params = new URLSearchParams();
   if (options.environment) params.set("environment", options.environment);
@@ -70,13 +70,13 @@ export async function buildStalePipelineStream(
   return streamMaterialization(
     `/api/pipelines/${pipelineId}/build-stale/stream${query ? `?${query}` : ""}`,
     handlers,
-    "Stale build stream ended unexpectedly."
+    "Stale build stream ended unexpectedly.",
   );
 }
 
 export async function getPipelineStaleness(
   pipelineId: string,
-  options: { environment?: string; start?: string; end?: string } = {}
+  options: { environment?: string; start?: string; end?: string } = {},
 ): Promise<PipelineStalenessResponse> {
   const params = new URLSearchParams();
   if (options.environment) params.set("environment", options.environment);
@@ -85,6 +85,6 @@ export async function getPipelineStaleness(
   const query = params.toString();
   return fetchJSON<PipelineStalenessResponse>(
     `/api/pipelines/${pipelineId}/staleness${query ? `?${query}` : ""}`,
-    { cache: "no-store" }
+    { cache: "no-store" },
   );
 }

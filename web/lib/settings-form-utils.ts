@@ -6,7 +6,7 @@ import {
 
 export function findEnvironmentByName(
   environments: WorkspaceConfigEnvironment[],
-  environmentName?: string | null
+  environmentName?: string | null,
 ) {
   return environments.find((environment) => environment.name === environmentName) ?? null;
 }
@@ -25,21 +25,21 @@ export function getFallbackEnvironmentName({
 
 export function getSelectedEnvironmentNameFromResponse(
   response: WorkspaceConfigResponse,
-  preferredName?: string | null
+  preferredName?: string | null,
 ) {
   return preferredName || response.default_environment || response.environments[0]?.name || null;
 }
 
 export function getSelectedConnectionNameFromEnvironment(
   environment: WorkspaceConfigEnvironment | null | undefined,
-  preferredName?: string | null
+  preferredName?: string | null,
 ) {
   return preferredName || environment?.connections[0]?.name || null;
 }
 
 export function findConnectionByName(
   environment: WorkspaceConfigEnvironment | null,
-  connectionName?: string | null
+  connectionName?: string | null,
 ) {
   return environment?.connections.find((connection) => connection.name === connectionName) ?? null;
 }
@@ -62,7 +62,7 @@ export function buildConnectionFieldDefaults({
       type: string;
       default_value?: string;
     }>;
-  }>; 
+  }>;
   existingConnection: WorkspaceConfigConnection | null;
   previousValues?: Record<string, string | number | boolean | string[]>;
   typeName: string;
@@ -91,7 +91,10 @@ export function buildConnectionFieldDefaults({
     }
     if (field.type === "string_array") {
       values[field.name] = field.default_value
-        ? field.default_value.split(",").map((item) => item.trim()).filter(Boolean)
+        ? field.default_value
+            .split(",")
+            .map((item) => item.trim())
+            .filter(Boolean)
         : [];
       continue;
     }

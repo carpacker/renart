@@ -12,33 +12,25 @@ type WorkspaceResponse = {
 };
 
 const pipelineId = Buffer.from("analytics").toString("base64url");
-const customersAssetId = Buffer.from(
-  "analytics/assets/analytics/customers.sql"
-).toString("base64url");
-const pythonAssetId = Buffer.from(
-  "analytics/assets/analytics/py_metric.py"
-).toString("base64url");
+const customersAssetId = Buffer.from("analytics/assets/analytics/customers.sql").toString(
+  "base64url",
+);
+const pythonAssetId = Buffer.from("analytics/assets/analytics/py_metric.py").toString("base64url");
 
 test.describe("app build actions live", () => {
   test.use({ fixtureName: "configured-workspace" });
 
-  test("materialize and inspect buttons run the real asset", async ({
-    liveApp,
-    page,
-  }) => {
-    await page.goto(
-      `${liveApp.baseURL}/pipelines/${pipelineId}/assets/${customersAssetId}/code`
-    );
-    await expect(page.locator(".view-lines").first()).toContainText(
-      "customer_id",
-      { timeout: 15000 }
-    );
+  test("materialize and inspect buttons run the real asset", async ({ liveApp, page }) => {
+    await page.goto(`${liveApp.baseURL}/pipelines/${pipelineId}/assets/${customersAssetId}/code`);
+    await expect(page.locator(".view-lines").first()).toContainText("customer_id", {
+      timeout: 15000,
+    });
 
     const materializeResponse = page.waitForResponse(
       (response) =>
         response.url().includes(`/api/assets/${customersAssetId}/materialize/stream`) &&
         response.ok(),
-      { timeout: 30000 }
+      { timeout: 30000 },
     );
     await page.getByRole("button", { name: "Materialize", exact: true }).click();
     await materializeResponse;
@@ -50,9 +42,8 @@ test.describe("app build actions live", () => {
 
     const inspectResponse = page.waitForResponse(
       (response) =>
-        response.url().includes(`/api/assets/${customersAssetId}/inspect`) &&
-        response.ok(),
-      { timeout: 30000 }
+        response.url().includes(`/api/assets/${customersAssetId}/inspect`) && response.ok(),
+      { timeout: 30000 },
     );
     await page.getByRole("button", { name: "Inspect", exact: true }).click();
     await inspectResponse;
@@ -67,23 +58,16 @@ test.describe("app build actions live", () => {
     await expect(disclosure.locator("pre")).toContainText(/select/i);
   });
 
-  test("pipeline run button triggers a scheduler run", async ({
-    liveApp,
-    page,
-  }) => {
-    await page.goto(
-      `${liveApp.baseURL}/pipelines/${pipelineId}/assets/${customersAssetId}/code`
-    );
-    await expect(page.locator(".view-lines").first()).toContainText(
-      "customer_id",
-      { timeout: 15000 }
-    );
+  test("pipeline run button triggers a scheduler run", async ({ liveApp, page }) => {
+    await page.goto(`${liveApp.baseURL}/pipelines/${pipelineId}/assets/${customersAssetId}/code`);
+    await expect(page.locator(".view-lines").first()).toContainText("customer_id", {
+      timeout: 15000,
+    });
 
     const triggerResponse = page.waitForResponse(
       (response) =>
-        response.url().includes(`/api/pipelines/${pipelineId}/trigger`) &&
-        response.ok(),
-      { timeout: 30000 }
+        response.url().includes(`/api/pipelines/${pipelineId}/trigger`) && response.ok(),
+      { timeout: 30000 },
     );
     await page.getByRole("button", { name: "Run", exact: true }).click();
     await triggerResponse;
@@ -100,10 +84,13 @@ test.describe("app build actions live", () => {
     // Asserts the explorer entry and the top-bar "Ad-hoc" link highlight in
     // tandem; both are desktop chrome (the explorer is a drawer on mobile and the
     // top-bar link is hidden below lg).
-    test.skip(test.info().project.name.includes("mobile"), "Explorer + top-bar ad-hoc affordances are desktop-only.");
+    test.skip(
+      test.info().project.name.includes("mobile"),
+      "Explorer + top-bar ad-hoc affordances are desktop-only.",
+    );
 
     await page.goto(
-      `${liveApp.baseURL}/pipelines/${pipelineId}/assets/${customersAssetId}/code?editor=adhoc`
+      `${liveApp.baseURL}/pipelines/${pipelineId}/assets/${customersAssetId}/code?editor=adhoc`,
     );
 
     const editor = page.locator(".monaco-editor").first();
@@ -111,12 +98,10 @@ test.describe("app build actions live", () => {
     await expect(page.getByText("Ad-hoc query").first()).toBeVisible();
 
     // Both the explorer entry and the top-bar button highlight the ad hoc mode.
-    await expect(
-      page.locator("button", { hasText: "Ad-hoc query" }).first()
-    ).toHaveClass(/ring-primary/);
-    await expect(page.getByRole("link", { name: "Ad-hoc" }).first()).toHaveClass(
-      /ring-primary/
+    await expect(page.locator("button", { hasText: "Ad-hoc query" }).first()).toHaveClass(
+      /ring-primary/,
     );
+    await expect(page.getByRole("link", { name: "Ad-hoc" }).first()).toHaveClass(/ring-primary/);
 
     // Replace the default draft with a marker query that needs Jinja rendering.
     await editor.click();
@@ -125,16 +110,14 @@ test.describe("app build actions live", () => {
 
     // The ad hoc editor reuses the SQL parse-context intellisense.
     const parseContextSeen = page.waitForResponse(
-      (response) =>
-        response.url().includes("/api/sql/parse-context") && response.ok(),
-      { timeout: 15000 }
+      (response) => response.url().includes("/api/sql/parse-context") && response.ok(),
+      { timeout: 15000 },
     );
     await parseContextSeen;
 
     const queryResponse = page.waitForResponse(
-      (response) =>
-        response.url().includes("/api/sql/query") && response.ok(),
-      { timeout: 30000 }
+      (response) => response.url().includes("/api/sql/query") && response.ok(),
+      { timeout: 30000 },
     );
     await page.getByTitle("Run (⌘ + ↵)").click();
     const queryRequestBody = (await queryResponse).request().postDataJSON() as {
@@ -161,10 +144,7 @@ test.describe("app build actions live", () => {
     await expect(disclosure).not.toContainText("{{");
   });
 
-  test("python assets never call the SQL parse-context endpoint", async ({
-    liveApp,
-    page,
-  }) => {
+  test("python assets never call the SQL parse-context endpoint", async ({ liveApp, page }) => {
     await writeFile(
       join(liveApp.workspaceDir, "analytics", "assets", "analytics", "py_metric.py"),
       `""" @bruin
@@ -174,15 +154,13 @@ type: python
 
 print("hello")
 `,
-      "utf8"
+      "utf8",
     );
 
     await expect
       .poll(
         async () => {
-          const response = await page.request.get(
-            `${liveApp.baseURL}/api/workspace`
-          );
+          const response = await page.request.get(`${liveApp.baseURL}/api/workspace`);
           if (!response.ok()) {
             return "";
           }
@@ -193,7 +171,7 @@ print("hello")
               .find((asset) => asset.id === pythonAssetId)?.content ?? ""
           );
         },
-        { timeout: 30000 }
+        { timeout: 30000 },
       )
       .toContain("print");
 
@@ -204,9 +182,7 @@ print("hello")
       }
     });
 
-    await page.goto(
-      `${liveApp.baseURL}/pipelines/${pipelineId}/assets/${pythonAssetId}/code`
-    );
+    await page.goto(`${liveApp.baseURL}/pipelines/${pipelineId}/assets/${pythonAssetId}/code`);
     const editor = page.locator(".monaco-editor").first();
     await expect(editor).toBeVisible({ timeout: 15000 });
     await expect(page.locator(".view-lines").first()).toContainText("print", {

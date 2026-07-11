@@ -8,16 +8,13 @@ import {
   SqlQueryResponse,
 } from "@/lib/types";
 
-export async function getSQLDatabases(options: {
-  connection: string;
-  environment?: string;
-}) {
+export async function getSQLDatabases(options: { connection: string; environment?: string }) {
   return fetchJSON<SqlDiscoveryDatabasesResponse>(
     `/api/sql/databases${buildQueryString({
       connection: options.connection,
       environment: options.environment,
     })}`,
-    { cache: "no-store" }
+    { cache: "no-store" },
   );
 }
 
@@ -31,7 +28,7 @@ export async function getSQLPathSuggestions(options: {
       prefix: options.prefix,
       environment: options.environment,
     })}`,
-    { cache: "no-store" }
+    { cache: "no-store" },
   );
 }
 
@@ -46,7 +43,7 @@ export async function getSQLTables(options: {
       database: options.database,
       environment: options.environment,
     })}`,
-    { cache: "no-store" }
+    { cache: "no-store" },
   );
 }
 
@@ -61,7 +58,7 @@ export async function getSQLTableColumns(options: {
       table: options.table,
       environment: options.environment,
     })}`,
-    { cache: "no-store" }
+    { cache: "no-store" },
   );
 }
 

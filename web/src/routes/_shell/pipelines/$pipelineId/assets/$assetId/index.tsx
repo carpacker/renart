@@ -6,5 +6,7 @@ export const Route = createFileRoute("/_shell/pipelines/$pipelineId/assets/$asse
 
 function AppAssetIndexRoute() {
   const { pipelineId, assetId } = Route.useParams();
-  return <Navigate to="/pipelines/$pipelineId/assets/$assetId/canvas" params={{ pipelineId, assetId }} />;
+  return (
+    <Navigate to="/pipelines/$pipelineId/assets/$assetId/canvas" params={{ pipelineId, assetId }} />
+  );
 }

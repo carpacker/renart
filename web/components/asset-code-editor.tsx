@@ -76,9 +76,7 @@ export function AssetCodeEditor({
     <div
       className={`relative overflow-hidden ${
         containerClassName ?? `${mobile ? "min-h-[240px]" : "h-[55%]"} border-b`
-      } ${
-        helpMode && editorHighlighted ? "ring-2 ring-primary/70 ring-inset" : ""
-      }`}
+      } ${helpMode && editorHighlighted ? "ring-2 ring-primary/70 ring-inset" : ""}`}
       style={helpMode && editorHighlighted ? highlightStyle : undefined}
       onMouseMove={handlePointerActivity}
       onMouseLeave={() => setShowFormatButton(false)}
@@ -91,7 +89,11 @@ export function AssetCodeEditor({
         />
       ) : null}
       <Suspense
-        fallback={<div className="flex h-full items-center justify-center text-sm text-muted-foreground">Loading editor...</div>}
+        fallback={
+          <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
+            Loading editor...
+          </div>
+        }
       >
         <MonacoEditor
           language={asset ? editorLanguageForAssetPath(asset.path) : "sql"}

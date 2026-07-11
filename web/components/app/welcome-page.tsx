@@ -39,10 +39,7 @@ import {
   getWorkspaceConfig,
   updateWorkspaceConnection,
 } from "@/lib/api-config";
-import {
-  importOnboardingDatabase,
-  previewOnboardingDiscovery,
-} from "@/lib/api-onboarding";
+import { importOnboardingDatabase, previewOnboardingDiscovery } from "@/lib/api-onboarding";
 import { createProject, getProjectTemplates } from "@/lib/api-projects";
 import { buildStalePipelineStream } from "@/lib/api-staleness";
 import type { StreamAssetEvent } from "@/lib/api-streams";
@@ -131,7 +128,7 @@ export function WelcomePage({ forceNew = false }: { forceNew?: boolean }) {
   const inPlace = !forceNew && workspaceEmpty === true;
   const demoTemplates = useMemo(
     () => templates.filter((template) => template.id.startsWith("demo:")),
-    [templates]
+    [templates],
   );
   const selectedTemplateId = intent === "demo" ? demoId : intent === "import" ? "bare" : "empty";
 
@@ -168,7 +165,9 @@ export function WelcomePage({ forceNew = false }: { forceNew?: boolean }) {
       setTickedFiles(0);
       setStage("creating");
     } catch (createError) {
-      setError(createError instanceof Error ? createError.message : "Failed to create the project.");
+      setError(
+        createError instanceof Error ? createError.message : "Failed to create the project.",
+      );
     } finally {
       setBusy(false);
     }
@@ -218,7 +217,10 @@ export function WelcomePage({ forceNew = false }: { forceNew?: boolean }) {
         setStage("done");
       } else {
         setRunState("error");
-        setError(payload?.error || "The first run failed. You can retry or open the workspace and run assets individually.");
+        setError(
+          payload?.error ||
+            "The first run failed. You can retry or open the workspace and run assets individually.",
+        );
       }
     } catch (runError) {
       setRunState("error");
@@ -254,7 +256,11 @@ export function WelcomePage({ forceNew = false }: { forceNew?: boolean }) {
         if (database ?? response.selected_database) {
           // Discovery only previews the connection; the import step reads the
           // saved workspace config, so persist the connection now.
-          await persistImportConnection(connectionType, values, database ?? response.selected_database ?? "");
+          await persistImportConnection(
+            connectionType,
+            values,
+            database ?? response.selected_database ?? "",
+          );
           setStage("import-tables");
         }
       } catch (discoveryError) {
@@ -263,7 +269,7 @@ export function WelcomePage({ forceNew = false }: { forceNew?: boolean }) {
         setBusy(false);
       }
     },
-    [connectionType, connectionValues]
+    [connectionType, connectionValues],
   );
 
   const handleImport = useCallback(async () => {
@@ -300,7 +306,9 @@ export function WelcomePage({ forceNew = false }: { forceNew?: boolean }) {
           <h1 className="text-2xl font-semibold tracking-tight">
             {stage === "choose" ? "Welcome to renart" : stageTitle(stage, intent)}
           </h1>
-          <p className="max-w-md text-sm text-muted-foreground">{stageSubtitle(stage, inPlace, workspacePath)}</p>
+          <p className="max-w-md text-sm text-muted-foreground">
+            {stageSubtitle(stage, inPlace, workspacePath)}
+          </p>
         </header>
 
         {error ? (
@@ -360,28 +368,45 @@ export function WelcomePage({ forceNew = false }: { forceNew?: boolean }) {
                     onClick={() => {
                       setDemoId(template.id);
                       setProjectName((current) =>
-                        !current || current === demoSuggestedName(demoId) ? demoSuggestedName(template.id) : current
+                        !current || current === demoSuggestedName(demoId)
+                          ? demoSuggestedName(template.id)
+                          : current,
                       );
                     }}
                     className={cn(
                       "flex items-start gap-3 rounded-lg border p-3 text-left transition-colors hover:bg-muted/50",
-                      demoId === template.id && "border-primary bg-primary/5"
+                      demoId === template.id && "border-primary bg-primary/5",
                     )}
                   >
-                    <div className={cn("mt-0.5 flex size-5 shrink-0 items-center justify-center rounded-full border", demoId === template.id ? "border-primary bg-primary text-primary-foreground" : "text-transparent")}>
+                    <div
+                      className={cn(
+                        "mt-0.5 flex size-5 shrink-0 items-center justify-center rounded-full border",
+                        demoId === template.id
+                          ? "border-primary bg-primary text-primary-foreground"
+                          : "text-transparent",
+                      )}
+                    >
                       <Check className="size-3" />
                     </div>
                     <div className="min-w-0">
                       <div className="flex flex-wrap items-center gap-2 text-sm font-medium">
                         {template.title}
                         {template.offline ? (
-                          <Badge variant="secondary" className="gap-1 text-[10px]"><WifiOff className="size-3" />works offline</Badge>
+                          <Badge variant="secondary" className="gap-1 text-[10px]">
+                            <WifiOff className="size-3" />
+                            works offline
+                          </Badge>
                         ) : null}
                       </div>
                       <p className="mt-0.5 text-xs text-muted-foreground">{template.description}</p>
                       <div className="mt-1.5 flex flex-wrap gap-1">
                         {template.asset_names.map((assetName) => (
-                          <span key={assetName} className="rounded bg-muted px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground">{assetName}</span>
+                          <span
+                            key={assetName}
+                            className="rounded bg-muted px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground"
+                          >
+                            {assetName}
+                          </span>
                         ))}
                       </div>
                     </div>
@@ -393,7 +418,10 @@ export function WelcomePage({ forceNew = false }: { forceNew?: boolean }) {
             {inPlace ? (
               <div className="grid gap-1.5">
                 <Label>Project</Label>
-                <div className="truncate rounded-md border bg-muted/40 px-2 py-1.5 font-mono text-xs" title={workspacePath}>
+                <div
+                  className="truncate rounded-md border bg-muted/40 px-2 py-1.5 font-mono text-xs"
+                  title={workspacePath}
+                >
                   {workspacePath || "current workspace"}
                 </div>
                 <p className="text-xs text-muted-foreground">
@@ -432,8 +460,17 @@ export function WelcomePage({ forceNew = false }: { forceNew?: boolean }) {
                 <ArrowLeft data-icon="inline-start" />
                 Back
               </Button>
-              <Button onClick={() => void handleCreate()} disabled={busy || (!inPlace && !projectName.trim()) || (intent === "demo" && !demoId)}>
-                {busy ? <LoaderCircle data-icon="inline-start" className="animate-spin" /> : <Rocket data-icon="inline-start" />}
+              <Button
+                onClick={() => void handleCreate()}
+                disabled={
+                  busy || (!inPlace && !projectName.trim()) || (intent === "demo" && !demoId)
+                }
+              >
+                {busy ? (
+                  <LoaderCircle data-icon="inline-start" className="animate-spin" />
+                ) : (
+                  <Rocket data-icon="inline-start" />
+                )}
                 Create project
               </Button>
             </div>
@@ -443,8 +480,18 @@ export function WelcomePage({ forceNew = false }: { forceNew?: boolean }) {
         {stage === "creating" && created ? (
           <div className="grid gap-2 rounded-xl border bg-background p-5">
             {created.files.map((file, index) => (
-              <div key={file} className={cn("flex items-center gap-2 font-mono text-xs transition-opacity", index < tickedFiles ? "opacity-100" : "opacity-30")}>
-                {index < tickedFiles ? <CheckCircle2 className="size-3.5 shrink-0 text-primary" /> : <FileCode className="size-3.5 shrink-0 text-muted-foreground" />}
+              <div
+                key={file}
+                className={cn(
+                  "flex items-center gap-2 font-mono text-xs transition-opacity",
+                  index < tickedFiles ? "opacity-100" : "opacity-30",
+                )}
+              >
+                {index < tickedFiles ? (
+                  <CheckCircle2 className="size-3.5 shrink-0 text-primary" />
+                ) : (
+                  <FileCode className="size-3.5 shrink-0 text-muted-foreground" />
+                )}
                 {file}
               </div>
             ))}
@@ -462,8 +509,18 @@ export function WelcomePage({ forceNew = false }: { forceNew?: boolean }) {
             <div className="grid gap-2">
               <div className="flex items-center justify-between text-sm">
                 <span className="flex items-center gap-2 font-medium">
-                  {runState === "running" ? <LoaderCircle className="size-4 animate-spin text-primary" /> : runState === "error" ? <XCircle className="size-4 text-destructive" /> : <CheckCircle2 className="size-4 text-primary" />}
-                  {runState === "running" ? "Materializing demo assets..." : runState === "error" ? "First run failed" : "Demo materialized"}
+                  {runState === "running" ? (
+                    <LoaderCircle className="size-4 animate-spin text-primary" />
+                  ) : runState === "error" ? (
+                    <XCircle className="size-4 text-destructive" />
+                  ) : (
+                    <CheckCircle2 className="size-4 text-primary" />
+                  )}
+                  {runState === "running"
+                    ? "Materializing demo assets..."
+                    : runState === "error"
+                      ? "First run failed"
+                      : "Demo materialized"}
                 </span>
                 {runProgress ? (
                   <span className="text-xs text-muted-foreground">
@@ -473,8 +530,15 @@ export function WelcomePage({ forceNew = false }: { forceNew?: boolean }) {
               </div>
               <div className="h-1.5 overflow-hidden rounded-full bg-muted">
                 <div
-                  className={cn("h-full rounded-full transition-all duration-300", runState === "error" ? "bg-destructive" : "bg-primary")}
-                  style={{ width: runProgress ? `${Math.round((Math.min(runProgress.step, runProgress.total) / Math.max(runProgress.total, 1)) * 100)}%` : "5%" }}
+                  className={cn(
+                    "h-full rounded-full transition-all duration-300",
+                    runState === "error" ? "bg-destructive" : "bg-primary",
+                  )}
+                  style={{
+                    width: runProgress
+                      ? `${Math.round((Math.min(runProgress.step, runProgress.total) / Math.max(runProgress.total, 1)) * 100)}%`
+                      : "5%",
+                  }}
                 />
               </div>
             </div>
@@ -487,13 +551,20 @@ export function WelcomePage({ forceNew = false }: { forceNew?: boolean }) {
               ))}
             </div>
             {runLog ? (
-              <ScrollArea className="h-32 rounded-md border bg-zinc-950" viewportClassName="max-h-32">
-                <pre className="whitespace-pre-wrap p-2 font-mono text-[10px] leading-relaxed text-zinc-300">{runLog}</pre>
+              <ScrollArea
+                className="h-32 rounded-md border bg-zinc-950"
+                viewportClassName="max-h-32"
+              >
+                <pre className="whitespace-pre-wrap p-2 font-mono text-[10px] leading-relaxed text-zinc-300">
+                  {runLog}
+                </pre>
               </ScrollArea>
             ) : null}
             {runState === "error" ? (
               <div className="flex justify-end gap-2">
-                <Button variant="outline" onClick={openWorkspace}>Open workspace anyway</Button>
+                <Button variant="outline" onClick={openWorkspace}>
+                  Open workspace anyway
+                </Button>
                 <Button onClick={() => void startMaterialize()}>
                   <Play data-icon="inline-start" />
                   Retry run
@@ -511,7 +582,11 @@ export function WelcomePage({ forceNew = false }: { forceNew?: boolean }) {
                 value={connectionType}
                 onValueChange={(value) => {
                   setConnectionType(value);
-                  setConnectionValues(defaultConnectionValues(connectionTypes.find((type) => type.type_name === value)));
+                  setConnectionValues(
+                    defaultConnectionValues(
+                      connectionTypes.find((type) => type.type_name === value),
+                    ),
+                  );
                   setDiscovery(null);
                 }}
               >
@@ -520,7 +595,9 @@ export function WelcomePage({ forceNew = false }: { forceNew?: boolean }) {
                 </SelectTrigger>
                 <SelectContent>
                   {connectionTypes.map((type) => (
-                    <SelectItem key={type.type_name} value={type.type_name}>{type.type_name}</SelectItem>
+                    <SelectItem key={type.type_name} value={type.type_name}>
+                      {type.type_name}
+                    </SelectItem>
                   ))}
                 </SelectContent>
               </Select>
@@ -534,7 +611,9 @@ export function WelcomePage({ forceNew = false }: { forceNew?: boolean }) {
                       <span className="font-medium">{field.name}</span>
                       <Switch
                         checked={connectionValues[field.name] === true}
-                        onCheckedChange={(checked) => setConnectionValues((values) => ({ ...values, [field.name]: checked }))}
+                        onCheckedChange={(checked) =>
+                          setConnectionValues((values) => ({ ...values, [field.name]: checked }))
+                        }
                       />
                     </label>
                   ) : (
@@ -545,10 +624,21 @@ export function WelcomePage({ forceNew = false }: { forceNew?: boolean }) {
                       </Label>
                       <Input
                         id={`welcome-field-${field.name}`}
-                        type={field.type === "int" ? "number" : isSecretField(field.name) ? "password" : "text"}
+                        type={
+                          field.type === "int"
+                            ? "number"
+                            : isSecretField(field.name)
+                              ? "password"
+                              : "text"
+                        }
                         value={String(connectionValues[field.name] ?? "")}
                         placeholder={field.default_value || undefined}
-                        onChange={(event) => setConnectionValues((values) => ({ ...values, [field.name]: event.target.value }))}
+                        onChange={(event) =>
+                          setConnectionValues((values) => ({
+                            ...values,
+                            [field.name]: event.target.value,
+                          }))
+                        }
                       />
                     </>
                   )}
@@ -557,13 +647,18 @@ export function WelcomePage({ forceNew = false }: { forceNew?: boolean }) {
             {discovery && !selectedDatabase && discovery.databases.length > 0 ? (
               <div className="grid gap-1.5">
                 <Label>Database</Label>
-                <Select value={selectedDatabase} onValueChange={(value) => void runDiscovery(value)}>
+                <Select
+                  value={selectedDatabase}
+                  onValueChange={(value) => void runDiscovery(value)}
+                >
                   <SelectTrigger>
                     <SelectValue placeholder="Select a database" />
                   </SelectTrigger>
                   <SelectContent>
                     {discovery.databases.map((database) => (
-                      <SelectItem key={database} value={database}>{database}</SelectItem>
+                      <SelectItem key={database} value={database}>
+                        {database}
+                      </SelectItem>
                     ))}
                   </SelectContent>
                 </Select>
@@ -579,7 +674,11 @@ export function WelcomePage({ forceNew = false }: { forceNew?: boolean }) {
                 </Button>
               )}
               <Button disabled={busy || !connectionType} onClick={() => void runDiscovery()}>
-                {busy ? <LoaderCircle data-icon="inline-start" className="animate-spin" /> : <Database data-icon="inline-start" />}
+                {busy ? (
+                  <LoaderCircle data-icon="inline-start" className="animate-spin" />
+                ) : (
+                  <Database data-icon="inline-start" />
+                )}
                 Connect
               </Button>
             </div>
@@ -606,7 +705,7 @@ export function WelcomePage({ forceNew = false }: { forceNew?: boolean }) {
                     setSelectedTables((current) =>
                       current.size === discovery.tables.length
                         ? new Set()
-                        : new Set(discovery.tables.map((table) => table.name))
+                        : new Set(discovery.tables.map((table) => table.name)),
                     )
                   }
                 >
@@ -623,7 +722,10 @@ export function WelcomePage({ forceNew = false }: { forceNew?: boolean }) {
                   {discovery.tables
                     .filter((table) => table.name.toLowerCase().includes(tableFilter.toLowerCase()))
                     .map((table) => (
-                      <label key={table.name} className="flex cursor-pointer items-center gap-2 border-b px-3 py-2 text-sm last:border-b-0 hover:bg-muted/50">
+                      <label
+                        key={table.name}
+                        className="flex cursor-pointer items-center gap-2 border-b px-3 py-2 text-sm last:border-b-0 hover:bg-muted/50"
+                      >
                         <Checkbox
                           checked={selectedTables.has(table.name)}
                           onCheckedChange={(checked) =>
@@ -638,11 +740,15 @@ export function WelcomePage({ forceNew = false }: { forceNew?: boolean }) {
                             })
                           }
                         />
-                        <span className="min-w-0 flex-1 truncate font-mono text-xs">{table.name}</span>
+                        <span className="min-w-0 flex-1 truncate font-mono text-xs">
+                          {table.name}
+                        </span>
                       </label>
                     ))}
                   {discovery.tables.length === 0 ? (
-                    <p className="px-3 py-4 text-sm text-muted-foreground">No tables found in this database.</p>
+                    <p className="px-3 py-4 text-sm text-muted-foreground">
+                      No tables found in this database.
+                    </p>
                   ) : null}
                 </div>
               </ScrollArea>
@@ -652,8 +758,15 @@ export function WelcomePage({ forceNew = false }: { forceNew?: boolean }) {
                 <ArrowLeft data-icon="inline-start" />
                 Back
               </Button>
-              <Button disabled={busy || selectedTables.size === 0 || !pipelineName.trim()} onClick={() => void handleImport()}>
-                {busy ? <LoaderCircle data-icon="inline-start" className="animate-spin" /> : <Import data-icon="inline-start" />}
+              <Button
+                disabled={busy || selectedTables.size === 0 || !pipelineName.trim()}
+                onClick={() => void handleImport()}
+              >
+                {busy ? (
+                  <LoaderCircle data-icon="inline-start" className="animate-spin" />
+                ) : (
+                  <Import data-icon="inline-start" />
+                )}
                 Import {selectedTables.size} table{selectedTables.size === 1 ? "" : "s"}
               </Button>
             </div>
@@ -731,7 +844,11 @@ function AssetStatusIcon({ status }: { status?: string }) {
 function stageTitle(stage: WelcomeStage, intent: WelcomeIntent) {
   switch (stage) {
     case "target":
-      return intent === "demo" ? "Pick a demo" : intent === "import" ? "Name your project" : "Name your project";
+      return intent === "demo"
+        ? "Pick a demo"
+        : intent === "import"
+          ? "Name your project"
+          : "Name your project";
     case "creating":
       return "Creating project...";
     case "materializing":
@@ -771,7 +888,8 @@ function defaultConnectionValues(connectionType?: WorkspaceConfigConnectionType)
   const values: Record<string, string | boolean> = {};
   for (const field of connectionType?.fields ?? []) {
     if (field.default_value) {
-      values[field.name] = field.type === "bool" ? field.default_value === "true" : field.default_value;
+      values[field.name] =
+        field.type === "bool" ? field.default_value === "true" : field.default_value;
     }
   }
   return values;
@@ -779,7 +897,9 @@ function defaultConnectionValues(connectionType?: WorkspaceConfigConnectionType)
 
 function isSecretField(name: string) {
   const lowered = name.toLowerCase();
-  return ["password", "secret", "token", "key", "credentials"].some((needle) => lowered.includes(needle));
+  return ["password", "secret", "token", "key", "credentials"].some((needle) =>
+    lowered.includes(needle),
+  );
 }
 
 // Saves the import flow's connection as `<type>-default` in the workspace
@@ -787,7 +907,7 @@ function isSecretField(name: string) {
 async function persistImportConnection(
   connectionType: string,
   values: Record<string, unknown>,
-  database: string
+  database: string,
 ) {
   const connectionValues = { ...values };
   if (database && connectionType !== "duckdb" && !connectionValues.database) {

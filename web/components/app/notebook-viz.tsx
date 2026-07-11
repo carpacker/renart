@@ -27,7 +27,13 @@ import {
 import { NotebookCellRunResult, VizDirective } from "@/lib/api-notebooks";
 
 const CHART_ROW_CAP = 200;
-const PIE_COLORS = ["var(--chart-1)", "var(--chart-2)", "var(--chart-3)", "var(--chart-4)", "var(--chart-5)"];
+const PIE_COLORS = [
+  "var(--chart-1)",
+  "var(--chart-2)",
+  "var(--chart-3)",
+  "var(--chart-4)",
+  "var(--chart-5)",
+];
 
 function asArray(value: unknown): string[] {
   if (Array.isArray(value)) {
@@ -70,10 +76,16 @@ function formatNumber(value: unknown, format?: string): string {
     return String(value ?? "");
   }
   if (format === "currency") {
-    return new Intl.NumberFormat(undefined, { style: "currency", currency: "USD", maximumFractionDigits: 0 }).format(numeric);
+    return new Intl.NumberFormat(undefined, {
+      style: "currency",
+      currency: "USD",
+      maximumFractionDigits: 0,
+    }).format(numeric);
   }
   if (format === "percent") {
-    return new Intl.NumberFormat(undefined, { style: "percent", maximumFractionDigits: 1 }).format(numeric);
+    return new Intl.NumberFormat(undefined, { style: "percent", maximumFractionDigits: 1 }).format(
+      numeric,
+    );
   }
   return new Intl.NumberFormat().format(numeric);
 }
@@ -124,7 +136,13 @@ export function NotebookVizRenderer({ result }: { result: NotebookCellRunResult 
             <ChartTooltip content={(props) => <ChartTooltipContent {...props} />} />
             <ChartLegend content={<ChartLegendContent />} />
             {yKeys.map((key) => (
-              <Bar key={key} dataKey={key} fill={`var(--color-${key})`} stackId={stacked ? "stack" : undefined} radius={stacked ? 0 : 4} />
+              <Bar
+                key={key}
+                dataKey={key}
+                fill={`var(--color-${key})`}
+                stackId={stacked ? "stack" : undefined}
+                radius={stacked ? 0 : 4}
+              />
             ))}
           </BarChart>
         ) : viz.kind === "area" ? (
@@ -135,7 +153,15 @@ export function NotebookVizRenderer({ result }: { result: NotebookCellRunResult 
             <ChartTooltip content={(props) => <ChartTooltipContent {...props} />} />
             <ChartLegend content={<ChartLegendContent />} />
             {yKeys.map((key) => (
-              <Area key={key} dataKey={key} type="monotone" fill={`var(--color-${key})`} stroke={`var(--color-${key})`} stackId={stacked ? "stack" : undefined} fillOpacity={0.2} />
+              <Area
+                key={key}
+                dataKey={key}
+                type="monotone"
+                fill={`var(--color-${key})`}
+                stroke={`var(--color-${key})`}
+                stackId={stacked ? "stack" : undefined}
+                fillOpacity={0.2}
+              />
             ))}
           </AreaChart>
         ) : viz.kind === "pie" ? (
@@ -155,13 +181,22 @@ export function NotebookVizRenderer({ result }: { result: NotebookCellRunResult 
             <ChartTooltip content={(props) => <ChartTooltipContent {...props} />} />
             <ChartLegend content={<ChartLegendContent />} />
             {yKeys.map((key) => (
-              <Line key={key} dataKey={key} type="monotone" stroke={`var(--color-${key})`} strokeWidth={2} dot={false} />
+              <Line
+                key={key}
+                dataKey={key}
+                type="monotone"
+                stroke={`var(--color-${key})`}
+                strokeWidth={2}
+                dot={false}
+              />
             ))}
           </LineChart>
         )}
       </ChartContainer>
       {truncated ? (
-        <div className="mt-1 text-[11px] text-muted-foreground">showing {capped.length} of {result.total_rows} rows</div>
+        <div className="mt-1 text-[11px] text-muted-foreground">
+          showing {capped.length} of {result.total_rows} rows
+        </div>
       ) : null}
     </div>
   );
@@ -176,20 +211,27 @@ function KpiCard({ viz, result }: { viz: VizDirective; result: NotebookCellRunRe
   }
 
   const valueIndex = result.columns.findIndex((c) => c.toLowerCase() === valueKey.toLowerCase());
-  const compareIndex = compareKey ? result.columns.findIndex((c) => c.toLowerCase() === compareKey.toLowerCase()) : -1;
+  const compareIndex = compareKey
+    ? result.columns.findIndex((c) => c.toLowerCase() === compareKey.toLowerCase())
+    : -1;
   const firstRow = result.rows[0] ?? [];
   const value = valueIndex >= 0 ? firstRow[valueIndex] : undefined;
   const compare = compareIndex >= 0 ? firstRow[compareIndex] : undefined;
   const format = typeof viz.options.format === "string" ? viz.options.format : undefined;
 
-  const delta = typeof value === "number" && typeof compare === "number" && compare !== 0
-    ? (value - compare) / Math.abs(compare)
-    : null;
+  const delta =
+    typeof value === "number" && typeof compare === "number" && compare !== 0
+      ? (value - compare) / Math.abs(compare)
+      : null;
 
   return (
     <div className="rounded-lg border p-4">
-      <div className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">{valueKey}</div>
-      <div className="mt-1 text-3xl font-semibold tracking-tight">{formatNumber(value, format)}</div>
+      <div className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+        {valueKey}
+      </div>
+      <div className="mt-1 text-3xl font-semibold tracking-tight">
+        {formatNumber(value, format)}
+      </div>
       {delta !== null ? (
         <div className={`mt-1 text-xs ${delta >= 0 ? "text-emerald-600" : "text-red-500"}`}>
           {delta >= 0 ? "▲" : "▼"} {formatNumber(Math.abs(delta), "percent")} vs {compareKey}

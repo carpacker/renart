@@ -16,22 +16,22 @@ export async function updateWorkspaceProject(input: {
 }
 
 export async function getWorkspaceEnvironmentPolicy(
-  environment: string
+  environment: string,
 ): Promise<WorkspaceEnvironmentPolicyResponse> {
   return fetchJSON<WorkspaceEnvironmentPolicyResponse>(
     `/api/config/environment-policies/${encodeURIComponent(environment)}`,
-    { cache: "no-store" }
+    { cache: "no-store" },
   );
 }
 
 export async function updateWorkspaceEnvironmentPolicy(
   environment: string,
-  policy: EnvironmentPolicy
+  policy: EnvironmentPolicy,
 ): Promise<WorkspaceEnvironmentPolicyResponse> {
   return fetchJSONWithBody<WorkspaceEnvironmentPolicyResponse>(
     `/api/config/environment-policies/${encodeURIComponent(environment)}`,
     "PUT",
-    policy
+    policy,
   );
 }
 
@@ -40,11 +40,7 @@ export async function createWorkspaceEnvironment(input: {
   schema_prefix?: string;
   set_as_default?: boolean;
 }): Promise<WorkspaceConfigResponse> {
-  return fetchJSONWithBody<WorkspaceConfigResponse>(
-    "/api/config/environments",
-    "POST",
-    input
-  );
+  return fetchJSONWithBody<WorkspaceConfigResponse>("/api/config/environments", "POST", input);
 }
 
 export async function updateWorkspaceEnvironment(input: {
@@ -53,11 +49,7 @@ export async function updateWorkspaceEnvironment(input: {
   schema_prefix?: string;
   set_as_default?: boolean;
 }): Promise<WorkspaceConfigResponse> {
-  return fetchJSONWithBody<WorkspaceConfigResponse>(
-    "/api/config/environments",
-    "PUT",
-    input
-  );
+  return fetchJSONWithBody<WorkspaceConfigResponse>("/api/config/environments", "PUT", input);
 }
 
 export async function cloneWorkspaceEnvironment(input: {
@@ -69,18 +61,12 @@ export async function cloneWorkspaceEnvironment(input: {
   return fetchJSONWithBody<WorkspaceConfigResponse>(
     "/api/config/environments/clone",
     "POST",
-    input
+    input,
   );
 }
 
-export async function deleteWorkspaceEnvironment(
-  name: string
-): Promise<WorkspaceConfigResponse> {
-  return fetchJSONWithBody<WorkspaceConfigResponse>(
-    "/api/config/environments",
-    "DELETE",
-    { name }
-  );
+export async function deleteWorkspaceEnvironment(name: string): Promise<WorkspaceConfigResponse> {
+  return fetchJSONWithBody<WorkspaceConfigResponse>("/api/config/environments", "DELETE", { name });
 }
 
 export async function createWorkspaceConnection(input: {
@@ -89,11 +75,7 @@ export async function createWorkspaceConnection(input: {
   type: string;
   values: Record<string, unknown>;
 }): Promise<WorkspaceConfigResponse> {
-  return fetchJSONWithBody<WorkspaceConfigResponse>(
-    "/api/config/connections",
-    "POST",
-    input
-  );
+  return fetchJSONWithBody<WorkspaceConfigResponse>("/api/config/connections", "POST", input);
 }
 
 export async function updateWorkspaceConnection(input: {
@@ -103,22 +85,14 @@ export async function updateWorkspaceConnection(input: {
   type: string;
   values: Record<string, unknown>;
 }): Promise<WorkspaceConfigResponse> {
-  return fetchJSONWithBody<WorkspaceConfigResponse>(
-    "/api/config/connections",
-    "PUT",
-    input
-  );
+  return fetchJSONWithBody<WorkspaceConfigResponse>("/api/config/connections", "PUT", input);
 }
 
 export async function deleteWorkspaceConnection(input: {
   environment_name: string;
   name: string;
 }): Promise<WorkspaceConfigResponse> {
-  return fetchJSONWithBody<WorkspaceConfigResponse>(
-    "/api/config/connections",
-    "DELETE",
-    input
-  );
+  return fetchJSONWithBody<WorkspaceConfigResponse>("/api/config/connections", "DELETE", input);
 }
 
 export async function testWorkspaceConnection(input: {
@@ -131,6 +105,6 @@ export async function testWorkspaceConnection(input: {
   return fetchJSONWithBody<{ status: string; message?: string }>(
     "/api/config/connections/test",
     "POST",
-    input
+    input,
   );
 }

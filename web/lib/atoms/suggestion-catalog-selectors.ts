@@ -9,7 +9,7 @@ import {
 
 export function mergeRemoteSuggestions(
   left: IngestrSuggestion[],
-  right: IngestrSuggestion[]
+  right: IngestrSuggestion[],
 ): IngestrSuggestion[] {
   const merged = new Map<string, IngestrSuggestion>();
 
@@ -33,7 +33,7 @@ export function mergeRemoteSuggestions(
 }
 
 export function getConnectionSuggestions(
-  catalog: SuggestionCatalogState
+  catalog: SuggestionCatalogState,
 ): ConnectionSuggestionEntry[] {
   return catalog.connections.map((connection) => ({
     name: connection.name,
@@ -48,7 +48,7 @@ export function getDatabaseSuggestions(
     connectionName: string;
     environment?: string;
     prefix?: string;
-  }
+  },
 ): string[] {
   const prefix = options.prefix?.trim().toLowerCase() ?? "";
 
@@ -61,7 +61,7 @@ export function getDatabaseSuggestions(
       const matchingSource = database.sources.some(
         (source) =>
           source.method === "connection-database-discovery" &&
-          (!options.environment || source.environment === options.environment)
+          (!options.environment || source.environment === options.environment),
       );
       if (!matchingSource) {
         return false;
@@ -79,7 +79,7 @@ export function getDatabaseSuggestions(
 
 export function getSelectedAssetSuggestionTable(
   catalog: SuggestionCatalogState,
-  assetId: string | null | undefined
+  assetId: string | null | undefined,
 ): SuggestionTableState | null {
   if (!assetId) {
     return null;
@@ -89,14 +89,12 @@ export function getSelectedAssetSuggestionTable(
 }
 
 export function getSelectedAssetColumnEntries(
-  table: SuggestionTableState | null
+  table: SuggestionTableState | null,
 ): Array<{ name?: string }> {
   return (table?.columns ?? []).map((column) => ({ name: column.name }));
 }
 
-export function getSelectedAssetInspectColumns(
-  table: SuggestionTableState | null
-): string[] {
+export function getSelectedAssetInspectColumns(table: SuggestionTableState | null): string[] {
   if (!table) {
     return [];
   }
@@ -109,7 +107,7 @@ export function getSelectedAssetInspectColumns(
 export function getSchemaSuggestionTablesForAsset(
   workspace: WorkspaceState | null,
   catalog: SuggestionCatalogState,
-  asset: WebAsset | null
+  asset: WebAsset | null,
 ): SuggestionTableState[] {
   if (!workspace || !asset) {
     return [];
@@ -120,14 +118,12 @@ export function getSchemaSuggestionTablesForAsset(
     return [];
   }
 
-  return catalog.tables.filter(
-    (table) => table.connectionName === currentConnection
-  );
+  return catalog.tables.filter((table) => table.connectionName === currentConnection);
 }
 
 export function toSchemaTables(
   tables: SuggestionTableState[],
-  currentAssetId?: string | null
+  currentAssetId?: string | null,
 ): SchemaTable[] {
   const schemaTables: SchemaTable[] = tables.map((table) => ({
     name: table.name,
@@ -136,7 +132,7 @@ export function toSchemaTables(
       .filter(
         (column) =>
           table.assetId !== currentAssetId ||
-          !column.sourceMethods.every((method) => method === "asset-sql-definition")
+          !column.sourceMethods.every((method) => method === "asset-sql-definition"),
       )
       .map((column) => ({
         name: column.name,
@@ -217,7 +213,7 @@ export function getIngestrTableSuggestionsFromCatalog(
     connectionName: string;
     environment?: string;
     prefix?: string;
-  }
+  },
 ): IngestrSuggestion[] {
   const prefix = options.prefix?.trim().toLowerCase() ?? "";
 
@@ -231,7 +227,7 @@ export function getIngestrTableSuggestionsFromCatalog(
         (source) =>
           source.method === "ingestr-suggestions" &&
           (!options.environment || source.environment === options.environment) &&
-          doesIngestrSourceMatchPrefix(source.prefix, prefix)
+          doesIngestrSourceMatchPrefix(source.prefix, prefix),
       );
 
       if (!matchingSource) {
@@ -258,7 +254,7 @@ function normalizeTableName(value: string): string {
 
 function doesIngestrSourceMatchPrefix(
   sourcePrefix: string | undefined,
-  requestedPrefix: string
+  requestedPrefix: string,
 ): boolean {
   const normalizedSourcePrefix = sourcePrefix?.trim().toLowerCase() ?? "";
 
@@ -274,8 +270,5 @@ function doesIngestrSourceMatchPrefix(
     return false;
   }
 
-  return (
-    normalizedSourcePrefix.endsWith("/") &&
-    requestedPrefix.startsWith(normalizedSourcePrefix)
-  );
+  return normalizedSourcePrefix.endsWith("/") && requestedPrefix.startsWith(normalizedSourcePrefix);
 }

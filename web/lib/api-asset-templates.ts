@@ -24,13 +24,8 @@ export const API_ASSET_TEMPLATES: APIAssetTemplate[] = [
   },
 ];
 
-export function buildAPIAssetTemplate(
-  templateId: APIAssetTemplateId,
-  connection?: string,
-): string {
-  const connectionLine = connection?.trim()
-    ? `connection: ${connection.trim()}\n`
-    : "";
+export function buildAPIAssetTemplate(templateId: APIAssetTemplateId, connection?: string): string {
+  const connectionLine = connection?.trim() ? `connection: ${connection.trim()}\n` : "";
 
   if (templateId === "paginated") {
     return `type: api

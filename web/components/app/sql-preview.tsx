@@ -99,7 +99,12 @@ export function SqlPreview({ query, className }: { query: string; className?: st
   const tokens = tokenizeSqlPreview(query);
 
   return (
-    <pre className={cn("max-h-28 overflow-auto whitespace-pre-wrap border-t bg-background px-2 py-1.5 font-mono text-[11px] leading-relaxed text-foreground", className)}>
+    <pre
+      className={cn(
+        "max-h-28 overflow-auto whitespace-pre-wrap border-t bg-background px-2 py-1.5 font-mono text-[11px] leading-relaxed text-foreground",
+        className,
+      )}
+    >
       {tokens.map((token, index) => {
         const classNameForToken = tokenClassName[token.type];
         if (!classNameForToken) {
@@ -219,7 +224,10 @@ function tokenizeSqlPreview(input: string): SqlToken[] {
   return tokens;
 }
 
-function readJinjaToken(input: string, index: number): { tokens: SqlToken[]; nextIndex: number } | null {
+function readJinjaToken(
+  input: string,
+  index: number,
+): { tokens: SqlToken[]; nextIndex: number } | null {
   const open = input.slice(index, index + 2);
   const close = open === "{{" ? "}}" : open === "{%" ? "%}" : open === "{#" ? "#}" : null;
   if (!close) {

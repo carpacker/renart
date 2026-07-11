@@ -42,12 +42,7 @@ try {
   const compiledPath = path.join(tempDir, "redesign-lineage-layout.js");
   const { computeRedesignLineageLayout } = await import(pathToFileURL(compiledPath).href);
 
-  const cases = [
-    chainCase(),
-    diamondCase(),
-    bipartiteShuffleCase(),
-    skipEdgesAndCycleCase(),
-  ];
+  const cases = [chainCase(), diamondCase(), bipartiteShuffleCase(), skipEdgesAndCycleCase()];
 
   for (const testCase of cases) {
     const first = computeRedesignLineageLayout({ ...testCase, layoutId: "strict" });
@@ -56,8 +51,18 @@ try {
     const secondPositions = serializePositions(second.positions);
     assert.equal(firstPositions, secondPositions, `${testCase.name} should be deterministic`);
 
-    const naive = countLayeredCrossings(testCase.nodes, testCase.edges, first.analysis.layerOrder, null);
-    const optimized = countLayeredCrossings(testCase.nodes, testCase.edges, first.analysis.layerOrder, first.positions);
+    const naive = countLayeredCrossings(
+      testCase.nodes,
+      testCase.edges,
+      first.analysis.layerOrder,
+      null,
+    );
+    const optimized = countLayeredCrossings(
+      testCase.nodes,
+      testCase.edges,
+      first.analysis.layerOrder,
+      first.positions,
+    );
     assert.ok(
       optimized <= naive,
       `${testCase.name} optimized crossings (${optimized}) should not exceed naive crossings (${naive})`,
@@ -149,20 +154,25 @@ function node(id, layer) {
 
 function countLayeredCrossings(nodes, edges, layerOrder, positions) {
   const layerIndex = new Map(layerOrder.map((layer, index) => [layer, index]));
-  const nodeById = new Map(nodes.map((candidate, index) => [candidate.id, { ...candidate, index }]));
+  const nodeById = new Map(
+    nodes.map((candidate, index) => [candidate.id, { ...candidate, index }]),
+  );
   const ranks = layerOrder.map(() => []);
   nodes.forEach((candidate) => {
     ranks[layerIndex.get(candidate.layer) ?? 0].push(candidate.id);
   });
   ranks.forEach((rank) => {
     rank.sort((a, b) => {
-      if (positions) return (positions.get(a)?.y ?? 0) - (positions.get(b)?.y ?? 0) || a.localeCompare(b);
+      if (positions)
+        return (positions.get(a)?.y ?? 0) - (positions.get(b)?.y ?? 0) || a.localeCompare(b);
       return (nodeById.get(a)?.index ?? 0) - (nodeById.get(b)?.index ?? 0) || a.localeCompare(b);
     });
   });
 
   const order = new Map();
-  ranks.forEach((rank, rankIndex) => rank.forEach((id, index) => order.set(id, { rank: rankIndex, index })));
+  ranks.forEach((rank, rankIndex) =>
+    rank.forEach((id, index) => order.set(id, { rank: rankIndex, index })),
+  );
   const virtualRanks = ranks.map((rank) => rank.slice());
   const segments = [];
   edges
@@ -177,18 +187,27 @@ function countLayeredCrossings(nodes, edges, layerOrder, positions) {
         const virtualId = `virtual:${edge.source}->${edge.target}:${rank}`;
         virtualRanks[rank].push(virtualId);
         previous = virtualId;
-        segments.push({ source: rank === source.rank + 1 ? edge.source : `virtual:${edge.source}->${edge.target}:${rank - 1}`, target: virtualId });
+        segments.push({
+          source:
+            rank === source.rank + 1
+              ? edge.source
+              : `virtual:${edge.source}->${edge.target}:${rank - 1}`,
+          target: virtualId,
+        });
       }
       segments.push({ source: previous, target: edge.target });
     });
 
   const virtualOrder = new Map();
-  virtualRanks.forEach((rank, rankIndex) => rank.forEach((id, index) => virtualOrder.set(id, { rank: rankIndex, index })));
+  virtualRanks.forEach((rank, rankIndex) =>
+    rank.forEach((id, index) => virtualOrder.set(id, { rank: rankIndex, index })),
+  );
   const byRank = Array.from({ length: Math.max(0, virtualRanks.length - 1) }, () => []);
   segments.forEach((edge) => {
     const source = virtualOrder.get(edge.source);
     const target = virtualOrder.get(edge.target);
-    if (source && target && target.rank === source.rank + 1) byRank[source.rank].push([source.index, target.index]);
+    if (source && target && target.rank === source.rank + 1)
+      byRank[source.rank].push([source.index, target.index]);
   });
   return byRank.reduce((sum, bilayer) => sum + countBilayer(bilayer), 0);
 }

@@ -36,11 +36,13 @@ function AppPipelineLayoutRoute() {
       variant={search.variant ?? "default"}
       onResultTabChange={(result) => updateSearch({ result })}
       onVariantChange={(variant) => updateSearch({ variant })}
-      onAssetSelect={(assetId) => navigate({
-        to: appAssetViewPath(currentView),
-        params: { pipelineId, assetId },
-        search: { ...search, editor: "asset" },
-      })}
+      onAssetSelect={(assetId) =>
+        navigate({
+          to: appAssetViewPath(currentView),
+          params: { pipelineId, assetId },
+          search: { ...search, editor: "asset" },
+        })
+      }
     />
   );
 }

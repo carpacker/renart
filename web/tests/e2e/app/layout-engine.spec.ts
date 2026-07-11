@@ -1,6 +1,10 @@
 import { expect, test } from "@playwright/test";
 
-import { computeAppLineageLayout, type AppLineageLayoutEdge, type AppLineageLayoutNode } from "../../../lib/app-lineage-layout";
+import {
+  computeAppLineageLayout,
+  type AppLineageLayoutEdge,
+  type AppLineageLayoutNode,
+} from "../../../lib/app-lineage-layout";
 
 function node(id: string): AppLineageLayoutNode {
   const [layer, ...nameParts] = id.split(".");
@@ -24,8 +28,12 @@ test.describe("app lineage layout engine", () => {
     expect(layout.analysis.skipEdges).toHaveLength(0);
     expect(layout.analysis.intraEdges).toHaveLength(0);
     expect(layout.analysis.backEdges).toHaveLength(0);
-    expect(layout.positions.get("raw.orders")!.x).toBeLessThan(layout.positions.get("staging.orders")!.x);
-    expect(layout.positions.get("staging.orders")!.x).toBeLessThan(layout.positions.get("core.orders")!.x);
+    expect(layout.positions.get("raw.orders")!.x).toBeLessThan(
+      layout.positions.get("staging.orders")!.x,
+    );
+    expect(layout.positions.get("staging.orders")!.x).toBeLessThan(
+      layout.positions.get("core.orders")!.x,
+    );
   });
 
   test("recommends layer bands when layer order is cyclic but the asset graph is a DAG", () => {
@@ -69,7 +77,12 @@ test.describe("app lineage layout engine", () => {
   test("can explicitly compute layer bands without using dependency-rank layout", () => {
     const layout = computeAppLineageLayout({
       layoutId: "bands",
-      nodes: [node("raw.orders"), node("staging.orders"), node("staging.items"), node("core.orders")],
+      nodes: [
+        node("raw.orders"),
+        node("staging.orders"),
+        node("staging.items"),
+        node("core.orders"),
+      ],
       edges: [
         edge("raw.orders", "staging.orders"),
         edge("raw.orders", "staging.items"),
@@ -80,7 +93,11 @@ test.describe("app lineage layout engine", () => {
 
     expect(layout.layoutId).toBe("bands");
     expect(layout.recommendation?.id).not.toBe("topo");
-    expect(layout.positions.get("raw.orders")!.x).toBeLessThan(layout.positions.get("core.orders")!.x);
-    expect(layout.positions.get("staging.orders")!.y).not.toBe(layout.positions.get("raw.orders")!.y);
+    expect(layout.positions.get("raw.orders")!.x).toBeLessThan(
+      layout.positions.get("core.orders")!.x,
+    );
+    expect(layout.positions.get("staging.orders")!.y).not.toBe(
+      layout.positions.get("raw.orders")!.y,
+    );
   });
 });

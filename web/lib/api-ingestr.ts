@@ -13,7 +13,7 @@ export async function getIngestrSuggestions(options: {
       prefix: options.prefix,
       environment: options.environment,
     })}`,
-    { cache: "no-store" }
+    { cache: "no-store" },
   );
 }
 
@@ -31,6 +31,6 @@ export async function getOpenAPISuggestions(options: {
       request_url: options.requestUrl,
       method: options.method,
     })}`,
-    { cache: "no-store" }
+    { cache: "no-store" },
   );
 }

@@ -2,42 +2,30 @@ import * as React from "react";
 
 import { cn } from "@/lib/utils";
 
-function DelimitedCard({
-  className,
-  ...props
-}: React.ComponentProps<"div">) {
+function DelimitedCard({ className, ...props }: React.ComponentProps<"div">) {
   return (
     <div
       data-slot="delimited-card"
       className={cn(
         "overflow-hidden rounded-xl border bg-card text-card-foreground shadow-sm",
-        className
+        className,
       )}
       {...props}
     />
   );
 }
 
-function DelimitedCardHeader({
-  className,
-  ...props
-}: React.ComponentProps<"div">) {
+function DelimitedCardHeader({ className, ...props }: React.ComponentProps<"div">) {
   return (
     <div
       data-slot="delimited-card-header"
-      className={cn(
-        "flex min-h-11 items-center gap-2 border-b bg-muted/30 px-3 py-2",
-        className
-      )}
+      className={cn("flex min-h-11 items-center gap-2 border-b bg-muted/30 px-3 py-2", className)}
       {...props}
     />
   );
 }
 
-function DelimitedCardTitle({
-  className,
-  ...props
-}: React.ComponentProps<"div">) {
+function DelimitedCardTitle({ className, ...props }: React.ComponentProps<"div">) {
   return (
     <div
       data-slot="delimited-card-title"
@@ -47,10 +35,7 @@ function DelimitedCardTitle({
   );
 }
 
-function DelimitedCardDescription({
-  className,
-  ...props
-}: React.ComponentProps<"div">) {
+function DelimitedCardDescription({ className, ...props }: React.ComponentProps<"div">) {
   return (
     <div
       data-slot="delimited-card-description"
@@ -60,10 +45,7 @@ function DelimitedCardDescription({
   );
 }
 
-function DelimitedCardAction({
-  className,
-  ...props
-}: React.ComponentProps<"div">) {
+function DelimitedCardAction({ className, ...props }: React.ComponentProps<"div">) {
   return (
     <div
       data-slot="delimited-card-action"
@@ -73,23 +55,11 @@ function DelimitedCardAction({
   );
 }
 
-function DelimitedCardContent({
-  className,
-  ...props
-}: React.ComponentProps<"div">) {
-  return (
-    <div
-      data-slot="delimited-card-content"
-      className={cn("p-3", className)}
-      {...props}
-    />
-  );
+function DelimitedCardContent({ className, ...props }: React.ComponentProps<"div">) {
+  return <div data-slot="delimited-card-content" className={cn("p-3", className)} {...props} />;
 }
 
-function DelimitedCardFooter({
-  className,
-  ...props
-}: React.ComponentProps<"div">) {
+function DelimitedCardFooter({ className, ...props }: React.ComponentProps<"div">) {
   return (
     <div
       data-slot="delimited-card-footer"

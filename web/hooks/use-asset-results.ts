@@ -70,7 +70,7 @@ function createMaterializeEntry(input: {
 function resolveScopedMaterializingAssetIds(
   assets: WebAsset[],
   assetId: string,
-  scope: MaterializeScope
+  scope: MaterializeScope,
 ) {
   const selected = assets.find((candidate) => candidate.id === assetId) ?? null;
   if (!selected || scope === "asset") {
@@ -125,8 +125,7 @@ function resolveScopedMaterializingAssetIds(
 export function useAssetResults() {
   const [results, setResults] = useAtom(assetResultsAtom);
   const setChangedAssetIds = useSetAtom(changedAssetIdsAtom);
-  const [pipelineMaterializeLoading, setPipelineMaterializeLoading] =
-    useState(false);
+  const [pipelineMaterializeLoading, setPipelineMaterializeLoading] = useState(false);
   const [assetMaterializeLoading, setAssetMaterializeLoading] = useState(false);
   const [materializingAssetIds, setMaterializingAssetIds] = useAtom(materializingAssetIdsAtom);
   const asset = useAtomValue(enrichedSelectedAssetAtom);
@@ -145,24 +144,17 @@ export function useAssetResults() {
     canLoadMoreByAssetId,
     loadMorePreviewRows,
   } = useAssetInspect(inspectAssets);
-  const {
-    resultTab,
-    selectedMaterializeEntryId,
-    materializeHistory,
-  } = results;
+  const { resultTab, selectedMaterializeEntryId, materializeHistory } = results;
 
-  const inspectResult = selectedAssetId
-    ? inspectByAssetId[selectedAssetId] ?? null
-    : null;
+  const inspectResult = selectedAssetId ? (inspectByAssetId[selectedAssetId] ?? null) : null;
   const inspectLoading = selectedAssetId
-    ? inspectLoadingByAssetId[selectedAssetId] ?? false
+    ? (inspectLoadingByAssetId[selectedAssetId] ?? false)
     : false;
   const canLoadMoreInspectRows = selectedAssetId
     ? Boolean(canLoadMoreByAssetId[selectedAssetId])
     : false;
 
-  const effectiveMaterializeLoading =
-    assetMaterializeLoading || pipelineMaterializeLoading;
+  const effectiveMaterializeLoading = assetMaterializeLoading || pipelineMaterializeLoading;
 
   const setResultTab = (tab: "inspect" | "materialize") => {
     setResults((previous) => ({
@@ -216,7 +208,9 @@ export function useAssetResults() {
 
   const upsertMaterializeEntry = (
     entryId: string,
-    updater: (previous: typeof materializeHistory[number] | null) => typeof materializeHistory[number]
+    updater: (
+      previous: (typeof materializeHistory)[number] | null,
+    ) => (typeof materializeHistory)[number],
   ) => {
     setResults((previous) => {
       const existingEntry =
@@ -267,7 +261,8 @@ export function useAssetResults() {
         }
         matched = true;
         if (schedulerRunEvent.type === "run.finished") {
-          const status: "ok" | "error" = schedulerRunEvent.run.status === "success" ? "ok" : "error";
+          const status: "ok" | "error" =
+            schedulerRunEvent.run.status === "success" ? "ok" : "error";
           return {
             ...entry,
             status,
@@ -295,447 +290,478 @@ export function useAssetResults() {
     });
   }, [schedulerRunEvent, setResults]);
 
-  const runInspectForAsset = useCallback(async (assetId: string, contentSnapshot?: string) => {
-    try {
-      const result = await inspectAssetById(assetId, {
-        force: true,
-        limit: 200,
-        contentSnapshot,
-        timeWindow: selectedExecutionTimeWindow ?? undefined,
-      });
-      if (result.rows.length > 0 || result.error) {
+  const runInspectForAsset = useCallback(
+    async (assetId: string, contentSnapshot?: string) => {
+      try {
+        const result = await inspectAssetById(assetId, {
+          force: true,
+          limit: 200,
+          contentSnapshot,
+          timeWindow: selectedExecutionTimeWindow ?? undefined,
+        });
+        if (result.rows.length > 0 || result.error) {
+          setResultTab("inspect");
+        }
+        return result;
+      } catch (error) {
+        const failure: AssetInspectResponse = {
+          status: "error",
+          columns: [],
+          rows: [],
+          raw_output: "",
+          operation: { type: "inspect" },
+          error: String(error),
+        };
         setResultTab("inspect");
+        return failure;
       }
-      return result;
-    } catch (error) {
-      const failure: AssetInspectResponse = {
-        status: "error",
-        columns: [],
-        rows: [],
-        raw_output: "",
-        operation: { type: "inspect" },
-        error: String(error),
-      };
-      setResultTab("inspect");
-      return failure;
-    }
-  }, [inspectAssetById, selectedExecutionTimeWindow]);
+    },
+    [inspectAssetById, selectedExecutionTimeWindow],
+  );
 
-  const runMaterializeForAsset = useCallback(async (
-    assetId: string,
-    scope: MaterializeScope = "asset",
-    refresh?: () => Promise<void> | void,
-    overrides?: { assetName?: string; timeWindow?: { start: string; end: string } | null; fullRefresh?: boolean }
-  ) => {
-    const entryId = createMaterializeHistoryId();
-    const startedAt = Date.now();
-    // Resolve the asset being built rather than assuming it is the selected one:
-    // the stale-build flow materializes assets other than the active selection,
-    // and the entry must carry the correct name, label and time window.
-    const targetAssetName =
-      overrides?.assetName ??
-      pipeline?.assets.find((candidate) => candidate.id === assetId)?.name ??
-      asset?.name ??
-      null;
-    const entryTimeWindow =
-      overrides?.timeWindow !== undefined ? overrides.timeWindow : selectedExecutionTimeWindow;
-    const actionLabel = overrides?.fullRefresh ? "Full refresh" : labelForMaterializeScope(scope);
-    const materializeLabel = targetAssetName
-      ? `${actionLabel}: ${targetAssetName}`
-      : actionLabel;
-    const scopedMaterializingIds = resolveScopedMaterializingAssetIds(
-      pipeline?.assets ?? [],
-      assetId,
-      scope
-    );
-
-    setAssetMaterializeLoading(true);
-    setMaterializingAssetIds((previous: Set<string>) => new Set([...previous, ...scopedMaterializingIds]));
-    upsertMaterializeEntry(entryId, () => ({
-      ...createMaterializeEntry({
-        id: entryId,
-        kind: "asset",
-        label: materializeLabel,
+  const runMaterializeForAsset = useCallback(
+    async (
+      assetId: string,
+      scope: MaterializeScope = "asset",
+      refresh?: () => Promise<void> | void,
+      overrides?: {
+        assetName?: string;
+        timeWindow?: { start: string; end: string } | null;
+        fullRefresh?: boolean;
+      },
+    ) => {
+      const entryId = createMaterializeHistoryId();
+      const startedAt = Date.now();
+      // Resolve the asset being built rather than assuming it is the selected one:
+      // the stale-build flow materializes assets other than the active selection,
+      // and the entry must carry the correct name, label and time window.
+      const targetAssetName =
+        overrides?.assetName ??
+        pipeline?.assets.find((candidate) => candidate.id === assetId)?.name ??
+        asset?.name ??
+        null;
+      const entryTimeWindow =
+        overrides?.timeWindow !== undefined ? overrides.timeWindow : selectedExecutionTimeWindow;
+      const actionLabel = overrides?.fullRefresh ? "Full refresh" : labelForMaterializeScope(scope);
+      const materializeLabel = targetAssetName ? `${actionLabel}: ${targetAssetName}` : actionLabel;
+      const scopedMaterializingIds = resolveScopedMaterializingAssetIds(
+        pipeline?.assets ?? [],
         assetId,
-        assetName: targetAssetName,
-        pipelineId: pipelineId ?? null,
-        pipelineName: pipeline?.name ?? null,
-        loading: true,
-        createdAt: startedAt,
-        timeWindow: entryTimeWindow,
-      }),
-    }));
-
-    try {
-      const result = await materializeAssetStream(
-        assetId,
-        {
-          onChunk: (chunk) => {
-            upsertMaterializeEntry(entryId, (previous) => ({
-              ...(previous ??
-                createMaterializeEntry({
-                  id: entryId,
-                  kind: "asset",
-                  label: materializeLabel,
-                  assetId,
-                  assetName: targetAssetName,
-                  pipelineId: pipelineId ?? null,
-                  pipelineName: pipeline?.name ?? null,
-                  loading: true,
-                  createdAt: startedAt,
-                  timeWindow: entryTimeWindow,
-                })),
-              output: (previous?.output ?? "") + chunk,
-              loading: true,
-              updatedAt: Date.now(),
-            }));
-          },
-        },
-        {
-          environment: selectedEnvironment,
-          scope,
-          timeWindow: entryTimeWindow ?? undefined,
-          fullRefresh: overrides?.fullRefresh,
-        }
+        scope,
       );
-      upsertMaterializeEntry(entryId, (previous) => ({
-        ...(previous ??
-          createMaterializeEntry({
-            id: entryId,
-            kind: "asset",
-            label: materializeLabel,
-            assetId,
-            assetName: targetAssetName,
-            pipelineId: pipelineId ?? null,
-            pipelineName: pipeline?.name ?? null,
-            loading: true,
-            createdAt: startedAt,
-            timeWindow: entryTimeWindow,
-          })),
-        output: result.output ?? previous?.output ?? "",
-        status: result.status ?? "error",
-        error: result.error ?? "",
-        warnings: result.warnings ?? [],
-        loading: false,
-        updatedAt: Date.now(),
+
+      setAssetMaterializeLoading(true);
+      setMaterializingAssetIds(
+        (previous: Set<string>) => new Set([...previous, ...scopedMaterializingIds]),
+      );
+      upsertMaterializeEntry(entryId, () => ({
+        ...createMaterializeEntry({
+          id: entryId,
+          kind: "asset",
+          label: materializeLabel,
+          assetId,
+          assetName: targetAssetName,
+          pipelineId: pipelineId ?? null,
+          pipelineName: pipeline?.name ?? null,
+          loading: true,
+          createdAt: startedAt,
+          timeWindow: entryTimeWindow,
+        }),
       }));
 
-      const affectedIds = result.changed_asset_ids;
-      if (affectedIds && affectedIds.length > 0) {
-        setChangedAssetIds((prev: Set<string>) => {
-          const next = new Set(prev);
-          for (const id of affectedIds) {
-            next.add(id);
-          }
-          return next;
-        });
-      } else {
-        setChangedAssetIds((prev: Set<string>) => new Set([...prev, assetId]));
-      }
-
-      return result;
-    } catch (error) {
-      upsertMaterializeEntry(entryId, (previous) => ({
-        ...(previous ??
-          createMaterializeEntry({
-            id: entryId,
-            kind: "asset",
-            label: materializeLabel,
-            assetId,
-            assetName: targetAssetName,
-            pipelineId: pipelineId ?? null,
-            pipelineName: pipeline?.name ?? null,
-            loading: true,
-            createdAt: startedAt,
-            timeWindow: entryTimeWindow,
-          })),
-        output:
-          (previous?.output ?? "") +
-          (previous?.output ? "\n" : "") +
-          String(error),
-        status: "error",
-        error: String(error),
-        loading: false,
-        updatedAt: Date.now(),
-      }));
-      return null;
-    } finally {
-      setAssetMaterializeLoading(false);
-      setMaterializingAssetIds((previous: Set<string>) => {
-        const next = new Set(previous);
-        for (const id of scopedMaterializingIds) {
-          next.delete(id);
-        }
-        return next;
-      });
-      if (refresh) {
-        await refresh();
-      }
-    }
-  }, [asset?.name, pipeline, pipelineId, selectedEnvironment, selectedExecutionTimeWindow, setChangedAssetIds, setResultTab]);
-
-  const runMaterializePipeline = useCallback(async (
-    pipelineId: string,
-    refresh?: () => Promise<void> | void,
-    options?: { dryRun?: boolean }
-  ) => {
-    const entryId = createMaterializeHistoryId();
-    const startedAt = Date.now();
-    const pipelineMaterializingIds = pipeline?.assets.map((current) => current.id) ?? [];
-
-    setPipelineMaterializeLoading(true);
-    if (!options?.dryRun) {
-      setMaterializingAssetIds((previous: Set<string>) => new Set([...previous, ...pipelineMaterializingIds]));
-    }
-    upsertMaterializeEntry(entryId, () => ({
-      ...createMaterializeEntry({
-        id: entryId,
-        kind: "pipeline",
-        label: pipeline?.name
-          ? `${options?.dryRun ? "Dry run" : "Pipeline"}: ${pipeline.name}`
-          : options?.dryRun
-            ? "Pipeline dry run"
-            : "Pipeline materialize",
-        pipelineId,
-        pipelineName: pipeline?.name ?? null,
-        loading: true,
-        createdAt: startedAt,
-        timeWindow: selectedExecutionTimeWindow,
-      }),
-    }));
-
-    try {
-      if (!options?.dryRun) {
-        const response = await triggerPipelineRun(pipelineId, {
-          environment: selectedEnvironment,
-          start: selectedExecutionTimeWindow?.start,
-          end: selectedExecutionTimeWindow?.end,
-          trigger: "manual",
-        });
-        const run = response.run;
+      try {
+        const result = await materializeAssetStream(
+          assetId,
+          {
+            onChunk: (chunk) => {
+              upsertMaterializeEntry(entryId, (previous) => ({
+                ...(previous ??
+                  createMaterializeEntry({
+                    id: entryId,
+                    kind: "asset",
+                    label: materializeLabel,
+                    assetId,
+                    assetName: targetAssetName,
+                    pipelineId: pipelineId ?? null,
+                    pipelineName: pipeline?.name ?? null,
+                    loading: true,
+                    createdAt: startedAt,
+                    timeWindow: entryTimeWindow,
+                  })),
+                output: (previous?.output ?? "") + chunk,
+                loading: true,
+                updatedAt: Date.now(),
+              }));
+            },
+          },
+          {
+            environment: selectedEnvironment,
+            scope,
+            timeWindow: entryTimeWindow ?? undefined,
+            fullRefresh: overrides?.fullRefresh,
+          },
+        );
         upsertMaterializeEntry(entryId, (previous) => ({
           ...(previous ??
             createMaterializeEntry({
               id: entryId,
-              kind: "pipeline",
-              label: pipeline?.name ? `Pipeline: ${pipeline.name}` : "Pipeline materialize",
-              pipelineId,
+              kind: "asset",
+              label: materializeLabel,
+              assetId,
+              assetName: targetAssetName,
+              pipelineId: pipelineId ?? null,
               pipelineName: pipeline?.name ?? null,
-              runId: run.id,
               loading: true,
               createdAt: startedAt,
-              timeWindow: selectedExecutionTimeWindow,
+              timeWindow: entryTimeWindow,
             })),
-          runId: run.id,
-          output: `Queued manual River run ${run.id} for ${run.pipeline || pipeline?.name || "pipeline"}.`,
-          status: null,
-          error: "",
-          loading: true,
+          output: result.output ?? previous?.output ?? "",
+          status: result.status ?? "error",
+          error: result.error ?? "",
+          warnings: result.warnings ?? [],
+          loading: false,
           updatedAt: Date.now(),
         }));
-        return { status: "ok", output: "", error: "", changed_asset_ids: [] };
-      }
 
-      const result = await materializePipelineStream(pipelineId, {
-        onChunk: (chunk) => {
+        const affectedIds = result.changed_asset_ids;
+        if (affectedIds && affectedIds.length > 0) {
+          setChangedAssetIds((prev: Set<string>) => {
+            const next = new Set(prev);
+            for (const id of affectedIds) {
+              next.add(id);
+            }
+            return next;
+          });
+        } else {
+          setChangedAssetIds((prev: Set<string>) => new Set([...prev, assetId]));
+        }
+
+        return result;
+      } catch (error) {
+        upsertMaterializeEntry(entryId, (previous) => ({
+          ...(previous ??
+            createMaterializeEntry({
+              id: entryId,
+              kind: "asset",
+              label: materializeLabel,
+              assetId,
+              assetName: targetAssetName,
+              pipelineId: pipelineId ?? null,
+              pipelineName: pipeline?.name ?? null,
+              loading: true,
+              createdAt: startedAt,
+              timeWindow: entryTimeWindow,
+            })),
+          output: (previous?.output ?? "") + (previous?.output ? "\n" : "") + String(error),
+          status: "error",
+          error: String(error),
+          loading: false,
+          updatedAt: Date.now(),
+        }));
+        return null;
+      } finally {
+        setAssetMaterializeLoading(false);
+        setMaterializingAssetIds((previous: Set<string>) => {
+          const next = new Set(previous);
+          for (const id of scopedMaterializingIds) {
+            next.delete(id);
+          }
+          return next;
+        });
+        if (refresh) {
+          await refresh();
+        }
+      }
+    },
+    [
+      asset?.name,
+      pipeline,
+      pipelineId,
+      selectedEnvironment,
+      selectedExecutionTimeWindow,
+      setChangedAssetIds,
+      setResultTab,
+    ],
+  );
+
+  const runMaterializePipeline = useCallback(
+    async (
+      pipelineId: string,
+      refresh?: () => Promise<void> | void,
+      options?: { dryRun?: boolean },
+    ) => {
+      const entryId = createMaterializeHistoryId();
+      const startedAt = Date.now();
+      const pipelineMaterializingIds = pipeline?.assets.map((current) => current.id) ?? [];
+
+      setPipelineMaterializeLoading(true);
+      if (!options?.dryRun) {
+        setMaterializingAssetIds(
+          (previous: Set<string>) => new Set([...previous, ...pipelineMaterializingIds]),
+        );
+      }
+      upsertMaterializeEntry(entryId, () => ({
+        ...createMaterializeEntry({
+          id: entryId,
+          kind: "pipeline",
+          label: pipeline?.name
+            ? `${options?.dryRun ? "Dry run" : "Pipeline"}: ${pipeline.name}`
+            : options?.dryRun
+              ? "Pipeline dry run"
+              : "Pipeline materialize",
+          pipelineId,
+          pipelineName: pipeline?.name ?? null,
+          loading: true,
+          createdAt: startedAt,
+          timeWindow: selectedExecutionTimeWindow,
+        }),
+      }));
+
+      try {
+        if (!options?.dryRun) {
+          const response = await triggerPipelineRun(pipelineId, {
+            environment: selectedEnvironment,
+            start: selectedExecutionTimeWindow?.start,
+            end: selectedExecutionTimeWindow?.end,
+            trigger: "manual",
+          });
+          const run = response.run;
           upsertMaterializeEntry(entryId, (previous) => ({
             ...(previous ??
               createMaterializeEntry({
                 id: entryId,
                 kind: "pipeline",
-                label: pipeline?.name
-                  ? `${options?.dryRun ? "Dry run" : "Pipeline"}: ${pipeline.name}`
-                  : options?.dryRun
-                    ? "Pipeline dry run"
-                    : "Pipeline materialize",
+                label: pipeline?.name ? `Pipeline: ${pipeline.name}` : "Pipeline materialize",
                 pipelineId,
                 pipelineName: pipeline?.name ?? null,
+                runId: run.id,
                 loading: true,
                 createdAt: startedAt,
                 timeWindow: selectedExecutionTimeWindow,
               })),
-            output: (previous?.output ?? "") + chunk,
+            runId: run.id,
+            output: `Queued manual River run ${run.id} for ${run.pipeline || pipeline?.name || "pipeline"}.`,
+            status: null,
+            error: "",
             loading: true,
             updatedAt: Date.now(),
           }));
-        },
-      }, { environment: selectedEnvironment, dryRun: options?.dryRun, timeWindow: selectedExecutionTimeWindow ?? undefined });
+          return { status: "ok", output: "", error: "", changed_asset_ids: [] };
+        }
 
-      upsertMaterializeEntry(entryId, (previous) => ({
-        ...(previous ??
-          createMaterializeEntry({
-            id: entryId,
-            kind: "pipeline",
-            label: pipeline?.name
-              ? `${options?.dryRun ? "Dry run" : "Pipeline"}: ${pipeline.name}`
-              : options?.dryRun
-                ? "Pipeline dry run"
-                : "Pipeline materialize",
-            pipelineId,
-            pipelineName: pipeline?.name ?? null,
-            loading: true,
-            createdAt: startedAt,
-            timeWindow: selectedExecutionTimeWindow,
-          })),
-        output: result.output ?? previous?.output ?? "",
-        status: result.status ?? "error",
-        error: result.error ?? "",
-        warnings: result.warnings ?? [],
-        loading: false,
-        updatedAt: Date.now(),
-      }));
+        const result = await materializePipelineStream(
+          pipelineId,
+          {
+            onChunk: (chunk) => {
+              upsertMaterializeEntry(entryId, (previous) => ({
+                ...(previous ??
+                  createMaterializeEntry({
+                    id: entryId,
+                    kind: "pipeline",
+                    label: pipeline?.name
+                      ? `${options?.dryRun ? "Dry run" : "Pipeline"}: ${pipeline.name}`
+                      : options?.dryRun
+                        ? "Pipeline dry run"
+                        : "Pipeline materialize",
+                    pipelineId,
+                    pipelineName: pipeline?.name ?? null,
+                    loading: true,
+                    createdAt: startedAt,
+                    timeWindow: selectedExecutionTimeWindow,
+                  })),
+                output: (previous?.output ?? "") + chunk,
+                loading: true,
+                updatedAt: Date.now(),
+              }));
+            },
+          },
+          {
+            environment: selectedEnvironment,
+            dryRun: options?.dryRun,
+            timeWindow: selectedExecutionTimeWindow ?? undefined,
+          },
+        );
 
-      const affectedIds = result.changed_asset_ids ?? [];
-      if (affectedIds.length > 0) {
-        setChangedAssetIds((prev: Set<string>) => {
-          const next = new Set(prev);
-          for (const id of affectedIds) {
-            next.add(id);
+        upsertMaterializeEntry(entryId, (previous) => ({
+          ...(previous ??
+            createMaterializeEntry({
+              id: entryId,
+              kind: "pipeline",
+              label: pipeline?.name
+                ? `${options?.dryRun ? "Dry run" : "Pipeline"}: ${pipeline.name}`
+                : options?.dryRun
+                  ? "Pipeline dry run"
+                  : "Pipeline materialize",
+              pipelineId,
+              pipelineName: pipeline?.name ?? null,
+              loading: true,
+              createdAt: startedAt,
+              timeWindow: selectedExecutionTimeWindow,
+            })),
+          output: result.output ?? previous?.output ?? "",
+          status: result.status ?? "error",
+          error: result.error ?? "",
+          warnings: result.warnings ?? [],
+          loading: false,
+          updatedAt: Date.now(),
+        }));
+
+        const affectedIds = result.changed_asset_ids ?? [];
+        if (affectedIds.length > 0) {
+          setChangedAssetIds((prev: Set<string>) => {
+            const next = new Set(prev);
+            for (const id of affectedIds) {
+              next.add(id);
+            }
+            return next;
+          });
+        }
+
+        return result;
+      } catch (error) {
+        upsertMaterializeEntry(entryId, (previous) => ({
+          ...(previous ??
+            createMaterializeEntry({
+              id: entryId,
+              kind: "pipeline",
+              label: pipeline?.name
+                ? `${options?.dryRun ? "Dry run" : "Pipeline"}: ${pipeline.name}`
+                : options?.dryRun
+                  ? "Pipeline dry run"
+                  : "Pipeline materialize",
+              pipelineId,
+              pipelineName: pipeline?.name ?? null,
+              loading: true,
+              createdAt: startedAt,
+              timeWindow: selectedExecutionTimeWindow,
+            })),
+          output: (previous?.output ?? "") + (previous?.output ? "\n" : "") + String(error),
+          status: "error",
+          error: String(error),
+          loading: false,
+          updatedAt: Date.now(),
+        }));
+        return null;
+      } finally {
+        setPipelineMaterializeLoading(false);
+        setMaterializingAssetIds((previous: Set<string>) => {
+          const next = new Set(previous);
+          for (const id of pipelineMaterializingIds) {
+            next.delete(id);
           }
           return next;
         });
-      }
-
-      return result;
-    } catch (error) {
-      upsertMaterializeEntry(entryId, (previous) => ({
-        ...(previous ??
-          createMaterializeEntry({
-            id: entryId,
-            kind: "pipeline",
-            label: pipeline?.name
-              ? `${options?.dryRun ? "Dry run" : "Pipeline"}: ${pipeline.name}`
-              : options?.dryRun
-                ? "Pipeline dry run"
-                : "Pipeline materialize",
-            pipelineId,
-            pipelineName: pipeline?.name ?? null,
-            loading: true,
-            createdAt: startedAt,
-            timeWindow: selectedExecutionTimeWindow,
-          })),
-        output:
-          (previous?.output ?? "") +
-          (previous?.output ? "\n" : "") +
-          String(error),
-        status: "error",
-        error: String(error),
-        loading: false,
-        updatedAt: Date.now(),
-      }));
-      return null;
-    } finally {
-      setPipelineMaterializeLoading(false);
-      setMaterializingAssetIds((previous: Set<string>) => {
-        const next = new Set(previous);
-        for (const id of pipelineMaterializingIds) {
-          next.delete(id);
+        if (!options?.dryRun && refresh) {
+          await refresh();
         }
-        return next;
-      });
-      if (!options?.dryRun && refresh) {
-        await refresh();
       }
-    }
-  }, [pipeline, selectedEnvironment, selectedExecutionTimeWindow, setChangedAssetIds]);
+    },
+    [pipeline, selectedEnvironment, selectedExecutionTimeWindow, setChangedAssetIds],
+  );
 
   // runBuildStale delegates the whole "build stale assets" operation to the
   // server: one streamed run in dependency order, one history entry, one log.
-  const runBuildStale = useCallback(async (
-    targetPipelineId: string,
-    options?: {
-      assetIds?: string[];
-      onAssetEvent?: (event: StreamAssetEvent) => void;
-    }
-  ) => {
-    const entryId = createMaterializeHistoryId();
-    const startedAt = Date.now();
-    const label = pipeline?.name ? `Build stale: ${pipeline.name}` : "Build stale assets";
-    const staleMaterializingIds = options?.assetIds ?? [];
-    const baseEntry = () =>
-      createMaterializeEntry({
-        id: entryId,
-        kind: "batch",
-        label,
-        pipelineId: targetPipelineId,
-        pipelineName: pipeline?.name ?? null,
-        loading: true,
-        createdAt: startedAt,
-        timeWindow: selectedExecutionTimeWindow,
-      });
+  const runBuildStale = useCallback(
+    async (
+      targetPipelineId: string,
+      options?: {
+        assetIds?: string[];
+        onAssetEvent?: (event: StreamAssetEvent) => void;
+      },
+    ) => {
+      const entryId = createMaterializeHistoryId();
+      const startedAt = Date.now();
+      const label = pipeline?.name ? `Build stale: ${pipeline.name}` : "Build stale assets";
+      const staleMaterializingIds = options?.assetIds ?? [];
+      const baseEntry = () =>
+        createMaterializeEntry({
+          id: entryId,
+          kind: "batch",
+          label,
+          pipelineId: targetPipelineId,
+          pipelineName: pipeline?.name ?? null,
+          loading: true,
+          createdAt: startedAt,
+          timeWindow: selectedExecutionTimeWindow,
+        });
 
-    setPipelineMaterializeLoading(true);
-    setMaterializingAssetIds((previous: Set<string>) => new Set([...previous, ...staleMaterializingIds]));
-    upsertMaterializeEntry(entryId, () => ({ ...baseEntry() }));
+      setPipelineMaterializeLoading(true);
+      setMaterializingAssetIds(
+        (previous: Set<string>) => new Set([...previous, ...staleMaterializingIds]),
+      );
+      upsertMaterializeEntry(entryId, () => ({ ...baseEntry() }));
 
-    try {
-      const result = await buildStalePipelineStream(targetPipelineId, {
-        onChunk: (chunk) => {
-          upsertMaterializeEntry(entryId, (previous) => ({
-            ...(previous ?? baseEntry()),
-            output: (previous?.output ?? "") + chunk,
-            loading: true,
-            updatedAt: Date.now(),
-          }));
-        },
-        onAssetEvent: options?.onAssetEvent,
-      }, {
-        environment: selectedEnvironment,
-        start: selectedExecutionTimeWindow?.start,
-        end: selectedExecutionTimeWindow?.end,
-      });
+      try {
+        const result = await buildStalePipelineStream(
+          targetPipelineId,
+          {
+            onChunk: (chunk) => {
+              upsertMaterializeEntry(entryId, (previous) => ({
+                ...(previous ?? baseEntry()),
+                output: (previous?.output ?? "") + chunk,
+                loading: true,
+                updatedAt: Date.now(),
+              }));
+            },
+            onAssetEvent: options?.onAssetEvent,
+          },
+          {
+            environment: selectedEnvironment,
+            start: selectedExecutionTimeWindow?.start,
+            end: selectedExecutionTimeWindow?.end,
+          },
+        );
 
-      upsertMaterializeEntry(entryId, (previous) => ({
-        ...(previous ?? baseEntry()),
-        output: result.output ?? previous?.output ?? "",
-        status: result.status ?? "error",
-        error: result.error ?? "",
-        warnings: result.warnings ?? [],
-        loading: false,
-        updatedAt: Date.now(),
-      }));
+        upsertMaterializeEntry(entryId, (previous) => ({
+          ...(previous ?? baseEntry()),
+          output: result.output ?? previous?.output ?? "",
+          status: result.status ?? "error",
+          error: result.error ?? "",
+          warnings: result.warnings ?? [],
+          loading: false,
+          updatedAt: Date.now(),
+        }));
 
-      const affectedIds = result.changed_asset_ids ?? [];
-      if (affectedIds.length > 0) {
-        setChangedAssetIds((prev: Set<string>) => {
-          const next = new Set(prev);
-          for (const id of affectedIds) {
-            next.add(id);
+        const affectedIds = result.changed_asset_ids ?? [];
+        if (affectedIds.length > 0) {
+          setChangedAssetIds((prev: Set<string>) => {
+            const next = new Set(prev);
+            for (const id of affectedIds) {
+              next.add(id);
+            }
+            return next;
+          });
+        }
+
+        return result;
+      } catch (error) {
+        upsertMaterializeEntry(entryId, (previous) => ({
+          ...(previous ?? baseEntry()),
+          output: (previous?.output ?? "") + (previous?.output ? "\n" : "") + String(error),
+          status: "error",
+          error: String(error),
+          loading: false,
+          updatedAt: Date.now(),
+        }));
+        return null;
+      } finally {
+        setPipelineMaterializeLoading(false);
+        setMaterializingAssetIds((previous: Set<string>) => {
+          const next = new Set(previous);
+          for (const id of staleMaterializingIds) {
+            next.delete(id);
           }
           return next;
         });
       }
-
-      return result;
-    } catch (error) {
-      upsertMaterializeEntry(entryId, (previous) => ({
-        ...(previous ?? baseEntry()),
-        output:
-          (previous?.output ?? "") +
-          (previous?.output ? "\n" : "") +
-          String(error),
-        status: "error",
-        error: String(error),
-        loading: false,
-        updatedAt: Date.now(),
-      }));
-      return null;
-    } finally {
-      setPipelineMaterializeLoading(false);
-      setMaterializingAssetIds((previous: Set<string>) => {
-        const next = new Set(previous);
-        for (const id of staleMaterializingIds) {
-          next.delete(id);
-        }
-        return next;
-      });
-    }
-  }, [pipeline, selectedEnvironment, selectedExecutionTimeWindow, setChangedAssetIds]);
+    },
+    [pipeline, selectedEnvironment, selectedExecutionTimeWindow, setChangedAssetIds],
+  );
 
   const setMaterializeBatchResult = (
     output: string,
     status: "ok" | "error",
-    errorMessage: string
+    errorMessage: string,
   ) => {
     const entryId = createMaterializeHistoryId();
     const now = Date.now();
@@ -768,17 +794,17 @@ export function useAssetResults() {
   const clearResultsAfterDelete = () => {
     setResults((previous) => {
       const remainingHistory = previous.materializeHistory.filter(
-        (entry) => entry.assetId !== selectedAssetId
+        (entry) => entry.assetId !== selectedAssetId,
       );
 
       return {
         ...previous,
         materializeHistory: remainingHistory,
         selectedMaterializeEntryId: remainingHistory.some(
-          (entry) => entry.id === previous.selectedMaterializeEntryId
+          (entry) => entry.id === previous.selectedMaterializeEntryId,
         )
           ? previous.selectedMaterializeEntryId
-          : remainingHistory[0]?.id ?? null,
+          : (remainingHistory[0]?.id ?? null),
       };
     });
   };

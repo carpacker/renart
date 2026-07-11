@@ -29,20 +29,31 @@ test.describe("first-run onboarding", () => {
     await expect(page.getByRole("button", { name: /Start empty/ })).toBeVisible();
   });
 
-  test("creates an empty project in place with git init and initial commit", async ({ liveApp, page }) => {
+  test("creates an empty project in place with git init and initial commit", async ({
+    liveApp,
+    page,
+  }) => {
     await page.goto(`${liveApp.baseURL}/welcome`);
 
     await page.getByRole("button", { name: /Start empty/ }).click();
     // In-place setup: the target step shows the workspace path, no name input.
-    await expect(page.getByText("Files are created in the workspace", { exact: false })).toBeVisible();
+    await expect(
+      page.getByText("Files are created in the workspace", { exact: false }),
+    ).toBeVisible();
     await page.getByRole("button", { name: "Create project" }).click();
 
-    await expect(page.getByRole("heading", { name: "You're all set" })).toBeVisible({ timeout: 30000 });
+    await expect(page.getByRole("heading", { name: "You're all set" })).toBeVisible({
+      timeout: 30000,
+    });
 
     expect(existsSync(join(liveApp.workspaceDir, "analytics", "pipeline.yml"))).toBe(true);
     expect(existsSync(join(liveApp.workspaceDir, "analytics", "assets", "example.sql"))).toBe(true);
-    expect(readFileSync(join(liveApp.workspaceDir, ".gitignore"), "utf8")).toContain("duckdb-files/");
-    expect(readFileSync(join(liveApp.workspaceDir, ".bruin.yml"), "utf8")).toContain("duckdb-default");
+    expect(readFileSync(join(liveApp.workspaceDir, ".gitignore"), "utf8")).toContain(
+      "duckdb-files/",
+    );
+    expect(readFileSync(join(liveApp.workspaceDir, ".bruin.yml"), "utf8")).toContain(
+      "duckdb-default",
+    );
     expect(gitLog(liveApp.workspaceDir)).toContain("Initialize renart project");
 
     await assertRegisteredProject(liveApp, liveApp.workspaceDir);
@@ -60,8 +71,12 @@ test.describe("first-run onboarding", () => {
 
     // The creating checklist hands over to the bootstrap run automatically;
     // "You're all set" only renders after the run stream finished with ok.
-    await expect(page.getByRole("heading", { name: "Running your pipeline" })).toBeVisible({ timeout: 30000 });
-    await expect(page.getByRole("heading", { name: "You're all set" })).toBeVisible({ timeout: 180000 });
+    await expect(page.getByRole("heading", { name: "Running your pipeline" })).toBeVisible({
+      timeout: 30000,
+    });
+    await expect(page.getByRole("heading", { name: "You're all set" })).toBeVisible({
+      timeout: 180000,
+    });
 
     for (const relPath of [
       "retail/pipeline.yml",
@@ -95,7 +110,9 @@ test.describe("first-run onboarding", () => {
     await page.getByLabel("Location (optional)").fill(parentDir);
     await page.getByRole("button", { name: "Create project" }).click();
 
-    await expect(page.getByRole("heading", { name: "You're all set" })).toBeVisible({ timeout: 30000 });
+    await expect(page.getByRole("heading", { name: "You're all set" })).toBeVisible({
+      timeout: 30000,
+    });
 
     const projectDir = join(parentDir, "my-new-project");
     expect(existsSync(join(projectDir, "analytics", "pipeline.yml"))).toBe(true);
@@ -110,7 +127,11 @@ test.describe("first-run onboarding", () => {
 test.describe("import onboarding", () => {
   test.use({ fixtureName: "empty-workspace-postgres" });
 
-  test("imports postgres tables as source assets through the welcome flow", async ({ liveApp, livePostgres, page }) => {
+  test("imports postgres tables as source assets through the welcome flow", async ({
+    liveApp,
+    livePostgres,
+    page,
+  }) => {
     test.skip(!livePostgres, "Postgres via docker is required for the import flow.");
     const postgres = livePostgres!;
 
@@ -127,12 +148,16 @@ test.describe("import onboarding", () => {
     await page.getByLabel(/^database/).fill(postgres.database);
     await page.getByRole("button", { name: "Connect" }).click();
 
-    await expect(page.getByRole("heading", { name: "Pick tables to import" })).toBeVisible({ timeout: 60000 });
+    await expect(page.getByRole("heading", { name: "Pick tables to import" })).toBeVisible({
+      timeout: 60000,
+    });
     await page.getByText(`${postgres.database}.analytics.orders`).click();
     await page.getByText(`${postgres.database}.analytics.customers`).click();
     await page.getByRole("button", { name: "Import 2 tables" }).click();
 
-    await expect(page.getByRole("heading", { name: "You're all set" })).toBeVisible({ timeout: 60000 });
+    await expect(page.getByRole("heading", { name: "You're all set" })).toBeVisible({
+      timeout: 60000,
+    });
     await expect(page.getByText("Imported 2 source assets", { exact: false })).toBeVisible();
 
     const assetsDir = join(liveApp.workspaceDir, "analytics", "assets");

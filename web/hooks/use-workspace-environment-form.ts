@@ -7,10 +7,7 @@ import {
   getSelectedEnvironmentNameFromResponse,
   trimOptionalValue,
 } from "@/lib/settings-form-utils";
-import {
-  WorkspaceConfigEnvironment,
-  WorkspaceConfigResponse,
-} from "@/lib/types";
+import { WorkspaceConfigEnvironment, WorkspaceConfigResponse } from "@/lib/types";
 
 export type EnvironmentMode = "edit" | "create" | "clone";
 
@@ -67,7 +64,7 @@ export function useWorkspaceEnvironmentForm({
 
   const activeEnvironment = useMemo(
     () => findEnvironmentByName(environments, selectedEnvironmentName),
-    [environments, selectedEnvironmentName]
+    [environments, selectedEnvironmentName],
   );
 
   useEffect(() => {
@@ -120,7 +117,7 @@ export function useWorkspaceEnvironmentForm({
       });
       onModeChange("edit");
       onSelectedEnvironmentChange(
-        getSelectedEnvironmentNameFromResponse(response, environmentForm.name.trim())
+        getSelectedEnvironmentNameFromResponse(response, environmentForm.name.trim()),
       );
       return;
     }
@@ -134,7 +131,7 @@ export function useWorkspaceEnvironmentForm({
       });
       onModeChange("edit");
       onSelectedEnvironmentChange(
-        getSelectedEnvironmentNameFromResponse(response, environmentForm.name.trim())
+        getSelectedEnvironmentNameFromResponse(response, environmentForm.name.trim()),
       );
       return;
     }
@@ -152,8 +149,8 @@ export function useWorkspaceEnvironmentForm({
     onSelectedEnvironmentChange(
       getSelectedEnvironmentNameFromResponse(
         response,
-        environmentForm.name.trim() || activeEnvironment.name
-      )
+        environmentForm.name.trim() || activeEnvironment.name,
+      ),
     );
   };
 

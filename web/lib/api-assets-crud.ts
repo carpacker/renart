@@ -19,12 +19,12 @@ export async function createAsset(
     source_asset_id?: string;
     seed_file_name?: string;
     seed_file_content?: string;
-  }
+  },
 ) {
   return fetchJSONWithBody<{ status: string; asset_id?: string; asset_path?: string }>(
     `/api/pipelines/${pipelineId}/assets`,
     "POST",
-    input
+    input,
   );
 }
 
@@ -44,30 +44,25 @@ export async function updateAsset(
     meta?: Record<string, string>;
     upstreams?: string[];
     parameters?: Record<string, string>;
-  }
+  },
 ) {
   return fetchJSONWithBody<Record<string, string>>(
     `/api/pipelines/${pipelineId}/assets/${assetId}`,
     "PUT",
-    input
+    input,
   );
 }
 
 export async function deleteAsset(pipelineId: string, assetId: string) {
-  return fetchJSON<Record<string, string>>(
-    `/api/pipelines/${pipelineId}/assets/${assetId}`,
-    {
-      method: "DELETE",
-    }
-  );
+  return fetchJSON<Record<string, string>>(`/api/pipelines/${pipelineId}/assets/${assetId}`, {
+    method: "DELETE",
+  });
 }
 
 export async function formatSQLAsset(assetId: string, content: string) {
-  return fetchJSONWithBody<FormatSQLAssetResponse>(
-    `/api/assets/${assetId}/format-sql`,
-    "POST",
-    { content },
-  );
+  return fetchJSONWithBody<FormatSQLAssetResponse>(`/api/assets/${assetId}/format-sql`, "POST", {
+    content,
+  });
 }
 
 export async function formatPythonAsset(assetId: string, content: string) {
@@ -95,18 +90,12 @@ export async function getAssetPythonDeps(assetId: string, signal?: AbortSignal) 
 
 /** Add a package to the Python asset's pyproject.toml; returns refreshed deps. */
 export async function addAssetPythonDependency(assetId: string, pkg: string) {
-  return fetchJSONWithBody<AssetPythonDeps>(
-    `/api/assets/${assetId}/python-deps`,
-    "POST",
-    { package: pkg },
-  );
+  return fetchJSONWithBody<AssetPythonDeps>(`/api/assets/${assetId}/python-deps`, "POST", {
+    package: pkg,
+  });
 }
 
-export async function getPythonDiagnostics(
-  assetId: string,
-  content: string,
-  signal?: AbortSignal,
-) {
+export async function getPythonDiagnostics(assetId: string, content: string, signal?: AbortSignal) {
   return fetchJSONWithBody<PythonDiagnosticsResponse>(
     `/api/assets/${assetId}/python-diagnostics`,
     "POST",

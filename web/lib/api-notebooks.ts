@@ -68,14 +68,20 @@ export type NotebookRuntimeEvent = {
 };
 
 export async function getNotebookRuntime(notebookId: string) {
-  return fetchJSON<NotebookRuntimeSnapshot>(`/api/notebooks/${notebookId}/runtime`, { cache: "no-store" });
+  return fetchJSON<NotebookRuntimeSnapshot>(`/api/notebooks/${notebookId}/runtime`, {
+    cache: "no-store",
+  });
 }
 
 export async function setNotebookSettings(
   notebookId: string,
-  input: { auto_recompute: boolean; environment?: string }
+  input: { auto_recompute: boolean; environment?: string },
 ) {
-  return fetchJSONWithBody<{ status: string }>(`/api/notebooks/${notebookId}/settings`, "PUT", input);
+  return fetchJSONWithBody<{ status: string }>(
+    `/api/notebooks/${notebookId}/settings`,
+    "PUT",
+    input,
+  );
 }
 
 export async function cancelNotebookRun(notebookId: string) {
@@ -88,7 +94,9 @@ type NotebookEnvelope = {
 };
 
 export async function getNotebook(notebookId: string) {
-  const payload = await fetchJSON<NotebookEnvelope>(`/api/notebooks/${notebookId}`, { cache: "no-store" });
+  const payload = await fetchJSON<NotebookEnvelope>(`/api/notebooks/${notebookId}`, {
+    cache: "no-store",
+  });
   return payload.notebook;
 }
 
@@ -102,14 +110,20 @@ export async function deleteNotebook(notebookId: string) {
 }
 
 export async function closeNotebookSession(notebookId: string) {
-  return fetchJSON<{ status: string }>(`/api/notebooks/${notebookId}/session`, { method: "DELETE" });
+  return fetchJSON<{ status: string }>(`/api/notebooks/${notebookId}/session`, {
+    method: "DELETE",
+  });
 }
 
 export async function createNotebookCell(
   notebookId: string,
-  input: { name?: string; language?: "sql" | "python" } = {}
+  input: { name?: string; language?: "sql" | "python" } = {},
 ) {
-  const payload = await fetchJSONWithBody<NotebookEnvelope>(`/api/notebooks/${notebookId}/cells`, "POST", input);
+  const payload = await fetchJSONWithBody<NotebookEnvelope>(
+    `/api/notebooks/${notebookId}/cells`,
+    "POST",
+    input,
+  );
   return payload.notebook;
 }
 
@@ -117,7 +131,7 @@ export async function updateNotebookCell(notebookId: string, cellId: string, con
   const payload = await fetchJSONWithBody<NotebookEnvelope>(
     `/api/notebooks/${notebookId}/cells/${cellId}`,
     "PUT",
-    { content }
+    { content },
   );
   return payload.notebook;
 }
@@ -126,15 +140,18 @@ export async function renameNotebookCell(notebookId: string, cellId: string, nam
   const payload = await fetchJSONWithBody<NotebookEnvelope>(
     `/api/notebooks/${notebookId}/cells/${cellId}/rename`,
     "POST",
-    { name }
+    { name },
   );
   return payload.notebook;
 }
 
 export async function deleteNotebookCell(notebookId: string, cellId: string) {
-  const payload = await fetchJSON<NotebookEnvelope>(`/api/notebooks/${notebookId}/cells/${cellId}`, {
-    method: "DELETE",
-  });
+  const payload = await fetchJSON<NotebookEnvelope>(
+    `/api/notebooks/${notebookId}/cells/${cellId}`,
+    {
+      method: "DELETE",
+    },
+  );
   return payload.notebook;
 }
 
@@ -142,7 +159,7 @@ export async function updateNotebookBlocks(notebookId: string, blocks: WebNotebo
   const payload = await fetchJSONWithBody<NotebookEnvelope>(
     `/api/notebooks/${notebookId}/blocks`,
     "PUT",
-    { blocks }
+    { blocks },
   );
   return payload.notebook;
 }
@@ -151,7 +168,7 @@ export async function updateNotebookDependencies(notebookId: string, dependencie
   const payload = await fetchJSONWithBody<NotebookEnvelope>(
     `/api/notebooks/${notebookId}/dependencies`,
     "PUT",
-    { content: dependencies.join("\n") }
+    { content: dependencies.join("\n") },
   );
   return payload.notebook;
 }
@@ -173,12 +190,12 @@ export async function promoteNotebookCell(
     target_name: string;
     include_upstream?: boolean;
     include_downstream?: boolean;
-  }
+  },
 ) {
   return fetchJSONWithBody<PromoteCellResponse>(
     `/api/notebooks/${notebookId}/cells/${cellId}/promote`,
     "POST",
-    input
+    input,
   );
 }
 
@@ -193,7 +210,7 @@ export async function runNotebook(
     start_date?: string;
     end_date?: string;
   },
-  signal?: AbortSignal
+  signal?: AbortSignal,
 ) {
   return fetchJSONWithBody<RunNotebookResponse>(`/api/notebooks/${notebookId}/run`, "POST", input, {
     signal,

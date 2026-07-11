@@ -1,6 +1,25 @@
 import { ArrowUpRight, Play, Plus, Trash2 } from "lucide-react";
-import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent } from "react";
-import { Background, Controls, Handle, Position, ReactFlow, useReactFlow, type Edge, type Node, type NodeProps, type NodeTypes, type ReactFlowInstance } from "reactflow";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type MouseEvent as ReactMouseEvent,
+} from "react";
+import {
+  Background,
+  Controls,
+  Handle,
+  Position,
+  ReactFlow,
+  useReactFlow,
+  type Edge,
+  type Node,
+  type NodeProps,
+  type NodeTypes,
+  type ReactFlowInstance,
+} from "reactflow";
 import "reactflow/dist/style.css";
 
 import { Button } from "@/components/ui/button";
@@ -76,7 +95,9 @@ function PrefixGroupFlowNode({ data }: NodeProps<PrefixGroupNodeData>) {
     >
       <div className="absolute left-3 top-2.5 flex items-center gap-2">
         <span className="font-mono text-xs font-semibold">{data.label}</span>
-        <span className="rounded-full bg-primary/10 px-1.5 text-[10px] text-primary">{data.count}</span>
+        <span className="rounded-full bg-primary/10 px-1.5 text-[10px] text-primary">
+          {data.count}
+        </span>
       </div>
     </div>
   );
@@ -106,7 +127,9 @@ function AssetFlowNode({ data }: NodeProps<AssetNodeData>) {
         asset={displayAsset}
         selected={data.selected}
         actions={actions}
-        onOpenConnection={data.onOpenConnection ? () => data.onOpenConnection?.(data.asset.id) : undefined}
+        onOpenConnection={
+          data.onOpenConnection ? () => data.onOpenConnection?.(data.asset.id) : undefined
+        }
       />
     </div>
   );
@@ -118,9 +141,15 @@ function AssetFlowNode({ data }: NodeProps<AssetNodeData>) {
         <ContextMenu>
           <ContextMenuTrigger>{card}</ContextMenuTrigger>
           <ContextMenuContent>
-            <ContextMenuItem disabled className="font-mono text-xs">{assetDisplayName(data.asset)}</ContextMenuItem>
+            <ContextMenuItem disabled className="font-mono text-xs">
+              {assetDisplayName(data.asset)}
+            </ContextMenuItem>
             <ContextMenuSeparator />
-            <AssetNodeMenuItems actions={actions} ItemComponent={ContextMenuItem} SeparatorComponent={ContextMenuSeparator} />
+            <AssetNodeMenuItems
+              actions={actions}
+              ItemComponent={ContextMenuItem}
+              SeparatorComponent={ContextMenuSeparator}
+            />
           </ContextMenuContent>
         </ContextMenu>
       ) : (
@@ -172,7 +201,10 @@ function ViewportFocus({ assetId, nodes }: { assetId?: string; nodes: Node[] }) 
     lastFocused.current = assetId;
     const width = node.width ?? 232;
     const height = node.height ?? 120;
-    setCenter(node.position.x + width / 2, node.position.y + height / 2, { zoom: 1, duration: 600 });
+    setCenter(node.position.x + width / 2, node.position.y + height / 2, {
+      zoom: 1,
+      duration: 600,
+    });
   }, [assetId, nodes, setCenter]);
 
   return null;
@@ -190,7 +222,7 @@ function derivedEdges(assets: AppLineageCanvasAsset[], links?: AppLineageLayoutE
     (asset.upstreams ?? [])
       .map((upstream) => assetByName.get(upstream) ?? assetById.get(upstream))
       .filter((source): source is AppLineageCanvasAsset => Boolean(source))
-      .map((source) => ({ source: source.id, target: asset.id }))
+      .map((source) => ({ source: source.id, target: asset.id })),
   );
 }
 
@@ -261,7 +293,7 @@ export function AppLineageCanvas({
   const [paneMenu, setPaneMenu] = useState<{ x: number; y: number; prefix?: string } | null>(null);
 
   useEffect(() => {
-    setLineageAssetId((current) => current && current !== selectedAssetId ? null : current);
+    setLineageAssetId((current) => (current && current !== selectedAssetId ? null : current));
   }, [selectedAssetId]);
 
   // Parents (e.g. the split-view build page) re-render and hand us fresh
@@ -269,24 +301,46 @@ export function AppLineageCanvas({
   // callbacks through a ref and depend only on their *presence* so the layout
   // memo below recomputes when the graph actually changes — not on every
   // keystroke, which otherwise re-renders every React Flow node and flickers.
-  const callbacksRef = useRef({ selectedAssetId, onAssetSelect, onCreateDownstream, onRunAsset, onDeleteAsset, onGoToAsset, onAssetConnectionClick });
-  callbacksRef.current = { selectedAssetId, onAssetSelect, onCreateDownstream, onRunAsset, onDeleteAsset, onGoToAsset, onAssetConnectionClick };
+  const callbacksRef = useRef({
+    selectedAssetId,
+    onAssetSelect,
+    onCreateDownstream,
+    onRunAsset,
+    onDeleteAsset,
+    onGoToAsset,
+    onAssetConnectionClick,
+  });
+  callbacksRef.current = {
+    selectedAssetId,
+    onAssetSelect,
+    onCreateDownstream,
+    onRunAsset,
+    onDeleteAsset,
+    onGoToAsset,
+    onAssetConnectionClick,
+  };
 
   const handleSelect = useCallback((assetId: string) => {
     const { onAssetSelect: select, selectedAssetId: currentSelected } = callbacksRef.current;
     if (!select) {
-      setLineageAssetId((current) => current === assetId ? null : assetId);
+      setLineageAssetId((current) => (current === assetId ? null : assetId));
       return;
     }
     if (assetId === currentSelected) {
-      setLineageAssetId((current) => current === assetId ? null : assetId);
+      setLineageAssetId((current) => (current === assetId ? null : assetId));
       return;
     }
     setLineageAssetId(null);
     select(assetId);
   }, []);
-  const handleCreateDownstream = useCallback((assetId: string) => callbacksRef.current.onCreateDownstream?.(assetId), []);
-  const handleOpenConnection = useCallback((assetId: string) => callbacksRef.current.onAssetConnectionClick?.(assetId), []);
+  const handleCreateDownstream = useCallback(
+    (assetId: string) => callbacksRef.current.onCreateDownstream?.(assetId),
+    [],
+  );
+  const handleOpenConnection = useCallback(
+    (assetId: string) => callbacksRef.current.onAssetConnectionClick?.(assetId),
+    [],
+  );
 
   const hasCreateDownstream = Boolean(onCreateDownstream);
   const hasConnectionClick = Boolean(onAssetConnectionClick);
@@ -307,44 +361,62 @@ export function AppLineageCanvas({
       edges: graphEdges,
     });
 
-    const assetsByGroup = assets.reduce<Record<string, AppLineageCanvasAsset[]>>((groups, asset) => {
-      const group = assetGroupName(asset);
-      groups[group] = [...(groups[group] ?? []), asset];
-      return groups;
-    }, {});
+    const assetsByGroup = assets.reduce<Record<string, AppLineageCanvasAsset[]>>(
+      (groups, asset) => {
+        const group = assetGroupName(asset);
+        groups[group] = [...(groups[group] ?? []), asset];
+        return groups;
+      },
+      {},
+    );
 
-    const groupNodes: Node<PrefixGroupNodeData>[] = Object.entries(assetsByGroup).map(([group, groupAssets]) => {
-      const positionedAssets = groupAssets
-        .map((asset) => ({ asset, position: layout.positions.get(asset.id) }))
-        .filter((item): item is { asset: AppLineageCanvasAsset; position: { x: number; y: number } } => Boolean(item.position));
-      const minX = Math.min(...positionedAssets.map(({ position }) => position.x)) - 16;
-      const minY = Math.min(...positionedAssets.map(({ position }) => position.y)) - 42;
-      const maxX = Math.max(...positionedAssets.map(({ position }) => position.x)) + 248;
-      const maxY = Math.max(...positionedAssets.map(({ position }) => position.y)) + 112;
-      return {
-        id: `prefix-group-${group}`,
-        type: "prefixGroup",
-        position: { x: minX, y: minY },
-        data: {
-          label: group,
-          count: groupAssets.length,
-          width: maxX - minX,
-          height: maxY - minY,
-        },
-        draggable: false,
-        selectable: false,
-        connectable: false,
-        zIndex: 0,
-      };
-    });
+    const groupNodes: Node<PrefixGroupNodeData>[] = Object.entries(assetsByGroup).map(
+      ([group, groupAssets]) => {
+        const positionedAssets = groupAssets
+          .map((asset) => ({ asset, position: layout.positions.get(asset.id) }))
+          .filter(
+            (item): item is { asset: AppLineageCanvasAsset; position: { x: number; y: number } } =>
+              Boolean(item.position),
+          );
+        const minX = Math.min(...positionedAssets.map(({ position }) => position.x)) - 16;
+        const minY = Math.min(...positionedAssets.map(({ position }) => position.y)) - 42;
+        const maxX = Math.max(...positionedAssets.map(({ position }) => position.x)) + 248;
+        const maxY = Math.max(...positionedAssets.map(({ position }) => position.y)) + 112;
+        return {
+          id: `prefix-group-${group}`,
+          type: "prefixGroup",
+          position: { x: minX, y: minY },
+          data: {
+            label: group,
+            count: groupAssets.length,
+            width: maxX - minX,
+            height: maxY - minY,
+          },
+          draggable: false,
+          selectable: false,
+          connectable: false,
+          zIndex: 0,
+        };
+      },
+    );
 
     const assetNodes: Node<AssetNodeData>[] = assets.map((asset) => {
       const actions: AssetNodeAction[] = [];
       if (hasRun) {
-        actions.push({ key: "run", label: "Run", icon: Play, onSelect: () => callbacksRef.current.onRunAsset?.(asset.id) });
+        actions.push({
+          key: "run",
+          label: "Run",
+          icon: Play,
+          onSelect: () => callbacksRef.current.onRunAsset?.(asset.id),
+        });
       }
       if (hasGoTo) {
-        actions.push({ key: "go-to", label: goToLabel ?? "Open", icon: ArrowUpRight, onSelect: () => callbacksRef.current.onGoToAsset?.(asset.id) });
+        actions.push({
+          key: "go-to",
+          label: goToLabel ?? "Open",
+          icon: ArrowUpRight,
+          onSelect: () => callbacksRef.current.onGoToAsset?.(asset.id),
+        });
       }
       if (hasDelete) {
         actions.push({
@@ -374,7 +446,9 @@ export function AppLineageCanvas({
     });
 
     const edges: Edge[] = graphEdges.map((edge) => {
-      const active = Boolean(lineage && lineage.all.has(edge.source) && lineage.all.has(edge.target));
+      const active = Boolean(
+        lineage && lineage.all.has(edge.source) && lineage.all.has(edge.target),
+      );
       const dimmed = Boolean(lineage && !active);
       return {
         id: `${edge.source}-${edge.target}`,
@@ -383,12 +457,30 @@ export function AppLineageCanvas({
         type: "default",
         className: active ? "asset-edge-active" : "asset-edge",
         animated: active,
-        style: { stroke: active ? undefined : "#a1a1aa", strokeWidth: active ? undefined : 1.5, opacity: dimmed ? 0.12 : 1 },
+        style: {
+          stroke: active ? undefined : "#a1a1aa",
+          strokeWidth: active ? undefined : 1.5,
+          opacity: dimmed ? 0.12 : 1,
+        },
       };
     });
 
     return { nodes: [...groupNodes, ...assetNodes], edges };
-  }, [assets, goToLabel, lineageAssetId, links, selectedAssetId, hasCreateDownstream, hasConnectionClick, hasRun, hasGoTo, hasDelete, handleSelect, handleCreateDownstream, handleOpenConnection]);
+  }, [
+    assets,
+    goToLabel,
+    lineageAssetId,
+    links,
+    selectedAssetId,
+    hasCreateDownstream,
+    hasConnectionClick,
+    hasRun,
+    hasGoTo,
+    hasDelete,
+    handleSelect,
+    handleCreateDownstream,
+    handleOpenConnection,
+  ]);
 
   const handlePaneContextMenu = useCallback(
     (event: ReactMouseEvent | MouseEvent) => {
@@ -403,7 +495,10 @@ export function AppLineageCanvas({
       const bounds = container.getBoundingClientRect();
       // Hit-test the prefix group boxes to default the new asset's prefix.
       let prefix: string | undefined;
-      const flowPosition = flowInstance?.screenToFlowPosition({ x: event.clientX, y: event.clientY });
+      const flowPosition = flowInstance?.screenToFlowPosition({
+        x: event.clientX,
+        y: event.clientY,
+      });
       if (flowPosition) {
         for (const node of nodes) {
           if (node.type !== "prefixGroup") continue;
@@ -423,7 +518,7 @@ export function AppLineageCanvas({
       }
       setPaneMenu({ x: event.clientX - bounds.left, y: event.clientY - bounds.top, prefix });
     },
-    [flowInstance, nodes, onCreateAsset]
+    [flowInstance, nodes, onCreateAsset],
   );
 
   return (
@@ -495,11 +590,21 @@ export function AppLineageCanvas({
             <DialogTitle>Delete asset?</DialogTitle>
             <DialogDescription>
               This will permanently delete{" "}
-              {pendingDelete ? <span className="font-mono">{pendingDelete.name}</span> : "this asset"} from the pipeline.
+              {pendingDelete ? (
+                <span className="font-mono">{pendingDelete.name}</span>
+              ) : (
+                "this asset"
+              )}{" "}
+              from the pipeline.
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>
-            <Button type="button" variant="outline" disabled={deleteLoading} onClick={() => setPendingDelete(null)}>
+            <Button
+              type="button"
+              variant="outline"
+              disabled={deleteLoading}
+              onClick={() => setPendingDelete(null)}
+            >
               Cancel
             </Button>
             <Button

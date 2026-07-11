@@ -1,5 +1,13 @@
 import { spawn } from "node:child_process";
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  cpSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import http from "node:http";
@@ -38,13 +46,13 @@ if (!existsSync(staticDir)) {
 mkdirSync(audioRoot, { recursive: true });
 mkdirSync(videoRoot, { recursive: true });
 
-  await generateAudio(tutorialPath, audioRoot);
+await generateAudio(tutorialPath, audioRoot);
 
-  const timings = JSON.parse(readFileSync(resolve(audioRoot, "timings.json"), "utf8"));
-  const introTimingPath = resolve(audioRoot, "intro-timing.json");
-  const introTiming = existsSync(introTimingPath)
-    ? JSON.parse(readFileSync(introTimingPath, "utf8"))
-    : null;
+const timings = JSON.parse(readFileSync(resolve(audioRoot, "timings.json"), "utf8"));
+const introTimingPath = resolve(audioRoot, "intro-timing.json");
+const introTiming = existsSync(introTimingPath)
+  ? JSON.parse(readFileSync(introTimingPath, "utf8"))
+  : null;
 const workspaceDir = mkdtempSync(resolve(tmpdir(), "bruin-web-tutorial-"));
 cpSync(fixtureRoot, workspaceDir, { recursive: true });
 mkdirSync(join(workspaceDir, ".git"));
@@ -71,7 +79,7 @@ const server = spawn(
     cwd: repoRoot,
     env: process.env,
     stdio: "inherit",
-  }
+  },
 );
 
 try {
@@ -79,14 +87,14 @@ try {
   const recording = await recordTutorial({ baseURL, tutorial, timings, videoRoot });
   writeFileSync(
     resolve(outputRoot, "video-segment-timings.json"),
-    JSON.stringify(recording.segmentTimings, null, 2)
+    JSON.stringify(recording.segmentTimings, null, 2),
   );
   const effectiveIntroDurationMs = getEffectiveIntroDurationMs(tutorial, introTiming);
   const finalVideoPath = await buildVideoWithIntro(
     recording.videoPath,
     thumbnailPath,
     tutorial,
-    effectiveIntroDurationMs
+    effectiveIntroDurationMs,
   );
   await muxVideoAndAudio(
     finalVideoPath,
@@ -95,7 +103,7 @@ try {
     timings,
     recording.segmentTimings,
     introTiming,
-    effectiveIntroDurationMs
+    effectiveIntroDurationMs,
   );
 } finally {
   server.kill("SIGTERM");
@@ -225,21 +233,13 @@ async function runTutorialAction(page, action) {
       await clickLocator(page, page.getByRole("link", { name: action.assetName }));
       break;
     case "clickPipelineLink":
-      await clickLocator(
-        page,
-        page.getByRole("link", { name: action.pipelineName, exact: true })
-      );
+      await clickLocator(page, page.getByRole("link", { name: action.pipelineName, exact: true }));
       break;
     case "createPipeline":
       await clickLocator(page, page.getByRole("button", { name: "Create pipeline" }).last());
       await fillInput(page, page.getByLabel("Pipeline path"), action.path, action);
-      await clickLocator(
-        page,
-        page.getByRole("button", { name: "Create Pipeline", exact: true })
-      );
-      await page
-        .getByRole("link", { name: action.path, exact: true })
-        .waitFor({ timeout: 15000 });
+      await clickLocator(page, page.getByRole("button", { name: "Create Pipeline", exact: true }));
+      await page.getByRole("link", { name: action.path, exact: true }).waitFor({ timeout: 15000 });
       break;
     case "createAssetOnCanvas":
       await createAssetOnCanvas(page, action);
@@ -253,50 +253,47 @@ async function runTutorialAction(page, action) {
       }
       const inspectResponsePromise = page.waitForResponse(
         (response) =>
-          response.request().method() === "GET" && response.url().includes("/api/assets/") &&
+          response.request().method() === "GET" &&
+          response.url().includes("/api/assets/") &&
           response.url().includes("/inspect"),
-        { timeout: Number(action.timeoutMs ?? 20000) }
+        { timeout: Number(action.timeoutMs ?? 20000) },
       );
-      await clickLocator(
-        page,
-        page.getByRole("button", { name: "Inspect Data", exact: true })
-      );
+      await clickLocator(page, page.getByRole("button", { name: "Inspect Data", exact: true }));
       await waitForInspectResult(page, await inspectResponsePromise, action);
       break;
     case "materializeAsset":
       const selectedAssetName = action.assetName ?? (await getSelectedAssetName(page));
       const materializeResponsePromise = page.waitForResponse(
         (response) =>
-          response.request().method() === "POST" && response.url().includes("/api/assets/") &&
+          response.request().method() === "POST" &&
+          response.url().includes("/api/assets/") &&
           response.url().includes("/materialize/stream"),
-        { timeout: Number(action.timeoutMs ?? 20000) }
+        { timeout: Number(action.timeoutMs ?? 20000) },
       );
       await clickLocator(page, page.getByRole("tab", { name: "Materialize" }));
-      await clickLocator(
-        page,
-        page.getByRole("button", { name: "Materialize", exact: true })
-      );
+      await clickLocator(page, page.getByRole("button", { name: "Materialize", exact: true }));
       await waitForMaterializeResult(
         page,
         selectedAssetName,
         await materializeResponsePromise,
-        action
+        action,
       );
       break;
     case "runPipeline":
       const selectedPipelineName = await getSelectedPipelineName(page, action);
       const pipelineResponsePromise = page.waitForResponse(
         (response) =>
-          response.request().method() === "POST" && response.url().includes("/api/pipelines/") &&
+          response.request().method() === "POST" &&
+          response.url().includes("/api/pipelines/") &&
           response.url().includes("/materialize/stream"),
-        { timeout: Number(action.timeoutMs ?? 30000) }
+        { timeout: Number(action.timeoutMs ?? 30000) },
       );
       await clickLocator(page, page.getByRole("button", { name: "Run pipeline", exact: true }));
       await waitForPipelineRunResult(
         page,
         selectedPipelineName,
         await pipelineResponsePromise,
-        action
+        action,
       );
       break;
     case "renameAsset":
@@ -332,14 +329,14 @@ async function muxVideoAndAudio(
   audioTimings,
   videoTimings,
   introTiming,
-  introDurationMs
+  introDurationMs,
 ) {
   const narrationPath = await buildAlignedNarration(
     audioRoot,
     audioTimings,
     videoTimings,
     introTiming,
-    introDurationMs
+    introDurationMs,
   );
   const outputPath = resolve(outputRoot, `${tutorialId}.mp4`);
 
@@ -364,7 +361,13 @@ async function muxVideoAndAudio(
   ]);
 }
 
-async function buildAlignedNarration(audioRoot, audioTimings, videoTimings, introTiming, introDurationMs) {
+async function buildAlignedNarration(
+  audioRoot,
+  audioTimings,
+  videoTimings,
+  introTiming,
+  introDurationMs,
+) {
   const concatManifestPath = resolve(audioRoot, "segments-aligned.txt");
   const outputPath = resolve(audioRoot, "narration-aligned.wav");
   const concatLines = [];
@@ -373,17 +376,17 @@ async function buildAlignedNarration(audioRoot, audioTimings, videoTimings, intr
     concatLines.push(`file '${basename(introTiming.audio_path)}'`);
     const introTargetDurationMs = Math.max(
       Number(introTiming.duration_ms ?? 0) + Number(introTiming.padding_ms ?? 0),
-      Number(introDurationMs ?? 0)
+      Number(introDurationMs ?? 0),
     );
     const introSilenceDurationMs = Math.max(
       0,
-      introTargetDurationMs - Number(introTiming.duration_ms ?? 0)
+      introTargetDurationMs - Number(introTiming.duration_ms ?? 0),
     );
 
     if (introSilenceDurationMs > 0) {
       const introSilencePath = resolve(
         audioRoot,
-        `00-intro-aligned-padding-${introSilenceDurationMs}.wav`
+        `00-intro-aligned-padding-${introSilenceDurationMs}.wav`,
       );
       if (!existsSync(introSilencePath)) {
         await createSilence(introSilencePath, introSilenceDurationMs);
@@ -402,14 +405,14 @@ async function buildAlignedNarration(audioRoot, audioTimings, videoTimings, intr
 
     const targetDurationMs = Math.max(
       Number(audioTiming.duration_ms ?? 0) + Number(audioTiming.padding_ms ?? 0),
-      Number(videoTiming?.final_duration_ms ?? 0)
+      Number(videoTiming?.final_duration_ms ?? 0),
     );
     const silenceDurationMs = Math.max(0, targetDurationMs - Number(audioTiming.duration_ms ?? 0));
 
     if (silenceDurationMs > 0) {
       const silencePath = resolve(
         audioRoot,
-        `${String(index + 1).padStart(2, "0")}-${audioTiming.id}-aligned-padding-${silenceDurationMs}.wav`
+        `${String(index + 1).padStart(2, "0")}-${audioTiming.id}-aligned-padding-${silenceDurationMs}.wav`,
       );
       if (!existsSync(silencePath)) {
         await createSilence(silencePath, silenceDurationMs);
@@ -437,7 +440,7 @@ async function buildAlignedNarration(audioRoot, audioTimings, videoTimings, intr
 function getEffectiveIntroDurationMs(tutorial, introTiming) {
   return Math.max(
     Number(tutorial.intro?.durationMs ?? 0),
-    Number(introTiming?.duration_ms ?? 0) + Number(introTiming?.padding_ms ?? 0)
+    Number(introTiming?.duration_ms ?? 0) + Number(introTiming?.padding_ms ?? 0),
   );
 }
 
@@ -570,14 +573,20 @@ async function clickLocator(page, locator) {
   const y = box.y + box.height / 2;
   await moveCursor(page, x, y);
   await page.mouse.down();
-  await page.evaluate(({ cursorX, cursorY }) => {
-    window.__tutorialCursorMove?.({ x: cursorX, y: cursorY, active: true });
-  }, { cursorX: x, cursorY: y });
+  await page.evaluate(
+    ({ cursorX, cursorY }) => {
+      window.__tutorialCursorMove?.({ x: cursorX, y: cursorY, active: true });
+    },
+    { cursorX: x, cursorY: y },
+  );
   await page.waitForTimeout(90);
   await page.mouse.up();
-  await page.evaluate(({ cursorX, cursorY }) => {
-    window.__tutorialCursorMove?.({ x: cursorX, y: cursorY, active: false });
-  }, { cursorX: x, cursorY: y });
+  await page.evaluate(
+    ({ cursorX, cursorY }) => {
+      window.__tutorialCursorMove?.({ x: cursorX, y: cursorY, active: false });
+    },
+    { cursorX: x, cursorY: y },
+  );
 }
 
 async function fillInput(page, locator, value, action = {}) {
@@ -613,10 +622,7 @@ async function createAssetOnCanvas(page, action) {
 
   const kind = action.kind ?? "sql";
   if (kind !== "sql") {
-    await clickLocator(
-      page,
-      draftNode.getByRole("tab", { name: kind.toUpperCase(), exact: true })
-    );
+    await clickLocator(page, draftNode.getByRole("tab", { name: kind.toUpperCase(), exact: true }));
   }
 
   await fillInput(page, draftNode.getByPlaceholder("Asset name"), action.assetName, action);
@@ -636,9 +642,10 @@ async function typeInEditor(page, action) {
     const saveResponsePromise = page
       .waitForResponse(
         (response) =>
-          response.request().method() === "PUT" && response.url().includes("/api/pipelines/") &&
+          response.request().method() === "PUT" &&
+          response.url().includes("/api/pipelines/") &&
           response.url().includes("/assets/"),
-        { timeout: Number(action.saveTimeoutMs ?? 15000) }
+        { timeout: Number(action.saveTimeoutMs ?? 15000) },
       )
       .catch(() => null);
 
@@ -659,7 +666,7 @@ async function typeInEditor(page, action) {
         return Math.max(selectorCount, fallbackCount) >= count;
       },
       action.waitForEdgeCount,
-      { timeout: Number(action.edgeTimeoutMs ?? 30000) }
+      { timeout: Number(action.edgeTimeoutMs ?? 30000) },
     );
   }
 
@@ -694,7 +701,14 @@ async function circleLocator(page, locator, action = {}) {
   await moveCursor(page, centerX + radiusX, centerY);
 
   await page.evaluate(
-    async ({ cursorCenterX, cursorCenterY, cursorRadiusX, cursorRadiusY, cursorLoops, cursorDurationMs }) => {
+    async ({
+      cursorCenterX,
+      cursorCenterY,
+      cursorRadiusX,
+      cursorRadiusY,
+      cursorLoops,
+      cursorDurationMs,
+    }) => {
       await new Promise((resolveAnimation) => {
         const startedAt = performance.now();
 
@@ -724,7 +738,7 @@ async function circleLocator(page, locator, action = {}) {
       cursorRadiusY: radiusY,
       cursorLoops: loops,
       cursorDurationMs: durationMs,
-    }
+    },
   );
 
   await page.waitForTimeout(settleMs);
@@ -732,9 +746,12 @@ async function circleLocator(page, locator, action = {}) {
 
 async function moveCursor(page, x, y) {
   await page.mouse.move(x, y, { steps: 18 });
-  await page.evaluate(({ cursorX, cursorY }) => {
-    window.__tutorialCursorMove?.({ x: cursorX, y: cursorY, active: false });
-  }, { cursorX: x, cursorY: y });
+  await page.evaluate(
+    ({ cursorX, cursorY }) => {
+      window.__tutorialCursorMove?.({ x: cursorX, y: cursorY, active: false });
+    },
+    { cursorX: x, cursorY: y },
+  );
   await page.waitForTimeout(120);
 }
 
@@ -778,7 +795,9 @@ async function alignCurrentLineIndentation(page, expectedIndentation) {
     const trimmed = currentLine.trim();
 
     if (trimmed.length > 0) {
-      throw new Error(`Expected an empty editor line before typing, got ${JSON.stringify(currentLine)}.`);
+      throw new Error(
+        `Expected an empty editor line before typing, got ${JSON.stringify(currentLine)}.`,
+      );
     }
 
     const currentIndentation = currentLine.match(/^\s*/)?.[0] ?? "";
@@ -810,7 +829,7 @@ async function assertEditorMatchesIgnoringWhitespace(page, expected) {
   if (actualNormalized !== expectedNormalized) {
     const mismatchIndex = firstMismatchIndex(actualNormalized, expectedNormalized);
     throw new Error(
-      `Editor content diverged at normalized index ${mismatchIndex}. Expected ${JSON.stringify(expectedNormalized[mismatchIndex] ?? "<eof>")}, got ${JSON.stringify(actualNormalized[mismatchIndex] ?? "<eof>")}.`
+      `Editor content diverged at normalized index ${mismatchIndex}. Expected ${JSON.stringify(expectedNormalized[mismatchIndex] ?? "<eof>")}, got ${JSON.stringify(actualNormalized[mismatchIndex] ?? "<eof>")}.`,
     );
   }
 }
@@ -820,7 +839,7 @@ async function readEditorText(page) {
     elements.map((element) => {
       const text = element.textContent ?? "";
       return text.replace(/\u00a0/g, " ");
-    })
+    }),
   );
 
   const value = lines.join("\n");
@@ -833,9 +852,11 @@ async function readEditorText(page) {
 }
 
 async function readCurrentEditorLine(page) {
-  const lines = await page.locator(".view-lines .view-line").evaluateAll((elements) =>
-    elements.map((element) => (element.textContent ?? "").replace(/\u00a0/g, " "))
-  );
+  const lines = await page
+    .locator(".view-lines .view-line")
+    .evaluateAll((elements) =>
+      elements.map((element) => (element.textContent ?? "").replace(/\u00a0/g, " ")),
+    );
 
   return lines.at(-1) ?? "";
 }
@@ -882,7 +903,7 @@ async function waitForInspectResult(page, response, action = {}) {
     throw new Error(
       `Inspect asset failed: ${payload?.error ?? `request returned ${response.status()}`}\n${
         payload?.raw_output ?? ""
-      }`
+      }`,
     );
   }
 
@@ -917,9 +938,7 @@ async function waitForMaterializeResult(page, assetName, response, action = {}) 
   }
 
   await page.getByTestId("workspace-results-panel").waitFor({ state: "visible", timeout });
-  await page
-    .getByText(`Asset: ${assetName}`, { exact: true })
-    .waitFor({ timeout });
+  await page.getByText(`Asset: ${assetName}`, { exact: true }).waitFor({ timeout });
 }
 
 async function waitForPipelineRunResult(page, pipelineName, response, action = {}) {

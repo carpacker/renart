@@ -11,7 +11,10 @@ const execFileAsync = promisify(execFile);
 test.describe("app source control live", () => {
   test.use({ fixtureName: "basic-workspace" });
 
-  test("shows unstaged changes, previews a diff, stages and unstages a file", async ({ liveApp, page }) => {
+  test("shows unstaged changes, previews a diff, stages and unstages a file", async ({
+    liveApp,
+    page,
+  }) => {
     await initializeGitRepository(liveApp.workspaceDir);
     await writeFile(join(liveApp.workspaceDir, "e2e-git.txt"), "first line\nsecond line\n", "utf8");
 
@@ -40,7 +43,9 @@ test.describe("app source control live", () => {
 
 async function initializeGitRepository(workspaceDir: string) {
   await execFileAsync("git", ["init"], { cwd: workspaceDir });
-  await execFileAsync("git", ["config", "user.email", "renart-e2e@example.com"], { cwd: workspaceDir });
+  await execFileAsync("git", ["config", "user.email", "renart-e2e@example.com"], {
+    cwd: workspaceDir,
+  });
   await execFileAsync("git", ["config", "user.name", "Renart E2E"], { cwd: workspaceDir });
   await execFileAsync("git", ["add", "."], { cwd: workspaceDir });
   await execFileAsync("git", ["commit", "-m", "Initial fixture"], { cwd: workspaceDir });

@@ -60,7 +60,8 @@ export function ProjectSwitcher() {
     }
   }, []);
 
-  const currentProjectId = getPinnedProjectId() ?? directory?.default_project_id ?? workspaceConfig?.project_id;
+  const currentProjectId =
+    getPinnedProjectId() ?? directory?.default_project_id ?? workspaceConfig?.project_id;
   const currentName =
     directory?.projects.find((project) => project.id === currentProjectId)?.name ||
     workspaceConfig?.project_name ||
@@ -70,7 +71,11 @@ export function ProjectSwitcher() {
     <>
       <DropdownMenu onOpenChange={(open) => open && void refresh()}>
         <DropdownMenuTrigger asChild>
-          <Button variant="outline" size="sm" className="h-7 border-zinc-800 bg-zinc-950 px-2 text-zinc-200 hover:bg-zinc-800 hover:text-white">
+          <Button
+            variant="outline"
+            size="sm"
+            className="h-7 border-zinc-800 bg-zinc-950 px-2 text-zinc-200 hover:bg-zinc-800 hover:text-white"
+          >
             <Building2 className="size-3.5 text-zinc-400" />
             <span className="max-w-32 truncate font-medium sm:max-w-44">{currentName}</span>
             <ChevronDown className="size-3 text-zinc-500" />
@@ -98,7 +103,12 @@ export function ProjectSwitcher() {
               <Building2 className="size-4" />
               <span className="min-w-0 flex-1">
                 <span className="block truncate">{project.name}</span>
-                <span className={cn("block truncate text-xs text-muted-foreground", !project.exists && "text-destructive")}>
+                <span
+                  className={cn(
+                    "block truncate text-xs text-muted-foreground",
+                    !project.exists && "text-destructive",
+                  )}
+                >
                   {project.exists ? project.path : `${project.path} (missing)`}
                 </span>
               </span>
@@ -111,7 +121,9 @@ export function ProjectSwitcher() {
                   aria-label={`Remove ${project.name} from list`}
                   onClick={(event) => {
                     event.stopPropagation();
-                    void removeProject(project.id).then(setDirectory).catch(() => {});
+                    void removeProject(project.id)
+                      .then(setDirectory)
+                      .catch(() => {});
                   }}
                 >
                   <Trash2 className="size-3.5 text-muted-foreground" />
@@ -121,17 +133,26 @@ export function ProjectSwitcher() {
           ))}
           <DropdownMenuSeparator />
           <DropdownMenuItem asChild>
-            <Link to="/welcome" search={{ new: true }}><FolderPlus className="size-4" />New project...</Link>
+            <Link to="/welcome" search={{ new: true }}>
+              <FolderPlus className="size-4" />
+              New project...
+            </Link>
           </DropdownMenuItem>
           <DropdownMenuItem onSelect={() => setBrowseOpen(true)}>
             <FolderSearch className="size-4" />
             Open project...
           </DropdownMenuItem>
           <DropdownMenuItem asChild>
-            <Link to="/project/general"><Settings className="size-4" />Project settings</Link>
+            <Link to="/project/general">
+              <Settings className="size-4" />
+              Project settings
+            </Link>
           </DropdownMenuItem>
           <DropdownMenuItem asChild>
-            <Link to="/account/workspaces"><Cloud className="size-4" />Connect cloud workspace</Link>
+            <Link to="/account/workspaces">
+              <Cloud className="size-4" />
+              Connect cloud workspace
+            </Link>
           </DropdownMenuItem>
         </DropdownMenuContent>
       </DropdownMenu>
@@ -194,7 +215,8 @@ function OpenProjectDialog({
             Open project
           </DialogTitle>
           <DialogDescription>
-            Pick a directory. It becomes a project with its own connections, environments, and schedules.
+            Pick a directory. It becomes a project with its own connections, environments, and
+            schedules.
           </DialogDescription>
         </DialogHeader>
         <div className="grid gap-2">
@@ -222,7 +244,12 @@ function OpenProjectDialog({
                   onDoubleClick={() => void browse(entry.path)}
                   onClick={() => void browse(entry.path)}
                 >
-                  <Folder className={cn("size-4 shrink-0", entry.is_project ? "text-primary" : "text-muted-foreground")} />
+                  <Folder
+                    className={cn(
+                      "size-4 shrink-0",
+                      entry.is_project ? "text-primary" : "text-muted-foreground",
+                    )}
+                  />
                   <span className="min-w-0 flex-1 truncate">{entry.name}</span>
                   {entry.is_project ? <span className="text-xs text-primary">project</span> : null}
                 </button>
@@ -238,7 +265,10 @@ function OpenProjectDialog({
           <Button variant="outline" onClick={() => onOpenChange(false)}>
             Cancel
           </Button>
-          <Button disabled={busy || !listing?.path} onClick={() => listing?.path && void openDirectory(listing.path)}>
+          <Button
+            disabled={busy || !listing?.path}
+            onClick={() => listing?.path && void openDirectory(listing.path)}
+          >
             {busy ? <LoaderCircle data-icon="inline-start" className="animate-spin" /> : null}
             Open this directory
           </Button>

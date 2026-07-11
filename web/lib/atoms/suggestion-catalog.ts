@@ -190,11 +190,11 @@ function databaseKey(connectionName: string, databaseName: string): string {
 function externalTableKey(
   connectionName: string,
   tableName: string,
-  databaseName?: string | null
+  databaseName?: string | null,
 ): string {
   return `external::${connectionKey(
     connectionName,
-    databaseName
+    databaseName,
   )}::${normalizeTableName(tableName).toLowerCase()}`;
 }
 
@@ -221,7 +221,7 @@ function sourceSignature(source: SuggestionObservation): string {
 
 function addSource(
   existing: SuggestionObservation[],
-  source: SuggestionObservation
+  source: SuggestionObservation,
 ): SuggestionObservation[] {
   const signature = sourceSignature(source);
   if (existing.some((item) => sourceSignature(item) === signature)) {
@@ -233,18 +233,13 @@ function addSource(
 
 function addSourceMethod(
   existing: SuggestionObservationMethod[],
-  method: SuggestionObservationMethod
+  method: SuggestionObservationMethod,
 ): SuggestionObservationMethod[] {
   return existing.includes(method) ? existing : [...existing, method];
 }
 
-function mergeColumnValue<T>(
-  current: T | undefined,
-  next: T | undefined
-): T | undefined {
-  return current === undefined || current === null || current === ("" as T)
-    ? next
-    : current;
+function mergeColumnValue<T>(current: T | undefined, next: T | undefined): T | undefined {
+  return current === undefined || current === null || current === ("" as T) ? next : current;
 }
 
 function sortColumns(columns: SuggestionColumnState[]): SuggestionColumnState[] {
@@ -255,9 +250,7 @@ function sortTables(tables: SuggestionTableState[]): SuggestionTableState[] {
   return [...tables].sort((left, right) => left.name.localeCompare(right.name));
 }
 
-function sortConnections(
-  connections: SuggestionConnectionState[]
-): SuggestionConnectionState[] {
+function sortConnections(connections: SuggestionConnectionState[]): SuggestionConnectionState[] {
   return [...connections].sort((left, right) => {
     const leftPriority = SOURCE_PRIORITY[left.type] ?? 99;
     const rightPriority = SOURCE_PRIORITY[right.type] ?? 99;
@@ -284,7 +277,7 @@ function buildWorkspaceObservation(
     workspaceEventType?: string;
     workspaceEventPath?: string;
     workspaceLite?: boolean;
-  }
+  },
 ): SuggestionObservation {
   return {
     method: options.method,
@@ -305,7 +298,7 @@ function buildWorkspaceObservation(
 function upsertConnection(
   connections: Map<string, SuggestionConnectionState>,
   input: ConnectionSuggestionEntry,
-  source: SuggestionObservation
+  source: SuggestionObservation,
 ) {
   const key = connectionKey(input.name, input.databaseName);
   const current = connections.get(key);
@@ -338,7 +331,7 @@ function upsertDatabase(
     connectionName: string;
     connectionType?: string | null;
   },
-  source: SuggestionObservation
+  source: SuggestionObservation,
 ) {
   const normalizedName = input.name.trim();
   if (!normalizedName) {
@@ -370,7 +363,7 @@ function upsertDatabase(
 function upsertTable(
   tables: Map<string, SuggestionTableState>,
   input: Omit<SuggestionTableState, "sourceMethods" | "sources" | "columns">,
-  source: SuggestionObservation
+  source: SuggestionObservation,
 ): SuggestionTableState {
   const current = tables.get(input.key);
 
@@ -397,10 +390,8 @@ function upsertTable(
     assetId: current.assetId ?? input.assetId,
     assetPath: current.assetPath ?? input.assetPath,
     isBruinAsset: current.isBruinAsset || input.isBruinAsset,
-    remoteSuggestionKind:
-      current.remoteSuggestionKind ?? input.remoteSuggestionKind,
-    remoteSuggestionDetail:
-      current.remoteSuggestionDetail ?? input.remoteSuggestionDetail,
+    remoteSuggestionKind: current.remoteSuggestionKind ?? input.remoteSuggestionKind,
+    remoteSuggestionDetail: current.remoteSuggestionDetail ?? input.remoteSuggestionDetail,
     sourceMethods: addSourceMethod(current.sourceMethods, source.method),
     sources: addSource(current.sources, source),
     columns: current.columns,
@@ -414,16 +405,14 @@ function upsertColumns(
   tables: Map<string, SuggestionTableState>,
   tableKey: string,
   columns: SchemaColumn[],
-  source: SuggestionObservation
+  source: SuggestionObservation,
 ) {
   const table = tables.get(tableKey);
   if (!table || columns.length === 0) {
     return;
   }
 
-  const columnsByKey = new Map(
-    table.columns.map((column) => [column.key, column] as const)
-  );
+  const columnsByKey = new Map(table.columns.map((column) => [column.key, column] as const));
 
   for (const column of columns) {
     const key = columnKey(tableKey, column.name);
@@ -472,7 +461,7 @@ function emptyCatalog(): SuggestionCatalogState {
 function buildCatalogFromWorkspace(
   workspace: WorkspaceState | null,
   syncSource: SuggestionWorkspaceSyncSource | null,
-  materializationByAssetId: MaterializationByAssetId = {}
+  materializationByAssetId: MaterializationByAssetId = {},
 ): SuggestionCatalogState {
   if (!workspace) {
     return emptyCatalog();
@@ -497,7 +486,7 @@ function buildCatalogFromWorkspace(
         workspaceEventType: syncSource?.eventType,
         workspaceEventPath: syncSource?.eventPath,
         workspaceLite: syncSource?.lite,
-      })
+      }),
     );
   }
 
@@ -506,7 +495,7 @@ function buildCatalogFromWorkspace(
       const materialization = materializationByAssetId[asset.id];
       const connectionName = resolveConnection(asset, workspace.connections ?? {});
       const connectionType = connectionName
-        ? workspace.connections?.[connectionName] ?? null
+        ? (workspace.connections?.[connectionName] ?? null)
         : null;
       const tableParts = parseQualifiedTableName(asset.name);
       const tableKey = assetTableKey(asset.id, pipeline.id);
@@ -532,7 +521,7 @@ function buildCatalogFromWorkspace(
             type: connectionType,
             databaseName: tableParts.databaseName,
           },
-          tableSource
+          tableSource,
         );
 
         if (tableParts.databaseName) {
@@ -543,7 +532,7 @@ function buildCatalogFromWorkspace(
               connectionName,
               connectionType,
             },
-            tableSource
+            tableSource,
           );
         }
       }
@@ -567,7 +556,7 @@ function buildCatalogFromWorkspace(
           isBruinAsset: true,
           isMaterialized: materialization?.is_materialized ?? asset.is_materialized,
         },
-        tableSource
+        tableSource,
       );
 
       upsertColumns(tables, tableKey, toSchemaColumns(asset.columns), tableSource);
@@ -583,7 +572,7 @@ function buildCatalogFromWorkspace(
 
 function findWorkspaceAsset(
   workspace: WorkspaceState,
-  assetId: string
+  assetId: string,
 ): { asset: WebAsset; pipelineId: string } | null {
   for (const pipeline of workspace.pipelines ?? []) {
     for (const asset of pipeline.assets ?? []) {
@@ -599,27 +588,17 @@ function findWorkspaceAsset(
 function mergeDynamicSuggestions(
   baseCatalog: SuggestionCatalogState,
   workspace: WorkspaceState | null,
-  dynamicState: DynamicSuggestionState
+  dynamicState: DynamicSuggestionState,
 ): SuggestionCatalogState {
   const connections = new Map(
-    Object.values(baseCatalog.connectionsByKey).map((connection) => [
-      connection.key,
-      connection,
-    ])
+    Object.values(baseCatalog.connectionsByKey).map((connection) => [connection.key, connection]),
   );
   const databases = new Map(
-    Object.values(baseCatalog.databasesByKey).map((database) => [
-      database.key,
-      database,
-    ])
+    Object.values(baseCatalog.databasesByKey).map((database) => [database.key, database]),
   );
-  const tables = new Map(
-    Object.values(baseCatalog.tablesByKey).map((table) => [table.key, table])
-  );
+  const tables = new Map(Object.values(baseCatalog.tablesByKey).map((table) => [table.key, table]));
 
-  for (const observations of Object.values(
-    dynamicState.remoteDatabasesByConnectionKey
-  )) {
+  for (const observations of Object.values(dynamicState.remoteDatabasesByConnectionKey)) {
     for (const observation of observations) {
       const source: SuggestionObservation = {
         method: observation.method,
@@ -636,7 +615,7 @@ function mergeDynamicSuggestions(
             name: observation.connectionName,
             type: observation.connectionType,
           },
-          source
+          source,
         );
       }
 
@@ -651,15 +630,13 @@ function mergeDynamicSuggestions(
           {
             ...source,
             databaseName,
-          }
+          },
         );
       }
     }
   }
 
-  for (const [assetId, observations] of Object.entries(
-    dynamicState.assetColumnsByAssetId
-  )) {
+  for (const [assetId, observations] of Object.entries(dynamicState.assetColumnsByAssetId)) {
     const workspaceAsset = workspace ? findWorkspaceAsset(workspace, assetId) : null;
     const tableKey = workspaceAsset
       ? assetTableKey(assetId, workspaceAsset.pipelineId)
@@ -668,7 +645,7 @@ function mergeDynamicSuggestions(
       ? resolveConnection(workspaceAsset.asset, workspace?.connections ?? {})
       : null;
     const connectionType = connectionName
-      ? workspace?.connections?.[connectionName] ?? null
+      ? (workspace?.connections?.[connectionName] ?? null)
       : null;
     const qualifiedName = normalizeTableName(workspaceAsset?.asset.name ?? assetId);
     const tableParts = parseQualifiedTableName(qualifiedName);
@@ -700,7 +677,7 @@ function mergeDynamicSuggestions(
         connectionName,
         connectionType,
         databaseName: tableParts.databaseName,
-      }
+      },
     );
 
     for (const observation of observations) {
@@ -739,7 +716,7 @@ function mergeDynamicSuggestions(
             type: observation.connectionType,
             databaseName: observation.databaseName,
           },
-          source
+          source,
         );
       }
 
@@ -751,7 +728,7 @@ function mergeDynamicSuggestions(
             connectionName: observation.connectionName,
             connectionType: observation.connectionType,
           },
-          source
+          source,
         );
       }
 
@@ -763,10 +740,7 @@ function mergeDynamicSuggestions(
 
         const tableParts = parseQualifiedTableName(normalizedName);
         const databaseName =
-          remoteTable.databaseName ??
-          observation.databaseName ??
-          tableParts.databaseName ??
-          null;
+          remoteTable.databaseName ?? observation.databaseName ?? tableParts.databaseName ?? null;
 
         if (databaseName) {
           upsertDatabase(
@@ -779,18 +753,14 @@ function mergeDynamicSuggestions(
             {
               ...source,
               databaseName,
-            }
+            },
           );
         }
 
         upsertTable(
           tables,
           {
-            key: externalTableKey(
-              observation.connectionName,
-              normalizedName,
-              databaseName
-            ),
+            key: externalTableKey(observation.connectionName, normalizedName, databaseName),
             name: normalizedName,
             shortName: tableParts.shortName,
             schemaName: remoteTable.schemaName ?? tableParts.schemaName,
@@ -802,15 +772,13 @@ function mergeDynamicSuggestions(
             remoteSuggestionKind: remoteTable.kind,
             remoteSuggestionDetail: remoteTable.detail,
           },
-          source
+          source,
         );
       }
     }
   }
 
-  for (const observations of Object.values(
-    dynamicState.remoteTableColumnsByTableKey
-  )) {
+  for (const observations of Object.values(dynamicState.remoteTableColumnsByTableKey)) {
     for (const observation of observations) {
       const normalizedName = normalizeTableName(observation.tableName);
       if (!normalizedName) {
@@ -818,8 +786,7 @@ function mergeDynamicSuggestions(
       }
 
       const tableParts = parseQualifiedTableName(normalizedName);
-      const databaseName =
-        observation.databaseName ?? tableParts.databaseName ?? null;
+      const databaseName = observation.databaseName ?? tableParts.databaseName ?? null;
       const source: SuggestionObservation = {
         method: observation.method,
         recordedAt: observation.recordedAt,
@@ -829,11 +796,7 @@ function mergeDynamicSuggestions(
         environment: observation.environment,
       };
       const key = connectionKey(observation.connectionName, databaseName);
-      const tableKey = externalTableKey(
-        observation.connectionName,
-        normalizedName,
-        databaseName
-      );
+      const tableKey = externalTableKey(observation.connectionName, normalizedName, databaseName);
 
       if (observation.connectionType) {
         upsertConnection(
@@ -843,7 +806,7 @@ function mergeDynamicSuggestions(
             type: observation.connectionType,
             databaseName,
           },
-          source
+          source,
         );
       }
 
@@ -855,7 +818,7 @@ function mergeDynamicSuggestions(
             connectionName: observation.connectionName,
             connectionType: observation.connectionType,
           },
-          source
+          source,
         );
       }
 
@@ -872,7 +835,7 @@ function mergeDynamicSuggestions(
           connectionType: observation.connectionType ?? null,
           isBruinAsset: false,
         },
-        source
+        source,
       );
 
       upsertColumns(tables, tableKey, observation.columns, source);
@@ -885,7 +848,7 @@ function mergeDynamicSuggestions(
 function toCatalogResult(
   connections: Map<string, SuggestionConnectionState>,
   databases: Map<string, SuggestionDatabaseState>,
-  tables: Map<string, SuggestionTableState>
+  tables: Map<string, SuggestionTableState>,
 ): SuggestionCatalogState {
   const sortedConnections = sortConnections(Array.from(connections.values()));
   const sortedDatabases = [...databases.values()].sort((left, right) => {
@@ -901,16 +864,12 @@ function toCatalogResult(
   return {
     connections: sortedConnections,
     connectionsByKey: Object.fromEntries(
-      sortedConnections.map((connection) => [connection.key, connection])
+      sortedConnections.map((connection) => [connection.key, connection]),
     ),
     databases: sortedDatabases,
-    databasesByKey: Object.fromEntries(
-      sortedDatabases.map((database) => [database.key, database])
-    ),
+    databasesByKey: Object.fromEntries(sortedDatabases.map((database) => [database.key, database])),
     tables: sortedTables,
-    tablesByKey: Object.fromEntries(
-      sortedTables.map((table) => [table.key, table])
-    ),
+    tablesByKey: Object.fromEntries(sortedTables.map((table) => [table.key, table])),
   };
 }
 
@@ -923,7 +882,7 @@ export function buildSuggestionCatalog(args: {
   const baseCatalog = buildCatalogFromWorkspace(
     args.workspace,
     args.syncSource,
-    args.materializationByAssetId
+    args.materializationByAssetId,
   );
   return mergeDynamicSuggestions(baseCatalog, args.workspace, args.dynamicState);
 }

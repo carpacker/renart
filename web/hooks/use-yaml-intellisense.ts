@@ -5,7 +5,10 @@ import { useEffect, useRef, type MutableRefObject } from "react";
 import type * as MonacoNS from "monaco-editor";
 
 import { getIngestrSuggestions, getOpenAPISuggestions } from "@/lib/api";
-import type { OpenAPIQueryParameterSuggestion, OpenAPISuggestionsResult } from "@/lib/generated/api-types";
+import type {
+  OpenAPIQueryParameterSuggestion,
+  OpenAPISuggestionsResult,
+} from "@/lib/generated/api-types";
 import {
   connectionSuggestionsAtom,
   getIngestrTableSuggestionsFromCatalog,
@@ -25,7 +28,7 @@ type YamlFieldContext = {
   normalizedValue: string;
   path: string[];
   quoted: boolean;
-  quote: "\"" | "'" | null;
+  quote: '"' | "'" | null;
   rawValue: string;
   replaceQuotedContentOnly: boolean;
   range: MonacoNS.IRange;
@@ -84,12 +87,18 @@ const SUPPORTED_DESTINATIONS = ["postgres", "duckdb", "s3"];
 const API_EXAMPLE_OPENAPI_URL = "https://api.weather.gov/openapi.json";
 const API_EXAMPLE_REQUEST_URL = "https://api.weather.gov/alerts/active?area=CA";
 
-export function useYAMLIntellisense(monaco: typeof MonacoNS | null, editor: MonacoNS.editor.IStandaloneCodeEditor | null, asset: WebAsset | null) {
+export function useYAMLIntellisense(
+  monaco: typeof MonacoNS | null,
+  editor: MonacoNS.editor.IStandaloneCodeEditor | null,
+  asset: WebAsset | null,
+) {
   const catalog = useAtomValue(suggestionCatalogAtom);
   const connections = useAtomValue(connectionSuggestionsAtom);
   const selectedEnvironment = useAtomValue(selectedEnvironmentAtom);
   const registerConnectionTables = useSetAtom(registerConnectionTablesAtom);
-  const cacheRef = useRef(new Map<string, Promise<Array<{ value: string; detail?: string; kind?: string }>>>());
+  const cacheRef = useRef(
+    new Map<string, Promise<Array<{ value: string; detail?: string; kind?: string }>>>(),
+  );
   // OpenAPI spec fetches are relatively expensive and stable per (spec URL,
   // request URL, method); cache the in-flight/settled result so keystroke-driven
   // completion requests don't refetch.
@@ -122,8 +131,12 @@ export function useYAMLIntellisense(monaco: typeof MonacoNS | null, editor: Mona
 
     const disposable = monaco.languages.registerCompletionItemProvider("yaml", {
       triggerCharacters: [":", "/", ".", "_", "?", "&", "=", ","],
-      provideCompletionItems: async (model: MonacoNS.editor.ITextModel, position: MonacoNS.Position) => {
-        const { asset, catalog, connections, selectedEnvironment, registerConnectionTables } = yamlStateRef.current;
+      provideCompletionItems: async (
+        model: MonacoNS.editor.ITextModel,
+        position: MonacoNS.Position,
+      ) => {
+        const { asset, catalog, connections, selectedEnvironment, registerConnectionTables } =
+          yamlStateRef.current;
         if (!asset || !isYamlPath(asset.path)) {
           return { suggestions: [] };
         }
@@ -187,7 +200,13 @@ export function useYAMLIntellisense(monaco: typeof MonacoNS | null, editor: Mona
   }, [monaco]);
 
   useEffect(() => {
-    if (!monaco || !editor || !asset || !isYamlPath(asset.path) || asset.type.toLowerCase() !== "api") {
+    if (
+      !monaco ||
+      !editor ||
+      !asset ||
+      !isYamlPath(asset.path) ||
+      asset.type.toLowerCase() !== "api"
+    ) {
       return;
     }
     const owner = "renart-api-yaml";
@@ -215,13 +234,18 @@ export function useYAMLIntellisense(monaco: typeof MonacoNS | null, editor: Mona
       };
 
       if (parsed.validationMode && !["off", "warn", "error"].includes(parsed.validationMode)) {
-        addMarker("parameters.openapi.validation", "OpenAPI validation must be off, warn, or error.");
+        addMarker(
+          "parameters.openapi.validation",
+          "OpenAPI validation must be off, warn, or error.",
+        );
       }
       // A failed suggestions fetch must still fall through to setModelMarkers:
       // returning early would leave markers from a previous pass on screen
       // after the user fixes the field.
       const result =
-        parsed.openapiUrl && parsed.requestUrl ? await fetchOpenAPISuggestionsCached(openapiCacheRef, parsed) : null;
+        parsed.openapiUrl && parsed.requestUrl
+          ? await fetchOpenAPISuggestionsCached(openapiCacheRef, parsed)
+          : null;
       if (currentVersion !== version) return;
       if (result) {
         const typed = result as OpenAPISuggestionsWithResponsePaths;
@@ -229,21 +253,33 @@ export function useYAMLIntellisense(monaco: typeof MonacoNS | null, editor: Mona
         const responsePaths = typed.response_paths ?? [];
         const responsePath = (path: string) => responsePaths.find((item) => item.path === path);
         if (parsed.recordsPath && !recordPaths.has(parsed.recordsPath)) {
-          addMarker("parameters.response.records_path", `records_path ${parsed.recordsPath} is not present in the OpenAPI response schema.`);
+          addMarker(
+            "parameters.response.records_path",
+            `records_path ${parsed.recordsPath} is not present in the OpenAPI response schema.`,
+          );
         }
         if (parsed.nextURLPath) {
           const match = responsePath(parsed.nextURLPath);
           if (!match || (match.detail && !match.detail.includes("string"))) {
-            addMarker("parameters.pagination.next_url_path", `next_url_path ${parsed.nextURLPath} is not a string response field.`);
+            addMarker(
+              "parameters.pagination.next_url_path",
+              `next_url_path ${parsed.nextURLPath} is not a string response field.`,
+            );
           }
         }
         if (parsed.paginationCursorPath && !responsePath(parsed.paginationCursorPath)) {
-          addMarker("parameters.pagination.cursor_path", `cursor_path ${parsed.paginationCursorPath} is not present in the OpenAPI response schema.`);
+          addMarker(
+            "parameters.pagination.cursor_path",
+            `cursor_path ${parsed.paginationCursorPath} is not present in the OpenAPI response schema.`,
+          );
         }
         if (parsed.hasMorePath) {
           const match = responsePath(parsed.hasMorePath);
           if (!match || (match.detail && !match.detail.includes("boolean"))) {
-            addMarker("parameters.pagination.has_more_path", `has_more_path ${parsed.hasMorePath} is not a boolean response field.`);
+            addMarker(
+              "parameters.pagination.has_more_path",
+              `has_more_path ${parsed.hasMorePath} is not a boolean response field.`,
+            );
           }
         }
       }
@@ -269,35 +305,37 @@ export function useYAMLIntellisense(monaco: typeof MonacoNS | null, editor: Mona
       return;
     }
 
-    const disposable = editor.onDidChangeModelContent((event: MonacoNS.editor.IModelContentChangedEvent) => {
-      if (!event.changes.some((change: { text: string }) => change.text.includes("/"))) {
-        return;
-      }
+    const disposable = editor.onDidChangeModelContent(
+      (event: MonacoNS.editor.IModelContentChangedEvent) => {
+        if (!event.changes.some((change: { text: string }) => change.text.includes("/"))) {
+          return;
+        }
 
-      const model = editor.getModel();
-      const position = editor.getPosition();
-      if (!model || !position) {
-        return;
-      }
+        const model = editor.getModel();
+        const position = editor.getPosition();
+        if (!model || !position) {
+          return;
+        }
 
-      const content = model.getValue();
-      if (!isIngestrYaml(content)) {
-        return;
-      }
+        const content = model.getValue();
+        if (!isIngestrYaml(content)) {
+          return;
+        }
 
-      const fieldContext = getYamlFieldContext(monaco, model, position);
-      if (!fieldContext) {
-        return;
-      }
+        const fieldContext = getYamlFieldContext(monaco, model, position);
+        if (!fieldContext) {
+          return;
+        }
 
-      if (!(fieldContext.inParameters && fieldContext.key === "source_table")) {
-        return;
-      }
+        if (!(fieldContext.inParameters && fieldContext.key === "source_table")) {
+          return;
+        }
 
-      queueMicrotask(() => {
-        void editor.getAction("editor.action.triggerSuggest")?.run();
-      });
-    });
+        queueMicrotask(() => {
+          void editor.getAction("editor.action.triggerSuggest")?.run();
+        });
+      },
+    );
 
     return () => {
       disposable.dispose();
@@ -305,7 +343,13 @@ export function useYAMLIntellisense(monaco: typeof MonacoNS | null, editor: Mona
   }, [asset, editor, monaco]);
 }
 
-function buildAPIKeySuggestions({ keyContext, monaco }: { keyContext: YamlKeyContext; monaco: typeof MonacoNS }) {
+function buildAPIKeySuggestions({
+  keyContext,
+  monaco,
+}: {
+  keyContext: YamlKeyContext;
+  monaco: typeof MonacoNS;
+}) {
   const snippetsForPath = apiKeySnippetsForPath(keyContext.path);
   return snippetsForPath
     .filter((item) => item.label.startsWith(keyContext.prefix))
@@ -321,7 +365,13 @@ function buildAPIKeySuggestions({ keyContext, monaco }: { keyContext: YamlKeyCon
     );
 }
 
-function buildAPIValueSuggestions({ fieldContext, monaco }: { fieldContext: YamlFieldContext; monaco: typeof MonacoNS }) {
+function buildAPIValueSuggestions({
+  fieldContext,
+  monaco,
+}: {
+  fieldContext: YamlFieldContext;
+  monaco: typeof MonacoNS;
+}) {
   const values = apiValueSuggestionsForField(fieldContext);
   return values.map((item) =>
     toCompletionItem(monaco, {
@@ -352,11 +402,20 @@ async function buildAPIOpenAPIValueSuggestions({
   fieldContext: YamlFieldContext;
   monaco: typeof MonacoNS;
 }): Promise<MonacoNS.languages.CompletionItem[] | null> {
-  const isRequestURL = pathEndsWith(fieldContext.path, ["parameters", "request"]) && fieldContext.key === "url";
-  const isRecordsPath = pathEndsWith(fieldContext.path, ["parameters", "response"]) && fieldContext.key === "records_path";
-  const isNextURLPath = pathEndsWith(fieldContext.path, ["parameters", "pagination"]) && fieldContext.key === "next_url_path";
-  const isCursorPath = pathEndsWith(fieldContext.path, ["parameters", "pagination"]) && fieldContext.key === "cursor_path";
-  const isHasMorePath = pathEndsWith(fieldContext.path, ["parameters", "pagination"]) && fieldContext.key === "has_more_path";
+  const isRequestURL =
+    pathEndsWith(fieldContext.path, ["parameters", "request"]) && fieldContext.key === "url";
+  const isRecordsPath =
+    pathEndsWith(fieldContext.path, ["parameters", "response"]) &&
+    fieldContext.key === "records_path";
+  const isNextURLPath =
+    pathEndsWith(fieldContext.path, ["parameters", "pagination"]) &&
+    fieldContext.key === "next_url_path";
+  const isCursorPath =
+    pathEndsWith(fieldContext.path, ["parameters", "pagination"]) &&
+    fieldContext.key === "cursor_path";
+  const isHasMorePath =
+    pathEndsWith(fieldContext.path, ["parameters", "pagination"]) &&
+    fieldContext.key === "has_more_path";
   if (!isRequestURL && !isRecordsPath && !isNextURLPath && !isCursorPath && !isHasMorePath) {
     return null;
   }
@@ -380,7 +439,11 @@ async function buildAPIOpenAPIValueSuggestions({
   const responsePaths = Array.isArray(typedResult.response_paths) ? typedResult.response_paths : [];
 
   if (isRequestURL) {
-    const querySuggestions = buildAPIRequestURLQuerySuggestions(monaco, fieldContext, typedResult.query_parameters ?? []);
+    const querySuggestions = buildAPIRequestURLQuerySuggestions(
+      monaco,
+      fieldContext,
+      typedResult.query_parameters ?? [],
+    );
     if (querySuggestions) {
       return querySuggestions;
     }
@@ -429,8 +492,12 @@ async function buildAPIOpenAPIValueSuggestions({
     return toCompletionItem(monaco, {
       detail: item.detail,
       filterText: filterTextForCurrentYamlValue(fieldContext, item.path),
-      insertText: isRoot ? insertTextForYamlValue('""', fieldContext) : insertTextForYamlValue(item.path, fieldContext),
-      kind: isRoot ? monaco.languages.CompletionItemKind.Value : monaco.languages.CompletionItemKind.Field,
+      insertText: isRoot
+        ? insertTextForYamlValue('""', fieldContext)
+        : insertTextForYamlValue(item.path, fieldContext),
+      kind: isRoot
+        ? monaco.languages.CompletionItemKind.Value
+        : monaco.languages.CompletionItemKind.Field,
       label: isRoot ? '""' : item.path,
       range: fieldContext.range,
     });
@@ -462,7 +529,9 @@ function fetchOpenAPISuggestionsCached(
 function requestURLWithoutQuery(value: string) {
   const query = value.indexOf("?");
   const fragment = value.indexOf("#");
-  const end = [query, fragment].filter((index) => index >= 0).reduce((current, index) => Math.min(current, index), value.length);
+  const end = [query, fragment]
+    .filter((index) => index >= 0)
+    .reduce((current, index) => Math.min(current, index), value.length);
   return value.slice(0, end);
 }
 
@@ -513,7 +582,12 @@ function buildAPIRequestURLQuerySuggestions(
       .filter((parameter) => !used.has(parameter.name))
       .map((parameter) =>
         toCompletionItem(monaco, {
-          detail: ["query parameter", parameter.required ? "required" : "optional", parameter.type, parameter.description]
+          detail: [
+            "query parameter",
+            parameter.required ? "required" : "optional",
+            parameter.type,
+            parameter.description,
+          ]
             .filter(Boolean)
             .join(" · "),
           insertText: `${encodeURIComponent(parameter.name)}=`,
@@ -590,11 +664,20 @@ function parseAPIYaml(content: string): ParsedAPIYaml {
       stack.push({ indent, key });
       continue;
     }
-    if (joined === "parameters.openapi.url" || joined === "parameters.openapi_url" || joined === "openapi.url" || joined === "openapi_url") {
+    if (
+      joined === "parameters.openapi.url" ||
+      joined === "parameters.openapi_url" ||
+      joined === "openapi.url" ||
+      joined === "openapi_url"
+    ) {
       openapiUrl = value;
     } else if (joined === "parameters.request.url") {
       requestUrl = value;
-    } else if (joined === "parameters.request.method" || joined === "parameters.openapi.method" || joined === "openapi.method") {
+    } else if (
+      joined === "parameters.request.method" ||
+      joined === "parameters.openapi.method" ||
+      joined === "openapi.method"
+    ) {
       method = value;
     } else if (joined === "parameters.response.records_path") {
       recordsPath = value;
@@ -631,7 +714,11 @@ function apiKeySnippetsForPath(path: string[]): APIKeySuggestion[] {
       {
         label: "parameters",
         insertText:
-          "parameters:\n  openapi:\n    url: ${1:" + API_EXAMPLE_OPENAPI_URL + "}\n  request:\n    url: ${2:" + API_EXAMPLE_REQUEST_URL + '}\n    method: GET\n  response:\n    records_path: ${3:""}',
+          "parameters:\n  openapi:\n    url: ${1:" +
+          API_EXAMPLE_OPENAPI_URL +
+          "}\n  request:\n    url: ${2:" +
+          API_EXAMPLE_REQUEST_URL +
+          '}\n    method: GET\n  response:\n    records_path: ${3:""}',
       },
       {
         label: "columns",
@@ -650,7 +737,10 @@ function apiKeySnippetsForPath(path: string[]): APIKeySuggestion[] {
       {
         label: "request",
         detail: "HTTP request",
-        insertText: "request:\n  url: ${1:" + API_EXAMPLE_REQUEST_URL + "}\n  method: GET\n  headers:\n    Accept: application/json",
+        insertText:
+          "request:\n  url: ${1:" +
+          API_EXAMPLE_REQUEST_URL +
+          "}\n  method: GET\n  headers:\n    Accept: application/json",
       },
       {
         label: "response",
@@ -670,7 +760,8 @@ function apiKeySnippetsForPath(path: string[]): APIKeySuggestion[] {
       {
         label: "pagination",
         detail: "HTTP pagination",
-        insertText: "pagination:\n  type: ${1:page_number}\n  page_param: ${2:page}\n  start_page: 1\n  max_pages: ${3:10}",
+        insertText:
+          "pagination:\n  type: ${1:page_number}\n  page_param: ${2:page}\n  start_page: 1\n  max_pages: ${3:10}",
       },
       {
         label: "load",
@@ -814,10 +905,16 @@ function apiKeySnippetsForPath(path: string[]): APIKeySuggestion[] {
 
 function apiValueSuggestionsForField(fieldContext: YamlFieldContext): APIValueSuggestion[] {
   if (pathEndsWith(fieldContext.path, ["parameters", "request"]) && fieldContext.key === "method") {
-    return ["GET", "POST", "PUT", "PATCH", "DELETE"].map((value) => ({ value, detail: "HTTP method" }));
+    return ["GET", "POST", "PUT", "PATCH", "DELETE"].map((value) => ({
+      value,
+      detail: "HTTP method",
+    }));
   }
   if (pathEndsWith(fieldContext.path, ["parameters", "openapi"]) && fieldContext.key === "method") {
-    return ["GET", "POST", "PUT", "PATCH", "DELETE"].map((value) => ({ value, detail: "OpenAPI operation method" }));
+    return ["GET", "POST", "PUT", "PATCH", "DELETE"].map((value) => ({
+      value,
+      detail: "OpenAPI operation method",
+    }));
   }
   if (pathEndsWith(fieldContext.path, ["parameters", "openapi"]) && fieldContext.key === "url") {
     return [{ value: API_EXAMPLE_OPENAPI_URL, detail: "sample OpenAPI spec" }];
@@ -825,16 +922,28 @@ function apiValueSuggestionsForField(fieldContext: YamlFieldContext): APIValueSu
   if (pathEndsWith(fieldContext.path, ["parameters", "openapi"]) && fieldContext.key === "path") {
     return [{ value: "/alerts/active", detail: "sample OpenAPI path" }];
   }
-  if (pathEndsWith(fieldContext.path, ["parameters", "openapi"]) && fieldContext.key === "response_status") {
-    return ["200", "201", "202", "default"].map((value) => ({ value, detail: "OpenAPI response status" }));
+  if (
+    pathEndsWith(fieldContext.path, ["parameters", "openapi"]) &&
+    fieldContext.key === "response_status"
+  ) {
+    return ["200", "201", "202", "default"].map((value) => ({
+      value,
+      detail: "OpenAPI response status",
+    }));
   }
-  if (pathEndsWith(fieldContext.path, ["parameters", "openapi"]) && fieldContext.key === "validation") {
+  if (
+    pathEndsWith(fieldContext.path, ["parameters", "openapi"]) &&
+    fieldContext.key === "validation"
+  ) {
     return ["warn", "error", "off"].map((value) => ({ value, detail: "OpenAPI validation mode" }));
   }
   if (pathEndsWith(fieldContext.path, ["parameters", "request"]) && fieldContext.key === "url") {
     return [{ value: API_EXAMPLE_REQUEST_URL, detail: "sample API endpoint" }];
   }
-  if (pathEndsWith(fieldContext.path, ["parameters", "response"]) && fieldContext.key === "records_path") {
+  if (
+    pathEndsWith(fieldContext.path, ["parameters", "response"]) &&
+    fieldContext.key === "records_path"
+  ) {
     return [
       { value: '""', detail: "response root" },
       { value: "data", detail: "common records property" },
@@ -848,10 +957,19 @@ function apiValueSuggestionsForField(fieldContext: YamlFieldContext): APIValueSu
   if (pathEndsWith(fieldContext.path, ["parameters", "auth"]) && fieldContext.key === "in") {
     return ["header", "query"].map((value) => ({ value, detail: "api key location" }));
   }
-  if (pathEndsWith(fieldContext.path, ["parameters", "pagination"]) && fieldContext.key === "type") {
-    return ["page_number", "offset", "cursor", "next_url"].map((value) => ({ value, detail: "pagination strategy" }));
+  if (
+    pathEndsWith(fieldContext.path, ["parameters", "pagination"]) &&
+    fieldContext.key === "type"
+  ) {
+    return ["page_number", "offset", "cursor", "next_url"].map((value) => ({
+      value,
+      detail: "pagination strategy",
+    }));
   }
-  if (pathEndsWith(fieldContext.path, ["parameters", "pagination"]) && fieldContext.key === "next_url_path") {
+  if (
+    pathEndsWith(fieldContext.path, ["parameters", "pagination"]) &&
+    fieldContext.key === "next_url_path"
+  ) {
     return [
       { value: "pagination.next", detail: "common next URL property" },
       { value: "links.next", detail: "common next URL property" },
@@ -870,7 +988,9 @@ function pathEndsWith(path: string[], suffix: string[]) {
 
 async function buildSuggestions(args: {
   catalog: SuggestionCatalogState;
-  cacheRef: MutableRefObject<Map<string, Promise<Array<{ value: string; detail?: string; kind?: string }>>>>;
+  cacheRef: MutableRefObject<
+    Map<string, Promise<Array<{ value: string; detail?: string; kind?: string }>>>
+  >;
   connections: ConnectionEntry[];
   fieldContext: YamlFieldContext;
   monaco: typeof MonacoNS;
@@ -878,11 +998,22 @@ async function buildSuggestions(args: {
   parsed: ParsedIngestrYaml;
   selectedEnvironment?: string;
 }) {
-  const { catalog, cacheRef, connections, fieldContext, monaco, onRegisterConnectionTables, parsed, selectedEnvironment } = args;
+  const {
+    catalog,
+    cacheRef,
+    connections,
+    fieldContext,
+    monaco,
+    onRegisterConnectionTables,
+    parsed,
+    selectedEnvironment,
+  } = args;
 
   if (!fieldContext.inParameters && fieldContext.key === "connection") {
     const destination = parsed.parameters.destination.toLowerCase();
-    const matchingConnections = destination ? connections.filter((entry) => entry.type === destination) : connections.filter((entry) => SUPPORTED_DESTINATIONS.includes(entry.type));
+    const matchingConnections = destination
+      ? connections.filter((entry) => entry.type === destination)
+      : connections.filter((entry) => SUPPORTED_DESTINATIONS.includes(entry.type));
 
     return matchingConnections.map((entry) =>
       toCompletionItem(monaco, {
@@ -895,7 +1026,14 @@ async function buildSuggestions(args: {
   }
 
   if (fieldContext.inParameters && fieldContext.key === "destination") {
-    const values = Array.from(new Set([...SUPPORTED_DESTINATIONS, ...connections.map((entry) => entry.type).filter((type) => SUPPORTED_DESTINATIONS.includes(type))])).sort();
+    const values = Array.from(
+      new Set([
+        ...SUPPORTED_DESTINATIONS,
+        ...connections
+          .map((entry) => entry.type)
+          .filter((type) => SUPPORTED_DESTINATIONS.includes(type)),
+      ]),
+    ).sort();
 
     return values.map((value) =>
       toCompletionItem(monaco, {
@@ -909,7 +1047,9 @@ async function buildSuggestions(args: {
 
   if (fieldContext.inParameters && fieldContext.key === "destination_connection") {
     const destination = parsed.parameters.destination.toLowerCase();
-    const matchingConnections = destination ? connections.filter((entry) => entry.type === destination) : connections;
+    const matchingConnections = destination
+      ? connections.filter((entry) => entry.type === destination)
+      : connections;
 
     return matchingConnections.map((entry) =>
       toCompletionItem(monaco, {
@@ -955,7 +1095,11 @@ async function buildSuggestions(args: {
       );
     }
 
-    const cacheKey = [sourceConnectionName, fieldContext.normalizedValue, selectedEnvironment ?? ""].join("::");
+    const cacheKey = [
+      sourceConnectionName,
+      fieldContext.normalizedValue,
+      selectedEnvironment ?? "",
+    ].join("::");
     const existing = cacheRef.current.get(cacheKey);
     const pending =
       existing ??
@@ -1010,7 +1154,7 @@ function toCompletionItem(
     filterText?: string;
     insertText?: string;
     insertTextRules?: MonacoNS.languages.CompletionItemInsertTextRule;
-  }
+  },
 ): MonacoNS.languages.CompletionItem {
   return {
     detail: item.detail,
@@ -1025,7 +1169,7 @@ function toCompletionItem(
 
 function mapSuggestionKind(
   monaco: typeof MonacoNS,
-  kind?: string
+  kind?: string,
 ): MonacoNS.languages.CompletionItemKind {
   switch (kind) {
     case "bucket":
@@ -1043,7 +1187,7 @@ function mapSuggestionKind(
 function getYamlFieldContext(
   monaco: typeof MonacoNS,
   model: MonacoNS.editor.ITextModel,
-  position: MonacoNS.Position
+  position: MonacoNS.Position,
 ): YamlFieldContext | null {
   const lineText = model.getLineContent(position.lineNumber);
   const match = lineText.match(/^(\s*)([A-Za-z_][\w-]*):(\s*)(.*)$/);
@@ -1073,9 +1217,10 @@ function getYamlFieldContext(
         position.lineNumber,
         valueStartOffset + 1,
         position.lineNumber,
-        lineText.length + 1
+        lineText.length + 1,
       );
-  const contentStartColumn = replaceQuotedContentOnly && innerStartColumn !== null ? innerStartColumn : valueStartOffset + 1;
+  const contentStartColumn =
+    replaceQuotedContentOnly && innerStartColumn !== null ? innerStartColumn : valueStartOffset + 1;
 
   return {
     contentStartColumn,
@@ -1095,7 +1240,7 @@ function getYamlFieldContext(
 function getYamlKeyContext(
   monaco: typeof MonacoNS,
   model: MonacoNS.editor.ITextModel,
-  position: MonacoNS.Position
+  position: MonacoNS.Position,
 ): YamlKeyContext | null {
   const lineText = model.getLineContent(position.lineNumber);
   const beforeCursor = lineText.slice(0, position.column - 1);
@@ -1113,11 +1258,20 @@ function getYamlKeyContext(
   return {
     path: yamlParentPath(model, position.lineNumber, indent),
     prefix,
-    range: new monaco.Range(position.lineNumber, indent + 1, position.lineNumber, lineText.length + 1),
+    range: new monaco.Range(
+      position.lineNumber,
+      indent + 1,
+      position.lineNumber,
+      lineText.length + 1,
+    ),
   };
 }
 
-function yamlParentPath(model: MonacoNS.editor.ITextModel, lineNumber: number, currentIndent: number) {
+function yamlParentPath(
+  model: MonacoNS.editor.ITextModel,
+  lineNumber: number,
+  currentIndent: number,
+) {
   const parents: string[] = [];
   let maxParentIndent = currentIndent;
 
@@ -1146,10 +1300,7 @@ function yamlParentPath(model: MonacoNS.editor.ITextModel, lineNumber: number, c
   return parents;
 }
 
-function isInsideParameters(
-  model: MonacoNS.editor.ITextModel,
-  lineNumber: number
-): boolean {
+function isInsideParameters(model: MonacoNS.editor.ITextModel, lineNumber: number): boolean {
   let parametersIndent: number | null = null;
 
   for (let currentLine = 1; currentLine <= lineNumber; currentLine += 1) {
@@ -1221,7 +1372,7 @@ function parseIngestrYaml(content: string): ParsedIngestrYaml {
 function normalizeYamlValue(value: string): string {
   const withoutComment = value.replace(/\s+#.*$/, "").trim();
   if (
-    (withoutComment.startsWith("\"") && withoutComment.endsWith("\"")) ||
+    (withoutComment.startsWith('"') && withoutComment.endsWith('"')) ||
     (withoutComment.startsWith("'") && withoutComment.endsWith("'"))
   ) {
     return withoutComment.slice(1, -1);
@@ -1263,11 +1414,11 @@ function filterTextForCurrentYamlValue(fieldContext: YamlFieldContext, value: st
 }
 
 function isEmptyQuotedLiteral(value: string) {
-  return value === "\"\"" || value === "''";
+  return value === '""' || value === "''";
 }
 
-function quotedValueInfo(value: string): { quote: "\"" | "'"; contentEndOffset: number } | null {
-  if (value[0] !== "\"" && value[0] !== "'") {
+function quotedValueInfo(value: string): { quote: '"' | "'"; contentEndOffset: number } | null {
+  if (value[0] !== '"' && value[0] !== "'") {
     return null;
   }
   const quote = value[0];

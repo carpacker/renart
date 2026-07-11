@@ -60,7 +60,7 @@ export async function launchStagedDemo({ port }) {
       "poll",
       "--no-open",
     ],
-    { cwd: repoRoot, detached: true, stdio: ["ignore", "pipe", "pipe"] }
+    { cwd: repoRoot, detached: true, stdio: ["ignore", "pipe", "pipe"] },
   );
   let serverOutput = "";
   server.stdout.on("data", (chunk) => (serverOutput += chunk.toString()));
@@ -165,7 +165,7 @@ export async function launchStagedDemo({ port }) {
   }
   await writeFile(
     orderItems,
-    orderItemsOriginal.replace(breakNeedle, "i.quantity * i.unit_pricee AS line_total")
+    orderItemsOriginal.replace(breakNeedle, "i.quantity * i.unit_pricee AS line_total"),
   );
   await sleep(3000); // let the poll watcher pick up the broken file
   await triggerRun(ACME, "default", "schedule");
@@ -198,7 +198,12 @@ export async function launchStagedDemo({ port }) {
   await materializeStream(`/api/pipelines/${MARKETING}/materialize/stream`);
   await api(`/api/pipelines/${MARKETING}/env-schedules/default`, {
     method: "PUT",
-    body: { cron: "15 * * * *", timezone: "Europe/Berlin", catchup_policy: "skip", deploy_now: true },
+    body: {
+      cron: "15 * * * *",
+      timezone: "Europe/Berlin",
+      catchup_policy: "skip",
+      deploy_now: true,
+    },
   });
   await triggerRun(MARKETING, "default", "schedule");
   await triggerRun(MARKETING, "default", "schedule");
@@ -244,7 +249,10 @@ export async function launchStagedDemo({ port }) {
 }
 
 async function buildNotebook(api) {
-  const created = await api("/api/notebooks", { method: "POST", body: { title: "Revenue deep-dive" } });
+  const created = await api("/api/notebooks", {
+    method: "POST",
+    body: { title: "Revenue deep-dive" },
+  });
   const notebookId = created.notebook.id;
   const cells = async () => (await api(`/api/notebooks/${notebookId}`)).notebook.cells;
   const cellId = async (name) => {
@@ -304,7 +312,10 @@ ORDER BY revenue DESC`,
     },
   });
 
-  const result = await api(`/api/notebooks/${notebookId}/run`, { method: "POST", body: { all: true } });
+  const result = await api(`/api/notebooks/${notebookId}/run`, {
+    method: "POST",
+    body: { all: true },
+  });
   const failed = (result.results ?? []).filter((cell) => !["ok", "success"].includes(cell.status));
   if (failed.length > 0) {
     throw new Error(`notebook cells failed: ${JSON.stringify(failed).slice(0, 400)}`);
@@ -326,7 +337,12 @@ async function waitForStalenessSettled(api) {
       ?.find((asset) => asset.name === "staging.orders")
       ?.content?.includes("NOT IN ('refunded', 'pending')");
     const weeklyDiscovered = acme?.assets?.some((asset) => asset.name === "mart.weekly_summary");
-    if (states.includes("stale_edited") && states.includes("never_built") && contentCurrent && weeklyDiscovered) {
+    if (
+      states.includes("stale_edited") &&
+      states.includes("never_built") &&
+      contentCurrent &&
+      weeklyDiscovered
+    ) {
       return;
     }
     await sleep(1000);
@@ -374,7 +390,9 @@ export async function convertShotsToWebp(outputDir, names) {
   const sharpLib = sharp();
   for (const name of names) {
     const png = path.join(outputDir, `${name}.png`);
-    const info = await sharpLib(png).webp({ quality: 92 }).toFile(path.join(outputDir, `${name}.webp`));
+    const info = await sharpLib(png)
+      .webp({ quality: 92 })
+      .toFile(path.join(outputDir, `${name}.webp`));
     await unlink(png);
     console.log(`${name}.webp ${info.width}x${info.height} ${info.size} bytes`);
   }

@@ -21,8 +21,20 @@ try {
 
   server = spawn(
     goBinary,
-    ["run", ".", "web", workspaceDir, "--port", String(port), "--static-dir", path.join(webRoot, "dist"), "--watch-mode", "fsnotify", "--no-open"],
-    { cwd: repoRoot, detached: true, stdio: ["ignore", "pipe", "pipe"] }
+    [
+      "run",
+      ".",
+      "web",
+      workspaceDir,
+      "--port",
+      String(port),
+      "--static-dir",
+      path.join(webRoot, "dist"),
+      "--watch-mode",
+      "fsnotify",
+      "--no-open",
+    ],
+    { cwd: repoRoot, detached: true, stdio: ["ignore", "pipe", "pipe"] },
   );
 
   let serverOutput = "";
@@ -36,7 +48,10 @@ try {
   await waitForServer(baseURL, () => serverOutput);
 
   browser = await chromium.launch();
-  const page = await browser.newPage({ viewport: { width: 1440, height: 960 }, deviceScaleFactor: 1 });
+  const page = await browser.newPage({
+    viewport: { width: 1440, height: 960 },
+    deviceScaleFactor: 1,
+  });
   await page.addInitScript(() => {
     window.localStorage.setItem("renart-theme", "dark");
   });
@@ -55,7 +70,7 @@ try {
       return state.active === false;
     },
     undefined,
-    { timeout: 60_000 }
+    { timeout: 60_000 },
   );
   await page.evaluate(() => {
     window.localStorage.setItem("renart-quickstart-tour-dismissed", "true");
@@ -69,11 +84,17 @@ try {
   }
   const pipelineId = pipeline.id;
   const assetId = asset.id;
-  await page.goto(`${baseURL}/?pipeline=${encodeURIComponent(pipelineId)}&asset=${encodeURIComponent(assetId)}`, {
-    waitUntil: "domcontentloaded",
-  });
+  await page.goto(
+    `${baseURL}/?pipeline=${encodeURIComponent(pipelineId)}&asset=${encodeURIComponent(assetId)}`,
+    {
+      waitUntil: "domcontentloaded",
+    },
+  );
   await forceDarkTheme(page);
-  await page.getByTestId("editor-asset-name").getByText("quickstart.player_stats").waitFor({ timeout: 60_000 });
+  await page
+    .getByTestId("editor-asset-name")
+    .getByText("quickstart.player_stats")
+    .waitFor({ timeout: 60_000 });
   await page.locator(".monaco-editor").waitFor({ timeout: 60_000 });
   await page.screenshot({
     path: path.join(docsPublicDir, "quickstart-workspace.png"),

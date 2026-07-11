@@ -17,7 +17,7 @@ export function useSQLParseContext(
   const isSqlAsset = Boolean(
     asset && (isSqlAssetType(asset.type) || asset.path.toLowerCase().endsWith(".sql")),
   );
-  const assetId = isSqlAsset ? asset?.id ?? null : null;
+  const assetId = isSqlAsset ? (asset?.id ?? null) : null;
   const [data, setData] = useState<SqlParseContextResponse | null>(null);
   const hasContent = useMemo(() => content.trim().length > 0, [content]);
   const schemaPayload = useMemo(

@@ -11,7 +11,7 @@ import {
 } from "./suggestion-types";
 
 export function normalizeRegisteredColumns(
-  columns: RegisterAssetColumnsPayload["columns"]
+  columns: RegisterAssetColumnsPayload["columns"],
 ): SchemaColumn[] {
   return columns
     .map((column) => ({
@@ -25,12 +25,11 @@ export function normalizeRegisteredColumns(
 
 export function replaceAssetColumnObservation(
   observations: DynamicAssetColumnObservation[],
-  nextObservation: DynamicAssetColumnObservation
+  nextObservation: DynamicAssetColumnObservation,
 ): DynamicAssetColumnObservation[] {
   const signature = `${nextObservation.method}::${nextObservation.environment ?? ""}`;
   const currentObservation = observations.find(
-    (observation) =>
-      `${observation.method}::${observation.environment ?? ""}` === signature
+    (observation) => `${observation.method}::${observation.environment ?? ""}` === signature,
   );
 
   if (nextObservation.columns.length === 0 && currentObservation?.columns.length) {
@@ -39,8 +38,7 @@ export function replaceAssetColumnObservation(
 
   return [
     ...observations.filter(
-      (observation) =>
-        `${observation.method}::${observation.environment ?? ""}` !== signature
+      (observation) => `${observation.method}::${observation.environment ?? ""}` !== signature,
     ),
     nextObservation,
   ];
@@ -48,7 +46,7 @@ export function replaceAssetColumnObservation(
 
 export function replaceConnectionTableObservation(
   observations: DynamicSuggestionState["remoteTablesByConnectionKey"][string],
-  nextObservation: DynamicSuggestionState["remoteTablesByConnectionKey"][string][number]
+  nextObservation: DynamicSuggestionState["remoteTablesByConnectionKey"][string][number],
 ): DynamicSuggestionState["remoteTablesByConnectionKey"][string] {
   const signature = `${nextObservation.method}::${
     nextObservation.environment ?? ""
@@ -59,7 +57,7 @@ export function replaceConnectionTableObservation(
       (observation) =>
         `${observation.method}::${observation.environment ?? ""}::${
           observation.databaseName ?? ""
-        }::${observation.prefix ?? ""}` !== signature
+        }::${observation.prefix ?? ""}` !== signature,
     ),
     nextObservation,
   ];
@@ -67,34 +65,30 @@ export function replaceConnectionTableObservation(
 
 export function replaceConnectionDatabaseObservation(
   observations: DynamicSuggestionState["remoteDatabasesByConnectionKey"][string],
-  nextObservation: DynamicRemoteDatabaseObservation
+  nextObservation: DynamicRemoteDatabaseObservation,
 ): DynamicSuggestionState["remoteDatabasesByConnectionKey"][string] {
   const signature = `${nextObservation.environment ?? ""}`;
 
   return [
-    ...observations.filter(
-      (observation) => `${observation.environment ?? ""}` !== signature
-    ),
+    ...observations.filter((observation) => `${observation.environment ?? ""}` !== signature),
     nextObservation,
   ];
 }
 
 export function replaceRemoteTableColumnObservation(
   observations: DynamicSuggestionState["remoteTableColumnsByTableKey"][string],
-  nextObservation: DynamicRemoteTableColumnObservation
+  nextObservation: DynamicRemoteTableColumnObservation,
 ): DynamicSuggestionState["remoteTableColumnsByTableKey"][string] {
   const signature = `${nextObservation.environment ?? ""}`;
 
   return [
-    ...observations.filter(
-      (observation) => `${observation.environment ?? ""}` !== signature
-    ),
+    ...observations.filter((observation) => `${observation.environment ?? ""}` !== signature),
     nextObservation,
   ];
 }
 
 export function normalizeRegisteredRemoteTables(
-  tables: RegisterConnectionTablesPayload["tables"]
+  tables: RegisterConnectionTablesPayload["tables"],
 ): RemoteTableSuggestionEntry[] {
   return tables
     .map((table) => ({
@@ -109,7 +103,7 @@ export function normalizeRegisteredRemoteTables(
 
 export function mergeRemoteTableEntries(
   left: RemoteTableSuggestionEntry[],
-  right: RemoteTableSuggestionEntry[]
+  right: RemoteTableSuggestionEntry[],
 ): RemoteTableSuggestionEntry[] {
   const merged = new Map<string, RemoteTableSuggestionEntry>();
 
@@ -131,7 +125,5 @@ export function mergeRemoteTableEntries(
     });
   }
 
-  return Array.from(merged.values()).sort((left, right) =>
-    left.name.localeCompare(right.name)
-  );
+  return Array.from(merged.values()).sort((left, right) => left.name.localeCompare(right.name));
 }

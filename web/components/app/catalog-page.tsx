@@ -17,7 +17,10 @@ import { useAssetResults } from "@/hooks/use-asset-results";
 import { deleteAsset } from "@/lib/api-assets";
 import { workspaceAtom } from "@/lib/atoms/domains/workspace";
 import type { WebAsset, WebPipeline } from "@/lib/types";
-import { labelForAppMaterializationState, useAppAssetMaterializationStatus } from "@/hooks/use-app-asset-materialization-status";
+import {
+  labelForAppMaterializationState,
+  useAppAssetMaterializationStatus,
+} from "@/hooks/use-app-asset-materialization-status";
 
 import { assets, edges, kindMeta, type AssetKind } from "./app-data";
 import { AppLineageCanvas, assetNameParts, type AppLineageCanvasAsset } from "./lineage-canvas";
@@ -91,7 +94,11 @@ function assetFileName(assetPath: string) {
 // Strip Bruin asset-selector decorations (++name+, -name) so the box behaves as
 // a plain substring filter over asset names.
 function normalizeFilterQuery(value: string) {
-  return value.trim().toLowerCase().replace(/^[+-]+/, "").replace(/[+-]+$/, "");
+  return value
+    .trim()
+    .toLowerCase()
+    .replace(/^[+-]+/, "")
+    .replace(/[+-]+$/, "");
 }
 
 export type AppCatalogSearch = { asset?: string };
@@ -110,26 +117,30 @@ export function AppCatalogPage({ selectedAssetId }: { selectedAssetId?: string }
   const [hiddenKinds, setHiddenKinds] = useState<Set<AssetKind>>(() => new Set());
 
   const catalogAssets = useMemo<AppLineageCanvasAsset[]>(
-    () => workspace?.pipelines.length ? workspace.pipelines.flatMap(catalogAssetsForPipeline) : assets,
-    [workspace?.pipelines]
+    () =>
+      workspace?.pipelines.length ? workspace.pipelines.flatMap(catalogAssetsForPipeline) : assets,
+    [workspace?.pipelines],
   );
   const materializationAssets = useMemo(
-    () => catalogAssets.map((asset) => ({
-      id: asset.id,
-      name: asset.name,
-      pipelineId: asset.pipelineId,
-      isMaterialized: asset.isMaterialized ?? (asset.status === "success" || asset.status === "ok"),
-    })),
-    [catalogAssets]
+    () =>
+      catalogAssets.map((asset) => ({
+        id: asset.id,
+        name: asset.name,
+        pipelineId: asset.pipelineId,
+        isMaterialized:
+          asset.isMaterialized ?? (asset.status === "success" || asset.status === "ok"),
+      })),
+    [catalogAssets],
   );
   const materializationStatusByAssetId = useAppAssetMaterializationStatus(materializationAssets);
   const displayedCatalogAssets = useMemo(
-    () => catalogAssets.map((asset) => ({
-      ...asset,
-      status: materializationStatusByAssetId[asset.id]?.status ?? asset.status,
-      materializedAt: labelForAppMaterializationState(materializationStatusByAssetId[asset.id]),
-    })),
-    [catalogAssets, materializationStatusByAssetId]
+    () =>
+      catalogAssets.map((asset) => ({
+        ...asset,
+        status: materializationStatusByAssetId[asset.id]?.status ?? asset.status,
+        materializedAt: labelForAppMaterializationState(materializationStatusByAssetId[asset.id]),
+      })),
+    [catalogAssets, materializationStatusByAssetId],
   );
 
   const availableKinds = useMemo(() => {
@@ -204,14 +215,22 @@ export function AppCatalogPage({ selectedAssetId }: { selectedAssetId?: string }
       <PageHeader
         title="Catalog"
         subtitle="Explore asset lineage across data_platform"
-        actions={<Button variant="outline" size="sm"><RotateCw className="size-3.5" />Reload</Button>}
+        actions={
+          <Button variant="outline" size="sm">
+            <RotateCw className="size-3.5" />
+            Reload
+          </Button>
+        }
       />
       <div className="flex items-center gap-2 px-3 pb-2">
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
             <Button variant={filterActive ? "default" : "outline"} size="sm">
               <Filter className="size-3.5" />
-              Filter{filterActive ? ` (${availableKinds.length - hiddenKinds.size}/${availableKinds.length})` : ""}
+              Filter
+              {filterActive
+                ? ` (${availableKinds.length - hiddenKinds.size}/${availableKinds.length})`
+                : ""}
             </Button>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="start" className="w-44">

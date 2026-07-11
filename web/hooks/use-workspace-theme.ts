@@ -61,14 +61,11 @@ export function useWorkspaceTheme() {
 
   const setTheme = useCallback((nextTheme: SetStateAction<WorkspaceTheme>) => {
     setThemeState((currentTheme) =>
-      typeof nextTheme === "function" ? nextTheme(currentTheme) : nextTheme
+      typeof nextTheme === "function" ? nextTheme(currentTheme) : nextTheme,
     );
   }, []);
 
-  const monacoTheme = useMemo(
-    () => (theme === "dark" ? "bruin-vs-dark" : "bruin-vs"),
-    [theme]
-  );
+  const monacoTheme = useMemo(() => (theme === "dark" ? "bruin-vs-dark" : "bruin-vs"), [theme]);
 
   return { theme, setTheme, monacoTheme };
 }

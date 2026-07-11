@@ -19,15 +19,10 @@ export async function inferAPIAsset(assetId: string) {
   });
 }
 
-export async function updateAssetColumns(
-  assetId: string,
-  columns: WebColumn[]
-) {
-  return fetchJSONWithBody<Record<string, string>>(
-    `/api/assets/${assetId}/columns`,
-    "PUT",
-    { columns }
-  );
+export async function updateAssetColumns(assetId: string, columns: WebColumn[]) {
+  return fetchJSONWithBody<Record<string, string>>(`/api/assets/${assetId}/columns`, "PUT", {
+    columns,
+  });
 }
 
 export async function fillAssetColumnsFromDB(assetId: string) {
@@ -35,7 +30,7 @@ export async function fillAssetColumnsFromDB(assetId: string) {
     `/api/assets/${assetId}/fill-columns-from-db`,
     {
       method: "POST",
-    }
+    },
   );
   if (!text) {
     return { status: res.ok ? "ok" : "error" };

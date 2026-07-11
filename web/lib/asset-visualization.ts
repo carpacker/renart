@@ -14,9 +14,7 @@ export type ChartSelection = {
   series: string[];
 };
 
-export function getAssetViewMode(
-  meta?: Record<string, string>
-): AssetViewMode | null {
+export function getAssetViewMode(meta?: Record<string, string>): AssetViewMode | null {
   const value = (meta?.web_view ?? "").trim().toLowerCase();
   if (value === "chart" || value === "markdown" || value === "table") {
     return value;
@@ -26,7 +24,7 @@ export function getAssetViewMode(
 
 export function buildMarkdown(
   meta: Record<string, string> | undefined,
-  rows: Record<string, unknown>[]
+  rows: Record<string, unknown>[],
 ): string {
   const template = (meta?.web_markdown_template ?? "").trim();
   if (template.length > 0) {
@@ -36,10 +34,7 @@ export function buildMarkdown(
   return getMarkdownValue(rows, meta?.web_markdown_column);
 }
 
-export function getTablePreviewLimit(
-  meta?: Record<string, string>,
-  fallback = 25
-): number {
+export function getTablePreviewLimit(meta?: Record<string, string>, fallback = 25): number {
   const raw = (meta?.web_table_limit ?? "").trim();
   if (!raw) {
     return fallback;
@@ -60,7 +55,7 @@ export function getTableDenseMode(meta?: Record<string, string>): boolean {
 export function buildLineChartSpec(
   rows: Record<string, unknown>[],
   meta?: Record<string, string>,
-  columns?: string[]
+  columns?: string[],
 ): LineChartSpec | null {
   const availableKeys = collectAvailableKeys(rows, columns);
   if (availableKeys.length < 2) {
@@ -97,22 +92,15 @@ export function buildLineChartSpec(
 export function resolveChartSelection(
   meta: Record<string, string> | undefined,
   rows: Record<string, unknown>[],
-  columns?: string[]
+  columns?: string[],
 ): ChartSelection | null {
   const availableKeys = collectAvailableKeys(rows, columns);
   if (availableKeys.length < 2) {
     return null;
   }
 
-  const configuredXKey = resolveKeyCaseInsensitive(
-    meta?.web_chart_x,
-    availableKeys
-  );
-  const configuredSeries = parseConfiguredSeries(
-    meta,
-    availableKeys,
-    configuredXKey
-  );
+  const configuredXKey = resolveKeyCaseInsensitive(meta?.web_chart_x, availableKeys);
+  const configuredSeries = parseConfiguredSeries(meta, availableKeys, configuredXKey);
 
   const inferredXKey = inferReasonableXKey(availableKeys);
   const xKey = configuredXKey ?? inferredXKey;
@@ -121,8 +109,7 @@ export function resolveChartSelection(
   }
 
   const inferredSeries = inferReasonableSeriesKeys(rows, availableKeys, xKey);
-  const series =
-    configuredSeries.length > 0 ? configuredSeries : inferredSeries;
+  const series = configuredSeries.length > 0 ? configuredSeries : inferredSeries;
   if (series.length === 0) {
     return null;
   }
@@ -133,10 +120,7 @@ export function resolveChartSelection(
   };
 }
 
-function collectAvailableKeys(
-  rows: Record<string, unknown>[],
-  columns?: string[]
-): string[] {
+function collectAvailableKeys(rows: Record<string, unknown>[], columns?: string[]): string[] {
   const orderedKeys: string[] = [];
   const seen = new Set<string>();
 
@@ -166,7 +150,7 @@ function collectAvailableKeys(
 
 function normalizeChartRows(
   rows: Record<string, unknown>[],
-  keys: string[]
+  keys: string[],
 ): Record<string, unknown>[] {
   return rows.map((row) => {
     const normalized: Record<string, unknown> = {};
@@ -177,10 +161,7 @@ function normalizeChartRows(
   });
 }
 
-function interpolateMarkdownTemplate(
-  template: string,
-  rows: Record<string, unknown>[]
-): string {
+function interpolateMarkdownTemplate(template: string, rows: Record<string, unknown>[]): string {
   const firstRow = rows[0] ?? {};
 
   return template.replace(/\{\{\s*([^}]+)\s*\}\}/g, (_match, rawExpression) => {
@@ -225,11 +206,7 @@ function stringifyTemplateValue(value: unknown): string {
       .replace(/\\t/g, "\t");
 
     const trimmed = normalized.trim();
-    if (
-      trimmed.includes("\n- ") &&
-      !trimmed.startsWith("- ") &&
-      !trimmed.startsWith("* ")
-    ) {
+    if (trimmed.includes("\n- ") && !trimmed.startsWith("- ") && !trimmed.startsWith("* ")) {
       normalized = `- ${trimmed}`;
     }
 
@@ -247,10 +224,7 @@ function stringifyTemplateValue(value: unknown): string {
   }
 }
 
-function getMarkdownValue(
-  rows: Record<string, unknown>[],
-  markdownColumn?: string
-): string {
+function getMarkdownValue(rows: Record<string, unknown>[], markdownColumn?: string): string {
   if (rows.length === 0) {
     return "";
   }
@@ -281,7 +255,7 @@ function getMarkdownValue(
 function parseConfiguredSeries(
   meta: Record<string, string> | undefined,
   keys: string[],
-  xKey: string | null
+  xKey: string | null,
 ): string[] {
   return (meta?.web_chart_series ?? "")
     .split(",")
@@ -314,7 +288,7 @@ function inferReasonableXKey(keys: string[]): string | null {
 function inferReasonableSeriesKeys(
   rows: Record<string, unknown>[],
   keys: string[],
-  xKey: string
+  xKey: string,
 ): string[] {
   return keys
     .filter((key) => key !== xKey)
@@ -322,10 +296,7 @@ function inferReasonableSeriesKeys(
     .slice(0, 3);
 }
 
-function isLikelyNumericSeries(
-  rows: Record<string, unknown>[],
-  key: string
-): boolean {
+function isLikelyNumericSeries(rows: Record<string, unknown>[], key: string): boolean {
   let sawNumericValue = false;
 
   for (const row of rows.slice(0, 50)) {
@@ -365,7 +336,7 @@ function isLikelyNumericSeries(
 
 function resolveKeyCaseInsensitive(
   requestedKey: string | undefined,
-  keys: string[]
+  keys: string[],
 ): string | null {
   const normalizedRequestedKey = (requestedKey ?? "").trim();
   if (!normalizedRequestedKey) {

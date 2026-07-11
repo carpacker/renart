@@ -56,11 +56,14 @@ export function NewNotebookDialog({
   };
 
   return (
-    <Dialog open={open} onOpenChange={(nextOpen) => {
-      if (!creating) {
-        onOpenChange(nextOpen);
-      }
-    }}>
+    <Dialog
+      open={open}
+      onOpenChange={(nextOpen) => {
+        if (!creating) {
+          onOpenChange(nextOpen);
+        }
+      }}
+    >
       <DialogContent>
         <form
           onSubmit={(event) => {
@@ -71,8 +74,13 @@ export function NewNotebookDialog({
           }}
         >
           <DialogHeader>
-            <DialogTitle className="flex items-center gap-2"><BookOpen className="size-4 text-primary" />New notebook</DialogTitle>
-            <DialogDescription>Create an exploratory SQL notebook in this workspace.</DialogDescription>
+            <DialogTitle className="flex items-center gap-2">
+              <BookOpen className="size-4 text-primary" />
+              New notebook
+            </DialogTitle>
+            <DialogDescription>
+              Create an exploratory SQL notebook in this workspace.
+            </DialogDescription>
           </DialogHeader>
           <div className="grid gap-2">
             <Label htmlFor="new-notebook-title">Title</Label>
@@ -87,12 +95,22 @@ export function NewNotebookDialog({
             />
           </div>
           {error ? (
-            <div className="mt-4 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700 dark:border-red-500/25 dark:bg-red-500/10 dark:text-red-300">{error}</div>
+            <div className="mt-4 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700 dark:border-red-500/25 dark:bg-red-500/10 dark:text-red-300">
+              {error}
+            </div>
           ) : null}
           <DialogFooter>
-            <Button type="button" variant="outline" onClick={() => onOpenChange(false)} disabled={creating}>Cancel</Button>
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => onOpenChange(false)}
+              disabled={creating}
+            >
+              Cancel
+            </Button>
             <Button type="submit" disabled={creating}>
-              {creating ? <Spinner className="size-4" /> : <CheckCircle2 className="size-4" />}Create
+              {creating ? <Spinner className="size-4" /> : <CheckCircle2 className="size-4" />}
+              Create
             </Button>
           </DialogFooter>
         </form>

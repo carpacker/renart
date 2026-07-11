@@ -132,8 +132,7 @@ export function NotebookCellMonaco({
     useState<MonacoNS.editor.IStandaloneCodeEditor | null>(null);
 
   const cellId = cell.cell_id ?? cell.id;
-  const isPython =
-    cell.type?.toLowerCase() === "python" || cell.path.toLowerCase().endsWith(".py");
+  const isPython = cell.type?.toLowerCase() === "python" || cell.path.toLowerCase().endsWith(".py");
   const ext = isPython ? "py" : "sql";
 
   // SQL intellisense (completion, parse-context, @viz, Jinja) is SQL-only;

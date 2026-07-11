@@ -43,10 +43,7 @@ export const pipelineAtom = atom<WebPipeline | null>((get) => {
     return null;
   }
 
-  return (
-    workspace.pipelines.find((pipeline) => pipeline.id === activePipeline) ??
-    null
-  );
+  return workspace.pipelines.find((pipeline) => pipeline.id === activePipeline) ?? null;
 });
 
 export const resolvedSelectedAssetAtom = atom<string | null>((get) => {
@@ -60,9 +57,7 @@ export const resolvedSelectedAssetAtom = atom<string | null>((get) => {
   const pipelineAssets = pipeline.assets ?? [];
 
   const pipelineAsset =
-    pipelineAssets.find((asset) => asset.id === selectedAsset) ??
-    pipelineAssets[0] ??
-    null;
+    pipelineAssets.find((asset) => asset.id === selectedAsset) ?? pipelineAssets[0] ?? null;
 
   return pipelineAsset?.id ?? null;
 });

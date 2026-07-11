@@ -80,7 +80,9 @@ test.describe("pipeline run crash recovery (live)", () => {
       const schedules = (await schedulesResponse.json()) as {
         schedules: Array<{ pipeline_id: string; pipeline_name: string }>;
       };
-      const sleeper = schedules.schedules.find((item) => item.pipeline_name === "sleeper") ?? schedules.schedules[0];
+      const sleeper =
+        schedules.schedules.find((item) => item.pipeline_name === "sleeper") ??
+        schedules.schedules[0];
       expect(sleeper, "sleeper pipeline should be scheduled").toBeTruthy();
 
       const triggerResponse = await ctxA.post(

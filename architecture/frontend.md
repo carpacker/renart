@@ -6,7 +6,7 @@ filesystem-changing action. There is no Node.js runtime in production.
 
 ## 1. Stack
 
-- **React 19.2 + TypeScript 5.9**
+- **React 19.2 + TypeScript 7**
 - **Routing:** TanStack Router (file-based, generated route tree)
 - **Build:** Vite 8 via `rolldown-vite`
 - **Styling:** Tailwind CSS v4 + shadcn/ui + Radix primitives + Base UI where used
@@ -20,6 +20,7 @@ filesystem-changing action. There is no Node.js runtime in production.
 - **Command UI:** `cmdk`
 - **Icons:** `lucide-react`, `react-icons`
 - **Markdown:** `react-markdown`
+- **Quality tooling:** Oxlint for linting and Oxfmt for formatting
 - **Realtime sync:** Server-Sent Events (see [backend.md](backend.md) §2)
 
 ## 2. Dev server
@@ -181,7 +182,7 @@ Relevant files: [asset-editor.tsx](../web/components/app/asset-editor.tsx),
 
 ## 8. Validation
 
-Build the frontend from [web/package.json](../web/package.json): `pnpm build`
-(prefer `pnpm` over `npm`). For behavior that touches workspace sync, canvas
-interactions, inspect/materialize, or Monaco, run the live e2e suite:
-`corepack pnpm test:e2e:live` in `web/`.
+Run `pnpm check` from `web/` to verify Oxfmt, Oxlint, TypeScript, and the Vite
+production build (prefer `pnpm` over `npm`). For behavior that touches workspace
+sync, canvas interactions, inspect/materialize, or Monaco, run the live e2e
+suite: `corepack pnpm test:e2e:live` in `web/`.

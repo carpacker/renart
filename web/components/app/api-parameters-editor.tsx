@@ -7,7 +7,11 @@ import { useAssetMonaco } from "@/hooks/use-asset-monaco";
 import { useDebouncedAssetSave } from "@/hooks/use-debounced-asset-save";
 import { useWorkspaceTheme } from "@/hooks/use-workspace-theme";
 import { refreshAssetColumnsFromDefinition } from "@/lib/api-asset-transactions";
-import { extractParametersText, hasIncompletePlainYAMLKeyLine, spliceParametersText } from "@/lib/api-parameters-yaml";
+import {
+  extractParametersText,
+  hasIncompletePlainYAMLKeyLine,
+  spliceParametersText,
+} from "@/lib/api-parameters-yaml";
 import { WebAsset } from "@/lib/types";
 
 /**
@@ -68,7 +72,11 @@ export function ApiParametersEditor({
       return;
     }
     pendingBlockRef.current = null;
-    void saveAssetNow(pipelineId, asset.id, spliceParametersText(latestContentRef.current, pending));
+    void saveAssetNow(
+      pipelineId,
+      asset.id,
+      spliceParametersText(latestContentRef.current, pending),
+    );
   }, [asset.id, pipelineId, saveAssetNow]);
 
   const handleChange = useCallback(
@@ -97,7 +105,7 @@ export function ApiParametersEditor({
         });
       }, 1200);
     },
-    [asset.id, flushSave]
+    [asset.id, flushSave],
   );
 
   // Flush a pending save when the editor unmounts (asset switch / navigation).
@@ -110,20 +118,14 @@ export function ApiParametersEditor({
     };
   }, [flushSave]);
 
-  const {
-    editorModelPath,
-    formatSQL,
-    handleBeforeMount,
-    handleMount,
-    isSqlAsset,
-    shortcutLabel,
-  } = useAssetMonaco({
-    asset,
-    editorValue: block,
-    onGoToAsset,
-    onInspect,
-    onSave: flushSave,
-  });
+  const { editorModelPath, formatSQL, handleBeforeMount, handleMount, isSqlAsset, shortcutLabel } =
+    useAssetMonaco({
+      asset,
+      editorValue: block,
+      onGoToAsset,
+      onInspect,
+      onSave: flushSave,
+    });
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">

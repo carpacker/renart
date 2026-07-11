@@ -32,19 +32,15 @@ let workspaceConfigLoadPromise: Promise<void> | null = null;
 export function useWorkspaceSettingsData() {
   const [workspaceConfig, setWorkspaceConfig] = useAtom(workspaceConfigAtom);
   const [workspaceEnvironmentPolicies, setWorkspaceEnvironmentPolicies] = useAtom(
-    workspaceEnvironmentPoliciesAtom
+    workspaceEnvironmentPoliciesAtom,
   );
-  const [workspaceConfigLoading, setWorkspaceConfigLoading] = useAtom(
-    workspaceConfigLoadingAtom
-  );
-  const [workspaceConfigBusy, setWorkspaceConfigBusy] = useAtom(
-    workspaceConfigBusyAtom
-  );
+  const [workspaceConfigLoading, setWorkspaceConfigLoading] = useAtom(workspaceConfigLoadingAtom);
+  const [workspaceConfigBusy, setWorkspaceConfigBusy] = useAtom(workspaceConfigBusyAtom);
   const [workspaceConfigStatusMessage, setWorkspaceConfigStatusMessage] = useAtom(
-    workspaceConfigStatusMessageAtom
+    workspaceConfigStatusMessageAtom,
   );
   const [workspaceConfigStatusTone, setWorkspaceConfigStatusTone] = useAtom(
-    workspaceConfigStatusToneAtom
+    workspaceConfigStatusToneAtom,
   );
 
   const loadWorkspaceConfig = useCallback(async () => {
@@ -62,9 +58,7 @@ export function useWorkspaceSettingsData() {
         setWorkspaceConfigStatusTone(null);
       } catch (error) {
         setWorkspaceConfigStatusMessage(
-          error instanceof Error
-            ? error.message
-            : "Failed to load workspace config."
+          error instanceof Error ? error.message : "Failed to load workspace config.",
         );
         setWorkspaceConfigStatusTone("error");
       } finally {
@@ -90,9 +84,9 @@ export function useWorkspaceSettingsData() {
   const normalizedConfigEnvironments = useMemo(
     () =>
       [...(workspaceConfig?.environments ?? [])].sort((left, right) =>
-        left.name.localeCompare(right.name)
+        left.name.localeCompare(right.name),
       ),
-    [workspaceConfig]
+    [workspaceConfig],
   );
 
   const fallbackConfigEnvironment = useMemo(
@@ -101,14 +95,11 @@ export function useWorkspaceSettingsData() {
       workspaceConfig?.default_environment ||
       normalizedConfigEnvironments[0]?.name ||
       null,
-    [normalizedConfigEnvironments, workspaceConfig]
+    [normalizedConfigEnvironments, workspaceConfig],
   );
 
   const runWorkspaceConfigMutation = useCallback(
-    async (
-      operation: () => Promise<WorkspaceConfigResponse>,
-      successMessage: string
-    ) => {
+    async (operation: () => Promise<WorkspaceConfigResponse>, successMessage: string) => {
       setWorkspaceConfigBusy(true);
       setWorkspaceConfigStatusMessage(null);
       setWorkspaceConfigStatusTone(null);
@@ -121,9 +112,7 @@ export function useWorkspaceSettingsData() {
         return response;
       } catch (error) {
         setWorkspaceConfigStatusMessage(
-          error instanceof Error
-            ? error.message
-            : "Workspace config update failed."
+          error instanceof Error ? error.message : "Workspace config update failed.",
         );
         setWorkspaceConfigStatusTone("error");
         throw error;
@@ -131,29 +120,25 @@ export function useWorkspaceSettingsData() {
         setWorkspaceConfigBusy(false);
       }
     },
-    []
+    [],
   );
 
   const handleUpdateWorkspaceProject = useCallback(
     (input: { name?: string; features?: Record<string, boolean> }) =>
       runWorkspaceConfigMutation(
         () => updateWorkspaceProject(input),
-        input.name ? `Project renamed to "${input.name}".` : "Project settings updated."
+        input.name ? `Project renamed to "${input.name}".` : "Project settings updated.",
       ),
-    [runWorkspaceConfigMutation]
+    [runWorkspaceConfigMutation],
   );
 
   const handleCreateWorkspaceEnvironment = useCallback(
-    (input: {
-      name: string;
-      schema_prefix?: string;
-      set_as_default?: boolean;
-    }) =>
+    (input: { name: string; schema_prefix?: string; set_as_default?: boolean }) =>
       runWorkspaceConfigMutation(
         () => createWorkspaceEnvironment(input),
-        `Environment "${input.name}" created.`
+        `Environment "${input.name}" created.`,
       ),
-    [runWorkspaceConfigMutation]
+    [runWorkspaceConfigMutation],
   );
 
   const handleUpdateWorkspaceEnvironment = useCallback(
@@ -165,9 +150,9 @@ export function useWorkspaceSettingsData() {
     }) =>
       runWorkspaceConfigMutation(
         () => updateWorkspaceEnvironment(input),
-        `Environment "${input.new_name || input.name}" saved.`
+        `Environment "${input.new_name || input.name}" saved.`,
       ),
-    [runWorkspaceConfigMutation]
+    [runWorkspaceConfigMutation],
   );
 
   const handleCloneWorkspaceEnvironment = useCallback(
@@ -179,18 +164,18 @@ export function useWorkspaceSettingsData() {
     }) =>
       runWorkspaceConfigMutation(
         () => cloneWorkspaceEnvironment(input),
-        `Environment "${input.target_name}" cloned.`
+        `Environment "${input.target_name}" cloned.`,
       ),
-    [runWorkspaceConfigMutation]
+    [runWorkspaceConfigMutation],
   );
 
   const handleDeleteWorkspaceEnvironment = useCallback(
     (name: string) =>
       runWorkspaceConfigMutation(
         () => deleteWorkspaceEnvironment(name),
-        `Environment "${name}" deleted.`
+        `Environment "${name}" deleted.`,
       ),
-    [runWorkspaceConfigMutation]
+    [runWorkspaceConfigMutation],
   );
 
   const handleCreateWorkspaceConnection = useCallback(
@@ -202,9 +187,9 @@ export function useWorkspaceSettingsData() {
     }) =>
       runWorkspaceConfigMutation(
         () => createWorkspaceConnection(input),
-        `Connection "${input.name}" created.`
+        `Connection "${input.name}" created.`,
       ),
-    [runWorkspaceConfigMutation]
+    [runWorkspaceConfigMutation],
   );
 
   const handleUpdateWorkspaceConnection = useCallback(
@@ -217,18 +202,18 @@ export function useWorkspaceSettingsData() {
     }) =>
       runWorkspaceConfigMutation(
         () => updateWorkspaceConnection(input),
-        `Connection "${input.name}" saved.`
+        `Connection "${input.name}" saved.`,
       ),
-    [runWorkspaceConfigMutation]
+    [runWorkspaceConfigMutation],
   );
 
   const handleDeleteWorkspaceConnection = useCallback(
     (input: { environment_name: string; name: string }) =>
       runWorkspaceConfigMutation(
         () => deleteWorkspaceConnection(input),
-        `Connection "${input.name}" deleted.`
+        `Connection "${input.name}" deleted.`,
       ),
-    [runWorkspaceConfigMutation]
+    [runWorkspaceConfigMutation],
   );
 
   const loadWorkspaceEnvironmentPolicy = useCallback(
@@ -240,7 +225,7 @@ export function useWorkspaceSettingsData() {
       }));
       return response.policy;
     },
-    [setWorkspaceEnvironmentPolicies]
+    [setWorkspaceEnvironmentPolicies],
   );
 
   const handleUpdateWorkspaceEnvironmentPolicy = useCallback(
@@ -259,9 +244,7 @@ export function useWorkspaceSettingsData() {
         return response.policy;
       } catch (error) {
         setWorkspaceConfigStatusMessage(
-          error instanceof Error
-            ? error.message
-            : "Environment policy update failed."
+          error instanceof Error ? error.message : "Environment policy update failed.",
         );
         setWorkspaceConfigStatusTone("error");
         throw error;
@@ -274,7 +257,7 @@ export function useWorkspaceSettingsData() {
       setWorkspaceConfigStatusMessage,
       setWorkspaceConfigStatusTone,
       setWorkspaceEnvironmentPolicies,
-    ]
+    ],
   );
 
   return {

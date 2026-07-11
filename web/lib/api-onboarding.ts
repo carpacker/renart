@@ -52,11 +52,7 @@ export async function importOnboardingDatabase(input: {
   create_if_missing?: boolean;
 }): Promise<OnboardingImportResponse> {
   invalidateOnboardingStateCache();
-  return fetchJSONWithBody<OnboardingImportResponse>(
-    "/api/onboarding/import",
-    "POST",
-    input
-  );
+  return fetchJSONWithBody<OnboardingImportResponse>("/api/onboarding/import", "POST", input);
 }
 
 export async function createDuckDBQuickstart(input: {
@@ -67,11 +63,7 @@ export async function createDuckDBQuickstart(input: {
   materialize?: boolean;
 }): Promise<OnboardingImportResponse> {
   invalidateOnboardingStateCache();
-  return fetchJSONWithBody<OnboardingImportResponse>(
-    "/api/onboarding/quickstart",
-    "POST",
-    input
-  );
+  return fetchJSONWithBody<OnboardingImportResponse>("/api/onboarding/quickstart", "POST", input);
 }
 
 export async function previewOnboardingDiscovery(input: {
@@ -80,11 +72,7 @@ export async function previewOnboardingDiscovery(input: {
   values: Record<string, unknown>;
   database?: string;
 }): Promise<OnboardingDiscoveryResponse> {
-  return fetchJSONWithBody<OnboardingDiscoveryResponse>(
-    "/api/onboarding/discovery",
-    "POST",
-    input
-  );
+  return fetchJSONWithBody<OnboardingDiscoveryResponse>("/api/onboarding/discovery", "POST", input);
 }
 
 export async function getOnboardingPathSuggestions(prefix?: string) {
@@ -96,12 +84,12 @@ export async function getOnboardingPathSuggestions(prefix?: string) {
   const query = search.toString();
   return fetchJSON<OnboardingPathSuggestionsResponse>(
     `/api/onboarding/path-suggestions${query ? `?${query}` : ""}`,
-    { cache: "no-store" }
+    { cache: "no-store" },
   );
 }
 
 export async function updateOnboardingState(
-  state: OnboardingSessionState
+  state: OnboardingSessionState,
 ): Promise<{ status: string }> {
   cachedOnboardingState = state;
   pendingOnboardingState = null;

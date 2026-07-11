@@ -11,13 +11,17 @@ import {
 } from "@/lib/atoms/domains/workspace";
 import { getWorkspace } from "@/lib/api";
 import type { StalenessUpdatedEvent } from "@/lib/api-staleness";
-import { SchedulerRunEvent, schedulerRunEventAtom, stalenessEventAtom } from "@/lib/atoms/domains/results";
+import {
+  SchedulerRunEvent,
+  schedulerRunEventAtom,
+  stalenessEventAtom,
+} from "@/lib/atoms/domains/results";
 import { WebAsset, WorkspaceEvent, WorkspaceState } from "@/lib/types";
 
 function mergeWorkspaceWithPreservedContent(
   current: WorkspaceState | null,
   incoming: WorkspaceState,
-  changedAssetIds: string[] = []
+  changedAssetIds: string[] = [],
 ): WorkspaceState {
   if (!current) {
     return incoming;
@@ -48,9 +52,7 @@ function mergeWorkspaceWithPreservedContent(
         ...asset,
         content: asset.content || currentAsset.content,
         meta: asset.meta ?? (isChangedAsset ? asset.meta : currentAsset.meta),
-        columns:
-          asset.columns ??
-          (isChangedAsset ? asset.columns : currentAsset.columns),
+        columns: asset.columns ?? (isChangedAsset ? asset.columns : currentAsset.columns),
         // These clear to empty (e.g. removing the last tag, blanking the owner,
         // or fixing a syntax error so the asset parses again). The backend omits
         // empty values, so for a changed asset we must take the incoming (absent)
@@ -61,8 +63,7 @@ function mergeWorkspaceWithPreservedContent(
           asset.incremental_key ??
           (isChangedAsset ? asset.incremental_key : currentAsset.incremental_key),
         parse_error:
-          asset.parse_error ??
-          (isChangedAsset ? asset.parse_error : currentAsset.parse_error),
+          asset.parse_error ?? (isChangedAsset ? asset.parse_error : currentAsset.parse_error),
       };
     }),
   }));
@@ -194,8 +195,7 @@ export function useWorkspaceSync() {
 
         setWorkspace((current) => {
           const currentRevision = current?.revision ?? -1;
-          const incomingRevision =
-            payload.workspace?.revision ?? currentRevision + 1;
+          const incomingRevision = payload.workspace?.revision ?? currentRevision + 1;
 
           if (incomingRevision <= currentRevision) {
             return current;
@@ -205,7 +205,7 @@ export function useWorkspaceSync() {
             return mergeWorkspaceWithPreservedContent(
               current,
               payload.workspace,
-              payload.changed_asset_ids ?? []
+              payload.changed_asset_ids ?? [],
             );
           }
 
@@ -221,7 +221,13 @@ export function useWorkspaceSync() {
       clearOfflineTimer();
       source.close();
     };
-  }, [setSchedulerRunEvent, setServerOnline, setStalenessEvent, setWorkspace, setWorkspaceSyncSource]);
+  }, [
+    setSchedulerRunEvent,
+    setServerOnline,
+    setStalenessEvent,
+    setWorkspace,
+    setWorkspaceSyncSource,
+  ]);
 
   return workspace as WorkspaceState | null;
 }

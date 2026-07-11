@@ -1,13 +1,6 @@
 import { test as base } from "@playwright/test";
 import { spawn } from "node:child_process";
-import {
-  cpSync,
-  existsSync,
-  mkdirSync,
-  mkdtempSync,
-  rmSync,
-  writeFileSync,
-} from "node:fs";
+import { cpSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import http from "node:http";
 import net from "node:net";
 import { open } from "node:fs/promises";
@@ -101,7 +94,9 @@ export const liveTest = base.extend<{
       });
     };
 
-    const onRequestFailed = (request: Parameters<typeof page.on>[1] extends never ? never : any) => {
+    const onRequestFailed = (
+      request: Parameters<typeof page.on>[1] extends never ? never : any,
+    ) => {
       const startedAt = requestStartedAt.get(request);
       recordEvent({
         type: "requestfailed",
@@ -126,11 +121,7 @@ export const liveTest = base.extend<{
 
       if (testInfo.status !== testInfo.expectedStatus) {
         const networkLogPath = testInfo.outputPath("network-requests.json");
-        writeFileSync(
-          networkLogPath,
-          JSON.stringify(networkEvents, null, 2),
-          "utf8"
-        );
+        writeFileSync(networkLogPath, JSON.stringify(networkEvents, null, 2), "utf8");
         await testInfo.attach("network-requests", {
           path: networkLogPath,
           contentType: "application/json",
@@ -142,7 +133,7 @@ export const liveTest = base.extend<{
     void livePostgres;
     if (!existsSync(binaryPath)) {
       throw new Error(
-        `Renart binary not found at ${binaryPath}. Build it first or set BRUIN_E2E_BINARY.`
+        `Renart binary not found at ${binaryPath}. Build it first or set BRUIN_E2E_BINARY.`,
       );
     }
 
@@ -157,7 +148,7 @@ export const liveTest = base.extend<{
       writeFileSync(
         configPath,
         "environments:\n  default:\n    connections:\n      duckdb:\n        - name: duckdb-default\n          path: duckdb-files/local.db\n",
-        "utf8"
+        "utf8",
       );
     }
 
@@ -189,7 +180,7 @@ export const liveTest = base.extend<{
           ...liveAppEnv,
         },
         stdio: "inherit",
-      }
+      },
     );
 
     try {
@@ -218,13 +209,27 @@ export type SpawnedServer = {
 // the single-server liveApp fixture does not cover.
 export async function startLiveServer(workspaceDir: string): Promise<SpawnedServer> {
   if (!existsSync(binaryPath)) {
-    throw new Error(`Renart binary not found at ${binaryPath}. Build it first or set BRUIN_E2E_BINARY.`);
+    throw new Error(
+      `Renart binary not found at ${binaryPath}. Build it first or set BRUIN_E2E_BINARY.`,
+    );
   }
   const port = await getAvailablePort();
   const baseURL = `http://${host}:${port}`;
   const child = spawn(
     binaryPath,
-    ["web", "--host", host, "--port", String(port), "--static-dir", staticDir, "--watch-mode", "poll", "--no-open", workspaceDir],
+    [
+      "web",
+      "--host",
+      host,
+      "--port",
+      String(port),
+      "--static-dir",
+      staticDir,
+      "--watch-mode",
+      "poll",
+      "--no-open",
+      workspaceDir,
+    ],
     {
       cwd: repoRoot,
       env: {
@@ -232,7 +237,7 @@ export async function startLiveServer(workspaceDir: string): Promise<SpawnedServ
         RENART_PROJECTS_REGISTRY: join(workspaceDir, ".renart", "projects.json"),
       },
       stdio: "inherit",
-    }
+    },
   );
   await waitForServer(baseURL);
   return { baseURL, child };

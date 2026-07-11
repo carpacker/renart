@@ -6,11 +6,7 @@ import { AssetCodeEditor } from "@/components/asset-code-editor";
 import { useAssetContentEditing } from "@/hooks/use-asset-content-editing";
 import { useAssetMonaco } from "@/hooks/use-asset-monaco";
 import { useWorkspaceTheme } from "@/hooks/use-workspace-theme";
-import {
-  addAssetPythonDependency,
-  AssetPythonDeps,
-  getAssetPythonDeps,
-} from "@/lib/api-assets";
+import { addAssetPythonDependency, AssetPythonDeps, getAssetPythonDeps } from "@/lib/api-assets";
 import { missingPythonImports } from "@/lib/notebook-python-deps";
 import { WebAsset } from "@/lib/types";
 
@@ -35,29 +31,23 @@ export function AppAssetEditor({
   onGoToAsset?: (pipelineId: string, assetId: string) => void;
 }) {
   const { monacoTheme } = useWorkspaceTheme();
-  const {
-    editorDisplayValue,
-    editorValue,
-    handleEditorChange,
-    handleSaveSelectedAsset,
-  } = useAssetContentEditing({ asset, pipelineId });
-  const {
-    editorModelPath,
-    formatSQL,
-    handleBeforeMount,
-    handleMount,
-    isSqlAsset,
-    shortcutLabel,
-  } = useAssetMonaco({
-    asset,
-    editorValue,
-    onGoToAsset,
-    onInspect,
-    onSave: handleSaveSelectedAsset,
-  });
+  const { editorDisplayValue, editorValue, handleEditorChange, handleSaveSelectedAsset } =
+    useAssetContentEditing({ asset, pipelineId });
+  const { editorModelPath, formatSQL, handleBeforeMount, handleMount, isSqlAsset, shortcutLabel } =
+    useAssetMonaco({
+      asset,
+      editorValue,
+      onGoToAsset,
+      onInspect,
+      onSave: handleSaveSelectedAsset,
+    });
 
   const isPythonAsset = asset.path?.toLowerCase().endsWith(".py") ?? false;
-  const { missingImports, addDependency } = useAssetPythonDeps(asset.id, isPythonAsset, editorValue);
+  const { missingImports, addDependency } = useAssetPythonDeps(
+    asset.id,
+    isPythonAsset,
+    editorValue,
+  );
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
@@ -79,7 +69,10 @@ export function AppAssetEditor({
       />
       {missingImports.length > 0 ? (
         <div className="shrink-0 border-t p-2">
-          <MissingPythonDepsBanner missingImports={missingImports} onAddDependency={addDependency} />
+          <MissingPythonDepsBanner
+            missingImports={missingImports}
+            onAddDependency={addDependency}
+          />
         </div>
       ) : null}
     </div>
@@ -112,7 +105,7 @@ function useAssetPythonDeps(assetId: string, enabled: boolean, source: string) {
           }
         });
     },
-    [assetId, enabled]
+    [assetId, enabled],
   );
 
   useEffect(() => {
@@ -130,7 +123,7 @@ function useAssetPythonDeps(assetId: string, enabled: boolean, source: string) {
         // Leave the banner in place; the user can retry.
       }
     },
-    [assetId]
+    [assetId],
   );
 
   const missingImports = useMemo(() => {

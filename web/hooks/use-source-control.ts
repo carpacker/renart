@@ -45,58 +45,80 @@ export function useSourceControl() {
     }
   }, []);
 
-  const run = useCallback(async (action: () => Promise<{ status: "ok" | "error"; repository?: SourceControlRepository }>) => {
-    setBusy(true);
-    setError("");
-    try {
-      const response = await action();
-      if (response.status === "ok" && response.repository) {
-        setRepository(response.repository);
+  const run = useCallback(
+    async (
+      action: () => Promise<{ status: "ok" | "error"; repository?: SourceControlRepository }>,
+    ) => {
+      setBusy(true);
+      setError("");
+      try {
+        const response = await action();
+        if (response.status === "ok" && response.repository) {
+          setRepository(response.repository);
+        }
+        return response;
+      } catch (err) {
+        setError(err instanceof Error ? err.message : "Source control operation failed");
+        throw err;
+      } finally {
+        setBusy(false);
       }
-      return response;
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Source control operation failed");
-      throw err;
-    } finally {
-      setBusy(false);
-    }
-  }, []);
+    },
+    [],
+  );
 
-  const updateChanges = useCallback((paths: string[], update: (change: SourceControlChange) => SourceControlChange | null) => {
-    const wanted = new Set(paths);
-    setRepository((current) => {
-      if (!current) return current;
-      const changes = current.changes
-        .map((change) => wanted.has(change.path) ? update(change) : change)
-        .filter((change): change is SourceControlChange => Boolean(change));
-      return { ...current, clean: changes.length === 0, changes };
-    });
-  }, []);
+  const updateChanges = useCallback(
+    (paths: string[], update: (change: SourceControlChange) => SourceControlChange | null) => {
+      const wanted = new Set(paths);
+      setRepository((current) => {
+        if (!current) return current;
+        const changes = current.changes
+          .map((change) => (wanted.has(change.path) ? update(change) : change))
+          .filter((change): change is SourceControlChange => Boolean(change));
+        return { ...current, clean: changes.length === 0, changes };
+      });
+    },
+    [],
+  );
 
-  const stage = useCallback(async (paths: string[]) => {
-    await run(() => stageSourceControlPaths(paths));
-    updateChanges(paths, (change) => ({
-      ...change,
-      staged: true,
-      staged_status: change.worktree_status === "?" ? "A" : change.worktree_status || change.staged_status || "M",
-      worktree_status: "",
-    }));
-  }, [run, updateChanges]);
+  const stage = useCallback(
+    async (paths: string[]) => {
+      await run(() => stageSourceControlPaths(paths));
+      updateChanges(paths, (change) => ({
+        ...change,
+        staged: true,
+        staged_status:
+          change.worktree_status === "?"
+            ? "A"
+            : change.worktree_status || change.staged_status || "M",
+        worktree_status: "",
+      }));
+    },
+    [run, updateChanges],
+  );
 
-  const unstage = useCallback(async (paths: string[]) => {
-    await run(() => unstageSourceControlPaths(paths));
-    updateChanges(paths, (change) => ({
-      ...change,
-      staged: false,
-      staged_status: "",
-      worktree_status: change.worktree_status || (change.staged_status === "A" ? "?" : change.staged_status || "M"),
-    }));
-  }, [run, updateChanges]);
+  const unstage = useCallback(
+    async (paths: string[]) => {
+      await run(() => unstageSourceControlPaths(paths));
+      updateChanges(paths, (change) => ({
+        ...change,
+        staged: false,
+        staged_status: "",
+        worktree_status:
+          change.worktree_status ||
+          (change.staged_status === "A" ? "?" : change.staged_status || "M"),
+      }));
+    },
+    [run, updateChanges],
+  );
 
-  const checkout = useCallback(async (branch: string) => {
-    await run(() => checkoutSourceControlBranch(branch));
-    setRepository((current) => current ? { ...current, branch } : current);
-  }, [run]);
+  const checkout = useCallback(
+    async (branch: string) => {
+      await run(() => checkoutSourceControlBranch(branch));
+      setRepository((current) => (current ? { ...current, branch } : current));
+    },
+    [run],
+  );
 
   const initRepository = useCallback(async () => {
     await run(() => initSourceControlRepository());
@@ -107,14 +129,17 @@ export function useSourceControl() {
     }
   }, [run]);
 
-  const commit = useCallback(async (message: string) => {
-    await run(() => commitSourceControlChanges(message));
-    setRepository((current) => {
-      if (!current) return current;
-      const changes = current.changes.filter((change) => !change.staged);
-      return { ...current, clean: changes.length === 0, changes };
-    });
-  }, [run]);
+  const commit = useCallback(
+    async (message: string) => {
+      await run(() => commitSourceControlChanges(message));
+      setRepository((current) => {
+        if (!current) return current;
+        const changes = current.changes.filter((change) => !change.staged);
+        return { ...current, clean: changes.length === 0, changes };
+      });
+    },
+    [run],
+  );
 
   const loadDiff = useCallback(async (path: string, staged: boolean) => {
     setDiffLoading(true);

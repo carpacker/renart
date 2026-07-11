@@ -27,8 +27,9 @@ function acquireJinjaProviders(monaco: typeof MonacoNS): () => void {
   let registration = jinjaProviderRegistry.get(monaco);
   if (!registration) {
     registration = {
-      disposable: registerJinjaProviders(monaco, (model) =>
-        jinjaRenderGetters.get(model.uri.toString())?.() ?? null,
+      disposable: registerJinjaProviders(
+        monaco,
+        (model) => jinjaRenderGetters.get(model.uri.toString())?.() ?? null,
       ),
       refs: 0,
     };
@@ -59,8 +60,15 @@ export function useJinjaIntellisense(
   const renderResultRef = useRef<JinjaRenderResponse | null>(null);
   renderResultRef.current = renderResult;
   const assetId = asset?.id ?? null;
-  const isSqlAsset = asset?.path.toLowerCase().endsWith(".sql") || asset?.type.toLowerCase().includes("sql");
-  const spanKey = useMemo(() => JSON.stringify(parseJinjaSpans(content).map((span) => [span.startOffset, span.endOffset, span.content])), [content]);
+  const isSqlAsset =
+    asset?.path.toLowerCase().endsWith(".sql") || asset?.type.toLowerCase().includes("sql");
+  const spanKey = useMemo(
+    () =>
+      JSON.stringify(
+        parseJinjaSpans(content).map((span) => [span.startOffset, span.endOffset, span.content]),
+      ),
+    [content],
+  );
 
   useEffect(() => {
     if (!monaco || !editor) return;
@@ -84,7 +92,12 @@ export function useJinjaIntellisense(
     const controller = new AbortController();
     const timer = window.setTimeout(async () => {
       try {
-        const response = await renderJinjaAsset({ assetId, content, timeWindow: selectedExecutionTimeWindow, signal: controller.signal });
+        const response = await renderJinjaAsset({
+          assetId,
+          content,
+          timeWindow: selectedExecutionTimeWindow,
+          signal: controller.signal,
+        });
         if (!controller.signal.aborted) {
           setRenderResult(response);
         }
@@ -113,25 +126,35 @@ export function useJinjaIntellisense(
       const spans = parseJinjaSpans(model.getValue());
       const renderSpans = renderResultRef.current?.spans ?? [];
 
-      decorations = editor.deltaDecorations(decorations, spans.map((span) => {
-        const inside = cursorOffset >= span.startOffset && cursorOffset <= span.endOffset;
-        const rendered = renderSpans.find(
-          (candidate) => candidate.start_line === span.startLine && candidate.start_column === span.startColumn,
-        );
-        const afterContent = !inside && span.type === "expression" && rendered?.rendered_text
-          ? `  → ${rendered.rendered_text}`
-          : "";
-        return {
-          range: new monaco.Range(span.startLine, span.startColumn, span.endLine, span.endColumn),
-          options: {
-            inlineClassName: span.type === "expression" ? "bruin-jinja-expression" : "bruin-jinja-statement",
-            after: afterContent ? {
-              content: afterContent.length > 80 ? `${afterContent.slice(0, 77)}...` : afterContent,
-              inlineClassName: "bruin-jinja-rendered-ghost",
-            } : undefined,
-          },
-        };
-      }));
+      decorations = editor.deltaDecorations(
+        decorations,
+        spans.map((span) => {
+          const inside = cursorOffset >= span.startOffset && cursorOffset <= span.endOffset;
+          const rendered = renderSpans.find(
+            (candidate) =>
+              candidate.start_line === span.startLine &&
+              candidate.start_column === span.startColumn,
+          );
+          const afterContent =
+            !inside && span.type === "expression" && rendered?.rendered_text
+              ? `  → ${rendered.rendered_text}`
+              : "";
+          return {
+            range: new monaco.Range(span.startLine, span.startColumn, span.endLine, span.endColumn),
+            options: {
+              inlineClassName:
+                span.type === "expression" ? "bruin-jinja-expression" : "bruin-jinja-statement",
+              after: afterContent
+                ? {
+                    content:
+                      afterContent.length > 80 ? `${afterContent.slice(0, 77)}...` : afterContent,
+                    inlineClassName: "bruin-jinja-rendered-ghost",
+                  }
+                : undefined,
+            },
+          };
+        }),
+      );
     };
 
     update();

@@ -1,9 +1,6 @@
 import { atom } from "jotai";
 
-import {
-  getConfiguredConnectionTypes,
-  getPreferredSqlAssetType,
-} from "@/lib/asset-types";
+import { getConfiguredConnectionTypes, getPreferredSqlAssetType } from "@/lib/asset-types";
 import { WorkspaceState } from "@/lib/types";
 import { ExecutionTimeWindow } from "@/lib/execution-time";
 
@@ -28,15 +25,16 @@ export const workspaceSyncSourceAtom = atom<WorkspaceSyncSource | null>(null);
 // the connection.
 export const serverOnlineAtom = atom<boolean>(true);
 export const selectedEnvironmentOverrideAtom = atom<string | undefined>(undefined);
-export const selectedEnvironmentAtom = atom<string | undefined>((get) =>
-	get(selectedEnvironmentOverrideAtom) || get(workspaceAtom)?.selected_environment || undefined
+export const selectedEnvironmentAtom = atom<string | undefined>(
+  (get) =>
+    get(selectedEnvironmentOverrideAtom) || get(workspaceAtom)?.selected_environment || undefined,
 );
 export const selectedExecutionTimeWindowAtom = atom<ExecutionTimeWindow | null>(null);
 
 export const configuredConnectionTypesAtom = atom<Set<string>>((get) =>
-  getConfiguredConnectionTypes(get(workspaceAtom)?.connections)
+  getConfiguredConnectionTypes(get(workspaceAtom)?.connections),
 );
 
 export const preferredSqlAssetTypeAtom = atom<string>((get) =>
-  getPreferredSqlAssetType(get(workspaceAtom)?.connections)
+  getPreferredSqlAssetType(get(workspaceAtom)?.connections),
 );

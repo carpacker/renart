@@ -62,18 +62,16 @@ const ASSET_TYPE_TO_CONNECTION_TYPE = Object.fromEntries(
   Object.entries(CONNECTION_TYPE_TO_ASSET_TYPE).map(([connectionType, assetType]) => [
     assetType,
     connectionType,
-  ])
+  ]),
 ) as Record<string, string>;
 
-export function getAvailableAssetTypes(
-  connectionTypes: WorkspaceConfigConnectionType[]
-): string[] {
+export function getAvailableAssetTypes(connectionTypes: WorkspaceConfigConnectionType[]): string[] {
   const mappedSqlTypes = connectionTypes
     .map((connectionType) => CONNECTION_TYPE_TO_ASSET_TYPE[connectionType.type_name])
     .filter((value): value is string => Boolean(value));
 
   return Array.from(
-    new Set([...mappedSqlTypes, ...SQL_ASSET_TYPES, ...SEED_ASSET_TYPES, ...NON_SQL_ASSET_TYPES])
+    new Set([...mappedSqlTypes, ...SQL_ASSET_TYPES, ...SEED_ASSET_TYPES, ...NON_SQL_ASSET_TYPES]),
   ).sort((left, right) => left.localeCompare(right));
 }
 
@@ -89,7 +87,7 @@ export function getConfiguredConnectionTypes(connections?: Record<string, string
   return new Set(
     Object.values(connections ?? {})
       .map((value) => value.trim())
-      .filter(Boolean)
+      .filter(Boolean),
   );
 }
 
@@ -107,7 +105,7 @@ export function getPreferredSqlAssetType(connections?: Record<string, string> | 
 
 export function groupAssetTypesByConfiguredConnections(
   assetTypes: string[],
-  connections?: Record<string, string> | null
+  connections?: Record<string, string> | null,
 ) {
   const configuredConnectionTypes = getConfiguredConnectionTypes(connections);
   const configured: string[] = [];

@@ -9,7 +9,16 @@ const outputPath = resolve(repoRoot, "web", "lib", "generated", "api-types.ts");
 const sources = [
   {
     file: resolve(repoRoot, "internal", "web", "model", "dto.go"),
-    types: ["ColumnCheck", "Column", "Asset", "Pipeline", "NotebookBlock", "Notebook", "EnvironmentPolicy", "WorkspaceState"],
+    types: [
+      "ColumnCheck",
+      "Column",
+      "Asset",
+      "Pipeline",
+      "NotebookBlock",
+      "Notebook",
+      "EnvironmentPolicy",
+      "WorkspaceState",
+    ],
   },
   {
     file: resolve(repoRoot, "internal", "web", "service", "workspace_coordinator.go"),
@@ -189,9 +198,7 @@ function jsonNameFromTag(tag, fieldName) {
     return tagMatch[1];
   }
 
-  return fieldName
-    .replace(/([a-z0-9])([A-Z])/g, "$1_$2")
-    .toLowerCase();
+  return fieldName.replace(/([a-z0-9])([A-Z])/g, "$1_$2").toLowerCase();
 }
 
 function isOptionalTag(tag) {
@@ -244,9 +251,7 @@ for (const source of sources) {
   const content = await readFile(source.file, "utf8");
   for (const typeName of source.types) {
     const body = extractStructBody(content, typeName);
-    const fields = splitFields(body)
-      .map(parseField)
-      .filter(Boolean);
+    const fields = splitFields(body).map(parseField).filter(Boolean);
     blocks.push(renderType(typeName, fields));
   }
 }

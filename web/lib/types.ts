@@ -72,10 +72,7 @@ export type {
 
 export type WorkspaceConfigFieldType = "string" | "int" | "bool" | "string_array";
 
-export type WorkspaceConfigFieldDef = Omit<
-  GeneratedWorkspaceConfigFieldDef,
-  "type"
-> & {
+export type WorkspaceConfigFieldDef = Omit<GeneratedWorkspaceConfigFieldDef, "type"> & {
   type: WorkspaceConfigFieldType;
 };
 
@@ -404,10 +401,15 @@ export type PythonGotoTarget = {
   full_range: PythonRange;
 };
 
-export type PipelineMaterializationResponse = Omit<GeneratedPipelineMaterializationResponse, "assets"> & {
-  assets: Array<GeneratedPipelineMaterializationResponse["assets"][number] & {
-    freshness_status?: "fresh" | "stale";
-  }>;
+export type PipelineMaterializationResponse = Omit<
+  GeneratedPipelineMaterializationResponse,
+  "assets"
+> & {
+  assets: Array<
+    GeneratedPipelineMaterializationResponse["assets"][number] & {
+      freshness_status?: "fresh" | "stale";
+    }
+  >;
 };
 
 export type PipelineConfigConnection = GeneratedPipelineConfigConnection;

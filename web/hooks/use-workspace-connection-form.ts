@@ -76,29 +76,27 @@ export function useWorkspaceConnectionForm({
 
   const activeEnvironment = useMemo(
     () => findEnvironmentByName(environments, selectedEnvironmentName),
-    [environments, selectedEnvironmentName]
+    [environments, selectedEnvironmentName],
   );
 
   const activeConnection = useMemo(
     () => findConnectionByName(activeEnvironment, selectedConnectionName),
-    [activeEnvironment, selectedConnectionName]
+    [activeEnvironment, selectedConnectionName],
   );
 
   const selectedConnectionType = useMemo(
     () =>
-      connectionTypes.find(
-        (connectionType) => connectionType.type_name === connectionForm.type
-      ) ?? null,
-    [connectionForm.type, connectionTypes]
+      connectionTypes.find((connectionType) => connectionType.type_name === connectionForm.type) ??
+      null,
+    [connectionForm.type, connectionTypes],
   );
 
   useEffect(() => {
     if (mode === "create") {
       const requestedType = requestedConnectionType?.trim() ?? "";
       const fallbackType =
-        connectionTypes.find(
-          (connectionType) => connectionType.type_name === requestedType
-        )?.type_name ??
+        connectionTypes.find((connectionType) => connectionType.type_name === requestedType)
+          ?.type_name ??
         connectionTypes[0]?.type_name ??
         "";
       setConnectionForm({
@@ -165,11 +163,11 @@ export function useWorkspaceConnectionForm({
       const response = await onCreateConnection(payload);
       const environment = findEnvironmentByName(
         response.environments,
-        connectionForm.environmentName
+        connectionForm.environmentName,
       );
       onSelectedEnvironmentChange(connectionForm.environmentName);
       onSelectedConnectionChange(
-        getSelectedConnectionNameFromEnvironment(environment, connectionForm.name.trim())
+        getSelectedConnectionNameFromEnvironment(environment, connectionForm.name.trim()),
       );
       onModeChange("edit");
       return;
@@ -181,10 +179,10 @@ export function useWorkspaceConnectionForm({
     });
     const environment = findEnvironmentByName(
       response.environments,
-      connectionForm.environmentName
+      connectionForm.environmentName,
     );
     onSelectedConnectionChange(
-      getSelectedConnectionNameFromEnvironment(environment, connectionForm.name.trim())
+      getSelectedConnectionNameFromEnvironment(environment, connectionForm.name.trim()),
     );
   };
 

@@ -127,10 +127,7 @@ export function useSQLSemanticDecorations(
       }
     }
 
-    decorationIdsRef.current = editor.deltaDecorations(
-      decorationIdsRef.current,
-      decorations,
-    );
+    decorationIdsRef.current = editor.deltaDecorations(decorationIdsRef.current, decorations);
 
     return () => {
       decorationIdsRef.current = editor.deltaDecorations(decorationIdsRef.current, []);

@@ -58,14 +58,10 @@ export function NewAssetNode({ data }: NodeProps<NewAssetNodeData>) {
     >
       <Handle className="asset-node-hidden-handle" type="target" position={Position.Top} />
       {data.kindLocked ? (
-        <div className="nodrag mb-2 px-1 text-sm font-medium">
-          New child asset
-        </div>
+        <div className="nodrag mb-2 px-1 text-sm font-medium">New child asset</div>
       ) : (
         <Tabs
-          onValueChange={(value) =>
-            setName(data.onKindChange(value as NewAssetKind))
-          }
+          onValueChange={(value) => setName(data.onKindChange(value as NewAssetKind))}
           value={data.kind}
         >
           <TabsList className="nodrag mb-2 grid w-full grid-cols-5">

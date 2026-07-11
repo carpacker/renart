@@ -68,7 +68,13 @@ function categoryIcon(category: string | undefined) {
  * Generic metadata (name, columns, dependencies, …) stays in the Properties
  * sidebar; the upstream dependency and columns are inferred from the source.
  */
-export function LoadParametersEditor({ asset, pipelineId }: { asset: WebAsset; pipelineId: string }) {
+export function LoadParametersEditor({
+  asset,
+  pipelineId,
+}: {
+  asset: WebAsset;
+  pipelineId: string;
+}) {
   const environment = useAtomValue(selectedEnvironmentAtom);
   const { workspaceConfig } = useWorkspaceSettingsData();
   const params = asset.parameters ?? {};
@@ -79,11 +85,12 @@ export function LoadParametersEditor({ asset, pipelineId }: { asset: WebAsset; p
       environments.find((env) => env.name === environment) ??
       environments.find(
         (env) =>
-          env.name === (workspaceConfig?.selected_environment || workspaceConfig?.default_environment)
+          env.name ===
+          (workspaceConfig?.selected_environment || workspaceConfig?.default_environment),
       ) ??
       environments[0];
     const loadConnections = (active?.connections ?? []).filter((connection) =>
-      Boolean(connection.load_category)
+      Boolean(connection.load_category),
     );
     // The local-file pseudo-connection is always available.
     return [LOCAL_CONNECTION_OPTION, ...loadConnections];
@@ -216,7 +223,7 @@ function ConnectionValue({
           type="button"
           className={cn(
             "font-monaco flex min-w-0 flex-1 items-center gap-1 rounded-sm px-1 text-left outline-none hover:bg-muted/50 focus:bg-muted/60 focus:ring-1 focus:ring-ring",
-            value ? "text-foreground" : "text-muted-foreground/60"
+            value ? "text-foreground" : "text-muted-foreground/60",
           )}
         >
           <Plug className="size-3 shrink-0 text-muted-foreground" />
@@ -231,7 +238,10 @@ function ConnectionValue({
               No database, storage, or file connections configured.
             </CommandEmpty>
             {grouped.map((group) => (
-              <CommandGroup key={group.category} heading={CATEGORY_LABELS[group.category] ?? group.category}>
+              <CommandGroup
+                key={group.category}
+                heading={CATEGORY_LABELS[group.category] ?? group.category}
+              >
                 {group.items.map((connection) => {
                   const Icon = categoryIcon(connection.load_category);
                   const selected = connection.name === value;
@@ -329,7 +339,7 @@ function StreamValue({
           type="button"
           className={cn(
             "font-monaco min-w-0 flex-1 rounded-sm px-1 text-left outline-none hover:bg-muted/50 focus:bg-muted/60 focus:ring-1 focus:ring-ring",
-            value ? "text-foreground" : "text-muted-foreground/60"
+            value ? "text-foreground" : "text-muted-foreground/60",
           )}
         >
           <span className="truncate">{value || placeholder || "object…"}</span>
@@ -363,7 +373,11 @@ function StreamValue({
             ) : null}
             {query.trim() ? (
               <CommandGroup heading="Custom">
-                <CommandItem value={`__custom__${query}`} onSelect={commitCustom} className="text-xs">
+                <CommandItem
+                  value={`__custom__${query}`}
+                  onSelect={commitCustom}
+                  className="text-xs"
+                >
                   <span className="flex-1 truncate">
                     Use “<span className="text-foreground">{query.trim()}</span>”
                   </span>
@@ -374,7 +388,9 @@ function StreamValue({
               <CommandGroup heading="Discovered">
                 {streams
                   .filter((stream) =>
-                    query.trim() ? stream.name.toLowerCase().includes(query.trim().toLowerCase()) : true
+                    query.trim()
+                      ? stream.name.toLowerCase().includes(query.trim().toLowerCase())
+                      : true,
                   )
                   .map((stream) => (
                     <CommandItem
@@ -388,7 +404,9 @@ function StreamValue({
                     >
                       <Boxes className="mr-2 size-3 text-muted-foreground" />
                       <span className="flex-1 truncate">{stream.name}</span>
-                      {stream.name === value ? <Check className="size-3 text-muted-foreground" /> : null}
+                      {stream.name === value ? (
+                        <Check className="size-3 text-muted-foreground" />
+                      ) : null}
                     </CommandItem>
                   ))}
               </CommandGroup>
@@ -455,7 +473,7 @@ function PathValue({
           type="button"
           className={cn(
             "font-monaco flex min-w-0 flex-1 items-center gap-1 rounded-sm px-1 text-left outline-none hover:bg-muted/50 focus:bg-muted/60 focus:ring-1 focus:ring-ring",
-            value ? "text-foreground" : "text-muted-foreground/60"
+            value ? "text-foreground" : "text-muted-foreground/60",
           )}
         >
           <FileText className="size-3 shrink-0 text-muted-foreground" />
@@ -482,10 +500,16 @@ function PathValue({
                 <Loader2 className="size-3 animate-spin" /> listing…
               </div>
             ) : null}
-            {!loading ? <CommandEmpty className="py-3 text-xs">No matching paths.</CommandEmpty> : null}
+            {!loading ? (
+              <CommandEmpty className="py-3 text-xs">No matching paths.</CommandEmpty>
+            ) : null}
             {query.trim() ? (
               <CommandGroup heading="Use path">
-                <CommandItem value={`__use__${query}`} onSelect={() => commit(query)} className="text-xs">
+                <CommandItem
+                  value={`__use__${query}`}
+                  onSelect={() => commit(query)}
+                  className="text-xs"
+                >
                   <span className="flex-1 truncate">
                     Use “<span className="text-foreground">{query.trim()}</span>”
                   </span>
@@ -553,7 +577,11 @@ function InferColumnsButton({ asset }: { asset: WebAsset }) {
         disabled={state === "loading"}
         className="font-monaco flex items-center gap-1 rounded-sm px-1 text-[11px] text-muted-foreground hover:bg-muted hover:text-foreground disabled:opacity-50"
       >
-        {state === "loading" ? <Loader2 className="size-3 animate-spin" /> : <Database className="size-3" />}
+        {state === "loading" ? (
+          <Loader2 className="size-3 animate-spin" />
+        ) : (
+          <Database className="size-3" />
+        )}
         infer columns from source
       </button>
       {message ? <Comment>{message}</Comment> : null}

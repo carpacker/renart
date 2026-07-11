@@ -11,9 +11,9 @@ import { liveTest as test, type LiveApp } from "../live-app-fixture";
 // is covered deterministically by the Go staleness unit tests.)
 
 const pipelineId = Buffer.from("analytics").toString("base64url");
-const customersAssetId = Buffer.from(
-  "analytics/assets/analytics/customers.sql",
-).toString("base64url");
+const customersAssetId = Buffer.from("analytics/assets/analytics/customers.sql").toString(
+  "base64url",
+);
 
 const frontmatter = `/* @bruin
 type: duckdb.sql
@@ -74,18 +74,14 @@ test.describe("app freshness failure states live", () => {
       "The freshness badge is a desktop sidebar/canvas affordance.",
     );
 
-    await page.goto(
-      `${liveApp.baseURL}/pipelines/${pipelineId}/assets/${customersAssetId}/code`,
-    );
-    await expect(page.locator(".view-lines").first()).toContainText(
-      "customer_id",
-      { timeout: 15000 },
-    );
+    await page.goto(`${liveApp.baseURL}/pipelines/${pipelineId}/assets/${customersAssetId}/code`);
+    await expect(page.locator(".view-lines").first()).toContainText("customer_id", {
+      timeout: 15000,
+    });
 
     // Build it once so it is fresh — the baseline every "edited" state needs.
     const firstMaterialize = page.waitForResponse(
-      (response) =>
-        response.url().includes(`/api/assets/${customersAssetId}/materialize/stream`),
+      (response) => response.url().includes(`/api/assets/${customersAssetId}/materialize/stream`),
       { timeout: 30000 },
     );
     await page.getByRole("button", { name: "Materialize", exact: true }).click();
@@ -96,31 +92,27 @@ test.describe("app freshness failure states live", () => {
 
     // State 2 — edit (a valid change) but do not re-run: reads as "Edited".
     await editAssetAndSettle(page, liveApp, validEdit, "edited_marker_not_re_run");
-    await expect(
-      page.locator('[title="Staleness: Edited"]').first(),
-    ).toBeVisible({ timeout: 20000 });
+    await expect(page.locator('[title="Staleness: Edited"]').first()).toBeVisible({
+      timeout: 20000,
+    });
     await expect(page.locator('[title="Staleness: Build failed"]')).toHaveCount(0);
 
     // State 1 — edit to something that fails, then run it: reads as "Build failed".
     await editAssetAndSettle(page, liveApp, brokenEdit, "does_not_exist_table");
     const failedMaterialize = page.waitForResponse(
-      (response) =>
-        response.url().includes(`/api/assets/${customersAssetId}/materialize/stream`),
+      (response) => response.url().includes(`/api/assets/${customersAssetId}/materialize/stream`),
       { timeout: 30000 },
     );
     await page.getByRole("button", { name: "Materialize", exact: true }).click();
     await failedMaterialize;
 
-    await expect(
-      page.locator('[title="Staleness: Build failed"]').first(),
-    ).toBeVisible({ timeout: 20000 });
+    await expect(page.locator('[title="Staleness: Build failed"]').first()).toBeVisible({
+      timeout: 20000,
+    });
     await expect(page.locator('[title="Staleness: Edited"]')).toHaveCount(0);
   });
 
-  test("surfaces unchanged code whose last run failed as Run failed", async ({
-    liveApp,
-    page,
-  }) => {
+  test("surfaces unchanged code whose last run failed as Run failed", async ({ liveApp, page }) => {
     test.skip(
       test.info().project.name.includes("mobile"),
       "The freshness badge is a desktop sidebar/canvas affordance.",
@@ -131,9 +123,9 @@ test.describe("app freshness failure states live", () => {
     // the only reliable way to produce "unchanged, but the last run failed". The
     // absolute path is baked in so it is independent of the run's working dir.
     const sentinelPath = join(liveApp.workspaceDir, "sentinel.txt");
-    const pyAssetId = Buffer.from(
-      "analytics/assets/analytics/sentinel_check.py",
-    ).toString("base64url");
+    const pyAssetId = Buffer.from("analytics/assets/analytics/sentinel_check.py").toString(
+      "base64url",
+    );
     const pyContent = `""" @bruin
 name: analytics.sentinel_check
 type: python
@@ -165,9 +157,7 @@ print("sentinel ok")
       )
       .toBe(true);
 
-    await page.goto(
-      `${liveApp.baseURL}/pipelines/${pipelineId}/assets/${pyAssetId}/code`,
-    );
+    await page.goto(`${liveApp.baseURL}/pipelines/${pipelineId}/assets/${pyAssetId}/code`);
     await expect(page.locator(".view-lines").first()).toContainText("sentinel", {
       timeout: 15000,
     });
@@ -198,7 +188,9 @@ print("sentinel ok")
     );
     await page.getByRole("button", { name: "Materialize", exact: true }).click();
     await firstRun;
-    await expect.poll(async () => (await sentinelStaleness())?.status, { timeout: 30000 }).toBe("fresh");
+    await expect
+      .poll(async () => (await sentinelStaleness())?.status, { timeout: 30000 })
+      .toBe("fresh");
 
     // Remove the sentinel — the asset's content is untouched.
     await rm(sentinelPath);
@@ -213,10 +205,13 @@ print("sentinel ok")
     await secondRun;
 
     await expect
-      .poll(async () => {
-        const s = await sentinelStaleness();
-        return `${s?.status}/${s?.last_run_status}/${s?.last_run_on_current_content}`;
-      }, { timeout: 30000 })
+      .poll(
+        async () => {
+          const s = await sentinelStaleness();
+          return `${s?.status}/${s?.last_run_status}/${s?.last_run_on_current_content}`;
+        },
+        { timeout: 30000 },
+      )
       .toBe("fresh/failed/true");
   });
 });

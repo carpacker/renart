@@ -6,10 +6,7 @@ import type * as MonacoNS from "monaco-editor";
 
 import { formatSQLAsset } from "@/lib/api";
 import { isSqlAssetType } from "@/lib/asset-types";
-import {
-  editorDraftAtom,
-  editorProgrammaticContentAtom,
-} from "@/lib/atoms/domains/editor";
+import { editorDraftAtom, editorProgrammaticContentAtom } from "@/lib/atoms/domains/editor";
 import { WebAsset } from "@/lib/types";
 
 export function useSQLFormatting(
@@ -18,9 +15,7 @@ export function useSQLFormatting(
   monaco: typeof MonacoNS | null,
 ) {
   const setEditorDraft = useSetAtom(editorDraftAtom);
-  const setEditorProgrammaticContent = useSetAtom(
-    editorProgrammaticContentAtom
-  );
+  const setEditorProgrammaticContent = useSetAtom(editorProgrammaticContentAtom);
   const isSqlAsset = useMemo(() => {
     if (!asset) {
       return false;
@@ -70,13 +65,7 @@ export function useSQLFormatting(
         }));
       })
       .catch(() => undefined);
-  }, [
-    asset?.id,
-    editor,
-    isSqlAsset,
-    setEditorDraft,
-    setEditorProgrammaticContent,
-  ]);
+  }, [asset?.id, editor, isSqlAsset, setEditorDraft, setEditorProgrammaticContent]);
 
   useEffect(() => {
     if (!editor || !monaco || !isSqlAsset) {

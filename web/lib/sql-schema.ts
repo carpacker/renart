@@ -78,7 +78,7 @@ export function platformForAssetType(assetType: string): string | null {
  */
 export function resolveConnection(
   asset: WebAsset,
-  connections: Record<string, string>
+  connections: Record<string, string>,
 ): string | null {
   if (asset.connection) {
     return asset.connection;

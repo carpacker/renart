@@ -22,7 +22,10 @@ const initialState: SQLDiscoveryCacheState = {
 export const sqlDiscoveryCacheAtom = atom<SQLDiscoveryCacheState>(initialState);
 
 const pendingTableDiscoveryRequests = new Map<string, Promise<SQLTableDiscoveryEntry[]>>();
-const pendingColumnDiscoveryRequests = new Map<string, Promise<Array<{ name: string; type?: string }>>>();
+const pendingColumnDiscoveryRequests = new Map<
+  string,
+  Promise<Array<{ name: string; type?: string }>>
+>();
 
 function discoveryScopeKey(connection: string, environment?: string) {
   return `${connection}::${environment ?? ""}`;
@@ -89,48 +92,48 @@ export const sqlDiscoveryTablesAtom = atom(
 );
 
 function columnScopeKey(connection: string, table: string, environment?: string) {
-	return `${connection}::${environment ?? ""}::${table.toLowerCase()}`;
+  return `${connection}::${environment ?? ""}::${table.toLowerCase()}`;
 }
 
 export const sqlDiscoveryColumnsAtom = atom(
-	(get) => get(sqlDiscoveryCacheAtom).columnsByScope,
-	async (get, set, options: { connection: string; table: string; environment?: string }) => {
-		const scopeKey = columnScopeKey(options.connection, options.table, options.environment);
-		const cached = get(sqlDiscoveryCacheAtom).columnsByScope[scopeKey];
-		if (cached) {
-			return cached;
-		}
+  (get) => get(sqlDiscoveryCacheAtom).columnsByScope,
+  async (get, set, options: { connection: string; table: string; environment?: string }) => {
+    const scopeKey = columnScopeKey(options.connection, options.table, options.environment);
+    const cached = get(sqlDiscoveryCacheAtom).columnsByScope[scopeKey];
+    if (cached) {
+      return cached;
+    }
 
-		const pending = pendingColumnDiscoveryRequests.get(scopeKey);
-		if (pending) {
-			return pending;
-		}
+    const pending = pendingColumnDiscoveryRequests.get(scopeKey);
+    if (pending) {
+      return pending;
+    }
 
-		const request = (async () => {
-			const response = await getSQLTableColumns({
-				connection: options.connection,
-				table: options.table,
-				environment: options.environment,
-			});
-			const columns = response.columns ?? [];
+    const request = (async () => {
+      const response = await getSQLTableColumns({
+        connection: options.connection,
+        table: options.table,
+        environment: options.environment,
+      });
+      const columns = response.columns ?? [];
 
-			set(sqlDiscoveryCacheAtom, (previous) => ({
-				databasesByScope: previous.databasesByScope,
-				tablesByScope: previous.tablesByScope,
-				columnsByScope: {
-					...previous.columnsByScope,
-					[scopeKey]: columns,
-				},
-			}));
+      set(sqlDiscoveryCacheAtom, (previous) => ({
+        databasesByScope: previous.databasesByScope,
+        tablesByScope: previous.tablesByScope,
+        columnsByScope: {
+          ...previous.columnsByScope,
+          [scopeKey]: columns,
+        },
+      }));
 
-			return columns;
-		})();
+      return columns;
+    })();
 
-		pendingColumnDiscoveryRequests.set(scopeKey, request);
-		try {
-			return await request;
-		} finally {
-			pendingColumnDiscoveryRequests.delete(scopeKey);
-		}
-	},
+    pendingColumnDiscoveryRequests.set(scopeKey, request);
+    try {
+      return await request;
+    } finally {
+      pendingColumnDiscoveryRequests.delete(scopeKey);
+    }
+  },
 );

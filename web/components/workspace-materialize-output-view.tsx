@@ -46,9 +46,7 @@ export function WorkspaceMaterializeOutputView({
       ) : null}
       <div
         className={`min-h-0 flex flex-1 flex-col overflow-hidden rounded border ${
-          entry.status === "error"
-            ? "border-destructive/40 bg-destructive/5"
-            : "bg-background"
+          entry.status === "error" ? "border-destructive/40 bg-destructive/5" : "bg-background"
         }`}
       >
         <ScrollArea
@@ -59,7 +57,8 @@ export function WorkspaceMaterializeOutputView({
           <div className="space-y-2">
             {entry.timeWindow ? (
               <div className="rounded border bg-muted/30 px-2 py-1 text-xs text-muted-foreground">
-                Period: {new Date(entry.timeWindow.start).toLocaleString()} - {new Date(entry.timeWindow.end).toLocaleString()}
+                Period: {new Date(entry.timeWindow.start).toLocaleString()} -{" "}
+                {new Date(entry.timeWindow.end).toLocaleString()}
               </div>
             ) : null}
             {entry.status === "error" ? (

@@ -46,19 +46,18 @@ export function buildInspectDiagnosticMarker(
 
   const maxColumn = actualLineText.length + 1;
   const startColumn = Math.min(Math.max(1, parsed.startColumn), maxColumn);
-  const endColumn = Math.min(
-    Math.max(startColumn + 1, parsed.endColumn),
-    maxColumn,
-  );
+  const endColumn = Math.min(Math.max(startColumn + 1, parsed.endColumn), maxColumn);
 
-  return [{
-    severity: 8,
-    message: parsed.message,
-    startLineNumber: parsed.lineNumber,
-    startColumn,
-    endLineNumber: parsed.lineNumber,
-    endColumn,
-  }];
+  return [
+    {
+      severity: 8,
+      message: parsed.message,
+      startLineNumber: parsed.lineNumber,
+      startColumn,
+      endLineNumber: parsed.lineNumber,
+      endColumn,
+    },
+  ];
 }
 
 function parseInspectLocation(raw: string | undefined): ParsedInspectLocation | null {

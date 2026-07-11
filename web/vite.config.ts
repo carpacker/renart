@@ -6,7 +6,7 @@ import { TanStackRouterVite } from "@tanstack/router-plugin/vite";
 import react from "@vitejs/plugin-react";
 
 const require = createRequire(import.meta.url);
-const PROXY_TARGET = process.env.PROXY_TARGET ?? "http://127.0.0.1:3000"
+const PROXY_TARGET = process.env.PROXY_TARGET ?? "http://127.0.0.1:3000";
 
 // The backend's SameOriginGuard rejects state-changing requests whose Origin
 // doesn't match its Host. `changeOrigin` already rewrites the forwarded Host to
@@ -63,10 +63,7 @@ export default defineConfig({
             return "graph-vendor";
           }
 
-          if (
-            id.includes("@tanstack/react-router") ||
-            id.includes("@tanstack/router-core")
-          ) {
+          if (id.includes("@tanstack/react-router") || id.includes("@tanstack/router-core")) {
             return "router-vendor";
           }
 
@@ -83,11 +80,7 @@ export default defineConfig({
             return "ui-vendor";
           }
 
-          if (
-            id.includes("recharts") ||
-            id.includes("victory-vendor") ||
-            id.includes("d3-")
-          ) {
+          if (id.includes("recharts") || id.includes("victory-vendor") || id.includes("d3-")) {
             return "chart-vendor";
           }
 

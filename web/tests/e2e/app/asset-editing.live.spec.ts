@@ -5,8 +5,12 @@ import { join } from "node:path";
 import { liveTest as test, type LiveApp } from "../live-app-fixture";
 
 const pipelineId = Buffer.from("analytics").toString("base64url");
-const customersAssetId = Buffer.from("analytics/assets/analytics/customers.sql").toString("base64url");
-const downstreamAssetId = Buffer.from("analytics/assets/analytics/downstream.sql").toString("base64url");
+const customersAssetId = Buffer.from("analytics/assets/analytics/customers.sql").toString(
+  "base64url",
+);
+const downstreamAssetId = Buffer.from("analytics/assets/analytics/downstream.sql").toString(
+  "base64url",
+);
 const loadAssetPath = "analytics/assets/analytics/orders_load.asset.yml";
 const loadAssetId = Buffer.from(loadAssetPath).toString("base64url");
 
@@ -75,14 +79,19 @@ async function openAssetProperties(page: Page): Promise<Locator> {
 test.describe("app asset editing workbench live", () => {
   test.use({ fixtureName: "configured-workspace" });
 
-  test("guided cards render and adding a manual dependency persists provenance", async ({ liveApp, page }) => {
+  test("guided cards render and adding a manual dependency persists provenance", async ({
+    liveApp,
+    page,
+  }) => {
     await page.goto(`${liveApp.baseURL}/pipelines/${pipelineId}/assets/${customersAssetId}/code`);
     await expect(page.locator(".monaco-editor").first()).toBeVisible({ timeout: 15000 });
 
     const properties = await openAssetProperties(page);
 
     // The guided metadata panel renders its focused cards.
-    await expect(properties.getByRole("heading", { name: "Identity" })).toBeVisible({ timeout: 15000 });
+    await expect(properties.getByRole("heading", { name: "Identity" })).toBeVisible({
+      timeout: 15000,
+    });
     await expect(properties.getByRole("heading", { name: "Materialization" })).toBeVisible();
     await expect(properties.getByRole("heading", { name: "Dependencies" })).toBeVisible();
     await expect(properties.getByRole("heading", { name: "Columns" })).toBeVisible();
@@ -90,20 +99,29 @@ test.describe("app asset editing workbench live", () => {
     const descriptionInput = properties.getByPlaceholder("What this asset produces");
     await descriptionInput.fill("Customer profile records");
     const descriptionResponse = page.waitForResponse(
-      (r) => r.url().includes(`/api/pipelines/${pipelineId}/assets/${customersAssetId}`) && r.request().method() === "PUT" && r.ok(),
+      (r) =>
+        r.url().includes(`/api/pipelines/${pipelineId}/assets/${customersAssetId}`) &&
+        r.request().method() === "PUT" &&
+        r.ok(),
       { timeout: 15000 },
     );
     await descriptionInput.press("Enter");
     await descriptionResponse;
-    const withDescription = await pollAsset(liveApp, page.request, "analytics.customers", (a) =>
-      a.meta?.description === "Customer profile records",
+    const withDescription = await pollAsset(
+      liveApp,
+      page.request,
+      "analytics.customers",
+      (a) => a.meta?.description === "Customer profile records",
     );
     expect(withDescription.meta?.description).toBe("Customer profile records");
 
     const tagInput = properties.getByPlaceholder("Add tag");
     await tagInput.fill("finance, north");
     const tagResponse = page.waitForResponse(
-      (r) => r.url().includes(`/api/pipelines/${pipelineId}/assets/${customersAssetId}`) && r.request().method() === "PUT" && r.ok(),
+      (r) =>
+        r.url().includes(`/api/pipelines/${pipelineId}/assets/${customersAssetId}`) &&
+        r.request().method() === "PUT" &&
+        r.ok(),
       { timeout: 15000 },
     );
     await tagInput.press("Enter");
@@ -134,33 +152,45 @@ test.describe("app asset editing workbench live", () => {
   });
 
   test("merge metadata is editable through both form and YAML views", async ({ liveApp, page }) => {
-    const declareColumns = await page.request.put(`${liveApp.baseURL}/api/assets/${customersAssetId}/columns`, {
-      data: {
-        columns: [
-          { name: "customer_id", type: "integer" },
-          { name: "customer_name", type: "varchar" },
-        ],
+    const declareColumns = await page.request.put(
+      `${liveApp.baseURL}/api/assets/${customersAssetId}/columns`,
+      {
+        data: {
+          columns: [
+            { name: "customer_id", type: "integer" },
+            { name: "customer_name", type: "varchar" },
+          ],
+        },
       },
-    });
+    );
     expect(declareColumns.ok()).toBe(true);
 
     await page.goto(`${liveApp.baseURL}/pipelines/${pipelineId}/assets/${customersAssetId}/code`);
     await expect(page.locator(".monaco-editor").first()).toBeVisible({ timeout: 15000 });
     const properties = await openAssetProperties(page);
-    const materialization = properties.getByRole("heading", { name: "Materialization" }).locator("../..");
+    const materialization = properties
+      .getByRole("heading", { name: "Materialization" })
+      .locator("../..");
 
     const strategyResponse = page.waitForResponse(
-      (response) => response.url().includes(`/api/pipelines/${pipelineId}/assets/${customersAssetId}`) && response.request().method() === "PUT" && response.ok(),
+      (response) =>
+        response.url().includes(`/api/pipelines/${pipelineId}/assets/${customersAssetId}`) &&
+        response.request().method() === "PUT" &&
+        response.ok(),
       { timeout: 15000 },
     );
     await materialization.getByRole("combobox").click();
     await page.getByRole("option", { name: "Merge by key" }).click();
     await strategyResponse;
-    await expect(materialization.getByText(/Merge needs at least one primary-key column/)).toBeVisible({ timeout: 15000 });
+    await expect(
+      materialization.getByText(/Merge needs at least one primary-key column/),
+    ).toBeVisible({ timeout: 15000 });
 
-    const invalidTypeCheck = await page.request.get(`${liveApp.baseURL}/api/pipelines/${pipelineId}/type-check`);
+    const invalidTypeCheck = await page.request.get(
+      `${liveApp.baseURL}/api/pipelines/${pipelineId}/type-check`,
+    );
     expect(invalidTypeCheck.ok()).toBe(true);
-    const invalidReport = await invalidTypeCheck.json() as {
+    const invalidReport = (await invalidTypeCheck.json()) as {
       assets: Array<{ name: string; findings: Array<{ message: string }> }>;
     };
     expect(
@@ -170,21 +200,30 @@ test.describe("app asset editing workbench live", () => {
     ).toBe(true);
 
     const primaryKeyResponse = page.waitForResponse(
-      (response) => response.url().includes(`/api/assets/${customersAssetId}/columns`) && response.request().method() === "PUT" && response.ok(),
+      (response) =>
+        response.url().includes(`/api/assets/${customersAssetId}/columns`) &&
+        response.request().method() === "PUT" &&
+        response.ok(),
       { timeout: 15000 },
     );
     await properties.getByRole("button", { name: "Set customer_id as primary key" }).click();
     await primaryKeyResponse;
 
     const updateOnMergeResponse = page.waitForResponse(
-      (response) => response.url().includes(`/api/assets/${customersAssetId}/columns`) && response.request().method() === "PUT" && response.ok(),
+      (response) =>
+        response.url().includes(`/api/assets/${customersAssetId}/columns`) &&
+        response.request().method() === "PUT" &&
+        response.ok(),
       { timeout: 15000 },
     );
     await properties.getByRole("button", { name: "Update customer_name on merge" }).click();
     await updateOnMergeResponse;
 
     const mergeSQLResponse = page.waitForResponse(
-      (response) => response.url().includes(`/api/assets/${customersAssetId}/columns`) && response.request().method() === "PUT" && response.ok(),
+      (response) =>
+        response.url().includes(`/api/assets/${customersAssetId}/columns`) &&
+        response.request().method() === "PUT" &&
+        response.ok(),
       { timeout: 15000 },
     );
     const mergeSQL = properties.getByPlaceholder("merge SQL (optional)").nth(1);
@@ -195,41 +234,67 @@ test.describe("app asset editing workbench live", () => {
     const configured = await pollAsset(liveApp, page.request, "analytics.customers", (asset) => {
       const id = asset.columns?.find((column) => column.name === "customer_id");
       const name = asset.columns?.find((column) => column.name === "customer_name");
-      return asset.materialization_strategy === "merge"
-        && id?.primary_key === true
-        && name?.update_on_merge === true
-        && name.merge_sql === "COALESCE(source.customer_name, target.customer_name)";
+      return (
+        asset.materialization_strategy === "merge" &&
+        id?.primary_key === true &&
+        name?.update_on_merge === true &&
+        name.merge_sql === "COALESCE(source.customer_name, target.customer_name)"
+      );
     });
     expect(configured.materialization_strategy).toBe("merge");
 
     await properties.getByRole("button", { name: "YAML" }).click();
     await expect(properties.getByText("primary_key:", { exact: true })).toBeVisible();
     await expect(properties.getByText("update_on_merge:", { exact: true })).toBeVisible();
-    await expect(properties.locator('input[value="COALESCE(source.customer_name, target.customer_name)"]')).toBeVisible();
+    await expect(
+      properties.locator('input[value="COALESCE(source.customer_name, target.customer_name)"]'),
+    ).toBeVisible();
 
     const unsetResponse = page.waitForResponse(
-      (response) => response.url().includes(`/api/assets/${customersAssetId}/columns`) && response.request().method() === "PUT" && response.ok(),
+      (response) =>
+        response.url().includes(`/api/assets/${customersAssetId}/columns`) &&
+        response.request().method() === "PUT" &&
+        response.ok(),
       { timeout: 15000 },
     );
     await properties.getByRole("button", { name: "Unset primary key on customer_id" }).click();
     await unsetResponse;
-    await expect(properties.getByRole("button", { name: "Set customer_id as primary key" })).toBeVisible({ timeout: 15000 });
+    await expect(
+      properties.getByRole("button", { name: "Set customer_id as primary key" }),
+    ).toBeVisible({ timeout: 15000 });
 
     const yamlKeyResponse = page.waitForResponse(
-      (response) => response.url().includes(`/api/assets/${customersAssetId}/columns`) && response.request().method() === "PUT" && response.ok(),
+      (response) =>
+        response.url().includes(`/api/assets/${customersAssetId}/columns`) &&
+        response.request().method() === "PUT" &&
+        response.ok(),
       { timeout: 15000 },
     );
     await properties.getByRole("button", { name: "Set customer_name as primary key" }).click();
     await yamlKeyResponse;
 
-    const yamlConfigured = await pollAsset(liveApp, page.request, "analytics.customers", (asset) => {
-      const keys = (asset.columns ?? []).filter((column) => column.primary_key).map((column) => column.name);
-      return keys.length === 1 && keys[0] === "customer_name";
-    });
-    expect((yamlConfigured.columns ?? []).filter((column) => column.primary_key).map((column) => column.name)).toEqual(["customer_name"]);
+    const yamlConfigured = await pollAsset(
+      liveApp,
+      page.request,
+      "analytics.customers",
+      (asset) => {
+        const keys = (asset.columns ?? [])
+          .filter((column) => column.primary_key)
+          .map((column) => column.name);
+        return keys.length === 1 && keys[0] === "customer_name";
+      },
+    );
+    expect(
+      (yamlConfigured.columns ?? [])
+        .filter((column) => column.primary_key)
+        .map((column) => column.name),
+    ).toEqual(["customer_name"]);
   });
 
-  test("load asset editors only offer Sling-compatible materializations", async ({ liveApp, page }) => {
+  test("load asset editors only offer Sling-compatible materializations", async ({
+    liveApp,
+    page,
+  }) => {
     await writeFile(
       join(liveApp.workspaceDir, loadAssetPath),
       `name: analytics.orders_load
@@ -246,7 +311,9 @@ parameters:
 
     await page.goto(`${liveApp.baseURL}/pipelines/${pipelineId}/assets/${loadAssetId}/code`);
     const properties = await openAssetProperties(page);
-    const materialization = properties.getByRole("heading", { name: "Materialization" }).locator("../..");
+    const materialization = properties
+      .getByRole("heading", { name: "Materialization" })
+      .locator("../..");
 
     const expectSlingOptions = async () => {
       await expect(page.getByRole("option", { name: "Table (replace)" })).toBeVisible();
@@ -255,13 +322,18 @@ parameters:
       await expect(page.getByRole("option", { name: "Merge by key" })).toBeVisible();
       await expect(page.getByRole("option", { name: "None (run only)" })).toHaveCount(0);
       await expect(page.getByRole("option", { name: "View" })).toHaveCount(0);
-      await expect(page.getByRole("option", { name: "Incremental (time interval)" })).toHaveCount(0);
+      await expect(page.getByRole("option", { name: "Incremental (time interval)" })).toHaveCount(
+        0,
+      );
     };
 
     await materialization.getByRole("combobox").click();
     await expectSlingOptions();
     const mergeResponse = page.waitForResponse(
-      (response) => response.url().includes(`/api/pipelines/${pipelineId}/assets/${loadAssetId}`) && response.request().method() === "PUT" && response.ok(),
+      (response) =>
+        response.url().includes(`/api/pipelines/${pipelineId}/assets/${loadAssetId}`) &&
+        response.request().method() === "PUT" &&
+        response.ok(),
       { timeout: 15000 },
     );
     await page.getByRole("option", { name: "Merge by key" }).click();
@@ -272,20 +344,33 @@ parameters:
     await expect(page.getByText("No declared columns. Add or infer columns first.")).toBeVisible();
     await page.keyboard.press("Escape");
 
-    const declareColumns = await page.request.put(`${liveApp.baseURL}/api/assets/${loadAssetId}/columns`, {
-      data: {
-        columns: [
-          { name: "id", type: "integer" },
-          { name: "updated_at", type: "timestamp" },
-        ],
+    const declareColumns = await page.request.put(
+      `${liveApp.baseURL}/api/assets/${loadAssetId}/columns`,
+      {
+        data: {
+          columns: [
+            { name: "id", type: "integer" },
+            { name: "updated_at", type: "timestamp" },
+          ],
+        },
       },
-    });
+    );
     expect(declareColumns.ok()).toBe(true);
-    await pollAsset(liveApp, page.request, "analytics.orders_load", (asset) => (asset.columns ?? []).length === 2);
-    await expect(properties.getByRole("button", { name: "Set id as primary key" })).toBeVisible({ timeout: 15000 });
+    await pollAsset(
+      liveApp,
+      page.request,
+      "analytics.orders_load",
+      (asset) => (asset.columns ?? []).length === 2,
+    );
+    await expect(properties.getByRole("button", { name: "Set id as primary key" })).toBeVisible({
+      timeout: 15000,
+    });
 
     const updateKeyResponse = page.waitForResponse(
-      (response) => response.url().includes(`/api/pipelines/${pipelineId}/assets/${loadAssetId}`) && response.request().method() === "PUT" && response.ok(),
+      (response) =>
+        response.url().includes(`/api/pipelines/${pipelineId}/assets/${loadAssetId}`) &&
+        response.request().method() === "PUT" &&
+        response.ok(),
       { timeout: 15000 },
     );
     const updateKey = materialization.getByRole("combobox").nth(1);
@@ -293,8 +378,12 @@ parameters:
     await page.getByPlaceholder("Search columns…").fill("updated");
     await page.getByRole("option", { name: "updated_at" }).click();
     await updateKeyResponse;
-    const configured = await pollAsset(liveApp, page.request, "analytics.orders_load", (asset) =>
-      asset.materialization_strategy === "merge" && asset.incremental_key === "updated_at",
+    const configured = await pollAsset(
+      liveApp,
+      page.request,
+      "analytics.orders_load",
+      (asset) =>
+        asset.materialization_strategy === "merge" && asset.incremental_key === "updated_at",
     );
     expect(configured.incremental_key).toBe("updated_at");
 
@@ -302,11 +391,17 @@ parameters:
     await properties.getByRole("combobox").nth(1).click();
     await expectSlingOptions();
     await page.keyboard.press("Escape");
-    const yamlUpdateKey = properties.getByText("incremental_key:", { exact: true }).locator("..").getByRole("combobox");
+    const yamlUpdateKey = properties
+      .getByText("incremental_key:", { exact: true })
+      .locator("..")
+      .getByRole("combobox");
     await expect(yamlUpdateKey).toContainText("updated_at");
   });
 
-  test("materializing an asset on a stale upstream warns before building", async ({ liveApp, page }) => {
+  test("materializing an asset on a stale upstream warns before building", async ({
+    liveApp,
+    page,
+  }) => {
     const { request } = page;
     // An upstream that is never built (so it reads as stale) and a downstream
     // that selects from it.
@@ -326,9 +421,13 @@ parameters:
       },
     });
     expect(downstream.ok()).toBe(true);
-    await pollAsset(liveApp, request, "analytics.warn_down", (a) => a.upstreams.includes("analytics.warn_up"));
+    await pollAsset(liveApp, request, "analytics.warn_down", (a) =>
+      a.upstreams.includes("analytics.warn_up"),
+    );
 
-    const warnDownId = Buffer.from("analytics/assets/analytics/warn_down.sql").toString("base64url");
+    const warnDownId = Buffer.from("analytics/assets/analytics/warn_down.sql").toString(
+      "base64url",
+    );
     const staleness = page.waitForResponse(
       (r) => r.url().includes(`/api/pipelines/${pipelineId}/staleness`) && r.ok(),
       { timeout: 15000 },
@@ -348,7 +447,10 @@ parameters:
     await expect(page.getByText("Upstream is out of date")).toBeHidden();
   });
 
-  test("ignoring an inferred dependency persists as a drop and survives reconcile", async ({ liveApp, request }) => {
+  test("ignoring an inferred dependency persists as a drop and survives reconcile", async ({
+    liveApp,
+    request,
+  }) => {
     // Create a downstream asset via the API so the SQL reconcile runs and infers
     // analytics.customers as an inferred (not manual) dependency.
     const create = await request.post(`${liveApp.baseURL}/api/pipelines/${pipelineId}/assets`, {
@@ -373,40 +475,58 @@ select customer_id from analytics.customers
     );
 
     // Ignore the inferred dependency.
-    const ignore = await request.post(`${liveApp.baseURL}/api/assets/${downstreamAssetId}/transactions`, {
-      data: { type: "dependency.inferred.ignore", dependency_key: "a:analytics.customers#full" },
-    });
+    const ignore = await request.post(
+      `${liveApp.baseURL}/api/assets/${downstreamAssetId}/transactions`,
+      {
+        data: { type: "dependency.inferred.ignore", dependency_key: "a:analytics.customers#full" },
+      },
+    );
     expect(ignore.ok()).toBe(true);
 
-    const ignored = await pollAsset(liveApp, request, "analytics.downstream", (a) =>
-      !a.upstreams.includes("analytics.customers"),
+    const ignored = await pollAsset(
+      liveApp,
+      request,
+      "analytics.downstream",
+      (a) => !a.upstreams.includes("analytics.customers"),
     );
     expect(ignored.meta?.renart_dep_drop).toContain("a:analytics.customers#full");
 
     // Re-saving the SQL triggers a reconcile; the dropped dependency must not
     // reappear even though the query still references analytics.customers.
-    const save = await request.put(`${liveApp.baseURL}/api/pipelines/${pipelineId}/assets/${downstreamAssetId}`, {
-      data: { content: "select customer_id from analytics.customers -- edited\n" },
-    });
+    const save = await request.put(
+      `${liveApp.baseURL}/api/pipelines/${pipelineId}/assets/${downstreamAssetId}`,
+      {
+        data: { content: "select customer_id from analytics.customers -- edited\n" },
+      },
+    );
     expect(save.ok()).toBe(true);
 
     // Give the reconcile a beat, then assert it stayed dropped.
-    const afterReconcile = await pollAsset(liveApp, request, "analytics.downstream", (a) =>
-      a.meta?.renart_dep_drop?.includes("a:analytics.customers#full") ?? false,
+    const afterReconcile = await pollAsset(
+      liveApp,
+      request,
+      "analytics.downstream",
+      (a) => a.meta?.renart_dep_drop?.includes("a:analytics.customers#full") ?? false,
     );
     expect(afterReconcile.upstreams).not.toContain("analytics.customers");
   });
 
-  test("columns are derived from the asset definition, not the warehouse", async ({ liveApp, request }) => {
+  test("columns are derived from the asset definition, not the warehouse", async ({
+    liveApp,
+    request,
+  }) => {
     // Declare the upstream's columns (the source of truth for downstream types).
-    const declare = await request.post(`${liveApp.baseURL}/api/assets/${customersAssetId}/columns/reconcile`, {
-      data: {
-        columns: [
-          { name: "customer_id", type: "INTEGER" },
-          { name: "customer_name", type: "VARCHAR" },
-        ],
+    const declare = await request.post(
+      `${liveApp.baseURL}/api/assets/${customersAssetId}/columns/reconcile`,
+      {
+        data: {
+          columns: [
+            { name: "customer_id", type: "INTEGER" },
+            { name: "customer_name", type: "VARCHAR" },
+          ],
+        },
       },
-    });
+    );
     expect(declare.ok()).toBe(true);
 
     // A downstream asset selecting from the upstream plus a computed column.
@@ -425,7 +545,9 @@ select customer_id, upper(customer_name) as shout from analytics.customers
       },
     });
     expect(create.ok()).toBe(true);
-    const reportAssetId = Buffer.from("analytics/assets/analytics/report.sql").toString("base64url");
+    const reportAssetId = Buffer.from("analytics/assets/analytics/report.sql").toString(
+      "base64url",
+    );
 
     // Deriving the downstream's columns from its definition resolves the bare
     // column type from the upstream asset and types the computed column — all
@@ -442,21 +564,30 @@ select customer_id, upper(customer_name) as shout from analytics.customers
 
   test("column type ownership is preserved across reconciliation", async ({ liveApp, request }) => {
     // Reconcile customers' columns from an inferred set (no declared columns yet).
-    const first = await request.post(`${liveApp.baseURL}/api/assets/${customersAssetId}/columns/reconcile`, {
-      data: { columns: [{ name: "customer_id", type: "integer" }] },
-    });
+    const first = await request.post(
+      `${liveApp.baseURL}/api/assets/${customersAssetId}/columns/reconcile`,
+      {
+        data: { columns: [{ name: "customer_id", type: "integer" }] },
+      },
+    );
     expect(first.ok()).toBe(true);
 
     // Take ownership of the column's type.
-    const own = await request.post(`${liveApp.baseURL}/api/assets/${customersAssetId}/transactions`, {
-      data: { type: "column.field.own", column: "customer_id", field: "type" },
-    });
+    const own = await request.post(
+      `${liveApp.baseURL}/api/assets/${customersAssetId}/transactions`,
+      {
+        data: { type: "column.field.own", column: "customer_id", field: "type" },
+      },
+    );
     expect(own.ok()).toBe(true);
 
     // A later inference saying bigint must not override the owned integer type.
-    const second = await request.post(`${liveApp.baseURL}/api/assets/${customersAssetId}/columns/reconcile`, {
-      data: { columns: [{ name: "customer_id", type: "bigint" }] },
-    });
+    const second = await request.post(
+      `${liveApp.baseURL}/api/assets/${customersAssetId}/columns/reconcile`,
+      {
+        data: { columns: [{ name: "customer_id", type: "bigint" }] },
+      },
+    );
     expect(second.ok()).toBe(true);
     const body = (await second.json()) as { columns: Array<{ name: string; type?: string }> };
     const customerId = body.columns.find((c) => c.name === "customer_id");
@@ -469,7 +600,9 @@ select customer_id, upper(customer_name) as shout from analytics.customers
     const properties = await openAssetProperties(page);
 
     // Wait for the properties surface to settle (cards render first), then switch views.
-    await expect(properties.getByRole("heading", { name: "Identity" })).toBeVisible({ timeout: 15000 });
+    await expect(properties.getByRole("heading", { name: "Identity" })).toBeVisible({
+      timeout: 15000,
+    });
     const yamlToggle = properties.getByRole("button", { name: "YAML", exact: true });
     await yamlToggle.click();
     await expect(yamlToggle).toHaveAttribute("aria-pressed", "true");
@@ -492,8 +625,15 @@ select customer_id, upper(customer_name) as shout from analytics.customers
     // Removing the last tag must clear it from the live view, not only after a
     // refresh (the workspace SSE merge omits empty fields).
     await properties.getByRole("button", { name: "Remove tag daily" }).click();
-    await expect(properties.getByRole("button", { name: "Remove tag daily" })).toBeHidden({ timeout: 15000 });
-    const cleared = await pollAsset(liveApp, page.request, "analytics.customers", (a) => (a.tags ?? []).length === 0);
+    await expect(properties.getByRole("button", { name: "Remove tag daily" })).toBeHidden({
+      timeout: 15000,
+    });
+    const cleared = await pollAsset(
+      liveApp,
+      page.request,
+      "analytics.customers",
+      (a) => (a.tags ?? []).length === 0,
+    );
     expect(cleared.tags ?? []).not.toContain("daily");
 
     // A custom column can be added directly from the columns list.
@@ -513,12 +653,17 @@ select customer_id, upper(customer_name) as shout from analytics.customers
     await expect(properties.getByRole("button", { name: /Confirm check on region/ })).toBeVisible();
 
     // Existing assets are offered as dependency proposals.
-    await expect(properties.getByRole("button", { name: "pick from existing assets…" })).toBeVisible();
+    await expect(
+      properties.getByRole("button", { name: "pick from existing assets…" }),
+    ).toBeVisible();
 
     // A column can be removed/ignored, after which it is no longer on the asset.
     await properties.getByRole("button", { name: "Remove column region" }).click();
-    const withoutColumn = await pollAsset(liveApp, page.request, "analytics.customers", (a) =>
-      !(a.columns ?? []).some((c) => c.name === "region"),
+    const withoutColumn = await pollAsset(
+      liveApp,
+      page.request,
+      "analytics.customers",
+      (a) => !(a.columns ?? []).some((c) => c.name === "region"),
     );
     expect((withoutColumn.columns ?? []).map((c) => c.name)).not.toContain("region");
   });
@@ -526,9 +671,12 @@ select customer_id, upper(customer_name) as shout from analytics.customers
   test("quality checks card adds and removes a column check", async ({ liveApp, page }) => {
     const { request } = page;
     // Declare a column so the checks card has a target.
-    const declare = await request.post(`${liveApp.baseURL}/api/assets/${customersAssetId}/columns/reconcile`, {
-      data: { columns: [{ name: "customer_id", type: "INTEGER" }] },
-    });
+    const declare = await request.post(
+      `${liveApp.baseURL}/api/assets/${customersAssetId}/columns/reconcile`,
+      {
+        data: { columns: [{ name: "customer_id", type: "INTEGER" }] },
+      },
+    );
     expect(declare.ok()).toBe(true);
 
     await page.goto(`${liveApp.baseURL}/pipelines/${pipelineId}/assets/${customersAssetId}/code`);
@@ -536,7 +684,9 @@ select customer_id, upper(customer_name) as shout from analytics.customers
     const properties = await openAssetProperties(page);
 
     const card = properties.locator("section").filter({ hasText: "Quality checks" });
-    await expect(card.getByRole("heading", { name: "Quality checks" })).toBeVisible({ timeout: 15000 });
+    await expect(card.getByRole("heading", { name: "Quality checks" })).toBeVisible({
+      timeout: 15000,
+    });
 
     // Pick the column (the check name defaults to not_null) and add the check.
     await card.getByRole("combobox").first().click();
@@ -556,6 +706,8 @@ select customer_id, upper(customer_name) as shout from analytics.customers
     );
     await removeButton.click();
     await removed;
-    await expect(card.getByRole("button", { name: "Remove not_null from customer_id" })).toBeHidden({ timeout: 15000 });
+    await expect(card.getByRole("button", { name: "Remove not_null from customer_id" })).toBeHidden(
+      { timeout: 15000 },
+    );
   });
 });

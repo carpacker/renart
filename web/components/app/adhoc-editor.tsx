@@ -28,7 +28,7 @@ export function useAdhocQueryDraft(pipelineId: string) {
     (nextValue: string) => {
       setDrafts((previous) => ({ ...previous, [pipelineId]: nextValue }));
     },
-    [pipelineId, setDrafts]
+    [pipelineId, setDrafts],
   );
   return [value, setValue] as const;
 }
@@ -67,7 +67,7 @@ export function AppAdhocEditor({
   // query reads from the context asset's own table.
   const adhocAsset = useMemo<WebAsset>(
     () => ({ ...contextAsset, name: "", path: "adhoc.sql" }),
-    [contextAsset]
+    [contextAsset],
   );
 
   useSQLIntellisense(
@@ -78,7 +78,7 @@ export function AppAdhocEditor({
     schemaTables,
     adhocAsset.upstreams ?? [],
     selectedEnvironment,
-    onGoToAsset
+    onGoToAsset,
   );
   useJinjaIntellisense(monacoInstance, editorInstance, adhocAsset, editorValue);
 
@@ -153,7 +153,7 @@ export function AppAdhocEditor({
       setEditorInstance(editor);
       setMonacoInstance(monaco);
     },
-    []
+    [],
   );
 
   return (

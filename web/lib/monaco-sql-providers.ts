@@ -1,7 +1,11 @@
 import type * as MonacoNS from "monaco-editor";
 
 import { SchemaTable, findTableByIdentifier } from "@/lib/sql-schema";
-import type { SqlParseContextColumn, SqlParseContextRange, SqlParseContextTable } from "@/lib/types";
+import type {
+  SqlParseContextColumn,
+  SqlParseContextRange,
+  SqlParseContextTable,
+} from "@/lib/types";
 
 type Monaco = typeof MonacoNS;
 
@@ -75,15 +79,74 @@ const TABLE_CLAUSE_PATTERN =
   /\b(?:from|join|into|update)\s+((?:(?:"[^"]+"|`[^`]+`|[a-zA-Z_][\w$]*)\.)*(?:"[^"]+"|`[^`]+`|[a-zA-Z_][\w$]*))/gi;
 
 const SQL_KEYWORDS = [
-  "SELECT", "FROM", "WHERE", "AND", "OR", "NOT", "IN", "IS", "NULL",
-  "JOIN", "LEFT", "RIGHT", "INNER", "OUTER", "CROSS", "FULL", "ON",
-  "GROUP", "BY", "ORDER", "ASC", "DESC", "HAVING", "LIMIT", "OFFSET",
-  "INSERT", "INTO", "VALUES", "UPDATE", "SET", "DELETE", "CREATE", "TABLE",
-  "VIEW", "DROP", "ALTER", "AS", "WITH", "UNION", "ALL", "DISTINCT",
-  "CASE", "WHEN", "THEN", "ELSE", "END", "BETWEEN", "LIKE", "EXISTS",
-  "TRUE", "FALSE", "COUNT", "SUM", "AVG", "MIN", "MAX", "CAST",
-  "COALESCE", "NULLIF", "OVER", "PARTITION", "ROW_NUMBER", "RANK",
-  "DENSE_RANK", "LAG", "LEAD", "FIRST_VALUE", "LAST_VALUE",
+  "SELECT",
+  "FROM",
+  "WHERE",
+  "AND",
+  "OR",
+  "NOT",
+  "IN",
+  "IS",
+  "NULL",
+  "JOIN",
+  "LEFT",
+  "RIGHT",
+  "INNER",
+  "OUTER",
+  "CROSS",
+  "FULL",
+  "ON",
+  "GROUP",
+  "BY",
+  "ORDER",
+  "ASC",
+  "DESC",
+  "HAVING",
+  "LIMIT",
+  "OFFSET",
+  "INSERT",
+  "INTO",
+  "VALUES",
+  "UPDATE",
+  "SET",
+  "DELETE",
+  "CREATE",
+  "TABLE",
+  "VIEW",
+  "DROP",
+  "ALTER",
+  "AS",
+  "WITH",
+  "UNION",
+  "ALL",
+  "DISTINCT",
+  "CASE",
+  "WHEN",
+  "THEN",
+  "ELSE",
+  "END",
+  "BETWEEN",
+  "LIKE",
+  "EXISTS",
+  "TRUE",
+  "FALSE",
+  "COUNT",
+  "SUM",
+  "AVG",
+  "MIN",
+  "MAX",
+  "CAST",
+  "COALESCE",
+  "NULLIF",
+  "OVER",
+  "PARTITION",
+  "ROW_NUMBER",
+  "RANK",
+  "DENSE_RANK",
+  "LAG",
+  "LEAD",
+  "FIRST_VALUE",
+  "LAST_VALUE",
 ];
 
 type SQLClauseContext =
@@ -139,10 +202,7 @@ function parseEqualityValueContext(
   return null;
 }
 
-function buildAliasMap(
-  sqlText: string,
-  tables: SchemaTable[],
-): Map<string, SchemaTable> {
+function buildAliasMap(sqlText: string, tables: SchemaTable[]): Map<string, SchemaTable> {
   const aliasMap = new Map<string, SchemaTable>();
   const relationPattern =
     /\b(?:from|join|into|update)\s+([\w."]+)(?:\s+(?:as\s+)?([a-zA-Z_]\w*))?/gi;
@@ -253,7 +313,8 @@ function buildParserAliasMap(
     }
 
     const resolvedName = tableEntry.resolved_name ?? tableEntry.name;
-    const table = findTableByIdentifier(tables, resolvedName) ?? findTableByIdentifier(tables, tableEntry.name);
+    const table =
+      findTableByIdentifier(tables, resolvedName) ?? findTableByIdentifier(tables, tableEntry.name);
     if (!table) {
       continue;
     }
@@ -273,16 +334,15 @@ function focusedSuggestText() {
     return null;
   }
 
-  return document
-    .querySelector(".suggest-widget.visible .monaco-list-row.focused")
-    ?.textContent
-    ?.trim()
-    .toLowerCase() ?? null;
+  return (
+    document
+      .querySelector(".suggest-widget.visible .monaco-list-row.focused")
+      ?.textContent?.trim()
+      .toLowerCase() ?? null
+  );
 }
 
-function preserveFocusedSuggestion(
-  suggestions: MonacoNS.languages.CompletionItem[],
-) {
+function preserveFocusedSuggestion(suggestions: MonacoNS.languages.CompletionItem[]) {
   const focusedText = focusedSuggestText();
   if (!focusedText) {
     return suggestions;
@@ -375,7 +435,10 @@ function findParserCTEColumnDefinitionRange(
   }
 
   const tableIdentifier = identifier.slice(0, dotIndex).trim().toLowerCase();
-  const columnName = identifier.slice(dotIndex + 1).trim().toLowerCase();
+  const columnName = identifier
+    .slice(dotIndex + 1)
+    .trim()
+    .toLowerCase();
   if (!tableIdentifier || !columnName) {
     return null;
   }
@@ -398,10 +461,7 @@ function findParserCTEColumnDefinitionRange(
   return rangeEntry?.[1] ?? null;
 }
 
-function parserRangeToMonaco(
-  monaco: Monaco,
-  range: SqlParseContextRange,
-) {
+function parserRangeToMonaco(monaco: Monaco, range: SqlParseContextRange) {
   return new monaco.Range(range.line, range.col, range.end_line, range.end_col);
 }
 
@@ -440,11 +500,12 @@ function findParserDefinitionRange(
 
   const resolvedTableName = directColumn?.resolved_table;
   if (resolvedTableName) {
-    const sourceTable = (parseContext.tables ?? []).find((table) =>
-      table.source_kind === "cte" &&
-      (table.name.trim().toLowerCase() === resolvedTableName.trim().toLowerCase() ||
-        table.alias?.trim().toLowerCase() === resolvedTableName.trim().toLowerCase() ||
-        table.resolved_name?.trim().toLowerCase() === resolvedTableName.trim().toLowerCase()),
+    const sourceTable = (parseContext.tables ?? []).find(
+      (table) =>
+        table.source_kind === "cte" &&
+        (table.name.trim().toLowerCase() === resolvedTableName.trim().toLowerCase() ||
+          table.alias?.trim().toLowerCase() === resolvedTableName.trim().toLowerCase() ||
+          table.resolved_name?.trim().toLowerCase() === resolvedTableName.trim().toLowerCase()),
     );
     const columnPart = directColumn.parts.findLast((part) => part.kind === "column");
     if (sourceTable?.column_ranges && columnPart) {
@@ -457,12 +518,17 @@ function findParserDefinitionRange(
     }
   }
 
-  const tableEntry = (parseContext.tables ?? []).find((table) =>
-    table.name.trim().toLowerCase() === normalizedIdentifier ||
-    table.alias?.trim().toLowerCase() === normalizedIdentifier ||
-    table.resolved_name?.trim().toLowerCase() === normalizedIdentifier,
+  const tableEntry = (parseContext.tables ?? []).find(
+    (table) =>
+      table.name.trim().toLowerCase() === normalizedIdentifier ||
+      table.alias?.trim().toLowerCase() === normalizedIdentifier ||
+      table.resolved_name?.trim().toLowerCase() === normalizedIdentifier,
   );
-  return tableEntry?.alias_range ?? tableEntry?.parts.find((part) => part.kind === "table")?.range ?? null;
+  return (
+    tableEntry?.alias_range ??
+    tableEntry?.parts.find((part) => part.kind === "table")?.range ??
+    null
+  );
 }
 
 function collectParserTableColumnSuggestions(
@@ -501,8 +567,8 @@ function aliasNameAtPosition(
     const isInside =
       position.lineNumber >= aliasRange.line &&
       position.lineNumber <= aliasRange.end_line &&
-      ((position.lineNumber !== aliasRange.line || position.column >= aliasRange.col) &&
-        (position.lineNumber !== aliasRange.end_line || position.column <= aliasRange.end_col));
+      (position.lineNumber !== aliasRange.line || position.column >= aliasRange.col) &&
+      (position.lineNumber !== aliasRange.end_line || position.column <= aliasRange.end_col);
     if (!isInside) {
       continue;
     }
@@ -557,8 +623,8 @@ function resolveParserColumn(
   identifier: string,
 ) {
   const normalizedIdentifier = identifier.trim().toLowerCase();
-  const directColumn = (parseContext.columns ?? []).find((column) =>
-    column.name.trim().toLowerCase() === normalizedIdentifier,
+  const directColumn = (parseContext.columns ?? []).find(
+    (column) => column.name.trim().toLowerCase() === normalizedIdentifier,
   );
 
   if (directColumn?.resolved_table) {
@@ -645,7 +711,9 @@ function buildLocalTableSortText(
   const currentTableName = options.context?.currentTableName?.toLowerCase();
   const currentSchemaName = options.context?.currentSchemaName?.toLowerCase();
   const sameTable = currentTableName === table.name.toLowerCase();
-  const samePipeline = Boolean(options.context?.currentPipelineId) && table.pipelineId === options.context?.currentPipelineId;
+  const samePipeline =
+    Boolean(options.context?.currentPipelineId) &&
+    table.pipelineId === options.context?.currentPipelineId;
   const sameSchema =
     Boolean(currentSchemaName) && schemaNameFromTableName(table.name) === currentSchemaName;
 
@@ -666,18 +734,13 @@ function buildLocalTableSortText(
   return `${clauseBucket}${rank}${sourceBucket}${table.name.toLowerCase()}`;
 }
 
-function hasMatchingRemoteTable(
-  table: SchemaTable,
-  context?: TableSuggestionContext,
-) {
+function hasMatchingRemoteTable(table: SchemaTable, context?: TableSuggestionContext) {
   const remoteTableNames = context?.remoteTableNames ?? [];
   const normalizedName = table.name.toLowerCase();
   return remoteTableNames.some((candidate) => candidate.toLowerCase() === normalizedName);
 }
 
-function buildLocalTableSuggestionLabel(
-  table: SchemaTable,
-) {
+function buildLocalTableSuggestionLabel(table: SchemaTable) {
   return table.name;
 }
 
@@ -745,13 +808,20 @@ function collectParserScopedColumnSuggestions(
   const seen = new Set<string>();
 
   for (const table of parserTables) {
-    const parserColumns = Object.entries(table.columns ?? {}).map(([name, type]) => ({ name, type }));
+    const parserColumns = Object.entries(table.columns ?? {}).map(([name, type]) => ({
+      name,
+      type,
+    }));
     const resolvedTable =
       findTableByIdentifier(tables, table.resolved_name ?? table.name) ??
       findTableByIdentifier(tables, table.name);
-    const columns = parserColumns.length > 0
-      ? parserColumns
-      : (resolvedTable?.columns ?? []).map((column) => ({ name: column.name, type: column.type }));
+    const columns =
+      parserColumns.length > 0
+        ? parserColumns
+        : (resolvedTable?.columns ?? []).map((column) => ({
+            name: column.name,
+            type: column.type,
+          }));
 
     for (const { name, type } of columns) {
       const key = name.toLowerCase();
@@ -762,7 +832,9 @@ function collectParserScopedColumnSuggestions(
       suggestions.push({
         label: name,
         kind: monaco.languages.CompletionItemKind.Field,
-        detail: type ? `${table.alias ?? table.name}.${name} (${type})` : `${table.alias ?? table.name}.${name}`,
+        detail: type
+          ? `${table.alias ?? table.name}.${name} (${type})`
+          : `${table.alias ?? table.name}.${name}`,
         insertText: name,
         range,
         sortText: "0",
@@ -1082,11 +1154,7 @@ function getQuotedPathContext(
   }
 
   const prefix = lineContent.slice(quoteStart + 1, cursorIndex);
-  if (
-    !prefix.startsWith("s3://") &&
-    !prefix.startsWith("./") &&
-    !prefix.startsWith("/")
-  ) {
+  if (!prefix.startsWith("s3://") && !prefix.startsWith("./") && !prefix.startsWith("/")) {
     return null;
   }
 
@@ -1361,10 +1429,7 @@ export function registerSQLProviders(
     monaco.languages.registerCompletionItemProvider("sql", {
       triggerCharacters: [".", "/", "'", '"'],
 
-      async provideCompletionItems(
-        model: MonacoNS.editor.ITextModel,
-        position: MonacoNS.Position,
-      ) {
+      async provideCompletionItems(model: MonacoNS.editor.ITextModel, position: MonacoNS.Position) {
         const entry = resolveEntry(model);
         if (!entry) {
           return { suggestions: [] };
@@ -1417,28 +1482,27 @@ export function registerSQLProviders(
         const aliasMap = parseContext?.tables?.length
           ? buildParserAliasMap(tables, parseContext)
           : buildAliasMap(currentSelectTextBeforeCursor, tables);
-        const scopedParserTables = parserTablesInScope(parseContext, position, currentSelectStatementText);
-        const parserReferencedNames = new Set(
-          scopedParserTables
-            .flatMap((table) => [
-              table.name.toLowerCase(),
-              (table.resolved_name ?? "").toLowerCase(),
-            ]),
+        const scopedParserTables = parserTablesInScope(
+          parseContext,
+          position,
+          currentSelectStatementText,
         );
-        const referencedTables = (
+        const parserReferencedNames = new Set(
+          scopedParserTables.flatMap((table) => [
+            table.name.toLowerCase(),
+            (table.resolved_name ?? "").toLowerCase(),
+          ]),
+        );
+        const referencedTables =
           parserReferencedNames.size > 0
             ? tables.filter(
                 (table) =>
                   parserReferencedNames.has(table.name.toLowerCase()) ||
                   parserReferencedNames.has(table.shortName.toLowerCase()),
               )
-            : resolveReferencedTables(tables, upstreamNames, aliasMap)
-        );
-        const columnSuggestionTables =
-          referencedTables.length > 0 ? referencedTables : tables;
-        const { inTableCtx, inColumnCtx } = getCompletionContext(
-          sqlTextBeforeCursor,
-        );
+            : resolveReferencedTables(tables, upstreamNames, aliasMap);
+        const columnSuggestionTables = referencedTables.length > 0 ? referencedTables : tables;
+        const { inTableCtx, inColumnCtx } = getCompletionContext(sqlTextBeforeCursor);
 
         const suggestions: MonacoNS.languages.CompletionItem[] = [];
         const equalityValueContext = parseEqualityValueContext(textBeforeCursor);
@@ -1490,11 +1554,7 @@ export function registerSQLProviders(
             };
           }
 
-          const table = resolveTableReference(
-            tables,
-            aliasMap,
-            dotPrefix.tablePart,
-          );
+          const table = resolveTableReference(tables, aliasMap, dotPrefix.tablePart);
           if (table && table.columns.length > 0) {
             const columnRange: MonacoNS.IRange = {
               startLineNumber: position.lineNumber,
@@ -1520,19 +1580,17 @@ export function registerSQLProviders(
           }
 
           if (remoteResolver) {
-            const remoteSuggestions = await remoteResolver.provideColumnSuggestions(
-              {
-                monaco,
-                tableIdentifier: dotPrefix.tablePart,
-                columnPrefix: dotPrefix.columnPrefix,
-                range: {
-                  startLineNumber: position.lineNumber,
-                  endLineNumber: position.lineNumber,
-                  startColumn: position.column - dotPrefix.columnPrefix.length,
-                  endColumn: position.column,
-                },
+            const remoteSuggestions = await remoteResolver.provideColumnSuggestions({
+              monaco,
+              tableIdentifier: dotPrefix.tablePart,
+              columnPrefix: dotPrefix.columnPrefix,
+              range: {
+                startLineNumber: position.lineNumber,
+                endLineNumber: position.lineNumber,
+                startColumn: position.column - dotPrefix.columnPrefix.length,
+                endColumn: position.column,
               },
-            );
+            });
 
             if (remoteSuggestions.length > 0) {
               return { suggestions: preserveFocusedSuggestion(remoteSuggestions) };
@@ -1561,10 +1619,7 @@ export function registerSQLProviders(
 
           suggestions.push(...scopedColumnSuggestions);
 
-          if (
-            scopedColumnSuggestions.length === 0 &&
-            columnSuggestionTables !== tables
-          ) {
+          if (scopedColumnSuggestions.length === 0 && columnSuggestionTables !== tables) {
             suggestions.push(...collectColumnSuggestions(monaco, tables, range));
           }
         }
@@ -1587,9 +1642,10 @@ export function registerSQLProviders(
             },
             kind: buildLocalTableSuggestionKind(monaco, table, tableSuggestionContext),
             detail: kindTag,
-            documentation: table.columns.length > 0
-              ? `Columns: ${table.columns.map((c) => c.name).join(", ")}`
-              : undefined,
+            documentation:
+              table.columns.length > 0
+                ? `Columns: ${table.columns.map((c) => c.name).join(", ")}`
+                : undefined,
             insertText: table.name,
             filterText: `${table.name} ${table.shortName}`,
             range,
@@ -1606,7 +1662,7 @@ export function registerSQLProviders(
               monaco,
               prefix: identifierPrefix,
               range,
-            }))
+            })),
           );
         }
 
@@ -1625,9 +1681,7 @@ export function registerSQLProviders(
 
         for (const suggestion of suggestions) {
           const label =
-            typeof suggestion.label === "string"
-              ? suggestion.label
-              : suggestion.label.label;
+            typeof suggestion.label === "string" ? suggestion.label : suggestion.label.label;
           const insertText = typeof suggestion.insertText === "string" ? suggestion.insertText : "";
           const key = `${label.toLowerCase()}::${suggestion.kind}::${insertText.toLowerCase()}`;
           if (seen.has(key)) {
@@ -1645,10 +1699,7 @@ export function registerSQLProviders(
 
   disposables.push(
     monaco.languages.registerDefinitionProvider("sql", {
-      provideDefinition(
-        model: MonacoNS.editor.ITextModel,
-        position: MonacoNS.Position,
-      ) {
+      provideDefinition(model: MonacoNS.editor.ITextModel, position: MonacoNS.Position) {
         const entry = resolveEntry(model);
         if (!entry) {
           return null;
@@ -1709,10 +1760,7 @@ export function registerSQLProviders(
 
   disposables.push(
     monaco.languages.registerHoverProvider("sql", {
-      provideHover(
-        model: MonacoNS.editor.ITextModel,
-        position: MonacoNS.Position,
-      ) {
+      provideHover(model: MonacoNS.editor.ITextModel, position: MonacoNS.Position) {
         const entry = resolveEntry(model);
         if (!entry) {
           return null;
@@ -1766,11 +1814,13 @@ export function registerSQLProviders(
 
           return {
             range: hoverRange,
-            contents: [{
-              value:
-                `**${aliasEntry.alias}**\n\nAlias for \`${aliasEntry.resolved_name ?? aliasEntry.name}\`` +
-                (aliasColumns ? `\n\n**Columns**\n${aliasColumns}` : ""),
-            }],
+            contents: [
+              {
+                value:
+                  `**${aliasEntry.alias}**\n\nAlias for \`${aliasEntry.resolved_name ?? aliasEntry.name}\`` +
+                  (aliasColumns ? `\n\n**Columns**\n${aliasColumns}` : ""),
+              },
+            ],
           };
         }
 
@@ -1812,11 +1862,13 @@ export function registerSQLProviders(
                   position.lineNumber,
                   position.column,
                 ),
-            contents: [{
-              value:
-                `**${aliasEntry.alias}**\n\nAlias for \`${aliasEntry.resolved_name ?? aliasEntry.name}\`` +
-                (aliasColumns ? `\n\n**Columns**\n${aliasColumns}` : ""),
-            }],
+            contents: [
+              {
+                value:
+                  `**${aliasEntry.alias}**\n\nAlias for \`${aliasEntry.resolved_name ?? aliasEntry.name}\`` +
+                  (aliasColumns ? `\n\n**Columns**\n${aliasColumns}` : ""),
+              },
+            ],
           };
         }
 

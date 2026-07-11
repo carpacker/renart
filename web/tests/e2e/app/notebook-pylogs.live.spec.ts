@@ -8,17 +8,36 @@ async function createNotebook(request: APIRequestContext, baseURL: string, title
   return (await response.json()).notebook as { id: string };
 }
 
-async function addPythonCell(request: APIRequestContext, baseURL: string, notebookId: string, name: string) {
+async function addPythonCell(
+  request: APIRequestContext,
+  baseURL: string,
+  notebookId: string,
+  name: string,
+) {
   const response = await request.post(`${baseURL}/api/notebooks/${notebookId}/cells`, {
     data: { name, language: "python" },
   });
   expect(response.ok()).toBe(true);
-  const notebook = (await response.json()).notebook as { cells: Array<{ cell_id: string; name: string }> };
+  const notebook = (await response.json()).notebook as {
+    cells: Array<{ cell_id: string; name: string }>;
+  };
   return notebook.cells.find((cell) => cell.name === name)!.cell_id;
 }
 
-async function setPy(request: APIRequestContext, baseURL: string, notebookId: string, cellId: string, body: string) {
-  expect((await request.put(`${baseURL}/api/notebooks/${notebookId}/cells/${cellId}`, { data: { content: `${body}\n` } })).ok()).toBe(true);
+async function setPy(
+  request: APIRequestContext,
+  baseURL: string,
+  notebookId: string,
+  cellId: string,
+  body: string,
+) {
+  expect(
+    (
+      await request.put(`${baseURL}/api/notebooks/${notebookId}/cells/${cellId}`, {
+        data: { content: `${body}\n` },
+      })
+    ).ok(),
+  ).toBe(true);
 }
 
 test.describe("notebook python logs", () => {
