@@ -140,6 +140,15 @@ than hand-rolled `div` shells.
   layout engine.
 - [lib/asset-visualization.ts](../web/lib/asset-visualization.ts): visualization
   metadata parsing.
+- [lib/project-context.ts](../web/lib/project-context.ts): per-tab project pin
+  (sessionStorage) — `projectApiPath` rewrites `/api/...` onto the pinned
+  project's `/api/projects/{id}/...` mount in one place; no pin means the
+  server's default project via the unprefixed alias. Two tabs can work on
+  different projects against one server.
+- [lib/features.ts](../web/lib/features.ts): project-scoped feature flags.
+  Ingestr surfaces (source connection types, asset kinds) render only when
+  `.renart/project.yml` sets `features.ingestr` or the workspace already
+  contains ingestr assets (see [backend.md](backend.md) §2).
 - [lib/sql-schema.ts](../web/lib/sql-schema.ts): schema context for SQL
   intellisense.
 - [lib/api-asset-templates.ts](../web/lib/api-asset-templates.ts): the three

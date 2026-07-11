@@ -1,8 +1,9 @@
 # Renart Docs — How We Write the User Docs
 
 Status: active. This is the authoring contract for everything under `docs/`
-(Astro Starlight, served at getrenart.com/docs). The companion
-`../plans/docs-alpha.md` defines *what* to build (the page set); this defines
+(Astro Starlight, served at getrenart.com/docs) — the docs pages *and* the
+landing page. The canonical page set is whatever `docs/astro.config.mjs`
+declares in its sidebar (see §9 for how it got that shape); this doc defines
 *how* to write it. If you are writing or reviewing a docs page, this is the
 checklist.
 
@@ -240,7 +241,24 @@ Before approving a docs PR, confirm:
 - [ ] **The gate** is satisfied: the feature this documents actually matches what
       ships.
 
----
+## 9. The shipped page set & the landing page (as-built record)
 
-*Companion: `../plans/docs-alpha.md` (the shipped alpha page set and its
-verification gates).*
+Folded here from `plans/docs-alpha.md` and `plans/landing-page.md` when they
+shipped (July 2026; git history keeps the full plans).
+
+- **The alpha page set** is deliberately small: ~17 real pages instead of the
+  46-stub IA from the earlier rollout plan. Deleted stubs come back from git
+  as their features stabilise, at the position the rollout IA assigned them.
+  The sidebar in `docs/astro.config.mjs` is the authoritative list; every
+  entry must be a real page (verification: `pnpm build` in `docs/` green, no
+  dead links, `grep -ri bruin docs/src` empty).
+- **The landing page** (`docs/src/pages/index.astro`) tells one story —
+  "the all-in-one, git-native data pipeline IDE" — as hero → logo marquee →
+  four lifecycle rows (Build / Explore / Run / Trust) → bento (runs, catalog,
+  diffs, quality) → manifesto → principles → CTA.
+- **Landing media** comes from `make landing-media` only (same staged acme
+  demo as `make docs-media`, §5): hero at 1920×1080, lifecycle shots at
+  1400×900, bento at 1200×675, the schedules-dialog shot at 1176×756; webp
+  q92 plus a 1200×675 PNG og-image, all written to `docs/public/landing/`.
+  If a capture changes dimensions, update the matching `<img>` width/height
+  in `index.astro`.

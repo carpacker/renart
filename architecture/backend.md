@@ -65,7 +65,12 @@ flow) — pipeline files, a `duckdb-default` connection, default .gitignore
 patterns, `.renart/project.yml` identity, and `git init` + an initial commit
 when the target has no repository — then opens/registers the project and
 refreshes its workspace. `GET /api/projects/templates` lists the templates
-for the welcome UI.
+for the welcome UI. `.renart/project.yml` also carries project-scoped feature
+flags (`internal/web/identity`): `features.ingestr` re-enables the ingestr
+surfaces the UI hides by default — `/api/config` filters ingestr source
+connection types out unless the flag is set, and the frontend
+(`web/lib/features.ts`) additionally shows them when the workspace already
+contains ingestr assets.
 
 ## 3. Persistence
 
@@ -141,6 +146,10 @@ fallback + the disk cache brought idle memory to roughly 360 MB.
   diffs are ever needed.
 - `WorkspaceCoordinator.CurrentState()` returns aliased slices/maps; consumers
   are read-only today but nothing enforces it.
+- Project runtimes are opened lazily but never evicted: each open project
+  keeps its watcher, SQLite pool, and scheduler alive for the life of the
+  process. Idle eviction (close after N hours unused, keep the registry
+  entry) is the planned cap if footprint becomes a problem.
 
 Verification for backend changes: `go build ./...`, `go vet ./...`,
 `go test ./...`, and the live e2e suite (`corepack pnpm test:e2e:live` in

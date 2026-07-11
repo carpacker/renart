@@ -10,14 +10,15 @@ the original.
 
 | Doc | Status |
 | --- | --- |
-| [cli-v1.md](cli-v1.md) | proposed — renart CLI usable standalone and inside a web-UI terminal |
-| [project-settings-and-workspaces.md](project-settings-and-workspaces.md) | proposed — real project settings + multi-project switching |
+| [cli-v1.md](cli-v1.md) | proposed — a clean CLI surface + `renart run`, standalone and inside a web-UI terminal |
 | [dbt-assets.md](dbt-assets.md) | evaluation — enabling renart intelligence on existing dbt projects |
 | [materialization-strategies.md](materialization-strategies.md) | in progress — Phase 1 partially landed |
 | [materialization-per-asset-type.md](materialization-per-asset-type.md) | proposed — make every offered materialization mode execute on sql/python/load/api assets |
-| [docs-alpha.md](docs-alpha.md) | implemented — the alpha docs page set (contract: `architecture/docs.md`) |
-| [notebook-intellisense.md](notebook-intellisense.md) | in progress — asset/cell completion + go-to-definition in notebooks |
-| [ingestr-feature-flag.md](ingestr-feature-flag.md) | in progress — hide ingestr surfaces behind a project flag |
 | [remote-table-intellisense.md](remote-table-intellisense.md) | proposal — surface warehouse tables with no backing asset via the LSP |
-| [landing-page.md](landing-page.md) | awaiting feedback — landing story + media regen proposal |
 | [questions.md](questions.md) | open questions for the maintainer |
+
+Recently folded away (git history keeps them): `docs-alpha.md` and
+`landing-page.md` → `architecture/docs.md`; `notebook-intellisense.md` →
+`architecture/sql-lsp.md`; `ingestr-feature-flag.md` and
+`project-settings-and-workspaces.md` → `architecture/backend.md` +
+`architecture/frontend.md`.
