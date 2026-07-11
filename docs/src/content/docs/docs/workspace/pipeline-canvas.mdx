@@ -2,15 +2,17 @@
 title: The pipeline canvas
 description: "Read your pipeline's lineage on the canvas, navigate it, and open or create assets from it."
 ---
-{/* Diátaxis mode: How-to. See architecture/docs-framework.md for the template. */}
-import { Image } from 'astro:assets';
-import canvas from '../../../../assets/docs/workspace/pipeline-canvas.png';
 
 The pipeline canvas is the main screen in **Build**. It shows every asset in a
 pipeline as a node, with arrows for how data flows between them, so you can read
 the whole pipeline at a glance and jump straight to the piece you want to work on.
 
-<Image src={canvas} alt="The pipeline canvas showing the acme_shop demo pipeline grouped into three labelled columns by folder — raw (four CSV seeds), staging (four cleaning views), and marts (order_items_enriched, customer_revenue, daily_revenue) — with lineage arrows flowing left to right between the asset nodes and zoom, fit, and lock controls at the bottom left." />
+<img
+  src="/docs-media/pipeline-canvas.webp"
+  alt="The pipeline canvas showing the demo pipeline grouped into three labelled columns by folder — raw, staging, and mart — with lineage arrows between asset nodes, a freshness badge on every node, and zoom, fit, and lock controls at the bottom left"
+  width="2800"
+  height="1800"
+/>
 
 The canvas isn't an exported diagram — it's the live workspace. Everything you see
 is a real file in your project, and the layout updates as you edit.
@@ -19,30 +21,28 @@ is a real file in your project, and the layout updates as you edit.
 
 Each node summarizes one asset:
 
-- **Name** and a type icon in the header (SQL, Python, API, Load, and so on).
-- The **file path** the asset lives at.
-- **Status badges** — whether the asset's output is fresh, stale, missing, or never
-  built, plus its connection (for example `duckdb-default`).
+- **Name** and a type icon in the header.
+- A **freshness badge** — **Fresh**, **Edited** (the asset's code changed since
+  it was last built), **Upstream changed** (something it reads from changed), or
+  **Never built** — plus the last materialized time.
+- The **connection** it runs against (for example `duckdb-default`).
 
 A node with a coloured border is the one you currently have selected; its details
-open in the panel on the right.
+open in the workbench on the right.
 
 ## Read the layout
 
 Assets are grouped into labelled boxes by the folder they live in under `assets/`.
-In the demo pipeline that's `raw`, `staging`, and `marts` — so the canvas mirrors
-the folders in the Explorer, and the count next to each label is how many assets
-that folder holds. Renart uses these folders, not a naming prefix, to organise a
-pipeline into layers: an asset in `assets/staging/` is named `staging.<name>`. See
-[Organising assets into folders](/docs/editing-assets/organising-assets/).
+In the demo pipeline that's `raw`, `staging`, and `mart` — the canvas mirrors the
+folders in the Explorer, and the count next to each label is how many assets that
+folder holds. An asset in `assets/staging/` is named `staging.<name>`.
 
 ## Follow the lineage
 
 Arrows point from an **upstream** asset to the **downstream** asset that depends on
-it. Read left-to-right (or top-down) to see how raw inputs become finished tables.
-Renart works out most of these links for you from the asset's code; you can also
-add links by hand. To learn how that inference works and how to override it, see
-[Dependencies](/docs/editing-assets/dependencies/).
+it. Read left-to-right to see how raw inputs become finished tables. Renart infers
+most of these links from the asset's SQL; you can also add dependencies by hand in
+the workbench.
 
 ## Navigate the canvas
 
@@ -71,6 +71,4 @@ open the full editor to change the asset's code and metadata — see
   in the app.
 - [The asset editor](/docs/editing-assets/asset-editor/) — edit what a node
   contains.
-- [Dependencies](/docs/editing-assets/dependencies/) — how the arrows are derived.
-- [How Renart works](/docs/introduction/how-renart-works/) — why the canvas maps to
-  files.
+- [Concepts](/docs/concepts/) — staleness and lineage in the underlying model.

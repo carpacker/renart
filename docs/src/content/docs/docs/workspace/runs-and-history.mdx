@@ -1,12 +1,45 @@
 ---
 title: Runs & history
-description: "What a run records and how to re-run from history."
+description: What a run records, how to read a failure, and how to re-run.
 ---
-{/* Diátaxis mode: How-to. See architecture/docs-framework.md for the template. */}
-import { Aside } from '@astrojs/starlight/components';
 
-<Aside type="note" title="In progress">
-This page is being written as part of the docs build-out.
-</Aside>
+The **Runs** view is the record of every pipeline execution — manual,
+scheduled, or triggered over the API. "What happened last night" is a
+click, not an investigation.
 
-Explains what the Runs view records and how to inspect or re-run past executions.
+## What a run records
+
+Each run stores the pipeline, the environment it ran against, what
+triggered it, and a per-asset breakdown: status, start time, and duration
+for every asset in the run.
+
+## Read a run
+
+Open a run to see its detail page:
+
+<img
+  src="/docs-media/run-detail.webp"
+  alt="A failed run's detail page: a per-asset timeline showing five succeeded assets and one errored, with the event log below showing the SQL error that failed the run"
+  width="2800"
+  height="1800"
+/>
+
+- The **timeline** at the top shows each asset as a bar — when it started,
+  how long it took, and whether it succeeded or errored.
+- The summary on the right counts assets by state (preparing, executing,
+  errored, succeeded).
+- The **Events** log below records each asset start/finish; on a failure,
+  the error — for example the exact SQL binder error — is right there in
+  the log. **stdout** and **stderr** tabs hold the raw output.
+
+## Re-run
+
+Use **Re-execute** on a run's detail page to run the same pipeline against
+the same environment again. Runs started from a schedule execute the
+pipeline's deployed snapshot; manual runs execute the working tree.
+
+## Related
+
+- [Scheduling](/docs/scheduling/overview/) — where recurring runs come from.
+- [The pipeline canvas](/docs/workspace/pipeline-canvas/) — freshness badges
+  reflect the latest materializations.

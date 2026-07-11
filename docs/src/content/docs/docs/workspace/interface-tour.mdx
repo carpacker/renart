@@ -1,12 +1,58 @@
 ---
 title: Tour of the interface
-description: "The Build, Catalog, Notebooks, Schedules, Runs, and Settings areas, and what each is for."
+description: The five main views of the Renart workspace and how they fit together.
 ---
-{/* Diátaxis mode: Explanation. See architecture/docs-framework.md for the template. */}
-import { Aside } from '@astrojs/starlight/components';
 
-<Aside type="note" title="In progress">
-This page is being written as part of the docs build-out.
-</Aside>
+The top bar holds the project switcher, the five main views, the environment
+picker, and the current git branch. Everything you do in any of them ends up
+as a file change in the repository.
 
-Orients a new user to the main areas of the app and when to use each.
+<img
+  src="/docs-media/workspace-overview.webp"
+  alt="The Build view in split mode: the explorer on the left, the SQL editor and pipeline canvas side by side, the results panel below, and the asset workbench on the right"
+  width="3200"
+  height="2000"
+/>
+
+## Build
+
+Where you spend most of your time. Build combines:
+
+- the **Explorer** — pipelines, asset files, and notebooks as a file tree;
+- the **editor** — the asset's code, with pipeline-aware IntelliSense;
+- the **canvas** — the pipeline's lineage with freshness badges;
+- the **results panel** — Inspect, Materialize, Query, Type check, and
+  History tabs for the selected asset;
+- the **workbench** — the asset's identity, materialization, dependencies,
+  and columns as editable cards.
+
+The view toggles at the top right switch between code, split, and canvas
+layouts of the same asset.
+
+## Catalog
+
+Every asset across every pipeline in the project, with cross-pipeline
+lineage. Select an asset to trace exactly what feeds it.
+
+## Notebooks
+
+SQL scratchpads with inline tables and charts, each running in its own local
+DuckDB session. See [Notebooks](/docs/notebooks/overview/).
+
+## Runs
+
+The record of every materialization triggered manually or by a schedule,
+with per-asset status, timing, and logs. See
+[Runs & history](/docs/workspace/runs-and-history/).
+
+## Schedules
+
+One schedule per pipeline and environment, with a timeline of recent and
+upcoming runs. See [Scheduling](/docs/scheduling/overview/).
+
+## The environment picker
+
+The environment selected in the top bar (for example `default` or
+`production`) is the one previews, materializations, and ad-hoc queries run
+against. Environments are defined in the project config — see
+[Managing connections](/docs/connections-environments/managing-connections/).
