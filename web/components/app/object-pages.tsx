@@ -23,11 +23,19 @@ export function AppDashboardPage({ dashboardId }: { dashboardId: string }) {
           <MetricCard label="Orders" value="9,328" delta="+4.1%" />
           <MetricCard label="Forecast error" value="3.2%" delta="-0.6%" />
           <SectionCard title="Daily revenue" icon={BarChart3} className="md:col-span-2">
-            <div className="h-44"><Sparkline /></div>
+            <div className="h-44">
+              <Sparkline />
+            </div>
           </SectionCard>
           <SectionCard title="Revenue by region" icon={LayoutDashboard}>
             <div className="flex h-44 items-end gap-2">
-              {[60, 80, 45, 95, 70].map((height, index) => <div key={index} className="flex-1 rounded-t bg-primary" style={{ height: `${height}%` }} />)}
+              {[60, 80, 45, 95, 70].map((height, index) => (
+                <div
+                  key={index}
+                  className="flex-1 rounded-t bg-primary"
+                  style={{ height: `${height}%` }}
+                />
+              ))}
             </div>
           </SectionCard>
           <AppPanel className="md:col-span-3">
@@ -36,7 +44,14 @@ export function AppDashboardPage({ dashboardId }: { dashboardId: string }) {
               <DelimitedCardTitle>Top assets</DelimitedCardTitle>
             </DelimitedCardHeader>
             <DelimitedCardContent className="p-0">
-              <SimpleTable columns={["Asset", "Rows", "Freshness"]} rows={[["revenue_daily", "30", "fresh"], ["orders_cleaned", "9,328", "fresh"], ["stripe_orders", "14,908", "overdue"]]} />
+              <SimpleTable
+                columns={["Asset", "Rows", "Freshness"]}
+                rows={[
+                  ["revenue_daily", "30", "fresh"],
+                  ["orders_cleaned", "9,328", "fresh"],
+                  ["stripe_orders", "14,908", "overdue"],
+                ]}
+              />
             </DelimitedCardContent>
           </AppPanel>
         </div>
@@ -49,7 +64,11 @@ function MetricCard({ label, value, delta }: { label: string; value: string; del
   return (
     <SectionCard title={label} icon={LayoutDashboard}>
       <div className="text-2xl font-semibold tracking-tight">{value}</div>
-      <div className={`mt-1 text-xs ${delta.startsWith("+") ? "text-emerald-600" : "text-red-500"}`}>{delta}</div>
+      <div
+        className={`mt-1 text-xs ${delta.startsWith("+") ? "text-emerald-600" : "text-red-500"}`}
+      >
+        {delta}
+      </div>
     </SectionCard>
   );
 }
@@ -57,8 +76,18 @@ function MetricCard({ label, value, delta }: { label: string; value: string; del
 function Sparkline() {
   return (
     <svg viewBox="0 0 100 36" preserveAspectRatio="none" className="h-full w-full">
-      <polyline points="0,30 14,22 28,26 42,14 56,18 70,8 84,12 100,4" fill="none" stroke="var(--primary)" strokeWidth="1.5" />
-      <polyline points="0,36 0,30 14,22 28,26 42,14 56,18 70,8 84,12 100,4 100,36" fill="var(--primary)" opacity="0.08" stroke="none" />
+      <polyline
+        points="0,30 14,22 28,26 42,14 56,18 70,8 84,12 100,4"
+        fill="none"
+        stroke="var(--primary)"
+        strokeWidth="1.5"
+      />
+      <polyline
+        points="0,36 0,30 14,22 28,26 42,14 56,18 70,8 84,12 100,4 100,36"
+        fill="var(--primary)"
+        opacity="0.08"
+        stroke="none"
+      />
     </svg>
   );
 }

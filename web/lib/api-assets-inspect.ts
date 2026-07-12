@@ -10,7 +10,7 @@ import { AssetInspectResponse } from "@/lib/types";
 
 export async function inspectAsset(
   assetId: string,
-  options?: { limit?: number; environment?: string; timeWindow?: { start: string; end: string } }
+  options?: { limit?: number; environment?: string; timeWindow?: { start: string; end: string } },
 ) {
   const { res, text, parsed } = await fetchParsedText<AssetInspectResponse>(
     `/api/assets/${assetId}/inspect${buildQueryString({
@@ -19,7 +19,7 @@ export async function inspectAsset(
       start_date: options?.timeWindow?.start,
       end_date: options?.timeWindow?.end,
     })}`,
-    { method: "GET" }
+    { method: "GET" },
   );
 
   if (parsed) {
@@ -35,7 +35,12 @@ export async function materializeAssetStream(
     onChunk?: (chunk: string) => void;
     onDone?: (payload: MaterializeStreamPayload) => void;
   },
-  options?: { environment?: string; scope?: MaterializeScope; timeWindow?: { start: string; end: string }; fullRefresh?: boolean }
+  options?: {
+    environment?: string;
+    scope?: MaterializeScope;
+    timeWindow?: { start: string; end: string };
+    fullRefresh?: boolean;
+  },
 ) {
   return streamMaterialization(
     `/api/assets/${assetId}/materialize/stream${buildQueryString({
@@ -43,9 +48,9 @@ export async function materializeAssetStream(
       scope: options?.scope,
       start_date: options?.timeWindow?.start,
       end_date: options?.timeWindow?.end,
-    full_refresh: options?.fullRefresh ? "true" : undefined,
+      full_refresh: options?.fullRefresh ? "true" : undefined,
     })}`,
     handlers,
-    "Asset materialization stream ended unexpectedly."
+    "Asset materialization stream ended unexpectedly.",
   );
 }

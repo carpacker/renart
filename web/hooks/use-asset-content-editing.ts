@@ -6,10 +6,7 @@ import { useCallback, useEffect, useRef } from "react";
 import { useDebouncedAssetSave } from "@/hooks/use-debounced-asset-save";
 import { refreshAssetColumnsFromDefinition } from "@/lib/api-asset-transactions";
 import { fillAssetColumnsFromDB } from "@/lib/api";
-import {
-  editorDraftAtom,
-  editorProgrammaticContentAtom,
-} from "@/lib/atoms/domains/editor";
+import { editorDraftAtom, editorProgrammaticContentAtom } from "@/lib/atoms/domains/editor";
 import { WebAsset } from "@/lib/types";
 
 export type SaveSelectedAssetResult = false | "saved" | "already-saved";
@@ -32,16 +29,9 @@ export function useAssetContentEditing({
   const editorDraft = useAtomValue(editorDraftAtom);
   const editorProgrammaticContent = useAtomValue(editorProgrammaticContentAtom);
   const setEditorDraft = useSetAtom(editorDraftAtom);
-  const {
-    scheduleSave,
-    flushAssetSave,
-    flushAllSaves,
-    hasPendingAssetSave,
-    saveAssetNow,
-  } = useDebouncedAssetSave(saveDelay);
-  const fillColumnsTimerRef = useRef<ReturnType<typeof setTimeout> | null>(
-    null
-  );
+  const { scheduleSave, flushAssetSave, flushAllSaves, hasPendingAssetSave, saveAssetNow } =
+    useDebouncedAssetSave(saveDelay);
+  const fillColumnsTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const lastEditorChangeRef = useRef<{
     assetId: string;
     value: string;
@@ -52,9 +42,7 @@ export function useAssetContentEditing({
   });
   const appliedProgrammaticRevisionRef = useRef<Record<string, number>>({});
 
-  const editorValue = asset
-    ? editorDraft[asset.id] ?? asset.content
-    : "";
+  const editorValue = asset ? (editorDraft[asset.id] ?? asset.content) : "";
 
   // Monaco applies a changed `value` prop by replacing the whole document in
   // a post-commit effect. While typing, that effect can run after further
@@ -62,14 +50,11 @@ export function useAssetContentEditing({
   // moves for changes that did not originate from the editor itself (asset
   // switch, SSE update, format) - the editor already has its own keystrokes.
   const assetId = asset?.id ?? null;
-  const programmaticContent = assetId
-    ? editorProgrammaticContent[assetId]
-    : undefined;
+  const programmaticContent = assetId ? editorProgrammaticContent[assetId] : undefined;
   const hasUnappliedProgrammaticContent = Boolean(
     assetId &&
-      programmaticContent &&
-      appliedProgrammaticRevisionRef.current[assetId] !==
-        programmaticContent.revision
+    programmaticContent &&
+    appliedProgrammaticRevisionRef.current[assetId] !== programmaticContent.revision,
   );
   const lastEditorChange = lastEditorChangeRef.current;
   const changeCameFromEditor =
@@ -78,12 +63,8 @@ export function useAssetContentEditing({
     lastEditorChange.value === editorValue;
   if (assetId && hasUnappliedProgrammaticContent && programmaticContent) {
     displayValueRef.current = { assetId, value: programmaticContent.content };
-    appliedProgrammaticRevisionRef.current[assetId] =
-      programmaticContent.revision;
-  } else if (
-    displayValueRef.current.assetId !== assetId ||
-    !changeCameFromEditor
-  ) {
+    appliedProgrammaticRevisionRef.current[assetId] = programmaticContent.revision;
+  } else if (displayValueRef.current.assetId !== assetId || !changeCameFromEditor) {
     displayValueRef.current = { assetId, value: editorValue };
   }
   const editorDisplayValue = displayValueRef.current.value;
@@ -103,8 +84,7 @@ export function useAssetContentEditing({
       scheduleSave(pipelineId, asset.id, nextValue);
 
       const isSQLAsset =
-        asset.path.toLowerCase().endsWith(".sql") ||
-        asset.type.toLowerCase().includes("sql");
+        asset.path.toLowerCase().endsWith(".sql") || asset.type.toLowerCase().includes("sql");
       const isAPIAsset = asset.type.toLowerCase() === "api";
       if (!isSQLAsset && !isAPIAsset) {
         return;
@@ -124,7 +104,7 @@ export function useAssetContentEditing({
         });
       }, 1200);
     },
-    [asset, pipelineId, scheduleSave, setEditorDraft]
+    [asset, pipelineId, scheduleSave, setEditorDraft],
   );
 
   useEffect(() => {
@@ -135,22 +115,21 @@ export function useAssetContentEditing({
     };
   }, []);
 
-  const handleSaveSelectedAsset =
-    useCallback(async (): Promise<SaveSelectedAssetResult> => {
-      if (!asset || !pipelineId) {
-        return false;
-      }
+  const handleSaveSelectedAsset = useCallback(async (): Promise<SaveSelectedAssetResult> => {
+    if (!asset || !pipelineId) {
+      return false;
+    }
 
-      const hasPendingSave = hasPendingAssetSave(asset.id);
-      const hasUnsavedChanges = hasPendingSave || editorValue !== asset.content;
+    const hasPendingSave = hasPendingAssetSave(asset.id);
+    const hasUnsavedChanges = hasPendingSave || editorValue !== asset.content;
 
-      if (!hasUnsavedChanges) {
-        return "already-saved";
-      }
+    if (!hasUnsavedChanges) {
+      return "already-saved";
+    }
 
-      const saved = await saveAssetNow(pipelineId, asset.id, editorValue);
-      return saved ? "saved" : false;
-    }, [asset, editorValue, hasPendingAssetSave, pipelineId, saveAssetNow]);
+    const saved = await saveAssetNow(pipelineId, asset.id, editorValue);
+    return saved ? "saved" : false;
+  }, [asset, editorValue, hasPendingAssetSave, pipelineId, saveAssetNow]);
 
   return {
     editorDisplayValue,

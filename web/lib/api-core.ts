@@ -42,12 +42,7 @@ export async function getResponseErrorMessage(res: Response): Promise<string> {
   const text = await res.text();
   const parsed = parseJSONSafely<JSONErrorPayload>(text);
 
-  return (
-    parsed?.error?.message ||
-    parsed?.message ||
-    text ||
-    `Request failed: ${res.status}`
-  );
+  return parsed?.error?.message || parsed?.message || text || `Request failed: ${res.status}`;
 }
 
 export function parseJSONSafely<T>(text: string): T | null {
@@ -58,9 +53,7 @@ export function parseJSONSafely<T>(text: string): T | null {
   }
 }
 
-export function buildQueryString(
-  params: Record<string, string | number | undefined>
-) {
+export function buildQueryString(params: Record<string, string | number | undefined>) {
   const searchParams = new URLSearchParams();
 
   for (const [key, value] of Object.entries(params)) {
@@ -90,7 +83,7 @@ export async function fetchJSONWithBody<T>(
   input: RequestInfo | URL,
   method: "POST" | "PUT" | "DELETE",
   body?: unknown,
-  init?: RequestInit
+  init?: RequestInit,
 ) {
   return fetchJSON<T>(input, {
     ...init,
@@ -118,10 +111,7 @@ export async function fetchText(input: RequestInfo | URL, init?: RequestInit) {
   return { res, text };
 }
 
-export async function fetchParsedText<T>(
-  input: RequestInfo | URL,
-  init?: RequestInit
-) {
+export async function fetchParsedText<T>(input: RequestInfo | URL, init?: RequestInit) {
   const { res, text } = await fetchText(input, init);
 
   return {
@@ -131,9 +121,7 @@ export async function fetchParsedText<T>(
   };
 }
 
-export function normalizeInspectResponse(
-  response: AssetInspectResponse
-): AssetInspectResponse {
+export function normalizeInspectResponse(response: AssetInspectResponse): AssetInspectResponse {
   if (response.status !== "error") {
     return response;
   }

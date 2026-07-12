@@ -14,7 +14,7 @@ type PackageSearchResponse = {
 /** Probable PyPI packages for a Python import name (with summaries). */
 export async function searchPythonPackages(importName: string): Promise<PythonPackage[]> {
   const response = await fetchJSON<PackageSearchResponse>(
-    `/api/python/packages?import=${encodeURIComponent(importName)}`
+    `/api/python/packages?import=${encodeURIComponent(importName)}`,
   );
   return response.packages ?? [];
 }

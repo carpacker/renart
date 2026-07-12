@@ -37,16 +37,11 @@ export const enrichedPipelineAtom = atom<WebPipeline | null>((get) => {
       return {
         ...pipelineAsset,
         is_materialized: lazy.is_materialized,
-        freshness_status:
-          lazy.freshness_status ?? pipelineAsset.freshness_status,
+        freshness_status: lazy.freshness_status ?? pipelineAsset.freshness_status,
         materialized_as: lazy.materialized_as ?? pipelineAsset.materialized_as,
-        row_count:
-          lazy.row_count === undefined
-            ? pipelineAsset.row_count
-            : lazy.row_count,
+        row_count: lazy.row_count === undefined ? pipelineAsset.row_count : lazy.row_count,
         connection: lazy.connection ?? pipelineAsset.connection,
-        materialization_type:
-          lazy.materialization_type ?? pipelineAsset.materialization_type,
+        materialization_type: lazy.materialization_type ?? pipelineAsset.materialization_type,
       };
     }),
   };

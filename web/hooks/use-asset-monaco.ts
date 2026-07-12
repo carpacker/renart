@@ -51,9 +51,7 @@ export function useAssetMonaco({
     useState<MonacoNS.editor.IStandaloneCodeEditor | null>(null);
 
   const schemaTables = useAtomValue(selectedAssetSchemaTablesAtom);
-  const schemaSuggestionTables = useAtomValue(
-    selectedAssetSchemaSuggestionTablesAtom
-  );
+  const schemaSuggestionTables = useAtomValue(selectedAssetSchemaSuggestionTablesAtom);
   const registerAssetColumns = useSetAtom(registerAssetColumnsAtom);
   const selectedEnvironment = useAtomValue(selectedEnvironmentAtom);
 
@@ -88,7 +86,7 @@ export function useAssetMonaco({
   const { formatSQL, isSqlAsset, shortcutLabel } = useSQLFormatting(
     asset,
     editorInstance,
-    monacoInstance
+    monacoInstance,
   );
 
   const handleBeforeMount = useCallback((monaco: Monaco) => {
@@ -101,7 +99,7 @@ export function useAssetMonaco({
       setEditorInstance(editor);
       setMonacoInstance(monaco);
     },
-    []
+    [],
   );
 
   useEffect(() => {

@@ -12,7 +12,7 @@ export type ExecutionTimeOption = ExecutionTimeWindow & {
 export function getExecutionTimeOptions(
   schedule: string | undefined,
   now: Date = new Date(),
-  count = 8
+  count = 8,
 ): ExecutionTimeOption[] {
   const boundaries = getRecentScheduleBoundaries(schedule, now, count + 1);
   const options: ExecutionTimeOption[] = [];
@@ -30,17 +30,18 @@ export function getExecutionTimeOptions(
   return options;
 }
 
-export function findExecutionTimeOption(
-  options: ExecutionTimeOption[],
-  value: string | undefined
-) {
+export function findExecutionTimeOption(options: ExecutionTimeOption[], value: string | undefined) {
   if (!value) {
     return options[0] ?? null;
   }
   return options.find((option) => option.value === value) ?? options[0] ?? null;
 }
 
-function getRecentScheduleBoundaries(schedule: string | undefined, now: Date, count: number): Date[] {
+function getRecentScheduleBoundaries(
+  schedule: string | undefined,
+  now: Date,
+  count: number,
+): Date[] {
   const normalized = normalizeSchedule(schedule);
   if (normalized === "@hourly") {
     const end = floorHour(now);
@@ -67,7 +68,9 @@ function getRecentScheduleBoundaries(schedule: string | undefined, now: Date, co
     cursor.setUTCMinutes(cursor.getUTCMinutes() - 1);
   }
 
-  return boundaries.length >= count ? boundaries : getRecentScheduleBoundaries("@daily", now, count);
+  return boundaries.length >= count
+    ? boundaries
+    : getRecentScheduleBoundaries("@daily", now, count);
 }
 
 function normalizeSchedule(schedule: string | undefined) {
@@ -104,10 +107,17 @@ function parseCronField(value: string, min: number, max: number) {
     if (!Number.isInteger(step) || step <= 0) {
       return null;
     }
-    const [startRaw, endRaw] = rangePart === "*" ? [String(min), String(max)] : rangePart.split("-");
+    const [startRaw, endRaw] =
+      rangePart === "*" ? [String(min), String(max)] : rangePart.split("-");
     const start = Number(startRaw);
     const end = Number(endRaw ?? startRaw);
-    if (!Number.isInteger(start) || !Number.isInteger(end) || start < min || end > max || start > end) {
+    if (
+      !Number.isInteger(start) ||
+      !Number.isInteger(end) ||
+      start < min ||
+      end > max ||
+      start > end
+    ) {
       return null;
     }
     for (let current = start; current <= end; current += step) {
@@ -122,25 +132,35 @@ function cronMatches(parsed: NonNullable<ReturnType<typeof parseStandardCron>>, 
     return false;
   }
   const weekday = date.getUTCDay();
-  const weekdayMatches = parsed.dayOfWeek.has(weekday) || (weekday === 0 && parsed.dayOfWeek.has(7));
-  return parsed.minute.has(date.getUTCMinutes()) &&
+  const weekdayMatches =
+    parsed.dayOfWeek.has(weekday) || (weekday === 0 && parsed.dayOfWeek.has(7));
+  return (
+    parsed.minute.has(date.getUTCMinutes()) &&
     parsed.hour.has(date.getUTCHours()) &&
     parsed.dayOfMonth.has(date.getUTCDate()) &&
     parsed.month.has(date.getUTCMonth() + 1) &&
-    weekdayMatches;
+    weekdayMatches
+  );
 }
 
 function formatExecutionTimeLabel(start: Date, end: Date) {
   const dateFormatter = new Intl.DateTimeFormat(undefined, { month: "short", day: "numeric" });
   const timeFormatter = new Intl.DateTimeFormat(undefined, { hour: "2-digit", minute: "2-digit" });
-  if (start.getUTCHours() === 0 && start.getUTCMinutes() === 0 && end.getUTCHours() === 0 && end.getUTCMinutes() === 0) {
+  if (
+    start.getUTCHours() === 0 &&
+    start.getUTCMinutes() === 0 &&
+    end.getUTCHours() === 0 &&
+    end.getUTCMinutes() === 0
+  ) {
     return dateFormatter.format(start);
   }
   return `${dateFormatter.format(start)} ${timeFormatter.format(start)}-${timeFormatter.format(end)}`;
 }
 
 function floorHour(date: Date) {
-  return new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate(), date.getUTCHours()));
+  return new Date(
+    Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate(), date.getUTCHours()),
+  );
 }
 
 function floorDay(date: Date) {

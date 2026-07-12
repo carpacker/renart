@@ -94,9 +94,7 @@ export function AppCommandPalette() {
       const target = event.target;
       const isEditable =
         target instanceof HTMLElement &&
-        (target.isContentEditable ||
-          target.tagName === "INPUT" ||
-          target.tagName === "TEXTAREA");
+        (target.isContentEditable || target.tagName === "INPUT" || target.tagName === "TEXTAREA");
       const isShortcut = event.key.toLowerCase() === "k" && (event.metaKey || event.ctrlKey);
       if (isEditable && !isShortcut) {
         return;
@@ -134,13 +132,55 @@ export function AppCommandPalette() {
       close();
     };
     return [
-      { id: "page:build", title: "Build", subtitle: "Pipeline canvas & editor", icon: Hammer, to: () => navigate({ to: "/" }) },
-      { id: "page:catalog", title: "Catalog", subtitle: "Asset lineage across the project", icon: Network, to: () => navigate({ to: "/catalog" }) },
-      { id: "page:notebooks", title: "Notebooks", subtitle: "Exploratory DuckDB notebooks", icon: BookOpen, to: () => navigate({ to: "/notebooks" }) },
-      { id: "page:runs", title: "Runs", subtitle: "Pipeline run history", icon: Play, to: () => navigate({ to: "/runs" }) },
-      { id: "page:schedules", title: "Schedules", subtitle: "Scheduled pipeline runs", icon: Calendar, to: () => navigate({ to: "/schedules" }) },
-      { id: "page:environments", title: "Environments", subtitle: "Project settings", icon: Settings2, to: () => navigate({ to: "/project/environments" }) },
-      { id: "page:connections", title: "Connections", subtitle: "Project settings", icon: Settings2, to: () => navigate({ to: "/project/connections" }) },
+      {
+        id: "page:build",
+        title: "Build",
+        subtitle: "Pipeline canvas & editor",
+        icon: Hammer,
+        to: () => navigate({ to: "/" }),
+      },
+      {
+        id: "page:catalog",
+        title: "Catalog",
+        subtitle: "Asset lineage across the project",
+        icon: Network,
+        to: () => navigate({ to: "/catalog" }),
+      },
+      {
+        id: "page:notebooks",
+        title: "Notebooks",
+        subtitle: "Exploratory DuckDB notebooks",
+        icon: BookOpen,
+        to: () => navigate({ to: "/notebooks" }),
+      },
+      {
+        id: "page:runs",
+        title: "Runs",
+        subtitle: "Pipeline run history",
+        icon: Play,
+        to: () => navigate({ to: "/runs" }),
+      },
+      {
+        id: "page:schedules",
+        title: "Schedules",
+        subtitle: "Scheduled pipeline runs",
+        icon: Calendar,
+        to: () => navigate({ to: "/schedules" }),
+      },
+      {
+        id: "page:environments",
+        title: "Environments",
+        subtitle: "Project settings",
+        icon: Settings2,
+        to: () => navigate({ to: "/project/environments" }),
+      },
+      {
+        id: "page:connections",
+        title: "Connections",
+        subtitle: "Project settings",
+        icon: Settings2,
+        to: () => navigate({ to: "/project/connections" }),
+      },
     ].map(({ id, title, subtitle, icon, to }) => ({
       id,
       title,
@@ -163,7 +203,10 @@ export function AppCommandPalette() {
         subtitle: pipeline.path,
         keywords: toKeywords(pipeline.name, pipeline.path, pipeline.id),
         perform: () => {
-          void navigate({ to: "/pipelines/$pipelineId/canvas", params: { pipelineId: pipeline.id } });
+          void navigate({
+            to: "/pipelines/$pipelineId/canvas",
+            params: { pipelineId: pipeline.id },
+          });
           close();
         },
       });
@@ -199,9 +242,27 @@ export function AppCommandPalette() {
     }
 
     return [
-      { id: "pipelines", title: "Go to pipeline...", description: "Open a pipeline canvas", icon: Workflow, items: pipelineItems },
-      { id: "assets", title: "Go to asset...", description: "Open an asset in the build view", icon: FileCode, items: assetItems },
-      { id: "notebooks", title: "Go to notebook...", description: "Open an exploratory notebook", icon: BookOpen, items: notebookItems },
+      {
+        id: "pipelines",
+        title: "Go to pipeline...",
+        description: "Open a pipeline canvas",
+        icon: Workflow,
+        items: pipelineItems,
+      },
+      {
+        id: "assets",
+        title: "Go to asset...",
+        description: "Open an asset in the build view",
+        icon: FileCode,
+        items: assetItems,
+      },
+      {
+        id: "notebooks",
+        title: "Go to notebook...",
+        description: "Open an exploratory notebook",
+        icon: BookOpen,
+        items: notebookItems,
+      },
     ];
   }, [navigate, workspace?.notebooks, workspace?.pipelines]);
 
@@ -234,7 +295,10 @@ export function AppCommandPalette() {
         <Command
           loop
           onKeyDown={(event) => {
-            if (pages.length > 0 && (event.key === "Escape" || (event.key === "Backspace" && !search.trim()))) {
+            if (
+              pages.length > 0 &&
+              (event.key === "Escape" || (event.key === "Backspace" && !search.trim()))
+            ) {
               event.preventDefault();
               setPages((current) => current.slice(0, -1));
             }
@@ -256,7 +320,9 @@ export function AppCommandPalette() {
                     <div className="flex min-w-0 flex-1 flex-col">
                       <span className="truncate">{item.title}</span>
                       {item.subtitle ? (
-                        <span className="truncate text-xs text-muted-foreground">{item.subtitle}</span>
+                        <span className="truncate text-xs text-muted-foreground">
+                          {item.subtitle}
+                        </span>
                       ) : null}
                     </div>
                   </CommandItem>
@@ -268,20 +334,22 @@ export function AppCommandPalette() {
                   {pageItems.map((item) => {
                     const Icon = item.icon ?? ChevronRight;
                     return (
-                    <CommandItem
-                      key={item.id}
-                      value={`${item.title} ${item.subtitle ?? ""}`}
-                      keywords={item.keywords}
-                      onSelect={item.perform}
-                    >
-                      <Icon className="size-4 text-muted-foreground" />
-                      <div className="flex min-w-0 flex-1 flex-col">
-                        <span className="truncate">{item.title}</span>
-                        {item.subtitle ? (
-                          <span className="truncate text-xs text-muted-foreground">{item.subtitle}</span>
-                        ) : null}
-                      </div>
-                    </CommandItem>
+                      <CommandItem
+                        key={item.id}
+                        value={`${item.title} ${item.subtitle ?? ""}`}
+                        keywords={item.keywords}
+                        onSelect={item.perform}
+                      >
+                        <Icon className="size-4 text-muted-foreground" />
+                        <div className="flex min-w-0 flex-1 flex-col">
+                          <span className="truncate">{item.title}</span>
+                          {item.subtitle ? (
+                            <span className="truncate text-xs text-muted-foreground">
+                              {item.subtitle}
+                            </span>
+                          ) : null}
+                        </div>
+                      </CommandItem>
                     );
                   })}
                 </CommandGroup>
@@ -302,7 +370,9 @@ export function AppCommandPalette() {
                           <Icon className="size-4 text-muted-foreground" />
                           <div className="flex min-w-0 flex-1 flex-col">
                             <span className="truncate">{section.title}</span>
-                            <span className="truncate text-xs text-muted-foreground">{section.description}</span>
+                            <span className="truncate text-xs text-muted-foreground">
+                              {section.description}
+                            </span>
                           </div>
                           <CommandShortcut>{section.items.length}</CommandShortcut>
                         </CommandItem>

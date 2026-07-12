@@ -12,10 +12,7 @@ const pythonAssetId = Buffer.from(pythonAssetPath).toString("base64url");
 test.describe("python intellisense live", () => {
   test.use({ fixtureName: "configured-workspace" });
 
-  test("shows ty diagnostics and formats Python assets in Monaco", async ({
-    liveApp,
-    page,
-  }) => {
+  test("shows ty diagnostics and formats Python assets in Monaco", async ({ liveApp, page }) => {
     await writeFile(
       join(liveApp.workspaceDir, pythonAssetPath),
       `"""@bruin
@@ -31,12 +28,12 @@ def returns_int(value:str)->int:
 
 df = pd.DataFrame({"a": [1]})
 `,
-      "utf8"
+      "utf8",
     );
     await writeFile(
       join(liveApp.workspaceDir, "analytics", "assets", "analytics", "requirements.txt"),
       "pandas\n",
-      "utf8"
+      "utf8",
     );
     const fakePandasPath = join(
       liveApp.workspaceDir,
@@ -44,30 +41,30 @@ df = pd.DataFrame({"a": [1]})
       "lib",
       "python3.11",
       "site-packages",
-      "pandas"
+      "pandas",
     );
     await mkdir(fakePandasPath, { recursive: true });
     await writeFile(
       join(fakePandasPath, "__init__.py"),
       "from pandas.core.api import (\n    Series,\n    DataFrame,\n    Index,\n)\n",
-      "utf8"
+      "utf8",
     );
     await mkdir(join(fakePandasPath, "core"), { recursive: true });
     await writeFile(
       join(fakePandasPath, "core", "api.py"),
       "from pandas.core.frame import DataFrame\nfrom pandas.core.indexes.base import Index\n",
-      "utf8"
+      "utf8",
     );
     await mkdir(join(fakePandasPath, "core", "indexes"), { recursive: true });
     await writeFile(
       join(fakePandasPath, "core", "frame.py"),
-      "class DataFrame:\n    def __init__(self, data=None, index=None, columns=None, dtype=None, copy=None): ...\n    columns = properties.AxisProperty(\n        doc=\"\"\"\n        Returns\n        -------\n        pandas.Index\n            The column labels.\n        \"\"\"\n    )\n    def head(self): ...\n    def merge(self): ...\n",
-      "utf8"
+      'class DataFrame:\n    def __init__(self, data=None, index=None, columns=None, dtype=None, copy=None): ...\n    columns = properties.AxisProperty(\n        doc="""\n        Returns\n        -------\n        pandas.Index\n            The column labels.\n        """\n    )\n    def head(self): ...\n    def merge(self): ...\n',
+      "utf8",
     );
     await writeFile(
       join(fakePandasPath, "core", "indexes", "base.py"),
       "class Index:\n    name = None\n    def to_list(self): ...\n    def unique(self): ...\n",
-      "utf8"
+      "utf8",
     );
 
     await waitForWorkspaceAsset(page, liveApp.baseURL, pythonAssetName);
@@ -84,12 +81,12 @@ df = pd.DataFrame({"a": [1]})
             owner: "bruin-python-ty",
             message: expect.stringMatching(/str|int|assignable|return/i),
           }),
-        ])
+        ]),
       );
 
     const markerMessages = await getPythonTyMarkers(page);
     expect(markerMessages.map((marker) => marker.message).join("\n")).not.toContain(
-      "Cannot resolve imported module `pandas`"
+      "Cannot resolve imported module `pandas`",
     );
 
     await formatDocument(page);
@@ -108,11 +105,9 @@ df = pd.DataFrame({"a": [1]})
 async function openAssetEditor(
   page: Page,
   baseURL: string,
-  options: { assetId: string; contentToken: string }
+  options: { assetId: string; contentToken: string },
 ) {
-  await page.goto(
-    `${baseURL}/pipelines/${pipelineId}/assets/${options.assetId}/code`
-  );
+  await page.goto(`${baseURL}/pipelines/${pipelineId}/assets/${options.assetId}/code`);
   await waitForEditorReady(page, options.contentToken);
 }
 
@@ -128,10 +123,10 @@ async function waitForWorkspaceAsset(page: Page, baseURL: string, assetName: str
           pipelines?: Array<{ assets?: Array<{ name?: string }> }>;
         };
         return (workspace.pipelines ?? []).some((pipeline) =>
-          (pipeline.assets ?? []).some((asset) => asset.name === assetName)
+          (pipeline.assets ?? []).some((asset) => asset.name === assetName),
         );
       },
-      { timeout: 15000 }
+      { timeout: 15000 },
     )
     .toBe(true);
 }
@@ -200,7 +195,9 @@ async function expectPythonCompletion(page: Page, prefix: string, expectedLabel:
     editor.trigger("test", "editor.action.triggerSuggest", {});
   }, prefix);
 
-  await expect(page.locator(".suggest-widget .monaco-list-row").filter({ hasText: expectedLabel }).first()).toBeVisible({
+  await expect(
+    page.locator(".suggest-widget .monaco-list-row").filter({ hasText: expectedLabel }).first(),
+  ).toBeVisible({
     timeout: 15000,
   });
 }

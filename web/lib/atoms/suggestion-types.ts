@@ -89,10 +89,7 @@ export type SuggestionCatalogState = {
 };
 
 export type DynamicAssetColumnObservation = {
-  method: Extract<
-    SuggestionObservationMethod,
-    "asset-inspect" | "asset-column-inference"
-  >;
+  method: Extract<SuggestionObservationMethod, "asset-inspect" | "asset-column-inference">;
   recordedAt: string;
   environment?: string;
   columns: SchemaColumn[];
@@ -138,10 +135,7 @@ export type DynamicSuggestionState = {
 
 export type RegisterAssetColumnsPayload = {
   assetId: string;
-  method: Extract<
-    SuggestionObservationMethod,
-    "asset-inspect" | "asset-column-inference"
-  >;
+  method: Extract<SuggestionObservationMethod, "asset-inspect" | "asset-column-inference">;
   columns: Array<{
     name: string;
     type?: string;

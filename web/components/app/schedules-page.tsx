@@ -45,10 +45,12 @@ export function AppSchedulesPage() {
   const axis = timelineAxis(window);
   const filteredSchedules = envSchedules.schedules.filter((schedule) => {
     const value = query.trim().toLowerCase();
-    return !value ||
+    return (
+      !value ||
       (schedule.pipeline_name ?? "").toLowerCase().includes(value) ||
       schedule.environment.toLowerCase().includes(value) ||
-      schedule.cron.toLowerCase().includes(value);
+      schedule.cron.toLowerCase().includes(value)
+    );
   });
 
   return (
@@ -56,49 +58,87 @@ export function AppSchedulesPage() {
       <PageHeader
         title="Schedules"
         subtitle="One schedule per pipeline and environment; scheduled runs execute the pinned deployed snapshot"
-        actions={envSchedules.loading ? <span className="flex items-center gap-1.5 text-xs text-muted-foreground"><Loader2 className="size-3.5 animate-spin" />Loading</span> : null}
+        actions={
+          envSchedules.loading ? (
+            <span className="flex items-center gap-1.5 text-xs text-muted-foreground">
+              <Loader2 className="size-3.5 animate-spin" />
+              Loading
+            </span>
+          ) : null
+        }
       />
       <div className="flex items-center gap-2 px-3 pb-2">
         <div className="relative min-w-0 flex-1 md:max-w-sm">
           <Search className="pointer-events-none absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" />
-          <Input className="pl-8" placeholder="Filter jobs..." value={query} onChange={(event) => setQuery(event.target.value)} />
+          <Input
+            className="pl-8"
+            placeholder="Filter jobs..."
+            value={query}
+            onChange={(event) => setQuery(event.target.value)}
+          />
         </div>
-        <Button variant="outline" size="sm" onClick={() => setNewScheduleOpen(true)}><Plus className="size-3.5" />New schedule</Button>
+        <Button variant="outline" size="sm" onClick={() => setNewScheduleOpen(true)}>
+          <Plus className="size-3.5" />
+          New schedule
+        </Button>
         <div className="ml-auto hidden overflow-hidden rounded-lg border md:flex">
-          {buckets.map((item) => <Button key={item} variant={bucket === item ? "default" : "ghost"} size="sm" className="rounded-none" onClick={() => setBucket(item)}>{item}</Button>)}
+          {buckets.map((item) => (
+            <Button
+              key={item}
+              variant={bucket === item ? "default" : "ghost"}
+              size="sm"
+              className="rounded-none"
+              onClick={() => setBucket(item)}
+            >
+              {item}
+            </Button>
+          ))}
         </div>
       </div>
       <div className="min-h-0 flex-1 px-3 pb-3">
         <AppPanel className="h-full overflow-auto">
           <TooltipProvider>
-          <div className="min-w-[980px]">
-            <div className="sticky top-0 z-10 flex h-9 items-center border-b bg-card text-[11px] font-semibold uppercase text-muted-foreground">
-              <div className="w-80 px-3">Jobs</div>
-              <TimelineAxis axis={axis} />
-              <div className="w-56 px-3 text-right">Controls</div>
+            <div className="min-w-[980px]">
+              <div className="sticky top-0 z-10 flex h-9 items-center border-b bg-card text-[11px] font-semibold uppercase text-muted-foreground">
+                <div className="w-80 px-3">Jobs</div>
+                <TimelineAxis axis={axis} />
+                <div className="w-56 px-3 text-right">Controls</div>
+              </div>
+              {envSchedules.loading && filteredSchedules.length === 0 ? (
+                <div className="flex h-24 items-center gap-2 px-3 text-sm text-muted-foreground">
+                  <Loader2 className="size-4 animate-spin" />
+                  Loading schedules...
+                </div>
+              ) : null}
+              {!envSchedules.loading && filteredSchedules.length === 0 ? (
+                <div className="px-3 py-8 text-sm text-muted-foreground">
+                  No schedules yet. Use “New schedule” to run a pipeline in an environment.
+                </div>
+              ) : null}
+              {filteredSchedules.map((schedule) => (
+                <EnvScheduleRow
+                  key={envScheduleKey(schedule)}
+                  schedule={schedule}
+                  window={window}
+                  axis={axis}
+                  busy={envSchedules.busyKey === envScheduleKey(schedule)}
+                  activeRun={runs.find(
+                    (run) =>
+                      run.pipeline_id === schedule.pipeline_id &&
+                      run.environment === schedule.environment &&
+                      (run.status === "queued" || run.status === "running"),
+                  )}
+                  onSetStatus={(status) => void envSchedules.setStatus(schedule, status)}
+                  onArchive={() => void envSchedules.archive(schedule)}
+                />
+              ))}
+              {envSchedules.archived.length > 0 ? (
+                <ArchivedSection
+                  archived={envSchedules.archived}
+                  onRestore={(schedule) => void envSchedules.setStatus(schedule, "active")}
+                />
+              ) : null}
             </div>
-            {envSchedules.loading && filteredSchedules.length === 0 ? (
-              <div className="flex h-24 items-center gap-2 px-3 text-sm text-muted-foreground"><Loader2 className="size-4 animate-spin" />Loading schedules...</div>
-            ) : null}
-            {!envSchedules.loading && filteredSchedules.length === 0 ? (
-              <div className="px-3 py-8 text-sm text-muted-foreground">No schedules yet. Use “New schedule” to run a pipeline in an environment.</div>
-            ) : null}
-            {filteredSchedules.map((schedule) => (
-              <EnvScheduleRow
-                key={envScheduleKey(schedule)}
-                schedule={schedule}
-                window={window}
-                axis={axis}
-                busy={envSchedules.busyKey === envScheduleKey(schedule)}
-                activeRun={runs.find((run) => run.pipeline_id === schedule.pipeline_id && run.environment === schedule.environment && (run.status === "queued" || run.status === "running"))}
-                onSetStatus={(status) => void envSchedules.setStatus(schedule, status)}
-                onArchive={() => void envSchedules.archive(schedule)}
-              />
-            ))}
-            {envSchedules.archived.length > 0 ? (
-              <ArchivedSection archived={envSchedules.archived} onRestore={(schedule) => void envSchedules.setStatus(schedule, "active")} />
-            ) : null}
-          </div>
           </TooltipProvider>
         </AppPanel>
       </div>
@@ -106,7 +146,10 @@ export function AppSchedulesPage() {
         open={newScheduleOpen}
         onOpenChange={setNewScheduleOpen}
         onCreate={async (pipeline, environment, input) => {
-          await envSchedules.upsert({ pipeline_uuid: pipeline.uuid ?? "", environment, pipeline_id: pipeline.id }, input);
+          await envSchedules.upsert(
+            { pipeline_uuid: pipeline.uuid ?? "", environment, pipeline_id: pipeline.id },
+            input,
+          );
         }}
       />
     </AppPage>
@@ -140,13 +183,17 @@ function EnvScheduleRow({
   const slots = expectedSlots(timeline, window);
   const [triggering, setTriggering] = useState(false);
   const runPending = busy || triggering || Boolean(activeRun);
-  const runLabel = activeRun?.status === "running" ? "Running" : activeRun?.status === "queued" ? "Queued" : "Run";
+  const runLabel =
+    activeRun?.status === "running" ? "Running" : activeRun?.status === "queued" ? "Queued" : "Run";
   const nowLeft = timelineLeft(Date.now(), window);
   const triggerNow = async () => {
     if (!schedule.pipeline_id) return;
     setTriggering(true);
     try {
-      await triggerPipelineRun(schedule.pipeline_id, { environment: schedule.environment, trigger: "manual" });
+      await triggerPipelineRun(schedule.pipeline_id, {
+        environment: schedule.environment,
+        trigger: "manual",
+      });
     } finally {
       setTriggering(false);
     }
@@ -154,12 +201,18 @@ function EnvScheduleRow({
   return (
     <div className="flex min-h-14 items-center border-b hover:bg-muted/40">
       <div className="flex w-80 min-w-0 items-center gap-3 px-3">
-        <Switch checked={enabled} disabled={busy} onCheckedChange={(next) => onSetStatus(next ? "active" : "paused")} />
+        <Switch
+          checked={enabled}
+          disabled={busy}
+          onCheckedChange={(next) => onSetStatus(next ? "active" : "paused")}
+        />
         <div className="min-w-0">
           <div className="flex items-center gap-2 font-mono text-xs text-primary">
             <Clock className="size-3.5 shrink-0 text-muted-foreground" />
             <span className="truncate">{schedule.pipeline_name || schedule.pipeline_uuid}</span>
-            <span className="rounded-full bg-primary/10 px-1.5 py-0.5 text-[10px] font-medium text-primary">{schedule.environment}</span>
+            <span className="rounded-full bg-primary/10 px-1.5 py-0.5 text-[10px] font-medium text-primary">
+              {schedule.environment}
+            </span>
           </div>
           <div className="mt-1 flex min-w-0 items-center gap-1.5 text-[11px] text-muted-foreground">
             <span className="truncate font-mono">{schedule.cron}</span>
@@ -168,15 +221,25 @@ function EnvScheduleRow({
             {schedule.last_run ? (
               <>
                 <span>·</span>
-                <span className="truncate">last {schedule.last_run.status} {formatSchedulerDate(schedule.last_run.finished_at ?? schedule.last_run.started_at)}</span>
+                <span className="truncate">
+                  last {schedule.last_run.status}{" "}
+                  {formatSchedulerDate(
+                    schedule.last_run.finished_at ?? schedule.last_run.started_at,
+                  )}
+                </span>
               </>
             ) : null}
             {schedule.snapshot_version_id ? (
               <Tooltip>
                 <TooltipTrigger asChild>
-                  <span className="inline-flex items-center gap-0.5 truncate"><Package className="size-3" />{schedule.snapshot_version_id.slice(0, 8)}</span>
+                  <span className="inline-flex items-center gap-0.5 truncate">
+                    <Package className="size-3" />
+                    {schedule.snapshot_version_id.slice(0, 8)}
+                  </span>
                 </TooltipTrigger>
-                <TooltipContent>Pinned deployed snapshot {schedule.snapshot_version_id}</TooltipContent>
+                <TooltipContent>
+                  Pinned deployed snapshot {schedule.snapshot_version_id}
+                </TooltipContent>
               </Tooltip>
             ) : null}
           </div>
@@ -193,36 +256,83 @@ function EnvScheduleRow({
               />
             </TooltipTrigger>
             <TooltipContent>
-              <div className="font-medium">{slot.kind === "persisted" ? "Next scheduled run" : slot.phase === "past" ? "Past expected run" : "Expected run"}</div>
+              <div className="font-medium">
+                {slot.kind === "persisted"
+                  ? "Next scheduled run"
+                  : slot.phase === "past"
+                    ? "Past expected run"
+                    : "Expected run"}
+              </div>
               <div className="font-mono">{formatSchedulerDate(slot.at)}</div>
-              {slot.kind === "projected" ? <div className="text-background/70">Projected from the schedule</div> : null}
+              {slot.kind === "projected" ? (
+                <div className="text-background/70">Projected from the schedule</div>
+              ) : null}
             </TooltipContent>
           </Tooltip>
         ))}
         {nowLeft !== null ? <NowMarker left={nowLeft} /> : null}
       </div>
       <div className="flex w-56 items-center justify-end gap-2 px-3">
-        <span className="text-[10px] uppercase text-muted-foreground">{schedule.catchup_policy.replace("_", " ")}</span>
-        <Button size="sm" variant="ghost" disabled={busy} title="Archive schedule (run history is kept)" onClick={onArchive}><ArchiveRestore className="size-3.5" /></Button>
-        <Button size="sm" variant="outline" disabled={runPending} onClick={() => void triggerNow()}>{runPending ? <Loader2 className="size-3.5 animate-spin" /> : <Play className="size-3.5" />}{runLabel}</Button>
+        <span className="text-[10px] uppercase text-muted-foreground">
+          {schedule.catchup_policy.replace("_", " ")}
+        </span>
+        <Button
+          size="sm"
+          variant="ghost"
+          disabled={busy}
+          title="Archive schedule (run history is kept)"
+          onClick={onArchive}
+        >
+          <ArchiveRestore className="size-3.5" />
+        </Button>
+        <Button size="sm" variant="outline" disabled={runPending} onClick={() => void triggerNow()}>
+          {runPending ? (
+            <Loader2 className="size-3.5 animate-spin" />
+          ) : (
+            <Play className="size-3.5" />
+          )}
+          {runLabel}
+        </Button>
       </div>
     </div>
   );
 }
 
-function ArchivedSection({ archived, onRestore }: { archived: EnvSchedule[]; onRestore: (schedule: EnvSchedule) => void }) {
+function ArchivedSection({
+  archived,
+  onRestore,
+}: {
+  archived: EnvSchedule[];
+  onRestore: (schedule: EnvSchedule) => void;
+}) {
   return (
     <div>
-      <div className="border-b bg-muted/40 px-3 py-1.5 text-[11px] font-semibold uppercase text-muted-foreground">Archived</div>
+      <div className="border-b bg-muted/40 px-3 py-1.5 text-[11px] font-semibold uppercase text-muted-foreground">
+        Archived
+      </div>
       {archived.map((schedule) => (
-        <div key={envScheduleKey(schedule)} className="flex min-h-10 items-center gap-3 border-b px-3 text-xs text-muted-foreground">
-          <span className="truncate font-mono">{schedule.pipeline_name || schedule.pipeline_uuid}</span>
-          <span className="rounded-full bg-muted px-1.5 py-0.5 text-[10px]">{schedule.environment}</span>
+        <div
+          key={envScheduleKey(schedule)}
+          className="flex min-h-10 items-center gap-3 border-b px-3 text-xs text-muted-foreground"
+        >
+          <span className="truncate font-mono">
+            {schedule.pipeline_name || schedule.pipeline_uuid}
+          </span>
+          <span className="rounded-full bg-muted px-1.5 py-0.5 text-[10px]">
+            {schedule.environment}
+          </span>
           <span className="truncate font-mono">{schedule.cron}</span>
-          <span className="truncate">{schedule.archived_reason === "missing" ? "pipeline file missing (restores automatically when it reappears)" : "archived"}</span>
+          <span className="truncate">
+            {schedule.archived_reason === "missing"
+              ? "pipeline file missing (restores automatically when it reappears)"
+              : "archived"}
+          </span>
           <span className="ml-auto" />
           {schedule.pipeline_id ? (
-            <Button size="sm" variant="ghost" onClick={() => onRestore(schedule)}><ArchiveRestore className="size-3.5" />Restore</Button>
+            <Button size="sm" variant="ghost" onClick={() => onRestore(schedule)}>
+              <ArchiveRestore className="size-3.5" />
+              Restore
+            </Button>
           ) : null}
         </div>
       ))}
@@ -237,7 +347,11 @@ function NewEnvScheduleDialog({
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  onCreate: (pipeline: { id: string; uuid?: string; name: string }, environment: string, input: { cron: string; timezone: string; catchup_policy: CatchupPolicy; deploy_now: boolean }) => Promise<void>;
+  onCreate: (
+    pipeline: { id: string; uuid?: string; name: string },
+    environment: string,
+    input: { cron: string; timezone: string; catchup_policy: CatchupPolicy; deploy_now: boolean },
+  ) => Promise<void>;
 }) {
   const workspace = useAtomValue(workspaceAtom);
   const pipelines = useMemo(() => workspace?.pipelines ?? [], [workspace?.pipelines]);
@@ -261,7 +375,9 @@ function NewEnvScheduleDialog({
   const submit = async () => {
     const pipeline = pipelines.find((item) => item.id === pipelineId);
     if (!pipeline || !environment.trim() || !cron.trim()) {
-      setError("Pipeline, environment, and cron are required — schedules have no implicit default environment.");
+      setError(
+        "Pipeline, environment, and cron are required — schedules have no implicit default environment.",
+      );
       return;
     }
     setSubmitting(true);
@@ -270,7 +386,12 @@ function NewEnvScheduleDialog({
       await onCreate(
         { id: pipeline.id, uuid: pipeline.uuid, name: pipeline.name },
         environment.trim(),
-        { cron: cron.trim(), timezone: timezone.trim() || "UTC", catchup_policy: catchupPolicy, deploy_now: deployNow }
+        {
+          cron: cron.trim(),
+          timezone: timezone.trim() || "UTC",
+          catchup_policy: catchupPolicy,
+          deploy_now: deployNow,
+        },
       );
       onOpenChange(false);
     } catch (submitError) {
@@ -284,8 +405,13 @@ function NewEnvScheduleDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-lg">
         <DialogHeader>
-          <DialogTitle className="flex items-center gap-2"><Clock className="size-4 text-primary" />New schedule</DialogTitle>
-          <DialogDescription>Schedules are per pipeline and environment, and execute a deployed snapshot.</DialogDescription>
+          <DialogTitle className="flex items-center gap-2">
+            <Clock className="size-4 text-primary" />
+            New schedule
+          </DialogTitle>
+          <DialogDescription>
+            Schedules are per pipeline and environment, and execute a deployed snapshot.
+          </DialogDescription>
         </DialogHeader>
         <div className="space-y-3">
           <label className="block space-y-1.5">
@@ -295,21 +421,38 @@ function NewEnvScheduleDialog({
               value={pipelineId}
               onChange={(event) => setPipelineId(event.target.value)}
             >
-              {pipelines.map((pipeline) => <option key={pipeline.id} value={pipeline.id}>{pipeline.name || pipeline.path}</option>)}
+              {pipelines.map((pipeline) => (
+                <option key={pipeline.id} value={pipeline.id}>
+                  {pipeline.name || pipeline.path}
+                </option>
+              ))}
             </select>
           </label>
           <label className="block space-y-1.5">
             <span className="text-xs font-medium text-muted-foreground">Environment</span>
-            <Input value={environment} onChange={(event) => setEnvironment(event.target.value)} placeholder="prod" />
+            <Input
+              value={environment}
+              onChange={(event) => setEnvironment(event.target.value)}
+              placeholder="prod"
+            />
           </label>
           <div className="grid grid-cols-2 gap-3">
             <label className="block space-y-1.5">
               <span className="text-xs font-medium text-muted-foreground">Cron</span>
-              <Input className="font-mono" value={cron} onChange={(event) => setCron(event.target.value)} placeholder="0 * * * *" />
+              <Input
+                className="font-mono"
+                value={cron}
+                onChange={(event) => setCron(event.target.value)}
+                placeholder="0 * * * *"
+              />
             </label>
             <label className="block space-y-1.5">
               <span className="text-xs font-medium text-muted-foreground">Timezone</span>
-              <Input value={timezone} onChange={(event) => setTimezone(event.target.value)} placeholder="UTC" />
+              <Input
+                value={timezone}
+                onChange={(event) => setTimezone(event.target.value)}
+                placeholder="UTC"
+              />
             </label>
           </div>
           <label className="block space-y-1.5">
@@ -321,7 +464,9 @@ function NewEnvScheduleDialog({
             >
               <option value="skip">Skip missed intervals</option>
               <option value="run_once">Run once to catch up</option>
-              <option value="backfill">Backfill each missed interval (incremental assets only)</option>
+              <option value="backfill">
+                Backfill each missed interval (incremental assets only)
+              </option>
             </select>
           </label>
           <label className="flex items-center gap-2 text-xs text-muted-foreground">
@@ -331,8 +476,12 @@ function NewEnvScheduleDialog({
           {error ? <p className="text-xs text-red-600">{error}</p> : null}
         </div>
         <DialogFooter>
-          <Button variant="outline" onClick={() => onOpenChange(false)} disabled={submitting}>Cancel</Button>
-          <Button onClick={() => void submit()} disabled={submitting}>{submitting ? "Saving…" : "Create schedule"}</Button>
+          <Button variant="outline" onClick={() => onOpenChange(false)} disabled={submitting}>
+            Cancel
+          </Button>
+          <Button onClick={() => void submit()} disabled={submitting}>
+            {submitting ? "Saving…" : "Create schedule"}
+          </Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>
@@ -377,7 +526,10 @@ function bucketHours(bucket: (typeof buckets)[number]) {
   }[bucket];
 }
 
-function timelineWindow(bucket: (typeof buckets)[number], density: TimelineDensity): TimelineWindow {
+function timelineWindow(
+  bucket: (typeof buckets)[number],
+  density: TimelineDensity,
+): TimelineWindow {
   const stepMs = tickStepMs(bucket, density);
   const now = Date.now();
   const bucketMs = bucketHours(bucket) * 60 * 60 * 1000;
@@ -427,14 +579,30 @@ function TimelineAxis({ axis }: { axis: TimelineTick[] }) {
   return (
     <div className="relative h-full flex-1 border-x">
       {axis.map((tick) => (
-        <span key={tick.key} className="absolute top-1/2 -translate-x-1/2 -translate-y-1/2 whitespace-nowrap px-1 text-center" style={{ left: `${tick.left}%` }}>{tick.label}</span>
+        <span
+          key={tick.key}
+          className="absolute top-1/2 -translate-x-1/2 -translate-y-1/2 whitespace-nowrap px-1 text-center"
+          style={{ left: `${tick.left}%` }}
+        >
+          {tick.label}
+        </span>
       ))}
     </div>
   );
 }
 
 function TimelineGrid({ axis }: { axis: TimelineTick[] }) {
-  return <>{axis.map((tick) => <span key={tick.key} className="absolute inset-y-0 w-px bg-border/60" style={{ left: `${tick.left}%` }} />)}</>;
+  return (
+    <>
+      {axis.map((tick) => (
+        <span
+          key={tick.key}
+          className="absolute inset-y-0 w-px bg-border/60"
+          style={{ left: `${tick.left}%` }}
+        />
+      ))}
+    </>
+  );
 }
 
 function NowMarker({ left }: { left: number }) {
@@ -453,7 +621,11 @@ function NowMarker({ left }: { left: number }) {
   );
 }
 
-function slotClassName(kind: "persisted" | "projected", enabled: boolean, phase: "past" | "future") {
+function slotClassName(
+  kind: "persisted" | "projected",
+  enabled: boolean,
+  phase: "past" | "future",
+) {
   if (!enabled) {
     return kind === "persisted"
       ? "absolute top-2 h-10 rounded-sm bg-muted-foreground/35"
@@ -471,7 +643,13 @@ function expectedSlots(schedule: TimelineSchedule, window: TimelineWindow) {
   const persistedNext = schedule.next_run_at ? new Date(schedule.next_run_at).getTime() : null;
   const normalized = normalizeSchedule(schedule.schedule);
   const parsed = parseStandardCron(normalized);
-  const slots: Array<{ at: string; left: number; width: number; kind: "persisted" | "projected"; phase: "past" | "future" }> = [];
+  const slots: Array<{
+    at: string;
+    left: number;
+    width: number;
+    kind: "persisted" | "projected";
+    phase: "past" | "future";
+  }> = [];
   const addSlot = (time: number, kind: "persisted" | "projected") => {
     const left = timelineLeft(time, window);
     if (left === null) return;
@@ -522,11 +700,23 @@ type ParsedCron = {
 
 function normalizeSchedule(schedule: string) {
   const normalized = schedule.trim().toLowerCase();
-  if (!normalized || normalized === "daily" || normalized === "@daily" || normalized === "@midnight") return "0 0 * * *";
+  if (
+    !normalized ||
+    normalized === "daily" ||
+    normalized === "@daily" ||
+    normalized === "@midnight"
+  )
+    return "0 0 * * *";
   if (normalized === "hourly" || normalized === "@hourly") return "0 * * * *";
   if (normalized === "weekly" || normalized === "@weekly") return "0 0 * * 0";
   if (normalized === "monthly" || normalized === "@monthly") return "0 0 1 * *";
-  if (normalized === "yearly" || normalized === "annually" || normalized === "@yearly" || normalized === "@annually") return "0 0 1 1 *";
+  if (
+    normalized === "yearly" ||
+    normalized === "annually" ||
+    normalized === "@yearly" ||
+    normalized === "@annually"
+  )
+    return "0 0 1 1 *";
   return normalized;
 }
 
@@ -574,7 +764,12 @@ const dayNames: Record<string, number> = {
   sat: 6,
 };
 
-function parseCronField(value: string, min: number, max: number, aliases: Record<string, number> = {}) {
+function parseCronField(
+  value: string,
+  min: number,
+  max: number,
+  aliases: Record<string, number> = {},
+) {
   const values = new Set<number>();
   let wildcard = false;
   for (const rawPart of value.split(",")) {
@@ -606,7 +801,13 @@ function cronRange(value: string, min: number, max: number, aliases: Record<stri
   const [startRaw, endRaw] = value.split("-");
   const start = cronNumber(startRaw, aliases);
   const end = cronNumber(endRaw ?? startRaw, aliases);
-  if (!Number.isInteger(start) || !Number.isInteger(end) || start < min || end > max || start > end) {
+  if (
+    !Number.isInteger(start) ||
+    !Number.isInteger(end) ||
+    start < min ||
+    end > max ||
+    start > end
+  ) {
     return null;
   }
   return { start, end, wildcard: false };
@@ -622,14 +823,19 @@ function cronMatches(parsed: ParsedCron, time: number, timezone: string | undefi
   if (!parts) {
     return false;
   }
-  const dayOfWeekMatches = parsed.dayOfWeek.values.has(parts.dayOfWeek) || (parts.dayOfWeek === 0 && parsed.dayOfWeek.values.has(7));
-  const dayMatches = parsed.dayOfMonth.wildcard || parsed.dayOfWeek.wildcard
-    ? parsed.dayOfMonth.values.has(parts.dayOfMonth) && dayOfWeekMatches
-    : parsed.dayOfMonth.values.has(parts.dayOfMonth) || dayOfWeekMatches;
-  return parsed.minute.values.has(parts.minute) &&
+  const dayOfWeekMatches =
+    parsed.dayOfWeek.values.has(parts.dayOfWeek) ||
+    (parts.dayOfWeek === 0 && parsed.dayOfWeek.values.has(7));
+  const dayMatches =
+    parsed.dayOfMonth.wildcard || parsed.dayOfWeek.wildcard
+      ? parsed.dayOfMonth.values.has(parts.dayOfMonth) && dayOfWeekMatches
+      : parsed.dayOfMonth.values.has(parts.dayOfMonth) || dayOfWeekMatches;
+  return (
+    parsed.minute.values.has(parts.minute) &&
     parsed.hour.values.has(parts.hour) &&
     dayMatches &&
-    parsed.month.values.has(parts.month);
+    parsed.month.values.has(parts.month)
+  );
 }
 
 function zonedDateParts(date: Date, timezone: string | undefined) {
@@ -643,7 +849,9 @@ function zonedDateParts(date: Date, timezone: string | undefined) {
       minute: "numeric",
       hour12: false,
     });
-    const values = Object.fromEntries(formatter.formatToParts(date).map((part) => [part.type, part.value]));
+    const values = Object.fromEntries(
+      formatter.formatToParts(date).map((part) => [part.type, part.value]),
+    );
     const year = Number(values.year);
     const month = Number(values.month);
     const dayOfMonth = Number(values.day);

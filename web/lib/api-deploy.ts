@@ -30,7 +30,9 @@ export type DeployResponse = {
 };
 
 export async function getDeployStatus(pipelineId: string): Promise<DeployStatus> {
-  return fetchJSON<DeployStatus>(`/api/pipelines/${pipelineId}/deploy/status`, { cache: "no-store" });
+  return fetchJSON<DeployStatus>(`/api/pipelines/${pipelineId}/deploy/status`, {
+    cache: "no-store",
+  });
 }
 
 export async function deployPipeline(pipelineId: string): Promise<DeployResponse> {
@@ -38,5 +40,7 @@ export async function deployPipeline(pipelineId: string): Promise<DeployResponse
 }
 
 export async function listSnapshots(pipelineId: string): Promise<{ snapshots: SnapshotSummary[] }> {
-  return fetchJSON<{ snapshots: SnapshotSummary[] }>(`/api/pipelines/${pipelineId}/snapshots`, { cache: "no-store" });
+  return fetchJSON<{ snapshots: SnapshotSummary[] }>(`/api/pipelines/${pipelineId}/snapshots`, {
+    cache: "no-store",
+  });
 }

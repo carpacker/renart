@@ -14,7 +14,13 @@ export type PipelineStaleness = {
   loading: boolean;
 };
 
-const staleStatuses = new Set(["stale_edited", "stale_upstream", "partial", "never_built", "missing"]);
+const staleStatuses = new Set([
+  "stale_edited",
+  "stale_upstream",
+  "partial",
+  "never_built",
+  "missing",
+]);
 
 export function isStaleStatus(status: AssetStaleness["status"]) {
   return staleStatuses.has(status);
@@ -70,9 +76,19 @@ export function usePipelineStaleness(pipelineId: string | undefined): PipelineSt
     // Discard pushes computed for a selection we have moved away from:
     // the fetch effect covers the new selection.
     if ((stalenessEvent.environment || "") !== (selectedEnvironment || "")) return;
-    if (!sameInstant(stalenessEvent.start, selectedTimeWindow?.start) || !sameInstant(stalenessEvent.end, selectedTimeWindow?.end)) return;
+    if (
+      !sameInstant(stalenessEvent.start, selectedTimeWindow?.start) ||
+      !sameInstant(stalenessEvent.end, selectedTimeWindow?.end)
+    )
+      return;
     setAssets(stalenessEvent.assets ?? []);
-  }, [pipelineId, selectedEnvironment, selectedTimeWindow?.start, selectedTimeWindow?.end, stalenessEvent]);
+  }, [
+    pipelineId,
+    selectedEnvironment,
+    selectedTimeWindow?.start,
+    selectedTimeWindow?.end,
+    stalenessEvent,
+  ]);
 
   return useMemo(() => {
     const byAssetName: Record<string, AssetStaleness> = {};

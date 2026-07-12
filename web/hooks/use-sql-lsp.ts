@@ -25,10 +25,7 @@ import {
 } from "@/lib/api-sql-lsp";
 import { getSQLPathSuggestions } from "@/lib/api-sql-discovery";
 import { selectedEnvironmentAtom, workspaceAtom } from "@/lib/atoms/domains/workspace";
-import {
-  sqlDiscoveryColumnsAtom,
-  sqlDiscoveryTablesAtom,
-} from "@/lib/atoms/sql-discovery";
+import { sqlDiscoveryColumnsAtom, sqlDiscoveryTablesAtom } from "@/lib/atoms/sql-discovery";
 import { useSQLParseContext } from "@/hooks/use-sql-parse-context";
 import { fetchJSON } from "@/lib/api-core";
 import { resolveConnection, SchemaTable } from "@/lib/sql-schema";
@@ -52,9 +49,8 @@ export function useSQLLSP(
   const loadRemoteTables = useSetAtom(sqlDiscoveryTablesAtom);
   const loadRemoteColumns = useSetAtom(sqlDiscoveryColumnsAtom);
   const parseContext = useSQLParseContext(asset, sqlContent, schemaTables);
-  const connectionName = asset && workspace
-    ? resolveConnection(asset, workspace.connections ?? {})
-    : null;
+  const connectionName =
+    asset && workspace ? resolveConnection(asset, workspace.connections ?? {}) : null;
 
   // The Monaco providers below are registered once per (editor, asset) and read
   // their live inputs through this ref. Keeping them off the effect's dependency
@@ -94,7 +90,7 @@ export function useSQLLSP(
     const modelURI = model.uri.toString();
 
     const completion = monaco.languages.registerCompletionItemProvider("sql", {
-      triggerCharacters: [".", "/", "\"", "'"],
+      triggerCharacters: [".", "/", '"', "'"],
       async provideCompletionItems(currentModel, position) {
         if (currentModel.uri.toString() !== modelURI) {
           return { suggestions: [] };
@@ -104,7 +100,10 @@ export function useSQLLSP(
         if (!asset) {
           return { suggestions: [] };
         }
-        const pathContext = getQuotedPathContext(currentModel.getLineContent(position.lineNumber), position);
+        const pathContext = getQuotedPathContext(
+          currentModel.getLineContent(position.lineNumber),
+          position,
+        );
         if (pathContext) {
           const response = await getSQLPathSuggestions({
             assetId: asset.id,
@@ -114,9 +113,10 @@ export function useSQLLSP(
           return {
             suggestions: (response?.suggestions ?? []).map((suggestion) => ({
               label: suggestion.value,
-              kind: suggestion.kind === "directory"
-                ? monaco.languages.CompletionItemKind.Folder
-                : monaco.languages.CompletionItemKind.File,
+              kind:
+                suggestion.kind === "directory"
+                  ? monaco.languages.CompletionItemKind.Folder
+                  : monaco.languages.CompletionItemKind.File,
               detail: suggestion.detail,
               insertText: suggestion.value,
               range: pathContext.range,
@@ -127,7 +127,9 @@ export function useSQLLSP(
         if (isInsideJinjaBlock(currentModel.getValue(), currentModel.getOffsetAt(position))) {
           return { suggestions: [] };
         }
-        const textBeforeCursor = currentModel.getLineContent(position.lineNumber).slice(0, position.column - 1);
+        const textBeforeCursor = currentModel
+          .getLineContent(position.lineNumber)
+          .slice(0, position.column - 1);
         const valueContext = parseEqualityValueContext(textBeforeCursor);
         if (valueContext && connectionName && parseContext && isDuckDBAsset(asset)) {
           const resolvedTable = resolveValueSuggestionTable(
@@ -169,7 +171,9 @@ export function useSQLLSP(
         // alias whose columns we should fetch from the warehouse — let the LSP
         // relation completions handle it (and don't hit /api/sql/table-columns).
         if (dotPrefix && connectionName && !isRelationDotContext(currentModel, position)) {
-          const remoteTableName = resolveRemoteTableName(dotPrefix.tablePart, schemaTables, parseContext) ?? dotPrefix.tablePart;
+          const remoteTableName =
+            resolveRemoteTableName(dotPrefix.tablePart, schemaTables, parseContext) ??
+            dotPrefix.tablePart;
           const columns = await loadRemoteColumns({
             connection: connectionName,
             table: remoteTableName,
@@ -183,7 +187,9 @@ export function useSQLLSP(
           );
           const normalizedPrefix = dotPrefix.columnPrefix.trim().toLowerCase();
           const suggestions = columns
-            .filter((column) => !normalizedPrefix || column.name.toLowerCase().includes(normalizedPrefix))
+            .filter(
+              (column) => !normalizedPrefix || column.name.toLowerCase().includes(normalizedPrefix),
+            )
             .map((column) => ({
               label: column.name,
               kind: monaco.languages.CompletionItemKind.Field,
@@ -214,34 +220,41 @@ export function useSQLLSP(
         // the LSP; drop anything else. Keywords sort last (see the engine's "z"
         // SortText) so schema-aware suggestions stay on top.
         const lspSuggestions = (response.completions ?? [])
-            .filter((item) => item.kind === 5 || item.kind === 18 || item.kind === 2)
-            .map((item) => completionToMonaco(monaco, item, range));
+          .filter((item) => item.kind === 5 || item.kind === 18 || item.kind === 2)
+          .map((item) => completionToMonaco(monaco, item, range));
         if (connectionName && isTableCompletionContext(currentModel, position)) {
           const remoteTables = await loadRemoteTables({
             connection: connectionName,
             environment: selectedEnvironment,
           }).catch(() => []);
           const normalizedPrefix = currentModel.getValueInRange(range).trim().toLowerCase();
-          const knownLocalNames = new Set(schemaTables.flatMap((table) => [
-            table.name.toLowerCase(),
-            table.shortName.toLowerCase(),
-          ]));
-          lspSuggestions.push(...remoteTables
-            .filter((table) => !normalizedPrefix ||
-              table.name.toLowerCase().includes(normalizedPrefix) ||
-              table.short_name.toLowerCase().includes(normalizedPrefix))
-            .filter((table) => !knownLocalNames.has(table.name.toLowerCase()))
-            .map((table) => ({
-              label: {
-                label: table.name,
-                description: "Remote table",
-              },
-              kind: monaco.languages.CompletionItemKind.Struct,
-              detail: "Remote table",
-              insertText: table.name,
-              range,
-              sortText: `22${table.name.toLowerCase()}`,
-            })));
+          const knownLocalNames = new Set(
+            schemaTables.flatMap((table) => [
+              table.name.toLowerCase(),
+              table.shortName.toLowerCase(),
+            ]),
+          );
+          lspSuggestions.push(
+            ...remoteTables
+              .filter(
+                (table) =>
+                  !normalizedPrefix ||
+                  table.name.toLowerCase().includes(normalizedPrefix) ||
+                  table.short_name.toLowerCase().includes(normalizedPrefix),
+              )
+              .filter((table) => !knownLocalNames.has(table.name.toLowerCase()))
+              .map((table) => ({
+                label: {
+                  label: table.name,
+                  description: "Remote table",
+                },
+                kind: monaco.languages.CompletionItemKind.Struct,
+                detail: "Remote table",
+                insertText: table.name,
+                range,
+                sortText: `22${table.name.toLowerCase()}`,
+              })),
+          );
         }
         return { suggestions: lspSuggestions };
       },
@@ -307,21 +320,23 @@ export function useSQLLSP(
         asset_id: asset.id,
         content: model.getValue(),
         position: monacoPositionToLSP(position),
-      }).then((response) => {
-        const assetLocation = (response.locations ?? []).find((location) => location.asset_id);
-        if (!assetLocation?.asset_id) {
-          return;
-        }
-        const target = findWorkspaceAsset(workspace, assetLocation.asset_id);
-        if (!target || target.asset.id === asset.id) {
-          return;
-        }
-        if (target.pipeline) {
-          onGoToAsset?.(target.pipeline.id, target.asset.id);
-        } else if (target.asset.cell_id) {
-          onGoToCell?.(target.asset.cell_id);
-        }
-      }).catch(() => undefined);
+      })
+        .then((response) => {
+          const assetLocation = (response.locations ?? []).find((location) => location.asset_id);
+          if (!assetLocation?.asset_id) {
+            return;
+          }
+          const target = findWorkspaceAsset(workspace, assetLocation.asset_id);
+          if (!target || target.asset.id === asset.id) {
+            return;
+          }
+          if (target.pipeline) {
+            onGoToAsset?.(target.pipeline.id, target.asset.id);
+          } else if (target.asset.cell_id) {
+            onGoToCell?.(target.asset.cell_id);
+          }
+        })
+        .catch(() => undefined);
     });
 
     const references = monaco.languages.registerReferenceProvider("sql", {
@@ -378,9 +393,11 @@ export function useSQLLSP(
         });
         const markerRanges = new Set(context.markers.map(markerRangeKey));
         const actions = (response.code_actions ?? [])
-          .filter((action) => action.diagnostics?.some((diagnostic) => {
-            return markerRanges.has(lspRangeKey(lspRangeToMarker(diagnostic.range)));
-          }))
+          .filter((action) =>
+            action.diagnostics?.some((diagnostic) => {
+              return markerRanges.has(lspRangeKey(lspRangeToMarker(diagnostic.range)));
+            }),
+          )
           .map((action) => codeActionToMonaco(monaco, currentModel, action, context.markers));
         return { actions, dispose: () => undefined };
       },
@@ -551,10 +568,7 @@ function isSQLAsset(asset: WebAsset) {
   return asset.type.toLowerCase().endsWith(".sql");
 }
 
-function findWorkspaceAsset(
-  workspace: WorkspaceState | null | undefined,
-  assetID: string,
-) {
+function findWorkspaceAsset(workspace: WorkspaceState | null | undefined, assetID: string) {
   for (const pipeline of workspace?.pipelines ?? []) {
     const asset = pipeline.assets.find((candidate) => candidate.id === assetID);
     if (asset) {
@@ -601,15 +615,19 @@ function locationToMonacoLocations(
     if (!target) {
       return [];
     }
-    return [{
-      uri: ensureAssetPreviewModel(monaco, target.asset),
-      range: lspRangeToMonaco(monaco, location.range),
-    }];
+    return [
+      {
+        uri: ensureAssetPreviewModel(monaco, target.asset),
+        range: lspRangeToMonaco(monaco, location.range),
+      },
+    ];
   }
-  return [{
-    uri: currentModel.uri,
-    range: lspRangeToMonaco(monaco, location.range),
-  }];
+  return [
+    {
+      uri: currentModel.uri,
+      range: lspRangeToMonaco(monaco, location.range),
+    },
+  ];
 }
 
 function lspWorkspaceEditToMonaco(
@@ -623,9 +641,10 @@ function lspWorkspaceEditToMonaco(
     for (const textEdit of textEdits) {
       edits.push({
         resource,
-        versionId: resource.toString() === currentModel.uri.toString()
-          ? currentModel.getVersionId()
-          : undefined,
+        versionId:
+          resource.toString() === currentModel.uri.toString()
+            ? currentModel.getVersionId()
+            : undefined,
         textEdit: {
           range: lspRangeToMonaco(monaco, textEdit.range),
           text: textEdit.newText,
@@ -774,7 +793,9 @@ function getQuotedPathContext(
   };
 }
 
-function parseDotPrefix(textBeforeCursor: string): { tablePart: string; columnPrefix: string } | null {
+function parseDotPrefix(
+  textBeforeCursor: string,
+): { tablePart: string; columnPrefix: string } | null {
   const match = textBeforeCursor.match(/([\w."]+)\.\s*([\w]*)$/);
   if (!match) {
     return null;
@@ -782,9 +803,12 @@ function parseDotPrefix(textBeforeCursor: string): { tablePart: string; columnPr
   return { tablePart: match[1].replace(/"/g, ""), columnPrefix: match[2] };
 }
 
-function parseEqualityValueContext(
-  textBeforeCursor: string,
-): { tableIdentifier: string | null; columnName: string; prefix: string; insideQuotes: boolean } | null {
+function parseEqualityValueContext(textBeforeCursor: string): {
+  tableIdentifier: string | null;
+  columnName: string;
+  prefix: string;
+  insideQuotes: boolean;
+} | null {
   const normalized = textBeforeCursor.replace(/\s+/g, " ");
   const patterns = [
     /(?:(["\w.]+)\.)?(["\w]+)\s*(?:=|!=|<>|<|>|<=|>=|like|ilike|in)\s*'([^']*)$/i,
@@ -814,8 +838,7 @@ function resolveRemoteTableName(
   const normalized = identifier.trim().toLowerCase();
   const localTable = schemaTables.find(
     (table) =>
-      table.name.toLowerCase() === normalized ||
-      table.shortName.toLowerCase() === normalized,
+      table.name.toLowerCase() === normalized || table.shortName.toLowerCase() === normalized,
   );
   if (localTable) {
     return localTable.name;
@@ -851,7 +874,12 @@ function resolveValueSuggestionTable(
       .map((table) => table.resolved_name ?? table.name)
       .filter(Boolean);
     const matchingTables = schemaTables.filter((table) => {
-      if (referencedTables.length > 0 && !referencedTables.some((name) => identifiersEqual(name, table.name) || identifiersEqual(name, table.shortName))) {
+      if (
+        referencedTables.length > 0 &&
+        !referencedTables.some(
+          (name) => identifiersEqual(name, table.name) || identifiersEqual(name, table.shortName),
+        )
+      ) {
         return false;
       }
       return table.columns.some((column) => column.name.toLowerCase() === columnName.toLowerCase());
@@ -871,8 +899,16 @@ function resolveValueSuggestionTable(
 }
 
 function identifiersEqual(left: string, right: string) {
-  return left.trim().replace(/^["'`]+|["'`]+$/g, "").toLowerCase() ===
-    right.trim().replace(/^["'`]+|["'`]+$/g, "").toLowerCase();
+  return (
+    left
+      .trim()
+      .replace(/^["'`]+|["'`]+$/g, "")
+      .toLowerCase() ===
+    right
+      .trim()
+      .replace(/^["'`]+|["'`]+$/g, "")
+      .toLowerCase()
+  );
 }
 
 function isDuckDBAsset(asset: WebAsset) {
@@ -951,10 +987,7 @@ function formatSQLValueCompletion(value: string | number | boolean | null, insid
   return String(value ?? "NULL");
 }
 
-function isRelationDotContext(
-  model: MonacoNS.editor.ITextModel,
-  position: MonacoNS.Position,
-) {
+function isRelationDotContext(model: MonacoNS.editor.ITextModel, position: MonacoNS.Position) {
   const textBeforeCursor = model
     .getValueInRange({
       startLineNumber: 1,
@@ -966,19 +999,15 @@ function isRelationDotContext(
   return /\b(?:from|join|into|update)\s+[\w.]+\.\s*$/i.test(textBeforeCursor);
 }
 
-function isTableCompletionContext(
-  model: MonacoNS.editor.ITextModel,
-  position: MonacoNS.Position,
-) {
+function isTableCompletionContext(model: MonacoNS.editor.ITextModel, position: MonacoNS.Position) {
   const textBeforeCursor = model.getValueInRange({
     startLineNumber: 1,
     startColumn: 1,
     endLineNumber: position.lineNumber,
     endColumn: position.column,
   });
-  const tokens = textBeforeCursor
-    .replace(/'[^']*'|"[^"]*"/g, " ")
-    .match(/\b[a-zA-Z_][\w]*\b/g) ?? [];
+  const tokens =
+    textBeforeCursor.replace(/'[^']*'|"[^"]*"/g, " ").match(/\b[a-zA-Z_][\w]*\b/g) ?? [];
   const last = tokens.at(-1)?.toLowerCase();
   return last === "from" || last === "join" || last === "into" || last === "update";
 }

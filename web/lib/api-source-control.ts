@@ -25,17 +25,25 @@ export async function initSourceControlRepository() {
 }
 
 export async function stageSourceControlPaths(paths: string[]) {
-  return fetchJSONWithBody<SourceControlActionResponse>("/api/source-control/stage", "POST", { paths });
+  return fetchJSONWithBody<SourceControlActionResponse>("/api/source-control/stage", "POST", {
+    paths,
+  });
 }
 
 export async function unstageSourceControlPaths(paths: string[]) {
-  return fetchJSONWithBody<SourceControlActionResponse>("/api/source-control/unstage", "POST", { paths });
+  return fetchJSONWithBody<SourceControlActionResponse>("/api/source-control/unstage", "POST", {
+    paths,
+  });
 }
 
 export async function checkoutSourceControlBranch(branch: string) {
-  return fetchJSONWithBody<SourceControlActionResponse>("/api/source-control/checkout", "POST", { branch });
+  return fetchJSONWithBody<SourceControlActionResponse>("/api/source-control/checkout", "POST", {
+    branch,
+  });
 }
 
 export async function commitSourceControlChanges(message: string) {
-  return fetchJSONWithBody<SourceControlCommitResponse>("/api/source-control/commit", "POST", { message });
+  return fetchJSONWithBody<SourceControlCommitResponse>("/api/source-control/commit", "POST", {
+    message,
+  });
 }

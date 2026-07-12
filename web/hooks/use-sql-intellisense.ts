@@ -3,9 +3,7 @@
 import { useEffect, useMemo, useRef } from "react";
 import type * as MonacoNS from "monaco-editor";
 
-import {
-  getSQLPathSuggestions,
-} from "@/lib/api";
+import { getSQLPathSuggestions } from "@/lib/api";
 import {
   registerSQLProviders,
   resolveTableAtPosition,
@@ -26,10 +24,7 @@ import {
 import { useSQLParseContext } from "@/hooks/use-sql-parse-context";
 import { useSQLSemanticDecorations } from "@/hooks/use-sql-semantic-decorations";
 import { fetchJSON } from "@/lib/api-core";
-import {
-  buildInspectDiagnosticMarker,
-  InspectDiagnosticSnapshot,
-} from "@/lib/inspect-diagnostics";
+import { buildInspectDiagnosticMarker, InspectDiagnosticSnapshot } from "@/lib/inspect-diagnostics";
 
 function buildValueSuggestionQuery(
   assetType: string | undefined,
@@ -105,9 +100,17 @@ type ColumnSuggestionContext = {
   tableIdentifier: string | null;
 };
 
-type ParseContextLike = {
-  tables?: Array<{ name: string; alias?: string; resolved_name?: string; columns?: Record<string, string> }>;
-} | null | undefined;
+type ParseContextLike =
+  | {
+      tables?: Array<{
+        name: string;
+        alias?: string;
+        resolved_name?: string;
+        columns?: Record<string, string>;
+      }>;
+    }
+  | null
+  | undefined;
 
 type SQLProviderState = {
   asset: WebAsset | null;
@@ -183,7 +186,9 @@ function normalizeIdentifierPart(value: string) {
 }
 
 function extractUnresolvedColumnName(message: string) {
-  const match = message.match(/unresolved\s+column\s*:\s*((?:[`"']?[\w$]+[`"']?\.)?[`"']?[\w$]+[`"']?)/i);
+  const match = message.match(
+    /unresolved\s+column\s*:\s*((?:[`"']?[\w$]+[`"']?\.)?[`"']?[\w$]+[`"']?)/i,
+  );
   const identifier = match ? normalizeIdentifierPart(match[1]) : null;
   return identifier?.split(".").at(-1) ?? null;
 }
@@ -237,7 +242,11 @@ function findSimilarColumn(unknownColumn: string, columns: string[]) {
     if (distance > maxDistance) {
       continue;
     }
-    if (!best || distance < best.distance || (distance === best.distance && column.length < best.column.length)) {
+    if (
+      !best ||
+      distance < best.distance ||
+      (distance === best.distance && column.length < best.column.length)
+    ) {
       best = { column, distance };
     }
   }
@@ -262,7 +271,11 @@ function findSimilarTable(unknownTable: string, tables: SchemaTable[]) {
       if (distance > maxDistance) {
         continue;
       }
-      if (!best || distance < best.distance || (distance === best.distance && candidate.length < best.candidateLength)) {
+      if (
+        !best ||
+        distance < best.distance ||
+        (distance === best.distance && candidate.length < best.candidateLength)
+      ) {
         best = { table, distance, candidateLength: candidate.length };
       }
     }
@@ -322,11 +335,18 @@ function columnContextForDiagnostic(
   });
   const qualifier = linePrefix.match(/([`"']?[\w$]+[`"']?)\.\s*$/)?.[1];
   if (qualifier) {
-    return aliasColumnMap.get(normalizeIdentifierPart(qualifier).toLowerCase()) ?? { columns: [], tableIdentifier: null };
+    return (
+      aliasColumnMap.get(normalizeIdentifierPart(qualifier).toLowerCase()) ?? {
+        columns: [],
+        tableIdentifier: null,
+      }
+    );
   }
 
   return {
-    columns: Array.from(new Set(tables.flatMap((table) => table.columns.map((column) => column.name)))),
+    columns: Array.from(
+      new Set(tables.flatMap((table) => table.columns.map((column) => column.name))),
+    ),
     tableIdentifier: null,
   };
 }
@@ -353,19 +373,21 @@ function buildUnresolvedColumnSuggestions(
       return [];
     }
 
-    return [{
-      diagnostic,
-      unknownColumn,
-      replacementColumn,
-      availableColumns: columnContext.columns,
-      tableIdentifier: columnContext.tableIdentifier,
-      range: {
-        startLineNumber: diagnostic.range.line,
-        startColumn: diagnostic.range.col,
-        endLineNumber: diagnostic.range.end_line,
-        endColumn: diagnostic.range.end_col,
+    return [
+      {
+        diagnostic,
+        unknownColumn,
+        replacementColumn,
+        availableColumns: columnContext.columns,
+        tableIdentifier: columnContext.tableIdentifier,
+        range: {
+          startLineNumber: diagnostic.range.line,
+          startColumn: diagnostic.range.col,
+          endLineNumber: diagnostic.range.end_line,
+          endColumn: diagnostic.range.end_col,
+        },
       },
-    }];
+    ];
   });
 }
 
@@ -385,7 +407,9 @@ function buildUnresolvedTableSuggestions(
     }
 
     const replacementTable = findSimilarTable(unknownTable, tables);
-    const replacementSchemaTable = replacementTable ? findTableByIdentifier(tables, replacementTable) : null;
+    const replacementSchemaTable = replacementTable
+      ? findTableByIdentifier(tables, replacementTable)
+      : null;
     if (!replacementTable || !replacementSchemaTable) {
       return [];
     }
@@ -397,21 +421,34 @@ function buildUnresolvedTableSuggestions(
       endColumn: diagnostic.range.end_col,
     };
     const diagnosticText = model.getValueInRange(range);
-    const replacementText = diagnosticText.includes(".") ? replacementTable : replacementSchemaTable.shortName;
+    const replacementText = diagnosticText.includes(".")
+      ? replacementTable
+      : replacementSchemaTable.shortName;
 
-    return [{
-      diagnostic,
-      unknownTable,
-      replacementTable,
-      replacementText,
-      range,
-    }];
+    return [
+      {
+        diagnostic,
+        unknownTable,
+        replacementTable,
+        replacementText,
+        range,
+      },
+    ];
   });
 }
 
 function buildSelfReferenceDiagnostics(
   asset: WebAsset | null,
-  parseContext: { tables?: Array<{ name: string; resolved_name?: string; parts?: Array<{ kind: string; range: SqlParseContextDiagnostic["range"] }> }> } | null | undefined,
+  parseContext:
+    | {
+        tables?: Array<{
+          name: string;
+          resolved_name?: string;
+          parts?: Array<{ kind: string; range: SqlParseContextDiagnostic["range"] }>;
+        }>;
+      }
+    | null
+    | undefined,
 ): SelfReferenceDiagnostic[] {
   if (!asset?.name) {
     return [];
@@ -485,8 +522,9 @@ function acquireSQLProviders(monaco: typeof MonacoNS): () => void {
   let registration = sqlProviderRegistry.get(monaco);
   if (!registration) {
     registration = {
-      disposable: registerSQLProviders(monaco, (model) =>
-        sqlProviderEntries.get(model.uri.toString()) ?? null,
+      disposable: registerSQLProviders(
+        monaco,
+        (model) => sqlProviderEntries.get(model.uri.toString()) ?? null,
       ),
       refs: 0,
     };
@@ -548,7 +586,10 @@ export function useSQLIntellisense(
     parseContext && (!parseContextHasErrors || parseContextHasRangedDiagnostics)
       ? parseContext
       : lastGoodParseContextRef.current;
-  const parseContextKey = useMemo(() => JSON.stringify(activeParseContext ?? null), [activeParseContext]);
+  const parseContextKey = useMemo(
+    () => JSON.stringify(activeParseContext ?? null),
+    [activeParseContext],
+  );
   const registerGlobalProviders = options?.registerGlobalProviders ?? true;
   const registerLegacyDiagnosticProviders = options?.registerLegacyDiagnosticProviders ?? true;
   const registerParseContextMarkers = options?.registerParseContextMarkers ?? true;
@@ -559,9 +600,9 @@ export function useSQLIntellisense(
   const connectionName =
     asset && workspace ? resolveConnection(asset, workspace.connections ?? {}) : null;
   const currentPipelineId = asset
-    ? (workspace?.pipelines ?? []).find((pipeline) =>
+    ? ((workspace?.pipelines ?? []).find((pipeline) =>
         pipeline.assets.some((candidate) => candidate.id === asset.id),
-      )?.id ?? null
+      )?.id ?? null)
     : null;
   const remoteTableNames = remoteTablesForConnection(
     sqlDiscoveryCache.tablesByScope,
@@ -608,7 +649,8 @@ export function useSQLIntellisense(
           return [];
         }
 
-        let remoteTables = sqlDiscoveryCache.tablesByScope[`${connectionName}::${environment ?? ""}`];
+        let remoteTables =
+          sqlDiscoveryCache.tablesByScope[`${connectionName}::${environment ?? ""}`];
         try {
           remoteTables ??= await loadSQLDiscoveryTables({
             connection: connectionName,
@@ -644,10 +686,12 @@ export function useSQLIntellisense(
               ? `Remote table + asset (${matchingAsset.assetPath ?? matchingAsset.name})`
               : "Remote table";
 
-            const currentSchemaName = schemaNameFromAssetName(latestStateRef.current.asset?.name)?.toLowerCase() ?? null;
+            const currentSchemaName =
+              schemaNameFromAssetName(latestStateRef.current.asset?.name)?.toLowerCase() ?? null;
             const tableSchemaName = schemaNameFromAssetName(table.name)?.toLowerCase() ?? null;
             const sameSchema = Boolean(currentSchemaName) && currentSchemaName === tableSchemaName;
-            const sameAssetName = latestStateRef.current.asset?.name?.toLowerCase() === table.name.toLowerCase();
+            const sameAssetName =
+              latestStateRef.current.asset?.name?.toLowerCase() === table.name.toLowerCase();
             const rank = sameAssetName ? "20" : sameSchema ? "21" : "22";
 
             return {
@@ -678,14 +722,15 @@ export function useSQLIntellisense(
         const localTable = providerTablesRef.current.find(
           (table) =>
             table.name.toLowerCase() === normalizedIdentifier ||
-            table.shortName.toLowerCase() === normalizedIdentifier
+            table.shortName.toLowerCase() === normalizedIdentifier,
         );
 
         const remoteTableName = localTable?.name ?? tableIdentifier;
 
-        let columns = sqlDiscoveryCache.columnsByScope[
-          `${connectionName}::${environment ?? ""}::${remoteTableName.toLowerCase()}`
-        ];
+        let columns =
+          sqlDiscoveryCache.columnsByScope[
+            `${connectionName}::${environment ?? ""}::${remoteTableName.toLowerCase()}`
+          ];
         try {
           columns ??= await loadSQLDiscoveryColumns({
             connection: connectionName,
@@ -809,9 +854,10 @@ export function useSQLIntellisense(
 
         return response.suggestions.map((suggestion) => ({
           label: suggestion.value,
-          kind: suggestion.kind === "directory"
-            ? monacoInstance.languages.CompletionItemKind.Folder
-            : monacoInstance.languages.CompletionItemKind.File,
+          kind:
+            suggestion.kind === "directory"
+              ? monacoInstance.languages.CompletionItemKind.Folder
+              : monacoInstance.languages.CompletionItemKind.File,
           detail: suggestion.detail,
           insertText: suggestion.value,
           range,
@@ -911,27 +957,27 @@ export function useSQLIntellisense(
         );
 
         return {
-        severity:
-          diagnostic.severity === "warning"
-            ? monaco.MarkerSeverity.Warning
-            : diagnostic.severity === "info"
-              ? monaco.MarkerSeverity.Info
-              : monaco.MarkerSeverity.Error,
-        message: unresolvedColumnSuggestion
-          ? formatUnresolvedColumnMessage(
-              unresolvedColumnSuggestion.unknownColumn,
-              unresolvedColumnSuggestion.replacementColumn,
-            )
-          : unresolvedTableSuggestion
-            ? formatUnresolvedTableMessage(
-                unresolvedTableSuggestion.unknownTable,
-                unresolvedTableSuggestion.replacementTable,
+          severity:
+            diagnostic.severity === "warning"
+              ? monaco.MarkerSeverity.Warning
+              : diagnostic.severity === "info"
+                ? monaco.MarkerSeverity.Info
+                : monaco.MarkerSeverity.Error,
+          message: unresolvedColumnSuggestion
+            ? formatUnresolvedColumnMessage(
+                unresolvedColumnSuggestion.unknownColumn,
+                unresolvedColumnSuggestion.replacementColumn,
               )
-          : diagnostic.message,
-        startLineNumber: diagnostic.range!.line,
-        startColumn: diagnostic.range!.col,
-        endLineNumber: diagnostic.range!.end_line,
-        endColumn: diagnostic.range!.end_col,
+            : unresolvedTableSuggestion
+              ? formatUnresolvedTableMessage(
+                  unresolvedTableSuggestion.unknownTable,
+                  unresolvedTableSuggestion.replacementTable,
+                )
+              : diagnostic.message,
+          startLineNumber: diagnostic.range!.line,
+          startColumn: diagnostic.range!.col,
+          endLineNumber: diagnostic.range!.end_line,
+          endColumn: diagnostic.range!.end_col,
         };
       });
 
@@ -956,7 +1002,15 @@ export function useSQLIntellisense(
     return () => {
       monaco.editor.setModelMarkers(model, "bruin-sql-parse-context", []);
     };
-  }, [asset, editor, inspectDiagnosticSnapshot, monaco, parseContextKey, registerParseContextMarkers, tables]);
+  }, [
+    asset,
+    editor,
+    inspectDiagnosticSnapshot,
+    monaco,
+    parseContextKey,
+    registerParseContextMarkers,
+    tables,
+  ]);
 
   useEffect(() => {
     if (!registerLegacyDiagnosticProviders || !editor || !monaco) {

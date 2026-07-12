@@ -42,7 +42,10 @@ export type AppLineageLayoutResult = {
   layoutId: AppLineageLayoutId;
   recommendation: AppLineageLayoutRecommendation | null;
   positions: Map<string, { x: number; y: number }>;
-  analysis: Pick<Analysis, "layerOrder" | "layerLinearizable" | "backEdges" | "skipEdges" | "intraEdges" | "cyclicNodes">;
+  analysis: Pick<
+    Analysis,
+    "layerOrder" | "layerLinearizable" | "backEdges" | "skipEdges" | "intraEdges" | "cyclicNodes"
+  >;
 };
 
 const DEFAULT_NODE_WIDTH = 232;
@@ -83,7 +86,10 @@ function graphFor(nodes: AppLineageLayoutNode[], edges: AppLineageLayoutEdge[]):
       height: node.height ?? DEFAULT_NODE_HEIGHT,
     })),
     edges: edges
-      .filter((edge) => edge.source !== edge.target && nodeIds.has(edge.source) && nodeIds.has(edge.target))
+      .filter(
+        (edge) =>
+          edge.source !== edge.target && nodeIds.has(edge.source) && nodeIds.has(edge.target),
+      )
       .map((edge) => ({ ...edge, key: `${edge.source}->${edge.target}` }))
       .filter((edge) => {
         if (edgeSet.has(edge.key)) return false;
@@ -186,7 +192,19 @@ function analyze(graph: Graph): Analysis {
     cyclicNodes.forEach((id) => nodeRank.set(id, fallbackRank));
   }
 
-  return { preds, succs, nodeById, layerOrder, layerIndex, layerLinearizable, backEdges, skipEdges, intraEdges, nodeRank, cyclicNodes };
+  return {
+    preds,
+    succs,
+    nodeById,
+    layerOrder,
+    layerIndex,
+    layerLinearizable,
+    backEdges,
+    skipEdges,
+    intraEdges,
+    nodeRank,
+    cyclicNodes,
+  };
 }
 
 function recommendLayout(graph: Graph, analysis: Analysis): AppLineageLayoutRecommendation | null {
@@ -196,7 +214,8 @@ function recommendLayout(graph: Graph, analysis: Analysis): AppLineageLayoutReco
   if (analysis.cyclicNodes.length) {
     return {
       id: "force",
-      reason: "The asset graph contains a cycle, so an organic layout is the safest way to expose the structure while the DAG is fixed.",
+      reason:
+        "The asset graph contains a cycle, so an organic layout is the safest way to expose the structure while the DAG is fixed.",
       scores: null,
     };
   }
@@ -207,11 +226,23 @@ function recommendLayout(graph: Graph, analysis: Analysis): AppLineageLayoutReco
   const backRatio = analysis.backEdges.length / edgeCount;
   const layers = analysis.layerOrder.length;
   const density = edgeCount / nodeCount;
-  const clean = analysis.skipEdges.length + analysis.intraEdges.length + analysis.backEdges.length === 0;
+  const clean =
+    analysis.skipEdges.length + analysis.intraEdges.length + analysis.backEdges.length === 0;
 
   const scores: Record<AppLineageLayoutId, number> = {
-    strict: 1.0 + (layers >= 3 && layers <= 6 ? 0.15 : 0) - skipRatio * 1.4 - intraRatio * 0.9 - backRatio * 5.0,
-    bands: 0.80 + (!analysis.layerLinearizable ? 0.6 : 0) + intraRatio * 0.5 + skipRatio * 0.2 + (layers >= 3 ? 0.05 : -0.35) - (analysis.layerLinearizable && clean ? 0.2 : 0),
+    strict:
+      1.0 +
+      (layers >= 3 && layers <= 6 ? 0.15 : 0) -
+      skipRatio * 1.4 -
+      intraRatio * 0.9 -
+      backRatio * 5.0,
+    bands:
+      0.8 +
+      (!analysis.layerLinearizable ? 0.6 : 0) +
+      intraRatio * 0.5 +
+      skipRatio * 0.2 +
+      (layers >= 3 ? 0.05 : -0.35) -
+      (analysis.layerLinearizable && clean ? 0.2 : 0),
     force: 0.2 + (density > 2.4 ? 0.45 : 0) + (density > 3.4 ? 0.4 : 0),
   };
   const id = Object.entries(scores).sort((a, b) => b[1] - a[1])[0]?.[0] as AppLineageLayoutId;
@@ -222,13 +253,15 @@ function recommendLayout(graph: Graph, analysis: Analysis): AppLineageLayoutReco
     bands: !analysis.layerLinearizable
       ? "The layer graph is cyclic, but layer bands preserve prefixes while the horizontal axis follows dependency depth."
       : "Intra-layer or skip dependencies make bands more readable than a strict prefix grid.",
-    force: "The graph is dense enough that cluster structure matters more than rank, so the organic layout is clearer.",
+    force:
+      "The graph is dense enough that cluster structure matters more than rank, so the organic layout is clearer.",
   };
   return { id, reason: reasons[id], scores };
 }
 
 function crossingReductionLimits({ graphNodeCount, graphEdgeCount }: CrossingReductionOptions) {
-  const large = graphNodeCount > LARGE_GRAPH_NODE_THRESHOLD || graphEdgeCount > LARGE_GRAPH_EDGE_THRESHOLD;
+  const large =
+    graphNodeCount > LARGE_GRAPH_NODE_THRESHOLD || graphEdgeCount > LARGE_GRAPH_EDGE_THRESHOLD;
   return {
     orderSweeps: large ? 2 : 8,
     transposeSweeps: large ? 1 : 6,
@@ -292,7 +325,11 @@ function countInversions(values: number[]) {
   return inversions;
 }
 
-function countBilayerCrossings(edges: LayeredLayoutEdge[], upperPositions: Map<string, number>, lowerPositions: Map<string, number>) {
+function countBilayerCrossings(
+  edges: LayeredLayoutEdge[],
+  upperPositions: Map<string, number>,
+  lowerPositions: Map<string, number>,
+) {
   const orderedTargets = edges
     .map((edge) => {
       const sourcePosition = upperPositions.get(edge.source);
@@ -308,25 +345,40 @@ function countBilayerCrossings(edges: LayeredLayoutEdge[], upperPositions: Map<s
 function edgesBetweenRanks(edges: LayeredLayoutEdge[], ranks: LayeredLayoutItem[][]) {
   const rankById = new Map<string, number>();
   ranks.forEach((rank, rankIndex) => rank.forEach((item) => rankById.set(item.id, rankIndex)));
-  const byRank = Array.from({ length: Math.max(0, ranks.length - 1) }, () => [] as LayeredLayoutEdge[]);
+  const byRank = Array.from(
+    { length: Math.max(0, ranks.length - 1) },
+    () => [] as LayeredLayoutEdge[],
+  );
   edges.forEach((edge) => {
     const sourceRank = rankById.get(edge.source);
     const targetRank = rankById.get(edge.target);
-    if (sourceRank === undefined || targetRank === undefined || targetRank !== sourceRank + 1) return;
+    if (sourceRank === undefined || targetRank === undefined || targetRank !== sourceRank + 1)
+      return;
     byRank[sourceRank]?.push(edge);
   });
   return byRank;
 }
 
-function countAdjacentRankCrossings(ranks: LayeredLayoutItem[][], edgesByRank: LayeredLayoutEdge[][], rankIndex: number) {
+function countAdjacentRankCrossings(
+  ranks: LayeredLayoutItem[][],
+  edgesByRank: LayeredLayoutEdge[][],
+  rankIndex: number,
+) {
   if (rankIndex < 0 || rankIndex >= edgesByRank.length) return 0;
   const upper = new Map(ranks[rankIndex].map((item, index) => [item.id, index]));
   const lower = new Map(ranks[rankIndex + 1].map((item, index) => [item.id, index]));
   return countBilayerCrossings(edgesByRank[rankIndex], upper, lower);
 }
 
-function crossingWindow(ranks: LayeredLayoutItem[][], edgesByRank: LayeredLayoutEdge[][], rankIndex: number) {
-  return countAdjacentRankCrossings(ranks, edgesByRank, rankIndex - 1) + countAdjacentRankCrossings(ranks, edgesByRank, rankIndex);
+function crossingWindow(
+  ranks: LayeredLayoutItem[][],
+  edgesByRank: LayeredLayoutEdge[][],
+  rankIndex: number,
+) {
+  return (
+    countAdjacentRankCrossings(ranks, edgesByRank, rankIndex - 1) +
+    countAdjacentRankCrossings(ranks, edgesByRank, rankIndex)
+  );
 }
 
 function median(values: number[]) {
@@ -358,12 +410,20 @@ function sortLayeredRankByNeighbors(
       if (a.score !== null && b.score !== null && a.score !== b.score) return a.score - b.score;
       if (a.score !== null && b.score === null) return -1;
       if (a.score === null && b.score !== null) return 1;
-      return a.previous - b.previous || a.item.stableIndex - b.item.stableIndex || a.item.id.localeCompare(b.item.id);
+      return (
+        a.previous - b.previous ||
+        a.item.stableIndex - b.item.stableIndex ||
+        a.item.id.localeCompare(b.item.id)
+      );
     })
     .map((entry) => entry.item);
 }
 
-function transposeLayeredRanks(ranks: LayeredLayoutItem[][], edgesByRank: LayeredLayoutEdge[][], maxSweeps: number) {
+function transposeLayeredRanks(
+  ranks: LayeredLayoutItem[][],
+  edgesByRank: LayeredLayoutEdge[][],
+  maxSweeps: number,
+) {
   for (let sweep = 0; sweep < maxSweeps; sweep++) {
     let improved = false;
     for (let rankIndex = 0; rankIndex < ranks.length; rankIndex++) {
@@ -385,7 +445,11 @@ function transposeLayeredRanks(ranks: LayeredLayoutItem[][], edgesByRank: Layere
   }
 }
 
-function minimizeLayeredCrossings(ranks: LayeredLayoutItem[][], edges: LayeredLayoutEdge[], options: CrossingReductionOptions) {
+function minimizeLayeredCrossings(
+  ranks: LayeredLayoutItem[][],
+  edges: LayeredLayoutEdge[],
+  options: CrossingReductionOptions,
+) {
   const limits = crossingReductionLimits(options);
   const { preds, succs } = buildLayeredAdjacency(edges);
   const edgesByRank = edgesBetweenRanks(edges, ranks);
@@ -410,13 +474,13 @@ function minimizeLayeredCrossings(ranks: LayeredLayoutItem[][], edges: LayeredLa
 function orderWithinRanks(ranks: string[][], graph: Graph) {
   let stableIndex = 0;
   const layeredRanks: LayeredLayoutItem[][] = ranks.map((rank, rankIndex) =>
-    rank
-      .slice()
-      .map((id) => ({ id, realId: id, rank: rankIndex, stableIndex: stableIndex++ })),
+    rank.slice().map((id) => ({ id, realId: id, rank: rankIndex, stableIndex: stableIndex++ })),
   );
   const layeredEdges: LayeredLayoutEdge[] = [];
   const rankById = new Map<string, number>();
-  layeredRanks.forEach((rank, rankIndex) => rank.forEach((item) => rankById.set(item.id, rankIndex)));
+  layeredRanks.forEach((rank, rankIndex) =>
+    rank.forEach((item) => rankById.set(item.id, rankIndex)),
+  );
 
   graph.edges
     .slice()
@@ -433,9 +497,12 @@ function orderWithinRanks(ranks: string[][], graph: Graph) {
         previous = virtualId;
       }
       layeredEdges.push({ source: previous, target: edge.target });
-  });
+    });
 
-  minimizeLayeredCrossings(layeredRanks, layeredEdges, { graphNodeCount: graph.nodes.length, graphEdgeCount: graph.edges.length });
+  minimizeLayeredCrossings(layeredRanks, layeredEdges, {
+    graphNodeCount: graph.nodes.length,
+    graphEdgeCount: graph.edges.length,
+  });
   return layeredRanks.map((rank) => rank.map((item) => item.id));
 }
 
@@ -458,8 +525,13 @@ function orderBandCells(
     }
   });
 
-  const limits = crossingReductionLimits({ graphNodeCount: graph.nodes.length, graphEdgeCount: graph.edges.length });
-  const rankById = new Map(graph.nodes.map((node) => [node.id, analysis.nodeRank.get(node.id) ?? 0]));
+  const limits = crossingReductionLimits({
+    graphNodeCount: graph.nodes.length,
+    graphEdgeCount: graph.edges.length,
+  });
+  const rankById = new Map(
+    graph.nodes.map((node) => [node.id, analysis.nodeRank.get(node.id) ?? 0]),
+  );
   const orderedEdges = graph.edges
     .filter((edge) => {
       const sourceRank = rankById.get(edge.source);
@@ -472,7 +544,8 @@ function orderBandCells(
   const allRanks = () => {
     const ranks = Array.from({ length: maxRank + 1 }, () => [] as LayeredLayoutItem[]);
     analysis.layerOrder.forEach((layer) => {
-      for (let rank = 0; rank <= maxRank; rank++) ranks[rank].push(...(cellItems.get(`${layer}\u0000${rank}`) ?? []));
+      for (let rank = 0; rank <= maxRank; rank++)
+        ranks[rank].push(...(cellItems.get(`${layer}\u0000${rank}`) ?? []));
     });
     return ranks;
   };
@@ -485,7 +558,14 @@ function orderBandCells(
     for (let rank = 1; rank <= maxRank; rank++) {
       analysis.layerOrder.forEach((layer) => {
         const key = `${layer}\u0000${rank}`;
-        cellItems.set(key, sortLayeredRankByNeighbors(cellItems.get(key) ?? [], currentPositions, (id) => preds.get(id) ?? []));
+        cellItems.set(
+          key,
+          sortLayeredRankByNeighbors(
+            cellItems.get(key) ?? [],
+            currentPositions,
+            (id) => preds.get(id) ?? [],
+          ),
+        );
       });
       currentPositions = positions();
     }
@@ -493,7 +573,14 @@ function orderBandCells(
     for (let rank = maxRank - 1; rank >= 0; rank--) {
       analysis.layerOrder.forEach((layer) => {
         const key = `${layer}\u0000${rank}`;
-        cellItems.set(key, sortLayeredRankByNeighbors(cellItems.get(key) ?? [], currentPositions, (id) => succs.get(id) ?? []));
+        cellItems.set(
+          key,
+          sortLayeredRankByNeighbors(
+            cellItems.get(key) ?? [],
+            currentPositions,
+            (id) => succs.get(id) ?? [],
+          ),
+        );
       });
       currentPositions = positions();
     }
@@ -531,7 +618,10 @@ function placeColumns(ranks: string[][], graph: Graph) {
   const maxRows = Math.max(1, ...ranks.map((rank) => rank.length));
   let x = LEFT_PAD;
   ranks.forEach((rank) => {
-    const maxWidth = Math.max(DEFAULT_NODE_WIDTH, ...rank.map((id) => nodeById.get(id)?.width ?? DEFAULT_NODE_WIDTH));
+    const maxWidth = Math.max(
+      DEFAULT_NODE_WIDTH,
+      ...rank.map((id) => nodeById.get(id)?.width ?? DEFAULT_NODE_WIDTH),
+    );
     const startY = TOP_PAD + ((maxRows - rank.length) * ROW_GAP) / 2;
     rank.forEach((id, index) => {
       const node = nodeById.get(id);
@@ -586,12 +676,17 @@ function layoutBands(graph: Graph, analysis: Analysis) {
     });
     const rows = Math.max(1, ...[...byRank.values()].map((nodes) => nodes.length));
     byRank.forEach((nodes, rank) => {
-      const orderedIds = cellItems.get(`${layer}\u0000${rank}`)?.map((item) => item.id) ?? nodes.map((node) => node.id);
+      const orderedIds =
+        cellItems.get(`${layer}\u0000${rank}`)?.map((item) => item.id) ??
+        nodes.map((node) => node.id);
       const nodeById = new Map(nodes.map((node) => [node.id, node]));
       orderedIds.forEach((id, index) => {
         const node = nodeById.get(id);
         if (!node) return;
-        positions.set(node.id, { x: columnX[rank] + (columnWidths[rank] - node.width) / 2, y: y + 42 + index * ROW_GAP });
+        positions.set(node.id, {
+          x: columnX[rank] + (columnWidths[rank] - node.width) / 2,
+          y: y + 42 + index * ROW_GAP,
+        });
       });
     });
     y += 42 + rows * ROW_GAP + 42;
@@ -602,7 +697,11 @@ function layoutBands(graph: Graph, analysis: Analysis) {
 function layoutForce(graph: Graph, analysis: Analysis) {
   const centers = graph.nodes.map((node, index) => ({
     id: node.id,
-    x: LEFT_PAD + (analysis.layerIndex.get(node.layer) ?? 0) * 290 + (index % 3) * 42 + node.width / 2,
+    x:
+      LEFT_PAD +
+      (analysis.layerIndex.get(node.layer) ?? 0) * 290 +
+      (index % 3) * 42 +
+      node.width / 2,
     y: TOP_PAD + (index % 7) * ROW_GAP + node.height / 2,
     vx: 0,
     vy: 0,
@@ -644,7 +743,10 @@ function layoutForce(graph: Graph, analysis: Analysis) {
     });
     centers.forEach((node) => {
       const source = analysis.nodeById.get(node.id);
-      const targetX = LEFT_PAD + (analysis.layerIndex.get(source?.layer ?? "default") ?? 0) * 290 + DEFAULT_NODE_WIDTH / 2;
+      const targetX =
+        LEFT_PAD +
+        (analysis.layerIndex.get(source?.layer ?? "default") ?? 0) * 290 +
+        DEFAULT_NODE_WIDTH / 2;
       node.vx += (targetX - node.x) * 0.018;
       node.vy += (TOP_PAD + 220 - node.y) * 0.004;
       node.x += node.vx;
@@ -657,7 +759,8 @@ function layoutForce(graph: Graph, analysis: Analysis) {
   const positions = new Map<string, { x: number; y: number }>();
   centers.forEach((center) => {
     const node = analysis.nodeById.get(center.id);
-    if (node) positions.set(center.id, { x: center.x - node.width / 2, y: center.y - node.height / 2 });
+    if (node)
+      positions.set(center.id, { x: center.x - node.width / 2, y: center.y - node.height / 2 });
   });
   normalizePositions(positions);
   return positions;

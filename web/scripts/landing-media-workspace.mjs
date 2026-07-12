@@ -83,7 +83,9 @@ function acmeFiles() {
     .map(([id, cid, d, s, t]) => `  (${id}, ${cid}, DATE '${d}', '${s}', ${t.toFixed(2)})`)
     .join(",\n");
   const customersValues = customers
-    .map(([id, name, email, cc, ts]) => `  (${id}, '${name}', '${email}', '${cc}', TIMESTAMP '${ts}')`)
+    .map(
+      ([id, name, email, cc, ts]) => `  (${id}, '${name}', '${email}', '${cc}', TIMESTAMP '${ts}')`,
+    )
     .join(",\n");
   const productsValues = products
     .map(([id, name, cat, price]) => `  (${id}, '${name}', '${cat}', ${price.toFixed(2)})`)
@@ -695,11 +697,9 @@ ORDER BY week_start
 `;
 
 function git(root, ...args) {
-  execFileSync(
-    "git",
-    ["-c", "user.email=demo@acme.dev", "-c", "user.name=Demo", ...args],
-    { cwd: root }
-  );
+  execFileSync("git", ["-c", "user.email=demo@acme.dev", "-c", "user.name=Demo", ...args], {
+    cwd: root,
+  });
 }
 
 async function writeAll(root, files) {
@@ -735,7 +735,10 @@ export async function addStalenessEdits(root) {
   }
   await writeFile(
     stagingOrders,
-    content.replace(needle, "WHERE o.status NOT IN ('refunded', 'pending')")
+    content.replace(needle, "WHERE o.status NOT IN ('refunded', 'pending')"),
   );
-  await writeFile(path.join(root, "acme", "assets", "mart", "weekly_summary.sql"), weeklySummarySQL);
+  await writeFile(
+    path.join(root, "acme", "assets", "mart", "weekly_summary.sql"),
+    weeklySummarySQL,
+  );
 }

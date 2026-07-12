@@ -28,6 +28,6 @@ export async function discoverLoadStreams(options: {
       pattern: options.pattern,
       environment: options.environment,
     })}`,
-    { cache: "no-store", signal: options.signal }
+    { cache: "no-store", signal: options.signal },
   );
 }

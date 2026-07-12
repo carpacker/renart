@@ -20,7 +20,9 @@ type WorkspaceResponse = {
 };
 
 const pipelineId = Buffer.from("analytics").toString("base64url");
-const customersAssetId = Buffer.from("analytics/assets/analytics/customers.sql").toString("base64url");
+const customersAssetId = Buffer.from("analytics/assets/analytics/customers.sql").toString(
+  "base64url",
+);
 const apiAssetPath = "analytics/assets/analytics/players_api.asset.yml";
 const apiAssetId = Buffer.from(apiAssetPath).toString("base64url");
 const paginatedAPIAssetPath = "analytics/assets/analytics/paginated_api.asset.yml";
@@ -41,7 +43,7 @@ type: api
 
 parameters:
 `,
-      "utf8"
+      "utf8",
     );
     await waitForWorkspaceAsset(page, liveApp.baseURL, apiAssetId);
 
@@ -75,14 +77,19 @@ parameters:
   response:
     records_path: data
 `,
-        "utf8"
+        "utf8",
       );
 
       await expect
-        .poll(async () => {
-          const asset = await waitForWorkspaceAsset(page, liveApp.baseURL, apiAssetId);
-          return (asset.columns ?? []).map((column) => `${column.name}:${column.type ?? ""}`).sort();
-        }, { timeout: 30000 })
+        .poll(
+          async () => {
+            const asset = await waitForWorkspaceAsset(page, liveApp.baseURL, apiAssetId);
+            return (asset.columns ?? [])
+              .map((column) => `${column.name}:${column.type ?? ""}`)
+              .sort();
+          },
+          { timeout: 30000 },
+        )
         .toEqual(["active:boolean", "rating:integer", "username:string"]);
 
       const response = await page.request.post(`${liveApp.baseURL}/api/sql/parse-context`, {
@@ -93,7 +100,10 @@ parameters:
         },
       });
       expect(response.ok()).toBe(true);
-      const body = await response.json() as { diagnostics?: Array<{ message?: string }>; errors?: string[] };
+      const body = (await response.json()) as {
+        diagnostics?: Array<{ message?: string }>;
+        errors?: string[];
+      };
       expect(body.errors ?? []).toEqual([]);
       const messages = (body.diagnostics ?? []).map((diagnostic) => diagnostic.message);
       expect(messages).not.toContain("Unresolved table: analytics.players_api");
@@ -105,7 +115,10 @@ parameters:
     }
   });
 
-  test("OpenAPI records_path suggestions render in the API YAML editor", async ({ liveApp, page }) => {
+  test("OpenAPI records_path suggestions render in the API YAML editor", async ({
+    liveApp,
+    page,
+  }) => {
     const specServer = await startRecordsPathOpenAPIServer();
     try {
       const assetContent = `name: analytics.players_api
@@ -120,11 +133,7 @@ parameters:
   response:
     records_path: ""
 `;
-      await writeFile(
-        join(liveApp.workspaceDir, apiAssetPath),
-        assetContent,
-        "utf8"
-      );
+      await writeFile(join(liveApp.workspaceDir, apiAssetPath), assetContent, "utf8");
       await waitForWorkspaceAssetContent(page, liveApp.baseURL, apiAssetId, specServer.url);
 
       await page.goto(`${liveApp.baseURL}/pipelines/${pipelineId}/assets/${apiAssetId}/code`);
@@ -137,15 +146,19 @@ parameters:
           response.url().includes("/api/api-assets/openapi-suggestions") &&
           response.url().includes("request_url=") &&
           response.ok(),
-        { timeout: 15000 }
+        { timeout: 15000 },
       );
       await page.keyboard.press("ControlOrMeta+Space");
       const response = await suggestionsResponse;
-      const body = await response.json() as { records_paths?: Array<{ path: string; detail?: string }> };
-      expect(body.records_paths).toContainEqual(expect.objectContaining({
-        detail: expect.stringContaining("array of objects"),
-        path: "data",
-      }));
+      const body = (await response.json()) as {
+        records_paths?: Array<{ path: string; detail?: string }>;
+      };
+      expect(body.records_paths).toContainEqual(
+        expect.objectContaining({
+          detail: expect.stringContaining("array of objects"),
+          path: "data",
+        }),
+      );
 
       const suggestWidget = page.locator(".suggest-widget.visible").first();
       await expect(suggestWidget).toBeVisible({ timeout: 15000 });
@@ -155,7 +168,10 @@ parameters:
     }
   });
 
-  test("OpenAPI request URL completes query parameter names and enum values", async ({ liveApp, page }) => {
+  test("OpenAPI request URL completes query parameter names and enum values", async ({
+    liveApp,
+    page,
+  }) => {
     const specServer = await startRecordsPathOpenAPIServer();
     try {
       const requestURL = "https://api.example.com/players/Ada?";
@@ -194,7 +210,9 @@ ${editorContent}`;
       await page.keyboard.press("ControlOrMeta+Space");
 
       let suggestWidget = page.locator(".suggest-widget.visible").first();
-      await expect(suggestWidget.getByText("area", { exact: true })).toBeVisible({ timeout: 15000 });
+      await expect(suggestWidget.getByText("area", { exact: true })).toBeVisible({
+        timeout: 15000,
+      });
       await suggestWidget.getByText("area", { exact: true }).click();
       await expect.poll(() => monacoEditorValue(page)).toContain(`${requestURL}area=`);
 
@@ -208,14 +226,19 @@ ${editorContent}`;
       await page.keyboard.insertText("&");
       await page.keyboard.press("ControlOrMeta+Space");
       suggestWidget = page.locator(".suggest-widget.visible").first();
-      await expect(suggestWidget.getByText("severity", { exact: true })).toBeVisible({ timeout: 15000 });
+      await expect(suggestWidget.getByText("severity", { exact: true })).toBeVisible({
+        timeout: 15000,
+      });
       await expect(suggestWidget.getByText("area", { exact: true })).toHaveCount(0);
     } finally {
       await new Promise<void>((resolve) => specServer.server.close(() => resolve()));
     }
   });
 
-  test("OpenAPI request URL completes partial and comma-separated query values", async ({ liveApp, page }) => {
+  test("OpenAPI request URL completes partial and comma-separated query values", async ({
+    liveApp,
+    page,
+  }) => {
     const specServer = await startRecordsPathOpenAPIServer();
     try {
       const requestURL = "https://api.example.com/players/Ada?area=C";
@@ -256,7 +279,10 @@ ${editorContent}`;
     }
   });
 
-  test("OpenAPI records_path suggestions complete inside an existing quoted value", async ({ liveApp, page }) => {
+  test("OpenAPI records_path suggestions complete inside an existing quoted value", async ({
+    liveApp,
+    page,
+  }) => {
     const specServer = await startRecordsPathOpenAPIServer();
     try {
       const assetContent = `name: analytics.players_api
@@ -271,11 +297,7 @@ parameters:
   response:
     records_path: "fea"
 `;
-      await writeFile(
-        join(liveApp.workspaceDir, apiAssetPath),
-        assetContent,
-        "utf8"
-      );
+      await writeFile(join(liveApp.workspaceDir, apiAssetPath), assetContent, "utf8");
       await waitForWorkspaceAssetContent(page, liveApp.baseURL, apiAssetId, specServer.url);
 
       await page.goto(`${liveApp.baseURL}/pipelines/${pipelineId}/assets/${apiAssetId}/code`);
@@ -288,15 +310,19 @@ parameters:
           response.url().includes("/api/api-assets/openapi-suggestions") &&
           response.url().includes("request_url=") &&
           response.ok(),
-        { timeout: 15000 }
+        { timeout: 15000 },
       );
       await page.keyboard.press("ControlOrMeta+Space");
       const response = await suggestionsResponse;
-      const body = await response.json() as { records_paths?: Array<{ path: string; detail?: string }> };
-      expect(body.records_paths).toContainEqual(expect.objectContaining({
-        detail: expect.stringContaining("array of objects"),
-        path: "features",
-      }));
+      const body = (await response.json()) as {
+        records_paths?: Array<{ path: string; detail?: string }>;
+      };
+      expect(body.records_paths).toContainEqual(
+        expect.objectContaining({
+          detail: expect.stringContaining("array of objects"),
+          path: "features",
+        }),
+      );
 
       const suggestWidget = page.locator(".suggest-widget.visible").first();
       await expect(suggestWidget).toBeVisible({ timeout: 15000 });
@@ -306,7 +332,10 @@ parameters:
     }
   });
 
-  test("OpenAPI next_url_path suggestions render in the API YAML editor", async ({ liveApp, page }) => {
+  test("OpenAPI next_url_path suggestions render in the API YAML editor", async ({
+    liveApp,
+    page,
+  }) => {
     const specServer = await startRecordsPathOpenAPIServer();
     try {
       const assetContent = `name: analytics.players_api
@@ -324,11 +353,7 @@ parameters:
     type: next_url
     next_url_path: "pag"
 `;
-      await writeFile(
-        join(liveApp.workspaceDir, apiAssetPath),
-        assetContent,
-        "utf8"
-      );
+      await writeFile(join(liveApp.workspaceDir, apiAssetPath), assetContent, "utf8");
       await waitForWorkspaceAssetContent(page, liveApp.baseURL, apiAssetId, specServer.url);
 
       await page.goto(`${liveApp.baseURL}/pipelines/${pipelineId}/assets/${apiAssetId}/code`);
@@ -341,15 +366,19 @@ parameters:
           response.url().includes("/api/api-assets/openapi-suggestions") &&
           response.url().includes("request_url=") &&
           response.ok(),
-        { timeout: 15000 }
+        { timeout: 15000 },
       );
       await page.keyboard.press("ControlOrMeta+Space");
       const response = await suggestionsResponse;
-      const body = await response.json() as { response_paths?: Array<{ path: string; detail?: string }> };
-      expect(body.response_paths).toContainEqual(expect.objectContaining({
-        detail: expect.stringContaining("string"),
-        path: "pagination.next",
-      }));
+      const body = (await response.json()) as {
+        response_paths?: Array<{ path: string; detail?: string }>;
+      };
+      expect(body.response_paths).toContainEqual(
+        expect.objectContaining({
+          detail: expect.stringContaining("string"),
+          path: "pagination.next",
+        }),
+      );
 
       const suggestWidget = page.locator(".suggest-widget.visible").first();
       await expect(suggestWidget).toBeVisible({ timeout: 15000 });
@@ -359,7 +388,10 @@ parameters:
     }
   });
 
-  test("API YAML editor stays mounted while parameters YAML is incomplete", async ({ liveApp, page }) => {
+  test("API YAML editor stays mounted while parameters YAML is incomplete", async ({
+    liveApp,
+    page,
+  }) => {
     const specServer = await startRecordsPathOpenAPIServer();
     try {
       const assetContent = `name: analytics.players_api
@@ -383,24 +415,31 @@ parameters:
     start_page: 1
     max_pages: 10
 `;
-      await writeFile(
-        join(liveApp.workspaceDir, apiAssetPath),
-        assetContent,
-        "utf8"
-      );
+      await writeFile(join(liveApp.workspaceDir, apiAssetPath), assetContent, "utf8");
 
       await expect
-        .poll(async () => {
-          const response = await page.request.get(`${liveApp.baseURL}/api/workspace`);
-          if (!response.ok()) return "";
-          const workspace = await response.json() as WorkspaceResponse;
-          const asset = workspace.pipelines.flatMap((pipeline) => pipeline.assets).find((item) => item.id === apiAssetId);
-          return [asset?.type ?? "", asset?.parse_error ? "parse_error" : "", asset?.content.includes("    fields") ? "content" : ""].join("|");
-        }, { timeout: 30000 })
+        .poll(
+          async () => {
+            const response = await page.request.get(`${liveApp.baseURL}/api/workspace`);
+            if (!response.ok()) return "";
+            const workspace = (await response.json()) as WorkspaceResponse;
+            const asset = workspace.pipelines
+              .flatMap((pipeline) => pipeline.assets)
+              .find((item) => item.id === apiAssetId);
+            return [
+              asset?.type ?? "",
+              asset?.parse_error ? "parse_error" : "",
+              asset?.content.includes("    fields") ? "content" : "",
+            ].join("|");
+          },
+          { timeout: 30000 },
+        )
         .toBe("api|parse_error|content");
 
       await page.goto(`${liveApp.baseURL}/pipelines/${pipelineId}/assets/${apiAssetId}/code`);
-      await expect(page.getByText("This asset could not be parsed.")).toBeVisible({ timeout: 15000 });
+      await expect(page.getByText("This asset could not be parsed.")).toBeVisible({
+        timeout: 15000,
+      });
       const editor = page.locator(".monaco-editor").first();
       await expect(editor).toBeVisible({ timeout: 15000 });
       await setEditorContentAtYamlField(page, assetContent, "next_url_path", "pag");
@@ -410,15 +449,19 @@ parameters:
           response.url().includes("/api/api-assets/openapi-suggestions") &&
           response.url().includes("request_url=") &&
           response.ok(),
-        { timeout: 15000 }
+        { timeout: 15000 },
       );
       await page.keyboard.press("ControlOrMeta+Space");
       const response = await suggestionsResponse;
-      const body = await response.json() as { response_paths?: Array<{ path: string; detail?: string }> };
+      const body = (await response.json()) as {
+        response_paths?: Array<{ path: string; detail?: string }>;
+      };
       expect(body.response_paths?.map((item) => item.path)).toContain("pagination.next");
 
       const suggestWidget = page.locator(".suggest-widget.visible").first();
-      await expect(suggestWidget.getByText("pagination.next", { exact: true })).toBeVisible({ timeout: 15000 });
+      await expect(suggestWidget.getByText("pagination.next", { exact: true })).toBeVisible({
+        timeout: 15000,
+      });
     } finally {
       await new Promise<void>((resolve) => specServer.server.close(() => resolve()));
     }
@@ -447,20 +490,24 @@ parameters:
     has_more_path: pagination.has_next_page
     max_pages: 5
 `,
-        "utf8"
+        "utf8",
       );
       await waitForWorkspaceAsset(page, liveApp.baseURL, paginatedAPIAssetId);
 
-      const inference = await page.request.post(`${liveApp.baseURL}/api/assets/${paginatedAPIAssetId}/api-infer`);
+      const inference = await page.request.post(
+        `${liveApp.baseURL}/api/assets/${paginatedAPIAssetId}/api-infer`,
+      );
       expect(inference.ok()).toBe(true);
-      const inferred = await inference.json() as {
+      const inferred = (await inference.json()) as {
         status: string;
         records_paths?: Array<{ path: string }>;
         columns?: Array<{ name: string; type?: string }>;
       };
       expect(inferred.status).toBe("ok");
       expect(inferred.records_paths?.map((item) => item.path)).toContain("data");
-      expect(inferred.columns).toContainEqual(expect.objectContaining({ name: "id", type: "integer" }));
+      expect(inferred.columns).toContainEqual(
+        expect.objectContaining({ name: "id", type: "integer" }),
+      );
       apiServer.pageRequests.length = 0;
 
       const done = await materializeAsset(page, liveApp.baseURL, paginatedAPIAssetId);
@@ -468,9 +515,14 @@ parameters:
       expect(done.output).toContain("Fetched 2 records from API asset analytics.paginated_api");
       expect(apiServer.pageRequests).toEqual(["1", "2"]);
 
-      const inspect = await page.request.get(`${liveApp.baseURL}/api/assets/${paginatedAPIAssetId}/inspect?limit=10`);
+      const inspect = await page.request.get(
+        `${liveApp.baseURL}/api/assets/${paginatedAPIAssetId}/inspect?limit=10`,
+      );
       expect(inspect.ok()).toBe(true);
-      const body = await inspect.json() as { status: string; rows?: Array<Record<string, unknown>> };
+      const body = (await inspect.json()) as {
+        status: string;
+        rows?: Array<Record<string, unknown>>;
+      };
       expect(body.status).toBe("ok");
       expect((body.rows ?? []).map((row) => String(row.id)).sort()).toEqual(["1", "2"]);
     } finally {
@@ -503,7 +555,7 @@ parameters:
       id: id
       name: name
 `,
-        "utf8"
+        "utf8",
       );
       await waitForWorkspaceAsset(page, liveApp.baseURL, postAPIAssetId);
 
@@ -513,9 +565,14 @@ parameters:
       expect(apiServer.postBodies).toEqual([{ query: "Ada" }]);
       expect(apiServer.authHeaders).toEqual(["secret-token"]);
 
-      const inspect = await page.request.get(`${liveApp.baseURL}/api/assets/${postAPIAssetId}/inspect?limit=10`);
+      const inspect = await page.request.get(
+        `${liveApp.baseURL}/api/assets/${postAPIAssetId}/inspect?limit=10`,
+      );
       expect(inspect.ok()).toBe(true);
-      const body = await inspect.json() as { status: string; rows?: Array<Record<string, unknown>> };
+      const body = (await inspect.json()) as {
+        status: string;
+        rows?: Array<Record<string, unknown>>;
+      };
       expect(body.status).toBe("ok");
       expect(body.rows?.[0]?.name).toBe("Ada");
     } finally {
@@ -523,7 +580,10 @@ parameters:
     }
   });
 
-  test("execution windows support replay and historical backfills through merge", async ({ liveApp, page }) => {
+  test("execution windows support replay and historical backfills through merge", async ({
+    liveApp,
+    page,
+  }) => {
     const apiServer = await startAPIExecutionServer();
     try {
       await writeFile(
@@ -551,7 +611,7 @@ columns:
   - name: updated_at
     type: timestamp
 `,
-        "utf8"
+        "utf8",
       );
       await waitForWorkspaceAsset(page, liveApp.baseURL, windowedAPIAssetId);
 
@@ -586,9 +646,11 @@ columns:
         { start: "2026-07-09T08:00:00.000000Z", end: "2026-07-09T10:00:00.000000Z" },
       ]);
 
-      const inspect = await page.request.get(`${liveApp.baseURL}/api/assets/${windowedAPIAssetId}/inspect?limit=10`);
+      const inspect = await page.request.get(
+        `${liveApp.baseURL}/api/assets/${windowedAPIAssetId}/inspect?limit=10`,
+      );
       expect(inspect.ok()).toBe(true);
-      const body = await inspect.json() as { rows?: Array<Record<string, unknown>> };
+      const body = (await inspect.json()) as { rows?: Array<Record<string, unknown>> };
       expect((body.rows ?? []).map((row) => String(row.id)).sort()).toEqual(["1", "2"]);
     } finally {
       await new Promise<void>((resolve) => apiServer.server.close(() => resolve()));
@@ -596,30 +658,49 @@ columns:
   });
 });
 
-async function waitForWorkspaceAsset(page: import("@playwright/test").Page, baseURL: string, assetId: string) {
+async function waitForWorkspaceAsset(
+  page: import("@playwright/test").Page,
+  baseURL: string,
+  assetId: string,
+) {
   let found: WorkspaceResponse["pipelines"][number]["assets"][number] | undefined;
   await expect
-    .poll(async () => {
-      const response = await page.request.get(`${baseURL}/api/workspace`);
-      if (!response.ok()) return false;
-      const workspace = await response.json() as WorkspaceResponse;
-      found = workspace.pipelines.flatMap((pipeline) => pipeline.assets).find((asset) => asset.id === assetId);
-      return Boolean(found);
-    }, { timeout: 30000 })
+    .poll(
+      async () => {
+        const response = await page.request.get(`${baseURL}/api/workspace`);
+        if (!response.ok()) return false;
+        const workspace = (await response.json()) as WorkspaceResponse;
+        found = workspace.pipelines
+          .flatMap((pipeline) => pipeline.assets)
+          .find((asset) => asset.id === assetId);
+        return Boolean(found);
+      },
+      { timeout: 30000 },
+    )
     .toBe(true);
   return found!;
 }
 
-async function waitForWorkspaceAssetContent(page: import("@playwright/test").Page, baseURL: string, assetId: string, expected: string) {
+async function waitForWorkspaceAssetContent(
+  page: import("@playwright/test").Page,
+  baseURL: string,
+  assetId: string,
+  expected: string,
+) {
   let found: WorkspaceResponse["pipelines"][number]["assets"][number] | undefined;
   await expect
-    .poll(async () => {
-      const response = await page.request.get(`${baseURL}/api/workspace`);
-      if (!response.ok()) return "";
-      const workspace = await response.json() as WorkspaceResponse;
-      found = workspace.pipelines.flatMap((pipeline) => pipeline.assets).find((asset) => asset.id === assetId);
-      return found?.content ?? "";
-    }, { timeout: 30000 })
+    .poll(
+      async () => {
+        const response = await page.request.get(`${baseURL}/api/workspace`);
+        if (!response.ok()) return "";
+        const workspace = (await response.json()) as WorkspaceResponse;
+        found = workspace.pipelines
+          .flatMap((pipeline) => pipeline.assets)
+          .find((asset) => asset.id === assetId);
+        return found?.content ?? "";
+      },
+      { timeout: 30000 },
+    )
     .toContain(expected);
   return found!;
 }
@@ -638,7 +719,12 @@ async function monacoEditorValue(page: import("@playwright/test").Page) {
   });
 }
 
-async function setEditorContentAtYamlField(page: import("@playwright/test").Page, content: string, fieldName: string, cursorAfter?: string) {
+async function setEditorContentAtYamlField(
+  page: import("@playwright/test").Page,
+  content: string,
+  fieldName: string,
+  cursorAfter?: string,
+) {
   await page.waitForFunction(
     () => {
       const monaco = (window as typeof window & { monaco?: any }).monaco;
@@ -646,33 +732,36 @@ async function setEditorContentAtYamlField(page: import("@playwright/test").Page
       return Boolean(editor?.getModel?.());
     },
     undefined,
-    { timeout: 15000 }
+    { timeout: 15000 },
   );
-  await page.evaluate(({ content, cursorAfter, fieldName }) => {
-    const monaco = (window as typeof window & { monaco?: any }).monaco;
-    const editor = monaco?.editor.getEditors?.()[0];
-    const model = editor?.getModel?.();
-    if (!editor || !model) {
-      throw new Error("Monaco editor is not ready");
-    }
-    model.setValue(content);
-    const match = model.findMatches(fieldName, false, false, false, null, true)[0];
-    if (!match) {
-      throw new Error(`${fieldName} was not found in the Monaco model`);
-    }
-    const lineNumber = match.range.startLineNumber;
-    const lineText = model.getLineContent(lineNumber);
-    let column = lineText.length + 1;
-    if (cursorAfter) {
-      const index = lineText.indexOf(cursorAfter);
-      if (index === -1) {
-        throw new Error(`cursor text ${cursorAfter} was not found in ${fieldName} line`);
+  await page.evaluate(
+    ({ content, cursorAfter, fieldName }) => {
+      const monaco = (window as typeof window & { monaco?: any }).monaco;
+      const editor = monaco?.editor.getEditors?.()[0];
+      const model = editor?.getModel?.();
+      if (!editor || !model) {
+        throw new Error("Monaco editor is not ready");
       }
-      column = index + cursorAfter.length + 1;
-    }
-    editor.focus();
-    editor.setPosition({ lineNumber, column });
-  }, { content, cursorAfter, fieldName });
+      model.setValue(content);
+      const match = model.findMatches(fieldName, false, false, false, null, true)[0];
+      if (!match) {
+        throw new Error(`${fieldName} was not found in the Monaco model`);
+      }
+      const lineNumber = match.range.startLineNumber;
+      const lineText = model.getLineContent(lineNumber);
+      let column = lineText.length + 1;
+      if (cursorAfter) {
+        const index = lineText.indexOf(cursorAfter);
+        if (index === -1) {
+          throw new Error(`cursor text ${cursorAfter} was not found in ${fieldName} line`);
+        }
+        column = index + cursorAfter.length + 1;
+      }
+      editor.focus();
+      editor.setPosition({ lineNumber, column });
+    },
+    { content, cursorAfter, fieldName },
+  );
 }
 
 async function materializeAsset(
@@ -686,7 +775,7 @@ async function materializeAsset(
   if (options.start) query.set("start_date", options.start);
   if (options.end) query.set("end_date", options.end);
   const response = await page.request.post(
-    `${baseURL}/api/assets/${assetId}/materialize/stream?${query.toString()}`
+    `${baseURL}/api/assets/${assetId}/materialize/stream?${query.toString()}`,
   );
   expect(response.ok()).toBe(true);
   const text = await response.text();
@@ -886,10 +975,14 @@ async function startAPIExecutionServer(): Promise<{
         return;
       }
       if (start === "2026-07-09T08:00:00.000000Z" && end === "2026-07-09T10:00:00.000000Z") {
-        res.end(JSON.stringify({ data: [
-          { id: 1, updated_at: "2026-07-09T09:00:00Z" },
-          { id: 2, updated_at: "2026-07-09T10:00:00Z" },
-        ] }));
+        res.end(
+          JSON.stringify({
+            data: [
+              { id: 1, updated_at: "2026-07-09T09:00:00Z" },
+              { id: 2, updated_at: "2026-07-09T10:00:00Z" },
+            ],
+          }),
+        );
         return;
       }
       res.writeHead(400).end(JSON.stringify({ error: "unexpected execution window" }));
@@ -902,5 +995,12 @@ async function startAPIExecutionServer(): Promise<{
   if (!address || typeof address === "string") {
     throw new Error("API execution test server did not start on a TCP port");
   }
-  return { server, url: `http://127.0.0.1:${address.port}`, pageRequests, postBodies, authHeaders, windowRequests };
+  return {
+    server,
+    url: `http://127.0.0.1:${address.port}`,
+    pageRequests,
+    postBodies,
+    authHeaders,
+    windowRequests,
+  };
 }

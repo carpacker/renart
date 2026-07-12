@@ -86,17 +86,21 @@ function MissingImportSuggestion({
           className="h-6 border-amber-300 bg-white/60 font-mono text-amber-900 hover:bg-white dark:border-amber-500/30 dark:bg-amber-500/15 dark:text-amber-100 dark:hover:bg-amber-500/25"
           title={`Find a PyPI package for "${importName}"`}
         >
-          <Plus className="size-3" />{importName}
+          <Plus className="size-3" />
+          {importName}
         </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="start" className="w-80">
         {loading ? (
           <div className="flex items-center gap-2 px-2 py-2 text-xs text-muted-foreground">
-            <Loader2 className="size-3.5 animate-spin" />Searching PyPI…
+            <Loader2 className="size-3.5 animate-spin" />
+            Searching PyPI…
           </div>
         ) : packages && packages.length > 0 ? (
           <>
-            <div className="px-2 py-1 text-[11px] text-muted-foreground">PyPI packages for “{importName}”</div>
+            <div className="px-2 py-1 text-[11px] text-muted-foreground">
+              PyPI packages for “{importName}”
+            </div>
             {packages.map((pkg) => (
               <DropdownMenuItem
                 key={pkg.name}
@@ -105,14 +109,17 @@ function MissingImportSuggestion({
               >
                 <span className="font-mono text-xs font-medium">{pkg.name}</span>
                 {pkg.summary ? (
-                  <span className="line-clamp-2 text-[11px] text-muted-foreground">{pkg.summary}</span>
+                  <span className="line-clamp-2 text-[11px] text-muted-foreground">
+                    {pkg.summary}
+                  </span>
                 ) : null}
               </DropdownMenuItem>
             ))}
           </>
         ) : (
           <DropdownMenuItem onSelect={() => onAdd(importName)}>
-            <Plus className="size-3.5" />Add <span className="font-mono">{importName}</span> anyway
+            <Plus className="size-3.5" />
+            Add <span className="font-mono">{importName}</span> anyway
           </DropdownMenuItem>
         )}
       </DropdownMenuContent>

@@ -8,16 +8,37 @@ async function createNotebook(request: APIRequestContext, baseURL: string, title
   return (await response.json()).notebook as { id: string };
 }
 
-async function addCell(request: APIRequestContext, baseURL: string, notebookId: string, name: string) {
-  const response = await request.post(`${baseURL}/api/notebooks/${notebookId}/cells`, { data: { name } });
+async function addCell(
+  request: APIRequestContext,
+  baseURL: string,
+  notebookId: string,
+  name: string,
+) {
+  const response = await request.post(`${baseURL}/api/notebooks/${notebookId}/cells`, {
+    data: { name },
+  });
   expect(response.ok()).toBe(true);
-  const notebook = (await response.json()).notebook as { cells: Array<{ cell_id: string; name: string }> };
+  const notebook = (await response.json()).notebook as {
+    cells: Array<{ cell_id: string; name: string }>;
+  };
   return notebook.cells.find((cell) => cell.name === name)!.cell_id;
 }
 
-async function setSql(request: APIRequestContext, baseURL: string, notebookId: string, cellId: string, body: string) {
+async function setSql(
+  request: APIRequestContext,
+  baseURL: string,
+  notebookId: string,
+  cellId: string,
+  body: string,
+) {
   const content = `/* @bruin\ntype: duckdb.sql\n@bruin */\n${body}\n`;
-  expect((await request.put(`${baseURL}/api/notebooks/${notebookId}/cells/${cellId}`, { data: { content } })).ok()).toBe(true);
+  expect(
+    (
+      await request.put(`${baseURL}/api/notebooks/${notebookId}/cells/${cellId}`, {
+        data: { content },
+      })
+    ).ok(),
+  ).toBe(true);
 }
 
 test.describe("notebook auto-recompute", () => {
@@ -55,7 +76,13 @@ test.describe("notebook auto-recompute", () => {
     const unionCell = await addCell(request, liveApp.baseURL, notebook.id, "u");
     // A set operation is read-only but not a "single SELECT" — it must still
     // auto-recompute (regression: UNION cells were stuck stale and never ran).
-    await setSql(request, liveApp.baseURL, notebook.id, unionCell, "select 111 as n union all select 222");
+    await setSql(
+      request,
+      liveApp.baseURL,
+      notebook.id,
+      unionCell,
+      "select 111 as n union all select 222",
+    );
 
     await page.goto(`${liveApp.baseURL}/notebooks/${notebook.id}`);
     await expect(page.getByText("AutoUnion").first()).toBeVisible({ timeout: 15000 });
@@ -76,13 +103,22 @@ test.describe("notebook auto-recompute", () => {
     await expect(page.getByText(/\d+ stale/)).toBeHidden({ timeout: 15000 });
   });
 
-  test("editing an upstream auto-recomputes clean SELECT descendants", async ({ liveApp, page }) => {
+  test("editing an upstream auto-recomputes clean SELECT descendants", async ({
+    liveApp,
+    page,
+  }) => {
     const { request } = page;
     const notebook = await createNotebook(request, liveApp.baseURL, "Auto");
     const baseCell = await addCell(request, liveApp.baseURL, notebook.id, "base");
     await setSql(request, liveApp.baseURL, notebook.id, baseCell, "select 10 as amount");
     const doubledCell = await addCell(request, liveApp.baseURL, notebook.id, "doubled");
-    await setSql(request, liveApp.baseURL, notebook.id, doubledCell, "select amount * 2 as doubled from base");
+    await setSql(
+      request,
+      liveApp.baseURL,
+      notebook.id,
+      doubledCell,
+      "select amount * 2 as doubled from base",
+    );
 
     await page.goto(`${liveApp.baseURL}/notebooks/${notebook.id}`);
     await expect(page.getByText("Auto").first()).toBeVisible({ timeout: 15000 });
@@ -107,13 +143,22 @@ test.describe("notebook auto-recompute", () => {
     await expect(page.getByText(/\d+ stale/)).toBeHidden({ timeout: 15000 });
   });
 
-  test("typing into an upstream auto-recomputes without leaving the editor", async ({ liveApp, page }) => {
+  test("typing into an upstream auto-recomputes without leaving the editor", async ({
+    liveApp,
+    page,
+  }) => {
     const { request } = page;
     const notebook = await createNotebook(request, liveApp.baseURL, "AutoType");
     const baseCell = await addCell(request, liveApp.baseURL, notebook.id, "base");
     await setSql(request, liveApp.baseURL, notebook.id, baseCell, "select 10 as amount");
     const doubledCell = await addCell(request, liveApp.baseURL, notebook.id, "doubled");
-    await setSql(request, liveApp.baseURL, notebook.id, doubledCell, "select amount * 2 as doubled from base");
+    await setSql(
+      request,
+      liveApp.baseURL,
+      notebook.id,
+      doubledCell,
+      "select amount * 2 as doubled from base",
+    );
 
     await page.goto(`${liveApp.baseURL}/notebooks/${notebook.id}`);
     await expect(page.getByText("AutoType").first()).toBeVisible({ timeout: 15000 });
@@ -136,13 +181,22 @@ test.describe("notebook auto-recompute", () => {
     await expect(page.getByText(/\d+ stale/)).toBeHidden({ timeout: 15000 });
   });
 
-  test("a breaking upstream column rename does not auto-recompute the downstream", async ({ liveApp, page }) => {
+  test("a breaking upstream column rename does not auto-recompute the downstream", async ({
+    liveApp,
+    page,
+  }) => {
     const { request } = page;
     const notebook = await createNotebook(request, liveApp.baseURL, "AutoBreak");
     const baseCell = await addCell(request, liveApp.baseURL, notebook.id, "base");
     await setSql(request, liveApp.baseURL, notebook.id, baseCell, "select 10 as amount");
     const doubledCell = await addCell(request, liveApp.baseURL, notebook.id, "doubled");
-    await setSql(request, liveApp.baseURL, notebook.id, doubledCell, "select amount * 2 as doubled from base");
+    await setSql(
+      request,
+      liveApp.baseURL,
+      notebook.id,
+      doubledCell,
+      "select amount * 2 as doubled from base",
+    );
 
     await page.goto(`${liveApp.baseURL}/notebooks/${notebook.id}`);
     await expect(page.getByText("AutoBreak").first()).toBeVisible({ timeout: 15000 });

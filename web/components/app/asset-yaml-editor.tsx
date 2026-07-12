@@ -56,7 +56,7 @@ import {
 export function AssetYamlEditor({ asset, pipelineId }: { asset: WebAsset; pipelineId: string }) {
   const isSql = useMemo(
     () => asset.path?.toLowerCase().endsWith(".sql") ?? asset.type.toLowerCase().includes("sql"),
-    [asset.path, asset.type]
+    [asset.path, asset.type],
   );
 
   return (
@@ -73,7 +73,15 @@ export function AssetYamlEditor({ asset, pipelineId }: { asset: WebAsset; pipeli
 
 // --- YAML primitives ---
 
-export function Line({ depth = 0, children, className }: { depth?: number; children: React.ReactNode; className?: string }) {
+export function Line({
+  depth = 0,
+  children,
+  className,
+}: {
+  depth?: number;
+  children: React.ReactNode;
+  className?: string;
+}) {
   return (
     <div className={cn("flex items-center gap-1.5", className)} style={{ paddingLeft: depth * 14 }}>
       {children}
@@ -159,7 +167,15 @@ export function InlineSelect({
 
 // AddItem renders a `- ` list row whose value is a small input committed on
 // Enter or via the add button.
-function AddItem({ depth, placeholder, onAdd }: { depth: number; placeholder: string; onAdd: (value: string) => void }) {
+function AddItem({
+  depth,
+  placeholder,
+  onAdd,
+}: {
+  depth: number;
+  placeholder: string;
+  onAdd: (value: string) => void;
+}) {
   const [value, setValue] = useState("");
   const commit = () => {
     const trimmed = value.trim();
@@ -214,7 +230,7 @@ function IdentitySection({ asset, pipelineId }: { asset: WebAsset; pipelineId: s
       Array.from(new Set([...SQL_ASSET_TYPES, ...NON_SQL_ASSET_TYPES, asset.type]))
         .filter((type) => ingestrEnabled || type !== "ingestr" || type === asset.type)
         .sort(),
-    [asset.type, ingestrEnabled]
+    [asset.type, ingestrEnabled],
   );
   const tags = asset.tags ?? [];
 
@@ -239,7 +255,8 @@ function IdentitySection({ asset, pipelineId }: { asset: WebAsset; pipelineId: s
           value={asset.name}
           placeholder="analytics.orders"
           onCommit={(name) => {
-            if (name.trim() && name.trim() !== asset.name) void updateAsset(pipelineId, asset.id, { name: name.trim() });
+            if (name.trim() && name.trim() !== asset.name)
+              void updateAsset(pipelineId, asset.id, { name: name.trim() });
           }}
         />
       </Line>
@@ -282,7 +299,10 @@ function IdentitySection({ asset, pipelineId }: { asset: WebAsset; pipelineId: s
         <Line key={tag} depth={1}>
           <Dash />
           <span className="flex-1 text-foreground">{tag}</span>
-          <RemoveButton label={`Remove tag ${tag}`} onClick={() => setTags(tags.filter((t) => t !== tag))} />
+          <RemoveButton
+            label={`Remove tag ${tag}`}
+            onClick={() => setTags(tags.filter((t) => t !== tag))}
+          />
         </Line>
       ))}
       <AddItem
@@ -296,9 +316,22 @@ function IdentitySection({ asset, pipelineId }: { asset: WebAsset; pipelineId: s
   );
 }
 
-function MaterializationSection({ asset, pipelineId, isSql }: { asset: WebAsset; pipelineId: string; isSql: boolean }) {
-  const { selected, isSlingBacked, selectedValue, options } = materializationEditorState(asset, isSql);
-  const primaryKeys = (asset.columns ?? []).filter((column) => column.primary_key).map((column) => column.name);
+function MaterializationSection({
+  asset,
+  pipelineId,
+  isSql,
+}: {
+  asset: WebAsset;
+  pipelineId: string;
+  isSql: boolean;
+}) {
+  const { selected, isSlingBacked, selectedValue, options } = materializationEditorState(
+    asset,
+    isSql,
+  );
+  const primaryKeys = (asset.columns ?? [])
+    .filter((column) => column.primary_key)
+    .map((column) => column.name);
   const [error, setError] = useState("");
   const save = (input: Parameters<typeof updateAsset>[2]) => {
     setError("");
@@ -326,7 +359,8 @@ function MaterializationSection({ asset, pipelineId, isSql }: { asset: WebAsset;
           }}
         />
       </Line>
-      {selected.value === "incremental" || (isSlingBacked && ["append", "merge"].includes(selected.value)) ? (
+      {selected.value === "incremental" ||
+      (isSlingBacked && ["append", "merge"].includes(selected.value)) ? (
         <Line depth={1}>
           <Key>incremental_key</Key>
           <ColumnCombobox
@@ -359,7 +393,7 @@ function DependsSection({ asset }: { asset: WebAsset }) {
   };
   const presentNames = useMemo(
     () => new Set([...inferred, ...manual].map((dep) => dep.name.toLowerCase())),
-    [inferred, manual]
+    [inferred, manual],
   );
   const hasAny = inferred.length > 0 || manual.length > 0;
 
@@ -368,7 +402,9 @@ function DependsSection({ asset }: { asset: WebAsset }) {
       <Line className="mt-1">
         <Key>depends</Key>
       </Line>
-      {!hasAny ? <Comment depth={1}>none yet — add a dependency below or pick from existing assets</Comment> : null}
+      {!hasAny ? (
+        <Comment depth={1}>none yet — add a dependency below or pick from existing assets</Comment>
+      ) : null}
       {inferred.length > 0 ? <Comment depth={1}>inferred from SQL</Comment> : null}
       {inferred.map((dep) => (
         <Line key={dep.key} depth={1}>
@@ -389,15 +425,24 @@ function DependsSection({ asset }: { asset: WebAsset }) {
           <Dash />
           <span className="flex-1 text-foreground">
             {dep.name}
-            {dep.mode === "symbolic" ? <span className="ml-1 text-muted-foreground">(symbolic)</span> : null}
+            {dep.mode === "symbolic" ? (
+              <span className="ml-1 text-muted-foreground">(symbolic)</span>
+            ) : null}
           </span>
-          <RemoveButton label={`Remove dependency ${dep.name}`} onClick={() => apply({ type: "dependency.manual.remove", dependency_key: dep.key })} />
+          <RemoveButton
+            label={`Remove dependency ${dep.name}`}
+            onClick={() => apply({ type: "dependency.manual.remove", dependency_key: dep.key })}
+          />
         </Line>
       ))}
-      {ignored.length > 0 ? <Comment depth={1}>ignored — restore to let inference manage them again</Comment> : null}
+      {ignored.length > 0 ? (
+        <Comment depth={1}>ignored — restore to let inference manage them again</Comment>
+      ) : null}
       {ignored.map((dep) => (
         <div key={dep.key} className="flex items-center gap-1.5" style={{ paddingLeft: 14 }}>
-          <span className="italic text-emerald-700/80 dark:text-emerald-400/70"># - {dep.value}</span>
+          <span className="italic text-emerald-700/80 dark:text-emerald-400/70">
+            # - {dep.value}
+          </span>
           <button
             type="button"
             className="shrink-0 rounded-sm px-1 text-[10px] text-muted-foreground hover:bg-muted hover:text-foreground"
@@ -407,7 +452,11 @@ function DependsSection({ asset }: { asset: WebAsset }) {
           </button>
         </div>
       ))}
-      <AddItem depth={1} placeholder="add dependency (asset name)" onAdd={(name) => apply({ type: "dependency.manual.add", dependency: { asset: name } })} />
+      <AddItem
+        depth={1}
+        placeholder="add dependency (asset name)"
+        onAdd={(name) => apply({ type: "dependency.manual.add", dependency: { asset: name } })}
+      />
       <AssetDependencyPicker
         assetId={asset.id}
         present={presentNames}
@@ -501,27 +550,40 @@ function ColumnsSection({ asset, isSql }: { asset: WebAsset; isSql: boolean }) {
     void applyAssetTransaction(asset.id, tx);
   };
   const setColumnType = (name: string, type: string) => {
-    const next: WebColumn[] = columns.map((column) => (column.name === name ? { ...column, type } : column));
+    const next: WebColumn[] = columns.map((column) =>
+      column.name === name ? { ...column, type } : column,
+    );
     void updateAssetColumns(asset.id, next);
   };
   const setColumnPrimaryKey = (name: string, primaryKey: boolean) => {
-    const next: WebColumn[] = columns.map((column) => (column.name === name ? { ...column, primary_key: primaryKey } : column));
+    const next: WebColumn[] = columns.map((column) =>
+      column.name === name ? { ...column, primary_key: primaryKey } : column,
+    );
     void updateAssetColumns(asset.id, next);
   };
   const setColumnUpdateOnMerge = (name: string, updateOnMerge: boolean) => {
-    const next: WebColumn[] = columns.map((column) => (column.name === name ? { ...column, update_on_merge: updateOnMerge } : column));
+    const next: WebColumn[] = columns.map((column) =>
+      column.name === name ? { ...column, update_on_merge: updateOnMerge } : column,
+    );
     void updateAssetColumns(asset.id, next);
   };
   const setColumnMergeSQL = (name: string, mergeSQL: string) => {
-    const next: WebColumn[] = columns.map((column) => (column.name === name ? { ...column, merge_sql: mergeSQL } : column));
+    const next: WebColumn[] = columns.map((column) =>
+      column.name === name ? { ...column, merge_sql: mergeSQL } : column,
+    );
     void updateAssetColumns(asset.id, next);
   };
 
-  const existingNames = useMemo(() => new Set(columns.map((column) => column.name.toLowerCase())), [columns]);
+  const existingNames = useMemo(
+    () => new Set(columns.map((column) => column.name.toLowerCase())),
+    [columns],
+  );
   // Columns the user has dropped/ignored — shown commented-out so they can be restored.
   const dropped = useMemo(() => {
     const present = new Set(columns.map((column) => column.name.toLowerCase()));
-    return [...parseAssetProvenance(asset.meta).colDrop].filter((name) => !present.has(name)).sort();
+    return [...parseAssetProvenance(asset.meta).colDrop]
+      .filter((name) => !present.has(name))
+      .sort();
   }, [asset.meta, columns]);
 
   return (
@@ -529,7 +591,12 @@ function ColumnsSection({ asset, isSql }: { asset: WebAsset; isSql: boolean }) {
       <Line className="mt-1">
         <Key>columns</Key>
       </Line>
-      {columns.length === 0 ? <Comment depth={1}>none yet — add one below{isSql ? " or refresh from the SQL definition" : " or import from the warehouse"}</Comment> : null}
+      {columns.length === 0 ? (
+        <Comment depth={1}>
+          none yet — add one below
+          {isSql ? " or refresh from the SQL definition" : " or import from the warehouse"}
+        </Comment>
+      ) : null}
       {columns.map((column) => (
         <ColumnEntry
           key={column.name}
@@ -546,7 +613,9 @@ function ColumnsSection({ asset, isSql }: { asset: WebAsset; isSql: boolean }) {
       {dropped.length > 0 ? <Comment depth={1}>ignored — restore to bring back</Comment> : null}
       {dropped.map((name) => (
         <div key={name} className="flex items-center gap-1.5" style={{ paddingLeft: 14 }}>
-          <span className="italic text-emerald-700/80 dark:text-emerald-400/70"># - name: {name}</span>
+          <span className="italic text-emerald-700/80 dark:text-emerald-400/70">
+            # - name: {name}
+          </span>
           <button
             type="button"
             className="shrink-0 rounded-sm px-1 text-[10px] text-muted-foreground hover:bg-muted hover:text-foreground"
@@ -560,7 +629,8 @@ function ColumnsSection({ asset, isSql }: { asset: WebAsset; isSql: boolean }) {
         depth={1}
         placeholder="add column"
         onAdd={(name) => {
-          if (!existingNames.has(name.toLowerCase())) apply({ type: "column.manual.add", column_def: { name } });
+          if (!existingNames.has(name.toLowerCase()))
+            apply({ type: "column.manual.add", column_def: { name } });
         }}
       />
       {!isSql ? <ImportColumnsButton asset={asset} /> : null}
@@ -579,7 +649,9 @@ function ImportColumnsButton({ asset }: { asset: WebAsset }) {
   const isAPIAsset = asset.type.toLowerCase() === "api";
 
   if (!connection && !isAPIAsset) {
-    return <Comment depth={1}>no connection set — can&apos;t import columns from the warehouse</Comment>;
+    return (
+      <Comment depth={1}>no connection set — can&apos;t import columns from the warehouse</Comment>
+    );
   }
 
   const run = () => {
@@ -595,7 +667,9 @@ function ImportColumnsButton({ asset }: { asset: WebAsset }) {
           await reconcileAssetColumns(asset.id, sample.columns);
           if (sample.warnings.length > 0) setError(sample.warnings.join(" "));
         })
-        .catch((err) => setError(err instanceof Error ? err.message : "Failed to sample the API response"))
+        .catch((err) =>
+          setError(err instanceof Error ? err.message : "Failed to sample the API response"),
+        )
         .finally(() => setLoading(false));
       return;
     }
@@ -610,7 +684,10 @@ function ImportColumnsButton({ asset }: { asset: WebAsset }) {
           setError(response.error);
           return;
         }
-        const inferred: WebColumn[] = (response.columns ?? []).map((column) => ({ name: column.name, type: column.type }));
+        const inferred: WebColumn[] = (response.columns ?? []).map((column) => ({
+          name: column.name,
+          type: column.type,
+        }));
         if (inferred.length === 0) {
           setError(`No columns found for ${table}`);
           return;
@@ -682,13 +759,22 @@ function ColumnEntry({
       </Line>
       <Line depth={3}>
         <Key>type</Key>
-        <InlineText value={column.type ?? ""} placeholder="VARCHAR" onCommit={(type) => { if (type !== (column.type ?? "")) onSetType(column.name, type); }} />
+        <InlineText
+          value={column.type ?? ""}
+          placeholder="VARCHAR"
+          onCommit={(type) => {
+            if (type !== (column.type ?? "")) onSetType(column.name, type);
+          }}
+        />
       </Line>
       {column.primary_key ? (
         <Line depth={3}>
           <Key>primary_key</Key>
           <span className="flex-1 text-foreground">true</span>
-          <RemoveButton label={`Unset primary key on ${column.name}`} onClick={() => onSetPrimaryKey(column.name, false)} />
+          <RemoveButton
+            label={`Unset primary key on ${column.name}`}
+            onClick={() => onSetPrimaryKey(column.name, false)}
+          />
         </Line>
       ) : (
         <Line depth={3}>
@@ -709,7 +795,10 @@ function ColumnEntry({
             <Line depth={3}>
               <Key>update_on_merge</Key>
               <span className="flex-1 text-foreground">true</span>
-              <RemoveButton label={`Do not update ${column.name} on merge`} onClick={() => onSetUpdateOnMerge(column.name, false)} />
+              <RemoveButton
+                label={`Do not update ${column.name} on merge`}
+                onClick={() => onSetUpdateOnMerge(column.name, false)}
+              />
             </Line>
           ) : (
             <Line depth={3}>
@@ -741,8 +830,20 @@ function ColumnEntry({
       {checks.map((check, index) => (
         <Line key={`${check.name}-${index}`} depth={4}>
           <Dash />
-          <span className="flex-1 text-foreground">{check.name}{formatCheckValue(check.value)}</span>
-          <RemoveButton label={`Remove ${check.name} from ${column.name}`} onClick={() => apply({ type: "column.check.remove", column: column.name, check: { name: check.name } })} />
+          <span className="flex-1 text-foreground">
+            {check.name}
+            {formatCheckValue(check.value)}
+          </span>
+          <RemoveButton
+            label={`Remove ${check.name} from ${column.name}`}
+            onClick={() =>
+              apply({
+                type: "column.check.remove",
+                column: column.name,
+                check: { name: check.name },
+              })
+            }
+          />
         </Line>
       ))}
       {adding ? (
@@ -758,9 +859,18 @@ function ColumnEntry({
               autoFocus
               className="font-monaco w-24 min-w-0 rounded-sm bg-transparent px-1 text-foreground outline-none placeholder:text-muted-foreground/60 hover:bg-muted/50 focus:bg-muted/60 focus:ring-1 focus:ring-ring"
               value={checkValue}
-              placeholder={checkName === "accepted_values" ? "a, b, c" : checkName === "pattern" ? "regex" : "number"}
+              placeholder={
+                checkName === "accepted_values"
+                  ? "a, b, c"
+                  : checkName === "pattern"
+                    ? "regex"
+                    : "number"
+              }
               onChange={(event) => setCheckValue(event.target.value)}
-              onKeyDown={(event) => { if (event.key === "Enter") addCheck(); if (event.key === "Escape") setAdding(false); }}
+              onKeyDown={(event) => {
+                if (event.key === "Enter") addCheck();
+                if (event.key === "Escape") setAdding(false);
+              }}
             />
           ) : null}
           <button
@@ -771,7 +881,13 @@ function ColumnEntry({
           >
             <Check className="size-3" />
           </button>
-          <RemoveButton label="Cancel add check" onClick={() => { setAdding(false); setCheckValue(""); }} />
+          <RemoveButton
+            label="Cancel add check"
+            onClick={() => {
+              setAdding(false);
+              setCheckValue("");
+            }}
+          />
         </Line>
       ) : (
         <Line depth={4}>

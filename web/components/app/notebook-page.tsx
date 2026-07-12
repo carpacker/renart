@@ -75,7 +75,11 @@ import {
   updateNotebookDependencies,
   VizKind,
 } from "@/lib/api-notebooks";
-import { selectedEnvironmentAtom, selectedExecutionTimeWindowAtom, workspaceAtom } from "@/lib/atoms/domains/workspace";
+import {
+  selectedEnvironmentAtom,
+  selectedExecutionTimeWindowAtom,
+  workspaceAtom,
+} from "@/lib/atoms/domains/workspace";
 import { addDependency, missingPythonImports } from "@/lib/notebook-python-deps";
 import { WebAsset, WebNotebook, WebNotebookBlock } from "@/lib/types";
 import { cn } from "@/lib/utils";
@@ -113,11 +117,12 @@ export function AppNotebooksIndexPage() {
     <AppPage>
       <PageHeader
         title="Notebooks"
-        actions={(
+        actions={
           <Button size="sm" onClick={() => setNewNotebookOpen(true)}>
-            <Plus className="size-3.5" />New notebook
+            <Plus className="size-3.5" />
+            New notebook
           </Button>
-        )}
+        }
       />
       <div className="min-h-0 flex-1 overflow-auto px-3 pb-3">
         {/* my-auto centers the (usually short) content vertically; long lists
@@ -131,30 +136,40 @@ export function AppNotebooksIndexPage() {
                 Notebooks are folders of SQL cells that run in a disposable local DuckDB session.
               </p>
               <Button size="sm" className="mt-4" onClick={() => setNewNotebookOpen(true)}>
-                <Plus className="size-3.5" />New notebook
+                <Plus className="size-3.5" />
+                New notebook
               </Button>
             </div>
           ) : (
             <div className="mx-auto my-auto w-full max-w-2xl py-6">
               <p className="mb-3 px-1 text-xs text-muted-foreground">
-                Exploratory SQL against a local DuckDB session — promote cells to pipelines when ready.
+                Exploratory SQL against a local DuckDB session — promote cells to pipelines when
+                ready.
               </p>
               <div className="divide-y overflow-hidden rounded-xl border bg-card">
                 {notebooks.map((notebook) => (
                   <button
                     key={notebook.id}
                     type="button"
-                    onClick={() => void navigate({ to: "/notebooks/$notebookId", params: { notebookId: notebook.id } })}
+                    onClick={() =>
+                      void navigate({
+                        to: "/notebooks/$notebookId",
+                        params: { notebookId: notebook.id },
+                      })
+                    }
                     className="flex w-full items-center gap-3 px-4 py-3 text-left transition-colors hover:bg-muted/50"
                   >
                     <BookOpen className="size-4 shrink-0 text-primary" />
                     <span className="min-w-0 flex-1">
                       <span className="block truncate text-sm font-medium">{notebook.title}</span>
-                      <span className="block truncate font-mono text-[11px] text-muted-foreground">{notebook.path}</span>
+                      <span className="block truncate font-mono text-[11px] text-muted-foreground">
+                        {notebook.path}
+                      </span>
                     </span>
                     {notebook.problems?.length ? (
                       <span className="inline-flex shrink-0 items-center gap-1 text-[11px] text-amber-600 dark:text-amber-400">
-                        <AlertTriangle className="size-3" />{notebook.problems.length}
+                        <AlertTriangle className="size-3" />
+                        {notebook.problems.length}
                       </span>
                     ) : null}
                     <span className="shrink-0 text-[11px] text-muted-foreground">
@@ -188,7 +203,7 @@ export function AppNotebookLivePage({ notebookId }: { notebookId: string }) {
 
   const stateNotebook = useMemo(
     () => workspace?.notebooks?.find((candidate) => candidate.id === notebookId) ?? null,
-    [notebookId, workspace?.notebooks]
+    [notebookId, workspace?.notebooks],
   );
   // Mutations return the fresh notebook before the SSE state catches up;
   // prefer the newer of the two.
@@ -235,7 +250,9 @@ export function AppNotebookLivePage({ notebookId }: { notebookId: string }) {
   const [depsOpen, setDepsOpen] = useState(false);
   const [promoting, setPromoting] = useState<WebAsset | null>(null);
   const [autoRecompute, setAutoRecompute] = useState(
-    () => typeof window === "undefined" || window.localStorage.getItem("renart-notebook-autorecompute") !== "off"
+    () =>
+      typeof window === "undefined" ||
+      window.localStorage.getItem("renart-notebook-autorecompute") !== "off",
   );
   useEffect(() => {
     window.localStorage.setItem("renart-notebook-autorecompute", autoRecompute ? "on" : "off");
@@ -280,7 +297,12 @@ export function AppNotebookLivePage({ notebookId }: { notebookId: string }) {
   // Apply a runtime snapshot/event from the server: the authoritative stale,
   // auto-pending, and running sets, plus any result deltas.
   const applyRuntime = useCallback(
-    (runtime: { stale: string[]; auto_pending: string[]; running?: string[]; results?: Record<string, NotebookCellRunResult> }) => {
+    (runtime: {
+      stale: string[];
+      auto_pending: string[];
+      running?: string[];
+      results?: Record<string, NotebookCellRunResult>;
+    }) => {
       setStaleCells(new Set(runtime.stale));
       setAutoPending(new Set(runtime.auto_pending));
       if (runtime.running) {
@@ -290,7 +312,7 @@ export function AppNotebookLivePage({ notebookId }: { notebookId: string }) {
         setResults((current) => ({ ...current, ...runtime.results }));
       }
     },
-    []
+    [],
   );
 
   // In-flight cell saves, keyed by cell id. A run must wait for these to land
@@ -309,7 +331,11 @@ export function AppNotebookLivePage({ notebookId }: { notebookId: string }) {
         try {
           // Saving marks the cell + descendants stale on the server, which then
           // drives auto-recompute and pushes the new state over SSE.
-          const updated = await updateNotebookCell(notebookId, cellId, joinCellContent(header, body));
+          const updated = await updateNotebookCell(
+            notebookId,
+            cellId,
+            joinCellContent(header, body),
+          );
           setMutated(updated);
         } catch (error) {
           setActionError(String(error));
@@ -324,7 +350,7 @@ export function AppNotebookLivePage({ notebookId }: { notebookId: string }) {
       pendingSavesRef.current.set(cellId, promise);
       return promise;
     },
-    [notebookId]
+    [notebookId],
   );
 
   const flushPendingSaves = useCallback(async () => {
@@ -339,7 +365,10 @@ export function AppNotebookLivePage({ notebookId }: { notebookId: string }) {
   // the running DuckDB statement.
   const runAbortRef = useRef<AbortController | null>(null);
   const runRequest = useCallback(
-    async (input: { all?: boolean; from?: string; cells?: string[]; refresh_imports?: boolean }, targetIds: string[]) => {
+    async (
+      input: { all?: boolean; from?: string; cells?: string[]; refresh_imports?: boolean },
+      targetIds: string[],
+    ) => {
       const controller = new AbortController();
       runAbortRef.current = controller;
       setBusy(true);
@@ -349,13 +378,17 @@ export function AppNotebookLivePage({ notebookId }: { notebookId: string }) {
         // Make sure any unsaved cell edits have landed before the backend
         // reloads the notebook, so the run sees the latest SQL and directives.
         await flushPendingSaves();
-        const response = await runNotebook(notebookId, {
-          ...input,
-          environment: selectedEnvironment,
-          // Render Jinja against the same execution window the editor previews.
-          start_date: selectedExecutionTimeWindow?.start,
-          end_date: selectedExecutionTimeWindow?.end,
-        }, controller.signal);
+        const response = await runNotebook(
+          notebookId,
+          {
+            ...input,
+            environment: selectedEnvironment,
+            // Render Jinja against the same execution window the editor previews.
+            start_date: selectedExecutionTimeWindow?.start,
+            end_date: selectedExecutionTimeWindow?.end,
+          },
+          controller.signal,
+        );
         applyResults(response.results);
       } catch (error) {
         if (!controller.signal.aborted) {
@@ -371,7 +404,7 @@ export function AppNotebookLivePage({ notebookId }: { notebookId: string }) {
         setRunningCells(new Set());
       }
     },
-    [applyResults, flushPendingSaves, notebookId, selectedEnvironment, selectedExecutionTimeWindow]
+    [applyResults, flushPendingSaves, notebookId, selectedEnvironment, selectedExecutionTimeWindow],
   );
 
   // Stop both a manual run (abort the request → cancels the server context and
@@ -383,7 +416,7 @@ export function AppNotebookLivePage({ notebookId }: { notebookId: string }) {
 
   const allCellIds = useMemo(
     () => (notebook?.cells ?? []).map((cell) => cell.cell_id ?? "").filter(Boolean),
-    [notebook?.cells]
+    [notebook?.cells],
   );
 
   // Seed from the server's current runtime, then follow it live: the server
@@ -440,18 +473,18 @@ export function AppNotebookLivePage({ notebookId }: { notebookId: string }) {
   const dependencies = useMemo(() => notebook?.dependencies ?? [], [notebook?.dependencies]);
   const installedModules = useMemo(
     () => notebook?.installed_modules ?? [],
-    [notebook?.installed_modules]
+    [notebook?.installed_modules],
   );
   const hasPythonCell = useMemo(
     () =>
       (notebook?.cells ?? []).some(
-        (cell) => cell.type?.toLowerCase() === "python" || cell.path.toLowerCase().endsWith(".py")
+        (cell) => cell.type?.toLowerCase() === "python" || cell.path.toLowerCase().endsWith(".py"),
       ),
-    [notebook?.cells]
+    [notebook?.cells],
   );
   const updateDependencies = useCallback(
     (next: string[]) => mutate(() => updateNotebookDependencies(notebookId, next)),
-    [mutate, notebookId]
+    [mutate, notebookId],
   );
 
   // Ctrl+Click / F12 targets: pipeline assets open in the build page, sibling
@@ -463,7 +496,7 @@ export function AppNotebookLivePage({ notebookId }: { notebookId: string }) {
         params: { pipelineId, assetId },
       });
     },
-    [navigate]
+    [navigate],
   );
   const goToCell = useCallback((cellId: string) => {
     document
@@ -481,13 +514,18 @@ export function AppNotebookLivePage({ notebookId }: { notebookId: string }) {
       setActionError("");
       setPromoting(cell);
     },
-    [pipelines]
+    [pipelines],
   );
 
   const runPromote = useCallback(
     async (
       cell: WebAsset,
-      input: { pipeline_id: string; target_name: string; include_upstream: boolean; include_downstream: boolean }
+      input: {
+        pipeline_id: string;
+        target_name: string;
+        include_upstream: boolean;
+        include_downstream: boolean;
+      },
     ) => {
       setActionError("");
       try {
@@ -495,14 +533,15 @@ export function AppNotebookLivePage({ notebookId }: { notebookId: string }) {
         setMutated(response.notebook);
         setPromoting(null);
         if (response.dialect_warning) {
-          const where = response.promoted_count > 1 ? `${response.promoted_count} assets` : response.asset_path;
+          const where =
+            response.promoted_count > 1 ? `${response.promoted_count} assets` : response.asset_path;
           setActionError(`Promoted ${where}. ${response.dialect_warning}`);
         }
       } catch (error) {
         setActionError(String(error));
       }
     },
-    [notebookId]
+    [notebookId],
   );
 
   if (!notebook) {
@@ -523,40 +562,66 @@ export function AppNotebookLivePage({ notebookId }: { notebookId: string }) {
 
   return (
     <AppPage>
-      <div className={cn("relative z-10 shrink-0 transition-shadow", notebookScrolled && "shadow-sm")}>
+      <div
+        className={cn("relative z-10 shrink-0 transition-shadow", notebookScrolled && "shadow-sm")}
+      >
         <PageHeader
           title={notebook.title}
           subtitle={`Notebook · ${notebook.path} · runs in a local DuckDB session`}
-          actions={(
+          actions={
             <div className="flex items-center gap-2">
               {staleCount > 0 ? (
                 <div className="flex items-center gap-1">
-                  <Badge variant="outline" className="border-amber-500/30 bg-amber-500/10 text-amber-700 dark:text-amber-200">
+                  <Badge
+                    variant="outline"
+                    className="border-amber-500/30 bg-amber-500/10 text-amber-700 dark:text-amber-200"
+                  >
                     <AlertTriangle className="size-3" />
                     {staleCount} stale
                   </Badge>
-                  <Button size="sm" variant="outline" aria-label="Recompute" disabled={busy} onClick={() => void runRequest({ cells: manualStaleCells }, manualStaleCells)}>
-                    <RotateCw className="size-3.5" /><span className="hidden sm:inline">Recompute</span>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    aria-label="Recompute"
+                    disabled={busy}
+                    onClick={() => void runRequest({ cells: manualStaleCells }, manualStaleCells)}
+                  >
+                    <RotateCw className="size-3.5" />
+                    <span className="hidden sm:inline">Recompute</span>
                   </Button>
                 </div>
               ) : null}
               {hasPythonCell ? (
-                <Button variant="outline" size="sm" aria-label="Dependencies" onClick={() => setDepsOpen(true)}>
-                  <Package className="size-3.5" /><span className="hidden sm:inline">Dependencies</span>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  aria-label="Dependencies"
+                  onClick={() => setDepsOpen(true)}
+                >
+                  <Package className="size-3.5" />
+                  <span className="hidden sm:inline">Dependencies</span>
                 </Button>
               ) : null}
               {busy || runningCells.size > 0 ? (
                 <Button size="sm" variant="outline" onClick={cancelRun}>
-                  <Square className="size-3.5 fill-current" />Stop
+                  <Square className="size-3.5 fill-current" />
+                  Stop
                 </Button>
               ) : (
-                <Button size="sm" disabled={allCellIds.length === 0} onClick={() => void runRequest({ all: true }, allCellIds)}>
-                  <Play className="size-3.5" />Run all
+                <Button
+                  size="sm"
+                  disabled={allCellIds.length === 0}
+                  onClick={() => void runRequest({ all: true }, allCellIds)}
+                >
+                  <Play className="size-3.5" />
+                  Run all
                 </Button>
               )}
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
-                  <Button variant="outline" size="icon-sm"><MoreHorizontal className="size-3.5" /></Button>
+                  <Button variant="outline" size="icon-sm">
+                    <MoreHorizontal className="size-3.5" />
+                  </Button>
                 </DropdownMenuTrigger>
                 <DropdownMenuContent align="end" className="w-64">
                   <DropdownMenuCheckboxItem
@@ -567,18 +632,27 @@ export function AppNotebookLivePage({ notebookId }: { notebookId: string }) {
                     Auto-recompute stale cells
                   </DropdownMenuCheckboxItem>
                   <DropdownMenuSeparator />
-                  <DropdownMenuItem disabled={busy} onSelect={() => void runRequest({ all: true, refresh_imports: true }, allCellIds)}>
-                    <RotateCw className="size-4" />Run all, refresh imports
+                  <DropdownMenuItem
+                    disabled={busy}
+                    onSelect={() =>
+                      void runRequest({ all: true, refresh_imports: true }, allCellIds)
+                    }
+                  >
+                    <RotateCw className="size-4" />
+                    Run all, refresh imports
                   </DropdownMenuItem>
                   <DropdownMenuItem
                     onSelect={() => {
-                      void closeNotebookSession(notebookId).then(() => {
-                        setResults({});
-                        setStaleCells(new Set(allCellIds));
-                      }).catch((error) => setActionError(String(error)));
+                      void closeNotebookSession(notebookId)
+                        .then(() => {
+                          setResults({});
+                          setStaleCells(new Set(allCellIds));
+                        })
+                        .catch((error) => setActionError(String(error)));
                     }}
                   >
-                    <Database className="size-4" />Reset session (delete local DB)
+                    <Database className="size-4" />
+                    Reset session (delete local DB)
                   </DropdownMenuItem>
                   <DropdownMenuSeparator />
                   <DropdownMenuItem
@@ -592,12 +666,13 @@ export function AppNotebookLivePage({ notebookId }: { notebookId: string }) {
                         .catch((error) => setActionError(String(error)));
                     }}
                   >
-                    <Trash2 className="size-4" />Delete notebook
+                    <Trash2 className="size-4" />
+                    Delete notebook
                   </DropdownMenuItem>
                 </DropdownMenuContent>
               </DropdownMenu>
             </div>
-          )}
+          }
         />
       </div>
 
@@ -622,18 +697,22 @@ export function AppNotebookLivePage({ notebookId }: { notebookId: string }) {
 
       {notebook.problems?.length ? (
         <div className="mx-3 mb-2 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-800 dark:border-red-500/25 dark:bg-red-500/10 dark:text-red-200">
-          {notebook.problems.map((problem) => <div key={problem}>{problem}</div>)}
+          {notebook.problems.map((problem) => (
+            <div key={problem}>{problem}</div>
+          ))}
         </div>
       ) : null}
       {actionError ? (
-        <div className="mx-3 mb-2 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-800 dark:border-red-500/25 dark:bg-red-500/10 dark:text-red-200">{actionError}</div>
+        <div className="mx-3 mb-2 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-800 dark:border-red-500/25 dark:bg-red-500/10 dark:text-red-200">
+          {actionError}
+        </div>
       ) : null}
       <ScrollArea
         className="min-h-0 flex-1"
         viewportClassName="px-3 pb-3"
         onViewportScroll={(event) => {
           const nextScrolled = event.currentTarget.scrollTop > 0;
-          setNotebookScrolled((current) => current === nextScrolled ? current : nextScrolled);
+          setNotebookScrolled((current) => (current === nextScrolled ? current : nextScrolled));
         }}
       >
         <div className="mx-auto flex max-w-5xl flex-col gap-3">
@@ -646,34 +725,42 @@ export function AppNotebookLivePage({ notebookId }: { notebookId: string }) {
                 }
                 return (
                   <div key={block.cell} data-notebook-cell-id={block.cell}>
-                  <NotebookCellCard
-                    cell={cell}
-                    cells={notebook.cells}
-                    dependencies={dependencies}
-                    installedModules={installedModules}
-                    onAddDependency={(pkg) => updateDependencies(addDependency(dependencies, pkg))}
-                    resultColumnsByCell={resultColumnsByCell}
-                    result={results[block.cell]}
-                    stale={staleCells.has(block.cell)}
-                    running={runningCells.has(block.cell)}
-                    busy={busy}
-                    onRun={() => void runRequest({ cells: [block.cell ?? ""] }, [block.cell ?? ""])}
-                    onCancel={cancelRun}
-                    onRunFromHere={() => void runRequest({ from: block.cell }, [block.cell ?? ""])}
-                    onDelete={() => {
-                      if (!window.confirm(`Delete cell "${cell.name}"?`)) {
-                        return;
+                    <NotebookCellCard
+                      cell={cell}
+                      cells={notebook.cells}
+                      dependencies={dependencies}
+                      installedModules={installedModules}
+                      onAddDependency={(pkg) =>
+                        updateDependencies(addDependency(dependencies, pkg))
                       }
-                      void mutate(() => deleteNotebookCell(notebookId, block.cell ?? ""));
-                    }}
-                    onRename={(name) => mutate(() => renameNotebookCell(notebookId, block.cell ?? "", name))}
-                    onPromote={() => void promoteCell(cell)}
-                    onSaveBody={(body) => saveCellBody(cell, body)}
-                    autoCommit={autoRecompute}
-                    pendingAuto={autoPending.has(block.cell ?? "")}
-                    onGoToAsset={goToAsset}
-                    onGoToCell={goToCell}
-                  />
+                      resultColumnsByCell={resultColumnsByCell}
+                      result={results[block.cell]}
+                      stale={staleCells.has(block.cell)}
+                      running={runningCells.has(block.cell)}
+                      busy={busy}
+                      onRun={() =>
+                        void runRequest({ cells: [block.cell ?? ""] }, [block.cell ?? ""])
+                      }
+                      onCancel={cancelRun}
+                      onRunFromHere={() =>
+                        void runRequest({ from: block.cell }, [block.cell ?? ""])
+                      }
+                      onDelete={() => {
+                        if (!window.confirm(`Delete cell "${cell.name}"?`)) {
+                          return;
+                        }
+                        void mutate(() => deleteNotebookCell(notebookId, block.cell ?? ""));
+                      }}
+                      onRename={(name) =>
+                        mutate(() => renameNotebookCell(notebookId, block.cell ?? "", name))
+                      }
+                      onPromote={() => void promoteCell(cell)}
+                      onSaveBody={(body) => saveCellBody(cell, body)}
+                      autoCommit={autoRecompute}
+                      pendingAuto={autoPending.has(block.cell ?? "")}
+                      onGoToAsset={goToAsset}
+                      onGoToCell={goToCell}
+                    />
                   </div>
                 );
               })()
@@ -682,25 +769,40 @@ export function AppNotebookLivePage({ notebookId }: { notebookId: string }) {
                 key={`md-${index}`}
                 markdown={block.markdown ?? ""}
                 onSave={(markdown) => {
-                  const blocks: WebNotebookBlock[] = notebook.blocks.map((candidate, candidateIndex) =>
-                    candidateIndex === index ? { markdown } : candidate
+                  const blocks: WebNotebookBlock[] = notebook.blocks.map(
+                    (candidate, candidateIndex) =>
+                      candidateIndex === index ? { markdown } : candidate,
                   );
                   void mutate(() => updateNotebookBlocks(notebookId, blocks));
                 }}
                 onDelete={() => {
-                  const blocks = notebook.blocks.filter((_, candidateIndex) => candidateIndex !== index);
+                  const blocks = notebook.blocks.filter(
+                    (_, candidateIndex) => candidateIndex !== index,
+                  );
                   void mutate(() => updateNotebookBlocks(notebookId, blocks));
                 }}
               />
-            )
+            ),
           )}
 
           <div className="flex gap-2">
-            <Button variant="outline" size="sm" onClick={() => void mutate(() => createNotebookCell(notebookId))}>
-              <Plus className="size-3.5" />SQL cell
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => void mutate(() => createNotebookCell(notebookId))}
+            >
+              <Plus className="size-3.5" />
+              SQL cell
             </Button>
-            <Button variant="outline" size="sm" onClick={() => void mutate(() => createNotebookCell(notebookId, { language: "python" }))}>
-              <Plus className="size-3.5" />Python cell
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() =>
+                void mutate(() => createNotebookCell(notebookId, { language: "python" }))
+              }
+            >
+              <Plus className="size-3.5" />
+              Python cell
             </Button>
             <Button
               variant="outline"
@@ -710,7 +812,8 @@ export function AppNotebookLivePage({ notebookId }: { notebookId: string }) {
                 void mutate(() => updateNotebookBlocks(notebookId, blocks));
               }}
             >
-              <Plus className="size-3.5" />Markdown
+              <Plus className="size-3.5" />
+              Markdown
             </Button>
           </div>
         </div>
@@ -778,7 +881,7 @@ function NotebookCellCard({
   const selectedEnvironment = useAtomValue(selectedEnvironmentAtom);
   const schemaTables = useMemo(
     () => buildNotebookSchemaTables(workspace, cells, cell, resultColumnsByCell),
-    [workspace, cells, cell, resultColumnsByCell]
+    [workspace, cells, cell, resultColumnsByCell],
   );
   const isPythonCell =
     cell.type?.toLowerCase() === "python" || cell.path.toLowerCase().endsWith(".py");
@@ -787,7 +890,7 @@ function NotebookCellCard({
 
   const missingDeps = useMemo(
     () => (isPythonCell ? missingPythonImports(draft, dependencies, installedModules) : []),
-    [isPythonCell, draft, dependencies, installedModules]
+    [isPythonCell, draft, dependencies, installedModules],
   );
   const lastSavedRef = useRef(body);
   const savingBodyRef = useRef<string | null>(null);
@@ -913,20 +1016,39 @@ function NotebookCellCard({
             {cell.name}
           </button>
         )}
-        <span className="rounded bg-muted px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground">{isPythonCell ? "python" : "sql"}</span>
+        <span className="rounded bg-muted px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground">
+          {isPythonCell ? "python" : "sql"}
+        </span>
         {result?.materialized === "table" ? (
-          <span className="rounded bg-sky-50 px-1.5 py-0.5 text-[10px] text-sky-700 dark:bg-sky-500/15 dark:text-sky-300">table</span>
+          <span className="rounded bg-sky-50 px-1.5 py-0.5 text-[10px] text-sky-700 dark:bg-sky-500/15 dark:text-sky-300">
+            table
+          </span>
         ) : null}
         {result?.imports?.map((imported) => (
-          <span key={imported.ref} title={`imported ${imported.imported_at}${imported.complete ? "" : " · truncated"}`} className="rounded bg-muted px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground">
-            {imported.ref}{imported.complete ? "" : " ⚠"}
+          <span
+            key={imported.ref}
+            title={`imported ${imported.imported_at}${imported.complete ? "" : " · truncated"}`}
+            className="rounded bg-muted px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground"
+          >
+            {imported.ref}
+            {imported.complete ? "" : " ⚠"}
           </span>
         ))}
         <span className="ml-auto text-[11px] text-muted-foreground">
-          {running ? "running…" : result?.status === "ok" ? `${result.total_rows} rows · ${result.duration_ms} ms` : null}
+          {running
+            ? "running…"
+            : result?.status === "ok"
+              ? `${result.total_rows} rows · ${result.duration_ms} ms`
+              : null}
         </span>
         {running ? (
-          <Button variant="ghost" size="icon-sm" className="group" onClick={onCancel} title="Stop cell">
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            className="group"
+            onClick={onCancel}
+            title="Stop cell"
+          >
             <Loader2 className="size-3.5 animate-spin group-hover:hidden" />
             <Square className="hidden size-3.5 fill-current group-hover:block" />
           </Button>
@@ -937,14 +1059,28 @@ function NotebookCellCard({
         )}
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
-            <Button variant="ghost" size="icon-sm" aria-label="Cell actions"><MoreHorizontal className="size-3.5" /></Button>
+            <Button variant="ghost" size="icon-sm" aria-label="Cell actions">
+              <MoreHorizontal className="size-3.5" />
+            </Button>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end" className="w-52">
-            <DropdownMenuItem disabled={busy} onSelect={onRunFromHere}><Play className="size-4" />Run from here</DropdownMenuItem>
-            <DropdownMenuItem onSelect={() => setRenaming(true)}><Pencil className="size-4" />Rename cell</DropdownMenuItem>
-            <DropdownMenuItem onSelect={onPromote}><ArrowUpFromLine className="size-4" />Promote to pipeline</DropdownMenuItem>
+            <DropdownMenuItem disabled={busy} onSelect={onRunFromHere}>
+              <Play className="size-4" />
+              Run from here
+            </DropdownMenuItem>
+            <DropdownMenuItem onSelect={() => setRenaming(true)}>
+              <Pencil className="size-4" />
+              Rename cell
+            </DropdownMenuItem>
+            <DropdownMenuItem onSelect={onPromote}>
+              <ArrowUpFromLine className="size-4" />
+              Promote to pipeline
+            </DropdownMenuItem>
             <DropdownMenuSeparator />
-            <DropdownMenuItem variant="destructive" onSelect={onDelete}><Trash2 className="size-4" />Delete cell</DropdownMenuItem>
+            <DropdownMenuItem variant="destructive" onSelect={onDelete}>
+              <Trash2 className="size-4" />
+              Delete cell
+            </DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>
       </DelimitedCardHeader>
@@ -964,10 +1100,14 @@ function NotebookCellCard({
         />
         <MissingPythonDepsBanner missingImports={missingDeps} onAddDependency={onAddDependency} />
         {result?.status === "error" ? (
-          <div className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 font-mono text-xs text-red-800 dark:border-red-500/25 dark:bg-red-500/10 dark:text-red-200">{result.error}</div>
+          <div className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 font-mono text-xs text-red-800 dark:border-red-500/25 dark:bg-red-500/10 dark:text-red-200">
+            {result.error}
+          </div>
         ) : null}
         {result?.status === "blocked" ? (
-          <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800 dark:border-amber-500/25 dark:bg-amber-500/10 dark:text-amber-200">{result.error}</div>
+          <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800 dark:border-amber-500/25 dark:bg-amber-500/10 dark:text-amber-200">
+            {result.error}
+          </div>
         ) : null}
         {result?.logs ? (
           <NotebookCellLogs logs={result.logs} isError={result.status === "error"} />
@@ -981,7 +1121,7 @@ function NotebookCellCard({
                   "rounded border px-2 py-1 text-[11px]",
                   diagnostic.severity === "error"
                     ? "border-red-200 bg-red-50 text-red-700 dark:border-red-500/25 dark:bg-red-500/10 dark:text-red-300"
-                    : "border-amber-200 bg-amber-50 text-amber-700 dark:border-amber-500/25 dark:bg-amber-500/10 dark:text-amber-300"
+                    : "border-amber-200 bg-amber-50 text-amber-700 dark:border-amber-500/25 dark:bg-amber-500/10 dark:text-amber-300",
                 )}
               >
                 @viz: {diagnostic.message}
@@ -1017,9 +1157,13 @@ function NotebookCellCard({
               <SimpleTable
                 viewportClassName="max-h-72"
                 columns={result.columns}
-                rows={result.rows.slice(0, RESULT_DISPLAY_CAP).map((row) =>
-                  row.map((value) => (value === null || value === undefined ? "" : String(value)))
-                )}
+                rows={result.rows
+                  .slice(0, RESULT_DISPLAY_CAP)
+                  .map((row) =>
+                    row.map((value) =>
+                      value === null || value === undefined ? "" : String(value),
+                    ),
+                  )}
               />
               {result.rows.length > rowsShown || result.total_rows > result.rows.length ? (
                 <div className="border-t bg-muted/30 px-2 py-1 text-[11px] text-muted-foreground">
@@ -1096,10 +1240,12 @@ function NotebookDependenciesDialog({
       <DialogContent className="max-w-lg">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
-            <Package className="size-4 text-primary" />Python dependencies
+            <Package className="size-4 text-primary" />
+            Python dependencies
           </DialogTitle>
           <DialogDescription>
-            One package per line. Managed with uv in the notebook&apos;s pyproject.toml and installed on the next run.
+            One package per line. Managed with uv in the notebook&apos;s pyproject.toml and
+            installed on the next run.
           </DialogDescription>
         </DialogHeader>
         <textarea
@@ -1124,11 +1270,17 @@ function NotebookDependenciesDialog({
               size="sm"
               disabled={!dirty}
               onClick={() => {
-                onSave(draft.split("\n").map((line) => line.trim()).filter(Boolean));
+                onSave(
+                  draft
+                    .split("\n")
+                    .map((line) => line.trim())
+                    .filter(Boolean),
+                );
                 onOpenChange(false);
               }}
             >
-              <Check className="size-3.5" />Save
+              <Check className="size-3.5" />
+              Save
             </Button>
           </div>
         </DialogFooter>
@@ -1150,7 +1302,12 @@ function PromoteCellDialog({
   onOpenChange: (open: boolean) => void;
   onPromote: (
     cell: WebAsset,
-    input: { pipeline_id: string; target_name: string; include_upstream: boolean; include_downstream: boolean }
+    input: {
+      pipeline_id: string;
+      target_name: string;
+      include_upstream: boolean;
+      include_downstream: boolean;
+    },
   ) => void;
 }) {
   const [pipelineId, setPipelineId] = useState("");
@@ -1169,7 +1326,9 @@ function PromoteCellDialog({
     const down = cells.some(
       (candidate) =>
         candidate.cell_id !== cell.cell_id &&
-        (candidate.upstreams ?? []).some((upstream) => upstream.toLowerCase() === cell.name.toLowerCase())
+        (candidate.upstreams ?? []).some(
+          (upstream) => upstream.toLowerCase() === cell.name.toLowerCase(),
+        ),
     );
     return { hasUpstream: up, hasDownstream: down };
   }, [cell, cells]);
@@ -1192,11 +1351,13 @@ function PromoteCellDialog({
       <DialogContent className="max-w-lg">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
-            <ArrowUpFromLine className="size-4 text-primary" />Promote to pipeline
+            <ArrowUpFromLine className="size-4 text-primary" />
+            Promote to pipeline
           </DialogTitle>
           <DialogDescription>
-            Move {cell ? <span className="font-mono">{cell.name}</span> : "this cell"} into a pipeline as a
-            real asset. Cells left behind that referenced it are rewritten to read the new asset.
+            Move {cell ? <span className="font-mono">{cell.name}</span> : "this cell"} into a
+            pipeline as a real asset. Cells left behind that referenced it are rewritten to read the
+            new asset.
           </DialogDescription>
         </DialogHeader>
 
@@ -1234,7 +1395,9 @@ function PromoteCellDialog({
 
           {hasUpstream || hasDownstream ? (
             <div className="space-y-2 rounded-lg border bg-muted/30 p-3">
-              <div className="text-[11px] font-medium text-muted-foreground">Also promote connected cells</div>
+              <div className="text-[11px] font-medium text-muted-foreground">
+                Also promote connected cells
+              </div>
               {hasUpstream ? (
                 <label className="flex items-center gap-2 text-sm">
                   <Checkbox
@@ -1254,7 +1417,8 @@ function PromoteCellDialog({
                 </label>
               ) : null}
               <p className="text-[11px] text-muted-foreground">
-                Connected cells are named in the same schema (e.g. <span className="font-mono">marts.&lt;cell&gt;</span>).
+                Connected cells are named in the same schema (e.g.{" "}
+                <span className="font-mono">marts.&lt;cell&gt;</span>).
               </p>
             </div>
           ) : null}
@@ -1279,7 +1443,8 @@ function PromoteCellDialog({
               });
             }}
           >
-            <ArrowUpFromLine className="size-3.5" />Promote
+            <ArrowUpFromLine className="size-3.5" />
+            Promote
           </Button>
         </DialogFooter>
       </DialogContent>
@@ -1309,7 +1474,15 @@ function MarkdownBlockCard({
         <DelimitedCardTitle>Markdown</DelimitedCardTitle>
         <span className="ml-auto" />
         {editing ? (
-          <Button variant="ghost" size="icon-sm" title="Save" onClick={() => { setEditing(false); if (draft !== markdown) onSave(draft); }}>
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            title="Save"
+            onClick={() => {
+              setEditing(false);
+              if (draft !== markdown) onSave(draft);
+            }}
+          >
             <Check className="size-3.5" />
           </Button>
         ) : (
@@ -1317,7 +1490,9 @@ function MarkdownBlockCard({
             <Pencil className="size-3.5" />
           </Button>
         )}
-        <Button variant="ghost" size="icon-sm" title="Delete block" onClick={onDelete}><Trash2 className="size-3.5" /></Button>
+        <Button variant="ghost" size="icon-sm" title="Delete block" onClick={onDelete}>
+          <Trash2 className="size-3.5" />
+        </Button>
       </DelimitedCardHeader>
       <DelimitedCardContent>
         {editing ? (

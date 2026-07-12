@@ -50,7 +50,17 @@ import {
   Trash2,
   XCircle,
 } from "lucide-react";
-import { ComponentType, ReactNode, createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
+import {
+  ComponentType,
+  ReactNode,
+  createContext,
+  useCallback,
+  useContext,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 
 import { Badge } from "@/components/ui/badge";
 import { ButtonGroup } from "@/components/ui/button-group";
@@ -64,7 +74,14 @@ import {
 } from "@/components/ui/breadcrumb";
 import { Button } from "@/components/ui/button";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
-import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -81,20 +98,12 @@ import {
 } from "@/components/ui/delimited-card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import {
-  Field,
-  FieldDescription,
-  FieldGroup,
-  FieldLabel,
-} from "@/components/ui/field";
+import { Field, FieldDescription, FieldGroup, FieldLabel } from "@/components/ui/field";
 import { Switch } from "@/components/ui/switch";
 import { createAsset, deleteAsset } from "@/lib/api-assets";
 import { createPipeline, getPipelineConfig, updatePipelineConfig } from "@/lib/api-pipelines";
 import { buildCreateAssetInput, buildSuggestedAssetName } from "@/lib/workspace-shell-helpers";
-import {
-  API_ASSET_TEMPLATES,
-  type APIAssetTemplateId,
-} from "@/lib/api-asset-templates";
+import { API_ASSET_TEMPLATES, type APIAssetTemplateId } from "@/lib/api-asset-templates";
 import type { NewAssetKind } from "@/components/new-asset-node";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
@@ -121,7 +130,15 @@ import {
 } from "@/lib/atoms/domains/workspace";
 import { renderJinjaAsset } from "@/lib/jinja-intellisense";
 import { resolveConnection } from "@/lib/sql-schema";
-import type { AssetInspectResponse, SqlQueryResponse, WebAsset, WebPipeline, PipelineConfigConnection, PipelineConfigVariable, UpdatePipelineConfigRequest } from "@/lib/types";
+import type {
+  AssetInspectResponse,
+  SqlQueryResponse,
+  WebAsset,
+  WebPipeline,
+  PipelineConfigConnection,
+  PipelineConfigVariable,
+  UpdatePipelineConfigRequest,
+} from "@/lib/types";
 import { cn } from "@/lib/utils";
 import { copyTextToClipboard } from "@/lib/copy-to-clipboard";
 import { useAssetResults } from "@/hooks/use-asset-results";
@@ -138,7 +155,10 @@ import { useIsMobile } from "@/hooks/use-mobile";
 import { usePipelineDeploy, type PipelineDeployState } from "@/hooks/use-pipeline-deploy";
 import { isStaleStatus, usePipelineStaleness } from "@/hooks/use-pipeline-staleness";
 import type { MaterializeScope } from "@/lib/materialize-scope";
-import { labelForAppMaterializationState, useAppAssetMaterializationStatus } from "@/hooks/use-app-asset-materialization-status";
+import {
+  labelForAppMaterializationState,
+  useAppAssetMaterializationStatus,
+} from "@/hooks/use-app-asset-materialization-status";
 
 import {
   assets,
@@ -168,13 +188,37 @@ import { AssetYamlEditor } from "./asset-yaml-editor";
 import { ErrorBoundary } from "@/components/ui/error-boundary";
 import { SqlPreview } from "./sql-preview";
 import { LoadParametersEditor } from "./load-parameters-editor";
-import { AppLineageCanvas, assetDisplayName, assetGroupName, assetNameParts, type AppLineageCanvasAsset } from "./lineage-canvas";
+import {
+  AppLineageCanvas,
+  assetDisplayName,
+  assetGroupName,
+  assetNameParts,
+  type AppLineageCanvasAsset,
+} from "./lineage-canvas";
 import { MultiValueInput } from "./multi-value-input";
 import { NewNotebookDialog } from "./new-notebook-dialog";
-import { AppPage, AppPanel, SeverityIcon, SimpleTable, StalenessBadge, StatusPill, stalenessDotClassName, stalenessLabel } from "./app-primitives";
+import {
+  AppPage,
+  AppPanel,
+  SeverityIcon,
+  SimpleTable,
+  StalenessBadge,
+  StatusPill,
+  stalenessDotClassName,
+  stalenessLabel,
+} from "./app-primitives";
 
 export type AppBuildView = "canvas" | "split" | "code";
-export type AppResultTab = "inspect" | "materialize" | "query" | "typecheck" | "tests" | "diagnostics" | "metadata" | "shell" | "history";
+export type AppResultTab =
+  | "inspect"
+  | "materialize"
+  | "query"
+  | "typecheck"
+  | "tests"
+  | "diagnostics"
+  | "metadata"
+  | "shell"
+  | "history";
 export type AppEditorMode = "asset" | "adhoc";
 
 export type AppBuildSearch = {
@@ -183,14 +227,28 @@ export type AppBuildSearch = {
   variant?: string;
 };
 
-const resultTabs: AppResultTab[] = ["inspect", "materialize", "query", "typecheck", "tests", "diagnostics", "metadata", "shell", "history"];
+const resultTabs: AppResultTab[] = [
+  "inspect",
+  "materialize",
+  "query",
+  "typecheck",
+  "tests",
+  "diagnostics",
+  "metadata",
+  "shell",
+  "history",
+];
 const editorModes: AppEditorMode[] = ["asset", "adhoc"];
 const variantIds = pipelineVariants.map((variant) => variant.id);
 
 export function normalizeAppBuildSearch(search: Record<string, unknown>): AppBuildSearch {
   return {
-    result: resultTabs.includes(search.result as AppResultTab) ? (search.result as AppResultTab) : undefined,
-    editor: editorModes.includes(search.editor as AppEditorMode) ? (search.editor as AppEditorMode) : undefined,
+    result: resultTabs.includes(search.result as AppResultTab)
+      ? (search.result as AppResultTab)
+      : undefined,
+    editor: editorModes.includes(search.editor as AppEditorMode)
+      ? (search.editor as AppEditorMode)
+      : undefined,
     variant: variantIds.includes(search.variant as never) ? (search.variant as string) : undefined,
   };
 }
@@ -270,7 +328,10 @@ function assetsForPipeline(pipeline: WebPipeline): BuildAsset[] {
   }));
 }
 
-function assetDisplayFields(asset: WebAsset, pipeline: WebPipeline): Omit<BuildAsset, "workspaceAsset" | "path" | "type" | "connection" | "upstreams" | "x" | "y"> {
+function assetDisplayFields(
+  asset: WebAsset,
+  pipeline: WebPipeline,
+): Omit<BuildAsset, "workspaceAsset" | "path" | "type" | "connection" | "upstreams" | "x" | "y"> {
   const canonicalName = asset.name || assetFileName(asset.path);
   const { prefix, title } = assetNameParts(canonicalName);
   return {
@@ -384,21 +445,35 @@ export function AppBuildPage({
   const navigate = useNavigate();
   const location = useLocation();
   const view = appBuildViewFromPath(location.pathname);
-  const buildSearch: AppBuildSearch = useMemo(() => ({ result: resultTab, editor: editorMode, variant }), [editorMode, resultTab, variant]);
+  const buildSearch: AppBuildSearch = useMemo(
+    () => ({ result: resultTab, editor: editorMode, variant }),
+    [editorMode, resultTab, variant],
+  );
   // Until the workspace has loaded (e.g. right after a page refresh) there is no
   // real pipeline to render; the derived assets fall back to placeholder demo
   // data, so we show a loading state over the content area instead.
   const isWorkspaceLoading = !workspace;
-  const activePipeline = useMemo(() => workspace?.pipelines.find((pipeline) => pipeline.id === pipelineId), [pipelineId, workspace?.pipelines]);
-  const pipelineAssets = useMemo(() => (activePipeline ? assetsForPipeline(activePipeline) : fallbackBuildAssets()), [activePipeline]);
-  const existingAssetNames = useMemo(() => new Set((activePipeline?.assets ?? []).map((asset) => asset.name)), [activePipeline?.assets]);
+  const activePipeline = useMemo(
+    () => workspace?.pipelines.find((pipeline) => pipeline.id === pipelineId),
+    [pipelineId, workspace?.pipelines],
+  );
+  const pipelineAssets = useMemo(
+    () => (activePipeline ? assetsForPipeline(activePipeline) : fallbackBuildAssets()),
+    [activePipeline],
+  );
+  const existingAssetNames = useMemo(
+    () => new Set((activePipeline?.assets ?? []).map((asset) => asset.name)),
+    [activePipeline?.assets],
+  );
   const materializationAssets = useMemo(
     () =>
       pipelineAssets.map((asset) => ({
         id: asset.id,
         name: asset.name,
         pipelineId: asset.pipelineId,
-        isMaterialized: asset.workspaceAsset?.is_materialized ?? (asset.status === "success" || asset.status === "ok"),
+        isMaterialized:
+          asset.workspaceAsset?.is_materialized ??
+          (asset.status === "success" || asset.status === "ok"),
       })),
     [pipelineAssets],
   );
@@ -461,9 +536,14 @@ export function AppBuildPage({
     staleUpstreams: string[];
   } | null>(null);
   const firstAssetId = displayedPipelineAssets[0]?.id ?? "revenue_daily";
-  const [visualSelectedAssetId, setVisualSelectedAssetId] = useState(selectedAssetId ?? firstAssetId);
+  const [visualSelectedAssetId, setVisualSelectedAssetId] = useState(
+    selectedAssetId ?? firstAssetId,
+  );
   const effectiveSelectedAssetId = visualSelectedAssetId ?? selectedAssetId ?? firstAssetId;
-  const selectedAsset = displayedPipelineAssets.find((asset) => asset.id === effectiveSelectedAssetId) ?? displayedPipelineAssets[0] ?? fallbackBuildAssets()[0];
+  const selectedAsset =
+    displayedPipelineAssets.find((asset) => asset.id === effectiveSelectedAssetId) ??
+    displayedPipelineAssets[0] ??
+    fallbackBuildAssets()[0];
   const [explorerOpen, setExplorerOpen] = useState(false);
   const [inspectorOpen, setInspectorOpen] = useState(false);
   // Large-screen collapse for the side columns; small screens keep using the
@@ -490,7 +570,9 @@ export function AppBuildPage({
     name: string;
   } | null>(null);
   const [pipelineSettingsOpen, setPipelineSettingsOpen] = useState(false);
-  const [pipelineSettingsSection, setPipelineSettingsSection] = useState<PipelineSettingsSection | undefined>(undefined);
+  const [pipelineSettingsSection, setPipelineSettingsSection] = useState<
+    PipelineSettingsSection | undefined
+  >(undefined);
   const openPipelineSettings = (section?: PipelineSettingsSection) => {
     setPipelineSettingsSection(section);
     setPipelineSettingsOpen(true);
@@ -562,7 +644,9 @@ export function AppBuildPage({
       return;
     }
     const normalized = pendingPipelinePath.replace(/^\.?\//, "").replace(/\/+$/, "");
-    const created = workspace.pipelines.find((item) => item.path === normalized || item.path.startsWith(`${normalized}/`));
+    const created = workspace.pipelines.find(
+      (item) => item.path === normalized || item.path.startsWith(`${normalized}/`),
+    );
     if (created) {
       setPendingPipelinePath(null);
       void navigate({
@@ -579,7 +663,9 @@ export function AppBuildPage({
     resultsPanelRef.current?.expand();
   };
   const addDependency = (dependency: string) => {
-    setAddedDependencies((current) => (current.includes(dependency) ? current : [...current, dependency]));
+    setAddedDependencies((current) =>
+      current.includes(dependency) ? current : [...current, dependency],
+    );
   };
   const logHistory = (kind: string, target: string) => {
     setHistory((current) =>
@@ -676,13 +762,17 @@ export function AppBuildPage({
     }
     logHistory("inspect", selectedAsset.name);
     openBottom("inspect");
-    void assetResults.runInspectForAsset(workspaceAsset.id, editorDraft[workspaceAsset.id] ?? workspaceAsset.content);
+    void assetResults.runInspectForAsset(
+      workspaceAsset.id,
+      editorDraft[workspaceAsset.id] ?? workspaceAsset.content,
+    );
   };
   // SQL context for the ad hoc editor: the selected asset when it is SQL,
   // otherwise the first SQL asset of the pipeline (dialect + connection).
   const adhocContextAsset = useMemo(() => {
     const candidates = activePipeline?.assets ?? [];
-    const isSql = (asset: WebAsset) => isSqlAssetType(asset.type) || asset.path.toLowerCase().endsWith(".sql");
+    const isSql = (asset: WebAsset) =>
+      isSqlAssetType(asset.type) || asset.path.toLowerCase().endsWith(".sql");
     const selected = candidates.find((asset) => asset.id === effectiveSelectedAssetId);
     if (selected && isSql(selected)) {
       return selected;
@@ -694,14 +784,17 @@ export function AppBuildPage({
       return;
     }
     openBottom("query");
-    const connection = adhocContextAsset ? resolveConnection(adhocContextAsset, workspace?.connections ?? {}) : null;
+    const connection = adhocContextAsset
+      ? resolveConnection(adhocContextAsset, workspace?.connections ?? {})
+      : null;
     if (!connection || !adhocContextAsset) {
       setAdhocRenderedQuery(null);
       setAdhocResult({
         status: "error",
         columns: [],
         rows: [],
-        error: "No SQL connection found for this pipeline; add a SQL asset or configure a connection first.",
+        error:
+          "No SQL connection found for this pipeline; add a SQL asset or configure a connection first.",
       });
       return;
     }
@@ -889,7 +982,12 @@ export function AppBuildPage({
         {isWorkspaceLoading ? (
           <BuildLoadingState />
         ) : (
-          <div className={cn("grid min-h-0 flex-1 grid-cols-1 gap-3 px-3 pb-3", sidePanelGridColsClass)}>
+          <div
+            className={cn(
+              "grid min-h-0 flex-1 grid-cols-1 gap-3 px-3 pb-3",
+              sidePanelGridColsClass,
+            )}
+          >
             {!explorerCollapsed ? (
               <AppPanel className="hidden min-h-0 xl:flex xl:flex-col">
                 <Explorer
@@ -913,12 +1011,21 @@ export function AppBuildPage({
                     <Outlet />
                   </DelimitedCardContent>
                   {view !== "code" ? (
-                    <FloatingViewSwitcher pipelineId={pipelineId} selectedAssetId={effectiveSelectedAssetId} currentView={view} search={buildSearch} onNewAsset={openNewAsset} />
+                    <FloatingViewSwitcher
+                      pipelineId={pipelineId}
+                      selectedAssetId={effectiveSelectedAssetId}
+                      currentView={view}
+                      search={buildSearch}
+                      onNewAsset={openNewAsset}
+                    />
                   ) : null}
                 </AppPanel>
               </Panel>
               <PanelResizeHandle
-                className={cn("my-1.5 h-1.5 shrink-0 cursor-row-resize rounded-full bg-border transition-colors hover:bg-primary/40", resultsCollapsed && "pointer-events-none opacity-0")}
+                className={cn(
+                  "my-1.5 h-1.5 shrink-0 cursor-row-resize rounded-full bg-border transition-colors hover:bg-primary/40",
+                  resultsCollapsed && "pointer-events-none opacity-0",
+                )}
               />
               <Panel
                 collapsible
@@ -926,7 +1033,9 @@ export function AppBuildPage({
                 minSize="120px"
                 defaultSize="224px"
                 panelRef={resultsPanelRef}
-                onResize={() => setResultsCollapsed(Boolean(resultsPanelRef.current?.isCollapsed()))}
+                onResize={() =>
+                  setResultsCollapsed(Boolean(resultsPanelRef.current?.isCollapsed()))
+                }
                 className="min-h-0"
               >
                 <ResultsPanel
@@ -1017,7 +1126,12 @@ export function AppBuildPage({
             openNewAssetInGroup(prefix);
           }}
         />
-        <PipelineSettingsDialog open={pipelineSettingsOpen} onOpenChange={setPipelineSettingsOpen} pipelineId={pipelineId} initialSection={pipelineSettingsSection} />
+        <PipelineSettingsDialog
+          open={pipelineSettingsOpen}
+          onOpenChange={setPipelineSettingsOpen}
+          pipelineId={pipelineId}
+          initialSection={pipelineSettingsSection}
+        />
         <PlanDialog open={planOpen} onOpenChange={setPlanOpen} />
         <Dialog
           open={staleBuildPrompt !== null}
@@ -1032,9 +1146,11 @@ export function AppBuildPage({
                 Upstream is out of date
               </DialogTitle>
               <DialogDescription>
-                <span className="font-mono">{staleBuildPrompt?.assetName}</span> depends on {staleBuildPrompt?.staleUpstreams.length} stale upstream
-                {staleBuildPrompt?.staleUpstreams.length === 1 ? "" : "s"}. Building now reads their outdated tables, so this asset will stay stale until its upstreams are current. Build the upstreams
-                first to get an up-to-date result.
+                <span className="font-mono">{staleBuildPrompt?.assetName}</span> depends on{" "}
+                {staleBuildPrompt?.staleUpstreams.length} stale upstream
+                {staleBuildPrompt?.staleUpstreams.length === 1 ? "" : "s"}. Building now reads their
+                outdated tables, so this asset will stay stale until its upstreams are current.
+                Build the upstreams first to get an up-to-date result.
               </DialogDescription>
             </DialogHeader>
             <div className="max-h-40 space-y-1 overflow-y-auto rounded-md border p-2 font-mono text-xs">
@@ -1052,7 +1168,8 @@ export function AppBuildPage({
               <Button
                 variant="outline"
                 onClick={() => {
-                  if (staleBuildPrompt) runMaterialize(staleBuildPrompt.assetId, staleBuildPrompt.assetName, "asset");
+                  if (staleBuildPrompt)
+                    runMaterialize(staleBuildPrompt.assetId, staleBuildPrompt.assetName, "asset");
                   setStaleBuildPrompt(null);
                 }}
               >
@@ -1060,7 +1177,12 @@ export function AppBuildPage({
               </Button>
               <Button
                 onClick={() => {
-                  if (staleBuildPrompt) runMaterialize(staleBuildPrompt.assetId, staleBuildPrompt.assetName, "asset_with_upstreams");
+                  if (staleBuildPrompt)
+                    runMaterialize(
+                      staleBuildPrompt.assetId,
+                      staleBuildPrompt.assetName,
+                      "asset_with_upstreams",
+                    );
                   setStaleBuildPrompt(null);
                 }}
               >
@@ -1077,9 +1199,16 @@ export function AppBuildPage({
           onBuild={(onAssetEvent) => {
             logHistory("build stale", `${staleness.staleAssets.length} assets`);
             openBottom("materialize");
-            const idByName = new Map(displayedPipelineAssets.map((asset) => [asset.name, asset.id]));
-            const assetIds = staleness.staleAssets.map((stale) => idByName.get(stale.asset_name)).filter((id): id is string => Boolean(id));
-            return assetResults.runBuildStale(activePipeline?.id ?? pipelineId, { assetIds, onAssetEvent });
+            const idByName = new Map(
+              displayedPipelineAssets.map((asset) => [asset.name, asset.id]),
+            );
+            const assetIds = staleness.staleAssets
+              .map((stale) => idByName.get(stale.asset_name))
+              .filter((id): id is string => Boolean(id));
+            return assetResults.runBuildStale(activePipeline?.id ?? pipelineId, {
+              assetIds,
+              onAssetEvent,
+            });
           }}
         />
       </AppPage>
@@ -1158,7 +1287,11 @@ function BuildTopBar({
         title={explorerCollapsed ? "Show explorer" : "Hide explorer"}
         aria-label={explorerCollapsed ? "Show explorer" : "Hide explorer"}
       >
-        {explorerCollapsed ? <PanelLeftOpen className="size-3.5" /> : <PanelLeftClose className="size-3.5" />}
+        {explorerCollapsed ? (
+          <PanelLeftOpen className="size-3.5" />
+        ) : (
+          <PanelLeftClose className="size-3.5" />
+        )}
       </Button>
       <Breadcrumb className="min-w-0 flex-1">
         <BreadcrumbList className="flex-nowrap text-xs">
@@ -1181,13 +1314,24 @@ function BuildTopBar({
           </BreadcrumbItem>
           <BreadcrumbSeparator />
           <BreadcrumbItem className="min-w-0">
-            {assetCrumbLoading ? <Skeleton className="h-4 w-32" aria-label="Loading asset" /> : <BreadcrumbPage className="truncate font-mono">{selectedAsset.name}</BreadcrumbPage>}
+            {assetCrumbLoading ? (
+              <Skeleton className="h-4 w-32" aria-label="Loading asset" />
+            ) : (
+              <BreadcrumbPage className="truncate font-mono">{selectedAsset.name}</BreadcrumbPage>
+            )}
           </BreadcrumbItem>
         </BreadcrumbList>
       </Breadcrumb>
       <DropdownMenu>
         <DropdownMenuTrigger asChild>
-          <Button variant="outline" size="sm" className={cn("hidden font-mono lg:inline-flex", variant !== "default" ? "text-primary" : null)}>
+          <Button
+            variant="outline"
+            size="sm"
+            className={cn(
+              "hidden font-mono lg:inline-flex",
+              variant !== "default" ? "text-primary" : null,
+            )}
+          >
             <GitBranch className="size-3.5" />
             {variant}
           </Button>
@@ -1217,12 +1361,19 @@ function BuildTopBar({
         asChild
         variant={editorMode === "adhoc" ? "secondary" : "outline"}
         size="sm"
-        className={cn("hidden lg:inline-flex", editorMode === "adhoc" ? "text-primary ring-1 ring-primary/30" : null)}
+        className={cn(
+          "hidden lg:inline-flex",
+          editorMode === "adhoc" ? "text-primary ring-1 ring-primary/30" : null,
+        )}
       >
         <Link
           to="/pipelines/$pipelineId/assets/$assetId/code"
           params={{ pipelineId, assetId: selectedAssetId }}
-          search={{ result: resultTab, editor: editorMode === "adhoc" ? "asset" : "adhoc", variant }}
+          search={{
+            result: resultTab,
+            editor: editorMode === "adhoc" ? "asset" : "adhoc",
+            variant,
+          }}
           aria-pressed={editorMode === "adhoc"}
         >
           <Terminal className="size-3.5" /> Ad-hoc
@@ -1241,9 +1392,16 @@ function BuildTopBar({
           size="sm"
           onClick={onBuildStale}
           disabled={executionBlocked}
-          title={executionBlocked ? "This environment is protected: interactive execution is disabled" : undefined}
+          title={
+            executionBlocked
+              ? "This environment is protected: interactive execution is disabled"
+              : undefined
+          }
         >
-          <Hammer className="size-3.5" /> Build stale <span className="rounded-full bg-amber-500 px-1 text-[10px] text-white">{staleCount}</span>
+          <Hammer className="size-3.5" /> Build stale{" "}
+          <span className="rounded-full bg-amber-500 px-1 text-[10px] text-white">
+            {staleCount}
+          </span>
         </Button>
       ) : null}
       {deployState ? <DeployButton deployState={deployState} /> : null}
@@ -1251,7 +1409,11 @@ function BuildTopBar({
         size="sm"
         onClick={onRun}
         disabled={executionBlocked}
-        title={executionBlocked ? "This environment is protected: interactive execution is disabled; deploy and schedule instead" : undefined}
+        title={
+          executionBlocked
+            ? "This environment is protected: interactive execution is disabled; deploy and schedule instead"
+            : undefined
+        }
       >
         <Play className="size-3.5" /> Run
       </Button>
@@ -1264,9 +1426,20 @@ function BuildTopBar({
         title={inspectorCollapsed ? "Show properties" : "Hide properties"}
         aria-label={inspectorCollapsed ? "Show properties" : "Hide properties"}
       >
-        {inspectorCollapsed ? <PanelRightOpen className="size-3.5" /> : <PanelRightClose className="size-3.5" />}
+        {inspectorCollapsed ? (
+          <PanelRightOpen className="size-3.5" />
+        ) : (
+          <PanelRightClose className="size-3.5" />
+        )}
       </Button>
-      <Button variant="ghost" size="sm" className="xl:hidden" onClick={onOpenInspector} title="Asset properties" aria-label="Asset properties">
+      <Button
+        variant="ghost"
+        size="sm"
+        className="xl:hidden"
+        onClick={onOpenInspector}
+        title="Asset properties"
+        aria-label="Asset properties"
+      >
         <PanelRight className="size-3.5" />
       </Button>
     </div>
@@ -1306,7 +1479,7 @@ function TypeCheckBell({
         <span
           className={cn(
             "absolute -right-1 -top-1 flex h-3.5 min-w-3.5 items-center justify-center rounded-full px-1 text-[9px] font-semibold text-white",
-            errors > 0 ? "bg-red-500" : "bg-amber-500"
+            errors > 0 ? "bg-red-500" : "bg-amber-500",
           )}
         >
           {total > 99 ? "99+" : total}
@@ -1336,7 +1509,13 @@ function FloatingViewSwitcher({
           <Plus className="size-3.5" /> New asset
         </Button>
       ) : null}
-      <BuildViewButtonGroup pipelineId={pipelineId} selectedAssetId={selectedAssetId} currentView={currentView} search={search} className="rounded-lg border bg-background/90 shadow-sm backdrop-blur" />
+      <BuildViewButtonGroup
+        pipelineId={pipelineId}
+        selectedAssetId={selectedAssetId}
+        currentView={currentView}
+        search={search}
+        className="rounded-lg border bg-background/90 shadow-sm backdrop-blur"
+      />
     </div>
   );
 }
@@ -1356,9 +1535,33 @@ function BuildViewButtonGroup({
 }) {
   return (
     <ButtonGroup className={className}>
-      <ViewLink pipelineId={pipelineId} selectedAssetId={selectedAssetId} currentView={currentView} view="code" search={search} icon={FileCode} label="Code" />
-      <ViewLink pipelineId={pipelineId} selectedAssetId={selectedAssetId} currentView={currentView} view="split" search={search} icon={Columns2} label="Split" />
-      <ViewLink pipelineId={pipelineId} selectedAssetId={selectedAssetId} currentView={currentView} view="canvas" search={search} icon={Layers} label="Canvas" />
+      <ViewLink
+        pipelineId={pipelineId}
+        selectedAssetId={selectedAssetId}
+        currentView={currentView}
+        view="code"
+        search={search}
+        icon={FileCode}
+        label="Code"
+      />
+      <ViewLink
+        pipelineId={pipelineId}
+        selectedAssetId={selectedAssetId}
+        currentView={currentView}
+        view="split"
+        search={search}
+        icon={Columns2}
+        label="Split"
+      />
+      <ViewLink
+        pipelineId={pipelineId}
+        selectedAssetId={selectedAssetId}
+        currentView={currentView}
+        view="canvas"
+        search={search}
+        icon={Layers}
+        label="Canvas"
+      />
     </ButtonGroup>
   );
 }
@@ -1382,7 +1585,13 @@ function ViewLink({
 }) {
   return (
     <Button asChild variant={currentView === view ? "secondary" : "outline"} size="icon-sm">
-      <Link to={appAssetViewPath(view)} params={{ pipelineId, assetId: selectedAssetId }} search={search} aria-label={`${label} view`} title={`${label} view`}>
+      <Link
+        to={appAssetViewPath(view)}
+        params={{ pipelineId, assetId: selectedAssetId }}
+        search={search}
+        aria-label={`${label} view`}
+        title={`${label} view`}
+      >
         <Icon className="size-3.5" />
         <span className="sr-only">{label}</span>
       </Link>
@@ -1446,7 +1655,9 @@ function Explorer({
       <DelimitedCardHeader>
         <Database className="size-4 text-primary" />
         <DelimitedCardTitle>Explorer</DelimitedCardTitle>
-        <Button size="icon-sm" variant="ghost" className="ml-auto" onClick={onNewAsset}><Plus className="size-3.5" /></Button>
+        <Button size="icon-sm" variant="ghost" className="ml-auto" onClick={onNewAsset}>
+          <Plus className="size-3.5" />
+        </Button>
       </DelimitedCardHeader>
       <div className="border-b p-2">
         <div className="flex h-8 items-center gap-2 rounded-md border bg-background px-2 text-xs text-muted-foreground">
@@ -1456,64 +1667,109 @@ function Explorer({
       </div>
       {/* Force Radix's inline `display: table` content wrapper to block so long
           asset names truncate instead of widening the sidebar horizontally. */}
-      <ScrollArea className="min-h-0 flex-1" horizontalScrollBarClassName="hidden" viewportClassName="[&>div]:!block">
+      <ScrollArea
+        className="min-h-0 flex-1"
+        horizontalScrollBarClassName="hidden"
+        viewportClassName="[&>div]:!block"
+      >
         <div className="space-y-2 p-2">
-          <ExplorerSection label={pipelineGroup?.label ?? "Pipelines"} icon={PipelineIcon} count={pipelineItems.length}>
-              {pipelineItems.map((item) => {
-                const activePipeline = item.id === pipelineId;
-                return (
-                  <div key={item.id}>
-                    <Link
-                      to="/pipelines/$pipelineId/canvas"
-                      params={{ pipelineId: item.id }}
-                      search={buildSearch}
-                      className={cn(
-                        "flex h-7 w-full items-center gap-1.5 rounded-md px-2 text-left font-mono text-xs hover:bg-muted",
-                        activePipeline ? "bg-muted text-foreground" : "text-muted-foreground"
-                      )}
-                    >
-                      <PipelineIcon className="size-3.5 text-primary" />
-                      <span className="truncate">{item.name || item.path || item.id}</span>
-                    </Link>
-                    {activePipeline ? (
-                      <div className="mt-1 space-y-0.5 border-l pl-3 ml-3">
-                        {Object.entries(assetsByGroup).length > 0 ? Object.entries(assetsByGroup).map(([group, groupAssets]) => (
+          <ExplorerSection
+            label={pipelineGroup?.label ?? "Pipelines"}
+            icon={PipelineIcon}
+            count={pipelineItems.length}
+          >
+            {pipelineItems.map((item) => {
+              const activePipeline = item.id === pipelineId;
+              return (
+                <div key={item.id}>
+                  <Link
+                    to="/pipelines/$pipelineId/canvas"
+                    params={{ pipelineId: item.id }}
+                    search={buildSearch}
+                    className={cn(
+                      "flex h-7 w-full items-center gap-1.5 rounded-md px-2 text-left font-mono text-xs hover:bg-muted",
+                      activePipeline ? "bg-muted text-foreground" : "text-muted-foreground",
+                    )}
+                  >
+                    <PipelineIcon className="size-3.5 text-primary" />
+                    <span className="truncate">{item.name || item.path || item.id}</span>
+                  </Link>
+                  {activePipeline ? (
+                    <div className="mt-1 space-y-0.5 border-l pl-3 ml-3">
+                      {Object.entries(assetsByGroup).length > 0 ? (
+                        Object.entries(assetsByGroup).map(([group, groupAssets]) => (
                           <div key={group}>
-                            <div className="px-2 py-1 font-mono text-[11px] text-muted-foreground">{group}/</div>
-                            {groupAssets.map((asset) => <AssetButton key={asset.id} asset={asset} declaredDependencies={declaredDependencies} selected={!adhocActive && selectedAssetId === asset.id} onSelect={() => onAssetSelect(asset.id)} />)}
+                            <div className="px-2 py-1 font-mono text-[11px] text-muted-foreground">
+                              {group}/
+                            </div>
+                            {groupAssets.map((asset) => (
+                              <AssetButton
+                                key={asset.id}
+                                asset={asset}
+                                declaredDependencies={declaredDependencies}
+                                selected={!adhocActive && selectedAssetId === asset.id}
+                                onSelect={() => onAssetSelect(asset.id)}
+                              />
+                            ))}
                           </div>
-                        )) : <div className="px-2 py-1 text-xs text-muted-foreground">No assets found.</div>}
-                        <div className="mt-1 border-t pt-1">
-                          <button className="flex h-7 w-full items-center gap-1.5 rounded-md px-2 text-left font-mono text-xs text-muted-foreground hover:bg-muted" onClick={onNewFolder}>
-                            <FolderPlus className="size-3.5" /> New folder
-                          </button>
-                          <button
-                            className={cn(
-                              "flex h-7 w-full items-center gap-1.5 rounded-md px-2 text-left font-mono text-xs hover:bg-muted",
-                              adhocActive ? "bg-primary/10 text-foreground ring-1 ring-primary/20" : "text-muted-foreground"
-                            )}
-                            onClick={onAdhoc}
-                          >
-                            <Terminal className={cn("size-3.5", adhocActive ? "text-primary" : null)} /> Ad-hoc query
-                          </button>
-                          <button className="flex h-7 w-full items-center gap-1.5 rounded-md px-2 text-left font-mono text-xs text-muted-foreground hover:bg-muted" onClick={onPipelineSettings}>
-                            <SettingsIcon /> Pipeline settings
-                          </button>
+                        ))
+                      ) : (
+                        <div className="px-2 py-1 text-xs text-muted-foreground">
+                          No assets found.
                         </div>
+                      )}
+                      <div className="mt-1 border-t pt-1">
+                        <button
+                          className="flex h-7 w-full items-center gap-1.5 rounded-md px-2 text-left font-mono text-xs text-muted-foreground hover:bg-muted"
+                          onClick={onNewFolder}
+                        >
+                          <FolderPlus className="size-3.5" /> New folder
+                        </button>
+                        <button
+                          className={cn(
+                            "flex h-7 w-full items-center gap-1.5 rounded-md px-2 text-left font-mono text-xs hover:bg-muted",
+                            adhocActive
+                              ? "bg-primary/10 text-foreground ring-1 ring-primary/20"
+                              : "text-muted-foreground",
+                          )}
+                          onClick={onAdhoc}
+                        >
+                          <Terminal
+                            className={cn("size-3.5", adhocActive ? "text-primary" : null)}
+                          />{" "}
+                          Ad-hoc query
+                        </button>
+                        <button
+                          className="flex h-7 w-full items-center gap-1.5 rounded-md px-2 text-left font-mono text-xs text-muted-foreground hover:bg-muted"
+                          onClick={onPipelineSettings}
+                        >
+                          <SettingsIcon /> Pipeline settings
+                        </button>
                       </div>
-                    ) : null}
-                  </div>
-                );
-              })}
-            </ExplorerSection>
-          <button onClick={onNewAsset} className="mt-2 flex h-8 w-full items-center gap-2 rounded-md border border-dashed px-2 text-left text-xs text-muted-foreground hover:bg-muted">
+                    </div>
+                  ) : null}
+                </div>
+              );
+            })}
+          </ExplorerSection>
+          <button
+            onClick={onNewAsset}
+            className="mt-2 flex h-8 w-full items-center gap-2 rounded-md border border-dashed px-2 text-left text-xs text-muted-foreground hover:bg-muted"
+          >
             <Plus className="size-3.5" /> New asset
           </button>
-          <button onClick={onNewPipeline} className="mt-1 flex h-8 w-full items-center gap-2 rounded-md border border-dashed px-2 text-left text-xs text-muted-foreground hover:bg-muted">
+          <button
+            onClick={onNewPipeline}
+            className="mt-1 flex h-8 w-full items-center gap-2 rounded-md border border-dashed px-2 text-left text-xs text-muted-foreground hover:bg-muted"
+          >
             <Plus className="size-3.5" /> New pipeline
           </button>
 
-          <ExplorerSection label={notebookGroup?.label ?? "Notebooks"} icon={NotebookIcon} count={notebookItems.length}>
+          <ExplorerSection
+            label={notebookGroup?.label ?? "Notebooks"}
+            icon={NotebookIcon}
+            count={notebookItems.length}
+          >
             {notebookItems.length > 0 ? (
               notebookItems.map((notebook) => (
                 <Link
@@ -1558,7 +1814,9 @@ function ExplorerSection({
   return (
     <div>
       <div className="flex h-7 items-center gap-1.5 rounded-md px-1 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
-        <Icon className="size-3.5" />{label}<span className="ml-auto">{count}</span>
+        <Icon className="size-3.5" />
+        {label}
+        <span className="ml-auto">{count}</span>
       </div>
       <div className="space-y-0.5">{children}</div>
     </div>
@@ -1577,31 +1835,55 @@ function AssetButton({
   onSelect: () => void;
 }) {
   const Icon = kindMeta[asset.kind].icon;
-  const missingCount = asset.kind === "python" ? missingPythonDependencies(asset, declaredDependencies).length : 0;
+  const missingCount =
+    asset.kind === "python" ? missingPythonDependencies(asset, declaredDependencies).length : 0;
   return (
     <button
       type="button"
       onClick={onSelect}
       className={cn(
         "flex h-7 w-full items-center gap-1.5 rounded-md px-2 text-left font-mono text-xs hover:bg-muted",
-        selected ? "bg-primary/10 text-foreground ring-1 ring-primary/20" : "text-muted-foreground"
+        selected ? "bg-primary/10 text-foreground ring-1 ring-primary/20" : "text-muted-foreground",
       )}
-      >
-        <Icon className="size-3.5 text-primary" />
+    >
+      <Icon className="size-3.5 text-primary" />
       <span className="min-w-0 flex-1 truncate">{assetSidebarName(asset)}</span>
-      {asset.staleness && (asset.staleness.status !== "fresh" || (asset.staleness.last_run_status === "failed" && asset.staleness.last_run_on_current_content)) ? (
+      {asset.staleness &&
+      (asset.staleness.status !== "fresh" ||
+        (asset.staleness.last_run_status === "failed" &&
+          asset.staleness.last_run_on_current_content)) ? (
         <span
           title={`Staleness: ${stalenessLabel(asset.staleness)}`}
           className={cn("size-1.5 rounded-full", stalenessDotClassName(asset.staleness))}
         />
       ) : null}
-      {missingCount > 0 ? <span title={`${missingCount} imports not in dependencies`} className="size-1.5 rounded-full bg-amber-500" /> : null}
+      {missingCount > 0 ? (
+        <span
+          title={`${missingCount} imports not in dependencies`}
+          className="size-1.5 rounded-full bg-amber-500"
+        />
+      ) : null}
     </button>
   );
 }
 
-function PipelineCanvas({ selectedAssetId, onAssetSelect }: { pipelineId: string; selectedAssetId: string; onAssetSelect: (assetId: string) => void }) {
-  const { pipelineAssets, createDownstreamAsset, openNewAssetInGroup, runAssetById, deleteAssetById, goToCatalog, openPipelineConnections } = useBuildContext();
+function PipelineCanvas({
+  selectedAssetId,
+  onAssetSelect,
+}: {
+  pipelineId: string;
+  selectedAssetId: string;
+  onAssetSelect: (assetId: string) => void;
+}) {
+  const {
+    pipelineAssets,
+    createDownstreamAsset,
+    openNewAssetInGroup,
+    runAssetById,
+    deleteAssetById,
+    goToCatalog,
+    openPipelineConnections,
+  } = useBuildContext();
   return (
     <AppLineageCanvas
       assets={pipelineAssets}
@@ -1625,7 +1907,13 @@ function PipelineCanvas({ selectedAssetId, onAssetSelect }: { pipelineId: string
 
 export function AppBuildCanvasView() {
   const { pipelineId, selectedAssetId, selectAsset } = useBuildContext();
-  return <PipelineCanvas pipelineId={pipelineId} selectedAssetId={selectedAssetId} onAssetSelect={selectAsset} />;
+  return (
+    <PipelineCanvas
+      pipelineId={pipelineId}
+      selectedAssetId={selectedAssetId}
+      onAssetSelect={selectAsset}
+    />
+  );
 }
 
 export function AppBuildSplitView() {
@@ -1637,7 +1925,11 @@ export function AppBuildSplitView() {
       </Panel>
       <PanelResizeHandle className="w-px bg-border" />
       <Panel defaultSize={50} minSize={28} className="min-w-0">
-        <PipelineCanvas pipelineId={pipelineId} selectedAssetId={selectedAssetId} onAssetSelect={selectAsset} />
+        <PipelineCanvas
+          pipelineId={pipelineId}
+          selectedAssetId={selectedAssetId}
+          onAssetSelect={selectAsset}
+        />
       </Panel>
     </PanelGroup>
   );
@@ -1648,13 +1940,7 @@ export function AppBuildCodeView() {
   return <EditorWorkspace asset={selectedAsset} adhoc={editorMode === "adhoc"} />;
 }
 
-function EditorWorkspace({
-  asset,
-  adhoc,
-}: {
-  asset: BuildAsset;
-  adhoc: boolean;
-}) {
+function EditorWorkspace({ asset, adhoc }: { asset: BuildAsset; adhoc: boolean }) {
   const {
     pipelineId,
     selectedAssetId,
@@ -1682,9 +1968,18 @@ function EditorWorkspace({
   // Real workspace assets get the live missing-dependency banner from
   // AppAssetEditor (driven by the asset's actual requirements.txt); this
   // mock affordance only covers the demo/sample assets that have no editor.
-  const missingDependencies = !asset.workspaceAsset && asset.kind === "python" ? missingPythonDependencies(asset, declaredDependencies) : [];
-  const actionLabel = asset.kind === "source" ? "Validate" : asset.kind === "ingestr" || asset.kind === "load" ? "Run" : "Materialize";
-  const filename = asset.path ?? `${asset.dir ? `${asset.dir}/` : ""}${asset.name}${kindMeta[asset.kind].ext}`;
+  const missingDependencies =
+    !asset.workspaceAsset && asset.kind === "python"
+      ? missingPythonDependencies(asset, declaredDependencies)
+      : [];
+  const actionLabel =
+    asset.kind === "source"
+      ? "Validate"
+      : asset.kind === "ingestr" || asset.kind === "load"
+        ? "Run"
+        : "Materialize";
+  const filename =
+    asset.path ?? `${asset.dir ? `${asset.dir}/` : ""}${asset.name}${kindMeta[asset.kind].ext}`;
 
   return (
     <div className="relative flex h-full min-h-0 flex-col">
@@ -1694,10 +1989,18 @@ function EditorWorkspace({
           showLabels={showActionLabels}
           showInspect={asset.kind !== "source"}
           onRun={materializeSelectedAsset}
-          onFullRefresh={asset.workspaceAsset?.type.toLowerCase() === "api" ? fullRefreshSelectedAsset : undefined}
+          onFullRefresh={
+            asset.workspaceAsset?.type.toLowerCase() === "api"
+              ? fullRefreshSelectedAsset
+              : undefined
+          }
           onInspect={inspectSelectedAsset}
           runDisabled={materializeLoading || executionBlocked || !asset.workspaceAsset}
-          runBlockedReason={executionBlocked ? "This environment is protected: interactive execution is disabled" : undefined}
+          runBlockedReason={
+            executionBlocked
+              ? "This environment is protected: interactive execution is disabled"
+              : undefined
+          }
           runLoading={materializeLoading}
           inspectDisabled={inspectLoading || !asset.workspaceAsset}
           inspectLoading={inspectLoading}
@@ -1716,12 +2019,23 @@ function EditorWorkspace({
           </Button>
         ) : null}
         {editorOnly ? (
-          <BuildViewButtonGroup pipelineId={pipelineId} selectedAssetId={selectedAssetId} currentView={view} search={buildSearch} />
+          <BuildViewButtonGroup
+            pipelineId={pipelineId}
+            selectedAssetId={selectedAssetId}
+            currentView={view}
+            search={buildSearch}
+          />
         ) : null}
       </EditorFilenameHeader>
       {missingDependencies.length > 0 ? (
-        <Button variant="outline" size="xs" className="absolute left-3 top-9 z-20 border-amber-300 bg-amber-50 text-amber-700 shadow-sm hover:bg-amber-100 dark:border-amber-500/40 dark:bg-amber-500/10 dark:text-amber-300 dark:hover:bg-amber-500/20" onClick={() => openBottom("diagnostics")}>
-          <AlertTriangle className="size-3" />{missingDependencies.length} not in deps
+        <Button
+          variant="outline"
+          size="xs"
+          className="absolute left-3 top-9 z-20 border-amber-300 bg-amber-50 text-amber-700 shadow-sm hover:bg-amber-100 dark:border-amber-500/40 dark:bg-amber-500/10 dark:text-amber-300 dark:hover:bg-amber-500/20"
+          onClick={() => openBottom("diagnostics")}
+        >
+          <AlertTriangle className="size-3" />
+          {missingDependencies.length} not in deps
         </Button>
       ) : null}
       <div className="flex min-h-0 flex-1">
@@ -1730,14 +2044,21 @@ function EditorWorkspace({
             <div className="flex shrink-0 items-start gap-2 border-b border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700 dark:border-red-500/30 dark:bg-red-500/10 dark:text-red-300">
               <AlertTriangle className="mt-0.5 size-3.5 shrink-0" />
               <div className="min-w-0">
-                <span className="font-medium">This asset could not be parsed.</span> Fix the file below to restore it.
-                <pre className="mt-1 max-h-24 overflow-auto whitespace-pre-wrap font-mono text-[11px] opacity-80">{asset.workspaceAsset.parse_error}</pre>
+                <span className="font-medium">This asset could not be parsed.</span> Fix the file
+                below to restore it.
+                <pre className="mt-1 max-h-24 overflow-auto whitespace-pre-wrap font-mono text-[11px] opacity-80">
+                  {asset.workspaceAsset.parse_error}
+                </pre>
               </div>
             </div>
           ) : null}
-          {asset.workspaceAsset && asset.pipelineId && asset.workspaceAsset.type.toLowerCase() === "load" ? (
+          {asset.workspaceAsset &&
+          asset.pipelineId &&
+          asset.workspaceAsset.type.toLowerCase() === "load" ? (
             <LoadParametersEditor asset={asset.workspaceAsset} pipelineId={asset.pipelineId} />
-          ) : asset.workspaceAsset && asset.pipelineId && asset.workspaceAsset.type.toLowerCase() === "api" ? (
+          ) : asset.workspaceAsset &&
+            asset.pipelineId &&
+            asset.workspaceAsset.type.toLowerCase() === "api" ? (
             <ApiParametersEditor
               key={asset.workspaceAsset.id}
               asset={asset.workspaceAsset}
@@ -1769,8 +2090,12 @@ function EditorWorkspace({
 function EditorFilenameHeader({ filename, children }: { filename: string; children?: ReactNode }) {
   return (
     <div className="flex h-10 min-w-0 shrink-0 items-center gap-2 overflow-hidden border-b bg-background/70 px-3">
-      <span className="block min-w-0 flex-[1_1_0] truncate font-mono text-[11px] text-muted-foreground">{filename}</span>
-      {children ? <div className="ml-auto flex shrink-0 items-center gap-1.5">{children}</div> : null}
+      <span className="block min-w-0 flex-[1_1_0] truncate font-mono text-[11px] text-muted-foreground">
+        {filename}
+      </span>
+      {children ? (
+        <div className="ml-auto flex shrink-0 items-center gap-1.5">{children}</div>
+      ) : null}
     </div>
   );
 }
@@ -1806,13 +2131,24 @@ function EditorActionButtons({
     <>
       {onFullRefresh ? (
         <ButtonGroup>
-          <Button size={showLabels ? "sm" : "icon-sm"} onClick={onRun} disabled={runDisabled} aria-label={actionLabel} title={runBlockedReason ?? actionLabel}>
+          <Button
+            size={showLabels ? "sm" : "icon-sm"}
+            onClick={onRun}
+            disabled={runDisabled}
+            aria-label={actionLabel}
+            title={runBlockedReason ?? actionLabel}
+          >
             <Hammer data-icon="inline-start" />
             {showLabels ? runLabel : <span className="sr-only">{runLabel}</span>}
           </Button>
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
-              <Button variant="outline" size="icon-sm" disabled={runDisabled} aria-label="Materialization options">
+              <Button
+                variant="outline"
+                size="icon-sm"
+                disabled={runDisabled}
+                aria-label="Materialization options"
+              >
                 <ChevronDown />
               </Button>
             </DropdownMenuTrigger>
@@ -1825,13 +2161,26 @@ function EditorActionButtons({
           </DropdownMenu>
         </ButtonGroup>
       ) : (
-        <Button size={showLabels ? "sm" : "icon-sm"} onClick={onRun} disabled={runDisabled} aria-label={actionLabel} title={runBlockedReason ?? actionLabel}>
+        <Button
+          size={showLabels ? "sm" : "icon-sm"}
+          onClick={onRun}
+          disabled={runDisabled}
+          aria-label={actionLabel}
+          title={runBlockedReason ?? actionLabel}
+        >
           <Hammer data-icon="inline-start" />
           {showLabels ? runLabel : <span className="sr-only">{runLabel}</span>}
         </Button>
       )}
       {showInspect ? (
-        <Button variant="outline" size={showLabels ? "sm" : "icon-sm"} onClick={onInspect} disabled={inspectDisabled} aria-label="Inspect" title="Inspect">
+        <Button
+          variant="outline"
+          size={showLabels ? "sm" : "icon-sm"}
+          onClick={onInspect}
+          disabled={inspectDisabled}
+          aria-label="Inspect"
+          title="Inspect"
+        >
           <Eye className="size-3.5" />
           {showLabels ? inspectLabel : <span className="sr-only">{inspectLabel}</span>}
         </Button>
@@ -1841,18 +2190,53 @@ function EditorActionButtons({
 }
 
 function AdhocEditor({ showActionLabels }: { showActionLabels: boolean }) {
-  const { pipelineId, selectedAssetId, view, buildSearch, adhocContextAsset, adhocLoading, runAdhocQuery, goToAsset } = useBuildContext();
+  const {
+    pipelineId,
+    selectedAssetId,
+    view,
+    buildSearch,
+    adhocContextAsset,
+    adhocLoading,
+    runAdhocQuery,
+    goToAsset,
+  } = useBuildContext();
   return (
     <div className="relative flex h-full min-h-0 flex-col">
       <EditorFilenameHeader filename="Ad-hoc query">
-        <Button size={showActionLabels ? "sm" : "icon-sm"} onClick={runAdhocQuery} disabled={adhocLoading || !adhocContextAsset} aria-label="Run" title="Run (⌘ + ↵)">
+        <Button
+          size={showActionLabels ? "sm" : "icon-sm"}
+          onClick={runAdhocQuery}
+          disabled={adhocLoading || !adhocContextAsset}
+          aria-label="Run"
+          title="Run (⌘ + ↵)"
+        >
           <Play className="size-3.5" />
-          {showActionLabels ? adhocLoading ? "Running..." : "Run" : <span className="sr-only">Run</span>}
+          {showActionLabels ? (
+            adhocLoading ? (
+              "Running..."
+            ) : (
+              "Run"
+            )
+          ) : (
+            <span className="sr-only">Run</span>
+          )}
         </Button>
-        {view === "code" ? <BuildViewButtonGroup pipelineId={pipelineId} selectedAssetId={selectedAssetId} currentView={view} search={buildSearch} /> : null}
+        {view === "code" ? (
+          <BuildViewButtonGroup
+            pipelineId={pipelineId}
+            selectedAssetId={selectedAssetId}
+            currentView={view}
+            search={buildSearch}
+          />
+        ) : null}
       </EditorFilenameHeader>
       {adhocContextAsset ? (
-        <AppAdhocEditor pipelineId={pipelineId} contextAsset={adhocContextAsset} onRunQuery={runAdhocQuery} onGoToAsset={goToAsset} />
+        <AppAdhocEditor
+          pipelineId={pipelineId}
+          contextAsset={adhocContextAsset}
+          onRunQuery={runAdhocQuery}
+          onGoToAsset={goToAsset}
+        />
       ) : (
         <CodeBlock lines={["select * from revenue_daily limit 100;"]} />
       )}
@@ -1880,8 +2264,21 @@ function CodeBlock({
           const dependency = importName ? packageForImport(importName) : null;
           const missing = Boolean(dependency && !declaredDependencies.includes(dependency));
           return (
-            <div key={index} className={cn("flex min-h-5 items-center", missing ? "bg-amber-500/10 shadow-[inset_2px_0_0_#f59e0b]" : null)}>
-              <span className={cn("w-11 shrink-0 select-none pr-3 text-right", missing ? "text-amber-400" : "text-zinc-500")}>{index + 1}</span>
+            <div
+              key={index}
+              className={cn(
+                "flex min-h-5 items-center",
+                missing ? "bg-amber-500/10 shadow-[inset_2px_0_0_#f59e0b]" : null,
+              )}
+            >
+              <span
+                className={cn(
+                  "w-11 shrink-0 select-none pr-3 text-right",
+                  missing ? "text-amber-400" : "text-zinc-500",
+                )}
+              >
+                {index + 1}
+              </span>
               <pre className="min-w-0 whitespace-pre">{line}</pre>
               {missing && dependency ? (
                 <Button
@@ -1930,7 +2327,14 @@ function ResultsPanel({
   collapsed: boolean;
   onToggleCollapse: () => void;
   variant: string;
-  history: Array<{ id: number; kind: string; target: string; status: string; time: string; variant: string }>;
+  history: Array<{
+    id: number;
+    kind: string;
+    target: string;
+    status: string;
+    time: string;
+    variant: string;
+  }>;
   typeCheckReport?: PipelineTypeCheckReport | null;
   typeCheckLoading?: boolean;
   onRunTypeCheck?: () => void;
@@ -1949,23 +2353,54 @@ function ResultsPanel({
 }) {
   return (
     <AppPanel className="flex h-full min-h-0 flex-col">
-        <Tabs value={activeTab} onValueChange={(value) => { if (resultTabs.includes(value as AppResultTab)) onTabChange(value as AppResultTab); }} className="flex h-full min-h-0 flex-col">
+      <Tabs
+        value={activeTab}
+        onValueChange={(value) => {
+          if (resultTabs.includes(value as AppResultTab)) onTabChange(value as AppResultTab);
+        }}
+        className="flex h-full min-h-0 flex-col"
+      >
         <DelimitedCardHeader className="min-h-9 gap-1 bg-muted py-1">
-          <ScrollArea className="min-w-0 flex-1" horizontalScrollBarClassName="hidden" viewportClassName="w-full">
+          <ScrollArea
+            className="min-w-0 flex-1"
+            horizontalScrollBarClassName="hidden"
+            viewportClassName="w-full"
+          >
             <TabsList className={scrollableTabsListClass}>
-              <TabsTrigger value="inspect" className={scrollableTabsTriggerClass}><Table2 className="size-3.5" />Inspect</TabsTrigger>
-              <TabsTrigger value="materialize" className={scrollableTabsTriggerClass}><Hammer className="size-3.5" />Materialize</TabsTrigger>
-              <TabsTrigger value="query" className={scrollableTabsTriggerClass}><Terminal className="size-3.5" />Query</TabsTrigger>
+              <TabsTrigger value="inspect" className={scrollableTabsTriggerClass}>
+                <Table2 className="size-3.5" />
+                Inspect
+              </TabsTrigger>
+              <TabsTrigger value="materialize" className={scrollableTabsTriggerClass}>
+                <Hammer className="size-3.5" />
+                Materialize
+              </TabsTrigger>
+              <TabsTrigger value="query" className={scrollableTabsTriggerClass}>
+                <Terminal className="size-3.5" />
+                Query
+              </TabsTrigger>
               <TabsTrigger value="typecheck" className={scrollableTabsTriggerClass}>
-                <Bell className="size-3.5" />Type check
-                {typeCheckReport && typeCheckReport.summary.errors + typeCheckReport.summary.warnings > 0 ? (
-                  <span className={cn(
-                    "ml-1 rounded-full px-1 text-[10px] text-white",
-                    typeCheckReport.summary.errors > 0 ? "bg-red-500" : "bg-amber-500"
-                  )}>{typeCheckReport.summary.errors + typeCheckReport.summary.warnings}</span>
+                <Bell className="size-3.5" />
+                Type check
+                {typeCheckReport &&
+                typeCheckReport.summary.errors + typeCheckReport.summary.warnings > 0 ? (
+                  <span
+                    className={cn(
+                      "ml-1 rounded-full px-1 text-[10px] text-white",
+                      typeCheckReport.summary.errors > 0 ? "bg-red-500" : "bg-amber-500",
+                    )}
+                  >
+                    {typeCheckReport.summary.errors + typeCheckReport.summary.warnings}
+                  </span>
                 ) : null}
               </TabsTrigger>
-              <TabsTrigger value="history" className={scrollableTabsTriggerClass}><History className="size-3.5" />History{history.length > 0 ? <span className="ml-1 text-[10px] text-muted-foreground">{history.length}</span> : null}</TabsTrigger>
+              <TabsTrigger value="history" className={scrollableTabsTriggerClass}>
+                <History className="size-3.5" />
+                History
+                {history.length > 0 ? (
+                  <span className="ml-1 text-[10px] text-muted-foreground">{history.length}</span>
+                ) : null}
+              </TabsTrigger>
             </TabsList>
           </ScrollArea>
           <Button
@@ -2030,7 +2465,11 @@ function ResultsPanel({
                 <AssetInspectView
                   columns={adhocResult.columns ?? []}
                   rows={(adhocResult.rows ?? []) as Record<string, unknown>[]}
-                  warning={adhocResult.truncated ? "Result truncated; showing the first rows only." : undefined}
+                  warning={
+                    adhocResult.truncated
+                      ? "Result truncated; showing the first rows only."
+                      : undefined
+                  }
                   frameless
                 />
               </div>
@@ -2039,14 +2478,29 @@ function ResultsPanel({
             <ResultsEmpty label="Run an ad hoc query to see results here." />
           )}
         </TabsContent>
-        <TabsContent value="tests" className="min-h-0 flex-1 overflow-auto p-3"><UnitTests /></TabsContent>
-        <TabsContent value="diagnostics" className="min-h-0 flex-1 overflow-auto p-0"><DiagnosticsList /></TabsContent>
-        <TabsContent value="metadata" className="min-h-0 flex-1 overflow-auto p-0"><MetadataPanel /></TabsContent>
-        <TabsContent value="shell" className="min-h-0 flex-1 overflow-hidden p-0"><ShellPanel variant={variant} /></TabsContent>
-        <TabsContent value="typecheck" className="min-h-0 flex-1 overflow-auto p-0">
-          <TypeCheckPanel report={typeCheckReport ?? null} loading={Boolean(typeCheckLoading)} onRun={onRunTypeCheck} onSelectAsset={onSelectAsset} />
+        <TabsContent value="tests" className="min-h-0 flex-1 overflow-auto p-3">
+          <UnitTests />
         </TabsContent>
-        <TabsContent value="history" className="min-h-0 flex-1 overflow-auto p-0"><HistoryPanel history={history} onOpen={onHistoryOpen} /></TabsContent>
+        <TabsContent value="diagnostics" className="min-h-0 flex-1 overflow-auto p-0">
+          <DiagnosticsList />
+        </TabsContent>
+        <TabsContent value="metadata" className="min-h-0 flex-1 overflow-auto p-0">
+          <MetadataPanel />
+        </TabsContent>
+        <TabsContent value="shell" className="min-h-0 flex-1 overflow-hidden p-0">
+          <ShellPanel variant={variant} />
+        </TabsContent>
+        <TabsContent value="typecheck" className="min-h-0 flex-1 overflow-auto p-0">
+          <TypeCheckPanel
+            report={typeCheckReport ?? null}
+            loading={Boolean(typeCheckLoading)}
+            onRun={onRunTypeCheck}
+            onSelectAsset={onSelectAsset}
+          />
+        </TabsContent>
+        <TabsContent value="history" className="min-h-0 flex-1 overflow-auto p-0">
+          <HistoryPanel history={history} onOpen={onHistoryOpen} />
+        </TabsContent>
       </Tabs>
     </AppPanel>
   );
@@ -2078,11 +2532,15 @@ function RenderedQueryDisclosure({ query }: { query?: string | null }) {
           onClick={() => setOpen((value) => !value)}
           aria-expanded={open}
         >
-          <ChevronRight className={cn("size-3 shrink-0 transition-transform", open ? "rotate-90" : null)} />
+          <ChevronRight
+            className={cn("size-3 shrink-0 transition-transform", open ? "rotate-90" : null)}
+          />
           <Terminal className="size-3 shrink-0" />
           <span className="shrink-0 font-semibold uppercase tracking-wide">Query</span>
           {!open ? (
-            <span className="min-w-0 flex-1 truncate font-mono">{trimmed.replace(/\s+/g, " ")}</span>
+            <span className="min-w-0 flex-1 truncate font-mono">
+              {trimmed.replace(/\s+/g, " ")}
+            </span>
           ) : null}
         </button>
         <Button
@@ -2137,7 +2595,10 @@ function TypeCheckPanel({
     return (
       <div className="flex h-full min-h-0 flex-col items-center justify-center gap-3 bg-background text-xs text-muted-foreground">
         <span>Type check assets for column and type errors.</span>
-        <Button size="sm" variant="outline" onClick={onRun}><Bell className="size-3.5" />Run type check</Button>
+        <Button size="sm" variant="outline" onClick={onRun}>
+          <Bell className="size-3.5" />
+          Run type check
+        </Button>
       </div>
     );
   }
@@ -2148,18 +2609,33 @@ function TypeCheckPanel({
   return (
     <div className="flex h-full min-h-0 flex-col bg-background">
       <div className="flex shrink-0 items-center gap-2 border-b px-3 py-1.5 text-xs">
-        <span className="inline-flex items-center gap-1 text-red-600 dark:text-red-400"><XCircle className="size-3.5" />{report.summary.errors}</span>
-        <span className="inline-flex items-center gap-1 text-amber-600 dark:text-amber-400"><AlertTriangle className="size-3.5" />{report.summary.warnings}</span>
-        <span className="text-muted-foreground">{report.summary.assets} asset{report.summary.assets === 1 ? "" : "s"} checked</span>
-        {checkedAt ? <span className="hidden text-muted-foreground/70 sm:inline">· window {checkedAt.toISOString().slice(0, 10)}</span> : null}
+        <span className="inline-flex items-center gap-1 text-red-600 dark:text-red-400">
+          <XCircle className="size-3.5" />
+          {report.summary.errors}
+        </span>
+        <span className="inline-flex items-center gap-1 text-amber-600 dark:text-amber-400">
+          <AlertTriangle className="size-3.5" />
+          {report.summary.warnings}
+        </span>
+        <span className="text-muted-foreground">
+          {report.summary.assets} asset{report.summary.assets === 1 ? "" : "s"} checked
+        </span>
+        {checkedAt ? (
+          <span className="hidden text-muted-foreground/70 sm:inline">
+            · window {checkedAt.toISOString().slice(0, 10)}
+          </span>
+        ) : null}
         <Button size="xs" variant="outline" className="ml-auto" onClick={onRun} disabled={loading}>
-          {loading ? <Loader2 className="size-3 animate-spin" /> : <RotateCw className="size-3" />}Re-run
+          {loading ? <Loader2 className="size-3 animate-spin" /> : <RotateCw className="size-3" />}
+          Re-run
         </Button>
       </div>
       <div className="min-h-0 flex-1 overflow-auto p-2">
         {flagged.length === 0 ? (
           <div className="flex items-center gap-2 px-2 py-3 text-xs text-emerald-600 dark:text-emerald-400">
-            <CheckCircle2 className="size-4" />No type errors found across {report.summary.assets} asset{report.summary.assets === 1 ? "" : "s"}.
+            <CheckCircle2 className="size-4" />
+            No type errors found across {report.summary.assets} asset
+            {report.summary.assets === 1 ? "" : "s"}.
           </div>
         ) : (
           <div className="space-y-2">
@@ -2171,16 +2647,30 @@ function TypeCheckPanel({
                   onClick={() => asset.id && onSelectAsset?.(asset.id)}
                   disabled={!asset.id}
                 >
-                  {asset.status === "error" ? <XCircle className="size-3.5 shrink-0 text-red-500" /> : <AlertTriangle className="size-3.5 shrink-0 text-amber-500" />}
-                  <span className="min-w-0 flex-1 truncate font-mono font-medium">{asset.name}</span>
+                  {asset.status === "error" ? (
+                    <XCircle className="size-3.5 shrink-0 text-red-500" />
+                  ) : (
+                    <AlertTriangle className="size-3.5 shrink-0 text-amber-500" />
+                  )}
+                  <span className="min-w-0 flex-1 truncate font-mono font-medium">
+                    {asset.name}
+                  </span>
                   <span className="shrink-0 text-[10px] text-muted-foreground">{asset.type}</span>
                 </button>
                 <ul className="divide-y">
                   {asset.findings.map((finding, index) => (
                     <li key={index} className="flex items-start gap-2 px-2.5 py-1.5 text-xs">
-                      {finding.severity === "error" ? <XCircle className="mt-0.5 size-3.5 shrink-0 text-red-500" /> : <AlertTriangle className="mt-0.5 size-3.5 shrink-0 text-amber-500" />}
+                      {finding.severity === "error" ? (
+                        <XCircle className="mt-0.5 size-3.5 shrink-0 text-red-500" />
+                      ) : (
+                        <AlertTriangle className="mt-0.5 size-3.5 shrink-0 text-amber-500" />
+                      )}
                       <span className="min-w-0 flex-1">{finding.message}</span>
-                      {finding.line ? <span className="shrink-0 font-mono text-[10px] text-muted-foreground">L{finding.line}:C{finding.column}</span> : null}
+                      {finding.line ? (
+                        <span className="shrink-0 font-mono text-[10px] text-muted-foreground">
+                          L{finding.line}:C{finding.column}
+                        </span>
+                      ) : null}
                     </li>
                   ))}
                 </ul>
@@ -2196,7 +2686,10 @@ function TypeCheckPanel({
 function ShellPanel({ variant }: { variant: string }) {
   const [command, setCommand] = useState("");
   const [lines, setLines] = useState<Array<{ type: "cmd" | "out" | "ok" | "err"; value: string }>>([
-    { type: "out", value: "renart shell: runs against the active project, environment and variant. Type help." },
+    {
+      type: "out",
+      value: "renart shell: runs against the active project, environment and variant. Type help.",
+    },
   ]);
   const prompt = `renart:simple(${variant}) $`;
   const runCommand = () => {
@@ -2208,11 +2701,27 @@ function ShellPanel({ variant }: { variant: string }) {
       return;
     }
     const output: typeof lines = [{ type: "cmd", value: `${prompt} ${value}` }];
-    if (/^(renart|bruin)\s+run/.test(value)) output.push({ type: "ok", value: `2 assets executed for ${renderedPipelineName(variant)} in 111ms` });
-    else if (/plan/.test(value)) output.push({ type: "out", value: "Changes: 1 breaking, 1 non-breaking; 3 to backfill. Apply with renart plan --apply." });
-    else if (/test/.test(value)) output.push({ type: "out", value: "2 passed, 1 failed: nulls_count_as_zero." });
-    else if (/list-variants|variants/.test(value)) output.push({ type: "out", value: pipelineVariants.map((item) => item.id).join(" · ") });
-    else if (value === "help") output.push({ type: "out", value: "run · plan · validate · test · asset · metadata · schedule · git · internal list-variants · clear" });
+    if (/^(renart|bruin)\s+run/.test(value))
+      output.push({
+        type: "ok",
+        value: `2 assets executed for ${renderedPipelineName(variant)} in 111ms`,
+      });
+    else if (/plan/.test(value))
+      output.push({
+        type: "out",
+        value:
+          "Changes: 1 breaking, 1 non-breaking; 3 to backfill. Apply with renart plan --apply.",
+      });
+    else if (/test/.test(value))
+      output.push({ type: "out", value: "2 passed, 1 failed: nulls_count_as_zero." });
+    else if (/list-variants|variants/.test(value))
+      output.push({ type: "out", value: pipelineVariants.map((item) => item.id).join(" · ") });
+    else if (value === "help")
+      output.push({
+        type: "out",
+        value:
+          "run · plan · validate · test · asset · metadata · schedule · git · internal list-variants · clear",
+      });
     else output.push({ type: "err", value: `command not found: ${value.split(" ")[0]}` });
     setLines((current) => [...current, ...output]);
     setCommand("");
@@ -2222,12 +2731,34 @@ function ShellPanel({ variant }: { variant: string }) {
     <div className="flex h-full min-h-0 flex-col bg-zinc-950 font-mono text-xs text-zinc-100">
       <ScrollArea className="min-h-0 flex-1">
         <div className="space-y-1 p-3">
-          {lines.map((line, index) => <div key={index} className={cn(line.type === "ok" ? "text-emerald-400" : line.type === "err" ? "text-red-400" : line.type === "cmd" ? "text-zinc-200" : "text-zinc-400")}>{line.value}</div>)}
+          {lines.map((line, index) => (
+            <div
+              key={index}
+              className={cn(
+                line.type === "ok"
+                  ? "text-emerald-400"
+                  : line.type === "err"
+                    ? "text-red-400"
+                    : line.type === "cmd"
+                      ? "text-zinc-200"
+                      : "text-zinc-400",
+              )}
+            >
+              {line.value}
+            </div>
+          ))}
         </div>
       </ScrollArea>
       <div className="flex items-center gap-2 border-t border-zinc-800 px-3 py-2">
         <span className="text-emerald-400">{prompt}</span>
-        <input className="min-w-0 flex-1 bg-transparent outline-none" value={command} onChange={(event) => setCommand(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") runCommand(); }} />
+        <input
+          className="min-w-0 flex-1 bg-transparent outline-none"
+          value={command}
+          onChange={(event) => setCommand(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key === "Enter") runCommand();
+          }}
+        />
       </div>
     </div>
   );
@@ -2237,16 +2768,41 @@ function HistoryPanel({
   history,
   onOpen,
 }: {
-  history: Array<{ id: number; kind: string; target: string; status: string; time: string; variant: string }>;
+  history: Array<{
+    id: number;
+    kind: string;
+    target: string;
+    status: string;
+    time: string;
+    variant: string;
+  }>;
   onOpen: (tab: AppResultTab) => void;
 }) {
   if (history.length === 0) {
-    return <div className="p-4 text-xs text-muted-foreground">No local actions yet. Run, inspect, query, or test something to populate history.</div>;
+    return (
+      <div className="p-4 text-xs text-muted-foreground">
+        No local actions yet. Run, inspect, query, or test something to populate history.
+      </div>
+    );
   }
   return (
     <div>
       {history.map((item) => (
-        <button key={item.id} className="flex w-full items-center gap-3 border-b px-3 py-2 text-left text-xs hover:bg-muted" onClick={() => onOpen(item.kind === "test" ? "tests" : item.kind === "query" ? "query" : item.kind === "inspect" ? "inspect" : "materialize")}>
+        <button
+          key={item.id}
+          className="flex w-full items-center gap-3 border-b px-3 py-2 text-left text-xs hover:bg-muted"
+          onClick={() =>
+            onOpen(
+              item.kind === "test"
+                ? "tests"
+                : item.kind === "query"
+                  ? "query"
+                  : item.kind === "inspect"
+                    ? "inspect"
+                    : "materialize",
+            )
+          }
+        >
           <History className="size-3.5 text-muted-foreground" />
           <span className="font-mono text-primary">{item.kind}</span>
           <span className="min-w-0 flex-1 truncate font-mono">{item.target}</span>
@@ -2284,7 +2840,9 @@ function Inspector({ asset }: { asset: BuildAsset }) {
         <Sliders className="size-4 shrink-0 text-primary" />
         <div className="min-w-0 flex-1">
           <div className="truncate font-monaco text-[13px] font-medium">{title}</div>
-          {subtitle ? <p className="truncate text-[11px] text-muted-foreground">{subtitle}</p> : null}
+          {subtitle ? (
+            <p className="truncate text-[11px] text-muted-foreground">{subtitle}</p>
+          ) : null}
         </div>
         {editable ? (
           <div className="flex shrink-0 overflow-hidden rounded-md border text-[11px]">
@@ -2294,7 +2852,9 @@ function Inspector({ asset }: { asset: BuildAsset }) {
                 type="button"
                 className={cn(
                   "px-2 py-0.5 transition-colors",
-                  propsView === option.value ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted"
+                  propsView === option.value
+                    ? "bg-primary text-primary-foreground"
+                    : "text-muted-foreground hover:bg-muted",
                 )}
                 aria-pressed={propsView === option.value}
                 onClick={() => setPropsView(option.value)}
@@ -2310,7 +2870,8 @@ function Inspector({ asset }: { asset: BuildAsset }) {
           resetKey={`${propsView} ${workspaceAsset.content ?? ""}`}
           fallback={
             <div className="flex min-h-0 flex-1 items-center justify-center p-6 text-center text-xs text-muted-foreground">
-              These properties can&apos;t be shown right now — the asset file may have a syntax error. Fix it in the code editor to continue.
+              These properties can&apos;t be shown right now — the asset file may have a syntax
+              error. Fix it in the code editor to continue.
             </div>
           }
         >
@@ -2334,16 +2895,41 @@ function UnitTests({ compact, onOpenResults }: { compact?: boolean; onOpenResult
     <div className="space-y-2">
       <div className="flex items-center gap-2">
         <span className="text-xs font-medium">Unit tests</span>
-        <Badge variant="outline" className="bg-emerald-50 text-emerald-700 dark:bg-emerald-500/10 dark:text-emerald-300">2 passed</Badge>
-        <Badge variant="outline" className="bg-red-50 text-red-700 dark:bg-red-500/10 dark:text-red-300">1 failed</Badge>
-        <Button variant="outline" size="xs" className="ml-auto"><Plus className="size-3" />New</Button>
-        <Button size="xs" onClick={onOpenResults}><Play className="size-3" />Run all</Button>
+        <Badge
+          variant="outline"
+          className="bg-emerald-50 text-emerald-700 dark:bg-emerald-500/10 dark:text-emerald-300"
+        >
+          2 passed
+        </Badge>
+        <Badge
+          variant="outline"
+          className="bg-red-50 text-red-700 dark:bg-red-500/10 dark:text-red-300"
+        >
+          1 failed
+        </Badge>
+        <Button variant="outline" size="xs" className="ml-auto">
+          <Plus className="size-3" />
+          New
+        </Button>
+        <Button size="xs" onClick={onOpenResults}>
+          <Play className="size-3" />
+          Run all
+        </Button>
       </div>
       {tests.map((test) => (
         <div key={test.id} className="rounded-lg border p-2 text-xs">
-          <div className="flex items-center gap-2"><StatusPill status={test.status} /><span className="min-w-0 flex-1 truncate font-mono font-medium">{test.name}</span>{compact ? <MoreHorizontal className="size-3.5 text-muted-foreground" /> : null}</div>
-          <div className="mt-1 flex flex-wrap gap-3 text-muted-foreground"><span>given: {test.given}</span><span>expect: {test.expect}</span></div>
-          {"got" in test ? <div className="mt-2 rounded bg-muted p-2 font-mono text-red-600">got: {test.got}</div> : null}
+          <div className="flex items-center gap-2">
+            <StatusPill status={test.status} />
+            <span className="min-w-0 flex-1 truncate font-mono font-medium">{test.name}</span>
+            {compact ? <MoreHorizontal className="size-3.5 text-muted-foreground" /> : null}
+          </div>
+          <div className="mt-1 flex flex-wrap gap-3 text-muted-foreground">
+            <span>given: {test.given}</span>
+            <span>expect: {test.expect}</span>
+          </div>
+          {"got" in test ? (
+            <div className="mt-2 rounded bg-muted p-2 font-mono text-red-600">got: {test.got}</div>
+          ) : null}
         </div>
       ))}
     </div>
@@ -2354,15 +2940,29 @@ function DiagnosticsList() {
   return (
     <div>
       <div className="sticky top-0 flex h-9 items-center gap-3 border-b bg-card px-3 text-xs">
-        <span className="flex items-center gap-1 text-red-500"><XCircle className="size-3.5" />2</span>
-        <span className="flex items-center gap-1 text-amber-500"><AlertTriangle className="size-3.5" />2</span>
-        <span className="flex items-center gap-1 text-muted-foreground"><Activity className="size-3.5" />0</span>
+        <span className="flex items-center gap-1 text-red-500">
+          <XCircle className="size-3.5" />2
+        </span>
+        <span className="flex items-center gap-1 text-amber-500">
+          <AlertTriangle className="size-3.5" />2
+        </span>
+        <span className="flex items-center gap-1 text-muted-foreground">
+          <Activity className="size-3.5" />0
+        </span>
       </div>
       {diagnostics.map((diagnostic) => (
-        <div key={`${diagnostic.asset}-${diagnostic.message}`} className="flex items-start gap-2 border-b px-3 py-2 text-xs">
+        <div
+          key={`${diagnostic.asset}-${diagnostic.message}`}
+          className="flex items-start gap-2 border-b px-3 py-2 text-xs"
+        >
           <SeverityIcon severity={diagnostic.severity} />
-          <div className="min-w-0 flex-1"><span className="font-mono text-primary">{diagnostic.asset}</span><span className="text-muted-foreground"> - {diagnostic.message}</span></div>
-          <Button variant="outline" size="xs">{diagnostic.action}</Button>
+          <div className="min-w-0 flex-1">
+            <span className="font-mono text-primary">{diagnostic.asset}</span>
+            <span className="text-muted-foreground"> - {diagnostic.message}</span>
+          </div>
+          <Button variant="outline" size="xs">
+            {diagnostic.action}
+          </Button>
         </div>
       ))}
     </div>
@@ -2375,22 +2975,71 @@ function MetadataPanel({ compact, onFull }: { compact?: boolean; onFull?: () => 
       <div className="space-y-2">
         <div className="flex items-center gap-2 text-xs">
           <GitCompare className="size-3.5 text-muted-foreground" /> Declared vs table
-          <Badge variant="outline" className="bg-amber-50 text-amber-700">drift detected</Badge>
-          <Button variant="link" size="xs" className="ml-auto h-auto p-0" onClick={onFull}>Full diff</Button>
+          <Badge variant="outline" className="bg-amber-50 text-amber-700">
+            drift detected
+          </Badge>
+          <Button variant="link" size="xs" className="ml-auto h-auto p-0" onClick={onFull}>
+            Full diff
+          </Button>
         </div>
-        {schemaRows.map((row) => <div key={row.name} className="rounded-lg border p-2 text-xs"><div className="flex items-center justify-between"><span className="font-mono">{row.name}</span><SchemaStatus status={row.status} /></div><div className="mt-1 flex gap-3 font-mono text-muted-foreground"><span>decl: {row.declared}</span><span>table: {row.actual}</span></div></div>)}
+        {schemaRows.map((row) => (
+          <div key={row.name} className="rounded-lg border p-2 text-xs">
+            <div className="flex items-center justify-between">
+              <span className="font-mono">{row.name}</span>
+              <SchemaStatus status={row.status} />
+            </div>
+            <div className="mt-1 flex gap-3 font-mono text-muted-foreground">
+              <span>decl: {row.declared}</span>
+              <span>table: {row.actual}</span>
+            </div>
+          </div>
+        ))}
       </div>
     );
   }
 
-  return <SimpleTable columns={["Column", "Declared", "In table", "Description", "Status"]} rows={schemaRows.map((row) => [row.name, row.declared, row.actual, row.description || "no description", <SchemaStatus key={row.name} status={row.status} />])} />;
+  return (
+    <SimpleTable
+      columns={["Column", "Declared", "In table", "Description", "Status"]}
+      rows={schemaRows.map((row) => [
+        row.name,
+        row.declared,
+        row.actual,
+        row.description || "no description",
+        <SchemaStatus key={row.name} status={row.status} />,
+      ])}
+    />
+  );
 }
 
 function SchemaStatus({ status }: { status: string }) {
-  if (status === "match") return <Badge variant="outline" className="bg-emerald-50 text-emerald-700"><CheckCircle2 className="size-3" />in sync</Badge>;
-  if (status === "drift") return <Badge variant="outline" className="bg-amber-50 text-amber-700"><AlertTriangle className="size-3" />type drift</Badge>;
-  if (status === "missing") return <Badge variant="outline" className="bg-muted"><Circle className="size-3" />missing</Badge>;
-  return <Badge variant="outline" className="bg-sky-50 text-sky-700"><Plus className="size-3" />extra</Badge>;
+  if (status === "match")
+    return (
+      <Badge variant="outline" className="bg-emerald-50 text-emerald-700">
+        <CheckCircle2 className="size-3" />
+        in sync
+      </Badge>
+    );
+  if (status === "drift")
+    return (
+      <Badge variant="outline" className="bg-amber-50 text-amber-700">
+        <AlertTriangle className="size-3" />
+        type drift
+      </Badge>
+    );
+  if (status === "missing")
+    return (
+      <Badge variant="outline" className="bg-muted">
+        <Circle className="size-3" />
+        missing
+      </Badge>
+    );
+  return (
+    <Badge variant="outline" className="bg-sky-50 text-sky-700">
+      <Plus className="size-3" />
+      extra
+    </Badge>
+  );
 }
 
 // Asset kinds the creation dialog can produce, mapped to real backend create
@@ -2407,14 +3056,24 @@ type AssetKindOption = {
 const CREATABLE_ASSETS: AssetKindOption[] = [
   { id: "sql", label: "SQL asset", description: "Transform with a SELECT", icon: FileCode },
   { id: "python", label: "Python asset", description: "Custom Python transform", icon: Cpu },
-  { id: "api", label: "HTTP API", description: "Pull records from an HTTP API endpoint", icon: Globe },
+  {
+    id: "api",
+    label: "HTTP API",
+    description: "Pull records from an HTTP API endpoint",
+    icon: Globe,
+  },
   { id: "load", label: "Load", description: "Replicate data between connections", icon: Download },
 ];
 
 const DOWNSTREAM_ASSETS: AssetKindOption[] = [
   { id: "sql", label: "SQL", description: "select * from the upstream table", icon: FileCode },
   { id: "python", label: "Python", description: "Read the upstream table from Python", icon: Cpu },
-  { id: "load", label: "Load", description: "Replicate downstream between connections", icon: Download },
+  {
+    id: "load",
+    label: "Load",
+    description: "Replicate downstream between connections",
+    icon: Download,
+  },
 ];
 
 // A downstream asset reuses the source's prefix and appends _downstream, kept
@@ -2436,7 +3095,11 @@ function suggestDownstreamName(sourceName: string, existing: Set<string>): strin
 
 // suggestPrefixedAssetName seeds a unique name under an explicit prefix
 // (from the canvas prefix-group the user right-clicked in).
-function suggestPrefixedAssetName(kind: NewAssetKind, prefix: string, existing: Set<string>): string {
+function suggestPrefixedAssetName(
+  kind: NewAssetKind,
+  prefix: string,
+  existing: Set<string>,
+): string {
   const base = `${prefix}.my_${kind}_asset_`;
   let index = 1;
   while (existing.has(`${base}${index}`)) {
@@ -2479,7 +3142,7 @@ function NewAssetDialog({
   const workspace = useAtomValue(workspaceAtom);
   const connectionNames = useMemo(
     () => Object.keys(workspace?.connections ?? {}).sort((a, b) => a.localeCompare(b)),
-    [workspace?.connections]
+    [workspace?.connections],
   );
 
   const isDownstream = Boolean(downstreamSource);
@@ -2551,12 +3214,21 @@ function NewAssetDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="flex max-h-[90dvh] max-w-2xl flex-col overflow-hidden">
         <DialogHeader>
-          <DialogTitle className="flex items-center gap-2"><Plus className="size-4 text-primary" />{isDownstream ? "New downstream asset" : "New asset"}</DialogTitle>
+          <DialogTitle className="flex items-center gap-2">
+            <Plus className="size-4 text-primary" />
+            {isDownstream ? "New downstream asset" : "New asset"}
+          </DialogTitle>
           <DialogDescription>
             {isDownstream && downstreamSource ? (
-              <>Depends on <span className="font-mono">{downstreamSource.name}</span>.</>
+              <>
+                Depends on <span className="font-mono">{downstreamSource.name}</span>.
+              </>
             ) : (
-              <>Create an asset in {pipelineName ? <span className="font-mono">{pipelineName}</span> : "this pipeline"}.</>
+              <>
+                Create an asset in{" "}
+                {pipelineName ? <span className="font-mono">{pipelineName}</span> : "this pipeline"}
+                .
+              </>
             )}
           </DialogDescription>
         </DialogHeader>
@@ -2566,7 +3238,10 @@ function NewAssetDialog({
               <button
                 key={option.id}
                 type="button"
-                className={cn("rounded-lg border p-3 text-left hover:bg-muted", selected.id === option.id ? "border-primary ring-1 ring-primary" : null)}
+                className={cn(
+                  "rounded-lg border p-3 text-left hover:bg-muted",
+                  selected.id === option.id ? "border-primary ring-1 ring-primary" : null,
+                )}
                 onClick={() => setKind(option.id)}
               >
                 <option.icon className="size-5 text-primary" />
@@ -2590,29 +3265,44 @@ function NewAssetDialog({
               }}
               autoFocus
             />
-            <p className="text-xs text-muted-foreground">Use a <span className="font-mono">prefix.name</span> to group it under <span className="font-mono">assets/prefix/</span>.</p>
+            <p className="text-xs text-muted-foreground">
+              Use a <span className="font-mono">prefix.name</span> to group it under{" "}
+              <span className="font-mono">assets/prefix/</span>.
+            </p>
           </div>
           {selected.id === "api" ? (
             <FieldGroup>
               <Field>
                 <FieldLabel htmlFor="new-api-template">API source</FieldLabel>
-                <Select value={apiTemplate} onValueChange={(value) => setAPITemplate(value as APIAssetTemplateId)}>
+                <Select
+                  value={apiTemplate}
+                  onValueChange={(value) => setAPITemplate(value as APIAssetTemplateId)}
+                >
                   <SelectTrigger id="new-api-template">
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
                     <SelectGroup>
                       {API_ASSET_TEMPLATES.map((template) => (
-                        <SelectItem key={template.id} value={template.id}>{template.label}</SelectItem>
+                        <SelectItem key={template.id} value={template.id}>
+                          {template.label}
+                        </SelectItem>
                       ))}
                     </SelectGroup>
                   </SelectContent>
                 </Select>
-                <FieldDescription>{API_ASSET_TEMPLATES.find((template) => template.id === apiTemplate)?.description}</FieldDescription>
+                <FieldDescription>
+                  {API_ASSET_TEMPLATES.find((template) => template.id === apiTemplate)?.description}
+                </FieldDescription>
               </Field>
               <Field>
                 <FieldLabel htmlFor="new-asset-connection">Destination connection</FieldLabel>
-                <Select value={connection || AUTO_CONNECTION_VALUE} onValueChange={(value) => setConnection(value === AUTO_CONNECTION_VALUE ? "" : value)}>
+                <Select
+                  value={connection || AUTO_CONNECTION_VALUE}
+                  onValueChange={(value) =>
+                    setConnection(value === AUTO_CONNECTION_VALUE ? "" : value)
+                  }
+                >
                   <SelectTrigger id="new-asset-connection">
                     <SelectValue />
                   </SelectTrigger>
@@ -2620,12 +3310,16 @@ function NewAssetDialog({
                     <SelectGroup>
                       <SelectItem value={AUTO_CONNECTION_VALUE}>Auto (pipeline default)</SelectItem>
                       {connectionNames.map((connectionName) => (
-                        <SelectItem key={connectionName} value={connectionName}>{connectionName}</SelectItem>
+                        <SelectItem key={connectionName} value={connectionName}>
+                          {connectionName}
+                        </SelectItem>
                       ))}
                     </SelectGroup>
                   </SelectContent>
                 </Select>
-                <FieldDescription>Where fetched records are loaded. You can change this later.</FieldDescription>
+                <FieldDescription>
+                  Where fetched records are loaded. You can change this later.
+                </FieldDescription>
               </Field>
             </FieldGroup>
           ) : null}
@@ -2638,7 +3332,9 @@ function NewAssetDialog({
           ) : null}
         </div>
         <DialogFooter>
-          <Button variant="outline" onClick={() => onOpenChange(false)} disabled={creating}>Cancel</Button>
+          <Button variant="outline" onClick={() => onOpenChange(false)} disabled={creating}>
+            Cancel
+          </Button>
           <Button onClick={() => void create()} disabled={creating || !pipelineId}>
             {creating ? <Spinner className="size-4" /> : <CheckCircle2 className="size-4" />}Create
           </Button>
@@ -2685,7 +3381,11 @@ function NewPipelineDialog({
       setError("Use a relative directory path without spaces.");
       return;
     }
-    if ([...existingPaths].some((existing) => existing === trimmedPath || existing.startsWith(`${trimmedPath}/`))) {
+    if (
+      [...existingPaths].some(
+        (existing) => existing === trimmedPath || existing.startsWith(`${trimmedPath}/`),
+      )
+    ) {
       setError(`A pipeline already exists at "${trimmedPath}".`);
       return;
     }
@@ -2706,9 +3406,13 @@ function NewPipelineDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-md">
         <DialogHeader>
-          <DialogTitle className="flex items-center gap-2"><Plus className="size-4 text-primary" />New pipeline</DialogTitle>
+          <DialogTitle className="flex items-center gap-2">
+            <Plus className="size-4 text-primary" />
+            New pipeline
+          </DialogTitle>
           <DialogDescription>
-            Creates a directory with a <span className="font-mono">pipeline.yml</span> and an empty <span className="font-mono">assets/</span> folder.
+            Creates a directory with a <span className="font-mono">pipeline.yml</span> and an empty{" "}
+            <span className="font-mono">assets/</span> folder.
           </DialogDescription>
         </DialogHeader>
         <div className="grid gap-4">
@@ -2743,11 +3447,15 @@ function NewPipelineDialog({
             />
           </div>
           {error ? (
-            <div className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700 dark:border-red-500/25 dark:bg-red-500/10 dark:text-red-300">{error}</div>
+            <div className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700 dark:border-red-500/25 dark:bg-red-500/10 dark:text-red-300">
+              {error}
+            </div>
           ) : null}
         </div>
         <DialogFooter>
-          <Button variant="outline" onClick={() => onOpenChange(false)} disabled={creating}>Cancel</Button>
+          <Button variant="outline" onClick={() => onOpenChange(false)} disabled={creating}>
+            Cancel
+          </Button>
           <Button onClick={() => void create()} disabled={creating}>
             {creating ? <Spinner className="size-4" /> : <CheckCircle2 className="size-4" />}Create
           </Button>
@@ -2798,9 +3506,19 @@ function NewFolderDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-md">
         <DialogHeader>
-          <DialogTitle className="flex items-center gap-2"><FolderPlus className="size-4 text-primary" />New folder</DialogTitle>
+          <DialogTitle className="flex items-center gap-2">
+            <FolderPlus className="size-4 text-primary" />
+            New folder
+          </DialogTitle>
           <DialogDescription>
-            Folders group assets under <span className="font-mono">assets/&lt;folder&gt;/</span>{pipelineName ? <> in <span className="font-mono">{pipelineName}</span></> : null}. The folder is created together with its first asset.
+            Folders group assets under <span className="font-mono">assets/&lt;folder&gt;/</span>
+            {pipelineName ? (
+              <>
+                {" "}
+                in <span className="font-mono">{pipelineName}</span>
+              </>
+            ) : null}
+            . The folder is created together with its first asset.
           </DialogDescription>
         </DialogHeader>
         <div className="grid gap-2">
@@ -2819,13 +3537,18 @@ function NewFolderDialog({
             autoFocus
           />
           {error ? (
-            <div className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700 dark:border-red-500/25 dark:bg-red-500/10 dark:text-red-300">{error}</div>
+            <div className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700 dark:border-red-500/25 dark:bg-red-500/10 dark:text-red-300">
+              {error}
+            </div>
           ) : null}
         </div>
         <DialogFooter>
-          <Button variant="outline" onClick={() => onOpenChange(false)}>Cancel</Button>
+          <Button variant="outline" onClick={() => onOpenChange(false)}>
+            Cancel
+          </Button>
           <Button onClick={confirm}>
-            <FolderPlus className="size-4" />Choose first asset
+            <FolderPlus className="size-4" />
+            Choose first asset
           </Button>
         </DialogFooter>
       </DialogContent>
@@ -2893,9 +3616,12 @@ function PipelineSettingsDialog({
     };
   }, [open, pipelineId, initialSection]);
 
-  const update = useCallback(<K extends keyof PipelineConfigDraft>(key: K, value: PipelineConfigDraft[K]) => {
-    setDraft((current) => (current ? { ...current, [key]: value } : current));
-  }, []);
+  const update = useCallback(
+    <K extends keyof PipelineConfigDraft>(key: K, value: PipelineConfigDraft[K]) => {
+      setDraft((current) => (current ? { ...current, [key]: value } : current));
+    },
+    [],
+  );
 
   const save = async () => {
     if (!draft) return;
@@ -2917,30 +3643,60 @@ function PipelineSettingsDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-3xl">
         <DialogHeader>
-          <DialogTitle>Pipeline settings <span className="font-mono text-xs text-muted-foreground">· {draft?.name || pipelineId}</span></DialogTitle>
-          <DialogDescription>Edit the pipeline configuration stored in <span className="font-mono">pipeline.yml</span>.</DialogDescription>
+          <DialogTitle>
+            Pipeline settings{" "}
+            <span className="font-mono text-xs text-muted-foreground">
+              · {draft?.name || pipelineId}
+            </span>
+          </DialogTitle>
+          <DialogDescription>
+            Edit the pipeline configuration stored in{" "}
+            <span className="font-mono">pipeline.yml</span>.
+          </DialogDescription>
         </DialogHeader>
         <div className="grid min-h-80 gap-4 md:grid-cols-[180px_minmax(0,1fr)]">
           <div className="flex gap-2 overflow-x-auto md:block md:space-y-1">
             {pipelineSettingsSections.map((item) => (
-              <Button key={item.id} variant={section === item.id ? "secondary" : "ghost"} className="justify-start" onClick={() => setSection(item.id)}>
+              <Button
+                key={item.id}
+                variant={section === item.id ? "secondary" : "ghost"}
+                className="justify-start"
+                onClick={() => setSection(item.id)}
+              >
                 {item.label}
               </Button>
             ))}
           </div>
           <div className="max-h-[26rem] space-y-4 overflow-y-auto rounded-lg border p-4">
             {loading || !draft ? (
-              <div className="flex items-center gap-2 text-sm text-muted-foreground"><Loader2 className="size-4 animate-spin" />Loading settings…</div>
+              <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                <Loader2 className="size-4 animate-spin" />
+                Loading settings…
+              </div>
             ) : (
-              <PipelineSettingsSectionBody section={section} draft={draft} update={update} yaml={yaml} />
+              <PipelineSettingsSectionBody
+                section={section}
+                draft={draft}
+                update={update}
+                yaml={yaml}
+              />
             )}
           </div>
         </div>
         {error ? <p className="text-xs text-red-600">{error}</p> : null}
         <DialogFooter>
-          <Button variant="outline" onClick={() => onOpenChange(false)} disabled={saving}>Cancel</Button>
+          <Button variant="outline" onClick={() => onOpenChange(false)} disabled={saving}>
+            Cancel
+          </Button>
           <Button onClick={() => void save()} disabled={saving || loading || !draft}>
-            {saving ? <><Loader2 className="size-4 animate-spin" />Saving…</> : "Save changes"}
+            {saving ? (
+              <>
+                <Loader2 className="size-4 animate-spin" />
+                Saving…
+              </>
+            ) : (
+              "Save changes"
+            )}
           </Button>
         </DialogFooter>
       </DialogContent>
@@ -3007,15 +3763,48 @@ function PipelineSettingsSectionBody({
   if (section === "general") {
     return (
       <>
-        <SettingsTextField label="Pipeline name" value={draft.name} onChange={(value) => update("name", value)} placeholder="my_pipeline" />
-        <SettingsTextField label="Owner" value={draft.owner} onChange={(value) => update("owner", value)} placeholder="team@acme.io" />
-        <SettingsMultiValueField label="Tags" value={draft.tags} onChange={(value) => update("tags", value)} placeholder="Add tag" />
-        <SettingsMultiValueField label="Domains" value={draft.domains} onChange={(value) => update("domains", value)} placeholder="Add domain" />
+        <SettingsTextField
+          label="Pipeline name"
+          value={draft.name}
+          onChange={(value) => update("name", value)}
+          placeholder="my_pipeline"
+        />
+        <SettingsTextField
+          label="Owner"
+          value={draft.owner}
+          onChange={(value) => update("owner", value)}
+          placeholder="team@acme.io"
+        />
+        <SettingsMultiValueField
+          label="Tags"
+          value={draft.tags}
+          onChange={(value) => update("tags", value)}
+          placeholder="Add tag"
+        />
+        <SettingsMultiValueField
+          label="Domains"
+          value={draft.domains}
+          onChange={(value) => update("domains", value)}
+          placeholder="Add domain"
+        />
         <div className="grid grid-cols-2 gap-3">
-          <SettingsNumberField label="Retries" value={draft.retries} onChange={(value) => update("retries", value ?? 0)} />
-          <SettingsNumberField label="Concurrency" value={draft.concurrency} onChange={(value) => update("concurrency", value ?? 0)} />
+          <SettingsNumberField
+            label="Retries"
+            value={draft.retries}
+            onChange={(value) => update("retries", value ?? 0)}
+          />
+          <SettingsNumberField
+            label="Concurrency"
+            value={draft.concurrency}
+            onChange={(value) => update("concurrency", value ?? 0)}
+          />
         </div>
-        <SettingsNumberField label="Max active steps" value={draft.max_active_steps} onChange={(value) => update("max_active_steps", value)} hint="Leave blank for no limit." />
+        <SettingsNumberField
+          label="Max active steps"
+          value={draft.max_active_steps}
+          onChange={(value) => update("max_active_steps", value)}
+          hint="Leave blank for no limit."
+        />
         <SettingsToggleField
           label="Push metadata to BigQuery"
           description="Sync asset metadata to BigQuery after each run."
@@ -3028,15 +3817,51 @@ function PipelineSettingsSectionBody({
   if (section === "schedule") {
     return (
       <>
-        <SettingsTextField label="Schedule" value={draft.schedule} onChange={(value) => update("schedule", value)} placeholder="@daily" hint="A cron expression or preset like @daily / @hourly." />
-        <SettingsTextField label="Start date" value={draft.start_date} onChange={(value) => update("start_date", value)} placeholder="2024-01-01" />
-        <SettingsToggleField label="Catchup" description="Backfill every schedule interval missed since the start date." checked={draft.catchup} onChange={(value) => update("catchup", value)} />
+        <SettingsTextField
+          label="Schedule"
+          value={draft.schedule}
+          onChange={(value) => update("schedule", value)}
+          placeholder="@daily"
+          hint="A cron expression or preset like @daily / @hourly."
+        />
+        <SettingsTextField
+          label="Start date"
+          value={draft.start_date}
+          onChange={(value) => update("start_date", value)}
+          placeholder="2024-01-01"
+        />
+        <SettingsToggleField
+          label="Catchup"
+          description="Backfill every schedule interval missed since the start date."
+          checked={draft.catchup}
+          onChange={(value) => update("catchup", value)}
+        />
         <div className="grid gap-3 border-t pt-4">
-          <div className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Interval defaults</div>
-          <SettingsNumberField label="Rerun cooldown (seconds)" value={draft.defaults.rerun_cooldown} onChange={(value) => update("defaults", { ...draft.defaults, rerun_cooldown: value })} />
+          <div className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+            Interval defaults
+          </div>
+          <SettingsNumberField
+            label="Rerun cooldown (seconds)"
+            value={draft.defaults.rerun_cooldown}
+            onChange={(value) => update("defaults", { ...draft.defaults, rerun_cooldown: value })}
+          />
           <div className="grid grid-cols-2 gap-3">
-            <SettingsTextField label="Start offset" value={draft.defaults.start_offset_raw ?? ""} onChange={(value) => update("defaults", { ...draft.defaults, start_offset_raw: value || undefined })} placeholder="-1d" />
-            <SettingsTextField label="End offset" value={draft.defaults.end_offset_raw ?? ""} onChange={(value) => update("defaults", { ...draft.defaults, end_offset_raw: value || undefined })} placeholder="0d" />
+            <SettingsTextField
+              label="Start offset"
+              value={draft.defaults.start_offset_raw ?? ""}
+              onChange={(value) =>
+                update("defaults", { ...draft.defaults, start_offset_raw: value || undefined })
+              }
+              placeholder="-1d"
+            />
+            <SettingsTextField
+              label="End offset"
+              value={draft.defaults.end_offset_raw ?? ""}
+              onChange={(value) =>
+                update("defaults", { ...draft.defaults, end_offset_raw: value || undefined })
+              }
+              placeholder="0d"
+            />
           </div>
         </div>
       </>
@@ -3045,20 +3870,65 @@ function PipelineSettingsSectionBody({
   if (section === "connections") {
     return (
       <div className="space-y-3">
-        <p className="text-xs text-muted-foreground">Default connection per platform. Assets that don&apos;t name a connection use these.</p>
+        <p className="text-xs text-muted-foreground">
+          Default connection per platform. Assets that don&apos;t name a connection use these.
+        </p>
         {draft.default_connections.length === 0 ? (
-          <p className="rounded-md border border-dashed p-3 text-xs text-muted-foreground">No default connections set for this pipeline.</p>
+          <p className="rounded-md border border-dashed p-3 text-xs text-muted-foreground">
+            No default connections set for this pipeline.
+          </p>
         ) : (
           draft.default_connections.map((connection, index) => (
             <div key={index} className="flex items-end gap-2">
-              <SettingsTextField className="flex-1" label={index === 0 ? "Platform" : undefined} value={connection.platform} onChange={(value) => update("default_connections", replaceAt(draft.default_connections, index, { ...connection, platform: value }))} placeholder="gcp" />
-              <SettingsTextField className="flex-1" label={index === 0 ? "Connection" : undefined} value={connection.name} onChange={(value) => update("default_connections", replaceAt(draft.default_connections, index, { ...connection, name: value }))} placeholder="bq-prod" />
-              <Button variant="ghost" size="icon-sm" aria-label="Remove connection" onClick={() => update("default_connections", removeAt(draft.default_connections, index))}><Trash2 className="size-3.5" /></Button>
+              <SettingsTextField
+                className="flex-1"
+                label={index === 0 ? "Platform" : undefined}
+                value={connection.platform}
+                onChange={(value) =>
+                  update(
+                    "default_connections",
+                    replaceAt(draft.default_connections, index, { ...connection, platform: value }),
+                  )
+                }
+                placeholder="gcp"
+              />
+              <SettingsTextField
+                className="flex-1"
+                label={index === 0 ? "Connection" : undefined}
+                value={connection.name}
+                onChange={(value) =>
+                  update(
+                    "default_connections",
+                    replaceAt(draft.default_connections, index, { ...connection, name: value }),
+                  )
+                }
+                placeholder="bq-prod"
+              />
+              <Button
+                variant="ghost"
+                size="icon-sm"
+                aria-label="Remove connection"
+                onClick={() =>
+                  update("default_connections", removeAt(draft.default_connections, index))
+                }
+              >
+                <Trash2 className="size-3.5" />
+              </Button>
             </div>
           ))
         )}
-        <Button variant="outline" size="sm" onClick={() => update("default_connections", [...draft.default_connections, { platform: "", name: "" }])}>
-          <Plus className="size-3.5" />Add connection
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={() =>
+            update("default_connections", [
+              ...draft.default_connections,
+              { platform: "", name: "" },
+            ])
+          }
+        >
+          <Plus className="size-3.5" />
+          Add connection
         </Button>
       </div>
     );
@@ -3084,20 +3954,84 @@ function PipelineSettingsSectionBody({
   if (section === "variables") {
     return (
       <div className="space-y-3">
-        <p className="text-xs text-muted-foreground">Pipeline variables available to assets via <span className="font-mono">{"{{ var.name }}"}</span>.</p>
+        <p className="text-xs text-muted-foreground">
+          Pipeline variables available to assets via{" "}
+          <span className="font-mono">{"{{ var.name }}"}</span>.
+        </p>
         {draft.variables.map((variable, index) => (
           <div key={index} className="space-y-2 rounded-md border p-3">
             <div className="flex items-end gap-2">
-              <SettingsTextField className="flex-1" label="Name" value={variable.name} onChange={(value) => update("variables", replaceAt(draft.variables, index, { ...variable, name: value }))} placeholder="lookback_days" />
-              <SettingsTextField className="w-28" label="Type" value={variable.type} onChange={(value) => update("variables", replaceAt(draft.variables, index, { ...variable, type: value }))} placeholder="integer" />
-              <Button variant="ghost" size="icon-sm" aria-label="Remove variable" onClick={() => update("variables", removeAt(draft.variables, index))}><Trash2 className="size-3.5" /></Button>
+              <SettingsTextField
+                className="flex-1"
+                label="Name"
+                value={variable.name}
+                onChange={(value) =>
+                  update(
+                    "variables",
+                    replaceAt(draft.variables, index, { ...variable, name: value }),
+                  )
+                }
+                placeholder="lookback_days"
+              />
+              <SettingsTextField
+                className="w-28"
+                label="Type"
+                value={variable.type}
+                onChange={(value) =>
+                  update(
+                    "variables",
+                    replaceAt(draft.variables, index, { ...variable, type: value }),
+                  )
+                }
+                placeholder="integer"
+              />
+              <Button
+                variant="ghost"
+                size="icon-sm"
+                aria-label="Remove variable"
+                onClick={() => update("variables", removeAt(draft.variables, index))}
+              >
+                <Trash2 className="size-3.5" />
+              </Button>
             </div>
-            <SettingsTextField label="Default" value={variableValueToText(variable.default_value)} onChange={(value) => update("variables", replaceAt(draft.variables, index, { ...variable, default_value: value }))} placeholder="30" />
-            <SettingsTextField label="Description" value={variable.description ?? ""} onChange={(value) => update("variables", replaceAt(draft.variables, index, { ...variable, description: value || undefined }))} />
+            <SettingsTextField
+              label="Default"
+              value={variableValueToText(variable.default_value)}
+              onChange={(value) =>
+                update(
+                  "variables",
+                  replaceAt(draft.variables, index, { ...variable, default_value: value }),
+                )
+              }
+              placeholder="30"
+            />
+            <SettingsTextField
+              label="Description"
+              value={variable.description ?? ""}
+              onChange={(value) =>
+                update(
+                  "variables",
+                  replaceAt(draft.variables, index, {
+                    ...variable,
+                    description: value || undefined,
+                  }),
+                )
+              }
+            />
           </div>
         ))}
-        <Button variant="outline" size="sm" onClick={() => update("variables", [...draft.variables, { name: "", type: "string", default_value: "" }])}>
-          <Plus className="size-3.5" />Add variable
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={() =>
+            update("variables", [
+              ...draft.variables,
+              { name: "", type: "string", default_value: "" },
+            ])
+          }
+        >
+          <Plus className="size-3.5" />
+          Add variable
         </Button>
       </div>
     );
@@ -3118,14 +4052,40 @@ function NotificationChannelFields({
 }) {
   return (
     <div className="space-y-3">
-      <SettingsToggleField label={title} description={`Send ${title} messages for this pipeline's runs.`} checked={value.enabled} onChange={(enabled) => onChange({ ...value, enabled })} />
+      <SettingsToggleField
+        label={title}
+        description={`Send ${title} messages for this pipeline's runs.`}
+        checked={value.enabled}
+        onChange={(enabled) => onChange({ ...value, enabled })}
+      />
       {value.enabled ? (
         <div className="space-y-3 border-l pl-3">
-          <SettingsTextField label="Channel" value={value.channel ?? ""} onChange={(channel) => onChange({ ...value, channel })} placeholder={channelPlaceholder} />
-          <SettingsTextField label="Connection" value={value.connection ?? ""} onChange={(connection) => onChange({ ...value, connection })} placeholder="slack-default" hint="Named connection that authenticates the message." />
+          <SettingsTextField
+            label="Channel"
+            value={value.channel ?? ""}
+            onChange={(channel) => onChange({ ...value, channel })}
+            placeholder={channelPlaceholder}
+          />
+          <SettingsTextField
+            label="Connection"
+            value={value.connection ?? ""}
+            onChange={(connection) => onChange({ ...value, connection })}
+            placeholder="slack-default"
+            hint="Named connection that authenticates the message."
+          />
           <div className="flex gap-4">
-            <SettingsToggleField compact label="On success" checked={value.success} onChange={(success) => onChange({ ...value, success })} />
-            <SettingsToggleField compact label="On failure" checked={value.failure} onChange={(failure) => onChange({ ...value, failure })} />
+            <SettingsToggleField
+              compact
+              label="On success"
+              checked={value.success}
+              onChange={(success) => onChange({ ...value, success })}
+            />
+            <SettingsToggleField
+              compact
+              label="On failure"
+              checked={value.failure}
+              onChange={(failure) => onChange({ ...value, failure })}
+            />
           </div>
         </div>
       ) : null}
@@ -3133,17 +4093,45 @@ function NotificationChannelFields({
   );
 }
 
-function SettingsTextField({ label, value, onChange, placeholder, hint, className }: { label?: string; value: string; onChange: (value: string) => void; placeholder?: string; hint?: string; className?: string }) {
+function SettingsTextField({
+  label,
+  value,
+  onChange,
+  placeholder,
+  hint,
+  className,
+}: {
+  label?: string;
+  value: string;
+  onChange: (value: string) => void;
+  placeholder?: string;
+  hint?: string;
+  className?: string;
+}) {
   return (
     <label className={cn("block space-y-1.5", className)}>
       {label ? <span className="text-xs font-medium text-muted-foreground">{label}</span> : null}
-      <Input value={value} placeholder={placeholder} onChange={(event) => onChange(event.target.value)} />
+      <Input
+        value={value}
+        placeholder={placeholder}
+        onChange={(event) => onChange(event.target.value)}
+      />
       {hint ? <span className="block text-[11px] text-muted-foreground">{hint}</span> : null}
     </label>
   );
 }
 
-function SettingsMultiValueField({ label, value, onChange, placeholder }: { label: string; value: string[]; onChange: (value: string[]) => void; placeholder?: string }) {
+function SettingsMultiValueField({
+  label,
+  value,
+  onChange,
+  placeholder,
+}: {
+  label: string;
+  value: string[];
+  onChange: (value: string[]) => void;
+  placeholder?: string;
+}) {
   return (
     <label className="block space-y-1.5">
       <span className="text-xs font-medium text-muted-foreground">{label}</span>
@@ -3152,7 +4140,17 @@ function SettingsMultiValueField({ label, value, onChange, placeholder }: { labe
   );
 }
 
-function SettingsNumberField({ label, value, onChange, hint }: { label: string; value?: number; onChange: (value: number | undefined) => void; hint?: string }) {
+function SettingsNumberField({
+  label,
+  value,
+  onChange,
+  hint,
+}: {
+  label: string;
+  value?: number;
+  onChange: (value: number | undefined) => void;
+  hint?: string;
+}) {
   return (
     <label className="block space-y-1.5">
       <span className="text-xs font-medium text-muted-foreground">{label}</span>
@@ -3169,7 +4167,19 @@ function SettingsNumberField({ label, value, onChange, hint }: { label: string; 
   );
 }
 
-function SettingsToggleField({ label, description, checked, onChange, compact }: { label: string; description?: string; checked: boolean; onChange: (value: boolean) => void; compact?: boolean }) {
+function SettingsToggleField({
+  label,
+  description,
+  checked,
+  onChange,
+  compact,
+}: {
+  label: string;
+  description?: string;
+  checked: boolean;
+  onChange: (value: boolean) => void;
+  compact?: boolean;
+}) {
   if (compact) {
     return (
       <label className="flex items-center gap-2 text-sm">
@@ -3207,39 +4217,85 @@ function PipelineVariantsPanel({ yaml }: { yaml?: string }) {
   return (
     <div className="space-y-4">
       <div>
-        <div className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Variables</div>
-        <SimpleTable columns={["Variable", "Type", "Default"]} rows={pipelineVariables.map(([name, type, value]) => [<span key={name} className="font-mono">{name}</span>, type, <span key={value} className="font-mono">{value}</span>])} />
-      </div>
-      <div>
-        <div className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Variants</div>
+        <div className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+          Variables
+        </div>
         <SimpleTable
-          columns={["Variant", "Rendered name", "Schedule", "Overrides"]}
-          rows={pipelineVariants.filter((variant) => variant.id !== "default").map((variant) => [
-            <span key="variant" className="font-mono">{variant.id}</span>,
-            <span key="name" className="font-mono text-primary">{renderedPipelineName(variant.id)}</span>,
-            <span key="schedule" className="font-mono">{renderedPipelineSchedule(variant.id)}</span>,
-            <span key="overrides" className="font-mono text-muted-foreground">{Object.entries(variant.overrides).map(([key, value]) => `${key}=${value}`).join(", ")}</span>,
+          columns={["Variable", "Type", "Default"]}
+          rows={pipelineVariables.map(([name, type, value]) => [
+            <span key={name} className="font-mono">
+              {name}
+            </span>,
+            type,
+            <span key={value} className="font-mono">
+              {value}
+            </span>,
           ])}
         />
       </div>
-      <p className="text-xs text-muted-foreground">One <span className="font-mono">pipeline.yml</span> renders multiple concrete pipelines. Run with <span className="font-mono">renart run --variant &lt;name&gt;</span>, or pick a variant from the Build toolbar.</p>
+      <div>
+        <div className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+          Variants
+        </div>
+        <SimpleTable
+          columns={["Variant", "Rendered name", "Schedule", "Overrides"]}
+          rows={pipelineVariants
+            .filter((variant) => variant.id !== "default")
+            .map((variant) => [
+              <span key="variant" className="font-mono">
+                {variant.id}
+              </span>,
+              <span key="name" className="font-mono text-primary">
+                {renderedPipelineName(variant.id)}
+              </span>,
+              <span key="schedule" className="font-mono">
+                {renderedPipelineSchedule(variant.id)}
+              </span>,
+              <span key="overrides" className="font-mono text-muted-foreground">
+                {Object.entries(variant.overrides)
+                  .map(([key, value]) => `${key}=${value}`)
+                  .join(", ")}
+              </span>,
+            ])}
+        />
+      </div>
+      <p className="text-xs text-muted-foreground">
+        One <span className="font-mono">pipeline.yml</span> renders multiple concrete pipelines. Run
+        with <span className="font-mono">renart run --variant &lt;name&gt;</span>, or pick a variant
+        from the Build toolbar.
+      </p>
       {yaml ? (
         <div>
-          <div className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">pipeline.yml</div>
-          <pre className="max-h-56 overflow-auto rounded-md border bg-muted/40 p-3 font-mono text-[11px] leading-relaxed">{yaml}</pre>
+          <div className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+            pipeline.yml
+          </div>
+          <pre className="max-h-56 overflow-auto rounded-md border bg-muted/40 p-3 font-mono text-[11px] leading-relaxed">
+            {yaml}
+          </pre>
         </div>
       ) : null}
     </div>
   );
 }
 
-function PlanDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (open: boolean) => void }) {
+function PlanDialog({
+  open,
+  onOpenChange,
+}: {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+}) {
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-3xl">
         <DialogHeader>
-          <DialogTitle className="flex items-center gap-2"><ClipboardCheck className="size-4 text-primary" />Impact plan</DialogTitle>
-          <DialogDescription>Static preview of changed assets, breaking impact, and backfill scope before running.</DialogDescription>
+          <DialogTitle className="flex items-center gap-2">
+            <ClipboardCheck className="size-4 text-primary" />
+            Impact plan
+          </DialogTitle>
+          <DialogDescription>
+            Static preview of changed assets, breaking impact, and backfill scope before running.
+          </DialogDescription>
         </DialogHeader>
         <div className="grid gap-4 md:grid-cols-[minmax(0,1fr)_18rem]">
           <div className="overflow-hidden rounded-lg border">
@@ -3248,8 +4304,15 @@ function PlanDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (open
               rows={impactPlan.changes.map((change) => {
                 const meta = changeTypeMeta[change.type];
                 return [
-                  <span key="asset" className="font-mono">{change.name}</span>,
-                  <span key="change" className={cn("rounded px-1.5 py-0.5 text-[11px]", meta.className)}>{meta.label}</span>,
+                  <span key="asset" className="font-mono">
+                    {change.name}
+                  </span>,
+                  <span
+                    key="change"
+                    className={cn("rounded px-1.5 py-0.5 text-[11px]", meta.className)}
+                  >
+                    {meta.label}
+                  </span>,
                   change.note,
                 ];
               })}
@@ -3259,19 +4322,29 @@ function PlanDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (open
             <div className="rounded-lg border bg-muted/30 p-3">
               <div className="text-sm font-medium">Backfill required</div>
               <div className="mt-1 text-2xl font-semibold">3 assets</div>
-              <p className="mt-1 text-xs text-muted-foreground">Breaking and downstream changes need recompute.</p>
+              <p className="mt-1 text-xs text-muted-foreground">
+                Breaking and downstream changes need recompute.
+              </p>
             </div>
             {impactPlan.backfill.map((item) => (
               <div key={item.name} className="rounded-lg border p-2 text-xs">
                 <div className="font-mono font-medium">{item.name}</div>
-                <div className="mt-1 flex items-center justify-between text-muted-foreground"><span>{item.reason}</span><span>{item.rows}</span></div>
+                <div className="mt-1 flex items-center justify-between text-muted-foreground">
+                  <span>{item.reason}</span>
+                  <span>{item.rows}</span>
+                </div>
               </div>
             ))}
           </div>
         </div>
         <DialogFooter>
-          <Button variant="outline" onClick={() => onOpenChange(false)}>Close</Button>
-          <Button onClick={() => onOpenChange(false)}><Play className="size-4" />Run plan</Button>
+          <Button variant="outline" onClick={() => onOpenChange(false)}>
+            Close
+          </Button>
+          <Button onClick={() => onOpenChange(false)}>
+            <Play className="size-4" />
+            Run plan
+          </Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>
@@ -3299,7 +4372,13 @@ function DeployButton({ deployState }: { deployState: PipelineDeployState }) {
     ? `Working tree differs from deployed ${status.version_id ?? ""}`
     : "No deployed snapshot yet; scheduled runs use the working tree until you deploy";
   return (
-    <Button variant="outline" size="sm" onClick={() => void deploy()} disabled={deploying} title={title}>
+    <Button
+      variant="outline"
+      size="sm"
+      onClick={() => void deploy()}
+      disabled={deploying}
+      title={title}
+    >
       <Package className={cn("size-3.5", status.has_snapshot ? "text-amber-600" : undefined)} />
       {deploying ? "Deploying…" : label}
     </Button>
@@ -3321,7 +4400,9 @@ function BuildStaleDialog({
   open: boolean;
   onOpenChange: (open: boolean) => void;
   staleAssets: AssetStaleness[];
-  onBuild: (onAssetEvent: (event: StreamAssetEvent) => void) => Promise<MaterializeStreamPayload | null>;
+  onBuild: (
+    onAssetEvent: (event: StreamAssetEvent) => void,
+  ) => Promise<MaterializeStreamPayload | null>;
 }) {
   const [progress, setProgress] = useState<Record<string, BuildStaleProgress>>({});
   const [building, setBuilding] = useState(false);
@@ -3361,31 +4442,61 @@ function BuildStaleDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-2xl">
         <DialogHeader>
-          <DialogTitle className="flex items-center gap-2"><Hammer className="size-4 text-primary" />Build stale assets</DialogTitle>
+          <DialogTitle className="flex items-center gap-2">
+            <Hammer className="size-4 text-primary" />
+            Build stale assets
+          </DialogTitle>
           <DialogDescription>
-            {staleAssets.length} asset{staleAssets.length === 1 ? "" : "s"} out of date for this environment and time range. The server builds them in dependency order as one run; partial incrementals rebuild only the uncovered gaps.
+            {staleAssets.length} asset{staleAssets.length === 1 ? "" : "s"} out of date for this
+            environment and time range. The server builds them in dependency order as one run;
+            partial incrementals rebuild only the uncovered gaps.
           </DialogDescription>
         </DialogHeader>
         <div className="max-h-80 space-y-1 overflow-y-auto">
           {staleAssets.map((stale) => (
-            <div key={stale.asset_id} className="flex items-center gap-2 rounded-md border px-2 py-1.5 text-xs">
+            <div
+              key={stale.asset_id}
+              className="flex items-center gap-2 rounded-md border px-2 py-1.5 text-xs"
+            >
               <span className="min-w-0 flex-1 truncate font-mono">{stale.asset_name}</span>
               <StalenessBadge staleness={stale} />
               {stale.gaps?.length ? (
-                <span className="text-[10px] text-muted-foreground">{stale.gaps.length} gap{stale.gaps.length === 1 ? "" : "s"}</span>
+                <span className="text-[10px] text-muted-foreground">
+                  {stale.gaps.length} gap{stale.gaps.length === 1 ? "" : "s"}
+                </span>
               ) : null}
-              {progress[stale.asset_name] === "running" ? <span className="text-[10px] text-sky-600">building…</span> : null}
-              {progress[stale.asset_name] === "done" ? <Check className="size-3.5 text-emerald-600" /> : null}
-              {progress[stale.asset_name] === "skipped" ? <span className="text-[10px] text-muted-foreground" title="Skipped: a stale upstream failed">skipped</span> : null}
-              {progress[stale.asset_name] === "failed" ? <XCircle className="size-3.5 text-red-600" /> : null}
+              {progress[stale.asset_name] === "running" ? (
+                <span className="text-[10px] text-sky-600">building…</span>
+              ) : null}
+              {progress[stale.asset_name] === "done" ? (
+                <Check className="size-3.5 text-emerald-600" />
+              ) : null}
+              {progress[stale.asset_name] === "skipped" ? (
+                <span
+                  className="text-[10px] text-muted-foreground"
+                  title="Skipped: a stale upstream failed"
+                >
+                  skipped
+                </span>
+              ) : null}
+              {progress[stale.asset_name] === "failed" ? (
+                <XCircle className="size-3.5 text-red-600" />
+              ) : null}
             </div>
           ))}
-          {staleAssets.length === 0 ? <p className="text-xs text-muted-foreground">Everything is fresh.</p> : null}
+          {staleAssets.length === 0 ? (
+            <p className="text-xs text-muted-foreground">Everything is fresh.</p>
+          ) : null}
         </div>
         <DialogFooter>
-          <Button variant="outline" onClick={() => onOpenChange(false)} disabled={building}>Close</Button>
+          <Button variant="outline" onClick={() => onOpenChange(false)} disabled={building}>
+            Close
+          </Button>
           <Button onClick={buildAll} disabled={building || staleAssets.length === 0}>
-            <Play className="size-4" />{building ? "Building…" : `Build ${staleAssets.length} asset${staleAssets.length === 1 ? "" : "s"}`}
+            <Play className="size-4" />
+            {building
+              ? "Building…"
+              : `Build ${staleAssets.length} asset${staleAssets.length === 1 ? "" : "s"}`}
           </Button>
         </DialogFooter>
       </DialogContent>

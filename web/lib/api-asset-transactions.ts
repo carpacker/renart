@@ -21,7 +21,10 @@ export type AssetTransactionResult = {
 };
 
 export type AssetTransaction =
-  | { type: "dependency.manual.add"; dependency: { asset?: string; uri?: string; mode?: "full" | "symbolic" } }
+  | {
+      type: "dependency.manual.add";
+      dependency: { asset?: string; uri?: string; mode?: "full" | "symbolic" };
+    }
   | { type: "dependency.manual.remove"; dependency_key: string }
   | { type: "dependency.inferred.ignore"; dependency_key: string }
   | { type: "dependency.inferred.restore"; dependency_key: string }
@@ -30,7 +33,11 @@ export type AssetTransaction =
   | { type: "column.inferred.restore"; column: string }
   | { type: "column.field.own"; column: string; field: string }
   | { type: "column.field.disown"; column: string; field: string }
-  | { type: "column.check.add"; column: string; check: { name: string; value?: unknown; blocking?: boolean; description?: string } }
+  | {
+      type: "column.check.add";
+      column: string;
+      check: { name: string; value?: unknown; blocking?: boolean; description?: string };
+    }
   | { type: "column.check.remove"; column: string; check: { name: string } }
   | { type: "column.description.set"; column: string; description: string };
 
@@ -39,7 +46,7 @@ export async function applyAssetTransaction(assetId: string, tx: AssetTransactio
   return fetchJSONWithBody<AssetTransactionResult>(
     `/api/assets/${assetId}/transactions`,
     "POST",
-    tx
+    tx,
   );
 }
 
@@ -57,7 +64,7 @@ export async function reconcileAssetColumns(assetId: string, inferred: WebColumn
   return fetchJSONWithBody<ReconcileColumnsResult>(
     `/api/assets/${assetId}/columns/reconcile`,
     "POST",
-    { columns: inferred }
+    { columns: inferred },
   );
 }
 
@@ -69,7 +76,7 @@ export async function reconcileAssetColumns(assetId: string, inferred: WebColumn
 export async function refreshAssetColumnsFromDefinition(assetId: string) {
   return fetchJSON<ReconcileColumnsResult>(
     `/api/assets/${assetId}/columns/refresh-from-definition`,
-    { method: "POST" }
+    { method: "POST" },
   );
 }
 
@@ -77,6 +84,10 @@ export async function refreshAssetColumnsFromDefinition(assetId: string) {
  * Build the normalized dependency key (a:<asset>#<mode> / u:<uri>#<mode>) the
  * backend uses to identify a dependency, matching assetmeta.DependencyKey.
  */
-export function dependencyKey(value: string, mode: "full" | "symbolic" = "full", kind: "asset" | "uri" = "asset") {
+export function dependencyKey(
+  value: string,
+  mode: "full" | "symbolic" = "full",
+  kind: "asset" | "uri" = "asset",
+) {
   return `${kind === "uri" ? "u" : "a"}:${value.trim()}#${mode}`;
 }

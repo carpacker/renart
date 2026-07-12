@@ -8,16 +8,37 @@ async function createNotebook(request: APIRequestContext, baseURL: string, title
   return (await response.json()).notebook as { id: string };
 }
 
-async function addCell(request: APIRequestContext, baseURL: string, notebookId: string, name: string) {
-  const response = await request.post(`${baseURL}/api/notebooks/${notebookId}/cells`, { data: { name } });
+async function addCell(
+  request: APIRequestContext,
+  baseURL: string,
+  notebookId: string,
+  name: string,
+) {
+  const response = await request.post(`${baseURL}/api/notebooks/${notebookId}/cells`, {
+    data: { name },
+  });
   expect(response.ok()).toBe(true);
-  const notebook = (await response.json()).notebook as { cells: Array<{ cell_id: string; name: string }> };
+  const notebook = (await response.json()).notebook as {
+    cells: Array<{ cell_id: string; name: string }>;
+  };
   return notebook.cells.find((cell) => cell.name === name)!.cell_id;
 }
 
-async function setSql(request: APIRequestContext, baseURL: string, notebookId: string, cellId: string, body: string) {
+async function setSql(
+  request: APIRequestContext,
+  baseURL: string,
+  notebookId: string,
+  cellId: string,
+  body: string,
+) {
   const content = `/* @bruin\ntype: duckdb.sql\n@bruin */\n${body}\n`;
-  expect((await request.put(`${baseURL}/api/notebooks/${notebookId}/cells/${cellId}`, { data: { content } })).ok()).toBe(true);
+  expect(
+    (
+      await request.put(`${baseURL}/api/notebooks/${notebookId}/cells/${cellId}`, {
+        data: { content },
+      })
+    ).ok(),
+  ).toBe(true);
 }
 
 // A query DuckDB cannot fold to a constant: the WHERE forces it to evaluate
@@ -28,10 +49,15 @@ const HEAVY_SQL =
 test.describe("notebook run cancellation", () => {
   test.use({ fixtureName: "configured-workspace" });
 
-  test("Stop interrupts a running cell and the session stays responsive", async ({ liveApp, page }) => {
+  test("Stop interrupts a running cell and the session stays responsive", async ({
+    liveApp,
+    page,
+  }) => {
     const { request } = page;
     // Keep auto-recompute out of it: the only runs are the ones we trigger.
-    await page.addInitScript(() => window.localStorage.setItem("renart-notebook-autorecompute", "off"));
+    await page.addInitScript(() =>
+      window.localStorage.setItem("renart-notebook-autorecompute", "off"),
+    );
 
     const notebook = await createNotebook(request, liveApp.baseURL, "Cancel");
     const heavyCell = await addCell(request, liveApp.baseURL, notebook.id, "heavy");

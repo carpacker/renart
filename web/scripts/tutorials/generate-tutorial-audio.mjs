@@ -5,8 +5,7 @@ import { basename, resolve } from "node:path";
 
 const tutorialPath = process.argv[2];
 const outputDir = process.argv[3];
-const apiURL =
-  process.env.CHATTERBOX_TTS_API_URL || "http://127.0.0.1:4123/v1/audio/speech";
+const apiURL = process.env.CHATTERBOX_TTS_API_URL || "http://127.0.0.1:4123/v1/audio/speech";
 
 if (!tutorialPath || !outputDir) {
   console.error("usage: node generate-tutorial-audio.mjs <tutorial.json> <output-dir>");
@@ -45,7 +44,7 @@ for (const [index, segment] of segments.entries()) {
       voice,
       ttsOptions,
       indexLabel: String(index + 1).padStart(2, "0"),
-    })
+    }),
   );
 }
 
@@ -62,16 +61,11 @@ for (const segment of renderedSegments) {
 writeFileSync(concatManifestPath, `${concatLines.join("\n")}\n`);
 
 const combinedPath = resolve(outputDir, "narration.wav");
-await runCommand("ffmpeg", [
-  "-y",
-  "-f",
-  "concat",
-  "-safe",
-  "0",
-  "-i",
-  concatManifestPath,
-  combinedPath,
-], outputDir);
+await runCommand(
+  "ffmpeg",
+  ["-y", "-f", "concat", "-safe", "0", "-i", concatManifestPath, combinedPath],
+  outputDir,
+);
 
 writeFileSync(resolve(outputDir, "timings.json"), JSON.stringify(renderedSegments, null, 2));
 console.log(combinedPath);
@@ -181,7 +175,9 @@ async function renderAudioUnit({ id, text, paddingMs, outputDir, voice, ttsOptio
     });
 
     if (!response.ok) {
-      throw new Error(`Chatterbox TTS request failed with ${response.status}: ${await response.text()}`);
+      throw new Error(
+        `Chatterbox TTS request failed with ${response.status}: ${await response.text()}`,
+      );
     }
 
     const audioBuffer = Buffer.from(await response.arrayBuffer());

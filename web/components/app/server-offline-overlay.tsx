@@ -20,8 +20,8 @@ export function ServerOfflineOverlay() {
         <div className="space-y-1">
           <h2 className="text-base font-semibold">Lost connection to the server</h2>
           <p className="text-sm text-muted-foreground">
-            The renart server isn&apos;t responding. Your work is safe on disk. This will clear as soon as the
-            connection is back.
+            The renart server isn&apos;t responding. Your work is safe on disk. This will clear as
+            soon as the connection is back.
           </p>
         </div>
         <div className="flex items-center gap-2 text-xs text-muted-foreground">

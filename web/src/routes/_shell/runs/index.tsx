@@ -10,5 +10,10 @@ export const Route = createFileRoute("/_shell/runs/")({
 function AppRunsIndexRoute() {
   const search = Route.useSearch();
   const navigate = Route.useNavigate();
-  return <AppRunsPage search={search} onSearchChange={(next) => navigate({ search: next, replace: true })} />;
+  return (
+    <AppRunsPage
+      search={search}
+      onSearchChange={(next) => navigate({ search: next, replace: true })}
+    />
+  );
 }

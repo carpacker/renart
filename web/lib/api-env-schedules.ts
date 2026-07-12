@@ -45,32 +45,35 @@ export async function getEnvSchedules(): Promise<EnvSchedulesResponse> {
 export async function upsertEnvSchedule(
   pipelineId: string,
   environment: string,
-  input: UpsertEnvScheduleInput
+  input: UpsertEnvScheduleInput,
 ): Promise<{ status: string; schedule: EnvSchedule }> {
   return fetchJSONWithBody(
     `/api/pipelines/${pipelineId}/env-schedules/${encodeURIComponent(environment)}`,
     "PUT",
-    input
+    input,
   );
 }
 
 export async function setEnvScheduleStatus(
   pipelineId: string,
   environment: string,
-  status: "active" | "paused"
+  status: "active" | "paused",
 ): Promise<{ status: string }> {
   return fetchJSONWithBody(
     `/api/pipelines/${pipelineId}/env-schedules/${encodeURIComponent(environment)}/status`,
     "POST",
-    { status }
+    { status },
   );
 }
 
 export async function archiveEnvSchedule(
   pipelineId: string,
-  environment: string
+  environment: string,
 ): Promise<{ status: string }> {
-  return fetchJSON(`/api/pipelines/${pipelineId}/env-schedules/${encodeURIComponent(environment)}`, {
-    method: "DELETE",
-  });
+  return fetchJSON(
+    `/api/pipelines/${pipelineId}/env-schedules/${encodeURIComponent(environment)}`,
+    {
+      method: "DELETE",
+    },
+  );
 }

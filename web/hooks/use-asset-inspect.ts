@@ -4,15 +4,16 @@ import { useAtom, useAtomValue, useSetAtom } from "jotai";
 import { useCallback, useEffect, useMemo, useRef } from "react";
 
 import { inspectAsset } from "@/lib/api";
-import { assetInspectAtom, changedAssetIdsAtom, emptyAssetInspectState } from "@/lib/atoms/domains/results";
+import {
+  assetInspectAtom,
+  changedAssetIdsAtom,
+  emptyAssetInspectState,
+} from "@/lib/atoms/domains/results";
 import { normalizeInspectErrorMessage } from "@/lib/inspect-errors";
 import { registerAssetColumnsAtom } from "@/lib/atoms/domains/suggestions";
 import { selectedEnvironmentAtom } from "@/lib/atoms/domains/workspace";
 import { selectedExecutionTimeWindowAtom } from "@/lib/atoms/domains/workspace";
-import {
-  getAssetViewMode,
-  getTablePreviewLimit,
-} from "@/lib/asset-visualization";
+import { getAssetViewMode, getTablePreviewLimit } from "@/lib/asset-visualization";
 import { AssetInspectResponse, WebAsset } from "@/lib/types";
 
 const inFlightInspectRequests = new Map<string, Promise<AssetInspectResponse>>();
@@ -30,15 +31,11 @@ function inspectFailure(error: unknown): AssetInspectResponse {
   };
 }
 
-function getBaseLimitByAssetId(
-  visualAssets: WebAsset[]
-): Record<string, number> {
+function getBaseLimitByAssetId(visualAssets: WebAsset[]): Record<string, number> {
   const limits: Record<string, number> = {};
   for (const asset of visualAssets) {
     limits[asset.id] =
-      getAssetViewMode(asset.meta) === "table"
-        ? getTablePreviewLimit(asset.meta, 25)
-        : 200;
+      getAssetViewMode(asset.meta) === "table" ? getTablePreviewLimit(asset.meta, 25) : 200;
   }
   return limits;
 }
@@ -59,7 +56,7 @@ function getInspectRequestKey(
   assetId: string,
   limit: number,
   environment?: string,
-  timeWindow?: { start: string; end: string } | null
+  timeWindow?: { start: string; end: string } | null,
 ) {
   return `${assetId}:${limit}:${environment ?? ""}:${timeWindow?.start ?? ""}:${timeWindow?.end ?? ""}`;
 }
@@ -73,18 +70,12 @@ export function useAssetInspect(visualAssets: WebAsset[] = []) {
 
   const { byAssetId, loadingByAssetId, requestedLimitsByAssetId } = inspectState;
 
-  const assetIds = useMemo(
-    () => visualAssets.map((asset) => asset.id).sort(),
-    [visualAssets]
-  );
+  const assetIds = useMemo(() => visualAssets.map((asset) => asset.id).sort(), [visualAssets]);
   const assetById = useMemo(
     () => Object.fromEntries(visualAssets.map((asset) => [asset.id, asset])),
-    [visualAssets]
+    [visualAssets],
   );
-  const baseLimitByAssetId = useMemo(
-    () => getBaseLimitByAssetId(visualAssets),
-    [visualAssets]
-  );
+  const baseLimitByAssetId = useMemo(() => getBaseLimitByAssetId(visualAssets), [visualAssets]);
 
   const setChangedIdsRef = useRef(setChangedIds);
   useEffect(() => {
@@ -108,13 +99,13 @@ export function useAssetInspect(visualAssets: WebAsset[] = []) {
         };
       });
     },
-    [setInspectState]
+    [setInspectState],
   );
 
   const mergeInspectResults = useCallback(
     (
       results: Record<string, AssetInspectResponse>,
-      fetchedLimitByAssetId: Record<string, number>
+      fetchedLimitByAssetId: Record<string, number>,
     ) => {
       if (Object.keys(results).length === 0) {
         return;
@@ -163,7 +154,7 @@ export function useAssetInspect(visualAssets: WebAsset[] = []) {
         });
       }
     },
-    [registerAssetColumns, setInspectState]
+    [registerAssetColumns, setInspectState],
   );
 
   const setLoading = useCallback(
@@ -188,17 +179,14 @@ export function useAssetInspect(visualAssets: WebAsset[] = []) {
         };
       });
     },
-    [setInspectState]
+    [setInspectState],
   );
 
   const fetchInspectRequests = useCallback(
-    async (
-      requests: Array<{ id: string; limit: number }>,
-      options?: { force?: boolean }
-    ) => {
+    async (requests: Array<{ id: string; limit: number }>, options?: { force?: boolean }) => {
       const normalizedRequests = normalizeRequests(requests);
       const requestsToFetch = normalizedRequests.filter(
-        ({ id, limit }) => options?.force || limit > (byAssetId[id]?.fetchedLimit ?? 0)
+        ({ id, limit }) => options?.force || limit > (byAssetId[id]?.fetchedLimit ?? 0),
       );
 
       if (requestsToFetch.length === 0) {
@@ -215,7 +203,7 @@ export function useAssetInspect(visualAssets: WebAsset[] = []) {
               id,
               limit,
               selectedEnvironment,
-              selectedExecutionTimeWindow
+              selectedExecutionTimeWindow,
             );
             const existingRequest = inFlightInspectRequests.get(requestKey);
 
@@ -225,7 +213,11 @@ export function useAssetInspect(visualAssets: WebAsset[] = []) {
 
             const request = (async () => {
               try {
-                return await inspectAsset(id, { limit, environment: selectedEnvironment, timeWindow: selectedExecutionTimeWindow ?? undefined });
+                return await inspectAsset(id, {
+                  limit,
+                  environment: selectedEnvironment,
+                  timeWindow: selectedExecutionTimeWindow ?? undefined,
+                });
               } catch (error) {
                 return inspectFailure(error);
               } finally {
@@ -241,12 +233,12 @@ export function useAssetInspect(visualAssets: WebAsset[] = []) {
             } catch (error) {
               return [id, inspectFailure(error)] as const;
             }
-          })
+          }),
         );
 
         const resultByAssetId = Object.fromEntries(results);
         const fetchedLimitByAssetId = Object.fromEntries(
-          requestsToFetch.map(({ id, limit }) => [id, limit])
+          requestsToFetch.map(({ id, limit }) => [id, limit]),
         );
 
         mergeInspectResults(resultByAssetId, fetchedLimitByAssetId);
@@ -255,19 +247,21 @@ export function useAssetInspect(visualAssets: WebAsset[] = []) {
         setLoading(assetIdsToFetch, false);
       }
     },
-    [byAssetId, mergeInspectResults, selectedEnvironment, selectedExecutionTimeWindow, setLoading]
+    [byAssetId, mergeInspectResults, selectedEnvironment, selectedExecutionTimeWindow, setLoading],
   );
 
   const inspectAssetById = useCallback(
     async (
       assetId: string,
-      options?: { force?: boolean; limit?: number; contentSnapshot?: string; timeWindow?: { start: string; end: string } }
+      options?: {
+        force?: boolean;
+        limit?: number;
+        contentSnapshot?: string;
+        timeWindow?: { start: string; end: string };
+      },
     ): Promise<AssetInspectResponse> => {
       const limit =
-        options?.limit ??
-        requestedLimitsByAssetId[assetId] ??
-        baseLimitByAssetId[assetId] ??
-        200;
+        options?.limit ?? requestedLimitsByAssetId[assetId] ?? baseLimitByAssetId[assetId] ?? 200;
 
       setRequestedLimit(assetId, limit);
 
@@ -315,13 +309,18 @@ export function useAssetInspect(visualAssets: WebAsset[] = []) {
       requestedLimitsByAssetId,
       setInspectState,
       setRequestedLimit,
-    ]
+    ],
   );
 
   useEffect(() => {
     setInspectState(emptyAssetInspectState);
     setChangedIds(new Set<string>());
-  }, [selectedExecutionTimeWindow?.start, selectedExecutionTimeWindow?.end, setChangedIds, setInspectState]);
+  }, [
+    selectedExecutionTimeWindow?.start,
+    selectedExecutionTimeWindow?.end,
+    setChangedIds,
+    setInspectState,
+  ]);
 
   useEffect(() => {
     for (const [assetId, baseLimit] of Object.entries(baseLimitByAssetId)) {
@@ -332,8 +331,7 @@ export function useAssetInspect(visualAssets: WebAsset[] = []) {
   const requestLimits = useMemo(() => {
     const limits: Record<string, number> = {};
     for (const assetId of new Set([...assetIds, ...Object.keys(requestedLimitsByAssetId)])) {
-      limits[assetId] =
-        requestedLimitsByAssetId[assetId] ?? baseLimitByAssetId[assetId] ?? 200;
+      limits[assetId] = requestedLimitsByAssetId[assetId] ?? baseLimitByAssetId[assetId] ?? 200;
     }
     return limits;
   }, [assetIds, baseLimitByAssetId, requestedLimitsByAssetId]);
@@ -351,7 +349,7 @@ export function useAssetInspect(visualAssets: WebAsset[] = []) {
       .filter(
         (assetId) =>
           Boolean(byAssetId[assetId]) &&
-          (requestLimits[assetId] ?? 0) > (byAssetId[assetId]?.fetchedLimit ?? 0)
+          (requestLimits[assetId] ?? 0) > (byAssetId[assetId]?.fetchedLimit ?? 0),
       )
       .map((assetId) => ({ id: assetId, limit: requestLimits[assetId] }));
 
@@ -364,7 +362,7 @@ export function useAssetInspect(visualAssets: WebAsset[] = []) {
         .filter((assetId) => assetIds.includes(assetId))
         .sort()
         .join(","),
-    [assetIds, changedIds]
+    [assetIds, changedIds],
   );
 
   useEffect(() => {
@@ -390,7 +388,7 @@ export function useAssetInspect(visualAssets: WebAsset[] = []) {
         id: assetId,
         limit: requestLimits[assetId] ?? baseLimitByAssetId[assetId] ?? 200,
       })),
-      { force: true }
+      { force: true },
     );
   }, [baseLimitByAssetId, fetchInspectRequests, relevantChangedKey, requestLimits]);
 
@@ -447,7 +445,7 @@ export function useAssetInspect(visualAssets: WebAsset[] = []) {
         };
       });
     },
-    [setInspectState]
+    [setInspectState],
   );
 
   const canLoadMoreByAssetId = useMemo<Record<string, boolean>>(() => {
@@ -463,8 +461,7 @@ export function useAssetInspect(visualAssets: WebAsset[] = []) {
         continue;
       }
 
-      const requestedLimit =
-        requestedLimitsByAssetId[assetId] ?? baseLimitByAssetId[assetId] ?? 25;
+      const requestedLimit = requestedLimitsByAssetId[assetId] ?? baseLimitByAssetId[assetId] ?? 25;
       if (entry.result.rows.length >= requestedLimit) {
         next[assetId] = true;
       }
@@ -478,7 +475,7 @@ export function useAssetInspect(visualAssets: WebAsset[] = []) {
       const currentLimit = requestedLimitsByAssetId[assetId] ?? baseLimit;
       setRequestedLimit(assetId, currentLimit + baseLimit);
     },
-    [baseLimitByAssetId, requestedLimitsByAssetId, setRequestedLimit]
+    [baseLimitByAssetId, requestedLimitsByAssetId, setRequestedLimit],
   );
 
   const refreshAssets = useCallback(
@@ -488,10 +485,10 @@ export function useAssetInspect(visualAssets: WebAsset[] = []) {
           id: assetId,
           limit: requestLimits[assetId] ?? baseLimitByAssetId[assetId] ?? 200,
         })),
-        { force: true }
+        { force: true },
       );
     },
-    [baseLimitByAssetId, fetchInspectRequests, requestLimits]
+    [baseLimitByAssetId, fetchInspectRequests, requestLimits],
   );
 
   const getRowsForAsset = useCallback(
@@ -507,7 +504,7 @@ export function useAssetInspect(visualAssets: WebAsset[] = []) {
 
       return entry.result.rows.slice(0, limit);
     },
-    [byAssetId]
+    [byAssetId],
   );
 
   return {

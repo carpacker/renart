@@ -1,7 +1,15 @@
 "use client";
 
 import { Check, Copy, Loader2 } from "lucide-react";
-import { UIEvent, WheelEventHandler, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import {
+  UIEvent,
+  WheelEventHandler,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 
 import { Button } from "@/components/ui/button";
 import { HoverCard, HoverCardContent, HoverCardTrigger } from "@/components/ui/hover-card";
@@ -139,7 +147,9 @@ export function VirtualDataTable({
     }
   }, [rows.length, loading]);
 
-  const showLoadMoreControl = Boolean(onLoadMore && (canLoadMore || loading) && (nearBottom || loading));
+  const showLoadMoreControl = Boolean(
+    onLoadMore && (canLoadMore || loading) && (nearBottom || loading),
+  );
 
   return (
     <div
@@ -273,8 +283,14 @@ function TableCellContent({ cell }: { cell: FormattedCell }) {
           {cell.value}
         </button>
       </HoverCardTrigger>
-      <HoverCardContent align="start" className="w-max min-w-32 max-w-[min(36rem,calc(100vw-2rem))] p-0">
-        <ScrollArea className="max-h-[min(24rem,calc(100vh-4rem))]" viewportClassName="max-h-[min(24rem,calc(100vh-4rem))] p-3">
+      <HoverCardContent
+        align="start"
+        className="w-max min-w-32 max-w-[min(36rem,calc(100vw-2rem))] p-0"
+      >
+        <ScrollArea
+          className="max-h-[min(24rem,calc(100vh-4rem))]"
+          viewportClassName="max-h-[min(24rem,calc(100vh-4rem))] p-3"
+        >
           {cell.detailKind === "json" ? (
             <JsonPreview value={cell.detailValue} />
           ) : (
@@ -366,14 +382,20 @@ function formatCellValue(value: unknown): { value: string; className: string } {
   return { value: String(value), className: "text-foreground" };
 }
 
-function formatCellDetail(value: unknown, fallback: string): { value: string; kind: "json" | "text" } {
+function formatCellDetail(
+  value: unknown,
+  fallback: string,
+): { value: string; kind: "json" | "text" } {
   if (value !== null && typeof value === "object") {
     return { value: JSON.stringify(value, null, 2), kind: "json" };
   }
 
   if (typeof value === "string") {
     const trimmed = value.trim();
-    if ((trimmed.startsWith("{") && trimmed.endsWith("}")) || (trimmed.startsWith("[") && trimmed.endsWith("]"))) {
+    if (
+      (trimmed.startsWith("{") && trimmed.endsWith("}")) ||
+      (trimmed.startsWith("[") && trimmed.endsWith("]"))
+    ) {
       try {
         return { value: JSON.stringify(JSON.parse(trimmed), null, 2), kind: "json" };
       } catch {
@@ -388,14 +410,23 @@ function formatCellDetail(value: unknown, fallback: string): { value: string; ki
 
 function serializeRowsAsTsv(columns: string[], rows: Record<string, unknown>[]) {
   const header = columns.map(escapeTsvValue).join("\t");
-  const body = rows.map((row) => columns.map((column) => escapeTsvValue(formatCellDetail(row[column], formatCellValue(row[column]).value).value)).join("\t"));
+  const body = rows.map((row) =>
+    columns
+      .map((column) =>
+        escapeTsvValue(formatCellDetail(row[column], formatCellValue(row[column]).value).value),
+      )
+      .join("\t"),
+  );
   return [header, ...body].join("\n");
 }
 
 function serializeRowsAsHtmlTable(columns: string[], rows: Record<string, unknown>[]) {
   const header = `<tr>${columns.map((column) => `<th>${escapeHtml(column)}</th>`).join("")}</tr>`;
   const body = rows
-    .map((row) => `<tr>${columns.map((column) => `<td>${escapeHtml(formatCellDetail(row[column], formatCellValue(row[column]).value).value)}</td>`).join("")}</tr>`)
+    .map(
+      (row) =>
+        `<tr>${columns.map((column) => `<td>${escapeHtml(formatCellDetail(row[column], formatCellValue(row[column]).value).value)}</td>`).join("")}</tr>`,
+    )
     .join("");
   return `<table><thead>${header}</thead><tbody>${body}</tbody></table>`;
 }
@@ -415,7 +446,8 @@ function escapeHtml(value: string) {
 
 function tokenizeJson(value: string) {
   const tokens: Array<{ value: string; className?: string }> = [];
-  const pattern = /("(?:\\.|[^"\\])*"\s*:)|("(?:\\.|[^"\\])*")|\b(true|false)\b|\b(null)\b|(-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?)/g;
+  const pattern =
+    /("(?:\\.|[^"\\])*"\s*:)|("(?:\\.|[^"\\])*")|\b(true|false)\b|\b(null)\b|(-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?)/g;
   let lastIndex = 0;
   for (const match of value.matchAll(pattern)) {
     if (match.index > lastIndex) {

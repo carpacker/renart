@@ -35,10 +35,9 @@ async function pythonDiagnostics(
   assetId: string,
   content: string,
 ) {
-  const response = await request.post(
-    `${baseURL}/api/assets/${assetId}/python-diagnostics`,
-    { data: { content } },
-  );
+  const response = await request.post(`${baseURL}/api/assets/${assetId}/python-diagnostics`, {
+    data: { content },
+  });
   expect(response.ok()).toBe(true);
   return (await response.json()) as PythonDiagnosticsResponse;
 }
@@ -49,14 +48,27 @@ async function createNotebook(request: APIRequestContext, baseURL: string, title
   return ((await response.json()) as NotebookEnvelope).notebook;
 }
 
-async function addCell(request: APIRequestContext, baseURL: string, notebookId: string, name: string) {
-  const response = await request.post(`${baseURL}/api/notebooks/${notebookId}/cells`, { data: { name } });
+async function addCell(
+  request: APIRequestContext,
+  baseURL: string,
+  notebookId: string,
+  name: string,
+) {
+  const response = await request.post(`${baseURL}/api/notebooks/${notebookId}/cells`, {
+    data: { name },
+  });
   expect(response.ok()).toBe(true);
   const notebook = ((await response.json()) as NotebookEnvelope).notebook;
   return notebook.cells.find((cell) => cell.name === name)!.cell_id;
 }
 
-async function setCell(request: APIRequestContext, baseURL: string, notebookId: string, cellId: string, body: string) {
+async function setCell(
+  request: APIRequestContext,
+  baseURL: string,
+  notebookId: string,
+  cellId: string,
+  body: string,
+) {
   const content = `/* @bruin\ntype: duckdb.sql\n@bruin */\n${body}\n`;
   const response = await request.put(`${baseURL}/api/notebooks/${notebookId}/cells/${cellId}`, {
     data: { content },
@@ -64,7 +76,12 @@ async function setCell(request: APIRequestContext, baseURL: string, notebookId: 
   expect(response.ok()).toBe(true);
 }
 
-async function addPythonCell(request: APIRequestContext, baseURL: string, notebookId: string, name: string) {
+async function addPythonCell(
+  request: APIRequestContext,
+  baseURL: string,
+  notebookId: string,
+  name: string,
+) {
   const response = await request.post(`${baseURL}/api/notebooks/${notebookId}/cells`, {
     data: { name, language: "python" },
   });
@@ -73,7 +90,13 @@ async function addPythonCell(request: APIRequestContext, baseURL: string, notebo
   return notebook.cells.find((cell) => cell.name === name)!.cell_id;
 }
 
-async function setPythonCell(request: APIRequestContext, baseURL: string, notebookId: string, cellId: string, body: string) {
+async function setPythonCell(
+  request: APIRequestContext,
+  baseURL: string,
+  notebookId: string,
+  cellId: string,
+  body: string,
+) {
   const response = await request.put(`${baseURL}/api/notebooks/${notebookId}/cells/${cellId}`, {
     data: { content: `${body}\n` },
   });
@@ -118,9 +141,21 @@ test.describe("app notebooks live", () => {
     const notebook = await createNotebook(request, liveApp.baseURL, "Revenue Exploration");
 
     const baseCell = await addCell(request, liveApp.baseURL, notebook.id, "base");
-    await setCell(request, liveApp.baseURL, notebook.id, baseCell, "select 10 as amount union all select 20");
+    await setCell(
+      request,
+      liveApp.baseURL,
+      notebook.id,
+      baseCell,
+      "select 10 as amount union all select 20",
+    );
     const doubledCell = await addCell(request, liveApp.baseURL, notebook.id, "doubled");
-    await setCell(request, liveApp.baseURL, notebook.id, doubledCell, "select amount * 2 as doubled from base order by 1");
+    await setCell(
+      request,
+      liveApp.baseURL,
+      notebook.id,
+      doubledCell,
+      "select amount * 2 as doubled from base order by 1",
+    );
 
     await page.goto(`${liveApp.baseURL}/notebooks/${notebook.id}`);
     await expect(page.getByText("Revenue Exploration").first()).toBeVisible({ timeout: 15000 });
@@ -130,7 +165,7 @@ test.describe("app notebooks live", () => {
 
     const runResponse = page.waitForResponse(
       (response) => response.url().includes(`/api/notebooks/${notebook.id}/run`) && response.ok(),
-      { timeout: 30000 }
+      { timeout: 30000 },
     );
     await page.getByRole("button", { name: "Run all" }).click();
     const payload = (await (await runResponse).json()) as {
@@ -152,17 +187,34 @@ test.describe("app notebooks live", () => {
   }) => {
     const notebook = await createNotebook(page.request, liveApp.baseURL, "Viz And Rename");
     const baseCell = await addCell(page.request, liveApp.baseURL, notebook.id, "base");
-    await setCell(page.request, liveApp.baseURL, notebook.id, baseCell, "select 'jan' as month, 10 as revenue union all select 'feb', 20");
+    await setCell(
+      page.request,
+      liveApp.baseURL,
+      notebook.id,
+      baseCell,
+      "select 'jan' as month, 10 as revenue union all select 'feb', 20",
+    );
     const chartCell = await addCell(page.request, liveApp.baseURL, notebook.id, "chart");
-    await setCell(page.request, liveApp.baseURL, notebook.id, chartCell, "select month, revenue from base order by 1");
+    await setCell(
+      page.request,
+      liveApp.baseURL,
+      notebook.id,
+      chartCell,
+      "select month, revenue from base order by 1",
+    );
 
     await page.goto(`${liveApp.baseURL}/notebooks/${notebook.id}`);
     await page.getByRole("button", { name: "Run all" }).click();
-    await page.waitForResponse((response) => response.url().includes(`/api/notebooks/${notebook.id}/run`) && response.ok(), {
-      timeout: 30000,
-    });
+    await page.waitForResponse(
+      (response) => response.url().includes(`/api/notebooks/${notebook.id}/run`) && response.ok(),
+      {
+        timeout: 30000,
+      },
+    );
     // Result table renders the column.
-    await expect(page.getByText("revenue", { exact: true }).first()).toBeVisible({ timeout: 15000 });
+    await expect(page.getByText("revenue", { exact: true }).first()).toBeVisible({
+      timeout: 15000,
+    });
 
     // Switching to a bar chart writes a @viz directive into the chart cell.
     const updateSeen = page.waitForResponse(
@@ -170,22 +222,29 @@ test.describe("app notebooks live", () => {
         response.url().includes(`/api/notebooks/${notebook.id}/cells/${chartCell}`) &&
         response.request().method() === "PUT" &&
         response.ok(),
-      { timeout: 15000 }
+      { timeout: 15000 },
     );
     await page.getByRole("button", { name: "bar", exact: true }).last().click();
     await updateSeen;
     // The directive landed in the cell file.
-    const afterViz = (await (await page.request.get(`${liveApp.baseURL}/api/notebooks/${notebook.id}`)).json()) as NotebookEnvelope;
+    const afterViz = (await (
+      await page.request.get(`${liveApp.baseURL}/api/notebooks/${notebook.id}`)
+    ).json()) as NotebookEnvelope;
     const chartContent = afterViz.notebook.cells.find((cell) => cell.cell_id === chartCell)!;
     expect(chartContent.content).toContain("@viz(bar");
 
     // Rename base → revenue and confirm the chart cell's reference updated.
-    const renamed = await page.request.post(`${liveApp.baseURL}/api/notebooks/${notebook.id}/cells/${baseCell}/rename`, {
-      data: { name: "revenue" },
-    });
+    const renamed = await page.request.post(
+      `${liveApp.baseURL}/api/notebooks/${notebook.id}/cells/${baseCell}/rename`,
+      {
+        data: { name: "revenue" },
+      },
+    );
     expect(renamed.ok()).toBe(true);
 
-    const final = (await (await page.request.get(`${liveApp.baseURL}/api/notebooks/${notebook.id}`)).json()) as NotebookEnvelope;
+    const final = (await (
+      await page.request.get(`${liveApp.baseURL}/api/notebooks/${notebook.id}`)
+    ).json()) as NotebookEnvelope;
     const chartFinal = final.notebook.cells.find((cell) => cell.cell_id === chartCell)!;
     expect(chartFinal.content).toContain("from revenue");
     expect(final.notebook.cells.find((cell) => cell.cell_id === baseCell)!.name).toBe("revenue");
@@ -197,14 +256,26 @@ test.describe("app notebooks live", () => {
   }) => {
     const notebook = await createNotebook(page.request, liveApp.baseURL, "Promotion");
     const baseCell = await addCell(page.request, liveApp.baseURL, notebook.id, "base");
-    await setCell(page.request, liveApp.baseURL, notebook.id, baseCell, "select 1 as id, 10 as amount");
+    await setCell(
+      page.request,
+      liveApp.baseURL,
+      notebook.id,
+      baseCell,
+      "select 1 as id, 10 as amount",
+    );
     const childCell = await addCell(page.request, liveApp.baseURL, notebook.id, "child");
-    await setCell(page.request, liveApp.baseURL, notebook.id, childCell, "select sum(amount) as total from base");
+    await setCell(
+      page.request,
+      liveApp.baseURL,
+      notebook.id,
+      childCell,
+      "select sum(amount) as total from base",
+    );
 
     const pipelineId = Buffer.from("analytics").toString("base64url");
     const response = await page.request.post(
       `${liveApp.baseURL}/api/notebooks/${notebook.id}/cells/${baseCell}/promote`,
-      { data: { pipeline_id: pipelineId, target_name: "marts.promoted_base" } }
+      { data: { pipeline_id: pipelineId, target_name: "marts.promoted_base" } },
     );
     expect(response.ok()).toBe(true);
     const result = (await response.json()) as {
@@ -216,7 +287,9 @@ test.describe("app notebooks live", () => {
     expect(result.asset_path).toContain("analytics/assets/");
 
     // The promoted asset now shows up as a pipeline asset, class=pipeline.
-    const workspace = (await (await page.request.get(`${liveApp.baseURL}/api/workspace`)).json()) as {
+    const workspace = (await (
+      await page.request.get(`${liveApp.baseURL}/api/workspace`)
+    ).json()) as {
       pipelines: Array<{ assets: Array<{ name: string; class?: string }> }>;
     };
     const promoted = workspace.pipelines
@@ -249,7 +322,9 @@ test.describe("app notebooks live", () => {
     await expect(page.getByText("Deps").first()).toBeVisible({ timeout: 15000 });
 
     // The cell imports `requests`, which is not declared → a suggestion appears.
-    await expect(page.getByText("Imported but not in dependencies:")).toBeVisible({ timeout: 15000 });
+    await expect(page.getByText("Imported but not in dependencies:")).toBeVisible({
+      timeout: 15000,
+    });
     const importButton = page.getByRole("button", { name: "requests" });
     await expect(importButton).toBeVisible();
 
@@ -268,7 +343,9 @@ test.describe("app notebooks live", () => {
     await candidate.click();
     await addSaved;
     expect(await getDependencies(request, liveApp.baseURL, notebook.id)).toContain("requests");
-    await expect(page.getByText("Imported but not in dependencies:")).toBeHidden({ timeout: 15000 });
+    await expect(page.getByText("Imported but not in dependencies:")).toBeHidden({
+      timeout: 15000,
+    });
 
     // The Dependencies dialog edits the dependency list directly.
     await page.getByRole("button", { name: "Dependencies" }).click();
@@ -327,7 +404,9 @@ test.describe("app notebooks live", () => {
     await expect(page.getByText("Resolve").first()).toBeVisible({ timeout: 15000 });
 
     // The unresolved import is flagged; the installed one (import≠package) is not.
-    await expect(page.getByText("Imported but not in dependencies:")).toBeVisible({ timeout: 15000 });
+    await expect(page.getByText("Imported but not in dependencies:")).toBeVisible({
+      timeout: 15000,
+    });
     await expect(page.getByRole("button", { name: "totally_made_up_pkg" })).toBeVisible();
     await expect(page.getByRole("button", { name: "skimage" })).toHaveCount(0);
   });
@@ -379,7 +458,13 @@ test.describe("app notebooks live", () => {
     const baseCell = await addCell(request, liveApp.baseURL, notebook.id, "base");
     await setCell(request, liveApp.baseURL, notebook.id, baseCell, "select 1 as id, 10 as amount");
     const childCell = await addCell(request, liveApp.baseURL, notebook.id, "child");
-    await setCell(request, liveApp.baseURL, notebook.id, childCell, "select sum(amount) as total from base");
+    await setCell(
+      request,
+      liveApp.baseURL,
+      notebook.id,
+      childCell,
+      "select sum(amount) as total from base",
+    );
 
     await page.goto(`${liveApp.baseURL}/notebooks/${notebook.id}`);
     await expect(page.getByText("Promote Chain").first()).toBeVisible({ timeout: 15000 });
@@ -397,7 +482,7 @@ test.describe("app notebooks live", () => {
     await dialog.getByRole("checkbox", { name: /Downstream assets/ }).click();
     const promoteResponse = page.waitForResponse(
       (response) => response.url().includes(`/cells/${baseCell}/promote`) && response.ok(),
-      { timeout: 30000 }
+      { timeout: 30000 },
     );
     await dialog.getByRole("button", { name: "Promote", exact: true }).click();
     const result = (await (await promoteResponse).json()) as { promoted_count: number };
@@ -429,7 +514,9 @@ test.describe("app notebooks live", () => {
 
     // The workspace payload tags the cell as a notebook asset and keeps it
     // out of the pipelines list.
-    const workspace = (await (await page.request.get(`${liveApp.baseURL}/api/workspace`)).json()) as {
+    const workspace = (await (
+      await page.request.get(`${liveApp.baseURL}/api/workspace`)
+    ).json()) as {
       pipelines: Array<{ assets: Array<{ name: string; class?: string }> }>;
       notebooks?: Array<{ title: string; cells: Array<{ name: string; class?: string }> }>;
     };

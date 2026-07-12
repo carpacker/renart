@@ -9,13 +9,15 @@ import type { WorkspaceConfigConnectionType, WorkspaceConfigResponse } from "@/l
  * .renart/project.yml, or the workspace already contains ingestr assets —
  * those must keep working and stay visible regardless of the flag.
  */
-export function useIngestrEnabled(workspaceConfig?: Pick<WorkspaceConfigResponse, "features"> | null): boolean {
+export function useIngestrEnabled(
+  workspaceConfig?: Pick<WorkspaceConfigResponse, "features"> | null,
+): boolean {
   const workspace = useAtomValue(workspaceAtom);
   if (workspaceConfig?.features?.ingestr || workspace?.features?.ingestr) {
     return true;
   }
   return (workspace?.pipelines ?? []).some((pipeline) =>
-    pipeline.assets.some((asset) => asset.type.toLowerCase().startsWith("ingestr"))
+    pipeline.assets.some((asset) => asset.type.toLowerCase().startsWith("ingestr")),
   );
 }
 
@@ -25,7 +27,7 @@ export function useIngestrEnabled(workspaceConfig?: Pick<WorkspaceConfigResponse
  */
 export function visibleConnectionTypes(
   types: WorkspaceConfigConnectionType[],
-  ingestrEnabled: boolean
+  ingestrEnabled: boolean,
 ): WorkspaceConfigConnectionType[] {
   if (ingestrEnabled) {
     return types;

@@ -25,5 +25,10 @@ function AppBuildIndexRoute() {
     return <Navigate to="/welcome" />;
   }
 
-  return <Navigate to="/pipelines/$pipelineId/canvas" params={{ pipelineId: workspace.pipelines[0].id }} />;
+  return (
+    <Navigate
+      to="/pipelines/$pipelineId/canvas"
+      params={{ pipelineId: workspace.pipelines[0].id }}
+    />
+  );
 }

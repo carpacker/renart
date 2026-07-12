@@ -25,7 +25,14 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
 import type { AssetStaleness, AssetStalenessStatus } from "@/lib/api-staleness";
 import { cn } from "@/lib/utils";
 
@@ -55,13 +62,7 @@ export function PageHeader({
   );
 }
 
-export function AppPanel({
-  children,
-  className,
-}: {
-  children: ReactNode;
-  className?: string;
-}) {
+export function AppPanel({ children, className }: { children: ReactNode; className?: string }) {
   return <DelimitedCard className={cn("min-h-0", className)}>{children}</DelimitedCard>;
 }
 
@@ -100,11 +101,19 @@ export function NavLinkButton({
   label: string;
 }) {
   return (
-    <Button asChild size="sm" variant="ghost" className="relative h-12 rounded-none px-3 text-zinc-400 hover:bg-transparent hover:text-zinc-200 data-[state=open]:bg-transparent">
+    <Button
+      asChild
+      size="sm"
+      variant="ghost"
+      className="relative h-12 rounded-none px-3 text-zinc-400 hover:bg-transparent hover:text-zinc-200 data-[state=open]:bg-transparent"
+    >
       <Link
         to={to}
         activeOptions={{ exact: to === "/" }}
-        activeProps={{ className: "text-white after:absolute after:inset-x-2 after:bottom-0 after:h-0.5 after:rounded-full after:bg-primary" }}
+        activeProps={{
+          className:
+            "text-white after:absolute after:inset-x-2 after:bottom-0 after:h-0.5 after:rounded-full after:bg-primary",
+        }}
       >
         <Icon className="size-3.5" />
         <span>{label}</span>
@@ -116,7 +125,10 @@ export function NavLinkButton({
 export function IntegrationBadge({ name }: { name: string }) {
   return (
     <span className="inline-flex max-w-full items-center gap-1.5 rounded-md border bg-background px-1.5 py-0.5 text-[11px] text-muted-foreground">
-      <span className="size-2 rounded-sm" style={{ backgroundColor: integrations[name] ?? "#71717a" }} />
+      <span
+        className="size-2 rounded-sm"
+        style={{ backgroundColor: integrations[name] ?? "#71717a" }}
+      />
       <span className="truncate">{name}</span>
     </span>
   );
@@ -124,30 +136,87 @@ export function IntegrationBadge({ name }: { name: string }) {
 
 export function StatusPill({ status }: { status: string }) {
   if (status === "success" || status === "pass" || status === "ok") {
-    return <span className="inline-flex items-center gap-1 rounded-full bg-emerald-100 px-1.5 py-0.5 text-[11px] text-emerald-700 dark:bg-emerald-500/15 dark:text-emerald-300"><CheckCircle2 className="size-3" />Success</span>;
+    return (
+      <span className="inline-flex items-center gap-1 rounded-full bg-emerald-100 px-1.5 py-0.5 text-[11px] text-emerald-700 dark:bg-emerald-500/15 dark:text-emerald-300">
+        <CheckCircle2 className="size-3" />
+        Success
+      </span>
+    );
   }
   if (status === "failed" || status === "fail" || status === "overdue") {
-    return <span className="inline-flex items-center gap-1 rounded-full bg-red-100 px-1.5 py-0.5 text-[11px] text-red-700 dark:bg-red-500/15 dark:text-red-300"><XCircle className="size-3" />Failed</span>;
+    return (
+      <span className="inline-flex items-center gap-1 rounded-full bg-red-100 px-1.5 py-0.5 text-[11px] text-red-700 dark:bg-red-500/15 dark:text-red-300">
+        <XCircle className="size-3" />
+        Failed
+      </span>
+    );
   }
   if (status === "running") {
-    return <span className="inline-flex items-center gap-1 rounded-full bg-amber-100 px-1.5 py-0.5 text-[11px] text-amber-700 dark:bg-amber-500/15 dark:text-amber-300"><Loader2 className="size-3 animate-spin" />Running</span>;
+    return (
+      <span className="inline-flex items-center gap-1 rounded-full bg-amber-100 px-1.5 py-0.5 text-[11px] text-amber-700 dark:bg-amber-500/15 dark:text-amber-300">
+        <Loader2 className="size-3 animate-spin" />
+        Running
+      </span>
+    );
   }
   if (status === "queued") {
-    return <span className="inline-flex items-center gap-1 rounded-full bg-sky-100 px-1.5 py-0.5 text-[11px] text-sky-700 dark:bg-sky-500/15 dark:text-sky-300"><Circle className="size-3" />Queued</span>;
+    return (
+      <span className="inline-flex items-center gap-1 rounded-full bg-sky-100 px-1.5 py-0.5 text-[11px] text-sky-700 dark:bg-sky-500/15 dark:text-sky-300">
+        <Circle className="size-3" />
+        Queued
+      </span>
+    );
   }
   if (status === "cancelled") {
-    return <span className="inline-flex items-center gap-1 rounded-full bg-zinc-200 px-1.5 py-0.5 text-[11px] text-zinc-700 dark:bg-zinc-500/15 dark:text-zinc-300"><Circle className="size-3" />Cancelled</span>;
+    return (
+      <span className="inline-flex items-center gap-1 rounded-full bg-zinc-200 px-1.5 py-0.5 text-[11px] text-zinc-700 dark:bg-zinc-500/15 dark:text-zinc-300">
+        <Circle className="size-3" />
+        Cancelled
+      </span>
+    );
   }
-  return <span className="inline-flex items-center gap-1 rounded-full bg-muted px-1.5 py-0.5 text-[11px] text-muted-foreground"><Circle className="size-3" />Idle</span>;
+  return (
+    <span className="inline-flex items-center gap-1 rounded-full bg-muted px-1.5 py-0.5 text-[11px] text-muted-foreground">
+      <Circle className="size-3" />
+      Idle
+    </span>
+  );
 }
 
-const stalenessMeta: Record<AssetStalenessStatus, { label: string; className: string; dotClassName: string }> = {
-  fresh: { label: "Fresh", className: "bg-emerald-100 text-emerald-700 dark:bg-emerald-500/15 dark:text-emerald-300", dotClassName: "bg-emerald-500" },
-  stale_edited: { label: "Edited", className: "bg-amber-100 text-amber-700 dark:bg-amber-500/15 dark:text-amber-300", dotClassName: "bg-amber-500" },
-  stale_upstream: { label: "Upstream changed", className: "bg-amber-50 text-amber-600 dark:bg-amber-500/10 dark:text-amber-300", dotClassName: "bg-amber-400" },
-  partial: { label: "Partial", className: "bg-sky-100 text-sky-700 dark:bg-sky-500/15 dark:text-sky-300", dotClassName: "bg-sky-500" },
-  never_built: { label: "Never built", className: "bg-zinc-200 text-zinc-700 dark:bg-zinc-500/15 dark:text-zinc-300", dotClassName: "bg-zinc-400" },
-  missing: { label: "Missing", className: "bg-red-100 text-red-700 dark:bg-red-500/15 dark:text-red-300", dotClassName: "bg-red-500" },
+const stalenessMeta: Record<
+  AssetStalenessStatus,
+  { label: string; className: string; dotClassName: string }
+> = {
+  fresh: {
+    label: "Fresh",
+    className: "bg-emerald-100 text-emerald-700 dark:bg-emerald-500/15 dark:text-emerald-300",
+    dotClassName: "bg-emerald-500",
+  },
+  stale_edited: {
+    label: "Edited",
+    className: "bg-amber-100 text-amber-700 dark:bg-amber-500/15 dark:text-amber-300",
+    dotClassName: "bg-amber-500",
+  },
+  stale_upstream: {
+    label: "Upstream changed",
+    className: "bg-amber-50 text-amber-600 dark:bg-amber-500/10 dark:text-amber-300",
+    dotClassName: "bg-amber-400",
+  },
+  partial: {
+    label: "Partial",
+    className: "bg-sky-100 text-sky-700 dark:bg-sky-500/15 dark:text-sky-300",
+    dotClassName: "bg-sky-500",
+  },
+  never_built: {
+    label: "Never built",
+    className: "bg-zinc-200 text-zinc-700 dark:bg-zinc-500/15 dark:text-zinc-300",
+    dotClassName: "bg-zinc-400",
+  },
+  missing: {
+    label: "Missing",
+    className: "bg-red-100 text-red-700 dark:bg-red-500/15 dark:text-red-300",
+    dotClassName: "bg-red-500",
+  },
 };
 
 const failedFreshnessClassName = "bg-red-100 text-red-700 dark:bg-red-500/15 dark:text-red-300";
@@ -172,13 +241,25 @@ function stalenessBaseLabel(staleness: AssetStaleness) {
  * it failed), or "Run failed" when the code is unchanged from a good build but
  * the latest run failed. Otherwise the base freshness display is used.
  */
-export function resolveFreshnessDisplay(staleness: AssetStaleness): { label: string; className: string; dotClassName: string } {
+export function resolveFreshnessDisplay(staleness: AssetStaleness): {
+  label: string;
+  className: string;
+  dotClassName: string;
+} {
   if (staleness.last_run_status === "failed" && staleness.last_run_on_current_content) {
     if (staleness.status === "fresh") {
-      return { label: "Run failed", className: failedFreshnessClassName, dotClassName: failedFreshnessDotClassName };
+      return {
+        label: "Run failed",
+        className: failedFreshnessClassName,
+        dotClassName: failedFreshnessDotClassName,
+      };
     }
     if (staleness.status === "stale_edited" || staleness.status === "never_built") {
-      return { label: "Build failed", className: failedFreshnessClassName, dotClassName: failedFreshnessDotClassName };
+      return {
+        label: "Build failed",
+        className: failedFreshnessClassName,
+        dotClassName: failedFreshnessDotClassName,
+      };
     }
   }
   const meta = stalenessMeta[staleness.status];
@@ -193,7 +274,13 @@ export function stalenessLabel(staleness: AssetStaleness) {
   return resolveFreshnessDisplay(staleness).label;
 }
 
-export function StalenessBadge({ staleness, className }: { staleness?: AssetStaleness; className?: string }) {
+export function StalenessBadge({
+  staleness,
+  className,
+}: {
+  staleness?: AssetStaleness;
+  className?: string;
+}) {
   if (!staleness || !stalenessMeta[staleness.status]) return null;
   const display = resolveFreshnessDisplay(staleness);
   return (
@@ -201,7 +288,11 @@ export function StalenessBadge({ staleness, className }: { staleness?: AssetStal
       data-staleness={staleness.status}
       data-last-run={staleness.last_run_status}
       title={`Staleness: ${display.label}`}
-      className={cn("inline-flex items-center gap-1 truncate rounded px-1.5 py-0.5 text-[10px]", display.className, className)}
+      className={cn(
+        "inline-flex items-center gap-1 truncate rounded px-1.5 py-0.5 text-[10px]",
+        display.className,
+        className,
+      )}
     >
       <span className={cn("size-1.5 shrink-0 rounded-full", display.dotClassName)} />
       {display.label}
@@ -245,13 +336,13 @@ export function AssetNode({
           ? "border-red-400 dark:border-red-500/70"
           : selected
             ? "border-primary"
-            : "border-border"
+            : "border-border",
       )}
     >
       <div
         className={cn(
           "flex h-8 items-center gap-1.5 border-b bg-muted/30 px-2.5",
-          hasParseError && "bg-red-50 dark:bg-red-500/10"
+          hasParseError && "bg-red-50 dark:bg-red-500/10",
         )}
       >
         {hasParseError ? (
@@ -270,7 +361,11 @@ export function AssetNode({
               <MoreHorizontal className="size-3.5" />
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end" onClick={(event) => event.stopPropagation()}>
-              <AssetNodeMenuItems actions={actions} ItemComponent={DropdownMenuItem} SeparatorComponent={DropdownMenuSeparator} />
+              <AssetNodeMenuItems
+                actions={actions}
+                ItemComponent={DropdownMenuItem}
+                SeparatorComponent={DropdownMenuSeparator}
+              />
             </DropdownMenuContent>
           </DropdownMenu>
         ) : (
@@ -279,7 +374,9 @@ export function AssetNode({
       </div>
       <div className="space-y-2 p-2.5">
         {hasParseError ? (
-          <p className="truncate text-[11px] text-muted-foreground" title={asset.parseError}>{asset.parseError}</p>
+          <p className="truncate text-[11px] text-muted-foreground" title={asset.parseError}>
+            {asset.parseError}
+          </p>
         ) : asset.description ? (
           <p className="truncate text-[11px] text-muted-foreground">{asset.description}</p>
         ) : null}
@@ -288,7 +385,12 @@ export function AssetNode({
             Live run states (running/failed) replace the timestamp. The
             connection badge lives on its own row below so the two never
             compete for width and the connection name never gets clipped. */}
-        {hasParseError || asset.staleness || asset.status === "pending" || asset.status === "failed" || asset.status === "overdue" || asset.materializedAt ? (
+        {hasParseError ||
+        asset.staleness ||
+        asset.status === "pending" ||
+        asset.status === "failed" ||
+        asset.status === "overdue" ||
+        asset.materializedAt ? (
           <div className="flex items-center gap-1.5">
             {hasParseError ? (
               <span className="inline-flex min-w-0 items-center gap-1 truncate rounded bg-red-100 px-1.5 py-0.5 text-[10px] text-red-700 dark:bg-red-500/15 dark:text-red-300">
@@ -298,9 +400,14 @@ export function AssetNode({
             ) : (
               <>
                 <StalenessBadge staleness={asset.staleness} className="shrink-0" />
-                {asset.status === "pending" || asset.status === "failed" || asset.status === "overdue" ? (
+                {asset.status === "pending" ||
+                asset.status === "failed" ||
+                asset.status === "overdue" ? (
                   <span
-                    className={cn("min-w-0 shrink-0 truncate rounded px-1.5 py-0.5 text-[10px]", statusMeta.className)}
+                    className={cn(
+                      "min-w-0 shrink-0 truncate rounded px-1.5 py-0.5 text-[10px]",
+                      statusMeta.className,
+                    )}
                     title={asset.materializedAt ? `Last build: ${asset.materializedAt}` : undefined}
                   >
                     {statusMeta.label}
@@ -380,15 +487,27 @@ export function AssetNodeMenuItems({
 
 function assetNodeStatusMeta(status: AppAsset["status"]) {
   if (status === "unknown") {
-    return { label: "Unknown", className: "bg-zinc-200 text-zinc-700 dark:bg-zinc-500/15 dark:text-zinc-300" };
+    return {
+      label: "Unknown",
+      className: "bg-zinc-200 text-zinc-700 dark:bg-zinc-500/15 dark:text-zinc-300",
+    };
   }
   if (status === "pending") {
-    return { label: "Running", className: "bg-blue-100 text-blue-700 dark:bg-blue-500/15 dark:text-blue-300" };
+    return {
+      label: "Running",
+      className: "bg-blue-100 text-blue-700 dark:bg-blue-500/15 dark:text-blue-300",
+    };
   }
   if (status === "failed" || status === "overdue") {
-    return { label: status === "overdue" ? "Overdue" : "Failed", className: "bg-red-100 text-red-700 dark:bg-red-500/15 dark:text-red-300" };
+    return {
+      label: status === "overdue" ? "Overdue" : "Failed",
+      className: "bg-red-100 text-red-700 dark:bg-red-500/15 dark:text-red-300",
+    };
   }
-  return { label: "Materialized", className: "bg-emerald-100 text-emerald-700 dark:bg-emerald-500/15 dark:text-emerald-300" };
+  return {
+    label: "Materialized",
+    className: "bg-emerald-100 text-emerald-700 dark:bg-emerald-500/15 dark:text-emerald-300",
+  };
 }
 
 export function SimpleTable({
@@ -410,7 +529,9 @@ export function SimpleTable({
         <TableHeader>
           <TableRow className="bg-muted/50">
             {columns.map((column) => (
-              <TableHead key={column} className="h-8 text-xs uppercase text-muted-foreground">{column}</TableHead>
+              <TableHead key={column} className="h-8 text-xs uppercase text-muted-foreground">
+                {column}
+              </TableHead>
             ))}
           </TableRow>
         </TableHeader>
@@ -418,7 +539,9 @@ export function SimpleTable({
           {rows.map((row, index) => (
             <TableRow key={index}>
               {row.map((cell, cellIndex) => (
-                <TableCell key={cellIndex} className="h-9 py-1.5 text-xs">{cell}</TableCell>
+                <TableCell key={cellIndex} className="h-9 py-1.5 text-xs">
+                  {cell}
+                </TableCell>
               ))}
             </TableRow>
           ))}

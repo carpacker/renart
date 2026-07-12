@@ -59,9 +59,7 @@ export {
   getIngestrTableSuggestionsFromCatalog,
 } from "./suggestion-catalog";
 
-const dynamicSuggestionStateAtom = atom<DynamicSuggestionState>(
-  emptyDynamicSuggestionState
-);
+const dynamicSuggestionStateAtom = atom<DynamicSuggestionState>(emptyDynamicSuggestionState);
 
 export const registerAssetColumnsAtom = atom(
   null,
@@ -73,20 +71,16 @@ export const registerAssetColumnsAtom = atom(
       environment: payload.environment,
       columns: normalizeRegisteredColumns(payload.columns),
     };
-    const currentObservations =
-      current.assetColumnsByAssetId[payload.assetId] ?? [];
+    const currentObservations = current.assetColumnsByAssetId[payload.assetId] ?? [];
 
     set(dynamicSuggestionStateAtom, {
       ...current,
       assetColumnsByAssetId: {
         ...current.assetColumnsByAssetId,
-        [payload.assetId]: replaceAssetColumnObservation(
-          currentObservations,
-          nextObservation
-        ),
+        [payload.assetId]: replaceAssetColumnObservation(currentObservations, nextObservation),
       },
     });
-  }
+  },
 );
 
 export const registerConnectionTablesAtom = atom(
@@ -104,7 +98,7 @@ export const registerConnectionTablesAtom = atom(
         }::${observation.prefix ?? ""}` ===
         `${payload.method ?? "ingestr-suggestions"}::${payload.environment ?? ""}::${
           payload.databaseName ?? ""
-        }::${payload.prefix ?? ""}`
+        }::${payload.prefix ?? ""}`,
     );
 
     const mergedTables = existing
@@ -125,13 +119,10 @@ export const registerConnectionTablesAtom = atom(
       ...current,
       remoteTablesByConnectionKey: {
         ...current.remoteTablesByConnectionKey,
-        [key]: replaceConnectionTableObservation(
-          currentObservations,
-          nextObservation
-        ),
+        [key]: replaceConnectionTableObservation(currentObservations, nextObservation),
       },
     });
-  }
+  },
 );
 
 export const registerConnectionDatabasesAtom = atom(
@@ -156,13 +147,10 @@ export const registerConnectionDatabasesAtom = atom(
       ...current,
       remoteDatabasesByConnectionKey: {
         ...current.remoteDatabasesByConnectionKey,
-        [key]: replaceConnectionDatabaseObservation(
-          currentObservations,
-          nextObservation
-        ),
+        [key]: replaceConnectionDatabaseObservation(currentObservations, nextObservation),
       },
     });
-  }
+  },
 );
 
 export const registerRemoteTableColumnsAtom = atom(
@@ -190,13 +178,10 @@ export const registerRemoteTableColumnsAtom = atom(
       ...current,
       remoteTableColumnsByTableKey: {
         ...current.remoteTableColumnsByTableKey,
-        [key]: replaceRemoteTableColumnObservation(
-          currentObservations,
-          nextObservation
-        ),
+        [key]: replaceRemoteTableColumnObservation(currentObservations, nextObservation),
       },
     });
-  }
+  },
 );
 
 export const suggestionCatalogAtom = atom<SuggestionCatalogState>((get) => {
@@ -209,42 +194,36 @@ export const suggestionCatalogAtom = atom<SuggestionCatalogState>((get) => {
 });
 
 export const connectionSuggestionsAtom = atom<ConnectionSuggestionEntry[]>((get) =>
-  getConnectionSuggestions(get(suggestionCatalogAtom))
+  getConnectionSuggestions(get(suggestionCatalogAtom)),
 );
 
-export const databaseSuggestionsAtom = atom<SuggestionDatabaseState[]>((get) =>
-  get(suggestionCatalogAtom).databases
+export const databaseSuggestionsAtom = atom<SuggestionDatabaseState[]>(
+  (get) => get(suggestionCatalogAtom).databases,
 );
 
-export const selectedAssetSuggestionTableAtom = atom<SuggestionTableState | null>(
-  (get) => {
-    return getSelectedAssetSuggestionTable(
-      get(suggestionCatalogAtom),
-      get(selectedAssetDataAtom)?.id
-    );
-  }
-);
+export const selectedAssetSuggestionTableAtom = atom<SuggestionTableState | null>((get) => {
+  return getSelectedAssetSuggestionTable(
+    get(suggestionCatalogAtom),
+    get(selectedAssetDataAtom)?.id,
+  );
+});
 
-export const selectedAssetColumnEntriesAtom = atom<Array<{ name?: string }>>(
-  (get) => getSelectedAssetColumnEntries(get(selectedAssetSuggestionTableAtom))
+export const selectedAssetColumnEntriesAtom = atom<Array<{ name?: string }>>((get) =>
+  getSelectedAssetColumnEntries(get(selectedAssetSuggestionTableAtom)),
 );
 
 export const selectedAssetInspectColumnsAtom = atom<string[]>((get) =>
-  getSelectedAssetInspectColumns(get(selectedAssetSuggestionTableAtom))
+  getSelectedAssetInspectColumns(get(selectedAssetSuggestionTableAtom)),
 );
 
-export const selectedAssetSchemaSuggestionTablesAtom = atom<SuggestionTableState[]>(
-  (get) =>
-    getSchemaSuggestionTablesForAsset(
-      get(workspaceAtom),
-      get(suggestionCatalogAtom),
-      get(selectedAssetDataAtom)
-    )
+export const selectedAssetSchemaSuggestionTablesAtom = atom<SuggestionTableState[]>((get) =>
+  getSchemaSuggestionTablesForAsset(
+    get(workspaceAtom),
+    get(suggestionCatalogAtom),
+    get(selectedAssetDataAtom),
+  ),
 );
 
 export const selectedAssetSchemaTablesAtom = atom<SchemaTable[]>((get) =>
-  toSchemaTables(
-    get(selectedAssetSchemaSuggestionTablesAtom),
-    get(selectedAssetDataAtom)?.id
-  )
+  toSchemaTables(get(selectedAssetSchemaSuggestionTablesAtom), get(selectedAssetDataAtom)?.id),
 );

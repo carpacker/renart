@@ -22,7 +22,7 @@ import {
 } from "./demo-media-lib.mjs";
 
 const outputDir = path.resolve(
-  process.env.RENART_LANDING_MEDIA_DIR ?? path.join(repoRoot, "docs", "public", "landing")
+  process.env.RENART_LANDING_MEDIA_DIR ?? path.join(repoRoot, "docs", "public", "landing"),
 );
 const port = Number(process.env.RENART_LANDING_MEDIA_PORT ?? "18183");
 
@@ -49,7 +49,7 @@ try {
     await goto(page, `/notebooks/${demo.notebookId}`, 5000);
     await page.evaluate(() => {
       const scroller = Array.from(document.querySelectorAll("*")).find(
-        (el) => el.scrollHeight > el.clientHeight + 100 && el.clientHeight > 400
+        (el) => el.scrollHeight > el.clientHeight + 100 && el.clientHeight > 400,
       );
       (scroller ?? document.scrollingElement).scrollTop = 760;
     });
@@ -88,11 +88,21 @@ try {
       .click()
       .catch(() => console.log("could not select customer_ltv node"));
     await page.waitForTimeout(1000);
-    await page.getByRole("button", { name: "Hide explorer" }).click().catch(() => {});
+    await page
+      .getByRole("button", { name: "Hide explorer" })
+      .click()
+      .catch(() => {});
     await page.waitForTimeout(600);
-    await page.getByRole("button", { name: "Collapse results panel" }).click().catch(() => {});
+    await page
+      .getByRole("button", { name: "Collapse results panel" })
+      .click()
+      .catch(() => {});
     await page.waitForTimeout(600);
-    await page.locator(".react-flow__controls-fitview").first().click().catch(() => {});
+    await page
+      .locator(".react-flow__controls-fitview")
+      .first()
+      .click()
+      .catch(() => {});
     await page.waitForTimeout(1200);
     await shot(page, "lifecycle-staleness");
   });
@@ -129,7 +139,11 @@ try {
       // hide the card the half-typed query triggers
       await page.evaluate(() => {
         for (const el of Array.from(document.querySelectorAll("div"))) {
-          if (el.textContent?.startsWith("Preview failed") && el.clientHeight > 0 && el.clientHeight < 300) {
+          if (
+            el.textContent?.startsWith("Preview failed") &&
+            el.clientHeight > 0 &&
+            el.clientHeight < 300
+          ) {
             el.style.visibility = "hidden";
             break;
           }
@@ -160,7 +174,9 @@ try {
     "feature-catalog",
   ]);
   console.log(`\nLanding media written to ${outputDir}`);
-  console.log("If a capture changed size, update the <img> width/height in docs/src/pages/index.astro.");
+  console.log(
+    "If a capture changed size, update the <img> width/height in docs/src/pages/index.astro.",
+  );
 } finally {
   await browser?.close().catch(() => undefined);
   demo?.stop();

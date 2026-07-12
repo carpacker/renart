@@ -14,9 +14,7 @@ type PendingAssetSave = {
 
 export function useDebouncedAssetSave(delay = 500) {
   const setChangedAssetIds = useSetAtom(changedAssetIdsAtom);
-  const timersByAssetRef = useRef<
-    Record<string, ReturnType<typeof setTimeout>>
-  >({});
+  const timersByAssetRef = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
   const pendingByAssetRef = useRef<Record<string, PendingAssetSave>>({});
 
   const runSaveNow = useCallback(
@@ -41,7 +39,7 @@ export function useDebouncedAssetSave(delay = 500) {
         return false;
       }
     },
-    [setChangedAssetIds]
+    [setChangedAssetIds],
   );
 
   const flushAssetSave = useCallback(
@@ -60,7 +58,7 @@ export function useDebouncedAssetSave(delay = 500) {
       delete pendingByAssetRef.current[assetId];
       void runSaveNow(pending);
     },
-    [runSaveNow]
+    [runSaveNow],
   );
 
   const flushAllSaves = useCallback(() => {
@@ -110,7 +108,7 @@ export function useDebouncedAssetSave(delay = 500) {
         void runSaveNow(pending);
       }, delay);
     },
-    [delay, runSaveNow]
+    [delay, runSaveNow],
   );
 
   const hasPendingAssetSave = useCallback((assetId: string) => {
@@ -133,7 +131,7 @@ export function useDebouncedAssetSave(delay = 500) {
         content,
       });
     },
-    [runSaveNow]
+    [runSaveNow],
   );
 
   return {

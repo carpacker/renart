@@ -1,8 +1,5 @@
 import { projectApiPath } from "@/lib/project-context";
-import {
-  getResponseErrorMessage,
-  MaterializeStreamPayload,
-} from "@/lib/api-core";
+import { getResponseErrorMessage, MaterializeStreamPayload } from "@/lib/api-core";
 
 export type StreamAssetEvent = {
   asset_name?: string;
@@ -18,7 +15,7 @@ export async function readSSEStream(
     onDone?: (payload: MaterializeStreamPayload) => void;
     onAssetEvent?: (event: StreamAssetEvent) => void;
   },
-  endedMessage: string
+  endedMessage: string,
 ) {
   if (!res.ok) {
     throw new Error(await getResponseErrorMessage(res));
@@ -81,7 +78,7 @@ export async function streamMaterialization(
     onDone?: (payload: MaterializeStreamPayload) => void;
     onAssetEvent?: (event: StreamAssetEvent) => void;
   },
-  endedMessage: string
+  endedMessage: string,
 ) {
   const res = await fetch(projectApiPath(path), {
     method: "POST",

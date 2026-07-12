@@ -12,30 +12,24 @@ type WorkspaceResponse = {
 };
 
 const pipelineId = Buffer.from("analytics").toString("base64url");
-const customersAssetId = Buffer.from(
-  "analytics/assets/analytics/customers.sql"
-).toString("base64url");
-const customerStatsAssetId = Buffer.from(
-  "analytics/assets/analytics/customer_stats.sql"
-).toString("base64url");
+const customersAssetId = Buffer.from("analytics/assets/analytics/customers.sql").toString(
+  "base64url",
+);
+const customerStatsAssetId = Buffer.from("analytics/assets/analytics/customer_stats.sql").toString(
+  "base64url",
+);
 
 test.describe("app build editor live", () => {
   test.use({ fixtureName: "configured-workspace" });
 
-  test("edits an asset in Monaco and persists the change", async ({
-    liveApp,
-    page,
-  }) => {
-    await page.goto(
-      `${liveApp.baseURL}/pipelines/${pipelineId}/assets/${customersAssetId}/code`
-    );
+  test("edits an asset in Monaco and persists the change", async ({ liveApp, page }) => {
+    await page.goto(`${liveApp.baseURL}/pipelines/${pipelineId}/assets/${customersAssetId}/code`);
 
     const editor = page.locator(".monaco-editor").first();
     await expect(editor).toBeVisible({ timeout: 15000 });
-    await expect(page.locator(".view-lines").first()).toContainText(
-      "customer_id",
-      { timeout: 15000 }
-    );
+    await expect(page.locator(".view-lines").first()).toContainText("customer_id", {
+      timeout: 15000,
+    });
 
     await editor.click();
     await page.keyboard.press("ControlOrMeta+End");
@@ -44,15 +38,13 @@ test.describe("app build editor live", () => {
         response.url().includes(`/api/pipelines/${pipelineId}/assets/`) &&
         response.request().method() === "PUT" &&
         response.ok(),
-      { timeout: 15000 }
+      { timeout: 15000 },
     );
     await page.keyboard.press("End");
     await page.keyboard.type("\n-- app editor smoke");
     await saveResponse;
 
-    const workspaceResponse = await page.request.get(
-      `${liveApp.baseURL}/api/workspace`
-    );
+    const workspaceResponse = await page.request.get(`${liveApp.baseURL}/api/workspace`);
     expect(workspaceResponse.ok()).toBe(true);
     const workspace = (await workspaceResponse.json()) as WorkspaceResponse;
     const customers = workspace.pipelines
@@ -61,20 +53,14 @@ test.describe("app build editor live", () => {
     expect(customers?.content).toContain("-- app editor smoke");
   });
 
-  test("ctrl+click on an upstream table opens that asset", async ({
-    liveApp,
-    page,
-  }) => {
-    test.skip(test.info().project.name.includes("mobile"), "Ctrl+click navigation is a desktop mouse/keyboard affordance.");
+  test("ctrl+click on an upstream table opens that asset", async ({ liveApp, page }) => {
+    test.skip(
+      test.info().project.name.includes("mobile"),
+      "Ctrl+click navigation is a desktop mouse/keyboard affordance.",
+    );
 
     await writeFile(
-      join(
-        liveApp.workspaceDir,
-        "analytics",
-        "assets",
-        "analytics",
-        "customer_stats.sql"
-      ),
+      join(liveApp.workspaceDir, "analytics", "assets", "analytics", "customer_stats.sql"),
       `/* @bruin
 type: duckdb.sql
 materialization:
@@ -83,7 +69,7 @@ materialization:
 
 select customer_id, customer_name from analytics.customers
 `,
-      "utf8"
+      "utf8",
     );
 
     // Wait for the watcher to pick the new asset up so the initial workspace
@@ -91,9 +77,7 @@ select customer_id, customer_name from analytics.customers
     await expect
       .poll(
         async () => {
-          const response = await page.request.get(
-            `${liveApp.baseURL}/api/workspace`
-          );
+          const response = await page.request.get(`${liveApp.baseURL}/api/workspace`);
           if (!response.ok()) {
             return "";
           }
@@ -104,12 +88,12 @@ select customer_id, customer_name from analytics.customers
               .find((asset) => asset.id === customerStatsAssetId)?.content ?? ""
           );
         },
-        { timeout: 30000 }
+        { timeout: 30000 },
       )
       .toContain("analytics.customers");
 
     await page.goto(
-      `${liveApp.baseURL}/pipelines/${pipelineId}/assets/${customerStatsAssetId}/code`
+      `${liveApp.baseURL}/pipelines/${pipelineId}/assets/${customerStatsAssetId}/code`,
     );
 
     const viewLines = page.locator(".view-lines").first();
@@ -117,30 +101,30 @@ select customer_id, customer_name from analytics.customers
       timeout: 15000,
     });
 
-    const upstreamToken = viewLines
-      .locator("span", { hasText: "customers" })
-      .last();
+    const upstreamToken = viewLines.locator("span", { hasText: "customers" }).last();
     await expect
       .poll(
         async () => {
           await upstreamToken.click({ modifiers: ["ControlOrMeta"] });
           return page.url();
         },
-        { timeout: 15000 }
+        { timeout: 15000 },
       )
       .toContain(`/assets/${customersAssetId}/code`);
 
-    await expect(page.locator(".view-lines").first()).toContainText(
-      "customer_name",
-      { timeout: 15000 }
-    );
+    await expect(page.locator(".view-lines").first()).toContainText("customer_name", {
+      timeout: 15000,
+    });
   });
 
   test("pipeline settings tags and domains use chips that allow commas", async ({
     liveApp,
     page,
   }) => {
-    test.skip(test.info().project.name.includes("mobile"), "Pipeline settings dialog coverage is desktop-only.");
+    test.skip(
+      test.info().project.name.includes("mobile"),
+      "Pipeline settings dialog coverage is desktop-only.",
+    );
 
     await page.goto(`${liveApp.baseURL}/pipelines/${pipelineId}/assets/${customersAssetId}/code`);
     await expect(page.locator(".monaco-editor").first()).toBeVisible({ timeout: 15000 });
@@ -162,14 +146,16 @@ select customer_id, customer_name from analytics.customers
         response.url().includes(`/api/pipelines/${pipelineId}/config`) &&
         response.request().method() === "PUT" &&
         response.ok(),
-      { timeout: 15000 }
+      { timeout: 15000 },
     );
     await page.getByRole("button", { name: "Save changes" }).click();
     await saveResponse;
 
-    const configResponse = await page.request.get(`${liveApp.baseURL}/api/pipelines/${pipelineId}/config`);
+    const configResponse = await page.request.get(
+      `${liveApp.baseURL}/api/pipelines/${pipelineId}/config`,
+    );
     expect(configResponse.ok()).toBe(true);
-    const config = await configResponse.json() as { tags?: string[]; domains?: string[] };
+    const config = (await configResponse.json()) as { tags?: string[]; domains?: string[] };
     expect(config.tags).toContain("finance, north");
     expect(config.domains).toContain("sales, enterprise");
   });

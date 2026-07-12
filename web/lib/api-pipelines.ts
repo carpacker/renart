@@ -11,16 +11,8 @@ import {
   UpdatePipelineConfigRequest,
 } from "@/lib/types";
 
-export async function createPipeline(input: {
-  path: string;
-  name?: string;
-  content?: string;
-}) {
-  return fetchJSONWithBody<Record<string, string>>(
-    "/api/pipelines",
-    "POST",
-    input
-  );
+export async function createPipeline(input: { path: string; name?: string; content?: string }) {
+  return fetchJSONWithBody<Record<string, string>>("/api/pipelines", "POST", input);
 }
 
 export async function deletePipeline(pipelineId: string) {
@@ -29,77 +21,66 @@ export async function deletePipeline(pipelineId: string) {
   });
 }
 
-export async function updatePipeline(input: {
-  id: string;
-  name?: string;
-  content?: string;
-}) {
-  return fetchJSONWithBody<Record<string, string>>(
-    "/api/pipelines",
-    "PUT",
-    input
-  );
+export async function updatePipeline(input: { id: string; name?: string; content?: string }) {
+  return fetchJSONWithBody<Record<string, string>>("/api/pipelines", "PUT", input);
 }
 
 export async function getPipelineConfig(pipelineId: string) {
-	return fetchJSON<PipelineConfigResponse>(`/api/pipelines/${pipelineId}/config`, {
-		method: "GET",
-		cache: "no-store",
-	});
+  return fetchJSON<PipelineConfigResponse>(`/api/pipelines/${pipelineId}/config`, {
+    method: "GET",
+    cache: "no-store",
+  });
 }
 
 export type PipelineTypeCheckFinding = {
-	severity: "error" | "warning";
-	message: string;
-	line?: number;
-	column?: number;
-	end_line?: number;
-	end_column?: number;
+  severity: "error" | "warning";
+  message: string;
+  line?: number;
+  column?: number;
+  end_line?: number;
+  end_column?: number;
 };
 
 export type PipelineTypeCheckAsset = {
-	id?: string;
-	name: string;
-	type: string;
-	dialect?: string;
-	status: "ok" | "warning" | "error";
-	findings: PipelineTypeCheckFinding[];
+  id?: string;
+  name: string;
+  type: string;
+  dialect?: string;
+  status: "ok" | "warning" | "error";
+  findings: PipelineTypeCheckFinding[];
 };
 
 export type PipelineTypeCheckReport = {
-	status: "ok" | "warning" | "error";
-	pipeline_id?: string;
-	pipeline_name: string;
-	start_date?: string;
-	end_date?: string;
-	assets: PipelineTypeCheckAsset[];
-	summary: { assets: number; errors: number; warnings: number };
+  status: "ok" | "warning" | "error";
+  pipeline_id?: string;
+  pipeline_name: string;
+  start_date?: string;
+  end_date?: string;
+  assets: PipelineTypeCheckAsset[];
+  summary: { assets: number; errors: number; warnings: number };
 };
 
 /** Type-checks every asset in a pipeline (SQL columns/types + missing column declarations). */
 export async function typeCheckPipeline(
-	pipelineId: string,
-	options?: { startDate?: string; endDate?: string }
+  pipelineId: string,
+  options?: { startDate?: string; endDate?: string },
 ) {
-	const query = buildQueryString({
-		start_date: options?.startDate,
-		end_date: options?.endDate,
-	});
-	return fetchJSON<PipelineTypeCheckReport>(
-		`/api/pipelines/${pipelineId}/type-check${query}`,
-		{ method: "GET", cache: "no-store" }
-	);
+  const query = buildQueryString({
+    start_date: options?.startDate,
+    end_date: options?.endDate,
+  });
+  return fetchJSON<PipelineTypeCheckReport>(`/api/pipelines/${pipelineId}/type-check${query}`, {
+    method: "GET",
+    cache: "no-store",
+  });
 }
 
-export async function updatePipelineConfig(
-	pipelineId: string,
-	input: UpdatePipelineConfigRequest
-) {
-	return fetchJSONWithBody<PipelineConfigResponse>(
-		`/api/pipelines/${pipelineId}/config`,
-		"PUT",
-		input
-	);
+export async function updatePipelineConfig(pipelineId: string, input: UpdatePipelineConfigRequest) {
+  return fetchJSONWithBody<PipelineConfigResponse>(
+    `/api/pipelines/${pipelineId}/config`,
+    "PUT",
+    input,
+  );
 }
 
 export async function materializePipelineStream(
@@ -108,7 +89,12 @@ export async function materializePipelineStream(
     onChunk?: (chunk: string) => void;
     onDone?: (payload: MaterializeStreamPayload) => void;
   },
-  options?: { environment?: string; dryRun?: boolean; fullRefresh?: boolean; timeWindow?: { start: string; end: string } }
+  options?: {
+    environment?: string;
+    dryRun?: boolean;
+    fullRefresh?: boolean;
+    timeWindow?: { start: string; end: string };
+  },
 ) {
   return streamMaterialization(
     `/api/pipelines/${pipelineId}/materialize/stream${buildQueryString({
@@ -119,13 +105,13 @@ export async function materializePipelineStream(
       end_date: options?.timeWindow?.end,
     })}`,
     handlers,
-    "Pipeline materialization stream ended unexpectedly."
+    "Pipeline materialization stream ended unexpectedly.",
   );
 }
 
 export async function getPipelineMaterialization(
   pipelineId: string,
-  options?: { environment?: string }
+  options?: { environment?: string },
 ) {
   return fetchJSON<PipelineMaterializationResponse>(
     `/api/pipelines/${pipelineId}/materialization${buildQueryString({
@@ -134,6 +120,6 @@ export async function getPipelineMaterialization(
     {
       method: "GET",
       cache: "no-store",
-    }
+    },
   );
 }

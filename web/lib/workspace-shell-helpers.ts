@@ -1,13 +1,10 @@
 import { NewAssetKind } from "@/components/new-asset-node";
-import {
-  buildAPIAssetTemplate,
-  type APIAssetTemplateId,
-} from "@/lib/api-asset-templates";
+import { buildAPIAssetTemplate, type APIAssetTemplateId } from "@/lib/api-asset-templates";
 
 export function buildSuggestedAssetName(
   kind: NewAssetKind,
   existingNames: Set<string>,
-  pipelineName?: string | null
+  pipelineName?: string | null,
 ): string {
   const pipelinePrefix = slugifyPipelinePrefix(pipelineName);
   const prefixByKind: Record<NewAssetKind, string> = {
@@ -131,9 +128,7 @@ def materialize():
 `;
 }
 
-export function buildOnboardingSQLStarterQuery(
-  pythonAssetName: string
-): string {
+export function buildOnboardingSQLStarterQuery(pythonAssetName: string): string {
   const pythonRef = tableReferenceForAssetName(pythonAssetName);
 
   return `with segment_map as (

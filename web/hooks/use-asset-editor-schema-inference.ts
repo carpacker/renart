@@ -28,22 +28,17 @@ export function useAssetEditorSchemaInference({
       return;
     }
 
-    const upstreamNameSet = new Set(
-      (asset.upstreams ?? []).map((name) => name.toLowerCase())
-    );
+    const upstreamNameSet = new Set((asset.upstreams ?? []).map((name) => name.toLowerCase()));
     const tablesNeedingInference = schemaSuggestionTables.filter(
       (table) =>
         table.assetId &&
         table.columns.length === 0 &&
-        upstreamNameSet.has(table.name.toLowerCase())
+        upstreamNameSet.has(table.name.toLowerCase()),
     );
 
     for (const table of tablesNeedingInference) {
       const tableAssetId = table.assetId;
-      if (
-        !tableAssetId ||
-        requestedInferenceAssetIdsRef.current.has(tableAssetId)
-      ) {
+      if (!tableAssetId || requestedInferenceAssetIdsRef.current.has(tableAssetId)) {
         continue;
       }
 

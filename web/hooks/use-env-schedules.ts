@@ -56,30 +56,39 @@ export function useEnvSchedules() {
         setBusyKey(null);
       }
     },
-    [refresh]
+    [refresh],
   );
 
   const upsert = useCallback(
-    async (schedule: Pick<EnvSchedule, "pipeline_uuid" | "environment"> & { pipeline_id: string }, input: UpsertEnvScheduleInput) => {
-      await withBusy(envScheduleKey(schedule), () => upsertEnvSchedule(schedule.pipeline_id, schedule.environment, input));
+    async (
+      schedule: Pick<EnvSchedule, "pipeline_uuid" | "environment"> & { pipeline_id: string },
+      input: UpsertEnvScheduleInput,
+    ) => {
+      await withBusy(envScheduleKey(schedule), () =>
+        upsertEnvSchedule(schedule.pipeline_id, schedule.environment, input),
+      );
     },
-    [withBusy]
+    [withBusy],
   );
 
   const setStatus = useCallback(
     async (schedule: EnvSchedule, status: "active" | "paused") => {
       if (!schedule.pipeline_id) return;
-      await withBusy(envScheduleKey(schedule), () => setEnvScheduleStatus(schedule.pipeline_id as string, schedule.environment, status));
+      await withBusy(envScheduleKey(schedule), () =>
+        setEnvScheduleStatus(schedule.pipeline_id as string, schedule.environment, status),
+      );
     },
-    [withBusy]
+    [withBusy],
   );
 
   const archive = useCallback(
     async (schedule: EnvSchedule) => {
       if (!schedule.pipeline_id) return;
-      await withBusy(envScheduleKey(schedule), () => archiveEnvSchedule(schedule.pipeline_id as string, schedule.environment));
+      await withBusy(envScheduleKey(schedule), () =>
+        archiveEnvSchedule(schedule.pipeline_id as string, schedule.environment),
+      );
     },
-    [withBusy]
+    [withBusy],
   );
 
   return { schedules, archived, loading, busyKey, refresh, upsert, setStatus, archive };

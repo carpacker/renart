@@ -12,13 +12,17 @@ export function FieldLabel({ className, ...props }: LabelProps) {
   return <Label className={cn("block cursor-pointer", className)} {...props} />;
 }
 
-export function Field({ className, orientation = "vertical", ...props }: DivProps & { orientation?: "horizontal" | "vertical" }) {
+export function Field({
+  className,
+  orientation = "vertical",
+  ...props
+}: DivProps & { orientation?: "horizontal" | "vertical" }) {
   return (
     <div
       className={cn(
         "rounded-lg border px-3 py-3",
         orientation === "horizontal" ? "flex items-start justify-between gap-3" : "grid gap-3",
-        className
+        className,
       )}
       {...props}
     />

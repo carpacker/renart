@@ -30,7 +30,7 @@ export async function createProject(input: CreateProjectRequest): Promise<Create
 export async function removeProject(id: string): Promise<ProjectListResponse> {
   return fetchJSONWithBody<ProjectListResponse>(
     `/api/projects/${encodeURIComponent(id)}`,
-    "DELETE"
+    "DELETE",
   );
 }
 

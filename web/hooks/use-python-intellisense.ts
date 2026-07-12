@@ -35,8 +35,9 @@ function acquirePythonProviders(monaco: typeof MonacoNS): () => void {
   let registration = pythonProviderRegistry.get(monaco);
   if (!registration) {
     registration = {
-      disposable: registerPythonProviders(monaco, (model) =>
-        pythonAssetEntries.get(model.uri.toString()) ?? null,
+      disposable: registerPythonProviders(
+        monaco,
+        (model) => pythonAssetEntries.get(model.uri.toString()) ?? null,
       ),
       refs: 0,
     };
@@ -63,160 +64,158 @@ function registerPythonProviders(
   const isPython = (asset: WebAsset | null): asset is WebAsset =>
     !!asset?.id && asset.path.toLowerCase().endsWith(".py");
 
-    const formatting = monaco.languages.registerDocumentFormattingEditProvider("python", {
-      async provideDocumentFormattingEdits(model) {
-        const currentAsset = resolveAsset(model);
-        if (!isPython(currentAsset)) {
-          return [];
-        }
+  const formatting = monaco.languages.registerDocumentFormattingEditProvider("python", {
+    async provideDocumentFormattingEdits(model) {
+      const currentAsset = resolveAsset(model);
+      if (!isPython(currentAsset)) {
+        return [];
+      }
 
-        const response = await formatPythonAsset(currentAsset.id, model.getValue()).catch(
-          () => null,
-        );
-        if (!response || response.status !== "ok" || response.content === model.getValue()) {
-          return [];
-        }
-        return [
+      const response = await formatPythonAsset(currentAsset.id, model.getValue()).catch(() => null);
+      if (!response || response.status !== "ok" || response.content === model.getValue()) {
+        return [];
+      }
+      return [
+        {
+          range: model.getFullModelRange(),
+          text: response.content,
+        },
+      ];
+    },
+  });
+
+  const completions = monaco.languages.registerCompletionItemProvider("python", {
+    triggerCharacters: ["."],
+    async provideCompletionItems(model, position, context, token) {
+      const currentAsset = resolveAsset(model);
+      if (!isPython(currentAsset)) {
+        return { suggestions: [] };
+      }
+
+      const controller = new AbortController();
+      const cancellation = token.onCancellationRequested(() => controller.abort());
+      try {
+        const response = await getPythonCompletions(
+          currentAsset.id,
           {
-            range: model.getFullModelRange(),
-            text: response.content,
+            content: model.getValue(),
+            line: position.lineNumber,
+            column: position.column,
+            snippets: shouldUsePythonCompletionSnippets(model, position, context),
           },
-        ];
-      },
-    });
-
-    const completions = monaco.languages.registerCompletionItemProvider("python", {
-      triggerCharacters: ["."],
-      async provideCompletionItems(model, position, context, token) {
-        const currentAsset = resolveAsset(model);
-        if (!isPython(currentAsset)) {
+          controller.signal,
+        );
+        if (token.isCancellationRequested || response.status !== "ok") {
           return { suggestions: [] };
         }
-
-        const controller = new AbortController();
-        const cancellation = token.onCancellationRequested(() => controller.abort());
-        try {
-          const response = await getPythonCompletions(
-            currentAsset.id,
-            {
-              content: model.getValue(),
-              line: position.lineNumber,
-              column: position.column,
-              snippets: shouldUsePythonCompletionSnippets(model, position, context),
-            },
-            controller.signal,
-          );
-          if (token.isCancellationRequested || response.status !== "ok") {
-            return { suggestions: [] };
-          }
-          const word = model.getWordUntilPosition(position);
-          const range = {
-            startLineNumber: position.lineNumber,
-            startColumn: word.startColumn,
-            endLineNumber: position.lineNumber,
-            endColumn: word.endColumn,
-          };
-          return {
-            suggestions: (response.completions ?? []).map((completion, index) =>
-              completionToSuggestion(monaco, completion, index, range),
-            ),
-          };
-        } catch (error) {
-          if (controller.signal.aborted || error instanceof DOMException) {
-            return { suggestions: [] };
-          }
+        const word = model.getWordUntilPosition(position);
+        const range = {
+          startLineNumber: position.lineNumber,
+          startColumn: word.startColumn,
+          endLineNumber: position.lineNumber,
+          endColumn: word.endColumn,
+        };
+        return {
+          suggestions: (response.completions ?? []).map((completion, index) =>
+            completionToSuggestion(monaco, completion, index, range),
+          ),
+        };
+      } catch (error) {
+        if (controller.signal.aborted || error instanceof DOMException) {
           return { suggestions: [] };
-        } finally {
-          cancellation.dispose();
         }
-      },
-    });
+        return { suggestions: [] };
+      } finally {
+        cancellation.dispose();
+      }
+    },
+  });
 
-    const hover = monaco.languages.registerHoverProvider("python", {
-      async provideHover(model, position, token) {
-        const currentAsset = resolveAsset(model);
-        if (!isPython(currentAsset)) {
+  const hover = monaco.languages.registerHoverProvider("python", {
+    async provideHover(model, position, token) {
+      const currentAsset = resolveAsset(model);
+      if (!isPython(currentAsset)) {
+        return null;
+      }
+      const controller = new AbortController();
+      const cancellation = token.onCancellationRequested(() => controller.abort());
+      try {
+        const response = await getPythonHover(
+          currentAsset.id,
+          positionRequest(model, position),
+          controller.signal,
+        );
+        if (token.isCancellationRequested || response.status !== "ok" || !response.hover) {
           return null;
         }
-        const controller = new AbortController();
-        const cancellation = token.onCancellationRequested(() => controller.abort());
-        try {
-          const response = await getPythonHover(
-            currentAsset.id,
-            positionRequest(model, position),
-            controller.signal,
-          );
-          if (token.isCancellationRequested || response.status !== "ok" || !response.hover) {
-            return null;
-          }
-          return {
-            contents: [{ value: response.hover.contents, isTrusted: false }],
-            range: response.hover.range ? rangeToMonaco(response.hover.range) : undefined,
-          };
-        } catch {
-          return null;
-        } finally {
-          cancellation.dispose();
-        }
-      },
-    });
+        return {
+          contents: [{ value: response.hover.contents, isTrusted: false }],
+          range: response.hover.range ? rangeToMonaco(response.hover.range) : undefined,
+        };
+      } catch {
+        return null;
+      } finally {
+        cancellation.dispose();
+      }
+    },
+  });
 
-    const signature = monaco.languages.registerSignatureHelpProvider("python", {
-      signatureHelpTriggerCharacters: ["(", ","],
-      signatureHelpRetriggerCharacters: [","],
-      async provideSignatureHelp(model, position, token) {
-        const currentAsset = resolveAsset(model);
-        if (!isPython(currentAsset)) {
+  const signature = monaco.languages.registerSignatureHelpProvider("python", {
+    signatureHelpTriggerCharacters: ["(", ","],
+    signatureHelpRetriggerCharacters: [","],
+    async provideSignatureHelp(model, position, token) {
+      const currentAsset = resolveAsset(model);
+      if (!isPython(currentAsset)) {
+        return null;
+      }
+      const controller = new AbortController();
+      const cancellation = token.onCancellationRequested(() => controller.abort());
+      try {
+        const response = await getPythonSignatureHelp(
+          currentAsset.id,
+          positionRequest(model, position),
+          controller.signal,
+        );
+        if (token.isCancellationRequested || response.status !== "ok" || !response.signature_help) {
           return null;
         }
-        const controller = new AbortController();
-        const cancellation = token.onCancellationRequested(() => controller.abort());
-        try {
-          const response = await getPythonSignatureHelp(
-            currentAsset.id,
-            positionRequest(model, position),
-            controller.signal,
-          );
-          if (token.isCancellationRequested || response.status !== "ok" || !response.signature_help) {
-            return null;
-          }
-          return {
-            value: signatureHelpToMonaco(response.signature_help),
-            dispose: () => {},
-          };
-        } catch {
-          return null;
-        } finally {
-          cancellation.dispose();
-        }
-      },
-    });
+        return {
+          value: signatureHelpToMonaco(response.signature_help),
+          dispose: () => {},
+        };
+      } catch {
+        return null;
+      } finally {
+        cancellation.dispose();
+      }
+    },
+  });
 
-    const definition = monaco.languages.registerDefinitionProvider("python", {
-      async provideDefinition(model, position, token) {
-        const currentAsset = resolveAsset(model);
-        if (!isPython(currentAsset)) {
+  const definition = monaco.languages.registerDefinitionProvider("python", {
+    async provideDefinition(model, position, token) {
+      const currentAsset = resolveAsset(model);
+      if (!isPython(currentAsset)) {
+        return [];
+      }
+      const controller = new AbortController();
+      const cancellation = token.onCancellationRequested(() => controller.abort());
+      try {
+        const response = await getPythonGotoDefinition(
+          currentAsset.id,
+          positionRequest(model, position),
+          controller.signal,
+        );
+        if (token.isCancellationRequested || response.status !== "ok") {
           return [];
         }
-        const controller = new AbortController();
-        const cancellation = token.onCancellationRequested(() => controller.abort());
-        try {
-          const response = await getPythonGotoDefinition(
-            currentAsset.id,
-            positionRequest(model, position),
-            controller.signal,
-          );
-          if (token.isCancellationRequested || response.status !== "ok") {
-            return [];
-          }
-          return (response.targets ?? []).map((target) => gotoTargetToLocation(monaco, target));
-        } catch {
-          return [];
-        } finally {
-          cancellation.dispose();
-        }
-      },
-    });
+        return (response.targets ?? []).map((target) => gotoTargetToLocation(monaco, target));
+      } catch {
+        return [];
+      } finally {
+        cancellation.dispose();
+      }
+    },
+  });
 
   return {
     dispose() {
@@ -315,16 +314,16 @@ function shouldUsePythonCompletionSnippets(
   if (context.triggerCharacter === ".") {
     return false;
   }
-  if (position.column > 1 && model.getLineContent(position.lineNumber).at(position.column - 2) === ".") {
+  if (
+    position.column > 1 &&
+    model.getLineContent(position.lineNumber).at(position.column - 2) === "."
+  ) {
     return false;
   }
   return true;
 }
 
-function positionRequest(
-  model: MonacoNS.editor.ITextModel,
-  position: MonacoNS.Position,
-) {
+function positionRequest(model: MonacoNS.editor.ITextModel, position: MonacoNS.Position) {
   return {
     content: model.getValue(),
     line: position.lineNumber,
@@ -341,9 +340,7 @@ function rangeToMonaco(range: PythonRange): MonacoNS.IRange {
   };
 }
 
-function signatureHelpToMonaco(
-  help: PythonSignatureHelp,
-): MonacoNS.languages.SignatureHelp {
+function signatureHelpToMonaco(help: PythonSignatureHelp): MonacoNS.languages.SignatureHelp {
   return {
     signatures: help.signatures.map((signature) => ({
       label: signature.label,
@@ -466,10 +463,7 @@ function diagnosticToMarker(
   ];
 }
 
-function severityToMarker(
-  monaco: typeof MonacoNS,
-  severity: PythonDiagnostic["severity"],
-) {
+function severityToMarker(monaco: typeof MonacoNS, severity: PythonDiagnostic["severity"]) {
   switch (severity) {
     case "info":
       return monaco.MarkerSeverity.Info;

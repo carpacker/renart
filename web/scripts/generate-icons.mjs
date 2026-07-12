@@ -82,7 +82,7 @@ try {
            <body style="margin:0;background:transparent;overflow:hidden;display:grid;place-items:center;width:100vw;height:100vh;">
              <img id="icon" src="${svgDataUrl}" width="${size}" height="${size}" style="display:block;width:${size}px;height:${size}px;object-fit:contain;" />
            </body>
-         </html>`
+         </html>`,
       );
       await page.waitForFunction(() => {
         const img = document.getElementById("icon");

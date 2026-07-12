@@ -30,10 +30,14 @@ export function MultiValueInput({
     setOptimisticRemovals((current) => current.filter((item) => value.includes(item)));
   }, [value]);
 
-  const confirmedValues = value.filter((item) => !optimisticRemovals.includes(item) || leavingValues.includes(item));
+  const confirmedValues = value.filter(
+    (item) => !optimisticRemovals.includes(item) || leavingValues.includes(item),
+  );
   const visibleValues = [
     ...confirmedValues,
-    ...pendingAdds.filter((item) => !confirmedValues.includes(item) && !optimisticRemovals.includes(item)),
+    ...pendingAdds.filter(
+      (item) => !confirmedValues.includes(item) && !optimisticRemovals.includes(item),
+    ),
     ...leavingValues.filter((item) => !confirmedValues.includes(item)),
   ];
 
@@ -52,8 +56,8 @@ export function MultiValueInput({
     const nextPending = pendingAdds.filter((current) => current !== item);
     setPendingAdds(nextPending);
     if (value.includes(item)) {
-      setLeavingValues((current) => current.includes(item) ? current : [...current, item]);
-      setOptimisticRemovals((current) => current.includes(item) ? current : [...current, item]);
+      setLeavingValues((current) => (current.includes(item) ? current : [...current, item]));
+      setOptimisticRemovals((current) => (current.includes(item) ? current : [...current, item]));
       window.setTimeout(() => {
         setLeavingValues((current) => current.filter((value) => value !== item));
       }, 180);
@@ -80,7 +84,7 @@ export function MultiValueInput({
             variant="outline"
             className={cn(
               "gap-1 pr-0.5 transition-all duration-150",
-              leaving ? "scale-95 opacity-0" : "scale-100 opacity-100"
+              leaving ? "scale-95 opacity-0" : "scale-100 opacity-100",
             )}
           >
             <span className="max-w-40 truncate">{item}</span>
@@ -111,7 +115,11 @@ export function MultiValueInput({
           if (event.key === "Enter") {
             event.preventDefault();
             addDraft(event.currentTarget.value);
-          } else if (event.key === "Backspace" && event.currentTarget.value === "" && value.length > 0) {
+          } else if (
+            event.key === "Backspace" &&
+            event.currentTarget.value === "" &&
+            value.length > 0
+          ) {
             event.preventDefault();
             removeValue(value[value.length - 1]);
           }

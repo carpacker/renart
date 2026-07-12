@@ -29,11 +29,24 @@ import {
   DelimitedCardHeader,
   DelimitedCardTitle,
 } from "@/components/ui/delimited-card";
-import { Field, FieldContent, FieldDescription, FieldGroup, FieldTitle } from "@/components/ui/field";
+import {
+  Field,
+  FieldContent,
+  FieldDescription,
+  FieldGroup,
+  FieldTitle,
+} from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import {
+  Select,
+  SelectContent,
+  SelectGroup,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import {
   Sheet,
   SheetContent,
@@ -116,7 +129,12 @@ function SettingsShell({
   title: string;
   subtitle: string;
   eyebrow: string;
-  sections: ReadonlyArray<{ id: string; label: string; icon: ComponentType<{ className?: string }>; to: string }>;
+  sections: ReadonlyArray<{
+    id: string;
+    label: string;
+    icon: ComponentType<{ className?: string }>;
+    to: string;
+  }>;
 }) {
   return (
     <AppPage>
@@ -131,7 +149,11 @@ function SettingsShell({
           </div>
         </aside>
         <div className="min-h-0 overflow-hidden">
-          <ScrollArea className="mb-3 md:hidden" horizontalScrollBarClassName="hidden" viewportClassName="w-full">
+          <ScrollArea
+            className="mb-3 md:hidden"
+            horizontalScrollBarClassName="hidden"
+            viewportClassName="w-full"
+          >
             <div className="flex gap-2 pb-1">
               {sections.map((section) => (
                 <SettingsPillLink key={section.id} section={section} />
@@ -149,7 +171,11 @@ function SettingsShell({
   );
 }
 
-function SettingsSideLink({ section }: { section: { label: string; icon: ComponentType<{ className?: string }>; to: string } }) {
+function SettingsSideLink({
+  section,
+}: {
+  section: { label: string; icon: ComponentType<{ className?: string }>; to: string };
+}) {
   return (
     <Link
       to={section.to}
@@ -162,7 +188,11 @@ function SettingsSideLink({ section }: { section: { label: string; icon: Compone
   );
 }
 
-function SettingsPillLink({ section }: { section: { label: string; icon: ComponentType<{ className?: string }>; to: string } }) {
+function SettingsPillLink({
+  section,
+}: {
+  section: { label: string; icon: ComponentType<{ className?: string }>; to: string };
+}) {
   return (
     <Link to={section.to} className="shrink-0" activeProps={{ className: "text-primary" }}>
       {({ isActive }) => (
@@ -199,10 +229,14 @@ export function AppProjectGeneralPage() {
   }, [workspaceConfig?.project_name]);
 
   useEffect(() => {
-    setDefaultEnvironment(workspaceConfig?.default_environment || normalizedConfigEnvironments[0]?.name || "");
+    setDefaultEnvironment(
+      workspaceConfig?.default_environment || normalizedConfigEnvironments[0]?.name || "",
+    );
   }, [normalizedConfigEnvironments, workspaceConfig?.default_environment]);
 
-  const selectedDefaultEnv = normalizedConfigEnvironments.find((environment) => environment.name === defaultEnvironment);
+  const selectedDefaultEnv = normalizedConfigEnvironments.find(
+    (environment) => environment.name === defaultEnvironment,
+  );
   const projectNameDirty = projectName.trim() !== (workspaceConfig?.project_name || "");
 
   return (
@@ -223,10 +257,22 @@ export function AppProjectGeneralPage() {
         <PlainFieldGroup className="md:grid-cols-2">
           <PlainField>
             <Label>Project name</Label>
-            <Input value={projectName} onChange={(event) => setProjectName(event.target.value)} placeholder="data_platform" />
+            <Input
+              value={projectName}
+              onChange={(event) => setProjectName(event.target.value)}
+              placeholder="data_platform"
+            />
           </PlainField>
-          <ReadonlyField label="Project id" value={workspaceConfig?.project_id || "Assigned on first load"} mono />
-          <ReadonlyField label="Workspace path" value={workspaceConfig?.workspace_path || "Loading..."} mono />
+          <ReadonlyField
+            label="Project id"
+            value={workspaceConfig?.project_id || "Assigned on first load"}
+            mono
+          />
+          <ReadonlyField
+            label="Workspace path"
+            value={workspaceConfig?.workspace_path || "Loading..."}
+            mono
+          />
           <ReadonlyField label="Config file" value={workspaceConfig?.path || ".bruin.yml"} mono />
         </PlainFieldGroup>
       </SettingsCard>
@@ -235,8 +281,8 @@ export function AppProjectGeneralPage() {
           <div>
             <Label>Ingestr sources</Label>
             <p className="mt-1 text-xs text-muted-foreground">
-              Offer ingestr source connection types and asset options. Off by default;
-              pipelines that already contain ingestr assets keep working either way.
+              Offer ingestr source connection types and asset options. Off by default; pipelines
+              that already contain ingestr assets keep working either way.
             </p>
           </div>
           <Switch
@@ -379,7 +425,7 @@ function EnvironmentSheet({
     workspaceEnvironmentPolicies,
   } = settings;
   const mode = state?.mode ?? "edit";
-  const selectedEnvironmentName = state?.mode === "create" ? null : state?.name ?? null;
+  const selectedEnvironmentName = state?.mode === "create" ? null : (state?.name ?? null);
 
   const { activeEnvironment, environmentForm, handleDelete, handleSave, setEnvironmentForm } =
     useWorkspaceEnvironmentForm({
@@ -458,7 +504,10 @@ function EnvironmentSheet({
         <div className="flex-1 overflow-auto px-4">
           <PlainFieldGroup>
             {workspaceConfigStatusTone === "error" ? (
-              <SettingsStatus message={workspaceConfigStatusMessage} tone={workspaceConfigStatusTone} />
+              <SettingsStatus
+                message={workspaceConfigStatusMessage}
+                tone={workspaceConfigStatusTone}
+              />
             ) : null}
             {mode === "clone" ? (
               <PlainField>
@@ -466,7 +515,9 @@ function EnvironmentSheet({
                 <Select
                   value={environmentForm.cloneSourceName || undefined}
                   onValueChange={(value) => {
-                    const source = normalizedConfigEnvironments.find((environment) => environment.name === value);
+                    const source = normalizedConfigEnvironments.find(
+                      (environment) => environment.name === value,
+                    );
                     setEnvironmentForm((current) => ({
                       ...current,
                       cloneSourceName: value,
@@ -493,7 +544,9 @@ function EnvironmentSheet({
               <Label>Name</Label>
               <Input
                 value={environmentForm.name}
-                onChange={(event) => setEnvironmentForm((current) => ({ ...current, name: event.target.value }))}
+                onChange={(event) =>
+                  setEnvironmentForm((current) => ({ ...current, name: event.target.value }))
+                }
                 placeholder="prod"
               />
             </PlainField>
@@ -501,18 +554,27 @@ function EnvironmentSheet({
               <Label>Schema prefix</Label>
               <Input
                 value={environmentForm.schemaPrefix}
-                onChange={(event) => setEnvironmentForm((current) => ({ ...current, schemaPrefix: event.target.value }))}
+                onChange={(event) =>
+                  setEnvironmentForm((current) => ({
+                    ...current,
+                    schemaPrefix: event.target.value,
+                  }))
+                }
                 placeholder="analytics_"
               />
             </PlainField>
             <Field orientation="horizontal">
               <FieldContent>
                 <FieldTitle>Default environment</FieldTitle>
-                <FieldDescription>Use this environment when no explicit environment is selected.</FieldDescription>
+                <FieldDescription>
+                  Use this environment when no explicit environment is selected.
+                </FieldDescription>
               </FieldContent>
               <Switch
                 checked={environmentForm.setAsDefault}
-                onCheckedChange={(checked) => setEnvironmentForm((current) => ({ ...current, setAsDefault: checked }))}
+                onCheckedChange={(checked) =>
+                  setEnvironmentForm((current) => ({ ...current, setAsDefault: checked }))
+                }
               />
             </Field>
             {mode === "edit" ? (
@@ -523,14 +585,20 @@ function EnvironmentSheet({
                     renart-only guardrails stored in .renart/environments.yml, applied on save.
                   </p>
                 </div>
-                <EnvironmentPolicyFields policy={policyDraft} disabled={workspaceConfigBusy} onChange={setPolicyDraft} />
+                <EnvironmentPolicyFields
+                  policy={policyDraft}
+                  disabled={workspaceConfigBusy}
+                  onChange={setPolicyDraft}
+                />
               </div>
             ) : null}
             {mode === "edit" && activeEnvironment ? (
               <div className="grid gap-2 border-t pt-4">
                 <h3 className="text-sm font-medium">Connections</h3>
                 {activeEnvironment.connections.length === 0 ? (
-                  <p className="text-sm text-muted-foreground">No connections in this environment.</p>
+                  <p className="text-sm text-muted-foreground">
+                    No connections in this environment.
+                  </p>
                 ) : (
                   <div className="flex flex-wrap gap-2">
                     {activeEnvironment.connections.map((connection) => (
@@ -578,8 +646,16 @@ function EnvironmentSheet({
               <Button size="sm" variant="outline" disabled={workspaceConfigBusy} onClick={close}>
                 Cancel
               </Button>
-              <Button size="sm" disabled={workspaceConfigBusy || !environmentForm.name.trim()} onClick={() => void save()}>
-                {mode === "create" ? "Create environment" : mode === "clone" ? "Clone environment" : "Save changes"}
+              <Button
+                size="sm"
+                disabled={workspaceConfigBusy || !environmentForm.name.trim()}
+                onClick={() => void save()}
+              >
+                {mode === "create"
+                  ? "Create environment"
+                  : mode === "clone"
+                    ? "Clone environment"
+                    : "Save changes"}
               </Button>
             </div>
           </div>
@@ -638,7 +714,9 @@ export function AppProjectConnectionsPage() {
                   <Badge variant="secondary">Default</Badge>
                 ) : null}
                 {workspaceEnvironmentPolicies[environment.name]?.protected ? (
-                  <Badge variant="outline" className="text-destructive">Protected</Badge>
+                  <Badge variant="outline" className="text-destructive">
+                    Protected
+                  </Badge>
                 ) : null}
               </span>
             }
@@ -655,7 +733,9 @@ export function AppProjectConnectionsPage() {
             }
           >
             {environment.connections.length === 0 ? (
-              <p className="text-sm text-muted-foreground">No connections in this environment yet.</p>
+              <p className="text-sm text-muted-foreground">
+                No connections in this environment yet.
+              </p>
             ) : (
               <div className="flex flex-col">
                 {environment.connections.map((connection) => (
@@ -663,7 +743,11 @@ export function AppProjectConnectionsPage() {
                     key={connection.name}
                     connection={connection}
                     onSelect={() =>
-                      setSheetState({ mode: "edit", environment: environment.name, connection: connection.name })
+                      setSheetState({
+                        mode: "edit",
+                        environment: environment.name,
+                        connection: connection.name,
+                      })
                     }
                   />
                 ))}
@@ -690,9 +774,13 @@ function ConnectionRow({
       className="group flex items-center gap-3 border-b px-3 py-2.5 text-left last:border-b-0 hover:bg-muted/50"
       onClick={onSelect}
     >
-      <span className="min-w-0 flex-1 truncate font-mono text-sm font-medium">{connection.name}</span>
+      <span className="min-w-0 flex-1 truncate font-mono text-sm font-medium">
+        {connection.name}
+      </span>
       <IntegrationBadge name={connection.type} />
-      {connection.load_category ? <Badge variant="secondary">{connection.load_category}</Badge> : null}
+      {connection.load_category ? (
+        <Badge variant="secondary">{connection.load_category}</Badge>
+      ) : null}
       <Pencil className="size-3.5 shrink-0 text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100" />
     </button>
   );
@@ -723,11 +811,12 @@ function ConnectionSheet({
   // useWorkspaceConnectionForm, and a fresh [] per render loops the effect.
   // Ingestr/SaaS source types are hidden unless the feature is on, but the
   // type of the connection being edited always stays selectable.
-  const editedConnectionType = state?.mode === "edit"
-    ? workspaceConfig?.environments
-        ?.find((environment) => environment.name === state.environment)
-        ?.connections.find((connection) => connection.name === state.connection)?.type
-    : undefined;
+  const editedConnectionType =
+    state?.mode === "edit"
+      ? workspaceConfig?.environments
+          ?.find((environment) => environment.name === state.environment)
+          ?.connections.find((connection) => connection.name === state.connection)?.type
+      : undefined;
   const connectionTypes = useMemo(() => {
     const all = workspaceConfig?.connection_types ?? [];
     const visible = visibleConnectionTypes(all, ingestrEnabled);
@@ -809,7 +898,7 @@ function ConnectionSheet({
         <SheetHeader>
           <SheetTitle className="flex items-center gap-2">
             <Plug className="size-4 text-primary" />
-            {mode === "create" ? "New connection" : form.activeConnection?.name ?? "Connection"}
+            {mode === "create" ? "New connection" : (form.activeConnection?.name ?? "Connection")}
           </SheetTitle>
           <SheetDescription>
             {mode === "create"
@@ -820,11 +909,18 @@ function ConnectionSheet({
         <div className="flex-1 overflow-auto px-4">
           <div className="grid gap-4">
             {workspaceConfigStatusTone === "error" ? (
-              <SettingsStatus message={workspaceConfigStatusMessage} tone={workspaceConfigStatusTone} />
+              <SettingsStatus
+                message={workspaceConfigStatusMessage}
+                tone={workspaceConfigStatusTone}
+              />
             ) : null}
             <WorkspaceConnectionFormFields
               busy={workspaceConfigBusy}
-              canValidate={Boolean(form.connectionForm.environmentName && form.connectionForm.name.trim() && form.connectionForm.type)}
+              canValidate={Boolean(
+                form.connectionForm.environmentName &&
+                form.connectionForm.name.trim() &&
+                form.connectionForm.type,
+              )}
               connectionForm={form.connectionForm}
               connectionTypes={connectionTypes}
               environments={normalizedConfigEnvironments}
@@ -836,9 +932,18 @@ function ConnectionSheet({
               validateMessage={validateMessage}
               validateTone={validateTone}
               showActions={false}
-              onEnvironmentChange={(value) => form.setConnectionForm((current) => ({ ...current, environmentName: value }))}
-              onFieldValueChange={(fieldName, value) => form.setConnectionForm((current) => ({ ...current, values: { ...current.values, [fieldName]: value } }))}
-              onNameChange={(value) => form.setConnectionForm((current) => ({ ...current, name: value }))}
+              onEnvironmentChange={(value) =>
+                form.setConnectionForm((current) => ({ ...current, environmentName: value }))
+              }
+              onFieldValueChange={(fieldName, value) =>
+                form.setConnectionForm((current) => ({
+                  ...current,
+                  values: { ...current.values, [fieldName]: value },
+                }))
+              }
+              onNameChange={(value) =>
+                form.setConnectionForm((current) => ({ ...current, name: value }))
+              }
               onSave={() => void save()}
               onTypeChange={(value) =>
                 form.setConnectionForm((current) => ({
@@ -874,12 +979,21 @@ function ConnectionSheet({
                 disabled={workspaceConfigBusy || validateBusy || !form.connectionForm.name.trim()}
                 onClick={() => void validateConnection()}
               >
-                {validateBusy ? <LoaderCircle data-icon="inline-start" className="animate-spin" /> : <CheckCircle2 data-icon="inline-start" />}
+                {validateBusy ? (
+                  <LoaderCircle data-icon="inline-start" className="animate-spin" />
+                ) : (
+                  <CheckCircle2 data-icon="inline-start" />
+                )}
                 Verify
               </Button>
               <Button
                 size="sm"
-                disabled={workspaceConfigBusy || !form.connectionForm.environmentName || !form.connectionForm.name.trim() || !form.connectionForm.type}
+                disabled={
+                  workspaceConfigBusy ||
+                  !form.connectionForm.environmentName ||
+                  !form.connectionForm.name.trim() ||
+                  !form.connectionForm.type
+                }
                 onClick={() => void save()}
               >
                 {mode === "create" ? "Create connection" : "Save changes"}
@@ -905,9 +1019,28 @@ export function AppAccountProfilePage() {
 
 export function AppAccountMembersPage() {
   return (
-    <SettingsCard title="Members & permissions" action={<Button size="sm"><Plus data-icon="inline-start" />Invite</Button>}>
-      <SimpleTable columns={["Member", "Email", "Role"]} rows={[["Jane Doe", "jane@acme.io", "Owner"], ["Alex Rivera", "alex@acme.io", "Editor"], ["Sam Lee", "sam@acme.io", "Viewer"], ["CI Bot", "ci@acme.io", "Editor"]]} />
-      <p className="mt-3 flex items-center gap-2 text-xs text-muted-foreground"><Shield className="size-3.5" />Owner manages billing and members, Editor builds pipelines, Viewer is read-only.</p>
+    <SettingsCard
+      title="Members & permissions"
+      action={
+        <Button size="sm">
+          <Plus data-icon="inline-start" />
+          Invite
+        </Button>
+      }
+    >
+      <SimpleTable
+        columns={["Member", "Email", "Role"]}
+        rows={[
+          ["Jane Doe", "jane@acme.io", "Owner"],
+          ["Alex Rivera", "alex@acme.io", "Editor"],
+          ["Sam Lee", "sam@acme.io", "Viewer"],
+          ["CI Bot", "ci@acme.io", "Editor"],
+        ]}
+      />
+      <p className="mt-3 flex items-center gap-2 text-xs text-muted-foreground">
+        <Shield className="size-3.5" />
+        Owner manages billing and members, Editor builds pipelines, Viewer is read-only.
+      </p>
     </SettingsCard>
   );
 }
@@ -916,8 +1049,22 @@ export function AppAccountWorkspacesPage() {
   return (
     <div className="flex flex-col gap-4">
       {["data_platform", "marketing_analytics"].map((workspace, index) => (
-        <SettingsCard key={workspace} title={workspace} action={index === 0 ? <Badge variant="secondary">Connected</Badge> : <Button size="sm">Connect</Button>}>
-          <p className="text-sm text-muted-foreground">{index === 0 ? "Cloud workspace · branch main · synced 2m ago" : "Local workspace · not connected"}</p>
+        <SettingsCard
+          key={workspace}
+          title={workspace}
+          action={
+            index === 0 ? (
+              <Badge variant="secondary">Connected</Badge>
+            ) : (
+              <Button size="sm">Connect</Button>
+            )
+          }
+        >
+          <p className="text-sm text-muted-foreground">
+            {index === 0
+              ? "Cloud workspace · branch main · synced 2m ago"
+              : "Local workspace · not connected"}
+          </p>
         </SettingsCard>
       ))}
     </div>
@@ -926,7 +1073,14 @@ export function AppAccountWorkspacesPage() {
 
 export function AppAccountBillingPage() {
   return (
-    <SettingsCard title="Billing" action={<Button variant="outline" size="sm">Manage plan</Button>}>
+    <SettingsCard
+      title="Billing"
+      action={
+        <Button variant="outline" size="sm">
+          Manage plan
+        </Button>
+      }
+    >
       <div className="grid gap-4 md:grid-cols-3">
         {[
           ["Seats used", "4 / 5"],
@@ -968,7 +1122,13 @@ function SettingsCard({
   );
 }
 
-function SettingsStatus({ message, tone }: { message?: string | null; tone?: "error" | "success" | null }) {
+function SettingsStatus({
+  message,
+  tone,
+}: {
+  message?: string | null;
+  tone?: "error" | "success" | null;
+}) {
   if (!message || !tone) return null;
   return (
     <Alert variant={tone === "error" ? "destructive" : "default"}>
@@ -1009,7 +1169,15 @@ function ConfirmDeleteButton({
   );
 }
 
-function ReadonlyField({ label, value, mono = false }: { label: string; value: string; mono?: boolean }) {
+function ReadonlyField({
+  label,
+  value,
+  mono = false,
+}: {
+  label: string;
+  value: string;
+  mono?: boolean;
+}) {
   return (
     <PlainField>
       <Label>{label}</Label>
@@ -1056,10 +1224,18 @@ function EnvironmentRow({
       <div className="min-w-0 flex-1">
         <div className="flex items-center gap-2">
           <span className="truncate font-mono font-medium">{environment.name}</span>
-          {environment.name === defaultEnvironment ? <Badge variant="secondary">Default</Badge> : null}
-          {policy?.protected ? <Badge variant="outline" className="text-destructive">Protected</Badge> : null}
+          {environment.name === defaultEnvironment ? (
+            <Badge variant="secondary">Default</Badge>
+          ) : null}
+          {policy?.protected ? (
+            <Badge variant="outline" className="text-destructive">
+              Protected
+            </Badge>
+          ) : null}
         </div>
-        <div className="mt-1 truncate text-xs text-muted-foreground">{environment.schema_prefix || "No schema prefix"}</div>
+        <div className="mt-1 truncate text-xs text-muted-foreground">
+          {environment.schema_prefix || "No schema prefix"}
+        </div>
       </div>
       <span className="shrink-0 text-xs text-muted-foreground">
         {environment.connections.length} connection{environment.connections.length === 1 ? "" : "s"}
@@ -1085,21 +1261,35 @@ function EnvironmentPolicyFields({
           <FieldTitle>Protected</FieldTitle>
           <FieldDescription>Disable interactive execution for this environment.</FieldDescription>
         </FieldContent>
-        <Switch disabled={disabled} checked={policy.protected} onCheckedChange={(checked) => onChange({ ...policy, protected: checked })} />
+        <Switch
+          disabled={disabled}
+          checked={policy.protected}
+          onCheckedChange={(checked) => onChange({ ...policy, protected: checked })}
+        />
       </Field>
       <Field orientation="horizontal">
         <FieldContent>
           <FieldTitle>Deployed only</FieldTitle>
           <FieldDescription>Only run deployed snapshots for this environment.</FieldDescription>
         </FieldContent>
-        <Switch disabled={disabled} checked={policy.deployed_only} onCheckedChange={(checked) => onChange({ ...policy, deployed_only: checked })} />
+        <Switch
+          disabled={disabled}
+          checked={policy.deployed_only}
+          onCheckedChange={(checked) => onChange({ ...policy, deployed_only: checked })}
+        />
       </Field>
       <Field orientation="horizontal">
         <FieldContent>
           <FieldTitle>Confirm destructive operations</FieldTitle>
-          <FieldDescription>Require typing the environment name before destructive runs.</FieldDescription>
+          <FieldDescription>
+            Require typing the environment name before destructive runs.
+          </FieldDescription>
         </FieldContent>
-        <Switch disabled={disabled} checked={policy.confirm_destructive} onCheckedChange={(checked) => onChange({ ...policy, confirm_destructive: checked })} />
+        <Switch
+          disabled={disabled}
+          checked={policy.confirm_destructive}
+          onCheckedChange={(checked) => onChange({ ...policy, confirm_destructive: checked })}
+        />
       </Field>
     </FieldGroup>
   );

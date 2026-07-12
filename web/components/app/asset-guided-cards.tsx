@@ -3,7 +3,18 @@
 import { useEffect, useMemo, useState } from "react";
 
 import { useAtomValue } from "jotai";
-import { Ban, Check, ChevronsUpDown, Database, KeyRound, Plus, RefreshCw, RotateCcw, Trash2, X } from "lucide-react";
+import {
+  Ban,
+  Check,
+  ChevronsUpDown,
+  Database,
+  KeyRound,
+  Plus,
+  RefreshCw,
+  RotateCcw,
+  Trash2,
+  X,
+} from "lucide-react";
 
 import { workspaceAtom } from "@/lib/atoms/domains/workspace";
 
@@ -36,11 +47,7 @@ import {
 import { updateAsset, updateAssetColumns } from "@/lib/api-assets";
 import { inferAPIAsset } from "@/lib/api-assets-columns";
 import type { APIInferResult } from "@/lib/generated/api-types";
-import {
-  classifyDependencies,
-  columnStatus,
-  parseAssetProvenance,
-} from "@/lib/asset-provenance";
+import { classifyDependencies, columnStatus, parseAssetProvenance } from "@/lib/asset-provenance";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { NON_SQL_ASSET_TYPES, SQL_ASSET_TYPES } from "@/lib/asset-types";
 import { useIngestrEnabled } from "@/lib/features";
@@ -57,7 +64,7 @@ import { MultiValueInput } from "./multi-value-input";
 export function AssetGuidedCards({ asset, pipelineId }: { asset: WebAsset; pipelineId: string }) {
   const isSql = useMemo(
     () => asset.path?.toLowerCase().endsWith(".sql") ?? asset.type.toLowerCase().includes("sql"),
-    [asset.path, asset.type]
+    [asset.path, asset.type],
   );
 
   return (
@@ -90,7 +97,9 @@ function GuidedCard({
   return (
     <section className="flex flex-col gap-2.5 py-4">
       <div className="flex min-h-5 items-center justify-between gap-2">
-        <h3 className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">{title}</h3>
+        <h3 className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+          {title}
+        </h3>
         {action}
       </div>
       {children}
@@ -157,9 +166,11 @@ function IdentityCard({ asset, pipelineId }: { asset: WebAsset; pipelineId: stri
       Array.from(new Set([...SQL_ASSET_TYPES, ...NON_SQL_ASSET_TYPES, asset.type]))
         // A broken/half-typed YAML asset can parse to an empty type; a Select
         // item must never have an empty value, so drop it.
-        .filter((type) => Boolean(type) && (ingestrEnabled || type !== "ingestr" || type === asset.type))
+        .filter(
+          (type) => Boolean(type) && (ingestrEnabled || type !== "ingestr" || type === asset.type),
+        )
         .sort(),
-    [asset.type, ingestrEnabled]
+    [asset.type, ingestrEnabled],
   );
 
   const updateMetaDescription = (description: string) => {
@@ -243,7 +254,12 @@ function IdentityCard({ asset, pipelineId }: { asset: WebAsset; pipelineId: stri
 
 // --- Materialization card (§14.2) ---
 
-export type MaterializationOption = { value: string; label: string; type: string; strategy: string };
+export type MaterializationOption = {
+  value: string;
+  label: string;
+  type: string;
+  strategy: string;
+};
 
 export const MATERIALIZATION_OPTIONS: MaterializationOption[] = [
   { value: "none", label: "None (run only)", type: "", strategy: "" },
@@ -252,7 +268,12 @@ export const MATERIALIZATION_OPTIONS: MaterializationOption[] = [
   { value: "truncate", label: "Table (truncate)", type: "table", strategy: "truncate+insert" },
   { value: "append", label: "Append rows", type: "table", strategy: "append" },
   { value: "merge", label: "Merge by key", type: "table", strategy: "merge" },
-  { value: "incremental", label: "Incremental (time interval)", type: "table", strategy: "time_interval" },
+  {
+    value: "incremental",
+    label: "Incremental (time interval)",
+    type: "table",
+    strategy: "time_interval",
+  },
 ];
 
 export function currentMaterializationOption(asset: WebAsset): MaterializationOption {
@@ -260,7 +281,9 @@ export function currentMaterializationOption(asset: WebAsset): MaterializationOp
   const strategy = (asset.materialization_strategy ?? "").toLowerCase();
   if (!type) return MATERIALIZATION_OPTIONS[0];
   if (type === "view") return MATERIALIZATION_OPTIONS[1];
-  const byStrategy = MATERIALIZATION_OPTIONS.find((o) => o.type === "table" && o.strategy === strategy);
+  const byStrategy = MATERIALIZATION_OPTIONS.find(
+    (o) => o.type === "table" && o.strategy === strategy,
+  );
   return byStrategy ?? MATERIALIZATION_OPTIONS[2];
 }
 
@@ -306,7 +329,9 @@ export function ColumnCombobox({
           aria-expanded={open}
           className={cn("w-full min-w-0 justify-between font-monaco font-normal", className)}
         >
-          <span className="truncate">{value || (items.length === 0 ? "Add or infer columns first" : placeholder)}</span>
+          <span className="truncate">
+            {value || (items.length === 0 ? "Add or infer columns first" : placeholder)}
+          </span>
           <ChevronsUpDown data-icon="inline-end" />
         </Button>
       </PopoverTrigger>
@@ -314,7 +339,11 @@ export function ColumnCombobox({
         <Command>
           <CommandInput placeholder="Search columns…" />
           <CommandList>
-            <CommandEmpty>{items.length === 0 ? "No declared columns. Add or infer columns first." : "No matching column."}</CommandEmpty>
+            <CommandEmpty>
+              {items.length === 0
+                ? "No declared columns. Add or infer columns first."
+                : "No matching column."}
+            </CommandEmpty>
             <CommandGroup>
               {value ? (
                 <CommandItem
@@ -348,9 +377,22 @@ export function ColumnCombobox({
   );
 }
 
-function MaterializationCard({ asset, pipelineId, isSql }: { asset: WebAsset; pipelineId: string; isSql: boolean }) {
-  const { selected, isSlingBacked, selectedValue, options } = materializationEditorState(asset, isSql);
-  const primaryKeys = (asset.columns ?? []).filter((column) => column.primary_key).map((column) => column.name);
+function MaterializationCard({
+  asset,
+  pipelineId,
+  isSql,
+}: {
+  asset: WebAsset;
+  pipelineId: string;
+  isSql: boolean;
+}) {
+  const { selected, isSlingBacked, selectedValue, options } = materializationEditorState(
+    asset,
+    isSql,
+  );
+  const primaryKeys = (asset.columns ?? [])
+    .filter((column) => column.primary_key)
+    .map((column) => column.name);
   const [error, setError] = useState("");
 
   const save = (input: Parameters<typeof updateAsset>[2]) => {
@@ -388,8 +430,11 @@ function MaterializationCard({ asset, pipelineId, isSql }: { asset: WebAsset; pi
           </SelectContent>
         </Select>
       </FieldRow>
-      {selected.value === "incremental" || (isSlingBacked && ["append", "merge"].includes(selected.value)) ? (
-        <FieldRow label={selected.value === "incremental" ? "Incremental key" : "Update key (optional)"}>
+      {selected.value === "incremental" ||
+      (isSlingBacked && ["append", "merge"].includes(selected.value)) ? (
+        <FieldRow
+          label={selected.value === "incremental" ? "Incremental key" : "Update key (optional)"}
+        >
           <ColumnCombobox
             columns={asset.columns ?? []}
             value={asset.incremental_key ?? ""}
@@ -405,7 +450,12 @@ function MaterializationCard({ asset, pipelineId, isSql }: { asset: WebAsset; pi
         </FieldRow>
       ) : null}
       {selected.value === "merge" ? (
-        <p className={cn("text-[11px]", primaryKeys.length === 0 ? "text-destructive" : "text-muted-foreground")}>
+        <p
+          className={cn(
+            "text-[11px]",
+            primaryKeys.length === 0 ? "text-destructive" : "text-muted-foreground",
+          )}
+        >
           {primaryKeys.length === 0
             ? "Merge needs at least one primary-key column. Set one with the key control in Columns."
             : `Primary key${primaryKeys.length === 1 ? "" : "s"}: ${primaryKeys.join(", ")}`}
@@ -518,13 +568,7 @@ function DependenciesCard({ asset }: { asset: WebAsset }) {
   );
 }
 
-function DepSection({
-  label,
-  children,
-}: {
-  label: string;
-  children: React.ReactNode;
-}) {
+function DepSection({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <div className="space-y-0.5">
       <div className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground/70">
@@ -535,11 +579,34 @@ function DepSection({
   );
 }
 
-function DepRow({ name, badge, muted, actionLabel, actionIcon, onAction }: { name: string; badge?: string; muted?: boolean; actionLabel: string; actionIcon: React.ReactNode; onAction: () => void }) {
+function DepRow({
+  name,
+  badge,
+  muted,
+  actionLabel,
+  actionIcon,
+  onAction,
+}: {
+  name: string;
+  badge?: string;
+  muted?: boolean;
+  actionLabel: string;
+  actionIcon: React.ReactNode;
+  onAction: () => void;
+}) {
   return (
     <div className="group flex items-center gap-1.5 px-2 py-1 text-xs">
-      <span className={cn("min-w-0 flex-1 truncate font-monaco", muted && "text-muted-foreground line-through")}>{name}</span>
-      {badge ? <span className="rounded bg-muted px-1 text-[10px] text-muted-foreground">{badge}</span> : null}
+      <span
+        className={cn(
+          "min-w-0 flex-1 truncate font-monaco",
+          muted && "text-muted-foreground line-through",
+        )}
+      >
+        {name}
+      </span>
+      {badge ? (
+        <span className="rounded bg-muted px-1 text-[10px] text-muted-foreground">{badge}</span>
+      ) : null}
       <Button
         variant="ghost"
         size="xs"
@@ -558,7 +625,9 @@ function DepRow({ name, badge, muted, actionLabel, actionIcon, onAction }: { nam
 
 function ColumnsCard({ asset }: { asset: WebAsset }) {
   const isAPI = asset.type.toLowerCase() === "api";
-  const isSQLMerge = asset.type.toLowerCase().includes("sql") && asset.materialization_strategy?.toLowerCase() === "merge";
+  const isSQLMerge =
+    asset.type.toLowerCase().includes("sql") &&
+    asset.materialization_strategy?.toLowerCase() === "merge";
   const provenance = useMemo(() => parseAssetProvenance(asset.meta), [asset.meta]);
   const columns = asset.columns ?? [];
   // Columns the user has ignored (renart_col_drop) that aren't currently present.
@@ -601,7 +670,9 @@ function ColumnsCard({ asset }: { asset: WebAsset }) {
       type: "column.inferred.drop",
       column,
     });
-    setReconcileItems((items) => items.filter((i) => i.column.toLowerCase() !== column.toLowerCase()));
+    setReconcileItems((items) =>
+      items.filter((i) => i.column.toLowerCase() !== column.toLowerCase()),
+    );
   };
 
   const keepAsManual = (column: string, def: WebColumn) => {
@@ -609,12 +680,16 @@ function ColumnsCard({ asset }: { asset: WebAsset }) {
       type: "column.manual.add",
       column_def: def,
     });
-    setReconcileItems((items) => items.filter((i) => i.column.toLowerCase() !== column.toLowerCase()));
+    setReconcileItems((items) =>
+      items.filter((i) => i.column.toLowerCase() !== column.toLowerCase()),
+    );
   };
 
   const commitType = (column: WebColumn, nextType: string) => {
     if (nextType === (column.type ?? "")) return;
-    const nextColumns = columns.map((c) => (c.name.toLowerCase() === column.name.toLowerCase() ? { ...c, type: nextType } : c));
+    const nextColumns = columns.map((c) =>
+      c.name.toLowerCase() === column.name.toLowerCase() ? { ...c, type: nextType } : c,
+    );
     void updateAssetColumns(asset.id, nextColumns).then(() =>
       applyAssetTransaction(asset.id, {
         type: "column.field.own",
@@ -627,18 +702,28 @@ function ColumnsCard({ asset }: { asset: WebAsset }) {
   // primary_key counts as user metadata (columnHasUserMetadata on the server),
   // so a plain columns update survives refresh-from-definition merges.
   const togglePrimaryKey = (column: WebColumn) => {
-    const nextColumns = columns.map((c) => (c.name.toLowerCase() === column.name.toLowerCase() ? { ...c, primary_key: !c.primary_key } : c));
+    const nextColumns = columns.map((c) =>
+      c.name.toLowerCase() === column.name.toLowerCase()
+        ? { ...c, primary_key: !c.primary_key }
+        : c,
+    );
     void updateAssetColumns(asset.id, nextColumns);
   };
 
   const toggleUpdateOnMerge = (column: WebColumn) => {
-    const nextColumns = columns.map((c) => (c.name.toLowerCase() === column.name.toLowerCase() ? { ...c, update_on_merge: !c.update_on_merge } : c));
+    const nextColumns = columns.map((c) =>
+      c.name.toLowerCase() === column.name.toLowerCase()
+        ? { ...c, update_on_merge: !c.update_on_merge }
+        : c,
+    );
     void updateAssetColumns(asset.id, nextColumns);
   };
 
   const commitMergeSQL = (column: WebColumn, mergeSQL: string) => {
     if (mergeSQL === (column.merge_sql ?? "")) return;
-    const nextColumns = columns.map((c) => (c.name.toLowerCase() === column.name.toLowerCase() ? { ...c, merge_sql: mergeSQL } : c));
+    const nextColumns = columns.map((c) =>
+      c.name.toLowerCase() === column.name.toLowerCase() ? { ...c, merge_sql: mergeSQL } : c,
+    );
     void updateAssetColumns(asset.id, nextColumns);
   };
 
@@ -651,9 +736,17 @@ function ColumnsCard({ asset }: { asset: WebAsset }) {
           size="xs"
           disabled={refreshing}
           onClick={refreshFromDefinition}
-          title={isAPI ? "Fetch one response page and infer its record shape" : "Derive columns from the definition and upstream assets"}
+          title={
+            isAPI
+              ? "Fetch one response page and infer its record shape"
+              : "Derive columns from the definition and upstream assets"
+          }
         >
-          {isAPI ? <Database data-icon="inline-start" /> : <RefreshCw data-icon="inline-start" className={cn(refreshing && "animate-spin")} />}
+          {isAPI ? (
+            <Database data-icon="inline-start" />
+          ) : (
+            <RefreshCw data-icon="inline-start" className={cn(refreshing && "animate-spin")} />
+          )}
           {isAPI ? "Test response" : "Refresh"}
         </Button>
       }
@@ -690,8 +783,13 @@ function ColumnsCard({ asset }: { asset: WebAsset }) {
       {reconcileItems.map((item) => {
         const def = columns.find((c) => c.name.toLowerCase() === item.column.toLowerCase());
         return (
-          <div key={item.column} className="rounded-md border border-amber-300 bg-amber-50 p-2 text-[11px] dark:border-amber-500/40 dark:bg-amber-950/30">
-            <div className="font-monaco font-medium text-amber-900 dark:text-amber-200">{item.column}</div>
+          <div
+            key={item.column}
+            className="rounded-md border border-amber-300 bg-amber-50 p-2 text-[11px] dark:border-amber-500/40 dark:bg-amber-950/30"
+          >
+            <div className="font-monaco font-medium text-amber-900 dark:text-amber-200">
+              {item.column}
+            </div>
             <div className="mb-1.5 text-amber-700 dark:text-amber-300">{item.detail}</div>
             <div className="flex gap-1.5">
               {def ? (
@@ -708,7 +806,9 @@ function ColumnsCard({ asset }: { asset: WebAsset }) {
       })}
 
       {columns.length === 0 ? (
-        <p className="text-[11px] text-muted-foreground">No columns. Refresh to infer them from the definition.</p>
+        <p className="text-[11px] text-muted-foreground">
+          No columns. Refresh to infer them from the definition.
+        </p>
       ) : (
         <div className="divide-y rounded-md border">
           {columns.map((column) => (
@@ -756,7 +856,17 @@ function ColumnsCard({ asset }: { asset: WebAsset }) {
 // The standard Bruin column checks. Value-bearing ones take an argument
 // (accepted_values a list, min/max a number, pattern a regex); the rest are
 // presence assertions.
-export const COLUMN_CHECK_NAMES = ["not_null", "unique", "positive", "non_negative", "negative", "accepted_values", "pattern", "min", "max"] as const;
+export const COLUMN_CHECK_NAMES = [
+  "not_null",
+  "unique",
+  "positive",
+  "non_negative",
+  "negative",
+  "accepted_values",
+  "pattern",
+  "min",
+  "max",
+] as const;
 export const VALUE_CHECKS = new Set(["accepted_values", "pattern", "min", "max"]);
 
 export function checkValueFor(checkName: string, raw: string): unknown {
@@ -812,20 +922,31 @@ function QualityChecksCard({ asset }: { asset: WebAsset }) {
 
   return (
     <GuidedCard title="Quality checks">
-      {columnsWithChecks.length === 0 ? <p className="text-[11px] text-muted-foreground">No checks yet.</p> : null}
+      {columnsWithChecks.length === 0 ? (
+        <p className="text-[11px] text-muted-foreground">No checks yet.</p>
+      ) : null}
       {columnsWithChecks.map((col) => (
         <div key={col.name} className="space-y-1">
           <div className="font-monaco text-[11px] text-foreground">{col.name}</div>
           <div className="flex flex-wrap gap-1">
             {(col.checks ?? []).map((check, index) => (
-              <span key={`${check.name}-${index}`} className="inline-flex items-center gap-1 rounded-full border bg-muted/40 px-2 py-0.5 text-[10px]">
+              <span
+                key={`${check.name}-${index}`}
+                className="inline-flex items-center gap-1 rounded-full border bg-muted/40 px-2 py-0.5 text-[10px]"
+              >
                 {check.name}
                 {formatCheckValue(check.value)}
                 <button
                   type="button"
                   className="text-muted-foreground hover:text-foreground"
                   aria-label={`Remove ${check.name} from ${col.name}`}
-                  onClick={() => apply({ type: "column.check.remove", column: col.name, check: { name: check.name } })}
+                  onClick={() =>
+                    apply({
+                      type: "column.check.remove",
+                      column: col.name,
+                      check: { name: check.name },
+                    })
+                  }
                 >
                   <X className="size-2.5" />
                 </button>
@@ -866,7 +987,13 @@ function QualityChecksCard({ asset }: { asset: WebAsset }) {
         {VALUE_CHECKS.has(checkName) ? (
           <Input
             className="h-7 text-xs"
-            placeholder={checkName === "accepted_values" ? "a, b, c" : checkName === "pattern" ? "regex" : "number"}
+            placeholder={
+              checkName === "accepted_values"
+                ? "a, b, c"
+                : checkName === "pattern"
+                  ? "regex"
+                  : "number"
+            }
             value={value}
             onChange={(event) => setValue(event.target.value)}
             onKeyDown={(event) => {
@@ -916,7 +1043,7 @@ function ColumnRow({
             "size-6 shrink-0 p-0",
             column.primary_key
               ? "text-amber-600 dark:text-amber-400"
-              : "text-muted-foreground opacity-0 group-hover:opacity-100 focus-visible:opacity-100"
+              : "text-muted-foreground opacity-0 group-hover:opacity-100 focus-visible:opacity-100",
           )}
           title={column.primary_key ? "Unset primary key" : "Set as primary key"}
           aria-label={`${column.primary_key ? "Unset" : "Set"} ${column.name} as primary key`}
@@ -995,7 +1122,9 @@ function ColumnStatusBadge({
           pk
         </span>
       ) : null}
-      <span className={cn("rounded px-1 text-[10px]", styles[status] ?? styles.inferred)}>{status}</span>
+      <span className={cn("rounded px-1 text-[10px]", styles[status] ?? styles.inferred)}>
+        {status}
+      </span>
     </span>
   );
 }

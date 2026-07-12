@@ -10,11 +10,21 @@ import {
   updatePipelineSchedule,
 } from "@/lib/api";
 import { schedulerRunEventAtom } from "@/lib/atoms/domains/results";
-import type { PipelineRun, PipelineRunLogLine, PipelineRunStep, PipelineSchedule } from "@/lib/types";
+import type {
+  PipelineRun,
+  PipelineRunLogLine,
+  PipelineRunStep,
+  PipelineSchedule,
+} from "@/lib/types";
 
-type SchedulePatch = Partial<Pick<PipelineSchedule, "enabled" | "schedule" | "timezone" | "catchup">>;
+type SchedulePatch = Partial<
+  Pick<PipelineSchedule, "enabled" | "schedule" | "timezone" | "catchup">
+>;
 
-export function usePipelineScheduler({ selectedRunId, runsQuery }: { selectedRunId?: string; runsQuery?: GetRunsOptions } = {}) {
+export function usePipelineScheduler({
+  selectedRunId,
+  runsQuery,
+}: { selectedRunId?: string; runsQuery?: GetRunsOptions } = {}) {
   const [schedules, setSchedules] = useState<PipelineSchedule[]>([]);
   const [runs, setRuns] = useState<PipelineRun[]>([]);
   const [runsTotal, setRunsTotal] = useState(0);
@@ -85,38 +95,53 @@ export function usePipelineScheduler({ selectedRunId, runsQuery }: { selectedRun
   }, []);
 
   const patchScheduleDraft = useCallback((pipelineId: string, patch: SchedulePatch) => {
-    setSchedules((current) => current.map((schedule) => (
-      schedule.pipeline_id === pipelineId ? { ...schedule, ...patch } : schedule
-    )));
+    setSchedules((current) =>
+      current.map((schedule) =>
+        schedule.pipeline_id === pipelineId ? { ...schedule, ...patch } : schedule,
+      ),
+    );
   }, []);
 
-  const updateSchedule = useCallback(async (item: PipelineSchedule, patch: SchedulePatch) => {
-    setBusyPipeline(item.pipeline_id);
-    try {
-      const next = { ...item, ...patch };
-      const response = await updatePipelineSchedule(item.pipeline_id, {
-        enabled: next.enabled,
-        schedule: next.schedule,
-        timezone: next.timezone || "UTC",
-        catchup: next.catchup,
-      });
-      if (response.status === "ok") {
-        setSchedules((current) => current.map((schedule) => (
-          schedule.pipeline_id === item.pipeline_id ? { ...response.schedule, next_run_at: response.schedule.next_run_at ?? schedule.next_run_at } : schedule
-        )));
-        void refreshSchedules();
+  const updateSchedule = useCallback(
+    async (item: PipelineSchedule, patch: SchedulePatch) => {
+      setBusyPipeline(item.pipeline_id);
+      try {
+        const next = { ...item, ...patch };
+        const response = await updatePipelineSchedule(item.pipeline_id, {
+          enabled: next.enabled,
+          schedule: next.schedule,
+          timezone: next.timezone || "UTC",
+          catchup: next.catchup,
+        });
+        if (response.status === "ok") {
+          setSchedules((current) =>
+            current.map((schedule) =>
+              schedule.pipeline_id === item.pipeline_id
+                ? {
+                    ...response.schedule,
+                    next_run_at: response.schedule.next_run_at ?? schedule.next_run_at,
+                  }
+                : schedule,
+            ),
+          );
+          void refreshSchedules();
+        }
+      } finally {
+        setBusyPipeline(null);
       }
-    } finally {
-      setBusyPipeline(null);
-    }
-  }, [refreshSchedules]);
+    },
+    [refreshSchedules],
+  );
 
   const triggerNow = useCallback(async (item: PipelineSchedule) => {
     setBusyPipeline(item.pipeline_id);
     try {
       const response = await triggerPipelineRun(item.pipeline_id, { trigger: "manual" });
       if (response.status === "ok") {
-        setRuns((current) => [response.run, ...current.filter((run) => run.id !== response.run.id)]);
+        setRuns((current) => [
+          response.run,
+          ...current.filter((run) => run.id !== response.run.id),
+        ]);
         setSelectedRun(response.run);
         setLogs([]);
         setSteps([]);
@@ -132,7 +157,10 @@ export function usePipelineScheduler({ selectedRunId, runsQuery }: { selectedRun
     try {
       const response = await triggerPipelineRun(pipelineId, { trigger: "manual" });
       if (response.status === "ok") {
-        setRuns((current) => [response.run, ...current.filter((run) => run.id !== response.run.id)]);
+        setRuns((current) => [
+          response.run,
+          ...current.filter((run) => run.id !== response.run.id),
+        ]);
         setSelectedRun(response.run);
         setLogs([]);
         setSteps([]);
@@ -171,8 +199,18 @@ export function usePipelineScheduler({ selectedRunId, runsQuery }: { selectedRun
     if (schedulerRunEvent.type === "run.step") {
       const step = schedulerRunEvent.run;
       if (selectedRun?.id === step.run_id || selectedRunId === step.run_id) {
-        setSteps((existing) => [step, ...existing.filter((item) => !(item.run_id === step.run_id && item.asset === step.asset))]
-          .sort((a, b) => new Date(a.started_at ?? a.finished_at ?? 0).getTime() - new Date(b.started_at ?? b.finished_at ?? 0).getTime()));
+        setSteps((existing) =>
+          [
+            step,
+            ...existing.filter(
+              (item) => !(item.run_id === step.run_id && item.asset === step.asset),
+            ),
+          ].sort(
+            (a, b) =>
+              new Date(a.started_at ?? a.finished_at ?? 0).getTime() -
+              new Date(b.started_at ?? b.finished_at ?? 0).getTime(),
+          ),
+        );
       }
       return;
     }

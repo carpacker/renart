@@ -27,10 +27,7 @@ import {
 } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 import { ConnectionMode } from "@/hooks/use-workspace-connection-form";
-import {
-  WorkspaceConfigConnectionType,
-  WorkspaceConfigEnvironment,
-} from "@/lib/types";
+import { WorkspaceConfigConnectionType, WorkspaceConfigEnvironment } from "@/lib/types";
 
 type ConnectionFormState = {
   environmentName: string;
@@ -76,10 +73,7 @@ export function WorkspaceConnectionFormFields({
   validateTone: "error" | "success" | null;
   showActions?: boolean;
   onEnvironmentChange: (value: string) => void;
-  onFieldValueChange: (
-    fieldName: string,
-    value: string | number | boolean | string[]
-  ) => void;
+  onFieldValueChange: (fieldName: string, value: string | number | boolean | string[]) => void;
   onNameChange: (value: string) => void;
   onSave: () => void;
   onTypeChange: (value: string) => void;
@@ -210,8 +204,13 @@ export function WorkspaceConnectionFormFields({
                       onFieldValueChange(
                         field.name,
                         field.type === "string_array"
-                          ? event.target.value.split(",").map((item) => item.trim()).filter(Boolean)
-                          : field.type === "int" ? event.target.value : event.target.value
+                          ? event.target.value
+                              .split(",")
+                              .map((item) => item.trim())
+                              .filter(Boolean)
+                          : field.type === "int"
+                            ? event.target.value
+                            : event.target.value,
                       )
                     }
                     placeholder={
@@ -330,7 +329,10 @@ function StringArrayCombobox({
         onChange(Array.isArray(nextValue) ? compactUnique(nextValue as string[]) : [])
       }
     >
-      <ComboboxChips ref={anchor} className="min-h-7 w-full border-0 bg-transparent px-0 py-0 shadow-none focus-within:ring-0">
+      <ComboboxChips
+        ref={anchor}
+        className="min-h-7 w-full border-0 bg-transparent px-0 py-0 shadow-none focus-within:ring-0"
+      >
         <ComboboxValue>
           {(values) => (
             <>
@@ -398,7 +400,7 @@ function secretInputType(name: string) {
 
 function isSecretField(name: string) {
   const lower = name.toLowerCase();
-  return ["password", "secret", "token", "api_key", "private_key", "access_key"].some(
-    (part) => lower.includes(part)
+  return ["password", "secret", "token", "api_key", "private_key", "access_key"].some((part) =>
+    lower.includes(part),
   );
 }
