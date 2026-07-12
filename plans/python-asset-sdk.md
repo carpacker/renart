@@ -1,6 +1,6 @@
 # Python asset SDK: query the project without credentials, upload without ingestr
 
-> **Status (2026-07-12): Phase 1 implemented** on the `redesign` branch. §10
+> **Status (2026-07-13): Phases 1–2 implemented** on the `redesign` branch. §10
 > questions were answered by Lukas: (1) SDK named `renart`, no bruin shim;
 > (2) any project connection is readable; (3) wait semantics as proposed,
 > `--refresh-upstreams` deferred to phase 3; (4) pandas is a hard dependency
@@ -18,9 +18,13 @@
 > and `SLING_LOADED_AT_COLUMN=false`). ingestr is gone from the python path.
 > Verified live: pipeline + single-asset + server-delegated runs, merge
 > strategy idempotence, read-only guard, undeclared-dep lint, same-run
-> deadlock guard. Phases 2–3 (stubs/type-check lint, notebook query(),
-> `--refresh-upstreams`, PyPI publication) remain open; fold into
-> architecture/ when they land or are dropped.
+> deadlock guard. Phase 2 added embedded `.pyi` stubs registered with
+> pyintelligence, built-in dependency recognition, type-check lint for literal
+> `query()` calls missing `depends`, notebook-cell broker queries, live notebook
+> E2E coverage, and user docs. The as-built design is now recorded in
+> `architecture/backend.md` and `architecture/notebooks.md`. Phase 3 reach items
+> (`--refresh-upstreams`, PyPI publication, a cross-connection policy surface,
+> and Arrow Flight evaluation) remain deferred.
 
 Goal: Python assets get first-class access to the rest of the renart project —
 `query()` against project data, run context, and result materialization — with
@@ -346,9 +350,10 @@ duckdb read_parquet path; live e2e — python asset queries an upstream duckdb
 table and materializes each strategy; a pipeline run where the python asset
 waits on a slower upstream; scheduler snapshot run.
 
-**Phase 2 — DX:** `.pyi` stubs + pyintelligence registration · type-check
-lint for undeclared `query()` references · JSON fallback polish · notebook
-`query()` against the session · docs (getting-started for python assets).
+**Phase 2 — DX (implemented):** `.pyi` stubs + pyintelligence registration ·
+type-check lint for undeclared literal `query()` references · JSON fallback
+coverage · notebook `query()` against the exported session-input snapshot ·
+docs for Python assets and notebook cells.
 
 **Phase 3 — reach:** `renart run --refresh-upstreams` (build-stale cone
 before the run) · PyPI publication · cross-connection read policy surface ·
@@ -361,23 +366,33 @@ consider Arrow Flight if profiles ever show the loopback hop mattering.
    semantics of existing bruin scripts). Bruin scripts using only `BRUIN_*`
    env vars keep working; scripts using `bruin-sdk`/`secrets:` keep working
    via Bruin's own mechanism if the user opts into `secrets:` — acceptable?
+   Answer: yes import name should be renart
 2. **Read scope.** May a python asset `query(connection=…)` any connection
    defined in the project, or only its own connection (+ declared upstream
    assets' connections)? Proposal: any project connection, reads only — the
    broker never reveals credentials and the same user authored both configs;
    protected-env policy can tighten later.
+   Answer: yes it may read all connections in the project as proposed
 3. **Wait semantics.** v1 = wait on in-flight same-env tasks, hard error on
    same-run ordering violations, warn on undeclared refs, no auto-build of
    stale-idle upstreams. Is the phase-3 `--refresh-upstreams` opt-in the
    right shape, or do you want read-triggered freshness (broker auto-builds
    the stale cone) earlier / at all?
+   Answer: fow now we should not do read-triggered freshness with rebuild of stale cone)
 4. **pandas dependency.** `query()` returning pandas by default requires
    pandas in the asset env. Proposal: SDK depends on pyarrow only;
    `format="pandas"` (the default) raises a clear "add pandas" error if
    missing. Alternative: make pandas a hard dep of the injected wheel.
+   Answer: we should check if we can't just give the user pyarrow dataframes instead
+   of pandas dataframes
+   Implementation decision: PyArrow provides a `Table`, not the familiar
+   DataFrame transformation API used by the default examples. Keep pandas as
+   the default/hard dependency and expose the zero-copy-friendly PyArrow Table
+   through `format="arrow"`.
 5. **ingestr asset type.** Leave the flag-hidden ingestr asset type as-is for
    now (bruin-compat, user-invoked), or schedule its Sling migration into
    this effort's phase 3?
+   Answer: For now leave as is
 
 ## 11. Risks
 
