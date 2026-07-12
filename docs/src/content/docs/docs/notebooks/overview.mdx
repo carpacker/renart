@@ -1,12 +1,12 @@
 ---
 title: Notebooks
-description: SQL scratchpads with inline tables and charts that can graduate into pipeline assets.
+description: SQL and Python scratchpads with inline tables and charts that can graduate into pipeline assets.
 ---
 
 Notebooks are where analysis starts before it deserves a place in the
-pipeline. Each notebook is a folder of SQL cells that runs in its own local
-DuckDB session, reading the tables your pipeline has materialized — so you
-can explore freely without touching pipeline state.
+pipeline. Each notebook is a folder of SQL and Python cells that runs in its
+own local DuckDB session, reading the tables your pipeline has materialized —
+so you can explore freely without touching pipeline state.
 
 <img
   src="/docs-media/notebook.webp"
@@ -17,9 +17,25 @@ can explore freely without touching pipeline state.
 
 ## Cells
 
-Each cell is a named SQL query. Run one cell, run from a cell downward, or
-**Run all**. Results render inline as a table, with view toggles for bar,
-line, area, and pie charts.
+Each cell is a named SQL query or Python transformation. Run one cell, run from
+a cell downward, or **Run all**. Results render inline as a table, with view
+toggles for bar, line, area, and pie charts.
+
+Python cells use the same `materialize()` contract as Python pipeline assets.
+They can read an upstream notebook cell by its visible name through the built-in
+SDK:
+
+```python
+from renart import query
+
+
+def materialize():
+    orders = query("select * from daily_orders", format="arrow")
+    return orders
+```
+
+Use **Dependencies** to manage third-party packages. Python cells run manually;
+editing one does not trigger notebook auto-recompute.
 
 ## Charts with @viz
 

@@ -125,6 +125,18 @@ warehouse write. OpenAPI inference, pagination, validation warnings, and
 HTTP API extraction and execution-window behavior are documented in
 [http-api-assets.md](http-api-assets.md).
 
+Python assets run through Renart's in-process operator
+(`service/python_operator.go`). Each task receives an embedded, version-locked
+`renart` SDK wheel and a token-scoped loopback broker (`internal/web/pybroker`).
+SDK queries stay read-only and execute through the Go connection manager, so
+credentials never enter Python. `internal/web/runstate` lets queries wait for
+in-flight same-environment materializations and rejects same-run ordering
+deadlocks. `materialize()` results stage as Parquet, then load natively through
+the DuckDB materializer or through Sling for other warehouses; the Python path
+does not use ingestr. The SDK's `.pyi` files are also mounted into the embedded
+Python language server, and pipeline type-check warns when a literal
+`query()` reads a project asset missing from `depends`.
+
 Pipeline type checks also validate materialization configuration: supported
 loader strategies, required merge primary keys, declared incremental/update
 keys, time-interval prerequisites, and merge-only column metadata. Editing may

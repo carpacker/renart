@@ -37,11 +37,40 @@ When the asset materializes, Renart runs the file and writes whatever
 `materialize()` returns — a DataFrame or a list of dicts — to the target
 table, like any other asset.
 
+## Query project data
+
+Use the built-in `renart` SDK to read another asset without putting connection
+credentials in your Python process:
+
+```python
+from renart import context, query
+
+
+def materialize():
+    orders = query(
+        "select customer_id, order_total from mart.orders "
+        "where order_date >= current_date - interval '30 days'",
+    )
+    return orders.groupby("customer_id", as_index=False)["order_total"].sum()
+```
+
+`query()` accepts one read-only `SELECT` and returns a pandas DataFrame. Pass
+`format="arrow"` to receive a PyArrow Table instead. It uses the asset's
+connection by default; `connection="warehouse-name"` reads through another
+connection defined in the project. Renart executes the query inside the runner,
+so the Python process receives the result but never the connection credentials.
+
+The `context` object exposes the current run window, run ID, pipeline variables,
+asset name, and full-refresh state.
+
 ## Dependencies and lineage
 
 Renart can't infer upstreams from Python the way it does from SQL. Declare
 them in the workbench's **Dependencies** card; the asset then runs after
-its upstreams and appears in the lineage like every other node.
+its upstreams and appears in the lineage like every other node. If a literal
+`query()` reads another project asset without a matching dependency, **Type
+check** warns about it. During a run, `query()` waits when a declared upstream
+is still materializing rather than reading a half-written table.
 
 ## Packages
 

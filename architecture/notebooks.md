@@ -21,10 +21,9 @@ notebooks/
   files + move the cell file, no manifest edit).
 - Prose blocks live in `notebook.yml`; they are not assets and have no
   fingerprints.
-- SQL-only for now (`isCellFile` accepts `.sql`); Python cells wait on Python
-  fingerprint hardening (staleness.md §8). Python *support inside sessions*
-  exists for execution (`notebook/run_python.go`) but cells are excluded from
-  auto-recompute.
+- Cells may be SQL (`.sql`) or Python (`.py`). Python cells participate in the
+  dependency DAG and manual runs but stay excluded from auto-recompute while
+  Python fingerprint hardening remains open (staleness.md §8).
 - Loading: `service/notebooks.go` folds notebooks into `ComputeState`; every
   asset carries `class: pipeline | notebook`.
 
@@ -69,6 +68,11 @@ notebooks/
   import resolver and writes only the local file.
 - Cell runs do **not** emit facts into matlog; staleness/results are runtime
   state (see §6), honest for the ephemeral per-session model.
+- Python cells export their materialized sibling upstreams into a throwaway
+  DuckDB input snapshot under the cells' logical names. The Renart SDK broker
+  reads that snapshot while `materialize()` stages its output into a separate
+  throwaway DuckDB file; neither path opens a second handle on the locked live
+  session database. The runner then copies the output table into the session.
 
 ## 4. Rename engine (`notebook/rename.go`)
 
@@ -139,7 +143,7 @@ prompt to build it.
   for `@viz`.
 - Warehouse-backed `notebook_target` (sandbox schemas + manifest/TTL janitor);
   the DuckDB-file default with delete-on-close + startup sweep is what exists.
-- Parked by decision: Python cells in the DAG, parameters/widgets,
+- Parked by decision: Python auto-recompute, parameters/widgets,
   cross-notebook references (workaround: promotion), result persistence
   (reopen re-queries head N), notebook sharing/cloud (folders of files travel
   through git and the snapshot CAS for free).
@@ -152,4 +156,5 @@ prompt to build it.
 parser), import cache + attach fast path, rename invariance, viz parser,
 promotion planning. `internal/web/service` covers ComputeState loading +
 direction rule, CRUD/run lifecycle, autorecompute eligibility, promotion.
-`web/tests/e2e/app/notebooks.live.spec.ts` drives the real server.
+`web/tests/e2e/app/notebooks.live.spec.ts` drives the real server, including a
+Python cell querying and materializing an upstream SQL cell through the SDK.
