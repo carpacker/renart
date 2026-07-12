@@ -10,6 +10,8 @@ import (
 	"github.com/bruin-data/bruin/pkg/config"
 	"github.com/bruin-data/bruin/pkg/pipeline"
 	"github.com/spf13/afero"
+
+	"renart/internal/web/runstate"
 )
 
 type HybridBruinExecutor struct {
@@ -17,6 +19,9 @@ type HybridBruinExecutor struct {
 	newPipelineBuilder   func() *pipeline.Builder
 	workspaceRoot        string
 	logSink              ExecutionLogSink
+	// runRegistry tracks in-flight materializations across every run this
+	// executor performs, so the python run broker can wait on them.
+	runRegistry *runstate.Registry
 }
 
 func NewHybridBruinExecutor(
@@ -34,6 +39,7 @@ func NewHybridBruinExecutor(
 		newPipelineBuilder:   newPipelineBuilder,
 		workspaceRoot:        workspaceRoot,
 		logSink:              logSink,
+		runRegistry:          runstate.NewRegistry(),
 	}
 }
 

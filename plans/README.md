@@ -14,6 +14,7 @@ the original.
 | [materialization-strategies.md](materialization-strategies.md) | in progress — Phase 1 partially landed |
 | [materialization-per-asset-type.md](materialization-per-asset-type.md) | proposed — make every offered materialization mode execute on sql/python/load/api assets |
 | [remote-table-intellisense.md](remote-table-intellisense.md) | proposal — surface warehouse tables with no backing asset via the LSP |
+| [python-asset-sdk.md](python-asset-sdk.md) | phase 1 implemented — credential-free `query()` via the run broker, ingestr-free uploads; phases 2–3 open |
 | [questions.md](questions.md) | open questions for the maintainer |
 
 Recently folded away (git history keeps them): `docs-alpha.md` and

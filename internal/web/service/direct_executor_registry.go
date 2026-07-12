@@ -20,7 +20,6 @@ import (
 	my "github.com/bruin-data/bruin/pkg/mysql"
 	"github.com/bruin-data/bruin/pkg/pipeline"
 	pg "github.com/bruin-data/bruin/pkg/postgres"
-	bruinpython "github.com/bruin-data/bruin/pkg/python"
 	"github.com/bruin-data/bruin/pkg/query"
 	"github.com/bruin-data/bruin/pkg/s3"
 	"github.com/bruin-data/bruin/pkg/scheduler"
@@ -29,9 +28,11 @@ import (
 	tri "github.com/bruin-data/bruin/pkg/trino"
 	vert "github.com/bruin-data/bruin/pkg/vertica"
 	"github.com/spf13/afero"
+
+	"renart/internal/web/runstate"
 )
 
-func buildDirectMainExecutors(manager config.ConnectionAndDetailsGetter, renderer *jinja.Renderer, parser *sqlparser.SQLParser, pl *pipeline.Pipeline) (map[pipeline.AssetType]bruinexecutor.Config, error) {
+func buildDirectMainExecutors(manager config.ConnectionAndDetailsGetter, renderer *jinja.Renderer, parser *sqlparser.SQLParser, pl *pipeline.Pipeline, registry *runstate.Registry) (map[pipeline.AssetType]bruinexecutor.Config, error) {
 	executors := make(map[pipeline.AssetType]bruinexecutor.Config, len(bruinexecutor.DefaultExecutorsV2))
 	for assetType, cfg := range bruinexecutor.DefaultExecutorsV2 {
 		if cfg == nil {
@@ -254,7 +255,10 @@ func buildDirectMainExecutors(manager config.ConnectionAndDetailsGetter, rendere
 	executors[pipeline.AssetTypeOracleQuery][scheduler.TaskInstanceTypeMain] = directOracleBasicOperator{connection: manager, extractor: wholeFileExtractor}
 	executors[pipeline.AssetTypeOracleQuery][scheduler.TaskInstanceTypeCustomCheck] = customCheckRunner
 	ensureExecutorConfig(pipeline.AssetTypePython)
-	executors[pipeline.AssetTypePython][scheduler.TaskInstanceTypeMain] = bruinpython.NewLocalOperator(manager, directPythonEnvVariables(pl))
+	executors[pipeline.AssetTypePython][scheduler.TaskInstanceTypeMain] = newRenartPythonOperator(manager, directPythonEnvVariables(pl), renartPythonOperatorOptions{
+		registry:     registry,
+		enableBroker: true,
+	})
 	ingestrOperator, err := bruiningestr.NewBasicOperator(manager, renderer)
 	if err != nil {
 		return nil, err

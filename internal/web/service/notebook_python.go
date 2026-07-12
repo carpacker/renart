@@ -15,7 +15,6 @@ import (
 	"github.com/bruin-data/bruin/pkg/connection"
 	bruinexecutor "github.com/bruin-data/bruin/pkg/executor"
 	"github.com/bruin-data/bruin/pkg/pipeline"
-	bruinpython "github.com/bruin-data/bruin/pkg/python"
 	"go.uber.org/zap"
 
 	"renart/internal/web/notebook"
@@ -156,7 +155,11 @@ func (s *NotebookService) materializePythonCell(ctx context.Context, cell *noteb
 		envVariables["RENART_NOTEBOOK_INPUTS"] = inputsPath
 	}
 
-	operator := bruinpython.NewLocalOperator(manager, envVariables)
+	// The renart operator loads the materialize() result into the throwaway
+	// DuckDB file natively (read_parquet), with no ingestr and no broker — a
+	// cell's query() support would need the session connection, which the
+	// runner holds the write lock on (phase 2).
+	operator := newRenartPythonOperator(manager, envVariables, renartPythonOperatorOptions{})
 	runErr := operator.RunTask(runCtx, runPipeline, &runAsset)
 	return logs.String(), runErr
 }

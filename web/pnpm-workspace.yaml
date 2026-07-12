@@ -5,6 +5,9 @@ allowBuilds:
   esbuild: true
   msw: true
 
+minimumReleaseAgeExclude:
+  - eslint@10.7.0
+
 onlyBuiltDependencies:
   - esbuild
   - msw

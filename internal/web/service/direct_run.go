@@ -17,6 +17,8 @@ import (
 	"github.com/bruin-data/bruin/pkg/sqlparser"
 	"github.com/spf13/afero"
 	"go.uber.org/zap"
+
+	"renart/internal/web/runstate"
 )
 
 func (e *HybridBruinExecutor) RunAsset(ctx context.Context, req RunAssetRequest, onChunk func([]byte)) ([]byte, error) {
@@ -63,7 +65,7 @@ func (e *HybridBruinExecutor) RunAsset(ctx context.Context, req RunAssetRequest,
 		return e.runLoadAsset(runCtx, pp.Asset, manager, onChunk)
 	}
 
-	mainExecutors, err := buildDirectMainExecutors(manager, renderer, parser, pp.Pipeline)
+	mainExecutors, err := buildDirectMainExecutors(manager, renderer, parser, pp.Pipeline, e.runRegistry)
 	if err != nil {
 		return nil, err
 	}
@@ -77,6 +79,12 @@ func (e *HybridBruinExecutor) RunAsset(ctx context.Context, req RunAssetRequest,
 	pending := s.GetTaskInstancesByStatus(scheduler.Pending)
 	if len(pending) == 0 {
 		return []byte(""), nil
+	}
+
+	var regRun *runstate.Run
+	if e.runRegistry != nil {
+		regRun = e.runRegistry.BeginRun(runID, pp.Config.SelectedEnvironmentName, []string{pp.Asset.Name})
+		defer regRun.End()
 	}
 
 	printer := &streamCaptureWriter{buffer: bytes.NewBuffer(nil), onChunk: onChunk}
@@ -118,7 +126,9 @@ func (e *HybridBruinExecutor) RunAsset(ctx context.Context, req RunAssetRequest,
 			taskStartedAt := time.Now()
 			emitDirectRunAssetEvent(req.AssetEvent, instance, "running", taskStartedAt, time.Time{}, nil)
 			writeDirectRunLifecycle(printer, instance, nil, true, 0)
+			finishTask := beginRegistryTask(regRun, instance)
 			if err := seq.RunSingleTask(runCtx, instance); err != nil {
+				finishTask(err)
 				instance.MarkAs(scheduler.Failed)
 				results = append(results, &scheduler.TaskExecutionResult{Instance: instance, Error: err})
 				emitDirectRunAssetEvent(req.AssetEvent, instance, "failed", taskStartedAt, time.Now(), err)
@@ -127,6 +137,7 @@ func (e *HybridBruinExecutor) RunAsset(ctx context.Context, req RunAssetRequest,
 				_ = e.saveDirectRunLog(ctx, pp.Pipeline, s, runID, req.Environment, timeWindow, []string{"renart", "run", req.AssetPath})
 				return printer.buffer.Bytes(), err
 			}
+			finishTask(nil)
 			instance.MarkAs(scheduler.Succeeded)
 			results = append(results, &scheduler.TaskExecutionResult{Instance: instance, Error: nil})
 			emitDirectRunAssetEvent(req.AssetEvent, instance, "success", taskStartedAt, time.Now(), nil)
@@ -197,7 +208,7 @@ func (e *HybridBruinExecutor) RunPipeline(ctx context.Context, req RunPipelineRe
 	if err != nil {
 		return nil, err
 	}
-	mainExecutors, err := buildDirectMainExecutors(manager, renderer, parser, foundPipeline)
+	mainExecutors, err := buildDirectMainExecutors(manager, renderer, parser, foundPipeline, e.runRegistry)
 	if err != nil {
 		return nil, err
 	}
@@ -219,6 +230,18 @@ func (e *HybridBruinExecutor) RunPipeline(ctx context.Context, req RunPipelineRe
 	s.MarkAll(scheduler.Pending)
 	results := make([]*scheduler.TaskExecutionResult, 0)
 	startedAt := time.Now()
+
+	var regRun *runstate.Run
+	if e.runRegistry != nil {
+		planned := make([]string, 0, len(foundPipeline.Assets))
+		for _, asset := range foundPipeline.Assets {
+			if asset != nil {
+				planned = append(planned, asset.Name)
+			}
+		}
+		regRun = e.runRegistry.BeginRun(runID, cfg.SelectedEnvironmentName, planned)
+		defer regRun.End()
+	}
 
 	for {
 		pending := s.GetTaskInstancesByStatus(scheduler.Pending)
@@ -243,6 +266,7 @@ func (e *HybridBruinExecutor) RunPipeline(ctx context.Context, req RunPipelineRe
 			taskStartedAt := time.Now()
 			emitDirectRunAssetEvent(req.AssetEvent, instance, "running", taskStartedAt, time.Time{}, nil)
 			writeDirectRunLifecycle(printer, instance, nil, true, 0)
+			finishTask := beginRegistryTask(regRun, instance)
 			var runErr error
 			if isAPIAsset(instance.GetAsset()) {
 				_, runErr = e.runAPIAsset(runCtx, foundPipeline, instance.GetAsset(), renderer, manager, func(chunk []byte) { _, _ = printer.Write(chunk) })
@@ -251,6 +275,7 @@ func (e *HybridBruinExecutor) RunPipeline(ctx context.Context, req RunPipelineRe
 			} else {
 				runErr = seq.RunSingleTask(runCtx, instance)
 			}
+			finishTask(runErr)
 			if runErr != nil {
 				instance.MarkAs(scheduler.Failed)
 				results = append(results, &scheduler.TaskExecutionResult{Instance: instance, Error: runErr})
@@ -417,6 +442,16 @@ var directRunAssetTypes = map[pipeline.AssetType]struct{}{
 	pipeline.AssetTypeIngestr:                 {},
 	pipeline.AssetType(loadAssetType):         {},
 	pipeline.AssetType(apiAssetType):          {},
+}
+
+// beginRegistryTask registers a main task instance as in flight in the run
+// registry, returning its finish callback (a no-op for check instances and
+// when the registry is absent, so call sites stay unconditional).
+func beginRegistryTask(regRun *runstate.Run, instance scheduler.TaskInstance) func(error) {
+	if regRun == nil || instance.GetType() != scheduler.TaskInstanceTypeMain || instance.GetAsset() == nil {
+		return func(error) {}
+	}
+	return regRun.BeginTask(instance.GetAsset().Name)
 }
 
 func allDirectRunPipelineDependenciesSucceeded(instance scheduler.TaskInstance) bool {
