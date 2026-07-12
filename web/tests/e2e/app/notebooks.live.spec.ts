@@ -181,6 +181,57 @@ test.describe("app notebooks live", () => {
     await expect(page.getByText("40", { exact: true }).first()).toBeVisible({ timeout: 15000 });
   });
 
+  test("a Python cell queries an upstream cell through the renart SDK", async ({
+    liveApp,
+    page,
+  }) => {
+    test.setTimeout(120000);
+    const { request } = page;
+    const notebook = await createNotebook(request, liveApp.baseURL, "Python Query");
+
+    const baseCell = await addCell(request, liveApp.baseURL, notebook.id, "base");
+    await setCell(
+      request,
+      liveApp.baseURL,
+      notebook.id,
+      baseCell,
+      "select 10 as amount union all select 20",
+    );
+    const pythonCell = await addPythonCell(request, liveApp.baseURL, notebook.id, "doubled");
+    await setPythonCell(
+      request,
+      liveApp.baseURL,
+      notebook.id,
+      pythonCell,
+      [
+        "from renart import query",
+        "",
+        "",
+        "def materialize():",
+        '    return query("select amount * 2 as doubled from base order by 1", format="arrow")',
+      ].join("\n"),
+    );
+
+    const response = await request.post(`${liveApp.baseURL}/api/notebooks/${notebook.id}/run`, {
+      data: { all: true },
+      timeout: 110000,
+    });
+    expect(response.ok()).toBe(true);
+    const payload = (await response.json()) as {
+      status: string;
+      results: Array<{
+        name: string;
+        status: string;
+        rows: unknown[][];
+        error?: string;
+        logs?: string;
+      }>;
+    };
+    const doubled = payload.results.find((result) => result.name === "doubled")!;
+    expect(doubled.status, `${doubled.error ?? ""}\n${doubled.logs ?? ""}`).toBe("ok");
+    expect(doubled.rows).toEqual([[20], [40]]);
+  });
+
   test("rename is reference-rewriting and the chart type writes a @viz directive", async ({
     liveApp,
     page,

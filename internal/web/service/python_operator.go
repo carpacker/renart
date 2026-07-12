@@ -43,10 +43,11 @@ type renartPythonOperator struct {
 	manager      config.ConnectionAndDetailsGetter
 	envVariables map[string]string
 	registry     *runstate.Registry
-	// enableBroker is false for notebook cells: their manager only holds the
-	// synthetic session connection, and a second DuckDB handle on the session
-	// file would fight the runner's lock.
 	enableBroker bool
+	// brokerDefaultConnection may differ from the asset's materialization
+	// connection. Notebook cells, for example, write to a throwaway output
+	// database while reading a snapshot of their notebook session.
+	brokerDefaultConnection string
 
 	uv     *bruinpython.UvChecker
 	cmd    *bruinpython.CommandRunner
@@ -54,8 +55,9 @@ type renartPythonOperator struct {
 }
 
 type renartPythonOperatorOptions struct {
-	registry     *runstate.Registry
-	enableBroker bool
+	registry                *runstate.Registry
+	enableBroker            bool
+	brokerDefaultConnection string
 }
 
 func newRenartPythonOperator(manager config.ConnectionAndDetailsGetter, envVariables map[string]string, opts renartPythonOperatorOptions) *renartPythonOperator {
@@ -63,13 +65,14 @@ func newRenartPythonOperator(manager config.ConnectionAndDetailsGetter, envVaria
 		envVariables = map[string]string{}
 	}
 	return &renartPythonOperator{
-		manager:      manager,
-		envVariables: envVariables,
-		registry:     opts.registry,
-		enableBroker: opts.enableBroker,
-		uv:           &bruinpython.UvChecker{},
-		cmd:          &bruinpython.CommandRunner{},
-		module:       &bruinpython.ModulePathFinder{},
+		manager:                 manager,
+		envVariables:            envVariables,
+		registry:                opts.registry,
+		enableBroker:            opts.enableBroker,
+		brokerDefaultConnection: opts.brokerDefaultConnection,
+		uv:                      &bruinpython.UvChecker{},
+		cmd:                     &bruinpython.CommandRunner{},
+		module:                  &bruinpython.ModulePathFinder{},
 	}
 }
 
@@ -198,9 +201,11 @@ func (o *renartPythonOperator) buildEnv(ctx context.Context, p *pipeline.Pipelin
 // startBroker wires a per-task pybroker instance to this operator's
 // connection manager, run registry, and run context.
 func (o *renartPythonOperator) startBroker(ctx context.Context, p *pipeline.Pipeline, t *pipeline.Asset, output io.Writer) (*pybroker.Broker, func(), error) {
-	defaultConnection := ""
-	if name, err := p.GetConnectionNameForAsset(t); err == nil {
-		defaultConnection = name
+	defaultConnection := o.brokerDefaultConnection
+	if defaultConnection == "" {
+		if name, err := p.GetConnectionNameForAsset(t); err == nil {
+			defaultConnection = name
+		}
 	}
 
 	doc := pybroker.ContextDocument{

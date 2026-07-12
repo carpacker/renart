@@ -75,6 +75,13 @@ func (b *boundedLogBuffer) String() string {
 // notebook session.
 const notebookSessionConnName = "renart-notebook-session"
 
+// notebookInputsConnName is the read-only side of a Python notebook run. The
+// runner exports the cell's materialized upstreams into this throwaway DuckDB
+// file under their logical names, so renart.query() can use the same names the
+// notebook editor shows without opening a second connection to the locked
+// session database.
+const notebookInputsConnName = "renart-notebook-inputs"
+
 // materializePythonCell runs a Python cell's materialize() through bruin's local
 // Python operator (uv), writing the resulting dataframe into destPath as table
 // destTable. The runner then copies that table into the notebook session.
@@ -84,12 +91,19 @@ func (s *NotebookService) materializePythonCell(ctx context.Context, cell *noteb
 	// project mode. Seed a default when none exists so a fresh cell runs.
 	ensureNotebookPyproject(notebookDir)
 
-	connections := &config.Connections{
-		DuckDB: []config.DuckDBConnection{{
-			ConnectionMetadata: config.ConnectionMetadata{Name: notebookSessionConnName},
-			Path:               destPath,
-		}},
+	duckDBConnections := []config.DuckDBConnection{{
+		ConnectionMetadata: config.ConnectionMetadata{Name: notebookSessionConnName},
+		Path:               destPath,
+	}}
+	brokerConnection := notebookSessionConnName
+	if inputsPath != "" {
+		duckDBConnections = append(duckDBConnections, config.DuckDBConnection{
+			ConnectionMetadata: config.ConnectionMetadata{Name: notebookInputsConnName},
+			Path:               inputsPath,
+		})
+		brokerConnection = notebookInputsConnName
 	}
+	connections := &config.Connections{DuckDB: duckDBConnections}
 	cfg := &config.Config{
 		SelectedEnvironmentName: "default",
 		SelectedEnvironment:     &config.Environment{Connections: connections},
@@ -155,11 +169,13 @@ func (s *NotebookService) materializePythonCell(ctx context.Context, cell *noteb
 		envVariables["RENART_NOTEBOOK_INPUTS"] = inputsPath
 	}
 
-	// The renart operator loads the materialize() result into the throwaway
-	// DuckDB file natively (read_parquet), with no ingestr and no broker — a
-	// cell's query() support would need the session connection, which the
-	// runner holds the write lock on (phase 2).
-	operator := newRenartPythonOperator(manager, envVariables, renartPythonOperatorOptions{})
+	// The renart operator loads materialize() into the throwaway output file and
+	// serves SDK queries from the separately exported input snapshot. Both stay
+	// in-process and credential-free, and neither opens the locked session file.
+	operator := newRenartPythonOperator(manager, envVariables, renartPythonOperatorOptions{
+		enableBroker:            true,
+		brokerDefaultConnection: brokerConnection,
+	})
 	runErr := operator.RunTask(runCtx, runPipeline, &runAsset)
 	return logs.String(), runErr
 }
