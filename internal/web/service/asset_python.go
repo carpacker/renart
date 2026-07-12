@@ -14,6 +14,8 @@ import (
 	"strings"
 
 	"github.com/spf13/afero"
+
+	"renart/internal/pysdk"
 	"renart/internal/web/profiling"
 	"renart/internal/web/pyintelligence"
 )
@@ -462,7 +464,7 @@ func (s *AssetService) installedPythonPackageStubs(relAssetPath, absAssetPath, c
 	moduleNames := make([]string, 0, len(modules))
 	modulePaths := map[string]string{}
 	for module := range modules {
-		if module == "" {
+		if module == "" || module == renartSDKModule {
 			continue
 		}
 		if modulePath := s.pythonModuleInstallPath(relAssetPath, module); modulePath != "" {
@@ -474,8 +476,18 @@ func (s *AssetService) installedPythonPackageStubs(relAssetPath, absAssetPath, c
 	sort.Strings(moduleNames)
 	installedCount = len(moduleNames)
 
-	files := make([]pyintelligence.VirtualFile, 0, len(moduleNames))
+	files := make([]pyintelligence.VirtualFile, 0, len(moduleNames)+3)
 	fingerprintHash := sha256.New()
+	if modules[renartSDKModule] {
+		for _, stub := range pysdk.TypeStubFiles() {
+			virtualPath := "/site-packages/" + stub.Path
+			files = append(files, pyintelligence.VirtualFile{Path: virtualPath, Content: stub.Content})
+			_, _ = fingerprintHash.Write([]byte(virtualPath))
+			_, _ = fingerprintHash.Write([]byte{0})
+			_, _ = fingerprintHash.Write([]byte(stub.Content))
+			_, _ = fingerprintHash.Write([]byte{0})
+		}
+	}
 	for _, module := range moduleNames {
 		mount := s.cachedPythonInstalledModuleFiles(module, modulePaths[module])
 		if len(mount.files) == 0 {

@@ -118,11 +118,11 @@ func canonicalRequirementName(spec string) string {
 	return strings.NewReplacer("_", "-", ".", "-").Replace(name)
 }
 
-// assetInstalledModules returns the top-level import names installed in the
-// project's local virtualenv(s) reachable from the asset — the ground truth for
-// "is this import resolvable here", regardless of how its package is named.
+// assetInstalledModules returns the top-level import names available to the
+// asset: packages from reachable project-local virtualenvs plus the
+// runner-injected renart SDK.
 func (s *AssetService) assetInstalledModules(relAssetPath string) []string {
-	return installedModulesFromSitePackages(s.assetLocalSitePackages(relAssetPath))
+	return withRenartSDKModule(installedModulesFromSitePackages(s.assetLocalSitePackages(relAssetPath)))
 }
 
 // assetLocalSitePackages collects the site-packages directories of the local

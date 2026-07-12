@@ -32,10 +32,11 @@ func TestNotebookInstalledModulesScansSitePackages(t *testing.T) {
 	assert.Contains(t, modules, "six")
 	assert.Contains(t, modules, "cv2")
 	assert.Contains(t, modules, "yaml")
+	assert.Contains(t, modules, "renart")
 	assert.NotContains(t, modules, "__pycache__")
 	assert.NotContains(t, modules, "PyYAML-6.0.dist-info")
 }
 
-func TestNotebookInstalledModulesEmptyWithoutVenv(t *testing.T) {
-	assert.Empty(t, notebookInstalledModules(filepath.Join(t.TempDir(), "does-not-exist")))
+func TestNotebookInstalledModulesIncludesInjectedSDKWithoutVenv(t *testing.T) {
+	assert.Equal(t, []string{"renart"}, notebookInstalledModules(filepath.Join(t.TempDir(), "does-not-exist")))
 }

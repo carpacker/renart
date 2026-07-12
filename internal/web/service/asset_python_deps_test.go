@@ -39,6 +39,7 @@ func TestAssetServicePythonDepsReadsRequirementsAndLocalVenv(t *testing.T) {
 	assert.Equal(t, "ok", resp.Status)
 	assert.Equal(t, []string{"pandas"}, resp.Dependencies)
 	assert.Contains(t, resp.InstalledModules, "numpy")
+	assert.Contains(t, resp.InstalledModules, "renart")
 	_ = relPath
 }
 

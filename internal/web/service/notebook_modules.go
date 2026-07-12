@@ -8,6 +8,8 @@ import (
 	"strings"
 )
 
+const renartSDKModule = "renart"
+
 // notebookVenvDir is the uv project virtualenv for a notebook (kept under
 // .renart so it stays out of the git-tracked notebook folder).
 func notebookVenvDir(workspaceRoot, notebookDir string) string {
@@ -17,9 +19,24 @@ func notebookVenvDir(workspaceRoot, notebookDir string) string {
 // notebookInstalledModules returns the top-level import names available in a
 // notebook's virtualenv. This is the ground truth for "is this import
 // resolvable", independent of how the package is named (cv2 from opencv-python,
-// yaml from PyYAML, …). Empty when the venv does not exist yet.
+// yaml from PyYAML, …). The runner-injected renart SDK is always included,
+// including before the notebook virtualenv exists.
 func notebookInstalledModules(venvDir string) []string {
-	return installedModulesFromSitePackages(pythonSitePackagesDirs(venvDir))
+	return withRenartSDKModule(installedModulesFromSitePackages(pythonSitePackagesDirs(venvDir)))
+}
+
+// withRenartSDKModule adds the SDK module that the runner injects into every
+// Python invocation. It is available even though it does not live in the
+// project's persistent virtualenv.
+func withRenartSDKModule(modules []string) []string {
+	for _, module := range modules {
+		if module == renartSDKModule {
+			return modules
+		}
+	}
+	modules = append(modules, renartSDKModule)
+	sort.Strings(modules)
+	return modules
 }
 
 // installedModulesFromSitePackages scans the given site-packages directories and

@@ -98,9 +98,8 @@ type Notebook struct {
 	// Dependencies are the notebook's Python package specifiers, stored in
 	// pyproject.toml ([project].dependencies) and installed by uv.
 	Dependencies []string `json:"dependencies,omitempty"`
-	// InstalledModules are the top-level import names available in the
-	// notebook's virtualenv — the ground truth for whether an import resolves,
-	// regardless of how the providing package is named.
+	// InstalledModules are the top-level import names available to notebook
+	// Python cells (virtualenv packages plus runner-injected modules).
 	InstalledModules []string `json:"installed_modules,omitempty"`
 }
 

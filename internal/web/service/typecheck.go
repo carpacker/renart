@@ -52,8 +52,9 @@ const (
 )
 
 // TypeCheckFinding is a single diagnostic about an asset (a type/column error
-// from the SQL parser, a template-rendering failure, or a missing-columns
-// warning). Line/column are 1-based and point into the rendered SQL.
+// from the SQL parser, a template-rendering failure, or an asset-source
+// warning). Line/column are 1-based and point into the rendered SQL for SQL
+// findings or the Python source for Python findings.
 type TypeCheckFinding struct {
 	Severity  string `json:"severity"`
 	Message   string `json:"message"`
@@ -163,6 +164,7 @@ func checkAsset(ctx context.Context, fs afero.Fs, pp *pipeline.Pipeline, workspa
 
 	dialect, dialectErr := AssetTypeToDialect(asset.Type)
 	if dialectErr != nil {
+		ac.Findings = append(ac.Findings, pythonQueryDependencyFindings(asset, pp)...)
 		// Non-SQL asset: we cannot infer its output schema. Warn when a
 		// table-producing asset declares no columns so the gap is visible.
 		if nonSQLColumnsExpected(asset) && !assetHasDeclaredColumns(ctx, asset) {

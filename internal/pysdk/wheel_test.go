@@ -31,8 +31,12 @@ func TestEnsureWheelProducesValidWheel(t *testing.T) {
 
 	want := map[string]bool{
 		"renart/__init__.py":                                 false,
+		"renart/__init__.pyi":                                false,
 		"renart/_client.py":                                  false,
+		"renart/_client.pyi":                                 false,
 		"renart/context.py":                                  false,
+		"renart/context.pyi":                                 false,
+		"renart/py.typed":                                    false,
 		"renart_sdk-" + Version + ".dist-info/METADATA":      false,
 		"renart_sdk-" + Version + ".dist-info/WHEEL":         false,
 		"renart_sdk-" + Version + ".dist-info/RECORD":        false,
@@ -46,6 +50,21 @@ func TestEnsureWheelProducesValidWheel(t *testing.T) {
 	for name, found := range want {
 		if !found {
 			t.Errorf("wheel is missing %s", name)
+		}
+	}
+}
+
+func TestTypeStubFiles(t *testing.T) {
+	files := TypeStubFiles()
+	if len(files) != 3 {
+		t.Fatalf("expected three SDK stub files, got %d", len(files))
+	}
+	if files[0].Path != "renart/__init__.pyi" {
+		t.Fatalf("stub files must be sorted and package-relative, got %q", files[0].Path)
+	}
+	for _, file := range files {
+		if file.Content == "" {
+			t.Fatalf("stub %s is empty", file.Path)
 		}
 	}
 }

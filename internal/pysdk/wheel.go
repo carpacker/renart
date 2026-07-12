@@ -19,12 +19,12 @@ import (
 	"strings"
 )
 
-//go:embed src/renart/*.py
+//go:embed src/renart/*
 var sdkSource embed.FS
 
 // Version is the SDK's wheel version. Bump it together with user-visible SDK
 // changes; the content hash in the cache path handles dev-time invalidation.
-const Version = "0.1.0"
+const Version = "0.2.0"
 
 const (
 	distribution = "renart_sdk"
@@ -59,6 +59,36 @@ func WheelFilename() string {
 type wheelEntry struct {
 	name    string
 	content []byte
+}
+
+// SourceFile is one embedded SDK source file. TypeStubFiles exposes the .pyi
+// subset to the embedded Python language server, so editor support matches the
+// exact SDK version injected into runs.
+type SourceFile struct {
+	Path    string
+	Content string
+}
+
+// TypeStubFiles returns fresh copies of the SDK's embedded .pyi files under
+// their package-relative paths.
+func TypeStubFiles() []SourceFile {
+	files := make([]SourceFile, 0, 3)
+	_ = fs.WalkDir(sdkSource, "src/renart", func(p string, d fs.DirEntry, err error) error {
+		if err != nil || d.IsDir() || !strings.HasSuffix(p, ".pyi") {
+			return err
+		}
+		content, readErr := sdkSource.ReadFile(p)
+		if readErr != nil {
+			return readErr
+		}
+		files = append(files, SourceFile{
+			Path:    path.Join("renart", strings.TrimPrefix(p, "src/renart/")),
+			Content: string(content),
+		})
+		return nil
+	})
+	sort.Slice(files, func(i, j int) bool { return files[i].Path < files[j].Path })
+	return files
 }
 
 func wheelEntries() ([]wheelEntry, error) {

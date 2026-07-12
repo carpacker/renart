@@ -166,6 +166,107 @@ print("hi")
 	assert.Empty(t, loader.Findings)
 }
 
+func TestCheckPipelineWarnsForUndeclaredPythonQueryAsset(t *testing.T) {
+	t.Parallel()
+	parsed, root := writeTypeCheckWorkspace(t, "name: analytics", map[string]string{
+		"up.sql": `
+/* @bruin
+name: analytics.up
+type: duckdb.sql
+materialization:
+  type: table
+columns:
+  - name: id
+    type: BIGINT
+@bruin */
+select 1 as id
+`,
+		"reader.py": `
+""" @bruin
+name: analytics.reader
+type: python
+columns:
+  - name: id
+    type: BIGINT
+@bruin """
+from renart import query
+
+def materialize():
+    return query("select id from analytics.up")
+`,
+	})
+
+	report := runTypeCheck(t, parsed, root)
+	reader := findAsset(t, report, "analytics.reader")
+	assert.True(t, hasFinding(reader, typeCheckSeverityWarning, "without declaring it in depends"),
+		"expected undeclared query dependency warning, got %+v", reader.Findings)
+	assert.Equal(t, typeCheckStatusWarning, reader.Status)
+	for _, finding := range reader.Findings {
+		if strings.Contains(finding.Message, "without declaring it in depends") {
+			assert.Greater(t, finding.Line, 0)
+			assert.Greater(t, finding.Column, 0)
+		}
+	}
+}
+
+func TestCheckPipelineAcceptsDeclaredPythonQueryAsset(t *testing.T) {
+	t.Parallel()
+	parsed, root := writeTypeCheckWorkspace(t, "name: analytics", map[string]string{
+		"up.sql": `
+/* @bruin
+name: analytics.up
+type: duckdb.sql
+materialization:
+  type: table
+columns:
+  - name: id
+    type: BIGINT
+@bruin */
+select 1 as id
+`,
+		"reader.py": `
+""" @bruin
+name: analytics.reader
+type: python
+depends:
+  - analytics.up
+columns:
+  - name: id
+    type: BIGINT
+@bruin """
+from renart import query
+
+def materialize():
+    return query("select id from analytics.up")
+`,
+	})
+
+	report := runTypeCheck(t, parsed, root)
+	reader := findAsset(t, report, "analytics.reader")
+	assert.False(t, hasFinding(reader, typeCheckSeverityWarning, "without declaring it in depends"),
+		"declared query dependency should not warn: %+v", reader.Findings)
+	assert.Equal(t, typeCheckStatusOK, reader.Status)
+}
+
+func TestPythonQueryStringLiteralsIgnoresDynamicAndNonCodeCalls(t *testing.T) {
+	t.Parallel()
+	source := strings.Join([]string{
+		`# query("select * from commented")`,
+		`text = "query('select * from a_string')"`,
+		`dynamic = query(sql)`,
+		`formatted = query(f"select * from {table}")`,
+		`first = query("select * from analytics.orders")`,
+		`second = renart.query(r'''select * from analytics.customers''')`,
+	}, "\n")
+
+	literals := pythonQueryStringLiterals(source)
+	require.Len(t, literals, 2)
+	assert.Equal(t, "select * from analytics.orders", literals[0].SQL)
+	assert.Equal(t, 5, literals[0].Line)
+	assert.Equal(t, "select * from analytics.customers", literals[1].SQL)
+	assert.Equal(t, 6, literals[1].Line)
+}
+
 func TestCheckPipelineSuppressesCascadeFromUndeclaredUpstream(t *testing.T) {
 	t.Parallel()
 	parsed, root := writeTypeCheckWorkspace(t, "name: analytics", map[string]string{

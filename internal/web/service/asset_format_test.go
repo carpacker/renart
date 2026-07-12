@@ -209,6 +209,40 @@ df = pd.DataFrame({"a": [1]})
 	}
 }
 
+func TestAssetServicePythonIntelligenceResolvesInjectedRenartSDK(t *testing.T) {
+	workspaceRoot := t.TempDir()
+	assetPath := filepath.Join("analytics", "assets", "task.py")
+	absAssetPath := filepath.Join(workspaceRoot, assetPath)
+	require.NoError(t, os.MkdirAll(filepath.Dir(absAssetPath), 0o755))
+	require.NoError(t, os.WriteFile(absAssetPath, []byte("from renart import context, query\n"), 0o644))
+
+	service := NewAssetService(AssetDependencies{
+		WorkspaceRoot:    workspaceRoot,
+		ResolveAssetByID: newAssetTestResolver(workspaceRoot).ResolveAssetByID,
+	})
+	assetID := EncodeID(assetPath)
+
+	diagnostics, apiErr := service.PythonDiagnostics(context.Background(), assetID, PythonDiagnosticsRequest{
+		Content: "from renart import context, query\n\ndef materialize():\n    return query(\"select 1\")\n",
+	})
+	require.Nil(t, apiErr)
+	require.Equal(t, "ok", diagnostics.Status)
+	for _, diagnostic := range diagnostics.Diagnostics {
+		assert.NotContains(t, diagnostic.Message, "Cannot resolve imported module `renart`")
+		assert.NotContains(t, diagnostic.Message, "Unknown import `query`")
+	}
+
+	completions, apiErr := service.PythonCompletions(context.Background(), assetID, PythonCompletionsRequest{
+		Content:  "from renart import context\n\ncontext.",
+		Line:     3,
+		Column:   9,
+		Snippets: true,
+	})
+	require.Nil(t, apiErr)
+	require.Equal(t, "ok", completions.Status)
+	assert.Contains(t, pythonCompletionLabels(completions.Completions), "run_id")
+}
+
 func TestAssetServicePythonCompletionsReturnsTySuggestions(t *testing.T) {
 	workspaceRoot := t.TempDir()
 	pipelineRoot := filepath.Join(workspaceRoot, "analytics")
