@@ -508,6 +508,23 @@ func (s *webServer) TriggerPipeline(ctx context.Context, pipelineID string, req 
 	if strings.TrimSpace(req.Trigger) == "" {
 		req.Trigger = string(webscheduler.RunTriggerManual)
 	}
+	if strings.TrimSpace(req.Environment) == "" {
+		req.Environment = s.currentState().SelectedEnvironment
+	}
+	if webscheduler.RunTrigger(req.Trigger) == webscheduler.RunTriggerManual {
+		environmentPolicy := policy.EnvironmentPolicy{}
+		if s.policyLoader != nil {
+			environmentPolicy = s.policyLoader.For(req.Environment)
+		}
+		if err := policy.Check(environmentPolicy, policy.RunRequest{
+			Environment:          req.Environment,
+			Interactive:          true,
+			Destructive:          req.Backfill,
+			ConfirmedEnvironment: strings.TrimSpace(req.ConfirmedEnvironment),
+		}); err != nil {
+			return webscheduler.PipelineRun{}, err
+		}
+	}
 	return s.schedulerSvc.Trigger(ctx, pipelineSchedule, req)
 }
 

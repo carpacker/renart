@@ -110,10 +110,12 @@ type UpdateScheduleRequest struct {
 }
 
 type TriggerRequest struct {
-	Environment string `json:"environment"`
-	Start       string `json:"start,omitempty"`
-	End         string `json:"end,omitempty"`
-	Trigger     string `json:"trigger,omitempty"`
+	Environment          string `json:"environment"`
+	Start                string `json:"start,omitempty"`
+	End                  string `json:"end,omitempty"`
+	Trigger              string `json:"trigger,omitempty"`
+	Backfill             bool   `json:"backfill,omitempty"`
+	ConfirmedEnvironment string `json:"confirmed_environment,omitempty"`
 }
 
 type PipelineRun struct {

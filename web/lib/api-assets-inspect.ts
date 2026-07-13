@@ -40,6 +40,8 @@ export async function materializeAssetStream(
     scope?: MaterializeScope;
     timeWindow?: { start: string; end: string };
     fullRefresh?: boolean;
+    backfill?: boolean;
+    confirmedEnvironment?: string;
   },
 ) {
   return streamMaterialization(
@@ -49,6 +51,8 @@ export async function materializeAssetStream(
       start_date: options?.timeWindow?.start,
       end_date: options?.timeWindow?.end,
       full_refresh: options?.fullRefresh ? "true" : undefined,
+      backfill: options?.backfill ? "true" : undefined,
+      confirmed_environment: options?.confirmedEnvironment,
     })}`,
     handlers,
     "Asset materialization stream ended unexpectedly.",

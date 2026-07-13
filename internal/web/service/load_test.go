@@ -74,6 +74,20 @@ func TestSlingMaterializationArgsFullRefreshOverridesStrategy(t *testing.T) {
 	assert.Equal(t, []string{"--mode", "full-refresh"}, args)
 }
 
+func TestSlingMaterializationArgsFullRefreshRespectsRestriction(t *testing.T) {
+	t.Parallel()
+	ctx, warnings := withExecutionWarnings(context.WithValue(context.Background(), pipeline.RunConfigFullRefresh, true))
+	restricted := true
+	asset := &pipeline.Asset{Name: "analytics.events", Type: pipeline.AssetType("api"), RefreshRestricted: &restricted}
+	asset.Materialization.Strategy = pipeline.MaterializationStrategyAppend
+
+	args, err := slingMaterializationArgs(ctx, asset)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"--mode", "snapshot"}, args)
+	require.Len(t, warnings.snapshot(), 1)
+	assert.Contains(t, warnings.snapshot()[0], "Full refresh is restricted")
+}
+
 func TestValidateLoaderMaterializationAllowsIncompleteMergeDuringEditing(t *testing.T) {
 	t.Parallel()
 

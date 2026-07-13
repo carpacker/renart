@@ -328,6 +328,7 @@ export function useAssetResults() {
         assetName?: string;
         timeWindow?: { start: string; end: string } | null;
         fullRefresh?: boolean;
+        confirmedEnvironment?: string;
       },
     ) => {
       const entryId = createMaterializeHistoryId();
@@ -399,6 +400,7 @@ export function useAssetResults() {
             scope,
             timeWindow: entryTimeWindow ?? undefined,
             fullRefresh: overrides?.fullRefresh,
+            confirmedEnvironment: overrides?.confirmedEnvironment,
           },
         );
         upsertMaterializeEntry(entryId, (previous) => ({
@@ -488,7 +490,7 @@ export function useAssetResults() {
     async (
       pipelineId: string,
       refresh?: () => Promise<void> | void,
-      options?: { dryRun?: boolean },
+      options?: { dryRun?: boolean; backfill?: boolean; confirmedEnvironment?: string },
     ) => {
       const entryId = createMaterializeHistoryId();
       const startedAt = Date.now();
@@ -524,6 +526,8 @@ export function useAssetResults() {
             start: selectedExecutionTimeWindow?.start,
             end: selectedExecutionTimeWindow?.end,
             trigger: "manual",
+            backfill: options?.backfill,
+            confirmed_environment: options?.confirmedEnvironment,
           });
           const run = response.run;
           upsertMaterializeEntry(entryId, (previous) => ({

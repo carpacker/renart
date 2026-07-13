@@ -118,6 +118,31 @@ func TestFullRefreshUpsertsSingleMarker(t *testing.T) {
 	assert.EqualValues(t, 3, facts)
 }
 
+func TestReplacementIntervalResetsCoverage(t *testing.T) {
+	t.Parallel()
+	store := openTestStore(t)
+	record(t, store, 0, 2)
+	record(t, store, 2, 4)
+	require.Len(t, coverageRows(t, store), 1)
+
+	start, end := interval(6, 7)
+	require.NoError(t, store.Record(context.Background(), matlog.Materialization{
+		AssetID:         "p:a",
+		Environment:     "prod",
+		Fingerprint:     "v1:abc",
+		VarsHash:        "vh",
+		IntervalStart:   start,
+		IntervalEnd:     end,
+		ReplaceCoverage: true,
+		MaterializedAt:  ts(7),
+	}))
+
+	rows := coverageRows(t, store)
+	require.Len(t, rows, 1)
+	assert.Equal(t, ts(6), *rows[0].IntervalStart)
+	assert.Equal(t, ts(7), *rows[0].IntervalEnd)
+}
+
 func TestScheduledRunFactReplayIsIdempotent(t *testing.T) {
 	t.Parallel()
 	store := openTestStore(t)

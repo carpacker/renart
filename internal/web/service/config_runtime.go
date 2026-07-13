@@ -7,6 +7,7 @@ import (
 
 	"github.com/bruin-data/bruin/pkg/config"
 	"github.com/bruin-data/bruin/pkg/connection"
+	"github.com/bruin-data/bruin/pkg/pipeline"
 	"github.com/spf13/afero"
 )
 
@@ -73,6 +74,22 @@ func selectConfigEnvironment(cfg *config.Config, requestedEnvironment string) (*
 	}
 
 	return cfg, nil
+}
+
+func selectedEnvironmentRestrictsFullRefresh(cfg *config.Config) bool {
+	return cfg != nil && cfg.SelectedEnvironment != nil && cfg.SelectedEnvironment.Config != nil && cfg.SelectedEnvironment.Config.RefreshRestricted
+}
+
+func applySelectedEnvironmentRefreshRestriction(cfg *config.Config, assets []*pipeline.Asset) {
+	if !selectedEnvironmentRestrictsFullRefresh(cfg) {
+		return
+	}
+	restricted := true
+	for _, asset := range assets {
+		if asset != nil {
+			asset.RefreshRestricted = &restricted
+		}
+	}
 }
 
 func newConnectionManagerFromConfig(ctx context.Context, cfg *config.Config) (config.ConnectionAndDetailsGetter, error) {

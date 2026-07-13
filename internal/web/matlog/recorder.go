@@ -116,9 +116,19 @@ func (r *Recorder) HandleRunCompleted(event bus.RunCompleted) {
 			RunID:          event.RunID,
 			MaterializedAt: event.CompletedAt,
 		}
-		if asset := parsed.GetAssetByName(assetRun.AssetName); asset != nil && IntervalAware(asset) {
+		asset := parsed.GetAssetByName(assetRun.AssetName)
+		behavior := coverageBehaviorFor(asset)
+		effectiveFullRefresh := event.FullRefresh && !refreshRestricted(asset)
+		if behavior != coverageMarker {
+			if event.WinStart == nil || event.WinEnd == nil {
+				r.warn("skipping interval materialization fact without a complete run window", assetRun.AssetID, nil)
+				continue
+			}
 			materialization.IntervalStart = event.WinStart
 			materialization.IntervalEnd = event.WinEnd
+			materialization.ReplaceCoverage = behavior == coverageReplaceInterval || effectiveFullRefresh
+		} else if effectiveFullRefresh {
+			materialization.ReplaceCoverage = true
 		}
 		if err := r.store.Record(ctx, materialization); err != nil {
 			r.warn("failed to record materialization", assetRun.AssetID, err)
@@ -154,27 +164,53 @@ func (r *Recorder) warn(message, subject string, err error) {
 	}
 }
 
-// IntervalAware reports whether an asset materializes per time interval
-// (coverage tracks its intervals) as opposed to full refresh (coverage
-// tracks a single "built" marker).
+type coverageBehavior uint8
+
+const (
+	coverageMarker coverageBehavior = iota
+	coverageUnionIntervals
+	coverageReplaceInterval
+)
+
+// IntervalAware reports whether the physical result represents a bounded run
+// window. This drives staleness coverage display; it does not by itself mean
+// independent windows can safely be accumulated by scheduler catch-up.
 func IntervalAware(asset *pipeline.Asset) bool {
+	return coverageBehaviorFor(asset) != coverageMarker
+}
+
+// BackfillSafe reports whether independent windows are replay-safe and can be
+// unioned into cumulative coverage. The scheduler uses this narrower contract
+// before enabling catch-up backfills.
+func BackfillSafe(asset *pipeline.Asset) bool {
+	return coverageBehaviorFor(asset) == coverageUnionIntervals
+}
+
+func coverageBehaviorFor(asset *pipeline.Asset) coverageBehavior {
 	if asset == nil {
-		return false
+		return coverageMarker
 	}
-	if strings.EqualFold(strings.TrimSpace(string(asset.Type)), "api") && executionWindowReference.MatchString(apiAssetContent(asset)) {
-		return true
+	assetType := strings.ToLower(strings.TrimSpace(string(asset.Type)))
+	if assetType == "load" || asset.Type == pipeline.AssetTypePython {
+		return coverageMarker
 	}
-	if asset.Materialization.IncrementalKey != "" {
-		return true
+	if assetType == "api" {
+		if !executionWindowReference.MatchString(apiAssetContent(asset)) {
+			return coverageMarker
+		}
+		if asset.Materialization.Strategy == pipeline.MaterializationStrategyMerge && len(asset.ColumnNamesWithPrimaryKey()) > 0 {
+			return coverageUnionIntervals
+		}
+		return coverageReplaceInterval
 	}
-	switch asset.Materialization.Strategy {
-	case pipeline.MaterializationStrategyTimeInterval,
-		pipeline.MaterializationStrategyDeleteInsert,
-		pipeline.MaterializationStrategyAppend:
-		return true
-	default:
-		return false
+	if asset.Materialization.Strategy == pipeline.MaterializationStrategyTimeInterval {
+		return coverageUnionIntervals
 	}
+	return coverageMarker
+}
+
+func refreshRestricted(asset *pipeline.Asset) bool {
+	return asset != nil && asset.RefreshRestricted != nil && *asset.RefreshRestricted
 }
 
 func apiAssetContent(asset *pipeline.Asset) string {

@@ -23,9 +23,11 @@ type RunCompleted struct {
 	RunID        string // scheduler run ID when applicable, "" for build-mode runs
 	PipelineUUID string
 	Environment  string
-	// WinStart/WinEnd carry the executed interval; nil for full-refresh runs.
+	// WinStart/WinEnd carry the requested execution interval. FullRefresh is
+	// independent: a window-filtered full refresh still represents that window.
 	WinStart    *time.Time
 	WinEnd      *time.Time
+	FullRefresh bool
 	CompletedAt time.Time
 	Assets      []AssetRun
 	// SnapshotVersionID/SnapshotDir are set when the run executed a deployed

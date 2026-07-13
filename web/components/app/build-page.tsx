@@ -502,6 +502,7 @@ export function AppBuildPage({
   const executionBlocked = Boolean(environmentPolicy?.protected);
   const assetResults = useAssetResults();
   const selectedEnvironment = useAtomValue(selectedEnvironmentAtom);
+  const effectiveEnvironment = selectedEnvironment ?? workspace?.selected_environment ?? "";
   const selectedExecutionTimeWindow = useAtomValue(selectedExecutionTimeWindowAtom);
   const editorDraft = useAtomValue(editorDraftAtom);
   const [adhocResult, setAdhocResult] = useState<SqlQueryResponse | null>(null);
@@ -553,6 +554,11 @@ export function AppBuildPage({
     assetName: string;
     staleUpstreams: string[];
   } | null>(null);
+  const [fullRefreshPrompt, setFullRefreshPrompt] = useState<{
+    assetId: string;
+    assetName: string;
+  } | null>(null);
+  const [fullRefreshConfirmation, setFullRefreshConfirmation] = useState("");
   const firstAssetId = displayedPipelineAssets[0]?.id ?? "revenue_daily";
   const [visualSelectedAssetId, setVisualSelectedAssetId] = useState(
     selectedAssetId ?? firstAssetId,
@@ -766,12 +772,22 @@ export function AppBuildPage({
     if (!activePipeline || !workspaceAsset) {
       return;
     }
-    logHistory("materialize", `${selectedAsset.name} (full refresh)`);
+    setFullRefreshConfirmation("");
+    setFullRefreshPrompt({ assetId: workspaceAsset.id, assetName: selectedAsset.name });
+  };
+  const confirmFullRefresh = () => {
+    if (!fullRefreshPrompt) return;
+    logHistory("materialize", `${fullRefreshPrompt.assetName} (full refresh)`);
     openBottom("materialize");
-    void assetResults.runMaterializeForAsset(workspaceAsset.id, "asset", undefined, {
-      assetName: selectedAsset.name,
+    void assetResults.runMaterializeForAsset(fullRefreshPrompt.assetId, "asset", undefined, {
+      assetName: fullRefreshPrompt.assetName,
       fullRefresh: true,
+      confirmedEnvironment: environmentPolicy?.confirm_destructive
+        ? fullRefreshConfirmation.trim()
+        : undefined,
     });
+    setFullRefreshPrompt(null);
+    setFullRefreshConfirmation("");
   };
   const inspectSelectedAsset = () => {
     const workspaceAsset = selectedAsset?.workspaceAsset;
@@ -1152,6 +1168,53 @@ export function AppBuildPage({
           initialSection={pipelineSettingsSection}
         />
         <PlanDialog open={planOpen} onOpenChange={setPlanOpen} />
+        <Dialog
+          open={fullRefreshPrompt !== null}
+          onOpenChange={(open) => {
+            if (!open) {
+              setFullRefreshPrompt(null);
+              setFullRefreshConfirmation("");
+            }
+          }}
+        >
+          <DialogContent>
+            <DialogHeader>
+              <DialogTitle>Full refresh {fullRefreshPrompt?.assetName}?</DialogTitle>
+              <DialogDescription>
+                This rebuilds the table from scratch and can be expensive. Existing rows are
+                replaced with the result for the currently selected execution window.
+              </DialogDescription>
+            </DialogHeader>
+            {environmentPolicy?.confirm_destructive ? (
+              <div className="space-y-2">
+                <Label htmlFor="full-refresh-environment-confirmation">
+                  Type <span className="font-mono">{effectiveEnvironment}</span> to confirm
+                </Label>
+                <Input
+                  id="full-refresh-environment-confirmation"
+                  value={fullRefreshConfirmation}
+                  onChange={(event) => setFullRefreshConfirmation(event.target.value)}
+                  autoComplete="off"
+                />
+              </div>
+            ) : null}
+            <DialogFooter>
+              <Button variant="outline" onClick={() => setFullRefreshPrompt(null)}>
+                Cancel
+              </Button>
+              <Button
+                variant="destructive"
+                disabled={
+                  Boolean(environmentPolicy?.confirm_destructive) &&
+                  fullRefreshConfirmation.trim() !== effectiveEnvironment
+                }
+                onClick={confirmFullRefresh}
+              >
+                Run full refresh
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
         <Dialog
           open={staleBuildPrompt !== null}
           onOpenChange={(open) => {
@@ -2073,9 +2136,7 @@ function EditorWorkspace({ asset, adhoc }: { asset: BuildAsset; adhoc: boolean }
           showInspect={asset.kind !== "source"}
           onRun={materializeSelectedAsset}
           onFullRefresh={
-            asset.workspaceAsset?.type.toLowerCase() === "api"
-              ? fullRefreshSelectedAsset
-              : undefined
+            asset.workspaceAsset?.supports_full_refresh ? fullRefreshSelectedAsset : undefined
           }
           onInspect={inspectSelectedAsset}
           runDisabled={materializeLoading || executionBlocked || !asset.workspaceAsset}

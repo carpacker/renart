@@ -199,8 +199,9 @@ func newWebServer(ctx context.Context, cfg serverConfig, logger *zap.Logger) (*w
 			}
 			return server.policyLoader.For(environment)
 		},
-		ParseQueryOutput:   service.ParseQueryJSONOutput,
-		NewPipelineBuilder: server.newPipelineBuilder,
+		SelectedEnvironment: func() string { return server.currentState().SelectedEnvironment },
+		ParseQueryOutput:    service.ParseQueryJSONOutput,
+		NewPipelineBuilder:  server.newPipelineBuilder,
 	})
 
 	server.assetSvc = service.NewAssetService(service.AssetDependencies{
@@ -271,7 +272,12 @@ func newWebServer(ctx context.Context, cfg serverConfig, logger *zap.Logger) (*w
 		ResolveAssetByID: server.resolveAssetByID,
 	})
 
-	server.runSvc = service.NewRunService(service.RunDependencies{Executor: server.executor})
+	server.runSvc = service.NewRunService(service.RunDependencies{
+		Executor:            server.executor,
+		ConfigPath:          resolveConfigFilePath(absRoot),
+		PolicyFor:           server.policyLoader.For,
+		SelectedEnvironment: func() string { return server.currentState().SelectedEnvironment },
+	})
 	server.onboardingSvc = service.NewOnboardingService(absRoot, resolveConfigFilePath(absRoot), server.executor)
 	server.sourceControlSvc = service.NewSourceControlService(absRoot)
 
@@ -330,7 +336,7 @@ func newWebServer(ctx context.Context, cfg serverConfig, logger *zap.Logger) (*w
 				return false
 			}
 			for _, asset := range parsed.Assets {
-				if matlog.IntervalAware(asset) {
+				if matlog.BackfillSafe(asset) {
 					return true
 				}
 			}

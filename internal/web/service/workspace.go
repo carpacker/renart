@@ -140,10 +140,12 @@ func (s *WorkspaceService) ComputeState(ctx context.Context) (model.WorkspaceSta
 	}
 
 	fs := afero.NewOsFs()
+	environmentRefreshRestricted := false
 	if exists, _ := afero.Exists(fs, s.configPath); exists {
 		cfg, cfgErr := loadSelectedConfig(s.configPath, "")
 		if cfgErr == nil {
 			state.SelectedEnvironment = cfg.SelectedEnvironmentName
+			environmentRefreshRestricted = selectedEnvironmentRestrictsFullRefresh(cfg)
 			if cfg.SelectedEnvironment != nil && cfg.SelectedEnvironment.Connections != nil {
 				state.Connections = cfg.SelectedEnvironment.Connections.ConnectionsSummaryList()
 			}
@@ -259,7 +261,14 @@ func (s *WorkspaceService) ComputeState(ctx context.Context) (model.WorkspaceSta
 
 			declaredMatType := string(asset.Materialization.Type)
 			destinationType := materializationDestinationType(asset, parsed, state.Connections)
-			materializationProfile := materializationProfileFor(asset, destinationType)
+			capabilityAsset := asset
+			if environmentRefreshRestricted && (asset.RefreshRestricted == nil || !*asset.RefreshRestricted) {
+				capabilityAsset = new(pipeline.Asset)
+				*capabilityAsset = *asset
+				restricted := true
+				capabilityAsset.RefreshRestricted = &restricted
+			}
+			materializationProfile := materializationProfileFor(capabilityAsset, destinationType)
 			columns := asset.Columns
 			if isAPIAsset(asset) && len(columns) == 0 {
 				columns = apiInferredColumnsForDisplay(ctx, asset)
@@ -297,8 +306,8 @@ func (s *WorkspaceService) ComputeState(ctx context.Context) (model.WorkspaceSta
 				MaterializationStrategy:     string(asset.Materialization.Strategy),
 				IncrementalKey:              asset.Materialization.IncrementalKey,
 				MaterializationCapabilities: editableMaterializationCapabilities(materializationProfile),
-				SupportsFullRefresh:         materializationProfile.SupportsFullRefresh,
-				RefreshRestricted:           asset.RefreshRestricted != nil && *asset.RefreshRestricted,
+				SupportsFullRefresh:         supportsFullRefreshForAsset(capabilityAsset, materializationProfile),
+				RefreshRestricted:           capabilityAsset.RefreshRestricted != nil && *capabilityAsset.RefreshRestricted,
 				Owner:                       asset.Owner,
 				Tags:                        asset.Tags,
 				IsMaterialized:              false,

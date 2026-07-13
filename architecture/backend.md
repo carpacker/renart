@@ -157,7 +157,10 @@ target (or omitted for the pipeline default), while `source_connection` and
 the asset's canonical name; file and object-storage targets instead require
 `parameters.destination_object`. The asset's `materialization` is the only load
 strategy source. Renart invokes Sling from those semantic fields directly; no
-replication sidecar or parallel destination/mode parameter set exists.
+replication sidecar or parallel destination/mode parameter set exists. A
+run-scoped full refresh temporarily selects Sling's replace mode without
+rewriting the asset definition; `refresh_restricted` assets keep their
+configured strategy and surface a warning instead.
 
 Python assets run through Renart's in-process operator
 (`service/python_operator.go`). Each task receives an embedded, version-locked
@@ -187,6 +190,15 @@ not duplicated as frontend asset-family heuristics. Dedicated runtimes without
 the generic SQL/Python/loader contract expose no generic materialization editor;
 hand-authored advanced SQL strategies remain visible as custom values instead of
 being mislabeled as replace.
+
+Full refresh is a run-scoped execution option shared by SQL, Python, Load, and
+API table assets. Direct SQL materializers are constructed with that option for
+the individual run; Python and loader-backed assets apply the equivalent
+replace behavior at their write boundary. DDL/query-only modes and
+asset-level or selected-environment full-refresh restrictions do not advertise
+the action in the workspace DTO. The direct runner applies Bruin's environment
+restriction to every parsed asset before dispatch, and backend policy checks
+remain authoritative even when a client supplies the request directly.
 
 Pipeline type checks also validate materialization configuration: supported
 strategies, required merge primary keys, active incremental/update keys, and

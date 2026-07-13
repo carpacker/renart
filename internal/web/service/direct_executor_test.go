@@ -564,6 +564,64 @@ func TestDirectQueryConnectionMatchesExpectedEnvelope(t *testing.T) {
 	assert.Equal(t, "select 1 as id, 'alice' as name", payload["query"])
 }
 
+func TestDirectRunAssetFullRefreshReplacesAppendTable(t *testing.T) {
+	workspaceRoot, assetPath := createSuccessfulDuckDBWorkspace(t)
+	configPath := filepath.Join(workspaceRoot, ".bruin.yml")
+	cfg, err := loadSelectedConfig(configPath, "")
+	require.NoError(t, err)
+	manager, err := newConnectionManagerFromConfig(context.Background(), cfg)
+	require.NoError(t, err)
+	if connection, ok := manager.GetConnection("duckdb-default").(interface{ Close() }); ok {
+		t.Cleanup(connection.Close)
+	}
+
+	executor := newCompatDirectExecutor(workspaceRoot, "")
+	executor.newConnectionManager = func(context.Context, string) (config.ConnectionAndDetailsGetter, error) {
+		return manager, nil
+	}
+
+	_, err = executor.RunAsset(context.Background(), RunAssetRequest{AssetPath: assetPath}, nil)
+	require.NoError(t, err)
+
+	require.NoError(t, os.WriteFile(assetPath, []byte(strings.TrimSpace(`
+/* @bruin
+name: analytics.customers
+type: duckdb.sql
+materialization:
+  type: table
+  strategy: append
+@bruin */
+
+select 1 as customer_id, 'seeded' as source_label
+`)+"\n"), 0o644))
+	_, err = executor.RunAsset(context.Background(), RunAssetRequest{AssetPath: assetPath}, nil)
+	require.NoError(t, err)
+	assert.Equal(t, float64(2), directDuckDBCount(t, executor))
+
+	_, err = executor.RunAsset(context.Background(), RunAssetRequest{AssetPath: assetPath, FullRefresh: true}, nil)
+	require.NoError(t, err)
+	assert.Equal(t, float64(1), directDuckDBCount(t, executor))
+}
+
+func directDuckDBCount(t *testing.T, executor *HybridBruinExecutor) float64 {
+	t.Helper()
+	output, err := executor.QueryConnection(context.Background(), QueryConnectionRequest{
+		ConnectionName: "duckdb-default",
+		Query:          "select count(*) as row_count from analytics.customers",
+		Output:         "json",
+	})
+	require.NoError(t, err)
+	var payload struct {
+		Rows [][]any `json:"rows"`
+	}
+	require.NoError(t, json.Unmarshal(output, &payload))
+	require.Len(t, payload.Rows, 1)
+	require.Len(t, payload.Rows[0], 1)
+	count, ok := payload.Rows[0][0].(float64)
+	require.True(t, ok, "unexpected count value: %#v", payload.Rows[0][0])
+	return count
+}
+
 func TestDirectRunAssetFailureMatchesCLIErrorSemantics(t *testing.T) {
 	t.Parallel()
 

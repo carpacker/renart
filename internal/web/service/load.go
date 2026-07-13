@@ -328,11 +328,14 @@ func loadRunModeArgs(ctx context.Context) []string {
 // loader flags. This is shared by native Load and HTTP API assets so the
 // workbench never offers a strategy that silently executes as full refresh.
 func slingMaterializationArgs(ctx context.Context, asset *pipeline.Asset) ([]string, error) {
-	if args := loadRunModeArgs(ctx); len(args) > 0 {
-		return args, nil
-	}
 	if asset == nil {
 		return nil, errors.New("asset is required to resolve materialization")
+	}
+	if args := loadRunModeArgs(ctx); len(args) > 0 {
+		if asset.RefreshRestricted == nil || !*asset.RefreshRestricted {
+			return args, nil
+		}
+		addExecutionWarning(ctx, fmt.Sprintf("Full refresh is restricted for %s; running its configured materialization strategy instead.", asset.Name))
 	}
 	strategy := strings.ToLower(strings.TrimSpace(string(asset.Materialization.Strategy)))
 	switch strategy {

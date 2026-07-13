@@ -93,7 +93,9 @@ export async function materializePipelineStream(
     environment?: string;
     dryRun?: boolean;
     fullRefresh?: boolean;
+    backfill?: boolean;
     timeWindow?: { start: string; end: string };
+    confirmedEnvironment?: string;
   },
 ) {
   return streamMaterialization(
@@ -101,8 +103,10 @@ export async function materializePipelineStream(
       environment: options?.environment,
       dry_run: options?.dryRun ? "true" : undefined,
       full_refresh: options?.fullRefresh ? "true" : undefined,
+      backfill: options?.backfill ? "true" : undefined,
       start_date: options?.timeWindow?.start,
       end_date: options?.timeWindow?.end,
+      confirmed_environment: options?.confirmedEnvironment,
     })}`,
     handlers,
     "Pipeline materialization stream ended unexpectedly.",

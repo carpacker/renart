@@ -57,6 +57,10 @@ func Run() *cli.Command {
 				Name:  "full-refresh",
 				Usage: "rebuild from scratch instead of running incrementally",
 			},
+			&cli.StringFlag{
+				Name:  "confirm-environment",
+				Usage: "type the target environment name when its policy requires confirmation for a full refresh or backfill",
+			},
 			&cli.BoolFlag{
 				Name:    "local",
 				Usage:   "run in-process even when a renart server is running (DuckDB conflicts possible)",
@@ -161,9 +165,18 @@ func runAction(ctx context.Context, c *cli.Command) error {
 			query.Set(key, value)
 		}
 	}
-	setNonEmpty("environment", c.String("env"))
+	runEnvironment := strings.TrimSpace(c.String("env"))
+	if runEnvironment == "" {
+		runEnvironment = strings.TrimSpace(state.SelectedEnvironment)
+	}
+	setNonEmpty("environment", runEnvironment)
 	setNonEmpty("start_date", c.String("start-date"))
 	setNonEmpty("end_date", c.String("end-date"))
+	setNonEmpty("confirmed_environment", c.String("confirm-environment"))
+	backfill := strings.TrimSpace(c.String("start-date")) != "" || strings.TrimSpace(c.String("end-date")) != ""
+	if backfill {
+		query.Set("backfill", "true")
+	}
 	if c.Bool("full-refresh") {
 		query.Set("full_refresh", "true")
 	}
@@ -200,13 +213,13 @@ func runAction(ctx context.Context, c *cli.Command) error {
 		var result service.MaterializeResult
 		if target.kind == "pipeline" {
 			result = server.executionSvc.MaterializePipelineStream(
-				ctx, target.pipeline.ID, c.String("env"), false, c.Bool("full-refresh"),
-				c.String("start-date"), c.String("end-date"), onChunk,
+				ctx, target.pipeline.ID, runEnvironment, false, c.Bool("full-refresh"), backfill,
+				c.String("start-date"), c.String("end-date"), c.String("confirm-environment"), onChunk,
 			)
 		} else {
 			result = server.executionSvc.MaterializeAssetStream(
-				ctx, target.asset.ID, c.String("env"), scope,
-				c.String("start-date"), c.String("end-date"), c.Bool("full-refresh"), onChunk,
+				ctx, target.asset.ID, runEnvironment, scope,
+				c.String("start-date"), c.String("end-date"), c.Bool("full-refresh"), backfill, c.String("confirm-environment"), onChunk,
 			)
 		}
 		status, message, output = result.Status, result.Error, result.Output

@@ -37,6 +37,7 @@ func (e *HybridBruinExecutor) RunAsset(ctx context.Context, req RunAssetRequest,
 	if _, err := selectConfigEnvironment(pp.Config, req.Environment); err != nil {
 		return nil, fmt.Errorf("failed to use the environment '%s': %w", req.Environment, err)
 	}
+	applySelectedEnvironmentRefreshRestriction(pp.Config, pp.Pipeline.Assets)
 	manager, err := e.directConnectionManager(ctx, pp.Config)
 	if err != nil {
 		return nil, err
@@ -65,7 +66,7 @@ func (e *HybridBruinExecutor) RunAsset(ctx context.Context, req RunAssetRequest,
 		return e.runLoadAsset(runCtx, pp.Pipeline, pp.Asset, manager, onChunk)
 	}
 
-	mainExecutors, err := buildDirectMainExecutors(manager, renderer, parser, pp.Pipeline, e.runRegistry, e.duckDBCoordinator, e.workspaceRoot)
+	mainExecutors, err := buildDirectMainExecutors(manager, renderer, parser, pp.Pipeline, e.runRegistry, e.duckDBCoordinator, e.workspaceRoot, req.FullRefresh)
 	if err != nil {
 		return nil, err
 	}
@@ -194,6 +195,7 @@ func (e *HybridBruinExecutor) RunPipeline(ctx context.Context, req RunPipelineRe
 	if err != nil {
 		return nil, err
 	}
+	applySelectedEnvironmentRefreshRestriction(cfg, foundPipeline.Assets)
 	manager, err := e.directConnectionManager(ctx, cfg)
 	if err != nil {
 		return nil, err
@@ -221,7 +223,7 @@ func (e *HybridBruinExecutor) RunPipeline(ctx context.Context, req RunPipelineRe
 	if err != nil {
 		return nil, err
 	}
-	mainExecutors, err := buildDirectMainExecutors(manager, renderer, parser, foundPipeline, e.runRegistry, e.duckDBCoordinator, e.workspaceRoot)
+	mainExecutors, err := buildDirectMainExecutors(manager, renderer, parser, foundPipeline, e.runRegistry, e.duckDBCoordinator, e.workspaceRoot, req.FullRefresh)
 	if err != nil {
 		return nil, err
 	}

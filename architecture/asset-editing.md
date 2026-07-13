@@ -130,6 +130,11 @@ round-trips unknown fields).
   refreshes the asset. Asset-type selectors in both guided and YAML views group
   SQL asset kinds separately from non-SQL kinds while preserving unknown current
   values for repair.
+- **Run-scoped full refresh:** supported table assets expose a Full refresh
+  action without mutating their saved strategy. The destructive dialog names
+  the selected environment and current execution window; environments with
+  `confirm_destructive` require typing the exact environment name. The same
+  confirmation is enforced again in the backend for HTTP and CLI callers.
 - **Provenance classification client-side** (`lib/asset-provenance.ts`)
   mirrors the flat-key schema for display (source chips: "inferred from SQL" /
   "manual").

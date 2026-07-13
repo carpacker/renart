@@ -27,7 +27,7 @@ func TestMaterializationProfilesMatchExecutionPaths(t *testing.T) {
 			materializationModeTimeInterval,
 		}, materializationProfileModes(profile))
 		assert.NotContains(t, materializationCapabilityModes(editableMaterializationCapabilities(profile)), materializationModeTimeInterval)
-		assert.False(t, profile.SupportsFullRefresh, "SQL full refresh is not wired into materializer construction yet")
+		assert.True(t, profile.SupportsFullRefresh)
 	})
 
 	t.Run("warehouse differences are preserved", func(t *testing.T) {
@@ -144,6 +144,22 @@ func TestValidateMaterializationCapability(t *testing.T) {
 		},
 	}
 	assert.ErrorContains(t, validateMaterializationCapability(viewWithTableStrategy, ""), "does not support strategy")
+}
+
+func TestSupportsFullRefreshForCurrentMaterialization(t *testing.T) {
+	t.Parallel()
+	view := &pipeline.Asset{Type: pipeline.AssetTypeDuckDBQuery, Materialization: pipeline.Materialization{Type: pipeline.MaterializationTypeView}}
+	assert.False(t, supportsFullRefreshForAsset(view, materializationProfileFor(view, "")))
+
+	table := &pipeline.Asset{Type: pipeline.AssetTypeDuckDBQuery, Materialization: pipeline.Materialization{Type: pipeline.MaterializationTypeTable}}
+	assert.True(t, supportsFullRefreshForAsset(table, materializationProfileFor(table, "")))
+
+	loaderDefault := &pipeline.Asset{Type: pipeline.AssetType("api")}
+	assert.True(t, supportsFullRefreshForAsset(loaderDefault, materializationProfileFor(loaderDefault, "duckdb")))
+
+	restricted := true
+	loaderDefault.RefreshRestricted = &restricted
+	assert.False(t, supportsFullRefreshForAsset(loaderDefault, materializationProfileFor(loaderDefault, "duckdb")))
 }
 
 func TestMaterializationDestinationType(t *testing.T) {

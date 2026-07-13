@@ -62,11 +62,24 @@ Python: H(fp_version ‖ file_bytes ‖ lockfile_hash ‖ shared_dir_hash ‖ co
 Every run writes an immutable fact row (asset, environment, fingerprint,
 vars_hash, optional interval, run_id, timestamp); a compacted coverage table
 merges overlapping/adjacent intervals into one row per contiguous range, so
-freshness lookups are O(gaps). Full-refresh assets hold a single "built"
-marker row (`interval_start = NULL`). `IntervalAware(asset)` (time_interval,
-delete+insert, append, or any asset with an `incremental_key`) decides whether
-runs stamp their window. A daily River job prunes raw facts (default 90 days);
-coverage is the durable summary.
+freshness lookups are O(gaps). Assets without a real execution-window contract
+hold a single "built" marker row (`interval_start = NULL`). SQL
+`time_interval` and API requests that reference Renart's start/end variables
+stamp their run window. Replay-safe API merge (with a primary key) and SQL
+`time_interval` union independent windows; other windowed API writes replace
+their prior coverage with the latest window so replace/append modes cannot
+claim data they may no longer contain. Load's Sling max-key state is not a
+Renart run window, and dormant `incremental_key` metadata never makes an asset
+interval-aware. `BackfillSafe` is the narrower union-safe contract used by the
+scheduler before enabling catch-up. A daily River job prunes raw facts (default
+90 days); coverage is the durable summary.
+
+A full refresh remains paired with its requested run window. For an
+interval-aware asset it replaces prior interval coverage with that window; it
+does not create a universal built marker for a query that may be window-filtered.
+For a non-windowed table it replaces the marker. Asset-level and selected-
+environment refresh restrictions run configured strategies and therefore keep
+normal union/marker behavior.
 
 Notes: `run_id` is empty for build-mode runs (no run record); scheduled runs
 carry theirs. A partial unique index keeps one fact per
@@ -218,14 +231,16 @@ environments:
     confirm_destructive: true  # full refresh / backfill / drop need typed confirm
 ```
 
-Enforced by `policy.Check` at the single execution-service dispatch chokepoint
-that every path (UI build, CLI, scheduler) goes through; scheduler runs pass
-trivially (snapshot-based, non-interactive). UI-side disabling is a hint, not
-enforcement. `confirm_destructive` is enforced but not yet exercised — renart
-has no full-refresh/backfill execution path yet (see
-`plans/materialization-strategies.md`). Locally these are guardrails, not a
-boundary (the user owns the credentials); the cloud permission model enforces
-the same flags harder, under the same names.
+Enforced by `policy.Check` at execution dispatch; the legacy `/api/run` path and
+manual scheduler trigger apply the same check instead of bypassing it. Scheduled
+snapshot runs pass as non-interactive. UI-side disabling is a hint, not
+enforcement. Full refresh has a destructive confirmation dialog and sends the
+typed environment through to the server; the CLI uses
+`--confirm-environment`. Explicit backfill requests use the same contract, while
+an ordinary selected execution window is not automatically mislabeled as
+destructive. Locally these are guardrails, not a boundary (the user owns the
+credentials); the cloud permission model enforces the same flags harder, under
+the same names.
 
 ## 8. Deferred and known-accepted
 

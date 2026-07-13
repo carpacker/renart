@@ -69,7 +69,8 @@ type ExecutionDependencies struct {
 	// PolicyFor returns the execution policy for an environment; nil means
 	// unrestricted. Enforced here — the run-dispatch chokepoint every
 	// execution path goes through — not in UI handlers.
-	PolicyFor func(environment string) policy.EnvironmentPolicy
+	PolicyFor           func(environment string) policy.EnvironmentPolicy
+	SelectedEnvironment func() string
 }
 
 type PipelineView struct {
@@ -131,6 +132,7 @@ func (s *ExecutionService) emitRunCompletedForSpec(spec PipelineRunSpec, pipelin
 		RunID:             spec.RunID,
 		PipelineUUID:      pipelineUUID,
 		Environment:       spec.Environment,
+		FullRefresh:       spec.FullRefresh,
 		CompletedAt:       completedAt,
 		Assets:            assets,
 		SnapshotVersionID: spec.SnapshotVersionID,
@@ -152,6 +154,28 @@ func (s *ExecutionService) checkRunPolicy(request policy.RunRequest) error {
 		return nil
 	}
 	return policy.Check(s.deps.PolicyFor(request.Environment), request)
+}
+
+func (s *ExecutionService) effectiveEnvironment(environment string) string {
+	if environment = strings.TrimSpace(environment); environment != "" {
+		return environment
+	}
+	if s.deps.SelectedEnvironment != nil {
+		return strings.TrimSpace(s.deps.SelectedEnvironment())
+	}
+	return ""
+}
+
+func (s *ExecutionService) effectiveFullRefresh(ctx context.Context, environment string, requested bool) bool {
+	if !requested || strings.TrimSpace(s.deps.ConfigPath) == "" {
+		return requested
+	}
+	cfg, err := loadSelectedConfig(s.deps.ConfigPath, environment)
+	if err != nil || !selectedEnvironmentRestrictsFullRefresh(cfg) {
+		return requested
+	}
+	addExecutionWarning(ctx, fmt.Sprintf("Full refresh is restricted for environment %s; running configured materialization strategies instead.", environment))
+	return false
 }
 
 // findPipelineViewForAsset locates the workspace pipeline containing the
@@ -427,9 +451,16 @@ func extractInspectRawOutput(output []byte) string {
 	return trimmed
 }
 
-func (s *ExecutionService) MaterializeAssetStream(ctx context.Context, assetID, environment, scope, startDate, endDate string, fullRefresh bool, onChunk func([]byte)) MaterializeResult {
+func (s *ExecutionService) MaterializeAssetStream(ctx context.Context, assetID, environment, scope, startDate, endDate string, fullRefresh, backfill bool, confirmedEnvironment string, onChunk func([]byte)) MaterializeResult {
 	ctx, warnings := withExecutionWarnings(ctx)
-	if err := s.checkRunPolicy(policy.RunRequest{Environment: environment, Interactive: true}); err != nil {
+	environment = s.effectiveEnvironment(environment)
+	fullRefresh = s.effectiveFullRefresh(ctx, environment, fullRefresh)
+	if err := s.checkRunPolicy(policy.RunRequest{
+		Environment:          environment,
+		Interactive:          true,
+		Destructive:          fullRefresh || backfill,
+		ConfirmedEnvironment: strings.TrimSpace(confirmedEnvironment),
+	}); err != nil {
 		return MaterializeResult{Status: "error", Error: err.Error(), ExitCode: 1}
 	}
 	relAssetPath, err := DecodeID(assetID)
@@ -496,7 +527,7 @@ func (s *ExecutionService) MaterializeAssetStream(ctx context.Context, assetID, 
 			}
 		}
 		if pipelineFound {
-			s.emitRunCompleted("", pipelineView.UUID, environment, timeWindow, now, runAssets)
+			s.emitRunCompletedForSpec(PipelineRunSpec{Environment: environment, FullRefresh: fullRefresh}, pipelineView.UUID, timeWindow, now, runAssets)
 		}
 		changedAssetIDs = s.deps.FindInspectIDs(assetIDsToRefresh...)
 	} else {
@@ -520,7 +551,7 @@ func (s *ExecutionService) MaterializeAssetStream(ctx context.Context, assetID, 
 				})
 			}
 			if len(runAssets) > 0 {
-				s.emitRunCompleted("", pipelineView.UUID, environment, timeWindow, now, runAssets)
+				s.emitRunCompletedForSpec(PipelineRunSpec{Environment: environment, FullRefresh: fullRefresh}, pipelineView.UUID, timeWindow, now, runAssets)
 			}
 		}
 	}
@@ -844,12 +875,21 @@ func (s *ExecutionService) GetPipelineMaterialization(ctx context.Context, pipel
 	return PipelineMaterializationResponse{PipelineID: pipelineID, Assets: assets}, nil
 }
 
-func (s *ExecutionService) MaterializePipelineStream(ctx context.Context, pipelineID, environment string, dryRun, fullRefresh bool, startDate, endDate string, onChunk func([]byte)) MaterializeResult {
-	return s.MaterializePipelineStreamWithAssetEvents(ctx, pipelineID, environment, dryRun, fullRefresh, startDate, endDate, onChunk, nil)
+func (s *ExecutionService) MaterializePipelineStream(ctx context.Context, pipelineID, environment string, dryRun, fullRefresh, backfill bool, startDate, endDate, confirmedEnvironment string, onChunk func([]byte)) MaterializeResult {
+	return s.MaterializePipelineStreamWithAssetEvents(ctx, pipelineID, environment, dryRun, fullRefresh, backfill, startDate, endDate, confirmedEnvironment, onChunk, nil)
 }
 
-func (s *ExecutionService) MaterializePipelineStreamWithAssetEvents(ctx context.Context, pipelineID, environment string, dryRun, fullRefresh bool, startDate, endDate string, onChunk func([]byte), onAssetEvent func(ExecutionAssetEvent)) MaterializeResult {
-	return s.MaterializePipelineStreamForRun(ctx, "", pipelineID, environment, dryRun, fullRefresh, startDate, endDate, onChunk, onAssetEvent)
+func (s *ExecutionService) MaterializePipelineStreamWithAssetEvents(ctx context.Context, pipelineID, environment string, dryRun, fullRefresh, backfill bool, startDate, endDate, confirmedEnvironment string, onChunk func([]byte), onAssetEvent func(ExecutionAssetEvent)) MaterializeResult {
+	return s.MaterializePipelineRun(ctx, PipelineRunSpec{
+		PipelineID:           pipelineID,
+		Environment:          environment,
+		DryRun:               dryRun,
+		FullRefresh:          fullRefresh,
+		Backfill:             backfill,
+		StartDate:            startDate,
+		EndDate:              endDate,
+		ConfirmedEnvironment: confirmedEnvironment,
+	}, onChunk, onAssetEvent)
 }
 
 // MaterializePipelineStreamForRun is the variant used by the scheduler: the
@@ -871,15 +911,17 @@ func (s *ExecutionService) MaterializePipelineStreamForRun(ctx context.Context, 
 // the executor runs the materialized snapshot instead of the working tree;
 // PipelineID still identifies the pipeline for events and asset listing.
 type PipelineRunSpec struct {
-	RunID             string
-	PipelineID        string
-	Environment       string
-	DryRun            bool
-	FullRefresh       bool
-	StartDate         string
-	EndDate           string
-	SnapshotDir       string
-	SnapshotVersionID string
+	RunID                string
+	PipelineID           string
+	Environment          string
+	DryRun               bool
+	FullRefresh          bool
+	Backfill             bool
+	StartDate            string
+	EndDate              string
+	ConfirmedEnvironment string
+	SnapshotDir          string
+	SnapshotVersionID    string
 	// ConfigPath points the executor at .bruin.yml when the target directory
 	// is outside the workspace git repository (snapshot runs).
 	ConfigPath string
@@ -887,12 +929,16 @@ type PipelineRunSpec struct {
 
 func (s *ExecutionService) MaterializePipelineRun(ctx context.Context, spec PipelineRunSpec, onChunk func([]byte), onAssetEvent func(ExecutionAssetEvent)) MaterializeResult {
 	ctx, warnings := withExecutionWarnings(ctx)
+	spec.Environment = s.effectiveEnvironment(spec.Environment)
+	spec.FullRefresh = s.effectiveFullRefresh(ctx, spec.Environment, spec.FullRefresh)
 	// Build-mode pipeline runs have no scheduler run ID and execute the
 	// working tree; scheduler-dispatched runs carry both.
 	if err := s.checkRunPolicy(policy.RunRequest{
-		Environment:   spec.Environment,
-		Interactive:   spec.RunID == "" && spec.SnapshotDir == "",
-		SnapshotBased: spec.SnapshotDir != "",
+		Environment:          spec.Environment,
+		Interactive:          spec.RunID == "" && spec.SnapshotDir == "",
+		SnapshotBased:        spec.SnapshotDir != "",
+		Destructive:          !spec.DryRun && (spec.FullRefresh || spec.Backfill),
+		ConfirmedEnvironment: strings.TrimSpace(spec.ConfirmedEnvironment),
 	}); err != nil {
 		return MaterializeResult{Status: "error", Error: err.Error(), ExitCode: 1}
 	}

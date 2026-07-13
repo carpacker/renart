@@ -33,11 +33,17 @@ type Materialization struct {
 	// upstream-inherited change.
 	OwnContent string
 	VarsHash   string
-	// IntervalStart/IntervalEnd are nil for full-refresh assets.
-	IntervalStart  *time.Time
-	IntervalEnd    *time.Time
-	RunID          string
-	MaterializedAt time.Time
+	// IntervalStart/IntervalEnd are nil when the result has no physical
+	// execution-window contract.
+	IntervalStart *time.Time
+	IntervalEnd   *time.Time
+	// ReplaceCoverage makes this outcome the complete known coverage for its
+	// asset/environment/fingerprint/vars variant instead of unioning it with
+	// prior rows. Window-filtered full refreshes and non-replay-safe windowed
+	// loaders use this rather than claiming universal or cumulative coverage.
+	ReplaceCoverage bool
+	RunID           string
+	MaterializedAt  time.Time
 }
 
 // CoverageRow is one merged interval (or full-refresh marker) from the
@@ -128,8 +134,18 @@ func (s *Store) Record(ctx context.Context, m Materialization) error {
 		return tx.Commit()
 	}
 
+	if m.ReplaceCoverage {
+		if _, err := tx.ExecContext(ctx, `
+			DELETE FROM renart_coverage
+			WHERE asset_id = ? AND environment = ? AND fingerprint = ? AND vars_hash = ?`,
+			m.AssetID, m.Environment, m.Fingerprint, m.VarsHash); err != nil {
+			return err
+		}
+	}
+
 	if m.IntervalStart == nil {
-		// Full refresh: upsert the single '' marker row, bumping the timestamp.
+		// Non-windowed result: upsert the single '' marker row, bumping the
+		// timestamp.
 		_, err = tx.ExecContext(ctx, `
 			INSERT INTO renart_coverage
 				(asset_id, environment, fingerprint, own_content, vars_hash, interval_start, interval_end, materialized_at)

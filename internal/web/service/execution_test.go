@@ -15,6 +15,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"renart/internal/web/bus"
+	"renart/internal/web/policy"
 )
 
 func newExecutionTestResolver(workspaceRoot string) *WorkspaceResolver {
@@ -132,7 +133,7 @@ func TestExecutionServiceMaterializeAssetStreamPreservesSuccessOutput(t *testing
 		Events: events,
 	})
 
-	result := svc.MaterializeAssetStream(context.Background(), assetID, "", "", "", "", false, func(chunk []byte) {
+	result := svc.MaterializeAssetStream(context.Background(), assetID, "", "", "", "", false, false, "", func(chunk []byte) {
 		streamed = append(streamed, string(chunk))
 	})
 
@@ -150,6 +151,100 @@ func TestExecutionServiceMaterializeAssetStreamPreservesSuccessOutput(t *testing
 	require.Len(t, completed.Assets, 1)
 	assert.Equal(t, "analytics.orders", completed.Assets[0].AssetName)
 	assert.Equal(t, "succeeded", completed.Assets[0].Status)
+}
+
+func TestExecutionServiceEnforcesDestructiveConfirmationAndEmitsFullRefresh(t *testing.T) {
+	t.Parallel()
+
+	assetID := EncodeID("pipelines/orders/assets/orders.sql")
+	executor := &stubExecutionExecutor{}
+	events := bus.New()
+	var completed bus.RunCompleted
+	events.OnRunCompleted(func(event bus.RunCompleted) { completed = event })
+	svc := NewExecutionService(ExecutionDependencies{
+		Executor:            executor,
+		SelectedEnvironment: func() string { return "prod" },
+		PolicyFor: func(environment string) policy.EnvironmentPolicy {
+			assert.Equal(t, "prod", environment)
+			return policy.EnvironmentPolicy{ConfirmDestructive: true}
+		},
+		ResolveAssetByID: func(context.Context, string) (string, *pipeline.Pipeline, *pipeline.Asset, error) {
+			return "pipelines/orders/assets/orders.sql", &pipeline.Pipeline{}, &pipeline.Asset{Connection: "warehouse"}, nil
+		},
+		ResolveAssetNameByID: func(string) string { return "analytics.orders" },
+		FindInspectIDs:       func(...string) []string { return []string{assetID} },
+		CurrentPipelines: func() []PipelineView {
+			return []PipelineView{{
+				ID:     EncodeID("pipelines/orders/pipeline.yml"),
+				UUID:   "orders-uuid",
+				Assets: []AssetView{{ID: assetID, Name: "analytics.orders"}},
+			}}
+		},
+		Events: events,
+	})
+
+	rejected := svc.MaterializeAssetStream(context.Background(), assetID, "", "", "", "", true, false, "wrong", nil)
+	assert.Equal(t, "error", rejected.Status)
+	assert.Contains(t, rejected.Error, "requires typing")
+	assert.Empty(t, executor.runAssetRequests)
+
+	accepted := svc.MaterializeAssetStream(context.Background(), assetID, "", "", "", "", true, false, "prod", nil)
+	assert.Equal(t, "ok", accepted.Status)
+	require.Len(t, executor.runAssetRequests, 1)
+	assert.Equal(t, "prod", executor.runAssetRequests[0].Environment)
+	assert.True(t, executor.runAssetRequests[0].FullRefresh)
+	assert.True(t, completed.FullRefresh)
+}
+
+func TestExecutionServiceHonorsEnvironmentFullRefreshRestriction(t *testing.T) {
+	t.Parallel()
+
+	workspaceRoot := t.TempDir()
+	configPath := filepath.Join(workspaceRoot, ".bruin.yml")
+	require.NoError(t, os.WriteFile(configPath, []byte(strings.TrimSpace(`
+default_environment: prod
+environments:
+  prod:
+    config:
+      full_refresh_restricted: true
+    connections: {}
+`)+"\n"), 0o644))
+
+	assetID := EncodeID("pipelines/orders/assets/orders.sql")
+	executor := &stubExecutionExecutor{}
+	events := bus.New()
+	var completed bus.RunCompleted
+	events.OnRunCompleted(func(event bus.RunCompleted) { completed = event })
+	svc := NewExecutionService(ExecutionDependencies{
+		ConfigPath:          configPath,
+		Executor:            executor,
+		SelectedEnvironment: func() string { return "prod" },
+		PolicyFor: func(string) policy.EnvironmentPolicy {
+			return policy.EnvironmentPolicy{ConfirmDestructive: true}
+		},
+		ResolveAssetByID: func(context.Context, string) (string, *pipeline.Pipeline, *pipeline.Asset, error) {
+			return "pipelines/orders/assets/orders.sql", &pipeline.Pipeline{}, &pipeline.Asset{Connection: "warehouse"}, nil
+		},
+		ResolveAssetNameByID: func(string) string { return "analytics.orders" },
+		FindInspectIDs:       func(...string) []string { return []string{assetID} },
+		CurrentPipelines: func() []PipelineView {
+			return []PipelineView{{
+				ID:     EncodeID("pipelines/orders/pipeline.yml"),
+				UUID:   "orders-uuid",
+				Assets: []AssetView{{ID: assetID, Name: "analytics.orders"}},
+			}}
+		},
+		Events: events,
+	})
+
+	result := svc.MaterializeAssetStream(context.Background(), assetID, "", "", "", "", true, false, "", nil)
+
+	assert.Equal(t, "ok", result.Status)
+	require.Len(t, executor.runAssetRequests, 1)
+	assert.False(t, executor.runAssetRequests[0].FullRefresh)
+	assert.False(t, completed.FullRefresh)
+	require.Len(t, result.Warnings, 1)
+	assert.Contains(t, result.Warnings[0], "restricted for environment prod")
 }
 
 func TestExecutionServiceMaterializeAssetStreamPreservesFailureOutput(t *testing.T) {
@@ -182,7 +277,7 @@ func TestExecutionServiceMaterializeAssetStreamPreservesFailureOutput(t *testing
 		Events: events,
 	})
 
-	result := svc.MaterializeAssetStream(context.Background(), assetID, "", "", "", "", false, nil)
+	result := svc.MaterializeAssetStream(context.Background(), assetID, "", "", "", "", false, false, "", nil)
 
 	require.Len(t, executor.runAssetRequests, 1)
 	assert.Equal(t, "error", result.Status)
@@ -223,7 +318,7 @@ func TestExecutionServiceMaterializePipelineStreamPreservesSuccessOutput(t *test
 		Events: events,
 	})
 
-	result := svc.MaterializePipelineStream(context.Background(), pipelineID, "", false, false, "", "", func(chunk []byte) {
+	result := svc.MaterializePipelineStream(context.Background(), pipelineID, "", false, false, false, "", "", "", func(chunk []byte) {
 		streamed = append(streamed, string(chunk))
 	})
 
@@ -277,7 +372,7 @@ func TestExecutionServiceMaterializePipelineStreamPreservesFailureOutput(t *test
 		Events: events,
 	})
 
-	result := svc.MaterializePipelineStream(context.Background(), pipelineID, "", false, false, "", "", nil)
+	result := svc.MaterializePipelineStream(context.Background(), pipelineID, "", false, false, false, "", "", "", nil)
 
 	require.Len(t, executor.runPipelineReqs, 1)
 	assert.Equal(t, "error", result.Status)
@@ -318,7 +413,7 @@ func TestExecutionServiceMaterializePipelineStreamDryRunDoesNotEmitCompletion(t 
 		Events: events,
 	})
 
-	result := svc.MaterializePipelineStream(context.Background(), pipelineID, "", true, false, "", "", nil)
+	result := svc.MaterializePipelineStream(context.Background(), pipelineID, "", true, false, false, "", "", "", nil)
 
 	require.Len(t, executor.runPipelineReqs, 1)
 	assert.True(t, executor.runPipelineReqs[0].DryRun)

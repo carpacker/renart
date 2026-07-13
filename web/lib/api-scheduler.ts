@@ -31,7 +31,14 @@ export async function updatePipelineSchedule(
 
 export async function triggerPipelineRun(
   pipelineId: string,
-  input: { environment?: string; start?: string; end?: string; trigger?: string } = {},
+  input: {
+    environment?: string;
+    start?: string;
+    end?: string;
+    trigger?: string;
+    backfill?: boolean;
+    confirmed_environment?: string;
+  } = {},
 ) {
   return fetchJSONWithBody<TriggerPipelineResponse>(
     `/api/pipelines/${pipelineId}/trigger`,

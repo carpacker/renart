@@ -9,6 +9,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"renart/internal/web/policy"
 )
 
 type stubRunRunner struct {
@@ -148,6 +150,28 @@ func TestRunServiceExecute_PropagatesRunnerFailure(t *testing.T) {
 	assert.Equal(t, "assets/foo.sql", result.Operation.AssetPath)
 	assert.Equal(t, "bad output", result.Output)
 	assert.Equal(t, "boom", result.Error)
+}
+
+func TestRunServiceExecuteEnforcesDestructivePolicy(t *testing.T) {
+	t.Parallel()
+
+	runner := &stubRunRunner{}
+	svc := NewRunService(RunDependencies{
+		Executor:            runner,
+		SelectedEnvironment: func() string { return "prod" },
+		PolicyFor: func(string) policy.EnvironmentPolicy {
+			return policy.EnvironmentPolicy{ConfirmDestructive: true}
+		},
+	})
+
+	rejected := svc.Execute(context.Background(), RunRequest{FullRefresh: true})
+	assert.Equal(t, "error", rejected.Status)
+	assert.Equal(t, 403, rejected.HTTPCode)
+	assert.Nil(t, runner.args)
+
+	accepted := svc.Execute(context.Background(), RunRequest{FullRefresh: true, ConfirmedEnvironment: "prod"})
+	assert.Equal(t, "ok", accepted.Status)
+	assert.Equal(t, []string{"run", ".", "--env", "prod"}, runner.args)
 }
 
 func TestExtractInspectRawOutputUsesErrorField(t *testing.T) {

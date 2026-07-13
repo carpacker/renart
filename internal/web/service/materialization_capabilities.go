@@ -172,10 +172,7 @@ func materializationProfileFor(asset *pipeline.Asset, destinationType string) ma
 			}
 		}
 	}
-	// SQL full refresh is enabled only after the run-scoped flag reaches the
-	// eagerly constructed warehouse materializers. Until then the capability
-	// response must not advertise an action that would be ignored.
-	return materializationProfile{Modes: modes}
+	return withFullRefresh(modes)
 }
 
 func editableMaterializationCapabilities(profile materializationProfile) []model.MaterializationCapability {
@@ -186,6 +183,18 @@ func editableMaterializationCapabilities(profile materializationProfile) []model
 		}
 	}
 	return capabilities
+}
+
+func supportsFullRefreshForAsset(asset *pipeline.Asset, profile materializationProfile) bool {
+	if asset == nil || !profile.SupportsFullRefresh {
+		return false
+	}
+	if asset.Materialization.Type == pipeline.MaterializationTypeTable {
+		return true
+	}
+	// Load/API assets always write a table; an omitted block is their canonical
+	// create+replace default rather than SQL/Python's run-only mode.
+	return (isAPIAsset(asset) || isLoadAsset(asset)) && asset.Materialization.Type == pipeline.MaterializationTypeNone
 }
 
 func normalizedMaterializationMode(asset *pipeline.Asset) string {
