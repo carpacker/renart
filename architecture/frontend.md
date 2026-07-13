@@ -125,7 +125,9 @@ than hand-rolled `div` shells.
   [sql-lsp.md](sql-lsp.md).
 - [use-python-query-intellisense.ts](../web/hooks/use-python-query-intellisense.ts):
   maps static SQL string literals in Python `query(...)` calls onto the same Go
-  LSP and translates the results back into the Python Monaco model.
+  LSP, merges schema-aware client completions (including notebook run columns),
+  and translates SQL completions, diagnostics, navigation, and highlighting
+  back into the Python Monaco model.
 - [use-asset-results.ts](../web/hooks/use-asset-results.ts): inspect and materialize
   flows, including API-asset full refresh.
 - [use-app-asset-materialization-status.ts](../web/hooks/use-app-asset-materialization-status.ts):

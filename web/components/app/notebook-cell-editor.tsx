@@ -212,6 +212,7 @@ export function NotebookCellMonaco({
     isPython ? editorInstance : null,
     cell,
     value,
+    schemaTables,
     onGoToAsset,
     onGoToCell,
   );

@@ -737,13 +737,19 @@ test.describe("app notebooks live", () => {
     );
 
     const notebook = await createNotebook(page.request, liveApp.baseURL, "Python SQL IntelliSense");
-    const baseCell = await addCell(page.request, liveApp.baseURL, notebook.id, "base");
-    await setCell(
+    const baseCell = await addPythonCell(page.request, liveApp.baseURL, notebook.id, "base");
+    await setPythonCell(
       page.request,
       liveApp.baseURL,
       notebook.id,
       baseCell,
-      "select 10 as amount, 'Ada' as customer_name",
+      [
+        "import pyarrow as pa",
+        "",
+        "",
+        "def materialize():",
+        '    return pa.table({"runtime_amount": [10], "runtime_customer": ["Ada"]})',
+      ].join("\n"),
     );
     const pythonCell = await addPythonCell(page.request, liveApp.baseURL, notebook.id, "reader");
     const savedPythonBody = [
@@ -752,6 +758,25 @@ test.describe("app notebooks live", () => {
       'result = query("select * from base")',
     ].join("\n");
     await setPythonCell(page.request, liveApp.baseURL, notebook.id, pythonCell, savedPythonBody);
+
+    // Python output columns are not statically available to the SQL LSP. They
+    // enter the notebook's schema context only through the last run result, so
+    // this completion proves the embedded query adapter consumes runtime data.
+    const runResponse = await page.request.post(
+      `${liveApp.baseURL}/api/notebooks/${notebook.id}/run`,
+      {
+        data: { cells: [baseCell] },
+        timeout: 110000,
+      },
+    );
+    expect(runResponse.ok()).toBe(true);
+    const runPayload = (await runResponse.json()) as {
+      results: Array<{ cell_id: string; status: string; columns: string[]; error?: string }>;
+    };
+    expect(runPayload.results.find((result) => result.cell_id === baseCell)).toMatchObject({
+      status: "ok",
+      columns: ["runtime_amount", "runtime_customer"],
+    });
 
     await page.goto(`${liveApp.baseURL}/notebooks/${notebook.id}`);
     await expect(page.getByText("Python SQL IntelliSense").first()).toBeVisible({ timeout: 15000 });
@@ -771,7 +796,10 @@ test.describe("app notebooks live", () => {
     await page.keyboard.type(".");
 
     await expect(
-      page.locator(".suggest-widget .monaco-list-row").filter({ hasText: "amount" }).first(),
+      page
+        .locator(".suggest-widget .monaco-list-row")
+        .filter({ hasText: "runtime_amount" })
+        .first(),
     ).toBeVisible({ timeout: 15000 });
     await expect(
       page

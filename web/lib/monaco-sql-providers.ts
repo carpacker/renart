@@ -1401,6 +1401,141 @@ export function resolveTableAtPosition(
   return findTableByIdentifier(tables, identifier) ?? null;
 }
 
+/**
+ * Build the schema-backed completion subset without requiring the model to be
+ * registered as a SQL editor. Embedded SQL hosts (currently Python query()
+ * literals) use this alongside the backend LSP so notebook runtime columns and
+ * client-discovered schemas behave exactly like they do in the SQL editor.
+ */
+export function provideLocalSQLCompletionItems(
+  monaco: Monaco,
+  model: MonacoNS.editor.ITextModel,
+  position: MonacoNS.Position,
+  entry: SQLProviderEntry,
+): MonacoNS.languages.CompletionList {
+  if (isInsideJinjaSpan(model, position)) {
+    return { suggestions: [] };
+  }
+
+  const tables = entry.getTables();
+  const upstreamNames = entry.getUpstreamNames();
+  const tableSuggestionContext = entry.getTableSuggestionContext();
+  const identifierInfo = identifierInfoAtPosition(model, position);
+  const wordInfo = model.getWordUntilPosition(position);
+  const range: MonacoNS.IRange = identifierInfo?.range ?? {
+    startLineNumber: position.lineNumber,
+    endLineNumber: position.lineNumber,
+    startColumn: wordInfo.startColumn,
+    endColumn: wordInfo.endColumn,
+  };
+  const lineContent = model.getLineContent(position.lineNumber);
+  const textBeforeCursor = lineContent.slice(0, position.column - 1);
+  const sqlTextBeforeCursor = model.getValueInRange({
+    startLineNumber: 1,
+    startColumn: 1,
+    endLineNumber: position.lineNumber,
+    endColumn: position.column,
+  });
+  const currentSelectTextBeforeCursor = currentTopLevelSelectText(sqlTextBeforeCursor);
+  const aliasMap = buildAliasMap(currentSelectTextBeforeCursor, tables);
+  const referencedTables = resolveReferencedTables(tables, upstreamNames, aliasMap);
+  const columnSuggestionTables = referencedTables.length > 0 ? referencedTables : tables;
+  const { inTableCtx, inColumnCtx } = getCompletionContext(sqlTextBeforeCursor);
+  const suggestions: MonacoNS.languages.CompletionItem[] = [];
+
+  const dotPrefix = inTableCtx ? null : parseDotPrefix(textBeforeCursor);
+  if (dotPrefix) {
+    const table = resolveTableReference(tables, aliasMap, dotPrefix.tablePart);
+    if (table?.columns.length) {
+      const columnRange: MonacoNS.IRange = {
+        startLineNumber: position.lineNumber,
+        endLineNumber: position.lineNumber,
+        startColumn: position.column - dotPrefix.columnPrefix.length,
+        endColumn: position.column,
+      };
+      for (const column of table.columns) {
+        if (
+          dotPrefix.columnPrefix &&
+          !column.name.toLowerCase().includes(dotPrefix.columnPrefix.toLowerCase())
+        ) {
+          continue;
+        }
+        const typeLabel = column.type ? ` (${column.type})` : "";
+        suggestions.push({
+          label: column.name,
+          kind: monaco.languages.CompletionItemKind.Field,
+          detail: `${table.shortName}.${column.name}${typeLabel}`,
+          documentation: column.description || undefined,
+          insertText: column.name,
+          range: columnRange,
+          sortText: column.primaryKey ? "0" : "1",
+        });
+      }
+      return { suggestions: preserveFocusedSuggestion(suggestions) };
+    }
+  }
+
+  if (inColumnCtx) {
+    suggestions.push(...collectColumnSuggestions(monaco, columnSuggestionTables, range));
+    if (suggestions.length === 0 && columnSuggestionTables !== tables) {
+      suggestions.push(...collectColumnSuggestions(monaco, tables, range));
+    }
+  }
+
+  for (const table of tables) {
+    const hasRemoteMatch = hasMatchingRemoteTable(table, tableSuggestionContext);
+    const kindTag = hasRemoteMatch
+      ? table.isBruinAsset
+        ? "Table + Asset"
+        : "Table"
+      : table.isBruinAsset
+        ? "Asset"
+        : "Table";
+    suggestions.push({
+      label: {
+        label: buildLocalTableSuggestionLabel(table),
+        description: `${kindTag} (${table.name})`,
+      },
+      kind: buildLocalTableSuggestionKind(monaco, table, tableSuggestionContext),
+      detail: kindTag,
+      documentation:
+        table.columns.length > 0
+          ? `Columns: ${table.columns.map((column) => column.name).join(", ")}`
+          : undefined,
+      insertText: table.name,
+      filterText: `${table.name} ${table.shortName}`,
+      range,
+      sortText: buildLocalTableSortText(table, {
+        inTableCtx,
+        context: tableSuggestionContext,
+      }),
+    });
+  }
+
+  for (const keyword of SQL_KEYWORDS) {
+    suggestions.push({
+      label: keyword,
+      kind: monaco.languages.CompletionItemKind.Keyword,
+      insertText: keyword,
+      range,
+      sortText: "9",
+    });
+  }
+
+  const deduped: MonacoNS.languages.CompletionItem[] = [];
+  const seen = new Set<string>();
+  for (const suggestion of suggestions) {
+    const label = typeof suggestion.label === "string" ? suggestion.label : suggestion.label.label;
+    const insertText = typeof suggestion.insertText === "string" ? suggestion.insertText : "";
+    const key = `${label.toLowerCase()}::${suggestion.kind}::${insertText.toLowerCase()}`;
+    if (!seen.has(key)) {
+      seen.add(key);
+      deduped.push(suggestion);
+    }
+  }
+  return { suggestions: preserveFocusedSuggestion(deduped) };
+}
+
 export function registerSQLProviders(
   monaco: Monaco,
   resolveEntry: (model: MonacoNS.editor.ITextModel) => SQLProviderEntry | null,

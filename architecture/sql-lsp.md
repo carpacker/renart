@@ -95,6 +95,19 @@ not represent one stable SQL document. This projection uses the Python asset's
 existing graph identity, so a notebook query sees only its sibling cells and
 the same pipeline relations as an SQL cell.
 
+Completion has two inputs, matching native notebook SQL cells: canonical graph
+suggestions from the LSP and the editor's `schemaTables` context. The latter
+adds schemas discovered by the client and a sibling cell's last successful run
+columns, which are intentionally ephemeral and therefore absent from
+`WorkspaceState`. LSP suggestions win when both sources describe the same
+item. Arbitrary Python output consequently gains column completion after that
+cell has run, without moving runtime state into the canonical graph.
+
+The adapter also projects Monaco's SQL lexical tokens into decorations inside
+the Python string, then overlays LSP semantic relation tokens when they arrive.
+This keeps SQL syntax highlighting immediate for both closed strings and the
+unfinished plain literals produced while a user is typing.
+
 ## 4. Column inference: fixpoint
 
 SQL assets that declare no columns get an `inferred` schema layer so

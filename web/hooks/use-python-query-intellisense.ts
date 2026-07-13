@@ -24,6 +24,8 @@ import {
   sourceOffsetForSQLOffset,
   sqlOffsetForSourceOffset,
 } from "@/lib/python-query-literals";
+import { provideLocalSQLCompletionItems } from "@/lib/monaco-sql-providers";
+import { SchemaTable } from "@/lib/sql-schema";
 import { WebAsset, WorkspaceState } from "@/lib/types";
 
 const PYTHON_QUERY_SQL_MARKER_OWNER = "renart-python-query-sql";
@@ -31,6 +33,7 @@ const SQL_SEMANTIC_KINDS = ["schema", "table", "column", "alias"] as const;
 
 type PythonQueryProviderState = {
   asset: WebAsset | null;
+  schemaTables: SchemaTable[];
   workspace: WorkspaceState | null;
   onGoToAsset?: (pipelineId: string, assetId: string) => void;
   onGoToCell?: (cellId: string) => void;
@@ -52,17 +55,19 @@ export function usePythonQueryIntellisense(
   editor: MonacoNS.editor.IStandaloneCodeEditor | null,
   asset: WebAsset | null,
   content: string,
+  schemaTables: SchemaTable[],
   onGoToAsset?: (pipelineId: string, assetId: string) => void,
   onGoToCell?: (cellId: string) => void,
 ) {
   const workspace = useAtomValue(workspaceAtom);
   const providerStateRef = useRef<PythonQueryProviderState>({
     asset,
+    schemaTables,
     workspace,
     onGoToAsset,
     onGoToCell,
   });
-  providerStateRef.current = { asset, workspace, onGoToAsset, onGoToCell };
+  providerStateRef.current = { asset, schemaTables, workspace, onGoToAsset, onGoToCell };
   const isPythonAsset = isPython(asset);
 
   useEffect(() => {
@@ -280,12 +285,28 @@ function registerPythonQueryProviders(monaco: typeof MonacoNS): MonacoNS.IDispos
       if (!state?.asset?.id || !projected) {
         return { suggestions: [] };
       }
+      const sqlModel = monaco.editor.createModel(projected.literal.sql, "sql");
+      let localSuggestions: MonacoNS.languages.CompletionItem[] = [];
+      try {
+        localSuggestions = provideLocalSQLCompletionItems(
+          monaco,
+          sqlModel,
+          new monaco.Position(projected.sqlPosition.line + 1, projected.sqlPosition.character + 1),
+          {
+            getTables: () => state.schemaTables,
+            getUpstreamNames: () => state.asset?.upstreams ?? [],
+            getTableSuggestionContext: () => undefined,
+          },
+        ).suggestions;
+      } finally {
+        sqlModel.dispose();
+      }
       const response = await getSQLLSPCompletions({
         asset_id: state.asset.id,
         content: projected.literal.sql,
         position: projected.sqlPosition,
       }).catch(() => null);
-      if (!response || token.isCancellationRequested) {
+      if (token.isCancellationRequested) {
         return { suggestions: [] };
       }
       const word = model.getWordUntilPosition(position);
@@ -300,10 +321,16 @@ function registerPythonQueryProviders(monaco: typeof MonacoNS): MonacoNS.IDispos
         position.lineNumber,
         word.endColumn,
       );
+      const backendSuggestions = (response?.completions ?? [])
+        .filter((item) => item.kind === 5 || item.kind === 18 || item.kind === 2)
+        .map((item) => completionToMonaco(monaco, item, range));
+      const projectedLocalSuggestions = localSuggestions.map((item) => ({
+        ...item,
+        detail: item.detail ? `${item.detail} · SQL in query()` : "SQL in query()",
+        range: sqlCompletionRangeToHostRange(model, projected.literal, item.range),
+      }));
       return {
-        suggestions: (response.completions ?? [])
-          .filter((item) => item.kind === 5 || item.kind === 18 || item.kind === 2)
-          .map((item) => completionToMonaco(monaco, item, range)),
+        suggestions: dedupeCompletions([...backendSuggestions, ...projectedLocalSuggestions]),
       };
     },
   });
@@ -452,6 +479,53 @@ function sqlRangeToHostRange(
     endLineNumber: end.lineNumber,
     endColumn: end.column,
   };
+}
+
+function sqlCompletionRangeToHostRange(
+  model: MonacoNS.editor.ITextModel,
+  literal: PythonQueryLiteral,
+  range: MonacoNS.languages.CompletionItem["range"],
+): MonacoNS.languages.CompletionItem["range"] {
+  if ("insert" in range) {
+    return {
+      insert: sqlMonacoRangeToHostRange(model, literal, range.insert),
+      replace: sqlMonacoRangeToHostRange(model, literal, range.replace),
+    };
+  }
+  return sqlMonacoRangeToHostRange(model, literal, range);
+}
+
+function sqlMonacoRangeToHostRange(
+  model: MonacoNS.editor.ITextModel,
+  literal: PythonQueryLiteral,
+  range: MonacoNS.IRange,
+) {
+  return sqlRangeToHostRange(model, literal, {
+    start: {
+      line: range.startLineNumber - 1,
+      character: range.startColumn - 1,
+    },
+    end: {
+      line: range.endLineNumber - 1,
+      character: range.endColumn - 1,
+    },
+  });
+}
+
+function dedupeCompletions(
+  suggestions: MonacoNS.languages.CompletionItem[],
+): MonacoNS.languages.CompletionItem[] {
+  const seen = new Set<string>();
+  return suggestions.filter((suggestion) => {
+    const label = typeof suggestion.label === "string" ? suggestion.label : suggestion.label.label;
+    const insertText = typeof suggestion.insertText === "string" ? suggestion.insertText : "";
+    const key = `${label.toLowerCase()}::${insertText.toLowerCase()}`;
+    if (seen.has(key)) {
+      return false;
+    }
+    seen.add(key);
+    return true;
+  });
 }
 
 function completionToMonaco(

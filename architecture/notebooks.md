@@ -110,6 +110,14 @@ Cell code is edited in Monaco. Its initial height follows the cell's content;
 each cell also has an independent vertical resize handle with pointer and
 keyboard controls. Resizing is presentation-only and stays in frontend state.
 
+`buildNotebookSchemaTables` supplies sibling relations to both SQL cells and
+plain SQL string literals inside Python `query(...)` calls. A sibling's last
+successful run columns take precedence over declared columns, so outputs that
+cannot be inferred statically (including arbitrary Python materializations)
+become available to column completion after a run. The Python adapter keeps the
+Monaco document in Python mode, projects completion ranges into the embedded
+SQL string, and renders SQL lexical plus semantic decorations there.
+
 ## 6. Server-driven auto-recompute (`service/notebook_autorecompute.go`)
 
 The server owns staleness and recompute; the client owns only "what the user

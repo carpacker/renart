@@ -82,7 +82,14 @@ export function useAssetMonaco({
   useSQLLSP(monacoInstance, editorInstance, asset, editorValue, schemaTables, onGoToAsset);
   useJinjaIntellisense(monacoInstance, editorInstance, asset, editorValue);
   usePythonIntellisense(monacoInstance, editorInstance, asset, editorValue);
-  usePythonQueryIntellisense(monacoInstance, editorInstance, asset, editorValue, onGoToAsset);
+  usePythonQueryIntellisense(
+    monacoInstance,
+    editorInstance,
+    asset,
+    editorValue,
+    schemaTables,
+    onGoToAsset,
+  );
   useYAMLIntellisense(monacoInstance, editorInstance, asset);
 
   const { formatSQL, isSqlAsset, shortcutLabel } = useSQLFormatting(
