@@ -173,6 +173,12 @@ test.describe("app asset editing workbench live", () => {
     await expect(properties.getByRole("heading", { name: "Dependencies" })).toBeVisible();
     await expect(properties.getByRole("heading", { name: "Columns" })).toBeVisible();
 
+    const identity = properties.getByRole("heading", { name: "Identity" }).locator("../..");
+    await identity.getByRole("combobox").first().click();
+    await expect(page.getByText("SQL assets", { exact: true })).toBeVisible();
+    await expect(page.getByText("Non-SQL assets", { exact: true })).toBeVisible();
+    await page.keyboard.press("Escape");
+
     const descriptionInput = properties.getByPlaceholder("What this asset produces");
     await descriptionInput.fill("Customer profile records");
     const descriptionResponse = page.waitForResponse(

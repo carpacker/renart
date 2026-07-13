@@ -21,6 +21,7 @@ import {
   SelectContent,
   SelectGroup,
   SelectItem,
+  SelectLabel,
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
@@ -29,7 +30,7 @@ import { updateAsset } from "@/lib/api-assets";
 import { inferAPIAsset, updateAssetColumns } from "@/lib/api-assets-columns";
 import { getSQLTableColumns } from "@/lib/api-sql-discovery";
 import { classifyDependencies, parseAssetProvenance } from "@/lib/asset-provenance";
-import { NON_SQL_ASSET_TYPES, SQL_ASSET_TYPES } from "@/lib/asset-types";
+import { NON_SQL_ASSET_TYPES, SQL_ASSET_TYPES, groupAssetTypesByKind } from "@/lib/asset-types";
 import { useIngestrEnabled } from "@/lib/features";
 import { selectedEnvironmentAtom, workspaceAtom } from "@/lib/atoms/workspace";
 import { WebAsset, WebColumn } from "@/lib/types";
@@ -140,12 +141,14 @@ export function InlineText({
 
 export function InlineSelect({
   value,
-  options,
+  options = [],
+  groups,
   onChange,
   placeholder,
 }: {
   value: string;
-  options: { value: string; label: string }[];
+  options?: { value: string; label: string }[];
+  groups?: Array<{ label: string; options: { value: string; label: string }[] }>;
   onChange: (next: string) => void;
   placeholder?: string;
 }) {
@@ -155,13 +158,26 @@ export function InlineSelect({
         <SelectValue placeholder={placeholder} />
       </SelectTrigger>
       <SelectContent>
-        <SelectGroup>
-          {options.map((option) => (
-            <SelectItem key={option.value} value={option.value} className="font-monaco text-xs">
-              {option.label}
-            </SelectItem>
-          ))}
-        </SelectGroup>
+        {groups ? (
+          groups.map((group) => (
+            <SelectGroup key={group.label}>
+              <SelectLabel>{group.label}</SelectLabel>
+              {group.options.map((option) => (
+                <SelectItem key={option.value} value={option.value} className="font-monaco text-xs">
+                  {option.label}
+                </SelectItem>
+              ))}
+            </SelectGroup>
+          ))
+        ) : (
+          <SelectGroup>
+            {options.map((option) => (
+              <SelectItem key={option.value} value={option.value} className="font-monaco text-xs">
+                {option.label}
+              </SelectItem>
+            ))}
+          </SelectGroup>
+        )}
       </SelectContent>
     </Select>
   );
@@ -267,11 +283,13 @@ function IdentitySection({ asset, pipelineId }: { asset: WebAsset; pipelineId: s
     workspace?.connections,
     workspaceConfig,
   ]);
-  const assetTypes = useMemo(
+  const assetTypeGroups = useMemo(
     () =>
-      Array.from(new Set([...SQL_ASSET_TYPES, ...NON_SQL_ASSET_TYPES, asset.type]))
-        .filter((type) => ingestrEnabled || type !== "ingestr" || type === asset.type)
-        .sort(),
+      groupAssetTypesByKind(
+        Array.from(new Set([...SQL_ASSET_TYPES, ...NON_SQL_ASSET_TYPES, asset.type])).filter(
+          (type) => ingestrEnabled || type !== "ingestr" || type === asset.type,
+        ),
+      ),
     [asset.type, ingestrEnabled],
   );
   const tags = asset.tags ?? [];
@@ -306,7 +324,16 @@ function IdentitySection({ asset, pipelineId }: { asset: WebAsset; pipelineId: s
         <Key>type</Key>
         <InlineSelect
           value={asset.type}
-          options={assetTypes.map((type) => ({ value: type, label: type }))}
+          groups={[
+            {
+              label: "SQL assets",
+              options: assetTypeGroups.sql.map((type) => ({ value: type, label: type })),
+            },
+            {
+              label: "Non-SQL assets",
+              options: assetTypeGroups.nonSql.map((type) => ({ value: type, label: type })),
+            },
+          ]}
           onChange={(type) => {
             if (type && type !== asset.type) void updateAsset(pipelineId, asset.id, { type });
           }}

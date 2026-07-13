@@ -60,7 +60,7 @@ renart_col_own   generated columns whose fields the user owns (col:field|field;�
 renart_col_map   rename memory (e:<exprhash>:col); optional
 ```
 
-Only *exceptions* are stored — inferred things are never listed; the file's
+Only _exceptions_ are stored — inferred things are never listed; the file's
 real `depends:`/`columns:` plus these keys reconstruct intent on the next
 reconcile. The key strings are stable; changing one is a file-format
 migration. All `assetmeta` functions are pure and unit-tested.
@@ -122,7 +122,9 @@ round-trips unknown fields).
   asset name, shows `destination_object` for file/storage targets, and offers a
   go-to-source action when the source resolves to an upstream asset. Every edit
   flows through the transaction/API write paths; the workspace SSE stream
-  refreshes the asset.
+  refreshes the asset. Asset-type selectors in both guided and YAML views group
+  SQL asset kinds separately from non-SQL kinds while preserving unknown current
+  values for repair.
 - **Provenance classification client-side** (`lib/asset-provenance.ts`)
   mirrors the flat-key schema for display (source chips: "inferred from SQL" /
   "manual").

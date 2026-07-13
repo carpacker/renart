@@ -36,6 +36,7 @@ import {
   SelectContent,
   SelectGroup,
   SelectItem,
+  SelectLabel,
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
@@ -50,7 +51,7 @@ import { inferAPIAsset } from "@/lib/api-assets-columns";
 import type { APIInferResult } from "@/lib/generated/api-types";
 import { classifyDependencies, columnStatus, parseAssetProvenance } from "@/lib/asset-provenance";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { NON_SQL_ASSET_TYPES, SQL_ASSET_TYPES } from "@/lib/asset-types";
+import { NON_SQL_ASSET_TYPES, SQL_ASSET_TYPES, groupAssetTypesByKind } from "@/lib/asset-types";
 import { useIngestrEnabled } from "@/lib/features";
 import { useWorkspaceSettingsData } from "@/hooks/use-workspace-settings-data";
 import { LOCAL_LOAD_CONNECTION, loadConnectionsForEnvironment } from "@/lib/load-assets";
@@ -181,15 +182,15 @@ function IdentityCard({ asset, pipelineId }: { asset: WebAsset; pipelineId: stri
   const normalizedType = asset.type.trim().toLowerCase();
   const hasTargetConnection =
     normalizedType === "api" || normalizedType === "load" || normalizedType.includes("python");
-  const assetTypes = useMemo(
+  const assetTypeGroups = useMemo(
     () =>
-      Array.from(new Set([...SQL_ASSET_TYPES, ...NON_SQL_ASSET_TYPES, asset.type]))
-        // A broken/half-typed YAML asset can parse to an empty type; a Select
-        // item must never have an empty value, so drop it.
-        .filter(
+      groupAssetTypesByKind(
+        Array.from(new Set([...SQL_ASSET_TYPES, ...NON_SQL_ASSET_TYPES, asset.type])).filter(
+          // A broken/half-typed YAML asset can parse to an empty type; a Select
+          // item must never have an empty value, so drop it.
           (type) => Boolean(type) && (ingestrEnabled || type !== "ingestr" || type === asset.type),
-        )
-        .sort(),
+        ),
+      ),
     [asset.type, ingestrEnabled],
   );
 
@@ -228,11 +229,22 @@ function IdentityCard({ asset, pipelineId }: { asset: WebAsset; pipelineId: stri
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
-            {assetTypes.map((type) => (
-              <SelectItem key={type} value={type}>
-                {type}
-              </SelectItem>
-            ))}
+            <SelectGroup>
+              <SelectLabel>SQL assets</SelectLabel>
+              {assetTypeGroups.sql.map((type) => (
+                <SelectItem key={type} value={type}>
+                  {type}
+                </SelectItem>
+              ))}
+            </SelectGroup>
+            <SelectGroup>
+              <SelectLabel>Non-SQL assets</SelectLabel>
+              {assetTypeGroups.nonSql.map((type) => (
+                <SelectItem key={type} value={type}>
+                  {type}
+                </SelectItem>
+              ))}
+            </SelectGroup>
           </SelectContent>
         </Select>
       </FieldRow>

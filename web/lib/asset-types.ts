@@ -79,6 +79,17 @@ export function isSqlAssetType(assetType?: string | null) {
   return (assetType ?? "").trim().toLowerCase().endsWith(".sql");
 }
 
+export function groupAssetTypesByKind(assetTypes: string[]) {
+  const uniqueTypes = Array.from(
+    new Set(assetTypes.map((type) => type.trim()).filter(Boolean)),
+  ).sort((left, right) => left.localeCompare(right));
+
+  return {
+    sql: uniqueTypes.filter((type) => isSqlAssetType(type)),
+    nonSql: uniqueTypes.filter((type) => !isSqlAssetType(type)),
+  };
+}
+
 export function getConnectionTypeForAssetType(assetType?: string | null) {
   return ASSET_TYPE_TO_CONNECTION_TYPE[(assetType ?? "").trim().toLowerCase()] ?? null;
 }
