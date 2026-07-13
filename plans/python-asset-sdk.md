@@ -319,7 +319,8 @@ exactly as Bruin does today.
   `SLING_LOADED_AT_COLUMN=false` and the connection URI passed through an
   env-named connection (verified §3) — credentials off argv. Strategies not
   representable in Sling modes (`time_interval`, `scd2_*`) stay rejected for
-  python assets, consistent with `materialization-per-asset-type.md`.
+  Python assets, consistent with the capability contract in
+  `../architecture/backend.md` §4.
 
 **Net effect:** ingestr disappears from the python path entirely (first
 python run gets faster — no ingestr env install), credentials never appear on

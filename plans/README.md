@@ -11,8 +11,7 @@ the original.
 | Doc | Status |
 | --- | --- |
 | [dbt-assets.md](dbt-assets.md) | evaluation — enabling renart intelligence on existing dbt projects |
-| [materialization-strategies.md](materialization-strategies.md) | in progress — Phase 1 partially landed |
-| [materialization-per-asset-type.md](materialization-per-asset-type.md) | proposed — make every offered materialization mode execute on sql/python/load/api assets |
+| [materialization-reach.md](materialization-reach.md) | proposed reach — guided advanced SQL modes, coverage timeline, Python pre-run diagnostic |
 | [remote-table-intellisense.md](remote-table-intellisense.md) | proposal — surface warehouse tables with no backing asset via the LSP |
 | [python-asset-sdk.md](python-asset-sdk.md) | phases 1–2 implemented — credential-free `query()`, ingestr-free uploads, editor stubs/lint, live-session notebook queries, optimized startup; phase 3 reach items open |
 | [questions.md](questions.md) | open questions for the maintainer |
