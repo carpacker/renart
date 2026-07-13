@@ -35,7 +35,13 @@ def materialize():
 ```
 
 Use **Dependencies** to manage third-party packages. Python cells run manually;
-editing one does not trigger notebook auto-recompute.
+editing one does not trigger notebook auto-recompute. The built-in runtime
+already includes pandas and PyArrow; adding any other package creates the
+notebook's Python project on demand.
+
+SDK queries run against the notebook's live local session. Renart rewrites the
+visible upstream names inside the runner, so Python receives query results but
+never a database path or connection credentials.
 
 ## Charts with @viz
 

@@ -136,6 +136,10 @@ the DuckDB materializer or through Sling for other warehouses; the Python path
 does not use ingestr. The SDK's `.pyi` files are also mounted into the embedded
 Python language server, and pipeline type-check warns when a literal
 `query()` reads a project asset missing from `depends`.
+Notebook Python cells use the same operator in collection-only mode: broker
+queries run against the notebook's already-open live session and the resulting
+Parquet file is loaded directly into that session, without input or output
+DuckDB staging databases.
 
 Pipeline type checks also validate materialization configuration: supported
 loader strategies, required merge primary keys, declared incremental/update

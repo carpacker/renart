@@ -1,6 +1,7 @@
 # Python asset SDK: query the project without credentials, upload without ingestr
 
-> **Status (2026-07-13): Phases 1–2 implemented** on the `redesign` branch. §10
+> **Status (2026-07-13): Phases 1–2 implemented, including notebook runner
+> unification and startup optimization,** on the `redesign` branch. §10
 > questions were answered by Lukas: (1) SDK named `renart`, no bruin shim;
 > (2) any project connection is readable; (3) wait semantics as proposed,
 > `--refresh-upstreams` deferred to phase 3; (4) pandas is a hard dependency
@@ -21,7 +22,13 @@
 > deadlock guard. Phase 2 added embedded `.pyi` stubs registered with
 > pyintelligence, built-in dependency recognition, type-check lint for literal
 > `query()` calls missing `depends`, notebook-cell broker queries, live notebook
-> E2E coverage, and user docs. The as-built design is now recorded in
+> E2E coverage, and user docs. Notebook cells now query their live in-process
+> session (logical names are rewritten to `cell_<id>`), stage only Parquet, and
+> never receive or create an input/output DuckDB staging database. Empty
+> notebooks do not provision a duplicate pandas/duckdb project; uv verification
+> is cached, `uv run` owns lock/sync, and pandas/polars imports are lazy for Arrow
+> results. On the profiling machine this reduced a warm SDK-query cell from
+> 719–918 ms to 418–515 ms. The as-built design is now recorded in
 > `architecture/backend.md` and `architecture/notebooks.md`. Phase 3 reach items
 > (`--refresh-upstreams`, PyPI publication, a cross-connection policy surface,
 > and Arrow Flight evaluation) remain deferred.
@@ -43,7 +50,7 @@ half-built or stale table.
 
 ---
 
-## 1. Current state (verified in code)
+## 1. Pre-implementation baseline (historical)
 
 **Execution.** Python assets run through Bruin's local operator:
 `direct_executor_registry.go:257` installs
@@ -330,12 +337,11 @@ translation. (§10 Q5.)
 | Scheduler snapshot run | server process, same registry, snapshot temp dir | same; `ConfigPath` override already flows through the executor |
 | `renart run` delegated | server process (SSE delegation) | same — the CLI never runs python itself when a server is live |
 | `renart run` embedded | headless in-process graph | same code path; no HTTP server needed — the broker is its own listener |
-| Notebook python cell | server, `materializePythonCell` | same operator; `RENART_NOTEBOOK_INPUTS` staging kept for now, broker `query()` against the session is a phase-2 unification |
+| Notebook python cell | server, `materializePythonCell` | same operator in collection-only mode; broker queries the already-open live session and the runner loads staged Parquet directly, with no database path exposed to Python |
 
-The operator needs deps it doesn't have today (query executor, runstate
-registry, sqlintelligence table extraction, policy): thread them from the
-service graph into `buildDirectMainExecutors` alongside the existing
-`manager`/`renderer`/`parser` — one construction site, all contexts inherit.
+The query executor, runstate registry, table extraction, and connection policy
+dependencies are threaded from the service graph through the direct executor
+construction site, so all execution contexts inherit the same broker behavior.
 
 ## 9. Phasing
 
@@ -352,8 +358,9 @@ waits on a slower upstream; scheduler snapshot run.
 
 **Phase 2 — DX (implemented):** `.pyi` stubs + pyintelligence registration ·
 type-check lint for undeclared literal `query()` references · JSON fallback
-coverage · notebook `query()` against the exported session-input snapshot ·
-docs for Python assets and notebook cells.
+coverage · notebook `query()` against the live notebook session · direct
+Parquet-to-session output load · startup/import optimization · docs for Python
+assets and notebook cells.
 
 **Phase 3 — reach:** `renart run --refresh-upstreams` (build-stale cone
 before the run) · PyPI publication · cross-connection read policy surface ·
@@ -405,9 +412,8 @@ consider Arrow Flight if profiles ever show the loopback hop mattering.
 - **arrow-go dependency** adds ~10 MB of modules to the build; runtime RSS
   impact negligible (no wasm, no persistent state). Verified it builds.
 - **uv `--with` wheel injection** interacts with three dependency modes
-  (none / requirements.txt / pyproject). Bruin already injects
-  `--with pyarrow` in pyproject mode for materialization, so the pattern is
-  proven; needs explicit tests for all three.
+  (none / requirements.txt / pyproject). `uv run` performs project lock/sync in
+  the same invocation; the SDK wheel itself supplies PyArrow and pandas.
 - **Broker lifetime edge cases** (script outlives task timeout, orphaned
   listeners). Listener is owned by the operator's context — cancellation
   closes it; tokens die with the listener.

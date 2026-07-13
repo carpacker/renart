@@ -1,6 +1,6 @@
 # Notebooks — current architecture
 
-Status: current state (built on the `redesign` branch, June 2026). Cells are
+Status: current state (built on the `redesign` branch, July 2026). Cells are
 ordinary Bruin assets in a notebook namespace; results live in an ephemeral
 per-notebook DuckDB session; recompute is server-driven.
 
@@ -68,11 +68,18 @@ notebooks/
   import resolver and writes only the local file.
 - Cell runs do **not** emit facts into matlog; staleness/results are runtime
   state (see §6), honest for the ephemeral per-session model.
-- Python cells export their materialized sibling upstreams into a throwaway
-  DuckDB input snapshot under the cells' logical names. The Renart SDK broker
-  reads that snapshot while `materialize()` stages its output into a separate
-  throwaway DuckDB file; neither path opens a second handle on the locked live
-  session database. The runner then copies the output table into the session.
+- Python cells query the already-open live session through their token-scoped
+  Renart SDK broker. The runner rewrites logical sibling names to `cell_<id>`
+  before executing the read-only query on the in-process session handle; no
+  database path or credential crosses into Python, and no upstream snapshot is
+  copied. `materialize()` stages one Parquet file which the runner loads
+  directly into the same session with `read_parquet`.
+- The embedded SDK wheel supplies `renart`, pandas, and PyArrow. A notebook with
+  no additional packages runs without creating a `pyproject.toml`; the
+  Dependencies surface creates one only when the user adds packages. Python is
+  still a fresh process per cell run. The verified uv path is cached in the Go
+  process, while `uv run` remains responsible for locking and syncing explicit
+  project dependencies.
 
 ## 4. Rename engine (`notebook/rename.go`)
 
