@@ -356,9 +356,7 @@ function currentMaterializationMode(asset: WebAsset) {
 
 export function currentMaterializationOption(asset: WebAsset): MaterializationOption {
   const mode = currentMaterializationMode(asset);
-  const capability = (asset.materialization_capabilities ?? []).find(
-    (item) => item.mode === mode,
-  );
+  const capability = (asset.materialization_capabilities ?? []).find((item) => item.mode === mode);
   if (capability) return materializationOptionForCapability(capability);
 
   const type = (asset.materialization_type ?? "").trim();
@@ -402,15 +400,16 @@ export function inferMaterializationTimeGranularity(asset: WebAsset, incremental
 }
 
 export function materializationSelectionInput(asset: WebAsset, option: MaterializationOption) {
+  const timeGranularity =
+    asset.time_granularity ||
+    ((asset.incremental_key ?? "").trim()
+      ? inferMaterializationTimeGranularity(asset, asset.incremental_key)
+      : "");
   return {
     materialization_type: option.type,
     materialization_strategy: option.strategy,
-    ...(option.capability?.requires_time_granularity
-      ? {
-          time_granularity:
-            asset.time_granularity ||
-            inferMaterializationTimeGranularity(asset, asset.incremental_key),
-        }
+    ...(option.capability?.requires_time_granularity && timeGranularity
+      ? { time_granularity: timeGranularity }
       : {}),
   };
 }
@@ -487,13 +486,7 @@ export function ColumnCombobox({
   );
 }
 
-function MaterializationCard({
-  asset,
-  pipelineId,
-}: {
-  asset: WebAsset;
-  pipelineId: string;
-}) {
+function MaterializationCard({ asset, pipelineId }: { asset: WebAsset; pipelineId: string }) {
   const { selected, selectedValue, options, hasEditor } = materializationEditorState(asset);
   const primaryKeys = (asset.columns ?? [])
     .filter((column) => column.primary_key)

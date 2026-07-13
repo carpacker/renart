@@ -28,6 +28,7 @@ type WorkspaceAsset = {
   tags?: string[];
   materialization_strategy?: string;
   incremental_key?: string;
+  time_granularity?: string;
   columns?: Array<{
     name: string;
     type?: string;
@@ -372,6 +373,71 @@ test.describe("app asset editing workbench live", () => {
         .filter((column) => column.primary_key)
         .map((column) => column.name),
     ).toEqual(["customer_name"]);
+  });
+
+  test("time-interval metadata defaults granularity from the selected key", async ({
+    liveApp,
+    page,
+  }) => {
+    const declareColumns = await page.request.put(
+      `${liveApp.baseURL}/api/assets/${customersAssetId}/columns`,
+      {
+        data: {
+          columns: [
+            { name: "customer_id", type: "integer" },
+            { name: "event_date", type: "date" },
+          ],
+        },
+      },
+    );
+    expect(declareColumns.ok()).toBe(true);
+
+    await page.goto(`${liveApp.baseURL}/pipelines/${pipelineId}/assets/${customersAssetId}/code`);
+    await expect(page.locator(".monaco-editor").first()).toBeVisible({ timeout: 15000 });
+    const properties = await openAssetProperties(page);
+    const materialization = properties
+      .getByRole("heading", { name: "Materialization" })
+      .locator("../..");
+
+    const strategyResponse = page.waitForResponse(
+      (response) =>
+        response.url().includes(`/api/pipelines/${pipelineId}/assets/${customersAssetId}`) &&
+        response.request().method() === "PUT" &&
+        response.ok(),
+      { timeout: 15000 },
+    );
+    await materialization.getByRole("combobox").first().click();
+    await page.getByRole("option", { name: "Incremental (time interval)" }).click();
+    await strategyResponse;
+
+    const keyResponse = page.waitForResponse(
+      (response) =>
+        response.url().includes(`/api/pipelines/${pipelineId}/assets/${customersAssetId}`) &&
+        response.request().method() === "PUT" &&
+        response.ok(),
+      { timeout: 15000 },
+    );
+    const incrementalKey = materialization.getByRole("combobox").nth(1);
+    await incrementalKey.click();
+    await page.getByPlaceholder("Search columns…").fill("event");
+    await page.getByRole("option", { name: "event_date" }).click();
+    await keyResponse;
+
+    const configured = await pollAsset(
+      liveApp,
+      page.request,
+      "analytics.customers",
+      (asset) =>
+        asset.materialization_strategy === "time_interval" &&
+        asset.incremental_key === "event_date" &&
+        asset.time_granularity === "date",
+    );
+    expect(configured.time_granularity).toBe("date");
+    await expect(materialization.getByRole("combobox").nth(2)).toContainText("Date");
+
+    await properties.getByRole("button", { name: "YAML" }).click();
+    await expect(properties.getByText("time_granularity:", { exact: true })).toBeVisible();
+    await expect(properties.getByText("incremental_key:", { exact: true })).toBeVisible();
   });
 
   test("load asset editors only offer Sling-compatible materializations", async ({
