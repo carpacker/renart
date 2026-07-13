@@ -17,6 +17,7 @@ import {
 } from "lucide-react";
 
 import { workspaceAtom } from "@/lib/atoms/domains/workspace";
+import { selectedEnvironmentAtom } from "@/lib/atoms/workspace";
 
 import { Button } from "@/components/ui/button";
 import {
@@ -51,6 +52,8 @@ import { classifyDependencies, columnStatus, parseAssetProvenance } from "@/lib/
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { NON_SQL_ASSET_TYPES, SQL_ASSET_TYPES } from "@/lib/asset-types";
 import { useIngestrEnabled } from "@/lib/features";
+import { useWorkspaceSettingsData } from "@/hooks/use-workspace-settings-data";
+import { LOCAL_LOAD_CONNECTION, loadConnectionsForEnvironment } from "@/lib/load-assets";
 import { cn } from "@/lib/utils";
 import { WebAsset, WebColumn } from "@/lib/types";
 import { MultiValueInput } from "./multi-value-input";
@@ -115,23 +118,34 @@ function GuidedCard({
 const AUTO_CONNECTION_VALUE = "__auto__";
 
 /**
- * Target connection picker for API assets. The connection is a top-level
+ * Target connection picker for API, Python, and Load assets. The connection is a top-level
  * `connection:` key (not part of the request `parameters` spec), so it belongs in
  * the guided editor — especially once raw editing is scoped to `parameters`.
  * Leaving it on "Auto" omits the key and lets the asset use the pipeline default.
  */
 function ConnectionField({ asset, pipelineId }: { asset: WebAsset; pipelineId: string }) {
   const workspace = useAtomValue(workspaceAtom);
-  const current = (asset.connection ?? "").trim();
+  const environment = useAtomValue(selectedEnvironmentAtom);
+  const { workspaceConfig } = useWorkspaceSettingsData();
+  const current = (asset.explicit_connection ?? "").trim();
+  const effective = (asset.connection ?? "").trim();
+  const isLoad = asset.type.trim().toLowerCase() === "load";
   const connectionNames = useMemo(() => {
-    const names = Object.keys(workspace?.connections ?? {});
+    const names = isLoad
+      ? loadConnectionsForEnvironment(workspaceConfig, environment).map(
+          (connection) => connection.name,
+        )
+      : Object.keys(workspace?.connections ?? {});
+    if (isLoad && !names.includes(LOCAL_LOAD_CONNECTION)) {
+      names.push(LOCAL_LOAD_CONNECTION);
+    }
     // Keep an explicitly-set connection selectable even if it isn't (yet) in the
     // active environment's connection list.
     if (current && !names.includes(current)) {
       names.push(current);
     }
     return names.sort((a, b) => a.localeCompare(b));
-  }, [workspace?.connections, current]);
+  }, [workspace?.connections, workspaceConfig, environment, current, isLoad]);
 
   return (
     <FieldRow label="Connection">
@@ -146,12 +160,16 @@ function ConnectionField({ asset, pipelineId }: { asset: WebAsset; pipelineId: s
           <SelectValue />
         </SelectTrigger>
         <SelectContent>
-          <SelectItem value={AUTO_CONNECTION_VALUE}>Auto (pipeline default)</SelectItem>
-          {connectionNames.map((name) => (
-            <SelectItem key={name} value={name}>
-              {name}
+          <SelectGroup>
+            <SelectItem value={AUTO_CONNECTION_VALUE}>
+              {effective ? `Auto (${effective})` : "Auto (pipeline default)"}
             </SelectItem>
-          ))}
+            {connectionNames.map((name) => (
+              <SelectItem key={name} value={name}>
+                {name}
+              </SelectItem>
+            ))}
+          </SelectGroup>
         </SelectContent>
       </Select>
     </FieldRow>
@@ -160,7 +178,9 @@ function ConnectionField({ asset, pipelineId }: { asset: WebAsset; pipelineId: s
 
 function IdentityCard({ asset, pipelineId }: { asset: WebAsset; pipelineId: string }) {
   const ingestrEnabled = useIngestrEnabled();
-  const isApi = asset.type.trim().toLowerCase() === "api";
+  const normalizedType = asset.type.trim().toLowerCase();
+  const hasTargetConnection =
+    normalizedType === "api" || normalizedType === "load" || normalizedType.includes("python");
   const assetTypes = useMemo(
     () =>
       Array.from(new Set([...SQL_ASSET_TYPES, ...NON_SQL_ASSET_TYPES, asset.type]))
@@ -216,7 +236,7 @@ function IdentityCard({ asset, pipelineId }: { asset: WebAsset; pipelineId: stri
           </SelectContent>
         </Select>
       </FieldRow>
-      {isApi ? <ConnectionField asset={asset} pipelineId={pipelineId} /> : null}
+      {hasTargetConnection ? <ConnectionField asset={asset} pipelineId={pipelineId} /> : null}
       <FieldRow label="Owner">
         <CommitInput
           value={asset.owner ?? ""}

@@ -16,6 +16,8 @@ export async function createAsset(
     type?: string;
     path?: string;
     content?: string;
+    connection?: string;
+    parameters?: Record<string, string>;
     source_asset_id?: string;
     seed_file_name?: string;
     seed_file_content?: string;

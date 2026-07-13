@@ -258,6 +258,23 @@ func materializationTypeCheckFindings(asset *pipeline.Asset) []TypeCheckFinding 
 			return findings
 		}
 	}
+	if isLoadAsset(asset) {
+		params := loadParamsFromAsset(asset)
+		if params.SourceConnection == "" {
+			addError("Invalid load asset: source_connection is required")
+		}
+		if params.SourceTable == "" {
+			addError("Invalid load asset: source_table is required")
+		}
+		if isLocalLoadConnection(asset.Connection) && params.DestinationObject == "" {
+			addError("Invalid load asset: a local target requires destination_object")
+		}
+		for _, removedKey := range []string{"destination_connection", "destination_table", "mode"} {
+			if value, ok := asset.Parameters.GetString(removedKey); ok && strings.TrimSpace(value) != "" {
+				addError("Invalid load asset: parameters." + removedKey + " was removed; use top-level connection, the asset name, and materialization instead")
+			}
+		}
+	}
 
 	if strategy == "merge" && len(asset.ColumnNamesWithPrimaryKey()) == 0 {
 		addError("Invalid materialization: merge needs at least one primary-key column")

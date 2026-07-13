@@ -65,6 +65,11 @@ func (s *AssetService) RefactorDirectDependencies(ctx context.Context, parsedPip
 				current.ExecutableFile.Content = nextContent
 				updated = true
 			}
+		} else if isLoadAsset(current) {
+			if sourceTable, ok := current.Parameters.GetString(loadParamSourceTable); ok && strings.EqualFold(strings.TrimSpace(sourceTable), oldName) {
+				current.Parameters[loadParamSourceTable] = newName
+				updated = true
+			}
 		}
 
 		if !updated {

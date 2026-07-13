@@ -186,26 +186,18 @@ try {
     },
   });
 
-  // Load asset: created without content so the backend writes its canonical
-  // flat-parameter skeleton (with type: load), then filled in the way the
-  // form editor writes parameters (local CSV -> the warehouse connection).
+  // Load asset: created semantically so the backend writes the canonical
+  // single-file definition (local CSV -> the warehouse connection).
   const loadAsset = await demo.api(`/api/pipelines/${ACME}/assets`, {
     method: "POST",
     body: {
       name: "raw.exchange_rates",
       type: "load",
       path: "assets/raw/exchange_rates.asset.yml",
-    },
-  });
-  await demo.api(`/api/pipelines/${ACME}/assets/${loadAsset.asset_id}`, {
-    method: "PUT",
-    body: {
+      connection: "duckdb-default",
       parameters: {
         source_connection: "local",
         source_table: "data/exchange_rates.csv",
-        destination_connection: "duckdb-default",
-        destination_table: "raw.exchange_rates",
-        mode: "full-refresh",
       },
     },
   });
@@ -268,7 +260,7 @@ try {
     await shot(page, "python-asset");
   });
 
-  // load-asset: the form editor with source/destination/mode filled in
+  // load-asset: the form editor with a local source and name-derived destination
   await withPage({ width: 1400, height: 900 }, async (page) => {
     await goto(page, `/pipelines/${ACME}/assets/${loadAsset.asset_id}/code`, 5000);
     await collapseResults(page);

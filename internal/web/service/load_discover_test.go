@@ -63,7 +63,7 @@ func TestLoadSourceTargetArgsLocalFile(t *testing.T) {
 		t.Errorf("local source args = %v", srcArgs)
 	}
 
-	tgtArgs, err := executor.loadTargetArgs(nil, loadRunParams{DestinationConnection: "LOCAL", DestinationTable: "/out/result.csv"})
+	tgtArgs, err := executor.loadTargetArgs(nil, loadRunParams{DestinationConnection: "LOCAL", DestinationObject: "/out/result.csv"})
 	if err != nil {
 		t.Fatalf("local target: %v", err)
 	}

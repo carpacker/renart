@@ -468,7 +468,12 @@ func TestMaterializationTypeCheckFindings(t *testing.T) {
 
 	t.Run("valid sling merge", func(t *testing.T) {
 		asset := &pipeline.Asset{
-			Type: pipeline.AssetType("load"),
+			Type:       pipeline.AssetType("load"),
+			Connection: "duckdb-default",
+			Parameters: pipeline.ParameterMap{
+				loadParamSourceConnection: "postgres-default",
+				loadParamSourceTable:      "public.orders",
+			},
 			Columns: []pipeline.Column{
 				{Name: "id", Type: "integer", PrimaryKey: true},
 				{Name: "updated_at", Type: "timestamp"},

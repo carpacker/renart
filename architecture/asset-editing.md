@@ -116,8 +116,13 @@ round-trips unknown fields).
   column-scoped primary keys, `update_on_merge`, custom `merge_sql`, and a
   column-backed update-key combobox for Sling-backed assets. Load and API
   assets only offer Sling-compatible replace, truncate, append, and merge
-  strategies. Every edit flows through the transaction/API write paths; the
-  workspace SSE stream refreshes the asset.
+  strategies. API, Python, and Load assets share the same top-level target
+  connection control, including an explicit Auto state. The Load editor keeps
+  only source fields in `parameters`, derives database destinations from the
+  asset name, shows `destination_object` for file/storage targets, and offers a
+  go-to-source action when the source resolves to an upstream asset. Every edit
+  flows through the transaction/API write paths; the workspace SSE stream
+  refreshes the asset.
 - **Provenance classification client-side** (`lib/asset-provenance.ts`)
   mirrors the flat-key schema for display (source chips: "inferred from SQL" /
   "manual").

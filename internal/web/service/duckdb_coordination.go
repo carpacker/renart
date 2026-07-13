@@ -81,7 +81,10 @@ func duckDBConnectionNamesForAsset(pl *pipeline.Pipeline, asset *pipeline.Asset)
 		return nil
 	}
 	if isLoadAsset(asset) {
-		params := loadParamsFromAsset(asset)
+		params, err := resolvedLoadParams(asset, pl)
+		if err != nil {
+			return []string{loadParamsFromAsset(asset).SourceConnection}
+		}
 		return []string{params.SourceConnection, params.DestinationConnection}
 	}
 

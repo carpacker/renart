@@ -247,19 +247,11 @@ func (s *WorkspaceService) ComputeState(ctx context.Context) (model.WorkspaceSta
 			}
 
 			connectionName := ""
-			if isAPIAsset(asset) {
-				if conn, connErr := apiConnectionNameForAsset(asset, parsed); connErr == nil {
-					connectionName = conn
-				}
-			} else if conn, connErr := parsed.GetConnectionNameForAsset(asset); connErr == nil {
+			if conn, connErr := targetConnectionNameForAsset(asset, parsed); connErr == nil {
 				connectionName = conn
 			}
 			parameters := parameterStrings(asset.Parameters)
-			if isLoadAsset(asset) {
-				if summary := loadSummaryParameters(content); len(summary) > 0 {
-					parameters = summary
-				}
-			} else if isAPIAsset(asset) {
+			if isAPIAsset(asset) {
 				if summary := apiSummaryParameters(content, asset, parsed); len(summary) > 0 {
 					parameters = summary
 				}
@@ -298,6 +290,7 @@ func (s *WorkspaceService) ComputeState(ctx context.Context) (model.WorkspaceSta
 				Meta:                    assetMeta,
 				Columns:                 PipelineColumnsToModelColumns(columns),
 				Connection:              connectionName,
+				ExplicitConnection:      strings.TrimSpace(asset.Connection),
 				MaterializationType:     declaredMatType,
 				MaterializationStrategy: string(asset.Materialization.Strategy),
 				IncrementalKey:          asset.Materialization.IncrementalKey,

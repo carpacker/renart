@@ -9,29 +9,34 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-func TestPersistYAMLAssetDefinitionPreservesLoadConfigSibling(t *testing.T) {
+func TestPersistYAMLAssetDefinitionPreservesCanonicalLoadConfig(t *testing.T) {
 	fs := afero.NewMemMapFs()
 	definition := `name: example.thing
-run: thing.sling.yml
 type: load
+connection: duckdb-default
+parameters:
+  source_connection: postgres-default
+  source_table: public.thing
+custom_key: keep-me
 `
 	if err := afero.WriteFile(fs, "/p/assets/thing.asset.yml", []byte(definition), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	replication := "source: duckdb-default\ntarget: duckdb-default\nstreams:\n  s1:\n    object: x\n"
-	if err := afero.WriteFile(fs, "/p/assets/thing.sling.yml", []byte(replication), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
 	asset := &pipeline.Asset{
 		Name:           "example.thing",
 		Type:           "load",
+		Connection:     "duckdb-default",
 		DefinitionFile: pipeline.TaskDefinitionFile{Path: "/p/assets/thing.asset.yml"},
-		ExecutableFile: pipeline.ExecutableFile{Path: "/p/assets/thing.sling.yml"},
-		Upstreams:      []pipeline.Upstream{{Type: "asset", Value: "example.upstream", Mode: pipeline.UpstreamModeFull}},
+		ExecutableFile: pipeline.ExecutableFile{Path: "/p/assets/thing.asset.yml"},
+		Parameters: pipeline.ParameterMap{
+			loadParamSourceConnection: "postgres-default",
+			loadParamSourceTable:      "public.thing",
+		},
+		Upstreams: []pipeline.Upstream{{Type: "asset", Value: "example.upstream", Mode: pipeline.UpstreamModeFull}},
 		Materialization: pipeline.Materialization{
 			Type:     pipeline.MaterializationTypeTable,
-			Strategy: pipeline.MaterializationStrategyMerge,
+			Strategy: pipeline.MaterializationStrategyCreateReplace,
 		},
 	}
 
@@ -39,20 +44,18 @@ type: load
 		t.Fatalf("persist: %v", err)
 	}
 
-	// The replication config (the executable sibling) must be untouched.
-	got, _ := afero.ReadFile(fs, "/p/assets/thing.sling.yml")
-	if string(got) != replication {
-		t.Errorf("sling replication config was modified:\n%s", got)
-	}
-
-	// The definition got the new managed fields and kept `run`.
+	// The canonical single-file definition gets managed fields while preserving
+	// unrelated content.
 	def, _ := afero.ReadFile(fs, "/p/assets/thing.asset.yml")
 	var parsed map[string]any
 	if err := yaml.Unmarshal(def, &parsed); err != nil {
 		t.Fatalf("definition not valid yaml: %v", err)
 	}
-	if parsed["run"] != "thing.sling.yml" {
-		t.Errorf("run pointer dropped:\n%s", def)
+	if parsed["custom_key"] != "keep-me" {
+		t.Errorf("custom key dropped:\n%s", def)
+	}
+	if parsed["connection"] != "duckdb-default" {
+		t.Errorf("connection not written:\n%s", def)
 	}
 	if _, ok := parsed["depends"]; !ok {
 		t.Errorf("depends not written:\n%s", def)
@@ -127,24 +130,20 @@ func TestMergeYAMLAssetDefinitionManagesLoadFlatParameters(t *testing.T) {
 	// source_table must be written while unrelated keys survive.
 	existing := `name: example.move_users
 type: load
+connection: duckdb_default
 parameters:
   source_connection: postgres_prod
   source_table: public.users
-  destination_connection: duckdb_default
-  destination_table: public.users
-  mode: full-refresh
 custom_key: keep-me
 `
 	asset := &pipeline.Asset{
 		Name:           "example.move_users",
 		Type:           "load",
+		Connection:     "warehouse",
 		ExecutableFile: pipeline.ExecutableFile{Path: "/x/move_users.asset.yml"},
 		Parameters: pipeline.ParameterMap{
-			"source_connection":      "postgres_prod",
-			"source_table":           "public.customers", // edited
-			"destination_connection": "duckdb_default",
-			"destination_table":      "public.users",
-			"mode":                   "incremental", // edited
+			"source_connection": "postgres_prod",
+			"source_table":      "public.customers", // edited
 		},
 	}
 
@@ -154,6 +153,7 @@ custom_key: keep-me
 	}
 	var parsed struct {
 		Parameters map[string]string `yaml:"parameters"`
+		Connection string            `yaml:"connection"`
 		CustomKey  string            `yaml:"custom_key"`
 	}
 	if err := yaml.Unmarshal(merged, &parsed); err != nil {
@@ -162,8 +162,8 @@ custom_key: keep-me
 	if parsed.Parameters["source_table"] != "public.customers" {
 		t.Errorf("source_table not updated: %q\n%s", parsed.Parameters["source_table"], merged)
 	}
-	if parsed.Parameters["mode"] != "incremental" {
-		t.Errorf("mode not updated: %q", parsed.Parameters["mode"])
+	if parsed.Connection != "warehouse" {
+		t.Errorf("connection not updated: %q", parsed.Connection)
 	}
 	if parsed.CustomKey != "keep-me" {
 		t.Errorf("unmanaged key dropped:\n%s", merged)
@@ -172,8 +172,7 @@ custom_key: keep-me
 
 func TestMergeYAMLAssetDefinitionClearsRemovedKeys(t *testing.T) {
 	existing := `name: example.thing
-type: load
-run: thing.sling.yml
+type: api
 owner: old@example.com
 tags:
   - daily
@@ -183,8 +182,8 @@ depends:
 	// The asset no longer carries owner/tags/depends.
 	asset := &pipeline.Asset{
 		Name:           "example.thing",
-		Type:           "load",
-		ExecutableFile: pipeline.ExecutableFile{Path: "/x/thing.sling.yml"},
+		Type:           "api",
+		ExecutableFile: pipeline.ExecutableFile{Path: "/x/thing.asset.yml"},
 	}
 
 	merged, err := mergeYAMLAssetDefinition([]byte(existing), asset)
@@ -199,10 +198,6 @@ depends:
 		if _, ok := parsed[key]; ok {
 			t.Errorf("expected %q to be cleared:\n%s", key, merged)
 		}
-	}
-	// The run pointer must survive even though it is unmanaged.
-	if parsed["run"] != "thing.sling.yml" {
-		t.Errorf("run pointer was dropped:\n%s", merged)
 	}
 	if !strings.Contains(string(merged), "name: example.thing") {
 		t.Errorf("name missing:\n%s", merged)

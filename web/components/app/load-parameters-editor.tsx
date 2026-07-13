@@ -3,8 +3,19 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 
 import { useAtomValue } from "jotai";
-import { Boxes, Check, Database, FileText, Folder, HardDrive, Loader2, Plug } from "lucide-react";
+import {
+  ArrowUpRight,
+  Boxes,
+  Check,
+  Database,
+  FileText,
+  Folder,
+  HardDrive,
+  Loader2,
+  Plug,
+} from "lucide-react";
 
+import { Button } from "@/components/ui/button";
 import {
   Command,
   CommandEmpty,
@@ -14,38 +25,24 @@ import {
   CommandList,
 } from "@/components/ui/command";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { Separator } from "@/components/ui/separator";
 import { refreshAssetColumnsFromDefinition } from "@/lib/api-asset-transactions";
 import { updateAsset } from "@/lib/api-assets";
 import { getOnboardingPathSuggestions } from "@/lib/api-onboarding";
 import { discoverLoadStreams, LoadDiscoveryStream } from "@/lib/api-load";
-import { selectedEnvironmentAtom } from "@/lib/atoms/workspace";
+import { selectedEnvironmentAtom, workspaceAtom } from "@/lib/atoms/workspace";
 import { IngestrSuggestion, WebAsset, WorkspaceConfigConnection } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import { useWorkspaceSettingsData } from "@/hooks/use-workspace-settings-data";
+import {
+  LOCAL_LOAD_CONNECTION_OPTION,
+  isLocalLoadConnection,
+  loadConnectionCategory,
+  loadConnectionsForEnvironment,
+  loadTargetNeedsDestinationObject,
+} from "@/lib/load-assets";
 
-import { Comment, InlineSelect, Key, Line } from "./asset-yaml-editor";
-
-// A Load source/target can be a local file rather than a bruin connection. It is
-// represented by this synthetic connection name; the run path omits --src-conn /
-// --tgt-conn and treats the corresponding _table value as a file path.
-const LOCAL_CONNECTION = "local";
-
-function isLocalConnection(name: string | undefined) {
-  return (name ?? "").trim().toLowerCase() === LOCAL_CONNECTION;
-}
-
-const LOCAL_CONNECTION_OPTION: WorkspaceConfigConnection = {
-  name: LOCAL_CONNECTION,
-  type: "local file",
-  values: {},
-  load_category: "file",
-};
-
-const SLING_MODES = [
-  { value: "full-refresh", label: "full-refresh" },
-  { value: "incremental", label: "incremental" },
-  { value: "truncate", label: "truncate" },
-];
+import { Comment, Key, Line } from "./asset-yaml-editor";
 
 const CATEGORY_LABELS: Record<string, string> = {
   database: "Databases",
@@ -63,38 +60,58 @@ function categoryIcon(category: string | undefined) {
 
 /**
  * The main-pane editor for a Load asset. Load assets carry their whole
- * replication intent under flat `parameters` (source/target connection + object,
- * mode), so the executable surface is this interactive form rather than Monaco.
+ * source intent under flat `parameters`; its target connection lives in the
+ * shared metadata editor and database targets always use the asset name.
  * Generic metadata (name, columns, dependencies, …) stays in the Properties
  * sidebar; the upstream dependency and columns are inferred from the source.
  */
 export function LoadParametersEditor({
   asset,
   pipelineId,
+  onGoToAsset,
 }: {
   asset: WebAsset;
   pipelineId: string;
+  onGoToAsset?: (pipelineId: string, assetId: string) => void;
 }) {
   const environment = useAtomValue(selectedEnvironmentAtom);
+  const workspace = useAtomValue(workspaceAtom);
   const { workspaceConfig } = useWorkspaceSettingsData();
   const params = asset.parameters ?? {};
 
-  const connections = useMemo(() => {
-    const environments = workspaceConfig?.environments ?? [];
-    const active =
-      environments.find((env) => env.name === environment) ??
-      environments.find(
-        (env) =>
-          env.name ===
-          (workspaceConfig?.selected_environment || workspaceConfig?.default_environment),
-      ) ??
-      environments[0];
-    const loadConnections = (active?.connections ?? []).filter((connection) =>
-      Boolean(connection.load_category),
+  const configuredConnections = useMemo(
+    () => loadConnectionsForEnvironment(workspaceConfig, environment),
+    [workspaceConfig, environment],
+  );
+  const connections = useMemo(
+    () => [LOCAL_LOAD_CONNECTION_OPTION, ...configuredConnections],
+    [configuredConnections],
+  );
+  const targetCategory = loadConnectionCategory(configuredConnections, asset.connection);
+  const targetNeedsObject = loadTargetNeedsDestinationObject(targetCategory);
+
+  const sourceAsset = useMemo(() => {
+    const pipeline = workspace?.pipelines.find((candidate) => candidate.id === pipelineId);
+    if (!pipeline) return null;
+    const source = (params.source_table ?? "").trim().toLowerCase();
+    const direct = source
+      ? pipeline.assets.find(
+          (candidate) =>
+            candidate.name.trim().toLowerCase() === source ||
+            candidate.id.trim().toLowerCase() === source,
+        )
+      : undefined;
+    if (direct) return direct;
+    if ((asset.upstreams ?? []).length !== 1) return null;
+    const upstream = asset.upstreams[0].trim().toLowerCase();
+    return (
+      pipeline.assets.find(
+        (candidate) =>
+          candidate.name.trim().toLowerCase() === upstream ||
+          candidate.id.trim().toLowerCase() === upstream,
+      ) ?? null
     );
-    // The local-file pseudo-connection is always available.
-    return [LOCAL_CONNECTION_OPTION, ...loadConnections];
-  }, [workspaceConfig, environment]);
+  }, [asset.upstreams, params.source_table, pipelineId, workspace?.pipelines]);
 
   const setParam = (key: string, value: string) => {
     const next: Record<string, string> = { ...params };
@@ -110,10 +127,19 @@ export function LoadParametersEditor({
   return (
     <div className="font-monaco min-h-0 flex-1 overflow-y-auto bg-background p-3 text-[13px] leading-6">
       <Comment>Load assets replicate data between two configured connections.</Comment>
-      <Comment>Source and target can each be a database, storage bucket, or file.</Comment>
+      <Comment>
+        Edit the target connection in Properties; materialization controls the load mode.
+      </Comment>
       <Line>
         <Key>type</Key>
         <span className="text-foreground">load</span>
+      </Line>
+      <Line>
+        <Key>connection</Key>
+        <span className="truncate text-foreground">
+          {(asset.explicit_connection ?? "").trim() ||
+            (asset.connection ? `auto (${asset.connection})` : "auto")}
+        </span>
       </Line>
       <Line>
         <Key>parameters</Key>
@@ -129,7 +155,7 @@ export function LoadParametersEditor({
       </Line>
       <Line depth={1}>
         <Key>source_table</Key>
-        {isLocalConnection(params.source_connection) ? (
+        {isLocalLoadConnection(params.source_connection) ? (
           <PathValue
             value={params.source_table ?? ""}
             placeholder="path/to/source.csv"
@@ -144,44 +170,47 @@ export function LoadParametersEditor({
             onCommit={(value) => setParam("source_table", value)}
           />
         )}
+        {sourceAsset && onGoToAsset ? (
+          <Button
+            variant="ghost"
+            size="icon-xs"
+            aria-label={`Go to ${sourceAsset.name}`}
+            title={`Go to ${sourceAsset.name}`}
+            onClick={() => onGoToAsset(pipelineId, sourceAsset.id)}
+          >
+            <ArrowUpRight />
+          </Button>
+        ) : null}
       </Line>
 
-      <Line depth={1}>
-        <Key>destination_connection</Key>
-        <ConnectionValue
-          value={params.destination_connection ?? ""}
-          connections={connections}
-          onPick={(name) => setParam("destination_connection", name)}
-        />
-      </Line>
-      <Line depth={1}>
-        <Key>destination_table</Key>
-        {isLocalConnection(params.destination_connection) ? (
-          <PathValue
-            value={params.destination_table ?? ""}
-            placeholder="path/to/destination.csv"
-            onCommit={(value) => setParam("destination_table", value)}
-          />
-        ) : (
-          <StreamValue
-            value={params.destination_table ?? ""}
-            connection={params.destination_connection ?? ""}
-            environment={environment}
-            placeholder="schema.table"
-            onCommit={(value) => setParam("destination_table", value)}
-          />
-        )}
-      </Line>
-      <Line depth={1}>
-        <Key>mode</Key>
-        <InlineSelect
-          value={params.mode ?? "full-refresh"}
-          options={SLING_MODES}
-          onChange={(mode) => setParam("mode", mode)}
-        />
-      </Line>
+      {targetNeedsObject ? (
+        <Line depth={1}>
+          <Key>destination_object</Key>
+          {isLocalLoadConnection(asset.connection) ? (
+            <PathValue
+              value={params.destination_object ?? ""}
+              placeholder="path/to/destination.csv"
+              onCommit={(value) => setParam("destination_object", value)}
+            />
+          ) : (
+            <StreamValue
+              value={params.destination_object ?? ""}
+              connection={asset.connection ?? ""}
+              environment={environment}
+              placeholder="path/to/object"
+              onCommit={(value) => setParam("destination_object", value)}
+            />
+          )}
+        </Line>
+      ) : (
+        <Line depth={1}>
+          <Key>destination_table</Key>
+          <span className="truncate text-foreground">{asset.name}</span>
+        </Line>
+      )}
 
-      <div className="mt-3 border-t pt-2">
+      <Separator className="mt-3" />
+      <div className="pt-2">
         <Comment>The upstream dependency is inferred from the source on save.</Comment>
         <InferColumnsButton asset={asset} />
       </div>

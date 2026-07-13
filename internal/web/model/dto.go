@@ -5,24 +5,28 @@ import "time"
 
 // Asset represents a web API asset with its metadata.
 type Asset struct {
-	ID                      string            `json:"id"`
-	Name                    string            `json:"name"`
-	Type                    string            `json:"type"`
-	Path                    string            `json:"path"`
-	Content                 string            `json:"content"`
-	Upstreams               []string          `json:"upstreams"`
-	Parameters              map[string]string `json:"parameters,omitempty"`
-	Meta                    map[string]string `json:"meta,omitempty"`
-	Columns                 []Column          `json:"columns,omitempty"`
-	Connection              string            `json:"connection,omitempty"`
-	MaterializationType     string            `json:"materialization_type,omitempty"`
-	MaterializationStrategy string            `json:"materialization_strategy,omitempty"`
-	IncrementalKey          string            `json:"incremental_key,omitempty"`
-	Owner                   string            `json:"owner,omitempty"`
-	Tags                    []string          `json:"tags,omitempty"`
-	IsMaterialized          bool              `json:"is_materialized"`
-	MaterializedAs          string            `json:"materialized_as,omitempty"`
-	RowCount                *int64            `json:"row_count,omitempty"`
+	ID         string            `json:"id"`
+	Name       string            `json:"name"`
+	Type       string            `json:"type"`
+	Path       string            `json:"path"`
+	Content    string            `json:"content"`
+	Upstreams  []string          `json:"upstreams"`
+	Parameters map[string]string `json:"parameters,omitempty"`
+	Meta       map[string]string `json:"meta,omitempty"`
+	Columns    []Column          `json:"columns,omitempty"`
+	// Connection is the effective target connection after applying pipeline
+	// defaults; ExplicitConnection is the persisted asset-level override used by
+	// metadata editors to represent the Auto state without losing runtime context.
+	Connection              string   `json:"connection,omitempty"`
+	ExplicitConnection      string   `json:"explicit_connection,omitempty"`
+	MaterializationType     string   `json:"materialization_type,omitempty"`
+	MaterializationStrategy string   `json:"materialization_strategy,omitempty"`
+	IncrementalKey          string   `json:"incremental_key,omitempty"`
+	Owner                   string   `json:"owner,omitempty"`
+	Tags                    []string `json:"tags,omitempty"`
+	IsMaterialized          bool     `json:"is_materialized"`
+	MaterializedAs          string   `json:"materialized_as,omitempty"`
+	RowCount                *int64   `json:"row_count,omitempty"`
 	// Class separates production assets from notebook cells; catalog,
 	// global lineage, and pipeline-side completion filter to "pipeline".
 	// Empty means "pipeline" (older payloads).
@@ -121,11 +125,11 @@ type WorkspaceState struct {
 	EnvironmentPolicies map[string]EnvironmentPolicy `json:"environment_policies,omitempty"`
 	// Features are project-scoped feature flags from .renart/project.yml
 	// (e.g. "ingestr" re-enables ingestr surfaces in the UI).
-	Features map[string]bool `json:"features,omitempty"`
-	Errors   []string        `json:"errors"`
-	UpdatedAt           time.Time                    `json:"updated_at"`
-	Metadata            map[string][]string          `json:"metadata"`
-	Revision            int64                        `json:"revision,omitempty"`
+	Features  map[string]bool     `json:"features,omitempty"`
+	Errors    []string            `json:"errors"`
+	UpdatedAt time.Time           `json:"updated_at"`
+	Metadata  map[string][]string `json:"metadata"`
+	Revision  int64               `json:"revision,omitempty"`
 }
 
 // WorkspaceEvent represents an SSE event for workspace changes.

@@ -270,7 +270,7 @@ func (s *AssetService) Create(ctx context.Context, pipelineID string, req Create
 		}
 		sourceAsset = resolvedAsset
 		sourcePipeline = resolvedPipeline
-		if conn, connErr := sourcePipeline.GetConnectionNameForAsset(sourceAsset); connErr == nil {
+		if conn, connErr := targetConnectionNameForAsset(sourceAsset, sourcePipeline); connErr == nil {
 			sourceConnectionName = conn
 		}
 	}
@@ -323,7 +323,46 @@ func (s *AssetService) Create(ctx context.Context, pipelineID string, req Create
 	}
 
 	content := req.Content
-	if content == "" {
+	if isLoadAssetType(assetType) {
+		// Load creation is semantic: always render the canonical single-file
+		// definition from the request fields so callers cannot reintroduce the
+		// removed destination_connection/destination_table/mode representation.
+		createPipeline := sourcePipeline
+		if createPipeline == nil {
+			createPipeline, _ = NewRenartPipelineBuilder(fs).CreatePipelineFromPath(ctx, pipelinePath, pipeline.WithMutate())
+		}
+		sourceConnection := strings.TrimSpace(req.Parameters[loadParamSourceConnection])
+		sourceTable := strings.TrimSpace(req.Parameters[loadParamSourceTable])
+		depends := []string(nil)
+		if sourceAsset != nil {
+			if sourceConnection == "" {
+				sourceConnection = sourceConnectionName
+			}
+			if sourceTable == "" {
+				sourceTable = sourceAsset.Name
+			}
+			depends = []string{sourceAsset.Name}
+		}
+		loadAsset := &pipeline.Asset{
+			Name:       assetName,
+			Type:       pipeline.AssetType(loadAssetType),
+			Connection: strings.TrimSpace(req.Connection),
+		}
+		if _, connectionErr := loadConnectionNameForAsset(loadAsset, createPipeline); connectionErr != nil {
+			return AssetMutationResponse{}, newAPIError(400, "invalid_load_target_connection", connectionErr.Error())
+		}
+		var renderErr error
+		content, renderErr = renderLoadAssetContent(
+			req.Connection,
+			sourceConnection,
+			sourceTable,
+			req.Parameters[loadParamDestinationObject],
+			depends,
+		)
+		if renderErr != nil {
+			return AssetMutationResponse{}, newAPIError(400, "invalid_load_asset", renderErr.Error())
+		}
+	} else if content == "" {
 		if sourceAsset != nil {
 			content = s.deps.DerivedAssetContent(assetName, assetType, relAssetPath, sourceAsset.Name, sourceConnectionName)
 		} else {
@@ -377,13 +416,15 @@ func (s *AssetService) Create(ctx context.Context, pipelineID string, req Create
 }
 
 type CreateAssetParams struct {
-	Name            string `json:"name"`
-	Type            string `json:"type"`
-	Path            string `json:"path"`
-	Content         string `json:"content"`
-	SourceAssetID   string `json:"source_asset_id"`
-	SeedFileName    string `json:"seed_file_name"`
-	SeedFileContent string `json:"seed_file_content"`
+	Name            string            `json:"name"`
+	Type            string            `json:"type"`
+	Path            string            `json:"path"`
+	Content         string            `json:"content"`
+	Connection      string            `json:"connection"`
+	Parameters      map[string]string `json:"parameters"`
+	SourceAssetID   string            `json:"source_asset_id"`
+	SeedFileName    string            `json:"seed_file_name"`
+	SeedFileContent string            `json:"seed_file_content"`
 }
 
 func (s *AssetService) Update(ctx context.Context, assetID string, req AssetUpdateRequest) (AssetMutationResponse, *APIError) {
@@ -522,9 +563,8 @@ func (s *AssetService) Update(ctx context.Context, assetID string, req AssetUpda
 		}
 		if isYAMLDefinedAsset(asset) {
 			// api/load/ingestr/plain-yaml: overlay managed fields onto the
-			// definition file, preserving the request spec, sling replication
-			// config and any other unmanaged content (and columns, which the old
-			// per-type writers silently dropped).
+			// definition file, preserving request-specific and other unmanaged
+			// content (and columns, which the old per-type writers silently dropped).
 			if apiErr := s.persistYAMLAssetPreservingInferredName(asset); apiErr != nil {
 				return AssetMutationResponse{}, apiErr
 			}
@@ -546,15 +586,15 @@ func (s *AssetService) Update(ctx context.Context, assetID string, req AssetUpda
 	}
 
 	// A YAML-defined asset was fully written by the codec above; rewriting the
-	// executable file here would overwrite that (for api the executable IS the
-	// definition file) or needlessly touch the sling replication config.
+	// executable file here would overwrite that (for API/Load the executable is
+	// the definition file).
 	if !persistedViaCodec {
 		latestBytes, err := afero.ReadFile(fs, absAssetPath)
 		if err != nil {
 			return AssetMutationResponse{}, newAPIError(500, "asset_read_failed", err.Error())
 		}
 		mergedContent := desiredExecutable
-		if !isLoadExecutablePath(relAssetPath) && !isAPIExecutablePath(relAssetPath) {
+		if !isAPIExecutablePath(relAssetPath) {
 			mergedContent = MergeExecutableContent(string(latestBytes), desiredExecutable)
 		}
 		if err := afero.WriteFile(fs, absAssetPath, []byte(mergedContent), 0o644); err != nil {
@@ -627,28 +667,11 @@ func (s *AssetService) Delete(ctx context.Context, assetID string) (StatusRespon
 	if err != nil {
 		return StatusResponse{}, newAPIError(400, "invalid_asset_path", err.Error())
 	}
-	pathsToRemove := []string{absAssetPath}
-	pathsToSuppress := []string{filepath.ToSlash(relAssetPath)}
-	if isLoadExecutablePath(relAssetPath) && s.deps.ResolveAssetByID != nil {
-		resolvedRelPath, _, asset, resolveErr := s.deps.ResolveAssetByID(ctx, assetID)
-		if resolveErr == nil && isLoadAsset(asset) && asset.DefinitionFile.Path != "" {
-			pathsToRemove = appendUniqueStrings(pathsToRemove, asset.DefinitionFile.Path)
-			if relDefinitionPath, relErr := filepath.Rel(s.deps.WorkspaceRoot, asset.DefinitionFile.Path); relErr == nil {
-				pathsToSuppress = appendUniqueStrings(pathsToSuppress, filepath.ToSlash(relDefinitionPath))
-			}
-			pathsToSuppress = appendUniqueStrings(pathsToSuppress, filepath.ToSlash(resolvedRelPath))
-		}
-	}
-
 	fs := s.fs()
-	for _, pathToRemove := range pathsToRemove {
-		if err := fs.Remove(pathToRemove); err != nil {
-			return StatusResponse{}, newAPIError(500, "asset_delete_failed", err.Error())
-		}
+	if err := fs.Remove(absAssetPath); err != nil {
+		return StatusResponse{}, newAPIError(500, "asset_delete_failed", err.Error())
 	}
-	for _, changedPath := range pathsToSuppress {
-		s.deps.SuppressWatcher(changedPath)
-	}
+	s.deps.SuppressWatcher(filepath.ToSlash(relAssetPath))
 	s.deps.PushWorkspaceUpdateImmediate(ctx, "asset.deleted", relAssetPath)
 	return StatusResponse{Status: "ok"}, nil
 }
@@ -795,15 +818,18 @@ func DefaultDerivedSQLAssetContent(assetName, assetType, assetPath, sourceAssetN
 	// asset as its source. bruin parses `parameters` as flat strings, so the whole
 	// replication intent stays in one bruin-loadable file (no .sling.yml sidecar).
 	if isLoadAssetType(assetType) {
-		object := assetNameLeafPath(assetName)
-		if strings.TrimSpace(object) == "" {
-			object = "asset"
-		}
 		sourceConnection := strings.TrimSpace(connectionName)
 		if sourceConnection == "" {
 			sourceConnection = "your_source_connection"
 		}
-		return fmt.Sprintf("type: load\n\ndepends:\n  - %s\n\nparameters:\n  source_connection: %s\n  source_table: %s\n  destination_connection: your_destination_connection\n  destination_table: public.%s\n  mode: full-refresh\n", sourceAssetName, sourceConnection, sourceAssetName, object)
+		content, _ := renderLoadAssetContent(
+			"your_destination_connection",
+			sourceConnection,
+			sourceAssetName,
+			"",
+			[]string{sourceAssetName},
+		)
+		return content
 	}
 
 	header := fmt.Sprintf("/* @bruin\n\ntype: %s\nmaterialization:\n  type: view\n\n@bruin */\n\n", assetType)

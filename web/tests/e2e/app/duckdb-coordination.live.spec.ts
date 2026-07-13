@@ -62,14 +62,13 @@ default_connections:
     join(loaderDir, "assets", "load.asset.yml"),
     `name: loader.loaded
 type: load
+connection: duckdb-default
 materialization:
   type: table
+  strategy: create+replace
 parameters:
   source_connection: local
   source_table: ${join(workspaceDir, "source.csv")}
-  destination_connection: duckdb-default
-  destination_table: loader.loaded
-  mode: full-refresh
 `,
   );
 

@@ -13,10 +13,9 @@ import (
 // YAML-defined assets (api, load, ingestr, plain `.asset.yml`, and any future
 // kind such as dbt) all round-trip through a single node-preserving codec: on
 // write, renart replaces only the keys it manages and leaves everything else in
-// the file untouched — the API request `parameters` spec, the sling `run`
-// pointer and `source`/`target`/`streams` config, comments, and any unknown
-// keys. This is the composable seam: a new YAML asset kind needs no bespoke
-// reader/writer, it just works.
+// the file untouched — notably the API request `parameters` spec, comments, and
+// any unknown keys. This is the composable seam: a new YAML asset kind needs no
+// bespoke reader/writer, it just works.
 //
 // SQL and Python assets are NOT handled here; their definition lives in a
 // `@bruin` comment block embedded in the executable file, which bruin's own

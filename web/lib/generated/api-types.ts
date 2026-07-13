@@ -33,6 +33,7 @@ export type WebAsset = {
   meta?: Record<string, string>;
   columns?: WebColumn[];
   connection?: string;
+  explicit_connection?: string;
   materialization_type?: string;
   materialization_strategy?: string;
   incremental_key?: string;

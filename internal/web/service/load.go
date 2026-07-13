@@ -9,7 +9,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"sort"
 	"strings"
 	"time"
 
@@ -68,21 +67,14 @@ func isLoadAsset(asset *pipeline.Asset) bool {
 	return asset != nil && isLoadAssetType(string(asset.Type))
 }
 
-func isLoadExecutablePath(path string) bool {
-	return strings.HasSuffix(strings.ToLower(strings.TrimSpace(path)), ".sling.yml") ||
-		strings.HasSuffix(strings.ToLower(strings.TrimSpace(path)), ".sling.yaml")
-}
-
 // Flat parameter keys for a Load asset. They live under the asset's
 // `parameters:` (bruin parses that as map[string]string, so they must be flat),
 // which keeps a Load asset a single bruin-loadable .asset.yml — no .sling.yml
 // replication sidecar.
 const (
-	loadParamSourceConnection      = "source_connection"
-	loadParamSourceTable           = "source_table"
-	loadParamDestinationConnection = "destination_connection"
-	loadParamDestinationTable      = "destination_table"
-	loadParamMode                  = "mode"
+	loadParamSourceConnection  = "source_connection"
+	loadParamSourceTable       = "source_table"
+	loadParamDestinationObject = "destination_object"
 )
 
 // loadRunParams is the resolved, flat replication intent of a Load asset.
@@ -90,8 +82,8 @@ type loadRunParams struct {
 	SourceConnection      string
 	SourceTable           string
 	DestinationConnection string
-	DestinationTable      string
-	Mode                  string
+	DestinationObject     string
+	AssetName             string
 }
 
 // loadParamsFromAsset reads the flat replication parameters off an asset.
@@ -106,13 +98,20 @@ func loadParamsFromAsset(asset *pipeline.Asset) loadRunParams {
 	}
 	params.SourceConnection = get(loadParamSourceConnection)
 	params.SourceTable = get(loadParamSourceTable)
-	params.DestinationConnection = get(loadParamDestinationConnection)
-	params.DestinationTable = get(loadParamDestinationTable)
-	params.Mode = get(loadParamMode)
-	if params.DestinationTable == "" {
-		params.DestinationTable = strings.TrimSpace(asset.Name)
-	}
+	params.DestinationConnection = strings.TrimSpace(asset.Connection)
+	params.DestinationObject = get(loadParamDestinationObject)
+	params.AssetName = strings.TrimSpace(asset.Name)
 	return params
+}
+
+func resolvedLoadParams(asset *pipeline.Asset, pl *pipeline.Pipeline) (loadRunParams, error) {
+	params := loadParamsFromAsset(asset)
+	connectionName, err := loadConnectionNameForAsset(asset, pl)
+	if err != nil {
+		return params, err
+	}
+	params.DestinationConnection = connectionName
+	return params, nil
 }
 
 // loadLocalConnectionName is the synthetic "connection" that marks a Load
@@ -161,79 +160,111 @@ func (e *HybridBruinExecutor) loadSourceArgs(manager config.ConnectionGetter, pa
 	return []string{"--src-conn", uri, "--src-stream", params.SourceTable}, nil
 }
 
-// loadTargetArgs builds the --tgt-* flags for a run: a file:// object (no
-// connection) for a local target, otherwise the bridged connection URI + object.
+// loadTargetArgs builds the --tgt-* flags for a run. Database destinations are
+// always named after the asset; file and object-storage destinations use the
+// explicit destination_object parameter.
 func (e *HybridBruinExecutor) loadTargetArgs(manager config.ConnectionGetter, params loadRunParams) ([]string, error) {
 	if isLocalLoadConnection(params.DestinationConnection) {
-		if params.DestinationTable == "" {
-			return nil, errors.New("a local load target requires a destination_table file path")
+		if params.DestinationObject == "" {
+			return nil, errors.New("a local load target requires a destination_object file path")
 		}
-		return []string{"--tgt-object", loadFileStreamURI(e.workspaceRoot, params.DestinationTable)}, nil
+		return []string{"--tgt-object", loadFileStreamURI(e.workspaceRoot, params.DestinationObject)}, nil
 	}
 	if params.DestinationConnection == "" {
-		return nil, errors.New("load asset requires a destination_connection parameter")
+		return nil, errors.New("load asset requires a target connection")
 	}
 	uri, err := loadConnectionURI(manager, params.DestinationConnection)
 	if err != nil {
 		return nil, err
 	}
-	return []string{"--tgt-conn", uri, "--tgt-object", params.DestinationTable}, nil
-}
-
-// hasLoadFlatParams reports whether the asset carries the flat-parameter
-// replication shape (vs. a legacy .sling.yml replication sidecar).
-func hasLoadFlatParams(asset *pipeline.Asset) bool {
-	if asset == nil {
-		return false
+	targetObject := strings.TrimSpace(params.AssetName)
+	if details, ok := manager.(config.ConnectionDetailsGetter); ok {
+		connectionType := details.GetConnectionType(params.DestinationConnection)
+		switch loadConnectionCategory(connectionType) {
+		case LoadCategoryDatabase:
+			// The database table is the asset's canonical name.
+		case LoadCategoryStorage, LoadCategoryFile:
+			targetObject = strings.TrimSpace(params.DestinationObject)
+			if targetObject == "" {
+				return nil, fmt.Errorf("load target connection %q requires a destination_object", params.DestinationConnection)
+			}
+		default:
+			return nil, fmt.Errorf("connection %q is not a supported Load target", params.DestinationConnection)
+		}
+	} else if destinationObject := strings.TrimSpace(params.DestinationObject); destinationObject != "" {
+		// Minimal test/custom managers cannot report a category. Preserve their
+		// ability to target an explicit object while real managers enforce the
+		// database-vs-storage distinction above.
+		targetObject = destinationObject
 	}
-	params := loadParamsFromAsset(asset)
-	return params.SourceConnection != "" || params.SourceTable != "" || params.DestinationConnection != ""
+	if targetObject == "" {
+		return nil, errors.New("load asset requires a name for its destination table")
+	}
+	return []string{"--tgt-conn", uri, "--tgt-object", targetObject}, nil
 }
 
-// defaultLoadAssetContent is the single-file flat-parameter skeleton for a new
-// Load asset. The name is intentionally omitted (inferred from the filename).
+type loadAssetYAML struct {
+	Type            string                       `yaml:"type"`
+	Connection      string                       `yaml:"connection,omitempty"`
+	Depends         []string                     `yaml:"depends,omitempty"`
+	Parameters      loadAssetParametersYAML      `yaml:"parameters"`
+	Materialization loadAssetMaterializationYAML `yaml:"materialization"`
+}
+
+type loadAssetParametersYAML struct {
+	SourceConnection  string `yaml:"source_connection"`
+	SourceTable       string `yaml:"source_table"`
+	DestinationObject string `yaml:"destination_object,omitempty"`
+}
+
+type loadAssetMaterializationYAML struct {
+	Type     string `yaml:"type"`
+	Strategy string `yaml:"strategy"`
+}
+
+func renderLoadAssetContent(connection, sourceConnection, sourceTable, destinationObject string, depends []string) (string, error) {
+	if strings.TrimSpace(sourceConnection) == "" {
+		return "", errors.New("load asset requires a source connection")
+	}
+	if strings.TrimSpace(sourceTable) == "" {
+		return "", errors.New("load asset requires a source table or object")
+	}
+	if isLocalLoadConnection(connection) && strings.TrimSpace(destinationObject) == "" {
+		return "", errors.New("a local load target requires a destination object")
+	}
+	definition := loadAssetYAML{
+		Type:       loadAssetType,
+		Connection: strings.TrimSpace(connection),
+		Depends:    depends,
+		Parameters: loadAssetParametersYAML{
+			SourceConnection:  strings.TrimSpace(sourceConnection),
+			SourceTable:       strings.TrimSpace(sourceTable),
+			DestinationObject: strings.TrimSpace(destinationObject),
+		},
+		Materialization: loadAssetMaterializationYAML{
+			Type:     "table",
+			Strategy: "create+replace",
+		},
+	}
+	content, err := yaml.Marshal(definition)
+	if err != nil {
+		return "", err
+	}
+	return string(content), nil
+}
+
+// defaultLoadAssetContent is used by non-interactive callers that need a
+// starter document. The create dialog sends concrete semantic fields instead.
 func defaultLoadAssetContent(assetName string) string {
 	leaf := assetNameLeafPath(assetName)
-	return fmt.Sprintf(`type: load
-
-parameters:
-  source_connection: your_source_connection
-  source_table: public.%s
-  destination_connection: your_destination_connection
-  destination_table: public.%s
-  mode: full-refresh
-`, leaf, leaf)
-}
-
-func loadSummaryParameters(content string) map[string]string {
-	type loadReplicationSummary struct {
-		Source  string         `yaml:"source"`
-		Target  string         `yaml:"target"`
-		Streams map[string]any `yaml:"streams"`
-	}
-	var summary loadReplicationSummary
-	if err := yaml.Unmarshal([]byte(content), &summary); err != nil {
-		return nil
-	}
-	params := map[string]string{}
-	if strings.TrimSpace(summary.Source) != "" {
-		params["source"] = strings.TrimSpace(summary.Source)
-	}
-	if strings.TrimSpace(summary.Target) != "" {
-		params["target"] = strings.TrimSpace(summary.Target)
-	}
-	if len(summary.Streams) > 0 {
-		streamNames := make([]string, 0, len(summary.Streams))
-		for name := range summary.Streams {
-			streamNames = append(streamNames, name)
-		}
-		sort.Strings(streamNames)
-		params["streams"] = strings.Join(streamNames, ", ")
-	}
-	if len(params) == 0 {
-		return nil
-	}
-	return params
+	content, _ := renderLoadAssetContent(
+		"your_destination_connection",
+		"your_source_connection",
+		"public."+leaf,
+		"",
+		nil,
+	)
+	return content
 }
 
 func loadBinaryPath() string {
@@ -381,21 +412,16 @@ func runStreamingCommand(cmd *exec.Cmd, writer *streamCaptureWriter) error {
 	return waitErr
 }
 
-func (e *HybridBruinExecutor) runLoadAsset(ctx context.Context, asset *pipeline.Asset, manager config.ConnectionGetter, onChunk func([]byte)) ([]byte, error) {
+func (e *HybridBruinExecutor) runLoadAsset(ctx context.Context, pl *pipeline.Pipeline, asset *pipeline.Asset, manager config.ConnectionGetter, onChunk func([]byte)) ([]byte, error) {
 	if asset == nil {
 		return nil, errors.New("load asset is required")
 	}
 	writer := &streamCaptureWriter{buffer: bytes.NewBuffer(nil), onChunk: onChunk}
 
-	// Legacy: a .sling.yml replication sidecar the asset points at via `run`.
-	if isLoadExecutablePath(asset.ExecutableFile.Path) {
-		return e.runLoadReplicationFile(ctx, asset.ExecutableFile.Path, writer)
+	params, err := resolvedLoadParams(asset, pl)
+	if err != nil {
+		return writer.buffer.Bytes(), err
 	}
-
-	// Flat-parameter Load asset: run directly from source/target connection
-	// URIs, bridging the named bruin connections — no replication file needed. A
-	// "local" connection is a local file rather than a bruin connection.
-	params := loadParamsFromAsset(asset)
 	srcArgs, err := e.loadSourceArgs(manager, params)
 	if err != nil {
 		return writer.buffer.Bytes(), err
@@ -411,9 +437,6 @@ func (e *HybridBruinExecutor) runLoadAsset(ctx context.Context, asset *pipeline.
 	if err != nil {
 		return writer.buffer.Bytes(), err
 	}
-	if len(modeArgs) == 0 && strings.TrimSpace(string(asset.Materialization.Strategy)) == "" {
-		modeArgs = loadModeArgsFromParams(ctx, params)
-	}
 	args = append(args, modeArgs...)
 
 	cmdName, cmdArgs, err := loadCommand(ctx, args, writer)
@@ -421,7 +444,7 @@ func (e *HybridBruinExecutor) runLoadAsset(ctx context.Context, asset *pipeline.
 		return writer.buffer.Bytes(), err
 	}
 	cmd := newStreamingCommand(ctx, cmdName, cmdArgs, e.workspaceRoot, writer)
-	lease, err := e.acquireDuckDBConnections(ctx, manager, []string{params.SourceConnection, params.DestinationConnection}, directTaskLeaseOwner(ctx, nil, asset), writer)
+	lease, err := e.acquireDuckDBConnections(ctx, manager, []string{params.SourceConnection, params.DestinationConnection}, directTaskLeaseOwner(ctx, pl, asset), writer)
 	if err != nil {
 		return writer.buffer.Bytes(), err
 	}
@@ -430,41 +453,4 @@ func (e *HybridBruinExecutor) runLoadAsset(ctx context.Context, asset *pipeline.
 		return writer.buffer.Bytes(), err
 	}
 	return writer.buffer.Bytes(), nil
-}
-
-// runLoadReplicationFile runs a legacy Load asset defined by a .sling.yml
-// replication sidecar via `sling run -r`.
-func (e *HybridBruinExecutor) runLoadReplicationFile(ctx context.Context, replicationPath string, writer *streamCaptureWriter) ([]byte, error) {
-	cmdDir := e.workspaceRoot
-	if pipelineRoot, err := findPipelineRootForAsset(replicationPath); err == nil {
-		cmdDir = pipelineRoot
-	}
-	cmdPath := replicationPath
-	if rel, err := filepath.Rel(cmdDir, replicationPath); err == nil && !strings.HasPrefix(rel, "..") {
-		cmdPath = filepath.ToSlash(rel)
-	}
-	args := append([]string{"run", "-r", cmdPath}, loadRunModeArgs(ctx)...)
-	cmdName, cmdArgs, err := loadCommand(ctx, args, writer)
-	if err != nil {
-		return writer.buffer.Bytes(), err
-	}
-	cmd := newStreamingCommand(ctx, cmdName, cmdArgs, cmdDir, writer)
-	if err := runStreamingCommand(cmd, writer); err != nil {
-		return writer.buffer.Bytes(), err
-	}
-	return writer.buffer.Bytes(), nil
-}
-
-// loadModeArgsFromParams resolves the Load --mode flag. An explicit
-// full-refresh from the run config wins; otherwise the asset's mode parameter is
-// passed through (full-refresh is Load's default, so it needs no flag).
-func loadModeArgsFromParams(ctx context.Context, params loadRunParams) []string {
-	if args := loadRunModeArgs(ctx); len(args) > 0 {
-		return args
-	}
-	mode := strings.TrimSpace(params.Mode)
-	if mode == "" || strings.EqualFold(mode, "full-refresh") {
-		return nil
-	}
-	return []string{"--mode", mode}
 }

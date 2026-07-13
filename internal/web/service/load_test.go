@@ -8,7 +8,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bruin-data/bruin/pkg/jinja"
 	"github.com/bruin-data/bruin/pkg/pipeline"
 	"github.com/spf13/afero"
 	"github.com/stretchr/testify/assert"
@@ -110,9 +109,15 @@ func TestAssetServiceCreateLoadAssetWritesFlatParamDefinition(t *testing.T) {
 	})
 
 	result, apiErr := service.Create(context.Background(), EncodeID("analytics"), CreateAssetParams{
-		Name: "analytics.orders_load",
-		Type: "load",
-		Path: "assets/analytics/orders_load.asset.yml",
+		Name:       "analytics.orders_load",
+		Type:       "load",
+		Path:       "assets/analytics/orders_load.asset.yml",
+		Connection: "duckdb-default",
+		Content:    "type: load\nparameters:\n  destination_connection: obsolete\n",
+		Parameters: map[string]string{
+			loadParamSourceConnection: "postgres-prod",
+			loadParamSourceTable:      "public.orders",
+		},
 	})
 	require.Nil(t, apiErr)
 	// A Load asset is now a single flat-parameter .asset.yml — no .sling.yml sidecar.
@@ -122,12 +127,65 @@ func TestAssetServiceCreateLoadAssetWritesFlatParamDefinition(t *testing.T) {
 	require.NoError(t, err)
 	assert.Contains(t, string(definition), "type: load")
 	assert.Contains(t, string(definition), "parameters:")
-	assert.Contains(t, string(definition), "source_connection:")
-	assert.Contains(t, string(definition), "destination_connection:")
+	assert.Contains(t, string(definition), "connection: duckdb-default")
+	assert.Contains(t, string(definition), "source_connection: postgres-prod")
+	assert.Contains(t, string(definition), "source_table: public.orders")
+	assert.Contains(t, string(definition), "strategy: create+replace")
+	assert.NotContains(t, string(definition), "destination_connection:")
+	assert.NotContains(t, string(definition), "destination_table:")
+	assert.NotContains(t, string(definition), "mode:")
 	assert.NotContains(t, string(definition), "run:")
 
 	_, err = os.Stat(filepath.Join(pipelineRoot, "assets/analytics/orders_load.sling.yml"))
 	assert.True(t, os.IsNotExist(err), "no replication sidecar should be written")
+}
+
+func TestAssetServiceCreateDownstreamLoadUsesSourceAndReplaceMaterialization(t *testing.T) {
+	t.Parallel()
+
+	workspaceRoot := t.TempDir()
+	pipelineRoot := filepath.Join(workspaceRoot, "analytics")
+	assetsRoot := filepath.Join(pipelineRoot, "assets", "analytics")
+	require.NoError(t, os.MkdirAll(assetsRoot, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(pipelineRoot, "pipeline.yml"), []byte("name: analytics\ndefault_connections:\n  duckdb: duckdb-default\n"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(assetsRoot, "orders.sql"), []byte("/* @bruin\nname: analytics.orders\ntype: duckdb.sql\nmaterialization:\n  type: table\n  strategy: create+replace\n@bruin */\nselect 1 as id\n"), 0o644))
+
+	resolver := newAssetTestResolver(workspaceRoot)
+	service := NewAssetService(AssetDependencies{
+		Fs:            afero.NewOsFs(),
+		WorkspaceRoot: workspaceRoot,
+		ResolveAssetByID: func(ctx context.Context, assetID string) (string, *pipeline.Pipeline, *pipeline.Asset, error) {
+			return resolver.ResolveAssetByID(ctx, assetID)
+		},
+		DefaultAssetContent:          DefaultAssetContent,
+		DerivedAssetContent:          DefaultDerivedSQLAssetContent,
+		EnsurePythonProject:          func(string, string, string) error { return nil },
+		SuppressWatcher:              func(string) {},
+		PushWorkspaceUpdateImmediate: func(context.Context, string, string) {},
+	})
+
+	result, apiErr := service.Create(context.Background(), EncodeID("analytics"), CreateAssetParams{
+		Name:          "analytics.orders_downstream",
+		Type:          "load",
+		SourceAssetID: EncodeID("analytics/assets/analytics/orders.sql"),
+	})
+	require.Nil(t, apiErr)
+	assert.Equal(t, "analytics/assets/analytics/orders_downstream.asset.yml", result.AssetPath)
+
+	definition, err := os.ReadFile(filepath.Join(workspaceRoot, filepath.FromSlash(result.AssetPath)))
+	require.NoError(t, err)
+	content := string(definition)
+	assert.Contains(t, content, "depends:\n  - analytics.orders")
+	assert.Contains(t, content, "source_connection: duckdb-default")
+	assert.Contains(t, content, "source_table: analytics.orders")
+	assert.Contains(t, content, "strategy: create+replace")
+	assert.NotContains(t, content, "destination_connection:")
+	assert.NotContains(t, content, "destination_table:")
+	assert.NotContains(t, content, "mode:")
+
+	_, _, created, err := resolver.ResolveAssetByID(context.Background(), result.AssetID)
+	require.NoError(t, err)
+	assert.Equal(t, pipeline.MaterializationStrategyCreateReplace, created.Materialization.Strategy)
 }
 
 func TestWorkspaceServiceLoadsFlatParamLoadAsset(t *testing.T) {
@@ -137,7 +195,7 @@ func TestWorkspaceServiceLoadsFlatParamLoadAsset(t *testing.T) {
 	require.NoError(t, os.MkdirAll(filepath.Join(pipelineRoot, "assets/analytics"), 0o755))
 	require.NoError(t, os.WriteFile(filepath.Join(pipelineRoot, "pipeline.yml"), []byte("name: analytics\n"), 0o644))
 	require.NoError(t, os.WriteFile(filepath.Join(pipelineRoot, "assets/analytics/move_users.asset.yml"), []byte(
-		"name: analytics.move_users\ntype: load\nparameters:\n  source_connection: postgres_prod\n  source_table: public.users\n  destination_connection: duckdb_default\n  destination_table: public.users\n  mode: full-refresh\n",
+		"name: analytics.move_users\ntype: load\nconnection: duckdb_default\nparameters:\n  source_connection: postgres_prod\n  source_table: public.users\nmaterialization:\n  type: table\n  strategy: create+replace\n",
 	), 0o644))
 
 	workspace := NewWorkspaceService(workspaceRoot, filepath.Join(workspaceRoot, ".bruin.yml"))
@@ -149,44 +207,22 @@ func TestWorkspaceServiceLoadsFlatParamLoadAsset(t *testing.T) {
 	asset := state.Pipelines[0].Assets[0]
 	assert.Equal(t, "load", asset.Type)
 	assert.Equal(t, "analytics/assets/analytics/move_users.asset.yml", asset.Path)
+	assert.Equal(t, "duckdb_default", asset.Connection)
+	assert.Equal(t, "duckdb_default", asset.ExplicitConnection)
 	assert.Equal(t, "postgres_prod", asset.Parameters["source_connection"])
 	assert.Equal(t, "public.users", asset.Parameters["source_table"])
-	assert.Equal(t, "duckdb_default", asset.Parameters["destination_connection"])
-	assert.Equal(t, "full-refresh", asset.Parameters["mode"])
+	assert.NotContains(t, asset.Parameters, "destination_connection")
+	assert.NotContains(t, asset.Parameters, "destination_table")
+	assert.NotContains(t, asset.Parameters, "mode")
 }
 
-func TestWorkspaceServiceSummarizesLoadReplication(t *testing.T) {
-	workspaceRoot := t.TempDir()
-	pipelineRoot := filepath.Join(workspaceRoot, "analytics")
-	require.NoError(t, os.MkdirAll(filepath.Join(workspaceRoot, ".git"), 0o755))
-	require.NoError(t, os.MkdirAll(filepath.Join(pipelineRoot, "assets/analytics"), 0o755))
-	require.NoError(t, os.WriteFile(filepath.Join(pipelineRoot, "pipeline.yml"), []byte("name: analytics\n"), 0o644))
-	require.NoError(t, os.WriteFile(filepath.Join(pipelineRoot, "assets/analytics/orders.asset.yml"), []byte("name: analytics.orders\ntype: load\nrun: orders.sling.yml\n"), 0o644))
-	require.NoError(t, os.WriteFile(filepath.Join(pipelineRoot, "assets/analytics/orders.sling.yml"), []byte("source: pg\ntarget: duckdb\nstreams:\n  public.orders:\n    object: analytics.orders\n"), 0o644))
-
-	workspace := NewWorkspaceService(workspaceRoot, filepath.Join(workspaceRoot, ".bruin.yml"))
-	state, err := workspace.ComputeState(context.Background())
-	require.NoError(t, err)
-	require.Empty(t, state.Errors)
-	require.Len(t, state.Pipelines, 1)
-	require.Len(t, state.Pipelines[0].Assets, 1)
-	asset := state.Pipelines[0].Assets[0]
-	assert.Equal(t, "load", asset.Type)
-	assert.Equal(t, "analytics/assets/analytics/orders.sling.yml", asset.Path)
-	assert.Equal(t, "pg", asset.Parameters["source"])
-	assert.Equal(t, "duckdb", asset.Parameters["target"])
-	assert.Equal(t, "public.orders", asset.Parameters["streams"])
-}
-
-func TestAssetServiceDeleteLoadAssetRemovesDefinitionAndReplication(t *testing.T) {
+func TestAssetServiceDeleteLoadAssetRemovesDefinition(t *testing.T) {
 	workspaceRoot := t.TempDir()
 	pipelineRoot := filepath.Join(workspaceRoot, "analytics")
 	require.NoError(t, os.MkdirAll(filepath.Join(pipelineRoot, "assets/analytics"), 0o755))
 	require.NoError(t, os.WriteFile(filepath.Join(pipelineRoot, "pipeline.yml"), []byte("name: analytics\n"), 0o644))
 	definitionPath := filepath.Join(pipelineRoot, "assets/analytics/orders.asset.yml")
-	replicationPath := filepath.Join(pipelineRoot, "assets/analytics/orders.sling.yml")
-	require.NoError(t, os.WriteFile(definitionPath, []byte("name: analytics.orders\ntype: load\nrun: orders.sling.yml\n"), 0o644))
-	require.NoError(t, os.WriteFile(replicationPath, []byte("source: pg\ntarget: duckdb\n"), 0o644))
+	require.NoError(t, os.WriteFile(definitionPath, []byte("name: analytics.orders\ntype: load\nconnection: target\nparameters:\n  source_connection: source\n  source_table: public.orders\nmaterialization:\n  type: table\n  strategy: create+replace\n"), 0o644))
 
 	resolver := newAssetTestResolver(workspaceRoot)
 	service := NewAssetService(AssetDependencies{
@@ -199,74 +235,46 @@ func TestAssetServiceDeleteLoadAssetRemovesDefinitionAndReplication(t *testing.T
 		PushWorkspaceUpdateImmediate: func(context.Context, string, string) {},
 	})
 
-	response, apiErr := service.Delete(context.Background(), EncodeID("analytics/assets/analytics/orders.sling.yml"))
+	response, apiErr := service.Delete(context.Background(), EncodeID("analytics/assets/analytics/orders.asset.yml"))
 	require.Nil(t, apiErr)
 	assert.Equal(t, "ok", response.Status)
 	assert.NoFileExists(t, definitionPath)
-	assert.NoFileExists(t, replicationPath)
 }
 
-func TestHybridBruinExecutorRunsLoadAssetWithCLI(t *testing.T) {
+type loadTestConnectionManager struct {
+	connections map[string]string
+}
+
+func (m loadTestConnectionManager) GetConnection(name string) any {
+	return m.connections[name]
+}
+
+func TestHybridBruinExecutorRunsCanonicalLoadAssetWithCLI(t *testing.T) {
 	workspaceRoot := t.TempDir()
 	fakeLoad := filepath.Join(workspaceRoot, "fake-sling")
-	require.NoError(t, os.WriteFile(fakeLoad, []byte("#!/bin/sh\nprintf 'sling %s %s %s\\n' \"$1\" \"$2\" \"$3\"\n"), 0o755))
+	require.NoError(t, os.WriteFile(fakeLoad, []byte("#!/bin/sh\nprintf 'sling %s\\n' \"$*\"\n"), 0o755))
 	t.Setenv("RENART_SLING_BINARY", fakeLoad)
 
-	replicationPath := filepath.Join(workspaceRoot, "assets/analytics/orders.sling.yml")
-	require.NoError(t, os.MkdirAll(filepath.Dir(replicationPath), 0o755))
-	require.NoError(t, os.WriteFile(replicationPath, []byte("source: pg\ntarget: duckdb\n"), 0o644))
-
-	executor := NewHybridBruinExecutor(
-		workspaceRoot,
-		"bruin",
-		nil,
-		func() *pipeline.Builder {
-			osFS := afero.NewOsFs()
-			return pipeline.NewBuilder(BuilderConfig, pipeline.CreateTaskFromYamlDefinition(osFS), pipeline.CreateTaskFromFileComments(osFS), osFS, DefaultGlossaryReader, jinja.VariantRendererFactory)
-		},
-	)
+	executor := NewHybridBruinExecutor(workspaceRoot, "bruin", nil, nil)
+	manager := loadTestConnectionManager{connections: map[string]string{
+		"source": "postgresql://source",
+		"target": "duckdb://target",
+	}}
 	var chunks bytes.Buffer
-	output, err := executor.runLoadAsset(context.Background(), &pipeline.Asset{
-		Name:           "analytics.orders",
-		Type:           pipeline.AssetType("load"),
-		ExecutableFile: pipeline.ExecutableFile{Path: replicationPath},
-	}, nil, func(chunk []byte) {
+	output, err := executor.runLoadAsset(context.Background(), &pipeline.Pipeline{}, &pipeline.Asset{
+		Name:       "analytics.orders",
+		Type:       pipeline.AssetType("load"),
+		Connection: "target",
+		Parameters: pipeline.ParameterMap{
+			loadParamSourceConnection: "source",
+			loadParamSourceTable:      "public.orders",
+		},
+	}, manager, func(chunk []byte) {
 		_, _ = chunks.Write(chunk)
 	})
 	require.NoError(t, err)
 	assert.Equal(t, output, chunks.Bytes())
-	assert.Contains(t, string(output), "sling run -r assets/analytics/orders.sling.yml")
-}
-
-func TestHybridBruinExecutorRunsPipelineLoadAssetFromPipelineRoot(t *testing.T) {
-	workspaceRoot := t.TempDir()
-	pipelineRoot := filepath.Join(workspaceRoot, "analytics")
-	fakeLoad := filepath.Join(workspaceRoot, "fake-sling")
-	require.NoError(t, os.WriteFile(fakeLoad, []byte("#!/bin/sh\nprintf 'pwd=%s args=%s %s %s\\n' \"$(pwd)\" \"$1\" \"$2\" \"$3\"\n"), 0o755))
-	t.Setenv("RENART_SLING_BINARY", fakeLoad)
-
-	replicationPath := filepath.Join(pipelineRoot, "assets/analytics/orders.sling.yml")
-	require.NoError(t, os.MkdirAll(filepath.Dir(replicationPath), 0o755))
-	require.NoError(t, os.WriteFile(filepath.Join(pipelineRoot, "pipeline.yml"), []byte("name: analytics\n"), 0o644))
-	require.NoError(t, os.WriteFile(replicationPath, []byte("source: pg\ntarget: duckdb\n"), 0o644))
-
-	executor := NewHybridBruinExecutor(
-		workspaceRoot,
-		"bruin",
-		nil,
-		func() *pipeline.Builder {
-			osFS := afero.NewOsFs()
-			return pipeline.NewBuilder(BuilderConfig, pipeline.CreateTaskFromYamlDefinition(osFS), pipeline.CreateTaskFromFileComments(osFS), osFS, DefaultGlossaryReader, jinja.VariantRendererFactory)
-		},
-	)
-	output, err := executor.runLoadAsset(context.Background(), &pipeline.Asset{
-		Name:           "analytics.orders",
-		Type:           pipeline.AssetType("load"),
-		ExecutableFile: pipeline.ExecutableFile{Path: replicationPath},
-	}, nil, nil)
-	require.NoError(t, err)
-	assert.Contains(t, string(output), "pwd="+pipelineRoot)
-	assert.Contains(t, string(output), "args=run -r assets/analytics/orders.sling.yml")
+	assert.Contains(t, string(output), "sling run --src-conn postgresql://source --src-stream public.orders --tgt-conn duckdb://target --tgt-object analytics.orders")
 }
 
 func TestHybridBruinExecutorRunsLoadAssetThroughUvWhenNoBinaryOverrideExists(t *testing.T) {
@@ -279,25 +287,21 @@ func TestHybridBruinExecutorRunsLoadAssetThroughUvWhenNoBinaryOverrideExists(t *
 	t.Setenv("RENART_UV_BINARY", fakeUv)
 	t.Setenv("RENART_SLING_PACKAGE", "sling-test-package")
 
-	replicationPath := filepath.Join(pipelineRoot, "assets/analytics/orders.sling.yml")
-	require.NoError(t, os.MkdirAll(filepath.Dir(replicationPath), 0o755))
+	require.NoError(t, os.MkdirAll(filepath.Join(pipelineRoot, "data"), 0o755))
 	require.NoError(t, os.WriteFile(filepath.Join(pipelineRoot, "pipeline.yml"), []byte("name: analytics\n"), 0o644))
-	require.NoError(t, os.WriteFile(replicationPath, []byte("source: pg\ntarget: duckdb\n"), 0o644))
 
-	executor := NewHybridBruinExecutor(
-		workspaceRoot,
-		"bruin",
-		nil,
-		func() *pipeline.Builder {
-			osFS := afero.NewOsFs()
-			return pipeline.NewBuilder(BuilderConfig, pipeline.CreateTaskFromYamlDefinition(osFS), pipeline.CreateTaskFromFileComments(osFS), osFS, DefaultGlossaryReader, jinja.VariantRendererFactory)
+	executor := NewHybridBruinExecutor(workspaceRoot, "bruin", nil, nil)
+	output, err := executor.runLoadAsset(context.Background(), &pipeline.Pipeline{}, &pipeline.Asset{
+		Name:       "analytics.orders",
+		Type:       pipeline.AssetType("load"),
+		Connection: loadLocalConnectionName,
+		Parameters: pipeline.ParameterMap{
+			loadParamSourceConnection:  loadLocalConnectionName,
+			loadParamSourceTable:       "analytics/data/orders.csv",
+			loadParamDestinationObject: "analytics/data/orders-copy.csv",
 		},
-	)
-	output, err := executor.runLoadAsset(context.Background(), &pipeline.Asset{
-		Name:           "analytics.orders",
-		Type:           pipeline.AssetType("load"),
-		ExecutableFile: pipeline.ExecutableFile{Path: replicationPath},
 	}, nil, nil)
 	require.NoError(t, err)
-	assert.Contains(t, string(output), "uv tool run --no-config --python 3.11 --from sling-test-package sling run -r assets/analytics/orders.sling.yml")
+	assert.Contains(t, string(output), "uv tool run --no-config --python 3.11 --from sling-test-package sling run --src-stream file://"+filepath.ToSlash(filepath.Join(workspaceRoot, "analytics/data/orders.csv")))
+	assert.Contains(t, string(output), "--tgt-object file://"+filepath.ToSlash(filepath.Join(workspaceRoot, "analytics/data/orders-copy.csv")))
 }

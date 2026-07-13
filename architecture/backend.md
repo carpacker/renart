@@ -147,6 +147,14 @@ until Sling exits. OpenAPI inference, pagination, validation warnings, and
 HTTP API extraction and execution-window behavior are documented in
 [http-api-assets.md](http-api-assets.md).
 
+Load assets use one canonical `.asset.yml`: the top-level `connection` is the
+target (or omitted for the pipeline default), while `source_connection` and
+`source_table` live under flat `parameters`. A database target always writes to
+the asset's canonical name; file and object-storage targets instead require
+`parameters.destination_object`. The asset's `materialization` is the only load
+strategy source. Renart invokes Sling from those semantic fields directly; no
+replication sidecar or parallel destination/mode parameter set exists.
+
 Python assets run through Renart's in-process operator
 (`service/python_operator.go`). Each task receives an embedded, version-locked
 `renart` SDK wheel and a token-scoped loopback broker (`internal/web/pybroker`).

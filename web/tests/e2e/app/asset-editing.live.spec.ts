@@ -18,6 +18,11 @@ const loadAssetId = Buffer.from(loadAssetPath).toString("base64url");
 type WorkspaceAsset = {
   id: string;
   name: string;
+  type?: string;
+  content?: string;
+  connection?: string;
+  explicit_connection?: string;
+  parameters?: Record<string, string>;
   upstreams: string[];
   meta?: Record<string, string>;
   tags?: string[];
@@ -371,11 +376,13 @@ test.describe("app asset editing workbench live", () => {
       join(liveApp.workspaceDir, loadAssetPath),
       `name: analytics.orders_load
 type: load
+connection: duckdb-default
 parameters:
   source_connection: duckdb-default
   source_table: analytics.orders
-  destination_connection: duckdb-default
-  destination_table: analytics.orders_load
+materialization:
+  type: table
+  strategy: create+replace
 `,
       "utf8",
     );
@@ -460,7 +467,12 @@ parameters:
     expect(configured.incremental_key).toBe("updated_at");
 
     await properties.getByRole("button", { name: "YAML" }).click();
-    await properties.getByRole("combobox").nth(1).click();
+    const yamlMaterialization = properties
+      .getByText("type:", { exact: true })
+      .nth(1)
+      .locator("..")
+      .getByRole("combobox");
+    await yamlMaterialization.click();
     await expectSlingOptions();
     await page.keyboard.press("Escape");
     const yamlUpdateKey = properties
@@ -468,6 +480,106 @@ parameters:
       .locator("..")
       .getByRole("combobox");
     await expect(yamlUpdateKey).toContainText("updated_at");
+  });
+
+  test("creates a canonical Load asset, navigates to its source, and edits target connections", async ({
+    liveApp,
+    page,
+  }) => {
+    test.skip(
+      test.info().project.name.includes("mobile"),
+      "The canvas creation flow is desktop-only.",
+    );
+
+    await page.goto(`${liveApp.baseURL}/pipelines/${pipelineId}/assets/${ordersAssetId}/canvas`);
+    await page.getByRole("button", { name: "New asset" }).first().click();
+    const dialog = page.getByRole("dialog", { name: "New asset" });
+    await expect(dialog).toBeVisible();
+    await dialog.getByRole("button", { name: /^Load/ }).click();
+    await dialog.getByLabel("Asset name").fill("analytics.orders_copy");
+    await dialog.getByLabel("Source connection").click();
+    await page.getByRole("option", { name: "duckdb-default", exact: true }).click();
+    await dialog.getByLabel("Source table or object").fill("analytics.orders");
+
+    const createdResponse = page.waitForResponse(
+      (response) =>
+        response.url().includes(`/api/pipelines/${pipelineId}/assets`) &&
+        response.request().method() === "POST",
+      { timeout: 15000 },
+    );
+    await dialog.getByRole("button", { name: "Create" }).click();
+    expect((await createdResponse).ok()).toBe(true);
+
+    const created = await pollAsset(
+      liveApp,
+      page.request,
+      "analytics.orders_copy",
+      (asset) =>
+        asset.parameters?.source_connection === "duckdb-default" &&
+        asset.parameters?.source_table === "analytics.orders",
+    );
+    expect(created.materialization_strategy).toBe("create+replace");
+    expect(created.upstreams).toContain("analytics.orders");
+    expect(created.parameters).not.toHaveProperty("destination_connection");
+    expect(created.parameters).not.toHaveProperty("destination_table");
+    expect(created.parameters).not.toHaveProperty("mode");
+    expect(created.content).toContain("strategy: create+replace");
+    expect(created.content).not.toContain("destination_table:");
+
+    await page.getByRole("link", { name: "Code view" }).click();
+    await expect(page.getByRole("button", { name: "Go to analytics.orders" })).toBeVisible({
+      timeout: 15000,
+    });
+    await page.getByRole("button", { name: "Go to analytics.orders" }).click();
+    await expect(page).toHaveURL(new RegExp(`/assets/${ordersAssetId}/`));
+
+    const createdLoadId = Buffer.from("analytics/assets/analytics/orders_copy.asset.yml").toString(
+      "base64url",
+    );
+    await page.goto(`${liveApp.baseURL}/pipelines/${pipelineId}/assets/${createdLoadId}/code`);
+    const loadProperties = await openAssetProperties(page);
+    const loadIdentity = loadProperties.getByRole("heading", { name: "Identity" }).locator("../..");
+    await loadIdentity
+      .getByText("Connection", { exact: true })
+      .locator("..")
+      .getByRole("combobox")
+      .click();
+    await page.getByRole("option", { name: "duckdb-default", exact: true }).click();
+    const loadWithExplicitTarget = await pollAsset(
+      liveApp,
+      page.request,
+      "analytics.orders_copy",
+      (asset) => asset.explicit_connection === "duckdb-default",
+    );
+    expect(loadWithExplicitTarget.connection).toBe("duckdb-default");
+
+    const pythonCreate = await page.request.post(
+      `${liveApp.baseURL}/api/pipelines/${pipelineId}/assets`,
+      { data: { name: "analytics.python_target", type: "python" } },
+    );
+    expect(pythonCreate.ok()).toBe(true);
+    const pythonAssetId = Buffer.from("analytics/assets/analytics/python_target.py").toString(
+      "base64url",
+    );
+    await pollAsset(liveApp, page.request, "analytics.python_target", () => true);
+    await page.goto(`${liveApp.baseURL}/pipelines/${pipelineId}/assets/${pythonAssetId}/code`);
+    const pythonProperties = await openAssetProperties(page);
+    const pythonIdentity = pythonProperties
+      .getByRole("heading", { name: "Identity" })
+      .locator("../..");
+    await pythonIdentity
+      .getByText("Connection", { exact: true })
+      .locator("..")
+      .getByRole("combobox")
+      .click();
+    await page.getByRole("option", { name: "duckdb-default", exact: true }).click();
+    const pythonWithExplicitTarget = await pollAsset(
+      liveApp,
+      page.request,
+      "analytics.python_target",
+      (asset) => asset.explicit_connection === "duckdb-default",
+    );
+    expect(pythonWithExplicitTarget.connection).toBe("duckdb-default");
   });
 
   test("materializing an asset on a stale upstream warns before building", async ({

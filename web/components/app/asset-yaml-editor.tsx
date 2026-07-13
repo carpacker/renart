@@ -33,6 +33,8 @@ import { NON_SQL_ASSET_TYPES, SQL_ASSET_TYPES } from "@/lib/asset-types";
 import { useIngestrEnabled } from "@/lib/features";
 import { selectedEnvironmentAtom, workspaceAtom } from "@/lib/atoms/workspace";
 import { WebAsset, WebColumn } from "@/lib/types";
+import { useWorkspaceSettingsData } from "@/hooks/use-workspace-settings-data";
+import { LOCAL_LOAD_CONNECTION, loadConnectionsForEnvironment } from "@/lib/load-assets";
 
 import {
   COLUMN_CHECK_NAMES,
@@ -223,8 +225,48 @@ export function RemoveButton({ label, onClick }: { label: string; onClick: () =>
 
 // --- Sections ---
 
+const AUTO_CONNECTION_VALUE = "__auto__";
+
 function IdentitySection({ asset, pipelineId }: { asset: WebAsset; pipelineId: string }) {
   const ingestrEnabled = useIngestrEnabled();
+  const workspace = useAtomValue(workspaceAtom);
+  const environment = useAtomValue(selectedEnvironmentAtom);
+  const { workspaceConfig } = useWorkspaceSettingsData();
+  const normalizedType = asset.type.trim().toLowerCase();
+  const hasTargetConnection =
+    normalizedType === "api" || normalizedType === "load" || normalizedType.includes("python");
+  const connectionOptions = useMemo(() => {
+    if (!hasTargetConnection) return [];
+    const explicit = (asset.explicit_connection ?? "").trim();
+    const names =
+      normalizedType === "load"
+        ? loadConnectionsForEnvironment(workspaceConfig, environment).map(
+            (connection) => connection.name,
+          )
+        : Object.keys(workspace?.connections ?? {});
+    if (normalizedType === "load" && !names.includes(LOCAL_LOAD_CONNECTION)) {
+      names.push(LOCAL_LOAD_CONNECTION);
+    }
+    if (explicit && !names.includes(explicit)) {
+      names.push(explicit);
+    }
+    const effective = (asset.connection ?? "").trim();
+    return [
+      {
+        value: AUTO_CONNECTION_VALUE,
+        label: effective ? `auto (${effective})` : "auto (pipeline default)",
+      },
+      ...names.sort((a, b) => a.localeCompare(b)).map((name) => ({ value: name, label: name })),
+    ];
+  }, [
+    asset.connection,
+    asset.explicit_connection,
+    environment,
+    hasTargetConnection,
+    normalizedType,
+    workspace?.connections,
+    workspaceConfig,
+  ]);
   const assetTypes = useMemo(
     () =>
       Array.from(new Set([...SQL_ASSET_TYPES, ...NON_SQL_ASSET_TYPES, asset.type]))
@@ -270,6 +312,21 @@ function IdentitySection({ asset, pipelineId }: { asset: WebAsset; pipelineId: s
           }}
         />
       </Line>
+      {hasTargetConnection ? (
+        <Line>
+          <Key>connection</Key>
+          <InlineSelect
+            value={(asset.explicit_connection ?? "").trim() || AUTO_CONNECTION_VALUE}
+            options={connectionOptions}
+            onChange={(connection) => {
+              const next = connection === AUTO_CONNECTION_VALUE ? "" : connection;
+              if (next !== (asset.explicit_connection ?? "").trim()) {
+                void updateAsset(pipelineId, asset.id, { connection: next });
+              }
+            }}
+          />
+        </Line>
+      ) : null}
       <Line>
         <Key>owner</Key>
         <InlineText

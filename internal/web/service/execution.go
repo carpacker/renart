@@ -278,16 +278,19 @@ func (s *ExecutionService) inspectMaterializedNonSQLAsset(ctx context.Context, a
 	// python/api it's the asset's own connection + name.
 	var connectionName, tableName string
 	if isLoadAsset(asset) {
-		params := loadParamsFromAsset(asset)
-		if isLocalLoadConnection(params.DestinationConnection) {
-			// A load asset that writes to a local file (e.g. ./data.csv) has no
-			// queryable table — surface an informational note rather than an error.
+		params, paramsErr := resolvedLoadParams(asset, parsedPipeline)
+		if paramsErr != nil {
+			return InspectResult{}, false
+		}
+		if isLocalLoadConnection(params.DestinationConnection) || strings.TrimSpace(params.DestinationObject) != "" {
+			// A load asset that writes to a file/object has no queryable table —
+			// surface an informational note rather than an error.
 			return InspectResult{
 				Status:     "info",
 				Columns:    []string{},
 				Rows:       []map[string]any{},
 				Operation:  queryAssetOperation(relAssetPath, limit, environment, ""),
-				Info:       fmt.Sprintf("This load asset writes to a local file (%s), which can't be previewed. Point the destination at a connection to inspect the loaded data.", strings.TrimSpace(params.DestinationTable)),
+				Info:       fmt.Sprintf("This load asset writes to %s, which can't be previewed as a database table.", strings.TrimSpace(params.DestinationObject)),
 				HTTPStatus: 200,
 			}, true
 		}
@@ -295,15 +298,9 @@ func (s *ExecutionService) inspectMaterializedNonSQLAsset(ctx context.Context, a
 			return InspectResult{}, false
 		}
 		connectionName = params.DestinationConnection
-		tableName = strings.TrimSpace(params.DestinationTable)
-		if tableName == "" {
-			tableName = asset.Name
-		}
+		tableName = asset.Name
 	} else {
-		connectionName, err = parsedPipeline.GetConnectionNameForAsset(asset)
-		if isAPIAsset(asset) {
-			connectionName, err = apiConnectionNameForAsset(asset, parsedPipeline)
-		}
+		connectionName, err = targetConnectionNameForAsset(asset, parsedPipeline)
 		if err != nil || strings.TrimSpace(connectionName) == "" {
 			return InspectResult{}, false
 		}
@@ -821,11 +818,7 @@ func (s *ExecutionService) GetPipelineMaterialization(ctx context.Context, pipel
 		}
 
 		connectionName := ""
-		if isAPIAsset(asset) {
-			if conn, connErr := apiConnectionNameForAsset(asset, parsed); connErr == nil {
-				connectionName = conn
-			}
-		} else if conn, connErr := parsed.GetConnectionNameForAsset(asset); connErr == nil {
+		if conn, connErr := targetConnectionNameForAsset(asset, parsed); connErr == nil {
 			connectionName = conn
 		}
 
@@ -1123,10 +1116,7 @@ func (s *ExecutionService) inspectPipelineMaterializations(ctx context.Context, 
 
 	assetsByConnection := make(map[string][]*pipeline.Asset)
 	for _, asset := range parsed.Assets {
-		conn, err := parsed.GetConnectionNameForAsset(asset)
-		if isAPIAsset(asset) {
-			conn, err = apiConnectionNameForAsset(asset, parsed)
-		}
+		conn, err := targetConnectionNameForAsset(asset, parsed)
 		if err != nil || conn == "" {
 			continue
 		}

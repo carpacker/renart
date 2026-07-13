@@ -134,11 +134,11 @@ the downstream cone), `RunCompleted` (flip the touched assets).
 | `missing` | materialization history says fresh, async verification couldn't find the table |
 
 The `missing` downgrade only applies to assets whose output is a warehouse
-object named after the asset (`verifiableByName`: SQL, seed). Load (sling) and
-python assets write to arbitrary destinations — a local file, a
-`destination_table` that doesn't match the asset name, or nothing — so the
-name-based lookup would always report them missing; they are skipped and rest on
-the run fact alone.
+object named after the asset (`verifiableByName`: SQL, seed, and database-backed
+Load). Local-, file-, and object-storage-backed Load assets use an explicit
+`destination_object`, while Python assets may return nothing or write elsewhere;
+those outputs cannot be verified by the asset name and therefore rest on the run
+fact alone.
 
 Unsaved editor buffers get a purely-frontend "modified" dot; the service only
 sees saved state.

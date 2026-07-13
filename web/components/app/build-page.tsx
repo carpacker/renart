@@ -152,9 +152,17 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { useIsMobile } from "@/hooks/use-mobile";
+import { useWorkspaceSettingsData } from "@/hooks/use-workspace-settings-data";
 import { usePipelineDeploy, type PipelineDeployState } from "@/hooks/use-pipeline-deploy";
 import { isStaleStatus, usePipelineStaleness } from "@/hooks/use-pipeline-staleness";
 import type { MaterializeScope } from "@/lib/materialize-scope";
+import {
+  LOCAL_LOAD_CONNECTION,
+  isLocalLoadConnection,
+  loadConnectionCategory,
+  loadConnectionsForEnvironment,
+  loadTargetNeedsDestinationObject,
+} from "@/lib/load-assets";
 import {
   labelForAppMaterializationState,
   useAppAssetMaterializationStatus,
@@ -2071,7 +2079,11 @@ function EditorWorkspace({ asset, adhoc }: { asset: BuildAsset; adhoc: boolean }
           {asset.workspaceAsset &&
           asset.pipelineId &&
           asset.workspaceAsset.type.toLowerCase() === "load" ? (
-            <LoadParametersEditor asset={asset.workspaceAsset} pipelineId={asset.pipelineId} />
+            <LoadParametersEditor
+              asset={asset.workspaceAsset}
+              pipelineId={asset.pipelineId}
+              onGoToAsset={goToAsset}
+            />
           ) : asset.workspaceAsset &&
             asset.pipelineId &&
             asset.workspaceAsset.type.toLowerCase() === "api" ? (
@@ -3151,15 +3163,35 @@ function NewAssetDialog({
   const [kind, setKind] = useState<NewAssetKind>("sql");
   const [name, setName] = useState("");
   const [connection, setConnection] = useState("");
+  const [sourceConnection, setSourceConnection] = useState("");
+  const [sourceTable, setSourceTable] = useState("");
+  const [destinationObject, setDestinationObject] = useState("");
   const [apiTemplate, setAPITemplate] = useState<APIAssetTemplateId>("openapi");
   const [creating, setCreating] = useState(false);
   const [error, setError] = useState("");
 
   const workspace = useAtomValue(workspaceAtom);
+  const environment = useAtomValue(selectedEnvironmentAtom);
+  const { workspaceConfig } = useWorkspaceSettingsData();
   const connectionNames = useMemo(
     () => Object.keys(workspace?.connections ?? {}).sort((a, b) => a.localeCompare(b)),
     [workspace?.connections],
   );
+  const loadConnections = useMemo(
+    () => loadConnectionsForEnvironment(workspaceConfig, environment),
+    [workspaceConfig, environment],
+  );
+  const loadConnectionNames = useMemo(
+    () => [
+      ...loadConnections
+        .map((candidate) => candidate.name)
+        .filter((name) => name !== LOCAL_LOAD_CONNECTION),
+      LOCAL_LOAD_CONNECTION,
+    ],
+    [loadConnections],
+  );
+  const targetLoadCategory = loadConnectionCategory(loadConnections, connection);
+  const targetNeedsDestinationObject = loadTargetNeedsDestinationObject(targetLoadCategory);
 
   const isDownstream = Boolean(downstreamSource);
   const options = isDownstream ? DOWNSTREAM_ASSETS : CREATABLE_ASSETS;
@@ -3181,6 +3213,9 @@ function NewAssetDialog({
     if (open) {
       setKind("sql");
       setConnection("");
+      setSourceConnection("");
+      setSourceTable("");
+      setDestinationObject("");
       setAPITemplate("openapi");
       setError("");
     }
@@ -3190,6 +3225,12 @@ function NewAssetDialog({
       setName(suggestedName);
     }
   }, [open, suggestedName]);
+
+  useEffect(() => {
+    if (open && selected.id === "load" && !isDownstream && !sourceConnection) {
+      setSourceConnection(loadConnectionNames[0] ?? "");
+    }
+  }, [isDownstream, loadConnectionNames, open, selected.id, sourceConnection]);
 
   const create = async () => {
     const trimmed = name.trim();
@@ -3205,12 +3246,45 @@ function NewAssetDialog({
       setError(`An asset named "${trimmed}" already exists.`);
       return;
     }
-    const input =
+    if (selected.id === "load" && !isDownstream) {
+      if (!sourceConnection.trim()) {
+        setError("A source connection is required for a Load asset.");
+        return;
+      }
+      if (!sourceTable.trim()) {
+        setError("A source table or object is required for a Load asset.");
+        return;
+      }
+    }
+    if (selected.id === "load" && targetNeedsDestinationObject && !destinationObject.trim()) {
+      setError("This target connection requires a destination object or file path.");
+      return;
+    }
+
+    let input: Parameters<typeof createAsset>[1] =
       isDownstream && downstreamSource
         ? selected.id === "sql"
           ? { name: trimmed, source_asset_id: downstreamSource.id }
           : { name: trimmed, source_asset_id: downstreamSource.id, type: selected.id }
         : buildCreateAssetInput(trimmed, selected.id, undefined, connection, apiTemplate);
+    if (selected.id === "load") {
+      input = {
+        ...input,
+        type: "load",
+        connection,
+        parameters: {
+          ...(isDownstream
+            ? {}
+            : {
+                source_connection: sourceConnection.trim(),
+                source_table: sourceTable.trim(),
+              }),
+          ...(targetNeedsDestinationObject && destinationObject.trim()
+            ? { destination_object: destinationObject.trim() }
+            : {}),
+        },
+      };
+    }
     setCreating(true);
     setError("");
     try {
@@ -3311,6 +3385,53 @@ function NewAssetDialog({
                   {API_ASSET_TEMPLATES.find((template) => template.id === apiTemplate)?.description}
                 </FieldDescription>
               </Field>
+            </FieldGroup>
+          ) : null}
+          {selected.id === "load" ? (
+            <FieldGroup>
+              {!isDownstream ? (
+                <>
+                  <Field>
+                    <FieldLabel htmlFor="new-load-source-connection">Source connection</FieldLabel>
+                    <Select value={sourceConnection} onValueChange={setSourceConnection}>
+                      <SelectTrigger id="new-load-source-connection">
+                        <SelectValue placeholder="Choose a source" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectGroup>
+                          {loadConnectionNames.map((connectionName) => (
+                            <SelectItem key={connectionName} value={connectionName}>
+                              {connectionName}
+                            </SelectItem>
+                          ))}
+                        </SelectGroup>
+                      </SelectContent>
+                    </Select>
+                  </Field>
+                  <Field>
+                    <FieldLabel htmlFor="new-load-source-table">
+                      {isLocalLoadConnection(sourceConnection)
+                        ? "Source file"
+                        : "Source table or object"}
+                    </FieldLabel>
+                    <Input
+                      id="new-load-source-table"
+                      className="font-mono"
+                      placeholder={
+                        isLocalLoadConnection(sourceConnection)
+                          ? "data/orders.csv"
+                          : "public.orders"
+                      }
+                      value={sourceTable}
+                      onChange={(event) => setSourceTable(event.target.value)}
+                    />
+                  </Field>
+                </>
+              ) : null}
+            </FieldGroup>
+          ) : null}
+          {selected.id === "api" || selected.id === "load" ? (
+            <FieldGroup>
               <Field>
                 <FieldLabel htmlFor="new-asset-connection">Destination connection</FieldLabel>
                 <Select
@@ -3325,18 +3446,36 @@ function NewAssetDialog({
                   <SelectContent>
                     <SelectGroup>
                       <SelectItem value={AUTO_CONNECTION_VALUE}>Auto (pipeline default)</SelectItem>
-                      {connectionNames.map((connectionName) => (
-                        <SelectItem key={connectionName} value={connectionName}>
-                          {connectionName}
-                        </SelectItem>
-                      ))}
+                      {(selected.id === "load" ? loadConnectionNames : connectionNames).map(
+                        (connectionName) => (
+                          <SelectItem key={connectionName} value={connectionName}>
+                            {connectionName}
+                          </SelectItem>
+                        ),
+                      )}
                     </SelectGroup>
                   </SelectContent>
                 </Select>
                 <FieldDescription>
-                  Where fetched records are loaded. You can change this later.
+                  {selected.id === "load"
+                    ? "Database destinations use the asset name as their table."
+                    : "Where fetched records are loaded. You can change this later."}
                 </FieldDescription>
               </Field>
+              {selected.id === "load" && targetNeedsDestinationObject ? (
+                <Field>
+                  <FieldLabel htmlFor="new-load-destination-object">Destination object</FieldLabel>
+                  <Input
+                    id="new-load-destination-object"
+                    className="font-mono"
+                    placeholder={
+                      isLocalLoadConnection(connection) ? "data/orders.csv" : "path/to/object"
+                    }
+                    value={destinationObject}
+                    onChange={(event) => setDestinationObject(event.target.value)}
+                  />
+                </Field>
+              ) : null}
             </FieldGroup>
           ) : null}
           {error ? (
@@ -3352,7 +3491,12 @@ function NewAssetDialog({
             Cancel
           </Button>
           <Button onClick={() => void create()} disabled={creating || !pipelineId}>
-            {creating ? <Spinner className="size-4" /> : <CheckCircle2 className="size-4" />}Create
+            {creating ? (
+              <Spinner data-icon="inline-start" />
+            ) : (
+              <CheckCircle2 data-icon="inline-start" />
+            )}
+            Create
           </Button>
         </DialogFooter>
       </DialogContent>

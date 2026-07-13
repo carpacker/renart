@@ -417,13 +417,12 @@ func TestExecutionServiceInspectLoadAssetQueriesDestinationConnection(t *testing
 		Executor: executor,
 		ResolveAssetByID: func(context.Context, string) (string, *pipeline.Pipeline, *pipeline.Asset, error) {
 			return "analytics/assets/load_orders.asset.yml", &pipeline.Pipeline{}, &pipeline.Asset{
-				Name: "analytics.orders",
-				Type: pipeline.AssetType(loadAssetType),
+				Name:       "analytics.orders",
+				Type:       pipeline.AssetType(loadAssetType),
+				Connection: "duckdb-default",
 				Parameters: pipeline.ParameterMap{
-					"source_connection":      "postgres-prod",
-					"source_table":           "public.orders",
-					"destination_connection": "duckdb-default",
-					"destination_table":      "analytics.orders",
+					"source_connection": "postgres-prod",
+					"source_table":      "public.orders",
 				},
 			}, nil
 		},
@@ -446,13 +445,13 @@ func TestExecutionServiceInspectLoadAssetToLocalFileReturnsInfo(t *testing.T) {
 		Executor: executor,
 		ResolveAssetByID: func(context.Context, string) (string, *pipeline.Pipeline, *pipeline.Asset, error) {
 			return "analytics/assets/load_local.asset.yml", &pipeline.Pipeline{}, &pipeline.Asset{
-				Name: "analytics.local_dump",
-				Type: pipeline.AssetType(loadAssetType),
+				Name:       "analytics.local_dump",
+				Type:       pipeline.AssetType(loadAssetType),
+				Connection: "local",
 				Parameters: pipeline.ParameterMap{
-					"source_connection":      "duckdb-default",
-					"source_table":           "analytics.orders",
-					"destination_connection": "local",
-					"destination_table":      "./blub.csv",
+					"source_connection":  "duckdb-default",
+					"source_table":       "analytics.orders",
+					"destination_object": "./blub.csv",
 				},
 			}, nil
 		},

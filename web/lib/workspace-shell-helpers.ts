@@ -39,6 +39,8 @@ export function buildCreateAssetInput(
   type: string;
   path?: string;
   content?: string;
+  connection?: string;
+  parameters?: Record<string, string>;
 } {
   const path = buildAssetPathFromName(name, kind);
   if (kind === "python") {
@@ -65,22 +67,11 @@ parameters:
   }
 
   if (kind === "load") {
-    const leaf = name.split(".").pop() ?? "asset";
     return {
       name,
       type: "load",
       path,
-      content: `source: your_source_connection
-target: your_target_connection
-
-defaults:
-  mode: full-refresh
-  object: public.${leaf}
-
-streams:
-  your_source_stream:
-    object: public.${leaf}
-`,
+      connection,
     };
   }
 

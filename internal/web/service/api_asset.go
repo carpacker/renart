@@ -360,20 +360,8 @@ func parseNativeAPIAssetSpec(content string, asset *pipeline.Asset, pl *pipeline
 			}
 		}
 		if connectionName == "" {
-			// Reuse Bruin's standard asset-connection resolution for the
-			// pipeline's majority warehouse type. This honours the pipeline's
-			// default_connections and also falls back to the built-in default
-			// connection name (e.g. duckdb-default) when none are declared, so
-			// an API asset materializes into the same warehouse as the SQL
-			// assets without requiring an explicit connection.
-			majorityType := pl.GetMajorityAssetTypesFromSQLAssets(pipeline.AssetTypeDuckDBQuery)
-			if conn, connErr := pl.GetConnectionNameForAsset(&pipeline.Asset{Type: majorityType}); connErr == nil {
-				connectionName = strings.TrimSpace(conn)
-			}
-		}
-		if connectionName == "" && len(pl.DefaultConnections) == 1 {
-			for _, conn := range pl.DefaultConnections {
-				connectionName = strings.TrimSpace(conn)
+			if conn, connErr := defaultPipelineTargetConnection(pl); connErr == nil {
+				connectionName = conn
 			}
 		}
 	}

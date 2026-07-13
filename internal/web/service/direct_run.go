@@ -62,7 +62,7 @@ func (e *HybridBruinExecutor) RunAsset(ctx context.Context, req RunAssetRequest,
 		return e.runAPIAsset(runCtx, pp.Pipeline, pp.Asset, renderer, manager, onChunk)
 	}
 	if isLoadAsset(pp.Asset) {
-		return e.runLoadAsset(runCtx, pp.Asset, manager, onChunk)
+		return e.runLoadAsset(runCtx, pp.Pipeline, pp.Asset, manager, onChunk)
 	}
 
 	mainExecutors, err := buildDirectMainExecutors(manager, renderer, parser, pp.Pipeline, e.runRegistry, e.duckDBCoordinator, e.workspaceRoot)
@@ -284,7 +284,7 @@ func (e *HybridBruinExecutor) RunPipeline(ctx context.Context, req RunPipelineRe
 			if isAPIAsset(instance.GetAsset()) {
 				_, runErr = e.runAPIAsset(runCtx, foundPipeline, instance.GetAsset(), renderer, manager, func(chunk []byte) { _, _ = printer.Write(chunk) })
 			} else if isLoadAsset(instance.GetAsset()) {
-				_, runErr = e.runLoadAsset(runCtx, instance.GetAsset(), manager, func(chunk []byte) { _, _ = printer.Write(chunk) })
+				_, runErr = e.runLoadAsset(runCtx, foundPipeline, instance.GetAsset(), manager, func(chunk []byte) { _, _ = printer.Write(chunk) })
 			} else {
 				lease, leaseErr := e.acquireDuckDBConnections(runCtx, manager, duckDBConnectionNamesForAsset(foundPipeline, instance.GetAsset()), directTaskLeaseOwner(runCtx, foundPipeline, instance.GetAsset()), printer)
 				if leaseErr != nil {

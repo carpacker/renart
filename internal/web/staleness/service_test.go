@@ -456,11 +456,17 @@ func TestLoadAssetNotDowngradedToMissing(t *testing.T) {
 	store := matlog.NewStore(schedStore.DB())
 	engine := fingerprint.NewEngine()
 	load := &pipeline.Asset{
-		Name: "example.to_csv",
-		Type: "load",
+		Name:       "example.to_csv",
+		Type:       "load",
+		Connection: "local",
+		Parameters: pipeline.ParameterMap{
+			"source_connection":  "duckdb-default",
+			"source_table":       "example.orders",
+			"destination_object": "./out.csv",
+		},
 		ExecutableFile: pipeline.ExecutableFile{
 			Path:    "/w/p/assets/to_csv.asset.yml",
-			Content: "type: load\nparameters:\n  destination_connection: local\n  destination_table: ./out.csv\n",
+			Content: "type: load\nconnection: local\nparameters:\n  source_connection: duckdb-default\n  source_table: example.orders\n  destination_object: ./out.csv\n",
 		},
 	}
 	p := &pipeline.Pipeline{

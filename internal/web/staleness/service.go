@@ -280,15 +280,18 @@ func (s *Service) compute(ctx context.Context, selection Selection) ([]AssetStat
 // verifiableByName reports whether an asset's freshness can be confirmed by
 // looking up a warehouse object named after the asset — the assumption the
 // trust-but-verify pass makes. It holds for SQL and seed assets. It does NOT
-// hold for load (sling) or python assets: a load asset writes to an arbitrary
-// destination (a local file like `./out.csv`, or a `destination_table` that
-// doesn't match the asset name), and a python asset runs an arbitrary script
-// that may write nothing (or a differently-named object). The name-based lookup
-// always reports those missing, so skip the downgrade — their freshness rests on
-// the run fact alone.
+// hold for database Load assets as well because their table is derived from the
+// asset name. File/object Load targets carry destination_object and Python
+// assets may still write no queryable table, so those rest on the run fact.
 func verifiableByName(asset *pipeline.Asset) bool {
 	switch strings.ToLower(strings.TrimSpace(string(asset.Type))) {
-	case "load", "python":
+	case "load":
+		if strings.EqualFold(strings.TrimSpace(asset.Connection), "local") {
+			return false
+		}
+		destinationObject, _ := asset.Parameters.GetString("destination_object")
+		return strings.TrimSpace(destinationObject) == ""
+	case "python":
 		return false
 	}
 	return true
