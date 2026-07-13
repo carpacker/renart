@@ -44,3 +44,32 @@ func TestInferPipelineDefaultConnectionsSkipsExplicitIngestrDestination(t *testi
 
 	assert.Empty(t, inferPipelineDefaultConnections(parsed))
 }
+
+func TestInferPipelineDefaultConnectionsSkipsExplicitAPITarget(t *testing.T) {
+	t.Parallel()
+
+	parsed := &pipeline.Pipeline{Assets: []*pipeline.Asset{
+		{
+			Name: "analytics.explicit_api",
+			Type: pipeline.AssetType(apiAssetType),
+			ExecutableFile: pipeline.ExecutableFile{Content: `type: api
+parameters:
+  load:
+    target: warehouse
+`},
+		},
+		{
+			Name: "analytics.default_api",
+			Type: pipeline.AssetType(apiAssetType),
+			ExecutableFile: pipeline.ExecutableFile{Content: `type: api
+parameters:
+  request:
+    url: https://example.com/data
+`},
+		},
+	}}
+
+	assert.Equal(t, []webmodel.PipelineConfigConnection{
+		{Platform: "duckdb", Name: "duckdb-default"},
+	}, inferPipelineDefaultConnections(parsed))
+}

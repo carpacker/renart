@@ -560,7 +560,15 @@ func defaultConnectionPlatformForAsset(parsed *pipeline.Pipeline, asset *pipelin
 
 	assetType := asset.Type
 	switch {
-	case isAPIAsset(asset), isLoadAsset(asset):
+	case isAPIAsset(asset):
+		// API assets can name their target inside parameters.load.target rather
+		// than through asset.Connection. That is still an asset-level override,
+		// so it must not be presented as a default inferred for the pipeline.
+		if connection, err := apiConnectionNameForAsset(asset, nil); err != nil || strings.TrimSpace(connection) != "" {
+			return "", false
+		}
+		assetType = parsed.GetMajorityAssetTypesFromSQLAssets(pipeline.AssetTypeDuckDBQuery)
+	case isLoadAsset(asset):
 		assetType = parsed.GetMajorityAssetTypesFromSQLAssets(pipeline.AssetTypeDuckDBQuery)
 	case assetType == pipeline.AssetTypePython || assetType == pipeline.AssetTypeEmpty:
 		assetType = parsed.GetMajorityAssetTypesFromSQLAssets(pipeline.AssetTypeBigqueryQuery)
