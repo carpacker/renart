@@ -1,6 +1,7 @@
 import { fetchJSON, fetchJSONWithBody } from "@/lib/api-core";
 import type {
   BrowseDirsResponse,
+  CreateDirectoryResponse,
   CreateProjectRequest,
   CreateProjectResponse,
   OpenProjectResponse,
@@ -34,7 +35,25 @@ export async function removeProject(id: string): Promise<ProjectListResponse> {
   );
 }
 
-export async function browseProjectDirs(path?: string): Promise<BrowseDirsResponse> {
-  const query = path ? `?path=${encodeURIComponent(path)}` : "";
-  return fetchJSON<BrowseDirsResponse>(`/api/projects/browse${query}`, { cache: "no-store" });
+export async function browseProjectDirs(
+  path?: string,
+  purpose?: "create",
+): Promise<BrowseDirsResponse> {
+  const search = new URLSearchParams();
+  if (path) search.set("path", path);
+  if (purpose) search.set("purpose", purpose);
+  const query = search.toString();
+  return fetchJSON<BrowseDirsResponse>(`/api/projects/browse${query ? `?${query}` : ""}`, {
+    cache: "no-store",
+  });
+}
+
+export async function createProjectDirectory(
+  parentDir: string,
+  name: string,
+): Promise<CreateDirectoryResponse> {
+  return fetchJSONWithBody<CreateDirectoryResponse>("/api/projects/directories", "POST", {
+    parent_dir: parentDir,
+    name,
+  });
 }

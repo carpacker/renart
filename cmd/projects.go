@@ -260,6 +260,50 @@ func (m *projectManager) resolveCreateParentDir(parentDir string) (string, error
 	return absParent, nil
 }
 
+// SuggestedCreateParentDir exposes the same default used by CreateProject so
+// the welcome screen can show the effective location before the user submits.
+func (m *projectManager) SuggestedCreateParentDir() (string, error) {
+	return m.resolveCreateParentDir("")
+}
+
+// CreateDirectory creates one visible child directory for the process-level
+// directory picker. Nested paths are deliberately rejected: navigation and
+// creation stay separate, reviewable actions in the UI.
+func (m *projectManager) CreateDirectory(parentDir, name string) (string, error) {
+	parent := strings.TrimSpace(parentDir)
+	if parent == "" {
+		return "", fmt.Errorf("parent directory is required")
+	}
+	absParent, err := filepath.Abs(parent)
+	if err != nil {
+		return "", err
+	}
+	info, err := os.Stat(absParent)
+	if err != nil {
+		return "", err
+	}
+	if !info.IsDir() {
+		return "", fmt.Errorf("%s is not a directory", absParent)
+	}
+
+	dirName := strings.TrimSpace(name)
+	if dirName == "" {
+		return "", fmt.Errorf("directory name is required")
+	}
+	if dirName == "." || dirName == ".." || strings.HasPrefix(dirName, ".") {
+		return "", fmt.Errorf("directory name must not start with a dot")
+	}
+	if strings.ContainsAny(dirName, `/\\`) || filepath.Base(dirName) != dirName {
+		return "", fmt.Errorf("directory name must not contain path separators")
+	}
+
+	target := filepath.Join(absParent, dirName)
+	if err := os.Mkdir(target, 0o755); err != nil {
+		return "", err
+	}
+	return target, nil
+}
+
 func validateProjectDirName(name string) error {
 	if name == "" {
 		return fmt.Errorf("project name is required")

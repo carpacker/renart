@@ -18,6 +18,8 @@ import {
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
+import { AnsiOutput } from "@/components/ansi-output";
+import { DirectoryPickerDialog } from "@/components/app/directory-picker-dialog";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -40,7 +42,7 @@ import {
   updateWorkspaceConnection,
 } from "@/lib/api-config";
 import { importOnboardingDatabase, previewOnboardingDiscovery } from "@/lib/api-onboarding";
-import { createProject, getProjectTemplates } from "@/lib/api-projects";
+import { browseProjectDirs, createProject, getProjectTemplates } from "@/lib/api-projects";
 import { buildStalePipelineStream } from "@/lib/api-staleness";
 import type { StreamAssetEvent } from "@/lib/api-streams";
 import { getWorkspace } from "@/lib/api-workspace";
@@ -85,6 +87,8 @@ export function WelcomePage({ forceNew = false }: { forceNew?: boolean }) {
   const [demoId, setDemoId] = useState("");
   const [projectName, setProjectName] = useState("");
   const [parentDir, setParentDir] = useState("");
+  const [parentDirLoading, setParentDirLoading] = useState(true);
+  const [directoryPickerOpen, setDirectoryPickerOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [created, setCreated] = useState<CreateProjectResponse | null>(null);
@@ -121,6 +125,10 @@ export function WelcomePage({ forceNew = false }: { forceNew?: boolean }) {
         setConnectionTypes(config.connection_types.filter((type) => type.category === "warehouse"));
       })
       .catch(() => {});
+    void browseProjectDirs(undefined, "create")
+      .then((response) => setParentDir((current) => current || response.path))
+      .catch(() => {})
+      .finally(() => setParentDirLoading(false));
   }, []);
 
   // Scaffolding into the open (empty) workspace is the first-run default;
@@ -441,15 +449,31 @@ export function WelcomePage({ forceNew = false }: { forceNew?: boolean }) {
                   />
                 </div>
                 <div className="grid gap-1.5">
-                  <Label htmlFor="welcome-project-location">Location (optional)</Label>
-                  <Input
+                  <Label htmlFor="welcome-project-location">Location</Label>
+                  <Button
                     id="welcome-project-location"
-                    value={parentDir}
-                    onChange={(event) => setParentDir(event.target.value)}
-                    placeholder="Defaults to the current project's parent directory"
-                  />
+                    type="button"
+                    variant="outline"
+                    className="min-w-0 justify-start"
+                    aria-label="Choose project location"
+                    title={parentDir || undefined}
+                    disabled={parentDirLoading}
+                    onClick={() => setDirectoryPickerOpen(true)}
+                  >
+                    {parentDirLoading ? (
+                      <LoaderCircle data-icon="inline-start" className="animate-spin" />
+                    ) : (
+                      <FolderPlus data-icon="inline-start" />
+                    )}
+                    <span className="truncate font-mono text-xs">
+                      {parentDirLoading
+                        ? "Loading suggested location..."
+                        : parentDir || "Choose a directory"}
+                    </span>
+                  </Button>
                   <p className="text-xs text-muted-foreground">
-                    A new directory with its own git repository is created here.
+                    A new {projectName.trim() || "project"} directory with its own git repository is
+                    created inside this folder.
                   </p>
                 </div>
               </>
@@ -463,7 +487,9 @@ export function WelcomePage({ forceNew = false }: { forceNew?: boolean }) {
               <Button
                 onClick={() => void handleCreate()}
                 disabled={
-                  busy || (!inPlace && !projectName.trim()) || (intent === "demo" && !demoId)
+                  busy ||
+                  (!inPlace && (!projectName.trim() || parentDirLoading)) ||
+                  (intent === "demo" && !demoId)
                 }
               >
                 {busy ? (
@@ -555,9 +581,10 @@ export function WelcomePage({ forceNew = false }: { forceNew?: boolean }) {
                 className="h-32 rounded-md border bg-zinc-950"
                 viewportClassName="max-h-32"
               >
-                <pre className="whitespace-pre-wrap p-2 font-mono text-[10px] leading-relaxed text-zinc-300">
-                  {runLog}
-                </pre>
+                <AnsiOutput
+                  output={runLog}
+                  className="whitespace-pre-wrap p-2 font-mono text-[10px] leading-relaxed text-zinc-300"
+                />
               </ScrollArea>
             ) : null}
             {runState === "error" ? (
@@ -795,6 +822,19 @@ export function WelcomePage({ forceNew = false }: { forceNew?: boolean }) {
           </div>
         ) : null}
       </div>
+      {!inPlace ? (
+        <DirectoryPickerDialog
+          open={directoryPickerOpen}
+          onOpenChange={setDirectoryPickerOpen}
+          initialPath={parentDir}
+          browsePurpose="create"
+          title="Choose project location"
+          description="Choose the folder that will contain the new project directory."
+          confirmLabel="Use this directory"
+          allowCreate
+          onSelect={setParentDir}
+        />
+      ) : null}
     </div>
   );
 }

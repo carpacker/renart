@@ -69,7 +69,10 @@ flow) — pipeline files, a `duckdb-default` connection, default .gitignore
 patterns, `.renart/project.yml` identity, and `git init` + an initial commit
 when the target has no repository — then opens/registers the project and
 refreshes its workspace. `GET /api/projects/templates` lists the templates
-for the welcome UI. `.renart/project.yml` also carries project-scoped feature
+for the welcome UI. The process-level `/api/projects/browse` directory picker
+uses the same default-parent resolution as project creation, and
+`POST /api/projects/directories` creates one visible child folder selected by
+the user. `.renart/project.yml` also carries project-scoped feature
 flags (`internal/web/identity`): `features.ingestr` re-enables the ingestr
 surfaces the UI hides by default — `/api/config` filters ingestr source
 connection types out unless the flag is set, and the frontend

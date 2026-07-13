@@ -61,7 +61,6 @@ type CreateProjectResponse struct {
 	GitInitialized bool        `json:"git_initialized"`
 }
 
-
 type BrowseDirEntry struct {
 	Name      string `json:"name"`
 	Path      string `json:"path"`
@@ -75,11 +74,23 @@ type BrowseDirsResponse struct {
 	Entries []BrowseDirEntry `json:"entries"`
 }
 
+type CreateDirectoryRequest struct {
+	ParentDir string `json:"parent_dir"`
+	Name      string `json:"name"`
+}
+
+type CreateDirectoryResponse struct {
+	Status string `json:"status"`
+	Path   string `json:"path"`
+}
+
 // ProjectDirectory is the project manager as seen by the HTTP layer.
 type ProjectDirectory interface {
 	ListProjects() ProjectListResponse
 	OpenProject(path string) (ProjectInfo, error)
 	CreateProject(req CreateProjectRequest) (CreateProjectResponse, error)
+	SuggestedCreateParentDir() (string, error)
+	CreateDirectory(parentDir, name string) (string, error)
 	RemoveProject(id string) error
 }
 
@@ -93,6 +104,7 @@ func RegisterProjectRoutes(router chi.Router, api *ProjectsAPI) {
 	router.Get("/api/projects/templates", api.HandleProjectTemplates)
 	router.Post("/api/projects/open", api.HandleOpenProject)
 	router.Get("/api/projects/browse", api.HandleBrowseDirs)
+	router.Post("/api/projects/directories", api.HandleCreateDirectory)
 	router.Delete("/api/projects/{projectID}", api.HandleRemoveProject)
 }
 
@@ -169,12 +181,16 @@ func (a *ProjectsAPI) HandleRemoveProject(w http.ResponseWriter, r *http.Request
 func (a *ProjectsAPI) HandleBrowseDirs(w http.ResponseWriter, r *http.Request) {
 	path := strings.TrimSpace(r.URL.Query().Get("path"))
 	if path == "" {
-		home, err := os.UserHomeDir()
+		var err error
+		if strings.TrimSpace(r.URL.Query().Get("purpose")) == "create" {
+			path, err = a.Directory.SuggestedCreateParentDir()
+		} else {
+			path, err = os.UserHomeDir()
+		}
 		if err != nil {
-			webapi.WriteInternalError(w, "home_dir_unavailable", err.Error())
+			webapi.WriteInternalError(w, "default_directory_unavailable", err.Error())
 			return
 		}
-		path = home
 	}
 
 	absPath, err := filepath.Abs(path)
@@ -209,6 +225,25 @@ func (a *ProjectsAPI) HandleBrowseDirs(w http.ResponseWriter, r *http.Request) {
 	})
 
 	webapi.WriteJSON(w, http.StatusOK, response)
+}
+
+func (a *ProjectsAPI) HandleCreateDirectory(w http.ResponseWriter, r *http.Request) {
+	var req CreateDirectoryRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		webapi.WriteBadRequest(w, "invalid_request_body", err.Error())
+		return
+	}
+
+	path, err := a.Directory.CreateDirectory(
+		strings.TrimSpace(req.ParentDir),
+		strings.TrimSpace(req.Name),
+	)
+	if err != nil {
+		webapi.WriteBadRequest(w, "directory_create_failed", err.Error())
+		return
+	}
+
+	webapi.WriteJSON(w, http.StatusCreated, CreateDirectoryResponse{Status: "ok", Path: path})
 }
 
 func looksLikeProject(dir string) bool {

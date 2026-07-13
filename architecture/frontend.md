@@ -56,9 +56,12 @@ File-based routes under [src/routes](../web/src/routes):
   ([welcome-page.tsx](../web/components/app/welcome-page.tsx)): demo / import /
   empty flows against `POST /api/projects`, with `?new=1` (the project
   switcher's "New project...") forcing creation of a fresh directory instead of
-  scaffolding into the current empty workspace. Demo creation bootstraps the
-  workspace with the `build-stale/stream` run (fresh assets are all
-  `never_built`) and renders its per-asset SSE progress.
+  scaffolding into the current empty workspace. New-project location uses the
+  server-backed directory picker shared with the project switcher; it starts at
+  the effective suggested parent and can create child folders. Demo creation
+  bootstraps the workspace with the `build-stale/stream` run (fresh assets are
+  all `never_built`) and renders its per-asset SSE progress and ANSI-colored
+  output.
 - `redesign.$.tsx` / `redesign.index.tsx` redirect legacy `/redesign/*` bookmarks
   to the root paths — the only place the old "redesign" name survives.
 - The route tree is generated into

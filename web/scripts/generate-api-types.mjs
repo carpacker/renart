@@ -45,6 +45,8 @@ const sources = [
       "CreateProjectResponse",
       "BrowseDirEntry",
       "BrowseDirsResponse",
+      "CreateDirectoryRequest",
+      "CreateDirectoryResponse",
     ],
   },
   {

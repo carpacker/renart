@@ -200,6 +200,16 @@ export type BrowseDirsResponse = {
   entries: BrowseDirEntry[];
 };
 
+export type CreateDirectoryRequest = {
+  parent_dir: string;
+  name: string;
+};
+
+export type CreateDirectoryResponse = {
+  status: string;
+  path: string;
+};
+
 export type ProjectTemplateInfo = {
   id: string;
   title: string;

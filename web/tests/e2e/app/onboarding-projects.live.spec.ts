@@ -1,6 +1,6 @@
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, readdirSync, statSync, readFileSync } from "node:fs";
-import { join } from "node:path";
+import { basename, dirname, join } from "node:path";
 
 import { expect } from "@playwright/test";
 
@@ -102,19 +102,32 @@ test.describe("first-run onboarding", () => {
   test("creates a new project directory from the New project flow", async ({ liveApp, page }) => {
     const parentDir = join(liveApp.workspaceDir, "projects");
     mkdirSync(parentDir, { recursive: true });
+    const selectedParentDir = join(parentDir, "onboarding-projects");
 
     await page.goto(`${liveApp.baseURL}/welcome?new=1`);
 
     await page.getByRole("button", { name: /Start empty/ }).click();
     await page.getByLabel("Project name").fill("my-new-project");
-    await page.getByLabel("Location (optional)").fill(parentDir);
+    const locationButton = page.getByRole("button", { name: "Choose project location" });
+    await expect(locationButton).toContainText(dirname(liveApp.workspaceDir));
+    await locationButton.click();
+
+    const picker = page.getByRole("dialog", { name: "Choose project location" });
+    await picker.getByRole("button", { name: basename(liveApp.workspaceDir), exact: true }).click();
+    await picker.getByRole("button", { name: "projects", exact: true }).click();
+    await picker.getByRole("button", { name: "New folder" }).click();
+    await picker.getByLabel("New folder name").fill("onboarding-projects");
+    await picker.getByRole("button", { name: "Create", exact: true }).click();
+    await expect(picker.getByTitle(selectedParentDir)).toBeVisible();
+    await picker.getByRole("button", { name: "Use this directory" }).click();
+    await expect(locationButton).toContainText(selectedParentDir);
     await page.getByRole("button", { name: "Create project" }).click();
 
     await expect(page.getByRole("heading", { name: "You're all set" })).toBeVisible({
       timeout: 30000,
     });
 
-    const projectDir = join(parentDir, "my-new-project");
+    const projectDir = join(selectedParentDir, "my-new-project");
     expect(existsSync(join(projectDir, "analytics", "pipeline.yml"))).toBe(true);
     expect(existsSync(join(projectDir, ".git"))).toBe(true);
     expect(readFileSync(join(projectDir, ".gitignore"), "utf8")).toContain("duckdb-files/");
