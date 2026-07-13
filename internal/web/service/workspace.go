@@ -258,6 +258,8 @@ func (s *WorkspaceService) ComputeState(ctx context.Context) (model.WorkspaceSta
 			}
 
 			declaredMatType := string(asset.Materialization.Type)
+			destinationType := materializationDestinationType(asset, parsed, state.Connections)
+			materializationProfile := materializationProfileFor(asset, destinationType)
 			columns := asset.Columns
 			if isAPIAsset(asset) && len(columns) == 0 {
 				columns = apiInferredColumnsForDisplay(ctx, asset)
@@ -280,25 +282,28 @@ func (s *WorkspaceService) ComputeState(ctx context.Context) (model.WorkspaceSta
 			}
 
 			pSummary.Assets = append(pSummary.Assets, model.Asset{
-				ID:                      EncodeID(filepath.ToSlash(relAssetPath)),
-				Name:                    asset.Name,
-				Type:                    string(asset.Type),
-				Path:                    filepath.ToSlash(relAssetPath),
-				Content:                 content,
-				Upstreams:               upstreams,
-				Parameters:              parameters,
-				Meta:                    assetMeta,
-				Columns:                 PipelineColumnsToModelColumns(columns),
-				Connection:              connectionName,
-				ExplicitConnection:      strings.TrimSpace(asset.Connection),
-				MaterializationType:     declaredMatType,
-				MaterializationStrategy: string(asset.Materialization.Strategy),
-				IncrementalKey:          asset.Materialization.IncrementalKey,
-				Owner:                   asset.Owner,
-				Tags:                    asset.Tags,
-				IsMaterialized:          false,
-				Class:                   notebook.ClassPipeline,
-				ParseError:              parseError,
+				ID:                          EncodeID(filepath.ToSlash(relAssetPath)),
+				Name:                        asset.Name,
+				Type:                        string(asset.Type),
+				Path:                        filepath.ToSlash(relAssetPath),
+				Content:                     content,
+				Upstreams:                   upstreams,
+				Parameters:                  parameters,
+				Meta:                        assetMeta,
+				Columns:                     PipelineColumnsToModelColumns(columns),
+				Connection:                  connectionName,
+				ExplicitConnection:          strings.TrimSpace(asset.Connection),
+				MaterializationType:         declaredMatType,
+				MaterializationStrategy:     string(asset.Materialization.Strategy),
+				IncrementalKey:              asset.Materialization.IncrementalKey,
+				MaterializationCapabilities: editableMaterializationCapabilities(materializationProfile),
+				SupportsFullRefresh:         materializationProfile.SupportsFullRefresh,
+				RefreshRestricted:           asset.RefreshRestricted != nil && *asset.RefreshRestricted,
+				Owner:                       asset.Owner,
+				Tags:                        asset.Tags,
+				IsMaterialized:              false,
+				Class:                       notebook.ClassPipeline,
+				ParseError:                  parseError,
 			})
 		}
 

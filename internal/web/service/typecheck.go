@@ -160,7 +160,7 @@ func checkAsset(ctx context.Context, fs afero.Fs, pp *pipeline.Pipeline, workspa
 		Type:     string(asset.Type),
 		Findings: []TypeCheckFinding{},
 	}
-	ac.Findings = append(ac.Findings, materializationTypeCheckFindings(asset)...)
+	ac.Findings = append(ac.Findings, materializationTypeCheckFindings(asset, pp)...)
 
 	dialect, dialectErr := AssetTypeToDialect(asset.Type)
 	if dialectErr != nil {
@@ -242,13 +242,28 @@ func checkAsset(ctx context.Context, fs afero.Fs, pp *pipeline.Pipeline, workspa
 	return ac
 }
 
-func materializationTypeCheckFindings(asset *pipeline.Asset) []TypeCheckFinding {
+func materializationTypeCheckFindings(asset *pipeline.Asset, pl ...*pipeline.Pipeline) []TypeCheckFinding {
 	if asset == nil {
 		return nil
 	}
 	findings := make([]TypeCheckFinding, 0, 3)
 	addError := func(message string) {
 		findings = append(findings, TypeCheckFinding{Severity: typeCheckSeverityError, Message: message})
+	}
+	addWarning := func(message string) {
+		findings = append(findings, TypeCheckFinding{Severity: typeCheckSeverityWarning, Message: message})
+	}
+
+	var parsedPipeline *pipeline.Pipeline
+	if len(pl) > 0 {
+		parsedPipeline = pl[0]
+	}
+	destinationType := materializationDestinationType(asset, parsedPipeline, nil)
+	profile := materializationProfileFor(asset, destinationType)
+	capability, capabilityKnown := materializationCapabilityForMode(profile, normalizedMaterializationMode(asset))
+	if err := validateMaterializationCapability(asset, destinationType); err != nil {
+		addError("Invalid materialization: " + err.Error())
+		return findings
 	}
 
 	strategy := strings.ToLower(strings.TrimSpace(string(asset.Materialization.Strategy)))
@@ -281,19 +296,20 @@ func materializationTypeCheckFindings(asset *pipeline.Asset) []TypeCheckFinding 
 	}
 
 	incrementalKey := strings.TrimSpace(asset.Materialization.IncrementalKey)
-	if incrementalKey != "" && !assetHasColumn(asset, incrementalKey) {
+	keyIsActive := capabilityKnown && (capability.SupportsIncrementalKey || capability.RequiresIncrementalKey)
+	if keyIsActive && incrementalKey != "" && !assetHasColumn(asset, incrementalKey) {
 		addError("Invalid materialization: incremental/update key " + incrementalKey + " is not declared as a column")
 	}
-	if (strategy == "time_interval" || strategy == "delete+insert" || strategy == "delete_insert") && incrementalKey == "" {
+	if capabilityKnown && capability.RequiresIncrementalKey && incrementalKey == "" {
 		addError("Invalid materialization: strategy " + strategy + " needs an incremental key")
 	}
-	if strategy == "time_interval" && strings.TrimSpace(string(asset.Materialization.TimeGranularity)) == "" {
+	if capabilityKnown && capability.RequiresTimeGranularity && strings.TrimSpace(string(asset.Materialization.TimeGranularity)) == "" {
 		addError("Invalid materialization: time_interval needs a time granularity")
 	}
 
 	for _, column := range asset.Columns {
 		if strategy != "merge" && (column.UpdateOnMerge || strings.TrimSpace(column.MergeSQL) != "") {
-			addError("Invalid materialization: column " + column.Name + " has merge-only metadata but the strategy is not merge")
+			addWarning("Inactive materialization metadata: column " + column.Name + " keeps merge-only settings that will be used if merge is selected again")
 		}
 	}
 	return findings

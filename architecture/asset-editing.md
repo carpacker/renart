@@ -114,9 +114,14 @@ round-trips unknown fields).
   workbench (status markers for inferred/manual/stale/type-overridden,
   checks, descriptions), and reconcile prompts. Merge editing includes
   column-scoped primary keys, `update_on_merge`, custom `merge_sql`, and a
-  column-backed update-key combobox for Sling-backed assets. Load and API
-  assets only offer Sling-compatible replace, truncate, append, and merge
-  strategies. API, Python, and Load assets share the same top-level target
+  column-backed update-key combobox where the active execution path supports
+  one. The backend-provided per-asset capability profile drives the available
+  modes and their prerequisites, including warehouse-specific SQL differences,
+  native versus Sling-backed Python writes, and Load/API's replace, truncate,
+  append, and merge subset. Unsupported hand-authored strategies are shown as
+  custom values without being reinterpreted; assets with dedicated non-generic
+  runtime configuration omit this section. API, Python, and Load assets share
+  the same top-level target
   connection control, including an explicit Auto state. The Load editor keeps
   only source fields in `parameters`, derives database destinations from the
   asset name, shows `destination_object` for file/storage targets, and offers a

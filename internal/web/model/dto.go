@@ -3,6 +3,19 @@ package model
 
 import "time"
 
+// MaterializationCapability describes one write mode Renart can safely offer
+// for an asset's concrete execution path. Labels remain a frontend concern;
+// the backend owns availability and field requirements.
+type MaterializationCapability struct {
+	Mode                    string `json:"mode"`
+	Type                    string `json:"type"`
+	Strategy                string `json:"strategy"`
+	SupportsIncrementalKey  bool   `json:"supports_incremental_key,omitempty"`
+	RequiresIncrementalKey  bool   `json:"requires_incremental_key,omitempty"`
+	RequiresPrimaryKey      bool   `json:"requires_primary_key,omitempty"`
+	RequiresTimeGranularity bool   `json:"requires_time_granularity,omitempty"`
+}
+
 // Asset represents a web API asset with its metadata. ContentRevision identifies
 // the exact snapshot returned for a notebook cell so saves can use it as an
 // optimistic-concurrency precondition.
@@ -20,16 +33,19 @@ type Asset struct {
 	// Connection is the effective target connection after applying pipeline
 	// defaults; ExplicitConnection is the persisted asset-level override used by
 	// metadata editors to represent the Auto state without losing runtime context.
-	Connection              string   `json:"connection,omitempty"`
-	ExplicitConnection      string   `json:"explicit_connection,omitempty"`
-	MaterializationType     string   `json:"materialization_type,omitempty"`
-	MaterializationStrategy string   `json:"materialization_strategy,omitempty"`
-	IncrementalKey          string   `json:"incremental_key,omitempty"`
-	Owner                   string   `json:"owner,omitempty"`
-	Tags                    []string `json:"tags,omitempty"`
-	IsMaterialized          bool     `json:"is_materialized"`
-	MaterializedAs          string   `json:"materialized_as,omitempty"`
-	RowCount                *int64   `json:"row_count,omitempty"`
+	Connection                  string                      `json:"connection,omitempty"`
+	ExplicitConnection          string                      `json:"explicit_connection,omitempty"`
+	MaterializationType         string                      `json:"materialization_type,omitempty"`
+	MaterializationStrategy     string                      `json:"materialization_strategy,omitempty"`
+	IncrementalKey              string                      `json:"incremental_key,omitempty"`
+	MaterializationCapabilities []MaterializationCapability `json:"materialization_capabilities,omitempty"`
+	SupportsFullRefresh         bool                        `json:"supports_full_refresh,omitempty"`
+	RefreshRestricted           bool                        `json:"refresh_restricted,omitempty"`
+	Owner                       string                      `json:"owner,omitempty"`
+	Tags                        []string                    `json:"tags,omitempty"`
+	IsMaterialized              bool                        `json:"is_materialized"`
+	MaterializedAs              string                      `json:"materialized_as,omitempty"`
+	RowCount                    *int64                      `json:"row_count,omitempty"`
 	// Class separates production assets from notebook cells; catalog,
 	// global lineage, and pipeline-side completion filter to "pipeline".
 	// Empty means "pipeline" (older payloads).

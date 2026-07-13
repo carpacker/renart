@@ -40,7 +40,6 @@ import { LOCAL_LOAD_CONNECTION, loadConnectionsForEnvironment } from "@/lib/load
 import {
   COLUMN_CHECK_NAMES,
   ColumnCombobox,
-  MATERIALIZATION_OPTIONS,
   VALUE_CHECKS,
   checkValueFor,
   formatCheckValue,
@@ -66,7 +65,7 @@ export function AssetYamlEditor({ asset, pipelineId }: { asset: WebAsset; pipeli
     <ScrollArea className="min-h-0 flex-1 bg-background">
       <div className="font-monaco p-3 text-[13px] leading-6">
         <IdentitySection asset={asset} pipelineId={pipelineId} />
-        <MaterializationSection asset={asset} pipelineId={pipelineId} isSql={isSql} />
+        <MaterializationSection asset={asset} pipelineId={pipelineId} />
         <DependsSection asset={asset} />
         <ColumnsSection asset={asset} isSql={isSql} />
       </div>
@@ -403,16 +402,11 @@ function IdentitySection({ asset, pipelineId }: { asset: WebAsset; pipelineId: s
 function MaterializationSection({
   asset,
   pipelineId,
-  isSql,
 }: {
   asset: WebAsset;
   pipelineId: string;
-  isSql: boolean;
 }) {
-  const { selected, isSlingBacked, selectedValue, options } = materializationEditorState(
-    asset,
-    isSql,
-  );
+  const { selected, selectedValue, options, hasEditor } = materializationEditorState(asset);
   const primaryKeys = (asset.columns ?? [])
     .filter((column) => column.primary_key)
     .map((column) => column.name);
@@ -423,6 +417,7 @@ function MaterializationSection({
       setError(cause instanceof Error ? cause.message : "Could not update materialization");
     });
   };
+  if (!hasEditor) return null;
   return (
     <>
       <Line className="mt-1">
@@ -434,8 +429,8 @@ function MaterializationSection({
           value={selectedValue}
           options={options.map((option) => ({ value: option.value, label: option.label }))}
           onChange={(value) => {
-            const option = MATERIALIZATION_OPTIONS.find((o) => o.value === value);
-            if (!option) return;
+            const option = options.find((item) => item.value === value);
+            if (!option || option.custom) return;
             save({
               materialization_type: option.type,
               materialization_strategy: option.strategy,
@@ -443,14 +438,16 @@ function MaterializationSection({
           }}
         />
       </Line>
-      {selected.value === "incremental" ||
-      (isSlingBacked && ["append", "merge"].includes(selected.value)) ? (
+      {selected.capability?.requires_incremental_key ||
+      selected.capability?.supports_incremental_key ? (
         <Line depth={1}>
           <Key>incremental_key</Key>
           <ColumnCombobox
             columns={asset.columns ?? []}
             value={asset.incremental_key ?? ""}
-            placeholder={selected.value === "incremental" ? "loaded_at" : "updated_at (optional)"}
+            placeholder={
+              selected.capability?.requires_incremental_key ? "loaded_at" : "updated_at (optional)"
+            }
             className="h-6 min-w-40 border-none bg-muted/40 shadow-none"
             onChange={(key) => {
               if (key !== (asset.incremental_key ?? "")) save({ incremental_key: key });
@@ -458,10 +455,10 @@ function MaterializationSection({
           />
         </Line>
       ) : null}
-      {selected.value === "merge" ? (
+      {selected.capability?.requires_primary_key ? (
         <Comment depth={2}>
           {primaryKeys.length === 0
-            ? "merge needs a primary_key column — set one under columns below"
+            ? `${selected.value === "merge" ? "merge" : "this mode"} needs a primary_key column — set one under columns below`
             : `primary key${primaryKeys.length === 1 ? "" : "s"}: ${primaryKeys.join(", ")}`}
         </Comment>
       ) : null}

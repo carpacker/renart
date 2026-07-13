@@ -501,4 +501,25 @@ func TestMaterializationTypeCheckFindings(t *testing.T) {
 		require.Len(t, findings, 1)
 		assert.Contains(t, findings[0].Message, "not supported")
 	})
+
+	t.Run("inactive strategy metadata is preserved without blocking", func(t *testing.T) {
+		asset := &pipeline.Asset{
+			Type: pipeline.AssetTypeDuckDBQuery,
+			Columns: []pipeline.Column{{
+				Name:          "id",
+				Type:          "BIGINT",
+				UpdateOnMerge: true,
+			}},
+			Materialization: pipeline.Materialization{
+				Type:           pipeline.MaterializationTypeTable,
+				Strategy:       pipeline.MaterializationStrategyCreateReplace,
+				IncrementalKey: "previously_used_key",
+			},
+		}
+
+		findings := materializationTypeCheckFindings(asset)
+		require.Len(t, findings, 1)
+		assert.Equal(t, typeCheckSeverityWarning, findings[0].Severity)
+		assert.Contains(t, findings[0].Message, "Inactive materialization metadata")
+	})
 }

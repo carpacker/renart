@@ -48,7 +48,7 @@ import {
 } from "@/lib/api-asset-transactions";
 import { updateAsset, updateAssetColumns } from "@/lib/api-assets";
 import { inferAPIAsset } from "@/lib/api-assets-columns";
-import type { APIInferResult } from "@/lib/generated/api-types";
+import type { APIInferResult, MaterializationCapability } from "@/lib/generated/api-types";
 import { classifyDependencies, columnStatus, parseAssetProvenance } from "@/lib/asset-provenance";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { NON_SQL_ASSET_TYPES, SQL_ASSET_TYPES, groupAssetTypesByKind } from "@/lib/asset-types";
@@ -66,16 +66,11 @@ import { MultiValueInput } from "./multi-value-input";
  * the asset API, and the workspace SSE stream refreshes the asset prop.
  */
 export function AssetGuidedCards({ asset, pipelineId }: { asset: WebAsset; pipelineId: string }) {
-  const isSql = useMemo(
-    () => asset.path?.toLowerCase().endsWith(".sql") ?? asset.type.toLowerCase().includes("sql"),
-    [asset.path, asset.type],
-  );
-
   return (
     <ScrollArea className="min-h-0 w-full flex-1">
       <div className="divide-y px-3">
         <IdentityCard asset={asset} pipelineId={pipelineId} />
-        <MaterializationCard asset={asset} pipelineId={pipelineId} isSql={isSql} />
+        <MaterializationCard asset={asset} pipelineId={pipelineId} />
         <DependenciesCard asset={asset} />
         <ColumnsCard asset={asset} />
         <QualityChecksCard asset={asset} />
@@ -291,49 +286,109 @@ export type MaterializationOption = {
   label: string;
   type: string;
   strategy: string;
+  capability?: MaterializationCapability;
+  custom?: boolean;
 };
 
 export const MATERIALIZATION_OPTIONS: MaterializationOption[] = [
   { value: "none", label: "None (run only)", type: "", strategy: "" },
   { value: "view", label: "View", type: "view", strategy: "" },
-  { value: "table", label: "Table (replace)", type: "table", strategy: "create+replace" },
-  { value: "truncate", label: "Table (truncate)", type: "table", strategy: "truncate+insert" },
+  {
+    value: "create+replace",
+    label: "Table (replace)",
+    type: "table",
+    strategy: "create+replace",
+  },
+  {
+    value: "truncate+insert",
+    label: "Table (truncate)",
+    type: "table",
+    strategy: "truncate+insert",
+  },
   { value: "append", label: "Append rows", type: "table", strategy: "append" },
   { value: "merge", label: "Merge by key", type: "table", strategy: "merge" },
   {
-    value: "incremental",
+    value: "delete+insert",
+    label: "Replace matching keys",
+    type: "table",
+    strategy: "delete+insert",
+  },
+  {
+    value: "time_interval",
     label: "Incremental (time interval)",
     type: "table",
     strategy: "time_interval",
   },
 ];
 
-export function currentMaterializationOption(asset: WebAsset): MaterializationOption {
-  const type = (asset.materialization_type ?? "").toLowerCase();
-  const strategy = (asset.materialization_strategy ?? "").toLowerCase();
-  if (!type) return MATERIALIZATION_OPTIONS[0];
-  if (type === "view") return MATERIALIZATION_OPTIONS[1];
-  const byStrategy = MATERIALIZATION_OPTIONS.find(
-    (o) => o.type === "table" && o.strategy === strategy,
-  );
-  return byStrategy ?? MATERIALIZATION_OPTIONS[2];
+function materializationOptionForCapability(
+  capability: MaterializationCapability,
+): MaterializationOption {
+  const known = MATERIALIZATION_OPTIONS.find((option) => option.value === capability.mode);
+  return {
+    value: capability.mode,
+    label: known?.label ?? capability.mode,
+    type: capability.type,
+    strategy: capability.strategy,
+    capability,
+  };
 }
 
-export function materializationEditorState(asset: WebAsset, isSql: boolean) {
+function currentMaterializationMode(asset: WebAsset) {
+  const type = (asset.materialization_type ?? "").toLowerCase();
+  const strategy = (asset.materialization_strategy ?? "").toLowerCase();
+  if (!type) {
+    return (asset.materialization_capabilities ?? []).some((item) => item.mode === "none")
+      ? "none"
+      : "create+replace";
+  }
+  if (type === "view") return "view";
+  if (type === "table" && !strategy) return "create+replace";
+  if (["create+replace", "create_replace", "full-refresh", "full_refresh"].includes(strategy)) {
+    return "create+replace";
+  }
+  if (["truncate+insert", "truncate_insert", "truncate"].includes(strategy)) {
+    return "truncate+insert";
+  }
+  if (strategy === "delete_insert") return "delete+insert";
+  return strategy;
+}
+
+export function currentMaterializationOption(asset: WebAsset): MaterializationOption {
+  const mode = currentMaterializationMode(asset);
+  const capability = (asset.materialization_capabilities ?? []).find(
+    (item) => item.mode === mode,
+  );
+  if (capability) return materializationOptionForCapability(capability);
+
+  const type = (asset.materialization_type ?? "").trim();
+  const strategy = (asset.materialization_strategy ?? "").trim();
+  const detail = strategy || type || mode;
+  return {
+    value: `custom:${type}:${strategy || mode}`,
+    label: `Custom (${detail})`,
+    type,
+    strategy,
+    custom: true,
+  };
+}
+
+export function materializationEditorState(asset: WebAsset) {
+  const options = (asset.materialization_capabilities ?? []).map(
+    materializationOptionForCapability,
+  );
   const selected = currentMaterializationOption(asset);
-  const type = asset.type.toLowerCase();
-  const isSlingBacked = type === "api" || type === "load";
+  const hasDeclaredMaterialization = Boolean(
+    (asset.materialization_type ?? "").trim() || (asset.materialization_strategy ?? "").trim(),
+  );
+  if (selected.custom && (options.length > 0 || hasDeclaredMaterialization)) {
+    options.unshift(selected);
+  }
   return {
     selected,
-    isSlingBacked,
-    selectedValue: isSlingBacked && selected.value === "none" ? "table" : selected.value,
-    options: isSql
-      ? MATERIALIZATION_OPTIONS
-      : MATERIALIZATION_OPTIONS.filter((option) =>
-          isSlingBacked
-            ? ["table", "truncate", "append", "merge"].includes(option.value)
-            : option.value !== "view" && option.value !== "incremental",
-        ),
+    selectedValue: selected.value,
+    options,
+    hasEditor: options.length > 0,
   };
 }
 
@@ -412,16 +467,11 @@ export function ColumnCombobox({
 function MaterializationCard({
   asset,
   pipelineId,
-  isSql,
 }: {
   asset: WebAsset;
   pipelineId: string;
-  isSql: boolean;
 }) {
-  const { selected, isSlingBacked, selectedValue, options } = materializationEditorState(
-    asset,
-    isSql,
-  );
+  const { selected, selectedValue, options, hasEditor } = materializationEditorState(asset);
   const primaryKeys = (asset.columns ?? [])
     .filter((column) => column.primary_key)
     .map((column) => column.name);
@@ -434,14 +484,16 @@ function MaterializationCard({
     });
   };
 
+  if (!hasEditor) return null;
+
   return (
     <GuidedCard title="Materialization">
       <FieldRow label="Write behavior">
         <Select
           value={selectedValue}
           onValueChange={(value) => {
-            const option = MATERIALIZATION_OPTIONS.find((o) => o.value === value);
-            if (!option) return;
+            const option = options.find((item) => item.value === value);
+            if (!option || option.custom) return;
             save({
               materialization_type: option.type,
               materialization_strategy: option.strategy,
@@ -454,7 +506,7 @@ function MaterializationCard({
           <SelectContent>
             <SelectGroup>
               {options.map((option) => (
-                <SelectItem key={option.value} value={option.value}>
+                <SelectItem key={option.value} value={option.value} disabled={option.custom}>
                   {option.label}
                 </SelectItem>
               ))}
@@ -462,15 +514,19 @@ function MaterializationCard({
           </SelectContent>
         </Select>
       </FieldRow>
-      {selected.value === "incremental" ||
-      (isSlingBacked && ["append", "merge"].includes(selected.value)) ? (
+      {selected.capability?.requires_incremental_key ||
+      selected.capability?.supports_incremental_key ? (
         <FieldRow
-          label={selected.value === "incremental" ? "Incremental key" : "Update key (optional)"}
+          label={
+            selected.capability?.requires_incremental_key
+              ? "Incremental key"
+              : "Update key (optional)"
+          }
         >
           <ColumnCombobox
             columns={asset.columns ?? []}
             value={asset.incremental_key ?? ""}
-            placeholder={selected.value === "incremental" ? "loaded_at" : "updated_at"}
+            placeholder={selected.capability?.requires_incremental_key ? "loaded_at" : "updated_at"}
             onChange={(key) => {
               if (key !== (asset.incremental_key ?? "")) {
                 save({
@@ -481,7 +537,7 @@ function MaterializationCard({
           />
         </FieldRow>
       ) : null}
-      {selected.value === "merge" ? (
+      {selected.capability?.requires_primary_key ? (
         <p
           className={cn(
             "text-[11px]",
@@ -489,7 +545,7 @@ function MaterializationCard({
           )}
         >
           {primaryKeys.length === 0
-            ? "Merge needs at least one primary-key column. Set one with the key control in Columns."
+            ? `${selected.value === "merge" ? "Merge" : "This mode"} needs at least one primary-key column. Set one with the key control in Columns.`
             : `Primary key${primaryKeys.length === 1 ? "" : "s"}: ${primaryKeys.join(", ")}`}
         </p>
       ) : null}

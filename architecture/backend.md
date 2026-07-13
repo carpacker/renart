@@ -180,11 +180,21 @@ queries run against the notebook's already-open live session and the resulting
 Parquet file is loaded directly into that session, without input or output
 DuckDB staging databases.
 
+Workspace asset DTOs carry a backend-owned materialization capability profile
+derived from the concrete asset type and destination. It is the contract used by
+both metadata editors: warehouse-specific exclusions and field requirements are
+not duplicated as frontend asset-family heuristics. Dedicated runtimes without
+the generic SQL/Python/loader contract expose no generic materialization editor;
+hand-authored advanced SQL strategies remain visible as custom values instead of
+being mislabeled as replace.
+
 Pipeline type checks also validate materialization configuration: supported
-loader strategies, required merge primary keys, declared incremental/update
-keys, time-interval prerequisites, and merge-only column metadata. Editing may
-temporarily persist an incomplete merge so multi-step form changes are possible;
-type check and execution surface the incomplete state until it is resolved.
+strategies, required merge primary keys, active incremental/update keys, and
+time-interval prerequisites. Editing may temporarily persist an incomplete merge
+so multi-step form changes are possible; type check and execution surface the
+incomplete state until it is resolved. Metadata belonging to another strategy
+is preserved as dormant state and reported as a warning rather than blocking an
+otherwise valid asset.
 
 ## 5. Conventions
 

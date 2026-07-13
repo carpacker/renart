@@ -216,6 +216,9 @@ func newWebServer(ctx context.Context, cfg serverConfig, logger *zap.Logger) (*w
 		PushWorkspaceUpdateImmediate: server.pushWorkspaceUpdateImmediate,
 		PushWorkspaceUpdateImmediateWithChangedIDs: server.pushWorkspaceUpdateImmediateWithChangedIDs,
 		PushAssetContentUpdateImmediate:            server.pushAssetContentUpdateImmediate,
+		ConnectionTypeFor: func(connectionName string) string {
+			return server.currentState().Connections[connectionName]
+		},
 	})
 
 	server.sqlSvc = service.NewSQLService(service.SQLDependencies{

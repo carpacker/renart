@@ -189,6 +189,7 @@ type AssetDependencies struct {
 	PushWorkspaceUpdateImmediate               func(context.Context, string, string)
 	PushWorkspaceUpdateImmediateWithChangedIDs func(context.Context, string, string, []string)
 	PushAssetContentUpdateImmediate            func(string, string, []string, string)
+	ConnectionTypeFor                          func(string) string
 }
 
 type AssetService struct {
@@ -557,6 +558,19 @@ func (s *AssetService) Update(ctx context.Context, assetID string, req AssetUpda
 				nextParameters[key] = rawValue
 			}
 			asset.Parameters = nextParameters
+		}
+		materializationChanged := req.Type != nil || req.Connection != nil || req.MaterializationType != nil || req.MaterializationStrategy != nil
+		if materializationChanged {
+			connectionTypes := map[string]string{}
+			if s.deps.ConnectionTypeFor != nil {
+				if connectionName, connectionErr := targetConnectionNameForAsset(asset, parsedPipeline); connectionErr == nil {
+					connectionTypes[connectionName] = s.deps.ConnectionTypeFor(connectionName)
+				}
+			}
+			destinationType := materializationDestinationType(asset, parsedPipeline, connectionTypes)
+			if capabilityErr := validateMaterializationCapability(asset, destinationType); capabilityErr != nil {
+				return AssetMutationResponse{}, badRequestError("unsupported_materialization", capabilityErr.Error())
+			}
 		}
 		if apiErr := loaderMaterializationAPIError(asset); apiErr != nil {
 			return AssetMutationResponse{}, apiErr
