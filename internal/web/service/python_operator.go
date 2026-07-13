@@ -155,6 +155,13 @@ func (o *renartPythonOperator) RunTask(ctx context.Context, p *pipeline.Pipeline
 	if err != nil {
 		return err
 	}
+	if depConfig.Type == bruinpython.DependencyTypePyproject {
+		projectRoot := depConfig.ProjectRoot
+		if projectRoot == "" {
+			projectRoot = repo.Path
+		}
+		configureUVLinkMode(envVariables, projectRoot, repo.Path)
+	}
 
 	output := printerWriter(ctx)
 

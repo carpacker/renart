@@ -167,7 +167,10 @@ does not use ingestr. `query()` returns a PyArrow Table by default; callers can
 convert explicitly with `.to_pandas()` or request `format="pandas"`. The SDK's
 `.pyi` files are also mounted into the embedded Python language server, and
 pipeline type-check warns when a literal `query()` reads a project asset missing
-from `depends`.
+from `depends`. Before a pyproject-backed run, the operator compares the project
+environment and uv cache filesystems. If they differ and the user has not set a
+cache or link policy, that invocation selects uv's copy mode up front; same-
+filesystem runs retain uv's faster default linking behavior.
 Notebook Python cells use the same operator in collection-only mode: broker
 queries run against the notebook's already-open live session and the resulting
 Parquet file is loaded directly into that session, without input or output
