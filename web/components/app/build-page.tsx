@@ -48,6 +48,7 @@ import {
   Table2,
   Terminal,
   Trash2,
+  X,
   XCircle,
 } from "lucide-react";
 import {
@@ -97,6 +98,12 @@ import {
   DelimitedCardTitle,
 } from "@/components/ui/delimited-card";
 import { Input } from "@/components/ui/input";
+import {
+  InputGroup,
+  InputGroupAddon,
+  InputGroupButton,
+  InputGroupInput,
+} from "@/components/ui/input-group";
 import { Label } from "@/components/ui/label";
 import { Field, FieldDescription, FieldGroup, FieldLabel } from "@/components/ui/field";
 import { Switch } from "@/components/ui/switch";
@@ -889,9 +896,9 @@ export function AppBuildPage({
       search: assetId ? { asset: assetId } : {},
     });
   };
-  // The ad hoc editor only renders in the code/split editor panes, so opening
-  // it from the explorer also navigates to the code view. Clicking again while
-  // ad-hoc is active toggles back to editing the current asset.
+  // The ad hoc editor only renders in code/split editor panes. Preserve the
+  // current editor layout when one exists, and add an editor beside the canvas
+  // when it does not. Clicking again toggles back to the current asset.
   const openAdhoc = () => {
     setExplorerOpen(false);
     if (editorMode === "adhoc") {
@@ -903,7 +910,7 @@ export function AppBuildPage({
       return;
     }
     void navigate({
-      to: appAssetViewPath("code"),
+      to: appAssetViewPath(view === "canvas" ? "split" : view),
       params: { pipelineId, assetId: effectiveSelectedAssetId },
       search: { ...buildSearch, editor: "adhoc" },
     });
@@ -969,6 +976,7 @@ export function AppBuildPage({
           assetCrumbLoading={!selectedAsset.workspaceAsset}
           resultTab={resultTab}
           editorMode={editorMode}
+          currentView={view}
           variant={variant}
           historyCount={history.length}
           onOpenExplorer={() => setExplorerOpen(true)}
@@ -1234,6 +1242,7 @@ function BuildTopBar({
   assetCrumbLoading = false,
   resultTab,
   editorMode,
+  currentView,
   variant,
   historyCount,
   onOpenExplorer,
@@ -1261,6 +1270,7 @@ function BuildTopBar({
   assetCrumbLoading?: boolean;
   resultTab: AppResultTab;
   editorMode: AppEditorMode;
+  currentView: AppBuildView;
   variant: string;
   historyCount: number;
   onOpenExplorer: () => void;
@@ -1377,7 +1387,9 @@ function BuildTopBar({
         )}
       >
         <Link
-          to="/pipelines/$pipelineId/assets/$assetId/code"
+          to={appAssetViewPath(
+            editorMode === "adhoc" ? currentView : currentView === "canvas" ? "split" : currentView,
+          )}
           params={{ pipelineId, assetId: selectedAssetId }}
           search={{
             result: resultTab,
@@ -1654,11 +1666,36 @@ function Explorer({
     : [{ id: "simple", name: "simple", path: "", assets: [] } satisfies WebPipeline];
   const notebookItems = workspace?.notebooks ?? [];
   const [newNotebookOpen, setNewNotebookOpen] = useState(false);
-  const assetsByGroup = pipelineAssets.reduce<Record<string, BuildAsset[]>>((groups, asset) => {
-    const group = assetGroupName(asset);
-    groups[group] = [...(groups[group] ?? []), asset];
-    return groups;
-  }, {});
+  const [assetFilter, setAssetFilter] = useState("");
+  const normalizedAssetFilter = assetFilter.trim().toLowerCase();
+  const filteredAssets = useMemo(() => {
+    if (!normalizedAssetFilter) {
+      return pipelineAssets;
+    }
+    return pipelineAssets.filter((asset) =>
+      [
+        asset.name,
+        asset.displayName,
+        assetSidebarName(asset),
+        assetGroupName(asset),
+        asset.prefix,
+        asset.path,
+        asset.type,
+        asset.connection,
+      ]
+        .filter((value): value is string => Boolean(value))
+        .some((value) => value.toLowerCase().includes(normalizedAssetFilter)),
+    );
+  }, [normalizedAssetFilter, pipelineAssets]);
+  const assetsByGroup = useMemo(
+    () =>
+      filteredAssets.reduce<Record<string, BuildAsset[]>>((groups, asset) => {
+        const group = assetGroupName(asset);
+        groups[group] = [...(groups[group] ?? []), asset];
+        return groups;
+      }, {}),
+    [filteredAssets],
+  );
 
   return (
     <>
@@ -1670,10 +1707,31 @@ function Explorer({
         </Button>
       </DelimitedCardHeader>
       <div className="border-b p-2">
-        <div className="flex h-8 items-center gap-2 rounded-md border bg-background px-2 text-xs text-muted-foreground">
-          <Search className="size-3.5" />
-          <span>Filter assets...</span>
-        </div>
+        <InputGroup className="bg-background">
+          <InputGroupAddon>
+            <Search />
+          </InputGroupAddon>
+          <InputGroupInput
+            value={assetFilter}
+            onChange={(event) => setAssetFilter(event.target.value)}
+            placeholder="Filter assets..."
+            aria-label="Filter assets"
+            autoComplete="off"
+            className="font-mono text-xs"
+          />
+          {assetFilter ? (
+            <InputGroupAddon align="inline-end">
+              <InputGroupButton
+                size="icon-xs"
+                onClick={() => setAssetFilter("")}
+                aria-label="Clear asset filter"
+                title="Clear asset filter"
+              >
+                <X />
+              </InputGroupButton>
+            </InputGroupAddon>
+          ) : null}
+        </InputGroup>
       </div>
       {/* Force Radix's inline `display: table` content wrapper to block so long
           asset names truncate instead of widening the sidebar horizontally. */}
@@ -1725,7 +1783,7 @@ function Explorer({
                         ))
                       ) : (
                         <div className="px-2 py-1 text-xs text-muted-foreground">
-                          No assets found.
+                          {normalizedAssetFilter ? "No matching assets." : "No assets found."}
                         </div>
                       )}
                       <div className="mt-1 border-t pt-1">

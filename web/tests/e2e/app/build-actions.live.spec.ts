@@ -89,8 +89,29 @@ test.describe("app build actions live", () => {
       "Explorer + top-bar ad-hoc affordances are desktop-only.",
     );
 
-    await page.goto(
-      `${liveApp.baseURL}/pipelines/${pipelineId}/assets/${customersAssetId}/code?editor=adhoc`,
+    // Bare asset URLs open the split editor/canvas view by default.
+    await page.goto(`${liveApp.baseURL}/pipelines/${pipelineId}/assets/${customersAssetId}`);
+    await expect(page).toHaveURL(
+      new RegExp(`/pipelines/${pipelineId}/assets/${customersAssetId}/split$`),
+    );
+    await expect(page.locator(".react-flow").first()).toBeVisible({ timeout: 15000 });
+
+    // Filtering narrows the current pipeline's assets and can be cleared.
+    const filter = page.getByRole("textbox", { name: "Filter assets" });
+    await filter.fill("orders");
+    await expect(page.getByRole("button", { name: /orders\.sql/ })).toBeVisible();
+    await expect(page.getByRole("button", { name: /customers\.sql/ })).toHaveCount(0);
+    await filter.fill("no-such-asset");
+    await expect(page.getByText("No matching assets.")).toBeVisible();
+    await page.getByRole("button", { name: "Clear asset filter" }).click();
+    await expect(page.getByRole("button", { name: /customers\.sql/ })).toBeVisible();
+
+    // Opening ad hoc from a split view keeps the split layout.
+    await page.getByRole("button", { name: "Ad-hoc query" }).click();
+    await expect(page).toHaveURL(
+      new RegExp(
+        `/pipelines/${pipelineId}/assets/${customersAssetId}/split[?].*editor=adhoc(?:&|$)`,
+      ),
     );
 
     const editor = page.locator(".monaco-editor").first();
@@ -142,6 +163,32 @@ test.describe("app build actions live", () => {
     await expect(disclosure).toBeVisible();
     await expect(disclosure).toContainText("adhoc_ok");
     await expect(disclosure).not.toContainText("{{");
+  });
+
+  test("ad hoc mode adds a split editor to canvas and preserves full-size code", async ({
+    liveApp,
+    page,
+  }) => {
+    test.skip(
+      test.info().project.name.includes("mobile"),
+      "The top-bar ad-hoc affordance is hidden below lg.",
+    );
+
+    await page.goto(`${liveApp.baseURL}/pipelines/${pipelineId}/assets/${customersAssetId}/canvas`);
+    await page.getByRole("link", { name: "Ad-hoc" }).click();
+    await expect(page).toHaveURL(
+      new RegExp(
+        `/pipelines/${pipelineId}/assets/${customersAssetId}/split[?].*editor=adhoc(?:&|$)`,
+      ),
+    );
+
+    await page.goto(`${liveApp.baseURL}/pipelines/${pipelineId}/assets/${customersAssetId}/code`);
+    await page.getByRole("link", { name: "Ad-hoc" }).click();
+    await expect(page).toHaveURL(
+      new RegExp(
+        `/pipelines/${pipelineId}/assets/${customersAssetId}/code[?].*editor=adhoc(?:&|$)`,
+      ),
+    );
   });
 
   test("python assets never call the SQL parse-context endpoint", async ({ liveApp, page }) => {
