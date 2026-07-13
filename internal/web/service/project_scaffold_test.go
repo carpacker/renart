@@ -73,7 +73,7 @@ func TestScaffoldProjectChessDemoAvoidsCatalogSchemaCollision(t *testing.T) {
 	t.Parallel()
 
 	target := t.TempDir()
-	_, err := ScaffoldProject(ScaffoldProjectRequest{
+	result, err := ScaffoldProject(ScaffoldProjectRequest{
 		TargetDir:     target,
 		Template:      ProjectTemplateChessDemo,
 		NewRepository: true,
@@ -84,6 +84,17 @@ func TestScaffoldProjectChessDemoAvoidsCatalogSchemaCollision(t *testing.T) {
 	require.NoError(t, err)
 	assert.Contains(t, string(configContents), "duckdb-files/chess_playground.duckdb")
 	assert.NotContains(t, string(configContents), "duckdb-files/chess.duckdb")
+	assert.ElementsMatch(t, []string{
+		"chess.players",
+		"chess.games",
+		"chess.game_results",
+		"chess.player_performance",
+		"chess.opening_repertoire",
+	}, projectTemplates()[0].info.AssetNames)
+	assert.Contains(t, result.Files, "chess/assets/chess/game_results.sql")
+	assert.Contains(t, result.Files, "chess/assets/chess/player_performance.sql")
+	assert.Contains(t, result.Files, "chess/assets/chess/opening_repertoire.sql")
+	assert.NoFileExists(t, filepath.Join(target, "chess", "assets", "chess", "my_python_asset.py"))
 }
 
 func TestScaffoldProjectIntoWorkspaceWithBareDotGitDirectory(t *testing.T) {
@@ -140,10 +151,10 @@ func TestScaffoldProjectKeepsExistingRepoAndConnections(t *testing.T) {
 	_, err = repo.Head()
 	assert.Error(t, err)
 
-	statsContents, err := os.ReadFile(filepath.Join(target, "chess", "assets", "chess", "player_stats.sql"))
+	performanceContents, err := os.ReadFile(filepath.Join(target, "chess", "assets", "chess", "player_performance.sql"))
 	require.NoError(t, err)
-	assert.Contains(t, string(statsContents), "FROM chess.players")
-	assert.NotContains(t, string(statsContents), "quickstart")
+	assert.Contains(t, string(performanceContents), "FROM chess.game_results")
+	assert.NotContains(t, string(performanceContents), "quickstart")
 }
 
 func TestScaffoldProjectRejectsUnknownTemplateAndExistingPipeline(t *testing.T) {

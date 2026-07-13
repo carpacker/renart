@@ -543,10 +543,11 @@ func (s *OnboardingService) CreateDuckDBQuickstart(ctx context.Context, req Onbo
 
 	files := map[string]string{
 		"pipeline.yml": quickstartPipelineYAML(filepath.Base(relPipelinePath), duckDBConnectionName),
-		filepath.Join("assets", "quickstart", "players.asset.yml"):  quickstartPlayersAPIYAML(),
-		filepath.Join("assets", "quickstart", "games.asset.yml"):    quickstartGamesAPIYAML(),
-		filepath.Join("assets", "quickstart", "player_stats.sql"):   quickstartPlayerStatsSQL("quickstart"),
-		filepath.Join("assets", "quickstart", "my_python_asset.py"): quickstartPythonAsset(),
+		filepath.Join("assets", "quickstart", "players.asset.yml"):      chessPlayersAPIYAML(),
+		filepath.Join("assets", "quickstart", "games.asset.yml"):        chessGamesAPIYAML(),
+		filepath.Join("assets", "quickstart", "game_results.sql"):       chessGameResultsSQL("quickstart"),
+		filepath.Join("assets", "quickstart", "player_performance.sql"): chessPlayerPerformanceSQL("quickstart"),
+		filepath.Join("assets", "quickstart", "opening_repertoire.sql"): chessOpeningRepertoireSQL("quickstart"),
 	}
 	for relPath, content := range files {
 		absPath := filepath.Join(absPipelinePath, relPath)
@@ -561,8 +562,9 @@ func (s *OnboardingService) CreateDuckDBQuickstart(ctx context.Context, req Onbo
 	assetPaths := []string{
 		filepath.ToSlash(filepath.Join(relPipelinePath, "assets", "quickstart", "players.asset.yml")),
 		filepath.ToSlash(filepath.Join(relPipelinePath, "assets", "quickstart", "games.asset.yml")),
-		filepath.ToSlash(filepath.Join(relPipelinePath, "assets", "quickstart", "player_stats.sql")),
-		filepath.ToSlash(filepath.Join(relPipelinePath, "assets", "quickstart", "my_python_asset.py")),
+		filepath.ToSlash(filepath.Join(relPipelinePath, "assets", "quickstart", "game_results.sql")),
+		filepath.ToSlash(filepath.Join(relPipelinePath, "assets", "quickstart", "player_performance.sql")),
+		filepath.ToSlash(filepath.Join(relPipelinePath, "assets", "quickstart", "opening_repertoire.sql")),
 	}
 	output := fmt.Sprintf("Created DuckDB chess quickstart pipeline at %s", relPipelinePath)
 	operation := runOperation(relPipelinePath, EncodeID(relPipelinePath), "", environmentName)
@@ -618,10 +620,10 @@ func (s *OnboardingService) prepareQuickstartDuckDBPath(databasePath string) err
 }
 
 func quickstartPipelineYAML(name, connectionName string) string {
-	return fmt.Sprintf("name: %s\nschedule: daily\nstart_date: \"2024-01-01\"\n\ndefault_connections:\n  duckdb: %s\n", name, connectionName)
+	return fmt.Sprintf("name: %s\nconcurrency: 1\n\ndefault_connections:\n  duckdb: %s\n", name, connectionName)
 }
 
-func quickstartPlayersAPIYAML() string {
+func chessPlayersAPIYAML() string {
 	return `type: api
 
 parameters:
@@ -630,20 +632,17 @@ parameters:
     method: GET
     headers:
       Accept: application/json
-      User-Agent: Renart Quickstart
+      User-Agent: "Renart Demo (https://github.com/bruin-data/renart)"
 
   iterate:
     as: username
     over:
-      - FabianoCaruana
+      - MagnusCarlsen
       - Hikaru
       - GothamChess
-      - DanielNaroditsky
-      - AnishGiri
-      - Firouzja2003
-      - LevonAronian
-      - WesleySo
-      - GarryKasparov
+      - AnnaCramling
+      - FabianoCaruana
+      - AlexandraBotez
 
   response:
     fields:
@@ -654,12 +653,14 @@ parameters:
       followers: followers
       joined: joined
       last_online: last_online
+      fide: fide
+      is_streamer: is_streamer
       player_id: player_id
       url: url
 `
 }
 
-func quickstartGamesAPIYAML() string {
+func chessGamesAPIYAML() string {
 	return `type: api
 
 parameters:
@@ -668,20 +669,17 @@ parameters:
     method: GET
     headers:
       Accept: application/json
-      User-Agent: Renart Quickstart
+      User-Agent: "Renart Demo (https://github.com/bruin-data/renart)"
 
   iterate:
     as: username
     over:
-      - FabianoCaruana
+      - MagnusCarlsen
       - Hikaru
       - GothamChess
-      - DanielNaroditsky
-      - AnishGiri
-      - Firouzja2003
-      - LevonAronian
-      - WesleySo
-      - GarryKasparov
+      - AnnaCramling
+      - FabianoCaruana
+      - AlexandraBotez
 
   response:
     records_path: games
@@ -689,68 +687,204 @@ parameters:
       url: url
       pgn: pgn
       time_control: time_control
+      time_class: time_class
       end_time: end_time
       rated: rated
       rules: rules
+      eco: eco
       white_username: white.username
       white_result: white.result
       white_rating: white.rating
+      white_accuracy: accuracies.white
       black_username: black.username
       black_result: black.result
       black_rating: black.rating
+      black_accuracy: accuracies.black
 `
 }
 
-func quickstartPlayerStatsSQL(schema string) string {
+func chessGameResultsSQL(schema string) string {
 	return `/* @bruin
+name: ` + schema + `.game_results
 type: duckdb.sql
 materialization:
   type: table
 depends:
   - ` + schema + `.players
   - ` + schema + `.games
+meta:
+  web_table_dense: "false"
+  web_view: table
 @bruin */
 
-WITH players AS (
-    SELECT
-        lower(username) AS player_username,
-        username,
-        coalesce(nullif(name, ''), username) AS name,
-        title,
-        country
-    FROM ` + schema + `.players
+WITH unique_games AS (
+    SELECT *
+    FROM ` + schema + `.games
+    WHERE rules = 'chess'
+    QUALIFY row_number() OVER (PARTITION BY url ORDER BY end_time DESC) = 1
 ),
 
-games AS (
+player_games AS (
     SELECT
-        lower(white_username) AS white_username,
-        lower(black_username) AS black_username,
-        white_result,
-        black_result
-    FROM ` + schema + `.games
+        url AS game_url,
+        end_time,
+        time_class,
+        time_control,
+        rated,
+        pgn,
+        eco AS eco_url,
+        lower(white_username) AS player_key,
+        'white' AS color,
+        white_result AS result_code,
+        white_rating AS rating,
+        white_accuracy AS accuracy,
+        black_username AS opponent_username,
+        black_rating AS opponent_rating
+    FROM unique_games
+
+    UNION ALL
+
+    SELECT
+        url AS game_url,
+        end_time,
+        time_class,
+        time_control,
+        rated,
+        pgn,
+        eco AS eco_url,
+        lower(black_username) AS player_key,
+        'black' AS color,
+        black_result AS result_code,
+        black_rating AS rating,
+        black_accuracy AS accuracy,
+        white_username AS opponent_username,
+        white_rating AS opponent_rating
+    FROM unique_games
 )
 
 SELECT
-    players.name,
     players.username,
+    coalesce(nullif(players.name, ''), players.username) AS name,
     players.title,
-    players.country,
-    coalesce(sum(CASE WHEN games.white_username = players.player_username THEN 1 ELSE 0 END), 0) AS games_white,
-    coalesce(sum(CASE WHEN games.black_username = players.player_username THEN 1 ELSE 0 END), 0) AS games_black
-FROM players
-LEFT JOIN games
-    ON players.player_username IN (games.white_username, games.black_username)
-GROUP BY players.name, players.username, players.title, players.country
-ORDER BY games_white + games_black DESC, players.name
+    upper(regexp_extract(players.country, '/country/([^/]+)$', 1)) AS country_code,
+    player_games.game_url,
+    to_timestamp(player_games.end_time) AS ended_at,
+    player_games.time_class,
+    player_games.time_control,
+    player_games.rated,
+    player_games.color,
+    player_games.rating,
+    player_games.accuracy,
+    player_games.opponent_username,
+    player_games.opponent_rating,
+    player_games.result_code,
+    CASE
+        WHEN player_games.result_code = 'win' THEN 'win'
+        WHEN player_games.result_code IN (
+            'agreed', 'repetition', 'stalemate', 'insufficient', '50move', 'timevsinsufficient'
+        ) THEN 'draw'
+        ELSE 'loss'
+    END AS outcome,
+    CASE
+        WHEN player_games.result_code = 'win' THEN 1.0
+        WHEN player_games.result_code IN (
+            'agreed', 'repetition', 'stalemate', 'insufficient', '50move', 'timevsinsufficient'
+        ) THEN 0.5
+        ELSE 0.0
+    END AS score,
+    nullif(regexp_extract(player_games.pgn, '\[ECO "([^"]+)"\]', 1), '') AS eco_code,
+    CASE
+        WHEN nullif(player_games.eco_url, '') IS NULL THEN 'Unknown'
+        ELSE replace(regexp_extract(player_games.eco_url, '/openings/(.*)$', 1), '-', ' ')
+    END AS opening
+FROM player_games
+INNER JOIN ` + schema + `.players AS players
+    ON lower(players.username) = player_games.player_key
 `
 }
 
-func quickstartPythonAsset() string {
-	return `"""@bruin
-image: python:3.11
-@bruin"""
+func chessPlayerPerformanceSQL(schema string) string {
+	return `/* @bruin
+name: ` + schema + `.player_performance
+type: duckdb.sql
+materialization:
+  type: table
+depends:
+  - ` + schema + `.game_results
+meta:
+  web_view: chart
+  web_chart_type: bar
+  web_chart_x: username
+  web_chart_series: score_percent
+  web_chart_title: January 2024 score percentage
+@bruin */
 
-print('hello world')
+SELECT
+    name,
+    username,
+    title,
+    country_code,
+    count(*) AS games,
+    count(*) FILTER (WHERE time_class = 'bullet') AS bullet_games,
+    count(*) FILTER (WHERE time_class = 'blitz') AS blitz_games,
+    count(*) FILTER (WHERE time_class = 'rapid') AS rapid_games,
+    count(*) FILTER (WHERE outcome = 'win') AS wins,
+    count(*) FILTER (WHERE outcome = 'draw') AS draws,
+    count(*) FILTER (WHERE outcome = 'loss') AS losses,
+    round(100 * avg(score), 1) AS score_percent,
+    round(avg(rating), 0) AS average_rating,
+    max(rating) AS peak_rating,
+    round(avg(accuracy), 1) AS average_accuracy
+FROM ` + schema + `.game_results
+GROUP BY name, username, title, country_code
+ORDER BY score_percent DESC, games DESC
+`
+}
+
+func chessOpeningRepertoireSQL(schema string) string {
+	return `/* @bruin
+name: ` + schema + `.opening_repertoire
+type: duckdb.sql
+materialization:
+  type: table
+depends:
+  - ` + schema + `.game_results
+meta:
+  web_table_dense: "false"
+  web_view: table
+@bruin */
+
+WITH opening_rollup AS (
+    SELECT
+        name,
+        username,
+        color,
+        time_class,
+        eco_code,
+        min(opening) AS opening,
+        count(*) AS games,
+        round(100 * avg(score), 1) AS score_percent,
+        round(avg(accuracy), 1) AS average_accuracy
+    FROM ` + schema + `.game_results
+    WHERE eco_code IS NOT NULL
+    GROUP BY name, username, color, time_class, eco_code
+    HAVING count(*) >= 2
+),
+
+ranked_openings AS (
+    SELECT
+        *,
+        row_number() OVER (
+            PARTITION BY username, color, time_class
+            ORDER BY games DESC, score_percent DESC, eco_code
+        ) AS repertoire_rank
+    FROM opening_rollup
+)
+
+SELECT * EXCLUDE (repertoire_rank)
+FROM ranked_openings
+WHERE repertoire_rank <= 5
+ORDER BY username, time_class, color, games DESC, score_percent DESC
 `
 }
 

@@ -44,11 +44,17 @@ func projectTemplates() []projectTemplate {
 		{
 			info: ProjectTemplateInfo{
 				ID:           ProjectTemplateChessDemo,
-				Title:        "Chess analytics",
-				Description:  "Pulls live player and game data from the public Chess.com API into DuckDB, with a SQL rollup and a Python asset on top.",
+				Title:        "Chess performance",
+				Description:  "Loads profiles and January 2024 games for popular players, then compares their results, ratings, and opening choices in DuckDB.",
 				Offline:      false,
 				PipelineName: "chess",
-				AssetNames:   []string{"chess.players", "chess.games", "chess.player_stats", "chess.my_python_asset"},
+				AssetNames: []string{
+					"chess.players",
+					"chess.games",
+					"chess.game_results",
+					"chess.player_performance",
+					"chess.opening_repertoire",
+				},
 			},
 			// Keep the DuckDB catalog name distinct from the asset schema. A
 			// database named chess.duckdb makes chess.games ambiguous to DuckDB
@@ -56,11 +62,12 @@ func projectTemplates() []projectTemplate {
 			duckdbFile: "chess_playground.duckdb",
 			files: func() map[string]string {
 				return map[string]string{
-					"pipeline.yml":                    quickstartPipelineYAML("chess", "duckdb-default"),
-					"assets/chess/players.asset.yml":  quickstartPlayersAPIYAML(),
-					"assets/chess/games.asset.yml":    quickstartGamesAPIYAML(),
-					"assets/chess/player_stats.sql":   quickstartPlayerStatsSQL("chess"),
-					"assets/chess/my_python_asset.py": quickstartPythonAsset(),
+					"pipeline.yml":                        quickstartPipelineYAML("chess", "duckdb-default"),
+					"assets/chess/players.asset.yml":      chessPlayersAPIYAML(),
+					"assets/chess/games.asset.yml":        chessGamesAPIYAML(),
+					"assets/chess/game_results.sql":       chessGameResultsSQL("chess"),
+					"assets/chess/player_performance.sql": chessPlayerPerformanceSQL("chess"),
+					"assets/chess/opening_repertoire.sql": chessOpeningRepertoireSQL("chess"),
 				}
 			},
 		},

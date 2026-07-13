@@ -63,8 +63,9 @@ content).
 tests) plus one lazily-opened per-project runtime each, mounted at
 `/api/projects/{id}/*` (`cmd/projects.go`); the argv root stays aliased at the
 unprefixed `/api/*`. `POST /api/projects` scaffolds a project from a template
-(`service.ScaffoldProject`: `demo:chess` — native `type: api` chess.com
-assets, `demo:retail` — offline SQL-only demo, `empty`, `bare` for the import
+(`service.ScaffoldProject`: `demo:chess` — native `type: api` Chess.com
+profiles and games feeding SQL performance and opening analysis,
+`demo:retail` — offline SQL-only demo, `empty`, `bare` for the import
 flow) — pipeline files, a `duckdb-default` connection, default .gitignore
 patterns, `.renart/project.yml` identity, and `git init` + an initial commit
 when the target has no repository — then opens/registers the project and
