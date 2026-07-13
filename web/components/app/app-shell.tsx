@@ -35,7 +35,6 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { Separator } from "@/components/ui/separator";
 import {
   Sheet,
   SheetContent,
@@ -91,9 +90,7 @@ export function AppShell() {
 
         <ProjectSwitcher />
 
-        <Separator orientation="vertical" className="mx-2 hidden h-5 bg-zinc-800 md:block" />
-
-        <nav className="hidden items-center md:flex">
+        <nav className="ml-2 hidden items-center md:flex">
           {navItems.map((item) => (
             <NavLinkButton key={item.to} {...item} />
           ))}

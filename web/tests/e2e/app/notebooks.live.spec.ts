@@ -181,6 +181,218 @@ test.describe("app notebooks live", () => {
     await expect(page.getByText("40", { exact: true }).first()).toBeVisible({ timeout: 15000 });
   });
 
+  test("cell editors can be resized vertically", async ({ liveApp, page }) => {
+    const notebook = await createNotebook(page.request, liveApp.baseURL, "Resizable Cells");
+    const cellId = await addCell(page.request, liveApp.baseURL, notebook.id, "resizable");
+    await setCell(page.request, liveApp.baseURL, notebook.id, cellId, "select 1 as value");
+
+    await page.goto(`${liveApp.baseURL}/notebooks/${notebook.id}`);
+    const cell = page.locator(`[data-notebook-cell-id="${cellId}"]`);
+    await expect(cell.locator(".monaco-editor")).toBeVisible({ timeout: 15000 });
+
+    const editor = cell.locator('[data-slot="notebook-cell-editor"]');
+    const handle = cell.getByRole("separator", { name: "Resize resizable cell" });
+    await expect(handle).toBeVisible();
+    const initialEditorHeight = await editor.evaluate(
+      (element) => element.getBoundingClientRect().height,
+    );
+    const initialCellHeight = await cell.evaluate(
+      (element) => element.getBoundingClientRect().height,
+    );
+    const handleBox = await handle.boundingBox();
+    expect(handleBox).not.toBeNull();
+
+    await page.mouse.move(
+      handleBox!.x + handleBox!.width / 2,
+      handleBox!.y + handleBox!.height / 2,
+    );
+    await page.mouse.down();
+    await page.mouse.move(
+      handleBox!.x + handleBox!.width / 2,
+      handleBox!.y + handleBox!.height / 2 + 140,
+      { steps: 5 },
+    );
+    await page.mouse.up();
+
+    await expect
+      .poll(() => editor.evaluate((element) => element.getBoundingClientRect().height))
+      .toBeGreaterThan(initialEditorHeight + 100);
+    await expect
+      .poll(() => cell.evaluate((element) => element.getBoundingClientRect().height))
+      .toBeGreaterThan(initialCellHeight + 100);
+
+    const draggedHeight = await editor.evaluate(
+      (element) => element.getBoundingClientRect().height,
+    );
+    await handle.focus();
+    await page.keyboard.press("ArrowUp");
+    await expect
+      .poll(() => editor.evaluate((element) => element.getBoundingClientRect().height))
+      .toBeLessThan(draggedHeight);
+
+    await handle.dblclick();
+    await expect
+      .poll(() => editor.evaluate((element) => element.getBoundingClientRect().height))
+      .toBe(initialEditorHeight);
+  });
+
+  test("new cells show a pending card, animate in, and keep the notebook at the bottom", async ({
+    liveApp,
+    page,
+  }) => {
+    const notebook = await createNotebook(page.request, liveApp.baseURL, "Cell Creation");
+    for (let index = 0; index < 8; index += 1) {
+      await addCell(page.request, liveApp.baseURL, notebook.id, `existing_${index + 1}`);
+    }
+
+    await page.goto(`${liveApp.baseURL}/notebooks/${notebook.id}`);
+    await expect(page.getByText("Cell Creation").first()).toBeVisible({ timeout: 15000 });
+
+    const viewport = page.locator('[data-slot="scroll-area-viewport"]');
+    const addSQLCell = page.getByRole("button", { name: "SQL cell" });
+    await addSQLCell.scrollIntoViewIfNeeded();
+
+    let releaseRequest = () => {};
+    const requestGate = new Promise<void>((resolve) => {
+      releaseRequest = resolve;
+    });
+    let markRequestStarted = () => {};
+    const requestStarted = new Promise<void>((resolve) => {
+      markRequestStarted = resolve;
+    });
+    const createRoute = `**/notebooks/${notebook.id}/cells`;
+    await page.route(createRoute, async (route) => {
+      if (route.request().method() !== "POST") {
+        await route.continue();
+        return;
+      }
+      markRequestStarted();
+      await requestGate;
+      await route.continue();
+    });
+
+    const createResponse = page.waitForResponse(
+      (response) =>
+        response.url().endsWith(`/notebooks/${notebook.id}/cells`) &&
+        response.request().method() === "POST",
+      { timeout: 15000 },
+    );
+    let released = false;
+    try {
+      await addSQLCell.click();
+      await requestStarted;
+
+      const pending = page.getByRole("status", { name: "Adding SQL cell" });
+      await expect(pending).toBeVisible();
+      await expect(pending).toHaveAttribute("data-notebook-block-pending", "sql");
+      await expect(pending).toHaveClass(/animate-in/);
+      await expect(addSQLCell).toBeDisabled();
+      await expect
+        .poll(() =>
+          viewport.evaluate(
+            (element) => element.scrollHeight - element.clientHeight - element.scrollTop,
+          ),
+        )
+        .toBeLessThanOrEqual(2);
+
+      releaseRequest();
+      released = true;
+      expect((await createResponse).ok()).toBe(true);
+      await expect(pending).toBeHidden();
+
+      const created = page.locator("[data-notebook-cell-id]").last();
+      await expect(created).toHaveAttribute("data-notebook-block-entering", "true");
+      await expect(created).toHaveClass(/animate-in/);
+      await expect
+        .poll(() =>
+          viewport.evaluate(
+            (element) => element.scrollHeight - element.clientHeight - element.scrollTop,
+          ),
+        )
+        .toBeLessThanOrEqual(2);
+    } finally {
+      if (!released) {
+        releaseRequest();
+      }
+      await page.unroute(createRoute);
+    }
+  });
+
+  test("cell deletion uses an in-app confirmation dialog", async ({ liveApp, page }) => {
+    const notebook = await createNotebook(page.request, liveApp.baseURL, "Cell Deletion");
+    const cellId = await addCell(page.request, liveApp.baseURL, notebook.id, "delete_me");
+    const nativeDialogs: string[] = [];
+    page.on("dialog", async (dialog) => {
+      nativeDialogs.push(dialog.type());
+      await dialog.dismiss();
+    });
+
+    await page.goto(`${liveApp.baseURL}/notebooks/${notebook.id}`);
+    await expect(page.getByText("Cell Deletion").first()).toBeVisible({ timeout: 15000 });
+
+    const cell = page.locator(`[data-notebook-cell-id="${cellId}"]`);
+    await cell.getByRole("button", { name: "Cell actions" }).click();
+    await page.getByRole("menuitem", { name: "Delete cell" }).click();
+
+    const dialog = page.getByRole("alertdialog");
+    await expect(dialog).toBeVisible();
+    await expect(dialog.getByText("Delete delete_me?", { exact: true })).toBeVisible();
+    expect(nativeDialogs).toEqual([]);
+
+    await dialog.getByRole("button", { name: "Cancel" }).click();
+    await expect(dialog).toBeHidden();
+    await expect(cell).toBeVisible();
+
+    await cell.getByRole("button", { name: "Cell actions" }).click();
+    await page.getByRole("menuitem", { name: "Delete cell" }).click();
+    let releaseRequest = () => {};
+    const requestGate = new Promise<void>((resolve) => {
+      releaseRequest = resolve;
+    });
+    let markRequestStarted = () => {};
+    const requestStarted = new Promise<void>((resolve) => {
+      markRequestStarted = resolve;
+    });
+    const deleteRoute = `**/notebooks/${notebook.id}/cells/${cellId}`;
+    await page.route(deleteRoute, async (route) => {
+      if (route.request().method() !== "DELETE") {
+        await route.continue();
+        return;
+      }
+      markRequestStarted();
+      await requestGate;
+      await route.continue();
+    });
+    const deleteResponse = page.waitForResponse(
+      (response) =>
+        response.url().endsWith(`/notebooks/${notebook.id}/cells/${cellId}`) &&
+        response.request().method() === "DELETE",
+      { timeout: 15000 },
+    );
+    let released = false;
+    try {
+      const confirmDelete = dialog.getByRole("button", { name: "Delete cell" });
+      await confirmDelete.click();
+      await requestStarted;
+      await expect(dialog).toBeVisible();
+      await expect(confirmDelete).toBeDisabled();
+      await expect(dialog.getByRole("status", { name: "Deleting cell" })).toBeVisible();
+
+      releaseRequest();
+      released = true;
+      expect((await deleteResponse).ok()).toBe(true);
+    } finally {
+      if (!released) {
+        releaseRequest();
+      }
+      await page.unroute(deleteRoute);
+    }
+
+    await expect(dialog).toBeHidden();
+    await expect(cell).toHaveCount(0);
+    expect(nativeDialogs).toEqual([]);
+  });
+
   test("a Python cell queries an upstream cell through the renart SDK", async ({
     liveApp,
     page,
@@ -205,13 +417,16 @@ test.describe("app notebooks live", () => {
       pythonCell,
       [
         "import os",
+        "import pyarrow as pa",
         "",
         "from renart import query",
         "",
         "",
         "def materialize():",
         '    assert "RENART_NOTEBOOK_INPUTS" not in os.environ',
-        '    return query("select amount * 2 as doubled from base order by 1", format="arrow")',
+        '    doubled = query("select amount * 2 as doubled from base order by 1")',
+        "    assert isinstance(doubled, pa.Table)",
+        "    return doubled",
       ].join("\n"),
     );
 

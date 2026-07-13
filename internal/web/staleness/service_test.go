@@ -2,6 +2,7 @@ package staleness
 
 import (
 	"context"
+	"fmt"
 	"path/filepath"
 	"testing"
 	"time"
@@ -23,6 +24,7 @@ type fixture struct {
 	pipeline *pipeline.Pipeline
 	events   *bus.Bus
 	pushed   chan any
+	nextRun  int
 }
 
 func sqlAsset(name, content string, upstreams ...string) *pipeline.Asset {
@@ -73,6 +75,8 @@ func newFixture(t *testing.T, assets ...*pipeline.Asset) *fixture {
 // downstream therefore captures the stale upstream it actually read.
 func (f *fixture) recordRun(t *testing.T, environment string, window *Interval, assetNames ...string) {
 	t.Helper()
+	f.nextRun++
+	runID := fmt.Sprintf("run-%d", f.nextRun)
 	vars := fingerprint.EffectiveVars(f.pipeline, nil)
 	results, err := f.engine.DAG(f.pipeline, vars)
 	require.NoError(t, err)
@@ -103,7 +107,7 @@ func (f *fixture) recordRun(t *testing.T, environment string, window *Interval, 
 			Fingerprint:    string(achieved[assetID]),
 			OwnContent:     string(result.OwnContent),
 			VarsHash:       varsHash,
-			RunID:          "run",
+			RunID:          runID,
 			MaterializedAt: time.Now().UTC(),
 		}
 		if window != nil {
@@ -118,7 +122,7 @@ func (f *fixture) recordRun(t *testing.T, environment string, window *Interval, 
 			Environment: environment,
 			Fingerprint: string(result.FP),
 			Status:      "succeeded",
-			RunID:       "run",
+			RunID:       runID,
 			RanAt:       time.Now().UTC(),
 		}))
 	}
@@ -129,6 +133,8 @@ func (f *fixture) recordRun(t *testing.T, environment string, window *Interval, 
 // failed run — no coverage fact is written.
 func (f *fixture) recordRunAttempt(t *testing.T, environment, status string, assetNames ...string) {
 	t.Helper()
+	f.nextRun++
+	runID := fmt.Sprintf("run-%d", f.nextRun)
 	vars := fingerprint.EffectiveVars(f.pipeline, nil)
 	results, err := f.engine.DAG(f.pipeline, vars)
 	require.NoError(t, err)
@@ -139,7 +145,7 @@ func (f *fixture) recordRunAttempt(t *testing.T, environment, status string, ass
 			Environment: environment,
 			Fingerprint: string(results[assetID].FP),
 			Status:      status,
-			RunID:       "run",
+			RunID:       runID,
 			RanAt:       time.Now().UTC(),
 		}))
 	}

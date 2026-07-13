@@ -2,6 +2,7 @@ package pysdk
 
 import (
 	"archive/zip"
+	"io/fs"
 	"strings"
 	"testing"
 )
@@ -51,6 +52,24 @@ func TestEnsureWheelProducesValidWheel(t *testing.T) {
 		if !found {
 			t.Errorf("wheel is missing %s", name)
 		}
+	}
+}
+
+func TestQueryDefaultsToArrow(t *testing.T) {
+	clientSource, err := fs.ReadFile(sdkSource, "src/renart/_client.py")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(clientSource), `format: str = "arrow"`) {
+		t.Fatal("runtime query() must default to Arrow")
+	}
+
+	clientStub, err := fs.ReadFile(sdkSource, "src/renart/_client.pyi")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(clientStub), `format: Literal["arrow", "pandas"] = "arrow"`) {
+		t.Fatal("query() type stub must advertise the Arrow default")
 	}
 }
 

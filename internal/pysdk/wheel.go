@@ -24,16 +24,16 @@ var sdkSource embed.FS
 
 // Version is the SDK's wheel version. Bump it together with user-visible SDK
 // changes; the content hash in the cache path handles dev-time invalidation.
-const Version = "0.2.0"
+const Version = "0.3.0"
 
 const (
 	distribution = "renart_sdk"
 	wheelTag     = "py3-none-any"
 )
 
-// metadata is the wheel's METADATA file. pyarrow decodes the broker's Arrow
-// responses; pandas backs query()'s default return type (a hard dependency by
-// decision — data code wants DataFrames).
+// metadata is the wheel's METADATA file. pyarrow decodes the broker's default
+// Arrow results; pandas remains available for explicit format="pandas" calls
+// and pyarrow.Table.to_pandas().
 var metadata = strings.TrimLeft(`
 Metadata-Version: 2.1
 Name: renart-sdk

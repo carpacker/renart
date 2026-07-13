@@ -162,8 +162,8 @@ from renart import query
 
 def materialize():
     # Read an upstream cell without opening its database directly:
-    # return query("select * from some_upstream_cell", format="arrow")
-    return query("select * from (values (1), (2), (3)) as example(n)", format="arrow")
+    # return query("select * from some_upstream_cell")
+    return query("select * from (values (1), (2), (3)) as example(n)")
 `, quotedCellID(cellID), PythonCellType, ClassNotebook)
 }
 

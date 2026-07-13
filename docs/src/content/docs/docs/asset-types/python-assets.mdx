@@ -50,15 +50,16 @@ def materialize():
     orders = query(
         "select customer_id, order_total from mart.orders "
         "where order_date >= current_date - interval '30 days'",
-    )
+    ).to_pandas()
     return orders.groupby("customer_id", as_index=False)["order_total"].sum()
 ```
 
-`query()` accepts one read-only `SELECT` and returns a pandas DataFrame. Pass
-`format="arrow"` to receive a PyArrow Table instead. It uses the asset's
-connection by default; `connection="warehouse-name"` reads through another
-connection defined in the project. Renart executes the query inside the runner,
-so the Python process receives the result but never the connection credentials.
+`query()` accepts one read-only `SELECT` and returns a PyArrow Table. Call
+`.to_pandas()` as above, or pass `format="pandas"`, when you want a pandas
+DataFrame. It uses the asset's connection by default;
+`connection="warehouse-name"` reads through another connection defined in the
+project. Renart executes the query inside the runner, so the Python process
+receives the result but never the connection credentials.
 
 The `context` object exposes the current run window, run ID, pipeline variables,
 asset name, and full-refresh state.

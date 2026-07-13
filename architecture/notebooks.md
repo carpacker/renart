@@ -77,9 +77,11 @@ notebooks/
 - The embedded SDK wheel supplies `renart`, pandas, and PyArrow. A notebook with
   no additional packages runs without creating a `pyproject.toml`; the
   Dependencies surface creates one only when the user adds packages. Python is
-  still a fresh process per cell run. The verified uv path is cached in the Go
-  process, while `uv run` remains responsible for locking and syncing explicit
-  project dependencies.
+  still a fresh process per cell run. SDK queries return PyArrow Tables by
+  default; pandas conversion is explicit through `.to_pandas()` or
+  `format="pandas"`. The verified uv path is cached in the Go process, while
+  `uv run` remains responsible for locking and syncing explicit project
+  dependencies.
 
 ## 4. Rename engine (`notebook/rename.go`)
 
@@ -103,6 +105,10 @@ chart settings popover parses and rewrites the directive line — text is the
 single source of truth. `@viz` is the first member of a general
 `-- @word(args)` comment-directive family (`@materialize` is another); all
 directives are comments and therefore outside fingerprints by construction.
+
+Cell code is edited in Monaco. Its initial height follows the cell's content;
+each cell also has an independent vertical resize handle with pointer and
+keyboard controls. Resizing is presentation-only and stays in frontend state.
 
 ## 6. Server-driven auto-recompute (`service/notebook_autorecompute.go`)
 
@@ -144,9 +150,7 @@ prompt to build it.
 
 - Rename/block-reorder don't re-trigger recompute for the *other* cells whose
   references they rewrite (a manual run or any subsequent edit recovers).
-- Promote-whole-notebook (subgraph → new pipeline); Monaco for cell editors
-  (cells are textareas — no SQL intellisense inside cells; reusing
-  `use-asset-monaco` is the obvious follow-up); Monaco squiggles/completion
+- Promote-whole-notebook (subgraph → new pipeline); Monaco squiggles/completion
   for `@viz`.
 - Warehouse-backed `notebook_target` (sandbox schemas + manifest/TTL janitor);
   the DuckDB-file default with delete-on-close + startup sweep is what exists.

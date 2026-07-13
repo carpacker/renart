@@ -9,7 +9,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/bruin-data/bruin/pkg/git"
@@ -19,7 +18,6 @@ import (
 	"renart/internal/web/bus"
 	"renart/internal/web/events"
 	"renart/internal/web/fingerprint"
-	"renart/internal/web/freshness"
 	webhttpapi "renart/internal/web/httpapi"
 	"renart/internal/web/identity"
 	"renart/internal/web/matlog"
@@ -156,8 +154,8 @@ func newWebServer(ctx context.Context, cfg serverConfig, logger *zap.Logger) (*w
 	}
 
 	server := &webServer{
-		projectID:   project.ID,
-		projectName: project.Name,
+		projectID:     project.ID,
+		projectName:   project.Name,
 		workspaceRoot: absRoot,
 		staticDir:     cfg.staticDir,
 		watchMode:     cfg.watchMode,
@@ -167,9 +165,7 @@ func newWebServer(ctx context.Context, cfg serverConfig, logger *zap.Logger) (*w
 		pipelineSvc:   service.NewPipelineService(absRoot),
 		hub:           events.NewDebouncedHub(150 * time.Millisecond),
 		executor:      nil,
-		freshness:     freshness.New(),
 		eventBus:      bus.New(),
-		duckDBOps:     make(map[string]*sync.Mutex),
 		logger:        logger,
 	}
 
@@ -178,14 +174,12 @@ func newWebServer(ctx context.Context, cfg serverConfig, logger *zap.Logger) (*w
 	server.policyLoader = policy.NewLoader(filepath.Join(absRoot, ".renart", "environments.yml"))
 
 	server.executionSvc = service.NewExecutionService(service.ExecutionDependencies{
-		WorkspaceRoot:                       absRoot,
-		ConfigPath:                          resolveConfigFilePath(absRoot),
-		Executor:                            server.executor,
-		ResolveAssetByID:                    server.resolveAssetByID,
-		ResolveAssetNameByID:                server.findAssetNameByID,
-		FindInspectIDs:                      server.findMaterializationInspectIDs,
-		RecordMaterialization:               server.freshness.RecordMaterialization,
-		RecordMaterializationForEnvironment: server.freshness.RecordMaterializationForEnvironment,
+		WorkspaceRoot:        absRoot,
+		ConfigPath:           resolveConfigFilePath(absRoot),
+		Executor:             server.executor,
+		ResolveAssetByID:     server.resolveAssetByID,
+		ResolveAssetNameByID: server.findAssetNameByID,
+		FindInspectIDs:       server.findMaterializationInspectIDs,
 		CurrentPipelines: func() []service.PipelineView {
 			state := server.currentState()
 			pipelines := make([]service.PipelineView, 0, len(state.Pipelines))
@@ -205,23 +199,8 @@ func newWebServer(ctx context.Context, cfg serverConfig, logger *zap.Logger) (*w
 			}
 			return server.policyLoader.For(environment)
 		},
-		DuckDBLock: func(lockKey string) *sync.Mutex {
-			return server.getDuckDBOperationMutex(lockKey)
-		},
 		ParseQueryOutput:   service.ParseQueryJSONOutput,
 		NewPipelineBuilder: server.newPipelineBuilder,
-		FreshnessSnapshot: func() map[string]service.AssetTimestamps {
-			items := server.freshness.GetAll()
-			result := make(map[string]service.AssetTimestamps, len(items))
-			for key, item := range items {
-				result[key] = service.AssetTimestamps{
-					MaterializedAt:   item.MaterializedAt,
-					ContentChangedAt: item.ContentChangedAt,
-					LastStatus:       item.MaterializedStatus,
-				}
-			}
-			return result
-		},
 	})
 
 	server.assetSvc = service.NewAssetService(service.AssetDependencies{
@@ -371,6 +350,7 @@ func newWebServer(ctx context.Context, cfg serverConfig, logger *zap.Logger) (*w
 			}
 			return "", fmt.Errorf("pipeline %s not found in workspace", pipelineUUID)
 		},
+		RecoverRun: server.replayRecoveredRun,
 		Runner: func(ctx context.Context, req webscheduler.RunRequest, onLog func(string)) webscheduler.RunResult {
 			spec := service.PipelineRunSpec{
 				RunID:             req.RunID,
@@ -411,7 +391,6 @@ func newWebServer(ctx context.Context, cfg serverConfig, logger *zap.Logger) (*w
 	server.workspaceCoord = service.NewWorkspaceCoordinator(service.WorkspaceCoordinatorDependencies{
 		WorkspaceService: server.workspaceSvc,
 		Hub:              server.hub,
-		Freshness:        server.freshness,
 		Logger:           logger,
 		Events:           server.eventBus,
 	})
@@ -428,12 +407,6 @@ func newWebServer(ctx context.Context, cfg serverConfig, logger *zap.Logger) (*w
 			server.schedulerStore.Close()
 			return nil, nil, fmt.Errorf("failed to initialize static asset handler: %w", err)
 		}
-	}
-
-	// Bootstrap materialization timestamps from existing run logs.
-	logsDir := filepath.Join(absRoot, "logs")
-	if err := server.freshness.LoadFromRunLogs(logsDir); err != nil {
-		logger.Warn("failed to load run logs for freshness tracking", zap.Error(err))
 	}
 
 	if err := server.refreshWorkspace(ctx); err != nil {

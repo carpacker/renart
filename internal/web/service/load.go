@@ -421,6 +421,11 @@ func (e *HybridBruinExecutor) runLoadAsset(ctx context.Context, asset *pipeline.
 		return writer.buffer.Bytes(), err
 	}
 	cmd := newStreamingCommand(ctx, cmdName, cmdArgs, e.workspaceRoot, writer)
+	lease, err := e.acquireDuckDBConnections(ctx, manager, []string{params.SourceConnection, params.DestinationConnection}, directTaskLeaseOwner(ctx, nil, asset), writer)
+	if err != nil {
+		return writer.buffer.Bytes(), err
+	}
+	defer lease.Release()
 	if err := runStreamingCommand(cmd, writer); err != nil {
 		return writer.buffer.Bytes(), err
 	}

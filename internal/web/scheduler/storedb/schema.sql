@@ -11,7 +11,8 @@ CREATE TABLE IF NOT EXISTS pipeline_runs (
     finished_at TEXT,
     error TEXT,
     log_ref TEXT,
-    snapshot_version_id TEXT
+    snapshot_version_id TEXT,
+    recovery_pending INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE INDEX IF NOT EXISTS idx_runs_pipeline_time ON pipeline_runs (pipeline_id, started_at DESC);
@@ -69,6 +70,8 @@ CREATE INDEX IF NOT EXISTS idx_renart_mat_lookup ON renart_materializations
     (asset_id, environment, fingerprint, vars_hash);
 CREATE INDEX IF NOT EXISTS idx_renart_mat_age ON renart_materializations
     (materialized_at);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_renart_mat_run ON renart_materializations
+    (asset_id, environment, run_id) WHERE run_id <> '';
 
 CREATE TABLE IF NOT EXISTS renart_coverage (
     asset_id        TEXT NOT NULL,

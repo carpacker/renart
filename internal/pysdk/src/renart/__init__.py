@@ -7,7 +7,7 @@ the Python process — and `context` exposes the run window and metadata.
     from renart import query, context
 
     def materialize():
-        games = query("select * from chess_games")
+        games = query("select * from chess_games").to_pandas()
         return games.groupby("winner").size().reset_index(name="wins")
 """
 

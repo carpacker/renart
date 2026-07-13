@@ -89,8 +89,10 @@ comparing symlink-resolved roots), and streams the same materialize SSE
 endpoints the UI uses, authenticating with the token
 (`SameOriginGuardWithToken`; `RENART_SERVER`/`RENART_TOKEN` pin a server,
 `--local` forces embedded). Delegation means one process owns all
-DuckDB/SQLite writes — DuckDB is single-writer per file across processes —
-and the UI's staleness/run history update live. Embedded mode boots the same
+SQLite writes and the UI's staleness/run history updates live. DuckDB access
+is additionally serialized per canonical database file as described in §4,
+because one server can run multiple pipelines and child processes concurrently.
+Embedded mode boots the same
 graph headless (`serverConfig.headless`: no static assets, watcher, or
 fingerprint pre-warm) and **never starts the River scheduler** (two
 schedulers on one state DB would duplicate runs); run facts still land in
@@ -111,17 +113,31 @@ users author is plain Bruin files (`.bruin.yml`, `pipeline.yml`, asset files).
 Bruin's operator/materializer packages (registered per warehouse in
 `service/direct_executor_registry.go`), with a **CLI fallback** so behavior
 matches the `bruin` binary where the direct path can't. Inspect-style queries
-force read-only semantics (single-SELECT check + `access_mode=read_only` for
-DuckDB paths). The scheduler executes deployed snapshots materialized to a
-temp dir, never the working tree (see staleness.md §5).
+enforce a single-SELECT boundary. The scheduler executes deployed snapshots
+materialized to a temp dir, never the working tree (see staleness.md §5).
+
+Local DuckDB files use the coordinator in `internal/web/duckcoord`. Connection
+paths are made absolute, symlink-resolved, deduplicated, and sorted before an
+exclusive lease is acquired. A process-local keyed lock serializes goroutines
+and a per-user advisory file lock serializes separate Renart processes. The
+parent keeps the lease for the entire database-touching phase, including the
+lifetime of Sling and ingestr children; API fetching and Python computation
+stay outside that phase. Loads that read and write two DuckDB files acquire
+both in sorted order. Waiting is context-cancellable, and an OS-released file
+lock makes a killed process recover without stale lock cleanup. Independent
+external programs do not participate in the advisory protocol, so inspect
+retains bounded retry and a clear DuckDB lock error as a defensive fallback.
 
 The scheduler is built on River with the SQLite driver: `Store` owns
 persistence/migrations, `Service` owns orchestration (catch-up windows,
 uniqueness via `river:"unique"`), and execution is injected as a plain
-`Runner` function.
+`Runner` function. Startup reconciles runs left open by a killed process and
+replays their persisted terminal steps into derived freshness state without
+rerunning asset code (see staleness.md §3).
 
 HTTP API assets use a native streaming extractor followed by Sling for the
-warehouse write. OpenAPI inference, pagination, validation warnings, and
+warehouse write. The target DuckDB lease is acquired after extraction and held
+until Sling exits. OpenAPI inference, pagination, validation warnings, and
 HTTP API extraction and execution-window behavior are documented in
 [http-api-assets.md](http-api-assets.md).
 
@@ -133,9 +149,11 @@ credentials never enter Python. `internal/web/runstate` lets queries wait for
 in-flight same-environment materializations and rejects same-run ordering
 deadlocks. `materialize()` results stage as Parquet, then load natively through
 the DuckDB materializer or through Sling for other warehouses; the Python path
-does not use ingestr. The SDK's `.pyi` files are also mounted into the embedded
-Python language server, and pipeline type-check warns when a literal
-`query()` reads a project asset missing from `depends`.
+does not use ingestr. `query()` returns a PyArrow Table by default; callers can
+convert explicitly with `.to_pandas()` or request `format="pandas"`. The SDK's
+`.pyi` files are also mounted into the embedded Python language server, and
+pipeline type-check warns when a literal `query()` reads a project asset missing
+from `depends`.
 Notebook Python cells use the same operator in collection-only mode: broker
 queries run against the notebook's already-open live session and the resulting
 Parquet file is loaded directly into that session, without input or output

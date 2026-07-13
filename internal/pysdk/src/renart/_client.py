@@ -56,7 +56,7 @@ def _raise_from_response(exc: urllib.error.HTTPError) -> "None":
     raise QueryError(message, code) from None
 
 
-def query(sql: str, connection: Optional[str] = None, format: str = "pandas") -> Any:
+def query(sql: str, connection: Optional[str] = None, format: str = "arrow") -> Any:
     """Run a read-only SQL query through the renart runner.
 
     Args:
@@ -65,8 +65,8 @@ def query(sql: str, connection: Optional[str] = None, format: str = "pandas") ->
             the runner waits for it to finish before executing the query.
         connection: a project connection name; defaults to the asset's own
             connection.
-        format: ``"pandas"`` (default) returns a pandas.DataFrame,
-            ``"arrow"`` returns a pyarrow.Table.
+        format: ``"arrow"`` (default) returns a pyarrow.Table,
+            ``"pandas"`` returns a pandas.DataFrame.
 
     Credentials never enter the Python process; the query executes inside
     the renart runner.

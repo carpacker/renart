@@ -10,9 +10,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"runtime"
-	"sort"
 	"strings"
-	"sync"
 	"syscall"
 	"time"
 
@@ -28,7 +26,6 @@ import (
 	"renart/internal/web/bus"
 	"renart/internal/web/events"
 	"renart/internal/web/fingerprint"
-	"renart/internal/web/freshness"
 	webhttpapi "renart/internal/web/httpapi"
 	"renart/internal/web/matlog"
 	"renart/internal/web/policy"
@@ -77,14 +74,10 @@ type webServer struct {
 
 	hub               *events.Hub
 	executor          service.BruinCommandExecutor
-	freshness         *freshness.Tracker
 	eventBus          *bus.Bus
 	fingerprintEngine *fingerprint.Engine
 	matlogStore       *matlog.Store
 	logger            *zap.Logger
-
-	duckDBOpsMu sync.Mutex
-	duckDBOps   map[string]*sync.Mutex
 }
 
 func Web() *cli.Command {
@@ -336,7 +329,6 @@ func (s *webServer) registerRoutes(router chi.Router) {
 		Snapshots:       s.snapshotStore,
 		ResolvePipeline: s.resolvePipelineForDeploy,
 	})
-	router.Get("/api/assets/freshness", s.handleGetAssetFreshness)
 
 	router.Get("/*", s.handleStatic)
 }
@@ -715,19 +707,6 @@ func (s *webServer) resolvePipelineByUUID(ctx context.Context, pipelineUUID stri
 	return nil, fmt.Errorf("pipeline with id %s not found in workspace", pipelineUUID)
 }
 
-func (s *webServer) getDuckDBOperationMutex(lockKey string) *sync.Mutex {
-	s.duckDBOpsMu.Lock()
-	defer s.duckDBOpsMu.Unlock()
-
-	if existing, ok := s.duckDBOps[lockKey]; ok {
-		return existing
-	}
-
-	mu := &sync.Mutex{}
-	s.duckDBOps[lockKey] = mu
-	return mu
-}
-
 func (s *webServer) newConnectionManager(ctx context.Context, environment string) (config.ConnectionAndDetailsGetter, error) {
 	configPath := s.resolveConfigFilePath()
 	cfg, err := config.LoadOrCreate(afero.NewOsFs(), configPath)
@@ -813,43 +792,6 @@ func (s *webServer) findMaterializationInspectIDs(assetIDs ...string) []string {
 // from the current workspace state.
 func (s *webServer) findAssetNameByID(assetID string) string {
 	return s.workspaceCoord.FindAssetNameByID(assetID)
-}
-
-// handleGetAssetFreshness returns freshness timestamps for all tracked assets.
-// Each entry includes both materialization and content-change timestamps so
-// the frontend can compute staleness from either perspective.
-func (s *webServer) handleGetAssetFreshness(w http.ResponseWriter, r *http.Request) {
-	environment := strings.TrimSpace(r.URL.Query().Get("environment"))
-	all := s.freshness.GetAll()
-	if environment != "" {
-		all = s.freshness.GetAllForEnvironment(environment)
-	}
-
-	type assetFreshnessEntry struct {
-		AssetName          string     `json:"asset_name"`
-		MaterializedAt     *time.Time `json:"materialized_at,omitempty"`
-		MaterializedStatus string     `json:"materialized_status,omitempty"`
-		ContentChangedAt   *time.Time `json:"content_changed_at,omitempty"`
-	}
-
-	entries := make([]assetFreshnessEntry, 0, len(all))
-	for name, ts := range all {
-		entry := assetFreshnessEntry{
-			AssetName:          name,
-			MaterializedAt:     ts.MaterializedAt,
-			MaterializedStatus: ts.MaterializedStatus,
-			ContentChangedAt:   ts.ContentChangedAt,
-		}
-		entries = append(entries, entry)
-	}
-
-	sort.Slice(entries, func(i, j int) bool {
-		return entries[i].AssetName < entries[j].AssetName
-	})
-
-	s.writeJSON(w, http.StatusOK, map[string]any{
-		"assets": entries,
-	})
 }
 
 func defaultAssetContent(assetName, assetType, assetPath string) string {

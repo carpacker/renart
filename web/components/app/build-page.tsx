@@ -200,6 +200,7 @@ import { NewNotebookDialog } from "./new-notebook-dialog";
 import {
   AppPage,
   AppPanel,
+  lastRunLabel,
   SeverityIcon,
   SimpleTable,
   StalenessBadge,
@@ -465,6 +466,7 @@ export function AppBuildPage({
     () => new Set((activePipeline?.assets ?? []).map((asset) => asset.name)),
     [activePipeline?.assets],
   );
+  const staleness = usePipelineStaleness(activePipeline?.id);
   const materializationAssets = useMemo(
     () =>
       pipelineAssets.map((asset) => ({
@@ -474,11 +476,11 @@ export function AppBuildPage({
         isMaterialized:
           asset.workspaceAsset?.is_materialized ??
           (asset.status === "success" || asset.status === "ok"),
+        staleness: staleness.byAssetName[asset.name],
       })),
-    [pipelineAssets],
+    [pipelineAssets, staleness.byAssetName],
   );
   const materializationStatusByAssetId = useAppAssetMaterializationStatus(materializationAssets);
-  const staleness = usePipelineStaleness(activePipeline?.id);
   const deployState = usePipelineDeploy(activePipeline?.id);
   const environmentPolicy = useSelectedEnvironmentPolicy();
   const executionBlocked = Boolean(environmentPolicy?.protected);
@@ -1837,6 +1839,11 @@ function AssetButton({
   const Icon = kindMeta[asset.kind].icon;
   const missingCount =
     asset.kind === "python" ? missingPythonDependencies(asset, declaredDependencies).length : 0;
+  const latestAttemptFailed =
+    asset.status === "failed" && asset.staleness?.last_run_status === "failed";
+  const latestAttemptCancelled =
+    asset.status !== "pending" && asset.staleness?.last_run_status === "cancelled";
+  const attemptLabel = asset.staleness ? lastRunLabel(asset.staleness) : "Last run failed";
   return (
     <button
       type="button"
@@ -1849,12 +1856,21 @@ function AssetButton({
       <Icon className="size-3.5 text-primary" />
       <span className="min-w-0 flex-1 truncate">{assetSidebarName(asset)}</span>
       {asset.staleness &&
-      (asset.staleness.status !== "fresh" ||
-        (asset.staleness.last_run_status === "failed" &&
-          asset.staleness.last_run_on_current_content)) ? (
+      (asset.staleness.status !== "fresh" || latestAttemptFailed || latestAttemptCancelled) ? (
         <span
-          title={`Staleness: ${stalenessLabel(asset.staleness)}`}
-          className={cn("size-1.5 rounded-full", stalenessDotClassName(asset.staleness))}
+          title={
+            latestAttemptFailed || latestAttemptCancelled
+              ? attemptLabel
+              : `Staleness: ${stalenessLabel(asset.staleness)}`
+          }
+          className={cn(
+            "size-1.5 rounded-full",
+            latestAttemptFailed
+              ? "bg-destructive"
+              : latestAttemptCancelled
+                ? "bg-muted-foreground"
+                : stalenessDotClassName(asset.staleness),
+          )}
         />
       ) : null}
       {missingCount > 0 ? (

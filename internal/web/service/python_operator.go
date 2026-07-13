@@ -24,6 +24,7 @@ import (
 	"github.com/bruin-data/bruin/pkg/sqlparser"
 
 	"renart/internal/pysdk"
+	"renart/internal/web/duckcoord"
 	"renart/internal/web/pybroker"
 	"renart/internal/web/runstate"
 )
@@ -59,6 +60,8 @@ type renartPythonOperator struct {
 	// into this Parquet file. Notebook runners then load it directly into their
 	// existing session instead of creating an intermediate DuckDB database.
 	stagingOutputPath string
+	duckDBCoordinator *duckcoord.Coordinator
+	workspaceRoot     string
 
 	uv     *bruinpython.UvChecker
 	cmd    *bruinpython.CommandRunner
@@ -73,6 +76,8 @@ type renartPythonOperatorOptions struct {
 	brokerValidateSQL       func(sql string) error
 	brokerUsedTables        func(sql string) ([]string, error)
 	stagingOutputPath       string
+	duckDBCoordinator       *duckcoord.Coordinator
+	workspaceRoot           string
 }
 
 type uvEnsurer interface {
@@ -120,6 +125,8 @@ func newRenartPythonOperator(manager config.ConnectionAndDetailsGetter, envVaria
 		brokerValidateSQL:       opts.brokerValidateSQL,
 		brokerUsedTables:        opts.brokerUsedTables,
 		stagingOutputPath:       opts.stagingOutputPath,
+		duckDBCoordinator:       opts.duckDBCoordinator,
+		workspaceRoot:           opts.workspaceRoot,
 		uv:                      &bruinpython.UvChecker{},
 		cmd:                     &bruinpython.CommandRunner{},
 		module:                  &bruinpython.ModulePathFinder{},
@@ -607,7 +614,14 @@ func (o *renartPythonOperator) runWithMaterialization(ctx context.Context, run p
 
 	fmt.Fprintln(run.output, "Collected the materialize() result, loading it into the destination…")
 	if isDuckDB {
-		err = o.loadParquetIntoDuckDB(ctx, run, connectionName, parquetPath)
+		lease, leaseErr := o.acquireDuckDBDestination(ctx, run, connectionName)
+		if leaseErr != nil {
+			return leaseErr
+		}
+		err = func() error {
+			defer lease.Release()
+			return o.loadParquetIntoDuckDB(ctx, run, connectionName, parquetPath)
+		}()
 	} else {
 		err = o.loadParquetViaSling(ctx, run, connectionName, parquetPath)
 	}
@@ -616,6 +630,36 @@ func (o *renartPythonOperator) runWithMaterialization(ctx context.Context, run p
 	}
 	fmt.Fprintln(run.output, "Loaded the data into the destination.")
 	return nil
+}
+
+func (o *renartPythonOperator) acquireDuckDBDestination(ctx context.Context, run pythonRun, connectionName string) (*duckcoord.Lease, error) {
+	if o.duckDBCoordinator == nil || o.manager == nil {
+		return &duckcoord.Lease{}, nil
+	}
+	rawPath := ""
+	switch connection := o.manager.GetConnectionDetails(connectionName).(type) {
+	case *config.DuckDBConnection:
+		if connection != nil {
+			rawPath = connection.Path
+		}
+	case config.DuckDBConnection:
+		rawPath = connection.Path
+	default:
+		return &duckcoord.Lease{}, nil
+	}
+	databasePath, err := duckcoord.CanonicalPath(o.workspaceRoot, rawPath)
+	if err != nil {
+		return nil, err
+	}
+	return o.duckDBCoordinator.Acquire(ctx, []string{databasePath}, duckcoord.Owner{
+		Operation: "materialize python asset",
+		Pipeline:  run.pipeline.Name,
+		Asset:     run.asset.Name,
+		RunID:     contextString(ctx, pipeline.RunConfigRunID),
+		OnWait: func(path string) {
+			_, _ = fmt.Fprintf(run.output, "Waiting for DuckDB database %s to become available...\n", filepath.Base(path))
+		},
+	})
 }
 
 func (o *renartPythonOperator) destinationIsDuckDB(connectionName string) bool {

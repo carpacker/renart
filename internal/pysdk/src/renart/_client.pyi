@@ -11,5 +11,5 @@ class QueryError(RenartError):
 def query(
     sql: str,
     connection: str | None = None,
-    format: Literal["pandas", "arrow"] = "pandas",
+    format: Literal["arrow", "pandas"] = "arrow",
 ) -> Any: ...

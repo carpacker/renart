@@ -12,7 +12,6 @@ import (
 	"go.uber.org/zap"
 	"renart/internal/web/bus"
 	"renart/internal/web/events"
-	"renart/internal/web/freshness"
 	"renart/internal/web/identity"
 	webmodel "renart/internal/web/model"
 )
@@ -39,7 +38,6 @@ type (
 type WorkspaceCoordinatorDependencies struct {
 	WorkspaceService *WorkspaceService
 	Hub              *events.Hub
-	Freshness        *freshness.Tracker
 	RefreshHook      func(context.Context) error
 	Logger           *zap.Logger
 	Events           *bus.Bus
@@ -126,11 +124,6 @@ func (c *WorkspaceCoordinator) PushUpdate(ctx context.Context, eventType, eventP
 	changed := c.FindDirectlyChangedAssetIDs(filepath.ToSlash(eventPath))
 
 	now := time.Now().UTC()
-	for _, id := range changed {
-		if name := c.FindAssetNameByID(id); name != "" {
-			c.deps.Freshness.RecordContentChange(name, now)
-		}
-	}
 	c.emitAssetSaved(changed, now)
 
 	c.deps.Hub.Publish(WorkspaceEvent{
@@ -155,11 +148,6 @@ func (c *WorkspaceCoordinator) PushUpdateImmediateWithChangedIDs(ctx context.Con
 	}
 
 	now := time.Now().UTC()
-	for _, id := range changed {
-		if name := c.FindAssetNameByID(id); name != "" {
-			c.deps.Freshness.RecordContentChange(name, now)
-		}
-	}
 	c.emitAssetSaved(changed, now)
 
 	c.deps.Hub.PublishImmediate(WorkspaceEvent{
@@ -179,11 +167,6 @@ func (c *WorkspaceCoordinator) PushAssetContentUpdateImmediate(eventType, eventP
 	now := time.Now().UTC()
 	state := c.updateAssetContent(changed, content, now)
 
-	for _, id := range changed {
-		if name := c.FindAssetNameByID(id); name != "" {
-			c.deps.Freshness.RecordContentChange(name, now)
-		}
-	}
 	c.emitAssetSaved(changed, now)
 
 	c.deps.Hub.PublishImmediate(WorkspaceEvent{

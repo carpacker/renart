@@ -30,7 +30,7 @@ func TestRecordRunUpsertsLatestAttempt(t *testing.T) {
 	ctx := context.Background()
 
 	require.NoError(t, store.RecordRun(ctx, matlog.AssetRunRecord{
-		AssetID: "p:a", Environment: "dev", Fingerprint: "fp1", Status: "failed", RanAt: ts(1),
+		AssetID: "p:a", Environment: "dev", Fingerprint: "fp1", Status: "failed", RunID: "run-1", RanAt: ts(1),
 	}))
 	runs, err := store.LastRuns(ctx, []string{"p:a"}, "dev")
 	require.NoError(t, err)
@@ -40,12 +40,24 @@ func TestRecordRunUpsertsLatestAttempt(t *testing.T) {
 	// A later run of either outcome overwrites the previous row (one per key), so
 	// a success clears the prior failure.
 	require.NoError(t, store.RecordRun(ctx, matlog.AssetRunRecord{
-		AssetID: "p:a", Environment: "dev", Fingerprint: "fp2", Status: "succeeded", RanAt: ts(2),
+		AssetID: "p:a", Environment: "dev", Fingerprint: "fp2", Status: "succeeded", RunID: "run-2", RanAt: ts(2),
 	}))
 	runs, err = store.LastRuns(ctx, []string{"p:a"}, "dev")
 	require.NoError(t, err)
 	assert.Equal(t, "succeeded", runs["p:a"].Status)
 	assert.Equal(t, "fp2", runs["p:a"].Fingerprint)
+	assert.Equal(t, "run-2", runs["p:a"].RunID)
+
+	// Startup recovery can replay an older persisted run after a newer attempt
+	// was already recorded. It must not move the latest-attempt row backwards.
+	require.NoError(t, store.RecordRun(ctx, matlog.AssetRunRecord{
+		AssetID: "p:a", Environment: "dev", Fingerprint: "fp-old", Status: "failed", RunID: "run-old", RanAt: ts(1),
+	}))
+	runs, err = store.LastRuns(ctx, []string{"p:a"}, "dev")
+	require.NoError(t, err)
+	assert.Equal(t, "succeeded", runs["p:a"].Status)
+	assert.Equal(t, "fp2", runs["p:a"].Fingerprint)
+	assert.Equal(t, "run-2", runs["p:a"].RunID)
 
 	// Attempts are environment-scoped.
 	other, err := store.LastRuns(ctx, []string{"p:a"}, "prod")
@@ -68,7 +80,7 @@ func record(t *testing.T, store *matlog.Store, startHour, endHour int) {
 		VarsHash:       "vh",
 		IntervalStart:  start,
 		IntervalEnd:    end,
-		RunID:          "run",
+		RunID:          "",
 		MaterializedAt: ts(endHour),
 	}))
 }
@@ -91,7 +103,7 @@ func TestFullRefreshUpsertsSingleMarker(t *testing.T) {
 			Environment:    "prod",
 			Fingerprint:    "v1:abc",
 			VarsHash:       "vh",
-			RunID:          "run",
+			RunID:          "",
 			MaterializedAt: ts(i),
 		}))
 	}
@@ -104,6 +116,31 @@ func TestFullRefreshUpsertsSingleMarker(t *testing.T) {
 	facts, err := store.CountFacts(ctx)
 	require.NoError(t, err)
 	assert.EqualValues(t, 3, facts)
+}
+
+func TestScheduledRunFactReplayIsIdempotent(t *testing.T) {
+	t.Parallel()
+	store := openTestStore(t)
+	ctx := context.Background()
+
+	require.NoError(t, store.Record(ctx, matlog.Materialization{
+		AssetID: "p:a", Environment: "prod", Fingerprint: "v1:first", VarsHash: "vh",
+		RunID: "scheduled-run", MaterializedAt: ts(1),
+	}))
+	// A crash after the first transaction committed can cause startup recovery
+	// to emit the same run again. The durable fact and coverage stay unchanged.
+	require.NoError(t, store.Record(ctx, matlog.Materialization{
+		AssetID: "p:a", Environment: "prod", Fingerprint: "v1:replayed", VarsHash: "vh",
+		RunID: "scheduled-run", MaterializedAt: ts(2),
+	}))
+
+	facts, err := store.CountFacts(ctx)
+	require.NoError(t, err)
+	assert.EqualValues(t, 1, facts)
+	rows := coverageRows(t, store)
+	require.Len(t, rows, 1)
+	assert.Equal(t, "v1:first", rows[0].Fingerprint)
+	assert.Equal(t, ts(1), rows[0].MaterializedAt)
 }
 
 func TestContiguousAppendsStayOneRow(t *testing.T) {
@@ -172,7 +209,7 @@ func TestDifferentFingerprintsDoNotMerge(t *testing.T) {
 		start, end := interval(i, i+1)
 		require.NoError(t, store.Record(ctx, matlog.Materialization{
 			AssetID: "p:a", Environment: "prod", Fingerprint: fp, VarsHash: "vh",
-			IntervalStart: start, IntervalEnd: end, RunID: "run", MaterializedAt: ts(i),
+			IntervalStart: start, IntervalEnd: end, RunID: "", MaterializedAt: ts(i),
 		}))
 	}
 	rows := coverageRows(t, store)
@@ -187,7 +224,7 @@ func TestDifferentVariableVariantsDoNotMergeCoverage(t *testing.T) {
 		start, end := interval(i, i+1)
 		require.NoError(t, store.Record(ctx, matlog.Materialization{
 			AssetID: "p:a", Environment: "prod", Fingerprint: "v1:same", VarsHash: varsHash,
-			IntervalStart: start, IntervalEnd: end, RunID: "run", MaterializedAt: ts(i),
+			IntervalStart: start, IntervalEnd: end, RunID: "", MaterializedAt: ts(i),
 		}))
 	}
 	eu, err := store.Coverage(ctx, []string{"p:a"}, "prod", "region-eu")
@@ -209,7 +246,7 @@ func TestHasAnyCoverageIgnoresFingerprintAndVars(t *testing.T) {
 	ctx := context.Background()
 	require.NoError(t, store.Record(ctx, matlog.Materialization{
 		AssetID: "p:a", Environment: "prod", Fingerprint: "v1:old", VarsHash: "other",
-		RunID: "run", MaterializedAt: ts(0),
+		RunID: "", MaterializedAt: ts(0),
 	}))
 
 	built, err := store.HasAnyCoverage(ctx, []string{"p:a", "p:b"}, "prod")

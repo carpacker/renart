@@ -2,10 +2,12 @@ package scheduler
 
 import (
 	"context"
+	"io/fs"
 	"path/filepath"
 	"testing"
 	"time"
 
+	"github.com/pressly/goose/v3"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -76,6 +78,9 @@ func TestFailOrphanedRunsReconcilesRunningRuns(t *testing.T) {
 	ids, err := store.FailOrphanedRuns(ctx, orphanedRunError)
 	require.NoError(t, err)
 	require.Equal(t, []string{orphan}, ids)
+	pending, err := store.PendingRunRecoveries(ctx)
+	require.NoError(t, err)
+	require.Equal(t, []string{orphan}, pending)
 
 	orphanRun, _, steps, err := store.Get(ctx, orphan)
 	require.NoError(t, err)
@@ -94,6 +99,48 @@ func TestFailOrphanedRunsReconcilesRunningRuns(t *testing.T) {
 	again, err := store.FailOrphanedRuns(ctx, orphanedRunError)
 	require.NoError(t, err)
 	assert.Empty(t, again)
+	pending, err = store.PendingRunRecoveries(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, []string{orphan}, pending, "replay remains pending until acknowledged")
+	require.NoError(t, store.MarkRunRecoveryReplayed(ctx, orphan))
+	pending, err = store.PendingRunRecoveries(ctx)
+	require.NoError(t, err)
+	assert.Empty(t, pending)
+}
+
+func TestRunRecoveryMigrationBackfillsInterruptedRuns(t *testing.T) {
+	path := filepath.Join(t.TempDir(), ".renart", "state.db")
+	store, err := OpenStore(path)
+	require.NoError(t, err)
+
+	ctx := context.Background()
+	migrations, err := fs.Sub(schedulerMigrations, "storedb/migrations")
+	require.NoError(t, err)
+	provider, err := goose.NewProvider(goose.DialectSQLite3, store.db, migrations)
+	require.NoError(t, err)
+	_, err = provider.DownTo(ctx, 7)
+	require.NoError(t, err)
+
+	_, err = store.Create(ctx, PipelineRun{
+		ID: "previously-reconciled", PipelineID: "p1", Pipeline: "analytics",
+		Environment: "prod", Trigger: RunTriggerSchedule, Status: RunStatusFailed,
+		Error: orphanedRunError,
+	})
+	require.NoError(t, err)
+	_, err = store.Create(ctx, PipelineRun{
+		ID: "ordinary-failure", PipelineID: "p1", Pipeline: "analytics",
+		Environment: "prod", Trigger: RunTriggerSchedule, Status: RunStatusFailed,
+		Error: "asset failed",
+	})
+	require.NoError(t, err)
+	require.NoError(t, store.Close())
+
+	store, err = OpenStore(path)
+	require.NoError(t, err)
+	defer store.Close()
+	pending, err := store.PendingRunRecoveries(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"previously-reconciled"}, pending)
 }
 
 func TestStoreDefaultsRunStatusAndGeneratedID(t *testing.T) {

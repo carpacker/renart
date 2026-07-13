@@ -6,7 +6,6 @@ import { pipelineAtom, resolvedSelectedAssetAtom } from "./selection";
 
 export type MaterializationState = {
   is_materialized: boolean;
-  freshness_status?: "fresh" | "stale";
   materialized_as?: string;
   row_count?: number;
   connection?: string;
@@ -37,7 +36,6 @@ export const enrichedPipelineAtom = atom<WebPipeline | null>((get) => {
       return {
         ...pipelineAsset,
         is_materialized: lazy.is_materialized,
-        freshness_status: lazy.freshness_status ?? pipelineAsset.freshness_status,
         materialized_as: lazy.materialized_as ?? pipelineAsset.materialized_as,
         row_count: lazy.row_count === undefined ? pipelineAsset.row_count : lazy.row_count,
         connection: lazy.connection ?? pipelineAsset.connection,

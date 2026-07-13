@@ -4,8 +4,9 @@
 > unification and startup optimization,** on the `redesign` branch. §10
 > questions were answered by Lukas: (1) SDK named `renart`, no bruin shim;
 > (2) any project connection is readable; (3) wait semantics as proposed,
-> `--refresh-upstreams` deferred to phase 3; (4) pandas is a hard dependency
-> of the SDK wheel; (5) the ingestr asset type stays as-is.
+> `--refresh-upstreams` deferred to phase 3; (4) queries default to Arrow while
+> pandas remains available in the SDK wheel; (5) the ingestr asset type stays
+> as-is.
 >
 > As built: `internal/web/runstate` (in-flight task registry, fed by
 > `HybridBruinExecutor.RunAsset/RunPipeline`), `internal/web/pybroker`
@@ -27,8 +28,10 @@
 > never receive or create an input/output DuckDB staging database. Empty
 > notebooks do not provision a duplicate pandas/duckdb project; uv verification
 > is cached, `uv run` owns lock/sync, and pandas/polars imports are lazy for Arrow
-> results. On the profiling machine this reduced a warm SDK-query cell from
-> 719–918 ms to 418–515 ms. The as-built design is now recorded in
+> results. SDK queries and generated notebook cells use Arrow by default, with
+> `.to_pandas()` and `format="pandas"` available explicitly. On the profiling
+> machine this reduced a warm SDK-query cell from 719–918 ms to 418–515 ms. The
+> as-built design is now recorded in
 > `architecture/backend.md` and `architecture/notebooks.md`. Phase 3 reach items
 > (`--refresh-upstreams`, PyPI publication, a cross-connection policy surface,
 > and Arrow Flight evaluation) remain deferred.
@@ -219,18 +222,18 @@ def materialize():
     games = query("select * from chess_games where end_time >= '2026-01-01'")
     if context.is_full_refresh:
         ...
-    return games.groupby("winner").size().reset_index(name="wins")
+    return games.to_pandas().groupby("winner").size().reset_index(name="wins")
 ```
 
-- `query(sql, connection=None, format="pandas")` → `pandas.DataFrame`;
-  `format="arrow"` → `pyarrow.Table` (zero-copy, feeds polars via
-  `pl.from_arrow`).
+- `query(sql, connection=None, format="arrow")` → `pyarrow.Table` (the
+  zero-copy default, and feeds polars via `pl.from_arrow`);
+  `format="pandas"` or `.to_pandas()` → `pandas.DataFrame`.
 - `context` — typed accessors backed by `GET /v1/context`, falling back to the
   `BRUIN_*` env vars (which we keep setting), so scripts that already read
   `BRUIN_START_DATE` etc. keep working unchanged.
 - Transport: stdlib `urllib` against `RENART_API_URL` + `RENART_API_TOKEN`.
-  Hard dependency: `pyarrow` only. `pandas` as a default extra
-  (`renart-sdk[pandas]` — see §10 Q4).
+  The embedded wheel includes PyArrow and pandas; Arrow stays the default so
+  pandas conversion is paid only when requested (see §10 Q4).
 - `materialize()` protocol stays byte-compatible with Bruin (return a
   DataFrame / pyarrow Table / generator of Tables).
 
@@ -386,16 +389,13 @@ consider Arrow Flight if profiles ever show the loopback hop mattering.
    right shape, or do you want read-triggered freshness (broker auto-builds
    the stale cone) earlier / at all?
    Answer: fow now we should not do read-triggered freshness with rebuild of stale cone)
-4. **pandas dependency.** `query()` returning pandas by default requires
-   pandas in the asset env. Proposal: SDK depends on pyarrow only;
-   `format="pandas"` (the default) raises a clear "add pandas" error if
-   missing. Alternative: make pandas a hard dep of the injected wheel.
+4. **pandas dependency.** Should `query()` return pandas or PyArrow by default,
+   and should pandas be included in the injected wheel?
    Answer: we should check if we can't just give the user pyarrow dataframes instead
    of pandas dataframes
-   Implementation decision: PyArrow provides a `Table`, not the familiar
-   DataFrame transformation API used by the default examples. Keep pandas as
-   the default/hard dependency and expose the zero-copy-friendly PyArrow Table
-   through `format="arrow"`.
+   Implementation decision (updated 2026-07-13): return a PyArrow Table by
+   default because it avoids the conversion cost. Keep pandas installed so
+   callers can use `.to_pandas()` or request `format="pandas"` explicitly.
 5. **ingestr asset type.** Leave the flag-hidden ingestr asset type as-is for
    now (bruin-compat, user-invoked), or schedule its Sling migration into
    this effort's phase 3?

@@ -15,6 +15,8 @@ import (
 	"github.com/bruin-data/bruin/pkg/query"
 	"github.com/bruin-data/bruin/pkg/sqlparser"
 	"github.com/spf13/afero"
+
+	"renart/internal/web/duckcoord"
 )
 
 func (e *HybridBruinExecutor) QueryAsset(ctx context.Context, req QueryAssetRequest) ([]byte, error) {
@@ -41,7 +43,7 @@ func (e *HybridBruinExecutor) QueryAsset(ctx context.Context, req QueryAssetRequ
 		return output, err
 	}
 
-	connName, conn, queryStr, err := e.buildDirectAssetQuery(ctx, pp, req.Environment, req.StartDate, req.EndDate)
+	connName, conn, queryStr, manager, err := e.buildDirectAssetQuery(ctx, pp, req.Environment, req.StartDate, req.EndDate)
 	if err != nil {
 		output, marshalErr := json.Marshal(directErrorResponse{Error: err.Error()})
 		if marshalErr != nil {
@@ -138,6 +140,19 @@ func (e *HybridBruinExecutor) QueryAsset(ctx context.Context, req QueryAssetRequ
 		}
 		return output, err
 	}
+	lease, err := e.acquireDuckDBConnections(ctx, manager, []string{connName}, duckcoord.Owner{
+		Operation: "inspect asset",
+		Pipeline:  pp.Pipeline.Name,
+		Asset:     pp.Asset.Name,
+	}, nil)
+	if err != nil {
+		output, marshalErr := json.Marshal(directErrorResponse{Error: err.Error()})
+		if marshalErr != nil {
+			return nil, err
+		}
+		return output, err
+	}
+	defer lease.Release()
 
 	result, err := selectWithComplexJSONFallback(ctx, querier, queryStr)
 	if err != nil {
@@ -194,6 +209,11 @@ func (e *HybridBruinExecutor) QueryConnection(ctx context.Context, req QueryConn
 	if !ok {
 		return nil, fmt.Errorf("connection %q does not support querying", req.ConnectionName)
 	}
+	lease, err := e.acquireDuckDBConnections(ctx, manager, []string{req.ConnectionName}, duckcoord.Owner{Operation: "query connection"}, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer lease.Release()
 
 	result, err := selectWithComplexJSONFallback(ctx, querier, req.Query)
 	if err != nil {
@@ -315,10 +335,10 @@ func wrapDirectQueryWithLimit(queryStr string, limit int64) string {
 	return fmt.Sprintf("SELECT * FROM (\n%s\n) AS renart_schema_query LIMIT %d", strings.TrimRight(queryStr, "; \n\t"), limit)
 }
 
-func (e *HybridBruinExecutor) buildDirectAssetQuery(ctx context.Context, pp *directPipelineInfo, environment, start, end string) (string, interface{}, string, error) {
+func (e *HybridBruinExecutor) buildDirectAssetQuery(ctx context.Context, pp *directPipelineInfo, environment, start, end string) (string, interface{}, string, config.ConnectionAndDetailsGetter, error) {
 	if strings.TrimSpace(environment) != "" {
 		if _, err := selectConfigEnvironment(pp.Config, environment); err != nil {
-			return "", nil, "", fmt.Errorf("failed to use the environment '%s': %w", environment, err)
+			return "", nil, "", nil, fmt.Errorf("failed to use the environment '%s': %w", environment, err)
 		}
 	}
 
@@ -327,29 +347,29 @@ func (e *HybridBruinExecutor) buildDirectAssetQuery(ctx context.Context, pp *dir
 		var err error
 		manager, err = e.newConnectionManager(ctx, pp.Config.SelectedEnvironmentName)
 		if err != nil {
-			return "", nil, "", fmt.Errorf("failed to create connection manager: %w", err)
+			return "", nil, "", nil, fmt.Errorf("failed to create connection manager: %w", err)
 		}
 	} else {
 		connectionManager, err := newConnectionManagerFromConfig(ctx, pp.Config)
 		if err != nil {
-			return "", nil, "", fmt.Errorf("failed to create connection manager: %w", err)
+			return "", nil, "", nil, fmt.Errorf("failed to create connection manager: %w", err)
 		}
 		manager = connectionManager
 	}
 
 	connName, err := pp.Pipeline.GetConnectionNameForAsset(pp.Asset)
 	if err != nil {
-		return "", nil, "", fmt.Errorf("failed to get connection: %w", err)
+		return "", nil, "", nil, fmt.Errorf("failed to get connection: %w", err)
 	}
 	conn := manager.GetConnection(connName)
 	if conn == nil {
-		return "", nil, "", fmt.Errorf("connection %q not found", connName)
+		return "", nil, "", nil, fmt.Errorf("connection %q not found", connName)
 	}
 
 	now := time.Now().UTC()
 	timeWindow, err := ResolveExecutionTimeWindow(string(pp.Pipeline.Schedule), start, end, now)
 	if err != nil {
-		return "", nil, "", err
+		return "", nil, "", nil, err
 	}
 	renderer := jinja.NewRendererWithStartEndDates(&timeWindow.Start, &timeWindow.End, &now, pp.Pipeline.Name, "your-run-id", nil)
 	fetchCtx := context.WithValue(ctx, pipeline.RunConfigStartDate, timeWindow.Start)
@@ -361,18 +381,18 @@ func (e *HybridBruinExecutor) buildDirectAssetQuery(ctx context.Context, pp *dir
 	extractor := &query.WholeFileExtractor{Fs: afero.NewOsFs(), Renderer: renderer}
 	clonedExtractor, err := extractor.CloneForAsset(fetchCtx, pp.Pipeline, pp.Asset)
 	if err != nil {
-		return "", nil, "", fmt.Errorf("failed to clone extractor for asset %s: %w", pp.Asset.Name, err)
+		return "", nil, "", nil, fmt.Errorf("failed to clone extractor for asset %s: %w", pp.Asset.Name, err)
 	}
 
 	queries, err := clonedExtractor.ExtractQueriesFromString(pp.Asset.ExecutableFile.Content)
 	if err != nil {
-		return "", nil, "", fmt.Errorf("failed to extract query: %w", err)
+		return "", nil, "", nil, fmt.Errorf("failed to extract query: %w", err)
 	}
 	if len(queries) == 0 {
-		return "", nil, "", fmt.Errorf("no query found in asset")
+		return "", nil, "", nil, fmt.Errorf("no query found in asset")
 	}
 
-	return connName, conn, queries[0].Query, nil
+	return connName, conn, queries[0].Query, manager, nil
 }
 
 func addDirectLimitToQuery(queryStr string, limit int64, conn interface{}, parser *sqlparser.SQLParser, dialect string) string {

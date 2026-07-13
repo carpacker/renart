@@ -1,12 +1,10 @@
 import { useAtomValue } from "jotai";
 import { useEffect, useMemo, useState } from "react";
 
-import { getAssetFreshness, getRun, getRuns } from "@/lib/api";
+import { getRun, getRuns } from "@/lib/api";
+import type { AssetStaleness } from "@/lib/api-staleness";
 import { schedulerRunEventAtom } from "@/lib/atoms/domains/results";
-import {
-  selectedEnvironmentAtom,
-  selectedExecutionTimeWindowAtom,
-} from "@/lib/atoms/domains/workspace";
+import { selectedEnvironmentAtom } from "@/lib/atoms/domains/workspace";
 import type { PipelineRunStep } from "@/lib/types";
 
 export type AppAssetMaterializationStatus = "unknown" | "pending" | "success" | "failed";
@@ -22,20 +20,19 @@ export type AppMaterializationAsset = {
   name: string;
   pipelineId?: string;
   isMaterialized?: boolean;
+  staleness?: AssetStaleness;
 };
 
 type AssetStatusEntry = {
   status: Exclude<AppAssetMaterializationStatus, "unknown">;
   recordedAt: number;
   materializedAt?: string;
+  runId: string;
 };
 
 type StatusByKey = Record<string, AssetStatusEntry>;
 
-type RunContextById = Record<
-  string,
-  { pipelineId: string; environment: string; winStart?: string; winEnd?: string }
->;
+type RunContextById = Record<string, { pipelineId: string; environment: string }>;
 
 function statusForStep(
   status: PipelineRunStep["status"],
@@ -79,22 +76,9 @@ function applyStepForKey(current: StatusByKey, step: PipelineRunStep, key: strin
       recordedAt,
       materializedAt:
         nextStatus === "success" ? (step.finished_at ?? step.started_at) : existing?.materializedAt,
+      runId: step.run_id,
     },
   };
-}
-
-function withinSelectedWindow(
-  startedAt: string | undefined,
-  finishedAt: string | undefined,
-  window: { start: string; end: string } | null,
-) {
-  if (!window) return true;
-  if (!startedAt && !finishedAt) return true;
-  const eventTime = new Date(finishedAt ?? startedAt ?? 0).getTime();
-  if (!Number.isFinite(eventTime) || eventTime <= 0) return false;
-  return (
-    eventTime >= new Date(window.start).getTime() && eventTime <= new Date(window.end).getTime()
-  );
 }
 
 function matchesSelectedEnvironment(
@@ -152,9 +136,7 @@ export function labelForAppMaterializationState(state?: AppAssetMaterializationD
 export function useAppAssetMaterializationStatus(assets: AppMaterializationAsset[]) {
   const schedulerRunEvent = useAtomValue(schedulerRunEventAtom);
   const selectedEnvironment = useAtomValue(selectedEnvironmentAtom);
-  const selectedExecutionTimeWindow = useAtomValue(selectedExecutionTimeWindowAtom);
   const [statusByKey, setStatusByKey] = useState<StatusByKey>({});
-  const [freshnessByName, setFreshnessByName] = useState<Record<string, string | undefined>>({});
   const [runContextById, setRunContextById] = useState<RunContextById>({});
   const [loading, setLoading] = useState(true);
   const pipelineIds = useMemo(
@@ -168,167 +150,122 @@ export function useAppAssetMaterializationStatus(assets: AppMaterializationAsset
   useEffect(() => {
     let cancelled = false;
 
-    async function loadRecentStepStatuses() {
+    async function loadActiveStepStatuses() {
       setLoading(true);
-      const freshnessResponse = await getAssetFreshness({ environment: selectedEnvironment }).catch(
-        () => null,
-      );
-      if (!cancelled && freshnessResponse) {
-        setFreshnessByName(
-          Object.fromEntries(
-            (freshnessResponse.assets ?? []).map((asset) => [
-              asset.asset_name,
-              asset.materialized_at,
-            ]),
-          ),
-        );
-      }
-      const runsResponse = await getRuns({ limit: 20, environment: selectedEnvironment }).catch(
-        () => null,
-      );
+      const runsResponse = await getRuns({
+        limit: 20,
+        environment: selectedEnvironment,
+        status: "running",
+      }).catch(() => null);
       if (!runsResponse || runsResponse.status !== "ok") {
         if (!cancelled) setLoading(false);
         return;
       }
-      const relevantRuns = (runsResponse.runs ?? [])
-        .filter((run) => pipelineIds.size === 0 || pipelineIds.has(run.pipeline_id))
-        .filter((run) => matchesSelectedEnvironment(run.environment, selectedEnvironment))
-        .filter((run) =>
-          withinSelectedWindow(run.win_start, run.win_end, selectedExecutionTimeWindow),
-        )
-        .slice(0, 8);
+      const relevantRuns = (runsResponse.runs ?? []).filter(
+        (run) =>
+          (pipelineIds.size === 0 || pipelineIds.has(run.pipeline_id)) &&
+          matchesSelectedEnvironment(run.environment, selectedEnvironment),
+      );
       const details = await Promise.all(
         relevantRuns.map((run) => getRun(run.id).catch(() => null)),
       );
-      if (cancelled) {
-        return;
-      }
-      setStatusByKey((current) => {
-        let next = current;
-        for (const detail of details) {
-          if (!detail || detail.status !== "ok") continue;
+      if (cancelled) return;
+
+      const contexts: RunContextById = {};
+      for (const detail of details) {
+        if (!detail || detail.status !== "ok") continue;
+        contexts[detail.run.id] = {
+          pipelineId: detail.run.pipeline_id,
+          environment: detail.run.environment,
+        };
+        setStatusByKey((current) => {
+          let next = current;
           for (const step of detail.steps ?? []) {
             const keys = keysForStepAsset(step.asset, assets, detail.run.pipeline_id);
-            if (keys.length === 0) continue;
-            next = applyStep(next, step, keys);
+            if (keys.length > 0) next = applyStep(next, step, keys);
           }
-        }
-        return next;
-      });
+          return next;
+        });
+      }
+      setRunContextById(contexts);
       setLoading(false);
     }
 
-    void loadRecentStepStatuses();
+    void loadActiveStepStatuses();
     return () => {
       cancelled = true;
     };
-  }, [assets, pipelineIds, selectedEnvironment, selectedExecutionTimeWindow]);
+  }, [assets, pipelineIds, selectedEnvironment]);
 
   useEffect(() => {
-    if (!schedulerRunEvent) {
-      return;
-    }
+    if (!schedulerRunEvent) return;
 
     if (schedulerRunEvent.type === "run.queued" || schedulerRunEvent.type === "run.started") {
       const run = schedulerRunEvent.run;
-      if (pipelineIds.size > 0 && !pipelineIds.has(run.pipeline_id)) {
-        return;
-      }
-      if (!matchesSelectedEnvironment(run.environment, selectedEnvironment)) {
-        return;
-      }
-      if (!withinSelectedWindow(run.win_start, run.win_end, selectedExecutionTimeWindow)) {
-        return;
-      }
-      setRunContextById((current) => ({
-        ...current,
-        [run.id]: {
-          pipelineId: run.pipeline_id,
-          environment: run.environment,
-          winStart: run.win_start,
-          winEnd: run.win_end,
-        },
-      }));
-      const recordedAt = run.started_at ? new Date(run.started_at).getTime() : Date.now();
-      setStatusByKey((current) => {
-        const next = { ...current };
-        for (const asset of assets) {
-          if (asset.pipelineId && asset.pipelineId !== run.pipeline_id) continue;
-          next[asset.name] = { status: "pending", recordedAt };
-          next[asset.id] = { status: "pending", recordedAt };
+      if (pipelineIds.size > 0 && !pipelineIds.has(run.pipeline_id)) return;
+      if (!matchesSelectedEnvironment(run.environment, selectedEnvironment)) return;
+      setRunContextById((current) => {
+        const existing = current[run.id];
+        if (existing?.pipelineId === run.pipeline_id && existing.environment === run.environment) {
+          return current;
         }
-        return next;
+        return {
+          ...current,
+          [run.id]: { pipelineId: run.pipeline_id, environment: run.environment },
+        };
       });
       return;
     }
 
     if (schedulerRunEvent.type === "run.finished") {
       const run = schedulerRunEvent.run;
-      if (pipelineIds.size > 0 && !pipelineIds.has(run.pipeline_id)) {
-        return;
-      }
-      if (!matchesSelectedEnvironment(run.environment, selectedEnvironment)) {
-        return;
-      }
-      if (!withinSelectedWindow(run.win_start, run.win_end, selectedExecutionTimeWindow)) {
-        return;
-      }
-      void getRun(run.id)
-        .then((detail) => {
-          if (!detail || detail.status !== "ok") return;
-          setStatusByKey((current) => {
-            let next = current;
-            for (const step of detail.steps ?? []) {
-              const keys = keysForStepAsset(
-                step.asset,
-                assets,
-                detail.run.pipeline_id || run.pipeline_id,
-              );
-              if (keys.length === 0) continue;
-              next = applyStep(next, step, keys);
-            }
-            return next;
-          });
-        })
-        .catch(() => undefined);
+      setStatusByKey((current) => {
+        if (!Object.values(current).some((entry) => entry.runId === run.id)) return current;
+        return Object.fromEntries(
+          Object.entries(current).filter(([, entry]) => entry.runId !== run.id),
+        );
+      });
+      setRunContextById((current) => {
+        if (!(run.id in current)) return current;
+        const next = { ...current };
+        delete next[run.id];
+        return next;
+      });
       return;
     }
 
-    if (schedulerRunEvent.type !== "run.step") {
-      return;
-    }
+    if (schedulerRunEvent.type !== "run.step") return;
 
     const step = schedulerRunEvent.run;
     const runContext = runContextById[step.run_id];
     if (runContext) {
       if (pipelineIds.size > 0 && !pipelineIds.has(runContext.pipelineId)) return;
       if (!matchesSelectedEnvironment(runContext.environment, selectedEnvironment)) return;
-      if (
-        !withinSelectedWindow(runContext.winStart, runContext.winEnd, selectedExecutionTimeWindow)
-      )
-        return;
     }
     const keys = keysForStepAsset(step.asset, assets, runContext?.pipelineId);
-    if (keys.length === 0) {
-      return;
-    }
+    if (keys.length === 0) return;
     setStatusByKey((current) => applyStep(current, step, keys));
-  }, [assets, pipelineIds, schedulerRunEvent, selectedEnvironment, selectedExecutionTimeWindow]);
+  }, [assets, pipelineIds, runContextById, schedulerRunEvent, selectedEnvironment]);
 
   return useMemo(() => {
     const result: Record<string, AppAssetMaterializationDisplayState> = {};
     for (const asset of assets) {
       const entry = statusByKey[asset.id] ?? statusByKey[asset.name];
-      const materializedAt = entry?.materializedAt ?? freshnessByName[asset.name];
-      const unresolved = loading && !entry && !materializedAt;
+      const materializedAt = entry?.materializedAt ?? asset.staleness?.last_materialized_at;
+      const canonicalStatus: AppAssetMaterializationStatus =
+        asset.staleness?.last_run_status === "failed"
+          ? "failed"
+          : asset.staleness?.last_run_status === "succeeded" ||
+              materializedAt ||
+              asset.isMaterialized
+            ? "success"
+            : "unknown";
       result[asset.id] = {
-        status: unresolved
-          ? "unknown"
-          : (entry?.status ?? (materializedAt || asset.isMaterialized ? "success" : "unknown")),
+        status: entry?.status ?? canonicalStatus,
         materializedAt,
         loading,
       };
     }
     return result;
-  }, [assets, freshnessByName, loading, statusByKey]);
+  }, [assets, loading, statusByKey]);
 }

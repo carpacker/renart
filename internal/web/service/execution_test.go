@@ -6,7 +6,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 
@@ -15,6 +14,7 @@ import (
 	"github.com/spf13/afero"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"renart/internal/web/bus"
 )
 
 func newExecutionTestResolver(workspaceRoot string) *WorkspaceResolver {
@@ -40,6 +40,7 @@ type stubExecutionExecutor struct {
 	runPipelineOutput []byte
 	runPipelineErr    error
 	runPipelineChunks [][]byte
+	runPipelineEvents []ExecutionAssetEvent
 	runPipelineReqs   []RunPipelineRequest
 	queryConnOutput   []byte
 	queryConnErr      error
@@ -62,6 +63,11 @@ func (s *stubExecutionExecutor) RunPipeline(_ context.Context, req RunPipelineRe
 	for _, chunk := range s.runPipelineChunks {
 		if onChunk != nil {
 			onChunk(chunk)
+		}
+	}
+	for _, event := range s.runPipelineEvents {
+		if req.AssetEvent != nil {
+			req.AssetEvent(event)
 		}
 	}
 	return s.runPipelineOutput, s.runPipelineErr
@@ -103,10 +109,10 @@ func TestExecutionServiceMaterializeAssetStreamPreservesSuccessOutput(t *testing
 		runAssetOutput: []byte("asset run complete\n"),
 		runAssetChunks: [][]byte{[]byte("asset "), []byte("run complete\n")},
 	}
-	recordedName := ""
-	recordedStatus := ""
-	var recordedAt time.Time
 	streamed := make([]string, 0)
+	events := bus.New()
+	var completed bus.RunCompleted
+	events.OnRunCompleted(func(event bus.RunCompleted) { completed = event })
 
 	svc := NewExecutionService(ExecutionDependencies{
 		ConfigPath: "/path/that/does/not/exist",
@@ -116,11 +122,14 @@ func TestExecutionServiceMaterializeAssetStreamPreservesSuccessOutput(t *testing
 		},
 		ResolveAssetNameByID: func(string) string { return "analytics.orders" },
 		FindInspectIDs:       func(...string) []string { return []string{"inspect-1", "inspect-2"} },
-		RecordMaterialization: func(name string, at time.Time, status string) {
-			recordedName = name
-			recordedAt = at
-			recordedStatus = status
+		CurrentPipelines: func() []PipelineView {
+			return []PipelineView{{
+				ID:     EncodeID("pipelines/orders/pipeline.yml"),
+				UUID:   "orders-uuid",
+				Assets: []AssetView{{ID: assetID, Name: "analytics.orders"}},
+			}}
 		},
+		Events: events,
 	})
 
 	result := svc.MaterializeAssetStream(context.Background(), assetID, "", "", "", "", false, func(chunk []byte) {
@@ -138,9 +147,9 @@ func TestExecutionServiceMaterializeAssetStreamPreservesSuccessOutput(t *testing
 	assert.Equal(t, []string{"inspect-1", "inspect-2"}, result.ChangedAssetIDs)
 	assert.NotNil(t, result.MaterializedAt)
 	assert.Equal(t, []string{"asset ", "run complete\n"}, streamed)
-	assert.Equal(t, "analytics.orders", recordedName)
-	assert.Equal(t, "succeeded", recordedStatus)
-	assert.False(t, recordedAt.IsZero())
+	require.Len(t, completed.Assets, 1)
+	assert.Equal(t, "analytics.orders", completed.Assets[0].AssetName)
+	assert.Equal(t, "succeeded", completed.Assets[0].Status)
 }
 
 func TestExecutionServiceMaterializeAssetStreamPreservesFailureOutput(t *testing.T) {
@@ -151,7 +160,9 @@ func TestExecutionServiceMaterializeAssetStreamPreservesFailureOutput(t *testing
 		runAssetOutput: []byte("asset failed after direct execution\n"),
 		runAssetErr:    errors.New("asset failed"),
 	}
-	recorded := false
+	events := bus.New()
+	var completed bus.RunCompleted
+	events.OnRunCompleted(func(event bus.RunCompleted) { completed = event })
 
 	svc := NewExecutionService(ExecutionDependencies{
 		ConfigPath: "/path/that/does/not/exist",
@@ -161,9 +172,14 @@ func TestExecutionServiceMaterializeAssetStreamPreservesFailureOutput(t *testing
 		},
 		ResolveAssetNameByID: func(string) string { return "analytics.orders" },
 		FindInspectIDs:       func(...string) []string { return []string{"inspect-1"} },
-		RecordMaterialization: func(string, time.Time, string) {
-			recorded = true
+		CurrentPipelines: func() []PipelineView {
+			return []PipelineView{{
+				ID:     EncodeID("pipelines/orders/pipeline.yml"),
+				UUID:   "orders-uuid",
+				Assets: []AssetView{{ID: assetID, Name: "analytics.orders"}},
+			}}
 		},
+		Events: events,
 	})
 
 	result := svc.MaterializeAssetStream(context.Background(), assetID, "", "", "", "", false, nil)
@@ -175,7 +191,8 @@ func TestExecutionServiceMaterializeAssetStreamPreservesFailureOutput(t *testing
 	assert.Equal(t, 1, result.ExitCode)
 	assert.Empty(t, result.ChangedAssetIDs)
 	assert.Nil(t, result.MaterializedAt)
-	assert.False(t, recorded)
+	require.Len(t, completed.Assets, 1)
+	assert.Equal(t, "failed", completed.Assets[0].Status)
 }
 
 func TestExecutionServiceMaterializePipelineStreamPreservesSuccessOutput(t *testing.T) {
@@ -186,23 +203,24 @@ func TestExecutionServiceMaterializePipelineStreamPreservesSuccessOutput(t *test
 		runPipelineOutput: []byte("pipeline run complete\n"),
 		runPipelineChunks: [][]byte{[]byte("pipeline "), []byte("run complete\n")},
 	}
-	recorded := make(map[string]string)
 	streamed := make([]string, 0)
+	events := bus.New()
+	var completed bus.RunCompleted
+	events.OnRunCompleted(func(event bus.RunCompleted) { completed = event })
 
 	svc := NewExecutionService(ExecutionDependencies{
 		Executor: executor,
 		CurrentPipelines: func() []PipelineView {
 			return []PipelineView{{
-				ID: pipelineID,
+				ID:   pipelineID,
+				UUID: "orders-uuid",
 				Assets: []AssetView{
 					{ID: "asset-1", Name: "analytics.orders"},
 					{ID: "asset-2", Name: "analytics.order_items"},
 				},
 			}}
 		},
-		RecordMaterialization: func(name string, _ time.Time, status string) {
-			recorded[name] = status
-		},
+		Events: events,
 	})
 
 	result := svc.MaterializePipelineStream(context.Background(), pipelineID, "", false, false, "", "", func(chunk []byte) {
@@ -220,10 +238,9 @@ func TestExecutionServiceMaterializePipelineStreamPreservesSuccessOutput(t *test
 	assert.Equal(t, []string{"asset-1", "asset-2"}, result.ChangedAssetIDs)
 	assert.NotNil(t, result.MaterializedAt)
 	assert.Equal(t, []string{"pipeline ", "run complete\n"}, streamed)
-	assert.Equal(t, map[string]string{
-		"analytics.orders":      "succeeded",
-		"analytics.order_items": "succeeded",
-	}, recorded)
+	require.Len(t, completed.Assets, 2)
+	assert.Equal(t, "succeeded", completed.Assets[0].Status)
+	assert.Equal(t, "succeeded", completed.Assets[1].Status)
 }
 
 func TestExecutionServiceMaterializePipelineStreamPreservesFailureOutput(t *testing.T) {
@@ -233,20 +250,31 @@ func TestExecutionServiceMaterializePipelineStreamPreservesFailureOutput(t *test
 	executor := &stubExecutionExecutor{
 		runPipelineOutput: []byte("pipeline failed during direct execution\n"),
 		runPipelineErr:    errors.New("pipeline failed"),
+		runPipelineEvents: []ExecutionAssetEvent{
+			{Asset: "analytics.orders", Status: "running"},
+			{Asset: "analytics.orders", Status: "success"},
+			{Asset: "analytics.order_items", Status: "running"},
+			{Asset: "analytics.order_items", Status: "failed", Error: "pipeline failed"},
+		},
 	}
-	recorded := false
+	events := bus.New()
+	var completed bus.RunCompleted
+	events.OnRunCompleted(func(event bus.RunCompleted) { completed = event })
 
 	svc := NewExecutionService(ExecutionDependencies{
 		Executor: executor,
 		CurrentPipelines: func() []PipelineView {
 			return []PipelineView{{
-				ID:     pipelineID,
-				Assets: []AssetView{{ID: "asset-1", Name: "analytics.orders"}},
+				ID:   pipelineID,
+				UUID: "orders-uuid",
+				Assets: []AssetView{
+					{ID: "asset-1", Name: "analytics.orders"},
+					{ID: "asset-2", Name: "analytics.order_items"},
+					{ID: "asset-3", Name: "analytics.parabola"},
+				},
 			}}
 		},
-		RecordMaterialization: func(string, time.Time, string) {
-			recorded = true
-		},
+		Events: events,
 	})
 
 	result := svc.MaterializePipelineStream(context.Background(), pipelineID, "", false, false, "", "", nil)
@@ -256,19 +284,28 @@ func TestExecutionServiceMaterializePipelineStreamPreservesFailureOutput(t *test
 	assert.Equal(t, "pipeline failed during direct execution\n", result.Output)
 	assert.Equal(t, "pipeline failed", result.Error)
 	assert.Equal(t, 1, result.ExitCode)
-	assert.Empty(t, result.ChangedAssetIDs)
+	assert.Equal(t, []string{"asset-1"}, result.ChangedAssetIDs)
 	assert.Nil(t, result.MaterializedAt)
-	assert.False(t, recorded)
+	require.Len(t, completed.Assets, 2)
+	assert.Equal(t, "analytics.orders", completed.Assets[0].AssetName)
+	assert.Equal(t, "succeeded", completed.Assets[0].Status)
+	assert.Equal(t, "analytics.order_items", completed.Assets[1].AssetName)
+	assert.Equal(t, "failed", completed.Assets[1].Status)
+	for _, asset := range completed.Assets {
+		assert.NotEqual(t, "analytics.parabola", asset.AssetName)
+	}
 }
 
-func TestExecutionServiceMaterializePipelineStreamDryRunDoesNotRecordMaterialization(t *testing.T) {
+func TestExecutionServiceMaterializePipelineStreamDryRunDoesNotEmitCompletion(t *testing.T) {
 	t.Parallel()
 
 	pipelineID := EncodeID("pipelines/orders/pipeline.yml")
 	executor := &stubExecutionExecutor{
 		runPipelineOutput: []byte("dry run complete\n"),
 	}
-	recorded := false
+	events := bus.New()
+	completed := 0
+	events.OnRunCompleted(func(bus.RunCompleted) { completed++ })
 
 	svc := NewExecutionService(ExecutionDependencies{
 		Executor: executor,
@@ -278,9 +315,7 @@ func TestExecutionServiceMaterializePipelineStreamDryRunDoesNotRecordMaterializa
 				Assets: []AssetView{{ID: "asset-1", Name: "analytics.orders"}},
 			}}
 		},
-		RecordMaterialization: func(string, time.Time, string) {
-			recorded = true
-		},
+		Events: events,
 	})
 
 	result := svc.MaterializePipelineStream(context.Background(), pipelineID, "", true, false, "", "", nil)
@@ -290,7 +325,7 @@ func TestExecutionServiceMaterializePipelineStreamDryRunDoesNotRecordMaterializa
 	assert.Equal(t, "ok", result.Status)
 	assert.Empty(t, result.ChangedAssetIDs)
 	assert.Nil(t, result.MaterializedAt)
-	assert.False(t, recorded)
+	assert.Zero(t, completed)
 }
 
 func TestExecutionServiceInspectAssetRejectsWriteQueries(t *testing.T) {
@@ -505,7 +540,6 @@ select * from analytics.players
 		Executor: &stubExecutionExecutor{runWithRetry: func(context.Context, QueryAssetRequest, int, time.Duration) ([]byte, error, int) {
 			return nil, queryErr, 1
 		}},
-		DuckDBLock:       func(string) *sync.Mutex { return nil },
 		ResolveAssetByID: resolveAssetByID,
 	})
 

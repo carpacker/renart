@@ -29,10 +29,11 @@ import (
 	vert "github.com/bruin-data/bruin/pkg/vertica"
 	"github.com/spf13/afero"
 
+	"renart/internal/web/duckcoord"
 	"renart/internal/web/runstate"
 )
 
-func buildDirectMainExecutors(manager config.ConnectionAndDetailsGetter, renderer *jinja.Renderer, parser *sqlparser.SQLParser, pl *pipeline.Pipeline, registry *runstate.Registry) (map[pipeline.AssetType]bruinexecutor.Config, error) {
+func buildDirectMainExecutors(manager config.ConnectionAndDetailsGetter, renderer *jinja.Renderer, parser *sqlparser.SQLParser, pl *pipeline.Pipeline, registry *runstate.Registry, coordinator *duckcoord.Coordinator, workspaceRoot string) (map[pipeline.AssetType]bruinexecutor.Config, error) {
 	executors := make(map[pipeline.AssetType]bruinexecutor.Config, len(bruinexecutor.DefaultExecutorsV2))
 	for assetType, cfg := range bruinexecutor.DefaultExecutorsV2 {
 		if cfg == nil {
@@ -256,8 +257,10 @@ func buildDirectMainExecutors(manager config.ConnectionAndDetailsGetter, rendere
 	executors[pipeline.AssetTypeOracleQuery][scheduler.TaskInstanceTypeCustomCheck] = customCheckRunner
 	ensureExecutorConfig(pipeline.AssetTypePython)
 	executors[pipeline.AssetTypePython][scheduler.TaskInstanceTypeMain] = newRenartPythonOperator(manager, directPythonEnvVariables(pl), renartPythonOperatorOptions{
-		registry:     registry,
-		enableBroker: true,
+		registry:          registry,
+		enableBroker:      true,
+		duckDBCoordinator: coordinator,
+		workspaceRoot:     workspaceRoot,
 	})
 	ingestrOperator, err := bruiningestr.NewBasicOperator(manager, renderer)
 	if err != nil {

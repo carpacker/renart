@@ -11,12 +11,24 @@ import {
 
 type RunDetail = {
   status: "ok" | "error";
-  run: { id: string; status: string; error?: string };
+  run: { id: string; status: string; error?: string; snapshot_version_id?: string };
   steps?: Array<{ asset: string; status: string }>;
 };
 
-// A workspace whose only pipeline runs a Python asset that sleeps, so a
-// triggered run stays "running" long enough to kill the server mid-execution.
+type AssetStaleness = {
+  asset_name: string;
+  status: string;
+  last_run_status?: string;
+  last_run_on_current_content?: boolean;
+};
+
+const finishedAsset = "sleeper.finished";
+const interruptedAsset = "sleeper.interrupted";
+const unreachedAsset = "sleeper.unreached";
+
+// A deployed three-step pipeline: one materialization finishes durably, a
+// Python step sleeps long enough to kill the server, and its downstream never
+// starts. Recovery must replay those persisted facts without executing again.
 function buildSleeperWorkspace(): string {
   const root = join(liveServerRepoRoot, ".playwright-live-workspaces");
   mkdirSync(root, { recursive: true });
@@ -32,11 +44,46 @@ function buildSleeperWorkspace(): string {
   const today = new Date().toISOString().slice(0, 10);
   writeFileSync(
     join(pipelineDir, "pipeline.yml"),
-    `name: sleeper\nschedule: daily\nstart_date: "${today}"\ncatchup: false\ndefault_connections:\n  duckdb: duckdb-default\n`,
+    `id: d64de5cf-ec85-45aa-a8bd-1a92a2d7f467\nname: sleeper\nschedule: daily\nstart_date: "${today}"\ncatchup: false\ndefault_connections:\n  duckdb: duckdb-default\n`,
   );
   writeFileSync(
-    join(pipelineDir, "assets", "sleep.py"),
-    `""" @bruin\nname: sleeper.sleep\ntype: python\n@bruin """\nimport time\n\ntime.sleep(60)\n`,
+    join(pipelineDir, "assets", "finished.sql"),
+    `/* @bruin
+name: ${finishedAsset}
+type: duckdb.sql
+materialization:
+  type: table
+@bruin */
+
+select 1 as value
+`,
+  );
+  writeFileSync(
+    join(pipelineDir, "assets", "interrupted.py"),
+    `""" @bruin
+name: ${interruptedAsset}
+type: python
+depends:
+  - ${finishedAsset}
+@bruin """
+import time
+
+time.sleep(60)
+`,
+  );
+  writeFileSync(
+    join(pipelineDir, "assets", "unreached.sql"),
+    `/* @bruin
+name: ${unreachedAsset}
+type: duckdb.sql
+materialization:
+  type: table
+depends:
+  - ${interruptedAsset}
+@bruin */
+
+select 3 as value
+`,
   );
   return dir;
 }
@@ -66,7 +113,8 @@ async function pollRun(
 }
 
 test.describe("pipeline run crash recovery (live)", () => {
-  test("a run left running by a killed server is reconciled to failed on restart", async () => {
+  test("replays persisted completed and interrupted steps into freshness on restart", async () => {
+    test.skip(test.info().project.name.includes("mobile"), "Backend recovery needs one run.");
     test.setTimeout(150000);
     const workspaceDir = buildSleeperWorkspace();
     let serverA: SpawnedServer | null = null;
@@ -85,26 +133,51 @@ test.describe("pipeline run crash recovery (live)", () => {
         schedules.schedules[0];
       expect(sleeper, "sleeper pipeline should be scheduled").toBeTruthy();
 
+      const deployResponse = await ctxA.post(
+        `${serverA.baseURL}/api/pipelines/${encodeURIComponent(sleeper.pipeline_id)}/deploy`,
+      );
+      expect(deployResponse.ok()).toBe(true);
+      const snapshotVersionId = (
+        (await deployResponse.json()) as { snapshot: { version_id: string } }
+      ).snapshot.version_id;
+      expect(snapshotVersionId).toBeTruthy();
+
+      const scheduledEnd = new Date();
+      const scheduledStart = new Date(scheduledEnd.getTime() - 30 * 60 * 1000);
       const triggerResponse = await ctxA.post(
         `${serverA.baseURL}/api/pipelines/${encodeURIComponent(sleeper.pipeline_id)}/trigger`,
-        { data: { trigger: "manual" } },
+        {
+          data: {
+            trigger: "schedule",
+            environment: "default",
+            start: scheduledStart.toISOString(),
+            end: scheduledEnd.toISOString(),
+          },
+        },
       );
       expect(triggerResponse.ok()).toBe(true);
       const runId = ((await triggerResponse.json()) as { run: { id: string } }).run.id;
       expect(runId).toBeTruthy();
 
-      // Wait until the asset itself is executing (a step marked running), not
-      // just the run — so the kill genuinely lands while a task is in flight.
+      // Wait until the first asset is durably successful and the second is
+      // executing. The third must still be absent, not pipeline-level pending.
       const beforeKill = await pollRun(
         ctxA,
         serverA.baseURL,
         runId,
-        (detail) => (detail.steps ?? []).some((step) => step.status === "running"),
+        (detail) =>
+          (detail.steps ?? []).some(
+            (step) => step.asset === finishedAsset && step.status === "success",
+          ) &&
+          (detail.steps ?? []).some(
+            (step) => step.asset === interruptedAsset && step.status === "running",
+          ),
         60000,
         "asset step running",
       );
       expect(beforeKill.run.status).toBe("running");
-      const runningStep = beforeKill.steps!.find((step) => step.status === "running")!.asset;
+      expect(beforeKill.run.snapshot_version_id).toBe(snapshotVersionId);
+      expect(beforeKill.steps?.some((step) => step.asset === unreachedAsset)).toBe(false);
       await ctxA.dispose();
 
       // Hard-kill the server (a crash) while the task runs — the run row and
@@ -125,8 +198,40 @@ test.describe("pipeline run crash recovery (live)", () => {
         "run failed after restart",
       );
       expect(detail.run.error ?? "").toContain("interrupted");
-      const reconciledStep = (detail.steps ?? []).find((step) => step.asset === runningStep);
-      expect(reconciledStep?.status, "the in-flight step is closed").toBe("failed");
+      expect(
+        (detail.steps ?? []).find((step) => step.asset === finishedAsset)?.status,
+        "the completed step stays successful",
+      ).toBe("success");
+      expect(
+        (detail.steps ?? []).find((step) => step.asset === interruptedAsset)?.status,
+        "the in-flight step is closed",
+      ).toBe("failed");
+      expect(detail.steps?.some((step) => step.asset === unreachedAsset)).toBe(false);
+
+      await expect
+        .poll(
+          async () => {
+            const response = await ctxB.get(
+              `${serverB!.baseURL}/api/pipelines/${encodeURIComponent(sleeper.pipeline_id)}/staleness?environment=default`,
+            );
+            if (!response.ok()) return null;
+            const body = (await response.json()) as { assets: AssetStaleness[] };
+            const finished = body.assets.find((asset) => asset.asset_name === finishedAsset);
+            const interrupted = body.assets.find((asset) => asset.asset_name === interruptedAsset);
+            const unreached = body.assets.find((asset) => asset.asset_name === unreachedAsset);
+            return {
+              finished: `${finished?.status}/${finished?.last_run_status}/${finished?.last_run_on_current_content}`,
+              interrupted: `${interrupted?.last_run_status}/${interrupted?.last_run_on_current_content}`,
+              unreached: unreached?.last_run_status ?? "none",
+            };
+          },
+          { timeout: 30000 },
+        )
+        .toEqual({
+          finished: "fresh/succeeded/true",
+          interrupted: "failed/true",
+          unreached: "none",
+        });
       await ctxB.dispose();
     } finally {
       if (serverA) {

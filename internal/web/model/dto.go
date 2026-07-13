@@ -169,13 +169,6 @@ type DBObjectInfo struct {
 	Kind          string
 }
 
-// DuckDBExecutionInfo contains info needed for DuckDB query execution.
-type DuckDBExecutionInfo struct {
-	ConnectionName string
-	DatabasePath   string
-	LockKey        string
-}
-
 // CreatePipelineRequest is the request body for creating a pipeline.
 type CreatePipelineRequest struct {
 	Path    string `json:"path"`

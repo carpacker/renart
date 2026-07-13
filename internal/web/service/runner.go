@@ -102,24 +102,6 @@ func IsDuckDBLockError(err error, output []byte) bool {
 		strings.Contains(message, "conflicting lock is held")
 }
 
-func AppendDuckDBReadOnlyMode(path string) string {
-	if path == "" {
-		return path
-	}
-
-	lower := strings.ToLower(path)
-	if strings.Contains(lower, "access_mode=read_only") || strings.HasPrefix(lower, "md:") {
-		return path
-	}
-
-	separator := "?"
-	if strings.Contains(path, "?") {
-		separator = "&"
-	}
-
-	return path + separator + "access_mode=read_only"
-}
-
 type streamCaptureWriter struct {
 	mu      sync.Mutex
 	buffer  *bytes.Buffer

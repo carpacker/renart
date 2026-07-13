@@ -14,8 +14,6 @@ import (
 	"github.com/bruin-data/bruin/pkg/config"
 	"github.com/bruin-data/bruin/pkg/pipeline"
 	"github.com/bruin-data/bruin/pkg/sqlparser"
-	"github.com/spf13/afero"
-	"gopkg.in/yaml.v3"
 	"renart/internal/web/bus"
 	"renart/internal/web/identity"
 	"renart/internal/web/policy"
@@ -57,27 +55,17 @@ const (
 	MaterializeScopeAssetWithNeighborhood MaterializeScope = "asset_with_upstreams_and_downstreams"
 )
 
-type DuckDBExecutionInfo struct {
-	ConnectionName string
-	DatabasePath   string
-	LockKey        string
-}
-
 type ExecutionDependencies struct {
-	WorkspaceRoot                       string
-	ConfigPath                          string
-	Executor                            BruinCommandExecutor
-	ResolveAssetByID                    func(context.Context, string) (string, *pipeline.Pipeline, *pipeline.Asset, error)
-	ResolveAssetNameByID                func(string) string
-	FindInspectIDs                      func(...string) []string
-	RecordMaterialization               func(string, time.Time, string)
-	RecordMaterializationForEnvironment func(string, string, time.Time, string)
-	CurrentPipelines                    func() []PipelineView
-	DuckDBLock                          func(string) *sync.Mutex
-	ParseQueryOutput                    func([]byte) ([]string, []map[string]any)
-	NewPipelineBuilder                  func() *pipeline.Builder
-	FreshnessSnapshot                   func() map[string]AssetTimestamps
-	Events                              *bus.Bus
+	WorkspaceRoot        string
+	ConfigPath           string
+	Executor             BruinCommandExecutor
+	ResolveAssetByID     func(context.Context, string) (string, *pipeline.Pipeline, *pipeline.Asset, error)
+	ResolveAssetNameByID func(string) string
+	FindInspectIDs       func(...string) []string
+	CurrentPipelines     func() []PipelineView
+	ParseQueryOutput     func([]byte) ([]string, []map[string]any)
+	NewPipelineBuilder   func() *pipeline.Builder
+	Events               *bus.Bus
 	// PolicyFor returns the execution policy for an environment; nil means
 	// unrestricted. Enforced here — the run-dispatch chokepoint every
 	// execution path goes through — not in UI handlers.
@@ -95,18 +83,11 @@ type AssetView struct {
 	Name string
 }
 
-type AssetTimestamps struct {
-	MaterializedAt   *time.Time
-	ContentChangedAt *time.Time
-	LastStatus       string
-}
-
 type PipelineMaterializationInfo struct {
 	AssetName       string
 	Connection      string
 	IsMaterialized  bool
 	MaterializedAs  string
-	FreshnessStatus string
 	RowCount        *int64
 	DeclaredMatType string
 }
@@ -115,7 +96,6 @@ type PipelineMaterializationState struct {
 	AssetID         string `json:"asset_id"`
 	IsMaterialized  bool   `json:"is_materialized"`
 	MaterializedAs  string `json:"materialized_as,omitempty"`
-	FreshnessStatus string `json:"freshness_status,omitempty"`
 	RowCount        *int64 `json:"row_count,omitempty"`
 	Connection      string `json:"connection,omitempty"`
 	DeclaredMatType string `json:"materialization_type,omitempty"`
@@ -190,16 +170,6 @@ func (s *ExecutionService) findPipelineViewForAsset(assetID string) (PipelineVie
 	return PipelineView{}, false
 }
 
-func (s *ExecutionService) recordMaterialization(assetName, environment string, at time.Time, status string) {
-	if s.deps.RecordMaterializationForEnvironment != nil {
-		s.deps.RecordMaterializationForEnvironment(assetName, environment, at, status)
-		return
-	}
-	if s.deps.RecordMaterialization != nil {
-		s.deps.RecordMaterialization(assetName, at, status)
-	}
-}
-
 func (s *ExecutionService) InspectAsset(ctx context.Context, assetID, limit, environment, startDate, endDate string) InspectResult {
 	relAssetPath, err := DecodeID(assetID)
 	if err != nil {
@@ -224,11 +194,6 @@ func (s *ExecutionService) InspectAsset(ctx context.Context, assetID, limit, env
 		return result
 	}
 
-	duckDBInfo, infoErr := s.findDuckDBExecutionInfoByAsset(ctx, assetID)
-	if infoErr != nil {
-		return InspectResult{Status: "error", Error: infoErr.Error(), HTTPStatus: 400}
-	}
-
 	queryReq := QueryAssetRequest{
 		AssetPath:   relAssetPath,
 		Limit:       limit,
@@ -248,26 +213,7 @@ func (s *ExecutionService) InspectAsset(ctx context.Context, assetID, limit, env
 		return runErr
 	}
 
-	if duckDBInfo != nil {
-		mu := s.deps.DuckDBLock(duckDBInfo.LockKey)
-		if mu != nil {
-			mu.Lock()
-			err = run()
-			if err != nil && IsDuckDBLockError(err, output) {
-				if readOnlyConfigPath, cleanup, cfgErr := s.buildReadOnlyConfigFile(duckDBInfo); cfgErr == nil {
-					defer cleanup()
-					queryReq.ConfigFile = readOnlyConfigPath
-					operation.ConfigFile = readOnlyConfigPath
-					err = run()
-				}
-			}
-			mu.Unlock()
-		} else {
-			err = run()
-		}
-	} else {
-		err = run()
-	}
+	err = run()
 
 	if err != nil {
 		statusCode := 400
@@ -499,11 +445,6 @@ func (s *ExecutionService) MaterializeAssetStream(ctx context.Context, assetID, 
 		return MaterializeResult{Status: "error", Error: scopeErr.Error(), ExitCode: 1}
 	}
 
-	duckDBInfo, infoErr := s.findDuckDBExecutionInfoByAsset(ctx, assetID)
-	if infoErr != nil {
-		return MaterializeResult{Status: "error", Error: infoErr.Error(), ExitCode: 1}
-	}
-
 	timeWindow, timeWindowErr := s.resolveAssetExecutionTimeWindow(ctx, assetID, startDate, endDate)
 	if timeWindowErr != nil {
 		return MaterializeResult{Status: "error", Error: timeWindowErr.Error(), ExitCode: 1}
@@ -536,15 +477,7 @@ func (s *ExecutionService) MaterializeAssetStream(ctx context.Context, assetID, 
 		assetNamesToRecord = append(assetNamesToRecord, assetName)
 	}
 
-	var runErr error
-	if duckDBInfo != nil {
-		mu := s.deps.DuckDBLock(duckDBInfo.LockKey)
-		mu.Lock()
-		runErr = run()
-		mu.Unlock()
-	} else {
-		runErr = run()
-	}
+	runErr := run()
 
 	changedAssetIDs := make([]string, 0)
 	var materializedAt *time.Time
@@ -557,7 +490,6 @@ func (s *ExecutionService) MaterializeAssetStream(ctx context.Context, assetID, 
 			if assetName == "" {
 				continue
 			}
-			s.recordMaterialization(assetName, environment, now, "succeeded")
 			if pipelineFound {
 				runAssets = append(runAssets, bus.AssetRun{
 					AssetID:   identity.AssetID(pipelineView.UUID, assetName),
@@ -875,7 +807,6 @@ func (s *ExecutionService) GetPipelineMaterialization(ctx context.Context, pipel
 	}
 
 	matInfo := s.inspectPipelineMaterializations(ctx, parsed, environment)
-	freshnessByAssetName := ComputePipelineFreshness(parsed, matInfo, s.deps.FreshnessSnapshot())
 	assets := make([]PipelineMaterializationState, 0, len(parsed.Assets))
 
 	for _, asset := range parsed.Assets {
@@ -908,15 +839,10 @@ func (s *ExecutionService) GetPipelineMaterialization(ctx context.Context, pipel
 		if info, ok := matInfo[key]; ok {
 			item.IsMaterialized = info.IsMaterialized
 			item.MaterializedAs = info.MaterializedAs
-			item.FreshnessStatus = info.FreshnessStatus
 			item.RowCount = info.RowCount
 			if info.DeclaredMatType != "" {
 				item.DeclaredMatType = info.DeclaredMatType
 			}
-		}
-
-		if status, ok := freshnessByAssetName[asset.Name]; ok {
-			item.FreshnessStatus = status
 		}
 
 		assets = append(assets, item)
@@ -990,40 +916,36 @@ func (s *ExecutionService) MaterializePipelineRun(ctx context.Context, spec Pipe
 		return MaterializeResult{Status: "error", Error: timeWindowErr.Error(), ExitCode: 1}
 	}
 	operation := withOperationTimeWindow(runOperation(target, spec.PipelineID, "", spec.Environment), timeWindow)
+	observed := newPipelineRunObservation(onAssetEvent)
 	output, runErr := s.deps.Executor.RunPipeline(ctx, RunPipelineRequest{
 		Target:      target,
 		Environment: spec.Environment,
 		DryRun:      spec.DryRun,
 		StartDate:   timeWindow.StartRFC3339(),
 		EndDate:     timeWindow.EndRFC3339(),
-		AssetEvent:  onAssetEvent,
+		AssetEvent:  observed.handle,
 		ConfigPath:  spec.ConfigPath,
 		FullRefresh: spec.FullRefresh,
 	}, onChunk)
 
 	changedAssetIDs := make([]string, 0)
 	var materializedAt *time.Time
-	if runErr == nil && !spec.DryRun {
+	if !spec.DryRun {
 		now := time.Now().UTC()
-		materializedAt = &now
-		for _, currentPipeline := range s.deps.CurrentPipelines() {
-			if currentPipeline.ID != spec.PipelineID {
-				continue
-			}
-			runAssets := make([]bus.AssetRun, 0, len(currentPipeline.Assets))
-			for _, asset := range currentPipeline.Assets {
-				changedAssetIDs = append(changedAssetIDs, asset.ID)
-				if strings.TrimSpace(asset.Name) != "" {
-					s.recordMaterialization(asset.Name, spec.Environment, now, "succeeded")
-					runAssets = append(runAssets, bus.AssetRun{
-						AssetID:   identity.AssetID(currentPipeline.UUID, asset.Name),
-						AssetName: asset.Name,
-						Status:    "succeeded",
-					})
+		if currentPipeline, ok := s.findPipelineView(spec.PipelineID); ok {
+			completionStatus := "succeeded"
+			if runErr != nil {
+				completionStatus = "failed"
+				if ctx.Err() != nil {
+					completionStatus = "cancelled"
 				}
 			}
+			runAssets, succeededIDs := observed.completedAssets(currentPipeline, completionStatus)
+			changedAssetIDs = append(changedAssetIDs, succeededIDs...)
 			s.emitRunCompletedForSpec(spec, currentPipeline.UUID, timeWindow, now, runAssets)
-			break
+			if runErr == nil {
+				materializedAt = &now
+			}
 		}
 	}
 
@@ -1046,6 +968,105 @@ func (s *ExecutionService) MaterializePipelineRun(ctx context.Context, spec Pipe
 		MaterializedAt:  materializedAt,
 		Warnings:        warnings.snapshot(),
 	}
+}
+
+type pipelineRunObservation struct {
+	mu       sync.Mutex
+	onEvent  func(ExecutionAssetEvent)
+	order    []string
+	statuses map[string]string
+}
+
+func newPipelineRunObservation(onEvent func(ExecutionAssetEvent)) *pipelineRunObservation {
+	return &pipelineRunObservation{onEvent: onEvent, statuses: make(map[string]string)}
+}
+
+func (o *pipelineRunObservation) handle(event ExecutionAssetEvent) {
+	if o.onEvent != nil {
+		o.onEvent(event)
+	}
+	assetName := strings.TrimSpace(event.Asset)
+	if assetName == "" {
+		return
+	}
+	status := completedExecutionStatus(event.Status)
+	running := strings.EqualFold(strings.TrimSpace(event.Status), "running")
+	if status == "" && !running {
+		return
+	}
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	if _, exists := o.statuses[assetName]; !exists {
+		o.order = append(o.order, assetName)
+	}
+	if status != "" {
+		o.statuses[assetName] = status
+	} else if _, exists := o.statuses[assetName]; !exists {
+		o.statuses[assetName] = ""
+	}
+}
+
+func (o *pipelineRunObservation) completedAssets(view PipelineView, completionStatus string) ([]bus.AssetRun, []string) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+
+	assetsByName := make(map[string]AssetView, len(view.Assets))
+	for _, asset := range view.Assets {
+		assetsByName[asset.Name] = asset
+		if completionStatus == "succeeded" {
+			if _, observed := o.statuses[asset.Name]; !observed {
+				o.order = append(o.order, asset.Name)
+				o.statuses[asset.Name] = "succeeded"
+			}
+		}
+	}
+
+	runs := make([]bus.AssetRun, 0, len(o.order))
+	succeededIDs := make([]string, 0, len(o.order))
+	for _, name := range o.order {
+		asset, exists := assetsByName[name]
+		if !exists {
+			continue
+		}
+		status := o.statuses[name]
+		if status == "" {
+			status = completionStatus
+		}
+		runs = append(runs, bus.AssetRun{
+			AssetID:   identity.AssetID(view.UUID, name),
+			AssetName: name,
+			Status:    status,
+		})
+		if status == "succeeded" {
+			succeededIDs = append(succeededIDs, asset.ID)
+		}
+	}
+	return runs, succeededIDs
+}
+
+func completedExecutionStatus(status string) string {
+	switch strings.ToLower(strings.TrimSpace(status)) {
+	case "success", "succeeded", "ok", "finished":
+		return "succeeded"
+	case "failed", "failure", "error", "errored":
+		return "failed"
+	case "cancelled", "canceled":
+		return "cancelled"
+	default:
+		return ""
+	}
+}
+
+func (s *ExecutionService) findPipelineView(pipelineID string) (PipelineView, bool) {
+	if s.deps.CurrentPipelines == nil {
+		return PipelineView{}, false
+	}
+	for _, view := range s.deps.CurrentPipelines() {
+		if view.ID == pipelineID {
+			return view, true
+		}
+	}
+	return PipelineView{}, false
 }
 
 // ResolvePipelineRunTarget validates that the pipeline ID decodes to a
@@ -1198,133 +1219,6 @@ func (s *ExecutionService) inspectPipelineMaterializations(ctx context.Context, 
 	return result
 }
 
-func ComputePipelineFreshness(parsed *pipeline.Pipeline, matInfo map[string]PipelineMaterializationInfo, tracker map[string]AssetTimestamps) map[string]string {
-	result := make(map[string]string, len(parsed.Assets))
-	assetsByName := make(map[string]*pipeline.Asset, len(parsed.Assets))
-	for _, asset := range parsed.Assets {
-		assetsByName[asset.Name] = asset
-	}
-
-	type visitState int
-	const (
-		visitUnknown visitState = iota
-		visitActive
-		visitDone
-	)
-
-	type freshnessEval struct {
-		Fresh           bool
-		EffectiveUpdate *time.Time
-	}
-
-	state := make(map[string]visitState, len(parsed.Assets))
-	evals := make(map[string]freshnessEval, len(parsed.Assets))
-
-	var evalAsset func(assetName string) freshnessEval
-	evalAsset = func(assetName string) freshnessEval {
-		if state[assetName] == visitDone {
-			return evals[assetName]
-		}
-		if state[assetName] == visitActive {
-			return freshnessEval{Fresh: false}
-		}
-
-		asset, ok := assetsByName[assetName]
-		if !ok {
-			return freshnessEval{Fresh: false}
-		}
-
-		state[assetName] = visitActive
-		defer func() {
-			state[assetName] = visitDone
-		}()
-
-		kind := "table"
-		connectionName := ""
-		if isAPIAsset(asset) {
-			if conn, err := apiConnectionNameForAsset(asset, parsed); err == nil {
-				connectionName = conn
-			}
-		} else if conn, err := parsed.GetConnectionNameForAsset(asset); err == nil {
-			connectionName = conn
-		}
-		if info, ok := matInfo[MaterializationAssetKey(asset.Name, connectionName)]; ok {
-			if strings.EqualFold(strings.TrimSpace(info.MaterializedAs), "view") {
-				kind = "view"
-			}
-		}
-		if strings.EqualFold(strings.TrimSpace(string(asset.Materialization.Type)), "view") {
-			kind = "view"
-		}
-
-		trackerEntry, hasTracker := tracker[assetName]
-		var materializedAt *time.Time
-		if hasTracker && trackerEntry.MaterializedAt != nil {
-			ts := trackerEntry.MaterializedAt.UTC()
-			materializedAt = &ts
-		}
-
-		upstreamEvals := make([]freshnessEval, 0, len(asset.Upstreams))
-		for _, up := range asset.Upstreams {
-			upstreamEvals = append(upstreamEvals, evalAsset(up.Value))
-		}
-
-		if kind == "view" {
-			if len(upstreamEvals) == 0 {
-				fresh := materializedAt != nil
-				e := freshnessEval{Fresh: fresh, EffectiveUpdate: materializedAt}
-				evals[assetName] = e
-				return e
-			}
-
-			fresh := true
-			var latest *time.Time
-			for _, up := range upstreamEvals {
-				if !up.Fresh {
-					fresh = false
-				}
-				latest = maxTimePtr(latest, up.EffectiveUpdate)
-			}
-
-			e := freshnessEval{Fresh: fresh, EffectiveUpdate: latest}
-			evals[assetName] = e
-			return e
-		}
-
-		if materializedAt == nil {
-			e := freshnessEval{Fresh: false, EffectiveUpdate: nil}
-			evals[assetName] = e
-			return e
-		}
-
-		fresh := true
-		for _, up := range upstreamEvals {
-			if !up.Fresh {
-				fresh = false
-				continue
-			}
-			if up.EffectiveUpdate != nil && up.EffectiveUpdate.After(*materializedAt) {
-				fresh = false
-			}
-		}
-
-		e := freshnessEval{Fresh: fresh, EffectiveUpdate: materializedAt}
-		evals[assetName] = e
-		return e
-	}
-
-	for _, asset := range parsed.Assets {
-		e := evalAsset(asset.Name)
-		if e.Fresh {
-			result[asset.Name] = "fresh"
-		} else {
-			result[asset.Name] = "stale"
-		}
-	}
-
-	return result
-}
-
 func (s *ExecutionService) runConnectionQuery(ctx context.Context, connectionName, query string) ([]string, []map[string]any, error) {
 	return s.RunConnectionQueryForEnvironment(ctx, connectionName, "", query)
 }
@@ -1398,99 +1292,4 @@ func maxTimePtr(a, b *time.Time) *time.Time {
 		return b
 	}
 	return a
-}
-
-func (s *ExecutionService) findDuckDBExecutionInfoByAsset(ctx context.Context, assetID string) (*DuckDBExecutionInfo, error) {
-	_, parsed, asset, err := s.deps.ResolveAssetByID(ctx, assetID)
-	if err != nil {
-		return nil, err
-	}
-
-	connectionName, err := parsed.GetConnectionNameForAsset(asset)
-	if isAPIAsset(asset) {
-		connectionName, err = apiConnectionNameForAsset(asset, parsed)
-	}
-	if err != nil || connectionName == "" {
-		return nil, nil
-	}
-
-	fs := afero.NewOsFs()
-	if exists, _ := afero.Exists(fs, s.deps.ConfigPath); !exists {
-		return nil, nil
-	}
-
-	cfg, cfgErr := loadSelectedConfig(s.deps.ConfigPath, "")
-	if cfgErr != nil || cfg.SelectedEnvironment == nil || cfg.SelectedEnvironment.Connections == nil {
-		return nil, nil
-	}
-
-	for _, conn := range cfg.SelectedEnvironment.Connections.DuckDB {
-		if conn.Name != connectionName {
-			continue
-		}
-		databasePath := strings.TrimSpace(conn.Path)
-		if databasePath == "" {
-			databasePath = connectionName
-		} else {
-			databasePath = filepath.Clean(databasePath)
-		}
-		return &DuckDBExecutionInfo{ConnectionName: connectionName, DatabasePath: databasePath, LockKey: "duckdb:" + databasePath}, nil
-	}
-
-	return nil, nil
-}
-
-func (s *ExecutionService) buildReadOnlyConfigFile(info *DuckDBExecutionInfo) (string, func(), error) {
-	if info == nil || info.ConnectionName == "" {
-		return "", nil, fmt.Errorf("duckdb read-only config requires connection info")
-	}
-
-	cfg, err := loadSelectedConfig(s.deps.ConfigPath, "")
-	if err != nil {
-		return "", nil, err
-	}
-	if cfg.SelectedEnvironment == nil || cfg.SelectedEnvironment.Connections == nil {
-		return "", nil, fmt.Errorf("selected environment has no connections")
-	}
-
-	envName := cfg.SelectedEnvironmentName
-	env, ok := cfg.Environments[envName]
-	if !ok || env.Connections == nil {
-		return "", nil, fmt.Errorf("environment '%s' not found", envName)
-	}
-
-	found := false
-	for i := range env.Connections.DuckDB {
-		if env.Connections.DuckDB[i].Name != info.ConnectionName {
-			continue
-		}
-		env.Connections.DuckDB[i].Path = AppendDuckDBReadOnlyMode(env.Connections.DuckDB[i].Path)
-		found = true
-		break
-	}
-	if !found {
-		return "", nil, fmt.Errorf("duckdb connection '%s' not found", info.ConnectionName)
-	}
-	cfg.Environments[envName] = env
-
-	fs := afero.NewOsFs()
-	tempFile, err := afero.TempFile(fs, "", "renart-readonly-*.yml")
-	if err != nil {
-		return "", nil, err
-	}
-	cleanup := func() { _ = fs.Remove(tempFile.Name()) }
-	if err := tempFile.Close(); err != nil {
-		cleanup()
-		return "", nil, err
-	}
-	content, err := yaml.Marshal(cfg)
-	if err != nil {
-		cleanup()
-		return "", nil, err
-	}
-	if err := afero.WriteFile(fs, tempFile.Name(), content, 0o600); err != nil {
-		cleanup()
-		return "", nil, err
-	}
-	return tempFile.Name(), cleanup, nil
 }

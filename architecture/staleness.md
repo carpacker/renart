@@ -69,18 +69,43 @@ runs stamp their window. A daily River job prunes raw facts (default 90 days);
 coverage is the durable summary.
 
 Notes: `run_id` is empty for build-mode runs (no run record); scheduled runs
-carry theirs. The recorder fingerprints at run *completion*, so an edit saved
+carry theirs. A partial unique index keeps one fact per
+`(asset, environment, scheduled run)` while deliberately allowing repeated
+empty build-mode IDs; recorder inserts are no-ops when crash recovery replays a
+fact that already committed. The recorder fingerprints at run *completion*, so an edit saved
 mid-build-mode-run records the newer fingerprint (scheduled runs are immune —
-they fingerprint the executed snapshot). Partially failed pipeline runs record
-no facts for the assets that did succeed; they read as stale and a rebuild
-repairs it.
+they fingerprint the executed snapshot). Pipeline execution collects terminal
+asset events even when the overall run fails: completed assets record success
+facts, the failing asset records a failed attempt, and assets the executor never
+reached record nothing.
 
 **Last run attempt.** Facts only capture successes, so the recorder also upserts
 `renart_asset_runs` — one row per `(asset, environment)` with the target
-fingerprint, `succeeded|failed`, and timestamp (a later run overwrites it, so a
-success clears a prior failure). Interactive materialize emits a failed
-`RunCompleted` on error (`MaterializeAssetStream`) so the failure is persisted;
-the pipeline-run path still records nothing on failure (accepted, as above).
+fingerprint, `succeeded|failed|cancelled`, and timestamp (a later run overwrites
+it, so a success clears a prior failure). The upsert is monotonic by timestamp:
+an older or equal-time recovery event cannot replace a newer attempt.
+Interactive, stale-plan, and full
+pipeline materialization all emit `RunCompleted` for the assets they actually
+attempted, including terminal failures.
+
+Bruin JSON run logs under `logs/runs/` are diagnostic artifacts, not application
+state. Freshness, materialization timestamps, and latest attempts are restored
+from `.renart/state.db`; transient running state comes from scheduler steps and
+SSE. In particular, a terminal run-log snapshot may still call an untouched
+asset `pending`, and Renart never persists that value as asset state.
+
+After an unclean server stop, scheduler startup first marks the orphaned run and
+every open step failed. It then re-emits only the persisted terminal steps
+through the same synchronous `RunCompleted` bus: prior successes remain
+successes, the interrupted step is failed, and unreached assets remain absent.
+For a deployed run it materializes the run's exact pinned snapshot while the
+recorder fingerprints it, then deletes the temp directory. This is derived-state
+recovery only—asset code and textual logs are never replayed. The fact and
+latest-attempt writes above make the path safe if the original completion event
+committed immediately before the process died. A durable pending flag is cleared
+only after replay returns, so another stop during startup retries safely; its
+migration also queues interrupted runs reconciled by older builds for one-time
+backfill.
 
 ## 4. Staleness service and UI (`internal/web/staleness`)
 
@@ -96,7 +121,7 @@ the downstream cone), `RunCompleted` (flip the touched assets).
 | `stale_upstream` | inherited via the Merkle cascade — also covers variable-value changes (own-content matches, full fp doesn't) |
 | `partial` | incremental: some intervals covered (built/total surfaced as covered/total seconds) |
 | `never_built` | no row for this asset in this env at any fingerprint |
-| `missing` | log says fresh, async verification couldn't find the table |
+| `missing` | materialization history says fresh, async verification couldn't find the table |
 
 The `missing` downgrade only applies to assets whose output is a warehouse
 object named after the asset (`verifiableByName`: SQL, seed). Load (sling) and
@@ -111,11 +136,21 @@ sees saved state.
 Each `AssetStatus` also carries the last run attempt (`last_run_status`,
 `last_run_at`, `last_run_on_current_content` — the latter true when the run's
 fingerprint matches the asset's current one) from `renart_asset_runs`,
-orthogonal to the base `status`. The frontend composes them
-(`resolveFreshnessDisplay`): base ∈ {`stale_edited`,`never_built`} + a failed run
-on the current content → **Build failed**; `fresh` + a failed run on the current
-content → **Run failed** (unchanged code, latest run failed); otherwise the base
-label. This distinguishes an untested edit from an edit that was run and failed.
+orthogonal to the base `status`. The frontend renders both dimensions instead
+of allowing one to replace the other: for example, unchanged built content can
+show **Fresh** + **Last run failed**, while edited or never-built content whose
+current version failed shows its base **Edited**/**Never built** badge + **Build
+failed**. A cancelled attempt is likewise separate. This preserves the answer
+to "can I use the existing data?" while also answering "what happened when I
+last tried to build it?" and distinguishes an untested edit from one that was
+run and failed.
+
+Running state is transient and asset-scoped. The UI derives it only from
+scheduler steps (initial active-run hydration plus `run.step` SSE events); a
+queued or started pipeline does not mark every asset pending. `run.finished`
+clears all transient entries for that run, while the canonical terminal attempt
+arrives through staleness. Assets skipped after an upstream failure therefore
+retain their previous freshness and attempt state.
 
 The Build-stale action is server-side: `POST
 /api/pipelines/{id}/build-stale/stream` (`httpapi/build_stale.go`) recomputes

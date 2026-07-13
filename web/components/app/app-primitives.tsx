@@ -11,6 +11,7 @@ import {
 import { ComponentType, Fragment, ReactNode } from "react";
 
 import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
 import {
   DelimitedCard,
   DelimitedCardContent,
@@ -25,6 +26,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import {
   Table,
   TableBody,
@@ -219,9 +221,6 @@ const stalenessMeta: Record<
   },
 };
 
-const failedFreshnessClassName = "bg-red-100 text-red-700 dark:bg-red-500/15 dark:text-red-300";
-const failedFreshnessDotClassName = "bg-red-500";
-
 function stalenessBaseLabel(staleness: AssetStaleness) {
   if (staleness.status === "partial" && staleness.total_seconds && staleness.total_seconds > 0) {
     const day = 24 * 60 * 60;
@@ -234,34 +233,11 @@ function stalenessBaseLabel(staleness: AssetStaleness) {
   return stalenessMeta[staleness.status]?.label ?? staleness.status;
 }
 
-/**
- * Layers the last-run-attempt failure dimension on top of the base staleness
- * status. A run that failed on the content currently on disk is surfaced in red:
- * "Build failed" when the asset is also edited/never-built (you ran the edit and
- * it failed), or "Run failed" when the code is unchanged from a good build but
- * the latest run failed. Otherwise the base freshness display is used.
- */
 export function resolveFreshnessDisplay(staleness: AssetStaleness): {
   label: string;
   className: string;
   dotClassName: string;
 } {
-  if (staleness.last_run_status === "failed" && staleness.last_run_on_current_content) {
-    if (staleness.status === "fresh") {
-      return {
-        label: "Run failed",
-        className: failedFreshnessClassName,
-        dotClassName: failedFreshnessDotClassName,
-      };
-    }
-    if (staleness.status === "stale_edited" || staleness.status === "never_built") {
-      return {
-        label: "Build failed",
-        className: failedFreshnessClassName,
-        dotClassName: failedFreshnessDotClassName,
-      };
-    }
-  }
   const meta = stalenessMeta[staleness.status];
   return {
     label: stalenessBaseLabel(staleness),
@@ -284,19 +260,70 @@ export function StalenessBadge({
   if (!staleness || !stalenessMeta[staleness.status]) return null;
   const display = resolveFreshnessDisplay(staleness);
   return (
-    <span
+    <Badge
+      size="xs"
       data-staleness={staleness.status}
-      data-last-run={staleness.last_run_status}
       title={`Staleness: ${display.label}`}
-      className={cn(
-        "inline-flex items-center gap-1 truncate rounded px-1.5 py-0.5 text-[10px]",
-        display.className,
-        className,
-      )}
+      className={cn("max-w-full truncate", display.className, className)}
     >
       <span className={cn("size-1.5 shrink-0 rounded-full", display.dotClassName)} />
       {display.label}
-    </span>
+    </Badge>
+  );
+}
+
+export function lastRunLabel(staleness: AssetStaleness) {
+  if (staleness.last_run_status === "cancelled") return "Last run cancelled";
+  if (
+    staleness.last_run_on_current_content &&
+    (staleness.status === "stale_edited" || staleness.status === "never_built")
+  ) {
+    return "Build failed";
+  }
+  return "Last run failed";
+}
+
+function lastRunTooltip(staleness: AssetStaleness) {
+  const label = lastRunLabel(staleness);
+  const at = staleness.last_run_at
+    ? ` on ${new Intl.DateTimeFormat(undefined, {
+        dateStyle: "medium",
+        timeStyle: "short",
+      }).format(new Date(staleness.last_run_at))}`
+    : "";
+  if (staleness.status === "fresh" && staleness.last_run_status === "failed") {
+    return `${label}${at}. Previously built data still covers the selected range.`;
+  }
+  if (!staleness.last_run_on_current_content) {
+    return `${label}${at}. The asset has changed since that attempt.`;
+  }
+  return `${label}${at}.`;
+}
+
+export function LastRunBadge({ staleness }: { staleness?: AssetStaleness }) {
+  if (
+    !staleness ||
+    (staleness.last_run_status !== "failed" && staleness.last_run_status !== "cancelled")
+  ) {
+    return null;
+  }
+  const label = lastRunLabel(staleness);
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <Badge
+          size="xs"
+          variant={staleness.last_run_status === "failed" ? "destructive" : "muted"}
+          data-last-run={staleness.last_run_status}
+          aria-label={label}
+          tabIndex={0}
+          className="max-w-full shrink-0 truncate"
+        >
+          {label}
+        </Badge>
+      </TooltipTrigger>
+      <TooltipContent>{lastRunTooltip(staleness)}</TooltipContent>
+    </Tooltip>
   );
 }
 
@@ -328,8 +355,19 @@ export function AssetNode({
   const Icon = meta.icon;
   const statusMeta = assetNodeStatusMeta(asset.status);
   const hasParseError = Boolean(asset.parseError);
+  const showDescription = !hasParseError && Boolean(asset.description);
+  const showLastRun =
+    asset.status !== "pending" &&
+    Boolean(asset.staleness) &&
+    (asset.staleness?.last_run_status === "cancelled" ||
+      (asset.staleness?.last_run_status === "failed" && asset.status === "failed"));
+  const showTransientRunStatus =
+    asset.status === "pending" ||
+    asset.status === "overdue" ||
+    (asset.status === "failed" && !showLastRun);
   return (
     <div
+      data-slot="asset-node"
       className={cn(
         "w-58 overflow-hidden rounded-xl border-2 bg-card text-left shadow-sm transition hover:border-primary/60",
         hasParseError
@@ -372,19 +410,15 @@ export function AssetNode({
           <MoreHorizontal className="size-3.5 text-muted-foreground" />
         )}
       </div>
-      <div className="space-y-2 p-2.5">
+      <div className="flex flex-col gap-2 p-2.5">
         {hasParseError ? (
           <p className="truncate text-[11px] text-muted-foreground" title={asset.parseError}>
             {asset.parseError}
           </p>
-        ) : asset.description ? (
-          <p className="truncate text-[11px] text-muted-foreground">{asset.description}</p>
         ) : null}
-        {/* Status row: freshness is the (only) colored badge; the last build
-            is a muted timestamp so two green pills never sit side by side.
-            Live run states (running/failed) replace the timestamp. The
-            connection badge lives on its own row below so the two never
-            compete for width and the connection name never gets clipped. */}
+        {/* Freshness and the latest attempt are independent: a still-fresh asset
+            can also say that its latest run failed. Live step state temporarily
+            takes the attempt badge's place while that asset is running. */}
         {hasParseError ||
         asset.staleness ||
         asset.status === "pending" ||
@@ -400,9 +434,8 @@ export function AssetNode({
             ) : (
               <>
                 <StalenessBadge staleness={asset.staleness} className="shrink-0" />
-                {asset.status === "pending" ||
-                asset.status === "failed" ||
-                asset.status === "overdue" ? (
+                {showLastRun ? <LastRunBadge staleness={asset.staleness} /> : null}
+                {showTransientRunStatus ? (
                   <span
                     className={cn(
                       "min-w-0 shrink-0 truncate rounded px-1.5 py-0.5 text-[10px]",
@@ -412,7 +445,7 @@ export function AssetNode({
                   >
                     {statusMeta.label}
                   </span>
-                ) : asset.materializedAt ? (
+                ) : !showLastRun && asset.materializedAt ? (
                   <span
                     className="inline-flex min-w-0 items-center gap-1 truncate text-[10px] text-muted-foreground"
                     title={`Last built: ${asset.materializedAt}`}
@@ -425,23 +458,40 @@ export function AssetNode({
             )}
           </div>
         ) : null}
-        <div className="flex min-w-0">
-          {onOpenConnection ? (
-            <button
-              type="button"
-              className="nodrag min-w-0 max-w-full rounded-md outline-none focus-visible:ring-1 focus-visible:ring-ring"
-              title="Open pipeline connection settings"
-              aria-label={`Connection ${asset.integration} — open pipeline connection settings`}
-              onClick={(event) => {
-                event.stopPropagation();
-                onOpenConnection();
-              }}
+        <div data-slot="asset-node-metadata" className="flex min-w-0 items-center gap-2">
+          {showDescription ? (
+            <p
+              data-slot="asset-node-description"
+              className="min-w-0 flex-1 truncate text-[11px] text-muted-foreground"
+              title={asset.description}
             >
+              {asset.description}
+            </p>
+          ) : null}
+          <div
+            data-slot="asset-node-connection"
+            className={cn(
+              "ml-auto min-w-0",
+              showDescription ? "max-w-[55%] shrink-0" : "max-w-full",
+            )}
+          >
+            {onOpenConnection ? (
+              <button
+                type="button"
+                className="nodrag min-w-0 max-w-full rounded-md outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                title="Open pipeline connection settings"
+                aria-label={`Connection ${asset.integration} — open pipeline connection settings`}
+                onClick={(event) => {
+                  event.stopPropagation();
+                  onOpenConnection();
+                }}
+              >
+                <IntegrationBadge name={asset.integration} />
+              </button>
+            ) : (
               <IntegrationBadge name={asset.integration} />
-            </button>
-          ) : (
-            <IntegrationBadge name={asset.integration} />
-          )}
+            )}
+          </div>
         </div>
       </div>
     </div>

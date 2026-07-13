@@ -65,7 +65,7 @@ func (e *HybridBruinExecutor) RunAsset(ctx context.Context, req RunAssetRequest,
 		return e.runLoadAsset(runCtx, pp.Asset, manager, onChunk)
 	}
 
-	mainExecutors, err := buildDirectMainExecutors(manager, renderer, parser, pp.Pipeline, e.runRegistry)
+	mainExecutors, err := buildDirectMainExecutors(manager, renderer, parser, pp.Pipeline, e.runRegistry, e.duckDBCoordinator, e.workspaceRoot)
 	if err != nil {
 		return nil, err
 	}
@@ -127,15 +127,28 @@ func (e *HybridBruinExecutor) RunAsset(ctx context.Context, req RunAssetRequest,
 			emitDirectRunAssetEvent(req.AssetEvent, instance, "running", taskStartedAt, time.Time{}, nil)
 			writeDirectRunLifecycle(printer, instance, nil, true, 0)
 			finishTask := beginRegistryTask(regRun, instance)
-			if err := seq.RunSingleTask(runCtx, instance); err != nil {
-				finishTask(err)
+			lease, leaseErr := e.acquireDuckDBConnections(runCtx, manager, duckDBConnectionNamesForAsset(pp.Pipeline, instance.GetAsset()), directTaskLeaseOwner(runCtx, pp.Pipeline, instance.GetAsset()), printer)
+			if leaseErr != nil {
+				finishTask(leaseErr)
 				instance.MarkAs(scheduler.Failed)
-				results = append(results, &scheduler.TaskExecutionResult{Instance: instance, Error: err})
-				emitDirectRunAssetEvent(req.AssetEvent, instance, "failed", taskStartedAt, time.Now(), err)
-				writeDirectRunLifecycle(printer, instance, err, false, time.Since(taskStartedAt))
+				results = append(results, &scheduler.TaskExecutionResult{Instance: instance, Error: leaseErr})
+				emitDirectRunAssetEvent(req.AssetEvent, instance, "failed", taskStartedAt, time.Now(), leaseErr)
+				writeDirectRunLifecycle(printer, instance, leaseErr, false, time.Since(taskStartedAt))
 				writeDirectRunSummary(printer, buildDirectRunSummary(results, time.Since(startedAt)))
 				_ = e.saveDirectRunLog(ctx, pp.Pipeline, s, runID, req.Environment, timeWindow, []string{"renart", "run", req.AssetPath})
-				return printer.buffer.Bytes(), err
+				return printer.buffer.Bytes(), leaseErr
+			}
+			runErr := seq.RunSingleTask(runCtx, instance)
+			lease.Release()
+			if runErr != nil {
+				finishTask(runErr)
+				instance.MarkAs(scheduler.Failed)
+				results = append(results, &scheduler.TaskExecutionResult{Instance: instance, Error: runErr})
+				emitDirectRunAssetEvent(req.AssetEvent, instance, "failed", taskStartedAt, time.Now(), runErr)
+				writeDirectRunLifecycle(printer, instance, runErr, false, time.Since(taskStartedAt))
+				writeDirectRunSummary(printer, buildDirectRunSummary(results, time.Since(startedAt)))
+				_ = e.saveDirectRunLog(ctx, pp.Pipeline, s, runID, req.Environment, timeWindow, []string{"renart", "run", req.AssetPath})
+				return printer.buffer.Bytes(), runErr
 			}
 			finishTask(nil)
 			instance.MarkAs(scheduler.Succeeded)
@@ -208,7 +221,7 @@ func (e *HybridBruinExecutor) RunPipeline(ctx context.Context, req RunPipelineRe
 	if err != nil {
 		return nil, err
 	}
-	mainExecutors, err := buildDirectMainExecutors(manager, renderer, parser, foundPipeline, e.runRegistry)
+	mainExecutors, err := buildDirectMainExecutors(manager, renderer, parser, foundPipeline, e.runRegistry, e.duckDBCoordinator, e.workspaceRoot)
 	if err != nil {
 		return nil, err
 	}
@@ -273,7 +286,13 @@ func (e *HybridBruinExecutor) RunPipeline(ctx context.Context, req RunPipelineRe
 			} else if isLoadAsset(instance.GetAsset()) {
 				_, runErr = e.runLoadAsset(runCtx, instance.GetAsset(), manager, func(chunk []byte) { _, _ = printer.Write(chunk) })
 			} else {
-				runErr = seq.RunSingleTask(runCtx, instance)
+				lease, leaseErr := e.acquireDuckDBConnections(runCtx, manager, duckDBConnectionNamesForAsset(foundPipeline, instance.GetAsset()), directTaskLeaseOwner(runCtx, foundPipeline, instance.GetAsset()), printer)
+				if leaseErr != nil {
+					runErr = leaseErr
+				} else {
+					runErr = seq.RunSingleTask(runCtx, instance)
+					lease.Release()
+				}
 			}
 			finishTask(runErr)
 			if runErr != nil {

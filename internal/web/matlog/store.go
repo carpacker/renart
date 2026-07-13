@@ -7,6 +7,7 @@ package matlog
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"sort"
 	"time"
@@ -106,15 +107,25 @@ func (s *Store) Record(ctx context.Context, m Materialization) error {
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	_, err = tx.ExecContext(ctx, `
+	result, err := tx.ExecContext(ctx, `
 		INSERT INTO renart_materializations
 			(asset_id, environment, fingerprint, own_content, vars_hash, interval_start, interval_end, run_id, materialized_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT DO NOTHING`,
 		m.AssetID, m.Environment, m.Fingerprint, m.OwnContent, m.VarsHash,
 		optionalTimeString(m.IntervalStart), optionalTimeString(m.IntervalEnd),
 		m.RunID, formatTime(m.MaterializedAt))
 	if err != nil {
 		return err
+	}
+	inserted, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if inserted == 0 {
+		// The scheduler run was already recorded before a crash. Its coverage
+		// was merged in the same transaction as that fact, so replay is a no-op.
+		return tx.Commit()
 	}
 
 	if m.IntervalStart == nil {
@@ -368,14 +379,14 @@ type AssetRunRecord struct {
 	// against the asset's current fingerprint to tell whether the failing run
 	// was on the content still on disk.
 	Fingerprint string
-	Status      string // "succeeded" | "failed"
+	Status      string // "succeeded" | "failed" | "cancelled"
 	RunID       string
 	RanAt       time.Time
 }
 
-// RecordRun upserts the latest run attempt for an asset+environment. A later run
-// of either outcome overwrites the previous row, so a success naturally clears a
-// prior failure.
+// RecordRun upserts the latest run attempt for an asset+environment. Older or
+// equal-time recovery events are ignored, so replay cannot overwrite a newer
+// result that was already recorded.
 func (s *Store) RecordRun(ctx context.Context, r AssetRunRecord) error {
 	if r.AssetID == "" || r.Fingerprint == "" || r.Status == "" {
 		return fmt.Errorf("matlog: asset_id, fingerprint and status are required")
@@ -383,7 +394,26 @@ func (s *Store) RecordRun(ctx context.Context, r AssetRunRecord) error {
 	if r.RanAt.IsZero() {
 		r.RanAt = time.Now().UTC()
 	}
-	_, err := s.db.ExecContext(ctx, `
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	var existingRaw string
+	err = tx.QueryRowContext(ctx, `
+		SELECT ran_at FROM renart_asset_runs
+		WHERE asset_id = ? AND environment = ?`, r.AssetID, r.Environment).Scan(&existingRaw)
+	if err == nil {
+		existing := parseTime(existingRaw)
+		if !existing.IsZero() && !existing.Before(r.RanAt.UTC()) {
+			return tx.Commit()
+		}
+	} else if !errors.Is(err, sql.ErrNoRows) {
+		return err
+	}
+
+	_, err = tx.ExecContext(ctx, `
 		INSERT INTO renart_asset_runs
 			(asset_id, environment, fingerprint, status, run_id, ran_at)
 		VALUES (?, ?, ?, ?, ?, ?)
@@ -391,7 +421,10 @@ func (s *Store) RecordRun(ctx context.Context, r AssetRunRecord) error {
 		DO UPDATE SET fingerprint = excluded.fingerprint, status = excluded.status,
 			run_id = excluded.run_id, ran_at = excluded.ran_at`,
 		r.AssetID, r.Environment, r.Fingerprint, r.Status, r.RunID, formatTime(r.RanAt))
-	return err
+	if err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 // LastRuns returns the most recent run attempt per asset in the environment.

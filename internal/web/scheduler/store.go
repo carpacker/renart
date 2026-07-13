@@ -140,11 +140,17 @@ func (s *Store) AppendLog(ctx context.Context, id string, line LogLine) error {
 
 // FailOrphanedRuns reconciles runs left mid-flight by a previous process (e.g.
 // the server was killed while executing tasks): every run still marked running
-// is finished as failed and its open steps are closed. Returns the reconciled
-// run IDs. Queued runs are left untouched — the job queue may still pick them
-// up.
+// is finished as failed, its open steps are closed, and durable derived-state
+// replay is marked pending. Returns the newly reconciled run IDs. Queued runs
+// are left untouched — the job queue may still pick them up.
 func (s *Store) FailOrphanedRuns(ctx context.Context, reason string) ([]string, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT id FROM pipeline_runs WHERE status = ?`, string(RunStatusRunning))
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	rows, err := tx.QueryContext(ctx, `SELECT id FROM pipeline_runs WHERE status = ?`, string(RunStatusRunning))
 	if err != nil {
 		return nil, err
 	}
@@ -164,11 +170,11 @@ func (s *Store) FailOrphanedRuns(ctx context.Context, reason string) ([]string, 
 		return nil, err
 	}
 	if len(ids) == 0 {
-		return nil, nil
+		return nil, tx.Commit()
 	}
 
 	now := formatTime(time.Now().UTC())
-	if _, err := s.db.ExecContext(ctx,
+	if _, err := tx.ExecContext(ctx,
 		`UPDATE pipeline_run_steps
 		 SET status = ?, finished_at = ?, error = CASE WHEN error IS NULL OR error = '' THEN ? ELSE error END
 		 WHERE finished_at IS NULL AND run_id IN (SELECT id FROM pipeline_runs WHERE status = ?)`,
@@ -176,13 +182,46 @@ func (s *Store) FailOrphanedRuns(ctx context.Context, reason string) ([]string, 
 	); err != nil {
 		return nil, err
 	}
-	if _, err := s.db.ExecContext(ctx,
-		`UPDATE pipeline_runs SET status = ?, finished_at = ?, error = ? WHERE status = ?`,
+	if _, err := tx.ExecContext(ctx,
+		`UPDATE pipeline_runs
+		 SET status = ?, finished_at = ?, error = ?, recovery_pending = 1
+		 WHERE status = ?`,
 		string(RunStatusFailed), now, reason, string(RunStatusRunning),
 	); err != nil {
 		return nil, err
 	}
-	return ids, nil
+	return ids, tx.Commit()
+}
+
+// PendingRunRecoveries returns interrupted runs whose persisted terminal steps
+// have not yet been replayed into derived state.
+func (s *Store) PendingRunRecoveries(ctx context.Context) ([]string, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT id FROM pipeline_runs
+		WHERE recovery_pending = 1
+		ORDER BY COALESCE(finished_at, started_at, '') ASC, id ASC`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		ids = append(ids, id)
+	}
+	return ids, rows.Err()
+}
+
+// MarkRunRecoveryReplayed acknowledges derived-state replay. If the process
+// dies before this write, the next startup replays the run again; downstream
+// stores therefore make replay idempotent by run ID.
+func (s *Store) MarkRunRecoveryReplayed(ctx context.Context, runID string) error {
+	_, err := s.db.ExecContext(ctx, `UPDATE pipeline_runs SET recovery_pending = 0 WHERE id = ?`, runID)
+	return err
 }
 
 func (s *Store) Finish(ctx context.Context, id string, status RunStatus, runErr error) error {

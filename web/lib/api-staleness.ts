@@ -28,7 +28,7 @@ export type AssetStaleness = {
   // untested edit from an edit that was run and failed, and surface unchanged code
   // whose last run failed. `last_run_on_current_content` is true when that run was
   // on the content currently on disk.
-  last_run_status?: "succeeded" | "failed";
+  last_run_status?: "succeeded" | "failed" | "cancelled";
   last_run_at?: string;
   last_run_on_current_content?: boolean;
 };

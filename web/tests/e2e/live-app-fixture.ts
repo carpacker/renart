@@ -207,7 +207,10 @@ export type SpawnedServer = {
 // startLiveServer boots a Renart server against an existing workspace directory.
 // Used by tests that need to restart the server (e.g. crash recovery), which
 // the single-server liveApp fixture does not cover.
-export async function startLiveServer(workspaceDir: string): Promise<SpawnedServer> {
+export async function startLiveServer(
+  workspaceDir: string,
+  environment: Record<string, string | undefined> = {},
+): Promise<SpawnedServer> {
   if (!existsSync(binaryPath)) {
     throw new Error(
       `Renart binary not found at ${binaryPath}. Build it first or set BRUIN_E2E_BINARY.`,
@@ -235,6 +238,7 @@ export async function startLiveServer(workspaceDir: string): Promise<SpawnedServ
       env: {
         ...process.env,
         RENART_PROJECTS_REGISTRY: join(workspaceDir, ".renart", "projects.json"),
+        ...environment,
       },
       stdio: "inherit",
     },

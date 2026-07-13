@@ -64,7 +64,7 @@ type AssetStatus struct {
 	// last run failed. LastRunOnCurrentContent is true when the last run's
 	// fingerprint matches the asset's current fingerprint (i.e. the run was on
 	// the content still on disk).
-	LastRunStatus           string     `json:"last_run_status,omitempty"` // "succeeded" | "failed"
+	LastRunStatus           string     `json:"last_run_status,omitempty"` // "succeeded" | "failed" | "cancelled"
 	LastRunAt               *time.Time `json:"last_run_at,omitempty"`
 	LastRunOnCurrentContent bool       `json:"last_run_on_current_content,omitempty"`
 }

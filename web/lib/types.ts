@@ -106,9 +106,7 @@ export type SqlParseContextResponse = GeneratedSqlParseContextResponse & {
   status: "ok" | "error";
 };
 
-export type WebAsset = GeneratedWebAsset & {
-  freshness_status?: "fresh" | "stale";
-};
+export type WebAsset = GeneratedWebAsset;
 
 export type WebPipeline = Omit<GeneratedWebPipeline, "assets"> & {
   schedule?: string;
@@ -401,16 +399,7 @@ export type PythonGotoTarget = {
   full_range: PythonRange;
 };
 
-export type PipelineMaterializationResponse = Omit<
-  GeneratedPipelineMaterializationResponse,
-  "assets"
-> & {
-  assets: Array<
-    GeneratedPipelineMaterializationResponse["assets"][number] & {
-      freshness_status?: "fresh" | "stale";
-    }
-  >;
-};
+export type PipelineMaterializationResponse = GeneratedPipelineMaterializationResponse;
 
 export type PipelineConfigConnection = GeneratedPipelineConfigConnection;
 
@@ -435,15 +424,4 @@ export type UpdatePipelineConfigRequest = Omit<
   "variables"
 > & {
   variables: PipelineConfigVariable[];
-};
-
-export type AssetFreshnessEntry = {
-  asset_name: string;
-  materialized_at?: string;
-  materialized_status?: string;
-  content_changed_at?: string;
-};
-
-export type AssetFreshnessResponse = {
-  assets: AssetFreshnessEntry[];
 };

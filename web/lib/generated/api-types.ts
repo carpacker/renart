@@ -432,7 +432,6 @@ export type PipelineMaterializationState = {
   asset_id: string;
   is_materialized: boolean;
   materialized_as?: string;
-  freshness_status?: string;
   row_count?: number;
   connection?: string;
   materialization_type?: string;

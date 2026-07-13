@@ -30,7 +30,7 @@ from renart import query
 
 
 def materialize():
-    orders = query("select * from daily_orders", format="arrow")
+    orders = query("select * from daily_orders")
     return orders
 ```
 

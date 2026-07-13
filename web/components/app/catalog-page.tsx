@@ -14,6 +14,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
 import { useAssetResults } from "@/hooks/use-asset-results";
+import { usePipelinesStaleness } from "@/hooks/use-pipeline-staleness";
 import { deleteAsset } from "@/lib/api-assets";
 import { workspaceAtom } from "@/lib/atoms/domains/workspace";
 import type { WebAsset, WebPipeline } from "@/lib/types";
@@ -121,6 +122,17 @@ export function AppCatalogPage({ selectedAssetId }: { selectedAssetId?: string }
       workspace?.pipelines.length ? workspace.pipelines.flatMap(catalogAssetsForPipeline) : assets,
     [workspace?.pipelines],
   );
+  const catalogPipelineIds = useMemo(
+    () => [
+      ...new Set(
+        catalogAssets
+          .map((asset) => asset.pipelineId)
+          .filter((pipelineId): pipelineId is string => Boolean(pipelineId)),
+      ),
+    ],
+    [catalogAssets],
+  );
+  const staleness = usePipelinesStaleness(catalogPipelineIds);
   const materializationAssets = useMemo(
     () =>
       catalogAssets.map((asset) => ({
@@ -129,8 +141,11 @@ export function AppCatalogPage({ selectedAssetId }: { selectedAssetId?: string }
         pipelineId: asset.pipelineId,
         isMaterialized:
           asset.isMaterialized ?? (asset.status === "success" || asset.status === "ok"),
+        staleness: asset.pipelineId
+          ? staleness.byPipelineId[asset.pipelineId]?.[asset.name]
+          : undefined,
       })),
-    [catalogAssets],
+    [catalogAssets, staleness.byPipelineId],
   );
   const materializationStatusByAssetId = useAppAssetMaterializationStatus(materializationAssets);
   const displayedCatalogAssets = useMemo(
@@ -139,8 +154,11 @@ export function AppCatalogPage({ selectedAssetId }: { selectedAssetId?: string }
         ...asset,
         status: materializationStatusByAssetId[asset.id]?.status ?? asset.status,
         materializedAt: labelForAppMaterializationState(materializationStatusByAssetId[asset.id]),
+        staleness: asset.pipelineId
+          ? staleness.byPipelineId[asset.pipelineId]?.[asset.name]
+          : undefined,
       })),
-    [catalogAssets, materializationStatusByAssetId],
+    [catalogAssets, materializationStatusByAssetId, staleness.byPipelineId],
   );
 
   const availableKinds = useMemo(() => {

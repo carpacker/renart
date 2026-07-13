@@ -8,6 +8,7 @@ const pipelineId = Buffer.from("analytics").toString("base64url");
 const customersAssetId = Buffer.from("analytics/assets/analytics/customers.sql").toString(
   "base64url",
 );
+const ordersAssetId = Buffer.from("analytics/assets/analytics/orders.sql").toString("base64url");
 const downstreamAssetId = Buffer.from("analytics/assets/analytics/downstream.sql").toString(
   "base64url",
 );
@@ -76,8 +77,79 @@ async function openAssetProperties(page: Page): Promise<Locator> {
   return inspector;
 }
 
+async function expectCompactAssetDescription(page: Page, description: string) {
+  const describedNode = page.getByTestId(`rf__node-${customersAssetId}`);
+  const baselineNode = page.getByTestId(`rf__node-${ordersAssetId}`);
+  await expect(describedNode).toBeVisible({ timeout: 15000 });
+  await expect(baselineNode).toBeVisible({ timeout: 15000 });
+
+  const metadata = describedNode.locator('[data-slot="asset-node-metadata"]');
+  const connection = metadata.locator('[data-slot="asset-node-connection"]');
+  const descriptionElement = metadata.locator('[data-slot="asset-node-description"]');
+  await expect(connection).toBeVisible();
+  await expect(descriptionElement).toHaveText(description);
+  await expect(metadata).toHaveCSS("display", "flex");
+  await expect(metadata).toHaveCSS("align-items", "center");
+  const metadataOrder = await metadata
+    .locator(":scope > [data-slot]")
+    .evaluateAll((elements) => elements.map((element) => element.getAttribute("data-slot")));
+  expect(metadataOrder).toEqual(["asset-node-description", "asset-node-connection"]);
+  const [descriptionX, connectionX] = await Promise.all(
+    [descriptionElement, connection].map((element) =>
+      element.evaluate((node) => node.getBoundingClientRect().x),
+    ),
+  );
+  expect(descriptionX).toBeLessThan(connectionX);
+  await expect(descriptionElement).toHaveCSS("overflow", "hidden");
+  await expect(descriptionElement).toHaveCSS("text-overflow", "ellipsis");
+  await expect(descriptionElement).toHaveCSS("white-space", "nowrap");
+
+  const descriptionOverflows = await descriptionElement.evaluate(
+    (element) => element.scrollWidth > element.clientWidth,
+  );
+  expect(descriptionOverflows).toBe(true);
+
+  const [describedHeight, baselineHeight] = await Promise.all(
+    [describedNode, baselineNode].map((node) =>
+      node
+        .locator('[data-slot="asset-node"]')
+        .evaluate((element) => element.getBoundingClientRect().height),
+    ),
+  );
+  expect(Math.abs(describedHeight - baselineHeight)).toBeLessThanOrEqual(1);
+}
+
 test.describe("app asset editing workbench live", () => {
   test.use({ fixtureName: "configured-workspace" });
+
+  test("keeps asset descriptions left of connections on both canvases", async ({
+    liveApp,
+    page,
+  }) => {
+    test.skip(
+      test.info().project.name.includes("mobile"),
+      "The lineage canvas is a desktop affordance.",
+    );
+
+    const description = "Customer profile records";
+    const update = await page.request.put(
+      `${liveApp.baseURL}/api/pipelines/${pipelineId}/assets/${customersAssetId}`,
+      { data: { meta: { description } } },
+    );
+    expect(update.ok()).toBe(true);
+    await pollAsset(
+      liveApp,
+      page.request,
+      "analytics.customers",
+      (asset) => asset.meta?.description === description,
+    );
+
+    await page.goto(`${liveApp.baseURL}/pipelines/${pipelineId}/assets/${customersAssetId}/canvas`);
+    await expectCompactAssetDescription(page, description);
+
+    await page.goto(`${liveApp.baseURL}/catalog?asset=${customersAssetId}`);
+    await expectCompactAssetDescription(page, description);
+  });
 
   test("guided cards render and adding a manual dependency persists provenance", async ({
     liveApp,

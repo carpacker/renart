@@ -28,6 +28,16 @@ import {
 } from "lucide-react";
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import {
@@ -54,6 +64,8 @@ import {
 import { Checkbox } from "@/components/ui/checkbox";
 import { Label } from "@/components/ui/label";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import { Skeleton } from "@/components/ui/skeleton";
+import { Spinner } from "@/components/ui/spinner";
 import {
   cancelNotebookRun,
   closeNotebookSession,
@@ -106,6 +118,15 @@ const RESULT_DISPLAY_CAP = 50;
 // How long to wait after the last keystroke before auto-committing a cell's
 // draft. The save marks the cell stale on the server, which drives recompute.
 const AUTO_COMMIT_DEBOUNCE_MS = 350;
+const NOTEBOOK_BLOCK_ENTER_ANIMATION =
+  "animate-in fade-in-0 slide-in-from-bottom-2 duration-300 motion-reduce:animate-none";
+
+type PendingNotebookBlockKind = "sql" | "python" | "markdown";
+type NotebookCellDeleteTarget = { id: string; name: string };
+
+function notebookBlockKey(block: WebNotebookBlock, index: number) {
+  return block.cell ? `cell:${block.cell}` : `markdown:${index}`;
+}
 
 export function AppNotebooksIndexPage() {
   const workspace = useAtomValue(workspaceAtom);
@@ -247,8 +268,18 @@ export function AppNotebookLivePage({ notebookId }: { notebookId: string }) {
   const [busy, setBusy] = useState(false);
   const [actionError, setActionError] = useState("");
   const [notebookScrolled, setNotebookScrolled] = useState(false);
+  const [pendingBlock, setPendingBlock] = useState<{
+    id: number;
+    kind: PendingNotebookBlockKind;
+  } | null>(null);
+  const [enteringBlockKey, setEnteringBlockKey] = useState<string | null>(null);
+  const [scrollRevision, setScrollRevision] = useState(0);
+  const [cellToDelete, setCellToDelete] = useState<NotebookCellDeleteTarget | null>(null);
+  const [deletingCell, setDeletingCell] = useState(false);
   const [depsOpen, setDepsOpen] = useState(false);
   const [promoting, setPromoting] = useState<WebAsset | null>(null);
+  const notebookViewportRef = useRef<HTMLDivElement>(null);
+  const pendingBlockSequenceRef = useRef(0);
   const [autoRecompute, setAutoRecompute] = useState(
     () =>
       typeof window === "undefined" ||
@@ -269,7 +300,32 @@ export function AppNotebookLivePage({ notebookId }: { notebookId: string }) {
 
   useEffect(() => {
     setNotebookScrolled(false);
+    setPendingBlock(null);
+    setEnteringBlockKey(null);
+    setCellToDelete(null);
+    setDeletingCell(false);
   }, [notebookId]);
+
+  // Adding a block changes the scroll height twice: once for the immediate
+  // pending card, then again when the real editor replaces it. Scroll after
+  // both commits so the newly appended block and add controls stay in view.
+  useEffect(() => {
+    if (scrollRevision === 0) {
+      return;
+    }
+    const frame = window.requestAnimationFrame(() => {
+      const viewport = notebookViewportRef.current;
+      if (!viewport) {
+        return;
+      }
+      const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+      viewport.scrollTo({
+        top: viewport.scrollHeight,
+        behavior: reducedMotion ? "auto" : "smooth",
+      });
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [scrollRevision]);
 
   const cellsById = useMemo(() => {
     const map = new Map<string, WebAsset>();
@@ -461,14 +517,73 @@ export function AppNotebookLivePage({ notebookId }: { notebookId: string }) {
     return map;
   }, [results]);
 
-  const mutate = useCallback(async (operation: () => Promise<WebNotebook>) => {
+  const mutateWithResult = useCallback(async (operation: () => Promise<WebNotebook>) => {
     setActionError("");
     try {
-      setMutated(await operation());
+      const updated = await operation();
+      setMutated(updated);
+      return updated;
     } catch (error) {
       setActionError(String(error));
+      return null;
     }
   }, []);
+  const mutate = useCallback(
+    async (operation: () => Promise<WebNotebook>) => {
+      await mutateWithResult(operation);
+    },
+    [mutateWithResult],
+  );
+
+  const confirmDeleteCell = useCallback(async () => {
+    if (!cellToDelete || deletingCell) {
+      return;
+    }
+    setDeletingCell(true);
+    await mutateWithResult(() => deleteNotebookCell(notebookId, cellToDelete.id));
+    setDeletingCell(false);
+    setCellToDelete(null);
+  }, [cellToDelete, deletingCell, mutateWithResult, notebookId]);
+
+  const createBlockAtBottom = useCallback(
+    async (kind: PendingNotebookBlockKind) => {
+      if (!notebook || pendingBlock) {
+        return;
+      }
+
+      const id = ++pendingBlockSequenceRef.current;
+      const existingCellIDs = new Set(
+        notebook.cells.map((cell) => cell.cell_id).filter((cellID): cellID is string => !!cellID),
+      );
+      setPendingBlock({ id, kind });
+      setEnteringBlockKey(null);
+      setScrollRevision((current) => current + 1);
+
+      const updated = await mutateWithResult(() => {
+        if (kind === "markdown") {
+          const blocks: WebNotebookBlock[] = [...notebook.blocks, { markdown: "## Notes" }];
+          return updateNotebookBlocks(notebookId, blocks);
+        }
+        return createNotebookCell(notebookId, kind === "python" ? { language: "python" } : {});
+      });
+
+      if (updated) {
+        if (kind === "markdown") {
+          setEnteringBlockKey(`markdown:${updated.blocks.length - 1}`);
+        } else {
+          const createdBlock = updated.blocks.find(
+            (block) => block.cell && !existingCellIDs.has(block.cell),
+          );
+          if (createdBlock?.cell) {
+            setEnteringBlockKey(`cell:${createdBlock.cell}`);
+          }
+        }
+      }
+      setPendingBlock((current) => (current?.id === id ? null : current));
+      setScrollRevision((current) => current + 1);
+    },
+    [mutateWithResult, notebook, notebookId, pendingBlock],
+  );
 
   const dependencies = useMemo(() => notebook?.dependencies ?? [], [notebook?.dependencies]);
   const installedModules = useMemo(
@@ -695,6 +810,17 @@ export function AppNotebookLivePage({ notebookId }: { notebookId: string }) {
         onPromote={runPromote}
       />
 
+      <DeleteNotebookCellDialog
+        cell={cellToDelete}
+        deleting={deletingCell}
+        onOpenChange={(open) => {
+          if (!open && !deletingCell) {
+            setCellToDelete(null);
+          }
+        }}
+        onConfirm={() => void confirmDeleteCell()}
+      />
+
       {notebook.problems?.length ? (
         <div className="mx-3 mb-2 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-800 dark:border-red-500/25 dark:bg-red-500/10 dark:text-red-200">
           {notebook.problems.map((problem) => (
@@ -709,22 +835,30 @@ export function AppNotebookLivePage({ notebookId }: { notebookId: string }) {
       ) : null}
       <ScrollArea
         className="min-h-0 flex-1"
-        viewportClassName="px-3 pb-3"
+        viewportClassName="px-3 pb-24"
+        viewportRef={notebookViewportRef}
         onViewportScroll={(event) => {
           const nextScrolled = event.currentTarget.scrollTop > 0;
           setNotebookScrolled((current) => (current === nextScrolled ? current : nextScrolled));
         }}
       >
         <div className="mx-auto flex max-w-5xl flex-col gap-3">
-          {notebook.blocks.map((block, index) =>
-            block.cell ? (
+          {notebook.blocks.map((block, index) => {
+            const blockKey = notebookBlockKey(block, index);
+            const entering = blockKey === enteringBlockKey;
+            return block.cell ? (
               (() => {
                 const cell = cellsById.get(block.cell);
                 if (!cell) {
                   return null;
                 }
                 return (
-                  <div key={block.cell} data-notebook-cell-id={block.cell}>
+                  <div
+                    key={block.cell}
+                    data-notebook-cell-id={block.cell}
+                    data-notebook-block-entering={entering || undefined}
+                    className={cn(entering && NOTEBOOK_BLOCK_ENTER_ANIMATION)}
+                  >
                     <NotebookCellCard
                       cell={cell}
                       cells={notebook.cells}
@@ -745,12 +879,7 @@ export function AppNotebookLivePage({ notebookId }: { notebookId: string }) {
                       onRunFromHere={() =>
                         void runRequest({ from: block.cell }, [block.cell ?? ""])
                       }
-                      onDelete={() => {
-                        if (!window.confirm(`Delete cell "${cell.name}"?`)) {
-                          return;
-                        }
-                        void mutate(() => deleteNotebookCell(notebookId, block.cell ?? ""));
-                      }}
+                      onDelete={() => setCellToDelete({ id: block.cell ?? "", name: cell.name })}
                       onRename={(name) =>
                         mutate(() => renameNotebookCell(notebookId, block.cell ?? "", name))
                       }
@@ -765,31 +894,40 @@ export function AppNotebookLivePage({ notebookId }: { notebookId: string }) {
                 );
               })()
             ) : (
-              <MarkdownBlockCard
+              <div
                 key={`md-${index}`}
-                markdown={block.markdown ?? ""}
-                onSave={(markdown) => {
-                  const blocks: WebNotebookBlock[] = notebook.blocks.map(
-                    (candidate, candidateIndex) =>
-                      candidateIndex === index ? { markdown } : candidate,
-                  );
-                  void mutate(() => updateNotebookBlocks(notebookId, blocks));
-                }}
-                onDelete={() => {
-                  const blocks = notebook.blocks.filter(
-                    (_, candidateIndex) => candidateIndex !== index,
-                  );
-                  void mutate(() => updateNotebookBlocks(notebookId, blocks));
-                }}
-              />
-            ),
-          )}
+                data-notebook-markdown-index={index}
+                data-notebook-block-entering={entering || undefined}
+                className={cn(entering && NOTEBOOK_BLOCK_ENTER_ANIMATION)}
+              >
+                <MarkdownBlockCard
+                  markdown={block.markdown ?? ""}
+                  onSave={(markdown) => {
+                    const blocks: WebNotebookBlock[] = notebook.blocks.map(
+                      (candidate, candidateIndex) =>
+                        candidateIndex === index ? { markdown } : candidate,
+                    );
+                    void mutate(() => updateNotebookBlocks(notebookId, blocks));
+                  }}
+                  onDelete={() => {
+                    const blocks = notebook.blocks.filter(
+                      (_, candidateIndex) => candidateIndex !== index,
+                    );
+                    void mutate(() => updateNotebookBlocks(notebookId, blocks));
+                  }}
+                />
+              </div>
+            );
+          })}
 
-          <div className="flex gap-2">
+          {pendingBlock ? <PendingNotebookBlock kind={pendingBlock.kind} /> : null}
+
+          <div className="flex gap-2" aria-busy={pendingBlock !== null}>
             <Button
               variant="outline"
               size="sm"
-              onClick={() => void mutate(() => createNotebookCell(notebookId))}
+              disabled={pendingBlock !== null}
+              onClick={() => void createBlockAtBottom("sql")}
             >
               <Plus className="size-3.5" />
               SQL cell
@@ -797,9 +935,8 @@ export function AppNotebookLivePage({ notebookId }: { notebookId: string }) {
             <Button
               variant="outline"
               size="sm"
-              onClick={() =>
-                void mutate(() => createNotebookCell(notebookId, { language: "python" }))
-              }
+              disabled={pendingBlock !== null}
+              onClick={() => void createBlockAtBottom("python")}
             >
               <Plus className="size-3.5" />
               Python cell
@@ -807,10 +944,8 @@ export function AppNotebookLivePage({ notebookId }: { notebookId: string }) {
             <Button
               variant="outline"
               size="sm"
-              onClick={() => {
-                const blocks: WebNotebookBlock[] = [...notebook.blocks, { markdown: "## Notes" }];
-                void mutate(() => updateNotebookBlocks(notebookId, blocks));
-              }}
+              disabled={pendingBlock !== null}
+              onClick={() => void createBlockAtBottom("markdown")}
             >
               <Plus className="size-3.5" />
               Markdown
@@ -819,6 +954,85 @@ export function AppNotebookLivePage({ notebookId }: { notebookId: string }) {
         </div>
       </ScrollArea>
     </AppPage>
+  );
+}
+
+function PendingNotebookBlock({ kind }: { kind: PendingNotebookBlockKind }) {
+  const label = kind === "markdown" ? "Markdown block" : `${kind.toUpperCase()} cell`;
+
+  return (
+    <div
+      role="status"
+      aria-live="polite"
+      aria-label={`Adding ${label}`}
+      data-notebook-block-pending={kind}
+      className={NOTEBOOK_BLOCK_ENTER_ANIMATION}
+    >
+      <AppPanel>
+        <DelimitedCardHeader>
+          <Spinner
+            role="presentation"
+            aria-hidden="true"
+            className="size-3.5 text-muted-foreground"
+          />
+          <DelimitedCardTitle>Adding {label}…</DelimitedCardTitle>
+          <Badge variant="secondary" className="font-mono text-[10px]">
+            {kind}
+          </Badge>
+        </DelimitedCardHeader>
+        <DelimitedCardContent>
+          <div className="space-y-2 rounded-lg border p-3">
+            <Skeleton className="h-3 w-2/5" />
+            <Skeleton className="h-3 w-3/4" />
+            <Skeleton className="h-3 w-1/2" />
+          </div>
+        </DelimitedCardContent>
+      </AppPanel>
+    </div>
+  );
+}
+
+function DeleteNotebookCellDialog({
+  cell,
+  deleting,
+  onOpenChange,
+  onConfirm,
+}: {
+  cell: NotebookCellDeleteTarget | null;
+  deleting: boolean;
+  onOpenChange: (open: boolean) => void;
+  onConfirm: () => void;
+}) {
+  return (
+    <AlertDialog open={cell !== null} onOpenChange={onOpenChange}>
+      <AlertDialogContent>
+        <AlertDialogHeader>
+          <AlertDialogTitle>Delete {cell?.name ?? "this cell"}?</AlertDialogTitle>
+          <AlertDialogDescription>
+            This deletes the cell file and removes it from the notebook. This action cannot be
+            undone.
+          </AlertDialogDescription>
+        </AlertDialogHeader>
+        <AlertDialogFooter>
+          <AlertDialogCancel disabled={deleting}>Cancel</AlertDialogCancel>
+          <AlertDialogAction
+            variant="destructive"
+            disabled={deleting}
+            onClick={(event) => {
+              event.preventDefault();
+              onConfirm();
+            }}
+          >
+            {deleting ? (
+              <Spinner data-icon="inline-start" aria-label="Deleting cell" />
+            ) : (
+              <Trash2 data-icon="inline-start" />
+            )}
+            Delete cell
+          </AlertDialogAction>
+        </AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
   );
 }
 

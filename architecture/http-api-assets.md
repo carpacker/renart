@@ -30,8 +30,11 @@ as JSON fields; Renart does not create child tables from nested arrays.
 
 `HybridBruinExecutor.runAPIAsset` parses the spec, resolves Jinja values and the
 target connection, streams each response page into a temporary JSON Lines file,
-and invokes Sling for the warehouse write. JSONL preserves source nulls and
-nested JSON values without CSV coercion. Per-page response bodies are capped at
+and invokes Sling for the warehouse write. For a local DuckDB target, Renart
+acquires the canonical database lease only after extraction and holds it until
+Sling exits, so other pipelines wait instead of racing DuckDB's process-level
+writer lock. JSONL preserves source nulls and nested JSON values without CSV
+coercion. Per-page response bodies are capped at
 25 MiB. GET requests retry `429` and `5xx` responses up to three attempts and
 honour a capped `Retry-After`; mutating methods are not retried automatically.
 

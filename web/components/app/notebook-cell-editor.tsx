@@ -1,8 +1,16 @@
 "use client";
 
 import type { Monaco } from "@monaco-editor/react";
+import { GripHorizontal } from "lucide-react";
 import type * as MonacoNS from "monaco-editor";
-import { useCallback, useEffect, useRef, useState } from "react";
+import {
+  type KeyboardEvent as ReactKeyboardEvent,
+  type PointerEvent as ReactPointerEvent,
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+} from "react";
 
 import { AssetCodeEditor } from "@/components/asset-code-editor";
 import { useJinjaIntellisense } from "@/hooks/use-jinja-intellisense";
@@ -21,6 +29,18 @@ import {
   SchemaTable,
 } from "@/lib/sql-schema";
 import { WebAsset, WebColumn, WorkspaceState } from "@/lib/types";
+
+const NOTEBOOK_EDITOR_LINE_HEIGHT = 19;
+const NOTEBOOK_EDITOR_VERTICAL_PADDING = 16;
+const NOTEBOOK_EDITOR_MIN_LINES = 3;
+const NOTEBOOK_EDITOR_AUTO_MAX_LINES = 24;
+const NOTEBOOK_EDITOR_MIN_HEIGHT =
+  NOTEBOOK_EDITOR_MIN_LINES * NOTEBOOK_EDITOR_LINE_HEIGHT + NOTEBOOK_EDITOR_VERTICAL_PADDING;
+const NOTEBOOK_EDITOR_MAX_HEIGHT = 800;
+
+function clampNotebookEditorHeight(height: number) {
+  return Math.min(Math.max(height, NOTEBOOK_EDITOR_MIN_HEIGHT), NOTEBOOK_EDITOR_MAX_HEIGHT);
+}
 
 /**
  * Build the completion/parse-context schema for a notebook cell.
@@ -130,6 +150,12 @@ export function NotebookCellMonaco({
   const [monacoInstance, setMonacoInstance] = useState<Monaco | null>(null);
   const [editorInstance, setEditorInstance] =
     useState<MonacoNS.editor.IStandaloneCodeEditor | null>(null);
+  const [resizedHeight, setResizedHeight] = useState<number | null>(null);
+  const resizeDragRef = useRef<{
+    pointerId: number;
+    startY: number;
+    startHeight: number;
+  } | null>(null);
 
   const cellId = cell.cell_id ?? cell.id;
   const isPython = cell.type?.toLowerCase() === "python" || cell.path.toLowerCase().endsWith(".py");
@@ -261,32 +287,121 @@ export function NotebookCellMonaco({
     [],
   );
 
-  // Grow with content like the old textarea, within bounds.
+  // Grow with content until the user takes ownership with the resize handle.
+  // A double-click on the handle returns to content-driven sizing.
   const lineCount = displayValueRef.current.value.split("\n").length;
-  const height = Math.min(Math.max(lineCount, 3), 24) * 19 + 16;
+  const contentHeight =
+    Math.min(Math.max(lineCount, NOTEBOOK_EDITOR_MIN_LINES), NOTEBOOK_EDITOR_AUTO_MAX_LINES) *
+      NOTEBOOK_EDITOR_LINE_HEIGHT +
+    NOTEBOOK_EDITOR_VERTICAL_PADDING;
+  const editorHeight = resizedHeight ?? contentHeight;
+
+  const setEditorHeight = (height: number) => {
+    setResizedHeight(clampNotebookEditorHeight(height));
+  };
+
+  const handleResizePointerDown = (event: ReactPointerEvent<HTMLDivElement>) => {
+    if (event.button !== 0) {
+      return;
+    }
+    event.preventDefault();
+    resizeDragRef.current = {
+      pointerId: event.pointerId,
+      startY: event.clientY,
+      startHeight: editorHeight,
+    };
+    event.currentTarget.setPointerCapture(event.pointerId);
+  };
+
+  const handleResizePointerMove = (event: ReactPointerEvent<HTMLDivElement>) => {
+    const drag = resizeDragRef.current;
+    if (!drag || drag.pointerId !== event.pointerId) {
+      return;
+    }
+    setEditorHeight(drag.startHeight + event.clientY - drag.startY);
+  };
+
+  const finishResize = (event: ReactPointerEvent<HTMLDivElement>) => {
+    const drag = resizeDragRef.current;
+    if (!drag || drag.pointerId !== event.pointerId) {
+      return;
+    }
+    resizeDragRef.current = null;
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    }
+  };
+
+  const handleResizeKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>) => {
+    let nextHeight: number | null = null;
+    if (event.key === "ArrowUp") {
+      nextHeight = editorHeight - NOTEBOOK_EDITOR_LINE_HEIGHT;
+    } else if (event.key === "ArrowDown") {
+      nextHeight = editorHeight + NOTEBOOK_EDITOR_LINE_HEIGHT;
+    } else if (event.key === "Home") {
+      nextHeight = NOTEBOOK_EDITOR_MIN_HEIGHT;
+    } else if (event.key === "End") {
+      nextHeight = NOTEBOOK_EDITOR_MAX_HEIGHT;
+    } else if (event.key === "Enter") {
+      setResizedHeight(null);
+      event.preventDefault();
+      return;
+    }
+    if (nextHeight === null) {
+      return;
+    }
+    event.preventDefault();
+    setEditorHeight(nextHeight);
+  };
 
   return (
-    <div className="overflow-hidden rounded-lg border" style={{ height }}>
-      <AssetCodeEditor
-        asset={cell}
-        containerClassName="h-full"
-        editorModelPath={`inmemory://bruin/notebook/${cellId}.${ext}`}
-        editorValue={displayValueRef.current.value}
-        editorHighlighted={false}
-        helpMode={false}
-        isSqlAsset={!isPython}
-        formatShortcutLabel="⌘ + ⇧ + I"
-        mobile={false}
-        monacoTheme={monacoTheme}
-        onChange={(next) => {
-          const nextValue = next ?? "";
-          lastEditorChangeRef.current = { cellId, value: nextValue };
-          onChange(nextValue);
+    <div className="overflow-hidden rounded-lg border">
+      <div data-slot="notebook-cell-editor" style={{ height: editorHeight }}>
+        <AssetCodeEditor
+          asset={cell}
+          containerClassName="h-full"
+          editorModelPath={`inmemory://bruin/notebook/${cellId}.${ext}`}
+          editorValue={displayValueRef.current.value}
+          editorHighlighted={false}
+          helpMode={false}
+          isSqlAsset={!isPython}
+          formatShortcutLabel="⌘ + ⇧ + I"
+          mobile={false}
+          monacoTheme={monacoTheme}
+          onChange={(next) => {
+            const nextValue = next ?? "";
+            lastEditorChangeRef.current = { cellId, value: nextValue };
+            onChange(nextValue);
+          }}
+          onBeforeMount={handleBeforeMount}
+          onFormat={formatSQL}
+          onMount={handleMount}
+        />
+      </div>
+      <div
+        data-slot="notebook-cell-resize-handle"
+        role="separator"
+        tabIndex={0}
+        aria-label={`Resize ${cell.name} cell`}
+        aria-orientation="horizontal"
+        aria-valuemin={NOTEBOOK_EDITOR_MIN_HEIGHT}
+        aria-valuemax={NOTEBOOK_EDITOR_MAX_HEIGHT}
+        aria-valuenow={Math.round(editorHeight)}
+        aria-valuetext={`${Math.round(editorHeight)} pixels high`}
+        title="Drag or use arrow keys to resize; double-click or press Enter to fit content"
+        className="group flex h-3 touch-none cursor-row-resize select-none items-center justify-center border-t bg-muted/20 text-muted-foreground outline-none transition-colors hover:bg-muted/50 hover:text-foreground focus-visible:bg-muted/50 focus-visible:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
+        onPointerDown={handleResizePointerDown}
+        onPointerMove={handleResizePointerMove}
+        onPointerUp={finishResize}
+        onPointerCancel={finishResize}
+        onLostPointerCapture={() => {
+          resizeDragRef.current = null;
         }}
-        onBeforeMount={handleBeforeMount}
-        onFormat={formatSQL}
-        onMount={handleMount}
-      />
+        onDoubleClick={() => setResizedHeight(null)}
+        onKeyDown={handleResizeKeyDown}
+      >
+        <GripHorizontal aria-hidden className="size-3.5" />
+      </div>
     </div>
   );
 }

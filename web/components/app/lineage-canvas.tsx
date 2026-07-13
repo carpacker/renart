@@ -179,6 +179,13 @@ const nodeTypes = {
   lineageAsset: AssetFlowNode,
 } satisfies NodeTypes;
 
+// React Flow hides controlled nodes until both dimensions are initialized.
+// Status-only updates replace our derived node objects, so carry forward the
+// measured dimensions (or the layout defaults on first render). Otherwise React
+// Flow marks every replacement visibility:hidden until it manages to remeasure.
+const assetNodeWidth = 232;
+const assetNodeHeight = 112;
+
 // Pans/zooms the viewport onto an asset when it is targeted from outside the
 // canvas (e.g. routing here from the build view). Runs only when the id changes
 // so it never fights the user's own panning.
@@ -199,8 +206,8 @@ function ViewportFocus({ assetId, nodes }: { assetId?: string; nodes: Node[] }) 
       return;
     }
     lastFocused.current = assetId;
-    const width = node.width ?? 232;
-    const height = node.height ?? 120;
+    const width = node.width ?? assetNodeWidth;
+    const height = node.height ?? assetNodeHeight;
     setCenter(node.position.x + width / 2, node.position.y + height / 2, {
       zoom: 1,
       duration: 600,
@@ -386,6 +393,8 @@ export function AppLineageCanvas({
           id: `prefix-group-${group}`,
           type: "prefixGroup",
           position: { x: minX, y: minY },
+          width: maxX - minX,
+          height: maxY - minY,
           data: {
             label: group,
             count: groupAssets.length,
@@ -401,6 +410,7 @@ export function AppLineageCanvas({
     );
 
     const assetNodes: Node<AssetNodeData>[] = assets.map((asset) => {
+      const measured = flowInstance?.getNode(asset.id);
       const actions: AssetNodeAction[] = [];
       if (hasRun) {
         actions.push({
@@ -432,6 +442,8 @@ export function AppLineageCanvas({
         id: asset.id,
         type: "lineageAsset",
         position: layout.positions.get(asset.id) ?? { x: asset.x, y: asset.y },
+        width: measured?.width ?? assetNodeWidth,
+        height: measured?.height ?? assetNodeHeight,
         data: {
           asset,
           selected: asset.id === visuallySelectedAssetId,
@@ -472,6 +484,7 @@ export function AppLineageCanvas({
     lineageAssetId,
     links,
     selectedAssetId,
+    flowInstance,
     hasCreateDownstream,
     hasConnectionClick,
     hasRun,

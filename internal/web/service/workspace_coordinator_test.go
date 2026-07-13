@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"renart/internal/web/events"
-	"renart/internal/web/freshness"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -117,8 +116,7 @@ func TestWorkspaceCoordinatorPushAssetContentUpdateImmediateSkipsRefresh(t *test
 	hub := events.NewHub()
 	refreshCalled := false
 	coord := NewWorkspaceCoordinator(WorkspaceCoordinatorDependencies{
-		Hub:       hub,
-		Freshness: freshness.New(),
+		Hub: hub,
 		RefreshHook: func(context.Context) error {
 			refreshCalled = true
 			return nil

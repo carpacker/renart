@@ -14,7 +14,7 @@ type AssetRun struct {
 	// AssetID is the durable identifier (pipeline UUID + ":" + asset name).
 	AssetID   string
 	AssetName string
-	Status    string // "succeeded" / "failed"
+	Status    string // "succeeded" / "failed" / "cancelled"
 }
 
 // RunCompleted is emitted once per finished run (build-mode single asset,

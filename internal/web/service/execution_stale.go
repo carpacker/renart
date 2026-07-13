@@ -121,8 +121,6 @@ func (s *ExecutionService) MaterializeStaleAssetsStream(
 
 		assetPath := assetRunPathForPipelineAsset(s.deps.WorkspaceRoot, asset)
 		encodedAssetID := encodePipelineAssetID(s.deps.WorkspaceRoot, asset)
-		duckDBInfo, _ := s.findDuckDBExecutionInfoByAsset(ctx, encodedAssetID)
-
 		assetFailed := false
 		for _, window := range windows {
 			suffix := ""
@@ -131,19 +129,7 @@ func (s *ExecutionService) MaterializeStaleAssetsStream(
 			}
 			logLine(fmt.Sprintf("\n━━ Building %s (%d/%d)%s ━━\n", asset.Name, index+1, total, suffix))
 
-			run := func() ([]byte, error) {
-				return s.runSingleAssetMaterialization(ctx, assetPath, environment, window, false, onChunk)
-			}
-			var output []byte
-			var runErr error
-			if duckDBInfo != nil {
-				mu := s.deps.DuckDBLock(duckDBInfo.LockKey)
-				mu.Lock()
-				output, runErr = run()
-				mu.Unlock()
-			} else {
-				output, runErr = run()
-			}
+			output, runErr := s.runSingleAssetMaterialization(ctx, assetPath, environment, window, false, onChunk)
 			combined.Write(output)
 
 			if runErr != nil {
@@ -152,6 +138,14 @@ func (s *ExecutionService) MaterializeStaleAssetsStream(
 					message = "duckdb database is busy (lock held by another process), please retry"
 				}
 				logLine(fmt.Sprintf("\n%s failed: %s\n", asset.Name, message))
+				if pipelineUUID != "" {
+					now := time.Now().UTC()
+					s.emitRunCompleted("", pipelineUUID, environment, window, now, []bus.AssetRun{{
+						AssetID:   identity.AssetID(pipelineUUID, asset.Name),
+						AssetName: asset.Name,
+						Status:    "failed",
+					}})
+				}
 				assetFailed = true
 				break
 			}
@@ -161,7 +155,6 @@ func (s *ExecutionService) MaterializeStaleAssetsStream(
 			// handlers run synchronously, so downstreams built later in this
 			// loop already see this asset's fresh fingerprint.
 			now := time.Now().UTC()
-			s.recordMaterialization(asset.Name, environment, now, "succeeded")
 			if pipelineUUID != "" {
 				s.emitRunCompleted("", pipelineUUID, environment, window, now, []bus.AssetRun{{
 					AssetID:   identity.AssetID(pipelineUUID, asset.Name),

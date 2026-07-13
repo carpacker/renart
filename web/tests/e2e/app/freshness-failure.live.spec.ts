@@ -4,11 +4,11 @@ import { join } from "node:path";
 
 import { liveTest as test, type LiveApp } from "../live-app-fixture";
 
-// Distinguishes the freshness states that used to all read as "Edited":
-//   - edited, then run, and the run failed        → "Build failed"
-//   - edited but not run yet                       → "Edited"
-// (The third state — unchanged content whose last run failed → "Run failed" —
-// is covered deterministically by the Go staleness unit tests.)
+// Freshness and the latest attempt are deliberately independent:
+//   - edited but not run yet                 → "Edited"
+//   - edited, then run, and the run failed   → "Edited" + "Build failed"
+//   - unchanged after a good build, but the
+//     latest identical run failed            → "Fresh" + "Last run failed"
 
 const pipelineId = Buffer.from("analytics").toString("base64url");
 const customersAssetId = Buffer.from("analytics/assets/analytics/customers.sql").toString(
@@ -90,14 +90,16 @@ test.describe("app freshness failure states live", () => {
       timeout: 15000,
     });
 
-    // State 2 — edit (a valid change) but do not re-run: reads as "Edited".
+    // Edit (a valid change) but do not re-run: only the freshness dimension
+    // changes, so the sidebar reads "Edited" with no attempt warning.
     await editAssetAndSettle(page, liveApp, validEdit, "edited_marker_not_re_run");
     await expect(page.locator('[title="Staleness: Edited"]').first()).toBeVisible({
       timeout: 20000,
     });
-    await expect(page.locator('[title="Staleness: Build failed"]')).toHaveCount(0);
+    await expect(page.locator('[title="Build failed"]')).toHaveCount(0);
 
-    // State 1 — edit to something that fails, then run it: reads as "Build failed".
+    // Edit to something that fails, then run it. The sidebar prioritizes the
+    // warning, while the canvas node shows both dimensions side by side.
     await editAssetAndSettle(page, liveApp, brokenEdit, "does_not_exist_table");
     const failedMaterialize = page.waitForResponse(
       (response) => response.url().includes(`/api/assets/${customersAssetId}/materialize/stream`),
@@ -106,13 +108,19 @@ test.describe("app freshness failure states live", () => {
     await page.getByRole("button", { name: "Materialize", exact: true }).click();
     await failedMaterialize;
 
-    await expect(page.locator('[title="Staleness: Build failed"]').first()).toBeVisible({
+    await expect(page.locator('[title="Build failed"]').first()).toBeVisible({
       timeout: 20000,
     });
-    await expect(page.locator('[title="Staleness: Edited"]')).toHaveCount(0);
+
+    await page.goto(`${liveApp.baseURL}/catalog?asset=${customersAssetId}`);
+    const customersNode = page.getByTestId(`rf__node-${customersAssetId}`);
+    await expect(customersNode.locator('[title="Staleness: Edited"]')).toBeVisible({
+      timeout: 20000,
+    });
+    await expect(customersNode.locator('[data-last-run="failed"]')).toHaveText("Build failed");
   });
 
-  test("surfaces unchanged code whose last run failed as Run failed", async ({ liveApp, page }) => {
+  test("keeps unchanged built data fresh when its latest run failed", async ({ liveApp, page }) => {
     test.skip(
       test.info().project.name.includes("mobile"),
       "The freshness badge is a desktop sidebar/canvas affordance.",
@@ -162,9 +170,8 @@ print("sentinel ok")
       timeout: 15000,
     });
 
-    // The state is authoritative on the staleness API (what the "Run failed"
-    // badge renders from — the badge mapping itself is covered by the "Build
-    // failed" case above). Polling avoids depending on the exact SSE push timing.
+    // The canonical state comes from the staleness API. Polling avoids depending
+    // on the exact SSE push timing before checking the rendered node as well.
     const sentinelStaleness = async () => {
       const response = await page.request.get(
         `${liveApp.baseURL}/api/pipelines/${pipelineId}/staleness?environment=default`,
@@ -196,7 +203,7 @@ print("sentinel ok")
     await rm(sentinelPath);
 
     // Run 2 — identical content, now fails. The asset stays fresh (an earlier
-    // build exists) but its last run failed on the current content → "Run failed".
+    // build exists) but its last run failed on the current content.
     const secondRun = page.waitForResponse(
       (response) => response.url().includes(`/api/assets/${pyAssetId}/materialize/stream`),
       { timeout: 90000 },
@@ -213,5 +220,12 @@ print("sentinel ok")
         { timeout: 30000 },
       )
       .toBe("fresh/failed/true");
+
+    await page.goto(`${liveApp.baseURL}/catalog?asset=${pyAssetId}`);
+    const sentinelNode = page.getByTestId(`rf__node-${pyAssetId}`);
+    await expect(sentinelNode.locator('[title="Staleness: Fresh"]')).toBeVisible({
+      timeout: 20000,
+    });
+    await expect(sentinelNode.locator('[data-last-run="failed"]')).toHaveText("Last run failed");
   });
 });

@@ -2,6 +2,7 @@ package scheduler
 
 import (
 	"context"
+	"errors"
 	"path/filepath"
 	"sync"
 	"testing"
@@ -11,6 +12,102 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func TestRecoverOrphanedRunsReplaysPersistedTerminalStepsOnce(t *testing.T) {
+	store, err := OpenStore(filepath.Join(t.TempDir(), "state.db"))
+	require.NoError(t, err)
+	defer store.Close()
+
+	ctx := context.Background()
+	started := time.Date(2026, 7, 13, 10, 0, 0, 0, time.UTC)
+	finished := started.Add(time.Minute)
+	runID, err := store.Create(ctx, PipelineRun{
+		ID: "orphaned-run", PipelineID: "pipeline-id", Pipeline: "analytics",
+		Environment: "prod", Trigger: RunTriggerSchedule, Status: RunStatusQueued,
+		SnapshotVersionID: "snapshot-id",
+	})
+	require.NoError(t, err)
+	require.NoError(t, store.MarkRunning(ctx, runID, started))
+	require.NoError(t, store.UpsertStep(ctx, PipelineRunStep{
+		RunID: runID, Asset: "analytics.finished", Status: RunStatusSuccess,
+		StartedAt: &started, FinishedAt: &finished,
+	}))
+	require.NoError(t, store.UpsertStep(ctx, PipelineRunStep{
+		RunID: runID, Asset: "analytics.interrupted", Status: RunStatusRunning,
+		StartedAt: &finished,
+	}))
+
+	callbackCount := 0
+	var recoveredRun PipelineRun
+	var recoveredSteps []PipelineRunStep
+	service := New(Options{
+		Store: store,
+		RecoverRun: func(_ context.Context, run PipelineRun, steps []PipelineRunStep) error {
+			callbackCount++
+			recoveredRun = run
+			recoveredSteps = append([]PipelineRunStep(nil), steps...)
+			return nil
+		},
+	})
+
+	service.recoverOrphanedRuns(ctx)
+	require.Equal(t, 1, callbackCount)
+	assert.Equal(t, RunStatusFailed, recoveredRun.Status)
+	assert.Equal(t, orphanedRunError, recoveredRun.Error)
+	assert.Equal(t, "snapshot-id", recoveredRun.SnapshotVersionID)
+	require.Len(t, recoveredSteps, 2)
+	assert.Equal(t, RunStatusSuccess, recoveredSteps[0].Status)
+	assert.Equal(t, RunStatusFailed, recoveredSteps[1].Status)
+	assert.Equal(t, orphanedRunError, recoveredSteps[1].Error)
+
+	service.recoverOrphanedRuns(ctx)
+	assert.Equal(t, 1, callbackCount, "already reconciled runs must not replay twice")
+}
+
+func TestRecoverOrphanedRunsRetriesUnacknowledgedReplay(t *testing.T) {
+	store, err := OpenStore(filepath.Join(t.TempDir(), "state.db"))
+	require.NoError(t, err)
+	defer store.Close()
+
+	ctx := context.Background()
+	started := time.Date(2026, 7, 13, 10, 0, 0, 0, time.UTC)
+	runID, err := store.Create(ctx, PipelineRun{
+		ID: "retry-recovery", PipelineID: "pipeline-id", Pipeline: "analytics",
+		Environment: "prod", Trigger: RunTriggerSchedule, Status: RunStatusQueued,
+	})
+	require.NoError(t, err)
+	require.NoError(t, store.MarkRunning(ctx, runID, started))
+	require.NoError(t, store.UpsertStep(ctx, PipelineRunStep{
+		RunID: runID, Asset: "analytics.interrupted", Status: RunStatusRunning, StartedAt: &started,
+	}))
+
+	attempts := 0
+	service := New(Options{
+		Store: store,
+		RecoverRun: func(context.Context, PipelineRun, []PipelineRunStep) error {
+			attempts++
+			if attempts == 1 {
+				return errors.New("temporary replay failure")
+			}
+			return nil
+		},
+	})
+
+	service.recoverOrphanedRuns(ctx)
+	assert.Equal(t, 1, attempts)
+	pending, err := store.PendingRunRecoveries(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, []string{runID}, pending)
+
+	service.recoverOrphanedRuns(ctx)
+	assert.Equal(t, 2, attempts)
+	pending, err = store.PendingRunRecoveries(ctx)
+	require.NoError(t, err)
+	assert.Empty(t, pending)
+
+	service.recoverOrphanedRuns(ctx)
+	assert.Equal(t, 2, attempts, "an acknowledged replay is not emitted again")
+}
 
 func TestServiceTriggerPersistsRunAndLogs(t *testing.T) {
 	stateDir := t.TempDir()

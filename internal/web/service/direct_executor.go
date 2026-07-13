@@ -11,6 +11,7 @@ import (
 	"github.com/bruin-data/bruin/pkg/pipeline"
 	"github.com/spf13/afero"
 
+	"renart/internal/web/duckcoord"
 	"renart/internal/web/runstate"
 )
 
@@ -19,6 +20,7 @@ type HybridBruinExecutor struct {
 	newPipelineBuilder   func() *pipeline.Builder
 	workspaceRoot        string
 	logSink              ExecutionLogSink
+	duckDBCoordinator    *duckcoord.Coordinator
 	// runRegistry tracks in-flight materializations across every run this
 	// executor performs, so the python run broker can wait on them.
 	runRegistry *runstate.Registry
@@ -39,8 +41,15 @@ func NewHybridBruinExecutor(
 		newPipelineBuilder:   newPipelineBuilder,
 		workspaceRoot:        workspaceRoot,
 		logSink:              logSink,
+		duckDBCoordinator:    duckcoord.New(duckcoord.Options{}),
 		runRegistry:          runstate.NewRegistry(),
 	}
+}
+
+// SetDuckDBCoordinator replaces the database coordinator. It is primarily
+// useful for tests that need an isolated lock directory.
+func (e *HybridBruinExecutor) SetDuckDBCoordinator(coordinator *duckcoord.Coordinator) {
+	e.duckDBCoordinator = coordinator
 }
 
 func (e *HybridBruinExecutor) SetExecutionLogSink(sink ExecutionLogSink) {

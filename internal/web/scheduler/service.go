@@ -36,6 +36,7 @@ type Service struct {
 	defaultEnvironment    func() string
 	pipelineIntervalAware func(context.Context, string) bool
 	deployPipeline        func(context.Context, string) (string, error)
+	recoverRun            func(context.Context, PipelineRun, []PipelineRunStep) error
 	lock                  *flock.Flock
 	riverClient           *river.Client[*sql.Tx]
 	mu                    sync.Mutex
@@ -65,12 +66,16 @@ type Options struct {
 	// DeployPipeline snapshots the working tree and returns the new
 	// version ID (the "deploy now" path when enabling a schedule).
 	DeployPipeline func(context.Context, string) (string, error)
+	// RecoverRun observes a run reconciled after an unclean stop. The callback
+	// receives the persisted terminal steps after open steps have been failed;
+	// it may rebuild derived state, but must never execute the pipeline again.
+	RecoverRun func(context.Context, PipelineRun, []PipelineRunStep) error
 }
 
 type pipelineRunJobArgs struct {
-	RunID        string     `json:"run_id,omitempty" river:"unique"`
-	PipelineID   string     `json:"pipeline_id,omitempty" river:"unique"`
-	PipelineName string     `json:"pipeline_name,omitempty"`
+	RunID        string `json:"run_id,omitempty" river:"unique"`
+	PipelineID   string `json:"pipeline_id,omitempty" river:"unique"`
+	PipelineName string `json:"pipeline_name,omitempty"`
 	// PipelineUUID is set for per-environment scheduled runs; together with
 	// Environment and the interval it forms the unique logical-run key, so
 	// restarts, leader churn, and catch-up can never double-enqueue.
@@ -135,6 +140,7 @@ func New(options Options) *Service {
 		defaultEnvironment:    options.DefaultEnvironment,
 		pipelineIntervalAware: options.PipelineIntervalAware,
 		deployPipeline:        options.DeployPipeline,
+		recoverRun:            options.RecoverRun,
 	}
 }
 
@@ -205,15 +211,35 @@ const orphanedRunError = "interrupted: the server stopped while this run was exe
 // was killed mid-execution (otherwise it would stay running forever), and
 // notifies listeners so open run views update.
 func (s *Service) recoverOrphanedRuns(ctx context.Context) {
-	ids, err := s.store.FailOrphanedRuns(ctx, orphanedRunError)
+	_, err := s.store.FailOrphanedRuns(ctx, orphanedRunError)
 	if err != nil {
 		slog.Warn("failed to reconcile orphaned pipeline runs", "error", err)
 		return
 	}
+	ids, err := s.store.PendingRunRecoveries(ctx)
+	if err != nil {
+		slog.Warn("failed to list pending pipeline run recoveries", "error", err)
+		return
+	}
 	for _, id := range ids {
-		if run, _, _, getErr := s.store.Get(ctx, id); getErr == nil {
-			s.publishRunEvent("run.finished", run)
+		run, _, steps, getErr := s.store.Get(ctx, id)
+		if getErr != nil {
+			slog.Warn("failed to load reconciled pipeline run", "run_id", id, "error", getErr)
+			continue
 		}
+		if s.recoverRun != nil {
+			if recoverErr := s.recoverRun(ctx, run, steps); recoverErr != nil {
+				slog.Warn("failed to replay reconciled pipeline run", "run_id", id, "error", recoverErr)
+				s.publishRunEvent("run.finished", run)
+				continue
+			}
+			if markErr := s.store.MarkRunRecoveryReplayed(ctx, id); markErr != nil {
+				slog.Warn("failed to acknowledge reconciled pipeline run replay", "run_id", id, "error", markErr)
+				s.publishRunEvent("run.finished", run)
+				continue
+			}
+		}
+		s.publishRunEvent("run.finished", run)
 	}
 }
 
