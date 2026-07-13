@@ -28,6 +28,7 @@ export type WebAsset = {
   type: string;
   path: string;
   content: string;
+  content_revision?: string;
   upstreams: string[];
   parameters?: Record<string, string>;
   meta?: Record<string, string>;

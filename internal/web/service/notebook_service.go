@@ -47,6 +47,12 @@ type NotebookService struct {
 	deps  NotebookDependencies
 	store *notebook.SessionStore
 
+	// cellEditLocks serialize the compare-and-write section for each cell.
+	// The content revision prevents stale writers; the lock makes that check
+	// atomic within this server process.
+	cellEditMu    sync.Mutex
+	cellEditLocks map[string]*cellEditLock
+
 	// Bruin's SQL parser is created lazily and reused across every load and run
 	// instead of being spun up per operation.
 	parserMu     sync.Mutex
@@ -55,6 +61,11 @@ type NotebookService struct {
 	// runtimes holds per-notebook recompute state (staleness, last results,
 	// the auto-recompute toggle) for server-driven auto-recompute.
 	runtimes *notebookRuntimes
+}
+
+type cellEditLock struct {
+	mu   sync.Mutex
+	refs int
 }
 
 // ensureParserLocked returns the shared parser, creating it on first use. The
@@ -140,9 +151,36 @@ func (s *NotebookService) usedTables(sqlText, assetType string) ([]string, error
 // .renart/notebooks in the workspace.
 func NewNotebookService(deps NotebookDependencies) *NotebookService {
 	return &NotebookService{
-		deps:     deps,
-		store:    notebook.NewSessionStore(filepath.Join(deps.WorkspaceRoot, ".renart", "notebooks")),
-		runtimes: newNotebookRuntimes(),
+		deps:          deps,
+		store:         notebook.NewSessionStore(filepath.Join(deps.WorkspaceRoot, ".renart", "notebooks")),
+		cellEditLocks: make(map[string]*cellEditLock),
+		runtimes:      newNotebookRuntimes(),
+	}
+}
+
+// lockCellEdit serializes optimistic-revision checks and writes for one cell.
+// It is keyed by durable notebook/cell identity rather than a path so renames
+// cannot create a second lock for the same logical document.
+func (s *NotebookService) lockCellEdit(notebookID, cellID string) func() {
+	key := notebookID + ":" + cellID
+	s.cellEditMu.Lock()
+	lock, ok := s.cellEditLocks[key]
+	if !ok {
+		lock = &cellEditLock{}
+		s.cellEditLocks[key] = lock
+	}
+	lock.refs++
+	s.cellEditMu.Unlock()
+
+	lock.mu.Lock()
+	return func() {
+		lock.mu.Unlock()
+		s.cellEditMu.Lock()
+		lock.refs--
+		if lock.refs == 0 && s.cellEditLocks[key] == lock {
+			delete(s.cellEditLocks, key)
+		}
+		s.cellEditMu.Unlock()
 	}
 }
 
@@ -315,6 +353,14 @@ type CreateCellRequest struct {
 	Language string `json:"language,omitempty"`
 }
 
+// UpdateCellRequest replaces a cell snapshot. BaseRevision is optional for
+// backwards-compatible API callers; interactive editors always provide it so
+// stale full-document writes fail explicitly instead of losing newer text.
+type UpdateCellRequest struct {
+	Content      string `json:"content"`
+	BaseRevision string `json:"base_revision,omitempty"`
+}
+
 // CreateCell writes a new cell file and appends it to the blocks.
 func (s *NotebookService) CreateCell(notebookID string, req CreateCellRequest) (model.Notebook, *APIError) {
 	nb, apiErr := s.load(notebookID)
@@ -411,7 +457,10 @@ func (s *NotebookService) RenameCell(notebookID, cellID, newName string) (model.
 
 // UpdateCell replaces a cell file's content. The frontmatter id is forced
 // back to the cell's durable id — identity is not editable.
-func (s *NotebookService) UpdateCell(notebookID, cellID, content string) (model.Notebook, *APIError) {
+func (s *NotebookService) UpdateCell(notebookID, cellID string, req UpdateCellRequest) (model.Notebook, *APIError) {
+	unlock := s.lockCellEdit(notebookID, cellID)
+	defer unlock()
+
 	nb, apiErr := s.load(notebookID)
 	if apiErr != nil {
 		return model.Notebook{}, apiErr
@@ -420,8 +469,21 @@ func (s *NotebookService) UpdateCell(notebookID, cellID, content string) (model.
 	if cell == nil {
 		return model.Notebook{}, &APIError{Status: http.StatusNotFound, Code: "cell_not_found", Message: "cell not found"}
 	}
+	currentContent := cell.Raw
+	if currentContent == "" {
+		if raw, readErr := os.ReadFile(cell.Path); readErr == nil {
+			currentContent = string(raw)
+		}
+	}
+	if req.BaseRevision != "" && req.BaseRevision != notebook.ContentRevision(currentContent) {
+		return model.Notebook{}, &APIError{
+			Status:  http.StatusConflict,
+			Code:    "cell_edit_conflict",
+			Message: "This cell changed after editing began. Your draft was kept; reload or reconcile the newer content before saving.",
+		}
+	}
 
-	normalized := notebook.NormalizeCellID(content, cellID, notebook.IsPythonCell(cell))
+	normalized := notebook.NormalizeCellID(req.Content, cellID, notebook.IsPythonCell(cell))
 	if err := os.WriteFile(cell.Path, []byte(normalized), 0o644); err != nil {
 		return model.Notebook{}, &APIError{Status: http.StatusInternalServerError, Code: "cell_update_failed", Message: err.Error()}
 	}

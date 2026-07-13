@@ -132,6 +132,19 @@ is typing" (a typing→save debounce) and rendering.
 - Optimistic staleness: on edit the server publishes stale cells as
   auto_pending up front so the hatch doesn't flash, then demotes any that
   won't actually refresh (Python, non-SELECT, errors).
+- Cell saves are ordered and revision-checked. Each cell DTO carries a
+  content-derived `content_revision` for the exact file snapshot. The client
+  keeps one full-document save queue per cell, sends only one `PUT` at a time,
+  and uses the last acknowledged revision as the next request's
+  `base_revision`. The service serializes the compare-and-write section per
+  cell and returns `409 cell_edit_conflict` when that snapshot is stale. A
+  delayed response therefore cannot replace newer typing, while another Renart
+  tab or revision-aware API client cannot silently overwrite a newer save.
+  Unsaved drafts remain in Monaco on conflict.
+- This is snapshot concurrency control, not collaborative text merging. The
+  acknowledged snapshot is the boundary where a future OT/CRDT adapter can
+  exchange operations; until then, conflicts are explicit and the filesystem
+  remains authoritative.
 - Eligibility logic (`computeAutoRecomputeWave` / `…Closure`) is a Go port of
   the deleted client module, covered by `notebook_autorecompute_test.go`.
 

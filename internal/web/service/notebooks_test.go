@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"fmt"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -145,7 +146,7 @@ func TestNotebookServiceLifecycle(t *testing.T) {
 
 	// Update content; the durable id survives even though the payload
 	// omits it.
-	updated, apiErr := svc.UpdateCell(notebookID, baseCellID, "/* @bruin\ntype: duckdb.sql\n@bruin */\nselect 21 as half\n")
+	updated, apiErr := svc.UpdateCell(notebookID, baseCellID, UpdateCellRequest{Content: "/* @bruin\ntype: duckdb.sql\n@bruin */\nselect 21 as half\n"})
 	if apiErr != nil {
 		t.Fatalf("update cell failed: %+v", apiErr)
 	}
@@ -158,7 +159,7 @@ func TestNotebookServiceLifecycle(t *testing.T) {
 		t.Fatalf("create second cell failed: %+v", apiErr)
 	}
 	doubledCellID := withSecond.Cells[1].CellID
-	if _, apiErr = svc.UpdateCell(notebookID, doubledCellID, "/* @bruin\ntype: duckdb.sql\n@bruin */\nselect half * 2 as answer from base\n"); apiErr != nil {
+	if _, apiErr = svc.UpdateCell(notebookID, doubledCellID, UpdateCellRequest{Content: "/* @bruin\ntype: duckdb.sql\n@bruin */\nselect half * 2 as answer from base\n"}); apiErr != nil {
 		t.Fatalf("update second cell failed: %+v", apiErr)
 	}
 
@@ -212,6 +213,103 @@ func TestNotebookServiceLifecycle(t *testing.T) {
 	}
 }
 
+func TestNotebookCellUpdateRejectsStaleRevision(t *testing.T) {
+	root := t.TempDir()
+	if err := os.Mkdir(filepath.Join(root, ".git"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	svc := NewNotebookService(NotebookDependencies{WorkspaceRoot: root})
+	created, apiErr := svc.Create(CreateNotebookRequest{Title: "Concurrent Editing"})
+	if apiErr != nil {
+		t.Fatalf("create failed: %+v", apiErr)
+	}
+	cell := created.Cells[0]
+	if cell.ContentRevision == "" {
+		t.Fatal("new notebook cell did not include a content revision")
+	}
+
+	latestContent := "/* @bruin\ntype: duckdb.sql\n@bruin */\nselect 2 as latest\n"
+	updated, apiErr := svc.UpdateCell(created.ID, cell.CellID, UpdateCellRequest{
+		Content:      latestContent,
+		BaseRevision: cell.ContentRevision,
+	})
+	if apiErr != nil {
+		t.Fatalf("first revision-checked update failed: %+v", apiErr)
+	}
+	if updated.Cells[0].ContentRevision == "" || updated.Cells[0].ContentRevision == cell.ContentRevision {
+		t.Fatalf("content revision did not advance: before=%q after=%q", cell.ContentRevision, updated.Cells[0].ContentRevision)
+	}
+
+	_, apiErr = svc.UpdateCell(created.ID, cell.CellID, UpdateCellRequest{
+		Content:      "/* @bruin\ntype: duckdb.sql\n@bruin */\nselect 1 as stale\n",
+		BaseRevision: cell.ContentRevision,
+	})
+	if apiErr == nil {
+		t.Fatal("expected stale update to be rejected")
+	}
+	if apiErr.Status != 409 || apiErr.Code != "cell_edit_conflict" {
+		t.Fatalf("unexpected stale-update error: %+v", apiErr)
+	}
+
+	fresh, apiErr := svc.Get(created.ID)
+	if apiErr != nil {
+		t.Fatalf("get after conflict failed: %+v", apiErr)
+	}
+	if !strings.Contains(fresh.Cells[0].Content, "select 2 as latest") {
+		t.Fatalf("stale update replaced newer content: %q", fresh.Cells[0].Content)
+	}
+
+	// Two clients that branch from the same acknowledged snapshot must not both
+	// win, even when they reach the service concurrently.
+	start := make(chan struct{})
+	type updateResult struct {
+		content string
+		err     *APIError
+	}
+	results := make(chan updateResult, 2)
+	for _, content := range []string{
+		"/* @bruin\ntype: duckdb.sql\n@bruin */\nselect 3 as peer_a\n",
+		"/* @bruin\ntype: duckdb.sql\n@bruin */\nselect 4 as peer_b\n",
+	} {
+		go func(content string) {
+			<-start
+			_, updateErr := svc.UpdateCell(created.ID, cell.CellID, UpdateCellRequest{
+				Content:      content,
+				BaseRevision: updated.Cells[0].ContentRevision,
+			})
+			results <- updateResult{content: content, err: updateErr}
+		}(content)
+	}
+	close(start)
+	first := <-results
+	second := <-results
+	winners := 0
+	conflicts := 0
+	winningContent := ""
+	for _, result := range []updateResult{first, second} {
+		if result.err == nil {
+			winners++
+			winningContent = result.content
+		} else if result.err.Status == http.StatusConflict && result.err.Code == "cell_edit_conflict" {
+			conflicts++
+		} else {
+			t.Fatalf("unexpected concurrent-update result: %+v", result.err)
+		}
+	}
+	if winners != 1 || conflicts != 1 {
+		t.Fatalf("concurrent updates: got %d winner(s), %d conflict(s)", winners, conflicts)
+	}
+	concurrentFresh, apiErr := svc.Get(created.ID)
+	if apiErr != nil {
+		t.Fatalf("get after concurrent updates failed: %+v", apiErr)
+	}
+	statementStart := strings.Index(winningContent, "select ")
+	if statementStart < 0 || !strings.Contains(concurrentFresh.Cells[0].Content, strings.TrimSpace(winningContent[statementStart:])) {
+		t.Fatalf("disk does not contain the winning update: %q", concurrentFresh.Cells[0].Content)
+	}
+}
+
 func TestNotebookServicePromoteCell(t *testing.T) {
 	root := t.TempDir()
 	if err := os.Mkdir(filepath.Join(root, ".git"), 0o755); err != nil {
@@ -238,7 +336,7 @@ func TestNotebookServicePromoteCell(t *testing.T) {
 		t.Fatalf("create base: %+v", apiErr)
 	}
 	baseID := withBase.Cells[0].CellID
-	if _, apiErr = svc.UpdateCell(nb.ID, baseID, "/* @bruin\ntype: duckdb.sql\n@bruin */\nselect 1 as id, 10 as amount\n"); apiErr != nil {
+	if _, apiErr = svc.UpdateCell(nb.ID, baseID, UpdateCellRequest{Content: "/* @bruin\ntype: duckdb.sql\n@bruin */\nselect 1 as id, 10 as amount\n"}); apiErr != nil {
 		t.Fatalf("update base: %+v", apiErr)
 	}
 	withChild, apiErr := svc.CreateCell(nb.ID, CreateCellRequest{Name: "child"})
@@ -246,7 +344,7 @@ func TestNotebookServicePromoteCell(t *testing.T) {
 		t.Fatalf("create child: %+v", apiErr)
 	}
 	childID := withChild.Cells[1].CellID
-	if _, apiErr = svc.UpdateCell(nb.ID, childID, "/* @bruin\ntype: duckdb.sql\n@bruin */\nselect sum(amount) from base\n"); apiErr != nil {
+	if _, apiErr = svc.UpdateCell(nb.ID, childID, UpdateCellRequest{Content: "/* @bruin\ntype: duckdb.sql\n@bruin */\nselect sum(amount) from base\n"}); apiErr != nil {
 		t.Fatalf("update child: %+v", apiErr)
 	}
 
@@ -309,7 +407,7 @@ func TestNotebookServicePromoteCellWithUpstream(t *testing.T) {
 		t.Fatalf("create base: %+v", apiErr)
 	}
 	baseID := withBase.Cells[0].CellID
-	if _, apiErr = svc.UpdateCell(nb.ID, baseID, "/* @bruin\ntype: duckdb.sql\n@bruin */\nselect 1 as id, 10 as amount\n"); apiErr != nil {
+	if _, apiErr = svc.UpdateCell(nb.ID, baseID, UpdateCellRequest{Content: "/* @bruin\ntype: duckdb.sql\n@bruin */\nselect 1 as id, 10 as amount\n"}); apiErr != nil {
 		t.Fatalf("update base: %+v", apiErr)
 	}
 	withChild, apiErr := svc.CreateCell(nb.ID, CreateCellRequest{Name: "child"})
@@ -317,7 +415,7 @@ func TestNotebookServicePromoteCellWithUpstream(t *testing.T) {
 		t.Fatalf("create child: %+v", apiErr)
 	}
 	childID := withChild.Cells[1].CellID
-	if _, apiErr = svc.UpdateCell(nb.ID, childID, "/* @bruin\ntype: duckdb.sql\n@bruin */\nselect sum(amount) from base\n"); apiErr != nil {
+	if _, apiErr = svc.UpdateCell(nb.ID, childID, UpdateCellRequest{Content: "/* @bruin\ntype: duckdb.sql\n@bruin */\nselect sum(amount) from base\n"}); apiErr != nil {
 		t.Fatalf("update child: %+v", apiErr)
 	}
 

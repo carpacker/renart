@@ -1,4 +1,4 @@
-import { expect, type APIRequestContext } from "@playwright/test";
+import { expect, type APIRequestContext, type Page } from "@playwright/test";
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { basename, join } from "node:path";
 
@@ -8,7 +8,13 @@ type NotebookEnvelope = {
   notebook: {
     id: string;
     path: string;
-    cells: Array<{ id: string; cell_id: string; name: string; content: string }>;
+    cells: Array<{
+      id: string;
+      cell_id: string;
+      name: string;
+      content: string;
+      content_revision?: string;
+    }>;
   };
 };
 
@@ -111,6 +117,40 @@ async function getDependencies(request: APIRequestContext, baseURL: string, note
   return ((await response.json()) as NotebookWithDependencies).notebook.dependencies ?? [];
 }
 
+async function setNotebookEditorValue(
+  page: Page,
+  cellId: string,
+  value: string,
+  options: { cursorOffset?: number; triggerSuggest?: boolean } = {},
+) {
+  await page.evaluate(
+    ({ targetCellId, nextValue, cursorOffset, triggerSuggest }) => {
+      const monaco = (window as typeof window & { monaco?: any }).monaco;
+      const model = monaco?.editor
+        .getModels?.()
+        .find((candidate: any) => candidate.uri.toString().includes(`/notebook/${targetCellId}.`));
+      const editor = monaco?.editor
+        .getEditors?.()
+        .find((candidate: any) => candidate.getModel?.() === model);
+      if (!editor) {
+        throw new Error(`Notebook editor for ${targetCellId} is not mounted`);
+      }
+      editor.setValue(nextValue);
+      editor.setPosition(model.getPositionAt(cursorOffset ?? nextValue.length));
+      editor.focus();
+      if (triggerSuggest) {
+        editor.trigger("test", "editor.action.triggerSuggest", {});
+      }
+    },
+    {
+      targetCellId: cellId,
+      nextValue: value,
+      cursorOffset: options.cursorOffset,
+      triggerSuggest: options.triggerSuggest,
+    },
+  );
+}
+
 test.describe("app notebooks live", () => {
   test.use({ fixtureName: "configured-workspace" });
 
@@ -179,6 +219,218 @@ test.describe("app notebooks live", () => {
 
     // The result table shows the computed values in the UI.
     await expect(page.getByText("40", { exact: true }).first()).toBeVisible({ timeout: 15000 });
+  });
+
+  test("serializes autosaves so a delayed response cannot erase newer typing", async ({
+    liveApp,
+    page,
+  }) => {
+    test.skip(
+      test.info().project.name.includes("mobile"),
+      "Monaco keyboard editing is only stable in the desktop notebook layout.",
+    );
+
+    const notebook = await createNotebook(page.request, liveApp.baseURL, "Save Ordering");
+    const cellId = await addCell(page.request, liveApp.baseURL, notebook.id, "typing");
+    await setCell(page.request, liveApp.baseURL, notebook.id, cellId, "select 1 as value");
+
+    await page.goto(`${liveApp.baseURL}/notebooks/${notebook.id}`);
+    await expect(page.getByText("Save Ordering").first()).toBeVisible({ timeout: 15000 });
+    const card = page.locator(`[data-notebook-cell-id="${cellId}"]`);
+    const editor = card.locator(".monaco-editor").first();
+    await expect(editor).toBeVisible({ timeout: 15000 });
+
+    let releaseFirstResponse = () => {};
+    const firstResponseGate = new Promise<void>((resolve) => {
+      releaseFirstResponse = resolve;
+    });
+    let markFirstProcessed = () => {};
+    const firstProcessed = new Promise<void>((resolve) => {
+      markFirstProcessed = resolve;
+    });
+    const savedRequests: Array<{ content: string; baseRevision: string }> = [];
+    const updateRoute = `**/notebooks/${notebook.id}/cells/${cellId}`;
+    await page.route(updateRoute, async (route) => {
+      if (route.request().method() !== "PUT") {
+        await route.continue();
+        return;
+      }
+      const payload = route.request().postDataJSON() as {
+        content?: string;
+        base_revision?: string;
+      };
+      savedRequests.push({
+        content: payload.content ?? "",
+        baseRevision: payload.base_revision ?? "",
+      });
+      if (savedRequests.length !== 1) {
+        await route.continue();
+        return;
+      }
+
+      // Let the server commit the first edit, but hold its response away from
+      // React. Without the per-cell queue a second PUT overtakes this response,
+      // then the stale first notebook snapshot replaces the newer draft.
+      const response = await route.fetch();
+      markFirstProcessed();
+      await firstResponseGate;
+      await route.fulfill({ response });
+    });
+
+    let released = false;
+    try {
+      await setNotebookEditorValue(page, cellId, "select 2 as value");
+      await firstProcessed;
+
+      await setNotebookEditorValue(page, cellId, "select 2 as value union all select 3");
+      await page.waitForTimeout(600);
+      expect(savedRequests).toHaveLength(1);
+
+      releaseFirstResponse();
+      released = true;
+      await expect.poll(() => savedRequests.length, { timeout: 15000 }).toBe(2);
+      expect(savedRequests[0].baseRevision).toMatch(/^[0-9a-f]{64}$/);
+      expect(savedRequests[1].baseRevision).toMatch(/^[0-9a-f]{64}$/);
+      expect(savedRequests[1].baseRevision).not.toBe(savedRequests[0].baseRevision);
+      await expect
+        .poll(
+          () =>
+            page.evaluate((targetCellId) => {
+              const monaco = (window as typeof window & { monaco?: any }).monaco;
+              const model = monaco?.editor
+                .getModels?.()
+                .find((candidate: any) =>
+                  candidate.uri.toString().includes(`/notebook/${targetCellId}.`),
+                );
+              return model?.getValue() ?? "";
+            }, cellId),
+          { timeout: 15000 },
+        )
+        .toBe("select 2 as value union all select 3");
+
+      await expect
+        .poll(async () => {
+          const response = await page.request.get(
+            `${liveApp.baseURL}/api/notebooks/${notebook.id}`,
+          );
+          const payload = (await response.json()) as NotebookEnvelope;
+          return payload.notebook.cells.find((cell) => cell.cell_id === cellId)?.content ?? "";
+        })
+        .toContain("select 2 as value union all select 3");
+    } finally {
+      if (!released) {
+        releaseFirstResponse();
+      }
+      await page.unroute(updateRoute);
+    }
+  });
+
+  test("keeps a local draft when a peer saves the same cell first", async ({ liveApp, page }) => {
+    test.skip(
+      test.info().project.name.includes("mobile"),
+      "Monaco keyboard editing is only stable in the desktop notebook layout.",
+    );
+
+    const notebook = await createNotebook(page.request, liveApp.baseURL, "Peer Save Conflict");
+    const cellId = await addCell(page.request, liveApp.baseURL, notebook.id, "shared");
+    await setCell(page.request, liveApp.baseURL, notebook.id, cellId, "select 1 as baseline");
+
+    await page.goto(`${liveApp.baseURL}/notebooks/${notebook.id}`);
+    await expect(page.getByText("Peer Save Conflict").first()).toBeVisible({ timeout: 15000 });
+    await expect(
+      page.locator(`[data-notebook-cell-id="${cellId}"] .monaco-editor`).first(),
+    ).toBeVisible({ timeout: 15000 });
+
+    const snapshotResponse = await page.request.get(
+      `${liveApp.baseURL}/api/notebooks/${notebook.id}`,
+    );
+    expect(snapshotResponse.ok()).toBe(true);
+    const snapshot = (await snapshotResponse.json()) as NotebookEnvelope;
+    const baseRevision = snapshot.notebook.cells.find(
+      (candidate) => candidate.cell_id === cellId,
+    )?.content_revision;
+    expect(baseRevision).toMatch(/^[0-9a-f]{64}$/);
+
+    let releaseLocalRequest = () => {};
+    const localRequestGate = new Promise<void>((resolve) => {
+      releaseLocalRequest = resolve;
+    });
+    let markLocalRequestStarted = () => {};
+    const localRequestStarted = new Promise<void>((resolve) => {
+      markLocalRequestStarted = resolve;
+    });
+    let localBaseRevision = "";
+    const updateRoute = `**/notebooks/${notebook.id}/cells/${cellId}`;
+    await page.route(updateRoute, async (route) => {
+      if (route.request().method() !== "PUT") {
+        await route.continue();
+        return;
+      }
+      const payload = route.request().postDataJSON() as { base_revision?: string };
+      localBaseRevision = payload.base_revision ?? "";
+      markLocalRequestStarted();
+      await localRequestGate;
+      await route.continue();
+    });
+
+    let released = false;
+    try {
+      const localDraft = "select 2 as unsaved_local_draft";
+      await setNotebookEditorValue(page, cellId, localDraft);
+      await localRequestStarted;
+      expect(localBaseRevision).toBe(baseRevision);
+
+      const peerContent = "/* @bruin\ntype: duckdb.sql\n@bruin */\nselect 3 as peer_save\n";
+      const peerResponse = await page.request.put(
+        `${liveApp.baseURL}/api/notebooks/${notebook.id}/cells/${cellId}`,
+        { data: { content: peerContent, base_revision: baseRevision } },
+      );
+      expect(peerResponse.ok()).toBe(true);
+
+      const conflictResponse = page.waitForResponse(
+        (response) =>
+          response.url().endsWith(`/notebooks/${notebook.id}/cells/${cellId}`) &&
+          response.request().method() === "PUT" &&
+          response.status() === 409,
+        { timeout: 15000 },
+      );
+      releaseLocalRequest();
+      released = true;
+      await conflictResponse;
+
+      await expect
+        .poll(
+          () =>
+            page.evaluate((targetCellId) => {
+              const monaco = (window as typeof window & { monaco?: any }).monaco;
+              return (
+                monaco?.editor
+                  .getModels?.()
+                  .find((candidate: any) =>
+                    candidate.uri.toString().includes(`/notebook/${targetCellId}.`),
+                  )
+                  ?.getValue() ?? ""
+              );
+            }, cellId),
+          { timeout: 15000 },
+        )
+        .toBe(localDraft);
+
+      await expect
+        .poll(async () => {
+          const response = await page.request.get(
+            `${liveApp.baseURL}/api/notebooks/${notebook.id}`,
+          );
+          const payload = (await response.json()) as NotebookEnvelope;
+          return payload.notebook.cells.find((candidate) => candidate.cell_id === cellId)?.content;
+        })
+        .toContain("select 3 as peer_save");
+    } finally {
+      if (!released) {
+        releaseLocalRequest();
+      }
+      await page.unroute(updateRoute);
+    }
   });
 
   test("cell editors can be resized vertically", async ({ liveApp, page }) => {
@@ -449,6 +701,49 @@ test.describe("app notebooks live", () => {
     expect(doubled.status, `${doubled.error ?? ""}\n${doubled.logs ?? ""}`).toBe("ok");
     expect(doubled.rows).toEqual([[20], [40]]);
     expect(existsSync(join(liveApp.workspaceDir, notebook.path, "pyproject.toml"))).toBe(false);
+  });
+
+  test("offers sibling SQL completion inside a Python notebook query literal", async ({
+    liveApp,
+    page,
+  }) => {
+    test.skip(
+      test.info().project.name.includes("mobile"),
+      "Monaco suggestions are only stable in the desktop notebook layout.",
+    );
+
+    const notebook = await createNotebook(page.request, liveApp.baseURL, "Python SQL IntelliSense");
+    const baseCell = await addCell(page.request, liveApp.baseURL, notebook.id, "base");
+    await setCell(
+      page.request,
+      liveApp.baseURL,
+      notebook.id,
+      baseCell,
+      "select 10 as amount, 'Ada' as customer_name",
+    );
+    const pythonCell = await addPythonCell(page.request, liveApp.baseURL, notebook.id, "reader");
+    const pythonBody = [
+      "from renart import query",
+      "",
+      'result = query("select * from base as b where b.")',
+    ].join("\n");
+    await setPythonCell(page.request, liveApp.baseURL, notebook.id, pythonCell, pythonBody);
+
+    await page.goto(`${liveApp.baseURL}/notebooks/${notebook.id}`);
+    await expect(page.getByText("Python SQL IntelliSense").first()).toBeVisible({ timeout: 15000 });
+    await expect(
+      page.locator(`[data-notebook-cell-id="${pythonCell}"] .monaco-editor`),
+    ).toBeVisible({
+      timeout: 15000,
+    });
+    await setNotebookEditorValue(page, pythonCell, pythonBody, {
+      cursorOffset: pythonBody.lastIndexOf('"'),
+      triggerSuggest: true,
+    });
+
+    await expect(
+      page.locator(".suggest-widget .monaco-list-row").filter({ hasText: "amount" }).first(),
+    ).toBeVisible({ timeout: 15000 });
   });
 
   test("rename is reference-rewriting and the chart type writes a @viz directive", async ({

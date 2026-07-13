@@ -15,6 +15,7 @@ import {
 import { AssetCodeEditor } from "@/components/asset-code-editor";
 import { useJinjaIntellisense } from "@/hooks/use-jinja-intellisense";
 import { usePythonIntellisense } from "@/hooks/use-python-intellisense";
+import { usePythonQueryIntellisense } from "@/hooks/use-python-query-intellisense";
 import { useSQLIntellisense } from "@/hooks/use-sql-intellisense";
 import { useSQLLSP } from "@/hooks/use-sql-lsp";
 import { useVizIntellisense } from "@/hooks/use-viz-intellisense";
@@ -198,6 +199,14 @@ export function NotebookCellMonaco({
     isPython ? editorInstance : null,
     cell,
     value,
+  );
+  usePythonQueryIntellisense(
+    isPython ? monacoInstance : null,
+    isPython ? editorInstance : null,
+    cell,
+    value,
+    onGoToAsset,
+    onGoToCell,
   );
 
   // Monaco replaces the whole document when the `value` prop changes; only move

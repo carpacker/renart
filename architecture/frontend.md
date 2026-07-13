@@ -114,6 +114,9 @@ than hand-rolled `div` shells.
 - [use-sql-lsp.ts](../web/hooks/use-sql-lsp.ts): SQL intellisense via the Go LSP
   (`/api/sql/lsp/*`) — completions, diagnostics, definition, hover, rename. See
   [sql-lsp.md](sql-lsp.md).
+- [use-python-query-intellisense.ts](../web/hooks/use-python-query-intellisense.ts):
+  maps static SQL string literals in Python `query(...)` calls onto the same Go
+  LSP and translates the results back into the Python Monaco model.
 - [use-asset-results.ts](../web/hooks/use-asset-results.ts): inspect and materialize
   flows, including API-asset full refresh.
 - [use-app-asset-materialization-status.ts](../web/hooks/use-app-asset-materialization-status.ts):

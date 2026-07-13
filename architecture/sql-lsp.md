@@ -83,6 +83,18 @@ same provider split as the asset editor: the language server owns diagnostics,
 decorations, hover, rename, etc.; `useSQLIntellisense` keeps schema-aware
 completion (which knows notebook run columns the backend cannot see).
 
+Python assets and Python notebook cells project static SQL passed as the first
+argument to `query("...")` or `renart.query("...")` through
+`use-python-query-intellisense.ts`. The host document stays Python. A small
+literal scanner decodes ordinary, raw, and triple-quoted strings and keeps a
+UTF-16 source map, then the adapter translates completion, diagnostics, hover,
+definition/navigation, signature-help, and semantic-token positions to and
+from the existing SQL LSP. Interpolated strings, bytes, variables,
+concatenation, and other runtime expressions remain Python-only because they do
+not represent one stable SQL document. This projection uses the Python asset's
+existing graph identity, so a notebook query sees only its sibling cells and
+the same pipeline relations as an SQL cell.
+
 ## 4. Column inference: fixpoint
 
 SQL assets that declare no columns get an `inferred` schema layer so

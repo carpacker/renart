@@ -8,6 +8,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { useAssetEditorSchemaInference } from "@/hooks/use-asset-editor-schema-inference";
 import { useJinjaIntellisense } from "@/hooks/use-jinja-intellisense";
 import { usePythonIntellisense } from "@/hooks/use-python-intellisense";
+import { usePythonQueryIntellisense } from "@/hooks/use-python-query-intellisense";
 import { useSQLFormatting } from "@/hooks/use-sql-formatting";
 import { useSQLIntellisense } from "@/hooks/use-sql-intellisense";
 import { useSQLLSP } from "@/hooks/use-sql-lsp";
@@ -81,6 +82,7 @@ export function useAssetMonaco({
   useSQLLSP(monacoInstance, editorInstance, asset, editorValue, schemaTables, onGoToAsset);
   useJinjaIntellisense(monacoInstance, editorInstance, asset, editorValue);
   usePythonIntellisense(monacoInstance, editorInstance, asset, editorValue);
+  usePythonQueryIntellisense(monacoInstance, editorInstance, asset, editorValue, onGoToAsset);
   useYAMLIntellisense(monacoInstance, editorInstance, asset);
 
   const { formatSQL, isSqlAsset, shortcutLabel } = useSQLFormatting(

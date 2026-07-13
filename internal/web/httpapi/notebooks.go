@@ -18,7 +18,7 @@ type NotebookHandlers interface {
 	Delete(notebookID string) *service.APIError
 	CloseSession(notebookID string) *service.APIError
 	CreateCell(notebookID string, req service.CreateCellRequest) (model.Notebook, *service.APIError)
-	UpdateCell(notebookID, cellID, content string) (model.Notebook, *service.APIError)
+	UpdateCell(notebookID, cellID string, req service.UpdateCellRequest) (model.Notebook, *service.APIError)
 	RenameCell(notebookID, cellID, newName string) (model.Notebook, *service.APIError)
 	DeleteCell(notebookID, cellID string) (model.Notebook, *service.APIError)
 	UpdateBlocks(notebookID string, blocks []model.NotebookBlock) (model.Notebook, *service.APIError)
@@ -114,18 +114,13 @@ func (h *NotebookAPI) HandleCreateCell(w http.ResponseWriter, r *http.Request) {
 	webapi.WriteJSON(w, http.StatusCreated, map[string]any{"status": "ok", "notebook": nb})
 }
 
-// UpdateCellRequest carries the full new cell file content.
-type UpdateCellRequest struct {
-	Content string `json:"content"`
-}
-
 func (h *NotebookAPI) HandleUpdateCell(w http.ResponseWriter, r *http.Request) {
-	var req UpdateCellRequest
+	var req service.UpdateCellRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		webapi.WriteBadRequest(w, "invalid_request_body", err.Error())
 		return
 	}
-	nb, apiErr := h.Service.UpdateCell(chi.URLParam(r, "id"), chi.URLParam(r, "cellID"), req.Content)
+	nb, apiErr := h.Service.UpdateCell(chi.URLParam(r, "id"), chi.URLParam(r, "cellID"), req)
 	if apiErr != nil {
 		writeNotebookError(w, apiErr)
 		return

@@ -376,33 +376,90 @@ export function AppNotebookLivePage({ notebookId }: { notebookId: string }) {
   // write completes and runs stale SQL (the "run twice for @viz" bug).
   const pendingSavesRef = useRef<Map<string, Promise<void>>>(new Map());
   const saveSeqRef = useRef<Map<string, number>>(new Map());
+  // Full-document saves are serialized per cell. Besides fixing response
+  // reordering in one editor, each request carries the revision acknowledged
+  // by the previous response, so another tab or a filesystem edit becomes an
+  // explicit conflict instead of a silent last-writer-wins overwrite.
+  const saveQueuesRef = useRef<
+    Map<
+      string,
+      {
+        tail: Promise<void>;
+        pending: number;
+        revision: string;
+        knownRevisions: Set<string>;
+      }
+    >
+  >(new Map());
 
   const saveCellBody = useCallback(
-    (cell: WebAsset, body: string): Promise<void> => {
+    (cell: WebAsset, body: string, baseRevision: string): Promise<void> => {
       const { header } = splitCellContent(cell.content);
       const cellId = cell.cell_id ?? "";
       const seq = (saveSeqRef.current.get(cellId) ?? 0) + 1;
       saveSeqRef.current.set(cellId, seq);
-      const promise = (async () => {
+      const draftRevision = baseRevision || cell.content_revision || "";
+      let queue = saveQueuesRef.current.get(cellId);
+      if (!queue) {
+        queue = {
+          tail: Promise.resolve(),
+          pending: 0,
+          revision: draftRevision,
+          knownRevisions: new Set(draftRevision ? [draftRevision] : []),
+        };
+        saveQueuesRef.current.set(cellId, queue);
+      } else if (
+        queue.pending === 0 &&
+        draftRevision &&
+        draftRevision !== queue.revision &&
+        !queue.knownRevisions.has(draftRevision)
+      ) {
+        // The cell card only advances its draft revision when it adopts the
+        // corresponding server body. A different revision here is therefore a
+        // clean external snapshot, not merely a delayed echo of our last save.
+        queue.revision = draftRevision;
+        queue.knownRevisions.add(draftRevision);
+      }
+      queue.pending += 1;
+
+      const previous = queue.tail;
+      const promise = previous.then(async () => {
         try {
+          const requestRevision = queue.revision;
+          if (requestRevision) {
+            queue.knownRevisions.add(requestRevision);
+          }
           // Saving marks the cell + descendants stale on the server, which then
           // drives auto-recompute and pushes the new state over SSE.
           const updated = await updateNotebookCell(
             notebookId,
             cellId,
             joinCellContent(header, body),
+            requestRevision,
           );
-          setMutated(updated);
+          const updatedCell = updated.cells.find((candidate) => candidate.cell_id === cellId);
+          if (updatedCell?.content_revision) {
+            queue.revision = updatedCell.content_revision;
+            queue.knownRevisions.add(updatedCell.content_revision);
+          }
+          // A queued newer save owns the visible mutation result. Applying an
+          // intermediate response here would recreate the stale echo that can
+          // replace the tail of an actively edited Monaco document.
+          if (saveSeqRef.current.get(cellId) === seq) {
+            setMutated(updated);
+          }
         } catch (error) {
           setActionError(String(error));
         } finally {
+          queue.pending = Math.max(0, queue.pending - 1);
           // Only the most recent save for this cell clears the pending slot,
           // so a slower earlier save cannot drop a newer one.
           if (saveSeqRef.current.get(cellId) === seq) {
             pendingSavesRef.current.delete(cellId);
           }
         }
-      })();
+      });
+      queue.tail = promise;
       pendingSavesRef.current.set(cellId, promise);
       return promise;
     },
@@ -884,7 +941,7 @@ export function AppNotebookLivePage({ notebookId }: { notebookId: string }) {
                         mutate(() => renameNotebookCell(notebookId, block.cell ?? "", name))
                       }
                       onPromote={() => void promoteCell(cell)}
-                      onSaveBody={(body) => saveCellBody(cell, body)}
+                      onSaveBody={(body, baseRevision) => saveCellBody(cell, body, baseRevision)}
                       autoCommit={autoRecompute}
                       pendingAuto={autoPending.has(block.cell ?? "")}
                       onGoToAsset={goToAsset}
@@ -1083,7 +1140,7 @@ function NotebookCellCard({
   onDelete: () => void;
   onRename: (name: string) => Promise<void>;
   onPromote: () => void;
-  onSaveBody: (body: string) => Promise<void>;
+  onSaveBody: (body: string, baseRevision: string) => Promise<void>;
   /** Save the draft on a typing debounce (drives auto-recompute without a blur). */
   autoCommit: boolean;
   /** Stale, but auto-recompute will refresh it on its own — don't flag it stale. */
@@ -1107,6 +1164,10 @@ function NotebookCellCard({
     [isPythonCell, draft, dependencies, installedModules],
   );
   const lastSavedRef = useRef(body);
+  // This is the snapshot the current draft actually branched from. It advances
+  // only when the matching server body is adopted; an SSE update arriving
+  // underneath unsaved typing must not silently rebase that draft.
+  const lastSavedRevisionRef = useRef(cell.content_revision ?? "");
   const savingBodyRef = useRef<string | null>(null);
   useEffect(() => {
     // Adopt the incoming body, but never clobber unsaved local edits: with
@@ -1122,9 +1183,10 @@ function NotebookCellCard({
         return current;
       }
       lastSavedRef.current = body;
+      lastSavedRevisionRef.current = cell.content_revision ?? "";
       return body;
     });
-  }, [body]);
+  }, [body, cell.content_revision]);
 
   const [renaming, setRenaming] = useState(false);
   const [nameDraft, setNameDraft] = useState(cell.name);
@@ -1145,7 +1207,7 @@ function NotebookCellCard({
   const commit = () => {
     if (draft !== lastSavedRef.current && draft !== savingBodyRef.current) {
       savingBodyRef.current = draft;
-      void onSaveBody(draft).finally(() => {
+      void onSaveBody(draft, lastSavedRevisionRef.current).finally(() => {
         if (savingBodyRef.current === draft) {
           savingBodyRef.current = null;
         }
@@ -1168,7 +1230,7 @@ function NotebookCellCard({
     const timer = window.setTimeout(() => {
       if (draft !== lastSavedRef.current && draft !== savingBodyRef.current) {
         savingBodyRef.current = draft;
-        void onSaveBodyRef.current(draft).finally(() => {
+        void onSaveBodyRef.current(draft, lastSavedRevisionRef.current).finally(() => {
           if (savingBodyRef.current === draft) {
             savingBodyRef.current = null;
           }
@@ -1184,7 +1246,7 @@ function NotebookCellCard({
     const next = applyVizKind(draft, kind, result?.columns ?? []);
     setDraft(next);
     savingBodyRef.current = next;
-    void onSaveBody(next).finally(() => {
+    void onSaveBody(next, lastSavedRevisionRef.current).finally(() => {
       if (savingBodyRef.current === next) {
         savingBodyRef.current = null;
       }

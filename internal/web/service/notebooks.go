@@ -86,25 +86,32 @@ func (s *WorkspaceService) notebookToModel(nb *notebook.Notebook) model.Notebook
 			upstreams = append(upstreams, upstream.Value)
 		}
 
-		content := cell.Asset.ExecutableFile.Content
+		// Raw is the authoritative on-disk snapshot (including an id inserted by
+		// EnsureCellID after the Bruin asset was parsed). Expose and version the
+		// same bytes so optimistic save preconditions survive parser rewrites.
+		content := cell.Raw
 		if strings.TrimSpace(content) == "" {
-			if raw, readErr := afero.ReadFile(afero.NewOsFs(), cell.Path); readErr == nil {
-				content = string(raw)
+			content = cell.Asset.ExecutableFile.Content
+			if strings.TrimSpace(content) == "" {
+				if raw, readErr := afero.ReadFile(afero.NewOsFs(), cell.Path); readErr == nil {
+					content = string(raw)
+				}
 			}
 		}
 
 		result.Cells = append(result.Cells, model.Asset{
-			ID:           EncodeID(filepath.ToSlash(relPath)),
-			Name:         cell.Asset.Name,
-			Type:         string(cell.Asset.Type),
-			Path:         filepath.ToSlash(relPath),
-			Content:      content,
-			Upstreams:    upstreams,
-			Meta:         cell.Asset.Meta,
-			Columns:      PipelineColumnsToModelColumns(cell.Asset.Columns),
-			Class:        notebook.ClassNotebook,
-			CellID:       cell.ID,
-			ExternalRefs: cell.ExternalRefs,
+			ID:              EncodeID(filepath.ToSlash(relPath)),
+			Name:            cell.Asset.Name,
+			Type:            string(cell.Asset.Type),
+			Path:            filepath.ToSlash(relPath),
+			Content:         content,
+			ContentRevision: notebook.ContentRevision(content),
+			Upstreams:       upstreams,
+			Meta:            cell.Asset.Meta,
+			Columns:         PipelineColumnsToModelColumns(cell.Asset.Columns),
+			Class:           notebook.ClassNotebook,
+			CellID:          cell.ID,
+			ExternalRefs:    cell.ExternalRefs,
 		})
 	}
 

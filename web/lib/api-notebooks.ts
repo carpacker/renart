@@ -127,11 +127,16 @@ export async function createNotebookCell(
   return payload.notebook;
 }
 
-export async function updateNotebookCell(notebookId: string, cellId: string, content: string) {
+export async function updateNotebookCell(
+  notebookId: string,
+  cellId: string,
+  content: string,
+  baseRevision?: string,
+) {
   const payload = await fetchJSONWithBody<NotebookEnvelope>(
     `/api/notebooks/${notebookId}/cells/${cellId}`,
     "PUT",
-    { content },
+    { content, base_revision: baseRevision },
   );
   return payload.notebook;
 }

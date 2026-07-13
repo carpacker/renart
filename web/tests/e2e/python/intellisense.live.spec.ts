@@ -100,6 +100,93 @@ df = pd.DataFrame({"a": [1]})
     await expectPythonCompletion(page, "returns_", "returns_int");
     await expectPythonCompletion(page, "pd.", "DataFrame");
   });
+
+  test("projects plain query string literals into the SQL language server", async ({
+    liveApp,
+    page,
+  }) => {
+    test.skip(
+      test.info().project.name.includes("mobile"),
+      "Monaco suggestion and marker APIs are only stable in the desktop editor.",
+    );
+
+    await writeFile(
+      join(liveApp.workspaceDir, pythonAssetPath),
+      `"""@bruin
+name: ${pythonAssetName}
+type: python
+@bruin"""
+
+from renart import query
+
+result = query("select 1")
+`,
+      "utf8",
+    );
+    await waitForWorkspaceAsset(page, liveApp.baseURL, pythonAssetName);
+    await openAssetEditor(page, liveApp.baseURL, {
+      assetId: pythonAssetId,
+      contentToken: "result",
+    });
+
+    await replaceEditorContent(
+      page,
+      ["from renart import query", "", 'result = query("select * from analytics.")'].join("\n"),
+      'analytics.")',
+    );
+    await expect(
+      page
+        .locator(".suggest-widget .monaco-list-row")
+        .filter({ hasText: "analytics.orders" })
+        .first(),
+    ).toBeVisible({ timeout: 15000 });
+
+    await replaceEditorContent(
+      page,
+      [
+        "from renart import query",
+        "",
+        'result = query("select * from analytics.orders as o where o.")',
+      ].join("\n"),
+      'o.")',
+    );
+    await expect(
+      page.locator(".suggest-widget .monaco-list-row").filter({ hasText: "order_id" }).first(),
+    ).toBeVisible({ timeout: 15000 });
+
+    await replaceEditorContent(
+      page,
+      [
+        "from renart import query",
+        "",
+        'result = query("select * from analytics.does_not_exist")',
+      ].join("\n"),
+    );
+    await expect
+      .poll(async () => await getPythonQuerySQLMarkers(page), { timeout: 15000 })
+      .toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            owner: "renart-python-query-sql",
+            message: expect.stringContaining("Unresolved relation: analytics.does_not_exist"),
+          }),
+        ]),
+      );
+
+    // Dynamic SQL remains Python-only: interpolated strings cannot be mapped
+    // safely back to one stable SQL document.
+    await replaceEditorContent(
+      page,
+      [
+        "from renart import query",
+        "column = 'order_id'",
+        'result = query(f"select {column} from analytics.orders")',
+      ].join("\n"),
+    );
+    await expect
+      .poll(async () => await getPythonQuerySQLMarkers(page), { timeout: 10000 })
+      .toEqual([]);
+  });
 });
 
 async function openAssetEditor(
@@ -157,6 +244,23 @@ async function getPythonTyMarkers(page: Page) {
   });
 }
 
+async function getPythonQuerySQLMarkers(page: Page) {
+  return await page.evaluate<Array<{ owner?: string; message: string; severity: number }>>(() => {
+    const monaco = (window as typeof window & { monaco?: any }).monaco;
+    const editor = monaco?.editor.getEditors?.()[0];
+    const model = editor?.getModel();
+    if (!monaco || !model) return [];
+    return monaco.editor
+      .getModelMarkers({ resource: model.uri })
+      .filter((marker: { owner?: string }) => marker.owner === "renart-python-query-sql")
+      .map((marker: { owner?: string; message: string; severity: number }) => ({
+        owner: marker.owner,
+        message: marker.message,
+        severity: marker.severity,
+      }));
+  });
+}
+
 async function getEditorValue(page: Page) {
   return await page.evaluate(() => {
     const monaco = (window as typeof window & { monaco?: any }).monaco;
@@ -171,6 +275,27 @@ async function formatDocument(page: Page) {
     const editor = monaco?.editor.getEditors?.()[0];
     await editor?.getAction("editor.action.formatDocument")?.run();
   });
+}
+
+async function replaceEditorContent(page: Page, content: string, cursorToken?: string) {
+  await page.evaluate(
+    ({ nextContent, token }) => {
+      const monaco = (window as typeof window & { monaco?: any }).monaco;
+      const editor = monaco?.editor.getEditors?.()[0];
+      const model = editor?.getModel();
+      if (!editor || !model) return;
+      editor.setValue(nextContent);
+      const cursorOffset = token
+        ? nextContent.lastIndexOf(token) + token.indexOf('"')
+        : nextContent.length;
+      editor.setPosition(model.getPositionAt(Math.max(0, cursorOffset)));
+      editor.focus();
+      if (token) {
+        editor.trigger("test", "editor.action.triggerSuggest", {});
+      }
+    },
+    { nextContent: content, token: cursorToken },
+  );
 }
 
 async function expectPythonCompletion(page: Page, prefix: string, expectedLabel: string) {

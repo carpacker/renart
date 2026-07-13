@@ -3,17 +3,20 @@ package model
 
 import "time"
 
-// Asset represents a web API asset with its metadata.
+// Asset represents a web API asset with its metadata. ContentRevision identifies
+// the exact snapshot returned for a notebook cell so saves can use it as an
+// optimistic-concurrency precondition.
 type Asset struct {
-	ID         string            `json:"id"`
-	Name       string            `json:"name"`
-	Type       string            `json:"type"`
-	Path       string            `json:"path"`
-	Content    string            `json:"content"`
-	Upstreams  []string          `json:"upstreams"`
-	Parameters map[string]string `json:"parameters,omitempty"`
-	Meta       map[string]string `json:"meta,omitempty"`
-	Columns    []Column          `json:"columns,omitempty"`
+	ID              string            `json:"id"`
+	Name            string            `json:"name"`
+	Type            string            `json:"type"`
+	Path            string            `json:"path"`
+	Content         string            `json:"content"`
+	ContentRevision string            `json:"content_revision,omitempty"`
+	Upstreams       []string          `json:"upstreams"`
+	Parameters      map[string]string `json:"parameters,omitempty"`
+	Meta            map[string]string `json:"meta,omitempty"`
+	Columns         []Column          `json:"columns,omitempty"`
 	// Connection is the effective target connection after applying pipeline
 	// defaults; ExplicitConnection is the persisted asset-level override used by
 	// metadata editors to represent the Auto state without losing runtime context.
