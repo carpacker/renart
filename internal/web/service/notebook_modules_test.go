@@ -38,5 +38,5 @@ func TestNotebookInstalledModulesScansSitePackages(t *testing.T) {
 }
 
 func TestNotebookInstalledModulesIncludesInjectedSDKWithoutVenv(t *testing.T) {
-	assert.Equal(t, []string{"renart"}, notebookInstalledModules(filepath.Join(t.TempDir(), "does-not-exist")))
+	assert.Equal(t, []string{"pandas", "pyarrow", "renart"}, notebookInstalledModules(filepath.Join(t.TempDir(), "does-not-exist")))
 }

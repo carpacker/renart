@@ -51,6 +51,10 @@ type renartPythonOperator struct {
 	// brokerRunQuery overrides project-connection lookup. Notebook cells use it
 	// to query the already-open notebook session without exposing its file path.
 	brokerRunQuery func(ctx context.Context, connection, sql string) (*query.QueryResult, error)
+	// Notebook runs reuse the notebook service's long-lived SQL parser instead
+	// of initializing a new parser for each task.
+	brokerValidateSQL func(sql string) error
+	brokerUsedTables  func(sql string) ([]string, error)
 	// stagingOutputPath makes the operator stop after collecting materialize()
 	// into this Parquet file. Notebook runners then load it directly into their
 	// existing session instead of creating an intermediate DuckDB database.
@@ -66,7 +70,40 @@ type renartPythonOperatorOptions struct {
 	enableBroker            bool
 	brokerDefaultConnection string
 	brokerRunQuery          func(ctx context.Context, connection, sql string) (*query.QueryResult, error)
+	brokerValidateSQL       func(sql string) error
+	brokerUsedTables        func(sql string) ([]string, error)
 	stagingOutputPath       string
+}
+
+type uvEnsurer interface {
+	EnsureUvInstalled(context.Context) (string, error)
+}
+
+// uvPathCache avoids a `uv self version` subprocess on every Python cell. The
+// binary lives in Renart/Bruin's managed home; a cheap stat still invalidates
+// the cache if it is removed between runs.
+type uvPathCache struct {
+	mu   sync.Mutex
+	path string
+}
+
+var renartUVCache uvPathCache
+
+func (c *uvPathCache) ensure(ctx context.Context, checker uvEnsurer) (string, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.path != "" {
+		if _, err := os.Stat(c.path); err == nil {
+			return c.path, nil
+		}
+		c.path = ""
+	}
+	path, err := checker.EnsureUvInstalled(ctx)
+	if err != nil {
+		return "", err
+	}
+	c.path = path
+	return path, nil
 }
 
 func newRenartPythonOperator(manager config.ConnectionAndDetailsGetter, envVariables map[string]string, opts renartPythonOperatorOptions) *renartPythonOperator {
@@ -80,6 +117,8 @@ func newRenartPythonOperator(manager config.ConnectionAndDetailsGetter, envVaria
 		enableBroker:            opts.enableBroker,
 		brokerDefaultConnection: opts.brokerDefaultConnection,
 		brokerRunQuery:          opts.brokerRunQuery,
+		brokerValidateSQL:       opts.brokerValidateSQL,
+		brokerUsedTables:        opts.brokerUsedTables,
 		stagingOutputPath:       opts.stagingOutputPath,
 		uv:                      &bruinpython.UvChecker{},
 		cmd:                     &bruinpython.CommandRunner{},
@@ -122,7 +161,7 @@ func (o *renartPythonOperator) RunTask(ctx context.Context, p *pipeline.Pipeline
 		envVariables["RENART_API_TOKEN"] = broker.Token
 	}
 
-	uvPath, err := o.uv.EnsureUvInstalled(ctx)
+	uvPath, err := renartUVCache.ensure(ctx, o.uv)
 	if err != nil {
 		return err
 	}
@@ -255,7 +294,18 @@ func (o *renartPythonOperator) startBroker(ctx context.Context, p *pipeline.Pipe
 		}
 	}
 
-	tools := &brokerSQLTools{dialect: brokerQueryDialect(o.manager, defaultConnection)}
+	var tools *brokerSQLTools
+	validateSQL := o.brokerValidateSQL
+	usedTables := o.brokerUsedTables
+	if validateSQL == nil || usedTables == nil {
+		tools = &brokerSQLTools{dialect: brokerQueryDialect(o.manager, defaultConnection)}
+		if validateSQL == nil {
+			validateSQL = tools.validateReadOnly
+		}
+		if usedTables == nil {
+			usedTables = tools.usedTables
+		}
+	}
 	runQuery := o.brokerRunQuery
 	if runQuery == nil {
 		runQuery = o.runBrokerQuery
@@ -265,20 +315,24 @@ func (o *renartPythonOperator) startBroker(ctx context.Context, p *pipeline.Pipe
 		Context:           doc,
 		DefaultConnection: defaultConnection,
 		RunQuery:          runQuery,
-		ValidateSQL:       tools.validateReadOnly,
-		UsedTables:        tools.usedTables,
+		ValidateSQL:       validateSQL,
+		UsedTables:        usedTables,
 		Registry:          o.registry,
 		KnownAssets:       knownAssets,
 		DeclaredUpstreams: declared,
 		Log:               output,
 	})
 	if err != nil {
-		tools.close()
+		if tools != nil {
+			tools.close()
+		}
 		return nil, nil, fmt.Errorf("failed to start the python run broker: %w", err)
 	}
 	return broker, func() {
 		broker.Close()
-		tools.close()
+		if tools != nil {
+			tools.close()
+		}
 	}, nil
 }
 
@@ -325,12 +379,11 @@ func (b *brokerSQLTools) validateReadOnly(sql string) error {
 	defer b.mu.Unlock()
 	parser := b.ensureParser()
 	if parser == nil {
-		return nil
+		return fmt.Errorf("could not initialize SQL validation")
 	}
 	isSelect, err := parser.IsSingleSelectQuery(sql, b.dialect)
 	if err != nil {
-		// An unparseable query still executes; the connection decides.
-		return nil
+		return fmt.Errorf("could not validate query: %w", err)
 	}
 	if !isSelect {
 		return fmt.Errorf("renart.query() only runs read-only single SELECT statements; use the asset's materialization for writes")
@@ -459,14 +512,6 @@ func (r pythonRun) uvRunArgs(pythonVersion string, target []string, extraWith []
 	return append(args, target...)
 }
 
-func (o *renartPythonOperator) lockPyproject(ctx context.Context, run pythonRun, pythonVersion string, projectRepo *git.Repo) error {
-	return o.cmd.Run(ctx, projectRepo, &bruinpython.CommandInstance{
-		Name:    run.uvPath,
-		Args:    []string{"lock", "--python", pythonVersion},
-		EnvVars: run.env,
-	})
-}
-
 // runScript runs a Python asset without materialization: the module executes
 // for its side effects (which may include renart.query() calls).
 func (o *renartPythonOperator) runScript(ctx context.Context, run pythonRun) error {
@@ -475,11 +520,6 @@ func (o *renartPythonOperator) runScript(ctx context.Context, run pythonRun) err
 		return err
 	}
 	module, runRepo := run.moduleForRun()
-	if run.isPyproject() {
-		if err := o.lockPyproject(ctx, run, pythonVersion, runRepo); err != nil {
-			return fmt.Errorf("failed to lock pyproject.toml dependencies: %w", err)
-		}
-	}
 	return o.cmd.Run(ctx, runRepo, &bruinpython.CommandInstance{
 		Name:    run.uvPath,
 		Args:    run.uvRunArgs(pythonVersion, []string{"--module", module}, nil),
@@ -541,16 +581,16 @@ func (o *renartPythonOperator) runWithMaterialization(ctx context.Context, run p
 		return fmt.Errorf("failed to write the materialization wrapper: %w", err)
 	}
 
-	if run.isPyproject() {
-		if err := o.lockPyproject(ctx, run, pythonVersion, runRepo); err != nil {
-			return fmt.Errorf("failed to lock pyproject.toml dependencies: %w", err)
-		}
+	// `uv run` performs the project lock/sync itself. The embedded SDK wheel
+	// already depends on pyarrow; keep an explicit fallback only if assembling
+	// the wheel failed.
+	extraWith := []string(nil)
+	if run.sdkWheel == "" {
+		extraWith = []string{"pyarrow>=15.0.0"}
 	}
-	// pyarrow writes the staging file; --with covers the wheel-less
-	// degradation case (the wheel already depends on pyarrow).
 	err = o.cmd.Run(ctx, runRepo, &bruinpython.CommandInstance{
 		Name:    run.uvPath,
-		Args:    run.uvRunArgs(pythonVersion, []string{wrapperPath}, []string{"pyarrow>=15.0.0"}),
+		Args:    run.uvRunArgs(pythonVersion, []string{wrapperPath}, extraWith),
 		EnvVars: run.env,
 	})
 	if err != nil {
@@ -725,17 +765,12 @@ def convert_and_write(df):
     import pyarrow as pa
     import pyarrow.parquet as pq
 
-    try:
-        import pandas as pd
-    except ImportError:
-        pd = None
-    try:
-        import polars as pl
-    except ImportError:
-        pl = None
-
-    def looks_like(obj, module_fragment, type_name):
-        return module_fragment in type(obj).__module__ and type(obj).__name__ == type_name
+    def derives_from(obj, module_name, type_name):
+        return any(
+            cls.__name__ == type_name
+            and (cls.__module__ == module_name or cls.__module__.startswith(module_name + "."))
+            for cls in type(obj).__mro__
+        )
 
     def write_tables(tables):
         iterator = iter(tables)
@@ -754,20 +789,22 @@ def convert_and_write(df):
                     raise TypeError("All yielded pyarrow Tables must share one schema.")
                 writer.write_table(table)
 
-    if (pl is not None and isinstance(df, pl.DataFrame)) or looks_like(df, "polars", "DataFrame"):
-        if pl is None:
-            raise TypeError("polars DataFrame returned but polars cannot be imported.")
+    if isinstance(df, pa.Table):
+        write_tables([df])
+        return
+
+    if derives_from(df, "polars", "DataFrame"):
+        import polars as pl
+        if not isinstance(df, pl.DataFrame):
+            raise TypeError(f"Unsupported polars return type: {type(df)}")
         df.write_parquet("$PARQUET_PATH")
         return
 
-    if (pd is not None and isinstance(df, pd.DataFrame)) or looks_like(df, "pandas", "DataFrame"):
-        if pd is None:
-            raise TypeError("pandas DataFrame returned but pandas cannot be imported.")
+    if derives_from(df, "pandas", "DataFrame"):
+        import pandas as pd
+        if not isinstance(df, pd.DataFrame):
+            raise TypeError(f"Unsupported pandas return type: {type(df)}")
         write_tables([pa.Table.from_pandas(df)])
-        return
-
-    if isinstance(df, pa.Table):
-        write_tables([df])
         return
 
     if isinstance(df, (list, tuple)):

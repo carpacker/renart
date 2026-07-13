@@ -74,9 +74,6 @@ func (b *boundedLogBuffer) String() string {
 // to runQuery, which targets the runner's already-open notebook session.
 func (s *NotebookService) materializePythonCell(ctx context.Context, cell *notebook.Cell, parquetPath string, runQuery notebook.PythonQueryFunc) (string, error) {
 	notebookDir := filepath.Dir(cell.Path)
-	// Python cells declare dependencies in pyproject.toml; uv installs them in
-	// project mode. Seed a default when none exists so a fresh cell runs.
-	ensureNotebookPyproject(notebookDir)
 
 	cfg := &config.Config{
 		SelectedEnvironmentName: "default",
@@ -134,7 +131,11 @@ func (s *NotebookService) materializePythonCell(ctx context.Context, cell *noteb
 		enableBroker:            true,
 		brokerDefaultConnection: notebook.NotebookConnectionName,
 		brokerRunQuery:          runQuery,
-		stagingOutputPath:       parquetPath,
+		brokerValidateSQL:       s.validateNotebookPythonQuery,
+		brokerUsedTables: func(sql string) ([]string, error) {
+			return s.usedTables(sql, notebook.DefaultCellType)
+		},
+		stagingOutputPath: parquetPath,
 	})
 	runErr := operator.RunTask(runCtx, runPipeline, &runAsset)
 	return logs.String(), runErr

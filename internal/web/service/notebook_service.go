@@ -83,6 +83,26 @@ func (s *NotebookService) renameTables(sqlText, dialect string, mapping map[stri
 	return parser.RenameTables(sqlText, dialect, mapping)
 }
 
+// validateNotebookPythonQuery applies the same single-SELECT boundary as the
+// ordinary Python broker while reusing the notebook service's long-lived SQL
+// parser. Reuse avoids initializing another parser for every Python cell.
+func (s *NotebookService) validateNotebookPythonQuery(sqlText string) error {
+	s.parserMu.Lock()
+	defer s.parserMu.Unlock()
+	parser, err := s.ensureParserLocked()
+	if err != nil {
+		return fmt.Errorf("could not initialize SQL validation: %w", err)
+	}
+	isSelect, err := parser.IsSingleSelectQuery(sqlText, "duckdb")
+	if err != nil {
+		return fmt.Errorf("could not validate notebook query: %w", err)
+	}
+	if !isSelect {
+		return fmt.Errorf("renart.query() only runs read-only single SELECT statements; use the cell's materialize() result for writes")
+	}
+	return nil
+}
+
 // newNotebookJinjaRenderer builds a Jinja renderer for a run's execution
 // window. A notebook is not a pipeline, so it renders with date windows only
 // (no pipeline variables or macros) — the same constructs the editor preview

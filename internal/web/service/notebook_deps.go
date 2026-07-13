@@ -2,7 +2,6 @@ package service
 
 import (
 	"net/http"
-	"os"
 	"path/filepath"
 	"strings"
 
@@ -35,33 +34,6 @@ func dependenciesFromText(content string) []string {
 		}
 	}
 	return deps
-}
-
-// ensureNotebookPyproject seeds a default pyproject.toml (pandas, duckdb) in a
-// notebook folder when neither it nor an ancestor up to the repo root already
-// declares Python dependencies (pyproject.toml or a legacy requirements.txt),
-// so a freshly created Python cell runs out of the box.
-func ensureNotebookPyproject(notebookDir string) {
-	dir := notebookDir
-	for {
-		if fileExists(filepath.Join(dir, pyprojectFile)) || fileExists(filepath.Join(dir, "requirements.txt")) {
-			return
-		}
-		if fileExists(filepath.Join(dir, ".git")) || fileExists(filepath.Join(dir, ".bruin.yml")) {
-			break
-		}
-		parent := filepath.Dir(dir)
-		if parent == dir {
-			break
-		}
-		dir = parent
-	}
-	_ = writeNotebookDependencies(notebookDir, []string{"pandas", "duckdb"})
-}
-
-func fileExists(path string) bool {
-	_, err := os.Stat(path)
-	return err == nil
 }
 
 // UpdateDependencies replaces the notebook's Python dependencies (pyproject.toml

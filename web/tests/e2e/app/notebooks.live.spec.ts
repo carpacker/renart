@@ -1,5 +1,5 @@
 import { expect, type APIRequestContext } from "@playwright/test";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { basename, join } from "node:path";
 
 import { liveTest as test } from "../live-app-fixture";
@@ -233,6 +233,7 @@ test.describe("app notebooks live", () => {
     const doubled = payload.results.find((result) => result.name === "doubled")!;
     expect(doubled.status, `${doubled.error ?? ""}\n${doubled.logs ?? ""}`).toBe("ok");
     expect(doubled.rows).toEqual([[20], [40]]);
+    expect(existsSync(join(liveApp.workspaceDir, notebook.path, "pyproject.toml"))).toBe(false);
   });
 
   test("rename is reference-rewriting and the chart type writes a @viz directive", async ({

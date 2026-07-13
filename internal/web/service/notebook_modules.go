@@ -10,31 +10,34 @@ import (
 
 const renartSDKModule = "renart"
 
+var renartRuntimeModules = []string{"pandas", "pyarrow", renartSDKModule}
+
 // notebookVenvDir is the uv project virtualenv for a notebook (kept under
 // .renart so it stays out of the git-tracked notebook folder).
 func notebookVenvDir(workspaceRoot, notebookDir string) string {
 	return filepath.Join(workspaceRoot, ".renart", "notebooks", "venvs", filepath.Base(notebookDir))
 }
 
-// notebookInstalledModules returns the top-level import names available in a
-// notebook's virtualenv. This is the ground truth for "is this import
-// resolvable", independent of how the package is named (cv2 from opencv-python,
-// yaml from PyYAML, …). The runner-injected renart SDK is always included,
-// including before the notebook virtualenv exists.
+// notebookInstalledModules returns top-level import names available in a
+// notebook's virtualenv or injected by the runner. The embedded SDK guarantees
+// renart, pandas, and pyarrow even before a notebook virtualenv exists.
 func notebookInstalledModules(venvDir string) []string {
-	return withRenartSDKModule(installedModulesFromSitePackages(pythonSitePackagesDirs(venvDir)))
+	return withRenartRuntimeModules(installedModulesFromSitePackages(pythonSitePackagesDirs(venvDir)))
 }
 
-// withRenartSDKModule adds the SDK module that the runner injects into every
-// Python invocation. It is available even though it does not live in the
-// project's persistent virtualenv.
-func withRenartSDKModule(modules []string) []string {
+// withRenartRuntimeModules adds the modules guaranteed by the injected SDK wheel.
+// They are available even though they need not live in the persistent venv.
+func withRenartRuntimeModules(modules []string) []string {
+	available := make(map[string]bool, len(modules)+len(renartRuntimeModules))
 	for _, module := range modules {
-		if module == renartSDKModule {
-			return modules
+		available[module] = true
+	}
+	for _, module := range renartRuntimeModules {
+		if !available[module] {
+			modules = append(modules, module)
+			available[module] = true
 		}
 	}
-	modules = append(modules, renartSDKModule)
 	sort.Strings(modules)
 	return modules
 }

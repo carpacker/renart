@@ -122,7 +122,7 @@ func canonicalRequirementName(spec string) string {
 // asset: packages from reachable project-local virtualenvs plus the
 // runner-injected renart SDK.
 func (s *AssetService) assetInstalledModules(relAssetPath string) []string {
-	return withRenartSDKModule(installedModulesFromSitePackages(s.assetLocalSitePackages(relAssetPath)))
+	return withRenartRuntimeModules(installedModulesFromSitePackages(s.assetLocalSitePackages(relAssetPath)))
 }
 
 // assetLocalSitePackages collects the site-packages directories of the local
