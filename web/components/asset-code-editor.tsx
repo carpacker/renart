@@ -18,6 +18,7 @@ export function AssetCodeEditor({
   containerClassName,
   editorModelPath,
   editorValue,
+  editorValueMode = "controlled",
   editorHighlighted,
   helpMode,
   highlightStyle,
@@ -34,6 +35,7 @@ export function AssetCodeEditor({
   containerClassName?: string;
   editorModelPath: string;
   editorValue: string;
+  editorValueMode?: "controlled" | "initial";
   editorHighlighted: boolean;
   helpMode: boolean;
   highlightStyle?: React.CSSProperties;
@@ -47,12 +49,18 @@ export function AssetCodeEditor({
   onMount: (editor: MonacoNS.editor.IStandaloneCodeEditor, monaco: Monaco) => void;
 }) {
   const [showFormatButton, setShowFormatButton] = useState(false);
+  const isPythonAsset = Boolean(
+    asset && (asset.path.toLowerCase().endsWith(".py") || asset.type?.toLowerCase() === "python"),
+  );
   const editorOptions = useMemo(
     () => ({
       minimap: { enabled: false },
       fontSize: 13,
       fixedOverflowWidgets: true,
-      quickSuggestions: true,
+      // Monaco normally suppresses suggestions inside strings. Plain Python
+      // query("...") literals are projected into SQL, so let that provider
+      // participate during ordinary typing rather than only after Ctrl+Space.
+      quickSuggestions: isPythonAsset ? { other: true, comments: false, strings: true } : true,
       suggestOnTriggerCharacters: true,
       // Track the container via Monaco's own ResizeObserver. Without this the
       // editor only re-measures on a window resize, so when a sibling (e.g. the
@@ -61,7 +69,7 @@ export function AssetCodeEditor({
       // window is resized.
       automaticLayout: true,
     }),
-    [],
+    [isPythonAsset],
   );
 
   const handlePointerActivity = () => {
@@ -96,11 +104,13 @@ export function AssetCodeEditor({
         }
       >
         <MonacoEditor
-          language={asset ? editorLanguageForAssetPath(asset.path) : "sql"}
+          language={asset ? editorLanguageForAsset(asset) : "sql"}
           path={editorModelPath}
           saveViewState
           keepCurrentModel
-          value={editorValue}
+          {...(editorValueMode === "initial"
+            ? { defaultValue: editorValue }
+            : { value: editorValue })}
           theme={monacoTheme}
           beforeMount={onBeforeMount}
           onChange={onChange}
@@ -112,9 +122,9 @@ export function AssetCodeEditor({
   );
 }
 
-function editorLanguageForAssetPath(path: string): "sql" | "python" | "yaml" {
-  const lowerPath = path.toLowerCase();
-  if (lowerPath.endsWith(".py")) {
+function editorLanguageForAsset(asset: WebAsset): "sql" | "python" | "yaml" {
+  const lowerPath = asset.path.toLowerCase();
+  if (lowerPath.endsWith(".py") || asset.type?.toLowerCase() === "python") {
     return "python";
   }
   if (lowerPath.endsWith(".yml") || lowerPath.endsWith(".yaml")) {

@@ -6,6 +6,7 @@ import {
   sourceOffsetForSQLOffset,
   sqlOffsetForSourceOffset,
 } from "../../../lib/python-query-literals";
+import { computeMinimalTextEdit, transformOffsetThroughEdit } from "../../../lib/monaco-model-sync";
 
 test.describe("Python query literal projection", () => {
   test("extracts stable query strings and ignores dynamic or non-code lookalikes", () => {
@@ -40,5 +41,24 @@ test.describe("Python query literal projection", () => {
     expect(sourceOffsetForSQLOffset(literal, sqlOrderOffset)).toBe(sourceOrderOffset);
     expect(sqlOffsetForSourceOffset(literal, sourceOrderOffset)).toBe(sqlOrderOffset);
     expect(pythonQueryLiteralAtOffset(source, sourceOrderOffset)?.sql).toBe(literal.sql);
+  });
+
+  test("keeps an unfinished plain query literal projected while typing", () => {
+    const source = 'result = query("select * from analytics.orders as o where o.';
+    const [literal] = findPythonQueryLiterals(source);
+
+    expect(literal.sql).toBe("select * from analytics.orders as o where o.");
+    expect(literal.sourceEnd).toBe(source.length);
+    expect(pythonQueryLiteralAtOffset(source, source.length)).toEqual(literal);
+  });
+});
+
+test.describe("Monaco external model synchronization", () => {
+  test("reduces a snapshot to a cursor-transformable edit", () => {
+    const edit = computeMinimalTextEdit("select amount from orders", "select total from orders");
+    expect(edit).toEqual({ start: 7, end: 13, text: "total" });
+    expect(transformOffsetThroughEdit(3, edit!)).toBe(3);
+    expect(transformOffsetThroughEdit(10, edit!)).toBe(12);
+    expect(transformOffsetThroughEdit(25, edit!)).toBe(24);
   });
 });

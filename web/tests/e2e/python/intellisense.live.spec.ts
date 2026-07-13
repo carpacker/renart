@@ -131,9 +131,12 @@ result = query("select 1")
 
     await replaceEditorContent(
       page,
-      ["from renart import query", "", 'result = query("select * from analytics.")'].join("\n"),
-      'analytics.")',
+      ["from renart import query", "", 'result = query("select * from analytics'].join("\n"),
     );
+    await page.keyboard.type(".");
+    await expect(
+      page.locator(".bruin-python-sql-keyword").filter({ hasText: "select" }).first(),
+    ).toBeVisible({ timeout: 15000 });
     await expect(
       page
         .locator(".suggest-widget .monaco-list-row")
@@ -141,17 +144,19 @@ result = query("select 1")
         .first(),
     ).toBeVisible({ timeout: 15000 });
 
-    await replaceEditorContent(
-      page,
-      [
-        "from renart import query",
-        "",
-        'result = query("select * from analytics.orders as o where o.")',
-      ].join("\n"),
-      'o.")',
-    );
+    await page.keyboard.press("Escape");
+    const closedQuery = [
+      "from renart import query",
+      "",
+      'result = query("select * from analy")',
+    ].join("\n");
+    await replaceEditorContent(page, closedQuery, 'analy")', false);
+    await page.keyboard.type("t");
     await expect(
-      page.locator(".suggest-widget .monaco-list-row").filter({ hasText: "order_id" }).first(),
+      page
+        .locator(".suggest-widget .monaco-list-row")
+        .filter({ hasText: "analytics.orders" })
+        .first(),
     ).toBeVisible({ timeout: 15000 });
 
     await replaceEditorContent(
@@ -277,9 +282,14 @@ async function formatDocument(page: Page) {
   });
 }
 
-async function replaceEditorContent(page: Page, content: string, cursorToken?: string) {
+async function replaceEditorContent(
+  page: Page,
+  content: string,
+  cursorToken?: string,
+  triggerSuggest = Boolean(cursorToken),
+) {
   await page.evaluate(
-    ({ nextContent, token }) => {
+    ({ nextContent, token, shouldTriggerSuggest }) => {
       const monaco = (window as typeof window & { monaco?: any }).monaco;
       const editor = monaco?.editor.getEditors?.()[0];
       const model = editor?.getModel();
@@ -290,11 +300,11 @@ async function replaceEditorContent(page: Page, content: string, cursorToken?: s
         : nextContent.length;
       editor.setPosition(model.getPositionAt(Math.max(0, cursorOffset)));
       editor.focus();
-      if (token) {
+      if (token && shouldTriggerSuggest) {
         editor.trigger("test", "editor.action.triggerSuggest", {});
       }
     },
-    { nextContent: content, token: cursorToken },
+    { nextContent: content, token: cursorToken, shouldTriggerSuggest: triggerSuggest },
   );
 }
 

@@ -62,7 +62,8 @@ function registerPythonProviders(
   resolveAsset: (model: MonacoNS.editor.ITextModel) => WebAsset | null,
 ): MonacoNS.IDisposable {
   const isPython = (asset: WebAsset | null): asset is WebAsset =>
-    !!asset?.id && asset.path.toLowerCase().endsWith(".py");
+    !!asset?.id &&
+    (asset.path.toLowerCase().endsWith(".py") || asset.type?.toLowerCase() === "python");
 
   const formatting = monaco.languages.registerDocumentFormattingEditProvider("python", {
     async provideDocumentFormattingEdits(model) {
@@ -234,7 +235,9 @@ export function usePythonIntellisense(
   asset: WebAsset | null,
   content: string,
 ) {
-  const isPythonAsset = !!asset?.id && asset.path.toLowerCase().endsWith(".py");
+  const isPythonAsset =
+    !!asset?.id &&
+    (asset.path.toLowerCase().endsWith(".py") || asset.type?.toLowerCase() === "python");
 
   // Register this editor's asset by model URI and acquire the shared global
   // providers. The providers resolve the asset for whichever model they run on,

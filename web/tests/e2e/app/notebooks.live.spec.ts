@@ -282,12 +282,17 @@ test.describe("app notebooks live", () => {
       await setNotebookEditorValue(page, cellId, "select 2 as value");
       await firstProcessed;
 
-      await setNotebookEditorValue(page, cellId, "select 2 as value union all select 3");
-      await page.waitForTimeout(600);
-      expect(savedRequests).toHaveLength(1);
-
-      releaseFirstResponse();
-      released = true;
+      const secondSuffix = " union all select 3";
+      const releaseTimer = setTimeout(() => {
+        releaseFirstResponse();
+        released = true;
+      }, 20);
+      await page.keyboard.type(secondSuffix, { delay: 8 });
+      clearTimeout(releaseTimer);
+      if (!released) {
+        releaseFirstResponse();
+        released = true;
+      }
       await expect.poll(() => savedRequests.length, { timeout: 15000 }).toBe(2);
       expect(savedRequests[0].baseRevision).toMatch(/^[0-9a-f]{64}$/);
       expect(savedRequests[1].baseRevision).toMatch(/^[0-9a-f]{64}$/);
@@ -307,6 +312,25 @@ test.describe("app notebooks live", () => {
           { timeout: 15000 },
         )
         .toBe("select 2 as value union all select 3");
+      await expect
+        .poll(
+          () =>
+            page.evaluate((targetCellId) => {
+              const monaco = (window as typeof window & { monaco?: any }).monaco;
+              const model = monaco?.editor
+                .getModels?.()
+                .find((candidate: any) =>
+                  candidate.uri.toString().includes(`/notebook/${targetCellId}.`),
+                );
+              const editor = monaco?.editor
+                .getEditors?.()
+                .find((candidate: any) => candidate.getModel?.() === model);
+              const position = editor?.getPosition();
+              return model && position ? model.getOffsetAt(position) : -1;
+            }, cellId),
+          { timeout: 15000 },
+        )
+        .toBe("select 2 as value union all select 3".length);
 
       await expect
         .poll(async () => {
@@ -722,12 +746,12 @@ test.describe("app notebooks live", () => {
       "select 10 as amount, 'Ada' as customer_name",
     );
     const pythonCell = await addPythonCell(page.request, liveApp.baseURL, notebook.id, "reader");
-    const pythonBody = [
+    const savedPythonBody = [
       "from renart import query",
       "",
-      'result = query("select * from base as b where b.")',
+      'result = query("select * from base")',
     ].join("\n");
-    await setPythonCell(page.request, liveApp.baseURL, notebook.id, pythonCell, pythonBody);
+    await setPythonCell(page.request, liveApp.baseURL, notebook.id, pythonCell, savedPythonBody);
 
     await page.goto(`${liveApp.baseURL}/notebooks/${notebook.id}`);
     await expect(page.getByText("Python SQL IntelliSense").first()).toBeVisible({ timeout: 15000 });
@@ -736,13 +760,36 @@ test.describe("app notebooks live", () => {
     ).toBeVisible({
       timeout: 15000,
     });
-    await setNotebookEditorValue(page, pythonCell, pythonBody, {
-      cursorOffset: pythonBody.lastIndexOf('"'),
-      triggerSuggest: true,
+    const unfinishedBody = [
+      "from renart import query",
+      "",
+      'result = query("select * from base as b where b',
+    ].join("\n");
+    await setNotebookEditorValue(page, pythonCell, unfinishedBody, {
+      cursorOffset: unfinishedBody.length,
     });
+    await page.keyboard.type(".");
 
     await expect(
       page.locator(".suggest-widget .monaco-list-row").filter({ hasText: "amount" }).first(),
+    ).toBeVisible({ timeout: 15000 });
+    await expect(
+      page
+        .locator(`[data-notebook-cell-id="${pythonCell}"] .bruin-python-sql-keyword`)
+        .filter({ hasText: "select" })
+        .first(),
+    ).toBeVisible({ timeout: 15000 });
+
+    await page.keyboard.press("Escape");
+    const closedBody = ["from renart import query", "", 'result = query("select * from ba")'].join(
+      "\n",
+    );
+    await setNotebookEditorValue(page, pythonCell, closedBody, {
+      cursorOffset: closedBody.lastIndexOf('"'),
+    });
+    await page.keyboard.type("s");
+    await expect(
+      page.locator(".suggest-widget .monaco-list-row").filter({ hasText: "base" }).first(),
     ).toBeVisible({ timeout: 15000 });
   });
 

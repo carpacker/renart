@@ -195,6 +195,31 @@
   font-weight: 600;
 }
 
+.monaco-editor .bruin-python-sql-keyword {
+  color: #0000ff !important;
+}
+
+.monaco-editor .bruin-python-sql-string {
+  color: #a31515 !important;
+}
+
+.monaco-editor .bruin-python-sql-number {
+  color: #098658 !important;
+}
+
+.monaco-editor .bruin-python-sql-predefined {
+  color: #267f99 !important;
+}
+
+.monaco-editor .bruin-python-sql-operator {
+  color: #24292f !important;
+}
+
+.monaco-editor .bruin-python-sql-comment {
+  color: #008000 !important;
+  font-style: italic;
+}
+
 .monaco-editor .bruin-jinja-expression {
   color: #8b5cf6 !important;
   font-weight: 500;
@@ -225,6 +250,30 @@
 
 .dark .monaco-editor .bruin-sql-token-alias {
   color: #c4b5fd !important;
+}
+
+.dark .monaco-editor .bruin-python-sql-keyword {
+  color: #569cd6 !important;
+}
+
+.dark .monaco-editor .bruin-python-sql-string {
+  color: #ce9178 !important;
+}
+
+.dark .monaco-editor .bruin-python-sql-number {
+  color: #b5cea8 !important;
+}
+
+.dark .monaco-editor .bruin-python-sql-predefined {
+  color: #4ec9b0 !important;
+}
+
+.dark .monaco-editor .bruin-python-sql-operator {
+  color: #d4d4d4 !important;
+}
+
+.dark .monaco-editor .bruin-python-sql-comment {
+  color: #6a9955 !important;
 }
 
 .dark .monaco-editor .bruin-jinja-expression {

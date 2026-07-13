@@ -9,6 +9,8 @@ export type PythonQueryLiteral = {
 /**
  * Extract direct query("...") and renart.query("...") calls whose first
  * argument is one ordinary (optionally raw/triple-quoted) Python string.
+ * An unterminated literal is included as well: that is the normal state while
+ * somebody is typing a new query, and its source map is stable through EOF.
  * Dynamic expressions, f-strings, bytes, comments, and query-looking text
  * inside other strings are deliberately ignored.
  *
@@ -115,7 +117,7 @@ function parseQueryLiteral(source: string, callStart: number, afterName: number)
     return null;
   }
   const afterLiteral = skipWhitespace(source, parsed.end);
-  if (source[afterLiteral] !== ")" && source[afterLiteral] !== ",") {
+  if (parsed.terminated && source[afterLiteral] !== ")" && source[afterLiteral] !== ",") {
     // The SQL must be the complete first argument. Reject concatenation,
     // method calls, and other expressions even when they start with a string,
     // because their runtime value has no stable source map.
@@ -152,6 +154,7 @@ function readPythonString(source: string, quoteStart: number, raw: boolean) {
         bodyEnd: index,
         end: index + delimiterLength,
         sqlToSourceOffsets,
+        terminated: true,
       };
     }
 
@@ -166,7 +169,13 @@ function readPythonString(source: string, quoteStart: number, raw: boolean) {
     // literal. Raw values retain both code units; ordinary strings decode the
     // common Python escapes and map the decoded boundary back to their source.
     if (index + 1 >= source.length) {
-      return null;
+      // Preserve a dangling slash in an in-progress literal. Python cannot
+      // execute it yet, but dropping the whole projection while the user is
+      // between keystrokes also drops SQL completion and highlighting.
+      value += source[index];
+      index += 1;
+      sqlToSourceOffsets.push(index);
+      continue;
     }
     if (raw) {
       value += source.slice(index, index + 2);
@@ -187,7 +196,14 @@ function readPythonString(source: string, quoteStart: number, raw: boolean) {
     index = decoded.end;
   }
 
-  return null;
+  return {
+    value,
+    bodyStart,
+    bodyEnd: source.length,
+    end: source.length,
+    sqlToSourceOffsets,
+    terminated: false,
+  };
 }
 
 function decodePythonEscape(source: string, start: number): { value: string; end: number } {

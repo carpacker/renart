@@ -8,6 +8,7 @@ import {
   type PointerEvent as ReactPointerEvent,
   useCallback,
   useEffect,
+  useLayoutEffect,
   useRef,
   useState,
 } from "react";
@@ -22,6 +23,7 @@ import { useVizIntellisense } from "@/hooks/use-viz-intellisense";
 import { useWorkspaceTheme } from "@/hooks/use-workspace-theme";
 import { formatSQLAsset } from "@/lib/api";
 import { defineBruinMonacoThemes } from "@/lib/monaco-theme";
+import { applyExternalModelValue } from "@/lib/monaco-model-sync";
 import { normalizeVizDirectiveLine } from "@/components/app/notebook-viz-directive";
 import {
   buildSchemaForAsset,
@@ -157,6 +159,11 @@ export function NotebookCellMonaco({
     startY: number;
     startHeight: number;
   } | null>(null);
+  // Monaco owns local typing. Keep every not-yet-observed model snapshot so a
+  // concurrent React render cannot mistake an older keystroke for an external
+  // update and replay it over newer text.
+  const localModelValuesRef = useRef(new Set<string>());
+  const applyingExternalValueRef = useRef(false);
 
   const cellId = cell.cell_id ?? cell.id;
   const isPython = cell.type?.toLowerCase() === "python" || cell.path.toLowerCase().endsWith(".py");
@@ -209,20 +216,33 @@ export function NotebookCellMonaco({
     onGoToCell,
   );
 
-  // Monaco replaces the whole document when the `value` prop changes; only move
-  // the value handed to the editor for changes that did not originate from the
-  // editor itself (cell switch, @viz toggle, format), or keystrokes get dropped.
-  const lastEditorChangeRef = useRef<{ cellId: string; value: string } | null>(null);
-  const displayValueRef = useRef<{ cellId: string | null; value: string }>({
-    cellId: null,
-    value: "",
-  });
-  const lastEditorChange = lastEditorChangeRef.current;
-  const changeCameFromEditor =
-    lastEditorChange?.cellId === cellId && lastEditorChange.value === value;
-  if (displayValueRef.current.cellId !== cellId || !changeCameFromEditor) {
-    displayValueRef.current = { cellId, value };
-  }
+  // React never controls the Monaco model after creation. A server/format/UI
+  // snapshot is reduced to a minimal model edit, preserving selections and
+  // giving a future collaborative layer an operation-shaped integration point.
+  useLayoutEffect(() => {
+    if (!editorInstance || !monacoInstance) {
+      return;
+    }
+    const model = editorInstance.getModel();
+    if (!model) {
+      return;
+    }
+    if (model.getValue() === value) {
+      localModelValuesRef.current.clear();
+      return;
+    }
+    if (localModelValuesRef.current.delete(value)) {
+      return;
+    }
+
+    applyingExternalValueRef.current = true;
+    try {
+      applyExternalModelValue(editorInstance, monacoInstance, value);
+      localModelValuesRef.current.clear();
+    } finally {
+      applyingExternalValueRef.current = false;
+    }
+  }, [cellId, editorInstance, monacoInstance, value]);
 
   const formatSQL = useCallback(() => {
     if (!editorInstance || isPython) {
@@ -298,7 +318,7 @@ export function NotebookCellMonaco({
 
   // Grow with content until the user takes ownership with the resize handle.
   // A double-click on the handle returns to content-driven sizing.
-  const lineCount = displayValueRef.current.value.split("\n").length;
+  const lineCount = value.split("\n").length;
   const contentHeight =
     Math.min(Math.max(lineCount, NOTEBOOK_EDITOR_MIN_LINES), NOTEBOOK_EDITOR_AUTO_MAX_LINES) *
       NOTEBOOK_EDITOR_LINE_HEIGHT +
@@ -370,7 +390,8 @@ export function NotebookCellMonaco({
           asset={cell}
           containerClassName="h-full"
           editorModelPath={`inmemory://bruin/notebook/${cellId}.${ext}`}
-          editorValue={displayValueRef.current.value}
+          editorValue={value}
+          editorValueMode="initial"
           editorHighlighted={false}
           helpMode={false}
           isSqlAsset={!isPython}
@@ -379,7 +400,10 @@ export function NotebookCellMonaco({
           monacoTheme={monacoTheme}
           onChange={(next) => {
             const nextValue = next ?? "";
-            lastEditorChangeRef.current = { cellId, value: nextValue };
+            if (applyingExternalValueRef.current) {
+              return;
+            }
+            localModelValuesRef.current.add(nextValue);
             onChange(nextValue);
           }}
           onBeforeMount={handleBeforeMount}

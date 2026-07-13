@@ -27,6 +27,7 @@ import {
 import { WebAsset, WorkspaceState } from "@/lib/types";
 
 const PYTHON_QUERY_SQL_MARKER_OWNER = "renart-python-query-sql";
+const SQL_SEMANTIC_KINDS = ["schema", "table", "column", "alias"] as const;
 
 type PythonQueryProviderState = {
   asset: WebAsset | null;
@@ -62,7 +63,7 @@ export function usePythonQueryIntellisense(
     onGoToCell,
   });
   providerStateRef.current = { asset, workspace, onGoToAsset, onGoToCell };
-  const isPythonAsset = !!asset?.id && asset.path.toLowerCase().endsWith(".py");
+  const isPythonAsset = isPython(asset);
 
   useEffect(() => {
     if (!monaco || !editor || !isPythonAsset) {
@@ -78,6 +79,67 @@ export function usePythonQueryIntellisense(
     return () => {
       pythonQueryEntries.delete(uri);
       release();
+    };
+  }, [asset?.id, editor, isPythonAsset, monaco]);
+
+  // A Python model tokenizes the entire literal as one Python string. Render
+  // SQL lexical tokens and LSP relation tokens as model decorations so the
+  // embedded language is visible for both complete and in-progress calls.
+  // This also avoids relying on a second document semantic-token provider for
+  // the Python language, which Monaco does not compose predictably.
+  useEffect(() => {
+    if (!monaco || !editor || !asset?.id || !isPythonAsset) {
+      return;
+    }
+    const model = editor.getModel();
+    if (!model) {
+      return;
+    }
+
+    let decorationIds: string[] = [];
+    let semanticTimer: number | null = null;
+    let refreshRevision = 0;
+    let disposed = false;
+
+    const refresh = () => {
+      const revision = ++refreshRevision;
+      const literals = findPythonQueryLiterals(model.getValue());
+      const lexical = embeddedSQLLexicalDecorations(monaco, model, literals);
+      decorationIds = editor.deltaDecorations(decorationIds, lexical);
+
+      if (semanticTimer !== null) {
+        window.clearTimeout(semanticTimer);
+      }
+      if (literals.length === 0) {
+        return;
+      }
+      semanticTimer = window.setTimeout(() => {
+        void Promise.all(
+          literals.map((literal) =>
+            getSQLLSPSemanticTokens({
+              asset_id: asset.id,
+              content: literal.sql,
+            }).catch(() => null),
+          ),
+        ).then((responses) => {
+          if (disposed || revision !== refreshRevision) {
+            return;
+          }
+          const semantic = embeddedSQLSemanticDecorations(model, literals, responses);
+          decorationIds = editor.deltaDecorations(decorationIds, [...lexical, ...semantic]);
+        });
+      }, 120);
+    };
+
+    refresh();
+    const changeSubscription = model.onDidChangeContent(refresh);
+    return () => {
+      disposed = true;
+      changeSubscription.dispose();
+      if (semanticTimer !== null) {
+        window.clearTimeout(semanticTimer);
+      }
+      decorationIds = editor.deltaDecorations(decorationIds, []);
     };
   }, [asset?.id, editor, isPythonAsset, monaco]);
 
@@ -329,39 +391,12 @@ function registerPythonQueryProviders(monaco: typeof MonacoNS): MonacoNS.IDispos
     },
   });
 
-  const semanticTokens = monaco.languages.registerDocumentSemanticTokensProvider("python", {
-    getLegend() {
-      return { tokenTypes: ["schema", "table", "column", "alias"], tokenModifiers: [] };
-    },
-    async provideDocumentSemanticTokens(model, _lastResultId, token) {
-      const state = resolveState(model);
-      if (!state?.asset?.id) {
-        return { data: new Uint32Array() };
-      }
-      const literals = findPythonQueryLiterals(model.getValue());
-      const responses = await Promise.all(
-        literals.map((literal) =>
-          getSQLLSPSemanticTokens({
-            asset_id: state.asset!.id,
-            content: literal.sql,
-          }).catch(() => null),
-        ),
-      );
-      if (token.isCancellationRequested) {
-        return { data: new Uint32Array() };
-      }
-      return { data: encodeHostSemanticTokens(model, literals, responses) };
-    },
-    releaseDocumentSemanticTokens() {},
-  });
-
   return {
     dispose() {
       completion.dispose();
       hover.dispose();
       definition.dispose();
       signature.dispose();
-      semanticTokens.dispose();
     },
   };
 }
@@ -500,18 +535,79 @@ function sqlRangeToMonaco(monaco: typeof MonacoNS, range: SQLLSPRange) {
   );
 }
 
-function encodeHostSemanticTokens(
+function embeddedSQLLexicalDecorations(
+  monaco: typeof MonacoNS,
+  model: MonacoNS.editor.ITextModel,
+  literals: PythonQueryLiteral[],
+): MonacoNS.editor.IModelDeltaDecoration[] {
+  const decorations: MonacoNS.editor.IModelDeltaDecoration[] = [];
+
+  for (const literal of literals) {
+    const lines = literal.sql.split("\n");
+    const tokenLines = monaco.editor.tokenize(literal.sql, "sql");
+    let sqlLineOffset = 0;
+    for (let lineIndex = 0; lineIndex < lines.length; lineIndex += 1) {
+      const line = lines[lineIndex];
+      const tokens = tokenLines[lineIndex] ?? [];
+      for (let tokenIndex = 0; tokenIndex < tokens.length; tokenIndex += 1) {
+        const token = tokens[tokenIndex];
+        const className = embeddedSQLTokenClass(token.type);
+        const endOffset = tokens[tokenIndex + 1]?.offset ?? line.length;
+        if (!className || endOffset <= token.offset) {
+          continue;
+        }
+        const start = model.getPositionAt(
+          sourceOffsetForSQLOffset(literal, sqlLineOffset + token.offset),
+        );
+        const end = model.getPositionAt(
+          sourceOffsetForSQLOffset(literal, sqlLineOffset + endOffset),
+        );
+        decorations.push({
+          range: {
+            startLineNumber: start.lineNumber,
+            startColumn: start.column,
+            endLineNumber: end.lineNumber,
+            endColumn: end.column,
+          },
+          options: { inlineClassName: className },
+        });
+      }
+      sqlLineOffset += line.length + 1;
+    }
+  }
+
+  return decorations;
+}
+
+function embeddedSQLTokenClass(tokenType: string) {
+  const normalized = tokenType.toLowerCase();
+  if (normalized.includes("comment")) {
+    return "bruin-python-sql-comment";
+  }
+  if (normalized.includes("string")) {
+    return "bruin-python-sql-string";
+  }
+  if (normalized.includes("number")) {
+    return "bruin-python-sql-number";
+  }
+  if (normalized.includes("keyword")) {
+    return "bruin-python-sql-keyword";
+  }
+  if (normalized.includes("predefined") || normalized.includes("type")) {
+    return "bruin-python-sql-predefined";
+  }
+  if (normalized.includes("operator") || normalized.includes("delimiter")) {
+    return "bruin-python-sql-operator";
+  }
+  return null;
+}
+
+function embeddedSQLSemanticDecorations(
   model: MonacoNS.editor.ITextModel,
   literals: PythonQueryLiteral[],
   responses: Array<{ tokens?: { data: number[] } } | null>,
-) {
-  const absolute: Array<{
-    line: number;
-    start: number;
-    length: number;
-    tokenType: number;
-    modifiers: number;
-  }> = [];
+): MonacoNS.editor.IModelDeltaDecoration[] {
+  const decorations: MonacoNS.editor.IModelDeltaDecoration[] = [];
 
   for (let literalIndex = 0; literalIndex < literals.length; literalIndex += 1) {
     const literal = literals[literalIndex];
@@ -530,31 +626,24 @@ function encodeHostSemanticTokens(
       if (hostRange.startLineNumber !== hostRange.endLineNumber) {
         continue;
       }
-      absolute.push({
-        line: hostRange.startLineNumber - 1,
-        start: hostRange.startColumn - 1,
-        length: Math.max(0, hostRange.endColumn - hostRange.startColumn),
-        tokenType: data[index + 3],
-        modifiers: data[index + 4],
+      const kind = SQL_SEMANTIC_KINDS[data[index + 3]];
+      if (!kind || hostRange.startColumn === hostRange.endColumn) {
+        continue;
+      }
+      decorations.push({
+        range: hostRange,
+        options: { inlineClassName: `bruin-sql-token-${kind}` },
       });
     }
   }
+  return decorations;
+}
 
-  absolute.sort((left, right) => left.line - right.line || left.start - right.start);
-  const encoded: number[] = [];
-  let previousLine = 0;
-  let previousStart = 0;
-  for (const token of absolute) {
-    if (token.length === 0) {
-      continue;
-    }
-    const deltaLine = token.line - previousLine;
-    const deltaStart = deltaLine === 0 ? token.start - previousStart : token.start;
-    encoded.push(deltaLine, deltaStart, token.length, token.tokenType, token.modifiers);
-    previousLine = token.line;
-    previousStart = token.start;
-  }
-  return new Uint32Array(encoded);
+function isPython(asset: WebAsset | null): asset is WebAsset {
+  return Boolean(
+    asset?.id &&
+    (asset.path.toLowerCase().endsWith(".py") || asset.type?.toLowerCase() === "python"),
+  );
 }
 
 function clearPythonQueryMarkers(
