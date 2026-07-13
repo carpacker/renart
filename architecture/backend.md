@@ -189,20 +189,37 @@ both metadata editors: warehouse-specific exclusions and field requirements are
 not duplicated as frontend asset-family heuristics. Dedicated runtimes without
 the generic SQL/Python/loader contract expose no generic materialization editor;
 hand-authored advanced SQL strategies remain visible as custom values instead of
-being mislabeled as replace.
+being mislabeled as replace. The DTO and patch API round-trip the complete guided
+materialization block (`strategy`, incremental key, time granularity, partition,
+and cluster expressions). `time_interval` requires both a key and `date` or
+`timestamp`; partition/cluster controls appear only for warehouse materializers
+that consume them. Hand-authored DDL/SCD/Data Vault strategies are checked against
+the concrete Bruin warehouse support matrix even though their larger contracts do
+not yet have guided controls.
 
 Full refresh is a run-scoped execution option shared by SQL, Python, Load, and
 API table assets. Direct SQL materializers are constructed with that option for
 the individual run; Python and loader-backed assets apply the equivalent
-replace behavior at their write boundary. DDL/query-only modes and
+replace behavior at their write boundary. Athena, Databricks, and ClickHouse's
+multi-statement materializers select the full-refresh or configured renderer per
+asset so a restricted sibling in the same run keeps its saved strategy. DDL,
+other hand-authored advanced modes, query-only modes, and
 asset-level or selected-environment full-refresh restrictions do not advertise
 the action in the workspace DTO. The direct runner applies Bruin's environment
 restriction to every parsed asset before dispatch, and backend policy checks
 remain authoritative even when a client supplies the request directly.
 
+Explicit asset backfill is a separate run-scoped option. It requires a complete
+start/end range, a single-asset scope, and `matlog.BackfillSafe` (currently SQL
+`time_interval` and window-aware API merge with a primary key). Full refresh and
+backfill are mutually exclusive. Both are destructive policy operations; the
+backend revalidates capability, range, scope, and typed environment confirmation
+rather than trusting the UI.
+
 Pipeline type checks also validate materialization configuration: supported
 strategies, required merge primary keys, active incremental/update keys, and
-time-interval prerequisites. Editing may temporarily persist an incomplete merge
+time-interval prerequisites. Warehouse-inactive partition/cluster metadata is
+preserved and reported as a warning. Editing may temporarily persist an incomplete merge
 so multi-step form changes are possible; type check and execution surface the
 incomplete state until it is resolved. Metadata belonging to another strategy
 is preserved as dormant state and reported as a warning rather than blocking an

@@ -247,6 +247,58 @@ environments:
 	assert.Contains(t, result.Warnings[0], "restricted for environment prod")
 }
 
+func TestExecutionServiceOnlyBackfillsReplaySafeAssets(t *testing.T) {
+	t.Parallel()
+
+	assetID := EncodeID("pipelines/orders/assets/orders.sql")
+	resolvedAsset := &pipeline.Asset{
+		Type: pipeline.AssetTypeDuckDBQuery,
+		Materialization: pipeline.Materialization{
+			Type:            pipeline.MaterializationTypeTable,
+			Strategy:        pipeline.MaterializationStrategyTimeInterval,
+			IncrementalKey:  "event_at",
+			TimeGranularity: pipeline.MaterializationTimeGranularityTimestamp,
+		},
+	}
+	executor := &stubExecutionExecutor{}
+	svc := NewExecutionService(ExecutionDependencies{
+		Executor:            executor,
+		SelectedEnvironment: func() string { return "prod" },
+		PolicyFor: func(string) policy.EnvironmentPolicy {
+			return policy.EnvironmentPolicy{ConfirmDestructive: true}
+		},
+		ResolveAssetByID: func(context.Context, string) (string, *pipeline.Pipeline, *pipeline.Asset, error) {
+			return "pipelines/orders/assets/orders.sql", &pipeline.Pipeline{Schedule: "daily"}, resolvedAsset, nil
+		},
+		ResolveAssetNameByID: func(string) string { return "analytics.orders" },
+		FindInspectIDs:       func(...string) []string { return []string{assetID} },
+	})
+
+	unsafe := *resolvedAsset
+	unsafe.Materialization.Strategy = pipeline.MaterializationStrategyAppend
+	resolvedAsset = &unsafe
+	missingWindow := svc.MaterializeAssetStream(context.Background(), assetID, "", "asset", "", "", false, true, "prod", nil)
+	assert.Equal(t, "error", missingWindow.Status)
+	assert.Contains(t, missingWindow.Error, "explicit start and end")
+	assert.Empty(t, executor.runAssetRequests)
+	conflictingMode := svc.MaterializeAssetStream(context.Background(), assetID, "", "asset", "2024-01-01T00:00:00Z", "2024-01-02T00:00:00Z", true, true, "prod", nil)
+	assert.Equal(t, "error", conflictingMode.Status)
+	assert.Contains(t, conflictingMode.Error, "mutually exclusive")
+	assert.Empty(t, executor.runAssetRequests)
+
+	rejected := svc.MaterializeAssetStream(context.Background(), assetID, "", "asset", "2024-01-01T00:00:00Z", "2024-01-02T00:00:00Z", false, true, "prod", nil)
+	assert.Equal(t, "error", rejected.Status)
+	assert.Contains(t, rejected.Error, "not safe to backfill")
+	assert.Empty(t, executor.runAssetRequests)
+
+	resolvedAsset.Materialization.Strategy = pipeline.MaterializationStrategyTimeInterval
+	accepted := svc.MaterializeAssetStream(context.Background(), assetID, "", "asset", "2024-01-01T00:00:00Z", "2024-01-02T00:00:00Z", false, true, "prod", nil)
+	assert.Equal(t, "ok", accepted.Status)
+	require.Len(t, executor.runAssetRequests, 1)
+	assert.Equal(t, "2024-01-01T00:00:00Z", executor.runAssetRequests[0].StartDate)
+	assert.Equal(t, "2024-01-02T00:00:00Z", executor.runAssetRequests[0].EndDate)
+}
+
 func TestExecutionServiceMaterializeAssetStreamPreservesFailureOutput(t *testing.T) {
 	t.Parallel()
 

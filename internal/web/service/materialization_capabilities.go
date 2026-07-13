@@ -62,9 +62,6 @@ func materializationTableCapability(mode string) materializationModeCapability {
 	case materializationModeTimeInterval:
 		capability.RequiresIncrementalKey = true
 		capability.RequiresTimeGranularity = true
-		// The runtime supports this mode, but Renart must not offer it until the
-		// time-granularity field can be read and written end to end.
-		capability.Editable = false
 	}
 	return capability
 }
@@ -94,6 +91,17 @@ func withoutMaterializationModes(modes []materializationModeCapability, excluded
 		}
 	}
 	return result
+}
+
+func withTableLayoutFields(modes []materializationModeCapability, partitionBy, clusterBy bool) []materializationModeCapability {
+	for index := range modes {
+		if modes[index].Type != string(pipeline.MaterializationTypeTable) {
+			continue
+		}
+		modes[index].SupportsPartitionBy = partitionBy
+		modes[index].SupportsClusterBy = clusterBy
+	}
+	return modes
 }
 
 func loaderMaterializationModes() []materializationModeCapability {
@@ -164,6 +172,16 @@ func materializationProfileFor(asset *pipeline.Asset, destinationType string) ma
 		modes = withoutMaterializationModes(modes, materializationModeTimeInterval)
 	case pipeline.AssetTypeClickHouse:
 		modes = withoutMaterializationModes(modes, materializationModeMerge)
+	case pipeline.AssetTypeTrinoQuery:
+		modes = withoutMaterializationModes(modes, materializationModeMerge)
+	}
+	switch asset.Type {
+	case pipeline.AssetTypeBigqueryQuery:
+		modes = withTableLayoutFields(modes, true, true)
+	case pipeline.AssetTypeAthenaQuery, pipeline.AssetTypeTrinoQuery:
+		modes = withTableLayoutFields(modes, true, false)
+	case pipeline.AssetTypeSnowflakeQuery:
+		modes = withTableLayoutFields(modes, false, true)
 	}
 	if asset.Type == pipeline.AssetTypeClickHouse {
 		for index := range modes {
@@ -190,11 +208,67 @@ func supportsFullRefreshForAsset(asset *pipeline.Asset, profile materializationP
 		return false
 	}
 	if asset.Materialization.Type == pipeline.MaterializationTypeTable {
-		return true
+		// Full refresh means "temporarily render as create+replace". Bruin keeps
+		// DDL untouched, and Renart does not yet expose the larger contracts of
+		// other advanced strategies, so only advertise the action for a mode in
+		// the guided capability profile.
+		_, supported := materializationCapabilityForMode(profile, normalizedMaterializationMode(asset))
+		return supported
 	}
 	// Load/API assets always write a table; an omitted block is their canonical
 	// create+replace default rather than SQL/Python's run-only mode.
 	return (isAPIAsset(asset) || isLoadAsset(asset)) && asset.Materialization.Type == pipeline.MaterializationTypeNone
+}
+
+func supportsAdvancedSQLMaterialization(assetType pipeline.AssetType, mode string) bool {
+	switch mode {
+	case string(pipeline.MaterializationStrategyDDL):
+		switch assetType {
+		case pipeline.AssetTypeDuckDBQuery,
+			pipeline.AssetTypeMotherduckQuery,
+			pipeline.AssetTypePostgresQuery,
+			pipeline.AssetTypeRedshiftQuery,
+			pipeline.AssetTypeBigqueryQuery,
+			pipeline.AssetTypeAthenaQuery,
+			pipeline.AssetTypeDatabricksQuery,
+			pipeline.AssetTypeMySQLQuery,
+			pipeline.AssetTypeSnowflakeQuery,
+			pipeline.AssetTypeMsSQLQuery,
+			pipeline.AssetTypeSynapseQuery,
+			pipeline.AssetTypeFabricQuery,
+			pipeline.AssetTypeFabricQueryLegacy,
+			pipeline.AssetTypeClickHouse,
+			pipeline.AssetTypeTrinoQuery,
+			pipeline.AssetTypeVerticaQuery:
+			return true
+		}
+	case string(pipeline.MaterializationStrategySCD2ByTime),
+		string(pipeline.MaterializationStrategySCD2ByColumn):
+		switch assetType {
+		case pipeline.AssetTypeDuckDBQuery,
+			pipeline.AssetTypeMotherduckQuery,
+			pipeline.AssetTypePostgresQuery,
+			pipeline.AssetTypeRedshiftQuery,
+			pipeline.AssetTypeBigqueryQuery,
+			pipeline.AssetTypeAthenaQuery,
+			pipeline.AssetTypeDatabricksQuery,
+			pipeline.AssetTypeMySQLQuery,
+			pipeline.AssetTypeSnowflakeQuery,
+			pipeline.AssetTypeTrinoQuery:
+			return true
+		}
+	case string(pipeline.MaterializationStrategyDataVaultHub),
+		string(pipeline.MaterializationStrategyDataVaultLink),
+		string(pipeline.MaterializationStrategyDataVaultSatellite):
+		switch assetType {
+		case pipeline.AssetTypeDuckDBQuery,
+			pipeline.AssetTypeMotherduckQuery,
+			pipeline.AssetTypePostgresQuery,
+			pipeline.AssetTypeRedshiftQuery:
+			return true
+		}
+	}
+	return false
 }
 
 func normalizedMaterializationMode(asset *pipeline.Asset) string {
@@ -254,19 +328,11 @@ func validateMaterializationCapability(asset *pipeline.Asset, destinationType st
 		return nil
 	}
 
-	// Advanced Bruin SQL strategies remain hand-authored passthroughs until
-	// Renart has dedicated editors for their larger field contracts. The SQL
-	// materializer remains the runtime source of truth for these modes.
-	if isQueryAssetType(asset.Type) && asset.Type != pipeline.AssetTypeOracleQuery {
-		switch mode {
-		case string(pipeline.MaterializationStrategyDDL),
-			string(pipeline.MaterializationStrategySCD2ByTime),
-			string(pipeline.MaterializationStrategySCD2ByColumn),
-			string(pipeline.MaterializationStrategyDataVaultHub),
-			string(pipeline.MaterializationStrategyDataVaultLink),
-			string(pipeline.MaterializationStrategyDataVaultSatellite):
-			return nil
-		}
+	// Advanced Bruin SQL strategies remain hand-authored until Renart has
+	// dedicated editors for their larger field contracts, but saves and type
+	// checks still use the concrete warehouse materializer's support matrix.
+	if isQueryAssetType(asset.Type) && supportsAdvancedSQLMaterialization(asset.Type, mode) {
+		return nil
 	}
 
 	return fmt.Errorf("materialization mode %q is not supported for %s assets on this destination", mode, asset.Type)

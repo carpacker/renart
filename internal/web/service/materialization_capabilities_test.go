@@ -1,6 +1,7 @@
 package service
 
 import (
+	"context"
 	"testing"
 
 	"github.com/bruin-data/bruin/pkg/pipeline"
@@ -10,10 +11,65 @@ import (
 	"renart/internal/web/model"
 )
 
+func TestWorkspaceExposesCompleteMaterializationContract(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	writeWorkspaceFile(t, root, ".git/keep", "")
+	writeWorkspaceFile(t, root, "analytics/pipeline.yml", "name: analytics\n")
+	writeWorkspaceFile(t, root, "analytics/assets/events.sql", `/* @bruin
+name: analytics.events
+type: bq.sql
+materialization:
+  type: table
+  strategy: time_interval
+  incremental_key: event_date
+  time_granularity: date
+  partition_by: event_date
+  cluster_by:
+    - customer_id
+columns:
+  - name: event_date
+    type: date
+  - name: customer_id
+    type: string
+@bruin */
+select current_date() as event_date, 'customer' as customer_id
+`)
+
+	state, err := NewWorkspaceService(root, "").ComputeState(context.Background())
+	require.NoError(t, err)
+	require.Empty(t, state.Errors)
+	require.Len(t, state.Pipelines, 1)
+	require.Len(t, state.Pipelines[0].Assets, 1)
+
+	asset := state.Pipelines[0].Assets[0]
+	assert.Equal(t, "table", asset.MaterializationType)
+	assert.Equal(t, "time_interval", asset.MaterializationStrategy)
+	assert.Equal(t, "event_date", asset.IncrementalKey)
+	assert.Equal(t, "date", asset.TimeGranularity)
+	assert.Equal(t, "event_date", asset.PartitionBy)
+	assert.Equal(t, []string{"customer_id"}, asset.ClusterBy)
+	assert.True(t, asset.SupportsFullRefresh)
+
+	var interval model.MaterializationCapability
+	for _, capability := range asset.MaterializationCapabilities {
+		if capability.Mode == materializationModeTimeInterval {
+			interval = capability
+			break
+		}
+	}
+	require.Equal(t, materializationModeTimeInterval, interval.Mode)
+	assert.True(t, interval.RequiresIncrementalKey)
+	assert.True(t, interval.RequiresTimeGranularity)
+	assert.True(t, interval.SupportsPartitionBy)
+	assert.True(t, interval.SupportsClusterBy)
+}
+
 func TestMaterializationProfilesMatchExecutionPaths(t *testing.T) {
 	t.Parallel()
 
-	t.Run("duckdb SQL exposes runtime modes but keeps incomplete time editor hidden", func(t *testing.T) {
+	t.Run("duckdb SQL exposes every guided runtime mode", func(t *testing.T) {
 		t.Parallel()
 		profile := materializationProfileFor(&pipeline.Asset{Type: pipeline.AssetTypeDuckDBQuery}, "")
 		assert.ElementsMatch(t, []string{
@@ -26,7 +82,7 @@ func TestMaterializationProfilesMatchExecutionPaths(t *testing.T) {
 			materializationModeDeleteInsert,
 			materializationModeTimeInterval,
 		}, materializationProfileModes(profile))
-		assert.NotContains(t, materializationCapabilityModes(editableMaterializationCapabilities(profile)), materializationModeTimeInterval)
+		assert.Contains(t, materializationCapabilityModes(editableMaterializationCapabilities(profile)), materializationModeTimeInterval)
 		assert.True(t, profile.SupportsFullRefresh)
 	})
 
@@ -35,6 +91,9 @@ func TestMaterializationProfilesMatchExecutionPaths(t *testing.T) {
 
 		fabric := materializationProfileFor(&pipeline.Asset{Type: pipeline.AssetTypeFabricQuery}, "")
 		assert.NotContains(t, materializationProfileModes(fabric), materializationModeTimeInterval)
+
+		trino := materializationProfileFor(&pipeline.Asset{Type: pipeline.AssetTypeTrinoQuery}, "")
+		assert.NotContains(t, materializationProfileModes(trino), materializationModeMerge)
 
 		clickHouse := materializationProfileFor(&pipeline.Asset{Type: pipeline.AssetTypeClickHouse}, "")
 		assert.NotContains(t, materializationProfileModes(clickHouse), materializationModeMerge)
@@ -48,6 +107,34 @@ func TestMaterializationProfilesMatchExecutionPaths(t *testing.T) {
 
 		oracle := materializationProfileFor(&pipeline.Asset{Type: pipeline.AssetTypeOracleQuery}, "")
 		assert.Equal(t, []string{materializationModeNone}, materializationProfileModes(oracle))
+	})
+
+	t.Run("table layout fields follow warehouse renderers", func(t *testing.T) {
+		t.Parallel()
+
+		bigQuery := materializationProfileFor(&pipeline.Asset{Type: pipeline.AssetTypeBigqueryQuery}, "")
+		bigQueryInterval, ok := materializationCapabilityForMode(bigQuery, materializationModeTimeInterval)
+		require.True(t, ok)
+		assert.True(t, bigQueryInterval.SupportsPartitionBy)
+		assert.True(t, bigQueryInterval.SupportsClusterBy)
+
+		athena := materializationProfileFor(&pipeline.Asset{Type: pipeline.AssetTypeAthenaQuery}, "")
+		athenaReplace, ok := materializationCapabilityForMode(athena, materializationModeReplace)
+		require.True(t, ok)
+		assert.True(t, athenaReplace.SupportsPartitionBy)
+		assert.False(t, athenaReplace.SupportsClusterBy)
+
+		snowflake := materializationProfileFor(&pipeline.Asset{Type: pipeline.AssetTypeSnowflakeQuery}, "")
+		snowflakeAppend, ok := materializationCapabilityForMode(snowflake, materializationModeAppend)
+		require.True(t, ok)
+		assert.False(t, snowflakeAppend.SupportsPartitionBy)
+		assert.True(t, snowflakeAppend.SupportsClusterBy)
+
+		duckDB := materializationProfileFor(&pipeline.Asset{Type: pipeline.AssetTypeDuckDBQuery}, "")
+		duckReplace, ok := materializationCapabilityForMode(duckDB, materializationModeReplace)
+		require.True(t, ok)
+		assert.False(t, duckReplace.SupportsPartitionBy)
+		assert.False(t, duckReplace.SupportsClusterBy)
 	})
 
 	t.Run("loader assets only expose Sling modes", func(t *testing.T) {
@@ -125,7 +212,34 @@ func TestValidateMaterializationCapability(t *testing.T) {
 			Strategy: pipeline.MaterializationStrategySCD2ByTime,
 		},
 	}
-	assert.NoError(t, validateMaterializationCapability(advancedDuckDB, ""), "hand-authored advanced SQL remains a passthrough")
+	assert.NoError(t, validateMaterializationCapability(advancedDuckDB, ""), "supported hand-authored advanced SQL remains a passthrough")
+
+	advancedTrino := &pipeline.Asset{
+		Type: pipeline.AssetTypeTrinoQuery,
+		Materialization: pipeline.Materialization{
+			Type:     pipeline.MaterializationTypeTable,
+			Strategy: pipeline.MaterializationStrategySCD2ByColumn,
+		},
+	}
+	assert.NoError(t, validateMaterializationCapability(advancedTrino, ""))
+
+	unsupportedAdvancedMSSQL := &pipeline.Asset{
+		Type: pipeline.AssetTypeMsSQLQuery,
+		Materialization: pipeline.Materialization{
+			Type:     pipeline.MaterializationTypeTable,
+			Strategy: pipeline.MaterializationStrategySCD2ByTime,
+		},
+	}
+	assert.ErrorContains(t, validateMaterializationCapability(unsupportedAdvancedMSSQL, ""), "not supported")
+
+	unknownDuckDB := &pipeline.Asset{
+		Type: pipeline.AssetTypeDuckDBQuery,
+		Materialization: pipeline.Materialization{
+			Type:     pipeline.MaterializationTypeTable,
+			Strategy: pipeline.MaterializationStrategy("future_strategy"),
+		},
+	}
+	assert.ErrorContains(t, validateMaterializationCapability(unknownDuckDB, ""), "not supported")
 
 	advancedOracle := &pipeline.Asset{
 		Type: pipeline.AssetTypeOracleQuery,
@@ -153,6 +267,9 @@ func TestSupportsFullRefreshForCurrentMaterialization(t *testing.T) {
 
 	table := &pipeline.Asset{Type: pipeline.AssetTypeDuckDBQuery, Materialization: pipeline.Materialization{Type: pipeline.MaterializationTypeTable}}
 	assert.True(t, supportsFullRefreshForAsset(table, materializationProfileFor(table, "")))
+
+	ddl := &pipeline.Asset{Type: pipeline.AssetTypeDuckDBQuery, Materialization: pipeline.Materialization{Type: pipeline.MaterializationTypeTable, Strategy: pipeline.MaterializationStrategyDDL}}
+	assert.False(t, supportsFullRefreshForAsset(ddl, materializationProfileFor(ddl, "")))
 
 	loaderDefault := &pipeline.Asset{Type: pipeline.AssetType("api")}
 	assert.True(t, supportsFullRefreshForAsset(loaderDefault, materializationProfileFor(loaderDefault, "duckdb")))

@@ -54,6 +54,7 @@ type AssetStatus struct {
 	Status             Status     `json:"status"`
 	Fingerprint        string     `json:"fingerprint"`
 	IntervalAware      bool       `json:"interval_aware"`
+	BackfillSafe       bool       `json:"backfill_safe"`
 	CoveredSeconds     float64    `json:"covered_seconds,omitempty"`
 	TotalSeconds       float64    `json:"total_seconds,omitempty"`
 	Gaps               []Interval `json:"gaps,omitempty"` // uncovered sub-ranges, the Build-stale plan input
@@ -319,6 +320,7 @@ func classify(asset *pipeline.Asset, assetID string, result fingerprint.Result, 
 		AssetName:     asset.Name,
 		Fingerprint:   string(result.FP),
 		IntervalAware: matlog.IntervalAware(asset),
+		BackfillSafe:  matlog.BackfillSafe(asset),
 	}
 
 	currentRows := make([]matlog.CoverageRow, 0, len(rows))

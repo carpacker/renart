@@ -603,6 +603,82 @@ select 1 as customer_id, 'seeded' as source_label
 	assert.Equal(t, float64(1), directDuckDBCount(t, executor))
 }
 
+func TestDirectRunAssetTimeIntervalRendersExecutionWindow(t *testing.T) {
+	workspaceRoot, assetPath := createSuccessfulDuckDBWorkspace(t)
+	configPath := filepath.Join(workspaceRoot, ".bruin.yml")
+	cfg, err := loadSelectedConfig(configPath, "")
+	require.NoError(t, err)
+	manager, err := newConnectionManagerFromConfig(context.Background(), cfg)
+	require.NoError(t, err)
+	if connection, ok := manager.GetConnection("duckdb-default").(interface{ Close() }); ok {
+		t.Cleanup(connection.Close)
+	}
+
+	executor := newCompatDirectExecutor(workspaceRoot, "")
+	executor.newConnectionManager = func(context.Context, string) (config.ConnectionAndDetailsGetter, error) {
+		return manager, nil
+	}
+
+	require.NoError(t, os.WriteFile(assetPath, []byte(strings.TrimSpace(`
+/* @bruin
+name: analytics.customers
+type: duckdb.sql
+materialization:
+  type: table
+  strategy: create+replace
+columns:
+  - name: event_id
+    type: BIGINT
+  - name: event_at
+    type: TIMESTAMP
+@bruin */
+
+select * from (values
+  (1, timestamp '2024-01-01 12:00:00'),
+  (2, timestamp '2024-01-02 12:00:00')
+) as events(event_id, event_at)
+`)+"\n"), 0o644))
+	_, err = executor.RunAsset(context.Background(), RunAssetRequest{AssetPath: assetPath}, nil)
+	require.NoError(t, err)
+
+	require.NoError(t, os.WriteFile(assetPath, []byte(strings.TrimSpace(`
+/* @bruin
+name: analytics.customers
+type: duckdb.sql
+materialization:
+  type: table
+  strategy: time_interval
+  incremental_key: event_at
+  time_granularity: timestamp
+columns:
+  - name: event_id
+    type: BIGINT
+  - name: event_at
+    type: TIMESTAMP
+@bruin */
+
+select 20 as event_id, timestamp '2024-01-02 12:00:00' as event_at
+`)+"\n"), 0o644))
+	_, err = executor.RunAsset(context.Background(), RunAssetRequest{
+		AssetPath: assetPath,
+		StartDate: "2024-01-02T00:00:00Z",
+		EndDate:   "2024-01-03T00:00:00Z",
+	}, nil)
+	require.NoError(t, err)
+
+	output, err := executor.QueryConnection(context.Background(), QueryConnectionRequest{
+		ConnectionName: "duckdb-default",
+		Query:          "select event_id from analytics.customers order by event_id",
+		Output:         "json",
+	})
+	require.NoError(t, err)
+	var payload struct {
+		Rows [][]any `json:"rows"`
+	}
+	require.NoError(t, json.Unmarshal(output, &payload))
+	assert.Equal(t, [][]any{{float64(1)}, {float64(20)}}, payload.Rows)
+}
+
 func directDuckDBCount(t *testing.T, executor *HybridBruinExecutor) float64 {
 	t.Helper()
 	output, err := executor.QueryConnection(context.Background(), QueryConnectionRequest{

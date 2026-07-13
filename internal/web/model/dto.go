@@ -14,6 +14,8 @@ type MaterializationCapability struct {
 	RequiresIncrementalKey  bool   `json:"requires_incremental_key,omitempty"`
 	RequiresPrimaryKey      bool   `json:"requires_primary_key,omitempty"`
 	RequiresTimeGranularity bool   `json:"requires_time_granularity,omitempty"`
+	SupportsPartitionBy     bool   `json:"supports_partition_by,omitempty"`
+	SupportsClusterBy       bool   `json:"supports_cluster_by,omitempty"`
 }
 
 // Asset represents a web API asset with its metadata. ContentRevision identifies
@@ -38,6 +40,9 @@ type Asset struct {
 	MaterializationType         string                      `json:"materialization_type,omitempty"`
 	MaterializationStrategy     string                      `json:"materialization_strategy,omitempty"`
 	IncrementalKey              string                      `json:"incremental_key,omitempty"`
+	PartitionBy                 string                      `json:"partition_by,omitempty"`
+	ClusterBy                   []string                    `json:"cluster_by,omitempty"`
+	TimeGranularity             string                      `json:"time_granularity,omitempty"`
 	MaterializationCapabilities []MaterializationCapability `json:"materialization_capabilities,omitempty"`
 	SupportsFullRefresh         bool                        `json:"supports_full_refresh,omitempty"`
 	RefreshRestricted           bool                        `json:"refresh_restricted,omitempty"`

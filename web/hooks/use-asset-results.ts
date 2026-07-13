@@ -328,6 +328,7 @@ export function useAssetResults() {
         assetName?: string;
         timeWindow?: { start: string; end: string } | null;
         fullRefresh?: boolean;
+        backfill?: boolean;
         confirmedEnvironment?: string;
       },
     ) => {
@@ -343,7 +344,11 @@ export function useAssetResults() {
         null;
       const entryTimeWindow =
         overrides?.timeWindow !== undefined ? overrides.timeWindow : selectedExecutionTimeWindow;
-      const actionLabel = overrides?.fullRefresh ? "Full refresh" : labelForMaterializeScope(scope);
+      const actionLabel = overrides?.backfill
+        ? "Backfill"
+        : overrides?.fullRefresh
+          ? "Full refresh"
+          : labelForMaterializeScope(scope);
       const materializeLabel = targetAssetName ? `${actionLabel}: ${targetAssetName}` : actionLabel;
       const scopedMaterializingIds = resolveScopedMaterializingAssetIds(
         pipeline?.assets ?? [],
@@ -400,6 +405,7 @@ export function useAssetResults() {
             scope,
             timeWindow: entryTimeWindow ?? undefined,
             fullRefresh: overrides?.fullRefresh,
+            backfill: overrides?.backfill,
             confirmedEnvironment: overrides?.confirmedEnvironment,
           },
         );

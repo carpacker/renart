@@ -306,6 +306,16 @@ func materializationTypeCheckFindings(asset *pipeline.Asset, pl ...*pipeline.Pip
 	if capabilityKnown && capability.RequiresTimeGranularity && strings.TrimSpace(string(asset.Materialization.TimeGranularity)) == "" {
 		addError("Invalid materialization: time_interval needs a time granularity")
 	}
+	granularity := strings.TrimSpace(string(asset.Materialization.TimeGranularity))
+	if granularity != "" && granularity != string(pipeline.MaterializationTimeGranularityDate) && granularity != string(pipeline.MaterializationTimeGranularityTimestamp) {
+		addError("Invalid materialization: time granularity must be date or timestamp")
+	}
+	if capabilityKnown && strings.TrimSpace(asset.Materialization.PartitionBy) != "" && !capability.SupportsPartitionBy {
+		addWarning("Inactive materialization metadata: partition_by is not used by the selected strategy and destination")
+	}
+	if capabilityKnown && len(asset.Materialization.ClusterBy) > 0 && !capability.SupportsClusterBy {
+		addWarning("Inactive materialization metadata: cluster_by is not used by the selected strategy and destination")
+	}
 
 	for _, column := range asset.Columns {
 		if strategy != "merge" && (column.UpdateOnMerge || strings.TrimSpace(column.MergeSQL) != "") {

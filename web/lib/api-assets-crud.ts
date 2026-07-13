@@ -41,6 +41,9 @@ export async function updateAsset(
     materialization_type?: string;
     materialization_strategy?: string;
     incremental_key?: string;
+    partition_by?: string;
+    cluster_by?: string[];
+    time_granularity?: string;
     owner?: string;
     tags?: string[];
     meta?: Record<string, string>;

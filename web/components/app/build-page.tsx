@@ -273,6 +273,26 @@ export function normalizeAppBuildSearch(search: Record<string, unknown>): AppBui
 const scrollableTabsListClass = "w-max max-w-none";
 const scrollableTabsTriggerClass = "flex-none";
 
+function toUTCDateTimeInput(value: string) {
+  if (!value) return "";
+  const timestamp = Date.parse(value);
+  if (Number.isNaN(timestamp)) return "";
+  return new Date(timestamp).toISOString().slice(0, 19);
+}
+
+function fromUTCDateTimeInput(value: string) {
+  if (!value) return "";
+  const timestamp = Date.parse(`${value}Z`);
+  if (Number.isNaN(timestamp)) return "";
+  return new Date(timestamp).toISOString();
+}
+
+function isValidExecutionWindow(start: string, end: string) {
+  const startTimestamp = Date.parse(start);
+  const endTimestamp = Date.parse(end);
+  return !Number.isNaN(startTimestamp) && !Number.isNaN(endTimestamp) && endTimestamp > startTimestamp;
+}
+
 type BuildAsset = AppLineageCanvasAsset & {
   workspaceAsset?: WebAsset;
   pipelineId?: string;
@@ -308,6 +328,7 @@ type BuildContextValue = {
   openBottom: (tab: AppResultTab) => void;
   materializeSelectedAsset: () => void;
   fullRefreshSelectedAsset: () => void;
+  backfillSelectedAsset: () => void;
   inspectSelectedAsset: () => void;
   runAdhocQuery: () => void;
   adhocContextAsset: WebAsset | null;
@@ -554,11 +575,15 @@ export function AppBuildPage({
     assetName: string;
     staleUpstreams: string[];
   } | null>(null);
-  const [fullRefreshPrompt, setFullRefreshPrompt] = useState<{
+  const [destructiveMaterializationPrompt, setDestructiveMaterializationPrompt] = useState<{
+    kind: "full-refresh" | "backfill";
     assetId: string;
     assetName: string;
+    start: string;
+    end: string;
   } | null>(null);
-  const [fullRefreshConfirmation, setFullRefreshConfirmation] = useState("");
+  const [destructiveMaterializationConfirmation, setDestructiveMaterializationConfirmation] =
+    useState("");
   const firstAssetId = displayedPipelineAssets[0]?.id ?? "revenue_daily";
   const [visualSelectedAssetId, setVisualSelectedAssetId] = useState(
     selectedAssetId ?? firstAssetId,
@@ -772,22 +797,59 @@ export function AppBuildPage({
     if (!activePipeline || !workspaceAsset) {
       return;
     }
-    setFullRefreshConfirmation("");
-    setFullRefreshPrompt({ assetId: workspaceAsset.id, assetName: selectedAsset.name });
-  };
-  const confirmFullRefresh = () => {
-    if (!fullRefreshPrompt) return;
-    logHistory("materialize", `${fullRefreshPrompt.assetName} (full refresh)`);
-    openBottom("materialize");
-    void assetResults.runMaterializeForAsset(fullRefreshPrompt.assetId, "asset", undefined, {
-      assetName: fullRefreshPrompt.assetName,
-      fullRefresh: true,
-      confirmedEnvironment: environmentPolicy?.confirm_destructive
-        ? fullRefreshConfirmation.trim()
-        : undefined,
+    setDestructiveMaterializationConfirmation("");
+    setDestructiveMaterializationPrompt({
+      kind: "full-refresh",
+      assetId: workspaceAsset.id,
+      assetName: selectedAsset.name,
+      start: selectedExecutionTimeWindow?.start ?? "",
+      end: selectedExecutionTimeWindow?.end ?? "",
     });
-    setFullRefreshPrompt(null);
-    setFullRefreshConfirmation("");
+  };
+  const backfillSelectedAsset = () => {
+    const workspaceAsset = selectedAsset?.workspaceAsset;
+    if (!activePipeline || !workspaceAsset) {
+      return;
+    }
+    setDestructiveMaterializationConfirmation("");
+    setDestructiveMaterializationPrompt({
+      kind: "backfill",
+      assetId: workspaceAsset.id,
+      assetName: selectedAsset.name,
+      start: selectedExecutionTimeWindow?.start ?? "",
+      end: selectedExecutionTimeWindow?.end ?? "",
+    });
+  };
+  const confirmDestructiveMaterialization = () => {
+    if (!destructiveMaterializationPrompt) return;
+    const isBackfill = destructiveMaterializationPrompt.kind === "backfill";
+    logHistory(
+      "materialize",
+      `${destructiveMaterializationPrompt.assetName} (${isBackfill ? "backfill" : "full refresh"})`,
+    );
+    openBottom("materialize");
+    void assetResults.runMaterializeForAsset(
+      destructiveMaterializationPrompt.assetId,
+      "asset",
+      undefined,
+      {
+        assetName: destructiveMaterializationPrompt.assetName,
+        fullRefresh: !isBackfill,
+        backfill: isBackfill,
+        timeWindow:
+          destructiveMaterializationPrompt.start && destructiveMaterializationPrompt.end
+            ? {
+                start: destructiveMaterializationPrompt.start,
+                end: destructiveMaterializationPrompt.end,
+              }
+            : null,
+        confirmedEnvironment: environmentPolicy?.confirm_destructive
+          ? destructiveMaterializationConfirmation.trim()
+          : undefined,
+      },
+    );
+    setDestructiveMaterializationPrompt(null);
+    setDestructiveMaterializationConfirmation("");
   };
   const inspectSelectedAsset = () => {
     const workspaceAsset = selectedAsset?.workspaceAsset;
@@ -973,6 +1035,7 @@ export function AppBuildPage({
     openBottom,
     materializeSelectedAsset,
     fullRefreshSelectedAsset,
+    backfillSelectedAsset,
     inspectSelectedAsset,
     runAdhocQuery,
     adhocContextAsset,
@@ -1169,48 +1232,89 @@ export function AppBuildPage({
         />
         <PlanDialog open={planOpen} onOpenChange={setPlanOpen} />
         <Dialog
-          open={fullRefreshPrompt !== null}
+          open={destructiveMaterializationPrompt !== null}
           onOpenChange={(open) => {
             if (!open) {
-              setFullRefreshPrompt(null);
-              setFullRefreshConfirmation("");
+              setDestructiveMaterializationPrompt(null);
+              setDestructiveMaterializationConfirmation("");
             }
           }}
         >
           <DialogContent>
             <DialogHeader>
-              <DialogTitle>Full refresh {fullRefreshPrompt?.assetName}?</DialogTitle>
+              <DialogTitle>
+                {destructiveMaterializationPrompt?.kind === "backfill" ? "Backfill" : "Full refresh"}{" "}
+                {destructiveMaterializationPrompt?.assetName}?
+              </DialogTitle>
               <DialogDescription>
-                This rebuilds the table from scratch and can be expensive. Existing rows are
-                replaced with the result for the currently selected execution window.
+                {destructiveMaterializationPrompt?.kind === "backfill"
+                  ? "Run this asset for the exact UTC window below. Backfill is available only when independent windows can be replayed safely."
+                  : "This rebuilds the table from scratch and can be expensive. Existing rows are replaced with the result for the selected execution window."}
               </DialogDescription>
             </DialogHeader>
+            {destructiveMaterializationPrompt?.kind === "backfill" ? (
+              <div className="grid gap-4 sm:grid-cols-2">
+                <div className="space-y-2">
+                  <Label htmlFor="backfill-start">Start (UTC)</Label>
+                  <Input
+                    id="backfill-start"
+                    type="datetime-local"
+                    step={1}
+                    value={toUTCDateTimeInput(destructiveMaterializationPrompt.start)}
+                    onChange={(event) =>
+                      setDestructiveMaterializationPrompt((current) =>
+                        current ? { ...current, start: fromUTCDateTimeInput(event.target.value) } : current,
+                      )
+                    }
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="backfill-end">End (UTC)</Label>
+                  <Input
+                    id="backfill-end"
+                    type="datetime-local"
+                    step={1}
+                    value={toUTCDateTimeInput(destructiveMaterializationPrompt.end)}
+                    onChange={(event) =>
+                      setDestructiveMaterializationPrompt((current) =>
+                        current ? { ...current, end: fromUTCDateTimeInput(event.target.value) } : current,
+                      )
+                    }
+                  />
+                </div>
+              </div>
+            ) : null}
             {environmentPolicy?.confirm_destructive ? (
               <div className="space-y-2">
-                <Label htmlFor="full-refresh-environment-confirmation">
+                <Label htmlFor="destructive-materialization-environment-confirmation">
                   Type <span className="font-mono">{effectiveEnvironment}</span> to confirm
                 </Label>
                 <Input
-                  id="full-refresh-environment-confirmation"
-                  value={fullRefreshConfirmation}
-                  onChange={(event) => setFullRefreshConfirmation(event.target.value)}
+                  id="destructive-materialization-environment-confirmation"
+                  value={destructiveMaterializationConfirmation}
+                  onChange={(event) => setDestructiveMaterializationConfirmation(event.target.value)}
                   autoComplete="off"
                 />
               </div>
             ) : null}
             <DialogFooter>
-              <Button variant="outline" onClick={() => setFullRefreshPrompt(null)}>
+              <Button variant="outline" onClick={() => setDestructiveMaterializationPrompt(null)}>
                 Cancel
               </Button>
               <Button
                 variant="destructive"
                 disabled={
-                  Boolean(environmentPolicy?.confirm_destructive) &&
-                  fullRefreshConfirmation.trim() !== effectiveEnvironment
+                  (destructiveMaterializationPrompt?.kind === "backfill" &&
+                    !isValidExecutionWindow(
+                      destructiveMaterializationPrompt.start,
+                      destructiveMaterializationPrompt.end,
+                    )) ||
+                  (Boolean(environmentPolicy?.confirm_destructive) &&
+                    destructiveMaterializationConfirmation.trim() !== effectiveEnvironment)
                 }
-                onClick={confirmFullRefresh}
+                onClick={confirmDestructiveMaterialization}
               >
-                Run full refresh
+                Run {destructiveMaterializationPrompt?.kind === "backfill" ? "backfill" : "full refresh"}
               </Button>
             </DialogFooter>
           </DialogContent>
@@ -2099,6 +2203,7 @@ function EditorWorkspace({ asset, adhoc }: { asset: BuildAsset; adhoc: boolean }
     openInspector,
     materializeSelectedAsset,
     fullRefreshSelectedAsset,
+    backfillSelectedAsset,
     inspectSelectedAsset,
     materializeLoading,
     inspectLoading,
@@ -2137,6 +2242,9 @@ function EditorWorkspace({ asset, adhoc }: { asset: BuildAsset; adhoc: boolean }
           onRun={materializeSelectedAsset}
           onFullRefresh={
             asset.workspaceAsset?.supports_full_refresh ? fullRefreshSelectedAsset : undefined
+          }
+          onBackfill={
+            asset.staleness?.backfill_safe ? backfillSelectedAsset : undefined
           }
           onInspect={inspectSelectedAsset}
           runDisabled={materializeLoading || executionBlocked || !asset.workspaceAsset}
@@ -2255,6 +2363,7 @@ function EditorActionButtons({
   onRun,
   onInspect,
   onFullRefresh,
+  onBackfill,
   runDisabled = false,
   runBlockedReason,
   runLoading = false,
@@ -2267,6 +2376,7 @@ function EditorActionButtons({
   onRun: () => void;
   onInspect: () => void;
   onFullRefresh?: () => void;
+  onBackfill?: () => void;
   runDisabled?: boolean;
   runBlockedReason?: string;
   runLoading?: boolean;
@@ -2277,7 +2387,7 @@ function EditorActionButtons({
   const inspectLabel = inspectLoading ? "Loading..." : "Inspect";
   return (
     <>
-      {onFullRefresh ? (
+      {onFullRefresh || onBackfill ? (
         <ButtonGroup>
           <Button
             size={showLabels ? "sm" : "icon-sm"}
@@ -2303,7 +2413,12 @@ function EditorActionButtons({
             <DropdownMenuContent align="end">
               <DropdownMenuGroup>
                 <DropdownMenuLabel>Materialization</DropdownMenuLabel>
-                <DropdownMenuItem onClick={onFullRefresh}>Full refresh</DropdownMenuItem>
+                {onFullRefresh ? (
+                  <DropdownMenuItem onClick={onFullRefresh}>Full refresh</DropdownMenuItem>
+                ) : null}
+                {onBackfill ? (
+                  <DropdownMenuItem onClick={onBackfill}>Backfill range…</DropdownMenuItem>
+                ) : null}
               </DropdownMenuGroup>
             </DropdownMenuContent>
           </DropdownMenu>

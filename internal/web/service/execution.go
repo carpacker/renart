@@ -16,6 +16,7 @@ import (
 	"github.com/bruin-data/bruin/pkg/sqlparser"
 	"renart/internal/web/bus"
 	"renart/internal/web/identity"
+	"renart/internal/web/matlog"
 	"renart/internal/web/policy"
 )
 
@@ -455,14 +456,6 @@ func (s *ExecutionService) MaterializeAssetStream(ctx context.Context, assetID, 
 	ctx, warnings := withExecutionWarnings(ctx)
 	environment = s.effectiveEnvironment(environment)
 	fullRefresh = s.effectiveFullRefresh(ctx, environment, fullRefresh)
-	if err := s.checkRunPolicy(policy.RunRequest{
-		Environment:          environment,
-		Interactive:          true,
-		Destructive:          fullRefresh || backfill,
-		ConfirmedEnvironment: strings.TrimSpace(confirmedEnvironment),
-	}); err != nil {
-		return MaterializeResult{Status: "error", Error: err.Error(), ExitCode: 1}
-	}
 	relAssetPath, err := DecodeID(assetID)
 	if err != nil {
 		return MaterializeResult{Status: "error", Error: "invalid asset id", ExitCode: 1}
@@ -471,6 +464,35 @@ func (s *ExecutionService) MaterializeAssetStream(ctx context.Context, assetID, 
 	normalizedScope, scopeErr := normalizeMaterializeScope(scope)
 	if scopeErr != nil {
 		return MaterializeResult{Status: "error", Error: scopeErr.Error(), ExitCode: 1}
+	}
+	if fullRefresh && backfill {
+		return MaterializeResult{Status: "error", Error: "full refresh and backfill are mutually exclusive", ExitCode: 1}
+	}
+	if backfill {
+		if normalizedScope != MaterializeScopeAsset {
+			return MaterializeResult{Status: "error", Error: "backfill only supports a single asset", ExitCode: 1}
+		}
+		if strings.TrimSpace(startDate) == "" || strings.TrimSpace(endDate) == "" {
+			return MaterializeResult{Status: "error", Error: "backfill requires an explicit start and end", ExitCode: 1}
+		}
+		if s.deps.ResolveAssetByID == nil {
+			return MaterializeResult{Status: "error", Error: "asset resolution is not available for backfill", ExitCode: 1}
+		}
+		_, _, asset, resolveErr := s.deps.ResolveAssetByID(ctx, assetID)
+		if resolveErr != nil || asset == nil {
+			return MaterializeResult{Status: "error", Error: "asset could not be resolved for backfill", ExitCode: 1}
+		}
+		if !matlog.BackfillSafe(asset) {
+			return MaterializeResult{Status: "error", Error: "asset materialization is not safe to backfill by independent execution windows", ExitCode: 1}
+		}
+	}
+	if err := s.checkRunPolicy(policy.RunRequest{
+		Environment:          environment,
+		Interactive:          true,
+		Destructive:          fullRefresh || backfill,
+		ConfirmedEnvironment: strings.TrimSpace(confirmedEnvironment),
+	}); err != nil {
+		return MaterializeResult{Status: "error", Error: err.Error(), ExitCode: 1}
 	}
 
 	timeWindow, timeWindowErr := s.resolveAssetExecutionTimeWindow(ctx, assetID, startDate, endDate)

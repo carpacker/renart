@@ -130,7 +130,10 @@ func buildDirectMainExecutors(manager config.ConnectionAndDetailsGetter, rendere
 	ensureExecutorConfig(pipeline.AssetTypeBigqueryTableSensor)
 	executors[pipeline.AssetTypeBigqueryTableSensor][scheduler.TaskInstanceTypeMain] = bq.NewTableSensor(manager, "once", wholeFileExtractor)
 	ensureExecutorConfig(pipeline.AssetTypeAthenaQuery)
-	executors[pipeline.AssetTypeAthenaQuery][scheduler.TaskInstanceTypeMain] = ath.NewBasicOperator(manager, wholeFileExtractor, ath.NewMaterializer(fullRefresh), parser)
+	executors[pipeline.AssetTypeAthenaQuery][scheduler.TaskInstanceTypeMain] = ath.NewBasicOperator(manager, wholeFileExtractor, refreshRestrictedAthenaMaterializer{
+		configured: ath.NewMaterializer(false),
+		full:       ath.NewMaterializer(fullRefresh),
+	}, parser)
 	athenaColumnCheckOperator := ath.NewColumnCheckOperator(manager)
 	executors[pipeline.AssetTypeAthenaQuery][scheduler.TaskInstanceTypeColumnCheck] = athenaColumnCheckOperator
 	executors[pipeline.AssetTypeAthenaQuery][scheduler.TaskInstanceTypeCustomCheck] = customCheckRunner
@@ -140,7 +143,10 @@ func buildDirectMainExecutors(manager config.ConnectionAndDetailsGetter, rendere
 	ensureExecutorConfig(pipeline.AssetTypeAthenaTableSensor)
 	executors[pipeline.AssetTypeAthenaTableSensor][scheduler.TaskInstanceTypeMain] = ansisql.NewTableSensor(manager, "once", wholeFileExtractor)
 	ensureExecutorConfig(pipeline.AssetTypeDatabricksQuery)
-	executors[pipeline.AssetTypeDatabricksQuery][scheduler.TaskInstanceTypeMain] = dbsql.NewBasicOperator(manager, wholeFileExtractor, dbsql.NewMaterializer(fullRefresh), parser)
+	executors[pipeline.AssetTypeDatabricksQuery][scheduler.TaskInstanceTypeMain] = dbsql.NewBasicOperator(manager, wholeFileExtractor, refreshRestrictedQueryBatchMaterializer{
+		configured: dbsql.NewMaterializer(false),
+		full:       dbsql.NewMaterializer(fullRefresh),
+	}, parser)
 	databricksColumnCheckOperator := dbsql.NewColumnCheckOperator(manager)
 	executors[pipeline.AssetTypeDatabricksQuery][scheduler.TaskInstanceTypeColumnCheck] = databricksColumnCheckOperator
 	executors[pipeline.AssetTypeDatabricksQuery][scheduler.TaskInstanceTypeCustomCheck] = customCheckRunner
@@ -214,7 +220,10 @@ func buildDirectMainExecutors(manager config.ConnectionAndDetailsGetter, rendere
 	ensureExecutorConfig(pipeline.AssetTypeSynapseTableSensor)
 	executors[pipeline.AssetTypeSynapseTableSensor][scheduler.TaskInstanceTypeMain] = ansisql.NewTableSensor(manager, "once", wholeFileExtractor)
 	ensureExecutorConfig(pipeline.AssetTypeClickHouse)
-	executors[pipeline.AssetTypeClickHouse][scheduler.TaskInstanceTypeMain] = ch.NewBasicOperator(manager, wholeFileExtractor, ch.NewMaterializer(fullRefresh), parser)
+	executors[pipeline.AssetTypeClickHouse][scheduler.TaskInstanceTypeMain] = ch.NewBasicOperator(manager, wholeFileExtractor, refreshRestrictedQueryBatchMaterializer{
+		configured: ch.NewMaterializer(false),
+		full:       ch.NewMaterializer(fullRefresh),
+	}, parser)
 	clickHouseColumnCheckOperator := ch.NewColumnCheckOperator(manager)
 	executors[pipeline.AssetTypeClickHouse][scheduler.TaskInstanceTypeColumnCheck] = clickHouseColumnCheckOperator
 	executors[pipeline.AssetTypeClickHouse][scheduler.TaskInstanceTypeCustomCheck] = customCheckRunner

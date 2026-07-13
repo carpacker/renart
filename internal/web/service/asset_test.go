@@ -348,6 +348,80 @@ parameters:
 	assert.Equal(t, []string{"--mode", "incremental", "--primary-key", "id", "--update-key", "updated_at"}, args)
 }
 
+func TestAssetServiceUpdateRoundTripsCompleteMaterializationBlock(t *testing.T) {
+	t.Parallel()
+
+	workspaceRoot := t.TempDir()
+	pipelineRoot := filepath.Join(workspaceRoot, "analytics")
+	assetsRoot := filepath.Join(pipelineRoot, "assets")
+	require.NoError(t, os.MkdirAll(assetsRoot, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(pipelineRoot, "pipeline.yml"), []byte("name: analytics\n"), 0o644))
+	assetPath := filepath.Join(assetsRoot, "events.sql")
+	require.NoError(t, os.WriteFile(assetPath, []byte(strings.TrimSpace(`
+/* @bruin
+name: analytics.events
+type: bq.sql
+columns:
+  - name: event_at
+    type: TIMESTAMP
+  - name: customer_id
+    type: STRING
+  - name: region
+    type: STRING
+@bruin */
+
+select current_timestamp() as event_at, '1' as customer_id, 'eu' as region
+`)+"\n"), 0o644))
+
+	resolver := newAssetTestResolver(workspaceRoot)
+	service := NewAssetService(AssetDependencies{
+		WorkspaceRoot:    workspaceRoot,
+		ResolveAssetByID: resolver.ResolveAssetByID,
+		SuppressWatcher:  func(string) {},
+		PushWorkspaceUpdateImmediateWithChangedIDs: func(context.Context, string, string, []string) {},
+	})
+	assetID := EncodeID("analytics/assets/events.sql")
+	materializationType := "table"
+	strategy := "time_interval"
+	incrementalKey := "event_at"
+	partitionBy := "DATE(event_at)"
+	timeGranularity := "timestamp"
+
+	_, apiErr := service.Update(context.Background(), assetID, AssetUpdateRequest{
+		MaterializationType:     &materializationType,
+		MaterializationStrategy: &strategy,
+		IncrementalKey:          &incrementalKey,
+		PartitionBy:             &partitionBy,
+		ClusterBy:               []string{"customer_id", " region ", "customer_id"},
+		TimeGranularity:         &timeGranularity,
+	})
+	require.Nil(t, apiErr)
+
+	content, err := os.ReadFile(assetPath)
+	require.NoError(t, err)
+	assert.Contains(t, string(content), "strategy: time_interval")
+	assert.Contains(t, string(content), "incremental_key: event_at")
+	assert.Contains(t, string(content), "partition_by: DATE(event_at)")
+	assert.Contains(t, string(content), "cluster_by:")
+	assert.Contains(t, string(content), "time_granularity: timestamp")
+
+	_, _, updated, err := resolver.ResolveAssetByID(context.Background(), assetID)
+	require.NoError(t, err)
+	assert.Equal(t, pipeline.MaterializationStrategyTimeInterval, updated.Materialization.Strategy)
+	assert.Equal(t, "event_at", updated.Materialization.IncrementalKey)
+	assert.Equal(t, "DATE(event_at)", updated.Materialization.PartitionBy)
+	assert.Equal(t, []string{"customer_id", "region"}, updated.Materialization.ClusterBy)
+	assert.Equal(t, pipeline.MaterializationTimeGranularityTimestamp, updated.Materialization.TimeGranularity)
+
+	invalidGranularity := "hour"
+	_, apiErr = service.Update(context.Background(), assetID, AssetUpdateRequest{TimeGranularity: &invalidGranularity})
+	require.NotNil(t, apiErr)
+	assert.Equal(t, "invalid_time_granularity", apiErr.Code)
+	_, _, unchanged, err := resolver.ResolveAssetByID(context.Background(), assetID)
+	require.NoError(t, err)
+	assert.Equal(t, pipeline.MaterializationTimeGranularityTimestamp, unchanged.Materialization.TimeGranularity)
+}
+
 func TestAssetServiceUpdatePersistsManualUpstreamsInHeader(t *testing.T) {
 	workspaceRoot := t.TempDir()
 	pipelineRoot := filepath.Join(workspaceRoot, "analytics")

@@ -392,6 +392,29 @@ export function materializationEditorState(asset: WebAsset) {
   };
 }
 
+export function inferMaterializationTimeGranularity(asset: WebAsset, incrementalKey?: string) {
+  const key = (incrementalKey ?? asset.incremental_key ?? "").trim().toLowerCase();
+  const columnType = (asset.columns ?? [])
+    .find((column) => column.name.trim().toLowerCase() === key)
+    ?.type?.trim()
+    .toLowerCase();
+  return columnType?.replace(/\(.*/, "").trim() === "date" ? "date" : "timestamp";
+}
+
+export function materializationSelectionInput(asset: WebAsset, option: MaterializationOption) {
+  return {
+    materialization_type: option.type,
+    materialization_strategy: option.strategy,
+    ...(option.capability?.requires_time_granularity
+      ? {
+          time_granularity:
+            asset.time_granularity ||
+            inferMaterializationTimeGranularity(asset, asset.incremental_key),
+        }
+      : {}),
+  };
+}
+
 export function ColumnCombobox({
   columns,
   value,
@@ -494,10 +517,7 @@ function MaterializationCard({
           onValueChange={(value) => {
             const option = options.find((item) => item.value === value);
             if (!option || option.custom) return;
-            save({
-              materialization_type: option.type,
-              materialization_strategy: option.strategy,
-            });
+            save(materializationSelectionInput(asset, option));
           }}
         >
           <SelectTrigger className="h-8">
@@ -531,7 +551,53 @@ function MaterializationCard({
               if (key !== (asset.incremental_key ?? "")) {
                 save({
                   incremental_key: key,
+                  ...(selected.capability?.requires_time_granularity && !asset.time_granularity
+                    ? { time_granularity: inferMaterializationTimeGranularity(asset, key) }
+                    : {}),
                 });
+              }
+            }}
+          />
+        </FieldRow>
+      ) : null}
+      {selected.capability?.requires_time_granularity ? (
+        <FieldRow label="Time granularity">
+          <Select
+            value={asset.time_granularity ?? ""}
+            onValueChange={(timeGranularity) => save({ time_granularity: timeGranularity })}
+          >
+            <SelectTrigger className="h-8">
+              <SelectValue placeholder="Select date or timestamp" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="timestamp">Timestamp</SelectItem>
+              <SelectItem value="date">Date</SelectItem>
+            </SelectContent>
+          </Select>
+        </FieldRow>
+      ) : null}
+      {selected.capability?.supports_partition_by ? (
+        <FieldRow label="Partition by">
+          <CommitInput
+            mono
+            value={asset.partition_by ?? ""}
+            placeholder="event_date"
+            onCommit={(partitionBy) => {
+              if (partitionBy !== (asset.partition_by ?? "")) {
+                save({ partition_by: partitionBy });
+              }
+            }}
+          />
+        </FieldRow>
+      ) : null}
+      {selected.capability?.supports_cluster_by ? (
+        <FieldRow label="Cluster by">
+          <MultiValueInput
+            value={asset.cluster_by ?? []}
+            placeholder="Add column or expression"
+            onChange={(clusterBy) => {
+              if (clusterBy.join("\n") !== (asset.cluster_by ?? []).join("\n")) {
+                save({ cluster_by: clusterBy });
               }
             }}
           />

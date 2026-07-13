@@ -118,7 +118,9 @@ round-trips unknown fields).
   one. The backend-provided per-asset capability profile drives the available
   modes and their prerequisites, including warehouse-specific SQL differences,
   native versus Sling-backed Python writes, and Load/API's replace, truncate,
-  append, and merge subset. Unsupported hand-authored strategies are shown as
+  append, and merge subset. SQL `time_interval` exposes its incremental key and
+  date/timestamp granularity; warehouse renderers that use table layout metadata
+  also expose partition and cluster expressions. Unsupported hand-authored strategies are shown as
   custom values without being reinterpreted; assets with dedicated non-generic
   runtime configuration omit this section. API, Python, and Load assets share
   the same top-level target
@@ -135,6 +137,11 @@ round-trips unknown fields).
   the selected environment and current execution window; environments with
   `confirm_destructive` require typing the exact environment name. The same
   confirmation is enforced again in the backend for HTTP and CLI callers.
+- **Replay-safe backfill:** assets whose backend staleness contract reports
+  `backfill_safe` expose a Backfill range action beside full refresh. The dialog
+  accepts an exact UTC start/end range and uses the same destructive confirmation;
+  the execution service independently rejects missing ranges, multi-asset scopes,
+  and materializations whose windows cannot be safely accumulated.
 - **Provenance classification client-side** (`lib/asset-provenance.ts`)
   mirrors the flat-key schema for display (source chips: "inferred from SQL" /
   "manual").

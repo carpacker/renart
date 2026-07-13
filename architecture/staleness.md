@@ -71,7 +71,10 @@ their prior coverage with the latest window so replace/append modes cannot
 claim data they may no longer contain. Load's Sling max-key state is not a
 Renart run window, and dormant `incremental_key` metadata never makes an asset
 interval-aware. `BackfillSafe` is the narrower union-safe contract used by the
-scheduler before enabling catch-up. A daily River job prunes raw facts (default
+scheduler before enabling catch-up and returned with each asset's staleness
+status. The editor uses that same backend fact for its explicit Backfill range
+action; the execution endpoint requires a complete UTC range and revalidates the
+asset before dispatch. A daily River job prunes raw facts (default
 90 days); coverage is the durable summary.
 
 A full refresh remains paired with its requested run window. For an

@@ -319,6 +319,8 @@ func TestPartialCoverageReportsGaps(t *testing.T) {
 	start, end := day(0), day(30)
 	status := f.statuses(t, "dev", &start, &end)["a"]
 	assert.Equal(t, StatusPartial, status.Status)
+	assert.True(t, status.IntervalAware)
+	assert.True(t, status.BackfillSafe)
 	assert.InDelta(t, (20 * 24 * time.Hour).Seconds(), status.CoveredSeconds, 1)
 	assert.InDelta(t, (30 * 24 * time.Hour).Seconds(), status.TotalSeconds, 1)
 	require.Len(t, status.Gaps, 1)

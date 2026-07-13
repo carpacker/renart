@@ -20,6 +20,7 @@ export type AssetStaleness = {
   status: AssetStalenessStatus;
   fingerprint: string;
   interval_aware: boolean;
+  backfill_safe: boolean;
   covered_seconds?: number;
   total_seconds?: number;
   gaps?: StalenessInterval[];

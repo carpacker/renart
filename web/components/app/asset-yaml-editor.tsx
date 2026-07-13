@@ -43,7 +43,9 @@ import {
   VALUE_CHECKS,
   checkValueFor,
   formatCheckValue,
+  inferMaterializationTimeGranularity,
   materializationEditorState,
+  materializationSelectionInput,
 } from "./asset-guided-cards";
 
 /**
@@ -431,10 +433,7 @@ function MaterializationSection({
           onChange={(value) => {
             const option = options.find((item) => item.value === value);
             if (!option || option.custom) return;
-            save({
-              materialization_type: option.type,
-              materialization_strategy: option.strategy,
-            });
+            save(materializationSelectionInput(asset, option));
           }}
         />
       </Line>
@@ -450,10 +449,71 @@ function MaterializationSection({
             }
             className="h-6 min-w-40 border-none bg-muted/40 shadow-none"
             onChange={(key) => {
-              if (key !== (asset.incremental_key ?? "")) save({ incremental_key: key });
+              if (key !== (asset.incremental_key ?? "")) {
+                save({
+                  incremental_key: key,
+                  ...(selected.capability?.requires_time_granularity && !asset.time_granularity
+                    ? { time_granularity: inferMaterializationTimeGranularity(asset, key) }
+                    : {}),
+                });
+              }
             }}
           />
         </Line>
+      ) : null}
+      {selected.capability?.requires_time_granularity ? (
+        <Line depth={1}>
+          <Key>time_granularity</Key>
+          <InlineSelect
+            value={asset.time_granularity ?? ""}
+            options={[
+              { value: "timestamp", label: "timestamp" },
+              { value: "date", label: "date" },
+            ]}
+            onChange={(timeGranularity) => save({ time_granularity: timeGranularity })}
+            placeholder="select date or timestamp"
+          />
+        </Line>
+      ) : null}
+      {selected.capability?.supports_partition_by ? (
+        <Line depth={1}>
+          <Key>partition_by</Key>
+          <InlineText
+            value={asset.partition_by ?? ""}
+            placeholder="event_date"
+            onCommit={(partitionBy) => {
+              if (partitionBy !== (asset.partition_by ?? "")) save({ partition_by: partitionBy });
+            }}
+          />
+        </Line>
+      ) : null}
+      {selected.capability?.supports_cluster_by ? (
+        <>
+          <Line depth={1}>
+            <Key>cluster_by</Key>
+          </Line>
+          {(asset.cluster_by ?? []).map((cluster, index) => (
+            <Line key={`${cluster}-${index}`} depth={2}>
+              <Dash />
+              <span className="flex-1 text-foreground">{cluster}</span>
+              <RemoveButton
+                label={`Remove cluster expression ${cluster}`}
+                onClick={() =>
+                  save({ cluster_by: (asset.cluster_by ?? []).filter((item) => item !== cluster) })
+                }
+              />
+            </Line>
+          ))}
+          <AddItem
+            depth={2}
+            placeholder="add column or expression"
+            onAdd={(cluster) => {
+              if (!(asset.cluster_by ?? []).includes(cluster)) {
+                save({ cluster_by: [...(asset.cluster_by ?? []), cluster] });
+              }
+            }}
+          />
+        </>
       ) : null}
       {selected.capability?.requires_primary_key ? (
         <Comment depth={2}>

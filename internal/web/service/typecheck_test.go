@@ -522,4 +522,54 @@ func TestMaterializationTypeCheckFindings(t *testing.T) {
 		assert.Equal(t, typeCheckSeverityWarning, findings[0].Severity)
 		assert.Contains(t, findings[0].Message, "Inactive materialization metadata")
 	})
+
+	t.Run("time interval requires a key and granularity", func(t *testing.T) {
+		asset := &pipeline.Asset{
+			Type: pipeline.AssetTypeDuckDBQuery,
+			Materialization: pipeline.Materialization{
+				Type:     pipeline.MaterializationTypeTable,
+				Strategy: pipeline.MaterializationStrategyTimeInterval,
+			},
+		}
+
+		findings := materializationTypeCheckFindings(asset)
+		require.Len(t, findings, 2)
+		assert.Contains(t, findings[0].Message, "incremental key")
+		assert.Contains(t, findings[1].Message, "time granularity")
+	})
+
+	t.Run("invalid time granularity is rejected", func(t *testing.T) {
+		asset := &pipeline.Asset{
+			Type:    pipeline.AssetTypeDuckDBQuery,
+			Columns: []pipeline.Column{{Name: "event_at", Type: "TIMESTAMP"}},
+			Materialization: pipeline.Materialization{
+				Type:            pipeline.MaterializationTypeTable,
+				Strategy:        pipeline.MaterializationStrategyTimeInterval,
+				IncrementalKey:  "event_at",
+				TimeGranularity: pipeline.MaterializationTimeGranularity("hour"),
+			},
+		}
+
+		findings := materializationTypeCheckFindings(asset)
+		require.Len(t, findings, 1)
+		assert.Contains(t, findings[0].Message, "must be date or timestamp")
+	})
+
+	t.Run("inactive warehouse layout fields are warnings", func(t *testing.T) {
+		asset := &pipeline.Asset{
+			Type: pipeline.AssetTypeDuckDBQuery,
+			Materialization: pipeline.Materialization{
+				Type:        pipeline.MaterializationTypeTable,
+				Strategy:    pipeline.MaterializationStrategyCreateReplace,
+				PartitionBy: "event_date",
+				ClusterBy:   []string{"customer_id"},
+			},
+		}
+
+		findings := materializationTypeCheckFindings(asset)
+		require.Len(t, findings, 2)
+		assert.Equal(t, typeCheckSeverityWarning, findings[0].Severity)
+		assert.Contains(t, findings[0].Message, "partition_by")
+		assert.Contains(t, findings[1].Message, "cluster_by")
+	})
 }

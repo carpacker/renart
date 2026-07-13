@@ -20,6 +20,9 @@ type AssetUpdateRequest struct {
 	MaterializationType     *string           `json:"materialization_type,omitempty"`
 	MaterializationStrategy *string           `json:"materialization_strategy,omitempty"`
 	IncrementalKey          *string           `json:"incremental_key,omitempty"`
+	PartitionBy             *string           `json:"partition_by,omitempty"`
+	ClusterBy               []string          `json:"cluster_by,omitempty"`
+	TimeGranularity         *string           `json:"time_granularity,omitempty"`
 	Owner                   *string           `json:"owner,omitempty"`
 	Tags                    []string          `json:"tags,omitempty"`
 	Meta                    map[string]string `json:"meta,omitempty"`
@@ -467,7 +470,7 @@ func (s *AssetService) Update(ctx context.Context, assetID string, req AssetUpda
 	persistedViaCodec := false
 	loadAssetUpdated := false
 
-	if req.Name != nil || req.Type != nil || req.Connection != nil || req.MaterializationType != nil || req.MaterializationStrategy != nil || req.IncrementalKey != nil || req.Owner != nil || req.Tags != nil || req.Meta != nil || req.Upstreams != nil || req.Parameters != nil {
+	if req.Name != nil || req.Type != nil || req.Connection != nil || req.MaterializationType != nil || req.MaterializationStrategy != nil || req.IncrementalKey != nil || req.PartitionBy != nil || req.ClusterBy != nil || req.TimeGranularity != nil || req.Owner != nil || req.Tags != nil || req.Meta != nil || req.Upstreams != nil || req.Parameters != nil {
 		_, parsedPipeline, asset, resolveErr := s.deps.ResolveAssetByID(ctx, assetID)
 		if resolveErr != nil {
 			return AssetMutationResponse{}, newAPIError(400, "asset_resolve_failed", resolveErr.Error())
@@ -515,6 +518,21 @@ func (s *AssetService) Update(ctx context.Context, assetID string, req AssetUpda
 		if req.IncrementalKey != nil {
 			asset.Materialization.IncrementalKey = strings.TrimSpace(*req.IncrementalKey)
 		}
+		if req.PartitionBy != nil {
+			asset.Materialization.PartitionBy = strings.TrimSpace(*req.PartitionBy)
+		}
+		if req.ClusterBy != nil {
+			asset.Materialization.ClusterBy = compactWorkspaceStringArray(req.ClusterBy)
+		}
+		if req.TimeGranularity != nil {
+			granularity := strings.ToLower(strings.TrimSpace(*req.TimeGranularity))
+			switch pipeline.MaterializationTimeGranularity(granularity) {
+			case "", pipeline.MaterializationTimeGranularityDate, pipeline.MaterializationTimeGranularityTimestamp:
+				asset.Materialization.TimeGranularity = pipeline.MaterializationTimeGranularity(granularity)
+			default:
+				return AssetMutationResponse{}, badRequestError("invalid_time_granularity", "time granularity must be date or timestamp")
+			}
+		}
 		if req.Connection != nil {
 			asset.Connection = strings.TrimSpace(*req.Connection)
 		}
@@ -559,7 +577,7 @@ func (s *AssetService) Update(ctx context.Context, assetID string, req AssetUpda
 			}
 			asset.Parameters = nextParameters
 		}
-		materializationChanged := req.Type != nil || req.Connection != nil || req.MaterializationType != nil || req.MaterializationStrategy != nil
+		materializationChanged := req.Type != nil || req.Connection != nil || req.MaterializationType != nil || req.MaterializationStrategy != nil || req.IncrementalKey != nil || req.PartitionBy != nil || req.ClusterBy != nil || req.TimeGranularity != nil
 		if materializationChanged {
 			connectionTypes := map[string]string{}
 			if s.deps.ConnectionTypeFor != nil {
@@ -570,6 +588,14 @@ func (s *AssetService) Update(ctx context.Context, assetID string, req AssetUpda
 			destinationType := materializationDestinationType(asset, parsedPipeline, connectionTypes)
 			if capabilityErr := validateMaterializationCapability(asset, destinationType); capabilityErr != nil {
 				return AssetMutationResponse{}, badRequestError("unsupported_materialization", capabilityErr.Error())
+			}
+			profile := materializationProfileFor(asset, destinationType)
+			capability, capabilityKnown := materializationCapabilityForMode(profile, normalizedMaterializationMode(asset))
+			if req.PartitionBy != nil && asset.Materialization.PartitionBy != "" && capabilityKnown && !capability.SupportsPartitionBy {
+				return AssetMutationResponse{}, badRequestError("unsupported_partition_by", "partition_by is not supported by this materialization mode and destination")
+			}
+			if req.ClusterBy != nil && len(asset.Materialization.ClusterBy) > 0 && capabilityKnown && !capability.SupportsClusterBy {
+				return AssetMutationResponse{}, badRequestError("unsupported_cluster_by", "cluster_by is not supported by this materialization mode and destination")
 			}
 		}
 		if apiErr := loaderMaterializationAPIError(asset); apiErr != nil {

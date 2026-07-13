@@ -8,6 +8,8 @@ export type MaterializationCapability = {
   requires_incremental_key?: boolean;
   requires_primary_key?: boolean;
   requires_time_granularity?: boolean;
+  supports_partition_by?: boolean;
+  supports_cluster_by?: boolean;
 };
 
 export type WebColumnCheck = {
@@ -48,6 +50,9 @@ export type WebAsset = {
   materialization_type?: string;
   materialization_strategy?: string;
   incremental_key?: string;
+  partition_by?: string;
+  cluster_by?: string[];
+  time_granularity?: string;
   materialization_capabilities?: MaterializationCapability[];
   supports_full_refresh?: boolean;
   refresh_restricted?: boolean;
