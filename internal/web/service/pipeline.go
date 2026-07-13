@@ -96,6 +96,7 @@ func (s *PipelineService) GetConfig(ctx context.Context, pipelineID string) (*we
 	}
 
 	resp := buildPipelineConfigResponse(pipelineID, filepath.ToSlash(relPath), parsed)
+	resp.InferredDefaultConnections = s.inferredDefaultConnections(ctx, relPath)
 	resp.Status = "ok"
 	return resp, nil
 }
@@ -233,6 +234,7 @@ func (s *PipelineService) UpdateConfig(ctx context.Context, pipelineID string, r
 	}
 
 	resp := buildPipelineConfigResponse(pipelineID, filepath.ToSlash(relPath), updated)
+	resp.InferredDefaultConnections = s.inferredDefaultConnections(ctx, relPath)
 	resp.Status = "ok"
 	return filepath.ToSlash(relPath), resp, nil
 }
@@ -478,6 +480,104 @@ func buildDefaultConnections(input []webmodel.PipelineConfigConnection) pipeline
 		return nil
 	}
 	return result
+}
+
+// inferredDefaultConnections loads assets only for the settings response. The
+// normal pipeline config path deliberately parses pipeline.yml alone so
+// schedule/config edits remain available even when an asset is temporarily
+// invalid. Inference is supplementary: a failed full parse simply leaves the
+// read-only inferred list empty.
+func (s *PipelineService) inferredDefaultConnections(ctx context.Context, relPath string) []webmodel.PipelineConfigConnection {
+	absPath, err := SafeJoin(s.workspaceRoot, relPath)
+	if err != nil {
+		return nil
+	}
+	parsed, err := s.newPipelineBuilder().CreatePipelineFromPath(ctx, absPath, pipeline.WithMutate())
+	if err != nil {
+		return nil
+	}
+	return inferPipelineDefaultConnections(parsed)
+}
+
+func inferPipelineDefaultConnections(parsed *pipeline.Pipeline) []webmodel.PipelineConfigConnection {
+	if parsed == nil {
+		return nil
+	}
+
+	explicitNames := make(map[string]struct{}, len(parsed.DefaultConnections))
+	for _, name := range parsed.DefaultConnections {
+		if name = strings.TrimSpace(name); name != "" {
+			explicitNames[name] = struct{}{}
+		}
+	}
+
+	inferred := make(map[string]string)
+	for _, asset := range parsed.Assets {
+		if asset == nil || strings.TrimSpace(asset.Connection) != "" {
+			continue
+		}
+		platform, ok := defaultConnectionPlatformForAsset(parsed, asset)
+		if !ok {
+			continue
+		}
+		if explicit := strings.TrimSpace(parsed.DefaultConnections[platform]); explicit != "" {
+			continue
+		}
+
+		name, err := targetConnectionNameForAsset(asset, parsed)
+		if err != nil {
+			continue
+		}
+		name = strings.TrimSpace(name)
+		if name == "" {
+			continue
+		}
+		if _, explicit := explicitNames[name]; explicit {
+			continue
+		}
+		if current, exists := inferred[platform]; !exists || name < current {
+			inferred[platform] = name
+		}
+	}
+
+	result := make([]webmodel.PipelineConfigConnection, 0, len(inferred))
+	for platform, name := range inferred {
+		result = append(result, webmodel.PipelineConfigConnection{Platform: platform, Name: name})
+	}
+	sort.Slice(result, func(i, j int) bool {
+		if result[i].Platform == result[j].Platform {
+			return result[i].Name < result[j].Name
+		}
+		return result[i].Platform < result[j].Platform
+	})
+	return result
+}
+
+func defaultConnectionPlatformForAsset(parsed *pipeline.Pipeline, asset *pipeline.Asset) (string, bool) {
+	if parsed == nil || asset == nil {
+		return "", false
+	}
+
+	assetType := asset.Type
+	switch {
+	case isAPIAsset(asset), isLoadAsset(asset):
+		assetType = parsed.GetMajorityAssetTypesFromSQLAssets(pipeline.AssetTypeDuckDBQuery)
+	case assetType == pipeline.AssetTypePython || assetType == pipeline.AssetTypeEmpty:
+		assetType = parsed.GetMajorityAssetTypesFromSQLAssets(pipeline.AssetTypeBigqueryQuery)
+	case assetType == pipeline.AssetTypeIngestr:
+		if connection, ok := asset.Parameters.GetString("destination_connection"); ok && strings.TrimSpace(connection) != "" {
+			return "", false
+		}
+		destination, _ := asset.Parameters.GetString("destination")
+		var ok bool
+		assetType, ok = pipeline.IngestrTypeConnectionMapping[strings.ToLower(strings.TrimSpace(destination))]
+		if !ok {
+			return "", false
+		}
+	}
+
+	platform, ok := pipeline.AssetTypeConnectionMapping[assetType]
+	return platform, ok && strings.TrimSpace(platform) != ""
 }
 
 func buildNotifications(slack, teams webmodel.PipelineConfigNotification) pipeline.Notifications {

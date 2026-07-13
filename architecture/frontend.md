@@ -84,7 +84,10 @@ not underscore-flattened route hacks.
 - [components/app/build-page.tsx](../web/components/app/build-page.tsx): the primary
   IDE — the interactive lineage canvas
   ([lineage-canvas.tsx](../web/components/app/lineage-canvas.tsx), React Flow)
-  beside the asset editor.
+  beside the asset editor. Bare asset URLs default to this split view; ad-hoc
+  queries preserve code/split layout and add the editor beside a canvas-only
+  view. The explorer's asset filter searches names, groups, paths, types, and
+  connections.
 - [components/app/asset-editor.tsx](../web/components/app/asset-editor.tsx): the
   Monaco editor plus guided metadata cards
   ([asset-guided-cards.tsx](../web/components/app/asset-guided-cards.tsx)) and YAML
@@ -97,6 +100,9 @@ not underscore-flattened route hacks.
   [settings-pages.tsx](../web/components/app/settings-pages.tsx),
   [object-pages.tsx](../web/components/app/object-pages.tsx),
   [welcome-page.tsx](../web/components/app/welcome-page.tsx).
+
+Project connection routes accept an environment/connection search target so
+pipeline default-connection links can open the exact editable connection sheet.
 
 All feature UI lives under `components/app/`; shared primitives under
 `components/ui/`. Prefer the shared shadcn card primitives

@@ -23,6 +23,7 @@ import {
   Database,
   Download,
   Eye,
+  ExternalLink,
   FileCode,
   FolderPlus,
   GitBranch,
@@ -3807,6 +3808,9 @@ function PipelineSettingsDialog({
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [yaml, setYaml] = useState<string>("");
+  const [inferredDefaultConnections, setInferredDefaultConnections] = useState<
+    PipelineConfigConnection[]
+  >([]);
 
   // Re-fetch whenever the dialog opens so the form always reflects on-disk state
   // (a code edit or CLI run may have changed pipeline.yml since last time).
@@ -3815,12 +3819,14 @@ function PipelineSettingsDialog({
     setSection(initialSection ?? "general");
     setError(null);
     setLoading(true);
+    setInferredDefaultConnections([]);
     let cancelled = false;
     getPipelineConfig(pipelineId)
       .then((config) => {
         if (cancelled) return;
         setYaml(config.yaml ?? "");
         setDraft(configResponseToDraft(config));
+        setInferredDefaultConnections(config.inferred_default_connections ?? []);
       })
       .catch((cause) => {
         if (cancelled) return;
@@ -3849,6 +3855,7 @@ function PipelineSettingsDialog({
       const response = await updatePipelineConfig(pipelineId, draft);
       setYaml(response.yaml ?? yaml);
       setDraft(configResponseToDraft(response));
+      setInferredDefaultConnections(response.inferred_default_connections ?? []);
       onOpenChange(false);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Failed to save pipeline settings.");
@@ -3897,6 +3904,7 @@ function PipelineSettingsDialog({
                 draft={draft}
                 update={update}
                 yaml={yaml}
+                inferredDefaultConnections={inferredDefaultConnections}
               />
             )}
           </div>
@@ -3930,6 +3938,7 @@ function configResponseToDraft(config: {
   tags?: string[];
   domains?: string[];
   default_connections?: PipelineConfigConnection[];
+  inferred_default_connections?: PipelineConfigConnection[];
   catchup?: boolean;
   metadata_push_bigquery?: boolean;
   retries?: number;
@@ -3972,12 +3981,15 @@ function PipelineSettingsSectionBody({
   draft,
   update,
   yaml,
+  inferredDefaultConnections,
 }: {
   section: PipelineSettingsSection;
   draft: PipelineConfigDraft;
   update: <K extends keyof PipelineConfigDraft>(key: K, value: PipelineConfigDraft[K]) => void;
   yaml: string;
+  inferredDefaultConnections: PipelineConfigConnection[];
 }) {
+  const environment = useAtomValue(selectedEnvironmentAtom);
   if (section === "general") {
     return (
       <>
@@ -4091,9 +4103,12 @@ function PipelineSettingsSectionBody({
         <p className="text-xs text-muted-foreground">
           Default connection per platform. Assets that don&apos;t name a connection use these.
         </p>
+        <div className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+          Pipeline overrides
+        </div>
         {draft.default_connections.length === 0 ? (
           <p className="rounded-md border border-dashed p-3 text-xs text-muted-foreground">
-            No default connections set for this pipeline.
+            No overrides in pipeline.yml.
           </p>
         ) : (
           draft.default_connections.map((connection, index) => (
@@ -4122,6 +4137,10 @@ function PipelineSettingsSectionBody({
                 }
                 placeholder="bq-prod"
               />
+              <PipelineConnectionSettingsLink
+                environment={environment}
+                connection={connection.name}
+              />
               <Button
                 variant="ghost"
                 size="icon-sm"
@@ -4148,6 +4167,43 @@ function PipelineSettingsSectionBody({
           <Plus className="size-3.5" />
           Add connection
         </Button>
+        {inferredDefaultConnections.length > 0 ? (
+          <div className="space-y-2 border-t pt-3">
+            <div>
+              <div className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+                Inferred defaults
+              </div>
+              <p className="mt-1 text-xs text-muted-foreground">
+                Bruin derives these from asset types when no pipeline override exists.
+              </p>
+            </div>
+            {inferredDefaultConnections.map((connection) => (
+              <div
+                key={`${connection.platform}:${connection.name}`}
+                data-testid="inferred-default-connection"
+                className="flex items-center gap-3 rounded-md border bg-muted/30 px-3 py-2"
+              >
+                <div className="min-w-0 flex-1">
+                  <div className="text-[10px] uppercase tracking-wide text-muted-foreground">
+                    Platform
+                  </div>
+                  <div className="truncate font-mono text-xs">{connection.platform}</div>
+                </div>
+                <div className="min-w-0 flex-1">
+                  <div className="text-[10px] uppercase tracking-wide text-muted-foreground">
+                    Connection
+                  </div>
+                  <div className="truncate font-mono text-xs">{connection.name}</div>
+                </div>
+                <Badge variant="outline">Inferred</Badge>
+                <PipelineConnectionSettingsLink
+                  environment={environment}
+                  connection={connection.name}
+                />
+              </div>
+            ))}
+          </div>
+        ) : null}
       </div>
     );
   }
@@ -4308,6 +4364,29 @@ function NotificationChannelFields({
         </div>
       ) : null}
     </div>
+  );
+}
+
+function PipelineConnectionSettingsLink({
+  environment,
+  connection,
+}: {
+  environment?: string;
+  connection: string;
+}) {
+  const name = connection.trim();
+  if (!name) return null;
+  return (
+    <Button asChild variant="ghost" size="icon-sm">
+      <Link
+        to="/project/connections"
+        search={{ environment: environment || undefined, connection: name }}
+        aria-label={`Open ${name} in project connection settings`}
+        title={`Open ${name} in project connection settings`}
+      >
+        <ExternalLink />
+      </Link>
+    </Button>
   );
 }
 

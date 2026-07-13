@@ -1,4 +1,4 @@
-import { Link, Outlet } from "@tanstack/react-router";
+import { Link, Outlet, useNavigate } from "@tanstack/react-router";
 import {
   Boxes,
   CheckCircle2,
@@ -611,7 +611,11 @@ function EnvironmentSheet({
                 )}
                 <p className="text-xs text-muted-foreground">
                   Manage them in the{" "}
-                  <Link to="/project/connections" className="underline underline-offset-2">
+                  <Link
+                    to="/project/connections"
+                    search={{}}
+                    className="underline underline-offset-2"
+                  >
                     Connections
                   </Link>{" "}
                   tab.
@@ -669,7 +673,14 @@ type ConnectionSheetState =
   | { mode: "create"; environment: string | null }
   | { mode: "edit"; environment: string; connection: string };
 
-export function AppProjectConnectionsPage() {
+export function AppProjectConnectionsPage({
+  selectedEnvironment,
+  selectedConnection,
+}: {
+  selectedEnvironment?: string;
+  selectedConnection?: string;
+}) {
+  const navigate = useNavigate();
   const settings = useWorkspaceSettingsData();
   const {
     loadWorkspaceConfig,
@@ -693,6 +704,35 @@ export function AppProjectConnectionsPage() {
       }
     }
   }, [loadWorkspaceEnvironmentPolicy, normalizedConfigEnvironments, workspaceEnvironmentPolicies]);
+
+  useEffect(() => {
+    if (!selectedConnection) return;
+    const preferredEnvironment = normalizedConfigEnvironments.find(
+      (environment) =>
+        environment.name === selectedEnvironment &&
+        environment.connections.some((connection) => connection.name === selectedConnection),
+    );
+    const environment =
+      preferredEnvironment ??
+      normalizedConfigEnvironments.find((item) =>
+        item.connections.some((connection) => connection.name === selectedConnection),
+      );
+    if (!environment) return;
+    setSheetState((current) =>
+      current?.mode === "edit" &&
+      current.environment === environment.name &&
+      current.connection === selectedConnection
+        ? current
+        : { mode: "edit", environment: environment.name, connection: selectedConnection },
+    );
+  }, [normalizedConfigEnvironments, selectedConnection, selectedEnvironment]);
+
+  const closeSheet = () => {
+    setSheetState(null);
+    if (selectedConnection || selectedEnvironment) {
+      void navigate({ to: "/project/connections", search: {}, replace: true });
+    }
+  };
 
   return (
     <div className="flex min-h-0 flex-col gap-4">
@@ -756,7 +796,7 @@ export function AppProjectConnectionsPage() {
           </SettingsCard>
         ))
       )}
-      <ConnectionSheet state={sheetState} onClose={() => setSheetState(null)} settings={settings} />
+      <ConnectionSheet state={sheetState} onClose={closeSheet} settings={settings} />
     </div>
   );
 }

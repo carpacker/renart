@@ -218,26 +218,27 @@ type PipelineConfigVariable struct {
 }
 
 type PipelineConfigResponse struct {
-	Status               string                     `json:"status"`
-	ID                   string                     `json:"id"`
-	Path                 string                     `json:"path"`
-	Name                 string                     `json:"name"`
-	Schedule             string                     `json:"schedule,omitempty"`
-	StartDate            string                     `json:"start_date,omitempty"`
-	Owner                string                     `json:"owner,omitempty"`
-	Tags                 []string                   `json:"tags"`
-	Domains              []string                   `json:"domains"`
-	DefaultConnections   []PipelineConfigConnection `json:"default_connections"`
-	Catchup              bool                       `json:"catchup"`
-	MetadataPushBigQuery bool                       `json:"metadata_push_bigquery"`
-	Retries              int                        `json:"retries"`
-	Concurrency          int                        `json:"concurrency"`
-	MaxActiveSteps       *int                       `json:"max_active_steps,omitempty"`
-	NotificationsSlack   PipelineConfigNotification `json:"notifications_slack"`
-	NotificationsTeams   PipelineConfigNotification `json:"notifications_teams"`
-	Defaults             PipelineConfigDefaults     `json:"defaults"`
-	Variables            []PipelineConfigVariable   `json:"variables"`
-	YAML                 string                     `json:"yaml"`
+	Status                     string                     `json:"status"`
+	ID                         string                     `json:"id"`
+	Path                       string                     `json:"path"`
+	Name                       string                     `json:"name"`
+	Schedule                   string                     `json:"schedule,omitempty"`
+	StartDate                  string                     `json:"start_date,omitempty"`
+	Owner                      string                     `json:"owner,omitempty"`
+	Tags                       []string                   `json:"tags"`
+	Domains                    []string                   `json:"domains"`
+	DefaultConnections         []PipelineConfigConnection `json:"default_connections"`
+	InferredDefaultConnections []PipelineConfigConnection `json:"inferred_default_connections"`
+	Catchup                    bool                       `json:"catchup"`
+	MetadataPushBigQuery       bool                       `json:"metadata_push_bigquery"`
+	Retries                    int                        `json:"retries"`
+	Concurrency                int                        `json:"concurrency"`
+	MaxActiveSteps             *int                       `json:"max_active_steps,omitempty"`
+	NotificationsSlack         PipelineConfigNotification `json:"notifications_slack"`
+	NotificationsTeams         PipelineConfigNotification `json:"notifications_teams"`
+	Defaults                   PipelineConfigDefaults     `json:"defaults"`
+	Variables                  []PipelineConfigVariable   `json:"variables"`
+	YAML                       string                     `json:"yaml"`
 }
 
 type UpdatePipelineConfigRequest struct {

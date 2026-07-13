@@ -131,6 +131,11 @@ round-trips unknown fields).
 - **Expert YAML mode** (`asset-yaml-editor.tsx`): edit the real definition
   with the same materialization/key controls plus pickers/completion for
   connections and columns; parsed and validated before write.
+- **Pipeline connection context**: a canvas asset's connection badge opens the
+  pipeline settings Connections section. The config response keeps explicit
+  `pipeline.yml` overrides separate from read-only defaults Bruin infers from
+  asset types, and each resolved connection links to that exact environment
+  connection under project settings.
 - Column refresh actions: re-infer from SQL
   (`/columns/refresh-from-definition`), fill from warehouse
   (`/fill-columns-from-db`), reconcile (`/columns/reconcile`).

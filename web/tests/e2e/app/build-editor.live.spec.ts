@@ -159,4 +159,60 @@ select customer_id, customer_name from analytics.customers
     expect(config.tags).toContain("finance, north");
     expect(config.domains).toContain("sales, enterprise");
   });
+
+  test("inferred pipeline defaults are shown and link to the project connection", async ({
+    liveApp,
+    page,
+  }) => {
+    test.skip(
+      test.info().project.name.includes("mobile"),
+      "Pipeline settings dialog coverage is desktop-only.",
+    );
+
+    await writeFile(
+      join(liveApp.workspaceDir, "analytics", "pipeline.yml"),
+      `id: 693a3341-9762-42b5-a35f-c2a9efe94203
+name: analytics
+`,
+      "utf8",
+    );
+
+    await expect
+      .poll(
+        async () => {
+          const response = await page.request.get(
+            `${liveApp.baseURL}/api/pipelines/${pipelineId}/config`,
+          );
+          if (!response.ok()) return [];
+          const config = (await response.json()) as {
+            inferred_default_connections?: Array<{ platform: string; name: string }>;
+          };
+          return config.inferred_default_connections ?? [];
+        },
+        { timeout: 30000 },
+      )
+      .toEqual([{ platform: "duckdb", name: "duckdb-default" }]);
+
+    await page.goto(`${liveApp.baseURL}/pipelines/${pipelineId}/assets/${customersAssetId}/canvas`);
+    const connectionButton = page
+      .getByTestId(`rf__node-${customersAssetId}`)
+      .locator('button[aria-label^="Connection duckdb-default"]');
+    await expect(connectionButton).toBeVisible({ timeout: 15000 });
+    await connectionButton.click();
+
+    const dialog = page.getByRole("dialog", { name: /Pipeline settings/ });
+    await expect(dialog).toBeVisible({ timeout: 15000 });
+    const inferred = dialog.getByTestId("inferred-default-connection");
+    await expect(inferred).toContainText("duckdb");
+    await expect(inferred).toContainText("duckdb-default");
+    await expect(inferred).toContainText("Inferred");
+
+    await dialog
+      .getByRole("link", { name: "Open duckdb-default in project connection settings" })
+      .click();
+    await expect(page).toHaveURL(/\/project\/connections[?].*connection=duckdb-default/);
+    await expect(page.getByRole("heading", { name: "duckdb-default" })).toBeVisible({
+      timeout: 15000,
+    });
+  });
 });

@@ -533,6 +533,7 @@ export type WebPipelineConfigResponse = {
   tags: string[];
   domains: string[];
   default_connections: PipelineConfigConnection[];
+  inferred_default_connections: PipelineConfigConnection[];
   catchup: boolean;
   metadata_push_bigquery: boolean;
   retries: number;

@@ -179,7 +179,7 @@ export function AppCommandPalette() {
         title: "Connections",
         subtitle: "Project settings",
         icon: Settings2,
-        to: () => navigate({ to: "/project/connections" }),
+        to: () => navigate({ to: "/project/connections", search: {} }),
       },
     ].map(({ id, title, subtitle, icon, to }) => ({
       id,
