@@ -204,10 +204,13 @@ test.describe("app notebooks live", () => {
       notebook.id,
       pythonCell,
       [
+        "import os",
+        "",
         "from renart import query",
         "",
         "",
         "def materialize():",
+        '    assert "RENART_NOTEBOOK_INPUTS" not in os.environ',
         '    return query("select amount * 2 as doubled from base order by 1", format="arrow")',
       ].join("\n"),
     );

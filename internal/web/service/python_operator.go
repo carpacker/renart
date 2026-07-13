@@ -45,9 +45,16 @@ type renartPythonOperator struct {
 	registry     *runstate.Registry
 	enableBroker bool
 	// brokerDefaultConnection may differ from the asset's materialization
-	// connection. Notebook cells, for example, write to a throwaway output
-	// database while reading a snapshot of their notebook session.
+	// connection. Notebook cells, for example, query their live session through
+	// a custom callback and only stage their result as Parquet.
 	brokerDefaultConnection string
+	// brokerRunQuery overrides project-connection lookup. Notebook cells use it
+	// to query the already-open notebook session without exposing its file path.
+	brokerRunQuery func(ctx context.Context, connection, sql string) (*query.QueryResult, error)
+	// stagingOutputPath makes the operator stop after collecting materialize()
+	// into this Parquet file. Notebook runners then load it directly into their
+	// existing session instead of creating an intermediate DuckDB database.
+	stagingOutputPath string
 
 	uv     *bruinpython.UvChecker
 	cmd    *bruinpython.CommandRunner
@@ -58,6 +65,8 @@ type renartPythonOperatorOptions struct {
 	registry                *runstate.Registry
 	enableBroker            bool
 	brokerDefaultConnection string
+	brokerRunQuery          func(ctx context.Context, connection, sql string) (*query.QueryResult, error)
+	stagingOutputPath       string
 }
 
 func newRenartPythonOperator(manager config.ConnectionAndDetailsGetter, envVariables map[string]string, opts renartPythonOperatorOptions) *renartPythonOperator {
@@ -70,6 +79,8 @@ func newRenartPythonOperator(manager config.ConnectionAndDetailsGetter, envVaria
 		registry:                opts.registry,
 		enableBroker:            opts.enableBroker,
 		brokerDefaultConnection: opts.brokerDefaultConnection,
+		brokerRunQuery:          opts.brokerRunQuery,
+		stagingOutputPath:       opts.stagingOutputPath,
 		uv:                      &bruinpython.UvChecker{},
 		cmd:                     &bruinpython.CommandRunner{},
 		module:                  &bruinpython.ModulePathFinder{},
@@ -101,7 +112,7 @@ func (o *renartPythonOperator) RunTask(ctx context.Context, p *pipeline.Pipeline
 
 	output := printerWriter(ctx)
 
-	if o.enableBroker && o.manager != nil {
+	if o.enableBroker && (o.manager != nil || o.brokerRunQuery != nil) {
 		broker, closeBroker, brokerErr := o.startBroker(ctx, p, t, output)
 		if brokerErr != nil {
 			return brokerErr
@@ -245,11 +256,15 @@ func (o *renartPythonOperator) startBroker(ctx context.Context, p *pipeline.Pipe
 	}
 
 	tools := &brokerSQLTools{dialect: brokerQueryDialect(o.manager, defaultConnection)}
+	runQuery := o.brokerRunQuery
+	if runQuery == nil {
+		runQuery = o.runBrokerQuery
+	}
 
 	broker, err := pybroker.Start(ctx, pybroker.Config{
 		Context:           doc,
 		DefaultConnection: defaultConnection,
-		RunQuery:          o.runBrokerQuery,
+		RunQuery:          runQuery,
 		ValidateSQL:       tools.validateReadOnly,
 		UsedTables:        tools.usedTables,
 		Registry:          o.registry,
@@ -481,13 +496,18 @@ func (o *renartPythonOperator) runWithMaterialization(ctx context.Context, run p
 		return fmt.Errorf("python assets only support table materialization, got %q", t.Materialization.Type)
 	}
 
-	connectionName, err := run.pipeline.GetConnectionNameForAsset(t)
-	if err != nil {
-		return fmt.Errorf("failed to resolve the asset's connection: %w", err)
-	}
-	isDuckDB := o.destinationIsDuckDB(connectionName)
-	if err := validatePythonStrategy(t, isDuckDB); err != nil {
-		return err
+	connectionName := ""
+	isDuckDB := false
+	if o.stagingOutputPath == "" {
+		var err error
+		connectionName, err = run.pipeline.GetConnectionNameForAsset(t)
+		if err != nil {
+			return fmt.Errorf("failed to resolve the asset's connection: %w", err)
+		}
+		isDuckDB = o.destinationIsDuckDB(connectionName)
+		if err := validatePythonStrategy(t, isDuckDB); err != nil {
+			return err
+		}
 	}
 
 	pythonVersion, err := run.pythonVersion()
@@ -495,12 +515,20 @@ func (o *renartPythonOperator) runWithMaterialization(ctx context.Context, run p
 		return err
 	}
 
-	stagingDir, err := os.MkdirTemp("", "renart-pymat-")
-	if err != nil {
-		return fmt.Errorf("failed to allocate the staging directory: %w", err)
+	stagingDir := ""
+	parquetPath := o.stagingOutputPath
+	if parquetPath == "" {
+		stagingDir, err = os.MkdirTemp("", "renart-pymat-")
+		if err != nil {
+			return fmt.Errorf("failed to allocate the staging directory: %w", err)
+		}
+		defer os.RemoveAll(stagingDir)
+		parquetPath = filepath.Join(stagingDir, "materialize.parquet")
+	} else if err := os.MkdirAll(filepath.Dir(parquetPath), 0o700); err != nil {
+		return fmt.Errorf("failed to create the staging directory: %w", err)
+	} else {
+		stagingDir = filepath.Dir(parquetPath)
 	}
-	defer os.RemoveAll(stagingDir)
-	parquetPath := filepath.Join(stagingDir, "materialize.parquet")
 
 	module, runRepo := run.moduleForRun()
 	rootPath := runRepo.Path
@@ -531,6 +559,9 @@ func (o *renartPythonOperator) runWithMaterialization(ctx context.Context, run p
 
 	if _, statErr := os.Stat(parquetPath); os.IsNotExist(statErr) {
 		fmt.Fprintln(run.output, "WARNING: materialize() returned None, skipping materialization")
+		return nil
+	}
+	if o.stagingOutputPath != "" {
 		return nil
 	}
 

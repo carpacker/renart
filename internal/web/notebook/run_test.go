@@ -186,14 +186,23 @@ func TestRunPythonCellCapturesLogs(t *testing.T) {
 
 	// Success path: the captured stdout/stderr rides along on the result.
 	okRunner := &Runner{
-		Store: NewSessionStore(filepath.Join(t.TempDir(), "sessions")),
-		PythonMaterializer: func(ctx context.Context, _ *Cell, destPath, destTable, _ string) (string, error) {
-			client, err := duck.NewClient(duck.Config{Path: destPath})
+		Store:        NewSessionStore(filepath.Join(t.TempDir(), "sessions")),
+		RenameTables: realRenameTables(t),
+		PythonMaterializer: func(ctx context.Context, _ *Cell, parquetPath string, runQuery PythonQueryFunc) (string, error) {
+			result, err := runQuery(ctx, NotebookConnectionName, "select 42 as answer")
+			if err != nil {
+				return "", err
+			}
+			if len(result.Rows) != 1 || fmt.Sprint(result.Rows[0][0]) != "42" {
+				return "", fmt.Errorf("unexpected live notebook query result: %+v", result.Rows)
+			}
+			client, err := duck.NewClient(duck.Config{Path: ""})
 			if err != nil {
 				return "", err
 			}
 			defer client.Close()
-			if err := client.RunQueryWithoutResult(ctx, &query.Query{Query: fmt.Sprintf("create table %s as select 42 as answer", destTable)}); err != nil {
+			copySQL := fmt.Sprintf("copy (select 42 as answer) to %s (format parquet)", sqlStringLiteral(parquetPath))
+			if err := client.RunQueryWithoutResult(ctx, &query.Query{Query: copySQL}); err != nil {
 				return "", err
 			}
 			return "hello from stdout", nil
@@ -213,7 +222,7 @@ func TestRunPythonCellCapturesLogs(t *testing.T) {
 	// Failure path: logs are still attached so a traceback is visible.
 	errRunner := &Runner{
 		Store: NewSessionStore(filepath.Join(t.TempDir(), "sessions")),
-		PythonMaterializer: func(context.Context, *Cell, string, string, string) (string, error) {
+		PythonMaterializer: func(context.Context, *Cell, string, PythonQueryFunc) (string, error) {
 			return "partial output\nTraceback: boom", fmt.Errorf("python cell failed")
 		},
 	}

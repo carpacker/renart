@@ -146,7 +146,7 @@ func CellFileTemplate(cellID string) string {
 }
 
 // PythonCellFileTemplate is the initial content for a newly created Python
-// cell. A Python cell defines `materialize()` returning a dataframe; the
+// cell. A Python cell defines `materialize()` returning tabular data; the
 // runner materializes it into the notebook session as the cell's table.
 func PythonCellFileTemplate(cellID string) string {
 	return fmt.Sprintf(`""" @bruin
@@ -157,17 +157,13 @@ materialization:
   type: table
 @bruin """
 
-import os
-
-import pandas as pd
+from renart import query
 
 
 def materialize():
-    # Read an upstream cell (a sibling you reference by name):
-    #   import duckdb
-    #   inputs = duckdb.connect(os.environ["RENART_NOTEBOOK_INPUTS"], read_only=True)
-    #   df = inputs.sql("select * from some_upstream_cell").df()
-    return pd.DataFrame({"n": [1, 2, 3]})
+    # Read an upstream cell without opening its database directly:
+    # return query("select * from some_upstream_cell", format="arrow")
+    return [{"n": 1}, {"n": 2}, {"n": 3}]
 `, quotedCellID(cellID), PythonCellType, ClassNotebook)
 }
 

@@ -9,6 +9,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/bruin-data/bruin/pkg/query"
 )
 
 // ErrUnknownSource signals that an external reference is not a known
@@ -43,9 +45,9 @@ type Runner struct {
 	// SQL the editor previews. nil leaves the SQL untouched (tests).
 	RenderSQL func(content string) (string, error)
 	Fetcher   SourceFetcher
-	// PythonMaterializer runs a Python cell, writing its materialize()
-	// dataframe into a DuckDB file as a table. nil when Python execution is
-	// not wired (the cell then reports a clear error instead of crashing).
+	// PythonMaterializer runs a Python cell, writing its materialize() result
+	// to a Parquet staging file. nil when Python execution is not wired (the
+	// cell then reports a clear error instead of crashing).
 	PythonMaterializer PythonMaterializer
 	// ImportRowCap caps generic (non-DuckDB) upstream imports; guardrail
 	// with an explicit refresh/full-import escape hatch later.
@@ -54,14 +56,22 @@ type Runner struct {
 	PreviewLimit int
 }
 
-// PythonMaterializer runs cell's materialize() and writes the resulting
-// dataframe into destPath (a DuckDB file) as table destTable. inputsPath, when
-// non-empty, is a DuckDB file holding the cell's upstream siblings under their
-// logical names, exposed to the Python via the RENART_NOTEBOOK_INPUTS env var.
-// It returns the cell's combined stdout/stderr (captured even on failure, so a
-// traceback is shown). Implemented by the service layer (bruin local Python
-// operator).
-type PythonMaterializer func(ctx context.Context, cell *Cell, destPath, destTable, inputsPath string) (logs string, err error)
+// NotebookConnectionName is the broker connection exposed to Python notebook
+// cells. It names the live, in-process notebook session rather than a database
+// path; callers cannot use it to open the session outside the broker.
+const NotebookConnectionName = "renart-notebook"
+
+// PythonQueryFunc executes a broker query against the live notebook session.
+// The broker performs authentication and read-only validation before invoking
+// it; the runner rewrites logical sibling names to their durable session object
+// names before querying DuckDB.
+type PythonQueryFunc func(ctx context.Context, connection, sql string) (*query.QueryResult, error)
+
+// PythonMaterializer runs cell's materialize() and writes the result to
+// parquetPath. runQuery is the only data-access path provided to Python; no
+// session database path or credentials cross the process boundary. It returns
+// combined stdout/stderr even on failure so the traceback can be shown.
+type PythonMaterializer func(ctx context.Context, cell *Cell, parquetPath string, runQuery PythonQueryFunc) (logs string, err error)
 
 const (
 	defaultImportRowCap = 50000

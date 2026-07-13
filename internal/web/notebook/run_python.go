@@ -6,14 +6,17 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
+
+	"github.com/bruin-data/bruin/pkg/query"
 )
 
 // runPython executes a Python cell. The cell's materialize() dataframe is
-// written into a throwaway DuckDB file, then copied into the session as
-// cell_<id> via ATTACH — this sidesteps a write-lock conflict that would arise
-// if the Python operator tried to open the session file directly while the
-// runner holds it open.
+// staged as Parquet, then loaded directly into the open notebook session as
+// cell_<id>. SDK queries execute through the task-scoped broker against this
+// same in-process session, so neither inputs nor outputs require a throwaway
+// DuckDB database.
 func (r *Runner) runPython(ctx context.Context, session *Session, nb *Notebook, cell *Cell, result CellRunResult, startedAt time.Time) CellRunResult {
 	if strings.TrimSpace(cell.Asset.ExecutableFile.Content) == "" {
 		result.Error = "cell is empty"
@@ -34,19 +37,40 @@ func (r *Runner) runPython(ctx context.Context, session *Session, nb *Notebook, 
 		return result
 	}
 	defer os.RemoveAll(tmpDir)
-	destPath := filepath.Join(tmpDir, "out.duckdb")
-	const srcTable = "output"
+	parquetPath := filepath.Join(tmpDir, "materialize.parquet")
 
-	// Export the cell's upstream siblings into a DuckDB file under their logical
-	// names, so the Python can read them (via RENART_NOTEBOOK_INPUTS).
-	inputsPath, exportErr := r.exportUpstreamInputs(ctx, session, nb, cell, filepath.Join(tmpDir, "inputs.duckdb"))
-	if exportErr != nil {
-		result.Error = normalizeDuckDBError(exportErr)
-		result.DurationMS = time.Since(startedAt).Milliseconds()
-		return result
+	mapping := make(map[string]string, len(nb.Cells)-1)
+	for _, sibling := range nb.Cells {
+		if sibling.ID != cell.ID {
+			mapping[sibling.Asset.Name] = CellObjectName(sibling.ID)
+		}
 	}
 
-	logs, materializeErr := r.PythonMaterializer(ctx, cell, destPath, srcTable, inputsPath)
+	// A user can issue queries from multiple Python threads. DuckDB calls on the
+	// shared session are serialized, just like the runner's ordinary cell work.
+	var queryMu sync.Mutex
+	runQuery := func(queryCtx context.Context, connection, sql string) (*query.QueryResult, error) {
+		if connection != NotebookConnectionName {
+			return nil, fmt.Errorf("connection %q is not available in a notebook cell", connection)
+		}
+		queryMu.Lock()
+		defer queryMu.Unlock()
+
+		rewritten := strings.TrimRight(strings.TrimSpace(sql), ";")
+		if referencesAnyMappedName(sql, mapping) {
+			if r.RenameTables == nil {
+				return nil, fmt.Errorf("notebook query rewriting is not available")
+			}
+			renamed, err := r.RenameTables(sql, "duckdb", mapping)
+			if err != nil {
+				return nil, fmt.Errorf("could not resolve notebook cell references: %w", err)
+			}
+			rewritten = strings.TrimRight(strings.TrimSpace(renamed), ";")
+		}
+		return session.Query(queryCtx, rewritten)
+	}
+
+	logs, materializeErr := r.PythonMaterializer(ctx, cell, parquetPath, runQuery)
 	result.Logs = logs
 	if materializeErr != nil {
 		result.Error = normalizePythonError(materializeErr)
@@ -69,10 +93,8 @@ func (r *Runner) runPython(ctx context.Context, session *Session, nb *Notebook, 
 		}
 	}
 
-	batch := fmt.Sprintf(
-		"attach %s as __renart_py (read_only); create table %s as select * from __renart_py.main.%s; detach __renart_py;",
-		sqlStringLiteral(destPath), object, quoteIdent(srcTable))
-	if err := session.Exec(ctx, batch); err != nil {
+	load := fmt.Sprintf("create table %s as select * from read_parquet(%s)", object, sqlStringLiteral(parquetPath))
+	if err := session.Exec(ctx, load); err != nil {
 		result.Error = normalizeDuckDBError(err)
 		result.DurationMS = time.Since(startedAt).Milliseconds()
 		return result
@@ -95,46 +117,6 @@ func (r *Runner) runPython(ctx context.Context, session *Session, nb *Notebook, 
 	result.Status = CellRunOK
 	result.DurationMS = time.Since(startedAt).Milliseconds()
 	return result
-}
-
-// exportUpstreamInputs writes the cell's upstream sibling tables into a DuckDB
-// file under their logical names. Returns "" (no file) when the cell has no
-// materialized upstream siblings. Siblings whose session object does not exist
-// yet are skipped (the cell can still run; the Python just won't see them).
-func (r *Runner) exportUpstreamInputs(ctx context.Context, session *Session, nb *Notebook, cell *Cell, inputsPath string) (string, error) {
-	declared := map[string]struct{}{}
-	for _, upstream := range cell.Asset.Upstreams {
-		if upstream.Type == "asset" {
-			declared[strings.ToLower(upstream.Value)] = struct{}{}
-		}
-	}
-
-	statements := []string{fmt.Sprintf("attach %s as __inputs;", sqlStringLiteral(inputsPath))}
-	exported := 0
-	for _, sibling := range nb.Cells {
-		if sibling.ID == cell.ID {
-			continue
-		}
-		if _, ok := declared[strings.ToLower(sibling.Asset.Name)]; !ok {
-			continue
-		}
-		objectType, _ := session.objectType(ctx, CellObjectName(sibling.ID))
-		if objectType == "" {
-			continue
-		}
-		statements = append(statements, fmt.Sprintf(
-			"create or replace table __inputs.%s as select * from %s;",
-			quoteIdent(sibling.Asset.Name), quoteIdent(CellObjectName(sibling.ID))))
-		exported++
-	}
-	if exported == 0 {
-		return "", nil
-	}
-	statements = append(statements, "detach __inputs;")
-	if err := session.Exec(ctx, strings.Join(statements, " ")); err != nil {
-		return "", err
-	}
-	return inputsPath, nil
 }
 
 func normalizePythonError(err error) string {

@@ -12,7 +12,6 @@ import (
 	"time"
 
 	"github.com/bruin-data/bruin/pkg/config"
-	"github.com/bruin-data/bruin/pkg/connection"
 	bruinexecutor "github.com/bruin-data/bruin/pkg/executor"
 	"github.com/bruin-data/bruin/pkg/pipeline"
 	"go.uber.org/zap"
@@ -70,59 +69,28 @@ func (b *boundedLogBuffer) String() string {
 	return out
 }
 
-// notebookSessionConnName is the synthetic connection a Python cell materializes
-// into; it is wired to the throwaway DuckDB file the runner then copies into the
-// notebook session.
-const notebookSessionConnName = "renart-notebook-session"
-
-// notebookInputsConnName is the read-only side of a Python notebook run. The
-// runner exports the cell's materialized upstreams into this throwaway DuckDB
-// file under their logical names, so renart.query() can use the same names the
-// notebook editor shows without opening a second connection to the locked
-// session database.
-const notebookInputsConnName = "renart-notebook-inputs"
-
-// materializePythonCell runs a Python cell's materialize() through bruin's local
-// Python operator (uv), writing the resulting dataframe into destPath as table
-// destTable. The runner then copies that table into the notebook session.
-func (s *NotebookService) materializePythonCell(ctx context.Context, cell *notebook.Cell, destPath, destTable, inputsPath string) (string, error) {
+// materializePythonCell runs a Python cell's materialize() through the Renart
+// Python operator, writing its result to parquetPath. SDK queries are delegated
+// to runQuery, which targets the runner's already-open notebook session.
+func (s *NotebookService) materializePythonCell(ctx context.Context, cell *notebook.Cell, parquetPath string, runQuery notebook.PythonQueryFunc) (string, error) {
 	notebookDir := filepath.Dir(cell.Path)
 	// Python cells declare dependencies in pyproject.toml; uv installs them in
 	// project mode. Seed a default when none exists so a fresh cell runs.
 	ensureNotebookPyproject(notebookDir)
 
-	duckDBConnections := []config.DuckDBConnection{{
-		ConnectionMetadata: config.ConnectionMetadata{Name: notebookSessionConnName},
-		Path:               destPath,
-	}}
-	brokerConnection := notebookSessionConnName
-	if inputsPath != "" {
-		duckDBConnections = append(duckDBConnections, config.DuckDBConnection{
-			ConnectionMetadata: config.ConnectionMetadata{Name: notebookInputsConnName},
-			Path:               inputsPath,
-		})
-		brokerConnection = notebookInputsConnName
-	}
-	connections := &config.Connections{DuckDB: duckDBConnections}
 	cfg := &config.Config{
 		SelectedEnvironmentName: "default",
-		SelectedEnvironment:     &config.Environment{Connections: connections},
-		Environments:            map[string]config.Environment{"default": {Connections: connections}},
-	}
-
-	manager, errs := connection.NewManagerFromConfigWithContext(ctx, cfg)
-	if len(errs) > 0 {
-		return "", fmt.Errorf("failed to set up the python session connection: %w", errs[0])
+		SelectedEnvironment:     &config.Environment{},
+		Environments:            map[string]config.Environment{"default": {}},
 	}
 
 	// Clone the cell asset for the run: the destination table is the asset name
 	// (bruin passes it to ingestr as --dest-table), materialized into the
 	// session connection.
 	runAsset := *cell.Asset
-	runAsset.Name = destTable
+	runAsset.Name = cell.Asset.Name
 	runAsset.Type = pipeline.AssetTypePython
-	runAsset.Connection = notebookSessionConnName
-	runAsset.Upstreams = nil
+	runAsset.Connection = notebook.NotebookConnectionName
 	runAsset.Materialization = pipeline.Materialization{Type: pipeline.MaterializationTypeTable}
 	runAsset.ExecutableFile = pipeline.ExecutableFile{
 		Name:    filepath.Base(cell.Path),
@@ -144,8 +112,7 @@ func (s *NotebookService) materializePythonCell(ctx context.Context, cell *noteb
 	}
 	logs := &boundedLogBuffer{}
 	runCtx := context.WithValue(ctx, pipeline.RunConfigFullRefresh, false)
-	// Without interval modifiers, bruin preserves the env we pass (otherwise it
-	// rebuilds it from scratch and drops RENART_NOTEBOOK_INPUTS).
+	// Without interval modifiers, bruin preserves the environment we pass.
 	runCtx = context.WithValue(runCtx, pipeline.RunConfigApplyIntervalModifiers, false)
 	runCtx = context.WithValue(runCtx, pipeline.RunConfigStartDate, timeWindow.Start)
 	runCtx = context.WithValue(runCtx, pipeline.RunConfigEndDate, timeWindow.End)
@@ -163,18 +130,11 @@ func (s *NotebookService) materializePythonCell(ctx context.Context, cell *noteb
 		// git-tracked folder of cells) by placing it under .renart.
 		"UV_PROJECT_ENVIRONMENT": notebookVenvDir(s.deps.WorkspaceRoot, notebookDir),
 	}
-	if inputsPath != "" {
-		// The Python reads upstream cells from this DuckDB file by their logical
-		// names, e.g. duckdb.connect(os.environ["RENART_NOTEBOOK_INPUTS"]).
-		envVariables["RENART_NOTEBOOK_INPUTS"] = inputsPath
-	}
-
-	// The renart operator loads materialize() into the throwaway output file and
-	// serves SDK queries from the separately exported input snapshot. Both stay
-	// in-process and credential-free, and neither opens the locked session file.
-	operator := newRenartPythonOperator(manager, envVariables, renartPythonOperatorOptions{
+	operator := newRenartPythonOperator(nil, envVariables, renartPythonOperatorOptions{
 		enableBroker:            true,
-		brokerDefaultConnection: brokerConnection,
+		brokerDefaultConnection: notebook.NotebookConnectionName,
+		brokerRunQuery:          runQuery,
+		stagingOutputPath:       parquetPath,
 	})
 	runErr := operator.RunTask(runCtx, runPipeline, &runAsset)
 	return logs.String(), runErr
