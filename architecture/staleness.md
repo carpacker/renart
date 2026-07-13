@@ -107,6 +107,16 @@ only after replay returns, so another stop during startup retries safely; its
 migration also queues interrupted runs reconciled by older builds for one-time
 backfill.
 
+The workspace scheduler lock is acquired before any River worker starts, so a
+River job still marked `running` at that point is unambiguously abandoned.
+Recovery cancels those internal pipeline and housekeeping rows in the same
+SQLite transaction that closes Renart's run records. Each run stores its River
+job ID; for a manual/API job killed during the narrow claim/link handoff, the ID
+is recovered from River's persisted arguments. A queued run whose job was never
+claimed remains queued and executes normally. Startup writes a structured
+summary with reconciled-run, cancelled-job, replay, and replay-failure counts;
+the queue rows also retain the interruption as an attempt error.
+
 ## 4. Staleness service and UI (`internal/web/staleness`)
 
 In-memory status map per current selection (env, range, vars), exposed at

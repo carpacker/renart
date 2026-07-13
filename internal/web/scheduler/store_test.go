@@ -8,6 +8,9 @@ import (
 	"time"
 
 	"github.com/pressly/goose/v3"
+	"github.com/riverqueue/river"
+	"github.com/riverqueue/river/riverdriver/riversqlite"
+	"github.com/riverqueue/river/rivertype"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -75,9 +78,10 @@ func TestFailOrphanedRunsReconcilesRunningRuns(t *testing.T) {
 	require.NoError(t, store.MarkRunning(ctx, done, started))
 	require.NoError(t, store.Finish(ctx, done, RunStatusSuccess, nil))
 
-	ids, err := store.FailOrphanedRuns(ctx, orphanedRunError)
+	recovery, err := store.ReconcileInterruptedState(ctx, orphanedRunError)
 	require.NoError(t, err)
-	require.Equal(t, []string{orphan}, ids)
+	require.Equal(t, []string{orphan}, recovery.RunIDs)
+	assert.Zero(t, recovery.RiverJobsCancelled)
 	pending, err := store.PendingRunRecoveries(ctx)
 	require.NoError(t, err)
 	require.Equal(t, []string{orphan}, pending)
@@ -96,9 +100,10 @@ func TestFailOrphanedRunsReconcilesRunningRuns(t *testing.T) {
 	assert.Equal(t, RunStatusSuccess, doneRun.Status)
 
 	// Idempotent: a second pass finds nothing to reconcile.
-	again, err := store.FailOrphanedRuns(ctx, orphanedRunError)
+	again, err := store.ReconcileInterruptedState(ctx, orphanedRunError)
 	require.NoError(t, err)
-	assert.Empty(t, again)
+	assert.Empty(t, again.RunIDs)
+	assert.Zero(t, again.RiverJobsCancelled)
 	pending, err = store.PendingRunRecoveries(ctx)
 	require.NoError(t, err)
 	assert.Equal(t, []string{orphan}, pending, "replay remains pending until acknowledged")
@@ -106,6 +111,69 @@ func TestFailOrphanedRunsReconcilesRunningRuns(t *testing.T) {
 	pending, err = store.PendingRunRecoveries(ctx)
 	require.NoError(t, err)
 	assert.Empty(t, pending)
+}
+
+func TestReconcileInterruptedStateCancelsClaimedRiverJobsAndPreservesQueuedJobs(t *testing.T) {
+	store, err := OpenStore(filepath.Join(t.TempDir(), ".renart", "state.db"))
+	require.NoError(t, err)
+	defer store.Close()
+
+	ctx := context.Background()
+	claimedRunID, err := store.Create(ctx, PipelineRun{
+		ID: "claimed-run", PipelineID: "pipeline-id", Pipeline: "analytics",
+		Environment: "prod", Trigger: RunTriggerManual, Status: RunStatusQueued,
+	})
+	require.NoError(t, err)
+	claimedJobID := insertTestRiverJob(t, store, pipelineRunJobArgs{RunID: claimedRunID})
+	markTestRiverJobRunning(t, store, claimedJobID)
+
+	queuedRunID, err := store.Create(ctx, PipelineRun{
+		ID: "queued-run", PipelineID: "other-pipeline", Pipeline: "marketing",
+		Environment: "prod", Trigger: RunTriggerManual, Status: RunStatusQueued,
+	})
+	require.NoError(t, err)
+	queuedJobID := insertTestRiverJob(t, store, pipelineRunJobArgs{RunID: queuedRunID})
+	require.NoError(t, store.SetRunRiverJob(ctx, queuedRunID, queuedJobID))
+
+	finishedJobID := insertTestRiverJob(t, store, pipelineRunJobArgs{RunID: "finished-run"})
+	finishedRunID, err := store.Create(ctx, PipelineRun{
+		ID: "finished-run", PipelineID: "finished-pipeline", Pipeline: "finished",
+		Environment: "prod", Trigger: RunTriggerManual, Status: RunStatusSuccess,
+		RiverJobID: &finishedJobID,
+	})
+	require.NoError(t, err)
+	markTestRiverJobRunning(t, store, finishedJobID)
+
+	housekeepingJobID := insertTestRiverJob(t, store, housekeepingJobArgs{})
+	markTestRiverJobRunning(t, store, housekeepingJobID)
+
+	recovery, err := store.ReconcileInterruptedState(ctx, orphanedRunError)
+	require.NoError(t, err)
+	assert.Equal(t, []string{claimedRunID}, recovery.RunIDs)
+	assert.EqualValues(t, 3, recovery.RiverJobsCancelled)
+
+	claimedRun, _, _, err := store.Get(ctx, claimedRunID)
+	require.NoError(t, err)
+	assert.Equal(t, RunStatusFailed, claimedRun.Status)
+	assert.Equal(t, orphanedRunError, claimedRun.Error)
+	require.NotNil(t, claimedRun.RiverJobID)
+	assert.Equal(t, claimedJobID, *claimedRun.RiverJobID)
+
+	queuedRun, _, _, err := store.Get(ctx, queuedRunID)
+	require.NoError(t, err)
+	assert.Equal(t, RunStatusQueued, queuedRun.Status)
+	assertRiverJobState(t, store, queuedJobID, rivertype.JobStateAvailable)
+
+	finishedRun, _, _, err := store.Get(ctx, finishedRunID)
+	require.NoError(t, err)
+	assert.Equal(t, RunStatusSuccess, finishedRun.Status)
+	assertRiverJobState(t, store, claimedJobID, rivertype.JobStateCancelled)
+	assertRiverJobState(t, store, finishedJobID, rivertype.JobStateCancelled)
+	assertRiverJobState(t, store, housekeepingJobID, rivertype.JobStateCancelled)
+
+	var riverErrors string
+	require.NoError(t, store.db.QueryRowContext(ctx, `SELECT json(errors) FROM river_job WHERE id = ?`, claimedJobID).Scan(&riverErrors))
+	assert.Contains(t, riverErrors, orphanedRunError)
 }
 
 func TestRunRecoveryMigrationBackfillsInterruptedRuns(t *testing.T) {
@@ -121,17 +189,13 @@ func TestRunRecoveryMigrationBackfillsInterruptedRuns(t *testing.T) {
 	_, err = provider.DownTo(ctx, 7)
 	require.NoError(t, err)
 
-	_, err = store.Create(ctx, PipelineRun{
-		ID: "previously-reconciled", PipelineID: "p1", Pipeline: "analytics",
-		Environment: "prod", Trigger: RunTriggerSchedule, Status: RunStatusFailed,
-		Error: orphanedRunError,
-	})
-	require.NoError(t, err)
-	_, err = store.Create(ctx, PipelineRun{
-		ID: "ordinary-failure", PipelineID: "p1", Pipeline: "analytics",
-		Environment: "prod", Trigger: RunTriggerSchedule, Status: RunStatusFailed,
-		Error: "asset failed",
-	})
+	_, err = store.db.ExecContext(ctx, `
+		INSERT INTO pipeline_runs (id, pipeline_id, pipeline, environment, trigger, status, error)
+		VALUES
+			('previously-reconciled', 'p1', 'analytics', 'prod', 'schedule', 'failed', ?),
+			('ordinary-failure', 'p1', 'analytics', 'prod', 'schedule', 'failed', 'asset failed')`,
+		orphanedRunError,
+	)
 	require.NoError(t, err)
 	require.NoError(t, store.Close())
 
@@ -141,6 +205,36 @@ func TestRunRecoveryMigrationBackfillsInterruptedRuns(t *testing.T) {
 	pending, err := store.PendingRunRecoveries(ctx)
 	require.NoError(t, err)
 	assert.Equal(t, []string{"previously-reconciled"}, pending)
+}
+
+func insertTestRiverJob(t *testing.T, store *Store, args river.JobArgs) int64 {
+	t.Helper()
+	client, err := river.NewClient(riversqlite.New(store.db), &river.Config{})
+	require.NoError(t, err)
+	inserted, err := client.Insert(context.Background(), args, &river.InsertOpts{
+		MaxAttempts: 1,
+		Queue:       pipelineRunQueue,
+	})
+	require.NoError(t, err)
+	return inserted.Job.ID
+}
+
+func markTestRiverJobRunning(t *testing.T, store *Store, jobID int64) {
+	t.Helper()
+	_, err := store.db.ExecContext(context.Background(), `
+		UPDATE river_job
+		SET state = ?, attempt = 1, attempted_at = ?
+		WHERE id = ?`,
+		string(rivertype.JobStateRunning), formatTime(time.Now().UTC()), jobID,
+	)
+	require.NoError(t, err)
+}
+
+func assertRiverJobState(t *testing.T, store *Store, jobID int64, expected rivertype.JobState) {
+	t.Helper()
+	var state string
+	require.NoError(t, store.db.QueryRowContext(context.Background(), `SELECT state FROM river_job WHERE id = ?`, jobID).Scan(&state))
+	assert.Equal(t, string(expected), state)
 }
 
 func TestStoreDefaultsRunStatusAndGeneratedID(t *testing.T) {

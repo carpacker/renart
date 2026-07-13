@@ -12,10 +12,12 @@ CREATE TABLE IF NOT EXISTS pipeline_runs (
     error TEXT,
     log_ref TEXT,
     snapshot_version_id TEXT,
-    recovery_pending INTEGER NOT NULL DEFAULT 0
+    recovery_pending INTEGER NOT NULL DEFAULT 0,
+    river_job_id INTEGER
 );
 
 CREATE INDEX IF NOT EXISTS idx_runs_pipeline_time ON pipeline_runs (pipeline_id, started_at DESC);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_pipeline_runs_river_job ON pipeline_runs (river_job_id) WHERE river_job_id IS NOT NULL;
 
 CREATE TABLE IF NOT EXISTS pipeline_run_logs (
     run_id TEXT NOT NULL,

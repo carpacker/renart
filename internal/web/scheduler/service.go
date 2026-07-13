@@ -21,7 +21,11 @@ import (
 	"github.com/robfig/cron/v3"
 )
 
-const pipelineRunQueue = "renart_pipeline_runs"
+const (
+	pipelineRunQueue    = "renart_pipeline_runs"
+	pipelineRunJobKind  = "renart-pipeline-run"
+	housekeepingJobKind = "renart-housekeeping"
+)
 
 type PipelineSource func(context.Context) ([]PipelineSchedule, error)
 
@@ -89,7 +93,7 @@ type pipelineRunJobArgs struct {
 	SnapshotVersionID string     `json:"snapshot_version_id,omitempty"`
 }
 
-func (pipelineRunJobArgs) Kind() string { return "renart-pipeline-run" }
+func (pipelineRunJobArgs) Kind() string { return pipelineRunJobKind }
 
 type pipelineRunWorker struct {
 	river.WorkerDefaults[pipelineRunJobArgs]
@@ -97,7 +101,11 @@ type pipelineRunWorker struct {
 }
 
 func (w *pipelineRunWorker) Work(ctx context.Context, job *river.Job[pipelineRunJobArgs]) error {
-	run, ok, err := w.service.prepareRun(ctx, job.Args)
+	var riverJobID int64
+	if job.JobRow != nil {
+		riverJobID = job.ID
+	}
+	run, ok, err := w.service.prepareRun(ctx, riverJobID, job.Args)
 	if err != nil || !ok {
 		return err
 	}
@@ -106,7 +114,7 @@ func (w *pipelineRunWorker) Work(ctx context.Context, job *river.Job[pipelineRun
 
 type housekeepingJobArgs struct{}
 
-func (housekeepingJobArgs) Kind() string { return "renart-housekeeping" }
+func (housekeepingJobArgs) Kind() string { return housekeepingJobKind }
 
 type housekeepingWorker struct {
 	river.WorkerDefaults[housekeepingJobArgs]
@@ -154,6 +162,22 @@ func (s *Service) Start(ctx context.Context) error {
 	if err := os.MkdirAll(s.stateDir, 0o755); err != nil {
 		return err
 	}
+	s.lock = flock.New(filepath.Join(s.stateDir, "scheduler.lock"))
+	locked, err := s.lock.TryLock()
+	if err != nil {
+		return err
+	}
+	if !locked {
+		s.ownerMessage = "scheduler lock is held by another Renart process; this process will not run jobs or register schedules"
+		return nil
+	}
+	unlockOnError := true
+	defer func() {
+		if unlockOnError {
+			_ = s.lock.Unlock()
+		}
+	}()
+
 	workers := river.NewWorkers()
 	river.AddWorker(workers, &pipelineRunWorker{service: s})
 	river.AddWorker(workers, &housekeepingWorker{service: s})
@@ -166,10 +190,20 @@ func (s *Service) Start(ctx context.Context) error {
 		MaxAttempts:                 1,
 		PollOnly:                    true,
 		Queues:                      map[string]river.QueueConfig{pipelineRunQueue: {MaxWorkers: 4}},
+		SoftStopTimeout:             5 * time.Second,
 		Workers:                     workers,
 	})
 	if err != nil {
 		return err
+	}
+	recovery := s.recoverOrphanedRuns(ctx)
+	if recovery.ReconciledRuns > 0 || recovery.RiverJobsCancelled > 0 || recovery.ReplayedRuns > 0 || recovery.ReplayFailures > 0 {
+		slog.Info("scheduler startup recovery completed",
+			"runs_reconciled", recovery.ReconciledRuns,
+			"river_jobs_cancelled", recovery.RiverJobsCancelled,
+			"runs_replayed", recovery.ReplayedRuns,
+			"replay_failures", recovery.ReplayFailures,
+		)
 	}
 	if err := client.Start(ctx); err != nil {
 		return err
@@ -177,26 +211,15 @@ func (s *Service) Start(ctx context.Context) error {
 	s.mu.Lock()
 	s.riverClient = client
 	s.mu.Unlock()
-	s.lock = flock.New(filepath.Join(s.stateDir, "scheduler.lock"))
-	locked, err := s.lock.TryLock()
-	if err != nil {
-		s.clearRiverClient(client)
-		stopRiverClient(client)
-		return err
-	}
-	if !locked {
-		s.ownerMessage = "scheduler lock is held by another Renart process; this process will not register schedules"
-		return nil
-	}
 	s.schedulerOn = true
-	s.recoverOrphanedRuns(ctx)
+	s.ownerMessage = ""
 	if err := s.Reconcile(ctx); err != nil {
 		s.schedulerOn = false
-		_ = s.lock.Unlock()
 		s.clearRiverClient(client)
 		stopRiverClient(client)
 		return err
 	}
+	unlockOnError = false
 	go func() {
 		<-ctx.Done()
 		s.Stop()
@@ -207,40 +230,55 @@ func (s *Service) Start(ctx context.Context) error {
 // orphanedRunError explains a run that was reconciled after an unclean stop.
 const orphanedRunError = "interrupted: the server stopped while this run was executing"
 
+type startupRecoverySummary struct {
+	ReconciledRuns     int
+	RiverJobsCancelled int64
+	ReplayedRuns       int
+	ReplayFailures     int
+}
+
 // recoverOrphanedRuns fails any run left "running" by a previous process that
 // was killed mid-execution (otherwise it would stay running forever), and
 // notifies listeners so open run views update.
-func (s *Service) recoverOrphanedRuns(ctx context.Context) {
-	_, err := s.store.FailOrphanedRuns(ctx, orphanedRunError)
+func (s *Service) recoverOrphanedRuns(ctx context.Context) startupRecoverySummary {
+	var summary startupRecoverySummary
+	recovery, err := s.store.ReconcileInterruptedState(ctx, orphanedRunError)
 	if err != nil {
 		slog.Warn("failed to reconcile orphaned pipeline runs", "error", err)
-		return
+		return summary
 	}
+	summary.ReconciledRuns = len(recovery.RunIDs)
+	summary.RiverJobsCancelled = recovery.RiverJobsCancelled
 	ids, err := s.store.PendingRunRecoveries(ctx)
 	if err != nil {
 		slog.Warn("failed to list pending pipeline run recoveries", "error", err)
-		return
+		return summary
 	}
 	for _, id := range ids {
 		run, _, steps, getErr := s.store.Get(ctx, id)
 		if getErr != nil {
 			slog.Warn("failed to load reconciled pipeline run", "run_id", id, "error", getErr)
+			summary.ReplayFailures++
 			continue
 		}
 		if s.recoverRun != nil {
 			if recoverErr := s.recoverRun(ctx, run, steps); recoverErr != nil {
 				slog.Warn("failed to replay reconciled pipeline run", "run_id", id, "error", recoverErr)
+				summary.ReplayFailures++
 				s.publishRunEvent("run.finished", run)
 				continue
 			}
 			if markErr := s.store.MarkRunRecoveryReplayed(ctx, id); markErr != nil {
 				slog.Warn("failed to acknowledge reconciled pipeline run replay", "run_id", id, "error", markErr)
+				summary.ReplayFailures++
 				s.publishRunEvent("run.finished", run)
 				continue
 			}
+			summary.ReplayedRuns++
 		}
 		s.publishRunEvent("run.finished", run)
 	}
+	return summary
 }
 
 func (s *Service) Stop() {
@@ -263,7 +301,16 @@ func (s *Service) Stop() {
 func stopRiverClient(client *river.Client[*sql.Tx]) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	_ = client.Stop(ctx)
+	if err := client.Stop(ctx); err == nil {
+		return
+	} else {
+		slog.Warn("River client did not stop gracefully; cancelling active jobs", "error", err)
+	}
+	hardCtx, hardCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer hardCancel()
+	if err := client.StopAndCancel(hardCtx); err != nil {
+		slog.Warn("River client did not stop after cancellation", "error", err)
+	}
 }
 
 func (s *Service) clearRiverClient(client *river.Client[*sql.Tx]) {
@@ -749,10 +796,19 @@ func (s *Service) Trigger(ctx context.Context, pipeline PipelineSchedule, req Tr
 	run.ID = id
 	s.publishRunEvent("run.queued", run)
 
-	if _, err := client.Insert(ctx, pipelineRunJobArgs{RunID: run.ID}, pipelineRunInsertOpts()); err != nil {
+	inserted, err := client.Insert(ctx, pipelineRunJobArgs{RunID: run.ID}, pipelineRunInsertOpts())
+	if err != nil {
 		_ = s.store.Finish(ctx, run.ID, RunStatusFailed, err)
 		return PipelineRun{}, err
 	}
+	if err := s.store.SetRunRiverJob(ctx, run.ID, inserted.Job.ID); err != nil {
+		_, _ = client.JobCancel(ctx, inserted.Job.ID)
+		linkErr := fmt.Errorf("link pipeline run to River job: %w", err)
+		_ = s.store.Finish(ctx, run.ID, RunStatusFailed, linkErr)
+		return PipelineRun{}, linkErr
+	}
+	riverJobID := inserted.Job.ID
+	run.RiverJobID = &riverJobID
 	return run, nil
 }
 
@@ -764,8 +820,11 @@ func (s *Service) GetRun(ctx context.Context, id string) (PipelineRun, []LogLine
 	return s.store.Get(ctx, id)
 }
 
-func (s *Service) prepareRun(ctx context.Context, args pipelineRunJobArgs) (PipelineRun, bool, error) {
+func (s *Service) prepareRun(ctx context.Context, riverJobID int64, args pipelineRunJobArgs) (PipelineRun, bool, error) {
 	if strings.TrimSpace(args.RunID) != "" {
+		if err := s.store.SetRunRiverJob(ctx, args.RunID, riverJobID); err != nil {
+			return PipelineRun{}, false, err
+		}
 		run, _, _, err := s.store.Get(ctx, args.RunID)
 		if err != nil {
 			return PipelineRun{}, false, err
@@ -773,6 +832,7 @@ func (s *Service) prepareRun(ctx context.Context, args pipelineRunJobArgs) (Pipe
 		if run.Status != RunStatusQueued {
 			return PipelineRun{}, false, nil
 		}
+		run.RiverJobID = &riverJobID
 		return run, true, nil
 	}
 
@@ -817,6 +877,7 @@ func (s *Service) prepareRun(ctx context.Context, args pipelineRunJobArgs) (Pipe
 	}
 	run := PipelineRun{
 		PipelineID:        encodedPipelineID,
+		RiverJobID:        &riverJobID,
 		PipelineUUID:      pipelineUUID,
 		Pipeline:          pipelineName,
 		Environment:       strings.TrimSpace(args.Environment),

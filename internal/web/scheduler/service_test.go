@@ -50,8 +50,12 @@ func TestRecoverOrphanedRunsReplaysPersistedTerminalStepsOnce(t *testing.T) {
 		},
 	})
 
-	service.recoverOrphanedRuns(ctx)
+	summary := service.recoverOrphanedRuns(ctx)
 	require.Equal(t, 1, callbackCount)
+	assert.Equal(t, 1, summary.ReconciledRuns)
+	assert.Zero(t, summary.RiverJobsCancelled)
+	assert.Equal(t, 1, summary.ReplayedRuns)
+	assert.Zero(t, summary.ReplayFailures)
 	assert.Equal(t, RunStatusFailed, recoveredRun.Status)
 	assert.Equal(t, orphanedRunError, recoveredRun.Error)
 	assert.Equal(t, "snapshot-id", recoveredRun.SnapshotVersionID)
@@ -60,8 +64,10 @@ func TestRecoverOrphanedRunsReplaysPersistedTerminalStepsOnce(t *testing.T) {
 	assert.Equal(t, RunStatusFailed, recoveredSteps[1].Status)
 	assert.Equal(t, orphanedRunError, recoveredSteps[1].Error)
 
-	service.recoverOrphanedRuns(ctx)
+	summary = service.recoverOrphanedRuns(ctx)
 	assert.Equal(t, 1, callbackCount, "already reconciled runs must not replay twice")
+	assert.Zero(t, summary.ReconciledRuns)
+	assert.Zero(t, summary.ReplayedRuns)
 }
 
 func TestRecoverOrphanedRunsRetriesUnacknowledgedReplay(t *testing.T) {
@@ -93,20 +99,70 @@ func TestRecoverOrphanedRunsRetriesUnacknowledgedReplay(t *testing.T) {
 		},
 	})
 
-	service.recoverOrphanedRuns(ctx)
+	summary := service.recoverOrphanedRuns(ctx)
 	assert.Equal(t, 1, attempts)
+	assert.Equal(t, 1, summary.ReconciledRuns)
+	assert.Zero(t, summary.ReplayedRuns)
+	assert.Equal(t, 1, summary.ReplayFailures)
 	pending, err := store.PendingRunRecoveries(ctx)
 	require.NoError(t, err)
 	assert.Equal(t, []string{runID}, pending)
 
-	service.recoverOrphanedRuns(ctx)
+	summary = service.recoverOrphanedRuns(ctx)
 	assert.Equal(t, 2, attempts)
+	assert.Zero(t, summary.ReconciledRuns)
+	assert.Equal(t, 1, summary.ReplayedRuns)
+	assert.Zero(t, summary.ReplayFailures)
 	pending, err = store.PendingRunRecoveries(ctx)
 	require.NoError(t, err)
 	assert.Empty(t, pending)
 
-	service.recoverOrphanedRuns(ctx)
+	summary = service.recoverOrphanedRuns(ctx)
 	assert.Equal(t, 2, attempts, "an acknowledged replay is not emitted again")
+	assert.Zero(t, summary.ReplayedRuns)
+}
+
+func TestServiceStartsRiverWorkersOnlyForSchedulerLockOwner(t *testing.T) {
+	stateDir := t.TempDir()
+	statePath := filepath.Join(stateDir, "state.db")
+	ownerStore, err := OpenStore(statePath)
+	require.NoError(t, err)
+	defer ownerStore.Close()
+	followerStore, err := OpenStore(statePath)
+	require.NoError(t, err)
+	defer followerStore.Close()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	owner := New(Options{
+		Store:    ownerStore,
+		StateDir: stateDir,
+		Runner: func(context.Context, RunRequest, func(string)) RunResult {
+			return RunResult{Status: "ok"}
+		},
+	})
+	require.NoError(t, owner.Start(ctx))
+	defer owner.Stop()
+
+	follower := New(Options{
+		Store:    followerStore,
+		StateDir: stateDir,
+		Runner: func(context.Context, RunRequest, func(string)) RunResult {
+			return RunResult{Status: "ok"}
+		},
+	})
+	require.NoError(t, follower.Start(ctx))
+	defer follower.Stop()
+
+	assert.True(t, owner.schedulerOn)
+	require.NotNil(t, owner.riverClient)
+	assert.False(t, follower.schedulerOn)
+	assert.Nil(t, follower.riverClient)
+	assert.Contains(t, follower.ownerMessage, "will not run jobs")
+
+	_, err = follower.Trigger(ctx, PipelineSchedule{PipelineID: "pipeline-id", PipelineName: "analytics"}, TriggerRequest{})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "scheduler is not running")
 }
 
 func TestServiceTriggerPersistsRunAndLogs(t *testing.T) {
@@ -140,6 +196,7 @@ func TestServiceTriggerPersistsRunAndLogs(t *testing.T) {
 	run, err := service.Trigger(ctx, PipelineSchedule{PipelineID: "pipeline-id", PipelineName: "analytics"}, TriggerRequest{Trigger: string(RunTriggerManual)})
 	require.NoError(t, err)
 	require.NotEmpty(t, run.ID)
+	require.NotNil(t, run.RiverJobID)
 
 	select {
 	case <-done:
@@ -155,6 +212,8 @@ func TestServiceTriggerPersistsRunAndLogs(t *testing.T) {
 	stored, logs, _, err := service.GetRun(context.Background(), run.ID)
 	require.NoError(t, err)
 	assert.Equal(t, RunStatusSuccess, stored.Status)
+	require.NotNil(t, stored.RiverJobID)
+	assert.Equal(t, *run.RiverJobID, *stored.RiverJobID)
 	assert.Equal(t, "running pipeline-id", logs[0].Line)
 
 	eventsMu.Lock()

@@ -119,20 +119,23 @@ type TriggerRequest struct {
 type PipelineRun struct {
 	ID         string `json:"id"`
 	PipelineID string `json:"pipeline_id"`
+	// RiverJobID links this application-level run to its internal queue job.
+	// It is deliberately not exposed through the API.
+	RiverJobID *int64 `json:"-"`
 	// PipelineUUID is the stable identity for per-environment scheduled
 	// runs. Not persisted; carried in memory so run completion can advance
 	// the (pipeline, environment) watermark.
-	PipelineUUID string `json:"pipeline_uuid,omitempty"`
-	Pipeline     string `json:"pipeline"`
-	Environment string     `json:"environment"`
-	Trigger     RunTrigger `json:"trigger"`
-	Status      RunStatus  `json:"status"`
-	WinStart    *time.Time `json:"win_start,omitempty"`
-	WinEnd      *time.Time `json:"win_end,omitempty"`
-	StartedAt   *time.Time `json:"started_at,omitempty"`
-	FinishedAt  *time.Time `json:"finished_at,omitempty"`
-	Error       string     `json:"error,omitempty"`
-	LogRef      string     `json:"log_ref,omitempty"`
+	PipelineUUID string     `json:"pipeline_uuid,omitempty"`
+	Pipeline     string     `json:"pipeline"`
+	Environment  string     `json:"environment"`
+	Trigger      RunTrigger `json:"trigger"`
+	Status       RunStatus  `json:"status"`
+	WinStart     *time.Time `json:"win_start,omitempty"`
+	WinEnd       *time.Time `json:"win_end,omitempty"`
+	StartedAt    *time.Time `json:"started_at,omitempty"`
+	FinishedAt   *time.Time `json:"finished_at,omitempty"`
+	Error        string     `json:"error,omitempty"`
+	LogRef       string     `json:"log_ref,omitempty"`
 	// SnapshotVersionID records the deployed snapshot the run executed;
 	// empty for working-tree builds.
 	SnapshotVersionID string `json:"snapshot_version_id,omitempty"`

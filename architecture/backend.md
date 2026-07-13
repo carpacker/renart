@@ -131,9 +131,15 @@ retains bounded retry and a clear DuckDB lock error as a defensive fallback.
 The scheduler is built on River with the SQLite driver: `Store` owns
 persistence/migrations, `Service` owns orchestration (catch-up windows,
 uniqueness via `river:"unique"`), and execution is injected as a plain
-`Runner` function. Startup reconciles runs left open by a killed process and
-replays their persisted terminal steps into derived freshness state without
-rerunning asset code (see staleness.md §3).
+`Runner` function. One filesystem lock owns both queue consumption and schedule
+registration; startup acquires it before River workers start. It then
+atomically fails runs left open by a killed process, cancels the corresponding
+abandoned River pipeline/housekeeping jobs, and replays persisted terminal
+steps into derived freshness state without rerunning asset code. Runs are
+linked to their River job IDs, including recovery from the job arguments if a
+process dies during the claim/link handoff; queued jobs River never claimed are
+preserved. Recovery emits one structured count summary for operational
+visibility (see staleness.md §3).
 
 HTTP API assets use a native streaming extractor followed by Sling for the
 warehouse write. The target DuckDB lease is acquired after extraction and held
@@ -183,7 +189,8 @@ type check and execution surface the incomplete state until it is resolved.
   `WorkspaceResolver.SafeJoin`.
 - **Deployment.** Single binary: embedded frontend, embedded Python (uv),
   pure-Go SQLite. Port fallback, browser auto-open, graceful shutdown
-  (scheduler `Stop()` drains River).
+  (scheduler `Stop()` drains River, then escalates to context cancellation if
+  workers do not stop within the grace period).
 
 ## 6. Embedded engines & memory
 

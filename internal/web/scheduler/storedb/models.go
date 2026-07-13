@@ -22,6 +22,8 @@ type PipelineRun struct {
 	Error             sql.NullString
 	LogRef            sql.NullString
 	SnapshotVersionID sql.NullString
+	RecoveryPending   int64
+	RiverJobID        sql.NullInt64
 }
 
 type PipelineRunLog struct {
@@ -44,6 +46,15 @@ type PipelineScheduleSetting struct {
 	PipelineID string
 	Enabled    int64
 	UpdatedAt  string
+}
+
+type RenartAssetRun struct {
+	AssetID     string
+	Environment string
+	Fingerprint string
+	Status      string
+	RunID       string
+	RanAt       string
 }
 
 type RenartBlob struct {

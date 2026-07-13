@@ -94,8 +94,8 @@ func (q *Queries) CountRuns(ctx context.Context, arg CountRunsParams) (int64, er
 }
 
 const createRun = `-- name: CreateRun :exec
-INSERT INTO pipeline_runs (id, pipeline_id, pipeline, environment, trigger, status, win_start, win_end, started_at, finished_at, error, log_ref, snapshot_version_id)
-VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)
+INSERT INTO pipeline_runs (id, pipeline_id, pipeline, environment, trigger, status, win_start, win_end, started_at, finished_at, error, log_ref, snapshot_version_id, river_job_id)
+VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)
 `
 
 type CreateRunParams struct {
@@ -112,6 +112,7 @@ type CreateRunParams struct {
 	Error             sql.NullString
 	LogRef            sql.NullString
 	SnapshotVersionID sql.NullString
+	RiverJobID        sql.NullInt64
 }
 
 func (q *Queries) CreateRun(ctx context.Context, arg CreateRunParams) error {
@@ -129,6 +130,7 @@ func (q *Queries) CreateRun(ctx context.Context, arg CreateRunParams) error {
 		arg.Error,
 		arg.LogRef,
 		arg.SnapshotVersionID,
+		arg.RiverJobID,
 	)
 	return err
 }
@@ -213,7 +215,7 @@ func (q *Queries) GetEnvSchedule(ctx context.Context, arg GetEnvScheduleParams) 
 }
 
 const getRun = `-- name: GetRun :one
-SELECT id, pipeline_id, pipeline, environment, trigger, status, win_start, win_end, started_at, finished_at, error, log_ref, snapshot_version_id
+SELECT id, pipeline_id, pipeline, environment, trigger, status, win_start, win_end, started_at, finished_at, error, log_ref, snapshot_version_id, recovery_pending, river_job_id
 FROM pipeline_runs
 WHERE id = ?1
 `
@@ -235,6 +237,8 @@ func (q *Queries) GetRun(ctx context.Context, id string) (PipelineRun, error) {
 		&i.Error,
 		&i.LogRef,
 		&i.SnapshotVersionID,
+		&i.RecoveryPending,
+		&i.RiverJobID,
 	)
 	return i, err
 }
@@ -380,7 +384,7 @@ func (q *Queries) ListRunSteps(ctx context.Context, runID string) ([]PipelineRun
 }
 
 const listRuns = `-- name: ListRuns :many
-SELECT id, pipeline_id, pipeline, environment, trigger, status, win_start, win_end, started_at, finished_at, error, log_ref, snapshot_version_id
+SELECT id, pipeline_id, pipeline, environment, trigger, status, win_start, win_end, started_at, finished_at, error, log_ref, snapshot_version_id, recovery_pending, river_job_id
 FROM pipeline_runs
 WHERE (CAST(?1 AS TEXT) = '' OR pipeline_id = CAST(?1 AS TEXT))
   AND (
@@ -438,6 +442,8 @@ func (q *Queries) ListRuns(ctx context.Context, arg ListRunsParams) ([]PipelineR
 			&i.Error,
 			&i.LogRef,
 			&i.SnapshotVersionID,
+			&i.RecoveryPending,
+			&i.RiverJobID,
 		); err != nil {
 			return nil, err
 		}
@@ -508,6 +514,22 @@ func (q *Queries) SetEnvScheduleStatus(ctx context.Context, arg SetEnvScheduleSt
 		arg.PipelineID,
 		arg.Environment,
 	)
+	return err
+}
+
+const setRunRiverJob = `-- name: SetRunRiverJob :exec
+UPDATE pipeline_runs
+SET river_job_id = ?1
+WHERE id = ?2
+`
+
+type SetRunRiverJobParams struct {
+	RiverJobID sql.NullInt64
+	ID         string
+}
+
+func (q *Queries) SetRunRiverJob(ctx context.Context, arg SetRunRiverJobParams) error {
+	_, err := q.db.ExecContext(ctx, setRunRiverJob, arg.RiverJobID, arg.ID)
 	return err
 }
 

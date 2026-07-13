@@ -17,6 +17,7 @@ import (
 	"github.com/pressly/goose/v3"
 	"github.com/riverqueue/river/riverdriver/riversqlite"
 	"github.com/riverqueue/river/rivermigrate"
+	"github.com/riverqueue/river/rivertype"
 	_ "modernc.org/sqlite"
 
 	"renart/internal/web/scheduler/storedb"
@@ -111,8 +112,18 @@ func (s *Store) Create(ctx context.Context, run PipelineRun) (string, error) {
 		Error:             stringValue(run.Error),
 		LogRef:            stringValue(run.LogRef),
 		SnapshotVersionID: stringValue(run.SnapshotVersionID),
+		RiverJobID:        nullInt64(run.RiverJobID),
 	})
 	return run.ID, err
+}
+
+// SetRunRiverJob links a run created before queue insertion (manual/API runs)
+// to the River job that owns its execution.
+func (s *Store) SetRunRiverJob(ctx context.Context, runID string, riverJobID int64) error {
+	return s.queries.SetRunRiverJob(ctx, storedb.SetRunRiverJobParams{
+		ID:         runID,
+		RiverJobID: sql.NullInt64{Int64: riverJobID, Valid: true},
+	})
 }
 
 // SetRunSnapshotVersion records which deployed snapshot a run executed.
@@ -138,59 +149,193 @@ func (s *Store) AppendLog(ctx context.Context, id string, line LogLine) error {
 	return s.queries.AppendRunLog(ctx, storedb.AppendRunLogParams{RunID: id, At: formatTime(line.At), Line: line.Line})
 }
 
-// FailOrphanedRuns reconciles runs left mid-flight by a previous process (e.g.
-// the server was killed while executing tasks): every run still marked running
-// is finished as failed, its open steps are closed, and durable derived-state
-// replay is marked pending. Returns the newly reconciled run IDs. Queued runs
-// are left untouched — the job queue may still pick them up.
-func (s *Store) FailOrphanedRuns(ctx context.Context, reason string) ([]string, error) {
+type InterruptedStateRecovery struct {
+	RunIDs             []string
+	RiverJobsCancelled int64
+}
+
+type interruptedRiverJob struct {
+	id      int64
+	attempt int
+	kind    string
+	args    string
+}
+
+// ReconcileInterruptedState repairs scheduler state left mid-flight by a
+// previous process. The caller must hold the workspace scheduler lock and must
+// invoke this before starting River workers, making every River job currently
+// marked running unambiguously abandoned.
+//
+// Renart runs already marked running are failed, as are linked queued runs
+// whose River job had already been claimed. Unclaimed queued jobs are left
+// untouched so they can execute normally after startup. Open steps are closed,
+// derived-state replay is marked pending, and abandoned internal River jobs are
+// terminalized as cancelled in the same SQLite transaction.
+func (s *Store) ReconcileInterruptedState(ctx context.Context, reason string) (InterruptedStateRecovery, error) {
+	var recovery InterruptedStateRecovery
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
-		return nil, err
+		return recovery, err
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	rows, err := tx.QueryContext(ctx, `SELECT id FROM pipeline_runs WHERE status = ?`, string(RunStatusRunning))
+	jobRows, err := tx.QueryContext(ctx, `
+		SELECT id, attempt, kind, json(args)
+		FROM river_job
+		WHERE queue = ?
+		  AND kind IN (?, ?)
+		  AND state = ?
+		ORDER BY id`,
+		pipelineRunQueue, pipelineRunJobKind, housekeepingJobKind, string(rivertype.JobStateRunning),
+	)
 	if err != nil {
-		return nil, err
+		return recovery, err
 	}
-	var ids []string
-	for rows.Next() {
-		var id string
-		if scanErr := rows.Scan(&id); scanErr != nil {
-			_ = rows.Close()
-			return nil, scanErr
+	var jobs []interruptedRiverJob
+	for jobRows.Next() {
+		var job interruptedRiverJob
+		if scanErr := jobRows.Scan(&job.id, &job.attempt, &job.kind, &job.args); scanErr != nil {
+			_ = jobRows.Close()
+			return recovery, scanErr
 		}
-		ids = append(ids, id)
+		jobs = append(jobs, job)
 	}
-	if closeErr := rows.Close(); closeErr != nil {
-		return nil, closeErr
+	if closeErr := jobRows.Close(); closeErr != nil {
+		return recovery, closeErr
 	}
-	if err := rows.Err(); err != nil {
-		return nil, err
+	if err := jobRows.Err(); err != nil {
+		return recovery, err
 	}
-	if len(ids) == 0 {
-		return nil, tx.Commit()
+	// Manual/API runs are created before their River job is inserted. If the
+	// process died in the tiny interval between River claiming the job and the
+	// worker persisting that link, recover it from the job's durable arguments.
+	for _, job := range jobs {
+		if job.kind != pipelineRunJobKind {
+			continue
+		}
+		var args pipelineRunJobArgs
+		if err := json.Unmarshal([]byte(job.args), &args); err != nil {
+			return recovery, fmt.Errorf("decode interrupted River job %d arguments: %w", job.id, err)
+		}
+		if strings.TrimSpace(args.RunID) == "" {
+			continue
+		}
+		if _, err := tx.ExecContext(ctx, `
+			UPDATE pipeline_runs
+			SET river_job_id = ?
+			WHERE id = ? AND river_job_id IS NULL`, job.id, args.RunID); err != nil {
+			return recovery, err
+		}
 	}
 
-	now := formatTime(time.Now().UTC())
+	runRows, err := tx.QueryContext(ctx, `
+		SELECT id
+		FROM pipeline_runs
+		WHERE status = ?
+		   OR (
+			status = ?
+			AND river_job_id IN (
+				SELECT id FROM river_job
+				WHERE queue = ?
+				  AND kind = ?
+				  AND state = ?
+			)
+		   )
+		ORDER BY COALESCE(started_at, ''), id`,
+		string(RunStatusRunning), string(RunStatusQueued), pipelineRunQueue,
+		pipelineRunJobKind, string(rivertype.JobStateRunning),
+	)
+	if err != nil {
+		return recovery, err
+	}
+	for runRows.Next() {
+		var id string
+		if scanErr := runRows.Scan(&id); scanErr != nil {
+			_ = runRows.Close()
+			return recovery, scanErr
+		}
+		recovery.RunIDs = append(recovery.RunIDs, id)
+	}
+	if closeErr := runRows.Close(); closeErr != nil {
+		return recovery, closeErr
+	}
+	if err := runRows.Err(); err != nil {
+		return recovery, err
+	}
+
+	nowTime := time.Now().UTC()
+	now := formatTime(nowTime)
 	if _, err := tx.ExecContext(ctx,
 		`UPDATE pipeline_run_steps
 		 SET status = ?, finished_at = ?, error = CASE WHEN error IS NULL OR error = '' THEN ? ELSE error END
-		 WHERE finished_at IS NULL AND run_id IN (SELECT id FROM pipeline_runs WHERE status = ?)`,
-		string(RunStatusFailed), now, reason, string(RunStatusRunning),
+		 WHERE finished_at IS NULL
+		   AND run_id IN (
+			SELECT id FROM pipeline_runs
+			WHERE status = ?
+			   OR (
+				status = ?
+				AND river_job_id IN (
+					SELECT id FROM river_job
+					WHERE queue = ? AND kind = ? AND state = ?
+				)
+			   )
+		   )`,
+		string(RunStatusFailed), now, reason,
+		string(RunStatusRunning), string(RunStatusQueued), pipelineRunQueue,
+		pipelineRunJobKind, string(rivertype.JobStateRunning),
 	); err != nil {
-		return nil, err
+		return recovery, err
 	}
 	if _, err := tx.ExecContext(ctx,
 		`UPDATE pipeline_runs
 		 SET status = ?, finished_at = ?, error = ?, recovery_pending = 1
-		 WHERE status = ?`,
-		string(RunStatusFailed), now, reason, string(RunStatusRunning),
+		 WHERE status = ?
+		    OR (
+			 status = ?
+			 AND river_job_id IN (
+				 SELECT id FROM river_job
+				 WHERE queue = ? AND kind = ? AND state = ?
+			 )
+		    )`,
+		string(RunStatusFailed), now, reason,
+		string(RunStatusRunning), string(RunStatusQueued), pipelineRunQueue,
+		pipelineRunJobKind, string(rivertype.JobStateRunning),
 	); err != nil {
-		return nil, err
+		return recovery, err
 	}
-	return ids, tx.Commit()
+
+	for _, job := range jobs {
+		errorData, marshalErr := json.Marshal(rivertype.AttemptError{
+			At:      nowTime,
+			Attempt: job.attempt,
+			Error:   reason,
+		})
+		if marshalErr != nil {
+			return recovery, marshalErr
+		}
+		result, updateErr := tx.ExecContext(ctx, `
+			UPDATE river_job
+			SET state = ?,
+			    finalized_at = ?,
+			    errors = jsonb_insert(COALESCE(errors, jsonb('[]')), '$[#]', jsonb(?))
+			WHERE id = ? AND state = ?`,
+			string(rivertype.JobStateCancelled), now, string(errorData), job.id,
+			string(rivertype.JobStateRunning),
+		)
+		if updateErr != nil {
+			return recovery, updateErr
+		}
+		rowsAffected, rowsErr := result.RowsAffected()
+		if rowsErr != nil {
+			return recovery, rowsErr
+		}
+		recovery.RiverJobsCancelled += rowsAffected
+	}
+
+	if err := tx.Commit(); err != nil {
+		return InterruptedStateRecovery{}, err
+	}
+	return recovery, nil
 }
 
 // PendingRunRecoveries returns interrupted runs whose persisted terminal steps
@@ -523,6 +668,7 @@ func runFromDB(row storedb.PipelineRun) PipelineRun {
 	return PipelineRun{
 		ID:                row.ID,
 		PipelineID:        row.PipelineID,
+		RiverJobID:        int64FromNull(row.RiverJobID),
 		Pipeline:          row.Pipeline,
 		Environment:       row.Environment,
 		Trigger:           RunTrigger(row.Trigger),
@@ -535,6 +681,21 @@ func runFromDB(row storedb.PipelineRun) PipelineRun {
 		LogRef:            stringFromNull(row.LogRef),
 		SnapshotVersionID: stringFromNull(row.SnapshotVersionID),
 	}
+}
+
+func nullInt64(value *int64) sql.NullInt64 {
+	if value == nil {
+		return sql.NullInt64{}
+	}
+	return sql.NullInt64{Int64: *value, Valid: true}
+}
+
+func int64FromNull(value sql.NullInt64) *int64 {
+	if !value.Valid {
+		return nil
+	}
+	result := value.Int64
+	return &result
 }
 
 func stepsFromDB(rows []storedb.PipelineRunStep) []PipelineRunStep {
