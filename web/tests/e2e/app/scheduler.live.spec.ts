@@ -1,4 +1,6 @@
 import { expect, type APIRequestContext } from "@playwright/test";
+import { appendFile } from "node:fs/promises";
+import { join } from "node:path";
 
 import { liveTest as test, type LiveApp } from "../live-app-fixture";
 
@@ -18,6 +20,8 @@ type RunDetailResponse = {
   steps?: Array<{ asset: string; status: string }>;
 };
 
+const analyticsPipelineId = Buffer.from("analytics").toString("base64url");
+
 test.describe("app scheduler pages live", () => {
   test.use({ fixtureName: "basic-workspace" });
 
@@ -31,6 +35,74 @@ test.describe("app scheduler pages live", () => {
     // fixture's default), not a generic "Catch up" label.
     await expect(page.getByText("skip", { exact: true })).toBeVisible();
     await expect(page.getByRole("button", { name: "Run" }).first()).toBeVisible();
+  });
+
+  test("shows and updates a schedule pinned to an older deployment", async ({
+    liveApp,
+    page,
+    request,
+  }) => {
+    const pinResponse = await request.put(
+      `${liveApp.baseURL}/api/pipelines/${analyticsPipelineId}/env-schedules/default`,
+      {
+        data: {
+          cron: "0 0 * * *",
+          timezone: "UTC",
+          catchup_policy: "skip",
+          deploy_now: true,
+        },
+      },
+    );
+    expect(pinResponse.ok()).toBe(true);
+    const pinnedVersion = (
+      (await pinResponse.json()) as { schedule: { snapshot_version_id: string } }
+    ).schedule.snapshot_version_id;
+    expect(pinnedVersion).toBeTruthy();
+
+    await appendFile(
+      join(liveApp.workspaceDir, "analytics/assets/analytics/orders.sql"),
+      "\n-- deployment mismatch regression\n",
+      "utf8",
+    );
+    const deployResponse = await request.post(
+      `${liveApp.baseURL}/api/pipelines/${analyticsPipelineId}/deploy`,
+    );
+    expect(deployResponse.ok()).toBe(true);
+    const latestVersion = ((await deployResponse.json()) as { snapshot: { version_id: string } })
+      .snapshot.version_id;
+    expect(latestVersion).not.toBe(pinnedVersion);
+
+    await page.goto(`${liveApp.baseURL}/schedules`);
+    const olderBadge = page.getByText("Older deployment", { exact: true });
+    await expect(olderBadge).toBeVisible({ timeout: 15000 });
+    await olderBadge.hover();
+    await expect(page.getByText(/Data freshness is tracked separately/)).toBeVisible();
+
+    const updateResponse = page.waitForResponse(
+      (response) =>
+        response.url().includes(`/api/pipelines/${analyticsPipelineId}/env-schedules/default`) &&
+        response.request().method() === "PUT" &&
+        response.ok(),
+      { timeout: 15000 },
+    );
+    await page.getByRole("button", { name: "Update deployment" }).click();
+    await updateResponse;
+
+    await expect
+      .poll(
+        async () => {
+          const response = await request.get(`${liveApp.baseURL}/api/env-schedules`);
+          if (!response.ok()) return "";
+          const body = (await response.json()) as {
+            schedules: Array<{ environment: string; snapshot_version_id?: string }>;
+          };
+          return body.schedules.find((schedule) => schedule.environment === "default")
+            ?.snapshot_version_id;
+        },
+        { timeout: 15000 },
+      )
+      .toBe(latestVersion);
+    await expect(olderBadge).toBeHidden({ timeout: 15000 });
   });
 
   test("shows triggered runs in the runs list", async ({ liveApp, page, request }) => {

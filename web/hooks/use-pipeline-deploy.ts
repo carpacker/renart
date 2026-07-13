@@ -8,6 +8,7 @@ export type PipelineDeployState = {
   status: DeployStatus | null;
   deploying: boolean;
   deploy: () => Promise<void>;
+  refresh: () => Promise<void>;
   driftedFileCount: number;
 };
 
@@ -51,5 +52,5 @@ export function usePipelineDeploy(pipelineId: string | undefined): PipelineDeplo
     (status?.added_files?.length ?? 0) +
     (status?.removed_files?.length ?? 0);
 
-  return { status, deploying, deploy, driftedFileCount };
+  return { status, deploying, deploy, refresh, driftedFileCount };
 }

@@ -1,8 +1,18 @@
 import { useAtomValue } from "jotai";
-import { ArchiveRestore, Clock, Loader2, Package, Play, Plus, Search } from "lucide-react";
+import {
+  ArchiveRestore,
+  Clock,
+  Loader2,
+  Package,
+  Play,
+  Plus,
+  RefreshCw,
+  Search,
+} from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 
 import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
 import {
   Dialog,
   DialogContent,
@@ -16,6 +26,7 @@ import { Switch } from "@/components/ui/switch";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { envScheduleKey, useEnvSchedules } from "@/hooks/use-env-schedules";
 import { formatSchedulerDate, usePipelineScheduler } from "@/hooks/use-pipeline-scheduler";
+import { usePipelineDeploy } from "@/hooks/use-pipeline-deploy";
 import { triggerPipelineRun } from "@/lib/api";
 import type { CatchupPolicy, EnvSchedule } from "@/lib/api-env-schedules";
 import { workspaceAtom } from "@/lib/atoms/domains/workspace";
@@ -102,7 +113,7 @@ export function AppSchedulesPage() {
               <div className="sticky top-0 z-10 flex h-9 items-center border-b bg-card text-[11px] font-semibold uppercase text-muted-foreground">
                 <div className="w-80 px-3">Jobs</div>
                 <TimelineAxis axis={axis} />
-                <div className="w-56 px-3 text-right">Controls</div>
+                <div className="w-72 px-3 text-right">Controls</div>
               </div>
               {envSchedules.loading && filteredSchedules.length === 0 ? (
                 <div className="flex h-24 items-center gap-2 px-3 text-sm text-muted-foreground">
@@ -130,6 +141,20 @@ export function AppSchedulesPage() {
                   )}
                   onSetStatus={(status) => void envSchedules.setStatus(schedule, status)}
                   onArchive={() => void envSchedules.archive(schedule)}
+                  onUpdateDeployment={async () => {
+                    if (!schedule.pipeline_id) return;
+                    await envSchedules.upsert(
+                      { ...schedule, pipeline_id: schedule.pipeline_id },
+                      {
+                        cron: schedule.cron,
+                        timezone: schedule.timezone,
+                        vars: schedule.vars,
+                        catchup_policy: schedule.catchup_policy,
+                        paused: schedule.status === "paused",
+                        deploy_now: true,
+                      },
+                    );
+                  }}
                 />
               ))}
               {envSchedules.archived.length > 0 ? (
@@ -164,6 +189,7 @@ function EnvScheduleRow({
   activeRun,
   onSetStatus,
   onArchive,
+  onUpdateDeployment,
 }: {
   schedule: EnvSchedule;
   window: TimelineWindow;
@@ -172,8 +198,14 @@ function EnvScheduleRow({
   activeRun?: PipelineRun;
   onSetStatus: (status: "active" | "paused") => void;
   onArchive: () => void;
+  onUpdateDeployment: () => Promise<void>;
 }) {
+  const deployState = usePipelineDeploy(schedule.pipeline_id);
   const enabled = schedule.status === "active";
+  const latestVersion = deployState.status?.version_id;
+  const deploymentOutdated = Boolean(
+    latestVersion && schedule.snapshot_version_id && latestVersion !== schedule.snapshot_version_id,
+  );
   const timeline: TimelineSchedule = {
     schedule: schedule.cron,
     timezone: schedule.timezone,
@@ -198,6 +230,10 @@ function EnvScheduleRow({
       setTriggering(false);
     }
   };
+  const updateDeployment = async () => {
+    await onUpdateDeployment();
+    await deployState.refresh();
+  };
   return (
     <div className="flex min-h-14 items-center border-b hover:bg-muted/40">
       <div className="flex w-80 min-w-0 items-center gap-3 px-3">
@@ -210,9 +246,9 @@ function EnvScheduleRow({
           <div className="flex items-center gap-2 font-mono text-xs text-primary">
             <Clock className="size-3.5 shrink-0 text-muted-foreground" />
             <span className="truncate">{schedule.pipeline_name || schedule.pipeline_uuid}</span>
-            <span className="rounded-full bg-primary/10 px-1.5 py-0.5 text-[10px] font-medium text-primary">
+            <Badge variant="secondary" size="xs">
               {schedule.environment}
-            </span>
+            </Badge>
           </div>
           <div className="mt-1 flex min-w-0 items-center gap-1.5 text-[11px] text-muted-foreground">
             <span className="truncate font-mono">{schedule.cron}</span>
@@ -239,6 +275,20 @@ function EnvScheduleRow({
                 </TooltipTrigger>
                 <TooltipContent>
                   Pinned deployed snapshot {schedule.snapshot_version_id}
+                </TooltipContent>
+              </Tooltip>
+            ) : null}
+            {deploymentOutdated ? (
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Badge variant="destructive" size="xs">
+                    Older deployment
+                  </Badge>
+                </TooltipTrigger>
+                <TooltipContent className="max-w-80">
+                  This schedule runs snapshot {schedule.snapshot_version_id?.slice(0, 8)}. The
+                  latest deployment is {latestVersion?.slice(0, 8)}. Data freshness is tracked
+                  separately.
                 </TooltipContent>
               </Tooltip>
             ) : null}
@@ -272,7 +322,7 @@ function EnvScheduleRow({
         ))}
         {nowLeft !== null ? <NowMarker left={nowLeft} /> : null}
       </div>
-      <div className="flex w-56 items-center justify-end gap-2 px-3">
+      <div className="flex w-72 items-center justify-end gap-2 px-3">
         <span className="text-[10px] uppercase text-muted-foreground">
           {schedule.catchup_policy.replace("_", " ")}
         </span>
@@ -283,13 +333,29 @@ function EnvScheduleRow({
           title="Archive schedule (run history is kept)"
           onClick={onArchive}
         >
-          <ArchiveRestore className="size-3.5" />
+          <ArchiveRestore />
         </Button>
+        {deploymentOutdated ? (
+          <Button
+            size="sm"
+            variant="secondary"
+            disabled={busy}
+            title="Deploy the current pipeline and update this schedule"
+            onClick={() => void updateDeployment()}
+          >
+            {busy ? (
+              <Loader2 data-icon="inline-start" className="animate-spin" />
+            ) : (
+              <RefreshCw data-icon="inline-start" />
+            )}
+            Update deployment
+          </Button>
+        ) : null}
         <Button size="sm" variant="outline" disabled={runPending} onClick={() => void triggerNow()}>
           {runPending ? (
-            <Loader2 className="size-3.5 animate-spin" />
+            <Loader2 data-icon="inline-start" className="animate-spin" />
           ) : (
-            <Play className="size-3.5" />
+            <Play data-icon="inline-start" />
           )}
           {runLabel}
         </Button>

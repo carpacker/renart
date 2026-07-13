@@ -199,6 +199,12 @@ user deletions (reason `user`), which stay archived until restored in the UI.
 River job uniqueness is keyed on (pipeline, environment, interval) so restarts
 and catch-up can never double-enqueue a logical run.
 
+The schedules UI compares each row's pinned snapshot with the pipeline's latest
+deployed version. A differing pin is shown as **Older deployment**, independently
+of data freshness and last-run status, with an action that deploys the current
+pipeline (deduping identical content) and atomically advances only that
+environment's schedule to the resulting snapshot.
+
 ## 7. Protected environments (`internal/web/policy`)
 
 Per-environment flags in `.renart/environments.yml` (kept out of `.bruin.yml`
