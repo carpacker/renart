@@ -2,7 +2,11 @@ package pysdk
 
 import (
 	"archive/zip"
+	"bytes"
+	"io"
 	"io/fs"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -94,4 +98,69 @@ func TestEnsureWheelOverride(t *testing.T) {
 	if err != nil || path != "/custom/renart_sdk.whl" {
 		t.Fatalf("override must win, got %q (%v)", path, err)
 	}
+}
+
+func TestBuildWheelUsesConfiguredVersionAndIsDeterministic(t *testing.T) {
+	originalVersion := Version
+	Version = "1.2.3"
+	t.Cleanup(func() { Version = originalVersion })
+
+	dir := t.TempDir()
+	path, err := BuildWheel(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := filepath.Base(path), "renart_sdk-1.2.3-py3-none-any.whl"; got != want {
+		t.Fatalf("unexpected wheel filename %q, want %q", got, want)
+	}
+
+	first, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	metadata := readWheelFile(t, path, "renart_sdk-1.2.3.dist-info/METADATA")
+	if !strings.Contains(metadata, "Name: renart-sdk\nVersion: 1.2.3\n") {
+		t.Fatalf("wheel metadata does not contain the configured version:\n%s", metadata)
+	}
+
+	path, err = BuildWheel(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(first, second) {
+		t.Fatal("building the same SDK version twice must produce identical wheel bytes")
+	}
+}
+
+func readWheelFile(t *testing.T, wheelPath, name string) string {
+	t.Helper()
+	reader, err := zip.OpenReader(wheelPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reader.Close()
+	for _, file := range reader.File {
+		if file.Name != name {
+			continue
+		}
+		contents, err := file.Open()
+		if err != nil {
+			t.Fatal(err)
+		}
+		data, err := io.ReadAll(contents)
+		closeErr := contents.Close()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if closeErr != nil {
+			t.Fatal(closeErr)
+		}
+		return string(data)
+	}
+	t.Fatalf("wheel is missing %s", name)
+	return ""
 }

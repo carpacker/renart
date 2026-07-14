@@ -12,7 +12,7 @@ builds:
       - -trimpath
       - -tags=no_duckdb_arrow
     ldflags:
-      - -s -w -X main.version={{ .Version }}
+      - -s -w -X main.version={{ .Version }} -X renart/internal/pysdk.Version={{ .Version }}
     goos:
       - linux
     goarch:
@@ -32,7 +32,7 @@ builds:
       - -trimpath
       - -tags=no_duckdb_arrow
     ldflags:
-      - -s -w -X main.version={{ .Version }}
+      - -s -w -X main.version={{ .Version }} -X renart/internal/pysdk.Version={{ .Version }}
     goos:
       - linux
     goarch:
@@ -53,7 +53,7 @@ builds:
       - -trimpath
       - -tags=no_duckdb_arrow
     ldflags:
-      - -s -w -X main.version={{ .Version }}
+      - -s -w -X main.version={{ .Version }} -X renart/internal/pysdk.Version={{ .Version }}
     goos:
       - darwin
     goarch:
@@ -74,7 +74,7 @@ builds:
       - -trimpath
       - -tags=no_duckdb_arrow
     ldflags:
-      - -s -w -X main.version={{ .Version }}
+      - -s -w -X main.version={{ .Version }} -X renart/internal/pysdk.Version={{ .Version }}
     goos:
       - darwin
     goarch:
@@ -96,7 +96,7 @@ builds:
       - -tags=no_duckdb_arrow
       - -buildmode=exe
     ldflags:
-      - -s -w -X main.version={{ .Version }} -extldflags=-static
+      - -s -w -X main.version={{ .Version }} -X renart/internal/pysdk.Version={{ .Version }} -extldflags=-static
     goos:
       - windows
     goarch:

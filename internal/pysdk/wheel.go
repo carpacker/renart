@@ -22,34 +22,53 @@ import (
 //go:embed src/renart/*
 var sdkSource embed.FS
 
-// Version is the SDK's wheel version. Bump it together with user-visible SDK
-// changes; the content hash in the cache path handles dev-time invalidation.
-const Version = "0.3.0"
+// Version is the SDK's wheel version. Release builds inject the Renart release
+// version with -X so the wheel embedded in the binary and the wheel published
+// to PyPI always have the same version. The default is the next release version
+// used by development and snapshot builds.
+var Version = "0.3.0"
 
 const (
 	distribution = "renart_sdk"
 	wheelTag     = "py3-none-any"
 )
 
-// metadata is the wheel's METADATA file. pyarrow decodes the broker's default
-// Arrow results; pandas remains available for explicit format="pandas" calls
-// and pyarrow.Table.to_pandas().
-var metadata = strings.TrimLeft(`
+// wheelMetadataFile is the wheel's WHEEL file.
+const wheelMetadataFile = `Wheel-Version: 1.0
+Generator: renart
+Root-Is-Purelib: true
+Tag: ` + wheelTag + `
+`
+
+// packageMetadata returns the wheel's METADATA file. pyarrow decodes the
+// broker's default Arrow results; pandas remains available for explicit
+// format="pandas" calls and pyarrow.Table.to_pandas().
+func packageMetadata() string {
+	return strings.TrimLeft(`
 Metadata-Version: 2.1
 Name: renart-sdk
 Version: `+Version+`
 Summary: Renart SDK for Python assets: query project data through the renart runner.
+Home-page: https://getrenart.com
+Project-URL: Documentation, https://getrenart.com/docs/asset-types/python-assets/
+Project-URL: Source, https://github.com/renart-data/renart
+License: Apache-2.0
 Requires-Python: >=3.9
 Requires-Dist: pyarrow>=15.0.0
 Requires-Dist: pandas>=1.5
-`, "\n")
+Description-Content-Type: text/markdown
 
-var wheelMetadata = strings.TrimLeft(`
-Wheel-Version: 1.0
-Generator: renart
-Root-Is-Purelib: true
-Tag: `+wheelTag+`
+# Renart Python SDK
+
+renart-sdk provides the renart package used by Python assets and Python
+notebook cells in Renart. Renart injects its matching SDK wheel automatically
+at runtime; the PyPI distribution is available for type checking, editors, and
+CI environments that inspect project code outside the Renart process.
+
+query() connects to a token-scoped broker started by the Renart runner. It
+does not contain database credentials and is not a standalone database client.
 `, "\n")
+}
 
 // WheelFilename is the canonical wheel file name.
 func WheelFilename() string {
@@ -114,8 +133,8 @@ func wheelEntries() ([]wheelEntry, error) {
 
 	distInfo := distribution + "-" + Version + ".dist-info"
 	entries = append(entries,
-		wheelEntry{name: distInfo + "/METADATA", content: []byte(metadata)},
-		wheelEntry{name: distInfo + "/WHEEL", content: []byte(wheelMetadata)},
+		wheelEntry{name: distInfo + "/METADATA", content: []byte(packageMetadata())},
+		wheelEntry{name: distInfo + "/WHEEL", content: []byte(wheelMetadataFile)},
 		wheelEntry{name: distInfo + "/top_level.txt", content: []byte("renart\n")},
 	)
 
@@ -158,6 +177,25 @@ func buildWheel(target string, entries []wheelEntry) error {
 		return err
 	}
 	return os.Rename(tmp.Name(), target)
+}
+
+// BuildWheel writes the configured SDK version into outputDir and returns the
+// resulting path. Release automation uses this same assembler as EnsureWheel,
+// keeping the PyPI artifact byte-identical to the SDK carried by a release
+// binary built with the same Version.
+func BuildWheel(outputDir string) (string, error) {
+	entries, err := wheelEntries()
+	if err != nil {
+		return "", fmt.Errorf("failed to assemble the renart SDK wheel: %w", err)
+	}
+	if err := os.MkdirAll(outputDir, 0o755); err != nil {
+		return "", fmt.Errorf("failed to create the SDK wheel output directory: %w", err)
+	}
+	target := filepath.Join(outputDir, WheelFilename())
+	if err := buildWheel(target, entries); err != nil {
+		return "", fmt.Errorf("failed to write the renart SDK wheel: %w", err)
+	}
+	return target, nil
 }
 
 // EnsureWheel writes the SDK wheel into the user cache (keyed by content
