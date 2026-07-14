@@ -13,7 +13,8 @@ the original.
 | [dbt-assets.md](dbt-assets.md) | evaluation — enabling renart intelligence on existing dbt projects |
 | [materialization-reach.md](materialization-reach.md) | proposed reach — guided advanced SQL modes, coverage timeline, Python pre-run diagnostic |
 | [remote-table-intellisense.md](remote-table-intellisense.md) | proposal — surface warehouse tables with no backing asset via the LSP |
-| [python-asset-sdk.md](python-asset-sdk.md) | phases 1–2 + explicit upstream refresh implemented — credential-free `query()`, ingestr-free uploads, editor/notebook parity; PyPI, policy, and protocol reach items open |
+| [python-asset-sdk.md](python-asset-sdk.md) | phases 1–2 + upstream refresh + PyPI publication implemented — credential-free `query()`, ingestr-free uploads, editor/notebook parity; policy and protocol reach items open |
+| [python-cross-connection-policy.md](python-cross-connection-policy.md) | proposal — opt-in per-environment connection scopes for Python SDK queries |
 | [questions.md](questions.md) | open questions for the maintainer |
 
 Recently folded away (git history keeps them): `docs-alpha.md` and
