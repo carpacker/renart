@@ -1,5 +1,5 @@
 import { expect, type APIRequestContext } from "@playwright/test";
-import { appendFile } from "node:fs/promises";
+import { appendFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
 import { liveTest as test, type LiveApp } from "../live-app-fixture";
@@ -16,7 +16,8 @@ type TriggerResponse = {
 
 type RunDetailResponse = {
   status: "ok" | "error";
-  run: { id: string; status: string; pipeline: string };
+  run: { id: string; status: string; pipeline: string; error?: string };
+  logs?: Array<{ at: string; line: string }>;
   steps?: Array<{ asset: string; status: string }>;
 };
 
@@ -115,7 +116,7 @@ test.describe("app scheduler pages live", () => {
     await expect(page.getByText("analytics", { exact: true }).first()).toBeVisible();
   });
 
-  test("opens a single run page with asset timings and high level events", async ({
+  test("opens a run with structured events and one combined output stream", async ({
     liveApp,
     page,
     request,
@@ -136,13 +137,86 @@ test.describe("app scheduler pages live", () => {
     });
     await expect(page.getByText(/Run of analytics/)).toBeVisible();
     await expect(page.getByRole("tab", { name: "Events" })).toBeVisible();
-    await expect(page.getByRole("tab", { name: "stdout" })).toBeVisible();
+    const outputTab = page.getByRole("tab", { name: "Output" });
+    await expect(outputTab).toBeVisible();
+    await expect(page.getByRole("tab", { name: "stderr" })).toHaveCount(0);
     if (stepAsset) {
       await expect(page.getByText(stepAsset, { exact: true }).first()).toBeVisible({
         timeout: 30000,
       });
     }
     await expect(page.getByText(/asset_(start|success)/).first()).toBeVisible({ timeout: 30000 });
+
+    await outputTab.click();
+    const terminal = page.locator('[data-slot="tabs-content"][data-state="active"] pre');
+    await expect(terminal).toContainText("Analyzed the pipeline 'analytics'", { timeout: 30000 });
+    await expect(terminal).toContainText("bruin run completed successfully", { timeout: 30000 });
+    const output = (await terminal.innerText()).replace(/\r\n/g, "\n");
+    expect(output.match(/Analyzed the pipeline 'analytics'/g)).toHaveLength(1);
+    expect(output).toMatch(/PASS analytics\.[^\n]+\nPASS analytics\./);
+  });
+
+  test("keeps a terminal failure in the combined output", async ({ liveApp, page, request }) => {
+    await writeFile(
+      join(liveApp.workspaceDir, "analytics/assets/analytics/orders.sql"),
+      `/* @bruin
+type: duckdb.sql
+materialization:
+  type: view
+@bruin */
+
+select * from analytics.table_that_does_not_exist
+`,
+      "utf8",
+    );
+
+    const runId = await triggerPipelineRun(liveApp, request);
+    const detail = await waitForRunDetail(
+      liveApp,
+      request,
+      runId,
+      (current) => current.run.status === "failed",
+    );
+    expect(detail.run.error).toBeTruthy();
+
+    await page.goto(`${liveApp.baseURL}/runs/${runId}`);
+    await expect(page.getByRole("tab", { name: "stderr" })).toHaveCount(0);
+    await page.getByRole("tab", { name: "Output" }).click();
+
+    const terminal = page.locator('[data-slot="tabs-content"][data-state="active"] pre');
+    await expect(terminal).toContainText(detail.run.error!, { timeout: 30000 });
+  });
+
+  test("rejects a missing dependency before any asset starts", async ({ liveApp, request }) => {
+    await writeFile(
+      join(liveApp.workspaceDir, "analytics/assets/analytics/orders.sql"),
+      `/* @bruin
+type: duckdb.sql
+depends:
+  - analytics.missing
+materialization:
+  type: view
+@bruin */
+
+select 1 as id
+`,
+      "utf8",
+    );
+
+    const runId = await triggerPipelineRun(liveApp, request);
+    const detail = await waitForRunDetail(
+      liveApp,
+      request,
+      runId,
+      (current) => current.run.status === "failed",
+    );
+    const output = detail.logs?.map((line) => line.line).join("") ?? "";
+
+    expect(detail.run.error).toContain("pipeline dependency validation failed with 1 issue");
+    expect(output).toContain("Dependency 'analytics.missing' does not exist");
+    expect(output).toContain("(dependency-exists)");
+    expect(output).not.toContain("Starting the pipeline execution");
+    expect(detail.steps ?? []).toEqual([]);
   });
 });
 

@@ -84,7 +84,10 @@ test.describe("notebook run cancellation", () => {
     await page.reload();
     await expect(page.getByText("Cancel").first()).toBeVisible({ timeout: 15000 });
     const runResponse = page.waitForResponse(
-      (r) => r.url().includes(`/api/notebooks/${notebook.id}/run`) && r.ok(),
+      (response) =>
+        new URL(response.url()).pathname === `/api/notebooks/${notebook.id}/run` &&
+        response.request().method() === "POST" &&
+        response.ok(),
       { timeout: 12000 },
     );
     await page.getByRole("button", { name: "Run all" }).click();

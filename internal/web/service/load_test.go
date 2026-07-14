@@ -23,6 +23,8 @@ func TestLoadRunEnvIncludesResolvedIntervalDates(t *testing.T) {
 	ctx = context.WithValue(ctx, pipeline.RunConfigEndDate, end)
 
 	env := loadRunEnv(ctx)
+	assert.Contains(t, env, "SLING_DISABLE_TELEMETRY=true")
+	assert.Contains(t, env, "DEBUGINFOD_URLS=")
 	assert.Contains(t, env, "START_DATE=2024-01-01T02:03:04Z")
 	assert.Contains(t, env, "END_DATE=2024-01-02T03:04:05Z")
 }

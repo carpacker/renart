@@ -60,7 +60,10 @@ test.describe("notebook python logs", () => {
 
     // First run installs the venv via uv, so allow generous time.
     const runResponse = page.waitForResponse(
-      (response) => response.url().includes(`/api/notebooks/${notebook.id}/run`) && response.ok(),
+      (response) =>
+        new URL(response.url()).pathname === `/api/notebooks/${notebook.id}/run` &&
+        response.request().method() === "POST" &&
+        response.ok(),
       { timeout: 180000 },
     );
     await page.getByRole("button", { name: "Run all" }).click();

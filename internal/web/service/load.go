@@ -370,8 +370,19 @@ func newStreamingCommand(ctx context.Context, name string, args []string, dir st
 	return cmd
 }
 
+func loadBaseEnv() []string {
+	return []string{
+		"SLING_DISABLE_TELEMETRY=true",
+		"PYTHONUNBUFFERED=1",
+		// Sling treats every inherited value containing :// as a potential
+		// connection. DEBUGINFOD_URLS is unrelated and otherwise produces a
+		// noisy "could not parse" warning before every invocation.
+		"DEBUGINFOD_URLS=",
+	}
+}
+
 func loadRunEnv(ctx context.Context) []string {
-	env := []string{"SLING_DISABLE_TELEMETRY=true", "PYTHONUNBUFFERED=1"}
+	env := loadBaseEnv()
 	if start, ok := ctx.Value(pipeline.RunConfigStartDate).(time.Time); ok && !start.IsZero() {
 		env = append(env, "START_DATE="+start.UTC().Format(time.RFC3339))
 	}

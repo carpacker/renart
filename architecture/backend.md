@@ -96,6 +96,12 @@ endpoints the UI uses, authenticating with the token
 SQLite writes and the UI's staleness/run history updates live. DuckDB access
 is additionally serialized per canonical database file as described in §4,
 because one server can run multiple pipelines and child processes concurrently.
+For an asset target, `--refresh-upstreams` first invokes the server-side stale
+planner narrowed to that asset's transitive upstream closure; only non-fresh
+upstreams run, with their configured strategies, and a failed refresh prevents
+the requested asset from starting. The same planning and execution services run
+directly in embedded mode. Pipeline targets reject the flag because their normal
+run already covers the whole DAG.
 Embedded mode boots the same
 graph headless (`serverConfig.headless`: no static assets, watcher, or
 fingerprint pre-warm) and **never starts the River scheduler** (two
@@ -119,6 +125,15 @@ Bruin's operator/materializer packages (registered per warehouse in
 matches the `bruin` binary where the direct path can't. Inspect-style queries
 enforce a single-SELECT boundary. The scheduler executes deployed snapshots
 materialized to a temp dir, never the working tree (see staleness.md §5).
+
+Before either a pipeline or a single asset starts, the direct runner validates
+declared dependencies across the whole parsed pipeline. Non-URI dependencies
+must resolve to another asset; a missing edge produces the same
+`dependency-exists` diagnostic as Bruin and stops before connections or task
+execution begin. The same validator feeds pipeline type-check findings. Runtime
+output is one stdout/stderr stream: lifecycle messages remain run-scoped, while
+task output passes through a line-aware asset writer that adds a timestamp,
+deterministically colored asset label, and `>>` marker to every logical line.
 
 Local DuckDB files use the coordinator in `internal/web/duckcoord`. Connection
 paths are made absolute, symlink-resolved, deduplicated, and sorted before an
@@ -216,14 +231,15 @@ backfill are mutually exclusive. Both are destructive policy operations; the
 backend revalidates capability, range, scope, and typed environment confirmation
 rather than trusting the UI.
 
-Pipeline type checks also validate materialization configuration: supported
-strategies, required merge primary keys, active incremental/update keys, and
-time-interval prerequisites. Warehouse-inactive partition/cluster metadata is
-preserved and reported as a warning. Editing may temporarily persist an incomplete merge
-so multi-step form changes are possible; type check and execution surface the
-incomplete state until it is resolved. Metadata belonging to another strategy
-is preserved as dormant state and reported as a warning rather than blocking an
-otherwise valid asset.
+Pipeline type checks also validate declared dependency existence and
+materialization configuration: supported strategies, required merge primary
+keys, active incremental/update keys, and time-interval prerequisites.
+Warehouse-inactive partition/cluster metadata is preserved and reported as a
+warning. Editing may temporarily persist an incomplete merge so multi-step form
+changes are possible; type check and execution surface the incomplete state
+until it is resolved. Metadata belonging to another strategy is preserved as
+dormant state and reported as a warning rather than blocking an otherwise valid
+asset.
 
 ## 5. Conventions
 

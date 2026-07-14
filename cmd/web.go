@@ -321,9 +321,10 @@ func (s *webServer) registerRoutes(router chi.Router) {
 		ResolvePipelineUUID: s.findPipelineUUIDByID,
 	})
 	webhttpapi.RegisterBuildStaleRoutes(router, &webhttpapi.BuildStaleAPI{
-		Staleness:           s.stalenessSvc,
-		ResolvePipelineUUID: s.findPipelineUUIDByID,
-		Execution:           s.executionSvc,
+		Staleness:                 s.stalenessSvc,
+		ResolvePipelineUUID:       s.findPipelineUUIDByID,
+		ResolveUpstreamAssetNames: s.findPipelineUpstreamNames,
+		Execution:                 s.executionSvc,
 	})
 	webhttpapi.RegisterDeployRoutes(router, &webhttpapi.DeployAPI{
 		Snapshots:       s.snapshotStore,
@@ -590,6 +591,15 @@ func (s *webServer) findPipelineUUIDByID(pipelineID string) (string, bool) {
 		}
 	}
 	return "", false
+}
+
+func (s *webServer) findPipelineUpstreamNames(pipelineID, assetName string) (map[string]struct{}, bool) {
+	for _, p := range s.currentState().Pipelines {
+		if p.ID == pipelineID {
+			return service.PipelineUpstreamNames(p, assetName)
+		}
+	}
+	return nil, false
 }
 
 // verifyMaterializedAssets is the staleness trust-but-verify hook: it asks

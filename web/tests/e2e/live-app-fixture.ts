@@ -359,7 +359,9 @@ function waitForServer(baseURL: string) {
 
 function waitForExit(child: ReturnType<typeof spawn>) {
   return new Promise<void>((resolveDone) => {
-    if (child.exitCode !== null || child.killed) {
+    // `child.killed` only confirms that Node successfully sent a signal; the
+    // process may still be alive and holding the workspace scheduler lock.
+    if (child.exitCode !== null || child.signalCode !== null) {
       resolveDone();
       return;
     }

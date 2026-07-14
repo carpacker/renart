@@ -30,7 +30,11 @@ Open a run to see its detail page:
   errored, succeeded).
 - The **Events** log below records each asset start/finish; on a failure,
   the error — for example the exact SQL binder error — is right there in
-  the log. **stdout** and **stderr** tabs hold the raw output.
+  the log. **Output** holds the combined terminal stream in execution order,
+  including both standard output and standard error. It starts with the
+  pipeline dependency check; a missing asset dependency stops the run before
+  execution. Task output is timestamped and labeled with its asset name, so
+  interleaved tool output remains attributable.
 
 ## Re-run
 

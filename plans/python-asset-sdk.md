@@ -1,10 +1,12 @@
 # Python asset SDK: query the project without credentials, upload without ingestr
 
-> **Status (2026-07-13): Phases 1–2 implemented, including notebook runner
-> unification and startup optimization,** on the `redesign` branch. §10
+> **Status (2026-07-14): Phases 1–2 and the explicit phase-3 upstream refresh
+> implemented, including notebook runner unification and startup optimization,**
+> on the `redesign` branch. §10
 > questions were answered by Lukas: (1) SDK named `renart`, no bruin shim;
 > (2) any project connection is readable; (3) wait semantics as proposed,
-> `--refresh-upstreams` deferred to phase 3; (4) queries default to Arrow while
+> with explicit `--refresh-upstreams` now implemented in phase 3; (4) queries
+> default to Arrow while
 > pandas remains available in the SDK wheel; (5) the ingestr asset type stays
 > as-is.
 >
@@ -32,9 +34,12 @@
 > `.to_pandas()` and `format="pandas"` available explicitly. On the profiling
 > machine this reduced a warm SDK-query cell from 719–918 ms to 418–515 ms. The
 > as-built design is now recorded in
-> `architecture/backend.md` and `architecture/notebooks.md`. Phase 3 reach items
-> (`--refresh-upstreams`, PyPI publication, a cross-connection policy surface,
-> and Arrow Flight evaluation) remain deferred.
+> `architecture/backend.md` and `architecture/notebooks.md`. Phase 3 now includes
+> `renart run <asset> --refresh-upstreams`: Renart builds only stale transitive
+> upstreams in the selected environment/window before the requested asset, in
+> both delegated and embedded CLI modes, and aborts the target run if an
+> upstream refresh fails. PyPI publication, a cross-connection policy surface,
+> and Arrow Flight evaluation remain deferred.
 
 Goal: Python assets get first-class access to the rest of the renart project —
 `query()` against project data, run context, and result materialization — with
@@ -366,9 +371,12 @@ coverage · notebook `query()` against the live notebook session · direct
 Parquet-to-session output load · startup/import optimization · docs for Python
 assets and notebook cells.
 
-**Phase 3 — reach:** `renart run --refresh-upstreams` (build-stale cone
-before the run) · PyPI publication · cross-connection read policy surface ·
-consider Arrow Flight if profiles ever show the loopback hop mattering.
+**Phase 3 — reach (partially implemented):** `renart run
+--refresh-upstreams` builds the stale transitive-upstream cone before an asset
+run, using normal upstream materialization strategies and stopping before the
+target if refresh fails. Remaining: PyPI publication · cross-connection read
+policy surface · consider Arrow Flight if profiles ever show the loopback hop
+mattering.
 
 ## 10. Open questions for Lukas
 
@@ -389,7 +397,9 @@ consider Arrow Flight if profiles ever show the loopback hop mattering.
    stale-idle upstreams. Is the phase-3 `--refresh-upstreams` opt-in the
    right shape, or do you want read-triggered freshness (broker auto-builds
    the stale cone) earlier / at all?
-   Answer: fow now we should not do read-triggered freshness with rebuild of stale cone)
+   Answer: for now, do not rebuild the stale cone as a side effect of a broker read.
+   Implementation update (2026-07-14): the explicit CLI opt-in is implemented;
+   broker reads still never trigger builds.
 4. **pandas dependency.** Should `query()` return pandas or PyArrow by default,
    and should pandas be included in the injected wheel?
    Answer: we should check if we can't just give the user pyarrow dataframes instead

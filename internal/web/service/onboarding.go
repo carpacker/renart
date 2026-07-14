@@ -632,7 +632,7 @@ parameters:
     method: GET
     headers:
       Accept: application/json
-      User-Agent: "Renart Demo (https://github.com/bruin-data/renart)"
+      User-Agent: "Renart Demo (https://github.com/renart-data/renart)"
 
   iterate:
     as: username
@@ -669,7 +669,7 @@ parameters:
     method: GET
     headers:
       Accept: application/json
-      User-Agent: "Renart Demo (https://github.com/bruin-data/renart)"
+      User-Agent: "Renart Demo (https://github.com/renart-data/renart)"
 
   iterate:
     as: username

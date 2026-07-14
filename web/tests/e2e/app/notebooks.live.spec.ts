@@ -204,7 +204,10 @@ test.describe("app notebooks live", () => {
     await expect(page.getByText("doubled", { exact: true }).first()).toBeVisible();
 
     const runResponse = page.waitForResponse(
-      (response) => response.url().includes(`/api/notebooks/${notebook.id}/run`) && response.ok(),
+      (response) =>
+        new URL(response.url()).pathname === `/api/notebooks/${notebook.id}/run` &&
+        response.request().method() === "POST" &&
+        response.ok(),
       { timeout: 30000 },
     );
     await page.getByRole("button", { name: "Run all" }).click();
@@ -219,6 +222,35 @@ test.describe("app notebooks live", () => {
 
     // The result table shows the computed values in the UI.
     await expect(page.getByText("40", { exact: true }).first()).toBeVisible({ timeout: 15000 });
+  });
+
+  test("highlights a sibling cell after definition navigation", async ({ liveApp, page }) => {
+    test.skip(
+      test.info().project.name.includes("mobile"),
+      "Ctrl+click definition navigation is a desktop editor interaction.",
+    );
+
+    const notebook = await createNotebook(page.request, liveApp.baseURL, "Definition Highlight");
+    const baseCell = await addCell(page.request, liveApp.baseURL, notebook.id, "base");
+    await setCell(page.request, liveApp.baseURL, notebook.id, baseCell, "select 1 as value");
+    const readerCell = await addCell(page.request, liveApp.baseURL, notebook.id, "reader");
+    await setCell(page.request, liveApp.baseURL, notebook.id, readerCell, "select value from base");
+
+    await page.goto(`${liveApp.baseURL}/notebooks/${notebook.id}`);
+    await expect(page.getByText("Definition Highlight").first()).toBeVisible({ timeout: 15000 });
+
+    const targetCard = page.locator(`[data-notebook-cell-id="${baseCell}"]`);
+    const readerCard = page.locator(`[data-notebook-cell-id="${readerCell}"]`);
+    const upstreamToken = readerCard.locator(".view-lines span", { hasText: "base" }).last();
+    await expect(upstreamToken).toBeVisible({ timeout: 15000 });
+    await upstreamToken.click({ modifiers: ["ControlOrMeta"] });
+
+    await expect(targetCard).toHaveAttribute("data-notebook-cell-jump-highlight", "true", {
+      timeout: 15000,
+    });
+    await expect(targetCard).not.toHaveAttribute("data-notebook-cell-jump-highlight", "true", {
+      timeout: 3000,
+    });
   });
 
   test("serializes autosaves so a delayed response cannot erase newer typing", async ({
@@ -751,6 +783,14 @@ test.describe("app notebooks live", () => {
         '    return pa.table({"runtime_amount": [10], "runtime_customer": ["Ada"]})',
       ].join("\n"),
     );
+    const staticCell = await addCell(page.request, liveApp.baseURL, notebook.id, "some_cell");
+    await setCell(
+      page.request,
+      liveApp.baseURL,
+      notebook.id,
+      staticCell,
+      "select 1 as col_identifier, 'Ada' as col_name",
+    );
     const pythonCell = await addPythonCell(page.request, liveApp.baseURL, notebook.id, "reader");
     const savedPythonBody = [
       "from renart import query",
@@ -808,6 +848,60 @@ test.describe("app notebooks live", () => {
         .first(),
     ).toBeVisible({ timeout: 15000 });
 
+    // Unqualified columns should be inferred statically from a never-run SQL
+    // sibling, not only offered after an alias dot or a prior runtime result.
+    // Keep the literal closed to exercise the normal mid-string cursor mapping
+    // used while editing an existing query.
+    await page.keyboard.press("Escape");
+    const whereBody = [
+      "from renart import query",
+      "",
+      'result = query("select * from some_cell where col_")',
+    ].join("\n");
+    await setNotebookEditorValue(page, pythonCell, whereBody, {
+      cursorOffset: whereBody.lastIndexOf('"'),
+    });
+    await page.keyboard.type("n");
+    await expect(
+      page.locator(".suggest-widget .monaco-list-row").filter({ hasText: "col_name" }).first(),
+    ).toBeVisible({ timeout: 15000 });
+
+    await page.keyboard.press("Escape");
+    const selectBody = [
+      "from renart import query",
+      "",
+      'result = query("select runtime_ from base")',
+    ].join("\n");
+    await setNotebookEditorValue(page, pythonCell, selectBody, {
+      cursorOffset: selectBody.indexOf(" from base"),
+    });
+    await page.keyboard.type("a");
+    await expect(
+      page
+        .locator(".suggest-widget .monaco-list-row")
+        .filter({ hasText: "runtime_amount" })
+        .first(),
+    ).toBeVisible({ timeout: 15000 });
+
+    // The projection supports both SDK spellings and raw/triple-quoted SQL,
+    // which is common for readable multi-line Python queries.
+    await page.keyboard.press("Escape");
+    const tripleBody = [
+      "import renart",
+      "",
+      'result = renart.query(r"""select * from base as b where b.runtime_""")',
+    ].join("\n");
+    await setNotebookEditorValue(page, pythonCell, tripleBody, {
+      cursorOffset: tripleBody.lastIndexOf('"""'),
+    });
+    await page.keyboard.type("a");
+    await expect(
+      page
+        .locator(".suggest-widget .monaco-list-row")
+        .filter({ hasText: "runtime_amount" })
+        .first(),
+    ).toBeVisible({ timeout: 15000 });
+
     await page.keyboard.press("Escape");
     const closedBody = ["from renart import query", "", 'result = query("select * from ba")'].join(
       "\n",
@@ -846,7 +940,10 @@ test.describe("app notebooks live", () => {
     await page.goto(`${liveApp.baseURL}/notebooks/${notebook.id}`);
     await page.getByRole("button", { name: "Run all" }).click();
     await page.waitForResponse(
-      (response) => response.url().includes(`/api/notebooks/${notebook.id}/run`) && response.ok(),
+      (response) =>
+        new URL(response.url()).pathname === `/api/notebooks/${notebook.id}/run` &&
+        response.request().method() === "POST" &&
+        response.ok(),
       {
         timeout: 30000,
       },

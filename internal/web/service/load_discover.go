@@ -29,12 +29,12 @@ type LoadDiscoveryStream struct {
 
 // LoadDiscoveryResult is the response of `sling conns discover` for intellisense.
 type LoadDiscoveryResult struct {
-	Status         string                 `json:"status"`
-	ConnectionName string                 `json:"connection_name"`
-	Pattern        string                 `json:"pattern,omitempty"`
+	Status         string                `json:"status"`
+	ConnectionName string                `json:"connection_name"`
+	Pattern        string                `json:"pattern,omitempty"`
 	Streams        []LoadDiscoveryStream `json:"streams"`
-	RawOutput      string                 `json:"raw_output,omitempty"`
-	Error          string                 `json:"error,omitempty"`
+	RawOutput      string                `json:"raw_output,omitempty"`
+	Error          string                `json:"error,omitempty"`
 }
 
 type LoadDependencies struct {
@@ -108,10 +108,8 @@ func runLoadConnsDiscover(ctx context.Context, workspaceRoot, connectionURI, pat
 	if strings.TrimSpace(workspaceRoot) != "" {
 		cmd.Dir = workspaceRoot
 	}
-	cmd.Env = append(os.Environ(),
-		"SLING_DISABLE_TELEMETRY=true",
-		loadDiscoverEnvName+"="+connectionURI,
-	)
+	cmd.Env = append(os.Environ(), loadBaseEnv()...)
+	cmd.Env = append(cmd.Env, loadDiscoverEnvName+"="+connectionURI)
 
 	var buf bytes.Buffer
 	cmd.Stdout = &buf

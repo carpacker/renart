@@ -123,6 +123,82 @@ select id, missing_column from analytics.up
 	assert.Equal(t, typeCheckStatusError, report.Status)
 }
 
+func TestCheckPipelinePropagatesColumnsThroughSelectStarCTEs(t *testing.T) {
+	t.Parallel()
+	parsed, root := writeTypeCheckWorkspace(t, "name: chess", map[string]string{
+		"game_results.sql": `
+/* @bruin
+name: chess.game_results
+type: duckdb.sql
+materialization:
+  type: table
+columns:
+  - name: name
+    type: VARCHAR
+  - name: username
+    type: VARCHAR
+  - name: color
+    type: VARCHAR
+  - name: time_class
+    type: VARCHAR
+  - name: eco_code
+    type: VARCHAR
+  - name: opening
+    type: VARCHAR
+  - name: score
+    type: DOUBLE
+  - name: accuracy
+    type: DOUBLE
+@bruin */
+select 'Magnus' as name, 'MagnusCarlsen' as username, 'white' as color,
+       'blitz' as time_class, 'C20' as eco_code, 'King Pawn' as opening,
+       1.0 as score, 98.0 as accuracy
+`,
+		"opening_repertoire.sql": `
+/* @bruin
+name: chess.opening_repertoire
+type: duckdb.sql
+materialization:
+  type: table
+depends:
+  - chess.game_results
+@bruin */
+WITH opening_rollup AS (
+    SELECT
+        name,
+        username,
+        color,
+        time_class,
+        eco_code,
+        min(opening) AS opening,
+        count(*) AS games,
+        round(100 * avg(score), 1) AS score_percent,
+        round(avg(accuracy), 1) AS average_accuracy
+    FROM chess.game_results
+    WHERE eco_code IS NOT NULL
+    GROUP BY name, username, color, time_class, eco_code
+),
+ranked_openings AS (
+    SELECT
+        *,
+        row_number() OVER (
+            PARTITION BY username, color, time_class
+            ORDER BY games DESC, score_percent DESC, eco_code
+        ) AS repertoire_rank
+    FROM opening_rollup
+)
+SELECT * EXCLUDE (repertoire_rank)
+FROM ranked_openings
+ORDER BY username, time_class, color, games DESC, score_percent DESC
+`,
+	})
+
+	report := runTypeCheck(t, parsed, root)
+	repertoire := findAsset(t, report, "chess.opening_repertoire")
+	assert.Equal(t, typeCheckStatusOK, repertoire.Status, "unexpected findings: %+v", repertoire.Findings)
+	assert.Empty(t, repertoire.Findings)
+}
+
 func TestCheckPipelineWarnsForUndeclaredNonSQLAssets(t *testing.T) {
 	t.Parallel()
 	parsed, root := writeTypeCheckWorkspace(t, "name: analytics", map[string]string{

@@ -817,7 +817,11 @@ func (s *Service) ListRuns(ctx context.Context, filter RunFilter) (RunList, erro
 }
 
 func (s *Service) GetRun(ctx context.Context, id string) (PipelineRun, []LogLine, []PipelineRunStep, error) {
-	return s.store.Get(ctx, id)
+	run, logs, steps, err := s.store.Get(ctx, id)
+	if err != nil {
+		return PipelineRun{}, nil, nil, err
+	}
+	return run, trimLegacyOutputReplay(logs), steps, nil
 }
 
 func (s *Service) prepareRun(ctx context.Context, riverJobID int64, args pipelineRunJobArgs) (PipelineRun, bool, error) {

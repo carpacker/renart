@@ -280,6 +280,12 @@ func validateWithPolyglot(ctx context.Context, query, dialect string, schema Sch
 
 func extractPolyglotCTEs(query string, ast []map[string]any, tokens []polyglotToken, schema Schema, columnSourceMethods SchemaColumnSourceMethods) map[string]polyglotCTE {
 	ctes := map[string]polyglotCTE{}
+	// CTEs are ordered: a later CTE may select from an earlier one. Keep a
+	// private working schema and extend it after each definition so SELECT * and
+	// unaliased columns propagate through the chain without mutating the caller's
+	// workspace schema.
+	workingSchema := mergePolyglotCTEsIntoSchema(schema, nil)
+	workingSourceMethods := clonePolyglotColumnSourceMethods(columnSourceMethods)
 	walkPolyglot(ast, func(key string, value map[string]any) {
 		if key != "with" {
 			return
@@ -297,11 +303,42 @@ func extractPolyglotCTEs(query string, ast []map[string]any, tokens []polyglotTo
 			if name == "" {
 				continue
 			}
-			columns, ranges, metadata := polyglotSelectColumns(query, tokens, cteValue["this"], schema, columnSourceMethods)
-			ctes[strings.ToLower(name)] = polyglotCTE{Name: name, Columns: columns, ColumnRanges: ranges, Metadata: metadata}
+			columns, ranges, metadata := polyglotSelectColumns(query, tokens, cteValue["this"], workingSchema, workingSourceMethods)
+			cte := polyglotCTE{Name: name, Columns: columns, ColumnRanges: ranges, Metadata: metadata}
+			ctes[strings.ToLower(name)] = cte
+			workingSchema[name] = schemaMapForPolyglotCTE(cte)
+			workingSourceMethods[name] = sourceMethodsForPolyglotCTE(cte)
 		}
 	})
 	return ctes
+}
+
+func clonePolyglotColumnSourceMethods(source SchemaColumnSourceMethods) SchemaColumnSourceMethods {
+	cloned := SchemaColumnSourceMethods{}
+	for tableName, methodsByColumn := range source {
+		clonedMethods := map[string][]string{}
+		for columnName, methods := range methodsByColumn {
+			clonedMethods[columnName] = append([]string(nil), methods...)
+		}
+		cloned[tableName] = clonedMethods
+	}
+	return cloned
+}
+
+func schemaMapForPolyglotCTE(cte polyglotCTE) map[string]string {
+	columns := make(map[string]string, len(cte.Columns))
+	for _, column := range cte.Columns {
+		columns[column.Name] = column.Type
+	}
+	return columns
+}
+
+func sourceMethodsForPolyglotCTE(cte polyglotCTE) map[string][]string {
+	methods := make(map[string][]string, len(cte.Columns))
+	for _, column := range cte.Columns {
+		methods[column.Name] = append([]string(nil), cte.Metadata[column.Name].SourceMethods...)
+	}
+	return methods
 }
 
 func mergePolyglotCTEsIntoSchema(schema Schema, ctes map[string]polyglotCTE) Schema {

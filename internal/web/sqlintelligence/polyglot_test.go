@@ -1,6 +1,7 @@
 package sqlintelligence
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -74,6 +75,56 @@ FROM quickstart.players`
 	require.NoError(t, err)
 
 	assert.Empty(t, parseContext.Diagnostics)
+}
+
+func TestParseContextWithSchemaPolyglotPropagatesSelectStarAcrossCTEs(t *testing.T) {
+	query := `WITH opening_rollup AS (
+    SELECT
+        name,
+        username,
+        color,
+        time_class,
+        eco_code,
+        count(*) AS games
+    FROM chess.game_results
+    GROUP BY name, username, color, time_class, eco_code
+),
+ranked_openings AS (
+    SELECT
+        *,
+        row_number() OVER (
+            PARTITION BY username, color, time_class
+            ORDER BY games DESC, eco_code
+        ) AS repertoire_rank
+    FROM opening_rollup
+)
+SELECT * EXCLUDE (repertoire_rank)
+FROM ranked_openings
+ORDER BY username, time_class, color, games DESC`
+
+	parseContext, err := ParseContextWithSchemaPolyglot(query, "duckdb", Schema{
+		"chess.game_results": {
+			"name":       "varchar",
+			"username":   "varchar",
+			"color":      "varchar",
+			"time_class": "varchar",
+			"eco_code":   "varchar",
+		},
+	})
+	require.NoError(t, err)
+
+	assert.Empty(t, parseContext.Diagnostics)
+	var rankedColumns []string
+	for _, table := range parseContext.Tables {
+		if strings.EqualFold(table.Name, "ranked_openings") {
+			for _, column := range table.Columns {
+				rankedColumns = append(rankedColumns, column.Name)
+			}
+		}
+	}
+	for _, column := range []string{"username", "color", "time_class", "games", "repertoire_rank"} {
+		assert.Contains(t, rankedColumns, column)
+	}
 }
 
 func TestParseContextWithSchemaPolyglotResolvesScalarSubqueryColumnsInLocalScope(t *testing.T) {

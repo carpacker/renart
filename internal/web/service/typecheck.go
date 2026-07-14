@@ -160,6 +160,7 @@ func checkAsset(ctx context.Context, fs afero.Fs, pp *pipeline.Pipeline, workspa
 		Type:     string(asset.Type),
 		Findings: []TypeCheckFinding{},
 	}
+	ac.Findings = append(ac.Findings, dependencyTypeCheckFindings(ctx, asset, pp)...)
 	ac.Findings = append(ac.Findings, materializationTypeCheckFindings(asset, pp)...)
 
 	dialect, dialectErr := AssetTypeToDialect(asset.Type)

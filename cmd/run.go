@@ -3,6 +3,7 @@ package cmd
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/url"
 	"os"
@@ -16,6 +17,7 @@ import (
 	"renart/internal/clientapi"
 	"renart/internal/web/model"
 	"renart/internal/web/service"
+	"renart/internal/web/staleness"
 )
 
 // Run materializes a pipeline or a single asset from the terminal. When a
@@ -34,7 +36,8 @@ func Run() *cli.Command {
 			"   renart run marts              run the whole marts pipeline\n" +
 			"   renart run mart.orders        run one asset by name\n" +
 			"   renart run assets/orders.sql  run one asset by path\n" +
-			"   renart run mart.orders --downstream   include everything below it",
+			"   renart run mart.orders --downstream   include everything below it\n" +
+			"   renart run mart.orders --refresh-upstreams   build stale upstreams first",
 		Flags: []cli.Flag{
 			workspaceFlag(),
 			&cli.StringFlag{
@@ -52,6 +55,10 @@ func Run() *cli.Command {
 			&cli.BoolFlag{
 				Name:  "downstream",
 				Usage: "asset targets only: also run everything downstream of the asset",
+			},
+			&cli.BoolFlag{
+				Name:  "refresh-upstreams",
+				Usage: "asset targets only: build stale transitive upstreams before running the asset",
 			},
 			&cli.BoolFlag{
 				Name:  "full-refresh",
@@ -158,21 +165,24 @@ func runAction(ctx context.Context, c *cli.Command) error {
 	if target.kind == "pipeline" && c.Bool("downstream") {
 		return cli.Exit("--downstream applies to asset targets; a pipeline run already covers the whole DAG", 2)
 	}
+	if target.kind == "pipeline" && c.Bool("refresh-upstreams") {
+		return cli.Exit("--refresh-upstreams applies to asset targets; a pipeline run already covers the whole DAG", 2)
+	}
 
 	query := url.Values{}
-	setNonEmpty := func(key, value string) {
+	setNonEmpty := func(values url.Values, key, value string) {
 		if strings.TrimSpace(value) != "" {
-			query.Set(key, value)
+			values.Set(key, value)
 		}
 	}
 	runEnvironment := strings.TrimSpace(c.String("env"))
 	if runEnvironment == "" {
 		runEnvironment = strings.TrimSpace(state.SelectedEnvironment)
 	}
-	setNonEmpty("environment", runEnvironment)
-	setNonEmpty("start_date", c.String("start-date"))
-	setNonEmpty("end_date", c.String("end-date"))
-	setNonEmpty("confirmed_environment", c.String("confirm-environment"))
+	setNonEmpty(query, "environment", runEnvironment)
+	setNonEmpty(query, "start_date", c.String("start-date"))
+	setNonEmpty(query, "end_date", c.String("end-date"))
+	setNonEmpty(query, "confirmed_environment", c.String("confirm-environment"))
 	backfill := strings.TrimSpace(c.String("start-date")) != "" || strings.TrimSpace(c.String("end-date")) != ""
 	if backfill {
 		query.Set("backfill", "true")
@@ -187,17 +197,53 @@ func runAction(ctx context.Context, c *cli.Command) error {
 	if target.kind == "asset" {
 		query.Set("scope", scope)
 	}
+	if c.Bool("refresh-upstreams") {
+		if _, err := service.ResolveExecutionTimeWindow(
+			target.pipeline.Schedule,
+			c.String("start-date"),
+			c.String("end-date"),
+			time.Now().UTC(),
+		); err != nil {
+			return cli.Exit(err.Error(), 2)
+		}
+	}
 
 	printer.event(map[string]any{
-		"event":  "start",
-		"mode":   map[bool]string{true: "client", false: "embedded"}[client != nil],
-		"kind":   target.kind,
-		"target": target.name(),
+		"event":             "start",
+		"mode":              map[bool]string{true: "client", false: "embedded"}[client != nil],
+		"kind":              target.kind,
+		"target":            target.name(),
+		"refresh_upstreams": c.Bool("refresh-upstreams"),
 	})
 
 	started := time.Now()
 	var status, message, output string
-	if client != nil {
+	if c.Bool("refresh-upstreams") {
+		printer.event(map[string]any{"event": "phase", "phase": "refresh_upstreams", "status": "running"})
+		status, message, output, err = refreshRunUpstreams(
+			ctx,
+			client,
+			server,
+			target,
+			runEnvironment,
+			c.String("start-date"),
+			c.String("end-date"),
+			printer,
+		)
+		if err != nil {
+			return err
+		}
+		printer.event(map[string]any{
+			"event":  "phase",
+			"phase":  "refresh_upstreams",
+			"status": status,
+			"error":  message,
+		})
+		if status == "ok" {
+			status, message, output = "", "", ""
+		}
+	}
+	if status == "" && client != nil {
 		var done clientapi.StreamDone
 		if target.kind == "pipeline" {
 			done, err = client.MaterializePipelineStream(ctx, target.pipeline.ID, query, printer.chunk)
@@ -208,7 +254,7 @@ func runAction(ctx context.Context, c *cli.Command) error {
 			return err
 		}
 		status, message, output = done.Status, done.Error, done.Output
-	} else {
+	} else if status == "" {
 		onChunk := func(chunk []byte) { printer.chunk(string(chunk)) }
 		var result service.MaterializeResult
 		if target.kind == "pipeline" {
@@ -250,6 +296,73 @@ func runAction(ctx context.Context, c *cli.Command) error {
 		return cli.Exit("", 1)
 	}
 	return nil
+}
+
+func refreshRunUpstreams(
+	ctx context.Context,
+	client *clientapi.Client,
+	server *webServer,
+	target runTarget,
+	environment, startDate, endDate string,
+	printer runPrinter,
+) (status, message, output string, err error) {
+	printer.notice("refreshing stale upstreams of %s", target.asset.Name)
+	if client != nil {
+		query := url.Values{"upstream_of": []string{target.asset.Name}}
+		if environment != "" {
+			query.Set("environment", environment)
+		}
+		if strings.TrimSpace(startDate) != "" {
+			query.Set("start", startDate)
+		}
+		if strings.TrimSpace(endDate) != "" {
+			query.Set("end", endDate)
+		}
+		done, streamErr := client.BuildStalePipelineStream(ctx, target.pipeline.ID, query, printer.chunk)
+		if streamErr != nil {
+			return "", "", "", fmt.Errorf("failed to refresh upstreams: %w", streamErr)
+		}
+		return done.Status, done.Error, done.Output, nil
+	}
+	if server == nil {
+		return "", "", "", errors.New("embedded runner is unavailable")
+	}
+	if strings.TrimSpace(target.pipeline.UUID) == "" {
+		return "", "", "", fmt.Errorf("pipeline %q has no stable id; add an id to pipeline.yml before refreshing upstreams", target.pipeline.Name)
+	}
+
+	upstreams, ok := service.PipelineUpstreamNames(target.pipeline, target.asset.Name)
+	if !ok {
+		return "", "", "", fmt.Errorf("asset %q is not part of pipeline %q", target.asset.Name, target.pipeline.Name)
+	}
+	selection := staleness.Selection{
+		PipelineUUID:      target.pipeline.UUID,
+		EncodedPipelineID: target.pipeline.ID,
+		Environment:       environment,
+	}
+	if strings.TrimSpace(startDate) != "" || strings.TrimSpace(endDate) != "" {
+		window, windowErr := service.ResolveExecutionTimeWindow(target.pipeline.Schedule, startDate, endDate, time.Now().UTC())
+		if windowErr != nil {
+			return "", "", "", windowErr
+		}
+		selection.Start = &window.Start
+		selection.End = &window.End
+	}
+	statuses, statusErr := server.stalenessSvc.Statuses(ctx, selection)
+	if statusErr != nil {
+		return "", "", "", fmt.Errorf("failed to compute upstream freshness: %w", statusErr)
+	}
+	result := server.executionSvc.MaterializeStaleAssetsStream(
+		ctx,
+		target.pipeline.ID,
+		environment,
+		service.BuildStalePlan(statuses, upstreams),
+		startDate,
+		endDate,
+		func(chunk []byte) { printer.chunk(string(chunk)) },
+		nil,
+	)
+	return result.Status, result.Error, result.Output, nil
 }
 
 // discoverRunClient decides client vs embedded mode: RENART_SERVER pins the

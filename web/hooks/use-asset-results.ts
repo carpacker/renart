@@ -18,7 +18,12 @@ import {
   selectedEnvironmentAtom,
 } from "@/lib/atoms/domains/workspace";
 import { useAssetInspect } from "@/hooks/use-asset-inspect";
-import { materializeAssetStream, materializePipelineStream, triggerPipelineRun } from "@/lib/api";
+import {
+  getRun,
+  materializeAssetStream,
+  materializePipelineStream,
+  triggerPipelineRun,
+} from "@/lib/api";
 import { buildStalePipelineStream } from "@/lib/api-staleness";
 import type { StreamAssetEvent } from "@/lib/api-streams";
 import { MaterializeScope, labelForMaterializeScope } from "@/lib/materialize-scope";
@@ -246,7 +251,10 @@ export function useAssetResults() {
           const line = schedulerRunEvent.run.log.line;
           return {
             ...entry,
-            output: `${entry.output}${entry.output ? "\n" : ""}${line}`,
+            // Scheduler log events are raw stream chunks and already contain
+            // their own newlines. Adding another separator here made the Build
+            // output double-spaced while the Runs view correctly joins chunks.
+            output: entry.output + line,
             loading: true,
             updatedAt: Date.now(),
           };
@@ -273,7 +281,6 @@ export function useAssetResults() {
         }
         return {
           ...entry,
-          output: `${entry.output}${entry.output ? "\n" : ""}${schedulerRunEvent.run.status === "running" ? "Run started." : "Run queued."}`,
           loading: true,
           updatedAt: Date.now(),
         };
@@ -288,6 +295,31 @@ export function useAssetResults() {
         materializeHistory: nextHistory,
       };
     });
+
+    if (schedulerRunEvent.type === "run.finished") {
+      // Reconcile with the canonical stored stream at completion. A very fast
+      // run can emit its first chunks before the trigger response gives this
+      // history entry its run ID; fetching once closes that subscription race
+      // and keeps Build output byte-for-byte aligned with the Runs view.
+      void getRun(schedulerRunEvent.run.id)
+        .then((response) => {
+          if (response.status !== "ok") {
+            return;
+          }
+          const output = (response.logs ?? []).map((log) => log.line).join("");
+          setResults((previous) => ({
+            ...previous,
+            materializeHistory: previous.materializeHistory.map((entry) =>
+              entry.runId === schedulerRunEvent.run.id
+                ? { ...entry, output, updatedAt: Date.now() }
+                : entry,
+            ),
+          }));
+        })
+        .catch(() => {
+          // The live stream remains usable if the reconciliation request fails.
+        });
+    }
   }, [schedulerRunEvent, setResults]);
 
   const runInspectForAsset = useCallback(
@@ -550,7 +582,7 @@ export function useAssetResults() {
                 timeWindow: selectedExecutionTimeWindow,
               })),
             runId: run.id,
-            output: `Queued manual River run ${run.id} for ${run.pipeline || pipeline?.name || "pipeline"}.`,
+            output: "",
             status: null,
             error: "",
             loading: true,
@@ -702,6 +734,9 @@ export function useAssetResults() {
       upsertMaterializeEntry(entryId, () => ({ ...baseEntry() }));
 
       try {
+        if (!selectedEnvironment) {
+          throw new Error("Select an environment before building stale assets.");
+        }
         const result = await buildStalePipelineStream(
           targetPipelineId,
           {

@@ -3,6 +3,7 @@ package httpapi
 import (
 	"context"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -21,7 +22,11 @@ type BuildStaleAPI struct {
 	// ResolvePipelineUUID maps the path-encoded API pipeline ID to the
 	// stable pipeline UUID.
 	ResolvePipelineUUID func(pipelineID string) (string, bool)
-	Execution           BuildStaleExecutionHandlers
+	// ResolveUpstreamAssetNames returns the target asset's transitive
+	// in-pipeline upstream closure. It is used by the CLI's explicit
+	// --refresh-upstreams mode; ordinary Build stale requests leave it unused.
+	ResolveUpstreamAssetNames func(pipelineID, assetName string) (map[string]struct{}, bool)
+	Execution                 BuildStaleExecutionHandlers
 }
 
 type BuildStaleExecutionHandlers interface {
@@ -46,6 +51,19 @@ func (h *BuildStaleAPI) HandleBuildStaleStream(w http.ResponseWriter, r *http.Re
 		webapi.WriteNotFound(w, "pipeline_not_found", "pipeline not found")
 		return
 	}
+	var include map[string]struct{}
+	if upstreamOf := strings.TrimSpace(r.URL.Query().Get("upstream_of")); upstreamOf != "" {
+		if h.ResolveUpstreamAssetNames == nil {
+			webapi.WriteInternalError(w, "upstream_resolution_unavailable", "upstream resolution is unavailable")
+			return
+		}
+		var found bool
+		include, found = h.ResolveUpstreamAssetNames(pipelineID, upstreamOf)
+		if !found {
+			webapi.WriteNotFound(w, "asset_not_found", "asset not found in pipeline")
+			return
+		}
+	}
 
 	selection := staleness.Selection{
 		PipelineUUID:      pipelineUUID,
@@ -68,7 +86,7 @@ func (h *BuildStaleAPI) HandleBuildStaleStream(w http.ResponseWriter, r *http.Re
 		webapi.WriteInternalError(w, "staleness_compute_failed", err.Error())
 		return
 	}
-	plan := staleBuildPlan(statuses)
+	plan := service.BuildStalePlan(statuses, include)
 
 	flusher, ok := w.(http.Flusher)
 	if !ok {
@@ -102,22 +120,4 @@ func (h *BuildStaleAPI) HandleBuildStaleStream(w http.ResponseWriter, r *http.Re
 		"changed_asset_ids": result.ChangedAssetIDs,
 		"materialized_at":   result.MaterializedAt,
 	})
-}
-
-// staleBuildPlan turns the staleness classification into a build plan: every
-// non-fresh asset, and for partially-covered incrementals exactly the
-// uncovered gap intervals.
-func staleBuildPlan(statuses []staleness.AssetStatus) []service.StaleAssetPlan {
-	plan := make([]service.StaleAssetPlan, 0, len(statuses))
-	for _, status := range statuses {
-		if status.Status == staleness.StatusFresh {
-			continue
-		}
-		item := service.StaleAssetPlan{AssetName: status.AssetName}
-		for _, gap := range status.Gaps {
-			item.Windows = append(item.Windows, service.ExecutionTimeWindow{Start: gap.Start, End: gap.End})
-		}
-		plan = append(plan, item)
-	}
-	return plan
 }

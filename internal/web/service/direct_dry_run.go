@@ -8,6 +8,7 @@ import (
 
 	"github.com/bruin-data/bruin/pkg/bigquery"
 	"github.com/bruin-data/bruin/pkg/config"
+	bruinexecutor "github.com/bruin-data/bruin/pkg/executor"
 	bruingit "github.com/bruin-data/bruin/pkg/git"
 	"github.com/bruin-data/bruin/pkg/jinja"
 	"github.com/bruin-data/bruin/pkg/lint"
@@ -36,6 +37,7 @@ func (e *HybridBruinExecutor) dryRunPipeline(ctx context.Context, foundPipeline 
 	if err != nil {
 		return printer.buffer.Bytes(), err
 	}
+	rules = renartDryRunRules(rules)
 	renderer := jinja.NewRendererWithYesterday(foundPipeline.Name, "renart-dry-run")
 	rules = append(rules, directDryRunQueryValidatorRules(zap.NewNop().Sugar(), cfg, manager)...)
 	rules = append(rules, lint.GetCustomCheckQueryDryRunRule(manager, renderer))
@@ -56,16 +58,6 @@ func (e *HybridBruinExecutor) dryRunPipeline(ctx context.Context, foundPipeline 
 		} else {
 			warningCount += len(ruleIssues)
 		}
-		for _, issue := range ruleIssues {
-			assetName := "pipeline"
-			if issue.Task != nil && issue.Task.Name != "" {
-				assetName = issue.Task.Name
-			}
-			_, _ = fmt.Fprintf(printer, "[%s] %s: %s\n", rule.Name(), assetName, issue.Description)
-			for _, contextLine := range issue.Context {
-				_, _ = fmt.Fprintf(printer, "  %s\n", contextLine)
-			}
-		}
 	}
 
 	writeDirectDryRunIssues(printer, issues, pipelinePath)
@@ -81,18 +73,48 @@ func (e *HybridBruinExecutor) dryRunPipeline(ctx context.Context, foundPipeline 
 	return printer.buffer.Bytes(), nil
 }
 
-var directDryRunBlueBoldPrinter = forcedColorPrinter(color.FgBlue, color.Bold)
-var directDryRunFaintPrinter = forcedColorPrinter(color.Faint)
-var directDryRunGreenPrinter = forcedColorPrinter(color.FgGreen)
-var directDryRunRedPrinter = forcedColorPrinter(color.FgRed)
-var directDryRunWhiteBoldPrinter = forcedColorPrinter(color.FgWhite, color.Bold)
-var directDryRunYellowPrinter = forcedColorPrinter(color.FgYellow)
-
-func forcedColorPrinter(attrs ...color.Attribute) func(format string, a ...interface{}) string {
-	c := color.New(attrs...)
-	c.EnableColor()
-	return c.SprintfFunc()
+func renartDryRunRules(rules []lint.Rule) []lint.Rule {
+	result := make([]lint.Rule, 0, len(rules)+1)
+	for _, rule := range rules {
+		if rule.Name() != "valid-task-type" {
+			result = append(result, rule)
+		}
+	}
+	result = append(result, &lint.SimpleRule{
+		Identifier:       "valid-task-type",
+		Fast:             true,
+		Severity:         lint.ValidatorSeverityCritical,
+		AssetValidator:   ensureRenartAssetType,
+		ApplicableLevels: []lint.Level{lint.LevelAsset},
+	})
+	return result
 }
+
+func ensureRenartAssetType(_ context.Context, _ *pipeline.Pipeline, asset *pipeline.Asset) ([]*lint.Issue, error) {
+	if asset == nil {
+		return nil, nil
+	}
+	if asset.Type == "" {
+		return []*lint.Issue{{Task: asset, Description: "Asset type must exist"}}, nil
+	}
+	if isAPIAsset(asset) || isLoadAsset(asset) {
+		return nil, nil
+	}
+	if _, ok := bruinexecutor.DefaultExecutorsV2[asset.Type]; ok {
+		return nil, nil
+	}
+	return []*lint.Issue{{
+		Task:        asset,
+		Description: fmt.Sprintf("Invalid asset type '%s'", asset.Type),
+	}}, nil
+}
+
+var directDryRunBlueBoldPrinter = directColorPrinter(color.FgBlue, color.Bold)
+var directDryRunFaintPrinter = directColorPrinter(color.Faint)
+var directDryRunGreenPrinter = directColorPrinter(color.FgGreen)
+var directDryRunRedPrinter = directColorPrinter(color.FgRed)
+var directDryRunWhiteBoldPrinter = directColorPrinter(color.FgWhite, color.Bold)
+var directDryRunYellowPrinter = directColorPrinter(color.FgYellow)
 
 func writeDirectDryRunIssues(w *streamCaptureWriter, issues *lint.PipelineIssues, pipelinePath string) {
 	_, _ = fmt.Fprintf(w, "\n%s\n", directDryRunBlueBoldPrinter("Pipeline: %s %s", issues.Pipeline.Name, directDryRunFaintPrinter("(%s)", pipelinePath)))

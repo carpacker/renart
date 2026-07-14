@@ -72,9 +72,49 @@ test.describe("app build actions live", () => {
     await page.getByRole("button", { name: "Run", exact: true }).click();
     await triggerResponse;
 
-    await expect(page.getByText(/Queued manual River run/).first()).toBeVisible({
-      timeout: 15000,
+    const output = page.locator("pre.font-console").first();
+    await expect(output).toContainText("Analyzed the pipeline 'analytics'", {
+      timeout: 30000,
     });
+    await expect(output).not.toContainText(/Queued manual River run|Run started\.|Run queued\./);
+  });
+
+  test("explorer creation actions live at the workspace and pipeline scopes", async ({
+    liveApp,
+    page,
+  }) => {
+    test.skip(
+      test.info().project.name.includes("mobile"),
+      "The explorer action toolbar is desktop-only.",
+    );
+
+    await page.goto(`${liveApp.baseURL}/pipelines/${pipelineId}/assets/${customersAssetId}/code`);
+
+    await page.getByRole("button", { name: "New pipeline", exact: true }).click();
+    await expect(page.getByRole("dialog", { name: "New pipeline" })).toBeVisible();
+    await page
+      .getByRole("dialog", { name: "New pipeline" })
+      .getByRole("button", { name: "Cancel" })
+      .click();
+
+    const newAsset = page.getByRole("button", { name: /^New asset in / });
+    const newFolder = page.getByRole("button", { name: /^New folder in / });
+    await expect(newAsset).toBeVisible();
+    await expect(newFolder).toBeVisible();
+
+    await newAsset.click();
+    await expect(page.getByRole("dialog", { name: "New asset" })).toBeVisible();
+    await page
+      .getByRole("dialog", { name: "New asset" })
+      .getByRole("button", { name: "Cancel" })
+      .click();
+
+    await newFolder.click();
+    await expect(page.getByRole("dialog", { name: "New folder" })).toBeVisible();
+    await page
+      .getByRole("dialog", { name: "New folder" })
+      .getByRole("button", { name: "Cancel" })
+      .click();
   });
 
   test("ad hoc editor uses Monaco with SQL intellisense and runs queries", async ({

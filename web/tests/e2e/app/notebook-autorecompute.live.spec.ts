@@ -1,4 +1,4 @@
-import { expect, type APIRequestContext } from "@playwright/test";
+import { expect, type APIRequestContext, type Locator, type Page } from "@playwright/test";
 
 import { liveTest as test } from "../live-app-fixture";
 
@@ -41,6 +41,14 @@ async function setSql(
   ).toBe(true);
 }
 
+async function replaceEditorContent(page: Page, card: Locator, content: string) {
+  // Click the rendered code line, not Monaco's outer shell (whose center can
+  // be blank) or its intentionally zero-width native input proxy.
+  await card.locator(".monaco-editor .view-line").first().click();
+  await page.keyboard.press("ControlOrMeta+A");
+  await page.keyboard.type(content);
+}
+
 test.describe("notebook auto-recompute", () => {
   test.use({ fixtureName: "configured-workspace" });
 
@@ -61,9 +69,7 @@ test.describe("notebook auto-recompute", () => {
     const srcCard = page
       .locator('[data-slot="delimited-card"]')
       .filter({ has: page.getByRole("button", { name: "src", exact: true }) });
-    await srcCard.locator(".monaco-editor").first().click();
-    await page.keyboard.press("ControlOrMeta+A");
-    await page.keyboard.type("select 222 as n");
+    await replaceEditorContent(page, srcCard, "select 222 as n");
     await page.getByText("AutoSelf").first().click(); // blur → save → recompute
 
     await expect(page.getByText("222", { exact: true }).first()).toBeVisible({ timeout: 20000 });
@@ -91,9 +97,7 @@ test.describe("notebook auto-recompute", () => {
     const card = page
       .locator('[data-slot="delimited-card"]')
       .filter({ has: page.getByRole("button", { name: "u", exact: true }) });
-    await card.locator(".monaco-editor").first().click();
-    await page.keyboard.press("ControlOrMeta+A");
-    await page.keyboard.type("select 333 as n union all select 444");
+    await replaceEditorContent(page, card, "select 333 as n union all select 444");
     await page.getByText("AutoUnion").first().click(); // blur → save → recompute
 
     await expect(page.getByText("333", { exact: true }).first()).toBeVisible({ timeout: 20000 });
@@ -132,9 +136,7 @@ test.describe("notebook auto-recompute", () => {
     const baseCard = page
       .locator('[data-slot="delimited-card"]')
       .filter({ has: page.getByRole("button", { name: "base", exact: true }) });
-    await baseCard.locator(".monaco-editor").first().click();
-    await page.keyboard.press("ControlOrMeta+A");
-    await page.keyboard.type("select 21 as amount");
+    await replaceEditorContent(page, baseCard, "select 21 as amount");
     await page.getByText("Auto").first().click(); // blur the editor → save → stale
 
     // The downstream cell recomputes on its own: doubled becomes 42.
@@ -172,9 +174,7 @@ test.describe("notebook auto-recompute", () => {
     const baseCard = page
       .locator('[data-slot="delimited-card"]')
       .filter({ has: page.getByRole("button", { name: "base", exact: true }) });
-    await baseCard.locator(".monaco-editor").first().click();
-    await page.keyboard.press("ControlOrMeta+A");
-    await page.keyboard.type("select 21 as amount");
+    await replaceEditorContent(page, baseCard, "select 21 as amount");
 
     // The downstream recomputes to 42 without the editor ever losing focus.
     await expect(page.getByText("42", { exact: true }).first()).toBeVisible({ timeout: 20000 });
@@ -212,9 +212,7 @@ test.describe("notebook auto-recompute", () => {
     const baseCard = page
       .locator('[data-slot="delimited-card"]')
       .filter({ has: page.getByRole("button", { name: "base", exact: true }) });
-    await baseCard.locator(".monaco-editor").first().click();
-    await page.keyboard.press("ControlOrMeta+A");
-    await page.keyboard.type("select 100 as renamed");
+    await replaceEditorContent(page, baseCard, "select 100 as renamed");
     await page.getByText("AutoBreak").first().click(); // blur → save → stale
 
     // The upstream auto-recomputes to 100.
@@ -255,9 +253,7 @@ test.describe("notebook auto-recompute", () => {
     const baseCard = page
       .locator('[data-slot="delimited-card"]')
       .filter({ has: page.getByRole("button", { name: "base", exact: true }) });
-    await baseCard.locator(".monaco-editor").first().click();
-    await page.keyboard.press("ControlOrMeta+A");
-    await page.keyboard.type("select fr0m where");
+    await replaceEditorContent(page, baseCard, "select fr0m where");
     await page.getByText("AutoErr").first().click(); // blur → save → stale
 
     // The cell stays stale and keeps the hatched header (the server won't

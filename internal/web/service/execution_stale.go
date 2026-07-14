@@ -9,7 +9,9 @@ import (
 	"github.com/bruin-data/bruin/pkg/pipeline"
 	"renart/internal/web/bus"
 	"renart/internal/web/identity"
+	webmodel "renart/internal/web/model"
 	"renart/internal/web/policy"
+	"renart/internal/web/staleness"
 )
 
 // StaleAssetPlan is one stale asset to rebuild. Windows carries the uncovered
@@ -18,6 +20,65 @@ import (
 type StaleAssetPlan struct {
 	AssetName string
 	Windows   []ExecutionTimeWindow
+}
+
+// PipelineUpstreamNames returns the transitive in-pipeline upstream closure
+// for targetAssetName. The target itself is excluded, including when a cycle
+// points back to it. Unknown/URI dependencies are ignored; pipeline type-check
+// reports those separately before execution.
+func PipelineUpstreamNames(view webmodel.Pipeline, targetAssetName string) (map[string]struct{}, bool) {
+	assetByName := make(map[string]webmodel.Asset, len(view.Assets))
+	for _, asset := range view.Assets {
+		assetByName[asset.Name] = asset
+	}
+	targetAssetName = strings.TrimSpace(targetAssetName)
+	target, ok := assetByName[targetAssetName]
+	if !ok {
+		return nil, false
+	}
+
+	upstreams := make(map[string]struct{})
+	queue := append([]string(nil), target.Upstreams...)
+	for len(queue) > 0 {
+		name := strings.TrimSpace(queue[0])
+		queue = queue[1:]
+		if name == "" || name == targetAssetName {
+			continue
+		}
+		if _, seen := upstreams[name]; seen {
+			continue
+		}
+		asset, exists := assetByName[name]
+		if !exists {
+			continue
+		}
+		upstreams[name] = struct{}{}
+		queue = append(queue, asset.Upstreams...)
+	}
+	return upstreams, true
+}
+
+// BuildStalePlan translates staleness classifications into executable plan
+// items. When include is non-nil, only those asset names are considered; an
+// empty non-nil set therefore means there is deliberately nothing to build.
+func BuildStalePlan(statuses []staleness.AssetStatus, include map[string]struct{}) []StaleAssetPlan {
+	plan := make([]StaleAssetPlan, 0, len(statuses))
+	for _, status := range statuses {
+		if status.Status == staleness.StatusFresh {
+			continue
+		}
+		if include != nil {
+			if _, selected := include[status.AssetName]; !selected {
+				continue
+			}
+		}
+		item := StaleAssetPlan{AssetName: status.AssetName}
+		for _, gap := range status.Gaps {
+			item.Windows = append(item.Windows, ExecutionTimeWindow{Start: gap.Start, End: gap.End})
+		}
+		plan = append(plan, item)
+	}
+	return plan
 }
 
 // StaleBuildEvent reports per-asset progress of a stale build stream.

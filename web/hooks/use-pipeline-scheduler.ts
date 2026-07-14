@@ -215,11 +215,18 @@ export function usePipelineScheduler({
       return;
     }
     const run = schedulerRunEvent.run;
+    const selected = selectedRun?.id === run.id || selectedRunId === run.id;
     setRuns((current) => [run, ...current.filter((item) => item.id !== run.id)]);
     setSelectedRun((current) => (current?.id === run.id ? run : current));
+    // A detail page can open between two streamed log events. Reloading the
+    // canonical record at completion closes that subscription race without
+    // relying on a final aggregate-output replay.
+    if (schedulerRunEvent.type === "run.finished" && selected) {
+      void selectRun(run.id);
+    }
     void refreshRuns();
     void refreshSchedules();
-  }, [refreshRuns, refreshSchedules, schedulerRunEvent, selectedRun?.id, selectedRunId]);
+  }, [refreshRuns, refreshSchedules, schedulerRunEvent, selectRun, selectedRun?.id, selectedRunId]);
 
   return {
     schedules,

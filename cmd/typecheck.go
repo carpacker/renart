@@ -16,12 +16,13 @@ import (
 
 // TypeCheck type-checks every asset in a pipeline: it renders each SQL asset
 // (Jinja templates, pipeline variables, and start/end dates) and validates the
-// rendered query against the schema of its upstreams, and warns about non-SQL
-// assets (Python/API/...) that declare no columns.
+// rendered query against the schema of its upstreams, validates declared
+// dependencies, and warns about non-SQL assets (Python/API/...) that declare no
+// columns.
 func TypeCheck() *cli.Command {
 	return &cli.Command{
 		Name:      "type-check",
-		Usage:     "type-check a pipeline's assets (SQL columns/types + missing column declarations)",
+		Usage:     "type-check a pipeline's dependencies, SQL columns/types, and declarations",
 		ArgsUsage: "[pipeline name or directory]",
 		Category:  categoryPipeline,
 		Flags: []cli.Flag{

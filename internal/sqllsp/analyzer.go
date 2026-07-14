@@ -42,7 +42,7 @@ const (
 
 var (
 	wordPattern         = regexp.MustCompile(`[A-Za-z_][A-Za-z0-9_$]*`)
-	relationPattern     = regexp.MustCompile(`(?i)\b(from|join|into|update|table)\s+((?:"[^"]+"|` + "`" + `[^` + "`" + `]+` + "`" + `|[A-Za-z_][\w$-]*)(?:\s*\.\s*(?:"[^"]+"|` + "`" + `[^` + "`" + `]+` + "`" + `|[A-Za-z_][\w$-]*))*)\s*(?:as\s+)?([A-Za-z_][\w$]*)?`)
+	relationPattern     = regexp.MustCompile(`(?i)\b(from|join|into|update|table)\s+((?:"[^"]+"|` + "`" + `[^` + "`" + `]+` + "`" + `|[A-Za-z_][\w$-]*)(?:\s*\.\s*(?:"[^"]+"|` + "`" + `[^` + "`" + `]+` + "`" + `|[A-Za-z_][\w$-]*))*)(?:\s+as\s+([A-Za-z_][\w$]*))?`)
 	insertValuesPattern = regexp.MustCompile(`(?is)\binsert\s+into\s+((?:"[^"]+"|` + "`" + `[^` + "`" + `]+` + "`" + `|[A-Za-z_][\w$-]*)(?:\s*\.\s*(?:"[^"]+"|` + "`" + `[^` + "`" + `]+` + "`" + `|[A-Za-z_][\w$-]*))*)\s*(?:\(([^)]*)\))?\s*values\s*\(`)
 	dotColumnPattern    = regexp.MustCompile(`([A-Za-z_][\w$]*)\s*\.\s*([A-Za-z_][\w$]*)`)
 	refCallPattern      = regexp.MustCompile(`(?is)\{\{\s*(ref|source)\s*\(\s*['"]([^'"]*)`)
@@ -448,7 +448,8 @@ func (e *Engine) Complete(doc TextDocumentItem, pos Position) []CompletionItem {
 	if projection.changed {
 		renderedOffset = projection.rendered.GeneratedOffsetForTemplateOffset(offset)
 	}
-	analysis := analyzeSQLWithResolver(projection.doc.Text, e)
+	fullAnalysis := analyzeSQLWithResolver(projection.doc.Text, e)
+	analysis := e.analysisForCurrentSelect(projection.doc.Text, renderedOffset, fullAnalysis)
 	if qualifier, ok := qualifierBeforeDot(projection.doc.Text, renderedOffset); ok {
 		// `from schema.` (or join/into/update) is a relation position, not an
 		// alias.column one: offer the relations in that schema rather than the
@@ -464,7 +465,7 @@ func (e *Engine) Complete(doc TextDocumentItem, pos Position) []CompletionItem {
 		return e.relationCompletions()
 	}
 	if columnCompletionPosition(projection.doc.Text, renderedOffset) {
-		return columnCompletions(e.columnsForCurrentSelect(projection.doc.Text, renderedOffset, analysis))
+		return columnCompletions(e.columnsForSelectAnalysis(analysis))
 	}
 	return append(e.keywordCompletions(), e.relationCompletions()...)
 }
@@ -1384,9 +1385,32 @@ func (e *Engine) InferOutputColumns(sql string) []ColumnInfo {
 	return outputColumns(sql, analysis, e)
 }
 
-func (e *Engine) columnsForCurrentSelect(sql string, offset int, fullAnalysis sqlAnalysis) []ColumnInfo {
-	segment := currentTopLevelSelectStatement(sql, offset)
+func (e *Engine) analysisForCurrentSelect(sql string, offset int, fullAnalysis sqlAnalysis) sqlAnalysis {
+	segment, _ := currentSelectStatementAt(sql, offset)
 	analysis := analyzeSQLWithResolver(segment, e)
+	scopes := selectScopeRangesAt(sql, offset)
+	visibleFrom := 0
+	for index := 1; index < len(scopes); index++ {
+		if isCTESelectScope(sql, scopes[index], scopes[:index]) {
+			// A CTE body can read earlier CTEs, but aliases from the query that
+			// consumes it are not an enclosing SQL scope.
+			visibleFrom = index
+		}
+	}
+	// Correlated subqueries inherit aliases from each real ancestor query.
+	// Analyze those scopes separately because the full-document analysis masks
+	// nested queries and intentionally does not retain their local aliases.
+	for index := visibleFrom; index < len(scopes)-1; index++ {
+		scope := scopes[index]
+		scopeText := sql[scope.start:scope.end]
+		localOffset := min(max(offset-scope.start, 0), len(scopeText))
+		ancestor := analyzeSQLWithResolver(currentTopLevelSelectStatement(scopeText, localOffset), e)
+		for key, ref := range ancestor.aliases {
+			if _, shadowed := analysis.aliases[key]; !shadowed {
+				analysis.aliases[key] = ref
+			}
+		}
+	}
 	for key, cte := range fullAnalysis.ctes {
 		analysis.ctes[key] = cte
 	}
@@ -1395,6 +1419,10 @@ func (e *Engine) columnsForCurrentSelect(sql string, offset int, fullAnalysis sq
 			analysis.aliases[key] = cte
 		}
 	}
+	return analysis
+}
+
+func (e *Engine) columnsForSelectAnalysis(analysis sqlAnalysis) []ColumnInfo {
 	var columns []ColumnInfo
 	for _, ref := range analysis.aliases {
 		columns = mergeColumns(columns, e.columnsForAliasRef(ref))
@@ -1403,8 +1431,7 @@ func (e *Engine) columnsForCurrentSelect(sql string, offset int, fullAnalysis sq
 }
 
 func (e *Engine) unqualifiedColumnDefinition(sql string, offset int, name string, fullAnalysis sqlAnalysis) (byteRange, bool) {
-	segmentStart := currentTopLevelSelectStart(sql, offset)
-	segment := currentTopLevelSelectStatement(sql, offset)
+	segment, segmentStart := currentSelectStatementAt(sql, offset)
 	// Analyze the segment with its absolute start as the base offset so the
 	// column ranges it produces are document-absolute. Passing baseOffset 0
 	// (as analyzeSQLWithResolver does) would yield segment-relative ranges that
@@ -1431,7 +1458,7 @@ func (e *Engine) unqualifiedColumnDefinition(sql string, offset int, name string
 }
 
 func (e *Engine) unqualifiedColumnAt(sql string, offset int, name string, fullAnalysis sqlAnalysis) (ColumnInfo, string, bool) {
-	segment := currentTopLevelSelectStatement(sql, offset)
+	segment, _ := currentSelectStatementAt(sql, offset)
 	analysis := analyzeSQLWithResolver(segment, e)
 	for key, cte := range fullAnalysis.ctes {
 		analysis.ctes[key] = cte
@@ -1802,6 +1829,9 @@ func analyzeSQLWithParent(sql string, resolver scopeResolver, parent *sqlAnalysi
 				alias = candidate
 				aliasStart, aliasEnd = match[6], match[7]
 			}
+		} else if candidate, candidateStart, candidateEnd := implicitRelationAlias(sql, match[5]); candidate != "" {
+			alias = candidate
+			aliasStart, aliasEnd = candidateStart, candidateEnd
 		}
 		ref := aliasRef{name: name, kind: "relation", start: baseOffset + aliasStart, end: baseOffset + aliasEnd}
 		if cte, ok := analysis.ctes[strings.ToLower(name)]; ok {
@@ -1860,6 +1890,19 @@ func analyzeSQLWithParent(sql string, resolver scopeResolver, parent *sqlAnalysi
 		})
 	}
 	return analysis
+}
+
+// implicitRelationAlias reads an alias without letting the relation matcher
+// consume the next clause keyword. Keeping that keyword outside the match is
+// important: in `FROM first JOIN second`, consuming JOIN as a rejected alias
+// prevents the scanner from discovering `second` at all.
+func implicitRelationAlias(sql string, relationEnd int) (string, int, int) {
+	start := skipSpace(sql, relationEnd)
+	alias, end := readIdentifier(sql, start)
+	if alias == "" || isKeyword(alias) {
+		return "", 0, 0
+	}
+	return alias, start, end
 }
 
 func tableFunctionColumns(name, sql string, end int) ([]ColumnInfo, bool) {
@@ -2331,7 +2374,7 @@ func relationPosition(text string, offset int) bool {
 }
 
 func selectListPosition(text string, offset int) bool {
-	segment := currentTopLevelSelectSegment(text, offset)
+	segment := currentSelectSegmentAt(text, offset)
 	localOffset := len(segment)
 	selectIndex := lastTopLevelKeywordBefore(segment, "select", localOffset)
 	if selectIndex < 0 {
@@ -2345,7 +2388,7 @@ func columnCompletionPosition(text string, offset int) bool {
 	if selectListPosition(text, offset) {
 		return true
 	}
-	segment := currentTopLevelSelectSegment(text, offset)
+	segment := currentSelectSegmentAt(text, offset)
 	localOffset := len(segment)
 	clause, ok := lastColumnClauseBefore(segment, localOffset)
 	if !ok {
@@ -2420,6 +2463,119 @@ func lastColumnClauseBefore(text string, offset int) (string, bool) {
 
 func isWordStart(ch byte) bool {
 	return (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') || ch == '_'
+}
+
+// currentSelectSegmentAt and currentSelectStatementAt scope completion and
+// column lookup to the innermost SELECT/CTE body containing the cursor. The
+// older top-level helpers deliberately ignore parenthesized queries, which is
+// correct for UNION splitting but left completion inside CTEs with no local
+// FROM aliases or columns.
+func currentSelectSegmentAt(text string, offset int) string {
+	scope := currentSelectScopeRange(text, offset)
+	localOffset := min(max(offset-scope.start, 0), scope.end-scope.start)
+	return currentTopLevelSelectSegment(text[scope.start:scope.end], localOffset)
+}
+
+func currentSelectStatementAt(text string, offset int) (string, int) {
+	scope := currentSelectScopeRange(text, offset)
+	scopeText := text[scope.start:scope.end]
+	localOffset := min(max(offset-scope.start, 0), len(scopeText))
+	localStart := currentTopLevelSelectStart(scopeText, localOffset)
+	return currentTopLevelSelectStatement(scopeText, localOffset), scope.start + localStart
+}
+
+func currentSelectScopeRange(text string, offset int) byteRange {
+	scopes := selectScopeRangesAt(text, offset)
+	return scopes[len(scopes)-1]
+}
+
+func selectScopeRangesAt(text string, offset int) []byteRange {
+	offset = min(max(offset, 0), len(text))
+	scopes := []byteRange{{start: 0, end: len(text)}}
+	openParens := make([]int, 0, 4)
+	inQuote := byte(0)
+	lineComment := false
+	blockComment := false
+	for i := 0; i < offset; i++ {
+		ch := text[i]
+		next := byte(0)
+		if i+1 < offset {
+			next = text[i+1]
+		}
+		if lineComment {
+			if ch == '\n' {
+				lineComment = false
+			}
+			continue
+		}
+		if blockComment {
+			if ch == '*' && next == '/' {
+				blockComment = false
+				i++
+			}
+			continue
+		}
+		if inQuote != 0 {
+			if ch == inQuote {
+				if next == inQuote {
+					i++
+					continue
+				}
+				inQuote = 0
+			}
+			continue
+		}
+		if ch == '-' && next == '-' {
+			lineComment = true
+			i++
+			continue
+		}
+		if ch == '/' && next == '*' {
+			blockComment = true
+			i++
+			continue
+		}
+		if ch == '\'' || ch == '"' || ch == '`' {
+			inQuote = ch
+			continue
+		}
+		switch ch {
+		case '(':
+			openParens = append(openParens, i)
+		case ')':
+			if len(openParens) > 0 {
+				openParens = openParens[:len(openParens)-1]
+			}
+		}
+	}
+
+	for _, open := range openParens {
+		bodyStart := skipSpace(text, open+1)
+		if !hasWordAt(text, bodyStart, "select") && !hasWordAt(text, bodyStart, "with") {
+			continue
+		}
+		end := findMatchingParen(text, open)
+		if end < 0 {
+			end = len(text)
+		}
+		scopes = append(scopes, byteRange{start: open + 1, end: end})
+	}
+	return scopes
+}
+
+func isCTESelectScope(text string, target byteRange, parents []byteRange) bool {
+	for _, parent := range parents {
+		if parent.start >= target.start || parent.end < target.end {
+			continue
+		}
+		for _, cte := range extractCTEDefs(text[parent.start:parent.end]) {
+			start := parent.start + cte.bodyStart
+			if start == target.start && start+len(cte.body) == target.end {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func currentTopLevelSelectSegment(text string, offset int) string {

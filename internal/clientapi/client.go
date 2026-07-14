@@ -142,6 +142,13 @@ func (c *Client) MaterializeAssetStream(ctx context.Context, assetID string, que
 	return c.stream(ctx, "/assets/"+url.PathEscape(assetID)+"/materialize/stream", query, onChunk)
 }
 
+// BuildStalePipelineStream rebuilds the stale plan selected by the server.
+// The optional upstream_of query narrows the plan to one asset's transitive
+// upstreams for `renart run --refresh-upstreams`.
+func (c *Client) BuildStalePipelineStream(ctx context.Context, pipelineID string, query url.Values, onChunk func(string)) (StreamDone, error) {
+	return c.stream(ctx, "/pipelines/"+url.PathEscape(pipelineID)+"/build-stale/stream", query, onChunk)
+}
+
 func (c *Client) getJSON(ctx context.Context, path string, out any) error {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.APIBase+path, nil)
 	if err != nil {

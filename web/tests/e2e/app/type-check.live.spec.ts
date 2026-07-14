@@ -45,6 +45,7 @@ materialization:
   type: view
 depends:
   - analytics.customers
+  - analytics.missing
 @bruin */
 
 select nonexistent_col from analytics.customers
@@ -85,7 +86,7 @@ async function pollTypeCheck(
 test.describe("app pipeline type check live", () => {
   test.use({ fixtureName: "configured-workspace" });
 
-  test("type-check endpoint reports column errors and missing-column warnings", async ({
+  test("type-check endpoint reports dependency, column, and declaration findings", async ({
     liveApp,
     request,
   }) => {
@@ -107,6 +108,11 @@ test.describe("app pipeline type check live", () => {
     expect(
       bad?.findings.some((f) => f.severity === "error" && /Unresolved column/i.test(f.message)),
     ).toBe(true);
+    const missingDependency = bad?.findings.some(
+      (f) =>
+        f.severity === "error" && /Dependency 'analytics\.missing' does not exist/.test(f.message),
+    );
+    expect(missingDependency, JSON.stringify(bad?.findings)).toBe(true);
 
     // A clean upstream asset reports no findings.
     const customers = byName.get("analytics.customers");

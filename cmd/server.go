@@ -390,9 +390,9 @@ func newWebServer(ctx context.Context, cfg serverConfig, logger *zap.Logger) (*w
 					Error:      event.Error,
 				})
 			})
-			if result.Output != "" && onLog != nil {
-				onLog(result.Output)
-			}
+			// MaterializePipelineRun already forwards every output byte through
+			// the chunk callback above. result.Output is the aggregate copy used
+			// by non-streaming callers; appending it here would replay the run.
 			return webscheduler.RunResult{Status: result.Status, Error: result.Error}
 		},
 	})

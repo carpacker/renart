@@ -118,6 +118,7 @@ const RESULT_DISPLAY_CAP = 50;
 // How long to wait after the last keystroke before auto-committing a cell's
 // draft. The save marks the cell stale on the server, which drives recompute.
 const AUTO_COMMIT_DEBOUNCE_MS = 350;
+const NOTEBOOK_CELL_JUMP_HIGHLIGHT_MS = 1600;
 const NOTEBOOK_BLOCK_ENTER_ANIMATION =
   "animate-in fade-in-0 slide-in-from-bottom-2 duration-300 motion-reduce:animate-none";
 
@@ -273,6 +274,7 @@ export function AppNotebookLivePage({ notebookId }: { notebookId: string }) {
     kind: PendingNotebookBlockKind;
   } | null>(null);
   const [enteringBlockKey, setEnteringBlockKey] = useState<string | null>(null);
+  const [jumpHighlightedCellId, setJumpHighlightedCellId] = useState<string | null>(null);
   const [scrollRevision, setScrollRevision] = useState(0);
   const [cellToDelete, setCellToDelete] = useState<NotebookCellDeleteTarget | null>(null);
   const [deletingCell, setDeletingCell] = useState(false);
@@ -280,6 +282,8 @@ export function AppNotebookLivePage({ notebookId }: { notebookId: string }) {
   const [promoting, setPromoting] = useState<WebAsset | null>(null);
   const notebookViewportRef = useRef<HTMLDivElement>(null);
   const pendingBlockSequenceRef = useRef(0);
+  const jumpHighlightFrameRef = useRef<number | null>(null);
+  const jumpHighlightTimerRef = useRef<number | null>(null);
   const [autoRecompute, setAutoRecompute] = useState(
     () =>
       typeof window === "undefined" ||
@@ -302,9 +306,30 @@ export function AppNotebookLivePage({ notebookId }: { notebookId: string }) {
     setNotebookScrolled(false);
     setPendingBlock(null);
     setEnteringBlockKey(null);
+    setJumpHighlightedCellId(null);
     setCellToDelete(null);
     setDeletingCell(false);
+    if (jumpHighlightFrameRef.current !== null) {
+      window.cancelAnimationFrame(jumpHighlightFrameRef.current);
+      jumpHighlightFrameRef.current = null;
+    }
+    if (jumpHighlightTimerRef.current !== null) {
+      window.clearTimeout(jumpHighlightTimerRef.current);
+      jumpHighlightTimerRef.current = null;
+    }
   }, [notebookId]);
+
+  useEffect(
+    () => () => {
+      if (jumpHighlightFrameRef.current !== null) {
+        window.cancelAnimationFrame(jumpHighlightFrameRef.current);
+      }
+      if (jumpHighlightTimerRef.current !== null) {
+        window.clearTimeout(jumpHighlightTimerRef.current);
+      }
+    },
+    [],
+  );
 
   // Adding a block changes the scroll height twice: once for the immediate
   // pending card, then again when the real editor replaces it. Scroll after
@@ -671,9 +696,31 @@ export function AppNotebookLivePage({ notebookId }: { notebookId: string }) {
     [navigate],
   );
   const goToCell = useCallback((cellId: string) => {
-    document
-      .querySelector(`[data-notebook-cell-id="${cellId}"]`)
-      ?.scrollIntoView({ behavior: "smooth", block: "center" });
+    const target = document.querySelector<HTMLElement>(`[data-notebook-cell-id="${cellId}"]`);
+    if (!target) {
+      return;
+    }
+
+    const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    target.scrollIntoView({ behavior: reducedMotion ? "auto" : "smooth", block: "center" });
+
+    // Toggle the attribute off for one frame so jumping to the same definition
+    // twice restarts the animation instead of leaving an already-finished one.
+    setJumpHighlightedCellId(null);
+    if (jumpHighlightFrameRef.current !== null) {
+      window.cancelAnimationFrame(jumpHighlightFrameRef.current);
+    }
+    if (jumpHighlightTimerRef.current !== null) {
+      window.clearTimeout(jumpHighlightTimerRef.current);
+    }
+    jumpHighlightFrameRef.current = window.requestAnimationFrame(() => {
+      setJumpHighlightedCellId(cellId);
+      jumpHighlightFrameRef.current = null;
+      jumpHighlightTimerRef.current = window.setTimeout(() => {
+        setJumpHighlightedCellId(null);
+        jumpHighlightTimerRef.current = null;
+      }, NOTEBOOK_CELL_JUMP_HIGHLIGHT_MS);
+    });
   }, []);
 
   const pipelines = workspace?.pipelines ?? [];
@@ -914,6 +961,9 @@ export function AppNotebookLivePage({ notebookId }: { notebookId: string }) {
                     key={block.cell}
                     data-notebook-cell-id={block.cell}
                     data-notebook-block-entering={entering || undefined}
+                    data-notebook-cell-jump-highlight={
+                      jumpHighlightedCellId === block.cell || undefined
+                    }
                     className={cn(entering && NOTEBOOK_BLOCK_ENTER_ANIMATION)}
                   >
                     <NotebookCellCard

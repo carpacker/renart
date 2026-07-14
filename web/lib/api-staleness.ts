@@ -61,7 +61,7 @@ export async function buildStalePipelineStream(
     onDone?: (payload: MaterializeStreamPayload) => void;
     onAssetEvent?: (event: StreamAssetEvent) => void;
   },
-  options: { environment?: string; start?: string; end?: string } = {},
+  options: { environment: string; start?: string; end?: string },
 ) {
   const params = new URLSearchParams();
   if (options.environment) params.set("environment", options.environment);

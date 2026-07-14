@@ -188,6 +188,10 @@ one `RunCompleted` bus emit per built window (so coverage and achieved
 fingerprints reflect exactly what ran, and downstreams built later in the same
 plan already see the fresh upstream fingerprints). Assets downstream of a
 failed plan member are skipped rather than built stale.
+The endpoint's optional `upstream_of` selector narrows that same plan to one
+asset's transitive upstream closure. `renart run <asset> --refresh-upstreams`
+uses this selector in delegated mode (and the same planner directly in embedded
+mode), then starts the requested asset only if the upstream plan succeeds.
 
 ## 5. Snapshots and deploy (`internal/web/snapshot`, `renart deploy`)
 

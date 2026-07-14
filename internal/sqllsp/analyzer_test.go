@@ -36,6 +36,91 @@ from recent_orders r`}
 	}
 }
 
+func TestEngineCompletesColumnsInsideCTEs(t *testing.T) {
+	engine := NewEngine(CanonicalGraph{
+		Version: 1,
+		Relations: []RelationNode{
+			{
+				ID:   "relation:game-results",
+				Name: "chess.game_results",
+			},
+			{
+				ID:   "relation:players",
+				Name: "chess.players",
+			},
+		},
+		Schemas: []SchemaLayer{
+			{
+				RelationID: "relation:game-results",
+				Columns: []ColumnInfo{
+					{Name: "username", Type: "varchar"},
+					{Name: "color", Type: "varchar"},
+					{Name: "time_class", Type: "varchar"},
+				},
+			},
+			{
+				RelationID: "relation:players",
+				Columns: []ColumnInfo{
+					{Name: "rating", Type: "integer"},
+				},
+			},
+		},
+	})
+
+	t.Run("qualified upstream in first CTE", func(t *testing.T) {
+		doc := TextDocumentItem{URI: "file:///query.sql", Text: `with opening_rollup as (
+  select games.
+  from chess.game_results games
+)
+select * from opening_rollup`}
+
+		items := engine.Complete(doc, Position{Line: 1, Character: len("  select games.")})
+		labels := completionLabels(items)
+		for _, column := range []string{"username", "color", "time_class"} {
+			if !slices.Contains(labels, column) {
+				t.Fatalf("expected %s inside the first CTE, got %#v", column, labels)
+			}
+		}
+	})
+
+	t.Run("unqualified columns from earlier CTE", func(t *testing.T) {
+		doc := TextDocumentItem{URI: "file:///query.sql", Text: `with opening_rollup as (
+  select username, color, time_class
+  from chess.game_results
+),
+ranked_openings as (
+  select *,
+
+  from opening_rollup
+)
+select * from ranked_openings`}
+
+		items := engine.Complete(doc, Position{Line: 6, Character: 0})
+		labels := completionLabels(items)
+		for _, column := range []string{"username", "color", "time_class"} {
+			if !slices.Contains(labels, column) {
+				t.Fatalf("expected earlier CTE column %s, got %#v", column, labels)
+			}
+		}
+	})
+
+	t.Run("does not inherit aliases from consuming query", func(t *testing.T) {
+		doc := TextDocumentItem{URI: "file:///query.sql", Text: `with opening_rollup as (
+  select outside.
+  from chess.game_results games
+)
+select *
+from opening_rollup
+join chess.players outside on true`}
+
+		items := engine.Complete(doc, Position{Line: 1, Character: len("  select outside.")})
+		labels := completionLabels(items)
+		if slices.Contains(labels, "rating") {
+			t.Fatalf("did not expect consuming-query alias columns inside the CTE, got %#v", labels)
+		}
+	})
+}
+
 func TestEngineCompletesColumnsFromSubqueryAlias(t *testing.T) {
 	engine := NewEngine(CanonicalGraph{
 		Version: 1,
@@ -185,6 +270,30 @@ from example.range_10`}
 		if diagnostic.Code == "unresolved-alias" {
 			t.Fatalf("unexpected unresolved alias diagnostic for qualified relation: %#v", diagnostic)
 		}
+	}
+}
+
+func TestEngineDoesNotConsumeJoinAsImplicitAlias(t *testing.T) {
+	engine := NewEngine(CanonicalGraph{
+		Version: 1,
+		Relations: []RelationNode{
+			{ID: "relation:example.range_10", Name: "example.range_10"},
+			{ID: "relation:example.my_python_asset_1", Name: "example.my_python_asset_1"},
+		},
+		Schemas: []SchemaLayer{
+			{RelationID: "relation:example.range_10", Columns: []ColumnInfo{{Name: "range"}}},
+			{RelationID: "relation:example.my_python_asset_1", Columns: []ColumnInfo{{Name: "col1"}}},
+		},
+	})
+
+	doc := TextDocumentItem{URI: "file:///query.sql", Text: `SELECT
+  *
+FROM example.range_10
+JOIN example.my_python_asset_1
+  ON col1 = range`}
+
+	if diagnostics := engine.Diagnostics(doc); len(diagnostics) > 0 {
+		t.Fatalf("unexpected diagnostics for consecutive qualified relations: %#v", diagnostics)
 	}
 }
 

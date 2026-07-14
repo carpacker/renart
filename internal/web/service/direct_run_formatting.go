@@ -12,9 +12,8 @@ import (
 )
 
 type directRunFormatting struct {
-	doNotLogTaskName bool
-	startDate        time.Time
-	endDate          time.Time
+	startDate time.Time
+	endDate   time.Time
 }
 
 type directRunSummary struct {
@@ -28,7 +27,13 @@ var directRunFaintPrinter = color.New(color.Faint).SprintfFunc()
 var directRunGreenPrinter = color.New(color.FgGreen).SprintfFunc()
 var directRunRedPrinter = color.New(color.FgRed).SprintfFunc()
 
-func writeDirectRunPrelude(w io.Writer, pl *pipeline.Pipeline, asset *pipeline.Asset, formatting directRunFormatting) {
+func directColorPrinter(attrs ...color.Attribute) func(format string, a ...interface{}) string {
+	c := color.New(attrs...)
+	c.EnableColor()
+	return c.SprintfFunc()
+}
+
+func writeDirectRunAnalysis(w io.Writer, pl *pipeline.Pipeline, asset *pipeline.Asset) {
 	if pl == nil || w == nil {
 		return
 	}
@@ -36,6 +41,12 @@ func writeDirectRunPrelude(w io.Writer, pl *pipeline.Pipeline, asset *pipeline.A
 	_, _ = fmt.Fprintf(w, "Analyzed the pipeline '%s' with %d assets.\n", pl.Name, len(pl.Assets))
 	if asset != nil {
 		_, _ = fmt.Fprintf(w, "Running only the asset '%s'\n", asset.Name)
+	}
+}
+
+func writeDirectRunWindow(w io.Writer, formatting directRunFormatting) {
+	if w == nil {
+		return
 	}
 	_, _ = fmt.Fprintf(w, "\nInterval: %s - %s\n", formatting.startDate.Format(time.RFC3339), formatting.endDate.Format(time.RFC3339))
 	_, _ = fmt.Fprint(w, "\nStarting the pipeline execution...\n\n")

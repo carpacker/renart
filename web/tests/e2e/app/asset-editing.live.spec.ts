@@ -569,6 +569,18 @@ materialization:
     await expect(dialog).toBeVisible();
     await dialog.getByRole("button", { name: /^Load/ }).click();
     await dialog.getByLabel("Asset name").fill("analytics.orders_copy");
+
+    await dialog.getByLabel("Source connection").click();
+    await page.getByRole("option", { name: "local", exact: true }).click();
+    const sourceFilePicker = dialog.getByRole("button", { name: "Choose source file" });
+    await expect(sourceFilePicker).toBeVisible();
+    await sourceFilePicker.click();
+    const sourcePathInput = page.getByPlaceholder("Type a path…");
+    await expect(sourcePathInput).toBeVisible();
+    await sourcePathInput.fill("data/orders.csv");
+    await sourcePathInput.press("Enter");
+    await expect(sourceFilePicker).toContainText("data/orders.csv");
+
     await dialog.getByLabel("Source connection").click();
     await page.getByRole("option", { name: "duckdb-default", exact: true }).click();
     await dialog.getByLabel("Source table or object").fill("analytics.orders");

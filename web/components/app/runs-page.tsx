@@ -26,7 +26,7 @@ import {
 } from "@/components/ui/table";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { formatSchedulerDate, usePipelineScheduler } from "@/hooks/use-pipeline-scheduler";
-import type { PipelineRun, PipelineRunStep } from "@/lib/types";
+import type { PipelineRun, PipelineRunLogLine, PipelineRunStep } from "@/lib/types";
 
 import { PageHeader, AppPage, AppPanel, SimpleTable, StatusPill } from "./app-primitives";
 
@@ -222,13 +222,7 @@ export function AppRunDetailPage({
     selectedRunId: runId,
   });
   const run = selectedRun;
-  const stdout = useMemo(
-    () =>
-      logs.length > 0
-        ? logs.map((line) => `[${formatSchedulerDate(line.at)}] ${line.line}`).join("\n")
-        : "No stdout captured.",
-    [logs],
-  );
+  const output = useMemo(() => combineRunOutput(logs, run?.error), [logs, run?.error]);
 
   if (!run) {
     return (
@@ -277,16 +271,12 @@ export function AppRunDetailPage({
               >
                 <TabsList className="w-max max-w-none">
                   <TabsTrigger value="events" className={runTabsTriggerClass}>
-                    <Play className="size-3.5" />
+                    <Play />
                     Events
                   </TabsTrigger>
-                  <TabsTrigger value="stdout" className={runTabsTriggerClass}>
-                    <Terminal className="size-3.5" />
-                    stdout
-                  </TabsTrigger>
-                  <TabsTrigger value="stderr" className={runTabsTriggerClass}>
-                    <Terminal className="size-3.5" />
-                    stderr
+                  <TabsTrigger value="output" className={runTabsTriggerClass}>
+                    <Terminal />
+                    Output
                   </TabsTrigger>
                 </TabsList>
               </ScrollArea>
@@ -298,16 +288,10 @@ export function AppRunDetailPage({
               <RunEventsTable run={run} steps={steps} loading={loadingRunId === run.id} />
             </TabsContent>
             <TabsContent
-              value="stdout"
+              value="output"
               className="m-0 min-h-0 flex-1 overflow-hidden bg-zinc-950 data-[state=inactive]:hidden"
             >
-              <RunTerminalOutput output={stdout} />
-            </TabsContent>
-            <TabsContent
-              value="stderr"
-              className="m-0 min-h-0 flex-1 overflow-hidden bg-zinc-950 data-[state=inactive]:hidden"
-            >
-              <RunTerminalOutput output={run.error ?? "No stderr output."} plain />
+              <RunTerminalOutput output={output} />
             </TabsContent>
           </Tabs>
         </AppPanel>
@@ -454,7 +438,18 @@ function RunEventsTable({
   );
 }
 
-function RunTerminalOutput({ output, plain }: { output: string; plain?: boolean }) {
+function combineRunOutput(logs: PipelineRunLogLine[], error?: string) {
+  const captured = logs.map((log) => log.line).join("");
+  const terminalError = error?.trim();
+  if (!terminalError || captured.includes(terminalError)) {
+    return captured || "No output captured.";
+  }
+
+  const separator = captured && !captured.endsWith("\n") ? "\n" : "";
+  return `${captured}${separator}${terminalError}\n`;
+}
+
+function RunTerminalOutput({ output }: { output: string }) {
   const viewportRef = useRef<HTMLDivElement | null>(null);
   useEffect(() => {
     const viewport = viewportRef.current;
@@ -463,14 +458,10 @@ function RunTerminalOutput({ output, plain }: { output: string; plain?: boolean 
   }, [output]);
   return (
     <ScrollArea className="h-full min-h-0" viewportClassName="h-full" viewportRef={viewportRef}>
-      {plain ? (
-        <pre className="font-console whitespace-pre-wrap p-3 text-xs text-zinc-100">{output}</pre>
-      ) : (
-        <AnsiOutput
-          output={output}
-          className="font-console whitespace-pre-wrap p-3 text-xs text-zinc-100"
-        />
-      )}
+      <AnsiOutput
+        output={output}
+        className="font-console whitespace-pre-wrap p-3 text-xs text-zinc-100"
+      />
     </ScrollArea>
   );
 }

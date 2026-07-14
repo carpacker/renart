@@ -3,8 +3,11 @@ package service
 import (
 	"reflect"
 	"testing"
+	"time"
 
 	"github.com/bruin-data/bruin/pkg/pipeline"
+	webmodel "renart/internal/web/model"
+	"renart/internal/web/staleness"
 )
 
 func stalePipeline(assets ...*pipeline.Asset) *pipeline.Pipeline {
@@ -79,5 +82,66 @@ func TestFailedUpstreamForWalksTransitively(t *testing.T) {
 	}
 	if got := failedUpstreamFor(parsed.Assets[3], parsed, failed); got != "" {
 		t.Fatalf("expected no failed upstream for d, got %q", got)
+	}
+}
+
+func TestPipelineUpstreamNamesReturnsTransitiveClosure(t *testing.T) {
+	view := webmodel.Pipeline{Assets: []webmodel.Asset{
+		{Name: "raw"},
+		{Name: "clean", Upstreams: []string{"raw"}},
+		{Name: "report", Upstreams: []string{"clean", "external.table"}},
+		{Name: "unrelated"},
+	}}
+
+	upstreams, ok := PipelineUpstreamNames(view, "report")
+	if !ok {
+		t.Fatal("expected report to resolve")
+	}
+	want := map[string]struct{}{"raw": {}, "clean": {}}
+	if !reflect.DeepEqual(upstreams, want) {
+		t.Fatalf("expected upstream closure %v, got %v", want, upstreams)
+	}
+	if _, ok := PipelineUpstreamNames(view, "missing"); ok {
+		t.Fatal("expected an unknown target to fail resolution")
+	}
+}
+
+func TestPipelineUpstreamNamesExcludesTargetInCycle(t *testing.T) {
+	view := webmodel.Pipeline{Assets: []webmodel.Asset{
+		{Name: "a", Upstreams: []string{"b"}},
+		{Name: "b", Upstreams: []string{"a"}},
+	}}
+
+	upstreams, ok := PipelineUpstreamNames(view, "a")
+	if !ok {
+		t.Fatal("expected a to resolve")
+	}
+	want := map[string]struct{}{"b": {}}
+	if !reflect.DeepEqual(upstreams, want) {
+		t.Fatalf("expected cycle-safe closure %v, got %v", want, upstreams)
+	}
+}
+
+func TestBuildStalePlanFiltersToSelectedUpstreamsAndPreservesGaps(t *testing.T) {
+	start := time.Date(2026, 7, 13, 0, 0, 0, 0, time.UTC)
+	end := start.Add(24 * time.Hour)
+	statuses := []staleness.AssetStatus{
+		{AssetName: "fresh", Status: staleness.StatusFresh},
+		{AssetName: "selected", Status: staleness.StatusPartial, Gaps: []staleness.Interval{{Start: start, End: end}}},
+		{AssetName: "other", Status: staleness.StatusNeverBuilt},
+	}
+
+	plan := BuildStalePlan(statuses, map[string]struct{}{"selected": {}})
+	if len(plan) != 1 || plan[0].AssetName != "selected" {
+		t.Fatalf("expected only selected in the plan, got %+v", plan)
+	}
+	if len(plan[0].Windows) != 1 || !plan[0].Windows[0].Start.Equal(start) || !plan[0].Windows[0].End.Equal(end) {
+		t.Fatalf("expected the selected gap window, got %+v", plan[0].Windows)
+	}
+	if plan := BuildStalePlan(statuses, map[string]struct{}{}); len(plan) != 0 {
+		t.Fatalf("expected an empty selected set to build nothing, got %+v", plan)
+	}
+	if plan := BuildStalePlan(statuses, nil); len(plan) != 2 {
+		t.Fatalf("expected an unrestricted plan to keep both stale assets, got %+v", plan)
 	}
 }

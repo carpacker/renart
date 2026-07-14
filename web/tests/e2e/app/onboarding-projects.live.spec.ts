@@ -12,6 +12,19 @@ type ProjectListResponse = {
   projects: Array<{ id: string; name: string; path: string; open: boolean }>;
 };
 
+type WorkspaceResponse = {
+  selected_environment: string;
+  pipelines: Array<{
+    id: string;
+    name: string;
+    assets: Array<{ id: string; name: string }>;
+  }>;
+};
+
+type StalenessResponse = {
+  assets: Array<{ asset_name: string; status: string }>;
+};
+
 function gitLog(dir: string): string {
   return execFileSync("git", ["-C", dir, "log", "--format=%s"], { encoding: "utf8" });
 }
@@ -74,6 +87,23 @@ test.describe("first-run onboarding", () => {
     await expect(page.getByRole("heading", { name: "Running your pipeline" })).toBeVisible({
       timeout: 30000,
     });
+
+    // The stream is longer than the fixed-height terminal. Keep following its
+    // newest output instead of leaving the viewport parked on the first lines.
+    const runLogViewport = page.locator('[data-slot="scroll-area-viewport"]');
+    await expect(runLogViewport).toBeVisible({ timeout: 30000 });
+    await expect
+      .poll(
+        () =>
+          runLogViewport.evaluate(
+            (viewport) =>
+              viewport.scrollHeight > viewport.clientHeight &&
+              viewport.scrollTop + viewport.clientHeight >= viewport.scrollHeight - 2,
+          ),
+        { timeout: 60000 },
+      )
+      .toBe(true);
+
     await expect(page.getByRole("heading", { name: "You're all set" })).toBeVisible({
       timeout: 180000,
     });
@@ -94,9 +124,35 @@ test.describe("first-run onboarding", () => {
     expect(existsSync(duckdbPath)).toBe(true);
     expect(statSync(duckdbPath).size).toBeGreaterThan(10000);
 
+    const workspaceResponse = await page.request.get(`${liveApp.baseURL}/api/workspace`);
+    expect(workspaceResponse.ok()).toBe(true);
+    const workspace = (await workspaceResponse.json()) as WorkspaceResponse;
+    expect(workspace.selected_environment).toBe("default");
+    const retail = workspace.pipelines.find((pipeline) => pipeline.name === "retail");
+    expect(retail).toBeTruthy();
+
+    await expect
+      .poll(
+        async () => {
+          const response = await page.request.get(
+            `${liveApp.baseURL}/api/pipelines/${retail!.id}/staleness?environment=${encodeURIComponent(workspace.selected_environment)}`,
+          );
+          if (!response.ok()) return [];
+          const staleness = (await response.json()) as StalenessResponse;
+          return staleness.assets.map((asset) => `${asset.asset_name}:${asset.status}`).sort();
+        },
+        { timeout: 30000 },
+      )
+      .toEqual(retail!.assets.map((asset) => `${asset.name}:fresh`).sort());
+
     await page.getByRole("button", { name: "Open workspace" }).click();
     await expect(page).toHaveURL(/\/pipelines\/.+\/canvas/, { timeout: 30000 });
     await expect(page.getByText("customer_orders").first()).toBeVisible({ timeout: 30000 });
+    for (const asset of retail!.assets) {
+      await expect(
+        page.getByTestId(`rf__node-${asset.id}`).locator('[title="Staleness: Fresh"]'),
+      ).toBeVisible({ timeout: 30000 });
+    }
   });
 
   test("creates a new project directory from the New project flow", async ({ liveApp, page }) => {

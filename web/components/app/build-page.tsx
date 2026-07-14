@@ -25,8 +25,10 @@ import {
   Eye,
   ExternalLink,
   FileCode,
+  FilePlus2,
   FolderPlus,
   GitBranch,
+  GitBranchPlus,
   Globe,
   GitCompare,
   Hammer,
@@ -204,6 +206,7 @@ import { AssetYamlEditor } from "./asset-yaml-editor";
 import { ErrorBoundary } from "@/components/ui/error-boundary";
 import { SqlPreview } from "./sql-preview";
 import { LoadParametersEditor } from "./load-parameters-editor";
+import { FilePathPicker } from "./file-path-picker";
 import {
   AppLineageCanvas,
   assetDisplayName,
@@ -1870,8 +1873,15 @@ function Explorer({
       <DelimitedCardHeader>
         <Database className="size-4 text-primary" />
         <DelimitedCardTitle>Explorer</DelimitedCardTitle>
-        <Button size="icon-sm" variant="ghost" className="ml-auto" onClick={onNewAsset}>
-          <Plus className="size-3.5" />
+        <Button
+          size="icon-sm"
+          variant="ghost"
+          className="ml-auto"
+          onClick={onNewPipeline}
+          aria-label="New pipeline"
+          title="New pipeline"
+        >
+          <GitBranchPlus data-icon="inline-start" />
         </Button>
       </DelimitedCardHeader>
       <div className="border-b p-2">
@@ -1916,20 +1926,49 @@ function Explorer({
           >
             {pipelineItems.map((item) => {
               const activePipeline = item.id === pipelineId;
+              const pipelineLabel = item.name || item.path || item.id;
               return (
                 <div key={item.id}>
-                  <Link
-                    to="/pipelines/$pipelineId/canvas"
-                    params={{ pipelineId: item.id }}
-                    search={buildSearch}
+                  <div
                     className={cn(
-                      "flex h-7 w-full items-center gap-1.5 rounded-md px-2 text-left font-mono text-xs hover:bg-muted",
+                      "group flex h-7 w-full items-center rounded-md hover:bg-muted",
                       activePipeline ? "bg-muted text-foreground" : "text-muted-foreground",
                     )}
                   >
-                    <PipelineIcon className="size-3.5 text-primary" />
-                    <span className="truncate">{item.name || item.path || item.id}</span>
-                  </Link>
+                    <Link
+                      to="/pipelines/$pipelineId/canvas"
+                      params={{ pipelineId: item.id }}
+                      search={buildSearch}
+                      className="flex min-w-0 flex-1 items-center gap-1.5 px-2 text-left font-mono text-xs"
+                    >
+                      <PipelineIcon className="size-3.5 text-primary" />
+                      <span className="truncate">{pipelineLabel}</span>
+                    </Link>
+                    {activePipeline ? (
+                      <div className="flex shrink-0 items-center pr-0.5">
+                        <Button
+                          type="button"
+                          size="icon-xs"
+                          variant="ghost"
+                          onClick={onNewAsset}
+                          aria-label={`New asset in ${pipelineLabel}`}
+                          title="New asset"
+                        >
+                          <FilePlus2 data-icon="inline-start" />
+                        </Button>
+                        <Button
+                          type="button"
+                          size="icon-xs"
+                          variant="ghost"
+                          onClick={onNewFolder}
+                          aria-label={`New folder in ${pipelineLabel}`}
+                          title="New folder"
+                        >
+                          <FolderPlus data-icon="inline-start" />
+                        </Button>
+                      </div>
+                    ) : null}
+                  </div>
                   {activePipeline ? (
                     <div className="mt-1 space-y-0.5 border-l pl-3 ml-3">
                       {Object.entries(assetsByGroup).length > 0 ? (
@@ -1955,12 +1994,6 @@ function Explorer({
                         </div>
                       )}
                       <div className="mt-1 border-t pt-1">
-                        <button
-                          className="flex h-7 w-full items-center gap-1.5 rounded-md px-2 text-left font-mono text-xs text-muted-foreground hover:bg-muted"
-                          onClick={onNewFolder}
-                        >
-                          <FolderPlus className="size-3.5" /> New folder
-                        </button>
                         <button
                           className={cn(
                             "flex h-7 w-full items-center gap-1.5 rounded-md px-2 text-left font-mono text-xs hover:bg-muted",
@@ -1988,18 +2021,6 @@ function Explorer({
               );
             })}
           </ExplorerSection>
-          <button
-            onClick={onNewAsset}
-            className="mt-2 flex h-8 w-full items-center gap-2 rounded-md border border-dashed px-2 text-left text-xs text-muted-foreground hover:bg-muted"
-          >
-            <Plus className="size-3.5" /> New asset
-          </button>
-          <button
-            onClick={onNewPipeline}
-            className="mt-1 flex h-8 w-full items-center gap-2 rounded-md border border-dashed px-2 text-left text-xs text-muted-foreground hover:bg-muted"
-          >
-            <Plus className="size-3.5" /> New pipeline
-          </button>
 
           <ExplorerSection
             label={notebookGroup?.label ?? "Notebooks"}
@@ -3649,17 +3670,24 @@ function NewAssetDialog({
                         ? "Source file"
                         : "Source table or object"}
                     </FieldLabel>
-                    <Input
-                      id="new-load-source-table"
-                      className="font-mono"
-                      placeholder={
-                        isLocalLoadConnection(sourceConnection)
-                          ? "data/orders.csv"
-                          : "public.orders"
-                      }
-                      value={sourceTable}
-                      onChange={(event) => setSourceTable(event.target.value)}
-                    />
+                    {isLocalLoadConnection(sourceConnection) ? (
+                      <FilePathPicker
+                        id="new-load-source-table"
+                        variant="field"
+                        ariaLabel="Choose source file"
+                        placeholder="data/orders.csv"
+                        value={sourceTable}
+                        onCommit={setSourceTable}
+                      />
+                    ) : (
+                      <Input
+                        id="new-load-source-table"
+                        className="font-mono"
+                        placeholder="public.orders"
+                        value={sourceTable}
+                        onChange={(event) => setSourceTable(event.target.value)}
+                      />
+                    )}
                   </Field>
                 </>
               ) : null}
