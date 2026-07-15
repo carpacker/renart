@@ -30,6 +30,7 @@ import {
 } from "@/components/ui/command";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Spinner } from "@/components/ui/spinner";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import {
   Select,
@@ -45,6 +46,7 @@ import {
   applyAssetTransaction,
   reconcileAssetColumns,
   refreshAssetColumnsFromDefinition,
+  refreshAssetColumnsFromMaterializedOutput,
 } from "@/lib/api-asset-transactions";
 import { updateAsset, updateAssetColumns } from "@/lib/api-assets";
 import { inferAPIAsset } from "@/lib/api-assets-columns";
@@ -56,9 +58,11 @@ import {
   SEED_ASSET_TYPES,
   SQL_ASSET_TYPES,
   getAssetAuthoringCapability,
+  getAssetColumnRefreshMode,
   groupAssetTypesByKind,
   isSeedAssetType,
   isSensorAssetType,
+  isSqlAssetType,
 } from "@/lib/asset-types";
 import { useIngestrEnabled } from "@/lib/features";
 import { useWorkspaceSettingsData } from "@/hooks/use-workspace-settings-data";
@@ -74,14 +78,15 @@ import { MultiValueInput } from "./multi-value-input";
  * the asset API, and the workspace SSE stream refreshes the asset prop.
  */
 export function AssetGuidedCards({ asset, pipelineId }: { asset: WebAsset; pipelineId: string }) {
+  const supportsColumns = getAssetColumnRefreshMode(asset.type, asset.parameters) !== "none";
   return (
     <ScrollArea className="min-h-0 w-full flex-1">
       <div className="divide-y px-3">
         <IdentityCard asset={asset} pipelineId={pipelineId} />
         <MaterializationCard asset={asset} pipelineId={pipelineId} />
         <DependenciesCard asset={asset} />
-        <ColumnsCard asset={asset} />
-        <QualityChecksCard asset={asset} />
+        {supportsColumns ? <ColumnsCard asset={asset} /> : null}
+        {supportsColumns ? <QualityChecksCard asset={asset} /> : null}
       </div>
     </ScrollArea>
   );
@@ -817,10 +822,12 @@ function DepRow({
 // --- Columns card (§14.4) ---
 
 function ColumnsCard({ asset }: { asset: WebAsset }) {
-  const isAPI = asset.type.toLowerCase() === "api";
+  const environment = useAtomValue(selectedEnvironmentAtom);
+  const refreshMode = getAssetColumnRefreshMode(asset.type, asset.parameters);
+  const isAPI = refreshMode === "api";
+  const importsMaterializedOutput = refreshMode === "materialized";
   const isSQLMerge =
-    asset.type.toLowerCase().includes("sql") &&
-    asset.materialization_strategy?.toLowerCase() === "merge";
+    isSqlAssetType(asset.type) && asset.materialization_strategy?.toLowerCase() === "merge";
   const provenance = useMemo(() => parseAssetProvenance(asset.meta), [asset.meta]);
   const columns = asset.columns ?? [];
   // Columns the user has ignored (renart_col_drop) that aren't currently present.
@@ -841,7 +848,9 @@ function ColumnsCard({ asset }: { asset: WebAsset }) {
         setAPISample(await inferAPIAsset(asset.id));
         return;
       }
-      const result = await refreshAssetColumnsFromDefinition(asset.id);
+      const result = importsMaterializedOutput
+        ? await refreshAssetColumnsFromMaterializedOutput(asset, environment)
+        : await refreshAssetColumnsFromDefinition(asset.id);
       setReconcileItems(result.reconcile_items ?? []);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to refresh columns");
@@ -932,15 +941,21 @@ function ColumnsCard({ asset }: { asset: WebAsset }) {
           title={
             isAPI
               ? "Fetch one response page and infer its record shape"
-              : "Derive columns from the definition and upstream assets"
+              : importsMaterializedOutput
+                ? "Import columns from the materialized output"
+                : isSeedAssetType(asset.type)
+                  ? "Infer columns from the seed file with Sling"
+                  : "Derive columns from the definition and upstream assets"
           }
         >
-          {isAPI ? (
+          {refreshing ? (
+            <Spinner data-icon="inline-start" />
+          ) : isAPI || importsMaterializedOutput ? (
             <Database data-icon="inline-start" />
           ) : (
-            <RefreshCw data-icon="inline-start" className={cn(refreshing && "animate-spin")} />
+            <RefreshCw data-icon="inline-start" />
           )}
-          {isAPI ? "Test response" : "Refresh"}
+          {isAPI ? "Test response" : importsMaterializedOutput ? "Import" : "Refresh"}
         </Button>
       }
     >

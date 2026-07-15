@@ -56,3 +56,22 @@ func TestDecodeCreateAssetRequestKeepsJSONContract(t *testing.T) {
 	assert.Equal(t, "analytics.orders", decoded.Name)
 	assert.Equal(t, "duckdb.sql", decoded.Type)
 }
+
+func TestDecodeSeedFileUploadReadsBinaryFile(t *testing.T) {
+	t.Parallel()
+	var body bytes.Buffer
+	writer := multipart.NewWriter(&body)
+	fileField, err := writer.CreateFormFile("file", "customers.parquet")
+	require.NoError(t, err)
+	upload := []byte{0x50, 0x41, 0x52, 0x31, 0x00, 0xff}
+	_, err = fileField.Write(upload)
+	require.NoError(t, err)
+	require.NoError(t, writer.Close())
+
+	request := httptest.NewRequest("POST", "/api/assets/x/seed-file", &body)
+	request.Header.Set("Content-Type", writer.FormDataContentType())
+	fileName, decoded, err := decodeSeedFileUpload(httptest.NewRecorder(), request)
+	require.NoError(t, err)
+	assert.Equal(t, "customers.parquet", fileName)
+	assert.Equal(t, upload, decoded)
+}

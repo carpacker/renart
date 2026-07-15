@@ -1,4 +1,4 @@
-import { expect, type Page } from "@playwright/test";
+import { expect, type Locator, type Page } from "@playwright/test";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
@@ -17,6 +17,7 @@ type WorkspaceAsset = {
   type: string;
   parameters?: Record<string, string>;
   meta?: Record<string, string>;
+  columns?: Array<{ name: string; type?: string }>;
 };
 
 type WorkspaceResponse = {
@@ -86,7 +87,95 @@ test.describe("seed and sensor assets live", () => {
     await expect(seedEditor.locator(".monaco-editor")).toHaveCount(0);
     await expect(seedEditor.getByLabel("Seed path")).toHaveValue("./regional_customers.csv");
     await expect(seedEditor.getByLabel("Seed file format")).toContainText("csv");
+    await expect(seedEditor.getByTestId("seed-file-dropzone")).toBeVisible();
+    await expect(
+      seedEditor.getByText("Columns and checks are configured in Properties."),
+    ).toHaveCount(0);
     await expect(page.getByRole("heading", { name: "Seed file" })).toHaveCount(0);
+
+    const seedProperties = await openAssetProperties(page);
+    const seedColumns = seedProperties.locator("section").filter({ hasText: "Columns" }).first();
+    await expect(seedColumns.getByRole("heading", { name: "Columns" })).toBeVisible({
+      timeout: 15000,
+    });
+    const initialRefreshResponse = page.waitForResponse(
+      (response) =>
+        response.url().includes(`/api/assets/${seedAssetId}/columns/refresh-from-definition`) &&
+        response.request().method() === "POST",
+      { timeout: 30000 },
+    );
+    await seedColumns.getByRole("button", { name: "Refresh", exact: true }).click();
+    const initialRefresh = await initialRefreshResponse;
+    expect(initialRefresh.ok(), await initialRefresh.text()).toBe(true);
+    await pollAsset(
+      liveApp,
+      page,
+      "analytics.regional_customers",
+      (asset) =>
+        asset.columns?.some((column) => column.name === "customer_id") === true &&
+        asset.columns?.some((column) => column.name === "customer_name") === true,
+    );
+
+    const replacement = Buffer.from(
+      "customer_id,customer_name,segment\n20,Replacement Grace,enterprise\n",
+      "utf8",
+    );
+    const seedUploadResponse = page.waitForResponse(
+      (response) =>
+        response.url().includes(`/api/assets/${seedAssetId}/seed-file`) &&
+        response.request().method() === "POST",
+      { timeout: 30000 },
+    );
+    const replacementRefreshResponse = page.waitForResponse(
+      (response) =>
+        response.url().includes(`/api/assets/${seedAssetId}/columns/refresh-from-definition`) &&
+        response.request().method() === "POST",
+      { timeout: 30000 },
+    );
+    await seedEditor.getByLabel("Upload seed file").setInputFiles({
+      name: "regional_customers_v2.csv",
+      mimeType: "text/csv",
+      buffer: replacement,
+    });
+    const [seedUpload, replacementRefresh] = await Promise.all([
+      seedUploadResponse,
+      replacementRefreshResponse,
+    ]);
+    expect(seedUpload.ok(), await seedUpload.text()).toBe(true);
+    expect(replacementRefresh.ok(), await replacementRefresh.text()).toBe(true);
+    await expect(
+      seedEditor.getByText("regional_customers_v2.csv uploaded and columns refreshed."),
+    ).toBeVisible({ timeout: 15000 });
+
+    const replacedSeed = await pollAsset(
+      liveApp,
+      page,
+      "analytics.regional_customers",
+      (asset) =>
+        asset.parameters?.path === "./regional_customers_v2.csv" &&
+        asset.meta?.renart_seed_file === "regional_customers_v2.csv" &&
+        asset.columns?.some((column) => column.name === "segment") === true,
+    );
+    expect(replacedSeed.parameters?.file_type).toBe("csv");
+    expect(
+      await readFile(
+        join(liveApp.workspaceDir, "analytics/assets/analytics/regional_customers_v2.csv"),
+      ),
+    ).toEqual(replacement);
+    let oldSeedError: NodeJS.ErrnoException | undefined;
+    try {
+      await readFile(
+        join(liveApp.workspaceDir, "analytics/assets/analytics/regional_customers.csv"),
+      );
+    } catch (error) {
+      oldSeedError = error as NodeJS.ErrnoException;
+    }
+    expect(oldSeedError?.code).toBe("ENOENT");
+    const replacedDefinition = await readFile(join(liveApp.workspaceDir, seedPath), "utf8");
+    expect(replacedDefinition).toContain("path: ./regional_customers_v2.csv");
+    expect(replacedDefinition).toContain("renart_seed_file: regional_customers_v2.csv");
+    expect(replacedDefinition).toContain("name: segment");
+
     const seedMaterializeResponse = page.waitForResponse(
       (response) =>
         response.url().includes(`/api/assets/${seedAssetId}/materialize/stream`) && response.ok(),
@@ -136,6 +225,9 @@ test.describe("seed and sensor assets live", () => {
     await expect(sensorEditor).toHaveAttribute("data-asset-kind", "sensor");
     await expect(sensorEditor.locator(".monaco-editor")).toHaveCount(0);
     await expect(sensorEditor.getByLabel("Ready condition query")).toHaveValue("select true");
+    await expect(
+      sensorEditor.getByText("Columns and checks are configured in Properties."),
+    ).toHaveCount(0);
     await expect(page.getByRole("heading", { name: "Sensor condition" })).toHaveCount(0);
     const timeoutInput = sensorEditor.getByLabel("Sensor timeout");
     await timeoutInput.fill("2h");
@@ -154,6 +246,13 @@ test.describe("seed and sensor assets live", () => {
       "analytics.orders_ready",
       (asset) => asset.parameters?.timeout === "2h",
     );
+
+    const sensorProperties = await openAssetProperties(page);
+    await expect(sensorProperties.getByRole("heading", { name: "Identity" })).toBeVisible({
+      timeout: 15000,
+    });
+    await expect(sensorProperties.getByRole("heading", { name: "Columns" })).toHaveCount(0);
+    await expect(sensorProperties.getByRole("heading", { name: "Quality checks" })).toHaveCount(0);
 
     const sensorRunResponse = page.waitForResponse(
       (response) =>
@@ -260,6 +359,20 @@ async function openNewAssetDialog(page: Page) {
   const dialog = page.getByRole("dialog", { name: "New asset" });
   await expect(dialog).toBeVisible({ timeout: 15000 });
   return dialog;
+}
+
+async function openAssetProperties(page: Page): Promise<Locator> {
+  const inspector = page.locator('[data-testid="asset-inspector"]:visible').first();
+  if (!(await inspector.isVisible().catch(() => false))) {
+    const trigger = page
+      .getByRole("button", { name: "Asset properties" })
+      .or(page.getByRole("button", { name: "Show properties" }))
+      .first();
+    await expect(trigger).toBeVisible({ timeout: 15000 });
+    await trigger.click();
+  }
+  await expect(inspector).toBeVisible({ timeout: 15000 });
+  return inspector;
 }
 
 async function pollAsset(

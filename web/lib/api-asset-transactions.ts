@@ -1,4 +1,5 @@
 import { fetchJSON, fetchJSONWithBody } from "@/lib/api-core";
+import { getSQLTableColumns } from "@/lib/api-sql-discovery";
 import { WebColumn } from "@/lib/types";
 
 /**
@@ -78,6 +79,41 @@ export async function refreshAssetColumnsFromDefinition(assetId: string) {
     `/api/assets/${assetId}/columns/refresh-from-definition`,
     { method: "POST" },
   );
+}
+
+/**
+ * Import columns from an asset's materialized relation, then reconcile them
+ * through the same provenance-preserving write path as definition inference.
+ */
+export async function refreshAssetColumnsFromMaterializedOutput(
+  asset: {
+    id: string;
+    name: string;
+    connection?: string;
+    materialized_as?: string;
+  },
+  environment?: string,
+) {
+  const connection = asset.connection?.trim() ?? "";
+  if (!connection) {
+    throw new Error("No connection is available for materialized column import");
+  }
+  const table = asset.materialized_as?.trim() || asset.name.trim();
+  if (!table) {
+    throw new Error("No materialized relation is available for column import");
+  }
+  const response = await getSQLTableColumns({ connection, table, environment });
+  if (response.error) {
+    throw new Error(response.error);
+  }
+  const columns: WebColumn[] = (response.columns ?? []).map((column) => ({
+    name: column.name,
+    type: column.type,
+  }));
+  if (columns.length === 0) {
+    throw new Error(`No columns found for ${table}`);
+  }
+  return reconcileAssetColumns(asset.id, columns);
 }
 
 /**

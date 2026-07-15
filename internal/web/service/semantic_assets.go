@@ -1,6 +1,7 @@
 package service
 
 import (
+	"context"
 	"fmt"
 	"net/url"
 	"os"
@@ -349,6 +350,128 @@ func containsString(values []string, wanted string) bool {
 		}
 	}
 	return false
+}
+
+// ReplaceSeedFile copies a new user upload beside an existing seed definition,
+// updates the canonical path/type and ownership marker, and preserves every
+// other managed or unknown field in the YAML document.
+func (s *AssetService) ReplaceSeedFile(
+	ctx context.Context,
+	assetID string,
+	fileName string,
+	fileBytes []byte,
+) (AssetMutationResponse, *APIError) {
+	relAssetPath, err := DecodeID(assetID)
+	if err != nil {
+		return AssetMutationResponse{}, badRequestError("invalid_asset_id", "invalid asset id")
+	}
+	absAssetPath, err := s.resolver().JoinPath(relAssetPath)
+	if err != nil {
+		return AssetMutationResponse{}, badRequestError("invalid_asset_path", err.Error())
+	}
+
+	unlock := s.lockAssetFile(absAssetPath)
+	defer unlock()
+
+	_, _, asset, err := s.deps.ResolveAssetByID(ctx, assetID)
+	if err != nil {
+		return AssetMutationResponse{}, badRequestError("asset_resolve_failed", err.Error())
+	}
+	if !strings.HasSuffix(strings.ToLower(strings.TrimSpace(string(asset.Type))), ".seed") {
+		return AssetMutationResponse{}, badRequestError("unsupported_asset_type", "seed file upload is supported for seed assets only")
+	}
+	capability, ok := authoringCapabilityForType(string(asset.Type))
+	if !ok || capability.Kind != "seed" {
+		return AssetMutationResponse{}, badRequestError("unsupported_asset_type", fmt.Sprintf("Renart cannot upload files for asset type %q", asset.Type))
+	}
+
+	cleanedName, nameErr := cleanSeedUploadName(fileName)
+	if nameErr != nil {
+		return AssetMutationResponse{}, nameErr
+	}
+	if cleanedName == filepath.Base(absAssetPath) {
+		return AssetMutationResponse{}, badRequestError("invalid_seed_file_name", "seed file cannot replace its asset definition")
+	}
+	fileType := seedFileTypeFromPath(cleanedName)
+	if fileType == "" || !containsString(capability.FileTypes, fileType) {
+		return AssetMutationResponse{}, badRequestError("invalid_seed_file_type", fmt.Sprintf("unsupported seed file type %q", fileType))
+	}
+
+	fs := s.fs()
+	existingDefinition, readErr := afero.ReadFile(fs, absAssetPath)
+	if readErr != nil {
+		return AssetMutationResponse{}, internalError("asset_read_failed", readErr.Error())
+	}
+	oldSidecarPath := ownedSeedSidecar(asset, absAssetPath)
+	newSidecarPath := filepath.Join(filepath.Dir(absAssetPath), cleanedName)
+	previousSidecar, previousSidecarErr := afero.ReadFile(fs, newSidecarPath)
+	previousSidecarExists := previousSidecarErr == nil
+	if previousSidecarErr != nil && !os.IsNotExist(previousSidecarErr) {
+		return AssetMutationResponse{}, internalError("seed_file_read_failed", previousSidecarErr.Error())
+	}
+	if previousSidecarExists && filepath.Clean(oldSidecarPath) != filepath.Clean(newSidecarPath) {
+		return AssetMutationResponse{}, newAPIError(
+			409,
+			"seed_file_path_exists",
+			fmt.Sprintf("seed file %q already exists and is not owned by this asset", cleanedName),
+		)
+	}
+
+	if asset.Parameters == nil {
+		asset.Parameters = pipeline.ParameterMap{}
+	}
+	asset.Parameters["path"] = "./" + cleanedName
+	asset.Parameters["file_type"] = fileType
+	if asset.Meta == nil {
+		asset.Meta = pipeline.EmptyStringMap{}
+	}
+	asset.Meta[renartOwnedSeedFileMetaKey] = cleanedName
+	mergedDefinition, mergeErr := mergeYAMLAssetDefinition(existingDefinition, asset)
+	if mergeErr != nil {
+		return AssetMutationResponse{}, internalError("asset_render_failed", mergeErr.Error())
+	}
+
+	writeErr := writeNewSemanticAssetFiles(fs, absAssetPath, semanticAssetFiles{
+		definition:  mergedDefinition,
+		sidecarPath: newSidecarPath,
+		sidecar:     append([]byte(nil), fileBytes...),
+	})
+	if writeErr != nil {
+		if previousSidecarExists {
+			_ = afero.WriteFile(fs, newSidecarPath, previousSidecar, 0o644)
+		} else {
+			_ = fs.Remove(newSidecarPath)
+		}
+		return AssetMutationResponse{}, internalError("seed_file_write_failed", writeErr.Error())
+	}
+	if oldSidecarPath != "" && oldSidecarPath != newSidecarPath {
+		_ = fs.Remove(oldSidecarPath)
+	}
+
+	pathsToSuppress := []string{filepath.ToSlash(relAssetPath)}
+	for _, sidecarPath := range []string{oldSidecarPath, newSidecarPath} {
+		if sidecarPath == "" {
+			continue
+		}
+		if relative, relErr := filepath.Rel(s.deps.WorkspaceRoot, sidecarPath); relErr == nil {
+			pathsToSuppress = appendUniqueStrings(pathsToSuppress, filepath.ToSlash(relative))
+		}
+	}
+	for _, path := range pathsToSuppress {
+		if s.deps.SuppressWatcher != nil {
+			s.deps.SuppressWatcher(path)
+		}
+	}
+	if s.deps.PushWorkspaceUpdateImmediateWithChangedIDs != nil {
+		s.deps.PushWorkspaceUpdateImmediateWithChangedIDs(ctx, "asset.updated", filepath.ToSlash(relAssetPath), []string{assetID})
+	} else if s.deps.PushWorkspaceUpdateImmediate != nil {
+		s.deps.PushWorkspaceUpdateImmediate(ctx, "asset.updated", filepath.ToSlash(relAssetPath))
+	}
+	return AssetMutationResponse{
+		Status:    "ok",
+		AssetID:   assetID,
+		AssetPath: filepath.ToSlash(relAssetPath),
+	}, nil
 }
 
 func writeNewSemanticAssetFiles(fs afero.Fs, definitionPath string, files semanticAssetFiles) error {

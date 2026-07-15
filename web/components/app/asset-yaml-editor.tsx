@@ -25,15 +25,21 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { applyAssetTransaction, reconcileAssetColumns } from "@/lib/api-asset-transactions";
+import {
+  applyAssetTransaction,
+  reconcileAssetColumns,
+  refreshAssetColumnsFromDefinition,
+  refreshAssetColumnsFromMaterializedOutput,
+} from "@/lib/api-asset-transactions";
 import { updateAsset } from "@/lib/api-assets";
 import { inferAPIAsset, updateAssetColumns } from "@/lib/api-assets-columns";
-import { getSQLTableColumns } from "@/lib/api-sql-discovery";
 import { classifyDependencies, parseAssetProvenance } from "@/lib/asset-provenance";
 import {
   NON_SQL_ASSET_TYPES,
   SEED_ASSET_TYPES,
   SQL_ASSET_TYPES,
+  type AssetColumnRefreshMode,
+  getAssetColumnRefreshMode,
   groupAssetTypesByKind,
   isSeedAssetType,
   isSensorAssetType,
@@ -69,6 +75,7 @@ export function AssetYamlEditor({ asset, pipelineId }: { asset: WebAsset; pipeli
     () => asset.path?.toLowerCase().endsWith(".sql") ?? asset.type.toLowerCase().includes("sql"),
     [asset.path, asset.type],
   );
+  const columnRefreshMode = getAssetColumnRefreshMode(asset.type, asset.parameters);
 
   return (
     <ScrollArea className="min-h-0 flex-1 bg-background">
@@ -77,7 +84,9 @@ export function AssetYamlEditor({ asset, pipelineId }: { asset: WebAsset; pipeli
         <SemanticParametersSection asset={asset} pipelineId={pipelineId} />
         <MaterializationSection asset={asset} pipelineId={pipelineId} />
         <DependsSection asset={asset} />
-        <ColumnsSection asset={asset} isSql={isSql} />
+        {columnRefreshMode !== "none" ? (
+          <ColumnsSection asset={asset} isSql={isSql} refreshMode={columnRefreshMode} />
+        ) : null}
       </div>
     </ScrollArea>
   );
@@ -842,7 +851,15 @@ function AssetDependencyPicker({
   );
 }
 
-function ColumnsSection({ asset, isSql }: { asset: WebAsset; isSql: boolean }) {
+function ColumnsSection({
+  asset,
+  isSql,
+  refreshMode,
+}: {
+  asset: WebAsset;
+  isSql: boolean;
+  refreshMode: AssetColumnRefreshMode;
+}) {
   const columns = asset.columns ?? [];
   const isSQLMerge = isSql && asset.materialization_strategy?.toLowerCase() === "merge";
   const apply = (tx: Parameters<typeof applyAssetTransaction>[1]) => {
@@ -893,7 +910,9 @@ function ColumnsSection({ asset, isSql }: { asset: WebAsset; isSql: boolean }) {
       {columns.length === 0 ? (
         <Comment depth={1}>
           none yet — add one below
-          {isSql ? " or refresh from the SQL definition" : " or import from the warehouse"}
+          {refreshMode === "materialized"
+            ? " or import from the warehouse"
+            : " or refresh from the definition"}
         </Comment>
       ) : null}
       {columns.map((column) => (
@@ -932,22 +951,24 @@ function ColumnsSection({ asset, isSql }: { asset: WebAsset; isSql: boolean }) {
             apply({ type: "column.manual.add", column_def: { name } });
         }}
       />
-      {!isSql ? <ImportColumnsButton asset={asset} /> : null}
+      <RefreshColumnsButton asset={asset} refreshMode={refreshMode} />
     </>
   );
 }
 
-// Non-SQL assets have no SELECT to infer columns from, so this reads the column
-// schema of the asset's table straight from the warehouse and reconciles it in.
-function ImportColumnsButton({ asset }: { asset: WebAsset }) {
+function RefreshColumnsButton({
+  asset,
+  refreshMode,
+}: {
+  asset: WebAsset;
+  refreshMode: AssetColumnRefreshMode;
+}) {
   const environment = useAtomValue(selectedEnvironmentAtom);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const connection = asset.connection;
-  const table = asset.materialized_as || asset.name;
-  const isAPIAsset = asset.type.toLowerCase() === "api";
+  const isAPIAsset = refreshMode === "api";
 
-  if (!connection && !isAPIAsset) {
+  if (refreshMode === "materialized" && !asset.connection) {
     return (
       <Comment depth={1}>no connection set — can&apos;t import columns from the warehouse</Comment>
     );
@@ -972,27 +993,11 @@ function ImportColumnsButton({ asset }: { asset: WebAsset }) {
         .finally(() => setLoading(false));
       return;
     }
-    if (!connection) {
-      setError("No connection set for warehouse column import");
-      setLoading(false);
-      return;
-    }
-    getSQLTableColumns({ connection, table, environment })
-      .then(async (response) => {
-        if (response.error) {
-          setError(response.error);
-          return;
-        }
-        const inferred: WebColumn[] = (response.columns ?? []).map((column) => ({
-          name: column.name,
-          type: column.type,
-        }));
-        if (inferred.length === 0) {
-          setError(`No columns found for ${table}`);
-          return;
-        }
-        await reconcileAssetColumns(asset.id, inferred);
-      })
+    const refresh =
+      refreshMode === "materialized"
+        ? refreshAssetColumnsFromMaterializedOutput(asset, environment)
+        : refreshAssetColumnsFromDefinition(asset.id);
+    refresh
       .catch((err) => setError(err instanceof Error ? err.message : "Failed to import columns"))
       .finally(() => setLoading(false));
   };
@@ -1007,7 +1012,13 @@ function ImportColumnsButton({ asset }: { asset: WebAsset }) {
           className="font-monaco flex items-center gap-1 rounded-sm px-1 text-[11px] text-muted-foreground hover:bg-muted hover:text-foreground disabled:opacity-50"
         >
           {loading ? <Loader2 className="size-3 animate-spin" /> : <Database className="size-3" />}
-          {isAPIAsset ? "test response and infer columns" : "import columns from warehouse"}
+          {isAPIAsset
+            ? "test response and infer columns"
+            : refreshMode === "materialized"
+              ? "import columns from warehouse"
+              : isSeedAssetType(asset.type)
+                ? "infer columns from seed file"
+                : "refresh columns from definition"}
         </button>
       </Line>
       {error ? <Comment depth={1}>{error}</Comment> : null}

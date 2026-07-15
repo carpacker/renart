@@ -67,6 +67,7 @@ type (
 type AssetHandlers interface {
 	Create(ctx context.Context, pipelineID string, req CreateAssetRequest) (AssetMutationResponse, *APIError)
 	Update(ctx context.Context, assetID string, req UpdateAssetRequest) (AssetMutationResponse, *APIError)
+	ReplaceSeedFile(ctx context.Context, assetID, fileName string, fileBytes []byte) (AssetMutationResponse, *APIError)
 	Delete(ctx context.Context, assetID string) (StatusResponse, *APIError)
 	FormatSQL(ctx context.Context, assetID string, req FormatSQLAssetRequest) (FormatSQLAssetResponse, *APIError)
 	FormatPython(ctx context.Context, assetID string, req FormatPythonAssetRequest) (FormatPythonAssetResponse, *APIError)
@@ -89,6 +90,7 @@ const maxSeedUploadBytes int64 = 256 << 20
 func RegisterAssetRoutes(router chi.Router, handlers *AssetsAPI) {
 	router.Post("/api/pipelines/{id}/assets", handlers.HandleCreateAsset)
 	router.Put("/api/pipelines/{pipelineID}/assets/{assetID}", handlers.HandleUpdateAsset)
+	router.Post("/api/assets/{assetID}/seed-file", handlers.HandleReplaceSeedFile)
 	router.Delete("/api/pipelines/{pipelineID}/assets/{assetID}", handlers.HandleDeleteAsset)
 	router.Post("/api/assets/{assetID}/format-sql", handlers.HandleFormatSQLAsset)
 	router.Post("/api/assets/{assetID}/format-python", handlers.HandleFormatPythonAsset)
@@ -173,6 +175,55 @@ func (h *AssetsAPI) HandleUpdateAsset(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	webapi.WriteJSON(w, http.StatusOK, resp)
+}
+
+func (h *AssetsAPI) HandleReplaceSeedFile(w http.ResponseWriter, r *http.Request) {
+	fileName, fileBytes, err := decodeSeedFileUpload(w, r)
+	if err != nil {
+		webapi.WriteBadRequest(w, "invalid_seed_upload", err.Error())
+		return
+	}
+	resp, apiErr := h.Service.ReplaceSeedFile(
+		r.Context(),
+		chi.URLParam(r, "assetID"),
+		fileName,
+		fileBytes,
+	)
+	if apiErr != nil {
+		writeAPIError(w, apiErr)
+		return
+	}
+	webapi.WriteJSON(w, http.StatusOK, resp)
+}
+
+func decodeSeedFileUpload(w http.ResponseWriter, r *http.Request) (string, []byte, error) {
+	mediaType, _, mediaTypeErr := mime.ParseMediaType(r.Header.Get("Content-Type"))
+	if mediaTypeErr != nil || mediaType != "multipart/form-data" {
+		return "", nil, errors.New("multipart/form-data is required")
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, maxSeedUploadBytes+(1<<20))
+	if err := r.ParseMultipartForm(16 << 20); err != nil {
+		return "", nil, err
+	}
+	if r.MultipartForm != nil {
+		defer r.MultipartForm.RemoveAll()
+	}
+	file, header, err := r.FormFile("file")
+	if errors.Is(err, http.ErrMissingFile) {
+		return "", nil, errors.New("seed file is required")
+	}
+	if err != nil {
+		return "", nil, err
+	}
+	defer file.Close()
+	contents, err := io.ReadAll(io.LimitReader(file, maxSeedUploadBytes+1))
+	if err != nil {
+		return "", nil, err
+	}
+	if int64(len(contents)) > maxSeedUploadBytes {
+		return "", nil, fmt.Errorf("seed upload exceeds the %d MiB limit", maxSeedUploadBytes>>20)
+	}
+	return header.Filename, contents, nil
 }
 
 func (h *AssetsAPI) HandleApplyAssetTransaction(w http.ResponseWriter, r *http.Request) {

@@ -70,6 +70,15 @@ export async function updateAsset(
   );
 }
 
+export async function replaceSeedAssetFile(assetId: string, file: File) {
+  const body = new FormData();
+  body.set("file", file, file.name);
+  return fetchJSON<{ status: string; asset_id?: string; asset_path?: string }>(
+    `/api/assets/${assetId}/seed-file`,
+    { method: "POST", body },
+  );
+}
+
 export async function deleteAsset(pipelineId: string, assetId: string) {
   return fetchJSON<Record<string, string>>(`/api/pipelines/${pipelineId}/assets/${assetId}`, {
     method: "DELETE",

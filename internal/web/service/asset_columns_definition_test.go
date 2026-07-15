@@ -146,3 +146,63 @@ parameters:
 	assert.Equal(t, "boolean", byName["rated"])
 	assert.Equal(t, "string", byName["white_username"])
 }
+
+func TestRefreshSeedColumnsFromLocalFileWithSling(t *testing.T) {
+	workspaceRoot := t.TempDir()
+	pipelineRoot := filepath.Join(workspaceRoot, "analytics")
+	assetsRoot := filepath.Join(pipelineRoot, "assets")
+	require.NoError(t, os.MkdirAll(assetsRoot, 0o755))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(pipelineRoot, "pipeline.yml"),
+		[]byte("name: analytics\ndefault_connections:\n  duckdb: duckdb-default\n"),
+		0o644,
+	))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(assetsRoot, "customers.csv"),
+		[]byte("customer_id,customer_name,created_at\n1,Ada,2026-07-15\n"),
+		0o644,
+	))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(assetsRoot, "customers.asset.yml"),
+		[]byte("name: analytics.customers\ntype: duckdb.seed\nparameters:\n  path: ./customers.csv\n  file_type: csv\n"),
+		0o644,
+	))
+
+	capturePath := filepath.Join(workspaceRoot, "sling-args.txt")
+	fakeSling := filepath.Join(workspaceRoot, "fake-sling")
+	require.NoError(t, os.WriteFile(fakeSling, []byte(`#!/bin/sh
+printf '%s\n' "$*" > "$CAPTURE_PATH"
+printf '%s\n' '{"fields":["File","ID","Column","Native Type","General Type"],"rows":[["customers.csv",1,"customer_id","-","bigint"],["customers.csv",2,"customer_name","-","text"],["customers.csv",3,"created_at","-","date"]]}'
+`), 0o755))
+	t.Setenv("RENART_SLING_BINARY", fakeSling)
+	t.Setenv("CAPTURE_PATH", capturePath)
+
+	service := NewAssetService(AssetDependencies{
+		Fs:                           afero.NewOsFs(),
+		WorkspaceRoot:                workspaceRoot,
+		ResolveAssetByID:             newAssetTestResolver(workspaceRoot).ResolveAssetByID,
+		SuppressWatcher:              func(string) {},
+		PushWorkspaceUpdateImmediate: func(context.Context, string, string) {},
+	})
+	result, apiErr := service.RefreshAssetColumnsFromDefinition(
+		context.Background(),
+		EncodeID("analytics/assets/customers.asset.yml"),
+	)
+	require.Nil(t, apiErr)
+	require.Len(t, result.Columns, 3)
+	assert.Equal(t, "customer_id", result.Columns[0].Name)
+	assert.Equal(t, "bigint", result.Columns[0].Type)
+	assert.Equal(t, "created_at", result.Columns[2].Name)
+	assert.Equal(t, "date", result.Columns[2].Type)
+
+	args, err := os.ReadFile(capturePath)
+	require.NoError(t, err)
+	assert.Contains(t, string(args), "conns discover LOCAL")
+	assert.Contains(t, string(args), "--columns")
+	assert.Contains(t, string(args), filepath.Join(assetsRoot, "customers.csv"))
+
+	definition, err := os.ReadFile(filepath.Join(assetsRoot, "customers.asset.yml"))
+	require.NoError(t, err)
+	assert.Contains(t, string(definition), "name: customer_id")
+	assert.Contains(t, string(definition), "type: bigint")
+}

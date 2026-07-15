@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"strings"
 
 	"github.com/bruin-data/bruin/pkg/jinja"
 	"github.com/bruin-data/bruin/pkg/pipeline"
@@ -31,6 +32,9 @@ func (s *AssetService) InferAssetColumnsFromDefinition(ctx context.Context, asse
 			result = append(result, WorkspaceColumn{Name: column.Name, Type: column.Type})
 		}
 		return result, nil
+	}
+	if strings.HasSuffix(strings.ToLower(strings.TrimSpace(string(asset.Type))), ".seed") {
+		return s.inferSeedColumnsFromSource(ctx, parsedPipeline, asset)
 	}
 
 	dialect, dialectErr := AssetTypeToDialect(asset.Type)

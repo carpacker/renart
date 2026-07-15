@@ -140,9 +140,16 @@ round-trips unknown fields).
   the same backend capability contract as creation: seed source, file type, and
   schema enforcement remain editable, while query/table/S3-key sensors expose
   their condition, `poke_interval`, and `timeout`. The inspector retains their
-  generic identity, dependencies, columns, and checks without duplicating those
-  runtime controls. The internal `renart_seed_file` ownership marker is
-  preserved without becoming a guided user setting. Asset-type
+  generic identity and dependencies without duplicating those runtime controls.
+  The internal `renart_seed_file` ownership marker is
+  preserved without becoming a guided user setting. Owned local seeds also
+  expose a drop target below the YAML-like parameters. Replacing the file uses
+  `POST /api/assets/{assetID}/seed-file`, updates `path`, `file_type`, and the
+  ownership marker in one server-side write, preserves the remaining definition,
+  and removes the previous owned sidecar. A file with the same name as an
+  unrelated workspace file is rejected instead of overwritten. Relation-producing
+  assets retain generic columns and checks in the inspector; sensors omit both
+  because they gate execution without producing a relation. Asset-type
   selectors in both guided and YAML views group SQL, seed, sensor, and other
   non-SQL kinds separately while preserving unknown current values for repair.
 - **Run-scoped full refresh:** supported table assets expose a Full refresh
@@ -166,9 +173,15 @@ round-trips unknown fields).
   `pipeline.yml` overrides separate from read-only defaults Bruin infers from
   asset types, and each resolved connection links to that exact environment
   connection under project settings.
-- Column refresh actions: re-infer from SQL
-  (`/columns/refresh-from-definition`), fill from warehouse
-  (`/fill-columns-from-db`), reconcile (`/columns/reconcile`).
+- Column refresh actions choose their source by asset kind. SQL and Load infer
+  from definitions/upstream assets; local seeds ask Sling to discover the source
+  file schema, so they work before the first run. HTTP API assets infer from a
+  sampled response. URL seeds and executable non-SQL relation assets import the
+  selected environment's materialized schema. All inferred shapes pass through
+  the same provenance-preserving reconciliation path. Sensors expose no column
+  refresh action. These flows use `/columns/refresh-from-definition`,
+  `/api-infer`, `/api/sql/table-columns`, and `/columns/reconcile`; the older
+  SQL-specific `/fill-columns-from-db` action remains available separately.
 
 ## 7. Not built (still intent, from the original concept)
 

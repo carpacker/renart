@@ -3,15 +3,19 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 
 import { useAtomValue } from "jotai";
-import { CircleAlert } from "lucide-react";
+import { CircleAlert, CloudUpload, Upload } from "lucide-react";
 
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
+import { Spinner } from "@/components/ui/spinner";
 import { Textarea } from "@/components/ui/textarea";
-import { updateAsset } from "@/lib/api-assets";
+import { refreshAssetColumnsFromDefinition } from "@/lib/api-asset-transactions";
+import { replaceSeedAssetFile, updateAsset } from "@/lib/api-assets";
 import { getAssetAuthoringCapability, isSeedAssetType, isSensorAssetType } from "@/lib/asset-types";
 import { workspaceAtom } from "@/lib/atoms/domains/workspace";
 import type { WebAsset } from "@/lib/types";
+import { cn } from "@/lib/utils";
 
 import { Comment, InlineSelect, InlineText, Key, Line } from "./asset-yaml-editor";
 
@@ -41,6 +45,8 @@ export function SemanticParametersEditor({
   const pendingUpdatesRef = useRef(0);
   const updateQueueRef = useRef<Promise<unknown>>(Promise.resolve());
   const [error, setError] = useState("");
+  const [uploading, setUploading] = useState(false);
+  const [uploadMessage, setUploadMessage] = useState("");
 
   useEffect(() => {
     if (pendingUpdatesRef.current > 0) return;
@@ -92,6 +98,29 @@ export function SemanticParametersEditor({
   const explicitConnection = (asset.explicit_connection ?? "").trim();
   const connection =
     explicitConnection || (asset.connection ? `auto (${asset.connection})` : "auto");
+
+  const uploadSeedFile = async (file: File) => {
+    setUploading(true);
+    setError("");
+    setUploadMessage("");
+    let uploaded = false;
+    try {
+      await updateQueueRef.current.catch(() => undefined);
+      await replaceSeedAssetFile(asset.id, file);
+      uploaded = true;
+      await refreshAssetColumnsFromDefinition(asset.id);
+      setUploadMessage(`${file.name} uploaded and columns refreshed.`);
+    } catch (cause) {
+      const message = cause instanceof Error ? cause.message : "Could not upload the seed file";
+      if (uploaded) {
+        setUploadMessage(`${file.name} uploaded. Columns were not refreshed: ${message}`);
+      } else {
+        setError(message);
+      }
+    } finally {
+      setUploading(false);
+    }
+  };
 
   if (!isSeed && !isSensor) return null;
 
@@ -155,6 +184,14 @@ export function SemanticParametersEditor({
               onChange={(value) => saveParameter("enforce_schema", value)}
             />
           </Line>
+          <Separator className="my-3" />
+          <SeedFileDropzone
+            currentPath={parameters.path ?? ""}
+            fileTypes={seedFileTypes}
+            uploading={uploading}
+            message={uploadMessage}
+            onFile={(file) => void uploadSeedFile(file)}
+          />
         </>
       ) : (
         <>
@@ -225,14 +262,16 @@ export function SemanticParametersEditor({
         </>
       )}
 
-      <Separator className="mt-3" />
-      <div className="flex flex-col gap-0.5 pt-2">
-        {isSensor ? (
-          <Comment>Manual runs check once; scheduled runs repeat until ready or timed out.</Comment>
-        ) : (
-          <Comment>Columns and checks are configured in Properties.</Comment>
-        )}
-      </div>
+      {isSensor ? (
+        <>
+          <Separator className="mt-3" />
+          <div className="flex flex-col gap-0.5 pt-2">
+            <Comment>
+              Manual runs check once; scheduled runs repeat until ready or timed out.
+            </Comment>
+          </div>
+        </>
+      ) : null}
       {error ? (
         <Alert variant="destructive" className="mt-3">
           <CircleAlert />
@@ -240,6 +279,89 @@ export function SemanticParametersEditor({
           <AlertDescription>{error}</AlertDescription>
         </Alert>
       ) : null}
+    </div>
+  );
+}
+
+function SeedFileDropzone({
+  currentPath,
+  fileTypes,
+  uploading,
+  message,
+  onFile,
+}: {
+  currentPath: string;
+  fileTypes: string[];
+  uploading: boolean;
+  message: string;
+  onFile: (file: File) => void;
+}) {
+  const inputRef = useRef<HTMLInputElement>(null);
+  const [dragging, setDragging] = useState(false);
+  const accept = fileTypes.map((fileType) => `.${fileType}`).join(",");
+
+  const chooseFile = (files: FileList | null) => {
+    const file = files?.[0];
+    if (file) onFile(file);
+  };
+
+  return (
+    <div className="flex flex-col gap-1.5" data-testid="seed-file-dropzone">
+      <div
+        className={cn(
+          "flex min-h-32 flex-col items-center justify-center gap-2 rounded-md border border-dashed p-4 text-center transition-colors",
+          dragging && "border-primary bg-accent",
+        )}
+        onDragEnter={(event) => {
+          event.preventDefault();
+          setDragging(true);
+        }}
+        onDragOver={(event) => {
+          event.preventDefault();
+          event.dataTransfer.dropEffect = "copy";
+        }}
+        onDragLeave={(event) => {
+          if (!event.currentTarget.contains(event.relatedTarget as Node | null)) {
+            setDragging(false);
+          }
+        }}
+        onDrop={(event) => {
+          event.preventDefault();
+          setDragging(false);
+          if (!uploading) chooseFile(event.dataTransfer.files);
+        }}
+      >
+        <CloudUpload className="size-5 text-muted-foreground" aria-hidden="true" />
+        <div className="flex flex-col gap-0.5">
+          <p className="text-xs font-medium text-foreground">Drop a seed file here</p>
+          <p className="text-[11px] text-muted-foreground">
+            {currentPath ? `Replace ${currentPath}` : "Upload a file beside the asset definition"}
+          </p>
+        </div>
+        <Button
+          type="button"
+          variant="outline"
+          size="xs"
+          disabled={uploading}
+          onClick={() => inputRef.current?.click()}
+        >
+          {uploading ? <Spinner data-icon="inline-start" /> : <Upload data-icon="inline-start" />}
+          {uploading ? "Uploading" : "Choose file"}
+        </Button>
+        <input
+          ref={inputRef}
+          className="sr-only"
+          type="file"
+          accept={accept}
+          aria-label="Upload seed file"
+          disabled={uploading}
+          onChange={(event) => {
+            chooseFile(event.target.files);
+            event.target.value = "";
+          }}
+        />
+      </div>
+      {message ? <Comment>{message}</Comment> : null}
     </div>
   );
 }

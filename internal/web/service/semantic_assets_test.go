@@ -250,3 +250,67 @@ func TestAssetServiceCreateSemanticAssetRejectsIncompatibleConnection(t *testing
 	require.NotNil(t, apiErr)
 	assert.Equal(t, "incompatible_connection", apiErr.Code)
 }
+
+func TestAssetServiceReplaceSeedFilePreservesDefinitionAndRemovesOldUpload(t *testing.T) {
+	t.Parallel()
+	service, pipelineRoot := newSemanticAssetTestService(t, nil)
+	response, createErr := service.Create(context.Background(), EncodeID("analytics"), CreateAssetParams{
+		Name:          "analytics.customers",
+		Type:          "duckdb.seed",
+		SeedFileName:  "customers.csv",
+		SeedFileBytes: []byte("id,name\n1,Ada\n"),
+	})
+	require.Nil(t, createErr)
+
+	definitionPath := filepath.Join(pipelineRoot, "assets", "analytics", "customers.asset.yml")
+	definition, err := os.ReadFile(definitionPath)
+	require.NoError(t, err)
+	definition = append(definition, []byte("custom_setting:\n  keep: true\n")...)
+	require.NoError(t, os.WriteFile(definitionPath, definition, 0o644))
+	_, reconcileErr := service.ReconcileAssetColumns(context.Background(), response.AssetID, []WorkspaceColumn{
+		{Name: "id", Type: "bigint"},
+		{Name: "name", Type: "text"},
+	})
+	require.Nil(t, reconcileErr)
+	takenSidecar := filepath.Join(pipelineRoot, "assets", "analytics", "taken.csv")
+	require.NoError(t, os.WriteFile(takenSidecar, []byte("do not replace"), 0o644))
+	_, collisionErr := service.ReplaceSeedFile(
+		context.Background(),
+		response.AssetID,
+		"taken.csv",
+		[]byte("replacement"),
+	)
+	require.NotNil(t, collisionErr)
+	assert.Equal(t, 409, collisionErr.Status)
+	assert.Equal(t, "seed_file_path_exists", collisionErr.Code)
+	takenContents, err := os.ReadFile(takenSidecar)
+	require.NoError(t, err)
+	assert.Equal(t, "do not replace", string(takenContents))
+	assert.FileExists(t, filepath.Join(pipelineRoot, "assets", "analytics", "customers.csv"))
+
+	replacement := []byte("id,name,segment\n2,Grace,enterprise\n")
+	updated, apiErr := service.ReplaceSeedFile(
+		context.Background(),
+		response.AssetID,
+		"regional_customers.csv",
+		replacement,
+	)
+	require.Nil(t, apiErr)
+	assert.Equal(t, response.AssetID, updated.AssetID)
+
+	newSidecar := filepath.Join(pipelineRoot, "assets", "analytics", "regional_customers.csv")
+	actual, err := os.ReadFile(newSidecar)
+	require.NoError(t, err)
+	assert.Equal(t, replacement, actual)
+	assert.NoFileExists(t, filepath.Join(pipelineRoot, "assets", "analytics", "customers.csv"))
+
+	updatedDefinition, err := os.ReadFile(definitionPath)
+	require.NoError(t, err)
+	text := string(updatedDefinition)
+	assert.Contains(t, text, "path: ./regional_customers.csv")
+	assert.Contains(t, text, "file_type: csv")
+	assert.Contains(t, text, "renart_seed_file: regional_customers.csv")
+	assert.Contains(t, text, "custom_setting:")
+	assert.Contains(t, text, "name: id")
+	assert.Contains(t, text, "name: name")
+}
