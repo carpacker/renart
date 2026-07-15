@@ -24,6 +24,7 @@ var creatableSeedAssetTypes = []pipeline.AssetType{
 	pipeline.AssetTypeRedshiftSeed,
 	pipeline.AssetTypeSnowflakeSeed,
 	pipeline.AssetTypeSynapseSeed,
+	assetTypeTrinoSeed,
 	pipeline.AssetTypeVerticaSeed,
 }
 

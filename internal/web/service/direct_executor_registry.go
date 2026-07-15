@@ -229,6 +229,7 @@ func buildDirectMainExecutors(manager config.ConnectionAndDetailsGetter, rendere
 	trinoColumnCheckOperator := ath.NewColumnCheckOperator(manager)
 	executors[pipeline.AssetTypeTrinoQuery][scheduler.TaskInstanceTypeColumnCheck] = trinoColumnCheckOperator
 	executors[pipeline.AssetTypeTrinoQuery][scheduler.TaskInstanceTypeCustomCheck] = ansisql.NewCustomCheckOperator(manager, renderer)
+	assignSeedExecutor(assetTypeTrinoSeed, trinoColumnCheckOperator, customCheckRunner, nil)
 	assignSensorExecutor(pipeline.AssetTypeTrinoQuerySensor, ansisql.NewQuerySensor(manager, wholeFileExtractor, sensorMode), trinoColumnCheckOperator, customCheckRunner, nil)
 	assignSensorExecutor(pipeline.AssetTypeDremioQuerySensor, ansisql.NewQuerySensor(manager, wholeFileExtractor, sensorMode), ath.NewColumnCheckOperator(manager), customCheckRunner, nil)
 	assignSensorExecutor(pipeline.AssetTypeSailQuerySensor, ansisql.NewQuerySensor(manager, wholeFileExtractor, sensorMode), sail.NewColumnCheckOperator(manager), customCheckRunner, nil)

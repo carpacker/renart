@@ -8,11 +8,70 @@ import (
 	"testing"
 	"time"
 
+	"github.com/bruin-data/bruin/pkg/config"
 	"github.com/bruin-data/bruin/pkg/pipeline"
 	"github.com/spf13/afero"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+type loadConnectionManagerWithDetails struct {
+	connection     any
+	connectionType string
+	details        any
+}
+
+func (m loadConnectionManagerWithDetails) GetConnection(string) any        { return m.connection }
+func (m loadConnectionManagerWithDetails) GetConnectionDetails(string) any { return m.details }
+func (m loadConnectionManagerWithDetails) GetConnectionType(string) string {
+	return m.connectionType
+}
+
+func TestLoadConnectionURIUsesSlingTrinoProperties(t *testing.T) {
+	t.Parallel()
+
+	manager := loadConnectionManagerWithDetails{
+		connection:     "trino://renart@trino.internal:8080/postgresql",
+		connectionType: "trino",
+		details: &config.TrinoConnection{
+			ConnectionMetadata: config.ConnectionMetadata{Name: "trino-default"},
+			Host:               "trino.internal",
+			Port:               8080,
+			Username:           "renart",
+			Password:           "p@ssword",
+			Catalog:            "postgresql",
+			Schema:             "analytics",
+		},
+	}
+
+	uri, err := loadConnectionURI(manager, "trino-default")
+	require.NoError(t, err)
+	assert.Equal(t, "trino://renart:p%40ssword@trino.internal:8080?catalog=postgresql&schema=analytics", uri)
+}
+
+func TestLoadConnectionURIUsesSlingClickHouseProperties(t *testing.T) {
+	t.Parallel()
+
+	secure := 1
+	manager := loadConnectionManagerWithDetails{
+		connection:     "clickhouse://renart:p%40ssword@clickhouse.internal:9000?http_port=8123&secure=1",
+		connectionType: "clickhouse",
+		details: &config.ClickHouseConnection{
+			ConnectionMetadata: config.ConnectionMetadata{Name: "clickhouse-default"},
+			Host:               "clickhouse.internal",
+			Port:               9000,
+			HTTPPort:           8123,
+			Username:           "renart",
+			Password:           "p@ssword",
+			Database:           "analytics",
+			Secure:             &secure,
+		},
+	}
+
+	uri, err := loadConnectionURI(manager, "clickhouse-default")
+	require.NoError(t, err)
+	assert.Equal(t, "clickhouse://renart:p%40ssword@clickhouse.internal:9000/analytics?secure=true", uri)
+}
 
 func TestLoadRunEnvIncludesResolvedIntervalDates(t *testing.T) {
 	t.Parallel()

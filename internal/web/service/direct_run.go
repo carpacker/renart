@@ -462,6 +462,7 @@ var directRunAssetTypes = map[pipeline.AssetType]struct{}{
 	pipeline.AssetTypeClickHouse:              {},
 	pipeline.AssetTypeClickHouseSeed:          {},
 	pipeline.AssetTypeTrinoQuery:              {},
+	assetTypeTrinoSeed:                        {},
 	pipeline.AssetTypeVerticaQuery:            {},
 	pipeline.AssetTypeVerticaSeed:             {},
 	pipeline.AssetTypeOracleQuery:             {},

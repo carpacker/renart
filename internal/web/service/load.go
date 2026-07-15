@@ -6,9 +6,12 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -41,6 +44,18 @@ func loadConnectionURI(manager config.ConnectionGetter, connectionName string) (
 	if conn == nil {
 		return "", fmt.Errorf("connection %q was not found", name)
 	}
+	if details, ok := manager.(config.ConnectionDetailsGetter); ok {
+		switch connection := details.GetConnectionDetails(name).(type) {
+		case *config.ClickHouseConnection:
+			return slingClickHouseConnectionURI(*connection)
+		case config.ClickHouseConnection:
+			return slingClickHouseConnectionURI(connection)
+		case *config.TrinoConnection:
+			return slingTrinoConnectionURI(*connection)
+		case config.TrinoConnection:
+			return slingTrinoConnectionURI(connection)
+		}
+	}
 	if uriGetter, ok := conn.(ingestrURIConnection); ok {
 		uri, err := uriGetter.GetIngestrURI()
 		if err != nil {
@@ -55,6 +70,64 @@ func loadConnectionURI(manager config.ConnectionGetter, connectionName string) (
 		return strings.TrimSpace(raw), nil
 	}
 	return "", fmt.Errorf("connection %q cannot be converted to a Load connection URI", name)
+}
+
+// Bruin's ClickHouse ingestr URI includes http_port as a native-driver query
+// setting. Sling forwards unknown query parameters to ClickHouse, where that
+// property is rejected. Its native connection contract uses the database path
+// and only needs the secure query flag when TLS is enabled.
+func slingClickHouseConnectionURI(connection config.ClickHouseConnection) (string, error) {
+	database := strings.TrimSpace(connection.Database)
+	if database == "" {
+		return "", fmt.Errorf("ClickHouse connection %q requires a database for Sling", connection.Name)
+	}
+
+	u := &url.URL{
+		Scheme: "clickhouse",
+		Host:   net.JoinHostPort(strings.TrimSpace(connection.Host), strconv.Itoa(connection.Port)),
+		Path:   "/" + database,
+	}
+	username := strings.TrimSpace(connection.Username)
+	if username != "" {
+		if connection.Password == "" {
+			u.User = url.User(username)
+		} else {
+			u.User = url.UserPassword(username, connection.Password)
+		}
+	}
+	if connection.Secure != nil && *connection.Secure == 1 {
+		u.RawQuery = url.Values{"secure": []string{"true"}}.Encode()
+	}
+	return u.String(), nil
+}
+
+// Bruin's Trino ingestr URI encodes the catalog as a path segment. Sling's
+// Trino connector instead requires catalog (and optionally schema) as query
+// properties, so build its URI from the retained connection details.
+func slingTrinoConnectionURI(connection config.TrinoConnection) (string, error) {
+	catalog := strings.TrimSpace(connection.Catalog)
+	if catalog == "" {
+		return "", fmt.Errorf("Trino connection %q requires a catalog for Sling", connection.Name)
+	}
+
+	u := &url.URL{
+		Scheme: "trino",
+		Host:   net.JoinHostPort(strings.TrimSpace(connection.Host), strconv.Itoa(connection.Port)),
+	}
+	username := strings.TrimSpace(connection.Username)
+	if username != "" {
+		if connection.Password == "" {
+			u.User = url.User(username)
+		} else {
+			u.User = url.UserPassword(username, connection.Password)
+		}
+	}
+	query := url.Values{"catalog": []string{catalog}}
+	if schema := strings.TrimSpace(connection.Schema); schema != "" {
+		query.Set("schema", schema)
+	}
+	u.RawQuery = query.Encode()
+	return u.String(), nil
 }
 
 var loadUvChecker = &bruinuv.Checker{}

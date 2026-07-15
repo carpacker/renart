@@ -483,6 +483,7 @@ func TestHybridBruinExecutorRunAssetSupportsSimpleSQLAssets(t *testing.T) {
 	assert.False(t, shouldFallbackToCLIRunAsset(&pipeline.Asset{Type: pipeline.AssetTypeDuckDBSeed}, &pipeline.Pipeline{}))
 	assert.False(t, shouldFallbackToCLIRunAsset(&pipeline.Asset{Type: pipeline.AssetTypeBigquerySeed}, &pipeline.Pipeline{}))
 	assert.False(t, shouldFallbackToCLIRunAsset(&pipeline.Asset{Type: pipeline.AssetTypePostgresSeed}, &pipeline.Pipeline{}))
+	assert.False(t, shouldFallbackToCLIRunAsset(&pipeline.Asset{Type: assetTypeTrinoSeed}, &pipeline.Pipeline{}))
 	assert.False(t, shouldFallbackToCLIRunAsset(&pipeline.Asset{Type: pipeline.AssetTypePostgresQuerySensor}, &pipeline.Pipeline{}))
 	assert.False(t, shouldFallbackToCLIRunAsset(&pipeline.Asset{Type: pipeline.AssetTypeS3KeySensor}, &pipeline.Pipeline{}))
 	assert.False(t, shouldFallbackToCLIRunAsset(&pipeline.Asset{Type: pipeline.AssetTypePython}, &pipeline.Pipeline{}))

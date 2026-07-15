@@ -185,7 +185,11 @@ strategy source. Renart invokes Sling from those semantic fields directly; no
 replication sidecar or parallel destination/mode parameter set exists. A
 run-scoped full refresh temporarily selects Sling's replace mode without
 rewriting the asset definition; `refresh_restricted` assets keep their
-configured strategy and surface a warning instead.
+configured strategy and surface a warning instead. The shared Sling connection
+bridge emits Sling-native DSNs where Bruin's ingestr URI convention differs:
+Trino carries `catalog` and `schema` as query properties, while ClickHouse uses
+the database path and exposes only the TLS flag as a query property. Load, API,
+Seed, and non-DuckDB Python materialization all use this same bridge.
 
 Seed and sensor authoring is likewise semantic rather than raw-file templating.
 The workspace DTO's backend-owned `asset_capabilities` list is the runtime
@@ -205,7 +209,10 @@ asset definition (or accepts HTTP(S)), supplies an explicit source format, and
 full-refreshes the canonical asset name through the resolved target connection.
 With `enforce_schema` and declared columns, it also passes the source selection,
 renames, and supported type casts to Sling. The normal per-warehouse column and
-custom checks still run around that main task. Sensor main tasks use Bruin's
+custom checks still run around that main task. Renart additionally owns the
+`trino.seed` type and maps it to `default_connections.trino`; the pinned Bruin
+version has no equivalent type, so this asset remains intentionally Renart-only
+until Bruin exposes the same contract. Sensor main tasks use Bruin's
 native sensor operators: interactive runs default to one bounded check, while
 scheduled runs retain dependency-gate semantics and wait until success or the
 configured timeout. HTTP and CLI execution can explicitly select

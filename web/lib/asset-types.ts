@@ -35,6 +35,7 @@ export const SEED_ASSET_TYPES = [
   "rs.seed",
   "sf.seed",
   "synapse.seed",
+  "trino.seed",
   "vertica.seed",
 ] as const;
 

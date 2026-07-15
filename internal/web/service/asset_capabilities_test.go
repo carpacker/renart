@@ -9,16 +9,18 @@ import (
 	"github.com/bruin-data/bruin/pkg/scheduler"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"renart/internal/web/model"
 )
 
 func TestAssetAuthoringCapabilitiesCoverDirectSeedsAndSensors(t *testing.T) {
 	t.Parallel()
 	capabilities := assetAuthoringCapabilities()
-	byType := make(map[string]struct{}, len(capabilities))
+	byType := make(map[string]model.AssetAuthoringCapability, len(capabilities))
 	for _, capability := range capabilities {
 		_, duplicate := byType[capability.Type]
 		assert.False(t, duplicate, "duplicate capability for %s", capability.Type)
-		byType[capability.Type] = struct{}{}
+		byType[capability.Type] = capability
 		assert.NotEmpty(t, capability.ConnectionTypes, capability.Type)
 		assert.True(t, isDirectRunAssetTypeSupported(pipeline.AssetType(capability.Type)), capability.Type)
 	}
@@ -27,7 +29,17 @@ func TestAssetAuthoringCapabilitiesCoverDirectSeedsAndSensors(t *testing.T) {
 	assert.Contains(t, byType, string(pipeline.AssetTypeDorisSeed))
 	assert.Contains(t, byType, string(pipeline.AssetTypeDremioQuerySensor))
 	assert.Contains(t, byType, string(pipeline.AssetTypeSailQuerySensor))
+	assert.Equal(t, []string{"trino"}, byType[string(assetTypeTrinoSeed)].ConnectionTypes)
 	assert.NotContains(t, byType, string(pipeline.AssetTypeFabricSeedLegacy))
+}
+
+func TestTrinoSeedResolvesPipelineDefaultConnection(t *testing.T) {
+	t.Parallel()
+	pl := &pipeline.Pipeline{DefaultConnections: pipeline.EmptyStringMap{"trino": "trino-e2e"}}
+
+	connection, err := pl.GetConnectionNameForAsset(&pipeline.Asset{Type: assetTypeTrinoSeed})
+	require.NoError(t, err)
+	assert.Equal(t, "trino-e2e", connection)
 }
 
 func TestSensorCapabilitiesDeclareVariantParameters(t *testing.T) {
