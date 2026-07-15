@@ -188,6 +188,9 @@ test.describe("seed and sensor assets live", () => {
     });
 
     await page.goto(`${liveApp.baseURL}/pipelines/${pipelineId}/assets/${ordersAssetId}/canvas`);
+    const ordersMaterialize = await materializeAsset(page, liveApp.baseURL, ordersAssetId);
+    expect(ordersMaterialize.status).toBe("ok");
+
     dialog = await openNewAssetDialog(page);
     await dialog.getByRole("radio", { name: "Sensor", exact: true }).click();
     await dialog.getByLabel("Asset name").fill("analytics.orders_ready");
@@ -222,13 +225,50 @@ test.describe("seed and sensor assets live", () => {
       timeout: 15000,
     });
     const sensorEditor = page.getByTestId("semantic-parameters-editor");
-    await expect(sensorEditor).toHaveAttribute("data-asset-kind", "sensor");
-    await expect(sensorEditor.locator(".monaco-editor")).toHaveCount(0);
-    await expect(sensorEditor.getByLabel("Ready condition query")).toHaveValue("select true");
+    await expect(sensorEditor).toHaveAttribute("data-asset-kind", "sensor-query");
+    await expect(sensorEditor.locator(".monaco-editor")).toBeVisible({ timeout: 15000 });
+    await expect.poll(() => monacoEditorValue(page)).toBe("select true");
     await expect(
       sensorEditor.getByText("Columns and checks are configured in Properties."),
     ).toHaveCount(0);
     await expect(page.getByRole("heading", { name: "Sensor condition" })).toHaveCount(0);
+
+    const completionQuery = "select count(*) > 0\nfrom analytics.orders o\nwhere o. > 0";
+    const completionResponse = page.waitForResponse(
+      (response) =>
+        response.url().includes("/api/sql/lsp/completions") &&
+        response.request().method() === "POST" &&
+        (response.request().postData() ?? "").includes(sensorAssetId),
+      { timeout: 15000 },
+    );
+    await setMonacoContentAndCursor(page, completionQuery, "where o.");
+    await page.keyboard.press("ControlOrMeta+Space");
+    await completionResponse;
+    const suggestWidget = page.locator(".suggest-widget.visible").first();
+    await expect(suggestWidget).toBeVisible({ timeout: 15000 });
+    const orderIDCompletion = suggestWidget
+      .locator(".monaco-list-row")
+      .filter({ hasText: "order_id" })
+      .first();
+    await expect(orderIDCompletion).toBeVisible();
+    const querySaveResponse = page.waitForResponse(
+      (response) =>
+        response.url().includes(`/api/pipelines/${pipelineId}/assets/${sensorAssetId}`) &&
+        response.request().method() === "PUT" &&
+        (response.request().postData() ?? "").includes("order_id") &&
+        response.ok(),
+      { timeout: 15000 },
+    );
+    await orderIDCompletion.click();
+    await querySaveResponse;
+    await expect.poll(() => monacoEditorValue(page)).toContain("where o.order_id > 0");
+    await pollAsset(
+      liveApp,
+      page,
+      "analytics.orders_ready",
+      (asset) => asset.parameters?.query?.includes("where o.order_id > 0") === true,
+    );
+
     const timeoutInput = sensorEditor.getByLabel("Sensor timeout");
     await timeoutInput.fill("2h");
     const timeoutResponse = page.waitForResponse(
@@ -397,4 +437,50 @@ async function pollAsset(
     .toBe(true);
   if (!found) throw new Error(`asset ${assetName} was not found`);
   return found;
+}
+
+async function materializeAsset(page: Page, baseURL: string, assetId: string) {
+  const response = await page.request.post(
+    `${baseURL}/api/assets/${assetId}/materialize/stream?environment=default`,
+  );
+  expect(response.ok()).toBe(true);
+  const stream = await response.text();
+  const doneLine = stream
+    .split(/\r?\n/)
+    .reverse()
+    .find((line) => line.startsWith("data: ") && line.includes('"status"'));
+  if (!doneLine) throw new Error(`materialize stream did not contain a done event:\n${stream}`);
+  return JSON.parse(doneLine.slice("data: ".length)) as { status: string; error?: string };
+}
+
+async function setMonacoContentAndCursor(page: Page, content: string, cursorAfter: string) {
+  await page.waitForFunction(
+    () => {
+      const monaco = (window as typeof window & { monaco?: any }).monaco;
+      return Boolean(monaco?.editor.getEditors?.()[0]?.getModel?.());
+    },
+    undefined,
+    { timeout: 15000 },
+  );
+  await page.evaluate(
+    ({ content, cursorAfter }) => {
+      const monaco = (window as typeof window & { monaco?: any }).monaco;
+      const editor = monaco?.editor.getEditors?.()[0];
+      const model = editor?.getModel?.();
+      if (!editor || !model) throw new Error("Monaco editor is not ready");
+      const cursorOffset = content.indexOf(cursorAfter);
+      if (cursorOffset < 0) throw new Error(`cursor text ${cursorAfter} was not found`);
+      model.setValue(content);
+      editor.focus();
+      editor.setPosition(model.getPositionAt(cursorOffset + cursorAfter.length));
+    },
+    { content, cursorAfter },
+  );
+}
+
+async function monacoEditorValue(page: Page) {
+  return page.evaluate(() => {
+    const monaco = (window as typeof window & { monaco?: any }).monaco;
+    return monaco?.editor.getEditors?.()[0]?.getModel?.()?.getValue?.() ?? "";
+  });
 }

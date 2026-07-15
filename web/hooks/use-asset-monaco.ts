@@ -20,6 +20,7 @@ import {
 } from "@/lib/atoms/domains/suggestions";
 import { selectedEnvironmentAtom } from "@/lib/atoms/domains/workspace";
 import { InspectDiagnosticSnapshot } from "@/lib/inspect-diagnostics";
+import { isQuerySensorAssetType } from "@/lib/asset-types";
 import { defineBruinMonacoThemes } from "@/lib/monaco-theme";
 import { WebAsset } from "@/lib/types";
 
@@ -146,7 +147,9 @@ export function useAssetMonaco({
       return "inmemory://bruin/no-selection.sql";
     }
 
-    const extension = asset.path.split(".").pop()?.toLowerCase() ?? "sql";
+    const extension = isQuerySensorAssetType(asset.type)
+      ? "sql"
+      : (asset.path.split(".").pop()?.toLowerCase() ?? "sql");
     return `inmemory://bruin/assets/${asset.id}.${extension}`;
   }, [asset]);
 

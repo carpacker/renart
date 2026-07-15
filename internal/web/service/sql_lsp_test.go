@@ -62,6 +62,58 @@ func TestSQLLSPServiceCompletesFromRenartWorkspaceState(t *testing.T) {
 	}
 }
 
+func TestSQLLSPServiceCompletesQuerySensorFromParameterSQL(t *testing.T) {
+	state := model.WorkspaceState{
+		Pipelines: []model.Pipeline{{
+			ID:   "pipeline",
+			Name: "analytics",
+			Assets: []model.Asset{
+				{
+					ID:   "orders",
+					Name: "analytics.orders",
+					Type: "duckdb.sql",
+					Path: "analytics/assets/analytics/orders.sql",
+					Columns: []model.Column{
+						{Name: "order_id", Type: "integer"},
+						{Name: "total_amount", Type: "integer"},
+					},
+				},
+				{
+					ID:   "orders-ready",
+					Name: "analytics.orders_ready",
+					Type: "duckdb.sensor.query",
+					Path: "analytics/assets/analytics/orders_ready.asset.yml",
+					Parameters: map[string]string{
+						"query": "select o.\nfrom analytics.orders o",
+					},
+				},
+			},
+		}},
+	}
+	service := NewSQLLSPService(SQLLSPDependencies{
+		WorkspaceRoot: t.TempDir(),
+		CurrentState:  func() model.WorkspaceState { return state },
+	})
+
+	response, apiErr := service.Completions(context.Background(), SQLLSPRequest{
+		AssetID: "orders-ready",
+		Position: sqllsp.Position{
+			Line:      0,
+			Character: len("select o."),
+		},
+	})
+	if apiErr != nil {
+		t.Fatal(apiErr)
+	}
+	labels := map[string]bool{}
+	for _, item := range response.Completions {
+		labels[item.Label] = true
+	}
+	if !labels["order_id"] || !labels["total_amount"] {
+		t.Fatalf("expected workspace columns for query sensor SQL, got %#v", response.Completions)
+	}
+}
+
 func TestSQLLSPServiceCompletesInferredRenartAssetColumns(t *testing.T) {
 	state := model.WorkspaceState{
 		Pipelines: []model.Pipeline{{
@@ -195,6 +247,15 @@ func TestSQLLSPServiceFindsReferencesAcrossWorkspaceAssets(t *testing.T) {
 					Path:    "analytics/assets/downstream.sql",
 					Content: `select * from {{ ref("analytics.orders") }}`,
 				},
+				{
+					ID:   "orders-ready",
+					Name: "analytics.orders_ready",
+					Type: "duckdb.sensor.query",
+					Path: "analytics/assets/orders_ready.asset.yml",
+					Parameters: map[string]string{
+						"query": "select count(*) > 0 from analytics.orders",
+					},
+				},
 			},
 		}},
 	}
@@ -211,11 +272,12 @@ func TestSQLLSPServiceFindsReferencesAcrossWorkspaceAssets(t *testing.T) {
 	if apiErr != nil {
 		t.Fatal(apiErr)
 	}
-	if len(response.Locations) != 2 {
-		t.Fatalf("expected references in report and downstream assets, got %#v", response.Locations)
+	if len(response.Locations) != 3 {
+		t.Fatalf("expected references in report, downstream, and query sensor assets, got %#v", response.Locations)
 	}
 	foundReport := false
 	foundDownstream := false
+	foundSensor := false
 	for _, location := range response.Locations {
 		if strings.Contains(string(location.URI), "report.sql") {
 			foundReport = true
@@ -223,9 +285,12 @@ func TestSQLLSPServiceFindsReferencesAcrossWorkspaceAssets(t *testing.T) {
 		if strings.Contains(string(location.URI), "downstream.sql") {
 			foundDownstream = true
 		}
+		if strings.Contains(string(location.URI), "orders_ready.asset.yml") {
+			foundSensor = true
+		}
 	}
-	if !foundReport || !foundDownstream {
-		t.Fatalf("expected report and downstream references, got %#v", response.Locations)
+	if !foundReport || !foundDownstream || !foundSensor {
+		t.Fatalf("expected report, downstream, and query sensor references, got %#v", response.Locations)
 	}
 }
 

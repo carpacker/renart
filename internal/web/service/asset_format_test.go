@@ -109,6 +109,35 @@ func TestAssetServiceFormatSQLUsesAssetContentWorkspaceUpdateWhenAvailable(t *te
 	assert.False(t, syncCalled)
 }
 
+func TestAssetServiceFormatSQLPersistsQuerySensorParameter(t *testing.T) {
+	t.Parallel()
+
+	service, _ := newSemanticAssetTestService(t, nil)
+	created, createErr := service.Create(context.Background(), EncodeID("analytics"), CreateAssetParams{
+		Name: "analytics.orders_ready",
+		Type: "duckdb.sensor.query",
+		Parameters: map[string]string{
+			"query":         "select true",
+			"poke_interval": "15",
+			"timeout":       "2h",
+		},
+	})
+	require.Nil(t, createErr)
+
+	response, apiErr := service.FormatSQL(context.Background(), created.AssetID, FormatSQLAssetRequest{
+		Content: "select count(*)>0 from analytics.orders",
+	})
+	require.Nil(t, apiErr)
+	assert.Equal(t, "ok", response.Status)
+	assert.NotEqual(t, "select count(*)>0 from analytics.orders", response.Content)
+
+	_, _, asset, err := service.deps.ResolveAssetByID(context.Background(), created.AssetID)
+	require.NoError(t, err)
+	assert.Equal(t, response.Content, asset.Parameters["query"])
+	assert.Equal(t, "15", asset.Parameters["poke_interval"])
+	assert.Equal(t, "2h", asset.Parameters["timeout"])
+}
+
 func TestAssetServiceFormatPythonUsesTyAndPersistsExecutableContent(t *testing.T) {
 	workspaceRoot := t.TempDir()
 	pipelineRoot := filepath.Join(workspaceRoot, "analytics")

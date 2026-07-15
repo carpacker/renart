@@ -15,9 +15,35 @@ func (s *AssetService) FormatSQL(ctx context.Context, assetID string, req Format
 	if err != nil {
 		return FormatSQLAssetResponse{}, newAPIError(400, "invalid_asset_id", "invalid asset id")
 	}
-	if !strings.HasSuffix(strings.ToLower(relAssetPath), ".sql") {
-		return FormatSQLAssetResponse{}, newAPIError(400, "invalid_asset_type", "only SQL assets can be formatted")
+	isSQLFile := strings.HasSuffix(strings.ToLower(relAssetPath), ".sql")
+	isQuerySensor := false
+	if !isSQLFile {
+		if s.deps.ResolveAssetByID == nil {
+			return FormatSQLAssetResponse{}, newAPIError(400, "invalid_asset_type", "only SQL assets and query sensors can be formatted")
+		}
+		_, _, resolvedAsset, resolveErr := s.deps.ResolveAssetByID(ctx, assetID)
+		if resolveErr != nil || resolvedAsset == nil || !isQuerySensorAssetType(resolvedAsset.Type) {
+			return FormatSQLAssetResponse{}, newAPIError(400, "invalid_asset_type", "only SQL assets and query sensors can be formatted")
+		}
+		isQuerySensor = true
 	}
+	formattedSQL, err := sqlformat.Format(ctx, req.Content, s.sqlFormatDialect(ctx, assetID))
+	if err != nil {
+		return FormatSQLAssetResponse{Status: "error", AssetID: assetID, Content: req.Content, Error: err.Error()}, nil
+	}
+	if isQuerySensor {
+		_, _, querySensor, resolveErr := s.deps.ResolveAssetByID(ctx, assetID)
+		if resolveErr != nil || querySensor == nil || !isQuerySensorAssetType(querySensor.Type) {
+			return FormatSQLAssetResponse{}, newAPIError(400, "asset_resolve_failed", "query sensor could not be resolved")
+		}
+		parameters := parameterStrings(querySensor.Parameters)
+		parameters["query"] = formattedSQL
+		if _, apiErr := s.Update(ctx, assetID, AssetUpdateRequest{Parameters: parameters}); apiErr != nil {
+			return FormatSQLAssetResponse{}, apiErr
+		}
+		return FormatSQLAssetResponse{Status: "ok", AssetID: assetID, Content: formattedSQL}, nil
+	}
+
 	absAssetPath, err := s.resolver().JoinPath(relAssetPath)
 	if err != nil {
 		return FormatSQLAssetResponse{}, newAPIError(400, "invalid_asset_path", err.Error())
@@ -26,10 +52,6 @@ func (s *AssetService) FormatSQL(ctx context.Context, assetID string, req Format
 	originalBytes, err := afero.ReadFile(fs, absAssetPath)
 	if err != nil {
 		return FormatSQLAssetResponse{}, newAPIError(500, "asset_read_failed", err.Error())
-	}
-	formattedSQL, err := sqlformat.Format(ctx, req.Content, s.sqlFormatDialect(ctx, assetID))
-	if err != nil {
-		return FormatSQLAssetResponse{Status: "error", AssetID: assetID, Content: req.Content, Error: err.Error()}, nil
 	}
 	mergedContent := MergeExecutableContent(string(originalBytes), formattedSQL)
 	if err := afero.WriteFile(fs, absAssetPath, []byte(mergedContent), 0o644); err != nil {

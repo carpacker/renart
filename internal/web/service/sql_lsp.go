@@ -135,7 +135,7 @@ func (s *SQLLSPService) References(ctx context.Context, req SQLLSPRequest) (SQLL
 	}
 	content := req.Content
 	if strings.TrimSpace(content) == "" {
-		content = asset.Content
+		content, _ = sqlLSPDocumentContent(asset)
 	}
 	doc := sqllsp.TextDocumentItem{URI: assetURI(s.deps.WorkspaceRoot, asset), LanguageID: "sql", Text: content}
 	engine := sqllsp.NewEngineWithPolyglot(s.graphForRequest(state, notebook), s.polyglotClient())
@@ -248,7 +248,7 @@ func (s *SQLLSPService) engineAndDocument(req SQLLSPRequest) (*sqllsp.Engine, sq
 	}
 	content := req.Content
 	if strings.TrimSpace(content) == "" {
-		content = asset.Content
+		content, _ = sqlLSPDocumentContent(asset)
 	}
 	doc := sqllsp.TextDocumentItem{URI: assetURI(s.deps.WorkspaceRoot, asset), LanguageID: "sql", Text: content}
 	return sqllsp.NewEngineWithPolyglot(s.graphForRequest(state, notebook), s.polyglotClient()), doc, nil
@@ -276,8 +276,8 @@ func (s *SQLLSPService) selectedAsset(state model.WorkspaceState, assetID string
 }
 
 // documentsForState collects the SQL documents reference search runs over:
-// every pipeline SQL asset, plus — when the request targets a notebook cell —
-// the sibling cells of that notebook.
+// every pipeline SQL asset and query sensor, plus — when the request targets a
+// notebook cell — the sibling cells of that notebook.
 func (s *SQLLSPService) documentsForState(state model.WorkspaceState, notebook *model.Notebook, selectedAssetID, selectedContent string) []sqllsp.TextDocumentItem {
 	assets := make([]model.Asset, 0, 16)
 	for _, pipeline := range state.Pipelines {
@@ -288,10 +288,10 @@ func (s *SQLLSPService) documentsForState(state model.WorkspaceState, notebook *
 	}
 	var docs []sqllsp.TextDocumentItem
 	for _, asset := range assets {
-		if !strings.HasSuffix(strings.ToLower(asset.Type), ".sql") {
+		content, isSQLDocument := sqlLSPDocumentContent(asset)
+		if !isSQLDocument {
 			continue
 		}
-		content := asset.Content
 		if asset.ID == selectedAssetID {
 			content = selectedContent
 		}
@@ -302,6 +302,17 @@ func (s *SQLLSPService) documentsForState(state model.WorkspaceState, notebook *
 		})
 	}
 	return docs
+}
+
+func sqlLSPDocumentContent(asset model.Asset) (string, bool) {
+	normalizedType := strings.ToLower(strings.TrimSpace(asset.Type))
+	if strings.HasSuffix(normalizedType, ".sql") {
+		return asset.Content, true
+	}
+	if strings.HasSuffix(normalizedType, ".sensor.query") {
+		return asset.Parameters["query"], true
+	}
+	return "", false
 }
 
 // graphForState returns the canonical graph for the given workspace state. The
@@ -403,6 +414,7 @@ func (s *SQLLSPService) graphAssetNodes(modelAssets []model.Asset) ([]sqllsp.Ass
 			continue
 		}
 		isSQLAsset := strings.HasSuffix(strings.ToLower(asset.Type), ".sql")
+		isQuerySensor := strings.HasSuffix(strings.ToLower(asset.Type), ".sensor.query")
 		kind := strings.ToLower(strings.TrimSpace(asset.Type))
 		dialect := ""
 		if kind == "" {
@@ -410,6 +422,8 @@ func (s *SQLLSPService) graphAssetNodes(modelAssets []model.Asset) ([]sqllsp.Ass
 		}
 		if isSQLAsset {
 			kind = "sql_model"
+		}
+		if isSQLAsset || isQuerySensor {
 			dialect = sqllsp.DialectFromAssetType(asset.Type)
 		}
 		nodes = append(nodes, sqllsp.AssetNode{

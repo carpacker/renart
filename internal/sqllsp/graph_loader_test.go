@@ -119,6 +119,25 @@ func writeFile(t *testing.T, root, rel, content string) {
 	}
 }
 
+func TestDialectFromAssetTypeSupportsQuerySensors(t *testing.T) {
+	tests := map[string]string{
+		"duckdb.sensor.query":     "duckdb",
+		"bq.sensor.query":         "bigquery",
+		"pg.sensor.query":         "postgres",
+		"sf.sensor.query":         "snowflake",
+		"synapse.sensor.query":    "tsql",
+		"clickhouse.sql":          "clickhouse",
+		"clickhouse.sensor.query": "clickhouse",
+	}
+	for assetType, expected := range tests {
+		t.Run(assetType, func(t *testing.T) {
+			if actual := DialectFromAssetType(assetType); actual != expected {
+				t.Fatalf("expected %q for %q, got %q", expected, assetType, actual)
+			}
+		})
+	}
+}
+
 // Regression: stripTemplates used to consume only up to the ref/source name's
 // closing quote, leaving a dangling `) }}` fragment that leaked into relation
 // extraction.

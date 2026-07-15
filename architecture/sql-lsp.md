@@ -52,6 +52,10 @@ coordinator's `WorkspaceState` rather than the filesystem:
 
 - Every pipeline asset becomes an asset node + relation; declared
   `model.Column`s become a `declared` schema layer.
+- Bruin query sensors are SQL documents even though their definition path ends
+  in `.asset.yml`: the adapter projects `parameters.query`, assigns the dialect
+  from the sensor provider, and includes that projected document in workspace
+  reference search.
 - The graph is **cached by `WorkspaceState.Revision`** (monotonic, bumped on
   every mutation). Editing issues LSP requests per keystroke against the same
   saved state, so rebuilding per request was wasted work. `Revision == 0`
@@ -174,10 +178,12 @@ analysis. Message size is capped at 64 MiB (`maxMessageBytes`).
 
 ## 6. Completion & diagnostic surface (web editor)
 
-The app's Monaco asset editor (`web/components/app/asset-editor.tsx`) drives SQL
-intellisense **entirely through the LSP** (`web/hooks/use-sql-lsp.ts`); the older
-client-side parse-context providers are deliberately disabled, so the LSP is the
-single source of truth.
+The app's Monaco asset editors (`web/components/app/asset-editor.tsx` and the
+query-sensor editor) drive SQL intellisense **entirely through the LSP**
+(`web/hooks/use-sql-lsp.ts`); the older client-side parse-context providers are
+deliberately disabled, so the LSP is the single source of truth. Query sensors
+use an in-memory `.sql` Monaco model while persisting edits and formatting back
+to `parameters.query`, never to the raw YAML content.
 
 - **Completions** by context: column fields (after an alias `.`), relations —
   workspace assets and, in a `from schema.` position,

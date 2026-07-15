@@ -96,14 +96,17 @@ not underscore-flattened route hacks.
   Monaco editor plus guided metadata cards
   ([asset-guided-cards.tsx](../web/components/app/asset-guided-cards.tsx)) and YAML
   view; wires intellisense through
-  [use-asset-monaco.ts](../web/hooks/use-asset-monaco.ts). Load, seed, and sensor
-  assets replace Monaco with compact YAML-like parameter editors in the same
-  main pane. Seed editors add a drag-and-drop file replacement target directly
-  below their parameters; the browser uploads through the Go server and then
-  refreshes columns from the new local file. Generic identity and dependency
-  metadata remains in the inspector, along with columns and checks for
-  relation-producing assets; sensors omit columns and checks because they do not
-  materialize a relation.
+  [use-asset-monaco.ts](../web/hooks/use-asset-monaco.ts). Load, seed, and
+  non-query sensor assets replace Monaco with compact YAML-like parameter
+  editors in the same main pane. Query sensors project `parameters.query` into
+  the normal SQL Monaco surface, including LSP diagnostics, completion,
+  navigation, Jinja support, and formatting; `poke_interval` and `timeout` stay
+  in a compact footer below it. Seed editors add a drag-and-drop file
+  replacement target directly below their parameters; the browser uploads
+  through the Go server and then refreshes columns from the new local file.
+  Generic identity and dependency metadata remains in the inspector, along with
+  columns and checks for relation-producing assets; sensors omit columns and
+  checks because they do not materialize a relation.
 - The Build view's New asset dialog uses the workspace's backend-provided
   `asset_capabilities` contract for seed and sensor authoring
   ([semantic-asset-create-fields.tsx](../web/components/app/semantic-asset-create-fields.tsx)).

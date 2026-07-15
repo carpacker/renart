@@ -97,6 +97,10 @@ export function isSensorAssetType(assetType?: string | null) {
   return (assetType ?? "").trim().toLowerCase().includes(".sensor.");
 }
 
+export function isQuerySensorAssetType(assetType?: string | null) {
+  return (assetType ?? "").trim().toLowerCase().endsWith(".sensor.query");
+}
+
 export type AssetColumnRefreshMode = "none" | "api" | "definition" | "materialized";
 
 /**

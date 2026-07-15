@@ -127,3 +127,7 @@ func sensorRequiredParameters(variant string) []string {
 func isSensorAssetType(assetType pipeline.AssetType) bool {
 	return strings.Contains(strings.ToLower(strings.TrimSpace(string(assetType))), ".sensor.")
 }
+
+func isQuerySensorAssetType(assetType pipeline.AssetType) bool {
+	return strings.HasSuffix(strings.ToLower(strings.TrimSpace(string(assetType))), ".sensor.query")
+}

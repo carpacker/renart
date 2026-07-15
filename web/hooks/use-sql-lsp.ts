@@ -24,6 +24,7 @@ import {
   SQLLSPWorkspaceEdit,
 } from "@/lib/api-sql-lsp";
 import { getSQLPathSuggestions } from "@/lib/api-sql-discovery";
+import { isQuerySensorAssetType, isSqlAssetType } from "@/lib/asset-types";
 import { selectedEnvironmentAtom, workspaceAtom } from "@/lib/atoms/domains/workspace";
 import { sqlDiscoveryColumnsAtom, sqlDiscoveryTablesAtom } from "@/lib/atoms/sql-discovery";
 import { useSQLParseContext } from "@/hooks/use-sql-parse-context";
@@ -565,7 +566,7 @@ export function useSQLLSP(
 }
 
 function isSQLAsset(asset: WebAsset) {
-  return asset.type.toLowerCase().endsWith(".sql");
+  return isSqlAssetType(asset.type) || isQuerySensorAssetType(asset.type);
 }
 
 function findWorkspaceAsset(workspace: WorkspaceState | null | undefined, assetID: string) {
@@ -588,18 +589,21 @@ function findWorkspaceAsset(workspace: WorkspaceState | null | undefined, assetI
 
 function ensureAssetPreviewModel(monaco: typeof MonacoNS, asset: WebAsset) {
   const basename = asset.name.trim() || asset.path.split("/").pop() || asset.id;
+  const content = isQuerySensorAssetType(asset.type)
+    ? (asset.parameters?.query ?? "")
+    : asset.content;
   const uri = monaco.Uri.from({
     scheme: "renart-asset",
     path: `/${basename.endsWith(".sql") ? basename : `${basename}.sql`}`,
   });
   const existing = monaco.editor.getModel(uri);
   if (existing) {
-    if (existing.getValue() !== asset.content) {
-      existing.setValue(asset.content);
+    if (existing.getValue() !== content) {
+      existing.setValue(content);
     }
     return uri;
   }
-  monaco.editor.createModel(asset.content, "sql", uri);
+  monaco.editor.createModel(content, "sql", uri);
   return uri;
 }
 

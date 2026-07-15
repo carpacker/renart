@@ -11,6 +11,7 @@ import {
   renderJinjaAsset,
 } from "@/lib/jinja-intellisense";
 import { selectedExecutionTimeWindowAtom } from "@/lib/atoms/domains/workspace";
+import { isQuerySensorAssetType, isSqlAssetType } from "@/lib/asset-types";
 import { WebAsset } from "@/lib/types";
 
 // One global Jinja provider set per Monaco, shared across editors. Each editor
@@ -61,7 +62,10 @@ export function useJinjaIntellisense(
   renderResultRef.current = renderResult;
   const assetId = asset?.id ?? null;
   const isSqlAsset =
-    asset?.path.toLowerCase().endsWith(".sql") || asset?.type.toLowerCase().includes("sql");
+    asset !== null &&
+    (asset.path.toLowerCase().endsWith(".sql") ||
+      isSqlAssetType(asset.type) ||
+      isQuerySensorAssetType(asset.type));
   const spanKey = useMemo(
     () =>
       JSON.stringify(

@@ -135,12 +135,16 @@ round-trips unknown fields).
   asset name, shows `destination_object` for file/storage targets, and offers a
   go-to-source action when the source resolves to an upstream asset. Every edit
   flows through the transaction/API write paths; the workspace SSE stream
-  refreshes the asset. Seed and sensor runtime parameters use dedicated compact,
-  YAML-like editors in the main pane where Monaco normally appears, driven by
-  the same backend capability contract as creation: seed source, file type, and
-  schema enforcement remain editable, while query/table/S3-key sensors expose
-  their condition, `poke_interval`, and `timeout`. The inspector retains their
-  generic identity and dependencies without duplicating those runtime controls.
+  refreshes the asset. Seed and non-query sensor runtime parameters use
+  dedicated compact, YAML-like editors in the main pane where Monaco normally
+  appears, driven by the same backend capability contract as creation: seed
+  source, file type, and schema enforcement remain editable, while table/S3-key
+  sensors expose their condition, `poke_interval`, and `timeout`. Query sensors
+  edit `parameters.query` in the same SQL Monaco editor and intellisense stack as
+  SQL assets, with their timing controls in a compact footer. Saves and format
+  actions update the YAML parameter through the Go server rather than treating
+  the query as the `.asset.yml` file content. The inspector retains their generic
+  identity and dependencies without duplicating those runtime controls.
   The internal `renart_seed_file` ownership marker is
   preserved without becoming a guided user setting. Owned local seeds also
   expose a drop target below the YAML-like parameters. Replacing the file uses

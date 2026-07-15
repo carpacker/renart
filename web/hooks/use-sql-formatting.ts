@@ -5,7 +5,7 @@ import { useCallback, useEffect, useMemo } from "react";
 import type * as MonacoNS from "monaco-editor";
 
 import { formatSQLAsset } from "@/lib/api";
-import { isSqlAssetType } from "@/lib/asset-types";
+import { isQuerySensorAssetType, isSqlAssetType } from "@/lib/asset-types";
 import { editorDraftAtom, editorProgrammaticContentAtom } from "@/lib/atoms/domains/editor";
 import { WebAsset } from "@/lib/types";
 
@@ -16,12 +16,17 @@ export function useSQLFormatting(
 ) {
   const setEditorDraft = useSetAtom(editorDraftAtom);
   const setEditorProgrammaticContent = useSetAtom(editorProgrammaticContentAtom);
+  const isQuerySensor = isQuerySensorAssetType(asset?.type);
   const isSqlAsset = useMemo(() => {
     if (!asset) {
       return false;
     }
 
-    return isSqlAssetType(asset.type) || asset.path.toLowerCase().endsWith(".sql");
+    return (
+      isSqlAssetType(asset.type) ||
+      isQuerySensorAssetType(asset.type) ||
+      asset.path.toLowerCase().endsWith(".sql")
+    );
   }, [asset]);
 
   const shortcutLabel = useMemo(() => "⌘ + ⇧ + I", []);
@@ -52,20 +57,26 @@ export function useSQLFormatting(
           }
         }
 
-        setEditorDraft((previous) => ({
-          ...previous,
-          [asset.id]: response.content,
-        }));
-        setEditorProgrammaticContent((previous) => ({
-          ...previous,
-          [asset.id]: {
-            content: response.content,
-            revision: (previous[asset.id]?.revision ?? 0) + 1,
-          },
-        }));
+        // Query sensors persist SQL inside parameters.query, not the asset's
+        // raw YAML content. Keeping their formatted text out of the generic
+        // executable-content draft prevents later actions from treating the
+        // query as a replacement for the .asset.yml document.
+        if (!isQuerySensor) {
+          setEditorDraft((previous) => ({
+            ...previous,
+            [asset.id]: response.content,
+          }));
+          setEditorProgrammaticContent((previous) => ({
+            ...previous,
+            [asset.id]: {
+              content: response.content,
+              revision: (previous[asset.id]?.revision ?? 0) + 1,
+            },
+          }));
+        }
       })
       .catch(() => undefined);
-  }, [asset?.id, editor, isSqlAsset, setEditorDraft, setEditorProgrammaticContent]);
+  }, [asset?.id, editor, isQuerySensor, isSqlAsset, setEditorDraft, setEditorProgrammaticContent]);
 
   useEffect(() => {
     if (!editor || !monaco || !isSqlAsset) {

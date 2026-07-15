@@ -2340,6 +2340,8 @@ function EditorWorkspace({ asset, adhoc }: { asset: BuildAsset; adhoc: boolean }
               key={asset.workspaceAsset.id}
               asset={asset.workspaceAsset}
               pipelineId={asset.pipelineId}
+              onCheck={materializeSelectedAsset}
+              onGoToAsset={goToAsset}
             />
           ) : asset.workspaceAsset && asset.pipelineId ? (
             <AppAssetEditor

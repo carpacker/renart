@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { useAtomValue } from "jotai";
 import { CircleAlert, CloudUpload, Upload } from "lucide-react";
@@ -12,27 +12,36 @@ import { Spinner } from "@/components/ui/spinner";
 import { Textarea } from "@/components/ui/textarea";
 import { refreshAssetColumnsFromDefinition } from "@/lib/api-asset-transactions";
 import { replaceSeedAssetFile, updateAsset } from "@/lib/api-assets";
-import { getAssetAuthoringCapability, isSeedAssetType, isSensorAssetType } from "@/lib/asset-types";
+import {
+  getAssetAuthoringCapability,
+  isQuerySensorAssetType,
+  isSeedAssetType,
+  isSensorAssetType,
+} from "@/lib/asset-types";
 import { workspaceAtom } from "@/lib/atoms/domains/workspace";
 import type { WebAsset } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
 import { Comment, InlineSelect, InlineText, Key, Line } from "./asset-yaml-editor";
+import { SensorQueryEditor } from "./sensor-query-editor";
 
 const DEFAULT_SEED_FILE_TYPES = ["csv", "parquet", "json", "jsonl", "ndjson", "avro"];
 
 /**
- * Main-pane editor for the dedicated seed and sensor runtime parameters. It
- * follows the Load editor's compact YAML-like presentation while keeping
- * generic metadata in Properties and avoiding a raw Monaco surface for assets
- * whose executable intent is fully structured.
+ * Main-pane editor for dedicated seed and sensor runtime parameters. Structured
+ * variants follow the Load editor's compact YAML-like presentation, while query
+ * sensors project parameters.query into the shared SQL Monaco surface.
  */
 export function SemanticParametersEditor({
   asset,
   pipelineId,
+  onCheck,
+  onGoToAsset,
 }: {
   asset: WebAsset;
   pipelineId: string;
+  onCheck?: () => void;
+  onGoToAsset?: (pipelineId: string, assetId: string) => void;
 }) {
   const workspace = useAtomValue(workspaceAtom);
   const isSeed = isSeedAssetType(asset.type);
@@ -55,6 +64,27 @@ export function SemanticParametersEditor({
     setParameters(next);
   }, [asset.parameters]);
 
+  const persistParameters = useCallback(
+    (next: Record<string, string>) => {
+      setError("");
+      pendingUpdatesRef.current += 1;
+      const request = updateQueueRef.current
+        .catch(() => undefined)
+        .then(() => updateAsset(pipelineId, asset.id, { parameters: next }));
+      const tracked = request
+        .catch((cause: unknown) => {
+          setError(cause instanceof Error ? cause.message : "Could not update parameters");
+          throw cause;
+        })
+        .finally(() => {
+          pendingUpdatesRef.current = Math.max(0, pendingUpdatesRef.current - 1);
+        });
+      updateQueueRef.current = tracked.catch(() => undefined);
+      return tracked;
+    },
+    [asset.id, pipelineId],
+  );
+
   const saveParameter = (key: string, value: string) => {
     const next = { ...parametersRef.current };
     const trimmed = value.trim();
@@ -67,18 +97,18 @@ export function SemanticParametersEditor({
 
     parametersRef.current = next;
     setParameters(next);
-    setError("");
-    pendingUpdatesRef.current += 1;
-    updateQueueRef.current = updateQueueRef.current
-      .catch(() => undefined)
-      .then(() => updateAsset(pipelineId, asset.id, { parameters: next }))
-      .catch((cause: unknown) => {
-        setError(cause instanceof Error ? cause.message : "Could not update parameters");
-      })
-      .finally(() => {
-        pendingUpdatesRef.current = Math.max(0, pendingUpdatesRef.current - 1);
-      });
+    void persistParameters(next).catch(() => undefined);
   };
+
+  const saveQuery = useCallback(
+    async (query: string) => {
+      const next = { ...parametersRef.current, query };
+      parametersRef.current = next;
+      setParameters(next);
+      await persistParameters(next);
+    },
+    [persistParameters],
+  );
 
   const required = useMemo(
     () => new Set(capability?.required_parameters ?? []),
@@ -88,6 +118,7 @@ export function SemanticParametersEditor({
   const usesQuery = required.has("query") || variant === "query";
   const usesTable = required.has("table") || variant === "table";
   const usesS3Key = required.has("bucket_name") || required.has("bucket_key") || variant === "key";
+  const isQuerySensor = isQuerySensorAssetType(asset.type);
   const seedFileTypes = useMemo(
     () =>
       Array.from(
@@ -123,6 +154,57 @@ export function SemanticParametersEditor({
   };
 
   if (!isSeed && !isSensor) return null;
+
+  if (isQuerySensor) {
+    return (
+      <div
+        className="flex min-h-0 flex-1 flex-col bg-background"
+        data-testid="semantic-parameters-editor"
+        data-asset-kind="sensor-query"
+      >
+        <SensorQueryEditor
+          asset={asset}
+          query={parameters.query ?? ""}
+          onSave={saveQuery}
+          onCheck={onCheck}
+          onGoToAsset={onGoToAsset}
+        />
+        <div
+          className="font-monaco shrink-0 border-t px-3 py-2 text-[13px] leading-6"
+          data-testid="sensor-query-controls"
+        >
+          <Line>
+            <Key>poke_interval</Key>
+            <InlineText
+              value={
+                parameters.poke_interval ?? capability?.default_parameters?.poke_interval ?? "30"
+              }
+              placeholder="30"
+              ariaLabel="Sensor check interval"
+              onCommit={(value) => saveParameter("poke_interval", value)}
+            />
+          </Line>
+          <Line>
+            <Key>timeout</Key>
+            <InlineText
+              value={parameters.timeout ?? capability?.default_parameters?.timeout ?? "24h"}
+              placeholder="24h"
+              ariaLabel="Sensor timeout"
+              onCommit={(value) => saveParameter("timeout", value)}
+            />
+          </Line>
+          <Comment>Manual runs check once; scheduled runs repeat until ready or timed out.</Comment>
+          {error ? (
+            <Alert variant="destructive" className="mt-2">
+              <CircleAlert />
+              <AlertTitle>Could not update parameters</AlertTitle>
+              <AlertDescription>{error}</AlertDescription>
+            </Alert>
+          ) : null}
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div

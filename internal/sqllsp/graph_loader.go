@@ -385,22 +385,24 @@ func normalizeGraph(graph CanonicalGraph) CanonicalGraph {
 // SQL dialect name used by the analyzer and validator.
 func DialectFromAssetType(assetType string) string {
 	switch strings.ToLower(strings.TrimSpace(assetType)) {
-	case "duckdb.sql":
+	case "duckdb.sql", "duckdb.sensor.query":
 		return "duckdb"
-	case "bq.sql":
+	case "bq.sql", "bq.sensor.query":
 		return "bigquery"
-	case "sf.sql":
+	case "sf.sql", "sf.sensor.query":
 		return "snowflake"
-	case "pg.sql", "rs.sql":
+	case "pg.sql", "pg.sensor.query", "rs.sql", "rs.sensor.query":
 		return "postgres"
-	case "athena.sql":
+	case "athena.sql", "athena.sensor.query":
 		return "athena"
-	case "databricks.sql":
+	case "databricks.sql", "databricks.sensor.query":
 		return "databricks"
-	case "ms.sql", "synapse.sql":
+	case "ms.sql", "ms.sensor.query", "synapse.sql", "synapse.sensor.query":
 		return "tsql"
-	case "ch.sql":
+	case "ch.sql", "clickhouse.sql", "clickhouse.sensor.query":
 		return "clickhouse"
+	case "trino.sql", "trino.sensor.query":
+		return "trino"
 	default:
 		return "generic"
 	}
