@@ -38,7 +38,11 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { computeAppLineageLayout, type AppLineageLayoutEdge } from "@/lib/app-lineage-layout";
+import {
+  computeAppLineageLayout,
+  initialCenteredViewportX,
+  type AppLineageLayoutEdge,
+} from "@/lib/app-lineage-layout";
 
 import type { AppAsset } from "./app-data";
 import { AssetNode, AssetNodeMenuItems, type AssetNodeAction } from "./app-primitives";
@@ -114,6 +118,8 @@ function AssetFlowNode({ data }: NodeProps<AssetNodeData>) {
     <div
       role="button"
       tabIndex={0}
+      data-testid="lineage-asset"
+      data-asset-id={data.asset.id}
       className="cursor-pointer text-left outline-none"
       onClick={() => data.onSelect?.(data.asset.id)}
       onKeyDown={(event) => {
@@ -494,6 +500,48 @@ export function AppLineageCanvas({
     handleCreateDownstream,
     handleOpenConnection,
   ]);
+
+  const centeredGraphRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!flowInstance || nodes.length === 0) {
+      return;
+    }
+    const graphKey = nodes
+      .map((node) => `${node.id}:${node.position.x}:${node.position.y}`)
+      .join("|");
+    if (centeredGraphRef.current === graphKey) {
+      return;
+    }
+    if (focusAssetId) {
+      centeredGraphRef.current = graphKey;
+      return;
+    }
+
+    const frame = window.requestAnimationFrame(() => {
+      const viewportWidth = containerRef.current?.getBoundingClientRect().width ?? 0;
+      const graphMinX = Math.min(...nodes.map((node) => node.position.x));
+      const graphMaxX = Math.max(
+        ...nodes.map((node) => node.position.x + (node.width ?? assetNodeWidth)),
+      );
+      const viewport = flowInstance.getViewport();
+      const x = initialCenteredViewportX({
+        viewportWidth,
+        graphMinX,
+        graphMaxX,
+        zoom: viewport.zoom,
+      });
+      if (x === null) {
+        if (viewportWidth > 0) {
+          centeredGraphRef.current = graphKey;
+        }
+        return;
+      }
+      centeredGraphRef.current = graphKey;
+      void flowInstance.setViewport({ ...viewport, x });
+    });
+
+    return () => window.cancelAnimationFrame(frame);
+  }, [flowInstance, focusAssetId, nodes]);
 
   const handlePaneContextMenu = useCallback(
     (event: ReactMouseEvent | MouseEvent) => {

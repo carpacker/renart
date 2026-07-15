@@ -126,7 +126,9 @@ test.describe("app scheduler pages live", () => {
       liveApp,
       request,
       runId,
-      (current) => (current.steps?.length ?? 0) > 0 || current.run.status !== "running",
+      (current) =>
+        (current.steps?.length ?? 0) > 0 &&
+        ["success", "failed", "cancelled"].includes(current.run.status),
     );
     const stepAsset = detail.steps?.[0]?.asset;
 
@@ -141,11 +143,36 @@ test.describe("app scheduler pages live", () => {
     await expect(outputTab).toBeVisible();
     await expect(page.getByRole("tab", { name: "stderr" })).toHaveCount(0);
     if (stepAsset) {
-      await expect(page.getByText(stepAsset, { exact: true }).first()).toBeVisible({
+      const timelineLabel = page
+        .locator('[data-testid="run-timeline-asset-label"]')
+        .filter({ hasText: stepAsset })
+        .first();
+      await expect(timelineLabel).toBeVisible({
         timeout: 30000,
       });
+      expect(
+        await timelineLabel.evaluate((element) => ({
+          overflow: getComputedStyle(element).overflow,
+          textOverflow: getComputedStyle(element).textOverflow,
+          whiteSpace: getComputedStyle(element).whiteSpace,
+        })),
+      ).toEqual({ overflow: "visible", textOverflow: "clip", whiteSpace: "normal" });
+
+      const assetLink = page.getByRole("link", { name: stepAsset, exact: true }).first();
+      await expect(assetLink).toHaveAttribute(
+        "href",
+        new RegExp(`/pipelines/${analyticsPipelineId}/assets/[^/]+/split$`),
+      );
     }
-    await expect(page.getByText(/asset_(start|success)/).first()).toBeVisible({ timeout: 30000 });
+    const startBadge = page.locator('[data-event-type="asset_start"]').first();
+    const successBadge = page.locator('[data-event-type="asset_success"]').first();
+    await expect(startBadge).toHaveAttribute("data-event-tone", "progress", { timeout: 30000 });
+    await expect(successBadge).toHaveAttribute("data-event-tone", "success", {
+      timeout: 30000,
+    });
+    expect(
+      await startBadge.evaluate((element) => getComputedStyle(element).backgroundColor),
+    ).not.toBe(await successBadge.evaluate((element) => getComputedStyle(element).backgroundColor));
 
     await outputTab.click();
     const terminal = page.locator('[data-slot="tabs-content"][data-state="active"] pre');
@@ -181,6 +208,9 @@ select * from analytics.table_that_does_not_exist
 
     await page.goto(`${liveApp.baseURL}/runs/${runId}`);
     await expect(page.getByRole("tab", { name: "stderr" })).toHaveCount(0);
+    await expect(page.locator('[data-event-tone="failure"]').first()).toBeVisible({
+      timeout: 30000,
+    });
     await page.getByRole("tab", { name: "Output" }).click();
 
     const terminal = page.locator('[data-slot="tabs-content"][data-state="active"] pre');

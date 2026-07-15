@@ -1,4 +1,5 @@
 import { Link } from "@tanstack/react-router";
+import { useAtomValue } from "jotai";
 import {
   ArrowLeft,
   ChevronLeft,
@@ -13,6 +14,7 @@ import {
 import { useEffect, useMemo, useRef, useState } from "react";
 
 import { AnsiOutput } from "@/components/ansi-output";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -25,8 +27,11 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { formatSchedulerDate, usePipelineScheduler } from "@/hooks/use-pipeline-scheduler";
+import { workspaceAtom } from "@/lib/atoms/domains/workspace";
 import type { PipelineRun, PipelineRunLogLine, PipelineRunStep } from "@/lib/types";
+import { cn } from "@/lib/utils";
 
 import { PageHeader, AppPage, AppPanel, SimpleTable, StatusPill } from "./app-primitives";
 
@@ -218,11 +223,16 @@ export function AppRunDetailPage({
   runId: string;
   search?: AppRunsSearch;
 }) {
+  const workspace = useAtomValue(workspaceAtom);
   const { selectedRun, logs, steps, loadingRunId, triggerPipeline } = usePipelineScheduler({
     selectedRunId: runId,
   });
   const run = selectedRun;
   const output = useMemo(() => combineRunOutput(logs, run?.error), [logs, run?.error]);
+  const assetIdsByName = useMemo(() => {
+    const pipeline = workspace?.pipelines.find((candidate) => candidate.id === run?.pipeline_id);
+    return new Map(pipeline?.assets.map((asset) => [asset.name, asset.id]) ?? []);
+  }, [run?.pipeline_id, workspace?.pipelines]);
 
   if (!run) {
     return (
@@ -285,7 +295,12 @@ export function AppRunDetailPage({
               value="events"
               className="m-0 min-h-0 flex-1 overflow-hidden data-[state=inactive]:hidden"
             >
-              <RunEventsTable run={run} steps={steps} loading={loadingRunId === run.id} />
+              <RunEventsTable
+                run={run}
+                steps={steps}
+                loading={loadingRunId === run.id}
+                assetIdsByName={assetIdsByName}
+              />
             </TabsContent>
             <TabsContent
               value="output"
@@ -307,16 +322,17 @@ function RunTimelinePanel({ run, steps }: { run: PipelineRun; steps: PipelineRun
   return (
     <AppPanel className="grid shrink-0 grid-cols-1 overflow-hidden lg:grid-cols-[minmax(0,1fr)_18rem]">
       <div className="min-w-0 p-3">
-        <div className="mb-2 flex text-[11px] text-muted-foreground">
-          {timelineTicks(bounds).map((tick) => (
-            <div key={tick.label} className="min-w-0 flex-1 font-mono">
-              {tick.label}
-            </div>
-          ))}
-        </div>
-        <div className="space-y-2">
+        <div className="grid grid-cols-[minmax(7rem,12rem)_minmax(0,1fr)] items-center gap-x-3 gap-y-2">
+          <div aria-hidden="true" />
+          <div className="flex text-[11px] text-muted-foreground">
+            {timelineTicks(bounds).map((tick) => (
+              <div key={tick.label} className="min-w-0 flex-1 font-mono">
+                {tick.label}
+              </div>
+            ))}
+          </div>
           {steps.length === 0 ? (
-            <div className="rounded-md border border-dashed p-6 text-center text-xs text-muted-foreground">
+            <div className="col-span-2 rounded-md border border-dashed p-6 text-center text-xs text-muted-foreground">
               Asset timings will appear here for direct backend runs.
             </div>
           ) : null}
@@ -331,6 +347,7 @@ function RunTimelinePanel({ run, steps }: { run: PipelineRun; steps: PipelineRun
           ["Executing", counts.running],
           ["Errored", counts.failed],
           ["Succeeded", counts.success],
+          ["Cancelled", counts.cancelled],
         ].map(([label, count]) => (
           <div
             key={label}
@@ -356,26 +373,58 @@ function StepBar({
 }) {
   const start = new Date(step.started_at ?? step.finished_at ?? bounds.start).getTime();
   const end = step.finished_at ? new Date(step.finished_at).getTime() : now;
-  const left = Math.max(0, ((start - bounds.start) / (bounds.end - bounds.start)) * 100);
-  const width = Math.max(
-    1.2,
-    ((Math.max(end, start + 1) - start) / (bounds.end - bounds.start)) * 100,
+  const rawLeft = ((start - bounds.start) / (bounds.end - bounds.start)) * 100;
+  const width = Math.min(
+    100,
+    Math.max(1.2, ((Math.max(end, start + 1) - start) / (bounds.end - bounds.start)) * 100),
   );
-  const color =
-    step.status === "failed"
-      ? "bg-red-500"
-      : step.status === "running"
-        ? "bg-blue-500"
-        : "bg-green-500";
+  const left = Math.min(Math.max(0, rawLeft), 100 - width);
+  const duration = formatDurationMs(Math.max(0, end - start));
   return (
-    <div className="relative h-7 rounded bg-muted/40">
-      <div
-        className={`absolute top-0.5 flex h-6 items-center overflow-hidden rounded px-2 text-[11px] font-mono text-white ${color}`}
-        style={{ left: `${left}%`, width: `${Math.min(width, 100 - left)}%` }}
-      >
-        <span className="truncate">{step.asset}</span>
-      </div>
-    </div>
+    <>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <span
+            className="min-w-0 break-words font-mono text-[11px] leading-4"
+            data-testid="run-timeline-asset-label"
+          >
+            {step.asset}
+          </span>
+        </TooltipTrigger>
+        <TooltipContent>{step.asset}</TooltipContent>
+      </Tooltip>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <div
+            className="relative h-7 rounded bg-muted/40"
+            data-testid="run-timeline-track"
+            data-asset={step.asset}
+          >
+            <div
+              className={cn(
+                "absolute top-0.5 h-6 min-w-px rounded",
+                step.status === "failed"
+                  ? "bg-destructive"
+                  : step.status === "running"
+                    ? "bg-primary/60"
+                    : step.status === "success"
+                      ? "bg-primary"
+                      : "bg-muted-foreground/45",
+              )}
+              data-testid="run-timeline-bar"
+              data-status={step.status}
+              style={{ left: `${left}%`, width: `${width}%` }}
+            />
+          </div>
+        </TooltipTrigger>
+        <TooltipContent>
+          <span className="font-mono">{step.asset}</span>
+          <span className="ml-1 capitalize">
+            · {step.status} · {duration}
+          </span>
+        </TooltipContent>
+      </Tooltip>
+    </>
   );
 }
 
@@ -383,10 +432,12 @@ function RunEventsTable({
   run,
   steps,
   loading,
+  assetIdsByName,
 }: {
   run: PipelineRun;
   steps: PipelineRunStep[];
   loading: boolean;
+  assetIdsByName: Map<string, string>;
 }) {
   const viewportRef = useRef<HTMLDivElement | null>(null);
   const events = runEvents(run, steps);
@@ -411,20 +462,42 @@ function RunEventsTable({
           </TableRow>
         </TableHeader>
         <TableBody>
-          {events.map((event, index) => (
-            <TableRow key={`${event.at}-${event.asset}-${event.type}-${index}`}>
-              <TableCell className="h-8 py-1.5 font-mono text-xs text-muted-foreground">
-                {formatSchedulerDate(event.at)}
-              </TableCell>
-              <TableCell className="h-8 py-1.5 font-mono text-xs">{event.asset}</TableCell>
-              <TableCell className="h-8 py-1.5">
-                <span className="rounded bg-muted px-1.5 py-0.5 font-mono text-[10px] uppercase text-muted-foreground">
-                  {event.type}
-                </span>
-              </TableCell>
-              <TableCell className="h-8 py-1.5 text-xs">{event.info}</TableCell>
-            </TableRow>
-          ))}
+          {events.map((event, index) => {
+            const assetId = assetIdsByName.get(event.asset);
+            const badge = runEventBadge(event.type);
+            return (
+              <TableRow key={`${event.at}-${event.asset}-${event.type}-${index}`}>
+                <TableCell className="h-8 py-1.5 font-mono text-xs text-muted-foreground">
+                  {formatSchedulerDate(event.at)}
+                </TableCell>
+                <TableCell className="h-8 py-1.5 font-mono text-xs">
+                  {assetId ? (
+                    <Link
+                      to="/pipelines/$pipelineId/assets/$assetId/split"
+                      params={{ pipelineId: run.pipeline_id, assetId }}
+                      className="text-primary hover:underline"
+                    >
+                      {event.asset}
+                    </Link>
+                  ) : (
+                    event.asset
+                  )}
+                </TableCell>
+                <TableCell className="h-8 py-1.5">
+                  <Badge
+                    variant={badge.variant}
+                    size="xs"
+                    className="font-mono uppercase"
+                    data-event-type={event.type}
+                    data-event-tone={badge.tone}
+                  >
+                    {event.type}
+                  </Badge>
+                </TableCell>
+                <TableCell className="h-8 py-1.5 text-xs">{event.info}</TableCell>
+              </TableRow>
+            );
+          })}
           {!loading && events.length === 0 ? (
             <TableRow>
               <TableCell colSpan={4} className="py-6 text-center text-xs text-muted-foreground">
@@ -436,6 +509,22 @@ function RunEventsTable({
       </Table>
     </ScrollArea>
   );
+}
+
+function runEventBadge(type: string): {
+  variant: "default" | "secondary" | "destructive" | "muted";
+  tone: "success" | "progress" | "failure" | "cancelled";
+} {
+  if (type.endsWith("_failed")) {
+    return { variant: "destructive", tone: "failure" };
+  }
+  if (type.endsWith("_cancelled")) {
+    return { variant: "muted", tone: "cancelled" };
+  }
+  if (type === "asset_start") {
+    return { variant: "secondary", tone: "progress" };
+  }
+  return { variant: "default", tone: "success" };
 }
 
 function combineRunOutput(logs: PipelineRunLogLine[], error?: string) {
@@ -506,6 +595,7 @@ function countSteps(steps: PipelineRunStep[]) {
     running: steps.filter((step) => step.status === "running").length,
     failed: steps.filter((step) => step.status === "failed").length,
     success: steps.filter((step) => step.status === "success").length,
+    cancelled: steps.filter((step) => step.status === "cancelled").length,
   };
 }
 
@@ -523,11 +613,18 @@ function runEvents(run: PipelineRun, steps: PipelineRunStep[]) {
       items.push({
         at: step.finished_at,
         asset: step.asset,
-        type: step.status === "failed" ? "asset_failed" : "asset_success",
+        type:
+          step.status === "failed"
+            ? "asset_failed"
+            : step.status === "cancelled"
+              ? "asset_cancelled"
+              : "asset_success",
         info:
           step.status === "failed"
             ? step.error || `Failed ${step.asset}.`
-            : `Finished ${step.asset} in ${formatStepDuration(step)}.`,
+            : step.status === "cancelled"
+              ? step.error || `Cancelled ${step.asset}.`
+              : `Finished ${step.asset} in ${formatStepDuration(step)}.`,
       });
     return items;
   });
@@ -535,7 +632,12 @@ function runEvents(run: PipelineRun, steps: PipelineRunStep[]) {
     events.push({
       at: run.finished_at,
       asset: run.pipeline,
-      type: run.status === "failed" ? "run_failed" : "run_finished",
+      type:
+        run.status === "failed"
+          ? "run_failed"
+          : run.status === "cancelled"
+            ? "run_cancelled"
+            : "run_finished",
       info: run.error || `Run ${run.status}.`,
     });
   return events.sort((a, b) => new Date(a.at).getTime() - new Date(b.at).getTime());

@@ -38,7 +38,7 @@ function AppPipelineLayoutRoute() {
       onVariantChange={(variant) => updateSearch({ variant })}
       onAssetSelect={(assetId) =>
         navigate({
-          to: appAssetViewPath(currentView),
+          to: appAssetViewPath(allParams.assetId ? currentView : "split"),
           params: { pipelineId, assetId },
           search: { ...search, editor: "asset" },
         })

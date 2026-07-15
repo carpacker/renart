@@ -2,6 +2,7 @@ import { expect, test } from "@playwright/test";
 
 import {
   computeAppLineageLayout,
+  initialCenteredViewportX,
   type AppLineageLayoutEdge,
   type AppLineageLayoutNode,
 } from "../../../lib/app-lineage-layout";
@@ -16,6 +17,26 @@ function edge(source: string, target: string): AppLineageLayoutEdge {
 }
 
 test.describe("app lineage layout engine", () => {
+  test("centers a fitting graph in the initial viewport", () => {
+    const x = initialCenteredViewportX({
+      viewportWidth: 1000,
+      graphMinX: 100,
+      graphMaxX: 500,
+    });
+
+    expect(x).toBe(200);
+  });
+
+  test("leaves an overflowing graph at its existing horizontal position", () => {
+    expect(
+      initialCenteredViewportX({
+        viewportWidth: 1000,
+        graphMinX: 0,
+        graphMaxX: 953,
+      }),
+    ).toBeNull();
+  });
+
   test("recommends strict layers for cleanly layered DAGs", () => {
     const layout = computeAppLineageLayout({
       nodes: [node("raw.orders"), node("staging.orders"), node("core.orders")],

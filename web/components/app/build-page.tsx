@@ -321,6 +321,7 @@ type BuildContextValue = {
   pipelineId: string;
   pipeline?: WebPipeline;
   pipelineAssets: BuildAsset[];
+  routedAssetId?: string;
   selectedAssetId: string;
   selectedAsset: BuildAsset;
   view: AppBuildView;
@@ -1018,6 +1019,7 @@ export function AppBuildPage({
     pipelineId,
     pipeline: activePipeline,
     pipelineAssets: displayedPipelineAssets,
+    routedAssetId: selectedAssetId,
     selectedAssetId: effectiveSelectedAssetId,
     selectedAsset,
     view,
@@ -2138,16 +2140,10 @@ function AssetButton({
   );
 }
 
-function PipelineCanvas({
-  selectedAssetId,
-  onAssetSelect,
-}: {
-  pipelineId: string;
-  selectedAssetId: string;
-  onAssetSelect: (assetId: string) => void;
-}) {
+function PipelineCanvas({ onAssetSelect }: { onAssetSelect: (assetId: string) => void }) {
   const {
     pipelineAssets,
+    routedAssetId,
     createDownstreamAsset,
     openNewAssetInGroup,
     runAssetById,
@@ -2158,7 +2154,7 @@ function PipelineCanvas({
   return (
     <AppLineageCanvas
       assets={pipelineAssets}
-      selectedAssetId={selectedAssetId}
+      selectedAssetId={routedAssetId}
       onAssetSelect={onAssetSelect}
       onRunAsset={runAssetById}
       onDeleteAsset={deleteAssetById}
@@ -2177,18 +2173,12 @@ function PipelineCanvas({
 }
 
 export function AppBuildCanvasView() {
-  const { pipelineId, selectedAssetId, selectAsset } = useBuildContext();
-  return (
-    <PipelineCanvas
-      pipelineId={pipelineId}
-      selectedAssetId={selectedAssetId}
-      onAssetSelect={selectAsset}
-    />
-  );
+  const { selectAsset } = useBuildContext();
+  return <PipelineCanvas onAssetSelect={selectAsset} />;
 }
 
 export function AppBuildSplitView() {
-  const { pipelineId, selectedAssetId, selectedAsset, selectAsset, editorMode } = useBuildContext();
+  const { selectedAsset, selectAsset, editorMode } = useBuildContext();
   return (
     <PanelGroup orientation="horizontal" className="h-full min-h-0 min-w-0">
       <Panel defaultSize={50} minSize={28} className="min-w-0">
@@ -2196,11 +2186,7 @@ export function AppBuildSplitView() {
       </Panel>
       <PanelResizeHandle className="w-px bg-border" />
       <Panel defaultSize={50} minSize={28} className="min-w-0">
-        <PipelineCanvas
-          pipelineId={pipelineId}
-          selectedAssetId={selectedAssetId}
-          onAssetSelect={selectAsset}
-        />
+        <PipelineCanvas onAssetSelect={selectAsset} />
       </Panel>
     </PanelGroup>
   );

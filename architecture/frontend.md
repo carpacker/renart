@@ -86,8 +86,12 @@ not underscore-flattened route hacks.
   ([lineage-canvas.tsx](../web/components/app/lineage-canvas.tsx), React Flow)
   beside the asset editor. Bare asset URLs default to this split view; ad-hoc
   queries preserve code/split layout and add the editor beside a canvas-only
-  view. The explorer's asset filter searches names, groups, paths, types, and
-  connections.
+  view. The first asset selection from a pipeline-only canvas opens the split
+  view; after an asset is present in the route, later selections preserve the
+  explicit code/split/canvas layout. A DAG that fits at the default zoom is
+  horizontally centered on initial render, while a wider DAG keeps its layout
+  origin so it remains predictable to pan. The explorer's asset filter searches
+  names, groups, paths, types, and connections.
 - [components/app/asset-editor.tsx](../web/components/app/asset-editor.tsx): the
   Monaco editor plus guided metadata cards
   ([asset-guided-cards.tsx](../web/components/app/asset-guided-cards.tsx)) and YAML
@@ -112,6 +116,9 @@ not underscore-flattened route hacks.
   [settings-pages.tsx](../web/components/app/settings-pages.tsx),
   [object-pages.tsx](../web/components/app/object-pages.tsx),
   [welcome-page.tsx](../web/components/app/welcome-page.tsx).
+  Run details use semantic event badges, link current-workspace asset events
+  back to the split Build view, and render timeline asset names in a dedicated
+  wrapping column with tooltips so short duration bars never truncate identity.
 
 Project connection routes accept an environment/connection search target so
 pipeline default-connection links can open the exact editable connection sheet.

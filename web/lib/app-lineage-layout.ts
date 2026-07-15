@@ -56,6 +56,32 @@ const LEFT_PAD = 40;
 const TOP_PAD = 96;
 const LARGE_GRAPH_NODE_THRESHOLD = 800;
 const LARGE_GRAPH_EDGE_THRESHOLD = 4000;
+const INITIAL_VIEWPORT_PADDING = 24;
+
+export function initialCenteredViewportX({
+  viewportWidth,
+  graphMinX,
+  graphMaxX,
+  zoom = 1,
+  padding = INITIAL_VIEWPORT_PADDING,
+}: {
+  viewportWidth: number;
+  graphMinX: number;
+  graphMaxX: number;
+  zoom?: number;
+  padding?: number;
+}) {
+  const graphWidth = (graphMaxX - graphMinX) * zoom;
+  if (
+    !Number.isFinite(graphWidth) ||
+    graphWidth <= 0 ||
+    !Number.isFinite(viewportWidth) ||
+    graphWidth + padding * 2 > viewportWidth
+  ) {
+    return null;
+  }
+  return (viewportWidth - graphWidth) / 2 - graphMinX * zoom;
+}
 
 type LayeredLayoutItem = {
   id: string;

@@ -15,10 +15,59 @@ const pipelineId = Buffer.from("analytics").toString("base64url");
 const customersAssetId = Buffer.from("analytics/assets/analytics/customers.sql").toString(
   "base64url",
 );
+const ordersAssetId = Buffer.from("analytics/assets/analytics/orders.sql").toString("base64url");
 const pythonAssetId = Buffer.from("analytics/assets/analytics/py_metric.py").toString("base64url");
 
 test.describe("app build actions live", () => {
   test.use({ fixtureName: "configured-workspace" });
+
+  test("centers a fitting DAG and opens the first asset selection in split view", async ({
+    liveApp,
+    page,
+  }) => {
+    test.skip(
+      test.info().project.name.includes("mobile"),
+      "The full Build canvas is a desktop affordance.",
+    );
+
+    await page.goto(`${liveApp.baseURL}/pipelines/${pipelineId}/canvas`);
+    const flow = page.locator(".react-flow").first();
+    await expect(flow).toBeVisible({ timeout: 15000 });
+    const assetNodes = page.locator('[data-testid="lineage-asset"]');
+    await expect(assetNodes).toHaveCount(2, { timeout: 15000 });
+
+    await expect
+      .poll(async () => {
+        const flowBox = await flow.boundingBox();
+        const nodeBoxes = await assetNodes.evaluateAll((nodes) =>
+          nodes.map((node) => {
+            const box = node.getBoundingClientRect();
+            return { left: box.left, right: box.right };
+          }),
+        );
+        if (!flowBox || nodeBoxes.length === 0) return Number.POSITIVE_INFINITY;
+        const graphLeft = Math.min(...nodeBoxes.map((box) => box.left));
+        const graphRight = Math.max(...nodeBoxes.map((box) => box.right));
+        return Math.abs((graphLeft + graphRight) / 2 - (flowBox.x + flowBox.width / 2));
+      })
+      .toBeLessThan(3);
+
+    await page
+      .locator(`[data-testid="lineage-asset"][data-asset-id="${customersAssetId}"]`)
+      .click();
+    await expect(page).toHaveURL(
+      new RegExp(`/pipelines/${pipelineId}/assets/${customersAssetId}/split(?:[?].*)?$`),
+    );
+
+    await page.getByRole("link", { name: "Canvas view" }).click();
+    await expect(page).toHaveURL(
+      new RegExp(`/pipelines/${pipelineId}/assets/${customersAssetId}/canvas(?:[?].*)?$`),
+    );
+    await page.locator(`[data-testid="lineage-asset"][data-asset-id="${ordersAssetId}"]`).click();
+    await expect(page).toHaveURL(
+      new RegExp(`/pipelines/${pipelineId}/assets/${ordersAssetId}/canvas(?:[?].*)?$`),
+    );
+  });
 
   test("materialize and inspect buttons run the real asset", async ({ liveApp, page }) => {
     await page.goto(`${liveApp.baseURL}/pipelines/${pipelineId}/assets/${customersAssetId}/code`);
