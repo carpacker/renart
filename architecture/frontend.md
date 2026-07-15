@@ -93,6 +93,18 @@ not underscore-flattened route hacks.
   ([asset-guided-cards.tsx](../web/components/app/asset-guided-cards.tsx)) and YAML
   view; wires intellisense through
   [use-asset-monaco.ts](../web/hooks/use-asset-monaco.ts).
+- The Build view's New asset dialog uses the workspace's backend-provided
+  `asset_capabilities` contract for seed and sensor authoring
+  ([semantic-asset-create-fields.tsx](../web/components/app/semantic-asset-create-fields.tsx)).
+  Its six top-level asset-kind choices use one fixed tile size, while the
+  creation fields use the plain `Field` variant instead of nesting a bordered
+  card around each input. It filters types and connections together, offers
+  upload/workspace-file/URL seed sources, renders the parameters required by
+  each sensor variant, and sends uploaded bytes through the multipart asset API.
+  The workspace-file source uses the shared path combobox, restricted to
+  supported files below the workspace root. The resulting seed and sensor assets
+  have distinct canvas/catalog classifications while remaining ordinary Bruin
+  files in the workspace.
 - Other pages: [catalog-page.tsx](../web/components/app/catalog-page.tsx),
   [notebook-page.tsx](../web/components/app/notebook-page.tsx),
   [runs-page.tsx](../web/components/app/runs-page.tsx),

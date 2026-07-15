@@ -38,12 +38,14 @@ var baseManagedYAMLAssetKeys = []string{
 }
 
 // managedYAMLAssetKeys returns the managed keys for a specific asset. `parameters`
-// is managed only for Load assets, whose replication intent renart edits as flat
+// is managed for Load, seed, and sensor assets, whose intent Renart edits as flat
 // string parameters. For API assets `parameters` holds a nested request/response
-// spec that renart does NOT model, so it stays preserved-but-unmanaged — managing
+// spec that Renart does NOT model, so it stays preserved-but-unmanaged — managing
 // it there would delete the spec on the next write.
 func managedYAMLAssetKeys(asset *pipeline.Asset) []string {
-	if isLoadAsset(asset) {
+	if isLoadAsset(asset) ||
+		strings.HasSuffix(strings.ToLower(string(asset.Type)), ".seed") ||
+		isSensorAssetType(asset.Type) {
 		return append(append([]string{}, baseManagedYAMLAssetKeys...), "parameters")
 	}
 	return baseManagedYAMLAssetKeys

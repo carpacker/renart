@@ -30,6 +30,8 @@ import {
 } from "@/components/ui/command";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Switch } from "@/components/ui/switch";
+import { Textarea } from "@/components/ui/textarea";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import {
   Select,
@@ -51,7 +53,15 @@ import { inferAPIAsset } from "@/lib/api-assets-columns";
 import type { APIInferResult, MaterializationCapability } from "@/lib/generated/api-types";
 import { classifyDependencies, columnStatus, parseAssetProvenance } from "@/lib/asset-provenance";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { NON_SQL_ASSET_TYPES, SQL_ASSET_TYPES, groupAssetTypesByKind } from "@/lib/asset-types";
+import {
+  NON_SQL_ASSET_TYPES,
+  SEED_ASSET_TYPES,
+  SQL_ASSET_TYPES,
+  getAssetAuthoringCapability,
+  groupAssetTypesByKind,
+  isSeedAssetType,
+  isSensorAssetType,
+} from "@/lib/asset-types";
 import { useIngestrEnabled } from "@/lib/features";
 import { useWorkspaceSettingsData } from "@/hooks/use-workspace-settings-data";
 import { LOCAL_LOAD_CONNECTION, loadConnectionsForEnvironment } from "@/lib/load-assets";
@@ -70,6 +80,7 @@ export function AssetGuidedCards({ asset, pipelineId }: { asset: WebAsset; pipel
     <ScrollArea className="min-h-0 w-full flex-1">
       <div className="divide-y px-3">
         <IdentityCard asset={asset} pipelineId={pipelineId} />
+        <SemanticParametersCard asset={asset} pipelineId={pipelineId} />
         <MaterializationCard asset={asset} pipelineId={pipelineId} />
         <DependenciesCard asset={asset} />
         <ColumnsCard asset={asset} />
@@ -126,12 +137,17 @@ function ConnectionField({ asset, pipelineId }: { asset: WebAsset; pipelineId: s
   const current = (asset.explicit_connection ?? "").trim();
   const effective = (asset.connection ?? "").trim();
   const isLoad = asset.type.trim().toLowerCase() === "load";
+  const capability = getAssetAuthoringCapability(asset.type, workspace?.asset_capabilities);
   const connectionNames = useMemo(() => {
     const names = isLoad
       ? loadConnectionsForEnvironment(workspaceConfig, environment).map(
           (connection) => connection.name,
         )
-      : Object.keys(workspace?.connections ?? {});
+      : capability
+        ? Object.entries(workspace?.connections ?? {})
+            .filter(([, type]) => capability.connection_types.includes(type))
+            .map(([name]) => name)
+        : Object.keys(workspace?.connections ?? {});
     if (isLoad && !names.includes(LOCAL_LOAD_CONNECTION)) {
       names.push(LOCAL_LOAD_CONNECTION);
     }
@@ -141,7 +157,7 @@ function ConnectionField({ asset, pipelineId }: { asset: WebAsset; pipelineId: s
       names.push(current);
     }
     return names.sort((a, b) => a.localeCompare(b));
-  }, [workspace?.connections, workspaceConfig, environment, current, isLoad]);
+  }, [workspace?.connections, workspaceConfig, environment, current, isLoad, capability]);
 
   return (
     <FieldRow label="Connection">
@@ -174,19 +190,32 @@ function ConnectionField({ asset, pipelineId }: { asset: WebAsset; pipelineId: s
 
 function IdentityCard({ asset, pipelineId }: { asset: WebAsset; pipelineId: string }) {
   const ingestrEnabled = useIngestrEnabled();
+  const workspace = useAtomValue(workspaceAtom);
   const normalizedType = asset.type.trim().toLowerCase();
   const hasTargetConnection =
-    normalizedType === "api" || normalizedType === "load" || normalizedType.includes("python");
+    normalizedType === "api" ||
+    normalizedType === "load" ||
+    normalizedType.includes("python") ||
+    isSeedAssetType(normalizedType) ||
+    isSensorAssetType(normalizedType);
   const assetTypeGroups = useMemo(
     () =>
       groupAssetTypesByKind(
-        Array.from(new Set([...SQL_ASSET_TYPES, ...NON_SQL_ASSET_TYPES, asset.type])).filter(
+        Array.from(
+          new Set([
+            ...SQL_ASSET_TYPES,
+            ...SEED_ASSET_TYPES,
+            ...NON_SQL_ASSET_TYPES,
+            ...(workspace?.asset_capabilities ?? []).map((capability) => capability.type),
+            asset.type,
+          ]),
+        ).filter(
           // A broken/half-typed YAML asset can parse to an empty type; a Select
           // item must never have an empty value, so drop it.
           (type) => Boolean(type) && (ingestrEnabled || type !== "ingestr" || type === asset.type),
         ),
       ),
-    [asset.type, ingestrEnabled],
+    [asset.type, ingestrEnabled, workspace?.asset_capabilities],
   );
 
   const updateMetaDescription = (description: string) => {
@@ -240,6 +269,26 @@ function IdentityCard({ asset, pipelineId }: { asset: WebAsset; pipelineId: stri
                 </SelectItem>
               ))}
             </SelectGroup>
+            {assetTypeGroups.seed.length > 0 ? (
+              <SelectGroup>
+                <SelectLabel>Seeds</SelectLabel>
+                {assetTypeGroups.seed.map((type) => (
+                  <SelectItem key={type} value={type}>
+                    {type}
+                  </SelectItem>
+                ))}
+              </SelectGroup>
+            ) : null}
+            {assetTypeGroups.sensor.length > 0 ? (
+              <SelectGroup>
+                <SelectLabel>Sensors</SelectLabel>
+                {assetTypeGroups.sensor.map((type) => (
+                  <SelectItem key={type} value={type}>
+                    {type}
+                  </SelectItem>
+                ))}
+              </SelectGroup>
+            ) : null}
           </SelectContent>
         </Select>
       </FieldRow>
@@ -275,6 +324,141 @@ function IdentityCard({ asset, pipelineId }: { asset: WebAsset; pipelineId: stri
           }}
         />
       </FieldRow>
+    </GuidedCard>
+  );
+}
+
+function SemanticParametersCard({ asset, pipelineId }: { asset: WebAsset; pipelineId: string }) {
+  const workspace = useAtomValue(workspaceAtom);
+  const isSeed = isSeedAssetType(asset.type);
+  const isSensor = isSensorAssetType(asset.type);
+  const capability = getAssetAuthoringCapability(asset.type, workspace?.asset_capabilities);
+  const [error, setError] = useState("");
+  if (!isSeed && !isSensor) return null;
+
+  const saveParameter = (key: string, value: string) => {
+    const parameters = { ...(asset.parameters ?? {}) };
+    if (value.trim()) {
+      parameters[key] = value.trim();
+    } else {
+      delete parameters[key];
+    }
+    setError("");
+    void updateAsset(pipelineId, asset.id, { parameters }).catch((cause) => {
+      setError(cause instanceof Error ? cause.message : "Could not update parameters");
+    });
+  };
+  const required = new Set(capability?.required_parameters ?? []);
+  const variant = capability?.variant ?? asset.type.split(".sensor.")[1] ?? "";
+  const usesQuery = required.has("query") || variant === "query";
+  const usesTable = required.has("table") || variant === "table";
+  const usesS3Key = required.has("bucket_name") || required.has("bucket_key") || variant === "key";
+
+  return (
+    <GuidedCard title={isSeed ? "Seed file" : "Sensor condition"}>
+      {isSeed ? (
+        <>
+          <FieldRow label="Path">
+            <CommitInput
+              mono
+              value={asset.parameters?.path ?? ""}
+              placeholder="./customers.csv"
+              onCommit={(value) => saveParameter("path", value)}
+            />
+          </FieldRow>
+          <FieldRow label="File format">
+            <Select
+              value={asset.parameters?.file_type ?? "csv"}
+              onValueChange={(value) => saveParameter("file_type", value)}
+            >
+              <SelectTrigger className="h-8">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {(
+                  capability?.file_types ?? ["csv", "parquet", "json", "jsonl", "ndjson", "avro"]
+                ).map((fileType) => (
+                  <SelectItem key={fileType} value={fileType}>
+                    {fileType}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </FieldRow>
+          <FieldRow label="Schema">
+            <div className="flex min-w-0 items-center justify-between gap-2">
+              <span className="text-[11px] text-muted-foreground">Enforce declared columns</span>
+              <Switch
+                checked={(asset.parameters?.enforce_schema ?? "true") !== "false"}
+                onCheckedChange={(checked) => saveParameter("enforce_schema", String(checked))}
+                aria-label="Enforce seed schema"
+              />
+            </div>
+          </FieldRow>
+        </>
+      ) : (
+        <>
+          {usesQuery ? (
+            <FieldRow label="Query">
+              <CommitTextarea
+                mono
+                value={asset.parameters?.query ?? ""}
+                placeholder="select count(*) > 0 from analytics.orders"
+                onCommit={(value) => saveParameter("query", value)}
+              />
+            </FieldRow>
+          ) : null}
+          {usesTable ? (
+            <FieldRow label="Table">
+              <CommitInput
+                mono
+                value={asset.parameters?.table ?? ""}
+                placeholder="analytics.orders"
+                onCommit={(value) => saveParameter("table", value)}
+              />
+            </FieldRow>
+          ) : null}
+          {usesS3Key ? (
+            <>
+              <FieldRow label="Bucket">
+                <CommitInput
+                  mono
+                  value={asset.parameters?.bucket_name ?? ""}
+                  placeholder="raw-data"
+                  onCommit={(value) => saveParameter("bucket_name", value)}
+                />
+              </FieldRow>
+              <FieldRow label="Object key">
+                <CommitInput
+                  mono
+                  value={asset.parameters?.bucket_key ?? ""}
+                  placeholder="daily/orders.csv"
+                  onCommit={(value) => saveParameter("bucket_key", value)}
+                />
+              </FieldRow>
+            </>
+          ) : null}
+          <FieldRow label="Check every">
+            <CommitInput
+              value={asset.parameters?.poke_interval ?? "30"}
+              placeholder="30 seconds"
+              onCommit={(value) => saveParameter("poke_interval", value)}
+            />
+          </FieldRow>
+          <FieldRow label="Timeout">
+            <CommitInput
+              mono
+              value={asset.parameters?.timeout ?? "24h"}
+              placeholder="24h"
+              onCommit={(value) => saveParameter("timeout", value)}
+            />
+          </FieldRow>
+          <p className="text-[11px] text-muted-foreground">
+            Manual runs check once. Scheduled runs keep checking until ready or timed out.
+          </p>
+        </>
+      )}
+      {error ? <p className="text-[11px] text-destructive">{error}</p> : null}
     </GuidedCard>
   );
 }
@@ -1319,6 +1503,31 @@ function CommitInput({
           e.currentTarget.blur();
         }
       }}
+    />
+  );
+}
+
+function CommitTextarea({
+  value,
+  placeholder,
+  onCommit,
+  mono,
+}: {
+  value: string;
+  placeholder?: string;
+  onCommit: (value: string) => void;
+  mono?: boolean;
+}) {
+  const [draft, setDraft] = useState(value);
+  useEffect(() => setDraft(value), [value]);
+
+  return (
+    <Textarea
+      className={cn("min-h-20 text-xs", mono && "font-monaco")}
+      value={draft}
+      placeholder={placeholder}
+      onChange={(event) => setDraft(event.target.value)}
+      onBlur={() => onCommit(draft)}
     />
   );
 }

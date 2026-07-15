@@ -297,6 +297,16 @@ func (s *ExecutionService) inspectMaterializedNonSQLAsset(ctx context.Context, a
 	}
 
 	rowLimit := normalizeInspectLimit(limit)
+	if isSensorAssetType(asset.Type) {
+		return InspectResult{
+			Status:     "info",
+			Columns:    []string{},
+			Rows:       []map[string]any{},
+			Operation:  queryAssetOperation(relAssetPath, limit, environment, ""),
+			Info:       "Sensors do not materialize previewable data. Run the sensor to check its condition now.",
+			HTTPStatus: 200,
+		}, true
+	}
 
 	// A non-SQL asset (python, api, load) is inspected by previewing the table it
 	// materializes into. For load assets the destination is a flat parameter; for
@@ -453,6 +463,10 @@ func extractInspectRawOutput(output []byte) string {
 }
 
 func (s *ExecutionService) MaterializeAssetStream(ctx context.Context, assetID, environment, scope, startDate, endDate string, fullRefresh, backfill bool, confirmedEnvironment string, onChunk func([]byte)) MaterializeResult {
+	return s.MaterializeAssetStreamWithSensorMode(ctx, assetID, environment, scope, startDate, endDate, fullRefresh, backfill, confirmedEnvironment, "", onChunk)
+}
+
+func (s *ExecutionService) MaterializeAssetStreamWithSensorMode(ctx context.Context, assetID, environment, scope, startDate, endDate string, fullRefresh, backfill bool, confirmedEnvironment, sensorMode string, onChunk func([]byte)) MaterializeResult {
 	ctx, warnings := withExecutionWarnings(ctx)
 	environment = s.effectiveEnvironment(environment)
 	fullRefresh = s.effectiveFullRefresh(ctx, environment, fullRefresh)
@@ -504,9 +518,10 @@ func (s *ExecutionService) MaterializeAssetStream(ctx context.Context, assetID, 
 	assetIDsToRefresh := []string{assetID}
 	materializedAssetIDs := []string{assetID}
 	assetNamesToRecord := make([]string, 0, 1)
+	sensorMode = effectiveSensorMode(sensorMode, false)
 	run := func() error {
 		var runErr error
-		output, runErr = s.runSingleAssetMaterialization(ctx, relAssetPath, environment, timeWindow, fullRefresh, onChunk)
+		output, runErr = s.runSingleAssetMaterializationWithSensorMode(ctx, relAssetPath, environment, timeWindow, fullRefresh, sensorMode, onChunk)
 		return runErr
 	}
 	if normalizedScope != MaterializeScopeAsset {
@@ -520,7 +535,7 @@ func (s *ExecutionService) MaterializeAssetStream(ctx context.Context, assetID, 
 		assetNamesToRecord = scoped.AssetNames
 		run = func() error {
 			var runErr error
-			output, runErr = s.runScopedAssetMaterialization(ctx, scoped.AssetPaths, environment, timeWindow, fullRefresh, onChunk)
+			output, runErr = s.runScopedAssetMaterialization(ctx, scoped.AssetPaths, environment, timeWindow, fullRefresh, sensorMode, onChunk)
 			return runErr
 		}
 	} else if assetName := s.deps.ResolveAssetNameByID(assetID); assetName != "" {
@@ -607,13 +622,17 @@ func (s *ExecutionService) MaterializeAssetStream(ctx context.Context, assetID, 
 }
 
 func (s *ExecutionService) runSingleAssetMaterialization(ctx context.Context, assetPath, environment string, timeWindow ExecutionTimeWindow, fullRefresh bool, onChunk func([]byte)) ([]byte, error) {
-	return s.deps.Executor.RunAsset(ctx, RunAssetRequest{AssetPath: assetPath, Environment: environment, StartDate: timeWindow.StartRFC3339(), EndDate: timeWindow.EndRFC3339(), FullRefresh: fullRefresh}, onChunk)
+	return s.runSingleAssetMaterializationWithSensorMode(ctx, assetPath, environment, timeWindow, fullRefresh, sensorModeOnce, onChunk)
 }
 
-func (s *ExecutionService) runScopedAssetMaterialization(ctx context.Context, assetPaths []string, environment string, timeWindow ExecutionTimeWindow, fullRefresh bool, onChunk func([]byte)) ([]byte, error) {
+func (s *ExecutionService) runSingleAssetMaterializationWithSensorMode(ctx context.Context, assetPath, environment string, timeWindow ExecutionTimeWindow, fullRefresh bool, sensorMode string, onChunk func([]byte)) ([]byte, error) {
+	return s.deps.Executor.RunAsset(ctx, RunAssetRequest{AssetPath: assetPath, Environment: environment, SensorMode: effectiveSensorMode(sensorMode, false), StartDate: timeWindow.StartRFC3339(), EndDate: timeWindow.EndRFC3339(), FullRefresh: fullRefresh}, onChunk)
+}
+
+func (s *ExecutionService) runScopedAssetMaterialization(ctx context.Context, assetPaths []string, environment string, timeWindow ExecutionTimeWindow, fullRefresh bool, sensorMode string, onChunk func([]byte)) ([]byte, error) {
 	var combined bytes.Buffer
 	for _, assetPath := range assetPaths {
-		chunkOutput, err := s.runSingleAssetMaterialization(ctx, assetPath, environment, timeWindow, fullRefresh, onChunk)
+		chunkOutput, err := s.runSingleAssetMaterializationWithSensorMode(ctx, assetPath, environment, timeWindow, fullRefresh, sensorMode, onChunk)
 		if len(chunkOutput) > 0 {
 			_, _ = combined.Write(chunkOutput)
 		}
@@ -898,7 +917,21 @@ func (s *ExecutionService) GetPipelineMaterialization(ctx context.Context, pipel
 }
 
 func (s *ExecutionService) MaterializePipelineStream(ctx context.Context, pipelineID, environment string, dryRun, fullRefresh, backfill bool, startDate, endDate, confirmedEnvironment string, onChunk func([]byte)) MaterializeResult {
-	return s.MaterializePipelineStreamWithAssetEvents(ctx, pipelineID, environment, dryRun, fullRefresh, backfill, startDate, endDate, confirmedEnvironment, onChunk, nil)
+	return s.MaterializePipelineStreamWithSensorMode(ctx, pipelineID, environment, dryRun, fullRefresh, backfill, startDate, endDate, confirmedEnvironment, "", onChunk)
+}
+
+func (s *ExecutionService) MaterializePipelineStreamWithSensorMode(ctx context.Context, pipelineID, environment string, dryRun, fullRefresh, backfill bool, startDate, endDate, confirmedEnvironment, sensorMode string, onChunk func([]byte)) MaterializeResult {
+	return s.MaterializePipelineRun(ctx, PipelineRunSpec{
+		PipelineID:           pipelineID,
+		Environment:          environment,
+		SensorMode:           sensorMode,
+		DryRun:               dryRun,
+		FullRefresh:          fullRefresh,
+		Backfill:             backfill,
+		StartDate:            startDate,
+		EndDate:              endDate,
+		ConfirmedEnvironment: confirmedEnvironment,
+	}, onChunk, nil)
 }
 
 func (s *ExecutionService) MaterializePipelineStreamWithAssetEvents(ctx context.Context, pipelineID, environment string, dryRun, fullRefresh, backfill bool, startDate, endDate, confirmedEnvironment string, onChunk func([]byte), onAssetEvent func(ExecutionAssetEvent)) MaterializeResult {
@@ -936,6 +969,7 @@ type PipelineRunSpec struct {
 	RunID                string
 	PipelineID           string
 	Environment          string
+	SensorMode           string
 	DryRun               bool
 	FullRefresh          bool
 	Backfill             bool
@@ -978,9 +1012,11 @@ func (s *ExecutionService) MaterializePipelineRun(ctx context.Context, spec Pipe
 	}
 	operation := withOperationTimeWindow(runOperation(target, spec.PipelineID, "", spec.Environment), timeWindow)
 	observed := newPipelineRunObservation(onAssetEvent)
+	sensorMode := effectiveSensorMode(spec.SensorMode, spec.RunID != "")
 	output, runErr := s.deps.Executor.RunPipeline(ctx, RunPipelineRequest{
 		Target:      target,
 		Environment: spec.Environment,
+		SensorMode:  sensorMode,
 		DryRun:      spec.DryRun,
 		StartDate:   timeWindow.StartRFC3339(),
 		EndDate:     timeWindow.EndRFC3339(),
@@ -1184,6 +1220,9 @@ func (s *ExecutionService) inspectPipelineMaterializations(ctx context.Context, 
 
 	assetsByConnection := make(map[string][]*pipeline.Asset)
 	for _, asset := range parsed.Assets {
+		if isSensorAssetType(asset.Type) {
+			continue
+		}
 		conn, err := targetConnectionNameForAsset(asset, parsed)
 		if err != nil || conn == "" {
 			continue

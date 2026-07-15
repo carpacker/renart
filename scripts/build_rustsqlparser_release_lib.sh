@@ -4,6 +4,8 @@ set -euo pipefail
 
 target="${1:?missing target triple}"
 lockdir="${HOME}/.cache/renart-rustsqlparser-release.lock"
+cache_root="${XDG_CACHE_HOME:-${HOME}/.cache}/renart/rustsqlparser"
+target_dir="${RENART_RUSTSQLPARSER_TARGET_DIR:-${cache_root}/target}"
 
 mkdir -p "$(dirname "${lockdir}")"
 
@@ -68,9 +70,9 @@ chmod -R u+w "${rustffi_dir}" || true
 rm -f "${rustffi_dir}/target/release/libbruin_rustsqlparser.a"
 
 rustup target add "${target}"
-cargo build --release --manifest-path "${rustffi_dir}/Cargo.toml" --target "${target}" --target-dir "${rustffi_dir}/target"
+cargo build --release --manifest-path "${rustffi_dir}/Cargo.toml" --target "${target}" --target-dir "${target_dir}"
 
-target_archive="${rustffi_dir}/target/${target}/release/libbruin_rustsqlparser.a"
+target_archive="${target_dir}/${target}/release/libbruin_rustsqlparser.a"
 generic_archive_dir="${rustffi_dir}/target/release"
 
 test -f "${target_archive}"

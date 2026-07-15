@@ -209,6 +209,11 @@ const stalenessMeta: Record<
     className: "bg-sky-100 text-sky-700 dark:bg-sky-500/15 dark:text-sky-300",
     dotClassName: "bg-sky-500",
   },
+  volatile: {
+    label: "Always checked",
+    className: "bg-violet-100 text-violet-700 dark:bg-violet-500/15 dark:text-violet-300",
+    dotClassName: "bg-violet-500",
+  },
   never_built: {
     label: "Never built",
     className: "bg-zinc-200 text-zinc-700 dark:bg-zinc-500/15 dark:text-zinc-300",

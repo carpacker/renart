@@ -17,7 +17,7 @@ type (
 
 type PipelineExecutionHandlers interface {
 	GetPipelineMaterialization(ctx context.Context, pipelineID, environment string) (PipelineMaterializationResponse, *APIError)
-	MaterializePipelineStream(ctx context.Context, pipelineID, environment string, dryRun, fullRefresh, backfill bool, startDate, endDate, confirmedEnvironment string, onChunk func([]byte)) MaterializeExecutionEvent
+	MaterializePipelineStreamWithSensorMode(ctx context.Context, pipelineID, environment string, dryRun, fullRefresh, backfill bool, startDate, endDate, confirmedEnvironment, sensorMode string, onChunk func([]byte)) MaterializeExecutionEvent
 	ResolvePipelineRunTarget(pipelineID string) error
 }
 
@@ -53,6 +53,7 @@ func (h *PipelineExecutionAPI) HandleMaterializePipelineStream(w http.ResponseWr
 	startDate := r.URL.Query().Get("start_date")
 	endDate := r.URL.Query().Get("end_date")
 	confirmedEnvironment := r.URL.Query().Get("confirmed_environment")
+	sensorMode := r.URL.Query().Get("sensor_mode")
 	if err := h.Service.ResolvePipelineRunTarget(pipelineID); err != nil {
 		webapi.WriteBadRequest(w, "invalid_pipeline_id", "invalid pipeline id")
 		return
@@ -70,7 +71,7 @@ func (h *PipelineExecutionAPI) HandleMaterializePipelineStream(w http.ResponseWr
 	w.Header().Set("X-Accel-Buffering", "no")
 
 	_ = WriteSSEJSON(w, flusher, "start", map[string]any{"operation": webmodel.OperationMetadata{Type: "run", PipelineID: pipelineID, Target: pipelineID}})
-	result := h.Service.MaterializePipelineStream(r.Context(), pipelineID, environment, dryRun, fullRefresh, backfill, startDate, endDate, confirmedEnvironment, func(chunk []byte) {
+	result := h.Service.MaterializePipelineStreamWithSensorMode(r.Context(), pipelineID, environment, dryRun, fullRefresh, backfill, startDate, endDate, confirmedEnvironment, sensorMode, func(chunk []byte) {
 		_ = WriteSSEJSON(w, flusher, "output", map[string]any{"chunk": string(chunk)})
 	})
 	_ = WriteSSEJSON(w, flusher, "done", map[string]any{

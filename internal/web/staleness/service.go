@@ -39,6 +39,9 @@ const (
 	// StatusMissing: the log says fresh but verification could not find the
 	// table in the warehouse.
 	StatusMissing Status = "missing"
+	// StatusVolatile marks sensors. A successful check is useful run history,
+	// not durable materialization coverage, so every requested run checks again.
+	StatusVolatile Status = "volatile"
 )
 
 // Interval is a [Start, End) time range.
@@ -55,6 +58,7 @@ type AssetStatus struct {
 	Fingerprint        string     `json:"fingerprint"`
 	IntervalAware      bool       `json:"interval_aware"`
 	BackfillSafe       bool       `json:"backfill_safe"`
+	Volatile           bool       `json:"volatile,omitempty"`
 	CoveredSeconds     float64    `json:"covered_seconds,omitempty"`
 	TotalSeconds       float64    `json:"total_seconds,omitempty"`
 	Gaps               []Interval `json:"gaps,omitempty"` // uncovered sub-ranges, the Build-stale plan input
@@ -285,6 +289,9 @@ func (s *Service) compute(ctx context.Context, selection Selection) ([]AssetStat
 // asset name. File/object Load targets carry destination_object and Python
 // assets may still write no queryable table, so those rest on the run fact.
 func verifiableByName(asset *pipeline.Asset) bool {
+	if isSensorAsset(asset) {
+		return false
+	}
 	switch strings.ToLower(strings.TrimSpace(string(asset.Type))) {
 	case "load":
 		if strings.EqualFold(strings.TrimSpace(asset.Connection), "local") {
@@ -333,6 +340,11 @@ func classify(asset *pipeline.Asset, assetID string, result fingerprint.Result, 
 			}
 		}
 	}
+	if isSensorAsset(asset) {
+		status.Status = StatusVolatile
+		status.Volatile = true
+		return status
+	}
 
 	if !status.IntervalAware || selectedRange == nil {
 		if len(currentRows) > 0 {
@@ -360,6 +372,10 @@ func classify(asset *pipeline.Asset, assetID string, result fingerprint.Result, 
 		return classifyStale(status, anyBuilt, lastOwnContent, result, selectedRange)
 	}
 	return status
+}
+
+func isSensorAsset(asset *pipeline.Asset) bool {
+	return asset != nil && strings.Contains(strings.ToLower(strings.TrimSpace(string(asset.Type))), ".sensor.")
 }
 
 func classifyStale(status AssetStatus, anyBuilt bool, lastOwnContent string, result fingerprint.Result, selectedRange *Interval) AssetStatus {

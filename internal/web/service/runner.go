@@ -13,6 +13,7 @@ import (
 type RunAssetRequest struct {
 	AssetPath   string
 	Environment string
+	SensorMode  string
 	StartDate   string
 	EndDate     string
 	AssetEvent  func(ExecutionAssetEvent)
@@ -22,6 +23,7 @@ type RunAssetRequest struct {
 type RunPipelineRequest struct {
 	Target      string
 	Environment string
+	SensorMode  string
 	DryRun      bool
 	StartDate   string
 	EndDate     string

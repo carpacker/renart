@@ -8,7 +8,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 
-export type NewAssetKind = "sql" | "python" | "ingestr" | "load" | "api";
+export type NewAssetKind = "sql" | "python" | "ingestr" | "load" | "api" | "seed" | "sensor";
 
 export type NewAssetNodeData = {
   name: string;

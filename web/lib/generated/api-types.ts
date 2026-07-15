@@ -12,6 +12,18 @@ export type MaterializationCapability = {
   supports_cluster_by?: boolean;
 };
 
+export type AssetAuthoringCapability = {
+  type: string;
+  kind: string;
+  variant: string;
+  connection_types: string[];
+  required_parameters?: string[];
+  default_parameters?: Record<string, string>;
+  file_types?: string[];
+  supports_upload?: boolean;
+  supports_url?: boolean;
+};
+
 export type WebColumnCheck = {
   name: string;
   value?: unknown;
@@ -104,6 +116,7 @@ export type WorkspaceState = {
   pipelines: WebPipeline[];
   notebooks?: WebNotebook[];
   connections: Record<string, string>;
+  asset_capabilities?: AssetAuthoringCapability[];
   selected_environment: string;
   environment_policies?: Record<string, EnvironmentPolicy>;
   features?: Record<string, boolean>;

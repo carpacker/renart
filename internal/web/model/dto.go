@@ -18,6 +18,21 @@ type MaterializationCapability struct {
 	SupportsClusterBy       bool   `json:"supports_cluster_by,omitempty"`
 }
 
+// AssetAuthoringCapability describes a concrete seed or sensor asset that
+// Renart can create and execute directly. The backend owns this list so the UI
+// cannot drift from the runtime when Bruin adds or changes asset types.
+type AssetAuthoringCapability struct {
+	Type               string            `json:"type"`
+	Kind               string            `json:"kind"`
+	Variant            string            `json:"variant"`
+	ConnectionTypes    []string          `json:"connection_types"`
+	RequiredParameters []string          `json:"required_parameters,omitempty"`
+	DefaultParameters  map[string]string `json:"default_parameters,omitempty"`
+	FileTypes          []string          `json:"file_types,omitempty"`
+	SupportsUpload     bool              `json:"supports_upload,omitempty"`
+	SupportsURL        bool              `json:"supports_url,omitempty"`
+}
+
 // Asset represents a web API asset with its metadata. ContentRevision identifies
 // the exact snapshot returned for a notebook cell so saves can use it as an
 // optimistic-concurrency precondition.
@@ -145,6 +160,7 @@ type WorkspaceState struct {
 	Pipelines           []Pipeline                   `json:"pipelines"`
 	Notebooks           []Notebook                   `json:"notebooks,omitempty"`
 	Connections         map[string]string            `json:"connections"`
+	AssetCapabilities   []AssetAuthoringCapability   `json:"asset_capabilities,omitempty"`
 	SelectedEnvironment string                       `json:"selected_environment"`
 	EnvironmentPolicies map[string]EnvironmentPolicy `json:"environment_policies,omitempty"`
 	// Features are project-scoped feature flags from .renart/project.yml

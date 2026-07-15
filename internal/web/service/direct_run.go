@@ -67,7 +67,7 @@ func (e *HybridBruinExecutor) RunAsset(ctx context.Context, req RunAssetRequest,
 
 	mainExecutors := map[pipeline.AssetType]bruinexecutor.Config{}
 	if !isAPIAsset(pp.Asset) && !isLoadAsset(pp.Asset) {
-		mainExecutors, err = buildDirectMainExecutors(manager, renderer, parser, pp.Pipeline, e.runRegistry, e.duckDBCoordinator, e.workspaceRoot, req.FullRefresh)
+		mainExecutors, err = buildDirectMainExecutors(manager, renderer, parser, pp.Pipeline, e.runRegistry, e.duckDBCoordinator, e.workspaceRoot, req.FullRefresh, effectiveSensorMode(req.SensorMode, false))
 		if err != nil {
 			return printer.buffer.Bytes(), err
 		}
@@ -221,7 +221,7 @@ func (e *HybridBruinExecutor) RunPipeline(ctx context.Context, req RunPipelineRe
 	if err != nil {
 		return printer.buffer.Bytes(), err
 	}
-	mainExecutors, err := buildDirectMainExecutors(manager, renderer, parser, foundPipeline, e.runRegistry, e.duckDBCoordinator, e.workspaceRoot, req.FullRefresh)
+	mainExecutors, err := buildDirectMainExecutors(manager, renderer, parser, foundPipeline, e.runRegistry, e.duckDBCoordinator, e.workspaceRoot, req.FullRefresh, effectiveSensorMode(req.SensorMode, false))
 	if err != nil {
 		return printer.buffer.Bytes(), err
 	}
@@ -483,6 +483,10 @@ var directRunAssetTypes = map[pipeline.AssetType]struct{}{
 	pipeline.AssetTypeFabricTableSensorLegacy: {},
 	pipeline.AssetTypeDatabricksQuerySensor:   {},
 	pipeline.AssetTypeDatabricksTableSensor:   {},
+	pipeline.AssetTypeDorisSeed:               {},
+	pipeline.AssetTypeDorisQuerySensor:        {},
+	pipeline.AssetTypeDorisTableSensor:        {},
+	pipeline.AssetTypeDremioQuerySensor:       {},
 	pipeline.AssetTypeAthenaSQLSensor:         {},
 	pipeline.AssetTypeAthenaTableSensor:       {},
 	pipeline.AssetTypeDuckDBQuerySensor:       {},
@@ -491,6 +495,7 @@ var directRunAssetTypes = map[pipeline.AssetType]struct{}{
 	pipeline.AssetTypeSnowflakeQuerySensor:    {},
 	pipeline.AssetTypeSnowflakeTableSensor:    {},
 	pipeline.AssetTypeTrinoQuerySensor:        {},
+	pipeline.AssetTypeSailQuerySensor:         {},
 	pipeline.AssetTypeVerticaQuerySensor:      {},
 	pipeline.AssetTypeVerticaTableSensor:      {},
 	pipeline.AssetTypeS3KeySensor:             {},

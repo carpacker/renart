@@ -3,6 +3,10 @@ package httpapi
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"mime"
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
@@ -80,6 +84,8 @@ type AssetsAPI struct {
 	Service AssetHandlers
 }
 
+const maxSeedUploadBytes int64 = 256 << 20
+
 func RegisterAssetRoutes(router chi.Router, handlers *AssetsAPI) {
 	router.Post("/api/pipelines/{id}/assets", handlers.HandleCreateAsset)
 	router.Put("/api/pipelines/{pipelineID}/assets/{assetID}", handlers.HandleUpdateAsset)
@@ -97,8 +103,8 @@ func RegisterAssetRoutes(router chi.Router, handlers *AssetsAPI) {
 }
 
 func (h *AssetsAPI) HandleCreateAsset(w http.ResponseWriter, r *http.Request) {
-	var req CreateAssetRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	req, err := decodeCreateAssetRequest(w, r)
+	if err != nil {
 		webapi.WriteBadRequest(w, "invalid_request_body", err.Error())
 		return
 	}
@@ -108,6 +114,51 @@ func (h *AssetsAPI) HandleCreateAsset(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	webapi.WriteJSON(w, http.StatusCreated, resp)
+}
+
+func decodeCreateAssetRequest(w http.ResponseWriter, r *http.Request) (CreateAssetRequest, error) {
+	var req CreateAssetRequest
+	mediaType, _, mediaTypeErr := mime.ParseMediaType(r.Header.Get("Content-Type"))
+	if mediaTypeErr != nil || mediaType != "multipart/form-data" {
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			return CreateAssetRequest{}, err
+		}
+		return req, nil
+	}
+
+	r.Body = http.MaxBytesReader(w, r.Body, maxSeedUploadBytes+(1<<20))
+	if err := r.ParseMultipartForm(16 << 20); err != nil {
+		return CreateAssetRequest{}, err
+	}
+	if r.MultipartForm != nil {
+		defer r.MultipartForm.RemoveAll()
+	}
+	encodedRequest := r.FormValue("request")
+	if encodedRequest == "" {
+		return CreateAssetRequest{}, errors.New("multipart request field is required")
+	}
+	if err := json.Unmarshal([]byte(encodedRequest), &req); err != nil {
+		return CreateAssetRequest{}, fmt.Errorf("invalid multipart request field: %w", err)
+	}
+
+	file, header, err := r.FormFile("file")
+	if errors.Is(err, http.ErrMissingFile) {
+		return req, nil
+	}
+	if err != nil {
+		return CreateAssetRequest{}, err
+	}
+	defer file.Close()
+	contents, err := io.ReadAll(io.LimitReader(file, maxSeedUploadBytes+1))
+	if err != nil {
+		return CreateAssetRequest{}, err
+	}
+	if int64(len(contents)) > maxSeedUploadBytes {
+		return CreateAssetRequest{}, fmt.Errorf("seed upload exceeds the %d MiB limit", maxSeedUploadBytes>>20)
+	}
+	req.SeedFileName = header.Filename
+	req.SeedFileBytes = contents
+	return req, nil
 }
 
 func (h *AssetsAPI) HandleUpdateAsset(w http.ResponseWriter, r *http.Request) {

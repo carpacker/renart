@@ -1,4 +1,4 @@
-import { WorkspaceConfigConnectionType } from "@/lib/types";
+import type { AssetAuthoringCapability, WorkspaceConfigConnectionType } from "@/lib/types";
 
 export const SQL_ASSET_TYPES = [
   "athena.sql",
@@ -25,6 +25,7 @@ export const SEED_ASSET_TYPES = [
   "bq.seed",
   "clickhouse.seed",
   "databricks.seed",
+  "doris.seed",
   "duckdb.seed",
   "fabric.seed",
   "fw.seed",
@@ -65,18 +66,45 @@ const ASSET_TYPE_TO_CONNECTION_TYPE = Object.fromEntries(
   ]),
 ) as Record<string, string>;
 
-export function getAvailableAssetTypes(connectionTypes: WorkspaceConfigConnectionType[]): string[] {
+export function getAvailableAssetTypes(
+  connectionTypes: WorkspaceConfigConnectionType[],
+  assetCapabilities: AssetAuthoringCapability[] = [],
+): string[] {
   const mappedSqlTypes = connectionTypes
     .map((connectionType) => CONNECTION_TYPE_TO_ASSET_TYPE[connectionType.type_name])
     .filter((value): value is string => Boolean(value));
 
   return Array.from(
-    new Set([...mappedSqlTypes, ...SQL_ASSET_TYPES, ...SEED_ASSET_TYPES, ...NON_SQL_ASSET_TYPES]),
+    new Set([
+      ...mappedSqlTypes,
+      ...SQL_ASSET_TYPES,
+      ...SEED_ASSET_TYPES,
+      ...NON_SQL_ASSET_TYPES,
+      ...assetCapabilities.map((capability) => capability.type),
+    ]),
   ).sort((left, right) => left.localeCompare(right));
 }
 
 export function isSqlAssetType(assetType?: string | null) {
   return (assetType ?? "").trim().toLowerCase().endsWith(".sql");
+}
+
+export function isSeedAssetType(assetType?: string | null) {
+  return (assetType ?? "").trim().toLowerCase().endsWith(".seed");
+}
+
+export function isSensorAssetType(assetType?: string | null) {
+  return (assetType ?? "").trim().toLowerCase().includes(".sensor.");
+}
+
+export function getAssetAuthoringCapability(
+  assetType: string | null | undefined,
+  capabilities: AssetAuthoringCapability[] | null | undefined,
+) {
+  const normalized = (assetType ?? "").trim().toLowerCase();
+  return (capabilities ?? []).find(
+    (capability) => capability.type.trim().toLowerCase() === normalized,
+  );
 }
 
 export function groupAssetTypesByKind(assetTypes: string[]) {
@@ -86,7 +114,11 @@ export function groupAssetTypesByKind(assetTypes: string[]) {
 
   return {
     sql: uniqueTypes.filter((type) => isSqlAssetType(type)),
-    nonSql: uniqueTypes.filter((type) => !isSqlAssetType(type)),
+    seed: uniqueTypes.filter((type) => isSeedAssetType(type)),
+    sensor: uniqueTypes.filter((type) => isSensorAssetType(type)),
+    nonSql: uniqueTypes.filter(
+      (type) => !isSqlAssetType(type) && !isSeedAssetType(type) && !isSensorAssetType(type),
+    ),
   };
 }
 

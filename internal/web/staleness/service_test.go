@@ -177,6 +177,28 @@ func TestNeverBuiltThenFresh(t *testing.T) {
 	assert.Equal(t, StatusFresh, f.statuses(t, "dev", nil, nil)["a"].Status)
 }
 
+func TestSensorRemainsVolatileAfterSuccessfulRun(t *testing.T) {
+	t.Parallel()
+	sensor := &pipeline.Asset{
+		Name:           "ready",
+		Type:           pipeline.AssetTypeDuckDBQuerySensor,
+		DefinitionFile: pipeline.TaskDefinitionFile{Path: "/w/p/assets/ready.asset.yml"},
+		Parameters:     pipeline.ParameterMap{"query": "select 1"},
+	}
+	f := newFixture(t, sensor)
+
+	before := f.statuses(t, "dev", nil, nil)["ready"]
+	assert.Equal(t, StatusVolatile, before.Status)
+	assert.True(t, before.Volatile)
+
+	f.recordRun(t, "dev", nil, "ready")
+	after := f.statuses(t, "dev", nil, nil)["ready"]
+	assert.Equal(t, StatusVolatile, after.Status)
+	assert.True(t, after.Volatile)
+	assert.NotNil(t, after.LastMaterializedAt)
+	assert.False(t, verifiableByName(sensor))
+}
+
 // State 1: you edited the asset, ran that exact edit, and it failed. Base status
 // stays stale_edited, but the failed run is on the current content.
 func TestEditedThenRunFailedOnCurrentContent(t *testing.T) {

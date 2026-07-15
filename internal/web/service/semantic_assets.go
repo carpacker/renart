@@ -1,0 +1,419 @@
+package service
+
+import (
+	"fmt"
+	"net/url"
+	"os"
+	"path/filepath"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/bruin-data/bruin/pkg/pipeline"
+	"github.com/spf13/afero"
+	"gopkg.in/yaml.v3"
+
+	"renart/internal/web/model"
+)
+
+const renartOwnedSeedFileMetaKey = "renart_seed_file"
+
+// seedWorkspacePathParameter is accepted only by semantic seed creation. The
+// UI's workspace picker speaks workspace-relative paths; canonical Bruin seed
+// definitions store paths relative to the .asset.yml file instead.
+const seedWorkspacePathParameter = "workspace_path"
+
+type semanticAssetDefinition struct {
+	Name       string                  `yaml:"name"`
+	Type       string                  `yaml:"type"`
+	Connection string                  `yaml:"connection,omitempty"`
+	Meta       map[string]string       `yaml:"meta,omitempty"`
+	Parameters semanticAssetParameters `yaml:"parameters"`
+}
+
+type semanticAssetParameters struct {
+	Path          string `yaml:"path,omitempty"`
+	FileType      string `yaml:"file_type,omitempty"`
+	EnforceSchema *bool  `yaml:"enforce_schema,omitempty"`
+	Query         string `yaml:"query,omitempty"`
+	Table         string `yaml:"table,omitempty"`
+	BucketName    string `yaml:"bucket_name,omitempty"`
+	BucketKey     string `yaml:"bucket_key,omitempty"`
+	PokeInterval  *int   `yaml:"poke_interval,omitempty"`
+	Timeout       string `yaml:"timeout,omitempty"`
+}
+
+type semanticAssetFiles struct {
+	definition  []byte
+	sidecarPath string
+	sidecar     []byte
+}
+
+func authoringCapabilityForType(assetType string) (model.AssetAuthoringCapability, bool) {
+	for _, capability := range assetAuthoringCapabilities() {
+		if capability.Type == strings.TrimSpace(assetType) {
+			return capability, true
+		}
+	}
+	return model.AssetAuthoringCapability{}, false
+}
+
+func (s *AssetService) buildSemanticAssetFiles(assetName, assetType, absAssetPath string, req CreateAssetParams) (semanticAssetFiles, *APIError) {
+	capability, ok := authoringCapabilityForType(assetType)
+	if !ok {
+		return semanticAssetFiles{}, newAPIError(400, "unsupported_asset_type", fmt.Sprintf("Renart cannot create asset type %q", assetType))
+	}
+	if connectionErr := s.validateAuthoringConnection(req.Connection, capability); connectionErr != nil {
+		return semanticAssetFiles{}, connectionErr
+	}
+
+	switch capability.Kind {
+	case "seed":
+		return s.buildSemanticSeedFiles(assetName, assetType, absAssetPath, req, capability)
+	case "sensor":
+		return buildSemanticSensorFiles(assetName, assetType, req, capability)
+	default:
+		return semanticAssetFiles{}, newAPIError(400, "unsupported_asset_kind", fmt.Sprintf("Renart cannot create asset kind %q", capability.Kind))
+	}
+}
+
+func (s *AssetService) validateSemanticAssetUpdate(asset *pipeline.Asset) *APIError {
+	if asset == nil {
+		return nil
+	}
+	assetType := strings.TrimSpace(string(asset.Type))
+	capability, ok := authoringCapabilityForType(assetType)
+	if !ok {
+		return newAPIError(400, "unsupported_asset_type", fmt.Sprintf("Renart cannot author asset type %q", assetType))
+	}
+	parameters := make(map[string]string, len(asset.Parameters))
+	for key := range asset.Parameters {
+		value, ok := asset.Parameters.GetString(key)
+		if !ok {
+			return newAPIError(400, "invalid_asset_parameter", fmt.Sprintf("asset parameter %q must be a scalar value", key))
+		}
+		parameters[key] = value
+	}
+	req := CreateAssetParams{Connection: asset.Connection, Parameters: parameters}
+	switch capability.Kind {
+	case "seed":
+		_, apiErr := s.buildSemanticSeedFiles(asset.Name, assetType, asset.DefinitionFile.Path, req, capability)
+		return apiErr
+	case "sensor":
+		_, apiErr := buildSemanticSensorFiles(asset.Name, assetType, req, capability)
+		return apiErr
+	default:
+		return newAPIError(400, "unsupported_asset_kind", fmt.Sprintf("Renart cannot author asset kind %q", capability.Kind))
+	}
+}
+
+func (s *AssetService) validateAuthoringConnection(connectionName string, capability model.AssetAuthoringCapability) *APIError {
+	connectionName = strings.TrimSpace(connectionName)
+	if connectionName == "" || s.deps.ConnectionTypeFor == nil {
+		return nil
+	}
+	connectionType := strings.TrimSpace(s.deps.ConnectionTypeFor(connectionName))
+	if connectionType == "" {
+		return nil
+	}
+	for _, allowed := range capability.ConnectionTypes {
+		if connectionType == allowed {
+			return nil
+		}
+	}
+	return newAPIError(400, "incompatible_connection", fmt.Sprintf("connection %q has type %q, which cannot back %s", connectionName, connectionType, capability.Type))
+}
+
+func (s *AssetService) buildSemanticSeedFiles(assetName, assetType, absAssetPath string, req CreateAssetParams, capability model.AssetAuthoringCapability) (semanticAssetFiles, *APIError) {
+	parameters := req.Parameters
+	if parameters == nil {
+		parameters = map[string]string{}
+	}
+	enforceSchema := true
+	if raw := strings.TrimSpace(parameters["enforce_schema"]); raw != "" {
+		parsed, err := strconv.ParseBool(raw)
+		if err != nil {
+			return semanticAssetFiles{}, newAPIError(400, "invalid_enforce_schema", "enforce_schema must be true or false")
+		}
+		enforceSchema = parsed
+	}
+	fileType := strings.ToLower(strings.TrimSpace(parameters["file_type"]))
+	if fileType != "" && !containsString(capability.FileTypes, fileType) {
+		return semanticAssetFiles{}, newAPIError(400, "invalid_seed_file_type", fmt.Sprintf("unsupported seed file type %q", fileType))
+	}
+
+	uploadBytes := req.SeedFileBytes
+	if uploadBytes == nil && strings.TrimSpace(req.SeedFileName) != "" {
+		uploadBytes = []byte(req.SeedFileContent)
+	}
+	seedPath := strings.TrimSpace(parameters["path"])
+	workspaceSeedPath := strings.TrimSpace(parameters[seedWorkspacePathParameter])
+	if seedPath != "" && workspaceSeedPath != "" {
+		return semanticAssetFiles{}, newAPIError(400, "conflicting_seed_paths", "provide either path or workspace_path, not both")
+	}
+	if workspaceSeedPath != "" {
+		var pathErr *APIError
+		seedPath, pathErr = s.canonicalSeedWorkspacePath(workspaceSeedPath, absAssetPath)
+		if pathErr != nil {
+			return semanticAssetFiles{}, pathErr
+		}
+	}
+	ownedFile := ""
+	files := semanticAssetFiles{}
+	if uploadBytes != nil {
+		seedFileName, nameErr := cleanSeedUploadName(req.SeedFileName)
+		if nameErr != nil {
+			return semanticAssetFiles{}, nameErr
+		}
+		if seedFileName == filepath.Base(absAssetPath) {
+			return semanticAssetFiles{}, newAPIError(400, "invalid_seed_file_name", "seed file cannot replace its asset definition")
+		}
+		inferredType := seedFileTypeFromPath(seedFileName)
+		if fileType == "" {
+			fileType = inferredType
+		}
+		if fileType == "" || !containsString(capability.FileTypes, fileType) {
+			return semanticAssetFiles{}, newAPIError(400, "invalid_seed_file_type", "seed uploads need a supported file extension or an explicit file_type")
+		}
+		if inferredType != "" && inferredType != fileType {
+			return semanticAssetFiles{}, newAPIError(400, "seed_file_type_mismatch", fmt.Sprintf("uploaded .%s file does not match file_type %q", inferredType, fileType))
+		}
+		seedPath = "./" + seedFileName
+		ownedFile = seedFileName
+		files.sidecarPath = filepath.Join(filepath.Dir(absAssetPath), seedFileName)
+		files.sidecar = append([]byte(nil), uploadBytes...)
+	} else {
+		if seedPath == "" {
+			return semanticAssetFiles{}, newAPIError(400, "missing_seed_path", "seed path is required when no file is uploaded")
+		}
+		if pathErr := s.validateExistingSeedPath(seedPath, absAssetPath); pathErr != nil {
+			return semanticAssetFiles{}, pathErr
+		}
+		if fileType == "" {
+			fileType = seedFileTypeFromPath(seedPath)
+		}
+		if fileType == "" || !containsString(capability.FileTypes, fileType) {
+			return semanticAssetFiles{}, newAPIError(400, "invalid_seed_file_type", "seed paths need a supported file extension or an explicit file_type")
+		}
+	}
+
+	definition := semanticAssetDefinition{
+		Name:       assetName,
+		Type:       assetType,
+		Connection: strings.TrimSpace(req.Connection),
+		Parameters: semanticAssetParameters{
+			Path:          seedPath,
+			FileType:      fileType,
+			EnforceSchema: &enforceSchema,
+		},
+	}
+	if ownedFile != "" {
+		definition.Meta = map[string]string{renartOwnedSeedFileMetaKey: ownedFile}
+	}
+	encoded, err := yaml.Marshal(definition)
+	if err != nil {
+		return semanticAssetFiles{}, newAPIError(500, "asset_render_failed", err.Error())
+	}
+	files.definition = encoded
+	return files, nil
+}
+
+func buildSemanticSensorFiles(assetName, assetType string, req CreateAssetParams, capability model.AssetAuthoringCapability) (semanticAssetFiles, *APIError) {
+	parameters := req.Parameters
+	if parameters == nil {
+		parameters = map[string]string{}
+	}
+	for _, required := range capability.RequiredParameters {
+		if strings.TrimSpace(parameters[required]) == "" {
+			return semanticAssetFiles{}, newAPIError(400, "missing_sensor_parameter", fmt.Sprintf("sensor parameter %q is required", required))
+		}
+	}
+	pokeInterval := 30
+	if raw := strings.TrimSpace(parameters["poke_interval"]); raw != "" {
+		parsed, err := strconv.Atoi(raw)
+		if err != nil || parsed <= 0 {
+			return semanticAssetFiles{}, newAPIError(400, "invalid_poke_interval", "poke_interval must be a positive number of seconds")
+		}
+		pokeInterval = parsed
+	}
+	timeout := strings.TrimSpace(parameters["timeout"])
+	if timeout == "" {
+		timeout = "24h"
+	}
+	parsedTimeout, err := time.ParseDuration(timeout)
+	if err != nil || parsedTimeout <= 0 {
+		return semanticAssetFiles{}, newAPIError(400, "invalid_sensor_timeout", "timeout must be a positive duration such as 30m or 24h")
+	}
+
+	definition := semanticAssetDefinition{
+		Name:       assetName,
+		Type:       assetType,
+		Connection: strings.TrimSpace(req.Connection),
+		Parameters: semanticAssetParameters{
+			Query:        strings.TrimSpace(parameters["query"]),
+			Table:        strings.TrimSpace(parameters["table"]),
+			BucketName:   strings.TrimSpace(parameters["bucket_name"]),
+			BucketKey:    strings.TrimSpace(parameters["bucket_key"]),
+			PokeInterval: &pokeInterval,
+			Timeout:      timeout,
+		},
+	}
+	encoded, err := yaml.Marshal(definition)
+	if err != nil {
+		return semanticAssetFiles{}, newAPIError(500, "asset_render_failed", err.Error())
+	}
+	return semanticAssetFiles{definition: encoded}, nil
+}
+
+func cleanSeedUploadName(name string) (string, *APIError) {
+	trimmed := strings.TrimSpace(strings.ReplaceAll(name, "\\", "/"))
+	base := filepath.Base(filepath.FromSlash(trimmed))
+	if trimmed == "" || base == "." || base == string(filepath.Separator) || base == "" {
+		return "", newAPIError(400, "invalid_seed_file_name", "seed file name is invalid")
+	}
+	return base, nil
+}
+
+func (s *AssetService) validateExistingSeedPath(seedPath, absAssetPath string) *APIError {
+	parsedURL, err := url.Parse(seedPath)
+	if err != nil {
+		return newAPIError(400, "invalid_seed_path", err.Error())
+	}
+	if parsedURL.IsAbs() {
+		if (parsedURL.Scheme == "http" || parsedURL.Scheme == "https") && parsedURL.Host != "" {
+			return nil
+		}
+		return newAPIError(400, "invalid_seed_path", "seed URLs must use http or https")
+	}
+	if filepath.IsAbs(filepath.FromSlash(seedPath)) {
+		return newAPIError(400, "invalid_seed_path", "local seed paths must be relative to the asset definition")
+	}
+	joined := filepath.Clean(filepath.Join(filepath.Dir(absAssetPath), filepath.FromSlash(seedPath)))
+	relative, err := filepath.Rel(s.deps.WorkspaceRoot, joined)
+	if err != nil || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
+		return newAPIError(400, "invalid_seed_path", "seed path must stay inside the workspace")
+	}
+	exists, err := afero.Exists(s.fs(), joined)
+	if err != nil {
+		return newAPIError(500, "seed_file_stat_failed", err.Error())
+	}
+	if !exists {
+		return newAPIError(400, "seed_file_not_found", fmt.Sprintf("seed file %q does not exist", seedPath))
+	}
+	return nil
+}
+
+func (s *AssetService) canonicalSeedWorkspacePath(workspacePath, absAssetPath string) (string, *APIError) {
+	trimmed := strings.TrimSpace(strings.ReplaceAll(workspacePath, "\\", "/"))
+	trimmed = strings.TrimPrefix(trimmed, "./")
+	if trimmed == "" {
+		return "", newAPIError(400, "invalid_seed_workspace_path", "workspace seed path is required")
+	}
+	absSeedPath, err := SafeJoin(s.deps.WorkspaceRoot, trimmed)
+	if err != nil {
+		return "", newAPIError(400, "invalid_seed_workspace_path", "workspace seed path must stay inside the workspace")
+	}
+	info, err := s.fs().Stat(absSeedPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return "", newAPIError(400, "seed_file_not_found", fmt.Sprintf("workspace seed file %q does not exist", workspacePath))
+		}
+		return "", newAPIError(500, "seed_file_stat_failed", err.Error())
+	}
+	if info.IsDir() {
+		return "", newAPIError(400, "invalid_seed_workspace_path", "workspace seed path must select a file")
+	}
+	relative, err := filepath.Rel(filepath.Dir(absAssetPath), absSeedPath)
+	if err != nil {
+		return "", newAPIError(400, "invalid_seed_workspace_path", err.Error())
+	}
+	canonical := filepath.ToSlash(relative)
+	if !strings.HasPrefix(canonical, ".") {
+		canonical = "./" + canonical
+	}
+	return canonical, nil
+}
+
+func seedFileTypeFromPath(value string) string {
+	pathValue := value
+	if parsed, err := url.Parse(value); err == nil && parsed.Path != "" {
+		pathValue = parsed.Path
+	}
+	return strings.TrimPrefix(strings.ToLower(filepath.Ext(pathValue)), ".")
+}
+
+func containsString(values []string, wanted string) bool {
+	for _, value := range values {
+		if value == wanted {
+			return true
+		}
+	}
+	return false
+}
+
+func writeNewSemanticAssetFiles(fs afero.Fs, definitionPath string, files semanticAssetFiles) error {
+	paths := []struct {
+		path string
+		data []byte
+	}{{path: definitionPath, data: files.definition}}
+	if files.sidecarPath != "" {
+		paths = append(paths, struct {
+			path string
+			data []byte
+		}{path: files.sidecarPath, data: files.sidecar})
+	}
+
+	temporary := make([]string, 0, len(paths))
+	cleanupTemps := func() {
+		for _, path := range temporary {
+			_ = fs.Remove(path)
+		}
+	}
+	defer cleanupTemps()
+	for _, file := range paths {
+		tmp, err := afero.TempFile(fs, filepath.Dir(file.path), ".renart-create-*")
+		if err != nil {
+			return err
+		}
+		temporary = append(temporary, tmp.Name())
+		if _, err := tmp.Write(file.data); err != nil {
+			_ = tmp.Close()
+			return err
+		}
+		if err := tmp.Close(); err != nil {
+			return err
+		}
+		if err := fs.Chmod(tmp.Name(), 0o644); err != nil {
+			return err
+		}
+	}
+
+	committedSidecar := ""
+	if files.sidecarPath != "" {
+		if err := fs.Rename(temporary[1], files.sidecarPath); err != nil {
+			return err
+		}
+		committedSidecar = files.sidecarPath
+		temporary[1] = ""
+	}
+	if err := fs.Rename(temporary[0], definitionPath); err != nil {
+		if committedSidecar != "" {
+			_ = fs.Remove(committedSidecar)
+		}
+		return err
+	}
+	temporary[0] = ""
+	return nil
+}
+
+func ownedSeedSidecar(asset *pipeline.Asset, definitionPath string) string {
+	if asset == nil || !strings.HasSuffix(strings.ToLower(strings.TrimSpace(string(asset.Type))), ".seed") {
+		return ""
+	}
+	name := strings.TrimSpace(asset.Meta[renartOwnedSeedFileMetaKey])
+	cleaned, apiErr := cleanSeedUploadName(name)
+	if apiErr != nil || cleaned != name {
+		return ""
+	}
+	return filepath.Join(filepath.Dir(definitionPath), cleaned)
+}

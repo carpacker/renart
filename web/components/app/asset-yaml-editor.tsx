@@ -30,7 +30,14 @@ import { updateAsset } from "@/lib/api-assets";
 import { inferAPIAsset, updateAssetColumns } from "@/lib/api-assets-columns";
 import { getSQLTableColumns } from "@/lib/api-sql-discovery";
 import { classifyDependencies, parseAssetProvenance } from "@/lib/asset-provenance";
-import { NON_SQL_ASSET_TYPES, SQL_ASSET_TYPES, groupAssetTypesByKind } from "@/lib/asset-types";
+import {
+  NON_SQL_ASSET_TYPES,
+  SEED_ASSET_TYPES,
+  SQL_ASSET_TYPES,
+  groupAssetTypesByKind,
+  isSeedAssetType,
+  isSensorAssetType,
+} from "@/lib/asset-types";
 import { useIngestrEnabled } from "@/lib/features";
 import { selectedEnvironmentAtom, workspaceAtom } from "@/lib/atoms/workspace";
 import { WebAsset, WebColumn } from "@/lib/types";
@@ -67,6 +74,7 @@ export function AssetYamlEditor({ asset, pipelineId }: { asset: WebAsset; pipeli
     <ScrollArea className="min-h-0 flex-1 bg-background">
       <div className="font-monaco p-3 text-[13px] leading-6">
         <IdentitySection asset={asset} pipelineId={pipelineId} />
+        <SemanticParametersSection asset={asset} pipelineId={pipelineId} />
         <MaterializationSection asset={asset} pipelineId={pipelineId} />
         <DependsSection asset={asset} />
         <ColumnsSection asset={asset} isSql={isSql} />
@@ -251,7 +259,11 @@ function IdentitySection({ asset, pipelineId }: { asset: WebAsset; pipelineId: s
   const { workspaceConfig } = useWorkspaceSettingsData();
   const normalizedType = asset.type.trim().toLowerCase();
   const hasTargetConnection =
-    normalizedType === "api" || normalizedType === "load" || normalizedType.includes("python");
+    normalizedType === "api" ||
+    normalizedType === "load" ||
+    normalizedType.includes("python") ||
+    isSeedAssetType(normalizedType) ||
+    isSensorAssetType(normalizedType);
   const connectionOptions = useMemo(() => {
     if (!hasTargetConnection) return [];
     const explicit = (asset.explicit_connection ?? "").trim();
@@ -260,7 +272,16 @@ function IdentitySection({ asset, pipelineId }: { asset: WebAsset; pipelineId: s
         ? loadConnectionsForEnvironment(workspaceConfig, environment).map(
             (connection) => connection.name,
           )
-        : Object.keys(workspace?.connections ?? {});
+        : isSeedAssetType(normalizedType) || isSensorAssetType(normalizedType)
+          ? Object.entries(workspace?.connections ?? {})
+              .filter(([, type]) => {
+                const capability = (workspace?.asset_capabilities ?? []).find(
+                  (candidate) => candidate.type === asset.type,
+                );
+                return capability?.connection_types.includes(type);
+              })
+              .map(([name]) => name)
+          : Object.keys(workspace?.connections ?? {});
     if (normalizedType === "load" && !names.includes(LOCAL_LOAD_CONNECTION)) {
       names.push(LOCAL_LOAD_CONNECTION);
     }
@@ -281,17 +302,25 @@ function IdentitySection({ asset, pipelineId }: { asset: WebAsset; pipelineId: s
     environment,
     hasTargetConnection,
     normalizedType,
+    asset.type,
+    workspace?.asset_capabilities,
     workspace?.connections,
     workspaceConfig,
   ]);
   const assetTypeGroups = useMemo(
     () =>
       groupAssetTypesByKind(
-        Array.from(new Set([...SQL_ASSET_TYPES, ...NON_SQL_ASSET_TYPES, asset.type])).filter(
-          (type) => ingestrEnabled || type !== "ingestr" || type === asset.type,
-        ),
+        Array.from(
+          new Set([
+            ...SQL_ASSET_TYPES,
+            ...SEED_ASSET_TYPES,
+            ...NON_SQL_ASSET_TYPES,
+            ...(workspace?.asset_capabilities ?? []).map((capability) => capability.type),
+            asset.type,
+          ]),
+        ).filter((type) => ingestrEnabled || type !== "ingestr" || type === asset.type),
       ),
-    [asset.type, ingestrEnabled],
+    [asset.type, ingestrEnabled, workspace?.asset_capabilities],
   );
   const tags = asset.tags ?? [];
 
@@ -333,6 +362,14 @@ function IdentitySection({ asset, pipelineId }: { asset: WebAsset; pipelineId: s
             {
               label: "Non-SQL assets",
               options: assetTypeGroups.nonSql.map((type) => ({ value: type, label: type })),
+            },
+            {
+              label: "Seeds",
+              options: assetTypeGroups.seed.map((type) => ({ value: type, label: type })),
+            },
+            {
+              label: "Sensors",
+              options: assetTypeGroups.sensor.map((type) => ({ value: type, label: type })),
             },
           ]}
           onChange={(type) => {
@@ -401,13 +438,126 @@ function IdentitySection({ asset, pipelineId }: { asset: WebAsset; pipelineId: s
   );
 }
 
-function MaterializationSection({
-  asset,
-  pipelineId,
-}: {
-  asset: WebAsset;
-  pipelineId: string;
-}) {
+function SemanticParametersSection({ asset, pipelineId }: { asset: WebAsset; pipelineId: string }) {
+  const isSeed = isSeedAssetType(asset.type);
+  const isSensor = isSensorAssetType(asset.type);
+  if (!isSeed && !isSensor) return null;
+
+  const saveParameter = (key: string, value: string) => {
+    const parameters = { ...(asset.parameters ?? {}) };
+    if (value.trim()) {
+      parameters[key] = value.trim();
+    } else {
+      delete parameters[key];
+    }
+    void updateAsset(pipelineId, asset.id, { parameters });
+  };
+  const sensorVariant = asset.type.split(".sensor.")[1] ?? "";
+
+  return (
+    <>
+      <Line className="mt-1">
+        <Key>parameters</Key>
+      </Line>
+      {isSeed ? (
+        <>
+          <Line depth={1}>
+            <Key>path</Key>
+            <InlineText
+              value={asset.parameters?.path ?? ""}
+              placeholder="./customers.csv"
+              onCommit={(value) => saveParameter("path", value)}
+            />
+          </Line>
+          <Line depth={1}>
+            <Key>file_type</Key>
+            <InlineSelect
+              value={asset.parameters?.file_type ?? "csv"}
+              options={["csv", "parquet", "json", "jsonl", "ndjson", "avro"].map((value) => ({
+                value,
+                label: value,
+              }))}
+              onChange={(value) => saveParameter("file_type", value)}
+            />
+          </Line>
+          <Line depth={1}>
+            <Key>enforce_schema</Key>
+            <InlineSelect
+              value={asset.parameters?.enforce_schema ?? "true"}
+              options={[
+                { value: "true", label: "true" },
+                { value: "false", label: "false" },
+              ]}
+              onChange={(value) => saveParameter("enforce_schema", value)}
+            />
+          </Line>
+        </>
+      ) : (
+        <>
+          {sensorVariant === "query" ? (
+            <Line depth={1}>
+              <Key>query</Key>
+              <InlineText
+                value={asset.parameters?.query ?? ""}
+                placeholder="select count(*) > 0 from analytics.orders"
+                onCommit={(value) => saveParameter("query", value)}
+              />
+            </Line>
+          ) : null}
+          {sensorVariant === "table" ? (
+            <Line depth={1}>
+              <Key>table</Key>
+              <InlineText
+                value={asset.parameters?.table ?? ""}
+                placeholder="analytics.orders"
+                onCommit={(value) => saveParameter("table", value)}
+              />
+            </Line>
+          ) : null}
+          {sensorVariant === "key" ? (
+            <>
+              <Line depth={1}>
+                <Key>bucket_name</Key>
+                <InlineText
+                  value={asset.parameters?.bucket_name ?? ""}
+                  placeholder="raw-data"
+                  onCommit={(value) => saveParameter("bucket_name", value)}
+                />
+              </Line>
+              <Line depth={1}>
+                <Key>bucket_key</Key>
+                <InlineText
+                  value={asset.parameters?.bucket_key ?? ""}
+                  placeholder="daily/orders.csv"
+                  onCommit={(value) => saveParameter("bucket_key", value)}
+                />
+              </Line>
+            </>
+          ) : null}
+          <Line depth={1}>
+            <Key>poke_interval</Key>
+            <InlineText
+              value={asset.parameters?.poke_interval ?? "30"}
+              placeholder="30"
+              onCommit={(value) => saveParameter("poke_interval", value)}
+            />
+          </Line>
+          <Line depth={1}>
+            <Key>timeout</Key>
+            <InlineText
+              value={asset.parameters?.timeout ?? "24h"}
+              placeholder="24h"
+              onCommit={(value) => saveParameter("timeout", value)}
+            />
+          </Line>
+          <Comment depth={1}>manual runs check once; scheduled runs wait</Comment>
+        </>
+      )}
+    </>
+  );
+}
+
+function MaterializationSection({ asset, pipelineId }: { asset: WebAsset; pipelineId: string }) {
   const { selected, selectedValue, options, hasEditor } = materializationEditorState(asset);
   const primaryKeys = (asset.columns ?? [])
     .filter((column) => column.primary_key)

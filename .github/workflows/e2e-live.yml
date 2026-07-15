@@ -71,6 +71,14 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-cargo-
 
+      - name: Cache Rust SQL parser build
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/renart/rustsqlparser/target
+          key: ${{ runner.os }}-rustsqlparser-${{ hashFiles('go.sum') }}
+          restore-keys: |
+            ${{ runner.os }}-rustsqlparser-
+
       - name: Install web dependencies
         working-directory: web
         run: corepack pnpm install --frozen-lockfile

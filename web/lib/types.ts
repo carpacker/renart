@@ -1,4 +1,5 @@
 import type {
+  AssetAuthoringCapability,
   AssetInspectResponse as GeneratedAssetInspectResponse,
   FormatSQLAssetResponse as GeneratedFormatSQLAssetResponse,
   InferColumnsResponse as GeneratedInferColumnsResponse,
@@ -46,6 +47,7 @@ import type {
 } from "@/lib/generated/api-types";
 
 export type {
+  AssetAuthoringCapability,
   IngestrSuggestion,
   IngestrSuggestionsResponse,
   OnboardingImportFormState,

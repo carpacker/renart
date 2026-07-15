@@ -108,6 +108,12 @@ round-trips unknown fields).
 
 ## 6. UI (`web/components/app/`)
 
+- **Asset creation:** the Build view's creation dialog presents SQL, Python,
+  HTTP API, Seed, Sensor, and Load as equal-size choices. Detail forms use the
+  plain `Field` variant so inputs are grouped by spacing and labels without a
+  border around every field. Seed workspace paths use the shared file picker;
+  the request carries a workspace-root-relative selection, while the saved
+  Bruin definition remains portable with a path relative to the asset file.
 - **Guided cards** (`asset-guided-cards.tsx`), rendered in the inspector
   sidebar next to the SQL editor: identity, materialization, dependencies
   (inferred / manual / ignored, with ignore/restore/remove actions), a column
@@ -129,9 +135,13 @@ round-trips unknown fields).
   asset name, shows `destination_object` for file/storage targets, and offers a
   go-to-source action when the source resolves to an upstream asset. Every edit
   flows through the transaction/API write paths; the workspace SSE stream
-  refreshes the asset. Asset-type selectors in both guided and YAML views group
-  SQL asset kinds separately from non-SQL kinds while preserving unknown current
-  values for repair.
+  refreshes the asset. Seed and sensor cards use the same backend capability
+  contract as creation: seed source, file type, and schema enforcement remain
+  editable, while query/table/S3-key sensors expose their condition,
+  `poke_interval`, and `timeout`. The internal `renart_seed_file` ownership
+  marker is preserved without becoming a guided user setting. Asset-type
+  selectors in both guided and YAML views group SQL, seed, sensor, and other
+  non-SQL kinds separately while preserving unknown current values for repair.
 - **Run-scoped full refresh:** supported table assets expose a Full refresh
   action without mutating their saved strategy. The destructive dialog names
   the selected environment and current execution window; environments with

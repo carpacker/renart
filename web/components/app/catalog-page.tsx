@@ -23,7 +23,7 @@ import {
   useAppAssetMaterializationStatus,
 } from "@/hooks/use-app-asset-materialization-status";
 
-import { assets, edges, kindMeta, type AssetKind } from "./app-data";
+import { assets, edges, kindForAssetType, kindMeta, type AssetKind } from "./app-data";
 import { AppLineageCanvas, assetNameParts, type AppLineageCanvasAsset } from "./lineage-canvas";
 import { PageHeader, AppPage, AppPanel } from "./app-primitives";
 
@@ -52,16 +52,6 @@ function catalogAssetFromWorkspace(asset: WebAsset, pipeline: WebPipeline): AppL
     x: 0,
     y: 0,
   };
-}
-
-function kindForAssetType(type: string): AssetKind {
-  const normalized = type.toLowerCase();
-  if (normalized.includes("python")) return "python";
-  if (normalized.includes("load")) return "load";
-  if (normalized.includes("ingestr")) return "ingestr";
-  if (normalized.includes("source")) return "source";
-  if (normalized.includes("test")) return "unittest";
-  return "sql";
 }
 
 function integrationForAsset(asset: WebAsset) {

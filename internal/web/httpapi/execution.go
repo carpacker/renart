@@ -19,7 +19,7 @@ type (
 
 type ExecutionHandlers interface {
 	InspectAsset(ctx context.Context, assetID, limit, environment, startDate, endDate string) InspectExecutionResult
-	MaterializeAssetStream(ctx context.Context, assetID, environment, scope, startDate, endDate string, fullRefresh, backfill bool, confirmedEnvironment string, onChunk func([]byte)) MaterializeExecutionEvent
+	MaterializeAssetStreamWithSensorMode(ctx context.Context, assetID, environment, scope, startDate, endDate string, fullRefresh, backfill bool, confirmedEnvironment, sensorMode string, onChunk func([]byte)) MaterializeExecutionEvent
 }
 
 type ExecutionAPI struct {
@@ -67,6 +67,7 @@ func (h *ExecutionAPI) HandleMaterializeAssetStream(w http.ResponseWriter, r *ht
 	fullRefresh := r.URL.Query().Get("full_refresh") == "true"
 	backfill := r.URL.Query().Get("backfill") == "true"
 	confirmedEnvironment := r.URL.Query().Get("confirmed_environment")
+	sensorMode := r.URL.Query().Get("sensor_mode")
 	flusher, ok := w.(http.Flusher)
 	if !ok {
 		webapi.WriteInternalError(w, "streaming_unsupported", "streaming unsupported")
@@ -79,7 +80,7 @@ func (h *ExecutionAPI) HandleMaterializeAssetStream(w http.ResponseWriter, r *ht
 	w.Header().Set("X-Accel-Buffering", "no")
 
 	_ = WriteSSEJSON(w, flusher, "start", map[string]any{"operation": webmodel.OperationMetadata{Type: "run", AssetPath: assetID, Target: assetID}})
-	result := h.Service.MaterializeAssetStream(r.Context(), assetID, environment, scope, startDate, endDate, fullRefresh, backfill, confirmedEnvironment, func(chunk []byte) {
+	result := h.Service.MaterializeAssetStreamWithSensorMode(r.Context(), assetID, environment, scope, startDate, endDate, fullRefresh, backfill, confirmedEnvironment, sensorMode, func(chunk []byte) {
 		_ = WriteSSEJSON(w, flusher, "output", map[string]any{"chunk": string(chunk)})
 	})
 	_ = WriteSSEJSON(w, flusher, "done", map[string]any{

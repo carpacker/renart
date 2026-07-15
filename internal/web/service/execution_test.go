@@ -139,6 +139,7 @@ func TestExecutionServiceMaterializeAssetStreamPreservesSuccessOutput(t *testing
 
 	require.Len(t, executor.runAssetRequests, 1)
 	assert.Equal(t, "pipelines/orders/assets/orders.sql", executor.runAssetRequests[0].AssetPath)
+	assert.Equal(t, sensorModeOnce, executor.runAssetRequests[0].SensorMode)
 	assert.Equal(t, "ok", result.Status)
 	assert.Equal(t, "asset run complete\n", result.Output)
 	assert.Empty(t, result.Error)
@@ -376,6 +377,7 @@ func TestExecutionServiceMaterializePipelineStreamPreservesSuccessOutput(t *test
 
 	require.Len(t, executor.runPipelineReqs, 1)
 	assert.Equal(t, "pipelines/orders", executor.runPipelineReqs[0].Target)
+	assert.Equal(t, sensorModeOnce, executor.runPipelineReqs[0].SensorMode)
 	assert.Equal(t, "ok", result.Status)
 	assert.Equal(t, "pipeline run complete\n", result.Output)
 	assert.Empty(t, result.Error)
@@ -388,6 +390,38 @@ func TestExecutionServiceMaterializePipelineStreamPreservesSuccessOutput(t *test
 	require.Len(t, completed.Assets, 2)
 	assert.Equal(t, "succeeded", completed.Assets[0].Status)
 	assert.Equal(t, "succeeded", completed.Assets[1].Status)
+}
+
+func TestExecutionServiceScheduledPipelineUsesWaitSensorMode(t *testing.T) {
+	t.Parallel()
+	pipelineID := EncodeID("pipelines/orders/pipeline.yml")
+	executor := &stubExecutionExecutor{}
+	svc := NewExecutionService(ExecutionDependencies{Executor: executor})
+
+	result := svc.MaterializePipelineRun(context.Background(), PipelineRunSpec{
+		RunID:      "scheduled-run",
+		PipelineID: pipelineID,
+		DryRun:     true,
+	}, nil, nil)
+
+	assert.Equal(t, "ok", result.Status)
+	require.Len(t, executor.runPipelineReqs, 1)
+	assert.Equal(t, sensorModeWait, executor.runPipelineReqs[0].SensorMode)
+}
+
+func TestExecutionServiceHonorsInteractiveSensorModeOverride(t *testing.T) {
+	t.Parallel()
+	pipelineID := EncodeID("pipelines/orders/pipeline.yml")
+	executor := &stubExecutionExecutor{}
+	svc := NewExecutionService(ExecutionDependencies{Executor: executor})
+
+	result := svc.MaterializePipelineStreamWithSensorMode(
+		context.Background(), pipelineID, "", false, false, false, "", "", "", sensorModeSkip, nil,
+	)
+
+	assert.Equal(t, "ok", result.Status)
+	require.Len(t, executor.runPipelineReqs, 1)
+	assert.Equal(t, sensorModeSkip, executor.runPipelineReqs[0].SensorMode)
 }
 
 func TestExecutionServiceMaterializePipelineStreamPreservesFailureOutput(t *testing.T) {
@@ -611,6 +645,28 @@ func TestExecutionServiceInspectLoadAssetToLocalFileReturnsInfo(t *testing.T) {
 	assert.Contains(t, result.Info, "./blub.csv")
 	assert.Empty(t, result.Error)
 	assert.Empty(t, executor.queryConnReqs, "a local-file load asset must not run a connection query")
+}
+
+func TestExecutionServiceInspectSensorReturnsInfoWithoutQueryingTable(t *testing.T) {
+	t.Parallel()
+
+	executor := &stubExecutionExecutor{}
+	svc := NewExecutionService(ExecutionDependencies{
+		Executor: executor,
+		ResolveAssetByID: func(context.Context, string) (string, *pipeline.Pipeline, *pipeline.Asset, error) {
+			return "analytics/assets/upstream_ready.asset.yml", &pipeline.Pipeline{}, &pipeline.Asset{
+				Name: "analytics.upstream_ready",
+				Type: pipeline.AssetTypeDuckDBQuerySensor,
+			}, nil
+		},
+	})
+
+	result := svc.InspectAsset(context.Background(), EncodeID("analytics/assets/upstream_ready.asset.yml"), "25", "", "", "")
+
+	assert.Equal(t, "info", result.Status)
+	assert.Equal(t, 200, result.HTTPStatus)
+	assert.Contains(t, result.Info, "do not materialize previewable data")
+	assert.Empty(t, executor.queryConnReqs)
 }
 
 func TestExecutionServiceInspectNonSQLAssetReportsMissingMaterializedTable(t *testing.T) {

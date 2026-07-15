@@ -25,6 +25,8 @@ type FilePathPickerProps = {
   id?: string;
   ariaLabel?: string;
   variant?: "inline" | "field";
+  workspaceOnly?: boolean;
+  fileExtensions?: string[];
 };
 
 // FilePathPicker is the shared workspace-file combobox used by both the Load
@@ -37,6 +39,8 @@ export function FilePathPicker({
   id,
   ariaLabel,
   variant = "inline",
+  workspaceOnly = false,
+  fileExtensions,
 }: FilePathPickerProps) {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState(value);
@@ -45,12 +49,28 @@ export function FilePathPicker({
   const requestRef = useRef(0);
 
   useEffect(() => {
-    if (!open) return;
     const token = ++requestRef.current;
+    if (!open) return;
+    if (workspaceOnly && query.trim() && !isWorkspacePath(query)) {
+      setSuggestions([]);
+      setLoading(false);
+      return;
+    }
     setLoading(true);
     getOnboardingPathSuggestions(query)
       .then((result) => {
-        if (token === requestRef.current) setSuggestions(result.suggestions ?? []);
+        if (token === requestRef.current) {
+          const extensions = new Set(
+            (fileExtensions ?? []).map((extension) => extension.toLowerCase().replace(/^\./, "")),
+          );
+          setSuggestions(
+            (result.suggestions ?? []).filter((suggestion) => {
+              if (suggestion.kind === "directory" || extensions.size === 0) return true;
+              const extension = suggestion.value.split(".").pop()?.toLowerCase() ?? "";
+              return extensions.has(extension);
+            }),
+          );
+        }
       })
       .catch(() => {
         if (token === requestRef.current) setSuggestions([]);
@@ -58,11 +78,11 @@ export function FilePathPicker({
       .finally(() => {
         if (token === requestRef.current) setLoading(false);
       });
-  }, [open, query]);
+  }, [fileExtensions, open, query, workspaceOnly]);
 
   const commit = (next: string) => {
     const trimmed = next.trim();
-    if (trimmed) {
+    if (trimmed && (!workspaceOnly || isWorkspacePath(trimmed))) {
       onCommit(trimmed);
       setOpen(false);
     }
@@ -128,7 +148,7 @@ export function FilePathPicker({
             {!loading ? (
               <CommandEmpty className="py-3 text-xs">No matching paths.</CommandEmpty>
             ) : null}
-            {query.trim() ? (
+            {query.trim() && (!workspaceOnly || isWorkspacePath(query)) ? (
               <CommandGroup heading="Use path">
                 <CommandItem
                   value={`__use__${query}`}
@@ -170,4 +190,17 @@ export function FilePathPicker({
       </PopoverContent>
     </Popover>
   );
+}
+
+function isWorkspacePath(value: string) {
+  const normalized = value.trim().replaceAll("\\", "/");
+  if (
+    !normalized ||
+    normalized.startsWith("/") ||
+    /^[a-zA-Z]:\//.test(normalized) ||
+    /^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//.test(normalized)
+  ) {
+    return false;
+  }
+  return !normalized.split("/").some((segment) => segment === "..");
 }

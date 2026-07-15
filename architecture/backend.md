@@ -109,6 +109,16 @@ schedulers on one state DB would duplicate runs); run facts still land in
 `.renart/state.db`. The visible command surface is pinned by
 `cmd/root_test.go`.
 
+**Release parser build cache.** Release and live-E2E builds compile Bruin's
+`bruinsqlparser` Rust static library before linking the Go binary. The build
+script keeps Cargo's target directory outside the Go module cache at
+`${XDG_CACHE_HOME:-$HOME/.cache}/renart/rustsqlparser/target`; CI caches that
+directory and the containerized GoReleaser jobs mount it into the build
+container. `RENART_RUSTSQLPARSER_TARGET_DIR` provides an explicit override for
+local or hermetic builders. Cargo still owns dependency and source invalidation,
+so unchanged parser builds reuse the release artifacts instead of recompiling
+the dependency graph for every target.
+
 ## 3. Persistence
 
 All durable state lives in SQLite at `.renart/state.db` inside the workspace
@@ -176,6 +186,31 @@ replication sidecar or parallel destination/mode parameter set exists. A
 run-scoped full refresh temporarily selects Sling's replace mode without
 rewriting the asset definition; `refresh_restricted` assets keep their
 configured strategy and surface a warning instead.
+
+Seed and sensor authoring is likewise semantic rather than raw-file templating.
+The workspace DTO's backend-owned `asset_capabilities` list is the runtime
+contract for the concrete Bruin types Renart can create, their compatible
+connection types, required/default parameters, and seed file support. Seeds can
+reference a workspace file selected from the workspace-root picker or an
+HTTP(S) URL, or accept a binary-safe multipart upload. A picker selection is a
+request-only workspace-relative path; the canonical YAML stores it relative to
+the new `.asset.yml` definition. Uploaded files are staged beside that
+definition and marked with `meta.renart_seed_file` so deleting the asset removes
+only the file Renart owns. Sensor definitions use flat typed parameters for
+query, table, or S3-key conditions plus `poke_interval` and `timeout`.
+
+Every advertised seed main task runs through Renart's Sling operator, separately
+from generic ingestr assets. The operator resolves local sources relative to the
+asset definition (or accepts HTTP(S)), supplies an explicit source format, and
+full-refreshes the canonical asset name through the resolved target connection.
+With `enforce_schema` and declared columns, it also passes the source selection,
+renames, and supported type casts to Sling. The normal per-warehouse column and
+custom checks still run around that main task. Sensor main tasks use Bruin's
+native sensor operators: interactive runs default to one bounded check, while
+scheduled runs retain dependency-gate semantics and wait until success or the
+configured timeout. HTTP and CLI execution can explicitly select
+`sensor_mode=once`, `wait`, or `skip`; the backend normalizes and enforces the
+effective mode rather than relying on UI behavior.
 
 Python assets run through Renart's in-process operator
 (`service/python_operator.go`). Each task receives an embedded, version-locked

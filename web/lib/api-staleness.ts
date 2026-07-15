@@ -6,6 +6,7 @@ export type AssetStalenessStatus =
   | "stale_edited"
   | "stale_upstream"
   | "partial"
+  | "volatile"
   | "never_built"
   | "missing";
 
@@ -21,6 +22,7 @@ export type AssetStaleness = {
   fingerprint: string;
   interval_aware: boolean;
   backfill_safe: boolean;
+  volatile?: boolean;
   covered_seconds?: number;
   total_seconds?: number;
   gaps?: StalenessInterval[];

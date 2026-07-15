@@ -9,20 +9,32 @@ import {
   PythonSignatureHelpResponse,
 } from "@/lib/types";
 
+export type CreateAssetInput = {
+  name?: string;
+  type?: string;
+  path?: string;
+  content?: string;
+  connection?: string;
+  parameters?: Record<string, string>;
+  source_asset_id?: string;
+  seed_file_name?: string;
+  seed_file_content?: string;
+};
+
 export async function createAsset(
   pipelineId: string,
-  input: {
-    name?: string;
-    type?: string;
-    path?: string;
-    content?: string;
-    connection?: string;
-    parameters?: Record<string, string>;
-    source_asset_id?: string;
-    seed_file_name?: string;
-    seed_file_content?: string;
-  },
+  input: CreateAssetInput,
+  options?: { seedFile?: File },
 ) {
+  if (options?.seedFile) {
+    const body = new FormData();
+    body.set("request", JSON.stringify(input));
+    body.set("file", options.seedFile, options.seedFile.name);
+    return fetchJSON<{ status: string; asset_id?: string; asset_path?: string }>(
+      `/api/pipelines/${pipelineId}/assets`,
+      { method: "POST", body },
+    );
+  }
   return fetchJSONWithBody<{ status: string; asset_id?: string; asset_path?: string }>(
     `/api/pipelines/${pipelineId}/assets`,
     "POST",

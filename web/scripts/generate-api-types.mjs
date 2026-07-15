@@ -11,6 +11,7 @@ const sources = [
     file: resolve(repoRoot, "internal", "web", "model", "dto.go"),
     types: [
       "MaterializationCapability",
+      "AssetAuthoringCapability",
       "ColumnCheck",
       "Column",
       "Asset",

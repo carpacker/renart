@@ -46,11 +46,13 @@ import {
   Play,
   Plus,
   RotateCw,
+  Radar,
   Search,
   Sliders,
   Table2,
   Terminal,
   Trash2,
+  Sprout,
   X,
   XCircle,
 } from "lucide-react";
@@ -110,6 +112,7 @@ import {
 import { Label } from "@/components/ui/label";
 import { Field, FieldDescription, FieldGroup, FieldLabel } from "@/components/ui/field";
 import { Switch } from "@/components/ui/switch";
+import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { createAsset, deleteAsset } from "@/lib/api-assets";
 import { createPipeline, getPipelineConfig, updatePipelineConfig } from "@/lib/api-pipelines";
 import { buildCreateAssetInput, buildSuggestedAssetName } from "@/lib/workspace-shell-helpers";
@@ -184,7 +187,7 @@ import {
   diagnostics,
   editorLinesFor,
   impactPlan,
-  type AssetKind,
+  kindForAssetType,
   kindMeta,
   missingPythonDependencies,
   objectGroups,
@@ -207,6 +210,13 @@ import { ErrorBoundary } from "@/components/ui/error-boundary";
 import { SqlPreview } from "./sql-preview";
 import { LoadParametersEditor } from "./load-parameters-editor";
 import { FilePathPicker } from "./file-path-picker";
+import {
+  SemanticAssetCreateFields,
+  buildSemanticAssetCreatePayload,
+  defaultSemanticAssetDraft,
+  type SemanticAssetDraft,
+  type SemanticAssetKind,
+} from "./semantic-asset-create-fields";
 import {
   AppLineageCanvas,
   assetDisplayName,
@@ -392,16 +402,6 @@ function assetDisplayFields(
     materializedAt: asset.is_materialized ? "current" : "not materialized",
     parseError: asset.parse_error,
   };
-}
-
-function kindForAssetType(type: string): AssetKind {
-  const normalized = type.toLowerCase();
-  if (normalized.includes("python")) return "python";
-  if (normalized.includes("load")) return "load";
-  if (normalized.includes("ingestr")) return "ingestr";
-  if (normalized.includes("source")) return "source";
-  if (normalized.includes("test")) return "unittest";
-  return "sql";
 }
 
 function integrationForAsset(asset: WebAsset) {
@@ -2247,6 +2247,8 @@ function EditorWorkspace({ asset, adhoc }: { asset: BuildAsset; adhoc: boolean }
   const actionLabel =
     asset.kind === "source"
       ? "Validate"
+      : asset.kind === "sensor"
+        ? "Check now"
       : asset.kind === "ingestr" || asset.kind === "load"
         ? "Run"
         : "Materialize";
@@ -3338,13 +3340,25 @@ type AssetKindOption = {
 };
 
 const CREATABLE_ASSETS: AssetKindOption[] = [
-  { id: "sql", label: "SQL asset", description: "Transform with a SELECT", icon: FileCode },
-  { id: "python", label: "Python asset", description: "Custom Python transform", icon: Cpu },
+  { id: "sql", label: "SQL", description: "Transform with a SELECT", icon: FileCode },
+  { id: "python", label: "Python", description: "Custom Python transform", icon: Cpu },
   {
     id: "api",
     label: "HTTP API",
     description: "Pull records from an HTTP API endpoint",
     icon: Globe,
+  },
+  {
+    id: "seed",
+    label: "Seed",
+    description: "Load a file into a table",
+    icon: Sprout,
+  },
+  {
+    id: "sensor",
+    label: "Sensor",
+    description: "Check an external readiness condition",
+    icon: Radar,
   },
   { id: "load", label: "Load", description: "Replicate data between connections", icon: Download },
 ];
@@ -3423,12 +3437,24 @@ function NewAssetDialog({
   const [sourceTable, setSourceTable] = useState("");
   const [destinationObject, setDestinationObject] = useState("");
   const [apiTemplate, setAPITemplate] = useState<APIAssetTemplateId>("openapi");
+  const [semanticDraft, setSemanticDraft] = useState<SemanticAssetDraft>(() =>
+    defaultSemanticAssetDraft("seed", [], {}),
+  );
   const [creating, setCreating] = useState(false);
   const [error, setError] = useState("");
+  const resetModeRef = useRef<string | null>(null);
 
   const workspace = useAtomValue(workspaceAtom);
   const environment = useAtomValue(selectedEnvironmentAtom);
   const { workspaceConfig } = useWorkspaceSettingsData();
+  const semanticCapabilities = useMemo(
+    () => workspace?.asset_capabilities ?? [],
+    [workspace?.asset_capabilities],
+  );
+  const semanticConnections = useMemo(
+    () => workspace?.connections ?? {},
+    [workspace?.connections],
+  );
   const connectionNames = useMemo(
     () => Object.keys(workspace?.connections ?? {}).sort((a, b) => a.localeCompare(b)),
     [workspace?.connections],
@@ -3466,16 +3492,24 @@ function NewAssetDialog({
 
   // Reset to a valid kind whenever the dialog (or its mode) opens.
   useEffect(() => {
-    if (open) {
-      setKind("sql");
-      setConnection("");
-      setSourceConnection("");
-      setSourceTable("");
-      setDestinationObject("");
-      setAPITemplate("openapi");
-      setError("");
+    if (!open) {
+      resetModeRef.current = null;
+      return;
     }
-  }, [open, isDownstream]);
+    const resetMode = isDownstream ? "downstream" : "standalone";
+    if (resetModeRef.current === resetMode) return;
+    resetModeRef.current = resetMode;
+    setKind("sql");
+    setConnection("");
+    setSourceConnection("");
+    setSourceTable("");
+    setDestinationObject("");
+    setAPITemplate("openapi");
+    setSemanticDraft(
+      defaultSemanticAssetDraft("seed", semanticCapabilities, semanticConnections),
+    );
+    setError("");
+  }, [open, isDownstream, semanticCapabilities, semanticConnections]);
   useEffect(() => {
     if (open) {
       setName(suggestedName);
@@ -3487,6 +3521,29 @@ function NewAssetDialog({
       setSourceConnection(loadConnectionNames[0] ?? "");
     }
   }, [isDownstream, loadConnectionNames, open, selected.id, sourceConnection]);
+
+  const semanticKind: SemanticAssetKind | null =
+    selected.id === "seed" || selected.id === "sensor" ? selected.id : null;
+  useEffect(() => {
+    if (
+      open &&
+      semanticKind &&
+      !semanticCapabilities.some(
+        (capability) =>
+          capability.kind === semanticKind && capability.type === semanticDraft.assetType,
+      )
+    ) {
+      setSemanticDraft(
+        defaultSemanticAssetDraft(semanticKind, semanticCapabilities, semanticConnections),
+      );
+    }
+  }, [
+    open,
+    semanticCapabilities,
+    semanticConnections,
+    semanticDraft.assetType,
+    semanticKind,
+  ]);
 
   const create = async () => {
     const trimmed = name.trim();
@@ -3500,6 +3557,13 @@ function NewAssetDialog({
     }
     if (existingAssetNames.has(trimmed)) {
       setError(`An asset named "${trimmed}" already exists.`);
+      return;
+    }
+    const semanticResult = semanticKind
+      ? buildSemanticAssetCreatePayload(semanticKind, semanticDraft, semanticCapabilities)
+      : null;
+    if (semanticResult?.error) {
+      setError(semanticResult.error);
       return;
     }
     if (selected.id === "load" && !isDownstream) {
@@ -3541,10 +3605,20 @@ function NewAssetDialog({
         },
       };
     }
+    let seedFile: File | undefined;
+    if (semanticResult?.payload) {
+      const { seedFile: payloadFile, ...semanticInput } = semanticResult.payload;
+      seedFile = payloadFile;
+      input = { ...input, ...semanticInput };
+    }
     setCreating(true);
     setError("");
     try {
-      const response = await createAsset(pipelineId, input);
+      const response = await createAsset(
+        pipelineId,
+        input,
+        seedFile ? { seedFile } : undefined,
+      );
       onOpenChange(false);
       if (response.asset_id) {
         onCreated?.(response.asset_id);
@@ -3579,25 +3653,37 @@ function NewAssetDialog({
           </DialogDescription>
         </DialogHeader>
         <div className="grid min-h-0 flex-1 gap-5 overflow-y-auto">
-          <div className="grid gap-2 sm:grid-cols-2">
+          <ToggleGroup
+            type="single"
+            variant="outline"
+            value={selected.id}
+            onValueChange={(nextKind) => {
+              if (!nextKind) return;
+              const next = nextKind as NewAssetKind;
+              setKind(next);
+              if (next === "seed" || next === "sensor") {
+                setSemanticDraft(
+                  defaultSemanticAssetDraft(next, semanticCapabilities, semanticConnections),
+                );
+              }
+            }}
+            className="grid w-full grid-cols-2 items-stretch gap-2 sm:grid-cols-3"
+          >
             {options.map((option) => (
-              <button
+              <ToggleGroupItem
                 key={option.id}
-                type="button"
-                className={cn(
-                  "rounded-lg border p-3 text-left hover:bg-muted",
-                  selected.id === option.id ? "border-primary ring-1 ring-primary" : null,
-                )}
-                onClick={() => setKind(option.id)}
+                value={option.id}
+                aria-label={option.label}
+                className="h-24 w-full min-w-0 flex-col items-start justify-start whitespace-normal p-3 text-left data-[state=on]:border-primary data-[state=on]:ring-1 data-[state=on]:ring-primary"
               >
-                <option.icon className="size-5 text-primary" />
-                <div className="mt-2 font-medium">{option.label}</div>
+                <option.icon className="text-primary" />
+                <div className="font-medium">{option.label}</div>
                 <div className="text-xs text-muted-foreground">{option.description}</div>
-              </button>
+              </ToggleGroupItem>
             ))}
-          </div>
-          <div className="grid gap-2">
-            <Label htmlFor="new-asset-name">Asset name</Label>
+          </ToggleGroup>
+          <Field variant="plain">
+            <FieldLabel htmlFor="new-asset-name">Asset name</FieldLabel>
             <Input
               id="new-asset-name"
               className="font-mono"
@@ -3611,14 +3697,23 @@ function NewAssetDialog({
               }}
               autoFocus
             />
-            <p className="text-xs text-muted-foreground">
+            <FieldDescription>
               Use a <span className="font-mono">prefix.name</span> to group it under{" "}
               <span className="font-mono">assets/prefix/</span>.
-            </p>
-          </div>
+            </FieldDescription>
+          </Field>
+          {semanticKind ? (
+            <SemanticAssetCreateFields
+              kind={semanticKind}
+              capabilities={semanticCapabilities}
+              connections={semanticConnections}
+              value={semanticDraft}
+              onChange={setSemanticDraft}
+            />
+          ) : null}
           {selected.id === "api" ? (
             <FieldGroup>
-              <Field>
+              <Field variant="plain">
                 <FieldLabel htmlFor="new-api-template">API source</FieldLabel>
                 <Select
                   value={apiTemplate}
@@ -3647,7 +3742,7 @@ function NewAssetDialog({
             <FieldGroup>
               {!isDownstream ? (
                 <>
-                  <Field>
+                  <Field variant="plain">
                     <FieldLabel htmlFor="new-load-source-connection">Source connection</FieldLabel>
                     <Select value={sourceConnection} onValueChange={setSourceConnection}>
                       <SelectTrigger id="new-load-source-connection">
@@ -3664,7 +3759,7 @@ function NewAssetDialog({
                       </SelectContent>
                     </Select>
                   </Field>
-                  <Field>
+                  <Field variant="plain">
                     <FieldLabel htmlFor="new-load-source-table">
                       {isLocalLoadConnection(sourceConnection)
                         ? "Source file"
@@ -3695,7 +3790,7 @@ function NewAssetDialog({
           ) : null}
           {selected.id === "api" || selected.id === "load" ? (
             <FieldGroup>
-              <Field>
+              <Field variant="plain">
                 <FieldLabel htmlFor="new-asset-connection">Destination connection</FieldLabel>
                 <Select
                   value={connection || AUTO_CONNECTION_VALUE}
@@ -3726,7 +3821,7 @@ function NewAssetDialog({
                 </FieldDescription>
               </Field>
               {selected.id === "load" && targetNeedsDestinationObject ? (
-                <Field>
+                <Field variant="plain">
                   <FieldLabel htmlFor="new-load-destination-object">Destination object</FieldLabel>
                   <Input
                     id="new-load-destination-object"

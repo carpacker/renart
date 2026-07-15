@@ -148,6 +148,7 @@ the downstream cone), `RunCompleted` (flip the touched assets).
 | `partial` | incremental: some intervals covered (built/total surfaced as covered/total seconds) |
 | `never_built` | no row for this asset in this env at any fingerprint |
 | `missing` | materialization history says fresh, async verification couldn't find the table |
+| `volatile` | sensor check has no durable output coverage and must run again in every stale plan |
 
 The `missing` downgrade only applies to assets whose output is a warehouse
 object named after the asset (`verifiableByName`: SQL, seed, and database-backed
@@ -155,6 +156,13 @@ Load). Local-, file-, and object-storage-backed Load assets use an explicit
 `destination_object`, while Python assets may return nothing or write elsewhere;
 those outputs cannot be verified by the asset name and therefore rest on the run
 fact alone.
+
+Sensors are deliberately classified as `volatile` before and after a successful
+check. Their last attempt is still recorded and displayed, but they are excluded
+from warehouse-object verification and never become fresh from a run fact. The
+Build-stale planner therefore includes them on every requested build; interactive
+execution performs one check, while scheduled execution waits according to the
+sensor's configured interval and timeout.
 
 Unsaved editor buffers get a purely-frontend "modified" dot; the service only
 sees saved state.

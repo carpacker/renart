@@ -23,6 +23,7 @@ const staleStatuses = new Set([
   "stale_edited",
   "stale_upstream",
   "partial",
+  "volatile",
   "never_built",
   "missing",
 ]);

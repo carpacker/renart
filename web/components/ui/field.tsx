@@ -15,12 +15,16 @@ export function FieldLabel({ className, ...props }: LabelProps) {
 export function Field({
   className,
   orientation = "vertical",
+  variant = "default",
   ...props
-}: DivProps & { orientation?: "horizontal" | "vertical" }) {
+}: DivProps & {
+  orientation?: "horizontal" | "vertical";
+  variant?: "default" | "plain";
+}) {
   return (
     <div
       className={cn(
-        "rounded-lg border px-3 py-3",
+        variant === "default" ? "rounded-lg border px-3 py-3" : "p-0",
         orientation === "horizontal" ? "flex items-start justify-between gap-3" : "grid gap-3",
         className,
       )}
@@ -30,7 +34,7 @@ export function Field({
 }
 
 export function FieldContent({ className, ...props }: DivProps) {
-  return <div className={cn("min-w-0 space-y-1", className)} {...props} />;
+  return <div className={cn("flex min-w-0 flex-col gap-1", className)} {...props} />;
 }
 
 export function FieldTitle({ className, ...props }: DivProps) {

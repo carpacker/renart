@@ -13,6 +13,8 @@ export function buildSuggestedAssetName(
     ingestr: `${pipelinePrefix}.my_ingestr_asset_`,
     load: `${pipelinePrefix}.my_load_asset_`,
     api: `${pipelinePrefix}.my_api_asset_`,
+    seed: `${pipelinePrefix}.my_seed_asset_`,
+    sensor: `${pipelinePrefix}.my_sensor_asset_`,
   };
 
   const prefix = prefixByKind[kind];
@@ -84,6 +86,14 @@ parameters:
     };
   }
 
+  if (kind === "seed" || kind === "sensor") {
+    return {
+      name,
+      type: kind === "seed" ? "duckdb.seed" : "duckdb.sensor.query",
+      path,
+    };
+  }
+
   return {
     name,
     type: preferredSqlAssetType,
@@ -99,6 +109,8 @@ function buildAssetPathFromName(name: string, kind: NewAssetKind): string {
     ingestr: ".asset.yml",
     load: ".asset.yml",
     api: ".asset.yml",
+    seed: ".asset.yml",
+    sensor: ".asset.yml",
   };
   const leaf = parts.pop() ?? "asset";
   return ["assets", ...parts, `${leaf}${extensionByKind[kind]}`].join("/");

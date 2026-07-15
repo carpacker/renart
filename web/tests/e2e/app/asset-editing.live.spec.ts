@@ -567,7 +567,7 @@ materialization:
     await page.getByRole("button", { name: "New asset" }).first().click();
     const dialog = page.getByRole("dialog", { name: "New asset" });
     await expect(dialog).toBeVisible();
-    await dialog.getByRole("button", { name: /^Load/ }).click();
+    await dialog.getByRole("radio", { name: /^Load/ }).click();
     await dialog.getByLabel("Asset name").fill("analytics.orders_copy");
 
     await dialog.getByLabel("Source connection").click();

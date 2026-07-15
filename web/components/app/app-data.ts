@@ -14,6 +14,8 @@ import {
   Layers,
   Network,
   Play,
+  Radar,
+  Sprout,
   Table2,
   TrendingUp,
 } from "lucide-react";
@@ -70,6 +72,18 @@ export const kindMeta = {
     ext: ".asset.yml",
     description: "Replicate data between connections",
   },
+  seed: {
+    label: "Seed asset",
+    icon: Sprout,
+    ext: ".asset.yml",
+    description: "Load a version-controlled file into a table",
+  },
+  sensor: {
+    label: "Sensor",
+    icon: Radar,
+    ext: ".asset.yml",
+    description: "Wait for an external readiness condition",
+  },
   source: {
     label: "Source table",
     icon: Table2,
@@ -96,6 +110,18 @@ export const kindMeta = {
 } as const;
 
 export type AssetKind = keyof typeof kindMeta;
+
+export function kindForAssetType(type: string): AssetKind {
+  const normalized = type.toLowerCase();
+  if (normalized.includes(".sensor.")) return "sensor";
+  if (normalized.endsWith(".seed")) return "seed";
+  if (normalized.includes("python")) return "python";
+  if (normalized.includes("load")) return "load";
+  if (normalized.includes("ingestr")) return "ingestr";
+  if (normalized.includes("source")) return "source";
+  if (normalized.includes("test")) return "unittest";
+  return "sql";
+}
 
 export type AppAsset = {
   id: string;

@@ -127,6 +127,7 @@ func TestBuildStalePlanFiltersToSelectedUpstreamsAndPreservesGaps(t *testing.T) 
 	end := start.Add(24 * time.Hour)
 	statuses := []staleness.AssetStatus{
 		{AssetName: "fresh", Status: staleness.StatusFresh},
+		{AssetName: "sensor", Status: staleness.StatusVolatile, Volatile: true},
 		{AssetName: "selected", Status: staleness.StatusPartial, Gaps: []staleness.Interval{{Start: start, End: end}}},
 		{AssetName: "other", Status: staleness.StatusNeverBuilt},
 	}
@@ -141,7 +142,7 @@ func TestBuildStalePlanFiltersToSelectedUpstreamsAndPreservesGaps(t *testing.T) 
 	if plan := BuildStalePlan(statuses, map[string]struct{}{}); len(plan) != 0 {
 		t.Fatalf("expected an empty selected set to build nothing, got %+v", plan)
 	}
-	if plan := BuildStalePlan(statuses, nil); len(plan) != 2 {
-		t.Fatalf("expected an unrestricted plan to keep both stale assets, got %+v", plan)
+	if plan := BuildStalePlan(statuses, nil); len(plan) != 3 {
+		t.Fatalf("expected an unrestricted plan to keep stale and volatile assets, got %+v", plan)
 	}
 }

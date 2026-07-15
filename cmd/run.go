@@ -65,6 +65,10 @@ func Run() *cli.Command {
 				Usage: "rebuild from scratch instead of running incrementally",
 			},
 			&cli.StringFlag{
+				Name:  "sensor-mode",
+				Usage: "sensor behavior: once, wait, or skip (default: once)",
+			},
+			&cli.StringFlag{
 				Name:  "confirm-environment",
 				Usage: "type the target environment name when its policy requires confirmation for a full refresh or backfill",
 			},
@@ -183,6 +187,11 @@ func runAction(ctx context.Context, c *cli.Command) error {
 	setNonEmpty(query, "start_date", c.String("start-date"))
 	setNonEmpty(query, "end_date", c.String("end-date"))
 	setNonEmpty(query, "confirmed_environment", c.String("confirm-environment"))
+	sensorMode := strings.ToLower(strings.TrimSpace(c.String("sensor-mode")))
+	if sensorMode != "" && sensorMode != "once" && sensorMode != "wait" && sensorMode != "skip" {
+		return cli.Exit("--sensor-mode must be one of once, wait, or skip", 2)
+	}
+	setNonEmpty(query, "sensor_mode", sensorMode)
 	backfill := strings.TrimSpace(c.String("start-date")) != "" || strings.TrimSpace(c.String("end-date")) != ""
 	if backfill {
 		query.Set("backfill", "true")
@@ -258,14 +267,14 @@ func runAction(ctx context.Context, c *cli.Command) error {
 		onChunk := func(chunk []byte) { printer.chunk(string(chunk)) }
 		var result service.MaterializeResult
 		if target.kind == "pipeline" {
-			result = server.executionSvc.MaterializePipelineStream(
+			result = server.executionSvc.MaterializePipelineStreamWithSensorMode(
 				ctx, target.pipeline.ID, runEnvironment, false, c.Bool("full-refresh"), backfill,
-				c.String("start-date"), c.String("end-date"), c.String("confirm-environment"), onChunk,
+				c.String("start-date"), c.String("end-date"), c.String("confirm-environment"), sensorMode, onChunk,
 			)
 		} else {
-			result = server.executionSvc.MaterializeAssetStream(
+			result = server.executionSvc.MaterializeAssetStreamWithSensorMode(
 				ctx, target.asset.ID, runEnvironment, scope,
-				c.String("start-date"), c.String("end-date"), c.Bool("full-refresh"), backfill, c.String("confirm-environment"), onChunk,
+				c.String("start-date"), c.String("end-date"), c.Bool("full-refresh"), backfill, c.String("confirm-environment"), sensorMode, onChunk,
 			)
 		}
 		status, message, output = result.Status, result.Error, result.Output

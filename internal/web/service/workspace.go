@@ -132,11 +132,12 @@ func (s *WorkspaceService) resolver() *WorkspaceResolver {
 // ComputeState computes the current workspace state from disk.
 func (s *WorkspaceService) ComputeState(ctx context.Context) (model.WorkspaceState, error) {
 	state := model.WorkspaceState{
-		Pipelines:   make([]model.Pipeline, 0),
-		Connections: map[string]string{},
-		Errors:      make([]string, 0),
-		UpdatedAt:   time.Now().UTC(),
-		Metadata:    map[string][]string{},
+		Pipelines:         make([]model.Pipeline, 0),
+		Connections:       map[string]string{},
+		AssetCapabilities: assetAuthoringCapabilities(),
+		Errors:            make([]string, 0),
+		UpdatedAt:         time.Now().UTC(),
+		Metadata:          map[string][]string{},
 	}
 
 	fs := afero.NewOsFs()

@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -197,6 +198,7 @@ type AssetDependencies struct {
 
 type AssetService struct {
 	deps                    AssetDependencies
+	createMu                sync.Mutex
 	patchMu                 sync.Mutex
 	patchTimers             map[string]*time.Timer
 	assetFileMu             sync.Mutex
@@ -313,9 +315,6 @@ func (s *AssetService) Create(ctx context.Context, pipelineID string, req Create
 		return AssetMutationResponse{}, newAPIError(400, "invalid_asset_path", err.Error())
 	}
 	fs := s.fs()
-	if err := fs.MkdirAll(filepath.Dir(absAssetPath), 0o755); err != nil {
-		return AssetMutationResponse{}, newAPIError(500, "asset_dir_create_failed", err.Error())
-	}
 
 	assetType := strings.TrimSpace(req.Type)
 	if assetType == "" {
@@ -327,7 +326,16 @@ func (s *AssetService) Create(ctx context.Context, pipelineID string, req Create
 	}
 
 	content := req.Content
-	if isLoadAssetType(assetType) {
+	semanticAsset := strings.HasSuffix(strings.ToLower(assetType), ".seed") || isSensorAssetType(pipeline.AssetType(assetType))
+	semanticFiles := semanticAssetFiles{}
+	if semanticAsset {
+		var semanticErr *APIError
+		semanticFiles, semanticErr = s.buildSemanticAssetFiles(assetName, assetType, absAssetPath, req)
+		if semanticErr != nil {
+			return AssetMutationResponse{}, semanticErr
+		}
+		content = string(semanticFiles.definition)
+	} else if isLoadAssetType(assetType) {
 		// Load creation is semantic: always render the canonical single-file
 		// definition from the request fields so callers cannot reintroduce the
 		// removed destination_connection/destination_table/mode representation.
@@ -374,24 +382,45 @@ func (s *AssetService) Create(ctx context.Context, pipelineID string, req Create
 		}
 	}
 
-	// Load assets are now a single flat-parameter .asset.yml (the DefaultAsset/
-	// DerivedAsset content producers emit that shape), so they write like any
-	// other single-file asset — no .sling.yml replication sidecar.
-	if err := afero.WriteFile(fs, absAssetPath, []byte(content), 0o644); err != nil {
-		return AssetMutationResponse{}, newAPIError(500, "asset_write_failed", err.Error())
-	}
-	if strings.TrimSpace(req.SeedFileName) != "" {
-		seedFileName := filepath.Base(strings.TrimSpace(req.SeedFileName))
-		if seedFileName == "." || seedFileName == string(filepath.Separator) || seedFileName == "" {
-			return AssetMutationResponse{}, newAPIError(400, "invalid_seed_file_name", "seed file name is invalid")
+	// Semantic seed/sensor definitions are rendered above. Uploaded seed bytes
+	// and their definition are staged and committed together, so a failed write
+	// cannot leave a half-created asset in the workspace.
+	if semanticAsset {
+		s.createMu.Lock()
+		defer s.createMu.Unlock()
+		for _, candidate := range []string{absAssetPath, semanticFiles.sidecarPath} {
+			if candidate == "" {
+				continue
+			}
+			exists, existsErr := afero.Exists(fs, candidate)
+			if existsErr != nil {
+				return AssetMutationResponse{}, newAPIError(500, "asset_stat_failed", existsErr.Error())
+			}
+			if exists {
+				return AssetMutationResponse{}, newAPIError(409, "asset_path_exists", fmt.Sprintf("a file already exists at %s", filepath.Base(candidate)))
+			}
 		}
-		seedFilePath := filepath.Join(filepath.Dir(absAssetPath), seedFileName)
-		if err := afero.WriteFile(fs, seedFilePath, []byte(req.SeedFileContent), 0o644); err != nil {
-			return AssetMutationResponse{}, newAPIError(500, "seed_file_write_failed", err.Error())
+		if err := fs.MkdirAll(filepath.Dir(absAssetPath), 0o755); err != nil {
+			return AssetMutationResponse{}, newAPIError(500, "asset_dir_create_failed", err.Error())
+		}
+		if err := writeNewSemanticAssetFiles(fs, absAssetPath, semanticFiles); err != nil {
+			return AssetMutationResponse{}, newAPIError(500, "asset_write_failed", err.Error())
+		}
+	} else {
+		// Load assets are now a single flat-parameter .asset.yml (the DefaultAsset/
+		// DerivedAsset content producers emit that shape), so they write like any
+		// other single-file asset — no .sling.yml replication sidecar.
+		if err := fs.MkdirAll(filepath.Dir(absAssetPath), 0o755); err != nil {
+			return AssetMutationResponse{}, newAPIError(500, "asset_dir_create_failed", err.Error())
+		}
+		if err := afero.WriteFile(fs, absAssetPath, []byte(content), 0o644); err != nil {
+			return AssetMutationResponse{}, newAPIError(500, "asset_write_failed", err.Error())
 		}
 	}
-	if err := s.deps.EnsurePythonProject(absAssetPath, assetType, relAssetPath); err != nil {
-		return AssetMutationResponse{}, newAPIError(500, "pyproject_write_failed", err.Error())
+	if !semanticAsset {
+		if err := s.deps.EnsurePythonProject(absAssetPath, assetType, relAssetPath); err != nil {
+			return AssetMutationResponse{}, newAPIError(500, "pyproject_write_failed", err.Error())
+		}
 	}
 	// A downstream Python asset reads its upstream via the Bruin Python SDK
 	// (`from bruin import query`), provided by the bruin-sdk package, so declare
@@ -403,6 +432,11 @@ func (s *AssetService) Create(ctx context.Context, pipelineID string, req Create
 
 	relWorkspaceAssetPath, _ := filepath.Rel(s.deps.WorkspaceRoot, absAssetPath)
 	assetPath := filepath.ToSlash(relWorkspaceAssetPath)
+	if semanticFiles.sidecarPath != "" {
+		if relSidecarPath, relErr := filepath.Rel(s.deps.WorkspaceRoot, semanticFiles.sidecarPath); relErr == nil {
+			s.deps.SuppressWatcher(filepath.ToSlash(relSidecarPath))
+		}
+	}
 	if strings.HasSuffix(strings.ToLower(assetPath), ".sql") {
 		if err := s.reconcileSQLAssetDependencies(ctx, assetPath); err != nil {
 			return AssetMutationResponse{}, newAPIError(500, "asset_dependency_reconcile_failed", err.Error())
@@ -429,6 +463,7 @@ type CreateAssetParams struct {
 	SourceAssetID   string            `json:"source_asset_id"`
 	SeedFileName    string            `json:"seed_file_name"`
 	SeedFileContent string            `json:"seed_file_content"`
+	SeedFileBytes   []byte            `json:"-"`
 }
 
 func (s *AssetService) Update(ctx context.Context, assetID string, req AssetUpdateRequest) (AssetMutationResponse, *APIError) {
@@ -577,6 +612,12 @@ func (s *AssetService) Update(ctx context.Context, assetID string, req AssetUpda
 			}
 			asset.Parameters = nextParameters
 		}
+		if (req.Type != nil || req.Connection != nil || req.Parameters != nil) &&
+			(strings.HasSuffix(strings.ToLower(string(asset.Type)), ".seed") || isSensorAssetType(asset.Type)) {
+			if semanticErr := s.validateSemanticAssetUpdate(asset); semanticErr != nil {
+				return AssetMutationResponse{}, semanticErr
+			}
+		}
 		materializationChanged := req.Type != nil || req.Connection != nil || req.MaterializationType != nil || req.MaterializationStrategy != nil || req.IncrementalKey != nil || req.PartitionBy != nil || req.ClusterBy != nil || req.TimeGranularity != nil
 		if materializationChanged {
 			connectionTypes := map[string]string{}
@@ -708,8 +749,29 @@ func (s *AssetService) Delete(ctx context.Context, assetID string) (StatusRespon
 		return StatusResponse{}, newAPIError(400, "invalid_asset_path", err.Error())
 	}
 	fs := s.fs()
+	var sidecarPath string
+	if s.deps.ResolveAssetByID != nil {
+		if _, _, asset, resolveErr := s.deps.ResolveAssetByID(ctx, assetID); resolveErr == nil {
+			sidecarPath = ownedSeedSidecar(asset, absAssetPath)
+		}
+	}
+	definitionBytes, readErr := afero.ReadFile(fs, absAssetPath)
+	if readErr != nil {
+		return StatusResponse{}, newAPIError(500, "asset_read_failed", readErr.Error())
+	}
 	if err := fs.Remove(absAssetPath); err != nil {
 		return StatusResponse{}, newAPIError(500, "asset_delete_failed", err.Error())
+	}
+	if sidecarPath != "" {
+		if err := fs.Remove(sidecarPath); err != nil && !os.IsNotExist(err) {
+			if restoreErr := afero.WriteFile(fs, absAssetPath, definitionBytes, 0o644); restoreErr != nil {
+				return StatusResponse{}, newAPIError(500, "seed_file_delete_failed", fmt.Sprintf("%v; restoring asset definition also failed: %v", err, restoreErr))
+			}
+			return StatusResponse{}, newAPIError(500, "seed_file_delete_failed", err.Error())
+		}
+		if relSidecarPath, relErr := filepath.Rel(s.deps.WorkspaceRoot, sidecarPath); relErr == nil {
+			s.deps.SuppressWatcher(filepath.ToSlash(relSidecarPath))
+		}
 	}
 	s.deps.SuppressWatcher(filepath.ToSlash(relAssetPath))
 	s.deps.PushWorkspaceUpdateImmediate(ctx, "asset.deleted", relAssetPath)
@@ -722,6 +784,8 @@ func extensionForAssetType(assetType string) string {
 	case isLoadAssetType(lowered):
 		return ".asset.yml"
 	case isAPIAssetType(lowered):
+		return ".asset.yml"
+	case isSensorAssetType(pipeline.AssetType(lowered)):
 		return ".asset.yml"
 	case strings.HasSuffix(lowered, ".seed"):
 		return ".asset.yml"

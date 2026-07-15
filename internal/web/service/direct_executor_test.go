@@ -36,6 +36,9 @@ func (e *cliCompatExecutor) RunAsset(ctx context.Context, req RunAssetRequest, o
 	if strings.TrimSpace(req.Environment) != "" {
 		args = append(args, "--env", req.Environment)
 	}
+	if strings.TrimSpace(req.SensorMode) != "" {
+		args = append(args, "--sensor-mode", req.SensorMode)
+	}
 	args = append(args, req.AssetPath)
 	return e.runMaybeStreaming(ctx, args, onChunk)
 }
@@ -44,6 +47,9 @@ func (e *cliCompatExecutor) RunPipeline(ctx context.Context, req RunPipelineRequ
 	args := []string{"run"}
 	if strings.TrimSpace(req.Environment) != "" {
 		args = append(args, "--env", req.Environment)
+	}
+	if strings.TrimSpace(req.SensorMode) != "" {
+		args = append(args, "--sensor-mode", req.SensorMode)
 	}
 	args = append(args, req.Target)
 	return e.runMaybeStreaming(ctx, args, onChunk)
