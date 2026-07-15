@@ -35,17 +35,17 @@ func TestEnsureWheelProducesValidWheel(t *testing.T) {
 	defer reader.Close()
 
 	want := map[string]bool{
-		"renart/__init__.py":                                 false,
-		"renart/__init__.pyi":                                false,
-		"renart/_client.py":                                  false,
-		"renart/_client.pyi":                                 false,
-		"renart/context.py":                                  false,
-		"renart/context.pyi":                                 false,
-		"renart/py.typed":                                    false,
-		"renart_sdk-" + Version + ".dist-info/METADATA":      false,
-		"renart_sdk-" + Version + ".dist-info/WHEEL":         false,
-		"renart_sdk-" + Version + ".dist-info/RECORD":        false,
-		"renart_sdk-" + Version + ".dist-info/top_level.txt": false,
+		"renart/__init__.py":                             false,
+		"renart/__init__.pyi":                            false,
+		"renart/_client.py":                              false,
+		"renart/_client.pyi":                             false,
+		"renart/context.py":                              false,
+		"renart/context.pyi":                             false,
+		"renart/py.typed":                                false,
+		"renart-" + Version + ".dist-info/METADATA":      false,
+		"renart-" + Version + ".dist-info/WHEEL":         false,
+		"renart-" + Version + ".dist-info/RECORD":        false,
+		"renart-" + Version + ".dist-info/top_level.txt": false,
 	}
 	for _, file := range reader.File {
 		if _, ok := want[file.Name]; ok {
@@ -93,9 +93,9 @@ func TestTypeStubFiles(t *testing.T) {
 }
 
 func TestEnsureWheelOverride(t *testing.T) {
-	t.Setenv("RENART_PYSDK_WHEEL", "/custom/renart_sdk.whl")
+	t.Setenv("RENART_PYSDK_WHEEL", "/custom/renart.whl")
 	path, err := EnsureWheel()
-	if err != nil || path != "/custom/renart_sdk.whl" {
+	if err != nil || path != "/custom/renart.whl" {
 		t.Fatalf("override must win, got %q (%v)", path, err)
 	}
 }
@@ -110,7 +110,7 @@ func TestBuildWheelUsesConfiguredVersionAndIsDeterministic(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got, want := filepath.Base(path), "renart_sdk-1.2.3-py3-none-any.whl"; got != want {
+	if got, want := filepath.Base(path), "renart-1.2.3-py3-none-any.whl"; got != want {
 		t.Fatalf("unexpected wheel filename %q, want %q", got, want)
 	}
 
@@ -118,8 +118,8 @@ func TestBuildWheelUsesConfiguredVersionAndIsDeterministic(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	metadata := readWheelFile(t, path, "renart_sdk-1.2.3.dist-info/METADATA")
-	if !strings.Contains(metadata, "Name: renart-sdk\nVersion: 1.2.3\n") {
+	metadata := readWheelFile(t, path, "renart-1.2.3.dist-info/METADATA")
+	if !strings.Contains(metadata, "Name: renart\nVersion: 1.2.3\n") {
 		t.Fatalf("wheel metadata does not contain the configured version:\n%s", metadata)
 	}
 

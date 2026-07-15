@@ -222,7 +222,7 @@ effective mode rather than relying on UI behavior.
 Python assets run through Renart's in-process operator
 (`service/python_operator.go`). Each task receives an embedded, version-locked
 `renart` SDK wheel and a token-scoped loopback broker (`internal/web/pybroker`).
-The same deterministic wheel is published to PyPI as `renart-sdk` on stable
+The same deterministic wheel is published to PyPI as `renart` on stable
 Renart release tags for external editors and CI. Release builds inject one
 version into both artifacts; runtime execution still uses the wheel assembled
 inside the Renart binary, so a network lookup or separately installed SDK can

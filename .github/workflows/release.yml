@@ -171,7 +171,7 @@ jobs:
       - name: Upload SDK wheel
         uses: actions/upload-artifact@b4b15b8c7c6ac21ea08fcf65892d2ee8f75cf882 # v4.4.3
         with:
-          name: renart-sdk-wheel
+          name: renart-python-wheel
           path: dist/python-sdk/*.whl
           if-no-files-found: error
 
@@ -183,7 +183,7 @@ jobs:
     runs-on: ubuntu-latest
     environment:
       name: pypi
-      url: https://pypi.org/p/renart-sdk
+      url: https://pypi.org/p/renart
     permissions:
       contents: read
       id-token: write
@@ -191,7 +191,7 @@ jobs:
       - name: Download SDK wheel
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
-          name: renart-sdk-wheel
+          name: renart-python-wheel
           path: dist/python-sdk
 
       - name: Publish SDK wheel to PyPI

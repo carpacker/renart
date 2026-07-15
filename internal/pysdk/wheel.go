@@ -29,7 +29,7 @@ var sdkSource embed.FS
 var Version = "0.3.0"
 
 const (
-	distribution = "renart_sdk"
+	distribution = "renart"
 	wheelTag     = "py3-none-any"
 )
 
@@ -46,7 +46,7 @@ Tag: ` + wheelTag + `
 func packageMetadata() string {
 	return strings.TrimLeft(`
 Metadata-Version: 2.1
-Name: renart-sdk
+Name: renart
 Version: `+Version+`
 Summary: Renart SDK for Python assets: query project data through the renart runner.
 Home-page: https://getrenart.com
@@ -60,7 +60,7 @@ Description-Content-Type: text/markdown
 
 # Renart Python SDK
 
-renart-sdk provides the renart package used by Python assets and Python
+renart provides the Python package used by Python assets and Python
 notebook cells in Renart. Renart injects its matching SDK wheel automatically
 at runtime; the PyPI distribution is available for type checking, editors, and
 CI environments that inspect project code outside the Renart process.
@@ -150,7 +150,7 @@ func wheelEntries() ([]wheelEntry, error) {
 }
 
 func buildWheel(target string, entries []wheelEntry) error {
-	tmp, err := os.CreateTemp(filepath.Dir(target), ".renart-sdk-*.whl")
+	tmp, err := os.CreateTemp(filepath.Dir(target), ".renart-*.whl")
 	if err != nil {
 		return err
 	}

@@ -9,7 +9,7 @@
 > default to Arrow while
 > pandas remains available in the SDK wheel; (5) the ingestr asset type stays
 > as-is. Stable Renart release tags now publish the exact same versioned wheel
-> to PyPI as `renart-sdk` through trusted publishing.
+> to PyPI as `renart` through trusted publishing.
 >
 > As built: `internal/web/runstate` (in-flight task registry, fed by
 > `HybridBruinExecutor.RunAsset/RunPipeline`), `internal/web/pybroker`
@@ -249,7 +249,7 @@ binary and one deterministic Go assembler writes the wheel on demand, then the
 runner injects it through `--with <wheel-path>` (works in both uv script mode
 and pyproject project mode). Stable release tags inject the Renart version into
 the binary and export the same wheel bytes for PyPI trusted publishing under
-the distribution name `renart-sdk`. PyPI exists mainly so external editors and
+the distribution name `renart`. PyPI exists mainly so external editors and
 CI can resolve `import renart`; the binary-assembled wheel remains the runtime
 source of truth and requires no network access.
 
@@ -378,7 +378,7 @@ assets and notebook cells.
 **Phase 3 — reach (partially implemented):** `renart run
 --refresh-upstreams` builds the stale transitive-upstream cone before an asset
 run, using normal upstream materialization strategies and stopping before the
-target if refresh fails. Stable release tags publish `renart-sdk` to PyPI from
+target if refresh fails. Stable release tags publish `renart` to PyPI from
 the same deterministic wheel assembler after the binary release succeeds.
 Remaining: implement the proposed cross-connection read-policy surface ·
 consider Arrow Flight if profiles ever show the loopback hop mattering.
