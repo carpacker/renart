@@ -274,6 +274,9 @@ rather than trusting the UI.
 Pipeline type checks also validate declared dependency existence and
 materialization configuration: supported strategies, required merge primary
 keys, active incremental/update keys, and time-interval prerequisites.
+Assets with dedicated runtime semantics and no generic capability profile are
+excluded from this generic materialization validation; in particular, a seed's
+successful Sling write is not reinterpreted as an unsupported `none` mode.
 Warehouse-inactive partition/cluster metadata is preserved and reported as a
 warning. Editing may temporarily persist an incomplete merge so multi-step form
 changes are possible; type check and execution surface the incomplete state

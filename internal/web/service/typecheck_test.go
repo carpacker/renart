@@ -525,6 +525,12 @@ select 1 as id
 func TestMaterializationTypeCheckFindings(t *testing.T) {
 	t.Parallel()
 
+	t.Run("dedicated seed runtime has no generic materialization finding", func(t *testing.T) {
+		asset := &pipeline.Asset{Type: pipeline.AssetTypeDuckDBSeed}
+
+		assert.Empty(t, materializationTypeCheckFindings(asset))
+	})
+
 	t.Run("merge and update key errors", func(t *testing.T) {
 		asset := &pipeline.Asset{
 			Type:    pipeline.AssetType("api"),
@@ -648,4 +654,28 @@ func TestMaterializationTypeCheckFindings(t *testing.T) {
 		assert.Contains(t, findings[0].Message, "partition_by")
 		assert.Contains(t, findings[1].Message, "cluster_by")
 	})
+}
+
+func TestCheckPipelineAcceptsSeedRuntimeWithoutGenericMaterialization(t *testing.T) {
+	t.Parallel()
+
+	parsed, root := writeTypeCheckWorkspace(t, "name: analytics", map[string]string{
+		"customer_seed.asset.yml": `
+name: analytics.customer_seed
+type: duckdb.seed
+parameters:
+  path: ./customer_seed.csv
+columns:
+  - name: customer_id
+    type: integer
+  - name: customer_name
+    type: varchar
+`,
+		"customer_seed.csv": "customer_id,customer_name\n1,Ada\n",
+	})
+
+	report := runTypeCheck(t, parsed, root)
+	seed := findAsset(t, report, "analytics.customer_seed")
+	assert.Equal(t, typeCheckStatusOK, seed.Status)
+	assert.Empty(t, seed.Findings)
 }

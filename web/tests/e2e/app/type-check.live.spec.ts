@@ -23,6 +23,25 @@ type TypeCheckReport = {
 
 async function seedTypeCheckAssets(liveApp: LiveApp) {
   const assetsDir = join(liveApp.workspaceDir, "analytics", "assets", "analytics");
+  await writeFile(
+    join(assetsDir, "customer_seed.csv"),
+    "customer_id,customer_name\n1,Ada\n",
+    "utf8",
+  );
+  await writeFile(
+    join(assetsDir, "customer_seed.asset.yml"),
+    `name: analytics.customer_seed
+type: duckdb.seed
+parameters:
+  path: ./customer_seed.csv
+columns:
+  - name: customer_id
+    type: integer
+  - name: customer_name
+    type: varchar
+`,
+    "utf8",
+  );
   // A Python asset with no declared columns -> warning.
   await writeFile(
     join(assetsDir, "py_metric.py"),
@@ -118,6 +137,12 @@ test.describe("app pipeline type check live", () => {
     const customers = byName.get("analytics.customers");
     expect(customers?.status).toBe("ok");
     expect(customers?.findings).toEqual([]);
+
+    // Seed writes are owned by the dedicated Sling runtime, not the generic
+    // materialization capability profile.
+    const seed = byName.get("analytics.customer_seed");
+    expect(seed?.status).toBe("ok");
+    expect(seed?.findings).toEqual([]);
 
     expect(report.summary.errors).toBeGreaterThanOrEqual(1);
     expect(report.summary.warnings).toBeGreaterThanOrEqual(1);

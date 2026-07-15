@@ -261,6 +261,13 @@ func materializationTypeCheckFindings(asset *pipeline.Asset, pl ...*pipeline.Pip
 	}
 	destinationType := materializationDestinationType(asset, parsedPipeline, nil)
 	profile := materializationProfileFor(asset, destinationType)
+	// Seeds, sensors, and other dedicated runtimes own their write semantics
+	// outside the generic SQL/Python/loader materialization contract. An empty
+	// capability profile therefore means there is nothing for this validator to
+	// check; treating their absent generic block as mode "none" is a false error.
+	if len(profile.Modes) == 0 {
+		return findings
+	}
 	capability, capabilityKnown := materializationCapabilityForMode(profile, normalizedMaterializationMode(asset))
 	if err := validateMaterializationCapability(asset, destinationType); err != nil {
 		addError("Invalid materialization: " + err.Error())
