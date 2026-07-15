@@ -96,7 +96,10 @@ not underscore-flattened route hacks.
   Monaco editor plus guided metadata cards
   ([asset-guided-cards.tsx](../web/components/app/asset-guided-cards.tsx)) and YAML
   view; wires intellisense through
-  [use-asset-monaco.ts](../web/hooks/use-asset-monaco.ts).
+  [use-asset-monaco.ts](../web/hooks/use-asset-monaco.ts). Load, seed, and sensor
+  assets replace Monaco with compact YAML-like parameter editors in the same
+  main pane; their generic identity, dependency, column, and check metadata
+  remains in the inspector.
 - The Build view's New asset dialog uses the workspace's backend-provided
   `asset_capabilities` contract for seed and sensor authoring
   ([semantic-asset-create-fields.tsx](../web/components/app/semantic-asset-create-fields.tsx)).

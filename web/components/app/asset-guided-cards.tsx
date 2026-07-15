@@ -30,8 +30,6 @@ import {
 } from "@/components/ui/command";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Switch } from "@/components/ui/switch";
-import { Textarea } from "@/components/ui/textarea";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import {
   Select,
@@ -80,7 +78,6 @@ export function AssetGuidedCards({ asset, pipelineId }: { asset: WebAsset; pipel
     <ScrollArea className="min-h-0 w-full flex-1">
       <div className="divide-y px-3">
         <IdentityCard asset={asset} pipelineId={pipelineId} />
-        <SemanticParametersCard asset={asset} pipelineId={pipelineId} />
         <MaterializationCard asset={asset} pipelineId={pipelineId} />
         <DependenciesCard asset={asset} />
         <ColumnsCard asset={asset} />
@@ -324,141 +321,6 @@ function IdentityCard({ asset, pipelineId }: { asset: WebAsset; pipelineId: stri
           }}
         />
       </FieldRow>
-    </GuidedCard>
-  );
-}
-
-function SemanticParametersCard({ asset, pipelineId }: { asset: WebAsset; pipelineId: string }) {
-  const workspace = useAtomValue(workspaceAtom);
-  const isSeed = isSeedAssetType(asset.type);
-  const isSensor = isSensorAssetType(asset.type);
-  const capability = getAssetAuthoringCapability(asset.type, workspace?.asset_capabilities);
-  const [error, setError] = useState("");
-  if (!isSeed && !isSensor) return null;
-
-  const saveParameter = (key: string, value: string) => {
-    const parameters = { ...(asset.parameters ?? {}) };
-    if (value.trim()) {
-      parameters[key] = value.trim();
-    } else {
-      delete parameters[key];
-    }
-    setError("");
-    void updateAsset(pipelineId, asset.id, { parameters }).catch((cause) => {
-      setError(cause instanceof Error ? cause.message : "Could not update parameters");
-    });
-  };
-  const required = new Set(capability?.required_parameters ?? []);
-  const variant = capability?.variant ?? asset.type.split(".sensor.")[1] ?? "";
-  const usesQuery = required.has("query") || variant === "query";
-  const usesTable = required.has("table") || variant === "table";
-  const usesS3Key = required.has("bucket_name") || required.has("bucket_key") || variant === "key";
-
-  return (
-    <GuidedCard title={isSeed ? "Seed file" : "Sensor condition"}>
-      {isSeed ? (
-        <>
-          <FieldRow label="Path">
-            <CommitInput
-              mono
-              value={asset.parameters?.path ?? ""}
-              placeholder="./customers.csv"
-              onCommit={(value) => saveParameter("path", value)}
-            />
-          </FieldRow>
-          <FieldRow label="File format">
-            <Select
-              value={asset.parameters?.file_type ?? "csv"}
-              onValueChange={(value) => saveParameter("file_type", value)}
-            >
-              <SelectTrigger className="h-8">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                {(
-                  capability?.file_types ?? ["csv", "parquet", "json", "jsonl", "ndjson", "avro"]
-                ).map((fileType) => (
-                  <SelectItem key={fileType} value={fileType}>
-                    {fileType}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </FieldRow>
-          <FieldRow label="Schema">
-            <div className="flex min-w-0 items-center justify-between gap-2">
-              <span className="text-[11px] text-muted-foreground">Enforce declared columns</span>
-              <Switch
-                checked={(asset.parameters?.enforce_schema ?? "true") !== "false"}
-                onCheckedChange={(checked) => saveParameter("enforce_schema", String(checked))}
-                aria-label="Enforce seed schema"
-              />
-            </div>
-          </FieldRow>
-        </>
-      ) : (
-        <>
-          {usesQuery ? (
-            <FieldRow label="Query">
-              <CommitTextarea
-                mono
-                value={asset.parameters?.query ?? ""}
-                placeholder="select count(*) > 0 from analytics.orders"
-                onCommit={(value) => saveParameter("query", value)}
-              />
-            </FieldRow>
-          ) : null}
-          {usesTable ? (
-            <FieldRow label="Table">
-              <CommitInput
-                mono
-                value={asset.parameters?.table ?? ""}
-                placeholder="analytics.orders"
-                onCommit={(value) => saveParameter("table", value)}
-              />
-            </FieldRow>
-          ) : null}
-          {usesS3Key ? (
-            <>
-              <FieldRow label="Bucket">
-                <CommitInput
-                  mono
-                  value={asset.parameters?.bucket_name ?? ""}
-                  placeholder="raw-data"
-                  onCommit={(value) => saveParameter("bucket_name", value)}
-                />
-              </FieldRow>
-              <FieldRow label="Object key">
-                <CommitInput
-                  mono
-                  value={asset.parameters?.bucket_key ?? ""}
-                  placeholder="daily/orders.csv"
-                  onCommit={(value) => saveParameter("bucket_key", value)}
-                />
-              </FieldRow>
-            </>
-          ) : null}
-          <FieldRow label="Check every">
-            <CommitInput
-              value={asset.parameters?.poke_interval ?? "30"}
-              placeholder="30 seconds"
-              onCommit={(value) => saveParameter("poke_interval", value)}
-            />
-          </FieldRow>
-          <FieldRow label="Timeout">
-            <CommitInput
-              mono
-              value={asset.parameters?.timeout ?? "24h"}
-              placeholder="24h"
-              onCommit={(value) => saveParameter("timeout", value)}
-            />
-          </FieldRow>
-          <p className="text-[11px] text-muted-foreground">
-            Manual runs check once. Scheduled runs keep checking until ready or timed out.
-          </p>
-        </>
-      )}
-      {error ? <p className="text-[11px] text-destructive">{error}</p> : null}
     </GuidedCard>
   );
 }
@@ -1503,31 +1365,6 @@ function CommitInput({
           e.currentTarget.blur();
         }
       }}
-    />
-  );
-}
-
-function CommitTextarea({
-  value,
-  placeholder,
-  onCommit,
-  mono,
-}: {
-  value: string;
-  placeholder?: string;
-  onCommit: (value: string) => void;
-  mono?: boolean;
-}) {
-  const [draft, setDraft] = useState(value);
-  useEffect(() => setDraft(value), [value]);
-
-  return (
-    <Textarea
-      className={cn("min-h-20 text-xs", mono && "font-monaco")}
-      value={draft}
-      placeholder={placeholder}
-      onChange={(event) => setDraft(event.target.value)}
-      onBlur={() => onCommit(draft)}
     />
   );
 }

@@ -1,4 +1,4 @@
-import { expect, type Locator, type Page } from "@playwright/test";
+import { expect, type Page } from "@playwright/test";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
@@ -81,6 +81,12 @@ test.describe("seed and sensor assets live", () => {
     await expect(page.getByRole("button", { name: "Materialize", exact: true })).toBeVisible({
       timeout: 15000,
     });
+    const seedEditor = page.getByTestId("semantic-parameters-editor");
+    await expect(seedEditor).toHaveAttribute("data-asset-kind", "seed");
+    await expect(seedEditor.locator(".monaco-editor")).toHaveCount(0);
+    await expect(seedEditor.getByLabel("Seed path")).toHaveValue("./regional_customers.csv");
+    await expect(seedEditor.getByLabel("Seed file format")).toContainText("csv");
+    await expect(page.getByRole("heading", { name: "Seed file" })).toHaveCount(0);
     const seedMaterializeResponse = page.waitForResponse(
       (response) =>
         response.url().includes(`/api/assets/${seedAssetId}/materialize/stream`) && response.ok(),
@@ -126,9 +132,12 @@ test.describe("seed and sensor assets live", () => {
     await expect(page.getByRole("button", { name: "Check now", exact: true })).toBeVisible({
       timeout: 15000,
     });
-    const properties = await openAssetProperties(page);
-    await expect(properties.getByRole("heading", { name: "Sensor condition" })).toBeVisible();
-    const timeoutInput = properties.getByPlaceholder("24h");
+    const sensorEditor = page.getByTestId("semantic-parameters-editor");
+    await expect(sensorEditor).toHaveAttribute("data-asset-kind", "sensor");
+    await expect(sensorEditor.locator(".monaco-editor")).toHaveCount(0);
+    await expect(sensorEditor.getByLabel("Ready condition query")).toHaveValue("select true");
+    await expect(page.getByRole("heading", { name: "Sensor condition" })).toHaveCount(0);
+    const timeoutInput = sensorEditor.getByLabel("Sensor timeout");
     await timeoutInput.fill("2h");
     const timeoutResponse = page.waitForResponse(
       (response) =>
@@ -251,20 +260,6 @@ async function openNewAssetDialog(page: Page) {
   const dialog = page.getByRole("dialog", { name: "New asset" });
   await expect(dialog).toBeVisible({ timeout: 15000 });
   return dialog;
-}
-
-async function openAssetProperties(page: Page): Promise<Locator> {
-  const inspector = page.locator('[data-testid="asset-inspector"]:visible').first();
-  if (!(await inspector.isVisible().catch(() => false))) {
-    const trigger = page
-      .getByRole("button", { name: "Asset properties" })
-      .or(page.getByRole("button", { name: "Show properties" }))
-      .first();
-    await expect(trigger).toBeVisible({ timeout: 15000 });
-    await trigger.click();
-  }
-  await expect(inspector).toBeVisible({ timeout: 15000 });
-  return inspector;
 }
 
 async function pollAsset(

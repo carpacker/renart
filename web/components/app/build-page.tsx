@@ -132,7 +132,7 @@ import type { MaterializeStreamPayload } from "@/lib/api-core";
 import type { StreamAssetEvent } from "@/lib/api-streams";
 import { typeCheckPipeline, type PipelineTypeCheckReport } from "@/lib/api-pipelines";
 import type { AssetStaleness } from "@/lib/api-staleness";
-import { isSqlAssetType } from "@/lib/asset-types";
+import { isSeedAssetType, isSensorAssetType, isSqlAssetType } from "@/lib/asset-types";
 import { editorDraftAtom } from "@/lib/atoms/domains/editor";
 import type { MaterializeHistoryEntry } from "@/lib/atoms/results";
 import {
@@ -209,6 +209,7 @@ import { AssetYamlEditor } from "./asset-yaml-editor";
 import { ErrorBoundary } from "@/components/ui/error-boundary";
 import { SqlPreview } from "./sql-preview";
 import { LoadParametersEditor } from "./load-parameters-editor";
+import { SemanticParametersEditor } from "./semantic-parameters-editor";
 import { FilePathPicker } from "./file-path-picker";
 import {
   SemanticAssetCreateFields,
@@ -2330,6 +2331,15 @@ function EditorWorkspace({ asset, adhoc }: { asset: BuildAsset; adhoc: boolean }
               pipelineId={asset.pipelineId}
               onInspect={inspectSelectedAsset}
               onGoToAsset={goToAsset}
+            />
+          ) : asset.workspaceAsset &&
+            asset.pipelineId &&
+            (isSeedAssetType(asset.workspaceAsset.type) ||
+              isSensorAssetType(asset.workspaceAsset.type)) ? (
+            <SemanticParametersEditor
+              key={asset.workspaceAsset.id}
+              asset={asset.workspaceAsset}
+              pipelineId={asset.pipelineId}
             />
           ) : asset.workspaceAsset && asset.pipelineId ? (
             <AppAssetEditor

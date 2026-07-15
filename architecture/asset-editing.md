@@ -135,11 +135,14 @@ round-trips unknown fields).
   asset name, shows `destination_object` for file/storage targets, and offers a
   go-to-source action when the source resolves to an upstream asset. Every edit
   flows through the transaction/API write paths; the workspace SSE stream
-  refreshes the asset. Seed and sensor cards use the same backend capability
-  contract as creation: seed source, file type, and schema enforcement remain
-  editable, while query/table/S3-key sensors expose their condition,
-  `poke_interval`, and `timeout`. The internal `renart_seed_file` ownership
-  marker is preserved without becoming a guided user setting. Asset-type
+  refreshes the asset. Seed and sensor runtime parameters use dedicated compact,
+  YAML-like editors in the main pane where Monaco normally appears, driven by
+  the same backend capability contract as creation: seed source, file type, and
+  schema enforcement remain editable, while query/table/S3-key sensors expose
+  their condition, `poke_interval`, and `timeout`. The inspector retains their
+  generic identity, dependencies, columns, and checks without duplicating those
+  runtime controls. The internal `renart_seed_file` ownership marker is
+  preserved without becoming a guided user setting. Asset-type
   selectors in both guided and YAML views group SQL, seed, sensor, and other
   non-SQL kinds separately while preserving unknown current values for repair.
 - **Run-scoped full refresh:** supported table assets expose a Full refresh

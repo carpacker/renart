@@ -121,10 +121,12 @@ export function Comment({ depth = 0, children }: { depth?: number; children: Rea
 export function InlineText({
   value,
   placeholder,
+  ariaLabel,
   onCommit,
 }: {
   value: string;
   placeholder?: string;
+  ariaLabel?: string;
   onCommit: (next: string) => void;
 }) {
   const [draft, setDraft] = useState(value);
@@ -134,6 +136,7 @@ export function InlineText({
       className="font-monaco min-w-0 flex-1 rounded-sm bg-transparent px-1 text-foreground outline-none ring-offset-background placeholder:text-muted-foreground/60 hover:bg-muted/50 focus:bg-muted/60 focus:ring-1 focus:ring-ring"
       value={draft}
       placeholder={placeholder}
+      aria-label={ariaLabel}
       onChange={(event) => setDraft(event.target.value)}
       onBlur={() => onCommit(draft)}
       onKeyDown={(event) => {
@@ -154,16 +157,21 @@ export function InlineSelect({
   groups,
   onChange,
   placeholder,
+  ariaLabel,
 }: {
   value: string;
   options?: { value: string; label: string }[];
   groups?: Array<{ label: string; options: { value: string; label: string }[] }>;
   onChange: (next: string) => void;
   placeholder?: string;
+  ariaLabel?: string;
 }) {
   return (
     <Select value={value} onValueChange={onChange}>
-      <SelectTrigger className="font-monaco h-6 w-auto gap-1 border-none bg-muted/40 px-1.5 text-xs hover:bg-muted/70 focus:ring-1">
+      <SelectTrigger
+        className="font-monaco h-6 w-auto gap-1 border-none bg-muted/40 px-1.5 text-xs hover:bg-muted/70 focus:ring-1"
+        aria-label={ariaLabel}
+      >
         <SelectValue placeholder={placeholder} />
       </SelectTrigger>
       <SelectContent>
