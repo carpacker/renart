@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useId, useMemo, useState } from "react";
 
 import { useAtomValue } from "jotai";
 import {
@@ -133,6 +133,7 @@ const AUTO_CONNECTION_VALUE = "__auto__";
  * Leaving it on "Auto" omits the key and lets the asset use the pipeline default.
  */
 function ConnectionField({ asset, pipelineId }: { asset: WebAsset; pipelineId: string }) {
+  const fieldId = `${useId()}-connection`;
   const workspace = useAtomValue(workspaceAtom);
   const environment = useAtomValue(selectedEnvironmentAtom);
   const { workspaceConfig } = useWorkspaceSettingsData();
@@ -162,7 +163,7 @@ function ConnectionField({ asset, pipelineId }: { asset: WebAsset; pipelineId: s
   }, [workspace?.connections, workspaceConfig, environment, current, isLoad, capability]);
 
   return (
-    <FieldRow label="Connection" htmlFor="asset-metadata-connection">
+    <FieldRow label="Connection" htmlFor={fieldId}>
       <Select
         value={current || AUTO_CONNECTION_VALUE}
         onValueChange={(value) => {
@@ -170,7 +171,7 @@ function ConnectionField({ asset, pipelineId }: { asset: WebAsset; pipelineId: s
           if (next !== current) void updateAsset(pipelineId, asset.id, { connection: next });
         }}
       >
-        <SelectTrigger id="asset-metadata-connection" className="h-8">
+        <SelectTrigger id={fieldId} className="h-8">
           <SelectValue />
         </SelectTrigger>
         <SelectContent>
@@ -191,6 +192,8 @@ function ConnectionField({ asset, pipelineId }: { asset: WebAsset; pipelineId: s
 }
 
 function IdentityCard({ asset, pipelineId }: { asset: WebAsset; pipelineId: string }) {
+  const fieldIdPrefix = `${useId()}-identity`;
+  const fieldId = (name: string) => `${fieldIdPrefix}-${name}`;
   const ingestrEnabled = useIngestrEnabled();
   const workspace = useAtomValue(workspaceAtom);
   const normalizedType = asset.type.trim().toLowerCase();
@@ -233,9 +236,9 @@ function IdentityCard({ asset, pipelineId }: { asset: WebAsset; pipelineId: stri
   return (
     <GuidedCard title="Identity">
       <FieldGroup>
-        <FieldRow label="Name" htmlFor="asset-metadata-name">
+        <FieldRow label="Name" htmlFor={fieldId("name")}>
           <CommitInput
-            id="asset-metadata-name"
+            id={fieldId("name")}
             mono
             value={asset.name}
             placeholder="analytics.orders"
@@ -246,14 +249,14 @@ function IdentityCard({ asset, pipelineId }: { asset: WebAsset; pipelineId: stri
             }}
           />
         </FieldRow>
-        <FieldRow label="Type" htmlFor="asset-metadata-type">
+        <FieldRow label="Type" htmlFor={fieldId("type")}>
           <Select
             value={asset.type}
             onValueChange={(type) => {
               if (type && type !== asset.type) void updateAsset(pipelineId, asset.id, { type });
             }}
           >
-            <SelectTrigger id="asset-metadata-type" className="h-8">
+            <SelectTrigger id={fieldId("type")} className="h-8">
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
@@ -297,9 +300,9 @@ function IdentityCard({ asset, pipelineId }: { asset: WebAsset; pipelineId: stri
           </Select>
         </FieldRow>
         {hasTargetConnection ? <ConnectionField asset={asset} pipelineId={pipelineId} /> : null}
-        <FieldRow label="Owner" htmlFor="asset-metadata-owner">
+        <FieldRow label="Owner" htmlFor={fieldId("owner")}>
           <CommitInput
-            id="asset-metadata-owner"
+            id={fieldId("owner")}
             value={asset.owner ?? ""}
             placeholder="team@company.com"
             onCommit={(owner) => {
@@ -307,9 +310,9 @@ function IdentityCard({ asset, pipelineId }: { asset: WebAsset; pipelineId: stri
             }}
           />
         </FieldRow>
-        <FieldRow label="Description" htmlFor="asset-metadata-description">
+        <FieldRow label="Description" htmlFor={fieldId("description")}>
           <CommitInput
-            id="asset-metadata-description"
+            id={fieldId("description")}
             value={asset.meta?.description ?? ""}
             placeholder="What this asset produces"
             onCommit={(description) => {
@@ -319,9 +322,9 @@ function IdentityCard({ asset, pipelineId }: { asset: WebAsset; pipelineId: stri
             }}
           />
         </FieldRow>
-        <FieldRow label="Tags" htmlFor="asset-metadata-tags">
+        <FieldRow label="Tags" htmlFor={fieldId("tags")}>
           <MultiValueInput
-            id="asset-metadata-tags"
+            id={fieldId("tags")}
             value={asset.tags ?? []}
             placeholder="Add tag"
             onChange={(tags) => {
@@ -547,6 +550,8 @@ export function ColumnCombobox({
 }
 
 function MaterializationCard({ asset, pipelineId }: { asset: WebAsset; pipelineId: string }) {
+  const fieldIdPrefix = `${useId()}-materialization`;
+  const fieldId = (name: string) => `${fieldIdPrefix}-${name}`;
   const { selected, selectedValue, options, hasEditor } = materializationEditorState(asset);
   const primaryKeys = (asset.columns ?? [])
     .filter((column) => column.primary_key)
@@ -565,7 +570,7 @@ function MaterializationCard({ asset, pipelineId }: { asset: WebAsset; pipelineI
   return (
     <GuidedCard title="Materialization">
       <FieldGroup>
-        <FieldRow label="Write behavior" htmlFor="asset-materialization-write-behavior">
+        <FieldRow label="Write behavior" htmlFor={fieldId("write-behavior")}>
           <Select
             value={selectedValue}
             onValueChange={(value) => {
@@ -574,7 +579,7 @@ function MaterializationCard({ asset, pipelineId }: { asset: WebAsset; pipelineI
               save(materializationSelectionInput(asset, option));
             }}
           >
-            <SelectTrigger id="asset-materialization-write-behavior" className="h-8">
+            <SelectTrigger id={fieldId("write-behavior")} className="h-8">
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
@@ -591,7 +596,7 @@ function MaterializationCard({ asset, pipelineId }: { asset: WebAsset; pipelineI
         {selected.capability?.requires_incremental_key ||
         selected.capability?.supports_incremental_key ? (
           <FieldRow
-            htmlFor="asset-materialization-incremental-key"
+            htmlFor={fieldId("incremental-key")}
             label={
               selected.capability?.requires_incremental_key
                 ? "Incremental key"
@@ -599,7 +604,7 @@ function MaterializationCard({ asset, pipelineId }: { asset: WebAsset; pipelineI
             }
           >
             <ColumnCombobox
-              id="asset-materialization-incremental-key"
+              id={fieldId("incremental-key")}
               columns={asset.columns ?? []}
               value={asset.incremental_key ?? ""}
               placeholder={
@@ -619,12 +624,12 @@ function MaterializationCard({ asset, pipelineId }: { asset: WebAsset; pipelineI
           </FieldRow>
         ) : null}
         {selected.capability?.requires_time_granularity ? (
-          <FieldRow label="Time granularity" htmlFor="asset-materialization-time-granularity">
+          <FieldRow label="Time granularity" htmlFor={fieldId("time-granularity")}>
             <Select
               value={asset.time_granularity ?? ""}
               onValueChange={(timeGranularity) => save({ time_granularity: timeGranularity })}
             >
-              <SelectTrigger id="asset-materialization-time-granularity" className="h-8">
+              <SelectTrigger id={fieldId("time-granularity")} className="h-8">
                 <SelectValue placeholder="Select date or timestamp" />
               </SelectTrigger>
               <SelectContent>
@@ -637,9 +642,9 @@ function MaterializationCard({ asset, pipelineId }: { asset: WebAsset; pipelineI
           </FieldRow>
         ) : null}
         {selected.capability?.supports_partition_by ? (
-          <FieldRow label="Partition by" htmlFor="asset-materialization-partition-by">
+          <FieldRow label="Partition by" htmlFor={fieldId("partition-by")}>
             <CommitInput
-              id="asset-materialization-partition-by"
+              id={fieldId("partition-by")}
               mono
               value={asset.partition_by ?? ""}
               placeholder="event_date"
@@ -652,9 +657,9 @@ function MaterializationCard({ asset, pipelineId }: { asset: WebAsset; pipelineI
           </FieldRow>
         ) : null}
         {selected.capability?.supports_cluster_by ? (
-          <FieldRow label="Cluster by" htmlFor="asset-materialization-cluster-by">
+          <FieldRow label="Cluster by" htmlFor={fieldId("cluster-by")}>
             <MultiValueInput
-              id="asset-materialization-cluster-by"
+              id={fieldId("cluster-by")}
               value={asset.cluster_by ?? []}
               placeholder="Add column or expression"
               onChange={(clusterBy) => {

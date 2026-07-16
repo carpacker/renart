@@ -127,7 +127,7 @@ export function DirectoryPickerDialog({
           <DialogDescription>{description}</DialogDescription>
         </DialogHeader>
 
-        <div className="flex flex-col gap-3">
+        <div className="flex min-w-0 flex-col gap-3">
           <div className="flex min-w-0 items-center gap-2">
             <Button
               variant="outline"

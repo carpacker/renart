@@ -347,7 +347,7 @@ test.describe("app asset editing workbench live", () => {
         response.ok(),
       { timeout: 15000 },
     );
-    await properties.getByRole("button", { name: "Unset primary key on customer_id" }).click();
+    await properties.getByRole("button", { name: "Unset customer_id as primary key" }).click();
     await unsetResponse;
     await expect(
       properties.getByRole("button", { name: "Set customer_id as primary key" }),
@@ -881,8 +881,8 @@ select customer_id, upper(customer_name) as shout from analytics.customers
 
     // Removing the last tag must clear it from the live view, not only after a
     // refresh (the workspace SSE merge omits empty fields).
-    await properties.getByRole("button", { name: "Remove tag daily" }).click();
-    await expect(properties.getByRole("button", { name: "Remove tag daily" })).toBeHidden({
+    await properties.getByRole("button", { name: "Remove daily" }).click();
+    await expect(properties.getByRole("button", { name: "Remove daily" })).toBeHidden({
       timeout: 15000,
     });
     const cleared = await pollAsset(

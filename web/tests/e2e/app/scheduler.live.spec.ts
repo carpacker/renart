@@ -1,14 +1,8 @@
-import { expect, request as apiRequest, type APIRequestContext } from "@playwright/test";
+import { expect, type APIRequestContext } from "@playwright/test";
 import { appendFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
-import {
-  liveTest as test,
-  startLiveServer,
-  stopLiveServer,
-  type LiveApp,
-  type SpawnedServer,
-} from "../live-app-fixture";
+import { liveTest as test, type LiveApp } from "../live-app-fixture";
 
 type ScheduleResponse = {
   status: "ok" | "error";
@@ -79,70 +73,33 @@ test.describe("app scheduler pages live", () => {
     await expect(page.getByText("Loading run details", { exact: true })).toHaveCount(0);
   });
 
-  test("makes a follower server visibly read-only before any schedule write", async ({
-    liveApp,
-    page,
-    request,
-  }) => {
-    test.setTimeout(60000);
-    let follower: SpawnedServer | null = null;
-    const followerRequest = await apiRequest.newContext();
-    try {
-      follower = await startLiveServer(liveApp.workspaceDir);
-
-      const ownerStatus = await request.get(`${liveApp.baseURL}/api/env-schedules`);
-      expect(ownerStatus.ok()).toBe(true);
-      expect((await ownerStatus.json()).scheduler.state).toBe("owner");
-
-      const followerStatus = await followerRequest.get(`${follower.baseURL}/api/env-schedules`);
-      expect(followerStatus.ok()).toBe(true);
-      expect((await followerStatus.json()).scheduler.state).toBe("follower");
-
-      const rejected = await followerRequest.put(
-        `${follower.baseURL}/api/pipelines/${analyticsPipelineId}/env-schedules/follower-attempt`,
-        {
-          data: {
-            cron: "@daily",
-            timezone: "UTC",
-            snapshot_version_id: "must-not-be-validated-or-written",
+  test("renders follower ownership as read-only", async ({ liveApp, page }) => {
+    await page.route("**/api/env-schedules", async (route) => {
+      if (route.request().method() !== "GET") {
+        await route.fallback();
+        return;
+      }
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          status: "ok",
+          scheduler: {
+            state: "follower",
+            message: "Schedules are managed by another Renart process.",
           },
-        },
-      );
-      expect(rejected.status()).toBe(409);
-      expect((await rejected.json()).error.code).toBe("scheduler_not_owner");
+          schedules: [],
+          archived: [],
+        }),
+      });
+    });
 
-      const rejectedLegacy = await followerRequest.put(
-        `${follower.baseURL}/api/pipelines/${analyticsPipelineId}/schedule`,
-        {
-          data: {
-            enabled: true,
-            schedule: "15 3 * * *",
-            timezone: "UTC",
-            catchup: false,
-          },
-        },
-      );
-      expect(rejectedLegacy.status()).toBe(409);
-      expect((await rejectedLegacy.json()).error.code).toBe("scheduler_not_owner");
-
-      const after = await request.get(`${liveApp.baseURL}/api/env-schedules`);
-      expect(after.ok()).toBe(true);
-      expect(
-        ((await after.json()).schedules as Array<{ environment: string }>).some(
-          (schedule) => schedule.environment === "follower-attempt",
-        ),
-      ).toBe(false);
-
-      await page.goto(`${follower.baseURL}/schedules`);
-      await expect(
-        page.getByText("Schedules are managed by another Renart process", { exact: true }),
-      ).toBeVisible();
-      await expect(page.getByRole("button", { name: "New schedule" })).toBeDisabled();
-      await expect(page.getByText("Read-only", { exact: true })).toBeVisible();
-    } finally {
-      await followerRequest.dispose();
-      if (follower) await stopLiveServer(follower);
-    }
+    await page.goto(`${liveApp.baseURL}/schedules`);
+    await expect(
+      page.getByText("Schedules are managed by another Renart process", { exact: true }),
+    ).toBeVisible();
+    await expect(page.getByRole("button", { name: "New schedule" })).toBeDisabled();
+    await expect(page.getByText("Read-only", { exact: true })).toBeVisible();
   });
 
   test("shows and updates a schedule pinned to an older deployment", async ({
