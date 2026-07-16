@@ -53,6 +53,31 @@ test.describe("app build editor live", () => {
     expect(customers?.content).toContain("-- app editor smoke");
   });
 
+  test("switches between light, dark, and system appearance", async ({ liveApp, page }) => {
+    await page.emulateMedia({ colorScheme: "light" });
+    await page.goto(`${liveApp.baseURL}/pipelines/${pipelineId}/assets/${customersAssetId}/code`);
+
+    const openAppearanceMenu = async () => {
+      await page.getByTestId("project-switcher-trigger").click();
+      await expect(page.getByText("Appearance", { exact: true })).toBeVisible();
+    };
+
+    await openAppearanceMenu();
+    await page.getByRole("menuitemradio", { name: "Dark" }).click();
+    await expect(page.locator("html")).toHaveClass(/dark/);
+    expect(await page.evaluate(() => localStorage.getItem("renart-theme"))).toBe("dark");
+
+    await openAppearanceMenu();
+    await page.getByRole("menuitemradio", { name: "System" }).click();
+    await expect(page.locator("html")).not.toHaveClass(/dark/);
+    expect(await page.evaluate(() => localStorage.getItem("renart-theme"))).toBe("system");
+
+    await openAppearanceMenu();
+    await page.getByRole("menuitemradio", { name: "Light" }).click();
+    await expect(page.locator("html")).not.toHaveClass(/dark/);
+    expect(await page.evaluate(() => localStorage.getItem("renart-theme"))).toBe("light");
+  });
+
   test("ctrl+click on an upstream table opens that asset", async ({ liveApp, page }) => {
     test.skip(
       test.info().project.name.includes("mobile"),
@@ -132,6 +157,11 @@ select customer_id, customer_name from analytics.customers
     await page.getByRole("button", { name: "Pipeline settings" }).click();
     const dialog = page.getByRole("dialog", { name: /Pipeline settings/ });
     await expect(dialog).toBeVisible({ timeout: 15000 });
+    expect((await dialog.boundingBox())?.width).toBeGreaterThan(700);
+    await expect(dialog.getByTestId("pipeline-settings-content")).toHaveAttribute(
+      "data-slot",
+      "scroll-area",
+    );
 
     await dialog.getByRole("textbox", { name: "Tags" }).fill("finance, north");
     await dialog.getByRole("textbox", { name: "Tags" }).press("Enter");

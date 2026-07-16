@@ -3,44 +3,50 @@
 import { type SetStateAction, useCallback, useEffect, useMemo, useState } from "react";
 
 type WorkspaceTheme = "light" | "dark";
+export type WorkspaceThemePreference = WorkspaceTheme | "system";
 
 const themeChangeEvent = "renart-theme-change";
 
-function resolveWorkspaceTheme(): WorkspaceTheme {
+function resolveSystemTheme(): WorkspaceTheme {
   if (typeof window === "undefined") {
     return "light";
-  }
-
-  const stored = window.localStorage.getItem("renart-theme");
-  if (stored === "dark" || stored === "light") {
-    return stored;
   }
 
   return window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
 }
 
-function applyWorkspaceTheme(theme: WorkspaceTheme) {
+function resolveThemePreference(): WorkspaceThemePreference {
+  if (typeof window === "undefined") {
+    return "system";
+  }
+  const stored = window.localStorage.getItem("renart-theme");
+  if (stored === "dark" || stored === "light" || stored === "system") {
+    return stored;
+  }
+  return "system";
+}
+
+function applyWorkspaceTheme(theme: WorkspaceTheme, preference: WorkspaceThemePreference) {
   const root = document.documentElement;
   root.classList.toggle("dark", theme === "dark");
-  window.localStorage.setItem("renart-theme", theme);
+  root.style.colorScheme = theme;
+  window.localStorage.setItem("renart-theme", preference);
 }
 
 export function useWorkspaceTheme() {
-  const [theme, setThemeState] = useState<WorkspaceTheme>(resolveWorkspaceTheme);
+  const [themePreference, setThemePreferenceState] =
+    useState<WorkspaceThemePreference>(resolveThemePreference);
+  const [systemTheme, setSystemTheme] = useState<WorkspaceTheme>(resolveSystemTheme);
+  const theme = themePreference === "system" ? systemTheme : themePreference;
 
   useEffect(() => {
-    const syncTheme = () => setThemeState(resolveWorkspaceTheme());
+    const syncTheme = () => setThemePreferenceState(resolveThemePreference());
     const syncStorageTheme = (event: StorageEvent) => {
       if (event.key === "renart-theme") {
         syncTheme();
       }
     };
-    const syncSystemTheme = () => {
-      const stored = window.localStorage.getItem("renart-theme");
-      if (stored !== "dark" && stored !== "light") {
-        syncTheme();
-      }
-    };
+    const syncSystemTheme = () => setSystemTheme(resolveSystemTheme());
     const systemTheme = window.matchMedia("(prefers-color-scheme: dark)");
 
     window.addEventListener(themeChangeEvent, syncTheme);
@@ -55,17 +61,17 @@ export function useWorkspaceTheme() {
   }, []);
 
   useEffect(() => {
-    applyWorkspaceTheme(theme);
+    applyWorkspaceTheme(theme, themePreference);
     window.dispatchEvent(new Event(themeChangeEvent));
-  }, [theme]);
+  }, [theme, themePreference]);
 
-  const setTheme = useCallback((nextTheme: SetStateAction<WorkspaceTheme>) => {
-    setThemeState((currentTheme) =>
+  const setTheme = useCallback((nextTheme: SetStateAction<WorkspaceThemePreference>) => {
+    setThemePreferenceState((currentTheme) =>
       typeof nextTheme === "function" ? nextTheme(currentTheme) : nextTheme,
     );
   }, []);
 
   const monacoTheme = useMemo(() => (theme === "dark" ? "bruin-vs-dark" : "bruin-vs"), [theme]);
 
-  return { theme, setTheme, monacoTheme };
+  return { theme, themePreference, setTheme, monacoTheme };
 }

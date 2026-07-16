@@ -10,11 +10,13 @@ import { Spinner } from "@/components/ui/spinner";
 import { cn } from "@/lib/utils";
 
 export function MultiValueInput({
+  id,
   value,
   onChange,
   placeholder,
   className,
 }: {
+  id?: string;
   value: string[];
   onChange: (value: string[]) => void;
   placeholder?: string;
@@ -115,6 +117,7 @@ export function MultiValueInput({
         );
       })}
       <Input
+        id={id}
         className="h-6 min-w-24 flex-1 border-0 bg-transparent px-1 py-0 text-xs shadow-none focus-visible:ring-0"
         value={draft}
         placeholder={visibleValues.length === 0 ? placeholder : undefined}

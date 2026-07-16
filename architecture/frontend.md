@@ -78,7 +78,8 @@ not underscore-flattened route hacks.
 - [components/app/app-shell.tsx](../web/components/app/app-shell.tsx) (`AppShell`):
   top nav (Build / Catalog / Notebooks / Runs / Schedules, from
   [app-data.ts](../web/components/app/app-data.ts)), the
-  [project switcher](../web/components/app/project-switcher.tsx), the
+  [project switcher](../web/components/app/project-switcher.tsx), including the
+  persisted Light / Dark / System appearance selector, the
   [command palette](../web/components/app/app-command-palette.tsx), and the routed
   `<Outlet />`.
 - [components/app/build-page.tsx](../web/components/app/build-page.tsx): the primary
@@ -115,8 +116,8 @@ not underscore-flattened route hacks.
   results back into queued.
 - [components/app/asset-editor.tsx](../web/components/app/asset-editor.tsx): the
   Monaco editor plus guided metadata cards
-  ([asset-guided-cards.tsx](../web/components/app/asset-guided-cards.tsx)) and YAML
-  view; wires intellisense through
+  ([asset-guided-cards.tsx](../web/components/app/asset-guided-cards.tsx)); the
+  metadata inspector currently keeps its raw YAML view hidden. It wires intellisense through
   [use-asset-monaco.ts](../web/hooks/use-asset-monaco.ts). Load, seed, and
   non-query sensor assets replace Monaco with compact YAML-like parameter
   editors in the same main pane. Query sensors project `parameters.query` into
@@ -150,6 +151,9 @@ not underscore-flattened route hacks.
   Run details use semantic event badges, link current-workspace asset events
   back to the split Build view, and render timeline asset names in a dedicated
   wrapping column with tooltips so short duration bars never truncate identity.
+  The asset timeline scrolls independently when a run has many assets, keeping
+  the event/output panel usable, and duration tooltips anchor to the duration
+  bars rather than the full timeline tracks.
   Schedule rows use `Run pinned <id>` with the exact displayed pin; pinless rows
   show `Needs deployment`, and rows with stored variable overrides are blocked
   until the execution ledger can preserve those overrides truthfully. Schedule

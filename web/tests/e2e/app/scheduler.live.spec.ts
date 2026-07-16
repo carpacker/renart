@@ -480,6 +480,13 @@ test.describe("app scheduler pages live", () => {
         })),
       ).toEqual({ overflow: "visible", textOverflow: "clip", whiteSpace: "normal" });
 
+      const timelineTrack = page.locator('[data-testid="run-timeline-track"]').first();
+      const timelineBar = timelineTrack.getByTestId("run-timeline-bar");
+      await expect(timelineBar).toHaveAttribute("data-slot", "tooltip-trigger");
+      await expect(
+        timelineTrack.locator('xpath=ancestor::*[@data-slot="scroll-area-viewport"]'),
+      ).toHaveCount(1);
+
       const assetLink = page.getByRole("link", { name: stepAsset, exact: true }).first();
       await expect(assetLink).toHaveAttribute(
         "href",

@@ -204,7 +204,6 @@ import { AppAdhocEditor, useAdhocQueryDraft } from "./adhoc-editor";
 import { AppAssetEditor } from "./asset-editor";
 import { ApiParametersEditor } from "./api-parameters-editor";
 import { AssetGuidedCards } from "./asset-guided-cards";
-import { AssetYamlEditor } from "./asset-yaml-editor";
 import { ErrorBoundary } from "@/components/ui/error-boundary";
 import { SqlPreview } from "./sql-preview";
 import { LoadParametersEditor } from "./load-parameters-editor";
@@ -3227,18 +3226,7 @@ function TypeCheckPanel({
   );
 }
 
-const PROPERTY_VIEWS = [
-  { value: "form", label: "Form" },
-  { value: "yaml", label: "YAML" },
-] as const;
-
-type PropertyView = (typeof PROPERTY_VIEWS)[number]["value"];
-
 function Inspector({ asset }: { asset: BuildAsset }) {
-  // The inspector is the asset properties editor: two presentations of the same
-  // editable metadata — a guided form, or an interactive YAML-shaped view — both
-  // driving the same asset API + transactions.
-  const [propsView, setPropsView] = useState<PropertyView>("form");
   const workspaceAsset = asset.workspaceAsset;
   const editable = Boolean(workspaceAsset && asset.pipelineId);
 
@@ -3257,30 +3245,10 @@ function Inspector({ asset }: { asset: BuildAsset }) {
             <p className="truncate text-[11px] text-muted-foreground">{subtitle}</p>
           ) : null}
         </div>
-        {editable ? (
-          <div className="flex shrink-0 overflow-hidden rounded-md border text-[11px]">
-            {PROPERTY_VIEWS.map((option) => (
-              <button
-                key={option.value}
-                type="button"
-                className={cn(
-                  "px-2 py-0.5 transition-colors",
-                  propsView === option.value
-                    ? "bg-primary text-primary-foreground"
-                    : "text-muted-foreground hover:bg-muted",
-                )}
-                aria-pressed={propsView === option.value}
-                onClick={() => setPropsView(option.value)}
-              >
-                {option.label}
-              </button>
-            ))}
-          </div>
-        ) : null}
       </div>
       {editable && workspaceAsset && asset.pipelineId ? (
         <ErrorBoundary
-          resetKey={`${propsView}\u0000${workspaceAsset.content ?? ""}`}
+          resetKey={workspaceAsset.content ?? ""}
           fallback={
             <div className="flex min-h-0 flex-1 items-center justify-center p-6 text-center text-xs text-muted-foreground">
               These properties can&apos;t be shown right now — the asset file may have a syntax
@@ -3288,11 +3256,7 @@ function Inspector({ asset }: { asset: BuildAsset }) {
             </div>
           }
         >
-          {propsView === "form" ? (
-            <AssetGuidedCards asset={workspaceAsset} pipelineId={asset.pipelineId} />
-          ) : (
-            <AssetYamlEditor asset={workspaceAsset} pipelineId={asset.pipelineId} />
-          )}
+          <AssetGuidedCards asset={workspaceAsset} pipelineId={asset.pipelineId} />
         </ErrorBoundary>
       ) : (
         <div className="flex min-h-0 flex-1 items-center justify-center p-6 text-center text-xs text-muted-foreground">
@@ -4273,7 +4237,7 @@ function PipelineSettingsDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-3xl">
+      <DialogContent className="sm:max-w-3xl">
         <DialogHeader>
           <DialogTitle>
             Pipeline settings{" "}
@@ -4299,21 +4263,26 @@ function PipelineSettingsDialog({
               </Button>
             ))}
           </div>
-          <div className="max-h-[26rem] space-y-4 overflow-y-auto rounded-lg border p-4">
-            {loading || !draft ? (
-              <div className="flex items-center gap-2 text-sm text-muted-foreground">
-                <Loader2 className="size-4 animate-spin" />
-                Loading settings…
-              </div>
-            ) : (
-              <PipelineSettingsSectionBody
-                section={section}
-                draft={draft}
-                update={update}
-                inferredDefaultConnections={inferredDefaultConnections}
-              />
-            )}
-          </div>
+          <ScrollArea
+            className="max-h-[26rem] min-h-0 rounded-lg border"
+            data-testid="pipeline-settings-content"
+          >
+            <div className="flex flex-col gap-4 p-4">
+              {loading || !draft ? (
+                <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                  <Loader2 className="size-4 animate-spin" />
+                  Loading settings…
+                </div>
+              ) : (
+                <PipelineSettingsSectionBody
+                  section={section}
+                  draft={draft}
+                  update={update}
+                  inferredDefaultConnections={inferredDefaultConnections}
+                />
+              )}
+            </div>
+          </ScrollArea>
         </div>
         {error ? <p className="text-xs text-red-600">{error}</p> : null}
         <DialogFooter>

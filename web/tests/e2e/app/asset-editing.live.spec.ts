@@ -235,7 +235,7 @@ test.describe("app asset editing workbench live", () => {
     expect(customers.meta?.renart_dep_add).toContain("a:analytics.orders#full");
   });
 
-  test("merge metadata is editable through both form and YAML views", async ({ liveApp, page }) => {
+  test("merge metadata is editable through the guided form", async ({ liveApp, page }) => {
     const declareColumns = await page.request.put(
       `${liveApp.baseURL}/api/assets/${customersAssetId}/columns`,
       {
@@ -327,12 +327,18 @@ test.describe("app asset editing workbench live", () => {
     });
     expect(configured.materialization_strategy).toBe("merge");
 
-    await properties.getByRole("button", { name: "YAML" }).click();
-    await expect(properties.getByText("primary_key:", { exact: true })).toBeVisible();
-    await expect(properties.getByText("update_on_merge:", { exact: true })).toBeVisible();
+    await expect(properties.getByRole("button", { name: "YAML", exact: true })).toHaveCount(0);
+    await expect(properties.getByRole("button", { name: "Form", exact: true })).toHaveCount(0);
     await expect(
-      properties.locator('input[value="COALESCE(source.customer_name, target.customer_name)"]'),
-    ).toBeVisible();
+      properties
+        .getByRole("textbox", { name: "Name" })
+        .locator('xpath=ancestor::*[@data-slot="field"]'),
+    ).toHaveAttribute("data-orientation", "vertical");
+    await expect(
+      properties
+        .getByRole("combobox", { name: "Type" })
+        .locator('xpath=ancestor::*[@data-slot="field"]'),
+    ).toHaveAttribute("data-orientation", "vertical");
 
     const unsetResponse = page.waitForResponse(
       (response) =>
@@ -347,7 +353,7 @@ test.describe("app asset editing workbench live", () => {
       properties.getByRole("button", { name: "Set customer_id as primary key" }),
     ).toBeVisible({ timeout: 15000 });
 
-    const yamlKeyResponse = page.waitForResponse(
+    const replacementKeyResponse = page.waitForResponse(
       (response) =>
         response.url().includes(`/api/assets/${customersAssetId}/columns`) &&
         response.request().method() === "PUT" &&
@@ -355,9 +361,9 @@ test.describe("app asset editing workbench live", () => {
       { timeout: 15000 },
     );
     await properties.getByRole("button", { name: "Set customer_name as primary key" }).click();
-    await yamlKeyResponse;
+    await replacementKeyResponse;
 
-    const yamlConfigured = await pollAsset(
+    const replacementConfigured = await pollAsset(
       liveApp,
       page.request,
       "analytics.customers",
@@ -369,7 +375,7 @@ test.describe("app asset editing workbench live", () => {
       },
     );
     expect(
-      (yamlConfigured.columns ?? [])
+      (replacementConfigured.columns ?? [])
         .filter((column) => column.primary_key)
         .map((column) => column.name),
     ).toEqual(["customer_name"]);
@@ -435,9 +441,7 @@ test.describe("app asset editing workbench live", () => {
     expect(configured.time_granularity).toBe("date");
     await expect(materialization.getByRole("combobox").nth(2)).toContainText("Date");
 
-    await properties.getByRole("button", { name: "YAML" }).click();
-    await expect(properties.getByText("time_granularity:", { exact: true })).toBeVisible();
-    await expect(properties.getByText("incremental_key:", { exact: true })).toBeVisible();
+    await expect(properties.getByRole("button", { name: "YAML", exact: true })).toHaveCount(0);
   });
 
   test("load asset editors only offer Sling-compatible materializations", async ({
@@ -538,20 +542,8 @@ materialization:
     );
     expect(configured.incremental_key).toBe("updated_at");
 
-    await properties.getByRole("button", { name: "YAML" }).click();
-    const yamlMaterialization = properties
-      .getByText("type:", { exact: true })
-      .nth(1)
-      .locator("..")
-      .getByRole("combobox");
-    await yamlMaterialization.click();
-    await expectSlingOptions();
-    await page.keyboard.press("Escape");
-    const yamlUpdateKey = properties
-      .getByText("incremental_key:", { exact: true })
-      .locator("..")
-      .getByRole("combobox");
-    await expect(yamlUpdateKey).toContainText("updated_at");
+    await expect(updateKey).toContainText("updated_at");
+    await expect(properties.getByRole("button", { name: "YAML", exact: true })).toHaveCount(0);
   });
 
   test("creates a canonical Load asset, navigates to its source, and edits target connections", async ({
@@ -862,26 +854,23 @@ select customer_id, upper(customer_name) as shout from analytics.customers
     expect(customerId?.type).toBe("integer");
   });
 
-  test("interactive YAML view renders the metadata and edits a tag", async ({ liveApp, page }) => {
+  test("guided metadata form is the only inspector mode and edits a tag", async ({
+    liveApp,
+    page,
+  }) => {
     await page.goto(`${liveApp.baseURL}/pipelines/${pipelineId}/assets/${customersAssetId}/code`);
     await expect(page.locator(".monaco-editor").first()).toBeVisible({ timeout: 15000 });
     const properties = await openAssetProperties(page);
 
-    // Wait for the properties surface to settle (cards render first), then switch views.
+    // The guided form is the only exposed metadata surface for now.
     await expect(properties.getByRole("heading", { name: "Identity" })).toBeVisible({
       timeout: 15000,
     });
-    const yamlToggle = properties.getByRole("button", { name: "YAML", exact: true });
-    await yamlToggle.click();
-    await expect(yamlToggle).toHaveAttribute("aria-pressed", "true");
+    await expect(properties.getByRole("button", { name: "YAML", exact: true })).toHaveCount(0);
+    await expect(properties.getByRole("button", { name: "Form", exact: true })).toHaveCount(0);
 
-    // It renders the metadata as YAML keys.
-    await expect(properties.getByText("depends:", { exact: true })).toBeVisible({ timeout: 15000 });
-    await expect(properties.getByText("columns:", { exact: true })).toBeVisible();
-    await expect(properties.getByText("tags:", { exact: true })).toBeVisible();
-
-    // Adding a tag through the YAML list input persists it.
-    const input = properties.getByPlaceholder("add tag");
+    // Adding a tag through the guided field persists it.
+    const input = properties.getByRole("textbox", { name: "Tags" });
     await input.fill("daily");
     await input.press("Enter");
 
@@ -903,37 +892,6 @@ select customer_id, upper(customer_name) as shout from analytics.customers
       (a) => (a.tags ?? []).length === 0,
     );
     expect(cleared.tags ?? []).not.toContain("daily");
-
-    // A custom column can be added directly from the columns list.
-    const addColumn = properties.getByPlaceholder("add column");
-    await addColumn.fill("region");
-    await addColumn.press("Enter");
-    const withColumn = await pollAsset(liveApp, page.request, "analytics.customers", (a) =>
-      (a.columns ?? []).some((c) => c.name === "region"),
-    );
-    expect((withColumn.columns ?? []).map((c) => c.name)).toContain("region");
-
-    // The check dropdown stays collapsed behind an "add check…" affordance until
-    // the user opts in (no bare dropdown with nothing selected).
-    const addCheck = properties.getByRole("button", { name: "add check…" }).first();
-    await expect(addCheck).toBeVisible({ timeout: 15000 });
-    await addCheck.click();
-    await expect(properties.getByRole("button", { name: /Confirm check on region/ })).toBeVisible();
-
-    // Existing assets are offered as dependency proposals.
-    await expect(
-      properties.getByRole("button", { name: "pick from existing assets…" }),
-    ).toBeVisible();
-
-    // A column can be removed/ignored, after which it is no longer on the asset.
-    await properties.getByRole("button", { name: "Remove column region" }).click();
-    const withoutColumn = await pollAsset(
-      liveApp,
-      page.request,
-      "analytics.customers",
-      (a) => !(a.columns ?? []).some((c) => c.name === "region"),
-    );
-    expect((withoutColumn.columns ?? []).map((c) => c.name)).not.toContain("region");
   });
 
   test("quality checks card adds and removes a column check", async ({ liveApp, page }) => {

@@ -6,7 +6,10 @@ import {
   Cloud,
   FolderPlus,
   FolderSearch,
+  Monitor,
+  Moon,
   Settings,
+  Sun,
   Trash2,
 } from "lucide-react";
 import { useCallback, useState } from "react";
@@ -18,10 +21,13 @@ import {
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuLabel,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { useWorkspaceSettingsData } from "@/hooks/use-workspace-settings-data";
+import { type WorkspaceThemePreference, useWorkspaceTheme } from "@/hooks/use-workspace-theme";
 import { listProjects, openProject, removeProject } from "@/lib/api-projects";
 import type { ProjectListResponse } from "@/lib/generated/api-types";
 import { getPinnedProjectId, pinProject } from "@/lib/project-context";
@@ -37,6 +43,7 @@ function switchToProject(projectId: string, defaultProjectId: string) {
 
 export function ProjectSwitcher() {
   const { workspaceConfig } = useWorkspaceSettingsData();
+  const { themePreference, setTheme } = useWorkspaceTheme();
   const [directory, setDirectory] = useState<ProjectListResponse | null>(null);
   const [browseOpen, setBrowseOpen] = useState(false);
 
@@ -60,6 +67,7 @@ export function ProjectSwitcher() {
       <DropdownMenu onOpenChange={(open) => open && void refresh()}>
         <DropdownMenuTrigger asChild>
           <Button
+            data-testid="project-switcher-trigger"
             variant="outline"
             size="sm"
             className="h-7 border-zinc-800 bg-zinc-950 px-2 text-zinc-200 hover:bg-zinc-800 hover:text-white"
@@ -142,6 +150,25 @@ export function ProjectSwitcher() {
               Connect cloud workspace
             </Link>
           </DropdownMenuItem>
+          <DropdownMenuSeparator />
+          <DropdownMenuLabel>Appearance</DropdownMenuLabel>
+          <DropdownMenuRadioGroup
+            value={themePreference}
+            onValueChange={(value) => setTheme(value as WorkspaceThemePreference)}
+          >
+            <DropdownMenuRadioItem value="light">
+              <Sun />
+              Light
+            </DropdownMenuRadioItem>
+            <DropdownMenuRadioItem value="dark">
+              <Moon />
+              Dark
+            </DropdownMenuRadioItem>
+            <DropdownMenuRadioItem value="system">
+              <Monitor />
+              System
+            </DropdownMenuRadioItem>
+          </DropdownMenuRadioGroup>
         </DropdownMenuContent>
       </DropdownMenu>
       <OpenProjectDialog

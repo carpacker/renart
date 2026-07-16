@@ -541,8 +541,8 @@ function RunTimelinePanel({ run, steps }: { run: PipelineRun; steps: PipelineRun
   const counts = countSteps(steps);
   return (
     <AppPanel className="grid shrink-0 grid-cols-1 overflow-hidden lg:grid-cols-[minmax(0,1fr)_18rem]">
-      <div className="min-w-0 p-3">
-        <div className="grid grid-cols-[minmax(7rem,12rem)_minmax(0,1fr)] items-center gap-x-3 gap-y-2">
+      <ScrollArea className="max-h-72 min-w-0" viewportClassName="min-h-0">
+        <div className="grid grid-cols-[minmax(7rem,12rem)_minmax(0,1fr)] items-center gap-x-3 gap-y-2 p-3">
           <div aria-hidden="true" />
           <div className="flex text-[11px] text-muted-foreground">
             {timelineTicks(bounds).map((tick) => (
@@ -560,7 +560,7 @@ function RunTimelinePanel({ run, steps }: { run: PipelineRun; steps: PipelineRun
             <StepBar key={`${step.run_id}-${step.asset}`} step={step} bounds={bounds} now={now} />
           ))}
         </div>
-      </div>
+      </ScrollArea>
       <div className="border-t p-2 lg:border-l lg:border-t-0">
         {[
           ["Preparing", counts.queued],
@@ -613,13 +613,13 @@ function StepBar({
         </TooltipTrigger>
         <TooltipContent>{step.asset}</TooltipContent>
       </Tooltip>
-      <Tooltip>
-        <TooltipTrigger asChild>
-          <div
-            className="relative h-7 rounded bg-muted/40"
-            data-testid="run-timeline-track"
-            data-asset={step.asset}
-          >
+      <div
+        className="relative h-7 rounded bg-muted/40"
+        data-testid="run-timeline-track"
+        data-asset={step.asset}
+      >
+        <Tooltip>
+          <TooltipTrigger asChild>
             <div
               className={cn(
                 "absolute top-0.5 h-6 min-w-px rounded",
@@ -635,15 +635,15 @@ function StepBar({
               data-status={step.status}
               style={{ left: `${left}%`, width: `${width}%` }}
             />
-          </div>
-        </TooltipTrigger>
-        <TooltipContent>
-          <span className="font-mono">{step.asset}</span>
-          <span className="ml-1 capitalize">
-            · {step.status} · {duration}
-          </span>
-        </TooltipContent>
-      </Tooltip>
+          </TooltipTrigger>
+          <TooltipContent>
+            <span className="font-mono">{step.asset}</span>
+            <span className="ml-1 capitalize">
+              · {step.status} · {duration}
+            </span>
+          </TooltipContent>
+        </Tooltip>
+      </div>
     </>
   );
 }

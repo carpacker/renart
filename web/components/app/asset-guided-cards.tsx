@@ -29,7 +29,7 @@ import {
   CommandList,
 } from "@/components/ui/command";
 import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
+import { Field, FieldGroup, FieldLabel } from "@/components/ui/field";
 import { Spinner } from "@/components/ui/spinner";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import {
@@ -162,7 +162,7 @@ function ConnectionField({ asset, pipelineId }: { asset: WebAsset; pipelineId: s
   }, [workspace?.connections, workspaceConfig, environment, current, isLoad, capability]);
 
   return (
-    <FieldRow label="Connection">
+    <FieldRow label="Connection" htmlFor="asset-metadata-connection">
       <Select
         value={current || AUTO_CONNECTION_VALUE}
         onValueChange={(value) => {
@@ -170,7 +170,7 @@ function ConnectionField({ asset, pipelineId }: { asset: WebAsset; pipelineId: s
           if (next !== current) void updateAsset(pipelineId, asset.id, { connection: next });
         }}
       >
-        <SelectTrigger className="h-8">
+        <SelectTrigger id="asset-metadata-connection" className="h-8">
           <SelectValue />
         </SelectTrigger>
         <SelectContent>
@@ -232,100 +232,106 @@ function IdentityCard({ asset, pipelineId }: { asset: WebAsset; pipelineId: stri
 
   return (
     <GuidedCard title="Identity">
-      <FieldRow label="Name">
-        <CommitInput
-          mono
-          value={asset.name}
-          placeholder="analytics.orders"
-          onCommit={(name) => {
-            if (name.trim() && name.trim() !== asset.name) {
-              void updateAsset(pipelineId, asset.id, { name: name.trim() });
-            }
-          }}
-        />
-      </FieldRow>
-      <FieldRow label="Type">
-        <Select
-          value={asset.type}
-          onValueChange={(type) => {
-            if (type && type !== asset.type) void updateAsset(pipelineId, asset.id, { type });
-          }}
-        >
-          <SelectTrigger className="h-8">
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectGroup>
-              <SelectLabel>SQL assets</SelectLabel>
-              {assetTypeGroups.sql.map((type) => (
-                <SelectItem key={type} value={type}>
-                  {type}
-                </SelectItem>
-              ))}
-            </SelectGroup>
-            <SelectGroup>
-              <SelectLabel>Non-SQL assets</SelectLabel>
-              {assetTypeGroups.nonSql.map((type) => (
-                <SelectItem key={type} value={type}>
-                  {type}
-                </SelectItem>
-              ))}
-            </SelectGroup>
-            {assetTypeGroups.seed.length > 0 ? (
+      <FieldGroup>
+        <FieldRow label="Name" htmlFor="asset-metadata-name">
+          <CommitInput
+            id="asset-metadata-name"
+            mono
+            value={asset.name}
+            placeholder="analytics.orders"
+            onCommit={(name) => {
+              if (name.trim() && name.trim() !== asset.name) {
+                void updateAsset(pipelineId, asset.id, { name: name.trim() });
+              }
+            }}
+          />
+        </FieldRow>
+        <FieldRow label="Type" htmlFor="asset-metadata-type">
+          <Select
+            value={asset.type}
+            onValueChange={(type) => {
+              if (type && type !== asset.type) void updateAsset(pipelineId, asset.id, { type });
+            }}
+          >
+            <SelectTrigger id="asset-metadata-type" className="h-8">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
               <SelectGroup>
-                <SelectLabel>Seeds</SelectLabel>
-                {assetTypeGroups.seed.map((type) => (
+                <SelectLabel>SQL assets</SelectLabel>
+                {assetTypeGroups.sql.map((type) => (
                   <SelectItem key={type} value={type}>
                     {type}
                   </SelectItem>
                 ))}
               </SelectGroup>
-            ) : null}
-            {assetTypeGroups.sensor.length > 0 ? (
               <SelectGroup>
-                <SelectLabel>Sensors</SelectLabel>
-                {assetTypeGroups.sensor.map((type) => (
+                <SelectLabel>Non-SQL assets</SelectLabel>
+                {assetTypeGroups.nonSql.map((type) => (
                   <SelectItem key={type} value={type}>
                     {type}
                   </SelectItem>
                 ))}
               </SelectGroup>
-            ) : null}
-          </SelectContent>
-        </Select>
-      </FieldRow>
-      {hasTargetConnection ? <ConnectionField asset={asset} pipelineId={pipelineId} /> : null}
-      <FieldRow label="Owner">
-        <CommitInput
-          value={asset.owner ?? ""}
-          placeholder="team@company.com"
-          onCommit={(owner) => {
-            if (owner !== (asset.owner ?? "")) void updateAsset(pipelineId, asset.id, { owner });
-          }}
-        />
-      </FieldRow>
-      <FieldRow label="Description">
-        <CommitInput
-          value={asset.meta?.description ?? ""}
-          placeholder="What this asset produces"
-          onCommit={(description) => {
-            if (description !== (asset.meta?.description ?? "")) {
-              updateMetaDescription(description);
-            }
-          }}
-        />
-      </FieldRow>
-      <FieldRow label="Tags">
-        <MultiValueInput
-          value={asset.tags ?? []}
-          placeholder="Add tag"
-          onChange={(tags) => {
-            if (tags.join("\n") !== (asset.tags ?? []).join("\n")) {
-              void updateAsset(pipelineId, asset.id, { tags });
-            }
-          }}
-        />
-      </FieldRow>
+              {assetTypeGroups.seed.length > 0 ? (
+                <SelectGroup>
+                  <SelectLabel>Seeds</SelectLabel>
+                  {assetTypeGroups.seed.map((type) => (
+                    <SelectItem key={type} value={type}>
+                      {type}
+                    </SelectItem>
+                  ))}
+                </SelectGroup>
+              ) : null}
+              {assetTypeGroups.sensor.length > 0 ? (
+                <SelectGroup>
+                  <SelectLabel>Sensors</SelectLabel>
+                  {assetTypeGroups.sensor.map((type) => (
+                    <SelectItem key={type} value={type}>
+                      {type}
+                    </SelectItem>
+                  ))}
+                </SelectGroup>
+              ) : null}
+            </SelectContent>
+          </Select>
+        </FieldRow>
+        {hasTargetConnection ? <ConnectionField asset={asset} pipelineId={pipelineId} /> : null}
+        <FieldRow label="Owner" htmlFor="asset-metadata-owner">
+          <CommitInput
+            id="asset-metadata-owner"
+            value={asset.owner ?? ""}
+            placeholder="team@company.com"
+            onCommit={(owner) => {
+              if (owner !== (asset.owner ?? "")) void updateAsset(pipelineId, asset.id, { owner });
+            }}
+          />
+        </FieldRow>
+        <FieldRow label="Description" htmlFor="asset-metadata-description">
+          <CommitInput
+            id="asset-metadata-description"
+            value={asset.meta?.description ?? ""}
+            placeholder="What this asset produces"
+            onCommit={(description) => {
+              if (description !== (asset.meta?.description ?? "")) {
+                updateMetaDescription(description);
+              }
+            }}
+          />
+        </FieldRow>
+        <FieldRow label="Tags" htmlFor="asset-metadata-tags">
+          <MultiValueInput
+            id="asset-metadata-tags"
+            value={asset.tags ?? []}
+            placeholder="Add tag"
+            onChange={(tags) => {
+              if (tags.join("\n") !== (asset.tags ?? []).join("\n")) {
+                void updateAsset(pipelineId, asset.id, { tags });
+              }
+            }}
+          />
+        </FieldRow>
+      </FieldGroup>
     </GuidedCard>
   );
 }
@@ -466,12 +472,14 @@ export function materializationSelectionInput(asset: WebAsset, option: Materiali
 }
 
 export function ColumnCombobox({
+  id,
   columns,
   value,
   placeholder,
   className,
   onChange,
 }: {
+  id?: string;
   columns: WebColumn[];
   value: string;
   placeholder: string;
@@ -484,6 +492,7 @@ export function ColumnCombobox({
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger asChild>
         <Button
+          id={id}
           variant="outline"
           role="combobox"
           aria-expanded={open}
@@ -555,111 +564,121 @@ function MaterializationCard({ asset, pipelineId }: { asset: WebAsset; pipelineI
 
   return (
     <GuidedCard title="Materialization">
-      <FieldRow label="Write behavior">
-        <Select
-          value={selectedValue}
-          onValueChange={(value) => {
-            const option = options.find((item) => item.value === value);
-            if (!option || option.custom) return;
-            save(materializationSelectionInput(asset, option));
-          }}
-        >
-          <SelectTrigger className="h-8">
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectGroup>
-              {options.map((option) => (
-                <SelectItem key={option.value} value={option.value} disabled={option.custom}>
-                  {option.label}
-                </SelectItem>
-              ))}
-            </SelectGroup>
-          </SelectContent>
-        </Select>
-      </FieldRow>
-      {selected.capability?.requires_incremental_key ||
-      selected.capability?.supports_incremental_key ? (
-        <FieldRow
-          label={
-            selected.capability?.requires_incremental_key
-              ? "Incremental key"
-              : "Update key (optional)"
-          }
-        >
-          <ColumnCombobox
-            columns={asset.columns ?? []}
-            value={asset.incremental_key ?? ""}
-            placeholder={selected.capability?.requires_incremental_key ? "loaded_at" : "updated_at"}
-            onChange={(key) => {
-              if (key !== (asset.incremental_key ?? "")) {
-                save({
-                  incremental_key: key,
-                  ...(selected.capability?.requires_time_granularity && !asset.time_granularity
-                    ? { time_granularity: inferMaterializationTimeGranularity(asset, key) }
-                    : {}),
-                });
-              }
-            }}
-          />
-        </FieldRow>
-      ) : null}
-      {selected.capability?.requires_time_granularity ? (
-        <FieldRow label="Time granularity">
+      <FieldGroup>
+        <FieldRow label="Write behavior" htmlFor="asset-materialization-write-behavior">
           <Select
-            value={asset.time_granularity ?? ""}
-            onValueChange={(timeGranularity) => save({ time_granularity: timeGranularity })}
+            value={selectedValue}
+            onValueChange={(value) => {
+              const option = options.find((item) => item.value === value);
+              if (!option || option.custom) return;
+              save(materializationSelectionInput(asset, option));
+            }}
           >
-            <SelectTrigger className="h-8">
-              <SelectValue placeholder="Select date or timestamp" />
+            <SelectTrigger id="asset-materialization-write-behavior" className="h-8">
+              <SelectValue />
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value="timestamp">Timestamp</SelectItem>
-              <SelectItem value="date">Date</SelectItem>
+              <SelectGroup>
+                {options.map((option) => (
+                  <SelectItem key={option.value} value={option.value} disabled={option.custom}>
+                    {option.label}
+                  </SelectItem>
+                ))}
+              </SelectGroup>
             </SelectContent>
           </Select>
         </FieldRow>
-      ) : null}
-      {selected.capability?.supports_partition_by ? (
-        <FieldRow label="Partition by">
-          <CommitInput
-            mono
-            value={asset.partition_by ?? ""}
-            placeholder="event_date"
-            onCommit={(partitionBy) => {
-              if (partitionBy !== (asset.partition_by ?? "")) {
-                save({ partition_by: partitionBy });
+        {selected.capability?.requires_incremental_key ||
+        selected.capability?.supports_incremental_key ? (
+          <FieldRow
+            htmlFor="asset-materialization-incremental-key"
+            label={
+              selected.capability?.requires_incremental_key
+                ? "Incremental key"
+                : "Update key (optional)"
+            }
+          >
+            <ColumnCombobox
+              id="asset-materialization-incremental-key"
+              columns={asset.columns ?? []}
+              value={asset.incremental_key ?? ""}
+              placeholder={
+                selected.capability?.requires_incremental_key ? "loaded_at" : "updated_at"
               }
-            }}
-          />
-        </FieldRow>
-      ) : null}
-      {selected.capability?.supports_cluster_by ? (
-        <FieldRow label="Cluster by">
-          <MultiValueInput
-            value={asset.cluster_by ?? []}
-            placeholder="Add column or expression"
-            onChange={(clusterBy) => {
-              if (clusterBy.join("\n") !== (asset.cluster_by ?? []).join("\n")) {
-                save({ cluster_by: clusterBy });
-              }
-            }}
-          />
-        </FieldRow>
-      ) : null}
-      {selected.capability?.requires_primary_key ? (
-        <p
-          className={cn(
-            "text-[11px]",
-            primaryKeys.length === 0 ? "text-destructive" : "text-muted-foreground",
-          )}
-        >
-          {primaryKeys.length === 0
-            ? `${selected.value === "merge" ? "Merge" : "This mode"} needs at least one primary-key column. Set one with the key control in Columns.`
-            : `Primary key${primaryKeys.length === 1 ? "" : "s"}: ${primaryKeys.join(", ")}`}
-        </p>
-      ) : null}
-      {error ? <p className="text-[11px] text-destructive">{error}</p> : null}
+              onChange={(key) => {
+                if (key !== (asset.incremental_key ?? "")) {
+                  save({
+                    incremental_key: key,
+                    ...(selected.capability?.requires_time_granularity && !asset.time_granularity
+                      ? { time_granularity: inferMaterializationTimeGranularity(asset, key) }
+                      : {}),
+                  });
+                }
+              }}
+            />
+          </FieldRow>
+        ) : null}
+        {selected.capability?.requires_time_granularity ? (
+          <FieldRow label="Time granularity" htmlFor="asset-materialization-time-granularity">
+            <Select
+              value={asset.time_granularity ?? ""}
+              onValueChange={(timeGranularity) => save({ time_granularity: timeGranularity })}
+            >
+              <SelectTrigger id="asset-materialization-time-granularity" className="h-8">
+                <SelectValue placeholder="Select date or timestamp" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectGroup>
+                  <SelectItem value="timestamp">Timestamp</SelectItem>
+                  <SelectItem value="date">Date</SelectItem>
+                </SelectGroup>
+              </SelectContent>
+            </Select>
+          </FieldRow>
+        ) : null}
+        {selected.capability?.supports_partition_by ? (
+          <FieldRow label="Partition by" htmlFor="asset-materialization-partition-by">
+            <CommitInput
+              id="asset-materialization-partition-by"
+              mono
+              value={asset.partition_by ?? ""}
+              placeholder="event_date"
+              onCommit={(partitionBy) => {
+                if (partitionBy !== (asset.partition_by ?? "")) {
+                  save({ partition_by: partitionBy });
+                }
+              }}
+            />
+          </FieldRow>
+        ) : null}
+        {selected.capability?.supports_cluster_by ? (
+          <FieldRow label="Cluster by" htmlFor="asset-materialization-cluster-by">
+            <MultiValueInput
+              id="asset-materialization-cluster-by"
+              value={asset.cluster_by ?? []}
+              placeholder="Add column or expression"
+              onChange={(clusterBy) => {
+                if (clusterBy.join("\n") !== (asset.cluster_by ?? []).join("\n")) {
+                  save({ cluster_by: clusterBy });
+                }
+              }}
+            />
+          </FieldRow>
+        ) : null}
+        {selected.capability?.requires_primary_key ? (
+          <p
+            className={cn(
+              "text-[11px]",
+              primaryKeys.length === 0 ? "text-destructive" : "text-muted-foreground",
+            )}
+          >
+            {primaryKeys.length === 0
+              ? `${selected.value === "merge" ? "Merge" : "This mode"} needs at least one primary-key column. Set one with the key control in Columns.`
+              : `Primary key${primaryKeys.length === 1 ? "" : "s"}: ${primaryKeys.join(", ")}`}
+          </p>
+        ) : null}
+        {error ? <p className="text-[11px] text-destructive">{error}</p> : null}
+      </FieldGroup>
     </GuidedCard>
   );
 }
@@ -1339,12 +1358,20 @@ function ColumnStatusBadge({
 
 // --- shared field primitives ---
 
-function FieldRow({ label, children }: { label: string; children: React.ReactNode }) {
+function FieldRow({
+  label,
+  htmlFor,
+  children,
+}: {
+  label: string;
+  htmlFor?: string;
+  children: React.ReactNode;
+}) {
   return (
-    <div className="grid grid-cols-[5.5rem_1fr] items-center gap-2">
-      <Label className="text-[11px] text-muted-foreground">{label}</Label>
+    <Field>
+      <FieldLabel htmlFor={htmlFor}>{label}</FieldLabel>
       {children}
-    </div>
+    </Field>
   );
 }
 
@@ -1353,12 +1380,14 @@ function FieldRow({ label, children }: { label: string; children: React.ReactNod
  * fire on every keystroke.
  */
 function CommitInput({
+  id,
   value,
   placeholder,
   onCommit,
   mono,
   className,
 }: {
+  id?: string;
   value: string;
   placeholder?: string;
   onCommit: (value: string) => void;
@@ -1370,6 +1399,7 @@ function CommitInput({
 
   return (
     <Input
+      id={id}
       className={cn("h-8 text-xs", mono && "font-monaco", className)}
       value={draft}
       placeholder={placeholder}

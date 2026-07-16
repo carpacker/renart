@@ -169,9 +169,9 @@ round-trips unknown fields).
 - **Provenance classification client-side** (`lib/asset-provenance.ts`)
   mirrors the flat-key schema for display (source chips: "inferred from SQL" /
   "manual").
-- **Expert YAML mode** (`asset-yaml-editor.tsx`): edit the real definition
-  with the same materialization/key controls plus pickers/completion for
-  connections and columns; parsed and validated before write.
+- **Expert YAML mode** (`asset-yaml-editor.tsx`) remains implemented but is not
+  currently exposed in the asset metadata inspector. The inspector shows only
+  the guided form while the raw mode is being held back from the product UI.
 - **Pipeline connection context**: a canvas asset's connection badge opens the
   pipeline settings Connections section. The config response keeps explicit
   `pipeline.yml` overrides separate from read-only defaults Bruin infers from
