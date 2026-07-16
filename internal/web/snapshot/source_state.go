@@ -3,8 +3,6 @@ package snapshot
 import (
 	"io/fs"
 	"os"
-	"path/filepath"
-	"strings"
 	"time"
 )
 
@@ -31,32 +29,12 @@ type sourceFileState struct {
 // in-place writes without hashing large source files a second time.
 func CollectSourceState(pipelineDir string) (SourceState, error) {
 	state := SourceState{files: make(map[string]sourceFileState)}
-	walkErr := filepath.WalkDir(pipelineDir, func(path string, entry fs.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		if entry.IsDir() {
-			if _, skip := skipDirNames[entry.Name()]; skip && path != pipelineDir {
-				return filepath.SkipDir
-			}
-			return nil
-		}
-		if !entry.Type().IsRegular() {
-			return nil
-		}
-		if _, skip := skipFileExtensions[strings.ToLower(filepath.Ext(path))]; skip {
-			return nil
-		}
-
-		info, infoErr := entry.Info()
+	walkErr := walkManifestFiles(pipelineDir, func(path, relativePath string) error {
+		info, infoErr := os.Stat(path)
 		if infoErr != nil {
 			return infoErr
 		}
-		rel, relErr := filepath.Rel(pipelineDir, path)
-		if relErr != nil {
-			return relErr
-		}
-		state.files[filepath.ToSlash(rel)] = sourceFileState{
+		state.files[relativePath] = sourceFileState{
 			size:    info.Size(),
 			mode:    info.Mode(),
 			modTime: info.ModTime(),

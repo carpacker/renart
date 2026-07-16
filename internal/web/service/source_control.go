@@ -65,9 +65,14 @@ func (s *SourceControlService) Status(ctx context.Context) (SourceControlStatus,
 	}
 	result := SourceControlStatus{HasRepository: true, Clean: status.IsClean(), Changes: []SourceControlChange{}}
 	result.Branch = currentBranch(repo)
+	runtimePrefix := s.runtimeGitPathPrefix()
 	for path, item := range status {
 		staging := normalizeStatusCode(item.Staging)
 		worktreeStatus := normalizeStatusCode(item.Worktree)
+		if isRuntimeGitPath(path, runtimePrefix) &&
+			(staging == git.Untracked || staging == git.Unmodified) && worktreeStatus == git.Untracked {
+			continue
+		}
 		result.Changes = append(result.Changes, SourceControlChange{
 			Path:           filepath.ToSlash(path),
 			StagedStatus:   statusCodeString(staging),
@@ -76,6 +81,7 @@ func (s *SourceControlService) Status(ctx context.Context) (SourceControlStatus,
 		})
 	}
 	sort.Slice(result.Changes, func(i, j int) bool { return result.Changes[i].Path < result.Changes[j].Path })
+	result.Clean = len(result.Changes) == 0
 	_ = ctx
 	return result, nil
 }
@@ -242,6 +248,8 @@ func (s *SourceControlService) open() (*git.Repository, *git.Worktree, error) {
 
 const defaultGitignoreContents = `.renart/state.db*
 .renart/server.lock
+.renart/server.json*
+.renart/scheduler.lock
 logs/
 duckdb-files/
 .env
@@ -257,6 +265,196 @@ func (s *SourceControlService) writeDefaultGitignore() error {
 		return err
 	}
 	return os.WriteFile(path, []byte(defaultGitignoreContents), 0o644)
+}
+
+var runtimeGitExcludePaths = []string{
+	".renart/state.db*",
+	".renart/server.lock",
+	".renart/server.json*",
+	".renart/scheduler.lock",
+}
+
+// EnsureRuntimeGitExcludes keeps Renart-owned runtime files out of source
+// control without modifying a user's .gitignore. The repository-local
+// info/exclude file is deliberately untracked and applies to existing projects
+// as well as newly scaffolded ones.
+func EnsureRuntimeGitExcludes(workspaceRoot string) error {
+	repositoryRoot, metadataDir, err := findRepositoryMetadata(workspaceRoot)
+	if err != nil {
+		return err
+	}
+	workspaceRoot, err = filepath.Abs(workspaceRoot)
+	if err != nil {
+		return err
+	}
+	relativeRoot, err := filepath.Rel(repositoryRoot, workspaceRoot)
+	if err != nil || relativeRoot == ".." || strings.HasPrefix(relativeRoot, ".."+string(filepath.Separator)) {
+		return fmt.Errorf("workspace %q is outside repository %q", workspaceRoot, repositoryRoot)
+	}
+
+	prefix := ""
+	if relativeRoot != "." {
+		prefix, err = gitExcludeLiteralPath(filepath.ToSlash(relativeRoot))
+		if err != nil {
+			return err
+		}
+		prefix += "/"
+	}
+	patterns := make([]string, 0, len(runtimeGitExcludePaths))
+	for _, path := range runtimeGitExcludePaths {
+		patterns = append(patterns, "/"+prefix+path)
+	}
+	return appendMissingGitExcludePatterns(filepath.Join(metadataDir, "info", "exclude"), patterns)
+}
+
+func gitExcludeLiteralPath(path string) (string, error) {
+	if strings.ContainsAny(path, "\x00\r\n") {
+		return "", fmt.Errorf("workspace path cannot be represented safely in Git excludes")
+	}
+	replacer := strings.NewReplacer(
+		"\\", "\\\\",
+		"*", "\\*",
+		"?", "\\?",
+		"[", "\\[",
+		"]", "\\]",
+	)
+	return replacer.Replace(path), nil
+}
+
+func (s *SourceControlService) runtimeGitPathPrefix() string {
+	repositoryRoot, _, err := findRepositoryMetadata(s.workspaceRoot)
+	if err != nil {
+		return ""
+	}
+	workspaceRoot, err := filepath.Abs(s.workspaceRoot)
+	if err != nil {
+		return ""
+	}
+	relativeRoot, err := filepath.Rel(repositoryRoot, workspaceRoot)
+	if err != nil {
+		return ""
+	}
+	prefix := ""
+	if relativeRoot != "." {
+		prefix = filepath.ToSlash(relativeRoot) + "/"
+	}
+	return prefix + ".renart/"
+}
+
+func isRuntimeGitPath(path, statePrefix string) bool {
+	if statePrefix == "" {
+		return false
+	}
+	path = filepath.ToSlash(path)
+	if !strings.HasPrefix(path, statePrefix) {
+		return false
+	}
+	name := strings.TrimPrefix(path, statePrefix)
+	return strings.HasPrefix(name, "state.db") ||
+		strings.HasPrefix(name, "server.json") ||
+		name == "server.lock" ||
+		name == "scheduler.lock"
+}
+
+func findRepositoryMetadata(workspaceRoot string) (string, string, error) {
+	current, err := filepath.Abs(workspaceRoot)
+	if err != nil {
+		return "", "", err
+	}
+	for {
+		marker := filepath.Join(current, ".git")
+		info, statErr := os.Stat(marker)
+		switch {
+		case statErr == nil && info.IsDir():
+			return current, marker, nil
+		case statErr == nil:
+			metadataDir, resolveErr := resolveGitDirFile(marker)
+			if resolveErr != nil {
+				return "", "", resolveErr
+			}
+			return current, metadataDir, nil
+		case !errors.Is(statErr, os.ErrNotExist):
+			return "", "", statErr
+		}
+		parent := filepath.Dir(current)
+		if parent == current {
+			return "", "", git.ErrRepositoryNotExists
+		}
+		current = parent
+	}
+}
+
+func resolveGitDirFile(marker string) (string, error) {
+	raw, err := os.ReadFile(marker)
+	if err != nil {
+		return "", err
+	}
+	value := strings.TrimSpace(string(raw))
+	const prefix = "gitdir:"
+	if !strings.HasPrefix(strings.ToLower(value), prefix) {
+		return "", fmt.Errorf("invalid git metadata file %q", marker)
+	}
+	metadataDir := strings.TrimSpace(value[len(prefix):])
+	if !filepath.IsAbs(metadataDir) {
+		metadataDir = filepath.Join(filepath.Dir(marker), metadataDir)
+	}
+	metadataDir = filepath.Clean(metadataDir)
+
+	// Linked worktrees point at .git/worktrees/<name>; their commondir points
+	// back to the main repository metadata where info/exclude lives.
+	commonRaw, err := os.ReadFile(filepath.Join(metadataDir, "commondir"))
+	if errors.Is(err, os.ErrNotExist) {
+		return metadataDir, nil
+	}
+	if err != nil {
+		return "", err
+	}
+	commonDir := strings.TrimSpace(string(commonRaw))
+	if !filepath.IsAbs(commonDir) {
+		commonDir = filepath.Join(metadataDir, commonDir)
+	}
+	return filepath.Clean(commonDir), nil
+}
+
+func appendMissingGitExcludePatterns(path string, patterns []string) error {
+	raw, err := os.ReadFile(path)
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	existing := make(map[string]struct{})
+	for _, line := range strings.Split(string(raw), "\n") {
+		existing[strings.TrimSuffix(line, "\r")] = struct{}{}
+	}
+	missing := make([]string, 0, len(patterns))
+	for _, pattern := range patterns {
+		if _, found := existing[pattern]; !found {
+			missing = append(missing, pattern)
+		}
+	}
+	if len(missing) == 0 {
+		return nil
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
+	}
+	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0o644)
+	if err != nil {
+		return err
+	}
+
+	var addition strings.Builder
+	if len(raw) > 0 && raw[len(raw)-1] != '\n' {
+		addition.WriteByte('\n')
+	}
+	for _, pattern := range missing {
+		addition.WriteString(pattern)
+		addition.WriteByte('\n')
+	}
+	if _, err := io.WriteString(file, addition.String()); err != nil {
+		_ = file.Close()
+		return err
+	}
+	return file.Close()
 }
 
 func commitAuthor(repo *git.Repository) *object.Signature {

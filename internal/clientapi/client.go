@@ -2,6 +2,7 @@ package clientapi
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -14,6 +15,7 @@ import (
 	"time"
 
 	"renart/internal/web/model"
+	"renart/internal/web/service"
 )
 
 // Client talks to a running renart server's API for one workspace. APIBase
@@ -130,6 +132,14 @@ func (c *Client) Workspace(ctx context.Context) (model.WorkspaceState, error) {
 	return state, err
 }
 
+// RenderAsset previews the saved asset through the same read-only service used
+// by the Build editor. The server owns the decoded path and preview run ID.
+func (c *Client) RenderAsset(ctx context.Context, assetID string, request service.AssetRenderRequest) (service.AssetRenderResult, error) {
+	var result service.AssetRenderResult
+	err := c.postJSON(ctx, "/assets/"+url.PathEscape(assetID)+"/render", request, &result)
+	return result, err
+}
+
 // MaterializePipelineStream runs a whole pipeline through the server,
 // forwarding output chunks as they stream.
 func (c *Client) MaterializePipelineStream(ctx context.Context, pipelineID string, query url.Values, onChunk func(string)) (StreamDone, error) {
@@ -163,6 +173,43 @@ func (c *Client) getJSON(ctx context.Context, path string, out any) error {
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
 		return fmt.Errorf("GET %s: %s: %s", path, resp.Status, strings.TrimSpace(string(body)))
+	}
+	return json.NewDecoder(resp.Body).Decode(out)
+}
+
+func (c *Client) postJSON(ctx context.Context, path string, input, out any) error {
+	body, err := json.Marshal(input)
+	if err != nil {
+		return err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.APIBase+path, bytes.NewReader(body))
+	if err != nil {
+		return err
+	}
+	c.authorize(req)
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "application/json")
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+		var envelope struct {
+			Error *struct {
+				Code    string `json:"code"`
+				Message string `json:"message"`
+			} `json:"error"`
+		}
+		if json.Unmarshal(body, &envelope) == nil && envelope.Error != nil && strings.TrimSpace(envelope.Error.Message) != "" {
+			if strings.TrimSpace(envelope.Error.Code) != "" {
+				return fmt.Errorf("POST %s: %s: %s: %s", path, resp.Status, envelope.Error.Code, envelope.Error.Message)
+			}
+			return fmt.Errorf("POST %s: %s: %s", path, resp.Status, envelope.Error.Message)
+		}
+		return fmt.Errorf("POST %s: %s: %s", path, resp.Status, strings.TrimSpace(string(body)))
 	}
 	return json.NewDecoder(resp.Body).Decode(out)
 }

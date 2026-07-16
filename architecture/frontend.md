@@ -101,19 +101,28 @@ not underscore-flattened route hacks.
   asset execution plus Deploy await every mounted editor's pending/in-flight
   save, so the saved source named by the action includes visible Monaco edits.
   Type-check does the same; transport/save failures remain visible in the bell
-  and results panel without erasing the last successful report. SQL assets and
-  query sensors also expose a read-only `Render` action after the same save
-  barrier. Its result tab separates compiled query from execution SQL, labels
-  render fidelity and redaction, and always identifies the saved source,
+  and results panel without erasing the last successful report. Every supported
+  SQL, Python, seed, Load, API, ingestr, and sensor asset also exposes a
+  read-only `Render` action after the same save barrier. The result tab shows
+  exact compiled/execution SQL where available, semantic JSON operations for
+  non-SQL work, or a runtime-only description for Python. It labels every
+  stage's fidelity and redaction and always identifies the saved source,
   environment, interval, and `Preview — not executed` status.
   Build freshness retains only the last successful response for the exact
-  environment/window selection. A transport failure disables the action as
-  **Freshness unavailable** instead of replacing unknown state with **Fresh**.
+  environment/window selection. Requests are tracked per pipeline; a matching
+  SSE freshness event authoritatively resolves only that pipeline and cannot be
+  overwritten by an older HTTP response. A transport failure disables the
+  action as **Freshness unavailable** instead of replacing unknown state with
+  **Fresh**, while a later matching event clears the recovered pipeline's
+  error without hiding unresolved sibling pipelines.
   Structured `pipeline_run_active` conflicts retain the backend's active run ID
   and link Build output, schedule actions, and rerun errors to that run. Build
   materialization output and asset materialization status ignore late scheduler
   events after `run.finished`, so a very fast worker cannot turn those finished
-  results back into queued.
+  results back into queued. Terminal events are remembered until the trigger
+  response associates the run ID with the Build result, then reconciled with
+  the canonical stored log; this also covers runs that finish before the trigger
+  response arrives.
 - [components/app/asset-editor.tsx](../web/components/app/asset-editor.tsx): the
   Monaco editor plus guided metadata cards
   ([asset-guided-cards.tsx](../web/components/app/asset-guided-cards.tsx)); the
@@ -200,11 +209,13 @@ than hand-rolled `div` shells.
   and translates SQL completions, diagnostics, navigation, and highlighting
   back into the Python Monaco model.
 - [use-asset-results.ts](../web/hooks/use-asset-results.ts): inspect and materialize
-  flows, including API-asset full refresh and scheduler-run links.
+  flows, including API-asset full refresh, scheduler-run links, and terminal
+  event/trigger-response correlation for very fast runs.
 - [use-app-asset-materialization-status.ts](../web/hooks/use-app-asset-materialization-status.ts):
   freshness / materialization enrichment with a post-terminal event guard.
-- [use-pipeline-staleness.ts](../web/hooks/use-pipeline-staleness.ts),
-  [use-pipeline-scheduler.ts](../web/hooks/use-pipeline-scheduler.ts),
+- [use-pipeline-staleness.ts](../web/hooks/use-pipeline-staleness.ts): per-pipeline
+  request state and selection-matched SSE/HTTP ordering.
+- [use-pipeline-scheduler.ts](../web/hooks/use-pipeline-scheduler.ts),
   [use-pipeline-deploy.ts](../web/hooks/use-pipeline-deploy.ts),
   [use-source-control.ts](../web/hooks/use-source-control.ts): run / schedule /
   deploy / VCS surfaces.

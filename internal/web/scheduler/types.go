@@ -219,11 +219,12 @@ type Context interface {
 }
 
 type RunRequest struct {
-	RunID       string
-	PipelineID  string
-	Environment string
-	Start       string
-	End         string
+	RunID        string
+	PipelineID   string
+	PipelineUUID string
+	Environment  string
+	Start        string
+	End          string
 	// Scheduled is derived from the persisted server-owned run origin. It must
 	// not be inferred from RunID because queued manual runs also have one.
 	Scheduled bool

@@ -11,6 +11,8 @@ main.go → cmd.Root() → urfave/cli commands (cmd/)
   standalone  same server + native window via renart-gui helper  (IDE)
   run         run a pipeline or asset; delegates to a live
               server, else executes in-process                   (Pipeline)
+  render      preview one saved asset without execution; delegates
+              to a live server, else renders read-only in-process (Pipeline)
   ls          list pipelines/assets                              (Pipeline)
   deploy      snapshot a pipeline for scheduled execution        (Pipeline)
   type-check  render + type-check a pipeline's assets            (Pipeline)
@@ -62,14 +64,28 @@ content).
 (`~/.config/renart/projects.json`; `RENART_PROJECTS_REGISTRY` overrides for
 tests) plus one lazily-opened per-project runtime each, mounted at
 `/api/projects/{id}/*` (`cmd/projects.go`); the argv root stays aliased at the
-unprefixed `/api/*`. Each non-headless runtime acquires that workspace's
-`.renart/server.lock` before opening its state database. One process may hold
-many such leases, but another `web` or `standalone` process cannot open a
-workspace already mounted by the first. A bounded health check of the existing
-`.renart/server.json` both supplies the owning PID/URL and detects live Renart
-versions from before the lock existed. The OS releases a lease on graceful
-close or process exit; the persistent unlocked file is inert. Embedded CLI
-execution does not take this long-lived-server lease.
+unprefixed `/api/*`. Before opening a workspace state database, every
+non-headless runtime acquires an authoritative per-user lease outside the Git
+worktree, keyed by the canonical (absolute, symlink-resolved) workspace root.
+The default location is under `XDG_RUNTIME_DIR`, falling back to the user cache;
+`RENART_WORKSPACE_LOCK_DIR` overrides it. Current processes also acquire the
+legacy `.renart/server.lock` as a compatibility lock for older versions and
+users with different runtime directories. One process may hold many workspace
+leases, but another `web` or `standalone` process cannot open a workspace
+already mounted by the first. Keeping the primary lease outside the worktree
+means `git clean` cannot unlink the authoritative lock while its process is
+running. A bounded health check of `.renart/server.json` supplies the owning
+PID/URL and detects live Renart versions from before either lock existed. The OS
+releases both leases on graceful close or process exit; persistent unlocked
+files are inert. Embedded CLI execution does not take this long-lived-server
+lease.
+
+At startup, Renart adds its state database, discovery file, and compatibility
+locks to the repository-local `.git/info/exclude` rather than modifying the
+user's tracked `.gitignore`. Source-control status also hides only untracked
+runtime artifacts, so an accidentally tracked runtime file remains visible.
+Failure to update Git metadata is a warning and does not prevent the workspace
+from opening; the out-of-worktree lease remains authoritative.
 `POST /api/projects` scaffolds a project from a template
 (`service.ScaffoldProject`: `demo:chess` — native `type: api` Chess.com
 profiles and games feeding SQL performance and opening analysis,
@@ -91,17 +107,20 @@ contains ingestr assets.
 **CLI ↔ server (delegate-or-embed).** Pipeline commands resolve their
 workspace git-style (walk up to `.bruin.yml` → `.renart` → repo root;
 `cmd/workspace.go`) and their target as a pipeline name, asset name, or
-path. `renart run` then delegates to a live server when one has the
+path. `renart run` and `renart render` delegate to a live server when one has the
 workspace open: servers write `.renart/server.json` (pid, project-mount API
 base, session token) into every open project root — removed on graceful
 shutdown; `web`/`standalone` trap SIGINT/SIGTERM for exactly this — and
 expose `GET /api/health`. `internal/clientapi` reads the file, health-checks
 it fast (a stale file falls back to embedded mode in under a second,
-comparing symlink-resolved roots), and streams the same materialize SSE
-endpoints the UI uses, authenticating with the token
+comparing symlink-resolved roots), and authenticates with the token
 (`SameOriginGuardWithToken`; `RENART_SERVER`/`RENART_TOKEN` pin a server,
-`--local` forces embedded). Delegation means one process owns all
-SQLite writes and the UI's staleness/run history updates live. DuckDB access
+`--local` forces in-process behavior). A delegated run streams the same
+materialize SSE endpoints the UI uses, so one process owns all SQLite writes
+and the UI's staleness/run history updates live. A delegated render calls the
+same read-only asset-render endpoint as the Build editor. Without a live server,
+`renart render` invokes the shared read-only service directly; it does not boot
+a server, scheduler, or state database. DuckDB access
 is additionally serialized per canonical database file as described in §4,
 because one server can run multiple pipelines and child processes concurrently.
 For an asset target, `--refresh-upstreams` first invokes the server-side stale
@@ -163,15 +182,29 @@ Query sensors compile `parameters.query`, never their surrounding YAML, and
 show that exact submitted condition query as execution SQL; polling mode,
 interval, and timeout remain described runtime controls rather than fabricated
 statements. A missing or blank query is an asset-scoped structured error.
+Non-SQL assets expose structured JSON operations at their honest fidelity:
+seeds describe the Sling load (including enforced casts), Load assets describe
+the Sling copy, API assets separate HTTP extraction shape from the Sling JSONL
+write, table/S3 sensors describe their condition and runtime controls, and
+ingestr assets describe their copy. Python exposes only the saved entrypoint and
+declared materialization as `runtime_only`, because user code and SDK calls
+determine its actual operations. These semantic stages contain named
+connections but never resolved connection URIs or credentials.
 MotherDuck uses the DuckDB dialect and exact DuckDB/MotherDuck materializer
 path. DuckDB/MotherDuck hook templates are resolved with the selected asset
 context before materializer construction by the same request-local helper used
 for direct asset and pipeline execution. Hooks are still folded into the
 single execution-SQL blob rather than returned as separate stages.
 Known inline credentials tagged by Bruin are masked before any stage or issue
-crosses the HTTP boundary, with explicit redaction metadata. The preview uses
-the read-only config loader, so rendering cannot create `.bruin.yml`, edit
-`.gitignore`, or otherwise mutate the workspace.
+crosses the HTTP boundary, with explicit redaction metadata. Semantic URL
+previews also redact userinfo and credential-like query parameters, and API
+previews expose header names/auth shape without values. The preview uses the
+read-only config loader, so rendering cannot create `.bruin.yml`, edit
+`.gitignore`, or otherwise mutate the workspace. The visible `renart render`
+command and Build action both use this same service contract. Render computes
+the canonical source manifest by streaming each file through the content hash;
+unlike Deploy, it never retains source blobs in memory, which keeps pipelines
+with large seed files bounded.
 
 Before either a pipeline or a single asset starts, the direct runner validates
 declared dependencies across the whole parsed pipeline. Non-URI dependencies
@@ -210,7 +243,11 @@ execution. Manual/API admission inserts the run, v1 spec, run-ID-only River
 job, run/job link, and namespaced path plus stable-UUID slot aliases in one
 SQLite transaction via `InsertTx`. Stored specs override parallel legacy job
 arguments; unknown versions, unknown fields, and row/spec mismatches fail the
-run closed. Pre-upgrade jobs without a spec retain one strict upgrade decoder.
+run closed. The stable UUID in the private spec is independently checked against
+the durable UUID slot before execution, then threaded through scheduler
+execution and snapshot resolution; deployment lookup never has to rediscover
+that identity from a mutable pipeline path. Pre-upgrade jobs without a spec
+retain one strict upgrade decoder.
 
 For new scheduler-backed admissions, the durable slot permits one
 queued/running pipeline-scope run per logical pipeline across environments and
@@ -219,10 +256,13 @@ Manual races return `409 pipeline_run_active` with the active run ID.
 Periodic/catch-up jobs remain compatibility due signals: the worker derives
 the same v1 spec when it claims the slot, and snoozes the original signal for
 30 seconds while another run holds it. This preserves the exact interval but
-is not yet a durable, user-visible occurrence ledger. Migration preflight
-reports duplicate legacy active rows without rewriting history and backfills
-only path aliases, because legacy run rows did not persist a pipeline UUID.
-Those aliases bridge the same path but cannot add rename safety retroactively.
+is not yet a durable, user-visible occurrence ledger. Migration reconciliation
+deterministically keeps one queued-first legacy active row per pipeline path,
+marks any duplicates failed, closes their open steps, and records the recovery
+reason before creating the unique slot table. This keeps every conflicting row
+auditable instead of preventing startup. The surviving legacy row receives only
+a path alias because old run rows did not persist a pipeline UUID; it cannot gain
+rename safety retroactively.
 
 Reconciliation propagates persistence and catch-up enqueue failures instead of
 leaving an apparently active row unapplied. Startup fails before River workers

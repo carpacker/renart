@@ -2,6 +2,8 @@ package cmd
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"os"
@@ -17,12 +19,13 @@ import (
 var errWorkspaceAlreadyServed = errors.New("workspace is already served by another Renart process")
 
 // workspaceServerLease prevents two long-lived Renart runtimes from opening
-// the same workspace. The lease is deliberately per workspace: one web
-// process may hold several leases for the projects it opens lazily.
+// the same workspace. The lease is deliberately per workspace so independent
+// server processes can still serve different repositories at the same time.
 type workspaceServerLease struct {
-	lock     *flock.Flock
-	closeErr error
-	close    sync.Once
+	primary       *flock.Flock
+	compatibility *flock.Flock
+	closeErr      error
+	close         sync.Once
 }
 
 // acquireRuntimeWorkspaceLease leaves embedded CLI execution alone. Embedded
@@ -35,34 +38,98 @@ func acquireRuntimeWorkspaceLease(ctx context.Context, cfg serverConfig) (*works
 }
 
 func acquireWorkspaceServerLease(ctx context.Context, workspaceRoot string) (*workspaceServerLease, error) {
-	root, err := filepath.Abs(workspaceRoot)
+	root, err := canonicalWorkspaceRoot(workspaceRoot)
 	if err != nil {
 		return nil, fmt.Errorf("resolve workspace server lock root: %w", err)
 	}
+	primaryPath, err := workspaceServerLeasePath(root)
+	if err != nil {
+		return nil, err
+	}
+	if err := os.MkdirAll(filepath.Dir(primaryPath), 0o700); err != nil {
+		return nil, fmt.Errorf("create workspace lease directory: %w", err)
+	}
+
+	primary := flock.New(primaryPath)
+	locked, err := primary.TryLock()
+	if err != nil {
+		return nil, fmt.Errorf("acquire workspace server lease %q: %w", primaryPath, err)
+	}
+	compatibilityPath := filepath.Join(root, ".renart", "server.lock")
+	if !locked {
+		return nil, workspaceAlreadyServedError(root, primaryPath, compatibilityPath, discoverLiveWorkspaceServer(ctx, root))
+	}
+
+	lease := &workspaceServerLease{primary: primary}
 	stateDir := filepath.Join(root, ".renart")
 	if err := os.MkdirAll(stateDir, 0o755); err != nil {
+		_ = lease.Close()
 		return nil, fmt.Errorf("create workspace state directory for server lock: %w", err)
 	}
 
-	lockPath := filepath.Join(stateDir, "server.lock")
-	fileLock := flock.New(lockPath)
-	locked, err := fileLock.TryLock()
+	// Keep taking the original in-worktree lock so current servers still
+	// coordinate with older Renart versions and with users whose per-user
+	// runtime directories differ. The primary lease above is authoritative for
+	// current versions: unlike this compatibility file, `git clean` cannot
+	// unlink it while a server is running.
+	compatibility := flock.New(compatibilityPath)
+	locked, err = compatibility.TryLock()
 	if err != nil {
-		return nil, fmt.Errorf("acquire workspace server lock %q: %w", lockPath, err)
+		_ = lease.Close()
+		return nil, fmt.Errorf("acquire compatibility workspace server lock %q: %w", compatibilityPath, err)
 	}
 	if !locked {
-		return nil, workspaceAlreadyServedError(root, lockPath, discoverLiveWorkspaceServer(ctx, root))
+		_ = lease.Close()
+		return nil, workspaceAlreadyServedError(root, primaryPath, compatibilityPath, discoverLiveWorkspaceServer(ctx, root))
 	}
+	lease.compatibility = compatibility
 
-	lease := &workspaceServerLease{lock: fileLock}
 	// server.json predates the lease. Checking it after acquiring the lock
 	// catches a live older Renart process that does not know about server.lock;
 	// stale discovery files are ignored by Discover's bounded health check.
 	if existing := discoverLiveWorkspaceServer(ctx, root); existing != nil {
 		_ = lease.Close()
-		return nil, workspaceAlreadyServedError(root, lockPath, existing)
+		return nil, workspaceAlreadyServedError(root, primaryPath, compatibilityPath, existing)
 	}
 	return lease, nil
+}
+
+func canonicalWorkspaceRoot(workspaceRoot string) (string, error) {
+	root, err := filepath.Abs(workspaceRoot)
+	if err != nil {
+		return "", err
+	}
+	root, err = filepath.EvalSymlinks(root)
+	if err != nil {
+		return "", err
+	}
+	return filepath.Clean(root), nil
+}
+
+func workspaceServerLeasePath(canonicalRoot string) (string, error) {
+	base, err := workspaceServerLeaseDir()
+	if err != nil {
+		return "", err
+	}
+	digest := sha256.Sum256([]byte(filepath.ToSlash(canonicalRoot)))
+	return filepath.Join(base, hex.EncodeToString(digest[:])+".lock"), nil
+}
+
+func workspaceServerLeaseDir() (string, error) {
+	if configured := strings.TrimSpace(os.Getenv("RENART_WORKSPACE_LOCK_DIR")); configured != "" {
+		if !filepath.IsAbs(configured) {
+			return "", fmt.Errorf("RENART_WORKSPACE_LOCK_DIR must be an absolute path")
+		}
+		return filepath.Clean(configured), nil
+	}
+	if runtimeDir := strings.TrimSpace(os.Getenv("XDG_RUNTIME_DIR")); runtimeDir != "" && filepath.IsAbs(runtimeDir) {
+		return filepath.Join(runtimeDir, "renart", "workspace-leases"), nil
+	}
+	cacheDir, err := os.UserCacheDir()
+	if err != nil {
+		return "", fmt.Errorf("resolve workspace lease directory: %w", err)
+	}
+	return filepath.Join(cacheDir, "renart", "workspace-leases"), nil
 }
 
 func discoverLiveWorkspaceServer(ctx context.Context, workspaceRoot string) *clientapi.ServerFile {
@@ -77,7 +144,7 @@ func discoverLiveWorkspaceServer(ctx context.Context, workspaceRoot string) *cli
 	return info
 }
 
-func workspaceAlreadyServedError(workspaceRoot, lockPath string, existing *clientapi.ServerFile) error {
+func workspaceAlreadyServedError(workspaceRoot, leasePath, compatibilityPath string, existing *clientapi.ServerFile) error {
 	details := make([]string, 0, 3)
 	if existing != nil {
 		if existing.PID > 0 {
@@ -96,20 +163,28 @@ func workspaceAlreadyServedError(workspaceRoot, lockPath string, existing *clien
 		owner += " (" + strings.Join(details, ", ") + ")"
 	}
 	return fmt.Errorf(
-		"%w: %s already has workspace %q open; use that server or stop it before starting another one (lock %q; a leftover unlocked file is harmless)",
+		"%w: %s already has workspace %q open; use that server or stop it before starting another one (lease %q; compatibility lock %q; leftover unlocked files are harmless)",
 		errWorkspaceAlreadyServed,
 		owner,
 		workspaceRoot,
-		lockPath,
+		leasePath,
+		compatibilityPath,
 	)
 }
 
 func (l *workspaceServerLease) Close() error {
-	if l == nil || l.lock == nil {
+	if l == nil {
 		return nil
 	}
 	l.close.Do(func() {
-		l.closeErr = l.lock.Unlock()
+		var closeErrors []error
+		if l.compatibility != nil {
+			closeErrors = append(closeErrors, l.compatibility.Unlock())
+		}
+		if l.primary != nil {
+			closeErrors = append(closeErrors, l.primary.Unlock())
+		}
+		l.closeErr = errors.Join(closeErrors...)
 	})
 	return l.closeErr
 }

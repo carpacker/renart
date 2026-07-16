@@ -726,12 +726,17 @@ func (s *webServer) parsePipelineDir(ctx context.Context, pipelineDir string) (*
 // resolveRunSnapshot materializes an already-resolved exact deployment. It
 // never chooses "latest" and never falls back to the working tree.
 func (s *webServer) resolveRunSnapshot(ctx context.Context, spec *service.PipelineRunSpec, scheduled bool, onLog func(string)) (func(), error) {
-	pipelineUUID := ""
+	pipelineUUID := strings.TrimSpace(spec.PipelineUUID)
 	if strings.TrimSpace(spec.SnapshotVersionID) != "" {
-		var ok bool
-		pipelineUUID, ok = s.findPipelineUUIDByID(spec.PipelineID)
-		if !ok {
-			return func() {}, fmt.Errorf("pipeline %s is not in the current workspace", spec.PipelineID)
+		// New scheduler-backed runs carry the stable UUID in their durable
+		// RunSpec. Retain path lookup only for rolling compatibility with jobs
+		// admitted before that field was threaded through execution.
+		if pipelineUUID == "" {
+			var ok bool
+			pipelineUUID, ok = s.findPipelineUUIDByID(spec.PipelineID)
+			if !ok {
+				return func() {}, fmt.Errorf("pipeline %s is not in the current workspace", spec.PipelineID)
+			}
 		}
 	}
 	return materializeExactRunSnapshot(ctx, s.snapshotStore, pipelineUUID, s.resolveConfigFilePath(), scheduled, spec, onLog)

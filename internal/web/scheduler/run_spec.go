@@ -277,6 +277,20 @@ func validateRunSpecBinding(run PipelineRun, spec runSpecV1) error {
 	return nil
 }
 
+// validateRunSpecAdmissionBinding compares the stable identity while it is
+// still present on the in-memory admission request. PipelineUUID is private
+// RunSpec provenance and is not persisted in the public run row, so queued-run
+// reloads validate it independently against the durable UUID slot instead.
+func validateRunSpecAdmissionBinding(run PipelineRun, spec runSpecV1) error {
+	if err := validateRunSpecBinding(run, spec); err != nil {
+		return err
+	}
+	if strings.TrimSpace(spec.Pipeline.UUID) != strings.TrimSpace(run.PipelineUUID) {
+		return errors.New("run spec stable pipeline UUID does not match queued run")
+	}
+	return nil
+}
+
 func equalRunTime(left, right *time.Time) bool {
 	if left == nil || right == nil {
 		return left == nil && right == nil

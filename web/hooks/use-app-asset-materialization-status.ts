@@ -34,6 +34,18 @@ type StatusByKey = Record<string, AssetStatusEntry>;
 
 type RunContextById = Record<string, { pipelineId: string; environment: string }>;
 
+const maxRememberedFinishedRuns = 128;
+
+function rememberFinishedRun(cache: Set<string>, runId: string) {
+  cache.delete(runId);
+  cache.add(runId);
+  while (cache.size > maxRememberedFinishedRuns) {
+    const oldestRunId = cache.values().next().value;
+    if (!oldestRunId) break;
+    cache.delete(oldestRunId);
+  }
+}
+
 function statusForStep(
   status: PipelineRunStep["status"],
 ): Exclude<AppAssetMaterializationStatus, "unknown"> {
@@ -175,11 +187,15 @@ export function useAppAssetMaterializationStatus(assets: AppMaterializationAsset
       const contexts: RunContextById = {};
       for (const detail of details) {
         if (!detail || detail.status !== "ok") continue;
+        // A running-runs request can have captured this row immediately before
+        // its finish event. Do not let the late detail resurrect pending steps.
+        if (finishedRunIds.current.has(detail.run.id)) continue;
         contexts[detail.run.id] = {
           pipelineId: detail.run.pipeline_id,
           environment: detail.run.environment,
         };
         setStatusByKey((current) => {
+          if (finishedRunIds.current.has(detail.run.id)) return current;
           let next = current;
           for (const step of detail.steps ?? []) {
             const keys = keysForStepAsset(step.asset, assets, detail.run.pipeline_id);
@@ -206,7 +222,7 @@ export function useAppAssetMaterializationStatus(assets: AppMaterializationAsset
         ? schedulerRunEvent.run.run_id
         : schedulerRunEvent.run.id;
     if (schedulerRunEvent.type === "run.finished") {
-      finishedRunIds.current.add(eventRunId);
+      rememberFinishedRun(finishedRunIds.current, eventRunId);
     } else if (finishedRunIds.current.has(eventRunId)) {
       return;
     }

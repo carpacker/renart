@@ -78,7 +78,7 @@ export function AssetRenderView({
     );
   }
   if (!result) {
-    return <RenderCentered message="Render an asset to preview its saved execution SQL here." />;
+    return <RenderCentered message="Render an asset to preview its saved operations here." />;
   }
 
   const context = result.provenance.context;
@@ -124,7 +124,7 @@ export function AssetRenderView({
             </>
           ) : null}
           {result.redactions.length > 0 ? (
-            <Badge variant="muted" size="xs" title="Known connection credentials were masked">
+            <Badge variant="muted" size="xs" title="Known credential values were masked or omitted">
               <ShieldCheck className="size-3" data-icon="inline-start" /> Credentials redacted
             </Badge>
           ) : null}
@@ -189,7 +189,7 @@ export function AssetRenderView({
 
       <div className="min-h-0 flex-1">
         {stage?.content ? (
-          <ReadOnlyRenderedSQL
+          <ReadOnlyRenderedOperation
             content={stage.content}
             language={stage.language || "sql"}
             modelKey={`${result.asset.id ?? result.asset.name}:${result.provenance.source.merkle_root}:${selectedStage}`}
@@ -204,7 +204,7 @@ export function AssetRenderView({
   );
 }
 
-function ReadOnlyRenderedSQL({
+function ReadOnlyRenderedOperation({
   content,
   language,
   modelKey,
@@ -215,12 +215,13 @@ function ReadOnlyRenderedSQL({
 }) {
   const { monacoTheme } = useWorkspaceTheme();
   const beforeMount = useCallback((monaco: Monaco) => defineBruinMonacoThemes(monaco), []);
+  const extension = language === "sql" ? "sql" : language === "json" ? "json" : "txt";
 
   return (
-    <Suspense fallback={<RenderCentered loading message="Loading SQL preview…" />}>
+    <Suspense fallback={<RenderCentered loading message="Loading preview…" />}>
       <MonacoEditor
         language={language}
-        path={`inmemory://renart/render/${encodeURIComponent(modelKey)}.${language === "sql" ? "sql" : "txt"}`}
+        path={`inmemory://renart/render/${encodeURIComponent(modelKey)}.${extension}`}
         value={content}
         theme={monacoTheme}
         beforeMount={beforeMount}

@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 	"time"
 
@@ -18,6 +19,7 @@ import (
 )
 
 func TestWorkspaceServerLeaseRejectsSecondRuntimeWithOwnerDetails(t *testing.T) {
+	isolateWorkspaceServerLeases(t)
 	root := t.TempDir()
 	first, err := acquireWorkspaceServerLease(t.Context(), root)
 	require.NoError(t, err)
@@ -41,9 +43,13 @@ func TestWorkspaceServerLeaseRejectsSecondRuntimeWithOwnerDetails(t *testing.T) 
 	assert.ErrorContains(t, err, health.URL)
 	assert.ErrorContains(t, err, root)
 	assert.ErrorContains(t, err, filepath.Join(root, ".renart", "server.lock"))
+	primaryPath, pathErr := workspaceServerLeasePath(root)
+	require.NoError(t, pathErr)
+	assert.ErrorContains(t, err, primaryPath)
 }
 
 func TestWorkspaceServerLeaseRejectsLivePreLockServerAndReleasesLease(t *testing.T) {
+	isolateWorkspaceServerLeases(t)
 	root := t.TempDir()
 	health := newWorkspaceHealthServer(t, root)
 	require.NoError(t, clientapi.WriteServerFile(root, clientapi.ServerFile{
@@ -66,10 +72,15 @@ func TestWorkspaceServerLeaseRejectsLivePreLockServerAndReleasesLease(t *testing
 }
 
 func TestWorkspaceServerLeaseAllowsUnlockedPersistentFile(t *testing.T) {
+	isolateWorkspaceServerLeases(t)
 	root := t.TempDir()
 	lockPath := filepath.Join(root, ".renart", "server.lock")
 	require.NoError(t, os.MkdirAll(filepath.Dir(lockPath), 0o755))
 	require.NoError(t, os.WriteFile(lockPath, []byte("left by an exited process\n"), 0o600))
+	primaryPath, err := workspaceServerLeasePath(root)
+	require.NoError(t, err)
+	require.NoError(t, os.MkdirAll(filepath.Dir(primaryPath), 0o700))
+	require.NoError(t, os.WriteFile(primaryPath, []byte("left by an exited process\n"), 0o600))
 
 	lease, err := acquireWorkspaceServerLease(t.Context(), root)
 	require.NoError(t, err)
@@ -79,16 +90,18 @@ func TestWorkspaceServerLeaseAllowsUnlockedPersistentFile(t *testing.T) {
 }
 
 func TestWorkspaceServerLeaseAllowsDifferentWorkspaces(t *testing.T) {
+	isolateWorkspaceServerLeases(t)
 	first, err := acquireWorkspaceServerLease(t.Context(), t.TempDir())
 	require.NoError(t, err)
 	defer first.Close()
 
 	second, err := acquireWorkspaceServerLease(t.Context(), t.TempDir())
-	require.NoError(t, err, "one Renart process may own multiple workspace runtimes")
+	require.NoError(t, err, "different Renart servers may own different workspace runtimes")
 	defer second.Close()
 }
 
 func TestRuntimeWorkspaceLeaseSkipsEmbeddedCLI(t *testing.T) {
+	isolateWorkspaceServerLeases(t)
 	root := t.TempDir()
 	held, err := acquireWorkspaceServerLease(t.Context(), root)
 	require.NoError(t, err)
@@ -103,6 +116,7 @@ func TestRuntimeWorkspaceLeaseSkipsEmbeddedCLI(t *testing.T) {
 }
 
 func TestNewWebServerChecksWorkspaceLeaseBeforeStateDatabase(t *testing.T) {
+	isolateWorkspaceServerLeases(t)
 	root := t.TempDir()
 	held, err := acquireWorkspaceServerLease(t.Context(), root)
 	require.NoError(t, err)
@@ -124,6 +138,49 @@ func TestNewWebServerChecksWorkspaceLeaseBeforeStateDatabase(t *testing.T) {
 	require.Error(t, err)
 	assert.True(t, errors.Is(err, errWorkspaceAlreadyServed))
 	assert.NotContains(t, err.Error(), "integrity check", "the state database must not be opened")
+}
+
+func TestWorkspaceServerLeaseSurvivesCompatibilityFileRemoval(t *testing.T) {
+	isolateWorkspaceServerLeases(t)
+	root := t.TempDir()
+	first, err := acquireWorkspaceServerLease(t.Context(), root)
+	require.NoError(t, err)
+	defer first.Close()
+
+	// Simulate `git clean` unlinking the old in-worktree lock and discovery
+	// record. The primary lease lives outside the worktree and must still reject
+	// another current Renart process.
+	require.NoError(t, os.Remove(filepath.Join(root, ".renart", "server.lock")))
+	clientapi.RemoveServerFile(root)
+
+	second, err := acquireWorkspaceServerLease(t.Context(), root)
+	require.Nil(t, second)
+	require.ErrorIs(t, err, errWorkspaceAlreadyServed)
+}
+
+func TestWorkspaceServerLeaseCanonicalizesSymlinkedRoots(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("creating symlinks requires privileges on Windows")
+	}
+	isolateWorkspaceServerLeases(t)
+	parent := t.TempDir()
+	root := filepath.Join(parent, "workspace")
+	require.NoError(t, os.Mkdir(root, 0o755))
+	alias := filepath.Join(parent, "workspace-alias")
+	require.NoError(t, os.Symlink(root, alias))
+
+	first, err := acquireWorkspaceServerLease(t.Context(), root)
+	require.NoError(t, err)
+	defer first.Close()
+
+	second, err := acquireWorkspaceServerLease(t.Context(), alias)
+	require.Nil(t, second)
+	require.ErrorIs(t, err, errWorkspaceAlreadyServed)
+}
+
+func isolateWorkspaceServerLeases(t *testing.T) {
+	t.Helper()
+	t.Setenv("RENART_WORKSPACE_LOCK_DIR", filepath.Join(t.TempDir(), "workspace-leases"))
 }
 
 func newWorkspaceHealthServer(t *testing.T, root string) *httptest.Server {

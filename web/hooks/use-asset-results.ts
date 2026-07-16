@@ -29,9 +29,51 @@ import { buildStalePipelineStream } from "@/lib/api-staleness";
 import type { StreamAssetEvent } from "@/lib/api-streams";
 import { MaterializeScope, labelForMaterializeScope } from "@/lib/materialize-scope";
 import { awaitWorkspaceSaves } from "@/lib/workspace-save-barrier";
-import { AssetInspectResponse, WebAsset } from "@/lib/types";
+import { AssetInspectResponse, type PipelineRun, WebAsset } from "@/lib/types";
 
 let nextMaterializeHistoryId = 0;
+const maxRememberedTerminalSchedulerRuns = 128;
+
+type TerminalSchedulerRun = {
+  runId: string;
+  status: "ok" | "error";
+  error: string;
+  output?: string;
+};
+
+function terminalSchedulerRun(run: PipelineRun, output?: string): TerminalSchedulerRun | null {
+  if (run.status !== "success" && run.status !== "failed" && run.status !== "cancelled") {
+    return null;
+  }
+  return {
+    runId: run.id,
+    status: run.status === "success" ? "ok" : "error",
+    error: run.error ?? "",
+    output,
+  };
+}
+
+function rememberTerminalSchedulerRun(
+  cache: Map<string, TerminalSchedulerRun>,
+  terminal: TerminalSchedulerRun,
+) {
+  const existing = cache.get(terminal.runId);
+  const remembered = {
+    ...existing,
+    ...terminal,
+    output: terminal.output ?? existing?.output,
+  };
+  // Refresh insertion order so the bounded cache retains recently observed
+  // terminal runs, including runs reconciled by a canonical HTTP response.
+  cache.delete(terminal.runId);
+  cache.set(terminal.runId, remembered);
+  while (cache.size > maxRememberedTerminalSchedulerRuns) {
+    const oldestRunId = cache.keys().next().value;
+    if (!oldestRunId) break;
+    cache.delete(oldestRunId);
+  }
+  return remembered;
+}
 
 function createMaterializeHistoryId() {
   nextMaterializeHistoryId += 1;
@@ -142,7 +184,7 @@ export function useAssetResults() {
   const selectedAssetId = useAtomValue(resolvedSelectedAssetAtom);
   const selectedExecutionTimeWindow = useAtomValue(selectedExecutionTimeWindowAtom);
   const schedulerRunEvent = useAtomValue(schedulerRunEventAtom);
-  const finishedSchedulerRunIds = useRef(new Set<string>());
+  const terminalSchedulerRuns = useRef(new Map<string, TerminalSchedulerRun>());
   const inspectAssets = useMemo(() => (asset ? [asset] : []), [asset]);
   const {
     inspectAssetById,
@@ -238,6 +280,50 @@ export function useAssetResults() {
     });
   };
 
+  const applyTerminalSchedulerRun = useCallback(
+    (terminal: TerminalSchedulerRun) => {
+      setResults((previous) => {
+        let matched = false;
+        const materializeHistory = previous.materializeHistory.map((entry) => {
+          if (entry.runId !== terminal.runId) return entry;
+          matched = true;
+          return {
+            ...entry,
+            ...(terminal.output === undefined ? {} : { output: terminal.output }),
+            status: terminal.status,
+            error: terminal.error,
+            loading: false,
+            updatedAt: Date.now(),
+          };
+        });
+        return matched ? { ...previous, materializeHistory } : previous;
+      });
+    },
+    [setResults],
+  );
+
+  const reconcileTerminalSchedulerRun = useCallback(
+    async (runId: string) => {
+      try {
+        const response = await getRun(runId);
+        if (response.status !== "ok") return;
+        const terminal = terminalSchedulerRun(
+          response.run,
+          (response.logs ?? []).map((log) => log.line).join(""),
+        );
+        // A non-terminal response may have been captured before a finish event.
+        // It must never overwrite newer live output or a terminal cache entry.
+        if (!terminal) return;
+        const remembered = rememberTerminalSchedulerRun(terminalSchedulerRuns.current, terminal);
+        applyTerminalSchedulerRun(remembered);
+      } catch {
+        // Live events still provide truthful terminal status. Association with
+        // a trigger response retries this reconciliation for fast runs.
+      }
+    },
+    [applyTerminalSchedulerRun],
+  );
+
   useEffect(() => {
     if (!schedulerRunEvent) {
       return;
@@ -248,8 +334,18 @@ export function useAssetResults() {
         ? schedulerRunEvent.run.run_id
         : schedulerRunEvent.run.id;
     if (schedulerRunEvent.type === "run.finished") {
-      finishedSchedulerRunIds.current.add(eventRunId);
-    } else if (finishedSchedulerRunIds.current.has(eventRunId)) {
+      const terminal = terminalSchedulerRun(schedulerRunEvent.run);
+      if (terminal) {
+        const remembered = rememberTerminalSchedulerRun(terminalSchedulerRuns.current, terminal);
+        applyTerminalSchedulerRun(remembered);
+        // The event carries terminal state but not the canonical stored log.
+        // Keep the result for later association even when this run finished
+        // before its trigger response gave the history entry a run ID.
+        void reconcileTerminalSchedulerRun(eventRunId);
+      }
+      return;
+    }
+    if (terminalSchedulerRuns.current.has(eventRunId)) {
       return;
     }
 
@@ -260,6 +356,7 @@ export function useAssetResults() {
           if (entry.runId !== schedulerRunEvent.run.run_id) {
             return entry;
           }
+          if (entry.status !== null && !entry.loading) return entry;
           matched = true;
           const line = schedulerRunEvent.run.log.line;
           return {
@@ -280,18 +377,8 @@ export function useAssetResults() {
         if (entry.runId !== schedulerRunEvent.run.id) {
           return entry;
         }
+        if (entry.status !== null && !entry.loading) return entry;
         matched = true;
-        if (schedulerRunEvent.type === "run.finished") {
-          const status: "ok" | "error" =
-            schedulerRunEvent.run.status === "success" ? "ok" : "error";
-          return {
-            ...entry,
-            status,
-            error: schedulerRunEvent.run.error ?? "",
-            loading: false,
-            updatedAt: Date.now(),
-          };
-        }
         return {
           ...entry,
           loading: true,
@@ -308,32 +395,7 @@ export function useAssetResults() {
         materializeHistory: nextHistory,
       };
     });
-
-    if (schedulerRunEvent.type === "run.finished") {
-      // Reconcile with the canonical stored stream at completion. A very fast
-      // run can emit its first chunks before the trigger response gives this
-      // history entry its run ID; fetching once closes that subscription race
-      // and keeps Build output byte-for-byte aligned with the Runs view.
-      void getRun(schedulerRunEvent.run.id)
-        .then((response) => {
-          if (response.status !== "ok") {
-            return;
-          }
-          const output = (response.logs ?? []).map((log) => log.line).join("");
-          setResults((previous) => ({
-            ...previous,
-            materializeHistory: previous.materializeHistory.map((entry) =>
-              entry.runId === schedulerRunEvent.run.id
-                ? { ...entry, output, updatedAt: Date.now() }
-                : entry,
-            ),
-          }));
-        })
-        .catch(() => {
-          // The live stream remains usable if the reconciliation request fails.
-        });
-    }
-  }, [schedulerRunEvent, setResults]);
+  }, [applyTerminalSchedulerRun, reconcileTerminalSchedulerRun, schedulerRunEvent, setResults]);
 
   const runInspectForAsset = useCallback(
     async (assetId: string, contentSnapshot?: string) => {
@@ -596,6 +658,10 @@ export function useAssetResults() {
             sensor_mode: options?.sensorMode,
           });
           const run = response.run;
+          const responseTerminal = terminalSchedulerRun(run);
+          const rememberedTerminal = responseTerminal
+            ? rememberTerminalSchedulerRun(terminalSchedulerRuns.current, responseTerminal)
+            : terminalSchedulerRuns.current.get(run.id);
           upsertMaterializeEntry(entryId, (previous) => ({
             ...(previous ??
               createMaterializeEntry({
@@ -610,12 +676,16 @@ export function useAssetResults() {
                 timeWindow: entryTimeWindow,
               })),
             runId: run.id,
-            output: "",
-            status: null,
-            error: "",
-            loading: true,
+            output: rememberedTerminal?.output ?? previous?.output ?? "",
+            status: rememberedTerminal?.status ?? null,
+            error: rememberedTerminal?.error ?? "",
+            loading: !rememberedTerminal,
             updatedAt: Date.now(),
           }));
+          // Usually this observes a queued/running run and becomes a no-op. For
+          // a run that completed before trigger correlation, it supplies the
+          // final stored logs even if the earlier finish-event request failed.
+          void reconcileTerminalSchedulerRun(run.id);
           return { status: "ok", output: "", error: "", changed_asset_ids: [] };
         }
 
@@ -749,7 +819,13 @@ export function useAssetResults() {
         }
       }
     },
-    [pipeline, selectedEnvironment, selectedExecutionTimeWindow, setChangedAssetIds],
+    [
+      pipeline,
+      reconcileTerminalSchedulerRun,
+      selectedEnvironment,
+      selectedExecutionTimeWindow,
+      setChangedAssetIds,
+    ],
   );
 
   // runBuildStale delegates the whole "build stale assets" operation to the

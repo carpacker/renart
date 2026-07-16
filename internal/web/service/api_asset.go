@@ -962,23 +962,72 @@ func sampleColumnType(value any) string {
 	}
 }
 
-// sensitiveQueryParamNames are masked in displayed URLs regardless of the
-// asset's auth configuration, as defense in depth for credentials placed
-// directly in request.params or the URL instead of the auth block.
+// sensitiveQueryParamNames are normalized (lower-case alphanumeric only) so
+// provider-specific spellings such as X-Amz-Security-Token and
+// X-Goog-Signature cannot bypass redaction with punctuation or casing.
 var sensitiveQueryParamNames = map[string]bool{
-	"access_token":  true,
-	"api_key":       true,
-	"api_token":     true,
-	"apikey":        true,
-	"auth":          true,
-	"authorization": true,
-	"client_secret": true,
-	"key":           true,
-	"password":      true,
-	"secret":        true,
-	"sig":           true,
-	"signature":     true,
-	"token":         true,
+	"accesstoken":    true,
+	"apikey":         true,
+	"apitoken":       true,
+	"auth":           true,
+	"authorization":  true,
+	"clientsecret":   true,
+	"googleaccessid": true,
+	"key":            true,
+	"keypairid":      true,
+	"password":       true,
+	"policy":         true,
+	"secret":         true,
+	"securitytoken":  true,
+	"sig":            true,
+	"signature":      true,
+	"token":          true,
+}
+
+var sensitiveQueryParamSuffixes = []string{
+	"accessid",
+	"accesstoken",
+	"apikey",
+	"apitoken",
+	"clientsecret",
+	"credential",
+	"credentials",
+	"password",
+	"secret",
+	"securitytoken",
+	"signature",
+	"token",
+}
+
+func normalizedQueryParamName(name string) string {
+	return strings.Map(func(r rune) rune {
+		if r >= 'A' && r <= 'Z' {
+			return r + ('a' - 'A')
+		}
+		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') {
+			return r
+		}
+		return -1
+	}, name)
+}
+
+func isSensitiveQueryParamName(name, authQueryParam string) bool {
+	normalized := normalizedQueryParamName(name)
+	if normalized == "" {
+		return false
+	}
+	if configured := normalizedQueryParamName(authQueryParam); configured != "" && normalized == configured {
+		return true
+	}
+	if sensitiveQueryParamNames[normalized] {
+		return true
+	}
+	for _, suffix := range sensitiveQueryParamSuffixes {
+		if strings.HasSuffix(normalized, suffix) {
+			return true
+		}
+	}
+	return false
 }
 
 // redactedURLString renders a URL for run output, error messages, and API
@@ -991,10 +1040,15 @@ func redactedURLString(u *neturl.URL, authQueryParam string) string {
 	if u == nil {
 		return ""
 	}
-	query := u.Query()
+	clone := *u
 	changed := false
+	if clone.User != nil {
+		clone.User = neturl.User("REDACTED")
+		changed = true
+	}
+	query := u.Query()
 	for name := range query {
-		if name == authQueryParam || sensitiveQueryParamNames[strings.ToLower(name)] {
+		if isSensitiveQueryParamName(name, authQueryParam) {
 			query.Set(name, "REDACTED")
 			changed = true
 		}
@@ -1002,7 +1056,6 @@ func redactedURLString(u *neturl.URL, authQueryParam string) string {
 	if !changed {
 		return u.String()
 	}
-	clone := *u
 	clone.RawQuery = query.Encode()
 	return clone.String()
 }

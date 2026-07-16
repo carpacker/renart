@@ -282,6 +282,7 @@ func TestExecutePublishesCanonicalResolvedContext(t *testing.T) {
 			events = append(events, payload)
 		},
 		Runner: func(_ context.Context, req RunRequest, _ func(string)) RunResult {
+			assert.Equal(t, "pipeline-uuid", req.PipelineUUID)
 			require.NotNil(t, req.OnContextResolved)
 			require.NoError(t, req.OnContextResolved(RunExecutionContext{
 				Environment: "effective", WinStart: resolvedStart, WinEnd: resolvedEnd,

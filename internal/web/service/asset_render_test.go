@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -290,7 +291,7 @@ select 1 as id
 	assert.Contains(t, result.Stages[1].Message, "requires the `columns` field")
 }
 
-func TestAssetRenderServiceMarksNonSQLAssetUnsupported(t *testing.T) {
+func TestAssetRenderServiceMarksPythonExecutionRuntimeOnly(t *testing.T) {
 	t.Parallel()
 
 	_, root := writeTypeCheckWorkspace(t, "name: analytics", map[string]string{
@@ -307,11 +308,330 @@ print("hello")
 	result, err := NewAssetRenderService(root).RenderPath(context.Background(), "analytics/assets/task.py", AssetRenderRequest{})
 	require.NoError(t, err)
 
-	assert.Equal(t, AssetRenderStatusUnsupported, result.Status)
+	assert.Equal(t, AssetRenderStatusPartial, result.Status)
 	require.Len(t, result.Stages, 1)
-	assert.Equal(t, "python", result.Stages[0].Language)
-	assert.Equal(t, AssetRenderStageStatusUnsupported, result.Stages[0].Status)
-	assert.Equal(t, AssetRenderFidelityUnsupported, result.Stages[0].Fidelity)
+	assert.Equal(t, "runtime", result.Stages[0].Kind)
+	assert.Equal(t, "json", result.Stages[0].Language)
+	assert.Equal(t, AssetRenderStageStatusOK, result.Stages[0].Status)
+	assert.Equal(t, AssetRenderFidelityRuntimeOnly, result.Stages[0].Fidelity)
+	assert.Contains(t, result.Stages[0].Content, `"operation": "execute_python"`)
+	assert.Contains(t, result.Stages[0].Content, `"entrypoint": "analytics/assets/task.py"`)
+	assert.NotContains(t, result.Stages[0].Content, `print("hello")`)
+}
+
+func TestAssetRenderServiceKeepsDotDotPrefixedWorkspacePathsRelative(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	pipelineRoot := filepath.Join(root, "..analytics")
+	assetPath := filepath.Join(pipelineRoot, "assets", "task.py")
+	require.NoError(t, os.MkdirAll(filepath.Join(root, ".git"), 0o755))
+	require.NoError(t, os.MkdirAll(filepath.Dir(assetPath), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(root, ".bruin.yml"), []byte(`
+default_environment: default
+environments:
+  default:
+    connections:
+      duckdb:
+        - name: duckdb-default
+          path: local.db
+`), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(pipelineRoot, "pipeline.yml"), []byte("name: analytics\n"), 0o644))
+	require.NoError(t, os.WriteFile(assetPath, []byte(`
+""" @bruin
+name: analytics.task
+type: python
+@bruin """
+`), 0o644))
+
+	result, err := NewAssetRenderService(root).RenderPath(context.Background(), "..analytics/assets/task.py", AssetRenderRequest{})
+	require.NoError(t, err)
+	assert.Equal(t, "..analytics/pipeline.yml", result.Provenance.Source.PipelinePath)
+	require.Len(t, result.Stages, 1)
+	assert.Contains(t, result.Stages[0].Content, `"entrypoint": "..analytics/assets/task.py"`)
+	assert.NotContains(t, result.Stages[0].Content, filepath.ToSlash(root))
+}
+
+func TestAssetRenderServiceDescribesSeedAsSemanticSlingLoad(t *testing.T) {
+	t.Parallel()
+
+	_, root := writeTypeCheckWorkspace(t, `
+name: analytics
+default_connections:
+  duckdb: duckdb-default
+`, map[string]string{
+		"customers.asset.yml": `
+name: analytics.customers
+type: duckdb.seed
+parameters:
+  path: https://example.test/customers.csv?token=secret-token&X-Amz-Credential=aws-credential&X-Amz-Signature=aws-signature&X-Amz-Security-Token=aws-session&GoogleAccessId=google-access
+  enforce_schema: "true"
+columns:
+  - name: customer_id
+    type: integer
+    source: id
+`,
+	})
+
+	result, err := NewAssetRenderService(root).RenderPath(context.Background(), "analytics/assets/customers.asset.yml", AssetRenderRequest{})
+	require.NoError(t, err)
+
+	assert.Equal(t, AssetRenderStatusOK, result.Status)
+	require.Len(t, result.Stages, 1)
+	stage := result.Stages[0]
+	assert.Equal(t, "materialization", stage.Kind)
+	assert.Equal(t, AssetRenderFidelitySemantic, stage.Fidelity)
+	assert.Contains(t, stage.Content, `"operation": "sling_load"`)
+	assert.Contains(t, stage.Content, `"mode": "full-refresh"`)
+	assert.Contains(t, stage.Content, `token=REDACTED`)
+	assert.NotContains(t, stage.Content, "secret-token")
+	assert.NotContains(t, stage.Content, "aws-credential")
+	assert.NotContains(t, stage.Content, "aws-signature")
+	assert.NotContains(t, stage.Content, "aws-session")
+	assert.NotContains(t, stage.Content, "google-access")
+	assert.Contains(t, stage.Content, `"cast": "integer"`)
+	require.Len(t, result.Redactions, 1)
+}
+
+func TestAssetRenderServiceRejectsSeedSourcesTheRuntimeCannotUse(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		path string
+		want string
+	}{
+		{name: "missing local file", path: "./missing.csv", want: "is unavailable"},
+		{name: "unsupported URL scheme", path: "s3://private-bucket/customers.csv", want: "must use http or https"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			_, root := writeTypeCheckWorkspace(t, `
+name: analytics
+default_connections:
+  duckdb: duckdb-default
+`, map[string]string{
+				"customers.asset.yml": `
+name: analytics.customers
+type: duckdb.seed
+parameters:
+  path: ` + tt.path + `
+`,
+			})
+
+			result, err := NewAssetRenderService(root).RenderPath(context.Background(), "analytics/assets/customers.asset.yml", AssetRenderRequest{})
+			require.NoError(t, err)
+			assert.Equal(t, AssetRenderStatusError, result.Status)
+			require.Len(t, result.Stages, 1)
+			assert.Equal(t, AssetRenderStageStatusError, result.Stages[0].Status)
+			assert.Contains(t, result.Stages[0].Message, tt.want)
+			require.Len(t, result.Issues, 1)
+			assert.Equal(t, "seed_source_invalid", result.Issues[0].Code)
+		})
+	}
+}
+
+func TestAssetRenderServiceDescribesLoadWithoutResolvingConnectionCredentials(t *testing.T) {
+	t.Parallel()
+
+	_, root := writeTypeCheckWorkspace(t, `
+name: analytics
+default_connections:
+  duckdb: duckdb-default
+`, map[string]string{
+		"orders.asset.yml": `
+name: analytics.orders
+type: load
+connection: duckdb-default
+parameters:
+  source_connection: duckdb-default
+  source_table: raw.orders
+materialization:
+  type: table
+  strategy: append
+  incremental_key: updated_at
+`,
+	})
+
+	result, err := NewAssetRenderService(root).RenderPath(context.Background(), "analytics/assets/orders.asset.yml", AssetRenderRequest{FullRefresh: true})
+	require.NoError(t, err)
+
+	assert.Equal(t, AssetRenderStatusOK, result.Status)
+	require.Len(t, result.Stages, 1)
+	stage := result.Stages[0]
+	assert.Equal(t, AssetRenderFidelitySemantic, stage.Fidelity)
+	assert.Contains(t, stage.Content, `"operation": "sling_copy"`)
+	assert.Contains(t, stage.Content, `"object": "raw.orders"`)
+	assert.Contains(t, stage.Content, `"full_refresh": true`)
+	assert.Contains(t, stage.Content, `"runtime_options"`)
+	assert.NotContains(t, stage.Content, "duckdb://")
+}
+
+func TestAssetRenderServiceDescribesTableSensorCondition(t *testing.T) {
+	t.Parallel()
+
+	_, root := writeTypeCheckWorkspace(t, `
+name: analytics
+default_connections:
+  duckdb: duckdb-default
+`, map[string]string{
+		"ready.asset.yml": `
+name: analytics.ready
+type: duckdb.sensor.table
+connection: duckdb-default
+parameters:
+  table: analytics.orders
+  poke_interval: "10"
+  timeout: 5m
+`,
+	})
+
+	result, err := NewAssetRenderService(root).RenderPath(context.Background(), "analytics/assets/ready.asset.yml", AssetRenderRequest{})
+	require.NoError(t, err)
+
+	assert.Equal(t, AssetRenderStatusOK, result.Status)
+	require.Len(t, result.Stages, 1)
+	assert.Equal(t, "condition", result.Stages[0].Kind)
+	assert.Equal(t, AssetRenderFidelitySemantic, result.Stages[0].Fidelity)
+	assert.Contains(t, result.Stages[0].Content, `"operation": "wait_for_table"`)
+	assert.Contains(t, result.Stages[0].Content, `"table": "analytics.orders"`)
+	var operation map[string]any
+	require.NoError(t, json.Unmarshal([]byte(result.Stages[0].Content), &operation))
+	assert.Equal(t, map[string]any{"poke_interval": "10", "timeout": "5m"}, operation["runtime_controls"])
+}
+
+func TestAssetRenderServiceValidatesIngestrBeforeDescribingTheOperation(t *testing.T) {
+	t.Parallel()
+
+	_, root := writeTypeCheckWorkspace(t, `
+name: analytics
+default_connections:
+  duckdb: duckdb-default
+`, map[string]string{
+		"events.asset.yml": `
+name: analytics.events
+type: ingestr
+parameters:
+  source_connection: source-default
+  source_table: public.events
+  destination: duckdb
+  cdc: "true"
+materialization:
+  type: table
+  strategy: append
+`,
+	})
+
+	result, err := NewAssetRenderService(root).RenderPath(context.Background(), "analytics/assets/events.asset.yml", AssetRenderRequest{})
+	require.NoError(t, err)
+	assert.Equal(t, AssetRenderStatusError, result.Status)
+	require.Len(t, result.Stages, 1)
+	assert.Equal(t, AssetRenderStageStatusError, result.Stages[0].Status)
+	assert.Equal(t, AssetRenderFidelitySemantic, result.Stages[0].Fidelity)
+	assert.Contains(t, result.Stages[0].Content, `"operation": "ingestr_copy"`)
+	assert.Contains(t, result.Stages[0].Message, "require incremental strategy 'merge'")
+	require.NotEmpty(t, result.Issues)
+	assert.Equal(t, "ingestr_configuration_invalid", result.Issues[0].Code)
+}
+
+func TestAssetRenderServiceShowsEffectiveIngestrStrategy(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name       string
+		parameters string
+		want       string
+	}{
+		{
+			name: "parameters append",
+			parameters: `
+  incremental_strategy: append`,
+			want: "append",
+		},
+		{
+			name: "CDC defaults to merge",
+			parameters: `
+  cdc: "true"`,
+			want: "merge",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			_, root := writeTypeCheckWorkspace(t, `
+name: analytics
+default_connections:
+  duckdb: duckdb-default
+`, map[string]string{
+				"events.asset.yml": `
+name: analytics.events
+type: ingestr
+parameters:
+  source_connection: source-default
+  source_table: public.events
+  destination: duckdb` + tt.parameters + `
+`,
+			})
+
+			result, err := NewAssetRenderService(root).RenderPath(context.Background(), "analytics/assets/events.asset.yml", AssetRenderRequest{})
+			require.NoError(t, err)
+			assert.Equal(t, AssetRenderStatusOK, result.Status)
+			require.Len(t, result.Stages, 1)
+			assert.Equal(t, AssetRenderStageStatusOK, result.Stages[0].Status)
+			assert.Contains(t, result.Stages[0].Content, `"effective_strategy": "`+tt.want+`"`)
+		})
+	}
+}
+
+func TestAssetRenderServiceDescribesAPIExtractionAndRedactsCredentials(t *testing.T) {
+	t.Parallel()
+
+	_, root := writeTypeCheckWorkspace(t, `
+name: analytics
+default_connections:
+  duckdb: duckdb-default
+`, map[string]string{
+		"events.asset.yml": `
+name: analytics.events
+type: api
+connection: duckdb-default
+materialization:
+  type: table
+  strategy: create+replace
+parameters:
+  request:
+    url: https://api-user:api-password@example.test/events?api_key=secret-key&X-Goog-Credential=google-credential&X-Goog-Signature=google-signature
+    method: GET
+    headers:
+      Authorization: Bearer secret-header
+      Accept: application/json
+  auth:
+    type: bearer
+    token: another-secret
+  response:
+    records_path: events
+`,
+	})
+
+	result, err := NewAssetRenderService(root).RenderPath(context.Background(), "analytics/assets/events.asset.yml", AssetRenderRequest{})
+	require.NoError(t, err)
+
+	assert.Equal(t, AssetRenderStatusOK, result.Status)
+	require.Len(t, result.Stages, 2)
+	assert.Equal(t, "extraction", result.Stages[0].Kind)
+	assert.Equal(t, "materialization", result.Stages[1].Kind)
+	assert.Contains(t, result.Stages[0].Content, "api_key=REDACTED")
+	assert.Contains(t, result.Stages[0].Content, `"Authorization"`)
+	assert.NotContains(t, result.Stages[0].Content, "secret-key")
+	assert.NotContains(t, result.Stages[0].Content, "api-user")
+	assert.NotContains(t, result.Stages[0].Content, "api-password")
+	assert.NotContains(t, result.Stages[0].Content, "secret-header")
+	assert.NotContains(t, result.Stages[0].Content, "another-secret")
+	assert.NotContains(t, result.Stages[0].Content, "google-credential")
+	assert.NotContains(t, result.Stages[0].Content, "google-signature")
+	assert.Contains(t, result.Stages[1].Content, `"operation": "sling_load_jsonlines"`)
+	require.Len(t, result.Redactions, 1)
 }
 
 func TestAssetRenderServiceRejectsInvalidExecutionContext(t *testing.T) {
@@ -637,6 +957,15 @@ select '{{ run_id }}' as run_id
 	require.NotNil(t, apiErr)
 	assert.Equal(t, 400, apiErr.Status)
 	assert.Equal(t, "invalid_asset_id", apiErr.Code)
+
+	_, apiErr = service.RenderAsset(
+		context.Background(),
+		EncodeID("analytics/assets/deleted.sql"),
+		AssetRenderRequest{},
+	)
+	require.NotNil(t, apiErr)
+	assert.Equal(t, 404, apiErr.Status)
+	assert.Equal(t, "asset_not_found", apiErr.Code)
 }
 
 func TestAssetRenderServiceRejectsSourceChangesDuringRender(t *testing.T) {
@@ -655,7 +984,7 @@ select 1
 		service := NewAssetRenderService(root)
 		manifestCalls := new(int)
 		collectManifest := service.collectManifest
-		service.collectManifest = func(pipelineDir string) (map[string]string, map[string][]byte, error) {
+		service.collectManifest = func(pipelineDir string) (map[string]string, error) {
 			*manifestCalls = *manifestCalls + 1
 			return collectManifest(pipelineDir)
 		}
@@ -718,8 +1047,8 @@ select 1
 	})
 	service := NewAssetRenderService(root)
 	internalDetail := filepath.Join(root, ".bruin.yml") + ": credential render-secret-token"
-	service.collectManifest = func(string) (map[string]string, map[string][]byte, error) {
-		return nil, nil, errors.New(internalDetail)
+	service.collectManifest = func(string) (map[string]string, error) {
+		return nil, errors.New(internalDetail)
 	}
 
 	_, apiErr := service.RenderAsset(

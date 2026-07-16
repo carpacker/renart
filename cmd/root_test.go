@@ -19,6 +19,7 @@ func TestRootSurface(t *testing.T) {
 		"web":        categoryIDE,
 		"standalone": categoryIDE,
 		"run":        categoryPipeline,
+		"render":     categoryPipeline,
 		"ls":         categoryPipeline,
 		"type-check": categoryPipeline,
 		"deploy":     categoryPipeline,

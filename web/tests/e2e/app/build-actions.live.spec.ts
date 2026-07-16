@@ -129,7 +129,7 @@ test.describe("app build actions live", () => {
         response.url().includes(`/api/assets/${customersAssetId}/render`) && response.ok(),
       { timeout: 30000 },
     );
-    await page.getByRole("button", { name: "Render saved SQL", exact: true }).click();
+    await page.getByRole("button", { name: "Render saved asset", exact: true }).click();
     const response = await renderResponse;
     expect(response.request().postDataJSON()).toMatchObject({
       environment: "default",
@@ -166,7 +166,7 @@ test.describe("app build actions live", () => {
     const savedDraftMarker = "-- render saved draft";
     await page.keyboard.type(`\n${savedDraftMarker}`);
     await expect(
-      page.getByText("Render an asset to preview its saved execution SQL here."),
+      page.getByText("Render an asset to preview its saved operations here."),
     ).toBeVisible();
 
     const rerenderResponse = page.waitForResponse(
@@ -179,7 +179,7 @@ test.describe("app build actions live", () => {
         candidate.url().includes(`/api/pipelines/${pipelineId}/type-check`) && candidate.ok(),
       { timeout: 30000 },
     );
-    await page.getByRole("button", { name: "Render saved SQL", exact: true }).click();
+    await page.getByRole("button", { name: "Render saved asset", exact: true }).click();
     const rerenderPayload = (await (await rerenderResponse).json()) as {
       stages: Array<{ kind: string; content?: string }>;
     };
@@ -223,7 +223,7 @@ test.describe("app build actions live", () => {
     );
     expect(externalUpdate.ok()).toBe(true);
     await expect(
-      page.getByText("Render an asset to preview its saved execution SQL here."),
+      page.getByText("Render an asset to preview its saved operations here."),
     ).toBeVisible({ timeout: 30000 });
     await expect(preview).toHaveCount(0);
 
@@ -232,7 +232,7 @@ test.describe("app build actions live", () => {
         candidate.url().includes(`/api/assets/${customersAssetId}/render`) && candidate.ok(),
       { timeout: 30000 },
     );
-    await page.getByRole("button", { name: "Render saved SQL", exact: true }).click();
+    await page.getByRole("button", { name: "Render saved asset", exact: true }).click();
     const externalRenderPayload = (await (await externalRenderResponse).json()) as {
       stages: Array<{ kind: string; content?: string }>;
     };
@@ -245,7 +245,7 @@ test.describe("app build actions live", () => {
     await page.keyboard.press("ControlOrMeta+End");
     await page.keyboard.type("\n-- newer unsaved render intent");
     await expect(
-      page.getByText("Render an asset to preview its saved execution SQL here."),
+      page.getByText("Render an asset to preview its saved operations here."),
     ).toBeVisible();
     await expect(preview).toHaveCount(0);
   });

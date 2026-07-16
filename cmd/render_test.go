@@ -1,0 +1,154 @@
+package cmd
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+
+	"renart/internal/clientapi"
+	"renart/internal/web/service"
+)
+
+func TestRenderLocalJSONUsesSharedReadOnlyService(t *testing.T) {
+	root, assetPath := writeRenderCLIWorkspace(t)
+	var output bytes.Buffer
+	app := Root("test")
+	app.Writer = &output
+
+	err := app.Run(context.Background(), []string{
+		"renart", "render", "--workspace", root, "--local", "--json",
+		"--execution-time", "2026-07-16T12:00:00Z", "mart.orders",
+	})
+	if err != nil {
+		t.Fatalf("render failed: %v", err)
+	}
+
+	var result service.AssetRenderResult
+	if err := json.Unmarshal(output.Bytes(), &result); err != nil {
+		t.Fatalf("decode render output: %v\n%s", err, output.String())
+	}
+	if result.Asset.Name != "mart.orders" || result.Status != service.AssetRenderStatusOK {
+		t.Fatalf("unexpected result: %+v", result)
+	}
+	if len(result.Stages) != 2 || result.Stages[0].Kind != "compiled_query" || result.Stages[1].Kind != "execution_sql" {
+		t.Fatalf("unexpected stages: %+v", result.Stages)
+	}
+	if !strings.Contains(result.Stages[0].Content, "2026-07-16T12:00:00") {
+		t.Fatalf("execution context was not rendered: %s", result.Stages[0].Content)
+	}
+	if got, err := resolveRenderAssetPath(context.Background(), root, root, assetPath); err != nil || got != "marts/assets/orders.sql" {
+		t.Fatalf("path resolution = %q, %v", got, err)
+	}
+}
+
+func TestRenderDelegatesToDiscoveredServer(t *testing.T) {
+	root, _ := writeRenderCLIWorkspace(t)
+	var renderedPath string
+	var renderedRequest service.AssetRenderRequest
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.URL.Path == "/api/health":
+			fmt.Fprintf(w, `{"status":"ok","version":"test","workspace_root":%q}`, root)
+		case strings.HasPrefix(r.URL.Path, "/api/assets/") && strings.HasSuffix(r.URL.Path, "/render"):
+			renderedPath = r.URL.Path
+			if err := json.NewDecoder(r.Body).Decode(&renderedRequest); err != nil {
+				t.Errorf("decode request: %v", err)
+			}
+			fmt.Fprint(w, `{
+                  "status":"ok",
+                  "provenance":{"source":{"kind":"working_tree","pipeline_path":"marts/pipeline.yml","merkle_root":"abcdef012345"},"pipeline":"marts","context":{"environment":"production","start_date":"2026-07-15T00:00:00Z","end_date":"2026-07-16T00:00:00Z","execution_time":"2026-07-16T12:00:00Z","run_id":"renart-render-preview","requested_full_refresh":true,"full_refresh":true,"variables_digest":"vars","configuration_digest":"config"}},
+                  "asset":{"name":"mart.orders","type":"duckdb.sql"},
+                  "stages":[{"kind":"execution_sql","language":"sql","content":"SELECT 1","status":"ok","fidelity":"exact"}],
+                  "issues":[],"redactions":[]
+                }`)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	if err := clientapi.WriteServerFile(root, clientapi.ServerFile{
+		PID: os.Getpid(), BaseURL: server.URL, APIBaseURL: server.URL + "/api",
+		WorkspaceRoot: root, Version: "test", StartedAt: time.Now(),
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	var output bytes.Buffer
+	app := Root("test")
+	app.Writer = &output
+	err := app.Run(context.Background(), []string{
+		"renart", "render", "--workspace", root, "--json", "--env", "production",
+		"--full-refresh", "marts/assets/orders.sql",
+	})
+	if err != nil {
+		t.Fatalf("render failed: %v", err)
+	}
+	expectedID := service.EncodeID("marts/assets/orders.sql")
+	if renderedPath != "/api/assets/"+expectedID+"/render" {
+		t.Fatalf("rendered path = %q", renderedPath)
+	}
+	if renderedRequest.Environment != "production" || !renderedRequest.FullRefresh {
+		t.Fatalf("render request = %+v", renderedRequest)
+	}
+	if !strings.Contains(output.String(), `"content": "SELECT 1"`) {
+		t.Fatalf("delegated result was not printed: %s", output.String())
+	}
+}
+
+func TestResolveRenderAssetPathRejectsAmbiguousNames(t *testing.T) {
+	root, _ := writeRenderCLIWorkspace(t)
+	secondPipeline := filepath.Join(root, "other")
+	mustWrite(t, filepath.Join(secondPipeline, "pipeline.yml"), "name: other\ndefault_connections:\n  duckdb: duckdb-default\n")
+	mustWrite(t, filepath.Join(secondPipeline, "assets", "orders.sql"), `
+/* @bruin
+name: mart.orders
+type: duckdb.sql
+@bruin */
+select 2
+`)
+
+	_, err := resolveRenderAssetPath(context.Background(), root, root, "mart.orders")
+	if err == nil || !strings.Contains(err.Error(), "ambiguous") {
+		t.Fatalf("expected ambiguous-name error, got %v", err)
+	}
+}
+
+func writeRenderCLIWorkspace(t *testing.T) (string, string) {
+	t.Helper()
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, ".git"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	mustWrite(t, filepath.Join(root, ".bruin.yml"), `
+default_environment: default
+environments:
+  default:
+    connections:
+      duckdb:
+        - name: duckdb-default
+          path: local.db
+`)
+	mustWrite(t, filepath.Join(root, "marts", "pipeline.yml"), `
+name: marts
+default_connections:
+  duckdb: duckdb-default
+`)
+	assetPath := filepath.Join(root, "marts", "assets", "orders.sql")
+	mustWrite(t, assetPath, `
+/* @bruin
+name: mart.orders
+type: duckdb.sql
+@bruin */
+select '{{ execution_timestamp }}' as execution_time
+`)
+	return root, assetPath
+}

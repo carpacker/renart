@@ -160,6 +160,25 @@ func TestDeploySkipsJunk(t *testing.T) {
 	assert.ElementsMatch(t, []string{"pipeline.yml", "assets/a.sql", "shared/helpers.py"}, paths)
 }
 
+func TestCollectManifestHashesMatchesDeployManifest(t *testing.T) {
+	t.Parallel()
+	dir := writePipelineDir(t, map[string]string{
+		"pipeline.yml":             "id: p\n",
+		"assets/a.sql":             "select 1",
+		"assets/seed.csv":          "id,name\n1,Ada\n",
+		"assets/nested/b.py":       "print('hello')\n",
+		"assets/local.duckdb":      "not source",
+		"assets/__pycache__/b.pyc": "not source",
+	})
+
+	contentManifest, _, err := snapshot.CollectManifest(dir)
+	require.NoError(t, err)
+	hashOnlyManifest, err := snapshot.CollectManifestHashes(dir)
+	require.NoError(t, err)
+	assert.Equal(t, contentManifest, hashOnlyManifest)
+	assert.Equal(t, snapshot.ManifestRoot(contentManifest), snapshot.ManifestRoot(hashOnlyManifest))
+}
+
 func TestDriftReport(t *testing.T) {
 	t.Parallel()
 	store := openTestStore(t)

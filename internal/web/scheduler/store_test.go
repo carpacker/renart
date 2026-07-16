@@ -2,7 +2,6 @@ package scheduler
 
 import (
 	"context"
-	"database/sql"
 	"fmt"
 	"io/fs"
 	"os"
@@ -169,6 +168,31 @@ func TestSetRunSpecIfMissingReturnsPersistedWinner(t *testing.T) {
 	persisted, err = store.SetRunSpecIfMissing(ctx, run.ID, loser)
 	require.NoError(t, err)
 	assert.Equal(t, first, persisted, "the stored spec remains authoritative after an insertion race")
+}
+
+func TestSetLegacyScheduledRunSpecClaimsStableUUIDSlot(t *testing.T) {
+	t.Parallel()
+	store, err := OpenStore(filepath.Join(t.TempDir(), "state.db"))
+	require.NoError(t, err)
+	defer store.Close()
+	ctx := context.Background()
+	start := time.Date(2026, 7, 16, 8, 0, 0, 0, time.UTC)
+	end := start.Add(time.Hour)
+	run := PipelineRun{
+		ID: "legacy-scheduled", PipelineID: "old-path", Pipeline: "analytics",
+		Environment: "prod", Trigger: RunTriggerSchedule, Status: RunStatusQueued,
+		WinStart: &start, WinEnd: &end, SnapshotVersionID: "snapshot-id",
+	}
+	_, err = store.Create(ctx, run)
+	require.NoError(t, err)
+	spec := scheduledRunSpec(run, pipelineRunJobArgs{
+		PipelineUUID: "stable-uuid", Environment: "prod", Schedule: "@hourly", Timezone: "UTC",
+	})
+
+	persisted, err := store.SetRunSpecIfMissing(ctx, run.ID, spec)
+	require.NoError(t, err)
+	assert.Equal(t, "stable-uuid", persisted.Pipeline.UUID)
+	assert.Equal(t, 1, countRows(t, store, `SELECT COUNT(*) FROM pipeline_run_slots WHERE slot_key = 'uuid:stable-uuid' AND run_id = ?`, run.ID))
 }
 
 func TestOpenStoreRejectsCorruptDatabaseBeforeMigrations(t *testing.T) {
@@ -520,7 +544,7 @@ func TestRunRecoveryMigrationBackfillsInterruptedRuns(t *testing.T) {
 	assert.Equal(t, []string{"previously-reconciled"}, pending)
 }
 
-func TestActiveRunSlotMigrationRejectsDuplicateLegacyRowsWithoutRewritingHistory(t *testing.T) {
+func TestActiveRunSlotMigrationReconcilesDuplicateLegacyRowsWithoutDeletingHistory(t *testing.T) {
 	t.Parallel()
 	path := filepath.Join(t.TempDir(), "state.db")
 	store, err := OpenStore(path)
@@ -540,25 +564,76 @@ func TestActiveRunSlotMigrationRejectsDuplicateLegacyRowsWithoutRewritingHistory
 			('legacy-active-a', 'pipeline-id', 'analytics', 'prod', 'manual', 'queued'),
 			('legacy-active-b', 'pipeline-id', 'analytics', 'prod', 'manual', 'running')`)
 	require.NoError(t, err)
+	_, err = store.db.ExecContext(ctx, `
+		INSERT INTO pipeline_run_steps (run_id, asset, status, started_at)
+		VALUES ('legacy-active-b', 'analytics.orders', 'running', '2026-07-16T08:00:00Z')`)
+	require.NoError(t, err)
 	require.NoError(t, store.Close())
 
-	failedStore, err := OpenStore(path)
-	if failedStore != nil {
-		_ = failedStore.Close()
-	}
-	require.Error(t, err)
-	assert.ErrorContains(t, err, "duplicate active runs exist")
-	assert.ErrorContains(t, err, "legacy-active-a")
-	assert.ErrorContains(t, err, "legacy-active-b")
-
-	raw, err := sql.Open("sqlite", path)
+	store, err = OpenStore(path)
 	require.NoError(t, err)
-	defer raw.Close()
+	defer store.Close()
 	var active int
-	require.NoError(t, raw.QueryRowContext(ctx, `
+	require.NoError(t, store.db.QueryRowContext(ctx, `
 		SELECT COUNT(*) FROM pipeline_runs
 		WHERE pipeline_id = 'pipeline-id' AND status IN ('queued', 'running')`).Scan(&active))
-	assert.Equal(t, 2, active, "migration preflight must not rewrite or delete run history")
+	assert.Equal(t, 1, active)
+	assert.Equal(t, 2, countRows(t, store, `SELECT COUNT(*) FROM pipeline_runs WHERE pipeline_id = 'pipeline-id'`), "migration must preserve every run row")
+	assert.Equal(t, 1, countRows(t, store, `SELECT COUNT(*) FROM pipeline_run_slots WHERE slot_key = 'path:pipeline-id' AND run_id = 'legacy-active-a'`))
+
+	survivor, _, _, err := store.Get(ctx, "legacy-active-a")
+	require.NoError(t, err)
+	assert.Equal(t, RunStatusQueued, survivor.Status)
+	conflict, logs, steps, err := store.Get(ctx, "legacy-active-b")
+	require.NoError(t, err)
+	assert.Equal(t, RunStatusFailed, conflict.Status)
+	require.NotNil(t, conflict.FinishedAt)
+	assert.Contains(t, conflict.Error, "duplicate active run reconciled during atomic run-slot migration")
+	assert.Contains(t, conflict.Error, "retained run legacy-active-a for scheduler recovery")
+	require.Len(t, logs, 1)
+	assert.Equal(t, conflict.Error, logs[0].Line)
+	require.Len(t, steps, 1)
+	assert.Equal(t, RunStatusFailed, steps[0].Status)
+	require.NotNil(t, steps[0].FinishedAt)
+	assert.Equal(t, conflict.Error, steps[0].Error)
+	pending, err := store.PendingRunRecoveries(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"legacy-active-b"}, pending)
+}
+
+func TestActiveRunSlotMigrationReconcilesDuplicatesBeforeRecoveryColumnsExist(t *testing.T) {
+	t.Parallel()
+	path := filepath.Join(t.TempDir(), "state.db")
+	store, err := OpenStore(path)
+	require.NoError(t, err)
+	ctx := context.Background()
+	migrations, err := fs.Sub(schedulerMigrations, "storedb/migrations")
+	require.NoError(t, err)
+	provider, err := goose.NewProvider(goose.DialectSQLite3, store.db, migrations)
+	require.NoError(t, err)
+	_, err = provider.DownTo(ctx, 7)
+	require.NoError(t, err)
+	_, err = store.db.ExecContext(ctx, `
+		INSERT INTO pipeline_runs (id, pipeline_id, pipeline, environment, trigger, status)
+		VALUES
+			('older-a', 'pipeline-id', 'analytics', 'prod', 'manual', 'queued'),
+			('older-b', 'pipeline-id', 'analytics', 'prod', 'manual', 'queued')`)
+	require.NoError(t, err)
+	require.NoError(t, store.Close())
+
+	store, err = OpenStore(path)
+	require.NoError(t, err)
+	defer store.Close()
+	assert.Equal(t, 2, countRows(t, store, `SELECT COUNT(*) FROM pipeline_runs WHERE pipeline_id = 'pipeline-id'`))
+	assert.Equal(t, 1, countRows(t, store, `SELECT COUNT(*) FROM pipeline_runs WHERE pipeline_id = 'pipeline-id' AND status = 'queued'`))
+	failed, logs, _, err := store.Get(ctx, "older-b")
+	require.NoError(t, err)
+	assert.Equal(t, RunStatusFailed, failed.Status)
+	assert.Contains(t, failed.Error, "retained run older-a for scheduler recovery")
+	require.Len(t, logs, 1)
+	pending, err := store.PendingRunRecoveries(ctx)
+	require.NoError(t, err)
+	assert.Empty(t, pending, "pre-context migrations cannot safely replay derived materialization state")
 }
 
 func TestActiveRunSlotMigrationBridgesLegacyPathAlias(t *testing.T) {

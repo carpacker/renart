@@ -131,7 +131,11 @@ conflicting River arguments; the spec remains authoritative while fact replay
 continues to use only the persisted effective execution context. New manual
 run/spec/job/link admission is atomic. River-argument link and mode recovery is
 retained only for pre-upgrade jobs, and an unknown or structurally incompatible
-spec fails closed rather than falling back to legacy semantics.
+spec fails closed rather than falling back to legacy semantics. The spec's
+stable pipeline UUID is independently bound to the durable UUID run slot before
+execution and travels through scheduler execution into snapshot resolution. A
+pipeline path rename therefore cannot redirect a queued snapshot through a
+newly resolved identity.
 For a deployed run it materializes the run's exact pinned snapshot while the
 recorder fingerprints it, then deletes the temp directory. This is derived-state
 recovery only—asset code and textual logs are never replayed. The fact and
@@ -154,12 +158,24 @@ summary with reconciled-run, cancelled-job, requeued-signal, replay, and
 replay-failure counts; cancelled queue rows retain the interruption as an
 attempt error.
 
+Before the unique run-slot migration is applied, a legacy database can contain
+multiple queued/running rows for one pipeline path because old admission was
+not atomic. Migration keeps one deterministic queued-first survivor, marks the
+other rows failed, closes their open steps, and writes the recovery reason to
+their logs. The survivor then enters normal startup recovery and receives the
+legacy path-only slot; old rows did not retain the stable UUID needed to
+reconstruct a UUID alias.
+
 ## 4. Staleness service and UI (`internal/web/staleness`)
 
 In-memory status map per current selection (env, range, vars), exposed at
-`/api/pipelines/{id}/staleness` and pushed over SSE. Recompute triggers:
-selection change (batched coverage query), `AssetSaved` (invalidate + recompute
-the downstream cone), `RunCompleted` (flip the touched assets).
+`/api/pipelines/{id}/staleness` and pushed over SSE. The frontend tracks loading
+and failures per pipeline for the exact selection. A matching SSE snapshot is
+authoritative for that pipeline: it resolves that request/error and prevents an
+older in-flight HTTP response from replacing the pushed state, without hiding
+unresolved sibling pipelines. Recompute triggers: selection change (batched
+coverage query), `AssetSaved` (invalidate + recompute the downstream cone),
+`RunCompleted` (flip the touched assets).
 
 | Status           | Meaning                                                                                                      |
 | ---------------- | ------------------------------------------------------------------------------------------------------------ |
@@ -205,7 +221,11 @@ scheduler steps (initial active-run hydration plus `run.step` SSE events); a
 queued or started pipeline does not mark every asset pending. `run.finished`
 clears all transient entries for that run, while the canonical terminal attempt
 arrives through staleness. Assets skipped after an upstream failure therefore
-retain their previous freshness and attempt state.
+retain their previous freshness and attempt state. Build remembers a terminal
+event even when a very fast run finishes before the trigger response supplies
+its run ID, then associates the result and reloads the canonical stored log.
+Late queued/running events or active-run hydration cannot resurrect that
+finished run.
 
 The Build-stale action is server-side: `POST
 /api/pipelines/{id}/build-stale/stream` (`httpapi/build_stale.go`) recomputes

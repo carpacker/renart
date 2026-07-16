@@ -13,6 +13,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"os/exec"
@@ -113,13 +114,8 @@ func merkleRoot(manifest map[string]string) string {
 	return ManifestRoot(manifest)
 }
 
-// CollectManifest walks the pipeline directory and returns relpath -> blob
-// hash plus the file contents keyed by hash.
-func CollectManifest(pipelineDir string) (map[string]string, map[string][]byte, error) {
-	manifest := make(map[string]string)
-	contents := make(map[string][]byte)
-
-	walkErr := filepath.WalkDir(pipelineDir, func(path string, entry fs.DirEntry, err error) error {
+func walkManifestFiles(pipelineDir string, visit func(path, relativePath string) error) error {
+	return filepath.WalkDir(pipelineDir, func(path string, entry fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
@@ -135,16 +131,28 @@ func CollectManifest(pipelineDir string) (map[string]string, map[string][]byte, 
 		if _, skip := skipFileExtensions[strings.ToLower(filepath.Ext(path))]; skip {
 			return nil
 		}
-		data, readErr := os.ReadFile(path)
-		if readErr != nil {
-			return readErr
-		}
 		rel, relErr := filepath.Rel(pipelineDir, path)
 		if relErr != nil {
 			return relErr
 		}
+		return visit(path, filepath.ToSlash(rel))
+	})
+}
+
+// CollectManifest walks the pipeline directory and returns relpath -> blob
+// hash plus the file contents keyed by hash. Deploy uses this content-retaining
+// variant because it persists every source blob.
+func CollectManifest(pipelineDir string) (map[string]string, map[string][]byte, error) {
+	manifest := make(map[string]string)
+	contents := make(map[string][]byte)
+
+	walkErr := walkManifestFiles(pipelineDir, func(path, relativePath string) error {
+		data, readErr := os.ReadFile(path)
+		if readErr != nil {
+			return readErr
+		}
 		hash := hashBytes(data)
-		manifest[filepath.ToSlash(rel)] = hash
+		manifest[relativePath] = hash
 		contents[hash] = data
 		return nil
 	})
@@ -152,6 +160,35 @@ func CollectManifest(pipelineDir string) (map[string]string, map[string][]byte, 
 		return nil, nil, walkErr
 	}
 	return manifest, contents, nil
+}
+
+// CollectManifestHashes returns the exact same content-addressed manifest as
+// CollectManifest while streaming each file through SHA-256. Read-only render
+// and drift callers use it so large seed/source files are never retained in
+// memory merely to compute the canonical source identity.
+func CollectManifestHashes(pipelineDir string) (map[string]string, error) {
+	manifest := make(map[string]string)
+	err := walkManifestFiles(pipelineDir, func(path, relativePath string) error {
+		file, err := os.Open(path)
+		if err != nil {
+			return err
+		}
+		hasher := sha256.New()
+		_, copyErr := io.Copy(hasher, file)
+		closeErr := file.Close()
+		if copyErr != nil {
+			return copyErr
+		}
+		if closeErr != nil {
+			return closeErr
+		}
+		manifest[relativePath] = hex.EncodeToString(hasher.Sum(nil))
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return manifest, nil
 }
 
 // Deploy snapshots the pipeline directory. When the content is identical to
@@ -500,7 +537,7 @@ func (s *Store) Drift(ctx context.Context, pipelineUUID, pipelineDir string) (Dr
 		report.Executable = true
 	}
 
-	manifest, _, err := CollectManifest(pipelineDir)
+	manifest, err := CollectManifestHashes(pipelineDir)
 	if err != nil {
 		return DriftReport{}, err
 	}

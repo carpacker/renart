@@ -980,9 +980,12 @@ func (s *ExecutionService) MaterializePipelineStreamForRun(ctx context.Context, 
 // the executor runs the materialized snapshot instead of the working tree;
 // PipelineID still identifies the pipeline for events and asset listing.
 type PipelineRunSpec struct {
-	RunID       string
-	PipelineID  string
-	Environment string
+	RunID      string
+	PipelineID string
+	// PipelineUUID is the stable identity admitted with a scheduler RunSpec.
+	// Snapshot execution must use it instead of re-resolving the mutable path.
+	PipelineUUID string
+	Environment  string
 	// Scheduled is derived from the server-owned run origin. A queued manual
 	// run also has a RunID, so RunID must not be used for this distinction.
 	Scheduled            bool

@@ -298,17 +298,21 @@ display calculated next-run times even though it dispatches nothing. This is a
 reliability issue, not merely missing copy: ownership, heartbeat, handoff, and
 cross-process reconciliation need a real contract as well as visible status.
 
-### 2.7 Rendering today
+### 2.7 Rendering checkpoint
 
-Renart has pieces of rendering, but no pre-execution render artifact:
+At the start of this investigation Renart had pieces of rendering but no
+pre-execution render artifact. Phase 1 now provides a saved-source asset render
+response, a Build `Render` view, and `renart render`; the exact shipped boundary
+is recorded in `architecture/backend.md` and `architecture/frontend.md`.
+Important gaps from the original picture remain:
 
-- `/api/assets/{id}/render-jinja` renders editor content for inline Monaco
-  values/tooltips; it does not apply materialization, hooks, or checks;
+- `/api/assets/{id}/render-jinja` still serves editor content for inline Monaco
+  values/tooltips; it is not the execution-plan interface;
 - type-check renders logical queries internally but returns diagnostics only;
 - Inspect and ad-hoc results can display the rendered SELECT after the action;
 - dry-run validates but does not expose statements;
 - run output is a combined text log, not a structured execution plan;
-- Renart has no `renart render` or `renart plan` CLI command.
+- Renart has no pipeline `plan` endpoint or `renart plan` command.
 
 The visible `Impact plan` is currently hard-coded fixture data, and its `Run
 plan` button only closes the dialog. The variant selector is also fixture-backed
@@ -1129,7 +1133,19 @@ snooze with their exact interval while it is occupied. Stored specs override
 job arguments; unknown versions, unknown fields, and row/spec mismatches fail
 closed, while pre-upgrade jobs use one strict upgrade decoder. Startup relinks
 runnable legacy jobs, fails terminal or jobless queued runs, and requeues a
-claimed scheduled signal that has not admitted a run.
+claimed scheduled signal that has not admitted a run. Follow-up hardening binds
+the private RunSpec UUID independently to the durable UUID slot and carries it
+through scheduler execution into snapshot resolution, so a path rename cannot
+retarget a queued deployment. A pre-slot database with duplicate active rows
+now keeps one deterministic queued-first survivor and records every duplicate
+as a failed, auditable recovery row instead of blocking startup.
+
+Long-lived runtimes also now take an authoritative canonical-workspace lease
+outside the worktree while retaining `.renart/server.lock` for compatibility.
+Runtime database/discovery/lock files are added to `.git/info/exclude` without
+editing tracked ignore rules. This closes the hole where worktree cleanup could
+unlink the only lock while a server still owned the workspace; it remains
+separate from the scheduler ownership/handoff workstream below.
 
 This is only the scheduler-backed foundation. Direct and inline execution,
 effective variables, asset/window execution units, target/latest-writer
@@ -1178,51 +1194,63 @@ Renart process.
 
 ### Phase 1: shared asset render service
 
-Implementation checkpoint (2026-07-16): a read-only backend vertical slice now
-exposes `POST /api/assets/{assetID}/render` for a saved working-tree asset. It
-shares the direct executor's hook-aware DuckDB/MotherDuck materializer and Rust
-`DECLARE` hoister, distinguishes requested from effective full refresh, uses a
-server-owned asset path and preview run ID, returns the source and variable
-identities plus a limited digest of the environment fields used by this
-connection-free DuckDB slice, and masks Bruin-tagged inline credentials with
-redaction metadata before returning SQL. That limited digest is explicitly not
-the canonical configuration/target identity defined in section 6.5 and must
-not be reused for plan confirmation or caching. The read-only config loader is
-proven not to create `.bruin.yml` or modify `.gitignore`. The Build editor now
-exposes this as a
-read-only saved-source preview with separate compiled/execution stages,
-provenance, fidelity, and redaction indicators. The CLI is not wired yet;
-snapshot rendering, semantic non-SQL operations, checks, and broader executor
-parity also remain before Phase 1 is complete.
+Implementation checkpoint (2026-07-16): a read-only backend service now exposes
+`POST /api/assets/{assetID}/render` for a saved working-tree asset. It shares the
+direct executor's hook-aware DuckDB/MotherDuck materializer and Rust `DECLARE`
+hoister, distinguishes requested from effective full refresh, uses a
+server-owned asset path and preview run ID, returns source/variable identities
+plus a limited digest of environment fields, and returns stage-level fidelity,
+issues, and redaction metadata. That limited digest is explicitly not the
+canonical configuration/target identity defined in section 6.5 and must not be
+reused for plan confirmation or caching.
 
-The supported slice now renders query sensors from `parameters.query`, reports
-a missing query as a structured asset error, and shows the exact submitted
-condition query while keeping polling controls explicitly runtime-only.
-MotherDuck follows the DuckDB dialect/materializer path. The same request-local,
-non-mutating hook-template resolver now serves rendering and direct DuckDB/
-MotherDuck asset and pipeline execution. Hooks are still folded into one
-execution-SQL stage, and exact materializer SQL for other SQL destinations,
-semantic non-SQL stages, checks, snapshot rendering, and CLI parity remain
-open.
+SQL assets expose the exact compiled query. DuckDB/MotherDuck also expose exact
+hook-aware execution SQL; query sensors compile only `parameters.query` and
+show the exact submitted condition while leaving polling behavior as runtime
+controls. Other SQL destinations currently retain the exact compiled query but
+mark execution rendering unsupported. The same request-local, non-mutating
+hook-template resolver serves rendering and direct DuckDB/MotherDuck asset and
+pipeline execution; hooks remain folded into one execution-SQL stage.
+
+Non-SQL rendering is now semantic rather than fabricated: seeds describe the
+Sling load and enforced casts, Load assets describe the Sling copy, API assets
+separate HTTP extraction shape from the Sling JSONL write, table/S3 sensors
+describe their condition and controls, and ingestr describes its copy. Python
+is explicitly `runtime_only` because user code and SDK calls decide what runs.
+Named connections are retained without resolved credentials; URLs, API auth,
+and header values are redacted or omitted.
+
+The Build editor exposes one generic read-only `Render` action for every
+supported SQL, Python, seed, Load, API, ingestr, and sensor asset. It keeps the
+save barrier and shows stages, provenance, fidelity, redactions, and
+`Preview — not executed`. `renart render <asset>` uses the same result: it
+delegates to an open workspace server when available and otherwise invokes the
+read-only service directly without booting the scheduler or state database.
 
 Review hardening keeps the content manifest as the sole canonical source
 identity while avoiding a second full read of large pipeline files: render
 captures a cheap size/mtime/inode guard before and after the one manifest hash
 and after rendering. This is explicitly a non-adversarial TOCTOU guard, not a
 replacement fingerprint; immutable snapshot rendering remains Phase 3 work.
-Invalid environment, execution-time, and window inputs now retain structured
+The render/drift manifest collector streams file hashes without retaining
+source blobs; only Deploy uses the content-retaining collector. Invalid
+environment, execution-time, and window inputs now retain structured
 sanitized `400` reasons, source-identity I/O failures return a sanitized `500`,
 and concurrent source drift remains `409`. Save-time CRLF-to-LF normalization
 no longer discards a successful preview, while genuine saved-source changes
 still invalidate it.
 
-- define canonical plan context/provenance DTOs;
-- factor SQL query extraction, Jinja, Renart-patched executor/materializer
-  selection, hooks, and checks behind a reusable in-process renderer;
-- add `Compiled query` and `Execution SQL` for one asset;
-- add semantic operations for non-SQL assets;
-- add `renart render <asset>` parity for CLI users;
-- implement partial diagnostics, redaction, and fingerprint invalidation.
+Remaining before Phase 1 is complete:
+
+- replace the limited configuration digest with the canonical plan
+  context/provenance/target identities from section 6.5;
+- factor checks behind the reusable renderer and return their stages;
+- expose exact execution SQL for supported non-DuckDB SQL destinations and
+  prove broader executor/materializer parity;
+- separate hooks into structured stages where execution can preserve that
+  boundary;
+- expand partial-diagnostic and executor-parity coverage without weakening the
+  saved-source drift guard or credential redaction.
 
 ### Phase 2: pipeline execution plan
 

@@ -7,8 +7,10 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -577,6 +579,33 @@ func TestWriteAPIAssetJSONLRedactsQueryCredentialsInOutput(t *testing.T) {
 	assert.Contains(t, output.String(), "cursor_hint=keep-me")
 	assert.NotContains(t, output.String(), "secret-token")
 	assert.NotContains(t, output.String(), "param-secret")
+}
+
+func TestRedactedURLStringMasksSignedURLCredentials(t *testing.T) {
+	t.Parallel()
+
+	raw := "https://user:password@example.test/object.csv?" +
+		"X-Amz-Algorithm=AWS4-HMAC-SHA256&" +
+		"X-Amz-Credential=aws-credential&" +
+		"X-Amz-Signature=aws-signature&" +
+		"X-Amz-Security-Token=aws-session&" +
+		"GoogleAccessId=google-access&" +
+		"X-Goog-Signature=google-signature&" +
+		"cursor_hint=keep-me"
+	parsed, err := url.Parse(raw)
+	require.NoError(t, err)
+
+	redacted := redactedURLString(parsed, "")
+	assert.Contains(t, redacted, "X-Amz-Algorithm=AWS4-HMAC-SHA256")
+	assert.Contains(t, redacted, "cursor_hint=keep-me")
+	assert.NotContains(t, redacted, "user")
+	assert.NotContains(t, redacted, "password")
+	for _, secret := range []string{
+		"aws-credential", "aws-signature", "aws-session", "google-access", "google-signature",
+	} {
+		assert.NotContains(t, redacted, secret)
+	}
+	assert.Equal(t, 6, strings.Count(redacted, "REDACTED"))
 }
 
 // Error messages surface in the UI and run history like output does; a failed

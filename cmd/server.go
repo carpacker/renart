@@ -151,6 +151,13 @@ func newWebServer(ctx context.Context, cfg serverConfig, logger *zap.Logger) (*w
 			_ = serverLease.Close()
 		}
 	}()
+	if err := service.EnsureRuntimeGitExcludes(absRoot); err != nil {
+		// Source-control hygiene must not make an otherwise writable workspace
+		// impossible to serve (for example when Git metadata is mounted
+		// read-only). This also covers embedded CLI runs, which open state.db even
+		// though they intentionally skip the long-lived workspace lease.
+		logger.Warn("failed to exclude Renart runtime files from Git status", zap.Error(err))
+	}
 
 	// Every served workspace gets a stable identity; the health endpoint and
 	// discovery file report it so CLI clients can address the right project.
@@ -509,6 +516,7 @@ func pipelineRunSpecFromSchedulerRequest(req webscheduler.RunRequest) service.Pi
 	return service.PipelineRunSpec{
 		RunID:                req.RunID,
 		PipelineID:           req.PipelineID,
+		PipelineUUID:         req.PipelineUUID,
 		Environment:          req.Environment,
 		Scheduled:            req.Scheduled,
 		FullRefresh:          req.FullRefresh,

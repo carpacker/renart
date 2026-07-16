@@ -95,6 +95,24 @@ func TestHandleRenderAssetUsesSharedServiceErrorEnvelope(t *testing.T) {
 	assert.Contains(t, response.Body.String(), `"message":"asset was not found"`)
 }
 
+func TestHandleRenderAssetReturnsNotFoundForDeletedAsset(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	router := chi.NewRouter()
+	RegisterAssetRenderRoutes(router, &AssetRenderAPI{Service: service.NewAssetRenderService(root)})
+	request := httptest.NewRequest(
+		http.MethodPost,
+		"/api/assets/"+service.EncodeID("pipeline/assets/deleted.sql")+"/render",
+		strings.NewReader(`{}`),
+	)
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, request)
+
+	require.Equal(t, http.StatusNotFound, response.Code)
+	assert.Contains(t, response.Body.String(), `"code":"asset_not_found"`)
+}
+
 func assetRenderRequest(stub *assetRenderHandlerStub, body string) *httptest.ResponseRecorder {
 	router := chi.NewRouter()
 	RegisterAssetRenderRoutes(router, &AssetRenderAPI{Service: stub})

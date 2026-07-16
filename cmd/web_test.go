@@ -100,6 +100,33 @@ func TestMaterializeExactRunSnapshotUsesPinAndCleansSandbox(t *testing.T) {
 	assert.ErrorIs(t, err, os.ErrNotExist)
 }
 
+func TestResolveRunSnapshotUsesAdmittedUUIDAfterPipelinePathChanges(t *testing.T) {
+	t.Parallel()
+	store, versionID := deployTriggerTestSnapshot(t, "stable-pipeline-uuid")
+	server := &webServer{
+		workspaceRoot: t.TempDir(),
+		snapshotStore: store,
+	}
+	spec := service.PipelineRunSpec{
+		PipelineID:        "path-that-is-no-longer-in-the-workspace",
+		PipelineUUID:      "stable-pipeline-uuid",
+		SnapshotVersionID: versionID,
+	}
+
+	cleanup, err := server.resolveRunSnapshot(context.Background(), &spec, true, nil)
+	require.NoError(t, err)
+	defer cleanup()
+	require.FileExists(t, filepath.Join(spec.SnapshotDir, "pipeline.yml"))
+}
+
+func TestPipelineRunSpecFromSchedulerRequestPreservesStableUUID(t *testing.T) {
+	t.Parallel()
+	spec := pipelineRunSpecFromSchedulerRequest(scheduler.RunRequest{
+		RunID: "run-id", PipelineID: "old-path", PipelineUUID: "stable-pipeline-uuid",
+	})
+	assert.Equal(t, "stable-pipeline-uuid", spec.PipelineUUID)
+}
+
 func TestMaterializeExactRunSnapshotFailsClosed(t *testing.T) {
 	t.Parallel()
 	store, versionID := deployTriggerTestSnapshot(t, "pipeline-a")

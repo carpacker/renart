@@ -93,6 +93,37 @@ test.describe("seed and sensor assets live", () => {
     ).toHaveCount(0);
     await expect(page.getByRole("heading", { name: "Seed file" })).toHaveCount(0);
 
+    const executionRequests: string[] = [];
+    page.on("request", (request) => {
+      const url = request.url();
+      if (
+        request.method() === "POST" &&
+        (url.includes("/materialize/stream") ||
+          url.includes("/trigger") ||
+          url.endsWith("/api/run"))
+      ) {
+        executionRequests.push(url);
+      }
+    });
+    const seedRenderResponse = page.waitForResponse(
+      (response) => response.url().includes(`/api/assets/${seedAssetId}/render`) && response.ok(),
+      { timeout: 30000 },
+    );
+    await page.getByRole("button", { name: "Render saved asset", exact: true }).click();
+    const seedRenderPayload = (await (await seedRenderResponse).json()) as {
+      stages: Array<{ content?: string; fidelity: string }>;
+    };
+    expect(seedRenderPayload.stages).toContainEqual(
+      expect.objectContaining({
+        content: expect.stringContaining('"operation": "sling_load"'),
+        fidelity: "semantic",
+      }),
+    );
+    await expect(page.getByTestId("asset-render-view")).toContainText("Preview — not executed", {
+      timeout: 15000,
+    });
+    expect(executionRequests).toEqual([]);
+
     const seedProperties = await openAssetProperties(page);
     const seedColumns = seedProperties.locator("section").filter({ hasText: "Columns" }).first();
     await expect(seedColumns.getByRole("heading", { name: "Columns" })).toBeVisible({

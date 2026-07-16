@@ -32,6 +32,7 @@ func Root(version string) *cli.Command {
 			Web(),
 			Standalone(),
 			Run(),
+			Render(),
 			Ls(),
 			TypeCheck(),
 			Deploy(),

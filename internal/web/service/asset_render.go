@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"os"
 	"path/filepath"
 	"strings"
 	"time"
@@ -30,7 +31,7 @@ var (
 	errQuerySensorQueryIsMissing = errors.New("query sensor parameter \"query\" is required")
 )
 
-type assetRenderManifestCollector func(string) (map[string]string, map[string][]byte, error)
+type assetRenderManifestCollector func(string) (map[string]string, error)
 type assetRenderSourceStateCollector func(string) (snapshot.SourceState, error)
 
 type assetRenderBoundaryError struct {
@@ -109,7 +110,7 @@ type AssetRenderContext struct {
 	FullRefresh          bool   `json:"full_refresh"`
 	VariablesDigest      string `json:"variables_digest"`
 	// ConfigurationDigest covers only the selected environment fields used by
-	// this connection-free DuckDB render slice. It is not the canonical
+	// this connection-free asset render slice. It is not the canonical
 	// configuration or physical-target identity required by pipeline planning.
 	ConfigurationDigest string `json:"configuration_digest"`
 }
@@ -160,10 +161,9 @@ type AssetRenderResult struct {
 }
 
 // AssetRenderService renders a saved working-tree asset without connecting to
-// a warehouse. The first vertical slice provides exact compiled queries for
-// SQL assets and exact materialization SQL for DuckDB/MotherDuck query assets.
-// Other runtimes remain explicit partial/unsupported results until their
-// executor construction exposes the same read-only planning seam.
+// a warehouse. SQL assets expose compiled queries and, where the direct
+// materializer supports it, exact execution SQL. Renart-owned non-SQL runtimes
+// expose secret-free semantic or runtime-only operation descriptions.
 type AssetRenderService struct {
 	workspaceRoot      string
 	fs                 afero.Fs
@@ -177,7 +177,7 @@ func NewAssetRenderService(workspaceRoot string) *AssetRenderService {
 		workspaceRoot:      workspaceRoot,
 		fs:                 afero.NewOsFs(),
 		now:                func() time.Time { return time.Now().UTC() },
-		collectManifest:    snapshot.CollectManifest,
+		collectManifest:    snapshot.CollectManifestHashes,
 		collectSourceState: snapshot.CollectSourceState,
 	}
 }
@@ -235,6 +235,9 @@ func (s *AssetRenderService) renderPath(ctx context.Context, assetPath string, r
 	}
 	assetPath, err := resolveWorkspaceRenderAssetPath(s.workspaceRoot, assetPath)
 	if err != nil {
+		if errors.Is(err, ErrAssetNotFound) {
+			return AssetRenderResult{}, ErrAssetNotFound
+		}
 		return AssetRenderResult{}, classifyAssetRenderError(
 			http.StatusBadRequest,
 			"invalid_asset_path",
@@ -253,7 +256,7 @@ func (s *AssetRenderService) renderPath(ctx context.Context, assetPath string, r
 	}
 	collectManifest := s.collectManifest
 	if collectManifest == nil {
-		collectManifest = snapshot.CollectManifest
+		collectManifest = snapshot.CollectManifestHashes
 	}
 	collectSourceState := s.collectSourceState
 	if collectSourceState == nil {
@@ -268,7 +271,7 @@ func (s *AssetRenderService) renderPath(ctx context.Context, assetPath string, r
 			fmt.Errorf("capture source state: %w", err),
 		)
 	}
-	manifest, _, err := collectManifest(pipelineDir)
+	manifest, err := collectManifest(pipelineDir)
 	if err != nil {
 		return AssetRenderResult{}, classifyAssetRenderError(
 			http.StatusInternalServerError,
@@ -402,7 +405,7 @@ func (s *AssetRenderService) renderPath(ctx context.Context, assetPath string, r
 	if pp.Config.SelectedEnvironment != nil {
 		result.Provenance.Context.SchemaPrefix = pp.Config.SelectedEnvironment.SchemaPrefix
 	}
-	if connectionName, connectionErr := pp.Pipeline.GetConnectionNameForAsset(pp.Asset); connectionErr == nil {
+	if connectionName, connectionErr := assetRenderConnectionName(pp); connectionErr == nil {
 		result.Asset.ConnectionName = connectionName
 	} else {
 		result.Status = AssetRenderStatusPartial
@@ -413,6 +416,19 @@ func (s *AssetRenderService) renderPath(ctx context.Context, assetPath string, r
 		})
 	}
 	result.Provenance.Context.ConfigurationDigest = assetRenderConfigurationDigest(pp.Config, result.Asset.ConnectionName)
+
+	renderer, err := buildAssetPlanRenderer(fs, pp.Pipeline, timeWindow, executionTime, runID)
+	if err != nil {
+		return AssetRenderResult{}, fmt.Errorf("build renderer: %w", err)
+	}
+	renderCtx := assetPlanRenderContext(ctx, pp.Config, timeWindow, executionTime, runID, effectiveFullRefresh)
+	if outcome := renderSemanticAsset(pp, renderer, renderCtx, result.Asset.ConnectionName, effectiveFullRefresh, s.workspaceRoot); outcome.handled {
+		result.Stages = append(result.Stages, outcome.stages...)
+		result.Issues = append(result.Issues, outcome.issues...)
+		result.Redactions = append(result.Redactions, outcome.redactions...)
+		result.Status = mergeAssetRenderStatus(result.Status, outcome.status)
+		return finalizeAssetRenderResult(result, pp.Config), nil
+	}
 
 	dialect, dialectErr := AssetTypeToDialect(pp.Asset.Type)
 	if dialectErr != nil {
@@ -427,12 +443,6 @@ func (s *AssetRenderService) renderPath(ctx context.Context, assetPath string, r
 		return finalizeAssetRenderResult(result, pp.Config), nil
 	}
 	result.Asset.Dialect = dialect
-
-	renderer, err := buildAssetPlanRenderer(fs, pp.Pipeline, timeWindow, executionTime, runID)
-	if err != nil {
-		return AssetRenderResult{}, fmt.Errorf("build renderer: %w", err)
-	}
-	renderCtx := assetPlanRenderContext(ctx, pp.Config, timeWindow, executionTime, runID, effectiveFullRefresh)
 	extractor := &query.WholeFileExtractor{Fs: fs, Renderer: renderer}
 	assetExtractor, err := extractor.CloneForAsset(renderCtx, pp.Pipeline, pp.Asset)
 	if err != nil {
@@ -784,8 +794,8 @@ func workspaceRelativeRenderPath(workspaceRoot, path string) string {
 		return ""
 	}
 	rel, err := filepath.Rel(workspaceRoot, path)
-	if err != nil || strings.HasPrefix(rel, "..") {
-		return filepath.ToSlash(path)
+	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return ""
 	}
 	return filepath.ToSlash(rel)
 }
@@ -822,6 +832,9 @@ func resolveWorkspaceRenderAssetPath(workspaceRoot, input string) (string, error
 	}
 	resolvedAsset, err := filepath.EvalSymlinks(joined)
 	if err != nil {
+		if os.IsNotExist(err) {
+			return "", ErrAssetNotFound
+		}
 		return "", fmt.Errorf("resolve asset_path symlinks: %w", err)
 	}
 	if !renderPathIsWithin(resolvedRoot, resolvedAsset) {

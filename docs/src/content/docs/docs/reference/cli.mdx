@@ -7,6 +7,17 @@ The `renart` binary contains the whole product. `renart --help` and
 `renart <command> --help` are always authoritative for your installed
 version.
 
+| Command | Purpose |
+| --- | --- |
+| `renart web` | Start the Renart IDE. |
+| `renart run` | Run a pipeline or asset. |
+| `renart render` | Preview one saved asset without executing it. |
+| `renart ls` | List pipelines or assets. |
+| `renart type-check` | Validate a pipeline's saved assets. |
+| `renart deploy` | Snapshot a pipeline for scheduled execution. |
+| `renart init` | Scaffold a project. |
+| `renart standalone` | Start the desktop app. |
+
 Commands that take a pipeline or asset find your workspace the way git
 finds a repository: they walk up from the current directory, so you can run
 them from anywhere inside a project. Pass `--workspace` to point somewhere
@@ -38,9 +49,9 @@ argument it runs the pipeline enclosing the current directory.
 
 ```bash
 renart run                    # the pipeline around you
-renart run marts              # a pipeline by name
-renart run mart.orders        # one asset by name
-renart run assets/orders.sql  # one asset by path
+renart run acme_shop          # a pipeline by name
+renart run marts.daily_revenue
+renart run acme_shop/assets/marts/daily_revenue.sql
 ```
 
 If the Renart IDE is open on the same workspace, the run goes through it —
@@ -61,6 +72,39 @@ the IDE picks up the results the next time it starts.
 
 Exit codes: `0` success, `1` the run failed, `2` usage error.
 
+## renart render
+
+Previews the saved operations for one asset without executing them or
+connecting to a warehouse.
+
+| Flag | Meaning |
+| --- | --- |
+| `--workspace` | Use a workspace other than the one found from the current directory. |
+| `--env` | Environment whose render context is used. |
+| `--start-date`, `--end-date` | ISO dates for the preview window (default: the pipeline schedule). |
+| `--execution-time` | RFC 3339 timestamp used by templates (default: now). |
+| `--full-refresh` | Preview full-refresh behavior when the environment permits it. |
+| `--json` | Emit the structured render response as JSON. |
+| `--local` | Render in-process even when the IDE is open. |
+
+```bash
+renart render marts.daily_revenue
+renart render --json acme_shop/assets/raw/customers.asset.yml
+```
+
+If the IDE has the workspace open, the command delegates to that server and
+uses the same render service as the Build workbench. Otherwise it uses the
+read-only service in-process without starting the scheduler or state database.
+
+SQL stages distinguish the exact compiled query from execution SQL. Non-SQL
+assets can show semantic operations, while Python is marked runtime-only
+because its code decides the final operations at runtime. Every stage reports
+its fidelity; a semantic or runtime-only stage is not presented as exact SQL.
+Credential values are redacted or omitted.
+
+Exit codes: `0` preview produced, `1` render error or unsupported asset, `2`
+usage error.
+
 ## renart ls
 
 Lists pipelines or assets in the workspace.
@@ -68,7 +112,7 @@ Lists pipelines or assets in the workspace.
 ```bash
 renart ls                  # pipelines: name, assets, schedule
 renart ls assets           # every asset
-renart ls assets marts     # assets of one pipeline
+renart ls assets acme_shop # assets of one pipeline
 ```
 
 `--json` emits the same listing as JSON.

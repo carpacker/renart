@@ -131,12 +131,7 @@ import type { StreamAssetEvent } from "@/lib/api-streams";
 import { typeCheckPipeline, type PipelineTypeCheckReport } from "@/lib/api-pipelines";
 import { renderAsset, type AssetRenderResult } from "@/lib/api-asset-render";
 import type { AssetStaleness } from "@/lib/api-staleness";
-import {
-  isQuerySensorAssetType,
-  isSeedAssetType,
-  isSensorAssetType,
-  isSqlAssetType,
-} from "@/lib/asset-types";
+import { isSeedAssetType, isSensorAssetType, isSqlAssetType } from "@/lib/asset-types";
 import { editorDraftAtom } from "@/lib/atoms/domains/editor";
 import type { MaterializeHistoryEntry } from "@/lib/atoms/results";
 import {
@@ -2458,9 +2453,7 @@ function EditorWorkspace({ asset, adhoc }: { asset: BuildAsset; adhoc: boolean }
   const filename =
     asset.path ?? `${asset.dir ? `${asset.dir}/` : ""}${asset.name}${kindMeta[asset.kind].ext}`;
   const renderableAsset = Boolean(
-    asset.workspaceAsset &&
-    (isSqlAssetType(asset.workspaceAsset.type) ||
-      isQuerySensorAssetType(asset.workspaceAsset.type)),
+    asset.workspaceAsset && isRenderableAssetType(asset.workspaceAsset.type),
   );
 
   return (
@@ -2694,8 +2687,8 @@ function EditorActionButtons({
           onClick={onRender}
           disabled={renderDisabled || Boolean(renderBlockedReason)}
           aria-busy={renderLoading}
-          aria-label="Render saved SQL"
-          title={renderBlockedReason ?? "Render saved SQL"}
+          aria-label="Render saved asset"
+          title={renderBlockedReason ?? "Render saved asset"}
         >
           <FileCode className="size-3.5" data-icon="inline-start" />
           {showLabels ? renderLabel : <span className="sr-only">{renderLabel}</span>}
@@ -2899,7 +2892,7 @@ function ResultsPanel({
               </TabsTrigger>
               <TabsTrigger value="render" className={scrollableTabsTriggerClass}>
                 <FileCode className="size-3.5" />
-                Rendered SQL
+                Render
               </TabsTrigger>
               <TabsTrigger value="materialize" className={scrollableTabsTriggerClass}>
                 <Hammer className="size-3.5" />
@@ -5094,4 +5087,17 @@ function BuildStaleDialog({
 
 function SettingsIcon() {
   return <Sliders className="size-3.5" />;
+}
+
+function isRenderableAssetType(assetType: string) {
+  const normalized = assetType.trim().toLowerCase();
+  return (
+    isSqlAssetType(normalized) ||
+    isSeedAssetType(normalized) ||
+    isSensorAssetType(normalized) ||
+    normalized === "python" ||
+    normalized === "load" ||
+    normalized === "api" ||
+    normalized === "ingestr"
+  );
 }

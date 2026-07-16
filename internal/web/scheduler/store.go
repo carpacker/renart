@@ -59,7 +59,7 @@ func OpenStore(path string) (*Store, error) {
 			err,
 		)
 	}
-	if err := preflightActiveRunSlotMigration(context.Background(), db); err != nil {
+	if err := reconcileActiveRunSlotMigration(context.Background(), db); err != nil {
 		_ = db.Close()
 		return nil, err
 	}
@@ -74,7 +74,7 @@ func OpenStore(path string) (*Store, error) {
 	return store, nil
 }
 
-func preflightActiveRunSlotMigration(ctx context.Context, db *sql.DB) error {
+func reconcileActiveRunSlotMigration(ctx context.Context, db *sql.DB) error {
 	var hasRunsTable, hasSlotTable bool
 	if err := db.QueryRowContext(ctx, `
 		SELECT EXISTS(SELECT 1 FROM sqlite_schema WHERE type = 'table' AND name = 'pipeline_runs')`).Scan(&hasRunsTable); err != nil {
@@ -102,16 +102,19 @@ func preflightActiveRunSlotMigration(ctx context.Context, db *sql.DB) error {
 			GROUP BY pipeline_id
 			HAVING COUNT(*) > 1
 		  )
-		ORDER BY pipeline_id, id`)
+		ORDER BY pipeline_id,
+		         CASE status WHEN 'queued' THEN 0 ELSE 1 END,
+		         COALESCE(started_at, ''),
+		         id`)
 	if err != nil {
-		return fmt.Errorf("preflight active-run slot migration: %w", err)
+		return fmt.Errorf("inspect active-run slot migration conflicts: %w", err)
 	}
-	defer rows.Close()
 	conflicts := make(map[string][]string)
 	order := make([]string, 0)
 	for rows.Next() {
 		var pipelineID, runID string
 		if err := rows.Scan(&pipelineID, &runID); err != nil {
+			_ = rows.Close()
 			return err
 		}
 		if _, exists := conflicts[pipelineID]; !exists {
@@ -120,19 +123,89 @@ func preflightActiveRunSlotMigration(ctx context.Context, db *sql.DB) error {
 		conflicts[pipelineID] = append(conflicts[pipelineID], runID)
 	}
 	if err := rows.Err(); err != nil {
+		_ = rows.Close()
+		return err
+	}
+	if err := rows.Close(); err != nil {
 		return err
 	}
 	if len(conflicts) == 0 {
 		return nil
 	}
-	details := make([]string, 0, len(order))
-	for _, pipelineID := range order {
-		details = append(details, fmt.Sprintf("%s=[%s]", pipelineID, strings.Join(conflicts[pipelineID], ", ")))
+
+	// Builds predating atomic admission could race HasActiveRun and persist more
+	// than one active row for the same path. Blocking the migration leaves the
+	// workspace with no running server and no way to cancel those rows. Keep one
+	// deterministic queued-first survivor for normal startup recovery and retain
+	// every conflicting row as an auditable terminal failure.
+	var hasRecoveryPending bool
+	if err := db.QueryRowContext(ctx, `
+		SELECT EXISTS(
+			SELECT 1 FROM pragma_table_info('pipeline_runs')
+			WHERE name = 'recovery_pending'
+		)`).Scan(&hasRecoveryPending); err != nil {
+		return fmt.Errorf("inspect active-run recovery schema: %w", err)
 	}
-	return fmt.Errorf(
-		"cannot migrate the state database to atomic pipeline run slots while duplicate active runs exist: %s; finish or cancel the listed runs before retrying",
-		strings.Join(details, "; "),
-	)
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("reconcile active-run slot migration: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	now := formatTime(time.Now().UTC())
+	for _, pipelineID := range order {
+		runIDs := conflicts[pipelineID]
+		survivorID := runIDs[0]
+		for _, runID := range runIDs[1:] {
+			reason := fmt.Sprintf(
+				"interrupted: duplicate active run reconciled during atomic run-slot migration; pipeline %s retained run %s for scheduler recovery",
+				pipelineID,
+				survivorID,
+			)
+			var result sql.Result
+			if hasRecoveryPending {
+				result, err = tx.ExecContext(ctx, `
+					UPDATE pipeline_runs
+					SET status = ?, finished_at = ?, error = ?, recovery_pending = 1
+					WHERE id = ? AND status IN (?, ?)`,
+					string(RunStatusFailed), now, reason, runID,
+					string(RunStatusQueued), string(RunStatusRunning))
+			} else {
+				result, err = tx.ExecContext(ctx, `
+					UPDATE pipeline_runs
+					SET status = ?, finished_at = ?, error = ?
+					WHERE id = ? AND status IN (?, ?)`,
+					string(RunStatusFailed), now, reason, runID,
+					string(RunStatusQueued), string(RunStatusRunning))
+			}
+			if err != nil {
+				return fmt.Errorf("terminalize duplicate active run %s: %w", runID, err)
+			}
+			updated, err := result.RowsAffected()
+			if err != nil {
+				return fmt.Errorf("confirm duplicate active run %s reconciliation: %w", runID, err)
+			}
+			if updated == 0 {
+				continue
+			}
+			if _, err := tx.ExecContext(ctx, `
+				UPDATE pipeline_run_steps
+				SET status = ?, finished_at = ?,
+				    error = CASE WHEN error IS NULL OR error = '' THEN ? ELSE error END
+				WHERE run_id = ? AND finished_at IS NULL`,
+				string(RunStatusFailed), now, reason, runID); err != nil {
+				return fmt.Errorf("close duplicate active run %s steps: %w", runID, err)
+			}
+			if _, err := tx.ExecContext(ctx, `
+				INSERT INTO pipeline_run_logs (run_id, at, line)
+				VALUES (?, ?, ?)`, runID, now, reason); err != nil {
+				return fmt.Errorf("record duplicate active run %s recovery: %w", runID, err)
+			}
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit active-run slot migration reconciliation: %w", err)
+	}
+	return nil
 }
 
 func verifyStateDatabaseIntegrity(ctx context.Context, db *sql.DB) error {
@@ -313,6 +386,79 @@ func (s *Store) claimRunSlot(ctx context.Context, execer runSpecExecer, run Pipe
 	return nil
 }
 
+func ensureRunSpecUUIDSlot(ctx context.Context, tx *sql.Tx, runID string, spec runSpecV1) error {
+	pipelineUUID := strings.TrimSpace(spec.Pipeline.UUID)
+	if pipelineUUID == "" {
+		return nil
+	}
+	slotKey := "uuid:" + pipelineUUID
+	if _, err := tx.ExecContext(ctx, `
+		INSERT INTO pipeline_run_slots (slot_key, run_id)
+		VALUES (?, ?)
+		ON CONFLICT (slot_key) DO NOTHING`, slotKey, runID); err != nil {
+		return err
+	}
+	var ownerRunID string
+	if err := tx.QueryRowContext(ctx, `
+		SELECT run_id FROM pipeline_run_slots WHERE slot_key = ?`, slotKey).Scan(&ownerRunID); err != nil {
+		return err
+	}
+	if ownerRunID != runID {
+		return &PipelineRunActiveError{PipelineID: spec.Pipeline.ID, ActiveRunID: ownerRunID}
+	}
+	return nil
+}
+
+// validateActiveRunSpecSlotBinding anchors the private stable UUID to durable
+// state that the JSON body cannot rewrite. It also checks the path alias so a
+// stored spec and run row cannot be changed together to escape admission.
+func (s *Store) validateActiveRunSpecSlotBinding(ctx context.Context, run PipelineRun, spec runSpecV1) error {
+	expectedPath := "path:" + strings.TrimSpace(run.PipelineID)
+	var hasPath bool
+	if err := s.db.QueryRowContext(ctx, `
+		SELECT EXISTS(
+			SELECT 1 FROM pipeline_run_slots
+			WHERE slot_key = ? AND run_id = ?
+		)`, expectedPath, run.ID).Scan(&hasPath); err != nil {
+		return err
+	}
+	if !hasPath {
+		return errors.New("run spec pipeline path does not match active run slot")
+	}
+
+	expectedUUID := strings.TrimSpace(spec.Pipeline.UUID)
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT slot_key
+		FROM pipeline_run_slots
+		WHERE run_id = ? AND slot_key LIKE 'uuid:%'
+		ORDER BY slot_key`, run.ID)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	var uuidSlots []string
+	for rows.Next() {
+		var slotKey string
+		if err := rows.Scan(&slotKey); err != nil {
+			return err
+		}
+		uuidSlots = append(uuidSlots, slotKey)
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	if expectedUUID == "" {
+		if len(uuidSlots) != 0 {
+			return errors.New("run spec omits the stable pipeline UUID owned by the active run slot")
+		}
+		return nil
+	}
+	if len(uuidSlots) != 1 || uuidSlots[0] != "uuid:"+expectedUUID {
+		return errors.New("run spec stable pipeline UUID does not match active run slot")
+	}
+	return nil
+}
+
 func (s *Store) insertRunSpec(ctx context.Context, execer runSpecExecer, runID string, spec runSpecV1) error {
 	body, err := marshalRunSpec(spec)
 	if err != nil {
@@ -328,7 +474,7 @@ func (s *Store) CreateWithSpec(ctx context.Context, run PipelineRun, spec runSpe
 	if err := spec.validate(); err != nil {
 		return "", err
 	}
-	if err := validateRunSpecBinding(run, spec); err != nil {
+	if err := validateRunSpecAdmissionBinding(run, spec); err != nil {
 		return "", err
 	}
 	for attempt := 0; attempt < 2; attempt++ {
@@ -406,6 +552,9 @@ func (s *Store) SetRunSpecIfMissing(ctx context.Context, runID string, spec runS
 		return runSpecV1{}, err
 	}
 	if inserted == 1 {
+		if err := ensureRunSpecUUIDSlot(ctx, tx, runID, spec); err != nil {
+			return runSpecV1{}, err
+		}
 		if _, err := tx.ExecContext(ctx, `
 			UPDATE pipeline_runs
 			SET full_refresh = ?, backfill = ?, sensor_mode = ?

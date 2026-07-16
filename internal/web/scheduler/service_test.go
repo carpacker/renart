@@ -318,7 +318,7 @@ func TestServiceTriggerPersistsRunAndLogs(t *testing.T) {
 	require.NoError(t, service.Start(ctx))
 	defer service.Stop()
 
-	run, err := service.Trigger(ctx, PipelineSchedule{PipelineID: "pipeline-id", PipelineName: "analytics"}, TriggerRequest{
+	run, err := service.Trigger(ctx, PipelineSchedule{PipelineID: "pipeline-id", PipelineUUID: "pipeline-uuid", PipelineName: "analytics"}, TriggerRequest{
 		Source:            RunSourceSnapshot,
 		SnapshotVersionID: " snapshot-7 ",
 		LegacyTrigger:     string(RunTriggerSchedule),
@@ -335,6 +335,7 @@ func TestServiceTriggerPersistsRunAndLogs(t *testing.T) {
 		t.Fatal("runner did not execute")
 	}
 	assert.False(t, capturedRequest.Scheduled)
+	assert.Equal(t, "pipeline-uuid", capturedRequest.PipelineUUID)
 	assert.Equal(t, "snapshot-7", capturedRequest.SnapshotVersionID)
 
 	require.Eventually(t, func() bool {
@@ -608,6 +609,44 @@ func TestPrepareRunUsesStoredSpecAndIgnoresConflictingLegacyArguments(t *testing
 	assert.True(t, prepared.FullRefresh)
 	assert.False(t, prepared.Backfill)
 	assert.Equal(t, "skip", prepared.SensorMode)
+}
+
+func TestPrepareRunRejectsStoredSpecWhoseStableUUIDWasRewrittenConsistently(t *testing.T) {
+	t.Parallel()
+	store, err := OpenStore(filepath.Join(t.TempDir(), "state.db"))
+	require.NoError(t, err)
+	defer store.Close()
+	ctx := context.Background()
+
+	start := time.Date(2026, 7, 16, 8, 0, 0, 0, time.UTC)
+	end := start.Add(time.Hour)
+	run := PipelineRun{
+		ID: "stable-identity", PipelineID: "old-path", PipelineUUID: "stable-uuid", Pipeline: "analytics",
+		Environment: "prod", Trigger: RunTriggerSchedule, Status: RunStatusQueued,
+		WinStart: &start, WinEnd: &end, SnapshotVersionID: "snapshot-id",
+	}
+	spec := scheduledRunSpec(run, pipelineRunJobArgs{
+		PipelineUUID: "stable-uuid", Environment: "prod", Schedule: "@hourly", Timezone: "UTC",
+	})
+	_, err = store.CreateWithSpec(ctx, run, spec)
+	require.NoError(t, err)
+
+	// Rewriting both JSON UUID copies still satisfies the RunSpec's internal
+	// equality check. The independently admitted UUID slot must reject it.
+	_, err = store.db.ExecContext(ctx, `
+		UPDATE pipeline_run_specs
+		SET body = json_set(body,
+			'$.pipeline.uuid', 'rewritten-uuid',
+			'$.schedule.pipeline_uuid', 'rewritten-uuid')
+		WHERE run_id = ?`, run.ID)
+	require.NoError(t, err)
+
+	service := New(Options{Store: store})
+	_, _, ok, err := service.prepareRun(ctx, 93, pipelineRunJobArgs{RunID: run.ID})
+	require.ErrorIs(t, err, ErrInvalidStoredSpec)
+	assert.ErrorContains(t, err, "stable pipeline UUID does not match active run slot")
+	assert.False(t, ok)
+	assert.Equal(t, 1, countRows(t, store, `SELECT COUNT(*) FROM pipeline_run_slots WHERE slot_key = 'uuid:stable-uuid' AND run_id = ?`, run.ID))
 }
 
 func TestPrepareRunStrictlyUpgradesLegacyJobOrRejectsUnknownSpecVersion(t *testing.T) {

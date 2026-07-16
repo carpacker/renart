@@ -1070,7 +1070,7 @@ func (s *Service) admitQueuedRun(ctx context.Context, client *river.Client[*sql.
 	if err := spec.validate(); err != nil {
 		return PipelineRun{}, err
 	}
-	if err := validateRunSpecBinding(run, spec); err != nil {
+	if err := validateRunSpecAdmissionBinding(run, spec); err != nil {
 		return PipelineRun{}, err
 	}
 	for attempt := 0; attempt < 2; attempt++ {
@@ -1176,6 +1176,9 @@ func (s *Service) prepareRun(ctx context.Context, riverJobID int64, args pipelin
 			}
 			spec, err = s.store.SetRunSpecIfMissing(ctx, run.ID, spec)
 			if err != nil {
+				if errors.Is(err, ErrPipelineRunActive) {
+					return PipelineRun{}, runSpecV1{}, false, &invalidRunSpecError{RunID: run.ID, Err: err}
+				}
 				return PipelineRun{}, runSpecV1{}, false, err
 			}
 			run, _, _, err = s.store.Get(ctx, run.ID)
@@ -1184,6 +1187,9 @@ func (s *Service) prepareRun(ctx context.Context, riverJobID int64, args pipelin
 			}
 		}
 		if err := validateRunSpecBinding(run, spec); err != nil {
+			return PipelineRun{}, runSpecV1{}, false, &invalidRunSpecError{RunID: run.ID, Err: err}
+		}
+		if err := s.store.validateActiveRunSpecSlotBinding(ctx, run, spec); err != nil {
 			return PipelineRun{}, runSpecV1{}, false, &invalidRunSpecError{RunID: run.ID, Err: err}
 		}
 		run.RiverJobID = &riverJobID
@@ -1274,6 +1280,7 @@ func (s *Service) execute(ctx context.Context, run PipelineRun, spec runSpecV1) 
 	req := RunRequest{
 		RunID:                run.ID,
 		PipelineID:           spec.Pipeline.ID,
+		PipelineUUID:         spec.Pipeline.UUID,
 		Environment:          spec.Requested.Environment,
 		Scheduled:            spec.Origin == RunTriggerSchedule,
 		SnapshotVersionID:    spec.Source.SnapshotVersionID,
