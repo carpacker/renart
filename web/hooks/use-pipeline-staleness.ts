@@ -12,11 +12,24 @@ export type PipelineStaleness = {
   byAssetName: Record<string, AssetStaleness>;
   staleAssets: AssetStaleness[];
   loading: boolean;
+  error: string | null;
 };
 
 export type PipelinesStaleness = {
   byPipelineId: Record<string, Record<string, AssetStaleness>>;
   loading: boolean;
+  error: string | null;
+};
+
+type StalenessSnapshot = {
+  selectionKey: string;
+  assetsByPipelineId: Record<string, AssetStaleness[]>;
+};
+
+type StalenessRequestState = {
+  selectionKey: string;
+  loading: boolean;
+  error: string | null;
 };
 
 const staleStatuses = new Set([
@@ -52,19 +65,31 @@ export function usePipelinesStaleness(pipelineIds: string[]): PipelinesStaleness
     () => (pipelineKey ? pipelineKey.split("\n") : []),
     [pipelineKey],
   );
-  const [assetsByPipelineId, setAssetsByPipelineId] = useState<Record<string, AssetStaleness[]>>(
-    {},
+  const selectionKey = useMemo(
+    () =>
+      JSON.stringify([
+        pipelineKey,
+        selectedEnvironment ?? "",
+        selectedTimeWindow?.start ?? "",
+        selectedTimeWindow?.end ?? "",
+      ]),
+    [pipelineKey, selectedEnvironment, selectedTimeWindow?.end, selectedTimeWindow?.start],
   );
-  const [loading, setLoading] = useState(false);
+  const [snapshot, setSnapshot] = useState<StalenessSnapshot | null>(null);
+  const [requestState, setRequestState] = useState<StalenessRequestState>({
+    selectionKey: "",
+    loading: false,
+    error: null,
+  });
 
   useEffect(() => {
     if (stablePipelineIds.length === 0) {
-      setAssetsByPipelineId({});
-      setLoading(false);
+      setSnapshot(null);
+      setRequestState({ selectionKey, loading: false, error: null });
       return;
     }
     let cancelled = false;
-    setLoading(true);
+    setRequestState({ selectionKey, loading: true, error: null });
     Promise.all(
       stablePipelineIds.map(async (pipelineId) => {
         const response = await getPipelineStaleness(pipelineId, {
@@ -76,18 +101,31 @@ export function usePipelinesStaleness(pipelineIds: string[]): PipelinesStaleness
       }),
     )
       .then((entries) => {
-        if (!cancelled) setAssetsByPipelineId(Object.fromEntries(entries));
+        if (cancelled) return;
+        setSnapshot({ selectionKey, assetsByPipelineId: Object.fromEntries(entries) });
+        setRequestState({ selectionKey, loading: false, error: null });
       })
-      .catch(() => {
-        if (!cancelled) setAssetsByPipelineId({});
-      })
-      .finally(() => {
-        if (!cancelled) setLoading(false);
+      .catch((cause) => {
+        if (cancelled) return;
+        setRequestState({
+          selectionKey,
+          loading: false,
+          error:
+            cause instanceof Error && cause.message
+              ? cause.message
+              : "Freshness could not be loaded.",
+        });
       });
     return () => {
       cancelled = true;
     };
-  }, [stablePipelineIds, selectedEnvironment, selectedTimeWindow?.start, selectedTimeWindow?.end]);
+  }, [
+    selectionKey,
+    stablePipelineIds,
+    selectedEnvironment,
+    selectedTimeWindow?.start,
+    selectedTimeWindow?.end,
+  ]);
 
   useEffect(() => {
     if (!stalenessEvent || !stablePipelineIds.includes(stalenessEvent.pipeline_id)) return;
@@ -99,11 +137,15 @@ export function usePipelinesStaleness(pipelineIds: string[]): PipelinesStaleness
       !sameInstant(stalenessEvent.end, selectedTimeWindow?.end)
     )
       return;
-    setAssetsByPipelineId((current) => ({
-      ...current,
-      [stalenessEvent.pipeline_id]: stalenessEvent.assets ?? [],
+    setSnapshot((current) => ({
+      selectionKey,
+      assetsByPipelineId: {
+        ...(current?.selectionKey === selectionKey ? current.assetsByPipelineId : {}),
+        [stalenessEvent.pipeline_id]: stalenessEvent.assets ?? [],
+      },
     }));
   }, [
+    selectionKey,
     stablePipelineIds,
     selectedEnvironment,
     selectedTimeWindow?.start,
@@ -112,6 +154,9 @@ export function usePipelinesStaleness(pipelineIds: string[]): PipelinesStaleness
   ]);
 
   return useMemo(() => {
+    const assetsByPipelineId =
+      snapshot?.selectionKey === selectionKey ? snapshot.assetsByPipelineId : {};
+    const requestIsCurrent = requestState.selectionKey === selectionKey;
     const byPipelineId: Record<string, Record<string, AssetStaleness>> = {};
     for (const pipelineId of stablePipelineIds) {
       const byAssetName: Record<string, AssetStaleness> = {};
@@ -120,8 +165,12 @@ export function usePipelinesStaleness(pipelineIds: string[]): PipelinesStaleness
       }
       byPipelineId[pipelineId] = byAssetName;
     }
-    return { byPipelineId, loading };
-  }, [assetsByPipelineId, loading, stablePipelineIds]);
+    return {
+      byPipelineId,
+      loading: stablePipelineIds.length > 0 && (!requestIsCurrent || requestState.loading),
+      error: requestIsCurrent ? requestState.error : null,
+    };
+  }, [requestState, selectionKey, snapshot, stablePipelineIds]);
 }
 
 export function usePipelineStaleness(pipelineId: string | undefined): PipelineStaleness {
@@ -132,6 +181,7 @@ export function usePipelineStaleness(pipelineId: string | undefined): PipelineSt
       byAssetName,
       staleAssets: Object.values(byAssetName).filter((asset) => isStaleStatus(asset.status)),
       loading: pipelines.loading,
+      error: pipelines.error,
     };
-  }, [pipelineId, pipelines.byPipelineId, pipelines.loading]);
+  }, [pipelineId, pipelines.byPipelineId, pipelines.error, pipelines.loading]);
 }

@@ -1,7 +1,8 @@
-import { Link } from "@tanstack/react-router";
+import { Link, useNavigate } from "@tanstack/react-router";
 import { useAtomValue } from "jotai";
 import {
   ArrowLeft,
+  AlertTriangle,
   ChevronLeft,
   ChevronRight,
   Loader2,
@@ -14,6 +15,7 @@ import {
 import { useEffect, useMemo, useRef, useState } from "react";
 
 import { AnsiOutput } from "@/components/ansi-output";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -30,8 +32,10 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { formatSchedulerDate, usePipelineScheduler } from "@/hooks/use-pipeline-scheduler";
 import { workspaceAtom } from "@/lib/atoms/domains/workspace";
+import { activePipelineRunConflict, type PipelineRunSource } from "@/lib/api-scheduler";
 import type { PipelineRun, PipelineRunLogLine, PipelineRunStep } from "@/lib/types";
 import { cn } from "@/lib/utils";
+import { awaitWorkspaceSaves } from "@/lib/workspace-save-barrier";
 
 import { PageHeader, AppPage, AppPanel, SimpleTable, StatusPill } from "./app-primitives";
 
@@ -81,7 +85,9 @@ export function AppRunsPage({
     }),
     [q, requestedPage, status],
   );
-  const { runs, loading, runsTotal, runsOffset } = usePipelineScheduler({ runsQuery });
+  const { runs, loading, runsTotal, runsOffset, runsError, refreshRuns } = usePipelineScheduler({
+    runsQuery,
+  });
   const pages = Math.max(1, Math.ceil(runsTotal / pageSize));
   const page = Math.min(requestedPage, pages);
   const visibleRuns = runs;
@@ -128,6 +134,21 @@ export function AppRunsPage({
           </div>
         }
       />
+      {runsError ? (
+        <div className="px-3 pb-2">
+          <Alert variant="destructive">
+            <AlertTriangle />
+            <AlertTitle>Runs could not be refreshed</AlertTitle>
+            <AlertDescription className="flex items-center justify-between gap-3">
+              <span>{runsError} The last successfully loaded rows remain visible.</span>
+              <Button variant="outline" size="xs" onClick={() => void refreshRuns()}>
+                <RotateCw />
+                Retry
+              </Button>
+            </AlertDescription>
+          </Alert>
+        </div>
+      ) : null}
       <div className="flex flex-wrap items-center gap-1.5 px-3 pb-2">
         {runStatuses.map((item) => (
           <Button
@@ -223,18 +244,117 @@ export function AppRunDetailPage({
   runId: string;
   search?: AppRunsSearch;
 }) {
+  const navigate = useNavigate();
   const workspace = useAtomValue(workspaceAtom);
-  const { selectedRun, logs, steps, loadingRunId, triggerPipeline } = usePipelineScheduler({
+  const {
+    selectedRun,
+    logs,
+    steps,
+    loadingRunId,
+    busyPipeline,
+    runDetailError,
+    selectRun,
+    triggerPipeline,
+  } = usePipelineScheduler({
     selectedRunId: runId,
   });
   const run = selectedRun;
+  const [rerunError, setRerunError] = useState<{
+    message: string;
+    linkedRunId?: string;
+    title?: string;
+    linkLabel?: string;
+  } | null>(null);
   const output = useMemo(() => combineRunOutput(logs, run?.error), [logs, run?.error]);
   const assetIdsByName = useMemo(() => {
     const pipeline = workspace?.pipelines.find((candidate) => candidate.id === run?.pipeline_id);
     return new Map(pipeline?.assets.map((asset) => [asset.name, asset.id]) ?? []);
   }, [run?.pipeline_id, workspace?.pipelines]);
+  const runAgain = async () => {
+    if (!run) return;
+    const executionContextResolved = run.execution_context_resolved === true;
+    const hasCompleteRecordedWindow = Boolean(run.win_start && run.win_end);
+    if (executionContextResolved && !hasCompleteRecordedWindow) {
+      setRerunError({
+        message:
+          "This run's resolved execution context has no complete window and cannot be reused safely.",
+      });
+      return;
+    }
+    const source: PipelineRunSource = run.snapshot_version_id
+      ? { source: "snapshot", snapshot_version_id: run.snapshot_version_id }
+      : { source: "working_tree" };
+    setRerunError(null);
+    let acceptedRunId: string;
+    try {
+      if (source.source === "working_tree") {
+        await awaitWorkspaceSaves();
+      }
+      const response = await triggerPipeline(run.pipeline_id, {
+        ...source,
+        ...(executionContextResolved && run.win_start && run.win_end
+          ? {
+              environment: run.environment,
+              start: run.win_start,
+              end: run.win_end,
+            }
+          : {}),
+      });
+      if (response.status !== "ok" || !response.run?.id) {
+        throw new Error("The rerun was not accepted.");
+      }
+      acceptedRunId = response.run.id;
+    } catch (cause) {
+      const conflict = activePipelineRunConflict(cause);
+      setRerunError({
+        message: conflict
+          ? "A run is already queued or running for this pipeline."
+          : cause instanceof Error
+            ? cause.message
+            : "Failed to queue the run.",
+        linkedRunId: conflict?.activeRunId,
+        title: conflict ? "Pipeline already running" : undefined,
+        linkLabel: conflict ? "Open active run" : undefined,
+      });
+      return;
+    }
+    try {
+      await navigate({
+        to: "/runs/$runId",
+        params: { runId: acceptedRunId },
+        search,
+      });
+    } catch (cause) {
+      setRerunError({
+        message: `Run ${acceptedRunId} was queued, but its details could not be opened${cause instanceof Error && cause.message ? `: ${cause.message}` : "."}`,
+        linkedRunId: acceptedRunId,
+        title: "Rerun queued",
+        linkLabel: "Open queued run",
+      });
+    }
+  };
 
   if (!run) {
+    if (runDetailError) {
+      return (
+        <AppPage>
+          <PageHeader title={`Run ${runId}`} subtitle="Run details could not be loaded" />
+          <div className="px-3 pb-3">
+            <Alert variant="destructive">
+              <AlertTriangle />
+              <AlertTitle>Run details unavailable</AlertTitle>
+              <AlertDescription className="flex items-center justify-between gap-3">
+                <span>{runDetailError}</span>
+                <Button variant="outline" size="sm" onClick={() => void selectRun(runId)}>
+                  <RotateCw />
+                  Retry
+                </Button>
+              </AlertDescription>
+            </Alert>
+          </div>
+        </AppPage>
+      );
+    }
     return (
       <AppPage>
         <PageHeader
@@ -246,11 +366,38 @@ export function AppRunDetailPage({
     );
   }
 
+  const sourceLabel = run.snapshot_version_id
+    ? `deployment ${run.snapshot_version_id.slice(0, 8)}`
+    : "saved workspace";
+  const rerunSourceLabel = run.snapshot_version_id
+    ? `deployment ${run.snapshot_version_id.slice(0, 8)}`
+    : "current saved workspace";
+  const executionContextResolved = run.execution_context_resolved === true;
+  const rerunEnvironmentLabel = executionContextResolved
+    ? run.environment || "default"
+    : "current default resolved at start";
+  const rerunButtonLabel = run.snapshot_version_id
+    ? `Run deployment ${run.snapshot_version_id.slice(0, 8)} with defaults`
+    : "Run current workspace with defaults";
+  const compactRerunButtonLabel = "Run with defaults";
+  const hasRecordedWindow = executionContextResolved && Boolean(run.win_start && run.win_end);
+  const hasIncompleteRecordedWindow = executionContextResolved && !hasRecordedWindow;
+  const rerunWindowLabel = hasRecordedWindow
+    ? `${formatSchedulerDate(run.win_start)} → ${formatSchedulerDate(run.win_end)}`
+    : hasIncompleteRecordedWindow
+      ? "resolved context is incomplete; rerun unavailable"
+      : "current pipeline default resolved at start";
+  const rerunDescription = `Source: ${run.snapshot_version_id ? `deployment ${run.snapshot_version_id}` : "current saved workspace"}. ${executionContextResolved ? `Recorded environment: ${rerunEnvironmentLabel}. Recorded window: ${rerunWindowLabel}.` : "The original effective environment and window are unavailable; current defaults are resolved when the rerun starts."} Default execution mode is used; full-refresh, backfill, sensor mode, variables, selection, authorization, and schedule-only context are not replayed.`;
+  const rerunUnavailable = hasIncompleteRecordedWindow;
+  const runEnvironmentLabel = executionContextResolved
+    ? run.environment || "default"
+    : "execution context unavailable";
+
   return (
     <AppPage>
       <PageHeader
         title={`Run ${run.id}`}
-        subtitle={`Run of ${run.pipeline} · ${steps.length || "unknown"} assets · ${formatRunDuration(run)}`}
+        subtitle={`Run of ${run.pipeline} · ${runEnvironmentLabel} · ${sourceLabel} · ${steps.length || "unknown"} assets · ${formatRunDuration(run)}`}
         actions={
           <div className="flex items-center gap-2">
             <Button asChild variant="ghost" size="icon-sm">
@@ -259,13 +406,86 @@ export function AppRunDetailPage({
               </Link>
             </Button>
             <StatusPill status={run.status} />
-            <Button size="sm" onClick={() => void triggerPipeline(run.pipeline_id)}>
-              <RotateCw className="size-3.5" />
-              Re-execute
-            </Button>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  size="sm"
+                  onClick={() => void runAgain()}
+                  disabled={busyPipeline === run.pipeline_id || rerunUnavailable}
+                  aria-busy={busyPipeline === run.pipeline_id}
+                  aria-label={rerunButtonLabel}
+                  aria-describedby="run-again-context"
+                >
+                  {busyPipeline === run.pipeline_id ? (
+                    <Loader2 data-icon="inline-start" className="animate-spin" />
+                  ) : (
+                    <RotateCw data-icon="inline-start" />
+                  )}
+                  <span className="hidden xl:inline">{rerunButtonLabel}</span>
+                  <span className="xl:hidden">{compactRerunButtonLabel}</span>
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent className="max-w-sm">{rerunDescription}</TooltipContent>
+            </Tooltip>
           </div>
         }
       />
+      <div
+        id="run-again-context"
+        className="flex flex-wrap items-center gap-x-2 gap-y-1 px-3 pb-2 text-xs text-muted-foreground"
+        data-testid="run-again-context"
+      >
+        <span>
+          Rerun source <span className="font-medium text-foreground">{rerunSourceLabel}</span>
+        </span>
+        <span aria-hidden="true">·</span>
+        <span>
+          Environment <span className="font-medium text-foreground">{rerunEnvironmentLabel}</span>
+        </span>
+        <span aria-hidden="true">·</span>
+        <span>{hasRecordedWindow ? `Recorded window ${rerunWindowLabel}` : rerunWindowLabel}</span>
+        <span aria-hidden="true">·</span>
+        <span>
+          Mode <span className="font-medium text-foreground">default execution</span>
+        </span>
+      </div>
+      {rerunError ? (
+        <div className="px-3 pb-2">
+          <Alert variant="destructive">
+            <AlertTriangle />
+            <AlertTitle>{rerunError.title ?? "Could not start rerun"}</AlertTitle>
+            <AlertDescription className="flex flex-wrap items-center gap-2">
+              <span>{rerunError.message}</span>
+              {rerunError.linkedRunId ? (
+                <Button asChild variant="outline" size="xs">
+                  <Link
+                    to="/runs/$runId"
+                    params={{ runId: rerunError.linkedRunId }}
+                    search={search}
+                  >
+                    {rerunError.linkLabel ?? "Open run"}
+                  </Link>
+                </Button>
+              ) : null}
+            </AlertDescription>
+          </Alert>
+        </div>
+      ) : null}
+      {runDetailError ? (
+        <div className="px-3 pb-2">
+          <Alert variant="destructive">
+            <AlertTriangle />
+            <AlertTitle>Run details could not be refreshed</AlertTitle>
+            <AlertDescription className="flex items-center justify-between gap-3">
+              <span>{runDetailError} Showing the last successfully loaded details.</span>
+              <Button variant="outline" size="xs" onClick={() => void selectRun(runId)}>
+                <RotateCw />
+                Retry
+              </Button>
+            </AlertDescription>
+          </Alert>
+        </div>
+      ) : null}
       <div className="flex min-h-0 flex-1 flex-col gap-3 px-3 pb-3">
         <RunTimelinePanel run={run} steps={steps} />
         <AppPanel className="min-h-0 flex-1 overflow-hidden">

@@ -38,6 +38,7 @@ func TestSourceControlInitCreatesRepositoryAndGitignore(t *testing.T) {
 	require.NoError(t, err)
 	for _, expected := range []string{
 		".renart/state.db*",
+		".renart/server.lock",
 		"logs/",
 		"duckdb-files/",
 		".env",

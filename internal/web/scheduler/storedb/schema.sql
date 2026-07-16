@@ -13,11 +13,44 @@ CREATE TABLE IF NOT EXISTS pipeline_runs (
     log_ref TEXT,
     snapshot_version_id TEXT,
     recovery_pending INTEGER NOT NULL DEFAULT 0,
-    river_job_id INTEGER
+    river_job_id INTEGER,
+    full_refresh INTEGER NOT NULL DEFAULT 0,
+    backfill INTEGER NOT NULL DEFAULT 0,
+    sensor_mode TEXT NOT NULL DEFAULT '',
+    execution_context_resolved INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE INDEX IF NOT EXISTS idx_runs_pipeline_time ON pipeline_runs (pipeline_id, started_at DESC);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_pipeline_runs_river_job ON pipeline_runs (river_job_id) WHERE river_job_id IS NOT NULL;
+-- Private execution contracts are deliberately kept out of pipeline_runs so
+-- run-list DTOs and SSE payloads cannot expose authorization or future secret
+-- references by accident.
+CREATE TABLE IF NOT EXISTS pipeline_run_specs (
+    run_id TEXT PRIMARY KEY,
+    version INTEGER NOT NULL CHECK (version > 0),
+    body TEXT NOT NULL CHECK (json_valid(body)),
+    created_at TEXT NOT NULL,
+    FOREIGN KEY(run_id) REFERENCES pipeline_runs(id) ON DELETE CASCADE
+);
+
+-- Pipeline-scope execution claims namespaced path and stable-UUID aliases. The
+-- path alias bridges pre-upgrade active rows; UUID keeps the slot stable across
+-- a rename or move.
+CREATE TABLE IF NOT EXISTS pipeline_run_slots (
+    slot_key TEXT PRIMARY KEY,
+    run_id TEXT NOT NULL,
+    FOREIGN KEY(run_id) REFERENCES pipeline_runs(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_pipeline_run_slots_run ON pipeline_run_slots (run_id);
+
+CREATE TRIGGER IF NOT EXISTS release_pipeline_run_slot
+AFTER UPDATE OF status ON pipeline_runs
+WHEN OLD.status IN ('queued', 'running')
+ AND NEW.status NOT IN ('queued', 'running')
+BEGIN
+    DELETE FROM pipeline_run_slots WHERE run_id = NEW.id;
+END;
 
 CREATE TABLE IF NOT EXISTS pipeline_run_logs (
     run_id TEXT NOT NULL,

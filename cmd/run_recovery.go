@@ -22,8 +22,32 @@ func (s *webServer) replayRecoveredRun(ctx context.Context, run webscheduler.Pip
 	if s == nil || s.eventBus == nil {
 		return nil
 	}
+	if !run.ExecutionContextResolved {
+		// The scheduler normally filters these rows. Keep the replay boundary
+		// fail-safe as well: legacy request fields cannot prove which defaults and
+		// environment restrictions the interrupted executor actually used.
+		if s.logger != nil {
+			s.logger.Warn("skipping interrupted run replay without persisted effective context", zap.String("run_id", run.ID))
+		}
+		return nil
+	}
 	if s.logger != nil {
 		s.logger.Info("replaying persisted steps for interrupted run", zap.String("run_id", run.ID), zap.Int("steps", len(steps)))
+	}
+	type recoveredAsset struct {
+		name   string
+		status string
+	}
+	recovered := make([]recoveredAsset, 0, len(steps))
+	for _, step := range steps {
+		status, terminal := recoveredAssetRunStatus(step.Status)
+		assetName := strings.TrimSpace(step.Asset)
+		if terminal && assetName != "" {
+			recovered = append(recovered, recoveredAsset{name: assetName, status: status})
+		}
+	}
+	if len(recovered) == 0 {
+		return nil
 	}
 
 	pipelineUUID := ""
@@ -61,21 +85,13 @@ func (s *webServer) replayRecoveredRun(ctx context.Context, run webscheduler.Pip
 		}
 	}
 
-	assets := make([]bus.AssetRun, 0, len(steps))
-	for _, step := range steps {
-		status, terminal := recoveredAssetRunStatus(step.Status)
-		assetName := strings.TrimSpace(step.Asset)
-		if !terminal || assetName == "" {
-			continue
-		}
+	assets := make([]bus.AssetRun, 0, len(recovered))
+	for _, asset := range recovered {
 		assets = append(assets, bus.AssetRun{
-			AssetID:   identity.AssetID(pipelineUUID, assetName),
-			AssetName: assetName,
-			Status:    status,
+			AssetID:   identity.AssetID(pipelineUUID, asset.name),
+			AssetName: asset.name,
+			Status:    asset.status,
 		})
-	}
-	if len(assets) == 0 {
-		return nil
 	}
 
 	completedAt := time.Now().UTC()
@@ -88,6 +104,7 @@ func (s *webServer) replayRecoveredRun(ctx context.Context, run webscheduler.Pip
 		Environment:       run.Environment,
 		WinStart:          run.WinStart,
 		WinEnd:            run.WinEnd,
+		FullRefresh:       run.FullRefresh,
 		CompletedAt:       completedAt,
 		Assets:            assets,
 		SnapshotVersionID: run.SnapshotVersionID,

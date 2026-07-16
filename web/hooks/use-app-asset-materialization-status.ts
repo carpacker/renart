@@ -1,5 +1,5 @@
 import { useAtomValue } from "jotai";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import { getRun, getRuns } from "@/lib/api";
 import type { AssetStaleness } from "@/lib/api-staleness";
@@ -138,6 +138,7 @@ export function useAppAssetMaterializationStatus(assets: AppMaterializationAsset
   const selectedEnvironment = useAtomValue(selectedEnvironmentAtom);
   const [statusByKey, setStatusByKey] = useState<StatusByKey>({});
   const [runContextById, setRunContextById] = useState<RunContextById>({});
+  const finishedRunIds = useRef(new Set<string>());
   const [loading, setLoading] = useState(true);
   const pipelineIds = useMemo(
     () =>
@@ -199,6 +200,16 @@ export function useAppAssetMaterializationStatus(assets: AppMaterializationAsset
 
   useEffect(() => {
     if (!schedulerRunEvent) return;
+
+    const eventRunId =
+      schedulerRunEvent.type === "run.log" || schedulerRunEvent.type === "run.step"
+        ? schedulerRunEvent.run.run_id
+        : schedulerRunEvent.run.id;
+    if (schedulerRunEvent.type === "run.finished") {
+      finishedRunIds.current.add(eventRunId);
+    } else if (finishedRunIds.current.has(eventRunId)) {
+      return;
+    }
 
     if (schedulerRunEvent.type === "run.queued" || schedulerRunEvent.type === "run.started") {
       const run = schedulerRunEvent.run;

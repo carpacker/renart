@@ -192,11 +192,16 @@ func runAction(ctx context.Context, c *cli.Command) error {
 		return cli.Exit("--sensor-mode must be one of once, wait, or skip", 2)
 	}
 	setNonEmpty(query, "sensor_mode", sensorMode)
-	backfill := strings.TrimSpace(c.String("start-date")) != "" || strings.TrimSpace(c.String("end-date")) != ""
+	fullRefresh := c.Bool("full-refresh")
+	hasExplicitWindow := strings.TrimSpace(c.String("start-date")) != "" || strings.TrimSpace(c.String("end-date")) != ""
+	// A full refresh can still be scoped to an explicit execution window. Do
+	// not also label that request as a backfill: the two modes are mutually
+	// exclusive, and the window must reach the executor unchanged.
+	backfill := hasExplicitWindow && !fullRefresh
 	if backfill {
 		query.Set("backfill", "true")
 	}
-	if c.Bool("full-refresh") {
+	if fullRefresh {
 		query.Set("full_refresh", "true")
 	}
 	scope := string(service.MaterializeScopeAsset)
@@ -268,13 +273,13 @@ func runAction(ctx context.Context, c *cli.Command) error {
 		var result service.MaterializeResult
 		if target.kind == "pipeline" {
 			result = server.executionSvc.MaterializePipelineStreamWithSensorMode(
-				ctx, target.pipeline.ID, runEnvironment, false, c.Bool("full-refresh"), backfill,
+				ctx, target.pipeline.ID, runEnvironment, false, fullRefresh, backfill,
 				c.String("start-date"), c.String("end-date"), c.String("confirm-environment"), sensorMode, onChunk,
 			)
 		} else {
 			result = server.executionSvc.MaterializeAssetStreamWithSensorMode(
 				ctx, target.asset.ID, runEnvironment, scope,
-				c.String("start-date"), c.String("end-date"), c.Bool("full-refresh"), backfill, c.String("confirm-environment"), sensorMode, onChunk,
+				c.String("start-date"), c.String("end-date"), fullRefresh, backfill, c.String("confirm-environment"), sensorMode, onChunk,
 			)
 		}
 		status, message, output = result.Status, result.Error, result.Output

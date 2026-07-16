@@ -1,6 +1,17 @@
 -- name: CreateRun :exec
-INSERT INTO pipeline_runs (id, pipeline_id, pipeline, environment, trigger, status, win_start, win_end, started_at, finished_at, error, log_ref, snapshot_version_id, river_job_id)
-VALUES (@id, @pipeline_id, @pipeline, @environment, @trigger, @status, @win_start, @win_end, @started_at, @finished_at, @error, @log_ref, @snapshot_version_id, @river_job_id);
+INSERT INTO pipeline_runs (id, pipeline_id, pipeline, environment, trigger, status, win_start, win_end, started_at, finished_at, error, log_ref, snapshot_version_id, river_job_id, full_refresh, backfill, sensor_mode, execution_context_resolved)
+VALUES (@id, @pipeline_id, @pipeline, @environment, @trigger, @status, @win_start, @win_end, @started_at, @finished_at, @error, @log_ref, @snapshot_version_id, @river_job_id, @full_refresh, @backfill, @sensor_mode, @execution_context_resolved);
+
+-- name: SetRunExecutionContext :execrows
+UPDATE pipeline_runs
+SET environment = @environment,
+    win_start = @win_start,
+    win_end = @win_end,
+    full_refresh = @full_refresh,
+    backfill = @backfill,
+    sensor_mode = @sensor_mode,
+    execution_context_resolved = 1
+WHERE id = @id AND status IN ('queued', 'running');
 
 -- name: SetRunRiverJob :exec
 UPDATE pipeline_runs
@@ -39,7 +50,7 @@ WHERE (CAST(@pipeline_id AS TEXT) = '' OR pipeline_id = CAST(@pipeline_id AS TEX
   );
 
 -- name: ListRuns :many
-SELECT id, pipeline_id, pipeline, environment, trigger, status, win_start, win_end, started_at, finished_at, error, log_ref, snapshot_version_id, recovery_pending, river_job_id
+SELECT id, pipeline_id, pipeline, environment, trigger, status, win_start, win_end, started_at, finished_at, error, log_ref, snapshot_version_id, recovery_pending, river_job_id, full_refresh, backfill, sensor_mode, execution_context_resolved
 FROM pipeline_runs
 WHERE (CAST(@pipeline_id AS TEXT) = '' OR pipeline_id = CAST(@pipeline_id AS TEXT))
   AND (
@@ -58,7 +69,7 @@ ORDER BY COALESCE(started_at, '') DESC, id DESC
 LIMIT @limit OFFSET @offset;
 
 -- name: GetRun :one
-SELECT id, pipeline_id, pipeline, environment, trigger, status, win_start, win_end, started_at, finished_at, error, log_ref, snapshot_version_id, recovery_pending, river_job_id
+SELECT id, pipeline_id, pipeline, environment, trigger, status, win_start, win_end, started_at, finished_at, error, log_ref, snapshot_version_id, recovery_pending, river_job_id, full_refresh, backfill, sensor_mode, execution_context_resolved
 FROM pipeline_runs
 WHERE id = @id;
 

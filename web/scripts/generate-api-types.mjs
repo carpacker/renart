@@ -114,6 +114,20 @@ const sources = [
     types: ["PipelineMaterializationState", "PipelineMaterializationResponse"],
   },
   {
+    file: resolve(repoRoot, "internal", "web", "service", "asset_render.go"),
+    types: [
+      "AssetRenderRequest",
+      "AssetRenderSource",
+      "AssetRenderContext",
+      "AssetRenderProvenance",
+      "AssetRenderAsset",
+      "AssetRenderStage",
+      "AssetRenderRedaction",
+      "AssetRenderIssue",
+      "AssetRenderResult",
+    ],
+  },
+  {
     file: resolve(repoRoot, "internal", "web", "model", "dto.go"),
     types: [
       "InspectResult",
@@ -138,6 +152,9 @@ const scalarMap = new Map([
   ["time.Time", "string"],
   ["any", "unknown"],
   ["policy.EnvironmentPolicy", "EnvironmentPolicy"],
+  ["AssetRenderStatus", '"ok" | "partial" | "unsupported" | "error"'],
+  ["AssetRenderStageStatus", '"ok" | "unsupported" | "error"'],
+  ["AssetRenderFidelity", '"exact" | "semantic" | "runtime_only" | "unsupported"'],
 ]);
 
 const renameMap = new Map([

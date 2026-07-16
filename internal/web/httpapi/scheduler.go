@@ -3,6 +3,8 @@ package httpapi
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"io"
 	"net/http"
 	"strconv"
 	"strings"
@@ -53,13 +55,17 @@ func (h *SchedulerAPI) HandleGetPipelineSchedule(w http.ResponseWriter, r *http.
 }
 
 func (h *SchedulerAPI) HandleUpdatePipelineSchedule(w http.ResponseWriter, r *http.Request) {
-	var req scheduler.UpdateScheduleRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	req, err := decodeStrictJSONObject[scheduler.UpdateScheduleRequest](r.Body)
+	if err != nil {
 		webapi.WriteBadRequest(w, "invalid_request_body", err.Error())
 		return
 	}
 	item, err := h.Service.UpdatePipelineSchedule(r.Context(), chi.URLParam(r, "id"), req)
 	if err != nil {
+		if errors.Is(err, scheduler.ErrSchedulerNotOwner) {
+			webapi.WriteConflict(w, "scheduler_not_owner", err.Error())
+			return
+		}
 		webapi.WriteBadRequest(w, "schedule_update_failed", err.Error())
 		return
 	}
@@ -68,11 +74,47 @@ func (h *SchedulerAPI) HandleUpdatePipelineSchedule(w http.ResponseWriter, r *ht
 
 func (h *SchedulerAPI) HandleTriggerPipeline(w http.ResponseWriter, r *http.Request) {
 	var req scheduler.TriggerRequest
-	if r.Body != nil {
-		_ = json.NewDecoder(r.Body).Decode(&req)
+	if r.Body != nil && r.Body != http.NoBody {
+		decoder := json.NewDecoder(r.Body)
+		decoder.DisallowUnknownFields()
+		var decoded *scheduler.TriggerRequest
+		if err := decoder.Decode(&decoded); err != nil && !errors.Is(err, io.EOF) {
+			webapi.WriteBadRequest(w, "invalid_request_body", err.Error())
+			return
+		} else if err == nil {
+			if decoded == nil {
+				webapi.WriteBadRequest(w, "invalid_request_body", "request body must be a JSON object")
+				return
+			}
+			req = *decoded
+		}
+		if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+			if err == nil {
+				err = errors.New("request body must contain a single JSON object")
+			}
+			webapi.WriteBadRequest(w, "invalid_request_body", err.Error())
+			return
+		}
 	}
+	if trigger := strings.TrimSpace(req.LegacyTrigger); trigger != "" && trigger != string(scheduler.RunTriggerManual) {
+		webapi.WriteBadRequest(w, "invalid_request_body", "trigger origin is server-owned; omit trigger or use the legacy manual value")
+		return
+	}
+	req.LegacyTrigger = ""
 	run, err := h.Service.TriggerPipeline(r.Context(), chi.URLParam(r, "id"), req)
 	if err != nil {
+		if errors.Is(err, scheduler.ErrSchedulerNotOwner) {
+			webapi.WriteConflict(w, "scheduler_not_owner", err.Error())
+			return
+		}
+		var activeRun *scheduler.PipelineRunActiveError
+		if errors.As(err, &activeRun) {
+			webapi.WriteErrorWithDetails(w, http.StatusConflict, "pipeline_run_active", err.Error(), map[string]string{
+				"pipeline_id":   activeRun.PipelineID,
+				"active_run_id": activeRun.ActiveRunID,
+			})
+			return
+		}
 		webapi.WriteBadRequest(w, "pipeline_trigger_failed", err.Error())
 		return
 	}

@@ -88,17 +88,13 @@ func buildDirectMainExecutors(manager config.ConnectionAndDetailsGetter, rendere
 	}
 
 	ensureExecutorConfig(pipeline.AssetTypeDuckDBQuery)
-	executors[pipeline.AssetTypeDuckDBQuery][scheduler.TaskInstanceTypeMain] = duck.NewBasicOperator(manager, wholeFileExtractor, pipeline.HookWrapperMaterializer{
-		Mat: duck.NewMaterializer(fullRefresh),
-	}, parser)
+	executors[pipeline.AssetTypeDuckDBQuery][scheduler.TaskInstanceTypeMain] = duck.NewBasicOperator(manager, wholeFileExtractor, newDirectDuckDBHookMaterializer(fullRefresh), parser)
 	duckColumnCheckOperator := duck.NewColumnCheckOperator(manager)
 	executors[pipeline.AssetTypeDuckDBQuery][scheduler.TaskInstanceTypeColumnCheck] = duckColumnCheckOperator
 	executors[pipeline.AssetTypeDuckDBQuery][scheduler.TaskInstanceTypeCustomCheck] = customCheckRunner
 	assignSeedExecutor(pipeline.AssetTypeDuckDBSeed, duckColumnCheckOperator, customCheckRunner, nil)
 	ensureExecutorConfig(pipeline.AssetTypeMotherduckQuery)
-	executors[pipeline.AssetTypeMotherduckQuery][scheduler.TaskInstanceTypeMain] = duck.NewBasicOperator(manager, wholeFileExtractor, pipeline.HookWrapperMaterializer{
-		Mat: duck.NewMaterializer(fullRefresh),
-	}, parser)
+	executors[pipeline.AssetTypeMotherduckQuery][scheduler.TaskInstanceTypeMain] = duck.NewBasicOperator(manager, wholeFileExtractor, newDirectDuckDBHookMaterializer(fullRefresh), parser)
 	executors[pipeline.AssetTypeMotherduckQuery][scheduler.TaskInstanceTypeColumnCheck] = duck.NewColumnCheckOperator(manager)
 	executors[pipeline.AssetTypeMotherduckQuery][scheduler.TaskInstanceTypeCustomCheck] = ansisql.NewCustomCheckOperator(manager, renderer)
 	ensureExecutorConfig(pipeline.AssetTypePostgresQuery)
@@ -264,6 +260,14 @@ func buildDirectMainExecutors(manager config.ConnectionAndDetailsGetter, rendere
 	ensureExecutorConfig(pipeline.AssetTypeIngestr)
 	executors[pipeline.AssetTypeIngestr][scheduler.TaskInstanceTypeMain] = ingestrOperator
 	return executors, nil
+}
+
+func newDirectDuckDBHookMaterializer(fullRefresh bool) pipeline.HookWrapperMaterializer {
+	hoister, _ := sqlparser.NewRustSQLParser(false)
+	return pipeline.HookWrapperMaterializer{
+		Mat:     duck.NewMaterializer(fullRefresh),
+		Hoister: hoister,
+	}
 }
 
 func directPythonEnvVariables(pl *pipeline.Pipeline) map[string]string {

@@ -33,6 +33,7 @@ var assetTypeDialectMap = map[pipeline.AssetType]string{
 	pipeline.AssetTypeSynapseQuerySensor:    "tsql",
 	pipeline.AssetTypeDuckDBQuery:           "duckdb",
 	pipeline.AssetTypeDuckDBQuerySensor:     "duckdb",
+	pipeline.AssetTypeMotherduckQuery:       "duckdb",
 }
 
 var (

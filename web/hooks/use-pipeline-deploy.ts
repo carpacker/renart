@@ -1,11 +1,14 @@
 import { useAtomValue } from "jotai";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 import { deployPipeline, getDeployStatus, type DeployStatus } from "@/lib/api-deploy";
 import { workspaceAtom } from "@/lib/atoms/domains/workspace";
+import { awaitWorkspaceSaves } from "@/lib/workspace-save-barrier";
 
 export type PipelineDeployState = {
   status: DeployStatus | null;
+  loading: boolean;
+  error: string | null;
   deploying: boolean;
   deploy: () => Promise<void>;
   refresh: () => Promise<void>;
@@ -17,40 +20,94 @@ export type PipelineDeployState = {
 // (i.e. after any save).
 export function usePipelineDeploy(pipelineId: string | undefined): PipelineDeployState {
   const workspace = useAtomValue(workspaceAtom);
-  const [status, setStatus] = useState<DeployStatus | null>(null);
-  const [deploying, setDeploying] = useState(false);
+  const [resolved, setResolved] = useState<{
+    pipelineId: string | undefined;
+    status: DeployStatus | null;
+    loading: boolean;
+    error: string | null;
+  }>({ pipelineId: undefined, status: null, loading: false, error: null });
+  const [deployingPipelineIds, setDeployingPipelineIds] = useState<Set<string>>(() => new Set());
+  const deployingPipelineIdsRef = useRef<Set<string>>(new Set());
+  const requestId = useRef(0);
+  const currentPipelineId = useRef(pipelineId);
+  currentPipelineId.current = pipelineId;
 
-  const refresh = useCallback(async () => {
-    if (!pipelineId) {
-      setStatus(null);
+  const current =
+    resolved.pipelineId === pipelineId
+      ? resolved
+      : { pipelineId, status: null, loading: Boolean(pipelineId), error: null };
+
+  const refreshPipeline = useCallback(async (targetPipelineId: string | undefined) => {
+    // A callback captured by the previous route may still finish after the
+    // user has opened another pipeline. It must not invalidate or replace the
+    // request owned by the current route.
+    if (currentPipelineId.current !== targetPipelineId) {
       return;
     }
-    try {
-      setStatus(await getDeployStatus(pipelineId));
-    } catch {
-      setStatus(null);
+    const nextRequestId = ++requestId.current;
+    if (!targetPipelineId) {
+      setResolved({ pipelineId: targetPipelineId, status: null, loading: false, error: null });
+      return;
     }
-  }, [pipelineId]);
+    setResolved((previous) => ({
+      pipelineId: targetPipelineId,
+      status: previous.pipelineId === targetPipelineId ? previous.status : null,
+      loading: true,
+      error: null,
+    }));
+    try {
+      const status = await getDeployStatus(targetPipelineId);
+      if (currentPipelineId.current === targetPipelineId && requestId.current === nextRequestId) {
+        setResolved({ pipelineId: targetPipelineId, status, loading: false, error: null });
+      }
+    } catch (cause) {
+      if (currentPipelineId.current === targetPipelineId && requestId.current === nextRequestId) {
+        setResolved({
+          pipelineId: targetPipelineId,
+          status: null,
+          loading: false,
+          error: cause instanceof Error ? cause.message : "Failed to load deployment status.",
+        });
+      }
+    }
+  }, []);
+
+  const refresh = useCallback(
+    async () => refreshPipeline(pipelineId),
+    [pipelineId, refreshPipeline],
+  );
 
   useEffect(() => {
     void refresh();
   }, [refresh, workspace?.revision]);
 
   const deploy = useCallback(async () => {
-    if (!pipelineId || deploying) return;
-    setDeploying(true);
+    if (!pipelineId || deployingPipelineIdsRef.current.has(pipelineId)) return;
+    const targetPipelineId = pipelineId;
+    deployingPipelineIdsRef.current.add(targetPipelineId);
+    setDeployingPipelineIds(new Set(deployingPipelineIdsRef.current));
     try {
-      await deployPipeline(pipelineId);
-      await refresh();
+      await awaitWorkspaceSaves();
+      await deployPipeline(targetPipelineId);
+      await refreshPipeline(targetPipelineId);
     } finally {
-      setDeploying(false);
+      deployingPipelineIdsRef.current.delete(targetPipelineId);
+      setDeployingPipelineIds(new Set(deployingPipelineIdsRef.current));
     }
-  }, [deploying, pipelineId, refresh]);
+  }, [pipelineId, refreshPipeline]);
 
   const driftedFileCount =
-    (status?.changed_files?.length ?? 0) +
-    (status?.added_files?.length ?? 0) +
-    (status?.removed_files?.length ?? 0);
+    (current.status?.changed_files?.length ?? 0) +
+    (current.status?.added_files?.length ?? 0) +
+    (current.status?.removed_files?.length ?? 0);
 
-  return { status, deploying, deploy, refresh, driftedFileCount };
+  return {
+    status: current.status,
+    loading: current.loading,
+    error: current.error,
+    deploying: Boolean(pipelineId && deployingPipelineIds.has(pipelineId)),
+    deploy,
+    refresh,
+    driftedFileCount,
+  };
 }

@@ -1,5 +1,5 @@
 import { useAtomValue } from "jotai";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 import {
   type GetRunsOptions,
@@ -9,6 +9,7 @@ import {
   triggerPipelineRun,
   updatePipelineSchedule,
 } from "@/lib/api";
+import type { TriggerPipelineRunInput } from "@/lib/api-scheduler";
 import { schedulerRunEventAtom } from "@/lib/atoms/domains/results";
 import type {
   PipelineRun,
@@ -36,61 +37,99 @@ export function usePipelineScheduler({
   const [loading, setLoading] = useState(true);
   const [busyPipeline, setBusyPipeline] = useState<string | null>(null);
   const [loadingRunId, setLoadingRunId] = useState<string | null>(null);
+  const [schedulesError, setSchedulesError] = useState<string | null>(null);
+  const [runsError, setRunsError] = useState<string | null>(null);
+  const [runDetailError, setRunDetailError] = useState<string | null>(null);
   const schedulerRunEvent = useAtomValue(schedulerRunEventAtom);
+  const selectedRunIdRef = useRef(selectedRunId);
+  const selectRunRequestIdRef = useRef(0);
+  selectedRunIdRef.current = selectedRunId;
+
+  const selectedRunForRequest = selectedRunId
+    ? selectedRun?.id === selectedRunId
+      ? selectedRun
+      : null
+    : selectedRun;
 
   const refreshRuns = useCallback(async () => {
-    const response = await getRuns(runsQuery ?? 100);
-    if (response.status === "ok") {
+    try {
+      const response = await getRuns(runsQuery ?? 100);
+      if (response.status !== "ok") {
+        throw new Error("The server could not refresh pipeline runs.");
+      }
       setRuns(response.runs ?? []);
       setRunsTotal(response.total ?? response.runs?.length ?? 0);
       setRunsLimit(response.limit ?? runsQuery?.limit ?? 100);
       setRunsOffset(response.offset ?? runsQuery?.offset ?? 0);
-    }
-  }, [runsQuery]);
-
-  const refresh = useCallback(async () => {
-    setLoading(true);
-    try {
-      const [scheduleResponse, runsResponse] = await Promise.all([
-        getSchedules(),
-        getRuns(runsQuery ?? 100),
-      ]);
-      if (scheduleResponse.status === "ok") {
-        setSchedules(scheduleResponse.schedules ?? []);
-      }
-      if (runsResponse.status === "ok") {
-        setRuns(runsResponse.runs ?? []);
-        setRunsTotal(runsResponse.total ?? runsResponse.runs?.length ?? 0);
-        setRunsLimit(runsResponse.limit ?? runsQuery?.limit ?? 100);
-        setRunsOffset(runsResponse.offset ?? runsQuery?.offset ?? 0);
-      }
-    } finally {
-      setLoading(false);
+      setRunsError(null);
+    } catch (cause) {
+      // Lifecycle SSE handlers intentionally fire refreshes without awaiting
+      // them. Keep the last readable records and expose failures instead of
+      // creating an unhandled rejection.
+      setRunsError(errorMessage(cause, "Pipeline runs could not be refreshed."));
     }
   }, [runsQuery]);
 
   const refreshSchedules = useCallback(async () => {
-    const response = await getSchedules();
-    if (response.status === "ok") {
+    try {
+      const response = await getSchedules();
+      if (response.status !== "ok") {
+        throw new Error("The server could not refresh pipeline schedules.");
+      }
       setSchedules(response.schedules ?? []);
+      setSchedulesError(null);
+    } catch (cause) {
+      setSchedulesError(errorMessage(cause, "Pipeline schedules could not be refreshed."));
     }
   }, []);
 
+  const refresh = useCallback(async () => {
+    setLoading(true);
+    try {
+      // These resources fail independently. A runs outage must not hide the
+      // last readable schedule state (or vice versa).
+      await Promise.all([refreshSchedules(), refreshRuns()]);
+    } finally {
+      setLoading(false);
+    }
+  }, [refreshRuns, refreshSchedules]);
+
   const selectRun = useCallback(async (runOrId: PipelineRun | PipelineRun["id"]) => {
     const runId = typeof runOrId === "string" ? runOrId : runOrId.id;
+    const requestedRunId = selectedRunIdRef.current;
+    if (requestedRunId && requestedRunId !== runId) {
+      return;
+    }
+    const requestId = ++selectRunRequestIdRef.current;
     if (typeof runOrId !== "string") {
       setSelectedRun(runOrId);
     }
     setLoadingRunId(runId);
+    setRunDetailError(null);
     try {
       const response = await getRun(runId);
-      if (response.status === "ok") {
+      if (response.status !== "ok") {
+        throw new Error(`Run ${runId} could not be loaded.`);
+      }
+      if (
+        selectRunRequestIdRef.current === requestId &&
+        (!selectedRunIdRef.current || selectedRunIdRef.current === runId)
+      ) {
         setSelectedRun(response.run);
         setLogs(response.logs ?? []);
         setSteps(response.steps ?? []);
       }
+    } catch (cause) {
+      if (
+        selectRunRequestIdRef.current === requestId &&
+        (!selectedRunIdRef.current || selectedRunIdRef.current === runId)
+      ) {
+        setRunDetailError(errorMessage(cause, `Run ${runId} could not be loaded.`));
+      }
     } finally {
-      setLoadingRunId(null);
+      if (selectRunRequestIdRef.current === requestId) {
+        setLoadingRunId(null);
+      }
     }
   }, []);
 
@@ -133,43 +172,33 @@ export function usePipelineScheduler({
     [refreshSchedules],
   );
 
-  const triggerNow = useCallback(async (item: PipelineSchedule) => {
-    setBusyPipeline(item.pipeline_id);
-    try {
-      const response = await triggerPipelineRun(item.pipeline_id, { trigger: "manual" });
-      if (response.status === "ok") {
-        setRuns((current) => [
-          response.run,
-          ...current.filter((run) => run.id !== response.run.id),
-        ]);
-        setSelectedRun(response.run);
-        setLogs([]);
-        setSteps([]);
+  const triggerPipeline = useCallback(
+    async (pipelineId: string, input: TriggerPipelineRunInput) => {
+      const triggeredFromRunDetail = Boolean(selectedRunIdRef.current);
+      setBusyPipeline(pipelineId);
+      try {
+        const response = await triggerPipelineRun(pipelineId, input);
+        if (response.status === "ok") {
+          setRuns((current) => [
+            response.run,
+            ...current.filter((run) => run.id !== response.run.id),
+          ]);
+          // A run-detail route remains bound to its URL. The caller can
+          // navigate to response.run.id explicitly, but accepting a rerun must
+          // never replace the record shown under the old URL.
+          if (!triggeredFromRunDetail && !selectedRunIdRef.current) {
+            setSelectedRun(response.run);
+            setLogs([]);
+            setSteps([]);
+          }
+        }
+        return response;
+      } finally {
+        setBusyPipeline(null);
       }
-      return response;
-    } finally {
-      setBusyPipeline(null);
-    }
-  }, []);
-
-  const triggerPipeline = useCallback(async (pipelineId: string) => {
-    setBusyPipeline(pipelineId);
-    try {
-      const response = await triggerPipelineRun(pipelineId, { trigger: "manual" });
-      if (response.status === "ok") {
-        setRuns((current) => [
-          response.run,
-          ...current.filter((run) => run.id !== response.run.id),
-        ]);
-        setSelectedRun(response.run);
-        setLogs([]);
-        setSteps([]);
-      }
-      return response;
-    } finally {
-      setBusyPipeline(null);
-    }
-  }, []);
+    },
+    [],
+  );
 
   useEffect(() => {
     void refresh();
@@ -177,11 +206,17 @@ export function usePipelineScheduler({
 
   useEffect(() => {
     if (!selectedRunId) {
+      ++selectRunRequestIdRef.current;
+      setLoadingRunId(null);
       setSelectedRun(null);
       setLogs([]);
       setSteps([]);
+      setRunDetailError(null);
       return;
     }
+    setSelectedRun((current) => (current?.id === selectedRunId ? current : null));
+    setLogs([]);
+    setSteps([]);
     void selectRun(selectedRunId);
   }, [selectedRunId, selectRun]);
 
@@ -191,14 +226,16 @@ export function usePipelineScheduler({
     }
     if (schedulerRunEvent.type === "run.log") {
       const { run_id, log } = schedulerRunEvent.run;
-      if (selectedRun?.id === run_id || selectedRunId === run_id) {
+      if (selectedRunId ? selectedRunId === run_id : selectedRunForRequest?.id === run_id) {
         setLogs((existing) => [...existing, log]);
       }
       return;
     }
     if (schedulerRunEvent.type === "run.step") {
       const step = schedulerRunEvent.run;
-      if (selectedRun?.id === step.run_id || selectedRunId === step.run_id) {
+      if (
+        selectedRunId ? selectedRunId === step.run_id : selectedRunForRequest?.id === step.run_id
+      ) {
         setSteps((existing) =>
           [
             step,
@@ -215,9 +252,13 @@ export function usePipelineScheduler({
       return;
     }
     const run = schedulerRunEvent.run;
-    const selected = selectedRun?.id === run.id || selectedRunId === run.id;
+    const selected = selectedRunId
+      ? selectedRunId === run.id
+      : selectedRunForRequest?.id === run.id;
     setRuns((current) => [run, ...current.filter((item) => item.id !== run.id)]);
-    setSelectedRun((current) => (current?.id === run.id ? run : current));
+    if (selected) {
+      setSelectedRun((current) => (current?.id === run.id ? run : current));
+    }
     // A detail page can open between two streamed log events. Reloading the
     // canonical record at completion closes that subscription race without
     // relying on a final aggregate-output replay.
@@ -226,7 +267,14 @@ export function usePipelineScheduler({
     }
     void refreshRuns();
     void refreshSchedules();
-  }, [refreshRuns, refreshSchedules, schedulerRunEvent, selectRun, selectedRun?.id, selectedRunId]);
+  }, [
+    refreshRuns,
+    refreshSchedules,
+    schedulerRunEvent,
+    selectRun,
+    selectedRunForRequest?.id,
+    selectedRunId,
+  ]);
 
   return {
     schedules,
@@ -234,10 +282,13 @@ export function usePipelineScheduler({
     runsTotal,
     runsLimit,
     runsOffset,
-    selectedRun,
+    selectedRun: selectedRunForRequest,
     logs,
     steps,
     loading,
+    schedulesError,
+    runsError,
+    runDetailError,
     busyPipeline,
     loadingRunId,
     refresh,
@@ -245,7 +296,6 @@ export function usePipelineScheduler({
     selectRun,
     patchScheduleDraft,
     updateSchedule,
-    triggerNow,
     triggerPipeline,
   };
 }
@@ -258,4 +308,8 @@ export function formatSchedulerDate(value?: string) {
     dateStyle: "medium",
     timeStyle: "short",
   }).format(new Date(value));
+}
+
+function errorMessage(cause: unknown, fallback: string) {
+  return cause instanceof Error && cause.message.trim() ? cause.message : fallback;
 }

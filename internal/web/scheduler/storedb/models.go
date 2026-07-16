@@ -9,21 +9,25 @@ import (
 )
 
 type PipelineRun struct {
-	ID                string
-	PipelineID        string
-	Pipeline          string
-	Environment       string
-	Trigger           string
-	Status            string
-	WinStart          sql.NullString
-	WinEnd            sql.NullString
-	StartedAt         sql.NullString
-	FinishedAt        sql.NullString
-	Error             sql.NullString
-	LogRef            sql.NullString
-	SnapshotVersionID sql.NullString
-	RecoveryPending   int64
-	RiverJobID        sql.NullInt64
+	ID                       string
+	PipelineID               string
+	Pipeline                 string
+	Environment              string
+	Trigger                  string
+	Status                   string
+	WinStart                 sql.NullString
+	WinEnd                   sql.NullString
+	StartedAt                sql.NullString
+	FinishedAt               sql.NullString
+	Error                    sql.NullString
+	LogRef                   sql.NullString
+	SnapshotVersionID        sql.NullString
+	RecoveryPending          int64
+	RiverJobID               sql.NullInt64
+	FullRefresh              int64
+	Backfill                 int64
+	SensorMode               string
+	ExecutionContextResolved int64
 }
 
 type PipelineRunLog struct {

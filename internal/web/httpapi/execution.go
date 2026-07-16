@@ -9,6 +9,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	webapi "renart/internal/web/api"
 	webmodel "renart/internal/web/model"
+	"renart/internal/web/runcontext"
 	"renart/internal/web/service"
 )
 
@@ -60,14 +61,54 @@ func (h *ExecutionAPI) HandleInspectAsset(w http.ResponseWriter, r *http.Request
 
 func (h *ExecutionAPI) HandleMaterializeAssetStream(w http.ResponseWriter, r *http.Request) {
 	assetID := chi.URLParam(r, "assetID")
-	environment := r.URL.Query().Get("environment")
-	scope := r.URL.Query().Get("scope")
-	startDate := r.URL.Query().Get("start_date")
-	endDate := r.URL.Query().Get("end_date")
-	fullRefresh := r.URL.Query().Get("full_refresh") == "true"
-	backfill := r.URL.Query().Get("backfill") == "true"
-	confirmedEnvironment := r.URL.Query().Get("confirmed_environment")
-	sensorMode := r.URL.Query().Get("sensor_mode")
+	query, err := decodeStrictQuery(r,
+		"environment", "scope", "start_date", "end_date", "dry_run",
+		"full_refresh", "backfill", "confirmed_environment", "sensor_mode",
+	)
+	if err != nil {
+		webapi.WriteBadRequest(w, "invalid_execution_context", err.Error())
+		return
+	}
+	dryRun, err := strictQueryBool(query, "dry_run")
+	if err != nil {
+		webapi.WriteBadRequest(w, "invalid_execution_context", err.Error())
+		return
+	}
+	if dryRun {
+		webapi.WriteBadRequest(w, "asset_dry_run_unsupported", "asset dry-run is not supported; use pipeline dry-run")
+		return
+	}
+	fullRefresh, err := strictQueryBool(query, "full_refresh")
+	if err != nil {
+		webapi.WriteBadRequest(w, "invalid_execution_context", err.Error())
+		return
+	}
+	backfill, err := strictQueryBool(query, "backfill")
+	if err != nil {
+		webapi.WriteBadRequest(w, "invalid_execution_context", err.Error())
+		return
+	}
+	normalized, err := runcontext.Normalize(runcontext.Input{
+		Start:       query.Get("start_date"),
+		End:         query.Get("end_date"),
+		FullRefresh: fullRefresh,
+		Backfill:    backfill,
+		SensorMode:  query.Get("sensor_mode"),
+	})
+	if err != nil {
+		webapi.WriteBadRequest(w, "invalid_execution_context", err.Error())
+		return
+	}
+	scope, err := service.NormalizeMaterializeScope(query.Get("scope"))
+	if err != nil {
+		webapi.WriteBadRequest(w, "invalid_execution_context", err.Error())
+		return
+	}
+	environment := query.Get("environment")
+	startDate := normalized.StartString()
+	endDate := normalized.EndString()
+	confirmedEnvironment := query.Get("confirmed_environment")
+	sensorMode := normalized.SensorMode
 	flusher, ok := w.(http.Flusher)
 	if !ok {
 		webapi.WriteInternalError(w, "streaming_unsupported", "streaming unsupported")
@@ -80,7 +121,7 @@ func (h *ExecutionAPI) HandleMaterializeAssetStream(w http.ResponseWriter, r *ht
 	w.Header().Set("X-Accel-Buffering", "no")
 
 	_ = WriteSSEJSON(w, flusher, "start", map[string]any{"operation": webmodel.OperationMetadata{Type: "run", AssetPath: assetID, Target: assetID}})
-	result := h.Service.MaterializeAssetStreamWithSensorMode(r.Context(), assetID, environment, scope, startDate, endDate, fullRefresh, backfill, confirmedEnvironment, sensorMode, func(chunk []byte) {
+	result := h.Service.MaterializeAssetStreamWithSensorMode(r.Context(), assetID, environment, string(scope), startDate, endDate, fullRefresh, backfill, confirmedEnvironment, sensorMode, func(chunk []byte) {
 		_ = WriteSSEJSON(w, flusher, "output", map[string]any{"chunk": string(chunk)})
 	})
 	_ = WriteSSEJSON(w, flusher, "done", map[string]any{

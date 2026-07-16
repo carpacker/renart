@@ -686,6 +686,74 @@ select 20 as event_id, timestamp '2024-01-02 12:00:00' as event_at
 	assert.Equal(t, [][]any{{float64(1)}, {float64(20)}}, payload.Rows)
 }
 
+func TestDirectRunsRenderDuckDBHookTemplates(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		pipeline bool
+	}{
+		{name: "asset"},
+		{name: "pipeline", pipeline: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			workspaceRoot, assetPath := createSuccessfulDuckDBWorkspace(t)
+			configPath := filepath.Join(workspaceRoot, ".bruin.yml")
+			cfg, err := loadSelectedConfig(configPath, "")
+			require.NoError(t, err)
+			manager, err := newConnectionManagerFromConfig(context.Background(), cfg)
+			require.NoError(t, err)
+			if connection, ok := manager.GetConnection("duckdb-default").(interface{ Close() }); ok {
+				t.Cleanup(connection.Close)
+			}
+
+			executor := newCompatDirectExecutor(workspaceRoot, "")
+			executor.newConnectionManager = func(context.Context, string) (config.ConnectionAndDetailsGetter, error) {
+				return manager, nil
+			}
+
+			require.NoError(t, os.WriteFile(assetPath, []byte(strings.TrimSpace(`
+/* @bruin
+name: analytics.customers
+type: duckdb.sql
+materialization:
+  type: table
+hooks:
+  pre:
+    - query: "CREATE TABLE IF NOT EXISTS hook_audit (rendered_start VARCHAR); INSERT INTO hook_audit VALUES ('{{ start_date }}')"
+@bruin */
+
+select 1 as customer_id, 'seeded' as source_label
+`)+"\n"), 0o644))
+
+			if tc.pipeline {
+				_, err = executor.RunPipeline(context.Background(), RunPipelineRequest{
+					Target:    "analytics",
+					StartDate: "2026-07-15T00:00:00Z",
+					EndDate:   "2026-07-16T00:00:00Z",
+				}, nil)
+			} else {
+				_, err = executor.RunAsset(context.Background(), RunAssetRequest{
+					AssetPath: assetPath,
+					StartDate: "2026-07-15T00:00:00Z",
+					EndDate:   "2026-07-16T00:00:00Z",
+				}, nil)
+			}
+			require.NoError(t, err)
+
+			output, err := executor.QueryConnection(context.Background(), QueryConnectionRequest{
+				ConnectionName: "duckdb-default",
+				Query:          "select rendered_start from hook_audit",
+				Output:         "json",
+			})
+			require.NoError(t, err)
+			var payload struct {
+				Rows [][]any `json:"rows"`
+			}
+			require.NoError(t, json.Unmarshal(output, &payload))
+			assert.Equal(t, [][]any{{"2026-07-15"}}, payload.Rows)
+		})
+	}
+}
+
 func directDuckDBCount(t *testing.T, executor *HybridBruinExecutor) float64 {
 	t.Helper()
 	output, err := executor.QueryConnection(context.Background(), QueryConnectionRequest{

@@ -219,7 +219,7 @@ async function waitForPipelineAssets(liveApp: LiveApp, request: APIRequestContex
 async function triggerPipeline(liveApp: LiveApp, request: APIRequestContext) {
   const response = await request.post(
     `${liveApp.baseURL}/api/pipelines/${encodeURIComponent(pipelineId)}/trigger`,
-    { data: { trigger: "manual", environment: "default" } },
+    { data: { environment: "default" } },
   );
   expect(response.ok()).toBe(true);
   const body = (await response.json()) as TriggerResponse;

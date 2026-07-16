@@ -396,17 +396,66 @@ func TestExecutionServiceScheduledPipelineUsesWaitSensorMode(t *testing.T) {
 	t.Parallel()
 	pipelineID := EncodeID("pipelines/orders/pipeline.yml")
 	executor := &stubExecutionExecutor{}
-	svc := NewExecutionService(ExecutionDependencies{Executor: executor})
+	svc := NewExecutionService(ExecutionDependencies{
+		Executor: executor,
+		PolicyFor: func(string) policy.EnvironmentPolicy {
+			return policy.EnvironmentPolicy{Protected: true}
+		},
+	})
 
 	result := svc.MaterializePipelineRun(context.Background(), PipelineRunSpec{
-		RunID:      "scheduled-run",
-		PipelineID: pipelineID,
-		DryRun:     true,
+		RunID:       "scheduled-run",
+		PipelineID:  pipelineID,
+		Environment: "prod",
+		Scheduled:   true,
+		DryRun:      true,
 	}, nil, nil)
 
 	assert.Equal(t, "ok", result.Status)
 	require.Len(t, executor.runPipelineReqs, 1)
 	assert.Equal(t, sensorModeWait, executor.runPipelineReqs[0].SensorMode)
+}
+
+func TestExecutionServiceQueuedManualPipelineUsesInteractiveSemantics(t *testing.T) {
+	t.Parallel()
+	pipelineID := EncodeID("pipelines/orders/pipeline.yml")
+
+	t.Run("durable run id does not select scheduled sensor mode", func(t *testing.T) {
+		executor := &stubExecutionExecutor{}
+		svc := NewExecutionService(ExecutionDependencies{Executor: executor})
+
+		result := svc.MaterializePipelineRun(context.Background(), PipelineRunSpec{
+			RunID:      "queued-manual-run",
+			PipelineID: pipelineID,
+			DryRun:     true,
+		}, nil, nil)
+
+		assert.Equal(t, "ok", result.Status)
+		require.Len(t, executor.runPipelineReqs, 1)
+		assert.Equal(t, sensorModeOnce, executor.runPipelineReqs[0].SensorMode)
+	})
+
+	t.Run("manual deployment remains interactive in a protected environment", func(t *testing.T) {
+		executor := &stubExecutionExecutor{}
+		svc := NewExecutionService(ExecutionDependencies{
+			Executor: executor,
+			PolicyFor: func(string) policy.EnvironmentPolicy {
+				return policy.EnvironmentPolicy{Protected: true}
+			},
+		})
+
+		result := svc.MaterializePipelineRun(context.Background(), PipelineRunSpec{
+			RunID:       "queued-manual-run",
+			PipelineID:  pipelineID,
+			Environment: "prod",
+			SnapshotDir: "/tmp/deployed-snapshot",
+			DryRun:      true,
+		}, nil, nil)
+
+		assert.Equal(t, "error", result.Status)
+		assert.Contains(t, result.Error, "protected")
+		assert.Empty(t, executor.runPipelineReqs)
+	})
 }
 
 func TestExecutionServiceHonorsInteractiveSensorModeOverride(t *testing.T) {
@@ -422,6 +471,94 @@ func TestExecutionServiceHonorsInteractiveSensorModeOverride(t *testing.T) {
 	assert.Equal(t, "ok", result.Status)
 	require.Len(t, executor.runPipelineReqs, 1)
 	assert.Equal(t, sensorModeSkip, executor.runPipelineReqs[0].SensorMode)
+}
+
+func TestExecutionServicePinnedPipelineUsesSnapshotDefaultWindow(t *testing.T) {
+	t.Parallel()
+
+	workspaceRoot := t.TempDir()
+	workspacePipelineRoot := filepath.Join(workspaceRoot, "pipelines", "orders")
+	snapshotRoot := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(workspaceRoot, ".git"), 0o755))
+	require.NoError(t, os.MkdirAll(workspacePipelineRoot, 0o755))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(workspacePipelineRoot, "pipeline.yml"),
+		[]byte("name: orders\nschedule: daily\n"),
+		0o644,
+	))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(snapshotRoot, "pipeline.yml"),
+		[]byte("name: orders\nschedule: hourly\n"),
+		0o644,
+	))
+
+	pipelineID := EncodeID("pipelines/orders/pipeline.yml")
+	executor := &stubExecutionExecutor{}
+	svc := NewExecutionService(ExecutionDependencies{
+		WorkspaceRoot: workspaceRoot,
+		Executor:      executor,
+		NewPipelineBuilder: func() *pipeline.Builder {
+			return NewRenartPipelineBuilder(afero.NewOsFs())
+		},
+	})
+
+	result := svc.MaterializePipelineRun(context.Background(), PipelineRunSpec{
+		PipelineID:  pipelineID,
+		SnapshotDir: snapshotRoot,
+	}, nil, nil)
+
+	require.Equal(t, "ok", result.Status, result.Error)
+	require.Len(t, executor.runPipelineReqs, 1)
+	request := executor.runPipelineReqs[0]
+	start, err := time.Parse(time.RFC3339, request.StartDate)
+	require.NoError(t, err)
+	end, err := time.Parse(time.RFC3339, request.EndDate)
+	require.NoError(t, err)
+	assert.Equal(t, time.Hour, end.Sub(start), "snapshot is hourly while the working tree is daily")
+	assert.Equal(t, request.StartDate, result.Operation.StartDate)
+	assert.Equal(t, request.EndDate, result.Operation.EndDate)
+}
+
+func TestExecutionServicePinnedPipelineKeepsExplicitWindow(t *testing.T) {
+	t.Parallel()
+
+	executor := &stubExecutionExecutor{}
+	svc := NewExecutionService(ExecutionDependencies{Executor: executor})
+	result := svc.MaterializePipelineRun(context.Background(), PipelineRunSpec{
+		PipelineID:  EncodeID("pipelines/orders/pipeline.yml"),
+		SnapshotDir: t.TempDir(),
+		StartDate:   "2026-07-16T08:00:00Z",
+		EndDate:     "2026-07-16T09:00:00Z",
+	}, nil, nil)
+
+	require.Equal(t, "ok", result.Status, result.Error)
+	require.Len(t, executor.runPipelineReqs, 1)
+	assert.Equal(t, "2026-07-16T08:00:00Z", executor.runPipelineReqs[0].StartDate)
+	assert.Equal(t, "2026-07-16T09:00:00Z", executor.runPipelineReqs[0].EndDate)
+	assert.Equal(t, executor.runPipelineReqs[0].StartDate, result.Operation.StartDate)
+	assert.Equal(t, executor.runPipelineReqs[0].EndDate, result.Operation.EndDate)
+}
+
+func TestExecutionServicePinnedPipelineRejectsUnresolvedTemplatedSchedule(t *testing.T) {
+	t.Parallel()
+
+	snapshotRoot := t.TempDir()
+	require.NoError(t, os.WriteFile(
+		filepath.Join(snapshotRoot, "pipeline.yml"),
+		[]byte("name: orders\nschedule: \"{{ var.value.execution_schedule }}\"\n"),
+		0o644,
+	))
+	executor := &stubExecutionExecutor{}
+	svc := NewExecutionService(ExecutionDependencies{Executor: executor})
+
+	result := svc.MaterializePipelineRun(context.Background(), PipelineRunSpec{
+		PipelineID:  EncodeID("pipelines/orders/pipeline.yml"),
+		SnapshotDir: snapshotRoot,
+	}, nil, nil)
+
+	assert.Equal(t, "error", result.Status)
+	assert.Contains(t, result.Error, "templated deployed pipeline schedule requires an explicit execution window")
+	assert.Empty(t, executor.runPipelineReqs)
 }
 
 func TestExecutionServiceMaterializePipelineStreamPreservesFailureOutput(t *testing.T) {
@@ -503,10 +640,39 @@ func TestExecutionServiceMaterializePipelineStreamDryRunDoesNotEmitCompletion(t 
 
 	require.Len(t, executor.runPipelineReqs, 1)
 	assert.True(t, executor.runPipelineReqs[0].DryRun)
+	assert.Empty(t, executor.runPipelineReqs[0].StartDate)
+	assert.Empty(t, executor.runPipelineReqs[0].EndDate)
 	assert.Equal(t, "ok", result.Status)
+	assert.Empty(t, result.Operation.StartDate)
+	assert.Empty(t, result.Operation.EndDate)
 	assert.Empty(t, result.ChangedAssetIDs)
 	assert.Nil(t, result.MaterializedAt)
 	assert.Zero(t, completed)
+}
+
+func TestExecutionServiceDryRunDoesNotResolveExecutionContext(t *testing.T) {
+	t.Parallel()
+
+	executor := &stubExecutionExecutor{}
+	contextResolved := false
+	svc := NewExecutionService(ExecutionDependencies{Executor: executor})
+
+	result := svc.MaterializePipelineRun(context.Background(), PipelineRunSpec{
+		PipelineID: EncodeID("pipelines/orders/pipeline.yml"),
+		DryRun:     true,
+		OnContextResolved: func(ResolvedPipelineRunContext) error {
+			contextResolved = true
+			return nil
+		},
+	}, nil, nil)
+
+	require.Equal(t, "ok", result.Status, result.Error)
+	require.Len(t, executor.runPipelineReqs, 1)
+	assert.False(t, contextResolved)
+	assert.Empty(t, executor.runPipelineReqs[0].StartDate)
+	assert.Empty(t, executor.runPipelineReqs[0].EndDate)
+	assert.Empty(t, result.Operation.StartDate)
+	assert.Empty(t, result.Operation.EndDate)
 }
 
 func TestExecutionServiceInspectAssetRejectsWriteQueries(t *testing.T) {

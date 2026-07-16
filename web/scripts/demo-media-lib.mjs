@@ -110,11 +110,11 @@ export async function launchStagedDemo({ port }) {
     throw new Error(`pipeline ${name} was not discovered in time`);
   }
 
-  async function triggerRun(pipelineId, environment, trigger) {
+  async function triggerRun(pipelineId, environment) {
     const before = (await api("/api/runs")).runs?.length ?? 0;
     await api(`/api/pipelines/${pipelineId}/trigger`, {
       method: "POST",
-      body: { environment, trigger },
+      body: { environment },
     });
     const deadline = Date.now() + 120_000;
     while (Date.now() < deadline) {
@@ -125,7 +125,7 @@ export async function launchStagedDemo({ port }) {
       }
       await sleep(1000);
     }
-    throw new Error(`run of ${pipelineId} (${environment}, ${trigger}) did not settle in time`);
+    throw new Error(`run of ${pipelineId} (${environment}) did not settle in time`);
   }
 
   // wait for the server
@@ -153,10 +153,10 @@ export async function launchStagedDemo({ port }) {
   // failed scheduled run (a briefly broken column reference in
   // staging.order_items) whose binder error shows in the run-detail event log.
   console.log("staging: recording run history…");
-  await triggerRun(ACME, "default", "manual");
-  await triggerRun(ACME, "default", "schedule");
-  await triggerRun(ACME, "default", "schedule");
-  await triggerRun(ACME, "production", "schedule");
+  await triggerRun(ACME, "default");
+  await triggerRun(ACME, "default");
+  await triggerRun(ACME, "default");
+  await triggerRun(ACME, "production");
   const orderItems = path.join(workspaceDir, "acme", "assets", "staging", "order_items.sql");
   const orderItemsOriginal = await readFile(orderItems, "utf8");
   const breakNeedle = "i.quantity * i.unit_price AS line_total";
@@ -168,10 +168,10 @@ export async function launchStagedDemo({ port }) {
     orderItemsOriginal.replace(breakNeedle, "i.quantity * i.unit_pricee AS line_total"),
   );
   await sleep(3000); // let the poll watcher pick up the broken file
-  await triggerRun(ACME, "default", "schedule");
+  await triggerRun(ACME, "default");
   await writeFile(orderItems, orderItemsOriginal);
   await sleep(3000);
-  await triggerRun(ACME, "default", "manual"); // leave everything fresh again
+  await triggerRun(ACME, "default"); // leave everything fresh again
 
   console.log("staging: creating env schedules…");
   await api(`/api/pipelines/${ACME}/env-schedules/default`, {
@@ -205,8 +205,8 @@ export async function launchStagedDemo({ port }) {
       deploy_now: true,
     },
   });
-  await triggerRun(MARKETING, "default", "schedule");
-  await triggerRun(MARKETING, "default", "schedule");
+  await triggerRun(MARKETING, "default");
+  await triggerRun(MARKETING, "default");
 
   console.log("staging: applying staleness edits…");
   await addStalenessEdits(workspaceDir);

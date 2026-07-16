@@ -26,6 +26,7 @@ func TestAssetTypeToDialect(t *testing.T) {
 		{pipeline.AssetTypeSynapseQuery, "tsql"},
 		{pipeline.AssetTypeDuckDBQuerySensor, "duckdb"},
 		{pipeline.AssetTypePostgresQuerySensor, "postgres"},
+		{pipeline.AssetTypeMotherduckQuery, "duckdb"},
 	}
 
 	for _, tt := range tests {

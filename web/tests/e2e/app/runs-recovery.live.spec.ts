@@ -148,8 +148,9 @@ test.describe("pipeline run crash recovery (live)", () => {
         `${serverA.baseURL}/api/pipelines/${encodeURIComponent(sleeper.pipeline_id)}/trigger`,
         {
           data: {
-            trigger: "schedule",
             environment: "default",
+            source: "snapshot",
+            snapshot_version_id: snapshotVersionId,
             start: scheduledStart.toISOString(),
             end: scheduledEnd.toISOString(),
           },

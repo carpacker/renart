@@ -5,6 +5,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { AssetCodeEditor } from "@/components/asset-code-editor";
 import { useAssetMonaco } from "@/hooks/use-asset-monaco";
 import { useDebouncedAssetSave } from "@/hooks/use-debounced-asset-save";
+import { useWorkspaceSaveParticipant } from "@/hooks/use-workspace-save-participant";
 import { useWorkspaceTheme } from "@/hooks/use-workspace-theme";
 import { refreshAssetColumnsFromDefinition } from "@/lib/api-asset-transactions";
 import {
@@ -35,7 +36,7 @@ export function ApiParametersEditor({
   onGoToAsset?: (pipelineId: string, assetId: string) => void;
 }) {
   const { monacoTheme } = useWorkspaceTheme();
-  const { saveAssetNow } = useDebouncedAssetSave();
+  const { awaitAllSaves, saveAssetNow } = useDebouncedAssetSave();
 
   // The whole file is the source of truth on disk; keep the latest copy so a
   // splice always writes edits into the freshest surrounding content (columns,
@@ -48,6 +49,7 @@ export function ApiParametersEditor({
   // time) so a concurrent metadata write isn't clobbered by a stale snapshot.
   const pendingBlockRef = useRef<string | null>(null);
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const saveSequenceRef = useRef(0);
   const columnsTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // A direct navigation can mount this editor before the workspace content
@@ -62,22 +64,38 @@ export function ApiParametersEditor({
     setBlock((current) => (current === "" && next !== "" ? next : current));
   }, [asset.content]);
 
-  const flushSave = useCallback(() => {
+  const flushSave = useCallback(async () => {
     if (saveTimerRef.current) {
       clearTimeout(saveTimerRef.current);
       saveTimerRef.current = null;
     }
     const pending = pendingBlockRef.current;
     if (pending === null) {
-      return;
+      return true;
     }
     pendingBlockRef.current = null;
-    void saveAssetNow(
+    const saveSequence = ++saveSequenceRef.current;
+    const saved = await saveAssetNow(
       pipelineId,
       asset.id,
       spliceParametersText(latestContentRef.current, pending),
     );
+    if (!saved && saveSequenceRef.current === saveSequence && pendingBlockRef.current === null) {
+      pendingBlockRef.current = pending;
+    }
+    return saved;
   }, [asset.id, pipelineId, saveAssetNow]);
+
+  const awaitPendingSaves = useCallback(async () => {
+    while (true) {
+      await flushSave();
+      await awaitAllSaves();
+      if (pendingBlockRef.current === null) {
+        return;
+      }
+    }
+  }, [awaitAllSaves, flushSave]);
+  useWorkspaceSaveParticipant(awaitPendingSaves);
 
   const handleChange = useCallback(
     (value?: string) => {
@@ -88,7 +106,9 @@ export function ApiParametersEditor({
       if (saveTimerRef.current) {
         clearTimeout(saveTimerRef.current);
       }
-      saveTimerRef.current = setTimeout(flushSave, 500);
+      saveTimerRef.current = setTimeout(() => {
+        void flushSave().catch(() => undefined);
+      }, 500);
 
       // Keep inferred columns in sync with the edited request/response spec.
       if (columnsTimerRef.current) {
@@ -108,15 +128,21 @@ export function ApiParametersEditor({
     [asset.id, flushSave],
   );
 
-  // Flush a pending save when the editor unmounts (asset switch / navigation).
+  // The workspace save participant owns the final awaited flush. This cleanup
+  // only cancels best-effort timers so they cannot start a second unobserved
+  // request after unmount.
   useEffect(() => {
     return () => {
+      if (saveTimerRef.current) {
+        clearTimeout(saveTimerRef.current);
+        saveTimerRef.current = null;
+      }
       if (columnsTimerRef.current) {
         clearTimeout(columnsTimerRef.current);
+        columnsTimerRef.current = null;
       }
-      flushSave();
     };
-  }, [flushSave]);
+  }, []);
 
   const { editorModelPath, formatSQL, handleBeforeMount, handleMount, isSqlAsset, shortcutLabel } =
     useAssetMonaco({

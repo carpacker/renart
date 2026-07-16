@@ -1,8 +1,10 @@
 "use client";
 
+import { Link } from "@tanstack/react-router";
 import { AlertTriangle, Play } from "lucide-react";
 import { useEffect, useRef } from "react";
 
+import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Spinner } from "@/components/ui/spinner";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
@@ -42,6 +44,16 @@ export function WorkspaceMaterializeOutputView({
         <div className="flex items-center gap-2 rounded border border-primary/30 bg-primary/5 px-2 py-1 text-xs text-primary">
           <Play className="size-3.5 animate-pulse fill-current" />
           Running pipeline...
+        </div>
+      ) : null}
+      {entry.runId ? (
+        <div className="flex items-center justify-between gap-2 rounded border bg-muted/30 px-2 py-1 text-xs text-muted-foreground">
+          <span className="min-w-0 truncate font-mono">Run {entry.runId}</span>
+          <Button asChild variant="outline" size="xs">
+            <Link to="/runs/$runId" params={{ runId: entry.runId }}>
+              Open run
+            </Link>
+          </Button>
         </div>
       ) : null}
       <div

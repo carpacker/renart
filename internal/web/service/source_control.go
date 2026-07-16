@@ -241,6 +241,7 @@ func (s *SourceControlService) open() (*git.Repository, *git.Worktree, error) {
 }
 
 const defaultGitignoreContents = `.renart/state.db*
+.renart/server.lock
 logs/
 duckdb-files/
 .env

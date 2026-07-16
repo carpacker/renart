@@ -1,4 +1,5 @@
 export * from "@/lib/api-assets";
+export * from "@/lib/api-asset-render";
 export * from "@/lib/api-config";
 export * from "@/lib/api-onboarding";
 export * from "@/lib/api-pipelines";

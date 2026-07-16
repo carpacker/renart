@@ -174,7 +174,7 @@ test.describe("DuckDB pipeline coordination (live)", () => {
 
       const loaderResponse = await request.post(
         `${server.baseURL}/api/pipelines/${encodeURIComponent(loader!.pipeline_id)}/trigger`,
-        { data: { trigger: "manual", environment: "default" } },
+        { data: { environment: "default" } },
       );
       expect(loaderResponse.ok()).toBe(true);
       const loaderRunId = ((await loaderResponse.json()) as { run: { id: string } }).run.id;
@@ -183,7 +183,7 @@ test.describe("DuckDB pipeline coordination (live)", () => {
 
       const writerResponse = await request.post(
         `${server.baseURL}/api/pipelines/${encodeURIComponent(writer!.pipeline_id)}/trigger`,
-        { data: { trigger: "manual", environment: "default" } },
+        { data: { environment: "default" } },
       );
       expect(writerResponse.ok()).toBe(true);
       const writerRunId = ((await writerResponse.json()) as { run: { id: string } }).run.id;

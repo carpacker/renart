@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { X } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
@@ -24,8 +24,17 @@ export function MultiValueInput({
   const [pendingAdds, setPendingAdds] = useState<string[]>([]);
   const [leavingValues, setLeavingValues] = useState<string[]>([]);
   const [optimisticRemovals, setOptimisticRemovals] = useState<string[]>([]);
-  useEffect(() => setDraft(""), [value]);
+  // Callers commonly provide `value ?? []`, so reference identity can change
+  // during an unrelated workspace refresh. Only a semantic value change may
+  // clear text the user is still entering.
+  const valueKeyRef = useRef(JSON.stringify(value));
   useEffect(() => {
+    const valueKey = JSON.stringify(value);
+    if (valueKeyRef.current === valueKey) {
+      return;
+    }
+    valueKeyRef.current = valueKey;
+    setDraft("");
     setPendingAdds((current) => current.filter((item) => !value.includes(item)));
     setOptimisticRemovals((current) => current.filter((item) => value.includes(item)));
   }, [value]);

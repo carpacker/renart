@@ -7,6 +7,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	webapi "renart/internal/web/api"
 	webmodel "renart/internal/web/model"
+	"renart/internal/web/runcontext"
 	"renart/internal/web/service"
 )
 
@@ -46,14 +47,50 @@ func (h *PipelineExecutionAPI) HandleGetPipelineMaterialization(w http.ResponseW
 
 func (h *PipelineExecutionAPI) HandleMaterializePipelineStream(w http.ResponseWriter, r *http.Request) {
 	pipelineID := chi.URLParam(r, "id")
-	environment := r.URL.Query().Get("environment")
-	dryRun := r.URL.Query().Get("dry_run") == "true"
-	fullRefresh := r.URL.Query().Get("full_refresh") == "true"
-	backfill := r.URL.Query().Get("backfill") == "true"
-	startDate := r.URL.Query().Get("start_date")
-	endDate := r.URL.Query().Get("end_date")
-	confirmedEnvironment := r.URL.Query().Get("confirmed_environment")
-	sensorMode := r.URL.Query().Get("sensor_mode")
+	query, err := decodeStrictQuery(r,
+		"environment", "dry_run", "full_refresh", "backfill", "start_date",
+		"end_date", "confirmed_environment", "sensor_mode",
+	)
+	if err != nil {
+		webapi.WriteBadRequest(w, "invalid_execution_context", err.Error())
+		return
+	}
+	dryRun, err := strictQueryBool(query, "dry_run")
+	if err != nil {
+		webapi.WriteBadRequest(w, "invalid_execution_context", err.Error())
+		return
+	}
+	fullRefresh, err := strictQueryBool(query, "full_refresh")
+	if err != nil {
+		webapi.WriteBadRequest(w, "invalid_execution_context", err.Error())
+		return
+	}
+	backfill, err := strictQueryBool(query, "backfill")
+	if err != nil {
+		webapi.WriteBadRequest(w, "invalid_execution_context", err.Error())
+		return
+	}
+	contextInput := runcontext.Input{
+		Start:       query.Get("start_date"),
+		End:         query.Get("end_date"),
+		FullRefresh: fullRefresh,
+		Backfill:    backfill,
+		SensorMode:  query.Get("sensor_mode"),
+	}
+	normalized, err := runcontext.Normalize(contextInput)
+	if err != nil {
+		webapi.WriteBadRequest(w, "invalid_execution_context", err.Error())
+		return
+	}
+	if err := runcontext.ValidateDryRun(dryRun, contextInput); err != nil {
+		webapi.WriteBadRequest(w, "unsupported_dry_run_context", err.Error())
+		return
+	}
+	environment := query.Get("environment")
+	startDate := normalized.StartString()
+	endDate := normalized.EndString()
+	confirmedEnvironment := query.Get("confirmed_environment")
+	sensorMode := normalized.SensorMode
 	if err := h.Service.ResolvePipelineRunTarget(pipelineID); err != nil {
 		webapi.WriteBadRequest(w, "invalid_pipeline_id", "invalid pipeline id")
 		return

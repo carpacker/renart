@@ -2,6 +2,7 @@ package scheduler
 
 import (
 	"context"
+	"errors"
 	"path/filepath"
 	"testing"
 	"time"
@@ -73,6 +74,69 @@ func TestEnvScheduleStoreRoundTrip(t *testing.T) {
 	assert.WithinDuration(t, next, *staging.NextRunAt, time.Second)
 }
 
+func TestReconcileContainsPerRowStoreFailures(t *testing.T) {
+	store := openEnvTestStore(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+
+	for _, row := range []EnvSchedule{
+		{
+			PipelineUUID:      "a-missing",
+			Environment:       "prod",
+			SnapshotVersionID: "snap-missing",
+			Cron:              "@hourly",
+			Timezone:          "UTC",
+			CatchupPolicy:     CatchupSkip,
+			Status:            ScheduleStatusActive,
+		},
+		{
+			PipelineUUID:      "b-healthy",
+			Environment:       "prod",
+			SnapshotVersionID: "snap-healthy",
+			Cron:              "@hourly",
+			Timezone:          "UTC",
+			CatchupPolicy:     CatchupSkip,
+			Status:            ScheduleStatusActive,
+		},
+	} {
+		require.NoError(t, store.UpsertEnvSchedule(ctx, row))
+	}
+	_, err := store.db.ExecContext(ctx, `
+		CREATE TRIGGER fail_missing_schedule_archive
+		BEFORE UPDATE OF status ON renart_schedules
+		WHEN OLD.pipeline_id = 'a-missing'
+		BEGIN
+			SELECT RAISE(ABORT, 'injected per-row schedule failure');
+		END`)
+	require.NoError(t, err)
+
+	service := New(Options{
+		Store:    store,
+		StateDir: t.TempDir(),
+		Runner:   func(context.Context, RunRequest, func(string)) RunResult { return RunResult{} },
+		ResolvePipelineRef: func(_ context.Context, uuid string) (PipelineRef, bool) {
+			if uuid == "b-healthy" {
+				return PipelineRef{EncodedID: "healthy", Name: "healthy"}, true
+			}
+			return PipelineRef{}, false
+		},
+		CheckSnapshot: func(context.Context, string, string) error { return nil },
+	})
+	require.NoError(t, service.Start(ctx), "one broken row must not make the scheduler unavailable")
+	t.Cleanup(service.Stop)
+	assert.Equal(t, SchedulerOwnershipOwner, service.Ownership().State)
+
+	missing, found, err := store.GetEnvSchedule(ctx, "a-missing", "prod")
+	require.NoError(t, err)
+	require.True(t, found)
+	assert.Equal(t, ScheduleStatusActive, missing.Status, "the failed mutation remains retryable")
+
+	healthy, found, err := store.GetEnvSchedule(ctx, "b-healthy", "prod")
+	require.NoError(t, err)
+	require.True(t, found)
+	require.NotNil(t, healthy.NextRunAt, "later rows must still reconcile")
+}
+
 func TestUpsertEnvScheduleValidation(t *testing.T) {
 	store := openEnvTestStore(t)
 	service := New(Options{
@@ -84,8 +148,19 @@ func TestUpsertEnvScheduleValidation(t *testing.T) {
 		},
 		PipelineIntervalAware: func(ctx context.Context, uuid string) bool { return false },
 		DeployPipeline:        func(ctx context.Context, uuid string) (string, error) { return "snap-new", nil },
+		ValidateSnapshot: func(_ context.Context, pipelineUUID, versionID string) error {
+			if pipelineUUID != "uuid-1" || (versionID != "snap-new" && versionID != "snap-existing") {
+				return errors.New("snapshot does not belong to pipeline")
+			}
+			return nil
+		},
 	})
-	ctx := context.Background()
+	ctx, cancel := context.WithCancel(context.Background())
+	require.NoError(t, service.Start(ctx))
+	t.Cleanup(func() {
+		cancel()
+		service.Stop()
+	})
 
 	_, err := service.UpsertEnvSchedule(ctx, "uuid-1", UpsertEnvScheduleRequest{Cron: "@hourly"})
 	require.ErrorContains(t, err, "environment is required")
@@ -111,6 +186,20 @@ func TestUpsertEnvScheduleValidation(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "snap-new", updated.SnapshotVersionID)
 	assert.Equal(t, "@daily", updated.Cron)
+
+	_, err = service.UpsertEnvSchedule(ctx, "uuid-1", UpsertEnvScheduleRequest{
+		Environment: "staging", Cron: "@daily", SnapshotVersionID: "wrong",
+	})
+	require.ErrorContains(t, err, "not executable for this pipeline")
+
+	paused, err := service.UpsertEnvSchedule(ctx, "uuid-1", UpsertEnvScheduleRequest{
+		Environment: "variables", Cron: "@daily", SnapshotVersionID: "snap-existing",
+		Vars: map[string]any{"region": "eu"}, Paused: true,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, ScheduleStatusPaused, paused.Status)
+	err = service.SetEnvScheduleLifecycle(ctx, "uuid-1", "variables", ScheduleStatusActive)
+	require.ErrorContains(t, err, "remove the overrides")
 }
 
 func TestEnvScheduledWorkerRunsWithEnvironmentAndWatermark(t *testing.T) {
@@ -176,6 +265,46 @@ func TestEnvScheduledWorkerRunsWithEnvironmentAndWatermark(t *testing.T) {
 	}}))
 }
 
+func TestEnvScheduledWorkerFailureDoesNotAdvanceWatermark(t *testing.T) {
+	t.Parallel()
+	store := openEnvTestStore(t)
+	ctx := context.Background()
+	service := New(Options{
+		Store:    store,
+		StateDir: t.TempDir(),
+		Runner: func(_ context.Context, req RunRequest, _ func(string)) RunResult {
+			require.True(t, req.Scheduled)
+			require.Equal(t, "corrupt-snapshot", req.SnapshotVersionID)
+			return RunResult{Status: "error", Error: "deployment blob hash mismatch"}
+		},
+		ResolvePipelineRef: func(context.Context, string) (PipelineRef, bool) {
+			return PipelineRef{EncodedID: "encoded-id", Name: "analytics"}, true
+		},
+	})
+
+	start := time.Date(2026, 6, 12, 10, 0, 0, 0, time.UTC)
+	end := start.Add(time.Hour)
+	worker := &pipelineRunWorker{service: service}
+	require.NoError(t, worker.Work(ctx, &river.Job[pipelineRunJobArgs]{Args: pipelineRunJobArgs{
+		PipelineUUID:      "uuid-1",
+		PipelineName:      "analytics",
+		Environment:       "prod",
+		Trigger:           RunTriggerSchedule,
+		Start:             start.Format(time.RFC3339Nano),
+		End:               end.Format(time.RFC3339Nano),
+		SnapshotVersionID: "corrupt-snapshot",
+	}}))
+
+	runs, err := service.ListRuns(ctx, RunFilter{PipelineID: "encoded-id"})
+	require.NoError(t, err)
+	require.Len(t, runs.Runs, 1)
+	assert.Equal(t, RunStatusFailed, runs.Runs[0].Status)
+	assert.Contains(t, runs.Runs[0].Error, "blob hash mismatch")
+	_, hasWatermark, err := store.LastInterval(ctx, "uuid-1|prod")
+	require.NoError(t, err)
+	assert.False(t, hasWatermark)
+}
+
 func TestMigrateLegacySchedules(t *testing.T) {
 	store := openEnvTestStore(t)
 	ctx := context.Background()
@@ -197,6 +326,18 @@ func TestMigrateLegacySchedules(t *testing.T) {
 			}, nil
 		},
 		DefaultEnvironment: func() string { return "dev" },
+		LatestSnapshot: func(_ context.Context, pipelineUUID string) (string, bool, error) {
+			if pipelineUUID == "uuid-enabled" {
+				return "snap-enabled", true, nil
+			}
+			return "", false, nil
+		},
+		ValidateSnapshot: func(_ context.Context, pipelineUUID, versionID string) error {
+			if pipelineUUID == "uuid-enabled" && versionID == "snap-enabled" {
+				return nil
+			}
+			return errors.New("unexpected snapshot")
+		},
 	})
 
 	require.NoError(t, service.migrateLegacySchedules(ctx))
@@ -214,13 +355,14 @@ func TestMigrateLegacySchedules(t *testing.T) {
 	assert.Equal(t, "@hourly", migrated.Cron)
 	assert.Equal(t, CatchupRunOnce, migrated.CatchupPolicy)
 	assert.Equal(t, ScheduleStatusActive, migrated.Status)
-	assert.Empty(t, migrated.SnapshotVersionID, "migrated rows fall back to latest-snapshot-or-working-tree")
+	assert.Equal(t, "snap-enabled", migrated.SnapshotVersionID)
 
-	// The config-only pipeline (schedule string, no explicit enabled row) is
-	// migrated as active; the explicitly-disabled one stays out.
+	// The config-only pipeline has no deployment, so it is retained but paused
+	// for review; the explicitly-disabled one stays out.
 	config := byUUID["uuid-config"]
 	assert.Equal(t, "@daily", config.Cron)
-	assert.Equal(t, ScheduleStatusActive, config.Status)
+	assert.Equal(t, ScheduleStatusPaused, config.Status)
+	assert.Empty(t, config.SnapshotVersionID)
 	_, disabledMigrated := byUUID["uuid-disabled"]
 	assert.False(t, disabledMigrated, "explicitly disabled schedule must not migrate")
 

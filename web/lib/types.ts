@@ -152,6 +152,8 @@ export type PipelineRun = {
   finished_at?: string;
   error?: string;
   log_ref?: string;
+  snapshot_version_id?: string;
+  execution_context_resolved?: boolean;
 };
 
 export type PipelineRunLogLine = {

@@ -17,7 +17,6 @@ import {
   ChevronRight,
   ChevronUp,
   Circle,
-  ClipboardCheck,
   Columns2,
   Cpu,
   Database,
@@ -27,12 +26,10 @@ import {
   FileCode,
   FilePlus2,
   FolderPlus,
-  GitBranch,
   GitBranchPlus,
   Globe,
   GitCompare,
   Hammer,
-  History,
   Layers,
   Loader2,
   MoreHorizontal,
@@ -45,6 +42,7 @@ import {
   PanelRightOpen,
   Play,
   Plus,
+  RefreshCw,
   RotateCw,
   Radar,
   Search,
@@ -94,7 +92,6 @@ import {
   DropdownMenuGroup,
   DropdownMenuItem,
   DropdownMenuLabel,
-  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import {
@@ -129,10 +126,17 @@ import { WorkspaceMaterializeOutputView } from "@/components/workspace-materiali
 import { Spinner } from "@/components/ui/spinner";
 import { runSQLQuery } from "@/lib/api";
 import type { MaterializeStreamPayload } from "@/lib/api-core";
+import type { PipelineRunSource } from "@/lib/api-scheduler";
 import type { StreamAssetEvent } from "@/lib/api-streams";
 import { typeCheckPipeline, type PipelineTypeCheckReport } from "@/lib/api-pipelines";
+import { renderAsset, type AssetRenderResult } from "@/lib/api-asset-render";
 import type { AssetStaleness } from "@/lib/api-staleness";
-import { isSeedAssetType, isSensorAssetType, isSqlAssetType } from "@/lib/asset-types";
+import {
+  isQuerySensorAssetType,
+  isSeedAssetType,
+  isSensorAssetType,
+  isSqlAssetType,
+} from "@/lib/asset-types";
 import { editorDraftAtom } from "@/lib/atoms/domains/editor";
 import type { MaterializeHistoryEntry } from "@/lib/atoms/results";
 import {
@@ -143,6 +147,7 @@ import {
 } from "@/lib/atoms/domains/workspace";
 import { renderJinjaAsset } from "@/lib/jinja-intellisense";
 import { resolveConnection } from "@/lib/sql-schema";
+import { awaitWorkspaceSaves } from "@/lib/workspace-save-barrier";
 import type {
   AssetInspectResponse,
   SqlQueryResponse,
@@ -183,10 +188,8 @@ import {
 
 import {
   assets,
-  changeTypeMeta,
   diagnostics,
   editorLinesFor,
-  impactPlan,
   kindForAssetType,
   kindMeta,
   missingPythonDependencies,
@@ -194,10 +197,6 @@ import {
   packageForImport,
   parsePythonImport,
   pipelineDependencies,
-  pipelineVariables,
-  pipelineVariants,
-  renderedPipelineName,
-  renderedPipelineSchedule,
   schemaRows,
   tests,
 } from "./app-data";
@@ -210,6 +209,7 @@ import { ErrorBoundary } from "@/components/ui/error-boundary";
 import { SqlPreview } from "./sql-preview";
 import { LoadParametersEditor } from "./load-parameters-editor";
 import { SemanticParametersEditor } from "./semantic-parameters-editor";
+import { AssetRenderView } from "./asset-render-view";
 import { FilePathPicker } from "./file-path-picker";
 import {
   SemanticAssetCreateFields,
@@ -242,35 +242,31 @@ import {
 export type AppBuildView = "canvas" | "split" | "code";
 export type AppResultTab =
   | "inspect"
+  | "render"
   | "materialize"
   | "query"
   | "typecheck"
   | "tests"
   | "diagnostics"
-  | "metadata"
-  | "shell"
-  | "history";
+  | "metadata";
 export type AppEditorMode = "asset" | "adhoc";
 
 export type AppBuildSearch = {
   result?: AppResultTab;
   editor?: AppEditorMode;
-  variant?: string;
 };
 
 const resultTabs: AppResultTab[] = [
   "inspect",
+  "render",
   "materialize",
   "query",
   "typecheck",
   "tests",
   "diagnostics",
   "metadata",
-  "shell",
-  "history",
 ];
 const editorModes: AppEditorMode[] = ["asset", "adhoc"];
-const variantIds = pipelineVariants.map((variant) => variant.id);
 
 export function normalizeAppBuildSearch(search: Record<string, unknown>): AppBuildSearch {
   return {
@@ -280,7 +276,6 @@ export function normalizeAppBuildSearch(search: Record<string, unknown>): AppBui
     editor: editorModes.includes(search.editor as AppEditorMode)
       ? (search.editor as AppEditorMode)
       : undefined,
-    variant: variantIds.includes(search.variant as never) ? (search.variant as string) : undefined,
   };
 }
 
@@ -304,7 +299,21 @@ function fromUTCDateTimeInput(value: string) {
 function isValidExecutionWindow(start: string, end: string) {
   const startTimestamp = Date.parse(start);
   const endTimestamp = Date.parse(end);
-  return !Number.isNaN(startTimestamp) && !Number.isNaN(endTimestamp) && endTimestamp > startTimestamp;
+  return (
+    !Number.isNaN(startTimestamp) && !Number.isNaN(endTimestamp) && endTimestamp > startTimestamp
+  );
+}
+
+function formatRunWindow(window?: { start: string; end: string } | null) {
+  if (!window) return "window resolving";
+  const start = new Date(window.start);
+  const end = new Date(window.end);
+  if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) {
+    return "invalid window";
+  }
+  const startUTC = start.toISOString().slice(0, 16).replace("T", " ");
+  const endUTC = end.toISOString().slice(0, 16).replace("T", " ");
+  return `${startUTC}–${endUTC} UTC`;
 }
 
 type BuildAsset = AppLineageCanvasAsset & {
@@ -316,6 +325,13 @@ type BuildAsset = AppLineageCanvasAsset & {
   type?: string;
   connection?: string;
   upstreams?: string[];
+};
+
+type AssetRenderSourceState = {
+  identity: string;
+  assetId: string;
+  savedIntentContent: string;
+  workspaceContentAtStart: string;
 };
 
 type BuildContextValue = {
@@ -345,12 +361,16 @@ type BuildContextValue = {
   fullRefreshSelectedAsset: () => void;
   backfillSelectedAsset: () => void;
   inspectSelectedAsset: () => void;
+  renderSelectedAsset: () => void;
   runAdhocQuery: () => void;
   adhocContextAsset: WebAsset | null;
   adhocLoading: boolean;
   materializeLoading: boolean;
   inspectLoading: boolean;
+  renderLoading: boolean;
+  renderBlockedReason?: string;
   executionBlocked: boolean;
+  executionBlockedReason?: string;
 };
 
 const BuildContext = createContext<BuildContextValue | null>(null);
@@ -436,6 +456,14 @@ function assetFileName(assetPath: string) {
   return file.replace(/\.[^.]+$/, "");
 }
 
+function normalizeAssetContentIdentity(content: string) {
+  // Monaco uses the browser/OS line ending while Bruin returns parsed asset
+  // content with LF endings. Treat that save-time normalization as the same
+  // source so an SSE refresh cannot invalidate a preview that was just
+  // rendered from the successfully saved editor value.
+  return content.replace(/\r\n?/g, "\n");
+}
+
 function assetSidebarName(asset: BuildAsset) {
   if (asset.path) {
     const file = asset.path.split("/").pop() ?? asset.name;
@@ -470,18 +498,14 @@ export function AppBuildPage({
   selectedAssetId,
   resultTab = "inspect",
   editorMode = "asset",
-  variant = "default",
   onResultTabChange,
-  onVariantChange,
   onAssetSelect,
 }: {
   pipelineId?: string;
   selectedAssetId?: string;
   resultTab?: AppResultTab;
   editorMode?: AppEditorMode;
-  variant?: string;
   onResultTabChange?: (tab: AppResultTab) => void;
-  onVariantChange?: (variant: string) => void;
   onAssetSelect?: (assetId: string) => void;
 }) {
   const workspace = useAtomValue(workspaceAtom);
@@ -489,8 +513,8 @@ export function AppBuildPage({
   const location = useLocation();
   const view = appBuildViewFromPath(location.pathname);
   const buildSearch: AppBuildSearch = useMemo(
-    () => ({ result: resultTab, editor: editorMode, variant }),
-    [editorMode, resultTab, variant],
+    () => ({ result: resultTab, editor: editorMode }),
+    [editorMode, resultTab],
   );
   // Until the workspace has loaded (e.g. right after a page refresh) there is no
   // real pipeline to render; the derived assets fall back to placeholder demo
@@ -525,15 +549,76 @@ export function AppBuildPage({
   const materializationStatusByAssetId = useAppAssetMaterializationStatus(materializationAssets);
   const deployState = usePipelineDeploy(activePipeline?.id);
   const environmentPolicy = useSelectedEnvironmentPolicy();
-  const executionBlocked = Boolean(environmentPolicy?.protected);
+  const executionBlocked = Boolean(
+    environmentPolicy?.protected || environmentPolicy?.deployed_only,
+  );
+  const executionBlockedReason = environmentPolicy?.protected
+    ? "This environment is protected: interactive execution is disabled"
+    : environmentPolicy?.deployed_only
+      ? "This environment only allows deployed pipeline runs; asset and stale builds use the working tree"
+      : undefined;
   const assetResults = useAssetResults();
   const selectedEnvironment = useAtomValue(selectedEnvironmentAtom);
   const effectiveEnvironment = selectedEnvironment ?? workspace?.selected_environment ?? "";
+  const pipelineRunSource = useMemo<PipelineRunSource | null>(() => {
+    if (!environmentPolicy?.deployed_only) {
+      return { source: "working_tree" };
+    }
+    const versionId = deployState.status?.version_id?.trim();
+    if (
+      deployState.loading ||
+      deployState.error ||
+      !deployState.status?.has_snapshot ||
+      !deployState.status.executable ||
+      !versionId
+    ) {
+      return null;
+    }
+    return { source: "snapshot", snapshot_version_id: versionId };
+  }, [
+    deployState.error,
+    deployState.loading,
+    deployState.status?.has_snapshot,
+    deployState.status?.executable,
+    deployState.status?.version_id,
+    environmentPolicy?.deployed_only,
+  ]);
+  const pipelineRunSourceLabel = environmentPolicy?.deployed_only
+    ? deployState.loading
+      ? "Resolving source"
+      : pipelineRunSource?.source === "snapshot"
+        ? `Run deployed ${pipelineRunSource.snapshot_version_id.slice(0, 8)}`
+        : "Deployment required"
+    : "Run workspace";
+  const pipelineRunBlockedReason = environmentPolicy?.protected
+    ? "This environment is protected: interactive execution is disabled; deploy and schedule instead"
+    : environmentPolicy?.deployed_only && deployState.loading
+      ? "Resolving the latest deployment for this environment"
+      : environmentPolicy?.deployed_only && deployState.error
+        ? `Deployment status is unavailable: ${deployState.error}`
+        : environmentPolicy?.deployed_only &&
+            deployState.status?.has_snapshot &&
+            !deployState.status.executable
+          ? `The latest deployment failed its integrity check: ${deployState.status.integrity_error ?? "redeploy it before running"}`
+          : environmentPolicy?.deployed_only && !pipelineRunSource
+            ? "This environment requires a deployment before it can run"
+            : undefined;
   const selectedExecutionTimeWindow = useAtomValue(selectedExecutionTimeWindowAtom);
+  const pipelineRunContextLabel = `${pipelineRunSourceLabel.replace(/^Run /, "")} · ${effectiveEnvironment || "default"} · ${formatRunWindow(selectedExecutionTimeWindow)}`;
+  const executionWindowBlockedReason = selectedExecutionTimeWindow
+    ? undefined
+    : "Resolving the execution window";
   const editorDraft = useAtomValue(editorDraftAtom);
+  const setEditorDraft = useSetAtom(editorDraftAtom);
   const [adhocResult, setAdhocResult] = useState<SqlQueryResponse | null>(null);
   const [adhocRenderedQuery, setAdhocRenderedQuery] = useState<string | null>(null);
   const [adhocLoading, setAdhocLoading] = useState(false);
+  const [assetRenderResult, setAssetRenderResult] = useState<AssetRenderResult | null>(null);
+  const [assetRenderLoading, setAssetRenderLoading] = useState(false);
+  const [assetRenderError, setAssetRenderError] = useState<string | null>(null);
+  const [assetRenderSource, setAssetRenderSource] = useState<AssetRenderSourceState | null>(null);
+  const assetRenderRequestId = useRef(0);
+  const assetRenderIdentityRef = useRef<string | null>(null);
   const [adhocQuery] = useAdhocQueryDraft(pipelineId);
   const displayedPipelineAssets = useMemo(
     () =>
@@ -598,6 +683,45 @@ export function AppBuildPage({
     displayedPipelineAssets.find((asset) => asset.id === effectiveSelectedAssetId) ??
     displayedPipelineAssets[0] ??
     fallbackBuildAssets()[0];
+  const selectedWorkspaceAsset = selectedAsset?.workspaceAsset;
+  const selectedAssetSavedIntentContent = selectedWorkspaceAsset
+    ? (editorDraft[selectedWorkspaceAsset.id] ?? selectedWorkspaceAsset.content)
+    : null;
+  const selectedAssetSavedIntentIdentity =
+    selectedAssetSavedIntentContent === null
+      ? null
+      : normalizeAssetContentIdentity(selectedAssetSavedIntentContent);
+  const selectedAssetRenderIdentity =
+    activePipeline &&
+    selectedWorkspaceAsset &&
+    selectedAssetSavedIntentIdentity !== null &&
+    selectedExecutionTimeWindow
+      ? JSON.stringify([
+          activePipeline.id,
+          selectedWorkspaceAsset.id,
+          selectedAssetSavedIntentIdentity,
+          effectiveEnvironment || "default",
+          selectedExecutionTimeWindow.start,
+          selectedExecutionTimeWindow.end,
+          false,
+        ])
+      : null;
+  assetRenderIdentityRef.current = selectedAssetRenderIdentity;
+  const assetRenderWorkspaceContentCompatible = Boolean(
+    assetRenderSource &&
+    selectedWorkspaceAsset?.id === assetRenderSource.assetId &&
+    (normalizeAssetContentIdentity(selectedWorkspaceAsset.content) ===
+      normalizeAssetContentIdentity(assetRenderSource.savedIntentContent) ||
+      normalizeAssetContentIdentity(selectedWorkspaceAsset.content) ===
+        normalizeAssetContentIdentity(assetRenderSource.workspaceContentAtStart)),
+  );
+  const assetRenderMatchesSelection =
+    selectedAssetRenderIdentity !== null &&
+    assetRenderSource?.identity === selectedAssetRenderIdentity &&
+    assetRenderWorkspaceContentCompatible;
+  const visibleAssetRenderResult = assetRenderMatchesSelection ? assetRenderResult : null;
+  const visibleAssetRenderLoading = assetRenderMatchesSelection && assetRenderLoading;
+  const visibleAssetRenderError = assetRenderMatchesSelection ? assetRenderError : null;
   const [explorerOpen, setExplorerOpen] = useState(false);
   const [inspectorOpen, setInspectorOpen] = useState(false);
   // Large-screen collapse for the side columns; small screens keep using the
@@ -631,22 +755,12 @@ export function AppBuildPage({
     setPipelineSettingsSection(section);
     setPipelineSettingsOpen(true);
   };
-  const [planOpen, setPlanOpen] = useState(false);
   const [buildStaleOpen, setBuildStaleOpen] = useState(false);
   const [addedDependencies, setAddedDependencies] = useState<string[]>([]);
-  const [history, setHistory] = useState<
-    Array<{
-      id: number;
-      kind: string;
-      target: string;
-      status: string;
-      time: string;
-      variant: string;
-    }>
-  >([]);
   const declaredDependencies = [...pipelineDependencies, ...addedDependencies];
   const [typeCheckReport, setTypeCheckReport] = useState<PipelineTypeCheckReport | null>(null);
   const [typeCheckLoading, setTypeCheckLoading] = useState(false);
+  const [typeCheckError, setTypeCheckError] = useState<string | null>(null);
   const resultsPanelRef = useRef<PanelImperativeHandle | null>(null);
   const [resultsCollapsed, setResultsCollapsed] = useState(false);
   const toggleResultsPanel = () => {
@@ -664,6 +778,35 @@ export function AppBuildPage({
   useEffect(() => {
     setVisualSelectedAssetId(selectedAssetId ?? firstAssetId);
   }, [firstAssetId, selectedAssetId]);
+
+  useEffect(() => {
+    assetRenderRequestId.current += 1;
+    setAssetRenderSource(null);
+    setAssetRenderResult(null);
+    setAssetRenderError(null);
+    setAssetRenderLoading(false);
+  }, [selectedAssetRenderIdentity]);
+
+  useEffect(() => {
+    if (!assetRenderSource || selectedWorkspaceAsset?.id !== assetRenderSource.assetId) return;
+    const workspaceContent = selectedWorkspaceAsset.content;
+    if (
+      normalizeAssetContentIdentity(workspaceContent) ===
+        normalizeAssetContentIdentity(assetRenderSource.savedIntentContent) ||
+      normalizeAssetContentIdentity(workspaceContent) ===
+        normalizeAssetContentIdentity(assetRenderSource.workspaceContentAtStart)
+    ) {
+      return;
+    }
+    setEditorDraft((previous) => {
+      if (previous[assetRenderSource.assetId] !== assetRenderSource.savedIntentContent) {
+        return previous;
+      }
+      const next = { ...previous };
+      delete next[assetRenderSource.assetId];
+      return next;
+    });
+  }, [assetRenderSource, selectedWorkspaceAsset, setEditorDraft]);
 
   // Keep the global selection atoms pointed at the asset shown here so the
   // selection-derived state (editor drafts, schema suggestion tables,
@@ -721,21 +864,6 @@ export function AppBuildPage({
       current.includes(dependency) ? current : [...current, dependency],
     );
   };
-  const logHistory = (kind: string, target: string) => {
-    setHistory((current) =>
-      [
-        {
-          id: Date.now(),
-          kind,
-          target,
-          status: "success",
-          time: new Date().toLocaleTimeString(),
-          variant,
-        },
-        ...current,
-      ].slice(0, 20),
-    );
-  };
   const runTypeCheck = useCallback(
     async (openTab = false) => {
       if (!activePipeline) {
@@ -745,14 +873,16 @@ export function AppBuildPage({
         openBottom("typecheck");
       }
       setTypeCheckLoading(true);
+      setTypeCheckError(null);
       try {
+        await awaitWorkspaceSaves();
         const report = await typeCheckPipeline(activePipeline.id, {
           startDate: selectedExecutionTimeWindow?.start,
           endDate: selectedExecutionTimeWindow?.end,
         });
         setTypeCheckReport(report);
-      } catch {
-        setTypeCheckReport(null);
+      } catch (cause) {
+        setTypeCheckError(cause instanceof Error ? cause.message : "Type check failed.");
       } finally {
         setTypeCheckLoading(false);
       }
@@ -768,15 +898,15 @@ export function AppBuildPage({
     void runTypeCheck(false);
   }, [activePipeline?.id, runTypeCheck]);
   const runAction = () => {
-    if (!activePipeline) {
+    if (!activePipeline || !pipelineRunSource || pipelineRunBlockedReason) {
       return;
     }
-    logHistory("run", activePipeline.name || pipelineId);
     openBottom("materialize");
-    void assetResults.runMaterializePipeline(activePipeline.id);
+    void assetResults.runMaterializePipeline(activePipeline.id, undefined, {
+      source: pipelineRunSource,
+    });
   };
   const runMaterialize = (assetId: string, name: string, scope: MaterializeScope = "asset") => {
-    logHistory("materialize", name);
     openBottom("materialize");
     void assetResults.runMaterializeForAsset(assetId, scope);
   };
@@ -792,7 +922,7 @@ export function AppBuildPage({
   };
   const materializeSelectedAsset = () => {
     const workspaceAsset = selectedAsset?.workspaceAsset;
-    if (!activePipeline || !workspaceAsset) {
+    if (!activePipeline || !workspaceAsset || !selectedExecutionTimeWindow) {
       return;
     }
     requestMaterialize(workspaceAsset.id, selectedAsset.name);
@@ -828,10 +958,6 @@ export function AppBuildPage({
   const confirmDestructiveMaterialization = () => {
     if (!destructiveMaterializationPrompt) return;
     const isBackfill = destructiveMaterializationPrompt.kind === "backfill";
-    logHistory(
-      "materialize",
-      `${destructiveMaterializationPrompt.assetName} (${isBackfill ? "backfill" : "full refresh"})`,
-    );
     openBottom("materialize");
     void assetResults.runMaterializeForAsset(
       destructiveMaterializationPrompt.assetId,
@@ -861,12 +987,62 @@ export function AppBuildPage({
     if (!activePipeline || !workspaceAsset) {
       return;
     }
-    logHistory("inspect", selectedAsset.name);
     openBottom("inspect");
     void assetResults.runInspectForAsset(
       workspaceAsset.id,
       editorDraft[workspaceAsset.id] ?? workspaceAsset.content,
     );
+  };
+  const renderSelectedAsset = async () => {
+    const workspaceAsset = selectedAsset?.workspaceAsset;
+    const executionWindow = selectedExecutionTimeWindow;
+    if (!activePipeline || !workspaceAsset || !executionWindow) {
+      return;
+    }
+    const sourceIdentity = selectedAssetRenderIdentity;
+    const sourceIntentContent = selectedAssetSavedIntentContent;
+    if (!sourceIdentity || sourceIntentContent === null) {
+      return;
+    }
+    const requestId = ++assetRenderRequestId.current;
+    openBottom("render");
+    setAssetRenderSource({
+      identity: sourceIdentity,
+      assetId: workspaceAsset.id,
+      savedIntentContent: sourceIntentContent,
+      workspaceContentAtStart: workspaceAsset.content,
+    });
+    setAssetRenderLoading(true);
+    setAssetRenderError(null);
+    try {
+      await awaitWorkspaceSaves();
+      const result = await renderAsset(workspaceAsset.id, {
+        environment: effectiveEnvironment || undefined,
+        start_date: executionWindow.start,
+        end_date: executionWindow.end,
+        full_refresh: false,
+      });
+      if (
+        assetRenderRequestId.current === requestId &&
+        assetRenderIdentityRef.current === sourceIdentity
+      ) {
+        setAssetRenderResult(result);
+      }
+    } catch (cause) {
+      if (
+        assetRenderRequestId.current === requestId &&
+        assetRenderIdentityRef.current === sourceIdentity
+      ) {
+        setAssetRenderError(cause instanceof Error ? cause.message : "Asset render failed.");
+      }
+    } finally {
+      if (
+        assetRenderRequestId.current === requestId &&
+        assetRenderIdentityRef.current === sourceIdentity
+      ) {
+        setAssetRenderLoading(false);
+      }
+    }
   };
   // SQL context for the ad hoc editor: the selected asset when it is SQL,
   // otherwise the first SQL asset of the pipeline (dialect + connection).
@@ -899,7 +1075,6 @@ export function AppBuildPage({
       });
       return;
     }
-    logHistory("query", connection);
     setAdhocLoading(true);
     try {
       // Ad hoc queries are Jinja templates: render them with the pipeline's
@@ -1043,12 +1218,16 @@ export function AppBuildPage({
     fullRefreshSelectedAsset,
     backfillSelectedAsset,
     inspectSelectedAsset,
+    renderSelectedAsset: () => void renderSelectedAsset(),
     runAdhocQuery,
     adhocContextAsset,
     adhocLoading,
     materializeLoading: assetResults.materializeLoading,
     inspectLoading: assetResults.inspectLoading,
+    renderLoading: visibleAssetRenderLoading,
+    renderBlockedReason: executionWindowBlockedReason,
     executionBlocked,
+    executionBlockedReason,
   };
 
   return (
@@ -1063,25 +1242,32 @@ export function AppBuildPage({
           resultTab={resultTab}
           editorMode={editorMode}
           currentView={view}
-          variant={variant}
-          historyCount={history.length}
           onOpenExplorer={() => setExplorerOpen(true)}
           onOpenInspector={() => setInspectorOpen(true)}
           explorerCollapsed={explorerCollapsed}
           inspectorCollapsed={inspectorCollapsed}
           onToggleExplorer={() => setExplorerCollapsed((value) => !value)}
           onToggleInspector={() => setInspectorCollapsed((value) => !value)}
-          onOpenHistory={() => openBottom("history")}
-          onOpenPlan={() => setPlanOpen(true)}
-          onVariantChange={onVariantChange}
           onRun={runAction}
           typeCheckReport={typeCheckReport}
           typeCheckLoading={typeCheckLoading}
+          typeCheckError={typeCheckError}
           onTypeCheck={() => void runTypeCheck(true)}
           staleCount={staleness.staleAssets.length}
+          stalenessLoading={staleness.loading}
+          stalenessError={staleness.error}
           onBuildStale={() => setBuildStaleOpen(true)}
           deployState={deployState}
           executionBlocked={executionBlocked}
+          executionBlockedReason={executionBlockedReason}
+          runLabel={pipelineRunSourceLabel}
+          runContextLabel={pipelineRunContextLabel}
+          runDisabled={
+            !pipelineRunSource ||
+            Boolean(pipelineRunBlockedReason) ||
+            Boolean(executionWindowBlockedReason)
+          }
+          runTitle={pipelineRunBlockedReason ?? executionWindowBlockedReason}
         />
         {isWorkspaceLoading ? (
           <BuildLoadingState />
@@ -1147,15 +1333,17 @@ export function AppBuildPage({
                   onTabChange={openBottom}
                   collapsed={resultsCollapsed}
                   onToggleCollapse={toggleResultsPanel}
-                  variant={variant}
-                  history={history}
                   typeCheckReport={typeCheckReport}
                   typeCheckLoading={typeCheckLoading}
+                  typeCheckError={typeCheckError}
                   onRunTypeCheck={() => void runTypeCheck(false)}
                   onSelectAsset={selectAsset}
-                  onHistoryOpen={(tab) => openBottom(tab)}
                   inspectResult={assetResults.inspectResult}
                   inspectLoading={assetResults.inspectLoading}
+                  renderResult={visibleAssetRenderResult}
+                  renderLoading={visibleAssetRenderLoading}
+                  renderError={visibleAssetRenderError}
+                  onRender={() => void renderSelectedAsset()}
                   canLoadMoreInspectRows={assetResults.canLoadMoreInspectRows}
                   onLoadMoreInspectRows={assetResults.loadMoreInspectRows}
                   selectedMaterializeEntry={assetResults.selectedMaterializeEntry}
@@ -1236,7 +1424,6 @@ export function AppBuildPage({
           pipelineId={pipelineId}
           initialSection={pipelineSettingsSection}
         />
-        <PlanDialog open={planOpen} onOpenChange={setPlanOpen} />
         <Dialog
           open={destructiveMaterializationPrompt !== null}
           onOpenChange={(open) => {
@@ -1249,7 +1436,9 @@ export function AppBuildPage({
           <DialogContent>
             <DialogHeader>
               <DialogTitle>
-                {destructiveMaterializationPrompt?.kind === "backfill" ? "Backfill" : "Full refresh"}{" "}
+                {destructiveMaterializationPrompt?.kind === "backfill"
+                  ? "Backfill"
+                  : "Full refresh"}{" "}
                 {destructiveMaterializationPrompt?.assetName}?
               </DialogTitle>
               <DialogDescription>
@@ -1269,7 +1458,9 @@ export function AppBuildPage({
                     value={toUTCDateTimeInput(destructiveMaterializationPrompt.start)}
                     onChange={(event) =>
                       setDestructiveMaterializationPrompt((current) =>
-                        current ? { ...current, start: fromUTCDateTimeInput(event.target.value) } : current,
+                        current
+                          ? { ...current, start: fromUTCDateTimeInput(event.target.value) }
+                          : current,
                       )
                     }
                   />
@@ -1283,7 +1474,9 @@ export function AppBuildPage({
                     value={toUTCDateTimeInput(destructiveMaterializationPrompt.end)}
                     onChange={(event) =>
                       setDestructiveMaterializationPrompt((current) =>
-                        current ? { ...current, end: fromUTCDateTimeInput(event.target.value) } : current,
+                        current
+                          ? { ...current, end: fromUTCDateTimeInput(event.target.value) }
+                          : current,
                       )
                     }
                   />
@@ -1298,7 +1491,9 @@ export function AppBuildPage({
                 <Input
                   id="destructive-materialization-environment-confirmation"
                   value={destructiveMaterializationConfirmation}
-                  onChange={(event) => setDestructiveMaterializationConfirmation(event.target.value)}
+                  onChange={(event) =>
+                    setDestructiveMaterializationConfirmation(event.target.value)
+                  }
                   autoComplete="off"
                 />
               </div>
@@ -1320,7 +1515,10 @@ export function AppBuildPage({
                 }
                 onClick={confirmDestructiveMaterialization}
               >
-                Run {destructiveMaterializationPrompt?.kind === "backfill" ? "backfill" : "full refresh"}
+                Run{" "}
+                {destructiveMaterializationPrompt?.kind === "backfill"
+                  ? "backfill"
+                  : "full refresh"}
               </Button>
             </DialogFooter>
           </DialogContent>
@@ -1389,7 +1587,6 @@ export function AppBuildPage({
           onOpenChange={setBuildStaleOpen}
           staleAssets={staleness.staleAssets}
           onBuild={(onAssetEvent) => {
-            logHistory("build stale", `${staleness.staleAssets.length} assets`);
             openBottom("materialize");
             const idByName = new Map(
               displayedPipelineAssets.map((asset) => [asset.name, asset.id]),
@@ -1417,24 +1614,27 @@ function BuildTopBar({
   resultTab,
   editorMode,
   currentView,
-  variant,
-  historyCount,
   onOpenExplorer,
   onOpenInspector,
   explorerCollapsed = false,
   inspectorCollapsed = false,
   onToggleExplorer,
   onToggleInspector,
-  onOpenHistory,
-  onOpenPlan,
-  onVariantChange,
   onRun,
   staleCount = 0,
+  stalenessLoading = false,
+  stalenessError,
   onBuildStale,
   deployState,
   executionBlocked = false,
+  executionBlockedReason,
+  runLabel = "Run workspace",
+  runContextLabel,
+  runDisabled = false,
+  runTitle,
   typeCheckReport,
   typeCheckLoading = false,
+  typeCheckError,
   onTypeCheck,
 }: {
   pipelineId: string;
@@ -1445,27 +1645,34 @@ function BuildTopBar({
   resultTab: AppResultTab;
   editorMode: AppEditorMode;
   currentView: AppBuildView;
-  variant: string;
-  historyCount: number;
   onOpenExplorer: () => void;
   onOpenInspector: () => void;
   explorerCollapsed?: boolean;
   inspectorCollapsed?: boolean;
   onToggleExplorer?: () => void;
   onToggleInspector?: () => void;
-  onOpenHistory: () => void;
-  onOpenPlan: () => void;
-  onVariantChange?: (variant: string) => void;
   onRun: () => void;
   staleCount?: number;
+  stalenessLoading?: boolean;
+  stalenessError?: string | null;
   onBuildStale?: () => void;
   deployState?: PipelineDeployState;
   executionBlocked?: boolean;
+  executionBlockedReason?: string;
+  runLabel?: string;
+  runContextLabel?: string;
+  runDisabled?: boolean;
+  runTitle?: string;
   typeCheckReport?: PipelineTypeCheckReport | null;
   typeCheckLoading?: boolean;
+  typeCheckError?: string | null;
   onTypeCheck?: () => void;
 }) {
-  const search: AppBuildSearch = { result: resultTab, editor: editorMode, variant };
+  const search: AppBuildSearch = { result: resultTab, editor: editorMode };
+  const freshnessUnavailable = Boolean(stalenessError);
+  const freshnessUnavailableTitle = freshnessUnavailable
+    ? `Freshness unavailable${stalenessError ? `: ${stalenessError}` : ""}. Last known state: ${staleCount} stale asset${staleCount === 1 ? "" : "s"}.`
+    : undefined;
 
   return (
     <div className="flex min-h-12 shrink-0 items-center gap-2 px-3">
@@ -1516,40 +1723,6 @@ function BuildTopBar({
           </BreadcrumbItem>
         </BreadcrumbList>
       </Breadcrumb>
-      <DropdownMenu>
-        <DropdownMenuTrigger asChild>
-          <Button
-            variant="outline"
-            size="sm"
-            className={cn(
-              "hidden font-mono lg:inline-flex",
-              variant !== "default" ? "text-primary" : null,
-            )}
-          >
-            <GitBranch className="size-3.5" />
-            {variant}
-          </Button>
-        </DropdownMenuTrigger>
-        <DropdownMenuContent align="end" className="w-64">
-          <DropdownMenuLabel>Variant</DropdownMenuLabel>
-          {pipelineVariants.map((item) => (
-            <DropdownMenuItem key={item.id} onSelect={() => onVariantChange?.(item.id)}>
-              <GitBranch className="size-4" />
-              <div className="min-w-0 flex-1">
-                <div className="truncate font-mono text-xs">{item.id}</div>
-                <div className="truncate font-mono text-[10px] text-muted-foreground">
-                  {renderedPipelineName(item.id)} · {renderedPipelineSchedule(item.id)}
-                </div>
-              </div>
-            </DropdownMenuItem>
-          ))}
-          <DropdownMenuSeparator />
-          <DropdownMenuItem onSelect={onOpenPlan}>
-            <ClipboardCheck className="size-4" />
-            Review impact plan
-          </DropdownMenuItem>
-        </DropdownMenuContent>
-      </DropdownMenu>
       {/* Toggle: a second click leaves ad-hoc mode and returns to the asset. */}
       <Button
         asChild
@@ -1568,50 +1741,77 @@ function BuildTopBar({
           search={{
             result: resultTab,
             editor: editorMode === "adhoc" ? "asset" : "adhoc",
-            variant,
           }}
           aria-pressed={editorMode === "adhoc"}
         >
           <Terminal className="size-3.5" /> Ad-hoc
         </Link>
       </Button>
-      {historyCount > 0 ? (
-        <Button variant="ghost" size="sm" onClick={onOpenHistory}>
-          <History className="size-3.5" />
-          {historyCount}
-        </Button>
-      ) : null}
-      <TypeCheckBell report={typeCheckReport} loading={typeCheckLoading} onClick={onTypeCheck} />
-      {staleCount > 0 ? (
-        <Button
-          variant="outline"
-          size="sm"
-          onClick={onBuildStale}
-          disabled={executionBlocked}
-          title={
-            executionBlocked
-              ? "This environment is protected: interactive execution is disabled"
-              : undefined
-          }
-        >
-          <Hammer className="size-3.5" /> Build stale{" "}
-          <span className="rounded-full bg-amber-500 px-1 text-[10px] text-white">
+      <TypeCheckControl
+        report={typeCheckReport}
+        loading={typeCheckLoading}
+        error={typeCheckError}
+        onClick={onTypeCheck}
+      />
+      <Button
+        variant="outline"
+        size="sm"
+        onClick={onBuildStale}
+        disabled={stalenessLoading || freshnessUnavailable || staleCount === 0 || executionBlocked}
+        title={executionBlocked ? executionBlockedReason : freshnessUnavailableTitle}
+        aria-label={
+          stalenessLoading
+            ? "Checking freshness"
+            : freshnessUnavailable
+              ? "Freshness unavailable"
+              : staleCount > 0
+                ? `Build needed: ${staleCount} stale asset${staleCount === 1 ? "" : "s"}`
+                : "Fresh"
+        }
+      >
+        {stalenessLoading ? (
+          <Loader2 data-icon="inline-start" className="animate-spin" />
+        ) : freshnessUnavailable ? (
+          <AlertTriangle data-icon="inline-start" />
+        ) : staleCount > 0 ? (
+          <Hammer data-icon="inline-start" />
+        ) : (
+          <CheckCircle2 data-icon="inline-start" />
+        )}
+        <span className="hidden lg:inline">
+          {stalenessLoading
+            ? "Checking…"
+            : freshnessUnavailable
+              ? "Freshness unavailable"
+              : staleCount > 0
+                ? "Build needed"
+                : "Fresh"}
+        </span>
+        {!stalenessLoading && !freshnessUnavailable && staleCount > 0 ? (
+          <Badge variant="secondary" size="xs">
             {staleCount}
-          </span>
-        </Button>
-      ) : null}
+          </Badge>
+        ) : null}
+      </Button>
       {deployState ? <DeployButton deployState={deployState} /> : null}
+      {runContextLabel ? (
+        <Badge
+          variant="muted"
+          size="xs"
+          className="hidden min-w-0 max-w-80 font-normal lg:inline-flex"
+          aria-label={`Run context: ${runContextLabel}`}
+          title={runContextLabel}
+        >
+          <span className="truncate">{runContextLabel}</span>
+        </Badge>
+      ) : null}
       <Button
         size="sm"
         onClick={onRun}
-        disabled={executionBlocked}
-        title={
-          executionBlocked
-            ? "This environment is protected: interactive execution is disabled; deploy and schedule instead"
-            : undefined
-        }
+        disabled={runDisabled}
+        title={runTitle ?? (runContextLabel ? `Run ${runContextLabel}` : undefined)}
       >
-        <Play className="size-3.5" /> Run
+        <Play data-icon="inline-start" /> {runLabel}
       </Button>
       <Button
         variant="ghost"
@@ -1642,45 +1842,58 @@ function BuildTopBar({
   );
 }
 
-// TypeCheckBell is the repurposed notification bell: it shows the pipeline
-// type-check status as a badge and opens the Type check results tab on click.
-function TypeCheckBell({
+// TypeCheckControl keeps code-check status visible and opens the detailed
+// results. A failed refresh remains distinct from the last successful report.
+function TypeCheckControl({
   report,
   loading,
+  error,
   onClick,
 }: {
   report?: PipelineTypeCheckReport | null;
   loading?: boolean;
+  error?: string | null;
   onClick?: () => void;
 }) {
   const errors = report?.summary.errors ?? 0;
   const warnings = report?.summary.warnings ?? 0;
   const total = errors + warnings;
+  const label = loading
+    ? "Checking…"
+    : error
+      ? "Checks failed"
+      : total > 0
+        ? `Problems ${total}`
+        : report
+          ? "Checks passed"
+          : "Checks";
   const title = loading
     ? "Type checking…"
-    : report
-      ? `Type check: ${errors} error${errors === 1 ? "" : "s"}, ${warnings} warning${warnings === 1 ? "" : "s"}`
-      : "Run type check";
+    : error
+      ? `Type check failed: ${error}`
+      : report
+        ? `Type check: ${errors} error${errors === 1 ? "" : "s"}, ${warnings} warning${warnings === 1 ? "" : "s"}`
+        : "Run type check";
   return (
     <Button
-      variant="ghost"
-      size="icon-sm"
-      className="relative"
+      variant={error ? "destructive" : "outline"}
+      size="sm"
       onClick={onClick}
-      aria-label="Type check"
+      aria-label={label}
       title={title}
     >
-      {loading ? <Loader2 className="size-4 animate-spin" /> : <Bell className="size-4" />}
-      {!loading && total > 0 ? (
-        <span
-          className={cn(
-            "absolute -right-1 -top-1 flex h-3.5 min-w-3.5 items-center justify-center rounded-full px-1 text-[9px] font-semibold text-white",
-            errors > 0 ? "bg-red-500" : "bg-amber-500",
-          )}
-        >
-          {total > 99 ? "99+" : total}
-        </span>
-      ) : null}
+      {loading ? (
+        <Loader2 data-icon="inline-start" className="animate-spin" />
+      ) : error ? (
+        <AlertTriangle data-icon="inline-start" />
+      ) : report && total === 0 ? (
+        <CheckCircle2 data-icon="inline-start" />
+      ) : total > 0 ? (
+        <AlertTriangle data-icon="inline-start" />
+      ) : (
+        <Bell data-icon="inline-start" />
+      )}
+      <span className="hidden lg:inline">{label}</span>
     </Button>
   );
 }
@@ -2213,9 +2426,13 @@ function EditorWorkspace({ asset, adhoc }: { asset: BuildAsset; adhoc: boolean }
     fullRefreshSelectedAsset,
     backfillSelectedAsset,
     inspectSelectedAsset,
+    renderSelectedAsset,
     materializeLoading,
     inspectLoading,
+    renderLoading,
+    renderBlockedReason,
     executionBlocked,
+    executionBlockedReason,
   } = useBuildContext();
   const isMobile = useIsMobile();
   const editorOnly = view === "code";
@@ -2236,11 +2453,16 @@ function EditorWorkspace({ asset, adhoc }: { asset: BuildAsset; adhoc: boolean }
       ? "Validate"
       : asset.kind === "sensor"
         ? "Check now"
-      : asset.kind === "ingestr" || asset.kind === "load"
-        ? "Run"
-        : "Materialize";
+        : asset.kind === "ingestr" || asset.kind === "load"
+          ? "Run"
+          : "Materialize";
   const filename =
     asset.path ?? `${asset.dir ? `${asset.dir}/` : ""}${asset.name}${kindMeta[asset.kind].ext}`;
+  const renderableAsset = Boolean(
+    asset.workspaceAsset &&
+    (isSqlAssetType(asset.workspaceAsset.type) ||
+      isQuerySensorAssetType(asset.workspaceAsset.type)),
+  );
 
   return (
     <div className="relative flex h-full min-h-0 flex-col">
@@ -2249,23 +2471,22 @@ function EditorWorkspace({ asset, adhoc }: { asset: BuildAsset; adhoc: boolean }
           actionLabel={actionLabel}
           showLabels={showActionLabels}
           showInspect={asset.kind !== "source"}
+          showRender={renderableAsset}
           onRun={materializeSelectedAsset}
           onFullRefresh={
             asset.workspaceAsset?.supports_full_refresh ? fullRefreshSelectedAsset : undefined
           }
-          onBackfill={
-            asset.staleness?.backfill_safe ? backfillSelectedAsset : undefined
-          }
+          onBackfill={asset.staleness?.backfill_safe ? backfillSelectedAsset : undefined}
           onInspect={inspectSelectedAsset}
+          onRender={renderSelectedAsset}
           runDisabled={materializeLoading || executionBlocked || !asset.workspaceAsset}
-          runBlockedReason={
-            executionBlocked
-              ? "This environment is protected: interactive execution is disabled"
-              : undefined
-          }
+          runBlockedReason={executionBlocked ? executionBlockedReason : undefined}
           runLoading={materializeLoading}
           inspectDisabled={inspectLoading || !asset.workspaceAsset}
           inspectLoading={inspectLoading}
+          renderDisabled={renderLoading || !asset.workspaceAsset}
+          renderLoading={renderLoading}
+          renderBlockedReason={renderBlockedReason}
         />
         {asset.workspaceAsset ? (
           <Button
@@ -2381,8 +2602,10 @@ function EditorActionButtons({
   actionLabel,
   showLabels,
   showInspect,
+  showRender,
   onRun,
   onInspect,
+  onRender,
   onFullRefresh,
   onBackfill,
   runDisabled = false,
@@ -2390,12 +2613,17 @@ function EditorActionButtons({
   runLoading = false,
   inspectDisabled = false,
   inspectLoading = false,
+  renderDisabled = false,
+  renderLoading = false,
+  renderBlockedReason,
 }: {
   actionLabel: string;
   showLabels: boolean;
   showInspect: boolean;
+  showRender: boolean;
   onRun: () => void;
   onInspect: () => void;
+  onRender: () => void;
   onFullRefresh?: () => void;
   onBackfill?: () => void;
   runDisabled?: boolean;
@@ -2403,9 +2631,13 @@ function EditorActionButtons({
   runLoading?: boolean;
   inspectDisabled?: boolean;
   inspectLoading?: boolean;
+  renderDisabled?: boolean;
+  renderLoading?: boolean;
+  renderBlockedReason?: string;
 }) {
   const runLabel = runLoading ? "Running..." : actionLabel;
   const inspectLabel = inspectLoading ? "Loading..." : "Inspect";
+  const renderLabel = renderLoading ? "Rendering..." : "Render";
   return (
     <>
       {onFullRefresh || onBackfill ? (
@@ -2456,6 +2688,20 @@ function EditorActionButtons({
           {showLabels ? runLabel : <span className="sr-only">{runLabel}</span>}
         </Button>
       )}
+      {showRender ? (
+        <Button
+          variant="outline"
+          size={showLabels ? "sm" : "icon-sm"}
+          onClick={onRender}
+          disabled={renderDisabled || Boolean(renderBlockedReason)}
+          aria-busy={renderLoading}
+          aria-label="Render saved SQL"
+          title={renderBlockedReason ?? "Render saved SQL"}
+        >
+          <FileCode className="size-3.5" data-icon="inline-start" />
+          {showLabels ? renderLabel : <span className="sr-only">{renderLabel}</span>}
+        </Button>
+      ) : null}
       {showInspect ? (
         <Button
           variant="outline"
@@ -2588,15 +2834,17 @@ function ResultsPanel({
   onTabChange,
   collapsed,
   onToggleCollapse,
-  variant,
-  history,
   typeCheckReport,
   typeCheckLoading,
+  typeCheckError,
   onRunTypeCheck,
   onSelectAsset,
-  onHistoryOpen,
   inspectResult,
   inspectLoading,
+  renderResult,
+  renderLoading,
+  renderError,
+  onRender,
   canLoadMoreInspectRows,
   onLoadMoreInspectRows,
   selectedMaterializeEntry,
@@ -2610,22 +2858,17 @@ function ResultsPanel({
   onTabChange: (tab: AppResultTab) => void;
   collapsed: boolean;
   onToggleCollapse: () => void;
-  variant: string;
-  history: Array<{
-    id: number;
-    kind: string;
-    target: string;
-    status: string;
-    time: string;
-    variant: string;
-  }>;
   typeCheckReport?: PipelineTypeCheckReport | null;
   typeCheckLoading?: boolean;
+  typeCheckError?: string | null;
   onRunTypeCheck?: () => void;
   onSelectAsset?: (assetId: string) => void;
-  onHistoryOpen: (tab: AppResultTab) => void;
   inspectResult: AssetInspectResponse | null;
   inspectLoading: boolean;
+  renderResult: AssetRenderResult | null;
+  renderLoading: boolean;
+  renderError: string | null;
+  onRender: () => void;
   canLoadMoreInspectRows: boolean;
   onLoadMoreInspectRows: () => void;
   selectedMaterializeEntry: MaterializeHistoryEntry | null;
@@ -2655,6 +2898,10 @@ function ResultsPanel({
                 <Table2 className="size-3.5" />
                 Inspect
               </TabsTrigger>
+              <TabsTrigger value="render" className={scrollableTabsTriggerClass}>
+                <FileCode className="size-3.5" />
+                Rendered SQL
+              </TabsTrigger>
               <TabsTrigger value="materialize" className={scrollableTabsTriggerClass}>
                 <Hammer className="size-3.5" />
                 Materialize
@@ -2676,13 +2923,6 @@ function ResultsPanel({
                   >
                     {typeCheckReport.summary.errors + typeCheckReport.summary.warnings}
                   </span>
-                ) : null}
-              </TabsTrigger>
-              <TabsTrigger value="history" className={scrollableTabsTriggerClass}>
-                <History className="size-3.5" />
-                History
-                {history.length > 0 ? (
-                  <span className="ml-1 text-[10px] text-muted-foreground">{history.length}</span>
                 ) : null}
               </TabsTrigger>
             </TabsList>
@@ -2728,6 +2968,14 @@ function ResultsPanel({
             <ResultsEmpty label="Inspect an asset to preview its data here." />
           )}
         </TabsContent>
+        <TabsContent value="render" className="min-h-0 flex-1 overflow-hidden p-0">
+          <AssetRenderView
+            result={renderResult}
+            loading={renderLoading}
+            error={renderError}
+            onRetry={onRender}
+          />
+        </TabsContent>
         <TabsContent value="materialize" className="min-h-0 flex-1 overflow-hidden p-2">
           <WorkspaceMaterializeOutputView
             entry={selectedMaterializeEntry}
@@ -2771,19 +3019,14 @@ function ResultsPanel({
         <TabsContent value="metadata" className="min-h-0 flex-1 overflow-auto p-0">
           <MetadataPanel />
         </TabsContent>
-        <TabsContent value="shell" className="min-h-0 flex-1 overflow-hidden p-0">
-          <ShellPanel variant={variant} />
-        </TabsContent>
         <TabsContent value="typecheck" className="min-h-0 flex-1 overflow-auto p-0">
           <TypeCheckPanel
             report={typeCheckReport ?? null}
             loading={Boolean(typeCheckLoading)}
+            error={typeCheckError ?? null}
             onRun={onRunTypeCheck}
             onSelectAsset={onSelectAsset}
           />
-        </TabsContent>
-        <TabsContent value="history" className="min-h-0 flex-1 overflow-auto p-0">
-          <HistoryPanel history={history} onOpen={onHistoryOpen} />
         </TabsContent>
       </Tabs>
     </AppPanel>
@@ -2864,11 +3107,13 @@ function ResultsEmpty({ label }: { label: string }) {
 function TypeCheckPanel({
   report,
   loading,
+  error,
   onRun,
   onSelectAsset,
 }: {
   report: PipelineTypeCheckReport | null;
   loading: boolean;
+  error: string | null;
   onRun?: () => void;
   onSelectAsset?: (assetId: string) => void;
 }) {
@@ -2877,11 +3122,19 @@ function TypeCheckPanel({
   }
   if (!report) {
     return (
-      <div className="flex h-full min-h-0 flex-col items-center justify-center gap-3 bg-background text-xs text-muted-foreground">
-        <span>Type check assets for column and type errors.</span>
+      <div className="flex h-full min-h-0 flex-col items-center justify-center gap-3 bg-background p-3 text-xs text-muted-foreground">
+        {error ? (
+          <Alert variant="destructive" className="max-w-lg">
+            <AlertTriangle />
+            <AlertTitle>Type check failed</AlertTitle>
+            <AlertDescription>{error}</AlertDescription>
+          </Alert>
+        ) : (
+          <span>Type check assets for column and type errors.</span>
+        )}
         <Button size="sm" variant="outline" onClick={onRun}>
           <Bell className="size-3.5" />
-          Run type check
+          {error ? "Retry type check" : "Run type check"}
         </Button>
       </div>
     );
@@ -2914,6 +3167,13 @@ function TypeCheckPanel({
           Re-run
         </Button>
       </div>
+      {error ? (
+        <Alert variant="destructive" className="m-2 shrink-0 w-auto">
+          <AlertTriangle />
+          <AlertTitle>Latest type check failed</AlertTitle>
+          <AlertDescription>{error}</AlertDescription>
+        </Alert>
+      ) : null}
       <div className="min-h-0 flex-1 overflow-auto p-2">
         {flagged.length === 0 ? (
           <div className="flex items-center gap-2 px-2 py-3 text-xs text-emerald-600 dark:text-emerald-400">
@@ -2963,137 +3223,6 @@ function TypeCheckPanel({
           </div>
         )}
       </div>
-    </div>
-  );
-}
-
-function ShellPanel({ variant }: { variant: string }) {
-  const [command, setCommand] = useState("");
-  const [lines, setLines] = useState<Array<{ type: "cmd" | "out" | "ok" | "err"; value: string }>>([
-    {
-      type: "out",
-      value: "renart shell: runs against the active project, environment and variant. Type help.",
-    },
-  ]);
-  const prompt = `renart:simple(${variant}) $`;
-  const runCommand = () => {
-    const value = command.trim();
-    if (!value) return;
-    if (value === "clear") {
-      setLines([]);
-      setCommand("");
-      return;
-    }
-    const output: typeof lines = [{ type: "cmd", value: `${prompt} ${value}` }];
-    if (/^(renart|bruin)\s+run/.test(value))
-      output.push({
-        type: "ok",
-        value: `2 assets executed for ${renderedPipelineName(variant)} in 111ms`,
-      });
-    else if (/plan/.test(value))
-      output.push({
-        type: "out",
-        value:
-          "Changes: 1 breaking, 1 non-breaking; 3 to backfill. Apply with renart plan --apply.",
-      });
-    else if (/test/.test(value))
-      output.push({ type: "out", value: "2 passed, 1 failed: nulls_count_as_zero." });
-    else if (/list-variants|variants/.test(value))
-      output.push({ type: "out", value: pipelineVariants.map((item) => item.id).join(" · ") });
-    else if (value === "help")
-      output.push({
-        type: "out",
-        value:
-          "run · plan · validate · test · asset · metadata · schedule · git · internal list-variants · clear",
-      });
-    else output.push({ type: "err", value: `command not found: ${value.split(" ")[0]}` });
-    setLines((current) => [...current, ...output]);
-    setCommand("");
-  };
-
-  return (
-    <div className="flex h-full min-h-0 flex-col bg-zinc-950 font-mono text-xs text-zinc-100">
-      <ScrollArea className="min-h-0 flex-1">
-        <div className="space-y-1 p-3">
-          {lines.map((line, index) => (
-            <div
-              key={index}
-              className={cn(
-                line.type === "ok"
-                  ? "text-emerald-400"
-                  : line.type === "err"
-                    ? "text-red-400"
-                    : line.type === "cmd"
-                      ? "text-zinc-200"
-                      : "text-zinc-400",
-              )}
-            >
-              {line.value}
-            </div>
-          ))}
-        </div>
-      </ScrollArea>
-      <div className="flex items-center gap-2 border-t border-zinc-800 px-3 py-2">
-        <span className="text-emerald-400">{prompt}</span>
-        <input
-          className="min-w-0 flex-1 bg-transparent outline-none"
-          value={command}
-          onChange={(event) => setCommand(event.target.value)}
-          onKeyDown={(event) => {
-            if (event.key === "Enter") runCommand();
-          }}
-        />
-      </div>
-    </div>
-  );
-}
-
-function HistoryPanel({
-  history,
-  onOpen,
-}: {
-  history: Array<{
-    id: number;
-    kind: string;
-    target: string;
-    status: string;
-    time: string;
-    variant: string;
-  }>;
-  onOpen: (tab: AppResultTab) => void;
-}) {
-  if (history.length === 0) {
-    return (
-      <div className="p-4 text-xs text-muted-foreground">
-        No local actions yet. Run, inspect, query, or test something to populate history.
-      </div>
-    );
-  }
-  return (
-    <div>
-      {history.map((item) => (
-        <button
-          key={item.id}
-          className="flex w-full items-center gap-3 border-b px-3 py-2 text-left text-xs hover:bg-muted"
-          onClick={() =>
-            onOpen(
-              item.kind === "test"
-                ? "tests"
-                : item.kind === "query"
-                  ? "query"
-                  : item.kind === "inspect"
-                    ? "inspect"
-                    : "materialize",
-            )
-          }
-        >
-          <History className="size-3.5 text-muted-foreground" />
-          <span className="font-mono text-primary">{item.kind}</span>
-          <span className="min-w-0 flex-1 truncate font-mono">{item.target}</span>
-          <span className="font-mono text-muted-foreground">{item.variant}</span>
-          <span className="text-muted-foreground">{item.time}</span>
-        </button>
-      ))}
     </div>
   );
 }
@@ -3151,7 +3280,7 @@ function Inspector({ asset }: { asset: BuildAsset }) {
       </div>
       {editable && workspaceAsset && asset.pipelineId ? (
         <ErrorBoundary
-          resetKey={`${propsView} ${workspaceAsset.content ?? ""}`}
+          resetKey={`${propsView}\u0000${workspaceAsset.content ?? ""}`}
           fallback={
             <div className="flex min-h-0 flex-1 items-center justify-center p-6 text-center text-xs text-muted-foreground">
               These properties can&apos;t be shown right now — the asset file may have a syntax
@@ -3449,10 +3578,7 @@ function NewAssetDialog({
     () => workspace?.asset_capabilities ?? [],
     [workspace?.asset_capabilities],
   );
-  const semanticConnections = useMemo(
-    () => workspace?.connections ?? {},
-    [workspace?.connections],
-  );
+  const semanticConnections = useMemo(() => workspace?.connections ?? {}, [workspace?.connections]);
   const connectionNames = useMemo(
     () => Object.keys(workspace?.connections ?? {}).sort((a, b) => a.localeCompare(b)),
     [workspace?.connections],
@@ -3503,9 +3629,7 @@ function NewAssetDialog({
     setSourceTable("");
     setDestinationObject("");
     setAPITemplate("openapi");
-    setSemanticDraft(
-      defaultSemanticAssetDraft("seed", semanticCapabilities, semanticConnections),
-    );
+    setSemanticDraft(defaultSemanticAssetDraft("seed", semanticCapabilities, semanticConnections));
     setError("");
   }, [open, isDownstream, semanticCapabilities, semanticConnections]);
   useEffect(() => {
@@ -3535,13 +3659,7 @@ function NewAssetDialog({
         defaultSemanticAssetDraft(semanticKind, semanticCapabilities, semanticConnections),
       );
     }
-  }, [
-    open,
-    semanticCapabilities,
-    semanticConnections,
-    semanticDraft.assetType,
-    semanticKind,
-  ]);
+  }, [open, semanticCapabilities, semanticConnections, semanticDraft.assetType, semanticKind]);
 
   const create = async () => {
     const trimmed = name.trim();
@@ -3612,11 +3730,7 @@ function NewAssetDialog({
     setCreating(true);
     setError("");
     try {
-      const response = await createAsset(
-        pipelineId,
-        input,
-        seedFile ? { seedFile } : undefined,
-      );
+      const response = await createAsset(pipelineId, input, seedFile ? { seedFile } : undefined);
       onOpenChange(false);
       if (response.asset_id) {
         onCreated?.(response.asset_id);
@@ -4078,7 +4192,6 @@ const pipelineSettingsSections = [
   { id: "connections", label: "Connections" },
   { id: "notifications", label: "Notifications" },
   { id: "variables", label: "Variables" },
-  { id: "variants", label: "Variants" },
 ] as const;
 
 export type PipelineSettingsSection = (typeof pipelineSettingsSections)[number]["id"];
@@ -4104,7 +4217,6 @@ function PipelineSettingsDialog({
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [yaml, setYaml] = useState<string>("");
   const [inferredDefaultConnections, setInferredDefaultConnections] = useState<
     PipelineConfigConnection[]
   >([]);
@@ -4121,7 +4233,6 @@ function PipelineSettingsDialog({
     getPipelineConfig(pipelineId)
       .then((config) => {
         if (cancelled) return;
-        setYaml(config.yaml ?? "");
         setDraft(configResponseToDraft(config));
         setInferredDefaultConnections(config.inferred_default_connections ?? []);
       })
@@ -4150,7 +4261,6 @@ function PipelineSettingsDialog({
     setError(null);
     try {
       const response = await updatePipelineConfig(pipelineId, draft);
-      setYaml(response.yaml ?? yaml);
       setDraft(configResponseToDraft(response));
       setInferredDefaultConnections(response.inferred_default_connections ?? []);
       onOpenChange(false);
@@ -4200,7 +4310,6 @@ function PipelineSettingsDialog({
                 section={section}
                 draft={draft}
                 update={update}
-                yaml={yaml}
                 inferredDefaultConnections={inferredDefaultConnections}
               />
             )}
@@ -4277,13 +4386,11 @@ function PipelineSettingsSectionBody({
   section,
   draft,
   update,
-  yaml,
   inferredDefaultConnections,
 }: {
   section: PipelineSettingsSection;
   draft: PipelineConfigDraft;
   update: <K extends keyof PipelineConfigDraft>(key: K, value: PipelineConfigDraft[K]) => void;
-  yaml: string;
   inferredDefaultConnections: PipelineConfigConnection[];
 }) {
   const environment = useAtomValue(selectedEnvironmentAtom);
@@ -4607,7 +4714,7 @@ function PipelineSettingsSectionBody({
       </div>
     );
   }
-  return <PipelineVariantsPanel yaml={yaml} />;
+  return null;
 }
 
 function NotificationChannelFields({
@@ -4807,151 +4914,37 @@ function variableValueToText(value: unknown): string {
   return String(value);
 }
 
-function PipelineVariantsPanel({ yaml }: { yaml?: string }) {
-  return (
-    <div className="space-y-4">
-      <div>
-        <div className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
-          Variables
-        </div>
-        <SimpleTable
-          columns={["Variable", "Type", "Default"]}
-          rows={pipelineVariables.map(([name, type, value]) => [
-            <span key={name} className="font-mono">
-              {name}
-            </span>,
-            type,
-            <span key={value} className="font-mono">
-              {value}
-            </span>,
-          ])}
-        />
-      </div>
-      <div>
-        <div className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
-          Variants
-        </div>
-        <SimpleTable
-          columns={["Variant", "Rendered name", "Schedule", "Overrides"]}
-          rows={pipelineVariants
-            .filter((variant) => variant.id !== "default")
-            .map((variant) => [
-              <span key="variant" className="font-mono">
-                {variant.id}
-              </span>,
-              <span key="name" className="font-mono text-primary">
-                {renderedPipelineName(variant.id)}
-              </span>,
-              <span key="schedule" className="font-mono">
-                {renderedPipelineSchedule(variant.id)}
-              </span>,
-              <span key="overrides" className="font-mono text-muted-foreground">
-                {Object.entries(variant.overrides)
-                  .map(([key, value]) => `${key}=${value}`)
-                  .join(", ")}
-              </span>,
-            ])}
-        />
-      </div>
-      <p className="text-xs text-muted-foreground">
-        One <span className="font-mono">pipeline.yml</span> renders multiple concrete pipelines. Run
-        with <span className="font-mono">renart run --variant &lt;name&gt;</span>, or pick a variant
-        from the Build toolbar.
-      </p>
-      {yaml ? (
-        <div>
-          <div className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
-            pipeline.yml
-          </div>
-          <pre className="max-h-56 overflow-auto rounded-md border bg-muted/40 p-3 font-mono text-[11px] leading-relaxed">
-            {yaml}
-          </pre>
-        </div>
-      ) : null}
-    </div>
-  );
-}
-
-function PlanDialog({
-  open,
-  onOpenChange,
-}: {
-  open: boolean;
-  onOpenChange: (open: boolean) => void;
-}) {
-  return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-3xl">
-        <DialogHeader>
-          <DialogTitle className="flex items-center gap-2">
-            <ClipboardCheck className="size-4 text-primary" />
-            Impact plan
-          </DialogTitle>
-          <DialogDescription>
-            Static preview of changed assets, breaking impact, and backfill scope before running.
-          </DialogDescription>
-        </DialogHeader>
-        <div className="grid gap-4 md:grid-cols-[minmax(0,1fr)_18rem]">
-          <div className="overflow-hidden rounded-lg border">
-            <SimpleTable
-              columns={["Asset", "Change", "Note"]}
-              rows={impactPlan.changes.map((change) => {
-                const meta = changeTypeMeta[change.type];
-                return [
-                  <span key="asset" className="font-mono">
-                    {change.name}
-                  </span>,
-                  <span
-                    key="change"
-                    className={cn("rounded px-1.5 py-0.5 text-[11px]", meta.className)}
-                  >
-                    {meta.label}
-                  </span>,
-                  change.note,
-                ];
-              })}
-            />
-          </div>
-          <div className="space-y-3">
-            <div className="rounded-lg border bg-muted/30 p-3">
-              <div className="text-sm font-medium">Backfill required</div>
-              <div className="mt-1 text-2xl font-semibold">3 assets</div>
-              <p className="mt-1 text-xs text-muted-foreground">
-                Breaking and downstream changes need recompute.
-              </p>
-            </div>
-            {impactPlan.backfill.map((item) => (
-              <div key={item.name} className="rounded-lg border p-2 text-xs">
-                <div className="font-mono font-medium">{item.name}</div>
-                <div className="mt-1 flex items-center justify-between text-muted-foreground">
-                  <span>{item.reason}</span>
-                  <span>{item.rows}</span>
-                </div>
-              </div>
-            ))}
-          </div>
-        </div>
-        <DialogFooter>
-          <Button variant="outline" onClick={() => onOpenChange(false)}>
-            Close
-          </Button>
-          <Button onClick={() => onOpenChange(false)}>
-            <Play className="size-4" />
-            Run plan
-          </Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
-  );
-}
-
 // DeployButton shows drift between the working tree and the latest deployed
 // snapshot and redeploys on click.
 function DeployButton({ deployState }: { deployState: PipelineDeployState }) {
-  const { status, deploying, deploy, driftedFileCount } = deployState;
-  if (!status) return null;
+  const { status, loading, error, deploying, deploy, refresh, driftedFileCount } = deployState;
+  const [actionError, setActionError] = useState<string | null>(null);
+  const handleDeploy = async () => {
+    setActionError(null);
+    try {
+      await deploy();
+    } catch (cause) {
+      setActionError(cause instanceof Error ? cause.message : "Deployment failed.");
+    }
+  };
+  if (!status) {
+    if (!loading && !error) return null;
+    if (error) {
+      return (
+        <Button variant="outline" size="sm" onClick={() => void refresh()} title={error}>
+          <RefreshCw data-icon="inline-start" /> Retry deployment status
+        </Button>
+      );
+    }
+    return (
+      <Button variant="ghost" size="sm" disabled title="Resolving deployment status">
+        <Spinner data-icon="inline-start" />
+        Deployment…
+      </Button>
+    );
+  }
 
-  if (status.has_snapshot && status.in_sync) {
+  if (status.has_snapshot && status.in_sync && status.executable) {
     return (
       <Button variant="ghost" size="sm" disabled title={`Deployed ${status.version_id ?? ""}`}>
         <Package className="size-3.5 text-emerald-600" /> Deployed
@@ -4960,21 +4953,34 @@ function DeployButton({ deployState }: { deployState: PipelineDeployState }) {
   }
 
   const label = status.has_snapshot
-    ? `Redeploy (${driftedFileCount} file${driftedFileCount === 1 ? "" : "s"} changed)`
+    ? status.executable
+      ? `Redeploy (${driftedFileCount} file${driftedFileCount === 1 ? "" : "s"} changed)`
+      : "Repair deployment"
     : "Deploy";
   const title = status.has_snapshot
-    ? `Working tree differs from deployed ${status.version_id ?? ""}`
-    : "No deployed snapshot yet; scheduled runs use the working tree until you deploy";
+    ? status.executable
+      ? `Working tree differs from deployed ${status.version_id ?? ""}`
+      : `The latest deployment is not executable: ${status.integrity_error ?? "integrity validation failed"}`
+    : "No deployment exists yet; schedules require an exact deployment pin";
   return (
     <Button
       variant="outline"
       size="sm"
-      onClick={() => void deploy()}
+      onClick={() => void handleDeploy()}
       disabled={deploying}
-      title={title}
+      title={actionError ?? title}
     >
-      <Package className={cn("size-3.5", status.has_snapshot ? "text-amber-600" : undefined)} />
-      {deploying ? "Deploying…" : label}
+      <Package
+        className={cn(
+          "size-3.5",
+          status.has_snapshot
+            ? status.executable
+              ? "text-amber-600"
+              : "text-destructive"
+            : undefined,
+        )}
+      />
+      {deploying ? "Deploying…" : actionError ? "Deploy failed — retry" : label}
     </Button>
   );
 }
@@ -5000,19 +5006,22 @@ function BuildStaleDialog({
 }) {
   const [progress, setProgress] = useState<Record<string, BuildStaleProgress>>({});
   const [building, setBuilding] = useState(false);
+  const [buildError, setBuildError] = useState<string | null>(null);
 
   useEffect(() => {
     if (!open) {
       setProgress({});
       setBuilding(false);
+      setBuildError(null);
     }
   }, [open]);
 
   const buildAll = async () => {
     setBuilding(true);
     setProgress({});
+    setBuildError(null);
     try {
-      await onBuild((event) => {
+      const result = await onBuild((event) => {
         if (!event.asset_name || !event.status) {
           return;
         }
@@ -5027,6 +5036,15 @@ function BuildStaleDialog({
         const assetName = event.asset_name;
         setProgress((current) => ({ ...current, [assetName]: mapped }));
       });
+      if (!result) {
+        setBuildError("The build could not be started. Review the Materialize output for details.");
+      } else if (result.status === "error") {
+        setBuildError(
+          result.error || "The build failed. Review the Materialize output for details.",
+        );
+      }
+    } catch (cause) {
+      setBuildError(cause instanceof Error ? cause.message : "The build could not be started.");
     } finally {
       setBuilding(false);
     }
@@ -5046,6 +5064,13 @@ function BuildStaleDialog({
             partial incrementals rebuild only the uncovered gaps.
           </DialogDescription>
         </DialogHeader>
+        {buildError ? (
+          <Alert variant="destructive">
+            <AlertTriangle />
+            <AlertTitle>Build needed failed</AlertTitle>
+            <AlertDescription>{buildError}</AlertDescription>
+          </Alert>
+        ) : null}
         <div className="max-h-80 space-y-1 overflow-y-auto">
           {staleAssets.map((stale) => (
             <div

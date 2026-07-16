@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	bruingit "github.com/bruin-data/bruin/pkg/git"
 	"github.com/stretchr/testify/assert"
@@ -90,6 +91,51 @@ func TestDeployDeduplicatesIdenticalContent(t *testing.T) {
 	assert.Equal(t, "select 1", string(content))
 }
 
+func TestLatestUsesTheMigrationTieBreaker(t *testing.T) {
+	t.Parallel()
+	store, db := openTestStoreWithDB(t)
+	ctx := context.Background()
+	createdAt := time.Date(2026, 7, 16, 10, 0, 0, 0, time.UTC).Format(time.RFC3339Nano)
+	for _, versionID := range []string{"version-a", "version-z"} {
+		_, err := db.ExecContext(ctx, `
+			INSERT INTO renart_snapshots
+				(version_id, pipeline_id, merkle_root, manifest, git_dirty, created_at)
+			VALUES (?, 'pipeline', 'root', '{}', 0, ?)`, versionID, createdAt)
+		require.NoError(t, err)
+	}
+
+	latest, err := store.Latest(ctx, "pipeline")
+	require.NoError(t, err)
+	require.NotNil(t, latest)
+	assert.Equal(t, "version-z", latest.VersionID)
+}
+
+func TestDeployRepairsCorruptContentInsteadOfReusingIt(t *testing.T) {
+	t.Parallel()
+	store, db := openTestStoreWithDB(t)
+	ctx := context.Background()
+	dir := writePipelineDir(t, map[string]string{
+		"pipeline.yml": "id: p\n",
+		"assets/a.sql": "select 1",
+	})
+	first, created, err := store.Deploy(ctx, "p", dir, "")
+	require.NoError(t, err)
+	require.True(t, created)
+	hash := first.Manifest["assets/a.sql"]
+	_, err = db.ExecContext(ctx, `UPDATE renart_blobs SET content = ? WHERE hash = ?`, []byte("corrupt"), hash)
+	require.NoError(t, err)
+
+	second, created, err := store.Deploy(ctx, "p", dir, "")
+	require.NoError(t, err)
+	assert.True(t, created, "an invalid deployment must not be returned as a no-op")
+	assert.NotEqual(t, first.VersionID, second.VersionID)
+	assert.Equal(t, first.MerkleRoot, second.MerkleRoot)
+	_, err = store.Validate(ctx, second.VersionID, "p")
+	require.NoError(t, err)
+	_, err = store.Validate(ctx, first.VersionID, "p")
+	require.NoError(t, err, "repairing a content-addressed blob also restores older manifests")
+}
+
 func TestDeploySkipsJunk(t *testing.T) {
 	t.Parallel()
 	store := openTestStore(t)
@@ -134,6 +180,8 @@ func TestDriftReport(t *testing.T) {
 	report, err = store.Drift(ctx, "p", dir)
 	require.NoError(t, err)
 	assert.True(t, report.InSync)
+	assert.True(t, report.Executable)
+	assert.Empty(t, report.IntegrityError)
 	assert.Equal(t, deployed.VersionID, report.VersionID)
 
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "assets", "a.sql"), []byte("select 99"), 0o644))
@@ -179,6 +227,33 @@ func TestMaterializeForExecutionSatisfiesRepoDiscovery(t *testing.T) {
 	require.NoError(t, err)
 }
 
+func TestMaterializeRejectsInvalidDestinationBeforeSnapshotLookup(t *testing.T) {
+	t.Parallel()
+	store := openTestStore(t)
+	for _, destDir := range []string{"", ".", filepath.Join("relative", "run")} {
+		err := store.Materialize(context.Background(), "missing", destDir)
+		require.ErrorContains(t, err, "materialization destination")
+		assert.NotContains(t, err.Error(), "load metadata")
+	}
+}
+
+func TestMaterializeForPipelineExecutionValidatesOwnershipBeforeWriting(t *testing.T) {
+	t.Parallel()
+	store := openTestStore(t)
+	ctx := context.Background()
+	dir := writePipelineDir(t, map[string]string{"pipeline.yml": "id: p\n"})
+	deployed, _, err := store.Deploy(ctx, "pipeline-a", dir, "")
+	require.NoError(t, err)
+
+	dest := filepath.Join(t.TempDir(), "run")
+	err = store.MaterializeForPipelineExecution(ctx, deployed.VersionID, "pipeline-b", dest)
+	require.ErrorContains(t, err, "belongs to pipeline pipeline-a")
+	_, statErr := os.Stat(filepath.Join(dest, "pipeline.yml"))
+	assert.ErrorIs(t, statErr, os.ErrNotExist)
+	_, statErr = os.Stat(filepath.Join(dest, ".git"))
+	assert.ErrorIs(t, statErr, os.ErrNotExist)
+}
+
 func TestMaterializeRejectsEscapingPaths(t *testing.T) {
 	t.Parallel()
 	store, db := openTestStoreWithDB(t)
@@ -194,4 +269,54 @@ func TestMaterializeRejectsEscapingPaths(t *testing.T) {
 	require.NoError(t, err)
 	err = store.Materialize(ctx, deployed.VersionID, t.TempDir())
 	require.Error(t, err)
+}
+
+func TestValidateRejectsWrongPipelineAndCorruptBlob(t *testing.T) {
+	t.Parallel()
+	store, db := openTestStoreWithDB(t)
+	ctx := context.Background()
+	dir := writePipelineDir(t, map[string]string{
+		"pipeline.yml": "id: p\n",
+		"assets/a.sql": "select 1",
+	})
+	deployed, _, err := store.Deploy(ctx, "pipeline-a", dir, "")
+	require.NoError(t, err)
+
+	_, err = store.Validate(ctx, deployed.VersionID, "pipeline-b")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "belongs to pipeline pipeline-a")
+
+	hash := deployed.Manifest["assets/a.sql"]
+	_, err = db.ExecContext(ctx, `UPDATE renart_blobs SET content = ? WHERE hash = ?`, []byte("tampered"), hash)
+	require.NoError(t, err)
+
+	_, err = store.Validate(ctx, deployed.VersionID, "pipeline-a")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "blob hash mismatch")
+	assert.Error(t, store.MaterializeForExecution(ctx, deployed.VersionID, t.TempDir()))
+
+	report, err := store.Drift(ctx, "pipeline-a", dir)
+	require.NoError(t, err)
+	assert.True(t, report.InSync)
+	assert.False(t, report.Executable)
+	assert.Contains(t, report.IntegrityError, "blob hash mismatch")
+}
+
+func TestValidateRejectsManifestThatDoesNotMatchRecordedRoot(t *testing.T) {
+	t.Parallel()
+	store, db := openTestStoreWithDB(t)
+	ctx := context.Background()
+	dir := writePipelineDir(t, map[string]string{
+		"pipeline.yml": "id: p\n",
+		"assets/a.sql": "select 1",
+	})
+	deployed, _, err := store.Deploy(ctx, "pipeline-a", dir, "")
+	require.NoError(t, err)
+	pipelineHash := deployed.Manifest["pipeline.yml"]
+	_, err = db.ExecContext(ctx, `UPDATE renart_snapshots SET manifest = ? WHERE version_id = ?`,
+		`{"pipeline.yml":"`+pipelineHash+`"}`, deployed.VersionID)
+	require.NoError(t, err)
+
+	_, err = store.Validate(ctx, deployed.VersionID, "pipeline-a")
+	require.ErrorContains(t, err, "manifest root mismatch")
 }

@@ -21,6 +21,15 @@ const (
 	RunTriggerCLI      RunTrigger = "cli"
 )
 
+// RunSource identifies the source tree a manual run executes. Scheduled runs
+// receive their source from the persisted environment schedule instead.
+type RunSource string
+
+const (
+	RunSourceWorkingTree RunSource = "working_tree"
+	RunSourceSnapshot    RunSource = "snapshot"
+)
+
 type PipelineSchedule struct {
 	PipelineID   string     `json:"pipeline_id"`
 	PipelineUUID string     `json:"pipeline_uuid,omitempty"`
@@ -90,7 +99,9 @@ type PipelineRef struct {
 
 // UpsertEnvScheduleRequest creates or updates a per-environment schedule.
 type UpsertEnvScheduleRequest struct {
-	Environment       string         `json:"environment"`
+	// Environment comes exclusively from the URL path at the HTTP boundary.
+	// Keeping it out of JSON prevents a second, conflicting schedule identity.
+	Environment       string         `json:"-"`
 	Cron              string         `json:"cron"`
 	Timezone          string         `json:"timezone"`
 	Vars              map[string]any `json:"vars,omitempty"`
@@ -110,12 +121,21 @@ type UpdateScheduleRequest struct {
 }
 
 type TriggerRequest struct {
-	Environment          string `json:"environment"`
-	Start                string `json:"start,omitempty"`
-	End                  string `json:"end,omitempty"`
-	Trigger              string `json:"trigger,omitempty"`
+	Environment string `json:"environment"`
+	Start       string `json:"start,omitempty"`
+	End         string `json:"end,omitempty"`
+	// Source is normalized by the admission layer. Empty remains a temporary
+	// internal compatibility value and is treated as working_tree; callers that
+	// request a snapshot must always provide its exact immutable version ID.
+	Source            RunSource `json:"source,omitempty"`
+	SnapshotVersionID string    `json:"snapshot_version_id,omitempty"`
+	// LegacyTrigger accepts the former client hint for rolling compatibility.
+	// It never controls persisted origin; only "manual" is accepted at HTTP.
+	LegacyTrigger        string `json:"trigger,omitempty"`
+	FullRefresh          bool   `json:"full_refresh,omitempty"`
 	Backfill             bool   `json:"backfill,omitempty"`
 	ConfirmedEnvironment string `json:"confirmed_environment,omitempty"`
+	SensorMode           string `json:"sensor_mode,omitempty"`
 }
 
 type PipelineRun struct {
@@ -141,6 +161,19 @@ type PipelineRun struct {
 	// SnapshotVersionID records the deployed snapshot the run executed;
 	// empty for working-tree builds.
 	SnapshotVersionID string `json:"snapshot_version_id,omitempty"`
+	// FullRefresh, Backfill, and SensorMode hold the normalized admission request
+	// until ExecutionContextResolved becomes true. Once resolved, they are the
+	// effective modes persisted before the first asset starts. They remain an
+	// internal recovery contract until the API has a nested requested/effective
+	// execution-context DTO.
+	FullRefresh bool   `json:"-"`
+	Backfill    bool   `json:"-"`
+	SensorMode  string `json:"-"`
+	// ExecutionContextResolved distinguishes effective execution provenance from
+	// pending, pre-execution-failed, and legacy request-only rows. Callers must
+	// not treat environment, window, or mode fields as executed context while it
+	// is false.
+	ExecutionContextResolved bool `json:"execution_context_resolved"`
 }
 
 type PipelineRunStep struct {
@@ -191,9 +224,21 @@ type RunRequest struct {
 	Environment string
 	Start       string
 	End         string
-	// SnapshotVersionID pins the deployed snapshot the run must execute;
-	// empty means "latest snapshot, else working tree".
-	SnapshotVersionID string
+	// Scheduled is derived from the persisted server-owned run origin. It must
+	// not be inferred from RunID because queued manual runs also have one.
+	Scheduled bool
+	// SnapshotVersionID pins the exact deployed snapshot the run must execute.
+	// Empty identifies a manual working-tree run and is invalid when Scheduled.
+	SnapshotVersionID    string
+	FullRefresh          bool
+	Backfill             bool
+	ConfirmedEnvironment string
+	SensorMode           string
+	// OnContextResolved must be called synchronously after execution policy,
+	// source, defaults, and modes are resolved but before the first asset starts.
+	// The scheduler uses it to durably replace admission intent and publish a
+	// canonical running event.
+	OnContextResolved func(RunExecutionContext) error
 	OnStep            func(RunStepEvent)
 }
 

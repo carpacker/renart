@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 
 import { AssetCodeEditor } from "@/components/asset-code-editor";
 import { useAssetMonaco } from "@/hooks/use-asset-monaco";
+import { useWorkspaceSaveParticipant } from "@/hooks/use-workspace-save-participant";
 import { useWorkspaceTheme } from "@/hooks/use-workspace-theme";
 import type { WebAsset } from "@/lib/types";
 
@@ -26,13 +27,16 @@ export function SensorQueryEditor({
   const [query, setQuery] = useState(externalQuery);
   const pendingQueryRef = useRef<string | null>(null);
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const savesInFlightRef = useRef(0);
+  const savesInFlightRef = useRef(new Set<Promise<void>>());
+  const lastSaveRef = useRef<Promise<void>>(Promise.resolve());
+  const saveFailureRef = useRef<{ error: unknown } | null>(null);
+  const saveSequenceRef = useRef(0);
 
   useEffect(() => {
     if (
       pendingQueryRef.current !== null ||
       saveTimerRef.current !== null ||
-      savesInFlightRef.current > 0
+      savesInFlightRef.current.size > 0
     ) {
       return;
     }
@@ -49,16 +53,56 @@ export function SensorQueryEditor({
       return;
     }
 
-    savesInFlightRef.current += 1;
-    try {
-      await onSave(pendingQuery);
-      if (pendingQueryRef.current === pendingQuery) {
-        pendingQueryRef.current = null;
-      }
-    } finally {
-      savesInFlightRef.current = Math.max(0, savesInFlightRef.current - 1);
-    }
+    pendingQueryRef.current = null;
+    const saveSequence = ++saveSequenceRef.current;
+    // Preserve edit order even when another debounce fires while a request is
+    // still in flight. A failed older value must not overwrite a newer save.
+    const save = lastSaveRef.current
+      .catch(() => undefined)
+      .then(() => onSave(pendingQuery))
+      .then(
+        () => {
+          saveFailureRef.current = null;
+        },
+        (error) => {
+          saveFailureRef.current = { error };
+          if (saveSequenceRef.current === saveSequence && pendingQueryRef.current === null) {
+            pendingQueryRef.current = pendingQuery;
+          }
+          throw error;
+        },
+      );
+    const tracked: Promise<void> = save.then(
+      () => {
+        savesInFlightRef.current.delete(tracked);
+      },
+      (error) => {
+        savesInFlightRef.current.delete(tracked);
+        throw error;
+      },
+    );
+    lastSaveRef.current = tracked;
+    savesInFlightRef.current.add(tracked);
+    void tracked.catch(() => undefined);
+    await tracked;
   }, [onSave]);
+
+  const awaitPendingSaves = useCallback(async () => {
+    while (true) {
+      await flushSave();
+      const active = Array.from(savesInFlightRef.current);
+      if (active.length > 0) {
+        await Promise.allSettled(active);
+      }
+      if (saveFailureRef.current) {
+        throw saveFailureRef.current.error;
+      }
+      if (pendingQueryRef.current === null && savesInFlightRef.current.size === 0) {
+        return;
+      }
+    }
+  }, [flushSave]);
+  useWorkspaceSaveParticipant(awaitPendingSaves);
 
   const handleChange = useCallback(
     (value?: string) => {
@@ -91,13 +135,17 @@ export function SensorQueryEditor({
       .catch(() => undefined);
   }, [flushSave, onCheck]);
 
+  const handleEditorSave = useCallback(() => {
+    void flushSave().catch(() => undefined);
+  }, [flushSave]);
+
   const { editorModelPath, formatSQL, handleBeforeMount, handleMount, isSqlAsset, shortcutLabel } =
     useAssetMonaco({
       asset,
       editorValue: query,
       onGoToAsset,
       onInspect: handleCheck,
-      onSave: flushSave,
+      onSave: handleEditorSave,
     });
 
   return (

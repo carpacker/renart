@@ -62,7 +62,15 @@ content).
 (`~/.config/renart/projects.json`; `RENART_PROJECTS_REGISTRY` overrides for
 tests) plus one lazily-opened per-project runtime each, mounted at
 `/api/projects/{id}/*` (`cmd/projects.go`); the argv root stays aliased at the
-unprefixed `/api/*`. `POST /api/projects` scaffolds a project from a template
+unprefixed `/api/*`. Each non-headless runtime acquires that workspace's
+`.renart/server.lock` before opening its state database. One process may hold
+many such leases, but another `web` or `standalone` process cannot open a
+workspace already mounted by the first. A bounded health check of the existing
+`.renart/server.json` both supplies the owning PID/URL and detects live Renart
+versions from before the lock existed. The OS releases a lease on graceful
+close or process exit; the persistent unlocked file is inert. Embedded CLI
+execution does not take this long-lived-server lease.
+`POST /api/projects` scaffolds a project from a template
 (`service.ScaffoldProject`: `demo:chess` — native `type: api` Chess.com
 profiles and games feeding SQL performance and opening analysis,
 `demo:retail` — offline SQL-only demo, `empty`, `bare` for the import
@@ -133,8 +141,37 @@ users author is plain Bruin files (`.bruin.yml`, `pipeline.yml`, asset files).
 Bruin's operator/materializer packages (registered per warehouse in
 `service/direct_executor_registry.go`), with a **CLI fallback** so behavior
 matches the `bruin` binary where the direct path can't. Inspect-style queries
-enforce a single-SELECT boundary. The scheduler executes deployed snapshots
-materialized to a temp dir, never the working tree (see staleness.md §5).
+enforce a single-SELECT boundary. Pipeline-wide queued runs carry a server-owned
+manual/scheduled origin and an explicit source: ordinary Build runs use the
+saved working tree, `deployed_only` Build runs resolve one exact deployment at
+admission, and scheduled runs use their exact row pin. Snapshot execution
+validates ownership and content before materializing a fresh temp directory;
+resolution failures fail the run rather than falling back to the working tree
+(see staleness.md §5).
+
+Asset rendering is a separate read-only path at
+`POST /api/assets/{assetID}/render`. It always reads the saved working-tree
+asset identified by the route (never a request-supplied path or editor buffer),
+uses a server-owned preview run ID, strictly parses the environment/window/
+execution-time/full-refresh context, and never opens a warehouse connection.
+The response includes the same source Merkle identity Deploy computes, a
+secret-free digest of the environment fields that affect this render, and the
+effective variable digest. SQL assets expose the exact compiled query;
+DuckDB/MotherDuck assets additionally expose the hook-aware materializer SQL.
+Every stage declares exact, semantic, runtime-only, or unsupported fidelity.
+Query sensors compile `parameters.query`, never their surrounding YAML, and
+show that exact submitted condition query as execution SQL; polling mode,
+interval, and timeout remain described runtime controls rather than fabricated
+statements. A missing or blank query is an asset-scoped structured error.
+MotherDuck uses the DuckDB dialect and exact DuckDB/MotherDuck materializer
+path. DuckDB/MotherDuck hook templates are resolved with the selected asset
+context before materializer construction by the same request-local helper used
+for direct asset and pipeline execution. Hooks are still folded into the
+single execution-SQL blob rather than returned as separate stages.
+Known inline credentials tagged by Bruin are masked before any stage or issue
+crosses the HTTP boundary, with explicit redaction metadata. The preview uses
+the read-only config loader, so rendering cannot create `.bruin.yml`, edit
+`.gitignore`, or otherwise mutate the workspace.
 
 Before either a pipeline or a single asset starts, the direct runner validates
 declared dependencies across the whole parsed pipeline. Non-URI dependencies
@@ -161,14 +198,55 @@ The scheduler is built on River with the SQLite driver: `Store` owns
 persistence/migrations, `Service` owns orchestration (catch-up windows,
 uniqueness via `river:"unique"`), and execution is injected as a plain
 `Runner` function. One filesystem lock owns both queue consumption and schedule
-registration; startup acquires it before River workers start. It then
-atomically fails runs left open by a killed process, cancels the corresponding
-abandoned River pipeline/housekeeping jobs, and replays persisted terminal
-steps into derived freshness state without rerunning asset code. Runs are
-linked to their River job IDs, including recovery from the job arguments if a
-process dies during the claim/link handoff; queued jobs River never claimed are
-preserved. Recovery emits one structured count summary for operational
-visibility (see staleness.md §3).
+registration; startup acquires it before River workers start. The service
+exposes `owner`, `follower`, or `unavailable` ownership through the environment
+schedule API. Only an active owner may mutate schedules or queue runs; follower
+requests fail with `409 scheduler_not_owner` before deployment, workspace, or
+SQLite writes. Scheduler-backed runs persist a private, validated, versioned
+`pipeline_run_specs` record outside public run DTOs and SSE. The spec is the
+immutable requested behavior contract; effective environment, window, and
+modes still replace the diagnostic `pipeline_runs` columns immediately before
+execution. Manual/API admission inserts the run, v1 spec, run-ID-only River
+job, run/job link, and namespaced path plus stable-UUID slot aliases in one
+SQLite transaction via `InsertTx`. Stored specs override parallel legacy job
+arguments; unknown versions, unknown fields, and row/spec mismatches fail the
+run closed. Pre-upgrade jobs without a spec retain one strict upgrade decoder.
+
+For new scheduler-backed admissions, the durable slot permits one
+queued/running pipeline-scope run per logical pipeline across environments and
+claims both path and stable-UUID aliases, preserving exclusion across a rename.
+Manual races return `409 pipeline_run_active` with the active run ID.
+Periodic/catch-up jobs remain compatibility due signals: the worker derives
+the same v1 spec when it claims the slot, and snoozes the original signal for
+30 seconds while another run holds it. This preserves the exact interval but
+is not yet a durable, user-visible occurrence ledger. Migration preflight
+reports duplicate legacy active rows without rewriting history and backfills
+only path aliases, because legacy run rows did not persist a pipeline UUID.
+Those aliases bridge the same path but cannot add rename safety retroactively.
+
+Reconciliation propagates persistence and catch-up enqueue failures instead of
+leaving an apparently active row unapplied. Startup fails before River workers
+start if core recovery state cannot be read or written. It atomically fails
+running rows and queued rows whose queue job is terminal or missing, relinks
+runnable legacy jobs, returns a claimed-but-not-yet-admitted schedule signal to
+River, cancels admitted abandoned jobs, and replays persisted terminal steps
+without rerunning asset code. New manual admissions need no claim/link repair;
+River-argument link recovery is legacy-only. Recovery emits one structured
+count summary, including requeued signals and legacy replays skipped because
+their effective execution context was never persisted (see staleness.md §3).
+
+This is a scheduler-backed foundation, not a universal run ledger. Direct/CLI,
+one-asset Materialize, and Build-stale paths still do not use this RunSpec/slot
+seam; effective variables, target/latest-writer identity, asset-by-window
+execution units, durable schedule occurrences, and exact re-execution remain
+open.
+
+Before applying either Renart or River migrations, `Store` runs SQLite's
+`quick_check` against the shared state database. A failed check aborts startup
+with the exact database path and instructions to preserve the database, WAL,
+and shared-memory files for recovery. Renart never treats corruption as an
+empty database: the file also contains schedules, deployments, run history,
+and freshness state that must not be silently discarded.
 
 HTTP API assets use a native streaming extractor followed by Sling for the
 warehouse write. The target DuckDB lease is acquired after extraction and held
@@ -217,7 +295,9 @@ native sensor operators: interactive runs default to one bounded check, while
 scheduled runs retain dependency-gate semantics and wait until success or the
 configured timeout. HTTP and CLI execution can explicitly select
 `sensor_mode=once`, `wait`, or `skip`; the backend normalizes and enforces the
-effective mode rather than relying on UI behavior.
+effective mode rather than relying on UI behavior. The default is derived from
+the server-owned scheduled origin, not from the presence of a durable run ID,
+because queued manual runs also have IDs.
 
 Python assets run through Renart's in-process operator
 (`service/python_operator.go`). Each task receives an embedded, version-locked

@@ -61,6 +61,7 @@ type webServer struct {
 	parseContextSvc  *service.ParseContextService
 	sqlLSPSvc        *service.SQLLSPService
 	jinjaRenderSvc   *service.JinjaRenderService
+	assetRenderSvc   *service.AssetRenderService
 	runSvc           *service.RunService
 	notebookSvc      *service.NotebookService
 	onboardingSvc    *service.OnboardingService
@@ -303,6 +304,7 @@ func (s *webServer) registerRoutes(router chi.Router) {
 	webhttpapi.RegisterParseContextRoutes(router, &webhttpapi.ParseContextAPI{Service: s.parseContextSvc})
 	webhttpapi.RegisterSQLLSPRoutes(router, &webhttpapi.SQLLSPAPI{Service: s.sqlLSPSvc})
 	webhttpapi.RegisterJinjaRenderRoutes(router, &webhttpapi.JinjaRenderAPI{Service: s.jinjaRenderSvc})
+	webhttpapi.RegisterAssetRenderRoutes(router, &webhttpapi.AssetRenderAPI{Service: s.assetRenderSvc})
 	webhttpapi.RegisterRunRoutes(router, &webhttpapi.RunAPI{Service: s.runSvc})
 	webhttpapi.RegisterNotebookRoutes(router, &webhttpapi.NotebookAPI{Service: s.notebookSvc})
 	webhttpapi.RegisterPythonPackageRoutes(router, &webhttpapi.PythonPackagesAPI{Search: service.SearchPyPIPackages})
@@ -392,6 +394,15 @@ func (s *webServer) GetPipelineSchedule(ctx context.Context, pipelineID string) 
 }
 
 func (s *webServer) UpdatePipelineSchedule(ctx context.Context, pipelineID string, req webscheduler.UpdateScheduleRequest) (webscheduler.PipelineSchedule, error) {
+	// This legacy endpoint edits pipeline.yml before bridging into the
+	// per-environment schedule store. Preflight ownership before either write,
+	// otherwise a follower could partially change the workspace without being
+	// able to apply the corresponding River schedule.
+	if s.schedulerSvc != nil {
+		if err := s.schedulerSvc.RequireOwner(); err != nil {
+			return webscheduler.PipelineSchedule{}, err
+		}
+	}
 	current, err := s.pipelineSvc.GetSchedule(ctx, pipelineID)
 	if err != nil {
 		return webscheduler.PipelineSchedule{}, err
@@ -506,27 +517,92 @@ func (s *webServer) TriggerPipeline(ctx context.Context, pipelineID string, req 
 	if err != nil {
 		return webscheduler.PipelineRun{}, err
 	}
-	if strings.TrimSpace(req.Trigger) == "" {
-		req.Trigger = string(webscheduler.RunTriggerManual)
+	req.Environment = normalizeTriggerEnvironment(req.Environment, s.currentState().SelectedEnvironment)
+	environmentPolicy := policy.EnvironmentPolicy{}
+	if s.policyLoader != nil {
+		environmentPolicy = s.policyLoader.For(req.Environment)
 	}
-	if strings.TrimSpace(req.Environment) == "" {
-		req.Environment = s.currentState().SelectedEnvironment
+	if err := resolveTriggerRunSource(ctx, s.snapshotStore, pipelineSchedule.PipelineUUID, req.Environment, environmentPolicy, &req); err != nil {
+		return webscheduler.PipelineRun{}, err
 	}
-	if webscheduler.RunTrigger(req.Trigger) == webscheduler.RunTriggerManual {
-		environmentPolicy := policy.EnvironmentPolicy{}
-		if s.policyLoader != nil {
-			environmentPolicy = s.policyLoader.For(req.Environment)
-		}
-		if err := policy.Check(environmentPolicy, policy.RunRequest{
-			Environment:          req.Environment,
-			Interactive:          true,
-			Destructive:          req.Backfill,
-			ConfirmedEnvironment: strings.TrimSpace(req.ConfirmedEnvironment),
-		}); err != nil {
-			return webscheduler.PipelineRun{}, err
-		}
+	if err := policy.Check(environmentPolicy, policy.RunRequest{
+		Environment:          req.Environment,
+		Interactive:          true,
+		SnapshotBased:        req.Source == webscheduler.RunSourceSnapshot,
+		Destructive:          req.FullRefresh || req.Backfill,
+		ConfirmedEnvironment: strings.TrimSpace(req.ConfirmedEnvironment),
+	}); err != nil {
+		return webscheduler.PipelineRun{}, err
 	}
 	return s.schedulerSvc.Trigger(ctx, pipelineSchedule, req)
+}
+
+func resolveTriggerRunSource(
+	ctx context.Context,
+	store *snapshot.Store,
+	pipelineUUID string,
+	environment string,
+	environmentPolicy policy.EnvironmentPolicy,
+	req *webscheduler.TriggerRequest,
+) error {
+	if req == nil {
+		return fmt.Errorf("run request is required")
+	}
+	pipelineUUID = strings.TrimSpace(pipelineUUID)
+	if pipelineUUID == "" {
+		return fmt.Errorf("pipeline has no stable ID; save the pipeline before running it")
+	}
+	req.SnapshotVersionID = strings.TrimSpace(req.SnapshotVersionID)
+
+	if req.Source == "" {
+		if req.SnapshotVersionID != "" {
+			return fmt.Errorf("source is required when snapshot_version_id is set")
+		}
+		if !environmentPolicy.DeployedOnly {
+			req.Source = webscheduler.RunSourceWorkingTree
+			return nil
+		}
+		if store == nil {
+			return fmt.Errorf("environment %q only executes deployed snapshots: deploy the pipeline first", environment)
+		}
+		latest, err := store.Latest(ctx, pipelineUUID)
+		if err != nil {
+			return fmt.Errorf("resolve latest deployment for pipeline: %w", err)
+		}
+		if latest == nil {
+			return fmt.Errorf("environment %q only executes deployed snapshots: deploy the pipeline first", environment)
+		}
+		req.Source = webscheduler.RunSourceSnapshot
+		req.SnapshotVersionID = latest.VersionID
+	}
+
+	switch req.Source {
+	case webscheduler.RunSourceWorkingTree:
+		if req.SnapshotVersionID != "" {
+			return fmt.Errorf("snapshot_version_id must be empty when source is working_tree")
+		}
+		return nil
+	case webscheduler.RunSourceSnapshot:
+		if req.SnapshotVersionID == "" {
+			return fmt.Errorf("snapshot_version_id is required when source is snapshot")
+		}
+		if store == nil {
+			return fmt.Errorf("snapshot store is unavailable")
+		}
+		if _, err := store.Validate(ctx, req.SnapshotVersionID, pipelineUUID); err != nil {
+			return fmt.Errorf("deployment %s is not executable for this pipeline: %w", req.SnapshotVersionID, err)
+		}
+		return nil
+	default:
+		return fmt.Errorf("invalid run source %q: expected working_tree or snapshot", req.Source)
+	}
+}
+
+func normalizeTriggerEnvironment(requested, selected string) string {
+	if normalized := strings.TrimSpace(requested); normalized != "" {
+		return normalized
+	}
+	return strings.TrimSpace(selected)
 }
 
 func (s *webServer) ListRuns(ctx context.Context, filter webscheduler.RunFilter) (webscheduler.RunList, error) {
@@ -647,49 +723,62 @@ func (s *webServer) parsePipelineDir(ctx context.Context, pipelineDir string) (*
 	return s.newPipelineBuilder().CreatePipelineFromPath(ctx, pipelineDir, pipeline.WithMutate())
 }
 
-// resolveScheduledRunSnapshot points the run spec at its deployed snapshot
-// — the schedule's pinned version when set, otherwise the latest deploy —
-// materializing it into a temp directory. The returned cleanup removes that
-// directory; it is safe to call always.
-func (s *webServer) resolveScheduledRunSnapshot(ctx context.Context, spec *service.PipelineRunSpec, onLog func(string)) func() {
-	cleanup := func() {}
-	if s.snapshotStore == nil {
-		return cleanup
-	}
-	versionID := spec.SnapshotVersionID
-	if versionID == "" {
-		pipelineUUID, ok := s.findPipelineUUIDByID(spec.PipelineID)
+// resolveRunSnapshot materializes an already-resolved exact deployment. It
+// never chooses "latest" and never falls back to the working tree.
+func (s *webServer) resolveRunSnapshot(ctx context.Context, spec *service.PipelineRunSpec, scheduled bool, onLog func(string)) (func(), error) {
+	pipelineUUID := ""
+	if strings.TrimSpace(spec.SnapshotVersionID) != "" {
+		var ok bool
+		pipelineUUID, ok = s.findPipelineUUIDByID(spec.PipelineID)
 		if !ok {
-			return cleanup
+			return func() {}, fmt.Errorf("pipeline %s is not in the current workspace", spec.PipelineID)
 		}
-		latest, err := s.snapshotStore.Latest(ctx, pipelineUUID)
-		if err != nil || latest == nil {
-			return cleanup
+	}
+	return materializeExactRunSnapshot(ctx, s.snapshotStore, pipelineUUID, s.resolveConfigFilePath(), scheduled, spec, onLog)
+}
+
+func materializeExactRunSnapshot(
+	ctx context.Context,
+	store *snapshot.Store,
+	pipelineUUID string,
+	configPath string,
+	scheduled bool,
+	spec *service.PipelineRunSpec,
+	onLog func(string),
+) (func(), error) {
+	cleanup := func() {}
+	if spec == nil {
+		return cleanup, fmt.Errorf("pipeline run specification is required")
+	}
+	versionID := strings.TrimSpace(spec.SnapshotVersionID)
+	if versionID == "" {
+		if scheduled {
+			return cleanup, fmt.Errorf("scheduled run has no pinned deployment")
 		}
-		versionID = latest.VersionID
+		return cleanup, nil
+	}
+	if store == nil {
+		return cleanup, fmt.Errorf("snapshot store is unavailable for deployment %s", versionID)
+	}
+	pipelineUUID = strings.TrimSpace(pipelineUUID)
+	if pipelineUUID == "" {
+		return cleanup, fmt.Errorf("pipeline has no stable ID for deployment %s", versionID)
 	}
 	tempDir, err := os.MkdirTemp("", "renart-snapshot-")
 	if err != nil {
-		return cleanup
+		return cleanup, fmt.Errorf("create deployment sandbox: %w", err)
 	}
-	if err := s.snapshotStore.MaterializeForExecution(ctx, versionID, tempDir); err != nil {
+	if err := store.MaterializeForPipelineExecution(ctx, versionID, pipelineUUID, tempDir); err != nil {
 		_ = os.RemoveAll(tempDir)
-		if onLog != nil {
-			onLog("warning: failed to materialize deployed snapshot " + versionID + ", falling back to working tree: " + err.Error() + "\n")
-		}
-		spec.SnapshotVersionID = ""
-		return cleanup
+		return cleanup, fmt.Errorf("materialize deployment %s: %w", versionID, err)
 	}
 	spec.SnapshotDir = tempDir
 	spec.SnapshotVersionID = versionID
-	spec.ConfigPath = s.resolveConfigFilePath()
+	spec.ConfigPath = configPath
 	if onLog != nil {
 		onLog("executing deployed snapshot " + versionID + "\n")
 	}
-	if spec.RunID != "" && s.schedulerStore != nil {
-		_ = s.schedulerStore.SetRunSnapshotVersion(ctx, spec.RunID, versionID)
-	}
-	return func() { _ = os.RemoveAll(tempDir) }
+	return func() { _ = os.RemoveAll(tempDir) }, nil
 }
 
 // warmFingerprintCache fingerprints every workspace pipeline once so the

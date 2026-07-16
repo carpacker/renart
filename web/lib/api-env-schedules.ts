@@ -1,8 +1,15 @@
 import { fetchJSON, fetchJSONWithBody } from "@/lib/api-core";
 import type { PipelineRun } from "@/lib/types";
+import { awaitWorkspaceSaves } from "@/lib/workspace-save-barrier";
 
 export type CatchupPolicy = "skip" | "run_once" | "backfill";
 export type EnvScheduleStatus = "active" | "paused" | "archived" | "delegated";
+export type SchedulerOwnershipState = "owner" | "follower" | "unavailable";
+
+export type SchedulerOwnership = {
+  state: SchedulerOwnershipState;
+  message?: string;
+};
 
 export type EnvSchedule = {
   pipeline_uuid: string;
@@ -24,19 +31,22 @@ export type EnvSchedule = {
 
 export type EnvSchedulesResponse = {
   status: "ok" | "error";
+  scheduler: SchedulerOwnership;
   schedules: EnvSchedule[];
   archived: EnvSchedule[];
 };
+
+type EnvScheduleSourceInput =
+  | { snapshot_version_id: string; deploy_now?: never }
+  | { deploy_now: true; snapshot_version_id?: never };
 
 export type UpsertEnvScheduleInput = {
   cron: string;
   timezone?: string;
   vars?: Record<string, unknown>;
   catchup_policy?: CatchupPolicy;
-  snapshot_version_id?: string;
-  deploy_now?: boolean;
   paused?: boolean;
-};
+} & EnvScheduleSourceInput;
 
 export async function getEnvSchedules(): Promise<EnvSchedulesResponse> {
   return fetchJSON<EnvSchedulesResponse>("/api/env-schedules", { cache: "no-store" });
@@ -47,6 +57,12 @@ export async function upsertEnvSchedule(
   environment: string,
   input: UpsertEnvScheduleInput,
 ): Promise<{ status: string; schedule: EnvSchedule }> {
+  // deploy_now snapshots the working tree. Flush every mounted editor before
+  // asking the backend to resolve that source, just like the standalone Deploy
+  // action does.
+  if (input.deploy_now) {
+    await awaitWorkspaceSaves();
+  }
   return fetchJSONWithBody(
     `/api/pipelines/${pipelineId}/env-schedules/${encodeURIComponent(environment)}`,
     "PUT",

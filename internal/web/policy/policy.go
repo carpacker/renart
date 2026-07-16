@@ -22,8 +22,8 @@ import (
 
 // EnvironmentPolicy is the per-environment rule set.
 type EnvironmentPolicy struct {
-	// Protected forbids interactive build-mode execution (working tree
-	// runs from the UI or CLI). Scheduled snapshot runs pass.
+	// Protected forbids user-initiated UI/CLI execution, whether it targets
+	// the working tree or a snapshot. Server-owned scheduled runs pass.
 	Protected bool `yaml:"protected" json:"protected"`
 	// DeployedOnly forbids any execution that is not a deployed snapshot,
 	// including scheduled runs falling back to the working tree.
@@ -178,8 +178,9 @@ func (l *Loader) Set(environment string, envPolicy EnvironmentPolicy) (Config, e
 // RunRequest describes one execution attempt for policy evaluation.
 type RunRequest struct {
 	Environment string
-	// Interactive marks build-mode execution (UI or CLI working-tree runs);
-	// scheduler-dispatched runs are not interactive.
+	// Interactive marks user-initiated UI/CLI execution. Only server-owned
+	// scheduled occurrences are non-interactive, even when a manual run uses an
+	// immutable deployment.
 	Interactive bool
 	// SnapshotBased marks execution of a deployed snapshot.
 	SnapshotBased bool

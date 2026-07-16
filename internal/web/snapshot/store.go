@@ -39,14 +39,16 @@ type Snapshot struct {
 // DriftReport compares the working tree against the latest deployed
 // snapshot.
 type DriftReport struct {
-	HasSnapshot   bool      `json:"has_snapshot"`
-	InSync        bool      `json:"in_sync"`
-	VersionID     string    `json:"version_id,omitempty"`
-	CreatedAt     time.Time `json:"created_at,omitempty"`
-	ChangedFiles  []string  `json:"changed_files,omitempty"`
-	AddedFiles    []string  `json:"added_files,omitempty"`
-	RemovedFiles  []string  `json:"removed_files,omitempty"`
-	SnapshotCount int       `json:"snapshot_count"`
+	HasSnapshot    bool      `json:"has_snapshot"`
+	Executable     bool      `json:"executable"`
+	IntegrityError string    `json:"integrity_error,omitempty"`
+	InSync         bool      `json:"in_sync"`
+	VersionID      string    `json:"version_id,omitempty"`
+	CreatedAt      time.Time `json:"created_at,omitempty"`
+	ChangedFiles   []string  `json:"changed_files,omitempty"`
+	AddedFiles     []string  `json:"added_files,omitempty"`
+	RemovedFiles   []string  `json:"removed_files,omitempty"`
+	SnapshotCount  int       `json:"snapshot_count"`
 }
 
 // skipDirNames are never snapshotted (VCS internals, caches, local state).
@@ -76,9 +78,11 @@ func hashBytes(content []byte) string {
 	return hex.EncodeToString(sum[:])
 }
 
-// merkleRoot derives the snapshot identity from the sorted manifest with
-// length-prefixed parts (no concatenation ambiguity).
-func merkleRoot(manifest map[string]string) string {
+// ManifestRoot derives the snapshot identity from the sorted manifest with
+// length-prefixed parts (no concatenation ambiguity). Planning and deployment
+// must use this same identity so a saved-working-tree preview cannot drift from
+// the source version Deploy will later persist.
+func ManifestRoot(manifest map[string]string) string {
 	paths := make([]string, 0, len(manifest))
 	for path := range manifest {
 		paths = append(paths, path)
@@ -101,6 +105,12 @@ func merkleRoot(manifest map[string]string) string {
 		writePart(manifest[path])
 	}
 	return hex.EncodeToString(hasher.Sum(nil))
+}
+
+// merkleRoot remains the package-local spelling used by the snapshot store.
+// Keep it as a wrapper so older tests and internal call sites stay readable.
+func merkleRoot(manifest map[string]string) string {
+	return ManifestRoot(manifest)
 }
 
 // CollectManifest walks the pipeline directory and returns relpath -> blob
@@ -165,7 +175,9 @@ func (s *Store) Deploy(ctx context.Context, pipelineUUID, pipelineDir, createdBy
 		return Snapshot{}, false, err
 	}
 	if latest != nil && latest.MerkleRoot == root {
-		return *latest, false, nil
+		if _, err := s.Validate(ctx, latest.VersionID, pipelineUUID); err == nil {
+			return *latest, false, nil
+		}
 	}
 
 	gitSHA, gitDirty := gitState(pipelineDir)
@@ -193,7 +205,7 @@ func (s *Store) Deploy(ctx context.Context, pipelineUUID, pipelineDir, createdBy
 
 	for hash, content := range contents {
 		if _, err := tx.ExecContext(ctx,
-			`INSERT INTO renart_blobs (hash, content) VALUES (?, ?) ON CONFLICT (hash) DO NOTHING`,
+			`INSERT INTO renart_blobs (hash, content) VALUES (?, ?) ON CONFLICT (hash) DO UPDATE SET content = excluded.content`,
 			hash, content); err != nil {
 			return Snapshot{}, false, err
 		}
@@ -213,6 +225,9 @@ func (s *Store) Deploy(ctx context.Context, pipelineUUID, pipelineDir, createdBy
 	if err := tx.Commit(); err != nil {
 		return Snapshot{}, false, err
 	}
+	if _, err := s.Validate(ctx, snapshot.VersionID, pipelineUUID); err != nil {
+		return Snapshot{}, false, fmt.Errorf("validate deployed snapshot %s: %w", snapshot.VersionID, err)
+	}
 	return snapshot, true, nil
 }
 
@@ -220,7 +235,7 @@ func (s *Store) Latest(ctx context.Context, pipelineUUID string) (*Snapshot, err
 	row := s.db.QueryRowContext(ctx, `
 		SELECT version_id, pipeline_id, merkle_root, manifest, git_sha, git_dirty, created_at, created_by
 		FROM renart_snapshots WHERE pipeline_id = ?
-		ORDER BY created_at DESC LIMIT 1`, pipelineUUID)
+		ORDER BY created_at DESC, version_id DESC LIMIT 1`, pipelineUUID)
 	snapshot, err := scanSnapshot(row)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
@@ -236,6 +251,35 @@ func (s *Store) Get(ctx context.Context, versionID string) (Snapshot, error) {
 		SELECT version_id, pipeline_id, merkle_root, manifest, git_sha, git_dirty, created_at, created_by
 		FROM renart_snapshots WHERE version_id = ?`, versionID)
 	return scanSnapshot(row)
+}
+
+// Validate verifies that a snapshot belongs to the expected pipeline and that
+// every manifest entry resolves to the content-addressed blob it names. An
+// empty pipelineUUID skips the ownership check.
+func (s *Store) Validate(ctx context.Context, versionID, pipelineUUID string) (Snapshot, error) {
+	snapshot, err := s.validatedSnapshot(ctx, versionID, pipelineUUID)
+	if err != nil {
+		return Snapshot{}, err
+	}
+	validatedHashes := make(map[string]struct{}, len(snapshot.Manifest))
+	for _, relPath := range sortedManifestPaths(snapshot.Manifest) {
+		expectedHash := snapshot.Manifest[relPath]
+		if _, ok := validatedHashes[expectedHash]; ok {
+			continue
+		}
+		if _, err := s.validatedBlobContent(ctx, snapshot.VersionID, relPath, expectedHash); err != nil {
+			return Snapshot{}, err
+		}
+		validatedHashes[expectedHash] = struct{}{}
+	}
+	return snapshot, nil
+}
+
+// ValidateMetadata performs the cheap, blob-free part of snapshot validation:
+// version lookup, pipeline ownership, manifest shape, and Merkle identity.
+// Runtime materialization still verifies every referenced blob before use.
+func (s *Store) ValidateMetadata(ctx context.Context, versionID, pipelineUUID string) (Snapshot, error) {
+	return s.validatedSnapshot(ctx, versionID, pipelineUUID)
 }
 
 func (s *Store) List(ctx context.Context, pipelineUUID string) ([]Snapshot, error) {
@@ -291,22 +335,31 @@ func (s *Store) BlobContent(ctx context.Context, hash string) ([]byte, error) {
 	return content, err
 }
 
-// Materialize writes a snapshot's files into destDir. Simplest correct v1
-// of the executor seam: files are KB-scale, extraction is microseconds; a
-// virtual fs.FS over the blob table is a clean later swap.
+// Materialize writes a snapshot's files into destDir. The destination must be
+// absolute so an absent path can never turn a materialization into writes in
+// the server's current working directory.
 func (s *Store) Materialize(ctx context.Context, versionID, destDir string) error {
-	snapshot, err := s.Get(ctx, versionID)
+	return s.materialize(ctx, versionID, "", destDir)
+}
+
+func (s *Store) materialize(ctx context.Context, versionID, pipelineUUID, destDir string) error {
+	destDir, err := validateMaterializeDestination(destDir)
 	if err != nil {
 		return err
 	}
-	for relPath, hash := range snapshot.Manifest {
-		content, err := s.BlobContent(ctx, hash)
+	snapshot, err := s.validatedSnapshot(ctx, versionID, pipelineUUID)
+	if err != nil {
+		return err
+	}
+	for _, relPath := range sortedManifestPaths(snapshot.Manifest) {
+		expectedHash := snapshot.Manifest[relPath]
+		content, err := s.validatedBlobContent(ctx, snapshot.VersionID, relPath, expectedHash)
 		if err != nil {
-			return fmt.Errorf("snapshot %s: blob %s for %s: %w", versionID, hash, relPath, err)
+			return err
 		}
 		target := filepath.Join(destDir, filepath.FromSlash(relPath))
-		if !strings.HasPrefix(filepath.Clean(target), filepath.Clean(destDir)+string(filepath.Separator)) {
-			return fmt.Errorf("snapshot %s: manifest path %q escapes destination", versionID, relPath)
+		if err := ensureMaterializeTarget(destDir, target); err != nil {
+			return fmt.Errorf("snapshot %s: manifest path %q: %w", snapshot.VersionID, relPath, err)
 		}
 		if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
 			return err
@@ -314,6 +367,89 @@ func (s *Store) Materialize(ctx context.Context, versionID, destDir string) erro
 		if err := os.WriteFile(target, content, 0o644); err != nil {
 			return err
 		}
+	}
+	return nil
+}
+
+func (s *Store) validatedSnapshot(ctx context.Context, versionID, pipelineUUID string) (Snapshot, error) {
+	versionID = strings.TrimSpace(versionID)
+	if versionID == "" {
+		return Snapshot{}, errors.New("snapshot: version ID is required")
+	}
+	snapshot, err := s.Get(ctx, versionID)
+	if err != nil {
+		return Snapshot{}, fmt.Errorf("snapshot %s: load metadata: %w", versionID, err)
+	}
+	if expected := strings.TrimSpace(pipelineUUID); expected != "" && snapshot.PipelineUUID != expected {
+		return Snapshot{}, fmt.Errorf("snapshot %s belongs to pipeline %s, not %s", versionID, snapshot.PipelineUUID, expected)
+	}
+	if len(snapshot.Manifest) == 0 {
+		return Snapshot{}, fmt.Errorf("snapshot %s: manifest is empty", versionID)
+	}
+	if actualRoot := merkleRoot(snapshot.Manifest); actualRoot != snapshot.MerkleRoot {
+		return Snapshot{}, fmt.Errorf("snapshot %s: manifest root mismatch: expected %s, got %s", versionID, snapshot.MerkleRoot, actualRoot)
+	}
+
+	for relPath := range snapshot.Manifest {
+		if err := validateManifestPath(relPath); err != nil {
+			return Snapshot{}, fmt.Errorf("snapshot %s: %w", versionID, err)
+		}
+	}
+	return snapshot, nil
+}
+
+func (s *Store) validatedBlobContent(ctx context.Context, versionID, relPath, expectedHash string) ([]byte, error) {
+	content, err := s.BlobContent(ctx, expectedHash)
+	if err != nil {
+		return nil, fmt.Errorf("snapshot %s: blob %s for %s: %w", versionID, expectedHash, relPath, err)
+	}
+	if actualHash := hashBytes(content); actualHash != expectedHash {
+		return nil, fmt.Errorf("snapshot %s: blob hash mismatch for %s: expected %s, got %s", versionID, relPath, expectedHash, actualHash)
+	}
+	return content, nil
+}
+
+func sortedManifestPaths(manifest map[string]string) []string {
+	paths := make([]string, 0, len(manifest))
+	for relPath := range manifest {
+		paths = append(paths, relPath)
+	}
+	sort.Strings(paths)
+	return paths
+}
+
+func validateMaterializeDestination(destDir string) (string, error) {
+	if strings.TrimSpace(destDir) == "" {
+		return "", errors.New("snapshot: materialization destination is required")
+	}
+	if !filepath.IsAbs(destDir) {
+		return "", fmt.Errorf("snapshot: materialization destination must be absolute: %q", destDir)
+	}
+	return filepath.Clean(destDir), nil
+}
+
+func ensureMaterializeTarget(destDir, target string) error {
+	relPath, err := filepath.Rel(destDir, target)
+	if err != nil {
+		return fmt.Errorf("resolve destination: %w", err)
+	}
+	if relPath == ".." || strings.HasPrefix(relPath, ".."+string(filepath.Separator)) {
+		return errors.New("escapes destination")
+	}
+	return nil
+}
+
+func validateManifestPath(relPath string) error {
+	if relPath == "" || strings.Contains(relPath, `\`) {
+		return fmt.Errorf("invalid manifest path %q", relPath)
+	}
+	platformPath := filepath.FromSlash(relPath)
+	cleaned := filepath.Clean(platformPath)
+	if filepath.IsAbs(platformPath) || cleaned == "." || cleaned == ".." || strings.HasPrefix(cleaned, ".."+string(filepath.Separator)) {
+		return fmt.Errorf("manifest path %q escapes destination", relPath)
+	}
+	if filepath.ToSlash(cleaned) != relPath {
+		return fmt.Errorf("manifest path %q is not canonical", relPath)
 	}
 	return nil
 }
@@ -326,7 +462,19 @@ func (s *Store) Materialize(ctx context.Context, versionID, destDir string) erro
 // at the root. Without it, ingestr assets fail with "no git repository
 // found".
 func (s *Store) MaterializeForExecution(ctx context.Context, versionID, destDir string) error {
-	if err := s.Materialize(ctx, versionID, destDir); err != nil {
+	return s.materializeForExecution(ctx, versionID, "", destDir)
+}
+
+// MaterializeForPipelineExecution is the ownership-aware executor path used
+// when a run names both its pipeline and deployment. It validates ownership,
+// metadata, and each blob while writing each file, without a separate full
+// validation pass or retaining the whole snapshot in memory.
+func (s *Store) MaterializeForPipelineExecution(ctx context.Context, versionID, pipelineUUID, destDir string) error {
+	return s.materializeForExecution(ctx, versionID, pipelineUUID, destDir)
+}
+
+func (s *Store) materializeForExecution(ctx context.Context, versionID, pipelineUUID, destDir string) error {
+	if err := s.materialize(ctx, versionID, pipelineUUID, destDir); err != nil {
 		return err
 	}
 	return os.MkdirAll(filepath.Join(destDir, ".git"), 0o755)
@@ -346,6 +494,11 @@ func (s *Store) Drift(ctx context.Context, pipelineUUID, pipelineDir string) (Dr
 	report.HasSnapshot = true
 	report.VersionID = latest.VersionID
 	report.CreatedAt = latest.CreatedAt
+	if _, err := s.Validate(ctx, latest.VersionID, pipelineUUID); err != nil {
+		report.IntegrityError = err.Error()
+	} else {
+		report.Executable = true
+	}
 
 	manifest, _, err := CollectManifest(pipelineDir)
 	if err != nil {

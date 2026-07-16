@@ -4,6 +4,7 @@ import { useAtomValue, useSetAtom } from "jotai";
 import { useCallback, useEffect, useRef } from "react";
 
 import { useDebouncedAssetSave } from "@/hooks/use-debounced-asset-save";
+import { useWorkspaceSaveParticipant } from "@/hooks/use-workspace-save-participant";
 import { refreshAssetColumnsFromDefinition } from "@/lib/api-asset-transactions";
 import { fillAssetColumnsFromDB } from "@/lib/api";
 import { editorDraftAtom, editorProgrammaticContentAtom } from "@/lib/atoms/domains/editor";
@@ -29,8 +30,15 @@ export function useAssetContentEditing({
   const editorDraft = useAtomValue(editorDraftAtom);
   const editorProgrammaticContent = useAtomValue(editorProgrammaticContentAtom);
   const setEditorDraft = useSetAtom(editorDraftAtom);
-  const { scheduleSave, flushAssetSave, flushAllSaves, hasPendingAssetSave, saveAssetNow } =
-    useDebouncedAssetSave(saveDelay);
+  const {
+    scheduleSave,
+    flushAssetSave,
+    flushAllSaves,
+    awaitAllSaves,
+    hasPendingAssetSave,
+    saveAssetNow,
+  } = useDebouncedAssetSave(saveDelay);
+  useWorkspaceSaveParticipant(awaitAllSaves);
   const fillColumnsTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const lastEditorChangeRef = useRef<{
     assetId: string;

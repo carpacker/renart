@@ -88,7 +88,7 @@ Notes: `run_id` is empty for build-mode runs (no run record); scheduled runs
 carry theirs. A partial unique index keeps one fact per
 `(asset, environment, scheduled run)` while deliberately allowing repeated
 empty build-mode IDs; recorder inserts are no-ops when crash recovery replays a
-fact that already committed. The recorder fingerprints at run *completion*, so an edit saved
+fact that already committed. The recorder fingerprints at run _completion_, so an edit saved
 mid-build-mode-run records the newer fingerprint (scheduled runs are immune —
 they fingerprint the executed snapshot). Pipeline execution collects terminal
 asset events even when the overall run fails: completed assets record success
@@ -114,6 +114,24 @@ After an unclean server stop, scheduler startup first marks the orphaned run and
 every open step failed. It then re-emits only the persisted terminal steps
 through the same synchronous `RunCompleted` bus: prior successes remain
 successes, the interrupted step is failed, and unreached assets remain absent.
+The run row stores the requested execution modes at admission, then atomically
+replaces them with the effective environment, window, full-refresh/backfill
+mode, and sensor mode immediately before the first asset starts. If that write
+fails, execution does not begin. Recovery therefore applies the same coverage
+replacement semantics as the interrupted executor, including environment-level
+full-refresh restrictions and default windows. Rows interrupted by a legacy
+build before that effective-context write existed remain explicitly unresolved:
+their River arguments are request diagnostics only, so startup acknowledges and
+counts the skipped replay without emitting materialization facts. Those assets
+remain stale rather than risking false coverage from an inferred environment,
+window, or refresh mode.
+New scheduler-backed admissions also persist a private versioned RunSpec. For a
+spec-backed run, recovery never overwrites requested modes from empty or
+conflicting River arguments; the spec remains authoritative while fact replay
+continues to use only the persisted effective execution context. New manual
+run/spec/job/link admission is atomic. River-argument link and mode recovery is
+retained only for pre-upgrade jobs, and an unknown or structurally incompatible
+spec fails closed rather than falling back to legacy semantics.
 For a deployed run it materializes the run's exact pinned snapshot while the
 recorder fingerprints it, then deletes the temp directory. This is derived-state
 recovery only—asset code and textual logs are never replayed. The fact and
@@ -124,14 +142,17 @@ migration also queues interrupted runs reconciled by older builds for one-time
 backfill.
 
 The workspace scheduler lock is acquired before any River worker starts, so a
-River job still marked `running` at that point is unambiguously abandoned.
-Recovery cancels those internal pipeline and housekeeping rows in the same
-SQLite transaction that closes Renart's run records. Each run stores its River
-job ID; for a manual/API job killed during the narrow claim/link handoff, the ID
-is recovered from River's persisted arguments. A queued run whose job was never
-claimed remains queued and executes normally. Startup writes a structured
-summary with reconciled-run, cancelled-job, replay, and replay-failure counts;
-the queue rows also retain the interruption as an attempt error.
+River job still marked `running` at that point belongs to the stopped process.
+Recovery cancels admitted pipeline and housekeeping jobs in the same SQLite
+transaction that closes Renart's run records. A queued run remains queued only
+when it still has an available, pending, retryable, or scheduled River job;
+terminal-linked and truly jobless queued rows fail and release their active
+slot. Pre-upgrade runnable jobs are relinked from their run ID. A claimed
+scheduled compatibility signal with no admitted run is instead returned to
+River with its exact arguments and interval intact. Startup writes a structured
+summary with reconciled-run, cancelled-job, requeued-signal, replay, and
+replay-failure counts; cancelled queue rows retain the interruption as an
+attempt error.
 
 ## 4. Staleness service and UI (`internal/web/staleness`)
 
@@ -140,15 +161,15 @@ In-memory status map per current selection (env, range, vars), exposed at
 selection change (batched coverage query), `AssetSaved` (invalidate + recompute
 the downstream cone), `RunCompleted` (flip the touched assets).
 
-| Status | Meaning |
-|---|---|
-| `fresh` | coverage exists for current fp + vars + range |
-| `stale_edited` | own definition changed since last build (own-content sub-hash mismatch) |
+| Status           | Meaning                                                                                                      |
+| ---------------- | ------------------------------------------------------------------------------------------------------------ |
+| `fresh`          | coverage exists for current fp + vars + range                                                                |
+| `stale_edited`   | own definition changed since last build (own-content sub-hash mismatch)                                      |
 | `stale_upstream` | inherited via the Merkle cascade — also covers variable-value changes (own-content matches, full fp doesn't) |
-| `partial` | incremental: some intervals covered (built/total surfaced as covered/total seconds) |
-| `never_built` | no row for this asset in this env at any fingerprint |
-| `missing` | materialization history says fresh, async verification couldn't find the table |
-| `volatile` | sensor check has no durable output coverage and must run again in every stale plan |
+| `partial`        | incremental: some intervals covered (built/total surfaced as covered/total seconds)                          |
+| `never_built`    | no row for this asset in this env at any fingerprint                                                         |
+| `missing`        | materialization history says fresh, async verification couldn't find the table                               |
+| `volatile`       | sensor check has no durable output coverage and must run again in every stale plan                           |
 
 The `missing` downgrade only applies to assets whose output is a warehouse
 object named after the asset (`verifiableByName`: SQL, seed, and database-backed
@@ -207,12 +228,20 @@ Content-addressed store in SQLite: `renart_blobs` (hash → file bytes) +
 `renart_snapshots` (version, pipeline, merkle root, manifest JSON, git
 SHA/dirty). Snapshots hold **source files, not rendered SQL** — rendering
 depends on per-run env/vars/interval, so the executor renders at run time from
-snapshot content exactly as from the working tree. Scheduled runs materialize
-the snapshot **to a temp dir outside the workspace** (so pipeline discovery
-doesn't pick it up) with a `ConfigPath` override on the executor. Deploy
-dedupes on identical merkle root. Drift between working tree and the latest
-deployed version is surfaced per pipeline (`/api/pipelines/{id}/deploy/status`,
-per-file view via `/api/snapshots/{versionId}/file`).
+snapshot content exactly as from the working tree. Every selected snapshot is
+an exact version ID owned by the target pipeline. Admission and execution
+validate canonical manifest paths, blob presence, and content hashes; a
+missing, wrong-pipeline, or corrupt deployment fails closed. Snapshot runs
+materialize into a fresh temp directory **outside the workspace** (so pipeline
+discovery doesn't pick it up) with a `ConfigPath` override on the executor.
+Ordinary Build runs explicitly stay on the saved working tree even after a
+deployment exists, while a `deployed_only` environment resolves the latest
+deployment to an exact ID before enqueue. Deploy dedupes on identical merkle
+root. Drift between working tree and the latest deployed version is surfaced
+per pipeline (`/api/pipelines/{id}/deploy/status`, per-file view via
+`/api/snapshots/{versionId}/file`); the status also reports whether the latest
+snapshot is executable so identical-but-corrupt content can be repaired by a
+new Deploy instead of dead-ending the UI.
 
 ## 6. Per-environment schedules (`renart_schedules`, `/api/env-schedules`)
 
@@ -224,14 +253,44 @@ The reconciler diffs over the compound key: file deleted / branch switched →
 `archived` tombstone (reason `missing`) with the River handle removed; the
 pipeline reappearing reactivates reconciler tombstones but **not** explicit
 user deletions (reason `user`), which stay archived until restored in the UI.
-River job uniqueness is keyed on (pipeline, environment, interval) so restarts
-and catch-up can never double-enqueue a logical run.
+River `ByArgs` uniqueness suppresses a duplicate `(pipeline UUID, environment,
+interval)` signal while the first job is active; it is not a durable completed-
+occurrence ledger. New admissions claim pipeline-global SQLite path and
+stable-UUID slot aliases, preventing concurrent scheduler-backed executions
+across a rename. Migrated active rows have only a path alias because their UUID
+was not persisted, so rename safety cannot be reconstructed for those rows. A
+scheduled signal blocked by a slot is snoozed and retried with its original
+arguments; no run row or visible deferred occurrence exists until it acquires
+the slot.
+
+Only the process holding `.renart/scheduler.lock` may change rows or enqueue
+runs. `GET /api/env-schedules` reports `owner`, `follower`, or `unavailable`;
+mutations through a follower return `409 scheduler_not_owner` before any
+deployment, `pipeline.yml`, or schedule-store write. Followers remain
+read-only—automatic takeover and cross-process handoff still belong to the
+separate scheduler-coordination workstream.
 
 The schedules UI compares each row's pinned snapshot with the pipeline's latest
 deployed version. A differing pin is shown as **Older deployment**, independently
 of data freshness and last-run status, with an action that deploys the current
 pipeline (deduping identical content) and atomically advances only that
-environment's schedule to the resulting snapshot.
+environment's schedule to the resulting snapshot. The row-level manual action
+submits that displayed exact pin and remains a manual run, so it cannot advance
+the schedule watermark. Rows without a pin show **Needs deployment** instead of
+silently running the working tree.
+For an actual scheduled tick, the successful run status and its environment-
+scoped watermark advance commit in one SQLite transaction. A crash or write
+failure therefore leaves the interval retryable instead of recording success
+while silently re-enqueueing the same catch-up window later. Watermark
+capability and identity come from the server-derived stored RunSpec, never a
+client trigger or the mere presence of a run ID.
+
+Existing database rows from the former pinless contract are migrated once:
+each non-archived row is pinned to that pipeline's then-latest deployment, or
+paused when no deployment exists. Legacy `pipeline.yml` schedules follow the
+same rule when first imported. Active rows with an invalid pin or stored
+variable overrides are paused during reconciliation; admission rejects new
+active rows until both are executable.
 
 ## 7. Protected environments (`internal/web/policy`)
 
@@ -241,9 +300,9 @@ so Bruin's own config parsing is never at risk):
 ```yaml
 environments:
   prod:
-    protected: true            # no interactive build-mode execution
-    deployed_only: true        # only snapshot versions may execute
-    confirm_destructive: true  # full refresh / backfill / drop need typed confirm
+    protected: true # no interactive build-mode execution
+    deployed_only: true # only snapshot versions may execute
+    confirm_destructive: true # full refresh / backfill / drop need typed confirm
 ```
 
 Enforced by `policy.Check` at execution dispatch; the legacy `/api/run` path and

@@ -64,6 +64,9 @@ func (e *HybridBruinExecutor) RunAsset(ctx context.Context, req RunAssetRequest,
 	if err != nil {
 		return printer.buffer.Bytes(), err
 	}
+	if err := resolveDirectDuckDBHookTemplates(runCtx, pp.Pipeline, pp.Asset, renderer); err != nil {
+		return printer.buffer.Bytes(), err
+	}
 
 	mainExecutors := map[pipeline.AssetType]bruinexecutor.Config{}
 	if !isAPIAsset(pp.Asset) && !isLoadAsset(pp.Asset) {
@@ -220,6 +223,11 @@ func (e *HybridBruinExecutor) RunPipeline(ctx context.Context, req RunPipelineRe
 	renderer, err := buildDirectRunAssetRenderer(pp, timeWindow, runID)
 	if err != nil {
 		return printer.buffer.Bytes(), err
+	}
+	for _, asset := range foundPipeline.Assets {
+		if err := resolveDirectDuckDBHookTemplates(runCtx, foundPipeline, asset, renderer); err != nil {
+			return printer.buffer.Bytes(), err
+		}
 	}
 	mainExecutors, err := buildDirectMainExecutors(manager, renderer, parser, foundPipeline, e.runRegistry, e.duckDBCoordinator, e.workspaceRoot, req.FullRefresh, effectiveSensorMode(req.SensorMode, false))
 	if err != nil {

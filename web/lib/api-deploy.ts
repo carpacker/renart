@@ -13,6 +13,8 @@ export type SnapshotSummary = {
 
 export type DeployStatus = {
   has_snapshot: boolean;
+  executable: boolean;
+  integrity_error?: string;
   in_sync: boolean;
   version_id?: string;
   created_at?: string;

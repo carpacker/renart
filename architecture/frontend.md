@@ -91,7 +91,28 @@ not underscore-flattened route hacks.
   explicit code/split/canvas layout. A DAG that fits at the default zoom is
   horizontally centered on initial render, while a wider DAG keeps its layout
   origin so it remains predictable to pan. The explorer's asset filter searches
-  names, groups, paths, types, and connections.
+  names, groups, paths, types, and connections. Its pipeline action displays
+  and submits an exact source: `Run workspace` in ordinary environments, or
+  `Run deployed <id>` for the resolved immutable deployment in a
+  `deployed_only` environment. Deployment loading, lookup failure, and a
+  missing or corrupt required deployment disable the action rather than
+  guessing; corrupt in-sync deployments expose a repair action. Pipeline and
+  asset execution plus Deploy await every mounted editor's pending/in-flight
+  save, so the saved source named by the action includes visible Monaco edits.
+  Type-check does the same; transport/save failures remain visible in the bell
+  and results panel without erasing the last successful report. SQL assets and
+  query sensors also expose a read-only `Render` action after the same save
+  barrier. Its result tab separates compiled query from execution SQL, labels
+  render fidelity and redaction, and always identifies the saved source,
+  environment, interval, and `Preview — not executed` status.
+  Build freshness retains only the last successful response for the exact
+  environment/window selection. A transport failure disables the action as
+  **Freshness unavailable** instead of replacing unknown state with **Fresh**.
+  Structured `pipeline_run_active` conflicts retain the backend's active run ID
+  and link Build output, schedule actions, and rerun errors to that run. Build
+  materialization output and asset materialization status ignore late scheduler
+  events after `run.finished`, so a very fast worker cannot turn those finished
+  results back into queued.
 - [components/app/asset-editor.tsx](../web/components/app/asset-editor.tsx): the
   Monaco editor plus guided metadata cards
   ([asset-guided-cards.tsx](../web/components/app/asset-guided-cards.tsx)) and YAML
@@ -129,6 +150,23 @@ not underscore-flattened route hacks.
   Run details use semantic event badges, link current-workspace asset events
   back to the split Build view, and render timeline asset names in a dedicated
   wrapping column with tooltips so short duration bars never truncate identity.
+  Schedule rows use `Run pinned <id>` with the exact displayed pin; pinless rows
+  show `Needs deployment`, and rows with stored variable overrides are blocked
+  until the execution ledger can preserve those overrides truthfully. Schedule
+  creation explicitly chooses an existing executable deployment or deploys the
+  saved workspace and pins the result. The page reports whether this server is
+  the scheduler owner. Followers and unavailable instances keep schedules and
+  timelines readable but disable creation, pin changes,
+  pause/resume/archive/restore, and queued runs with an explanatory alert;
+  ownership is unknown and therefore fail-closed while the request loads. Run
+  details display the recorded source. Their rerun action names the source it
+  will execute and reuses environment/window only when the backend marks the
+  execution context resolved. Legacy or pre-execution-failed rows omit their
+  request-only environment/window so the backend resolves current defaults.
+  The context stays visible on compact layouts, the compact action still says
+  `with defaults`, and the accepted run opens immediately; it never claims that
+  unresolved modes, variables, authorization, or schedule-only context are
+  replayed.
 
 Project connection routes accept an environment/connection search target so
 pipeline default-connection links can open the exact editable connection sheet.
@@ -158,9 +196,9 @@ than hand-rolled `div` shells.
   and translates SQL completions, diagnostics, navigation, and highlighting
   back into the Python Monaco model.
 - [use-asset-results.ts](../web/hooks/use-asset-results.ts): inspect and materialize
-  flows, including API-asset full refresh.
+  flows, including API-asset full refresh and scheduler-run links.
 - [use-app-asset-materialization-status.ts](../web/hooks/use-app-asset-materialization-status.ts):
-  freshness / materialization enrichment.
+  freshness / materialization enrichment with a post-terminal event guard.
 - [use-pipeline-staleness.ts](../web/hooks/use-pipeline-staleness.ts),
   [use-pipeline-scheduler.ts](../web/hooks/use-pipeline-scheduler.ts),
   [use-pipeline-deploy.ts](../web/hooks/use-pipeline-deploy.ts),

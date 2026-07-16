@@ -21,14 +21,14 @@ func (w ExecutionTimeWindow) StartRFC3339() string {
 	if w.Start.IsZero() {
 		return ""
 	}
-	return w.Start.UTC().Format(time.RFC3339)
+	return w.Start.UTC().Format(time.RFC3339Nano)
 }
 
 func (w ExecutionTimeWindow) EndRFC3339() string {
 	if w.End.IsZero() {
 		return ""
 	}
-	return w.End.UTC().Format(time.RFC3339)
+	return w.End.UTC().Format(time.RFC3339Nano)
 }
 
 func ResolveExecutionTimeWindow(schedule, start, end string, now time.Time) (ExecutionTimeWindow, error) {

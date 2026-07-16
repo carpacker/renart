@@ -2,7 +2,7 @@
 
 import AnsiToHtml from "ansi-to-html";
 import { useAtom, useAtomValue, useSetAtom } from "jotai";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import {
   assetResultsAtom,
@@ -24,9 +24,11 @@ import {
   materializePipelineStream,
   triggerPipelineRun,
 } from "@/lib/api";
+import { activePipelineRunConflict, type PipelineRunSource } from "@/lib/api-scheduler";
 import { buildStalePipelineStream } from "@/lib/api-staleness";
 import type { StreamAssetEvent } from "@/lib/api-streams";
 import { MaterializeScope, labelForMaterializeScope } from "@/lib/materialize-scope";
+import { awaitWorkspaceSaves } from "@/lib/workspace-save-barrier";
 import { AssetInspectResponse, WebAsset } from "@/lib/types";
 
 let nextMaterializeHistoryId = 0;
@@ -140,6 +142,7 @@ export function useAssetResults() {
   const selectedAssetId = useAtomValue(resolvedSelectedAssetAtom);
   const selectedExecutionTimeWindow = useAtomValue(selectedExecutionTimeWindowAtom);
   const schedulerRunEvent = useAtomValue(schedulerRunEventAtom);
+  const finishedSchedulerRunIds = useRef(new Set<string>());
   const inspectAssets = useMemo(() => (asset ? [asset] : []), [asset]);
   const {
     inspectAssetById,
@@ -237,6 +240,16 @@ export function useAssetResults() {
 
   useEffect(() => {
     if (!schedulerRunEvent) {
+      return;
+    }
+
+    const eventRunId =
+      schedulerRunEvent.type === "run.log" || schedulerRunEvent.type === "run.step"
+        ? schedulerRunEvent.run.run_id
+        : schedulerRunEvent.run.id;
+    if (schedulerRunEvent.type === "run.finished") {
+      finishedSchedulerRunIds.current.add(eventRunId);
+    } else if (finishedSchedulerRunIds.current.has(eventRunId)) {
       return;
     }
 
@@ -408,6 +421,7 @@ export function useAssetResults() {
       }));
 
       try {
+        await awaitWorkspaceSaves();
         const result = await materializeAssetStream(
           assetId,
           {
@@ -528,11 +542,19 @@ export function useAssetResults() {
     async (
       pipelineId: string,
       refresh?: () => Promise<void> | void,
-      options?: { dryRun?: boolean; backfill?: boolean; confirmedEnvironment?: string },
+      options?: {
+        dryRun?: boolean;
+        fullRefresh?: boolean;
+        backfill?: boolean;
+        confirmedEnvironment?: string;
+        sensorMode?: "once" | "wait" | "skip";
+        source?: PipelineRunSource;
+      },
     ) => {
       const entryId = createMaterializeHistoryId();
       const startedAt = Date.now();
       const pipelineMaterializingIds = pipeline?.assets.map((current) => current.id) ?? [];
+      const entryTimeWindow = options?.dryRun ? null : selectedExecutionTimeWindow;
 
       setPipelineMaterializeLoading(true);
       if (!options?.dryRun) {
@@ -553,19 +575,25 @@ export function useAssetResults() {
           pipelineName: pipeline?.name ?? null,
           loading: true,
           createdAt: startedAt,
-          timeWindow: selectedExecutionTimeWindow,
+          timeWindow: entryTimeWindow,
         }),
       }));
 
       try {
+        await awaitWorkspaceSaves();
         if (!options?.dryRun) {
+          if (!options?.source) {
+            throw new Error("A pipeline run source is required.");
+          }
           const response = await triggerPipelineRun(pipelineId, {
+            ...options.source,
             environment: selectedEnvironment,
             start: selectedExecutionTimeWindow?.start,
             end: selectedExecutionTimeWindow?.end,
-            trigger: "manual",
+            full_refresh: options?.fullRefresh,
             backfill: options?.backfill,
             confirmed_environment: options?.confirmedEnvironment,
+            sensor_mode: options?.sensorMode,
           });
           const run = response.run;
           upsertMaterializeEntry(entryId, (previous) => ({
@@ -579,7 +607,7 @@ export function useAssetResults() {
                 runId: run.id,
                 loading: true,
                 createdAt: startedAt,
-                timeWindow: selectedExecutionTimeWindow,
+                timeWindow: entryTimeWindow,
               })),
             runId: run.id,
             output: "",
@@ -609,7 +637,7 @@ export function useAssetResults() {
                     pipelineName: pipeline?.name ?? null,
                     loading: true,
                     createdAt: startedAt,
-                    timeWindow: selectedExecutionTimeWindow,
+                    timeWindow: entryTimeWindow,
                   })),
                 output: (previous?.output ?? "") + chunk,
                 loading: true,
@@ -619,8 +647,9 @@ export function useAssetResults() {
           },
           {
             environment: selectedEnvironment,
+            // Deliberately omit timeWindow: the validation-only executor does
+            // not consume it, and the server rejects unsupported dry-run context.
             dryRun: options?.dryRun,
-            timeWindow: selectedExecutionTimeWindow ?? undefined,
           },
         );
 
@@ -638,7 +667,7 @@ export function useAssetResults() {
               pipelineName: pipeline?.name ?? null,
               loading: true,
               createdAt: startedAt,
-              timeWindow: selectedExecutionTimeWindow,
+              timeWindow: entryTimeWindow,
             })),
           output: result.output ?? previous?.output ?? "",
           status: result.status ?? "error",
@@ -661,6 +690,28 @@ export function useAssetResults() {
 
         return result;
       } catch (error) {
+        const conflict = activePipelineRunConflict(error);
+        if (conflict) {
+          upsertMaterializeEntry(entryId, (previous) => ({
+            ...(previous ??
+              createMaterializeEntry({
+                id: entryId,
+                kind: "pipeline",
+                label: pipeline?.name ? `Pipeline: ${pipeline.name}` : "Pipeline materialize",
+                pipelineId,
+                pipelineName: pipeline?.name ?? null,
+                createdAt: startedAt,
+                timeWindow: entryTimeWindow,
+              })),
+            runId: conflict.activeRunId,
+            output: `Run ${conflict.activeRunId} is already queued or running for this pipeline. Open the active run to follow its progress.`,
+            status: null,
+            error: "",
+            loading: false,
+            updatedAt: Date.now(),
+          }));
+          return null;
+        }
         upsertMaterializeEntry(entryId, (previous) => ({
           ...(previous ??
             createMaterializeEntry({
@@ -675,7 +726,7 @@ export function useAssetResults() {
               pipelineName: pipeline?.name ?? null,
               loading: true,
               createdAt: startedAt,
-              timeWindow: selectedExecutionTimeWindow,
+              timeWindow: entryTimeWindow,
             })),
           output: (previous?.output ?? "") + (previous?.output ? "\n" : "") + String(error),
           status: "error",
@@ -734,6 +785,7 @@ export function useAssetResults() {
       upsertMaterializeEntry(entryId, () => ({ ...baseEntry() }));
 
       try {
+        await awaitWorkspaceSaves();
         if (!selectedEnvironment) {
           throw new Error("Select an environment before building stale assets.");
         }

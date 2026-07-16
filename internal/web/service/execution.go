@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -14,10 +15,12 @@ import (
 	"github.com/bruin-data/bruin/pkg/config"
 	"github.com/bruin-data/bruin/pkg/pipeline"
 	"github.com/bruin-data/bruin/pkg/sqlparser"
+	"gopkg.in/yaml.v3"
 	"renart/internal/web/bus"
 	"renart/internal/web/identity"
 	"renart/internal/web/matlog"
 	"renart/internal/web/policy"
+	"renart/internal/web/runcontext"
 )
 
 type InspectResult struct {
@@ -467,6 +470,20 @@ func (s *ExecutionService) MaterializeAssetStream(ctx context.Context, assetID, 
 }
 
 func (s *ExecutionService) MaterializeAssetStreamWithSensorMode(ctx context.Context, assetID, environment, scope, startDate, endDate string, fullRefresh, backfill bool, confirmedEnvironment, sensorMode string, onChunk func([]byte)) MaterializeResult {
+	normalizedContext, contextErr := runcontext.Normalize(runcontext.Input{
+		Start:       startDate,
+		End:         endDate,
+		FullRefresh: fullRefresh,
+		Backfill:    backfill,
+		SensorMode:  sensorMode,
+	})
+	if contextErr != nil {
+		return MaterializeResult{Status: "error", Error: contextErr.Error(), ExitCode: 1}
+	}
+	startDate = normalizedContext.StartString()
+	endDate = normalizedContext.EndString()
+	sensorMode = normalizedContext.SensorMode
+
 	ctx, warnings := withExecutionWarnings(ctx)
 	environment = s.effectiveEnvironment(environment)
 	fullRefresh = s.effectiveFullRefresh(ctx, environment, fullRefresh)
@@ -475,19 +492,13 @@ func (s *ExecutionService) MaterializeAssetStreamWithSensorMode(ctx context.Cont
 		return MaterializeResult{Status: "error", Error: "invalid asset id", ExitCode: 1}
 	}
 
-	normalizedScope, scopeErr := normalizeMaterializeScope(scope)
+	normalizedScope, scopeErr := NormalizeMaterializeScope(scope)
 	if scopeErr != nil {
 		return MaterializeResult{Status: "error", Error: scopeErr.Error(), ExitCode: 1}
-	}
-	if fullRefresh && backfill {
-		return MaterializeResult{Status: "error", Error: "full refresh and backfill are mutually exclusive", ExitCode: 1}
 	}
 	if backfill {
 		if normalizedScope != MaterializeScopeAsset {
 			return MaterializeResult{Status: "error", Error: "backfill only supports a single asset", ExitCode: 1}
-		}
-		if strings.TrimSpace(startDate) == "" || strings.TrimSpace(endDate) == "" {
-			return MaterializeResult{Status: "error", Error: "backfill requires an explicit start and end", ExitCode: 1}
 		}
 		if s.deps.ResolveAssetByID == nil {
 			return MaterializeResult{Status: "error", Error: "asset resolution is not available for backfill", ExitCode: 1}
@@ -651,7 +662,9 @@ type materializeAssetScopeResult struct {
 	RefreshAssetIDs []string
 }
 
-func normalizeMaterializeScope(scope string) (MaterializeScope, error) {
+// NormalizeMaterializeScope validates an asset materialization selection and
+// supplies the one-asset default used by both HTTP and service callers.
+func NormalizeMaterializeScope(scope string) (MaterializeScope, error) {
 	trimmed := strings.TrimSpace(scope)
 	if trimmed == "" {
 		return MaterializeScopeAsset, nil
@@ -955,6 +968,7 @@ func (s *ExecutionService) MaterializePipelineStreamForRun(ctx context.Context, 
 		RunID:       runID,
 		PipelineID:  pipelineID,
 		Environment: environment,
+		Scheduled:   true,
 		DryRun:      dryRun,
 		FullRefresh: fullRefresh,
 		StartDate:   startDate,
@@ -966,9 +980,12 @@ func (s *ExecutionService) MaterializePipelineStreamForRun(ctx context.Context, 
 // the executor runs the materialized snapshot instead of the working tree;
 // PipelineID still identifies the pipeline for events and asset listing.
 type PipelineRunSpec struct {
-	RunID                string
-	PipelineID           string
-	Environment          string
+	RunID       string
+	PipelineID  string
+	Environment string
+	// Scheduled is derived from the server-owned run origin. A queued manual
+	// run also has a RunID, so RunID must not be used for this distinction.
+	Scheduled            bool
 	SensorMode           string
 	DryRun               bool
 	FullRefresh          bool
@@ -981,17 +998,46 @@ type PipelineRunSpec struct {
 	// ConfigPath points the executor at .bruin.yml when the target directory
 	// is outside the workspace git repository (snapshot runs).
 	ConfigPath string
+	// OnContextResolved persists the effective context after policy and source
+	// normalization but before the first asset starts. A scheduler-backed run
+	// uses it to make crash recovery preserve materialization semantics.
+	OnContextResolved func(ResolvedPipelineRunContext) error
+}
+
+type ResolvedPipelineRunContext struct {
+	Environment string
+	WinStart    time.Time
+	WinEnd      time.Time
+	FullRefresh bool
+	Backfill    bool
+	SensorMode  string
 }
 
 func (s *ExecutionService) MaterializePipelineRun(ctx context.Context, spec PipelineRunSpec, onChunk func([]byte), onAssetEvent func(ExecutionAssetEvent)) MaterializeResult {
+	contextInput := runcontext.Input{
+		Start:       spec.StartDate,
+		End:         spec.EndDate,
+		FullRefresh: spec.FullRefresh,
+		Backfill:    spec.Backfill,
+		SensorMode:  spec.SensorMode,
+	}
+	normalizedContext, contextErr := runcontext.Normalize(contextInput)
+	if contextErr != nil {
+		return MaterializeResult{Status: "error", Error: contextErr.Error(), ExitCode: 1}
+	}
+	if contextErr := runcontext.ValidateDryRun(spec.DryRun, contextInput); contextErr != nil {
+		return MaterializeResult{Status: "error", Error: contextErr.Error(), ExitCode: 1}
+	}
+	spec.StartDate = normalizedContext.StartString()
+	spec.EndDate = normalizedContext.EndString()
+	spec.SensorMode = normalizedContext.SensorMode
+
 	ctx, warnings := withExecutionWarnings(ctx)
 	spec.Environment = s.effectiveEnvironment(spec.Environment)
 	spec.FullRefresh = s.effectiveFullRefresh(ctx, spec.Environment, spec.FullRefresh)
-	// Build-mode pipeline runs have no scheduler run ID and execute the
-	// working tree; scheduler-dispatched runs carry both.
 	if err := s.checkRunPolicy(policy.RunRequest{
 		Environment:          spec.Environment,
-		Interactive:          spec.RunID == "" && spec.SnapshotDir == "",
+		Interactive:          !spec.Scheduled,
 		SnapshotBased:        spec.SnapshotDir != "",
 		Destructive:          !spec.DryRun && (spec.FullRefresh || spec.Backfill),
 		ConfirmedEnvironment: strings.TrimSpace(spec.ConfirmedEnvironment),
@@ -1006,13 +1052,29 @@ func (s *ExecutionService) MaterializePipelineRun(ctx context.Context, spec Pipe
 		target = spec.SnapshotDir
 	}
 
-	timeWindow, timeWindowErr := s.resolvePipelineExecutionTimeWindow(ctx, spec.PipelineID, spec.StartDate, spec.EndDate)
-	if timeWindowErr != nil {
-		return MaterializeResult{Status: "error", Error: timeWindowErr.Error(), ExitCode: 1}
+	timeWindow := ExecutionTimeWindow{}
+	if !spec.DryRun {
+		var timeWindowErr error
+		timeWindow, timeWindowErr = s.resolvePipelineExecutionTimeWindow(ctx, spec.PipelineID, spec.SnapshotDir, spec.StartDate, spec.EndDate)
+		if timeWindowErr != nil {
+			return MaterializeResult{Status: "error", Error: timeWindowErr.Error(), ExitCode: 1}
+		}
 	}
 	operation := withOperationTimeWindow(runOperation(target, spec.PipelineID, "", spec.Environment), timeWindow)
 	observed := newPipelineRunObservation(onAssetEvent)
-	sensorMode := effectiveSensorMode(spec.SensorMode, spec.RunID != "")
+	sensorMode := effectiveSensorMode(spec.SensorMode, spec.Scheduled)
+	if !spec.DryRun && spec.OnContextResolved != nil {
+		if err := spec.OnContextResolved(ResolvedPipelineRunContext{
+			Environment: spec.Environment,
+			WinStart:    timeWindow.Start,
+			WinEnd:      timeWindow.End,
+			FullRefresh: spec.FullRefresh,
+			Backfill:    spec.Backfill,
+			SensorMode:  sensorMode,
+		}); err != nil {
+			return MaterializeResult{Status: "error", Error: "persist resolved run context: " + err.Error(), ExitCode: 1}
+		}
+	}
 	output, runErr := s.deps.Executor.RunPipeline(ctx, RunPipelineRequest{
 		Target:      target,
 		Environment: spec.Environment,
@@ -1203,7 +1265,25 @@ func (s *ExecutionService) resolveAssetExecutionTimeWindow(ctx context.Context, 
 	return ResolveExecutionTimeWindow(schedule, startDate, endDate, time.Now().UTC())
 }
 
-func (s *ExecutionService) resolvePipelineExecutionTimeWindow(ctx context.Context, pipelineID, startDate, endDate string) (ExecutionTimeWindow, error) {
+func (s *ExecutionService) resolvePipelineExecutionTimeWindow(ctx context.Context, pipelineID, snapshotDir, startDate, endDate string) (ExecutionTimeWindow, error) {
+	// Explicit bounds are already the authoritative execution context. They do
+	// not depend on either source's pipeline schedule and must survive a pinned
+	// run unchanged.
+	if strings.TrimSpace(startDate) != "" || strings.TrimSpace(endDate) != "" {
+		return ResolveExecutionTimeWindow("", startDate, endDate, time.Now().UTC())
+	}
+
+	// A pinned run executes the pipeline materialized in SnapshotDir. Resolve
+	// its default interval from that same source rather than from a potentially
+	// newer working-tree pipeline.
+	if strings.TrimSpace(snapshotDir) != "" {
+		schedule, err := readPipelineSchedule(snapshotDir)
+		if err != nil {
+			return ExecutionTimeWindow{}, fmt.Errorf("resolve deployed pipeline execution window: %w", err)
+		}
+		return ResolveExecutionTimeWindow(string(schedule), "", "", time.Now().UTC())
+	}
+
 	if target, err := ResolvePipelineRunTarget(pipelineID); err == nil && s.deps.NewPipelineBuilder != nil {
 		absPipelinePath, joinErr := NewWorkspaceResolver(s.deps.WorkspaceRoot, nil).JoinPath(target)
 		if joinErr == nil {
@@ -1213,6 +1293,30 @@ func (s *ExecutionService) resolvePipelineExecutionTimeWindow(ctx context.Contex
 		}
 	}
 	return ResolveExecutionTimeWindow("", startDate, endDate, time.Now().UTC())
+}
+
+func readPipelineSchedule(pipelineDir string) (pipeline.Schedule, error) {
+	for _, definitionFile := range PipelineDefinitionFiles {
+		content, err := os.ReadFile(filepath.Join(pipelineDir, definitionFile))
+		if os.IsNotExist(err) {
+			continue
+		}
+		if err != nil {
+			return "", err
+		}
+
+		var definition struct {
+			Schedule pipeline.Schedule `yaml:"schedule"`
+		}
+		if err := yaml.Unmarshal(content, &definition); err != nil {
+			return "", err
+		}
+		if schedule := string(definition.Schedule); strings.Contains(schedule, "{{") || strings.Contains(schedule, "{%") {
+			return "", fmt.Errorf("templated deployed pipeline schedule requires an explicit execution window")
+		}
+		return definition.Schedule, nil
+	}
+	return "", fmt.Errorf("pipeline definition was not found")
 }
 
 func (s *ExecutionService) inspectPipelineMaterializations(ctx context.Context, parsed *pipeline.Pipeline, environment string) map[string]PipelineMaterializationInfo {

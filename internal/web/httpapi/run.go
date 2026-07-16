@@ -2,11 +2,11 @@ package httpapi
 
 import (
 	"context"
-	"encoding/json"
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
 	webapi "renart/internal/web/api"
+	"renart/internal/web/runcontext"
 	"renart/internal/web/service"
 )
 
@@ -23,11 +23,34 @@ func RegisterRunRoutes(router chi.Router, handlers *RunAPI) {
 }
 
 func (h *RunAPI) HandleRun(w http.ResponseWriter, r *http.Request) {
-	var req service.RunRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	req, err := decodeStrictJSONObject[service.RunRequest](r.Body)
+	if err != nil {
 		webapi.WriteBadRequest(w, "invalid_request_body", err.Error())
 		return
 	}
+	if req.AssetPath != "" && req.DryRun {
+		webapi.WriteBadRequest(w, "asset_dry_run_unsupported", "asset dry-run is not supported; use pipeline dry-run")
+		return
+	}
+	contextInput := runcontext.Input{
+		Start:       req.StartDate,
+		End:         req.EndDate,
+		FullRefresh: req.FullRefresh,
+		Backfill:    req.Backfill,
+		SensorMode:  req.SensorMode,
+	}
+	normalizedContext, err := runcontext.Normalize(contextInput)
+	if err != nil {
+		webapi.WriteBadRequest(w, "invalid_execution_context", err.Error())
+		return
+	}
+	if err := runcontext.ValidateDryRun(req.DryRun, contextInput); err != nil {
+		webapi.WriteBadRequest(w, "unsupported_dry_run_context", err.Error())
+		return
+	}
+	req.StartDate = normalizedContext.StartString()
+	req.EndDate = normalizedContext.EndString()
+	req.SensorMode = normalizedContext.SensorMode
 
 	result := h.Service.Execute(r.Context(), req)
 	webapi.WriteJSON(w, result.HTTPCode, map[string]any{

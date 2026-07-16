@@ -68,12 +68,65 @@ func TestRunClientMode(t *testing.T) {
 	}
 }
 
+func TestRunClientModeKeepsFullRefreshWindowOutOfBackfill(t *testing.T) {
+	root := t.TempDir()
+	mustWrite(t, root+"/.bruin.yml", "environments: {}\n")
+
+	var fullRefresh, backfill, startDate, endDate string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.URL.Path == "/api/health":
+			fmt.Fprintf(w, `{"status":"ok","version":"test","workspace_root":%q}`, root)
+		case r.URL.Path == "/api/workspace":
+			fmt.Fprint(w, `{
+				"pipelines": [{"id": "cGlwZQ", "name": "marts", "path": "marts", "assets": []}],
+				"connections": {}, "selected_environment": "default",
+				"errors": [], "updated_at": "2026-07-11T00:00:00Z", "metadata": {}
+			}`)
+		case strings.HasSuffix(r.URL.Path, "/materialize/stream"):
+			fullRefresh = r.URL.Query().Get("full_refresh")
+			backfill = r.URL.Query().Get("backfill")
+			startDate = r.URL.Query().Get("start_date")
+			endDate = r.URL.Query().Get("end_date")
+			w.Header().Set("Content-Type", "text/event-stream")
+			fmt.Fprint(w, "event: done\ndata: {\"status\":\"ok\",\"error\":\"\",\"exit_code\":0}\n\n")
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	if err := clientapi.WriteServerFile(root, clientapi.ServerFile{
+		PID: os.Getpid(), BaseURL: server.URL, APIBaseURL: server.URL + "/api",
+		WorkspaceRoot: root, Version: "test", StartedAt: time.Now(),
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	err := Root("test").Run(context.Background(), []string{
+		"renart", "run", "--workspace", root, "--quiet", "marts", "--full-refresh",
+		"--start-date", "2026-07-12T00:00:00Z", "--end-date", "2026-07-13T00:00:00Z",
+	})
+	if err != nil {
+		t.Fatalf("run failed: %v", err)
+	}
+	if fullRefresh != "true" {
+		t.Fatalf("expected full_refresh=true, got %q", fullRefresh)
+	}
+	if backfill != "" {
+		t.Fatalf("expected a windowed full refresh not to set backfill, got %q", backfill)
+	}
+	if startDate != "2026-07-12T00:00:00Z" || endDate != "2026-07-13T00:00:00Z" {
+		t.Fatalf("expected the full refresh window to be preserved, got %q - %q", startDate, endDate)
+	}
+}
+
 func TestRunClientModeRefreshesStaleUpstreamsBeforeAsset(t *testing.T) {
 	root := t.TempDir()
 	mustWrite(t, root+"/.bruin.yml", "environments: {}\n")
 
 	var postPaths []string
-	var upstreamOf, environment, refreshStart, refreshEnd string
+	var upstreamOf, environment, refreshStart, refreshEnd, materializeBackfill string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case r.URL.Path == "/api/health":
@@ -103,6 +156,7 @@ func TestRunClientModeRefreshesStaleUpstreamsBeforeAsset(t *testing.T) {
 			fmt.Fprint(w, "event: done\ndata: {\"status\":\"ok\",\"error\":\"\",\"exit_code\":0}\n\n")
 		case strings.HasSuffix(r.URL.Path, "/materialize/stream"):
 			postPaths = append(postPaths, r.URL.Path)
+			materializeBackfill = r.URL.Query().Get("backfill")
 			w.Header().Set("Content-Type", "text/event-stream")
 			fmt.Fprint(w, "event: done\ndata: {\"status\":\"ok\",\"error\":\"\",\"exit_code\":0}\n\n")
 		default:
@@ -141,6 +195,9 @@ func TestRunClientModeRefreshesStaleUpstreamsBeforeAsset(t *testing.T) {
 	}
 	if refreshStart != "2026-07-12T00:00:00Z" || refreshEnd != "2026-07-13T00:00:00Z" {
 		t.Fatalf("expected refresh window to match the asset run, got %q - %q", refreshStart, refreshEnd)
+	}
+	if materializeBackfill != "true" {
+		t.Fatalf("expected the ordinary explicit asset window to remain a backfill, got %q", materializeBackfill)
 	}
 }
 

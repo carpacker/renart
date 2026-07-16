@@ -50,7 +50,8 @@ func TestReplayRecoveredRunEmitsPersistedStepsAgainstPinnedSnapshot(t *testing.T
 		ID: "run-id", PipelineID: "encoded-path", Pipeline: "analytics",
 		Environment: "prod", Status: webscheduler.RunStatusFailed,
 		WinStart: &windowStart, WinEnd: &windowEnd, FinishedAt: &finishedAt,
-		SnapshotVersionID: deployed.VersionID,
+		SnapshotVersionID: deployed.VersionID, FullRefresh: true,
+		ExecutionContextResolved: true,
 	}, []webscheduler.PipelineRunStep{
 		{Asset: "analytics.finished", Status: webscheduler.RunStatusSuccess},
 		{Asset: "analytics.interrupted", Status: webscheduler.RunStatusFailed},
@@ -65,6 +66,7 @@ func TestReplayRecoveredRunEmitsPersistedStepsAgainstPinnedSnapshot(t *testing.T
 	assert.Equal(t, finishedAt, got.CompletedAt)
 	assert.Equal(t, &windowStart, got.WinStart)
 	assert.Equal(t, &windowEnd, got.WinEnd)
+	assert.True(t, got.FullRefresh)
 	assert.Equal(t, []bus.AssetRun{
 		{AssetID: identity.AssetID("pipeline-uuid", "analytics.finished"), AssetName: "analytics.finished", Status: "succeeded"},
 		{AssetID: identity.AssetID("pipeline-uuid", "analytics.interrupted"), AssetName: "analytics.interrupted", Status: "failed"},
@@ -79,4 +81,60 @@ func TestRecoveredAssetRunStatusIgnoresNonTerminalSteps(t *testing.T) {
 		assert.False(t, ok)
 		assert.Empty(t, mapped)
 	}
+}
+
+func TestReplayRecoveredRunSkipsSourceResolutionWithoutTerminalSteps(t *testing.T) {
+	t.Parallel()
+	events := bus.New()
+	emitted := false
+	events.OnRunCompleted(func(bus.RunCompleted) { emitted = true })
+	server := &webServer{eventBus: events}
+
+	err := server.replayRecoveredRun(context.Background(), webscheduler.PipelineRun{
+		ID: "pre-execution", SnapshotVersionID: "missing",
+	}, []webscheduler.PipelineRunStep{{Asset: "analytics.pending", Status: webscheduler.RunStatusRunning}})
+	require.NoError(t, err)
+	assert.False(t, emitted)
+}
+
+func TestReplayRecoveredRunSkipsUnresolvedContextWithTerminalSteps(t *testing.T) {
+	t.Parallel()
+	events := bus.New()
+	emitted := false
+	events.OnRunCompleted(func(bus.RunCompleted) { emitted = true })
+	server := &webServer{eventBus: events}
+
+	err := server.replayRecoveredRun(context.Background(), webscheduler.PipelineRun{
+		ID: "legacy-unresolved", SnapshotVersionID: "must-not-be-resolved",
+	}, []webscheduler.PipelineRunStep{{Asset: "analytics.finished", Status: webscheduler.RunStatusSuccess}})
+	require.NoError(t, err)
+	assert.False(t, emitted)
+}
+
+func TestReplayRecoveredRunRejectsCorruptPinnedSnapshotWithTerminalSteps(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	schedulerStore, err := webscheduler.OpenStore(filepath.Join(t.TempDir(), "state.db"))
+	require.NoError(t, err)
+	defer schedulerStore.Close()
+	pipelineDir := filepath.Join(t.TempDir(), "analytics")
+	require.NoError(t, os.MkdirAll(pipelineDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(pipelineDir, "pipeline.yml"), []byte("name: analytics\n"), 0o644))
+	snapshotStore := snapshot.NewStore(schedulerStore.DB())
+	deployed, _, err := snapshotStore.Deploy(ctx, "pipeline-uuid", pipelineDir, "test")
+	require.NoError(t, err)
+	hash := deployed.Manifest["pipeline.yml"]
+	_, err = schedulerStore.DB().ExecContext(ctx, `UPDATE renart_blobs SET content = ? WHERE hash = ?`, []byte("corrupt"), hash)
+	require.NoError(t, err)
+
+	events := bus.New()
+	emitted := false
+	events.OnRunCompleted(func(bus.RunCompleted) { emitted = true })
+	server := &webServer{snapshotStore: snapshotStore, eventBus: events}
+	err = server.replayRecoveredRun(ctx, webscheduler.PipelineRun{
+		ID: "corrupt-run", SnapshotVersionID: deployed.VersionID,
+		ExecutionContextResolved: true,
+	}, []webscheduler.PipelineRunStep{{Asset: "analytics.finished", Status: webscheduler.RunStatusSuccess}})
+	require.ErrorContains(t, err, "blob hash mismatch")
+	assert.False(t, emitted)
 }

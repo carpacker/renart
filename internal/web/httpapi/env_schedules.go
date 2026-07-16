@@ -2,7 +2,7 @@ package httpapi
 
 import (
 	"context"
-	"encoding/json"
+	"errors"
 	"net/http"
 	"strings"
 
@@ -14,6 +14,7 @@ import (
 // EnvScheduleHandlers is the per-environment schedule surface: schedule
 // identity is (pipeline, environment), with no implicit default.
 type EnvScheduleHandlers interface {
+	Ownership() scheduler.SchedulerOwnership
 	ListAllEnvSchedules(ctx context.Context) (live []scheduler.EnvSchedule, archived []scheduler.EnvSchedule, err error)
 	UpsertEnvSchedule(ctx context.Context, pipelineUUID string, req scheduler.UpsertEnvScheduleRequest) (scheduler.EnvSchedule, error)
 	SetEnvScheduleLifecycle(ctx context.Context, pipelineUUID, environment string, status scheduler.ScheduleStatus) error
@@ -56,6 +57,7 @@ func (h *EnvSchedulesAPI) HandleList(w http.ResponseWriter, r *http.Request) {
 	}
 	webapi.WriteJSON(w, http.StatusOK, map[string]any{
 		"status":    "ok",
+		"scheduler": h.Service.Ownership(),
 		"schedules": live,
 		"archived":  archived,
 	})
@@ -66,15 +68,15 @@ func (h *EnvSchedulesAPI) HandleUpsert(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	var req scheduler.UpsertEnvScheduleRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	req, err := decodeStrictJSONObject[scheduler.UpsertEnvScheduleRequest](r.Body)
+	if err != nil {
 		webapi.WriteBadRequest(w, "invalid_request_body", err.Error())
 		return
 	}
 	req.Environment = environment
 	updated, err := h.Service.UpsertEnvSchedule(r.Context(), pipelineUUID, req)
 	if err != nil {
-		webapi.WriteBadRequest(w, "env_schedule_upsert_failed", err.Error())
+		writeEnvScheduleMutationError(w, "env_schedule_upsert_failed", err)
 		return
 	}
 	webapi.WriteJSON(w, http.StatusOK, map[string]any{"status": "ok", "schedule": updated})
@@ -85,15 +87,16 @@ func (h *EnvSchedulesAPI) HandleSetStatus(w http.ResponseWriter, r *http.Request
 	if !ok {
 		return
 	}
-	var req struct {
+	type statusRequest struct {
 		Status string `json:"status"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	req, err := decodeStrictJSONObject[statusRequest](r.Body)
+	if err != nil {
 		webapi.WriteBadRequest(w, "invalid_request_body", err.Error())
 		return
 	}
 	if err := h.Service.SetEnvScheduleLifecycle(r.Context(), pipelineUUID, environment, scheduler.ScheduleStatus(req.Status)); err != nil {
-		webapi.WriteBadRequest(w, "env_schedule_status_failed", err.Error())
+		writeEnvScheduleMutationError(w, "env_schedule_status_failed", err)
 		return
 	}
 	webapi.WriteJSON(w, http.StatusOK, map[string]any{"status": "ok"})
@@ -105,8 +108,16 @@ func (h *EnvSchedulesAPI) HandleArchive(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	if err := h.Service.ArchiveEnvSchedule(r.Context(), pipelineUUID, environment); err != nil {
-		webapi.WriteBadRequest(w, "env_schedule_archive_failed", err.Error())
+		writeEnvScheduleMutationError(w, "env_schedule_archive_failed", err)
 		return
 	}
 	webapi.WriteJSON(w, http.StatusOK, map[string]any{"status": "ok"})
+}
+
+func writeEnvScheduleMutationError(w http.ResponseWriter, fallbackCode string, err error) {
+	if errors.Is(err, scheduler.ErrSchedulerNotOwner) {
+		webapi.WriteConflict(w, "scheduler_not_owner", err.Error())
+		return
+	}
+	webapi.WriteBadRequest(w, fallbackCode, err.Error())
 }

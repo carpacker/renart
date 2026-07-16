@@ -33,9 +33,7 @@ function AppPipelineLayoutRoute() {
       selectedAssetId={allParams.assetId}
       resultTab={search.result ?? "inspect"}
       editorMode={search.editor ?? "asset"}
-      variant={search.variant ?? "default"}
       onResultTabChange={(result) => updateSearch({ result })}
-      onVariantChange={(variant) => updateSearch({ variant })}
       onAssetSelect={(assetId) =>
         navigate({
           to: appAssetViewPath(allParams.assetId ? currentView : "split"),

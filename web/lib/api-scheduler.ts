@@ -1,4 +1,4 @@
-import { fetchJSON, fetchJSONWithBody } from "@/lib/api-core";
+import { APIError, fetchJSON, fetchJSONWithBody } from "@/lib/api-core";
 import type {
   PipelineRun,
   PipelineSchedule,
@@ -29,17 +29,47 @@ export async function updatePipelineSchedule(
   );
 }
 
-export async function triggerPipelineRun(
-  pipelineId: string,
-  input: {
-    environment?: string;
-    start?: string;
-    end?: string;
-    trigger?: string;
-    backfill?: boolean;
-    confirmed_environment?: string;
-  } = {},
-) {
+export type PipelineRunSource =
+  | { source: "working_tree"; snapshot_version_id?: never }
+  | { source: "snapshot"; snapshot_version_id: string };
+
+export type TriggerPipelineRunInput = PipelineRunSource & {
+  environment?: string;
+  start?: string;
+  end?: string;
+  full_refresh?: boolean;
+  backfill?: boolean;
+  confirmed_environment?: string;
+  sensor_mode?: "once" | "wait" | "skip";
+};
+
+export type ActivePipelineRunConflict = {
+  pipelineId: string;
+  activeRunId: string;
+};
+
+export function activePipelineRunConflict(error: unknown): ActivePipelineRunConflict | null {
+  if (
+    !(error instanceof APIError) ||
+    error.status !== 409 ||
+    error.code !== "pipeline_run_active"
+  ) {
+    return null;
+  }
+  if (!error.details || typeof error.details !== "object") {
+    return null;
+  }
+  const details = error.details as Record<string, unknown>;
+  if (typeof details.pipeline_id !== "string" || typeof details.active_run_id !== "string") {
+    return null;
+  }
+  return {
+    pipelineId: details.pipeline_id,
+    activeRunId: details.active_run_id,
+  };
+}
+
+export async function triggerPipelineRun(pipelineId: string, input: TriggerPipelineRunInput) {
   return fetchJSONWithBody<TriggerPipelineResponse>(
     `/api/pipelines/${pipelineId}/trigger`,
     "POST",

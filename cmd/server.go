@@ -141,6 +141,16 @@ func serverConfigFromCommand(c *cli.Command) (serverConfig, error) {
 // stops when ctx is cancelled.
 func newWebServer(ctx context.Context, cfg serverConfig, logger *zap.Logger) (*webServer, func(), error) {
 	absRoot := cfg.workspaceRoot
+	serverLease, err := acquireRuntimeWorkspaceLease(ctx, cfg)
+	if err != nil {
+		return nil, nil, err
+	}
+	releaseLeaseOnError := serverLease != nil
+	defer func() {
+		if releaseLeaseOnError {
+			_ = serverLease.Close()
+		}
+	}()
 
 	// Every served workspace gets a stable identity; the health endpoint and
 	// discovery file report it so CLI clients can address the right project.
@@ -271,9 +281,11 @@ func newWebServer(ctx context.Context, cfg serverConfig, logger *zap.Logger) (*w
 	server.jinjaRenderSvc = service.NewJinjaRenderService(service.JinjaRenderDependencies{
 		ResolveAssetByID: server.resolveAssetByID,
 	})
+	server.assetRenderSvc = service.NewAssetRenderService(absRoot)
 
 	server.runSvc = service.NewRunService(service.RunDependencies{
 		Executor:            server.executor,
+		WorkspaceRoot:       absRoot,
 		ConfigPath:          resolveConfigFilePath(absRoot),
 		PolicyFor:           server.policyLoader.For,
 		SelectedEnvironment: func() string { return server.currentState().SelectedEnvironment },
@@ -359,19 +371,44 @@ func newWebServer(ctx context.Context, cfg serverConfig, logger *zap.Logger) (*w
 			}
 			return "", fmt.Errorf("pipeline %s not found in workspace", pipelineUUID)
 		},
+		LatestSnapshot: func(ctx context.Context, pipelineUUID string) (string, bool, error) {
+			latest, err := server.snapshotStore.Latest(ctx, pipelineUUID)
+			if err != nil || latest == nil {
+				return "", false, err
+			}
+			return latest.VersionID, true, nil
+		},
+		ValidateSnapshot: func(ctx context.Context, pipelineUUID, versionID string) error {
+			_, err := server.snapshotStore.Validate(ctx, versionID, pipelineUUID)
+			return err
+		},
+		CheckSnapshot: func(ctx context.Context, pipelineUUID, versionID string) error {
+			_, err := server.snapshotStore.Validate(ctx, versionID, pipelineUUID)
+			return err
+		},
 		RecoverRun: server.replayRecoveredRun,
 		Runner: func(ctx context.Context, req webscheduler.RunRequest, onLog func(string)) webscheduler.RunResult {
-			spec := service.PipelineRunSpec{
-				RunID:             req.RunID,
-				PipelineID:        req.PipelineID,
-				Environment:       req.Environment,
-				StartDate:         req.Start,
-				EndDate:           req.End,
-				SnapshotVersionID: req.SnapshotVersionID,
+			spec := pipelineRunSpecFromSchedulerRequest(req)
+			spec.OnContextResolved = func(resolved service.ResolvedPipelineRunContext) error {
+				if req.OnContextResolved == nil {
+					return fmt.Errorf("scheduler run %s cannot persist resolved execution context", req.RunID)
+				}
+				return req.OnContextResolved(webscheduler.RunExecutionContext{
+					Environment: resolved.Environment,
+					WinStart:    resolved.WinStart,
+					WinEnd:      resolved.WinEnd,
+					FullRefresh: resolved.FullRefresh,
+					Backfill:    resolved.Backfill,
+					SensorMode:  resolved.SensorMode,
+				})
 			}
-			// Scheduled runs execute the schedule's pinned snapshot (or the
-			// latest deployed one); build mode keeps running the working tree.
-			cleanupSnapshot := server.resolveScheduledRunSnapshot(ctx, &spec, onLog)
+			cleanupSnapshot, err := server.resolveRunSnapshot(ctx, &spec, req.Scheduled, onLog)
+			if err != nil {
+				if onLog != nil {
+					onLog("failed to prepare run source: " + err.Error() + "\n")
+				}
+				return webscheduler.RunResult{Status: "error", Error: err.Error()}
+			}
 			defer cleanupSnapshot()
 
 			result := server.executionSvc.MaterializePipelineRun(ctx, spec, func(chunk []byte) {
@@ -459,9 +496,29 @@ func newWebServer(ctx context.Context, cfg serverConfig, logger *zap.Logger) (*w
 	cleanup := func() {
 		server.schedulerSvc.Stop()
 		server.schedulerStore.Close()
+		if serverLease != nil {
+			_ = serverLease.Close()
+		}
 	}
 
+	releaseLeaseOnError = false
 	return server, cleanup, nil
+}
+
+func pipelineRunSpecFromSchedulerRequest(req webscheduler.RunRequest) service.PipelineRunSpec {
+	return service.PipelineRunSpec{
+		RunID:                req.RunID,
+		PipelineID:           req.PipelineID,
+		Environment:          req.Environment,
+		Scheduled:            req.Scheduled,
+		FullRefresh:          req.FullRefresh,
+		Backfill:             req.Backfill,
+		StartDate:            req.Start,
+		EndDate:              req.End,
+		ConfirmedEnvironment: req.ConfirmedEnvironment,
+		SensorMode:           req.SensorMode,
+		SnapshotVersionID:    req.SnapshotVersionID,
+	}
 }
 
 // buildRouter assembles the chi router with the standard middleware stack

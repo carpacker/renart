@@ -1,8 +1,14 @@
-import { expect, type APIRequestContext } from "@playwright/test";
+import { expect, request as apiRequest, type APIRequestContext } from "@playwright/test";
 import { appendFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
-import { liveTest as test, type LiveApp } from "../live-app-fixture";
+import {
+  liveTest as test,
+  startLiveServer,
+  stopLiveServer,
+  type LiveApp,
+  type SpawnedServer,
+} from "../live-app-fixture";
 
 type ScheduleResponse = {
   status: "ok" | "error";
@@ -16,7 +22,18 @@ type TriggerResponse = {
 
 type RunDetailResponse = {
   status: "ok" | "error";
-  run: { id: string; status: string; pipeline: string; error?: string };
+  run: {
+    id: string;
+    pipeline_id: string;
+    status: string;
+    pipeline: string;
+    environment: string;
+    error?: string;
+    win_start?: string;
+    win_end?: string;
+    snapshot_version_id?: string;
+    execution_context_resolved?: boolean;
+  };
   logs?: Array<{ at: string; line: string }>;
   steps?: Array<{ asset: string; status: string }>;
 };
@@ -32,10 +49,100 @@ test.describe("app scheduler pages live", () => {
     await expect(page.getByRole("heading", { name: "Schedules" })).toBeVisible();
     await expect(page.getByText("analytics", { exact: true })).toBeVisible({ timeout: 15000 });
     await expect(page.getByText("daily", { exact: true })).toBeVisible();
-    // The catchup column renders the policy itself (here "skip", from the
-    // fixture's default), not a generic "Catch up" label.
-    await expect(page.getByText("skip", { exact: true })).toBeVisible();
-    await expect(page.getByRole("button", { name: "Run" }).first()).toBeVisible();
+    await expect(page.getByTestId("schedule-run-window-context")).toContainText(
+      "skip · runtime window from pinned pipeline",
+    );
+    await expect(page.getByText("Needs deployment", { exact: true }).first()).toBeVisible();
+    await expect(page.getByRole("button", { name: "Deploy & pin" }).first()).toBeVisible();
+  });
+
+  test("surfaces run list and run-detail transport failures", async ({ liveApp, page }) => {
+    await page.route("**/api/runs**", async (route) => {
+      const pathname = new URL(route.request().url()).pathname;
+      if (pathname === "/api/runs" || pathname === "/api/runs/unavailable-run") {
+        await route.fulfill({
+          status: 503,
+          contentType: "application/json",
+          body: JSON.stringify({ error: { message: "scheduler store unavailable" } }),
+        });
+        return;
+      }
+      await route.fallback();
+    });
+
+    await page.goto(`${liveApp.baseURL}/runs`);
+    await expect(page.getByRole("alert")).toContainText("Runs could not be refreshed");
+    await expect(page.getByRole("button", { name: "Retry" })).toBeVisible();
+
+    await page.goto(`${liveApp.baseURL}/runs/unavailable-run`);
+    await expect(page.getByRole("alert")).toContainText("Run details unavailable");
+    await expect(page.getByText("Loading run details", { exact: true })).toHaveCount(0);
+  });
+
+  test("makes a follower server visibly read-only before any schedule write", async ({
+    liveApp,
+    page,
+    request,
+  }) => {
+    test.setTimeout(60000);
+    let follower: SpawnedServer | null = null;
+    const followerRequest = await apiRequest.newContext();
+    try {
+      follower = await startLiveServer(liveApp.workspaceDir);
+
+      const ownerStatus = await request.get(`${liveApp.baseURL}/api/env-schedules`);
+      expect(ownerStatus.ok()).toBe(true);
+      expect((await ownerStatus.json()).scheduler.state).toBe("owner");
+
+      const followerStatus = await followerRequest.get(`${follower.baseURL}/api/env-schedules`);
+      expect(followerStatus.ok()).toBe(true);
+      expect((await followerStatus.json()).scheduler.state).toBe("follower");
+
+      const rejected = await followerRequest.put(
+        `${follower.baseURL}/api/pipelines/${analyticsPipelineId}/env-schedules/follower-attempt`,
+        {
+          data: {
+            cron: "@daily",
+            timezone: "UTC",
+            snapshot_version_id: "must-not-be-validated-or-written",
+          },
+        },
+      );
+      expect(rejected.status()).toBe(409);
+      expect((await rejected.json()).error.code).toBe("scheduler_not_owner");
+
+      const rejectedLegacy = await followerRequest.put(
+        `${follower.baseURL}/api/pipelines/${analyticsPipelineId}/schedule`,
+        {
+          data: {
+            enabled: true,
+            schedule: "15 3 * * *",
+            timezone: "UTC",
+            catchup: false,
+          },
+        },
+      );
+      expect(rejectedLegacy.status()).toBe(409);
+      expect((await rejectedLegacy.json()).error.code).toBe("scheduler_not_owner");
+
+      const after = await request.get(`${liveApp.baseURL}/api/env-schedules`);
+      expect(after.ok()).toBe(true);
+      expect(
+        ((await after.json()).schedules as Array<{ environment: string }>).some(
+          (schedule) => schedule.environment === "follower-attempt",
+        ),
+      ).toBe(false);
+
+      await page.goto(`${follower.baseURL}/schedules`);
+      await expect(
+        page.getByText("Schedules are managed by another Renart process", { exact: true }),
+      ).toBeVisible();
+      await expect(page.getByRole("button", { name: "New schedule" })).toBeDisabled();
+      await expect(page.getByText("Read-only", { exact: true })).toBeVisible();
+    } finally {
+      await followerRequest.dispose();
+      if (follower) await stopLiveServer(follower);
+    }
   });
 
   test("shows and updates a schedule pinned to an older deployment", async ({
@@ -79,6 +186,35 @@ test.describe("app scheduler pages live", () => {
     await olderBadge.hover();
     await expect(page.getByText(/Data freshness is tracked separately/)).toBeVisible();
 
+    const pinnedRunRequest = page.waitForRequest(
+      (request) =>
+        request.url().endsWith(`/api/pipelines/${analyticsPipelineId}/trigger`) &&
+        request.method() === "POST",
+    );
+    await page.route(`**/api/pipelines/${analyticsPipelineId}/trigger`, async (route) => {
+      await route.fulfill({
+        status: 202,
+        contentType: "application/json",
+        body: JSON.stringify({
+          status: "ok",
+          run: {
+            id: "pinned-ui-check",
+            pipeline_id: analyticsPipelineId,
+            environment: "default",
+            trigger: "manual",
+            status: "queued",
+          },
+        }),
+      });
+    });
+    await page.getByRole("button", { name: `Run pinned ${pinnedVersion.slice(0, 8)}` }).click();
+    expect((await pinnedRunRequest).postDataJSON()).toMatchObject({
+      source: "snapshot",
+      snapshot_version_id: pinnedVersion,
+      environment: "default",
+    });
+    await page.unroute(`**/api/pipelines/${analyticsPipelineId}/trigger`);
+
     const updateResponse = page.waitForResponse(
       (response) =>
         response.url().includes(`/api/pipelines/${analyticsPipelineId}/env-schedules/default`) &&
@@ -106,6 +242,56 @@ test.describe("app scheduler pages live", () => {
     await expect(olderBadge).toBeHidden({ timeout: 15000 });
   });
 
+  test("blocks a corrupt latest pin and offers repair", async ({ liveApp, page, request }) => {
+    const pinResponse = await request.put(
+      `${liveApp.baseURL}/api/pipelines/${analyticsPipelineId}/env-schedules/default`,
+      {
+        data: {
+          cron: "0 0 * * *",
+          timezone: "UTC",
+          catchup_policy: "skip",
+          deploy_now: true,
+        },
+      },
+    );
+    expect(pinResponse.ok()).toBe(true);
+    const pinnedVersion = (
+      (await pinResponse.json()) as { schedule: { snapshot_version_id: string } }
+    ).schedule.snapshot_version_id;
+
+    await page.route("**/api/pipelines/**/deploy/status", async (route) => {
+      const pathname = new URL(route.request().url()).pathname;
+      if (pathname === `/api/pipelines/${analyticsPipelineId}/deploy/status`) {
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({
+            has_snapshot: true,
+            executable: false,
+            integrity_error: "snapshot blob is missing",
+            in_sync: false,
+            version_id: pinnedVersion,
+            snapshot_count: 1,
+          }),
+        });
+        return;
+      }
+      await route.fallback();
+    });
+
+    await page.goto(`${liveApp.baseURL}/schedules`);
+    await expect(page.getByText("Deployment needs repair", { exact: true })).toBeVisible({
+      timeout: 15000,
+    });
+    await expect(page.getByRole("button", { name: "Repair & pin" })).toBeEnabled();
+    await expect(
+      page.getByRole("button", { name: `Run pinned ${pinnedVersion.slice(0, 8)}` }),
+    ).toBeDisabled();
+    await expect(page.getByTestId("schedule-run-window-context")).toContainText(
+      "runtime window from pinned pipeline",
+    );
+  });
+
   test("shows triggered runs in the runs list", async ({ liveApp, page, request }) => {
     const runId = await triggerPipelineRun(liveApp, request);
 
@@ -114,6 +300,139 @@ test.describe("app scheduler pages live", () => {
     await expect(page.getByRole("heading", { name: "Runs" })).toBeVisible();
     await expect(page.getByText(runId, { exact: true })).toBeVisible({ timeout: 15000 });
     await expect(page.getByText("analytics", { exact: true }).first()).toBeVisible();
+  });
+
+  test("reruns a non-default original with visibly labeled defaults", async ({
+    liveApp,
+    page,
+    request,
+  }) => {
+    const runId = await triggerPipelineRun(liveApp, request, {
+      start: "2026-07-15T00:00:00Z",
+      end: "2026-07-16T00:00:00Z",
+      sensor_mode: "skip",
+    });
+    const original = await waitForRunDetail(
+      liveApp,
+      request,
+      runId,
+      (detail) => detail.run.execution_context_resolved === true,
+    );
+    expect(original.run.execution_context_resolved).toBe(true);
+    expect(original.run.win_start).toBeTruthy();
+    expect(original.run.win_end).toBeTruthy();
+    const acceptedRun = {
+      id: "default-mode-rerun",
+      pipeline_id: analyticsPipelineId,
+      pipeline: original.run.pipeline,
+      environment: original.run.environment,
+      trigger: "manual",
+      status: "queued",
+    };
+
+    await page.route(`**/api/pipelines/${analyticsPipelineId}/trigger`, async (route) => {
+      await route.fulfill({
+        status: 202,
+        contentType: "application/json",
+        body: JSON.stringify({ status: "ok", run: acceptedRun }),
+      });
+    });
+    await page.route("**/api/runs/default-mode-rerun", async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({ status: "ok", run: acceptedRun, logs: [], steps: [] }),
+      });
+    });
+
+    await page.goto(`${liveApp.baseURL}/runs/${runId}`);
+    const context = page.getByTestId("run-again-context");
+    await expect(context).toBeVisible();
+    await expect(context).toContainText("Rerun source current saved workspace");
+    await expect(context).toContainText("Environment default");
+    await expect(context).toContainText("Recorded window");
+    await expect(context).not.toContainText("no recorded window");
+    await expect(context).toContainText("Mode default execution");
+
+    const rerunRequest = page.waitForRequest(
+      (candidate) =>
+        candidate.url().endsWith(`/api/pipelines/${analyticsPipelineId}/trigger`) &&
+        candidate.method() === "POST",
+    );
+    await page.getByRole("button", { name: "Run current workspace with defaults" }).click();
+    expect((await rerunRequest).postDataJSON()).toEqual({
+      source: "working_tree",
+      environment: original.run.environment,
+      start: original.run.win_start,
+      end: original.run.win_end,
+    });
+
+    await expect(page).toHaveURL(new RegExp("/runs/default-mode-rerun$"));
+    await expect(page.getByRole("heading", { name: "Run default-mode-rerun" })).toBeVisible();
+  });
+
+  test("omits unresolved legacy environment and window from a rerun", async ({ liveApp, page }) => {
+    await page.setViewportSize({ width: 900, height: 800 });
+    const unresolvedRun = {
+      id: "legacy-unresolved-context",
+      pipeline_id: analyticsPipelineId,
+      pipeline: "analytics",
+      environment: "request-only-environment",
+      trigger: "manual",
+      status: "failed",
+      win_start: "2026-07-15T00:00:00Z",
+      win_end: "2026-07-16T00:00:00Z",
+      execution_context_resolved: false,
+    };
+    const acceptedRun = {
+      id: "legacy-default-rerun",
+      pipeline_id: analyticsPipelineId,
+      pipeline: "analytics",
+      environment: "",
+      trigger: "manual",
+      status: "queued",
+      execution_context_resolved: false,
+    };
+    await page.route("**/api/runs/legacy-unresolved-context", async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({ status: "ok", run: unresolvedRun, logs: [], steps: [] }),
+      });
+    });
+    await page.route(`**/api/pipelines/${analyticsPipelineId}/trigger`, async (route) => {
+      await route.fulfill({
+        status: 202,
+        contentType: "application/json",
+        body: JSON.stringify({ status: "ok", run: acceptedRun }),
+      });
+    });
+    await page.route("**/api/runs/legacy-default-rerun", async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({ status: "ok", run: acceptedRun, logs: [], steps: [] }),
+      });
+    });
+
+    await page.goto(`${liveApp.baseURL}/runs/legacy-unresolved-context`);
+    const context = page.getByTestId("run-again-context");
+    await expect(context).toContainText("Environment current default resolved at start");
+    await expect(context).toContainText("current pipeline default resolved at start");
+    await expect(page.getByText(/execution context unavailable/)).toBeVisible();
+    const rerunButton = page.getByRole("button", {
+      name: "Run current workspace with defaults",
+    });
+    await expect(rerunButton).toContainText("Run with defaults");
+
+    const rerunRequest = page.waitForRequest(
+      (candidate) =>
+        candidate.url().endsWith(`/api/pipelines/${analyticsPipelineId}/trigger`) &&
+        candidate.method() === "POST",
+    );
+    await rerunButton.click();
+    expect((await rerunRequest).postDataJSON()).toEqual({ source: "working_tree" });
+    await expect(page).toHaveURL(new RegExp("/runs/legacy-default-rerun$"));
   });
 
   test("opens a run with structured events and one combined output stream", async ({
@@ -138,6 +457,9 @@ test.describe("app scheduler pages live", () => {
       timeout: 15000,
     });
     await expect(page.getByText(/Run of analytics/)).toBeVisible();
+    await expect(page.getByTestId("run-again-context")).toContainText("default");
+    await expect(page.getByTestId("run-again-context")).toContainText("Recorded window");
+    await expect(page.getByTestId("run-again-context")).toContainText("Mode default execution");
     await expect(page.getByRole("tab", { name: "Events" })).toBeVisible();
     const outputTab = page.getByRole("tab", { name: "Output" });
     await expect(outputTab).toBeVisible();
@@ -250,7 +572,11 @@ select 1 as id
   });
 });
 
-async function triggerPipelineRun(liveApp: LiveApp, request: APIRequestContext) {
+async function triggerPipelineRun(
+  liveApp: LiveApp,
+  request: APIRequestContext,
+  input: { start?: string; end?: string; sensor_mode?: "once" | "wait" | "skip" } = {},
+) {
   const scheduleResponse = await request.get(`${liveApp.baseURL}/api/schedules`);
   expect(scheduleResponse.ok()).toBe(true);
   const schedules = (await scheduleResponse.json()) as ScheduleResponse;
@@ -262,7 +588,7 @@ async function triggerPipelineRun(liveApp: LiveApp, request: APIRequestContext) 
   const triggerResponse = await request.post(
     `${liveApp.baseURL}/api/pipelines/${encodeURIComponent(pipeline.pipeline_id)}/trigger`,
     {
-      data: { trigger: "manual" },
+      data: { source: "working_tree", ...input },
     },
   );
   expect(triggerResponse.ok()).toBe(true);

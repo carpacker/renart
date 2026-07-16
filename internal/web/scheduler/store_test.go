@@ -2,8 +2,12 @@ package scheduler
 
 import (
 	"context"
+	"database/sql"
+	"fmt"
 	"io/fs"
+	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
@@ -14,6 +18,190 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func TestStorePersistsAndValidatesVersionedRunSpec(t *testing.T) {
+	t.Parallel()
+	store, err := OpenStore(filepath.Join(t.TempDir(), "state.db"))
+	require.NoError(t, err)
+	defer store.Close()
+
+	start := time.Date(2026, 7, 16, 8, 0, 0, 123456789, time.UTC)
+	end := start.Add(time.Hour)
+	run := PipelineRun{
+		ID: "spec-run", PipelineID: "pipeline-id", Pipeline: "analytics",
+		Environment: "prod", Trigger: RunTriggerManual, Status: RunStatusQueued,
+		WinStart: &start, WinEnd: &end, SnapshotVersionID: "snapshot-id",
+		FullRefresh: true, SensorMode: "skip",
+	}
+	spec := manualRunSpec(run, RunSourceSnapshot, "prod")
+	runID, err := store.CreateWithSpec(context.Background(), run, spec)
+	require.NoError(t, err)
+	assert.Equal(t, run.ID, runID)
+
+	persisted, found, err := store.GetRunSpec(context.Background(), runID)
+	require.NoError(t, err)
+	require.True(t, found)
+	assert.Equal(t, spec, persisted)
+
+	_, err = store.db.Exec(`UPDATE pipeline_run_specs SET version = 2, body = json_set(body, '$.version', 2) WHERE run_id = ?`, runID)
+	require.NoError(t, err)
+	_, found, err = store.GetRunSpec(context.Background(), runID)
+	require.True(t, found)
+	require.ErrorContains(t, err, "unsupported run spec version 2")
+
+	_, err = store.db.Exec(`UPDATE pipeline_run_specs SET version = 1, body = json_set(body, '$.version', 1, '$.future_behavior', true) WHERE run_id = ?`, runID)
+	require.NoError(t, err)
+	_, found, err = store.GetRunSpec(context.Background(), runID)
+	require.True(t, found)
+	require.ErrorContains(t, err, "unknown field")
+}
+
+func TestStoreEnforcesOneAtomicActiveRunPerPipeline(t *testing.T) {
+	t.Parallel()
+	store, err := OpenStore(filepath.Join(t.TempDir(), "state.db"))
+	require.NoError(t, err)
+	defer store.Close()
+
+	const attempts = 8
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+	accepted := make(chan string, attempts)
+	rejected := make(chan error, attempts)
+	for index := 0; index < attempts; index++ {
+		wg.Add(1)
+		go func(index int) {
+			defer wg.Done()
+			<-start
+			id, err := store.Create(context.Background(), PipelineRun{
+				ID: fmt.Sprintf("run-%d", index), PipelineID: "pipeline-id", Pipeline: "analytics",
+				Trigger: RunTriggerManual, Status: RunStatusQueued,
+			})
+			if err != nil {
+				rejected <- err
+				return
+			}
+			accepted <- id
+		}(index)
+	}
+	close(start)
+	wg.Wait()
+	close(accepted)
+	close(rejected)
+
+	acceptedIDs := make([]string, 0, 1)
+	for id := range accepted {
+		acceptedIDs = append(acceptedIDs, id)
+	}
+	require.Len(t, acceptedIDs, 1)
+	for err := range rejected {
+		assert.ErrorIs(t, err, ErrPipelineRunActive)
+		var conflict *PipelineRunActiveError
+		require.ErrorAs(t, err, &conflict)
+		assert.Equal(t, acceptedIDs[0], conflict.ActiveRunID)
+	}
+
+	otherID, err := store.Create(context.Background(), PipelineRun{
+		ID: "other-run", PipelineID: "other-pipeline", Pipeline: "marketing",
+		Trigger: RunTriggerManual, Status: RunStatusQueued,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, "other-run", otherID)
+}
+
+func TestStoreActiveSlotUsesStableUUIDAndNamespacedAliases(t *testing.T) {
+	t.Parallel()
+	store, err := OpenStore(filepath.Join(t.TempDir(), "state.db"))
+	require.NoError(t, err)
+	defer store.Close()
+	ctx := context.Background()
+
+	firstID, err := store.Create(ctx, PipelineRun{
+		ID: "first", PipelineID: "old-path", PipelineUUID: "stable-uuid", Pipeline: "analytics",
+		Trigger: RunTriggerManual, Status: RunStatusQueued,
+	})
+	require.NoError(t, err)
+	_, err = store.Create(ctx, PipelineRun{
+		ID: "renamed", PipelineID: "new-path", PipelineUUID: "stable-uuid", Pipeline: "analytics",
+		Trigger: RunTriggerManual, Status: RunStatusQueued,
+	})
+	require.ErrorIs(t, err, ErrPipelineRunActive)
+	var conflict *PipelineRunActiveError
+	require.ErrorAs(t, err, &conflict)
+	assert.Equal(t, firstID, conflict.ActiveRunID)
+
+	// Path and UUID aliases are namespaced, so equal raw values belonging to
+	// different pipelines cannot create a false conflict.
+	_, err = store.Create(ctx, PipelineRun{
+		ID: "unrelated", PipelineID: "stable-uuid", PipelineUUID: "other-uuid", Pipeline: "marketing",
+		Trigger: RunTriggerManual, Status: RunStatusQueued,
+	})
+	require.NoError(t, err)
+
+	require.NoError(t, store.Finish(ctx, firstID, RunStatusSuccess, nil))
+	_, err = store.Create(ctx, PipelineRun{
+		ID: "renamed", PipelineID: "new-path", PipelineUUID: "stable-uuid", Pipeline: "analytics",
+		Trigger: RunTriggerManual, Status: RunStatusQueued,
+	})
+	require.NoError(t, err)
+}
+
+func TestSetRunSpecIfMissingReturnsPersistedWinner(t *testing.T) {
+	t.Parallel()
+	store, err := OpenStore(filepath.Join(t.TempDir(), "state.db"))
+	require.NoError(t, err)
+	defer store.Close()
+	ctx := context.Background()
+	run := PipelineRun{
+		ID: "legacy", PipelineID: "pipeline-id", Pipeline: "analytics",
+		Trigger: RunTriggerManual, Status: RunStatusQueued,
+	}
+	_, err = store.Create(ctx, run)
+	require.NoError(t, err)
+
+	first := manualRunSpec(run, RunSourceWorkingTree, "")
+	first.Requested.FullRefresh = true
+	persisted, err := store.SetRunSpecIfMissing(ctx, run.ID, first)
+	require.NoError(t, err)
+	assert.Equal(t, first, persisted)
+
+	loser := manualRunSpec(run, RunSourceWorkingTree, "")
+	loser.Requested.SensorMode = "skip"
+	persisted, err = store.SetRunSpecIfMissing(ctx, run.ID, loser)
+	require.NoError(t, err)
+	assert.Equal(t, first, persisted, "the stored spec remains authoritative after an insertion race")
+}
+
+func TestOpenStoreRejectsCorruptDatabaseBeforeMigrations(t *testing.T) {
+	t.Parallel()
+	path := filepath.Join(t.TempDir(), "state.db")
+	store, err := OpenStore(path)
+	require.NoError(t, err)
+
+	var pageSize, rootPage int64
+	require.NoError(t, store.db.QueryRow(`PRAGMA page_size`).Scan(&pageSize))
+	require.NoError(t, store.db.QueryRow(`
+		SELECT rootpage
+		FROM sqlite_schema
+		WHERE type = 'table' AND name = 'pipeline_run_logs'`).Scan(&rootPage))
+	require.Positive(t, pageSize)
+	require.Positive(t, rootPage)
+	require.NoError(t, store.Close())
+
+	file, err := os.OpenFile(path, os.O_WRONLY, 0)
+	require.NoError(t, err)
+	_, writeErr := file.WriteAt(make([]byte, pageSize), (rootPage-1)*pageSize)
+	require.NoError(t, writeErr)
+	require.NoError(t, file.Close())
+
+	corruptStore, err := OpenStore(path)
+	if corruptStore != nil {
+		_ = corruptStore.Close()
+	}
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrStateDatabaseIntegrity)
+	assert.ErrorContains(t, err, path)
+	assert.ErrorContains(t, err, "back up state.db, state.db-wal, and state.db-shm")
+}
 
 func TestStoreCreatesRunsLogsAndWatermarks(t *testing.T) {
 	store, err := OpenStore(filepath.Join(t.TempDir(), ".renart", "state.db"))
@@ -57,6 +245,58 @@ func TestStoreCreatesRunsLogsAndWatermarks(t *testing.T) {
 	assert.Equal(t, end, watermark)
 }
 
+func TestFinishScheduledSuccessIsAtomicWithWatermark(t *testing.T) {
+	t.Parallel()
+	store, err := OpenStore(filepath.Join(t.TempDir(), "state.db"))
+	require.NoError(t, err)
+	defer store.Close()
+
+	ctx := context.Background()
+	started := time.Date(2026, 7, 16, 8, 0, 0, 0, time.UTC)
+	end := started.Add(time.Hour)
+	runID, err := store.Create(ctx, PipelineRun{
+		ID: "atomic-finish", PipelineID: "pipeline-id", Pipeline: "analytics",
+		Environment: "prod", Trigger: RunTriggerSchedule, Status: RunStatusQueued,
+		WinStart: &started, WinEnd: &end,
+	})
+	require.NoError(t, err)
+	require.NoError(t, store.MarkRunning(ctx, runID, started))
+	_, err = store.db.ExecContext(ctx, `
+		CREATE TRIGGER reject_test_watermark
+		BEFORE INSERT ON schedule_watermarks
+		BEGIN
+			SELECT RAISE(ABORT, 'test watermark failure');
+		END`)
+	require.NoError(t, err)
+
+	err = store.FinishScheduledSuccess(ctx, runID, "pipeline-id|prod", end)
+	require.ErrorContains(t, err, "test watermark failure")
+	run, _, _, err := store.Get(ctx, runID)
+	require.NoError(t, err)
+	assert.Equal(t, RunStatusRunning, run.Status, "run finish must roll back with the watermark")
+	_, ok, err := store.LastInterval(ctx, "pipeline-id|prod")
+	require.NoError(t, err)
+	assert.False(t, ok)
+
+	_, err = store.db.ExecContext(ctx, `DROP TRIGGER reject_test_watermark`)
+	require.NoError(t, err)
+	require.NoError(t, store.FinishScheduledSuccess(ctx, runID, "pipeline-id|prod", end))
+	run, _, _, err = store.Get(ctx, runID)
+	require.NoError(t, err)
+	assert.Equal(t, RunStatusSuccess, run.Status)
+	watermark, ok, err := store.LastInterval(ctx, "pipeline-id|prod")
+	require.NoError(t, err)
+	assert.True(t, ok)
+	assert.Equal(t, end, watermark)
+
+	err = store.FinishScheduledSuccess(ctx, "missing-run", "pipeline-id|prod", end.Add(time.Hour))
+	require.ErrorContains(t, err, "active pipeline run missing-run was not found")
+	watermark, ok, err = store.LastInterval(ctx, "pipeline-id|prod")
+	require.NoError(t, err)
+	assert.True(t, ok)
+	assert.Equal(t, end, watermark, "a missing run must not advance progress")
+}
+
 func TestFailOrphanedRunsReconcilesRunningRuns(t *testing.T) {
 	store, err := OpenStore(filepath.Join(t.TempDir(), ".renart", "state.db"))
 	require.NoError(t, err)
@@ -73,7 +313,7 @@ func TestFailOrphanedRunsReconcilesRunningRuns(t *testing.T) {
 	require.NoError(t, store.UpsertStep(ctx, PipelineRunStep{RunID: orphan, Asset: "orders", Status: RunStatusRunning, StartedAt: &started}))
 
 	// A run that finished normally must be left untouched.
-	done, err := store.Create(ctx, PipelineRun{PipelineID: "p1", Pipeline: "analytics", Environment: "dev", Trigger: RunTriggerManual, Status: RunStatusQueued})
+	done, err := store.Create(ctx, PipelineRun{PipelineID: "p2", Pipeline: "marketing", Environment: "dev", Trigger: RunTriggerManual, Status: RunStatusQueued})
 	require.NoError(t, err)
 	require.NoError(t, store.MarkRunning(ctx, done, started))
 	require.NoError(t, store.Finish(ctx, done, RunStatusSuccess, nil))
@@ -176,6 +416,79 @@ func TestReconcileInterruptedStateCancelsClaimedRiverJobsAndPreservesQueuedJobs(
 	assert.Contains(t, riverErrors, orphanedRunError)
 }
 
+func TestReconcileInterruptedStateRepairsQueuedRowsAndRequeuesUnadmittedScheduleSignal(t *testing.T) {
+	store, err := OpenStore(filepath.Join(t.TempDir(), ".renart", "state.db"))
+	require.NoError(t, err)
+	defer store.Close()
+	ctx := context.Background()
+
+	availableRunID, err := store.Create(ctx, PipelineRun{
+		ID: "available-legacy", PipelineID: "available-pipeline", Pipeline: "available",
+		Trigger: RunTriggerManual, Status: RunStatusQueued,
+	})
+	require.NoError(t, err)
+	availableJobID := insertTestRiverJob(t, store, pipelineRunJobArgs{RunID: availableRunID})
+
+	terminalRunID, err := store.Create(ctx, PipelineRun{
+		ID: "terminal-linked", PipelineID: "terminal-pipeline", Pipeline: "terminal",
+		Trigger: RunTriggerManual, Status: RunStatusQueued,
+	})
+	require.NoError(t, err)
+	terminalJobID := insertTestRiverJob(t, store, pipelineRunJobArgs{RunID: terminalRunID})
+	require.NoError(t, store.SetRunRiverJob(ctx, terminalRunID, terminalJobID))
+	_, err = store.db.ExecContext(ctx, `UPDATE river_job SET state = ?, finalized_at = ? WHERE id = ?`,
+		string(rivertype.JobStateDiscarded), formatTime(time.Now().UTC()), terminalJobID)
+	require.NoError(t, err)
+
+	joblessRunID, err := store.Create(ctx, PipelineRun{
+		ID: "jobless", PipelineID: "jobless-pipeline", Pipeline: "jobless",
+		Trigger: RunTriggerManual, Status: RunStatusQueued,
+	})
+	require.NoError(t, err)
+
+	dueArgs := pipelineRunJobArgs{
+		PipelineUUID: "scheduled-uuid", Environment: "prod",
+		Start: "2026-07-16T08:00:00Z", End: "2026-07-16T09:00:00Z",
+		SnapshotVersionID: "snapshot-id",
+	}
+	dueJobID := insertTestRiverJob(t, store, dueArgs)
+	markTestRiverJobRunning(t, store, dueJobID)
+	var dueArgsBefore string
+	require.NoError(t, store.db.QueryRowContext(ctx, `SELECT json(args) FROM river_job WHERE id = ?`, dueJobID).Scan(&dueArgsBefore))
+
+	recovery, err := store.ReconcileInterruptedState(ctx, orphanedRunError)
+	require.NoError(t, err)
+	assert.Equal(t, []string{joblessRunID, terminalRunID}, recovery.RunIDs)
+	assert.Zero(t, recovery.RiverJobsCancelled)
+	assert.EqualValues(t, 1, recovery.RiverJobsRequeued)
+
+	available, _, _, err := store.Get(ctx, availableRunID)
+	require.NoError(t, err)
+	assert.Equal(t, RunStatusQueued, available.Status)
+	require.NotNil(t, available.RiverJobID)
+	assert.Equal(t, availableJobID, *available.RiverJobID)
+	assertRiverJobState(t, store, availableJobID, rivertype.JobStateAvailable)
+
+	for _, runID := range []string{joblessRunID, terminalRunID} {
+		run, _, _, getErr := store.Get(ctx, runID)
+		require.NoError(t, getErr)
+		assert.Equal(t, RunStatusFailed, run.Status)
+		assert.Equal(t, orphanedRunError, run.Error)
+	}
+	assertRiverJobState(t, store, terminalJobID, rivertype.JobStateDiscarded)
+	assertRiverJobState(t, store, dueJobID, rivertype.JobStateAvailable)
+	var dueArgsAfter string
+	var dueAttempt int
+	require.NoError(t, store.db.QueryRowContext(ctx, `SELECT json(args), attempt FROM river_job WHERE id = ?`, dueJobID).Scan(&dueArgsAfter, &dueAttempt))
+	assert.JSONEq(t, dueArgsBefore, dueArgsAfter, "recovery must preserve the exact scheduled interval signal")
+	assert.Zero(t, dueAttempt)
+
+	// Failed orphan rows released their path aliases, so neither can hold the
+	// active slot forever after an upgrade.
+	_, err = store.Create(ctx, PipelineRun{PipelineID: "jobless-pipeline", Pipeline: "replacement", Trigger: RunTriggerManual})
+	require.NoError(t, err)
+}
+
 func TestRunRecoveryMigrationBackfillsInterruptedRuns(t *testing.T) {
 	path := filepath.Join(t.TempDir(), ".renart", "state.db")
 	store, err := OpenStore(path)
@@ -205,6 +518,135 @@ func TestRunRecoveryMigrationBackfillsInterruptedRuns(t *testing.T) {
 	pending, err := store.PendingRunRecoveries(ctx)
 	require.NoError(t, err)
 	assert.Equal(t, []string{"previously-reconciled"}, pending)
+}
+
+func TestActiveRunSlotMigrationRejectsDuplicateLegacyRowsWithoutRewritingHistory(t *testing.T) {
+	t.Parallel()
+	path := filepath.Join(t.TempDir(), "state.db")
+	store, err := OpenStore(path)
+	require.NoError(t, err)
+
+	ctx := context.Background()
+	migrations, err := fs.Sub(schedulerMigrations, "storedb/migrations")
+	require.NoError(t, err)
+	provider, err := goose.NewProvider(goose.DialectSQLite3, store.db, migrations)
+	require.NoError(t, err)
+	_, err = provider.DownTo(ctx, 11)
+	require.NoError(t, err)
+	_, err = store.db.ExecContext(ctx, `
+		INSERT INTO pipeline_runs
+			(id, pipeline_id, pipeline, environment, trigger, status)
+		VALUES
+			('legacy-active-a', 'pipeline-id', 'analytics', 'prod', 'manual', 'queued'),
+			('legacy-active-b', 'pipeline-id', 'analytics', 'prod', 'manual', 'running')`)
+	require.NoError(t, err)
+	require.NoError(t, store.Close())
+
+	failedStore, err := OpenStore(path)
+	if failedStore != nil {
+		_ = failedStore.Close()
+	}
+	require.Error(t, err)
+	assert.ErrorContains(t, err, "duplicate active runs exist")
+	assert.ErrorContains(t, err, "legacy-active-a")
+	assert.ErrorContains(t, err, "legacy-active-b")
+
+	raw, err := sql.Open("sqlite", path)
+	require.NoError(t, err)
+	defer raw.Close()
+	var active int
+	require.NoError(t, raw.QueryRowContext(ctx, `
+		SELECT COUNT(*) FROM pipeline_runs
+		WHERE pipeline_id = 'pipeline-id' AND status IN ('queued', 'running')`).Scan(&active))
+	assert.Equal(t, 2, active, "migration preflight must not rewrite or delete run history")
+}
+
+func TestActiveRunSlotMigrationBridgesLegacyPathAlias(t *testing.T) {
+	t.Parallel()
+	path := filepath.Join(t.TempDir(), "state.db")
+	store, err := OpenStore(path)
+	require.NoError(t, err)
+	ctx := context.Background()
+	migrations, err := fs.Sub(schedulerMigrations, "storedb/migrations")
+	require.NoError(t, err)
+	provider, err := goose.NewProvider(goose.DialectSQLite3, store.db, migrations)
+	require.NoError(t, err)
+	_, err = provider.DownTo(ctx, 11)
+	require.NoError(t, err)
+	_, err = store.db.ExecContext(ctx, `
+		INSERT INTO pipeline_runs (id, pipeline_id, pipeline, environment, trigger, status)
+		VALUES ('legacy-active', 'pipeline-id', 'analytics', 'prod', 'manual', 'queued')`)
+	require.NoError(t, err)
+	require.NoError(t, store.Close())
+
+	store, err = OpenStore(path)
+	require.NoError(t, err)
+	defer store.Close()
+	_, err = store.Create(ctx, PipelineRun{
+		ID: "new-run", PipelineID: "pipeline-id", PipelineUUID: "stable-uuid", Pipeline: "analytics",
+		Trigger: RunTriggerManual, Status: RunStatusQueued,
+	})
+	require.ErrorIs(t, err, ErrPipelineRunActive)
+	var conflict *PipelineRunActiveError
+	require.ErrorAs(t, err, &conflict)
+	assert.Equal(t, "legacy-active", conflict.ActiveRunID)
+	assert.Equal(t, 1, countRows(t, store, `SELECT COUNT(*) FROM pipeline_run_slots WHERE slot_key = 'path:pipeline-id' AND run_id = 'legacy-active'`))
+}
+
+func TestPinlessScheduleMigrationFreezesLatestDeploymentOrPauses(t *testing.T) {
+	t.Parallel()
+	path := filepath.Join(t.TempDir(), ".renart", "state.db")
+	store, err := OpenStore(path)
+	require.NoError(t, err)
+	ctx := context.Background()
+	migrations, err := fs.Sub(schedulerMigrations, "storedb/migrations")
+	require.NoError(t, err)
+	provider, err := goose.NewProvider(goose.DialectSQLite3, store.db, migrations)
+	require.NoError(t, err)
+	_, err = provider.DownTo(ctx, 9)
+	require.NoError(t, err)
+
+	for _, snapshot := range []struct {
+		version, pipeline, created string
+	}{
+		{version: "old", pipeline: "with-deploy", created: "2026-01-01T00:00:00Z"},
+		{version: "latest", pipeline: "with-deploy", created: "2026-01-02T00:00:00Z"},
+		{version: "paused-pin", pipeline: "paused-with-deploy", created: "2026-01-03T00:00:00Z"},
+	} {
+		_, err = store.db.ExecContext(ctx, `
+			INSERT INTO renart_snapshots (version_id, pipeline_id, merkle_root, manifest, git_dirty, created_at)
+			VALUES (?, ?, ?, '{}', 0, ?)`, snapshot.version, snapshot.pipeline, snapshot.version, snapshot.created)
+		require.NoError(t, err)
+	}
+	for _, row := range []EnvSchedule{
+		{PipelineUUID: "with-deploy", Environment: "prod", Cron: "@daily", Timezone: "UTC", CatchupPolicy: CatchupSkip, Status: ScheduleStatusActive},
+		{PipelineUUID: "paused-with-deploy", Environment: "prod", Cron: "@daily", Timezone: "UTC", CatchupPolicy: CatchupSkip, Status: ScheduleStatusPaused},
+		{PipelineUUID: "without-deploy", Environment: "prod", Cron: "@daily", Timezone: "UTC", CatchupPolicy: CatchupSkip, Status: ScheduleStatusActive},
+		{PipelineUUID: "archived", Environment: "prod", Cron: "@daily", Timezone: "UTC", CatchupPolicy: CatchupSkip, Status: ScheduleStatusArchived, ArchivedReason: ArchivedReasonUser},
+	} {
+		require.NoError(t, store.UpsertEnvSchedule(ctx, row))
+	}
+	require.NoError(t, store.Close())
+
+	store, err = OpenStore(path)
+	require.NoError(t, err)
+	defer store.Close()
+	withDeploy, _, err := store.GetEnvSchedule(ctx, "with-deploy", "prod")
+	require.NoError(t, err)
+	assert.Equal(t, "latest", withDeploy.SnapshotVersionID)
+	assert.Equal(t, ScheduleStatusActive, withDeploy.Status)
+	paused, _, err := store.GetEnvSchedule(ctx, "paused-with-deploy", "prod")
+	require.NoError(t, err)
+	assert.Equal(t, "paused-pin", paused.SnapshotVersionID)
+	assert.Equal(t, ScheduleStatusPaused, paused.Status)
+	withoutDeploy, _, err := store.GetEnvSchedule(ctx, "without-deploy", "prod")
+	require.NoError(t, err)
+	assert.Empty(t, withoutDeploy.SnapshotVersionID)
+	assert.Equal(t, ScheduleStatusPaused, withoutDeploy.Status)
+	archived, _, err := store.GetEnvSchedule(ctx, "archived", "prod")
+	require.NoError(t, err)
+	assert.Empty(t, archived.SnapshotVersionID)
+	assert.Equal(t, ScheduleStatusArchived, archived.Status)
 }
 
 func insertTestRiverJob(t *testing.T, store *Store, args river.JobArgs) int64 {

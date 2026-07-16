@@ -304,63 +304,6 @@ export function missingPythonDependencies(
     .filter((pkg, index, packages) => !declared.includes(pkg) && packages.indexOf(pkg) === index);
 }
 
-export const pipelineVariables = [
-  ["client", "string", "client_a"],
-  ["region", "string", "us"],
-  ["schedule", "string", "@daily"],
-] as const;
-
-export const pipelineVariants = [
-  { id: "default", overrides: {} },
-  { id: "client_alpha", overrides: { client: "alpha", region: "us", schedule: "@hourly" } },
-  { id: "client_beta", overrides: { client: "beta", region: "eu", schedule: "0 6 * * *" } },
-  { id: "client_gamma", overrides: { client: "gamma", region: "ap", schedule: "@weekly" } },
-] as const;
-
-export type PipelineVariantId = (typeof pipelineVariants)[number]["id"];
-
-export function pipelineVariantValue(variantId: string, variableName: string) {
-  const variant = pipelineVariants.find((item) => item.id === variantId);
-  const base = pipelineVariables.find(([name]) => name === variableName)?.[2] ?? "";
-  return variant?.overrides[variableName as keyof typeof variant.overrides] ?? base;
-}
-
-export function renderedPipelineName(variantId: string) {
-  return `${pipelineVariantValue(variantId, "client")}_pipe`;
-}
-
-export function renderedPipelineSchedule(variantId: string) {
-  return pipelineVariantValue(variantId, "schedule");
-}
-
-export const impactPlan = {
-  changes: [
-    {
-      name: "marts.revenue_daily",
-      type: "breaking",
-      note: "revenue retyped DECIMAL(18,2) to DOUBLE; invalidates existing data",
-    },
-    { name: "staging.orders_cleaned", type: "nonbreaking", note: "added column customer_id" },
-    { name: "raw.events_to_bq", type: "added", note: "new load asset" },
-    { name: "ml.predicted_orders", type: "indirect", note: "selects from revenue_daily" },
-    { name: "ml.model_revenue", type: "indirect", note: "selects from revenue_daily" },
-    { name: "raw.locations", type: "metadata", note: "description updated; no recompute" },
-  ],
-  backfill: [
-    { name: "marts.revenue_daily", rows: "~120k", reason: "breaking change" },
-    { name: "ml.predicted_orders", rows: "~4.2k", reason: "downstream" },
-    { name: "ml.model_revenue", rows: "~360", reason: "downstream" },
-  ],
-} as const;
-
-export const changeTypeMeta: Record<string, { label: string; className: string }> = {
-  added: { label: "Added", className: "bg-emerald-100 text-emerald-700" },
-  breaking: { label: "Breaking", className: "bg-red-100 text-red-700" },
-  nonbreaking: { label: "Non-breaking", className: "bg-amber-100 text-amber-700" },
-  indirect: { label: "Indirect", className: "bg-orange-100 text-orange-700" },
-  metadata: { label: "Metadata", className: "bg-zinc-200 text-zinc-600" },
-};
-
 export const edges = [
   ["stripe_orders", "orders_cleaned"],
   ["ga4_events", "events_cleaned"],

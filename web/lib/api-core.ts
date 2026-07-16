@@ -3,9 +3,29 @@ import { AssetInspectResponse, OperationMetadata } from "@/lib/types";
 import { extractInspectErrorText } from "@/lib/inspect-errors";
 
 export type JSONErrorPayload = {
-  error?: { message?: string };
+  error?:
+    | {
+        code?: string;
+        message?: string;
+        details?: unknown;
+      }
+    | string;
   message?: string;
 };
+
+export class APIError extends Error {
+  readonly status: number;
+  readonly code: string | null;
+  readonly details: unknown;
+
+  constructor(input: { status: number; message: string; code?: string | null; details?: unknown }) {
+    super(input.message);
+    this.name = "APIError";
+    this.status = input.status;
+    this.code = input.code ?? null;
+    this.details = input.details;
+  }
+}
 
 export type MaterializeStreamPayload = {
   status?: "ok" | "error";
@@ -32,17 +52,33 @@ export type FillColumnsFromDBResponse = {
 
 export async function readJSON<T>(res: Response): Promise<T> {
   if (!res.ok) {
-    throw new Error(await getResponseErrorMessage(res));
+    throw await readResponseError(res);
   }
 
   return (await res.json()) as T;
 }
 
 export async function getResponseErrorMessage(res: Response): Promise<string> {
+  return (await readResponseError(res)).message;
+}
+
+export async function readResponseError(res: Response): Promise<APIError> {
   const text = await res.text();
   const parsed = parseJSONSafely<JSONErrorPayload>(text);
+  const error = typeof parsed?.error === "object" ? parsed.error : null;
+  const message =
+    error?.message ||
+    (typeof parsed?.error === "string" ? parsed.error : undefined) ||
+    parsed?.message ||
+    text ||
+    `Request failed: ${res.status}`;
 
-  return parsed?.error?.message || parsed?.message || text || `Request failed: ${res.status}`;
+  return new APIError({
+    status: res.status,
+    message,
+    code: error?.code,
+    details: error?.details,
+  });
 }
 
 export function parseJSONSafely<T>(text: string): T | null {
@@ -98,7 +134,7 @@ export async function fetchJSONWithBody<T>(
 
 export async function readTextOrThrow(res: Response) {
   if (!res.ok) {
-    throw new Error(await getResponseErrorMessage(res));
+    throw await readResponseError(res);
   }
 
   return res.text();

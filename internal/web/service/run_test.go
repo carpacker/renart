@@ -14,12 +14,15 @@ import (
 )
 
 type stubRunRunner struct {
-	args   []string
-	output []byte
-	err    error
+	args               []string
+	output             []byte
+	err                error
+	runAssetRequest    RunAssetRequest
+	runPipelineRequest RunPipelineRequest
 }
 
 func (s *stubRunRunner) RunAsset(_ context.Context, req RunAssetRequest, _ func([]byte)) ([]byte, error) {
+	s.runAssetRequest = req
 	s.args = []string{"run", req.AssetPath}
 	if req.Environment != "" {
 		s.args = append(s.args, "--env", req.Environment)
@@ -28,6 +31,7 @@ func (s *stubRunRunner) RunAsset(_ context.Context, req RunAssetRequest, _ func(
 }
 
 func (s *stubRunRunner) RunPipeline(_ context.Context, req RunPipelineRequest, _ func([]byte)) ([]byte, error) {
+	s.runPipelineRequest = req
 	s.args = []string{"run", req.Target}
 	if req.Environment != "" {
 		s.args = append(s.args, "--env", req.Environment)
@@ -172,6 +176,144 @@ func TestRunServiceExecuteEnforcesDestructivePolicy(t *testing.T) {
 	accepted := svc.Execute(context.Background(), RunRequest{FullRefresh: true, ConfirmedEnvironment: "prod"})
 	assert.Equal(t, "ok", accepted.Status)
 	assert.Equal(t, []string{"run", ".", "--env", "prod"}, runner.args)
+}
+
+func TestRunServiceRejectsUnsupportedAssetDryRunAndInvalidWindow(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		req  RunRequest
+		want string
+	}{
+		{
+			name: "asset dry run",
+			req:  RunRequest{AssetPath: "assets/foo.sql", DryRun: true},
+			want: "asset dry-run is not supported",
+		},
+		{
+			name: "malformed window",
+			req: RunRequest{
+				StartDate: "not-a-time",
+				EndDate:   "2026-07-16T09:00:00Z",
+			},
+			want: "start must be an RFC3339",
+		},
+		{
+			name: "backfill without window",
+			req:  RunRequest{Backfill: true},
+			want: "backfill requires an explicit start and end",
+		},
+		{
+			name: "dry run with full refresh",
+			req:  RunRequest{DryRun: true, FullRefresh: true},
+			want: "dry_run does not support",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			runner := &stubRunRunner{}
+			svc := NewRunService(RunDependencies{Executor: runner})
+
+			result := svc.Execute(context.Background(), tt.req)
+
+			assert.Equal(t, "error", result.Status)
+			assert.Equal(t, 400, result.HTTPCode)
+			assert.Contains(t, result.Error, tt.want)
+			assert.Nil(t, runner.args)
+		})
+	}
+}
+
+func TestRunServiceNormalizesAndPreservesSensorMode(t *testing.T) {
+	t.Parallel()
+
+	runner := &stubRunRunner{}
+	svc := NewRunService(RunDependencies{Executor: runner})
+
+	result := svc.Execute(context.Background(), RunRequest{
+		StartDate:  "2026-07-16T10:00:00+02:00",
+		EndDate:    "2026-07-16T11:00:00+02:00",
+		SensorMode: "skip",
+	})
+
+	require.Equal(t, "ok", result.Status)
+	assert.Equal(t, "skip", runner.runPipelineRequest.SensorMode)
+	assert.Equal(t, "2026-07-16T08:00:00Z", runner.runPipelineRequest.StartDate)
+	assert.Equal(t, "2026-07-16T09:00:00Z", runner.runPipelineRequest.EndDate)
+}
+
+func TestRunServiceRejectsUnsafeLegacyAssetBackfill(t *testing.T) {
+	t.Parallel()
+
+	_, workspaceRoot := writeTypeCheckWorkspace(t, `
+name: analytics
+default_connections:
+  duckdb: duckdb-default
+`, map[string]string{
+		"unsafe.sql": `
+/* @bruin
+name: analytics.unsafe
+type: duckdb.sql
+materialization:
+  type: table
+@bruin */
+select 1 as id
+`,
+	})
+	runner := &stubRunRunner{}
+	svc := NewRunService(RunDependencies{Executor: runner, WorkspaceRoot: workspaceRoot})
+
+	result := svc.Execute(context.Background(), RunRequest{
+		AssetPath: "analytics/assets/unsafe.sql",
+		Backfill:  true,
+		StartDate: "2026-07-15T00:00:00Z",
+		EndDate:   "2026-07-16T00:00:00Z",
+	})
+
+	assert.Equal(t, "error", result.Status)
+	assert.Equal(t, 400, result.HTTPCode)
+	assert.Contains(t, result.Error, "not safe to backfill")
+	assert.Nil(t, runner.args)
+}
+
+func TestRunServiceAllowsReplaySafeLegacyAssetBackfill(t *testing.T) {
+	t.Parallel()
+
+	_, workspaceRoot := writeTypeCheckWorkspace(t, `
+name: analytics
+default_connections:
+  duckdb: duckdb-default
+`, map[string]string{
+		"safe.sql": `
+/* @bruin
+name: analytics.safe
+type: duckdb.sql
+materialization:
+  type: table
+  strategy: time_interval
+  incremental_key: event_date
+  time_granularity: date
+@bruin */
+select cast('{{ start_date }}' as date) as event_date
+`,
+	})
+	runner := &stubRunRunner{}
+	svc := NewRunService(RunDependencies{Executor: runner, WorkspaceRoot: workspaceRoot})
+
+	result := svc.Execute(context.Background(), RunRequest{
+		AssetPath: "analytics/assets/safe.sql",
+		Backfill:  true,
+		StartDate: "2026-07-15T00:00:00Z",
+		EndDate:   "2026-07-16T00:00:00Z",
+	})
+
+	require.Equal(t, "ok", result.Status, result.Error)
+	assert.Equal(t, []string{"run", "analytics/assets/safe.sql"}, runner.args)
+	assert.Equal(t, "2026-07-15T00:00:00Z", runner.runAssetRequest.StartDate)
+	assert.Equal(t, "2026-07-16T00:00:00Z", runner.runAssetRequest.EndDate)
 }
 
 func TestExtractInspectRawOutputUsesErrorField(t *testing.T) {

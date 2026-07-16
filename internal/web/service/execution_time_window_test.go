@@ -51,3 +51,15 @@ func TestResolveExecutionTimeWindowExplicit(t *testing.T) {
 	assert.Equal(t, "2026-05-26T00:00:00Z", window.StartRFC3339())
 	assert.Equal(t, "2026-05-27T00:00:00Z", window.EndRFC3339())
 }
+
+func TestResolveExecutionTimeWindowPreservesFractionalSeconds(t *testing.T) {
+	window, err := ResolveExecutionTimeWindow(
+		"@daily",
+		"2026-05-26T00:00:00.123456789+02:00",
+		"2026-05-26T00:00:01.987654321+02:00",
+		time.Date(2026, 5, 28, 13, 14, 0, 0, time.UTC),
+	)
+	require.NoError(t, err)
+	assert.Equal(t, "2026-05-25T22:00:00.123456789Z", window.StartRFC3339())
+	assert.Equal(t, "2026-05-25T22:00:01.987654321Z", window.EndRFC3339())
+}

@@ -52,13 +52,27 @@ func directPathReferencesAsset(inputPath string) bool {
 }
 
 func getDirectPipelineAndAsset(ctx context.Context, workspaceRoot, inputPath string, fs afero.Fs) (*directPipelineInfo, error) {
+	return getDirectPipelineAndAssetWithConfigLoader(ctx, workspaceRoot, inputPath, fs, loadSelectedConfigFS)
+}
+
+func getDirectPipelineAndAssetReadOnly(ctx context.Context, workspaceRoot, inputPath string, fs afero.Fs) (*directPipelineInfo, error) {
+	return getDirectPipelineAndAssetWithConfigLoader(ctx, workspaceRoot, inputPath, fs, loadSelectedConfigReadOnlyFS)
+}
+
+func getDirectPipelineAndAssetWithConfigLoader(
+	ctx context.Context,
+	workspaceRoot string,
+	inputPath string,
+	fs afero.Fs,
+	loadConfig func(afero.Fs, string, string) (*config.Config, error),
+) (*directPipelineInfo, error) {
 	resolvedInputPath := resolveDirectPath(workspaceRoot, inputPath)
 	repoRoot, err := git.FindRepoFromPath(resolvedInputPath)
 	if err != nil {
 		return nil, err
 	}
 	configFilePath := filepath.Join(repoRoot.Path, ".bruin.yml")
-	cm, err := loadSelectedConfigFS(fs, configFilePath, "")
+	cm, err := loadConfig(fs, configFilePath, "")
 	if err != nil {
 		return nil, err
 	}

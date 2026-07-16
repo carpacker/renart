@@ -19,6 +19,7 @@ import (
 	"github.com/riverqueue/river/riverdriver/riversqlite"
 	"github.com/riverqueue/river/rivertype"
 	"github.com/robfig/cron/v3"
+	"renart/internal/web/runcontext"
 )
 
 const (
@@ -40,11 +41,15 @@ type Service struct {
 	defaultEnvironment    func() string
 	pipelineIntervalAware func(context.Context, string) bool
 	deployPipeline        func(context.Context, string) (string, error)
+	latestSnapshot        func(context.Context, string) (string, bool, error)
+	checkSnapshot         func(context.Context, string, string) error
+	validateSnapshot      func(context.Context, string, string) error
 	recoverRun            func(context.Context, PipelineRun, []PipelineRunStep) error
 	lock                  *flock.Flock
 	riverClient           *river.Client[*sql.Tx]
 	mu                    sync.Mutex
 	schedulerOn           bool
+	ownershipState        SchedulerOwnershipState
 	ownerMessage          string
 }
 
@@ -70,6 +75,15 @@ type Options struct {
 	// DeployPipeline snapshots the working tree and returns the new
 	// version ID (the "deploy now" path when enabling a schedule).
 	DeployPipeline func(context.Context, string) (string, error)
+	// LatestSnapshot resolves the current exact deployment for a stable
+	// pipeline UUID. It is used only by the one-time pinless-row migration.
+	LatestSnapshot func(context.Context, string) (versionID string, found bool, err error)
+	// CheckSnapshot verifies that an exact version belongs to the pipeline and
+	// remains executable. Reconciliation caches each version check for one pass.
+	CheckSnapshot func(context.Context, string, string) error
+	// ValidateSnapshot verifies that an exact version exists, belongs to the
+	// pipeline, and is executable before a schedule can retain the pin.
+	ValidateSnapshot func(context.Context, string, string) error
 	// RecoverRun observes a run reconciled after an unclean stop. The callback
 	// receives the persisted terminal steps after open steps have been failed;
 	// it may rebuild derived state, but must never execute the pipeline again.
@@ -91,6 +105,13 @@ type pipelineRunJobArgs struct {
 	Start             string     `json:"start,omitempty" river:"unique"`
 	End               string     `json:"end,omitempty" river:"unique"`
 	SnapshotVersionID string     `json:"snapshot_version_id,omitempty"`
+	// Backfill and ConfirmedEnvironment are temporary Phase 0a queue fields.
+	// Manual jobs must retain destructive intent and its authorization across
+	// River persistence until the canonical durable RunSpec replaces them.
+	Backfill             bool   `json:"backfill,omitempty"`
+	ConfirmedEnvironment string `json:"confirmed_environment,omitempty"`
+	FullRefresh          bool   `json:"full_refresh,omitempty"`
+	SensorMode           string `json:"sensor_mode,omitempty"`
 }
 
 func (pipelineRunJobArgs) Kind() string { return pipelineRunJobKind }
@@ -100,16 +121,63 @@ type pipelineRunWorker struct {
 	service *Service
 }
 
+type invalidScheduleSignalError struct{ err error }
+
+func (e *invalidScheduleSignalError) Error() string { return e.err.Error() }
+func (e *invalidScheduleSignalError) Unwrap() error { return e.err }
+
+type runStartPersistenceError struct{ err error }
+
+func (e *runStartPersistenceError) Error() string { return e.err.Error() }
+func (e *runStartPersistenceError) Unwrap() error { return e.err }
+
 func (w *pipelineRunWorker) Work(ctx context.Context, job *river.Job[pipelineRunJobArgs]) error {
 	var riverJobID int64
 	if job.JobRow != nil {
 		riverJobID = job.ID
 	}
-	run, ok, err := w.service.prepareRun(ctx, riverJobID, job.Args)
-	if err != nil || !ok {
+	run, spec, ok, err := w.service.prepareRun(ctx, riverJobID, job.Args)
+	if err != nil {
+		if errors.Is(err, ErrPipelineRunActive) && strings.TrimSpace(job.Args.RunID) == "" {
+			return river.JobSnooze(runSpecRetrySnoozeTime)
+		}
+		var invalidSpec *invalidRunSpecError
+		if errors.As(err, &invalidSpec) {
+			if finishErr := w.service.failRunBeforeExecution(ctx, invalidSpec.RunID, err); finishErr != nil {
+				return errors.Join(err, finishErr)
+			}
+			return river.JobCancel(err)
+		}
+		var invalidSignal *invalidScheduleSignalError
+		if errors.As(err, &invalidSignal) {
+			return river.JobCancel(err)
+		}
+		if strings.TrimSpace(job.Args.RunID) != "" || strings.TrimSpace(job.Args.PipelineUUID) != "" || job.Args.Trigger == RunTriggerSchedule {
+			return river.JobSnooze(runSpecRetrySnoozeTime)
+		}
 		return err
 	}
-	return w.service.execute(ctx, run)
+	if !ok {
+		return nil
+	}
+	err = w.service.execute(ctx, run, spec)
+	var startErr *runStartPersistenceError
+	if errors.As(err, &startErr) {
+		return river.JobSnooze(runSpecRetrySnoozeTime)
+	}
+	return err
+}
+
+func (s *Service) failRunBeforeExecution(ctx context.Context, runID string, runErr error) error {
+	if err := s.store.Finish(ctx, runID, RunStatusFailed, runErr); err != nil {
+		return fmt.Errorf("fail pipeline run %s before execution: %w", runID, err)
+	}
+	run, _, _, err := s.store.Get(ctx, runID)
+	if err != nil {
+		return fmt.Errorf("reload failed pipeline run %s: %w", runID, err)
+	}
+	s.publishRunEvent("run.finished", run)
+	return nil
 }
 
 type housekeepingJobArgs struct{}
@@ -148,7 +216,12 @@ func New(options Options) *Service {
 		defaultEnvironment:    options.DefaultEnvironment,
 		pipelineIntervalAware: options.PipelineIntervalAware,
 		deployPipeline:        options.DeployPipeline,
+		latestSnapshot:        options.LatestSnapshot,
+		checkSnapshot:         options.CheckSnapshot,
+		validateSnapshot:      options.ValidateSnapshot,
 		recoverRun:            options.RecoverRun,
+		ownershipState:        SchedulerOwnershipUnavailable,
+		ownerMessage:          "scheduler has not started",
 	}
 }
 
@@ -157,18 +230,32 @@ func (s *Service) Start(ctx context.Context) error {
 		return nil
 	}
 	if s.store == nil || s.runner == nil {
+		s.mu.Lock()
+		s.setOwnershipLocked(SchedulerOwnershipUnavailable, "scheduler is not configured")
+		s.mu.Unlock()
 		return errors.New("scheduler is not configured")
 	}
+	s.mu.Lock()
+	s.setOwnershipLocked(SchedulerOwnershipUnavailable, "scheduler is starting")
+	s.mu.Unlock()
 	if err := os.MkdirAll(s.stateDir, 0o755); err != nil {
+		s.mu.Lock()
+		s.setOwnershipLocked(SchedulerOwnershipUnavailable, err.Error())
+		s.mu.Unlock()
 		return err
 	}
 	s.lock = flock.New(filepath.Join(s.stateDir, "scheduler.lock"))
 	locked, err := s.lock.TryLock()
 	if err != nil {
+		s.mu.Lock()
+		s.setOwnershipLocked(SchedulerOwnershipUnavailable, err.Error())
+		s.mu.Unlock()
 		return err
 	}
 	if !locked {
-		s.ownerMessage = "scheduler lock is held by another Renart process; this process will not run jobs or register schedules"
+		s.mu.Lock()
+		s.setOwnershipLocked(SchedulerOwnershipFollower, "scheduler lock is held by another Renart process; schedules are read-only in this process")
+		s.mu.Unlock()
 		return nil
 	}
 	unlockOnError := true
@@ -194,28 +281,47 @@ func (s *Service) Start(ctx context.Context) error {
 		Workers:                     workers,
 	})
 	if err != nil {
+		s.mu.Lock()
+		s.setOwnershipLocked(SchedulerOwnershipUnavailable, err.Error())
+		s.mu.Unlock()
 		return err
 	}
-	recovery := s.recoverOrphanedRuns(ctx)
-	if recovery.ReconciledRuns > 0 || recovery.RiverJobsCancelled > 0 || recovery.ReplayedRuns > 0 || recovery.ReplayFailures > 0 {
+	recovery, err := s.recoverOrphanedRuns(ctx)
+	if err != nil {
+		s.mu.Lock()
+		s.setOwnershipLocked(SchedulerOwnershipUnavailable, "scheduler startup recovery failed: "+err.Error())
+		s.mu.Unlock()
+		return fmt.Errorf("scheduler startup recovery failed: %w", err)
+	}
+	if recovery.ReconciledRuns > 0 || recovery.RiverJobsCancelled > 0 || recovery.RiverJobsRequeued > 0 || recovery.ReplayedRuns > 0 || recovery.SkippedRunReplays > 0 || recovery.ReplayFailures > 0 {
 		slog.Info("scheduler startup recovery completed",
 			"runs_reconciled", recovery.ReconciledRuns,
 			"river_jobs_cancelled", recovery.RiverJobsCancelled,
+			"river_jobs_requeued", recovery.RiverJobsRequeued,
 			"runs_replayed", recovery.ReplayedRuns,
+			"run_replays_skipped", recovery.SkippedRunReplays,
 			"replay_failures", recovery.ReplayFailures,
 		)
 	}
 	if err := client.Start(ctx); err != nil {
+		s.mu.Lock()
+		s.setOwnershipLocked(SchedulerOwnershipUnavailable, err.Error())
+		s.mu.Unlock()
 		return err
 	}
 	s.mu.Lock()
 	s.riverClient = client
-	s.mu.Unlock()
 	s.schedulerOn = true
-	s.ownerMessage = ""
+	s.setOwnershipLocked(SchedulerOwnershipOwner, "")
+	s.mu.Unlock()
 	if err := s.Reconcile(ctx); err != nil {
+		s.mu.Lock()
+		if s.riverClient == client {
+			s.riverClient = nil
+		}
 		s.schedulerOn = false
-		s.clearRiverClient(client)
+		s.setOwnershipLocked(SchedulerOwnershipUnavailable, "scheduler reconciliation failed: "+err.Error())
+		s.mu.Unlock()
 		stopRiverClient(client)
 		return err
 	}
@@ -233,32 +339,45 @@ const orphanedRunError = "interrupted: the server stopped while this run was exe
 type startupRecoverySummary struct {
 	ReconciledRuns     int
 	RiverJobsCancelled int64
+	RiverJobsRequeued  int64
 	ReplayedRuns       int
+	SkippedRunReplays  int
 	ReplayFailures     int
 }
 
 // recoverOrphanedRuns fails any run left "running" by a previous process that
 // was killed mid-execution (otherwise it would stay running forever), and
 // notifies listeners so open run views update.
-func (s *Service) recoverOrphanedRuns(ctx context.Context) startupRecoverySummary {
+func (s *Service) recoverOrphanedRuns(ctx context.Context) (startupRecoverySummary, error) {
 	var summary startupRecoverySummary
 	recovery, err := s.store.ReconcileInterruptedState(ctx, orphanedRunError)
 	if err != nil {
-		slog.Warn("failed to reconcile orphaned pipeline runs", "error", err)
-		return summary
+		return summary, fmt.Errorf("reconcile interrupted runs: %w", err)
 	}
 	summary.ReconciledRuns = len(recovery.RunIDs)
 	summary.RiverJobsCancelled = recovery.RiverJobsCancelled
+	summary.RiverJobsRequeued = recovery.RiverJobsRequeued
 	ids, err := s.store.PendingRunRecoveries(ctx)
 	if err != nil {
-		slog.Warn("failed to list pending pipeline run recoveries", "error", err)
-		return summary
+		return summary, fmt.Errorf("list pending run recoveries: %w", err)
 	}
 	for _, id := range ids {
 		run, _, steps, getErr := s.store.Get(ctx, id)
 		if getErr != nil {
-			slog.Warn("failed to load reconciled pipeline run", "run_id", id, "error", getErr)
-			summary.ReplayFailures++
+			return summary, fmt.Errorf("load reconciled run %s: %w", id, getErr)
+		}
+		if !run.ExecutionContextResolved {
+			// Current builds persist the effective context before invoking the
+			// executor, so an unresolved row with terminal steps can only come from
+			// a legacy build. Its River arguments are request intent, not proof of
+			// what environment policy and default-window resolution actually used.
+			// Acknowledge it without emitting RunCompleted so freshness fails safe.
+			slog.Warn("skipping interrupted run derived-state replay because its effective execution context was not persisted", "run_id", id)
+			if markErr := s.store.MarkRunRecoveryReplayed(ctx, id); markErr != nil {
+				return summary, fmt.Errorf("acknowledge skipped run recovery %s: %w", id, markErr)
+			}
+			summary.SkippedRunReplays++
+			s.publishRunEvent("run.finished", run)
 			continue
 		}
 		if s.recoverRun != nil {
@@ -269,16 +388,13 @@ func (s *Service) recoverOrphanedRuns(ctx context.Context) startupRecoverySummar
 				continue
 			}
 			if markErr := s.store.MarkRunRecoveryReplayed(ctx, id); markErr != nil {
-				slog.Warn("failed to acknowledge reconciled pipeline run replay", "run_id", id, "error", markErr)
-				summary.ReplayFailures++
-				s.publishRunEvent("run.finished", run)
-				continue
+				return summary, fmt.Errorf("acknowledge run recovery %s: %w", id, markErr)
 			}
 			summary.ReplayedRuns++
 		}
 		s.publishRunEvent("run.finished", run)
 	}
-	return summary
+	return summary, nil
 }
 
 func (s *Service) Stop() {
@@ -289,6 +405,7 @@ func (s *Service) Stop() {
 	client := s.riverClient
 	s.riverClient = nil
 	s.schedulerOn = false
+	s.setOwnershipLocked(SchedulerOwnershipUnavailable, "scheduler is stopped")
 	s.mu.Unlock()
 	if client != nil {
 		stopRiverClient(client)
@@ -327,13 +444,14 @@ func (s *Service) clearRiverClient(client *river.Client[*sql.Tx]) {
 // tombstones whose pipeline reappears — same UUID, e.g. after a branch
 // switch — are reactivated. Catch-up policies are applied for active rows.
 func (s *Service) Reconcile(ctx context.Context) error {
-	if s == nil || !s.schedulerOn {
+	if s == nil {
 		return nil
 	}
 	s.mu.Lock()
 	client := s.riverClient
+	on := s.schedulerOn && s.ownershipState == SchedulerOwnershipOwner
 	s.mu.Unlock()
-	if client == nil {
+	if !on || client == nil {
 		return nil
 	}
 
@@ -345,9 +463,22 @@ func (s *Service) Reconcile(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	logRowError := func(row EnvSchedule, operation string, err error) error {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return ctxErr
+		}
+		slog.Warn("schedule reconciliation skipped a row operation",
+			"pipeline_uuid", row.PipelineUUID,
+			"environment", row.Environment,
+			"operation", operation,
+			"error", err,
+		)
+		return nil
+	}
 
 	now := time.Now()
 	jobs := make([]*river.PeriodicJob, 0, len(rows)+1)
+	snapshotChecks := make(map[string]error)
 	for _, row := range rows {
 		row := row
 		ref, exists := s.resolveRef(ctx, row.PipelineUUID)
@@ -355,13 +486,26 @@ func (s *Service) Reconcile(ctx context.Context) error {
 		switch row.Status {
 		case ScheduleStatusActive, ScheduleStatusPaused:
 			if !exists {
-				_ = s.store.SetEnvScheduleStatus(ctx, row.PipelineUUID, row.Environment, ScheduleStatusArchived, ArchivedReasonMissing)
+				if err := s.store.SetEnvScheduleStatus(ctx, row.PipelineUUID, row.Environment, ScheduleStatusArchived, ArchivedReasonMissing); err != nil {
+					if fatalErr := logRowError(row, "archive missing pipeline", err); fatalErr != nil {
+						return fatalErr
+					}
+				}
 				continue
 			}
 		case ScheduleStatusArchived:
 			if exists && row.ArchivedReason == ArchivedReasonMissing {
-				_ = s.store.SetEnvScheduleStatus(ctx, row.PipelineUUID, row.Environment, ScheduleStatusActive, "")
-				row.Status = ScheduleStatusActive
+				restoredStatus := ScheduleStatusActive
+				if strings.TrimSpace(row.SnapshotVersionID) == "" || len(row.Vars) > 0 {
+					restoredStatus = ScheduleStatusPaused
+				}
+				if err := s.store.SetEnvScheduleStatus(ctx, row.PipelineUUID, row.Environment, restoredStatus, ""); err != nil {
+					if fatalErr := logRowError(row, "restore pipeline", err); fatalErr != nil {
+						return fatalErr
+					}
+					continue
+				}
+				row.Status = restoredStatus
 			} else {
 				continue
 			}
@@ -371,14 +515,55 @@ func (s *Service) Reconcile(ctx context.Context) error {
 		if row.Status != ScheduleStatusActive {
 			continue
 		}
+		if len(row.Vars) > 0 {
+			if err := s.store.SetEnvScheduleStatus(ctx, row.PipelineUUID, row.Environment, ScheduleStatusPaused, ""); err != nil {
+				if fatalErr := logRowError(row, "pause unsupported variables", err); fatalErr != nil {
+					return fatalErr
+				}
+			}
+			continue
+		}
+		snapshotCheckKey := row.PipelineUUID + "\x00" + strings.TrimSpace(row.SnapshotVersionID)
+		snapshotErr, checked := snapshotChecks[snapshotCheckKey]
+		if !checked {
+			snapshotErr = s.checkScheduleSnapshot(ctx, row.PipelineUUID, row.SnapshotVersionID)
+			snapshotChecks[snapshotCheckKey] = snapshotErr
+		}
+		if snapshotErr != nil {
+			slog.Warn("pausing schedule with invalid deployment pin", "pipeline_uuid", row.PipelineUUID, "environment", row.Environment, "error", snapshotErr)
+			if pauseErr := s.store.SetEnvScheduleStatus(ctx, row.PipelineUUID, row.Environment, ScheduleStatusPaused, ""); pauseErr != nil {
+				if fatalErr := logRowError(row, "pause invalid deployment", pauseErr); fatalErr != nil {
+					return fatalErr
+				}
+			}
+			continue
+		}
 
 		schedule, parseErr := parseSchedule(row.Cron, row.Timezone)
 		if parseErr != nil {
+			slog.Warn("pausing schedule with invalid persisted cron", "pipeline_uuid", row.PipelineUUID, "environment", row.Environment, "error", parseErr)
+			if pauseErr := s.store.SetEnvScheduleStatus(ctx, row.PipelineUUID, row.Environment, ScheduleStatusPaused, ""); pauseErr != nil {
+				if fatalErr := logRowError(row, "pause invalid cron", pauseErr); fatalErr != nil {
+					return fatalErr
+				}
+			}
 			continue
 		}
 		next := schedule.Next(now)
-		_ = s.store.SetEnvScheduleNextRun(ctx, row.PipelineUUID, row.Environment, &next)
-		s.catchUp(ctx, client, row, ref, schedule)
+		if err := s.store.SetEnvScheduleNextRun(ctx, row.PipelineUUID, row.Environment, &next); err != nil {
+			// next_run_at is derived presentation state. A failed write must not
+			// prevent this row's future ticks or unrelated schedules from running.
+			if fatalErr := logRowError(row, "persist next run", err); fatalErr != nil {
+				return fatalErr
+			}
+		}
+		if err := s.catchUp(ctx, client, row, ref, schedule); err != nil {
+			// Catch-up and normal periodic ticks are independent. Keep the latter
+			// registered and let a later reconciliation retry missed intervals.
+			if fatalErr := logRowError(row, "enqueue catch-up", err); fatalErr != nil {
+				return fatalErr
+			}
+		}
 
 		jobs = append(jobs, river.NewPeriodicJob(cronPeriodicSchedule{schedule: schedule}, func() (river.JobArgs, *river.InsertOpts) {
 			args := pipelineRunJobArgs{
@@ -458,19 +643,65 @@ func (s *Service) migrateLegacySchedules(ctx context.Context) error {
 		if item.Catchup {
 			policy = CatchupRunOnce
 		}
-		// Migrated rows keep snapshot_version_id empty: they execute the
-		// latest snapshot if one exists, else the working tree, preserving
-		// pre-migration behavior until the user deploys.
+		status := ScheduleStatusPaused
+		versionID := ""
+		if s.latestSnapshot != nil {
+			latest, found, latestErr := s.latestSnapshot(ctx, item.PipelineUUID)
+			if latestErr != nil {
+				slog.Warn("legacy schedule could not resolve a deployment and was paused", "pipeline_uuid", item.PipelineUUID, "error", latestErr)
+			} else if found && strings.TrimSpace(latest) != "" {
+				latest = strings.TrimSpace(latest)
+				if validateErr := s.validateScheduleSnapshot(ctx, item.PipelineUUID, latest); validateErr != nil {
+					slog.Warn("legacy schedule deployment is invalid and was paused", "pipeline_uuid", item.PipelineUUID, "error", validateErr)
+				} else {
+					versionID = latest
+					status = ScheduleStatusActive
+				}
+			}
+		}
 		if err := s.store.UpsertEnvSchedule(ctx, EnvSchedule{
-			PipelineUUID:  item.PipelineUUID,
-			Environment:   environment,
-			Cron:          strings.TrimSpace(item.Schedule),
-			Timezone:      item.Timezone,
-			CatchupPolicy: policy,
-			Status:        ScheduleStatusActive,
+			PipelineUUID:      item.PipelineUUID,
+			Environment:       environment,
+			SnapshotVersionID: versionID,
+			Cron:              strings.TrimSpace(item.Schedule),
+			Timezone:          item.Timezone,
+			CatchupPolicy:     policy,
+			Status:            status,
 		}); err != nil {
 			return err
 		}
+	}
+	return nil
+}
+
+func (s *Service) validateScheduleSnapshot(ctx context.Context, pipelineUUID, versionID string) error {
+	versionID = strings.TrimSpace(versionID)
+	if versionID == "" {
+		return errors.New("a deployed snapshot is required to schedule this pipeline")
+	}
+	if s.validateSnapshot == nil {
+		return errors.New("snapshot validation is unavailable")
+	}
+	if err := s.validateSnapshot(ctx, strings.TrimSpace(pipelineUUID), versionID); err != nil {
+		return fmt.Errorf("deployment %s is not executable for this pipeline: %w", versionID, err)
+	}
+	return nil
+}
+
+func (s *Service) checkScheduleSnapshot(ctx context.Context, pipelineUUID, versionID string) error {
+	versionID = strings.TrimSpace(versionID)
+	if versionID == "" {
+		return errors.New("a deployed snapshot is required to schedule this pipeline")
+	}
+	check := s.checkSnapshot
+	if check == nil {
+		check = s.validateSnapshot
+	}
+	if check == nil {
+		return errors.New("snapshot validation is unavailable")
+	}
+	if err := check(ctx, strings.TrimSpace(pipelineUUID), versionID); err != nil {
+		return fmt.Errorf("deployment %s is not executable for this pipeline: %w", versionID, err)
 	}
 	return nil
 }
@@ -481,28 +712,27 @@ func watermarkKey(row EnvSchedule) string {
 
 // catchUp applies the schedule's catch-up policy for intervals missed while
 // the process was down (laptop closed overnight).
-func (s *Service) catchUp(ctx context.Context, client *river.Client[*sql.Tx], row EnvSchedule, ref PipelineRef, schedule cron.Schedule) {
+func (s *Service) catchUp(ctx context.Context, client *river.Client[*sql.Tx], row EnvSchedule, ref PipelineRef, schedule cron.Schedule) error {
 	key := watermarkKey(row)
 	now := time.Now().UTC()
 	_, prevEnd, found := previousScheduleInterval(schedule, now)
 	if !found {
-		return
+		return nil
 	}
 	last, ok, err := s.store.LastInterval(ctx, key)
 	if err != nil {
-		return
+		return err
 	}
 	if !ok {
 		// First reconcile for this schedule: start tracking from here, no
 		// retroactive catch-up.
-		_ = s.store.SetInterval(ctx, key, prevEnd)
-		return
+		return s.store.SetInterval(ctx, key, prevEnd)
 	}
 	if !last.Before(prevEnd) {
-		return
+		return nil
 	}
 
-	insertCatchupJob := func(start, end time.Time) {
+	insertCatchupJob := func(start, end time.Time) error {
 		args := pipelineRunJobArgs{
 			PipelineUUID:      row.PipelineUUID,
 			PipelineName:      ref.Name,
@@ -514,12 +744,13 @@ func (s *Service) catchUp(ctx context.Context, client *river.Client[*sql.Tx], ro
 			End:               end.UTC().Format(time.RFC3339Nano),
 			SnapshotVersionID: row.SnapshotVersionID,
 		}
-		_, _ = client.Insert(ctx, args, pipelineRunInsertOpts())
+		_, err := client.Insert(ctx, args, pipelineRunInsertOpts())
+		return err
 	}
 
 	switch row.CatchupPolicy {
 	case CatchupRunOnce:
-		insertCatchupJob(last, prevEnd)
+		return insertCatchupJob(last, prevEnd)
 	case CatchupBackfill:
 		cursor := last
 		const maxBackfillRuns = 100
@@ -528,12 +759,15 @@ func (s *Service) catchUp(ctx context.Context, client *river.Client[*sql.Tx], ro
 			if !next.After(cursor) || next.After(prevEnd) {
 				break
 			}
-			insertCatchupJob(cursor, next)
+			if err := insertCatchupJob(cursor, next); err != nil {
+				return err
+			}
 			cursor = next
 		}
 	default: // CatchupSkip
-		_ = s.store.SetInterval(ctx, key, prevEnd)
+		return s.store.SetInterval(ctx, key, prevEnd)
 	}
+	return nil
 }
 
 func (s *Service) ListSchedules(ctx context.Context) ([]PipelineSchedule, error) {
@@ -646,6 +880,9 @@ func (s *Service) ListAllEnvSchedules(ctx context.Context) (live []EnvSchedule, 
 // environment). Enabling requires a deployed snapshot: pass an explicit
 // version, set DeployNow, or rely on an already-pinned version.
 func (s *Service) UpsertEnvSchedule(ctx context.Context, pipelineUUID string, req UpsertEnvScheduleRequest) (EnvSchedule, error) {
+	if req.DeployNow && strings.TrimSpace(req.SnapshotVersionID) != "" {
+		return EnvSchedule{}, errors.New("deploy_now and snapshot_version_id are mutually exclusive")
+	}
 	environment := strings.TrimSpace(req.Environment)
 	if environment == "" {
 		return EnvSchedule{}, errors.New("environment is required: per-environment schedules have no implicit default")
@@ -673,6 +910,9 @@ func (s *Service) UpsertEnvSchedule(ctx context.Context, pipelineUUID string, re
 	if policy == CatchupBackfill && s.pipelineIntervalAware != nil && !s.pipelineIntervalAware(ctx, pipelineUUID) {
 		return EnvSchedule{}, errors.New("backfill catch-up requires interval-aware assets (incremental materialization)")
 	}
+	if err := s.RequireOwner(); err != nil {
+		return EnvSchedule{}, err
+	}
 
 	existing, found, err := s.store.GetEnvSchedule(ctx, pipelineUUID, environment)
 	if err != nil {
@@ -693,13 +933,19 @@ func (s *Service) UpsertEnvSchedule(ctx context.Context, pipelineUUID string, re
 		}
 		snapshotVersionID = deployed
 	}
-	if snapshotVersionID == "" && !found {
+	if snapshotVersionID == "" {
 		return EnvSchedule{}, errors.New("a deployed snapshot is required to schedule this pipeline; deploy it first or pass deploy_now")
+	}
+	if err := s.validateScheduleSnapshot(ctx, pipelineUUID, snapshotVersionID); err != nil {
+		return EnvSchedule{}, err
 	}
 
 	status := ScheduleStatusActive
 	if req.Paused {
 		status = ScheduleStatusPaused
+	}
+	if status == ScheduleStatusActive && len(req.Vars) > 0 {
+		return EnvSchedule{}, errors.New("schedule variables are not executable yet; save this schedule paused until variable-aware runs are available")
 	}
 	schedule := EnvSchedule{
 		PipelineUUID:      pipelineUUID,
@@ -736,12 +982,23 @@ func (s *Service) SetEnvScheduleLifecycle(ctx context.Context, pipelineUUID, env
 	if status != ScheduleStatusActive && status != ScheduleStatusPaused {
 		return fmt.Errorf("invalid schedule status %q", status)
 	}
-	_, found, err := s.store.GetEnvSchedule(ctx, pipelineUUID, environment)
+	if err := s.RequireOwner(); err != nil {
+		return err
+	}
+	existing, found, err := s.store.GetEnvSchedule(ctx, pipelineUUID, environment)
 	if err != nil {
 		return err
 	}
 	if !found {
 		return errors.New("schedule not found")
+	}
+	if status == ScheduleStatusActive {
+		if len(existing.Vars) > 0 {
+			return errors.New("schedule variables are not executable yet; remove the overrides before resuming")
+		}
+		if err := s.validateScheduleSnapshot(ctx, pipelineUUID, existing.SnapshotVersionID); err != nil {
+			return err
+		}
 	}
 	if err := s.store.SetEnvScheduleStatus(ctx, pipelineUUID, environment, status, ""); err != nil {
 		return err
@@ -752,6 +1009,9 @@ func (s *Service) SetEnvScheduleLifecycle(ctx context.Context, pipelineUUID, env
 // ArchiveEnvSchedule is the user-facing delete: the row becomes a tombstone
 // (run history stays addressable) and is never auto-restored.
 func (s *Service) ArchiveEnvSchedule(ctx context.Context, pipelineUUID, environment string) error {
+	if err := s.RequireOwner(); err != nil {
+		return err
+	}
 	if err := s.store.SetEnvScheduleStatus(ctx, pipelineUUID, environment, ScheduleStatusArchived, ArchivedReasonUser); err != nil {
 		return err
 	}
@@ -762,54 +1022,106 @@ func (s *Service) Trigger(ctx context.Context, pipeline PipelineSchedule, req Tr
 	if s.store == nil || s.runner == nil {
 		return PipelineRun{}, errors.New("scheduler is not configured")
 	}
+	if err := s.RequireOwner(); err != nil {
+		return PipelineRun{}, err
+	}
 	s.mu.Lock()
 	client := s.riverClient
 	s.mu.Unlock()
 	if client == nil {
 		return PipelineRun{}, errors.New("scheduler is not running")
 	}
-	active, err := s.store.HasActiveRun(ctx, pipeline.PipelineID)
+	source, snapshotVersionID, err := normalizeManualRunSource(req.Source, req.SnapshotVersionID)
 	if err != nil {
 		return PipelineRun{}, err
 	}
-	if active {
-		return PipelineRun{}, fmt.Errorf("pipeline %s already has a queued or running run", pipeline.PipelineName)
+	normalizedContext, err := runcontext.Normalize(runcontext.Input{
+		Start:       req.Start,
+		End:         req.End,
+		FullRefresh: req.FullRefresh,
+		Backfill:    req.Backfill,
+		SensorMode:  req.SensorMode,
+	})
+	if err != nil {
+		return PipelineRun{}, err
 	}
-
-	trigger := RunTrigger(strings.TrimSpace(req.Trigger))
-	if trigger == "" {
-		trigger = RunTriggerManual
-	}
+	start := normalizedContext.Start
+	end := normalizedContext.End
+	sensorMode := normalizedContext.SensorMode
 	run := PipelineRun{
-		PipelineID:  pipeline.PipelineID,
-		Pipeline:    pipeline.PipelineName,
-		Environment: strings.TrimSpace(req.Environment),
-		Trigger:     trigger,
-		Status:      RunStatusQueued,
-		WinStart:    parseOptionalRequestTime(req.Start),
-		WinEnd:      parseOptionalRequestTime(req.End),
+		PipelineID:        pipeline.PipelineID,
+		PipelineUUID:      pipeline.PipelineUUID,
+		Pipeline:          pipeline.PipelineName,
+		Environment:       strings.TrimSpace(req.Environment),
+		Trigger:           RunTriggerManual,
+		Status:            RunStatusQueued,
+		WinStart:          start,
+		WinEnd:            end,
+		SnapshotVersionID: snapshotVersionID,
+		FullRefresh:       req.FullRefresh,
+		Backfill:          req.Backfill,
+		SensorMode:        sensorMode,
 	}
-	id, err := s.store.Create(ctx, run)
-	if err != nil {
-		return PipelineRun{}, err
-	}
-	run.ID = id
-	s.publishRunEvent("run.queued", run)
+	spec := manualRunSpec(run, source, req.ConfirmedEnvironment)
+	return s.admitQueuedRun(ctx, client, run, spec)
+}
 
-	inserted, err := client.Insert(ctx, pipelineRunJobArgs{RunID: run.ID}, pipelineRunInsertOpts())
-	if err != nil {
-		_ = s.store.Finish(ctx, run.ID, RunStatusFailed, err)
+func (s *Service) admitQueuedRun(ctx context.Context, client *river.Client[*sql.Tx], run PipelineRun, spec runSpecV1) (PipelineRun, error) {
+	if err := spec.validate(); err != nil {
 		return PipelineRun{}, err
 	}
-	if err := s.store.SetRunRiverJob(ctx, run.ID, inserted.Job.ID); err != nil {
-		_, _ = client.JobCancel(ctx, inserted.Job.ID)
-		linkErr := fmt.Errorf("link pipeline run to River job: %w", err)
-		_ = s.store.Finish(ctx, run.ID, RunStatusFailed, linkErr)
-		return PipelineRun{}, linkErr
+	if err := validateRunSpecBinding(run, spec); err != nil {
+		return PipelineRun{}, err
 	}
-	riverJobID := inserted.Job.ID
-	run.RiverJobID = &riverJobID
-	return run, nil
+	for attempt := 0; attempt < 2; attempt++ {
+		tx, err := s.store.db.BeginTx(ctx, nil)
+		if err != nil {
+			return PipelineRun{}, err
+		}
+		queries := s.store.queries.WithTx(tx)
+		id, err := s.store.createRun(ctx, queries, run)
+		if err == nil {
+			err = s.store.claimRunSlot(ctx, tx, run, id)
+		}
+		if err == nil {
+			err = s.store.insertRunSpec(ctx, tx, id, spec)
+		}
+		var inserted *rivertype.JobInsertResult
+		if err == nil {
+			inserted, err = client.InsertTx(ctx, tx, pipelineRunJobArgs{RunID: id}, pipelineRunInsertOpts())
+		}
+		if err == nil {
+			err = s.store.setRunRiverJob(ctx, queries, id, inserted.Job.ID)
+			if err != nil {
+				err = fmt.Errorf("link pipeline run to River job: %w", err)
+			}
+		}
+		if err == nil {
+			err = tx.Commit()
+		}
+		if err != nil {
+			_ = tx.Rollback()
+		}
+		if isActiveRunSlotConstraint(err) {
+			conflict, found, lookupErr := s.store.pipelineRunActiveError(ctx, run.PipelineID, runSlotKeys(run))
+			if lookupErr != nil {
+				return PipelineRun{}, errors.Join(err, lookupErr)
+			}
+			if !found && attempt == 0 {
+				continue
+			}
+			return PipelineRun{}, conflict
+		}
+		if err != nil {
+			return PipelineRun{}, err
+		}
+		run.ID = id
+		riverJobID := inserted.Job.ID
+		run.RiverJobID = &riverJobID
+		s.publishRunEvent("run.queued", run)
+		return run, nil
+	}
+	return PipelineRun{}, errors.New("pipeline run admission retry exhausted")
 }
 
 func (s *Service) ListRuns(ctx context.Context, filter RunFilter) (RunList, error) {
@@ -824,20 +1136,58 @@ func (s *Service) GetRun(ctx context.Context, id string) (PipelineRun, []LogLine
 	return run, trimLegacyOutputReplay(logs), steps, nil
 }
 
-func (s *Service) prepareRun(ctx context.Context, riverJobID int64, args pipelineRunJobArgs) (PipelineRun, bool, error) {
-	if strings.TrimSpace(args.RunID) != "" {
-		if err := s.store.SetRunRiverJob(ctx, args.RunID, riverJobID); err != nil {
-			return PipelineRun{}, false, err
+func (s *Service) prepareRun(ctx context.Context, riverJobID int64, args pipelineRunJobArgs) (PipelineRun, runSpecV1, bool, error) {
+	if strings.TrimSpace(args.RunID) == "" && riverJobID != 0 {
+		if existingRunID, found, err := s.store.RunIDForRiverJob(ctx, riverJobID); err != nil {
+			return PipelineRun{}, runSpecV1{}, false, err
+		} else if found {
+			args.RunID = existingRunID
 		}
+	}
+	if strings.TrimSpace(args.RunID) != "" {
 		run, _, _, err := s.store.Get(ctx, args.RunID)
 		if err != nil {
-			return PipelineRun{}, false, err
+			return PipelineRun{}, runSpecV1{}, false, err
 		}
 		if run.Status != RunStatusQueued {
-			return PipelineRun{}, false, nil
+			return PipelineRun{}, runSpecV1{}, false, nil
+		}
+		if riverJobID != 0 {
+			if run.RiverJobID != nil && *run.RiverJobID != riverJobID {
+				return PipelineRun{}, runSpecV1{}, false, &invalidRunSpecError{
+					RunID: run.ID,
+					Err:   fmt.Errorf("queued run is linked to River job %d, not %d", *run.RiverJobID, riverJobID),
+				}
+			}
+			if run.RiverJobID == nil {
+				if err := s.store.SetRunRiverJob(ctx, args.RunID, riverJobID); err != nil {
+					return PipelineRun{}, runSpecV1{}, false, err
+				}
+			}
+		}
+		spec, found, err := s.store.GetRunSpec(ctx, run.ID)
+		if err != nil {
+			return PipelineRun{}, runSpecV1{}, false, err
+		}
+		if !found {
+			spec, err = legacyRunSpec(run, args)
+			if err != nil {
+				return PipelineRun{}, runSpecV1{}, false, &invalidRunSpecError{RunID: run.ID, Err: err}
+			}
+			spec, err = s.store.SetRunSpecIfMissing(ctx, run.ID, spec)
+			if err != nil {
+				return PipelineRun{}, runSpecV1{}, false, err
+			}
+			run, _, _, err = s.store.Get(ctx, run.ID)
+			if err != nil {
+				return PipelineRun{}, runSpecV1{}, false, err
+			}
+		}
+		if err := validateRunSpecBinding(run, spec); err != nil {
+			return PipelineRun{}, runSpecV1{}, false, &invalidRunSpecError{RunID: run.ID, Err: err}
 		}
 		run.RiverJobID = &riverJobID
-		return run, true, nil
+		return applyRunSpec(run, spec), spec, true, nil
 	}
 
 	// Per-environment scheduled runs: resolve the stable UUID to the
@@ -849,7 +1199,7 @@ func (s *Service) prepareRun(ctx context.Context, riverJobID int64, args pipelin
 	if pipelineUUID != "" {
 		ref, ok := s.resolveRef(ctx, pipelineUUID)
 		if !ok {
-			return PipelineRun{}, false, nil
+			return PipelineRun{}, runSpecV1{}, false, nil
 		}
 		encodedPipelineID = ref.EncodedID
 		if ref.Name != "" {
@@ -858,52 +1208,50 @@ func (s *Service) prepareRun(ctx context.Context, riverJobID int64, args pipelin
 	}
 
 	if encodedPipelineID == "" {
-		return PipelineRun{}, false, errors.New("pipeline id is required")
-	}
-	active, err := s.store.HasActiveRun(ctx, encodedPipelineID)
-	if err != nil || active {
-		return PipelineRun{}, false, err
-	}
-	trigger := args.Trigger
-	if trigger == "" {
-		trigger = RunTriggerSchedule
+		return PipelineRun{}, runSpecV1{}, false, &invalidScheduleSignalError{err: errors.New("pipeline id is required")}
 	}
 	args.PipelineID = encodedPipelineID
 	start, end := s.scheduledWindow(ctx, args, time.Now().UTC())
-	if parsed := parseOptionalRequestTime(args.Start); parsed != nil {
-		start = *parsed
+	explicitStart, explicitEnd, err := parseRequestWindow(args.Start, args.End)
+	if err != nil {
+		return PipelineRun{}, runSpecV1{}, false, &invalidScheduleSignalError{err: fmt.Errorf("invalid scheduled interval: %w", err)}
 	}
-	if parsed := parseOptionalRequestTime(args.End); parsed != nil {
-		end = *parsed
-	}
-	if !start.Before(end) {
-		start = end.Add(-time.Minute)
+	if explicitStart != nil {
+		start = *explicitStart
+		end = *explicitEnd
 	}
 	run := PipelineRun{
 		PipelineID:        encodedPipelineID,
-		RiverJobID:        &riverJobID,
 		PipelineUUID:      pipelineUUID,
 		Pipeline:          pipelineName,
 		Environment:       strings.TrimSpace(args.Environment),
-		Trigger:           trigger,
+		Trigger:           RunTriggerSchedule,
 		Status:            RunStatusQueued,
 		WinStart:          &start,
 		WinEnd:            &end,
 		SnapshotVersionID: args.SnapshotVersionID,
+		FullRefresh:       args.FullRefresh,
+		Backfill:          args.Backfill,
+		SensorMode:        strings.TrimSpace(args.SensorMode),
 	}
-	id, err := s.store.Create(ctx, run)
+	if riverJobID != 0 {
+		run.RiverJobID = &riverJobID
+	}
+	spec := scheduledRunSpec(run, args)
+	if err := spec.validate(); err != nil {
+		return PipelineRun{}, runSpecV1{}, false, &invalidScheduleSignalError{err: err}
+	}
+	id, err := s.store.CreateWithSpec(ctx, run, spec)
 	if err != nil {
-		return PipelineRun{}, false, err
+		return PipelineRun{}, runSpecV1{}, false, err
 	}
 	run.ID = id
-	// Create persists SnapshotVersionID but PipelineUUID is in-memory only;
-	// re-attach it after the round trip for the watermark update.
-	run.PipelineUUID = pipelineUUID
+	run = applyRunSpec(run, spec)
 	s.publishRunEvent("run.queued", run)
-	return run, true, nil
+	return run, spec, true, nil
 }
 
-func (s *Service) execute(ctx context.Context, run PipelineRun) error {
+func (s *Service) execute(ctx context.Context, run PipelineRun, spec runSpecV1) error {
 	defer func() {
 		if recovered := recover(); recovered != nil {
 			err := fmt.Errorf("pipeline run panicked: %v", recovered)
@@ -918,13 +1266,38 @@ func (s *Service) execute(ctx context.Context, run PipelineRun) error {
 	run = ensureScheduledRunWindow(run)
 	started := time.Now().UTC()
 	if err := s.store.MarkRunning(ctx, run.ID, started); err != nil {
-		return err
+		return &runStartPersistenceError{err: err}
 	}
 	run.Status = RunStatusRunning
 	run.StartedAt = &started
-	s.publishRunEvent("run.started", run)
 
-	req := RunRequest{RunID: run.ID, PipelineID: run.PipelineID, Environment: run.Environment, SnapshotVersionID: run.SnapshotVersionID}
+	req := RunRequest{
+		RunID:                run.ID,
+		PipelineID:           spec.Pipeline.ID,
+		Environment:          spec.Requested.Environment,
+		Scheduled:            spec.Origin == RunTriggerSchedule,
+		SnapshotVersionID:    spec.Source.SnapshotVersionID,
+		FullRefresh:          spec.Requested.FullRefresh,
+		Backfill:             spec.Requested.Backfill,
+		ConfirmedEnvironment: spec.Authorization.ConfirmedEnvironment,
+		SensorMode:           spec.Requested.SensorMode,
+	}
+	req.OnContextResolved = func(resolved RunExecutionContext) error {
+		if err := s.store.SetRunExecutionContext(ctx, run.ID, resolved); err != nil {
+			return err
+		}
+		windowStart := resolved.WinStart
+		windowEnd := resolved.WinEnd
+		run.Environment = strings.TrimSpace(resolved.Environment)
+		run.WinStart = &windowStart
+		run.WinEnd = &windowEnd
+		run.FullRefresh = resolved.FullRefresh
+		run.Backfill = resolved.Backfill
+		run.SensorMode = strings.TrimSpace(resolved.SensorMode)
+		run.ExecutionContextResolved = true
+		s.publishRunEvent("run.started", run)
+		return nil
+	}
 	req.OnStep = func(event RunStepEvent) {
 		s.persistRunStep(ctx, run.ID, event)
 	}
@@ -940,18 +1313,30 @@ func (s *Service) execute(ctx context.Context, run PipelineRun) error {
 		s.publishRunEvent("run.log", map[string]any{"run_id": run.ID, "log": logLine})
 	})
 	status, runErr := statusFromResult(result)
-	if err := s.store.Finish(ctx, run.ID, status, runErr); err != nil {
-		_ = s.store.AppendLog(ctx, run.ID, LogLine{At: time.Now().UTC(), Line: "failed to persist run status: " + err.Error()})
-		return err
+	var finishErr error
+	if status == RunStatusSuccess && spec.Schedule != nil && spec.Schedule.AdvancesWatermark && spec.Requested.End != nil {
+		watermark := spec.Schedule.PipelineUUID + "|" + spec.Schedule.Environment
+		finishErr = s.store.FinishScheduledSuccess(ctx, run.ID, watermark, *spec.Requested.End)
+	} else {
+		finishErr = s.store.Finish(ctx, run.ID, status, runErr)
 	}
-	if status == RunStatusSuccess && run.Trigger == RunTriggerSchedule && run.WinEnd != nil {
-		watermark := run.PipelineID
-		if run.PipelineUUID != "" {
-			watermark = run.PipelineUUID + "|" + run.Environment
-		}
-		_ = s.store.SetInterval(ctx, watermark, *run.WinEnd)
+	if finishErr != nil {
+		_ = s.store.AppendLog(ctx, run.ID, LogLine{At: time.Now().UTC(), Line: "failed to persist run status: " + finishErr.Error()})
+		return finishErr
+	}
+	if persisted, _, _, getErr := s.store.Get(ctx, run.ID); getErr == nil {
+		// Stable scheduled identity is private RunSpec provenance rather than a
+		// public run-row column. Preserve it while taking user-visible effective
+		// context from the canonical row written by OnContextResolved and Finish.
+		persisted.PipelineUUID = run.PipelineUUID
+		run = persisted
+	} else {
+		_ = s.store.AppendLog(ctx, run.ID, LogLine{At: time.Now().UTC(), Line: "failed to reload canonical run context: " + getErr.Error()})
 	}
 	finished := time.Now().UTC()
+	if run.FinishedAt != nil {
+		finished = *run.FinishedAt
+	}
 	_ = s.store.FinishOpenSteps(ctx, run.ID, status, finished, runErr)
 	run.Status = status
 	run.FinishedAt = &finished
@@ -1072,13 +1457,27 @@ func parseSchedule(expr, timezone string) (cron.Schedule, error) {
 	return parser.Parse("CRON_TZ=" + location.String() + " " + expr)
 }
 
-func parseOptionalRequestTime(value string) *time.Time {
-	if strings.TrimSpace(value) == "" {
-		return nil
+func normalizeManualRunSource(source RunSource, snapshotVersionID string) (RunSource, string, error) {
+	if source == "" {
+		source = RunSourceWorkingTree
 	}
-	parsed, err := time.Parse(time.RFC3339, strings.TrimSpace(value))
-	if err != nil {
-		return nil
+	pinnedVersion := strings.TrimSpace(snapshotVersionID)
+	switch source {
+	case RunSourceWorkingTree:
+		if pinnedVersion != "" {
+			return "", "", errors.New("snapshot_version_id must be empty when source is working_tree")
+		}
+		return source, "", nil
+	case RunSourceSnapshot:
+		if pinnedVersion == "" {
+			return "", "", errors.New("snapshot_version_id is required when source is snapshot")
+		}
+		return source, pinnedVersion, nil
+	default:
+		return "", "", fmt.Errorf("invalid run source %q: expected working_tree or snapshot", source)
 	}
-	return &parsed
+}
+
+func parseRequestWindow(startValue, endValue string) (*time.Time, *time.Time, error) {
+	return runcontext.NormalizeWindow(startValue, endValue)
 }

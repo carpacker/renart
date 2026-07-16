@@ -74,7 +74,6 @@ test.describe("app build actions live", () => {
     await expect(page.locator(".view-lines").first()).toContainText("customer_id", {
       timeout: 15000,
     });
-
     const materializeResponse = page.waitForResponse(
       (response) =>
         response.url().includes(`/api/assets/${customersAssetId}/materialize/stream`) &&
@@ -107,25 +106,266 @@ test.describe("app build actions live", () => {
     await expect(disclosure.locator("pre")).toContainText(/select/i);
   });
 
+  test("renders saved execution SQL without running the asset", async ({ liveApp, page }) => {
+    await page.goto(`${liveApp.baseURL}/pipelines/${pipelineId}/assets/${customersAssetId}/code`);
+    await expect(page.locator(".view-lines").first()).toContainText("customer_id", {
+      timeout: 15000,
+    });
+    const executionRequests: string[] = [];
+    page.on("request", (request) => {
+      const url = request.url();
+      if (
+        request.method() === "POST" &&
+        (url.includes("/materialize/stream") ||
+          url.includes("/trigger") ||
+          url.endsWith("/api/run"))
+      ) {
+        executionRequests.push(url);
+      }
+    });
+
+    const renderResponse = page.waitForResponse(
+      (response) =>
+        response.url().includes(`/api/assets/${customersAssetId}/render`) && response.ok(),
+      { timeout: 30000 },
+    );
+    await page.getByRole("button", { name: "Render saved SQL", exact: true }).click();
+    const response = await renderResponse;
+    expect(response.request().postDataJSON()).toMatchObject({
+      environment: "default",
+      full_refresh: false,
+    });
+
+    const payload = (await response.json()) as {
+      provenance: { source: { kind: string; merkle_root: string } };
+      stages: Array<{ kind: string; content?: string; fidelity: string }>;
+    };
+    expect(payload.provenance.source).toMatchObject({ kind: "working_tree" });
+    expect(payload.provenance.source.merkle_root).toMatch(/^[a-f0-9]{64}$/);
+    expect(payload.stages.find((stage) => stage.kind === "compiled_query")).toMatchObject({
+      fidelity: "exact",
+    });
+    const executionSQL = payload.stages.find((stage) => stage.kind === "execution_sql")?.content;
+    expect(executionSQL).toMatch(/create(?:\s+or\s+replace)?\s+view/i);
+
+    const preview = page.getByTestId("asset-render-view");
+    await expect(preview).toBeVisible({ timeout: 15000 });
+    await expect(preview).toContainText("Preview — not executed");
+    await expect(preview).toContainText("Saved workspace");
+    await expect(preview.getByRole("radio", { name: "Compiled query" })).toBeChecked();
+    await preview.getByRole("radio", { name: "Execution SQL" }).click();
+    await expect(preview.getByRole("radio", { name: "Execution SQL" })).toBeChecked();
+    await expect(preview.locator(".view-lines").first()).toContainText(
+      /create(?:\s+or\s+replace)?\s+view/i,
+    );
+    expect(executionRequests).toEqual([]);
+
+    const assetEditor = page.locator(".monaco-editor").first();
+    await assetEditor.click();
+    await page.keyboard.press("ControlOrMeta+End");
+    const savedDraftMarker = "-- render saved draft";
+    await page.keyboard.type(`\n${savedDraftMarker}`);
+    await expect(
+      page.getByText("Render an asset to preview its saved execution SQL here."),
+    ).toBeVisible();
+
+    const rerenderResponse = page.waitForResponse(
+      (candidate) =>
+        candidate.url().includes(`/api/assets/${customersAssetId}/render`) && candidate.ok(),
+      { timeout: 30000 },
+    );
+    const savedWorkspaceRefresh = page.waitForResponse(
+      (candidate) =>
+        candidate.url().includes(`/api/pipelines/${pipelineId}/type-check`) && candidate.ok(),
+      { timeout: 30000 },
+    );
+    await page.getByRole("button", { name: "Render saved SQL", exact: true }).click();
+    const rerenderPayload = (await (await rerenderResponse).json()) as {
+      stages: Array<{ kind: string; content?: string }>;
+    };
+    expect(
+      rerenderPayload.stages.find((stage) => stage.kind === "compiled_query")?.content,
+    ).toContain(savedDraftMarker);
+
+    await expect
+      .poll(
+        async () => {
+          const workspaceResponse = await page.request.get(`${liveApp.baseURL}/api/workspace`);
+          if (!workspaceResponse.ok()) return "";
+          const workspace = (await workspaceResponse.json()) as WorkspaceResponse;
+          return (
+            workspace.pipelines
+              .flatMap((pipeline) => pipeline.assets)
+              .find((asset) => asset.id === customersAssetId)?.content ?? ""
+          );
+        },
+        { timeout: 30000 },
+      )
+      .toContain(savedDraftMarker);
+    await savedWorkspaceRefresh;
+    await expect(preview).toBeVisible({ timeout: 15000 });
+
+    const savedWorkspaceResponse = await page.request.get(`${liveApp.baseURL}/api/workspace`);
+    expect(savedWorkspaceResponse.ok()).toBe(true);
+    const savedWorkspace = (await savedWorkspaceResponse.json()) as WorkspaceResponse;
+    const savedContent = savedWorkspace.pipelines
+      .flatMap((pipeline) => pipeline.assets)
+      .find((asset) => asset.id === customersAssetId)?.content;
+    expect(savedContent).toContain(savedDraftMarker);
+    const externalMarker = "-- external workspace change";
+    const externalUpdate = await page.request.put(
+      `${liveApp.baseURL}/api/pipelines/${pipelineId}/assets/${customersAssetId}`,
+      {
+        data: {
+          content: `${savedContent?.trimEnd()}\n${externalMarker}\n`,
+        },
+      },
+    );
+    expect(externalUpdate.ok()).toBe(true);
+    await expect(
+      page.getByText("Render an asset to preview its saved execution SQL here."),
+    ).toBeVisible({ timeout: 30000 });
+    await expect(preview).toHaveCount(0);
+
+    const externalRenderResponse = page.waitForResponse(
+      (candidate) =>
+        candidate.url().includes(`/api/assets/${customersAssetId}/render`) && candidate.ok(),
+      { timeout: 30000 },
+    );
+    await page.getByRole("button", { name: "Render saved SQL", exact: true }).click();
+    const externalRenderPayload = (await (await externalRenderResponse).json()) as {
+      stages: Array<{ kind: string; content?: string }>;
+    };
+    expect(
+      externalRenderPayload.stages.find((stage) => stage.kind === "compiled_query")?.content,
+    ).toContain(externalMarker);
+    await expect(preview).toBeVisible({ timeout: 15000 });
+
+    await assetEditor.click();
+    await page.keyboard.press("ControlOrMeta+End");
+    await page.keyboard.type("\n-- newer unsaved render intent");
+    await expect(
+      page.getByText("Render an asset to preview its saved execution SQL here."),
+    ).toBeVisible();
+    await expect(preview).toHaveCount(0);
+  });
+
   test("pipeline run button triggers a scheduler run", async ({ liveApp, page }) => {
     await page.goto(`${liveApp.baseURL}/pipelines/${pipelineId}/assets/${customersAssetId}/code`);
     await expect(page.locator(".view-lines").first()).toContainText("customer_id", {
       timeout: 15000,
     });
 
+    let saveFinished = false;
+    let saveFinishedWhenTriggered: boolean | undefined;
+    await page.route(`**/api/pipelines/${pipelineId}/assets/${customersAssetId}`, async (route) => {
+      if (route.request().method() !== "PUT") {
+        await route.continue();
+        return;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 400));
+      const response = await route.fetch();
+      saveFinished = true;
+      await route.fulfill({ response });
+    });
+    page.on("request", (request) => {
+      if (
+        request.method() === "POST" &&
+        request.url().includes(`/api/pipelines/${pipelineId}/trigger`)
+      ) {
+        saveFinishedWhenTriggered = saveFinished;
+      }
+    });
+
+    const editor = page.locator(".monaco-editor").first();
+    await editor.click();
+    await page.keyboard.press("Control+End");
+    await page.keyboard.type("\n-- save barrier e2e");
+
+    const runButton = page.getByRole("button", { name: "Run workspace", exact: true });
+    await expect(runButton).toHaveAttribute(
+      "title",
+      /^Run workspace · default · \d{4}-\d{2}-\d{2} \d{2}:\d{2}–\d{4}-\d{2}-\d{2} \d{2}:\d{2} UTC$/,
+    );
+    await expect(
+      page.getByRole("button", { name: /^(?:Fresh|Build needed: \d+ stale assets?)/ }),
+    ).toBeVisible();
+
     const triggerResponse = page.waitForResponse(
       (response) =>
         response.url().includes(`/api/pipelines/${pipelineId}/trigger`) && response.ok(),
       { timeout: 30000 },
     );
-    await page.getByRole("button", { name: "Run", exact: true }).click();
-    await triggerResponse;
+    await runButton.click();
+    const response = await triggerResponse;
+    expect(response.request().postDataJSON()).toMatchObject({ source: "working_tree" });
+    expect(saveFinishedWhenTriggered).toBe(true);
 
     const output = page.locator("pre.font-console").first();
     await expect(output).toContainText("Analyzed the pipeline 'analytics'", {
       timeout: 30000,
     });
     await expect(output).not.toContainText(/Queued manual River run|Run started\.|Run queued\./);
+  });
+
+  test("does not report fresh when the freshness request is unavailable", async ({
+    liveApp,
+    page,
+  }) => {
+    await page.route(`**/api/pipelines/${pipelineId}/staleness**`, async (route) => {
+      await route.fulfill({
+        status: 503,
+        contentType: "application/json",
+        body: JSON.stringify({
+          status: "error",
+          error: { code: "staleness_unavailable", message: "staleness store unavailable" },
+        }),
+      });
+    });
+
+    await page.goto(`${liveApp.baseURL}/pipelines/${pipelineId}/assets/${customersAssetId}/code`);
+    await expect(page.locator(".view-lines").first()).toContainText("customer_id", {
+      timeout: 15000,
+    });
+
+    const freshness = page.getByRole("button", { name: "Freshness unavailable", exact: true });
+    await expect(freshness).toBeVisible();
+    await expect(freshness).toBeDisabled();
+    await expect(freshness).toHaveAttribute("title", /staleness store unavailable/);
+    await expect(page.getByRole("button", { name: "Fresh", exact: true })).toHaveCount(0);
+  });
+
+  test("links a rejected pipeline trigger to the already active run", async ({ liveApp, page }) => {
+    const activeRunId = "active-run-id";
+    await page.route(`**/api/pipelines/${pipelineId}/trigger`, async (route) => {
+      await route.fulfill({
+        status: 409,
+        contentType: "application/json",
+        body: JSON.stringify({
+          status: "error",
+          error: {
+            code: "pipeline_run_active",
+            message: `pipeline ${pipelineId} already has active run ${activeRunId}`,
+            details: { pipeline_id: pipelineId, active_run_id: activeRunId },
+          },
+        }),
+      });
+    });
+
+    await page.goto(`${liveApp.baseURL}/pipelines/${pipelineId}/assets/${customersAssetId}/code`);
+    await expect(page.locator(".view-lines").first()).toContainText("customer_id", {
+      timeout: 15000,
+    });
+
+    await page.getByRole("button", { name: "Run workspace", exact: true }).click();
+    await expect(page.getByText(`Run ${activeRunId}`, { exact: true })).toBeVisible();
+    await expect(
+      page.getByText(new RegExp(`Run ${activeRunId} is already queued or running`)),
+    ).toBeVisible();
+    await expect(page.getByRole("link", { name: "Open run", exact: true })).toHaveAttribute(
+      "href",
+      `/runs/${activeRunId}`,
+    );
   });
 
   test("explorer creation actions live at the workspace and pipeline scopes", async ({

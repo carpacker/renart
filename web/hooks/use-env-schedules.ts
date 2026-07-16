@@ -7,6 +7,7 @@ import {
   setEnvScheduleStatus,
   upsertEnvSchedule,
   type EnvSchedule,
+  type SchedulerOwnership,
   type UpsertEnvScheduleInput,
 } from "@/lib/api-env-schedules";
 import { schedulerRunEventAtom } from "@/lib/atoms/domains/results";
@@ -20,6 +21,7 @@ export function useEnvSchedules() {
   const runEvent = useAtomValue(schedulerRunEventAtom);
   const [schedules, setSchedules] = useState<EnvSchedule[]>([]);
   const [archived, setArchived] = useState<EnvSchedule[]>([]);
+  const [ownership, setOwnership] = useState<SchedulerOwnership | null>(null);
   const [loading, setLoading] = useState(true);
   const [busyKey, setBusyKey] = useState<string | null>(null);
 
@@ -28,8 +30,19 @@ export function useEnvSchedules() {
       const response = await getEnvSchedules();
       setSchedules(response.schedules ?? []);
       setArchived(response.archived ?? []);
-    } catch {
-      // keep previous state
+      setOwnership(
+        response.scheduler ?? {
+          state: "unavailable",
+          message: "The server did not report scheduler ownership.",
+        },
+      );
+    } catch (cause) {
+      // Keep the last readable rows but fail closed for every mutation.
+      setOwnership({
+        state: "unavailable",
+        message:
+          cause instanceof Error ? cause.message : "Scheduler ownership could not be loaded.",
+      });
     } finally {
       setLoading(false);
     }
@@ -46,8 +59,18 @@ export function useEnvSchedules() {
     }
   }, [refresh, runEvent]);
 
+  const canMutate = ownership?.state === "owner";
+  const ownershipReason =
+    ownership?.message ??
+    (ownership?.state === "follower"
+      ? "Schedules are managed by another Renart process."
+      : "Scheduler ownership has not been established.");
+
   const withBusy = useCallback(
     async (key: string, action: () => Promise<unknown>) => {
+      if (!canMutate) {
+        throw new Error(ownershipReason);
+      }
       setBusyKey(key);
       try {
         await action();
@@ -56,7 +79,7 @@ export function useEnvSchedules() {
         setBusyKey(null);
       }
     },
-    [refresh],
+    [canMutate, ownershipReason, refresh],
   );
 
   const upsert = useCallback(
@@ -91,5 +114,17 @@ export function useEnvSchedules() {
     [withBusy],
   );
 
-  return { schedules, archived, loading, busyKey, refresh, upsert, setStatus, archive };
+  return {
+    schedules,
+    archived,
+    ownership,
+    canMutate,
+    ownershipReason,
+    loading,
+    busyKey,
+    refresh,
+    upsert,
+    setStatus,
+    archive,
+  };
 }

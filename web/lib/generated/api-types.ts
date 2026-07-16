@@ -485,6 +485,78 @@ export type PipelineMaterializationResponse = {
   assets: PipelineMaterializationState[];
 };
 
+export type AssetRenderRequest = {
+  environment?: string;
+  start_date?: string;
+  end_date?: string;
+  execution_time?: string;
+  full_refresh: boolean;
+};
+
+export type AssetRenderSource = {
+  kind: string;
+  pipeline_path: string;
+  merkle_root: string;
+};
+
+export type AssetRenderContext = {
+  environment?: string;
+  schema_prefix?: string;
+  start_date: string;
+  end_date: string;
+  execution_time: string;
+  run_id: string;
+  requested_full_refresh: boolean;
+  full_refresh: boolean;
+  variables_digest: string;
+  configuration_digest: string;
+};
+
+export type AssetRenderProvenance = {
+  source: AssetRenderSource;
+  pipeline: string;
+  context: AssetRenderContext;
+};
+
+export type AssetRenderAsset = {
+  id?: string;
+  name: string;
+  type: string;
+  dialect?: string;
+  connection_name?: string;
+};
+
+export type AssetRenderStage = {
+  kind: string;
+  language: string;
+  content?: string;
+  status: "ok" | "unsupported" | "error";
+  fidelity: "exact" | "semantic" | "runtime_only" | "unsupported";
+  conditional?: boolean;
+  redacted?: boolean;
+  message?: string;
+};
+
+export type AssetRenderRedaction = {
+  kind: string;
+  replacement: string;
+};
+
+export type AssetRenderIssue = {
+  code: string;
+  severity: string;
+  message: string;
+};
+
+export type AssetRenderResult = {
+  status: "ok" | "partial" | "unsupported" | "error";
+  provenance: AssetRenderProvenance;
+  asset: AssetRenderAsset;
+  stages: AssetRenderStage[];
+  issues: AssetRenderIssue[];
+  redactions: AssetRenderRedaction[];
+};
+
 export type AssetInspectResponse = {
   status: string;
   columns: string[];

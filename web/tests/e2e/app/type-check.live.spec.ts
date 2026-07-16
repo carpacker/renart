@@ -149,7 +149,7 @@ test.describe("app pipeline type check live", () => {
     expect(report.status).toBe("error");
   });
 
-  test("notification bell opens the type-check tab in the bottom panel", async ({
+  test("problems control opens the type-check tab in the bottom panel", async ({
     liveApp,
     page,
   }) => {
@@ -169,8 +169,11 @@ test.describe("app pipeline type check live", () => {
     await page.goto(`${liveApp.baseURL}/pipelines/${pipelineId}/assets/${customersAssetId}/canvas`);
     await typeCheckResponse;
 
-    // The repurposed notification bell opens the Type check results tab.
-    await page.getByRole("button", { name: "Type check" }).first().click();
+    // The visible problems status opens the detailed Type check results tab.
+    await page
+      .getByRole("button", { name: /^Problems \d+$/ })
+      .first()
+      .click();
 
     await expect(page.getByText("analytics.bad_downstream").first()).toBeVisible({
       timeout: 15000,

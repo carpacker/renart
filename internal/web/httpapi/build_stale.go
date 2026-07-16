@@ -4,11 +4,11 @@ import (
 	"context"
 	"net/http"
 	"strings"
-	"time"
 
 	"github.com/go-chi/chi/v5"
 	webapi "renart/internal/web/api"
 	webmodel "renart/internal/web/model"
+	"renart/internal/web/runcontext"
 	"renart/internal/web/service"
 	"renart/internal/web/staleness"
 )
@@ -45,6 +45,20 @@ func RegisterBuildStaleRoutes(router chi.Router, handlers *BuildStaleAPI) {
 }
 
 func (h *BuildStaleAPI) HandleBuildStaleStream(w http.ResponseWriter, r *http.Request) {
+	query, err := decodeStrictQuery(r, "upstream_of", "environment", "start", "end")
+	if err != nil {
+		webapi.WriteBadRequest(w, "invalid_execution_context", err.Error())
+		return
+	}
+	normalized, err := runcontext.Normalize(runcontext.Input{
+		Start: query.Get("start"),
+		End:   query.Get("end"),
+	})
+	if err != nil {
+		webapi.WriteBadRequest(w, "invalid_execution_context", err.Error())
+		return
+	}
+
 	pipelineID := chi.URLParam(r, "id")
 	pipelineUUID, ok := h.ResolvePipelineUUID(pipelineID)
 	if !ok {
@@ -52,7 +66,7 @@ func (h *BuildStaleAPI) HandleBuildStaleStream(w http.ResponseWriter, r *http.Re
 		return
 	}
 	var include map[string]struct{}
-	if upstreamOf := strings.TrimSpace(r.URL.Query().Get("upstream_of")); upstreamOf != "" {
+	if upstreamOf := strings.TrimSpace(query.Get("upstream_of")); upstreamOf != "" {
 		if h.ResolveUpstreamAssetNames == nil {
 			webapi.WriteInternalError(w, "upstream_resolution_unavailable", "upstream resolution is unavailable")
 			return
@@ -68,17 +82,17 @@ func (h *BuildStaleAPI) HandleBuildStaleStream(w http.ResponseWriter, r *http.Re
 	selection := staleness.Selection{
 		PipelineUUID:      pipelineUUID,
 		EncodedPipelineID: pipelineID,
-		Environment:       r.URL.Query().Get("environment"),
+		Environment:       query.Get("environment"),
 	}
-	startDate := ""
-	endDate := ""
-	if start, ok := parseQueryTime(r, "start"); ok {
+	startDate := normalized.StartString()
+	endDate := normalized.EndString()
+	if normalized.Start != nil {
+		start := *normalized.Start
 		selection.Start = &start
-		startDate = start.Format(time.RFC3339)
 	}
-	if end, ok := parseQueryTime(r, "end"); ok {
+	if normalized.End != nil {
+		end := *normalized.End
 		selection.End = &end
-		endDate = end.Format(time.RFC3339)
 	}
 
 	statuses, err := h.Staleness.Statuses(r.Context(), selection)
