@@ -43,11 +43,31 @@ test.describe("app scheduler pages live", () => {
     await expect(page.getByRole("heading", { name: "Schedules" })).toBeVisible();
     await expect(page.getByText("analytics", { exact: true })).toBeVisible({ timeout: 15000 });
     await expect(page.getByText("daily", { exact: true })).toBeVisible();
-    await expect(page.getByTestId("schedule-run-window-context")).toContainText(
-      "skip · runtime window from pinned pipeline",
+    const scheduleRow = page.getByTestId("schedule-row").filter({ hasText: "analytics" }).first();
+    const metadata = scheduleRow.getByTestId("schedule-metadata");
+    await expect(metadata).toContainText("Schedule");
+    await expect(metadata).toContainText("Timezone");
+    await expect(metadata).toContainText("Last run");
+    await expect(metadata).toContainText("Deployment");
+    await expect(scheduleRow.getByTestId("schedule-run-window-context")).toContainText(
+      "Skip missed runs",
     );
-    await expect(page.getByText("Needs deployment", { exact: true }).first()).toBeVisible();
-    await expect(page.getByRole("button", { name: "Deploy & pin" }).first()).toBeVisible();
+    await expect(metadata).toContainText("Pinned pipeline schedule");
+    expect(
+      await metadata.locator("[data-schedule-meta-value]").evaluateAll((elements) =>
+        elements.every((element) => {
+          const style = getComputedStyle(element);
+          return style.whiteSpace === "normal" && style.textOverflow !== "ellipsis";
+        }),
+      ),
+    ).toBe(true);
+    await expect(scheduleRow.getByText("Needs deployment", { exact: true })).toBeVisible();
+    const actions = scheduleRow.getByTestId("schedule-actions");
+    await expect(actions.getByRole("button", { name: "Deploy & pin" })).toBeVisible();
+    await expect(actions.getByRole("button", { name: "Run now" })).toBeDisabled();
+    await actions.getByRole("button", { name: /More actions for analytics/ }).click();
+    await expect(page.getByRole("menuitem", { name: "Archive schedule" })).toBeVisible();
+    await page.keyboard.press("Escape");
   });
 
   test("surfaces run list and run-detail transport failures", async ({ liveApp, page }) => {
@@ -164,7 +184,8 @@ test.describe("app scheduler pages live", () => {
         }),
       });
     });
-    await page.getByRole("button", { name: `Run pinned ${pinnedVersion.slice(0, 8)}` }).click();
+    const scheduleRow = page.getByTestId("schedule-row").filter({ hasText: "analytics" }).first();
+    await scheduleRow.getByRole("button", { name: "Run now" }).click();
     expect((await pinnedRunRequest).postDataJSON()).toMatchObject({
       source: "snapshot",
       snapshot_version_id: pinnedVersion,
@@ -179,7 +200,7 @@ test.describe("app scheduler pages live", () => {
         response.ok(),
       { timeout: 15000 },
     );
-    await page.getByRole("button", { name: "Update deployment" }).click();
+    await scheduleRow.getByRole("button", { name: "Update deployment" }).click();
     await updateResponse;
 
     await expect
@@ -241,11 +262,10 @@ test.describe("app scheduler pages live", () => {
       timeout: 15000,
     });
     await expect(page.getByRole("button", { name: "Repair & pin" })).toBeEnabled();
-    await expect(
-      page.getByRole("button", { name: `Run pinned ${pinnedVersion.slice(0, 8)}` }),
-    ).toBeDisabled();
-    await expect(page.getByTestId("schedule-run-window-context")).toContainText(
-      "runtime window from pinned pipeline",
+    const scheduleRow = page.getByTestId("schedule-row").filter({ hasText: "analytics" }).first();
+    await expect(scheduleRow.getByRole("button", { name: "Run now" })).toBeDisabled();
+    await expect(scheduleRow.getByTestId("schedule-metadata")).toContainText(
+      "Pinned pipeline schedule",
     );
   });
 

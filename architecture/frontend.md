@@ -167,13 +167,18 @@ not underscore-flattened route hacks.
   The asset timeline scrolls independently when a run has many assets, keeping
   the event/output panel usable, and duration tooltips anchor to the duration
   bars rather than the full timeline tracks.
-  Schedule rows use `Run pinned <id>` with the exact displayed pin; pinless rows
-  show `Needs deployment`, and rows with stored variable overrides are blocked
-  until the execution ledger can preserve those overrides truthfully. Schedule
-  creation explicitly chooses an existing executable deployment or deploys the
-  saved workspace and pins the result. The page reports whether this server is
-  the scheduler owner. Followers and unavailable instances keep schedules and
-  timelines readable but disable creation, pin changes,
+  Schedule rows keep cadence, timezone, last-run result, deployment, catch-up,
+  and runtime-window context in a wrapping metadata area rather than one
+  truncated status line. Timeline and actions have dedicated columns: `Run now`
+  is the primary action, deployment repair/update is secondary, and archive is
+  in the row's overflow menu. The displayed deployment identifies the exact pin
+  used by the run; pinless rows show `Needs deployment`, and rows with stored
+  variable overrides are blocked until the execution ledger can preserve those
+  overrides truthfully. Schedule creation explicitly chooses an existing
+  executable deployment or deploys the saved workspace and pins the result. The
+  page reports whether this server is the scheduler owner. Followers and
+  unavailable instances keep schedules and timelines readable but disable
+  creation, pin changes,
   pause/resume/archive/restore, and queued runs with an explanatory alert;
   ownership is unknown and therefore fail-closed while the request loads. Run
   details display the recorded source. Their rerun action names the source it

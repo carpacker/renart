@@ -6,13 +6,14 @@ import {
   CircleCheck,
   Clock,
   Loader2,
+  MoreHorizontal,
   Package,
   Play,
   Plus,
   RefreshCw,
   Search,
 } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { type ReactNode, useEffect, useMemo, useState } from "react";
 
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -26,6 +27,13 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuGroup,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { Switch } from "@/components/ui/switch";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
@@ -132,48 +140,54 @@ export function AppSchedulesPage() {
           </Alert>
         </div>
       ) : null}
-      <div className="flex items-center gap-2 px-3 pb-2">
+      <div className="flex flex-wrap items-center gap-2 px-3 pb-2">
         <div className="relative min-w-0 flex-1 md:max-w-sm">
           <Search className="pointer-events-none absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" />
           <Input
             className="pl-8"
-            placeholder="Filter jobs..."
+            placeholder="Filter schedules..."
             value={query}
             onChange={(event) => setQuery(event.target.value)}
           />
         </div>
         <Button
-          variant="outline"
           size="sm"
           disabled={!envSchedules.canMutate}
           title={!envSchedules.canMutate ? envSchedules.ownershipReason : undefined}
           onClick={() => setNewScheduleOpen(true)}
         >
-          <Plus className="size-3.5" />
+          <Plus data-icon="inline-start" />
           New schedule
         </Button>
-        <div className="ml-auto hidden overflow-hidden rounded-lg border md:flex">
+        <ToggleGroup
+          type="single"
+          variant="outline"
+          size="sm"
+          spacing={0}
+          value={bucket}
+          aria-label="Timeline range"
+          className="ml-auto hidden md:flex"
+          onValueChange={(value) => {
+            if (buckets.includes(value as (typeof buckets)[number])) {
+              setBucket(value as (typeof buckets)[number]);
+            }
+          }}
+        >
           {buckets.map((item) => (
-            <Button
-              key={item}
-              variant={bucket === item ? "default" : "ghost"}
-              size="sm"
-              className="rounded-none"
-              onClick={() => setBucket(item)}
-            >
+            <ToggleGroupItem key={item} value={item} aria-label={`Show ${item} timeline`}>
               {item}
-            </Button>
+            </ToggleGroupItem>
           ))}
-        </div>
+        </ToggleGroup>
       </div>
       <div className="min-h-0 flex-1 px-3 pb-3">
         <AppPanel className="h-full overflow-auto">
           <TooltipProvider>
-            <div className="min-w-[1120px]">
-              <div className="sticky top-0 z-10 flex h-9 items-center border-b bg-card text-[11px] font-semibold uppercase text-muted-foreground">
-                <div className="w-80 px-3">Jobs</div>
+            <div className="min-w-[1040px]">
+              <div className="sticky top-0 z-10 grid h-9 grid-cols-[22rem_minmax(20rem,1fr)_21rem] items-center border-b bg-card text-[11px] font-semibold uppercase text-muted-foreground">
+                <div className="px-3">Schedule</div>
                 <TimelineAxis axis={axis} />
-                <div className="w-[28rem] px-3 text-right">Controls</div>
+                <div className="px-3 text-right">Actions</div>
               </div>
               {envSchedules.loading && filteredSchedules.length === 0 ? (
                 <div className="flex h-24 items-center gap-2 px-3 text-sm text-muted-foreground">
@@ -312,9 +326,12 @@ function EnvScheduleRow({
       ? "Running"
       : activeRun?.status === "queued"
         ? "Queued"
-        : pinnedVersion
-          ? `Run pinned ${pinnedVersion.slice(0, 8)}`
-          : "Needs deployment";
+        : "Run now";
+  const pipelineLabel = schedule.pipeline_name || schedule.pipeline_uuid;
+  const lastRunAt = schedule.last_run?.finished_at ?? schedule.last_run?.started_at;
+  const lastRunLabel = schedule.last_run
+    ? `${sentenceCase(schedule.last_run.status)} ${formatSchedulerDate(lastRunAt)}`
+    : "Not run yet";
   const nowLeft = timelineLeft(Date.now(), window);
   const runWindowDescription = `Environment ${schedule.environment}. This action sends and records no interval; when execution starts, the backend resolves the effective window from the pipeline schedule stored in deployment ${pinnedVersion.slice(0, 8)}.`;
   const triggerNow = async () => {
@@ -373,96 +390,122 @@ function EnvScheduleRow({
     }
   };
   return (
-    <div className="flex min-h-14 items-center border-b hover:bg-muted/40">
-      <div className="flex w-80 min-w-0 items-center gap-3 px-3">
+    <div
+      className="grid min-h-[5.5rem] grid-cols-[22rem_minmax(20rem,1fr)_21rem] border-b hover:bg-muted/40"
+      data-testid="schedule-row"
+      data-pipeline={pipelineLabel}
+      data-environment={schedule.environment}
+    >
+      <div className="flex min-w-0 items-start gap-3 px-3 py-2.5">
         <Switch
+          className="mt-0.5"
           checked={configuredEnabled}
           disabled={!canMutate || busy || (!configuredEnabled && Boolean(sourceBlockReason))}
           title={!canMutate ? ownershipReason : undefined}
-          aria-label={`${configuredEnabled ? "Pause" : "Resume"} ${schedule.pipeline_name || schedule.pipeline_uuid} in ${schedule.environment}`}
+          aria-label={`${configuredEnabled ? "Pause" : "Resume"} ${pipelineLabel} in ${schedule.environment}`}
           onCheckedChange={(next) => void updateStatus(next ? "active" : "paused")}
         />
-        <div className="min-w-0">
-          <div className="flex items-center gap-2 font-mono text-xs text-primary">
+        <div className="min-w-0 flex-1">
+          <div className="flex min-w-0 items-center gap-2 text-xs font-medium text-foreground">
             <Clock className="size-3.5 shrink-0 text-muted-foreground" />
-            <span className="truncate">{schedule.pipeline_name || schedule.pipeline_uuid}</span>
+            <span className="truncate" title={pipelineLabel}>
+              {pipelineLabel}
+            </span>
             <Badge variant="secondary" size="xs">
               {schedule.environment}
             </Badge>
           </div>
-          <div className="mt-1 flex min-w-0 items-center gap-1.5 text-[11px] text-muted-foreground">
-            <span className="truncate font-mono">{schedule.cron}</span>
-            <span>·</span>
-            <span className="truncate">{schedule.timezone || "UTC"}</span>
-            {schedule.last_run ? (
-              <>
-                <span>·</span>
-                <span className="truncate">
-                  last {schedule.last_run.status}{" "}
-                  {formatSchedulerDate(
-                    schedule.last_run.finished_at ?? schedule.last_run.started_at,
-                  )}
-                </span>
-              </>
-            ) : null}
-            {pinnedVersion ? (
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <span className="inline-flex items-center gap-0.5 truncate" tabIndex={0}>
-                    <Package className="size-3" />
-                    {pinnedVersion.slice(0, 8)}
-                  </span>
-                </TooltipTrigger>
-                <TooltipContent>Pinned deployed snapshot {pinnedVersion}</TooltipContent>
-              </Tooltip>
-            ) : (
-              <Badge variant="destructive" size="xs">
-                Needs deployment
-              </Badge>
-            )}
-            {overrideNames.length > 0 ? (
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <Badge variant="outline" size="xs" tabIndex={0}>
-                    Overrides unsupported
-                  </Badge>
-                </TooltipTrigger>
-                <TooltipContent>
-                  Stored variables are blocked until execution can preserve them:{" "}
-                  {overrideNames.join(", ")}
-                </TooltipContent>
-              </Tooltip>
-            ) : null}
-            {deploymentOutdated ? (
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <Badge variant="destructive" size="xs" tabIndex={0}>
-                    Older deployment
-                  </Badge>
-                </TooltipTrigger>
-                <TooltipContent className="max-w-80">
-                  This schedule runs snapshot {pinnedVersion.slice(0, 8)}. The latest deployment is{" "}
-                  {latestVersion?.slice(0, 8)}. Data freshness is tracked separately.
-                </TooltipContent>
-              </Tooltip>
-            ) : null}
-            {pinnedDeploymentCorrupt ? (
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <Badge variant="destructive" size="xs" tabIndex={0}>
-                    Deployment needs repair
-                  </Badge>
-                </TooltipTrigger>
-                <TooltipContent className="max-w-80">
-                  {deployState.status?.integrity_error ??
-                    "The pinned deployment failed its integrity check."}
-                </TooltipContent>
-              </Tooltip>
-            ) : null}
-          </div>
+          <dl
+            className="mt-1.5 flex min-w-0 flex-wrap gap-x-3 gap-y-1 text-[11px] text-muted-foreground"
+            data-testid="schedule-metadata"
+          >
+            <ScheduleMetadata label="Schedule" testId="schedule-cadence">
+              <span className="break-all font-mono text-foreground">{schedule.cron}</span>
+            </ScheduleMetadata>
+            <ScheduleMetadata label="Timezone">
+              <span className="break-words text-foreground">{schedule.timezone || "UTC"}</span>
+            </ScheduleMetadata>
+            <ScheduleMetadata label="Last run" testId="schedule-last-run">
+              <span className="break-words text-foreground">{lastRunLabel}</span>
+            </ScheduleMetadata>
+            <ScheduleMetadata label="Deployment" testId="schedule-deployment">
+              {pinnedVersion ? (
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <span
+                      className="inline-flex items-center gap-1 font-mono text-foreground"
+                      tabIndex={0}
+                    >
+                      <Package className="size-3 shrink-0 text-muted-foreground" />
+                      {pinnedVersion.slice(0, 8)}
+                    </span>
+                  </TooltipTrigger>
+                  <TooltipContent>Pinned deployed snapshot {pinnedVersion}</TooltipContent>
+                </Tooltip>
+              ) : (
+                <span className="text-foreground">Not pinned</span>
+              )}
+            </ScheduleMetadata>
+            <ScheduleMetadata label="Catch-up" testId="schedule-run-window-context">
+              <span className="break-words text-foreground">
+                {catchupPolicyLabel(schedule.catchup_policy)}
+              </span>
+            </ScheduleMetadata>
+            <ScheduleMetadata label="Window">
+              <span className="break-words text-foreground">Pinned pipeline schedule</span>
+            </ScheduleMetadata>
+          </dl>
+          {sourceBlockReason || deploymentOutdated ? (
+            <div className="mt-1.5 flex flex-wrap gap-1" data-testid="schedule-state-badges">
+              {!pinnedVersion ? (
+                <Badge variant="destructive" size="xs">
+                  Needs deployment
+                </Badge>
+              ) : null}
+              {overrideNames.length > 0 ? (
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Badge variant="outline" size="xs" tabIndex={0}>
+                      Overrides unsupported
+                    </Badge>
+                  </TooltipTrigger>
+                  <TooltipContent>
+                    Stored variables are blocked until execution can preserve them:{" "}
+                    {overrideNames.join(", ")}
+                  </TooltipContent>
+                </Tooltip>
+              ) : null}
+              {deploymentOutdated ? (
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Badge variant="destructive" size="xs" tabIndex={0}>
+                      Older deployment
+                    </Badge>
+                  </TooltipTrigger>
+                  <TooltipContent className="max-w-80">
+                    This schedule runs snapshot {pinnedVersion.slice(0, 8)}. The latest deployment
+                    is {latestVersion?.slice(0, 8)}. Data freshness is tracked separately.
+                  </TooltipContent>
+                </Tooltip>
+              ) : null}
+              {pinnedDeploymentCorrupt ? (
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Badge variant="destructive" size="xs" tabIndex={0}>
+                      Deployment needs repair
+                    </Badge>
+                  </TooltipTrigger>
+                  <TooltipContent className="max-w-80">
+                    {deployState.status?.integrity_error ??
+                      "The pinned deployment failed its integrity check."}
+                  </TooltipContent>
+                </Tooltip>
+              ) : null}
+            </div>
+          ) : null}
         </div>
       </div>
-      <div className="relative h-14 flex-1 border-x bg-muted/20">
+      <div className="relative min-h-[5.5rem] border-x bg-muted/20" data-testid="schedule-timeline">
         <TimelineGrid axis={axis} />
         {slots.map((slot, index) => (
           <Tooltip key={`${slot.at}-${slot.kind}-${index}`}>
@@ -492,13 +535,16 @@ function EnvScheduleRow({
         ))}
         {nowLeft !== null ? <NowMarker left={nowLeft} /> : null}
       </div>
-      <div className="flex w-[28rem] flex-wrap items-center justify-end gap-2 px-3 py-2">
+      <div
+        className="flex min-w-0 flex-col items-end justify-center gap-1.5 px-3 py-2.5"
+        data-testid="schedule-actions"
+      >
         {actionError ? (
           <div
-            className="flex basis-full items-center justify-end gap-1 text-right text-[11px] text-destructive"
+            className="flex min-w-0 items-center justify-end gap-1 text-right text-[11px] text-destructive"
             role="alert"
           >
-            <span className="truncate">{actionError.message}</span>
+            <span className="min-w-0 whitespace-normal">{actionError.message}</span>
             {actionError.activeRunId ? (
               <Button asChild variant="link" size="xs">
                 <Link to="/runs/$runId" params={{ runId: actionError.activeRunId }}>
@@ -508,68 +554,109 @@ function EnvScheduleRow({
             ) : null}
           </div>
         ) : null}
-        <span
-          className="text-[10px] uppercase text-muted-foreground"
-          data-testid="schedule-run-window-context"
-        >
-          {schedule.catchup_policy.replace("_", " ")} · runtime window from pinned pipeline
-        </span>
-        <Button
-          size="sm"
-          variant="ghost"
-          disabled={!canMutate || busy}
-          title={!canMutate ? ownershipReason : "Archive schedule (run history is kept)"}
-          onClick={() => void archive()}
-        >
-          <ArchiveRestore />
-        </Button>
-        {deploymentOutdated || !pinnedVersion || pinnedDeploymentCorrupt ? (
-          <Button
-            size="sm"
-            variant="secondary"
-            disabled={!canMutate || busy}
-            title={
-              !canMutate ? ownershipReason : "Deploy the current pipeline and update this schedule"
-            }
-            onClick={() => void updateDeployment()}
-          >
-            {busy ? (
-              <Loader2 data-icon="inline-start" className="animate-spin" />
-            ) : (
-              <RefreshCw data-icon="inline-start" />
-            )}
-            {pinnedDeploymentCorrupt
-              ? "Repair & pin"
-              : pinnedVersion
-                ? "Update deployment"
-                : "Deploy & pin"}
-          </Button>
-        ) : null}
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <span tabIndex={0}>
+        <div className="flex items-center justify-end gap-1.5">
+          {deploymentOutdated || !pinnedVersion || pinnedDeploymentCorrupt ? (
+            <Button
+              size="sm"
+              variant="secondary"
+              disabled={!canMutate || busy}
+              title={
+                !canMutate
+                  ? ownershipReason
+                  : "Deploy the current pipeline and update this schedule"
+              }
+              onClick={() => void updateDeployment()}
+            >
+              {busy ? (
+                <Loader2 data-icon="inline-start" className="animate-spin" />
+              ) : (
+                <RefreshCw data-icon="inline-start" />
+              )}
+              {pinnedDeploymentCorrupt
+                ? "Repair & pin"
+                : pinnedVersion
+                  ? "Update deployment"
+                  : "Deploy & pin"}
+            </Button>
+          ) : null}
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <span className="inline-flex" tabIndex={0}>
+                <Button size="sm" disabled={runDisabled} onClick={() => void triggerNow()}>
+                  {runBusy ? (
+                    <Loader2 data-icon="inline-start" className="animate-spin" />
+                  ) : (
+                    <Play data-icon="inline-start" />
+                  )}
+                  {runLabel}
+                </Button>
+              </span>
+            </TooltipTrigger>
+            <TooltipContent className="max-w-80">
+              {runBlockReason ?? runWindowDescription}
+            </TooltipContent>
+          </Tooltip>
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
               <Button
-                size="sm"
-                variant="outline"
-                disabled={runDisabled}
-                onClick={() => void triggerNow()}
+                size="icon-sm"
+                variant="ghost"
+                disabled={!canMutate || busy}
+                aria-label={`More actions for ${pipelineLabel} in ${schedule.environment}`}
+                title={!canMutate ? ownershipReason : "More schedule actions"}
               >
-                {runBusy ? (
-                  <Loader2 data-icon="inline-start" className="animate-spin" />
-                ) : (
-                  <Play data-icon="inline-start" />
-                )}
-                {runLabel}
+                <MoreHorizontal />
               </Button>
-            </span>
-          </TooltipTrigger>
-          <TooltipContent className="max-w-80">
-            {runBlockReason ?? runWindowDescription}
-          </TooltipContent>
-        </Tooltip>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="w-48">
+              <DropdownMenuGroup>
+                <DropdownMenuItem onSelect={() => void archive()}>
+                  <ArchiveRestore />
+                  Archive schedule
+                </DropdownMenuItem>
+              </DropdownMenuGroup>
+            </DropdownMenuContent>
+          </DropdownMenu>
+        </div>
       </div>
     </div>
   );
+}
+
+function ScheduleMetadata({
+  label,
+  testId,
+  children,
+}: {
+  label: string;
+  testId?: string;
+  children: ReactNode;
+}) {
+  return (
+    <div className="flex min-w-0 items-baseline gap-1 whitespace-normal" data-testid={testId}>
+      <dt className="shrink-0 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+        {label}
+      </dt>
+      <dd className="min-w-0 whitespace-normal" data-schedule-meta-value>
+        {children}
+      </dd>
+    </div>
+  );
+}
+
+function catchupPolicyLabel(policy: CatchupPolicy) {
+  switch (policy) {
+    case "run_once":
+      return "Run once after downtime";
+    case "backfill":
+      return "Backfill missed windows";
+    default:
+      return "Skip missed runs";
+  }
+}
+
+function sentenceCase(value: string) {
+  return value ? `${value.charAt(0).toUpperCase()}${value.slice(1).replaceAll("_", " ")}` : value;
 }
 
 function ArchivedSection({
@@ -969,14 +1056,14 @@ function slotClassName(
 ) {
   if (!enabled) {
     return kind === "persisted"
-      ? "absolute top-2 h-10 rounded-sm bg-muted-foreground/35"
-      : "absolute top-3 h-8 rounded-sm border border-muted-foreground/25 bg-muted-foreground/10";
+      ? "absolute top-1/2 h-10 -translate-y-1/2 rounded-sm bg-muted-foreground/35"
+      : "absolute top-1/2 h-8 -translate-y-1/2 rounded-sm border border-muted-foreground/25 bg-muted-foreground/10";
   }
   return kind === "persisted"
-    ? "absolute top-2 h-10 rounded-sm bg-primary"
+    ? "absolute top-1/2 h-10 -translate-y-1/2 rounded-sm bg-primary"
     : phase === "past"
-      ? "absolute top-3 h-8 rounded-sm border border-amber-500/45 bg-amber-500/15"
-      : "absolute top-3 h-8 rounded-sm border border-primary/40 bg-primary/15";
+      ? "absolute top-1/2 h-8 -translate-y-1/2 rounded-sm border border-amber-500/45 bg-amber-500/15"
+      : "absolute top-1/2 h-8 -translate-y-1/2 rounded-sm border border-primary/40 bg-primary/15";
 }
 
 function expectedSlots(schedule: TimelineSchedule, window: TimelineWindow) {
