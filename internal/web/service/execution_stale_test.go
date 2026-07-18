@@ -143,6 +143,9 @@ func TestBuildStalePlanFiltersToSelectedUpstreamsAndPreservesGaps(t *testing.T) 
 	if len(plan[0].Windows) != 1 || !plan[0].Windows[0].Start.Equal(start) || !plan[0].Windows[0].End.Equal(end) {
 		t.Fatalf("expected the selected gap window, got %+v", plan[0].Windows)
 	}
+	if plan[0].Reason != "uncovered_interval" {
+		t.Fatalf("expected the partial selection reason to survive planning, got %q", plan[0].Reason)
+	}
 	if plan := BuildStalePlan(statuses, map[string]struct{}{}); len(plan) != 0 {
 		t.Fatalf("expected an empty selected set to build nothing, got %+v", plan)
 	}

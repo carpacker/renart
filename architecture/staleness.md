@@ -185,8 +185,12 @@ replays only its retained terminal facts. One-asset and scoped materialization
 use RunSpec v2 to retain the exact ordered asset paths, common window, scope,
 anchor, and inclusion reasons; the same transaction creates queued execution
 units, and the inline executor transitions each unit around its physical call.
-Build-needed remains outside this RunSpec ledger until its exact gap windows
-use the same selection contract.
+Build-needed uses the same v2 selection after recomputing freshness server-side:
+each topologically ordered asset/gap window is a durable unit with its staleness
+reason and run-derived completion identity. Earlier successful windows remain
+successful if a later window fails; remaining windows and downstream assets are
+durably skipped. Asset-level steps stay aggregated for compatibility while the
+unit ledger remains the exact execution record.
 For a deployed run it materializes the run's exact pinned snapshot while the
 recorder fingerprints it, then deletes the temp directory. This is derived-state
 recovery only—asset code and textual logs are never replayed. The fact and

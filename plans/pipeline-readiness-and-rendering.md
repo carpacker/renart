@@ -1171,8 +1171,8 @@ editing tracked ignore rules. This closes the hole where worktree cleanup could
 unlink the only lock while a server still owned the workspace; it remains
 separate from the scheduler ownership/handoff workstream below.
 
-This began as only the scheduler-backed foundation. Asset/scoped and
-Build-needed execution plus exact re-execution remain open; effective variables,
+This began as only the scheduler-backed foundation. Exact re-execution remains
+open; asset/scoped and Build-needed execution, effective variables,
 full-pipeline inline execution, asset/window execution units, run-ID-only
 scheduled dispatch, target/latest-writer identity, and durable schedule
 occurrences/attempts have since landed in the checkpoints below.
@@ -1219,8 +1219,15 @@ the path plus available UUID slots, target snapshot, step/log persistence,
 policy recheck, and detached finalization share the full-pipeline inline
 lifecycle without a River job. Units transition independently around each
 direct asset call, so sparse executor events cannot erase the selected work.
-Build-needed remains open for the follow-up that maps each exact staleness gap
-to one v2 unit.
+
+Inline Build-needed checkpoint (2026-07-18): after recomputing freshness and
+topological order server-side, Build-needed flattens every exact gap/default
+window into a v2 `needed` unit with its staleness reason and canonical asset
+path. It keeps the existing inline output and asset progress, persists one
+run-derived completion identity per window, aggregates compatibility steps per
+asset, and durably marks remaining same-asset windows plus downstream work
+skipped after failure. Admission, the pipeline slot, target snapshot, policy
+recheck, logs, and detached finalization now match the other inline paths.
 
 This is the architectural prerequisite for the pipeline plan:
 
@@ -1566,12 +1573,11 @@ planner now emits its generic partial warning only for an actual failed,
 unsupported, runtime-only, or unresolved-target stage; this removes repeated
 non-actionable SQL warnings while retaining Python's honest runtime warning.
 
-Phase 2 is complete. The remaining universal-ledger gap is broader than this
-phase: Build-needed still uses the common completion seam without a RunSpec;
-direct one-asset/scoped, full-pipeline onboarding, HTTP, and embedded execution
-now use the inline ledger. Durable schedule occurrences/attempts, variables,
-deploy/schedule plan integration, and separate signal-to-execution jobs are
-implemented; exact gap-window selection continues in Phase 0b.
+Phase 2 is complete. Direct one-asset/scoped, Build-needed, full-pipeline
+onboarding, HTTP, and embedded execution now use the inline ledger. Durable
+schedule occurrences/attempts, variables, deploy/schedule plan integration,
+and separate signal-to-execution jobs are implemented. Exact re-execution is
+the remaining Phase 0b ledger item.
 
 ### Phase 3: Deploy and schedule integration
 
@@ -1617,8 +1623,8 @@ and pipeline slot. A blocked plan becomes a failed auditable run without
 physical execution, and its durable blocked decision survives a crash before
 failure finalization. Row-level `Run pinned` now loads the pin and overrides on
 the server while retaining manual/no-watermark provenance. Phase 3 is complete;
-the Build-needed ledger plus exact re-execution remain in the earlier Phase 0b
-workstream. Durable occurrence identity, numbered attempts,
+exact re-execution remains in the earlier Phase 0b workstream. Durable
+occurrence identity, numbered attempts,
 run-ID-only scheduled dispatch, and inline full-pipeline history are covered by
 the later Phase 0b checkpoints above.
 

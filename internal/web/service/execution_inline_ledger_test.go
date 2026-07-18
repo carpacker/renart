@@ -7,6 +7,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/bruin-data/bruin/pkg/pipeline"
+	"github.com/spf13/afero"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"renart/internal/web/bus"
@@ -269,6 +271,154 @@ func TestExecutionServicePersistsInlineAssetSelectionThroughSchedulerLedger(t *t
 	require.Len(t, logs, 1)
 	require.Len(t, steps, 1)
 	assert.Equal(t, webscheduler.RunStatusSuccess, steps[0].Status)
+	var riverJobs int
+	require.NoError(t, store.DB().QueryRowContext(context.Background(), `SELECT COUNT(*) FROM river_job`).Scan(&riverJobs))
+	assert.Zero(t, riverJobs)
+}
+
+func TestExecutionServicePersistsExactNeededWindowsAndDownstreamSkips(t *testing.T) {
+	t.Parallel()
+	_, workspaceRoot := writeTypeCheckWorkspace(t, `
+name: analytics
+id: 0b73db88-ab55-4ed1-8f50-ef38089fc2d2
+schedule: daily
+default_connections:
+  duckdb: duckdb-default
+`, map[string]string{
+		"orders.sql": `
+/* @bruin
+name: analytics.orders
+type: duckdb.sql
+materialization:
+  type: table
+@bruin */
+select 1 as id
+`,
+		"report.sql": `
+/* @bruin
+name: analytics.report
+type: duckdb.sql
+depends:
+  - analytics.orders
+materialization:
+  type: table
+@bruin */
+select * from analytics.orders
+`,
+	})
+	store, err := webscheduler.OpenStore(filepath.Join(t.TempDir(), "state.db"))
+	require.NoError(t, err)
+	defer store.Close()
+	ledger := webscheduler.New(webscheduler.Options{Store: store})
+	pipelineID := EncodeID("analytics/pipeline.yml")
+	ordersID := EncodeID("analytics/assets/orders.sql")
+	reportID := EncodeID("analytics/assets/report.sql")
+	start := time.Date(2026, 7, 16, 0, 0, 0, 123456789, time.UTC)
+	middle := start.Add(24 * time.Hour)
+	end := middle.Add(24 * time.Hour)
+	firstFinished := start.Add(time.Second)
+	secondStarted := middle.Add(time.Second)
+	secondFinished := secondStarted.Add(time.Second)
+	call := 0
+	executor := &stubExecutionExecutor{}
+	executor.onRunAsset = func() {
+		call++
+		executor.runAssetOutput = []byte("window output\n")
+		executor.runAssetTargets = &ExecutionTargetSnapshot{
+			Version: ExecutionTargetSnapshotVersion, PipelineUUID: "0b73db88-ab55-4ed1-8f50-ef38089fc2d2",
+			Entries: map[string]ExecutionTargetSnapshotEntry{
+				"analytics.orders": {
+					AssetID:        "0b73db88-ab55-4ed1-8f50-ef38089fc2d2:analytics.orders",
+					TargetIdentity: "target-orders", TargetFidelity: AssetRenderFidelityExact,
+					Fingerprint: "v2:orders", OwnContent: "v2:orders-own",
+					ConsumedVarsHash: "consumed", VarsHash: "vars", CoverageMode: ExecutionCoverageMarker,
+				},
+				"analytics.report": {
+					AssetID:        "0b73db88-ab55-4ed1-8f50-ef38089fc2d2:analytics.report",
+					TargetIdentity: "target-report", TargetFidelity: AssetRenderFidelityExact,
+					Fingerprint: "v2:report", OwnContent: "v2:report-own",
+					ConsumedVarsHash: "consumed", VarsHash: "vars", CoverageMode: ExecutionCoverageMarker,
+				},
+			},
+		}
+		if call == 1 {
+			executor.runAssetErr = nil
+			executor.runAssetEvents = []ExecutionAssetEvent{
+				{Asset: "analytics.orders", Status: "running", StartedAt: &start},
+				{Asset: "analytics.orders", Status: "success", StartedAt: &start, FinishedAt: &firstFinished},
+			}
+			return
+		}
+		executor.runAssetErr = errors.New("second gap failed")
+		executor.runAssetEvents = []ExecutionAssetEvent{
+			{Asset: "analytics.orders", Status: "running", StartedAt: &secondStarted},
+			{Asset: "analytics.orders", Status: "failed", StartedAt: &secondStarted, FinishedAt: &secondFinished, Error: "second gap failed"},
+		}
+	}
+	events := bus.New()
+	completed := make([]bus.RunCompleted, 0, 2)
+	events.OnRunCompleted(func(event bus.RunCompleted) error {
+		completed = append(completed, event)
+		return nil
+	})
+	svc := NewExecutionService(ExecutionDependencies{
+		WorkspaceRoot: workspaceRoot, Executor: executor, InlineRuns: ledger, Events: events,
+		NewPipelineBuilder: func() *pipeline.Builder { return NewRenartPipelineBuilder(afero.NewOsFs()) },
+		FindInspectIDs:     func(ids ...string) []string { return ids },
+		CurrentPipelines: func() []PipelineView {
+			return []PipelineView{{
+				ID: pipelineID, UUID: "0b73db88-ab55-4ed1-8f50-ef38089fc2d2", Name: "analytics",
+				Assets: []AssetView{{ID: ordersID, Name: "analytics.orders"}, {ID: reportID, Name: "analytics.report"}},
+			}}
+		},
+	})
+
+	result := svc.MaterializeStaleAssetsStream(
+		context.Background(), pipelineID, "prod",
+		[]StaleAssetPlan{
+			{AssetName: "analytics.report", Reason: "stale_upstream"},
+			{AssetName: "analytics.orders", Reason: "uncovered_interval", Windows: []ExecutionTimeWindow{{Start: start, End: middle}, {Start: middle, End: end}}},
+		},
+		start.Format(time.RFC3339Nano), end.Format(time.RFC3339Nano), nil, nil,
+	)
+	require.Equal(t, "error", result.Status)
+	assert.Contains(t, result.Error, "analytics.orders")
+	assert.Equal(t, 2, call, "the downstream asset must not execute after its upstream failed")
+
+	runs, err := store.List(context.Background(), webscheduler.RunFilter{PipelineID: pipelineID})
+	require.NoError(t, err)
+	require.Len(t, runs.Runs, 1)
+	run := runs.Runs[0]
+	assert.Equal(t, webscheduler.RunStatusFailed, run.Status)
+	spec, found, err := store.GetRunSpec(context.Background(), run.ID)
+	require.NoError(t, err)
+	require.True(t, found)
+	assert.Equal(t, 2, spec.Version)
+	assert.Equal(t, "needed", spec.Selection)
+	require.NotNil(t, spec.SelectionDetails)
+	require.Len(t, spec.SelectionDetails.Units, 3)
+	assert.Equal(t, "analytics/assets/orders.sql", spec.SelectionDetails.Units[0].AssetPath)
+	units, err := store.ListRunUnits(context.Background(), run.ID)
+	require.NoError(t, err)
+	require.Len(t, units, 3)
+	assert.Equal(t, []string{"analytics.orders", "analytics.orders", "analytics.report"}, []string{units[0].AssetName, units[1].AssetName, units[2].AssetName})
+	assert.Equal(t, []webscheduler.PipelineRunUnitStatus{
+		webscheduler.PipelineRunUnitSuccess, webscheduler.PipelineRunUnitFailed, webscheduler.PipelineRunUnitSkipped,
+	}, []webscheduler.PipelineRunUnitStatus{units[0].Status, units[1].Status, units[2].Status})
+	assert.Equal(t, start.Format(time.RFC3339Nano), units[0].StartDate)
+	assert.Equal(t, middle.Format(time.RFC3339Nano), units[1].StartDate)
+	assert.Equal(t, "uncovered_interval", units[1].Reason)
+	assert.Equal(t, "stale_upstream", units[2].Reason)
+	require.Len(t, completed, 2)
+	assert.Equal(t, run.ID+"/unit/0", completed[0].CompletionID)
+	assert.Equal(t, run.ID+"/unit/1", completed[1].CompletionID)
+	assert.Equal(t, run.ID, completed[0].RunID)
+	_, logs, steps, err := store.Get(context.Background(), run.ID)
+	require.NoError(t, err)
+	assert.NotEmpty(t, logs)
+	require.Len(t, steps, 1)
+	assert.Equal(t, "analytics.orders", steps[0].Asset)
+	assert.Equal(t, webscheduler.RunStatusFailed, steps[0].Status)
 	var riverJobs int
 	require.NoError(t, store.DB().QueryRowContext(context.Background(), `SELECT COUNT(*) FROM river_job`).Scan(&riverJobs))
 	assert.Zero(t, riverJobs)

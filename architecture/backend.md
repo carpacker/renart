@@ -539,8 +539,11 @@ ledger. This includes HTTP pipeline streaming, delegated or embedded CLI
 pipeline runs, legacy full-pipeline `/api/run`, and onboarding quickstart
 materialization while preserving their inline stream. One-asset/scoped
 Materialize now uses the v2 selection/unit ledger while preserving its one-click
-stream. Build-needed still uses only the common target-capture/write-claim/
-completion seam. Exact re-execution also remains open.
+stream. Build-needed flattens its server-recomputed topological selection into
+v2 units—one per exact gap/default window—and records unit success, failure,
+same-asset remainder skips, and downstream-of-failure skips while retaining one
+asset-level progress step. Every window keeps a run/unit-derived completion ID.
+Exact re-execution remains open.
 
 Before applying either Renart or River migrations, `Store` runs SQLite's
 `quick_check` against the shared state database. A failed check aborts startup
