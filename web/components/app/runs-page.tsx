@@ -260,11 +260,13 @@ export function AppRunDetailPage({
     steps,
     plan,
     units,
+    reexecution,
     loadingRunId,
     busyPipeline,
     runDetailError,
     selectRun,
     triggerPipeline,
+    reexecuteRun,
   } = usePipelineScheduler({
     selectedRunId: runId,
   });
@@ -282,9 +284,10 @@ export function AppRunDetailPage({
   }, [run?.pipeline_id, workspace?.pipelines]);
   const runAgain = async () => {
     if (!run) return;
+    const exactReplay = reexecution?.mode === "exact";
     const executionContextResolved = run.execution_context_resolved === true;
     const hasCompleteRecordedWindow = Boolean(run.win_start && run.win_end);
-    if (executionContextResolved && !hasCompleteRecordedWindow) {
+    if (!exactReplay && executionContextResolved && !hasCompleteRecordedWindow) {
       setRerunError({
         message:
           "This run's resolved execution context has no complete window and cannot be reused safely.",
@@ -297,19 +300,23 @@ export function AppRunDetailPage({
     setRerunError(null);
     let acceptedRunId: string;
     try {
-      if (source.source === "working_tree") {
-        await awaitWorkspaceSaves();
-      }
-      const response = await triggerPipeline(run.pipeline_id, {
-        ...source,
-        ...(executionContextResolved && run.win_start && run.win_end
-          ? {
-              environment: run.environment,
-              start: run.win_start,
-              end: run.win_end,
+      const response = exactReplay
+        ? await reexecuteRun(run)
+        : await (async () => {
+            if (source.source === "working_tree") {
+              await awaitWorkspaceSaves();
             }
-          : {}),
-      });
+            return triggerPipeline(run.pipeline_id, {
+              ...source,
+              ...(executionContextResolved && run.win_start && run.win_end
+                ? {
+                    environment: run.environment,
+                    start: run.win_start,
+                    end: run.win_end,
+                  }
+                : {}),
+            });
+          })();
       if (response.status !== "ok" || !response.run?.id) {
         throw new Error("The rerun was not accepted.");
       }
@@ -383,22 +390,27 @@ export function AppRunDetailPage({
     ? deploymentLabel(run.snapshot_ordinal, run.snapshot_version_id, "deployment")
     : "current saved workspace";
   const executionContextResolved = run.execution_context_resolved === true;
-  const rerunEnvironmentLabel = executionContextResolved
+  const exactReplayAvailable = reexecution?.mode === "exact";
+  const replayContextAvailable = exactReplayAvailable || executionContextResolved;
+  const exactUnitCount = reexecution?.execution_units ?? units.length;
+  const rerunEnvironmentLabel = replayContextAvailable
     ? run.environment || "default"
     : "current default resolved at start";
-  const rerunButtonLabel = run.snapshot_version_id
-    ? `Run ${deploymentLabel(run.snapshot_ordinal, run.snapshot_version_id, "deployment")} with defaults`
-    : "Run current workspace with defaults";
-  const compactRerunButtonLabel = "Run with defaults";
-  const hasRecordedWindow = executionContextResolved && Boolean(run.win_start && run.win_end);
-  const hasIncompleteRecordedWindow = executionContextResolved && !hasRecordedWindow;
+  const rerunButtonLabel = exactReplayAvailable
+    ? "Re-execute exact plan"
+    : "Run again with current settings";
+  const compactRerunButtonLabel = exactReplayAvailable ? "Re-execute" : "Run current settings";
+  const hasRecordedWindow = replayContextAvailable && Boolean(run.win_start && run.win_end);
+  const hasIncompleteRecordedWindow = replayContextAvailable && !hasRecordedWindow;
   const rerunWindowLabel = hasRecordedWindow
     ? `${formatSchedulerDate(run.win_start)} → ${formatSchedulerDate(run.win_end)}`
     : hasIncompleteRecordedWindow
       ? "resolved context is incomplete; rerun unavailable"
       : "current pipeline default resolved at start";
-  const rerunDescription = `Source: ${run.snapshot_version_id ? `${deploymentLabel(run.snapshot_ordinal, run.snapshot_version_id, "deployment")} (${run.snapshot_version_id})` : "current saved workspace"}. ${executionContextResolved ? `Recorded environment: ${rerunEnvironmentLabel}. Recorded window: ${rerunWindowLabel}.` : "The original effective environment and window are unavailable; current defaults are resolved when the rerun starts."} Default execution mode is used; full-refresh, backfill, sensor mode, variables, selection, authorization, and schedule-only context are not replayed.`;
-  const rerunUnavailable = hasIncompleteRecordedWindow;
+  const rerunDescription = exactReplayAvailable
+    ? `Replays the retained source, environment, window, execution time, variables, modes, authorization, and ${exactUnitCount} execution ${exactUnitCount === 1 ? "unit" : "units"} after verifying the selected configuration. The new run is manual and cannot advance a schedule watermark.`
+    : `Source: ${run.snapshot_version_id ? `${deploymentLabel(run.snapshot_ordinal, run.snapshot_version_id, "deployment")} (${run.snapshot_version_id})` : "current saved workspace"}. ${executionContextResolved ? `Recorded environment: ${rerunEnvironmentLabel}. Recorded window: ${rerunWindowLabel}.` : "The original effective environment and window are unavailable; current defaults are resolved when the run starts."} Current execution settings are used; full-refresh, backfill, sensor mode, variables, selection, authorization, and schedule-only context are not replayed.${reexecution?.reason ? ` Exact re-execution is unavailable because ${lowercaseFirst(reexecution.reason)}` : ""}`;
+  const rerunUnavailable = !exactReplayAvailable && hasIncompleteRecordedWindow;
   const runEnvironmentLabel = executionContextResolved
     ? run.environment || "default"
     : "execution context unavailable";
@@ -446,7 +458,8 @@ export function AppRunDetailPage({
         data-testid="run-again-context"
       >
         <span>
-          Rerun source <span className="font-medium text-foreground">{rerunSourceLabel}</span>
+          {exactReplayAvailable ? "Replay source" : "Run source"}{" "}
+          <span className="font-medium text-foreground">{rerunSourceLabel}</span>
         </span>
         <span aria-hidden="true">·</span>
         <span>
@@ -456,7 +469,12 @@ export function AppRunDetailPage({
         <span>{hasRecordedWindow ? `Recorded window ${rerunWindowLabel}` : rerunWindowLabel}</span>
         <span aria-hidden="true">·</span>
         <span>
-          Mode <span className="font-medium text-foreground">default execution</span>
+          Mode{" "}
+          <span className="font-medium text-foreground">
+            {exactReplayAvailable
+              ? `exact ${humanizePlanValue(reexecution?.selection || plan?.selection.mode || "plan").toLowerCase()} plan · ${exactUnitCount} ${exactUnitCount === 1 ? "unit" : "units"}`
+              : "current settings"}
+          </span>
         </span>
       </div>
       {rerunError ? (
@@ -821,6 +839,10 @@ function formatRunPlanSelection(plan: PipelineRunPlan) {
 function humanizePlanValue(value: string) {
   const normalized = value.trim().replaceAll("_", " ");
   return normalized ? normalized[0].toUpperCase() + normalized.slice(1) : "Unknown";
+}
+
+function lowercaseFirst(value: string) {
+  return value ? value[0].toLocaleLowerCase() + value.slice(1) : value;
 }
 
 function shortenPlanIdentity(value: string) {

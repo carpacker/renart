@@ -6,6 +6,7 @@ import {
   getRun,
   getRuns,
   getSchedules,
+  reexecutePipelineRun,
   triggerPipelineRun,
   updatePipelineSchedule,
 } from "@/lib/api";
@@ -15,6 +16,7 @@ import type {
   PipelineRun,
   PipelineRunLogLine,
   PipelineRunPlan,
+  PipelineRunReexecution,
   PipelineRunStep,
   PipelineRunUnit,
   PipelineSchedule,
@@ -38,6 +40,7 @@ export function usePipelineScheduler({
   const [steps, setSteps] = useState<PipelineRunStep[]>([]);
   const [plan, setPlan] = useState<PipelineRunPlan | null>(null);
   const [units, setUnits] = useState<PipelineRunUnit[]>([]);
+  const [reexecution, setReexecution] = useState<PipelineRunReexecution | null>(null);
   const [loading, setLoading] = useState(true);
   const [busyPipeline, setBusyPipeline] = useState<string | null>(null);
   const [loadingRunId, setLoadingRunId] = useState<string | null>(null);
@@ -124,6 +127,12 @@ export function usePipelineScheduler({
         setSteps(response.steps ?? []);
         setPlan(response.plan ?? null);
         setUnits(response.units ?? []);
+        setReexecution(
+          response.reexecution ?? {
+            mode: "current_settings",
+            reason: "The original exact execution contract is unavailable.",
+          },
+        );
       }
     } catch (cause) {
       if (
@@ -198,6 +207,7 @@ export function usePipelineScheduler({
             setSteps([]);
             setPlan(null);
             setUnits([]);
+            setReexecution(null);
           }
         }
         return response;
@@ -207,6 +217,22 @@ export function usePipelineScheduler({
     },
     [],
   );
+
+  const reexecuteRun = useCallback(async (run: PipelineRun) => {
+    setBusyPipeline(run.pipeline_id);
+    try {
+      const response = await reexecutePipelineRun(run.id);
+      if (response.status === "ok") {
+        setRuns((current) => [
+          response.run,
+          ...current.filter((candidate) => candidate.id !== response.run.id),
+        ]);
+      }
+      return response;
+    } finally {
+      setBusyPipeline(null);
+    }
+  }, []);
 
   useEffect(() => {
     void refresh();
@@ -221,6 +247,7 @@ export function usePipelineScheduler({
       setSteps([]);
       setPlan(null);
       setUnits([]);
+      setReexecution(null);
       setRunDetailError(null);
       return;
     }
@@ -229,6 +256,7 @@ export function usePipelineScheduler({
     setSteps([]);
     setPlan(null);
     setUnits([]);
+    setReexecution(null);
     void selectRun(selectedRunId);
   }, [selectedRunId, selectRun]);
 
@@ -310,6 +338,7 @@ export function usePipelineScheduler({
     steps,
     plan,
     units,
+    reexecution,
     loading,
     schedulesError,
     runsError,
@@ -322,6 +351,7 @@ export function usePipelineScheduler({
     patchScheduleDraft,
     updateSchedule,
     triggerPipeline,
+    reexecuteRun,
   };
 }
 

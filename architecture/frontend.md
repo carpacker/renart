@@ -218,14 +218,17 @@ not underscore-flattened route hacks.
   creation, pin changes,
   pause/resume/archive/restore, and queued runs with an explanatory alert;
   ownership is unknown and therefore fail-closed while the request loads. Run
-  details display the recorded source. Their rerun action names the source it
-  will execute and reuses environment/window only when the backend marks the
-  execution context resolved. Legacy or pre-execution-failed rows omit their
-  request-only environment/window so the backend resolves current defaults.
-  The context stays visible on compact layouts, the compact action still says
-  `with defaults`, and the accepted run opens immediately; it never claims that
-  unresolved modes, variables, authorization, or schedule-only context are
-  replayed.
+  details display the recorded source and use the backend's dynamic
+  re-execution descriptor. Eligible retained plans show `Re-execute exact plan`
+  plus selection and unit count; the run-owned endpoint receives no execution
+  context from the browser and the accepted manual run opens immediately.
+  Legacy, blocked, incomplete, or source/configuration-drifted rows instead
+  show `Run again with current settings`, including the safe reason exact replay
+  is unavailable. That fallback names its source and reuses environment/window
+  only when the backend marks the execution context resolved; legacy or
+  pre-execution-failed rows omit request-only values so current defaults are
+  resolved at start. Its copy explicitly says that modes, variables,
+  authorization, selection, and schedule-only context are not replayed.
 
 Project connection routes accept an environment/connection search target so
 pipeline default-connection links can open the exact editable connection sheet.

@@ -28,6 +28,10 @@ type schedulerHandlerStub struct {
 	hasRunPlan        bool
 	runPlanErr        error
 	runUnits          []scheduler.PipelineRunUnit
+	runReexecution    scheduler.PipelineRunReexecution
+	reexecuteCalls    int
+	reexecuteRunID    string
+	reexecuteErr      error
 }
 
 func (s *schedulerHandlerStub) ListSchedules(context.Context) ([]scheduler.PipelineSchedule, error) {
@@ -71,6 +75,19 @@ func (s *schedulerHandlerStub) ListRunUnits(context.Context, string) ([]schedule
 	return s.runUnits, nil
 }
 
+func (s *schedulerHandlerStub) GetRunReexecution(context.Context, string) (scheduler.PipelineRunReexecution, error) {
+	return s.runReexecution, nil
+}
+
+func (s *schedulerHandlerStub) ReexecuteRun(_ context.Context, runID string) (scheduler.PipelineRun, error) {
+	s.reexecuteCalls++
+	s.reexecuteRunID = runID
+	if s.reexecuteErr != nil {
+		return scheduler.PipelineRun{}, s.reexecuteErr
+	}
+	return scheduler.PipelineRun{ID: "reexecuted-run", Trigger: scheduler.RunTriggerManual}, nil
+}
+
 func TestHandleTriggerPipelineRejectsInvalidOrClientOwnedContext(t *testing.T) {
 	t.Parallel()
 
@@ -100,6 +117,9 @@ func TestHandleTriggerPipelineRejectsInvalidOrClientOwnedContext(t *testing.T) {
 func TestHandleGetRunIncludesReviewedPlanWhenPresent(t *testing.T) {
 	t.Parallel()
 	stub := &schedulerHandlerStub{
+		runReexecution: scheduler.PipelineRunReexecution{
+			Mode: scheduler.PipelineRunReexecutionExact, Selection: "all", ExecutionUnits: 1,
+		},
 		hasRunPlan: true,
 		runUnits: []scheduler.PipelineRunUnit{{
 			Position: 0, AssetName: "analytics.orders", Status: scheduler.PipelineRunUnitQueued,
@@ -120,6 +140,40 @@ func TestHandleGetRunIncludesReviewedPlanWhenPresent(t *testing.T) {
 	assert.Contains(t, response.Body.String(), `"plan":{"version":1`)
 	assert.Contains(t, response.Body.String(), `"artifact":{"id":"reviewed-plan"}`)
 	assert.Contains(t, response.Body.String(), `"units":[{"position":0`)
+	assert.Contains(t, response.Body.String(), `"reexecution":{"mode":"exact","selection":"all","execution_units":1}`)
+}
+
+func TestHandleReexecuteRunRequiresEmptyObjectAndReturnsAcceptedRun(t *testing.T) {
+	t.Parallel()
+	for _, body := range []string{`null`, `{"unexpected":true}`, `{}` + "\n" + `{}`} {
+		stub := &schedulerHandlerStub{}
+		response := reexecuteRequest(stub, body)
+		assert.Equal(t, http.StatusBadRequest, response.Code)
+		assert.Contains(t, response.Body.String(), `"code":"invalid_request_body"`)
+		assert.Zero(t, stub.reexecuteCalls)
+	}
+
+	stub := &schedulerHandlerStub{}
+	response := reexecuteRequest(stub, `{}`)
+	require.Equal(t, http.StatusAccepted, response.Code)
+	assert.Equal(t, 1, stub.reexecuteCalls)
+	assert.Equal(t, "original-run", stub.reexecuteRunID)
+	assert.Contains(t, response.Body.String(), `"id":"reexecuted-run"`)
+}
+
+func TestHandleReexecuteRunReportsUnavailableAndActiveConflicts(t *testing.T) {
+	t.Parallel()
+	unavailable := &scheduler.ExactReexecutionUnavailableError{Reason: "the source changed"}
+	response := reexecuteRequest(&schedulerHandlerStub{reexecuteErr: unavailable}, `{}`)
+	require.Equal(t, http.StatusConflict, response.Code)
+	assert.Contains(t, response.Body.String(), `"code":"exact_reexecution_unavailable"`)
+	assert.Contains(t, response.Body.String(), `"reason":"the source changed"`)
+
+	active := &scheduler.PipelineRunActiveError{PipelineID: "pipeline-id", ActiveRunID: "active-run"}
+	response = reexecuteRequest(&schedulerHandlerStub{reexecuteErr: active}, `{}`)
+	require.Equal(t, http.StatusConflict, response.Code)
+	assert.Contains(t, response.Body.String(), `"code":"pipeline_run_active"`)
+	assert.Contains(t, response.Body.String(), `"active_run_id":"active-run"`)
 }
 
 func TestHandleUpdatePipelineScheduleRequiresOneStrictJSONObject(t *testing.T) {
@@ -237,6 +291,15 @@ func updateScheduleRequest(stub *schedulerHandlerStub, body string) *httptest.Re
 	router := chi.NewRouter()
 	RegisterSchedulerRoutes(router, &SchedulerAPI{Service: stub})
 	request := httptest.NewRequest(http.MethodPut, "/api/pipelines/pipeline-id/schedule", strings.NewReader(body))
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, request)
+	return response
+}
+
+func reexecuteRequest(stub *schedulerHandlerStub, body string) *httptest.ResponseRecorder {
+	router := chi.NewRouter()
+	RegisterSchedulerRoutes(router, &SchedulerAPI{Service: stub})
+	request := httptest.NewRequest(http.MethodPost, "/api/runs/original-run/reexecute", strings.NewReader(body))
 	response := httptest.NewRecorder()
 	router.ServeHTTP(response, request)
 	return response

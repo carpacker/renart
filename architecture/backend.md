@@ -543,7 +543,23 @@ stream. Build-needed flattens its server-recomputed topological selection into
 v2 units—one per exact gap/default window—and records unit success, failure,
 same-asset remainder skips, and downstream-of-failure skips while retaining one
 asset-level progress step. Every window keeps a run/unit-derived completion ID.
-Exact re-execution remains open.
+
+Terminal plan-backed runs expose a server-derived re-execution capability on
+run details. Renart offers exact re-execution only while the private RunSpec and
+unblocked immutable plan are retained, their complete window and execution time
+are present, current policy still permits the operation, and the original
+source Merkle plus secret-free selected-configuration digest still resolve.
+The run-owned `POST /api/runs/{id}/reexecute` accepts only an empty object and
+rechecks those conditions at admission, so the browser cannot replace private
+variables, modes, authorization, source, or units. It clones the retained
+RunSpec and plan into a new manual, run-ID-only River job under the ordinary
+pipeline slot, retaining source, environment, window, execution time,
+variables, modes, authorization, selection, and units while removing schedule
+identity and watermark authority. Stable pipeline UUID lookup lets an
+unchanged working-tree plan survive a pipeline-directory rename. Legacy,
+blocked, incomplete, or drifted runs instead advertise the distinct
+current-settings action; a stale exact request fails with
+`409 exact_reexecution_unavailable` rather than silently changing behavior.
 
 Before applying either Renart or River migrations, `Store` runs SQLite's
 `quick_check` against the shared state database. A failed check aborts startup

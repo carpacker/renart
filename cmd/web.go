@@ -681,6 +681,20 @@ func (s *webServer) ListRunUnits(ctx context.Context, runID string) ([]webschedu
 	return s.schedulerSvc.ListRunUnits(ctx, runID)
 }
 
+func (s *webServer) GetRunReexecution(ctx context.Context, runID string) (webscheduler.PipelineRunReexecution, error) {
+	if s.schedulerSvc == nil {
+		return webscheduler.PipelineRunReexecution{}, fmt.Errorf("scheduler is not initialized")
+	}
+	return s.schedulerSvc.GetRunReexecution(ctx, runID)
+}
+
+func (s *webServer) ReexecuteRun(ctx context.Context, runID string) (webscheduler.PipelineRun, error) {
+	if s.schedulerSvc == nil {
+		return webscheduler.PipelineRun{}, fmt.Errorf("scheduler is not initialized")
+	}
+	return s.schedulerSvc.ReexecuteRun(ctx, runID)
+}
+
 func schedulerStatusFromExecutionStatus(status string) webscheduler.RunStatus {
 	switch strings.ToLower(strings.TrimSpace(status)) {
 	case "success", "succeeded", "ok", "finished":
@@ -804,7 +818,16 @@ func (s *webServer) resolveRunSnapshot(ctx context.Context, spec *service.Pipeli
 			}
 		}
 	} else if expectedMerkle := strings.TrimSpace(spec.ExpectedSourceMerkle); expectedMerkle != "" {
-		target, err := service.ResolvePipelineRunTarget(spec.PipelineID)
+		pipelineID := spec.PipelineID
+		if pipelineUUID != "" {
+			for _, current := range s.currentState().Pipelines {
+				if current.UUID == pipelineUUID {
+					pipelineID = current.ID
+					break
+				}
+			}
+		}
+		target, err := service.ResolvePipelineRunTarget(pipelineID)
 		if err != nil {
 			return func() {}, fmt.Errorf("resolve confirmed pipeline source: %w", err)
 		}

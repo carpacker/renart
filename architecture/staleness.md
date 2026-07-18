@@ -191,6 +191,15 @@ reason and run-derived completion identity. Earlier successful windows remain
 successful if a later window fails; remaining windows and downstream assets are
 durably skipped. Asset-level steps stay aggregated for compatibility while the
 unit ledger remains the exact execution record.
+An exact re-execution is a new manual run admitted from a terminal run's
+retained private RunSpec and immutable plan. Before admission Renart revalidates
+current policy, the original source Merkle, and the selected secret-free
+configuration digest; source or configuration drift changes the available UI
+action to an explicitly non-exact current-settings run. Exact replay retains
+the original source, execution time, context, selection, and units, but receives
+new run-derived completion identities and never inherits schedule occurrence or
+watermark authority. Its successful facts therefore pass through the normal
+latest-writer and coverage rules rather than copying facts from the old run.
 For a deployed run it materializes the run's exact pinned snapshot while the
 recorder fingerprints it, then deletes the temp directory. This is derived-state
 recovery only—asset code and textual logs are never replayed. The fact and

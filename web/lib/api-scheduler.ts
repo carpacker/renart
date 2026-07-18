@@ -105,4 +105,8 @@ export async function getRun(runId: PipelineRun["id"]) {
   return fetchJSON<RunDetailResponse>(`/api/runs/${runId}`);
 }
 
+export async function reexecutePipelineRun(runId: PipelineRun["id"]) {
+  return fetchJSONWithBody<TriggerPipelineResponse>(`/api/runs/${runId}/reexecute`, "POST", {});
+}
+
 export type { PipelineRun, PipelineSchedule };

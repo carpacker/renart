@@ -595,9 +595,10 @@ select 1 as customer_id,'Ada' as customer_name union all select 2 as customer_id
 
     let terminalDetail:
       | {
-          run: { status: string };
-          plan?: { selection: { mode: string }; execution_units: unknown[] };
+          run: { status: string; trigger?: string };
+          plan?: { plan_id: string; selection: { mode: string }; execution_units: unknown[] };
           units?: Array<{ position: number; asset_name: string; status: string; reason: string }>;
+          reexecution?: { mode: string; selection?: string; execution_units?: number };
         }
       | undefined;
     await expect
@@ -617,8 +618,17 @@ select 1 as customer_id,'Ada' as customer_name union all select 2 as customer_id
     expect(terminalDetail?.plan?.selection.mode).toBe("needed");
     expect(terminalDetail?.units).toHaveLength(neededPlan.execution_units.length);
     expect(terminalDetail?.units?.every((unit) => unit.status === "success")).toBe(true);
+    expect(terminalDetail?.reexecution).toEqual({
+      mode: "exact",
+      selection: "needed",
+      execution_units: neededPlan.execution_units.length,
+    });
 
     await page.goto(`${liveApp.baseURL}/runs/${encodeURIComponent(confirmation.run.id)}`);
+    await expect(page.getByRole("button", { name: "Re-execute exact plan" })).toBeVisible();
+    await expect(page.getByTestId("run-again-context")).toContainText(
+      `Mode exact needed plan · ${neededPlan.execution_units.length}`,
+    );
     await page.getByRole("tab", { name: "Plan" }).click();
     const retainedPlan = page.getByTestId("run-plan-panel");
     await expect(retainedPlan).toBeVisible({ timeout: 15000 });
@@ -627,6 +637,38 @@ select 1 as customer_id,'Ada' as customer_name union all select 2 as customer_id
     );
     await expect(retainedPlan).toContainText("Final asset and window order admitted for this run");
     await expect(retainedPlan).toContainText("Planned stages");
+
+    const reexecutionResponse = page.waitForResponse(
+      (response) =>
+        response.url().endsWith(`/api/runs/${confirmation.run.id}/reexecute`) &&
+        response.status() === 202,
+      { timeout: 30000 },
+    );
+    await page.getByRole("button", { name: "Re-execute exact plan" }).click();
+    const reexecutionAccepted = await reexecutionResponse;
+    expect(reexecutionAccepted.request().postDataJSON()).toEqual({});
+    const reexecution = (await reexecutionAccepted.json()) as { run: { id: string } };
+    await expect(page).toHaveURL(new RegExp(`/runs/${encodeURIComponent(reexecution.run.id)}$`));
+
+    let replayDetail: typeof terminalDetail;
+    await expect
+      .poll(
+        async () => {
+          const response = await page.request.get(
+            `${liveApp.baseURL}/api/runs/${encodeURIComponent(reexecution.run.id)}`,
+          );
+          if (!response.ok()) return "unavailable";
+          replayDetail = (await response.json()) as typeof terminalDetail;
+          return replayDetail?.run.status ?? "unavailable";
+        },
+        { timeout: 90000 },
+      )
+      .toMatch(/^(success|failed|cancelled)$/);
+    expect(replayDetail?.run).toMatchObject({ status: "success", trigger: "manual" });
+    expect(replayDetail?.plan?.plan_id).toBe(terminalDetail?.plan?.plan_id);
+    expect(replayDetail?.plan?.selection.mode).toBe("needed");
+    expect(replayDetail?.units).toHaveLength(neededPlan.execution_units.length);
+    expect(replayDetail?.units?.every((unit) => unit.status === "success")).toBe(true);
 
     const stalenessQuery = new URLSearchParams({
       environment: neededPlan.context.environment || "default",

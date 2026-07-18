@@ -23,6 +23,8 @@ type SchedulerHandlers interface {
 	GetRun(ctx context.Context, runID string) (scheduler.PipelineRun, []scheduler.LogLine, []scheduler.PipelineRunStep, error)
 	GetRunPlan(ctx context.Context, runID string) (scheduler.PipelineRunPlan, bool, error)
 	ListRunUnits(ctx context.Context, runID string) ([]scheduler.PipelineRunUnit, error)
+	GetRunReexecution(ctx context.Context, runID string) (scheduler.PipelineRunReexecution, error)
+	ReexecuteRun(ctx context.Context, runID string) (scheduler.PipelineRun, error)
 }
 
 type SchedulerAPI struct {
@@ -36,6 +38,7 @@ func RegisterSchedulerRoutes(router chi.Router, handlers *SchedulerAPI) {
 	router.Post("/api/pipelines/{id}/trigger", handlers.HandleTriggerPipeline)
 	router.Get("/api/runs", handlers.HandleListRuns)
 	router.Get("/api/runs/{id}", handlers.HandleGetRun)
+	router.Post("/api/runs/{id}/reexecute", handlers.HandleReexecuteRun)
 }
 
 func (h *SchedulerAPI) HandleListSchedules(w http.ResponseWriter, r *http.Request) {
@@ -177,5 +180,44 @@ func (h *SchedulerAPI) HandleGetRun(w http.ResponseWriter, r *http.Request) {
 	if hasPlan {
 		planResponse = plan
 	}
-	webapi.WriteJSON(w, http.StatusOK, map[string]any{"status": "ok", "run": run, "logs": logs, "steps": steps, "plan": planResponse, "units": units})
+	reexecution, err := h.Service.GetRunReexecution(r.Context(), runID)
+	if err != nil {
+		webapi.WriteBadRequest(w, "run_get_failed", err.Error())
+		return
+	}
+	webapi.WriteJSON(w, http.StatusOK, map[string]any{
+		"status": "ok", "run": run, "logs": logs, "steps": steps,
+		"plan": planResponse, "units": units, "reexecution": reexecution,
+	})
+}
+
+func (h *SchedulerAPI) HandleReexecuteRun(w http.ResponseWriter, r *http.Request) {
+	if _, err := decodeStrictJSONObject[struct{}](r.Body); err != nil {
+		webapi.WriteBadRequest(w, "invalid_request_body", err.Error())
+		return
+	}
+	run, err := h.Service.ReexecuteRun(r.Context(), chi.URLParam(r, "id"))
+	if err != nil {
+		if errors.Is(err, scheduler.ErrSchedulerNotOwner) {
+			webapi.WriteConflict(w, "scheduler_not_owner", err.Error())
+			return
+		}
+		var activeRun *scheduler.PipelineRunActiveError
+		if errors.As(err, &activeRun) {
+			webapi.WriteErrorWithDetails(w, http.StatusConflict, "pipeline_run_active", err.Error(), map[string]string{
+				"pipeline_id": activeRun.PipelineID, "active_run_id": activeRun.ActiveRunID,
+			})
+			return
+		}
+		var unavailable *scheduler.ExactReexecutionUnavailableError
+		if errors.As(err, &unavailable) {
+			webapi.WriteErrorWithDetails(w, http.StatusConflict, "exact_reexecution_unavailable", err.Error(), map[string]string{
+				"reason": strings.TrimSpace(unavailable.Reason),
+			})
+			return
+		}
+		webapi.WriteBadRequest(w, "run_reexecution_failed", err.Error())
+		return
+	}
+	webapi.WriteJSON(w, http.StatusAccepted, map[string]any{"status": "ok", "run": run})
 }

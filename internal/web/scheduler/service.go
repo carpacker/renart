@@ -49,6 +49,7 @@ type Service struct {
 	validateSnapshot          func(context.Context, string, string) error
 	validateScheduleVariables func(context.Context, string, string, map[string]any) error
 	planScheduledRun          func(context.Context, ScheduledRunPlanRequest) (ScheduledRunPlanResult, error)
+	validateReexecution       func(context.Context, RunReexecutionValidationRequest) error
 	snapshotOrdinal           func(context.Context, string) (int64, error)
 	recoverRun                func(context.Context, PipelineRun, []PipelineRunStep) error
 	lock                      *flock.Flock
@@ -96,6 +97,9 @@ type Options struct {
 	// PlanScheduledRun produces the redacted immutable plan for an actual due
 	// interval. Admission persists it atomically with the RunSpec and run slot.
 	PlanScheduledRun func(context.Context, ScheduledRunPlanRequest) (ScheduledRunPlanResult, error)
+	// ValidateReexecution fails closed unless the retained source, variables,
+	// selected configuration, and current policy still permit exact replay.
+	ValidateReexecution func(context.Context, RunReexecutionValidationRequest) error
 	// SnapshotOrdinal resolves presentation identity for an immutable version.
 	// A missing historical deployment never blocks run or schedule history.
 	SnapshotOrdinal func(context.Context, string) (int64, error)
@@ -339,6 +343,7 @@ func New(options Options) *Service {
 		validateSnapshot:          options.ValidateSnapshot,
 		validateScheduleVariables: options.ValidateScheduleVariables,
 		planScheduledRun:          options.PlanScheduledRun,
+		validateReexecution:       options.ValidateReexecution,
 		snapshotOrdinal:           options.SnapshotOrdinal,
 		recoverRun:                options.RecoverRun,
 		ownershipState:            SchedulerOwnershipUnavailable,

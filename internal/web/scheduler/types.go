@@ -222,6 +222,43 @@ type TriggerRequest struct {
 	ConfirmedPlan *PipelineRunPlan `json:"-"`
 }
 
+// PipelineRunReexecution describes the truthful action available from run
+// details. Exact means Renart still retains and can resolve the original
+// private RunSpec plus its immutable reviewed plan. CurrentSettings is the
+// explicit fallback for legacy, inline, blocked, or drifted runs.
+type PipelineRunReexecution struct {
+	Mode           PipelineRunReexecutionMode `json:"mode"`
+	Reason         string                     `json:"reason,omitempty"`
+	Selection      string                     `json:"selection,omitempty"`
+	ExecutionUnits int                        `json:"execution_units,omitempty"`
+}
+
+type PipelineRunReexecutionMode string
+
+const (
+	PipelineRunReexecutionExact           PipelineRunReexecutionMode = "exact"
+	PipelineRunReexecutionCurrentSettings PipelineRunReexecutionMode = "current_settings"
+)
+
+// RunReexecutionValidationRequest is private server-to-server validation
+// input. Values such as variable overrides and authorization are deliberately
+// never serialized into run-detail responses or SSE events.
+type RunReexecutionValidationRequest struct {
+	OriginalRunID               string
+	PipelineID                  string
+	PipelineUUID                string
+	Environment                 string
+	Source                      RunSource
+	SnapshotVersionID           string
+	ExpectedSourceMerkle        string
+	ExpectedConfigurationDigest string
+	VariableOverrides           map[string]any
+	ConfigurationAssetNames     []string
+	FullRefresh                 bool
+	Backfill                    bool
+	ConfirmedEnvironment        string
+}
+
 // InlineRunAdmission is the server-normalized contract for a synchronous,
 // streaming full-pipeline execution. The execution service resolves policy,
 // defaults, and the exact window before admission; the scheduler service owns

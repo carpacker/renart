@@ -211,6 +211,13 @@ export type PipelineRunUnit = PipelineRunPlanExecutionUnit & {
   error?: string;
 };
 
+export type PipelineRunReexecution = {
+  mode: "exact" | "current_settings";
+  reason?: string;
+  selection?: "all" | "needed" | "asset" | string;
+  execution_units?: number;
+};
+
 export type SchedulesResponse = {
   status: "ok" | "error";
   schedules: PipelineSchedule[];
@@ -241,6 +248,7 @@ export type RunDetailResponse = {
   steps: PipelineRunStep[];
   plan?: PipelineRunPlan | null;
   units?: PipelineRunUnit[];
+  reexecution?: PipelineRunReexecution;
 };
 
 export type SourceControlChange = {

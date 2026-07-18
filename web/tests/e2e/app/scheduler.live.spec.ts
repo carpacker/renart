@@ -320,7 +320,7 @@ test.describe("app scheduler pages live", () => {
     await expect(page.getByText("analytics", { exact: true }).first()).toBeVisible();
   });
 
-  test("reruns a non-default original with visibly labeled defaults", async ({
+  test("runs a non-replayable original with visibly labeled current settings", async ({
     liveApp,
     page,
     request,
@@ -366,18 +366,18 @@ test.describe("app scheduler pages live", () => {
     await page.goto(`${liveApp.baseURL}/runs/${runId}`);
     const context = page.getByTestId("run-again-context");
     await expect(context).toBeVisible();
-    await expect(context).toContainText("Rerun source current saved workspace");
+    await expect(context).toContainText("Run source current saved workspace");
     await expect(context).toContainText("Environment default");
     await expect(context).toContainText("Recorded window");
     await expect(context).not.toContainText("no recorded window");
-    await expect(context).toContainText("Mode default execution");
+    await expect(context).toContainText("Mode current settings");
 
     const rerunRequest = page.waitForRequest(
       (candidate) =>
         candidate.url().endsWith(`/api/pipelines/${analyticsPipelineId}/trigger`) &&
         candidate.method() === "POST",
     );
-    await page.getByRole("button", { name: "Run current workspace with defaults" }).click();
+    await page.getByRole("button", { name: "Run again with current settings" }).click();
     expect((await rerunRequest).postDataJSON()).toEqual({
       source: "working_tree",
       environment: original.run.environment,
@@ -387,6 +387,79 @@ test.describe("app scheduler pages live", () => {
 
     await expect(page).toHaveURL(new RegExp("/runs/default-mode-rerun$"));
     await expect(page.getByRole("heading", { name: "Run default-mode-rerun" })).toBeVisible();
+  });
+
+  test("re-executes an exact retained plan through the run-owned endpoint", async ({
+    liveApp,
+    page,
+  }) => {
+    const originalRun = {
+      id: "exact-original",
+      pipeline_id: analyticsPipelineId,
+      pipeline: "analytics",
+      environment: "default",
+      trigger: "schedule",
+      status: "success",
+      win_start: "2026-07-15T00:00:00Z",
+      win_end: "2026-07-16T00:00:00Z",
+      snapshot_version_id: "deployment-id",
+      snapshot_ordinal: 4,
+      execution_context_resolved: true,
+    };
+    const acceptedRun = {
+      ...originalRun,
+      id: "exact-reexecution",
+      trigger: "manual",
+      status: "queued",
+      execution_context_resolved: false,
+    };
+    await page.route("**/api/runs/exact-original", async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          status: "ok",
+          run: originalRun,
+          logs: [],
+          steps: [],
+          units: [],
+          reexecution: { mode: "exact", selection: "all", execution_units: 2 },
+        }),
+      });
+    });
+    await page.route("**/api/runs/exact-original/reexecute", async (route) => {
+      await route.fulfill({
+        status: 202,
+        contentType: "application/json",
+        body: JSON.stringify({ status: "ok", run: acceptedRun }),
+      });
+    });
+    await page.route("**/api/runs/exact-reexecution", async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          status: "ok",
+          run: acceptedRun,
+          logs: [],
+          steps: [],
+          reexecution: { mode: "current_settings", reason: "The run has not finished." },
+        }),
+      });
+    });
+
+    await page.goto(`${liveApp.baseURL}/runs/exact-original`);
+    await expect(page.getByTestId("run-again-context")).toContainText(
+      "Mode exact all plan · 2 units",
+    );
+    const request = page.waitForRequest(
+      (candidate) =>
+        candidate.url().endsWith("/api/runs/exact-original/reexecute") &&
+        candidate.method() === "POST",
+    );
+    await page.getByRole("button", { name: "Re-execute exact plan" }).click();
+    expect((await request).postDataJSON()).toEqual({});
+    await expect(page).toHaveURL(new RegExp("/runs/exact-reexecution$"));
   });
 
   test("omits unresolved legacy environment and window from a rerun", async ({ liveApp, page }) => {
@@ -439,9 +512,9 @@ test.describe("app scheduler pages live", () => {
     await expect(context).toContainText("current pipeline default resolved at start");
     await expect(page.getByText(/execution context unavailable/)).toBeVisible();
     const rerunButton = page.getByRole("button", {
-      name: "Run current workspace with defaults",
+      name: "Run again with current settings",
     });
-    await expect(rerunButton).toContainText("Run with defaults");
+    await expect(rerunButton).toContainText("Run current settings");
 
     const rerunRequest = page.waitForRequest(
       (candidate) =>
@@ -477,7 +550,7 @@ test.describe("app scheduler pages live", () => {
     await expect(page.getByText(/Run of analytics/)).toBeVisible();
     await expect(page.getByTestId("run-again-context")).toContainText("default");
     await expect(page.getByTestId("run-again-context")).toContainText("Recorded window");
-    await expect(page.getByTestId("run-again-context")).toContainText("Mode default execution");
+    await expect(page.getByTestId("run-again-context")).toContainText("Mode current settings");
     await expect(page.getByRole("tab", { name: "Events" })).toBeVisible();
     const outputTab = page.getByRole("tab", { name: "Output" });
     await expect(outputTab).toBeVisible();

@@ -150,6 +150,33 @@ func TestResolveRunSnapshotFreezesConfirmedWorkingTreeSource(t *testing.T) {
 	assert.Equal(t, "select 1", string(copied))
 }
 
+func TestResolveRunSnapshotUsesStableUUIDAfterWorkingTreePathChanges(t *testing.T) {
+	t.Parallel()
+	workspace := t.TempDir()
+	pipelineDir := filepath.Join(workspace, "renamed-analytics")
+	require.NoError(t, os.MkdirAll(filepath.Join(pipelineDir, "assets"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(pipelineDir, "pipeline.yml"), []byte("id: stable-pipeline-uuid\nname: analytics\n"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(pipelineDir, "assets", "orders.sql"), []byte("select 1"), 0o644))
+	manifest, err := snapshot.CollectManifestHashes(pipelineDir)
+	require.NoError(t, err)
+
+	coordinator := service.NewWorkspaceCoordinator(service.WorkspaceCoordinatorDependencies{})
+	coordinator.SetState(service.WorkspaceState{Pipelines: []service.WorkspacePipeline{{
+		ID: service.EncodeID("renamed-analytics"), UUID: "stable-pipeline-uuid",
+	}}})
+	server := &webServer{workspaceRoot: workspace, workspaceCoord: coordinator}
+	spec := service.PipelineRunSpec{
+		PipelineID:           service.EncodeID("old-analytics-path"),
+		PipelineUUID:         "stable-pipeline-uuid",
+		ExpectedSourceMerkle: snapshot.ManifestRoot(manifest),
+	}
+
+	cleanup, err := server.resolveRunSnapshot(context.Background(), &spec, false, nil)
+	require.NoError(t, err)
+	defer cleanup()
+	require.FileExists(t, filepath.Join(spec.SnapshotDir, "assets", "orders.sql"))
+}
+
 func TestResolveRunSnapshotRejectsChangedConfirmedSource(t *testing.T) {
 	t.Parallel()
 	workspace := t.TempDir()

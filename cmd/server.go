@@ -530,6 +530,46 @@ func newWebServer(ctx context.Context, cfg serverConfig, logger *zap.Logger) (*w
 			}
 			return webscheduler.ScheduledRunPlanResult{Plan: retainedPlan}, nil
 		},
+		ValidateReexecution: func(ctx context.Context, req webscheduler.RunReexecutionValidationRequest) error {
+			environmentPolicy := policy.EnvironmentPolicy{}
+			if server.policyLoader != nil {
+				environmentPolicy = server.policyLoader.For(req.Environment)
+			}
+			if err := policy.Check(environmentPolicy, policy.RunRequest{
+				Environment:          req.Environment,
+				Interactive:          true,
+				SnapshotBased:        req.Source == webscheduler.RunSourceSnapshot,
+				Destructive:          req.FullRefresh || req.Backfill,
+				ConfirmedEnvironment: req.ConfirmedEnvironment,
+			}); err != nil {
+				return err
+			}
+
+			pipelineID := req.PipelineID
+			for _, current := range server.currentState().Pipelines {
+				if current.UUID == req.PipelineUUID {
+					pipelineID = current.ID
+					break
+				}
+			}
+			if req.Source == webscheduler.RunSourceWorkingTree && pipelineID == req.PipelineID {
+				if currentUUID, ok := server.findPipelineUUIDByID(req.PipelineID); !ok || currentUUID != req.PipelineUUID {
+					return fmt.Errorf("the original saved-workspace pipeline is no longer present")
+				}
+			}
+			return server.pipelinePlanSvc.ValidateRetainedRunContext(ctx, service.RetainedRunContextValidationRequest{
+				PipelineID:   pipelineID,
+				PipelineUUID: req.PipelineUUID,
+				Environment:  req.Environment,
+				Source: service.PipelinePlanSourceRequest{
+					Kind: string(req.Source), VersionID: req.SnapshotVersionID,
+				},
+				VariableOverrides:           req.VariableOverrides,
+				ConfigurationAssetNames:     req.ConfigurationAssetNames,
+				ExpectedSourceMerkle:        req.ExpectedSourceMerkle,
+				ExpectedConfigurationDigest: req.ExpectedConfigurationDigest,
+			})
+		},
 		SnapshotOrdinal: func(ctx context.Context, versionID string) (int64, error) {
 			deployed, err := server.snapshotStore.Get(ctx, versionID)
 			return deployed.Ordinal, err

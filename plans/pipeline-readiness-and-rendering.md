@@ -1171,11 +1171,12 @@ editing tracked ignore rules. This closes the hole where worktree cleanup could
 unlink the only lock while a server still owned the workspace; it remains
 separate from the scheduler ownership/handoff workstream below.
 
-This began as only the scheduler-backed foundation. Exact re-execution remains
-open; asset/scoped and Build-needed execution, effective variables,
-full-pipeline inline execution, asset/window execution units, run-ID-only
-scheduled dispatch, target/latest-writer identity, and durable schedule
-occurrences/attempts have since landed in the checkpoints below.
+This began as only the scheduler-backed foundation. Exact re-execution,
+asset/scoped and Build-needed execution, effective variables, full-pipeline
+inline execution, asset/window execution units, run-ID-only scheduled dispatch,
+target/latest-writer identity, and durable schedule occurrences/attempts have
+since landed in the checkpoints below. The legacy job decoder and duplicated
+compatibility fields remain intentionally until pre-upgrade jobs have drained.
 
 Durable occurrence checkpoint (2026-07-18): actual due/catch-up intervals now
 receive a stable server-derived occurrence key over pipeline UUID, environment,
@@ -1229,6 +1230,19 @@ asset, and durably marks remaining same-asset windows plus downstream work
 skipped after failure. Admission, the pipeline slot, target snapshot, policy
 recheck, logs, and detached finalization now match the other inline paths.
 
+Exact re-execution checkpoint (2026-07-18): terminal runs with a retained,
+unblocked immutable plan and complete private RunSpec now expose a dynamic
+server-owned capability. Eligibility and admission both recheck current policy,
+the exact source Merkle, retained variables, and the secret-free selected-
+configuration digest. `POST /api/runs/{id}/reexecute` accepts no behavior input
+and atomically clones the original source, environment, window, execution time,
+variables, modes, authorization, selection, plan, and units into a new manual
+run with a run-ID-only River job and the normal pipeline slot. Schedule identity
+and watermark authority are stripped. Stable UUID resolution permits an
+unchanged working-tree plan to survive a directory rename; any missing input,
+blocked plan, policy change, or source/configuration drift yields the distinct
+`Run again with current settings` action and a stale exact request fails closed.
+
 This is the architectural prerequisite for the pipeline plan:
 
 - introduce the versioned durable `RunSpec` and universal run records for every
@@ -1246,8 +1260,9 @@ This is the architectural prerequisite for the pipeline plan:
   drained;
 - verify snapshot integrity, execute each deployment in an isolated per-run
   sandbox, and make recovery use the same exact source/context;
-- move exact re-execution and canonical run history onto this ledger, then
-  remove Phase 0a's temporary duplicated queue fields.
+- retain exact re-execution and canonical run history on this ledger; remove
+  Phase 0a's duplicated compatibility queue fields only after pre-upgrade jobs
+  no longer need the versioned legacy decoder.
 
 Phase 1 rendering can proceed in parallel once Phase 0a establishes truthful
 source/context semantics. Phase 2 requires both Phase 1 and Phase 0b.
@@ -1576,8 +1591,9 @@ non-actionable SQL warnings while retaining Python's honest runtime warning.
 Phase 2 is complete. Direct one-asset/scoped, Build-needed, full-pipeline
 onboarding, HTTP, and embedded execution now use the inline ledger. Durable
 schedule occurrences/attempts, variables, deploy/schedule plan integration,
-and separate signal-to-execution jobs are implemented. Exact re-execution is
-the remaining Phase 0b ledger item.
+separate signal-to-execution jobs, and exact retained-plan re-execution are
+implemented. Phase 0b's functional ledger scope is complete; only rolling
+legacy-job compatibility cleanup remains.
 
 ### Phase 3: Deploy and schedule integration
 
@@ -1623,10 +1639,10 @@ and pipeline slot. A blocked plan becomes a failed auditable run without
 physical execution, and its durable blocked decision survives a crash before
 failure finalization. Row-level `Run pinned` now loads the pin and overrides on
 the server while retaining manual/no-watermark provenance. Phase 3 is complete;
-exact re-execution remains in the earlier Phase 0b workstream. Durable
-occurrence identity, numbered attempts,
-run-ID-only scheduled dispatch, and inline full-pipeline history are covered by
-the later Phase 0b checkpoints above.
+exact re-execution is covered by the completed Phase 0b checkpoint. Durable
+occurrence identity, numbered attempts, run-ID-only scheduled dispatch, and
+inline full-pipeline history are covered by the later Phase 0b checkpoints
+above.
 
 ### Phase 4: optional policy and automation
 
@@ -1672,6 +1688,12 @@ the later Phase 0b checkpoints above.
 - deployment manifest/blob verification and isolated-run-sandbox tests;
 - client trigger spoofing rejection and server-owned watermark tests;
 - manual pinned/re-executed runs do not advance the schedule watermark;
+- exact re-execution retains source/configuration identities, variables,
+  execution time, complete context, selection, and units; it strips schedule
+  authority and admits only a run-ID River job;
+- exact replay becomes unavailable on source/configuration/policy drift, and a
+  validation race between run-detail load and admission fails closed without a
+  partial run or job;
 - atomic concurrent run-admission conflict and scheduled retry tests;
 - the same periodic/catch-up occurrence admitted concurrently creates one run;
   a completed occurrence does not re-execute, while retry stays under its
@@ -1703,6 +1725,8 @@ operations or exact canonical blobs from the renderer.
 - E2E: a `deployed_only` Run displays/uses its exact deployment or blocks with
   Deploy;
 - E2E: schedule-row Run executes its displayed pin;
+- E2E: retained plan -> exact run-owned re-execution, while a legacy or drifted
+  run is visibly labeled as current-settings execution;
 - E2E: one-click asset Materialize and its stale-upstream prompt remain intact;
 - E2E: occupied run slot disables/links before confirmation and a race returns
   the typed active-run result;
