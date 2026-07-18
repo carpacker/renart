@@ -2,7 +2,7 @@ import { expect, type Locator, type Page } from "@playwright/test";
 import { writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
-import { liveTest as test, type LiveApp } from "../live-app-fixture";
+import { liveTest as test, timeoutForRetry, type LiveApp } from "../live-app-fixture";
 
 const pipelineId = Buffer.from("analytics").toString("base64url");
 const customersAssetId = Buffer.from("analytics/assets/analytics/customers.sql").toString(
@@ -62,7 +62,7 @@ async function pollAsset(
         found = await fetchAsset(liveApp, request, assetName);
         return found ? predicate(found) : false;
       },
-      { timeout: 30000 },
+      { timeout: timeoutForRetry(test.info(), 30000) },
     )
     .toBe(true);
   if (!found) throw new Error(`asset ${assetName} never satisfied predicate`);
@@ -71,15 +71,21 @@ async function pollAsset(
 
 async function openAssetProperties(page: Page): Promise<Locator> {
   const inspector = page.locator('[data-testid="asset-inspector"]:visible').first();
+  const trigger = page
+    .getByRole("button", { name: "Asset properties" })
+    .or(page.getByRole("button", { name: "Show properties" }))
+    .first();
+  const timeout = timeoutForRetry(test.info(), 15000);
+
+  // Desktop renders the inspector directly, while compact layouts render its
+  // trigger. Wait for either route-dependent state before deciding to click.
+  await expect
+    .poll(async () => (await inspector.isVisible()) || (await trigger.isVisible()), { timeout })
+    .toBe(true);
   if (!(await inspector.isVisible().catch(() => false))) {
-    const trigger = page
-      .getByRole("button", { name: "Asset properties" })
-      .or(page.getByRole("button", { name: "Show properties" }))
-      .first();
-    await expect(trigger).toBeVisible({ timeout: 15000 });
     await trigger.click();
   }
-  await expect(inspector).toBeVisible({ timeout: 15000 });
+  await expect(inspector).toBeVisible({ timeout });
   return inspector;
 }
 
@@ -550,6 +556,7 @@ materialization:
     liveApp,
     page,
   }) => {
+    test.setTimeout(timeoutForRetry(test.info(), 90000, 60000));
     test.skip(
       test.info().project.name.includes("mobile"),
       "The canvas creation flow is desktop-only.",
@@ -558,7 +565,7 @@ materialization:
     await page.goto(`${liveApp.baseURL}/pipelines/${pipelineId}/assets/${ordersAssetId}/canvas`);
     await page.getByRole("button", { name: "New asset" }).first().click();
     const dialog = page.getByRole("dialog", { name: "New asset" });
-    await expect(dialog).toBeVisible();
+    await expect(dialog).toBeVisible({ timeout: timeoutForRetry(test.info(), 15000) });
     await dialog.getByRole("radio", { name: /^Load/ }).click();
     await dialog.getByLabel("Asset name").fill("analytics.orders_copy");
 

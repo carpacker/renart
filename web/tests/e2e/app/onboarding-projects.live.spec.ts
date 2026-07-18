@@ -4,7 +4,7 @@ import { basename, dirname, join } from "node:path";
 
 import { expect } from "@playwright/test";
 
-import { liveTest as test, type LiveApp } from "../live-app-fixture";
+import { liveTest as test, timeoutForRetry, type LiveApp } from "../live-app-fixture";
 
 type ProjectListResponse = {
   status: string;
@@ -76,25 +76,26 @@ test.describe("first-run onboarding", () => {
   });
 
   test("creates and materializes the offline retail demo", async ({ liveApp, page }) => {
-    test.setTimeout(180000);
+    test.setTimeout(timeoutForRetry(test.info(), 240000, 60000));
     await page.goto(`${liveApp.baseURL}/welcome`);
 
     await page.getByRole("button", { name: /Start from a demo/ }).click();
     await page.getByRole("button", { name: /Retail analytics/ }).click();
+    const createResponse = page.waitForResponse(
+      (response) =>
+        new URL(response.url()).pathname === "/api/projects" &&
+        response.request().method() === "POST",
+      { timeout: timeoutForRetry(test.info(), 60000) },
+    );
     await page.getByRole("button", { name: "Create project" }).click();
+    expect((await createResponse).ok()).toBe(true);
 
-    // The creating checklist hands over to the bootstrap run automatically;
-    // "You're all set" only renders after the run stream finished with ok.
-    await expect(page.getByRole("heading", { name: "Running your pipeline" })).toBeVisible({
-      timeout: 30000,
-    });
-
-    // The running screen is intentionally transient; a fast local DuckDB run
-    // can replace its log between two locator checks. Assert the durable
-    // completion state rather than racing that intermediate DOM.
+    // The creating checklist hands over to the bootstrap run automatically.
+    // Both the checklist and running screen are transient, so wait for the
+    // durable state that only renders after the run stream finished with ok.
     const completedHeading = page.getByRole("heading", { name: "You're all set" });
     await expect(completedHeading).toBeVisible({
-      timeout: 180000,
+      timeout: timeoutForRetry(test.info(), 180000, 60000),
     });
 
     for (const relPath of [
@@ -130,23 +131,25 @@ test.describe("first-run onboarding", () => {
           const staleness = (await response.json()) as StalenessResponse;
           return staleness.assets.map((asset) => `${asset.asset_name}:${asset.status}`).sort();
         },
-        { timeout: 30000 },
+        { timeout: timeoutForRetry(test.info(), 30000) },
       )
       .toEqual(retail!.assets.map((asset) => `${asset.name}:fresh`).sort());
 
     await page.getByRole("button", { name: "Open workspace" }).click();
-    await expect(page).toHaveURL(/\/pipelines\/.+\/canvas/, { timeout: 30000 });
+    await expect(page).toHaveURL(/\/pipelines\/.+\/canvas/, {
+      timeout: timeoutForRetry(test.info(), 30000),
+    });
     const customerOrders = retail!.assets.find(
       (asset) => asset.name === "analytics.customer_orders",
     );
     expect(customerOrders).toBeTruthy();
     await expect(page.getByTestId(`rf__node-${customerOrders!.id}`)).toBeVisible({
-      timeout: 30000,
+      timeout: timeoutForRetry(test.info(), 30000),
     });
     for (const asset of retail!.assets) {
       await expect(
         page.getByTestId(`rf__node-${asset.id}`).locator('[title="Staleness: Fresh"]'),
-      ).toBeVisible({ timeout: 30000 });
+      ).toBeVisible({ timeout: timeoutForRetry(test.info(), 30000) });
     }
   });
 

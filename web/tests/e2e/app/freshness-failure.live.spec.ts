@@ -251,9 +251,9 @@ print("sentinel ok")
       "The freshness badge is a desktop sidebar/canvas affordance.",
     );
 
-    const pyAssetId = Buffer.from(
-      "analytics/assets/analytics/python_freshness.py",
-    ).toString("base64url");
+    const pyAssetId = Buffer.from("analytics/assets/analytics/python_freshness.py").toString(
+      "base64url",
+    );
     await writeFile(
       join(liveApp.workspaceDir, "analytics", "assets", "analytics", "python_freshness.py"),
       `""" @bruin

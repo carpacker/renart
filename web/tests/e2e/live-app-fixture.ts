@@ -1,4 +1,4 @@
-import { test as base } from "@playwright/test";
+import { test as base, type TestInfo } from "@playwright/test";
 import { spawn } from "node:child_process";
 import { cpSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import http from "node:http";
@@ -19,6 +19,16 @@ export type LivePostgres = {
   password: string;
   database: string;
 };
+
+const retryTestTimeoutExtensionMs = 60_000;
+
+export function timeoutForRetry(
+  testInfo: Pick<TestInfo, "retry">,
+  timeoutMs: number,
+  retryExtensionMs = timeoutMs,
+) {
+  return testInfo.retry > 0 ? timeoutMs + retryExtensionMs : timeoutMs;
+}
 
 const webDir = resolve(__dirname, "..", "..");
 const repoRoot = resolve(webDir, "..");
@@ -56,6 +66,13 @@ export const liveTest = base.extend<{
     { timeout: 120000 },
   ],
   page: async ({ page }, use, testInfo) => {
+    // Retries collect a trace after a full failed server lifecycle, which is
+    // noticeably slower on constrained CI runners. Keep the first attempt's
+    // feedback loop tight while giving retries enough end-to-end headroom.
+    if (testInfo.retry > 0) {
+      testInfo.setTimeout(timeoutForRetry(testInfo, testInfo.timeout, retryTestTimeoutExtensionMs));
+    }
+
     const networkEvents: Array<Record<string, unknown>> = [];
     const requestStartedAt = new WeakMap<object, number>();
 

@@ -2,7 +2,7 @@ import { expect, type APIRequestContext, type Page } from "@playwright/test";
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { basename, join } from "node:path";
 
-import { liveTest as test } from "../live-app-fixture";
+import { liveTest as test, timeoutForRetry } from "../live-app-fixture";
 
 type NotebookEnvelope = {
   notebook: {
@@ -177,6 +177,7 @@ test.describe("app notebooks live", () => {
   });
 
   test("create, edit, and run a notebook against the local session", async ({ liveApp, page }) => {
+    test.setTimeout(timeoutForRetry(test.info(), 60000, 60000));
     const { request } = page;
     const notebook = await createNotebook(request, liveApp.baseURL, "Revenue Exploration");
 
@@ -198,7 +199,9 @@ test.describe("app notebooks live", () => {
     );
 
     await page.goto(`${liveApp.baseURL}/notebooks/${notebook.id}`);
-    await expect(page.getByText("Revenue Exploration").first()).toBeVisible({ timeout: 15000 });
+    await expect(page.getByText("Revenue Exploration").first()).toBeVisible({
+      timeout: timeoutForRetry(test.info(), 15000),
+    });
     // Both cells render with their names.
     await expect(page.getByText("base", { exact: true }).first()).toBeVisible();
     await expect(page.getByText("doubled", { exact: true }).first()).toBeVisible();
@@ -208,7 +211,7 @@ test.describe("app notebooks live", () => {
         new URL(response.url()).pathname === `/api/notebooks/${notebook.id}/run` &&
         response.request().method() === "POST" &&
         response.ok(),
-      { timeout: 30000 },
+      { timeout: timeoutForRetry(test.info(), 30000) },
     );
     await page.getByRole("button", { name: "Run all" }).click();
     const payload = (await (await runResponse).json()) as {
@@ -221,7 +224,9 @@ test.describe("app notebooks live", () => {
     expect(doubled.rows).toEqual([[20], [40]]);
 
     // The result table shows the computed values in the UI.
-    await expect(page.getByText("40", { exact: true }).first()).toBeVisible({ timeout: 15000 });
+    await expect(page.getByText("40", { exact: true }).first()).toBeVisible({
+      timeout: timeoutForRetry(test.info(), 15000),
+    });
   });
 
   test("highlights a sibling cell after definition navigation", async ({ liveApp, page }) => {
