@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"path/filepath"
 	"strings"
 
 	"github.com/spf13/afero"
@@ -35,10 +36,21 @@ type RunResult struct {
 
 type RunDependencies struct {
 	Executor            BruinCommandExecutor
+	Execution           RunMaterializer
+	CurrentPipelineIDs  func() []string
 	ConfigPath          string
 	WorkspaceRoot       string
 	PolicyFor           func(environment string) policy.EnvironmentPolicy
 	SelectedEnvironment func() string
+}
+
+// RunMaterializer is the canonical, completion-aware execution path used by
+// the Build UI and delegated CLI runs. Keeping this dependency narrow lets the
+// legacy JSON endpoint preserve its response contract while sharing target
+// capture, write claims, and completion persistence with every other run path.
+type RunMaterializer interface {
+	MaterializeAssetStreamWithSensorMode(ctx context.Context, assetID, environment, scope, startDate, endDate string, fullRefresh, backfill bool, confirmedEnvironment, sensorMode string, onChunk func([]byte)) MaterializeResult
+	MaterializePipelineStreamWithSensorMode(ctx context.Context, pipelineID, environment string, dryRun, fullRefresh, backfill bool, startDate, endDate, confirmedEnvironment, sensorMode string, onChunk func([]byte)) MaterializeResult
 }
 
 type RunService struct {
@@ -122,6 +134,43 @@ func (s *RunService) Execute(ctx context.Context, req RunRequest) RunResult {
 	}
 
 	operation := runOperation(target, req.PipelineID, req.AssetPath, req.Environment)
+	if !req.DryRun && s.deps.Execution != nil {
+		if req.AssetPath == "" && req.PipelineID == "" {
+			return s.materializeCurrentPipelines(ctx, req, operation)
+		}
+
+		var result MaterializeResult
+		if req.AssetPath != "" {
+			result = s.deps.Execution.MaterializeAssetStreamWithSensorMode(
+				ctx,
+				EncodeID(filepath.ToSlash(target)),
+				req.Environment,
+				string(MaterializeScopeAsset),
+				req.StartDate,
+				req.EndDate,
+				req.FullRefresh,
+				req.Backfill,
+				req.ConfirmedEnvironment,
+				req.SensorMode,
+				nil,
+			)
+		} else {
+			result = s.deps.Execution.MaterializePipelineStreamWithSensorMode(
+				ctx,
+				req.PipelineID,
+				req.Environment,
+				false,
+				req.FullRefresh,
+				req.Backfill,
+				req.StartDate,
+				req.EndDate,
+				req.ConfirmedEnvironment,
+				req.SensorMode,
+				nil,
+			)
+		}
+		return legacyRunResult(operation, result)
+	}
 
 	var output []byte
 	var runErr error
@@ -148,5 +197,98 @@ func (s *RunService) Execute(ctx context.Context, req RunRequest) RunResult {
 		Output:    string(output),
 		ExitCode:  0,
 		HTTPCode:  200,
+	}
+}
+
+// materializeCurrentPipelines preserves the legacy POST /api/run {} meaning
+// (run the workspace) without bypassing the completion-aware execution path.
+// The dependency returns IDs in workspace order, so output is concatenated in
+// the same deterministic order and execution stops at the first failure.
+func (s *RunService) materializeCurrentPipelines(ctx context.Context, req RunRequest, operation OperationMetadata) RunResult {
+	var pipelineIDs []string
+	if s.deps.CurrentPipelineIDs != nil {
+		pipelineIDs = s.deps.CurrentPipelineIDs()
+	}
+
+	orderedIDs := make([]string, 0, len(pipelineIDs))
+	seen := make(map[string]struct{}, len(pipelineIDs))
+	for _, pipelineID := range pipelineIDs {
+		pipelineID = strings.TrimSpace(pipelineID)
+		if pipelineID == "" {
+			continue
+		}
+		if _, exists := seen[pipelineID]; exists {
+			continue
+		}
+		seen[pipelineID] = struct{}{}
+		orderedIDs = append(orderedIDs, pipelineID)
+	}
+	if len(orderedIDs) == 0 {
+		return RunResult{
+			Status:    "error",
+			Operation: operation,
+			Error:     "workspace has no pipelines to run",
+			ExitCode:  1,
+			HTTPCode:  400,
+		}
+	}
+
+	var output strings.Builder
+	for _, pipelineID := range orderedIDs {
+		result := s.deps.Execution.MaterializePipelineStreamWithSensorMode(
+			ctx,
+			pipelineID,
+			req.Environment,
+			false,
+			req.FullRefresh,
+			req.Backfill,
+			req.StartDate,
+			req.EndDate,
+			req.ConfirmedEnvironment,
+			req.SensorMode,
+			nil,
+		)
+		appendLegacyRunOutput(&output, result.Output)
+		if result.Status != "ok" {
+			legacy := legacyRunResult(operation, result)
+			legacy.Output = output.String()
+			return legacy
+		}
+	}
+
+	return RunResult{
+		Status:    "ok",
+		Operation: operation,
+		Output:    output.String(),
+		ExitCode:  0,
+		HTTPCode:  200,
+	}
+}
+
+func appendLegacyRunOutput(output *strings.Builder, next string) {
+	if next == "" {
+		return
+	}
+	if output.Len() > 0 {
+		current := output.String()
+		if !strings.HasSuffix(current, "\n") && !strings.HasPrefix(next, "\n") {
+			output.WriteByte('\n')
+		}
+	}
+	output.WriteString(next)
+}
+
+func legacyRunResult(fallbackOperation OperationMetadata, result MaterializeResult) RunResult {
+	httpCode := 200
+	if result.Status != "ok" {
+		httpCode = 400
+	}
+	return RunResult{
+		Status:    result.Status,
+		Operation: fallbackOperation,
+		Output:    result.Output,
+		Error:     result.Error,
+		ExitCode:  result.ExitCode,
+		HTTPCode:  httpCode,
 	}
 }

@@ -3,6 +3,7 @@ package service
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"strings"
@@ -64,12 +65,19 @@ func (e *HybridBruinExecutor) RunAsset(ctx context.Context, req RunAssetRequest,
 	if err != nil {
 		return printer.buffer.Bytes(), err
 	}
-	if err := resolveDirectDuckDBHookTemplates(runCtx, pp.Pipeline, pp.Asset, renderer); err != nil {
+	if err := resolveDirectExecutionHookTemplates(directAssetHookRenderContext(runCtx, pp.Asset, req.FullRefresh), pp.Pipeline, pp.Asset, renderer); err != nil {
 		return printer.buffer.Bytes(), err
 	}
 
 	mainExecutors := map[pipeline.AssetType]bruinexecutor.Config{}
-	if !isAPIAsset(pp.Asset) && !isLoadAsset(pp.Asset) {
+	if isAPIAsset(pp.Asset) || isLoadAsset(pp.Asset) {
+		// Main execution stays on Renart's HTTP/Sling path below, but the
+		// scheduler still creates quality-check and metadata task instances.
+		mainExecutors, err = buildDirectCheckExecutors(manager, renderer)
+		if err != nil {
+			return printer.buffer.Bytes(), err
+		}
+	} else {
 		mainExecutors, err = buildDirectMainExecutors(manager, renderer, parser, pp.Pipeline, e.runRegistry, e.duckDBCoordinator, e.workspaceRoot, req.FullRefresh, effectiveSensorMode(req.SensorMode, false))
 		if err != nil {
 			return printer.buffer.Bytes(), err
@@ -85,6 +93,9 @@ func (e *HybridBruinExecutor) RunAsset(ctx context.Context, req RunAssetRequest,
 	pending := s.GetTaskInstancesByStatus(scheduler.Pending)
 	if len(pending) == 0 {
 		return printer.buffer.Bytes(), nil
+	}
+	if err := e.notifyExecutionTargetsResolved(pp.Pipeline, pp.Config, pp.Pipeline.Assets, req.OnTargetsResolved); err != nil {
+		return printer.buffer.Bytes(), err
 	}
 
 	var regRun *runstate.Run
@@ -126,26 +137,39 @@ func (e *HybridBruinExecutor) RunAsset(ctx context.Context, req RunAssetRequest,
 			}
 
 			progressed = true
-			instance.MarkAs(scheduler.Running)
 			taskStartedAt := time.Now()
-			emitDirectRunAssetEvent(req.AssetEvent, instance, "running", taskStartedAt, time.Time{}, nil)
+			if eventErr := emitDirectRunAssetEvent(req.AssetEvent, instance, "running", taskStartedAt, time.Time{}, nil); eventErr != nil {
+				return printer.buffer.Bytes(), fmt.Errorf("persist running event for asset %q: %w", instance.GetAsset().Name, eventErr)
+			}
+			instance.MarkAs(scheduler.Running)
 			writeDirectRunLifecycle(printer, instance, nil, true, 0)
 			finishTask := beginRegistryTask(regRun, instance)
 			runErr := e.runDirectTask(runCtx, pp.Pipeline, instance, renderer, manager, &seq, printer)
 			if runErr != nil {
 				finishTask(runErr)
 				instance.MarkAs(scheduler.Failed)
-				results = append(results, &scheduler.TaskExecutionResult{Instance: instance, Error: runErr})
-				emitDirectRunAssetEvent(req.AssetEvent, instance, "failed", taskStartedAt, time.Now(), runErr)
-				writeDirectRunLifecycle(printer, instance, runErr, false, time.Since(taskStartedAt))
+				resultErr := runErr
+				if eventErr := emitDirectRunAssetEvent(req.AssetEvent, instance, directRunTerminalErrorStatus(runCtx, runErr), taskStartedAt, time.Now(), runErr); eventErr != nil {
+					resultErr = errors.Join(runErr, fmt.Errorf("persist failed event for asset %q: %w", instance.GetAsset().Name, eventErr))
+				}
+				results = append(results, &scheduler.TaskExecutionResult{Instance: instance, Error: resultErr})
+				writeDirectRunLifecycle(printer, instance, resultErr, false, time.Since(taskStartedAt))
 				writeDirectRunSummary(printer, buildDirectRunSummary(results, time.Since(startedAt)))
 				_ = e.saveDirectRunLog(ctx, pp.Pipeline, s, runID, req.Environment, timeWindow, []string{"renart", "run", req.AssetPath})
-				return printer.buffer.Bytes(), runErr
+				return printer.buffer.Bytes(), resultErr
 			}
 			finishTask(nil)
+			if eventErr := emitDirectRunAssetEvent(req.AssetEvent, instance, "success", taskStartedAt, time.Now(), nil); eventErr != nil {
+				resultErr := fmt.Errorf("persist success event for asset %q: %w", instance.GetAsset().Name, eventErr)
+				instance.MarkAs(scheduler.Failed)
+				results = append(results, &scheduler.TaskExecutionResult{Instance: instance, Error: resultErr})
+				writeDirectRunLifecycle(printer, instance, resultErr, false, time.Since(taskStartedAt))
+				writeDirectRunSummary(printer, buildDirectRunSummary(results, time.Since(startedAt)))
+				_ = e.saveDirectRunLog(ctx, pp.Pipeline, s, runID, req.Environment, timeWindow, []string{"renart", "run", req.AssetPath})
+				return printer.buffer.Bytes(), resultErr
+			}
 			instance.MarkAs(scheduler.Succeeded)
 			results = append(results, &scheduler.TaskExecutionResult{Instance: instance, Error: nil})
-			emitDirectRunAssetEvent(req.AssetEvent, instance, "success", taskStartedAt, time.Now(), nil)
 			writeDirectRunLifecycle(printer, instance, nil, false, time.Since(taskStartedAt))
 		}
 
@@ -225,7 +249,7 @@ func (e *HybridBruinExecutor) RunPipeline(ctx context.Context, req RunPipelineRe
 		return printer.buffer.Bytes(), err
 	}
 	for _, asset := range foundPipeline.Assets {
-		if err := resolveDirectDuckDBHookTemplates(runCtx, foundPipeline, asset, renderer); err != nil {
+		if err := resolveDirectExecutionHookTemplates(directAssetHookRenderContext(runCtx, asset, req.FullRefresh), foundPipeline, asset, renderer); err != nil {
 			return printer.buffer.Bytes(), err
 		}
 	}
@@ -247,6 +271,9 @@ func (e *HybridBruinExecutor) RunPipeline(ctx context.Context, req RunPipelineRe
 	seq := bruinexecutor.Sequential{TaskTypeMap: mainExecutors}
 	s := scheduler.NewScheduler(zap.NewNop().Sugar(), foundPipeline, runID)
 	s.MarkAll(scheduler.Pending)
+	if err := e.notifyExecutionTargetsResolved(foundPipeline, cfg, foundPipeline.Assets, req.OnTargetsResolved); err != nil {
+		return printer.buffer.Bytes(), err
+	}
 	results := make([]*scheduler.TaskExecutionResult, 0)
 	startedAt := time.Now()
 
@@ -281,25 +308,38 @@ func (e *HybridBruinExecutor) RunPipeline(ctx context.Context, req RunPipelineRe
 			}
 
 			progressed = true
-			instance.MarkAs(scheduler.Running)
 			taskStartedAt := time.Now()
-			emitDirectRunAssetEvent(req.AssetEvent, instance, "running", taskStartedAt, time.Time{}, nil)
+			if eventErr := emitDirectRunAssetEvent(req.AssetEvent, instance, "running", taskStartedAt, time.Time{}, nil); eventErr != nil {
+				return printer.buffer.Bytes(), fmt.Errorf("persist running event for asset %q: %w", instance.GetAsset().Name, eventErr)
+			}
+			instance.MarkAs(scheduler.Running)
 			writeDirectRunLifecycle(printer, instance, nil, true, 0)
 			finishTask := beginRegistryTask(regRun, instance)
 			runErr := e.runDirectTask(runCtx, foundPipeline, instance, renderer, manager, &seq, printer)
 			finishTask(runErr)
 			if runErr != nil {
 				instance.MarkAs(scheduler.Failed)
-				results = append(results, &scheduler.TaskExecutionResult{Instance: instance, Error: runErr})
-				emitDirectRunAssetEvent(req.AssetEvent, instance, "failed", taskStartedAt, time.Now(), runErr)
-				writeDirectRunLifecycle(printer, instance, runErr, false, time.Since(taskStartedAt))
+				resultErr := runErr
+				if eventErr := emitDirectRunAssetEvent(req.AssetEvent, instance, directRunTerminalErrorStatus(runCtx, runErr), taskStartedAt, time.Now(), runErr); eventErr != nil {
+					resultErr = errors.Join(runErr, fmt.Errorf("persist failed event for asset %q: %w", instance.GetAsset().Name, eventErr))
+				}
+				results = append(results, &scheduler.TaskExecutionResult{Instance: instance, Error: resultErr})
+				writeDirectRunLifecycle(printer, instance, resultErr, false, time.Since(taskStartedAt))
 				writeDirectRunSummary(printer, buildDirectRunSummary(results, time.Since(startedAt)))
 				_ = e.saveDirectRunLog(ctx, foundPipeline, s, runID, req.Environment, timeWindow, []string{"renart", "run", req.Target})
-				return printer.buffer.Bytes(), runErr
+				return printer.buffer.Bytes(), resultErr
+			}
+			if eventErr := emitDirectRunAssetEvent(req.AssetEvent, instance, "success", taskStartedAt, time.Now(), nil); eventErr != nil {
+				resultErr := fmt.Errorf("persist success event for asset %q: %w", instance.GetAsset().Name, eventErr)
+				instance.MarkAs(scheduler.Failed)
+				results = append(results, &scheduler.TaskExecutionResult{Instance: instance, Error: resultErr})
+				writeDirectRunLifecycle(printer, instance, resultErr, false, time.Since(taskStartedAt))
+				writeDirectRunSummary(printer, buildDirectRunSummary(results, time.Since(startedAt)))
+				_ = e.saveDirectRunLog(ctx, foundPipeline, s, runID, req.Environment, timeWindow, []string{"renart", "run", req.Target})
+				return printer.buffer.Bytes(), resultErr
 			}
 			instance.MarkAs(scheduler.Succeeded)
 			results = append(results, &scheduler.TaskExecutionResult{Instance: instance, Error: nil})
-			emitDirectRunAssetEvent(req.AssetEvent, instance, "success", taskStartedAt, time.Now(), nil)
 			writeDirectRunLifecycle(printer, instance, nil, false, time.Since(taskStartedAt))
 		}
 
@@ -313,6 +353,18 @@ func (e *HybridBruinExecutor) RunPipeline(ctx context.Context, req RunPipelineRe
 	writeDirectRunSummary(printer, buildDirectRunSummary(results, time.Since(startedAt)))
 	_ = e.saveDirectRunLog(ctx, foundPipeline, s, runID, req.Environment, timeWindow, []string{"renart", "run", req.Target})
 	return printer.buffer.Bytes(), nil
+}
+
+func directRunTerminalErrorStatus(ctx context.Context, runErr error) string {
+	if errors.Is(runErr, context.Canceled) || errors.Is(runErr, context.DeadlineExceeded) || (ctx != nil && ctx.Err() != nil) {
+		return "cancelled"
+	}
+	return "failed"
+}
+
+func directAssetHookRenderContext(ctx context.Context, asset *pipeline.Asset, requestedFullRefresh bool) context.Context {
+	effectiveFullRefresh := requestedFullRefresh && !assetRefreshRestricted(asset)
+	return context.WithValue(ctx, pipeline.RunConfigFullRefresh, effectiveFullRefresh)
 }
 
 func (e *HybridBruinExecutor) runDirectTask(
@@ -338,15 +390,15 @@ func (e *HybridBruinExecutor) runDirectTask(
 
 	var runErr error
 	switch {
-	case isAPIAsset(asset):
+	case isAPIAsset(asset) && instance.GetType() == scheduler.TaskInstanceTypeMain:
 		_, runErr = e.runAPIAsset(taskCtx, pl, asset, renderer, manager, forward)
-	case isLoadAsset(asset):
+	case isLoadAsset(asset) && instance.GetType() == scheduler.TaskInstanceTypeMain:
 		_, runErr = e.runLoadAsset(taskCtx, pl, asset, manager, forward)
 	default:
 		lease, leaseErr := e.acquireDuckDBConnections(
 			taskCtx,
 			manager,
-			duckDBConnectionNamesForAsset(pl, asset),
+			directTaskDuckDBConnectionNames(pl, instance),
 			directTaskLeaseOwner(taskCtx, pl, asset),
 			assetWriter,
 		)
@@ -365,6 +417,32 @@ func (e *HybridBruinExecutor) runDirectTask(
 		runErr = flushErr
 	}
 	return runErr
+}
+
+func directTaskDuckDBConnectionNames(pl *pipeline.Pipeline, instance scheduler.TaskInstance) []string {
+	if instance == nil || instance.GetAsset() == nil {
+		return nil
+	}
+	switch instance.GetType() {
+	case scheduler.TaskInstanceTypeColumnCheck, scheduler.TaskInstanceTypeCustomCheck:
+		connectionName, err := targetConnectionNameForAsset(instance.GetAsset(), pl)
+		if err != nil || connectionName == "" {
+			return nil
+		}
+		return []string{connectionName}
+	case scheduler.TaskInstanceTypeMetadataPush:
+		// API, Load, and Python metadata dispatch is an explicit no-op in the
+		// shared registry, so it must not acquire a warehouse write lease. Keep
+		// the established behavior for native warehouse assets whose metadata
+		// publishers may still use the configured connection.
+		assetType := instance.GetAsset().Type
+		if isAPIAsset(instance.GetAsset()) || isLoadAsset(instance.GetAsset()) || assetType == pipeline.AssetTypePython {
+			return nil
+		}
+		return duckDBConnectionNamesForAsset(pl, instance.GetAsset())
+	default:
+		return duckDBConnectionNamesForAsset(pl, instance.GetAsset())
+	}
 }
 
 func (e *HybridBruinExecutor) saveDirectRunLog(ctx context.Context, foundPipeline *pipeline.Pipeline, s *scheduler.Scheduler, runID, environment string, timeWindow ExecutionTimeWindow, cmdline []string) error {
@@ -422,9 +500,9 @@ func isDirectRunAssetTypeSupported(assetType pipeline.AssetType) bool {
 	return ok
 }
 
-func emitDirectRunAssetEvent(onEvent func(ExecutionAssetEvent), instance scheduler.TaskInstance, status string, startedAt, finishedAt time.Time, err error) {
+func emitDirectRunAssetEvent(onEvent func(ExecutionAssetEvent) error, instance scheduler.TaskInstance, status string, startedAt, finishedAt time.Time, err error) error {
 	if onEvent == nil || instance == nil || instance.GetAsset() == nil || instance.GetType() != scheduler.TaskInstanceTypeMain {
-		return
+		return nil
 	}
 	event := ExecutionAssetEvent{Asset: instance.GetAsset().Name, Status: status}
 	if !startedAt.IsZero() {
@@ -438,7 +516,7 @@ func emitDirectRunAssetEvent(onEvent func(ExecutionAssetEvent), instance schedul
 	if err != nil {
 		event.Error = err.Error()
 	}
-	onEvent(event)
+	return onEvent(event)
 }
 
 var directRunAssetTypes = map[pipeline.AssetType]struct{}{

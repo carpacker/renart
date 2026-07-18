@@ -100,7 +100,9 @@ SQL stages distinguish the exact compiled query from execution SQL. Non-SQL
 assets can show semantic operations, while Python is marked runtime-only
 because its code decides the final operations at runtime. Every stage reports
 its fidelity; a semantic or runtime-only stage is not presented as exact SQL.
-Credential values are redacted or omitted.
+Configured column and custom quality checks are listed as individually named
+stages, with their exact destination-specific SQL when the direct runtime can
+render it without a warehouse. Credential values are redacted or omitted.
 
 Exit codes: `0` preview produced, `1` render error or unsupported asset, `2`
 usage error.

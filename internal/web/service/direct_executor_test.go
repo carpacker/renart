@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -205,6 +206,17 @@ func TestHybridBruinExecutorQueryConnectionUsesDirectPath(t *testing.T) {
 		"connectionName": "warehouse",
 		"query": "select 1 as id, 'alice' as name"
 	}`, string(output))
+}
+
+func TestDirectRunTerminalErrorStatusPreservesCancellation(t *testing.T) {
+	t.Parallel()
+	assert.Equal(t, "cancelled", directRunTerminalErrorStatus(context.Background(), context.Canceled))
+	assert.Equal(t, "cancelled", directRunTerminalErrorStatus(context.Background(), context.DeadlineExceeded))
+
+	cancelled, cancel := context.WithCancel(context.Background())
+	cancel()
+	assert.Equal(t, "cancelled", directRunTerminalErrorStatus(cancelled, errors.New("operator stopped")))
+	assert.Equal(t, "failed", directRunTerminalErrorStatus(context.Background(), errors.New("warehouse failed")))
 }
 
 func TestSelectWithComplexJSONFallbackRewritesOnlyComplexColumns(t *testing.T) {

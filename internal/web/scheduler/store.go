@@ -288,6 +288,9 @@ func (s *Store) Create(ctx context.Context, run PipelineRun) (string, error) {
 		if err != nil {
 			_ = tx.Rollback()
 		}
+		if errors.Is(err, ErrPipelineRunActive) {
+			return "", err
+		}
 		if !isActiveRunSlotConstraint(err) {
 			return id, err
 		}
@@ -295,8 +298,11 @@ func (s *Store) Create(ctx context.Context, run PipelineRun) (string, error) {
 		if lookupErr != nil {
 			return "", errors.Join(err, lookupErr)
 		}
-		if found || attempt == 1 {
+		if found {
 			return "", conflict
+		}
+		if attempt == 1 {
+			return "", fmt.Errorf("pipeline run admission retry exhausted after the active slot changed: %w", err)
 		}
 	}
 	return "", errors.New("pipeline run admission retry exhausted")
@@ -351,6 +357,11 @@ type runSpecExecer interface {
 	ExecContext(context.Context, string, ...any) (sql.Result, error)
 }
 
+type runSlotExecer interface {
+	runSpecExecer
+	QueryRowContext(context.Context, string, ...any) *sql.Row
+}
+
 func runSlotKeys(run PipelineRun) []string {
 	pipelineID := strings.TrimSpace(run.PipelineID)
 	pipelineUUID := strings.TrimSpace(run.PipelineUUID)
@@ -364,7 +375,7 @@ func runSlotKeys(run PipelineRun) []string {
 	return keys
 }
 
-func (s *Store) claimRunSlot(ctx context.Context, execer runSpecExecer, run PipelineRun, runID string) error {
+func (s *Store) claimRunSlot(ctx context.Context, execer runSlotExecer, run PipelineRun, runID string) error {
 	status := run.Status
 	if status == "" {
 		status = RunStatusQueued
@@ -377,10 +388,28 @@ func (s *Store) claimRunSlot(ctx context.Context, execer runSpecExecer, run Pipe
 		return errors.New("active pipeline run requires a stable slot key")
 	}
 	for _, slotKey := range slotKeys {
+		// Resolve a conflict while this write transaction still owns its SQLite
+		// lock. Looking up the slot after rollback lets the owner finish between
+		// the constraint and the lookup, losing the active run ID returned to the
+		// caller.
 		if _, err := execer.ExecContext(ctx, `
 			INSERT INTO pipeline_run_slots (slot_key, run_id)
-			VALUES (?, ?)`, slotKey, runID); err != nil {
+			VALUES (?, ?)
+			ON CONFLICT (slot_key) DO NOTHING`, slotKey, runID); err != nil {
 			return err
+		}
+		var ownerRunID string
+		if err := execer.QueryRowContext(ctx, `
+			SELECT run_id
+			FROM pipeline_run_slots
+			WHERE slot_key = ?`, slotKey).Scan(&ownerRunID); err != nil {
+			return fmt.Errorf("resolve owner for active run slot %q: %w", slotKey, err)
+		}
+		if ownerRunID != runID {
+			return &PipelineRunActiveError{
+				PipelineID:  strings.TrimSpace(run.PipelineID),
+				ActiveRunID: ownerRunID,
+			}
 		}
 	}
 	return nil
@@ -496,6 +525,9 @@ func (s *Store) CreateWithSpec(ctx context.Context, run PipelineRun, spec runSpe
 		if err != nil {
 			_ = tx.Rollback()
 		}
+		if errors.Is(err, ErrPipelineRunActive) {
+			return "", err
+		}
 		if !isActiveRunSlotConstraint(err) {
 			return id, err
 		}
@@ -503,8 +535,11 @@ func (s *Store) CreateWithSpec(ctx context.Context, run PipelineRun, spec runSpe
 		if lookupErr != nil {
 			return "", errors.Join(err, lookupErr)
 		}
-		if found || attempt == 1 {
+		if found {
 			return "", conflict
+		}
+		if attempt == 1 {
+			return "", fmt.Errorf("pipeline run admission retry exhausted after the active slot changed: %w", err)
 		}
 	}
 	return "", errors.New("pipeline run admission retry exhausted")
@@ -605,7 +640,7 @@ func (s *Store) pipelineRunActiveError(ctx context.Context, pipelineID string, s
 			ActiveRunID: activeRunID,
 		}, true, nil
 	}
-	return &PipelineRunActiveError{PipelineID: strings.TrimSpace(pipelineID)}, false, nil
+	return nil, false, nil
 }
 
 // RunExecutionContext is the normalized context that will be used by the
@@ -910,11 +945,7 @@ func (s *Store) ReconcileInterruptedState(ctx context.Context, reason string) (I
 	nowTime := time.Now().UTC()
 	now := formatTime(nowTime)
 	for _, runID := range recovery.RunIDs {
-		if _, err := tx.ExecContext(ctx, `
-			UPDATE pipeline_run_steps
-			SET status = ?, finished_at = ?, error = CASE WHEN error IS NULL OR error = '' THEN ? ELSE error END
-			WHERE run_id = ? AND finished_at IS NULL`,
-			string(RunStatusFailed), now, reason, runID); err != nil {
+		if err := finishOpenRunSteps(ctx, tx, runID, RunStatusFailed, nowTime, reason); err != nil {
 			return recovery, err
 		}
 		if _, err := tx.ExecContext(ctx, `
@@ -1053,6 +1084,77 @@ func (s *Store) FinishScheduledSuccess(ctx context.Context, id, watermark string
 	return tx.Commit()
 }
 
+// FinalizeExecution closes every still-open step, the run row, and (when
+// provided) the schedule watermark in one transaction. A terminal run can
+// therefore never become visible with a running step or an advanced watermark
+// that was committed separately.
+func (s *Store) FinalizeExecution(
+	ctx context.Context,
+	id string,
+	status RunStatus,
+	at time.Time,
+	runErr error,
+	watermark string,
+	watermarkUpTo *time.Time,
+) error {
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return errors.New("run id is required")
+	}
+	if !isTerminalRunStatus(status) {
+		return fmt.Errorf("cannot finalize run with non-terminal status %q", status)
+	}
+	if at.IsZero() {
+		return errors.New("run completion time is required")
+	}
+	message := ""
+	if runErr != nil {
+		message = runErr.Error()
+	}
+	watermark = strings.TrimSpace(watermark)
+	if (watermark == "") != (watermarkUpTo == nil) {
+		return errors.New("schedule watermark key and time must be provided together")
+	}
+	if watermarkUpTo != nil && watermarkUpTo.IsZero() {
+		return errors.New("schedule watermark time is required")
+	}
+
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	if err := finishOpenRunSteps(ctx, tx, id, status, at, message); err != nil {
+		return err
+	}
+	result, err := tx.ExecContext(ctx, `
+		UPDATE pipeline_runs
+		SET status = ?, finished_at = ?, error = ?
+		WHERE id = ? AND status IN (?, ?)`,
+		string(status), formatTime(at), stringValue(message), id,
+		string(RunStatusQueued), string(RunStatusRunning),
+	)
+	if err != nil {
+		return err
+	}
+	updated, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if updated != 1 {
+		return fmt.Errorf("active pipeline run %s was not found", id)
+	}
+	if watermark != "" {
+		if err := s.queries.WithTx(tx).SetScheduleWatermark(ctx, storedb.SetScheduleWatermarkParams{
+			Pipeline: watermark,
+			UpTo:     formatTime(*watermarkUpTo),
+		}); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
 func (s *Store) List(ctx context.Context, filter RunFilter) (RunList, error) {
 	limit := filter.Limit
 	if limit <= 0 || limit > 500 {
@@ -1076,7 +1178,11 @@ func (s *Store) List(ctx context.Context, filter RunFilter) (RunList, error) {
 	if err != nil {
 		return RunList{}, err
 	}
-	return RunList{Runs: runsFromDB(rows), Total: int(total), Limit: limit, Offset: offset}, nil
+	runs, err := runsFromDB(rows)
+	if err != nil {
+		return RunList{}, err
+	}
+	return RunList{Runs: runs, Total: int(total), Limit: limit, Offset: offset}, nil
 }
 
 func runFilterParams(filter RunFilter, limit, offset int) storedb.ListRunsParams {
@@ -1111,21 +1217,100 @@ func (s *Store) Get(ctx context.Context, id string) (PipelineRun, []LogLine, []P
 	if err != nil {
 		return PipelineRun{}, nil, nil, err
 	}
-	return runFromDB(row), logs, steps, nil
+	run, err := runFromDB(row)
+	if err != nil {
+		return PipelineRun{}, nil, nil, err
+	}
+	return run, logs, steps, nil
 }
 
 func (s *Store) UpsertStep(ctx context.Context, step PipelineRunStep) error {
 	if strings.TrimSpace(step.Asset) == "" {
 		return nil
 	}
-	return s.queries.UpsertRunStep(ctx, storedb.UpsertRunStepParams{
-		RunID:      step.RunID,
-		Asset:      step.Asset,
-		Status:     string(step.Status),
-		StartedAt:  nullTime(step.StartedAt),
-		FinishedAt: nullTime(step.FinishedAt),
-		Error:      stringValue(step.Error),
+	if strings.TrimSpace(step.RunID) == "" {
+		return errors.New("run id is required")
+	}
+	if step.CompletionOrdinal != nil && *step.CompletionOrdinal < 0 {
+		return errors.New("completion ordinal must not be negative")
+	}
+	if step.CompletionOrdinal != nil && !isTerminalRunStatus(step.Status) {
+		return errors.New("completion ordinal requires a terminal step status")
+	}
+	if !isTerminalRunStatus(step.Status) {
+		return upsertRunStep(ctx, s.queries, step)
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	var existing sql.NullInt64
+	err = tx.QueryRowContext(ctx, `
+		SELECT completion_ordinal
+		FROM pipeline_run_steps
+		WHERE run_id = ? AND asset = ?`, step.RunID, step.Asset).Scan(&existing)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return err
+	}
+	if existing.Valid {
+		if step.CompletionOrdinal != nil && *step.CompletionOrdinal != existing.Int64 {
+			return fmt.Errorf(
+				"step %s completion ordinal is already %d, not %d",
+				step.Asset,
+				existing.Int64,
+				*step.CompletionOrdinal,
+			)
+		}
+		ordinal := existing.Int64
+		step.CompletionOrdinal = &ordinal
+	} else if step.CompletionOrdinal == nil {
+		var ordinal int64
+		if err := tx.QueryRowContext(ctx, `
+			SELECT COALESCE(MAX(completion_ordinal) + 1, 0)
+			FROM pipeline_run_steps
+			WHERE run_id = ?`, step.RunID).Scan(&ordinal); err != nil {
+			return err
+		}
+		step.CompletionOrdinal = &ordinal
+	}
+	if err := upsertRunStep(ctx, s.queries.WithTx(tx), step); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+func upsertRunStep(ctx context.Context, queries *storedb.Queries, step PipelineRunStep) error {
+	upstreamWriters, err := marshalUpstreamWriterSnapshot(
+		step.UpstreamWriters,
+		step.HasUpstreamWriterSnapshot,
+	)
+	if err != nil {
+		return err
+	}
+	updated, err := queries.UpsertRunStep(ctx, storedb.UpsertRunStepParams{
+		RunID:                  step.RunID,
+		Asset:                  step.Asset,
+		Status:                 string(step.Status),
+		StartedAt:              nullTime(step.StartedAt),
+		FinishedAt:             nullTime(step.FinishedAt),
+		Error:                  stringValue(step.Error),
+		CompletionOrdinal:      nullInt64(step.CompletionOrdinal),
+		UpstreamWriterSnapshot: upstreamWriters,
 	})
+	if err != nil {
+		return err
+	}
+	if updated != 1 {
+		return fmt.Errorf(
+			"%w for step %s in run %s",
+			ErrUpstreamWriterSnapshotConflict,
+			step.Asset,
+			step.RunID,
+		)
+	}
+	return nil
 }
 
 func (s *Store) ListSteps(ctx context.Context, runID string) ([]PipelineRunStep, error) {
@@ -1133,7 +1318,7 @@ func (s *Store) ListSteps(ctx context.Context, runID string) ([]PipelineRunStep,
 	if err != nil {
 		return nil, err
 	}
-	return stepsFromDB(rows), nil
+	return stepsFromDB(rows)
 }
 
 func (s *Store) FinishOpenSteps(ctx context.Context, runID string, status RunStatus, at time.Time, runErr error) error {
@@ -1141,12 +1326,64 @@ func (s *Store) FinishOpenSteps(ctx context.Context, runID string, status RunSta
 	if runErr != nil {
 		message = runErr.Error()
 	}
-	return s.queries.FinishOpenRunSteps(ctx, storedb.FinishOpenRunStepsParams{
-		Status:     string(status),
-		FinishedAt: stringValue(formatTime(at)),
-		Error:      message,
-		RunID:      runID,
-	})
+	return finishOpenRunSteps(ctx, s.db, runID, status, at, message)
+}
+
+type runStepExecer interface {
+	ExecContext(context.Context, string, ...any) (sql.Result, error)
+}
+
+func finishOpenRunSteps(ctx context.Context, execer runStepExecer, runID string, status RunStatus, at time.Time, message string) error {
+	if strings.TrimSpace(runID) == "" {
+		return errors.New("run id is required")
+	}
+	if !isTerminalRunStatus(status) {
+		return fmt.Errorf("cannot finish open steps with non-terminal status %q", status)
+	}
+	if at.IsZero() {
+		return errors.New("step completion time is required")
+	}
+	_, err := execer.ExecContext(ctx, `
+		WITH base AS MATERIALIZED (
+			SELECT COALESCE(MAX(completion_ordinal), -1) + 1 AS next_ordinal
+			FROM pipeline_run_steps
+			WHERE run_id = ?
+		), ordered AS MATERIALIZED (
+			SELECT
+				asset,
+				ROW_NUMBER() OVER (ORDER BY COALESCE(started_at, ''), asset) - 1 AS offset
+			FROM pipeline_run_steps
+			WHERE run_id = ? AND finished_at IS NULL
+		)
+		UPDATE pipeline_run_steps
+		SET status = ?,
+			finished_at = ?,
+			error = CASE WHEN ? = '' THEN error WHEN error IS NULL OR error = '' THEN ? ELSE error END,
+			completion_ordinal = COALESCE(
+				completion_ordinal,
+				(SELECT base.next_ordinal + ordered.offset
+				 FROM base, ordered
+				 WHERE ordered.asset = pipeline_run_steps.asset)
+			)
+		WHERE run_id = ? AND finished_at IS NULL`,
+		runID,
+		runID,
+		string(status),
+		formatTime(at),
+		message,
+		message,
+		runID,
+	)
+	return err
+}
+
+func isTerminalRunStatus(status RunStatus) bool {
+	switch status {
+	case RunStatusSuccess, RunStatusFailed, RunStatusCancelled:
+		return true
+	default:
+		return false
+	}
 }
 
 func (s *Store) HasActiveRun(ctx context.Context, pipelineID string) (bool, error) {
@@ -1327,15 +1564,23 @@ func formatTime(value time.Time) string {
 	return value.UTC().Format(time.RFC3339Nano)
 }
 
-func runsFromDB(rows []storedb.PipelineRun) []PipelineRun {
+func runsFromDB(rows []storedb.PipelineRun) ([]PipelineRun, error) {
 	runs := make([]PipelineRun, 0, len(rows))
 	for _, row := range rows {
-		runs = append(runs, runFromDB(row))
+		run, err := runFromDB(row)
+		if err != nil {
+			return nil, err
+		}
+		runs = append(runs, run)
 	}
-	return runs
+	return runs, nil
 }
 
-func runFromDB(row storedb.PipelineRun) PipelineRun {
+func runFromDB(row storedb.PipelineRun) (PipelineRun, error) {
+	targetSnapshot, err := unmarshalExecutionTargetSnapshot(row.ExecutionTargetSnapshot)
+	if err != nil {
+		return PipelineRun{}, fmt.Errorf("load execution target snapshot for run %s: %w", row.ID, err)
+	}
 	return PipelineRun{
 		ID:                       row.ID,
 		PipelineID:               row.PipelineID,
@@ -1355,7 +1600,8 @@ func runFromDB(row storedb.PipelineRun) PipelineRun {
 		Backfill:                 row.Backfill != 0,
 		SensorMode:               row.SensorMode,
 		ExecutionContextResolved: row.ExecutionContextResolved != 0,
-	}
+		ExecutionTargetSnapshot:  targetSnapshot,
+	}, nil
 }
 
 func boolInt64(value bool) int64 {
@@ -1380,24 +1626,42 @@ func int64FromNull(value sql.NullInt64) *int64 {
 	return &result
 }
 
-func stepsFromDB(rows []storedb.PipelineRunStep) []PipelineRunStep {
+func stepsFromDB(rows []storedb.PipelineRunStep) ([]PipelineRunStep, error) {
 	steps := make([]PipelineRunStep, 0, len(rows))
 	for _, row := range rows {
+		upstreamWriters, hasUpstreamWriters, err := unmarshalUpstreamWriterSnapshot(row.UpstreamWriterSnapshot)
+		if err != nil {
+			return nil, fmt.Errorf(
+				"load upstream writer snapshot for step %s in run %s: %w",
+				row.Asset,
+				row.RunID,
+				err,
+			)
+		}
 		steps = append(steps, PipelineRunStep{
-			RunID:      row.RunID,
-			Asset:      row.Asset,
-			Status:     RunStatus(row.Status),
-			StartedAt:  parseNullTime(row.StartedAt),
-			FinishedAt: parseNullTime(row.FinishedAt),
-			Error:      stringFromNull(row.Error),
+			RunID:                     row.RunID,
+			Asset:                     row.Asset,
+			Status:                    RunStatus(row.Status),
+			StartedAt:                 parseNullTime(row.StartedAt),
+			FinishedAt:                parseNullTime(row.FinishedAt),
+			Error:                     stringFromNull(row.Error),
+			CompletionOrdinal:         int64FromNull(row.CompletionOrdinal),
+			UpstreamWriters:           upstreamWriters,
+			HasUpstreamWriterSnapshot: hasUpstreamWriters,
 		})
 	}
-	return steps
+	return steps, nil
 }
 
 func statusFromResult(result RunResult) (RunStatus, error) {
-	if result.Status == "ok" || result.Status == "success" || result.Status == "" {
+	switch strings.ToLower(strings.TrimSpace(result.Status)) {
+	case "", "ok", "success", "succeeded":
 		return RunStatusSuccess, nil
+	case "cancelled", "canceled":
+		if result.Error == "" {
+			result.Error = "pipeline run was cancelled"
+		}
+		return RunStatusCancelled, errors.New(result.Error)
 	}
 	if result.Error == "" {
 		result.Error = fmt.Sprintf("pipeline run finished with status %s", result.Status)

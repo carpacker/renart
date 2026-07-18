@@ -1,11 +1,15 @@
 package service
 
 import (
+	"context"
 	"reflect"
 	"testing"
 	"time"
 
 	"github.com/bruin-data/bruin/pkg/pipeline"
+	"github.com/spf13/afero"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	webmodel "renart/internal/web/model"
 	"renart/internal/web/staleness"
 )
@@ -145,4 +149,62 @@ func TestBuildStalePlanFiltersToSelectedUpstreamsAndPreservesGaps(t *testing.T) 
 	if plan := BuildStalePlan(statuses, nil); len(plan) != 3 {
 		t.Fatalf("expected an unrestricted plan to keep stale and volatile assets, got %+v", plan)
 	}
+}
+
+func TestMaterializeStaleAssetsHoldsWorkspaceLeaseThroughPhysicalWork(t *testing.T) {
+	t.Parallel()
+
+	_, workspaceRoot := writeTypeCheckWorkspace(t, `
+name: analytics
+id: 0b73db88-ab55-4ed1-8f50-ef38089fc2d2
+default_connections:
+  duckdb: duckdb-default
+`, map[string]string{
+		"orders.sql": `
+/* @bruin
+name: analytics.orders
+type: duckdb.sql
+materialization:
+  type: table
+@bruin */
+select 1 as id
+`,
+	})
+
+	leaseHeld := false
+	acquired := 0
+	released := 0
+	executor := &stubExecutionExecutor{
+		onRunAsset: func() { assert.True(t, leaseHeld) },
+	}
+	svc := NewExecutionService(ExecutionDependencies{
+		WorkspaceRoot: workspaceRoot,
+		Executor:      executor,
+		NewPipelineBuilder: func() *pipeline.Builder {
+			return NewRenartPipelineBuilder(afero.NewOsFs())
+		},
+		FindInspectIDs: func(ids ...string) []string { return ids },
+		AcquireExecutionLease: func(context.Context) (func() error, error) {
+			acquired++
+			leaseHeld = true
+			return func() error {
+				released++
+				leaseHeld = false
+				return nil
+			}, nil
+		},
+	})
+
+	result := svc.MaterializeStaleAssetsStream(
+		context.Background(),
+		EncodeID("analytics/pipeline.yml"),
+		"default",
+		[]StaleAssetPlan{{AssetName: "analytics.orders"}},
+		"", "", nil, nil,
+	)
+
+	require.Equal(t, "ok", result.Status, result.Error)
+	assert.Equal(t, 1, acquired)
+	assert.Equal(t, 1, released)
+	assert.False(t, leaseHeld)
 }

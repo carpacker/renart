@@ -4,11 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/bruin-data/bruin/pkg/config"
 	"github.com/bruin-data/bruin/pkg/pipeline"
 	"github.com/bruin-data/bruin/pkg/query"
 	"github.com/stretchr/testify/assert"
@@ -72,13 +74,25 @@ select
 	assert.Equal(t, assetRenderPreviewRunID, result.Provenance.Context.RunID)
 	assert.NotEmpty(t, result.Provenance.Source.MerkleRoot)
 	assert.NotEmpty(t, result.Provenance.Context.ConfigurationDigest)
+	assert.Equal(t, "exact", result.Provenance.Context.ConfigurationFidelity)
+	assert.Empty(t, result.Provenance.Context.ConfigurationMessage)
 	assert.True(t, result.Provenance.Context.RequestedFullRefresh)
 	assert.True(t, result.Provenance.Context.FullRefresh)
 	assert.NotEmpty(t, result.Provenance.Context.VariablesDigest)
+	assert.Equal(t, []AssetRenderVariableProvenance{{
+		Name:   "threshold",
+		Source: "pipeline_default",
+	}}, result.Provenance.Context.VariableProvenance)
 	assert.Equal(t, "analytics.report", result.Asset.Name)
 	assert.Equal(t, "duckdb.sql", result.Asset.Type)
 	assert.Equal(t, "duckdb", result.Asset.Dialect)
 	assert.Equal(t, "duckdb-default", result.Asset.ConnectionName)
+	assert.NotEmpty(t, result.Asset.Fingerprint)
+	assert.Equal(t, AssetRenderFidelityExact, result.Asset.Target.Fidelity)
+	assert.Equal(t, assetRenderTargetKindRelation, result.Asset.Target.Kind)
+	assert.Equal(t, "analytics.report", result.Asset.Target.Object)
+	assert.NotEmpty(t, result.Asset.Target.Identity)
+	assert.NotContains(t, result.Asset.Target.Identity, root)
 
 	require.Len(t, result.Stages, 3)
 	compiled := result.Stages[0]
@@ -107,9 +121,130 @@ select
 	assert.Contains(t, execution.Content, "SELECT 'render-finished';")
 	assert.NotContains(t, execution.Content, "INSERT INTO analytics.report", "full refresh must use the runtime materializer's replace path")
 	assert.Empty(t, result.Issues)
+	payload, marshalErr := json.Marshal(result)
+	require.NoError(t, marshalErr)
+	assert.NotContains(t, string(payload), root, "physical target coordinates must stay opaque")
 }
 
-func TestAssetRenderServiceKeepsCompiledSQLWhenExecutionRendererIsUnsupported(t *testing.T) {
+func TestAssetRenderServiceRendersExactSchedulerQualityChecks(t *testing.T) {
+	t.Parallel()
+
+	_, root := writeTypeCheckWorkspace(t, `
+name: analytics
+default_connections:
+  duckdb: duckdb-default
+variables:
+  threshold:
+    type: integer
+    default: 7
+`, map[string]string{
+		"checked.sql": `
+/* @bruin
+name: analytics.checked
+type: duckdb.sql
+materialization:
+  type: table
+columns:
+  - name: id
+    type: integer
+    checks:
+      - name: not_null
+        blocking: false
+      - name: accepted_values
+        value: [1, 2]
+custom_checks:
+  - name: row limit
+    count: 2
+    query: select * from analytics.checked where id > {{ var.threshold }}
+@bruin */
+select 1 as id
+`,
+	})
+
+	result, err := NewAssetRenderService(root).RenderPath(context.Background(), "analytics/assets/checked.sql", AssetRenderRequest{})
+	require.NoError(t, err)
+
+	checks := make([]AssetRenderStage, 0, 3)
+	for _, stage := range result.Stages {
+		if stage.Kind == "check" {
+			checks = append(checks, stage)
+		}
+	}
+	require.Len(t, checks, 3)
+
+	notNull := checks[0]
+	assert.Equal(t, "id · not_null", notNull.Label)
+	assert.Equal(t, "column", notNull.CheckKind)
+	assert.Equal(t, "not_null", notNull.CheckName)
+	assert.Equal(t, "id", notNull.CheckColumn)
+	require.NotNil(t, notNull.CheckBlocking)
+	assert.False(t, *notNull.CheckBlocking)
+	assert.Equal(t, AssetRenderStageStatusOK, notNull.Status)
+	assert.Equal(t, AssetRenderFidelityExact, notNull.Fidelity)
+	assert.Equal(t, "SELECT count(*) FROM analytics.checked WHERE id IS NULL", notNull.Content)
+
+	acceptedValues := checks[1]
+	assert.Equal(t, "id · accepted_values", acceptedValues.Label)
+	assert.Equal(t, AssetRenderStageStatusOK, acceptedValues.Status)
+	assert.Contains(t, acceptedValues.Content, "CAST(id as TEXT) NOT IN ('1','2')")
+
+	custom := checks[2]
+	assert.Equal(t, "Custom · row limit", custom.Label)
+	assert.Equal(t, "custom", custom.CheckKind)
+	assert.Equal(t, "row limit", custom.CheckName)
+	assert.Empty(t, custom.CheckColumn)
+	require.NotNil(t, custom.CheckBlocking)
+	assert.True(t, *custom.CheckBlocking)
+	assert.Equal(t, AssetRenderStageStatusOK, custom.Status)
+	assert.Equal(t, AssetRenderFidelityExact, custom.Fidelity)
+	assert.Contains(t, custom.Content, "SELECT count(*) FROM (select * from analytics.checked where id > 7) AS t")
+	assert.Empty(t, result.Issues)
+}
+
+func TestAssetRenderServiceKeepsMainStagesWhenAQualityCheckCannotRender(t *testing.T) {
+	t.Parallel()
+
+	_, root := writeTypeCheckWorkspace(t, `
+name: analytics
+default_connections:
+  duckdb: duckdb-default
+`, map[string]string{
+		"checked.sql": `
+/* @bruin
+name: analytics.checked
+type: duckdb.sql
+columns:
+  - name: id
+    type: integer
+    checks:
+      - name: min
+@bruin */
+select 1 as id
+`,
+	})
+
+	result, err := NewAssetRenderService(root).RenderPath(context.Background(), "analytics/assets/checked.sql", AssetRenderRequest{})
+	require.NoError(t, err)
+
+	assert.Equal(t, AssetRenderStatusPartial, result.Status)
+	require.GreaterOrEqual(t, len(result.Stages), 3)
+	assert.Equal(t, "compiled_query", result.Stages[0].Kind)
+	assert.Equal(t, AssetRenderStageStatusOK, result.Stages[0].Status)
+	assert.Equal(t, "execution_sql", result.Stages[1].Kind)
+	assert.Equal(t, AssetRenderStageStatusOK, result.Stages[1].Status)
+
+	failedCheck := result.Stages[len(result.Stages)-1]
+	assert.Equal(t, "check", failedCheck.Kind)
+	assert.Equal(t, "id · min", failedCheck.Label)
+	assert.Equal(t, AssetRenderStageStatusError, failedCheck.Status)
+	assert.Equal(t, AssetRenderFidelityUnsupported, failedCheck.Fidelity)
+	assert.Empty(t, failedCheck.Content)
+	assert.Contains(t, failedCheck.Message, "value must be an int, float or string")
+	require.NotEmpty(t, result.Issues)
+	assert.Equal(t, "check_render_failed", result.Issues[len(result.Issues)-1].Code)
+}
+
+func TestAssetRenderServiceRendersExactPostgresExecutionSQL(t *testing.T) {
 	t.Parallel()
 
 	_, root := writeTypeCheckWorkspace(t, `
@@ -135,13 +270,89 @@ select '{{ start_date }}' as window_start
 	require.NoError(t, err)
 
 	assert.Equal(t, AssetRenderStatusPartial, result.Status)
-	require.Len(t, result.Stages, 2)
+	require.Len(t, result.Stages, 3)
 	assert.Equal(t, AssetRenderStageStatusOK, result.Stages[0].Status)
 	assert.Equal(t, AssetRenderFidelityExact, result.Stages[0].Fidelity)
 	assert.Contains(t, result.Stages[0].Content, "'2026-07-15'")
-	assert.Equal(t, AssetRenderStageStatusUnsupported, result.Stages[1].Status)
-	assert.Equal(t, AssetRenderFidelityUnsupported, result.Stages[1].Fidelity)
-	assert.Empty(t, result.Stages[1].Content)
+	assert.Equal(t, "schema_preparation", result.Stages[1].Kind)
+	assert.Equal(t, AssetRenderFidelitySemantic, result.Stages[1].Fidelity)
+	assert.Equal(t, "execution_sql", result.Stages[2].Kind)
+	assert.Equal(t, AssetRenderStageStatusOK, result.Stages[2].Status)
+	assert.Equal(t, AssetRenderFidelityExact, result.Stages[2].Fidelity)
+	assert.Contains(t, result.Stages[2].Content, `DROP TABLE IF EXISTS "analytics"."report"`)
+	assert.Contains(t, result.Stages[2].Content, "'2026-07-15' as window_start")
+}
+
+func TestAssetRenderServicePostgresFamilyExecutionMatchesDirectRuntime(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name             string
+		assetType        pipeline.AssetType
+		connectionFamily string
+	}{
+		{name: "postgres", assetType: pipeline.AssetTypePostgresQuery, connectionFamily: "postgres"},
+		{name: "redshift", assetType: pipeline.AssetTypeRedshiftQuery, connectionFamily: "redshift"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			pipelineYAML := fmt.Sprintf(`
+name: analytics
+default_connections:
+  %s: warehouse-default
+`, test.connectionFamily)
+			assetSQL := fmt.Sprintf(`
+/* @bruin
+name: analytics.report
+type: %s
+materialization:
+  type: table
+  strategy: append
+hooks:
+  pre:
+    - query: "SELECT 'pre {{ start_date }}'"
+  post:
+    - query: "SELECT 'post {{ end_date }}'"
+@bruin */
+select '{{ start_date }}' as window_start
+`, test.assetType)
+			_, root := writeTypeCheckWorkspace(t, pipelineYAML, map[string]string{"report.sql": assetSQL})
+			request := AssetRenderRequest{
+				StartDate: "2026-07-15T00:00:00Z",
+				EndDate:   "2026-07-16T00:00:00Z",
+			}
+
+			result, err := NewAssetRenderService(root).RenderPath(context.Background(), "analytics/assets/report.sql", request)
+			require.NoError(t, err)
+			var renderedExecution string
+			for _, stage := range result.Stages {
+				if stage.Kind != "execution_sql" {
+					continue
+				}
+				assert.Equal(t, AssetRenderStageStatusOK, stage.Status)
+				assert.Equal(t, AssetRenderFidelityExact, stage.Fidelity)
+				renderedExecution = stage.Content
+			}
+			require.NotEmpty(t, renderedExecution)
+
+			connection := &stubSchemaQuerier{}
+			executor := newCompatDirectExecutor(root, "")
+			executor.newConnectionManager = func(context.Context, string) (config.ConnectionAndDetailsGetter, error) {
+				return &stubConnectionManager{conn: connection}, nil
+			}
+			_, err = executor.RunAsset(context.Background(), RunAssetRequest{
+				AssetPath: filepath.Join(root, "analytics", "assets", "report.sql"),
+				StartDate: request.StartDate,
+				EndDate:   request.EndDate,
+			}, nil)
+			require.NoError(t, err)
+
+			assert.Equal(t, renderedExecution, connection.query)
+			assert.Contains(t, connection.query, "SELECT 'pre 2026-07-15';")
+			assert.Contains(t, connection.query, "SELECT 'post 2026-07-16';")
+			assert.NotContains(t, connection.query, "{{")
+		})
+	}
 }
 
 func TestAssetRenderServiceUsesQueryParameterForQuerySensors(t *testing.T) {
@@ -175,6 +386,9 @@ parameters:
 	})
 	require.NoError(t, err)
 	require.Equal(t, AssetRenderStatusOK, result.Status)
+	assert.Equal(t, AssetRenderFidelityExact, result.Asset.Target.Fidelity)
+	assert.Equal(t, assetRenderTargetKindNone, result.Asset.Target.Kind)
+	assert.Empty(t, result.Asset.Target.Identity)
 	assert.Equal(t, "duckdb", result.Asset.Dialect)
 	require.Len(t, result.Stages, 2)
 
@@ -246,7 +460,8 @@ select '{{ start_date }}' as window_start
 		EndDate:   "2026-07-16T00:00:00Z",
 	})
 	require.NoError(t, err)
-	require.Equal(t, AssetRenderStatusOK, result.Status)
+	require.Equal(t, AssetRenderStatusPartial, result.Status)
+	assert.Equal(t, AssetRenderFidelityRuntimeOnly, result.Asset.Target.Fidelity)
 	assert.Equal(t, "motherduck.sql", result.Asset.Type)
 	assert.Equal(t, "duckdb", result.Asset.Dialect)
 	assert.Equal(t, "motherduck-default", result.Asset.ConnectionName)
@@ -259,36 +474,49 @@ select '{{ start_date }}' as window_start
 func TestAssetRenderServiceReturnsPartialResultOnMaterializationError(t *testing.T) {
 	t.Parallel()
 
-	_, root := writeTypeCheckWorkspace(t, `
+	tests := []struct {
+		name             string
+		assetType        pipeline.AssetType
+		connectionFamily string
+	}{
+		{name: "duckdb", assetType: pipeline.AssetTypeDuckDBQuery, connectionFamily: "duckdb"},
+		{name: "postgres", assetType: pipeline.AssetTypePostgresQuery, connectionFamily: "postgres"},
+		{name: "redshift", assetType: pipeline.AssetTypeRedshiftQuery, connectionFamily: "redshift"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			pipelineYAML := fmt.Sprintf(`
 name: analytics
 default_connections:
-  duckdb: duckdb-default
-`, map[string]string{
-		"report.sql": `
+  %s: warehouse-default
+`, test.connectionFamily)
+			assetSQL := fmt.Sprintf(`
 /* @bruin
 name: analytics.report
-type: duckdb.sql
+type: %s
 materialization:
   type: table
   strategy: merge
 @bruin */
 select 1 as id
-`,
-	})
+`, test.assetType)
+			_, root := writeTypeCheckWorkspace(t, pipelineYAML, map[string]string{"report.sql": assetSQL})
 
-	result, err := NewAssetRenderService(root).RenderPath(context.Background(), "analytics/assets/report.sql", AssetRenderRequest{
-		StartDate: "2026-07-15T00:00:00Z",
-		EndDate:   "2026-07-16T00:00:00Z",
-	})
-	require.NoError(t, err)
+			result, err := NewAssetRenderService(root).RenderPath(context.Background(), "analytics/assets/report.sql", AssetRenderRequest{
+				StartDate: "2026-07-15T00:00:00Z",
+				EndDate:   "2026-07-16T00:00:00Z",
+			})
+			require.NoError(t, err)
 
-	assert.Equal(t, AssetRenderStatusPartial, result.Status)
-	require.Len(t, result.Stages, 2)
-	assert.Equal(t, AssetRenderStageStatusOK, result.Stages[0].Status)
-	assert.Equal(t, "select 1 as id", strings.TrimSpace(result.Stages[0].Content))
-	assert.Equal(t, AssetRenderStageStatusError, result.Stages[1].Status)
-	assert.Equal(t, AssetRenderFidelityExact, result.Stages[1].Fidelity)
-	assert.Contains(t, result.Stages[1].Message, "requires the `columns` field")
+			assert.Equal(t, AssetRenderStatusPartial, result.Status)
+			require.Len(t, result.Stages, 2)
+			assert.Equal(t, AssetRenderStageStatusOK, result.Stages[0].Status)
+			assert.Equal(t, "select 1 as id", strings.TrimSpace(result.Stages[0].Content))
+			assert.Equal(t, AssetRenderStageStatusError, result.Stages[1].Status)
+			assert.Equal(t, AssetRenderFidelityExact, result.Stages[1].Fidelity)
+			assert.Contains(t, result.Stages[1].Message, "requires the `columns` field")
+		})
+	}
 }
 
 func TestAssetRenderServiceMarksPythonExecutionRuntimeOnly(t *testing.T) {
@@ -317,6 +545,72 @@ print("hello")
 	assert.Contains(t, result.Stages[0].Content, `"operation": "execute_python"`)
 	assert.Contains(t, result.Stages[0].Content, `"entrypoint": "analytics/assets/task.py"`)
 	assert.NotContains(t, result.Stages[0].Content, `print("hello")`)
+	assert.Equal(t, "exact", result.Provenance.Context.ConfigurationFidelity)
+	assert.NotEmpty(t, result.Provenance.Context.ConfigurationDigest)
+}
+
+func TestAssetRenderServiceMarksUnresolvedConnectionConfigurationRuntimeOnly(t *testing.T) {
+	t.Parallel()
+
+	_, root := writeTypeCheckWorkspace(t, "name: analytics", map[string]string{
+		"report.sql": `
+/* @bruin
+name: analytics.report
+type: duckdb.sql
+connection: missing-connection
+@bruin */
+select 1
+`,
+	})
+
+	result, err := NewAssetRenderService(root).RenderPath(context.Background(), "analytics/assets/report.sql", AssetRenderRequest{})
+	require.NoError(t, err)
+	assert.Equal(t, "runtime_only", result.Provenance.Context.ConfigurationFidelity)
+	assert.Empty(t, result.Provenance.Context.ConfigurationDigest)
+	assert.Contains(t, result.Provenance.Context.ConfigurationMessage, "missing-connection")
+}
+
+func TestAssetRenderResponseNeverSerializesCredentialOrOpaqueConnectionValues(t *testing.T) {
+	t.Parallel()
+
+	_, root := writeTypeCheckWorkspace(t, `
+name: analytics
+default_connections:
+  mssql: warehouse
+`, map[string]string{
+		"report.sql": `
+/* @bruin
+name: analytics.report
+type: mssql.sql
+@bruin */
+select 1
+`,
+	})
+	require.NoError(t, os.WriteFile(filepath.Join(root, ".bruin.yml"), []byte(strings.TrimSpace(`
+default_environment: default
+environments:
+  default:
+    connections:
+      mssql:
+        - name: warehouse
+          host: sql.internal
+          database: analytics
+          username: renart
+          password: tagged-credential-secret
+          options: encrypt=true&password=opaque-options-secret
+`)+"\n"), 0o644))
+
+	result, err := NewAssetRenderService(root).RenderPath(context.Background(), "analytics/assets/report.sql", AssetRenderRequest{})
+	require.NoError(t, err)
+	assert.Equal(t, "runtime_only", result.Provenance.Context.ConfigurationFidelity)
+	assert.Empty(t, result.Provenance.Context.ConfigurationDigest)
+
+	payload, err := json.Marshal(result)
+	require.NoError(t, err)
+	assert.NotContains(t, string(payload), "tagged-credential-secret")
+	assert.NotContains(t, string(payload), "opaque-options-secret")
+	assert.NotContains(t, string(payload), "encrypt=true")
+	assert.NotContains(t, string(payload), "sql.internal")
 }
 
 func TestAssetRenderServiceKeepsDotDotPrefixedWorkspacePathsRelative(t *testing.T) {
@@ -789,6 +1083,7 @@ environments:
 	assert.False(t, result.Provenance.Context.FullRefresh)
 	require.Len(t, result.Issues, 1)
 	assert.Equal(t, "full_refresh_restricted", result.Issues[0].Code)
+	assert.Contains(t, result.Issues[0].Message, "restricted for this asset in the selected environment")
 	assert.Contains(t, result.Stages[0].Content, "'False' as is_full_refresh")
 	assert.NotContains(t, result.Stages[0].Content, "'True' as is_full_refresh")
 
@@ -820,7 +1115,7 @@ hooks:
     - query: "SELECT '{{ var.hook_label }}' AS post"
 @bruin */
 SELECT 'first';
-DECLARE marker INTEGER;
+DECLARE marker CURSOR FOR SELECT 42;
 SELECT 'second';
 `,
 	})
@@ -830,7 +1125,8 @@ SELECT 'second';
 		EndDate:   "2026-07-16T00:00:00Z",
 	})
 	require.NoError(t, err)
-	require.Equal(t, AssetRenderStatusOK, result.Status)
+	require.Equal(t, AssetRenderStatusPartial, result.Status)
+	assert.Equal(t, AssetRenderFidelityRuntimeOnly, result.Asset.Target.Fidelity)
 	require.Len(t, result.Stages, 2)
 
 	compiled := result.Stages[0].Content
@@ -842,7 +1138,7 @@ SELECT 'second';
 	execution := result.Stages[1].Content
 	pre := strings.Index(execution, "SELECT '2026-07-15' AS pre")
 	first := strings.Index(execution, "SELECT 'first'")
-	declare := strings.Index(execution, "DECLARE marker")
+	declare := strings.Index(execution, "DECLARE marker CURSOR")
 	second := strings.Index(execution, "SELECT 'second'")
 	post := strings.Index(execution, "SELECT 'rendered-post' AS post")
 	require.NotEqual(t, -1, pre)
@@ -855,6 +1151,65 @@ SELECT 'second';
 	assert.Less(t, pre, first)
 	assert.Less(t, first, second)
 	assert.Less(t, second, post)
+}
+
+func TestAssetRenderServicePostgresUsesBruinDeclareHoister(t *testing.T) {
+	t.Parallel()
+
+	_, root := writeTypeCheckWorkspace(t, `
+name: analytics
+default_connections:
+  postgres: warehouse-default
+`, map[string]string{
+		"script.sql": `
+/* @bruin
+name: analytics.script
+type: pg.sql
+hooks:
+  pre:
+    - query: "SELECT '{{ start_date }}' AS pre"
+@bruin */
+SELECT 'first';
+DECLARE marker INTEGER;
+SELECT 'second';
+`,
+	})
+	request := AssetRenderRequest{
+		StartDate: "2026-07-15T00:00:00Z",
+		EndDate:   "2026-07-16T00:00:00Z",
+	}
+
+	result, err := NewAssetRenderService(root).RenderPath(context.Background(), "analytics/assets/script.sql", request)
+	require.NoError(t, err)
+	require.Equal(t, AssetRenderStatusPartial, result.Status)
+	assert.Equal(t, AssetRenderFidelityRuntimeOnly, result.Asset.Target.Fidelity)
+	require.Len(t, result.Stages, 2)
+	execution := result.Stages[1].Content
+
+	declare := strings.Index(execution, "DECLARE marker")
+	pre := strings.Index(execution, "SELECT '2026-07-15' AS pre")
+	first := strings.Index(execution, "SELECT 'first'")
+	second := strings.Index(execution, "SELECT 'second'")
+	require.NotEqual(t, -1, declare)
+	require.NotEqual(t, -1, pre)
+	require.NotEqual(t, -1, first)
+	require.NotEqual(t, -1, second)
+	assert.Less(t, declare, pre)
+	assert.Less(t, pre, first)
+	assert.Less(t, first, second)
+
+	connection := &stubSchemaQuerier{}
+	executor := newCompatDirectExecutor(root, "")
+	executor.newConnectionManager = func(context.Context, string) (config.ConnectionAndDetailsGetter, error) {
+		return &stubConnectionManager{conn: connection}, nil
+	}
+	_, err = executor.RunAsset(context.Background(), RunAssetRequest{
+		AssetPath: filepath.Join(root, "analytics", "assets", "script.sql"),
+		StartDate: request.StartDate,
+		EndDate:   request.EndDate,
+	}, nil)
+	require.NoError(t, err)
+	assert.Equal(t, execution, connection.query)
 }
 
 func TestAssetRenderServiceDoesNotCreateConfigOrGitignore(t *testing.T) {
@@ -892,6 +1247,10 @@ default_connections:
 /* @bruin
 name: analytics.report
 type: duckdb.sql
+custom_checks:
+  - name: credential literal
+    value: 0
+    query: select count(*) from analytics.report where token = 'render-secret-token'
 @bruin */
 select 'render-secret-token' as example
 `,
@@ -924,6 +1283,9 @@ environments:
 	}
 	assert.Contains(t, result.Stages[0].Content, "****")
 	assert.True(t, result.Stages[0].Redacted)
+	require.Equal(t, "check", result.Stages[len(result.Stages)-1].Kind)
+	assert.Contains(t, result.Stages[len(result.Stages)-1].Content, "****")
+	assert.True(t, result.Stages[len(result.Stages)-1].Redacted)
 	require.Len(t, result.Redactions, 1)
 	assert.Equal(t, "connection_credentials", result.Redactions[0].Kind)
 	assert.Equal(t, "****", result.Redactions[0].Replacement)
@@ -1139,6 +1501,49 @@ environments:
 	assert.Contains(t, execution.Message, "depends on live warehouse state")
 }
 
+func TestAssetRenderServiceMarksPostgresDeveloperEnvironmentRewriteRuntimeOnly(t *testing.T) {
+	t.Parallel()
+
+	_, root := writeTypeCheckWorkspace(t, `
+name: analytics
+default_connections:
+  postgres: postgres-default
+`, map[string]string{
+		"events.sql": `
+/* @bruin
+name: analytics.events
+type: pg.sql
+materialization:
+  type: table
+@bruin */
+select * from analytics.source_events
+`,
+	})
+	require.NoError(t, os.WriteFile(filepath.Join(root, ".bruin.yml"), []byte(strings.TrimSpace(`
+default_environment: dev
+environments:
+  dev:
+    schema_prefix: dev_
+    connections:
+      duckdb:
+        - name: duckdb-default
+          path: local.db
+`)+"\n"), 0o644))
+
+	result, err := NewAssetRenderService(root).RenderPath(context.Background(), "analytics/assets/events.sql", AssetRenderRequest{
+		Environment: "dev",
+	})
+	require.NoError(t, err)
+	require.Equal(t, AssetRenderStatusPartial, result.Status)
+	require.Len(t, result.Stages, 3)
+
+	execution := result.Stages[2]
+	assert.Equal(t, AssetRenderStageStatusOK, execution.Status)
+	assert.Equal(t, AssetRenderFidelityRuntimeOnly, execution.Fidelity)
+	assert.Contains(t, execution.Content, "analytics.source_events")
+	assert.Contains(t, execution.Message, "depends on live warehouse state")
+}
+
 func TestAssetRenderServiceMarksGeneratedTemporaryIdentifiersRuntimeOnly(t *testing.T) {
 	t.Parallel()
 
@@ -1176,6 +1581,51 @@ select 1 as id, 'value' as value
 	assert.Equal(t, AssetRenderFidelityRuntimeOnly, execution.Fidelity)
 	assert.Contains(t, execution.Content, "__bruin_merge_tmp_")
 	assert.Contains(t, execution.Message, "temporary table identifiers")
+}
+
+func TestAssetRenderServiceMarksPostgresFamilyTemporaryIdentifiersRuntimeOnly(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name             string
+		assetType        pipeline.AssetType
+		connectionFamily string
+	}{
+		{name: "postgres", assetType: pipeline.AssetTypePostgresQuery, connectionFamily: "postgres"},
+		{name: "redshift", assetType: pipeline.AssetTypeRedshiftQuery, connectionFamily: "redshift"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			pipelineYAML := fmt.Sprintf(`
+name: analytics
+default_connections:
+  %s: warehouse-default
+`, test.connectionFamily)
+			assetSQL := fmt.Sprintf(`
+/* @bruin
+name: analytics.events
+type: %s
+materialization:
+  type: table
+  strategy: delete+insert
+  incremental_key: event_date
+@bruin */
+select 1 as id, current_date as event_date
+`, test.assetType)
+			_, root := writeTypeCheckWorkspace(t, pipelineYAML, map[string]string{"events.sql": assetSQL})
+
+			result, err := NewAssetRenderService(root).RenderPath(context.Background(), "analytics/assets/events.sql", AssetRenderRequest{})
+			require.NoError(t, err)
+			require.Equal(t, AssetRenderStatusPartial, result.Status)
+			require.Len(t, result.Stages, 3)
+
+			execution := result.Stages[2]
+			assert.Equal(t, AssetRenderStageStatusOK, execution.Status)
+			assert.Equal(t, AssetRenderFidelityRuntimeOnly, execution.Fidelity)
+			assert.Contains(t, execution.Content, "__bruin_tmp_")
+			assert.Contains(t, execution.Message, "temporary table identifiers")
+		})
+	}
 }
 
 func TestAssetRenderServiceMatchesMultipleQueryMaterializationGuard(t *testing.T) {

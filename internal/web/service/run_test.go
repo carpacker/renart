@@ -21,6 +21,72 @@ type stubRunRunner struct {
 	runPipelineRequest RunPipelineRequest
 }
 
+type stubRunMaterializer struct {
+	assetID              string
+	assetEnvironment     string
+	assetScope           string
+	assetStartDate       string
+	assetEndDate         string
+	assetFullRefresh     bool
+	assetBackfill        bool
+	assetConfirmation    string
+	assetSensorMode      string
+	pipelineID           string
+	pipelineEnvironment  string
+	pipelineDryRun       bool
+	pipelineFullRefresh  bool
+	pipelineBackfill     bool
+	pipelineStartDate    string
+	pipelineEndDate      string
+	pipelineConfirmation string
+	pipelineSensorMode   string
+	pipelineIDs          []string
+	pipelineResults      map[string]MaterializeResult
+	result               MaterializeResult
+}
+
+func (s *stubRunMaterializer) MaterializeAssetStreamWithSensorMode(
+	_ context.Context,
+	assetID, environment, scope, startDate, endDate string,
+	fullRefresh, backfill bool,
+	confirmedEnvironment, sensorMode string,
+	_ func([]byte),
+) MaterializeResult {
+	s.assetID = assetID
+	s.assetEnvironment = environment
+	s.assetScope = scope
+	s.assetStartDate = startDate
+	s.assetEndDate = endDate
+	s.assetFullRefresh = fullRefresh
+	s.assetBackfill = backfill
+	s.assetConfirmation = confirmedEnvironment
+	s.assetSensorMode = sensorMode
+	return s.result
+}
+
+func (s *stubRunMaterializer) MaterializePipelineStreamWithSensorMode(
+	_ context.Context,
+	pipelineID, environment string,
+	dryRun, fullRefresh, backfill bool,
+	startDate, endDate, confirmedEnvironment, sensorMode string,
+	_ func([]byte),
+) MaterializeResult {
+	s.pipelineIDs = append(s.pipelineIDs, pipelineID)
+	s.pipelineID = pipelineID
+	s.pipelineEnvironment = environment
+	s.pipelineDryRun = dryRun
+	s.pipelineFullRefresh = fullRefresh
+	s.pipelineBackfill = backfill
+	s.pipelineStartDate = startDate
+	s.pipelineEndDate = endDate
+	s.pipelineConfirmation = confirmedEnvironment
+	s.pipelineSensorMode = sensorMode
+	if result, ok := s.pipelineResults[pipelineID]; ok {
+		return result
+	}
+	return s.result
+}
+
 func (s *stubRunRunner) RunAsset(_ context.Context, req RunAssetRequest, _ func([]byte)) ([]byte, error) {
 	s.runAssetRequest = req
 	s.args = []string{"run", req.AssetPath}
@@ -121,6 +187,161 @@ func TestRunServiceExecute_AssetPathOverridesPipelineID(t *testing.T) {
 	assert.Equal(t, "ok", result.Status)
 	assert.Equal(t, "pipelines/orders/assets/order_items.sql", result.Operation.Target)
 	assert.Equal(t, []string{"run", "pipelines/orders/assets/order_items.sql"}, runner.args)
+}
+
+func TestRunServiceExecute_UsesCompletionAwarePipelineMaterializer(t *testing.T) {
+	t.Parallel()
+
+	runner := &stubRunRunner{output: []byte("legacy path must not run")}
+	materializer := &stubRunMaterializer{result: MaterializeResult{
+		Status:    "ok",
+		Operation: runOperation("internal-execution-target", "", "", "staging"),
+		Output:    "materialized",
+	}}
+	pipelineID := EncodeID("pipelines/orders/pipeline.yml")
+	svc := NewRunService(RunDependencies{Executor: runner, Execution: materializer})
+
+	result := svc.Execute(context.Background(), RunRequest{
+		PipelineID:           pipelineID,
+		Environment:          "staging",
+		FullRefresh:          true,
+		ConfirmedEnvironment: "staging",
+		SensorMode:           "skip",
+	})
+
+	require.Equal(t, "ok", result.Status)
+	assert.Equal(t, 200, result.HTTPCode)
+	assert.Equal(t, "materialized", result.Output)
+	assert.Equal(t, "pipelines/orders", result.Operation.Target)
+	assert.Nil(t, runner.args)
+	assert.Equal(t, pipelineID, materializer.pipelineID)
+	assert.Equal(t, "staging", materializer.pipelineEnvironment)
+	assert.False(t, materializer.pipelineDryRun)
+	assert.True(t, materializer.pipelineFullRefresh)
+	assert.False(t, materializer.pipelineBackfill)
+	assert.Equal(t, "staging", materializer.pipelineConfirmation)
+	assert.Equal(t, "skip", materializer.pipelineSensorMode)
+}
+
+func TestRunServiceExecute_UsesCompletionAwareAssetMaterializer(t *testing.T) {
+	t.Parallel()
+
+	runner := &stubRunRunner{output: []byte("legacy path must not run")}
+	materializer := &stubRunMaterializer{result: MaterializeResult{
+		Status:   "error",
+		Output:   "partial output",
+		Error:    "materialization failed",
+		ExitCode: 1,
+	}}
+	svc := NewRunService(RunDependencies{Executor: runner, Execution: materializer})
+
+	result := svc.Execute(context.Background(), RunRequest{
+		AssetPath:   "pipelines/orders/assets/order_items.sql",
+		Environment: "staging",
+		StartDate:   "2026-07-16T10:00:00+02:00",
+		EndDate:     "2026-07-16T11:00:00+02:00",
+		SensorMode:  "once",
+	})
+
+	require.Equal(t, "error", result.Status)
+	assert.Equal(t, 400, result.HTTPCode)
+	assert.Equal(t, "partial output", result.Output)
+	assert.Equal(t, "materialization failed", result.Error)
+	assert.Equal(t, "pipelines/orders/assets/order_items.sql", result.Operation.Target)
+	assert.Nil(t, runner.args)
+	assetPath, err := DecodeID(materializer.assetID)
+	require.NoError(t, err)
+	assert.Equal(t, "pipelines/orders/assets/order_items.sql", assetPath)
+	assert.Equal(t, "staging", materializer.assetEnvironment)
+	assert.Equal(t, string(MaterializeScopeAsset), materializer.assetScope)
+	assert.Equal(t, "2026-07-16T08:00:00Z", materializer.assetStartDate)
+	assert.Equal(t, "2026-07-16T09:00:00Z", materializer.assetEndDate)
+	assert.Equal(t, "once", materializer.assetSensorMode)
+}
+
+func TestRunServiceExecute_DryRunStaysOnExecutor(t *testing.T) {
+	t.Parallel()
+
+	runner := &stubRunRunner{output: []byte("checked")}
+	materializer := &stubRunMaterializer{result: MaterializeResult{Status: "error", Error: "must not run"}}
+	svc := NewRunService(RunDependencies{Executor: runner, Execution: materializer})
+
+	result := svc.Execute(context.Background(), RunRequest{DryRun: true})
+
+	require.Equal(t, "ok", result.Status)
+	assert.Equal(t, "checked", result.Output)
+	assert.True(t, runner.runPipelineRequest.DryRun)
+	assert.Empty(t, materializer.pipelineID)
+}
+
+func TestRunServiceExecute_DefaultTargetMaterializesEveryCurrentPipelineInWorkspaceOrder(t *testing.T) {
+	t.Parallel()
+
+	runner := &stubRunRunner{output: []byte("root run")}
+	firstID := EncodeID("pipelines/zeta/pipeline.yml")
+	secondID := EncodeID("pipelines/alpha/pipeline.yml")
+	materializer := &stubRunMaterializer{pipelineResults: map[string]MaterializeResult{
+		firstID:  {Status: "ok", Output: "zeta output\n"},
+		secondID: {Status: "ok", Output: "alpha output"},
+	}}
+	svc := NewRunService(RunDependencies{
+		Executor:           runner,
+		Execution:          materializer,
+		CurrentPipelineIDs: func() []string { return []string{firstID, secondID} },
+	})
+
+	result := svc.Execute(context.Background(), RunRequest{})
+
+	require.Equal(t, "ok", result.Status)
+	assert.Equal(t, "zeta output\nalpha output", result.Output)
+	assert.Nil(t, runner.args)
+	assert.Equal(t, []string{firstID, secondID}, materializer.pipelineIDs)
+}
+
+func TestRunServiceExecute_DefaultTargetStopsAtFirstPipelineFailure(t *testing.T) {
+	t.Parallel()
+
+	firstID := EncodeID("pipelines/first/pipeline.yml")
+	failingID := EncodeID("pipelines/failing/pipeline.yml")
+	untouchedID := EncodeID("pipelines/untouched/pipeline.yml")
+	materializer := &stubRunMaterializer{pipelineResults: map[string]MaterializeResult{
+		firstID:   {Status: "ok", Output: "first output"},
+		failingID: {Status: "error", Output: "failing output", Error: "pipeline failed", ExitCode: 1},
+		untouchedID: {
+			Status: "ok", Output: "must not run",
+		},
+	}}
+	svc := NewRunService(RunDependencies{
+		Execution:          materializer,
+		CurrentPipelineIDs: func() []string { return []string{firstID, failingID, untouchedID} },
+	})
+
+	result := svc.Execute(context.Background(), RunRequest{})
+
+	require.Equal(t, "error", result.Status)
+	assert.Equal(t, 400, result.HTTPCode)
+	assert.Equal(t, 1, result.ExitCode)
+	assert.Equal(t, "pipeline failed", result.Error)
+	assert.Equal(t, "first output\nfailing output", result.Output)
+	assert.Equal(t, []string{firstID, failingID}, materializer.pipelineIDs)
+}
+
+func TestRunServiceExecute_DefaultTargetRejectsWorkspaceWithoutPipelines(t *testing.T) {
+	t.Parallel()
+
+	materializer := &stubRunMaterializer{result: MaterializeResult{Status: "ok"}}
+	svc := NewRunService(RunDependencies{
+		Execution:          materializer,
+		CurrentPipelineIDs: func() []string { return nil },
+	})
+
+	result := svc.Execute(context.Background(), RunRequest{})
+
+	require.Equal(t, "error", result.Status)
+	assert.Equal(t, 400, result.HTTPCode)
+	assert.Equal(t, 1, result.ExitCode)
+	assert.Equal(t, "workspace has no pipelines to run", result.Error)
+	assert.Empty(t, materializer.pipelineIDs)
 }
 
 func TestRunServiceExecute_InvalidPipelineID(t *testing.T) {

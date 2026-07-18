@@ -15,7 +15,7 @@ func TestOnboardingImportDatabaseReturnsSchemaAssetPaths(t *testing.T) {
 
 	workspaceRoot := t.TempDir()
 	runner := &stubRunRunner{output: []byte(`{"status":"ok"}`)}
-	svc := NewOnboardingService(workspaceRoot, filepath.Join(workspaceRoot, ".bruin.yml"), runner)
+	svc := NewOnboardingService(workspaceRoot, filepath.Join(workspaceRoot, ".bruin.yml"), runner, nil)
 
 	result := svc.ImportDatabase(context.Background(), OnboardingImportRequest{
 		ConnectionName:  "postgres-default",
@@ -40,7 +40,8 @@ func TestCreateDuckDBQuickstartCreatesChessAnalysisAssetsAndDatabaseFile(t *test
 
 	workspaceRoot := t.TempDir()
 	runner := &stubRunRunner{output: []byte("quickstart run complete")}
-	svc := NewOnboardingService(workspaceRoot, filepath.Join(workspaceRoot, ".bruin.yml"), runner)
+	materializer := &stubRunMaterializer{result: MaterializeResult{Status: "ok", Output: "quickstart run complete"}}
+	svc := NewOnboardingService(workspaceRoot, filepath.Join(workspaceRoot, ".bruin.yml"), runner, materializer)
 
 	result := svc.CreateDuckDBQuickstart(context.Background(), OnboardingQuickstartRequest{
 		EnvironmentName: "default",
@@ -51,7 +52,9 @@ func TestCreateDuckDBQuickstartCreatesChessAnalysisAssetsAndDatabaseFile(t *test
 	})
 
 	require.Equal(t, "ok", result.Status)
-	assert.Equal(t, []string{"run", "quickstart", "--env", "default"}, runner.args)
+	assert.Empty(t, runner.args, "quickstart materialization must not bypass the completion-aware execution service")
+	assert.Equal(t, EncodeID("quickstart"), materializer.pipelineID)
+	assert.Equal(t, "default", materializer.pipelineEnvironment)
 	assert.Equal(t, []string{
 		"quickstart/assets/quickstart/players.asset.yml",
 		"quickstart/assets/quickstart/games.asset.yml",
@@ -130,7 +133,8 @@ func TestCreateDuckDBQuickstartRemovesStaleEmptyDuckDBPlaceholder(t *testing.T) 
 	require.NoError(t, os.WriteFile(databasePath, nil, 0o644))
 
 	runner := &stubRunRunner{output: []byte("quickstart run complete")}
-	svc := NewOnboardingService(workspaceRoot, filepath.Join(workspaceRoot, ".bruin.yml"), runner)
+	materializer := &stubRunMaterializer{result: MaterializeResult{Status: "ok", Output: "quickstart run complete"}}
+	svc := NewOnboardingService(workspaceRoot, filepath.Join(workspaceRoot, ".bruin.yml"), runner, materializer)
 
 	result := svc.CreateDuckDBQuickstart(context.Background(), OnboardingQuickstartRequest{
 		EnvironmentName: "default",
@@ -153,7 +157,8 @@ func TestCreateDuckDBQuickstartPreparesDuckDBPathRelativeToConfigFile(t *testing
 	require.NoError(t, os.MkdirAll(workspaceRoot, 0o755))
 
 	runner := &stubRunRunner{output: []byte("quickstart run complete")}
-	svc := NewOnboardingService(workspaceRoot, filepath.Join(repoRoot, ".bruin.yml"), runner)
+	materializer := &stubRunMaterializer{result: MaterializeResult{Status: "ok", Output: "quickstart run complete"}}
+	svc := NewOnboardingService(workspaceRoot, filepath.Join(repoRoot, ".bruin.yml"), runner, materializer)
 
 	result := svc.CreateDuckDBQuickstart(context.Background(), OnboardingQuickstartRequest{
 		EnvironmentName: "default",

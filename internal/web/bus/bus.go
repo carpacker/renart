@@ -5,6 +5,7 @@
 package bus
 
 import (
+	"errors"
 	"sync"
 	"time"
 )
@@ -15,12 +16,75 @@ type AssetRun struct {
 	AssetID   string
 	AssetName string
 	Status    string // "succeeded" / "failed" / "cancelled"
+	// StartedAt/FinishedAt describe the main task that can write the physical
+	// output. They deliberately exclude checks and metadata tasks. A recorder
+	// may fall back to RunCompleted.CompletedAt for legacy/synthetic events.
+	StartedAt  *time.Time
+	FinishedAt *time.Time
+	// CompletionOrdinal is stable within CompletionID and disambiguates
+	// multiple writes that finish at the same persisted timestamp.
+	CompletionOrdinal    int64
+	HasCompletionOrdinal bool
+	// The remaining fields are the secret-free, pre-execution snapshot for this
+	// asset. TargetIdentity is empty unless TargetFidelity is exact. Fingerprint
+	// fields describe the source/configuration selected before the first task;
+	// they must never be reconstructed from mutable configuration at completion.
+	TargetIdentity   string
+	TargetFidelity   string
+	Fingerprint      string
+	OwnContent       string
+	ConsumedVarsHash string
+	VarsHash         string
+	// UpstreamWriters is the trusted latest-writer read set captured immediately
+	// before this main task began. The explicit presence flag distinguishes an
+	// empty read set from legacy evidence that never captured one.
+	UpstreamWriters           map[string]UpstreamWriterSnapshot
+	HasUpstreamWriterSnapshot bool
+}
+
+// UpstreamWriterSnapshot identifies the physical upstream output visible at
+// the start of one consumer task. The map containing it is keyed by AssetID.
+type UpstreamWriterSnapshot struct {
+	AssetID           string
+	TargetIdentity    string
+	Fingerprint       string
+	VarsHash          string
+	TargetGeneration  int64
+	CompletionID      string
+	CompletionOrdinal int64
+	MaterializedAt    time.Time
+}
+
+type ExecutionUpstreamSnapshot struct {
+	Type  string
+	Value string
+}
+
+// ExecutionTargetSnapshotEntry is one value-only entry captured before any
+// main task starts. The RunCompleted map is keyed by canonical asset name so
+// an executed downstream can still resolve the captured identity of an
+// upstream that was not part of the selected run.
+type ExecutionTargetSnapshotEntry struct {
+	AssetID           string
+	TargetIdentity    string
+	TargetFidelity    string
+	Fingerprint       string
+	OwnContent        string
+	ConsumedVarsHash  string
+	VarsHash          string
+	Upstreams         []ExecutionUpstreamSnapshot
+	CoverageMode      string
+	RefreshRestricted bool
 }
 
 // RunCompleted is emitted once per finished run (build-mode single asset,
 // build-mode pipeline run, or scheduled run).
 type RunCompleted struct {
-	RunID        string // scheduler run ID when applicable, "" for build-mode runs
+	RunID string // scheduler run ID when applicable, "" for build-mode runs
+	// CompletionID is non-empty for new events. Scheduler-backed executions use
+	// RunID; inline executions use a generated UUID so replay ordering never
+	// depends on a second-resolution log identifier.
+	CompletionID string
 	PipelineUUID string
 	Environment  string
 	// WinStart/WinEnd carry the requested execution interval. FullRefresh is
@@ -30,6 +94,11 @@ type RunCompleted struct {
 	FullRefresh bool
 	CompletedAt time.Time
 	Assets      []AssetRun
+	// ExecutionTargets is the complete parsed pipeline snapshot, not only the
+	// assets attempted by this run. SnapshotVersion identifies its contract.
+	ExecutionTargetSnapshotVersion int
+	ExecutionPipelineUUID          string
+	ExecutionTargets               map[string]ExecutionTargetSnapshotEntry
 	// SnapshotVersionID/SnapshotDir are set when the run executed a deployed
 	// snapshot; SnapshotDir is the materialized source the run actually used
 	// (valid for the duration of the event dispatch).
@@ -47,31 +116,55 @@ type AssetSaved struct {
 	SavedAt      time.Time
 }
 
+// TargetWriteChanged is emitted after a physical-target claim becomes active
+// or dirty. It invalidates freshness immediately, including the failure path
+// where no completion event can be dispatched.
+type TargetWriteChanged struct {
+	PipelineUUID string
+	AssetID      string
+}
+
 // Events is the seam consumers subscribe to. Handlers run synchronously on
 // the emitting goroutine, in subscription order — keep them fast and never
 // emit from inside a handler.
 type Events interface {
-	OnRunCompleted(func(RunCompleted)) (unsubscribe func())
+	OnRunCompleted(func(RunCompleted) error) (unsubscribe func())
 	OnAssetSaved(func(AssetSaved)) (unsubscribe func())
+	OnTargetWriteChanged(func(TargetWriteChanged)) (unsubscribe func())
 }
 
 // Bus is the canonical Events implementation. The zero value is unusable;
 // call New.
 type Bus struct {
-	mu       sync.RWMutex
-	nextID   int
-	runSubs  map[int]func(RunCompleted)
-	saveSubs map[int]func(AssetSaved)
+	mu         sync.RWMutex
+	nextID     int
+	runSubs    map[int]func(RunCompleted) error
+	saveSubs   map[int]func(AssetSaved)
+	targetSubs map[int]func(TargetWriteChanged)
 }
 
 func New() *Bus {
 	return &Bus{
-		runSubs:  make(map[int]func(RunCompleted)),
-		saveSubs: make(map[int]func(AssetSaved)),
+		runSubs:    make(map[int]func(RunCompleted) error),
+		saveSubs:   make(map[int]func(AssetSaved)),
+		targetSubs: make(map[int]func(TargetWriteChanged)),
 	}
 }
 
-func (b *Bus) OnRunCompleted(handler func(RunCompleted)) func() {
+func (b *Bus) OnTargetWriteChanged(handler func(TargetWriteChanged)) func() {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	id := b.nextID
+	b.nextID++
+	b.targetSubs[id] = handler
+	return func() {
+		b.mu.Lock()
+		defer b.mu.Unlock()
+		delete(b.targetSubs, id)
+	}
+}
+
+func (b *Bus) OnRunCompleted(handler func(RunCompleted) error) func() {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	id := b.nextID
@@ -97,13 +190,17 @@ func (b *Bus) OnAssetSaved(handler func(AssetSaved)) func() {
 	}
 }
 
-func (b *Bus) EmitRunCompleted(event RunCompleted) {
+func (b *Bus) EmitRunCompleted(event RunCompleted) error {
 	if b == nil {
-		return
+		return nil
 	}
+	var errs []error
 	for _, handler := range b.snapshotRunSubs() {
-		handler(event)
+		if err := handler(event); err != nil {
+			errs = append(errs, err)
+		}
 	}
+	return errors.Join(errs...)
 }
 
 func (b *Bus) EmitAssetSaved(event AssetSaved) {
@@ -115,10 +212,19 @@ func (b *Bus) EmitAssetSaved(event AssetSaved) {
 	}
 }
 
-func (b *Bus) snapshotRunSubs() []func(RunCompleted) {
+func (b *Bus) EmitTargetWriteChanged(event TargetWriteChanged) {
+	if b == nil {
+		return
+	}
+	for _, handler := range b.snapshotTargetSubs() {
+		handler(event)
+	}
+}
+
+func (b *Bus) snapshotRunSubs() []func(RunCompleted) error {
 	b.mu.RLock()
 	defer b.mu.RUnlock()
-	handlers := make([]func(RunCompleted), 0, len(b.runSubs))
+	handlers := make([]func(RunCompleted) error, 0, len(b.runSubs))
 	for id := 0; id < b.nextID; id++ {
 		if handler, ok := b.runSubs[id]; ok {
 			handlers = append(handlers, handler)
@@ -133,6 +239,18 @@ func (b *Bus) snapshotSaveSubs() []func(AssetSaved) {
 	handlers := make([]func(AssetSaved), 0, len(b.saveSubs))
 	for id := 0; id < b.nextID; id++ {
 		if handler, ok := b.saveSubs[id]; ok {
+			handlers = append(handlers, handler)
+		}
+	}
+	return handlers
+}
+
+func (b *Bus) snapshotTargetSubs() []func(TargetWriteChanged) {
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+	handlers := make([]func(TargetWriteChanged), 0, len(b.targetSubs))
+	for id := 0; id < b.nextID; id++ {
+		if handler, ok := b.targetSubs[id]; ok {
 			handlers = append(handlers, handler)
 		}
 	}

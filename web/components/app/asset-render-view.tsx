@@ -13,6 +13,7 @@ import { useWorkspaceTheme } from "@/hooks/use-workspace-theme";
 import type {
   AssetRenderFidelity,
   AssetRenderResult,
+  AssetRenderStage,
   AssetRenderStageStatus,
 } from "@/lib/api-asset-render";
 import { copyTextToClipboard } from "@/lib/copy-to-clipboard";
@@ -86,6 +87,23 @@ export function AssetRenderView({
     result.provenance.source.kind === "working_tree"
       ? `Saved workspace · ${result.provenance.source.merkle_root.slice(0, 8)}`
       : `Deployment · ${result.provenance.source.merkle_root.slice(0, 8)}`;
+  const configurationTitle = context.configuration_digest
+    ? `Configuration ${context.configuration_digest.slice(0, 8)} · ${context.configuration_fidelity}`
+    : context.configuration_message || "Configuration identity is only available at runtime";
+  const variableProvenance = context.variable_provenance ?? [];
+  const variableTitle = variableProvenance
+    .map((variable) => `${variable.name} — ${variableSourceLabel(variable.source)}`)
+    .join("\n");
+  const fingerprintTitle = result.asset.fingerprint
+    ? `Asset/DAG fingerprint ${result.asset.fingerprint}`
+    : "Asset/DAG fingerprint unavailable";
+  const target = result.asset.target;
+  const targetTitle = [
+    target.object ? `${target.kind}: ${target.object}` : target.kind,
+    target.identity ? `Physical target ${target.identity}` : target.message,
+  ]
+    .filter(Boolean)
+    .join("\n");
 
   return (
     <div
@@ -106,7 +124,7 @@ export function AssetRenderView({
             {sourceLabel}
           </span>
           <span className="text-muted-foreground">·</span>
-          <span>{context.environment || "default"}</span>
+          <span title={configurationTitle}>{context.environment || "default"}</span>
           <span className="text-muted-foreground">·</span>
           <span>{formatRenderWindow(context.start_date, context.end_date)}</span>
           <span className="text-muted-foreground">·</span>
@@ -122,6 +140,31 @@ export function AssetRenderView({
               <span className="text-muted-foreground">·</span>
               <span className="truncate font-mono">{result.asset.connection_name}</span>
             </>
+          ) : null}
+          {result.asset.fingerprint ? (
+            <Badge variant="muted" size="xs" title={fingerprintTitle}>
+              DAG {result.asset.fingerprint.slice(0, 8)}
+            </Badge>
+          ) : null}
+          {target.kind !== "none" || target.fidelity !== "exact" ? (
+            <Badge
+              variant={target.fidelity === "exact" ? "secondary" : "muted"}
+              size="xs"
+              title={targetTitle}
+            >
+              Target {target.identity ? target.identity.slice(0, 8) : "runtime-only"}
+            </Badge>
+          ) : null}
+          {variableProvenance.length > 0 ? (
+            <Badge variant="muted" size="xs" title={variableTitle}>
+              {variableProvenance.length} pipeline{" "}
+              {variableProvenance.length === 1 ? "variable" : "variables"}
+            </Badge>
+          ) : null}
+          {context.configuration_fidelity === "runtime_only" ? (
+            <Badge variant="muted" size="xs" title={configurationTitle}>
+              Config runtime-only
+            </Badge>
           ) : null}
           {result.redactions.length > 0 ? (
             <Badge variant="muted" size="xs" title="Known credential values were masked or omitted">
@@ -161,8 +204,12 @@ export function AssetRenderView({
               aria-label="Rendered operation"
             >
               {result.stages.map((item, index) => (
-                <ToggleGroupItem key={stageKeys[index]} value={stageKeys[index]}>
-                  {stageLabel(item.kind)}
+                <ToggleGroupItem
+                  key={stageKeys[index]}
+                  value={stageKeys[index]}
+                  title={item.message || stageLabel(item)}
+                >
+                  {stageLabel(item)}
                 </ToggleGroupItem>
               ))}
             </ToggleGroup>
@@ -202,6 +249,19 @@ export function AssetRenderView({
       </div>
     </div>
   );
+}
+
+function variableSourceLabel(source: string) {
+  switch (source) {
+    case "pipeline_default":
+      return "pipeline default";
+    case "schedule_override":
+      return "schedule override";
+    case "run_override":
+      return "run override";
+    default:
+      return source.replaceAll("_", " ");
+  }
 }
 
 function ReadOnlyRenderedOperation({
@@ -289,8 +349,9 @@ function RenderCentered({ message, loading = false }: { message: string; loading
   );
 }
 
-function stageLabel(kind: string) {
-  switch (kind) {
+function stageLabel(stage: AssetRenderStage) {
+  if (stage.label) return stage.label;
+  switch (stage.kind) {
     case "compiled_query":
       return "Compiled query";
     case "execution_sql":
@@ -298,7 +359,7 @@ function stageLabel(kind: string) {
     case "schema_preparation":
       return "Schema preparation";
     default:
-      return kind.replaceAll("_", " ");
+      return stage.kind.replaceAll("_", " ");
   }
 }
 

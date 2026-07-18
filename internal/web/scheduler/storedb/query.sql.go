@@ -223,7 +223,7 @@ func (q *Queries) GetEnvSchedule(ctx context.Context, arg GetEnvScheduleParams) 
 }
 
 const getRun = `-- name: GetRun :one
-SELECT id, pipeline_id, pipeline, environment, trigger, status, win_start, win_end, started_at, finished_at, error, log_ref, snapshot_version_id, recovery_pending, river_job_id, full_refresh, backfill, sensor_mode, execution_context_resolved
+SELECT id, pipeline_id, pipeline, environment, trigger, status, win_start, win_end, started_at, finished_at, error, log_ref, snapshot_version_id, recovery_pending, river_job_id, full_refresh, backfill, sensor_mode, execution_context_resolved, execution_target_snapshot
 FROM pipeline_runs
 WHERE id = ?1
 `
@@ -251,6 +251,7 @@ func (q *Queries) GetRun(ctx context.Context, id string) (PipelineRun, error) {
 		&i.Backfill,
 		&i.SensorMode,
 		&i.ExecutionContextResolved,
+		&i.ExecutionTargetSnapshot,
 	)
 	return i, err
 }
@@ -359,10 +360,14 @@ func (q *Queries) ListRunLogs(ctx context.Context, runID string) ([]ListRunLogsR
 }
 
 const listRunSteps = `-- name: ListRunSteps :many
-SELECT run_id, asset, status, started_at, finished_at, error
+SELECT run_id, asset, status, started_at, finished_at, error, completion_ordinal, upstream_writer_snapshot
 FROM pipeline_run_steps
 WHERE run_id = ?1
-ORDER BY COALESCE(started_at, finished_at, '') ASC, asset ASC
+ORDER BY
+    CASE WHEN completion_ordinal IS NULL THEN 1 ELSE 0 END,
+    completion_ordinal ASC,
+    COALESCE(started_at, finished_at, '') ASC,
+    asset ASC
 `
 
 func (q *Queries) ListRunSteps(ctx context.Context, runID string) ([]PipelineRunStep, error) {
@@ -381,6 +386,8 @@ func (q *Queries) ListRunSteps(ctx context.Context, runID string) ([]PipelineRun
 			&i.StartedAt,
 			&i.FinishedAt,
 			&i.Error,
+			&i.CompletionOrdinal,
+			&i.UpstreamWriterSnapshot,
 		); err != nil {
 			return nil, err
 		}
@@ -396,7 +403,7 @@ func (q *Queries) ListRunSteps(ctx context.Context, runID string) ([]PipelineRun
 }
 
 const listRuns = `-- name: ListRuns :many
-SELECT id, pipeline_id, pipeline, environment, trigger, status, win_start, win_end, started_at, finished_at, error, log_ref, snapshot_version_id, recovery_pending, river_job_id, full_refresh, backfill, sensor_mode, execution_context_resolved
+SELECT id, pipeline_id, pipeline, environment, trigger, status, win_start, win_end, started_at, finished_at, error, log_ref, snapshot_version_id, recovery_pending, river_job_id, full_refresh, backfill, sensor_mode, execution_context_resolved, execution_target_snapshot
 FROM pipeline_runs
 WHERE (CAST(?1 AS TEXT) = '' OR pipeline_id = CAST(?1 AS TEXT))
   AND (
@@ -460,6 +467,7 @@ func (q *Queries) ListRuns(ctx context.Context, arg ListRunsParams) ([]PipelineR
 			&i.Backfill,
 			&i.SensorMode,
 			&i.ExecutionContextResolved,
+			&i.ExecutionTargetSnapshot,
 		); err != nil {
 			return nil, err
 		}
@@ -681,33 +689,48 @@ func (q *Queries) UpsertEnvSchedule(ctx context.Context, arg UpsertEnvSchedulePa
 	return err
 }
 
-const upsertRunStep = `-- name: UpsertRunStep :exec
-INSERT INTO pipeline_run_steps (run_id, asset, status, started_at, finished_at, error)
-VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+const upsertRunStep = `-- name: UpsertRunStep :execrows
+INSERT INTO pipeline_run_steps (run_id, asset, status, started_at, finished_at, error, completion_ordinal, upstream_writer_snapshot)
+VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
 ON CONFLICT(run_id, asset) DO UPDATE SET
     status = excluded.status,
     started_at = COALESCE(pipeline_run_steps.started_at, excluded.started_at),
     finished_at = excluded.finished_at,
-    error = excluded.error
+    error = excluded.error,
+    completion_ordinal = COALESCE(pipeline_run_steps.completion_ordinal, excluded.completion_ordinal),
+    upstream_writer_snapshot = CASE
+        WHEN pipeline_run_steps.upstream_writer_snapshot = '' THEN excluded.upstream_writer_snapshot
+        ELSE pipeline_run_steps.upstream_writer_snapshot
+    END
+WHERE pipeline_run_steps.upstream_writer_snapshot = ''
+   OR excluded.upstream_writer_snapshot = ''
+   OR pipeline_run_steps.upstream_writer_snapshot = excluded.upstream_writer_snapshot
 `
 
 type UpsertRunStepParams struct {
-	RunID      string
-	Asset      string
-	Status     string
-	StartedAt  sql.NullString
-	FinishedAt sql.NullString
-	Error      sql.NullString
+	RunID                  string
+	Asset                  string
+	Status                 string
+	StartedAt              sql.NullString
+	FinishedAt             sql.NullString
+	Error                  sql.NullString
+	CompletionOrdinal      sql.NullInt64
+	UpstreamWriterSnapshot string
 }
 
-func (q *Queries) UpsertRunStep(ctx context.Context, arg UpsertRunStepParams) error {
-	_, err := q.db.ExecContext(ctx, upsertRunStep,
+func (q *Queries) UpsertRunStep(ctx context.Context, arg UpsertRunStepParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, upsertRunStep,
 		arg.RunID,
 		arg.Asset,
 		arg.Status,
 		arg.StartedAt,
 		arg.FinishedAt,
 		arg.Error,
+		arg.CompletionOrdinal,
+		arg.UpstreamWriterSnapshot,
 	)
-	return err
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
 }

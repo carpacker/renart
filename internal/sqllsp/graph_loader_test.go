@@ -128,6 +128,9 @@ func TestDialectFromAssetTypeSupportsQuerySensors(t *testing.T) {
 		"synapse.sensor.query":    "tsql",
 		"clickhouse.sql":          "clickhouse",
 		"clickhouse.sensor.query": "clickhouse",
+		"my.sql":                  "mysql",
+		"my.sensor.query":         "mysql",
+		"oracle.sql":              "oracle",
 	}
 	for assetType, expected := range tests {
 		t.Run(assetType, func(t *testing.T) {

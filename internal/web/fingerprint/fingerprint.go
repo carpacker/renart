@@ -246,6 +246,21 @@ func (e *Engine) AchievedFingerprints(
 	succeeded map[string]bool,
 	latestAchieved func(assetID string) (Fingerprint, bool),
 ) (map[string]Fingerprint, error) {
+	return e.AchievedFingerprintsByConsumer(p, targets, succeeded, func(_, upstreamAssetID string) (Fingerprint, bool) {
+		return latestAchieved(upstreamAssetID)
+	})
+}
+
+// AchievedFingerprintsByConsumer is the read-set-aware form used by durable
+// completion recording. latestAchieved is evaluated for the consumer that
+// actually read an upstream, so a later concurrent writer cannot be
+// retroactively attributed to an earlier task.
+func (e *Engine) AchievedFingerprintsByConsumer(
+	p *pipeline.Pipeline,
+	targets map[string]Result,
+	succeeded map[string]bool,
+	latestAchieved func(consumerAssetID, upstreamAssetID string) (Fingerprint, bool),
+) (map[string]Fingerprint, error) {
 	if p == nil {
 		return nil, fmt.Errorf("fingerprint: pipeline is nil")
 	}
@@ -281,7 +296,7 @@ func (e *Engine) AchievedFingerprints(
 			upID := identity.AssetID(pipelineUUID, upstream.Value)
 			if fp, ok := achieved[upID]; ok {
 				parts = append(parts, "up:"+string(fp))
-			} else if fp, ok := latestAchieved(upID); ok {
+			} else if fp, ok := latestAchieved(assetID, upID); ok {
 				parts = append(parts, "up:"+string(fp))
 			} else {
 				// The upstream has never materialized in this environment, so the

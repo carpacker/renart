@@ -2,8 +2,11 @@ package matlog
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"os"
 	"regexp"
+	"sort"
 	"strings"
 	"time"
 
@@ -11,6 +14,7 @@ import (
 	"go.uber.org/zap"
 	"renart/internal/web/bus"
 	"renart/internal/web/fingerprint"
+	"renart/internal/web/identity"
 )
 
 var executionWindowReference = regexp.MustCompile(`(?i)\{\{[-\s]*(?:start|end)_(?:date|date_nodash|datetime|timestamp)\b`)
@@ -24,7 +28,8 @@ type PipelineResolver func(ctx context.Context, pipelineUUID string) (*pipeline.
 type PathResolver func(ctx context.Context, pipelineDir string) (*pipeline.Pipeline, error)
 
 // Recorder subscribes to RunCompleted bus events and writes materialization
-// facts with the fingerprints current at completion time.
+// facts from pre-execution target/fingerprint evidence when available. Legacy
+// events retain the completion-time fingerprint fallback until rebuilt.
 type Recorder struct {
 	store       *Store
 	engine      *fingerprint.Engine
@@ -37,32 +42,40 @@ func NewRecorder(store *Store, engine *fingerprint.Engine, resolve PipelineResol
 	return &Recorder{store: store, engine: engine, resolve: resolve, resolvePath: resolvePath, logger: logger}
 }
 
-// HandleRunCompleted is the bus subscriber. Failures are logged, never
-// propagated — a missed fact only means the asset reads as stale, which a
-// rebuild repairs.
-func (r *Recorder) HandleRunCompleted(event bus.RunCompleted) {
+// HandleRunCompleted is the synchronous bus subscriber. Failures are logged
+// and returned so durable crash recovery is acknowledged only after derived
+// state commits. Normal inline execution may deliberately ignore the returned
+// error until it has a completion outbox; retrying a physical write here would
+// be unsafe.
+func (r *Recorder) HandleRunCompleted(event bus.RunCompleted) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
 	var parsed *pipeline.Pipeline
 	var err error
-	if event.SnapshotDir != "" && r.resolvePath != nil {
-		parsed, err = r.resolvePath(ctx, event.SnapshotDir)
-	} else {
-		parsed, err = r.resolve(ctx, event.PipelineUUID)
-	}
-	if err != nil {
-		r.warn("failed to resolve pipeline for materialization log", event.PipelineUUID, err)
-		return
+	capturedV2 := event.ExecutionTargetSnapshotVersion >= executionTargetSnapshotVersionV2
+	if !capturedV2 {
+		if event.SnapshotDir != "" && r.resolvePath != nil {
+			parsed, err = r.resolvePath(ctx, event.SnapshotDir)
+		} else {
+			parsed, err = r.resolve(ctx, event.PipelineUUID)
+		}
+		if err != nil {
+			r.warn("failed to resolve pipeline for materialization log", event.PipelineUUID, err)
+			return fmt.Errorf("resolve pipeline %s for materialization log: %w", event.PipelineUUID, err)
+		}
 	}
 
-	vars := fingerprint.EffectiveVars(parsed, nil)
-	results, err := r.engine.DAG(parsed, vars)
+	fingerprintCtx, err := r.fingerprintContext(parsed, event)
 	if err != nil {
-		r.warn("failed to fingerprint pipeline for materialization log", event.PipelineUUID, err)
-		return
+		r.warn("failed to load execution fingerprint context for materialization log", event.PipelineUUID, err)
+		return err
 	}
-	varsHash := fingerprint.AllVarsHash(vars)
+	parsed = fingerprintCtx.parsed
+	results := fingerprintCtx.results
+	varsHashes := fingerprintCtx.varsHashes
+	targetsByID := fingerprintCtx.targetsByID
+	captured := fingerprintCtx.captured
 
 	// Record each asset's *achieved* fingerprint — the data it actually
 	// produced, folding in the fingerprint of each upstream as physically read
@@ -81,20 +94,21 @@ func (r *Recorder) HandleRunCompleted(event bus.RunCompleted) {
 			succeeded[assetRun.AssetID] = true
 		}
 	}
-	latest, err := r.store.LatestFingerprint(ctx, assetIDs, event.Environment)
+	latestAchieved, err := r.latestAchievedLookup(
+		ctx, assetIDs, event.Environment, targetsByID, event.Assets,
+		captured, event.ExecutionTargetSnapshotVersion,
+	)
 	if err != nil {
-		r.warn("failed to load latest fingerprints for materialization log", event.PipelineUUID, err)
-		return
+		r.warn("failed to load latest physical writers for materialization log", event.PipelineUUID, err)
+		return fmt.Errorf("load latest physical writers for pipeline %s: %w", event.PipelineUUID, err)
 	}
-	achieved, err := r.engine.AchievedFingerprints(parsed, results, succeeded, func(id string) (fingerprint.Fingerprint, bool) {
-		fp, ok := latest[id]
-		return fingerprint.Fingerprint(fp), ok
-	})
+	achieved, err := r.engine.AchievedFingerprintsByConsumer(parsed, results, succeeded, latestAchieved)
 	if err != nil {
 		r.warn("failed to compute achieved fingerprints for materialization log", event.PipelineUUID, err)
-		return
+		return fmt.Errorf("compute achieved fingerprints for pipeline %s: %w", event.PipelineUUID, err)
 	}
 
+	var recordErrs []error
 	for _, assetRun := range event.Assets {
 		if assetRun.Status != "succeeded" {
 			continue
@@ -107,18 +121,22 @@ func (r *Recorder) HandleRunCompleted(event bus.RunCompleted) {
 		if !ok {
 			continue
 		}
+		materializedAt := assetRunCompletionTime(assetRun, event.CompletedAt)
 		materialization := Materialization{
-			AssetID:        assetRun.AssetID,
-			Environment:    event.Environment,
-			Fingerprint:    string(achievedFP),
-			OwnContent:     string(result.OwnContent),
-			VarsHash:       varsHash,
-			RunID:          event.RunID,
-			MaterializedAt: event.CompletedAt,
+			AssetID:           assetRun.AssetID,
+			Environment:       event.Environment,
+			Fingerprint:       string(achievedFP),
+			OwnContent:        string(result.OwnContent),
+			VarsHash:          varsHashes[assetRun.AssetID],
+			RunID:             event.RunID,
+			TargetIdentity:    targetsByID[assetRun.AssetID].TargetIdentity,
+			CompletionID:      event.CompletionID,
+			CompletionOrdinal: assetRun.CompletionOrdinal,
+			MaterializedAt:    materializedAt,
 		}
 		asset := parsed.GetAssetByName(assetRun.AssetName)
-		behavior := coverageBehaviorFor(asset)
-		effectiveFullRefresh := event.FullRefresh && !refreshRestricted(asset)
+		behavior := fingerprintCtx.coverageBehavior(assetRun.AssetID, asset)
+		effectiveFullRefresh := event.FullRefresh && !fingerprintCtx.refreshRestricted(assetRun.AssetID, asset)
 		if behavior != coverageMarker {
 			if event.WinStart == nil || event.WinEnd == nil {
 				r.warn("skipping interval materialization fact without a complete run window", assetRun.AssetID, nil)
@@ -132,6 +150,9 @@ func (r *Recorder) HandleRunCompleted(event bus.RunCompleted) {
 		}
 		if err := r.store.Record(ctx, materialization); err != nil {
 			r.warn("failed to record materialization", assetRun.AssetID, err)
+			if !errors.Is(err, ErrTargetWriterAmbiguous) {
+				recordErrs = append(recordErrs, fmt.Errorf("record materialization for %s: %w", assetRun.AssetID, err))
+			}
 		}
 	}
 
@@ -151,11 +172,364 @@ func (r *Recorder) HandleRunCompleted(event bus.RunCompleted) {
 			Fingerprint: string(result.FP),
 			Status:      assetRun.Status,
 			RunID:       event.RunID,
-			RanAt:       event.CompletedAt,
+			RanAt:       assetRunCompletionTime(assetRun, event.CompletedAt),
 		}); err != nil {
 			r.warn("failed to record run attempt", assetRun.AssetID, err)
+			recordErrs = append(recordErrs, fmt.Errorf("record run attempt for %s: %w", assetRun.AssetID, err))
 		}
 	}
+	return errors.Join(recordErrs...)
+}
+
+const (
+	executionTargetSnapshotVersionV1 = 1
+	executionTargetSnapshotVersionV2 = 2
+)
+
+type executionFingerprintContext struct {
+	parsed              *pipeline.Pipeline
+	results             map[string]fingerprint.Result
+	varsHashes          map[string]string
+	targetsByID         map[string]bus.ExecutionTargetSnapshotEntry
+	coverageModes       map[string]string
+	refreshRestrictions map[string]bool
+	captured            bool
+}
+
+func (c executionFingerprintContext) coverageBehavior(assetID string, fallback *pipeline.Asset) coverageBehavior {
+	if mode, ok := c.coverageModes[assetID]; ok {
+		switch mode {
+		case "marker":
+			return coverageMarker
+		case "union_intervals":
+			return coverageUnionIntervals
+		case "replace_interval":
+			return coverageReplaceInterval
+		}
+	}
+	return coverageBehaviorFor(fallback)
+}
+
+func (c executionFingerprintContext) refreshRestricted(assetID string, fallback *pipeline.Asset) bool {
+	if restricted, ok := c.refreshRestrictions[assetID]; ok {
+		return restricted
+	}
+	return refreshRestricted(fallback)
+}
+
+func (r *Recorder) fingerprintContext(
+	parsed *pipeline.Pipeline,
+	event bus.RunCompleted,
+) (executionFingerprintContext, error) {
+	captured := event.ExecutionTargetSnapshotVersion != 0 || len(event.ExecutionTargets) > 0
+	if !captured {
+		if parsed == nil {
+			return executionFingerprintContext{}, fmt.Errorf("pipeline %s has no parsed source", event.PipelineUUID)
+		}
+		vars := fingerprint.EffectiveVars(parsed, nil)
+		results, err := r.engine.DAG(parsed, vars)
+		if err != nil {
+			return executionFingerprintContext{}, fmt.Errorf("fingerprint pipeline %s for materialization log: %w", event.PipelineUUID, err)
+		}
+		varsHash := fingerprint.AllVarsHash(vars)
+		varsHashes := make(map[string]string, len(results))
+		for assetID := range results {
+			varsHashes[assetID] = varsHash
+		}
+		return executionFingerprintContext{
+			parsed: parsed, results: results, varsHashes: varsHashes,
+			targetsByID: map[string]bus.ExecutionTargetSnapshotEntry{}, captured: false,
+		}, nil
+	}
+	if event.ExecutionTargetSnapshotVersion != executionTargetSnapshotVersionV1 &&
+		event.ExecutionTargetSnapshotVersion != executionTargetSnapshotVersionV2 {
+		return executionFingerprintContext{}, fmt.Errorf("pipeline %s has unsupported execution target snapshot version %d", event.PipelineUUID, event.ExecutionTargetSnapshotVersion)
+	}
+	if len(event.ExecutionTargets) == 0 {
+		return executionFingerprintContext{}, fmt.Errorf("pipeline %s execution target snapshot is empty", event.PipelineUUID)
+	}
+	if strings.TrimSpace(event.CompletionID) == "" {
+		return executionFingerprintContext{}, fmt.Errorf("pipeline %s execution target snapshot has no completion identity", event.PipelineUUID)
+	}
+
+	pipelineUUID := strings.TrimSpace(event.PipelineUUID)
+	if pipelineUUID == "" {
+		return executionFingerprintContext{}, fmt.Errorf("execution target snapshot has no pipeline identity")
+	}
+	if event.ExecutionTargetSnapshotVersion >= executionTargetSnapshotVersionV2 {
+		if strings.TrimSpace(event.ExecutionPipelineUUID) != pipelineUUID {
+			return executionFingerprintContext{}, fmt.Errorf("execution target snapshot does not match completion pipeline identity")
+		}
+		parsed = pipelineFromExecutionSnapshot(pipelineUUID, event.ExecutionTargets)
+	} else if parsed == nil || strings.TrimSpace(parsed.LegacyID) != pipelineUUID {
+		return executionFingerprintContext{}, fmt.Errorf("pipeline execution target snapshot does not match parsed pipeline identity")
+	}
+	if event.ExecutionTargetSnapshotVersion == executionTargetSnapshotVersionV1 {
+		if err := r.validateLegacySnapshotSource(parsed, event.ExecutionTargets); err != nil {
+			return executionFingerprintContext{}, err
+		}
+	}
+	results := make(map[string]fingerprint.Result, len(parsed.Assets))
+	varsHashes := make(map[string]string, len(parsed.Assets))
+	targetsByID := make(map[string]bus.ExecutionTargetSnapshotEntry, len(parsed.Assets))
+	coverageModes := make(map[string]string, len(parsed.Assets))
+	refreshRestrictions := make(map[string]bool, len(parsed.Assets))
+	commonVarsHash := ""
+	for _, asset := range parsed.Assets {
+		if asset == nil || strings.TrimSpace(asset.Name) == "" {
+			return executionFingerprintContext{}, fmt.Errorf("pipeline %s contains an unnamed asset", pipelineUUID)
+		}
+		entry, ok := event.ExecutionTargets[asset.Name]
+		if !ok {
+			return executionFingerprintContext{}, fmt.Errorf("pipeline %s execution target snapshot has no entry for %s", pipelineUUID, asset.Name)
+		}
+		expectedID := identity.AssetID(pipelineUUID, asset.Name)
+		if entry.AssetID != expectedID {
+			return executionFingerprintContext{}, fmt.Errorf("execution target snapshot asset identity does not match %s", asset.Name)
+		}
+		if err := validateCapturedExecutionTarget(asset.Name, entry, event.ExecutionTargetSnapshotVersion); err != nil {
+			return executionFingerprintContext{}, err
+		}
+		if commonVarsHash == "" {
+			commonVarsHash = entry.VarsHash
+		} else if entry.VarsHash != commonVarsHash {
+			return executionFingerprintContext{}, fmt.Errorf("pipeline %s execution target snapshot has inconsistent variables hashes", pipelineUUID)
+		}
+		results[entry.AssetID] = fingerprint.Result{
+			FP:               fingerprint.Fingerprint(entry.Fingerprint),
+			OwnContent:       fingerprint.Fingerprint(entry.OwnContent),
+			ConsumedVarsHash: entry.ConsumedVarsHash,
+		}
+		varsHashes[entry.AssetID] = entry.VarsHash
+		targetsByID[entry.AssetID] = entry
+		if event.ExecutionTargetSnapshotVersion >= executionTargetSnapshotVersionV2 {
+			coverageModes[entry.AssetID] = entry.CoverageMode
+			refreshRestrictions[entry.AssetID] = entry.RefreshRestricted
+		}
+	}
+	if len(targetsByID) != len(event.ExecutionTargets) {
+		return executionFingerprintContext{}, fmt.Errorf("pipeline %s execution target snapshot contains assets outside the executed graph", pipelineUUID)
+	}
+	seenRuns := make(map[string]struct{}, len(event.Assets))
+	succeededRuns := make(map[string]bool, len(event.Assets))
+	for _, assetRun := range event.Assets {
+		if assetRun.Status == "succeeded" {
+			succeededRuns[assetRun.AssetID] = true
+		}
+	}
+	for _, assetRun := range event.Assets {
+		if _, duplicate := seenRuns[assetRun.AssetName]; duplicate {
+			return executionFingerprintContext{}, fmt.Errorf("completed asset %s appears more than once", assetRun.AssetName)
+		}
+		seenRuns[assetRun.AssetName] = struct{}{}
+		entry, ok := event.ExecutionTargets[assetRun.AssetName]
+		if !ok || entry.AssetID != assetRun.AssetID {
+			return executionFingerprintContext{}, fmt.Errorf("completed asset %s is absent from the execution target snapshot", assetRun.AssetName)
+		}
+		if assetRun.Fingerprint != entry.Fingerprint || assetRun.OwnContent != entry.OwnContent ||
+			assetRun.ConsumedVarsHash != entry.ConsumedVarsHash || assetRun.VarsHash != entry.VarsHash ||
+			assetRun.TargetIdentity != entry.TargetIdentity || assetRun.TargetFidelity != entry.TargetFidelity {
+			return executionFingerprintContext{}, fmt.Errorf("completed asset %s does not match its execution target snapshot", assetRun.AssetID)
+		}
+		if assetRun.Status == "succeeded" && (assetRun.FinishedAt == nil || assetRun.FinishedAt.IsZero() || !assetRun.HasCompletionOrdinal) {
+			return executionFingerprintContext{}, fmt.Errorf("completed asset %s has incomplete completion coordinates", assetRun.AssetID)
+		}
+		if assetRun.Status == "succeeded" && event.ExecutionTargetSnapshotVersion >= executionTargetSnapshotVersionV2 {
+			if !assetRun.HasUpstreamWriterSnapshot {
+				return executionFingerprintContext{}, fmt.Errorf("completed asset %s has no upstream writer snapshot", assetRun.AssetID)
+			}
+			if err := validateCapturedUpstreamWriters(assetRun, parsed.GetAssetByName(assetRun.AssetName), event.ExecutionTargets); err != nil {
+				return executionFingerprintContext{}, err
+			}
+		}
+		if assetRun.Status == "succeeded" && event.ExecutionTargetSnapshotVersion == executionTargetSnapshotVersionV1 {
+			asset := parsed.GetAssetByName(assetRun.AssetName)
+			if asset != nil {
+				for _, upstream := range asset.Upstreams {
+					entry, inPipeline := event.ExecutionTargets[upstream.Value]
+					if inPipeline && !succeededRuns[entry.AssetID] {
+						return executionFingerprintContext{}, fmt.Errorf(
+							"completed asset %s uses upstream %s but version-one evidence has no upstream writer snapshot",
+							assetRun.AssetID,
+							entry.AssetID,
+						)
+					}
+				}
+			}
+		}
+	}
+	return executionFingerprintContext{
+		parsed: parsed, results: results, varsHashes: varsHashes, targetsByID: targetsByID,
+		coverageModes: coverageModes, refreshRestrictions: refreshRestrictions, captured: true,
+	}, nil
+}
+
+func validateCapturedUpstreamWriters(
+	assetRun bus.AssetRun,
+	asset *pipeline.Asset,
+	targets map[string]bus.ExecutionTargetSnapshotEntry,
+) error {
+	allowed := make(map[string]bus.ExecutionTargetSnapshotEntry)
+	if asset != nil {
+		for _, upstream := range asset.Upstreams {
+			if entry, ok := targets[upstream.Value]; ok {
+				allowed[entry.AssetID] = entry
+			}
+		}
+	}
+	for upstreamID, writer := range assetRun.UpstreamWriters {
+		target, ok := allowed[upstreamID]
+		if !ok {
+			return fmt.Errorf("completed asset %s captured writer for a non-upstream asset %s", assetRun.AssetID, upstreamID)
+		}
+		if writer.AssetID != upstreamID || target.AssetID != upstreamID || target.TargetFidelity != "exact" ||
+			writer.TargetIdentity != target.TargetIdentity || strings.TrimSpace(writer.TargetIdentity) != writer.TargetIdentity {
+			return fmt.Errorf("completed asset %s has mismatched upstream writer identity for %s", assetRun.AssetID, upstreamID)
+		}
+		if strings.TrimSpace(writer.Fingerprint) == "" || strings.TrimSpace(writer.VarsHash) == "" ||
+			strings.TrimSpace(writer.CompletionID) == "" || strings.TrimSpace(writer.CompletionID) != writer.CompletionID ||
+			writer.TargetGeneration <= 0 || writer.CompletionOrdinal < 0 || writer.MaterializedAt.IsZero() {
+			return fmt.Errorf("completed asset %s has incomplete upstream writer evidence for %s", assetRun.AssetID, upstreamID)
+		}
+	}
+	return nil
+}
+
+// Version-one snapshots captured target and fingerprint evidence but not the
+// executed dependency graph or coverage contract. They are therefore safe to
+// replay only while the immutable snapshot/current source still produces the
+// exact captured evidence. A changed source must fail closed instead of
+// combining old fingerprints with new topology or materialization semantics.
+func (r *Recorder) validateLegacySnapshotSource(parsed *pipeline.Pipeline, entries map[string]bus.ExecutionTargetSnapshotEntry) error {
+	vars := fingerprint.EffectiveVars(parsed, nil)
+	results, err := r.engine.DAG(parsed, vars)
+	if err != nil {
+		return fmt.Errorf("validate version-one execution target snapshot source: %w", err)
+	}
+	varsHash := fingerprint.AllVarsHash(vars)
+	if len(results) != len(entries) {
+		return fmt.Errorf("version-one execution target snapshot no longer matches parsed pipeline source")
+	}
+	for _, asset := range parsed.Assets {
+		if asset == nil {
+			return fmt.Errorf("version-one execution target snapshot source contains a nil asset")
+		}
+		entry, ok := entries[asset.Name]
+		if !ok {
+			return fmt.Errorf("version-one execution target snapshot no longer matches parsed pipeline source")
+		}
+		assetID := identity.AssetID(parsed.LegacyID, asset.Name)
+		result, ok := results[assetID]
+		if !ok || entry.AssetID != assetID || entry.Fingerprint != string(result.FP) ||
+			entry.OwnContent != string(result.OwnContent) || entry.ConsumedVarsHash != result.ConsumedVarsHash ||
+			entry.VarsHash != varsHash {
+			return fmt.Errorf("version-one execution target snapshot no longer matches parsed pipeline source")
+		}
+	}
+	return nil
+}
+
+func validateCapturedExecutionTarget(assetName string, entry bus.ExecutionTargetSnapshotEntry, version int) error {
+	if strings.TrimSpace(entry.TargetIdentity) != entry.TargetIdentity {
+		return fmt.Errorf("execution target snapshot entry %s has a non-canonical target identity", assetName)
+	}
+	for field, value := range map[string]string{
+		"fingerprint": entry.Fingerprint, "own content": entry.OwnContent,
+		"consumed variables hash": entry.ConsumedVarsHash, "variables hash": entry.VarsHash,
+	} {
+		if strings.TrimSpace(value) == "" {
+			return fmt.Errorf("execution target snapshot entry %s has no %s", assetName, field)
+		}
+	}
+	switch entry.TargetFidelity {
+	case "exact":
+	case "runtime_only":
+		if entry.TargetIdentity != "" {
+			return fmt.Errorf("runtime-only execution target snapshot entry %s claims an exact identity", assetName)
+		}
+	default:
+		return fmt.Errorf("execution target snapshot entry %s has unsupported fidelity %q", assetName, entry.TargetFidelity)
+	}
+	if version >= executionTargetSnapshotVersionV2 {
+		switch entry.CoverageMode {
+		case "marker", "union_intervals", "replace_interval":
+		default:
+			return fmt.Errorf("execution target snapshot entry %s has unsupported coverage mode %q", assetName, entry.CoverageMode)
+		}
+		for _, upstream := range entry.Upstreams {
+			if strings.TrimSpace(upstream.Type) != upstream.Type || strings.TrimSpace(upstream.Value) == "" || strings.TrimSpace(upstream.Value) != upstream.Value {
+				return fmt.Errorf("execution target snapshot entry %s has a non-canonical upstream", assetName)
+			}
+		}
+	}
+	return nil
+}
+
+func pipelineFromExecutionSnapshot(pipelineUUID string, entries map[string]bus.ExecutionTargetSnapshotEntry) *pipeline.Pipeline {
+	names := make([]string, 0, len(entries))
+	for name := range entries {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	assets := make([]*pipeline.Asset, 0, len(names))
+	for _, name := range names {
+		entry := entries[name]
+		asset := &pipeline.Asset{Name: name}
+		asset.Upstreams = make([]pipeline.Upstream, 0, len(entry.Upstreams))
+		for _, upstream := range entry.Upstreams {
+			asset.Upstreams = append(asset.Upstreams, pipeline.Upstream{Type: upstream.Type, Value: upstream.Value})
+		}
+		assets = append(assets, asset)
+	}
+	return &pipeline.Pipeline{LegacyID: pipelineUUID, Assets: assets}
+}
+
+func (r *Recorder) latestAchievedLookup(
+	ctx context.Context,
+	assetIDs []string,
+	environment string,
+	targetsByID map[string]bus.ExecutionTargetSnapshotEntry,
+	assetRuns []bus.AssetRun,
+	captured bool,
+	snapshotVersion int,
+) (func(string, string) (fingerprint.Fingerprint, bool), error) {
+	if !captured || snapshotVersion < executionTargetSnapshotVersionV2 {
+		latest, err := r.store.LatestFingerprint(ctx, assetIDs, environment)
+		if err != nil {
+			return nil, err
+		}
+		return func(_, upstreamAssetID string) (fingerprint.Fingerprint, bool) {
+			fp, ok := latest[upstreamAssetID]
+			return fingerprint.Fingerprint(fp), ok
+		}, nil
+	}
+	runsByID := make(map[string]bus.AssetRun, len(assetRuns))
+	for _, assetRun := range assetRuns {
+		runsByID[assetRun.AssetID] = assetRun
+	}
+	return func(consumerAssetID, upstreamAssetID string) (fingerprint.Fingerprint, bool) {
+		consumer, ok := runsByID[consumerAssetID]
+		if !ok || !consumer.HasUpstreamWriterSnapshot {
+			return "", false
+		}
+		writer, ok := consumer.UpstreamWriters[upstreamAssetID]
+		if !ok {
+			return "", false
+		}
+		target, ok := targetsByID[upstreamAssetID]
+		if !ok || target.TargetFidelity != "exact" || target.TargetIdentity == "" ||
+			writer.AssetID != upstreamAssetID || writer.TargetIdentity != target.TargetIdentity {
+			return "", false
+		}
+		return fingerprint.Fingerprint(writer.Fingerprint), true
+	}, nil
+}
+
+func assetRunCompletionTime(assetRun bus.AssetRun, fallback time.Time) time.Time {
+	if assetRun.FinishedAt != nil && !assetRun.FinishedAt.IsZero() {
+		return assetRun.FinishedAt.UTC()
+	}
+	return fallback.UTC()
 }
 
 func (r *Recorder) warn(message, subject string, err error) {

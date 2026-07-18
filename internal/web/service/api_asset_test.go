@@ -707,7 +707,9 @@ func TestHybridBruinExecutorRunsAPIAssetThroughLoadWithBruinTargetConnection(t *
 	t.Setenv("SLING_BINARY", "")
 	t.Setenv("RENART_SLING_PACKAGE", "sling-test-package")
 
+	requestCount := 0
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requestCount++
 		assert.Equal(t, "/player/Hikaru", r.URL.Path)
 		_, _ = w.Write([]byte(`{"username":"Hikaru","name":"Hikaru Nakamura"}`))
 	}))
@@ -733,6 +735,11 @@ parameters:
     fields:
       username: username
       name: name
+
+custom_checks:
+  - name: check wiring
+    value: 0
+    query: select 0
 `), 0o644))
 
 	executor := NewHybridBruinExecutor(
@@ -745,6 +752,7 @@ parameters:
 	)
 	output, err := executor.RunAsset(context.Background(), RunAssetRequest{AssetPath: "quickstart/assets/quickstart/players.asset.yml", Environment: "default"}, nil)
 	require.NoError(t, err)
+	assert.Equal(t, 1, requestCount, "scheduler check tasks must not rerun the API main request")
 	assert.Contains(t, string(output), "Fetched 1 records from API asset quickstart.players")
 	assert.Contains(t, string(output), "uv tool run --no-config --python 3.11 --from sling-test-package sling run --src-stream file://")
 	assert.Contains(t, string(output), ".jsonl")

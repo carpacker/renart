@@ -50,7 +50,7 @@ WHERE (CAST(@pipeline_id AS TEXT) = '' OR pipeline_id = CAST(@pipeline_id AS TEX
   );
 
 -- name: ListRuns :many
-SELECT id, pipeline_id, pipeline, environment, trigger, status, win_start, win_end, started_at, finished_at, error, log_ref, snapshot_version_id, recovery_pending, river_job_id, full_refresh, backfill, sensor_mode, execution_context_resolved
+SELECT id, pipeline_id, pipeline, environment, trigger, status, win_start, win_end, started_at, finished_at, error, log_ref, snapshot_version_id, recovery_pending, river_job_id, full_refresh, backfill, sensor_mode, execution_context_resolved, execution_target_snapshot
 FROM pipeline_runs
 WHERE (CAST(@pipeline_id AS TEXT) = '' OR pipeline_id = CAST(@pipeline_id AS TEXT))
   AND (
@@ -69,7 +69,7 @@ ORDER BY COALESCE(started_at, '') DESC, id DESC
 LIMIT @limit OFFSET @offset;
 
 -- name: GetRun :one
-SELECT id, pipeline_id, pipeline, environment, trigger, status, win_start, win_end, started_at, finished_at, error, log_ref, snapshot_version_id, recovery_pending, river_job_id, full_refresh, backfill, sensor_mode, execution_context_resolved
+SELECT id, pipeline_id, pipeline, environment, trigger, status, win_start, win_end, started_at, finished_at, error, log_ref, snapshot_version_id, recovery_pending, river_job_id, full_refresh, backfill, sensor_mode, execution_context_resolved, execution_target_snapshot
 FROM pipeline_runs
 WHERE id = @id;
 
@@ -84,20 +84,32 @@ FROM pipeline_run_logs
 WHERE run_id = @run_id
 ORDER BY seq ASC;
 
--- name: UpsertRunStep :exec
-INSERT INTO pipeline_run_steps (run_id, asset, status, started_at, finished_at, error)
-VALUES (@run_id, @asset, @status, @started_at, @finished_at, @error)
+-- name: UpsertRunStep :execrows
+INSERT INTO pipeline_run_steps (run_id, asset, status, started_at, finished_at, error, completion_ordinal, upstream_writer_snapshot)
+VALUES (@run_id, @asset, @status, @started_at, @finished_at, @error, @completion_ordinal, @upstream_writer_snapshot)
 ON CONFLICT(run_id, asset) DO UPDATE SET
     status = excluded.status,
     started_at = COALESCE(pipeline_run_steps.started_at, excluded.started_at),
     finished_at = excluded.finished_at,
-    error = excluded.error;
+    error = excluded.error,
+    completion_ordinal = COALESCE(pipeline_run_steps.completion_ordinal, excluded.completion_ordinal),
+    upstream_writer_snapshot = CASE
+        WHEN pipeline_run_steps.upstream_writer_snapshot = '' THEN excluded.upstream_writer_snapshot
+        ELSE pipeline_run_steps.upstream_writer_snapshot
+    END
+WHERE pipeline_run_steps.upstream_writer_snapshot = ''
+   OR excluded.upstream_writer_snapshot = ''
+   OR pipeline_run_steps.upstream_writer_snapshot = excluded.upstream_writer_snapshot;
 
 -- name: ListRunSteps :many
-SELECT run_id, asset, status, started_at, finished_at, error
+SELECT run_id, asset, status, started_at, finished_at, error, completion_ordinal, upstream_writer_snapshot
 FROM pipeline_run_steps
 WHERE run_id = @run_id
-ORDER BY COALESCE(started_at, finished_at, '') ASC, asset ASC;
+ORDER BY
+    CASE WHEN completion_ordinal IS NULL THEN 1 ELSE 0 END,
+    completion_ordinal ASC,
+    COALESCE(started_at, finished_at, '') ASC,
+    asset ASC;
 
 -- name: FinishOpenRunSteps :exec
 UPDATE pipeline_run_steps

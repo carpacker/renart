@@ -118,8 +118,10 @@ const sources = [
     types: [
       "AssetRenderRequest",
       "AssetRenderSource",
+      "AssetRenderVariableProvenance",
       "AssetRenderContext",
       "AssetRenderProvenance",
+      "AssetRenderTarget",
       "AssetRenderAsset",
       "AssetRenderStage",
       "AssetRenderRedaction",

@@ -95,6 +95,7 @@ type OnboardingImportResult struct {
 type OnboardingService struct {
 	workspaceRoot string
 	executor      BruinCommandExecutor
+	execution     RunMaterializer
 	configPath    string
 	statePath     string
 }
@@ -108,10 +109,11 @@ const (
 	OnboardingStateSuccess    = "success"
 )
 
-func NewOnboardingService(workspaceRoot, configPath string, executor BruinCommandExecutor) *OnboardingService {
+func NewOnboardingService(workspaceRoot, configPath string, executor BruinCommandExecutor, execution RunMaterializer) *OnboardingService {
 	return &OnboardingService{
 		workspaceRoot: workspaceRoot,
 		executor:      executor,
+		execution:     execution,
 		configPath:    configPath,
 		statePath:     filepath.Join(workspaceRoot, ".renart-onboarding.json"),
 	}
@@ -567,16 +569,31 @@ func (s *OnboardingService) CreateDuckDBQuickstart(ctx context.Context, req Onbo
 		filepath.ToSlash(filepath.Join(relPipelinePath, "assets", "quickstart", "opening_repertoire.sql")),
 	}
 	output := fmt.Sprintf("Created DuckDB chess quickstart pipeline at %s", relPipelinePath)
-	operation := runOperation(relPipelinePath, EncodeID(relPipelinePath), "", environmentName)
+	pipelineID := EncodeID(relPipelinePath)
+	operation := runOperation(relPipelinePath, pipelineID, "", environmentName)
 	if req.Materialize {
-		runOutput, runErr := s.executor.RunPipeline(ctx, RunPipelineRequest{Target: relPipelinePath, Environment: environmentName}, nil)
-		output = strings.TrimSpace(output + "\n" + string(runOutput))
-		if runErr != nil {
+		if s.execution == nil {
 			return OnboardingImportResult{
 				Status:       "error",
 				Operation:    operation,
 				Output:       output,
-				Error:        runErr.Error(),
+				Error:        "completion-aware pipeline execution is unavailable",
+				PipelinePath: relPipelinePath,
+				AssetPaths:   assetPaths,
+				HTTPCode:     500,
+			}
+		}
+		runResult := s.execution.MaterializePipelineStreamWithSensorMode(
+			ctx, pipelineID, environmentName, false, false, false,
+			"", "", "", "", nil,
+		)
+		output = strings.TrimSpace(output + "\n" + runResult.Output)
+		if runResult.Status != "ok" {
+			return OnboardingImportResult{
+				Status:       "error",
+				Operation:    operation,
+				Output:       output,
+				Error:        runResult.Error,
 				PipelinePath: relPipelinePath,
 				AssetPaths:   assetPaths,
 				HTTPCode:     400,

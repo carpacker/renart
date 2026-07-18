@@ -8,6 +8,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"renart/internal/web/bus"
 )
 
 type RunAssetRequest struct {
@@ -16,8 +18,11 @@ type RunAssetRequest struct {
 	SensorMode  string
 	StartDate   string
 	EndDate     string
-	AssetEvent  func(ExecutionAssetEvent)
+	AssetEvent  func(ExecutionAssetEvent) error
 	FullRefresh bool
+	// OnTargetsResolved must succeed synchronously after effective execution
+	// context and target resolution but before the first task starts.
+	OnTargetsResolved func(ExecutionTargetSnapshot) error
 }
 
 type RunPipelineRequest struct {
@@ -27,7 +32,11 @@ type RunPipelineRequest struct {
 	DryRun      bool
 	StartDate   string
 	EndDate     string
-	AssetEvent  func(ExecutionAssetEvent)
+	AssetEvent  func(ExecutionAssetEvent) error
+	// OnTargetsResolved must succeed synchronously after effective execution
+	// context and target resolution but before the first task starts. Dry runs
+	// do not resolve or capture execution targets.
+	OnTargetsResolved func(ExecutionTargetSnapshot) error
 	// ConfigPath overrides .bruin.yml discovery via the git repo root. Set
 	// for snapshot runs, whose target directory lives outside the workspace.
 	ConfigPath  string
@@ -35,11 +44,14 @@ type RunPipelineRequest struct {
 }
 
 type ExecutionAssetEvent struct {
-	Asset      string
-	Status     string
-	StartedAt  *time.Time
-	FinishedAt *time.Time
-	Error      string
+	Asset                     string
+	Status                    string
+	StartedAt                 *time.Time
+	FinishedAt                *time.Time
+	Error                     string
+	CompletionOrdinal         *int64
+	UpstreamWriters           map[string]bus.UpstreamWriterSnapshot
+	HasUpstreamWriterSnapshot bool
 }
 
 type QueryAssetRequest struct {

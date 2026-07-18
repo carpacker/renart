@@ -1,6 +1,6 @@
 # Staleness stack — fingerprints, facts, snapshots, schedules, protection
 
-Status: current state (built on the `redesign` branch, June 2026). Six
+Status: current state (July 2026). Six
 interlocking subsystems that together answer "what is built, what is stale,
 what runs on a schedule, and what is protected".
 
@@ -15,8 +15,10 @@ identity + bus ──► fingerprints ──► facts/coverage ──► stalene
   (`internal/web/identity`). Asset identity is `pipeline_uuid:asset_name` —
   renaming an asset orphans its history (accepted; a content-hash rename
   heuristic can be added later if it hurts).
-- One event bus (`internal/web/bus`) emits `RunCompleted` and `AssetSaved`;
-  the fact recorder and staleness service attach here.
+- One event bus (`internal/web/bus`) emits `RunCompleted`, `AssetSaved`, and
+  `TargetWriteChanged`; the fact recorder and staleness service attach here.
+  Target-write events invalidate freshness as soon as an exact physical output
+  is claimed or becomes uncertain, without waiting for a successful run.
 - All durable tables live in the scheduler's SQLite DB (`.renart/state.db`)
   under the `renart_` prefix, migrated by the goose runner (goose's version
   table is the schema-version ledger). WAL + `busy_timeout=5000`.
@@ -77,6 +79,35 @@ action; the execution endpoint requires a complete UTC range and revalidates the
 asset before dispatch. A daily River job prunes raw facts (default
 90 days); coverage is the durable summary.
 
+Immutable facts and coverage carry
+a secret-free `target_identity` plus a monotonic `target_generation`, and
+`renart_latest_successful_writers` retains the global winning writer for each
+non-empty physical target independently of raw-fact retention. `Store.Record`
+updates the writer, fact, and current-generation coverage atomically; changing
+the writer asset/environment or fingerprint/full-variables pair advances the
+generation, so an A -> B -> A sequence cannot reactivate A's old coverage.
+Stable completion IDs and ordinals make replay ordering deterministic and older
+completions are ignored. A scheduled fact-key replay is accepted only when all
+persisted target, source, window, timestamp, and completion evidence agrees and
+the stored generation matches the target-aware/legacy class; conflicts fail
+before the writer can change. Equal-time
+independent completions mark the writer ambiguous and suppress current coverage
+until a strictly newer write establishes a new generation. Legacy and
+runtime-only target calls remain explicitly at empty target, generation zero,
+with no writer row.
+
+Immediately before physical execution, the direct runner captures a versioned,
+secret-free snapshot of the full parsed graph: stable pipeline/asset identity,
+target identity and fidelity, fingerprints, dependency edges, coverage mode,
+variables hash, and refresh restriction. Scheduler-backed runs persist this
+snapshot before their first step; interactive asset, scoped, Build-stale,
+legacy `/api/run`, and quickstart builds carry the same evidence directly into
+their completion envelope. At each main-task start Renart captures the exact
+latest-writer read set for its in-pipeline upstream targets, then claims its own
+exact output before warehouse work can begin. A failed or cancelled claimed
+write becomes `dirty`; active and dirty claims make the previous writer
+unavailable so freshness fails closed.
+
 A full refresh remains paired with its requested run window. For an
 interval-aware asset it replaces prior interval coverage with that window; it
 does not create a universal built marker for a query that may be window-filtered.
@@ -85,15 +116,20 @@ environment refresh restrictions run configured strategies and therefore keep
 normal union/marker behavior.
 
 Notes: `run_id` is empty for build-mode runs (no run record); scheduled runs
-carry theirs. A partial unique index keeps one fact per
+carry theirs. Every new completion still has a stable `completion_id`. A
+partial unique index keeps one fact per
 `(asset, environment, scheduled run)` while deliberately allowing repeated
 empty build-mode IDs; recorder inserts are no-ops when crash recovery replays a
-fact that already committed. The recorder fingerprints at run _completion_, so an edit saved
-mid-build-mode-run records the newer fingerprint (scheduled runs are immune —
-they fingerprint the executed snapshot). Pipeline execution collects terminal
-asset events even when the overall run fails: completed assets record success
-facts, the failing asset records a failed attempt, and assets the executor never
-reached record nothing.
+fact that already committed. New runs record only their pre-execution captured
+fingerprint/target evidence, so a source or configuration edit during a run
+cannot be mistaken for what executed. Version-two completion evidence is
+self-contained for recovery and includes the captured dependency graph and
+upstream writers. Legacy version-one evidence is accepted only where current
+source still matches and every in-pipeline upstream needed by a successful
+asset also succeeded; otherwise it fails closed. Pipeline execution collects
+terminal asset events even when the overall run fails: completed assets record
+success facts, the failing asset records a failed attempt, and assets the
+executor never reached record nothing.
 
 **Last run attempt.** Facts only capture successes, so the recorder also upserts
 `renart_asset_runs` — one row per `(asset, environment)` with the target
@@ -145,6 +181,22 @@ only after replay returns, so another stop during startup retries safely; its
 migration also queues interrupted runs reconciled by older builds for one-time
 backfill.
 
+Completion delivery uses a durable SQLite outbox. Physical execution enqueues a
+self-contained completion before reporting success; recorder or staleness
+subscriber failures leave the envelope pending for startup/housekeeping replay
+without relabelling the already-finished warehouse operation as failed. Delivery
+and acknowledgement are idempotent, including concurrent replay attempts.
+
+Target-claim recovery is fenced separately from River ownership. Every non-dry
+execution holds a shared per-workspace OS lease from before target capture
+through durable completion hand-off. Startup takes the corresponding exclusive
+lease before converting orphaned active claims to dirty; embedded/headless
+invocations skip reconciliation while a live executor owns a shared lease. A
+primary lock outside the worktree survives `git clean`, while
+`.renart/execution.lock` keeps processes with different runtime-cache settings
+in the same lock domain. This applies to pipeline, asset/scope, Build-stale,
+legacy workspace, and onboarding quickstart materialization paths.
+
 The workspace scheduler lock is acquired before any River worker starts, so a
 River job still marked `running` at that point belongs to the stopped process.
 Recovery cancels admitted pipeline and housekeeping jobs in the same SQLite
@@ -173,9 +225,16 @@ In-memory status map per current selection (env, range, vars), exposed at
 and failures per pipeline for the exact selection. A matching SSE snapshot is
 authoritative for that pipeline: it resolves that request/error and prevents an
 older in-flight HTTP response from replacing the pushed state, without hiding
-unresolved sibling pipelines. Recompute triggers: selection change (batched
-coverage query), `AssetSaved` (invalidate + recompute the downstream cone),
-`RunCompleted` (flip the touched assets).
+unresolved sibling pipelines. Each response/SSE snapshot includes a
+`data_state_token` over the selection-relevant physical generations, coverage,
+claims, and ambiguity. Each asset also exposes its selected target
+fidelity/identity and the current `latest_output` writer metadata when that
+target is trustworthy. Equivalent reruns in the same generation do not churn
+the token; generation changes, coverage expansion, ambiguity, and active/dirty
+claims do. Recompute triggers: selection change (batched coverage query),
+`AssetSaved` (invalidate + recompute the downstream cone), `RunCompleted` (flip
+the touched assets), and `TargetWriteChanged` (publish the fail-closed claim
+state).
 
 | Status           | Meaning                                                                                                      |
 | ---------------- | ------------------------------------------------------------------------------------------------------------ |
@@ -237,6 +296,9 @@ one `RunCompleted` bus emit per built window (so coverage and achieved
 fingerprints reflect exactly what ran, and downstreams built later in the same
 plan already see the fresh upstream fingerprints). Assets downstream of a
 failed plan member are skipped rather than built stale.
+The whole physical plan holds the workspace execution lease, and every window
+uses the same target-capture, write-claim, and durable completion path as direct
+asset materialization.
 The endpoint's optional `upstream_of` selector narrows that same plan to one
 asset's transitive upstream closure. `renart run <asset> --refresh-upstreams`
 uses this selector in delegated mode (and the same planner directly in embedded

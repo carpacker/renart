@@ -247,7 +247,12 @@ func manualRunSpec(run PipelineRun, source RunSource, confirmedEnvironment strin
 	}
 }
 
-func validateRunSpecBinding(run PipelineRun, spec runSpecV1) error {
+// validateRunSpecImmutableBinding compares the parts of a persisted RunSpec
+// that must remain identical for the lifetime of a run. The requested
+// execution context is deliberately excluded: once execution starts, the run
+// row contains the effective environment, window, and modes resolved by the
+// execution service rather than these immutable request values.
+func validateRunSpecImmutableBinding(run PipelineRun, spec runSpecV1) error {
 	if strings.TrimSpace(spec.Pipeline.ID) != strings.TrimSpace(run.PipelineID) ||
 		strings.TrimSpace(spec.Pipeline.Name) != strings.TrimSpace(run.Pipeline) {
 		return errors.New("run spec pipeline identity does not match queued run")
@@ -264,6 +269,17 @@ func validateRunSpecBinding(run PipelineRun, spec runSpecV1) error {
 	}
 	if spec.Source.Kind != expectedSource {
 		return errors.New("run spec source kind does not match queued run")
+	}
+	if runUUID := strings.TrimSpace(run.PipelineUUID); runUUID != "" &&
+		runUUID != strings.TrimSpace(spec.Pipeline.UUID) {
+		return errors.New("run spec stable pipeline UUID does not match queued run")
+	}
+	return nil
+}
+
+func validateRunSpecBinding(run PipelineRun, spec runSpecV1) error {
+	if err := validateRunSpecImmutableBinding(run, spec); err != nil {
+		return err
 	}
 	if strings.TrimSpace(spec.Requested.Environment) != strings.TrimSpace(run.Environment) ||
 		!equalRunTime(spec.Requested.Start, run.WinStart) ||
@@ -379,5 +395,15 @@ func applyRunSpec(run PipelineRun, spec runSpecV1) PipelineRun {
 	run.FullRefresh = spec.Requested.FullRefresh
 	run.Backfill = spec.Requested.Backfill
 	run.SensorMode = strings.TrimSpace(spec.Requested.SensorMode)
+	return run
+}
+
+// applyRecoveredRunSpecIdentity restores the private stable identity that is
+// intentionally absent from the public run row. Effective execution context
+// already persisted on the row must remain untouched during recovery.
+func applyRecoveredRunSpecIdentity(run PipelineRun, spec runSpecV1) PipelineRun {
+	if strings.TrimSpace(run.PipelineUUID) == "" {
+		run.PipelineUUID = strings.TrimSpace(spec.Pipeline.UUID)
+	}
 	return run
 }

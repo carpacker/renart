@@ -42,6 +42,7 @@ func TestSourceControlInitCreatesRepositoryAndGitignore(t *testing.T) {
 		".renart/server.lock",
 		".renart/server.json*",
 		".renart/scheduler.lock",
+		".renart/execution.lock",
 		"logs/",
 		"duckdb-files/",
 		".env",
@@ -82,13 +83,14 @@ func TestEnsureRuntimeGitExcludesPreservesGitignoreAndHidesRuntimeFiles(t *testi
 		"/.renart/server.lock",
 		"/.renart/server.json*",
 		"/.renart/scheduler.lock",
+		"/.renart/execution.lock",
 	} {
 		assert.Equal(t, 1, strings.Count(string(exclude), expected), expected)
 	}
 
 	stateDir := filepath.Join(workspaceRoot, ".renart")
 	require.NoError(t, os.MkdirAll(stateDir, 0o755))
-	for _, name := range []string{"state.db", "state.db-wal", "server.lock", "server.json", "server.json.tmp", "scheduler.lock"} {
+	for _, name := range []string{"state.db", "state.db-wal", "server.lock", "server.json", "server.json.tmp", "scheduler.lock", "execution.lock"} {
 		require.NoError(t, os.WriteFile(filepath.Join(stateDir, name), []byte("runtime\n"), 0o600))
 	}
 	status, err := NewSourceControlService(workspaceRoot).Status(t.Context())

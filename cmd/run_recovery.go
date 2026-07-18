@@ -35,6 +35,7 @@ func (s *webServer) replayRecoveredRun(ctx context.Context, run webscheduler.Pip
 		s.logger.Info("replaying persisted steps for interrupted run", zap.String("run_id", run.ID), zap.Int("steps", len(steps)))
 	}
 	type recoveredAsset struct {
+		step   webscheduler.PipelineRunStep
 		name   string
 		status string
 	}
@@ -43,7 +44,7 @@ func (s *webServer) replayRecoveredRun(ctx context.Context, run webscheduler.Pip
 		status, terminal := recoveredAssetRunStatus(step.Status)
 		assetName := strings.TrimSpace(step.Asset)
 		if terminal && assetName != "" {
-			recovered = append(recovered, recoveredAsset{name: assetName, status: status})
+			recovered = append(recovered, recoveredAsset{step: step, name: assetName, status: status})
 		}
 	}
 	if len(recovered) == 0 {
@@ -55,6 +56,8 @@ func (s *webServer) replayRecoveredRun(ctx context.Context, run webscheduler.Pip
 	cleanup := func() {}
 	defer func() { cleanup() }()
 
+	targetSnapshot := run.ExecutionTargetSnapshot
+	selfContainedSnapshot := targetSnapshot != nil && targetSnapshot.Version >= webscheduler.ExecutionTargetSnapshotVersionV2
 	if versionID := strings.TrimSpace(run.SnapshotVersionID); versionID != "" {
 		if s.snapshotStore == nil {
 			return fmt.Errorf("snapshot store is unavailable for recovered run %s", run.ID)
@@ -64,42 +67,106 @@ func (s *webServer) replayRecoveredRun(ctx context.Context, run webscheduler.Pip
 			return fmt.Errorf("load snapshot %s for recovered run %s: %w", versionID, run.ID, err)
 		}
 		pipelineUUID = snapshot.PipelineUUID
-		tempDir, err := os.MkdirTemp("", "renart-recovered-snapshot-")
-		if err != nil {
-			return fmt.Errorf("create recovery snapshot directory: %w", err)
+		if !selfContainedSnapshot {
+			tempDir, err := os.MkdirTemp("", "renart-recovered-snapshot-")
+			if err != nil {
+				return fmt.Errorf("create recovery snapshot directory: %w", err)
+			}
+			cleanup = func() { _ = os.RemoveAll(tempDir) }
+			if err := s.snapshotStore.MaterializeForExecution(ctx, versionID, tempDir); err != nil {
+				return fmt.Errorf("materialize snapshot %s for recovered run %s: %w", versionID, run.ID, err)
+			}
+			snapshotDir = tempDir
 		}
-		cleanup = func() { _ = os.RemoveAll(tempDir) }
-		if err := s.snapshotStore.MaterializeForExecution(ctx, versionID, tempDir); err != nil {
-			return fmt.Errorf("materialize snapshot %s for recovered run %s: %w", versionID, run.ID, err)
-		}
-		snapshotDir = tempDir
 	} else {
-		for _, candidate := range s.currentState().Pipelines {
-			if candidate.ID == run.PipelineID {
-				pipelineUUID = candidate.UUID
-				break
+		pipelineUUID = strings.TrimSpace(run.PipelineUUID)
+		if selfContainedSnapshot {
+			capturedUUID := strings.TrimSpace(targetSnapshot.PipelineUUID)
+			if capturedUUID == "" || (pipelineUUID != "" && capturedUUID != pipelineUUID) {
+				return fmt.Errorf("recovered run %s target snapshot does not match its admitted pipeline identity", run.ID)
+			}
+			pipelineUUID = capturedUUID
+		}
+		if pipelineUUID == "" {
+			for _, candidate := range s.currentState().Pipelines {
+				if candidate.UUID == run.PipelineUUID || (run.PipelineUUID == "" && candidate.ID == run.PipelineID) {
+					pipelineUUID = candidate.UUID
+					break
+				}
 			}
 		}
 		if pipelineUUID == "" {
 			return fmt.Errorf("pipeline %s for recovered run %s is not in the current workspace", run.PipelineID, run.ID)
 		}
 	}
+	if targetSnapshot != nil && strings.TrimSpace(targetSnapshot.PipelineUUID) != "" && targetSnapshot.PipelineUUID != pipelineUUID {
+		return fmt.Errorf("recovered run %s target snapshot pipeline identity does not match executed source", run.ID)
+	}
 
 	assets := make([]bus.AssetRun, 0, len(recovered))
-	for _, asset := range recovered {
-		assets = append(assets, bus.AssetRun{
-			AssetID:   identity.AssetID(pipelineUUID, asset.name),
-			AssetName: asset.name,
-			Status:    asset.status,
-		})
+	for index, asset := range recovered {
+		runAsset := bus.AssetRun{
+			AssetID:    identity.AssetID(pipelineUUID, asset.name),
+			AssetName:  asset.name,
+			Status:     asset.status,
+			StartedAt:  asset.step.StartedAt,
+			FinishedAt: asset.step.FinishedAt,
+		}
+		if asset.step.CompletionOrdinal != nil {
+			runAsset.CompletionOrdinal = *asset.step.CompletionOrdinal
+			runAsset.HasCompletionOrdinal = true
+		} else {
+			runAsset.CompletionOrdinal = int64(index)
+		}
+		if asset.step.HasUpstreamWriterSnapshot {
+			runAsset.UpstreamWriters = make(map[string]bus.UpstreamWriterSnapshot, len(asset.step.UpstreamWriters))
+			for assetID, writer := range asset.step.UpstreamWriters {
+				runAsset.UpstreamWriters[assetID] = bus.UpstreamWriterSnapshot{
+					AssetID:           writer.AssetID,
+					TargetIdentity:    writer.TargetIdentity,
+					Fingerprint:       writer.Fingerprint,
+					VarsHash:          writer.VarsHash,
+					TargetGeneration:  writer.TargetGeneration,
+					CompletionID:      writer.CompletionID,
+					CompletionOrdinal: writer.CompletionOrdinal,
+					MaterializedAt:    writer.MaterializedAt,
+				}
+			}
+			runAsset.HasUpstreamWriterSnapshot = true
+		}
+		if snapshot := run.ExecutionTargetSnapshot; snapshot != nil {
+			entry, exists := snapshot.Entries[asset.name]
+			if !exists {
+				return fmt.Errorf("recovered run %s target snapshot has no entry for %s", run.ID, asset.name)
+			}
+			if asset.status == "succeeded" && (asset.step.FinishedAt == nil || asset.step.CompletionOrdinal == nil) {
+				return fmt.Errorf("recovered run %s successful step %s has incomplete completion coordinates", run.ID, asset.name)
+			}
+			if snapshot.Version >= webscheduler.ExecutionTargetSnapshotVersionV2 && asset.status == "succeeded" && !asset.step.HasUpstreamWriterSnapshot {
+				return fmt.Errorf("recovered run %s successful step %s has no upstream writer snapshot", run.ID, asset.name)
+			}
+			expectedAssetID := identity.AssetID(pipelineUUID, asset.name)
+			if entry.AssetID != expectedAssetID {
+				return fmt.Errorf("recovered run %s target snapshot asset identity does not match %s", run.ID, asset.name)
+			}
+			runAsset.AssetID = entry.AssetID
+			runAsset.TargetIdentity = entry.TargetIdentity
+			runAsset.TargetFidelity = entry.TargetFidelity
+			runAsset.Fingerprint = entry.Fingerprint
+			runAsset.OwnContent = entry.OwnContent
+			runAsset.ConsumedVarsHash = entry.ConsumedVarsHash
+			runAsset.VarsHash = entry.VarsHash
+		}
+		assets = append(assets, runAsset)
 	}
 
 	completedAt := time.Now().UTC()
 	if run.FinishedAt != nil && !run.FinishedAt.IsZero() {
 		completedAt = run.FinishedAt.UTC()
 	}
-	s.eventBus.EmitRunCompleted(bus.RunCompleted{
+	event := bus.RunCompleted{
 		RunID:             run.ID,
+		CompletionID:      run.ID,
 		PipelineUUID:      pipelineUUID,
 		Environment:       run.Environment,
 		WinStart:          run.WinStart,
@@ -109,7 +176,33 @@ func (s *webServer) replayRecoveredRun(ctx context.Context, run webscheduler.Pip
 		Assets:            assets,
 		SnapshotVersionID: run.SnapshotVersionID,
 		SnapshotDir:       snapshotDir,
-	})
+	}
+	if snapshot := run.ExecutionTargetSnapshot; snapshot != nil {
+		event.ExecutionTargetSnapshotVersion = snapshot.Version
+		event.ExecutionPipelineUUID = snapshot.PipelineUUID
+		event.ExecutionTargets = make(map[string]bus.ExecutionTargetSnapshotEntry, len(snapshot.Entries))
+		for assetName, entry := range snapshot.Entries {
+			upstreams := make([]bus.ExecutionUpstreamSnapshot, 0, len(entry.Upstreams))
+			for _, upstream := range entry.Upstreams {
+				upstreams = append(upstreams, bus.ExecutionUpstreamSnapshot{Type: upstream.Type, Value: upstream.Value})
+			}
+			event.ExecutionTargets[assetName] = bus.ExecutionTargetSnapshotEntry{
+				AssetID:           entry.AssetID,
+				TargetIdentity:    entry.TargetIdentity,
+				TargetFidelity:    entry.TargetFidelity,
+				Fingerprint:       entry.Fingerprint,
+				OwnContent:        entry.OwnContent,
+				ConsumedVarsHash:  entry.ConsumedVarsHash,
+				VarsHash:          entry.VarsHash,
+				Upstreams:         upstreams,
+				CoverageMode:      entry.CoverageMode,
+				RefreshRestricted: entry.RefreshRestricted,
+			}
+		}
+	}
+	if err := s.eventBus.EmitRunCompleted(event); err != nil {
+		return fmt.Errorf("replay recovered run %s completion: %w", run.ID, err)
+	}
 	if s.logger != nil {
 		s.logger.Info("replayed persisted steps for interrupted run", zap.String("run_id", run.ID), zap.Int("assets", len(assets)))
 	}

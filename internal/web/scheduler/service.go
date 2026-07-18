@@ -23,9 +23,11 @@ import (
 )
 
 const (
-	pipelineRunQueue    = "renart_pipeline_runs"
-	pipelineRunJobKind  = "renart-pipeline-run"
-	housekeepingJobKind = "renart-housekeeping"
+	pipelineRunQueue          = "renart_pipeline_runs"
+	pipelineRunJobKind        = "renart-pipeline-run"
+	housekeepingJobKind       = "renart-housekeeping"
+	runFinalizationTimeout    = 30 * time.Second
+	indeterminateRetryMessage = "pipeline run was retried while still marked running after its worker returned; the previous physical outcome is indeterminate, so Renart did not repeat physical execution"
 )
 
 type PipelineSource func(context.Context) ([]PipelineSchedule, error)
@@ -153,6 +155,7 @@ func (w *pipelineRunWorker) Work(ctx context.Context, job *river.Job[pipelineRun
 			return river.JobCancel(err)
 		}
 		if strings.TrimSpace(job.Args.RunID) != "" || strings.TrimSpace(job.Args.PipelineUUID) != "" || job.Args.Trigger == RunTriggerSchedule {
+			warnPipelineRunJobSnooze("prepare_run", riverJobID, job.Args.RunID, job.Args.PipelineID, job.Args.PipelineUUID, err)
 			return river.JobSnooze(runSpecRetrySnoozeTime)
 		}
 		return err
@@ -163,9 +166,22 @@ func (w *pipelineRunWorker) Work(ctx context.Context, job *river.Job[pipelineRun
 	err = w.service.execute(ctx, run, spec)
 	var startErr *runStartPersistenceError
 	if errors.As(err, &startErr) {
+		warnPipelineRunJobSnooze("persist_run_start", riverJobID, run.ID, run.PipelineID, run.PipelineUUID, err)
 		return river.JobSnooze(runSpecRetrySnoozeTime)
 	}
 	return err
+}
+
+func warnPipelineRunJobSnooze(phase string, riverJobID int64, runID, pipelineID, pipelineUUID string, err error) {
+	slog.Warn("pipeline run job hit a persistence error; retrying",
+		"phase", phase,
+		"river_job_id", riverJobID,
+		"run_id", strings.TrimSpace(runID),
+		"pipeline_id", strings.TrimSpace(pipelineID),
+		"pipeline_uuid", strings.TrimSpace(pipelineUUID),
+		"retry_after", runSpecRetrySnoozeTime,
+		"error", err,
+	)
 }
 
 func (s *Service) failRunBeforeExecution(ctx context.Context, runID string, runErr error) error {
@@ -365,6 +381,14 @@ func (s *Service) recoverOrphanedRuns(ctx context.Context) (startupRecoverySumma
 		run, _, steps, getErr := s.store.Get(ctx, id)
 		if getErr != nil {
 			return summary, fmt.Errorf("load reconciled run %s: %w", id, getErr)
+		}
+		if spec, found, specErr := s.store.GetRunSpec(ctx, id); specErr != nil {
+			return summary, fmt.Errorf("load reconciled run spec %s: %w", id, specErr)
+		} else if found {
+			if bindingErr := validateRunSpecImmutableBinding(run, spec); bindingErr != nil {
+				return summary, fmt.Errorf("validate reconciled run spec %s: %w", id, bindingErr)
+			}
+			run = applyRecoveredRunSpecIdentity(run, spec)
 		}
 		if !run.ExecutionContextResolved {
 			// Current builds persist the effective context before invoking the
@@ -1102,15 +1126,21 @@ func (s *Service) admitQueuedRun(ctx context.Context, client *river.Client[*sql.
 		if err != nil {
 			_ = tx.Rollback()
 		}
+		if errors.Is(err, ErrPipelineRunActive) {
+			return PipelineRun{}, err
+		}
 		if isActiveRunSlotConstraint(err) {
 			conflict, found, lookupErr := s.store.pipelineRunActiveError(ctx, run.PipelineID, runSlotKeys(run))
 			if lookupErr != nil {
 				return PipelineRun{}, errors.Join(err, lookupErr)
 			}
-			if !found && attempt == 0 {
+			if found {
+				return PipelineRun{}, conflict
+			}
+			if attempt == 0 {
 				continue
 			}
-			return PipelineRun{}, conflict
+			return PipelineRun{}, fmt.Errorf("pipeline run admission retry exhausted after the active slot changed: %w", err)
 		}
 		if err != nil {
 			return PipelineRun{}, err
@@ -1149,7 +1179,7 @@ func (s *Service) prepareRun(ctx context.Context, riverJobID int64, args pipelin
 		if err != nil {
 			return PipelineRun{}, runSpecV1{}, false, err
 		}
-		if run.Status != RunStatusQueued {
+		if run.Status != RunStatusQueued && run.Status != RunStatusRunning {
 			return PipelineRun{}, runSpecV1{}, false, nil
 		}
 		if riverJobID != 0 {
@@ -1191,6 +1221,12 @@ func (s *Service) prepareRun(ctx context.Context, riverJobID int64, args pipelin
 		}
 		if err := s.store.validateActiveRunSpecSlotBinding(ctx, run, spec); err != nil {
 			return PipelineRun{}, runSpecV1{}, false, &invalidRunSpecError{RunID: run.ID, Err: err}
+		}
+		if run.Status == RunStatusRunning {
+			if err := s.finalizeIndeterminateRetry(ctx, run); err != nil {
+				return PipelineRun{}, runSpecV1{}, false, err
+			}
+			return PipelineRun{}, runSpecV1{}, false, nil
 		}
 		run.RiverJobID = &riverJobID
 		return applyRunSpec(run, spec), spec, true, nil
@@ -1261,10 +1297,14 @@ func (s *Service) execute(ctx context.Context, run PipelineRun, spec runSpecV1) 
 	defer func() {
 		if recovered := recover(); recovered != nil {
 			err := fmt.Errorf("pipeline run panicked: %v", recovered)
-			_ = s.store.Finish(context.Background(), run.ID, RunStatusFailed, err)
+			finished := time.Now().UTC()
+			finalizeCtx, cancel := detachedRunFinalizationContext(ctx)
+			defer cancel()
+			if finalizeErr := s.store.FinalizeExecution(finalizeCtx, run.ID, RunStatusFailed, finished, err, "", nil); finalizeErr != nil {
+				slog.Error("failed to persist panicked pipeline run", "run_id", run.ID, "error", finalizeErr)
+			}
 			run.Status = RunStatusFailed
 			run.Error = err.Error()
-			finished := time.Now().UTC()
 			run.FinishedAt = &finished
 			s.publishRunEvent("run.finished", run)
 		}
@@ -1305,8 +1345,16 @@ func (s *Service) execute(ctx context.Context, run PipelineRun, spec runSpecV1) 
 		s.publishRunEvent("run.started", run)
 		return nil
 	}
-	req.OnStep = func(event RunStepEvent) {
-		s.persistRunStep(ctx, run.ID, event)
+	req.OnTargetsResolved = func(snapshot ExecutionTargetSnapshot) error {
+		if err := s.store.SetRunExecutionTargetSnapshot(ctx, run.ID, snapshot); err != nil {
+			return err
+		}
+		captured := snapshot
+		run.ExecutionTargetSnapshot = &captured
+		return nil
+	}
+	req.OnStep = func(event RunStepEvent) error {
+		return s.persistRunStep(ctx, run.ID, event)
 	}
 	if run.WinStart != nil {
 		req.Start = run.WinStart.Format(time.RFC3339Nano)
@@ -1320,31 +1368,33 @@ func (s *Service) execute(ctx context.Context, run PipelineRun, spec runSpecV1) 
 		s.publishRunEvent("run.log", map[string]any{"run_id": run.ID, "log": logLine})
 	})
 	status, runErr := statusFromResult(result)
-	var finishErr error
+	finished := time.Now().UTC()
+	var watermark string
+	var watermarkUpTo *time.Time
 	if status == RunStatusSuccess && spec.Schedule != nil && spec.Schedule.AdvancesWatermark && spec.Requested.End != nil {
-		watermark := spec.Schedule.PipelineUUID + "|" + spec.Schedule.Environment
-		finishErr = s.store.FinishScheduledSuccess(ctx, run.ID, watermark, *spec.Requested.End)
-	} else {
-		finishErr = s.store.Finish(ctx, run.ID, status, runErr)
+		watermark = spec.Schedule.PipelineUUID + "|" + spec.Schedule.Environment
+		upTo := *spec.Requested.End
+		watermarkUpTo = &upTo
 	}
+	finalizeCtx, cancelFinalize := detachedRunFinalizationContext(ctx)
+	defer cancelFinalize()
+	finishErr := s.store.FinalizeExecution(finalizeCtx, run.ID, status, finished, runErr, watermark, watermarkUpTo)
 	if finishErr != nil {
-		_ = s.store.AppendLog(ctx, run.ID, LogLine{At: time.Now().UTC(), Line: "failed to persist run status: " + finishErr.Error()})
+		_ = s.store.AppendLog(finalizeCtx, run.ID, LogLine{At: time.Now().UTC(), Line: "failed to persist run status: " + finishErr.Error()})
 		return finishErr
 	}
-	if persisted, _, _, getErr := s.store.Get(ctx, run.ID); getErr == nil {
+	if persisted, _, _, getErr := s.store.Get(finalizeCtx, run.ID); getErr == nil {
 		// Stable scheduled identity is private RunSpec provenance rather than a
 		// public run-row column. Preserve it while taking user-visible effective
 		// context from the canonical row written by OnContextResolved and Finish.
 		persisted.PipelineUUID = run.PipelineUUID
 		run = persisted
 	} else {
-		_ = s.store.AppendLog(ctx, run.ID, LogLine{At: time.Now().UTC(), Line: "failed to reload canonical run context: " + getErr.Error()})
+		_ = s.store.AppendLog(finalizeCtx, run.ID, LogLine{At: time.Now().UTC(), Line: "failed to reload canonical run context: " + getErr.Error()})
 	}
-	finished := time.Now().UTC()
 	if run.FinishedAt != nil {
 		finished = *run.FinishedAt
 	}
-	_ = s.store.FinishOpenSteps(ctx, run.ID, status, finished, runErr)
 	run.Status = status
 	run.FinishedAt = &finished
 	if runErr != nil {
@@ -1354,18 +1404,55 @@ func (s *Service) execute(ctx context.Context, run PipelineRun, spec runSpecV1) 
 	return nil
 }
 
-func (s *Service) persistRunStep(ctx context.Context, runID string, event RunStepEvent) {
+func detachedRunFinalizationContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.WithoutCancel(ctx), runFinalizationTimeout)
+}
+
+func (s *Service) finalizeIndeterminateRetry(ctx context.Context, run PipelineRun) error {
+	finished := time.Now().UTC()
+	runErr := errors.New(indeterminateRetryMessage)
+	finalizeCtx, cancel := detachedRunFinalizationContext(ctx)
+	defer cancel()
+	if err := s.store.FinalizeExecution(finalizeCtx, run.ID, RunStatusFailed, finished, runErr, "", nil); err != nil {
+		return fmt.Errorf("finalize indeterminate retry for pipeline run %s: %w", run.ID, err)
+	}
+	if err := s.store.AppendLog(finalizeCtx, run.ID, LogLine{
+		At:   finished,
+		Line: "scheduler recovery: " + indeterminateRetryMessage,
+	}); err != nil {
+		slog.Warn("failed to append indeterminate pipeline run retry diagnostic", "run_id", run.ID, "error", err)
+	}
+	run.Status = RunStatusFailed
+	run.Error = indeterminateRetryMessage
+	run.FinishedAt = &finished
+	s.publishRunEvent("run.finished", run)
+	return nil
+}
+
+func (s *Service) persistRunStep(ctx context.Context, runID string, event RunStepEvent) error {
 	asset := strings.TrimSpace(event.Asset)
 	if asset == "" {
-		return
+		return nil
 	}
-	step := PipelineRunStep{RunID: runID, Asset: asset, Status: event.Status, StartedAt: event.StartedAt, FinishedAt: event.FinishedAt, Error: event.Error}
+	step := PipelineRunStep{
+		RunID:                     runID,
+		Asset:                     asset,
+		Status:                    event.Status,
+		StartedAt:                 event.StartedAt,
+		FinishedAt:                event.FinishedAt,
+		Error:                     event.Error,
+		CompletionOrdinal:         event.CompletionOrdinal,
+		UpstreamWriters:           event.UpstreamWriters,
+		HasUpstreamWriterSnapshot: event.HasUpstreamWriterSnapshot,
+	}
 	if step.Status == "" {
 		step.Status = RunStatusRunning
 	}
-	if err := s.store.UpsertStep(ctx, step); err == nil {
-		s.publishRunEvent("run.step", step)
+	if err := s.store.UpsertStep(ctx, step); err != nil {
+		return fmt.Errorf("persist step %s for run %s: %w", asset, runID, err)
 	}
+	s.publishRunEvent("run.step", step)
+	return nil
 }
 
 func (s *Service) windowStart(ctx context.Context, pipelineID string, end time.Time) time.Time {

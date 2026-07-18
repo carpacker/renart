@@ -4,10 +4,13 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"regexp"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -15,6 +18,7 @@ import (
 	"github.com/bruin-data/bruin/pkg/config"
 	"github.com/bruin-data/bruin/pkg/pipeline"
 	"github.com/bruin-data/bruin/pkg/sqlparser"
+	"github.com/google/uuid"
 	"gopkg.in/yaml.v3"
 	"renart/internal/web/bus"
 	"renart/internal/web/identity"
@@ -59,6 +63,12 @@ const (
 	MaterializeScopeAssetWithNeighborhood MaterializeScope = "asset_with_upstreams_and_downstreams"
 )
 
+type TargetWriteStore interface {
+	ClaimTargetWrite(context.Context, matlog.TargetWriteClaim) error
+	MarkTargetWriteClaimDirty(context.Context, matlog.TargetWriteClaim, time.Time) error
+	LatestWriters(context.Context, []string) (map[string]matlog.LatestSuccessfulWriter, error)
+}
+
 type ExecutionDependencies struct {
 	WorkspaceRoot        string
 	ConfigPath           string
@@ -70,6 +80,19 @@ type ExecutionDependencies struct {
 	ParseQueryOutput     func([]byte) ([]string, []map[string]any)
 	NewPipelineBuilder   func() *pipeline.Builder
 	Events               *bus.Bus
+	// TargetWrites durably claims exact physical outputs before their main
+	// task starts and marks uncertain outcomes dirty. Nil retains the legacy
+	// in-memory observation behavior used by isolated tests.
+	TargetWrites TargetWriteStore
+	// DispatchCompletion persists and dispatches a self-contained completion
+	// event. Production wires this through the durable completion outbox; nil
+	// falls back to the in-process bus for isolated/legacy callers.
+	DispatchCompletion func(context.Context, bus.RunCompleted) error
+	// AcquireExecutionLease coordinates physical execution with cross-process
+	// recovery of interrupted target-write claims. Production holds the shared
+	// lease from before target capture until the durable completion hand-off;
+	// nil keeps isolated tests and non-writing callers lightweight.
+	AcquireExecutionLease func(context.Context) (release func() error, err error)
 	// PolicyFor returns the execution policy for an environment; nil means
 	// unrestricted. Enforced here — the run-dispatch chokepoint every
 	// execution path goes through — not in UI handlers.
@@ -124,16 +147,17 @@ func NewExecutionService(deps ExecutionDependencies) *ExecutionService {
 // emitRunCompleted publishes the run-completion event on the process bus.
 // This is the single seam Phase 2 (materialization facts) and Phase 3
 // (staleness) attach to for run observation.
-func (s *ExecutionService) emitRunCompleted(runID, pipelineUUID, environment string, window ExecutionTimeWindow, completedAt time.Time, assets []bus.AssetRun) {
-	s.emitRunCompletedForSpec(PipelineRunSpec{RunID: runID, Environment: environment}, pipelineUUID, window, completedAt, assets)
+func (s *ExecutionService) emitRunCompleted(ctx context.Context, runID, pipelineUUID, environment string, window ExecutionTimeWindow, completedAt time.Time, assets []bus.AssetRun) error {
+	return s.emitRunCompletedForSpec(ctx, PipelineRunSpec{RunID: runID, Environment: environment}, pipelineUUID, window, completedAt, assets)
 }
 
-func (s *ExecutionService) emitRunCompletedForSpec(spec PipelineRunSpec, pipelineUUID string, window ExecutionTimeWindow, completedAt time.Time, assets []bus.AssetRun) {
-	if s.deps.Events == nil || pipelineUUID == "" || len(assets) == 0 {
-		return
+func (s *ExecutionService) emitRunCompletedForSpec(ctx context.Context, spec PipelineRunSpec, pipelineUUID string, window ExecutionTimeWindow, completedAt time.Time, assets []bus.AssetRun) error {
+	if pipelineUUID == "" || len(assets) == 0 {
+		return nil
 	}
 	event := bus.RunCompleted{
 		RunID:             spec.RunID,
+		CompletionID:      completionIDForRun(spec),
 		PipelineUUID:      pipelineUUID,
 		Environment:       spec.Environment,
 		FullRefresh:       spec.FullRefresh,
@@ -142,13 +166,54 @@ func (s *ExecutionService) emitRunCompletedForSpec(spec PipelineRunSpec, pipelin
 		SnapshotVersionID: spec.SnapshotVersionID,
 		SnapshotDir:       spec.SnapshotDir,
 	}
+	if snapshot := spec.executionTargetSnapshot; snapshot != nil {
+		event.ExecutionTargetSnapshotVersion = snapshot.Version
+		event.ExecutionPipelineUUID = snapshot.PipelineUUID
+		event.ExecutionTargets = make(map[string]bus.ExecutionTargetSnapshotEntry, len(snapshot.Entries))
+		for assetName, entry := range snapshot.Entries {
+			upstreams := make([]bus.ExecutionUpstreamSnapshot, 0, len(entry.Upstreams))
+			for _, upstream := range entry.Upstreams {
+				upstreams = append(upstreams, bus.ExecutionUpstreamSnapshot{Type: upstream.Type, Value: upstream.Value})
+			}
+			event.ExecutionTargets[assetName] = bus.ExecutionTargetSnapshotEntry{
+				AssetID:           entry.AssetID,
+				TargetIdentity:    entry.TargetIdentity,
+				TargetFidelity:    string(entry.TargetFidelity),
+				Fingerprint:       entry.Fingerprint,
+				OwnContent:        entry.OwnContent,
+				ConsumedVarsHash:  entry.ConsumedVarsHash,
+				VarsHash:          entry.VarsHash,
+				Upstreams:         upstreams,
+				CoverageMode:      string(entry.CoverageMode),
+				RefreshRestricted: entry.RefreshRestricted,
+			}
+		}
+	}
 	if !window.IsZero() {
 		start := window.Start
 		end := window.End
 		event.WinStart = &start
 		event.WinEnd = &end
 	}
-	s.deps.Events.EmitRunCompleted(event)
+	persistCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+	defer cancel()
+	if s.deps.DispatchCompletion != nil {
+		return s.deps.DispatchCompletion(persistCtx, event)
+	}
+	if s.deps.Events != nil {
+		return s.deps.Events.EmitRunCompleted(event)
+	}
+	return nil
+}
+
+func completionIDForRun(spec PipelineRunSpec) string {
+	if completionID := strings.TrimSpace(spec.CompletionID); completionID != "" {
+		return completionID
+	}
+	if runID := strings.TrimSpace(spec.RunID); runID != "" {
+		return runID
+	}
+	return uuid.NewString()
 }
 
 // checkRunPolicy evaluates the environment policy at the run-dispatch
@@ -530,9 +595,15 @@ func (s *ExecutionService) MaterializeAssetStreamWithSensorMode(ctx context.Cont
 	materializedAssetIDs := []string{assetID}
 	assetNamesToRecord := make([]string, 0, 1)
 	sensorMode = effectiveSensorMode(sensorMode, false)
+	completionID := uuid.NewString()
+	observed := newPipelineRunObservation(nil)
+	observed.configureTargetWrites(ctx, completionID, s.deps.TargetWrites)
 	run := func() error {
 		var runErr error
-		output, runErr = s.runSingleAssetMaterializationWithSensorMode(ctx, relAssetPath, environment, timeWindow, fullRefresh, sensorMode, onChunk)
+		output, runErr = s.runSingleAssetMaterializationObserved(
+			ctx, relAssetPath, environment, timeWindow, fullRefresh, sensorMode,
+			onChunk, observed.handle, observed.captureExecutionTargets,
+		)
 		return runErr
 	}
 	if normalizedScope != MaterializeScopeAsset {
@@ -546,72 +617,75 @@ func (s *ExecutionService) MaterializeAssetStreamWithSensorMode(ctx context.Cont
 		assetNamesToRecord = scoped.AssetNames
 		run = func() error {
 			var runErr error
-			output, runErr = s.runScopedAssetMaterialization(ctx, scoped.AssetPaths, environment, timeWindow, fullRefresh, sensorMode, onChunk)
+			output, runErr = s.runScopedAssetMaterializationObserved(
+				ctx, scoped.AssetPaths, environment, timeWindow, fullRefresh, sensorMode,
+				onChunk, observed.handle, observed.captureExecutionTargets,
+			)
 			return runErr
 		}
 	} else if assetName := s.deps.ResolveAssetNameByID(assetID); assetName != "" {
 		assetNamesToRecord = append(assetNamesToRecord, assetName)
 	}
+	releaseExecutionLease, leaseErr := s.acquireExecutionLease(ctx)
+	if leaseErr != nil {
+		return MaterializeResult{Status: "error", Operation: operation, Error: "acquire workspace execution lease: " + leaseErr.Error(), ExitCode: 1}
+	}
+	defer func() { _ = releaseExecutionLease() }()
 
 	runErr := run()
+	var completionErr error
 
 	changedAssetIDs := make([]string, 0)
 	var materializedAt *time.Time
-	if runErr == nil {
-		now := time.Now().UTC()
+	now := time.Now().UTC()
+	pipelineView, pipelineFound := s.findPipelineViewForAsset(assetID)
+	if pipelineFound || observed.pipelineUUID() != "" {
+		completionStatus := "succeeded"
+		if runErr != nil {
+			completionStatus = "failed"
+			if ctx.Err() != nil {
+				completionStatus = "cancelled"
+			}
+		}
+		runAssets, _ := observed.completedAssetsForNames(pipelineView, completionStatus, assetNamesToRecord)
+		if len(runAssets) > 0 {
+			pipelineUUID := observed.pipelineUUID()
+			if pipelineUUID == "" {
+				pipelineUUID = pipelineView.UUID
+			}
+			completionErr = s.emitRunCompletedForSpec(ctx, PipelineRunSpec{
+				CompletionID:            completionID,
+				Environment:             environment,
+				FullRefresh:             fullRefresh,
+				executionTargetSnapshot: observed.executionTargetSnapshot(),
+			}, pipelineUUID, timeWindow, now, runAssets)
+			if completionErr != nil {
+				completionErr = errors.Join(completionErr, observed.markSuccessfulTargetWritesDirty(now))
+			}
+		}
+	}
+	if runErr == nil && completionErr == nil {
 		materializedAt = &now
-		runAssets := make([]bus.AssetRun, 0, len(assetNamesToRecord))
-		pipelineView, pipelineFound := s.findPipelineViewForAsset(assetID)
-		for _, assetName := range assetNamesToRecord {
-			if assetName == "" {
-				continue
-			}
-			if pipelineFound {
-				runAssets = append(runAssets, bus.AssetRun{
-					AssetID:   identity.AssetID(pipelineView.UUID, assetName),
-					AssetName: assetName,
-					Status:    "succeeded",
-				})
-			}
-		}
-		if pipelineFound {
-			s.emitRunCompletedForSpec(PipelineRunSpec{Environment: environment, FullRefresh: fullRefresh}, pipelineView.UUID, timeWindow, now, runAssets)
-		}
 		changedAssetIDs = s.deps.FindInspectIDs(assetIDsToRefresh...)
-	} else {
-		// The run failed. Emit a RunCompleted marking the attempted assets as
-		// failed so the matlog recorder persists a failed run attempt. Coverage
-		// (success facts) stays untouched, but staleness can now tell "edited and
-		// the run failed" from "edited, not run yet", and surface an unchanged
-		// asset whose last run failed.
-		now := time.Now().UTC()
-		pipelineView, pipelineFound := s.findPipelineViewForAsset(assetID)
-		if pipelineFound {
-			runAssets := make([]bus.AssetRun, 0, len(assetNamesToRecord))
-			for _, assetName := range assetNamesToRecord {
-				if assetName == "" {
-					continue
-				}
-				runAssets = append(runAssets, bus.AssetRun{
-					AssetID:   identity.AssetID(pipelineView.UUID, assetName),
-					AssetName: assetName,
-					Status:    "failed",
-				})
-			}
-			if len(runAssets) > 0 {
-				s.emitRunCompletedForSpec(PipelineRunSpec{Environment: environment, FullRefresh: fullRefresh}, pipelineView.UUID, timeWindow, now, runAssets)
-			}
-		}
 	}
 
 	status := "ok"
 	errorMessage := ""
 	exitCode := 0
-	if runErr != nil {
+	if runErr != nil || completionErr != nil {
 		status = "error"
+		if runErr != nil && executionWasCancelled(ctx, runErr) {
+			status = "cancelled"
+		}
 		exitCode = 1
-		errorMessage = runErr.Error()
-		if IsDuckDBLockError(runErr, output) {
+		if runErr == nil {
+			errorMessage = "physical execution completed, but its durable completion could not be recorded: " + completionErr.Error()
+		} else if completionErr != nil {
+			errorMessage = errors.Join(runErr, fmt.Errorf("record durable completion: %w", completionErr)).Error()
+		} else {
+			errorMessage = runErr.Error()
+		}
+		if runErr != nil && IsDuckDBLockError(runErr, output) {
 			errorMessage = "duckdb database is busy (lock held by another process), please retry"
 		}
 	}
@@ -637,13 +711,52 @@ func (s *ExecutionService) runSingleAssetMaterialization(ctx context.Context, as
 }
 
 func (s *ExecutionService) runSingleAssetMaterializationWithSensorMode(ctx context.Context, assetPath, environment string, timeWindow ExecutionTimeWindow, fullRefresh bool, sensorMode string, onChunk func([]byte)) ([]byte, error) {
-	return s.deps.Executor.RunAsset(ctx, RunAssetRequest{AssetPath: assetPath, Environment: environment, SensorMode: effectiveSensorMode(sensorMode, false), StartDate: timeWindow.StartRFC3339(), EndDate: timeWindow.EndRFC3339(), FullRefresh: fullRefresh}, onChunk)
+	return s.runSingleAssetMaterializationObserved(ctx, assetPath, environment, timeWindow, fullRefresh, sensorMode, onChunk, nil, nil)
 }
 
 func (s *ExecutionService) runScopedAssetMaterialization(ctx context.Context, assetPaths []string, environment string, timeWindow ExecutionTimeWindow, fullRefresh bool, sensorMode string, onChunk func([]byte)) ([]byte, error) {
+	return s.runScopedAssetMaterializationObserved(ctx, assetPaths, environment, timeWindow, fullRefresh, sensorMode, onChunk, nil, nil)
+}
+
+func (s *ExecutionService) runSingleAssetMaterializationObserved(
+	ctx context.Context,
+	assetPath, environment string,
+	timeWindow ExecutionTimeWindow,
+	fullRefresh bool,
+	sensorMode string,
+	onChunk func([]byte),
+	onAssetEvent func(ExecutionAssetEvent) error,
+	onTargetsResolved func(ExecutionTargetSnapshot) error,
+) ([]byte, error) {
+	return s.deps.Executor.RunAsset(ctx, RunAssetRequest{
+		AssetPath:         assetPath,
+		Environment:       environment,
+		SensorMode:        effectiveSensorMode(sensorMode, false),
+		StartDate:         timeWindow.StartRFC3339(),
+		EndDate:           timeWindow.EndRFC3339(),
+		AssetEvent:        onAssetEvent,
+		FullRefresh:       fullRefresh,
+		OnTargetsResolved: onTargetsResolved,
+	}, onChunk)
+}
+
+func (s *ExecutionService) runScopedAssetMaterializationObserved(
+	ctx context.Context,
+	assetPaths []string,
+	environment string,
+	timeWindow ExecutionTimeWindow,
+	fullRefresh bool,
+	sensorMode string,
+	onChunk func([]byte),
+	onAssetEvent func(ExecutionAssetEvent) error,
+	onTargetsResolved func(ExecutionTargetSnapshot) error,
+) ([]byte, error) {
 	var combined bytes.Buffer
 	for _, assetPath := range assetPaths {
-		chunkOutput, err := s.runSingleAssetMaterializationWithSensorMode(ctx, assetPath, environment, timeWindow, fullRefresh, sensorMode, onChunk)
+		chunkOutput, err := s.runSingleAssetMaterializationObserved(
+			ctx, assetPath, environment, timeWindow, fullRefresh, sensorMode,
+			onChunk, onAssetEvent, onTargetsResolved,
+		)
 		if len(chunkOutput) > 0 {
 			_, _ = combined.Write(chunkOutput)
 		}
@@ -947,7 +1060,7 @@ func (s *ExecutionService) MaterializePipelineStreamWithSensorMode(ctx context.C
 	}, onChunk, nil)
 }
 
-func (s *ExecutionService) MaterializePipelineStreamWithAssetEvents(ctx context.Context, pipelineID, environment string, dryRun, fullRefresh, backfill bool, startDate, endDate, confirmedEnvironment string, onChunk func([]byte), onAssetEvent func(ExecutionAssetEvent)) MaterializeResult {
+func (s *ExecutionService) MaterializePipelineStreamWithAssetEvents(ctx context.Context, pipelineID, environment string, dryRun, fullRefresh, backfill bool, startDate, endDate, confirmedEnvironment string, onChunk func([]byte), onAssetEvent func(ExecutionAssetEvent) error) MaterializeResult {
 	return s.MaterializePipelineRun(ctx, PipelineRunSpec{
 		PipelineID:           pipelineID,
 		Environment:          environment,
@@ -963,7 +1076,7 @@ func (s *ExecutionService) MaterializePipelineStreamWithAssetEvents(ctx context.
 // MaterializePipelineStreamForRun is the variant used by the scheduler: the
 // run ID is threaded through so the RunCompleted bus event attributes
 // materializations to the scheduler run record.
-func (s *ExecutionService) MaterializePipelineStreamForRun(ctx context.Context, runID, pipelineID, environment string, dryRun, fullRefresh bool, startDate, endDate string, onChunk func([]byte), onAssetEvent func(ExecutionAssetEvent)) MaterializeResult {
+func (s *ExecutionService) MaterializePipelineStreamForRun(ctx context.Context, runID, pipelineID, environment string, dryRun, fullRefresh bool, startDate, endDate string, onChunk func([]byte), onAssetEvent func(ExecutionAssetEvent) error) MaterializeResult {
 	return s.MaterializePipelineRun(ctx, PipelineRunSpec{
 		RunID:       runID,
 		PipelineID:  pipelineID,
@@ -980,8 +1093,11 @@ func (s *ExecutionService) MaterializePipelineStreamForRun(ctx context.Context, 
 // the executor runs the materialized snapshot instead of the working tree;
 // PipelineID still identifies the pipeline for events and asset listing.
 type PipelineRunSpec struct {
-	RunID      string
-	PipelineID string
+	RunID string
+	// CompletionID orders target-aware writes. Scheduler-backed runs use RunID;
+	// inline executions receive a UUID before execution.
+	CompletionID string
+	PipelineID   string
 	// PipelineUUID is the stable identity admitted with a scheduler RunSpec.
 	// Snapshot execution must use it instead of re-resolving the mutable path.
 	PipelineUUID string
@@ -1005,6 +1121,12 @@ type PipelineRunSpec struct {
 	// normalization but before the first asset starts. A scheduler-backed run
 	// uses it to make crash recovery preserve materialization semantics.
 	OnContextResolved func(ResolvedPipelineRunContext) error
+	// OnTargetsResolved persists the complete value-only pipeline snapshot
+	// after effective configuration is selected and before the first task.
+	OnTargetsResolved func(ExecutionTargetSnapshot) error
+	// executionTargetSnapshot is populated internally by the executor callback
+	// and carried only on the synchronous completion event.
+	executionTargetSnapshot *ExecutionTargetSnapshot
 }
 
 type ResolvedPipelineRunContext struct {
@@ -1016,7 +1138,7 @@ type ResolvedPipelineRunContext struct {
 	SensorMode  string
 }
 
-func (s *ExecutionService) MaterializePipelineRun(ctx context.Context, spec PipelineRunSpec, onChunk func([]byte), onAssetEvent func(ExecutionAssetEvent)) MaterializeResult {
+func (s *ExecutionService) MaterializePipelineRun(ctx context.Context, spec PipelineRunSpec, onChunk func([]byte), onAssetEvent func(ExecutionAssetEvent) error) MaterializeResult {
 	contextInput := runcontext.Input{
 		Start:       spec.StartDate,
 		End:         spec.EndDate,
@@ -1034,6 +1156,12 @@ func (s *ExecutionService) MaterializePipelineRun(ctx context.Context, spec Pipe
 	spec.StartDate = normalizedContext.StartString()
 	spec.EndDate = normalizedContext.EndString()
 	spec.SensorMode = normalizedContext.SensorMode
+	if !spec.DryRun && strings.TrimSpace(spec.CompletionID) == "" {
+		spec.CompletionID = strings.TrimSpace(spec.RunID)
+		if spec.CompletionID == "" {
+			spec.CompletionID = uuid.NewString()
+		}
+	}
 
 	ctx, warnings := withExecutionWarnings(ctx)
 	spec.Environment = s.effectiveEnvironment(spec.Environment)
@@ -1064,7 +1192,16 @@ func (s *ExecutionService) MaterializePipelineRun(ctx context.Context, spec Pipe
 		}
 	}
 	operation := withOperationTimeWindow(runOperation(target, spec.PipelineID, "", spec.Environment), timeWindow)
+	var releaseExecutionLease func() error
+	if !spec.DryRun {
+		releaseExecutionLease, err = s.acquireExecutionLease(ctx)
+		if err != nil {
+			return MaterializeResult{Status: "error", Operation: operation, Error: "acquire workspace execution lease: " + err.Error(), ExitCode: 1}
+		}
+		defer func() { _ = releaseExecutionLease() }()
+	}
 	observed := newPipelineRunObservation(onAssetEvent)
+	observed.configureTargetWrites(ctx, spec.CompletionID, s.deps.TargetWrites)
 	sensorMode := effectiveSensorMode(spec.SensorMode, spec.Scheduled)
 	if !spec.DryRun && spec.OnContextResolved != nil {
 		if err := spec.OnContextResolved(ResolvedPipelineRunContext{
@@ -1086,15 +1223,37 @@ func (s *ExecutionService) MaterializePipelineRun(ctx context.Context, spec Pipe
 		StartDate:   timeWindow.StartRFC3339(),
 		EndDate:     timeWindow.EndRFC3339(),
 		AssetEvent:  observed.handle,
+		OnTargetsResolved: func(snapshot ExecutionTargetSnapshot) error {
+			if spec.OnTargetsResolved != nil {
+				if err := spec.OnTargetsResolved(snapshot); err != nil {
+					return err
+				}
+			}
+			if err := observed.captureExecutionTargets(snapshot); err != nil {
+				return err
+			}
+			captured := snapshot
+			spec.executionTargetSnapshot = &captured
+			return nil
+		},
 		ConfigPath:  spec.ConfigPath,
 		FullRefresh: spec.FullRefresh,
 	}, onChunk)
 
 	changedAssetIDs := make([]string, 0)
 	var materializedAt *time.Time
+	var completionErr error
 	if !spec.DryRun {
 		now := time.Now().UTC()
-		if currentPipeline, ok := s.findPipelineView(spec.PipelineID); ok {
+		currentPipeline, _ := s.findPipelineView(spec.PipelineID)
+		pipelineUUID := observed.pipelineUUID()
+		if pipelineUUID == "" {
+			pipelineUUID = strings.TrimSpace(spec.PipelineUUID)
+		}
+		if pipelineUUID == "" {
+			pipelineUUID = currentPipeline.UUID
+		}
+		if pipelineUUID != "" {
 			completionStatus := "succeeded"
 			if runErr != nil {
 				completionStatus = "failed"
@@ -1104,8 +1263,11 @@ func (s *ExecutionService) MaterializePipelineRun(ctx context.Context, spec Pipe
 			}
 			runAssets, succeededIDs := observed.completedAssets(currentPipeline, completionStatus)
 			changedAssetIDs = append(changedAssetIDs, succeededIDs...)
-			s.emitRunCompletedForSpec(spec, currentPipeline.UUID, timeWindow, now, runAssets)
-			if runErr == nil {
+			completionErr = s.emitRunCompletedForSpec(ctx, spec, pipelineUUID, timeWindow, now, runAssets)
+			if completionErr != nil {
+				completionErr = errors.Join(completionErr, observed.markSuccessfulTargetWritesDirty(now))
+			}
+			if runErr == nil && completionErr == nil {
 				materializedAt = &now
 			}
 		}
@@ -1114,10 +1276,19 @@ func (s *ExecutionService) MaterializePipelineRun(ctx context.Context, spec Pipe
 	status := "ok"
 	errorMessage := ""
 	exitCode := 0
-	if runErr != nil {
+	if runErr != nil || completionErr != nil {
 		status = "error"
-		errorMessage = runErr.Error()
+		if runErr != nil && executionWasCancelled(ctx, runErr) {
+			status = "cancelled"
+		}
 		exitCode = 1
+		if runErr == nil {
+			errorMessage = "physical execution completed, but its durable completion could not be recorded: " + completionErr.Error()
+		} else if completionErr != nil {
+			errorMessage = errors.Join(runErr, fmt.Errorf("record durable completion: %w", completionErr)).Error()
+		} else {
+			errorMessage = runErr.Error()
+		}
 	}
 
 	return MaterializeResult{
@@ -1132,78 +1303,408 @@ func (s *ExecutionService) MaterializePipelineRun(ctx context.Context, spec Pipe
 	}
 }
 
-type pipelineRunObservation struct {
-	mu       sync.Mutex
-	onEvent  func(ExecutionAssetEvent)
-	order    []string
-	statuses map[string]string
+func executionWasCancelled(ctx context.Context, runErr error) bool {
+	return errors.Is(runErr, context.Canceled) ||
+		errors.Is(runErr, context.DeadlineExceeded) ||
+		(ctx != nil && ctx.Err() != nil)
 }
 
-func newPipelineRunObservation(onEvent func(ExecutionAssetEvent)) *pipelineRunObservation {
-	return &pipelineRunObservation{onEvent: onEvent, statuses: make(map[string]string)}
-}
-
-func (o *pipelineRunObservation) handle(event ExecutionAssetEvent) {
-	if o.onEvent != nil {
-		o.onEvent(event)
+func (s *ExecutionService) acquireExecutionLease(ctx context.Context) (func() error, error) {
+	if s.deps.AcquireExecutionLease == nil {
+		return func() error { return nil }, nil
 	}
+	release, err := s.deps.AcquireExecutionLease(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if release == nil {
+		return nil, errors.New("execution lease returned a nil release function")
+	}
+	return release, nil
+}
+
+type pipelineRunObservation struct {
+	mu               sync.Mutex
+	onEvent          func(ExecutionAssetEvent) error
+	targetWriteCtx   context.Context
+	targetWrites     TargetWriteStore
+	completionID     string
+	claims           map[string]matlog.TargetWriteClaim
+	upstreamWriters  map[string]map[string]bus.UpstreamWriterSnapshot
+	hasUpstreamReads map[string]bool
+	order            []string
+	statuses         map[string]string
+	startedAt        map[string]*time.Time
+	finishedAt       map[string]*time.Time
+	ordinals         map[string]int64
+	terminal         map[string]bool
+	nextOrdinal      int64
+	executionTargets ExecutionTargetSnapshot
+}
+
+func newPipelineRunObservation(onEvent func(ExecutionAssetEvent) error) *pipelineRunObservation {
+	return &pipelineRunObservation{
+		onEvent:          onEvent,
+		claims:           make(map[string]matlog.TargetWriteClaim),
+		upstreamWriters:  make(map[string]map[string]bus.UpstreamWriterSnapshot),
+		hasUpstreamReads: make(map[string]bool),
+		statuses:         make(map[string]string),
+		startedAt:        make(map[string]*time.Time),
+		finishedAt:       make(map[string]*time.Time),
+		ordinals:         make(map[string]int64),
+		terminal:         make(map[string]bool),
+	}
+}
+
+func (o *pipelineRunObservation) configureTargetWrites(ctx context.Context, completionID string, store TargetWriteStore) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	o.targetWriteCtx = ctx
+	o.completionID = strings.TrimSpace(completionID)
+	o.targetWrites = store
+}
+
+func (o *pipelineRunObservation) handle(event ExecutionAssetEvent) error {
 	assetName := strings.TrimSpace(event.Asset)
 	if assetName == "" {
-		return
+		return nil
 	}
 	status := completedExecutionStatus(event.Status)
 	running := strings.EqualFold(strings.TrimSpace(event.Status), "running")
 	if status == "" && !running {
-		return
+		return nil
+	}
+	if running {
+		writers, captured, err := o.captureUpstreamWriterSnapshot(assetName)
+		if err != nil {
+			return err
+		}
+		event.UpstreamWriters = writers
+		event.HasUpstreamWriterSnapshot = captured
 	}
 	o.mu.Lock()
-	defer o.mu.Unlock()
 	if _, exists := o.statuses[assetName]; !exists {
 		o.order = append(o.order, assetName)
 	}
+	if event.StartedAt != nil && !event.StartedAt.IsZero() {
+		started := event.StartedAt.UTC()
+		if o.startedAt[assetName] == nil {
+			o.startedAt[assetName] = &started
+		}
+		event.StartedAt = o.startedAt[assetName]
+	}
 	if status != "" {
 		o.statuses[assetName] = status
+		if !o.terminal[assetName] {
+			o.terminal[assetName] = true
+			o.ordinals[assetName] = o.nextOrdinal
+			o.nextOrdinal++
+			finished := time.Now().UTC()
+			if event.FinishedAt != nil && !event.FinishedAt.IsZero() {
+				finished = event.FinishedAt.UTC()
+			}
+			o.finishedAt[assetName] = &finished
+		}
+		ordinal := o.ordinals[assetName]
+		event.CompletionOrdinal = &ordinal
+		event.FinishedAt = o.finishedAt[assetName]
 	} else if _, exists := o.statuses[assetName]; !exists {
 		o.statuses[assetName] = ""
 	}
+	if !running {
+		event.UpstreamWriters = cloneUpstreamWriterSnapshot(o.upstreamWriters[assetName])
+		event.HasUpstreamWriterSnapshot = o.hasUpstreamReads[assetName]
+	}
+	o.mu.Unlock()
+
+	if running {
+		if o.onEvent != nil {
+			if err := o.onEvent(event); err != nil {
+				return err
+			}
+		}
+		// The scheduler's running step is durable before the physical claim, but
+		// the direct executor cannot start the task until this callback returns.
+		// A claim failure therefore aborts safely without touching the target.
+		return o.claimTargetWrite(assetName, event.StartedAt)
+	}
+	if status == "failed" || status == "cancelled" {
+		// Persist physical uncertainty before forwarding the terminal scheduler
+		// step. A step-store failure must not leave the previous writer trusted.
+		if err := o.markTargetWriteDirty(assetName, event.FinishedAt); err != nil {
+			return err
+		}
+	}
+	// Observation happens before persistence forwarding so a physical success
+	// remains represented truthfully even if terminal step persistence fails.
+	if o.onEvent != nil {
+		return o.onEvent(event)
+	}
+	return nil
 }
 
-func (o *pipelineRunObservation) completedAssets(view PipelineView, completionStatus string) ([]bus.AssetRun, []string) {
+func (o *pipelineRunObservation) captureUpstreamWriterSnapshot(assetName string) (map[string]bus.UpstreamWriterSnapshot, bool, error) {
+	o.mu.Lock()
+	if o.hasUpstreamReads[assetName] {
+		writers := cloneUpstreamWriterSnapshot(o.upstreamWriters[assetName])
+		o.mu.Unlock()
+		return writers, true, nil
+	}
+	store := o.targetWrites
+	baseCtx := o.targetWriteCtx
+	snapshot := o.executionTargets
+	consumer, exists := snapshot.Entries[assetName]
+	o.mu.Unlock()
+	if store == nil {
+		return nil, false, nil
+	}
+	if snapshot.Version < ExecutionTargetSnapshotVersion || !exists {
+		return nil, false, fmt.Errorf("capture upstream physical writers for %s: execution target snapshot is unavailable", assetName)
+	}
+
+	targets := make([]string, 0, len(consumer.Upstreams))
+	upstreams := make(map[string]ExecutionTargetSnapshotEntry, len(consumer.Upstreams))
+	seenTargets := make(map[string]struct{}, len(consumer.Upstreams))
+	for _, upstream := range consumer.Upstreams {
+		entry, inPipeline := snapshot.Entries[upstream.Value]
+		if !inPipeline || entry.TargetFidelity != AssetRenderFidelityExact || entry.TargetIdentity == "" {
+			continue
+		}
+		upstreams[entry.AssetID] = entry
+		if _, seen := seenTargets[entry.TargetIdentity]; !seen {
+			seenTargets[entry.TargetIdentity] = struct{}{}
+			targets = append(targets, entry.TargetIdentity)
+		}
+	}
+	sort.Strings(targets)
+	if baseCtx == nil {
+		baseCtx = context.Background()
+	}
+	writers, err := store.LatestWriters(baseCtx, targets)
+	if err != nil {
+		return nil, false, fmt.Errorf("capture upstream physical writers for %s: %w", assetName, err)
+	}
+	captured := make(map[string]bus.UpstreamWriterSnapshot, len(upstreams))
+	for upstreamID, target := range upstreams {
+		writer, ok := writers[target.TargetIdentity]
+		if !ok || writer.Ambiguous || writer.AssetID != upstreamID || writer.TargetIdentity != target.TargetIdentity {
+			continue
+		}
+		captured[upstreamID] = bus.UpstreamWriterSnapshot{
+			AssetID: writer.AssetID, TargetIdentity: writer.TargetIdentity,
+			Fingerprint: writer.Fingerprint, VarsHash: writer.VarsHash,
+			TargetGeneration: writer.TargetGeneration, CompletionID: writer.CompletionID,
+			CompletionOrdinal: writer.CompletionOrdinal, MaterializedAt: writer.MaterializedAt.UTC(),
+		}
+	}
+	o.mu.Lock()
+	o.upstreamWriters[assetName] = cloneUpstreamWriterSnapshot(captured)
+	o.hasUpstreamReads[assetName] = true
+	o.mu.Unlock()
+	return captured, true, nil
+}
+
+func cloneUpstreamWriterSnapshot(source map[string]bus.UpstreamWriterSnapshot) map[string]bus.UpstreamWriterSnapshot {
+	if source == nil {
+		return nil
+	}
+	clone := make(map[string]bus.UpstreamWriterSnapshot, len(source))
+	for assetID, writer := range source {
+		clone[assetID] = writer
+	}
+	return clone
+}
+
+func (o *pipelineRunObservation) claimTargetWrite(assetName string, startedAt *time.Time) error {
+	o.mu.Lock()
+	store := o.targetWrites
+	entry, captured := o.executionTargets.Entries[assetName]
+	if store == nil || !captured || entry.TargetFidelity != AssetRenderFidelityExact || entry.TargetIdentity == "" {
+		o.mu.Unlock()
+		return nil
+	}
+	if _, exists := o.claims[assetName]; exists {
+		o.mu.Unlock()
+		return nil
+	}
+	claimedAt := time.Now().UTC()
+	if startedAt != nil && !startedAt.IsZero() {
+		claimedAt = startedAt.UTC()
+	}
+	claim := matlog.TargetWriteClaim{
+		TargetIdentity: entry.TargetIdentity,
+		CompletionID:   o.completionID,
+		AssetID:        entry.AssetID,
+		ClaimedAt:      claimedAt,
+	}
+	claimCtx := o.targetWriteCtx
+	o.claims[assetName] = claim
+	o.mu.Unlock()
+
+	if claimCtx == nil {
+		claimCtx = context.Background()
+	}
+	if err := store.ClaimTargetWrite(claimCtx, claim); err != nil {
+		o.mu.Lock()
+		delete(o.claims, assetName)
+		o.mu.Unlock()
+		return fmt.Errorf("claim physical target for %s: %w", assetName, err)
+	}
+	return nil
+}
+
+func (o *pipelineRunObservation) markTargetWriteDirty(assetName string, finishedAt *time.Time) error {
+	o.mu.Lock()
+	store := o.targetWrites
+	claim, claimed := o.claims[assetName]
+	baseCtx := o.targetWriteCtx
+	o.mu.Unlock()
+	if store == nil || !claimed {
+		return nil
+	}
+	at := time.Now().UTC()
+	if finishedAt != nil && !finishedAt.IsZero() {
+		at = finishedAt.UTC()
+	}
+	if baseCtx == nil {
+		baseCtx = context.Background()
+	}
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(baseCtx), 10*time.Second)
+	defer cancel()
+	if err := store.MarkTargetWriteClaimDirty(ctx, claim, at); err != nil && !errors.Is(err, matlog.ErrTargetWriteClaimNotFound) {
+		return fmt.Errorf("mark physical target uncertain for %s: %w", assetName, err)
+	}
+	return nil
+}
+
+func (o *pipelineRunObservation) markSuccessfulTargetWritesDirty(at time.Time) error {
+	o.mu.Lock()
+	names := make([]string, 0, len(o.claims))
+	for name := range o.claims {
+		if o.statuses[name] == "succeeded" {
+			names = append(names, name)
+		}
+	}
+	o.mu.Unlock()
+	sort.Strings(names)
+	var errs []error
+	for _, name := range names {
+		finished := at
+		o.mu.Lock()
+		if recorded := o.finishedAt[name]; recorded != nil {
+			finished = recorded.UTC()
+		}
+		o.mu.Unlock()
+		if err := o.markTargetWriteDirty(name, &finished); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	return errors.Join(errs...)
+}
+
+func (o *pipelineRunObservation) captureExecutionTargets(snapshot ExecutionTargetSnapshot) error {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	if o.executionTargets.Version != 0 {
+		if !reflect.DeepEqual(o.executionTargets, snapshot) {
+			return fmt.Errorf("execution target snapshot changed during the run")
+		}
+		return nil
+	}
+	o.executionTargets = snapshot
+	return nil
+}
+
+func (o *pipelineRunObservation) completedAssets(view PipelineView, _ string) ([]bus.AssetRun, []string) {
+	return o.completedAssetsForNames(view, "", nil)
+}
+
+func (o *pipelineRunObservation) completedAssetsForNames(view PipelineView, _ string, selectedNames []string) ([]bus.AssetRun, []string) {
 	o.mu.Lock()
 	defer o.mu.Unlock()
 
+	selected := make(map[string]bool, len(selectedNames))
+	for _, name := range selectedNames {
+		if name = strings.TrimSpace(name); name != "" {
+			selected[name] = true
+		}
+	}
+	restrictSelection := selectedNames != nil && len(selected) > 0
 	assetsByName := make(map[string]AssetView, len(view.Assets))
 	for _, asset := range view.Assets {
 		assetsByName[asset.Name] = asset
-		if completionStatus == "succeeded" {
-			if _, observed := o.statuses[asset.Name]; !observed {
-				o.order = append(o.order, asset.Name)
-				o.statuses[asset.Name] = "succeeded"
-			}
-		}
 	}
 
 	runs := make([]bus.AssetRun, 0, len(o.order))
 	succeededIDs := make([]string, 0, len(o.order))
 	for _, name := range o.order {
-		asset, exists := assetsByName[name]
-		if !exists {
+		if restrictSelection && !selected[name] {
 			continue
 		}
+		asset, existsInView := assetsByName[name]
 		status := o.statuses[name]
-		if status == "" {
-			status = completionStatus
+		if status == "" || !o.terminal[name] {
+			// Completion facts describe observed terminal main-task outcomes only.
+			// A pipeline-level result cannot prove that an unobserved asset wrote.
+			continue
+		}
+		entry, captured := o.executionTargets.Entries[name]
+		assetID := entry.AssetID
+		if !captured {
+			if !existsInView || strings.TrimSpace(view.UUID) == "" {
+				continue
+			}
+			assetID = identity.AssetID(view.UUID, name)
 		}
 		runs = append(runs, bus.AssetRun{
-			AssetID:   identity.AssetID(view.UUID, name),
+			AssetID:   assetID,
 			AssetName: name,
 			Status:    status,
 		})
-		if status == "succeeded" {
+		run := &runs[len(runs)-1]
+		if started := o.startedAt[name]; started != nil {
+			value := started.UTC()
+			run.StartedAt = &value
+		}
+		if finished := o.finishedAt[name]; finished != nil {
+			value := finished.UTC()
+			run.FinishedAt = &value
+		}
+		if o.terminal[name] {
+			run.CompletionOrdinal = o.ordinals[name]
+			run.HasCompletionOrdinal = true
+			run.UpstreamWriters = cloneUpstreamWriterSnapshot(o.upstreamWriters[name])
+			run.HasUpstreamWriterSnapshot = o.hasUpstreamReads[name]
+			if captured {
+				run.TargetIdentity = entry.TargetIdentity
+				run.TargetFidelity = string(entry.TargetFidelity)
+				run.Fingerprint = entry.Fingerprint
+				run.OwnContent = entry.OwnContent
+				run.ConsumedVarsHash = entry.ConsumedVarsHash
+				run.VarsHash = entry.VarsHash
+			}
+		}
+		if status == "succeeded" && existsInView {
 			succeededIDs = append(succeededIDs, asset.ID)
 		}
 	}
 	return runs, succeededIDs
+}
+
+func (o *pipelineRunObservation) pipelineUUID() string {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	return strings.TrimSpace(o.executionTargets.PipelineUUID)
+}
+
+func (o *pipelineRunObservation) executionTargetSnapshot() *ExecutionTargetSnapshot {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	if o.executionTargets.Version == 0 {
+		return nil
+	}
+	snapshot := o.executionTargets
+	return &snapshot
 }
 
 func completedExecutionStatus(status string) string {

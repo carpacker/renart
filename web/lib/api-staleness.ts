@@ -15,6 +15,22 @@ export type StalenessInterval = {
   end: string;
 };
 
+export type TargetFidelity = "exact" | "runtime_only" | "unresolved" | "legacy";
+
+export type LatestPhysicalOutput = {
+  target_identity: string;
+  target_generation: number;
+  writer_asset_id: string;
+  writer_environment: string;
+  fingerprint: string;
+  vars_hash: string;
+  run_id?: string;
+  materialized_at: string;
+  completion_id: string;
+  completion_ordinal: number;
+  ambiguous: boolean;
+};
+
 export type AssetStaleness = {
   asset_id: string;
   asset_name: string;
@@ -34,12 +50,19 @@ export type AssetStaleness = {
   last_run_status?: "succeeded" | "failed" | "cancelled";
   last_run_at?: string;
   last_run_on_current_content?: boolean;
+  // The selected physical output and the latest durable fact about what is
+  // present there. Runtime-only and unresolved targets deliberately omit a
+  // reusable target identity/output.
+  target_fidelity: TargetFidelity;
+  target_identity?: string;
+  latest_output?: LatestPhysicalOutput;
 };
 
 export type PipelineStalenessResponse = {
   pipeline_id: string;
   pipeline_uuid: string;
   environment: string;
+  data_state_token: string;
   assets: AssetStaleness[];
 };
 
@@ -50,6 +73,7 @@ export type StalenessUpdatedEvent = {
   environment: string;
   start?: string;
   end?: string;
+  data_state_token: string;
   assets: AssetStaleness[];
 };
 

@@ -2,6 +2,11 @@ package scheduler
 
 import "time"
 
+const (
+	ExecutionTargetSnapshotVersionV1 = 1
+	ExecutionTargetSnapshotVersionV2 = 2
+)
+
 type RunStatus string
 
 const (
@@ -174,15 +179,65 @@ type PipelineRun struct {
 	// not treat environment, window, or mode fields as executed context while it
 	// is false.
 	ExecutionContextResolved bool `json:"execution_context_resolved"`
+	// ExecutionTargetSnapshot is the immutable, secret-free execution identity
+	// captured after runtime context resolution and before the first asset is
+	// executed. It remains private recovery provenance rather than API state.
+	ExecutionTargetSnapshot *ExecutionTargetSnapshot `json:"-"`
+}
+
+// ExecutionTargetSnapshot captures the exact source and physical-target
+// identity used by one run. Entries are keyed by canonical asset name because
+// persisted run steps use that name; AssetID retains the durable identity used
+// by fingerprint, coverage, and materialization stores.
+type ExecutionTargetSnapshot struct {
+	Version      int                                     `json:"version"`
+	PipelineUUID string                                  `json:"pipeline_uuid,omitempty"`
+	Entries      map[string]ExecutionTargetSnapshotEntry `json:"entries"`
+}
+
+type ExecutionUpstreamSnapshot struct {
+	Type  string `json:"type"`
+	Value string `json:"value"`
+}
+
+type ExecutionTargetSnapshotEntry struct {
+	AssetID           string                      `json:"asset_id"`
+	TargetIdentity    string                      `json:"target_identity,omitempty"`
+	TargetFidelity    string                      `json:"target_fidelity"`
+	Fingerprint       string                      `json:"fingerprint"`
+	OwnContent        string                      `json:"own_content"`
+	ConsumedVarsHash  string                      `json:"consumed_vars_hash"`
+	VarsHash          string                      `json:"vars_hash"`
+	Upstreams         []ExecutionUpstreamSnapshot `json:"upstreams,omitempty"`
+	CoverageMode      string                      `json:"coverage_mode,omitempty"`
+	RefreshRestricted bool                        `json:"refresh_restricted,omitempty"`
 }
 
 type PipelineRunStep struct {
-	RunID      string     `json:"run_id"`
-	Asset      string     `json:"asset"`
-	Status     RunStatus  `json:"status"`
-	StartedAt  *time.Time `json:"started_at,omitempty"`
-	FinishedAt *time.Time `json:"finished_at,omitempty"`
-	Error      string     `json:"error,omitempty"`
+	RunID                     string                            `json:"run_id"`
+	Asset                     string                            `json:"asset"`
+	Status                    RunStatus                         `json:"status"`
+	StartedAt                 *time.Time                        `json:"started_at,omitempty"`
+	FinishedAt                *time.Time                        `json:"finished_at,omitempty"`
+	Error                     string                            `json:"error,omitempty"`
+	CompletionOrdinal         *int64                            `json:"completion_ordinal,omitempty"`
+	UpstreamWriters           map[string]UpstreamWriterSnapshot `json:"-"`
+	HasUpstreamWriterSnapshot bool                              `json:"-"`
+}
+
+// UpstreamWriterSnapshot is the exact physical output an asset read from one
+// upstream immediately before its main task began. The containing map is keyed
+// by AssetID. It is persisted with the run step so recovery never has to infer
+// read provenance from a later latest-writer state.
+type UpstreamWriterSnapshot struct {
+	AssetID           string
+	TargetIdentity    string
+	Fingerprint       string
+	VarsHash          string
+	TargetGeneration  int64
+	CompletionID      string
+	CompletionOrdinal int64
+	MaterializedAt    time.Time
 }
 
 type LogLine struct {
@@ -240,13 +295,21 @@ type RunRequest struct {
 	// The scheduler uses it to durably replace admission intent and publish a
 	// canonical running event.
 	OnContextResolved func(RunExecutionContext) error
-	OnStep            func(RunStepEvent)
+	// OnTargetsResolved persists the value-only execution target snapshot after
+	// effective configuration is selected and before the first task starts.
+	OnTargetsResolved func(ExecutionTargetSnapshot) error
+	// OnStep is synchronous: a running-step persistence failure must stop before
+	// the physical task, and a terminal persistence failure must fail closed.
+	OnStep func(RunStepEvent) error
 }
 
 type RunStepEvent struct {
-	Asset      string
-	Status     RunStatus
-	StartedAt  *time.Time
-	FinishedAt *time.Time
-	Error      string
+	Asset                     string
+	Status                    RunStatus
+	StartedAt                 *time.Time
+	FinishedAt                *time.Time
+	Error                     string
+	CompletionOrdinal         *int64
+	UpstreamWriters           map[string]UpstreamWriterSnapshot
+	HasUpstreamWriterSnapshot bool
 }

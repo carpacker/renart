@@ -250,6 +250,7 @@ const defaultGitignoreContents = `.renart/state.db*
 .renart/server.lock
 .renart/server.json*
 .renart/scheduler.lock
+.renart/execution.lock
 logs/
 duckdb-files/
 .env
@@ -272,6 +273,7 @@ var runtimeGitExcludePaths = []string{
 	".renart/server.lock",
 	".renart/server.json*",
 	".renart/scheduler.lock",
+	".renart/execution.lock",
 }
 
 // EnsureRuntimeGitExcludes keeps Renart-owned runtime files out of source
@@ -353,7 +355,8 @@ func isRuntimeGitPath(path, statePrefix string) bool {
 	return strings.HasPrefix(name, "state.db") ||
 		strings.HasPrefix(name, "server.json") ||
 		name == "server.lock" ||
-		name == "scheduler.lock"
+		name == "scheduler.lock" ||
+		name == "execution.lock"
 }
 
 func findRepositoryMetadata(workspaceRoot string) (string, string, error) {

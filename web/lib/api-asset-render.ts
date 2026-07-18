@@ -13,6 +13,7 @@ export type {
   AssetRenderRequest,
   AssetRenderResult,
   AssetRenderStage,
+  AssetRenderTarget,
 } from "@/lib/generated/api-types";
 
 export function renderAsset(assetId: string, request: AssetRenderRequest) {

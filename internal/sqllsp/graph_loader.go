@@ -403,6 +403,10 @@ func DialectFromAssetType(assetType string) string {
 		return "clickhouse"
 	case "trino.sql", "trino.sensor.query":
 		return "trino"
+	case "my.sql", "my.sensor.query":
+		return "mysql"
+	case "oracle.sql":
+		return "oracle"
 	default:
 		return "generic"
 	}

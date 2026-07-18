@@ -2,13 +2,13 @@ package service
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
 
 	"github.com/bruin-data/bruin/pkg/pipeline"
-	"renart/internal/web/bus"
-	"renart/internal/web/identity"
+	"github.com/google/uuid"
 	webmodel "renart/internal/web/model"
 	"renart/internal/web/policy"
 	"renart/internal/web/staleness"
@@ -131,17 +131,32 @@ func (s *ExecutionService) MaterializeStaleAssetsStream(
 	}
 	operation = withOperationTimeWindow(operation, defaultWindow)
 
-	pipelineUUID := ""
+	pipelineView := PipelineView{}
+	pipelineFound := false
 	if s.deps.CurrentPipelines != nil {
 		for _, view := range s.deps.CurrentPipelines() {
 			if view.ID == pipelineID {
-				pipelineUUID = view.UUID
+				pipelineView = view
+				pipelineFound = true
 				break
 			}
 		}
 	}
 
 	ordered, unknown := orderStalePlan(parsed, plan)
+	var releaseExecutionLease func() error
+	if len(ordered) > 0 {
+		releaseExecutionLease, err = s.acquireExecutionLease(ctx)
+		if err != nil {
+			return MaterializeResult{
+				Status:    "error",
+				Operation: operation,
+				Error:     "acquire workspace execution lease: " + err.Error(),
+				ExitCode:  1,
+			}
+		}
+		defer func() { _ = releaseExecutionLease() }()
+	}
 	emit := func(event StaleBuildEvent) {
 		if onEvent != nil {
 			onEvent(event)
@@ -190,8 +205,40 @@ func (s *ExecutionService) MaterializeStaleAssetsStream(
 			}
 			logLine(fmt.Sprintf("\n━━ Building %s (%d/%d)%s ━━\n", asset.Name, index+1, total, suffix))
 
-			output, runErr := s.runSingleAssetMaterialization(ctx, assetPath, environment, window, false, onChunk)
+			completionID := uuid.NewString()
+			observed := newPipelineRunObservation(nil)
+			observed.configureTargetWrites(ctx, completionID, s.deps.TargetWrites)
+			output, runErr := s.runSingleAssetMaterializationObserved(
+				ctx, assetPath, environment, window, false, sensorModeOnce,
+				onChunk, observed.handle, observed.captureExecutionTargets,
+			)
 			combined.Write(output)
+			if pipelineFound || observed.pipelineUUID() != "" {
+				completionStatus := "succeeded"
+				if runErr != nil {
+					completionStatus = "failed"
+					if executionWasCancelled(ctx, runErr) {
+						completionStatus = "cancelled"
+					}
+				}
+				runAssets, _ := observed.completedAssetsForNames(pipelineView, completionStatus, []string{asset.Name})
+				if len(runAssets) > 0 {
+					now := time.Now().UTC()
+					pipelineUUID := observed.pipelineUUID()
+					if pipelineUUID == "" {
+						pipelineUUID = pipelineView.UUID
+					}
+					completionErr := s.emitRunCompletedForSpec(ctx, PipelineRunSpec{
+						CompletionID:            completionID,
+						Environment:             environment,
+						executionTargetSnapshot: observed.executionTargetSnapshot(),
+					}, pipelineUUID, window, now, runAssets)
+					if completionErr != nil {
+						completionErr = errors.Join(completionErr, observed.markSuccessfulTargetWritesDirty(now))
+						runErr = errors.Join(runErr, fmt.Errorf("record durable completion: %w", completionErr))
+					}
+				}
+			}
 
 			if runErr != nil {
 				message := runErr.Error()
@@ -199,14 +246,6 @@ func (s *ExecutionService) MaterializeStaleAssetsStream(
 					message = "duckdb database is busy (lock held by another process), please retry"
 				}
 				logLine(fmt.Sprintf("\n%s failed: %s\n", asset.Name, message))
-				if pipelineUUID != "" {
-					now := time.Now().UTC()
-					s.emitRunCompleted("", pipelineUUID, environment, window, now, []bus.AssetRun{{
-						AssetID:   identity.AssetID(pipelineUUID, asset.Name),
-						AssetName: asset.Name,
-						Status:    "failed",
-					}})
-				}
 				assetFailed = true
 				break
 			}
@@ -215,14 +254,6 @@ func (s *ExecutionService) MaterializeStaleAssetsStream(
 			// and achieved fingerprints reflect exactly what was executed; bus
 			// handlers run synchronously, so downstreams built later in this
 			// loop already see this asset's fresh fingerprint.
-			now := time.Now().UTC()
-			if pipelineUUID != "" {
-				s.emitRunCompleted("", pipelineUUID, environment, window, now, []bus.AssetRun{{
-					AssetID:   identity.AssetID(pipelineUUID, asset.Name),
-					AssetName: asset.Name,
-					Status:    "succeeded",
-				}})
-			}
 		}
 
 		if assetFailed {

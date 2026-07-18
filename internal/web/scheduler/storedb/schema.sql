@@ -17,7 +17,9 @@ CREATE TABLE IF NOT EXISTS pipeline_runs (
     full_refresh INTEGER NOT NULL DEFAULT 0,
     backfill INTEGER NOT NULL DEFAULT 0,
     sensor_mode TEXT NOT NULL DEFAULT '',
-    execution_context_resolved INTEGER NOT NULL DEFAULT 0
+    execution_context_resolved INTEGER NOT NULL DEFAULT 0,
+    execution_target_snapshot TEXT NOT NULL DEFAULT ''
+        CHECK (execution_target_snapshot = '' OR json_valid(execution_target_snapshot))
 );
 
 CREATE INDEX IF NOT EXISTS idx_runs_pipeline_time ON pipeline_runs (pipeline_id, started_at DESC);
@@ -69,11 +71,18 @@ CREATE TABLE IF NOT EXISTS pipeline_run_steps (
     started_at TEXT,
     finished_at TEXT,
     error TEXT,
+    completion_ordinal INTEGER
+        CHECK (completion_ordinal IS NULL OR completion_ordinal >= 0),
+    upstream_writer_snapshot TEXT NOT NULL DEFAULT ''
+        CHECK (upstream_writer_snapshot = '' OR json_valid(upstream_writer_snapshot)),
     PRIMARY KEY(run_id, asset),
     FOREIGN KEY(run_id) REFERENCES pipeline_runs(id) ON DELETE CASCADE
 );
 
 CREATE INDEX IF NOT EXISTS idx_run_steps_run_started ON pipeline_run_steps (run_id, started_at);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_pipeline_run_steps_completion
+    ON pipeline_run_steps (run_id, completion_ordinal)
+    WHERE completion_ordinal IS NOT NULL;
 
 CREATE TABLE IF NOT EXISTS schedule_watermarks (
     pipeline TEXT PRIMARY KEY,
@@ -86,19 +95,39 @@ CREATE TABLE IF NOT EXISTS pipeline_schedule_settings (
     updated_at TEXT NOT NULL
 );
 
+-- Durable hand-off between physical run completion and derived-state
+-- consumers. The body is a strict versioned completion envelope; sequence is
+-- the deterministic replay order.
+CREATE TABLE IF NOT EXISTS renart_completion_outbox (
+    sequence      INTEGER PRIMARY KEY AUTOINCREMENT,
+    completion_id TEXT NOT NULL UNIQUE
+        CHECK (completion_id <> '' AND completion_id = trim(completion_id)),
+    version       INTEGER NOT NULL CHECK (version = 1),
+    body          TEXT NOT NULL
+        CHECK (json_valid(body))
+        CHECK (json_type(body) = 'object')
+        CHECK (COALESCE(json_extract(body, '$.version') = version, 0))
+        CHECK (COALESCE(json_extract(body, '$.event.completion_id') = completion_id, 0)),
+    enqueued_at   TEXT NOT NULL CHECK (enqueued_at <> '')
+);
+
 -- Materialization log (queried by the matlog package directly, not sqlc;
 -- kept here so this file stays the full schema reference).
 CREATE TABLE IF NOT EXISTS renart_materializations (
-    id              INTEGER PRIMARY KEY,
-    asset_id        TEXT NOT NULL,
-    environment     TEXT NOT NULL,
-    fingerprint     TEXT NOT NULL,
-    vars_hash       TEXT NOT NULL,
-    interval_start  TEXT NOT NULL DEFAULT '',
-    interval_end    TEXT NOT NULL DEFAULT '',
-    run_id          TEXT NOT NULL,
-    materialized_at TEXT NOT NULL,
-    own_content     TEXT NOT NULL DEFAULT ''
+    id                INTEGER PRIMARY KEY,
+    asset_id          TEXT NOT NULL,
+    environment       TEXT NOT NULL,
+    fingerprint       TEXT NOT NULL,
+    vars_hash         TEXT NOT NULL,
+    interval_start    TEXT NOT NULL DEFAULT '',
+    interval_end      TEXT NOT NULL DEFAULT '',
+    run_id            TEXT NOT NULL,
+    materialized_at   TEXT NOT NULL,
+    own_content       TEXT NOT NULL DEFAULT '',
+    target_identity   TEXT NOT NULL DEFAULT '',
+    target_generation INTEGER NOT NULL DEFAULT 0 CHECK (target_generation >= 0),
+    completion_id     TEXT NOT NULL DEFAULT '',
+    completion_ordinal INTEGER NOT NULL DEFAULT 0 CHECK (completion_ordinal >= 0)
 );
 
 CREATE INDEX IF NOT EXISTS idx_renart_mat_lookup ON renart_materializations
@@ -109,19 +138,60 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_renart_mat_run ON renart_materializations
     (asset_id, environment, run_id) WHERE run_id <> '';
 
 CREATE TABLE IF NOT EXISTS renart_coverage (
-    asset_id        TEXT NOT NULL,
-    environment     TEXT NOT NULL,
-    fingerprint     TEXT NOT NULL,
-    vars_hash       TEXT NOT NULL,
-    interval_start  TEXT NOT NULL DEFAULT '',
-    interval_end    TEXT NOT NULL DEFAULT '',
-    materialized_at TEXT NOT NULL,
-    own_content     TEXT NOT NULL DEFAULT '',
-    PRIMARY KEY (asset_id, environment, fingerprint, vars_hash, interval_start)
+    asset_id          TEXT NOT NULL,
+    environment       TEXT NOT NULL,
+    fingerprint       TEXT NOT NULL,
+    vars_hash         TEXT NOT NULL,
+    target_identity   TEXT NOT NULL DEFAULT '',
+    target_generation INTEGER NOT NULL DEFAULT 0 CHECK (target_generation >= 0),
+    interval_start    TEXT NOT NULL DEFAULT '',
+    interval_end      TEXT NOT NULL DEFAULT '',
+    materialized_at   TEXT NOT NULL,
+    own_content       TEXT NOT NULL DEFAULT '',
+    PRIMARY KEY (
+        asset_id, environment, fingerprint, vars_hash,
+        target_identity, target_generation, interval_start
+    )
 );
 
 CREATE INDEX IF NOT EXISTS idx_renart_coverage_selection ON renart_coverage
     (environment, vars_hash, asset_id);
+CREATE INDEX IF NOT EXISTS idx_renart_coverage_target ON renart_coverage
+    (target_identity, target_generation, asset_id, environment, vars_hash);
+
+-- Durable identity of the successful writer currently present at each
+-- physical target. Raw materialization-fact retention never prunes this row.
+CREATE TABLE IF NOT EXISTS renart_latest_successful_writers (
+    target_identity    TEXT PRIMARY KEY CHECK (target_identity <> ''),
+    target_generation  INTEGER NOT NULL CHECK (target_generation > 0),
+    asset_id           TEXT NOT NULL,
+    environment        TEXT NOT NULL,
+    fingerprint        TEXT NOT NULL,
+    vars_hash          TEXT NOT NULL,
+    run_id             TEXT NOT NULL DEFAULT '',
+    materialized_at    TEXT NOT NULL,
+    completion_id      TEXT NOT NULL CHECK (completion_id <> ''),
+    completion_ordinal INTEGER NOT NULL CHECK (completion_ordinal >= 0),
+    ambiguous          INTEGER NOT NULL DEFAULT 0 CHECK (ambiguous IN (0, 1))
+);
+
+-- Durable fail-closed marker spanning physical execution and materialization
+-- fact recording. A target with any active or dirty claim is never considered
+-- fresh. Successful target-aware recording clears the matching claim and all
+-- older dirty claims in the same transaction as the writer update.
+CREATE TABLE IF NOT EXISTS renart_target_write_claims (
+    claim_sequence  INTEGER PRIMARY KEY AUTOINCREMENT,
+    target_identity TEXT NOT NULL CHECK (target_identity <> ''),
+    completion_id   TEXT NOT NULL CHECK (completion_id <> ''),
+    asset_id        TEXT NOT NULL CHECK (asset_id <> ''),
+    state           TEXT NOT NULL CHECK (state IN ('active', 'dirty')),
+    claimed_at      TEXT NOT NULL,
+    updated_at      TEXT NOT NULL,
+    UNIQUE (target_identity, completion_id, asset_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_renart_target_write_claims_target_state
+    ON renart_target_write_claims (target_identity, state, claim_sequence);
 
 -- Most recent run attempt per (asset, environment), success or failure;
 -- upserted so a later run overwrites the previous outcome.

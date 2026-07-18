@@ -80,6 +80,148 @@ func TestRecoverOrphanedRunsReplaysPersistedTerminalStepsOnce(t *testing.T) {
 	assert.Zero(t, summary.ReplayedRuns)
 }
 
+func TestRecoverOrphanedRunsPreservesResolvedContextWhenRunSpecHasRequestedContext(t *testing.T) {
+	requestedStart := time.Date(2026, 7, 16, 8, 0, 0, 0, time.UTC)
+	requestedEnd := requestedStart.Add(time.Hour)
+
+	tests := []struct {
+		name             string
+		scheduled        bool
+		mutateRequested  func(*PipelineRun)
+		mutateEffective  func(*RunExecutionContext)
+		assertDifference func(*testing.T, PipelineRun, RunExecutionContext)
+	}{
+		{
+			name: "default environment",
+			mutateRequested: func(run *PipelineRun) {
+				run.Environment = ""
+			},
+			assertDifference: func(t *testing.T, requested PipelineRun, effective RunExecutionContext) {
+				assert.Empty(t, requested.Environment)
+				assert.Equal(t, "prod", effective.Environment)
+			},
+		},
+		{
+			name: "default window",
+			mutateRequested: func(run *PipelineRun) {
+				run.WinStart = nil
+				run.WinEnd = nil
+			},
+			assertDifference: func(t *testing.T, requested PipelineRun, effective RunExecutionContext) {
+				assert.Nil(t, requested.WinStart)
+				assert.Nil(t, requested.WinEnd)
+				assert.False(t, effective.WinStart.IsZero())
+				assert.False(t, effective.WinEnd.IsZero())
+			},
+		},
+		{
+			name:      "scheduled restricted full refresh",
+			scheduled: true,
+			mutateRequested: func(run *PipelineRun) {
+				run.FullRefresh = true
+			},
+			mutateEffective: func(context *RunExecutionContext) {
+				context.FullRefresh = false
+			},
+			assertDifference: func(t *testing.T, requested PipelineRun, effective RunExecutionContext) {
+				assert.True(t, requested.FullRefresh)
+				assert.False(t, effective.FullRefresh)
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			store, err := OpenStore(filepath.Join(t.TempDir(), "state.db"))
+			require.NoError(t, err)
+			defer store.Close()
+
+			ctx := context.Background()
+			start := requestedStart
+			end := requestedEnd
+			requested := PipelineRun{
+				ID:           "recovered-context",
+				PipelineID:   "pipeline-id",
+				PipelineUUID: "pipeline-uuid",
+				Pipeline:     "analytics",
+				Environment:  "prod",
+				Trigger:      RunTriggerManual,
+				Status:       RunStatusQueued,
+				WinStart:     &start,
+				WinEnd:       &end,
+				SensorMode:   "once",
+			}
+			if test.scheduled {
+				requested.Trigger = RunTriggerSchedule
+				requested.SnapshotVersionID = "snapshot-id"
+			}
+			if test.mutateRequested != nil {
+				test.mutateRequested(&requested)
+			}
+
+			var spec runSpecV1
+			if test.scheduled {
+				spec = scheduledRunSpec(requested, pipelineRunJobArgs{
+					PipelineUUID:      requested.PipelineUUID,
+					Environment:       requested.Environment,
+					SnapshotVersionID: requested.SnapshotVersionID,
+					FullRefresh:       requested.FullRefresh,
+					SensorMode:        requested.SensorMode,
+				})
+			} else {
+				spec = manualRunSpec(requested, RunSourceWorkingTree, "")
+			}
+			_, err = store.CreateWithSpec(ctx, requested, spec)
+			require.NoError(t, err)
+			jobID := insertTestRiverJob(t, store, pipelineRunJobArgs{RunID: requested.ID})
+			require.NoError(t, store.SetRunRiverJob(ctx, requested.ID, jobID))
+			require.NoError(t, store.MarkRunning(ctx, requested.ID, requestedStart))
+
+			effective := RunExecutionContext{
+				Environment: "prod",
+				WinStart:    requestedStart,
+				WinEnd:      requestedEnd,
+				FullRefresh: requested.FullRefresh,
+				Backfill:    requested.Backfill,
+				SensorMode:  requested.SensorMode,
+			}
+			if test.mutateEffective != nil {
+				test.mutateEffective(&effective)
+			}
+			require.NoError(t, store.SetRunExecutionContext(ctx, requested.ID, effective))
+			require.NoError(t, store.UpsertStep(ctx, PipelineRunStep{
+				RunID: requested.ID, Asset: "analytics.finished", Status: RunStatusSuccess,
+				StartedAt: &requestedStart, FinishedAt: &requestedEnd,
+			}))
+			markTestRiverJobRunning(t, store, jobID)
+
+			var recovered PipelineRun
+			service := New(Options{
+				Store: store,
+				RecoverRun: func(_ context.Context, run PipelineRun, _ []PipelineRunStep) error {
+					recovered = run
+					return nil
+				},
+			})
+			summary, err := service.recoverOrphanedRuns(ctx)
+			require.NoError(t, err)
+			assert.Equal(t, 1, summary.ReconciledRuns)
+			assert.Equal(t, 1, summary.ReplayedRuns)
+			require.True(t, recovered.ExecutionContextResolved)
+			assert.Equal(t, "pipeline-uuid", recovered.PipelineUUID, "recovery restores only the private stable identity")
+			assert.Equal(t, effective.Environment, recovered.Environment)
+			require.NotNil(t, recovered.WinStart)
+			require.NotNil(t, recovered.WinEnd)
+			assert.True(t, effective.WinStart.Equal(*recovered.WinStart))
+			assert.True(t, effective.WinEnd.Equal(*recovered.WinEnd))
+			assert.Equal(t, effective.FullRefresh, recovered.FullRefresh)
+			assert.Equal(t, effective.Backfill, recovered.Backfill)
+			assert.Equal(t, effective.SensorMode, recovered.SensorMode)
+			test.assertDifference(t, requested, effective)
+		})
+	}
+}
+
 func TestRecoverOrphanedRunsSkipsUnresolvedLegacyContext(t *testing.T) {
 	store, err := OpenStore(filepath.Join(t.TempDir(), "state.db"))
 	require.NoError(t, err)
@@ -374,10 +516,19 @@ func TestServicePersistsStructuredRunSteps(t *testing.T) {
 		Store:    store,
 		StateDir: stateDir,
 		Runner: func(ctx context.Context, req RunRequest, onLog func(string)) RunResult {
+			require.NotNil(t, req.OnTargetsResolved)
+			require.NoError(t, req.OnTargetsResolved(testExecutionTargetSnapshot()))
 			started := time.Now().UTC()
-			req.OnStep(RunStepEvent{Asset: "orders_cleaned", Status: RunStatusRunning, StartedAt: &started})
+			require.NoError(t, req.OnStep(RunStepEvent{
+				Asset: "orders_cleaned", Status: RunStatusRunning, StartedAt: &started,
+				UpstreamWriters: testUpstreamWriterSnapshot(), HasUpstreamWriterSnapshot: true,
+			}))
 			finished := started.Add(150 * time.Millisecond)
-			req.OnStep(RunStepEvent{Asset: "orders_cleaned", Status: RunStatusSuccess, StartedAt: &started, FinishedAt: &finished})
+			ordinal := int64(0)
+			require.NoError(t, req.OnStep(RunStepEvent{
+				Asset: "orders_cleaned", Status: RunStatusSuccess,
+				StartedAt: &started, FinishedAt: &finished, CompletionOrdinal: &ordinal,
+			}))
 			return RunResult{Status: "ok"}
 		},
 	})
@@ -387,8 +538,12 @@ func TestServicePersistsStructuredRunSteps(t *testing.T) {
 	run, err := service.Trigger(ctx, PipelineSchedule{PipelineID: "pipeline-id", PipelineName: "analytics"}, TriggerRequest{})
 	require.NoError(t, err)
 	require.Eventually(t, func() bool {
-		_, _, steps, err := service.GetRun(context.Background(), run.ID)
-		return err == nil && len(steps) == 1 && steps[0].Status == RunStatusSuccess
+		stored, _, steps, err := service.GetRun(context.Background(), run.ID)
+		return err == nil && stored.ExecutionTargetSnapshot != nil &&
+			len(steps) == 1 && steps[0].Status == RunStatusSuccess &&
+			steps[0].CompletionOrdinal != nil && *steps[0].CompletionOrdinal == 0 &&
+			steps[0].HasUpstreamWriterSnapshot &&
+			len(steps[0].UpstreamWriters) == 1
 	}, 2*time.Second, 20*time.Millisecond)
 }
 
@@ -817,6 +972,101 @@ func TestWorkerSnoozesWhenQueuedRunCannotPersistStart(t *testing.T) {
 	finished, _, _, getErr := store.Get(ctx, run.ID)
 	require.NoError(t, getErr)
 	assert.Equal(t, RunStatusSuccess, finished.Status)
+	assert.Zero(t, countRows(t, store, `SELECT COUNT(*) FROM pipeline_run_slots WHERE run_id = ?`, run.ID))
+}
+
+func TestWorkerFinalizesWithContextDetachedFromRunnerCancellation(t *testing.T) {
+	t.Parallel()
+	store, err := OpenStore(filepath.Join(t.TempDir(), "state.db"))
+	require.NoError(t, err)
+	defer store.Close()
+	ctx, cancel := context.WithCancel(context.Background())
+	riverJobID := int64(655)
+	run := PipelineRun{
+		ID: "cancelled-after-execution", PipelineID: "pipeline-id", Pipeline: "analytics",
+		Trigger: RunTriggerManual, Status: RunStatusQueued, RiverJobID: &riverJobID,
+	}
+	_, err = store.CreateWithSpec(ctx, run, manualRunSpec(run, RunSourceWorkingTree, ""))
+	require.NoError(t, err)
+
+	worker := &pipelineRunWorker{service: New(Options{
+		Store: store,
+		Runner: func(context.Context, RunRequest, func(string)) RunResult {
+			cancel()
+			return RunResult{Status: "ok"}
+		},
+	})}
+	require.NoError(t, worker.Work(ctx, &river.Job[pipelineRunJobArgs]{
+		JobRow: &rivertype.JobRow{ID: riverJobID},
+		Args:   pipelineRunJobArgs{RunID: run.ID},
+	}))
+	require.ErrorIs(t, ctx.Err(), context.Canceled)
+
+	finished, _, _, getErr := store.Get(context.Background(), run.ID)
+	require.NoError(t, getErr)
+	assert.Equal(t, RunStatusSuccess, finished.Status)
+	assert.NotNil(t, finished.FinishedAt)
+	assert.Zero(t, countRows(t, store, `SELECT COUNT(*) FROM pipeline_run_slots WHERE run_id = ?`, run.ID))
+}
+
+func TestWorkerRetryFinalizesRunningRunWithoutRepeatingPhysicalExecution(t *testing.T) {
+	t.Parallel()
+	store, err := OpenStore(filepath.Join(t.TempDir(), "state.db"))
+	require.NoError(t, err)
+	defer store.Close()
+	ctx := context.Background()
+	riverJobID := int64(656)
+	run := PipelineRun{
+		ID: "indeterminate-running-retry", PipelineID: "pipeline-id", Pipeline: "analytics",
+		Trigger: RunTriggerManual, Status: RunStatusQueued, RiverJobID: &riverJobID,
+	}
+	_, err = store.CreateWithSpec(ctx, run, manualRunSpec(run, RunSourceWorkingTree, ""))
+	require.NoError(t, err)
+	started := time.Date(2026, 7, 17, 15, 0, 0, 0, time.UTC)
+	succeededAt := started.Add(time.Second)
+	require.NoError(t, store.MarkRunning(ctx, run.ID, started))
+	require.NoError(t, store.AppendLog(ctx, run.ID, LogLine{At: started, Line: "physical execution started"}))
+	require.NoError(t, store.UpsertStep(ctx, PipelineRunStep{
+		RunID: run.ID, Asset: "analytics.finished", Status: RunStatusSuccess,
+		StartedAt: &started, FinishedAt: &succeededAt,
+	}))
+	require.NoError(t, store.UpsertStep(ctx, PipelineRunStep{
+		RunID: run.ID, Asset: "analytics.open", Status: RunStatusRunning, StartedAt: &started,
+	}))
+
+	var runnerCalls atomic.Int32
+	worker := &pipelineRunWorker{service: New(Options{
+		Store: store,
+		Runner: func(context.Context, RunRequest, func(string)) RunResult {
+			runnerCalls.Add(1)
+			return RunResult{Status: "ok"}
+		},
+	})}
+	require.NoError(t, worker.Work(ctx, &river.Job[pipelineRunJobArgs]{
+		JobRow: &rivertype.JobRow{ID: riverJobID},
+		Args:   pipelineRunJobArgs{RunID: run.ID},
+	}))
+	assert.Zero(t, runnerCalls.Load(), "indeterminate physical work must never be repeated")
+
+	finished, logs, steps, getErr := store.Get(ctx, run.ID)
+	require.NoError(t, getErr)
+	assert.Equal(t, RunStatusFailed, finished.Status)
+	assert.Contains(t, finished.Error, "physical outcome is indeterminate")
+	assert.NotNil(t, finished.FinishedAt)
+	require.Len(t, logs, 2)
+	assert.Equal(t, "physical execution started", logs[0].Line)
+	assert.Contains(t, logs[1].Line, "scheduler recovery")
+	require.Len(t, steps, 2)
+	stepByAsset := make(map[string]PipelineRunStep, len(steps))
+	for _, step := range steps {
+		stepByAsset[step.Asset] = step
+	}
+	assert.Equal(t, RunStatusSuccess, stepByAsset["analytics.finished"].Status,
+		"terminal evidence from the original attempt must be preserved")
+	assert.Equal(t, succeededAt, *stepByAsset["analytics.finished"].FinishedAt)
+	assert.Equal(t, RunStatusFailed, stepByAsset["analytics.open"].Status)
+	assert.Contains(t, stepByAsset["analytics.open"].Error, "physical outcome is indeterminate")
+	assert.NotNil(t, stepByAsset["analytics.open"].FinishedAt)
 	assert.Zero(t, countRows(t, store, `SELECT COUNT(*) FROM pipeline_run_slots WHERE run_id = ?`, run.ID))
 }
 

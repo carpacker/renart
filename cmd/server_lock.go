@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/gofrs/flock"
 
@@ -18,10 +19,30 @@ import (
 
 var errWorkspaceAlreadyServed = errors.New("workspace is already served by another Renart process")
 
+const workspaceExecutionLeaseRetryDelay = 25 * time.Millisecond
+
 // workspaceServerLease prevents two long-lived Renart runtimes from opening
 // the same workspace. The lease is deliberately per workspace so independent
 // server processes can still serve different repositories at the same time.
 type workspaceServerLease struct {
+	primary       *flock.Flock
+	compatibility *flock.Flock
+	closeErr      error
+	close         sync.Once
+}
+
+// workspaceExecutionCoordinator protects physical-target claim recovery from
+// racing a live execution. Every non-dry execution holds both files shared;
+// startup recovery holds them exclusively while it converts orphaned active
+// claims to dirty. The primary file lives outside the worktree so `git clean`
+// cannot silently split the lock domain. The compatibility file keeps current
+// processes coordinated when their per-user runtime directory differs.
+type workspaceExecutionCoordinator struct {
+	primaryPath       string
+	compatibilityPath string
+}
+
+type heldWorkspaceExecutionLease struct {
 	primary       *flock.Flock
 	compatibility *flock.Flock
 	closeErr      error
@@ -94,6 +115,126 @@ func acquireWorkspaceServerLease(ctx context.Context, workspaceRoot string) (*wo
 	return lease, nil
 }
 
+func newWorkspaceExecutionCoordinator(workspaceRoot string) (*workspaceExecutionCoordinator, error) {
+	root, err := canonicalWorkspaceRoot(workspaceRoot)
+	if err != nil {
+		return nil, fmt.Errorf("resolve workspace execution lock root: %w", err)
+	}
+	primaryPath, err := workspaceExecutionLeasePath(root)
+	if err != nil {
+		return nil, err
+	}
+	return &workspaceExecutionCoordinator{
+		primaryPath:       primaryPath,
+		compatibilityPath: filepath.Join(root, ".renart", "execution.lock"),
+	}, nil
+}
+
+// AcquireShared implements service.ExecutionLease. A separate flock instance
+// is opened for each execution so concurrent runs in one server remain distinct
+// shared holders and an exclusive reconciler cannot enter until all finish.
+func (c *workspaceExecutionCoordinator) AcquireShared(ctx context.Context) (func() error, error) {
+	held, err := c.acquire(ctx, true)
+	if err != nil {
+		return nil, err
+	}
+	return held.Close, nil
+}
+
+func (c *workspaceExecutionCoordinator) acquireExclusive(ctx context.Context) (func() error, error) {
+	held, err := c.acquire(ctx, false)
+	if err != nil {
+		return nil, err
+	}
+	return held.Close, nil
+}
+
+func (c *workspaceExecutionCoordinator) acquire(ctx context.Context, shared bool) (*heldWorkspaceExecutionLease, error) {
+	if c == nil {
+		return nil, errors.New("workspace execution coordinator is unavailable")
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	primary, compatibility, err := c.newLocks()
+	if err != nil {
+		return nil, err
+	}
+
+	var locked bool
+	if shared {
+		locked, err = primary.TryRLockContext(ctx, workspaceExecutionLeaseRetryDelay)
+	} else {
+		locked, err = primary.TryLockContext(ctx, workspaceExecutionLeaseRetryDelay)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("acquire primary workspace execution lease %q: %w", c.primaryPath, err)
+	}
+	if !locked {
+		return nil, fmt.Errorf("acquire primary workspace execution lease %q: lock was not acquired", c.primaryPath)
+	}
+	held := &heldWorkspaceExecutionLease{primary: primary}
+
+	if shared {
+		locked, err = compatibility.TryRLockContext(ctx, workspaceExecutionLeaseRetryDelay)
+	} else {
+		locked, err = compatibility.TryLockContext(ctx, workspaceExecutionLeaseRetryDelay)
+	}
+	if err != nil {
+		_ = held.Close()
+		return nil, fmt.Errorf("acquire compatibility workspace execution lease %q: %w", c.compatibilityPath, err)
+	}
+	if !locked {
+		_ = held.Close()
+		return nil, fmt.Errorf("acquire compatibility workspace execution lease %q: lock was not acquired", c.compatibilityPath)
+	}
+	held.compatibility = compatibility
+	return held, nil
+}
+
+// tryAcquireExclusive is used by short-lived embedded CLI runtimes. It never
+// waits behind a live executor: failure to acquire means that executor owns the
+// active claims and reconciliation must be skipped. Once a crashed process has
+// released its OS locks, the next embedded invocation can acquire and repair.
+func (c *workspaceExecutionCoordinator) tryAcquireExclusive() (func() error, bool, error) {
+	if c == nil {
+		return nil, false, errors.New("workspace execution coordinator is unavailable")
+	}
+	primary, compatibility, err := c.newLocks()
+	if err != nil {
+		return nil, false, err
+	}
+	locked, err := primary.TryLock()
+	if err != nil {
+		return nil, false, fmt.Errorf("acquire primary workspace execution lease %q: %w", c.primaryPath, err)
+	}
+	if !locked {
+		return nil, false, nil
+	}
+	held := &heldWorkspaceExecutionLease{primary: primary}
+	locked, err = compatibility.TryLock()
+	if err != nil {
+		_ = held.Close()
+		return nil, false, fmt.Errorf("acquire compatibility workspace execution lease %q: %w", c.compatibilityPath, err)
+	}
+	if !locked {
+		_ = held.Close()
+		return nil, false, nil
+	}
+	held.compatibility = compatibility
+	return held.Close, true, nil
+}
+
+func (c *workspaceExecutionCoordinator) newLocks() (*flock.Flock, *flock.Flock, error) {
+	if err := os.MkdirAll(filepath.Dir(c.primaryPath), 0o700); err != nil {
+		return nil, nil, fmt.Errorf("create workspace execution lease directory: %w", err)
+	}
+	if err := os.MkdirAll(filepath.Dir(c.compatibilityPath), 0o755); err != nil {
+		return nil, nil, fmt.Errorf("create workspace execution compatibility directory: %w", err)
+	}
+	return flock.New(c.primaryPath), flock.New(c.compatibilityPath), nil
+}
+
 func canonicalWorkspaceRoot(workspaceRoot string) (string, error) {
 	root, err := filepath.Abs(workspaceRoot)
 	if err != nil {
@@ -113,6 +254,15 @@ func workspaceServerLeasePath(canonicalRoot string) (string, error) {
 	}
 	digest := sha256.Sum256([]byte(filepath.ToSlash(canonicalRoot)))
 	return filepath.Join(base, hex.EncodeToString(digest[:])+".lock"), nil
+}
+
+func workspaceExecutionLeasePath(canonicalRoot string) (string, error) {
+	base, err := workspaceServerLeaseDir()
+	if err != nil {
+		return "", err
+	}
+	digest := sha256.Sum256([]byte(filepath.ToSlash(canonicalRoot)))
+	return filepath.Join(base, hex.EncodeToString(digest[:])+".execution.lock"), nil
 }
 
 func workspaceServerLeaseDir() (string, error) {
@@ -173,6 +323,23 @@ func workspaceAlreadyServedError(workspaceRoot, leasePath, compatibilityPath str
 }
 
 func (l *workspaceServerLease) Close() error {
+	if l == nil {
+		return nil
+	}
+	l.close.Do(func() {
+		var closeErrors []error
+		if l.compatibility != nil {
+			closeErrors = append(closeErrors, l.compatibility.Unlock())
+		}
+		if l.primary != nil {
+			closeErrors = append(closeErrors, l.primary.Unlock())
+		}
+		l.closeErr = errors.Join(closeErrors...)
+	})
+	return l.closeErr
+}
+
+func (l *heldWorkspaceExecutionLease) Close() error {
 	if l == nil {
 		return nil
 	}

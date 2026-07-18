@@ -55,6 +55,18 @@ func TestStorePersistsAndValidatesVersionedRunSpec(t *testing.T) {
 	require.ErrorContains(t, err, "unknown field")
 }
 
+func TestStatusFromResultPreservesCancellation(t *testing.T) {
+	t.Parallel()
+
+	status, err := statusFromResult(RunResult{Status: "cancelled", Error: "context canceled"})
+	assert.Equal(t, RunStatusCancelled, status)
+	require.ErrorContains(t, err, "context canceled")
+
+	status, err = statusFromResult(RunResult{Status: "canceled"})
+	assert.Equal(t, RunStatusCancelled, status)
+	require.ErrorContains(t, err, "pipeline run was cancelled")
+}
+
 func TestStoreEnforcesOneAtomicActiveRunPerPipeline(t *testing.T) {
 	t.Parallel()
 	store, err := OpenStore(filepath.Join(t.TempDir(), "state.db"))
@@ -319,6 +331,57 @@ func TestFinishScheduledSuccessIsAtomicWithWatermark(t *testing.T) {
 	require.NoError(t, err)
 	assert.True(t, ok)
 	assert.Equal(t, end, watermark, "a missing run must not advance progress")
+}
+
+func TestFinalizeExecutionAtomicallyClosesStepsRunAndWatermark(t *testing.T) {
+	t.Parallel()
+	store, err := OpenStore(filepath.Join(t.TempDir(), "state.db"))
+	require.NoError(t, err)
+	defer store.Close()
+	ctx := context.Background()
+	started := time.Date(2026, 7, 17, 8, 0, 0, 0, time.UTC)
+	finished := started.Add(time.Minute)
+	upTo := started.Add(time.Hour)
+	runID, err := store.Create(ctx, PipelineRun{
+		ID: "atomic-execution-finish", PipelineID: "pipeline-id", Pipeline: "analytics",
+		Environment: "prod", Trigger: RunTriggerSchedule, Status: RunStatusQueued,
+	})
+	require.NoError(t, err)
+	require.NoError(t, store.MarkRunning(ctx, runID, started))
+	require.NoError(t, store.UpsertStep(ctx, PipelineRunStep{
+		RunID: runID, Asset: "analytics.orders", Status: RunStatusRunning, StartedAt: &started,
+	}))
+	_, err = store.db.ExecContext(ctx, `
+		CREATE TRIGGER reject_atomic_execution_watermark
+		BEFORE INSERT ON schedule_watermarks
+		BEGIN
+			SELECT RAISE(ABORT, 'atomic execution watermark failure');
+		END`)
+	require.NoError(t, err)
+
+	err = store.FinalizeExecution(ctx, runID, RunStatusSuccess, finished, nil, "pipeline-id|prod", &upTo)
+	require.ErrorContains(t, err, "atomic execution watermark failure")
+	run, _, steps, err := store.Get(ctx, runID)
+	require.NoError(t, err)
+	assert.Equal(t, RunStatusRunning, run.Status)
+	require.Len(t, steps, 1)
+	assert.Equal(t, RunStatusRunning, steps[0].Status)
+	assert.Nil(t, steps[0].FinishedAt)
+
+	_, err = store.db.ExecContext(ctx, `DROP TRIGGER reject_atomic_execution_watermark`)
+	require.NoError(t, err)
+	require.NoError(t, store.FinalizeExecution(ctx, runID, RunStatusSuccess, finished, nil, "pipeline-id|prod", &upTo))
+	run, _, steps, err = store.Get(ctx, runID)
+	require.NoError(t, err)
+	assert.Equal(t, RunStatusSuccess, run.Status)
+	assert.Equal(t, finished, *run.FinishedAt)
+	require.Len(t, steps, 1)
+	assert.Equal(t, RunStatusSuccess, steps[0].Status)
+	assert.Equal(t, finished, *steps[0].FinishedAt)
+	watermark, ok, err := store.LastInterval(ctx, "pipeline-id|prod")
+	require.NoError(t, err)
+	assert.True(t, ok)
+	assert.Equal(t, upTo, watermark)
 }
 
 func TestFailOrphanedRunsReconcilesRunningRuns(t *testing.T) {

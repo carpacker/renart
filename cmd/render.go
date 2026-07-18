@@ -166,7 +166,7 @@ func resolveRenderAssetPath(ctx context.Context, workspaceRoot, cwd, target stri
 			return filepath.ToSlash(relative), nil
 		}
 		if filepath.IsAbs(target) {
-			break
+			return "", fmt.Errorf("asset path %q is outside the workspace", target)
 		}
 	}
 
@@ -226,6 +226,48 @@ func printAssetRenderResult(w interface{ Write([]byte) (int, error) }, result se
 	if result.Provenance.Context.FullRefresh {
 		fmt.Fprintln(w, "Mode: full refresh")
 	}
+	if result.Provenance.Context.ConfigurationFidelity != "" || result.Provenance.Context.ConfigurationDigest != "" {
+		if result.Provenance.Context.ConfigurationDigest == "" {
+			fmt.Fprintln(w, "Configuration: runtime-only")
+		} else {
+			fmt.Fprintf(w, "Configuration: %s %s\n",
+				shortRenderIdentity(result.Provenance.Context.ConfigurationDigest),
+				dim("["+result.Provenance.Context.ConfigurationFidelity+"]"),
+			)
+		}
+		if result.Provenance.Context.ConfigurationMessage != "" {
+			fmt.Fprintln(w, dim(result.Provenance.Context.ConfigurationMessage))
+		}
+	}
+	if result.Provenance.Context.VariablesDigest != "" {
+		fmt.Fprintf(w, "Variables: %s", shortRenderIdentity(result.Provenance.Context.VariablesDigest))
+		if provenance := renderVariableProvenance(result.Provenance.Context.VariableProvenance); provenance != "" {
+			fmt.Fprintf(w, " · %s", provenance)
+		}
+		fmt.Fprintln(w)
+	}
+	if result.Asset.Fingerprint != "" {
+		fmt.Fprintf(w, "Asset fingerprint: %s\n", shortRenderIdentity(result.Asset.Fingerprint))
+	}
+	if result.Asset.Target.Kind != "" {
+		if result.Asset.Target.Kind == "none" && result.Asset.Target.Fidelity == service.AssetRenderFidelityExact {
+			fmt.Fprintln(w, "Target: no physical output")
+		} else if result.Asset.Target.Identity != "" {
+			fmt.Fprintf(w, "Target: %s %s %s\n",
+				valueOrDefault(result.Asset.Target.Object, result.Asset.Target.Kind),
+				shortRenderIdentity(result.Asset.Target.Identity),
+				dim("["+string(result.Asset.Target.Fidelity)+"]"),
+			)
+		} else {
+			fmt.Fprintf(w, "Target: %s %s\n",
+				valueOrDefault(result.Asset.Target.Object, result.Asset.Target.Kind),
+				dim("["+string(result.Asset.Target.Fidelity)+"]"),
+			)
+		}
+		if result.Asset.Target.Message != "" {
+			fmt.Fprintln(w, dim(result.Asset.Target.Message))
+		}
+	}
 	for _, issue := range result.Issues {
 		label := warn("warning")
 		if issue.Severity == "error" {
@@ -234,7 +276,7 @@ func printAssetRenderResult(w interface{ Write([]byte) (int, error) }, result se
 		fmt.Fprintf(w, "%s: %s\n", label, issue.Message)
 	}
 	for _, stage := range result.Stages {
-		fmt.Fprintf(w, "\n%s %s\n", renderStageTitle(stage.Kind), dim("["+string(stage.Fidelity)+"]"))
+		fmt.Fprintf(w, "\n%s %s\n", renderStageTitle(stage), dim("["+string(stage.Fidelity)+"]"))
 		if stage.Content != "" {
 			fmt.Fprintln(w, stage.Content)
 		}
@@ -247,8 +289,20 @@ func printAssetRenderResult(w interface{ Write([]byte) (int, error) }, result se
 	}
 }
 
-func renderStageTitle(kind string) string {
-	switch kind {
+func renderVariableProvenance(variables []service.AssetRenderVariableProvenance) string {
+	items := make([]string, 0, len(variables))
+	for _, variable := range variables {
+		source := strings.ReplaceAll(variable.Source, "_", " ")
+		items = append(items, variable.Name+" ("+source+")")
+	}
+	return strings.Join(items, ", ")
+}
+
+func renderStageTitle(stage service.AssetRenderStage) string {
+	if strings.TrimSpace(stage.Label) != "" {
+		return stage.Label
+	}
+	switch stage.Kind {
 	case "compiled_query":
 		return "Compiled query"
 	case "execution_sql":
@@ -256,7 +310,7 @@ func renderStageTitle(kind string) string {
 	case "schema_preparation":
 		return "Schema preparation"
 	default:
-		words := strings.ReplaceAll(kind, "_", " ")
+		words := strings.ReplaceAll(stage.Kind, "_", " ")
 		if words == "" {
 			return "Operation"
 		}

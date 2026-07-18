@@ -499,6 +499,11 @@ export type AssetRenderSource = {
   merkle_root: string;
 };
 
+export type AssetRenderVariableProvenance = {
+  name: string;
+  source: string;
+};
+
 export type AssetRenderContext = {
   environment?: string;
   schema_prefix?: string;
@@ -509,7 +514,11 @@ export type AssetRenderContext = {
   requested_full_refresh: boolean;
   full_refresh: boolean;
   variables_digest: string;
+  coverage_variables_hash: string;
+  variable_provenance: AssetRenderVariableProvenance[];
   configuration_digest: string;
+  configuration_fidelity: string;
+  configuration_message?: string;
 };
 
 export type AssetRenderProvenance = {
@@ -518,21 +527,36 @@ export type AssetRenderProvenance = {
   context: AssetRenderContext;
 };
 
+export type AssetRenderTarget = {
+  kind: string;
+  object?: string;
+  identity?: string;
+  fidelity: "exact" | "semantic" | "runtime_only" | "unsupported";
+  message?: string;
+};
+
 export type AssetRenderAsset = {
   id?: string;
   name: string;
   type: string;
   dialect?: string;
   connection_name?: string;
+  fingerprint?: string;
+  target: AssetRenderTarget;
 };
 
 export type AssetRenderStage = {
   kind: string;
+  label?: string;
   language: string;
   content?: string;
   status: "ok" | "unsupported" | "error";
   fidelity: "exact" | "semantic" | "runtime_only" | "unsupported";
   conditional?: boolean;
+  check_kind?: string;
+  check_name?: string;
+  check_column?: string;
+  check_blocking?: boolean;
   redacted?: boolean;
   message?: string;
 };

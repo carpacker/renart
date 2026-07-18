@@ -153,6 +153,8 @@ All durable state lives in SQLite at `.renart/state.db` inside the workspace
 renart's own `renart_*` tables, migrated by a goose runner. Renart-specific
 per-environment policy lives in `.renart/environments.yml`; everything else
 users author is plain Bruin files (`.bruin.yml`, `pipeline.yml`, asset files).
+Runtime lock/discovery files, including `.renart/execution.lock`, are excluded
+from Git by the source-control service.
 
 ## 4. Execution
 
@@ -173,11 +175,68 @@ Asset rendering is a separate read-only path at
 asset identified by the route (never a request-supplied path or editor buffer),
 uses a server-owned preview run ID, strictly parses the environment/window/
 execution-time/full-refresh context, and never opens a warehouse connection.
-The response includes the same source Merkle identity Deploy computes, a
-secret-free digest of the environment fields that affect this render, and the
-effective variable digest. SQL assets expose the exact compiled query;
-DuckDB/MotherDuck assets additionally expose the hook-aware materializer SQL.
+The response includes the same source Merkle identity Deploy computes, the
+canonical asset/DAG fingerprint, the full-variable coverage hash, the
+effective-variable digest with value-free, sorted variable provenance, and a
+secret-free canonical identity for the selected environment controls plus only
+the named connections the asset can execute against. The fingerprint service
+uses the existing staleness engine and a request-local pipeline-ID sentinel for
+legacy pipelines, so rendering never writes an ID back to disk. Fingerprint
+failure leaves usable render stages intact and adds a sanitized partial
+warning. The configuration classifier reads Bruin's public `mapstructure`
+schema directly, represents
+`sensitive` and `sensitive_file` values only by presence, and never invokes
+custom marshalers. Opaque maps/interfaces and non-empty URL, DSN, endpoint, or
+raw options fields fail closed as `runtime_only` with an empty digest instead
+of risking credential exposure or silently omitting behavior. This
+configuration identity is separate from the asset's physical-target identity.
+
+The target resolver is also connection-free. It hashes only resolved physical
+routing coordinates and the relation/file object; connection aliases,
+environment names, principals, and credentials are excluded, and endpoints or
+database paths never appear in the response. Local DuckDB/Load files share the
+same canonical path and symlink rules as runtime locking. Supported database
+families resolve through Bruin's table-name capabilities and require complete,
+unambiguous routing context. Schema-prefix rewrites, pre-hooks with an
+unqualified target, in-memory/MotherDuck/lakehouse DuckDB, raw routing options,
+credential-derived tenancy, Python outputs, non-materialized SQL, and unproven
+target families fail closed as `runtime_only` with an empty identity. Sensors
+are exact no-output targets. The same resolver supplies the versioned
+pre-execution target snapshot used by durable latest-writer coverage; exact
+identities are claimed before physical writes, while runtime-only targets stay
+explicitly targetless and cannot claim cross-run physical freshness.
+
+SQL assets expose the exact compiled query. DuckDB/MotherDuck,
+PostgreSQL/Redshift, BigQuery, MySQL, Snowflake, MSSQL, Trino, Vertica, and both
+Fabric query aliases additionally expose hook-aware materializer SQL built by
+the same factory as direct execution. Databricks, ClickHouse, Synapse, and
+Athena expose the complete ordered statement list submitted by their direct
+operators without splitting SQL text. BigQuery also applies the same annotation
+comment helper before claiming exact SQL. Oracle assets without materialization
+expose the exact query submitted by direct execution. Oracle materialization
+remains unsupported by that direct path, and declared Oracle hooks produce an
+explicit partial-result warning because the runtime does not execute them.
 Every stage declares exact, semantic, runtime-only, or unsupported fidelity.
+Runtime column and custom quality checks are separate, named `check` stages.
+They come from Bruin's scheduler task instances and the same destination-aware
+check-operator registry used by direct execution. Rendering runs those
+operators against a query-capturing in-memory connection that returns the
+expected synthetic result, so dialect-specific SQL and custom-check Jinja/count
+wrapping are exact without opening a warehouse. A malformed check becomes its
+own error stage and issue without erasing successfully compiled query or
+materialization stages. Asset types whose direct runtime does not expose a real
+check operator are reported as unsupported rather than fabricating SQL;
+ingestr, Python, API, and Load delegate checks through their resolved target
+destination in both paths. Oracle column checks use Bruin's Oracle operator.
+Targets without a SQL check operator remain explicitly unsupported. API and
+Load use their dedicated HTTP/Sling path only for the main task; check tasks
+use the shared sequential registry, and destination-resolved metadata tasks
+are explicit no-ops so neither path can repeat the side-effecting main work.
+Scheduler-created metadata-push post-tasks are rendered after checks and use the
+same explicit PostgreSQL-compatible, BigQuery, and Snowflake asset-type mapping
+as direct execution. Warehouse mutations remain `runtime_only`, while
+backend-specific skips and validation failures are represented semantically;
+unsupported publishers are shown as the no-op the direct registry executes.
 Query sensors compile `parameters.query`, never their surrounding YAML, and
 show that exact submitted condition query as execution SQL; polling mode,
 interval, and timeout remain described runtime controls rather than fabricated
@@ -191,10 +250,50 @@ declared materialization as `runtime_only`, because user code and SDK calls
 determine its actual operations. These semantic stages contain named
 connections but never resolved connection URIs or credentials.
 MotherDuck uses the DuckDB dialect and exact DuckDB/MotherDuck materializer
-path. DuckDB/MotherDuck hook templates are resolved with the selected asset
-context before materializer construction by the same request-local helper used
-for direct asset and pipeline execution. Hooks are still folded into the
-single execution-SQL blob rather than returned as separate stages.
+path. PostgreSQL/Redshift, MySQL, MSSQL, Trino, Vertica, and Fabric use their
+corresponding Bruin materializers through the same shared factory; the current
+and legacy Fabric query aliases intentionally share one construction path.
+Direct execution and rendering share hook-aware factories for BigQuery and
+Snowflake string materializers, Databricks/ClickHouse/Synapse ordered-statement
+materializers, and Athena's location-aware ordered statements. The hook wrapper
+sits outside refresh-strategy selection, so configured and full-refresh paths
+retain the same pre/post hooks. Synapse specifically uses Bruin's Synapse
+operator and materializer rather than borrowing MSSQL execution semantics.
+Athena rendering reads the selected typed connection's public query-results
+path without constructing a live client; missing configuration is an explicit
+partial result rather than a fabricated location.
+
+Hook templates are resolved with the selected asset context before
+materializer construction by the same request-local helper used for direct
+asset and pipeline execution, including each asset's effective full-refresh
+restriction. String materializers retain hooks in one execution-SQL blob.
+Databricks, ClickHouse, and Synapse expose separate pre/main/post stages only
+when the final list is byte-for-byte equal to the unhoisted wrapper order; if
+`DECLARE` hoisting moves statements, the exact elements remain available as
+generic execution-SQL stages. Athena likewise uses neutral ordered stages
+because its hoisted runtime list does not preserve trustworthy provenance.
+Schema and destination preparation are emitted only where the direct operator
+performs them, with semantic or runtime-only fidelity for live conditional
+steps. BigQuery cost/target checks and Snowflake warehouse/target/SCD2 checks
+are represented without contacting either warehouse or exposing credentials.
+The BigQuery cost guard also precedes query- and table-sensor conditions.
+PostgreSQL/Redshift and MySQL string-SCD2 paths expose their live conditional
+timestamp-column migration before execution SQL, matching the direct
+operator's full-refresh gate.
+Databricks three-part targets expose the runtime's ordered catalog-then-schema
+preparation, including the same identifier casing.
+MSSQL, Trino, and Athena metadata-only DDL are rendered from declared columns
+without requiring placeholder SQL. Trino and Athena time-interval
+materializations retain the complete post-extraction statement list.
+Execution stages whose live developer-environment rewrite needs warehouse
+state, or whose materializer generates temporary identifiers, are labelled
+`runtime_only` instead of claiming byte-for-byte parity. This includes MSSQL
+and Vertica `delete+insert`, plus MySQL `delete+insert`, `merge`, and both SCD2
+strategies; the corresponding generated-name paths for BigQuery, Snowflake,
+Databricks, ClickHouse, Synapse, and Athena are classified the same way.
+Fabric's temporary names are deterministic. Full-refresh classification uses
+the environment-level operator mode and the per-asset effective mode at the
+same boundaries as direct execution.
 Known inline credentials tagged by Bruin are masked before any stage or issue
 crosses the HTTP boundary, with explicit redaction metadata. Semantic URL
 previews also redact userinfo and credential-like query parameters, and API
@@ -226,6 +325,26 @@ both in sorted order. Waiting is context-cancellable, and an OS-released file
 lock makes a killed process recover without stale lock cleanup. Independent
 external programs do not participate in the advisory protocol, so inspect
 retains bounded retry and a clear DuckDB lock error as a defensive fallback.
+
+Physical-target recovery uses a separate per-workspace execution coordinator.
+Every non-dry `ExecutionService` path holds shared primary and compatibility
+OS locks from before target capture through the durable completion hand-off;
+startup takes them exclusively before converting orphaned active write claims
+to dirty. The primary lock lives in the per-user runtime directory so a
+worktree cleanup cannot split the lock domain, while `.renart/execution.lock`
+coordinates processes whose runtime-directory settings differ. Pipeline,
+asset/scope, Build-stale, delegated/embedded legacy `/api/run`, and onboarding
+quickstart materialization all enter through this boundary. Dry-run/render/
+inspect do not take the lease.
+
+Successful physical work is handed to a durable SQLite completion outbox before
+the request returns. The outbox carries the version-two target/fingerprint
+snapshot, per-task upstream-writer read sets, terminal coordinates, and run
+context needed by materialization facts and staleness. Subscriber failure leaves
+the envelope pending for idempotent startup/housekeeping replay instead of
+turning a completed warehouse write into a false execution failure. Cancelled
+operators retain a cancelled terminal status through asset events, the
+materialization result, and scheduler finalization.
 
 The scheduler is built on River with the SQLite driver: `Store` owns
 persistence/migrations, `Service` owns orchestration (catch-up windows,
@@ -275,11 +394,12 @@ River-argument link recovery is legacy-only. Recovery emits one structured
 count summary, including requeued signals and legacy replays skipped because
 their effective execution context was never persisted (see staleness.md §3).
 
-This is a scheduler-backed foundation, not a universal run ledger. Direct/CLI,
-one-asset Materialize, and Build-stale paths still do not use this RunSpec/slot
-seam; effective variables, target/latest-writer identity, asset-by-window
-execution units, durable schedule occurrences, and exact re-execution remain
-open.
+This is a scheduler-backed foundation, not a universal run ledger. Interactive
+and embedded CLI, one-asset Materialize, Build-stale, and onboarding paths use
+the common target-capture/write-claim/completion seam but do not create a
+RunSpec or claim a pipeline-global run slot. Executable variable overrides,
+durable asset-by-window run units, durable schedule occurrences, and exact
+re-execution remain open.
 
 Before applying either Renart or River migrations, `Store` runs SQLite's
 `quick_check` against the shared state database. A failed check aborts startup
@@ -301,6 +421,9 @@ the asset's canonical name; file and object-storage targets instead require
 `parameters.destination_object`. The asset's `materialization` is the only load
 strategy source. Renart invokes Sling from those semantic fields directly; no
 replication sidecar or parallel destination/mode parameter set exists. A
+connectionless API or Load asset follows the SQL/ingestr warehouse majority;
+when there is no such majority and the pipeline configures exactly one default,
+that explicit connection wins before Bruin's synthesized DuckDB fallback. A
 run-scoped full refresh temporarily selects Sling's replace mode without
 rewriting the asset definition; `refresh_restricted` assets keep their
 configured strategy and surface a warning instead. The shared Sling connection

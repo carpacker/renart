@@ -7,6 +7,11 @@ package staleness
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+	"fmt"
+	"reflect"
 	"sort"
 	"strings"
 	"sync"
@@ -50,6 +55,39 @@ type Interval struct {
 	End   time.Time `json:"end"`
 }
 
+// TargetFidelity describes whether the physical output selected for an asset
+// can safely participate in freshness. Only exact targets have a durable,
+// comparable identity. Runtime-only and unresolved targets deliberately fail
+// closed, while legacy is retained for callers that have not supplied target
+// resolution yet.
+type TargetFidelity string
+
+const (
+	TargetFidelityExact       TargetFidelity = "exact"
+	TargetFidelityRuntimeOnly TargetFidelity = "runtime_only"
+	TargetFidelityUnresolved  TargetFidelity = "unresolved"
+	TargetFidelityLegacy      TargetFidelity = "legacy"
+)
+
+// LatestPhysicalOutput is the durable global writer currently associated with
+// an exact selected target. WriterAssetID and WriterEnvironment describe the
+// output that is physically present; they can differ from the selected asset
+// and environment when another context displaced it. An ambiguous writer is
+// exposed for diagnosis but never contributes reusable coverage.
+type LatestPhysicalOutput struct {
+	TargetIdentity    string    `json:"target_identity"`
+	TargetGeneration  int64     `json:"target_generation"`
+	WriterAssetID     string    `json:"writer_asset_id"`
+	WriterEnvironment string    `json:"writer_environment"`
+	Fingerprint       string    `json:"fingerprint"`
+	VarsHash          string    `json:"vars_hash"`
+	RunID             string    `json:"run_id,omitempty"`
+	MaterializedAt    time.Time `json:"materialized_at"`
+	CompletionID      string    `json:"completion_id"`
+	CompletionOrdinal int64     `json:"completion_ordinal"`
+	Ambiguous         bool      `json:"ambiguous"`
+}
+
 // AssetStatus is the classification result for one asset.
 type AssetStatus struct {
 	AssetID            string     `json:"asset_id"` // durable: pipeline UUID + ":" + name
@@ -72,6 +110,22 @@ type AssetStatus struct {
 	LastRunStatus           string     `json:"last_run_status,omitempty"` // "succeeded" | "failed" | "cancelled"
 	LastRunAt               *time.Time `json:"last_run_at,omitempty"`
 	LastRunOnCurrentContent bool       `json:"last_run_on_current_content,omitempty"`
+	// TargetFidelity and TargetIdentity describe the output selected by the
+	// current environment/configuration. LatestOutput describes what is
+	// physically present there, when that fact is durably known. Exact targets
+	// with an active/dirty write claim intentionally have no LatestOutput.
+	TargetFidelity TargetFidelity        `json:"target_fidelity"`
+	TargetIdentity string                `json:"target_identity,omitempty"`
+	LatestOutput   *LatestPhysicalOutput `json:"latest_output,omitempty"`
+}
+
+// Snapshot is one internally consistent staleness computation. The opaque
+// DataStateToken changes exactly when data state relevant to a needed
+// selection changes; callers can compare it without interpreting writer or
+// coverage internals.
+type Snapshot struct {
+	DataStateToken string        `json:"data_state_token"`
+	Assets         []AssetStatus `json:"assets"`
 }
 
 // Selection identifies what the user is looking at.
@@ -99,10 +153,41 @@ func (s Selection) rangeInterval() *Interval {
 // warehouse; assets reported false are downgraded from fresh to missing.
 type Verifier func(ctx context.Context, selection Selection, assetNames []string) (map[string]bool, error)
 
+// PhysicalTarget is the secret-free result of resolving the physical output
+// selected for one asset. Identity is usable for freshness only when Exact is
+// true and the identity is non-empty. Runtime-dependent and otherwise unknown
+// targets deliberately remain inexact so historical coverage cannot be
+// mistaken for evidence about the currently selected output.
+type PhysicalTarget struct {
+	Identity string
+	Exact    bool
+	// Fidelity is optional for compatibility with existing resolvers. When it
+	// is empty, Exact maps to exact and a present non-exact result maps to
+	// runtime_only.
+	Fidelity TargetFidelity
+}
+
+// TargetResolver resolves selected physical outputs without opening a
+// warehouse. Results are keyed by canonical asset ID (pipeline UUID + asset
+// name). Missing, empty, or inexact results fail closed for that asset.
+//
+// The callback is a dependency rather than a service-package import so target
+// resolution can share the execution resolver at composition time without
+// introducing a staleness/service package cycle.
+type TargetResolver func(
+	ctx context.Context,
+	selection Selection,
+	parsed *pipeline.Pipeline,
+) (map[string]PhysicalTarget, error)
+
 type Dependencies struct {
 	Store   *matlog.Store
 	Engine  *fingerprint.Engine
 	Resolve matlog.PipelineResolver
+	// ResolveTargets enables generation-aware physical-output freshness. It is
+	// optional only for legacy callers and tests; production supplies the same
+	// selected-context resolver used before execution.
+	ResolveTargets TargetResolver
 	// Publish pushes staleness.updated events to SSE clients.
 	Publish func(any)
 	// Verify is optional trust-but-verify support; it runs async, throttled
@@ -119,8 +204,8 @@ type Service struct {
 	// selections holds the last-requested selection per pipeline UUID; bus
 	// events recompute exactly these.
 	selections map[string]Selection
-	// statuses caches the last computed result per pipeline UUID.
-	statuses map[string][]AssetStatus
+	// snapshots caches the last computed result per pipeline UUID.
+	snapshots map[string]Snapshot
 	// verified tracks (pipelineUUID, environment) pairs already verified
 	// this session; missing tables found are remembered until the next run.
 	verified       map[string]bool
@@ -131,7 +216,7 @@ func New(deps Dependencies) *Service {
 	return &Service{
 		deps:           deps,
 		selections:     make(map[string]Selection),
-		statuses:       make(map[string][]AssetStatus),
+		snapshots:      make(map[string]Snapshot),
 		verified:       make(map[string]bool),
 		missingByPanel: make(map[string]map[string]bool),
 	}
@@ -142,23 +227,43 @@ func (s *Service) AttachBus(events bus.Events) {
 	events.OnAssetSaved(func(event bus.AssetSaved) {
 		s.recomputePipeline(event.PipelineUUID, "asset saved")
 	})
-	events.OnRunCompleted(func(event bus.RunCompleted) {
+	events.OnRunCompleted(func(event bus.RunCompleted) error {
 		s.recomputePipeline(event.PipelineUUID, "run completed")
+		return nil
+	})
+	events.OnTargetWriteChanged(func(event bus.TargetWriteChanged) {
+		// Claim acquisition is on the physical execution's critical path. Publish
+		// the fail-closed snapshot asynchronously so warehouse work is not delayed
+		// by fingerprinting, while dirty claims still reach the UI even when no
+		// completion event can be persisted.
+		go s.recomputePipeline(event.PipelineUUID, "target write changed")
 	})
 }
 
-// Statuses computes (and caches) the staleness map for a selection. This is
-// the selection-change entry point: one batched coverage query, the rest in
-// memory.
+// Statuses preserves the original asset-only API for planners and other
+// internal callers. HTTP and SSE use Snapshot so they can also carry the
+// data-state token from the same computation.
 func (s *Service) Statuses(ctx context.Context, selection Selection) ([]AssetStatus, error) {
-	statuses, err := s.compute(ctx, selection)
+	snapshot, err := s.Snapshot(ctx, selection)
 	if err != nil {
 		return nil, err
+	}
+	return snapshot.Assets, nil
+}
+
+// Snapshot computes and caches the full staleness result for a selection.
+// This is the selection-change entry point: target writers and coverage are
+// loaded in batches, and both the classifications and token are derived from
+// that one view.
+func (s *Service) Snapshot(ctx context.Context, selection Selection) (Snapshot, error) {
+	snapshot, err := s.compute(ctx, selection)
+	if err != nil {
+		return Snapshot{}, err
 	}
 
 	s.mu.Lock()
 	s.selections[selection.PipelineUUID] = selection
-	s.statuses[selection.PipelineUUID] = statuses
+	s.snapshots[selection.PipelineUUID] = snapshot
 	shouldVerify := s.deps.Verify != nil && !s.verified[verifyKey(selection)]
 	if shouldVerify {
 		s.verified[verifyKey(selection)] = true
@@ -168,7 +273,7 @@ func (s *Service) Statuses(ctx context.Context, selection Selection) ([]AssetSta
 	if shouldVerify {
 		go s.runVerification(selection)
 	}
-	return statuses, nil
+	return snapshot, nil
 }
 
 func verifyKey(selection Selection) string {
@@ -187,7 +292,7 @@ func (s *Service) recomputePipeline(pipelineUUID, reason string) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
-	statuses, err := s.compute(ctx, selection)
+	snapshot, err := s.compute(ctx, selection)
 	if err != nil {
 		if s.deps.Logger != nil {
 			s.deps.Logger.Warn("staleness recompute failed",
@@ -197,21 +302,22 @@ func (s *Service) recomputePipeline(pipelineUUID, reason string) {
 	}
 
 	s.mu.Lock()
-	s.statuses[pipelineUUID] = statuses
+	s.snapshots[pipelineUUID] = snapshot
 	s.mu.Unlock()
-	s.publish(selection, statuses)
+	s.publish(selection, snapshot)
 }
 
-func (s *Service) publish(selection Selection, statuses []AssetStatus) {
+func (s *Service) publish(selection Selection, snapshot Snapshot) {
 	if s.deps.Publish == nil {
 		return
 	}
 	event := map[string]any{
-		"type":          "staleness.updated",
-		"pipeline_id":   selection.EncodedPipelineID,
-		"pipeline_uuid": selection.PipelineUUID,
-		"environment":   selection.Environment,
-		"assets":        statuses,
+		"type":             "staleness.updated",
+		"pipeline_id":      selection.EncodedPipelineID,
+		"pipeline_uuid":    selection.PipelineUUID,
+		"environment":      selection.Environment,
+		"data_state_token": snapshot.DataStateToken,
+		"assets":           snapshot.Assets,
 	}
 	// The selection's range rides along so clients can discard pushes
 	// computed for a selection they have already moved away from.
@@ -224,16 +330,16 @@ func (s *Service) publish(selection Selection, statuses []AssetStatus) {
 	s.deps.Publish(event)
 }
 
-func (s *Service) compute(ctx context.Context, selection Selection) ([]AssetStatus, error) {
+func (s *Service) compute(ctx context.Context, selection Selection) (Snapshot, error) {
 	parsed, err := s.deps.Resolve(ctx, selection.PipelineUUID)
 	if err != nil {
-		return nil, err
+		return Snapshot{}, err
 	}
 
 	vars := fingerprint.EffectiveVars(parsed, selection.VarOverrides)
 	results, err := s.deps.Engine.DAG(parsed, vars)
 	if err != nil {
-		return nil, err
+		return Snapshot{}, err
 	}
 	varsHash := fingerprint.AllVarsHash(vars)
 
@@ -243,21 +349,19 @@ func (s *Service) compute(ctx context.Context, selection Selection) ([]AssetStat
 	}
 	sort.Strings(assetIDs)
 
-	coverage, err := s.deps.Store.Coverage(ctx, assetIDs, selection.Environment, varsHash)
+	coverageContext, err := s.loadCoverageContext(
+		ctx,
+		selection,
+		parsed,
+		assetIDs,
+		varsHash,
+	)
 	if err != nil {
-		return nil, err
-	}
-	anyBuilt, err := s.deps.Store.HasAnyCoverage(ctx, assetIDs, selection.Environment)
-	if err != nil {
-		return nil, err
-	}
-	lastOwnContent, err := s.deps.Store.LatestOwnContent(ctx, assetIDs, selection.Environment)
-	if err != nil {
-		return nil, err
+		return Snapshot{}, err
 	}
 	lastRuns, err := s.deps.Store.LastRuns(ctx, assetIDs, selection.Environment)
 	if err != nil {
-		return nil, err
+		return Snapshot{}, err
 	}
 
 	s.mu.Lock()
@@ -272,14 +376,316 @@ func (s *Service) compute(ctx context.Context, selection Selection) ([]AssetStat
 		if !ok {
 			continue
 		}
-		status := classify(asset, assetID, result, coverage[assetID], anyBuilt[assetID], lastOwnContent[assetID], selectedRange)
+		status := classify(
+			asset,
+			assetID,
+			result,
+			coverageContext.coverage[assetID],
+			coverageContext.anyBuilt[assetID],
+			coverageContext.lastOwnContent[assetID],
+			selectedRange,
+		)
+		applyTargetContext(&status, coverageContext.targets[assetID], coverageContext.writers)
 		applyLastRun(&status, lastRuns[assetID], result)
 		if status.Status == StatusFresh && missing != nil && missing[asset.Name] && verifiableByName(asset) {
 			status.Status = StatusMissing
 		}
 		statuses = append(statuses, status)
 	}
-	return statuses, nil
+	token, err := dataStateToken(selection, varsHash, assetIDs, coverageContext, missing)
+	if err != nil {
+		return Snapshot{}, err
+	}
+	return Snapshot{DataStateToken: token, Assets: statuses}, nil
+}
+
+type selectedTarget struct {
+	Fidelity TargetFidelity
+	Identity string
+}
+
+type coverageContext struct {
+	coverage       map[string][]matlog.CoverageRow
+	anyBuilt       map[string]bool
+	lastOwnContent map[string]string
+	targets        map[string]selectedTarget
+	writers        map[string]matlog.LatestSuccessfulWriter
+}
+
+func (s *Service) loadCoverageContext(
+	ctx context.Context,
+	selection Selection,
+	parsed *pipeline.Pipeline,
+	assetIDs []string,
+	varsHash string,
+) (coverageContext, error) {
+	if s.deps.ResolveTargets == nil {
+		coverage, err := s.deps.Store.Coverage(ctx, assetIDs, selection.Environment, varsHash)
+		if err != nil {
+			return coverageContext{}, err
+		}
+		anyBuilt, err := s.deps.Store.HasAnyCoverage(ctx, assetIDs, selection.Environment)
+		if err != nil {
+			return coverageContext{}, err
+		}
+		lastOwnContent, err := s.deps.Store.LatestOwnContent(ctx, assetIDs, selection.Environment)
+		if err != nil {
+			return coverageContext{}, err
+		}
+		targets := make(map[string]selectedTarget, len(assetIDs))
+		for _, assetID := range assetIDs {
+			targets[assetID] = selectedTarget{Fidelity: TargetFidelityLegacy}
+		}
+		return coverageContext{
+			coverage: coverage, anyBuilt: anyBuilt, lastOwnContent: lastOwnContent,
+			targets: targets, writers: map[string]matlog.LatestSuccessfulWriter{},
+		}, nil
+	}
+
+	resolved, err := s.deps.ResolveTargets(ctx, selection, parsed)
+	if err != nil {
+		return coverageContext{}, err
+	}
+	assetTargets := make(map[string]string, len(assetIDs))
+	targets := make(map[string]selectedTarget, len(assetIDs))
+	targetIdentities := make([]string, 0, len(assetIDs))
+	for _, assetID := range assetIDs {
+		target, ok := resolved[assetID]
+		selected := normalizeSelectedTarget(target, ok)
+		targets[assetID] = selected
+		if selected.Fidelity != TargetFidelityExact {
+			continue
+		}
+		assetTargets[assetID] = selected.Identity
+		targetIdentities = append(targetIdentities, selected.Identity)
+	}
+
+	// Claims make writes fail closed, and the second writer read prevents a
+	// completion that lands between the batched queries from producing a hybrid
+	// snapshot (old latest-output metadata with new-generation coverage, or the
+	// inverse). A stable read normally completes on the first attempt.
+	for attempt := 0; attempt < 3; attempt++ {
+		writers, err := s.deps.Store.LatestWriters(ctx, targetIdentities)
+		if err != nil {
+			return coverageContext{}, err
+		}
+		coverage, err := s.deps.Store.CurrentTargetCoverage(
+			ctx,
+			assetTargets,
+			selection.Environment,
+			varsHash,
+		)
+		if err != nil {
+			return coverageContext{}, err
+		}
+		currentOwnContent, err := s.deps.Store.CurrentTargetOwnContent(
+			ctx,
+			assetTargets,
+			selection.Environment,
+		)
+		if err != nil {
+			return coverageContext{}, err
+		}
+		confirmedWriters, err := s.deps.Store.LatestWriters(ctx, targetIdentities)
+		if err != nil {
+			return coverageContext{}, err
+		}
+		if !reflect.DeepEqual(writers, confirmedWriters) {
+			continue
+		}
+		anyBuilt := make(map[string]bool, len(currentOwnContent))
+		for assetID := range currentOwnContent {
+			anyBuilt[assetID] = true
+		}
+		return coverageContext{
+			coverage: coverage, anyBuilt: anyBuilt, lastOwnContent: currentOwnContent,
+			targets: targets, writers: writers,
+		}, nil
+	}
+	return coverageContext{}, fmt.Errorf("staleness: physical target state changed during snapshot computation")
+}
+
+func normalizeSelectedTarget(target PhysicalTarget, present bool) selectedTarget {
+	if !present {
+		return selectedTarget{Fidelity: TargetFidelityUnresolved}
+	}
+	if target.Exact {
+		if target.Identity != "" && strings.TrimSpace(target.Identity) == target.Identity {
+			return selectedTarget{Fidelity: TargetFidelityExact, Identity: target.Identity}
+		}
+		return selectedTarget{Fidelity: TargetFidelityUnresolved}
+	}
+	fidelity := target.Fidelity
+	switch fidelity {
+	case TargetFidelityRuntimeOnly, TargetFidelityUnresolved:
+		return selectedTarget{Fidelity: fidelity}
+	default:
+		return selectedTarget{Fidelity: TargetFidelityRuntimeOnly}
+	}
+}
+
+func applyTargetContext(
+	status *AssetStatus,
+	target selectedTarget,
+	writers map[string]matlog.LatestSuccessfulWriter,
+) {
+	status.TargetFidelity = target.Fidelity
+	status.TargetIdentity = target.Identity
+	if target.Fidelity != TargetFidelityExact || target.Identity == "" {
+		return
+	}
+	writer, ok := writers[target.Identity]
+	if !ok {
+		return
+	}
+	status.LatestOutput = &LatestPhysicalOutput{
+		TargetIdentity:    writer.TargetIdentity,
+		TargetGeneration:  writer.TargetGeneration,
+		WriterAssetID:     writer.AssetID,
+		WriterEnvironment: writer.Environment,
+		Fingerprint:       writer.Fingerprint,
+		VarsHash:          writer.VarsHash,
+		RunID:             writer.RunID,
+		MaterializedAt:    writer.MaterializedAt,
+		CompletionID:      writer.CompletionID,
+		CompletionOrdinal: writer.CompletionOrdinal,
+		Ambiguous:         writer.Ambiguous,
+	}
+}
+
+const dataStateTokenVersion = "renart-data-state-v1"
+
+type dataStateTokenInput struct {
+	Version      string                `json:"version"`
+	PipelineUUID string                `json:"pipeline_uuid"`
+	Environment  string                `json:"environment"`
+	VarsHash     string                `json:"vars_hash"`
+	Range        *dataStateTokenRange  `json:"range,omitempty"`
+	Assets       []dataStateTokenAsset `json:"assets"`
+}
+
+type dataStateTokenRange struct {
+	Start string `json:"start"`
+	End   string `json:"end"`
+}
+
+type dataStateTokenAsset struct {
+	AssetID         string                   `json:"asset_id"`
+	TargetFidelity  TargetFidelity           `json:"target_fidelity"`
+	TargetIdentity  string                   `json:"target_identity,omitempty"`
+	Writer          *dataStateTokenWriter    `json:"writer,omitempty"`
+	Coverage        []dataStateTokenCoverage `json:"coverage,omitempty"`
+	AnyBuilt        bool                     `json:"any_built,omitempty"`
+	LastOwnContent  string                   `json:"last_own_content,omitempty"`
+	VerifiedMissing bool                     `json:"verified_missing,omitempty"`
+}
+
+type dataStateTokenWriter struct {
+	TargetGeneration  int64  `json:"target_generation"`
+	WriterAssetID     string `json:"writer_asset_id"`
+	WriterEnvironment string `json:"writer_environment"`
+	Fingerprint       string `json:"fingerprint"`
+	VarsHash          string `json:"vars_hash"`
+	Ambiguous         bool   `json:"ambiguous"`
+}
+
+type dataStateTokenCoverage struct {
+	Fingerprint      string `json:"fingerprint"`
+	OwnContent       string `json:"own_content"`
+	TargetIdentity   string `json:"target_identity,omitempty"`
+	TargetGeneration int64  `json:"target_generation,omitempty"`
+	IntervalStart    string `json:"interval_start,omitempty"`
+	IntervalEnd      string `json:"interval_end,omitempty"`
+}
+
+// dataStateToken intentionally excludes run IDs, completion coordinates, and
+// materialization timestamps: replacing a writer with the same physical
+// variant and unchanged coverage does not change a needed selection. Writer
+// generation/scope/variant, ambiguity, and current-generation coverage do.
+func dataStateToken(
+	selection Selection,
+	varsHash string,
+	assetIDs []string,
+	context coverageContext,
+	missing map[string]bool,
+) (string, error) {
+	input := dataStateTokenInput{
+		Version:      dataStateTokenVersion,
+		PipelineUUID: selection.PipelineUUID,
+		Environment:  selection.Environment,
+		VarsHash:     varsHash,
+		Assets:       make([]dataStateTokenAsset, 0, len(assetIDs)),
+	}
+	if selectedRange := selection.rangeInterval(); selectedRange != nil {
+		input.Range = &dataStateTokenRange{
+			Start: selectedRange.Start.UTC().Format(time.RFC3339Nano),
+			End:   selectedRange.End.UTC().Format(time.RFC3339Nano),
+		}
+	}
+
+	for _, assetID := range assetIDs {
+		target := context.targets[assetID]
+		_, assetName, _ := identity.SplitAssetID(assetID)
+		assetState := dataStateTokenAsset{
+			AssetID:         assetID,
+			TargetFidelity:  target.Fidelity,
+			TargetIdentity:  target.Identity,
+			AnyBuilt:        context.anyBuilt[assetID],
+			LastOwnContent:  context.lastOwnContent[assetID],
+			VerifiedMissing: missing[assetName],
+		}
+		if writer, ok := context.writers[target.Identity]; ok && target.Fidelity == TargetFidelityExact {
+			assetState.Writer = &dataStateTokenWriter{
+				TargetGeneration:  writer.TargetGeneration,
+				WriterAssetID:     writer.AssetID,
+				WriterEnvironment: writer.Environment,
+				Fingerprint:       writer.Fingerprint,
+				VarsHash:          writer.VarsHash,
+				Ambiguous:         writer.Ambiguous,
+			}
+		}
+		rows := context.coverage[assetID]
+		assetState.Coverage = make([]dataStateTokenCoverage, 0, len(rows))
+		for _, row := range rows {
+			coverage := dataStateTokenCoverage{
+				Fingerprint:      row.Fingerprint,
+				OwnContent:       row.OwnContent,
+				TargetIdentity:   row.TargetIdentity,
+				TargetGeneration: row.TargetGeneration,
+			}
+			if row.IntervalStart != nil {
+				coverage.IntervalStart = row.IntervalStart.UTC().Format(time.RFC3339Nano)
+			}
+			if row.IntervalEnd != nil {
+				coverage.IntervalEnd = row.IntervalEnd.UTC().Format(time.RFC3339Nano)
+			}
+			assetState.Coverage = append(assetState.Coverage, coverage)
+		}
+		sort.Slice(assetState.Coverage, func(i, j int) bool {
+			left, right := assetState.Coverage[i], assetState.Coverage[j]
+			if left.TargetIdentity != right.TargetIdentity {
+				return left.TargetIdentity < right.TargetIdentity
+			}
+			if left.TargetGeneration != right.TargetGeneration {
+				return left.TargetGeneration < right.TargetGeneration
+			}
+			if left.Fingerprint != right.Fingerprint {
+				return left.Fingerprint < right.Fingerprint
+			}
+			if left.IntervalStart != right.IntervalStart {
+				return left.IntervalStart < right.IntervalStart
+			}
+			return left.IntervalEnd < right.IntervalEnd
+		})
+		input.Assets = append(input.Assets, assetState)
+	}
+
+	encoded, err := json.Marshal(input)
+	if err != nil {
+		return "", err
+	}
+	digest := sha256.Sum256(encoded)
+	return dataStateTokenVersion + ":" + hex.EncodeToString(digest[:]), nil
 }
 
 // verifiableByName reports whether an asset's freshness can be confirmed by
@@ -444,7 +850,7 @@ func (s *Service) runVerification(selection Selection) {
 	defer cancel()
 
 	s.mu.Lock()
-	statuses := s.statuses[selection.PipelineUUID]
+	statuses := s.snapshots[selection.PipelineUUID].Assets
 	s.mu.Unlock()
 
 	freshNames := make([]string, 0, len(statuses))

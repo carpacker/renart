@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -24,6 +25,7 @@ import (
 	"github.com/urfave/cli/v3"
 	webapi "renart/internal/web/api"
 	"renart/internal/web/bus"
+	"renart/internal/web/completion"
 	"renart/internal/web/events"
 	"renart/internal/web/fingerprint"
 	webhttpapi "renart/internal/web/httpapi"
@@ -68,6 +70,7 @@ type webServer struct {
 	sourceControlSvc *service.SourceControlService
 	schedulerSvc     *webscheduler.Service
 	schedulerStore   *webscheduler.Store
+	completionStore  *completion.Store
 	stalenessSvc     *staleness.Service
 	snapshotStore    *snapshot.Store
 	policyLoader     *policy.Loader
@@ -78,6 +81,7 @@ type webServer struct {
 	eventBus          *bus.Bus
 	fingerprintEngine *fingerprint.Engine
 	matlogStore       *matlog.Store
+	completionMu      sync.Mutex
 	logger            *zap.Logger
 }
 

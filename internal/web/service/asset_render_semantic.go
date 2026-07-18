@@ -29,14 +29,7 @@ func assetRenderConnectionName(info *directPipelineInfo) (string, error) {
 	if info == nil || info.Pipeline == nil || info.Asset == nil {
 		return "", fmt.Errorf("asset render context is incomplete")
 	}
-	switch {
-	case isLoadAsset(info.Asset):
-		return loadConnectionNameForAsset(info.Asset, info.Pipeline)
-	case isAPIAsset(info.Asset):
-		return apiConnectionNameForAsset(info.Asset, info.Pipeline)
-	default:
-		return info.Pipeline.GetConnectionNameForAsset(info.Asset)
-	}
+	return targetConnectionNameForAsset(info.Asset, info.Pipeline)
 }
 
 func renderSemanticAsset(
@@ -61,7 +54,19 @@ func renderSemanticAsset(
 	case isAPIAsset(asset):
 		return renderAPISemanticAsset(asset, info.Pipeline, renderer, renderCtx, connectionName)
 	case isSensorAssetType(asset.Type) && !isQuerySensorAssetType(asset.Type):
-		return renderConditionSensorSemanticAsset(asset, connectionName)
+		outcome := renderConditionSensorSemanticAsset(asset, connectionName)
+		if asset.Type == pipeline.AssetTypeBigqueryTableSensor && outcome.status != AssetRenderStatusError {
+			operatorOutcome := assetRenderSemanticOutcome{handled: true, status: AssetRenderStatusOK}
+			appendBigQueryQueryCostGuard(&operatorOutcome, info)
+			if len(operatorOutcome.stages) > 0 {
+				operatorOutcome.stages = append(operatorOutcome.stages, outcome.stages...)
+				operatorOutcome.issues = append(operatorOutcome.issues, outcome.issues...)
+				operatorOutcome.redactions = append(operatorOutcome.redactions, outcome.redactions...)
+				operatorOutcome.status = mergeAssetRenderStatus(operatorOutcome.status, outcome.status)
+				return operatorOutcome
+			}
+		}
+		return outcome
 	case asset.Type == pipeline.AssetTypeIngestr:
 		return renderIngestrSemanticAsset(renderCtx, info.Pipeline, asset, connectionName, effectiveFullRefresh)
 	default:

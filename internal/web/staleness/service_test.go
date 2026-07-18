@@ -151,6 +151,61 @@ func (f *fixture) recordRunAttempt(t *testing.T, environment, status string, ass
 	}
 }
 
+func (f *fixture) enableTargetAware(targets map[string]PhysicalTarget) {
+	f.service.deps.ResolveTargets = func(
+		ctx context.Context,
+		selection Selection,
+		parsed *pipeline.Pipeline,
+	) (map[string]PhysicalTarget, error) {
+		return targets, nil
+	}
+}
+
+func (f *fixture) recordTargetRun(
+	t *testing.T,
+	environment string,
+	targetIdentity string,
+	window *Interval,
+	assetName string,
+) matlog.Materialization {
+	t.Helper()
+	f.nextRun++
+	runID := fmt.Sprintf("target-run-%d", f.nextRun)
+	vars := fingerprint.EffectiveVars(f.pipeline, nil)
+	results, err := f.engine.DAG(f.pipeline, vars)
+	require.NoError(t, err)
+	assetID := identity.AssetID("p", assetName)
+	result, ok := results[assetID]
+	require.True(t, ok)
+	materializedAt := time.Date(2026, 7, 1, f.nextRun, 0, 0, 0, time.UTC)
+	materialization := matlog.Materialization{
+		AssetID:           assetID,
+		Environment:       environment,
+		Fingerprint:       string(result.FP),
+		OwnContent:        string(result.OwnContent),
+		VarsHash:          fingerprint.AllVarsHash(vars),
+		RunID:             runID,
+		TargetIdentity:    targetIdentity,
+		CompletionID:      runID,
+		CompletionOrdinal: 0,
+		MaterializedAt:    materializedAt,
+	}
+	if window != nil {
+		materialization.IntervalStart = &window.Start
+		materialization.IntervalEnd = &window.End
+	}
+	require.NoError(t, f.store.Record(context.Background(), materialization))
+	require.NoError(t, f.store.RecordRun(context.Background(), matlog.AssetRunRecord{
+		AssetID:     assetID,
+		Environment: environment,
+		Fingerprint: string(result.FP),
+		Status:      "succeeded",
+		RunID:       runID,
+		RanAt:       materializedAt,
+	}))
+	return materialization
+}
+
 func (f *fixture) statuses(t *testing.T, environment string, start, end *time.Time) map[string]AssetStatus {
 	t.Helper()
 	statuses, err := f.service.Statuses(context.Background(), Selection{
@@ -175,6 +230,31 @@ func TestNeverBuiltThenFresh(t *testing.T) {
 
 	f.recordRun(t, "dev", nil, "a")
 	assert.Equal(t, StatusFresh, f.statuses(t, "dev", nil, nil)["a"].Status)
+}
+
+func TestLegacySnapshotTokenIsDeterministicAndPreservesFreshness(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t, sqlAsset("a", "select 1"))
+	selection := Selection{PipelineUUID: "p", Environment: "dev"}
+
+	before, err := f.service.Snapshot(context.Background(), selection)
+	require.NoError(t, err)
+	require.Len(t, before.Assets, 1)
+	assert.Equal(t, TargetFidelityLegacy, before.Assets[0].TargetFidelity)
+	assert.Equal(t, StatusNeverBuilt, before.Assets[0].Status)
+
+	f.recordRun(t, "dev", nil, "a")
+	first, err := f.service.Snapshot(context.Background(), selection)
+	require.NoError(t, err)
+	assert.Equal(t, StatusFresh, first.Assets[0].Status)
+	assert.NotEqual(t, before.DataStateToken, first.DataStateToken)
+
+	// Repeating the same marker build changes diagnostic run/timestamp state but
+	// not the legacy coverage needed by this selection.
+	f.recordRun(t, "dev", nil, "a")
+	second, err := f.service.Snapshot(context.Background(), selection)
+	require.NoError(t, err)
+	assert.Equal(t, first.DataStateToken, second.DataStateToken)
 }
 
 func TestSensorRemainsVolatileAfterSuccessfulRun(t *testing.T) {
@@ -323,6 +403,293 @@ func TestEnvironmentSwitchKeepsIndependentStatus(t *testing.T) {
 	assert.Equal(t, StatusFresh, f.statuses(t, "prod", nil, nil)["a"].Status)
 }
 
+func TestTargetAwareStalenessDoesNotResurrectHistoricalGeneration(t *testing.T) {
+	t.Parallel()
+	asset := intervalAwareAsset("a")
+	f := newFixture(t, asset)
+	const target = "renart-physical-target-v1:orders"
+	targets := map[string]PhysicalTarget{"p:a": {Identity: target, Exact: true}}
+	f.enableTargetAware(targets)
+	day := func(d int) time.Time { return time.Date(2026, 7, 1+d, 0, 0, 0, 0, time.UTC) }
+	wide := Interval{Start: day(0), End: day(10)}
+
+	// Generation one contains broad coverage for source variant A.
+	f.recordTargetRun(t, "dev", target, &wide, "a")
+	start, end := wide.Start, wide.End
+	require.Equal(t, StatusFresh, f.statuses(t, "dev", &start, &end)["a"].Status)
+
+	// Variant B overwrites the same physical target and advances its generation.
+	asset.ExecutableFile.Content = "select * from events where active"
+	f.recordTargetRun(t, "dev", target, &wide, "a")
+	require.Equal(t, StatusFresh, f.statuses(t, "dev", &start, &end)["a"].Status)
+
+	// Returning the source to A must not reactivate generation one's matching
+	// fingerprint and broad interval coverage.
+	asset.ExecutableFile.Content = "select * from events"
+	assert.Equal(t, StatusStaleEdited, f.statuses(t, "dev", &start, &end)["a"].Status)
+
+	// Rebuilding only one day starts generation three. The old nine days from
+	// generation one remain audit history, not reusable freshness.
+	oneDay := Interval{Start: day(0), End: day(1)}
+	f.recordTargetRun(t, "dev", target, &oneDay, "a")
+	status := f.statuses(t, "dev", &start, &end)["a"]
+	assert.Equal(t, StatusPartial, status.Status)
+	require.Len(t, status.Gaps, 1)
+	assert.Equal(t, day(1), status.Gaps[0].Start)
+	assert.Equal(t, day(10), status.Gaps[0].End)
+}
+
+func TestTargetAwareStalenessFollowsSelectedPhysicalTarget(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t, sqlAsset("a", "select 1"))
+	targets := map[string]PhysicalTarget{
+		"p:a": {Identity: "renart-physical-target-v1:a", Exact: true},
+	}
+	f.enableTargetAware(targets)
+
+	f.recordTargetRun(t, "dev", targets["p:a"].Identity, nil, "a")
+	assert.Equal(t, StatusFresh, f.statuses(t, "dev", nil, nil)["a"].Status)
+
+	// The same source routed to a new target has no reusable evidence there.
+	targets["p:a"] = PhysicalTarget{Identity: "renart-physical-target-v1:b", Exact: true}
+	assert.Equal(t, StatusNeverBuilt, f.statuses(t, "dev", nil, nil)["a"].Status)
+	f.recordTargetRun(t, "dev", targets["p:a"].Identity, nil, "a")
+	assert.Equal(t, StatusFresh, f.statuses(t, "dev", nil, nil)["a"].Status)
+
+	// Distinct exact targets prove physical isolation, so switching back to A
+	// can reuse A's still-current writer and coverage.
+	targets["p:a"] = PhysicalTarget{Identity: "renart-physical-target-v1:a", Exact: true}
+	assert.Equal(t, StatusFresh, f.statuses(t, "dev", nil, nil)["a"].Status)
+}
+
+func TestTargetAwareStalenessFailsClosedForUnresolvedTarget(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name   string
+		target *PhysicalTarget
+	}{
+		{name: "missing"},
+		{name: "runtime only", target: &PhysicalTarget{Exact: false}},
+		{name: "empty exact", target: &PhysicalTarget{Exact: true}},
+		{name: "non canonical identity", target: &PhysicalTarget{Identity: " target ", Exact: true}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			f := newFixture(t, sqlAsset("a", "select 1"))
+			// Legacy evidence exists, but target-aware mode must never infer a
+			// current physical target from it.
+			f.recordRun(t, "dev", nil, "a")
+			targets := map[string]PhysicalTarget{}
+			if tt.target != nil {
+				targets["p:a"] = *tt.target
+			}
+			f.enableTargetAware(targets)
+			assert.Equal(t, StatusNeverBuilt, f.statuses(t, "dev", nil, nil)["a"].Status)
+		})
+	}
+}
+
+func TestTargetAwareStalenessFailsClosedForAmbiguousWriter(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t, sqlAsset("a", "select 1"))
+	const target = "renart-physical-target-v1:shared"
+	f.enableTargetAware(map[string]PhysicalTarget{"p:a": {Identity: target, Exact: true}})
+	first := f.recordTargetRun(t, "dev", target, nil, "a")
+
+	conflict := first
+	conflict.Fingerprint = "v1:conflicting-output"
+	conflict.RunID = "other-run"
+	conflict.CompletionID = "other-completion"
+	require.ErrorIs(t, f.store.Record(context.Background(), conflict), matlog.ErrTargetWriterAmbiguous)
+
+	snapshot, err := f.service.Snapshot(context.Background(), Selection{PipelineUUID: "p", Environment: "dev"})
+	require.NoError(t, err)
+	require.Len(t, snapshot.Assets, 1)
+	assert.Equal(t, StatusNeverBuilt, snapshot.Assets[0].Status)
+	require.NotNil(t, snapshot.Assets[0].LatestOutput)
+	assert.True(t, snapshot.Assets[0].LatestOutput.Ambiguous)
+}
+
+func TestTargetAwareStalenessFailsClosedForDisplacedWriter(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t, sqlAsset("a", "select 1"))
+	const target = "renart-physical-target-v1:shared"
+	f.enableTargetAware(map[string]PhysicalTarget{"p:a": {Identity: target, Exact: true}})
+	first := f.recordTargetRun(t, "dev", target, nil, "a")
+	require.Equal(t, StatusFresh, f.statuses(t, "dev", nil, nil)["a"].Status)
+
+	displacing := first
+	displacing.AssetID = "other:b"
+	displacing.Environment = "prod"
+	displacing.Fingerprint = "v1:other"
+	displacing.OwnContent = "v1:other-own"
+	displacing.RunID = "other-run"
+	displacing.CompletionID = "other-completion"
+	displacing.MaterializedAt = first.MaterializedAt.Add(time.Hour)
+	require.NoError(t, f.store.Record(context.Background(), displacing))
+
+	assert.Equal(t, StatusNeverBuilt, f.statuses(t, "dev", nil, nil)["a"].Status)
+}
+
+func TestTargetAwareStalenessUsesCurrentGenerationOwnContent(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t,
+		sqlAsset("a", "select 1"),
+		sqlAsset("b", "select * from a", "a"),
+	)
+	const target = "renart-physical-target-v1:b"
+	f.enableTargetAware(map[string]PhysicalTarget{
+		"p:a": {Identity: "renart-physical-target-v1:a", Exact: true},
+		"p:b": {Identity: target, Exact: true},
+	})
+	f.recordTargetRun(t, "dev", target, nil, "b")
+
+	// B's own definition is unchanged, while its Merkle fingerprint changes
+	// with A. Classification must use B's own content from the target's current
+	// generation, not an arbitrary historical row.
+	f.pipeline.Assets[0].ExecutableFile.Content = "select 2"
+	assert.Equal(t, StatusStaleUpstream, f.statuses(t, "dev", nil, nil)["b"].Status)
+}
+
+func TestTargetAwareStalenessClassifiesSelectedVariablesFromCurrentWriter(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t, sqlAsset("a", "select '{{ var.region }}'"))
+	f.pipeline.Variables = pipeline.Variables{
+		"region": map[string]any{"type": "string", "default": "eu"},
+	}
+	const target = "renart-physical-target-v1:variables"
+	f.enableTargetAware(map[string]PhysicalTarget{"p:a": {Identity: target, Exact: true}})
+	f.recordTargetRun(t, "dev", target, nil, "a")
+
+	statuses, err := f.service.Statuses(context.Background(), Selection{
+		PipelineUUID: "p",
+		Environment:  "dev",
+		VarOverrides: map[string]any{"region": "us"},
+	})
+	require.NoError(t, err)
+	require.Len(t, statuses, 1)
+	assert.Equal(t, StatusStaleUpstream, statuses[0].Status,
+		"a different variables hash has no current coverage but is not an own-definition edit")
+}
+
+func TestTargetAwareSnapshotExposesSelectedTargetAndLatestOutput(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t, sqlAsset("a", "select 1"))
+	const target = "renart-physical-target-v1:output"
+	f.enableTargetAware(map[string]PhysicalTarget{
+		"p:a": {Identity: target, Exact: true},
+	})
+	recorded := f.recordTargetRun(t, "dev", target, nil, "a")
+
+	snapshot, err := f.service.Snapshot(context.Background(), Selection{
+		PipelineUUID: "p",
+		Environment:  "dev",
+	})
+	require.NoError(t, err)
+	require.NotEmpty(t, snapshot.DataStateToken)
+	require.Len(t, snapshot.Assets, 1)
+	status := snapshot.Assets[0]
+	assert.Equal(t, TargetFidelityExact, status.TargetFidelity)
+	assert.Equal(t, target, status.TargetIdentity)
+	require.NotNil(t, status.LatestOutput)
+	assert.Equal(t, target, status.LatestOutput.TargetIdentity)
+	assert.EqualValues(t, 1, status.LatestOutput.TargetGeneration)
+	assert.Equal(t, "p:a", status.LatestOutput.WriterAssetID)
+	assert.Equal(t, "dev", status.LatestOutput.WriterEnvironment)
+	assert.Equal(t, recorded.Fingerprint, status.LatestOutput.Fingerprint)
+	assert.Equal(t, recorded.VarsHash, status.LatestOutput.VarsHash)
+	assert.Equal(t, recorded.RunID, status.LatestOutput.RunID)
+	assert.Equal(t, recorded.MaterializedAt, status.LatestOutput.MaterializedAt)
+	assert.Equal(t, recorded.CompletionID, status.LatestOutput.CompletionID)
+	assert.Equal(t, recorded.CompletionOrdinal, status.LatestOutput.CompletionOrdinal)
+	assert.False(t, status.LatestOutput.Ambiguous)
+}
+
+func TestTargetAwareDataStateTokenTracksGenerationButNotEquivalentRerunMetadata(t *testing.T) {
+	t.Parallel()
+	asset := sqlAsset("a", "select 1")
+	f := newFixture(t, asset)
+	const target = "renart-physical-target-v1:token-generation"
+	f.enableTargetAware(map[string]PhysicalTarget{
+		"p:a": {Identity: target, Exact: true},
+	})
+
+	f.recordTargetRun(t, "dev", target, nil, "a")
+	first, err := f.service.Snapshot(context.Background(), Selection{PipelineUUID: "p", Environment: "dev"})
+	require.NoError(t, err)
+
+	// A same-variant rerun changes the diagnostic run/completion/time fields but
+	// keeps the writer generation and needed selection unchanged.
+	f.recordTargetRun(t, "dev", target, nil, "a")
+	equivalent, err := f.service.Snapshot(context.Background(), Selection{PipelineUUID: "p", Environment: "dev"})
+	require.NoError(t, err)
+	assert.Equal(t, first.DataStateToken, equivalent.DataStateToken)
+	require.NotNil(t, equivalent.Assets[0].LatestOutput)
+	assert.NotEqual(t, first.Assets[0].LatestOutput.RunID, equivalent.Assets[0].LatestOutput.RunID)
+	assert.EqualValues(t, 1, equivalent.Assets[0].LatestOutput.TargetGeneration)
+
+	// A different variant advances the physical generation, and returning to A
+	// advances it again rather than resurrecting generation one's state.
+	asset.ExecutableFile.Content = "select 2"
+	f.recordTargetRun(t, "dev", target, nil, "a")
+	variantB, err := f.service.Snapshot(context.Background(), Selection{PipelineUUID: "p", Environment: "dev"})
+	require.NoError(t, err)
+	assert.NotEqual(t, equivalent.DataStateToken, variantB.DataStateToken)
+
+	asset.ExecutableFile.Content = "select 1"
+	f.recordTargetRun(t, "dev", target, nil, "a")
+	returnedA, err := f.service.Snapshot(context.Background(), Selection{PipelineUUID: "p", Environment: "dev"})
+	require.NoError(t, err)
+	assert.NotEqual(t, first.DataStateToken, returnedA.DataStateToken)
+	require.NotNil(t, returnedA.Assets[0].LatestOutput)
+	assert.EqualValues(t, 3, returnedA.Assets[0].LatestOutput.TargetGeneration)
+}
+
+func TestTargetAwareDataStateTokenChangesForClaimAndCoverageExpansion(t *testing.T) {
+	t.Parallel()
+	asset := intervalAwareAsset("a")
+	f := newFixture(t, asset)
+	const target = "renart-physical-target-v1:token-coverage"
+	f.enableTargetAware(map[string]PhysicalTarget{
+		"p:a": {Identity: target, Exact: true},
+	})
+	day := func(d int) time.Time { return time.Date(2026, 7, 1+d, 0, 0, 0, 0, time.UTC) }
+	selection := Selection{
+		PipelineUUID: "p",
+		Environment:  "dev",
+		Start:        timePointer(day(0)),
+		End:          timePointer(day(10)),
+	}
+
+	firstWindow := Interval{Start: day(0), End: day(1)}
+	f.recordTargetRun(t, "dev", target, &firstWindow, "a")
+	first, err := f.service.Snapshot(context.Background(), selection)
+	require.NoError(t, err)
+
+	secondWindow := Interval{Start: day(1), End: day(2)}
+	f.recordTargetRun(t, "dev", target, &secondWindow, "a")
+	expanded, err := f.service.Snapshot(context.Background(), selection)
+	require.NoError(t, err)
+	assert.NotEqual(t, first.DataStateToken, expanded.DataStateToken)
+
+	claim := matlog.TargetWriteClaim{
+		TargetIdentity: target,
+		CompletionID:   "pending-completion",
+		AssetID:        "p:a",
+		ClaimedAt:      day(3),
+	}
+	require.NoError(t, f.store.ClaimTargetWrite(context.Background(), claim))
+	claimed, err := f.service.Snapshot(context.Background(), selection)
+	require.NoError(t, err)
+	assert.NotEqual(t, expanded.DataStateToken, claimed.DataStateToken)
+	require.Nil(t, claimed.Assets[0].LatestOutput)
+	assert.Equal(t, StatusNeverBuilt, claimed.Assets[0].Status)
+}
+
+func timePointer(value time.Time) *time.Time {
+	return &value
+}
+
 func intervalAwareAsset(name string) *pipeline.Asset {
 	asset := sqlAsset(name, "select * from events")
 	asset.Materialization.Strategy = pipeline.MaterializationStrategyTimeInterval
@@ -396,12 +763,52 @@ func TestRunCompletedEventRecomputesAndPublishes(t *testing.T) {
 		payload, ok := event.(map[string]any)
 		require.True(t, ok)
 		assert.Equal(t, "staleness.updated", payload["type"])
+		assert.NotEmpty(t, payload["data_state_token"])
 		statuses, ok := payload["assets"].([]AssetStatus)
 		require.True(t, ok)
 		require.Len(t, statuses, 1)
 		assert.Equal(t, StatusFresh, statuses[0].Status)
 	case <-time.After(5 * time.Second):
 		t.Fatal("no staleness.updated event published")
+	}
+}
+
+func TestTargetWriteChangedEventPublishesFailClosedSnapshot(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t, sqlAsset("a", "select 1"))
+	const target = "renart-physical-target-v1:claim-event"
+	f.enableTargetAware(map[string]PhysicalTarget{
+		"p:a": {Identity: target, Exact: true},
+	})
+	f.recordTargetRun(t, "dev", target, nil, "a")
+	selection := Selection{PipelineUUID: "p", Environment: "dev"}
+	fresh, err := f.service.Snapshot(context.Background(), selection)
+	require.NoError(t, err)
+	require.Len(t, fresh.Assets, 1)
+	require.Equal(t, StatusFresh, fresh.Assets[0].Status)
+
+	claim := matlog.TargetWriteClaim{
+		TargetIdentity: target,
+		CompletionID:   "pending-completion",
+		AssetID:        "p:a",
+		ClaimedAt:      time.Now().UTC(),
+	}
+	require.NoError(t, f.store.ClaimTargetWrite(context.Background(), claim))
+	f.events.EmitTargetWriteChanged(bus.TargetWriteChanged{PipelineUUID: "p", AssetID: "p:a"})
+
+	select {
+	case event := <-f.pushed:
+		payload, ok := event.(map[string]any)
+		require.True(t, ok)
+		assert.Equal(t, "staleness.updated", payload["type"])
+		assert.NotEqual(t, fresh.DataStateToken, payload["data_state_token"])
+		statuses, ok := payload["assets"].([]AssetStatus)
+		require.True(t, ok)
+		require.Len(t, statuses, 1)
+		assert.Equal(t, StatusNeverBuilt, statuses[0].Status)
+		assert.Nil(t, statuses[0].LatestOutput)
+	case <-time.After(5 * time.Second):
+		t.Fatal("no fail-closed staleness.updated event published for target claim")
 	}
 }
 

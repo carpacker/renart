@@ -912,17 +912,41 @@ recording. Reuse the existing asset-fingerprint and coverage canonicalization,
 so enabling overrides alone requires plumbing rather than a fact-schema
 migration and existing default-context facts remain valid.
 
-The latest-physical-output rule is separate storage work and may require a
+The latest-physical-output rule is separate storage work and requires a
 migration. Current facts/coverage have fingerprint and variables hash but no
 target identity; `LatestFingerprint` omits the variables hash and reads raw
 facts that retention later prunes, while the latest-attempt row may describe a
-failure. Before enabling the rule, either prove an equivalent durable lookup or
-prefer an explicit latest-successful-writer record keyed by
-`(asset, environment, target identity)`, updated atomically with successful
-fact/coverage recording. Scope facts and coverage by that same target identity
-so intervals from two destinations cannot be merged or reused. Dynamic
-Python/runtime-only outputs remain unknown unless their operator can report a
-reliable target.
+failure. The durable latest-successful-writer record must be keyed globally by
+`target identity`, not by asset or environment: those fields describe the
+writer, while two assets or environments that route to the same mutable object
+compete for the same physical output. Facts and coverage remain scoped by
+`(asset, environment, target identity)` so intervals from different
+destinations cannot be merged or reused.
+
+Target scoping alone is insufficient because coverage for variant A could
+otherwise become reusable again after variant B overwrites the target and a
+later selection returns to A. Give each accepted physical writer a monotonic
+target generation. Facts and coverage store that generation, and freshness
+consults only the generation on the current global writer row. A change to the
+writer scope `(asset, environment)` or its `(asset fingerprint, full variables
+hash)` advances the generation; the scope is part of the boundary because
+coverage remains asset/environment-scoped. Returning to an older variant or
+writer therefore starts a new generation instead of resurrecting its
+historical coverage. Update the writer row, immutable fact, and
+current-generation coverage atomically. Raw-fact retention must never remove
+this writer row. Scheduled replay keys must compare their persisted target,
+source, window, timestamp, and completion evidence, plus validate the stored
+generation class, before any writer mutation; only an exact match is an
+idempotent no-op.
+
+Resolve and capture the exact target before execution from the same selected
+source/configuration context as the operator, persist it for queued recovery,
+and carry it on per-asset completion events. The recorder must not reconstruct
+an executed target from a possibly changed `.bruin.yml` after completion.
+Legacy facts migrate with an empty target and generation zero and remain
+untrusted evidence until rebuilt; do not infer historical targets from current
+configuration. Dynamic Python/runtime-only outputs remain unknown unless their
+operator can report a reliable target.
 
 Historical coverage is evidence, not automatically reusable freshness. For an
 ordinary mutable target, freshness requires selected-context coverage and an
@@ -1196,21 +1220,26 @@ Renart process.
 
 Implementation checkpoint (2026-07-16): a read-only backend service now exposes
 `POST /api/assets/{assetID}/render` for a saved working-tree asset. It shares the
-direct executor's hook-aware DuckDB/MotherDuck materializer and Rust `DECLARE`
-hoister, distinguishes requested from effective full refresh, uses a
-server-owned asset path and preview run ID, returns source/variable identities
-plus a limited digest of environment fields, and returns stage-level fidelity,
-issues, and redaction metadata. That limited digest is explicitly not the
-canonical configuration/target identity defined in section 6.5 and must not be
-reused for plan confirmation or caching.
+direct executor's materializer construction for every hook-capable direct SQL
+family, including the string, ordered-list, and Athena location-aware forms and
+their Rust `DECLARE` hoisters. It distinguishes requested, environment-level
+operator, and per-asset effective full refresh, uses a server-owned asset path
+and preview run ID, returns source/effective-variable identities plus value-free
+variable provenance, and returns stage-level fidelity, issues, and redaction
+metadata.
 
-SQL assets expose the exact compiled query. DuckDB/MotherDuck also expose exact
-hook-aware execution SQL; query sensors compile only `parameters.query` and
-show the exact submitted condition while leaving polling behavior as runtime
-controls. Other SQL destinations currently retain the exact compiled query but
-mark execution rendering unsupported. The same request-local, non-mutating
-hook-template resolver serves rendering and direct DuckDB/MotherDuck asset and
-pipeline execution; hooks remain folded into one execution-SQL stage.
+SQL assets expose the exact compiled query. Deterministic direct paths also
+expose the final submitted execution SQL: string materializers retain their
+hook-aware blob, Databricks/ClickHouse/Synapse retain atomic ordered elements,
+and Athena retains its location-aware ordered elements. BigQuery and Snowflake
+add secret-free semantic/runtime-only stages for their live conditional
+preflights. Oracle exposes the exact query its no-materialization direct runtime
+submits. Query sensors compile only `parameters.query` and show the exact
+submitted condition while leaving polling behavior as runtime controls. The
+same request-local, non-mutating hook-template resolver serves rendering and
+direct execution. Ordered hooks become structured stages only when their
+provenance survives hoisting byte-for-byte; otherwise exact elements are
+reported neutrally without regex or SQL-text inference.
 
 Non-SQL rendering is now semantic rather than fabricated: seeds describe the
 Sling load and enforced casts, Load assets describe the Sling copy, API assets
@@ -1240,17 +1269,200 @@ and concurrent source drift remains `409`. Save-time CRLF-to-LF normalization
 no longer discards a successful preview, while genuine saved-source changes
 still invalidate it.
 
-Remaining before Phase 1 is complete:
+Quality-check checkpoint (2026-07-17): the renderer now enumerates Bruin's
+authoritative scheduler column/custom-check instances and runs the same
+destination-specific direct-executor check operators against a capture-only
+connection. This returns one named, structured `check` stage per runtime task,
+including exact rendered SQL, column/custom identity, and blocking semantics,
+without contacting a warehouse. Invalid checks remain asset-scoped error
+stages and do not erase usable query/materialization stages; unsupported direct
+check paths are explicit. The shared registry also restores ingestr's
+destination-aware column/custom check delegates during direct execution. Build
+and CLI output use distinct check labels, and the existing backend redactor
+covers check SQL and diagnostics.
 
-- replace the limited configuration digest with the canonical plan
-  context/provenance/target identities from section 6.5;
-- factor checks behind the reusable renderer and return their stages;
-- expose exact execution SQL for supported non-DuckDB SQL destinations and
-  prove broader executor/materializer parity;
-- separate hooks into structured stages where execution can preserve that
-  boundary;
-- expand partial-diagnostic and executor-parity coverage without weakening the
-  saved-source drift guard or credential redaction.
+Destination-check parity checkpoint (2026-07-17): Oracle now uses Bruin's
+Oracle column-check operator. Python, API, and Load resolve their effective
+target connection and delegate column/custom checks to that destination's
+actual SQL operator; targets without a mapped SQL check operator become typed
+unsupported warnings without exposing connection names. API and Load retain
+their custom HTTP/Sling path only for main tasks, while checks use the shared
+sequential registry and metadata tasks are explicit no-ops. This also closes a
+duplicate-execution gap where scheduler-created check or metadata tasks could
+rerun the side-effecting main loader. Direct execution and render parity tests
+cover dialect selection, captured SQL, unsupported targets, DuckDB
+coordination, and the no-rerun boundary. The shared API/Load Auto-target
+resolver also honors a lone configured default when no SQL/ingestr majority
+exists, instead of silently selecting a synthesized DuckDB connection name.
+
+PostgreSQL/Redshift parity checkpoint (2026-07-17): rendering and direct
+execution now construct their hook-aware string materializer through one shared
+factory. Parity tests compare the execution stage byte-for-byte with the SQL a
+fake direct runtime connection receives for both destinations. Exact fidelity
+is limited to those deterministic paths: developer-environment schema rewrites
+that depend on live warehouse state and materializations with generated
+temporary identifiers are explicitly `runtime_only`; schema preparation
+remains semantic and materialization errors retain earlier usable stages.
+
+MSSQL/Vertica/Fabric parity checkpoint (2026-07-17): rendering and direct
+execution now share the hook-aware string-materializer factory and Rust
+`DECLARE` hoister for MSSQL, Vertica, Fabric, and the legacy Fabric query alias.
+End-to-end tests compare each saved-source execution stage byte-for-byte with
+the SQL captured from direct `RunAsset`, including pre/post hooks. Schema
+preparation appears only for the Fabric aliases because MSSQL and Vertica do
+not perform that separate runtime step. MSSQL and Vertica `delete+insert` are
+`runtime_only` because their materializers generate fresh temporary names;
+Fabric's names remain exact because they are deterministic. MSSQL metadata-only
+DDL also matches direct execution without requiring placeholder query text.
+
+Selected-configuration checkpoint (2026-07-17): render provenance keeps the
+existing `configuration_digest` field but now derives it from a shared
+run-context canonicalizer over selected environment controls and only the
+execution-relevant named connections. Bruin `sensitive` and `sensitive_file`
+fields contribute presence without their values or file paths; custom
+marshalers are never invoked. Connection ordering and unrelated environment
+connections do not change the digest, while behavior-relevant public fields
+do. Maps, interfaces, raw URL/DSN/endpoint/options strings, unresolved
+connections, and unknown shapes fail closed to `runtime_only` with an empty
+digest. Variable provenance exposes only sorted names and their winning source;
+the current render path truthfully reports pipeline defaults because schedule
+and ad-hoc overrides are not executable yet. This selected-configuration
+identity is explicitly not the physical-target identity from section 6.5.
+
+Direct-hook parity checkpoint (2026-07-17): every hook-capable direct SQL path
+now constructs its materializer through one of the shared factories: the
+string-returning families use the Rust `DECLARE` hoister, Databricks,
+ClickHouse, and Synapse use the ordered-statement wrapper, and Athena uses the
+location-aware ordered-statement wrapper. Hook wrapping remains outside the
+configured/full-refresh selector so pre/post hooks survive both variants.
+Runtime parity tests cover ordered pre/main/post submission and the shared
+hoister. Synapse direct execution now uses Bruin's Synapse operator and
+materializer instead of the MSSQL implementation.
+
+MySQL/Trino/Oracle render checkpoint (2026-07-17): MySQL and Trino now share
+their direct executor's hook-aware materializer and query-extraction paths with
+the renderer, with byte-for-byte parity tests for deterministic cases. MySQL
+schema creation remains a semantic preparation stage, while materializations
+that generate temporary names (`delete+insert`, `merge`, and both SCD2
+strategies) are honestly `runtime_only`. Trino preserves its split-statement
+runtime semantics, including complete time-interval batches and metadata-only
+DDL derived from columns; only developer schema-prefix rewrites that require
+live warehouse state remain `runtime_only`. Oracle's direct path supports only
+no-materialization queries, so that submitted query is rendered exactly;
+declared materialization produces the matching execution error, and declared
+pre/post hooks produce a partial warning because the direct Oracle runtime does
+not execute them.
+
+Canonical asset/target identity checkpoint (2026-07-17): render now reuses the
+staleness fingerprint engine to return the selected asset's full DAG
+fingerprint and the existing full-variable-map coverage hash. A missing legacy
+pipeline ID is represented only on a shallow in-memory copy, so the read-only
+path never self-assigns or persists an ID; fingerprint failures retain usable
+stages as sanitized partial results. The same identity fields are visible in
+Build and `renart render`.
+
+Render also exposes a secret-free physical-target descriptor resolved without
+opening a warehouse. Exact identities exclude connection aliases,
+environment/principal names, and credentials while including only proven
+endpoint/routing coordinates plus the resolved relation or canonical local
+file. Bruin's table-name capabilities and Renart's DuckDB path canonicalizer
+are the shared parsing/normalization seams. Ambiguous session defaults,
+schema-prefix rewrites, pre-hooks with unqualified targets, raw routing
+options, credential-derived tenancy, dynamic Python outputs, non-materialized
+SQL, and unsupported families fail closed to `runtime_only`; sensors report an
+exact no-output target. Response display values never expose warehouse hosts,
+database paths, or credentials. This is the read-only resolution seam needed
+by target capture and latest-writer persistence; the execution-evidence and
+target-aware state checkpoints below now use it without widening its
+credential-free contract.
+
+Remaining-direct-SQL render checkpoint (2026-07-17): BigQuery and Snowflake
+now share their exact hook-aware string materializers with rendering. BigQuery
+applies the same annotation comment before submission; its live cost guard,
+dataset preparation, and target-compatibility work, plus Snowflake's warehouse
+selection, container preparation, target compatibility, and SCD2 migration,
+are represented at semantic or runtime-only fidelity without opening a
+warehouse or exposing connection values. Operator-level and asset-effective
+full refresh remain distinct so environment and asset restrictions match
+direct execution.
+
+Databricks, ClickHouse, and Synapse now render the complete ordered batches
+submitted by their direct operators. The renderer preserves batch elements and
+uses structured pre/main/post kinds only when the final list matches the
+unhoisted origin byte-for-byte; a successful `DECLARE` reorder falls back to
+neutral execution stages instead of guessing provenance. Databricks three-part
+targets also expose the runtime's uppercase catalog-then-schema preparation.
+Athena uses the same
+location-aware materializer and selected typed query-results path as direct
+execution, exposes neutral ordered stages, supports metadata-only DDL, and
+matches per-asset hook refresh context. Time-interval post-extraction and
+generated temporary-name fidelity are covered by direct parity tests.
+
+Post-task/operator closure checkpoint (2026-07-17): rendering now asks Bruin's
+scheduler graph whether metadata push exists and appends it after quality checks
+from the same structural result finalizer. PostgreSQL-compatible, BigQuery, and
+Snowflake metadata stages use the exact explicit asset-type mapping installed by
+the direct executor registry; mutations remain secret-free `runtime_only`, and
+backend no-op/error behavior is represented semantically. BigQuery query/table
+sensors now show the configured live dry-run cost guard before their condition.
+PostgreSQL/Redshift and MySQL string-SCD2 assets show the direct operator's live
+timestamp-column migration before execution SQL, with the same full-refresh
+gate. Focused parity tests cover task order, executor mapping, sensor limits,
+migration ordering, and credential redaction.
+
+Target-generation storage checkpoint (2026-07-17): materialization facts and
+coverage now carry secret-free target identity and generation, while a global
+latest-successful-writer table survives raw-fact pruning. One transaction
+orders a completion, advances or reuses its generation, writes the immutable
+fact, updates only current-generation coverage, and moves the writer. Writer
+scope changes advance the generation as well as fingerprint/full-variable
+changes, preventing cross-asset or cross-environment A -> B -> A resurrection.
+Stable completion IDs/ordinals handle same-run ordering; independent equal-time
+writes become explicitly ambiguous, and non-exact fact-key replays fail before
+writer mutation. Legacy targetless rows remain generation zero. The schema is
+now active across pre-execution capture, recovery transport, recorder, and
+staleness selection.
+
+Execution-evidence checkpoint (2026-07-17): immediately before execution the
+direct runner captures a version-two, secret-free snapshot of the full parsed
+graph, including stable identity, exact/runtime-only target fidelity,
+fingerprints, authored upstream edges, coverage mode, variable hash, and refresh
+restriction. Scheduler runs persist it before their first step; all completion-
+aware interactive paths carry it directly. At each main-task start Renart
+captures the visible latest writers for exact in-pipeline upstream targets and
+claims the output before physical work. Failed/cancelled claims become dirty,
+successful facts clear matching claims in the same writer/fact/coverage
+transaction, and active/dirty claims suppress the prior writer. Recovery uses
+self-contained v2 evidence; v1 replay fails closed where a successful consumer
+lacks a successful in-pipeline upstream.
+
+Completion/recovery checkpoint (2026-07-17): a durable SQLite outbox is the
+single post-execution hand-off for recorder and staleness subscribers. Enqueue
+failure still fails the request, while a later subscriber failure leaves
+retryable derived-state work without misreporting the finished physical run.
+Every non-dry mutating service path holds a shared per-workspace OS lease through
+that hand-off; startup takes it exclusively before marking orphaned active
+claims dirty, and headless invocations skip reconciliation behind a live
+executor. Legacy workspace runs and quickstart materialization now route through
+the same completion-aware service, and Build-stale holds the lease across its
+whole ordered plan. Cancelled execution remains cancelled through the direct
+event, service result, and scheduler status.
+
+Target-aware state checkpoint (2026-07-17): staleness now selects only current-
+generation coverage for the resolved exact target, exposes per-asset target
+fidelity/identity and `latest_output`, and publishes a deterministic
+`data_state_token` through HTTP and SSE. Equivalent rerun metadata does not churn
+the token; generation, coverage, ambiguity, or active/dirty claim changes do.
+Target-claim transitions trigger an asynchronous fail-closed staleness snapshot
+even when no completion can be produced.
+
+Phase 1 is complete. The shared saved-source asset renderer covers the direct
+task graph at exact, semantic, runtime-only, or unsupported fidelity; target
+capture and generation-aware data state now provide the source/config/data
+identity seam required by Phase 2. Safe selected-configuration coverage can
+continue to expand only when an opaque connection field gains an explicit
+secret-free schema, and live conditional parity tests remain an ongoing
+hardening concern rather than a Phase 1 blocker.
 
 ### Phase 2: pipeline execution plan
 

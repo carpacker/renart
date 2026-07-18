@@ -106,8 +106,12 @@ not underscore-flattened route hacks.
   read-only `Render` action after the same save barrier. The result tab shows
   exact compiled/execution SQL where available, semantic JSON operations for
   non-SQL work, or a runtime-only description for Python. It labels every
-  stage's fidelity and redaction and always identifies the saved source,
-  environment, interval, and `Preview — not executed` status.
+  stage's fidelity and redaction, gives each runtime quality check its own
+  column/custom-check label and SQL tab when renderable, and always identifies
+  the saved source, environment, interval, and `Preview — not executed` status.
+  Compact badges show the asset/DAG fingerprint and either the opaque exact
+  physical-target identity or its runtime-only state; full target context stays
+  in the badge title without exposing endpoint coordinates.
   Build freshness retains only the last successful response for the exact
   environment/window selection. Requests are tracked per pipeline; a matching
   SSE freshness event authoritatively resolves only that pipeline and cannot be

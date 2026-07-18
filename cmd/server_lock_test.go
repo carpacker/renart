@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"net/http"
@@ -113,6 +114,60 @@ func TestRuntimeWorkspaceLeaseSkipsEmbeddedCLI(t *testing.T) {
 	})
 	require.NoError(t, err)
 	assert.Nil(t, lease)
+}
+
+func TestWorkspaceExecutionCoordinatorSeparatesLiveExecutionFromRecovery(t *testing.T) {
+	isolateWorkspaceServerLeases(t)
+	coordinator, err := newWorkspaceExecutionCoordinator(t.TempDir())
+	require.NoError(t, err)
+
+	releaseFirst, err := coordinator.AcquireShared(t.Context())
+	require.NoError(t, err)
+	releaseSecond, err := coordinator.AcquireShared(t.Context())
+	require.NoError(t, err, "independent executions may hold the workspace lease concurrently")
+
+	releaseRecovery, acquired, err := coordinator.tryAcquireExclusive()
+	require.NoError(t, err)
+	assert.False(t, acquired, "claim recovery must not enter while any physical execution is live")
+	assert.Nil(t, releaseRecovery)
+
+	require.NoError(t, releaseFirst())
+	releaseRecovery, acquired, err = coordinator.tryAcquireExclusive()
+	require.NoError(t, err)
+	assert.False(t, acquired, "all shared executors must finish before recovery")
+	assert.Nil(t, releaseRecovery)
+	require.NoError(t, releaseSecond())
+
+	releaseRecovery, acquired, err = coordinator.tryAcquireExclusive()
+	require.NoError(t, err)
+	require.True(t, acquired, "an exited executor leaves its claims recoverable")
+	require.NotNil(t, releaseRecovery)
+
+	waitCtx, cancel := context.WithTimeout(t.Context(), 75*time.Millisecond)
+	defer cancel()
+	_, err = coordinator.AcquireShared(waitCtx)
+	require.Error(t, err, "new physical work must wait while recovery owns the exclusive lease")
+	assert.ErrorIs(t, err, context.DeadlineExceeded)
+	require.NoError(t, releaseRecovery())
+
+	releaseExecution, err := coordinator.AcquireShared(t.Context())
+	require.NoError(t, err)
+	require.NoError(t, releaseExecution())
+}
+
+func TestWorkspaceExecutionCoordinatorAllowsDifferentWorkspaces(t *testing.T) {
+	isolateWorkspaceServerLeases(t)
+	first, err := newWorkspaceExecutionCoordinator(t.TempDir())
+	require.NoError(t, err)
+	second, err := newWorkspaceExecutionCoordinator(t.TempDir())
+	require.NoError(t, err)
+
+	releaseFirst, err := first.acquireExclusive(t.Context())
+	require.NoError(t, err)
+	defer releaseFirst()
+	releaseSecond, err := second.AcquireShared(t.Context())
+	require.NoError(t, err, "execution coordination remains scoped to one workspace")
+	require.NoError(t, releaseSecond())
 }
 
 func TestNewWebServerChecksWorkspaceLeaseBeforeStateDatabase(t *testing.T) {

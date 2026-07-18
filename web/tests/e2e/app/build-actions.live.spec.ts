@@ -107,6 +107,22 @@ test.describe("app build actions live", () => {
   });
 
   test("renders saved execution SQL without running the asset", async ({ liveApp, page }) => {
+    await writeFile(
+      join(liveApp.workspaceDir, "analytics", "assets", "analytics", "customers.sql"),
+      `/* @bruin
+type: duckdb.sql
+materialization:
+  type: view
+columns:
+  - name: customer_id
+    type: integer
+    checks:
+      - name: not_null
+@bruin */
+
+select 1 as customer_id,'Ada' as customer_name union all select 2 as customer_id,'Grace' as customer_name
+`,
+    );
     await page.goto(`${liveApp.baseURL}/pipelines/${pipelineId}/assets/${customersAssetId}/code`);
     await expect(page.locator(".view-lines").first()).toContainText("customer_id", {
       timeout: 15000,
@@ -138,26 +154,46 @@ test.describe("app build actions live", () => {
 
     const payload = (await response.json()) as {
       provenance: { source: { kind: string; merkle_root: string } };
-      stages: Array<{ kind: string; content?: string; fidelity: string }>;
+      asset: {
+        fingerprint: string;
+        target: { identity?: string; fidelity: string; kind: string; object?: string };
+      };
+      stages: Array<{ kind: string; label?: string; content?: string; fidelity: string }>;
     };
     expect(payload.provenance.source).toMatchObject({ kind: "working_tree" });
     expect(payload.provenance.source.merkle_root).toMatch(/^[a-f0-9]{64}$/);
+    expect(payload.asset.fingerprint).toMatch(/^v2:[a-f0-9]{64}$/);
+    expect(payload.asset.target).toMatchObject({
+      fidelity: "exact",
+      kind: "relation",
+      object: "analytics.customers",
+    });
+    expect(payload.asset.target.identity).toMatch(/^[a-f0-9]{64}$/);
     expect(payload.stages.find((stage) => stage.kind === "compiled_query")).toMatchObject({
       fidelity: "exact",
     });
     const executionSQL = payload.stages.find((stage) => stage.kind === "execution_sql")?.content;
     expect(executionSQL).toMatch(/create(?:\s+or\s+replace)?\s+view/i);
+    expect(payload.stages.find((stage) => stage.kind === "check")).toMatchObject({
+      label: "customer_id · not_null",
+      fidelity: "exact",
+    });
 
     const preview = page.getByTestId("asset-render-view");
     await expect(preview).toBeVisible({ timeout: 15000 });
     await expect(preview).toContainText("Preview — not executed");
     await expect(preview).toContainText("Saved workspace");
+    await expect(preview).toContainText("DAG v2:");
+    await expect(preview).toContainText("Target");
     await expect(preview.getByRole("radio", { name: "Compiled query" })).toBeChecked();
     await preview.getByRole("radio", { name: "Execution SQL" }).click();
     await expect(preview.getByRole("radio", { name: "Execution SQL" })).toBeChecked();
     await expect(preview.locator(".view-lines").first()).toContainText(
       /create(?:\s+or\s+replace)?\s+view/i,
     );
+    await preview.getByRole("radio", { name: "customer_id · not_null" }).click();
+    await expect(preview.getByRole("radio", { name: "customer_id · not_null" })).toBeChecked();
+    await expect(preview.locator(".view-lines").first()).toContainText(/customer_id\s+is\s+null/i);
     expect(executionRequests).toEqual([]);
 
     const assetEditor = page.locator(".monaco-editor").first();

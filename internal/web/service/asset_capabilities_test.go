@@ -82,6 +82,23 @@ func TestDirectSensorExecutorsReplaceNoOpsForChecks(t *testing.T) {
 	}
 }
 
+func TestDirectIngestrExecutorUsesDestinationAwareQualityChecks(t *testing.T) {
+	t.Parallel()
+	executors, err := buildDirectMainExecutors(&stubConnectionManager{}, nil, nil, &pipeline.Pipeline{}, nil, nil, "", false, sensorModeWait)
+	require.NoError(t, err)
+
+	config := executors[pipeline.AssetTypeIngestr]
+	require.NotNil(t, config)
+	for _, taskType := range []scheduler.TaskInstanceType{
+		scheduler.TaskInstanceTypeColumnCheck,
+		scheduler.TaskInstanceTypeCustomCheck,
+	} {
+		operator := config[taskType]
+		require.NotNil(t, operator, taskType)
+		assert.NotContains(t, strings.ToLower(fmt.Sprintf("%T", operator)), "noop", taskType)
+	}
+}
+
 func TestEffectiveSensorModeDefaultsByRunKind(t *testing.T) {
 	t.Parallel()
 	assert.Equal(t, sensorModeOnce, effectiveSensorMode("", false))

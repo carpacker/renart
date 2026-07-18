@@ -11,12 +11,45 @@ import (
 
 	"github.com/bruin-data/bruin/pkg/jinja"
 	"github.com/bruin-data/bruin/pkg/pipeline"
+	"github.com/google/uuid"
 	"github.com/spf13/afero"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"renart/internal/web/bus"
+	"renart/internal/web/matlog"
 	"renart/internal/web/policy"
 )
+
+type stubTargetWriteStore struct {
+	claim  func(context.Context, matlog.TargetWriteClaim) error
+	dirty  func(context.Context, matlog.TargetWriteClaim, time.Time) error
+	latest func(context.Context, []string) (map[string]matlog.LatestSuccessfulWriter, error)
+	claims []matlog.TargetWriteClaim
+	dirtys []matlog.TargetWriteClaim
+}
+
+func (s *stubTargetWriteStore) LatestWriters(ctx context.Context, targets []string) (map[string]matlog.LatestSuccessfulWriter, error) {
+	if s.latest != nil {
+		return s.latest(ctx, targets)
+	}
+	return map[string]matlog.LatestSuccessfulWriter{}, nil
+}
+
+func (s *stubTargetWriteStore) ClaimTargetWrite(ctx context.Context, claim matlog.TargetWriteClaim) error {
+	s.claims = append(s.claims, claim)
+	if s.claim != nil {
+		return s.claim(ctx, claim)
+	}
+	return nil
+}
+
+func (s *stubTargetWriteStore) MarkTargetWriteClaimDirty(ctx context.Context, claim matlog.TargetWriteClaim, at time.Time) error {
+	s.dirtys = append(s.dirtys, claim)
+	if s.dirty != nil {
+		return s.dirty(ctx, claim, at)
+	}
+	return nil
+}
 
 func newExecutionTestResolver(workspaceRoot string) *WorkspaceResolver {
 	return NewWorkspaceResolver(workspaceRoot, func(ctx context.Context, pipelinePath string) (*pipeline.Pipeline, error) {
@@ -34,41 +67,71 @@ func newExecutionTestResolver(workspaceRoot string) *WorkspaceResolver {
 }
 
 type stubExecutionExecutor struct {
-	runAssetOutput    []byte
-	runAssetErr       error
-	runAssetChunks    [][]byte
-	runAssetRequests  []RunAssetRequest
-	runPipelineOutput []byte
-	runPipelineErr    error
-	runPipelineChunks [][]byte
-	runPipelineEvents []ExecutionAssetEvent
-	runPipelineReqs   []RunPipelineRequest
-	queryConnOutput   []byte
-	queryConnErr      error
-	queryConnReqs     []QueryConnectionRequest
-	runWithRetry      func(context.Context, QueryAssetRequest, int, time.Duration) ([]byte, error, int)
+	runAssetOutput     []byte
+	runAssetErr        error
+	runAssetChunks     [][]byte
+	runAssetEvents     []ExecutionAssetEvent
+	runAssetTargets    *ExecutionTargetSnapshot
+	runAssetRequests   []RunAssetRequest
+	runPipelineOutput  []byte
+	runPipelineErr     error
+	runPipelineChunks  [][]byte
+	runPipelineEvents  []ExecutionAssetEvent
+	runPipelineTargets *ExecutionTargetSnapshot
+	runPipelineReqs    []RunPipelineRequest
+	queryConnOutput    []byte
+	queryConnErr       error
+	queryConnReqs      []QueryConnectionRequest
+	runWithRetry       func(context.Context, QueryAssetRequest, int, time.Duration) ([]byte, error, int)
+	onRunAsset         func()
+	onRunPipeline      func()
 }
 
 func (s *stubExecutionExecutor) RunAsset(_ context.Context, req RunAssetRequest, onChunk func([]byte)) ([]byte, error) {
+	if s.onRunAsset != nil {
+		s.onRunAsset()
+	}
 	s.runAssetRequests = append(s.runAssetRequests, req)
 	for _, chunk := range s.runAssetChunks {
 		if onChunk != nil {
 			onChunk(chunk)
 		}
 	}
+	if s.runAssetTargets != nil && req.OnTargetsResolved != nil {
+		if err := req.OnTargetsResolved(*s.runAssetTargets); err != nil {
+			return s.runAssetOutput, err
+		}
+	}
+	for _, event := range s.runAssetEvents {
+		if req.AssetEvent != nil {
+			if err := req.AssetEvent(event); err != nil {
+				return s.runAssetOutput, err
+			}
+		}
+	}
 	return s.runAssetOutput, s.runAssetErr
 }
 
 func (s *stubExecutionExecutor) RunPipeline(_ context.Context, req RunPipelineRequest, onChunk func([]byte)) ([]byte, error) {
+	if s.onRunPipeline != nil {
+		s.onRunPipeline()
+	}
 	s.runPipelineReqs = append(s.runPipelineReqs, req)
 	for _, chunk := range s.runPipelineChunks {
 		if onChunk != nil {
 			onChunk(chunk)
 		}
 	}
+	if s.runPipelineTargets != nil && req.OnTargetsResolved != nil {
+		if err := req.OnTargetsResolved(*s.runPipelineTargets); err != nil {
+			return s.runPipelineOutput, err
+		}
+	}
 	for _, event := range s.runPipelineEvents {
 		if req.AssetEvent != nil {
-			req.AssetEvent(event)
+			if err := req.AssetEvent(event); err != nil {
+				return s.runPipelineOutput, err
+			}
 		}
 	}
 	return s.runPipelineOutput, s.runPipelineErr
@@ -106,14 +169,30 @@ func TestExecutionServiceMaterializeAssetStreamPreservesSuccessOutput(t *testing
 	t.Parallel()
 
 	assetID := EncodeID("pipelines/orders/assets/orders.sql")
+	started := time.Date(2026, 7, 17, 11, 0, 0, 0, time.UTC)
+	finished := started.Add(time.Second)
 	executor := &stubExecutionExecutor{
 		runAssetOutput: []byte("asset run complete\n"),
 		runAssetChunks: [][]byte{[]byte("asset "), []byte("run complete\n")},
+		runAssetEvents: []ExecutionAssetEvent{
+			{Asset: "analytics.orders", Status: "running", StartedAt: &started},
+			{Asset: "analytics.orders", Status: "success", StartedAt: &started, FinishedAt: &finished},
+		},
+		runAssetTargets: &ExecutionTargetSnapshot{
+			Version: ExecutionTargetSnapshotVersion, PipelineUUID: "orders-uuid",
+			Entries: map[string]ExecutionTargetSnapshotEntry{
+				"analytics.orders": {
+					AssetID: "orders-uuid:analytics.orders", TargetIdentity: "target-orders",
+					TargetFidelity: AssetRenderFidelityExact, Fingerprint: "v2:orders",
+					OwnContent: "v2:orders-own", ConsumedVarsHash: "consumed", VarsHash: "vars", CoverageMode: ExecutionCoverageMarker,
+				},
+			},
+		},
 	}
 	streamed := make([]string, 0)
 	events := bus.New()
 	var completed bus.RunCompleted
-	events.OnRunCompleted(func(event bus.RunCompleted) { completed = event })
+	events.OnRunCompleted(func(event bus.RunCompleted) error { completed = event; return nil })
 
 	svc := NewExecutionService(ExecutionDependencies{
 		ConfigPath: "/path/that/does/not/exist",
@@ -150,18 +229,30 @@ func TestExecutionServiceMaterializeAssetStreamPreservesSuccessOutput(t *testing
 	assert.NotNil(t, result.MaterializedAt)
 	assert.Equal(t, []string{"asset ", "run complete\n"}, streamed)
 	require.Len(t, completed.Assets, 1)
+	_, err := uuid.Parse(completed.CompletionID)
+	require.NoError(t, err)
 	assert.Equal(t, "analytics.orders", completed.Assets[0].AssetName)
 	assert.Equal(t, "succeeded", completed.Assets[0].Status)
+	assert.Equal(t, "target-orders", completed.Assets[0].TargetIdentity)
+	assert.Equal(t, finished, *completed.Assets[0].FinishedAt)
+	assert.Equal(t, "target-orders", completed.ExecutionTargets["analytics.orders"].TargetIdentity)
 }
 
 func TestExecutionServiceEnforcesDestructiveConfirmationAndEmitsFullRefresh(t *testing.T) {
 	t.Parallel()
 
 	assetID := EncodeID("pipelines/orders/assets/orders.sql")
-	executor := &stubExecutionExecutor{}
+	started := time.Date(2026, 7, 17, 12, 0, 0, 0, time.UTC)
+	finished := started.Add(time.Second)
+	executor := &stubExecutionExecutor{
+		runAssetEvents: []ExecutionAssetEvent{
+			{Asset: "analytics.orders", Status: "running", StartedAt: &started},
+			{Asset: "analytics.orders", Status: "success", StartedAt: &started, FinishedAt: &finished},
+		},
+	}
 	events := bus.New()
 	var completed bus.RunCompleted
-	events.OnRunCompleted(func(event bus.RunCompleted) { completed = event })
+	events.OnRunCompleted(func(event bus.RunCompleted) error { completed = event; return nil })
 	svc := NewExecutionService(ExecutionDependencies{
 		Executor:            executor,
 		SelectedEnvironment: func() string { return "prod" },
@@ -215,7 +306,7 @@ environments:
 	executor := &stubExecutionExecutor{}
 	events := bus.New()
 	var completed bus.RunCompleted
-	events.OnRunCompleted(func(event bus.RunCompleted) { completed = event })
+	events.OnRunCompleted(func(event bus.RunCompleted) error { completed = event; return nil })
 	svc := NewExecutionService(ExecutionDependencies{
 		ConfigPath:          configPath,
 		Executor:            executor,
@@ -307,10 +398,15 @@ func TestExecutionServiceMaterializeAssetStreamPreservesFailureOutput(t *testing
 	executor := &stubExecutionExecutor{
 		runAssetOutput: []byte("asset failed after direct execution\n"),
 		runAssetErr:    errors.New("asset failed"),
+		runAssetEvents: []ExecutionAssetEvent{{
+			Asset: "analytics.orders", Status: "failed",
+			StartedAt:  func() *time.Time { value := time.Date(2026, 7, 17, 12, 0, 0, 0, time.UTC); return &value }(),
+			FinishedAt: func() *time.Time { value := time.Date(2026, 7, 17, 12, 0, 1, 0, time.UTC); return &value }(),
+		}},
 	}
 	events := bus.New()
 	var completed bus.RunCompleted
-	events.OnRunCompleted(func(event bus.RunCompleted) { completed = event })
+	events.OnRunCompleted(func(event bus.RunCompleted) error { completed = event; return nil })
 
 	svc := NewExecutionService(ExecutionDependencies{
 		ConfigPath: "/path/that/does/not/exist",
@@ -347,14 +443,36 @@ func TestExecutionServiceMaterializePipelineStreamPreservesSuccessOutput(t *test
 	t.Parallel()
 
 	pipelineID := EncodeID("pipelines/orders/pipeline.yml")
+	started := time.Date(2026, 7, 17, 12, 0, 0, 0, time.UTC)
+	secondStarted := started.Add(time.Second)
+	secondFinished := secondStarted.Add(time.Second)
 	executor := &stubExecutionExecutor{
 		runPipelineOutput: []byte("pipeline run complete\n"),
 		runPipelineChunks: [][]byte{[]byte("pipeline "), []byte("run complete\n")},
+		runPipelineEvents: []ExecutionAssetEvent{
+			{Asset: "analytics.orders", Status: "success", StartedAt: &started, FinishedAt: &secondStarted},
+			{Asset: "analytics.order_items", Status: "success", StartedAt: &secondStarted, FinishedAt: &secondFinished},
+		},
+		runPipelineTargets: &ExecutionTargetSnapshot{
+			Version: ExecutionTargetSnapshotVersion, PipelineUUID: "orders-uuid",
+			Entries: map[string]ExecutionTargetSnapshotEntry{
+				"analytics.orders": {
+					AssetID: "orders-uuid:analytics.orders", TargetIdentity: "target-orders",
+					TargetFidelity: AssetRenderFidelityExact, Fingerprint: "v2:orders", OwnContent: "v2:orders-own",
+					ConsumedVarsHash: "consumed", VarsHash: "vars", CoverageMode: ExecutionCoverageMarker,
+				},
+				"analytics.order_items": {
+					AssetID: "orders-uuid:analytics.order_items", TargetIdentity: "target-items",
+					TargetFidelity: AssetRenderFidelityExact, Fingerprint: "v2:items", OwnContent: "v2:items-own",
+					ConsumedVarsHash: "consumed", VarsHash: "vars", CoverageMode: ExecutionCoverageMarker,
+				},
+			},
+		},
 	}
 	streamed := make([]string, 0)
 	events := bus.New()
 	var completed bus.RunCompleted
-	events.OnRunCompleted(func(event bus.RunCompleted) { completed = event })
+	events.OnRunCompleted(func(event bus.RunCompleted) error { completed = event; return nil })
 
 	svc := NewExecutionService(ExecutionDependencies{
 		Executor: executor,
@@ -577,7 +695,7 @@ func TestExecutionServiceMaterializePipelineStreamPreservesFailureOutput(t *test
 	}
 	events := bus.New()
 	var completed bus.RunCompleted
-	events.OnRunCompleted(func(event bus.RunCompleted) { completed = event })
+	events.OnRunCompleted(func(event bus.RunCompleted) error { completed = event; return nil })
 
 	svc := NewExecutionService(ExecutionDependencies{
 		Executor: executor,
@@ -614,6 +732,254 @@ func TestExecutionServiceMaterializePipelineStreamPreservesFailureOutput(t *test
 	}
 }
 
+func TestPipelineRunObservationPersistsTerminalCoordinatesBeforeForwarding(t *testing.T) {
+	t.Parallel()
+	started := time.Date(2026, 7, 17, 12, 0, 0, 0, time.UTC)
+	finished := started.Add(250 * time.Millisecond)
+	forwardErr := errors.New("step persistence failed")
+	var forwarded ExecutionAssetEvent
+	observed := newPipelineRunObservation(func(event ExecutionAssetEvent) error {
+		forwarded = event
+		if event.Status == "success" {
+			return forwardErr
+		}
+		return nil
+	})
+	require.NoError(t, observed.captureExecutionTargets(ExecutionTargetSnapshot{
+		Version: ExecutionTargetSnapshotVersion, PipelineUUID: "pipeline-uuid",
+		Entries: map[string]ExecutionTargetSnapshotEntry{
+			"analytics.orders": {
+				AssetID: "pipeline-uuid:analytics.orders", TargetIdentity: "target-1",
+				TargetFidelity: AssetRenderFidelityExact, Fingerprint: "v2:fp",
+				OwnContent: "v2:own", ConsumedVarsHash: "consumed", VarsHash: "vars", CoverageMode: ExecutionCoverageMarker,
+			},
+		},
+	}))
+
+	require.NoError(t, observed.handle(ExecutionAssetEvent{
+		Asset: "analytics.orders", Status: "running", StartedAt: &started,
+	}))
+	err := observed.handle(ExecutionAssetEvent{
+		Asset: "analytics.orders", Status: "success", StartedAt: &started, FinishedAt: &finished,
+	})
+	require.ErrorIs(t, err, forwardErr)
+	require.NotNil(t, forwarded.CompletionOrdinal)
+	assert.EqualValues(t, 0, *forwarded.CompletionOrdinal)
+	assert.Equal(t, finished, *forwarded.FinishedAt)
+
+	runs, succeeded := observed.completedAssets(PipelineView{
+		UUID:   "pipeline-uuid",
+		Assets: []AssetView{{ID: "encoded-asset-id", Name: "analytics.orders"}},
+	}, "failed")
+	require.Len(t, runs, 1)
+	assert.Equal(t, "succeeded", runs[0].Status, "the warehouse write succeeded before terminal persistence failed")
+	assert.Equal(t, started, *runs[0].StartedAt)
+	assert.Equal(t, finished, *runs[0].FinishedAt)
+	assert.EqualValues(t, 0, runs[0].CompletionOrdinal)
+	assert.Equal(t, "target-1", runs[0].TargetIdentity)
+	assert.Equal(t, "v2:fp", runs[0].Fingerprint)
+	assert.Equal(t, []string{"encoded-asset-id"}, succeeded)
+}
+
+func TestPipelineRunObservationClaimsBeforeExecutionAndMarksFailuresDirty(t *testing.T) {
+	t.Parallel()
+	started := time.Date(2026, 7, 17, 12, 0, 0, 0, time.UTC)
+	finished := started.Add(time.Second)
+	var order []string
+	store := &stubTargetWriteStore{
+		claim: func(context.Context, matlog.TargetWriteClaim) error {
+			order = append(order, "claim")
+			return nil
+		},
+		dirty: func(context.Context, matlog.TargetWriteClaim, time.Time) error {
+			order = append(order, "dirty")
+			return nil
+		},
+	}
+	observed := newPipelineRunObservation(func(event ExecutionAssetEvent) error {
+		order = append(order, "step-"+event.Status)
+		return nil
+	})
+	observed.configureTargetWrites(context.Background(), "completion-id", store)
+	require.NoError(t, observed.captureExecutionTargets(ExecutionTargetSnapshot{
+		Version: ExecutionTargetSnapshotVersion, PipelineUUID: "pipeline-uuid",
+		Entries: map[string]ExecutionTargetSnapshotEntry{
+			"analytics.orders": {
+				AssetID: "pipeline-uuid:analytics.orders", TargetIdentity: "target-orders",
+				TargetFidelity: AssetRenderFidelityExact, Fingerprint: "v2:fp", OwnContent: "v2:own",
+				ConsumedVarsHash: "consumed", VarsHash: "vars", CoverageMode: ExecutionCoverageMarker,
+			},
+		},
+	}))
+
+	require.NoError(t, observed.handle(ExecutionAssetEvent{
+		Asset: "analytics.orders", Status: "running", StartedAt: &started,
+	}))
+	require.Equal(t, []string{"step-running", "claim"}, order,
+		"the direct task starts only after the durable claim callback returns")
+	require.Len(t, store.claims, 1)
+	assert.Equal(t, "completion-id", store.claims[0].CompletionID)
+	assert.Equal(t, "pipeline-uuid:analytics.orders", store.claims[0].AssetID)
+
+	require.NoError(t, observed.handle(ExecutionAssetEvent{
+		Asset: "analytics.orders", Status: "failed", StartedAt: &started, FinishedAt: &finished,
+	}))
+	assert.Equal(t, []string{"step-running", "claim", "dirty", "step-failed"}, order,
+		"physical uncertainty must be durable before terminal scheduler persistence")
+	require.Len(t, store.dirtys, 1)
+}
+
+func TestExecutionServiceFailsClosedWhenCompletionDispatchFails(t *testing.T) {
+	t.Parallel()
+	pipelineID := EncodeID("pipelines/orders/pipeline.yml")
+	started := time.Date(2026, 7, 17, 12, 0, 0, 0, time.UTC)
+	finished := started.Add(time.Second)
+	snapshot := ExecutionTargetSnapshot{
+		Version: ExecutionTargetSnapshotVersion, PipelineUUID: "orders-uuid",
+		Entries: map[string]ExecutionTargetSnapshotEntry{
+			"analytics.orders": {
+				AssetID: "orders-uuid:analytics.orders", TargetIdentity: "target-orders",
+				TargetFidelity: AssetRenderFidelityExact, Fingerprint: "v2:orders", OwnContent: "v2:own",
+				ConsumedVarsHash: "consumed", VarsHash: "vars", CoverageMode: ExecutionCoverageMarker,
+			},
+		},
+	}
+	executor := &stubExecutionExecutor{
+		runPipelineTargets: &snapshot,
+		runPipelineEvents: []ExecutionAssetEvent{
+			{Asset: "analytics.orders", Status: "running", StartedAt: &started},
+			{Asset: "analytics.orders", Status: "success", StartedAt: &started, FinishedAt: &finished},
+		},
+	}
+	store := &stubTargetWriteStore{}
+	dispatchErr := errors.New("state database unavailable")
+	var completed bus.RunCompleted
+	svc := NewExecutionService(ExecutionDependencies{
+		Executor:     executor,
+		TargetWrites: store,
+		CurrentPipelines: func() []PipelineView {
+			return []PipelineView{{
+				ID: pipelineID, UUID: "orders-uuid",
+				Assets: []AssetView{{ID: "orders-asset", Name: "analytics.orders"}},
+			}}
+		},
+		DispatchCompletion: func(_ context.Context, event bus.RunCompleted) error {
+			completed = event
+			return dispatchErr
+		},
+	})
+
+	result := svc.MaterializePipelineRun(context.Background(), PipelineRunSpec{PipelineID: pipelineID}, nil, nil)
+	require.Equal(t, "error", result.Status)
+	assert.ErrorContains(t, errors.New(result.Error), "physical execution completed")
+	assert.ErrorContains(t, errors.New(result.Error), dispatchErr.Error())
+	assert.Nil(t, result.MaterializedAt)
+	require.Len(t, store.claims, 1)
+	require.Len(t, store.dirtys, 1, "a pending successful completion must suppress stale writer evidence")
+	assert.Equal(t, store.claims[0], store.dirtys[0])
+	assert.Equal(t, store.claims[0].CompletionID, completed.CompletionID)
+}
+
+func TestExecutionServiceCarriesCapturedTargetsAndUniqueCompletionIdentity(t *testing.T) {
+	t.Parallel()
+	pipelineID := EncodeID("pipelines/orders/pipeline.yml")
+	started := time.Date(2026, 7, 17, 12, 0, 0, 0, time.UTC)
+	finished := started.Add(time.Second)
+	snapshot := ExecutionTargetSnapshot{
+		Version: ExecutionTargetSnapshotVersion, PipelineUUID: "orders-uuid",
+		Entries: map[string]ExecutionTargetSnapshotEntry{
+			"analytics.orders": {
+				AssetID: "orders-uuid:analytics.orders", TargetIdentity: "target-orders",
+				TargetFidelity: AssetRenderFidelityExact, Fingerprint: "v2:orders",
+				OwnContent: "v2:orders-own", ConsumedVarsHash: "consumed", VarsHash: "vars", CoverageMode: ExecutionCoverageMarker,
+			},
+		},
+	}
+	executor := &stubExecutionExecutor{
+		runPipelineTargets: &snapshot,
+		runPipelineEvents: []ExecutionAssetEvent{
+			{Asset: "analytics.orders", Status: "running", StartedAt: &started},
+			{Asset: "analytics.orders", Status: "success", StartedAt: &started, FinishedAt: &finished},
+		},
+	}
+	events := bus.New()
+	var completed bus.RunCompleted
+	events.OnRunCompleted(func(event bus.RunCompleted) error {
+		completed = event
+		return nil
+	})
+	svc := NewExecutionService(ExecutionDependencies{
+		Executor: executor,
+		CurrentPipelines: func() []PipelineView {
+			return []PipelineView{{
+				ID: pipelineID, UUID: "orders-uuid",
+				Assets: []AssetView{{ID: "encoded-orders", Name: "analytics.orders"}},
+			}}
+		},
+		Events: events,
+	})
+
+	result := svc.MaterializePipelineRun(context.Background(), PipelineRunSpec{PipelineID: pipelineID}, nil, nil)
+	require.Equal(t, "ok", result.Status, result.Error)
+	_, err := uuid.Parse(completed.CompletionID)
+	require.NoError(t, err)
+	assert.Empty(t, completed.RunID, "inline fact keys remain independent from scheduler run IDs")
+	assert.Equal(t, ExecutionTargetSnapshotVersion, completed.ExecutionTargetSnapshotVersion)
+	assert.Equal(t, "target-orders", completed.ExecutionTargets["analytics.orders"].TargetIdentity)
+	require.Len(t, completed.Assets, 1)
+	assert.Equal(t, "target-orders", completed.Assets[0].TargetIdentity)
+	assert.Equal(t, finished, *completed.Assets[0].FinishedAt)
+	assert.EqualValues(t, 0, completed.Assets[0].CompletionOrdinal)
+}
+
+func TestExecutionServiceCompletionUsesCapturedDeploymentAssetsNotCurrentWorkspaceView(t *testing.T) {
+	t.Parallel()
+	pipelineID := EncodeID("pipelines/orders/pipeline.yml")
+	started := time.Date(2026, 7, 17, 13, 0, 0, 0, time.UTC)
+	finished := started.Add(time.Second)
+	snapshot := ExecutionTargetSnapshot{
+		Version: ExecutionTargetSnapshotVersion, PipelineUUID: "orders-uuid",
+		Entries: map[string]ExecutionTargetSnapshotEntry{
+			"analytics.old_orders": {
+				AssetID: "orders-uuid:analytics.old_orders", TargetIdentity: "target-orders",
+				TargetFidelity: AssetRenderFidelityExact, Fingerprint: "v2:old-orders",
+				OwnContent: "v2:old-orders-own", ConsumedVarsHash: "consumed", VarsHash: "vars",
+				CoverageMode: ExecutionCoverageMarker,
+			},
+		},
+	}
+	executor := &stubExecutionExecutor{
+		runPipelineTargets: &snapshot,
+		runPipelineEvents: []ExecutionAssetEvent{
+			{Asset: "analytics.old_orders", Status: "running", StartedAt: &started},
+			{Asset: "analytics.old_orders", Status: "success", StartedAt: &started, FinishedAt: &finished},
+		},
+	}
+	events := bus.New()
+	var completed bus.RunCompleted
+	events.OnRunCompleted(func(event bus.RunCompleted) error { completed = event; return nil })
+	svc := NewExecutionService(ExecutionDependencies{
+		Executor: executor,
+		CurrentPipelines: func() []PipelineView {
+			return []PipelineView{{
+				ID: pipelineID, UUID: "orders-uuid",
+				Assets: []AssetView{{ID: "current-new-id", Name: "analytics.new_orders"}},
+			}}
+		},
+		Events: events,
+	})
+
+	result := svc.MaterializePipelineRun(context.Background(), PipelineRunSpec{
+		PipelineID: pipelineID, PipelineUUID: "orders-uuid", SnapshotVersionID: "deployed-version",
+	}, nil, nil)
+	require.Equal(t, "ok", result.Status, result.Error)
+	require.Len(t, completed.Assets, 1)
+	assert.Equal(t, "analytics.old_orders", completed.Assets[0].AssetName)
+	assert.Equal(t, "orders-uuid:analytics.old_orders", completed.Assets[0].AssetID)
+	assert.Empty(t, result.ChangedAssetIDs, "current-view IDs are presentation-only and cannot replace captured assets")
+	assert.NotNil(t, result.MaterializedAt)
+}
+
 func TestExecutionServiceMaterializePipelineStreamDryRunDoesNotEmitCompletion(t *testing.T) {
 	t.Parallel()
 
@@ -623,7 +989,7 @@ func TestExecutionServiceMaterializePipelineStreamDryRunDoesNotEmitCompletion(t 
 	}
 	events := bus.New()
 	completed := 0
-	events.OnRunCompleted(func(bus.RunCompleted) { completed++ })
+	events.OnRunCompleted(func(bus.RunCompleted) error { completed++; return nil })
 
 	svc := NewExecutionService(ExecutionDependencies{
 		Executor: executor,
@@ -673,6 +1039,154 @@ func TestExecutionServiceDryRunDoesNotResolveExecutionContext(t *testing.T) {
 	assert.Empty(t, executor.runPipelineReqs[0].EndDate)
 	assert.Empty(t, result.Operation.StartDate)
 	assert.Empty(t, result.Operation.EndDate)
+}
+
+func TestExecutionServiceHoldsWorkspaceLeaseThroughDurablePipelineCompletion(t *testing.T) {
+	t.Parallel()
+	pipelineID := EncodeID("pipelines/orders/pipeline.yml")
+	started := time.Date(2026, 7, 17, 16, 0, 0, 0, time.UTC)
+	finished := started.Add(time.Second)
+	leaseHeld := false
+	acquired := 0
+	released := 0
+	executor := &stubExecutionExecutor{
+		runPipelineTargets: &ExecutionTargetSnapshot{
+			Version: ExecutionTargetSnapshotVersion, PipelineUUID: "orders-uuid",
+			Entries: map[string]ExecutionTargetSnapshotEntry{
+				"analytics.orders": {
+					AssetID: "orders-uuid:analytics.orders", TargetFidelity: AssetRenderFidelityRuntimeOnly,
+					Fingerprint: "v2:orders", OwnContent: "v2:own", ConsumedVarsHash: "consumed", VarsHash: "vars",
+				},
+			},
+		},
+		runPipelineEvents: []ExecutionAssetEvent{
+			{Asset: "analytics.orders", Status: "running", StartedAt: &started},
+			{Asset: "analytics.orders", Status: "success", StartedAt: &started, FinishedAt: &finished},
+		},
+		onRunPipeline: func() {
+			assert.True(t, leaseHeld, "physical execution must run under the shared workspace lease")
+		},
+	}
+	dispatched := false
+	svc := NewExecutionService(ExecutionDependencies{
+		Executor: executor,
+		AcquireExecutionLease: func(context.Context) (func() error, error) {
+			acquired++
+			leaseHeld = true
+			return func() error {
+				released++
+				leaseHeld = false
+				return nil
+			}, nil
+		},
+		CurrentPipelines: func() []PipelineView {
+			return []PipelineView{{ID: pipelineID, UUID: "orders-uuid", Assets: []AssetView{{ID: "asset-id", Name: "analytics.orders"}}}}
+		},
+		DispatchCompletion: func(context.Context, bus.RunCompleted) error {
+			dispatched = true
+			assert.True(t, leaseHeld, "the lease must cover the durable completion hand-off")
+			return nil
+		},
+	})
+
+	result := svc.MaterializePipelineRun(context.Background(), PipelineRunSpec{PipelineID: pipelineID}, nil, nil)
+
+	require.Equal(t, "ok", result.Status, result.Error)
+	assert.True(t, dispatched)
+	assert.Equal(t, 1, acquired)
+	assert.Equal(t, 1, released)
+	assert.False(t, leaseHeld)
+}
+
+func TestExecutionServiceWorkspaceLeaseCoversAssetRunsAndSkipsDryRuns(t *testing.T) {
+	t.Parallel()
+	assetID := EncodeID("pipelines/orders/assets/orders.sql")
+	leaseHeld := false
+	acquired := 0
+	executor := &stubExecutionExecutor{
+		onRunAsset: func() {
+			assert.True(t, leaseHeld)
+		},
+	}
+	svc := NewExecutionService(ExecutionDependencies{
+		Executor: executor,
+		AcquireExecutionLease: func(context.Context) (func() error, error) {
+			acquired++
+			leaseHeld = true
+			return func() error { leaseHeld = false; return nil }, nil
+		},
+		ResolveAssetByID: func(context.Context, string) (string, *pipeline.Pipeline, *pipeline.Asset, error) {
+			return "pipelines/orders/assets/orders.sql", &pipeline.Pipeline{}, &pipeline.Asset{}, nil
+		},
+		ResolveAssetNameByID: func(string) string { return "analytics.orders" },
+		FindInspectIDs:       func(ids ...string) []string { return ids },
+	})
+
+	assetResult := svc.MaterializeAssetStream(context.Background(), assetID, "", "", "", "", false, false, "", nil)
+	require.Equal(t, "ok", assetResult.Status, assetResult.Error)
+	assert.Equal(t, 1, acquired)
+	assert.False(t, leaseHeld)
+
+	dryResult := svc.MaterializePipelineRun(context.Background(), PipelineRunSpec{
+		PipelineID: EncodeID("pipelines/orders/pipeline.yml"),
+		DryRun:     true,
+	}, nil, nil)
+	require.Equal(t, "ok", dryResult.Status, dryResult.Error)
+	assert.Equal(t, 1, acquired, "read-only planning must not acquire the physical execution lease")
+}
+
+func TestExecutionServiceAbortsBeforePhysicalWorkWhenWorkspaceLeaseFails(t *testing.T) {
+	t.Parallel()
+	executor := &stubExecutionExecutor{}
+	svc := NewExecutionService(ExecutionDependencies{
+		Executor: executor,
+		AcquireExecutionLease: func(context.Context) (func() error, error) {
+			return nil, errors.New("lease unavailable")
+		},
+	})
+
+	result := svc.MaterializePipelineRun(context.Background(), PipelineRunSpec{
+		PipelineID: EncodeID("pipelines/orders/pipeline.yml"),
+	}, nil, nil)
+
+	require.Equal(t, "error", result.Status)
+	assert.Contains(t, result.Error, "lease unavailable")
+	assert.Empty(t, executor.runPipelineReqs)
+}
+
+func TestExecutionServicePreservesCancellationStatus(t *testing.T) {
+	t.Parallel()
+	pipelineID := EncodeID("pipelines/orders/pipeline.yml")
+	started := time.Now().UTC()
+	finished := started.Add(time.Second)
+	executor := &stubExecutionExecutor{
+		runPipelineErr: context.Canceled,
+		runPipelineEvents: []ExecutionAssetEvent{
+			{Asset: "analytics.orders", Status: "running", StartedAt: &started},
+			{Asset: "analytics.orders", Status: "cancelled", StartedAt: &started, FinishedAt: &finished, Error: context.Canceled.Error()},
+		},
+	}
+	events := bus.New()
+	var completed bus.RunCompleted
+	events.OnRunCompleted(func(event bus.RunCompleted) error { completed = event; return nil })
+	svc := NewExecutionService(ExecutionDependencies{
+		Executor: executor,
+		CurrentPipelines: func() []PipelineView {
+			return []PipelineView{{
+				ID: pipelineID, UUID: "orders-uuid",
+				Assets: []AssetView{{ID: "asset-id", Name: "analytics.orders"}},
+			}}
+		},
+		Events: events,
+	})
+
+	result := svc.MaterializePipelineRun(context.Background(), PipelineRunSpec{PipelineID: pipelineID}, nil, nil)
+
+	assert.Equal(t, "cancelled", result.Status)
+	assert.Equal(t, 1, result.ExitCode)
+	assert.Equal(t, context.Canceled.Error(), result.Error)
+	require.Len(t, completed.Assets, 1)
+	assert.Equal(t, "cancelled", completed.Assets[0].Status)
 }
 
 func TestExecutionServiceInspectAssetRejectsWriteQueries(t *testing.T) {

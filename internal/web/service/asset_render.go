@@ -2,8 +2,6 @@ package service
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"net/http"
@@ -21,10 +19,15 @@ import (
 	"github.com/spf13/afero"
 
 	"renart/internal/web/fingerprint"
+	"renart/internal/web/identity"
+	"renart/internal/web/runcontext"
 	"renart/internal/web/snapshot"
 )
 
-const assetRenderPreviewRunID = "renart-render-preview"
+const (
+	assetRenderPreviewRunID          = "renart-render-preview"
+	assetRenderFingerprintPipelineID = "renart-render-only-pipeline"
+)
 
 var (
 	ErrAssetRenderSourceChanged  = errors.New("asset source changed while rendering")
@@ -100,19 +103,25 @@ type AssetRenderSource struct {
 }
 
 type AssetRenderContext struct {
-	Environment          string `json:"environment,omitempty"`
-	SchemaPrefix         string `json:"schema_prefix,omitempty"`
-	StartDate            string `json:"start_date"`
-	EndDate              string `json:"end_date"`
-	ExecutionTime        string `json:"execution_time"`
-	RunID                string `json:"run_id"`
-	RequestedFullRefresh bool   `json:"requested_full_refresh"`
-	FullRefresh          bool   `json:"full_refresh"`
-	VariablesDigest      string `json:"variables_digest"`
-	// ConfigurationDigest covers only the selected environment fields used by
-	// this connection-free asset render slice. It is not the canonical
-	// configuration or physical-target identity required by pipeline planning.
-	ConfigurationDigest string `json:"configuration_digest"`
+	Environment           string                          `json:"environment,omitempty"`
+	SchemaPrefix          string                          `json:"schema_prefix,omitempty"`
+	StartDate             string                          `json:"start_date"`
+	EndDate               string                          `json:"end_date"`
+	ExecutionTime         string                          `json:"execution_time"`
+	RunID                 string                          `json:"run_id"`
+	RequestedFullRefresh  bool                            `json:"requested_full_refresh"`
+	FullRefresh           bool                            `json:"full_refresh"`
+	VariablesDigest       string                          `json:"variables_digest"`
+	CoverageVariablesHash string                          `json:"coverage_variables_hash"`
+	VariableProvenance    []AssetRenderVariableProvenance `json:"variable_provenance"`
+	ConfigurationDigest   string                          `json:"configuration_digest"`
+	ConfigurationFidelity string                          `json:"configuration_fidelity"`
+	ConfigurationMessage  string                          `json:"configuration_message,omitempty"`
+}
+
+type AssetRenderVariableProvenance struct {
+	Name   string `json:"name"`
+	Source string `json:"source"`
 }
 
 type AssetRenderProvenance struct {
@@ -121,23 +130,42 @@ type AssetRenderProvenance struct {
 	Context  AssetRenderContext `json:"context"`
 }
 
+// AssetRenderTarget identifies the mutable physical output selected by the
+// same saved asset and environment configuration used by execution. Identity
+// is deliberately empty unless Fidelity is exact. Object is presentation-only
+// and never contains connection endpoint coordinates or a DuckDB database path.
+type AssetRenderTarget struct {
+	Kind     string              `json:"kind"`
+	Object   string              `json:"object,omitempty"`
+	Identity string              `json:"identity,omitempty"`
+	Fidelity AssetRenderFidelity `json:"fidelity"`
+	Message  string              `json:"message,omitempty"`
+}
+
 type AssetRenderAsset struct {
-	ID             string `json:"id,omitempty"`
-	Name           string `json:"name"`
-	Type           string `json:"type"`
-	Dialect        string `json:"dialect,omitempty"`
-	ConnectionName string `json:"connection_name,omitempty"`
+	ID             string            `json:"id,omitempty"`
+	Name           string            `json:"name"`
+	Type           string            `json:"type"`
+	Dialect        string            `json:"dialect,omitempty"`
+	ConnectionName string            `json:"connection_name,omitempty"`
+	Fingerprint    string            `json:"fingerprint,omitempty"`
+	Target         AssetRenderTarget `json:"target"`
 }
 
 type AssetRenderStage struct {
-	Kind        string                 `json:"kind"`
-	Language    string                 `json:"language"`
-	Content     string                 `json:"content,omitempty"`
-	Status      AssetRenderStageStatus `json:"status"`
-	Fidelity    AssetRenderFidelity    `json:"fidelity"`
-	Conditional bool                   `json:"conditional,omitempty"`
-	Redacted    bool                   `json:"redacted,omitempty"`
-	Message     string                 `json:"message,omitempty"`
+	Kind          string                 `json:"kind"`
+	Label         string                 `json:"label,omitempty"`
+	Language      string                 `json:"language"`
+	Content       string                 `json:"content,omitempty"`
+	Status        AssetRenderStageStatus `json:"status"`
+	Fidelity      AssetRenderFidelity    `json:"fidelity"`
+	Conditional   bool                   `json:"conditional,omitempty"`
+	CheckKind     string                 `json:"check_kind,omitempty"`
+	CheckName     string                 `json:"check_name,omitempty"`
+	CheckColumn   string                 `json:"check_column,omitempty"`
+	CheckBlocking *bool                  `json:"check_blocking,omitempty"`
+	Redacted      bool                   `json:"redacted,omitempty"`
+	Message       string                 `json:"message,omitempty"`
 }
 
 type AssetRenderRedaction struct {
@@ -170,6 +198,7 @@ type AssetRenderService struct {
 	now                func() time.Time
 	collectManifest    assetRenderManifestCollector
 	collectSourceState assetRenderSourceStateCollector
+	fingerprintEngine  *fingerprint.Engine
 }
 
 func NewAssetRenderService(workspaceRoot string) *AssetRenderService {
@@ -179,7 +208,44 @@ func NewAssetRenderService(workspaceRoot string) *AssetRenderService {
 		now:                func() time.Time { return time.Now().UTC() },
 		collectManifest:    snapshot.CollectManifestHashes,
 		collectSourceState: snapshot.CollectSourceState,
+		fingerprintEngine:  fingerprint.NewEngine(),
 	}
+}
+
+func (s *AssetRenderService) computeAssetRenderFingerprint(
+	pl *pipeline.Pipeline,
+	asset *pipeline.Asset,
+	vars fingerprint.Vars,
+) (string, error) {
+	if pl == nil || asset == nil {
+		return "", fmt.Errorf("asset fingerprint context is incomplete")
+	}
+
+	// Fingerprint DAG results are keyed by the durable pipeline ID. Older
+	// pipelines may not have one yet, but rendering is read-only and must not
+	// self-assign it on disk. Use a shallow copy with a request-local sentinel;
+	// LegacyID only selects the result map key and is not part of the canonical
+	// fingerprint input.
+	fingerprintPipeline := *pl
+	pipelineID := strings.TrimSpace(fingerprintPipeline.LegacyID)
+	if pipelineID == "" {
+		pipelineID = assetRenderFingerprintPipelineID
+		fingerprintPipeline.LegacyID = pipelineID
+	}
+
+	engine := s.fingerprintEngine
+	if engine == nil {
+		engine = fingerprint.NewEngine()
+	}
+	results, err := engine.DAG(&fingerprintPipeline, vars)
+	if err != nil {
+		return "", err
+	}
+	result, ok := results[identity.AssetID(pipelineID, asset.Name)]
+	if !ok {
+		return "", fmt.Errorf("asset fingerprint result is missing")
+	}
+	return string(result.FP), nil
 }
 
 // RenderAsset renders the saved asset identified by the same opaque workspace
@@ -329,6 +395,13 @@ func (s *AssetRenderService) renderPath(ctx context.Context, assetPath string, r
 	if pp == nil || pp.Pipeline == nil || pp.Asset == nil {
 		return AssetRenderResult{}, fmt.Errorf("resolved asset is incomplete")
 	}
+	// Keep credential redaction structural: every result assembled after the
+	// config is loaded passes through one finalizer, including stages appended by
+	// later deferred work. This defer is registered before the quality-check
+	// defer below so LIFO ordering redacts those stages too.
+	defer func() {
+		result = finalizeAssetRenderResult(result, pp.Config)
+	}()
 	if _, err := selectConfigEnvironment(pp.Config, req.Environment); err != nil {
 		return AssetRenderResult{}, classifyAssetRenderError(
 			http.StatusBadRequest,
@@ -337,8 +410,9 @@ func (s *AssetRenderService) renderPath(ctx context.Context, assetPath string, r
 			fmt.Errorf("select environment: %w", err),
 		)
 	}
+	executionFullRefresh := req.FullRefresh && !selectedEnvironmentRestrictsFullRefresh(pp.Config)
 	applySelectedEnvironmentRefreshRestriction(pp.Config, pp.Pipeline.Assets)
-	effectiveFullRefresh := req.FullRefresh && (pp.Asset.RefreshRestricted == nil || !*pp.Asset.RefreshRestricted)
+	effectiveFullRefresh := executionFullRefresh && !assetRefreshRestricted(pp.Asset)
 
 	executionTime, err := s.resolveExecutionTime(req.ExecutionTime)
 	if err != nil {
@@ -365,6 +439,8 @@ func (s *AssetRenderService) renderPath(ctx context.Context, assetPath string, r
 	}
 
 	runID := assetRenderPreviewRunID
+	effectiveVars := fingerprint.EffectiveVars(pp.Pipeline, nil)
+	coverageVariablesHash := fingerprint.AllVarsHash(effectiveVars)
 
 	result = AssetRenderResult{
 		Status: AssetRenderStatusOK,
@@ -376,14 +452,15 @@ func (s *AssetRenderService) renderPath(ctx context.Context, assetPath string, r
 			},
 			Pipeline: pp.Pipeline.Name,
 			Context: AssetRenderContext{
-				Environment:          pp.Config.SelectedEnvironmentName,
-				StartDate:            timeWindow.StartRFC3339(),
-				EndDate:              timeWindow.EndRFC3339(),
-				ExecutionTime:        executionTime.Format(time.RFC3339Nano),
-				RunID:                runID,
-				RequestedFullRefresh: req.FullRefresh,
-				FullRefresh:          effectiveFullRefresh,
-				VariablesDigest:      fingerprint.AllVarsHash(fingerprint.EffectiveVars(pp.Pipeline, nil)),
+				Environment:           pp.Config.SelectedEnvironmentName,
+				StartDate:             timeWindow.StartRFC3339(),
+				EndDate:               timeWindow.EndRFC3339(),
+				ExecutionTime:         executionTime.Format(time.RFC3339Nano),
+				RunID:                 runID,
+				RequestedFullRefresh:  req.FullRefresh,
+				FullRefresh:           effectiveFullRefresh,
+				VariablesDigest:       coverageVariablesHash,
+				CoverageVariablesHash: coverageVariablesHash,
 			},
 		},
 		Asset: AssetRenderAsset{
@@ -395,17 +472,29 @@ func (s *AssetRenderService) renderPath(ctx context.Context, assetPath string, r
 		Issues:     []AssetRenderIssue{},
 		Redactions: []AssetRenderRedaction{},
 	}
+	assetFingerprint, fingerprintErr := s.computeAssetRenderFingerprint(pp.Pipeline, pp.Asset, effectiveVars)
+	if fingerprintErr != nil {
+		result.Status = AssetRenderStatusPartial
+		result.Issues = append(result.Issues, AssetRenderIssue{
+			Code:     "asset_fingerprint_failed",
+			Severity: "warning",
+			Message:  "asset/DAG fingerprint could not be computed",
+		})
+	} else {
+		result.Asset.Fingerprint = assetFingerprint
+	}
 	if req.FullRefresh && !effectiveFullRefresh {
 		result.Issues = append(result.Issues, AssetRenderIssue{
 			Code:     "full_refresh_restricted",
 			Severity: "warning",
-			Message:  "the selected environment restricts full refresh; execution uses the configured materialization strategy",
+			Message:  "full refresh is restricted for this asset in the selected environment; execution uses the configured materialization strategy",
 		})
 	}
 	if pp.Config.SelectedEnvironment != nil {
 		result.Provenance.Context.SchemaPrefix = pp.Config.SelectedEnvironment.SchemaPrefix
 	}
-	if connectionName, connectionErr := assetRenderConnectionName(pp); connectionErr == nil {
+	connectionName, connectionErr := assetRenderConnectionName(pp)
+	if connectionErr == nil {
 		result.Asset.ConnectionName = connectionName
 	} else {
 		result.Status = AssetRenderStatusPartial
@@ -415,19 +504,62 @@ func (s *AssetRenderService) renderPath(ctx context.Context, assetPath string, r
 			Message:  connectionErr.Error(),
 		})
 	}
-	result.Provenance.Context.ConfigurationDigest = assetRenderConfigurationDigest(pp.Config, result.Asset.ConnectionName)
+	configurationIdentity := runcontext.SelectedConfigurationIdentity(
+		pp.Config.SelectedEnvironmentName,
+		pp.Config.SelectedEnvironment,
+		assetRenderConfigurationConnectionNames(pp, result.Asset.ConnectionName),
+	)
+	if connectionErr != nil && !assetRenderAssetIsConnectionless(pp) {
+		configurationIdentity = runcontext.Identity{
+			Fidelity: runcontext.IdentityFidelityRuntimeOnly,
+			Message:  "asset connection configuration could not be resolved",
+		}
+	}
+	result.Provenance.Context.ConfigurationDigest = configurationIdentity.Digest
+	result.Provenance.Context.ConfigurationFidelity = string(configurationIdentity.Fidelity)
+	result.Provenance.Context.ConfigurationMessage = configurationIdentity.Message
+	result.Provenance.Context.VariableProvenance = assetRenderVariableProvenance(pp.Pipeline)
+	result.Asset.Target = resolveAssetPhysicalTarget(s.workspaceRoot, pp)
+	if result.Asset.Target.Fidelity == AssetRenderFidelityRuntimeOnly {
+		result.Status = mergeAssetRenderStatus(result.Status, AssetRenderStatusPartial)
+	}
 
 	renderer, err := buildAssetPlanRenderer(fs, pp.Pipeline, timeWindow, executionTime, runID)
 	if err != nil {
 		return AssetRenderResult{}, fmt.Errorf("build renderer: %w", err)
 	}
 	renderCtx := assetPlanRenderContext(ctx, pp.Config, timeWindow, executionTime, runID, effectiveFullRefresh)
+	// Every main-render branch below returns independently so incomplete SQL or
+	// unsupported materialization never erases a useful partial preview. Append
+	// scheduler-created post tasks in one deferred finalizer to give checks and
+	// metadata push the same partial-result behavior without duplicating every
+	// return path. Their presentation order matches Bruin's task-instance order:
+	// checks are declared before metadata push. They are sibling post-tasks that
+	// both depend on the main task, not on each other.
+	defer func() {
+		if resultErr != nil {
+			return
+		}
+		checkOutcome := renderAssetCheckStages(renderCtx, pp.Pipeline, pp.Asset, renderer)
+		if len(checkOutcome.stages) > 0 || len(checkOutcome.issues) > 0 {
+			result.Stages = append(result.Stages, checkOutcome.stages...)
+			result.Issues = append(result.Issues, checkOutcome.issues...)
+			result.Status = mergeAssetRenderStatus(result.Status, checkOutcome.status)
+		}
+
+		metadataOutcome := renderAssetMetadataPushStages(pp.Pipeline, pp.Asset)
+		if len(metadataOutcome.stages) > 0 || len(metadataOutcome.issues) > 0 {
+			result.Stages = append(result.Stages, metadataOutcome.stages...)
+			result.Issues = append(result.Issues, metadataOutcome.issues...)
+			result.Status = mergeAssetRenderStatus(result.Status, metadataOutcome.status)
+		}
+	}()
 	if outcome := renderSemanticAsset(pp, renderer, renderCtx, result.Asset.ConnectionName, effectiveFullRefresh, s.workspaceRoot); outcome.handled {
 		result.Stages = append(result.Stages, outcome.stages...)
 		result.Issues = append(result.Issues, outcome.issues...)
 		result.Redactions = append(result.Redactions, outcome.redactions...)
 		result.Status = mergeAssetRenderStatus(result.Status, outcome.status)
-		return finalizeAssetRenderResult(result, pp.Config), nil
+		return result, nil
 	}
 
 	dialect, dialectErr := AssetTypeToDialect(pp.Asset.Type)
@@ -440,15 +572,15 @@ func (s *AssetRenderService) renderPath(ctx context.Context, assetPath string, r
 			Fidelity: AssetRenderFidelityUnsupported,
 			Message:  "static rendering is not supported for this asset type",
 		})
-		return finalizeAssetRenderResult(result, pp.Config), nil
+		return result, nil
 	}
 	result.Asset.Dialect = dialect
-	extractor := &query.WholeFileExtractor{Fs: fs, Renderer: renderer}
+	extractor := newDirectSQLQueryExtractor(fs, renderer, pp.Asset.Type)
 	assetExtractor, err := extractor.CloneForAsset(renderCtx, pp.Pipeline, pp.Asset)
 	if err != nil {
 		result.Status = AssetRenderStatusError
 		result.Stages = append(result.Stages, failedExactRenderStage("compiled_query", err))
-		return finalizeAssetRenderResult(result, pp.Config), nil
+		return result, nil
 	}
 
 	querySource, err := querySourceForRenderAsset(pp.Asset)
@@ -462,31 +594,40 @@ func (s *AssetRenderService) renderPath(ctx context.Context, assetPath string, r
 				Message:  err.Error(),
 			})
 		}
-		return finalizeAssetRenderResult(result, pp.Config), nil
+		return result, nil
 	}
 
 	queries, err := assetExtractor.ExtractQueriesFromString(querySource)
 	if err != nil {
 		result.Status = AssetRenderStatusError
 		result.Stages = append(result.Stages, failedExactRenderStage("compiled_query", err))
-		return finalizeAssetRenderResult(result, pp.Config), nil
+		return result, nil
 	}
 	compiledQuery, err := compiledQueryForRenderAsset(pp.Asset, queries)
 	if err != nil {
 		result.Status = AssetRenderStatusError
 		result.Stages = append(result.Stages, failedExactRenderStage("compiled_query", err))
-		return finalizeAssetRenderResult(result, pp.Config), nil
+		return result, nil
 	}
 
-	result.Stages = append(result.Stages, AssetRenderStage{
-		Kind:     "compiled_query",
-		Language: "sql",
-		Content:  compiledQuery,
-		Status:   AssetRenderStageStatusOK,
-		Fidelity: AssetRenderFidelityExact,
-	})
+	if compiledQuery != "" {
+		result.Stages = append(result.Stages, AssetRenderStage{
+			Kind:     "compiled_query",
+			Language: "sql",
+			Content:  compiledQuery,
+			Status:   AssetRenderStageStatusOK,
+			Fidelity: AssetRenderFidelityExact,
+		})
+	}
 
 	if isQuerySensorAssetType(pp.Asset.Type) {
+		if pp.Asset.Type == pipeline.AssetTypeBigqueryQuerySensor {
+			operatorOutcome := assetRenderSemanticOutcome{status: AssetRenderStatusOK}
+			appendBigQueryQueryCostGuard(&operatorOutcome, pp)
+			result.Stages = append(result.Stages, operatorOutcome.stages...)
+			result.Issues = append(result.Issues, operatorOutcome.issues...)
+			result.Status = mergeAssetRenderStatus(result.Status, operatorOutcome.status)
+		}
 		result.Stages = append(result.Stages, AssetRenderStage{
 			Kind:     "execution_sql",
 			Language: "sql",
@@ -495,23 +636,149 @@ func (s *AssetRenderService) renderPath(ctx context.Context, assetPath string, r
 			Fidelity: AssetRenderFidelityExact,
 			Message:  "exact rendered query submitted by the sensor; polling mode, interval, and timeout are runtime controls and are not included in this SQL stage",
 		})
-		return finalizeAssetRenderResult(result, pp.Config), nil
+		return result, nil
+	}
+	if pp.Asset.Type == pipeline.AssetTypeOracleQuery {
+		if pp.Asset.Materialization.Type != pipeline.MaterializationTypeNone {
+			result.Status = AssetRenderStatusPartial
+			result.Stages = append(result.Stages, failedExactRenderStage(
+				"execution_sql",
+				fmt.Errorf("direct oracle execution only supports assets without materialization"),
+			))
+			return result, nil
+		}
+
+		executionMessage := ""
+		if len(pp.Asset.Hooks.Pre) > 0 || len(pp.Asset.Hooks.Post) > 0 {
+			result.Status = AssetRenderStatusPartial
+			executionMessage = "the direct Oracle runtime does not execute declared pre/post hooks"
+			result.Issues = append(result.Issues, AssetRenderIssue{
+				Code:     "oracle_hooks_unsupported",
+				Severity: "warning",
+				Message:  executionMessage,
+			})
+		}
+		result.Stages = append(result.Stages, AssetRenderStage{
+			Kind:     "execution_sql",
+			Language: "sql",
+			Content:  compiledQuery,
+			Status:   AssetRenderStageStatusOK,
+			Fidelity: AssetRenderFidelityExact,
+			Message:  executionMessage,
+		})
+		return result, nil
 	}
 
-	executionAsset := pp.Asset
-	if supportsExactDuckDBExecutionRender(pp.Asset) {
+	if outcome := renderBigQuerySnowflakeExecution(
+		renderCtx,
+		pp,
+		renderer,
+		assetExtractor,
+		compiledQuery,
+		executionFullRefresh,
+		effectiveFullRefresh,
+	); outcome.handled {
+		result.Stages = append(result.Stages, outcome.stages...)
+		result.Issues = append(result.Issues, outcome.issues...)
+		result.Redactions = append(result.Redactions, outcome.redactions...)
+		result.Status = mergeAssetRenderStatus(result.Status, outcome.status)
+		return result, nil
+	}
+	if outcome := renderAthenaExecution(
+		renderCtx,
+		pp,
+		renderer,
+		assetExtractor,
+		compiledQuery,
+		executionFullRefresh,
+		effectiveFullRefresh,
+	); outcome.handled {
+		result.Stages = append(result.Stages, outcome.stages...)
+		result.Issues = append(result.Issues, outcome.issues...)
+		result.Redactions = append(result.Redactions, outcome.redactions...)
+		result.Status = mergeAssetRenderStatus(result.Status, outcome.status)
+		return result, nil
+	}
+
+	if supportsOrderedBatchExecutionRender(pp.Asset) {
 		resolvedHooks, resolveErr := resolveAssetHookTemplates(renderCtx, pp.Pipeline, pp.Asset, renderer)
 		if resolveErr != nil {
 			result.Status = AssetRenderStatusPartial
 			result.Stages = append(result.Stages, failedExactRenderStage("execution_sql", resolveErr))
-			return finalizeAssetRenderResult(result, pp.Config), nil
+			return result, nil
+		}
+		assetCopy := *pp.Asset
+		assetCopy.Hooks = resolvedHooks
+		orderedStages, supported, renderErr := renderExactQueryBatchExecutionStages(
+			&assetCopy,
+			assetExtractor,
+			compiledQuery,
+			executionFullRefresh,
+		)
+		if !supported {
+			result.Status = AssetRenderStatusPartial
+			result.Stages = append(result.Stages, AssetRenderStage{
+				Kind:     "execution_sql",
+				Language: "sql",
+				Status:   AssetRenderStageStatusUnsupported,
+				Fidelity: AssetRenderFidelityUnsupported,
+				Message:  "exact ordered execution rendering is not available for this SQL asset type",
+			})
+			return result, nil
+		}
+		if renderErr != nil {
+			result.Status = AssetRenderStatusPartial
+			result.Stages = append(result.Stages, failedExactRenderStage("execution_sql", renderErr))
+			return result, nil
+		}
+
+		if pp.Asset.Materialization.Type != pipeline.MaterializationTypeNone && pp.Asset.Type == pipeline.AssetTypeDatabricksQuery {
+			appendDatabricksPreparationStages(&result, pp.Asset)
+		}
+
+		executionMessage := ""
+		if result.Provenance.Context.SchemaPrefix != "" {
+			executionMessage = "pre-rewrite materializer SQL; the developer-environment table rewrite depends on live warehouse state"
+		}
+		ephemeralIdentifiers := executionMaterializationUsesEphemeralIdentifiers(pp.Asset, executionFullRefresh)
+		for index := range orderedStages {
+			stage := &orderedStages[index]
+			message := executionMessage
+			// When hook provenance remains trustworthy, generated temporary
+			// identifiers affect only the materializer statements. If DECLARE
+			// hoisting erased that boundary, every generic execution stage must
+			// conservatively carry the downgrade.
+			ephemeralStage := ephemeralIdentifiers && stage.Kind == "execution_sql"
+			if executionMessage != "" || ephemeralStage {
+				stage.Fidelity = AssetRenderFidelityRuntimeOnly
+				if ephemeralStage {
+					if message != "" {
+						message += "; "
+					}
+					message += "temporary table identifiers are generated independently when execution starts"
+				}
+				stage.Message = message
+				result.Status = AssetRenderStatusPartial
+			}
+		}
+		result.Stages = append(result.Stages, orderedStages...)
+		return result, nil
+	}
+
+	executionAsset := pp.Asset
+	if supportsDirectStringExecutionRender(pp.Asset) {
+		resolvedHooks, resolveErr := resolveAssetHookTemplates(renderCtx, pp.Pipeline, pp.Asset, renderer)
+		if resolveErr != nil {
+			result.Status = AssetRenderStatusPartial
+			result.Stages = append(result.Stages, failedExactRenderStage("execution_sql", resolveErr))
+			return result, nil
 		}
 		assetCopy := *pp.Asset
 		assetCopy.Hooks = resolvedHooks
 		executionAsset = &assetCopy
 	}
 
-	executionSQL, supported, err := renderExactDuckDBExecutionSQL(executionAsset, assetExtractor, compiledQuery, effectiveFullRefresh)
+	executionSQL, supported, err := renderExactStringExecutionSQL(executionAsset, assetExtractor, compiledQuery, executionFullRefresh)
 	if !supported {
 		result.Status = AssetRenderStatusPartial
 		result.Stages = append(result.Stages, AssetRenderStage{
@@ -521,15 +788,15 @@ func (s *AssetRenderService) renderPath(ctx context.Context, assetPath string, r
 			Fidelity: AssetRenderFidelityUnsupported,
 			Message:  "exact execution rendering is not yet exposed for this SQL asset type",
 		})
-		return finalizeAssetRenderResult(result, pp.Config), nil
+		return result, nil
 	}
 	if err != nil {
 		result.Status = AssetRenderStatusPartial
 		result.Stages = append(result.Stages, failedExactRenderStage("execution_sql", err))
-		return finalizeAssetRenderResult(result, pp.Config), nil
+		return result, nil
 	}
 
-	if pp.Asset.Materialization.Type != pipeline.MaterializationTypeNone {
+	if pp.Asset.Materialization.Type != pipeline.MaterializationTypeNone && directExecutionCreatesSchema(pp.Asset.Type) {
 		if schemaName, hasSchema := tablename.SchemaToCreate(pp.Asset.Name, strings.ToLower); hasSchema {
 			result.Status = AssetRenderStatusPartial
 			result.Stages = append(result.Stages, AssetRenderStage{
@@ -543,11 +810,12 @@ func (s *AssetRenderService) renderPath(ctx context.Context, assetPath string, r
 			})
 		}
 	}
+	appendDirectStringSCD2MigrationStage(&result, pp.Asset, executionFullRefresh)
 
 	executionFidelity := AssetRenderFidelityExact
 	executionMessage := ""
 	if result.Provenance.Context.SchemaPrefix != "" {
-		// The DuckDB operator's developer-environment modifier consults the live
+		// The SQL operator's developer-environment modifier consults the live
 		// database schema and may rename referenced tables after materialization.
 		// Planning must remain connection-free, so expose the canonical
 		// pre-rewrite SQL while being explicit that the final query is runtime-only.
@@ -555,7 +823,7 @@ func (s *AssetRenderService) renderPath(ctx context.Context, assetPath string, r
 		executionFidelity = AssetRenderFidelityRuntimeOnly
 		executionMessage = "pre-rewrite materializer SQL; the developer-environment table rewrite depends on live warehouse state"
 	}
-	if duckDBMaterializationUsesEphemeralIdentifiers(pp.Asset, effectiveFullRefresh) {
+	if executionMaterializationUsesEphemeralIdentifiers(pp.Asset, executionFullRefresh) {
 		result.Status = AssetRenderStatusPartial
 		executionFidelity = AssetRenderFidelityRuntimeOnly
 		if executionMessage != "" {
@@ -572,39 +840,137 @@ func (s *AssetRenderService) renderPath(ctx context.Context, assetPath string, r
 		Fidelity: executionFidelity,
 		Message:  executionMessage,
 	})
-	return finalizeAssetRenderResult(result, pp.Config), nil
+	return result, nil
 }
 
-func assetRenderConfigurationDigest(cfg *config.Config, connectionName string) string {
-	environmentName := ""
-	schemaPrefix := ""
-	refreshRestricted := "false"
-	connectionType := ""
-	if cfg != nil {
-		environmentName = cfg.SelectedEnvironmentName
-		if cfg.SelectedEnvironment != nil {
-			schemaPrefix = cfg.SelectedEnvironment.SchemaPrefix
-			if cfg.SelectedEnvironment.Config != nil && cfg.SelectedEnvironment.Config.RefreshRestricted {
-				refreshRestricted = "true"
-			}
-			if cfg.SelectedEnvironment.Connections != nil {
-				connectionType = cfg.SelectedEnvironment.Connections.ConnectionsSummaryList()[connectionName]
-			}
-		}
+func appendDirectStringSCD2MigrationStage(result *AssetRenderResult, asset *pipeline.Asset, requestedFullRefresh bool) {
+	if result == nil || asset == nil || requestedFullRefresh || !asset.Materialization.IsSCD2() {
+		return
 	}
 
-	hasher := sha256.New()
-	for _, part := range []string{environmentName, schemaPrefix, refreshRestricted, connectionName, connectionType} {
-		var length [8]byte
-		n := len(part)
-		for i := 7; i >= 0; i-- {
-			length[i] = byte(n)
-			n >>= 8
-		}
-		_, _ = hasher.Write(length[:])
-		_, _ = hasher.Write([]byte(part))
+	operation := ""
+	message := ""
+	switch asset.Type {
+	case pipeline.AssetTypePostgresQuery, pipeline.AssetTypeRedshiftQuery:
+		operation = "migrate_postgres_scd2_target"
+		message = "inspects and migrates the live PostgreSQL-compatible SCD2 target timestamp columns before submitting materializer SQL"
+	case pipeline.AssetTypeMySQLQuery:
+		operation = "migrate_mysql_scd2_target"
+		message = "inspects and migrates the live MySQL SCD2 target timestamp columns before submitting materializer SQL"
+	default:
+		return
 	}
-	return hex.EncodeToString(hasher.Sum(nil))
+
+	result.Status = mergeAssetRenderStatus(result.Status, AssetRenderStatusPartial)
+	result.Stages = append(result.Stages, AssetRenderStage{
+		Kind:        "scd2_migration",
+		Language:    "json",
+		Content:     mustRenderOperationJSON(map[string]any{"operation": operation, "strategy": asset.Materialization.Strategy}),
+		Status:      AssetRenderStageStatusOK,
+		Fidelity:    AssetRenderFidelityRuntimeOnly,
+		Conditional: true,
+		Message:     message,
+	})
+}
+
+func directExecutionCreatesSchema(assetType pipeline.AssetType) bool {
+	switch assetType {
+	case pipeline.AssetTypeDuckDBQuery,
+		pipeline.AssetTypeMotherduckQuery,
+		pipeline.AssetTypePostgresQuery,
+		pipeline.AssetTypeRedshiftQuery,
+		pipeline.AssetTypeMySQLQuery,
+		pipeline.AssetTypeFabricQuery,
+		pipeline.AssetTypeFabricQueryLegacy:
+		return true
+	default:
+		return false
+	}
+}
+
+func supportsOrderedBatchExecutionRender(asset *pipeline.Asset) bool {
+	if asset == nil {
+		return false
+	}
+	switch asset.Type {
+	case pipeline.AssetTypeDatabricksQuery,
+		pipeline.AssetTypeClickHouse,
+		pipeline.AssetTypeSynapseQuery:
+		return true
+	default:
+		return false
+	}
+}
+
+func appendDatabricksPreparationStages(result *AssetRenderResult, asset *pipeline.Asset) {
+	if result == nil || asset == nil {
+		return
+	}
+	if catalogName, hasCatalog := tablename.ContainerToCreate(asset.Name, strings.ToUpper); hasCatalog {
+		appendDatabricksPreparationStage(result, "Catalog", "CREATE CATALOG IF NOT EXISTS "+catalogName)
+	}
+	if schemaName, hasSchema := tablename.SchemaToCreate(asset.Name, strings.ToUpper); hasSchema {
+		appendDatabricksPreparationStage(result, "Schema", "CREATE SCHEMA IF NOT EXISTS "+schemaName)
+	}
+}
+
+func appendDatabricksPreparationStage(result *AssetRenderResult, label, sql string) {
+	result.Status = mergeAssetRenderStatus(result.Status, AssetRenderStatusPartial)
+	result.Stages = append(result.Stages, AssetRenderStage{
+		Kind:        "schema_preparation",
+		Label:       label,
+		Language:    "sql",
+		Content:     sql,
+		Status:      AssetRenderStageStatusOK,
+		Fidelity:    AssetRenderFidelitySemantic,
+		Conditional: true,
+		Message:     "executed until Bruin's connection-local preparation cache records this object",
+	})
+}
+
+func assetRenderConfigurationConnectionNames(info *directPipelineInfo, primary string) []string {
+	names := make([]string, 0, 3)
+	if assetRenderAssetIsConnectionless(info) {
+		return names
+	}
+	if info != nil && info.Pipeline != nil && info.Asset != nil {
+		if resolved, err := info.Pipeline.GetAllConnectionNamesForAsset(info.Asset); err == nil {
+			names = append(names, resolved...)
+		}
+		if isLoadAsset(info.Asset) {
+			params := loadParamsFromAsset(info.Asset)
+			names = append(names, params.SourceConnection)
+		}
+	}
+	names = append(names, primary)
+	return names
+}
+
+func assetRenderAssetIsConnectionless(info *directPipelineInfo) bool {
+	if info == nil || info.Pipeline == nil || info.Asset == nil {
+		return false
+	}
+	names, err := info.Pipeline.GetAllConnectionNamesForAsset(info.Asset)
+	return err == nil && len(names) == 0
+}
+
+func assetRenderVariableProvenance(pl *pipeline.Pipeline) []AssetRenderVariableProvenance {
+	if pl == nil {
+		return []AssetRenderVariableProvenance{}
+	}
+	names := make([]string, 0, len(pl.Variables))
+	for name := range pl.Variables {
+		names = append(names, name)
+	}
+	provenance := runcontext.ValueFreeVariableProvenance(runcontext.VariableLayer{
+		Source: runcontext.VariableSourcePipelineDefault,
+		Names:  names,
+	})
+	result := make([]AssetRenderVariableProvenance, 0, len(provenance))
+	for _, variable := range provenance {
+		result = append(result, AssetRenderVariableProvenance{Name: variable.Name, Source: variable.Source})
+	}
+	return result
 }
 
 func finalizeAssetRenderResult(result AssetRenderResult, cfg *config.Config) AssetRenderResult {
@@ -632,11 +998,25 @@ func finalizeAssetRenderResult(result AssetRenderResult, cfg *config.Config) Ass
 		redacted = redacted || message != result.Issues[i].Message
 		result.Issues[i].Message = message
 	}
+	object := redactor.Mask(result.Asset.Target.Object)
+	targetMessage := redactor.Mask(result.Asset.Target.Message)
+	redacted = redacted || object != result.Asset.Target.Object || targetMessage != result.Asset.Target.Message
+	result.Asset.Target.Object = object
+	result.Asset.Target.Message = targetMessage
 	if redacted {
-		result.Redactions = append(result.Redactions, AssetRenderRedaction{
-			Kind:        "connection_credentials",
-			Replacement: mask.Mask,
-		})
+		alreadyReported := false
+		for _, redaction := range result.Redactions {
+			if redaction.Kind == "connection_credentials" && redaction.Replacement == mask.Mask {
+				alreadyReported = true
+				break
+			}
+		}
+		if !alreadyReported {
+			result.Redactions = append(result.Redactions, AssetRenderRedaction{
+				Kind:        "connection_credentials",
+				Replacement: mask.Mask,
+			})
+		}
 	}
 	return result
 }
@@ -686,12 +1066,14 @@ func assetPlanRenderContext(ctx context.Context, cfg *config.Config, timeWindow 
 	return ctx
 }
 
-func renderExactDuckDBExecutionSQL(asset *pipeline.Asset, extractor query.QueryExtractor, compiledQuery string, fullRefresh bool) (string, bool, error) {
-	if !supportsExactDuckDBExecutionRender(asset) {
+func renderExactStringExecutionSQL(asset *pipeline.Asset, extractor query.QueryExtractor, compiledQuery string, fullRefresh bool) (string, bool, error) {
+	if !supportsDirectStringExecutionRender(asset) {
 		return "", false, nil
 	}
-
-	materializer := newDirectDuckDBHookMaterializer(fullRefresh)
+	materializer, supported, err := newDirectStringExecutionMaterializer(asset.Type, fullRefresh)
+	if err != nil || !supported {
+		return "", supported, err
+	}
 	executionSQL, err := materializer.Render(asset, compiledQuery)
 	if err != nil {
 		return "", true, err
@@ -709,17 +1091,23 @@ func renderExactDuckDBExecutionSQL(asset *pipeline.Asset, extractor query.QueryE
 		if len(rendered) == 0 {
 			return "", true, fmt.Errorf("time_interval execution SQL rendered empty")
 		}
-		executionSQL = rendered[0].Query
+		if asset.Type == pipeline.AssetTypeTrinoQuery {
+			statements := make([]string, 0, len(rendered))
+			for _, statement := range rendered {
+				if statement != nil && strings.TrimSpace(statement.Query) != "" {
+					statements = append(statements, statement.Query)
+				}
+			}
+			if len(statements) == 0 {
+				return "", true, fmt.Errorf("time_interval execution SQL rendered empty")
+			}
+			executionSQL = strings.Join(statements, ";\n") + ";"
+		} else {
+			executionSQL = rendered[0].Query
+		}
 	}
 
 	return executionSQL, true, nil
-}
-
-func supportsExactDuckDBExecutionRender(asset *pipeline.Asset) bool {
-	if asset == nil {
-		return false
-	}
-	return asset.Type == pipeline.AssetTypeDuckDBQuery || asset.Type == pipeline.AssetTypeMotherduckQuery
 }
 
 func querySourceForRenderAsset(asset *pipeline.Asset) (string, error) {
@@ -738,25 +1126,71 @@ func querySourceForRenderAsset(asset *pipeline.Asset) (string, error) {
 }
 
 func compiledQueryForRenderAsset(asset *pipeline.Asset, queries []*query.Query) (string, error) {
-	if len(queries) == 0 {
-		return "", fmt.Errorf("no query was extracted")
-	}
 	if len(queries) > 1 && asset != nil && asset.Materialization.Type != pipeline.MaterializationTypeNone {
 		return "", fmt.Errorf("cannot enable materialization for tasks with multiple queries")
+	}
+	if len(queries) == 0 || queries[0] == nil || strings.TrimSpace(queries[0].Query) == "" {
+		// Bruin's MSSQL and Trino operators deliberately invoke the DDL
+		// materializer with an empty query because the statement is derived
+		// entirely from columns.
+		// Preserve that exact metadata-only path instead of requiring placeholder
+		// SQL in an otherwise declarative asset.
+		if asset != nil && (asset.Type == pipeline.AssetTypeMsSQLQuery ||
+			asset.Type == pipeline.AssetTypeTrinoQuery ||
+			athenaExecutionAllowsEmptyCompiledQuery(asset)) &&
+			asset.Materialization.Type == pipeline.MaterializationTypeTable &&
+			asset.Materialization.Strategy == pipeline.MaterializationStrategyDDL {
+			return "", nil
+		}
+		return "", fmt.Errorf("no query was extracted")
 	}
 	return queries[0].Query, nil
 }
 
-func duckDBMaterializationUsesEphemeralIdentifiers(asset *pipeline.Asset, fullRefresh bool) bool {
+func executionMaterializationUsesEphemeralIdentifiers(asset *pipeline.Asset, fullRefresh bool) bool {
 	if asset == nil || asset.Materialization.Type != pipeline.MaterializationTypeTable {
 		return false
 	}
-	if fullRefresh && asset.Materialization.Strategy != pipeline.MaterializationStrategyDDL &&
-		(asset.RefreshRestricted == nil || !*asset.RefreshRestricted) {
+	effectiveFullRefresh := fullRefresh && asset.Materialization.Strategy != pipeline.MaterializationStrategyDDL &&
+		(asset.RefreshRestricted == nil || !*asset.RefreshRestricted)
+	strategy := asset.Materialization.Strategy
+	switch asset.Type {
+	case pipeline.AssetTypeDatabricksQuery:
+		if effectiveFullRefresh {
+			// Databricks' full-refresh SCD2 builders are deterministic, while
+			// its ordinary create/replace path stages through a generated table.
+			return strategy != pipeline.MaterializationStrategySCD2ByColumn &&
+				strategy != pipeline.MaterializationStrategySCD2ByTime
+		}
+		return strategy == pipeline.MaterializationStrategyNone ||
+			strategy == pipeline.MaterializationStrategyCreateReplace ||
+			strategy == pipeline.MaterializationStrategyDeleteInsert
+	case pipeline.AssetTypeClickHouse:
+		return !effectiveFullRefresh && strategy == pipeline.MaterializationStrategyDeleteInsert
+	case pipeline.AssetTypeSynapseQuery:
+		return effectiveFullRefresh ||
+			strategy == pipeline.MaterializationStrategyNone ||
+			strategy == pipeline.MaterializationStrategyCreateReplace ||
+			strategy == pipeline.MaterializationStrategyDeleteInsert
+	case pipeline.AssetTypeDuckDBQuery, pipeline.AssetTypeMotherduckQuery:
+		return !effectiveFullRefresh && (strategy == pipeline.MaterializationStrategyDeleteInsert ||
+			strategy == pipeline.MaterializationStrategyMerge)
+	case pipeline.AssetTypePostgresQuery, pipeline.AssetTypeRedshiftQuery:
+		return !effectiveFullRefresh && (strategy == pipeline.MaterializationStrategyDeleteInsert ||
+			strategy == pipeline.MaterializationStrategySCD2ByColumn ||
+			strategy == pipeline.MaterializationStrategySCD2ByTime)
+	case pipeline.AssetTypeMySQLQuery:
+		return !effectiveFullRefresh && (strategy == pipeline.MaterializationStrategyDeleteInsert ||
+			strategy == pipeline.MaterializationStrategyMerge ||
+			strategy == pipeline.MaterializationStrategySCD2ByColumn ||
+			strategy == pipeline.MaterializationStrategySCD2ByTime)
+	case pipeline.AssetTypeBigqueryQuery, pipeline.AssetTypeSnowflakeQuery:
+		return !effectiveFullRefresh && strategy == pipeline.MaterializationStrategyDeleteInsert
+	case pipeline.AssetTypeMsSQLQuery, pipeline.AssetTypeVerticaQuery:
+		return !effectiveFullRefresh && strategy == pipeline.MaterializationStrategyDeleteInsert
+	default:
 		return false
 	}
-	return asset.Materialization.Strategy == pipeline.MaterializationStrategyDeleteInsert ||
-		asset.Materialization.Strategy == pipeline.MaterializationStrategyMerge
 }
 
 func failedExactRenderStage(kind string, err error) AssetRenderStage {

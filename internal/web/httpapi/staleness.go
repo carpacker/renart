@@ -44,17 +44,18 @@ func (h *StalenessAPI) HandleGetStaleness(w http.ResponseWriter, r *http.Request
 		selection.End = &end
 	}
 
-	statuses, err := h.Service.Statuses(r.Context(), selection)
+	snapshot, err := h.Service.Snapshot(r.Context(), selection)
 	if err != nil {
 		webapi.WriteInternalError(w, "staleness_compute_failed", err.Error())
 		return
 	}
 
 	webapi.WriteJSON(w, http.StatusOK, map[string]any{
-		"pipeline_id":   pipelineID,
-		"pipeline_uuid": pipelineUUID,
-		"environment":   selection.Environment,
-		"assets":        statuses,
+		"pipeline_id":      pipelineID,
+		"pipeline_uuid":    pipelineUUID,
+		"environment":      selection.Environment,
+		"data_state_token": snapshot.DataStateToken,
+		"assets":           snapshot.Assets,
 	})
 }
 

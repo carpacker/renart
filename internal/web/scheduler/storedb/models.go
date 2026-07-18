@@ -28,6 +28,7 @@ type PipelineRun struct {
 	Backfill                 int64
 	SensorMode               string
 	ExecutionContextResolved int64
+	ExecutionTargetSnapshot  string
 }
 
 type PipelineRunLog struct {
@@ -37,13 +38,27 @@ type PipelineRunLog struct {
 	Line  string
 }
 
+type PipelineRunSlot struct {
+	SlotKey string
+	RunID   string
+}
+
+type PipelineRunSpec struct {
+	RunID     string
+	Version   int64
+	Body      string
+	CreatedAt string
+}
+
 type PipelineRunStep struct {
-	RunID      string
-	Asset      string
-	Status     string
-	StartedAt  sql.NullString
-	FinishedAt sql.NullString
-	Error      sql.NullString
+	RunID                  string
+	Asset                  string
+	Status                 string
+	StartedAt              sql.NullString
+	FinishedAt             sql.NullString
+	Error                  sql.NullString
+	CompletionOrdinal      sql.NullInt64
+	UpstreamWriterSnapshot string
 }
 
 type PipelineScheduleSetting struct {
@@ -66,28 +81,56 @@ type RenartBlob struct {
 	Content []byte
 }
 
+type RenartCompletionOutbox struct {
+	Sequence     int64
+	CompletionID string
+	Version      int64
+	Body         string
+	EnqueuedAt   string
+}
+
 type RenartCoverage struct {
-	AssetID        string
-	Environment    string
-	Fingerprint    string
-	VarsHash       string
-	IntervalStart  string
-	IntervalEnd    string
-	MaterializedAt string
-	OwnContent     string
+	AssetID          string
+	Environment      string
+	Fingerprint      string
+	VarsHash         string
+	TargetIdentity   string
+	TargetGeneration int64
+	IntervalStart    string
+	IntervalEnd      string
+	MaterializedAt   string
+	OwnContent       string
+}
+
+type RenartLatestSuccessfulWriter struct {
+	TargetIdentity    string
+	TargetGeneration  int64
+	AssetID           string
+	Environment       string
+	Fingerprint       string
+	VarsHash          string
+	RunID             string
+	MaterializedAt    string
+	CompletionID      string
+	CompletionOrdinal int64
+	Ambiguous         int64
 }
 
 type RenartMaterialization struct {
-	ID             int64
-	AssetID        string
-	Environment    string
-	Fingerprint    string
-	VarsHash       string
-	IntervalStart  string
-	IntervalEnd    string
-	RunID          string
-	MaterializedAt string
-	OwnContent     string
+	ID                int64
+	AssetID           string
+	Environment       string
+	Fingerprint       string
+	VarsHash          string
+	IntervalStart     string
+	IntervalEnd       string
+	RunID             string
+	MaterializedAt    string
+	OwnContent        string
+	TargetIdentity    string
+	TargetGeneration  int64
+	CompletionID      string
+	CompletionOrdinal int64
 }
 
 type RenartSchedule struct {
@@ -114,6 +157,16 @@ type RenartSnapshot struct {
 	GitDirty   sql.NullInt64
 	CreatedAt  string
 	CreatedBy  sql.NullString
+}
+
+type RenartTargetWriteClaim struct {
+	ClaimSequence  int64
+	TargetIdentity string
+	CompletionID   string
+	AssetID        string
+	State          string
+	ClaimedAt      string
+	UpdatedAt      string
 }
 
 type ScheduleWatermark struct {

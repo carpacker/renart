@@ -40,13 +40,13 @@ func resolveAssetHookTemplates(
 	return resolved, nil
 }
 
-func resolveDirectDuckDBHookTemplates(
+func resolveDirectExecutionHookTemplates(
 	ctx context.Context,
 	pl *pipeline.Pipeline,
 	asset *pipeline.Asset,
 	renderer jinja.RendererInterface,
 ) error {
-	if !supportsExactDuckDBExecutionRender(asset) {
+	if !supportsDirectExecutionHooks(asset) {
 		return nil
 	}
 	resolved, err := resolveAssetHookTemplates(ctx, pl, asset, renderer)

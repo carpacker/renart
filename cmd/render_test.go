@@ -35,8 +35,11 @@ func TestRenderLocalJSONUsesSharedReadOnlyService(t *testing.T) {
 	if err := json.Unmarshal(output.Bytes(), &result); err != nil {
 		t.Fatalf("decode render output: %v\n%s", err, output.String())
 	}
-	if result.Asset.Name != "mart.orders" || result.Status != service.AssetRenderStatusOK {
+	if result.Asset.Name != "mart.orders" || result.Status != service.AssetRenderStatusPartial {
 		t.Fatalf("unexpected result: %+v", result)
+	}
+	if result.Asset.Target.Kind != "unknown" || result.Asset.Target.Fidelity != service.AssetRenderFidelityRuntimeOnly {
+		t.Fatalf("unexpected non-materialized target: %+v", result.Asset.Target)
 	}
 	if len(result.Stages) != 2 || result.Stages[0].Kind != "compiled_query" || result.Stages[1].Kind != "execution_sql" {
 		t.Fatalf("unexpected stages: %+v", result.Stages)
@@ -119,6 +122,103 @@ select 2
 	_, err := resolveRenderAssetPath(context.Background(), root, root, "mart.orders")
 	if err == nil || !strings.Contains(err.Error(), "ambiguous") {
 		t.Fatalf("expected ambiguous-name error, got %v", err)
+	}
+}
+
+func TestResolveRenderAssetPathRejectsAbsolutePathOutsideWorkspace(t *testing.T) {
+	root, _ := writeRenderCLIWorkspace(t)
+	outsidePath := filepath.Join(t.TempDir(), "outside.sql")
+	mustWrite(t, outsidePath, "select 1\n")
+
+	_, err := resolveRenderAssetPath(context.Background(), root, root, outsidePath)
+	if err == nil || !strings.Contains(err.Error(), "outside the workspace") || strings.Contains(err.Error(), "no asset named") {
+		t.Fatalf("expected an outside-workspace path error, got %v", err)
+	}
+}
+
+func TestPrintAssetRenderResultUsesDistinctQualityCheckLabels(t *testing.T) {
+	var output bytes.Buffer
+	blocking := true
+	printAssetRenderResult(&output, service.AssetRenderResult{
+		Status: service.AssetRenderStatusOK,
+		Provenance: service.AssetRenderProvenance{
+			Source: service.AssetRenderSource{Kind: "working_tree", MerkleRoot: "abcdef012345"},
+			Context: service.AssetRenderContext{
+				StartDate: "2026-07-15T00:00:00Z",
+				EndDate:   "2026-07-16T00:00:00Z",
+			},
+		},
+		Asset: service.AssetRenderAsset{Name: "mart.orders", Type: "duckdb.sql"},
+		Stages: []service.AssetRenderStage{
+			{
+				Kind:          "check",
+				Label:         "order_id · not_null",
+				Language:      "sql",
+				Content:       "SELECT count(*) FROM mart.orders WHERE order_id IS NULL",
+				Status:        service.AssetRenderStageStatusOK,
+				Fidelity:      service.AssetRenderFidelityExact,
+				CheckKind:     "column",
+				CheckName:     "not_null",
+				CheckColumn:   "order_id",
+				CheckBlocking: &blocking,
+			},
+		},
+		Issues:     []service.AssetRenderIssue{},
+		Redactions: []service.AssetRenderRedaction{},
+	})
+
+	if !strings.Contains(output.String(), "order_id · not_null [exact]") {
+		t.Fatalf("named check stage was not printed distinctly:\n%s", output.String())
+	}
+}
+
+func TestPrintAssetRenderResultShowsValueFreeContextProvenance(t *testing.T) {
+	var output bytes.Buffer
+	printAssetRenderResult(&output, service.AssetRenderResult{
+		Status: service.AssetRenderStatusOK,
+		Provenance: service.AssetRenderProvenance{
+			Source: service.AssetRenderSource{Kind: "working_tree", MerkleRoot: "abcdef012345"},
+			Context: service.AssetRenderContext{
+				Environment:           "production",
+				StartDate:             "2026-07-15T00:00:00Z",
+				EndDate:               "2026-07-16T00:00:00Z",
+				ConfigurationDigest:   "configuration-digest",
+				ConfigurationFidelity: "exact",
+				VariablesDigest:       "variables-digest",
+				VariableProvenance: []service.AssetRenderVariableProvenance{
+					{Name: "region", Source: "pipeline_default"},
+					{Name: "threshold", Source: "run_override"},
+				},
+			},
+		},
+		Asset: service.AssetRenderAsset{
+			Name:        "mart.orders",
+			Type:        "duckdb.sql",
+			Fingerprint: "v2:asset-fingerprint",
+			Target: service.AssetRenderTarget{
+				Kind:     "relation",
+				Object:   "mart.orders",
+				Identity: "physical-target-digest",
+				Fidelity: service.AssetRenderFidelityExact,
+			},
+		},
+	})
+
+	printed := output.String()
+	if !strings.Contains(printed, "Configuration: configur [exact]") {
+		t.Fatalf("configuration provenance missing: %s", printed)
+	}
+	if !strings.Contains(printed, "Variables: variable · region (pipeline default), threshold (run override)") {
+		t.Fatalf("variable provenance missing: %s", printed)
+	}
+	if !strings.Contains(printed, "Asset fingerprint: v2:asset") {
+		t.Fatalf("asset fingerprint missing: %s", printed)
+	}
+	if !strings.Contains(printed, "Target: mart.orders physical [exact]") {
+		t.Fatalf("physical target identity missing: %s", printed)
+	}
+	if strings.Contains(printed, "secret-value") {
+		t.Fatalf("variable values must not be printed: %s", printed)
 	}
 }
 

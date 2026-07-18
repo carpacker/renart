@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
@@ -12,10 +13,12 @@ import (
 	"time"
 
 	"github.com/bruin-data/bruin/pkg/git"
+	"github.com/bruin-data/bruin/pkg/pipeline"
 	"github.com/go-chi/chi/v5"
 	"github.com/spf13/afero"
 	"github.com/urfave/cli/v3"
 	"renart/internal/web/bus"
+	"renart/internal/web/completion"
 	"renart/internal/web/events"
 	"renart/internal/web/fingerprint"
 	webhttpapi "renart/internal/web/httpapi"
@@ -158,6 +161,10 @@ func newWebServer(ctx context.Context, cfg serverConfig, logger *zap.Logger) (*w
 		// though they intentionally skip the long-lived workspace lease.
 		logger.Warn("failed to exclude Renart runtime files from Git status", zap.Error(err))
 	}
+	executionCoordinator, err := newWorkspaceExecutionCoordinator(absRoot)
+	if err != nil {
+		return nil, nil, err
+	}
 
 	// Every served workspace gets a stable identity; the health endpoint and
 	// discovery file report it so CLI clients can address the right project.
@@ -209,7 +216,12 @@ func newWebServer(ctx context.Context, cfg serverConfig, logger *zap.Logger) (*w
 			}
 			return pipelines
 		},
-		Events: server.eventBus,
+		Events:       server.eventBus,
+		TargetWrites: serverTargetWriteStore{server: server},
+		DispatchCompletion: func(ctx context.Context, event bus.RunCompleted) error {
+			return server.dispatchRunCompletion(ctx, event)
+		},
+		AcquireExecutionLease: executionCoordinator.AcquireShared,
 		PolicyFor: func(environment string) policy.EnvironmentPolicy {
 			if strings.TrimSpace(environment) == "" {
 				environment = server.currentState().SelectedEnvironment
@@ -291,13 +303,22 @@ func newWebServer(ctx context.Context, cfg serverConfig, logger *zap.Logger) (*w
 	server.assetRenderSvc = service.NewAssetRenderService(absRoot)
 
 	server.runSvc = service.NewRunService(service.RunDependencies{
-		Executor:            server.executor,
+		Executor:  server.executor,
+		Execution: server.executionSvc,
+		CurrentPipelineIDs: func() []string {
+			pipelines := server.currentState().Pipelines
+			pipelineIDs := make([]string, 0, len(pipelines))
+			for _, currentPipeline := range pipelines {
+				pipelineIDs = append(pipelineIDs, currentPipeline.ID)
+			}
+			return pipelineIDs
+		},
 		WorkspaceRoot:       absRoot,
 		ConfigPath:          resolveConfigFilePath(absRoot),
 		PolicyFor:           server.policyLoader.For,
 		SelectedEnvironment: func() string { return server.currentState().SelectedEnvironment },
 	})
-	server.onboardingSvc = service.NewOnboardingService(absRoot, resolveConfigFilePath(absRoot), server.executor)
+	server.onboardingSvc = service.NewOnboardingService(absRoot, resolveConfigFilePath(absRoot), server.executor, server.executionSvc)
 	server.sourceControlSvc = service.NewSourceControlService(absRoot)
 
 	server.schedulerStore, err = webscheduler.OpenStore(cfg.schedulerStatePath)
@@ -305,8 +326,34 @@ func newWebServer(ctx context.Context, cfg serverConfig, logger *zap.Logger) (*w
 		return nil, nil, fmt.Errorf("failed to initialize scheduler store: %w", err)
 	}
 	server.fingerprintEngine = fingerprint.NewEngine()
+	hybridExecutor.SetFingerprintEngine(server.fingerprintEngine)
 	server.matlogStore = matlog.NewStore(server.schedulerStore.DB())
+	server.completionStore = completion.NewStore(server.schedulerStore.DB())
 	server.snapshotStore = snapshot.NewStore(server.schedulerStore.DB())
+	shouldReconcileClaims := serverLease != nil
+	var releaseClaimRecovery func() error
+	if shouldReconcileClaims {
+		releaseClaimRecovery, err = executionCoordinator.acquireExclusive(ctx)
+	} else {
+		var acquired bool
+		releaseClaimRecovery, acquired, err = executionCoordinator.tryAcquireExclusive()
+		shouldReconcileClaims = acquired
+	}
+	if err != nil {
+		server.schedulerStore.Close()
+		return nil, nil, fmt.Errorf("acquire physical target recovery lease: %w", err)
+	}
+	if shouldReconcileClaims {
+		converted, claimErr := server.matlogStore.MarkActiveTargetWriteClaimsDirty(ctx, time.Now().UTC())
+		releaseErr := releaseClaimRecovery()
+		if claimErr != nil || releaseErr != nil {
+			server.schedulerStore.Close()
+			return nil, nil, fmt.Errorf("mark interrupted physical target writes uncertain: %w", errors.Join(claimErr, releaseErr))
+		}
+		if converted > 0 {
+			logger.Warn("marked interrupted physical target writes uncertain", zap.Int64("targets", converted))
+		}
+	}
 	recorder := matlog.NewRecorder(server.matlogStore, server.fingerprintEngine, server.resolvePipelineByUUID, server.parsePipelineDir, logger)
 	// Subscription order matters: the recorder writes coverage before any
 	// later subscriber (the staleness service) re-reads it.
@@ -314,11 +361,35 @@ func newWebServer(ctx context.Context, cfg serverConfig, logger *zap.Logger) (*w
 	server.eventBus.OnAssetSaved(func(event bus.AssetSaved) {
 		server.fingerprintEngine.Invalidate(event.AssetID)
 	})
+	if serverLease != nil {
+		if replayErr := server.replayPendingCompletions(ctx); replayErr != nil {
+			logger.Warn("failed to replay pending run completions", zap.Error(replayErr))
+		}
+	}
 
 	server.stalenessSvc = staleness.New(staleness.Dependencies{
 		Store:   server.matlogStore,
 		Engine:  server.fingerprintEngine,
 		Resolve: server.resolvePipelineByUUID,
+		ResolveTargets: func(_ context.Context, selection staleness.Selection, parsed *pipeline.Pipeline) (map[string]staleness.PhysicalTarget, error) {
+			resolved, resolveErr := service.ResolvePipelinePhysicalTargets(
+				absRoot,
+				resolveConfigFilePath(absRoot),
+				selection.Environment,
+				parsed,
+			)
+			if resolveErr != nil {
+				return nil, resolveErr
+			}
+			targets := make(map[string]staleness.PhysicalTarget, len(resolved))
+			for assetID, target := range resolved {
+				targets[assetID] = staleness.PhysicalTarget{
+					Identity: target.Identity,
+					Exact:    target.Fidelity == service.AssetRenderFidelityExact,
+				}
+			}
+			return targets, nil
+		},
 		Publish: func(event any) {
 			server.hub.PublishImmediate(event)
 		},
@@ -335,6 +406,9 @@ func newWebServer(ctx context.Context, cfg serverConfig, logger *zap.Logger) (*w
 			server.hub.PublishImmediate(event)
 		},
 		Housekeeping: func(ctx context.Context) error {
+			if replayErr := server.replayPendingCompletions(ctx); replayErr != nil {
+				return replayErr
+			}
 			_, pruneErr := server.matlogStore.Prune(ctx, time.Now().UTC().AddDate(0, 0, -90))
 			return pruneErr
 		},
@@ -409,6 +483,37 @@ func newWebServer(ctx context.Context, cfg serverConfig, logger *zap.Logger) (*w
 					SensorMode:  resolved.SensorMode,
 				})
 			}
+			spec.OnTargetsResolved = func(snapshot service.ExecutionTargetSnapshot) error {
+				if req.OnTargetsResolved == nil {
+					return fmt.Errorf("scheduler run %s cannot persist execution targets", req.RunID)
+				}
+				entries := make(map[string]webscheduler.ExecutionTargetSnapshotEntry, len(snapshot.Entries))
+				for assetName, entry := range snapshot.Entries {
+					upstreams := make([]webscheduler.ExecutionUpstreamSnapshot, 0, len(entry.Upstreams))
+					for _, upstream := range entry.Upstreams {
+						upstreams = append(upstreams, webscheduler.ExecutionUpstreamSnapshot{
+							Type: upstream.Type, Value: upstream.Value,
+						})
+					}
+					entries[assetName] = webscheduler.ExecutionTargetSnapshotEntry{
+						AssetID:           entry.AssetID,
+						TargetIdentity:    entry.TargetIdentity,
+						TargetFidelity:    string(entry.TargetFidelity),
+						Fingerprint:       entry.Fingerprint,
+						OwnContent:        entry.OwnContent,
+						ConsumedVarsHash:  entry.ConsumedVarsHash,
+						VarsHash:          entry.VarsHash,
+						Upstreams:         upstreams,
+						CoverageMode:      string(entry.CoverageMode),
+						RefreshRestricted: entry.RefreshRestricted,
+					}
+				}
+				return req.OnTargetsResolved(webscheduler.ExecutionTargetSnapshot{
+					Version:      snapshot.Version,
+					PipelineUUID: snapshot.PipelineUUID,
+					Entries:      entries,
+				})
+			}
 			cleanupSnapshot, err := server.resolveRunSnapshot(ctx, &spec, req.Scheduled, onLog)
 			if err != nil {
 				if onLog != nil {
@@ -422,16 +527,35 @@ func newWebServer(ctx context.Context, cfg serverConfig, logger *zap.Logger) (*w
 				if onLog != nil {
 					onLog(string(chunk))
 				}
-			}, func(event service.ExecutionAssetEvent) {
+			}, func(event service.ExecutionAssetEvent) error {
 				if req.OnStep == nil {
-					return
+					return fmt.Errorf("scheduler run %s cannot persist execution step", req.RunID)
 				}
-				req.OnStep(webscheduler.RunStepEvent{
-					Asset:      event.Asset,
-					Status:     schedulerStatusFromExecutionStatus(event.Status),
-					StartedAt:  event.StartedAt,
-					FinishedAt: event.FinishedAt,
-					Error:      event.Error,
+				var upstreamWriters map[string]webscheduler.UpstreamWriterSnapshot
+				if event.HasUpstreamWriterSnapshot {
+					upstreamWriters = make(map[string]webscheduler.UpstreamWriterSnapshot, len(event.UpstreamWriters))
+					for assetID, writer := range event.UpstreamWriters {
+						upstreamWriters[assetID] = webscheduler.UpstreamWriterSnapshot{
+							AssetID:           writer.AssetID,
+							TargetIdentity:    writer.TargetIdentity,
+							Fingerprint:       writer.Fingerprint,
+							VarsHash:          writer.VarsHash,
+							TargetGeneration:  writer.TargetGeneration,
+							CompletionID:      writer.CompletionID,
+							CompletionOrdinal: writer.CompletionOrdinal,
+							MaterializedAt:    writer.MaterializedAt,
+						}
+					}
+				}
+				return req.OnStep(webscheduler.RunStepEvent{
+					Asset:                     event.Asset,
+					Status:                    schedulerStatusFromExecutionStatus(event.Status),
+					StartedAt:                 event.StartedAt,
+					FinishedAt:                event.FinishedAt,
+					Error:                     event.Error,
+					CompletionOrdinal:         event.CompletionOrdinal,
+					UpstreamWriters:           upstreamWriters,
+					HasUpstreamWriterSnapshot: event.HasUpstreamWriterSnapshot,
 				})
 			})
 			// MaterializePipelineRun already forwards every output byte through

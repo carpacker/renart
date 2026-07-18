@@ -12,6 +12,7 @@ import (
 	"github.com/spf13/afero"
 
 	"renart/internal/web/duckcoord"
+	"renart/internal/web/fingerprint"
 	"renart/internal/web/runstate"
 )
 
@@ -21,6 +22,7 @@ type HybridBruinExecutor struct {
 	workspaceRoot        string
 	logSink              ExecutionLogSink
 	duckDBCoordinator    *duckcoord.Coordinator
+	fingerprintEngine    *fingerprint.Engine
 	// runRegistry tracks in-flight materializations across every run this
 	// executor performs, so the python run broker can wait on them.
 	runRegistry *runstate.Registry
@@ -42,6 +44,7 @@ func NewHybridBruinExecutor(
 		workspaceRoot:        workspaceRoot,
 		logSink:              logSink,
 		duckDBCoordinator:    duckcoord.New(duckcoord.Options{}),
+		fingerprintEngine:    fingerprint.NewEngine(),
 		runRegistry:          runstate.NewRegistry(),
 	}
 }
@@ -57,6 +60,16 @@ func (e *HybridBruinExecutor) SetExecutionLogSink(sink ExecutionLogSink) {
 		sink = NoopExecutionLogSink{}
 	}
 	e.logSink = sink
+}
+
+// SetFingerprintEngine shares the canonical fingerprint cache with services
+// that plan, execute, and record the same workspace. A nil engine restores an
+// isolated engine rather than leaving target capture without one.
+func (e *HybridBruinExecutor) SetFingerprintEngine(engine *fingerprint.Engine) {
+	if engine == nil {
+		engine = fingerprint.NewEngine()
+	}
+	e.fingerprintEngine = engine
 }
 
 func (e *HybridBruinExecutor) executionLogSink() ExecutionLogSink {
