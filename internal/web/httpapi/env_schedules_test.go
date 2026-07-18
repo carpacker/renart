@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/stretchr/testify/assert"
@@ -160,15 +161,23 @@ func TestEnvScheduleMutationBodiesAcceptDeclaredFields(t *testing.T) {
 
 func TestEnvScheduleResponsesExposeOnlySortedVariableNames(t *testing.T) {
 	t.Parallel()
+	start := time.Date(2026, 7, 18, 8, 0, 0, 0, time.UTC)
+	end := start.Add(time.Hour)
 	stub := &envScheduleHandlerStub{live: []scheduler.EnvSchedule{{
 		PipelineUUID: "pipeline-uuid", Environment: "prod", Cron: "@daily", Timezone: "UTC",
 		Vars: map[string]any{"region": "private-region", "limit": 25},
+		DeferredOccurrence: &scheduler.DeferredScheduleOccurrence{
+			IntervalStart: start, IntervalEnd: end, AttemptCount: 1,
+		},
 	}}}
 	response := envScheduleRequest(stub, http.MethodGet, "/api/env-schedules", "")
 	require.Equal(t, http.StatusOK, response.Code)
 	assert.Contains(t, response.Body.String(), `"variable_names":["limit","region"]`)
+	assert.Contains(t, response.Body.String(), `"deferred_occurrence"`)
+	assert.Contains(t, response.Body.String(), `"attempt_count":1`)
 	assert.NotContains(t, response.Body.String(), "private-region")
 	assert.NotContains(t, response.Body.String(), `"vars"`)
+	assert.NotContains(t, response.Body.String(), `"occurrence_key"`)
 }
 
 func TestEnvSchedulesExposeOwnershipAndRejectFollowerMutations(t *testing.T) {

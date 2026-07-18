@@ -462,15 +462,31 @@ failure leaves no partially admitted run. The row-level Run-pinned endpoint
 loads the pin and private overrides server-side, queues a manual run, and never
 inherits schedule-watermark capability.
 
+Every actual due/catch-up interval is first recorded in
+`schedule_occurrences` under a server-derived SHA-256 key over the stable
+pipeline UUID, environment, and normalized half-open interval. Duplicate
+signals return the active or successful occurrence without creating a second
+run. Failed/cancelled occurrences become pending only when another signal
+explicitly retries them; each admitted run is retained as a numbered
+`schedule_occurrence_attempts` row. Occurrence claim, attempt number, run,
+RunSpec, plan/units, and pipeline slot commit in one SQLite transaction. A slot
+conflict rolls the attempt back while leaving a durable pending occurrence for
+the schedules API and UI. Run terminalization updates the occurrence through a
+database trigger in the same transaction, including scheduled success plus its
+watermark. The private RunSpec binds new scheduled runs back to the derived key;
+legacy specs without one retain strict upgrade compatibility.
+
 For new scheduler-backed admissions, the durable slot permits one
 queued/running pipeline-scope run per logical pipeline across environments and
 claims both path and stable-UUID aliases, preserving exclusion across a rename.
 Manual races return `409 pipeline_run_active` with the active run ID.
 Periodic/catch-up jobs remain compatibility due signals: the worker derives
-the same v1 spec when it claims the slot, and snoozes the original signal for
-30 seconds while another run holds it. This preserves the exact interval but
-is not yet a durable, user-visible occurrence ledger. Migration reconciliation
-deterministically keeps one queued-first legacy active row per pipeline path,
+the same v1 spec when it claims the occurrence and slot, and snoozes the
+original signal for 30 seconds while another run holds the slot. The signal is
+still also the physical-execution worker; splitting it from a run-ID-only River
+execution job remains universal-ledger work, while occurrence identity and
+attempt history are already authoritative in Renart storage. Migration
+reconciliation deterministically keeps one queued-first legacy active row per pipeline path,
 marks any duplicates failed, closes their open steps, and records the recovery
 reason before creating the unique slot table. This keeps every conflicting row
 auditable instead of preventing startup. The surviving legacy row receives only

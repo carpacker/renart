@@ -367,14 +367,20 @@ The reconciler diffs over the compound key: file deleted / branch switched →
 pipeline reappearing reactivates reconciler tombstones but **not** explicit
 user deletions (reason `user`), which stay archived until restored in the UI.
 River `ByArgs` uniqueness suppresses a duplicate `(pipeline UUID, environment,
-interval)` signal while the first job is active; it is not a durable completed-
-occurrence ledger. New admissions claim pipeline-global SQLite path and
-stable-UUID slot aliases, preventing concurrent scheduler-backed executions
-across a rename. Migrated active rows have only a path alias because their UUID
-was not persisted, so rename safety cannot be reconstructed for those rows. A
-scheduled signal blocked by a slot is snoozed and retried with its original
-arguments; no run row or visible deferred occurrence exists until it acquires
-the slot.
+interval)` signal while the first job is active. The authoritative identity is
+also retained in `schedule_occurrences`: a SHA-256 key binds the stable schedule
+identity to its normalized half-open interval, and a durable unique constraint
+prevents a second active or already-successful execution after River forgets a
+terminal job. Failed/cancelled intervals can be retried under the same
+occurrence with numbered run attempts. Occurrence/attempt claim, run, RunSpec,
+retained plan/units, and pipeline-global path plus stable-UUID slot aliases
+commit in one SQLite transaction. A slot conflict rolls the attempted admission
+back, leaves the occurrence pending, and snoozes the original signal with its
+exact arguments. The schedules API exposes only the pending interval and prior
+attempt count, and the UI labels it **Run waiting** or **Retry waiting**; values
+and the private key are not exposed. SSE occurrence events refresh this state
+without polling. Migrated active rows have only a path alias because their UUID
+was not persisted, so rename safety cannot be reconstructed for those rows.
 
 Only the process holding `.renart/scheduler.lock` may change rows or enqueue
 runs. `GET /api/env-schedules` reports `owner`, `follower`, or `unavailable`;
@@ -399,6 +405,9 @@ failure therefore leaves the interval retryable instead of recording success
 while silently re-enqueueing the same catch-up window later. Watermark
 capability and identity come from the server-derived stored RunSpec, never a
 client trigger or the mere presence of a run ID.
+The same transaction updates the occurrence to `success`; every other terminal
+run path updates it to `failed` or `cancelled`, so startup recovery, blocked
+plans, and panic handling cannot leave the occurrence falsely active.
 
 Schedule overrides are validated against the variable declarations in the
 exact pinned deployment on create/update, resume, promotion, and reconciliation.

@@ -304,6 +304,7 @@ function EnvScheduleRow({
   const pinnedVersion = schedule.snapshot_version_id?.trim() ?? "";
   const pinnedDeployment = deploymentLabel(schedule.snapshot_ordinal, pinnedVersion, "deployment");
   const overrideNames = [...(schedule.variable_names ?? [])].sort();
+  const deferredOccurrence = schedule.deferred_occurrence;
   const deploymentOutdated = Boolean(
     latestVersion && pinnedVersion && latestVersion !== pinnedVersion,
   );
@@ -457,7 +458,10 @@ function EnvScheduleRow({
               <span className="break-words text-foreground">Pinned pipeline schedule</span>
             </ScheduleMetadata>
           </dl>
-          {sourceBlockReason || deploymentOutdated ? (
+          {sourceBlockReason ||
+          deploymentOutdated ||
+          overrideNames.length > 0 ||
+          deferredOccurrence ? (
             <div className="mt-1.5 flex flex-wrap gap-1" data-testid="schedule-state-badges">
               {!pinnedVersion ? (
                 <Badge variant="destructive" size="xs">
@@ -473,6 +477,21 @@ function EnvScheduleRow({
                   </TooltipTrigger>
                   <TooltipContent>
                     Applied from this schedule to its pinned deployment: {overrideNames.join(", ")}
+                  </TooltipContent>
+                </Tooltip>
+              ) : null}
+              {deferredOccurrence ? (
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Badge variant="outline" size="xs" tabIndex={0}>
+                      <Clock />
+                      {deferredOccurrence.attempt_count > 0 ? "Retry waiting" : "Run waiting"}
+                    </Badge>
+                  </TooltipTrigger>
+                  <TooltipContent className="max-w-80">
+                    Scheduled interval {formatSchedulerDate(deferredOccurrence.interval_start)} to{" "}
+                    {formatSchedulerDate(deferredOccurrence.interval_end)} is durably retained and
+                    will be admitted when planning and the pipeline run slot are available.
                   </TooltipContent>
                 </Tooltip>
               ) : null}

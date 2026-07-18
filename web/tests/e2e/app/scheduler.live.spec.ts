@@ -38,6 +38,22 @@ test.describe("app scheduler pages live", () => {
   test.use({ fixtureName: "basic-workspace" });
 
   test("shows configured schedules", async ({ liveApp, page }) => {
+    await page.route("**/api/env-schedules", async (route) => {
+      const response = await route.fetch();
+      const body = (await response.json()) as {
+        schedules?: Array<Record<string, unknown>>;
+      };
+      for (const schedule of body.schedules ?? []) {
+        if (schedule.pipeline_name === "analytics") {
+          schedule.deferred_occurrence = {
+            interval_start: "2026-07-18T08:00:00Z",
+            interval_end: "2026-07-18T09:00:00Z",
+            attempt_count: 0,
+          };
+        }
+      }
+      await route.fulfill({ response, json: body });
+    });
     await page.goto(`${liveApp.baseURL}/schedules`);
 
     await expect(page.getByRole("heading", { name: "Schedules" })).toBeVisible();
@@ -62,6 +78,10 @@ test.describe("app scheduler pages live", () => {
       ),
     ).toBe(true);
     await expect(scheduleRow.getByText("Needs deployment", { exact: true })).toBeVisible();
+    const waitingBadge = scheduleRow.getByText("Run waiting", { exact: true });
+    await expect(waitingBadge).toBeVisible();
+    await waitingBadge.focus();
+    await expect(page.getByRole("tooltip")).toContainText("durably retained");
     const actions = scheduleRow.getByTestId("schedule-actions");
     await expect(actions.getByRole("button", { name: "Review deployment" })).toBeVisible();
     await expect(actions.getByRole("button", { name: "Run pinned" })).toBeDisabled();

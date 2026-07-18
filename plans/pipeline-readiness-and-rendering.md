@@ -1171,10 +1171,25 @@ editing tracked ignore rules. This closes the hole where worktree cleanup could
 unlink the only lock while a server still owned the workspace; it remains
 separate from the scheduler ownership/handoff workstream below.
 
-This is only the scheduler-backed foundation. Direct and inline execution,
-effective variables, asset/window execution units, target/latest-writer
-identity, durable occurrence identities and attempts, a separate
-signal-to-execution job, and exact re-execution remain open.
+This began as only the scheduler-backed foundation. Direct and inline
+execution, a separate signal-to-execution job, and exact re-execution remain
+open; effective variables, asset/window execution units,
+target/latest-writer identity, and durable schedule occurrences/attempts have
+since landed in the checkpoints below.
+
+Durable occurrence checkpoint (2026-07-18): actual due/catch-up intervals now
+receive a stable server-derived occurrence key over pipeline UUID, environment,
+and normalized half-open interval before planning. SQLite retains one
+occurrence plus numbered run attempts. Occurrence claim, run, RunSpec, retained
+plan/units, and pipeline slot are atomic; concurrent or later duplicate signals
+reuse an active/successful occurrence, while failure/cancellation permits a
+new numbered attempt. Slot contention rolls back the attempted run but leaves
+the interval visibly pending in the schedules API/UI, refreshed by SSE. Run
+terminalization and scheduled-success watermark advancement update the
+occurrence in the same transaction. River `ByArgs` remains a defense in depth,
+and the compatibility due signal still performs physical execution; the
+separate run-ID-only execution job and universal direct/inline ledger remain
+open.
 
 This is the architectural prerequisite for the pipeline plan:
 
@@ -1185,8 +1200,9 @@ This is the architectural prerequisite for the pipeline plan:
 - add target identity plus durable latest-successful-writer storage/coverage
   semantics, and enable variable overrides only with that freshness contract;
 - make run-slot admission atomic and return typed active-run conflicts;
-- add durable schedule-occurrence identity, transactional
-  run-plus-`InsertTx` admission, and visible deferred/retry state;
+- retain the shipped durable schedule-occurrence identity, transactional
+  attempt/run/slot admission, and visible deferred/retry state while moving the
+  resulting execution job to run-ID-only arguments;
 - route manual, periodic, and catch-up work through the common admission seam,
   then move execution jobs to run-ID-only arguments;
 - keep a versioned legacy worker/decoder until pre-upgrade River jobs have
@@ -1523,8 +1539,9 @@ non-actionable SQL warnings while retaining Python's honest runtime warning.
 Phase 2 is complete. The remaining universal-ledger gap is broader than this
 phase: direct one-asset, Build-needed, onboarding, and embedded execution paths
 still use the common completion seam without scheduler RunSpecs. Durable
-schedule occurrences, variables, and deploy/schedule plan integration continue
-in Phase 3 and the earlier Phase 0b/0c workstreams.
+schedule occurrences/attempts, variables, and deploy/schedule plan integration
+are now implemented; the separate signal-to-execution job and direct paths
+continue in the earlier Phase 0b/0c workstreams.
 
 ### Phase 3: Deploy and schedule integration
 
@@ -1570,8 +1587,9 @@ and pipeline slot. A blocked plan becomes a failed auditable run without
 physical execution, and its durable blocked decision survives a crash before
 failure finalization. Row-level `Run pinned` now loads the pin and overrides on
 the server while retaining manual/no-watermark provenance. Phase 3 is complete;
-the broader universal direct-path ledger and durable occurrence/attempt model
-remain in the earlier Phase 0b/0c workstream.
+the broader universal direct-path ledger and run-ID-only scheduled execution
+job remain in the earlier Phase 0b/0c workstream. Durable occurrence identity
+and numbered attempts are covered by the later Phase 0b checkpoint above.
 
 ### Phase 4: optional policy and automation
 

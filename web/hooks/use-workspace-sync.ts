@@ -12,7 +12,9 @@ import {
 import { getWorkspace } from "@/lib/api";
 import type { StalenessUpdatedEvent } from "@/lib/api-staleness";
 import {
+  ScheduleOccurrenceEvent,
   SchedulerRunEvent,
+  scheduleOccurrenceEventAtom,
   schedulerRunEventAtom,
   stalenessEventAtom,
 } from "@/lib/atoms/domains/results";
@@ -84,6 +86,19 @@ function isSchedulerRunEvent(payload: unknown): payload is SchedulerRunEvent {
   );
 }
 
+function isScheduleOccurrenceEvent(payload: unknown): payload is ScheduleOccurrenceEvent {
+  return (
+    typeof payload === "object" &&
+    payload !== null &&
+    "type" in payload &&
+    payload.type === "schedule.occurrence" &&
+    "pipeline_uuid" in payload &&
+    typeof payload.pipeline_uuid === "string" &&
+    "environment" in payload &&
+    typeof payload.environment === "string"
+  );
+}
+
 function isWorkspaceEvent(payload: unknown): payload is WorkspaceEvent {
   return (
     typeof payload === "object" &&
@@ -106,6 +121,7 @@ export function useWorkspaceSync() {
   const workspace = useAtomValue(workspaceAtom);
   const setWorkspace = useSetAtom(workspaceAtom);
   const setSchedulerRunEvent = useSetAtom(schedulerRunEventAtom);
+  const setScheduleOccurrenceEvent = useSetAtom(scheduleOccurrenceEventAtom);
   const setStalenessEvent = useSetAtom(stalenessEventAtom);
   const setWorkspaceSyncSource = useSetAtom(workspaceSyncSourceAtom);
   const setServerOnline = useSetAtom(serverOnlineAtom);
@@ -171,6 +187,11 @@ export function useWorkspaceSync() {
 
         if (isSchedulerRunEvent(payload)) {
           setSchedulerRunEvent(payload);
+          return;
+        }
+
+        if (isScheduleOccurrenceEvent(payload)) {
+          setScheduleOccurrenceEvent(payload);
           return;
         }
 

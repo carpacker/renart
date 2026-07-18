@@ -10,7 +10,7 @@ import {
   type SchedulerOwnership,
   type UpsertEnvScheduleInput,
 } from "@/lib/api-env-schedules";
-import { schedulerRunEventAtom } from "@/lib/atoms/domains/results";
+import { scheduleOccurrenceEventAtom, schedulerRunEventAtom } from "@/lib/atoms/domains/results";
 
 export function envScheduleKey(schedule: Pick<EnvSchedule, "pipeline_uuid" | "environment">) {
   return `${schedule.pipeline_uuid}::${schedule.environment}`;
@@ -19,6 +19,7 @@ export function envScheduleKey(schedule: Pick<EnvSchedule, "pipeline_uuid" | "en
 // useEnvSchedules manages the per-(pipeline, environment) schedule rows.
 export function useEnvSchedules() {
   const runEvent = useAtomValue(schedulerRunEventAtom);
+  const occurrenceEvent = useAtomValue(scheduleOccurrenceEventAtom);
   const [schedules, setSchedules] = useState<EnvSchedule[]>([]);
   const [archived, setArchived] = useState<EnvSchedule[]>([]);
   const [ownership, setOwnership] = useState<SchedulerOwnership | null>(null);
@@ -54,10 +55,20 @@ export function useEnvSchedules() {
 
   // Run lifecycle events update last-run displays.
   useEffect(() => {
-    if (runEvent?.type === "run.finished" || runEvent?.type === "run.started") {
+    if (
+      runEvent?.type === "run.queued" ||
+      runEvent?.type === "run.finished" ||
+      runEvent?.type === "run.started"
+    ) {
       void refresh();
     }
   }, [refresh, runEvent]);
+
+  useEffect(() => {
+    if (occurrenceEvent?.type === "schedule.occurrence") {
+      void refresh();
+    }
+  }, [occurrenceEvent, refresh]);
 
   const canMutate = ownership?.state === "owner";
   const ownershipReason =

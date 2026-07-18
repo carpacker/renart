@@ -65,6 +65,42 @@ const (
 	ScheduleStatusDelegated ScheduleStatus = "delegated"
 )
 
+// ScheduleOccurrenceStatus describes the durable lifecycle of one actual
+// due/catch-up interval. It is independent from River's temporary job state.
+type ScheduleOccurrenceStatus string
+
+const (
+	ScheduleOccurrencePending   ScheduleOccurrenceStatus = "pending"
+	ScheduleOccurrenceAdmitting ScheduleOccurrenceStatus = "admitting"
+	ScheduleOccurrenceActive    ScheduleOccurrenceStatus = "active"
+	ScheduleOccurrenceSuccess   ScheduleOccurrenceStatus = "success"
+	ScheduleOccurrenceFailed    ScheduleOccurrenceStatus = "failed"
+	ScheduleOccurrenceCancelled ScheduleOccurrenceStatus = "cancelled"
+)
+
+// ScheduleOccurrence is the durable identity shared by duplicate signals and
+// all retry attempts for one normalized half-open schedule interval.
+type ScheduleOccurrence struct {
+	Key           string                   `json:"key"`
+	PipelineUUID  string                   `json:"pipeline_uuid"`
+	Environment   string                   `json:"environment"`
+	IntervalStart time.Time                `json:"interval_start"`
+	IntervalEnd   time.Time                `json:"interval_end"`
+	Status        ScheduleOccurrenceStatus `json:"status"`
+	CurrentRunID  string                   `json:"current_run_id,omitempty"`
+	AttemptCount  int                      `json:"attempt_count"`
+	CreatedAt     time.Time                `json:"created_at"`
+	UpdatedAt     time.Time                `json:"updated_at"`
+}
+
+// DeferredScheduleOccurrence is the small public projection shown on a
+// schedule row while a due interval is waiting for planning or the run slot.
+type DeferredScheduleOccurrence struct {
+	IntervalStart time.Time `json:"interval_start"`
+	IntervalEnd   time.Time `json:"interval_end"`
+	AttemptCount  int       `json:"attempt_count"`
+}
+
 const (
 	// ArchivedReasonMissing marks reconciler tombstones (pipeline file gone,
 	// e.g. branch switch); these auto-restore when the file reappears.
@@ -94,9 +130,10 @@ type EnvSchedule struct {
 	UpdatedAt      time.Time      `json:"updated_at"`
 
 	// Resolved presentation fields (not persisted).
-	PipelineID   string       `json:"pipeline_id,omitempty"` // path-encoded API ID
-	PipelineName string       `json:"pipeline_name,omitempty"`
-	LastRun      *PipelineRun `json:"last_run,omitempty"`
+	PipelineID         string                      `json:"pipeline_id,omitempty"` // path-encoded API ID
+	PipelineName       string                      `json:"pipeline_name,omitempty"`
+	LastRun            *PipelineRun                `json:"last_run,omitempty"`
+	DeferredOccurrence *DeferredScheduleOccurrence `json:"deferred_occurrence,omitempty"`
 }
 
 // PipelineRef resolves a stable pipeline UUID to its current workspace

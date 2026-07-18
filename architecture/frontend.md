@@ -205,7 +205,11 @@ not underscore-flattened route hacks.
   Schedule creation accepts an optional JSON object, validates it against the
   exact chosen deployment, and explicitly chooses an existing executable
   deployment or reviews and deploys the saved workspace before pinning the
-  returned version. `Run pinned #N` calls the row-owned endpoint, so the browser
+  returned version. A due interval waiting for planning or the pipeline slot is
+  exposed as `Run waiting`; after a failed/cancelled attempt it becomes `Retry
+  waiting`. Its tooltip shows only the retained interval, and a dedicated
+  `schedule.occurrence` SSE event refreshes the schedule response without
+  polling or exposing the private occurrence key. `Run pinned #N` calls the row-owned endpoint, so the browser
   never has to resend private values. Standalone deployment never changes
   existing pins implicitly; explicit multi-schedule promotion is one
   compare-and-swap batch. The

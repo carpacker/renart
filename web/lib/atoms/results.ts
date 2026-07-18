@@ -35,6 +35,12 @@ export type SchedulerRunEvent =
   | { type: "run.step"; run: PipelineRunStep }
   | { type: "run.unit"; run: { run_id: string; unit: PipelineRunUnit } };
 
+export type ScheduleOccurrenceEvent = {
+  type: "schedule.occurrence";
+  pipeline_uuid: string;
+  environment: string;
+};
+
 export type AssetResultsState = {
   resultTab: AssetResultTab;
   selectedMaterializeEntryId: string | null;
@@ -50,5 +56,7 @@ export const assetResultsAtom = atom<AssetResultsState>({
 export const changedAssetIdsAtom = atom<Set<string>>(new Set<string>());
 
 export const schedulerRunEventAtom = atom<SchedulerRunEvent | null>(null);
+
+export const scheduleOccurrenceEventAtom = atom<ScheduleOccurrenceEvent | null>(null);
 
 export const stalenessEventAtom = atom<StalenessUpdatedEvent | null>(null);

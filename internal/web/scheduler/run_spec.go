@@ -108,6 +108,7 @@ type runScheduleIdentity struct {
 	Environment       string `json:"environment"`
 	Cron              string `json:"cron,omitempty"`
 	Timezone          string `json:"timezone,omitempty"`
+	OccurrenceKey     string `json:"occurrence_key,omitempty"`
 	AdvancesWatermark bool   `json:"advances_watermark"`
 }
 
@@ -177,6 +178,23 @@ func (spec runSpecV1) validate() error {
 		}
 		if spec.Requested.Start == nil || spec.Requested.End == nil {
 			return errors.New("scheduled run spec requires an exact interval")
+		}
+		if occurrenceKey := strings.TrimSpace(spec.Schedule.OccurrenceKey); occurrenceKey != "" {
+			if err := validateRunIdentityDigest("schedule occurrence_key", occurrenceKey); err != nil {
+				return err
+			}
+			occurrence, err := newScheduleOccurrence(
+				spec.Schedule.PipelineUUID,
+				spec.Schedule.Environment,
+				*spec.Requested.Start,
+				*spec.Requested.End,
+			)
+			if err != nil {
+				return err
+			}
+			if occurrence.Key != occurrenceKey {
+				return errors.New("scheduled run spec occurrence key does not match its normalized interval")
+			}
 		}
 		if spec.Source.Kind != RunSourceSnapshot {
 			return errors.New("scheduled run spec requires an immutable snapshot source")
@@ -390,6 +408,7 @@ func scheduledRunSpec(run PipelineRun, args pipelineRunJobArgs) runSpecV1 {
 			Environment:       strings.TrimSpace(run.Environment),
 			Cron:              strings.TrimSpace(args.Schedule),
 			Timezone:          strings.TrimSpace(args.Timezone),
+			OccurrenceKey:     strings.TrimSpace(args.OccurrenceKey),
 			AdvancesWatermark: true,
 		},
 	}

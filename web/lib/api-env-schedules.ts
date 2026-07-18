@@ -28,6 +28,11 @@ export type EnvSchedule = {
   pipeline_id?: string;
   pipeline_name?: string;
   last_run?: PipelineRun;
+  deferred_occurrence?: {
+    interval_start: string;
+    interval_end: string;
+    attempt_count: number;
+  };
 };
 
 export type EnvSchedulesResponse = {

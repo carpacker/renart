@@ -127,6 +127,9 @@ type pipelineRunJobArgs struct {
 	ConfirmedEnvironment string `json:"confirmed_environment,omitempty"`
 	FullRefresh          bool   `json:"full_refresh,omitempty"`
 	SensorMode           string `json:"sensor_mode,omitempty"`
+	// OccurrenceKey is derived inside the due-signal worker after the interval
+	// is normalized. It is never accepted from or persisted as queue behavior.
+	OccurrenceKey string `json:"-"`
 }
 
 func (pipelineRunJobArgs) Kind() string { return pipelineRunJobKind }
@@ -950,6 +953,15 @@ func (s *Service) ListAllEnvSchedules(ctx context.Context) (live []EnvSchedule, 
 				row.LastRun = &lastRun
 			}
 		}
+		deferred, foundDeferred, deferredErr := s.store.DeferredScheduleOccurrence(
+			ctx, row.PipelineUUID, row.Environment,
+		)
+		if deferredErr != nil {
+			return nil, nil, deferredErr
+		}
+		if foundDeferred {
+			row.DeferredOccurrence = &deferred
+		}
 		if row.Status == ScheduleStatusArchived {
 			archived = append(archived, row)
 		} else {
@@ -1419,6 +1431,9 @@ func (s *Service) prepareRun(ctx context.Context, riverJobID int64, args pipelin
 		if err := s.store.validateActiveRunSpecSlotBinding(ctx, run, spec); err != nil {
 			return PipelineRun{}, runSpecV1{}, false, &invalidRunSpecError{RunID: run.ID, Err: err}
 		}
+		if err := s.store.validateActiveRunOccurrenceBinding(ctx, run, spec); err != nil {
+			return PipelineRun{}, runSpecV1{}, false, &invalidRunSpecError{RunID: run.ID, Err: err}
+		}
 		plan, foundPlan, err := s.store.GetRunPlan(ctx, run.ID)
 		if err != nil {
 			return PipelineRun{}, runSpecV1{}, false, err
@@ -1474,6 +1489,19 @@ func (s *Service) prepareRun(ctx context.Context, riverJobID int64, args pipelin
 		start = *explicitStart
 		end = *explicitEnd
 	}
+	occurrence, err := newScheduleOccurrence(pipelineUUID, args.Environment, start, end)
+	if err != nil {
+		return PipelineRun{}, runSpecV1{}, false, &invalidScheduleSignalError{err: err}
+	}
+	occurrence, _, err = s.store.EnsureScheduleOccurrence(ctx, occurrence)
+	if err != nil {
+		return PipelineRun{}, runSpecV1{}, false, err
+	}
+	s.publishScheduleOccurrenceEvent(occurrence)
+	if occurrence.Status == ScheduleOccurrenceActive || occurrence.Status == ScheduleOccurrenceSuccess {
+		return PipelineRun{}, runSpecV1{}, false, nil
+	}
+	args.OccurrenceKey = occurrence.Key
 	run := PipelineRun{
 		PipelineID:        encodedPipelineID,
 		PipelineUUID:      pipelineUUID,
@@ -1515,8 +1543,12 @@ func (s *Service) prepareRun(ctx context.Context, riverJobID int64, args pipelin
 	if err := spec.validate(); err != nil {
 		return PipelineRun{}, runSpecV1{}, false, &invalidScheduleSignalError{err: err}
 	}
-	id, err := s.store.CreateWithSpecAndPlan(ctx, run, spec, planned.Plan)
+	id, err := s.store.CreateScheduleOccurrenceAttemptWithSpecAndPlan(ctx, occurrence, run, spec, planned.Plan)
 	if err != nil {
+		var alreadyAdmitted *ScheduleOccurrenceAlreadyAdmittedError
+		if errors.As(err, &alreadyAdmitted) {
+			return PipelineRun{}, runSpecV1{}, false, nil
+		}
 		return PipelineRun{}, runSpecV1{}, false, err
 	}
 	run.ID = id
@@ -1782,6 +1814,17 @@ func (s *Service) publishRunEvent(eventType string, payload any) {
 		return
 	}
 	s.publish(map[string]any{"type": eventType, "run": payload})
+}
+
+func (s *Service) publishScheduleOccurrenceEvent(occurrence ScheduleOccurrence) {
+	if s.publish == nil {
+		return
+	}
+	s.publish(map[string]any{
+		"type":          "schedule.occurrence",
+		"pipeline_uuid": occurrence.PipelineUUID,
+		"environment":   occurrence.Environment,
+	})
 }
 
 func pipelineRunInsertOpts() *river.InsertOpts {
