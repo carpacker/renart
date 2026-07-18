@@ -271,7 +271,7 @@ test.describe("sql intellisense live", () => {
     );
 
     await openCustomersEditor(page, liveApp.baseURL);
-    await replaceEditorContent(
+    await replaceEditorContentByInsertText(
       page,
       [
         "SELECT",
