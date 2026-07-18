@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/riverqueue/river"
+	"github.com/riverqueue/river/riverdriver/riversqlite"
 	"github.com/riverqueue/river/rivertype"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -242,6 +243,233 @@ func TestScheduledWorkerDoesNotReexecuteCompletedOccurrence(t *testing.T) {
 	assert.EqualValues(t, 1, runnerCalls.Load())
 	assert.Equal(t, 1, countRows(t, store, `SELECT COUNT(*) FROM pipeline_runs`))
 	assert.Equal(t, 1, countRows(t, store, `SELECT COUNT(*) FROM schedule_occurrences`))
+}
+
+func TestV2ScheduleSignalAtomicallyQueuesRunIDOnlyExecution(t *testing.T) {
+	t.Parallel()
+	store, err := OpenStore(filepath.Join(t.TempDir(), "state.db"))
+	require.NoError(t, err)
+	defer store.Close()
+	client, err := river.NewClient(riversqlite.New(store.db), &river.Config{})
+	require.NoError(t, err)
+	var runnerCalls atomic.Int32
+	service := New(Options{
+		Store: store,
+		ResolvePipelineRef: func(context.Context, string) (PipelineRef, bool) {
+			return PipelineRef{EncodedID: "pipeline-id", Name: "analytics"}, true
+		},
+		PlanScheduledRun: testScheduledRunPlan,
+		Runner: func(_ context.Context, req RunRequest, _ func(string)) RunResult {
+			runnerCalls.Add(1)
+			require.True(t, req.Scheduled)
+			assert.Equal(t, map[string]any{"region": "eu"}, req.VariableOverrides)
+			if unitErr := completeTestScheduledRunUnits(req); unitErr != nil {
+				return RunResult{Status: "error", Error: unitErr.Error()}
+			}
+			return RunResult{Status: "ok"}
+		},
+	})
+	start := time.Date(2026, 7, 18, 8, 0, 0, 0, time.UTC)
+	args := scheduleSignalJobArgs{
+		PipelineUUID: "pipeline-uuid", PipelineName: "analytics", Environment: "prod",
+		Schedule: "@hourly", Timezone: "UTC",
+		Start: start.Format(time.RFC3339Nano), End: start.Add(time.Hour).Format(time.RFC3339Nano),
+		SnapshotVersionID: "snapshot-id", Variables: map[string]any{"region": "eu"},
+	}
+	signalWorker := &scheduleSignalWorker{service: service, client: client}
+	require.NoError(t, signalWorker.Work(context.Background(), &river.Job[scheduleSignalJobArgs]{
+		JobRow: &rivertype.JobRow{ID: 55}, Args: args,
+	}))
+	assert.Zero(t, runnerCalls.Load(), "the lightweight signal must not execute physical work")
+
+	runs, err := store.List(context.Background(), RunFilter{PipelineID: "pipeline-id"})
+	require.NoError(t, err)
+	require.Len(t, runs.Runs, 1)
+	run := runs.Runs[0]
+	require.NotNil(t, run.RiverJobID)
+	var kind, body string
+	require.NoError(t, store.db.QueryRowContext(context.Background(), `
+		SELECT kind, json(args) FROM river_job WHERE id = ?`, *run.RiverJobID).Scan(&kind, &body))
+	assert.Equal(t, pipelineRunJobKind, kind)
+	assert.JSONEq(t, `{"run_id":"`+run.ID+`"}`, body)
+	assert.Equal(t, 1, countRows(t, store, `SELECT COUNT(*) FROM schedule_occurrence_attempts`))
+
+	// A second signal while the occurrence is active is an idempotent no-op.
+	require.NoError(t, signalWorker.Work(context.Background(), &river.Job[scheduleSignalJobArgs]{
+		JobRow: &rivertype.JobRow{ID: 56}, Args: args,
+	}))
+	assert.Equal(t, 1, countRows(t, store, `SELECT COUNT(*) FROM pipeline_runs`))
+	assert.Equal(t, 1, countRows(t, store, `SELECT COUNT(*) FROM river_job WHERE kind = ?`, pipelineRunJobKind))
+
+	executionWorker := &pipelineRunWorker{service: service}
+	require.NoError(t, executionWorker.Work(context.Background(), &river.Job[pipelineRunJobArgs]{
+		JobRow: &rivertype.JobRow{ID: *run.RiverJobID}, Args: pipelineRunJobArgs{RunID: run.ID},
+	}))
+	assert.EqualValues(t, 1, runnerCalls.Load())
+	finished, _, _, err := store.Get(context.Background(), run.ID)
+	require.NoError(t, err)
+	assert.Equal(t, RunStatusSuccess, finished.Status)
+	occurrence, err := newScheduleOccurrence("pipeline-uuid", "prod", start, start.Add(time.Hour))
+	require.NoError(t, err)
+	persisted, found, err := store.GetScheduleOccurrence(context.Background(), occurrence.Key)
+	require.NoError(t, err)
+	require.True(t, found)
+	assert.Equal(t, ScheduleOccurrenceSuccess, persisted.Status)
+}
+
+func TestV2ScheduleSignalRollsBackAttemptWhenExecutionJobInsertFails(t *testing.T) {
+	t.Parallel()
+	store, err := OpenStore(filepath.Join(t.TempDir(), "state.db"))
+	require.NoError(t, err)
+	defer store.Close()
+	ctx := context.Background()
+	client, err := river.NewClient(riversqlite.New(store.db), &river.Config{})
+	require.NoError(t, err)
+	service := New(Options{
+		Store: store,
+		ResolvePipelineRef: func(context.Context, string) (PipelineRef, bool) {
+			return PipelineRef{EncodedID: "pipeline-id", Name: "analytics"}, true
+		},
+		PlanScheduledRun: testScheduledRunPlan,
+	})
+	require.NoError(t, func() error {
+		_, triggerErr := store.db.ExecContext(ctx, `
+			CREATE TRIGGER reject_scheduled_execution_job
+			BEFORE INSERT ON river_job
+			WHEN NEW.kind = 'renart-pipeline-run'
+			BEGIN
+				SELECT RAISE(ABORT, 'injected scheduled dispatch failure');
+			END`)
+		return triggerErr
+	}())
+	start := time.Date(2026, 7, 18, 8, 0, 0, 0, time.UTC)
+	err = service.admitScheduledSignal(ctx, client, scheduleSignalJobArgs{
+		PipelineUUID: "pipeline-uuid", Environment: "prod",
+		Start: start.Format(time.RFC3339Nano), End: start.Add(time.Hour).Format(time.RFC3339Nano),
+		SnapshotVersionID: "snapshot-id",
+	}.admissionArgs())
+	require.ErrorContains(t, err, "injected scheduled dispatch failure")
+
+	occurrence, err := newScheduleOccurrence("pipeline-uuid", "prod", start, start.Add(time.Hour))
+	require.NoError(t, err)
+	persisted, found, err := store.GetScheduleOccurrence(ctx, occurrence.Key)
+	require.NoError(t, err)
+	require.True(t, found)
+	assert.Equal(t, ScheduleOccurrencePending, persisted.Status)
+	assert.Zero(t, persisted.AttemptCount)
+	assert.Equal(t, 0, countRows(t, store, `SELECT COUNT(*) FROM pipeline_runs`))
+	assert.Equal(t, 0, countRows(t, store, `SELECT COUNT(*) FROM pipeline_run_specs`))
+	assert.Equal(t, 0, countRows(t, store, `SELECT COUNT(*) FROM schedule_occurrence_attempts`))
+	assert.Equal(t, 0, countRows(t, store, `SELECT COUNT(*) FROM river_job WHERE kind = ?`, pipelineRunJobKind))
+}
+
+func TestV2ScheduleSignalSnoozesBehindActivePipelineRun(t *testing.T) {
+	t.Parallel()
+	store, err := OpenStore(filepath.Join(t.TempDir(), "state.db"))
+	require.NoError(t, err)
+	defer store.Close()
+	ctx := context.Background()
+	client, err := river.NewClient(riversqlite.New(store.db), &river.Config{})
+	require.NoError(t, err)
+	manual := PipelineRun{
+		ID: "manual-owner", PipelineID: "pipeline-id", PipelineUUID: "pipeline-uuid",
+		Pipeline: "analytics", Environment: "dev", Trigger: RunTriggerManual, Status: RunStatusQueued,
+	}
+	_, err = store.CreateWithSpec(ctx, manual, manualRunSpec(manual, RunSourceWorkingTree, ""))
+	require.NoError(t, err)
+	service := New(Options{
+		Store: store,
+		ResolvePipelineRef: func(context.Context, string) (PipelineRef, bool) {
+			return PipelineRef{EncodedID: "pipeline-id", Name: "analytics"}, true
+		},
+		PlanScheduledRun: testScheduledRunPlan,
+	})
+	start := time.Date(2026, 7, 18, 8, 0, 0, 0, time.UTC)
+	args := scheduleSignalJobArgs{
+		PipelineUUID: "pipeline-uuid", Environment: "prod",
+		Start: start.Format(time.RFC3339Nano), End: start.Add(time.Hour).Format(time.RFC3339Nano),
+		SnapshotVersionID: "snapshot-id",
+	}
+	err = (&scheduleSignalWorker{service: service, client: client}).Work(
+		ctx,
+		&river.Job[scheduleSignalJobArgs]{JobRow: &rivertype.JobRow{ID: 77}, Args: args},
+	)
+	var snooze *river.JobSnoozeError
+	require.ErrorAs(t, err, &snooze)
+
+	occurrence, err := newScheduleOccurrence("pipeline-uuid", "prod", start, start.Add(time.Hour))
+	require.NoError(t, err)
+	persisted, found, err := store.GetScheduleOccurrence(ctx, occurrence.Key)
+	require.NoError(t, err)
+	require.True(t, found)
+	assert.Equal(t, ScheduleOccurrencePending, persisted.Status)
+	assert.Zero(t, persisted.AttemptCount)
+	assert.Equal(t, 1, countRows(t, store, `SELECT COUNT(*) FROM pipeline_runs`))
+	assert.Equal(t, 0, countRows(t, store, `SELECT COUNT(*) FROM river_job WHERE kind = ?`, pipelineRunJobKind))
+}
+
+func TestV2ScheduleSignalRecoveryRequeuesSignalAndRetriesFailedAttempt(t *testing.T) {
+	store, err := OpenStore(filepath.Join(t.TempDir(), "state.db"))
+	require.NoError(t, err)
+	defer store.Close()
+	ctx := context.Background()
+	client, err := river.NewClient(riversqlite.New(store.db), &river.Config{})
+	require.NoError(t, err)
+	service := New(Options{
+		Store: store,
+		ResolvePipelineRef: func(context.Context, string) (PipelineRef, bool) {
+			return PipelineRef{EncodedID: "pipeline-id", Name: "analytics"}, true
+		},
+		PlanScheduledRun: testScheduledRunPlan,
+	})
+	start := time.Date(2026, 7, 18, 8, 0, 0, 0, time.UTC)
+	args := scheduleSignalJobArgs{
+		PipelineUUID: "pipeline-uuid", Environment: "prod",
+		Start: start.Format(time.RFC3339Nano), End: start.Add(time.Hour).Format(time.RFC3339Nano),
+		SnapshotVersionID: "snapshot-id",
+	}
+	signalJobID := insertTestRiverJob(t, store, args)
+	markTestRiverJobRunning(t, store, signalJobID)
+	require.NoError(t, service.admitScheduledSignal(ctx, client, args.admissionArgs()))
+
+	firstRuns, err := store.List(ctx, RunFilter{PipelineID: "pipeline-id"})
+	require.NoError(t, err)
+	require.Len(t, firstRuns.Runs, 1)
+	firstRun := firstRuns.Runs[0]
+	require.NotNil(t, firstRun.RiverJobID)
+	markTestRiverJobRunning(t, store, *firstRun.RiverJobID)
+
+	recovery, err := store.ReconcileInterruptedState(ctx, orphanedRunError)
+	require.NoError(t, err)
+	assert.Equal(t, []string{firstRun.ID}, recovery.RunIDs)
+	assert.EqualValues(t, 1, recovery.RiverJobsRequeued)
+	assert.EqualValues(t, 1, recovery.RiverJobsCancelled)
+	assertRiverJobState(t, store, signalJobID, rivertype.JobStateAvailable)
+	assertRiverJobState(t, store, *firstRun.RiverJobID, rivertype.JobStateCancelled)
+	failed, _, _, err := store.Get(ctx, firstRun.ID)
+	require.NoError(t, err)
+	assert.Equal(t, RunStatusFailed, failed.Status)
+
+	occurrence, err := newScheduleOccurrence("pipeline-uuid", "prod", start, start.Add(time.Hour))
+	require.NoError(t, err)
+	failedOccurrence, found, err := store.GetScheduleOccurrence(ctx, occurrence.Key)
+	require.NoError(t, err)
+	require.True(t, found)
+	assert.Equal(t, ScheduleOccurrenceFailed, failedOccurrence.Status)
+	assert.Equal(t, 1, failedOccurrence.AttemptCount)
+
+	require.NoError(t, (&scheduleSignalWorker{service: service, client: client}).Work(
+		ctx,
+		&river.Job[scheduleSignalJobArgs]{JobRow: &rivertype.JobRow{ID: signalJobID}, Args: args},
+	))
+	retried, found, err := store.GetScheduleOccurrence(ctx, occurrence.Key)
+	require.NoError(t, err)
+	require.True(t, found)
+	assert.Equal(t, ScheduleOccurrenceActive, retried.Status)
+	assert.Equal(t, 2, retried.AttemptCount)
+	assert.NotEqual(t, firstRun.ID, retried.CurrentRunID)
+	assert.Equal(t, 2, countRows(t, store, `SELECT COUNT(*) FROM pipeline_runs`))
+	assert.Equal(t, 2, countRows(t, store, `SELECT COUNT(*) FROM schedule_occurrence_attempts`))
 }
 
 func scheduledOccurrenceFixture(t testing.TB) (

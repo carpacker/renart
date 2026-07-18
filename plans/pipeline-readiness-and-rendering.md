@@ -1172,8 +1172,8 @@ unlink the only lock while a server still owned the workspace; it remains
 separate from the scheduler ownership/handoff workstream below.
 
 This began as only the scheduler-backed foundation. Direct and inline
-execution, a separate signal-to-execution job, and exact re-execution remain
-open; effective variables, asset/window execution units,
+execution plus exact re-execution remain open; effective variables,
+asset/window execution units, run-ID-only scheduled dispatch,
 target/latest-writer identity, and durable schedule occurrences/attempts have
 since landed in the checkpoints below.
 
@@ -1186,10 +1186,18 @@ reuse an active/successful occurrence, while failure/cancellation permits a
 new numbered attempt. Slot contention rolls back the attempted run but leaves
 the interval visibly pending in the schedules API/UI, refreshed by SSE. Run
 terminalization and scheduled-success watermark advancement update the
-occurrence in the same transaction. River `ByArgs` remains a defense in depth,
-and the compatibility due signal still performs physical execution; the
-separate run-ID-only execution job and universal direct/inline ledger remain
-open.
+occurrence in the same transaction. River `ByArgs` remains a defense in depth.
+
+Run-ID-only scheduled dispatch checkpoint (2026-07-18): new periodic and
+catch-up work uses a separate v2 due-signal kind containing the captured
+schedule revision and normalized interval. Its worker plans and atomically
+commits the occurrence attempt, run, RunSpec, retained plan/units, slot,
+run-ID-only River execution job, and run/job link, then returns without physical
+execution. The ordinary run worker reconstructs all behavior from the stored
+RunSpec. Startup requeues a claimed signal unchanged; if admission committed,
+the occurrence makes the duplicate signal a no-op while the linked execution
+job is recovered normally. Pre-v2 combined jobs keep their strict legacy
+decoder until they drain. The universal direct/inline ledger remains open.
 
 This is the architectural prerequisite for the pipeline plan:
 
@@ -1201,10 +1209,9 @@ This is the architectural prerequisite for the pipeline plan:
   semantics, and enable variable overrides only with that freshness contract;
 - make run-slot admission atomic and return typed active-run conflicts;
 - retain the shipped durable schedule-occurrence identity, transactional
-  attempt/run/slot admission, and visible deferred/retry state while moving the
-  resulting execution job to run-ID-only arguments;
-- route manual, periodic, and catch-up work through the common admission seam,
-  then move execution jobs to run-ID-only arguments;
+  attempt/run/slot/job admission, and visible deferred/retry state;
+- extend the common RunSpec/dispatch seam from shipped manual, periodic, and
+  catch-up work to direct and inline paths;
 - keep a versioned legacy worker/decoder until pre-upgrade River jobs have
   drained;
 - verify snapshot integrity, execute each deployment in an isolated per-run
@@ -1540,8 +1547,8 @@ Phase 2 is complete. The remaining universal-ledger gap is broader than this
 phase: direct one-asset, Build-needed, onboarding, and embedded execution paths
 still use the common completion seam without scheduler RunSpecs. Durable
 schedule occurrences/attempts, variables, and deploy/schedule plan integration
-are now implemented; the separate signal-to-execution job and direct paths
-continue in the earlier Phase 0b/0c workstreams.
+plus separate signal-to-execution jobs are now implemented; direct paths
+continue in the earlier Phase 0b workstream.
 
 ### Phase 3: Deploy and schedule integration
 
@@ -1587,9 +1594,9 @@ and pipeline slot. A blocked plan becomes a failed auditable run without
 physical execution, and its durable blocked decision survives a crash before
 failure finalization. Row-level `Run pinned` now loads the pin and overrides on
 the server while retaining manual/no-watermark provenance. Phase 3 is complete;
-the broader universal direct-path ledger and run-ID-only scheduled execution
-job remain in the earlier Phase 0b/0c workstream. Durable occurrence identity
-and numbered attempts are covered by the later Phase 0b checkpoint above.
+the broader universal direct-path ledger remains in the earlier Phase 0b
+workstream. Durable occurrence identity, numbered attempts, and run-ID-only
+scheduled dispatch are covered by the later Phase 0b checkpoints above.
 
 ### Phase 4: optional policy and automation
 

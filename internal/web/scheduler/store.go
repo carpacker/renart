@@ -973,9 +973,10 @@ type interruptedRiverJob struct {
 // Renart runs already marked running are failed, as are queued rows that no
 // longer have a runnable River job. Available/pending/retryable/scheduled jobs
 // are preserved. A claimed schedule signal that has not admitted a run yet is
-// returned to River unchanged instead of losing its exact interval. Open steps
-// are closed, derived-state replay is marked pending, and admitted abandoned
-// jobs are terminalized as cancelled in the same SQLite transaction.
+// returned to River unchanged instead of losing its exact interval/revision.
+// This covers both the v2 signal kind and legacy scheduled pipeline-run jobs.
+// Open steps are closed, derived-state replay is marked pending, and admitted
+// abandoned jobs are terminalized as cancelled in the same SQLite transaction.
 func (s *Store) ReconcileInterruptedState(ctx context.Context, reason string) (InterruptedStateRecovery, error) {
 	var recovery InterruptedStateRecovery
 	tx, err := s.db.BeginTx(ctx, nil)
@@ -988,10 +989,11 @@ func (s *Store) ReconcileInterruptedState(ctx context.Context, reason string) (I
 		SELECT id, attempt, kind, json(args)
 		FROM river_job
 		WHERE queue = ?
-		  AND kind IN (?, ?)
+		  AND kind IN (?, ?, ?)
 		  AND state = ?
 		ORDER BY id`,
-		pipelineRunQueue, pipelineRunJobKind, housekeepingJobKind, string(rivertype.JobStateRunning),
+		pipelineRunQueue, pipelineRunJobKind, scheduleSignalJobKind, housekeepingJobKind,
+		string(rivertype.JobStateRunning),
 	)
 	if err != nil {
 		return recovery, err
@@ -1052,6 +1054,29 @@ func (s *Store) ReconcileInterruptedState(ctx context.Context, reason string) (I
 	// durable arguments. New admissions persist run, spec, job, and link in one
 	// transaction, but keep this decoder until pre-upgrade jobs have drained.
 	for _, job := range jobs {
+		if job.kind == scheduleSignalJobKind {
+			result, err := tx.ExecContext(ctx, `
+				UPDATE river_job
+				SET state = ?,
+				    attempt = CASE WHEN attempt > 0 THEN attempt - 1 ELSE 0 END,
+				    scheduled_at = ?,
+				    finalized_at = NULL
+				WHERE id = ? AND state = ?`,
+				string(rivertype.JobStateAvailable), formatTime(time.Now().UTC()), job.id,
+				string(rivertype.JobStateRunning))
+			if err != nil {
+				return recovery, err
+			}
+			rowsAffected, err := result.RowsAffected()
+			if err != nil {
+				return recovery, err
+			}
+			if rowsAffected == 1 {
+				requeuedJobs[job.id] = struct{}{}
+				recovery.RiverJobsRequeued++
+			}
+			continue
+		}
 		if job.kind != pipelineRunJobKind {
 			continue
 		}

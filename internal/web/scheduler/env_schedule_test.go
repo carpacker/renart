@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/riverqueue/river"
+	"github.com/riverqueue/river/riverdriver/riversqlite"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -322,6 +323,43 @@ func TestEnvScheduledWorkerRunsWithEnvironmentAndWatermark(t *testing.T) {
 		Environment:  "prod",
 		Trigger:      RunTriggerSchedule,
 	}}))
+}
+
+func TestCatchUpQueuesV2ScheduleSignalInsteadOfExecutionContract(t *testing.T) {
+	t.Parallel()
+	store := openEnvTestStore(t)
+	ctx := context.Background()
+	client, err := river.NewClient(riversqlite.New(store.db), &river.Config{})
+	require.NoError(t, err)
+	schedule, err := parseSchedule("@hourly", "UTC")
+	require.NoError(t, err)
+	start, end, ok := previousScheduleInterval(schedule, time.Now().UTC())
+	require.True(t, ok)
+	row := EnvSchedule{
+		PipelineUUID: "uuid-1", Environment: "prod", SnapshotVersionID: "snapshot-id",
+		Cron: "@hourly", Timezone: "UTC", CatchupPolicy: CatchupRunOnce,
+		Vars: map[string]any{"region": "eu"},
+	}
+	require.NoError(t, store.SetInterval(ctx, watermarkKey(row), start))
+	service := New(Options{Store: store})
+	require.NoError(t, service.catchUp(
+		ctx, client, row, PipelineRef{EncodedID: "pipeline-id", Name: "analytics"}, schedule,
+	))
+
+	var kind, body string
+	require.NoError(t, store.db.QueryRowContext(ctx, `
+		SELECT kind, json(args)
+		FROM river_job
+		WHERE queue = ?
+		ORDER BY id DESC
+		LIMIT 1`, pipelineRunQueue).Scan(&kind, &body))
+	assert.Equal(t, scheduleSignalJobKind, kind)
+	assert.Contains(t, body, `"pipeline_uuid":"uuid-1"`)
+	assert.Contains(t, body, `"environment":"prod"`)
+	assert.Contains(t, body, `"snapshot_version_id":"snapshot-id"`)
+	assert.Contains(t, body, `"start":"`+formatTime(start)+`"`)
+	assert.Contains(t, body, `"end":"`+formatTime(end)+`"`)
+	assert.Equal(t, 0, countRows(t, store, `SELECT COUNT(*) FROM river_job WHERE kind = ?`, pipelineRunJobKind))
 }
 
 func TestEnvScheduledWorkerFailureDoesNotAdvanceWatermark(t *testing.T) {

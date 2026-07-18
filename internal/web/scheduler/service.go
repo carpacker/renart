@@ -25,6 +25,7 @@ import (
 const (
 	pipelineRunQueue          = "renart_pipeline_runs"
 	pipelineRunJobKind        = "renart-pipeline-run"
+	scheduleSignalJobKind     = "renart-schedule-signal-v2"
 	housekeepingJobKind       = "renart-housekeeping"
 	runFinalizationTimeout    = 30 * time.Second
 	indeterminateRetryMessage = "pipeline run was retried while still marked running after its worker returned; the previous physical outcome is indeterminate, so Renart did not repeat physical execution"
@@ -108,9 +109,9 @@ type pipelineRunJobArgs struct {
 	RunID        string `json:"run_id,omitempty" river:"unique"`
 	PipelineID   string `json:"pipeline_id,omitempty" river:"unique"`
 	PipelineName string `json:"pipeline_name,omitempty"`
-	// PipelineUUID is set for per-environment scheduled runs; together with
-	// Environment and the interval it forms the unique logical-run key, so
-	// restarts, leader churn, and catch-up can never double-enqueue.
+	// The remaining fields decode pre-v2 scheduled jobs that can survive an
+	// upgrade in River. New execution jobs carry RunID only; new due intervals
+	// use scheduleSignalJobArgs below.
 	PipelineUUID      string         `json:"pipeline_uuid,omitempty" river:"unique"`
 	Environment       string         `json:"environment,omitempty" river:"unique"`
 	Trigger           RunTrigger     `json:"trigger,omitempty"`
@@ -120,9 +121,8 @@ type pipelineRunJobArgs struct {
 	End               string         `json:"end,omitempty" river:"unique"`
 	SnapshotVersionID string         `json:"snapshot_version_id,omitempty"`
 	Variables         map[string]any `json:"variables,omitempty"`
-	// Backfill and ConfirmedEnvironment are temporary Phase 0a queue fields.
-	// Manual jobs must retain destructive intent and its authorization across
-	// River persistence until the canonical durable RunSpec replaces them.
+	// These fields remain only for strict decoding of pre-RunSpec River jobs.
+	// New manual and scheduled execution jobs reconstruct behavior from RunID.
 	Backfill             bool   `json:"backfill,omitempty"`
 	ConfirmedEnvironment string `json:"confirmed_environment,omitempty"`
 	FullRefresh          bool   `json:"full_refresh,omitempty"`
@@ -133,6 +133,70 @@ type pipelineRunJobArgs struct {
 }
 
 func (pipelineRunJobArgs) Kind() string { return pipelineRunJobKind }
+
+// scheduleSignalJobArgs contains the immutable schedule revision captured at
+// firing plus its normalized interval. It is planning/admission input, never
+// the physical execution contract; the resulting worker job carries only a
+// durable run ID.
+type scheduleSignalJobArgs struct {
+	PipelineUUID      string         `json:"pipeline_uuid" river:"unique"`
+	PipelineName      string         `json:"pipeline_name,omitempty"`
+	Environment       string         `json:"environment" river:"unique"`
+	Schedule          string         `json:"schedule,omitempty"`
+	Timezone          string         `json:"timezone,omitempty"`
+	Start             string         `json:"start" river:"unique"`
+	End               string         `json:"end" river:"unique"`
+	SnapshotVersionID string         `json:"snapshot_version_id"`
+	Variables         map[string]any `json:"variables,omitempty"`
+}
+
+func (scheduleSignalJobArgs) Kind() string { return scheduleSignalJobKind }
+
+func (args scheduleSignalJobArgs) admissionArgs() pipelineRunJobArgs {
+	return pipelineRunJobArgs{
+		PipelineUUID:      args.PipelineUUID,
+		PipelineName:      args.PipelineName,
+		Environment:       args.Environment,
+		Trigger:           RunTriggerSchedule,
+		Schedule:          args.Schedule,
+		Timezone:          args.Timezone,
+		Start:             args.Start,
+		End:               args.End,
+		SnapshotVersionID: args.SnapshotVersionID,
+		Variables:         args.Variables,
+	}
+}
+
+type scheduleSignalWorker struct {
+	river.WorkerDefaults[scheduleSignalJobArgs]
+	service *Service
+	client  *river.Client[*sql.Tx]
+}
+
+func (w *scheduleSignalWorker) Work(ctx context.Context, job *river.Job[scheduleSignalJobArgs]) error {
+	var riverJobID int64
+	if job.JobRow != nil {
+		riverJobID = job.ID
+	}
+	if w.client == nil {
+		err := errors.New("River client is unavailable for scheduled admission")
+		warnPipelineRunJobSnooze("admit_schedule_occurrence", riverJobID, "", "", job.Args.PipelineUUID, err)
+		return river.JobSnooze(runSpecRetrySnoozeTime)
+	}
+	err := w.service.admitScheduledSignal(ctx, w.client, job.Args.admissionArgs())
+	if err == nil {
+		return nil
+	}
+	var invalidSignal *invalidScheduleSignalError
+	if errors.As(err, &invalidSignal) {
+		return river.JobCancel(err)
+	}
+	if errors.Is(err, ErrPipelineRunActive) {
+		return river.JobSnooze(runSpecRetrySnoozeTime)
+	}
+	warnPipelineRunJobSnooze("admit_schedule_occurrence", riverJobID, "", "", job.Args.PipelineUUID, err)
+	return river.JobSnooze(runSpecRetrySnoozeTime)
+}
 
 type pipelineRunWorker struct {
 	river.WorkerDefaults[pipelineRunJobArgs]
@@ -324,6 +388,8 @@ func (s *Service) Start(ctx context.Context) error {
 
 	workers := river.NewWorkers()
 	river.AddWorker(workers, &pipelineRunWorker{service: s})
+	signalWorker := &scheduleSignalWorker{service: s}
+	river.AddWorker(workers, signalWorker)
 	river.AddWorker(workers, &housekeepingWorker{service: s})
 	client, err := river.NewClient(riversqlite.New(s.store.db), &river.Config{
 		CompletedJobRetentionPeriod: 24 * time.Hour,
@@ -343,6 +409,7 @@ func (s *Service) Start(ctx context.Context) error {
 		s.mu.Unlock()
 		return err
 	}
+	signalWorker.client = client
 	recovery, err := s.recoverOrphanedRuns(ctx)
 	if err != nil {
 		s.mu.Lock()
@@ -634,11 +701,10 @@ func (s *Service) Reconcile(ctx context.Context) error {
 		}
 
 		jobs = append(jobs, river.NewPeriodicJob(cronPeriodicSchedule{schedule: schedule}, func() (river.JobArgs, *river.InsertOpts) {
-			args := pipelineRunJobArgs{
+			args := scheduleSignalJobArgs{
 				PipelineUUID:      row.PipelineUUID,
 				PipelineName:      ref.Name,
 				Environment:       row.Environment,
-				Trigger:           RunTriggerSchedule,
 				Schedule:          row.Cron,
 				Timezone:          row.Timezone,
 				SnapshotVersionID: row.SnapshotVersionID,
@@ -648,7 +714,7 @@ func (s *Service) Reconcile(ctx context.Context) error {
 				args.Start = start.UTC().Format(time.RFC3339Nano)
 				args.End = end.UTC().Format(time.RFC3339Nano)
 			}
-			return args, pipelineRunInsertOpts()
+			return args, scheduleSignalInsertOpts()
 		}, &river.PeriodicJobOpts{ID: "schedule:" + row.PipelineUUID + ":" + row.Environment}))
 	}
 
@@ -822,11 +888,10 @@ func (s *Service) catchUp(ctx context.Context, client *river.Client[*sql.Tx], ro
 	}
 
 	insertCatchupJob := func(start, end time.Time) error {
-		args := pipelineRunJobArgs{
+		args := scheduleSignalJobArgs{
 			PipelineUUID:      row.PipelineUUID,
 			PipelineName:      ref.Name,
 			Environment:       row.Environment,
-			Trigger:           RunTriggerSchedule,
 			Schedule:          row.Cron,
 			Timezone:          row.Timezone,
 			Start:             start.UTC().Format(time.RFC3339Nano),
@@ -834,7 +899,7 @@ func (s *Service) catchUp(ctx context.Context, client *river.Client[*sql.Tx], ro
 			SnapshotVersionID: row.SnapshotVersionID,
 			Variables:         row.Vars,
 		}
-		_, err := client.Insert(ctx, args, pipelineRunInsertOpts())
+		_, err := client.Insert(ctx, args, scheduleSignalInsertOpts())
 		return err
 	}
 
@@ -1459,16 +1524,57 @@ func (s *Service) prepareRun(ctx context.Context, riverJobID int64, args pipelin
 		return applyRunSpec(run, spec), spec, true, nil
 	}
 
-	// Per-environment scheduled runs: resolve the stable UUID to the
-	// current workspace incarnation; a missing pipeline skips silently (the
-	// reconciler will archive the schedule).
+	prepared, shouldAdmit, err := s.prepareScheduledRunAdmission(ctx, args)
+	if err != nil || !shouldAdmit {
+		return PipelineRun{}, runSpecV1{}, false, err
+	}
+	if riverJobID != 0 {
+		prepared.Run.RiverJobID = &riverJobID
+	}
+	id, err := s.store.CreateScheduleOccurrenceAttemptWithSpecAndPlan(
+		ctx, prepared.Occurrence, prepared.Run, prepared.Spec, prepared.Plan,
+	)
+	if err != nil {
+		var alreadyAdmitted *ScheduleOccurrenceAlreadyAdmittedError
+		if errors.As(err, &alreadyAdmitted) {
+			return PipelineRun{}, runSpecV1{}, false, nil
+		}
+		return PipelineRun{}, runSpecV1{}, false, err
+	}
+	prepared.Run.ID = id
+	prepared.Run = applyRunSpec(prepared.Run, prepared.Spec)
+	prepared.Run.ConfirmedPlan = &prepared.Plan
+	s.hydrateSnapshotOrdinal(ctx, &prepared.Run.SnapshotOrdinal, prepared.Run.SnapshotVersionID)
+	s.publishRunEvent("run.queued", prepared.Run)
+	if prepared.Plan.Blocked {
+		return PipelineRun{}, runSpecV1{}, false, &scheduledPlanBlockedError{
+			RunID: id,
+			err:   fmt.Errorf("scheduled plan is blocked: %s", strings.Join(prepared.Plan.Blockers, "; ")),
+		}
+	}
+	return prepared.Run, prepared.Spec, true, nil
+}
+
+type scheduledRunAdmission struct {
+	Occurrence ScheduleOccurrence
+	Run        PipelineRun
+	Spec       runSpecV1
+	Plan       PipelineRunPlan
+}
+
+func (s *Service) prepareScheduledRunAdmission(
+	ctx context.Context,
+	args pipelineRunJobArgs,
+) (scheduledRunAdmission, bool, error) {
+	// Resolve the stable UUID to the current workspace incarnation; a missing
+	// pipeline skips silently because reconciliation will archive its schedule.
 	pipelineUUID := strings.TrimSpace(args.PipelineUUID)
 	encodedPipelineID := strings.TrimSpace(args.PipelineID)
 	pipelineName := args.PipelineName
 	if pipelineUUID != "" {
 		ref, ok := s.resolveRef(ctx, pipelineUUID)
 		if !ok {
-			return PipelineRun{}, runSpecV1{}, false, nil
+			return scheduledRunAdmission{}, false, nil
 		}
 		encodedPipelineID = ref.EncodedID
 		if ref.Name != "" {
@@ -1477,13 +1583,13 @@ func (s *Service) prepareRun(ctx context.Context, riverJobID int64, args pipelin
 	}
 
 	if encodedPipelineID == "" {
-		return PipelineRun{}, runSpecV1{}, false, &invalidScheduleSignalError{err: errors.New("pipeline id is required")}
+		return scheduledRunAdmission{}, false, &invalidScheduleSignalError{err: errors.New("pipeline id is required")}
 	}
 	args.PipelineID = encodedPipelineID
 	start, end := s.scheduledWindow(ctx, args, time.Now().UTC())
 	explicitStart, explicitEnd, err := parseRequestWindow(args.Start, args.End)
 	if err != nil {
-		return PipelineRun{}, runSpecV1{}, false, &invalidScheduleSignalError{err: fmt.Errorf("invalid scheduled interval: %w", err)}
+		return scheduledRunAdmission{}, false, &invalidScheduleSignalError{err: fmt.Errorf("invalid scheduled interval: %w", err)}
 	}
 	if explicitStart != nil {
 		start = *explicitStart
@@ -1491,15 +1597,15 @@ func (s *Service) prepareRun(ctx context.Context, riverJobID int64, args pipelin
 	}
 	occurrence, err := newScheduleOccurrence(pipelineUUID, args.Environment, start, end)
 	if err != nil {
-		return PipelineRun{}, runSpecV1{}, false, &invalidScheduleSignalError{err: err}
+		return scheduledRunAdmission{}, false, &invalidScheduleSignalError{err: err}
 	}
 	occurrence, _, err = s.store.EnsureScheduleOccurrence(ctx, occurrence)
 	if err != nil {
-		return PipelineRun{}, runSpecV1{}, false, err
+		return scheduledRunAdmission{}, false, err
 	}
 	s.publishScheduleOccurrenceEvent(occurrence)
 	if occurrence.Status == ScheduleOccurrenceActive || occurrence.Status == ScheduleOccurrenceSuccess {
-		return PipelineRun{}, runSpecV1{}, false, nil
+		return scheduledRunAdmission{}, false, nil
 	}
 	args.OccurrenceKey = occurrence.Key
 	run := PipelineRun{
@@ -1519,12 +1625,9 @@ func (s *Service) prepareRun(ctx context.Context, riverJobID int64, args pipelin
 	}
 	executionTime := time.Now().UTC()
 	run.ExecutionTime = &executionTime
-	if riverJobID != 0 {
-		run.RiverJobID = &riverJobID
-	}
 	spec := scheduledRunSpec(run, args)
 	if s.planScheduledRun == nil {
-		return PipelineRun{}, runSpecV1{}, false, errors.New("scheduled-run planning is unavailable")
+		return scheduledRunAdmission{}, false, errors.New("scheduled-run planning is unavailable")
 	}
 	planned, err := s.planScheduledRun(ctx, ScheduledRunPlanRequest{
 		PipelineID: encodedPipelineID, PipelineUUID: pipelineUUID,
@@ -1533,7 +1636,7 @@ func (s *Service) prepareRun(ctx context.Context, riverJobID int64, args pipelin
 		VariableOverrides: args.Variables,
 	})
 	if err != nil {
-		return PipelineRun{}, runSpecV1{}, false, fmt.Errorf("plan scheduled run: %w", err)
+		return scheduledRunAdmission{}, false, fmt.Errorf("plan scheduled run: %w", err)
 	}
 	run.ExpectedSourceMerkle = planned.Plan.SourceMerkle
 	run.ExpectedConfigurationDigest = planned.Plan.ConfigurationDigest
@@ -1541,28 +1644,61 @@ func (s *Service) prepareRun(ctx context.Context, riverJobID int64, args pipelin
 		SourceMerkle: planned.Plan.SourceMerkle, ConfigurationDigest: planned.Plan.ConfigurationDigest,
 	}
 	if err := spec.validate(); err != nil {
-		return PipelineRun{}, runSpecV1{}, false, &invalidScheduleSignalError{err: err}
+		return scheduledRunAdmission{}, false, &invalidScheduleSignalError{err: err}
 	}
-	id, err := s.store.CreateScheduleOccurrenceAttemptWithSpecAndPlan(ctx, occurrence, run, spec, planned.Plan)
+	return scheduledRunAdmission{
+		Occurrence: occurrence,
+		Run:        run,
+		Spec:       spec,
+		Plan:       planned.Plan,
+	}, true, nil
+}
+
+func (s *Service) admitScheduledSignal(
+	ctx context.Context,
+	client *river.Client[*sql.Tx],
+	args pipelineRunJobArgs,
+) error {
+	prepared, shouldAdmit, err := s.prepareScheduledRunAdmission(ctx, args)
+	if err != nil || !shouldAdmit {
+		return err
+	}
+	var inserted *rivertype.JobInsertResult
+	id, err := s.store.createScheduleOccurrenceAttemptWithSpecAndPlan(
+		ctx,
+		prepared.Occurrence,
+		prepared.Run,
+		prepared.Spec,
+		prepared.Plan,
+		func(tx *sql.Tx, runID string) error {
+			var insertErr error
+			inserted, insertErr = client.InsertTx(
+				ctx, tx, pipelineRunJobArgs{RunID: runID}, pipelineRunInsertOpts(),
+			)
+			if insertErr != nil {
+				return insertErr
+			}
+			if err := s.store.setRunRiverJob(ctx, s.store.queries.WithTx(tx), runID, inserted.Job.ID); err != nil {
+				return fmt.Errorf("link scheduled run to River execution job: %w", err)
+			}
+			return nil
+		},
+	)
 	if err != nil {
 		var alreadyAdmitted *ScheduleOccurrenceAlreadyAdmittedError
 		if errors.As(err, &alreadyAdmitted) {
-			return PipelineRun{}, runSpecV1{}, false, nil
+			return nil
 		}
-		return PipelineRun{}, runSpecV1{}, false, err
+		return err
 	}
-	run.ID = id
-	run = applyRunSpec(run, spec)
-	run.ConfirmedPlan = &planned.Plan
-	s.hydrateSnapshotOrdinal(ctx, &run.SnapshotOrdinal, run.SnapshotVersionID)
-	s.publishRunEvent("run.queued", run)
-	if planned.Plan.Blocked {
-		return PipelineRun{}, runSpecV1{}, false, &scheduledPlanBlockedError{
-			RunID: id,
-			err:   fmt.Errorf("scheduled plan is blocked: %s", strings.Join(planned.Plan.Blockers, "; ")),
-		}
-	}
-	return run, spec, true, nil
+	prepared.Run.ID = id
+	riverJobID := inserted.Job.ID
+	prepared.Run.RiverJobID = &riverJobID
+	prepared.Run = applyRunSpec(prepared.Run, prepared.Spec)
+	prepared.Run.ConfirmedPlan = &prepared.Plan
+	s.hydrateSnapshotOrdinal(ctx, &prepared.Run.SnapshotOrdinal, prepared.Run.SnapshotVersionID)
+	s.publishRunEvent("run.queued", prepared.Run)
+	return nil
 }
 
 func (s *Service) execute(ctx context.Context, run PipelineRun, spec runSpecV1) error {
@@ -1828,6 +1964,22 @@ func (s *Service) publishScheduleOccurrenceEvent(occurrence ScheduleOccurrence) 
 }
 
 func pipelineRunInsertOpts() *river.InsertOpts {
+	return &river.InsertOpts{
+		MaxAttempts: 1,
+		Queue:       pipelineRunQueue,
+		UniqueOpts: river.UniqueOpts{
+			ByArgs: true,
+			ByState: []rivertype.JobState{
+				rivertype.JobStateAvailable,
+				rivertype.JobStatePending,
+				rivertype.JobStateRunning,
+				rivertype.JobStateScheduled,
+			},
+		},
+	}
+}
+
+func scheduleSignalInsertOpts() *river.InsertOpts {
 	return &river.InsertOpts{
 		MaxAttempts: 1,
 		Queue:       pipelineRunQueue,

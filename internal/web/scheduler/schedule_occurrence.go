@@ -294,15 +294,26 @@ func (s *Store) DeferredScheduleOccurrence(
 
 // CreateScheduleOccurrenceAttemptWithSpecAndPlan atomically claims the
 // occurrence, pipeline slot, run row, private spec, retained plan, and numbered
-// attempt. The current River signal remains the compatibility dispatcher; a
-// later universal-ledger slice can replace it with a run-ID-only execution job
-// without changing the occurrence contract.
+// attempt. It is retained for legacy scheduled jobs and focused store callers;
+// new v2 signals use the private dispatch hook to add the run-ID-only River job
+// in the same transaction.
 func (s *Store) CreateScheduleOccurrenceAttemptWithSpecAndPlan(
 	ctx context.Context,
 	occurrence ScheduleOccurrence,
 	run PipelineRun,
 	spec runSpecV1,
 	plan PipelineRunPlan,
+) (string, error) {
+	return s.createScheduleOccurrenceAttemptWithSpecAndPlan(ctx, occurrence, run, spec, plan, nil)
+}
+
+func (s *Store) createScheduleOccurrenceAttemptWithSpecAndPlan(
+	ctx context.Context,
+	occurrence ScheduleOccurrence,
+	run PipelineRun,
+	spec runSpecV1,
+	plan PipelineRunPlan,
+	dispatch func(*sql.Tx, string) error,
 ) (string, error) {
 	if err := validateScheduleOccurrenceAdmissionBinding(occurrence, run, spec); err != nil {
 		return "", err
@@ -364,6 +375,9 @@ func (s *Store) CreateScheduleOccurrenceAttemptWithSpecAndPlan(
 	}
 	if err == nil {
 		err = s.insertRunPlan(ctx, tx, runID, plan)
+	}
+	if err == nil && dispatch != nil {
+		err = dispatch(tx, runID)
 	}
 	if err == nil {
 		_, err = tx.ExecContext(ctx, `

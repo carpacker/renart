@@ -675,12 +675,21 @@ func TestReconcileInterruptedStateRepairsQueuedRowsAndRequeuesUnadmittedSchedule
 	markTestRiverJobRunning(t, store, dueJobID)
 	var dueArgsBefore string
 	require.NoError(t, store.db.QueryRowContext(ctx, `SELECT json(args) FROM river_job WHERE id = ?`, dueJobID).Scan(&dueArgsBefore))
+	v2SignalArgs := scheduleSignalJobArgs{
+		PipelineUUID: "scheduled-v2-uuid", Environment: "prod",
+		Start: "2026-07-16T09:00:00Z", End: "2026-07-16T10:00:00Z",
+		SnapshotVersionID: "snapshot-id",
+	}
+	v2SignalJobID := insertTestRiverJob(t, store, v2SignalArgs)
+	markTestRiverJobRunning(t, store, v2SignalJobID)
+	var v2ArgsBefore string
+	require.NoError(t, store.db.QueryRowContext(ctx, `SELECT json(args) FROM river_job WHERE id = ?`, v2SignalJobID).Scan(&v2ArgsBefore))
 
 	recovery, err := store.ReconcileInterruptedState(ctx, orphanedRunError)
 	require.NoError(t, err)
 	assert.Equal(t, []string{joblessRunID, terminalRunID}, recovery.RunIDs)
 	assert.Zero(t, recovery.RiverJobsCancelled)
-	assert.EqualValues(t, 1, recovery.RiverJobsRequeued)
+	assert.EqualValues(t, 2, recovery.RiverJobsRequeued)
 
 	available, _, _, err := store.Get(ctx, availableRunID)
 	require.NoError(t, err)
@@ -697,11 +706,17 @@ func TestReconcileInterruptedStateRepairsQueuedRowsAndRequeuesUnadmittedSchedule
 	}
 	assertRiverJobState(t, store, terminalJobID, rivertype.JobStateDiscarded)
 	assertRiverJobState(t, store, dueJobID, rivertype.JobStateAvailable)
+	assertRiverJobState(t, store, v2SignalJobID, rivertype.JobStateAvailable)
 	var dueArgsAfter string
 	var dueAttempt int
 	require.NoError(t, store.db.QueryRowContext(ctx, `SELECT json(args), attempt FROM river_job WHERE id = ?`, dueJobID).Scan(&dueArgsAfter, &dueAttempt))
 	assert.JSONEq(t, dueArgsBefore, dueArgsAfter, "recovery must preserve the exact scheduled interval signal")
 	assert.Zero(t, dueAttempt)
+	var v2ArgsAfter string
+	var v2Attempt int
+	require.NoError(t, store.db.QueryRowContext(ctx, `SELECT json(args), attempt FROM river_job WHERE id = ?`, v2SignalJobID).Scan(&v2ArgsAfter, &v2Attempt))
+	assert.JSONEq(t, v2ArgsBefore, v2ArgsAfter, "recovery must preserve the v2 due signal revision and interval")
+	assert.Zero(t, v2Attempt)
 
 	// Failed orphan rows released their path aliases, so neither can hold the
 	// active slot forever after an upgrade.

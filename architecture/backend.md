@@ -468,8 +468,11 @@ pipeline UUID, environment, and normalized half-open interval. Duplicate
 signals return the active or successful occurrence without creating a second
 run. Failed/cancelled occurrences become pending only when another signal
 explicitly retries them; each admitted run is retained as a numbered
-`schedule_occurrence_attempts` row. Occurrence claim, attempt number, run,
-RunSpec, plan/units, and pipeline slot commit in one SQLite transaction. A slot
+`schedule_occurrence_attempts` row. A v2 periodic/catch-up River job is only a
+lightweight due signal: it carries the immutable schedule revision and interval,
+performs planning/admission, and never invokes the physical runner. Occurrence
+claim, attempt number, run, RunSpec, plan/units, pipeline slot, run-ID-only River
+execution job, and run/job link commit in one SQLite transaction. A slot
 conflict rolls the attempt back while leaving a durable pending occurrence for
 the schedules API and UI. Run terminalization updates the occurrence through a
 database trigger in the same transaction, including scheduled success plus its
@@ -480,13 +483,14 @@ For new scheduler-backed admissions, the durable slot permits one
 queued/running pipeline-scope run per logical pipeline across environments and
 claims both path and stable-UUID aliases, preserving exclusion across a rename.
 Manual races return `409 pipeline_run_active` with the active run ID.
-Periodic/catch-up jobs remain compatibility due signals: the worker derives
-the same v1 spec when it claims the occurrence and slot, and snoozes the
-original signal for 30 seconds while another run holds the slot. The signal is
-still also the physical-execution worker; splitting it from a run-ID-only River
-execution job remains universal-ledger work, while occurrence identity and
-attempt history are already authoritative in Renart storage. Migration
-reconciliation deterministically keeps one queued-first legacy active row per pipeline path,
+New periodic/catch-up jobs use the distinct `renart-schedule-signal-v2` kind and
+snooze for 30 seconds while another run holds the slot. River jobs persisted
+under the older combined kind still decode and execute through the legacy path
+until they drain. Startup requeues a claimed v2 or legacy signal with its exact
+revision/interval; if a crash happens after v2 admission, its linked execution
+job and occurrence let recovery distinguish queued, running, and retryable
+state without reconstructing behavior from the signal. Migration reconciliation
+deterministically keeps one queued-first legacy active row per pipeline path,
 marks any duplicates failed, closes their open steps, and records the recovery
 reason before creating the unique slot table. This keeps every conflicting row
 auditable instead of preventing startup. The surviving legacy row receives only

@@ -373,14 +373,19 @@ identity to its normalized half-open interval, and a durable unique constraint
 prevents a second active or already-successful execution after River forgets a
 terminal job. Failed/cancelled intervals can be retried under the same
 occurrence with numbered run attempts. Occurrence/attempt claim, run, RunSpec,
-retained plan/units, and pipeline-global path plus stable-UUID slot aliases
-commit in one SQLite transaction. A slot conflict rolls the attempted admission
+retained plan/units, pipeline-global path plus stable-UUID slot aliases, and a
+run-ID-only River execution job/link commit in one SQLite transaction. The v2
+periodic/catch-up job is only a due signal containing the captured schedule
+revision and interval; physical execution reconstructs behavior exclusively
+from the stored RunSpec. A slot conflict rolls the attempted admission
 back, leaves the occurrence pending, and snoozes the original signal with its
 exact arguments. The schedules API exposes only the pending interval and prior
 attempt count, and the UI labels it **Run waiting** or **Retry waiting**; values
 and the private key are not exposed. SSE occurrence events refresh this state
 without polling. Migrated active rows have only a path alias because their UUID
 was not persisted, so rename safety cannot be reconstructed for those rows.
+Pre-v2 combined River jobs remain decodable until already-persisted work drains;
+startup returns both legacy and v2 claimed signals to River unchanged.
 
 Only the process holding `.renart/scheduler.lock` may change rows or enqueue
 runs. `GET /api/env-schedules` reports `owner`, `follower`, or `unavailable`;
