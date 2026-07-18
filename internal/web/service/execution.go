@@ -114,6 +114,7 @@ type InlineRunLedger interface {
 	StartInlineRun(context.Context, string, time.Time) error
 	SetInlineRunExecutionTargetSnapshot(context.Context, string, webscheduler.ExecutionTargetSnapshot) error
 	RecordInlineRunStep(context.Context, string, webscheduler.RunStepEvent) error
+	RecordInlineRunUnit(context.Context, string, webscheduler.PipelineRunUnitEvent) error
 	AppendInlineRunLog(context.Context, string, string) error
 	FinishInlineRun(context.Context, string, webscheduler.RunStatus, error) error
 }
@@ -360,7 +361,7 @@ func (s *ExecutionService) InspectAsset(ctx context.Context, assetID, limit, env
 		EndDate:     endDate,
 		Output:      "json",
 	}
-	timeWindow, _ := s.resolveAssetExecutionTimeWindow(ctx, assetID, startDate, endDate)
+	timeWindow, _ := s.resolveAssetExecutionTimeWindow(ctx, assetID, startDate, endDate, time.Now().UTC())
 	operation := withOperationTimeWindow(queryAssetOperation(relAssetPath, limit, environment, ""), timeWindow)
 
 	var output []byte
@@ -641,16 +642,18 @@ func (s *ExecutionService) MaterializeAssetStreamWithSensorMode(ctx context.Cont
 			return MaterializeResult{Status: "error", Error: "asset materialization is not safe to backfill by independent execution windows", ExitCode: 1}
 		}
 	}
-	if err := s.checkRunPolicy(policy.RunRequest{
+	policyRequest := policy.RunRequest{
 		Environment:          environment,
 		Interactive:          true,
 		Destructive:          fullRefresh || backfill,
 		ConfirmedEnvironment: strings.TrimSpace(confirmedEnvironment),
-	}); err != nil {
+	}
+	if err := s.checkRunPolicy(policyRequest); err != nil {
 		return MaterializeResult{Status: "error", Error: err.Error(), ExitCode: 1}
 	}
 
-	timeWindow, timeWindowErr := s.resolveAssetExecutionTimeWindow(ctx, assetID, startDate, endDate)
+	executionTime := time.Now().UTC()
+	timeWindow, timeWindowErr := s.resolveAssetExecutionTimeWindow(ctx, assetID, startDate, endDate, executionTime)
 	if timeWindowErr != nil {
 		return MaterializeResult{Status: "error", Error: timeWindowErr.Error(), ExitCode: 1}
 	}
@@ -659,18 +662,13 @@ func (s *ExecutionService) MaterializeAssetStreamWithSensorMode(ctx context.Cont
 	assetIDsToRefresh := []string{assetID}
 	materializedAssetIDs := []string{assetID}
 	assetNamesToRecord := make([]string, 0, 1)
+	selectedAssetIDs := []string{assetID}
+	selectedAssetPaths := []string{relAssetPath}
+	selectionReasons := []string{"explicit"}
 	sensorMode = effectiveSensorMode(sensorMode, false)
-	completionID := uuid.NewString()
-	observed := newPipelineRunObservation(nil)
-	observed.configureTargetWrites(ctx, completionID, s.deps.TargetWrites)
-	run := func() error {
-		var runErr error
-		output, runErr = s.runSingleAssetMaterializationObserved(
-			ctx, relAssetPath, environment, timeWindow, fullRefresh, sensorMode,
-			onChunk, observed.handle, observed.captureExecutionTargets, observed.beginTargetWrite,
-		)
-		return runErr
-	}
+	pipelineView, pipelineFound := s.findPipelineViewForAsset(assetID)
+	pipelineID := strings.TrimSpace(pipelineView.ID)
+	inlineLedger := s.inlineRunLedger()
 	if normalizedScope != MaterializeScopeAsset {
 		scoped, scopedErr := s.resolveMaterializeAssetScope(ctx, assetID, normalizedScope)
 		if scopedErr != nil {
@@ -680,30 +678,184 @@ func (s *ExecutionService) MaterializeAssetStreamWithSensorMode(ctx context.Cont
 		assetIDsToRefresh = scoped.RefreshAssetIDs
 		materializedAssetIDs = scoped.AssetIDs
 		assetNamesToRecord = scoped.AssetNames
-		run = func() error {
-			var runErr error
-			output, runErr = s.runScopedAssetMaterializationObserved(
-				ctx, scoped.AssetPaths, environment, timeWindow, fullRefresh, sensorMode,
-				onChunk, observed.handle, observed.captureExecutionTargets, observed.beginTargetWrite,
-			)
-			return runErr
+		selectedAssetIDs = scoped.AssetIDs
+		selectedAssetPaths = scoped.AssetPaths
+		selectionReasons = scoped.Reasons
+		pipelineID = strings.TrimSpace(scoped.PipelineID)
+		if strings.TrimSpace(pipelineView.Name) == "" {
+			pipelineView.Name = scoped.PipelineName
 		}
-	} else if assetName := s.deps.ResolveAssetNameByID(assetID); assetName != "" {
-		assetNamesToRecord = append(assetNamesToRecord, assetName)
+	} else if s.deps.ResolveAssetNameByID != nil {
+		if assetName := strings.TrimSpace(s.deps.ResolveAssetNameByID(assetID)); assetName != "" {
+			assetNamesToRecord = append(assetNamesToRecord, assetName)
+		}
+	}
+	if pipelineID == "" && pipelineFound {
+		pipelineID = strings.TrimSpace(pipelineView.ID)
+	}
+	if inlineLedger != nil && normalizedScope == MaterializeScopeAsset &&
+		(pipelineID == "" || len(assetNamesToRecord) == 0) && s.deps.ResolveAssetByID != nil {
+		_, parsed, selected, resolveErr := s.deps.ResolveAssetByID(ctx, assetID)
+		if resolveErr == nil && parsed != nil && selected != nil {
+			if pipelineID == "" {
+				pipelineID = encodePipelineIDForParsedPipeline(s.deps.WorkspaceRoot, parsed)
+			}
+			if strings.TrimSpace(pipelineView.Name) == "" {
+				pipelineView.Name = strings.TrimSpace(parsed.Name)
+			}
+			if len(assetNamesToRecord) == 0 && strings.TrimSpace(selected.Name) != "" {
+				assetNamesToRecord = append(assetNamesToRecord, selected.Name)
+				selectedAssetIDs[0] = encodePipelineAssetID(s.deps.WorkspaceRoot, selected)
+				selectedAssetPaths[0] = assetRunPathForPipelineAsset(s.deps.WorkspaceRoot, selected)
+			}
+		}
+	}
+
+	completionID := uuid.NewString()
+	var inlineRunID string
+	inlineFinalized := false
+	finishInline := func(status webscheduler.RunStatus, runErr error) error {
+		if inlineLedger == nil || inlineRunID == "" || inlineFinalized {
+			return nil
+		}
+		inlineFinalized = true
+		return inlineLedger.FinishInlineRun(ctx, inlineRunID, status, runErr)
+	}
+	if inlineLedger != nil {
+		if pipelineID == "" || len(assetNamesToRecord) != len(selectedAssetPaths) ||
+			len(selectedAssetIDs) != len(selectedAssetPaths) || len(selectionReasons) != len(selectedAssetPaths) {
+			return MaterializeResult{
+				Status: "error", Operation: operation, ExitCode: 1, Warnings: warnings.snapshot(),
+				Error: "admit durable inline run: selected asset provenance is incomplete",
+			}
+		}
+		selectionUnits := make([]webscheduler.RunSelectionUnit, 0, len(selectedAssetPaths))
+		for index, assetPath := range selectedAssetPaths {
+			start, end := timeWindow.Start, timeWindow.End
+			selectionUnits = append(selectionUnits, webscheduler.RunSelectionUnit{
+				AssetID: selectedAssetIDs[index], AssetName: assetNamesToRecord[index], AssetPath: assetPath,
+				Start: &start, End: &end, Reason: selectionReasons[index],
+			})
+		}
+		pipelineTarget, targetErr := ResolvePipelineRunTarget(pipelineID)
+		if targetErr != nil {
+			return MaterializeResult{Status: "error", Operation: operation, Error: "admit durable inline run: invalid pipeline id", ExitCode: 1, Warnings: warnings.snapshot()}
+		}
+		admitted, admitErr := inlineLedger.AdmitInlineRun(ctx, webscheduler.InlineRunAdmission{
+			PipelineID: pipelineID, PipelineUUID: strings.TrimSpace(pipelineView.UUID),
+			PipelineName: inlinePipelineName(pipelineView, pipelineTarget, s.deps.WorkspaceRoot),
+			Environment:  environment, Origin: ExecutionOrigin(ctx), Source: webscheduler.RunSourceWorkingTree,
+			Start: timeWindow.Start, End: timeWindow.End, ExecutionTime: executionTime,
+			FullRefresh: fullRefresh, Backfill: backfill, ConfirmedEnvironment: confirmedEnvironment,
+			SensorMode: sensorMode,
+			Selection: webscheduler.RunSelection{
+				Mode: webscheduler.RunSelectionAsset, Scope: string(normalizedScope),
+				AnchorAssetID: assetID, Units: selectionUnits,
+			},
+		})
+		if admitErr != nil {
+			return MaterializeResult{Status: "error", Operation: operation, Error: "admit durable inline run: " + admitErr.Error(), ExitCode: 1, Warnings: warnings.snapshot()}
+		}
+		inlineRunID = admitted.ID
+		completionID = admitted.ID
+		if startErr := inlineLedger.StartInlineRun(ctx, admitted.ID, time.Now().UTC()); startErr != nil {
+			startErr = errors.Join(startErr, finishInline(webscheduler.RunStatusFailed, startErr))
+			return MaterializeResult{Status: "error", Operation: operation, Error: "start durable inline run: " + startErr.Error(), ExitCode: 1, Warnings: warnings.snapshot()}
+		}
+		defer func() {
+			if !inlineFinalized {
+				_ = finishInline(webscheduler.RunStatusFailed, errors.New("inline execution ended before durable finalization"))
+			}
+		}()
+	}
+
+	assetEvent := func(event ExecutionAssetEvent) error {
+		if inlineLedger == nil {
+			return nil
+		}
+		if err := inlineLedger.RecordInlineRunStep(ctx, inlineRunID, schedulerRunStepEvent(event)); err != nil {
+			return fmt.Errorf("persist inline execution step: %w", err)
+		}
+		return nil
+	}
+	streamChunk := onChunk
+	if inlineLedger != nil {
+		streamChunk = func(chunk []byte) {
+			_ = inlineLedger.AppendInlineRunLog(ctx, inlineRunID, string(chunk))
+			if onChunk != nil {
+				onChunk(chunk)
+			}
+		}
+	}
+	observed := newPipelineRunObservation(assetEvent)
+	observed.configureTargetWrites(ctx, completionID, s.deps.TargetWrites)
+	targetsResolved := observed.captureExecutionTargets
+	if inlineLedger != nil {
+		targetsResolved = func(snapshot ExecutionTargetSnapshot) error {
+			if err := inlineLedger.SetInlineRunExecutionTargetSnapshot(ctx, inlineRunID, schedulerExecutionTargetSnapshot(snapshot)); err != nil {
+				return fmt.Errorf("persist inline execution targets: %w", err)
+			}
+			return observed.captureExecutionTargets(snapshot)
+		}
 	}
 	releaseExecutionLease, leaseErr := s.acquireExecutionLease(ctx)
 	if leaseErr != nil {
-		return MaterializeResult{Status: "error", Operation: operation, Error: "acquire workspace execution lease: " + leaseErr.Error(), ExitCode: 1}
+		leaseErr = errors.Join(leaseErr, finishInline(webscheduler.RunStatusFailed, leaseErr))
+		return MaterializeResult{Status: "error", Operation: operation, Error: "acquire workspace execution lease: " + leaseErr.Error(), ExitCode: 1, Warnings: warnings.snapshot()}
 	}
 	defer func() { _ = releaseExecutionLease() }()
+	if err := s.checkRunPolicy(policyRequest); err != nil {
+		err = errors.Join(err, finishInline(webscheduler.RunStatusFailed, err))
+		return MaterializeResult{Status: "error", Operation: operation, Error: err.Error(), ExitCode: 1, Warnings: warnings.snapshot()}
+	}
 
-	runErr := run()
+	var combined bytes.Buffer
+	var runErr error
+	for position, assetPath := range selectedAssetPaths {
+		started := time.Now().UTC()
+		if inlineLedger != nil {
+			if err := inlineLedger.RecordInlineRunUnit(ctx, inlineRunID, webscheduler.PipelineRunUnitEvent{
+				Position: position, Status: webscheduler.PipelineRunUnitRunning, StartedAt: &started,
+			}); err != nil {
+				runErr = err
+				break
+			}
+		}
+		chunkOutput, assetErr := s.runSingleAssetMaterializationObserved(
+			ctx, assetPath, environment, timeWindow, fullRefresh, sensorMode,
+			streamChunk, observed.handle, targetsResolved, observed.beginTargetWrite,
+		)
+		if len(chunkOutput) > 0 {
+			_, _ = combined.Write(chunkOutput)
+		}
+		if inlineLedger != nil {
+			finished := time.Now().UTC()
+			unitStatus := webscheduler.PipelineRunUnitSuccess
+			unitError := ""
+			if assetErr != nil {
+				unitStatus = webscheduler.PipelineRunUnitFailed
+				unitError = assetErr.Error()
+				if executionWasCancelled(ctx, assetErr) {
+					unitStatus = webscheduler.PipelineRunUnitCancelled
+				}
+			}
+			if unitErr := inlineLedger.RecordInlineRunUnit(ctx, inlineRunID, webscheduler.PipelineRunUnitEvent{
+				Position: position, Status: unitStatus, FinishedAt: &finished, Error: unitError,
+			}); unitErr != nil {
+				assetErr = errors.Join(assetErr, unitErr)
+			}
+		}
+		if assetErr != nil {
+			runErr = assetErr
+			break
+		}
+	}
+	output = combined.Bytes()
 	var completionErr error
 
 	changedAssetIDs := make([]string, 0)
 	var materializedAt *time.Time
 	now := time.Now().UTC()
-	pipelineView, pipelineFound := s.findPipelineViewForAsset(assetID)
 	if pipelineFound || observed.pipelineUUID() != "" {
 		completionStatus := "succeeded"
 		if runErr != nil {
@@ -719,6 +871,7 @@ func (s *ExecutionService) MaterializeAssetStreamWithSensorMode(ctx context.Cont
 				pipelineUUID = pipelineView.UUID
 			}
 			completionErr = s.emitRunCompletedForSpec(ctx, PipelineRunSpec{
+				RunID:                   inlineRunID,
 				CompletionID:            completionID,
 				Environment:             environment,
 				FullRefresh:             fullRefresh,
@@ -727,6 +880,19 @@ func (s *ExecutionService) MaterializeAssetStreamWithSensorMode(ctx context.Cont
 			if completionErr != nil {
 				completionErr = errors.Join(completionErr, observed.markSuccessfulTargetWritesDirty(now))
 			}
+		}
+	}
+	if inlineRunID != "" {
+		terminalStatus := webscheduler.RunStatusSuccess
+		terminalErr := errors.Join(runErr, completionErr)
+		if terminalErr != nil {
+			terminalStatus = webscheduler.RunStatusFailed
+			if runErr != nil && executionWasCancelled(ctx, runErr) {
+				terminalStatus = webscheduler.RunStatusCancelled
+			}
+		}
+		if finishErr := finishInline(terminalStatus, terminalErr); finishErr != nil {
+			completionErr = errors.Join(completionErr, fmt.Errorf("finalize durable inline run: %w", finishErr))
 		}
 	}
 	if runErr == nil && completionErr == nil {
@@ -837,9 +1003,11 @@ func (s *ExecutionService) runScopedAssetMaterializationObserved(
 
 type materializeAssetScopeResult struct {
 	PipelineID      string
+	PipelineName    string
 	AssetIDs        []string
 	AssetPaths      []string
 	AssetNames      []string
+	Reasons         []string
 	RefreshAssetIDs []string
 }
 
@@ -941,18 +1109,30 @@ func (s *ExecutionService) resolveMaterializeAssetScope(ctx context.Context, ass
 	assetIDs := make([]string, 0, len(orderedNames))
 	assetPaths := make([]string, 0, len(orderedNames))
 	assetNames := make([]string, 0, len(orderedNames))
+	reasons := make([]string, 0, len(orderedNames))
+	upstreamNames := pipelinePlanUpstreamClosure(selectedAsset.Name, assetByName)
+	downstreamNames := pipelinePlanDownstreamClosure(selectedAsset.Name, downstreamByName)
 	for _, name := range orderedNames {
 		assetIDs = append(assetIDs, assetIDByName[name])
 		assetPaths = append(assetPaths, assetPathByName[name])
 		assetNames = append(assetNames, name)
+		reason := "explicit"
+		if _, upstream := upstreamNames[name]; upstream {
+			reason = "required_upstream"
+		} else if _, downstream := downstreamNames[name]; downstream {
+			reason = "selected_downstream"
+		}
+		reasons = append(reasons, reason)
 	}
 
 	refreshIDs := append([]string(nil), assetIDs...)
 	return materializeAssetScopeResult{
 		PipelineID:      encodePipelineIDForParsedPipeline(s.deps.WorkspaceRoot, parsedPipeline),
+		PipelineName:    strings.TrimSpace(parsedPipeline.Name),
 		AssetIDs:        assetIDs,
 		AssetPaths:      assetPaths,
 		AssetNames:      assetNames,
+		Reasons:         reasons,
 		RefreshAssetIDs: refreshIDs,
 	}, nil
 }
@@ -2240,7 +2420,7 @@ func ResolvePipelineRunTarget(pipelineID string) (string, error) {
 	return filepath.ToSlash(cleaned), nil
 }
 
-func (s *ExecutionService) resolveAssetExecutionTimeWindow(ctx context.Context, assetID, startDate, endDate string) (ExecutionTimeWindow, error) {
+func (s *ExecutionService) resolveAssetExecutionTimeWindow(ctx context.Context, assetID, startDate, endDate string, executionTime time.Time) (ExecutionTimeWindow, error) {
 	schedule := ""
 	if s.deps.ResolveAssetByID != nil {
 		_, parsedPipeline, _, err := s.deps.ResolveAssetByID(ctx, assetID)
@@ -2248,7 +2428,7 @@ func (s *ExecutionService) resolveAssetExecutionTimeWindow(ctx context.Context, 
 			schedule = string(parsedPipeline.Schedule)
 		}
 	}
-	return ResolveExecutionTimeWindow(schedule, startDate, endDate, time.Now().UTC())
+	return ResolveExecutionTimeWindow(schedule, startDate, endDate, executionTime)
 }
 
 func (s *ExecutionService) resolvePipelineExecutionTimeWindow(ctx context.Context, pipelineID, snapshotDir, startDate, endDate string, executionTime time.Time) (ExecutionTimeWindow, error) {

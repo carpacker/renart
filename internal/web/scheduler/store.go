@@ -493,10 +493,24 @@ func (s *Store) insertRunSpec(ctx context.Context, execer runSpecExecer, runID s
 	if err != nil {
 		return err
 	}
-	_, err = execer.ExecContext(ctx, `
+	if _, err = execer.ExecContext(ctx, `
 		INSERT INTO pipeline_run_specs (run_id, version, body, created_at)
-		VALUES (?, ?, ?, ?)`, runID, spec.Version, string(body), formatTime(time.Now().UTC()))
-	return err
+		VALUES (?, ?, ?, ?)`, runID, spec.Version, string(body), formatTime(time.Now().UTC())); err != nil {
+		return err
+	}
+	if spec.SelectionDetails == nil {
+		return nil
+	}
+	units := make([]PipelineRunExecutionUnit, 0, len(spec.SelectionDetails.Units))
+	for _, unit := range spec.SelectionDetails.Units {
+		units = append(units, PipelineRunExecutionUnit{
+			AssetID: unit.AssetID, AssetName: unit.AssetName,
+			StartDate: unit.Start.UTC().Format(time.RFC3339Nano),
+			EndDate:   unit.End.UTC().Format(time.RFC3339Nano),
+			Reason:    unit.Reason,
+		})
+	}
+	return s.insertRunUnits(ctx, execer, runID, units)
 }
 
 func (s *Store) insertRunPlan(ctx context.Context, execer runSpecExecer, runID string, plan PipelineRunPlan) error {
@@ -510,7 +524,11 @@ func (s *Store) insertRunPlan(ctx context.Context, execer runSpecExecer, runID s
 	if err != nil {
 		return err
 	}
-	for position, unit := range plan.ExecutionUnits {
+	return s.insertRunUnits(ctx, execer, runID, plan.ExecutionUnits)
+}
+
+func (s *Store) insertRunUnits(ctx context.Context, execer runSpecExecer, runID string, units []PipelineRunExecutionUnit) error {
+	for position, unit := range units {
 		if _, err := execer.ExecContext(ctx, `
 			INSERT INTO pipeline_run_units (
 				run_id, position, asset_id, asset_name, start_date, end_date,

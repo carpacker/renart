@@ -181,9 +181,12 @@ Synchronous full-pipeline materialization now uses the same ledger with an
 and server-authenticated API/CLI origin are admitted before Bruin starts;
 targets and steps are persisted synchronously, and terminalization releases the
 same pipeline-global slot. A crash marks the jobless inline run failed and
-replays only its retained terminal facts. Asset/scoped and Build-stale
-selections remain outside this RunSpec ledger until their selection schema is
-durable.
+replays only its retained terminal facts. One-asset and scoped materialization
+use RunSpec v2 to retain the exact ordered asset paths, common window, scope,
+anchor, and inclusion reasons; the same transaction creates queued execution
+units, and the inline executor transitions each unit around its physical call.
+Build-needed remains outside this RunSpec ledger until its exact gap windows
+use the same selection contract.
 For a deployed run it materializes the run's exact pinned snapshot while the
 recorder fingerprints it, then deletes the temp directory. This is derived-state
 recovery only—asset code and textual logs are never replayed. The fact and

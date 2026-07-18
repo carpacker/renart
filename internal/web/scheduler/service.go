@@ -1375,6 +1375,9 @@ func (s *Service) AdmitInlineRun(ctx context.Context, req InlineRunAdmission) (P
 		ExecutionContextResolved: true,
 	}
 	spec := inlineRunSpec(run, source, req.ConfirmedEnvironment)
+	if err := applyInlineRunSelection(&spec, req.Selection); err != nil {
+		return PipelineRun{}, fmt.Errorf("normalize inline run selection: %w", err)
+	}
 	id, err := s.store.CreateWithSpec(ctx, run, spec)
 	if err != nil {
 		return PipelineRun{}, err
@@ -1435,6 +1438,13 @@ func (s *Service) RecordInlineRunStep(ctx context.Context, runID string, event R
 		return errors.New("run ledger is not configured")
 	}
 	return s.persistRunStep(ctx, strings.TrimSpace(runID), event)
+}
+
+func (s *Service) RecordInlineRunUnit(ctx context.Context, runID string, event PipelineRunUnitEvent) error {
+	if s == nil || s.store == nil {
+		return errors.New("run ledger is not configured")
+	}
+	return s.persistRunUnit(ctx, strings.TrimSpace(runID), event)
 }
 
 func (s *Service) AppendInlineRunLog(ctx context.Context, runID, line string) error {
@@ -1921,20 +1931,7 @@ func (s *Service) execute(ctx context.Context, run PipelineRun, spec runSpecV1) 
 		return s.persistRunStep(ctx, run.ID, event)
 	}
 	req.OnUnit = func(event PipelineRunUnitEvent) error {
-		if err := s.store.UpdateRunUnit(ctx, run.ID, event); err != nil {
-			return fmt.Errorf("persist execution unit %d for run %s: %w", event.Position, run.ID, err)
-		}
-		units, err := s.store.ListRunUnits(ctx, run.ID)
-		if err != nil {
-			return err
-		}
-		for _, unit := range units {
-			if unit.Position == event.Position {
-				s.publishRunEvent("run.unit", map[string]any{"run_id": run.ID, "unit": unit})
-				break
-			}
-		}
-		return nil
+		return s.persistRunUnit(ctx, run.ID, event)
 	}
 	if run.WinStart != nil {
 		req.Start = run.WinStart.Format(time.RFC3339Nano)
@@ -2032,6 +2029,23 @@ func (s *Service) persistRunStep(ctx context.Context, runID string, event RunSte
 		return fmt.Errorf("persist step %s for run %s: %w", asset, runID, err)
 	}
 	s.publishRunEvent("run.step", step)
+	return nil
+}
+
+func (s *Service) persistRunUnit(ctx context.Context, runID string, event PipelineRunUnitEvent) error {
+	if err := s.store.UpdateRunUnit(ctx, runID, event); err != nil {
+		return fmt.Errorf("persist execution unit %d for run %s: %w", event.Position, runID, err)
+	}
+	units, err := s.store.ListRunUnits(ctx, runID)
+	if err != nil {
+		return err
+	}
+	for _, unit := range units {
+		if unit.Position == event.Position {
+			s.publishRunEvent("run.unit", map[string]any{"run_id": runID, "unit": unit})
+			break
+		}
+	}
 	return nil
 }
 

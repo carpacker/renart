@@ -5,17 +5,22 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"path"
 	"strings"
 	"time"
 )
 
 const (
 	runSpecVersionV1             = 1
+	runSpecVersionV2             = 2
 	runDispatchRiver             = "river"
 	runDispatchInlineStreaming   = "inline_streaming"
 	runSelectionAll              = "all"
+	runSelectionAsset            = "asset"
+	runSelectionNeeded           = "needed"
 	runSpecRetrySnoozeTime       = 30 * time.Second
 	maxRunVariableOverridesBytes = 256 << 10
+	maxRunSelectionUnits         = 100_000
 )
 
 var (
@@ -56,21 +61,39 @@ func (e *PipelineRunActiveError) Unwrap() error {
 }
 
 // runSpecV1 is the private, replayable behavior contract for queued and inline
-// full-pipeline runs. It is stored separately from the public run row so
-// authorization and future secret references cannot leak through run-list JSON or SSE events.
+// runs. Version 1 represents an entire pipeline; version 2 adds exact
+// asset/window selection provenance. It is stored separately from the public
+// run row so authorization and future secret references cannot leak through
+// run-list JSON or SSE events.
 // Requested context stays immutable; effective post-policy context continues
 // to live in the pipeline_runs columns written immediately before execution.
 type runSpecV1 struct {
-	Version       int                  `json:"version"`
-	Pipeline      runPipelineIdentity  `json:"pipeline"`
-	Origin        RunTrigger           `json:"origin"`
-	Dispatch      string               `json:"dispatch"`
-	Source        runSourceSpec        `json:"source"`
-	Requested     runRequestedContext  `json:"requested"`
-	Expected      *runExpectedIdentity `json:"expected,omitempty"`
-	Authorization runAuthorization     `json:"authorization"`
-	Selection     string               `json:"selection"`
-	Schedule      *runScheduleIdentity `json:"schedule,omitempty"`
+	Version          int                  `json:"version"`
+	Pipeline         runPipelineIdentity  `json:"pipeline"`
+	Origin           RunTrigger           `json:"origin"`
+	Dispatch         string               `json:"dispatch"`
+	Source           runSourceSpec        `json:"source"`
+	Requested        runRequestedContext  `json:"requested"`
+	Expected         *runExpectedIdentity `json:"expected,omitempty"`
+	Authorization    runAuthorization     `json:"authorization"`
+	Selection        string               `json:"selection"`
+	SelectionDetails *runSelectionDetails `json:"selection_details,omitempty"`
+	Schedule         *runScheduleIdentity `json:"schedule,omitempty"`
+}
+
+type runSelectionDetails struct {
+	Scope         string             `json:"scope,omitempty"`
+	AnchorAssetID string             `json:"anchor_asset_id,omitempty"`
+	Units         []runSelectionUnit `json:"units"`
+}
+
+type runSelectionUnit struct {
+	AssetID   string     `json:"asset_id"`
+	AssetName string     `json:"asset_name"`
+	AssetPath string     `json:"asset_path"`
+	Start     *time.Time `json:"start,omitempty"`
+	End       *time.Time `json:"end,omitempty"`
+	Reason    string     `json:"reason"`
 }
 
 type runPipelineIdentity struct {
@@ -114,7 +137,7 @@ type runScheduleIdentity struct {
 }
 
 func (spec runSpecV1) validate() error {
-	if spec.Version != runSpecVersionV1 {
+	if spec.Version != runSpecVersionV1 && spec.Version != runSpecVersionV2 {
 		return fmt.Errorf("unsupported run spec version %d", spec.Version)
 	}
 	if strings.TrimSpace(spec.Pipeline.ID) == "" || strings.TrimSpace(spec.Pipeline.Name) == "" {
@@ -125,8 +148,8 @@ func (spec runSpecV1) validate() error {
 	default:
 		return fmt.Errorf("unsupported run dispatch %q", spec.Dispatch)
 	}
-	if spec.Selection != runSelectionAll {
-		return fmt.Errorf("unsupported run selection %q", spec.Selection)
+	if err := validateRunSelection(spec); err != nil {
+		return err
 	}
 	if err := validateRunSpecSource(spec.Source); err != nil {
 		return err
@@ -218,6 +241,150 @@ func (spec runSpecV1) validate() error {
 	return nil
 }
 
+func validateRunSelection(spec runSpecV1) error {
+	selection := strings.TrimSpace(spec.Selection)
+	if selection != spec.Selection {
+		return errors.New("run spec selection must be canonical")
+	}
+	if spec.Version == runSpecVersionV1 {
+		if selection != runSelectionAll || spec.SelectionDetails != nil {
+			return errors.New("run spec v1 only supports an all selection")
+		}
+		return nil
+	}
+
+	switch selection {
+	case runSelectionAll:
+		if spec.SelectionDetails != nil {
+			return errors.New("run spec all selection cannot contain selection details")
+		}
+		return nil
+	case runSelectionAsset, runSelectionNeeded:
+	default:
+		return fmt.Errorf("unsupported run selection %q", spec.Selection)
+	}
+	if spec.SelectionDetails == nil {
+		return fmt.Errorf("run spec %s selection requires details", selection)
+	}
+	details := spec.SelectionDetails
+	if len(details.Units) == 0 || len(details.Units) > maxRunSelectionUnits {
+		return fmt.Errorf("run spec %s selection requires between 1 and %d execution units", selection, maxRunSelectionUnits)
+	}
+
+	scope := strings.TrimSpace(details.Scope)
+	anchor := strings.TrimSpace(details.AnchorAssetID)
+	if scope != details.Scope || anchor != details.AnchorAssetID {
+		return errors.New("run spec selection identity must be canonical")
+	}
+	if selection == runSelectionAsset {
+		switch scope {
+		case "asset", "asset_with_upstreams", "asset_with_downstreams", "asset_with_upstreams_and_downstreams":
+		default:
+			return fmt.Errorf("invalid run spec asset selection scope %q", details.Scope)
+		}
+		if anchor == "" {
+			return errors.New("run spec asset selection requires an anchor asset id")
+		}
+	} else if scope != "" || anchor != "" {
+		return errors.New("run spec needed selection cannot contain asset scope provenance")
+	}
+
+	seen := make(map[string]struct{}, len(details.Units))
+	anchorFound := false
+	for index, unit := range details.Units {
+		if err := validateRunSelectionUnit(spec, unit); err != nil {
+			return fmt.Errorf("run spec selection unit %d: %w", index, err)
+		}
+		if unit.AssetID == anchor {
+			anchorFound = true
+		}
+		key := strings.Join([]string{
+			unit.AssetID,
+			unit.AssetPath,
+			unit.Start.UTC().Format(time.RFC3339Nano),
+			unit.End.UTC().Format(time.RFC3339Nano),
+		}, "\x00")
+		if _, exists := seen[key]; exists {
+			return fmt.Errorf("run spec selection unit %d is duplicated", index)
+		}
+		seen[key] = struct{}{}
+	}
+	if selection == runSelectionAsset && !anchorFound {
+		return errors.New("run spec asset selection anchor is absent from its units")
+	}
+	return nil
+}
+
+func validateRunSelectionUnit(spec runSpecV1, unit runSelectionUnit) error {
+	for _, field := range []struct {
+		name  string
+		value string
+	}{
+		{name: "asset_id", value: unit.AssetID},
+		{name: "asset_name", value: unit.AssetName},
+		{name: "asset_path", value: unit.AssetPath},
+		{name: "reason", value: unit.Reason},
+	} {
+		if strings.TrimSpace(field.value) == "" || strings.TrimSpace(field.value) != field.value {
+			return fmt.Errorf("%s must be non-empty and canonical", field.name)
+		}
+		if len(field.value) > 4096 {
+			return fmt.Errorf("%s exceeds the 4096 byte limit", field.name)
+		}
+	}
+	firstPathSegment := strings.SplitN(unit.AssetPath, "/", 2)[0]
+	if strings.ContainsRune(unit.AssetPath, 0) || strings.Contains(unit.AssetPath, "\\") ||
+		(len(firstPathSegment) >= 2 && firstPathSegment[1] == ':') || strings.HasPrefix(unit.AssetPath, "/") ||
+		path.Clean(unit.AssetPath) != unit.AssetPath || unit.AssetPath == "." ||
+		unit.AssetPath == ".." || strings.HasPrefix(unit.AssetPath, "../") {
+		return errors.New("asset_path must be a canonical workspace-relative slash path")
+	}
+	if (unit.Start == nil) != (unit.End == nil) || unit.Start == nil {
+		return errors.New("start and end must both contain an exact execution window")
+	}
+	if !unit.Start.Before(*unit.End) {
+		return errors.New("execution window must be increasing")
+	}
+	if spec.Requested.Start == nil || spec.Requested.End == nil ||
+		unit.Start.Before(*spec.Requested.Start) || unit.End.After(*spec.Requested.End) {
+		return errors.New("execution window must be contained by the requested run window")
+	}
+	return nil
+}
+
+func applyInlineRunSelection(spec *runSpecV1, selection RunSelection) error {
+	mode := selection.Mode
+	if mode == "" {
+		mode = RunSelectionAll
+	}
+	if mode == RunSelectionAll {
+		if strings.TrimSpace(selection.Scope) != "" || strings.TrimSpace(selection.AnchorAssetID) != "" || len(selection.Units) != 0 {
+			return errors.New("inline all selection cannot contain asset or unit details")
+		}
+		return nil
+	}
+
+	details := &runSelectionDetails{
+		Scope:         selection.Scope,
+		AnchorAssetID: selection.AnchorAssetID,
+		Units:         make([]runSelectionUnit, 0, len(selection.Units)),
+	}
+	for _, unit := range selection.Units {
+		details.Units = append(details.Units, runSelectionUnit{
+			AssetID:   unit.AssetID,
+			AssetName: unit.AssetName,
+			AssetPath: unit.AssetPath,
+			Start:     cloneRunTime(unit.Start),
+			End:       cloneRunTime(unit.End),
+			Reason:    unit.Reason,
+		})
+	}
+	spec.Version = runSpecVersionV2
+	spec.Selection = string(mode)
+	spec.SelectionDetails = details
+	return spec.validate()
+}
+
 func validateRunIdentityDigest(field, value string) error {
 	if len(value) != 64 || strings.ToLower(value) != value {
 		return fmt.Errorf("run spec %s must be a lowercase SHA-256 digest", field)
@@ -255,7 +422,7 @@ func marshalRunSpec(spec runSpecV1) ([]byte, error) {
 }
 
 func unmarshalRunSpec(version int, body []byte) (runSpecV1, error) {
-	if version != runSpecVersionV1 {
+	if version != runSpecVersionV1 && version != runSpecVersionV2 {
 		return runSpecV1{}, fmt.Errorf("unsupported run spec version %d", version)
 	}
 	var spec runSpecV1

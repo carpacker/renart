@@ -242,6 +242,40 @@ type InlineRunAdmission struct {
 	Backfill             bool
 	ConfirmedEnvironment string
 	SensorMode           string
+	Selection            RunSelection
+}
+
+// RunSelectionMode identifies the immutable work selection retained by a
+// RunSpec. Full-pipeline runs use all; one-click asset/scoped runs use asset;
+// Build-needed runs use needed with one unit per exact asset/window.
+type RunSelectionMode string
+
+const (
+	RunSelectionAll    RunSelectionMode = "all"
+	RunSelectionAsset  RunSelectionMode = "asset"
+	RunSelectionNeeded RunSelectionMode = "needed"
+)
+
+// RunSelection is server-normalized provenance for an inline execution. Scope
+// and AnchorAssetID are populated only for asset selections. Units are ordered
+// exactly as physical execution will occur.
+type RunSelection struct {
+	Mode          RunSelectionMode
+	Scope         string
+	AnchorAssetID string
+	Units         []RunSelectionUnit
+}
+
+// RunSelectionUnit is one immutable asset/window execution decision. AssetPath
+// is the canonical workspace-relative path used by direct working-tree runs;
+// Start and End are optional as a pair for future non-windowed operations.
+type RunSelectionUnit struct {
+	AssetID   string
+	AssetName string
+	AssetPath string
+	Start     *time.Time
+	End       *time.Time
+	Reason    string
 }
 
 type PipelineRun struct {

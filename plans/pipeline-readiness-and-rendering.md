@@ -1209,9 +1209,18 @@ requests receive server-authenticated `cli` provenance; ordinary HTTP calls are
 `api`. Pipeline runs through direct HTTP, delegated/embedded CLI, legacy
 `/api/run`, and onboarding therefore appear in canonical history and compete
 with queued work. Startup fails interrupted jobless inline rows without
-physical replay. Asset/scoped Materialize and Build-needed remain open because
-their exact selection needs a versioned RunSpec representation rather than an
-encoded string.
+physical replay.
+
+Inline asset-selection checkpoint (2026-07-18): RunSpec v2 adds a strict exact
+selection representation for one-asset and upstream/downstream/neighborhood
+materialization. It retains the anchor, scope, canonical workspace-relative
+asset paths, ordered common-window units, and inclusion reasons. Admission,
+the path plus available UUID slots, target snapshot, step/log persistence,
+policy recheck, and detached finalization share the full-pipeline inline
+lifecycle without a River job. Units transition independently around each
+direct asset call, so sparse executor events cannot erase the selected work.
+Build-needed remains open for the follow-up that maps each exact staleness gap
+to one v2 unit.
 
 This is the architectural prerequisite for the pipeline plan:
 
@@ -1558,11 +1567,11 @@ unsupported, runtime-only, or unresolved-target stage; this removes repeated
 non-actionable SQL warnings while retaining Python's honest runtime warning.
 
 Phase 2 is complete. The remaining universal-ledger gap is broader than this
-phase: direct one-asset/scoped and Build-needed paths still use the common
-completion seam without RunSpecs. Full-pipeline onboarding, HTTP, and embedded
-execution now use the inline ledger. Durable schedule occurrences/attempts,
-variables, deploy/schedule plan integration, and separate signal-to-execution
-jobs are implemented; selection-aware paths continue in Phase 0b.
+phase: Build-needed still uses the common completion seam without a RunSpec;
+direct one-asset/scoped, full-pipeline onboarding, HTTP, and embedded execution
+now use the inline ledger. Durable schedule occurrences/attempts, variables,
+deploy/schedule plan integration, and separate signal-to-execution jobs are
+implemented; exact gap-window selection continues in Phase 0b.
 
 ### Phase 3: Deploy and schedule integration
 
@@ -1608,8 +1617,8 @@ and pipeline slot. A blocked plan becomes a failed auditable run without
 physical execution, and its durable blocked decision survives a crash before
 failure finalization. Row-level `Run pinned` now loads the pin and overrides on
 the server while retaining manual/no-watermark provenance. Phase 3 is complete;
-the asset/scoped and Build-needed ledger plus exact re-execution remain in the
-earlier Phase 0b workstream. Durable occurrence identity, numbered attempts,
+the Build-needed ledger plus exact re-execution remain in the earlier Phase 0b
+workstream. Durable occurrence identity, numbered attempts,
 run-ID-only scheduled dispatch, and inline full-pipeline history are covered by
 the later Phase 0b checkpoints above.
 

@@ -103,6 +103,79 @@ func TestScheduledRunSpecRejectsInlineDispatch(t *testing.T) {
 	require.ErrorContains(t, spec.validate(), "scheduled run spec requires River dispatch")
 }
 
+func TestInlineAssetRunPersistsVersionedSelectionAndUnits(t *testing.T) {
+	t.Parallel()
+	store, err := OpenStore(filepath.Join(t.TempDir(), "state.db"))
+	require.NoError(t, err)
+	defer store.Close()
+	service := New(Options{Store: store})
+	ctx := context.Background()
+	start := time.Date(2026, 7, 18, 8, 0, 0, 123456789, time.UTC)
+	end := start.Add(time.Hour)
+
+	run, err := service.AdmitInlineRun(ctx, InlineRunAdmission{
+		PipelineID: "pipeline-id", PipelineUUID: "pipeline-uuid", PipelineName: "analytics",
+		Environment: "prod", Origin: RunTriggerAPI, Source: RunSourceWorkingTree,
+		Start: start, End: end, ExecutionTime: start.Add(time.Minute), SensorMode: "once",
+		Selection: RunSelection{
+			Mode: RunSelectionAsset, Scope: "asset_with_upstreams", AnchorAssetID: "asset-orders",
+			Units: []RunSelectionUnit{
+				{AssetID: "asset-customers", AssetName: "analytics.customers", AssetPath: "analytics/assets/customers.sql", Start: &start, End: &end, Reason: "required_upstream"},
+				{AssetID: "asset-orders", AssetName: "analytics.orders", AssetPath: "analytics/assets/orders.sql", Start: &start, End: &end, Reason: "explicit"},
+			},
+		},
+	})
+	require.NoError(t, err)
+	spec, found, err := store.GetRunSpec(ctx, run.ID)
+	require.NoError(t, err)
+	require.True(t, found)
+	assert.Equal(t, runSpecVersionV2, spec.Version)
+	assert.Equal(t, runSelectionAsset, spec.Selection)
+	require.NotNil(t, spec.SelectionDetails)
+	assert.Equal(t, "asset_with_upstreams", spec.SelectionDetails.Scope)
+	assert.Equal(t, "asset-orders", spec.SelectionDetails.AnchorAssetID)
+	require.Len(t, spec.SelectionDetails.Units, 2)
+	assert.Equal(t, "analytics/assets/customers.sql", spec.SelectionDetails.Units[0].AssetPath)
+
+	units, err := store.ListRunUnits(ctx, run.ID)
+	require.NoError(t, err)
+	require.Len(t, units, 2)
+	assert.Equal(t, []string{"analytics.customers", "analytics.orders"}, []string{units[0].AssetName, units[1].AssetName})
+	assert.Equal(t, start.Format(time.RFC3339Nano), units[0].StartDate)
+	assert.Equal(t, PipelineRunUnitQueued, units[0].Status)
+
+	require.NoError(t, service.StartInlineRun(ctx, run.ID, start))
+	require.NoError(t, service.RecordInlineRunUnit(ctx, run.ID, PipelineRunUnitEvent{Position: 0, Status: PipelineRunUnitRunning, StartedAt: &start}))
+	require.NoError(t, service.RecordInlineRunUnit(ctx, run.ID, PipelineRunUnitEvent{Position: 0, Status: PipelineRunUnitSuccess, FinishedAt: &end}))
+	require.NoError(t, service.RecordInlineRunUnit(ctx, run.ID, PipelineRunUnitEvent{Position: 1, Status: PipelineRunUnitRunning, StartedAt: &start}))
+	require.NoError(t, service.RecordInlineRunUnit(ctx, run.ID, PipelineRunUnitEvent{Position: 1, Status: PipelineRunUnitSuccess, FinishedAt: &end}))
+	require.NoError(t, service.FinishInlineRun(ctx, run.ID, RunStatusSuccess, nil))
+}
+
+func TestInlineAssetRunRejectsUnsafeOrInconsistentSelection(t *testing.T) {
+	t.Parallel()
+	store, err := OpenStore(filepath.Join(t.TempDir(), "state.db"))
+	require.NoError(t, err)
+	defer store.Close()
+	service := New(Options{Store: store})
+	start := time.Date(2026, 7, 18, 8, 0, 0, 0, time.UTC)
+	end := start.Add(time.Hour)
+
+	_, err = service.AdmitInlineRun(context.Background(), InlineRunAdmission{
+		PipelineID: "pipeline-id", PipelineName: "analytics", Origin: RunTriggerAPI,
+		Source: RunSourceWorkingTree, Start: start, End: end,
+		Selection: RunSelection{
+			Mode: RunSelectionAsset, Scope: "asset", AnchorAssetID: "asset-orders",
+			Units: []RunSelectionUnit{{
+				AssetID: "asset-orders", AssetName: "analytics.orders", AssetPath: "../orders.sql",
+				Start: &start, End: &end, Reason: "explicit",
+			}},
+		},
+	})
+	require.ErrorContains(t, err, "workspace-relative")
+	assert.Equal(t, 0, countRows(t, store, `SELECT COUNT(*) FROM pipeline_runs`))
+}
+
 func TestInterruptedInlineRunIsRecoveredWithoutPhysicalReplay(t *testing.T) {
 	t.Parallel()
 	store, err := OpenStore(filepath.Join(t.TempDir(), "state.db"))

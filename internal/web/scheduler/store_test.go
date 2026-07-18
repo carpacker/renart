@@ -49,11 +49,11 @@ func TestStorePersistsAndValidatesVersionedRunSpec(t *testing.T) {
 	assert.Equal(t, strings.Repeat("a", 64), persisted.Expected.SourceMerkle)
 	assert.Equal(t, strings.Repeat("b", 64), persisted.Expected.ConfigurationDigest)
 
-	_, err = store.db.Exec(`UPDATE pipeline_run_specs SET version = 2, body = json_set(body, '$.version', 2) WHERE run_id = ?`, runID)
+	_, err = store.db.Exec(`UPDATE pipeline_run_specs SET version = 3, body = json_set(body, '$.version', 3) WHERE run_id = ?`, runID)
 	require.NoError(t, err)
 	_, found, err = store.GetRunSpec(context.Background(), runID)
 	require.True(t, found)
-	require.ErrorContains(t, err, "unsupported run spec version 2")
+	require.ErrorContains(t, err, "unsupported run spec version 3")
 
 	_, err = store.db.Exec(`UPDATE pipeline_run_specs SET version = 1, body = json_set(body, '$.version', 1, '$.future_behavior', true) WHERE run_id = ?`, runID)
 	require.NoError(t, err)

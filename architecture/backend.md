@@ -427,11 +427,15 @@ registration; startup acquires it before River workers start. The service
 exposes `owner`, `follower`, or `unavailable` ownership through the environment
 schedule API. Only an active owner may mutate schedules or queue runs; follower
 requests fail with `409 scheduler_not_owner` before deployment, workspace, or
-SQLite writes. Queued runs and inline full-pipeline mutations persist a private,
+SQLite writes. Queued runs and inline mutations persist a private,
 validated, versioned `pipeline_run_specs` record outside public run DTOs and
 SSE. The spec is the immutable behavior contract; scheduler-backed rows replace
 their diagnostic context with effective values immediately before execution,
 while inline admission stores the already server-normalized effective context.
+Version 1 represents an entire pipeline. Version 2 adds a strict ordered
+asset/window selection with canonical workspace-relative paths, inclusion
+reasons, and asset-scope provenance; its units are inserted atomically beside
+the run and spec.
 Plan-confirmed runs additionally retain the reviewed source/config/time
 identities, redacted plan artifact, and final unit ledger described above.
 Manual/API admission inserts the run, v1 spec, optional confirmed plan and
@@ -456,6 +460,14 @@ Authenticated discovery-token requests are server-classified as `cli`; other
 HTTP execution is `api`, so clients cannot submit their own origin. A crash
 fails the jobless inline row and replays only durable terminal provenance—it
 never re-executes asset code.
+
+One-click asset and upstream/downstream/neighborhood materialization uses the
+v2 selection contract with `dispatch=inline_streaming`. Admission retains the
+anchor, scope, ordered asset paths, exact common window, and inclusion reasons,
+then creates no River job. Each selected asset has a durable unit transitioned
+around its direct executor call independently from the executor's step events;
+targets, steps, output, completion, detached terminalization, the pipeline slot,
+and the pre-side-effect policy recheck otherwise use the same inline lifecycle.
 
 Actual due/catch-up signals generate the same redacted plan against the row's
 exact deployment, environment, normalized interval, and admission-time
@@ -526,9 +538,9 @@ Plan-confirmed and synchronous full-pipeline execution now share the durable run
 ledger. This includes HTTP pipeline streaming, delegated or embedded CLI
 pipeline runs, legacy full-pipeline `/api/run`, and onboarding quickstart
 materialization while preserving their inline stream. One-asset/scoped
-Materialize and Build-stale still use only the common target-capture/write-
-claim/completion seam; their selection requires the next RunSpec schema slice
-before they can safely join the ledger. Exact re-execution also remains open.
+Materialize now uses the v2 selection/unit ledger while preserving its one-click
+stream. Build-needed still uses only the common target-capture/write-claim/
+completion seam. Exact re-execution also remains open.
 
 Before applying either Renart or River migrations, `Store` runs SQLite's
 `quick_check` against the shared state database. A failed check aborts startup

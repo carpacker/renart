@@ -20,6 +20,7 @@ type stubInlineRunLedger struct {
 	started   bool
 	targets   []webscheduler.ExecutionTargetSnapshot
 	steps     []webscheduler.RunStepEvent
+	units     []webscheduler.PipelineRunUnitEvent
 	logs      []string
 	status    webscheduler.RunStatus
 	finishErr error
@@ -45,6 +46,11 @@ func (s *stubInlineRunLedger) SetInlineRunExecutionTargetSnapshot(_ context.Cont
 
 func (s *stubInlineRunLedger) RecordInlineRunStep(_ context.Context, _ string, event webscheduler.RunStepEvent) error {
 	s.steps = append(s.steps, event)
+	return nil
+}
+
+func (s *stubInlineRunLedger) RecordInlineRunUnit(_ context.Context, _ string, event webscheduler.PipelineRunUnitEvent) error {
+	s.units = append(s.units, event)
 	return nil
 }
 
@@ -187,6 +193,82 @@ func TestExecutionServicePersistsInlinePipelineThroughSchedulerLedger(t *testing
 	require.True(t, found)
 	assert.Equal(t, "inline_streaming", spec.Dispatch)
 	assert.Equal(t, "orders-uuid", spec.Pipeline.UUID)
+	var riverJobs int
+	require.NoError(t, store.DB().QueryRowContext(context.Background(), `SELECT COUNT(*) FROM river_job`).Scan(&riverJobs))
+	assert.Zero(t, riverJobs)
+}
+
+func TestExecutionServicePersistsInlineAssetSelectionThroughSchedulerLedger(t *testing.T) {
+	t.Parallel()
+	store, err := webscheduler.OpenStore(filepath.Join(t.TempDir(), "state.db"))
+	require.NoError(t, err)
+	defer store.Close()
+	ledger := webscheduler.New(webscheduler.Options{Store: store})
+	assetID := EncodeID("pipelines/orders/assets/orders.sql")
+	pipelineID := EncodeID("pipelines/orders/pipeline.yml")
+	start := time.Date(2026, 7, 18, 8, 0, 0, 123456789, time.UTC)
+	end := start.Add(time.Hour)
+	finished := start.Add(time.Second)
+	executor := &stubExecutionExecutor{
+		runAssetOutput: []byte("asset complete\n"),
+		runAssetChunks: [][]byte{[]byte("asset complete\n")},
+		runAssetEvents: []ExecutionAssetEvent{
+			{Asset: "analytics.orders", Status: "running", StartedAt: &start},
+			{Asset: "analytics.orders", Status: "success", StartedAt: &start, FinishedAt: &finished},
+		},
+		runAssetTargets: &ExecutionTargetSnapshot{
+			Version: ExecutionTargetSnapshotVersion, PipelineUUID: "orders-uuid",
+			Entries: map[string]ExecutionTargetSnapshotEntry{
+				"analytics.orders": {
+					AssetID: "orders-uuid:analytics.orders", TargetIdentity: "target-orders",
+					TargetFidelity: AssetRenderFidelityExact, Fingerprint: "v2:orders",
+					OwnContent: "v2:orders-own", ConsumedVarsHash: "consumed", VarsHash: "vars",
+					CoverageMode: ExecutionCoverageMarker,
+				},
+			},
+		},
+	}
+	events := bus.New()
+	var completed bus.RunCompleted
+	events.OnRunCompleted(func(event bus.RunCompleted) error { completed = event; return nil })
+	svc := NewExecutionService(ExecutionDependencies{
+		Executor: executor, InlineRuns: ledger, Events: events,
+		ResolveAssetNameByID: func(string) string { return "analytics.orders" },
+		FindInspectIDs:       func(ids ...string) []string { return ids },
+		CurrentPipelines: func() []PipelineView {
+			return []PipelineView{{
+				ID: pipelineID, UUID: "orders-uuid", Name: "analytics",
+				Assets: []AssetView{{ID: assetID, Name: "analytics.orders"}},
+			}}
+		},
+	})
+
+	result := svc.MaterializeAssetStream(
+		WithExecutionOrigin(context.Background(), webscheduler.RunTriggerCLI),
+		assetID, "prod", "asset", start.Format(time.RFC3339Nano), end.Format(time.RFC3339Nano),
+		false, false, "", nil,
+	)
+	require.Equal(t, "ok", result.Status, result.Error)
+	runs, err := store.List(context.Background(), webscheduler.RunFilter{PipelineID: pipelineID})
+	require.NoError(t, err)
+	require.Len(t, runs.Runs, 1)
+	run := runs.Runs[0]
+	assert.Equal(t, webscheduler.RunStatusSuccess, run.Status)
+	assert.Equal(t, webscheduler.RunTriggerCLI, run.Trigger)
+	assert.Equal(t, run.ID, completed.RunID)
+	assert.Equal(t, run.ID, completed.CompletionID)
+	units, err := store.ListRunUnits(context.Background(), run.ID)
+	require.NoError(t, err)
+	require.Len(t, units, 1)
+	assert.Equal(t, "analytics.orders", units[0].AssetName)
+	assert.Equal(t, "explicit", units[0].Reason)
+	assert.Equal(t, start.Format(time.RFC3339Nano), units[0].StartDate)
+	assert.Equal(t, webscheduler.PipelineRunUnitSuccess, units[0].Status)
+	_, logs, steps, err := store.Get(context.Background(), run.ID)
+	require.NoError(t, err)
+	require.Len(t, logs, 1)
+	require.Len(t, steps, 1)
+	assert.Equal(t, webscheduler.RunStatusSuccess, steps[0].Status)
 	var riverJobs int
 	require.NoError(t, store.DB().QueryRowContext(context.Background(), `SELECT COUNT(*) FROM river_job`).Scan(&riverJobs))
 	assert.Zero(t, riverJobs)
