@@ -475,6 +475,10 @@ func newWebServer(ctx context.Context, cfg serverConfig, logger *zap.Logger) (*w
 			_, err := server.snapshotStore.Validate(ctx, versionID, pipelineUUID)
 			return err
 		},
+		SnapshotOrdinal: func(ctx context.Context, versionID string) (int64, error) {
+			deployed, err := server.snapshotStore.Get(ctx, versionID)
+			return deployed.Ordinal, err
+		},
 		CheckSnapshot: func(ctx context.Context, pipelineUUID, versionID string) error {
 			_, err := server.snapshotStore.Validate(ctx, versionID, pipelineUUID)
 			return err

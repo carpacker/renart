@@ -331,8 +331,10 @@ mode), then starts the requested asset only if the upstream plan succeeds.
 ## 5. Snapshots and deploy (`internal/web/snapshot`, `renart deploy`)
 
 Content-addressed store in SQLite: `renart_blobs` (hash → file bytes) +
-`renart_snapshots` (version, pipeline, merkle root, manifest JSON, git
-SHA/dirty). Snapshots hold **source files, not rendered SQL** — rendering
+`renart_snapshots` (version, pipeline, per-pipeline ordinal, merkle root,
+manifest JSON, git SHA/dirty). Existing ordinals are backfilled oldest-first
+with a deterministic version-ID tie-breaker; identical no-op deploys retain
+their UUID and ordinal. Snapshots hold **source files, not rendered SQL** — rendering
 depends on per-run env/vars/interval, so the executor renders at run time from
 snapshot content exactly as from the working tree. Every selected snapshot is
 an exact version ID owned by the target pipeline. Admission and execution
@@ -343,9 +345,14 @@ discovery doesn't pick it up) with a `ConfigPath` override on the executor.
 Ordinary Build runs explicitly stay on the saved working tree even after a
 deployment exists, while a `deployed_only` environment resolves the latest
 deployment to an exact ID before enqueue. Deploy dedupes on identical merkle
-root. Drift between working tree and the latest deployed version is surfaced
-per pipeline (`/api/pipelines/{id}/deploy/status`, per-file view via
-`/api/snapshots/{versionId}/file`); the status also reports whether the latest
+root. A reviewed web deployment also submits the source Merkle it displayed;
+if saved files changed before the snapshot write, the server returns a typed
+conflict and creates nothing. Drift between working tree and the latest
+deployed version is surfaced per pipeline (`/api/pipelines/{id}/deploy/status`).
+Its file lists can be opened through a pipeline/version-owned comparison
+endpoint that returns exact deployed and saved text up to 2 MiB per side while
+withholding binary/oversized contents. The immutable snapshot-file endpoint
+remains `/api/snapshots/{versionId}/file`; status also reports whether the latest
 snapshot is executable so identical-but-corrupt content can be repaired by a
 new Deploy instead of dead-ending the UI.
 
@@ -378,9 +385,11 @@ separate scheduler-coordination workstream.
 
 The schedules UI compares each row's pinned snapshot with the pipeline's latest
 deployed version. A differing pin is shown as **Older deployment**, independently
-of data freshness and last-run status, with an action that deploys the current
-pipeline (deduping identical content) and atomically advances only that
-environment's schedule to the resulting snapshot. The row-level manual action
+of data freshness and last-run status. Repair/update opens the saved-source
+deployment review; after deployment the user explicitly selects zero or more
+older pins. The server validates the target deployment and compare-and-swaps
+all selected rows in one transaction, so a concurrently changed pin rejects
+the whole batch. The row-level manual action
 submits that displayed exact pin and remains a manual run, so it cannot advance
 the schedule watermark. Rows without a pin show **Needs deployment** instead of
 silently running the working tree.

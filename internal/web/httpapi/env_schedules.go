@@ -17,6 +17,7 @@ type EnvScheduleHandlers interface {
 	Ownership() scheduler.SchedulerOwnership
 	ListAllEnvSchedules(ctx context.Context) (live []scheduler.EnvSchedule, archived []scheduler.EnvSchedule, err error)
 	UpsertEnvSchedule(ctx context.Context, pipelineUUID string, req scheduler.UpsertEnvScheduleRequest) (scheduler.EnvSchedule, error)
+	PromoteEnvSchedules(ctx context.Context, pipelineUUID string, req scheduler.PromoteEnvSchedulesRequest) ([]scheduler.EnvSchedule, error)
 	SetEnvScheduleLifecycle(ctx context.Context, pipelineUUID, environment string, status scheduler.ScheduleStatus) error
 	ArchiveEnvSchedule(ctx context.Context, pipelineUUID, environment string) error
 }
@@ -31,8 +32,28 @@ type EnvSchedulesAPI struct {
 func RegisterEnvScheduleRoutes(router chi.Router, handlers *EnvSchedulesAPI) {
 	router.Get("/api/env-schedules", handlers.HandleList)
 	router.Put("/api/pipelines/{id}/env-schedules/{environment}", handlers.HandleUpsert)
+	router.Post("/api/pipelines/{id}/env-schedules/promote", handlers.HandlePromote)
 	router.Post("/api/pipelines/{id}/env-schedules/{environment}/status", handlers.HandleSetStatus)
 	router.Delete("/api/pipelines/{id}/env-schedules/{environment}", handlers.HandleArchive)
+}
+
+func (h *EnvSchedulesAPI) HandlePromote(w http.ResponseWriter, r *http.Request) {
+	pipelineUUID, ok := h.ResolvePipelineUUID(chi.URLParam(r, "id"))
+	if !ok {
+		webapi.WriteNotFound(w, "pipeline_not_found", "pipeline not found")
+		return
+	}
+	req, err := decodeStrictJSONObject[scheduler.PromoteEnvSchedulesRequest](r.Body)
+	if err != nil {
+		webapi.WriteBadRequest(w, "invalid_request_body", err.Error())
+		return
+	}
+	updated, err := h.Service.PromoteEnvSchedules(r.Context(), pipelineUUID, req)
+	if err != nil {
+		writeEnvScheduleMutationError(w, "env_schedule_promotion_failed", err)
+		return
+	}
+	webapi.WriteJSON(w, http.StatusOK, map[string]any{"status": "ok", "schedules": updated})
 }
 
 func (h *EnvSchedulesAPI) resolve(w http.ResponseWriter, r *http.Request) (string, string, bool) {

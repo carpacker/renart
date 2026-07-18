@@ -46,6 +46,7 @@ type Service struct {
 	latestSnapshot        func(context.Context, string) (string, bool, error)
 	checkSnapshot         func(context.Context, string, string) error
 	validateSnapshot      func(context.Context, string, string) error
+	snapshotOrdinal       func(context.Context, string) (int64, error)
 	recoverRun            func(context.Context, PipelineRun, []PipelineRunStep) error
 	lock                  *flock.Flock
 	riverClient           *river.Client[*sql.Tx]
@@ -86,6 +87,9 @@ type Options struct {
 	// ValidateSnapshot verifies that an exact version exists, belongs to the
 	// pipeline, and is executable before a schedule can retain the pin.
 	ValidateSnapshot func(context.Context, string, string) error
+	// SnapshotOrdinal resolves presentation identity for an immutable version.
+	// A missing historical deployment never blocks run or schedule history.
+	SnapshotOrdinal func(context.Context, string) (int64, error)
 	// RecoverRun observes a run reconciled after an unclean stop. The callback
 	// receives the persisted terminal steps after open steps have been failed;
 	// it may rebuild derived state, but must never execute the pipeline again.
@@ -242,6 +246,7 @@ func New(options Options) *Service {
 		latestSnapshot:        options.LatestSnapshot,
 		checkSnapshot:         options.CheckSnapshot,
 		validateSnapshot:      options.ValidateSnapshot,
+		snapshotOrdinal:       options.SnapshotOrdinal,
 		recoverRun:            options.RecoverRun,
 		ownershipState:        SchedulerOwnershipUnavailable,
 		ownerMessage:          "scheduler has not started",
@@ -876,6 +881,7 @@ func (s *Service) ListAllEnvSchedules(ctx context.Context) (live []EnvSchedule, 
 	live = make([]EnvSchedule, 0, len(rows))
 	archived = make([]EnvSchedule, 0)
 	for _, row := range rows {
+		s.hydrateSnapshotOrdinal(ctx, &row.SnapshotOrdinal, row.SnapshotVersionID)
 		if ref, ok := s.resolveRef(ctx, row.PipelineUUID); ok {
 			row.PipelineID = ref.EncodedID
 			row.PipelineName = ref.Name
@@ -889,6 +895,7 @@ func (s *Service) ListAllEnvSchedules(ctx context.Context) (live []EnvSchedule, 
 		if row.PipelineID != "" {
 			if list, listErr := s.store.List(ctx, RunFilter{PipelineID: row.PipelineID, Environment: row.Environment, Limit: 1}); listErr == nil && len(list.Runs) > 0 {
 				lastRun := list.Runs[0]
+				s.hydrateSnapshotOrdinal(ctx, &lastRun.SnapshotOrdinal, lastRun.SnapshotVersionID)
 				row.LastRun = &lastRun
 			}
 		}
@@ -1004,6 +1011,86 @@ func (s *Service) UpsertEnvSchedule(ctx context.Context, pipelineUUID string, re
 	if ref, ok := s.resolveRef(ctx, pipelineUUID); ok {
 		updated.PipelineID = ref.EncodedID
 		updated.PipelineName = ref.Name
+	}
+	s.hydrateSnapshotOrdinal(ctx, &updated.SnapshotOrdinal, updated.SnapshotVersionID)
+	return updated, nil
+}
+
+// PromoteEnvSchedules explicitly advances selected schedule pins after a
+// deployment review. Expected pins make the batch all-or-nothing if another
+// editor changed any selected row in the meantime.
+func (s *Service) PromoteEnvSchedules(ctx context.Context, pipelineUUID string, req PromoteEnvSchedulesRequest) ([]EnvSchedule, error) {
+	if err := s.RequireOwner(); err != nil {
+		return nil, err
+	}
+	pipelineUUID = strings.TrimSpace(pipelineUUID)
+	versionID := strings.TrimSpace(req.SnapshotVersionID)
+	if pipelineUUID == "" || versionID == "" {
+		return nil, errors.New("pipeline and snapshot_version_id are required")
+	}
+	if len(req.Schedules) == 0 {
+		return nil, errors.New("select at least one schedule to update")
+	}
+	if len(req.Schedules) > 100 {
+		return nil, errors.New("at most 100 schedules can be updated at once")
+	}
+	if err := s.validateScheduleSnapshot(ctx, pipelineUUID, versionID); err != nil {
+		return nil, err
+	}
+
+	selections := make([]EnvSchedulePinSelection, 0, len(req.Schedules))
+	seen := make(map[string]struct{}, len(req.Schedules))
+	for _, requested := range req.Schedules {
+		environment := strings.TrimSpace(requested.Environment)
+		expectedVersion := strings.TrimSpace(requested.ExpectedSnapshotVersionID)
+		if environment == "" || expectedVersion == "" {
+			return nil, errors.New("each selected schedule requires environment and expected_snapshot_version_id")
+		}
+		if _, duplicate := seen[environment]; duplicate {
+			return nil, fmt.Errorf("schedule %s was selected more than once", environment)
+		}
+		seen[environment] = struct{}{}
+		existing, found, err := s.store.GetEnvSchedule(ctx, pipelineUUID, environment)
+		if err != nil {
+			return nil, err
+		}
+		if !found || existing.Status == ScheduleStatusArchived {
+			return nil, fmt.Errorf("schedule %s was not found", environment)
+		}
+		if existing.SnapshotVersionID != expectedVersion {
+			return nil, fmt.Errorf("schedule %s changed after deployment review", environment)
+		}
+		if expectedVersion == versionID {
+			continue
+		}
+		selections = append(selections, EnvSchedulePinSelection{
+			Environment: environment, ExpectedSnapshotVersionID: expectedVersion,
+		})
+	}
+	if len(selections) > 0 {
+		if err := s.store.PromoteEnvSchedulePins(ctx, pipelineUUID, versionID, selections); err != nil {
+			return nil, err
+		}
+		if err := s.Reconcile(ctx); err != nil {
+			return nil, err
+		}
+	}
+
+	updated := make([]EnvSchedule, 0, len(req.Schedules))
+	for _, requested := range req.Schedules {
+		row, found, err := s.store.GetEnvSchedule(ctx, pipelineUUID, strings.TrimSpace(requested.Environment))
+		if err != nil {
+			return nil, err
+		}
+		if !found {
+			return nil, fmt.Errorf("schedule %s disappeared after promotion", requested.Environment)
+		}
+		if ref, ok := s.resolveRef(ctx, pipelineUUID); ok {
+			row.PipelineID = ref.EncodedID
+			row.PipelineName = ref.Name
+		}
+		s.hydrateSnapshotOrdinal(ctx, &row.SnapshotOrdinal, row.SnapshotVersionID)
+		updated = append(updated, row)
 	}
 	return updated, nil
 }
@@ -1175,6 +1262,7 @@ func (s *Service) admitQueuedRun(ctx context.Context, client *river.Client[*sql.
 		run.ID = id
 		riverJobID := inserted.Job.ID
 		run.RiverJobID = &riverJobID
+		s.hydrateSnapshotOrdinal(ctx, &run.SnapshotOrdinal, run.SnapshotVersionID)
 		s.publishRunEvent("run.queued", run)
 		return run, nil
 	}
@@ -1182,7 +1270,14 @@ func (s *Service) admitQueuedRun(ctx context.Context, client *river.Client[*sql.
 }
 
 func (s *Service) ListRuns(ctx context.Context, filter RunFilter) (RunList, error) {
-	return s.store.List(ctx, filter)
+	list, err := s.store.List(ctx, filter)
+	if err != nil {
+		return RunList{}, err
+	}
+	for index := range list.Runs {
+		s.hydrateSnapshotOrdinal(ctx, &list.Runs[index].SnapshotOrdinal, list.Runs[index].SnapshotVersionID)
+	}
+	return list, nil
 }
 
 func (s *Service) GetRun(ctx context.Context, id string) (PipelineRun, []LogLine, []PipelineRunStep, error) {
@@ -1190,7 +1285,18 @@ func (s *Service) GetRun(ctx context.Context, id string) (PipelineRun, []LogLine
 	if err != nil {
 		return PipelineRun{}, nil, nil, err
 	}
+	s.hydrateSnapshotOrdinal(ctx, &run.SnapshotOrdinal, run.SnapshotVersionID)
 	return run, trimLegacyOutputReplay(logs), steps, nil
+}
+
+func (s *Service) hydrateSnapshotOrdinal(ctx context.Context, destination *int64, versionID string) {
+	if s == nil || destination == nil || s.snapshotOrdinal == nil || strings.TrimSpace(versionID) == "" {
+		return
+	}
+	ordinal, err := s.snapshotOrdinal(ctx, strings.TrimSpace(versionID))
+	if err == nil && ordinal > 0 {
+		*destination = ordinal
+	}
 }
 
 func (s *Service) GetRunPlan(ctx context.Context, id string) (PipelineRunPlan, bool, error) {
@@ -1217,6 +1323,7 @@ func (s *Service) prepareRun(ctx context.Context, riverJobID int64, args pipelin
 		if run.Status != RunStatusQueued && run.Status != RunStatusRunning {
 			return PipelineRun{}, runSpecV1{}, false, nil
 		}
+		s.hydrateSnapshotOrdinal(ctx, &run.SnapshotOrdinal, run.SnapshotVersionID)
 		if riverJobID != 0 {
 			if run.RiverJobID != nil && *run.RiverJobID != riverJobID {
 				return PipelineRun{}, runSpecV1{}, false, &invalidRunSpecError{
@@ -1334,6 +1441,7 @@ func (s *Service) prepareRun(ctx context.Context, riverJobID int64, args pipelin
 	}
 	run.ID = id
 	run = applyRunSpec(run, spec)
+	s.hydrateSnapshotOrdinal(ctx, &run.SnapshotOrdinal, run.SnapshotVersionID)
 	s.publishRunEvent("run.queued", run)
 	return run, spec, true, nil
 }

@@ -155,6 +155,7 @@ export type PipelineRun = {
   error?: string;
   log_ref?: string;
   snapshot_version_id?: string;
+  snapshot_ordinal?: number;
   execution_context_resolved?: boolean;
 };
 

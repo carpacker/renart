@@ -262,6 +262,45 @@ select 1
 	assert.Nil(t, stale.parsed)
 }
 
+func TestPipelineDeploymentPlanIgnoresExecutionOnlyPolicyAndDataState(t *testing.T) {
+	_, root := writeTypeCheckWorkspace(t, "id: pipeline-uuid\nname: analytics", map[string]string{
+		"report.sql": `
+/* @bruin
+name: analytics.report
+type: duckdb.sql
+materialization:
+  type: table
+@bruin */
+select 1 as id
+`,
+	})
+	stale := &pipelinePlanStalenessStub{err: assert.AnError}
+	service := newTestPipelinePlanService(root, stale, nil)
+	service.deps.PolicyFor = func(string) policy.EnvironmentPolicy {
+		return policy.EnvironmentPolicy{Protected: true, DeployedOnly: true, ConfirmDestructive: true}
+	}
+	service.deps.ActiveRunID = func(context.Context, string, string) (string, error) {
+		return "run-active", nil
+	}
+
+	plan, apiErr := service.Plan(context.Background(), EncodeID("analytics"), PipelinePlanRequest{
+		Purpose:     PipelinePlanPurposeDeployment,
+		FullRefresh: true,
+		Selection:   PipelinePlanSelectionRequest{Mode: PipelinePlanSelectionAll},
+	})
+	require.Nil(t, apiErr)
+	assert.NotEqual(t, PipelinePlanStatusBlocked, plan.Status, plan.Readiness.Blockers)
+	assert.Equal(t, PipelinePlanSourceWorkingTree, plan.Source.Kind)
+	assert.Empty(t, plan.Readiness.ActiveRun)
+	assert.NotContains(t, pipelinePlanIssueCodes(plan.Readiness.Blockers), "pipeline_already_running")
+	assert.NotContains(t, pipelinePlanIssueCodes(plan.Readiness.Blockers), "data_state_unavailable")
+	assert.NotContains(t, pipelinePlanIssueCodes(plan.Readiness.Blockers), "interactive_execution_protected")
+	assert.NotContains(t, pipelinePlanIssueCodes(plan.Readiness.Blockers), "deployed_source_required")
+	assert.NotContains(t, pipelinePlanIssueCodes(plan.Readiness.Warnings), "destructive_confirmation_required")
+	assert.Nil(t, stale.parsed, "deployment review must not depend on mutable data state")
+	require.Len(t, plan.Assets, 1)
+}
+
 func TestPipelinePlanAssetClosureAndActiveRunAreExplicit(t *testing.T) {
 	_, root := writeTypeCheckWorkspace(t, "id: pipeline-uuid\nname: analytics", map[string]string{
 		"up.sql": `

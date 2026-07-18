@@ -496,6 +496,7 @@ export type AssetRenderRequest = {
 export type AssetRenderSource = {
   kind: string;
   version_id?: string;
+  deployment_ordinal?: number;
   pipeline_path: string;
   merkle_root: string;
 };
@@ -628,6 +629,7 @@ export type PipelinePlanSelectionRequest = {
 };
 
 export type PipelinePlanRequest = {
+  purpose?: string;
   environment?: string;
   start_date?: string;
   end_date?: string;

@@ -63,8 +63,8 @@ test.describe("app scheduler pages live", () => {
     ).toBe(true);
     await expect(scheduleRow.getByText("Needs deployment", { exact: true })).toBeVisible();
     const actions = scheduleRow.getByTestId("schedule-actions");
-    await expect(actions.getByRole("button", { name: "Deploy & pin" })).toBeVisible();
-    await expect(actions.getByRole("button", { name: "Run now" })).toBeDisabled();
+    await expect(actions.getByRole("button", { name: "Review deployment" })).toBeVisible();
+    await expect(actions.getByRole("button", { name: "Run pinned" })).toBeDisabled();
     await actions.getByRole("button", { name: /More actions for analytics/ }).click();
     await expect(page.getByRole("menuitem", { name: "Archive schedule" })).toBeVisible();
     await page.keyboard.press("Escape");
@@ -185,7 +185,7 @@ test.describe("app scheduler pages live", () => {
       });
     });
     const scheduleRow = page.getByTestId("schedule-row").filter({ hasText: "analytics" }).first();
-    await scheduleRow.getByRole("button", { name: "Run now" }).click();
+    await scheduleRow.getByRole("button", { name: /Run pinned/ }).click();
     expect((await pinnedRunRequest).postDataJSON()).toMatchObject({
       source: "snapshot",
       snapshot_version_id: pinnedVersion,
@@ -195,12 +195,19 @@ test.describe("app scheduler pages live", () => {
 
     const updateResponse = page.waitForResponse(
       (response) =>
-        response.url().includes(`/api/pipelines/${analyticsPipelineId}/env-schedules/default`) &&
-        response.request().method() === "PUT" &&
+        response.url().includes(`/api/pipelines/${analyticsPipelineId}/env-schedules/promote`) &&
+        response.request().method() === "POST" &&
         response.ok(),
       { timeout: 15000 },
     );
-    await scheduleRow.getByRole("button", { name: "Update deployment" }).click();
+    await scheduleRow.getByRole("button", { name: "Review deployment" }).click();
+    await expect(page.getByRole("heading", { name: "Review deployment" })).toBeVisible();
+    await page.getByRole("button", { name: /^Deploy \d+ assets?$/ }).click();
+    await expect(page.getByText(/still pinned to an older deployment/)).toBeVisible({
+      timeout: 15000,
+    });
+    await page.getByRole("checkbox", { name: "default" }).check();
+    await page.getByRole("button", { name: "Update 1 schedule" }).click();
     await updateResponse;
 
     await expect
@@ -261,9 +268,9 @@ test.describe("app scheduler pages live", () => {
     await expect(page.getByText("Deployment needs repair", { exact: true })).toBeVisible({
       timeout: 15000,
     });
-    await expect(page.getByRole("button", { name: "Repair & pin" })).toBeEnabled();
+    await expect(page.getByRole("button", { name: "Review repair" })).toBeEnabled();
     const scheduleRow = page.getByTestId("schedule-row").filter({ hasText: "analytics" }).first();
-    await expect(scheduleRow.getByRole("button", { name: "Run now" })).toBeDisabled();
+    await expect(scheduleRow.getByRole("button", { name: /Run pinned/ })).toBeDisabled();
     await expect(scheduleRow.getByTestId("schedule-metadata")).toContainText(
       "Pinned pipeline schedule",
     );

@@ -1536,6 +1536,28 @@ in Phase 3 and the earlier Phase 0b/0c workstreams.
 - generate and retain a redacted plan artifact for each scheduled run using its
   actual interval and variables.
 
+Implementation checkpoint (2026-07-18): deployments now have deterministic,
+per-pipeline ordinals while retaining UUIDs as their immutable execution
+identity. Build, schedules, plans, runs, and CLI output use the shared human
+label; identical deploys retain the existing ordinal. The web Deploy action and
+schedule repair/create paths now open an explicit saved-working-tree review.
+The planner's `deployment` purpose renders the entire pipeline but deliberately
+does not inherit execution-only freshness, active-run, protected-environment,
+or `deployed_only` gates, and run confirmation rejects that purpose.
+
+The review shows exact added/changed/removed paths plus source-bound deployed
+and saved text previews, with binary and files over 2 MiB withheld. Deployment
+submits the reviewed Merkle root and returns a typed conflict without writing a
+snapshot if saved source changed. Existing schedule pins never move as a side
+effect: after deployment the user selects an initially unchecked subset, and
+the server validates the target then compare-and-swaps the complete selection
+in one transaction. Schedule creation likewise reviews the workspace and pins
+the exact returned version; production UI no longer relies on `deploy_now`.
+
+The remaining Phase 3 slice is scheduled-run integration: persist and apply
+effective schedule variables, generate the redacted plan at the actual tick
+interval, and retain it with the scheduled run/recovery contract.
+
 ### Phase 4: optional policy and automation
 
 - configurable deployment gates for deterministic errors and acknowledged

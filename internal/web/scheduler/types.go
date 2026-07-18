@@ -79,6 +79,7 @@ type EnvSchedule struct {
 	PipelineUUID      string         `json:"pipeline_uuid"`
 	Environment       string         `json:"environment"`
 	SnapshotVersionID string         `json:"snapshot_version_id,omitempty"`
+	SnapshotOrdinal   int64          `json:"snapshot_ordinal,omitempty"`
 	Cron              string         `json:"cron"`
 	Timezone          string         `json:"timezone"`
 	Vars              map[string]any `json:"vars,omitempty"`
@@ -116,6 +117,16 @@ type UpsertEnvScheduleRequest struct {
 	// snapshot when none exists yet.
 	DeployNow bool `json:"deploy_now,omitempty"`
 	Paused    bool `json:"paused,omitempty"`
+}
+
+type EnvSchedulePinSelection struct {
+	Environment               string `json:"environment"`
+	ExpectedSnapshotVersionID string `json:"expected_snapshot_version_id"`
+}
+
+type PromoteEnvSchedulesRequest struct {
+	SnapshotVersionID string                    `json:"snapshot_version_id"`
+	Schedules         []EnvSchedulePinSelection `json:"schedules"`
 }
 
 type UpdateScheduleRequest struct {
@@ -174,6 +185,9 @@ type PipelineRun struct {
 	// SnapshotVersionID records the deployed snapshot the run executed;
 	// empty for working-tree builds.
 	SnapshotVersionID string `json:"snapshot_version_id,omitempty"`
+	// SnapshotOrdinal is resolved presentation metadata for the immutable
+	// version above. The UUID remains the persisted execution contract.
+	SnapshotOrdinal int64 `json:"snapshot_ordinal,omitempty"`
 	// FullRefresh, Backfill, and SensorMode hold the normalized admission request
 	// until ExecutionContextResolved becomes true. Once resolved, they are the
 	// effective modes persisted before the first asset starts. They remain an

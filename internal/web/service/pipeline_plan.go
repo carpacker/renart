@@ -31,6 +31,8 @@ const (
 
 	PipelinePlanSourceWorkingTree = "working_tree"
 	PipelinePlanSourceSnapshot    = "snapshot"
+	PipelinePlanPurposeExecution  = "execution"
+	PipelinePlanPurposeDeployment = "deployment"
 
 	PipelinePlanSelectionNeeded = "needed"
 	PipelinePlanSelectionAll    = "all"
@@ -51,6 +53,7 @@ type PipelinePlanSelectionRequest struct {
 // PipelinePlanRequest contains only behavior-changing plan inputs. Source is
 // resolved to an exact Merkle/version before the response is returned.
 type PipelinePlanRequest struct {
+	Purpose             string                       `json:"purpose,omitempty"`
 	Environment         string                       `json:"environment,omitempty"`
 	StartDate           string                       `json:"start_date,omitempty"`
 	EndDate             string                       `json:"end_date,omitempty"`
@@ -266,13 +269,26 @@ func (s *PipelinePlanService) Plan(
 		envPolicy = s.deps.PolicyFor(environment)
 	}
 
+	purpose, err := normalizePipelinePlanPurpose(req.Purpose)
+	if err != nil {
+		return PipelinePlan{}, &APIError{Status: 400, Code: "invalid_plan_purpose", Message: err.Error()}
+	}
+	if purpose == PipelinePlanPurposeDeployment && strings.TrimSpace(req.Source.Kind) == "" {
+		req.Source.Kind = PipelinePlanSourceWorkingTree
+	}
 	sourceRequest, err := normalizePipelinePlanSource(req.Source, envPolicy)
 	if err != nil {
 		return PipelinePlan{}, &APIError{Status: 400, Code: "invalid_plan_source", Message: err.Error()}
 	}
+	if purpose == PipelinePlanPurposeDeployment && sourceRequest.Kind != PipelinePlanSourceWorkingTree {
+		return PipelinePlan{}, &APIError{Status: 400, Code: "invalid_plan_source", Message: "deployment review requires the saved working tree"}
+	}
 	selectionRequest, err := normalizePipelinePlanSelection(req.Selection)
 	if err != nil {
 		return PipelinePlan{}, &APIError{Status: 400, Code: "invalid_plan_selection", Message: err.Error()}
+	}
+	if purpose == PipelinePlanPurposeDeployment && selectionRequest.Mode != PipelinePlanSelectionAll {
+		return PipelinePlan{}, &APIError{Status: 400, Code: "invalid_plan_selection", Message: "deployment review requires the entire pipeline"}
 	}
 
 	base := PipelinePlan{
@@ -373,7 +389,7 @@ func (s *PipelinePlanService) Plan(
 	base.Readiness.CodeChecks.PipelineID = pipelineID
 	addPipelineAssetParseFindings(&base.Readiness.CodeChecks, resolved.parsed, resolved.root)
 	s.addCodeCheckIssues(&base)
-	if s.deps.ActiveRunID != nil {
+	if purpose == PipelinePlanPurposeExecution && s.deps.ActiveRunID != nil {
 		activeRunID, activeErr := s.deps.ActiveRunID(ctx, pipelineID, pipelineUUID)
 		if activeErr != nil {
 			base.Readiness.Warnings = append(base.Readiness.Warnings, PipelinePlanIssue{
@@ -391,25 +407,31 @@ func (s *PipelinePlanService) Plan(
 		}
 	}
 
-	staleSelection := staleness.Selection{
-		PipelineUUID:      pipelineUUID,
-		EncodedPipelineID: pipelineID,
-		Environment:       environment,
-		Start:             &timeWindow.Start,
-		End:               &timeWindow.End,
-	}
-	staleSnapshot, staleErr := s.deps.Staleness.Evaluate(ctx, staleSelection, resolved.parsed)
-	if staleErr != nil {
-		base.Readiness.Blockers = append(base.Readiness.Blockers, PipelinePlanIssue{
-			Code:     "data_state_unavailable",
-			Severity: "error",
-			Message:  "current data state could not be evaluated for this source and environment",
-		})
-	} else {
-		base.Selection.DataStateToken = staleSnapshot.DataStateToken
+	staleSnapshot := staleness.Snapshot{}
+	dataStateAvailable := false
+	if purpose == PipelinePlanPurposeExecution {
+		staleSelection := staleness.Selection{
+			PipelineUUID:      pipelineUUID,
+			EncodedPipelineID: pipelineID,
+			Environment:       environment,
+			Start:             &timeWindow.Start,
+			End:               &timeWindow.End,
+		}
+		var staleErr error
+		staleSnapshot, staleErr = s.deps.Staleness.Evaluate(ctx, staleSelection, resolved.parsed)
+		if staleErr != nil {
+			base.Readiness.Blockers = append(base.Readiness.Blockers, PipelinePlanIssue{
+				Code:     "data_state_unavailable",
+				Severity: "error",
+				Message:  "current data state could not be evaluated for this source and environment",
+			})
+		} else {
+			dataStateAvailable = true
+			base.Selection.DataStateToken = staleSnapshot.DataStateToken
+		}
 	}
 
-	selected := selectPipelinePlanAssets(resolved.parsed, selectionRequest, staleSnapshot.Assets, staleErr == nil)
+	selected := selectPipelinePlanAssets(resolved.parsed, selectionRequest, staleSnapshot.Assets, dataStateAvailable)
 	if selected.err != nil {
 		return PipelinePlan{}, &APIError{Status: 400, Code: "invalid_plan_selection", Message: selected.err.Error()}
 	}
@@ -468,11 +490,17 @@ func (s *PipelinePlanService) Plan(
 	base.Context.ConfigurationDigest = selectedConfiguration.Digest
 	base.Context.ConfigurationFidelity = string(selectedConfiguration.Fidelity)
 	if len(selectedAssets) > 0 && (selectedConfiguration.Fidelity != runcontext.IdentityFidelityExact || selectedConfiguration.Digest == "") {
-		base.Readiness.Blockers = append(base.Readiness.Blockers, PipelinePlanIssue{
+		issue := PipelinePlanIssue{
 			Code:     "configuration_identity_unavailable",
 			Severity: "error",
 			Message:  "the selected execution configuration cannot be bound to a stable, secret-free identity",
-		})
+		}
+		if purpose == PipelinePlanPurposeDeployment {
+			issue.Severity = "warning"
+			base.Readiness.Warnings = append(base.Readiness.Warnings, issue)
+		} else {
+			base.Readiness.Blockers = append(base.Readiness.Blockers, issue)
+		}
 	}
 	for _, item := range selected.items {
 		asset := item.asset
@@ -572,7 +600,9 @@ func (s *PipelinePlanService) Plan(
 		base.Summary.DestructiveOperations += len(base.ExecutionUnits)
 	}
 	base.Context.Destructive = base.Summary.DestructiveOperations > 0
-	s.addPolicyIssues(&base, envPolicy)
+	if purpose == PipelinePlanPurposeExecution {
+		s.addPolicyIssues(&base, envPolicy)
+	}
 
 	latestSourceState, stateErr := snapshot.CollectSourceState(resolved.pipelineDir)
 	if stateErr != nil {
@@ -618,6 +648,19 @@ func (s *PipelinePlanService) executionTime(raw string) (time.Time, error) {
 		return s.deps.Now().UTC(), nil
 	}
 	return time.Now().UTC(), nil
+}
+
+func normalizePipelinePlanPurpose(raw string) (string, error) {
+	purpose := strings.TrimSpace(raw)
+	if purpose == "" {
+		return PipelinePlanPurposeExecution, nil
+	}
+	switch purpose {
+	case PipelinePlanPurposeExecution, PipelinePlanPurposeDeployment:
+		return purpose, nil
+	default:
+		return "", fmt.Errorf("purpose must be execution or deployment")
+	}
 }
 
 func normalizePipelinePlanSource(req PipelinePlanSourceRequest, envPolicy policy.EnvironmentPolicy) (PipelinePlanSourceRequest, error) {
@@ -744,10 +787,11 @@ func (s *PipelinePlanService) resolveSource(
 		resolved.pipelineDir = pipelineDir
 		resolved.manifest = deployed.Manifest
 		resolved.source = AssetRenderSource{
-			Kind:         PipelinePlanSourceSnapshot,
-			VersionID:    deployed.VersionID,
-			PipelinePath: relPath,
-			MerkleRoot:   deployed.MerkleRoot,
+			Kind:              PipelinePlanSourceSnapshot,
+			VersionID:         deployed.VersionID,
+			DeploymentOrdinal: deployed.Ordinal,
+			PipelinePath:      relPath,
+			MerkleRoot:        deployed.MerkleRoot,
 		}
 	}
 

@@ -81,6 +81,11 @@ func (h *PipelinePlanAPI) HandleConfirmPipelinePlan(w http.ResponseWriter, r *ht
 		webapi.WriteBadRequest(w, "plan_id_required", "plan_id is required")
 		return
 	}
+	purpose := strings.TrimSpace(req.Plan.Purpose)
+	if purpose != "" && purpose != service.PipelinePlanPurposeExecution {
+		webapi.WriteBadRequest(w, "plan_purpose_not_confirmable", "only execution plans can be confirmed as runs")
+		return
+	}
 	selectionMode := strings.TrimSpace(req.Plan.Selection.Mode)
 	if selectionMode != service.PipelinePlanSelectionAll && selectionMode != service.PipelinePlanSelectionNeeded && selectionMode != service.PipelinePlanSelectionAsset {
 		webapi.WriteBadRequest(w, "plan_selection_not_confirmable", "the selected pipeline plan mode cannot be confirmed")

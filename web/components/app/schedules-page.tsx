@@ -45,8 +45,10 @@ import { activePipelineRunConflict } from "@/lib/api-scheduler";
 import type { CatchupPolicy, EnvSchedule, UpsertEnvScheduleInput } from "@/lib/api-env-schedules";
 import { workspaceAtom } from "@/lib/atoms/domains/workspace";
 import type { PipelineRun } from "@/lib/types";
+import { deploymentLabel } from "@/lib/deployment-label";
 
 import { PageHeader, AppPage, AppPanel } from "./app-primitives";
+import { PipelinePlanSheet } from "./pipeline-plan-sheet";
 
 const buckets = ["1hr", "6hr", "12hr", "24hr"] as const;
 
@@ -70,6 +72,11 @@ export function AppSchedulesPage() {
   const [query, setQuery] = useState("");
   const [bucket, setBucket] = useState<(typeof buckets)[number]>("12hr");
   const [newScheduleOpen, setNewScheduleOpen] = useState(false);
+  const [deploymentReview, setDeploymentReview] = useState<{
+    pipelineId: string;
+    pipelineName: string;
+    environment: string;
+  } | null>(null);
   const tickDensity = useTimelineTickDensity();
   const window = timelineWindow(bucket, tickDensity);
   const axis = timelineAxis(window);
@@ -217,19 +224,13 @@ export function AppSchedulesPage() {
                   )}
                   onSetStatus={(status) => envSchedules.setStatus(schedule, status)}
                   onArchive={() => envSchedules.archive(schedule)}
-                  onUpdateDeployment={async () => {
+                  onReviewDeployment={() => {
                     if (!schedule.pipeline_id) return;
-                    await envSchedules.upsert(
-                      { ...schedule, pipeline_id: schedule.pipeline_id },
-                      {
-                        cron: schedule.cron,
-                        timezone: schedule.timezone,
-                        vars: schedule.vars,
-                        catchup_policy: schedule.catchup_policy,
-                        paused: schedule.status === "paused",
-                        deploy_now: true,
-                      },
-                    );
+                    setDeploymentReview({
+                      pipelineId: schedule.pipeline_id,
+                      pipelineName: schedule.pipeline_name || schedule.pipeline_uuid,
+                      environment: schedule.environment,
+                    });
                   }}
                 />
               ))}
@@ -257,6 +258,13 @@ export function AppSchedulesPage() {
           );
         }}
       />
+      <ScheduleDeploymentReview
+        target={deploymentReview}
+        onOpenChange={(nextOpen) => {
+          if (!nextOpen) setDeploymentReview(null);
+        }}
+        onSchedulesChanged={envSchedules.refresh}
+      />
     </AppPage>
   );
 }
@@ -271,7 +279,7 @@ function EnvScheduleRow({
   activeRun,
   onSetStatus,
   onArchive,
-  onUpdateDeployment,
+  onReviewDeployment,
 }: {
   schedule: EnvSchedule;
   window: TimelineWindow;
@@ -282,12 +290,14 @@ function EnvScheduleRow({
   activeRun?: PipelineRun;
   onSetStatus: (status: "active" | "paused") => Promise<void>;
   onArchive: () => Promise<void>;
-  onUpdateDeployment: () => Promise<void>;
+  onReviewDeployment: () => void;
 }) {
   const deployState = usePipelineDeploy(schedule.pipeline_id);
   const configuredEnabled = schedule.status === "active";
   const latestVersion = deployState.status?.version_id;
+  const latestOrdinal = deployState.status?.ordinal;
   const pinnedVersion = schedule.snapshot_version_id?.trim() ?? "";
+  const pinnedDeployment = deploymentLabel(schedule.snapshot_ordinal, pinnedVersion, "deployment");
   const overrideNames = Object.keys(schedule.vars ?? {}).sort();
   const deploymentOutdated = Boolean(
     latestVersion && pinnedVersion && latestVersion !== pinnedVersion,
@@ -306,7 +316,7 @@ function EnvScheduleRow({
   const sourceBlockReason = !pinnedVersion
     ? "This schedule needs an exact deployment pin before it can run"
     : pinnedDeploymentCorrupt
-      ? `Pinned deployment ${pinnedVersion.slice(0, 8)} failed its integrity check${deployState.status?.integrity_error ? `: ${deployState.status.integrity_error}` : ""}`
+      ? `Pinned ${pinnedDeployment} failed its integrity check${deployState.status?.integrity_error ? `: ${deployState.status.integrity_error}` : ""}`
       : overrideNames.length > 0
         ? `Schedule overrides are not executable yet: ${overrideNames.join(", ")}`
         : undefined;
@@ -326,14 +336,16 @@ function EnvScheduleRow({
       ? "Running"
       : activeRun?.status === "queued"
         ? "Queued"
-        : "Run now";
+        : schedule.snapshot_ordinal
+          ? `Run pinned #${schedule.snapshot_ordinal}`
+          : "Run pinned";
   const pipelineLabel = schedule.pipeline_name || schedule.pipeline_uuid;
   const lastRunAt = schedule.last_run?.finished_at ?? schedule.last_run?.started_at;
   const lastRunLabel = schedule.last_run
     ? `${sentenceCase(schedule.last_run.status)} ${formatSchedulerDate(lastRunAt)}`
     : "Not run yet";
   const nowLeft = timelineLeft(Date.now(), window);
-  const runWindowDescription = `Environment ${schedule.environment}. This action sends and records no interval; when execution starts, the backend resolves the effective window from the pipeline schedule stored in deployment ${pinnedVersion.slice(0, 8)}.`;
+  const runWindowDescription = `Environment ${schedule.environment}. This action sends and records no interval; when execution starts, the backend resolves the effective window from the pipeline schedule stored in ${pinnedDeployment}.`;
   const triggerNow = async () => {
     if (!schedule.pipeline_id || runBlockReason) return;
     setTriggering(true);
@@ -356,17 +368,6 @@ function EnvScheduleRow({
       });
     } finally {
       setTriggering(false);
-    }
-  };
-  const updateDeployment = async () => {
-    setActionError(null);
-    try {
-      await onUpdateDeployment();
-      await deployState.refresh();
-    } catch (cause) {
-      setActionError({
-        message: cause instanceof Error ? cause.message : "Failed to update the deployment.",
-      });
     }
   };
   const updateStatus = async (status: "active" | "paused") => {
@@ -437,10 +438,12 @@ function EnvScheduleRow({
                       tabIndex={0}
                     >
                       <Package className="size-3 shrink-0 text-muted-foreground" />
-                      {pinnedVersion.slice(0, 8)}
+                      {deploymentLabel(schedule.snapshot_ordinal, pinnedVersion)}
                     </span>
                   </TooltipTrigger>
-                  <TooltipContent>Pinned deployed snapshot {pinnedVersion}</TooltipContent>
+                  <TooltipContent>
+                    Pinned {pinnedDeployment} ({pinnedVersion})
+                  </TooltipContent>
                 </Tooltip>
               ) : (
                 <span className="text-foreground">Not pinned</span>
@@ -483,8 +486,9 @@ function EnvScheduleRow({
                     </Badge>
                   </TooltipTrigger>
                   <TooltipContent className="max-w-80">
-                    This schedule runs snapshot {pinnedVersion.slice(0, 8)}. The latest deployment
-                    is {latestVersion?.slice(0, 8)}. Data freshness is tracked separately.
+                    This schedule runs {pinnedDeployment}. The latest is{" "}
+                    {deploymentLabel(latestOrdinal, latestVersion, "deployment")}. Data freshness is
+                    tracked separately.
                   </TooltipContent>
                 </Tooltip>
               ) : null}
@@ -563,20 +567,16 @@ function EnvScheduleRow({
               title={
                 !canMutate
                   ? ownershipReason
-                  : "Deploy the current pipeline and update this schedule"
+                  : "Review the saved pipeline, deploy it, then choose which schedule pins to update"
               }
-              onClick={() => void updateDeployment()}
+              onClick={onReviewDeployment}
             >
               {busy ? (
                 <Loader2 data-icon="inline-start" className="animate-spin" />
               ) : (
                 <RefreshCw data-icon="inline-start" />
               )}
-              {pinnedDeploymentCorrupt
-                ? "Repair & pin"
-                : pinnedVersion
-                  ? "Update deployment"
-                  : "Deploy & pin"}
+              {pinnedDeploymentCorrupt ? "Review repair" : "Review deployment"}
             </Button>
           ) : null}
           <Tooltip>
@@ -711,6 +711,30 @@ function ArchivedSection({
   );
 }
 
+function ScheduleDeploymentReview({
+  target,
+  onOpenChange,
+  onSchedulesChanged,
+}: {
+  target: { pipelineId: string; pipelineName: string; environment: string } | null;
+  onOpenChange: (open: boolean) => void;
+  onSchedulesChanged: () => void | Promise<void>;
+}) {
+  const deployState = usePipelineDeploy(target?.pipelineId);
+  return (
+    <PipelinePlanSheet
+      open={Boolean(target)}
+      onOpenChange={onOpenChange}
+      pipelineId={target?.pipelineId ?? ""}
+      pipelineName={target?.pipelineName ?? "Pipeline"}
+      environment={target?.environment ?? ""}
+      intent="deploy"
+      onDeploy={(expectedSourceMerkle) => deployState.deploy(expectedSourceMerkle)}
+      onSchedulesChanged={onSchedulesChanged}
+    />
+  );
+}
+
 function NewEnvScheduleDialog({
   open,
   onOpenChange,
@@ -739,6 +763,15 @@ function NewEnvScheduleDialog({
   const [sourceMode, setSourceMode] = useState<"existing" | "deploy">("deploy");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [pendingDeployment, setPendingDeployment] = useState<{
+    pipeline: { id: string; uuid?: string; name: string };
+    environment: string;
+    input: {
+      cron: string;
+      timezone: string;
+      catchup_policy: CatchupPolicy;
+    };
+  } | null>(null);
 
   useEffect(() => {
     if (open) {
@@ -746,6 +779,7 @@ function NewEnvScheduleDialog({
       setEnvironment(workspace?.selected_environment ?? "");
       setSourceMode("deploy");
       setError(null);
+      setPendingDeployment(null);
     }
   }, [open, pipelines, workspace?.selected_environment]);
 
@@ -768,21 +802,29 @@ function NewEnvScheduleDialog({
       );
       return;
     }
+    const selectedPipeline = { id: pipeline.id, uuid: pipeline.uuid, name: pipeline.name };
+    const scheduleInput = {
+      cron: cron.trim(),
+      timezone: timezone.trim() || "UTC",
+      catchup_policy: catchupPolicy,
+    };
+    if (sourceMode === "deploy") {
+      setPendingDeployment({
+        pipeline: selectedPipeline,
+        environment: environment.trim(),
+        input: scheduleInput,
+      });
+      onOpenChange(false);
+      return;
+    }
+
     setSubmitting(true);
     setError(null);
     try {
-      await onCreate(
-        { id: pipeline.id, uuid: pipeline.uuid, name: pipeline.name },
-        environment.trim(),
-        {
-          cron: cron.trim(),
-          timezone: timezone.trim() || "UTC",
-          catchup_policy: catchupPolicy,
-          ...(sourceMode === "existing"
-            ? { snapshot_version_id: existingVersion! }
-            : { deploy_now: true }),
-        },
-      );
+      await onCreate(selectedPipeline, environment.trim(), {
+        ...scheduleInput,
+        snapshot_version_id: existingVersion!,
+      });
       onOpenChange(false);
     } catch (submitError) {
       setError(submitError instanceof Error ? submitError.message : "Failed to save schedule.");
@@ -792,127 +834,159 @@ function NewEnvScheduleDialog({
   };
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-lg">
-        <DialogHeader>
-          <DialogTitle className="flex items-center gap-2">
-            <Clock className="size-4 text-primary" />
-            New schedule
-          </DialogTitle>
-          <DialogDescription>
-            Schedules are per pipeline and environment, and execute a deployed snapshot.
-          </DialogDescription>
-        </DialogHeader>
-        <div className="space-y-3">
-          <label className="block space-y-1.5">
-            <span className="text-xs font-medium text-muted-foreground">Pipeline</span>
-            <select
-              className="h-9 w-full rounded-md border bg-background px-2 text-sm"
-              value={pipelineId}
-              onChange={(event) => {
-                setPipelineId(event.target.value);
-                setSourceMode("deploy");
-              }}
-            >
-              {pipelines.map((pipeline) => (
-                <option key={pipeline.id} value={pipeline.id}>
-                  {pipeline.name || pipeline.path}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label className="block space-y-1.5">
-            <span className="text-xs font-medium text-muted-foreground">Environment</span>
-            <Input
-              value={environment}
-              onChange={(event) => setEnvironment(event.target.value)}
-              placeholder="prod"
-            />
-          </label>
-          <div className="grid grid-cols-2 gap-3">
+    <>
+      <Dialog open={open} onOpenChange={onOpenChange}>
+        <DialogContent className="max-w-lg">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Clock className="size-4 text-primary" />
+              New schedule
+            </DialogTitle>
+            <DialogDescription>
+              Schedules are per pipeline and environment, and execute a deployed snapshot.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-3">
             <label className="block space-y-1.5">
-              <span className="text-xs font-medium text-muted-foreground">Cron</span>
-              <Input
-                className="font-mono"
-                value={cron}
-                onChange={(event) => setCron(event.target.value)}
-                placeholder="0 * * * *"
-              />
-            </label>
-            <label className="block space-y-1.5">
-              <span className="text-xs font-medium text-muted-foreground">Timezone</span>
-              <Input
-                value={timezone}
-                onChange={(event) => setTimezone(event.target.value)}
-                placeholder="UTC"
-              />
-            </label>
-          </div>
-          <label className="block space-y-1.5">
-            <span className="text-xs font-medium text-muted-foreground">Catch-up policy</span>
-            <select
-              className="h-9 w-full rounded-md border bg-background px-2 text-sm"
-              value={catchupPolicy}
-              onChange={(event) => setCatchupPolicy(event.target.value as CatchupPolicy)}
-            >
-              <option value="skip">Skip missed intervals</option>
-              <option value="run_once">Run once to catch up</option>
-              <option value="backfill">
-                Backfill each missed interval (incremental assets only)
-              </option>
-            </select>
-          </label>
-          <div className="space-y-1.5">
-            <span className="text-xs font-medium text-muted-foreground">Run source</span>
-            <ToggleGroup
-              type="single"
-              variant="outline"
-              spacing={0}
-              value={sourceMode}
-              onValueChange={(value) => {
-                if (value === "existing" || value === "deploy") setSourceMode(value);
-              }}
-              className="grid w-full grid-cols-2"
-            >
-              <ToggleGroupItem
-                value="existing"
-                className="w-full"
-                disabled={
-                  deployState.loading ||
-                  !deployState.status?.has_snapshot ||
-                  !deployState.status.executable
-                }
+              <span className="text-xs font-medium text-muted-foreground">Pipeline</span>
+              <select
+                className="h-9 w-full rounded-md border bg-background px-2 text-sm"
+                value={pipelineId}
+                onChange={(event) => {
+                  setPipelineId(event.target.value);
+                  setSourceMode("deploy");
+                }}
               >
-                {deployState.loading
-                  ? "Checking deployment…"
-                  : deployState.status?.has_snapshot && !deployState.status.executable
-                    ? "Deployment needs repair"
-                    : deployState.status?.version_id
-                      ? `Use ${deployState.status.version_id.slice(0, 8)}`
-                      : "No deployment yet"}
-              </ToggleGroupItem>
-              <ToggleGroupItem value="deploy" className="w-full">
-                Deploy saved workspace
-              </ToggleGroupItem>
-            </ToggleGroup>
-            <p className="text-[11px] text-muted-foreground">
-              {sourceMode === "existing" && deployState.status?.version_id
-                ? `The schedule will stay pinned to deployment ${deployState.status.version_id.slice(0, 8)}.`
-                : "Renart will deploy the saved workspace and pin the schedule to that exact deployment."}
-            </p>
+                {pipelines.map((pipeline) => (
+                  <option key={pipeline.id} value={pipeline.id}>
+                    {pipeline.name || pipeline.path}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="block space-y-1.5">
+              <span className="text-xs font-medium text-muted-foreground">Environment</span>
+              <Input
+                value={environment}
+                onChange={(event) => setEnvironment(event.target.value)}
+                placeholder="prod"
+              />
+            </label>
+            <div className="grid grid-cols-2 gap-3">
+              <label className="block space-y-1.5">
+                <span className="text-xs font-medium text-muted-foreground">Cron</span>
+                <Input
+                  className="font-mono"
+                  value={cron}
+                  onChange={(event) => setCron(event.target.value)}
+                  placeholder="0 * * * *"
+                />
+              </label>
+              <label className="block space-y-1.5">
+                <span className="text-xs font-medium text-muted-foreground">Timezone</span>
+                <Input
+                  value={timezone}
+                  onChange={(event) => setTimezone(event.target.value)}
+                  placeholder="UTC"
+                />
+              </label>
+            </div>
+            <label className="block space-y-1.5">
+              <span className="text-xs font-medium text-muted-foreground">Catch-up policy</span>
+              <select
+                className="h-9 w-full rounded-md border bg-background px-2 text-sm"
+                value={catchupPolicy}
+                onChange={(event) => setCatchupPolicy(event.target.value as CatchupPolicy)}
+              >
+                <option value="skip">Skip missed intervals</option>
+                <option value="run_once">Run once to catch up</option>
+                <option value="backfill">
+                  Backfill each missed interval (incremental assets only)
+                </option>
+              </select>
+            </label>
+            <div className="space-y-1.5">
+              <span className="text-xs font-medium text-muted-foreground">Run source</span>
+              <ToggleGroup
+                type="single"
+                variant="outline"
+                spacing={0}
+                value={sourceMode}
+                onValueChange={(value) => {
+                  if (value === "existing" || value === "deploy") setSourceMode(value);
+                }}
+                className="grid w-full grid-cols-2"
+              >
+                <ToggleGroupItem
+                  value="existing"
+                  className="w-full"
+                  disabled={
+                    deployState.loading ||
+                    !deployState.status?.has_snapshot ||
+                    !deployState.status.executable
+                  }
+                >
+                  {deployState.loading
+                    ? "Checking deployment…"
+                    : deployState.status?.has_snapshot && !deployState.status.executable
+                      ? "Deployment needs repair"
+                      : deployState.status?.version_id
+                        ? `Use ${deploymentLabel(
+                            deployState.status.ordinal,
+                            deployState.status.version_id,
+                          )}`
+                        : "No deployment yet"}
+                </ToggleGroupItem>
+                <ToggleGroupItem value="deploy" className="w-full">
+                  Review saved workspace
+                </ToggleGroupItem>
+              </ToggleGroup>
+              <p className="text-[11px] text-muted-foreground">
+                {sourceMode === "existing" && deployState.status?.version_id
+                  ? `The schedule will stay pinned to ${deploymentLabel(
+                      deployState.status.ordinal,
+                      deployState.status.version_id,
+                      "deployment",
+                    )}.`
+                  : "Review the saved workspace, create a deployment, and pin this schedule to that exact version."}
+              </p>
+            </div>
+            {error ? <p className="text-xs text-red-600">{error}</p> : null}
           </div>
-          {error ? <p className="text-xs text-red-600">{error}</p> : null}
-        </div>
-        <DialogFooter>
-          <Button variant="outline" onClick={() => onOpenChange(false)} disabled={submitting}>
-            Cancel
-          </Button>
-          <Button onClick={() => void submit()} disabled={submitting || !canMutate}>
-            {submitting ? "Saving…" : "Create schedule"}
-          </Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => onOpenChange(false)} disabled={submitting}>
+              Cancel
+            </Button>
+            <Button onClick={() => void submit()} disabled={submitting || !canMutate}>
+              {submitting
+                ? "Saving…"
+                : sourceMode === "deploy"
+                  ? "Review & create"
+                  : "Create schedule"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+      <PipelinePlanSheet
+        open={Boolean(pendingDeployment)}
+        onOpenChange={(nextOpen) => {
+          if (!nextOpen) setPendingDeployment(null);
+        }}
+        pipelineId={pendingDeployment?.pipeline.id ?? ""}
+        pipelineName={pendingDeployment?.pipeline.name ?? "Pipeline"}
+        environment={pendingDeployment?.environment ?? ""}
+        intent="deploy"
+        onDeploy={async (expectedSourceMerkle) => {
+          if (!pendingDeployment) throw new Error("Schedule details are unavailable.");
+          const response = await deployState.deploy(expectedSourceMerkle);
+          await onCreate(pendingDeployment.pipeline, pendingDeployment.environment, {
+            ...pendingDeployment.input,
+            snapshot_version_id: response.snapshot.version_id,
+          });
+          return response;
+        }}
+      />
+    </>
   );
 }
 

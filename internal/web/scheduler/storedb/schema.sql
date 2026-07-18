@@ -245,6 +245,7 @@ CREATE TABLE IF NOT EXISTS renart_blobs (
 CREATE TABLE IF NOT EXISTS renart_snapshots (
     version_id  TEXT PRIMARY KEY,
     pipeline_id TEXT NOT NULL,
+    ordinal     INTEGER NOT NULL CHECK (ordinal > 0),
     merkle_root TEXT NOT NULL,
     manifest    TEXT NOT NULL,
     git_sha     TEXT,
@@ -253,8 +254,10 @@ CREATE TABLE IF NOT EXISTS renart_snapshots (
     created_by  TEXT
 );
 
+CREATE UNIQUE INDEX IF NOT EXISTS idx_renart_snapshots_pipeline_ordinal
+    ON renart_snapshots (pipeline_id, ordinal);
 CREATE INDEX IF NOT EXISTS idx_renart_snapshots_pipeline
-    ON renart_snapshots (pipeline_id, created_at DESC);
+    ON renart_snapshots (pipeline_id, ordinal DESC);
 
 CREATE TABLE IF NOT EXISTS renart_schedules (
     pipeline_id         TEXT NOT NULL,

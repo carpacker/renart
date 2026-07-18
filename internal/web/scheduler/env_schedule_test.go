@@ -200,6 +200,30 @@ func TestUpsertEnvScheduleValidation(t *testing.T) {
 	assert.Equal(t, ScheduleStatusPaused, paused.Status)
 	err = service.SetEnvScheduleLifecycle(ctx, "uuid-1", "variables", ScheduleStatusActive)
 	require.ErrorContains(t, err, "remove the overrides")
+
+	promoted, err := service.PromoteEnvSchedules(ctx, "uuid-1", PromoteEnvSchedulesRequest{
+		SnapshotVersionID: "snap-new",
+		Schedules: []EnvSchedulePinSelection{
+			{Environment: "prod", ExpectedSnapshotVersionID: "snap-new"},
+			{Environment: "variables", ExpectedSnapshotVersionID: "snap-existing"},
+		},
+	})
+	require.NoError(t, err)
+	require.Len(t, promoted, 2)
+	assert.Equal(t, "snap-new", promoted[1].SnapshotVersionID)
+
+	_, err = service.PromoteEnvSchedules(ctx, "uuid-1", PromoteEnvSchedulesRequest{
+		SnapshotVersionID: "snap-existing",
+		Schedules: []EnvSchedulePinSelection{
+			{Environment: "prod", ExpectedSnapshotVersionID: "stale-client-pin"},
+			{Environment: "variables", ExpectedSnapshotVersionID: "snap-new"},
+		},
+	})
+	require.ErrorContains(t, err, "changed after deployment review")
+	prod, found, loadErr := store.GetEnvSchedule(ctx, "uuid-1", "prod")
+	require.NoError(t, loadErr)
+	require.True(t, found)
+	assert.Equal(t, "snap-new", prod.SnapshotVersionID, "a stale batch must not partially promote")
 }
 
 func TestEnvScheduledWorkerRunsWithEnvironmentAndWatermark(t *testing.T) {

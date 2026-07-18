@@ -53,6 +53,7 @@ func TestDeployAndMaterializeRoundTrip(t *testing.T) {
 	deployed, created, err := store.Deploy(ctx, "p", dir, "tester")
 	require.NoError(t, err)
 	assert.True(t, created)
+	assert.EqualValues(t, 1, deployed.Ordinal)
 	assert.Len(t, deployed.Manifest, 3)
 
 	dest := t.TempDir()
@@ -76,6 +77,7 @@ func TestDeployDeduplicatesIdenticalContent(t *testing.T) {
 	require.NoError(t, err)
 	assert.False(t, created, "identical content should not create a new snapshot")
 	assert.Equal(t, first.VersionID, second.VersionID)
+	assert.Equal(t, first.Ordinal, second.Ordinal)
 
 	// An edit creates a new version; the old one stays materializable.
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "assets", "a.sql"), []byte("select 1, 2"), 0o644))
@@ -83,6 +85,7 @@ func TestDeployDeduplicatesIdenticalContent(t *testing.T) {
 	require.NoError(t, err)
 	assert.True(t, created)
 	assert.NotEqual(t, first.VersionID, third.VersionID)
+	assert.EqualValues(t, 2, third.Ordinal)
 
 	dest := t.TempDir()
 	require.NoError(t, store.Materialize(ctx, first.VersionID, dest))
@@ -91,16 +94,62 @@ func TestDeployDeduplicatesIdenticalContent(t *testing.T) {
 	assert.Equal(t, "select 1", string(content))
 }
 
-func TestLatestUsesTheMigrationTieBreaker(t *testing.T) {
+func TestDeployReviewedRejectsSavedSourceChangedAfterReview(t *testing.T) {
+	t.Parallel()
+	store := openTestStore(t)
+	ctx := context.Background()
+	dir := writePipelineDir(t, map[string]string{
+		"pipeline.yml": "id: p\n",
+		"assets/a.sql": "select 1",
+	})
+	manifest, err := snapshot.CollectManifestHashes(dir)
+	require.NoError(t, err)
+	reviewedRoot := snapshot.ManifestRoot(manifest)
+
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "assets", "a.sql"), []byte("select 2"), 0o644))
+	_, created, err := store.DeployReviewed(ctx, "p", dir, "tester", reviewedRoot)
+	require.ErrorIs(t, err, snapshot.ErrSourceChanged)
+	assert.False(t, created)
+
+	deployments, listErr := store.List(ctx, "p")
+	require.NoError(t, listErr)
+	assert.Empty(t, deployments, "a stale review must not create a deployment")
+}
+
+func TestCompareFileReturnsExactDeploymentAndSavedContents(t *testing.T) {
+	t.Parallel()
+	store := openTestStore(t)
+	ctx := context.Background()
+	dir := writePipelineDir(t, map[string]string{
+		"pipeline.yml": "id: p\n",
+		"assets/a.sql": "select 1\n",
+	})
+	deployed, _, err := store.Deploy(ctx, "p", dir, "tester")
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "assets", "a.sql"), []byte("select 2\n"), 0o644))
+
+	comparison, err := store.CompareFile(ctx, "p", dir, deployed.VersionID, "assets/a.sql")
+	require.NoError(t, err)
+	assert.Equal(t, "changed", comparison.Status)
+	assert.Equal(t, "select 1\n", comparison.Before)
+	assert.Equal(t, "select 2\n", comparison.After)
+	assert.True(t, comparison.BeforeExists)
+	assert.True(t, comparison.AfterExists)
+
+	_, err = store.CompareFile(ctx, "p", dir, deployed.VersionID, "../outside.sql")
+	require.ErrorContains(t, err, "escapes destination")
+}
+
+func TestLatestUsesDeploymentOrdinal(t *testing.T) {
 	t.Parallel()
 	store, db := openTestStoreWithDB(t)
 	ctx := context.Background()
 	createdAt := time.Date(2026, 7, 16, 10, 0, 0, 0, time.UTC).Format(time.RFC3339Nano)
-	for _, versionID := range []string{"version-a", "version-z"} {
+	for ordinal, versionID := range []string{"version-a", "version-z"} {
 		_, err := db.ExecContext(ctx, `
 			INSERT INTO renart_snapshots
-				(version_id, pipeline_id, merkle_root, manifest, git_dirty, created_at)
-			VALUES (?, 'pipeline', 'root', '{}', 0, ?)`, versionID, createdAt)
+				(version_id, pipeline_id, ordinal, merkle_root, manifest, git_dirty, created_at)
+			VALUES (?, 'pipeline', ?, 'root', '{}', 0, ?)`, versionID, ordinal+1, createdAt)
 		require.NoError(t, err)
 	}
 
@@ -108,6 +157,7 @@ func TestLatestUsesTheMigrationTieBreaker(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, latest)
 	assert.Equal(t, "version-z", latest.VersionID)
+	assert.EqualValues(t, 2, latest.Ordinal)
 }
 
 func TestDeployRepairsCorruptContentInsteadOfReusingIt(t *testing.T) {

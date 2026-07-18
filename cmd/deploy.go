@@ -67,10 +67,10 @@ func Deploy() *cli.Command {
 				return err
 			}
 			if !created {
-				fmt.Printf("already up to date: latest snapshot %s matches the working tree\n", deployed.VersionID)
+				fmt.Printf("already up to date: Deployment #%d (%s) matches the working tree\n", deployed.Ordinal, deployed.VersionID)
 				return nil
 			}
-			fmt.Printf("deployed snapshot %s (%d files", deployed.VersionID, len(deployed.Manifest))
+			fmt.Printf("created Deployment #%d (%s, %d files", deployed.Ordinal, deployed.VersionID, len(deployed.Manifest))
 			if deployed.GitSHA != "" {
 				dirty := ""
 				if deployed.GitDirty {

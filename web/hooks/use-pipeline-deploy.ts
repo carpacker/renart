@@ -1,7 +1,12 @@
 import { useAtomValue } from "jotai";
 import { useCallback, useEffect, useRef, useState } from "react";
 
-import { deployPipeline, getDeployStatus, type DeployStatus } from "@/lib/api-deploy";
+import {
+  deployPipeline,
+  getDeployStatus,
+  type DeployResponse,
+  type DeployStatus,
+} from "@/lib/api-deploy";
 import { workspaceAtom } from "@/lib/atoms/domains/workspace";
 import { awaitWorkspaceSaves } from "@/lib/workspace-save-barrier";
 
@@ -10,7 +15,7 @@ export type PipelineDeployState = {
   loading: boolean;
   error: string | null;
   deploying: boolean;
-  deploy: () => Promise<void>;
+  deploy: (expectedSourceMerkle?: string) => Promise<DeployResponse>;
   refresh: () => Promise<void>;
   driftedFileCount: number;
 };
@@ -81,20 +86,29 @@ export function usePipelineDeploy(pipelineId: string | undefined): PipelineDeplo
     void refresh();
   }, [refresh, workspace?.revision]);
 
-  const deploy = useCallback(async () => {
-    if (!pipelineId || deployingPipelineIdsRef.current.has(pipelineId)) return;
-    const targetPipelineId = pipelineId;
-    deployingPipelineIdsRef.current.add(targetPipelineId);
-    setDeployingPipelineIds(new Set(deployingPipelineIdsRef.current));
-    try {
-      await awaitWorkspaceSaves();
-      await deployPipeline(targetPipelineId);
-      await refreshPipeline(targetPipelineId);
-    } finally {
-      deployingPipelineIdsRef.current.delete(targetPipelineId);
+  const deploy = useCallback(
+    async (expectedSourceMerkle?: string) => {
+      if (!pipelineId) {
+        throw new Error("Pipeline is required to deploy.");
+      }
+      if (deployingPipelineIdsRef.current.has(pipelineId)) {
+        throw new Error("A deployment is already in progress.");
+      }
+      const targetPipelineId = pipelineId;
+      deployingPipelineIdsRef.current.add(targetPipelineId);
       setDeployingPipelineIds(new Set(deployingPipelineIdsRef.current));
-    }
-  }, [pipelineId, refreshPipeline]);
+      try {
+        await awaitWorkspaceSaves();
+        const deployed = await deployPipeline(targetPipelineId, expectedSourceMerkle);
+        await refreshPipeline(targetPipelineId);
+        return deployed;
+      } finally {
+        deployingPipelineIdsRef.current.delete(targetPipelineId);
+        setDeployingPipelineIds(new Set(deployingPipelineIdsRef.current));
+      }
+    },
+    [pipelineId, refreshPipeline],
+  );
 
   const driftedFileCount =
     (current.status?.changed_files?.length ?? 0) +

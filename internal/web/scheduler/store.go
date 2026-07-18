@@ -1703,6 +1703,41 @@ func (s *Store) UpsertEnvSchedule(ctx context.Context, schedule EnvSchedule) err
 	})
 }
 
+func (s *Store) PromoteEnvSchedulePins(
+	ctx context.Context,
+	pipelineUUID string,
+	snapshotVersionID string,
+	selections []EnvSchedulePinSelection,
+) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	updatedAt := formatTime(time.Now().UTC())
+	for _, selection := range selections {
+		result, err := tx.ExecContext(ctx, `
+			UPDATE renart_schedules
+			SET snapshot_version_id = ?, updated_at = ?
+			WHERE pipeline_id = ? AND environment = ?
+			  AND snapshot_version_id = ? AND status <> ?`,
+			snapshotVersionID, updatedAt, pipelineUUID, selection.Environment,
+			selection.ExpectedSnapshotVersionID, string(ScheduleStatusArchived),
+		)
+		if err != nil {
+			return err
+		}
+		count, err := result.RowsAffected()
+		if err != nil {
+			return err
+		}
+		if count != 1 {
+			return fmt.Errorf("schedule %s changed after deployment review", selection.Environment)
+		}
+	}
+	return tx.Commit()
+}
+
 func (s *Store) ListEnvSchedules(ctx context.Context) ([]EnvSchedule, error) {
 	rows, err := s.queries.ListEnvSchedules(ctx)
 	if err != nil {

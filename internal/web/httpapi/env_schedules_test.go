@@ -21,6 +21,12 @@ type envScheduleHandlerStub struct {
 	upsertReq   scheduler.UpsertEnvScheduleRequest
 	statusCalls int
 	status      scheduler.ScheduleStatus
+	promoteReq  scheduler.PromoteEnvSchedulesRequest
+}
+
+func (s *envScheduleHandlerStub) PromoteEnvSchedules(_ context.Context, _ string, req scheduler.PromoteEnvSchedulesRequest) ([]scheduler.EnvSchedule, error) {
+	s.promoteReq = req
+	return nil, s.mutationErr
 }
 
 func (s *envScheduleHandlerStub) Ownership() scheduler.SchedulerOwnership {
@@ -76,6 +82,7 @@ func TestEnvScheduleMutationBodiesRequireOneStrictJSONObject(t *testing.T) {
 	}{
 		{name: "upsert", method: http.MethodPut, path: "/api/pipelines/pipeline-id/env-schedules/prod"},
 		{name: "status", method: http.MethodPost, path: "/api/pipelines/pipeline-id/env-schedules/prod/status"},
+		{name: "promote", method: http.MethodPost, path: "/api/pipelines/pipeline-id/env-schedules/promote"},
 	} {
 		endpoint := endpoint
 		t.Run(endpoint.name, func(t *testing.T) {

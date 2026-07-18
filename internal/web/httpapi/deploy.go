@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"errors"
 	"net/http"
 	"strings"
 
@@ -21,7 +22,28 @@ func RegisterDeployRoutes(router chi.Router, handlers *DeployAPI) {
 	router.Post("/api/pipelines/{id}/deploy", handlers.HandleDeploy)
 	router.Get("/api/pipelines/{id}/deploy/status", handlers.HandleDeployStatus)
 	router.Get("/api/pipelines/{id}/snapshots", handlers.HandleListSnapshots)
+	router.Get("/api/pipelines/{id}/deploy/diff", handlers.HandleDeployFileDiff)
 	router.Get("/api/snapshots/{versionId}/file", handlers.HandleSnapshotFile)
+}
+
+func (h *DeployAPI) HandleDeployFileDiff(w http.ResponseWriter, r *http.Request) {
+	pipelineUUID, absDir, ok := h.ResolvePipeline(chi.URLParam(r, "id"))
+	if !ok {
+		webapi.WriteNotFound(w, "pipeline_not_found", "pipeline not found")
+		return
+	}
+	comparison, err := h.Snapshots.CompareFile(
+		r.Context(),
+		pipelineUUID,
+		absDir,
+		strings.TrimSpace(r.URL.Query().Get("version_id")),
+		strings.TrimSpace(r.URL.Query().Get("path")),
+	)
+	if err != nil {
+		webapi.WriteBadRequest(w, "deployment_diff_failed", err.Error())
+		return
+	}
+	webapi.WriteJSON(w, http.StatusOK, map[string]any{"status": "ok", "diff": comparison})
 }
 
 func (h *DeployAPI) HandleDeploy(w http.ResponseWriter, r *http.Request) {
@@ -30,8 +52,30 @@ func (h *DeployAPI) HandleDeploy(w http.ResponseWriter, r *http.Request) {
 		webapi.WriteNotFound(w, "pipeline_not_found", "pipeline not found")
 		return
 	}
-	deployed, created, err := h.Snapshots.Deploy(r.Context(), pipelineUUID, absDir, "web")
+	type deployRequest struct {
+		ExpectedSourceMerkle string `json:"expected_source_merkle,omitempty"`
+	}
+	request := deployRequest{}
+	if r.ContentLength != 0 {
+		decoded, decodeErr := decodeStrictJSONObject[deployRequest](r.Body)
+		if decodeErr != nil {
+			webapi.WriteBadRequest(w, "invalid_request_body", decodeErr.Error())
+			return
+		}
+		request = decoded
+	}
+	deployed, created, err := h.Snapshots.DeployReviewed(
+		r.Context(), pipelineUUID, absDir, "web", request.ExpectedSourceMerkle,
+	)
 	if err != nil {
+		var changed *snapshot.SourceChangedError
+		if errors.As(err, &changed) {
+			webapi.WriteErrorWithDetails(w, http.StatusConflict, "deployment_source_changed", "the saved pipeline source changed after review", map[string]string{
+				"expected_source_merkle": changed.Expected,
+				"actual_source_merkle":   changed.Actual,
+			})
+			return
+		}
 		webapi.WriteInternalError(w, "deploy_failed", err.Error())
 		return
 	}
@@ -111,6 +155,7 @@ func snapshotSummary(item snapshot.Snapshot) map[string]any {
 	return map[string]any{
 		"version_id":  item.VersionID,
 		"pipeline_id": item.PipelineUUID,
+		"ordinal":     item.Ordinal,
 		"merkle_root": item.MerkleRoot,
 		"file_count":  len(item.Manifest),
 		"git_sha":     item.GitSHA,

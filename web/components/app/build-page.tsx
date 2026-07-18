@@ -153,6 +153,7 @@ import type {
   UpdatePipelineConfigRequest,
 } from "@/lib/types";
 import { cn } from "@/lib/utils";
+import { deploymentLabel } from "@/lib/deployment-label";
 import { copyTextToClipboard } from "@/lib/copy-to-clipboard";
 import { useAssetResults } from "@/hooks/use-asset-results";
 import { useSelectedEnvironmentPolicy } from "@/hooks/use-environment-policy";
@@ -572,7 +573,7 @@ export function AppBuildPage({
     ? deployState.loading
       ? "Resolving source"
       : pipelineRunSource?.source === "snapshot"
-        ? `Run deployed ${pipelineRunSource.snapshot_version_id.slice(0, 8)}`
+        ? `Run ${deploymentLabel(deployState.status?.ordinal, pipelineRunSource.snapshot_version_id, "deployment")}`
         : "Deployment required"
     : "Run workspace";
   const selectedExecutionTimeWindow = useAtomValue(selectedExecutionTimeWindowAtom);
@@ -728,6 +729,7 @@ export function AppBuildPage({
   };
   const [buildStaleOpen, setBuildStaleOpen] = useState(false);
   const [pipelinePlanOpen, setPipelinePlanOpen] = useState(false);
+  const [deploymentPlanOpen, setDeploymentPlanOpen] = useState(false);
   const [addedDependencies, setAddedDependencies] = useState<string[]>([]);
   const declaredDependencies = [...pipelineDependencies, ...addedDependencies];
   const [typeCheckReport, setTypeCheckReport] = useState<PipelineTypeCheckReport | null>(null);
@@ -1212,6 +1214,7 @@ export function AppBuildPage({
           onToggleExplorer={() => setExplorerCollapsed((value) => !value)}
           onToggleInspector={() => setInspectorCollapsed((value) => !value)}
           onReviewRun={() => setPipelinePlanOpen(true)}
+          onReviewDeploy={() => setDeploymentPlanOpen(true)}
           typeCheckReport={typeCheckReport}
           typeCheckLoading={typeCheckLoading}
           typeCheckError={typeCheckError}
@@ -1361,6 +1364,16 @@ export function AppBuildPage({
               end: plan.context.end_date,
             });
           }}
+        />
+        <PipelinePlanSheet
+          open={deploymentPlanOpen}
+          onOpenChange={setDeploymentPlanOpen}
+          pipelineId={activePipeline?.id ?? pipelineId}
+          pipelineName={activePipeline?.name ?? pipelineId}
+          environment={effectiveEnvironment}
+          timeWindow={selectedExecutionTimeWindow}
+          intent="deploy"
+          onDeploy={(expectedSourceMerkle) => deployState.deploy(expectedSourceMerkle)}
         />
 
         <NewAssetDialog
@@ -1597,6 +1610,7 @@ function BuildTopBar({
   onToggleExplorer,
   onToggleInspector,
   onReviewRun,
+  onReviewDeploy,
   staleCount = 0,
   stalenessLoading = false,
   stalenessError,
@@ -1627,6 +1641,7 @@ function BuildTopBar({
   onToggleExplorer?: () => void;
   onToggleInspector?: () => void;
   onReviewRun: () => void;
+  onReviewDeploy: () => void;
   staleCount?: number;
   stalenessLoading?: boolean;
   stalenessError?: string | null;
@@ -1729,7 +1744,7 @@ function BuildTopBar({
         buildDisabled={executionBlocked}
         buildDisabledReason={executionBlockedReason}
       />
-      {deployState ? <DeployButton deployState={deployState} /> : null}
+      {deployState ? <DeployButton deployState={deployState} onReview={onReviewDeploy} /> : null}
       <Button size="sm" onClick={onReviewRun} disabled={runDisabled} title={runTitle}>
         <Play data-icon="inline-start" /> Review run
         {runSourceLabel ? <span className="sr-only"> from {runSourceLabel}</span> : null}
@@ -4869,19 +4884,16 @@ function variableValueToText(value: unknown): string {
   return String(value);
 }
 
-// DeployButton shows drift between the working tree and the latest deployed
-// snapshot and redeploys on click.
-function DeployButton({ deployState }: { deployState: PipelineDeployState }) {
-  const { status, loading, error, deploying, deploy, refresh, driftedFileCount } = deployState;
-  const [actionError, setActionError] = useState<string | null>(null);
-  const handleDeploy = async () => {
-    setActionError(null);
-    try {
-      await deploy();
-    } catch (cause) {
-      setActionError(cause instanceof Error ? cause.message : "Deployment failed.");
-    }
-  };
+// DeployButton keeps deployment status compact; mutating always opens the
+// reviewed deployment plan rather than snapshotting immediately.
+function DeployButton({
+  deployState,
+  onReview,
+}: {
+  deployState: PipelineDeployState;
+  onReview: () => void;
+}) {
+  const { status, loading, error, deploying, refresh, driftedFileCount } = deployState;
   if (!status) {
     if (!loading && !error) return null;
     if (error) {
@@ -4900,8 +4912,9 @@ function DeployButton({ deployState }: { deployState: PipelineDeployState }) {
   }
 
   if (status.has_snapshot && status.in_sync && status.executable) {
+    const currentDeployment = deploymentLabel(status.ordinal, status.version_id);
     return (
-      <Button variant="ghost" size="sm" disabled title={`Deployed ${status.version_id ?? ""}`}>
+      <Button variant="ghost" size="sm" disabled title={`${currentDeployment} is current`}>
         <Package className="size-3.5 text-emerald-600" /> Deployed
       </Button>
     );
@@ -4914,17 +4927,11 @@ function DeployButton({ deployState }: { deployState: PipelineDeployState }) {
     : "Deploy";
   const title = status.has_snapshot
     ? status.executable
-      ? `Working tree differs from deployed ${status.version_id ?? ""}`
+      ? `Working tree differs from ${deploymentLabel(status.ordinal, status.version_id, "deployment")}`
       : `The latest deployment is not executable: ${status.integrity_error ?? "integrity validation failed"}`
     : "No deployment exists yet; schedules require an exact deployment pin";
   return (
-    <Button
-      variant="outline"
-      size="sm"
-      onClick={() => void handleDeploy()}
-      disabled={deploying}
-      title={actionError ?? title}
-    >
+    <Button variant="outline" size="sm" onClick={onReview} disabled={deploying} title={title}>
       <Package
         className={cn(
           "size-3.5",
@@ -4935,7 +4942,7 @@ function DeployButton({ deployState }: { deployState: PipelineDeployState }) {
             : undefined,
         )}
       />
-      {deploying ? "Deploying…" : actionError ? "Deploy failed — retry" : label}
+      {deploying ? "Deploying…" : label}
     </Button>
   );
 }

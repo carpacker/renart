@@ -7,7 +7,9 @@ import {
   CircleAlert,
   FileCode2,
   Loader2,
+  Package,
   Play,
+  RefreshCw,
   ShieldAlert,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -19,6 +21,14 @@ import {
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
+import {
+  Field,
+  FieldContent,
+  FieldDescription,
+  FieldGroup,
+  FieldLabel,
+} from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -42,6 +52,19 @@ import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { APIError } from "@/lib/api-core";
 import {
+  getDeploymentFileDiff,
+  getDeployStatus,
+  type DeploymentFileDiff,
+  type DeployResponse,
+  type DeployStatus,
+} from "@/lib/api-deploy";
+import {
+  getEnvSchedules,
+  promoteEnvSchedules,
+  type EnvSchedule,
+  type SchedulerOwnership,
+} from "@/lib/api-env-schedules";
+import {
   canonicalPipelinePlanRequest,
   canonicalPipelinePlanReviewedIdentity,
   confirmPipelinePlan,
@@ -54,9 +77,11 @@ import { activePipelineRunConflict, type PipelineRunSource } from "@/lib/api-sch
 import type { PipelineRun } from "@/lib/types";
 import { awaitWorkspaceSaves } from "@/lib/workspace-save-barrier";
 import { cn } from "@/lib/utils";
+import { deploymentLabel } from "@/lib/deployment-label";
 
 type PlanSelectionMode = "all" | "needed";
 type SensorMode = "once" | "wait" | "skip";
+type PlanIntent = "run" | "deploy";
 
 export function PipelinePlanSheet({
   open,
@@ -66,8 +91,11 @@ export function PipelinePlanSheet({
   environment,
   timeWindow,
   source,
+  intent = "run",
   confirmDestructive = false,
   onAccepted,
+  onDeploy,
+  onSchedulesChanged,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -76,8 +104,11 @@ export function PipelinePlanSheet({
   environment: string;
   timeWindow?: { start: string; end: string } | null;
   source?: PipelineRunSource | null;
+  intent?: PlanIntent;
   confirmDestructive?: boolean;
-  onAccepted: (run: PipelineRun, plan: PipelinePlan) => void;
+  onAccepted?: (run: PipelineRun, plan: PipelinePlan) => void;
+  onDeploy?: (expectedSourceMerkle: string) => Promise<DeployResponse>;
+  onSchedulesChanged?: () => void | Promise<void>;
 }) {
   const [request, setRequest] = useState<PipelinePlanRequest | null>(null);
   const [plan, setPlan] = useState<PipelinePlan | null>(null);
@@ -89,11 +120,18 @@ export function PipelinePlanSheet({
   const [confirmation, setConfirmation] = useState("");
   const [activeRunId, setActiveRunId] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState("summary");
+  const [deployStatus, setDeployStatus] = useState<DeployStatus | null>(null);
+  const [deployment, setDeployment] = useState<DeployResponse | null>(null);
+  const [schedules, setSchedules] = useState<EnvSchedule[]>([]);
+  const [schedulerOwnership, setSchedulerOwnership] = useState<SchedulerOwnership | null>(null);
+  const [selectedScheduleKeys, setSelectedScheduleKeys] = useState<Set<string>>(() => new Set());
+  const [promoting, setPromoting] = useState(false);
+  const [promotionError, setPromotionError] = useState<string | null>(null);
   const requestSerial = useRef(0);
   const initialPlanContext = useRef<string | null>(null);
-  const requestedSourceKind = source?.source;
+  const requestedSourceKind = intent === "deploy" ? "working_tree" : source?.source;
   const requestedSourceVersion =
-    source?.source === "snapshot" ? source.snapshot_version_id : undefined;
+    intent !== "deploy" && source?.source === "snapshot" ? source.snapshot_version_id : undefined;
 
   const fetchPlan = useCallback(
     async (input: PipelinePlanRequest, includeStageContent = false) => {
@@ -109,7 +147,10 @@ export function PipelinePlanSheet({
         });
         if (serial !== requestSerial.current) return;
         setPlan(next);
-        setRequest(canonicalPipelinePlanRequest(next, false));
+        setRequest({
+          ...canonicalPipelinePlanRequest(next, false),
+          purpose: input.purpose,
+        });
         setStageContentLoaded(includeStageContent);
       } catch (cause) {
         if (serial !== requestSerial.current) return;
@@ -139,6 +180,12 @@ export function PipelinePlanSheet({
     setConfirmation("");
     setActiveTab("summary");
     setStageContentLoaded(false);
+    setDeployStatus(null);
+    setDeployment(null);
+    setSchedules([]);
+    setSchedulerOwnership(null);
+    setSelectedScheduleKeys(new Set());
+    setPromotionError(null);
     setLoading(true);
     const serial = ++requestSerial.current;
     void (async () => {
@@ -146,6 +193,7 @@ export function PipelinePlanSheet({
         await awaitWorkspaceSaves();
         if (serial !== requestSerial.current) return;
         const input: PipelinePlanRequest = {
+          purpose: intent === "deploy" ? "deployment" : "execution",
           environment: environment || undefined,
           start_date: timeWindow?.start,
           end_date: timeWindow?.end,
@@ -160,6 +208,16 @@ export function PipelinePlanSheet({
           selection: { mode: "all" },
         };
         setRequest(input);
+        if (intent === "deploy") {
+          const [statusResponse, scheduleResponse] = await Promise.all([
+            getDeployStatus(pipelineId),
+            getEnvSchedules(),
+          ]);
+          if (serial !== requestSerial.current) return;
+          setDeployStatus(statusResponse);
+          setSchedules(scheduleResponse.schedules ?? []);
+          setSchedulerOwnership(scheduleResponse.scheduler);
+        }
         await fetchPlan(input);
       } catch (cause) {
         if (serial !== requestSerial.current) return;
@@ -170,6 +228,7 @@ export function PipelinePlanSheet({
   }, [
     environment,
     fetchPlan,
+    intent,
     open,
     pipelineId,
     requestedSourceKind,
@@ -191,14 +250,41 @@ export function PipelinePlanSheet({
     "all") as PlanSelectionMode;
   const sensorMode = (request?.sensor_mode ?? plan?.context.sensor_mode ?? "once") as SensorMode;
   const fullRefresh = Boolean(request?.full_refresh ?? plan?.context.requested_full_refresh);
-  const destructiveConfirmationRequired = Boolean(confirmDestructive && plan?.context.destructive);
+  const destructiveConfirmationRequired = Boolean(
+    intent === "run" && confirmDestructive && plan?.context.destructive,
+  );
   const confirmationMatches =
     !destructiveConfirmationRequired || confirmation.trim() === plan?.context.environment;
   const hasBlockers = Boolean(
     plan && (plan.status === "blocked" || plan.readiness.blockers.length),
   );
   const canConfirm = Boolean(
-    plan && !hasBlockers && confirmationMatches && !loading && plan.summary.execution_units > 0,
+    plan &&
+    !hasBlockers &&
+    confirmationMatches &&
+    !loading &&
+    !deployment &&
+    (intent === "deploy" ? plan.summary.assets > 0 : plan.summary.execution_units > 0),
+  );
+
+  const pipelineSchedules = useMemo(
+    () =>
+      plan
+        ? schedules.filter(
+            (schedule) =>
+              schedule.pipeline_uuid === plan.pipeline_uuid && schedule.status !== "archived",
+          )
+        : [],
+    [plan, schedules],
+  );
+  const promotionCandidates = useMemo(
+    () =>
+      deployment
+        ? pipelineSchedules.filter(
+            (schedule) => schedule.snapshot_version_id !== deployment.snapshot.version_id,
+          )
+        : [],
+    [deployment, pipelineSchedules],
   );
 
   const loadStageContent = () => {
@@ -212,15 +298,40 @@ export function PipelinePlanSheet({
     setError(null);
     setActiveRunId(null);
     try {
+      if (intent === "deploy") {
+        if (!onDeploy) {
+          throw new Error("Deployment is unavailable.");
+        }
+        const response = await onDeploy(plan.source.merkle_root);
+        setDeployment(response);
+        setDeployStatus(await getDeployStatus(pipelineId));
+        const scheduleResponse = await getEnvSchedules();
+        setSchedules(scheduleResponse.schedules ?? []);
+        setSchedulerOwnership(scheduleResponse.scheduler);
+        setSelectedScheduleKeys(new Set());
+        setActiveTab("schedules");
+        return;
+      }
       const response = await confirmPipelinePlan(pipelineId, {
         plan_id: plan.id,
         plan: canonicalPipelinePlanRequest(plan, false),
         reviewed: canonicalPipelinePlanReviewedIdentity(plan),
         confirmed_environment: destructiveConfirmationRequired ? confirmation.trim() : undefined,
       });
-      onAccepted(response.run, plan);
+      onAccepted?.(response.run, plan);
       onOpenChange(false);
     } catch (cause) {
+      if (
+        intent === "deploy" &&
+        cause instanceof APIError &&
+        cause.code === "deployment_source_changed" &&
+        request
+      ) {
+        setError("The saved source changed after review. Review the refreshed deployment plan.");
+        setDeployStatus(await getDeployStatus(pipelineId));
+        await fetchPlan(request);
+        return;
+      }
       const refreshed = pipelinePlanFromConflict(cause);
       if (refreshed) {
         setPlan(refreshed);
@@ -249,10 +360,46 @@ export function PipelinePlanSheet({
     }
   };
 
-  const sourceLabel = plan ? planSourceLabel(plan) : sourceInputLabel(source);
+  const promoteSelectedSchedules = async () => {
+    if (!deployment || !plan || selectedScheduleKeys.size === 0) return;
+    const selected = promotionCandidates.filter((schedule) =>
+      selectedScheduleKeys.has(schedule.environment),
+    );
+    setPromoting(true);
+    setPromotionError(null);
+    try {
+      await promoteEnvSchedules(
+        pipelineId,
+        deployment.snapshot.version_id,
+        selected.map((schedule) => ({
+          environment: schedule.environment,
+          expected_snapshot_version_id: schedule.snapshot_version_id ?? "",
+        })),
+      );
+      const scheduleResponse = await getEnvSchedules();
+      setSchedules(scheduleResponse.schedules ?? []);
+      setSchedulerOwnership(scheduleResponse.scheduler);
+      setSelectedScheduleKeys(new Set());
+      await onSchedulesChanged?.();
+    } catch (cause) {
+      setPromotionError(cause instanceof Error ? cause.message : "Schedules could not be updated.");
+    } finally {
+      setPromoting(false);
+    }
+  };
+
+  const sourceLabel = plan
+    ? planSourceLabel(plan)
+    : intent === "deploy"
+      ? "Saved working tree"
+      : sourceInputLabel(source);
   const finalActionLabel = plan
-    ? `Run ${plan.summary.assets} ${plan.summary.assets === 1 ? "asset" : "assets"} from ${runSourceLabel(plan)}`
-    : "Run pipeline";
+    ? intent === "deploy"
+      ? `Deploy ${plan.summary.assets} ${plan.summary.assets === 1 ? "asset" : "assets"}`
+      : `Run ${plan.summary.assets} ${plan.summary.assets === 1 ? "asset" : "assets"} from ${runSourceLabel(plan)}`
+    : intent === "deploy"
+      ? "Deploy pipeline"
+      : "Run pipeline";
 
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
@@ -262,14 +409,19 @@ export function PipelinePlanSheet({
       >
         <SheetHeader className="shrink-0 border-b px-5 py-4 pr-12">
           <div className="flex min-w-0 items-center gap-2">
-            <SheetTitle className="truncate">Review pipeline run</SheetTitle>
+            <SheetTitle className="truncate">
+              {intent === "deploy" ? "Review deployment" : "Review pipeline run"}
+            </SheetTitle>
             {plan ? <PlanStatusBadge status={plan.status} /> : null}
             {(loading || contentLoading) && plan ? (
               <Loader2 className="size-3.5 animate-spin" />
             ) : null}
           </div>
           <SheetDescription>
-            {pipelineName} · saved source preview · nothing executes until you confirm
+            {pipelineName} · saved source preview ·{" "}
+            {intent === "deploy"
+              ? "no data is executed by deployment"
+              : "nothing executes until you confirm"}
           </SheetDescription>
         </SheetHeader>
 
@@ -295,66 +447,77 @@ export function PipelinePlanSheet({
               value={`${fullRefresh ? "full refresh" : "incremental"} · sensor ${sensorMode}`}
             />
           </dl>
-          <div className="mt-3 flex flex-wrap items-end gap-3 border-t pt-3">
-            <div className="min-w-40 flex-1 sm:max-w-52">
-              <Label
-                htmlFor="pipeline-plan-scope"
-                className="mb-1 block text-[11px] text-muted-foreground"
-              >
-                Scope
+          {intent === "run" ? (
+            <div className="mt-3 flex flex-wrap items-end gap-3 border-t pt-3">
+              <div className="min-w-40 flex-1 sm:max-w-52">
+                <Label
+                  htmlFor="pipeline-plan-scope"
+                  className="mb-1 block text-[11px] text-muted-foreground"
+                >
+                  Scope
+                </Label>
+                <Select
+                  value={selectionMode}
+                  onValueChange={(value) =>
+                    updateRequest((current) => ({
+                      ...current,
+                      selection: { mode: value as PlanSelectionMode },
+                    }))
+                  }
+                >
+                  <SelectTrigger id="pipeline-plan-scope" size="sm" className="w-full">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">Entire pipeline</SelectItem>
+                    <SelectItem value="needed">Needed assets</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="min-w-36 flex-1 sm:max-w-44">
+                <Label
+                  htmlFor="pipeline-plan-sensor"
+                  className="mb-1 block text-[11px] text-muted-foreground"
+                >
+                  Sensors
+                </Label>
+                <Select
+                  value={sensorMode}
+                  onValueChange={(value) =>
+                    updateRequest((current) => ({ ...current, sensor_mode: value as SensorMode }))
+                  }
+                >
+                  <SelectTrigger id="pipeline-plan-sensor" size="sm" className="w-full">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="once">Check once</SelectItem>
+                    <SelectItem value="wait">Wait</SelectItem>
+                    <SelectItem value="skip">Skip</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <Label className="flex h-8 items-center gap-2 rounded-md border px-3 text-xs font-normal">
+                <Switch
+                  size="sm"
+                  checked={fullRefresh}
+                  onCheckedChange={(checked) =>
+                    updateRequest((current) => ({ ...current, full_refresh: checked }))
+                  }
+                />
+                Full refresh
               </Label>
-              <Select
-                value={selectionMode}
-                onValueChange={(value) =>
-                  updateRequest((current) => ({
-                    ...current,
-                    selection: { mode: value as PlanSelectionMode },
-                  }))
-                }
-              >
-                <SelectTrigger id="pipeline-plan-scope" size="sm" className="w-full">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="all">Entire pipeline</SelectItem>
-                  <SelectItem value="needed">Needed assets</SelectItem>
-                </SelectContent>
-              </Select>
             </div>
-            <div className="min-w-36 flex-1 sm:max-w-44">
-              <Label
-                htmlFor="pipeline-plan-sensor"
-                className="mb-1 block text-[11px] text-muted-foreground"
-              >
-                Sensors
-              </Label>
-              <Select
-                value={sensorMode}
-                onValueChange={(value) =>
-                  updateRequest((current) => ({ ...current, sensor_mode: value as SensorMode }))
-                }
-              >
-                <SelectTrigger id="pipeline-plan-sensor" size="sm" className="w-full">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="once">Check once</SelectItem>
-                  <SelectItem value="wait">Wait</SelectItem>
-                  <SelectItem value="skip">Skip</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
-            <Label className="flex h-8 items-center gap-2 rounded-md border px-3 text-xs font-normal">
-              <Switch
-                size="sm"
-                checked={fullRefresh}
-                onCheckedChange={(checked) =>
-                  updateRequest((current) => ({ ...current, full_refresh: checked }))
-                }
-              />
-              Full refresh
-            </Label>
-          </div>
+          ) : (
+            <Alert className="mt-3">
+              <Package />
+              <AlertTitle>Representative execution preview</AlertTitle>
+              <AlertDescription>
+                Deployment stores this saved source, not rendered SQL. Scheduled runs render it
+                again with their actual interval, environment, and variables.
+              </AlertDescription>
+            </Alert>
+          )}
         </div>
 
         {plan ? (
@@ -366,17 +529,21 @@ export function PipelinePlanSheet({
               if (value === "execution") loadStageContent();
             }}
           >
-            <div className="shrink-0 border-b px-5 py-2">
-              <TabsList variant="line" className="w-full justify-start">
+            <div className="shrink-0 overflow-x-auto border-b px-5 py-2">
+              <TabsList variant="line" className="w-max min-w-full justify-start">
                 <TabsTrigger value="summary">Summary</TabsTrigger>
                 <TabsTrigger value="assets">Assets</TabsTrigger>
                 <TabsTrigger value="checks">Checks</TabsTrigger>
                 <TabsTrigger value="execution">Execution</TabsTrigger>
+                {intent === "deploy" ? <TabsTrigger value="changes">Files</TabsTrigger> : null}
+                {intent === "deploy" ? (
+                  <TabsTrigger value="schedules">Schedules</TabsTrigger>
+                ) : null}
               </TabsList>
             </div>
             <ScrollArea className="min-h-0 flex-1">
               <TabsContent value="summary" className="m-0 space-y-4 p-5">
-                <PlanSummary plan={plan} />
+                <PlanSummary plan={plan} intent={intent} deployment={deployment} />
               </TabsContent>
               <TabsContent value="assets" className="m-0 p-5">
                 <PlanAssets plan={plan} />
@@ -391,6 +558,24 @@ export function PipelinePlanSheet({
                   contentLoaded={stageContentLoaded}
                 />
               </TabsContent>
+              {intent === "deploy" ? (
+                <TabsContent value="changes" className="m-0 p-5">
+                  <DeploymentFileChanges pipelineId={pipelineId} status={deployStatus} />
+                </TabsContent>
+              ) : null}
+              {intent === "deploy" ? (
+                <TabsContent value="schedules" className="m-0 p-5">
+                  <DeploymentSchedulePromotion
+                    schedules={pipelineSchedules}
+                    candidates={promotionCandidates}
+                    deployment={deployment}
+                    ownership={schedulerOwnership}
+                    selected={selectedScheduleKeys}
+                    onSelectedChange={setSelectedScheduleKeys}
+                    error={promotionError}
+                  />
+                </TabsContent>
+              ) : null}
             </ScrollArea>
           </Tabs>
         ) : (
@@ -435,23 +620,61 @@ export function PipelinePlanSheet({
               />
             </div>
           ) : null}
-          <div className="flex flex-wrap items-center justify-between gap-2">
-            <div className="min-w-0 flex-1 text-left text-[11px] text-muted-foreground">
-              {selectionMode === "needed"
-                ? "Confirmation omits work that became fresh, but never adds new work without another review."
-                : plan?.readiness.active_run_id
-                  ? "This pipeline already has an active run."
-                  : "Confirmation rechecks the complete plan before the run is admitted."}
+          {deployment ? (
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div className="min-w-0 flex-1 text-left text-[11px] text-muted-foreground">
+                {promotionCandidates.length > 0
+                  ? `${promotionCandidates.length} schedule${promotionCandidates.length === 1 ? " is" : "s are"} still pinned to an older deployment. Only selected schedules will move.`
+                  : "Every schedule for this pipeline is already on this deployment."}
+              </div>
+              <div className="flex items-center gap-2">
+                <Button variant="outline" onClick={() => onOpenChange(false)}>
+                  Close
+                </Button>
+                {promotionCandidates.length > 0 ? (
+                  <Button
+                    onClick={() => void promoteSelectedSchedules()}
+                    disabled={
+                      selectedScheduleKeys.size === 0 ||
+                      promoting ||
+                      schedulerOwnership?.state !== "owner"
+                    }
+                  >
+                    {promoting ? (
+                      <Loader2 data-icon="inline-start" className="animate-spin" />
+                    ) : (
+                      <RefreshCw data-icon="inline-start" />
+                    )}
+                    {promoting
+                      ? "Updating…"
+                      : `Update ${selectedScheduleKeys.size} schedule${selectedScheduleKeys.size === 1 ? "" : "s"}`}
+                  </Button>
+                ) : null}
+              </div>
             </div>
-            <Button onClick={() => void confirm()} disabled={!canConfirm || confirming}>
-              {confirming ? (
-                <Loader2 data-icon="inline-start" className="animate-spin" />
-              ) : (
-                <Play data-icon="inline-start" />
-              )}
-              {confirming ? "Starting…" : finalActionLabel}
-            </Button>
-          </div>
+          ) : (
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div className="min-w-0 flex-1 text-left text-[11px] text-muted-foreground">
+                {intent === "deploy"
+                  ? "Deployment rechecks the saved source identity. It never deploys an unsaved editor buffer."
+                  : selectionMode === "needed"
+                    ? "Confirmation omits work that became fresh, but never adds new work without another review."
+                    : plan?.readiness.active_run_id
+                      ? "This pipeline already has an active run."
+                      : "Confirmation rechecks the complete plan before the run is admitted."}
+              </div>
+              <Button onClick={() => void confirm()} disabled={!canConfirm || confirming}>
+                {confirming ? (
+                  <Loader2 data-icon="inline-start" className="animate-spin" />
+                ) : intent === "deploy" ? (
+                  <Package data-icon="inline-start" />
+                ) : (
+                  <Play data-icon="inline-start" />
+                )}
+                {confirming ? (intent === "deploy" ? "Deploying…" : "Starting…") : finalActionLabel}
+              </Button>
+            </div>
+          )}
         </SheetFooter>
       </SheetContent>
     </Sheet>
@@ -489,7 +712,15 @@ function PlanStatusBadge({ status }: { status: string }) {
   );
 }
 
-function PlanSummary({ plan }: { plan: PipelinePlan }) {
+function PlanSummary({
+  plan,
+  intent,
+  deployment,
+}: {
+  plan: PipelinePlan;
+  intent: PlanIntent;
+  deployment: DeployResponse | null;
+}) {
   return (
     <>
       <div className="grid grid-cols-2 divide-x divide-y rounded-lg border sm:grid-cols-4 sm:divide-y-0">
@@ -500,16 +731,31 @@ function PlanSummary({ plan }: { plan: PipelinePlan }) {
       </div>
       <PlanIssues title="Blockers" issues={plan.readiness.blockers} destructive />
       <PlanIssues title="Warnings" issues={plan.readiness.warnings} />
-      {plan.readiness.blockers.length === 0 && plan.readiness.warnings.length === 0 ? (
+      {deployment ? (
         <Alert>
           <CheckCircle2 />
-          <AlertTitle>Ready to run</AlertTitle>
+          <AlertTitle>
+            {deployment.created ? "Deployment created" : "Deployment already current"}
+          </AlertTitle>
+          <AlertDescription>
+            {deploymentLabel(deployment.snapshot.ordinal, deployment.snapshot.version_id)} ·{" "}
+            {deployment.snapshot.file_count} files · source{" "}
+            {deployment.snapshot.merkle_root.slice(0, 8)}
+          </AlertDescription>
+        </Alert>
+      ) : null}
+      {!deployment &&
+      plan.readiness.blockers.length === 0 &&
+      plan.readiness.warnings.length === 0 ? (
+        <Alert>
+          <CheckCircle2 />
+          <AlertTitle>{intent === "deploy" ? "Ready to deploy" : "Ready to run"}</AlertTitle>
           <AlertDescription>
             The saved source and complete operation graph passed planning.
           </AlertDescription>
         </Alert>
       ) : null}
-      {plan.readiness.active_run_id ? (
+      {intent === "run" && plan.readiness.active_run_id ? (
         <Alert variant="destructive">
           <ShieldAlert />
           <AlertTitle>Pipeline already running</AlertTitle>
@@ -787,6 +1033,413 @@ function PlanExecution({
   );
 }
 
+type DeploymentChange = {
+  path: string;
+  label: "Added" | "Changed" | "Removed";
+  variant: "secondary" | "outline" | "destructive";
+};
+
+function DeploymentFileChanges({
+  pipelineId,
+  status,
+}: {
+  pipelineId: string;
+  status: DeployStatus | null;
+}) {
+  const changes = useMemo<DeploymentChange[]>(
+    () =>
+      status
+        ? [
+            ...(status.added_files ?? []).map((path) => ({
+              path,
+              label: "Added" as const,
+              variant: "secondary" as const,
+            })),
+            ...(status.changed_files ?? []).map((path) => ({
+              path,
+              label: "Changed" as const,
+              variant: "outline" as const,
+            })),
+            ...(status.removed_files ?? []).map((path) => ({
+              path,
+              label: "Removed" as const,
+              variant: "destructive" as const,
+            })),
+          ]
+        : [],
+    [status],
+  );
+  const [selectedPath, setSelectedPath] = useState("");
+  const [diff, setDiff] = useState<DeploymentFileDiff | null>(null);
+  const [diffLoading, setDiffLoading] = useState(false);
+  const [diffError, setDiffError] = useState<string | null>(null);
+
+  useEffect(() => {
+    setSelectedPath((current) =>
+      changes.some((change) => change.path === current) ? current : (changes[0]?.path ?? ""),
+    );
+  }, [changes]);
+
+  useEffect(() => {
+    if (!status || !selectedPath) {
+      setDiff(null);
+      setDiffError(null);
+      setDiffLoading(false);
+      return;
+    }
+    let cancelled = false;
+    setDiffLoading(true);
+    setDiffError(null);
+    getDeploymentFileDiff(pipelineId, selectedPath, status.version_id)
+      .then((nextDiff) => {
+        if (!cancelled) setDiff(nextDiff);
+      })
+      .catch((cause: unknown) => {
+        if (cancelled) return;
+        setDiff(null);
+        setDiffError(
+          cause instanceof Error ? cause.message : "Could not load the file comparison.",
+        );
+      })
+      .finally(() => {
+        if (!cancelled) setDiffLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [pipelineId, selectedPath, status?.source_merkle, status?.version_id]);
+
+  if (!status) {
+    return <Skeleton className="h-40" />;
+  }
+  const groups = [
+    { label: "Added", paths: status.added_files ?? [], variant: "secondary" as const },
+    { label: "Changed", paths: status.changed_files ?? [], variant: "outline" as const },
+    { label: "Removed", paths: status.removed_files ?? [], variant: "destructive" as const },
+  ].filter((group) => group.paths.length > 0);
+
+  return (
+    <div className="space-y-4">
+      <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+        <Badge variant="muted" size="xs" title={status.source_merkle}>
+          Saved source {status.source_merkle?.slice(0, 8) || "unavailable"}
+        </Badge>
+        {status.has_snapshot ? (
+          <span>
+            Compared with {deploymentLabel(status.ordinal, status.version_id, "deployment")}
+          </span>
+        ) : (
+          <span>First deployment; every source file is new.</span>
+        )}
+      </div>
+      {groups.length === 0 ? (
+        <Alert>
+          <CheckCircle2 />
+          <AlertTitle>No source changes</AlertTitle>
+          <AlertDescription>
+            The saved working tree already matches the latest deployment.
+          </AlertDescription>
+        </Alert>
+      ) : (
+        <div className="grid min-w-0 gap-4 xl:grid-cols-[16rem_minmax(0,1fr)]">
+          <div className="space-y-4">
+            {groups.map((group) => (
+              <section key={group.label} className="space-y-2">
+                <h3 className="text-xs font-medium">
+                  {group.label}{" "}
+                  <span className="text-muted-foreground">({group.paths.length})</span>
+                </h3>
+                <ul className="divide-y overflow-hidden rounded-md border">
+                  {group.paths.map((path) => (
+                    <li key={path}>
+                      <button
+                        type="button"
+                        aria-pressed={selectedPath === path}
+                        className={cn(
+                          "flex w-full min-w-0 items-center gap-2 px-3 py-2 text-left text-xs transition-colors hover:bg-muted/50",
+                          selectedPath === path && "bg-muted",
+                        )}
+                        onClick={() => setSelectedPath(path)}
+                      >
+                        <Badge variant={group.variant} size="xs">
+                          {group.label}
+                        </Badge>
+                        <span className="min-w-0 truncate font-mono" title={path}>
+                          {path}
+                        </span>
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              </section>
+            ))}
+          </div>
+          <DeploymentFileDiffPreview
+            pipelineId={pipelineId}
+            sourceVersion={status.version_id}
+            path={selectedPath}
+            diff={diff}
+            loading={diffLoading}
+            error={diffError}
+          />
+        </div>
+      )}
+    </div>
+  );
+}
+
+function DeploymentFileDiffPreview({
+  pipelineId,
+  sourceVersion,
+  path,
+  diff,
+  loading,
+  error,
+}: {
+  pipelineId: string;
+  sourceVersion?: string;
+  path: string;
+  diff: DeploymentFileDiff | null;
+  loading: boolean;
+  error: string | null;
+}) {
+  if (loading && !diff) {
+    return <Skeleton className="h-80 min-w-0" />;
+  }
+  if (error) {
+    return (
+      <Alert variant="destructive" className="min-w-0">
+        <AlertTriangle />
+        <AlertTitle>Could not load this comparison</AlertTitle>
+        <AlertDescription>{error}</AlertDescription>
+      </Alert>
+    );
+  }
+  if (!diff) return null;
+  if (diff.binary || diff.too_large) {
+    return (
+      <Alert className="min-w-0">
+        <FileCode2 />
+        <AlertTitle>{diff.binary ? "Binary file" : "File is too large to preview"}</AlertTitle>
+        <AlertDescription>
+          {path} is included in the deployment comparison, but its contents are not sent to the
+          browser.
+        </AlertDescription>
+      </Alert>
+    );
+  }
+
+  const language = deploymentFileLanguage(path);
+  const modelPrefix = `deployment-diff:${pipelineId}:${sourceVersion ?? "first"}:${path}`;
+  return (
+    <div className="grid min-w-0 gap-3 lg:grid-cols-2">
+      <DeploymentFileVersion
+        title="Current deployment"
+        exists={diff.before_exists}
+        content={diff.before ?? ""}
+        language={language}
+        modelKey={`${modelPrefix}:before`}
+      />
+      <DeploymentFileVersion
+        title="Saved workspace"
+        exists={diff.after_exists}
+        content={diff.after ?? ""}
+        language={language}
+        modelKey={`${modelPrefix}:after`}
+      />
+    </div>
+  );
+}
+
+function DeploymentFileVersion({
+  title,
+  exists,
+  content,
+  language,
+  modelKey,
+}: {
+  title: string;
+  exists: boolean;
+  content: string;
+  language: string;
+  modelKey: string;
+}) {
+  return (
+    <section className="min-w-0 overflow-hidden rounded-md border">
+      <div className="border-b bg-muted/30 px-3 py-2 text-xs font-medium">{title}</div>
+      <div className="h-80 min-w-0">
+        {exists ? (
+          <ReadOnlyRenderedOperation content={content} language={language} modelKey={modelKey} />
+        ) : (
+          <div className="flex h-full items-center justify-center p-4 text-center text-xs text-muted-foreground">
+            File does not exist in this source version.
+          </div>
+        )}
+      </div>
+    </section>
+  );
+}
+
+function deploymentFileLanguage(path: string) {
+  const extension = path.split(".").pop()?.toLowerCase();
+  switch (extension) {
+    case "sql":
+      return "sql";
+    case "py":
+      return "python";
+    case "json":
+      return "json";
+    case "yaml":
+    case "yml":
+      return "yaml";
+    case "md":
+      return "markdown";
+    default:
+      return "text";
+  }
+}
+
+function DeploymentSchedulePromotion({
+  schedules,
+  candidates,
+  deployment,
+  ownership,
+  selected,
+  onSelectedChange,
+  error,
+}: {
+  schedules: EnvSchedule[];
+  candidates: EnvSchedule[];
+  deployment: DeployResponse | null;
+  ownership: SchedulerOwnership | null;
+  selected: Set<string>;
+  onSelectedChange: (selected: Set<string>) => void;
+  error: string | null;
+}) {
+  if (schedules.length === 0) {
+    return (
+      <Alert>
+        <CheckCircle2 />
+        <AlertTitle>No schedules to update</AlertTitle>
+        <AlertDescription>
+          This pipeline has no active or paused environment schedules.
+        </AlertDescription>
+      </Alert>
+    );
+  }
+
+  if (!deployment) {
+    return (
+      <div className="space-y-3">
+        <div>
+          <h3 className="text-sm font-medium">Current schedule pins</h3>
+          <p className="text-xs text-muted-foreground">
+            Deployment does not move these automatically. After creating the deployment, you can
+            select exactly which schedules to promote.
+          </p>
+        </div>
+        <dl className="divide-y rounded-md border">
+          {schedules.map((schedule) => (
+            <div
+              key={schedule.environment}
+              className="flex min-w-0 items-center justify-between gap-3 px-3 py-2 text-xs"
+            >
+              <dt className="min-w-0 truncate font-medium">{schedule.environment}</dt>
+              <dd className="shrink-0 font-mono text-muted-foreground">
+                {deploymentLabel(schedule.snapshot_ordinal, schedule.snapshot_version_id)}
+              </dd>
+            </div>
+          ))}
+        </dl>
+      </div>
+    );
+  }
+
+  if (candidates.length === 0) {
+    return (
+      <Alert>
+        <CheckCircle2 />
+        <AlertTitle>Schedules are current</AlertTitle>
+        <AlertDescription>
+          Every schedule for this pipeline is pinned to{" "}
+          {deploymentLabel(
+            deployment.snapshot.ordinal,
+            deployment.snapshot.version_id,
+            "deployment",
+          )}
+          .
+        </AlertDescription>
+      </Alert>
+    );
+  }
+
+  const canPromote = ownership?.state === "owner";
+  return (
+    <div className="space-y-4">
+      <div>
+        <h3 className="text-sm font-medium">Promote selected schedules</h3>
+        <p className="text-xs text-muted-foreground">
+          Move only the checked schedule pins to{" "}
+          {deploymentLabel(
+            deployment.snapshot.ordinal,
+            deployment.snapshot.version_id,
+            "deployment",
+          )}
+          . Unchecked schedules keep running their current deployment.
+        </p>
+      </div>
+      {!canPromote ? (
+        <Alert variant="destructive">
+          <ShieldAlert />
+          <AlertTitle>Schedules are read-only here</AlertTitle>
+          <AlertDescription>
+            {ownership?.message ?? "Scheduler ownership is unavailable."}
+          </AlertDescription>
+        </Alert>
+      ) : null}
+      {error ? (
+        <Alert variant="destructive">
+          <AlertTriangle />
+          <AlertTitle>Schedules were not updated</AlertTitle>
+          <AlertDescription>{error}</AlertDescription>
+        </Alert>
+      ) : null}
+      <FieldGroup data-slot="checkbox-group" className="gap-2">
+        {candidates.map((schedule) => {
+          const checkboxID = `promote-schedule-${schedule.environment}`;
+          return (
+            <Field
+              key={schedule.environment}
+              orientation="horizontal"
+              data-disabled={!canPromote || undefined}
+              className="rounded-md border px-3 py-2"
+            >
+              <Checkbox
+                id={checkboxID}
+                checked={selected.has(schedule.environment)}
+                disabled={!canPromote}
+                onCheckedChange={(checked) => {
+                  const next = new Set(selected);
+                  if (checked === true) next.add(schedule.environment);
+                  else next.delete(schedule.environment);
+                  onSelectedChange(next);
+                }}
+              />
+              <FieldContent>
+                <FieldLabel htmlFor={checkboxID}>{schedule.environment}</FieldLabel>
+                <FieldDescription>
+                  {deploymentLabel(schedule.snapshot_ordinal, schedule.snapshot_version_id)} ·{" "}
+                  {schedule.status}
+                </FieldDescription>
+              </FieldContent>
+            </Field>
+          );
+        })}
+      </FieldGroup>
+    </div>
+  );
+}
+
 function PlanLoading() {
   return (
     <div className="space-y-4" aria-label="Planning pipeline">
@@ -805,19 +1458,26 @@ function sourceInputLabel(source?: PipelineRunSource | null) {
   if (!source) return "Policy default";
   return source.source === "working_tree"
     ? "Saved working tree"
-    : `Deployment ${source.snapshot_version_id.slice(0, 8)}`;
+    : deploymentLabel(undefined, source.snapshot_version_id);
 }
 
 function planSourceLabel(plan: PipelinePlan) {
   return plan.source.kind === "working_tree"
     ? `Saved working tree · ${plan.source.merkle_root.slice(0, 8)}`
-    : `Deployment ${plan.source.version_id?.slice(0, 8) || plan.source.merkle_root.slice(0, 8)}`;
+    : deploymentLabel(
+        plan.source.deployment_ordinal,
+        plan.source.version_id || plan.source.merkle_root,
+      );
 }
 
 function runSourceLabel(plan: PipelinePlan) {
   return plan.source.kind === "working_tree"
     ? "working tree"
-    : `deployment ${plan.source.version_id?.slice(0, 8) || plan.source.merkle_root.slice(0, 8)}`;
+    : deploymentLabel(
+        plan.source.deployment_ordinal,
+        plan.source.version_id || plan.source.merkle_root,
+        "deployment",
+      );
 }
 
 function formatPlanWindow(start: string, end: string) {

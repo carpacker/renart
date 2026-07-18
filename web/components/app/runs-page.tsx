@@ -43,6 +43,7 @@ import type {
 } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import { awaitWorkspaceSaves } from "@/lib/workspace-save-barrier";
+import { deploymentLabel } from "@/lib/deployment-label";
 
 import { PageHeader, AppPage, AppPanel, SimpleTable, StatusPill } from "./app-primitives";
 
@@ -376,17 +377,17 @@ export function AppRunDetailPage({
   }
 
   const sourceLabel = run.snapshot_version_id
-    ? `deployment ${run.snapshot_version_id.slice(0, 8)}`
+    ? deploymentLabel(run.snapshot_ordinal, run.snapshot_version_id, "deployment")
     : "saved workspace";
   const rerunSourceLabel = run.snapshot_version_id
-    ? `deployment ${run.snapshot_version_id.slice(0, 8)}`
+    ? deploymentLabel(run.snapshot_ordinal, run.snapshot_version_id, "deployment")
     : "current saved workspace";
   const executionContextResolved = run.execution_context_resolved === true;
   const rerunEnvironmentLabel = executionContextResolved
     ? run.environment || "default"
     : "current default resolved at start";
   const rerunButtonLabel = run.snapshot_version_id
-    ? `Run deployment ${run.snapshot_version_id.slice(0, 8)} with defaults`
+    ? `Run ${deploymentLabel(run.snapshot_ordinal, run.snapshot_version_id, "deployment")} with defaults`
     : "Run current workspace with defaults";
   const compactRerunButtonLabel = "Run with defaults";
   const hasRecordedWindow = executionContextResolved && Boolean(run.win_start && run.win_end);
@@ -396,7 +397,7 @@ export function AppRunDetailPage({
     : hasIncompleteRecordedWindow
       ? "resolved context is incomplete; rerun unavailable"
       : "current pipeline default resolved at start";
-  const rerunDescription = `Source: ${run.snapshot_version_id ? `deployment ${run.snapshot_version_id}` : "current saved workspace"}. ${executionContextResolved ? `Recorded environment: ${rerunEnvironmentLabel}. Recorded window: ${rerunWindowLabel}.` : "The original effective environment and window are unavailable; current defaults are resolved when the rerun starts."} Default execution mode is used; full-refresh, backfill, sensor mode, variables, selection, authorization, and schedule-only context are not replayed.`;
+  const rerunDescription = `Source: ${run.snapshot_version_id ? `${deploymentLabel(run.snapshot_ordinal, run.snapshot_version_id, "deployment")} (${run.snapshot_version_id})` : "current saved workspace"}. ${executionContextResolved ? `Recorded environment: ${rerunEnvironmentLabel}. Recorded window: ${rerunWindowLabel}.` : "The original effective environment and window are unavailable; current defaults are resolved when the rerun starts."} Default execution mode is used; full-refresh, backfill, sensor mode, variables, selection, authorization, and schedule-only context are not replayed.`;
   const rerunUnavailable = hasIncompleteRecordedWindow;
   const runEnvironmentLabel = executionContextResolved
     ? run.environment || "default"
@@ -574,7 +575,7 @@ function RunPlanPanel({
   const source = artifact.source;
   const context = artifact.context;
   const facts = [
-    ["Source", formatRunPlanSource(source.kind, source.version_id)],
+    ["Source", formatRunPlanSource(source.kind, source.version_id, source.deployment_ordinal)],
     ["Environment", context.environment || "default"],
     ["Scope", formatRunPlanSelection(plan)],
     [
@@ -800,9 +801,11 @@ function RunUnitStatusPill({ status }: { status: PipelineRunUnit["status"] }) {
   );
 }
 
-function formatRunPlanSource(kind: string, versionId?: string) {
+function formatRunPlanSource(kind: string, versionId?: string, ordinal?: number) {
   if (kind === "snapshot") {
-    return versionId ? `Deployment ${versionId}` : "Deployment";
+    return versionId
+      ? `${deploymentLabel(ordinal, versionId)} (${versionId})`
+      : deploymentLabel(ordinal, undefined);
   }
   return "Saved working tree";
 }

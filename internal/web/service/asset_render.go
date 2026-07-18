@@ -97,10 +97,11 @@ type AssetRenderRequest struct {
 }
 
 type AssetRenderSource struct {
-	Kind         string `json:"kind"`
-	VersionID    string `json:"version_id,omitempty"`
-	PipelinePath string `json:"pipeline_path"`
-	MerkleRoot   string `json:"merkle_root"`
+	Kind              string `json:"kind"`
+	VersionID         string `json:"version_id,omitempty"`
+	DeploymentOrdinal int64  `json:"deployment_ordinal,omitempty"`
+	PipelinePath      string `json:"pipeline_path"`
+	MerkleRoot        string `json:"merkle_root"`
 }
 
 type AssetRenderContext struct {

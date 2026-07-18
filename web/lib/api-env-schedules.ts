@@ -15,6 +15,7 @@ export type EnvSchedule = {
   pipeline_uuid: string;
   environment: string;
   snapshot_version_id?: string;
+  snapshot_ordinal?: number;
   cron: string;
   timezone: string;
   vars?: Record<string, unknown>;
@@ -68,6 +69,22 @@ export async function upsertEnvSchedule(
     "PUT",
     input,
   );
+}
+
+export type EnvSchedulePinSelection = {
+  environment: string;
+  expected_snapshot_version_id: string;
+};
+
+export async function promoteEnvSchedules(
+  pipelineId: string,
+  snapshotVersionId: string,
+  schedules: EnvSchedulePinSelection[],
+): Promise<{ status: string; schedules: EnvSchedule[] }> {
+  return fetchJSONWithBody(`/api/pipelines/${pipelineId}/env-schedules/promote`, "POST", {
+    snapshot_version_id: snapshotVersionId,
+    schedules,
+  });
 }
 
 export async function setEnvScheduleStatus(

@@ -116,6 +116,12 @@ not underscore-flattened route hacks.
   Pipeline and asset execution plus Deploy await every mounted editor's
   pending/in-flight save, so the saved source named by the action includes
   visible Monaco edits.
+  **Deploy** opens the same sheet in a definition-only deployment mode rather
+  than mutating immediately. It reviews the entire saved working tree, keeps
+  execution policy/data freshness out of the gate, shows exact added/changed/
+  removed files with side-by-side deployed/workspace content where safe, and
+  binds the final write to the reviewed source Merkle. Afterward it offers an
+  unchecked list of older schedule pins; only explicitly selected rows move.
   Type-check does the same; transport/save failures remain visible in the bell
   and results panel without erasing the last successful report. Every supported
   SQL, Python, seed, Load, API, ingestr, and sensor asset also exposes a
@@ -190,13 +196,17 @@ not underscore-flattened route hacks.
   bars rather than the full timeline tracks.
   Schedule rows keep cadence, timezone, last-run result, deployment, catch-up,
   and runtime-window context in a wrapping metadata area rather than one
-  truncated status line. Timeline and actions have dedicated columns: `Run now`
-  is the primary action, deployment repair/update is secondary, and archive is
+  truncated status line. Timeline and actions have dedicated columns: `Run
+  pinned #N` is the primary action, reviewed deployment repair/update is
+  secondary, and archive is
   in the row's overflow menu. The displayed deployment identifies the exact pin
   used by the run; pinless rows show `Needs deployment`, and rows with stored
   variable overrides are blocked until the execution ledger can preserve those
   overrides truthfully. Schedule creation explicitly chooses an existing
-  executable deployment or deploys the saved workspace and pins the result. The
+  executable deployment or reviews and deploys the saved workspace before
+  pinning the returned exact version. Standalone deployment never changes
+  existing pins implicitly; explicit multi-schedule promotion is one
+  compare-and-swap batch. The
   page reports whether this server is the scheduler owner. Followers and
   unavailable instances keep schedules and timelines readable but disable
   creation, pin changes,

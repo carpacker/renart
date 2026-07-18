@@ -158,6 +158,25 @@ func TestHandleConfirmPipelinePlanRegeneratesAndTriggersExactPlan(t *testing.T) 
 	assert.Contains(t, response.Body.String(), `"id":"run-1"`)
 }
 
+func TestHandleConfirmPipelinePlanRejectsDeploymentReviewPurpose(t *testing.T) {
+	t.Parallel()
+	planner := &pipelinePlanHandlerStub{plan: confirmablePipelinePlan()}
+	runs := &pipelinePlanRunStub{}
+	response := pipelinePlanConfirmRequest(planner, runs, `{
+  "plan_id":"plan-id",
+  "plan":{
+    "purpose":"deployment",
+    "execution_time":"2026-07-17T12:00:00Z",
+    "selection":{"mode":"all"}
+  }
+}`)
+
+	require.Equal(t, http.StatusBadRequest, response.Code)
+	assert.Contains(t, response.Body.String(), `"code":"plan_purpose_not_confirmable"`)
+	assert.Zero(t, planner.calls)
+	assert.Zero(t, runs.calls)
+}
+
 func TestHandleConfirmPipelinePlanRequiresReviewAgainWhenPlanChanged(t *testing.T) {
 	t.Parallel()
 	planner := &pipelinePlanHandlerStub{plan: confirmablePipelinePlan()}

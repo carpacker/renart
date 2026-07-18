@@ -189,8 +189,17 @@ selected-configuration and variable identities, data-state token, context,
 selection, and operation graph. Incomplete source remains visible through
 structured findings and honest fidelity rather than fabricated SQL.
 
+The same endpoint accepts a distinct `deployment` purpose for reviewing the
+entire saved working tree before Deploy. That purpose is definition-only: it
+does not consult data freshness, reserve a run slot, or apply protected/
+`deployed_only` execution policy. Deterministic code/render failures still
+block the review, while an unavailable secret-free configuration identity is
+advisory. Deployment-purpose requests require `working_tree` plus `all`, and
+the run-confirm endpoint rejects them; they cannot be reused as an execution
+policy bypass.
+
 `POST /api/pipelines/{id}/plan/confirm` admits `all`, `needed`, and asset-closure
-plans. The server regenerates the plan from the submitted canonical request at
+execution plans. The server regenerates the plan from the submitted canonical request at
 the reviewed execution timestamp; rendered content supplied by the browser is
 never trusted. A changed source, configuration, context, or operation returns
 `409 plan_stale` with the replacement plan. Needed selection has one narrower

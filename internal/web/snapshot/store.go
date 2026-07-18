@@ -25,10 +25,24 @@ import (
 	"github.com/google/uuid"
 )
 
+var ErrSourceChanged = errors.New("snapshot: saved source changed after review")
+
+type SourceChangedError struct {
+	Expected string
+	Actual   string
+}
+
+func (e *SourceChangedError) Error() string {
+	return fmt.Sprintf("%s: expected %s, got %s", ErrSourceChanged, e.Expected, e.Actual)
+}
+
+func (e *SourceChangedError) Unwrap() error { return ErrSourceChanged }
+
 // Snapshot is one deployed version of a pipeline.
 type Snapshot struct {
 	VersionID    string            `json:"version_id"`
 	PipelineUUID string            `json:"pipeline_id"`
+	Ordinal      int64             `json:"ordinal"`
 	MerkleRoot   string            `json:"merkle_root"`
 	Manifest     map[string]string `json:"manifest"` // relpath -> blob hash
 	GitSHA       string            `json:"git_sha,omitempty"`
@@ -45,6 +59,8 @@ type DriftReport struct {
 	IntegrityError string    `json:"integrity_error,omitempty"`
 	InSync         bool      `json:"in_sync"`
 	VersionID      string    `json:"version_id,omitempty"`
+	Ordinal        int64     `json:"ordinal,omitempty"`
+	SourceMerkle   string    `json:"source_merkle"`
 	CreatedAt      time.Time `json:"created_at,omitempty"`
 	ChangedFiles   []string  `json:"changed_files,omitempty"`
 	AddedFiles     []string  `json:"added_files,omitempty"`
@@ -73,6 +89,19 @@ func NewStore(db *sql.DB) *Store {
 }
 
 const timeLayout = time.RFC3339Nano
+
+const maxFileComparisonBytes int64 = 2 << 20
+
+type FileComparison struct {
+	Path         string `json:"path"`
+	Status       string `json:"status"`
+	Before       string `json:"before,omitempty"`
+	After        string `json:"after,omitempty"`
+	BeforeExists bool   `json:"before_exists"`
+	AfterExists  bool   `json:"after_exists"`
+	Binary       bool   `json:"binary"`
+	TooLarge     bool   `json:"too_large"`
+}
 
 func hashBytes(content []byte) string {
 	sum := sha256.Sum256(content)
@@ -251,6 +280,13 @@ func CopyPipelineSourceForExecution(pipelineDir, destDir string) (map[string]str
 // the latest snapshot it is a no-op and returns that snapshot with
 // created=false.
 func (s *Store) Deploy(ctx context.Context, pipelineUUID, pipelineDir, createdBy string) (Snapshot, bool, error) {
+	return s.DeployReviewed(ctx, pipelineUUID, pipelineDir, createdBy, "")
+}
+
+// DeployReviewed snapshots the saved pipeline directory only if its exact
+// source identity still matches the reviewed Merkle root. An empty expected
+// root preserves the CLI/internal deploy contract.
+func (s *Store) DeployReviewed(ctx context.Context, pipelineUUID, pipelineDir, createdBy, expectedRoot string) (Snapshot, bool, error) {
 	if strings.TrimSpace(pipelineUUID) == "" {
 		return Snapshot{}, false, errors.New("snapshot: pipeline UUID is required")
 	}
@@ -262,6 +298,10 @@ func (s *Store) Deploy(ctx context.Context, pipelineUUID, pipelineDir, createdBy
 		return Snapshot{}, false, fmt.Errorf("snapshot: no files found under %s", pipelineDir)
 	}
 	root := merkleRoot(manifest)
+	expectedRoot = strings.TrimSpace(expectedRoot)
+	if expectedRoot != "" && root != expectedRoot {
+		return Snapshot{}, false, &SourceChangedError{Expected: expectedRoot, Actual: root}
+	}
 
 	latest, err := s.Latest(ctx, pipelineUUID)
 	if err != nil {
@@ -296,6 +336,13 @@ func (s *Store) Deploy(ctx context.Context, pipelineUUID, pipelineDir, createdBy
 	}
 	defer func() { _ = tx.Rollback() }()
 
+	if err := tx.QueryRowContext(ctx,
+		`SELECT COALESCE(MAX(ordinal), 0) + 1 FROM renart_snapshots WHERE pipeline_id = ?`,
+		pipelineUUID,
+	).Scan(&snapshot.Ordinal); err != nil {
+		return Snapshot{}, false, err
+	}
+
 	for hash, content := range contents {
 		if _, err := tx.ExecContext(ctx,
 			`INSERT INTO renart_blobs (hash, content) VALUES (?, ?) ON CONFLICT (hash) DO UPDATE SET content = excluded.content`,
@@ -309,9 +356,9 @@ func (s *Store) Deploy(ctx context.Context, pipelineUUID, pipelineDir, createdBy
 		dirty = 1
 	}
 	if _, err := tx.ExecContext(ctx, `
-		INSERT INTO renart_snapshots (version_id, pipeline_id, merkle_root, manifest, git_sha, git_dirty, created_at, created_by)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-		snapshot.VersionID, snapshot.PipelineUUID, snapshot.MerkleRoot, string(manifestJSON),
+		INSERT INTO renart_snapshots (version_id, pipeline_id, ordinal, merkle_root, manifest, git_sha, git_dirty, created_at, created_by)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		snapshot.VersionID, snapshot.PipelineUUID, snapshot.Ordinal, snapshot.MerkleRoot, string(manifestJSON),
 		snapshot.GitSHA, dirty, snapshot.CreatedAt.Format(timeLayout), snapshot.CreatedBy); err != nil {
 		return Snapshot{}, false, err
 	}
@@ -326,9 +373,9 @@ func (s *Store) Deploy(ctx context.Context, pipelineUUID, pipelineDir, createdBy
 
 func (s *Store) Latest(ctx context.Context, pipelineUUID string) (*Snapshot, error) {
 	row := s.db.QueryRowContext(ctx, `
-		SELECT version_id, pipeline_id, merkle_root, manifest, git_sha, git_dirty, created_at, created_by
+		SELECT version_id, pipeline_id, ordinal, merkle_root, manifest, git_sha, git_dirty, created_at, created_by
 		FROM renart_snapshots WHERE pipeline_id = ?
-		ORDER BY created_at DESC, version_id DESC LIMIT 1`, pipelineUUID)
+		ORDER BY ordinal DESC LIMIT 1`, pipelineUUID)
 	snapshot, err := scanSnapshot(row)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
@@ -341,7 +388,7 @@ func (s *Store) Latest(ctx context.Context, pipelineUUID string) (*Snapshot, err
 
 func (s *Store) Get(ctx context.Context, versionID string) (Snapshot, error) {
 	row := s.db.QueryRowContext(ctx, `
-		SELECT version_id, pipeline_id, merkle_root, manifest, git_sha, git_dirty, created_at, created_by
+		SELECT version_id, pipeline_id, ordinal, merkle_root, manifest, git_sha, git_dirty, created_at, created_by
 		FROM renart_snapshots WHERE version_id = ?`, versionID)
 	return scanSnapshot(row)
 }
@@ -377,9 +424,9 @@ func (s *Store) ValidateMetadata(ctx context.Context, versionID, pipelineUUID st
 
 func (s *Store) List(ctx context.Context, pipelineUUID string) ([]Snapshot, error) {
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT version_id, pipeline_id, merkle_root, manifest, git_sha, git_dirty, created_at, created_by
+		SELECT version_id, pipeline_id, ordinal, merkle_root, manifest, git_sha, git_dirty, created_at, created_by
 		FROM renart_snapshots WHERE pipeline_id = ?
-		ORDER BY created_at DESC`, pipelineUUID)
+		ORDER BY ordinal DESC`, pipelineUUID)
 	if err != nil {
 		return nil, err
 	}
@@ -405,7 +452,7 @@ func scanSnapshot(row rowScanner) (Snapshot, error) {
 	var manifestJSON, createdAt string
 	var gitSHA, createdBy sql.NullString
 	var gitDirty sql.NullInt64
-	if err := row.Scan(&snapshot.VersionID, &snapshot.PipelineUUID, &snapshot.MerkleRoot,
+	if err := row.Scan(&snapshot.VersionID, &snapshot.PipelineUUID, &snapshot.Ordinal, &snapshot.MerkleRoot,
 		&manifestJSON, &gitSHA, &gitDirty, &createdAt, &createdBy); err != nil {
 		return Snapshot{}, err
 	}
@@ -426,6 +473,97 @@ func (s *Store) BlobContent(ctx context.Context, hash string) ([]byte, error) {
 	var content []byte
 	err := s.db.QueryRowContext(ctx, `SELECT content FROM renart_blobs WHERE hash = ?`, hash).Scan(&content)
 	return content, err
+}
+
+// CompareFile returns the exact saved-working-tree and deployment contents for
+// one canonical manifest path. Large and binary files remain identifiable but
+// are not copied into the JSON response.
+func (s *Store) CompareFile(
+	ctx context.Context,
+	pipelineUUID string,
+	pipelineDir string,
+	versionID string,
+	relPath string,
+) (FileComparison, error) {
+	relPath = strings.TrimSpace(relPath)
+	if err := validateManifestPath(relPath); err != nil {
+		return FileComparison{}, err
+	}
+	comparison := FileComparison{Path: relPath}
+
+	var deployed *Snapshot
+	var err error
+	if strings.TrimSpace(versionID) != "" {
+		item, loadErr := s.ValidateMetadata(ctx, versionID, pipelineUUID)
+		if loadErr != nil {
+			return FileComparison{}, loadErr
+		}
+		deployed = &item
+	} else {
+		deployed, err = s.Latest(ctx, pipelineUUID)
+		if err != nil {
+			return FileComparison{}, err
+		}
+	}
+	if deployed != nil {
+		if hash, ok := deployed.Manifest[relPath]; ok {
+			comparison.BeforeExists = true
+			var size int64
+			if err := s.db.QueryRowContext(ctx, `SELECT length(content) FROM renart_blobs WHERE hash = ?`, hash).Scan(&size); err != nil {
+				return FileComparison{}, err
+			}
+			if size > maxFileComparisonBytes {
+				comparison.TooLarge = true
+			} else {
+				content, readErr := s.validatedBlobContent(ctx, deployed.VersionID, relPath, hash)
+				if readErr != nil {
+					return FileComparison{}, readErr
+				}
+				comparison.Binary = strings.Contains(string(content), "\x00")
+				if !comparison.Binary {
+					comparison.Before = string(content)
+				}
+			}
+		}
+	}
+
+	workingPath := filepath.Join(pipelineDir, filepath.FromSlash(relPath))
+	if err := ensureMaterializeTarget(filepath.Clean(pipelineDir), workingPath); err != nil {
+		return FileComparison{}, err
+	}
+	info, statErr := os.Stat(workingPath)
+	if statErr == nil {
+		if !info.Mode().IsRegular() {
+			return FileComparison{}, fmt.Errorf("snapshot: comparison path %q is not a regular file", relPath)
+		}
+		comparison.AfterExists = true
+		if info.Size() > maxFileComparisonBytes {
+			comparison.TooLarge = true
+		} else {
+			content, readErr := os.ReadFile(workingPath)
+			if readErr != nil {
+				return FileComparison{}, readErr
+			}
+			comparison.Binary = comparison.Binary || strings.Contains(string(content), "\x00")
+			if !comparison.Binary {
+				comparison.After = string(content)
+			}
+		}
+	} else if !errors.Is(statErr, os.ErrNotExist) {
+		return FileComparison{}, statErr
+	}
+
+	switch {
+	case !comparison.BeforeExists && comparison.AfterExists:
+		comparison.Status = "added"
+	case comparison.BeforeExists && !comparison.AfterExists:
+		comparison.Status = "removed"
+	case comparison.BeforeExists && comparison.AfterExists && comparison.Before == comparison.After && !comparison.Binary && !comparison.TooLarge:
+		comparison.Status = "unchanged"
+	default:
+		comparison.Status = "changed"
+	}
+	return comparison, nil
 }
 
 // Materialize writes a snapshot's files into destDir. The destination must be
@@ -579,13 +717,22 @@ func (s *Store) Drift(ctx context.Context, pipelineUUID, pipelineDir string) (Dr
 	if err != nil {
 		return DriftReport{}, err
 	}
-	report := DriftReport{SnapshotCount: len(snapshots)}
+	manifest, err := CollectManifestHashes(pipelineDir)
+	if err != nil {
+		return DriftReport{}, err
+	}
+	report := DriftReport{SnapshotCount: len(snapshots), SourceMerkle: merkleRoot(manifest)}
 	if len(snapshots) == 0 {
+		for path := range manifest {
+			report.AddedFiles = append(report.AddedFiles, path)
+		}
+		sort.Strings(report.AddedFiles)
 		return report, nil
 	}
 	latest := snapshots[0]
 	report.HasSnapshot = true
 	report.VersionID = latest.VersionID
+	report.Ordinal = latest.Ordinal
 	report.CreatedAt = latest.CreatedAt
 	if _, err := s.Validate(ctx, latest.VersionID, pipelineUUID); err != nil {
 		report.IntegrityError = err.Error()
@@ -593,11 +740,7 @@ func (s *Store) Drift(ctx context.Context, pipelineUUID, pipelineDir string) (Dr
 		report.Executable = true
 	}
 
-	manifest, err := CollectManifestHashes(pipelineDir)
-	if err != nil {
-		return DriftReport{}, err
-	}
-	if merkleRoot(manifest) == latest.MerkleRoot {
+	if report.SourceMerkle == latest.MerkleRoot {
 		report.InSync = true
 		return report, nil
 	}
