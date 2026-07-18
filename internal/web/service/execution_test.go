@@ -933,6 +933,35 @@ func TestPipelineRunObservationClaimsBeforeExecutionAndMarksFailuresDirty(t *tes
 	require.Len(t, store.dirtys, 1)
 }
 
+func TestPipelineRunObservationDefersEvidenceRequiredClaimUntilOperatorWrite(t *testing.T) {
+	t.Parallel()
+	started := time.Date(2026, 7, 17, 12, 0, 0, 0, time.UTC)
+	store := &stubTargetWriteStore{}
+	observed := newPipelineRunObservation(nil)
+	observed.configureTargetWrites(context.Background(), "python-completion", store)
+	require.NoError(t, observed.captureExecutionTargets(ExecutionTargetSnapshot{
+		Version: ExecutionTargetSnapshotVersion, PipelineUUID: "pipeline-uuid",
+		Entries: map[string]ExecutionTargetSnapshotEntry{
+			"analytics.python_table": {
+				AssetID: "pipeline-uuid:analytics.python_table", TargetIdentity: "target-python-table",
+				TargetFidelity: AssetRenderFidelityExact, TargetWriteEvidenceRequired: true,
+				Fingerprint: "v2:fp", OwnContent: "v2:own", ConsumedVarsHash: "consumed", VarsHash: "vars",
+				CoverageMode: ExecutionCoverageMarker,
+			},
+		},
+	}))
+
+	require.NoError(t, observed.handle(ExecutionAssetEvent{
+		Asset: "analytics.python_table", Status: "running", StartedAt: &started,
+	}))
+	assert.Empty(t, store.claims, "starting Python code does not prove that materialize() returned output")
+
+	require.NoError(t, observed.beginTargetWrite("analytics.python_table"))
+	require.Len(t, store.claims, 1)
+	assert.Equal(t, "target-python-table", store.claims[0].TargetIdentity)
+	assert.Equal(t, "python-completion", store.claims[0].CompletionID)
+}
+
 func TestExecutionServiceFailsClosedWhenCompletionDispatchFails(t *testing.T) {
 	t.Parallel()
 	pipelineID := EncodeID("pipelines/orders/pipeline.yml")

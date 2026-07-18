@@ -280,6 +280,34 @@ func (s *Store) MarkActiveTargetWriteClaimsDirty(ctx context.Context, at time.Ti
 	return result.RowsAffected()
 }
 
+// HasTargetWriteEvidence reports whether an operator durably claimed a target
+// before writing it, or whether that exact completion already committed its
+// materialization fact. The latter keeps completion-outbox replay idempotent if
+// a process stops after Store.Record clears the claim but before acknowledgement.
+func (s *Store) HasTargetWriteEvidence(ctx context.Context, claim TargetWriteClaim) (bool, error) {
+	if claim.TargetIdentity == "" || claim.CompletionID == "" || claim.AssetID == "" {
+		return false, nil
+	}
+	var exists int
+	err := s.db.QueryRowContext(ctx, `
+		SELECT EXISTS (
+			SELECT 1
+			FROM renart_target_write_claims
+			WHERE target_identity = ? AND completion_id = ? AND asset_id = ?
+			UNION ALL
+			SELECT 1
+			FROM renart_materializations
+			WHERE target_identity = ? AND completion_id = ? AND asset_id = ?
+		)`,
+		claim.TargetIdentity, claim.CompletionID, claim.AssetID,
+		claim.TargetIdentity, claim.CompletionID, claim.AssetID,
+	).Scan(&exists)
+	if err != nil {
+		return false, err
+	}
+	return exists == 1, nil
+}
+
 // Record writes the immutable fact row, current-generation coverage, and (for
 // target-aware writes) the global latest-successful-writer row inside one
 // transaction. The merge unions the new interval with every existing row it

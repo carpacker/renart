@@ -256,16 +256,17 @@ type upstreamWriterV1 struct {
 }
 
 type executionTargetV1 struct {
-	AssetID           string                `json:"asset_id"`
-	TargetIdentity    string                `json:"target_identity"`
-	TargetFidelity    string                `json:"target_fidelity"`
-	Fingerprint       string                `json:"fingerprint"`
-	OwnContent        string                `json:"own_content"`
-	ConsumedVarsHash  string                `json:"consumed_vars_hash"`
-	VarsHash          string                `json:"vars_hash"`
-	Upstreams         []executionUpstreamV1 `json:"upstreams"`
-	CoverageMode      string                `json:"coverage_mode"`
-	RefreshRestricted bool                  `json:"refresh_restricted"`
+	AssetID                     string                `json:"asset_id"`
+	TargetIdentity              string                `json:"target_identity"`
+	TargetFidelity              string                `json:"target_fidelity"`
+	TargetWriteEvidenceRequired bool                  `json:"target_write_evidence_required,omitempty"`
+	Fingerprint                 string                `json:"fingerprint"`
+	OwnContent                  string                `json:"own_content"`
+	ConsumedVarsHash            string                `json:"consumed_vars_hash"`
+	VarsHash                    string                `json:"vars_hash"`
+	Upstreams                   []executionUpstreamV1 `json:"upstreams"`
+	CoverageMode                string                `json:"coverage_mode"`
+	RefreshRestricted           bool                  `json:"refresh_restricted"`
 }
 
 type executionUpstreamV1 struct {
@@ -496,6 +497,9 @@ func validateExecutionTarget(assetName string, entry bus.ExecutionTargetSnapshot
 	default:
 		return fmt.Errorf("%w: execution target %q has unsupported fidelity %q", ErrInvalidEnvelope, assetName, entry.TargetFidelity)
 	}
+	if entry.TargetWriteEvidenceRequired && (entry.TargetFidelity != "exact" || entry.TargetIdentity == "") {
+		return fmt.Errorf("%w: execution target %q requires write evidence without an exact target", ErrInvalidEnvelope, assetName)
+	}
 	for field, value := range map[string]string{
 		"fingerprint":        entry.Fingerprint,
 		"own_content":        entry.OwnContent,
@@ -550,8 +554,9 @@ func eventToV1(event bus.RunCompleted) completedRunV1 {
 		}
 		targets[assetName] = executionTargetV1{
 			AssetID: target.AssetID, TargetIdentity: target.TargetIdentity,
-			TargetFidelity: target.TargetFidelity, Fingerprint: target.Fingerprint,
-			OwnContent: target.OwnContent, ConsumedVarsHash: target.ConsumedVarsHash,
+			TargetFidelity: target.TargetFidelity, TargetWriteEvidenceRequired: target.TargetWriteEvidenceRequired,
+			Fingerprint: target.Fingerprint,
+			OwnContent:  target.OwnContent, ConsumedVarsHash: target.ConsumedVarsHash,
 			VarsHash: target.VarsHash, Upstreams: upstreams, CoverageMode: target.CoverageMode,
 			RefreshRestricted: target.RefreshRestricted,
 		}
@@ -597,8 +602,9 @@ func eventFromV1(event completedRunV1) bus.RunCompleted {
 		}
 		targets[assetName] = bus.ExecutionTargetSnapshotEntry{
 			AssetID: target.AssetID, TargetIdentity: target.TargetIdentity,
-			TargetFidelity: target.TargetFidelity, Fingerprint: target.Fingerprint,
-			OwnContent: target.OwnContent, ConsumedVarsHash: target.ConsumedVarsHash,
+			TargetFidelity: target.TargetFidelity, TargetWriteEvidenceRequired: target.TargetWriteEvidenceRequired,
+			Fingerprint: target.Fingerprint,
+			OwnContent:  target.OwnContent, ConsumedVarsHash: target.ConsumedVarsHash,
 			VarsHash: target.VarsHash, Upstreams: upstreams, CoverageMode: target.CoverageMode,
 			RefreshRestricted: target.RefreshRestricted,
 		}

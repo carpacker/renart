@@ -181,9 +181,11 @@ func completeEvent(completionID string) bus.RunCompleted {
 		ExecutionPipelineUUID:          "pipeline-uuid",
 		ExecutionTargets: map[string]bus.ExecutionTargetSnapshotEntry{
 			"analytics.orders": {
-				AssetID:        "pipeline-uuid:analytics.orders",
-				TargetIdentity: "duckdb|main|analytics|orders", TargetFidelity: "exact",
-				Fingerprint: "v2:fingerprint", OwnContent: "v2:own",
+				AssetID:                     "pipeline-uuid:analytics.orders",
+				TargetIdentity:              "duckdb|main|analytics|orders",
+				TargetFidelity:              "exact",
+				TargetWriteEvidenceRequired: true,
+				Fingerprint:                 "v2:fingerprint", OwnContent: "v2:own",
 				ConsumedVarsHash: "consumed-vars", VarsHash: "all-vars",
 				Upstreams: []bus.ExecutionUpstreamSnapshot{
 					{Type: "asset", Value: "raw.orders"},

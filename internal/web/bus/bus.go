@@ -65,16 +65,17 @@ type ExecutionUpstreamSnapshot struct {
 // an executed downstream can still resolve the captured identity of an
 // upstream that was not part of the selected run.
 type ExecutionTargetSnapshotEntry struct {
-	AssetID           string
-	TargetIdentity    string
-	TargetFidelity    string
-	Fingerprint       string
-	OwnContent        string
-	ConsumedVarsHash  string
-	VarsHash          string
-	Upstreams         []ExecutionUpstreamSnapshot
-	CoverageMode      string
-	RefreshRestricted bool
+	AssetID                     string
+	TargetIdentity              string
+	TargetFidelity              string
+	TargetWriteEvidenceRequired bool
+	Fingerprint                 string
+	OwnContent                  string
+	ConsumedVarsHash            string
+	VarsHash                    string
+	Upstreams                   []ExecutionUpstreamSnapshot
+	CoverageMode                string
+	RefreshRestricted           bool
 }
 
 // RunCompleted is emitted once per finished run (build-mode single asset,

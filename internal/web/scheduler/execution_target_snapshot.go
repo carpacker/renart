@@ -97,6 +97,13 @@ func validateExecutionTargetSnapshot(snapshot ExecutionTargetSnapshot) error {
 				entry.TargetFidelity,
 			)
 		}
+		if entry.TargetWriteEvidenceRequired && (entry.TargetFidelity != ExecutionTargetFidelityExact || targetIdentity == "") {
+			return fmt.Errorf(
+				"%w: entry %q can require target-write evidence only for an exact non-empty target",
+				ErrInvalidExecutionTargetSnapshot,
+				assetName,
+			)
+		}
 		for field, value := range map[string]string{
 			"fingerprint":        entry.Fingerprint,
 			"own_content":        entry.OwnContent,

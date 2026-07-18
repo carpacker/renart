@@ -508,16 +508,17 @@ func newWebServer(ctx context.Context, cfg serverConfig, logger *zap.Logger) (*w
 						})
 					}
 					entries[assetName] = webscheduler.ExecutionTargetSnapshotEntry{
-						AssetID:           entry.AssetID,
-						TargetIdentity:    entry.TargetIdentity,
-						TargetFidelity:    string(entry.TargetFidelity),
-						Fingerprint:       entry.Fingerprint,
-						OwnContent:        entry.OwnContent,
-						ConsumedVarsHash:  entry.ConsumedVarsHash,
-						VarsHash:          entry.VarsHash,
-						Upstreams:         upstreams,
-						CoverageMode:      string(entry.CoverageMode),
-						RefreshRestricted: entry.RefreshRestricted,
+						AssetID:                     entry.AssetID,
+						TargetIdentity:              entry.TargetIdentity,
+						TargetFidelity:              string(entry.TargetFidelity),
+						TargetWriteEvidenceRequired: entry.TargetWriteEvidenceRequired,
+						Fingerprint:                 entry.Fingerprint,
+						OwnContent:                  entry.OwnContent,
+						ConsumedVarsHash:            entry.ConsumedVarsHash,
+						VarsHash:                    entry.VarsHash,
+						Upstreams:                   upstreams,
+						CoverageMode:                string(entry.CoverageMode),
+						RefreshRestricted:           entry.RefreshRestricted,
 					}
 				}
 				return req.OnTargetsResolved(webscheduler.ExecutionTargetSnapshot{

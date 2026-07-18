@@ -96,6 +96,11 @@ func TestStoreValidatesExecutionTargetSnapshotIdentity(t *testing.T) {
 			entry.TargetIdentity = "renart-physical-target-v1:false-claim"
 			snapshot.Entries["analytics.sensor"] = entry
 		}},
+		{name: "write evidence without target", mutate: func(snapshot *ExecutionTargetSnapshot) {
+			entry := snapshot.Entries["analytics.sensor"]
+			entry.TargetWriteEvidenceRequired = true
+			snapshot.Entries["analytics.sensor"] = entry
+		}},
 		{name: "unknown fidelity", mutate: func(snapshot *ExecutionTargetSnapshot) {
 			entry := snapshot.Entries["analytics.orders"]
 			entry.TargetFidelity = "semantic"
@@ -279,14 +284,15 @@ func testExecutionTargetSnapshot() ExecutionTargetSnapshot {
 		ConfigurationDigest: strings.Repeat("c", 64), ConfigurationFidelity: ExecutionTargetFidelityExact,
 		Entries: map[string]ExecutionTargetSnapshotEntry{
 			"analytics.orders": {
-				AssetID:          "pipeline-uuid:analytics.orders",
-				TargetIdentity:   "renart-physical-target-v1:orders",
-				TargetFidelity:   ExecutionTargetFidelityExact,
-				Fingerprint:      "v2:orders",
-				OwnContent:       "v2:orders-own",
-				ConsumedVarsHash: "consumed-orders",
-				VarsHash:         "all-vars",
-				CoverageMode:     "marker",
+				AssetID:                     "pipeline-uuid:analytics.orders",
+				TargetIdentity:              "renart-physical-target-v1:orders",
+				TargetFidelity:              ExecutionTargetFidelityExact,
+				TargetWriteEvidenceRequired: true,
+				Fingerprint:                 "v2:orders",
+				OwnContent:                  "v2:orders-own",
+				ConsumedVarsHash:            "consumed-orders",
+				VarsHash:                    "all-vars",
+				CoverageMode:                "marker",
 			},
 			"analytics.sensor": {
 				AssetID:          "pipeline-uuid:analytics.sensor",

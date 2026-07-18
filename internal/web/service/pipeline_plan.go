@@ -1088,11 +1088,11 @@ func (s *PipelinePlanService) addRenderIssues(plan *PipelinePlan, assetID, asset
 			AssetID:   assetID,
 			AssetName: assetName,
 		})
-	} else if result.Status == AssetRenderStatusPartial {
+	} else if message, warn := pipelinePlanPartialRenderWarning(result); result.Status == AssetRenderStatusPartial && warn {
 		plan.Readiness.Warnings = append(plan.Readiness.Warnings, PipelinePlanIssue{
 			Code:      "asset_render_partial",
 			Severity:  "warning",
-			Message:   "some execution details are only available at runtime",
+			Message:   message,
 			AssetID:   assetID,
 			AssetName: assetName,
 		})
@@ -1132,6 +1132,26 @@ func (s *PipelinePlanService) addRenderIssues(plan *PipelinePlan, assetID, asset
 			plan.Readiness.Blockers = append(plan.Readiness.Blockers, issue)
 		}
 	}
+}
+
+func pipelinePlanPartialRenderWarning(result AssetRenderResult) (string, bool) {
+	for _, stage := range result.Stages {
+		if stage.Status == AssetRenderStageStatusError {
+			return "one or more execution stages could not be rendered", true
+		}
+		if stage.Status == AssetRenderStageStatusUnsupported || stage.Fidelity == AssetRenderFidelityUnsupported {
+			return "one or more execution stages cannot be rendered statically", true
+		}
+	}
+	for _, stage := range result.Stages {
+		if stage.Fidelity == AssetRenderFidelityRuntimeOnly {
+			return "some execution details are only available at runtime", true
+		}
+	}
+	if result.Asset.Target.Fidelity == AssetRenderFidelityRuntimeOnly {
+		return "the physical output target is only available at runtime", true
+	}
+	return "", false
 }
 
 func pipelinePlanID(plan PipelinePlan) string {

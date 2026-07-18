@@ -49,16 +49,17 @@ type ExecutionTargetSnapshot struct {
 // runtime-only targets remain explicit through TargetFidelity and an empty
 // TargetIdentity.
 type ExecutionTargetSnapshotEntry struct {
-	AssetID           string                      `json:"asset_id"`
-	TargetIdentity    string                      `json:"target_identity"`
-	TargetFidelity    AssetRenderFidelity         `json:"target_fidelity"`
-	Fingerprint       string                      `json:"fingerprint"`
-	OwnContent        string                      `json:"own_content"`
-	ConsumedVarsHash  string                      `json:"consumed_vars_hash"`
-	VarsHash          string                      `json:"vars_hash"`
-	Upstreams         []ExecutionUpstreamSnapshot `json:"upstreams"`
-	CoverageMode      ExecutionCoverageMode       `json:"coverage_mode"`
-	RefreshRestricted bool                        `json:"refresh_restricted"`
+	AssetID                     string                      `json:"asset_id"`
+	TargetIdentity              string                      `json:"target_identity"`
+	TargetFidelity              AssetRenderFidelity         `json:"target_fidelity"`
+	TargetWriteEvidenceRequired bool                        `json:"target_write_evidence_required,omitempty"`
+	Fingerprint                 string                      `json:"fingerprint"`
+	OwnContent                  string                      `json:"own_content"`
+	ConsumedVarsHash            string                      `json:"consumed_vars_hash"`
+	VarsHash                    string                      `json:"vars_hash"`
+	Upstreams                   []ExecutionUpstreamSnapshot `json:"upstreams"`
+	CoverageMode                ExecutionCoverageMode       `json:"coverage_mode"`
+	RefreshRestricted           bool                        `json:"refresh_restricted"`
 }
 
 func (e *HybridBruinExecutor) resolveExecutionTargetSnapshot(
@@ -118,15 +119,16 @@ func (e *HybridBruinExecutor) resolveExecutionTargetSnapshotForSelection(
 			Config:   cfg,
 		})
 		entry := ExecutionTargetSnapshotEntry{
-			AssetID:           assetID,
-			TargetIdentity:    target.Identity,
-			TargetFidelity:    target.Fidelity,
-			Fingerprint:       string(result.FP),
-			OwnContent:        string(result.OwnContent),
-			ConsumedVarsHash:  result.ConsumedVarsHash,
-			VarsHash:          varsHash,
-			CoverageMode:      executionCoverageMode(asset),
-			RefreshRestricted: asset.RefreshRestricted != nil && *asset.RefreshRestricted,
+			AssetID:                     assetID,
+			TargetIdentity:              target.Identity,
+			TargetFidelity:              target.Fidelity,
+			TargetWriteEvidenceRequired: pythonTargetWriteEvidenceRequired(asset, target),
+			Fingerprint:                 string(result.FP),
+			OwnContent:                  string(result.OwnContent),
+			ConsumedVarsHash:            result.ConsumedVarsHash,
+			VarsHash:                    varsHash,
+			CoverageMode:                executionCoverageMode(asset),
+			RefreshRestricted:           asset.RefreshRestricted != nil && *asset.RefreshRestricted,
 		}
 		entry.Upstreams = make([]ExecutionUpstreamSnapshot, 0, len(asset.Upstreams))
 		for _, upstream := range asset.Upstreams {
@@ -146,6 +148,12 @@ func (e *HybridBruinExecutor) resolveExecutionTargetSnapshotForSelection(
 		ConfigurationFidelity: string(configurationIdentity.Fidelity),
 		Entries:               entries,
 	}, nil
+}
+
+func pythonTargetWriteEvidenceRequired(asset *pipeline.Asset, target AssetRenderTarget) bool {
+	return asset != nil && asset.Type == pipeline.AssetTypePython &&
+		asset.Materialization.Type == pipeline.MaterializationTypeTable &&
+		target.Fidelity == AssetRenderFidelityExact && target.Identity != ""
 }
 
 func executionCoverageMode(asset *pipeline.Asset) ExecutionCoverageMode {

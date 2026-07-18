@@ -176,16 +176,17 @@ func (s *ExecutionService) emitRunCompletedForSpec(ctx context.Context, spec Pip
 				upstreams = append(upstreams, bus.ExecutionUpstreamSnapshot{Type: upstream.Type, Value: upstream.Value})
 			}
 			event.ExecutionTargets[assetName] = bus.ExecutionTargetSnapshotEntry{
-				AssetID:           entry.AssetID,
-				TargetIdentity:    entry.TargetIdentity,
-				TargetFidelity:    string(entry.TargetFidelity),
-				Fingerprint:       entry.Fingerprint,
-				OwnContent:        entry.OwnContent,
-				ConsumedVarsHash:  entry.ConsumedVarsHash,
-				VarsHash:          entry.VarsHash,
-				Upstreams:         upstreams,
-				CoverageMode:      string(entry.CoverageMode),
-				RefreshRestricted: entry.RefreshRestricted,
+				AssetID:                     entry.AssetID,
+				TargetIdentity:              entry.TargetIdentity,
+				TargetFidelity:              string(entry.TargetFidelity),
+				TargetWriteEvidenceRequired: entry.TargetWriteEvidenceRequired,
+				Fingerprint:                 entry.Fingerprint,
+				OwnContent:                  entry.OwnContent,
+				ConsumedVarsHash:            entry.ConsumedVarsHash,
+				VarsHash:                    entry.VarsHash,
+				Upstreams:                   upstreams,
+				CoverageMode:                string(entry.CoverageMode),
+				RefreshRestricted:           entry.RefreshRestricted,
 			}
 		}
 	}
@@ -602,7 +603,7 @@ func (s *ExecutionService) MaterializeAssetStreamWithSensorMode(ctx context.Cont
 		var runErr error
 		output, runErr = s.runSingleAssetMaterializationObserved(
 			ctx, relAssetPath, environment, timeWindow, fullRefresh, sensorMode,
-			onChunk, observed.handle, observed.captureExecutionTargets,
+			onChunk, observed.handle, observed.captureExecutionTargets, observed.beginTargetWrite,
 		)
 		return runErr
 	}
@@ -619,7 +620,7 @@ func (s *ExecutionService) MaterializeAssetStreamWithSensorMode(ctx context.Cont
 			var runErr error
 			output, runErr = s.runScopedAssetMaterializationObserved(
 				ctx, scoped.AssetPaths, environment, timeWindow, fullRefresh, sensorMode,
-				onChunk, observed.handle, observed.captureExecutionTargets,
+				onChunk, observed.handle, observed.captureExecutionTargets, observed.beginTargetWrite,
 			)
 			return runErr
 		}
@@ -711,11 +712,11 @@ func (s *ExecutionService) runSingleAssetMaterialization(ctx context.Context, as
 }
 
 func (s *ExecutionService) runSingleAssetMaterializationWithSensorMode(ctx context.Context, assetPath, environment string, timeWindow ExecutionTimeWindow, fullRefresh bool, sensorMode string, onChunk func([]byte)) ([]byte, error) {
-	return s.runSingleAssetMaterializationObserved(ctx, assetPath, environment, timeWindow, fullRefresh, sensorMode, onChunk, nil, nil)
+	return s.runSingleAssetMaterializationObserved(ctx, assetPath, environment, timeWindow, fullRefresh, sensorMode, onChunk, nil, nil, nil)
 }
 
 func (s *ExecutionService) runScopedAssetMaterialization(ctx context.Context, assetPaths []string, environment string, timeWindow ExecutionTimeWindow, fullRefresh bool, sensorMode string, onChunk func([]byte)) ([]byte, error) {
-	return s.runScopedAssetMaterializationObserved(ctx, assetPaths, environment, timeWindow, fullRefresh, sensorMode, onChunk, nil, nil)
+	return s.runScopedAssetMaterializationObserved(ctx, assetPaths, environment, timeWindow, fullRefresh, sensorMode, onChunk, nil, nil, nil)
 }
 
 func (s *ExecutionService) runSingleAssetMaterializationObserved(
@@ -727,6 +728,7 @@ func (s *ExecutionService) runSingleAssetMaterializationObserved(
 	onChunk func([]byte),
 	onAssetEvent func(ExecutionAssetEvent) error,
 	onTargetsResolved func(ExecutionTargetSnapshot) error,
+	onTargetWriteStarting func(string) error,
 ) ([]byte, error) {
 	return s.deps.Executor.RunAsset(ctx, RunAssetRequest{
 		AssetPath:         assetPath,
@@ -736,6 +738,7 @@ func (s *ExecutionService) runSingleAssetMaterializationObserved(
 		EndDate:           timeWindow.EndRFC3339(),
 		AssetEvent:        onAssetEvent,
 		FullRefresh:       fullRefresh,
+		BeforeTargetWrite: onTargetWriteStarting,
 		OnTargetsResolved: onTargetsResolved,
 	}, onChunk)
 }
@@ -750,12 +753,13 @@ func (s *ExecutionService) runScopedAssetMaterializationObserved(
 	onChunk func([]byte),
 	onAssetEvent func(ExecutionAssetEvent) error,
 	onTargetsResolved func(ExecutionTargetSnapshot) error,
+	onTargetWriteStarting func(string) error,
 ) ([]byte, error) {
 	var combined bytes.Buffer
 	for _, assetPath := range assetPaths {
 		chunkOutput, err := s.runSingleAssetMaterializationObserved(
 			ctx, assetPath, environment, timeWindow, fullRefresh, sensorMode,
-			onChunk, onAssetEvent, onTargetsResolved,
+			onChunk, onAssetEvent, onTargetsResolved, onTargetWriteStarting,
 		)
 		if len(chunkOutput) > 0 {
 			_, _ = combined.Write(chunkOutput)
@@ -1315,14 +1319,15 @@ func (s *ExecutionService) MaterializePipelineRun(ctx context.Context, spec Pipe
 		return nil
 	}
 	request := RunPipelineRequest{
-		Target:      target,
-		Environment: spec.Environment,
-		SensorMode:  sensorMode,
-		DryRun:      spec.DryRun,
-		StartDate:   timeWindow.StartRFC3339(),
-		EndDate:     timeWindow.EndRFC3339(),
-		AssetEvent:  observed.handle,
-		RunID:       spec.RunID,
+		Target:            target,
+		Environment:       spec.Environment,
+		SensorMode:        sensorMode,
+		DryRun:            spec.DryRun,
+		StartDate:         timeWindow.StartRFC3339(),
+		EndDate:           timeWindow.EndRFC3339(),
+		AssetEvent:        observed.handle,
+		BeforeTargetWrite: observed.beginTargetWrite,
+		RunID:             spec.RunID,
 		OnTargetsResolved: func(snapshot ExecutionTargetSnapshot) error {
 			if expected := strings.TrimSpace(spec.ExpectedConfigurationDigest); expected != "" &&
 				(snapshot.ConfigurationFidelity != string(runcontext.IdentityFidelityExact) || snapshot.ConfigurationDigest != expected) {
@@ -1588,7 +1593,7 @@ func (o *pipelineRunObservation) handle(event ExecutionAssetEvent) error {
 		// The scheduler's running step is durable before the physical claim, but
 		// the direct executor cannot start the task until this callback returns.
 		// A claim failure therefore aborts safely without touching the target.
-		return o.claimTargetWrite(assetName, event.StartedAt)
+		return o.claimTargetWrite(assetName, event.StartedAt, false)
 	}
 	if status == "failed" || status == "cancelled" {
 		// Persist physical uncertainty before forwarding the terminal scheduler
@@ -1677,11 +1682,19 @@ func cloneUpstreamWriterSnapshot(source map[string]bus.UpstreamWriterSnapshot) m
 	return clone
 }
 
-func (o *pipelineRunObservation) claimTargetWrite(assetName string, startedAt *time.Time) error {
+func (o *pipelineRunObservation) beginTargetWrite(assetName string) error {
+	return o.claimTargetWrite(strings.TrimSpace(assetName), nil, true)
+}
+
+func (o *pipelineRunObservation) claimTargetWrite(assetName string, startedAt *time.Time, operatorReported bool) error {
 	o.mu.Lock()
 	store := o.targetWrites
 	entry, captured := o.executionTargets.Entries[assetName]
 	if store == nil || !captured || entry.TargetFidelity != AssetRenderFidelityExact || entry.TargetIdentity == "" {
+		o.mu.Unlock()
+		return nil
+	}
+	if entry.TargetWriteEvidenceRequired && !operatorReported {
 		o.mu.Unlock()
 		return nil
 	}

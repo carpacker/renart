@@ -834,7 +834,6 @@ func (s *AssetRenderService) renderPath(ctx context.Context, assetPath string, r
 
 	if pp.Asset.Materialization.Type != pipeline.MaterializationTypeNone && directExecutionCreatesSchema(pp.Asset.Type) {
 		if schemaName, hasSchema := tablename.SchemaToCreate(pp.Asset.Name, strings.ToLower); hasSchema {
-			result.Status = AssetRenderStatusPartial
 			result.Stages = append(result.Stages, AssetRenderStage{
 				Kind:        "schema_preparation",
 				Language:    "sql",
@@ -951,7 +950,6 @@ func appendDatabricksPreparationStages(result *AssetRenderResult, asset *pipelin
 }
 
 func appendDatabricksPreparationStage(result *AssetRenderResult, label, sql string) {
-	result.Status = mergeAssetRenderStatus(result.Status, AssetRenderStatusPartial)
 	result.Stages = append(result.Stages, AssetRenderStage{
 		Kind:        "schema_preparation",
 		Label:       label,
@@ -971,15 +969,32 @@ func assetRenderConfigurationConnectionNames(info *directPipelineInfo, primary s
 	}
 	if info != nil && info.Pipeline != nil && info.Asset != nil {
 		if resolved, err := info.Pipeline.GetAllConnectionNamesForAsset(info.Asset); err == nil {
-			names = append(names, resolved...)
+			for _, name := range resolved {
+				if !assetRenderUsesLocalPseudoConnection(info, name) {
+					names = append(names, name)
+				}
+			}
 		}
 		if isLoadAsset(info.Asset) {
 			params := loadParamsFromAsset(info.Asset)
-			names = append(names, params.SourceConnection)
+			if !assetRenderUsesLocalPseudoConnection(info, params.SourceConnection) {
+				names = append(names, params.SourceConnection)
+			}
 		}
 	}
-	names = append(names, primary)
+	if !assetRenderUsesLocalPseudoConnection(info, primary) {
+		names = append(names, primary)
+	}
 	return names
+}
+
+// `local` is a reserved Sling endpoint for filesystem-backed Load sources and
+// destinations, not a named Bruin connection. The asset's source/destination
+// path remains fingerprinted and its physical destination has a separate
+// canonical target identity, so requiring `local` in .bruin.yml only creates a
+// false runtime-only configuration result.
+func assetRenderUsesLocalPseudoConnection(info *directPipelineInfo, name string) bool {
+	return info != nil && info.Asset != nil && isLoadAsset(info.Asset) && isLocalLoadConnection(name)
 }
 
 func assetRenderAssetIsConnectionless(info *directPipelineInfo) bool {

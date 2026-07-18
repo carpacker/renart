@@ -20,24 +20,29 @@ type RunAssetRequest struct {
 	EndDate     string
 	AssetEvent  func(ExecutionAssetEvent) error
 	FullRefresh bool
+	// BeforeTargetWrite is called by operators whose successful main task does
+	// not itself prove that a declared output was written. It must return before
+	// the physical write begins so target fencing remains fail-closed.
+	BeforeTargetWrite func(assetName string) error
 	// OnTargetsResolved must succeed synchronously after effective execution
 	// context and target resolution but before the first task starts.
 	OnTargetsResolved func(ExecutionTargetSnapshot) error
 }
 
 type RunPipelineRequest struct {
-	Target         string
-	Environment    string
-	SensorMode     string
-	DryRun         bool
-	StartDate      string
-	EndDate        string
-	ExecutionTime  time.Time
-	RunID          string
-	AssetEvent     func(ExecutionAssetEvent) error
-	SelectionMode  string
-	ExecutionUnits []PipelineExecutionUnit
-	UnitEvent      func(PipelineExecutionUnitEvent) error
+	Target            string
+	Environment       string
+	SensorMode        string
+	DryRun            bool
+	StartDate         string
+	EndDate           string
+	ExecutionTime     time.Time
+	RunID             string
+	AssetEvent        func(ExecutionAssetEvent) error
+	SelectionMode     string
+	ExecutionUnits    []PipelineExecutionUnit
+	UnitEvent         func(PipelineExecutionUnitEvent) error
+	BeforeTargetWrite func(assetName string) error
 	// OnTargetsResolved must succeed synchronously after effective execution
 	// context and target resolution but before the first task starts. Dry runs
 	// do not resolve or capture execution targets.

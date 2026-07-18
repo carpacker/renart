@@ -8,6 +8,7 @@ import { liveTest as test, type LiveApp } from "../live-app-fixture";
 //   - edited but not run yet                 → "Edited"
 //   - an exact-target write fails            → fail closed + "Build failed"
 //   - a runtime-only Python asset succeeds   → "Never built" + successful attempt
+//   - a Python table returns data             → "Fresh" from its confirmed write
 
 const pipelineId = Buffer.from("analytics").toString("base64url");
 const customersAssetId = Buffer.from("analytics/assets/analytics/customers.sql").toString(
@@ -239,5 +240,89 @@ print("sentinel ok")
       timeout: 20000,
     });
     await expect(sentinelNode.locator('[data-last-run="failed"]')).toHaveText("Build failed");
+  });
+
+  test("marks a materialized Python table fresh after its confirmed write", async ({
+    liveApp,
+    page,
+  }) => {
+    test.skip(
+      test.info().project.name.includes("mobile"),
+      "The freshness badge is a desktop sidebar/canvas affordance.",
+    );
+
+    const pyAssetId = Buffer.from(
+      "analytics/assets/analytics/python_freshness.py",
+    ).toString("base64url");
+    await writeFile(
+      join(liveApp.workspaceDir, "analytics", "assets", "analytics", "python_freshness.py"),
+      `""" @bruin
+name: analytics.python_freshness
+type: python
+connection: duckdb-default
+materialization:
+  type: table
+@bruin """
+
+import pyarrow as pa
+
+
+def materialize():
+    return pa.table({"value": [1, 2, 3]})
+`,
+      "utf8",
+    );
+
+    await expect
+      .poll(
+        async () => {
+          const response = await page.request.get(`${liveApp.baseURL}/api/workspace`);
+          if (!response.ok()) return false;
+          const workspace = (await response.json()) as {
+            pipelines: Array<{ assets: Array<{ id: string }> }>;
+          };
+          return workspace.pipelines.flatMap((p) => p.assets).some((a) => a.id === pyAssetId);
+        },
+        { timeout: 20000 },
+      )
+      .toBe(true);
+
+    await page.goto(`${liveApp.baseURL}/pipelines/${pipelineId}/assets/${pyAssetId}/code`);
+    await expect(page.locator(".view-lines").first()).toContainText("materialize", {
+      timeout: 15000,
+    });
+
+    const materialize = page.waitForResponse(
+      (response) => response.url().includes(`/api/assets/${pyAssetId}/materialize/stream`),
+      { timeout: 90000 },
+    );
+    await page.getByRole("button", { name: "Materialize", exact: true }).click();
+    const response = await materialize;
+    expect(response.ok()).toBe(true);
+
+    await expect
+      .poll(
+        async () => {
+          const stalenessResponse = await page.request.get(
+            `${liveApp.baseURL}/api/pipelines/${pipelineId}/staleness?environment=default`,
+          );
+          if (!stalenessResponse.ok()) return "";
+          const body = (await stalenessResponse.json()) as {
+            assets: Array<{
+              asset_name: string;
+              status: string;
+              last_run_status?: string;
+              last_run_on_current_content?: boolean;
+              target_fidelity?: string;
+            }>;
+          };
+          const status = body.assets.find(
+            (asset) => asset.asset_name === "analytics.python_freshness",
+          );
+          return `${status?.status}/${status?.last_run_status}/${status?.last_run_on_current_content}/${status?.target_fidelity}`;
+        },
+        { timeout: 45000 },
+      )
+      .toBe("fresh/succeeded/true/exact");
   });
 });

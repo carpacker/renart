@@ -84,15 +84,31 @@ func (r *Recorder) HandleRunCompleted(event bus.RunCompleted) error {
 	// pre-run fingerprint (this run's facts are not yet written), so an upstream
 	// not rebuilt here contributes its old fingerprint; one rebuilt here
 	// contributes its fresh achieved fingerprint via topo order.
-	succeeded := make(map[string]bool, len(event.Assets))
+	materializedSucceeded := make(map[string]bool, len(event.Assets))
 	assetIDs := make([]string, 0, len(results))
 	for id := range results {
 		assetIDs = append(assetIDs, id)
 	}
 	for _, assetRun := range event.Assets {
-		if assetRun.Status == "succeeded" {
-			succeeded[assetRun.AssetID] = true
+		if assetRun.Status != "succeeded" {
+			continue
 		}
+		target := targetsByID[assetRun.AssetID]
+		if target.TargetWriteEvidenceRequired {
+			observed, evidenceErr := r.store.HasTargetWriteEvidence(ctx, TargetWriteClaim{
+				TargetIdentity: target.TargetIdentity,
+				CompletionID:   event.CompletionID,
+				AssetID:        assetRun.AssetID,
+			})
+			if evidenceErr != nil {
+				r.warn("failed to load operator target-write evidence", assetRun.AssetID, evidenceErr)
+				return fmt.Errorf("load operator target-write evidence for %s: %w", assetRun.AssetID, evidenceErr)
+			}
+			if !observed {
+				continue
+			}
+		}
+		materializedSucceeded[assetRun.AssetID] = true
 	}
 	latestAchieved, err := r.latestAchievedLookup(
 		ctx, assetIDs, event.Environment, targetsByID, event.Assets,
@@ -102,7 +118,7 @@ func (r *Recorder) HandleRunCompleted(event bus.RunCompleted) error {
 		r.warn("failed to load latest physical writers for materialization log", event.PipelineUUID, err)
 		return fmt.Errorf("load latest physical writers for pipeline %s: %w", event.PipelineUUID, err)
 	}
-	achieved, err := r.engine.AchievedFingerprintsByConsumer(parsed, results, succeeded, latestAchieved)
+	achieved, err := r.engine.AchievedFingerprintsByConsumer(parsed, results, materializedSucceeded, latestAchieved)
 	if err != nil {
 		r.warn("failed to compute achieved fingerprints for materialization log", event.PipelineUUID, err)
 		return fmt.Errorf("compute achieved fingerprints for pipeline %s: %w", event.PipelineUUID, err)
@@ -110,7 +126,7 @@ func (r *Recorder) HandleRunCompleted(event bus.RunCompleted) error {
 
 	var recordErrs []error
 	for _, assetRun := range event.Assets {
-		if assetRun.Status != "succeeded" {
+		if !materializedSucceeded[assetRun.AssetID] {
 			continue
 		}
 		result, ok := results[assetRun.AssetID]
@@ -449,6 +465,9 @@ func validateCapturedExecutionTarget(assetName string, entry bus.ExecutionTarget
 		}
 	default:
 		return fmt.Errorf("execution target snapshot entry %s has unsupported fidelity %q", assetName, entry.TargetFidelity)
+	}
+	if entry.TargetWriteEvidenceRequired && (entry.TargetFidelity != "exact" || entry.TargetIdentity == "") {
+		return fmt.Errorf("execution target snapshot entry %s requires write evidence without an exact target", assetName)
 	}
 	if version >= executionTargetSnapshotVersionV2 {
 		switch entry.CoverageMode {

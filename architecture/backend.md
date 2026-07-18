@@ -242,6 +242,9 @@ custom marshalers. Opaque maps/interfaces and non-empty URL, DSN, endpoint, or
 raw options fields fail closed as `runtime_only` with an empty digest instead
 of risking credential exposure or silently omitting behavior. This
 configuration identity is separate from the asset's physical-target identity.
+For Load assets the reserved Sling `local` endpoint is not treated as a named
+Bruin connection: authored source/destination paths remain in source identity,
+and an exact local destination has its own canonical physical-target identity.
 
 The target resolver is also connection-free. It hashes only resolved physical
 routing coordinates and the relation/file object; connection aliases,
@@ -251,12 +254,17 @@ same canonical path and symlink rules as runtime locking. Supported database
 families resolve through Bruin's table-name capabilities and require complete,
 unambiguous routing context. Schema-prefix rewrites, pre-hooks with an
 unqualified target, in-memory/MotherDuck/lakehouse DuckDB, raw routing options,
-credential-derived tenancy, Python outputs, non-materialized SQL, and unproven
-target families fail closed as `runtime_only` with an empty identity. Sensors
-are exact no-output targets. The same resolver supplies the versioned
-pre-execution target snapshot used by durable latest-writer coverage; exact
-identities are claimed before physical writes, while runtime-only targets stay
-explicitly targetless and cannot claim cross-run physical freshness.
+credential-derived tenancy, non-materialized Python/SQL, and unproven target
+families fail closed as `runtime_only` with an empty identity. A Python asset
+with declared table materialization resolves the same intended relation as its
+Go-side Parquet loader, but its snapshot requires operator write evidence:
+coverage is recorded only when the operator durably claims that target just
+before loading a returned result. A successful `None` return records the run
+attempt without physical coverage. Sensors are exact no-output targets. The
+same resolver supplies the versioned pre-execution target snapshot used by
+durable latest-writer coverage; exact identities are claimed before physical
+writes, while runtime-only targets stay explicitly targetless and cannot claim
+cross-run physical freshness.
 
 SQL assets expose the exact compiled query. DuckDB/MotherDuck,
 PostgreSQL/Redshift, BigQuery, MySQL, Snowflake, MSSQL, Trino, Vertica, and both
@@ -269,6 +277,10 @@ expose the exact query submitted by direct execution. Oracle materialization
 remains unsupported by that direct path, and declared Oracle hooks produce an
 explicit partial-result warning because the runtime does not execute them.
 Every stage declares exact, semantic, runtime-only, or unsupported fidelity.
+An honest semantic conditional such as connection-local schema preparation is
+an `ok` render detail, not a partial-plan warning; only missing, failed,
+unsupported, or genuinely runtime-only execution/target information downgrades
+readiness.
 Runtime column and custom quality checks are separate, named `check` stages.
 They come from Bruin's scheduler task instances and the same destination-aware
 check-operator registry used by direct execution. Rendering runs those

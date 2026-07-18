@@ -137,6 +137,56 @@ func TestRecorderRejectsCompletionThatDiffersFromCapturedSnapshot(t *testing.T) 
 	assert.Empty(t, writers)
 }
 
+func TestRecorderRequiresOperatorWriteEvidenceForSuccessfulPythonTable(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	store := openTestStore(t)
+	engine := fingerprint.NewEngine()
+	asset := recorderSQLAsset("analytics.python_table", "def materialize(): return value")
+	asset.Type = pipeline.AssetTypePython
+	pl := &pipeline.Pipeline{LegacyID: "pipeline-uuid", Name: "analytics", Assets: []*pipeline.Asset{asset}}
+	vars := fingerprint.EffectiveVars(pl, nil)
+	results, err := engine.DAG(pl, vars)
+	require.NoError(t, err)
+	assetID := identity.AssetID(pl.LegacyID, asset.Name)
+	varsHash := fingerprint.AllVarsHash(vars)
+	entry := withCapturedSemantics(recorderTargetEntry(assetID, "target-python-table", results[assetID], varsHash), asset)
+	entry.TargetWriteEvidenceRequired = true
+	recorder := matlog.NewRecorder(store, engine, nil, nil, nil)
+
+	completion := func(id string, finished time.Time) bus.RunCompleted {
+		return bus.RunCompleted{
+			RunID: id, CompletionID: id, PipelineUUID: pl.LegacyID, Environment: "default", CompletedAt: finished,
+			ExecutionTargetSnapshotVersion: 2, ExecutionPipelineUUID: pl.LegacyID,
+			ExecutionTargets: map[string]bus.ExecutionTargetSnapshotEntry{asset.Name: entry},
+			Assets:           []bus.AssetRun{capturedAssetRun(asset.Name, assetID, entry, finished)},
+		}
+	}
+
+	noOutputAt := time.Date(2026, 7, 18, 10, 0, 0, 0, time.UTC)
+	require.NoError(t, recorder.HandleRunCompleted(completion("python-no-output", noOutputAt)))
+	coverage, err := store.CurrentTargetCoverage(ctx, map[string]string{assetID: entry.TargetIdentity}, "default", varsHash)
+	require.NoError(t, err)
+	assert.Empty(t, coverage[assetID], "a successful None return must not claim physical freshness")
+	runs, err := store.LastRuns(ctx, []string{assetID}, "default")
+	require.NoError(t, err)
+	assert.Equal(t, "succeeded", runs[assetID].Status, "the execution attempt remains successful")
+
+	writtenAt := noOutputAt.Add(time.Hour)
+	claim := matlog.TargetWriteClaim{
+		TargetIdentity: entry.TargetIdentity, CompletionID: "python-with-output", AssetID: assetID, ClaimedAt: writtenAt.Add(-time.Second),
+	}
+	require.NoError(t, store.ClaimTargetWrite(ctx, claim))
+	require.NoError(t, recorder.HandleRunCompleted(completion("python-with-output", writtenAt)))
+	coverage, err = store.CurrentTargetCoverage(ctx, map[string]string{assetID: entry.TargetIdentity}, "default", varsHash)
+	require.NoError(t, err)
+	require.Len(t, coverage[assetID], 1)
+	assert.Equal(t, string(results[assetID].FP), coverage[assetID][0].Fingerprint)
+	evidence, err := store.HasTargetWriteEvidence(ctx, claim)
+	require.NoError(t, err)
+	assert.True(t, evidence, "the committed fact preserves replay evidence after its claim is cleared")
+}
+
 func TestRecorderRejectsVersionOneSnapshotAfterSourceTopologyChanges(t *testing.T) {
 	t.Parallel()
 	store := openTestStore(t)

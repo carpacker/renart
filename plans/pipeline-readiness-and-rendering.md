@@ -1368,8 +1368,10 @@ endpoint/routing coordinates plus the resolved relation or canonical local
 file. Bruin's table-name capabilities and Renart's DuckDB path canonicalizer
 are the shared parsing/normalization seams. Ambiguous session defaults,
 schema-prefix rewrites, pre-hooks with unqualified targets, raw routing
-options, credential-derived tenancy, dynamic Python outputs, non-materialized
-SQL, and unsupported families fail closed to `runtime_only`; sensors report an
+options, credential-derived tenancy, non-materialized/dynamic Python outputs,
+non-materialized SQL, and unsupported families fail closed to `runtime_only`;
+declared Python tables can use an exact intended target only when completion
+coverage requires the operator's durable write evidence. Sensors report an
 exact no-output target. Response display values never expose warehouse hosts,
 database paths, or credentials. This is the read-only resolution seam needed
 by target capture and latest-writer persistence; the execution-evidence and
@@ -1430,11 +1432,14 @@ fingerprints, authored upstream edges, coverage mode, variable hash, and refresh
 restriction. Scheduler runs persist it before their first step; all completion-
 aware interactive paths carry it directly. At each main-task start Renart
 captures the visible latest writers for exact in-pipeline upstream targets and
-claims the output before physical work. Failed/cancelled claims become dirty,
-successful facts clear matching claims in the same writer/fact/coverage
-transaction, and active/dirty claims suppress the prior writer. Recovery uses
-self-contained v2 evidence; v1 replay fails closed where a successful consumer
-lacks a successful in-pipeline upstream.
+claims ordinary outputs before physical work. Evidence-required Python tables
+instead claim immediately before their Go-side load; the recorder grants
+coverage only when that durable claim (or an already committed matching fact)
+exists. Failed/cancelled claims become dirty, successful facts clear matching
+claims in the same writer/fact/coverage transaction, and active/dirty claims
+suppress the prior writer. Recovery uses self-contained v2 evidence; v1 replay
+fails closed where a successful consumer lacks a successful in-pipeline
+upstream.
 
 Completion/recovery checkpoint (2026-07-17): a durable SQLite outbox is the
 single post-execution hand-off for recorder and staleness subscribers. Enqueue
@@ -1503,8 +1508,17 @@ retains sibling previews, and Python remains explicitly runtime-only where a
 safe static claim is unavailable. Backend coverage includes source modes,
 selection/closure, data-state shrink and expansion, policy, repeated windows,
 durable unit/completion behavior, and partial sources; live coverage exercises
-Needed execution/history, no-deployment `deployed_only`, incomplete source, and
-destructive confirmation on desktop and mobile.
+Needed execution/history, no-deployment `deployed_only`, incomplete source,
+destructive confirmation, and confirmed Python-table freshness on desktop and
+mobile where applicable.
+
+Readiness-diagnostic follow-up (2026-07-18): the reserved Load `local` endpoint
+is excluded from named-connection identity while its real source connection and
+exact file target remain bound. Conditional semantic schema preparation stays
+visible in render stages without making an otherwise exact plan partial. The
+planner now emits its generic partial warning only for an actual failed,
+unsupported, runtime-only, or unresolved-target stage; this removes repeated
+non-actionable SQL warnings while retaining Python's honest runtime warning.
 
 Phase 2 is complete. The remaining universal-ledger gap is broader than this
 phase: direct one-asset, Build-needed, onboarding, and embedded execution paths

@@ -105,8 +105,8 @@ select id from analytics.up
 		Selection:     PipelinePlanSelectionRequest{Mode: PipelinePlanSelectionNeeded},
 	})
 	require.Nil(t, apiErr)
-	assert.Equal(t, PipelinePlanStatusWarning, plan.Status, plan.Readiness.Warnings)
-	assert.Contains(t, pipelinePlanIssueCodes(plan.Readiness.Warnings), "asset_render_partial")
+	assert.Equal(t, PipelinePlanStatusReady, plan.Status, plan.Readiness.Warnings)
+	assert.NotContains(t, pipelinePlanIssueCodes(plan.Readiness.Warnings), "asset_render_partial")
 	assert.Equal(t, PipelinePlanSourceWorkingTree, plan.Source.Kind)
 	assert.NotEmpty(t, plan.Source.MerkleRoot)
 	assert.Equal(t, "data-token", plan.Selection.DataStateToken)
@@ -125,6 +125,41 @@ select id from analytics.up
 	assert.Equal(t, "default", stale.selectn.Environment)
 	assert.NotNil(t, stale.parsed)
 	assert.NotEmpty(t, plan.ID)
+}
+
+func TestPipelinePlanDoesNotBlockLocalLoadPseudoConnection(t *testing.T) {
+	t.Parallel()
+
+	_, root := writeTypeCheckWorkspace(t, "id: pipeline-uuid\nname: analytics", map[string]string{
+		"orders.asset.yml": `
+name: analytics.orders_export
+type: load
+connection: local
+parameters:
+  source_connection: duckdb-default
+  source_table: analytics.orders
+  destination_object: ./orders.csv
+materialization:
+  type: table
+  strategy: create+replace
+columns:
+  - name: order_id
+    type: integer
+`,
+	})
+	stale := &pipelinePlanStalenessStub{snapshot: staleness.Snapshot{Assets: []staleness.AssetStatus{{
+		AssetName: "analytics.orders_export", Status: staleness.StatusNeverBuilt,
+	}}}}
+
+	plan, apiErr := newTestPipelinePlanService(root, stale, nil).Plan(
+		context.Background(), EncodeID("analytics"),
+		PipelinePlanRequest{Selection: PipelinePlanSelectionRequest{Mode: PipelinePlanSelectionAll}},
+	)
+	require.Nil(t, apiErr)
+	assert.Equal(t, PipelinePlanStatusReady, plan.Status, plan.Readiness)
+	assert.Equal(t, "exact", plan.Context.ConfigurationFidelity)
+	assert.NotEmpty(t, plan.Context.ConfigurationDigest)
+	assert.NotContains(t, pipelinePlanIssueCodes(plan.Readiness.Blockers), "configuration_identity_unavailable")
 }
 
 func TestPipelinePlanSnapshotUsesImmutableSourceAndTopologicalOrder(t *testing.T) {

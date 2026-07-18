@@ -218,16 +218,17 @@ type ExecutionUpstreamSnapshot struct {
 }
 
 type ExecutionTargetSnapshotEntry struct {
-	AssetID           string                      `json:"asset_id"`
-	TargetIdentity    string                      `json:"target_identity,omitempty"`
-	TargetFidelity    string                      `json:"target_fidelity"`
-	Fingerprint       string                      `json:"fingerprint"`
-	OwnContent        string                      `json:"own_content"`
-	ConsumedVarsHash  string                      `json:"consumed_vars_hash"`
-	VarsHash          string                      `json:"vars_hash"`
-	Upstreams         []ExecutionUpstreamSnapshot `json:"upstreams,omitempty"`
-	CoverageMode      string                      `json:"coverage_mode,omitempty"`
-	RefreshRestricted bool                        `json:"refresh_restricted,omitempty"`
+	AssetID                     string                      `json:"asset_id"`
+	TargetIdentity              string                      `json:"target_identity,omitempty"`
+	TargetFidelity              string                      `json:"target_fidelity"`
+	TargetWriteEvidenceRequired bool                        `json:"target_write_evidence_required,omitempty"`
+	Fingerprint                 string                      `json:"fingerprint"`
+	OwnContent                  string                      `json:"own_content"`
+	ConsumedVarsHash            string                      `json:"consumed_vars_hash"`
+	VarsHash                    string                      `json:"vars_hash"`
+	Upstreams                   []ExecutionUpstreamSnapshot `json:"upstreams,omitempty"`
+	CoverageMode                string                      `json:"coverage_mode,omitempty"`
+	RefreshRestricted           bool                        `json:"refresh_restricted,omitempty"`
 }
 
 type PipelineRunStep struct {

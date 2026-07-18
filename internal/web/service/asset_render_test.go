@@ -63,7 +63,7 @@ select
 	})
 	require.NoError(t, err)
 
-	assert.Equal(t, AssetRenderStatusPartial, result.Status)
+	assert.Equal(t, AssetRenderStatusOK, result.Status)
 	assert.Equal(t, "working_tree", result.Provenance.Source.Kind)
 	assert.Equal(t, "analytics/pipeline.yml", result.Provenance.Source.PipelinePath)
 	assert.Equal(t, "analytics", result.Provenance.Pipeline)
@@ -762,6 +762,37 @@ materialization:
 	assert.NotContains(t, stage.Content, "duckdb://")
 }
 
+func TestAssetRenderServiceTreatsLocalLoadAsPseudoConnection(t *testing.T) {
+	t.Parallel()
+
+	_, root := writeTypeCheckWorkspace(t, "id: pipeline-uuid\nname: analytics", map[string]string{
+		"orders.asset.yml": `
+name: analytics.orders_export
+type: load
+connection: local
+parameters:
+  source_connection: duckdb-default
+  source_table: analytics.orders
+  destination_object: ./orders.csv
+materialization:
+  type: table
+  strategy: create+replace
+columns:
+  - name: order_id
+    type: integer
+`,
+	})
+
+	result, err := NewAssetRenderService(root).RenderPath(context.Background(), "analytics/assets/orders.asset.yml", AssetRenderRequest{})
+	require.NoError(t, err)
+	assert.Equal(t, AssetRenderStatusOK, result.Status)
+	assert.Equal(t, "exact", result.Provenance.Context.ConfigurationFidelity)
+	assert.NotEmpty(t, result.Provenance.Context.ConfigurationDigest)
+	assert.Equal(t, AssetRenderFidelityExact, result.Asset.Target.Fidelity)
+	assert.Equal(t, assetRenderTargetKindFile, result.Asset.Target.Kind)
+	assert.Equal(t, "orders.csv", result.Asset.Target.Object)
+}
+
 func TestAssetRenderServiceDescribesTableSensorCondition(t *testing.T) {
 	t.Parallel()
 
@@ -1031,7 +1062,7 @@ select DATE '{{ start_date }}' as event_date
 		EndDate:   "2026-07-16T00:00:00Z",
 	})
 	require.NoError(t, err)
-	require.Equal(t, AssetRenderStatusPartial, result.Status)
+	require.Equal(t, AssetRenderStatusOK, result.Status)
 	require.Len(t, result.Stages, 3)
 
 	execution := result.Stages[2].Content
@@ -1077,7 +1108,7 @@ environments:
 		FullRefresh: true,
 	})
 	require.NoError(t, err)
-	require.Equal(t, AssetRenderStatusPartial, result.Status)
+	require.Equal(t, AssetRenderStatusOK, result.Status)
 	require.Len(t, result.Stages, 3)
 	assert.True(t, result.Provenance.Context.RequestedFullRefresh)
 	assert.False(t, result.Provenance.Context.FullRefresh)

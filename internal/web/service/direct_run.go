@@ -62,6 +62,7 @@ func (e *HybridBruinExecutor) RunAsset(ctx context.Context, req RunAssetRequest,
 	}
 	defer cleanup()
 	runCtx = context.WithValue(runCtx, pipeline.RunConfigFullRefresh, req.FullRefresh)
+	runCtx = withTargetWriteStartCallback(runCtx, req.BeforeTargetWrite)
 
 	renderer, err := buildDirectRunAssetRenderer(pp, timeWindow, executionTime, runID)
 	if err != nil {
@@ -257,6 +258,7 @@ func (e *HybridBruinExecutor) RunPipeline(ctx context.Context, req RunPipelineRe
 	}
 	defer cleanup()
 	runCtx = context.WithValue(runCtx, pipeline.RunConfigFullRefresh, req.FullRefresh)
+	runCtx = withTargetWriteStartCallback(runCtx, req.BeforeTargetWrite)
 	renderer, err := buildDirectRunAssetRenderer(pp, timeWindow, executionTime, runID)
 	if err != nil {
 		return printer.buffer.Bytes(), err
@@ -480,6 +482,7 @@ func (e *HybridBruinExecutor) runPlannedPipelineUnit(
 	}
 	defer cleanup()
 	runCtx = context.WithValue(runCtx, pipeline.RunConfigFullRefresh, req.FullRefresh)
+	runCtx = withTargetWriteStartCallback(runCtx, req.BeforeTargetWrite)
 	renderer, err := buildDirectRunAssetRenderer(pp, window, executionTime, unitRunID)
 	if err != nil {
 		return err

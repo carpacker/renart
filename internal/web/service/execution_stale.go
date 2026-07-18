@@ -210,7 +210,7 @@ func (s *ExecutionService) MaterializeStaleAssetsStream(
 			observed.configureTargetWrites(ctx, completionID, s.deps.TargetWrites)
 			output, runErr := s.runSingleAssetMaterializationObserved(
 				ctx, assetPath, environment, window, false, sensorModeOnce,
-				onChunk, observed.handle, observed.captureExecutionTargets,
+				onChunk, observed.handle, observed.captureExecutionTargets, observed.beginTargetWrite,
 			)
 			combined.Write(output)
 			if pipelineFound || observed.pipelineUUID() != "" {

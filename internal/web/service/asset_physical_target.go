@@ -84,8 +84,8 @@ func resolveAssetPhysicalTarget(workspaceRoot string, info *directPipelineInfo) 
 	}
 
 	targetKind, displayObject := assetTargetIntent(asset, info.Pipeline)
-	if asset.Type == pipeline.AssetTypePython {
-		return runtimeOnlyAssetTarget(targetKind, displayObject, "Python code and SDK calls determine the physical output at runtime")
+	if asset.Type == pipeline.AssetTypePython && asset.Materialization.Type != pipeline.MaterializationTypeTable {
+		return runtimeOnlyAssetTarget(targetKind, displayObject, "Python code and SDK calls do not declare a Renart-managed table output")
 	}
 	knownWriter := isKnownImplicitAssetWriter(asset)
 	if asset.Materialization.Type == pipeline.MaterializationTypeNone && !knownWriter {

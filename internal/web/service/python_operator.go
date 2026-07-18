@@ -618,6 +618,9 @@ func (o *renartPythonOperator) runWithMaterialization(ctx context.Context, run p
 	if o.stagingOutputPath != "" {
 		return nil
 	}
+	if err := reportTargetWriteStarting(ctx, t.Name); err != nil {
+		return fmt.Errorf("claim the Python materialization target: %w", err)
+	}
 
 	fmt.Fprintln(run.output, "Collected the materialize() result, loading it into the destination…")
 	if isDuckDB {

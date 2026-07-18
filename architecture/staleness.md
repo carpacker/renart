@@ -104,9 +104,13 @@ snapshot before their first step; interactive asset, scoped, Build-stale,
 legacy `/api/run`, and quickstart builds carry the same evidence directly into
 their completion envelope. At each main-task start Renart captures the exact
 latest-writer read set for its in-pipeline upstream targets, then claims its own
-exact output before warehouse work can begin. A failed or cancelled claimed
-write becomes `dirty`; active and dirty claims make the previous writer
-unavailable so freshness fails closed.
+exact output before warehouse work can begin. Declared Python tables are the
+evidence-required exception: the intended target is captured up front, but the
+operator creates its durable claim only after `materialize()` returned data and
+immediately before the Go-side loader writes it. The recorder requires that
+claim (or the already-committed matching fact during replay) before granting
+coverage. A failed or cancelled claimed write becomes `dirty`; active and dirty
+claims make the previous writer unavailable so freshness fails closed.
 
 A full refresh remains paired with its requested run window. For an
 interval-aware asset it replaces prior interval coverage with that window; it
@@ -250,9 +254,12 @@ The `missing` downgrade only applies to assets whose output is a warehouse
 object named after the asset (`verifiableByName`: SQL, seed, and database-backed
 Load). Local-, file-, and object-storage-backed Load assets use an explicit
 `destination_object` and rest on their exact target-aware run facts instead.
-Python assets may return nothing or write elsewhere; unless their operator
-reports a reliable target, they remain `runtime_only`/`never_built` while their
-latest attempt is still recorded and displayed.
+Non-materialized Python assets may write anywhere and remain
+`runtime_only`/`never_built` while their latest attempt is still recorded and
+displayed. Declared Python tables use their supported destination relation as
+an exact target. They become fresh only when Renart's operator confirms that a
+returned result was loaded; a successful `None` return remains a successful
+attempt without creating coverage.
 
 Sensors are deliberately classified as `volatile` before and after a successful
 check. Their last attempt is still recorded and displayed, but they are excluded

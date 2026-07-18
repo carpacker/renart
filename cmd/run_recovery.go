@@ -187,16 +187,17 @@ func (s *webServer) replayRecoveredRun(ctx context.Context, run webscheduler.Pip
 				upstreams = append(upstreams, bus.ExecutionUpstreamSnapshot{Type: upstream.Type, Value: upstream.Value})
 			}
 			event.ExecutionTargets[assetName] = bus.ExecutionTargetSnapshotEntry{
-				AssetID:           entry.AssetID,
-				TargetIdentity:    entry.TargetIdentity,
-				TargetFidelity:    entry.TargetFidelity,
-				Fingerprint:       entry.Fingerprint,
-				OwnContent:        entry.OwnContent,
-				ConsumedVarsHash:  entry.ConsumedVarsHash,
-				VarsHash:          entry.VarsHash,
-				Upstreams:         upstreams,
-				CoverageMode:      entry.CoverageMode,
-				RefreshRestricted: entry.RefreshRestricted,
+				AssetID:                     entry.AssetID,
+				TargetIdentity:              entry.TargetIdentity,
+				TargetFidelity:              entry.TargetFidelity,
+				TargetWriteEvidenceRequired: entry.TargetWriteEvidenceRequired,
+				Fingerprint:                 entry.Fingerprint,
+				OwnContent:                  entry.OwnContent,
+				ConsumedVarsHash:            entry.ConsumedVarsHash,
+				VarsHash:                    entry.VarsHash,
+				Upstreams:                   upstreams,
+				CoverageMode:                entry.CoverageMode,
+				RefreshRestricted:           entry.RefreshRestricted,
 			}
 		}
 	}

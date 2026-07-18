@@ -162,6 +162,27 @@ func TestAssetPhysicalTargetCanonicalizesDuckDBAndLocalFilePaths(t *testing.T) {
 	assert.NotContains(t, local.Object, root)
 }
 
+func TestAssetPhysicalTargetUsesDeclaredPythonTableDestination(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	connections := &config.Connections{DuckDB: []config.DuckDBConnection{{
+		ConnectionMetadata: targetMetadata("warehouse"), Path: filepath.Join(root, "warehouse.duckdb"),
+	}}}
+	table := materializedTargetAsset(pipeline.AssetTypePython, "analytics.python_table", "warehouse")
+	target := resolveAssetPhysicalTarget(root, targetInfo(table, connections, ""))
+	require.Equal(t, AssetRenderFidelityExact, target.Fidelity, target.Message)
+	assert.Equal(t, assetRenderTargetKindRelation, target.Kind)
+	assert.Equal(t, "analytics.python_table", target.Object)
+	assert.NotEmpty(t, target.Identity)
+
+	script := *table
+	script.Materialization = pipeline.Materialization{Type: pipeline.MaterializationTypeNone}
+	runtimeOnly := resolveAssetPhysicalTarget(root, targetInfo(&script, connections, ""))
+	assert.Equal(t, AssetRenderFidelityRuntimeOnly, runtimeOnly.Fidelity)
+	assert.Empty(t, runtimeOnly.Identity)
+}
+
 func TestAssetPhysicalTargetTreatsKnownZeroMaterializationAssetsAsWriters(t *testing.T) {
 	t.Parallel()
 

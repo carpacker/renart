@@ -122,6 +122,32 @@ func TestExecutionTargetSnapshotCapturesSecretFreeTargetAndFingerprintEvidence(t
 	}
 }
 
+func TestExecutionTargetSnapshotRequiresOperatorEvidenceForPythonTable(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	asset := materializedTargetAsset(pipeline.AssetTypePython, "analytics.python_table", "warehouse")
+	asset.ExecutableFile = pipeline.ExecutableFile{Path: filepath.Join(root, "analytics", "assets", "python_table.py"), Content: "def materialize():\n    return dataframe\n"}
+	pl := &pipeline.Pipeline{
+		LegacyID: "pipeline-python-target-id", Name: "analytics",
+		DefinitionFile: pipeline.DefinitionFile{Path: filepath.Join(root, "analytics", "pipeline.yml")},
+		Assets:         []*pipeline.Asset{asset},
+	}
+	cfg := &config.Config{
+		SelectedEnvironmentName: "default",
+		SelectedEnvironment: &config.Environment{Connections: &config.Connections{
+			DuckDB: []config.DuckDBConnection{{ConnectionMetadata: targetMetadata("warehouse"), Path: filepath.Join(root, "warehouse.duckdb")}},
+		}},
+	}
+
+	snapshot, err := NewHybridBruinExecutor(root, "", nil, nil).resolveExecutionTargetSnapshot(pl, cfg, pl.Assets)
+	require.NoError(t, err)
+	entry := snapshot.Entries[asset.Name]
+	assert.Equal(t, AssetRenderFidelityExact, entry.TargetFidelity)
+	assert.NotEmpty(t, entry.TargetIdentity)
+	assert.True(t, entry.TargetWriteEvidenceRequired)
+}
+
 func TestExecutionTargetSnapshotCallbackFailureStopsBeforeAnyTask(t *testing.T) {
 	for _, tc := range []struct {
 		name string
