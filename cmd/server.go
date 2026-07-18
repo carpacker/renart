@@ -213,7 +213,7 @@ func newWebServer(ctx context.Context, cfg serverConfig, logger *zap.Logger) (*w
 				for _, asset := range pipeline.Assets {
 					assets = append(assets, service.AssetView{ID: asset.ID, Name: asset.Name})
 				}
-				pipelines = append(pipelines, service.PipelineView{ID: pipeline.ID, UUID: pipeline.UUID, Assets: assets})
+				pipelines = append(pipelines, service.PipelineView{ID: pipeline.ID, UUID: pipeline.UUID, Name: pipeline.Name, Assets: assets})
 			}
 			return pipelines
 		},
@@ -618,6 +618,7 @@ func newWebServer(ctx context.Context, cfg serverConfig, logger *zap.Logger) (*w
 			return webscheduler.RunResult{Status: result.Status, Error: result.Error}
 		},
 	})
+	server.executionSvc.SetInlineRunLedger(server.schedulerSvc)
 
 	server.workspaceCoord = service.NewWorkspaceCoordinator(service.WorkspaceCoordinatorDependencies{
 		WorkspaceService: server.workspaceSvc,

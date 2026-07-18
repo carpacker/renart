@@ -1333,6 +1333,148 @@ func (s *Service) Trigger(ctx context.Context, pipeline PipelineSchedule, req Tr
 	return s.admitQueuedRun(ctx, client, run, spec, req.ConfirmedPlan)
 }
 
+// AdmitInlineRun records a synchronous full-pipeline execution before any
+// physical work starts. Inline dispatch shares the same private RunSpec and
+// durable pipeline slot as queued work, but deliberately creates no River job.
+func (s *Service) AdmitInlineRun(ctx context.Context, req InlineRunAdmission) (PipelineRun, error) {
+	if s == nil || s.store == nil {
+		return PipelineRun{}, errors.New("run ledger is not configured")
+	}
+	switch req.Origin {
+	case RunTriggerManual, RunTriggerAPI, RunTriggerCLI:
+	default:
+		return PipelineRun{}, fmt.Errorf("invalid inline run origin %q", req.Origin)
+	}
+	if req.Start.IsZero() || req.End.IsZero() || !req.Start.Before(req.End) {
+		return PipelineRun{}, errors.New("inline run requires a complete increasing execution window")
+	}
+	source, snapshotVersionID, err := normalizeManualRunSource(req.Source, req.SnapshotVersionID)
+	if err != nil {
+		return PipelineRun{}, err
+	}
+	executionTime := req.ExecutionTime.UTC()
+	if executionTime.IsZero() {
+		executionTime = time.Now().UTC()
+	}
+	start, end := req.Start.UTC(), req.End.UTC()
+	run := PipelineRun{
+		PipelineID:               strings.TrimSpace(req.PipelineID),
+		PipelineUUID:             strings.TrimSpace(req.PipelineUUID),
+		Pipeline:                 strings.TrimSpace(req.PipelineName),
+		Environment:              strings.TrimSpace(req.Environment),
+		Trigger:                  req.Origin,
+		Status:                   RunStatusQueued,
+		WinStart:                 &start,
+		WinEnd:                   &end,
+		SnapshotVersionID:        snapshotVersionID,
+		FullRefresh:              req.FullRefresh,
+		Backfill:                 req.Backfill,
+		SensorMode:               strings.TrimSpace(req.SensorMode),
+		VariableOverrides:        req.VariableOverrides,
+		ExecutionTime:            &executionTime,
+		ExecutionContextResolved: true,
+	}
+	spec := inlineRunSpec(run, source, req.ConfirmedEnvironment)
+	id, err := s.store.CreateWithSpec(ctx, run, spec)
+	if err != nil {
+		return PipelineRun{}, err
+	}
+	run.ID = id
+	s.publishRunEvent("run.queued", run)
+	return run, nil
+}
+
+// StartInlineRun transitions an admitted inline run immediately before its
+// executor is called. A persistence failure prevents physical execution.
+func (s *Service) StartInlineRun(ctx context.Context, runID string, started time.Time) error {
+	if s == nil || s.store == nil {
+		return errors.New("run ledger is not configured")
+	}
+	run, _, _, err := s.store.Get(ctx, strings.TrimSpace(runID))
+	if err != nil {
+		return err
+	}
+	spec, found, err := s.store.GetRunSpec(ctx, run.ID)
+	if err != nil {
+		return err
+	}
+	if !found || spec.Dispatch != runDispatchInlineStreaming {
+		return errors.New("run is not an inline-streaming execution")
+	}
+	if run.Status != RunStatusQueued {
+		return fmt.Errorf("inline run %s cannot start from status %s", run.ID, run.Status)
+	}
+	if err := validateRunSpecBinding(run, spec); err != nil {
+		return fmt.Errorf("validate inline run spec: %w", err)
+	}
+	if err := s.store.validateActiveRunSpecSlotBinding(ctx, run, spec); err != nil {
+		return fmt.Errorf("validate inline run slot: %w", err)
+	}
+	started = started.UTC()
+	if started.IsZero() {
+		started = time.Now().UTC()
+	}
+	if err := s.store.MarkRunning(ctx, run.ID, started); err != nil {
+		return err
+	}
+	run.Status = RunStatusRunning
+	run.StartedAt = &started
+	s.publishRunEvent("run.started", run)
+	return nil
+}
+
+func (s *Service) SetInlineRunExecutionTargetSnapshot(ctx context.Context, runID string, snapshot ExecutionTargetSnapshot) error {
+	if s == nil || s.store == nil {
+		return errors.New("run ledger is not configured")
+	}
+	return s.store.SetRunExecutionTargetSnapshot(ctx, strings.TrimSpace(runID), snapshot)
+}
+
+func (s *Service) RecordInlineRunStep(ctx context.Context, runID string, event RunStepEvent) error {
+	if s == nil || s.store == nil {
+		return errors.New("run ledger is not configured")
+	}
+	return s.persistRunStep(ctx, strings.TrimSpace(runID), event)
+}
+
+func (s *Service) AppendInlineRunLog(ctx context.Context, runID, line string) error {
+	if s == nil || s.store == nil {
+		return errors.New("run ledger is not configured")
+	}
+	entry := LogLine{At: time.Now().UTC(), Line: line}
+	if err := s.store.AppendLog(ctx, strings.TrimSpace(runID), entry); err != nil {
+		return err
+	}
+	s.publishRunEvent("run.log", map[string]any{"run_id": strings.TrimSpace(runID), "log": entry})
+	return nil
+}
+
+// FinishInlineRun durably releases the run slot even when the request context
+// was cancelled. Inline runs never carry schedule-watermark capability.
+func (s *Service) FinishInlineRun(ctx context.Context, runID string, status RunStatus, runErr error) error {
+	if s == nil || s.store == nil {
+		return errors.New("run ledger is not configured")
+	}
+	switch status {
+	case RunStatusSuccess, RunStatusFailed, RunStatusCancelled:
+	default:
+		return fmt.Errorf("invalid terminal inline run status %q", status)
+	}
+	finalizeCtx, cancel := detachedRunFinalizationContext(ctx)
+	defer cancel()
+	finished := time.Now().UTC()
+	if err := s.store.FinalizeExecution(finalizeCtx, strings.TrimSpace(runID), status, finished, runErr, "", nil); err != nil {
+		return err
+	}
+	run, _, _, err := s.store.Get(finalizeCtx, strings.TrimSpace(runID))
+	if err != nil {
+		slog.Warn("failed to reload finalized inline run", "run_id", strings.TrimSpace(runID), "error", err)
+		return nil
+	}
+	s.publishRunEvent("run.finished", run)
+	return nil
+}
+
 func (s *Service) admitQueuedRun(ctx context.Context, client *river.Client[*sql.Tx], run PipelineRun, spec runSpecV1, plan *PipelineRunPlan) (PipelineRun, error) {
 	if err := spec.validate(); err != nil {
 		return PipelineRun{}, err
@@ -1492,6 +1634,11 @@ func (s *Service) prepareRun(ctx context.Context, riverJobID int64, args pipelin
 		}
 		if err := validateRunSpecBinding(run, spec); err != nil {
 			return PipelineRun{}, runSpecV1{}, false, &invalidRunSpecError{RunID: run.ID, Err: err}
+		}
+		if spec.Dispatch != runDispatchRiver {
+			return PipelineRun{}, runSpecV1{}, false, &invalidRunSpecError{
+				RunID: run.ID, Err: fmt.Errorf("River worker cannot execute dispatch %q", spec.Dispatch),
+			}
 		}
 		if err := s.store.validateActiveRunSpecSlotBinding(ctx, run, spec); err != nil {
 			return PipelineRun{}, runSpecV1{}, false, &invalidRunSpecError{RunID: run.ID, Err: err}

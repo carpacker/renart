@@ -25,6 +25,7 @@ import (
 	"renart/internal/web/matlog"
 	"renart/internal/web/policy"
 	"renart/internal/web/runcontext"
+	webscheduler "renart/internal/web/scheduler"
 )
 
 type InspectResult struct {
@@ -98,11 +99,29 @@ type ExecutionDependencies struct {
 	// execution path goes through — not in UI handlers.
 	PolicyFor           func(environment string) policy.EnvironmentPolicy
 	SelectedEnvironment func() string
+	// InlineRuns records synchronous full-pipeline mutations in the same
+	// durable run ledger as River-backed work. It may be attached after service
+	// construction because the scheduler store is initialized later at startup.
+	InlineRuns InlineRunLedger
+}
+
+// InlineRunLedger is implemented by scheduler.Service. Keeping the execution
+// service on this narrow lifecycle contract preserves inline SSE streaming
+// while giving it the same durable RunSpec, run slot, logs, and steps as queued
+// executions.
+type InlineRunLedger interface {
+	AdmitInlineRun(context.Context, webscheduler.InlineRunAdmission) (webscheduler.PipelineRun, error)
+	StartInlineRun(context.Context, string, time.Time) error
+	SetInlineRunExecutionTargetSnapshot(context.Context, string, webscheduler.ExecutionTargetSnapshot) error
+	RecordInlineRunStep(context.Context, string, webscheduler.RunStepEvent) error
+	AppendInlineRunLog(context.Context, string, string) error
+	FinishInlineRun(context.Context, string, webscheduler.RunStatus, error) error
 }
 
 type PipelineView struct {
 	ID     string
 	UUID   string
+	Name   string
 	Assets []AssetView
 }
 
@@ -135,13 +154,58 @@ type PipelineMaterializationResponse struct {
 }
 
 type ExecutionService struct {
-	deps ExecutionDependencies
+	deps         ExecutionDependencies
+	inlineRunsMu sync.RWMutex
+	inlineRuns   InlineRunLedger
 }
 
 const inspectReadOnlyErrorMessage = "Inspect only supports read-only single SELECT queries. Materialize the asset to run write, delete, copy, or multi-statement SQL."
 
 func NewExecutionService(deps ExecutionDependencies) *ExecutionService {
-	return &ExecutionService{deps: deps}
+	return &ExecutionService{deps: deps, inlineRuns: deps.InlineRuns}
+}
+
+// SetInlineRunLedger attaches the durable ledger after the shared scheduler
+// store and service have been constructed. Production calls it before serving
+// requests; the mutex keeps tests and alternate embedders safe.
+func (s *ExecutionService) SetInlineRunLedger(ledger InlineRunLedger) {
+	if s == nil {
+		return
+	}
+	s.inlineRunsMu.Lock()
+	s.inlineRuns = ledger
+	s.inlineRunsMu.Unlock()
+}
+
+func (s *ExecutionService) inlineRunLedger() InlineRunLedger {
+	if s == nil {
+		return nil
+	}
+	s.inlineRunsMu.RLock()
+	defer s.inlineRunsMu.RUnlock()
+	return s.inlineRuns
+}
+
+type executionOriginContextKey struct{}
+
+// WithExecutionOrigin marks a trusted in-process invocation. HTTP callers do
+// not control this value and therefore retain the server-owned API origin.
+func WithExecutionOrigin(ctx context.Context, origin webscheduler.RunTrigger) context.Context {
+	return context.WithValue(ctx, executionOriginContextKey{}, origin)
+}
+
+// ExecutionOrigin returns the trusted server-side origin for an execution.
+// Requests without an authenticated in-process marker are API calls.
+func ExecutionOrigin(ctx context.Context) webscheduler.RunTrigger {
+	if ctx != nil {
+		if origin, ok := ctx.Value(executionOriginContextKey{}).(webscheduler.RunTrigger); ok {
+			switch origin {
+			case webscheduler.RunTriggerManual, webscheduler.RunTriggerAPI, webscheduler.RunTriggerCLI:
+				return origin
+			}
+		}
+	}
+	return webscheduler.RunTriggerAPI
 }
 
 // emitRunCompleted publishes the run-completion event on the process bus.
@@ -1198,23 +1262,17 @@ func (s *ExecutionService) MaterializePipelineRun(ctx context.Context, spec Pipe
 		}
 		executionTime = parsedExecutionTime.UTC()
 	}
-	if !spec.DryRun && strings.TrimSpace(spec.CompletionID) == "" {
-		spec.CompletionID = strings.TrimSpace(spec.RunID)
-		if spec.CompletionID == "" {
-			spec.CompletionID = uuid.NewString()
-		}
-	}
-
 	ctx, warnings := withExecutionWarnings(ctx)
 	spec.Environment = s.effectiveEnvironment(spec.Environment)
 	spec.FullRefresh = s.effectiveFullRefresh(ctx, spec.Environment, spec.FullRefresh)
-	if err := s.checkRunPolicy(policy.RunRequest{
+	policyRequest := policy.RunRequest{
 		Environment:          spec.Environment,
 		Interactive:          !spec.Scheduled,
 		SnapshotBased:        spec.SnapshotDir != "",
 		Destructive:          !spec.DryRun && (spec.FullRefresh || spec.Backfill),
 		ConfirmedEnvironment: strings.TrimSpace(spec.ConfirmedEnvironment),
-	}); err != nil {
+	}
+	if err := s.checkRunPolicy(policyRequest); err != nil {
 		return MaterializeResult{Status: "error", Error: err.Error(), ExitCode: 1}
 	}
 	target, err := ResolvePipelineRunTarget(spec.PipelineID)
@@ -1234,13 +1292,125 @@ func (s *ExecutionService) MaterializePipelineRun(ctx context.Context, spec Pipe
 		}
 	}
 	operation := withOperationTimeWindow(runOperation(target, spec.PipelineID, "", spec.Environment), timeWindow)
+
+	var inlineLedger InlineRunLedger
+	var inlineRunID string
+	inlineFinalized := false
+	finishInline := func(status webscheduler.RunStatus, runErr error) error {
+		if inlineLedger == nil || inlineRunID == "" || inlineFinalized {
+			return nil
+		}
+		inlineFinalized = true
+		return inlineLedger.FinishInlineRun(ctx, inlineRunID, status, runErr)
+	}
+	if !spec.DryRun && strings.TrimSpace(spec.RunID) == "" {
+		inlineLedger = s.inlineRunLedger()
+		if inlineLedger != nil {
+			pipelineView, _ := s.findPipelineView(spec.PipelineID)
+			pipelineUUID := strings.TrimSpace(spec.PipelineUUID)
+			if pipelineUUID == "" {
+				pipelineUUID = strings.TrimSpace(pipelineView.UUID)
+			}
+			pipelineName := inlinePipelineName(pipelineView, target, s.deps.WorkspaceRoot)
+			source := webscheduler.RunSourceWorkingTree
+			if strings.TrimSpace(spec.SnapshotDir) != "" || strings.TrimSpace(spec.SnapshotVersionID) != "" {
+				source = webscheduler.RunSourceSnapshot
+			}
+			admitted, admitErr := inlineLedger.AdmitInlineRun(ctx, webscheduler.InlineRunAdmission{
+				PipelineID:           spec.PipelineID,
+				PipelineUUID:         pipelineUUID,
+				PipelineName:         pipelineName,
+				Environment:          spec.Environment,
+				Origin:               ExecutionOrigin(ctx),
+				Source:               source,
+				SnapshotVersionID:    spec.SnapshotVersionID,
+				Start:                timeWindow.Start,
+				End:                  timeWindow.End,
+				ExecutionTime:        executionTime,
+				VariableOverrides:    spec.VariableOverrides,
+				FullRefresh:          spec.FullRefresh,
+				Backfill:             spec.Backfill,
+				ConfirmedEnvironment: spec.ConfirmedEnvironment,
+				SensorMode:           effectiveSensorMode(spec.SensorMode, false),
+			})
+			if admitErr != nil {
+				return MaterializeResult{
+					Status: "error", Operation: operation, Error: "admit durable inline run: " + admitErr.Error(),
+					ExitCode: 1, Warnings: warnings.snapshot(),
+				}
+			}
+			inlineRunID = admitted.ID
+			spec.RunID = admitted.ID
+			spec.PipelineUUID = pipelineUUID
+			if strings.TrimSpace(spec.CompletionID) == "" {
+				spec.CompletionID = admitted.ID
+			}
+			if startErr := inlineLedger.StartInlineRun(ctx, admitted.ID, time.Now().UTC()); startErr != nil {
+				startErr = errors.Join(startErr, finishInline(webscheduler.RunStatusFailed, startErr))
+				return MaterializeResult{
+					Status: "error", Operation: operation, Error: "start durable inline run: " + startErr.Error(),
+					ExitCode: 1, Warnings: warnings.snapshot(),
+				}
+			}
+
+			existingTargetsResolved := spec.OnTargetsResolved
+			spec.OnTargetsResolved = func(snapshot ExecutionTargetSnapshot) error {
+				if err := inlineLedger.SetInlineRunExecutionTargetSnapshot(
+					ctx, inlineRunID, schedulerExecutionTargetSnapshot(snapshot),
+				); err != nil {
+					return fmt.Errorf("persist inline execution targets: %w", err)
+				}
+				if existingTargetsResolved != nil {
+					return existingTargetsResolved(snapshot)
+				}
+				return nil
+			}
+			existingAssetEvent := onAssetEvent
+			onAssetEvent = func(event ExecutionAssetEvent) error {
+				if err := inlineLedger.RecordInlineRunStep(ctx, inlineRunID, schedulerRunStepEvent(event)); err != nil {
+					return fmt.Errorf("persist inline execution step: %w", err)
+				}
+				if existingAssetEvent != nil {
+					return existingAssetEvent(event)
+				}
+				return nil
+			}
+			existingChunk := onChunk
+			onChunk = func(chunk []byte) {
+				_ = inlineLedger.AppendInlineRunLog(ctx, inlineRunID, string(chunk))
+				if existingChunk != nil {
+					existingChunk(chunk)
+				}
+			}
+			defer func() {
+				if !inlineFinalized {
+					_ = finishInline(webscheduler.RunStatusFailed, errors.New("inline execution ended before durable finalization"))
+				}
+			}()
+		}
+	}
+	if !spec.DryRun && strings.TrimSpace(spec.CompletionID) == "" {
+		spec.CompletionID = strings.TrimSpace(spec.RunID)
+		if spec.CompletionID == "" {
+			spec.CompletionID = uuid.NewString()
+		}
+	}
+
 	var releaseExecutionLease func() error
 	if !spec.DryRun {
 		releaseExecutionLease, err = s.acquireExecutionLease(ctx)
 		if err != nil {
-			return MaterializeResult{Status: "error", Operation: operation, Error: "acquire workspace execution lease: " + err.Error(), ExitCode: 1}
+			runErr := fmt.Errorf("acquire workspace execution lease: %w", err)
+			runErr = errors.Join(runErr, finishInline(webscheduler.RunStatusFailed, runErr))
+			return MaterializeResult{Status: "error", Operation: operation, Error: runErr.Error(), ExitCode: 1, Warnings: warnings.snapshot()}
 		}
 		defer func() { _ = releaseExecutionLease() }()
+		// Policy is evaluated again after admission and lease acquisition against
+		// the same normalized context, immediately before executor side effects.
+		if err := s.checkRunPolicy(policyRequest); err != nil {
+			runErr := errors.Join(err, finishInline(webscheduler.RunStatusFailed, err))
+			return MaterializeResult{Status: "error", Operation: operation, Error: runErr.Error(), ExitCode: 1, Warnings: warnings.snapshot()}
+		}
 	}
 	observed := newPipelineRunObservation(onAssetEvent)
 	observed.configureTargetWrites(ctx, spec.CompletionID, s.deps.TargetWrites)
@@ -1397,6 +1567,19 @@ func (s *ExecutionService) MaterializePipelineRun(ctx context.Context, spec Pipe
 			if runErr == nil && completionErr == nil {
 				materializedAt = &now
 			}
+		}
+	}
+	if inlineRunID != "" {
+		terminalStatus := webscheduler.RunStatusSuccess
+		terminalErr := errors.Join(runErr, completionErr)
+		if terminalErr != nil {
+			terminalStatus = webscheduler.RunStatusFailed
+			if runErr != nil && executionWasCancelled(ctx, runErr) {
+				terminalStatus = webscheduler.RunStatusCancelled
+			}
+		}
+		if finishErr := finishInline(terminalStatus, terminalErr); finishErr != nil {
+			completionErr = errors.Join(completionErr, fmt.Errorf("finalize durable inline run: %w", finishErr))
 		}
 	}
 
@@ -1931,6 +2114,91 @@ func completedExecutionStatus(status string) string {
 		return "cancelled"
 	default:
 		return ""
+	}
+}
+
+func inlinePipelineName(view PipelineView, target, workspaceRoot string) string {
+	if name := strings.TrimSpace(view.Name); name != "" {
+		return name
+	}
+	cleaned := filepath.Clean(strings.TrimSpace(target))
+	if cleaned == "." || cleaned == "" {
+		if workspaceName := strings.TrimSpace(filepath.Base(filepath.Clean(workspaceRoot))); workspaceName != "" && workspaceName != "." {
+			return workspaceName
+		}
+		return "workspace"
+	}
+	if name := strings.TrimSpace(filepath.Base(cleaned)); name != "" && name != "." {
+		return name
+	}
+	return "pipeline"
+}
+
+func schedulerExecutionTargetSnapshot(snapshot ExecutionTargetSnapshot) webscheduler.ExecutionTargetSnapshot {
+	entries := make(map[string]webscheduler.ExecutionTargetSnapshotEntry, len(snapshot.Entries))
+	for assetName, entry := range snapshot.Entries {
+		upstreams := make([]webscheduler.ExecutionUpstreamSnapshot, 0, len(entry.Upstreams))
+		for _, upstream := range entry.Upstreams {
+			upstreams = append(upstreams, webscheduler.ExecutionUpstreamSnapshot{
+				Type: upstream.Type, Value: upstream.Value,
+			})
+		}
+		entries[assetName] = webscheduler.ExecutionTargetSnapshotEntry{
+			AssetID:                     entry.AssetID,
+			TargetIdentity:              entry.TargetIdentity,
+			TargetFidelity:              string(entry.TargetFidelity),
+			TargetWriteEvidenceRequired: entry.TargetWriteEvidenceRequired,
+			Fingerprint:                 entry.Fingerprint,
+			OwnContent:                  entry.OwnContent,
+			ConsumedVarsHash:            entry.ConsumedVarsHash,
+			VarsHash:                    entry.VarsHash,
+			Upstreams:                   upstreams,
+			CoverageMode:                string(entry.CoverageMode),
+			RefreshRestricted:           entry.RefreshRestricted,
+		}
+	}
+	return webscheduler.ExecutionTargetSnapshot{
+		Version:               snapshot.Version,
+		PipelineUUID:          snapshot.PipelineUUID,
+		ConfigurationDigest:   snapshot.ConfigurationDigest,
+		ConfigurationFidelity: snapshot.ConfigurationFidelity,
+		Entries:               entries,
+	}
+}
+
+func schedulerRunStepEvent(event ExecutionAssetEvent) webscheduler.RunStepEvent {
+	var upstreamWriters map[string]webscheduler.UpstreamWriterSnapshot
+	if event.HasUpstreamWriterSnapshot {
+		upstreamWriters = make(map[string]webscheduler.UpstreamWriterSnapshot, len(event.UpstreamWriters))
+		for assetID, writer := range event.UpstreamWriters {
+			upstreamWriters[assetID] = webscheduler.UpstreamWriterSnapshot{
+				AssetID: writer.AssetID, TargetIdentity: writer.TargetIdentity,
+				Fingerprint: writer.Fingerprint, VarsHash: writer.VarsHash,
+				TargetGeneration: writer.TargetGeneration, CompletionID: writer.CompletionID,
+				CompletionOrdinal: writer.CompletionOrdinal, MaterializedAt: writer.MaterializedAt,
+			}
+		}
+	}
+	return webscheduler.RunStepEvent{
+		Asset: event.Asset, Status: schedulerRunStatus(event.Status),
+		StartedAt: event.StartedAt, FinishedAt: event.FinishedAt, Error: event.Error,
+		CompletionOrdinal: event.CompletionOrdinal, UpstreamWriters: upstreamWriters,
+		HasUpstreamWriterSnapshot: event.HasUpstreamWriterSnapshot,
+	}
+}
+
+func schedulerRunStatus(status string) webscheduler.RunStatus {
+	switch strings.ToLower(strings.TrimSpace(status)) {
+	case "success", "succeeded", "ok", "finished":
+		return webscheduler.RunStatusSuccess
+	case "failed", "failure", "error", "errored":
+		return webscheduler.RunStatusFailed
+	case "cancelled", "canceled":
+		return webscheduler.RunStatusCancelled
+	case "queued":
+		return webscheduler.RunStatusQueued
+	default:
+		return webscheduler.RunStatusRunning
 	}
 }
 

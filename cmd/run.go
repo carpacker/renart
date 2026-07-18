@@ -16,6 +16,7 @@ import (
 
 	"renart/internal/clientapi"
 	"renart/internal/web/model"
+	webscheduler "renart/internal/web/scheduler"
 	"renart/internal/web/service"
 	"renart/internal/web/staleness"
 )
@@ -269,6 +270,7 @@ func runAction(ctx context.Context, c *cli.Command) error {
 		}
 		status, message, output = done.Status, done.Error, done.Output
 	} else if status == "" {
+		ctx = service.WithExecutionOrigin(ctx, webscheduler.RunTriggerCLI)
 		onChunk := func(chunk []byte) { printer.chunk(string(chunk)) }
 		var result service.MaterializeResult
 		if target.kind == "pipeline" {

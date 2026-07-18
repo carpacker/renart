@@ -11,6 +11,8 @@ import (
 
 	"go.uber.org/zap"
 	webapi "renart/internal/web/api"
+	webscheduler "renart/internal/web/scheduler"
+	"renart/internal/web/service"
 )
 
 func isLoopbackHost(hostname string) bool {
@@ -118,7 +120,11 @@ func SameOriginGuardWithToken(token string) func(http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if presented := requestSessionToken(r); presented != "" {
 				if token != "" && subtle.ConstantTimeCompare([]byte(presented), []byte(token)) == 1 {
-					next.ServeHTTP(w, r)
+					// A valid discovery token is minted by this server and supplied
+					// to the local CLI. It is therefore a server-authenticated origin,
+					// unlike a client-provided trigger field.
+					ctx := service.WithExecutionOrigin(r.Context(), webscheduler.RunTriggerCLI)
+					next.ServeHTTP(w, r.WithContext(ctx))
 					return
 				}
 				webapi.WriteError(w, http.StatusForbidden, "invalid_session_token", "invalid session token")

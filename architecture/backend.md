@@ -427,12 +427,13 @@ registration; startup acquires it before River workers start. The service
 exposes `owner`, `follower`, or `unavailable` ownership through the environment
 schedule API. Only an active owner may mutate schedules or queue runs; follower
 requests fail with `409 scheduler_not_owner` before deployment, workspace, or
-SQLite writes. Scheduler-backed runs persist a private, validated, versioned
-`pipeline_run_specs` record outside public run DTOs and SSE. The spec is the
-immutable requested behavior contract; effective environment, window, and
-modes still replace the diagnostic `pipeline_runs` columns immediately before
-execution. Plan-confirmed runs additionally retain the reviewed source/config/
-time identities, redacted plan artifact, and final unit ledger described above.
+SQLite writes. Queued runs and inline full-pipeline mutations persist a private,
+validated, versioned `pipeline_run_specs` record outside public run DTOs and
+SSE. The spec is the immutable behavior contract; scheduler-backed rows replace
+their diagnostic context with effective values immediately before execution,
+while inline admission stores the already server-normalized effective context.
+Plan-confirmed runs additionally retain the reviewed source/config/time
+identities, redacted plan artifact, and final unit ledger described above.
 Manual/API admission inserts the run, v1 spec, optional confirmed plan and
 units, run-ID-only River job, run/job link, and namespaced path plus stable-UUID
 slot aliases in one SQLite transaction via `InsertTx`. Stored specs override
@@ -442,6 +443,19 @@ independently checked against the durable UUID slot before execution, then
 threaded through scheduler execution and snapshot resolution; deployment
 lookup never has to rediscover that identity from a mutable pipeline path.
 Pre-upgrade jobs without a spec retain one strict upgrade decoder.
+
+Synchronous full-pipeline execution uses the same v1 RunSpec with
+`dispatch=inline_streaming`. After policy/default/window normalization and
+before acquiring the physical executor, Renart atomically creates the run,
+private spec, and path plus available stable-UUID slot aliases without a River
+job. It then marks the run running before calling Bruin, persists target
+identity, steps, and streamed logs through the same scheduler service, and
+finalizes through a context-detached write that releases the slot. A second
+policy check uses the same normalized context immediately before side effects.
+Authenticated discovery-token requests are server-classified as `cli`; other
+HTTP execution is `api`, so clients cannot submit their own origin. A crash
+fails the jobless inline row and replays only durable terminal provenance—it
+never re-executes asset code.
 
 Actual due/catch-up signals generate the same redacted plan against the row's
 exact deployment, environment, normalized interval, and admission-time
@@ -508,12 +522,13 @@ River-argument link recovery is legacy-only. Recovery emits one structured
 count summary, including requeued signals and legacy replays skipped because
 their effective execution context was never persisted (see staleness.md §3).
 
-Plan-confirmed pipeline execution now has a durable asset/window ledger, but it
-is not yet universal across every mutating path. Interactive and embedded CLI,
-one-asset Materialize, Build-stale, and onboarding paths use the common target-
-capture/write-claim/completion seam but do not create a RunSpec or claim a
-pipeline-global run slot. Durable schedule occurrences, ledger coverage for
-those direct paths, and exact re-execution remain open.
+Plan-confirmed and synchronous full-pipeline execution now share the durable run
+ledger. This includes HTTP pipeline streaming, delegated or embedded CLI
+pipeline runs, legacy full-pipeline `/api/run`, and onboarding quickstart
+materialization while preserving their inline stream. One-asset/scoped
+Materialize and Build-stale still use only the common target-capture/write-
+claim/completion seam; their selection requires the next RunSpec schema slice
+before they can safely join the ledger. Exact re-execution also remains open.
 
 Before applying either Renart or River migrations, `Store` runs SQLite's
 `quick_check` against the shared state database. A failed check aborts startup

@@ -12,6 +12,7 @@ import (
 const (
 	runSpecVersionV1             = 1
 	runDispatchRiver             = "river"
+	runDispatchInlineStreaming   = "inline_streaming"
 	runSelectionAll              = "all"
 	runSpecRetrySnoozeTime       = 30 * time.Second
 	maxRunVariableOverridesBytes = 256 << 10
@@ -54,9 +55,9 @@ func (e *PipelineRunActiveError) Unwrap() error {
 	return ErrPipelineRunActive
 }
 
-// runSpecV1 is the private, replayable behavior contract for scheduler-backed
-// runs. It is stored separately from the public run row so authorization and
-// future secret references cannot leak through run-list JSON or SSE events.
+// runSpecV1 is the private, replayable behavior contract for queued and inline
+// full-pipeline runs. It is stored separately from the public run row so
+// authorization and future secret references cannot leak through run-list JSON or SSE events.
 // Requested context stays immutable; effective post-policy context continues
 // to live in the pipeline_runs columns written immediately before execution.
 type runSpecV1 struct {
@@ -119,7 +120,9 @@ func (spec runSpecV1) validate() error {
 	if strings.TrimSpace(spec.Pipeline.ID) == "" || strings.TrimSpace(spec.Pipeline.Name) == "" {
 		return errors.New("run spec pipeline id and name are required")
 	}
-	if spec.Dispatch != runDispatchRiver {
+	switch spec.Dispatch {
+	case runDispatchRiver, runDispatchInlineStreaming:
+	default:
 		return fmt.Errorf("unsupported run dispatch %q", spec.Dispatch)
 	}
 	if spec.Selection != runSelectionAll {
@@ -161,6 +164,9 @@ func (spec runSpecV1) validate() error {
 	}
 	switch spec.Origin {
 	case RunTriggerSchedule:
+		if spec.Dispatch != runDispatchRiver {
+			return errors.New("scheduled run spec requires River dispatch")
+		}
 		if spec.Schedule == nil {
 			return errors.New("scheduled run spec requires schedule provenance")
 		}
@@ -306,6 +312,12 @@ func manualRunSpec(run PipelineRun, source RunSource, confirmedEnvironment strin
 			ConfigurationDigest: strings.TrimSpace(run.ExpectedConfigurationDigest),
 		}
 	}
+	return spec
+}
+
+func inlineRunSpec(run PipelineRun, source RunSource, confirmedEnvironment string) runSpecV1 {
+	spec := manualRunSpec(run, source, confirmedEnvironment)
+	spec.Dispatch = runDispatchInlineStreaming
 	return spec
 }
 

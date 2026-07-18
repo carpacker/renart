@@ -176,6 +176,14 @@ stable pipeline UUID is independently bound to the durable UUID run slot before
 execution and travels through scheduler execution into snapshot resolution. A
 pipeline path rename therefore cannot redirect a queued snapshot through a
 newly resolved identity.
+Synchronous full-pipeline materialization now uses the same ledger with an
+`inline_streaming` dispatch. Its effective window, environment, modes, source,
+and server-authenticated API/CLI origin are admitted before Bruin starts;
+targets and steps are persisted synchronously, and terminalization releases the
+same pipeline-global slot. A crash marks the jobless inline run failed and
+replays only its retained terminal facts. Asset/scoped and Build-stale
+selections remain outside this RunSpec ledger until their selection schema is
+durable.
 For a deployed run it materializes the run's exact pinned snapshot while the
 recorder fingerprints it, then deletes the temp directory. This is derived-state
 recovery only—asset code and textual logs are never replayed. The fact and

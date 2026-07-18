@@ -222,15 +222,37 @@ type TriggerRequest struct {
 	ConfirmedPlan *PipelineRunPlan `json:"-"`
 }
 
+// InlineRunAdmission is the server-normalized contract for a synchronous,
+// streaming full-pipeline execution. The execution service resolves policy,
+// defaults, and the exact window before admission; the scheduler service owns
+// durable provenance and the pipeline-global run slot without involving River.
+type InlineRunAdmission struct {
+	PipelineID           string
+	PipelineUUID         string
+	PipelineName         string
+	Environment          string
+	Origin               RunTrigger
+	Source               RunSource
+	SnapshotVersionID    string
+	Start                time.Time
+	End                  time.Time
+	ExecutionTime        time.Time
+	VariableOverrides    map[string]any
+	FullRefresh          bool
+	Backfill             bool
+	ConfirmedEnvironment string
+	SensorMode           string
+}
+
 type PipelineRun struct {
 	ID         string `json:"id"`
 	PipelineID string `json:"pipeline_id"`
 	// RiverJobID links this application-level run to its internal queue job.
 	// It is deliberately not exposed through the API.
 	RiverJobID *int64 `json:"-"`
-	// PipelineUUID is the stable identity for per-environment scheduled
-	// runs. Not persisted; carried in memory so run completion can advance
-	// the (pipeline, environment) watermark.
+	// PipelineUUID is stable admission/event identity for scheduled and inline
+	// runs. It is retained privately in the RunSpec and durable UUID slot rather
+	// than duplicated onto the public run row.
 	PipelineUUID string     `json:"pipeline_uuid,omitempty"`
 	Pipeline     string     `json:"pipeline"`
 	Environment  string     `json:"environment"`
