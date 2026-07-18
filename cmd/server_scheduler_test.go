@@ -20,6 +20,7 @@ func TestPipelineRunSpecFromSchedulerRequestPreservesDestructiveContext(t *testi
 		Backfill:             true,
 		ConfirmedEnvironment: "prod",
 		SensorMode:           "skip",
+		VariableOverrides:    map[string]any{"region": "eu"},
 	}
 
 	spec := pipelineRunSpecFromSchedulerRequest(req)
@@ -34,4 +35,5 @@ func TestPipelineRunSpecFromSchedulerRequestPreservesDestructiveContext(t *testi
 	assert.Equal(t, req.Backfill, spec.Backfill)
 	assert.Equal(t, req.ConfirmedEnvironment, spec.ConfirmedEnvironment)
 	assert.Equal(t, req.SensorMode, spec.SensorMode)
+	assert.Equal(t, req.VariableOverrides, spec.VariableOverrides)
 }

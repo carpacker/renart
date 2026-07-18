@@ -154,6 +154,15 @@ func TestUpsertEnvScheduleValidation(t *testing.T) {
 			}
 			return nil
 		},
+		ValidateScheduleVariables: func(_ context.Context, pipelineUUID, versionID string, overrides map[string]any) error {
+			if pipelineUUID != "uuid-1" || (versionID != "snap-new" && versionID != "snap-existing") {
+				return errors.New("wrong pinned deployment")
+			}
+			if overrides["region"] == "invalid" {
+				return errors.New("variable \"region\" does not satisfy its declared schema")
+			}
+			return nil
+		},
 	})
 	ctx, cancel := context.WithCancel(context.Background())
 	require.NoError(t, service.Start(ctx))
@@ -192,6 +201,12 @@ func TestUpsertEnvScheduleValidation(t *testing.T) {
 	})
 	require.ErrorContains(t, err, "not executable for this pipeline")
 
+	_, err = service.UpsertEnvSchedule(ctx, "uuid-1", UpsertEnvScheduleRequest{
+		Environment: "invalid-vars", Cron: "@daily", SnapshotVersionID: "snap-existing",
+		Vars: map[string]any{"region": "invalid"},
+	})
+	require.ErrorContains(t, err, "invalid for the pinned deployment")
+
 	paused, err := service.UpsertEnvSchedule(ctx, "uuid-1", UpsertEnvScheduleRequest{
 		Environment: "variables", Cron: "@daily", SnapshotVersionID: "snap-existing",
 		Vars: map[string]any{"region": "eu"}, Paused: true,
@@ -199,7 +214,11 @@ func TestUpsertEnvScheduleValidation(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, ScheduleStatusPaused, paused.Status)
 	err = service.SetEnvScheduleLifecycle(ctx, "uuid-1", "variables", ScheduleStatusActive)
-	require.ErrorContains(t, err, "remove the overrides")
+	require.NoError(t, err)
+	activeVariables, found, err := store.GetEnvSchedule(ctx, "uuid-1", "variables")
+	require.NoError(t, err)
+	require.True(t, found)
+	assert.Equal(t, ScheduleStatusActive, activeVariables.Status)
 
 	promoted, err := service.PromoteEnvSchedules(ctx, "uuid-1", PromoteEnvSchedulesRequest{
 		SnapshotVersionID: "snap-new",
@@ -238,6 +257,9 @@ func TestEnvScheduledWorkerRunsWithEnvironmentAndWatermark(t *testing.T) {
 		StateDir: stateDir,
 		Runner: func(ctx context.Context, req RunRequest, onLog func(string)) RunResult {
 			capturedRequest = req
+			if err := completeTestScheduledRunUnits(req); err != nil {
+				return RunResult{Status: "error", Error: err.Error()}
+			}
 			return RunResult{Status: "ok"}
 		},
 		ResolvePipelineRef: func(ctx context.Context, uuid string) (PipelineRef, bool) {
@@ -246,6 +268,7 @@ func TestEnvScheduledWorkerRunsWithEnvironmentAndWatermark(t *testing.T) {
 			}
 			return PipelineRef{}, false
 		},
+		PlanScheduledRun: testScheduledRunPlan,
 	})
 
 	worker := &pipelineRunWorker{service: service}
@@ -261,11 +284,14 @@ func TestEnvScheduledWorkerRunsWithEnvironmentAndWatermark(t *testing.T) {
 		Start:             start.Format(time.RFC3339Nano),
 		End:               end.Format(time.RFC3339Nano),
 		SnapshotVersionID: "snap-7",
+		Variables:         map[string]any{"region": "private-schedule-value"},
 	}}))
 
 	assert.Equal(t, "encoded-id", capturedRequest.PipelineID)
 	assert.Equal(t, "prod", capturedRequest.Environment)
 	assert.Equal(t, "snap-7", capturedRequest.SnapshotVersionID)
+	assert.Equal(t, map[string]any{"region": "private-schedule-value"}, capturedRequest.VariableOverrides)
+	require.NotNil(t, capturedRequest.ConfirmedPlan)
 
 	result, err := service.ListRuns(context.Background(), RunFilter{PipelineID: "encoded-id"})
 	require.NoError(t, err)
@@ -273,6 +299,15 @@ func TestEnvScheduledWorkerRunsWithEnvironmentAndWatermark(t *testing.T) {
 	run := result.Runs[0]
 	assert.Equal(t, "prod", run.Environment)
 	assert.Equal(t, "snap-7", run.SnapshotVersionID)
+	plan, found, err := store.GetRunPlan(context.Background(), run.ID)
+	require.NoError(t, err)
+	require.True(t, found)
+	assert.NotContains(t, string(plan.Artifact), "private-schedule-value")
+	spec, found, err := store.GetRunSpec(context.Background(), run.ID)
+	require.NoError(t, err)
+	require.True(t, found)
+	assert.Equal(t, map[string]any{"region": "private-schedule-value"}, spec.Requested.Variables)
+	require.NotNil(t, spec.Requested.ExecutionTime)
 
 	// Watermark is keyed by (pipeline UUID, environment), so run history
 	// and progress survive directory moves and stay per-environment.
@@ -304,6 +339,7 @@ func TestEnvScheduledWorkerFailureDoesNotAdvanceWatermark(t *testing.T) {
 		ResolvePipelineRef: func(context.Context, string) (PipelineRef, bool) {
 			return PipelineRef{EncodedID: "encoded-id", Name: "analytics"}, true
 		},
+		PlanScheduledRun: testScheduledRunPlan,
 	})
 
 	start := time.Date(2026, 6, 12, 10, 0, 0, 0, time.UTC)

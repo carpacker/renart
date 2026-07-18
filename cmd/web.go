@@ -320,6 +320,7 @@ func (s *webServer) registerRoutes(router chi.Router) {
 	webhttpapi.RegisterSchedulerRoutes(router, &webhttpapi.SchedulerAPI{Service: s})
 	webhttpapi.RegisterEnvScheduleRoutes(router, &webhttpapi.EnvSchedulesAPI{
 		Service:             s.schedulerSvc,
+		TriggerEnvSchedule:  s.TriggerEnvSchedule,
 		ResolvePipelineUUID: s.findPipelineUUIDByID,
 	})
 	webhttpapi.RegisterOnboardingRoutes(router, &webhttpapi.OnboardingAPI{Service: s.onboardingSvc, Publisher: s})
@@ -541,6 +542,47 @@ func (s *webServer) TriggerPipeline(ctx context.Context, pipelineID string, req 
 		return webscheduler.PipelineRun{}, err
 	}
 	return s.schedulerSvc.Trigger(ctx, pipelineSchedule, req)
+}
+
+// TriggerEnvSchedule runs the exact source and private variable context stored
+// on one schedule row, but keeps the invocation manual: it cannot advance the
+// schedule watermark or impersonate an actual due occurrence.
+func (s *webServer) TriggerEnvSchedule(
+	ctx context.Context,
+	pipelineID string,
+	pipelineUUID string,
+	environment string,
+) (webscheduler.PipelineRun, error) {
+	if s.schedulerStore == nil {
+		return webscheduler.PipelineRun{}, fmt.Errorf("scheduler store is not initialized")
+	}
+	row, found, err := s.schedulerStore.GetEnvSchedule(ctx, strings.TrimSpace(pipelineUUID), strings.TrimSpace(environment))
+	if err != nil {
+		return webscheduler.PipelineRun{}, err
+	}
+	if !found {
+		return webscheduler.PipelineRun{}, fmt.Errorf("schedule not found")
+	}
+	req, err := envScheduleTriggerRequest(row)
+	if err != nil {
+		return webscheduler.PipelineRun{}, err
+	}
+	return s.TriggerPipeline(ctx, pipelineID, req)
+}
+
+func envScheduleTriggerRequest(row webscheduler.EnvSchedule) (webscheduler.TriggerRequest, error) {
+	if row.Status == webscheduler.ScheduleStatusArchived {
+		return webscheduler.TriggerRequest{}, fmt.Errorf("schedule not found")
+	}
+	if row.Status == webscheduler.ScheduleStatusDelegated {
+		return webscheduler.TriggerRequest{}, fmt.Errorf("delegated schedules cannot run in this Renart server")
+	}
+	return webscheduler.TriggerRequest{
+		Environment:       row.Environment,
+		Source:            webscheduler.RunSourceSnapshot,
+		SnapshotVersionID: row.SnapshotVersionID,
+		VariableOverrides: row.Vars,
+	}, nil
 }
 
 func resolveTriggerRunSource(

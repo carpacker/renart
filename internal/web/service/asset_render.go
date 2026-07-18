@@ -203,6 +203,11 @@ type AssetRenderService struct {
 	fingerprintEngine  *fingerprint.Engine
 	configPath         string
 	source             AssetRenderSource
+	// variableOverrides is an internal exact-source planning input. HTTP asset
+	// rendering never populates it; scheduled planning uses the same strict
+	// pre-asset mutator as execution.
+	variableOverrides      map[string]any
+	variableOverrideSource string
 }
 
 func NewAssetRenderService(workspaceRoot string) *AssetRenderService {
@@ -408,12 +413,15 @@ func (s *AssetRenderService) renderPath(ctx context.Context, assetPath string, r
 
 	var pp *directPipelineInfo
 	if strings.TrimSpace(s.configPath) != "" {
-		pp, err = getDirectPipelineAndAssetReadOnlyWithConfigPath(
-			ctx,
-			s.workspaceRoot,
-			assetPath,
-			fs,
-			s.configPath,
+		var mutator pipeline.PipelineMutator
+		if len(s.variableOverrides) > 0 {
+			mutator, err = variableOverridesMutator(s.variableOverrides)
+			if err != nil {
+				return AssetRenderResult{}, err
+			}
+		}
+		pp, err = getDirectPipelineAndAssetWithConfigLoaderAndMutator(
+			ctx, s.workspaceRoot, assetPath, fs, s.configPath, loadSelectedConfigReadOnlyFS, mutator,
 		)
 	} else {
 		pp, err = getDirectPipelineAndAssetReadOnly(ctx, s.workspaceRoot, assetPath, fs)
@@ -555,7 +563,9 @@ func (s *AssetRenderService) renderPath(ctx context.Context, assetPath string, r
 	result.Provenance.Context.ConfigurationDigest = configurationIdentity.Digest
 	result.Provenance.Context.ConfigurationFidelity = string(configurationIdentity.Fidelity)
 	result.Provenance.Context.ConfigurationMessage = configurationIdentity.Message
-	result.Provenance.Context.VariableProvenance = assetRenderVariableProvenance(pp.Pipeline)
+	result.Provenance.Context.VariableProvenance = assetRenderVariableProvenanceWithOverrides(
+		pp.Pipeline, s.variableOverrides, s.variableOverrideSource,
+	)
 	result.Asset.Target = resolveAssetPhysicalTarget(s.workspaceRoot, pp)
 	if result.Asset.Target.Fidelity == AssetRenderFidelityRuntimeOnly {
 		result.Status = mergeAssetRenderStatus(result.Status, AssetRenderStatusPartial)
@@ -1007,6 +1017,14 @@ func assetRenderAssetIsConnectionless(info *directPipelineInfo) bool {
 }
 
 func assetRenderVariableProvenance(pl *pipeline.Pipeline) []AssetRenderVariableProvenance {
+	return assetRenderVariableProvenanceWithOverrides(pl, nil, "")
+}
+
+func assetRenderVariableProvenanceWithOverrides(
+	pl *pipeline.Pipeline,
+	overrides map[string]any,
+	overrideSource string,
+) []AssetRenderVariableProvenance {
 	if pl == nil {
 		return []AssetRenderVariableProvenance{}
 	}
@@ -1014,10 +1032,20 @@ func assetRenderVariableProvenance(pl *pipeline.Pipeline) []AssetRenderVariableP
 	for name := range pl.Variables {
 		names = append(names, name)
 	}
-	provenance := runcontext.ValueFreeVariableProvenance(runcontext.VariableLayer{
-		Source: runcontext.VariableSourcePipelineDefault,
-		Names:  names,
-	})
+	layers := []runcontext.VariableLayer{{
+		Source: runcontext.VariableSourcePipelineDefault, Names: names,
+	}}
+	if len(overrides) > 0 {
+		overrideNames := make([]string, 0, len(overrides))
+		for name := range overrides {
+			overrideNames = append(overrideNames, name)
+		}
+		if strings.TrimSpace(overrideSource) == "" {
+			overrideSource = runcontext.VariableSourceRunOverride
+		}
+		layers = append(layers, runcontext.VariableLayer{Source: overrideSource, Names: overrideNames})
+	}
+	provenance := runcontext.ValueFreeVariableProvenance(layers...)
 	result := make([]AssetRenderVariableProvenance, 0, len(provenance))
 	for _, variable := range provenance {
 		result = append(result, AssetRenderVariableProvenance{Name: variable.Name, Source: variable.Source})

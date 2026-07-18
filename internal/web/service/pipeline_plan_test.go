@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -12,6 +13,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"renart/internal/web/fingerprint"
 	"renart/internal/web/policy"
 	"renart/internal/web/scheduler"
 	"renart/internal/web/snapshot"
@@ -234,6 +236,108 @@ select * from analytics.up
 	assert.NotContains(t, rendered, "select 99")
 	require.NotNil(t, stale.parsed)
 	assert.NotEqual(t, filepath.Join(root, "analytics"), filepath.Dir(stale.parsed.DefinitionFile.Path))
+}
+
+func TestScheduledPipelinePlanAppliesSnapshotVariablesBeforeRendering(t *testing.T) {
+	_, root := writeTypeCheckWorkspace(t, `
+id: pipeline-uuid
+name: analytics
+schedule: hourly
+variables:
+  region:
+    type: string
+    default: eu
+  limit:
+    type: integer
+    default: 10
+`, map[string]string{
+		"report.sql": `
+/* @bruin
+name: analytics.report
+type: duckdb.sql
+materialization:
+  type: table
+@bruin */
+select '{{ var.region }}' as region, {{ var.limit }} as row_limit
+`,
+	})
+	schedulerStore, err := scheduler.OpenStore(filepath.Join(t.TempDir(), "state.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = schedulerStore.Close() })
+	snapshotStore := snapshot.NewStore(schedulerStore.DB())
+	deployed, _, err := snapshotStore.Deploy(
+		context.Background(), "pipeline-uuid", filepath.Join(root, "analytics"), "test",
+	)
+	require.NoError(t, err)
+
+	// The working tree can evolve independently. Overrides are validated and
+	// applied against the pinned deployment, not these newer declarations.
+	pipelinePath := filepath.Join(root, "analytics", "pipeline.yml")
+	workingTree, err := os.ReadFile(pipelinePath)
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(pipelinePath, append(workingTree, []byte(`
+  future:
+    type: string
+    default: later
+`)...), 0o644))
+
+	executionTime := time.Date(2026, 7, 18, 10, 30, 0, 0, time.UTC)
+	start := executionTime.Add(-time.Hour)
+	stale := &pipelinePlanStalenessStub{snapshot: staleness.Snapshot{Assets: []staleness.AssetStatus{{
+		AssetName: "analytics.report", Status: staleness.StatusNeverBuilt,
+	}}}}
+	planner := newTestPipelinePlanService(root, stale, snapshotStore)
+	plan, apiErr := planner.Plan(context.Background(), EncodeID("analytics"), PipelinePlanRequest{
+		Environment: "default", StartDate: start.Format(time.RFC3339),
+		EndDate: executionTime.Format(time.RFC3339), ExecutionTime: executionTime.Format(time.RFC3339),
+		Source:                 PipelinePlanSourceRequest{Kind: PipelinePlanSourceSnapshot, VersionID: deployed.VersionID},
+		Selection:              PipelinePlanSelectionRequest{Mode: PipelinePlanSelectionAll},
+		IncludeStageContent:    true,
+		VariableOverrides:      map[string]any{"region": "private-schedule-value", "limit": float64(25)},
+		VariableOverrideSource: "schedule_override",
+		Scheduled:              true,
+	})
+	require.Nil(t, apiErr)
+	assert.Equal(t, PipelinePlanStatusReady, plan.Status, plan.Readiness)
+	assert.Equal(t, "wait", plan.Context.SensorMode)
+	assert.Equal(t, []AssetRenderVariableProvenance{
+		{Name: "limit", Source: "schedule_override"},
+		{Name: "region", Source: "schedule_override"},
+	}, plan.Context.VariableProvenance)
+	require.NotNil(t, stale.parsed)
+	assert.Equal(t, int64(25), stale.parsed.Variables.Value()["limit"])
+	assert.Equal(t, "private-schedule-value", stale.parsed.Variables.Value()["region"])
+	assert.Equal(t, fingerprint.AllVarsHash(fingerprint.EffectiveVars(stale.parsed, nil)), plan.Context.VariablesDigest)
+
+	var rendered string
+	for _, stage := range plan.Assets[0].Renders[0].Stages {
+		rendered += stage.Content
+	}
+	assert.Contains(t, rendered, "'private-schedule-value'")
+	assert.Contains(t, rendered, "25")
+
+	redactedPlan, apiErr := planner.Plan(context.Background(), EncodeID("analytics"), PipelinePlanRequest{
+		Environment: "default", StartDate: start.Format(time.RFC3339),
+		EndDate: executionTime.Format(time.RFC3339), ExecutionTime: executionTime.Format(time.RFC3339),
+		Source:                 PipelinePlanSourceRequest{Kind: PipelinePlanSourceSnapshot, VersionID: deployed.VersionID},
+		Selection:              PipelinePlanSelectionRequest{Mode: PipelinePlanSelectionAll},
+		VariableOverrides:      map[string]any{"region": "private-schedule-value", "limit": float64(25)},
+		VariableOverrideSource: "schedule_override",
+		Scheduled:              true,
+	})
+	require.Nil(t, apiErr)
+	redactedArtifact, err := json.Marshal(redactedPlan)
+	require.NoError(t, err)
+	assert.NotContains(t, string(redactedArtifact), "private-schedule-value")
+
+	_, invalid := planner.Plan(context.Background(), EncodeID("analytics"), PipelinePlanRequest{
+		Source:            PipelinePlanSourceRequest{Kind: PipelinePlanSourceSnapshot, VersionID: deployed.VersionID},
+		Selection:         PipelinePlanSelectionRequest{Mode: PipelinePlanSelectionAll},
+		VariableOverrides: map[string]any{"future": "not-in-deployment"},
+	})
+	require.NotNil(t, invalid)
+	assert.Equal(t, "invalid_variable_overrides", invalid.Code)
+	assert.NotContains(t, invalid.Message, "not-in-deployment")
 }
 
 func TestPipelinePlanDeployedOnlyWithoutSnapshotReturnsActionableBlocker(t *testing.T) {

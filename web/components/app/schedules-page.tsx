@@ -27,6 +27,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -40,9 +41,13 @@ import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/comp
 import { envScheduleKey, useEnvSchedules } from "@/hooks/use-env-schedules";
 import { formatSchedulerDate, usePipelineScheduler } from "@/hooks/use-pipeline-scheduler";
 import { usePipelineDeploy } from "@/hooks/use-pipeline-deploy";
-import { triggerPipelineRun } from "@/lib/api";
 import { activePipelineRunConflict } from "@/lib/api-scheduler";
-import type { CatchupPolicy, EnvSchedule, UpsertEnvScheduleInput } from "@/lib/api-env-schedules";
+import {
+  triggerEnvSchedule,
+  type CatchupPolicy,
+  type EnvSchedule,
+  type UpsertEnvScheduleInput,
+} from "@/lib/api-env-schedules";
 import { workspaceAtom } from "@/lib/atoms/domains/workspace";
 import type { PipelineRun } from "@/lib/types";
 import { deploymentLabel } from "@/lib/deployment-label";
@@ -298,7 +303,7 @@ function EnvScheduleRow({
   const latestOrdinal = deployState.status?.ordinal;
   const pinnedVersion = schedule.snapshot_version_id?.trim() ?? "";
   const pinnedDeployment = deploymentLabel(schedule.snapshot_ordinal, pinnedVersion, "deployment");
-  const overrideNames = Object.keys(schedule.vars ?? {}).sort();
+  const overrideNames = [...(schedule.variable_names ?? [])].sort();
   const deploymentOutdated = Boolean(
     latestVersion && pinnedVersion && latestVersion !== pinnedVersion,
   );
@@ -317,9 +322,7 @@ function EnvScheduleRow({
     ? "This schedule needs an exact deployment pin before it can run"
     : pinnedDeploymentCorrupt
       ? `Pinned ${pinnedDeployment} failed its integrity check${deployState.status?.integrity_error ? `: ${deployState.status.integrity_error}` : ""}`
-      : overrideNames.length > 0
-        ? `Schedule overrides are not executable yet: ${overrideNames.join(", ")}`
-        : undefined;
+      : undefined;
   const runBlockReason = !canMutate ? ownershipReason : sourceBlockReason;
   const enabled = configuredEnabled && !sourceBlockReason;
   const timeline: TimelineSchedule = {
@@ -345,17 +348,13 @@ function EnvScheduleRow({
     ? `${sentenceCase(schedule.last_run.status)} ${formatSchedulerDate(lastRunAt)}`
     : "Not run yet";
   const nowLeft = timelineLeft(Date.now(), window);
-  const runWindowDescription = `Environment ${schedule.environment}. This action sends and records no interval; when execution starts, the backend resolves the effective window from the pipeline schedule stored in ${pinnedDeployment}.`;
+  const runWindowDescription = `Environment ${schedule.environment}. This action uses ${pinnedDeployment}${overrideNames.length > 0 ? ` with its stored overrides (${overrideNames.join(", ")})` : ""}. It sends no interval; when execution starts, the backend resolves the effective window from that deployment.`;
   const triggerNow = async () => {
     if (!schedule.pipeline_id || runBlockReason) return;
     setTriggering(true);
     setActionError(null);
     try {
-      await triggerPipelineRun(schedule.pipeline_id, {
-        source: "snapshot",
-        snapshot_version_id: pinnedVersion,
-        environment: schedule.environment,
-      });
+      await triggerEnvSchedule(schedule.pipeline_id, schedule.environment);
     } catch (cause) {
       const conflict = activePipelineRunConflict(cause);
       setActionError({
@@ -468,13 +467,12 @@ function EnvScheduleRow({
               {overrideNames.length > 0 ? (
                 <Tooltip>
                   <TooltipTrigger asChild>
-                    <Badge variant="outline" size="xs" tabIndex={0}>
-                      Overrides unsupported
+                    <Badge variant="secondary" size="xs" tabIndex={0}>
+                      Overrides
                     </Badge>
                   </TooltipTrigger>
                   <TooltipContent>
-                    Stored variables are blocked until execution can preserve them:{" "}
-                    {overrideNames.join(", ")}
+                    Applied from this schedule to its pinned deployment: {overrideNames.join(", ")}
                   </TooltipContent>
                 </Tooltip>
               ) : null}
@@ -759,6 +757,7 @@ function NewEnvScheduleDialog({
   const [cron, setCron] = useState("0 * * * *");
   const [timezone, setTimezone] = useState("UTC");
   const [catchupPolicy, setCatchupPolicy] = useState<CatchupPolicy>("skip");
+  const [variableOverrides, setVariableOverrides] = useState("{}");
   const deployState = usePipelineDeploy(pipelineId || undefined);
   const [sourceMode, setSourceMode] = useState<"existing" | "deploy">("deploy");
   const [submitting, setSubmitting] = useState(false);
@@ -770,6 +769,7 @@ function NewEnvScheduleDialog({
       cron: string;
       timezone: string;
       catchup_policy: CatchupPolicy;
+      vars?: Record<string, unknown>;
     };
   } | null>(null);
 
@@ -778,6 +778,7 @@ function NewEnvScheduleDialog({
       setPipelineId(pipelines[0]?.id ?? "");
       setEnvironment(workspace?.selected_environment ?? "");
       setSourceMode("deploy");
+      setVariableOverrides("{}");
       setError(null);
       setPendingDeployment(null);
     }
@@ -802,11 +803,24 @@ function NewEnvScheduleDialog({
       );
       return;
     }
+    let vars: Record<string, unknown> | undefined;
+    try {
+      const decoded: unknown = JSON.parse(variableOverrides.trim() || "{}");
+      if (!decoded || typeof decoded !== "object" || Array.isArray(decoded)) {
+        setError("Variable overrides must be a JSON object keyed by declared variable name.");
+        return;
+      }
+      if (Object.keys(decoded).length > 0) vars = decoded as Record<string, unknown>;
+    } catch {
+      setError("Variable overrides must be valid JSON.");
+      return;
+    }
     const selectedPipeline = { id: pipeline.id, uuid: pipeline.uuid, name: pipeline.name };
     const scheduleInput = {
       cron: cron.trim(),
       timezone: timezone.trim() || "UTC",
       catchup_policy: catchupPolicy,
+      vars,
     };
     if (sourceMode === "deploy") {
       setPendingDeployment({
@@ -904,6 +918,20 @@ function NewEnvScheduleDialog({
                   Backfill each missed interval (incremental assets only)
                 </option>
               </select>
+            </label>
+            <label className="block space-y-1.5">
+              <span className="text-xs font-medium text-muted-foreground">Variable overrides</span>
+              <Textarea
+                className="min-h-20 font-mono text-xs"
+                value={variableOverrides}
+                onChange={(event) => setVariableOverrides(event.target.value)}
+                placeholder={'{"region":"eu","limit":100}'}
+                spellCheck={false}
+              />
+              <span className="block text-[11px] text-muted-foreground">
+                Optional JSON values are validated against the declarations in the pinned
+                deployment. Plans and schedule responses expose names and digests, not values.
+              </span>
             </label>
             <div className="space-y-1.5">
               <span className="text-xs font-medium text-muted-foreground">Run source</span>

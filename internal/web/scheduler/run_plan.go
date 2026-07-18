@@ -29,6 +29,8 @@ type PipelineRunPlan struct {
 	SourceMerkle        string                     `json:"source_merkle"`
 	ConfigurationDigest string                     `json:"configuration_digest"`
 	ExecutionTime       string                     `json:"execution_time"`
+	Blocked             bool                       `json:"blocked,omitempty"`
+	Blockers            []string                   `json:"blockers,omitempty"`
 	Selection           PipelineRunPlanSelection   `json:"selection"`
 	ExecutionUnits      []PipelineRunExecutionUnit `json:"execution_units"`
 	Preview             *PipelineRunPlanPreview    `json:"preview,omitempty"`
@@ -132,8 +134,19 @@ func (plan PipelineRunPlan) validate() error {
 	if err := validatePipelineRunPlanSelection(plan.Selection); err != nil {
 		return err
 	}
-	if len(plan.ExecutionUnits) == 0 && (plan.Preview == nil || plan.Selection.Mode != "needed" || len(plan.Preview.ExecutionUnits) == 0) {
+	if len(plan.ExecutionUnits) == 0 && !plan.Blocked && (plan.Preview == nil || plan.Selection.Mode != "needed" || len(plan.Preview.ExecutionUnits) == 0) {
 		return errors.New("pipeline run plan requires at least one execution unit unless a reviewed needed plan became empty")
+	}
+	if plan.Blocked != (len(plan.Blockers) > 0) {
+		return errors.New("pipeline run plan blocked status requires blocker messages")
+	}
+	if len(plan.Blockers) > 256 {
+		return errors.New("pipeline run plan contains too many blocker messages")
+	}
+	for _, blocker := range plan.Blockers {
+		if strings.TrimSpace(blocker) == "" || len(blocker) > 4096 {
+			return errors.New("pipeline run plan blocker messages must be non-empty and at most 4096 bytes")
+		}
 	}
 	seen := make(map[string]struct{}, len(plan.ExecutionUnits))
 	for index, unit := range plan.ExecutionUnits {
@@ -269,6 +282,12 @@ func validatePipelineRunPlanArtifact(plan PipelineRunPlan) error {
 			ExecutionTime       string `json:"execution_time"`
 			ConfigurationDigest string `json:"configuration_digest"`
 		} `json:"context"`
+		Status    string `json:"status"`
+		Readiness struct {
+			Blockers []struct {
+				Message string `json:"message"`
+			} `json:"blockers"`
+		} `json:"readiness"`
 		Selection      PipelineRunPlanSelection   `json:"selection"`
 		ExecutionUnits []PipelineRunExecutionUnit `json:"execution_units"`
 		Assets         []struct {
@@ -297,6 +316,18 @@ func validatePipelineRunPlanArtifact(plan PipelineRunPlan) error {
 	if artifact.Selection != plan.Selection {
 		return errors.New("pipeline run plan artifact selection does not match its durable binding")
 	}
+	if plan.Blocked != (strings.TrimSpace(artifact.Status) == "blocked") {
+		return errors.New("pipeline run plan artifact blocked status does not match its durable binding")
+	}
+	artifactBlockers := make([]string, 0, len(artifact.Readiness.Blockers))
+	for _, blocker := range artifact.Readiness.Blockers {
+		if message := strings.TrimSpace(blocker.Message); message != "" {
+			artifactBlockers = append(artifactBlockers, message)
+		}
+	}
+	if !equalStrings(artifactBlockers, plan.Blockers) {
+		return errors.New("pipeline run plan artifact blockers do not match its durable binding")
+	}
 	if !equalPipelineRunExecutionUnits(artifact.ExecutionUnits, plan.ExecutionUnits) {
 		return errors.New("pipeline run plan artifact execution units do not match their durable binding")
 	}
@@ -310,6 +341,18 @@ func validatePipelineRunPlanArtifact(plan PipelineRunPlan) error {
 		}
 	}
 	return nil
+}
+
+func equalStrings(left, right []string) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for index := range left {
+		if left[index] != right[index] {
+			return false
+		}
+	}
+	return true
 }
 
 func equalPipelineRunExecutionUnits(left, right []PipelineRunExecutionUnit) bool {

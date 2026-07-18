@@ -127,6 +127,11 @@ test.describe("app scheduler pages live", () => {
     page,
     request,
   }) => {
+    await appendFile(
+      join(liveApp.workspaceDir, "analytics/pipeline.yml"),
+      "\nvariables:\n  region:\n    type: string\n    default: eu\n",
+      "utf8",
+    );
     const pinResponse = await request.put(
       `${liveApp.baseURL}/api/pipelines/${analyticsPipelineId}/env-schedules/default`,
       {
@@ -134,15 +139,19 @@ test.describe("app scheduler pages live", () => {
           cron: "0 0 * * *",
           timezone: "UTC",
           catchup_policy: "skip",
+          vars: { region: "private-schedule-value" },
           deploy_now: true,
         },
       },
     );
     expect(pinResponse.ok()).toBe(true);
-    const pinnedVersion = (
-      (await pinResponse.json()) as { schedule: { snapshot_version_id: string } }
-    ).schedule.snapshot_version_id;
+    const pinBody = (await pinResponse.json()) as {
+      schedule: { snapshot_version_id: string; variable_names?: string[] };
+    };
+    const pinnedVersion = pinBody.schedule.snapshot_version_id;
     expect(pinnedVersion).toBeTruthy();
+    expect(pinBody.schedule.variable_names).toEqual(["region"]);
+    expect(JSON.stringify(pinBody)).not.toContain("private-schedule-value");
 
     await appendFile(
       join(liveApp.workspaceDir, "analytics/assets/analytics/orders.sql"),
@@ -165,33 +174,38 @@ test.describe("app scheduler pages live", () => {
 
     const pinnedRunRequest = page.waitForRequest(
       (request) =>
-        request.url().endsWith(`/api/pipelines/${analyticsPipelineId}/trigger`) &&
+        request.url().endsWith(`/api/pipelines/${analyticsPipelineId}/env-schedules/default/run`) &&
         request.method() === "POST",
     );
-    await page.route(`**/api/pipelines/${analyticsPipelineId}/trigger`, async (route) => {
-      await route.fulfill({
-        status: 202,
-        contentType: "application/json",
-        body: JSON.stringify({
-          status: "ok",
-          run: {
-            id: "pinned-ui-check",
-            pipeline_id: analyticsPipelineId,
-            environment: "default",
-            trigger: "manual",
-            status: "queued",
-          },
-        }),
-      });
-    });
+    await page.route(
+      `**/api/pipelines/${analyticsPipelineId}/env-schedules/default/run`,
+      async (route) => {
+        await route.fulfill({
+          status: 202,
+          contentType: "application/json",
+          body: JSON.stringify({
+            status: "ok",
+            run: {
+              id: "pinned-ui-check",
+              pipeline_id: analyticsPipelineId,
+              environment: "default",
+              trigger: "manual",
+              status: "queued",
+            },
+          }),
+        });
+      },
+    );
     const scheduleRow = page.getByTestId("schedule-row").filter({ hasText: "analytics" }).first();
+    const overridesBadge = scheduleRow.getByText("Overrides", { exact: true });
+    await expect(overridesBadge).toBeVisible();
+    await overridesBadge.focus();
+    await expect(page.getByRole("tooltip", { name: /Applied from this schedule/ })).toContainText(
+      "region",
+    );
     await scheduleRow.getByRole("button", { name: /Run pinned/ }).click();
-    expect((await pinnedRunRequest).postDataJSON()).toMatchObject({
-      source: "snapshot",
-      snapshot_version_id: pinnedVersion,
-      environment: "default",
-    });
-    await page.unroute(`**/api/pipelines/${analyticsPipelineId}/trigger`);
+    expect((await pinnedRunRequest).postData()).toBeNull();
+    await page.unroute(`**/api/pipelines/${analyticsPipelineId}/env-schedules/default/run`);
 
     const updateResponse = page.waitForResponse(
       (response) =>

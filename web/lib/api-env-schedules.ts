@@ -18,7 +18,7 @@ export type EnvSchedule = {
   snapshot_ordinal?: number;
   cron: string;
   timezone: string;
-  vars?: Record<string, unknown>;
+  variable_names?: string[];
   catchup_policy: CatchupPolicy;
   status: EnvScheduleStatus;
   archived_reason?: string;
@@ -108,5 +108,15 @@ export async function archiveEnvSchedule(
     {
       method: "DELETE",
     },
+  );
+}
+
+export async function triggerEnvSchedule(
+  pipelineId: string,
+  environment: string,
+): Promise<{ status: string; run: PipelineRun }> {
+  return fetchJSON(
+    `/api/pipelines/${pipelineId}/env-schedules/${encodeURIComponent(environment)}/run`,
+    { method: "POST" },
   );
 }

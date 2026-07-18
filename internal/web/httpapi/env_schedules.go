@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"sort"
 	"strings"
 
 	"github.com/go-chi/chi/v5"
@@ -23,7 +24,8 @@ type EnvScheduleHandlers interface {
 }
 
 type EnvSchedulesAPI struct {
-	Service EnvScheduleHandlers
+	Service            EnvScheduleHandlers
+	TriggerEnvSchedule func(ctx context.Context, pipelineID, pipelineUUID, environment string) (scheduler.PipelineRun, error)
 	// ResolvePipelineUUID maps the path-encoded API pipeline ID to the
 	// stable UUID.
 	ResolvePipelineUUID func(pipelineID string) (string, bool)
@@ -34,7 +36,27 @@ func RegisterEnvScheduleRoutes(router chi.Router, handlers *EnvSchedulesAPI) {
 	router.Put("/api/pipelines/{id}/env-schedules/{environment}", handlers.HandleUpsert)
 	router.Post("/api/pipelines/{id}/env-schedules/promote", handlers.HandlePromote)
 	router.Post("/api/pipelines/{id}/env-schedules/{environment}/status", handlers.HandleSetStatus)
+	router.Post("/api/pipelines/{id}/env-schedules/{environment}/run", handlers.HandleRun)
 	router.Delete("/api/pipelines/{id}/env-schedules/{environment}", handlers.HandleArchive)
+}
+
+func (h *EnvSchedulesAPI) HandleRun(w http.ResponseWriter, r *http.Request) {
+	pipelineUUID, environment, ok := h.resolve(w, r)
+	if !ok {
+		return
+	}
+	if h.TriggerEnvSchedule == nil {
+		webapi.WriteInternalError(w, "env_schedule_run_failed", "schedule run is unavailable")
+		return
+	}
+	run, err := h.TriggerEnvSchedule(
+		r.Context(), chi.URLParam(r, "id"), pipelineUUID, environment,
+	)
+	if err != nil {
+		writeEnvScheduleMutationError(w, "env_schedule_run_failed", err)
+		return
+	}
+	webapi.WriteJSON(w, http.StatusAccepted, map[string]any{"status": "ok", "run": run})
 }
 
 func (h *EnvSchedulesAPI) HandlePromote(w http.ResponseWriter, r *http.Request) {
@@ -53,7 +75,9 @@ func (h *EnvSchedulesAPI) HandlePromote(w http.ResponseWriter, r *http.Request) 
 		writeEnvScheduleMutationError(w, "env_schedule_promotion_failed", err)
 		return
 	}
-	webapi.WriteJSON(w, http.StatusOK, map[string]any{"status": "ok", "schedules": updated})
+	webapi.WriteJSON(w, http.StatusOK, map[string]any{
+		"status": "ok", "schedules": publicEnvSchedules(updated),
+	})
 }
 
 func (h *EnvSchedulesAPI) resolve(w http.ResponseWriter, r *http.Request) (string, string, bool) {
@@ -79,8 +103,8 @@ func (h *EnvSchedulesAPI) HandleList(w http.ResponseWriter, r *http.Request) {
 	webapi.WriteJSON(w, http.StatusOK, map[string]any{
 		"status":    "ok",
 		"scheduler": h.Service.Ownership(),
-		"schedules": live,
-		"archived":  archived,
+		"schedules": publicEnvSchedules(live),
+		"archived":  publicEnvSchedules(archived),
 	})
 }
 
@@ -100,7 +124,9 @@ func (h *EnvSchedulesAPI) HandleUpsert(w http.ResponseWriter, r *http.Request) {
 		writeEnvScheduleMutationError(w, "env_schedule_upsert_failed", err)
 		return
 	}
-	webapi.WriteJSON(w, http.StatusOK, map[string]any{"status": "ok", "schedule": updated})
+	webapi.WriteJSON(w, http.StatusOK, map[string]any{
+		"status": "ok", "schedule": publicEnvSchedule(updated),
+	})
 }
 
 func (h *EnvSchedulesAPI) HandleSetStatus(w http.ResponseWriter, r *http.Request) {
@@ -140,5 +166,31 @@ func writeEnvScheduleMutationError(w http.ResponseWriter, fallbackCode string, e
 		webapi.WriteConflict(w, "scheduler_not_owner", err.Error())
 		return
 	}
+	var activeRun *scheduler.PipelineRunActiveError
+	if errors.As(err, &activeRun) {
+		webapi.WriteErrorWithDetails(w, http.StatusConflict, "pipeline_run_active", err.Error(), map[string]string{
+			"pipeline_id": activeRun.PipelineID, "active_run_id": activeRun.ActiveRunID,
+		})
+		return
+	}
 	webapi.WriteBadRequest(w, fallbackCode, err.Error())
+}
+
+func publicEnvSchedules(schedules []scheduler.EnvSchedule) []scheduler.EnvSchedule {
+	result := make([]scheduler.EnvSchedule, len(schedules))
+	for index, schedule := range schedules {
+		result[index] = publicEnvSchedule(schedule)
+	}
+	return result
+}
+
+func publicEnvSchedule(schedule scheduler.EnvSchedule) scheduler.EnvSchedule {
+	result := schedule
+	result.VariableNames = make([]string, 0, len(schedule.Vars))
+	for name := range schedule.Vars {
+		result.VariableNames = append(result.VariableNames, name)
+	}
+	sort.Strings(result.VariableNames)
+	result.Vars = nil
+	return result
 }

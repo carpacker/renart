@@ -68,6 +68,16 @@ type PipelinePlanRequest struct {
 	// to re-evaluate the reviewed selection's configuration after a Needed plan
 	// shrinks. It is never decoded from HTTP JSON.
 	ConfigurationAssetNames []string `json:"-"`
+	// VariableOverrides and their value-free provenance source are internal
+	// admission inputs. Public plan JSON cannot set or recover their values.
+	VariableOverrides      map[string]any `json:"-"`
+	VariableOverrideSource string         `json:"-"`
+	// Scheduled admission arbitrates the active run slot transactionally and
+	// always selects all assets, so transient active/data-state checks must not
+	// turn a due interval into a failed plan before admission.
+	SkipActiveRunCheck bool `json:"-"`
+	SkipDataStateCheck bool `json:"-"`
+	Scheduled          bool `json:"-"`
 }
 
 // PipelinePlanConfirmRequest carries the exact read-only request used to
@@ -322,7 +332,7 @@ func (s *PipelinePlanService) Plan(
 		ExecutionTime:         executionTime.Format(time.RFC3339Nano),
 		RequestedFullRefresh:  req.FullRefresh,
 		Backfill:              req.Backfill,
-		SensorMode:            effectiveSensorMode(normalized.SensorMode, false),
+		SensorMode:            effectiveSensorMode(normalized.SensorMode, req.Scheduled),
 		ConfigurationDigest:   initialConfigIdentity.Digest,
 		ConfigurationFidelity: string(initialConfigIdentity.Fidelity),
 	}
@@ -330,7 +340,9 @@ func (s *PipelinePlanService) Plan(
 		base.Context.SchemaPrefix = cfg.SelectedEnvironment.SchemaPrefix
 	}
 
-	resolved, deploymentRequired, apiErr := s.resolveSource(ctx, pipelineID, pipelineUUID, sourceRequest)
+	resolved, deploymentRequired, apiErr := s.resolveSource(
+		ctx, pipelineID, pipelineUUID, sourceRequest, req.VariableOverrides,
+	)
 	if apiErr != nil {
 		return PipelinePlan{}, apiErr
 	}
@@ -361,15 +373,17 @@ func (s *PipelinePlanService) Plan(
 	vars := fingerprint.EffectiveVars(resolved.parsed, nil)
 	varsDigest := fingerprint.AllVarsHash(vars)
 	base.Context = PipelinePlanContext{
-		Environment:           environment,
-		StartDate:             timeWindow.StartRFC3339(),
-		EndDate:               timeWindow.EndRFC3339(),
-		ExecutionTime:         executionTime.Format(time.RFC3339Nano),
-		RequestedFullRefresh:  req.FullRefresh,
-		Backfill:              req.Backfill,
-		SensorMode:            effectiveSensorMode(normalized.SensorMode, false),
-		VariablesDigest:       varsDigest,
-		VariableProvenance:    assetRenderVariableProvenance(resolved.parsed),
+		Environment:          environment,
+		StartDate:            timeWindow.StartRFC3339(),
+		EndDate:              timeWindow.EndRFC3339(),
+		ExecutionTime:        executionTime.Format(time.RFC3339Nano),
+		RequestedFullRefresh: req.FullRefresh,
+		Backfill:             req.Backfill,
+		SensorMode:           effectiveSensorMode(normalized.SensorMode, req.Scheduled),
+		VariablesDigest:      varsDigest,
+		VariableProvenance: assetRenderVariableProvenanceWithOverrides(
+			resolved.parsed, req.VariableOverrides, req.VariableOverrideSource,
+		),
 		ConfigurationDigest:   initialConfigIdentity.Digest,
 		ConfigurationFidelity: string(initialConfigIdentity.Fidelity),
 		Destructive:           req.Backfill,
@@ -389,7 +403,7 @@ func (s *PipelinePlanService) Plan(
 	base.Readiness.CodeChecks.PipelineID = pipelineID
 	addPipelineAssetParseFindings(&base.Readiness.CodeChecks, resolved.parsed, resolved.root)
 	s.addCodeCheckIssues(&base)
-	if purpose == PipelinePlanPurposeExecution && s.deps.ActiveRunID != nil {
+	if purpose == PipelinePlanPurposeExecution && !req.SkipActiveRunCheck && s.deps.ActiveRunID != nil {
 		activeRunID, activeErr := s.deps.ActiveRunID(ctx, pipelineID, pipelineUUID)
 		if activeErr != nil {
 			base.Readiness.Warnings = append(base.Readiness.Warnings, PipelinePlanIssue{
@@ -409,7 +423,7 @@ func (s *PipelinePlanService) Plan(
 
 	staleSnapshot := staleness.Snapshot{}
 	dataStateAvailable := false
-	if purpose == PipelinePlanPurposeExecution {
+	if purpose == PipelinePlanPurposeExecution && !req.SkipDataStateCheck {
 		staleSelection := staleness.Selection{
 			PipelineUUID:      pipelineUUID,
 			EncodedPipelineID: pipelineID,
@@ -448,6 +462,8 @@ func (s *PipelinePlanService) Plan(
 		s.deps.ConfigPath,
 		resolved.source,
 	)
+	renderer.variableOverrides = req.VariableOverrides
+	renderer.variableOverrideSource = req.VariableOverrideSource
 	renderer.collectManifest = func(string) (map[string]string, error) {
 		return resolved.manifest, nil
 	}
@@ -601,7 +617,7 @@ func (s *PipelinePlanService) Plan(
 	}
 	base.Context.Destructive = base.Summary.DestructiveOperations > 0
 	if purpose == PipelinePlanPurposeExecution {
-		s.addPolicyIssues(&base, envPolicy)
+		s.addPolicyIssues(&base, envPolicy, req.Scheduled)
 	}
 
 	latestSourceState, stateErr := snapshot.CollectSourceState(resolved.pipelineDir)
@@ -723,6 +739,7 @@ func (s *PipelinePlanService) resolveSource(
 	pipelineID string,
 	pipelineUUID string,
 	req PipelinePlanSourceRequest,
+	variableOverrides map[string]any,
 ) (*resolvedPipelinePlanSource, bool, *APIError) {
 	relPath, err := DecodeID(pipelineID)
 	if err != nil {
@@ -810,16 +827,32 @@ func (s *PipelinePlanService) resolveSource(
 		resolved.manifest = manifest
 		resolved.source.MerkleRoot = snapshot.ManifestRoot(manifest)
 	}
-	parsed, parseErr := builder().CreatePipelineFromPath(ctx, resolved.pipelineDir, pipeline.WithMutate())
+	pipelineBuilder := builder()
+	if overrideErr := addVariableOverrides(pipelineBuilder, variableOverrides); overrideErr != nil {
+		resolved.cleanup()
+		return nil, false, &APIError{Status: 400, Code: "invalid_variable_overrides", Message: overrideErr.Error()}
+	}
+	parsed, parseErr := pipelineBuilder.CreatePipelineFromPath(ctx, resolved.pipelineDir, pipeline.WithMutate())
 	if parseErr != nil {
+		if errors.Is(parseErr, ErrInvalidVariableOverrides) {
+			resolved.cleanup()
+			return nil, false, &APIError{Status: 400, Code: "invalid_variable_overrides", Message: parseErr.Error()}
+		}
 		// A malformed asset is an asset-scoped plan blocker, not a reason to
 		// erase every valid sibling from the review. The tolerant builder keeps
 		// the broken file as a marked placeholder. Pipeline-level YAML errors
 		// still fail here because the tolerant builder cannot recover them.
-		parsed, parseErr = NewRenartTolerantPipelineBuilder(afero.NewOsFs()).
-			CreatePipelineFromPath(ctx, resolved.pipelineDir, pipeline.WithMutate())
+		tolerantBuilder := NewRenartTolerantPipelineBuilder(afero.NewOsFs())
+		if overrideErr := addVariableOverrides(tolerantBuilder, variableOverrides); overrideErr != nil {
+			resolved.cleanup()
+			return nil, false, &APIError{Status: 400, Code: "invalid_variable_overrides", Message: overrideErr.Error()}
+		}
+		parsed, parseErr = tolerantBuilder.CreatePipelineFromPath(ctx, resolved.pipelineDir, pipeline.WithMutate())
 		if parseErr != nil {
 			resolved.cleanup()
+			if errors.Is(parseErr, ErrInvalidVariableOverrides) {
+				return nil, false, &APIError{Status: 400, Code: "invalid_variable_overrides", Message: parseErr.Error()}
+			}
 			return nil, false, &APIError{Status: 400, Code: "pipeline_invalid", Message: "pipeline source could not be parsed"}
 		}
 	}
@@ -1089,8 +1122,8 @@ func (s *PipelinePlanService) addCodeCheckIssues(plan *PipelinePlan) {
 	}
 }
 
-func (s *PipelinePlanService) addPolicyIssues(plan *PipelinePlan, envPolicy policy.EnvironmentPolicy) {
-	if envPolicy.Protected {
+func (s *PipelinePlanService) addPolicyIssues(plan *PipelinePlan, envPolicy policy.EnvironmentPolicy, scheduled bool) {
+	if envPolicy.Protected && !scheduled {
 		plan.Readiness.Blockers = append(plan.Readiness.Blockers, PipelinePlanIssue{
 			Code:     "interactive_execution_protected",
 			Severity: "error",

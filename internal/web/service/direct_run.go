@@ -194,6 +194,9 @@ func (e *HybridBruinExecutor) RunPipeline(ctx context.Context, req RunPipelineRe
 
 	resolvedTarget := resolveDirectPath(e.workspaceRoot, req.Target)
 	builder := e.newPipelineBuilder()
+	if err := addVariableOverrides(builder, req.VariableOverrides); err != nil {
+		return nil, err
+	}
 	foundPipeline, err := builder.CreatePipelineFromPath(ctx, resolvedTarget, pipeline.WithMutate())
 	if err != nil {
 		return nil, err

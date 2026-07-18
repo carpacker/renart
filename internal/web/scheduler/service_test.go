@@ -2,6 +2,7 @@ package scheduler
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"path/filepath"
@@ -679,6 +680,7 @@ func TestConfirmedPlanRunPersistsUnitProgressBeforeSuccess(t *testing.T) {
 			}))
 			return RunResult{Status: "ok"}
 		},
+		PlanScheduledRun: testScheduledRunPlan,
 	})
 	require.NoError(t, service.Start(ctx))
 	defer service.Stop()
@@ -954,8 +956,12 @@ func TestScheduledWorkerSnoozesOriginalJobWhilePipelineSlotIsOccupied(t *testing
 			runnerCalls.Add(1)
 			assert.Equal(t, "2026-07-16T08:00:00Z", req.Start)
 			assert.Equal(t, "2026-07-16T09:00:00Z", req.End)
+			if err := completeTestScheduledRunUnits(req); err != nil {
+				return RunResult{Status: "error", Error: err.Error()}
+			}
 			return RunResult{Status: "ok"}
 		},
+		PlanScheduledRun: testScheduledRunPlan,
 	})
 	worker := &pipelineRunWorker{service: service}
 	job := &river.Job[pipelineRunJobArgs]{
@@ -1336,8 +1342,12 @@ func TestScheduledWorkerCreatesRunAndWatermark(t *testing.T) {
 			require.NoError(t, err)
 			require.True(t, start.Before(end), "scheduled run start must be before end")
 			onLog("scheduled " + req.PipelineID)
+			if err := completeTestScheduledRunUnits(req); err != nil {
+				return RunResult{Status: "error", Error: err.Error()}
+			}
 			return RunResult{Status: "ok"}
 		},
+		PlanScheduledRun: testScheduledRunPlan,
 	})
 	worker := &pipelineRunWorker{service: service}
 	require.NoError(t, worker.Work(context.Background(), &river.Job[pipelineRunJobArgs]{
@@ -1375,6 +1385,80 @@ func TestScheduledWorkerCreatesRunAndWatermark(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, ok)
 	assert.Equal(t, *runs[0].WinEnd, watermark)
+}
+
+func TestScheduledWorkerRetainsBlockedPlanWithoutExecuting(t *testing.T) {
+	t.Parallel()
+	store, err := OpenStore(filepath.Join(t.TempDir(), "state.db"))
+	require.NoError(t, err)
+	defer store.Close()
+
+	var runnerCalls atomic.Int32
+	service := New(Options{
+		Store: store,
+		ResolvePipelineRef: func(context.Context, string) (PipelineRef, bool) {
+			return PipelineRef{EncodedID: "pipeline-id", Name: "analytics"}, true
+		},
+		PlanScheduledRun: func(ctx context.Context, req ScheduledRunPlanRequest) (ScheduledRunPlanResult, error) {
+			planned, err := testScheduledRunPlan(ctx, req)
+			if err != nil {
+				return ScheduledRunPlanResult{}, err
+			}
+			var artifact map[string]any
+			if err := json.Unmarshal(planned.Plan.Artifact, &artifact); err != nil {
+				return ScheduledRunPlanResult{}, err
+			}
+			artifact["status"] = "blocked"
+			artifact["execution_units"] = []any{}
+			artifact["readiness"] = map[string]any{
+				"blockers": []map[string]string{{"message": "analytics.report cannot be rendered"}},
+			}
+			planned.Plan.Artifact, err = json.Marshal(artifact)
+			if err != nil {
+				return ScheduledRunPlanResult{}, err
+			}
+			planned.Plan.Blocked = true
+			planned.Plan.ExecutionUnits = nil
+			planned.Plan.Blockers = []string{"analytics.report cannot be rendered"}
+			return planned, nil
+		},
+		Runner: func(context.Context, RunRequest, func(string)) RunResult {
+			runnerCalls.Add(1)
+			return RunResult{Status: "ok"}
+		},
+	})
+	start := time.Date(2026, 7, 18, 8, 0, 0, 0, time.UTC)
+	worker := &pipelineRunWorker{service: service}
+	args := pipelineRunJobArgs{
+		PipelineUUID: "pipeline-uuid", Environment: "prod",
+		Start: start.Format(time.RFC3339), End: start.Add(time.Hour).Format(time.RFC3339),
+		SnapshotVersionID: "snapshot-id",
+	}
+	_, _, ok, err := service.prepareRun(context.Background(), 77, args)
+	require.Error(t, err)
+	assert.False(t, ok)
+	var blocked *scheduledPlanBlockedError
+	require.ErrorAs(t, err, &blocked)
+
+	// A crash after atomic admission but before the worker records failure must
+	// still observe the retained blocked bit and never execute on retry.
+	_, _, ok, retryErr := service.prepareRun(context.Background(), 77, args)
+	require.Error(t, retryErr)
+	assert.False(t, ok)
+	require.ErrorAs(t, retryErr, &blocked)
+
+	err = worker.Work(context.Background(), &river.Job[pipelineRunJobArgs]{JobRow: &rivertype.JobRow{ID: 77}, Args: args})
+	require.Error(t, err)
+	assert.Zero(t, runnerCalls.Load())
+
+	runs, listErr := store.List(context.Background(), RunFilter{PipelineID: "pipeline-id"})
+	require.NoError(t, listErr)
+	require.Len(t, runs.Runs, 1)
+	assert.Equal(t, RunStatusFailed, runs.Runs[0].Status)
+	assert.Contains(t, runs.Runs[0].Error, "analytics.report cannot be rendered")
+	_, found, planErr := store.GetRunPlan(context.Background(), runs.Runs[0].ID)
+	require.NoError(t, planErr)
+	assert.True(t, found)
 }
 
 func TestPreviousScheduleIntervalForMinuteCron(t *testing.T) {

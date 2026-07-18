@@ -91,6 +91,20 @@ func getDirectPipelineAndAssetWithConfigLoader(
 	configFilePath string,
 	loadConfig func(afero.Fs, string, string) (*config.Config, error),
 ) (*directPipelineInfo, error) {
+	return getDirectPipelineAndAssetWithConfigLoaderAndMutator(
+		ctx, workspaceRoot, inputPath, fs, configFilePath, loadConfig, nil,
+	)
+}
+
+func getDirectPipelineAndAssetWithConfigLoaderAndMutator(
+	ctx context.Context,
+	workspaceRoot string,
+	inputPath string,
+	fs afero.Fs,
+	configFilePath string,
+	loadConfig func(afero.Fs, string, string) (*config.Config, error),
+	mutator pipeline.PipelineMutator,
+) (*directPipelineInfo, error) {
 	resolvedInputPath := resolveDirectPath(workspaceRoot, inputPath)
 	if strings.TrimSpace(configFilePath) == "" {
 		repoRoot, err := git.FindRepoFromPath(resolvedInputPath)
@@ -105,6 +119,9 @@ func getDirectPipelineAndAssetWithConfigLoader(
 	}
 	resolver := NewWorkspaceResolver(workspaceRoot, func(ctx context.Context, pipelinePath string) (*pipeline.Pipeline, error) {
 		builder := NewRenartPipelineBuilder(fs)
+		if mutator != nil {
+			builder.AddPipelineMutator(mutator)
+		}
 		return builder.CreatePipelineFromPath(ctx, pipelinePath, pipeline.WithMutate())
 	})
 	_, foundPipeline, asset, err := resolver.ResolveAssetByPath(ctx, "", resolvedInputPath)

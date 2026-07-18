@@ -1554,9 +1554,24 @@ the server validates the target then compare-and-swaps the complete selection
 in one transaction. Schedule creation likewise reviews the workspace and pins
 the exact returned version; production UI no longer relies on `deploy_now`.
 
-The remaining Phase 3 slice is scheduled-run integration: persist and apply
-effective schedule variables, generate the redacted plan at the actual tick
-interval, and retain it with the scheduled run/recovery contract.
+Scheduled-run integration checkpoint (2026-07-18): schedule overrides now
+validate against the exact pinned deployment on write, resume, promotion, and
+reconciliation. One strict Bruin pipeline mutator normalizes and applies those
+values before asset construction in planning, rendering, and execution, so the
+variables digest, fingerprints, targets, and recorder evidence share the same
+effective context. Raw values remain private schedule/RunSpec inputs; public
+schedule responses, plan provenance, and retained artifacts expose only sorted
+names and digests.
+
+Each actual due/catch-up signal plans the immutable pin at its normalized
+interval and admission timestamp with scheduled sensor semantics, then
+atomically persists the run, private RunSpec, redacted artifact, ordered units,
+and pipeline slot. A blocked plan becomes a failed auditable run without
+physical execution, and its durable blocked decision survives a crash before
+failure finalization. Row-level `Run pinned` now loads the pin and overrides on
+the server while retaining manual/no-watermark provenance. Phase 3 is complete;
+the broader universal direct-path ledger and durable occurrence/attempt model
+remain in the earlier Phase 0b/0c workstream.
 
 ### Phase 4: optional policy and automation
 

@@ -1119,6 +1119,7 @@ type PipelineRunSpec struct {
 	SnapshotDir                 string
 	SnapshotVersionID           string
 	ExecutionTime               string
+	VariableOverrides           map[string]any
 	ExpectedSourceMerkle        string
 	ExpectedConfigurationDigest string
 	Plan                        *PipelineExecutionPlan
@@ -1345,10 +1346,11 @@ func (s *ExecutionService) MaterializePipelineRun(ctx context.Context, spec Pipe
 			spec.executionTargetSnapshot = &captured
 			return nil
 		},
-		ConfigPath:    spec.ConfigPath,
-		FullRefresh:   spec.FullRefresh,
-		ExecutionTime: executionTime,
-		UnitEvent:     unitEvent,
+		ConfigPath:        spec.ConfigPath,
+		FullRefresh:       spec.FullRefresh,
+		ExecutionTime:     executionTime,
+		VariableOverrides: spec.VariableOverrides,
+		UnitEvent:         unitEvent,
 	}
 	if spec.Plan != nil {
 		request.SelectionMode = spec.Plan.SelectionMode

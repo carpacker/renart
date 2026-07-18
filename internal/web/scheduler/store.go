@@ -525,11 +525,37 @@ func (s *Store) insertRunPlan(ctx context.Context, execer runSpecExecer, runID s
 }
 
 func (s *Store) CreateWithSpec(ctx context.Context, run PipelineRun, spec runSpecV1) (string, error) {
+	return s.createWithSpecAndPlan(ctx, run, spec, nil)
+}
+
+// CreateWithSpecAndPlan atomically admits a scheduled run together with the
+// private RunSpec, redacted plan artifact, and exact execution units. A worker
+// can therefore never observe an executable scheduled run without its plan.
+func (s *Store) CreateWithSpecAndPlan(
+	ctx context.Context,
+	run PipelineRun,
+	spec runSpecV1,
+	plan PipelineRunPlan,
+) (string, error) {
+	return s.createWithSpecAndPlan(ctx, run, spec, &plan)
+}
+
+func (s *Store) createWithSpecAndPlan(
+	ctx context.Context,
+	run PipelineRun,
+	spec runSpecV1,
+	plan *PipelineRunPlan,
+) (string, error) {
 	if err := spec.validate(); err != nil {
 		return "", err
 	}
 	if err := validateRunSpecAdmissionBinding(run, spec); err != nil {
 		return "", err
+	}
+	if plan != nil {
+		if err := validateRunPlanAdmissionBinding(run, spec, *plan); err != nil {
+			return "", err
+		}
 	}
 	for attempt := 0; attempt < 2; attempt++ {
 		tx, err := s.db.BeginTx(ctx, nil)
@@ -543,6 +569,9 @@ func (s *Store) CreateWithSpec(ctx context.Context, run PipelineRun, spec runSpe
 		}
 		if err == nil {
 			err = s.insertRunSpec(ctx, tx, id, spec)
+		}
+		if err == nil && plan != nil {
+			err = s.insertRunPlan(ctx, tx, id, *plan)
 		}
 		if err == nil {
 			err = tx.Commit()

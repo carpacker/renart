@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -475,6 +476,60 @@ func newWebServer(ctx context.Context, cfg serverConfig, logger *zap.Logger) (*w
 			_, err := server.snapshotStore.Validate(ctx, versionID, pipelineUUID)
 			return err
 		},
+		ValidateScheduleVariables: func(ctx context.Context, pipelineUUID, versionID string, overrides map[string]any) error {
+			tempRoot, err := os.MkdirTemp("", "renart-schedule-vars-")
+			if err != nil {
+				return err
+			}
+			defer os.RemoveAll(tempRoot)
+			pipelineRoot := filepath.Join(tempRoot, "pipeline")
+			if err := os.MkdirAll(pipelineRoot, 0o755); err != nil {
+				return err
+			}
+			if err := server.snapshotStore.MaterializeForPipelineExecution(
+				ctx, versionID, pipelineUUID, pipelineRoot,
+			); err != nil {
+				return err
+			}
+			return service.ValidatePipelineVariableOverrides(
+				ctx, service.NewRenartPipelineBuilder(afero.NewOsFs()), pipelineRoot, overrides,
+			)
+		},
+		PlanScheduledRun: func(ctx context.Context, req webscheduler.ScheduledRunPlanRequest) (webscheduler.ScheduledRunPlanResult, error) {
+			plan, apiErr := server.pipelinePlanSvc.Plan(ctx, req.PipelineID, service.PipelinePlanRequest{
+				Purpose:       service.PipelinePlanPurposeExecution,
+				Environment:   req.Environment,
+				StartDate:     req.Start.UTC().Format(time.RFC3339Nano),
+				EndDate:       req.End.UTC().Format(time.RFC3339Nano),
+				ExecutionTime: req.ExecutionTime.UTC().Format(time.RFC3339Nano),
+				Source: service.PipelinePlanSourceRequest{
+					Kind: service.PipelinePlanSourceSnapshot, VersionID: req.SnapshotVersionID,
+				},
+				Selection:              service.PipelinePlanSelectionRequest{Mode: service.PipelinePlanSelectionAll},
+				VariableOverrides:      req.VariableOverrides,
+				VariableOverrideSource: "schedule_override",
+				SkipActiveRunCheck:     true,
+				SkipDataStateCheck:     true,
+				Scheduled:              true,
+			})
+			if apiErr != nil {
+				return webscheduler.ScheduledRunPlanResult{}, fmt.Errorf("%s: %s", apiErr.Code, apiErr.Message)
+			}
+			blockers := make([]string, 0, len(plan.Readiness.Blockers))
+			for _, blocker := range plan.Readiness.Blockers {
+				if message := strings.TrimSpace(blocker.Message); message != "" {
+					blockers = append(blockers, message)
+				}
+			}
+			if plan.Status == service.PipelinePlanStatusBlocked && len(blockers) == 0 {
+				blockers = append(blockers, "the scheduled plan is not executable")
+			}
+			retainedPlan, err := scheduledPipelineRunPlan(plan, blockers)
+			if err != nil {
+				return webscheduler.ScheduledRunPlanResult{}, err
+			}
+			return webscheduler.ScheduledRunPlanResult{Plan: retainedPlan}, nil
+		},
 		SnapshotOrdinal: func(ctx context.Context, versionID string) (int64, error) {
 			deployed, err := server.snapshotStore.Get(ctx, versionID)
 			return deployed.Ordinal, err
@@ -650,6 +705,7 @@ func pipelineRunSpecFromSchedulerRequest(req webscheduler.RunRequest) service.Pi
 		SensorMode:                  req.SensorMode,
 		SnapshotVersionID:           req.SnapshotVersionID,
 		ExecutionTime:               req.ExecutionTime,
+		VariableOverrides:           req.VariableOverrides,
 		ExpectedSourceMerkle:        req.ExpectedSourceMerkle,
 		ExpectedConfigurationDigest: req.ExpectedConfigurationDigest,
 	}
@@ -668,6 +724,34 @@ func pipelineRunSpecFromSchedulerRequest(req webscheduler.RunRequest) service.Pi
 		}
 	}
 	return spec
+}
+
+func scheduledPipelineRunPlan(plan service.PipelinePlan, blockers []string) (webscheduler.PipelineRunPlan, error) {
+	artifact, err := json.Marshal(plan)
+	if err != nil {
+		return webscheduler.PipelineRunPlan{}, fmt.Errorf("encode scheduled pipeline plan: %w", err)
+	}
+	units := make([]webscheduler.PipelineRunExecutionUnit, 0, len(plan.ExecutionUnits))
+	for _, unit := range plan.ExecutionUnits {
+		units = append(units, webscheduler.PipelineRunExecutionUnit{
+			AssetID: unit.AssetID, AssetName: unit.AssetName,
+			StartDate: unit.StartDate, EndDate: unit.EndDate,
+			RenderIndex: unit.RenderIndex, Reason: unit.Reason,
+		})
+	}
+	return webscheduler.PipelineRunPlan{
+		Version: webscheduler.PipelineRunPlanVersionV1,
+		PlanID:  plan.ID, PipelineID: plan.PipelineID, PipelineUUID: plan.PipelineUUID,
+		SourceMerkle: plan.Source.MerkleRoot, ConfigurationDigest: plan.Context.ConfigurationDigest,
+		ExecutionTime: plan.Context.ExecutionTime, Blocked: plan.Status == service.PipelinePlanStatusBlocked,
+		Blockers: append([]string(nil), blockers...),
+		Selection: webscheduler.PipelineRunPlanSelection{
+			Mode: plan.Selection.Mode, AssetName: plan.Selection.AssetName,
+			Scope: plan.Selection.Scope, DataStateToken: plan.Selection.DataStateToken,
+		},
+		ExecutionUnits: units,
+		Artifact:       artifact,
+	}, nil
 }
 
 func persistAllPlanUnitEvent(req webscheduler.RunRequest, event service.ExecutionAssetEvent) error {

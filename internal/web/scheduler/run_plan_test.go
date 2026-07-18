@@ -100,6 +100,19 @@ func TestPipelineRunPlanAdmissionBinding(t *testing.T) {
 	require.ErrorContains(t, validateRunPlanAdmissionBinding(run, spec, wrongPipeline), "admitted pipeline")
 }
 
+func TestPipelineRunPlanAllowsRetainedBlockedPlanWithoutExecutionUnits(t *testing.T) {
+	t.Parallel()
+	plan := validPipelineRunPlan(t)
+	plan.Blocked = true
+	plan.Blockers = []string{"analytics.orders cannot be rendered"}
+	plan.ExecutionUnits = nil
+	plan.Artifact = pipelineRunPlanArtifact(t, plan)
+	require.NoError(t, plan.validate())
+
+	plan.Blocked = false
+	require.ErrorContains(t, plan.validate(), "requires at least one execution unit")
+}
+
 func TestPipelineRunPlanValidatesNeededPreviewDelta(t *testing.T) {
 	t.Parallel()
 
@@ -160,6 +173,7 @@ func pipelineRunPlanArtifact(t testing.TB, plan PipelineRunPlan) json.RawMessage
 	t.Helper()
 	artifact := map[string]any{
 		"id":          plan.PlanID,
+		"status":      map[bool]string{true: "blocked", false: "ready"}[plan.Blocked],
 		"pipeline_id": plan.PipelineID, "pipeline_uuid": plan.PipelineUUID,
 		"source": map[string]any{"merkle_root": plan.SourceMerkle},
 		"context": map[string]any{
@@ -167,6 +181,15 @@ func pipelineRunPlanArtifact(t testing.TB, plan PipelineRunPlan) json.RawMessage
 		},
 		"selection":       plan.Selection,
 		"execution_units": plan.ExecutionUnits,
+		"readiness": map[string]any{
+			"blockers": func() []map[string]string {
+				result := make([]map[string]string, 0, len(plan.Blockers))
+				for _, message := range plan.Blockers {
+					result = append(result, map[string]string{"message": message})
+				}
+				return result
+			}(),
+		},
 		"assets": []any{map[string]any{
 			"id": "pipeline-uuid:analytics.orders", "name": "analytics.orders",
 			"renders": []any{map[string]any{

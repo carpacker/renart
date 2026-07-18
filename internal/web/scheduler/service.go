@@ -33,27 +33,29 @@ const (
 type PipelineSource func(context.Context) ([]PipelineSchedule, error)
 
 type Service struct {
-	store                 *Store
-	runner                func(context.Context, RunRequest, func(string)) RunResult
-	pipelines             PipelineSource
-	publish               func(any)
-	stateDir              string
-	housekeeping          func(context.Context) error
-	resolvePipelineRef    func(context.Context, string) (PipelineRef, bool)
-	defaultEnvironment    func() string
-	pipelineIntervalAware func(context.Context, string) bool
-	deployPipeline        func(context.Context, string) (string, error)
-	latestSnapshot        func(context.Context, string) (string, bool, error)
-	checkSnapshot         func(context.Context, string, string) error
-	validateSnapshot      func(context.Context, string, string) error
-	snapshotOrdinal       func(context.Context, string) (int64, error)
-	recoverRun            func(context.Context, PipelineRun, []PipelineRunStep) error
-	lock                  *flock.Flock
-	riverClient           *river.Client[*sql.Tx]
-	mu                    sync.Mutex
-	schedulerOn           bool
-	ownershipState        SchedulerOwnershipState
-	ownerMessage          string
+	store                     *Store
+	runner                    func(context.Context, RunRequest, func(string)) RunResult
+	pipelines                 PipelineSource
+	publish                   func(any)
+	stateDir                  string
+	housekeeping              func(context.Context) error
+	resolvePipelineRef        func(context.Context, string) (PipelineRef, bool)
+	defaultEnvironment        func() string
+	pipelineIntervalAware     func(context.Context, string) bool
+	deployPipeline            func(context.Context, string) (string, error)
+	latestSnapshot            func(context.Context, string) (string, bool, error)
+	checkSnapshot             func(context.Context, string, string) error
+	validateSnapshot          func(context.Context, string, string) error
+	validateScheduleVariables func(context.Context, string, string, map[string]any) error
+	planScheduledRun          func(context.Context, ScheduledRunPlanRequest) (ScheduledRunPlanResult, error)
+	snapshotOrdinal           func(context.Context, string) (int64, error)
+	recoverRun                func(context.Context, PipelineRun, []PipelineRunStep) error
+	lock                      *flock.Flock
+	riverClient               *river.Client[*sql.Tx]
+	mu                        sync.Mutex
+	schedulerOn               bool
+	ownershipState            SchedulerOwnershipState
+	ownerMessage              string
 }
 
 type Options struct {
@@ -87,6 +89,12 @@ type Options struct {
 	// ValidateSnapshot verifies that an exact version exists, belongs to the
 	// pipeline, and is executable before a schedule can retain the pin.
 	ValidateSnapshot func(context.Context, string, string) error
+	// ValidateScheduleVariables checks overrides against the declarations in
+	// the exact pinned snapshot without connecting to a destination.
+	ValidateScheduleVariables func(context.Context, string, string, map[string]any) error
+	// PlanScheduledRun produces the redacted immutable plan for an actual due
+	// interval. Admission persists it atomically with the RunSpec and run slot.
+	PlanScheduledRun func(context.Context, ScheduledRunPlanRequest) (ScheduledRunPlanResult, error)
 	// SnapshotOrdinal resolves presentation identity for an immutable version.
 	// A missing historical deployment never blocks run or schedule history.
 	SnapshotOrdinal func(context.Context, string) (int64, error)
@@ -103,14 +111,15 @@ type pipelineRunJobArgs struct {
 	// PipelineUUID is set for per-environment scheduled runs; together with
 	// Environment and the interval it forms the unique logical-run key, so
 	// restarts, leader churn, and catch-up can never double-enqueue.
-	PipelineUUID      string     `json:"pipeline_uuid,omitempty" river:"unique"`
-	Environment       string     `json:"environment,omitempty" river:"unique"`
-	Trigger           RunTrigger `json:"trigger,omitempty"`
-	Schedule          string     `json:"schedule,omitempty"`
-	Timezone          string     `json:"timezone,omitempty"`
-	Start             string     `json:"start,omitempty" river:"unique"`
-	End               string     `json:"end,omitempty" river:"unique"`
-	SnapshotVersionID string     `json:"snapshot_version_id,omitempty"`
+	PipelineUUID      string         `json:"pipeline_uuid,omitempty" river:"unique"`
+	Environment       string         `json:"environment,omitempty" river:"unique"`
+	Trigger           RunTrigger     `json:"trigger,omitempty"`
+	Schedule          string         `json:"schedule,omitempty"`
+	Timezone          string         `json:"timezone,omitempty"`
+	Start             string         `json:"start,omitempty" river:"unique"`
+	End               string         `json:"end,omitempty" river:"unique"`
+	SnapshotVersionID string         `json:"snapshot_version_id,omitempty"`
+	Variables         map[string]any `json:"variables,omitempty"`
 	// Backfill and ConfirmedEnvironment are temporary Phase 0a queue fields.
 	// Manual jobs must retain destructive intent and its authorization across
 	// River persistence until the canonical durable RunSpec replaces them.
@@ -131,6 +140,14 @@ type invalidScheduleSignalError struct{ err error }
 
 func (e *invalidScheduleSignalError) Error() string { return e.err.Error() }
 func (e *invalidScheduleSignalError) Unwrap() error { return e.err }
+
+type scheduledPlanBlockedError struct {
+	RunID string
+	err   error
+}
+
+func (e *scheduledPlanBlockedError) Error() string { return e.err.Error() }
+func (e *scheduledPlanBlockedError) Unwrap() error { return e.err }
 
 type runStartPersistenceError struct{ err error }
 
@@ -163,6 +180,13 @@ func (w *pipelineRunWorker) Work(ctx context.Context, job *river.Job[pipelineRun
 		}
 		var invalidSignal *invalidScheduleSignalError
 		if errors.As(err, &invalidSignal) {
+			return river.JobCancel(err)
+		}
+		var blockedPlan *scheduledPlanBlockedError
+		if errors.As(err, &blockedPlan) {
+			if finishErr := w.service.failRunBeforeExecution(ctx, blockedPlan.RunID, err); finishErr != nil {
+				return errors.Join(err, finishErr)
+			}
 			return river.JobCancel(err)
 		}
 		if strings.TrimSpace(job.Args.RunID) != "" || strings.TrimSpace(job.Args.PipelineUUID) != "" || job.Args.Trigger == RunTriggerSchedule {
@@ -233,23 +257,25 @@ func (s cronPeriodicSchedule) Next(current time.Time) time.Time {
 
 func New(options Options) *Service {
 	return &Service{
-		store:                 options.Store,
-		runner:                options.Runner,
-		pipelines:             options.Pipelines,
-		publish:               options.Publish,
-		stateDir:              options.StateDir,
-		housekeeping:          options.Housekeeping,
-		resolvePipelineRef:    options.ResolvePipelineRef,
-		defaultEnvironment:    options.DefaultEnvironment,
-		pipelineIntervalAware: options.PipelineIntervalAware,
-		deployPipeline:        options.DeployPipeline,
-		latestSnapshot:        options.LatestSnapshot,
-		checkSnapshot:         options.CheckSnapshot,
-		validateSnapshot:      options.ValidateSnapshot,
-		snapshotOrdinal:       options.SnapshotOrdinal,
-		recoverRun:            options.RecoverRun,
-		ownershipState:        SchedulerOwnershipUnavailable,
-		ownerMessage:          "scheduler has not started",
+		store:                     options.Store,
+		runner:                    options.Runner,
+		pipelines:                 options.Pipelines,
+		publish:                   options.Publish,
+		stateDir:                  options.StateDir,
+		housekeeping:              options.Housekeeping,
+		resolvePipelineRef:        options.ResolvePipelineRef,
+		defaultEnvironment:        options.DefaultEnvironment,
+		pipelineIntervalAware:     options.PipelineIntervalAware,
+		deployPipeline:            options.DeployPipeline,
+		latestSnapshot:            options.LatestSnapshot,
+		checkSnapshot:             options.CheckSnapshot,
+		validateSnapshot:          options.ValidateSnapshot,
+		validateScheduleVariables: options.ValidateScheduleVariables,
+		planScheduledRun:          options.PlanScheduledRun,
+		snapshotOrdinal:           options.SnapshotOrdinal,
+		recoverRun:                options.RecoverRun,
+		ownershipState:            SchedulerOwnershipUnavailable,
+		ownerMessage:              "scheduler has not started",
 	}
 }
 
@@ -532,7 +558,7 @@ func (s *Service) Reconcile(ctx context.Context) error {
 		case ScheduleStatusArchived:
 			if exists && row.ArchivedReason == ArchivedReasonMissing {
 				restoredStatus := ScheduleStatusActive
-				if strings.TrimSpace(row.SnapshotVersionID) == "" || len(row.Vars) > 0 {
+				if strings.TrimSpace(row.SnapshotVersionID) == "" {
 					restoredStatus = ScheduleStatusPaused
 				}
 				if err := s.store.SetEnvScheduleStatus(ctx, row.PipelineUUID, row.Environment, restoredStatus, ""); err != nil {
@@ -551,14 +577,6 @@ func (s *Service) Reconcile(ctx context.Context) error {
 		if row.Status != ScheduleStatusActive {
 			continue
 		}
-		if len(row.Vars) > 0 {
-			if err := s.store.SetEnvScheduleStatus(ctx, row.PipelineUUID, row.Environment, ScheduleStatusPaused, ""); err != nil {
-				if fatalErr := logRowError(row, "pause unsupported variables", err); fatalErr != nil {
-					return fatalErr
-				}
-			}
-			continue
-		}
 		snapshotCheckKey := row.PipelineUUID + "\x00" + strings.TrimSpace(row.SnapshotVersionID)
 		snapshotErr, checked := snapshotChecks[snapshotCheckKey]
 		if !checked {
@@ -569,6 +587,17 @@ func (s *Service) Reconcile(ctx context.Context) error {
 			slog.Warn("pausing schedule with invalid deployment pin", "pipeline_uuid", row.PipelineUUID, "environment", row.Environment, "error", snapshotErr)
 			if pauseErr := s.store.SetEnvScheduleStatus(ctx, row.PipelineUUID, row.Environment, ScheduleStatusPaused, ""); pauseErr != nil {
 				if fatalErr := logRowError(row, "pause invalid deployment", pauseErr); fatalErr != nil {
+					return fatalErr
+				}
+			}
+			continue
+		}
+		if variablesErr := s.validateScheduleVariableOverrides(
+			ctx, row.PipelineUUID, row.SnapshotVersionID, row.Vars,
+		); variablesErr != nil {
+			slog.Warn("pausing schedule with invalid variable overrides", "pipeline_uuid", row.PipelineUUID, "environment", row.Environment, "error", variablesErr)
+			if pauseErr := s.store.SetEnvScheduleStatus(ctx, row.PipelineUUID, row.Environment, ScheduleStatusPaused, ""); pauseErr != nil {
+				if fatalErr := logRowError(row, "pause invalid variables", pauseErr); fatalErr != nil {
 					return fatalErr
 				}
 			}
@@ -610,6 +639,7 @@ func (s *Service) Reconcile(ctx context.Context) error {
 				Schedule:          row.Cron,
 				Timezone:          row.Timezone,
 				SnapshotVersionID: row.SnapshotVersionID,
+				Variables:         row.Vars,
 			}
 			if start, end, ok := previousScheduleInterval(schedule, time.Now().UTC()); ok {
 				args.Start = start.UTC().Format(time.RFC3339Nano)
@@ -724,6 +754,26 @@ func (s *Service) validateScheduleSnapshot(ctx context.Context, pipelineUUID, ve
 	return nil
 }
 
+func (s *Service) validateScheduleVariableOverrides(
+	ctx context.Context,
+	pipelineUUID string,
+	versionID string,
+	overrides map[string]any,
+) error {
+	if len(overrides) == 0 {
+		return nil
+	}
+	if s.validateScheduleVariables == nil {
+		return errors.New("schedule variable validation is unavailable")
+	}
+	if err := s.validateScheduleVariables(
+		ctx, strings.TrimSpace(pipelineUUID), strings.TrimSpace(versionID), overrides,
+	); err != nil {
+		return fmt.Errorf("schedule variables are invalid for the pinned deployment: %w", err)
+	}
+	return nil
+}
+
 func (s *Service) checkScheduleSnapshot(ctx context.Context, pipelineUUID, versionID string) error {
 	versionID = strings.TrimSpace(versionID)
 	if versionID == "" {
@@ -779,6 +829,7 @@ func (s *Service) catchUp(ctx context.Context, client *river.Client[*sql.Tx], ro
 			Start:             start.UTC().Format(time.RFC3339Nano),
 			End:               end.UTC().Format(time.RFC3339Nano),
 			SnapshotVersionID: row.SnapshotVersionID,
+			Variables:         row.Vars,
 		}
 		_, err := client.Insert(ctx, args, pipelineRunInsertOpts())
 		return err
@@ -977,13 +1028,13 @@ func (s *Service) UpsertEnvSchedule(ctx context.Context, pipelineUUID string, re
 	if err := s.validateScheduleSnapshot(ctx, pipelineUUID, snapshotVersionID); err != nil {
 		return EnvSchedule{}, err
 	}
+	if err := s.validateScheduleVariableOverrides(ctx, pipelineUUID, snapshotVersionID, req.Vars); err != nil {
+		return EnvSchedule{}, err
+	}
 
 	status := ScheduleStatusActive
 	if req.Paused {
 		status = ScheduleStatusPaused
-	}
-	if status == ScheduleStatusActive && len(req.Vars) > 0 {
-		return EnvSchedule{}, errors.New("schedule variables are not executable yet; save this schedule paused until variable-aware runs are available")
 	}
 	schedule := EnvSchedule{
 		PipelineUUID:      pipelineUUID,
@@ -1060,6 +1111,9 @@ func (s *Service) PromoteEnvSchedules(ctx context.Context, pipelineUUID string, 
 		if existing.SnapshotVersionID != expectedVersion {
 			return nil, fmt.Errorf("schedule %s changed after deployment review", environment)
 		}
+		if err := s.validateScheduleVariableOverrides(ctx, pipelineUUID, versionID, existing.Vars); err != nil {
+			return nil, fmt.Errorf("schedule %s cannot use the selected deployment: %w", environment, err)
+		}
 		if expectedVersion == versionID {
 			continue
 		}
@@ -1111,10 +1165,10 @@ func (s *Service) SetEnvScheduleLifecycle(ctx context.Context, pipelineUUID, env
 		return errors.New("schedule not found")
 	}
 	if status == ScheduleStatusActive {
-		if len(existing.Vars) > 0 {
-			return errors.New("schedule variables are not executable yet; remove the overrides before resuming")
-		}
 		if err := s.validateScheduleSnapshot(ctx, pipelineUUID, existing.SnapshotVersionID); err != nil {
+			return err
+		}
+		if err := s.validateScheduleVariableOverrides(ctx, pipelineUUID, existing.SnapshotVersionID, existing.Vars); err != nil {
 			return err
 		}
 	}
@@ -1188,6 +1242,7 @@ func (s *Service) Trigger(ctx context.Context, pipeline PipelineSchedule, req Tr
 		FullRefresh:                 req.FullRefresh,
 		Backfill:                    req.Backfill,
 		SensorMode:                  sensorMode,
+		VariableOverrides:           req.VariableOverrides,
 		ExecutionTime:               executionTime,
 		ExpectedSourceMerkle:        strings.TrimSpace(req.ExpectedSourceMerkle),
 		ExpectedConfigurationDigest: strings.TrimSpace(req.ExpectedConfigurationDigest),
@@ -1373,6 +1428,11 @@ func (s *Service) prepareRun(ctx context.Context, riverJobID int64, args pipelin
 				return PipelineRun{}, runSpecV1{}, false, &invalidRunPlanError{RunID: run.ID, Err: err}
 			}
 			run.ConfirmedPlan = &plan
+			if plan.Blocked {
+				return PipelineRun{}, runSpecV1{}, false, &scheduledPlanBlockedError{
+					RunID: run.ID, err: fmt.Errorf("scheduled plan is blocked: %s", strings.Join(plan.Blockers, "; ")),
+				}
+			}
 		}
 		if run.Status == RunStatusRunning {
 			if err := s.finalizeIndeterminateRetry(ctx, run); err != nil {
@@ -1427,22 +1487,49 @@ func (s *Service) prepareRun(ctx context.Context, riverJobID int64, args pipelin
 		FullRefresh:       args.FullRefresh,
 		Backfill:          args.Backfill,
 		SensorMode:        strings.TrimSpace(args.SensorMode),
+		VariableOverrides: args.Variables,
 	}
+	executionTime := time.Now().UTC()
+	run.ExecutionTime = &executionTime
 	if riverJobID != 0 {
 		run.RiverJobID = &riverJobID
 	}
 	spec := scheduledRunSpec(run, args)
+	if s.planScheduledRun == nil {
+		return PipelineRun{}, runSpecV1{}, false, errors.New("scheduled-run planning is unavailable")
+	}
+	planned, err := s.planScheduledRun(ctx, ScheduledRunPlanRequest{
+		PipelineID: encodedPipelineID, PipelineUUID: pipelineUUID,
+		Environment: run.Environment, SnapshotVersionID: run.SnapshotVersionID,
+		Start: start, End: end, ExecutionTime: executionTime,
+		VariableOverrides: args.Variables,
+	})
+	if err != nil {
+		return PipelineRun{}, runSpecV1{}, false, fmt.Errorf("plan scheduled run: %w", err)
+	}
+	run.ExpectedSourceMerkle = planned.Plan.SourceMerkle
+	run.ExpectedConfigurationDigest = planned.Plan.ConfigurationDigest
+	spec.Expected = &runExpectedIdentity{
+		SourceMerkle: planned.Plan.SourceMerkle, ConfigurationDigest: planned.Plan.ConfigurationDigest,
+	}
 	if err := spec.validate(); err != nil {
 		return PipelineRun{}, runSpecV1{}, false, &invalidScheduleSignalError{err: err}
 	}
-	id, err := s.store.CreateWithSpec(ctx, run, spec)
+	id, err := s.store.CreateWithSpecAndPlan(ctx, run, spec, planned.Plan)
 	if err != nil {
 		return PipelineRun{}, runSpecV1{}, false, err
 	}
 	run.ID = id
 	run = applyRunSpec(run, spec)
+	run.ConfirmedPlan = &planned.Plan
 	s.hydrateSnapshotOrdinal(ctx, &run.SnapshotOrdinal, run.SnapshotVersionID)
 	s.publishRunEvent("run.queued", run)
+	if planned.Plan.Blocked {
+		return PipelineRun{}, runSpecV1{}, false, &scheduledPlanBlockedError{
+			RunID: id,
+			err:   fmt.Errorf("scheduled plan is blocked: %s", strings.Join(planned.Plan.Blockers, "; ")),
+		}
+	}
 	return run, spec, true, nil
 }
 
@@ -1481,6 +1568,7 @@ func (s *Service) execute(ctx context.Context, run PipelineRun, spec runSpecV1) 
 		Backfill:             spec.Requested.Backfill,
 		ConfirmedEnvironment: spec.Authorization.ConfirmedEnvironment,
 		SensorMode:           spec.Requested.SensorMode,
+		VariableOverrides:    spec.Requested.Variables,
 	}
 	if spec.Requested.ExecutionTime != nil {
 		req.ExecutionTime = spec.Requested.ExecutionTime.UTC().Format(time.RFC3339Nano)

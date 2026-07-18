@@ -24,6 +24,24 @@ func TestNormalizeTriggerEnvironmentBeforePolicyLookup(t *testing.T) {
 	assert.Equal(t, "dev", normalizeTriggerEnvironment("  ", "  dev  "))
 }
 
+func TestEnvScheduleTriggerRequestKeepsPinnedSourceAndPrivateVariables(t *testing.T) {
+	t.Parallel()
+	req, err := envScheduleTriggerRequest(scheduler.EnvSchedule{
+		Environment: "prod", SnapshotVersionID: "deployment-id",
+		Vars: map[string]any{"region": "eu"}, Status: scheduler.ScheduleStatusPaused,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, "prod", req.Environment)
+	assert.Equal(t, scheduler.RunSourceSnapshot, req.Source)
+	assert.Equal(t, "deployment-id", req.SnapshotVersionID)
+	assert.Equal(t, map[string]any{"region": "eu"}, req.VariableOverrides)
+	assert.Empty(t, req.Start)
+	assert.Empty(t, req.End)
+
+	_, err = envScheduleTriggerRequest(scheduler.EnvSchedule{Status: scheduler.ScheduleStatusArchived})
+	require.ErrorContains(t, err, "not found")
+}
+
 func TestResolveTriggerRunSourceDefaultsByEnvironmentPolicy(t *testing.T) {
 	t.Parallel()
 

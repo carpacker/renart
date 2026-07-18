@@ -389,10 +389,10 @@ of data freshness and last-run status. Repair/update opens the saved-source
 deployment review; after deployment the user explicitly selects zero or more
 older pins. The server validates the target deployment and compare-and-swaps
 all selected rows in one transaction, so a concurrently changed pin rejects
-the whole batch. The row-level manual action
-submits that displayed exact pin and remains a manual run, so it cannot advance
-the schedule watermark. Rows without a pin show **Needs deployment** instead of
-silently running the working tree.
+the whole batch. The row-level manual action is a server-owned endpoint that
+loads the displayed exact pin and stored overrides; it remains a manual run, so
+it cannot advance the schedule watermark. Rows without a pin show **Needs
+deployment** instead of silently running the working tree.
 For an actual scheduled tick, the successful run status and its environment-
 scoped watermark advance commit in one SQLite transaction. A crash or write
 failure therefore leaves the interval retryable instead of recording success
@@ -400,12 +400,22 @@ while silently re-enqueueing the same catch-up window later. Watermark
 capability and identity come from the server-derived stored RunSpec, never a
 client trigger or the mere presence of a run ID.
 
+Schedule overrides are validated against the variable declarations in the
+exact pinned deployment on create/update, resume, promotion, and reconciliation.
+They are applied before assets are constructed in planning, rendering, and
+execution, so rendered SQL, target/fingerprint evidence, and recorded variable
+hashes share one effective value set. Each actual tick retains an immutable,
+stage-content-free plan for its real interval and admission timestamp; values
+are private RunSpec inputs while plan/run/schedule responses carry only sorted
+names, provenance, and digests. A blocked scheduled plan is persisted as a
+failed auditable run and cannot become executable after worker recovery.
+
 Existing database rows from the former pinless contract are migrated once:
 each non-archived row is pinned to that pipeline's then-latest deployment, or
 paused when no deployment exists. Legacy `pipeline.yml` schedules follow the
-same rule when first imported. Active rows with an invalid pin or stored
-variable overrides are paused during reconciliation; admission rejects new
-active rows until both are executable.
+same rule when first imported. Active rows with an invalid pin or overrides
+that no longer validate against that pin are paused during reconciliation; new
+and resumed rows fail closed until both source and variables are executable.
 
 ## 7. Protected environments (`internal/web/policy`)
 

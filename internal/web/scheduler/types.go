@@ -76,19 +76,22 @@ const (
 // EnvSchedule is one (pipeline, environment) schedule row — the unit of
 // schedule identity.
 type EnvSchedule struct {
-	PipelineUUID      string         `json:"pipeline_uuid"`
-	Environment       string         `json:"environment"`
-	SnapshotVersionID string         `json:"snapshot_version_id,omitempty"`
-	SnapshotOrdinal   int64          `json:"snapshot_ordinal,omitempty"`
-	Cron              string         `json:"cron"`
-	Timezone          string         `json:"timezone"`
-	Vars              map[string]any `json:"vars,omitempty"`
-	CatchupPolicy     CatchupPolicy  `json:"catchup_policy"`
-	Status            ScheduleStatus `json:"status"`
-	ArchivedReason    string         `json:"archived_reason,omitempty"`
-	NextRunAt         *time.Time     `json:"next_run_at,omitempty"`
-	CreatedAt         time.Time      `json:"created_at"`
-	UpdatedAt         time.Time      `json:"updated_at"`
+	PipelineUUID      string `json:"pipeline_uuid"`
+	Environment       string `json:"environment"`
+	SnapshotVersionID string `json:"snapshot_version_id,omitempty"`
+	SnapshotOrdinal   int64  `json:"snapshot_ordinal,omitempty"`
+	Cron              string `json:"cron"`
+	Timezone          string `json:"timezone"`
+	// Vars is private execution context. Public schedule DTOs expose only
+	// VariableNames so ordinary values never enter API responses or SSE state.
+	Vars           map[string]any `json:"-"`
+	VariableNames  []string       `json:"variable_names,omitempty"`
+	CatchupPolicy  CatchupPolicy  `json:"catchup_policy"`
+	Status         ScheduleStatus `json:"status"`
+	ArchivedReason string         `json:"archived_reason,omitempty"`
+	NextRunAt      *time.Time     `json:"next_run_at,omitempty"`
+	CreatedAt      time.Time      `json:"created_at"`
+	UpdatedAt      time.Time      `json:"updated_at"`
 
 	// Resolved presentation fields (not persisted).
 	PipelineID   string       `json:"pipeline_id,omitempty"` // path-encoded API ID
@@ -101,6 +104,23 @@ type EnvSchedule struct {
 type PipelineRef struct {
 	EncodedID string
 	Name      string
+}
+
+// ScheduledRunPlanRequest is the exact, private context resolved by a due or
+// catch-up signal. Variable values never enter public run or plan DTOs.
+type ScheduledRunPlanRequest struct {
+	PipelineID        string
+	PipelineUUID      string
+	Environment       string
+	SnapshotVersionID string
+	Start             time.Time
+	End               time.Time
+	ExecutionTime     time.Time
+	VariableOverrides map[string]any
+}
+
+type ScheduledRunPlanResult struct {
+	Plan PipelineRunPlan
 }
 
 // UpsertEnvScheduleRequest creates or updates a per-environment schedule.
@@ -157,6 +177,9 @@ type TriggerRequest struct {
 	ExpectedSourceMerkle        string `json:"-"`
 	ExpectedConfigurationDigest string `json:"-"`
 	ExecutionTime               string `json:"-"`
+	// VariableOverrides is server-owned schedule/run context. The ordinary
+	// trigger JSON endpoint cannot supply it.
+	VariableOverrides map[string]any `json:"-"`
 	// ConfirmedPlan is the server-regenerated, redacted plan admitted with this
 	// run. It is never accepted from the ordinary trigger JSON endpoint.
 	ConfirmedPlan *PipelineRunPlan `json:"-"`
@@ -197,9 +220,10 @@ type PipelineRun struct {
 	Backfill    bool   `json:"-"`
 	SensorMode  string `json:"-"`
 	// Plan confirmation evidence is persisted only in the private RunSpec.
-	ExecutionTime               *time.Time `json:"-"`
-	ExpectedSourceMerkle        string     `json:"-"`
-	ExpectedConfigurationDigest string     `json:"-"`
+	ExecutionTime               *time.Time     `json:"-"`
+	ExpectedSourceMerkle        string         `json:"-"`
+	ExpectedConfigurationDigest string         `json:"-"`
+	VariableOverrides           map[string]any `json:"-"`
 	// ExecutionContextResolved distinguishes effective execution provenance from
 	// pending, pre-execution-failed, and legacy request-only rows. Callers must
 	// not treat environment, window, or mode fields as executed context while it
@@ -306,13 +330,14 @@ type Context interface {
 }
 
 type RunRequest struct {
-	RunID         string
-	PipelineID    string
-	PipelineUUID  string
-	Environment   string
-	Start         string
-	End           string
-	ExecutionTime string
+	RunID             string
+	PipelineID        string
+	PipelineUUID      string
+	Environment       string
+	Start             string
+	End               string
+	ExecutionTime     string
+	VariableOverrides map[string]any
 	// Scheduled is derived from the persisted server-owned run origin. It must
 	// not be inferred from RunID because queued manual runs also have one.
 	Scheduled bool

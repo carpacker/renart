@@ -201,10 +201,12 @@ not underscore-flattened route hacks.
   secondary, and archive is
   in the row's overflow menu. The displayed deployment identifies the exact pin
   used by the run; pinless rows show `Needs deployment`, and rows with stored
-  variable overrides are blocked until the execution ledger can preserve those
-  overrides truthfully. Schedule creation explicitly chooses an existing
-  executable deployment or reviews and deploys the saved workspace before
-  pinning the returned exact version. Standalone deployment never changes
+  variable overrides show an `Overrides` badge and value-free name tooltip.
+  Schedule creation accepts an optional JSON object, validates it against the
+  exact chosen deployment, and explicitly chooses an existing executable
+  deployment or reviews and deploys the saved workspace before pinning the
+  returned version. `Run pinned #N` calls the row-owned endpoint, so the browser
+  never has to resend private values. Standalone deployment never changes
   existing pins implicitly; explicit multi-schedule promotion is one
   compare-and-swap batch. The
   page reports whether this server is the scheduler owner. Followers and

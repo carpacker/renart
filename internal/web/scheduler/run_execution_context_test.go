@@ -159,6 +159,7 @@ func TestManualAndScheduledAdmissionPersistRequestedExecutionModes(t *testing.T)
 		ResolvePipelineRef: func(context.Context, string) (PipelineRef, bool) {
 			return PipelineRef{EncodedID: "scheduled-pipeline", Name: "scheduled"}, true
 		},
+		PlanScheduledRun: testScheduledRunPlan,
 	})
 	scheduled, _, ok, err := scheduledService.prepareRun(ctx, 42, pipelineRunJobArgs{
 		PipelineUUID:      "scheduled-uuid",

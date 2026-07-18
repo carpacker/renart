@@ -443,6 +443,25 @@ threaded through scheduler execution and snapshot resolution; deployment
 lookup never has to rediscover that identity from a mutable pipeline path.
 Pre-upgrade jobs without a spec retain one strict upgrade decoder.
 
+Actual due/catch-up signals generate the same redacted plan against the row's
+exact deployment, environment, normalized interval, and admission-time
+execution timestamp. Schedule overrides are validated against declarations in
+that immutable deployment, normalized through the same pre-asset Bruin
+pipeline mutator used by rendering and execution, and contribute to variable
+digests/fingerprints without entering the plan artifact. Their values remain in
+private schedule state, the compatibility signal, and the RunSpec; public
+schedule responses expose sorted names only. Scheduled sensor semantics are
+planned and executed as `wait`.
+
+The worker atomically admits the run, RunSpec, pipeline slot, redacted plan, and
+ordered units before physical execution. A deterministic blocker still creates
+an auditable failed run with its retained plan but never invokes the executor;
+the durable blocked bit and blocker messages preserve that decision across a
+crash between admission and failure finalization. A plan-stage persistence
+failure leaves no partially admitted run. The row-level Run-pinned endpoint
+loads the pin and private overrides server-side, queues a manual run, and never
+inherits schedule-watermark capability.
+
 For new scheduler-backed admissions, the durable slot permits one
 queued/running pipeline-scope run per logical pipeline across environments and
 claims both path and stable-UUID aliases, preserving exclusion across a rename.
@@ -473,9 +492,8 @@ Plan-confirmed pipeline execution now has a durable asset/window ledger, but it
 is not yet universal across every mutating path. Interactive and embedded CLI,
 one-asset Materialize, Build-stale, and onboarding paths use the common target-
 capture/write-claim/completion seam but do not create a RunSpec or claim a
-pipeline-global run slot. Executable variable overrides, durable schedule
-occurrences, ledger coverage for those direct paths, and exact re-execution
-remain open.
+pipeline-global run slot. Durable schedule occurrences, ledger coverage for
+those direct paths, and exact re-execution remain open.
 
 Before applying either Renart or River migrations, `Store` runs SQLite's
 `quick_check` against the shared state database. A failed check aborts startup

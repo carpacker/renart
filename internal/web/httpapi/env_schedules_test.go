@@ -22,6 +22,21 @@ type envScheduleHandlerStub struct {
 	statusCalls int
 	status      scheduler.ScheduleStatus
 	promoteReq  scheduler.PromoteEnvSchedulesRequest
+	runCalls    int
+	runPipeline string
+	runUUID     string
+	runEnv      string
+	live        []scheduler.EnvSchedule
+	archived    []scheduler.EnvSchedule
+}
+
+func (s *envScheduleHandlerStub) TriggerEnvSchedule(_ context.Context, pipelineID, pipelineUUID, environment string) (scheduler.PipelineRun, error) {
+	s.runCalls++
+	s.runPipeline, s.runUUID, s.runEnv = pipelineID, pipelineUUID, environment
+	if s.mutationErr != nil {
+		return scheduler.PipelineRun{}, s.mutationErr
+	}
+	return scheduler.PipelineRun{ID: "run-id", PipelineID: pipelineID, Environment: environment}, nil
 }
 
 func (s *envScheduleHandlerStub) PromoteEnvSchedules(_ context.Context, _ string, req scheduler.PromoteEnvSchedulesRequest) ([]scheduler.EnvSchedule, error) {
@@ -37,7 +52,7 @@ func (s *envScheduleHandlerStub) Ownership() scheduler.SchedulerOwnership {
 }
 
 func (s *envScheduleHandlerStub) ListAllEnvSchedules(context.Context) ([]scheduler.EnvSchedule, []scheduler.EnvSchedule, error) {
-	return nil, nil, nil
+	return s.live, s.archived, nil
 }
 
 func (s *envScheduleHandlerStub) UpsertEnvSchedule(_ context.Context, pipelineUUID string, req scheduler.UpsertEnvScheduleRequest) (scheduler.EnvSchedule, error) {
@@ -46,7 +61,7 @@ func (s *envScheduleHandlerStub) UpsertEnvSchedule(_ context.Context, pipelineUU
 	if s.mutationErr != nil {
 		return scheduler.EnvSchedule{}, s.mutationErr
 	}
-	return scheduler.EnvSchedule{PipelineUUID: pipelineUUID, Environment: req.Environment}, nil
+	return scheduler.EnvSchedule{PipelineUUID: pipelineUUID, Environment: req.Environment, Vars: req.Vars}, nil
 }
 
 func (s *envScheduleHandlerStub) SetEnvScheduleLifecycle(_ context.Context, _, _ string, status scheduler.ScheduleStatus) error {
@@ -111,12 +126,15 @@ func TestEnvScheduleMutationBodiesAcceptDeclaredFields(t *testing.T) {
 		upsertStub,
 		http.MethodPut,
 		"/api/pipelines/pipeline-id/env-schedules/prod",
-		`{"cron":"@daily","timezone":"UTC","snapshot_version_id":"snapshot-id"}`,
+		`{"cron":"@daily","timezone":"UTC","snapshot_version_id":"snapshot-id","vars":{"region":"private-value"}}`,
 	)
 	require.Equal(t, http.StatusOK, upsertResponse.Code)
 	assert.Equal(t, 1, upsertStub.upsertCalls)
 	assert.Equal(t, "prod", upsertStub.upsertReq.Environment)
 	assert.Equal(t, "snapshot-id", upsertStub.upsertReq.SnapshotVersionID)
+	assert.Equal(t, "private-value", upsertStub.upsertReq.Vars["region"])
+	assert.Contains(t, upsertResponse.Body.String(), `"variable_names":["region"]`)
+	assert.NotContains(t, upsertResponse.Body.String(), "private-value")
 
 	statusStub := &envScheduleHandlerStub{}
 	statusResponse := envScheduleRequest(
@@ -128,6 +146,29 @@ func TestEnvScheduleMutationBodiesAcceptDeclaredFields(t *testing.T) {
 	require.Equal(t, http.StatusOK, statusResponse.Code)
 	assert.Equal(t, 1, statusStub.statusCalls)
 	assert.Equal(t, scheduler.ScheduleStatusPaused, statusStub.status)
+
+	runStub := &envScheduleHandlerStub{}
+	runResponse := envScheduleRequest(
+		runStub, http.MethodPost, "/api/pipelines/pipeline-id/env-schedules/prod/run", "",
+	)
+	require.Equal(t, http.StatusAccepted, runResponse.Code)
+	assert.Equal(t, 1, runStub.runCalls)
+	assert.Equal(t, "pipeline-id", runStub.runPipeline)
+	assert.Equal(t, "pipeline-uuid", runStub.runUUID)
+	assert.Equal(t, "prod", runStub.runEnv)
+}
+
+func TestEnvScheduleResponsesExposeOnlySortedVariableNames(t *testing.T) {
+	t.Parallel()
+	stub := &envScheduleHandlerStub{live: []scheduler.EnvSchedule{{
+		PipelineUUID: "pipeline-uuid", Environment: "prod", Cron: "@daily", Timezone: "UTC",
+		Vars: map[string]any{"region": "private-region", "limit": 25},
+	}}}
+	response := envScheduleRequest(stub, http.MethodGet, "/api/env-schedules", "")
+	require.Equal(t, http.StatusOK, response.Code)
+	assert.Contains(t, response.Body.String(), `"variable_names":["limit","region"]`)
+	assert.NotContains(t, response.Body.String(), "private-region")
+	assert.NotContains(t, response.Body.String(), `"vars"`)
 }
 
 func TestEnvSchedulesExposeOwnershipAndRejectFollowerMutations(t *testing.T) {
@@ -145,8 +186,8 @@ func TestEnvSchedulesExposeOwnershipAndRejectFollowerMutations(t *testing.T) {
 	assert.JSONEq(t, `{
 		"status":"ok",
 		"scheduler":{"state":"follower","message":"managed by another process"},
-		"schedules":null,
-		"archived":null
+		"schedules":[],
+		"archived":[]
 	}`, listResponse.Body.String())
 
 	mutations := []struct {
@@ -156,6 +197,7 @@ func TestEnvSchedulesExposeOwnershipAndRejectFollowerMutations(t *testing.T) {
 	}{
 		{http.MethodPut, "/api/pipelines/pipeline-id/env-schedules/prod", `{"cron":"@daily","snapshot_version_id":"snapshot-id"}`},
 		{http.MethodPost, "/api/pipelines/pipeline-id/env-schedules/prod/status", `{"status":"paused"}`},
+		{http.MethodPost, "/api/pipelines/pipeline-id/env-schedules/prod/run", ""},
 		{http.MethodDelete, "/api/pipelines/pipeline-id/env-schedules/prod", ""},
 	}
 	for _, mutation := range mutations {
@@ -168,7 +210,8 @@ func TestEnvSchedulesExposeOwnershipAndRejectFollowerMutations(t *testing.T) {
 func envScheduleRequest(stub *envScheduleHandlerStub, method, path, body string) *httptest.ResponseRecorder {
 	router := chi.NewRouter()
 	RegisterEnvScheduleRoutes(router, &EnvSchedulesAPI{
-		Service: stub,
+		Service:            stub,
+		TriggerEnvSchedule: stub.TriggerEnvSchedule,
 		ResolvePipelineUUID: func(pipelineID string) (string, bool) {
 			return "pipeline-uuid", pipelineID == "pipeline-id"
 		},

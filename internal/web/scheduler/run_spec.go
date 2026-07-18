@@ -10,10 +10,11 @@ import (
 )
 
 const (
-	runSpecVersionV1       = 1
-	runDispatchRiver       = "river"
-	runSelectionAll        = "all"
-	runSpecRetrySnoozeTime = 30 * time.Second
+	runSpecVersionV1             = 1
+	runDispatchRiver             = "river"
+	runSelectionAll              = "all"
+	runSpecRetrySnoozeTime       = 30 * time.Second
+	maxRunVariableOverridesBytes = 256 << 10
 )
 
 var (
@@ -83,13 +84,14 @@ type runSourceSpec struct {
 }
 
 type runRequestedContext struct {
-	Environment   string     `json:"environment"`
-	Start         *time.Time `json:"start,omitempty"`
-	End           *time.Time `json:"end,omitempty"`
-	ExecutionTime *time.Time `json:"execution_time,omitempty"`
-	FullRefresh   bool       `json:"full_refresh,omitempty"`
-	Backfill      bool       `json:"backfill,omitempty"`
-	SensorMode    string     `json:"sensor_mode,omitempty"`
+	Environment   string         `json:"environment"`
+	Start         *time.Time     `json:"start,omitempty"`
+	End           *time.Time     `json:"end,omitempty"`
+	ExecutionTime *time.Time     `json:"execution_time,omitempty"`
+	Variables     map[string]any `json:"variables,omitempty"`
+	FullRefresh   bool           `json:"full_refresh,omitempty"`
+	Backfill      bool           `json:"backfill,omitempty"`
+	SensorMode    string         `json:"sensor_mode,omitempty"`
 }
 
 type runExpectedIdentity struct {
@@ -127,6 +129,9 @@ func (spec runSpecV1) validate() error {
 	}
 	if (spec.Requested.Start == nil) != (spec.Requested.End == nil) {
 		return errors.New("run spec start and end must both be set or both be omitted")
+	}
+	if err := validateRunVariableOverrides(spec.Requested.Variables); err != nil {
+		return err
 	}
 	if spec.Requested.Start != nil && !spec.Requested.Start.Before(*spec.Requested.End) {
 		return errors.New("run spec requires an increasing execution window")
@@ -269,6 +274,7 @@ func manualRunSpec(run PipelineRun, source RunSource, confirmedEnvironment strin
 			Start:         cloneRunTime(run.WinStart),
 			End:           cloneRunTime(run.WinEnd),
 			ExecutionTime: cloneRunTime(run.ExecutionTime),
+			Variables:     run.VariableOverrides,
 			FullRefresh:   run.FullRefresh,
 			Backfill:      run.Backfill,
 			SensorMode:    strings.TrimSpace(run.SensorMode),
@@ -368,12 +374,14 @@ func scheduledRunSpec(run PipelineRun, args pipelineRunJobArgs) runSpecV1 {
 			SnapshotVersionID: strings.TrimSpace(run.SnapshotVersionID),
 		},
 		Requested: runRequestedContext{
-			Environment: strings.TrimSpace(run.Environment),
-			Start:       cloneRunTime(run.WinStart),
-			End:         cloneRunTime(run.WinEnd),
-			FullRefresh: run.FullRefresh,
-			Backfill:    run.Backfill,
-			SensorMode:  strings.TrimSpace(run.SensorMode),
+			Environment:   strings.TrimSpace(run.Environment),
+			Start:         cloneRunTime(run.WinStart),
+			End:           cloneRunTime(run.WinEnd),
+			ExecutionTime: cloneRunTime(run.ExecutionTime),
+			Variables:     args.Variables,
+			FullRefresh:   run.FullRefresh,
+			Backfill:      run.Backfill,
+			SensorMode:    strings.TrimSpace(run.SensorMode),
 		},
 		Authorization: runAuthorization{ConfirmedEnvironment: strings.TrimSpace(args.ConfirmedEnvironment)},
 		Selection:     runSelectionAll,
@@ -421,6 +429,25 @@ func cloneRunTime(value *time.Time) *time.Time {
 	return &cloned
 }
 
+func validateRunVariableOverrides(overrides map[string]any) error {
+	if len(overrides) == 0 {
+		return nil
+	}
+	for name := range overrides {
+		if strings.TrimSpace(name) == "" {
+			return errors.New("run spec variable override names cannot be empty")
+		}
+	}
+	body, err := json.Marshal(overrides)
+	if err != nil {
+		return errors.New("run spec variable overrides must contain JSON-compatible values")
+	}
+	if len(body) > maxRunVariableOverridesBytes {
+		return fmt.Errorf("run spec variable overrides exceed the %d byte limit", maxRunVariableOverridesBytes)
+	}
+	return nil
+}
+
 func applyRunSpec(run PipelineRun, spec runSpecV1) PipelineRun {
 	run.PipelineID = strings.TrimSpace(spec.Pipeline.ID)
 	run.PipelineUUID = strings.TrimSpace(spec.Pipeline.UUID)
@@ -434,6 +461,7 @@ func applyRunSpec(run PipelineRun, spec runSpecV1) PipelineRun {
 	run.Backfill = spec.Requested.Backfill
 	run.SensorMode = strings.TrimSpace(spec.Requested.SensorMode)
 	run.ExecutionTime = cloneRunTime(spec.Requested.ExecutionTime)
+	run.VariableOverrides = spec.Requested.Variables
 	if spec.Expected != nil {
 		run.ExpectedSourceMerkle = strings.TrimSpace(spec.Expected.SourceMerkle)
 		run.ExpectedConfigurationDigest = strings.TrimSpace(spec.Expected.ConfigurationDigest)

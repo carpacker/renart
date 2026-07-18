@@ -30,13 +30,16 @@ type RunAssetRequest struct {
 }
 
 type RunPipelineRequest struct {
-	Target            string
-	Environment       string
-	SensorMode        string
-	DryRun            bool
-	StartDate         string
-	EndDate           string
-	ExecutionTime     time.Time
+	Target        string
+	Environment   string
+	SensorMode    string
+	DryRun        bool
+	StartDate     string
+	EndDate       string
+	ExecutionTime time.Time
+	// VariableOverrides is a private normalized RunSpec input. It is applied as
+	// a pipeline mutator before assets are constructed.
+	VariableOverrides map[string]any
 	RunID             string
 	AssetEvent        func(ExecutionAssetEvent) error
 	SelectionMode     string
