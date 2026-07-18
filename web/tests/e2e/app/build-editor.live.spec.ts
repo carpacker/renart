@@ -58,8 +58,16 @@ test.describe("app build editor live", () => {
     await page.goto(`${liveApp.baseURL}/pipelines/${pipelineId}/assets/${customersAssetId}/code`);
 
     const openAppearanceMenu = async () => {
-      await page.getByTestId("project-switcher-trigger").click();
-      await expect(page.getByText("Appearance", { exact: true })).toBeVisible();
+      const trigger = page.getByTestId("project-switcher-trigger");
+      await expect(trigger).toBeVisible({ timeout: 15000 });
+      // On mobile the header can still shift while Monaco and inspect results
+      // settle. Keyboard activation avoids a coordinate click landing on the
+      // adjacent Search control during that late layout movement.
+      await trigger.focus();
+      await trigger.press("Enter");
+      await expect(page.getByRole("menuitemradio", { name: "Dark" })).toBeVisible({
+        timeout: 10000,
+      });
     };
 
     await openAppearanceMenu();

@@ -149,7 +149,7 @@ test.describe("app pipeline type check live", () => {
     expect(report.status).toBe("error");
   });
 
-  test("problems control opens the type-check tab in the bottom panel", async ({
+  test("readiness control opens the type-check tab in the bottom panel", async ({
     liveApp,
     page,
   }) => {
@@ -169,11 +169,10 @@ test.describe("app pipeline type check live", () => {
     await page.goto(`${liveApp.baseURL}/pipelines/${pipelineId}/assets/${customersAssetId}/canvas`);
     await typeCheckResponse;
 
-    // The visible problems status opens the detailed Type check results tab.
-    await page
-      .getByRole("button", { name: /^Problems \d+$/ })
-      .first()
-      .click();
+    // Definition and data status now share the Readiness control. Its Code
+    // checks action opens the detailed Type check results tab.
+    await page.getByRole("button", { name: /^Readiness:/ }).click();
+    await page.getByRole("menuitem", { name: /^Code checks/ }).click();
 
     await expect(page.getByText("analytics.bad_downstream").first()).toBeVisible({
       timeout: 15000,

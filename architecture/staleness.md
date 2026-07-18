@@ -249,9 +249,10 @@ state).
 The `missing` downgrade only applies to assets whose output is a warehouse
 object named after the asset (`verifiableByName`: SQL, seed, and database-backed
 Load). Local-, file-, and object-storage-backed Load assets use an explicit
-`destination_object`, while Python assets may return nothing or write elsewhere;
-those outputs cannot be verified by the asset name and therefore rest on the run
-fact alone.
+`destination_object` and rest on their exact target-aware run facts instead.
+Python assets may return nothing or write elsewhere; unless their operator
+reports a reliable target, they remain `runtime_only`/`never_built` while their
+latest attempt is still recorded and displayed.
 
 Sensors are deliberately classified as `volatile` before and after a successful
 check. Their last attempt is still recorded and displayed, but they are excluded

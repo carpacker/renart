@@ -6,9 +6,8 @@ import { liveTest as test, type LiveApp } from "../live-app-fixture";
 
 // Freshness and the latest attempt are deliberately independent:
 //   - edited but not run yet                 → "Edited"
-//   - edited, then run, and the run failed   → "Edited" + "Build failed"
-//   - unchanged after a good build, but the
-//     latest identical run failed            → "Fresh" + "Last run failed"
+//   - an exact-target write fails            → fail closed + "Build failed"
+//   - a runtime-only Python asset succeeds   → "Never built" + successful attempt
 
 const pipelineId = Buffer.from("analytics").toString("base64url");
 const customersAssetId = Buffer.from("analytics/assets/analytics/customers.sql").toString(
@@ -63,7 +62,7 @@ async function editAssetAndSettle(page: Page, liveApp: LiveApp, content: string,
 test.describe("app freshness failure states live", () => {
   test.use({ fixtureName: "configured-workspace" });
 
-  test("tells an untested edit apart from an edit that was run and failed", async ({
+  test("tells an untested edit apart from an exact-target write that failed", async ({
     liveApp,
     page,
   }) => {
@@ -98,8 +97,10 @@ test.describe("app freshness failure states live", () => {
     });
     await expect(page.locator('[title="Build failed"]')).toHaveCount(0);
 
-    // Edit to something that fails, then run it. The sidebar prioritizes the
-    // warning, while the canvas node shows both dimensions side by side.
+    // Edit to something that fails, then run it. Once an exact physical target
+    // has been claimed, a failed write makes its previous contents uncertain.
+    // Freshness therefore fails closed while the attempt remains independently
+    // visible as a build failure.
     await editAssetAndSettle(page, liveApp, brokenEdit, "does_not_exist_table");
     const failedMaterialize = page.waitForResponse(
       (response) => response.url().includes(`/api/assets/${customersAssetId}/materialize/stream`),
@@ -114,13 +115,16 @@ test.describe("app freshness failure states live", () => {
 
     await page.goto(`${liveApp.baseURL}/catalog?asset=${customersAssetId}`);
     const customersNode = page.getByTestId(`rf__node-${customersAssetId}`);
-    await expect(customersNode.locator('[title="Staleness: Edited"]')).toBeVisible({
+    await expect(customersNode.locator('[title="Staleness: Never built"]')).toBeVisible({
       timeout: 20000,
     });
     await expect(customersNode.locator('[data-last-run="failed"]')).toHaveText("Build failed");
   });
 
-  test("keeps unchanged built data fresh when its latest run failed", async ({ liveApp, page }) => {
+  test("keeps runtime-only Python attempts separate from physical freshness", async ({
+    liveApp,
+    page,
+  }) => {
     test.skip(
       test.info().project.name.includes("mobile"),
       "The freshness badge is a desktop sidebar/canvas affordance.",
@@ -182,13 +186,15 @@ print("sentinel ok")
           status: string;
           last_run_status?: string;
           last_run_on_current_content?: boolean;
+          target_fidelity?: string;
         }>;
       };
       return body.assets.find((a) => a.asset_name === "analytics.sentinel_check");
     };
 
-    // Run 1 — sentinel present → succeeds → fresh. A python asset writes no
-    // warehouse table, so "fresh" here also proves it is not falsely "missing".
+    // Run 1 — sentinel present → succeeds. User Python can write anywhere (or
+    // nowhere), so without a reliable reported target it remains runtime-only
+    // and cannot claim reusable physical freshness.
     const firstRun = page.waitForResponse(
       (response) => response.url().includes(`/api/assets/${pyAssetId}/materialize/stream`),
       { timeout: 90000 },
@@ -196,14 +202,20 @@ print("sentinel ok")
     await page.getByRole("button", { name: "Materialize", exact: true }).click();
     await firstRun;
     await expect
-      .poll(async () => (await sentinelStaleness())?.status, { timeout: 30000 })
-      .toBe("fresh");
+      .poll(
+        async () => {
+          const s = await sentinelStaleness();
+          return `${s?.status}/${s?.last_run_status}/${s?.last_run_on_current_content}/${s?.target_fidelity}`;
+        },
+        { timeout: 30000 },
+      )
+      .toBe("never_built/succeeded/true/runtime_only");
 
     // Remove the sentinel — the asset's content is untouched.
     await rm(sentinelPath);
 
-    // Run 2 — identical content, now fails. The asset stays fresh (an earlier
-    // build exists) but its last run failed on the current content.
+    // Run 2 — identical content, now fails. Its base status remains
+    // deliberately unknown while the current-content failure is recorded.
     const secondRun = page.waitForResponse(
       (response) => response.url().includes(`/api/assets/${pyAssetId}/materialize/stream`),
       { timeout: 90000 },
@@ -215,17 +227,17 @@ print("sentinel ok")
       .poll(
         async () => {
           const s = await sentinelStaleness();
-          return `${s?.status}/${s?.last_run_status}/${s?.last_run_on_current_content}`;
+          return `${s?.status}/${s?.last_run_status}/${s?.last_run_on_current_content}/${s?.target_fidelity}`;
         },
         { timeout: 30000 },
       )
-      .toBe("fresh/failed/true");
+      .toBe("never_built/failed/true/runtime_only");
 
     await page.goto(`${liveApp.baseURL}/catalog?asset=${pyAssetId}`);
     const sentinelNode = page.getByTestId(`rf__node-${pyAssetId}`);
-    await expect(sentinelNode.locator('[title="Staleness: Fresh"]')).toBeVisible({
+    await expect(sentinelNode.locator('[title="Staleness: Never built"]')).toBeVisible({
       timeout: 20000,
     });
-    await expect(sentinelNode.locator('[data-last-run="failed"]')).toHaveText("Last run failed");
+    await expect(sentinelNode.locator('[data-last-run="failed"]')).toHaveText("Build failed");
   });
 });

@@ -37,7 +37,7 @@ type AssetStaleness = {
 test.describe("pipeline failure asset status live", () => {
   test.use({ fixtureName: "configured-workspace" });
 
-  test("keeps an unreached child out of pending and preserves fresh data after failure", async ({
+  test("keeps an unreached child out of pending and preserves exact-target freshness", async ({
     liveApp,
     page,
     request,
@@ -51,9 +51,9 @@ test.describe("pipeline failure asset status live", () => {
     const sentinelPath = await addFailurePipeline(liveApp);
     await waitForPipelineAssets(liveApp, request);
 
-    // Establish successful facts for all three assets. The second run can then
-    // fail without changing source content, so freshness must remain independent
-    // from the latest attempt.
+    // Establish successful attempts for all three assets. SQL outputs have
+    // exact physical targets and become fresh; the Python gate remains
+    // runtime-only because its user code does not report a durable target.
     const baselineRunId = await triggerPipeline(liveApp, request);
     const baseline = await waitForTerminalRun(liveApp, request, baselineRunId);
     expect(baseline.run.status).toBe("success");
@@ -64,9 +64,10 @@ test.describe("pipeline failure asset status live", () => {
     await page.goto(`${liveApp.baseURL}/catalog?asset=${gateAssetId}`);
     const gateNode = page.getByTestId(`rf__node-${gateAssetId}`);
     const childNode = page.getByTestId(`rf__node-${childAssetId}`);
-    await expect(gateNode.locator('[title="Staleness: Fresh"]')).toBeVisible({
+    await expect(gateNode.locator('[title="Staleness: Never built"]')).toBeVisible({
       timeout: 20000,
     });
+    await expect(childNode.locator('[title="Staleness: Fresh"]')).toBeVisible();
     await expect(gateNode.locator("[data-last-run]")).toHaveCount(0);
 
     // The source and fingerprints stay identical; only the external condition
@@ -99,15 +100,15 @@ test.describe("pipeline failure asset status live", () => {
         { timeout: 30000 },
       )
       .toEqual({
-        gate: "fresh/failed/true",
+        gate: "never_built/failed/true",
         child: "fresh/succeeded/true",
       });
 
     await expect(gateNode.getByText("Running", { exact: true })).toHaveCount(0, {
       timeout: 30000,
     });
-    await expect(gateNode.locator('[title="Staleness: Fresh"]')).toBeVisible();
-    await expect(gateNode.locator('[data-last-run="failed"]')).toHaveText("Last run failed");
+    await expect(gateNode.locator('[title="Staleness: Never built"]')).toBeVisible();
+    await expect(gateNode.locator('[data-last-run="failed"]')).toHaveText("Build failed");
     await expect(childNode.getByText("Running", { exact: true })).toHaveCount(0);
     await expect(childNode.locator("[data-last-run]")).toHaveCount(0);
 
@@ -116,12 +117,10 @@ test.describe("pipeline failure asset status live", () => {
     await page.reload();
     const reloadedGateNode = page.getByTestId(`rf__node-${gateAssetId}`);
     const reloadedChildNode = page.getByTestId(`rf__node-${childAssetId}`);
-    await expect(reloadedGateNode.locator('[title="Staleness: Fresh"]')).toBeVisible({
+    await expect(reloadedGateNode.locator('[title="Staleness: Never built"]')).toBeVisible({
       timeout: 20000,
     });
-    await expect(reloadedGateNode.locator('[data-last-run="failed"]')).toHaveText(
-      "Last run failed",
-    );
+    await expect(reloadedGateNode.locator('[data-last-run="failed"]')).toHaveText("Build failed");
     await expect(reloadedChildNode.getByText("Running", { exact: true })).toHaveCount(0);
     await expect(reloadedChildNode.locator("[data-last-run]")).toHaveCount(0);
   });
