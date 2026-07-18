@@ -4,6 +4,7 @@ import (
 	"context"
 	"io/fs"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -68,6 +69,11 @@ func TestStoreValidatesExecutionTargetSnapshotIdentity(t *testing.T) {
 		mutate func(*ExecutionTargetSnapshot)
 	}{
 		{name: "version", mutate: func(snapshot *ExecutionTargetSnapshot) { snapshot.Version = 99 }},
+		{name: "configuration digest", mutate: func(snapshot *ExecutionTargetSnapshot) { snapshot.ConfigurationDigest = "short" }},
+		{name: "configuration fidelity", mutate: func(snapshot *ExecutionTargetSnapshot) { snapshot.ConfigurationFidelity = "best_effort" }},
+		{name: "runtime configuration with digest", mutate: func(snapshot *ExecutionTargetSnapshot) {
+			snapshot.ConfigurationFidelity = ExecutionTargetFidelityRuntimeOnly
+		}},
 		{name: "empty entries", mutate: func(snapshot *ExecutionTargetSnapshot) { snapshot.Entries = nil }},
 		{name: "noncanonical name", mutate: func(snapshot *ExecutionTargetSnapshot) {
 			entry := snapshot.Entries["analytics.orders"]
@@ -270,6 +276,7 @@ func TestExecutionTargetSnapshotMigrationBackfillsStepOrderAndDowngradesCleanly(
 func testExecutionTargetSnapshot() ExecutionTargetSnapshot {
 	return ExecutionTargetSnapshot{
 		Version: ExecutionTargetSnapshotVersionV2, PipelineUUID: "pipeline-uuid",
+		ConfigurationDigest: strings.Repeat("c", 64), ConfigurationFidelity: ExecutionTargetFidelityExact,
 		Entries: map[string]ExecutionTargetSnapshotEntry{
 			"analytics.orders": {
 				AssetID:          "pipeline-uuid:analytics.orders",

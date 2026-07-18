@@ -275,16 +275,32 @@ to "can I use the existing data?" while also answering "what happened when I
 last tried to build it?" and distinguishes an untested edit from one that was
 run and failed.
 
-Running state is transient and asset-scoped. The UI derives it only from
-scheduler steps (initial active-run hydration plus `run.step` SSE events); a
-queued or started pipeline does not mark every asset pending. `run.finished`
-clears all transient entries for that run, while the canonical terminal attempt
-arrives through staleness. Assets skipped after an upstream failure therefore
-retain their previous freshness and attempt state. Build remembers a terminal
-event even when a very fast run finishes before the trigger response supplies
-its run ID, then associates the result and reloads the canonical stored log.
-Late queued/running events or active-run hydration cannot resurrect that
-finished run.
+Running state is transient and asset-scoped. The UI derives materialization
+state from scheduler steps (initial active-run hydration plus `run.step` SSE
+events); a queued or started pipeline does not mark every asset pending.
+Reviewed-plan progress has a separate durable unit ledger and `run.unit` SSE
+event for the run-details Plan tab. `run.finished` clears all transient entries
+for that run, while the canonical terminal attempt arrives through staleness.
+Assets skipped after an upstream failure therefore retain their previous
+freshness and attempt state. Build remembers a terminal event even when a very
+fast run finishes before the trigger response supplies its run ID, then
+associates the result and reloads the canonical stored log. Late queued/running
+events or active-run hydration cannot resurrect that finished run.
+
+The read-only pipeline planner consumes the same snapshot and
+`data_state_token`. `needed` selection includes every non-fresh/volatile asset
+in topological order and uses exact uncovered intervals for partial assets;
+asset-closure selection applies the same state to a selected asset and its
+requested dependency direction. Each planned asset records why it was included,
+and each final asset/window becomes an explicit execution unit in the response.
+The token is part of the plan identity, so confirmation regenerates against the
+latest generation, coverage, claims, and ambiguity rather than trusting a UI
+snapshot. `all`, Needed, and asset-closure plans persist and execute their final
+ordered units. If a Needed unit became fresh between review and confirmation it
+may be omitted and is retained as preview-delta evidence; new work, widened
+windows, or changed windows return `plan_data_changed` instead of expanding the
+run silently. Each admitted unit carries its inclusion reason and exact window,
+and terminal unit state is durable even when later work is skipped.
 
 The Build-stale action is server-side: `POST
 /api/pipelines/{id}/build-stale/stream` (`httpapi/build_stale.go`) recomputes
@@ -391,12 +407,13 @@ Enforced by `policy.Check` at execution dispatch; the legacy `/api/run` path and
 manual scheduler trigger apply the same check instead of bypassing it. Scheduled
 snapshot runs pass as non-interactive. UI-side disabling is a hint, not
 enforcement. Full refresh has a destructive confirmation dialog and sends the
-typed environment through to the server; the CLI uses
-`--confirm-environment`. Explicit backfill requests use the same contract, while
-an ordinary selected execution window is not automatically mislabeled as
-destructive. Locally these are guardrails, not a boundary (the user owns the
-credentials); the cloud permission model enforces the same flags harder, under
-the same names.
+typed environment through to the server; plan confirmation rejects a missing or
+mismatched value before queue admission, and execution checks it again before
+side effects. The CLI uses `--confirm-environment`. Explicit backfill requests
+use the same contract, while an ordinary selected execution window is not
+automatically mislabeled as destructive. Locally these are guardrails, not a
+boundary (the user owns the credentials); the cloud permission model enforces
+the same flags harder, under the same names.
 
 ## 8. Deferred and known-accepted
 

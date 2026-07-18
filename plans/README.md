@@ -12,7 +12,7 @@ the original.
 | --- | --- |
 | [dbt-assets.md](dbt-assets.md) | evaluation — enabling renart intelligence on existing dbt projects |
 | [materialization-reach.md](materialization-reach.md) | proposed reach — guided advanced SQL modes, coverage timeline, Python pre-run diagnostic |
-| [pipeline-readiness-and-rendering.md](pipeline-readiness-and-rendering.md) | implementation in progress — scheduler foundation and Phase 1 saved-source rendering plus target-aware data state shipped; pipeline planning/readiness, universal ledger completion, durable occurrences, and deploy integration remain |
+| [pipeline-readiness-and-rendering.md](pipeline-readiness-and-rendering.md) | implementation in progress — Phase 1 rendering and Phase 2 reviewed all/Needed/asset-unit execution + history shipped; universal direct-path ledger coverage, durable occurrences, variables, and Phase 3 deploy/schedule integration remain |
 | [remote-table-intellisense.md](remote-table-intellisense.md) | proposal — surface warehouse tables with no backing asset via the LSP |
 | [python-asset-sdk.md](python-asset-sdk.md) | phases 1–2 + upstream refresh + PyPI publication implemented — credential-free `query()`, ingestr-free uploads, editor/notebook parity; policy and protocol reach items open |
 | [python-cross-connection-policy.md](python-cross-connection-policy.md) | proposal — opt-in per-environment connection scopes for Python SDK queries |

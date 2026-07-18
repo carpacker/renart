@@ -1395,6 +1395,57 @@ select 1
 	assert.Equal(t, 1, *manifestCalls, "HTTP rendering must hash source contents only once")
 }
 
+func TestAssetRenderServiceRendersExactExternalSourceWithWorkspaceConfig(t *testing.T) {
+	t.Parallel()
+
+	_, sourceRoot := writeTypeCheckWorkspace(t, "name: analytics", map[string]string{
+		"report.sql": `
+/* @bruin
+name: analytics.report
+type: duckdb.sql
+materialization:
+  type: table
+@bruin */
+select 1 as value
+`,
+	})
+	configRoot := t.TempDir()
+	configPath := filepath.Join(configRoot, ".bruin.yml")
+	require.NoError(t, os.Rename(filepath.Join(sourceRoot, ".bruin.yml"), configPath))
+	require.NoError(t, os.RemoveAll(filepath.Join(sourceRoot, ".git")))
+
+	manifest, err := snapshot.CollectManifestHashes(filepath.Join(sourceRoot, "analytics"))
+	require.NoError(t, err)
+	merkleRoot := snapshot.ManifestRoot(manifest)
+	service := newAssetRenderServiceForSource(sourceRoot, configPath, AssetRenderSource{
+		Kind:         "snapshot",
+		VersionID:    "version-1",
+		PipelinePath: "analytics/pipeline.yml",
+		MerkleRoot:   merkleRoot,
+	})
+
+	result, err := service.RenderPath(
+		context.Background(),
+		"analytics/assets/report.sql",
+		AssetRenderRequest{},
+	)
+	require.NoError(t, err)
+	assert.Equal(t, "snapshot", result.Provenance.Source.Kind)
+	assert.Equal(t, "version-1", result.Provenance.Source.VersionID)
+	assert.Equal(t, "analytics/pipeline.yml", result.Provenance.Source.PipelinePath)
+	assert.Equal(t, merkleRoot, result.Provenance.Source.MerkleRoot)
+	assert.Equal(t, "default", result.Provenance.Context.Environment)
+	assert.NotEmpty(t, result.Stages)
+
+	service.source.MerkleRoot = strings.Repeat("0", 64)
+	_, err = service.RenderPath(
+		context.Background(),
+		"analytics/assets/report.sql",
+		AssetRenderRequest{},
+	)
+	require.ErrorIs(t, err, ErrAssetRenderSourceChanged)
+}
+
 func TestAssetRenderServiceSanitizesHTTPFailuresButKeepsInProcessDetail(t *testing.T) {
 	t.Parallel()
 

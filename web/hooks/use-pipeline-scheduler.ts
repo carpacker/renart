@@ -14,7 +14,9 @@ import { schedulerRunEventAtom } from "@/lib/atoms/domains/results";
 import type {
   PipelineRun,
   PipelineRunLogLine,
+  PipelineRunPlan,
   PipelineRunStep,
+  PipelineRunUnit,
   PipelineSchedule,
 } from "@/lib/types";
 
@@ -34,6 +36,8 @@ export function usePipelineScheduler({
   const [selectedRun, setSelectedRun] = useState<PipelineRun | null>(null);
   const [logs, setLogs] = useState<PipelineRunLogLine[]>([]);
   const [steps, setSteps] = useState<PipelineRunStep[]>([]);
+  const [plan, setPlan] = useState<PipelineRunPlan | null>(null);
+  const [units, setUnits] = useState<PipelineRunUnit[]>([]);
   const [loading, setLoading] = useState(true);
   const [busyPipeline, setBusyPipeline] = useState<string | null>(null);
   const [loadingRunId, setLoadingRunId] = useState<string | null>(null);
@@ -118,6 +122,8 @@ export function usePipelineScheduler({
         setSelectedRun(response.run);
         setLogs(response.logs ?? []);
         setSteps(response.steps ?? []);
+        setPlan(response.plan ?? null);
+        setUnits(response.units ?? []);
       }
     } catch (cause) {
       if (
@@ -190,6 +196,8 @@ export function usePipelineScheduler({
             setSelectedRun(response.run);
             setLogs([]);
             setSteps([]);
+            setPlan(null);
+            setUnits([]);
           }
         }
         return response;
@@ -211,12 +219,16 @@ export function usePipelineScheduler({
       setSelectedRun(null);
       setLogs([]);
       setSteps([]);
+      setPlan(null);
+      setUnits([]);
       setRunDetailError(null);
       return;
     }
     setSelectedRun((current) => (current?.id === selectedRunId ? current : null));
     setLogs([]);
     setSteps([]);
+    setPlan(null);
+    setUnits([]);
     void selectRun(selectedRunId);
   }, [selectedRunId, selectRun]);
 
@@ -246,6 +258,17 @@ export function usePipelineScheduler({
             (a, b) =>
               new Date(a.started_at ?? a.finished_at ?? 0).getTime() -
               new Date(b.started_at ?? b.finished_at ?? 0).getTime(),
+          ),
+        );
+      }
+      return;
+    }
+    if (schedulerRunEvent.type === "run.unit") {
+      const { run_id, unit } = schedulerRunEvent.run;
+      if (selectedRunId ? selectedRunId === run_id : selectedRunForRequest?.id === run_id) {
+        setUnits((existing) =>
+          [unit, ...existing.filter((item) => item.position !== unit.position)].sort(
+            (a, b) => a.position - b.position,
           ),
         );
       }
@@ -285,6 +308,8 @@ export function usePipelineScheduler({
     selectedRun: selectedRunForRequest,
     logs,
     steps,
+    plan,
+    units,
     loading,
     schedulesError,
     runsError,

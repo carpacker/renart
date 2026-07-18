@@ -191,6 +191,62 @@ func CollectManifestHashes(pipelineDir string) (map[string]string, error) {
 	return manifest, nil
 }
 
+// CopyPipelineSourceForExecution copies the same source file set used by
+// deployment manifests into an isolated execution directory. It hashes the
+// bytes actually written, so callers can bind a confirmed working-tree plan to
+// an immutable copy without retaining large seed files in memory.
+func CopyPipelineSourceForExecution(pipelineDir, destDir string) (map[string]string, error) {
+	manifest := make(map[string]string)
+	err := walkManifestFiles(pipelineDir, func(path, relativePath string) error {
+		target := filepath.Join(destDir, filepath.FromSlash(relativePath))
+		relTarget, err := filepath.Rel(destDir, target)
+		if err != nil || relTarget == ".." || strings.HasPrefix(relTarget, ".."+string(filepath.Separator)) {
+			return fmt.Errorf("snapshot: invalid source path %q", relativePath)
+		}
+		if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+			return err
+		}
+
+		source, err := os.Open(path)
+		if err != nil {
+			return err
+		}
+		info, err := source.Stat()
+		if err != nil {
+			_ = source.Close()
+			return err
+		}
+		destination, err := os.OpenFile(target, os.O_CREATE|os.O_EXCL|os.O_WRONLY, info.Mode().Perm())
+		if err != nil {
+			_ = source.Close()
+			return err
+		}
+
+		hasher := sha256.New()
+		_, copyErr := io.Copy(io.MultiWriter(destination, hasher), source)
+		closeDestinationErr := destination.Close()
+		closeSourceErr := source.Close()
+		if copyErr != nil {
+			return copyErr
+		}
+		if closeDestinationErr != nil {
+			return closeDestinationErr
+		}
+		if closeSourceErr != nil {
+			return closeSourceErr
+		}
+		manifest[relativePath] = hex.EncodeToString(hasher.Sum(nil))
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	if err := os.MkdirAll(filepath.Join(destDir, ".git"), 0o755); err != nil {
+		return nil, err
+	}
+	return manifest, nil
+}
+
 // Deploy snapshots the pipeline directory. When the content is identical to
 // the latest snapshot it is a no-op and returns that snapshot with
 // created=false.

@@ -92,14 +92,30 @@ not underscore-flattened route hacks.
   explicit code/split/canvas layout. A DAG that fits at the default zoom is
   horizontally centered on initial render, while a wider DAG keeps its layout
   origin so it remains predictable to pan. The explorer's asset filter searches
-  names, groups, paths, types, and connections. Its pipeline action displays
-  and submits an exact source: `Run workspace` in ordinary environments, or
-  `Run deployed <id>` for the resolved immutable deployment in a
-  `deployed_only` environment. Deployment loading, lookup failure, and a
-  missing or corrupt required deployment disable the action rather than
-  guessing; corrupt in-sync deployments expose a repair action. Pipeline and
-  asset execution plus Deploy await every mounted editor's pending/in-flight
-  save, so the saved source named by the action includes visible Monaco edits.
+  names, groups, paths, types, and connections. The toolbar groups persistent
+  Definition and Data state under one **Readiness** control, keeps Deploy as a
+  separate secondary action, and makes **Review run** the primary pipeline
+  action. The review sheet defaults to the entire pipeline and names the exact
+  saved working tree or immutable deployment, environment, UTC interval,
+  refresh/sensor mode, asset and execution-unit counts, checks, blockers,
+  warnings, and source/configuration/variable identities. Summary, Assets, and
+  Checks load with the compact plan; opening Execution lazily requests redacted
+  stage content and shows compiled queries, generated materialization SQL,
+  checks, and semantic/runtime-only operations in read-only Monaco with
+  `Preview — not executed`. The selected tab and initial review context stay
+  stable while background workspace/deployment refreshes arrive; confirmation
+  still revalidates every identity server-side and replaces a stale plan for
+  another review. Entire-pipeline and Needed plans execute their exact reviewed
+  asset/window units. Needed confirmation may visibly omit units that became
+  fresh, but never adds or widens work without another review. Destructive
+  policy requires typing the exact environment. Active-run blockers and
+  admission races link to the canonical run. A `deployed_only` environment with
+  no executable deployment opens the same review surface with an actionable
+  blocker instead of guessing a source. A temporarily invalid asset definition
+  appears as an asset-scoped blocker while renderable siblings remain visible.
+  Pipeline and asset execution plus Deploy await every mounted editor's
+  pending/in-flight save, so the saved source named by the action includes
+  visible Monaco edits.
   Type-check does the same; transport/save failures remain visible in the bell
   and results panel without erasing the last successful report. Every supported
   SQL, Python, seed, Load, API, ingestr, and sensor asset also exposes a
@@ -164,6 +180,11 @@ not underscore-flattened route hacks.
   Run details use semantic event badges, link current-workspace asset events
   back to the split Build view, and render timeline asset names in a dedicated
   wrapping column with tooltips so short duration bars never truncate identity.
+  Runs admitted from a reviewed plan add a Plan tab with the immutable final
+  unit order and statuses, inclusion reasons and exact windows, safe Needed
+  preview omissions, source/configuration/data identities, and retained
+  redacted stage metadata. `run.unit` SSE updates that ledger live without
+  teaching unrelated asset-result consumers to treat units as pipeline steps.
   The asset timeline scrolls independently when a run has many assets, keeping
   the event/output panel usable, and duration tooltips anchor to the duration
   bars rather than the full timeline tracks.

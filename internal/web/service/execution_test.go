@@ -79,6 +79,7 @@ type stubExecutionExecutor struct {
 	runPipelineEvents  []ExecutionAssetEvent
 	runPipelineTargets *ExecutionTargetSnapshot
 	runPipelineReqs    []RunPipelineRequest
+	runPipelineExecute func(RunPipelineRequest) error
 	queryConnOutput    []byte
 	queryConnErr       error
 	queryConnReqs      []QueryConnectionRequest
@@ -126,6 +127,12 @@ func (s *stubExecutionExecutor) RunPipeline(_ context.Context, req RunPipelineRe
 		if err := req.OnTargetsResolved(*s.runPipelineTargets); err != nil {
 			return s.runPipelineOutput, err
 		}
+	}
+	if s.runPipelineExecute != nil {
+		if err := s.runPipelineExecute(req); err != nil {
+			return s.runPipelineOutput, err
+		}
+		return s.runPipelineOutput, s.runPipelineErr
 	}
 	for _, event := range s.runPipelineEvents {
 		if req.AssetEvent != nil {
@@ -508,6 +515,103 @@ func TestExecutionServiceMaterializePipelineStreamPreservesSuccessOutput(t *test
 	require.Len(t, completed.Assets, 2)
 	assert.Equal(t, "succeeded", completed.Assets[0].Status)
 	assert.Equal(t, "succeeded", completed.Assets[1].Status)
+}
+
+func TestExecutionServiceRecordsEachReviewedWindowWithDistinctCompletionIdentity(t *testing.T) {
+	t.Parallel()
+
+	pipelineID := EncodeID("pipelines/orders/pipeline.yml")
+	started := time.Date(2026, 7, 17, 9, 0, 0, 0, time.UTC)
+	snapshot := ExecutionTargetSnapshot{
+		Version: ExecutionTargetSnapshotVersion, PipelineUUID: "orders-uuid",
+		Entries: map[string]ExecutionTargetSnapshotEntry{
+			"analytics.orders": {
+				AssetID: "orders-uuid:analytics.orders", TargetIdentity: "target-orders",
+				TargetFidelity: AssetRenderFidelityExact, Fingerprint: "v2:orders", OwnContent: "v2:orders-own",
+				ConsumedVarsHash: "consumed", VarsHash: "vars", CoverageMode: ExecutionCoverageUnionIntervals,
+			},
+		},
+	}
+	units := []PipelineExecutionUnit{
+		{
+			Position: 0, AssetID: "orders-uuid:analytics.orders", AssetName: "analytics.orders",
+			StartDate: "2026-07-17T09:00:00Z", EndDate: "2026-07-17T10:00:00Z", Reason: "coverage_gap",
+		},
+		{
+			Position: 1, AssetID: "orders-uuid:analytics.orders", AssetName: "analytics.orders",
+			StartDate: "2026-07-17T10:00:00Z", EndDate: "2026-07-17T11:00:00Z", Reason: "coverage_gap",
+		},
+	}
+	executor := &stubExecutionExecutor{runPipelineTargets: &snapshot}
+	executor.runPipelineExecute = func(req RunPipelineRequest) error {
+		for position := range units {
+			unitStarted := started.Add(time.Duration(position) * time.Hour)
+			unitFinished := unitStarted.Add(time.Second)
+			if err := req.UnitEvent(PipelineExecutionUnitEvent{
+				Position: position, Status: "running", StartedAt: &unitStarted,
+			}); err != nil {
+				return err
+			}
+			if err := req.AssetEvent(ExecutionAssetEvent{
+				Asset: "analytics.orders", Status: "running", StartedAt: &unitStarted,
+				UnitPosition: position, HasUnitPosition: true,
+			}); err != nil {
+				return err
+			}
+			if err := req.AssetEvent(ExecutionAssetEvent{
+				Asset: "analytics.orders", Status: "success", StartedAt: &unitStarted, FinishedAt: &unitFinished,
+				UnitPosition: position, HasUnitPosition: true,
+			}); err != nil {
+				return err
+			}
+			if err := req.UnitEvent(PipelineExecutionUnitEvent{
+				Position: position, Status: "success", StartedAt: &unitStarted, FinishedAt: &unitFinished,
+			}); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	writeStore := &stubTargetWriteStore{}
+	var completions []bus.RunCompleted
+	svc := NewExecutionService(ExecutionDependencies{
+		Executor:     executor,
+		TargetWrites: writeStore,
+		CurrentPipelines: func() []PipelineView {
+			return []PipelineView{{
+				ID: pipelineID, UUID: "orders-uuid",
+				Assets: []AssetView{{ID: "encoded-orders", Name: "analytics.orders"}},
+			}}
+		},
+		DispatchCompletion: func(_ context.Context, event bus.RunCompleted) error {
+			completions = append(completions, event)
+			return nil
+		},
+	})
+
+	result := svc.MaterializePipelineRun(context.Background(), PipelineRunSpec{
+		RunID: "run-reviewed-windows", PipelineID: pipelineID, PipelineUUID: "orders-uuid",
+		StartDate: units[0].StartDate, EndDate: units[1].EndDate,
+		Plan: &PipelineExecutionPlan{SelectionMode: PipelinePlanSelectionNeeded, Units: units},
+	}, nil, nil)
+
+	require.Equal(t, "ok", result.Status, result.Error)
+	require.Len(t, completions, 2)
+	assert.Equal(t, "run-reviewed-windows", completions[0].RunID)
+	assert.Equal(t, "run-reviewed-windows", completions[1].RunID)
+	assert.Equal(t, "run-reviewed-windows/unit/0", completions[0].CompletionID)
+	assert.Equal(t, "run-reviewed-windows/unit/1", completions[1].CompletionID)
+	assert.Equal(t, units[0].StartDate, completions[0].WinStart.Format(time.RFC3339))
+	assert.Equal(t, units[0].EndDate, completions[0].WinEnd.Format(time.RFC3339))
+	assert.Equal(t, units[1].StartDate, completions[1].WinStart.Format(time.RFC3339))
+	assert.Equal(t, units[1].EndDate, completions[1].WinEnd.Format(time.RFC3339))
+	require.Len(t, completions[0].Assets, 1)
+	require.Len(t, completions[1].Assets, 1)
+	assert.EqualValues(t, 0, completions[0].Assets[0].CompletionOrdinal)
+	assert.EqualValues(t, 1, completions[1].Assets[0].CompletionOrdinal)
+	require.Len(t, writeStore.claims, 2)
+	assert.Equal(t, completions[0].CompletionID, writeStore.claims[0].CompletionID)
+	assert.Equal(t, completions[1].CompletionID, writeStore.claims[1].CompletionID)
 }
 
 func TestExecutionServiceScheduledPipelineUsesWaitSensorMode(t *testing.T) {
@@ -1039,6 +1143,49 @@ func TestExecutionServiceDryRunDoesNotResolveExecutionContext(t *testing.T) {
 	assert.Empty(t, executor.runPipelineReqs[0].EndDate)
 	assert.Empty(t, result.Operation.StartDate)
 	assert.Empty(t, result.Operation.EndDate)
+}
+
+func TestExecutionServiceUsesConfirmedExecutionTime(t *testing.T) {
+	t.Parallel()
+	executor := &stubExecutionExecutor{}
+	svc := NewExecutionService(ExecutionDependencies{Executor: executor})
+	executionTime := time.Date(2026, 7, 17, 10, 11, 12, 123456789, time.UTC)
+
+	result := svc.MaterializePipelineRun(context.Background(), PipelineRunSpec{
+		PipelineID:    EncodeID("pipelines/orders/pipeline.yml"),
+		ExecutionTime: executionTime.Format(time.RFC3339Nano),
+		StartDate:     "2026-07-17T09:00:00Z",
+		EndDate:       "2026-07-17T10:00:00Z",
+	}, nil, nil)
+
+	require.Equal(t, "ok", result.Status, result.Error)
+	require.Len(t, executor.runPipelineReqs, 1)
+	assert.Equal(t, executionTime, executor.runPipelineReqs[0].ExecutionTime)
+}
+
+func TestExecutionServiceRejectsChangedConfirmedConfiguration(t *testing.T) {
+	t.Parallel()
+	executor := &stubExecutionExecutor{
+		runPipelineTargets: &ExecutionTargetSnapshot{
+			Version: ExecutionTargetSnapshotVersion, PipelineUUID: "orders-uuid",
+			ConfigurationDigest: strings.Repeat("b", 64), ConfigurationFidelity: "exact",
+			Entries: map[string]ExecutionTargetSnapshotEntry{
+				"analytics.orders": {
+					AssetID: "orders-uuid:analytics.orders", TargetFidelity: AssetRenderFidelityRuntimeOnly,
+					Fingerprint: "v2:orders", OwnContent: "v2:own", ConsumedVarsHash: "consumed", VarsHash: "vars",
+				},
+			},
+		},
+	}
+	svc := NewExecutionService(ExecutionDependencies{Executor: executor})
+
+	result := svc.MaterializePipelineRun(context.Background(), PipelineRunSpec{
+		PipelineID:                  EncodeID("pipelines/orders/pipeline.yml"),
+		ExpectedConfigurationDigest: strings.Repeat("a", 64),
+	}, nil, nil)
+
+	require.Equal(t, "error", result.Status)
+	assert.Contains(t, result.Error, "execution configuration changed after plan confirmation")
 }
 
 func TestExecutionServiceHoldsWorkspaceLeaseThroughDurablePipelineCompletion(t *testing.T) {

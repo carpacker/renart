@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -79,7 +80,12 @@ func TestResolveTriggerRunSourceRejectsAmbiguousOrUnavailableSource(t *testing.T
 func TestMaterializeExactRunSnapshotUsesPinAndCleansSandbox(t *testing.T) {
 	t.Parallel()
 	store, versionID := deployTriggerTestSnapshot(t, "pipeline-a")
-	spec := service.PipelineRunSpec{SnapshotVersionID: "  " + versionID + "  "}
+	deployed, err := store.ValidateMetadata(context.Background(), versionID, "pipeline-a")
+	require.NoError(t, err)
+	spec := service.PipelineRunSpec{
+		SnapshotVersionID:    "  " + versionID + "  ",
+		ExpectedSourceMerkle: deployed.MerkleRoot,
+	}
 	var logs string
 
 	cleanup, err := materializeExactRunSnapshot(
@@ -98,6 +104,64 @@ func TestMaterializeExactRunSnapshotUsesPinAndCleansSandbox(t *testing.T) {
 	cleanup()
 	_, err = os.Stat(sandbox)
 	assert.ErrorIs(t, err, os.ErrNotExist)
+}
+
+func TestResolveRunSnapshotFreezesConfirmedWorkingTreeSource(t *testing.T) {
+	t.Parallel()
+	workspace := t.TempDir()
+	pipelineDir := filepath.Join(workspace, "analytics")
+	require.NoError(t, os.MkdirAll(filepath.Join(pipelineDir, "assets"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(pipelineDir, "pipeline.yml"), []byte("name: analytics\n"), 0o644))
+	assetPath := filepath.Join(pipelineDir, "assets", "orders.sql")
+	require.NoError(t, os.WriteFile(assetPath, []byte("select 1"), 0o644))
+	manifest, err := snapshot.CollectManifestHashes(pipelineDir)
+	require.NoError(t, err)
+
+	server := &webServer{workspaceRoot: workspace}
+	spec := service.PipelineRunSpec{
+		PipelineID:           service.EncodeID("analytics"),
+		ExpectedSourceMerkle: snapshot.ManifestRoot(manifest),
+	}
+	cleanup, err := server.resolveRunSnapshot(context.Background(), &spec, false, nil)
+	require.NoError(t, err)
+	defer cleanup()
+	require.NotEmpty(t, spec.SnapshotDir)
+	require.NoError(t, os.WriteFile(assetPath, []byte("select 2"), 0o644))
+	copied, err := os.ReadFile(filepath.Join(spec.SnapshotDir, "assets", "orders.sql"))
+	require.NoError(t, err)
+	assert.Equal(t, "select 1", string(copied))
+}
+
+func TestResolveRunSnapshotRejectsChangedConfirmedSource(t *testing.T) {
+	t.Parallel()
+	workspace := t.TempDir()
+	pipelineDir := filepath.Join(workspace, "analytics")
+	require.NoError(t, os.MkdirAll(pipelineDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(pipelineDir, "pipeline.yml"), []byte("name: analytics\n"), 0o644))
+	server := &webServer{workspaceRoot: workspace}
+	spec := service.PipelineRunSpec{
+		PipelineID:           service.EncodeID("analytics"),
+		ExpectedSourceMerkle: strings.Repeat("0", 64),
+	}
+
+	cleanup, err := server.resolveRunSnapshot(context.Background(), &spec, false, nil)
+	cleanup()
+	require.ErrorContains(t, err, "pipeline source changed after plan confirmation")
+	assert.Empty(t, spec.SnapshotDir)
+}
+
+func TestMaterializeExactRunSnapshotRejectsChangedConfirmedDeployment(t *testing.T) {
+	t.Parallel()
+	store, versionID := deployTriggerTestSnapshot(t, "pipeline-a")
+	spec := service.PipelineRunSpec{
+		SnapshotVersionID:    versionID,
+		ExpectedSourceMerkle: strings.Repeat("0", 64),
+	}
+
+	cleanup, err := materializeExactRunSnapshot(context.Background(), store, "pipeline-a", "", false, &spec, nil)
+	cleanup()
+	require.ErrorContains(t, err, "pipeline source changed after plan confirmation")
+	assert.Empty(t, spec.SnapshotDir)
 }
 
 func TestResolveRunSnapshotUsesAdmittedUUIDAfterPipelinePathChanges(t *testing.T) {

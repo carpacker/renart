@@ -52,11 +52,35 @@ func directPathReferencesAsset(inputPath string) bool {
 }
 
 func getDirectPipelineAndAsset(ctx context.Context, workspaceRoot, inputPath string, fs afero.Fs) (*directPipelineInfo, error) {
-	return getDirectPipelineAndAssetWithConfigLoader(ctx, workspaceRoot, inputPath, fs, loadSelectedConfigFS)
+	return getDirectPipelineAndAssetWithConfigLoader(ctx, workspaceRoot, inputPath, fs, "", loadSelectedConfigFS)
 }
 
 func getDirectPipelineAndAssetReadOnly(ctx context.Context, workspaceRoot, inputPath string, fs afero.Fs) (*directPipelineInfo, error) {
-	return getDirectPipelineAndAssetWithConfigLoader(ctx, workspaceRoot, inputPath, fs, loadSelectedConfigReadOnlyFS)
+	return getDirectPipelineAndAssetWithConfigLoader(ctx, workspaceRoot, inputPath, fs, "", loadSelectedConfigReadOnlyFS)
+}
+
+// getDirectPipelineAndAssetReadOnlyWithConfigPath resolves source files under
+// workspaceRoot while loading configuration from an explicit, server-owned
+// path. Snapshot planning uses this to render immutable pipeline files from a
+// temporary directory without copying credentials or .bruin.yml into it.
+func getDirectPipelineAndAssetReadOnlyWithConfigPath(
+	ctx context.Context,
+	workspaceRoot string,
+	inputPath string,
+	fs afero.Fs,
+	configFilePath string,
+) (*directPipelineInfo, error) {
+	if strings.TrimSpace(configFilePath) == "" {
+		return nil, fmt.Errorf("configuration path is required")
+	}
+	return getDirectPipelineAndAssetWithConfigLoader(
+		ctx,
+		workspaceRoot,
+		inputPath,
+		fs,
+		configFilePath,
+		loadSelectedConfigReadOnlyFS,
+	)
 }
 
 func getDirectPipelineAndAssetWithConfigLoader(
@@ -64,14 +88,17 @@ func getDirectPipelineAndAssetWithConfigLoader(
 	workspaceRoot string,
 	inputPath string,
 	fs afero.Fs,
+	configFilePath string,
 	loadConfig func(afero.Fs, string, string) (*config.Config, error),
 ) (*directPipelineInfo, error) {
 	resolvedInputPath := resolveDirectPath(workspaceRoot, inputPath)
-	repoRoot, err := git.FindRepoFromPath(resolvedInputPath)
-	if err != nil {
-		return nil, err
+	if strings.TrimSpace(configFilePath) == "" {
+		repoRoot, err := git.FindRepoFromPath(resolvedInputPath)
+		if err != nil {
+			return nil, err
+		}
+		configFilePath = filepath.Join(repoRoot.Path, ".bruin.yml")
 	}
-	configFilePath := filepath.Join(repoRoot.Path, ".bruin.yml")
 	cm, err := loadConfig(fs, configFilePath, "")
 	if err != nil {
 		return nil, err

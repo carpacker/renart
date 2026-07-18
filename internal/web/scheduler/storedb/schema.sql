@@ -35,6 +35,37 @@ CREATE TABLE IF NOT EXISTS pipeline_run_specs (
     FOREIGN KEY(run_id) REFERENCES pipeline_runs(id) ON DELETE CASCADE
 );
 
+-- Redacted reviewed-plan history is separate from the private RunSpec: the
+-- typed units can be exposed in run details without exposing authorization.
+CREATE TABLE IF NOT EXISTS pipeline_run_plans (
+    run_id TEXT PRIMARY KEY,
+    version INTEGER NOT NULL CHECK (version > 0),
+    body TEXT NOT NULL CHECK (json_valid(body)),
+    created_at TEXT NOT NULL,
+    FOREIGN KEY(run_id) REFERENCES pipeline_runs(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS pipeline_run_units (
+    run_id TEXT NOT NULL,
+    position INTEGER NOT NULL CHECK (position >= 0),
+    asset_id TEXT NOT NULL CHECK (asset_id <> ''),
+    asset_name TEXT NOT NULL CHECK (asset_name <> ''),
+    start_date TEXT NOT NULL,
+    end_date TEXT NOT NULL,
+    render_index INTEGER NOT NULL CHECK (render_index >= 0),
+    reason TEXT NOT NULL CHECK (reason <> ''),
+    status TEXT NOT NULL DEFAULT 'queued'
+        CHECK (status IN ('queued', 'running', 'success', 'failed', 'cancelled', 'skipped')),
+    started_at TEXT,
+    finished_at TEXT,
+    error TEXT,
+    PRIMARY KEY (run_id, position),
+    FOREIGN KEY(run_id) REFERENCES pipeline_runs(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_pipeline_run_units_run_status
+    ON pipeline_run_units (run_id, status, position);
+
 -- Pipeline-scope execution claims namespaced path and stable-UUID aliases. The
 -- path alias bridges pre-upgrade active rows; UUID keeps the slot stable across
 -- a rename or move.

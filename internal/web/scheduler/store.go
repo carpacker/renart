@@ -499,6 +499,31 @@ func (s *Store) insertRunSpec(ctx context.Context, execer runSpecExecer, runID s
 	return err
 }
 
+func (s *Store) insertRunPlan(ctx context.Context, execer runSpecExecer, runID string, plan PipelineRunPlan) error {
+	body, err := marshalPipelineRunPlan(plan)
+	if err != nil {
+		return err
+	}
+	_, err = execer.ExecContext(ctx, `
+		INSERT INTO pipeline_run_plans (run_id, version, body, created_at)
+		VALUES (?, ?, ?, ?)`, runID, plan.Version, string(body), formatTime(time.Now().UTC()))
+	if err != nil {
+		return err
+	}
+	for position, unit := range plan.ExecutionUnits {
+		if _, err := execer.ExecContext(ctx, `
+			INSERT INTO pipeline_run_units (
+				run_id, position, asset_id, asset_name, start_date, end_date,
+				render_index, reason, status
+			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			runID, position, unit.AssetID, unit.AssetName, unit.StartDate, unit.EndDate,
+			unit.RenderIndex, unit.Reason, string(PipelineRunUnitQueued)); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func (s *Store) CreateWithSpec(ctx context.Context, run PipelineRun, spec runSpecV1) (string, error) {
 	if err := spec.validate(); err != nil {
 		return "", err
@@ -563,6 +588,158 @@ func (s *Store) GetRunSpec(ctx context.Context, runID string) (runSpecV1, bool, 
 		return runSpecV1{}, true, &invalidRunSpecError{RunID: runID, Err: err}
 	}
 	return spec, true, nil
+}
+
+// GetRunPlan returns the immutable, redacted plan reviewed at admission. Runs
+// admitted outside the plan-confirmation path, including legacy and scheduled
+// runs, do not have one yet.
+func (s *Store) GetRunPlan(ctx context.Context, runID string) (PipelineRunPlan, bool, error) {
+	runID = strings.TrimSpace(runID)
+	if runID == "" {
+		return PipelineRunPlan{}, false, errors.New("run id is required")
+	}
+	var version int
+	var body string
+	err := s.db.QueryRowContext(ctx, `
+		SELECT version, body
+		FROM pipeline_run_plans
+		WHERE run_id = ?`, runID).Scan(&version, &body)
+	if errors.Is(err, sql.ErrNoRows) {
+		return PipelineRunPlan{}, false, nil
+	}
+	if err != nil {
+		return PipelineRunPlan{}, false, err
+	}
+	plan, err := unmarshalPipelineRunPlan(version, []byte(body))
+	if err != nil {
+		return PipelineRunPlan{}, true, &invalidRunPlanError{RunID: runID, Err: err}
+	}
+	return plan, true, nil
+}
+
+func (s *Store) ListRunUnits(ctx context.Context, runID string) ([]PipelineRunUnit, error) {
+	runID = strings.TrimSpace(runID)
+	if runID == "" {
+		return nil, errors.New("run id is required")
+	}
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT position, asset_id, asset_name, start_date, end_date, render_index,
+		       reason, status, started_at, finished_at, error
+		FROM pipeline_run_units
+		WHERE run_id = ?
+		ORDER BY position`, runID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	units := make([]PipelineRunUnit, 0)
+	for rows.Next() {
+		var unit PipelineRunUnit
+		var startDate, endDate, status string
+		var startedAt, finishedAt, unitError sql.NullString
+		if err := rows.Scan(
+			&unit.Position, &unit.AssetID, &unit.AssetName, &startDate, &endDate,
+			&unit.RenderIndex, &unit.Reason, &status, &startedAt, &finishedAt, &unitError,
+		); err != nil {
+			return nil, err
+		}
+		unit.StartDate = startDate
+		unit.EndDate = endDate
+		unit.Status = PipelineRunUnitStatus(status)
+		if !validPipelineRunUnitStatus(unit.Status) {
+			return nil, fmt.Errorf("pipeline run %s unit %d has invalid status %q", runID, unit.Position, status)
+		}
+		unit.StartedAt = parseOptionalTime(startedAt)
+		unit.FinishedAt = parseOptionalTime(finishedAt)
+		unit.Error = unitError.String
+		units = append(units, unit)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return units, nil
+}
+
+func parseOptionalTime(value sql.NullString) *time.Time {
+	if !value.Valid || strings.TrimSpace(value.String) == "" {
+		return nil
+	}
+	parsed := parseTimeValue(value.String)
+	if parsed.IsZero() {
+		return nil
+	}
+	return &parsed
+}
+
+func validPipelineRunUnitStatus(status PipelineRunUnitStatus) bool {
+	switch status {
+	case PipelineRunUnitQueued, PipelineRunUnitRunning, PipelineRunUnitSuccess,
+		PipelineRunUnitFailed, PipelineRunUnitCancelled, PipelineRunUnitSkipped:
+		return true
+	default:
+		return false
+	}
+}
+
+func terminalPipelineRunUnitStatus(status PipelineRunUnitStatus) bool {
+	switch status {
+	case PipelineRunUnitSuccess, PipelineRunUnitFailed, PipelineRunUnitCancelled, PipelineRunUnitSkipped:
+		return true
+	default:
+		return false
+	}
+}
+
+func (s *Store) UpdateRunUnit(ctx context.Context, runID string, event PipelineRunUnitEvent) error {
+	runID = strings.TrimSpace(runID)
+	if runID == "" {
+		return errors.New("run id is required")
+	}
+	if event.Position < 0 {
+		return errors.New("pipeline run unit position cannot be negative")
+	}
+	if event.Status != PipelineRunUnitRunning && !terminalPipelineRunUnitStatus(event.Status) {
+		return fmt.Errorf("invalid pipeline run unit event status %q", event.Status)
+	}
+	now := time.Now().UTC()
+	if event.Status == PipelineRunUnitRunning {
+		startedAt := now
+		if event.StartedAt != nil && !event.StartedAt.IsZero() {
+			startedAt = event.StartedAt.UTC()
+		}
+		result, err := s.db.ExecContext(ctx, `
+			UPDATE pipeline_run_units
+			SET status = ?, started_at = COALESCE(started_at, ?)
+			WHERE run_id = ? AND position = ? AND status IN (?, ?)`,
+			string(PipelineRunUnitRunning), formatTime(startedAt), runID, event.Position,
+			string(PipelineRunUnitQueued), string(PipelineRunUnitRunning))
+		return expectOneRunUnitUpdate(result, err, runID, event.Position, event.Status)
+	}
+	finishedAt := now
+	if event.FinishedAt != nil && !event.FinishedAt.IsZero() {
+		finishedAt = event.FinishedAt.UTC()
+	}
+	result, err := s.db.ExecContext(ctx, `
+		UPDATE pipeline_run_units
+		SET status = ?, finished_at = ?, error = ?
+		WHERE run_id = ? AND position = ? AND status IN (?, ?)`,
+		string(event.Status), formatTime(finishedAt), stringValue(event.Error), runID, event.Position,
+		string(PipelineRunUnitQueued), string(PipelineRunUnitRunning))
+	return expectOneRunUnitUpdate(result, err, runID, event.Position, event.Status)
+}
+
+func expectOneRunUnitUpdate(result sql.Result, err error, runID string, position int, status PipelineRunUnitStatus) error {
+	if err != nil {
+		return err
+	}
+	updated, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if updated != 1 {
+		return fmt.Errorf("pipeline run %s unit %d cannot transition to %s", runID, position, status)
+	}
+	return nil
 }
 
 func (s *Store) SetRunSpecIfMissing(ctx context.Context, runID string, spec runSpecV1) (runSpecV1, error) {
@@ -1030,12 +1207,24 @@ func (s *Store) Finish(ctx context.Context, id string, status RunStatus, runErr 
 	if runErr != nil {
 		message = runErr.Error()
 	}
-	return s.queries.FinishRun(ctx, storedb.FinishRunParams{
+	finishedAt := time.Now().UTC()
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	if err := finishOpenRunUnits(ctx, tx, id, status, finishedAt, message); err != nil {
+		return err
+	}
+	if err := s.queries.WithTx(tx).FinishRun(ctx, storedb.FinishRunParams{
 		Status:     string(status),
-		FinishedAt: stringValue(formatTime(time.Now().UTC())),
+		FinishedAt: stringValue(formatTime(finishedAt)),
 		Error:      stringValue(message),
 		ID:         id,
-	})
+	}); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 // FinishScheduledSuccess commits a successful scheduled run and its progress
@@ -1127,6 +1316,9 @@ func (s *Store) FinalizeExecution(
 	if err := finishOpenRunSteps(ctx, tx, id, status, at, message); err != nil {
 		return err
 	}
+	if err := finishOpenRunUnits(ctx, tx, id, status, at, message); err != nil {
+		return err
+	}
 	result, err := tx.ExecContext(ctx, `
 		UPDATE pipeline_runs
 		SET status = ?, finished_at = ?, error = ?
@@ -1153,6 +1345,42 @@ func (s *Store) FinalizeExecution(
 		}
 	}
 	return tx.Commit()
+}
+
+func finishOpenRunUnits(ctx context.Context, execer runSlotExecer, runID string, status RunStatus, at time.Time, message string) error {
+	if status == RunStatusSuccess {
+		var open int
+		if err := execer.QueryRowContext(ctx, `
+			SELECT COUNT(*)
+			FROM pipeline_run_units
+			WHERE run_id = ? AND status IN (?, ?)`,
+			runID, string(PipelineRunUnitQueued), string(PipelineRunUnitRunning)).Scan(&open); err != nil {
+			return err
+		}
+		if open > 0 {
+			return fmt.Errorf("pipeline run %s cannot succeed with %d unfinished execution units", runID, open)
+		}
+		return nil
+	}
+	unitStatus := PipelineRunUnitFailed
+	if status == RunStatusCancelled {
+		unitStatus = PipelineRunUnitCancelled
+	}
+	if _, err := execer.ExecContext(ctx, `
+		UPDATE pipeline_run_units
+		SET status = ?, finished_at = ?,
+		    error = CASE WHEN ? = '' THEN error WHEN error IS NULL OR error = '' THEN ? ELSE error END
+		WHERE run_id = ? AND status = ?`,
+		string(unitStatus), formatTime(at), message, message, runID, string(PipelineRunUnitRunning)); err != nil {
+		return err
+	}
+	_, err := execer.ExecContext(ctx, `
+		UPDATE pipeline_run_units
+		SET status = ?, finished_at = ?,
+		    error = CASE WHEN ? = '' THEN error WHEN error IS NULL OR error = '' THEN ? ELSE error END
+		WHERE run_id = ? AND status = ?`,
+		string(PipelineRunUnitSkipped), formatTime(at), message, message, runID, string(PipelineRunUnitQueued))
+	return err
 }
 
 func (s *Store) List(ctx context.Context, filter RunFilter) (RunList, error) {
@@ -1393,6 +1621,20 @@ func (s *Store) HasActiveRun(ctx context.Context, pipelineID string) (bool, erro
 		RunningStatus: string(RunStatusRunning),
 	})
 	return count > 0, err
+}
+
+// ActiveRunID returns the owner of the atomic path/UUID run slot. Checking
+// both aliases keeps pre-RunSpec path-only rows visible while newer runs are
+// protected against pipeline renames by the stable UUID slot.
+func (s *Store) ActiveRunID(ctx context.Context, pipelineID, pipelineUUID string) (string, error) {
+	active, found, err := s.pipelineRunActiveError(ctx, pipelineID, runSlotKeys(PipelineRun{
+		PipelineID:   strings.TrimSpace(pipelineID),
+		PipelineUUID: strings.TrimSpace(pipelineUUID),
+	}))
+	if err != nil || !found {
+		return "", err
+	}
+	return active.ActiveRunID, nil
 }
 
 func (s *Store) LastInterval(ctx context.Context, pipeline string) (time.Time, bool, error) {

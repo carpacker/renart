@@ -140,6 +140,14 @@ func (c *Client) RenderAsset(ctx context.Context, assetID string, request servic
 	return result, err
 }
 
+// PlanPipeline resolves a read-only execution plan through the same service
+// used by the Build review surface.
+func (c *Client) PlanPipeline(ctx context.Context, pipelineID string, request service.PipelinePlanRequest) (service.PipelinePlan, error) {
+	var result service.PipelinePlan
+	err := c.postJSON(ctx, "/pipelines/"+url.PathEscape(pipelineID)+"/plan", request, &result)
+	return result, err
+}
+
 // MaterializePipelineStream runs a whole pipeline through the server,
 // forwarding output chunks as they stream.
 func (c *Client) MaterializePipelineStream(ctx context.Context, pipelineID string, query url.Values, onChunk func(string)) (StreamDone, error) {

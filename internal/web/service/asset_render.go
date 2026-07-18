@@ -98,6 +98,7 @@ type AssetRenderRequest struct {
 
 type AssetRenderSource struct {
 	Kind         string `json:"kind"`
+	VersionID    string `json:"version_id,omitempty"`
 	PipelinePath string `json:"pipeline_path"`
 	MerkleRoot   string `json:"merkle_root"`
 }
@@ -199,6 +200,8 @@ type AssetRenderService struct {
 	collectManifest    assetRenderManifestCollector
 	collectSourceState assetRenderSourceStateCollector
 	fingerprintEngine  *fingerprint.Engine
+	configPath         string
+	source             AssetRenderSource
 }
 
 func NewAssetRenderService(workspaceRoot string) *AssetRenderService {
@@ -210,6 +213,20 @@ func NewAssetRenderService(workspaceRoot string) *AssetRenderService {
 		collectSourceState: snapshot.CollectSourceState,
 		fingerprintEngine:  fingerprint.NewEngine(),
 	}
+}
+
+// newAssetRenderServiceForSource creates the exact-source renderer used by
+// pipeline planning. It remains package-private so HTTP asset rendering cannot
+// accept client-owned paths or source metadata.
+func newAssetRenderServiceForSource(
+	workspaceRoot string,
+	configPath string,
+	source AssetRenderSource,
+) *AssetRenderService {
+	service := NewAssetRenderService(workspaceRoot)
+	service.configPath = configPath
+	service.source = source
+	return service
 }
 
 func (s *AssetRenderService) computeAssetRenderFingerprint(
@@ -388,7 +405,18 @@ func (s *AssetRenderService) renderPath(ctx context.Context, assetPath string, r
 		}
 	}()
 
-	pp, err := getDirectPipelineAndAssetReadOnly(ctx, s.workspaceRoot, assetPath, fs)
+	var pp *directPipelineInfo
+	if strings.TrimSpace(s.configPath) != "" {
+		pp, err = getDirectPipelineAndAssetReadOnlyWithConfigPath(
+			ctx,
+			s.workspaceRoot,
+			assetPath,
+			fs,
+			s.configPath,
+		)
+	} else {
+		pp, err = getDirectPipelineAndAssetReadOnly(ctx, s.workspaceRoot, assetPath, fs)
+	}
 	if err != nil {
 		return AssetRenderResult{}, fmt.Errorf("resolve asset for rendering: %w", err)
 	}
@@ -442,14 +470,22 @@ func (s *AssetRenderService) renderPath(ctx context.Context, assetPath string, r
 	effectiveVars := fingerprint.EffectiveVars(pp.Pipeline, nil)
 	coverageVariablesHash := fingerprint.AllVarsHash(effectiveVars)
 
+	source := s.source
+	if strings.TrimSpace(source.Kind) == "" {
+		source.Kind = "working_tree"
+	}
+	if strings.TrimSpace(source.PipelinePath) == "" {
+		source.PipelinePath = workspaceRelativeRenderPath(s.workspaceRoot, pp.Pipeline.DefinitionFile.Path)
+	}
+	if strings.TrimSpace(source.MerkleRoot) != "" && source.MerkleRoot != sourceMerkleRoot {
+		return AssetRenderResult{}, ErrAssetRenderSourceChanged
+	}
+	source.MerkleRoot = sourceMerkleRoot
+
 	result = AssetRenderResult{
 		Status: AssetRenderStatusOK,
 		Provenance: AssetRenderProvenance{
-			Source: AssetRenderSource{
-				Kind:         "working_tree",
-				PipelinePath: workspaceRelativeRenderPath(s.workspaceRoot, pp.Pipeline.DefinitionFile.Path),
-				MerkleRoot:   sourceMerkleRoot,
-			},
+			Source:   source,
 			Pipeline: pp.Pipeline.Name,
 			Context: AssetRenderContext{
 				Environment:           pp.Config.SelectedEnvironmentName,

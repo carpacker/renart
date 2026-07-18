@@ -68,6 +68,25 @@ func newFixture(t *testing.T, assets ...*pipeline.Asset) *fixture {
 	return f
 }
 
+func TestEvaluateUsesResolvedPipelineWithoutMutatingCachedPanelState(t *testing.T) {
+	f := newFixture(t, sqlAsset("source", "select 1"))
+	alternate := *f.pipeline
+	alternate.Assets = []*pipeline.Asset{sqlAsset("snapshot_source", "select 2")}
+
+	result, err := f.service.Evaluate(context.Background(), Selection{
+		PipelineUUID: "p",
+		Environment:  "dev",
+	}, &alternate)
+	require.NoError(t, err)
+	require.Len(t, result.Assets, 1)
+	assert.Equal(t, "snapshot_source", result.Assets[0].AssetName)
+
+	f.service.mu.Lock()
+	defer f.service.mu.Unlock()
+	assert.Empty(t, f.service.selections)
+	assert.Empty(t, f.service.snapshots)
+}
+
 // recordRun simulates a completed run exactly as the matlog recorder does: it
 // fingerprints the current pipeline, derives the *achieved* fingerprint for the
 // named assets (folding in each upstream's last-recorded fingerprint for

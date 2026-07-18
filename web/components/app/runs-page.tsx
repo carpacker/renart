@@ -5,6 +5,7 @@ import {
   AlertTriangle,
   ChevronLeft,
   ChevronRight,
+  ListTree,
   Loader2,
   Play,
   RotateCw,
@@ -33,7 +34,13 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { formatSchedulerDate, usePipelineScheduler } from "@/hooks/use-pipeline-scheduler";
 import { workspaceAtom } from "@/lib/atoms/domains/workspace";
 import { activePipelineRunConflict, type PipelineRunSource } from "@/lib/api-scheduler";
-import type { PipelineRun, PipelineRunLogLine, PipelineRunStep } from "@/lib/types";
+import type {
+  PipelineRun,
+  PipelineRunLogLine,
+  PipelineRunPlan,
+  PipelineRunStep,
+  PipelineRunUnit,
+} from "@/lib/types";
 import { cn } from "@/lib/utils";
 import { awaitWorkspaceSaves } from "@/lib/workspace-save-barrier";
 
@@ -250,6 +257,8 @@ export function AppRunDetailPage({
     selectedRun,
     logs,
     steps,
+    plan,
+    units,
     loadingRunId,
     busyPipeline,
     runDetailError,
@@ -397,7 +406,7 @@ export function AppRunDetailPage({
     <AppPage>
       <PageHeader
         title={`Run ${run.id}`}
-        subtitle={`Run of ${run.pipeline} · ${runEnvironmentLabel} · ${sourceLabel} · ${steps.length || "unknown"} assets · ${formatRunDuration(run)}`}
+        subtitle={`Run of ${run.pipeline} · ${runEnvironmentLabel} · ${sourceLabel} · ${plan ? `${units.length} execution units` : `${steps.length || "unknown"} assets`} · ${formatRunDuration(run)}`}
         actions={
           <div className="flex items-center gap-2">
             <Button asChild variant="ghost" size="icon-sm">
@@ -504,6 +513,12 @@ export function AppRunDetailPage({
                     <Play />
                     Events
                   </TabsTrigger>
+                  {plan ? (
+                    <TabsTrigger value="plan" className={runTabsTriggerClass}>
+                      <ListTree />
+                      Plan
+                    </TabsTrigger>
+                  ) : null}
                   <TabsTrigger value="output" className={runTabsTriggerClass}>
                     <Terminal />
                     Output
@@ -522,6 +537,14 @@ export function AppRunDetailPage({
                 assetIdsByName={assetIdsByName}
               />
             </TabsContent>
+            {plan ? (
+              <TabsContent
+                value="plan"
+                className="m-0 min-h-0 flex-1 overflow-hidden data-[state=inactive]:hidden"
+              >
+                <RunPlanPanel run={run} plan={plan} units={units} assetIdsByName={assetIdsByName} />
+              </TabsContent>
+            ) : null}
             <TabsContent
               value="output"
               className="m-0 min-h-0 flex-1 overflow-hidden bg-zinc-950 data-[state=inactive]:hidden"
@@ -533,6 +556,290 @@ export function AppRunDetailPage({
       </div>
     </AppPage>
   );
+}
+
+function RunPlanPanel({
+  run,
+  plan,
+  units,
+  assetIdsByName,
+}: {
+  run: PipelineRun;
+  plan: PipelineRunPlan;
+  units: PipelineRunUnit[];
+  assetIdsByName: Map<string, string>;
+}) {
+  const artifact = plan.artifact;
+  const omittedUnits = plan.preview?.omitted_execution_units ?? [];
+  const source = artifact.source;
+  const context = artifact.context;
+  const facts = [
+    ["Source", formatRunPlanSource(source.kind, source.version_id)],
+    ["Environment", context.environment || "default"],
+    ["Scope", formatRunPlanSelection(plan)],
+    [
+      "Window",
+      `${formatSchedulerDate(context.start_date)} → ${formatSchedulerDate(context.end_date)}`,
+    ],
+    ["Execution time", formatSchedulerDate(plan.execution_time)],
+    ["Plan ID", plan.plan_id],
+    ["Source identity", plan.source_merkle],
+    ["Configuration", plan.configuration_digest],
+  ];
+  if (plan.selection.data_state_token) {
+    facts.push(["Data state", plan.selection.data_state_token]);
+  }
+
+  return (
+    <ScrollArea className="h-full min-h-0" viewportClassName="h-full">
+      <div className="min-w-0" data-testid="run-plan-panel">
+        <div className="grid border-b sm:grid-cols-2 xl:grid-cols-4">
+          {facts.map(([label, value]) => (
+            <RunPlanFact key={label} label={label} value={value} />
+          ))}
+        </div>
+
+        {omittedUnits.length > 0 ? (
+          <div className="border-b p-3">
+            <Alert>
+              <AlertTriangle />
+              <AlertTitle>Needed work changed before confirmation</AlertTitle>
+              <AlertDescription>
+                {omittedUnits.length} reviewed execution{" "}
+                {omittedUnits.length === 1 ? "unit was" : "units were"} no longer needed and
+                omitted. No new work was added without review.
+              </AlertDescription>
+            </Alert>
+          </div>
+        ) : null}
+
+        <section aria-labelledby="run-plan-units-heading" className="border-b">
+          <div className="flex flex-wrap items-baseline justify-between gap-2 px-3 py-2">
+            <div>
+              <h3 id="run-plan-units-heading" className="text-sm font-medium">
+                Execution units
+              </h3>
+              <p className="text-xs text-muted-foreground">
+                Final asset and window order admitted for this run.
+              </p>
+            </div>
+            <span className="font-mono text-xs text-muted-foreground">
+              {units.length} final · {omittedUnits.length} omitted
+            </span>
+          </div>
+          {units.length > 0 ? (
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead className="h-8 w-12 text-xs">#</TableHead>
+                  <TableHead className="h-8 text-xs">Asset</TableHead>
+                  <TableHead className="h-8 text-xs">Window</TableHead>
+                  <TableHead className="h-8 text-xs">Reason</TableHead>
+                  <TableHead className="h-8 text-xs">Status</TableHead>
+                  <TableHead className="h-8 text-right text-xs">Duration</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {units.map((unit) => {
+                  const assetId = assetIdsByName.get(unit.asset_name);
+                  return (
+                    <TableRow key={unit.position} data-testid="run-plan-unit">
+                      <TableCell className="py-2 font-mono text-xs text-muted-foreground">
+                        {unit.position + 1}
+                      </TableCell>
+                      <TableCell className="max-w-64 py-2 font-mono text-xs">
+                        {assetId ? (
+                          <Link
+                            to="/pipelines/$pipelineId/assets/$assetId/split"
+                            params={{ pipelineId: run.pipeline_id, assetId }}
+                            className="break-words text-primary hover:underline"
+                          >
+                            {unit.asset_name}
+                          </Link>
+                        ) : (
+                          <span className="break-words">{unit.asset_name}</span>
+                        )}
+                      </TableCell>
+                      <TableCell className="py-2 text-xs text-muted-foreground">
+                        <span className="whitespace-nowrap">
+                          {formatSchedulerDate(unit.start_date)}
+                        </span>
+                        <span className="mx-1" aria-hidden="true">
+                          →
+                        </span>
+                        <span className="whitespace-nowrap">
+                          {formatSchedulerDate(unit.end_date)}
+                        </span>
+                      </TableCell>
+                      <TableCell className="max-w-56 py-2 text-xs">
+                        <span>{humanizePlanValue(unit.reason)}</span>
+                        {unit.error ? (
+                          <span className="mt-0.5 block text-destructive">{unit.error}</span>
+                        ) : null}
+                      </TableCell>
+                      <TableCell className="py-2">
+                        <RunUnitStatusPill status={unit.status} />
+                      </TableCell>
+                      <TableCell className="py-2 text-right font-mono text-xs text-muted-foreground">
+                        {formatRunUnitDuration(unit)}
+                      </TableCell>
+                    </TableRow>
+                  );
+                })}
+              </TableBody>
+            </Table>
+          ) : (
+            <div className="border-t border-dashed px-3 py-6 text-center text-xs text-muted-foreground">
+              All reviewed Needed work became fresh before confirmation, so this run had no physical
+              execution units.
+            </div>
+          )}
+        </section>
+
+        <section aria-labelledby="run-plan-stages-heading">
+          <div className="flex flex-wrap items-baseline justify-between gap-2 px-3 py-2">
+            <div>
+              <h3 id="run-plan-stages-heading" className="text-sm font-medium">
+                Planned stages
+              </h3>
+              <p className="text-xs text-muted-foreground">
+                Redacted stage metadata retained from the reviewed plan; statement text is not
+                stored.
+              </p>
+            </div>
+            <span className="font-mono text-xs text-muted-foreground">
+              {artifact.summary.assets} assets · {artifact.summary.stages} stages
+            </span>
+          </div>
+          <div className="border-t">
+            {artifact.assets.map((asset) => {
+              const assetId = assetIdsByName.get(asset.name);
+              return (
+                <div key={asset.id} className="border-b px-3 py-2 last:border-b-0">
+                  <div className="flex min-w-0 flex-wrap items-center gap-2">
+                    {assetId ? (
+                      <Link
+                        to="/pipelines/$pipelineId/assets/$assetId/split"
+                        params={{ pipelineId: run.pipeline_id, assetId }}
+                        className="min-w-0 break-words font-mono text-xs text-primary hover:underline"
+                      >
+                        {asset.name}
+                      </Link>
+                    ) : (
+                      <span className="min-w-0 break-words font-mono text-xs">{asset.name}</span>
+                    )}
+                    <Badge variant="outline" size="xs">
+                      {asset.type}
+                    </Badge>
+                    {asset.inclusion_reasons.map((reason) => (
+                      <Badge key={reason} variant="muted" size="xs">
+                        {humanizePlanValue(reason)}
+                      </Badge>
+                    ))}
+                  </div>
+                  <div className="mt-2 space-y-1.5">
+                    {asset.renders.map((render, renderIndex) => (
+                      <div
+                        key={`${asset.id}-${render.start_date}-${render.end_date}-${renderIndex}`}
+                        className="flex min-w-0 flex-wrap items-center gap-1.5 text-xs text-muted-foreground"
+                      >
+                        <span className="mr-1 font-mono text-[11px]">
+                          {formatSchedulerDate(render.start_date)} →{" "}
+                          {formatSchedulerDate(render.end_date)}
+                        </span>
+                        {render.stages.map((stage, stageIndex) => (
+                          <Badge
+                            key={`${stage.kind}-${stage.label ?? ""}-${stageIndex}`}
+                            variant={runPlanStageBadgeVariant(stage.status, stage.fidelity)}
+                            size="xs"
+                            title={stage.message}
+                          >
+                            {stage.label || humanizePlanValue(stage.kind)} · {stage.fidelity}
+                          </Badge>
+                        ))}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </section>
+      </div>
+    </ScrollArea>
+  );
+}
+
+function RunPlanFact({ label, value }: { label: string; value: string }) {
+  const shortened = shortenPlanIdentity(value);
+  return (
+    <div className="min-w-0 border-r px-3 py-2 last:border-r-0">
+      <div className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+        {label}
+      </div>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <div className="mt-0.5 truncate font-mono text-xs" title={value}>
+            {shortened}
+          </div>
+        </TooltipTrigger>
+        <TooltipContent className="max-w-lg break-all font-mono text-xs">{value}</TooltipContent>
+      </Tooltip>
+    </div>
+  );
+}
+
+function RunUnitStatusPill({ status }: { status: PipelineRunUnit["status"] }) {
+  if (status !== "skipped") {
+    return <StatusPill status={status} />;
+  }
+  return (
+    <span className="inline-flex items-center rounded-full bg-muted px-1.5 py-0.5 text-[11px] text-muted-foreground">
+      Skipped
+    </span>
+  );
+}
+
+function formatRunPlanSource(kind: string, versionId?: string) {
+  if (kind === "snapshot") {
+    return versionId ? `Deployment ${versionId}` : "Deployment";
+  }
+  return "Saved working tree";
+}
+
+function formatRunPlanSelection(plan: PipelineRunPlan) {
+  if (plan.selection.mode !== "asset") {
+    return humanizePlanValue(plan.selection.mode);
+  }
+  const scope = plan.selection.scope ? ` · ${humanizePlanValue(plan.selection.scope)}` : "";
+  return `${plan.selection.asset_name || "Selected asset"}${scope}`;
+}
+
+function humanizePlanValue(value: string) {
+  const normalized = value.trim().replaceAll("_", " ");
+  return normalized ? normalized[0].toUpperCase() + normalized.slice(1) : "Unknown";
+}
+
+function shortenPlanIdentity(value: string) {
+  return /^[a-f0-9]{32,}$/i.test(value) ? `${value.slice(0, 12)}…` : value;
+}
+
+function formatRunUnitDuration(unit: PipelineRunUnit) {
+  if (!unit.started_at || !unit.finished_at) return "-";
+  return formatDurationMs(
+    new Date(unit.finished_at).getTime() - new Date(unit.started_at).getTime(),
+  );
+}
+
+function runPlanStageBadgeVariant(
+  status: string,
+  fidelity: string,
+): "secondary" | "destructive" | "outline" | "muted" {
+  if (status === "error") return "destructive";
+  if (status === "unsupported" || fidelity === "unsupported" || fidelity === "runtime_only") {
+    return "muted";
+  }
+  return fidelity === "exact" ? "secondary" : "outline";
 }
 
 function RunTimelinePanel({ run, steps }: { run: PipelineRun; steps: PipelineRunStep[] }) {

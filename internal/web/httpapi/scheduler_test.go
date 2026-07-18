@@ -24,6 +24,10 @@ type schedulerHandlerStub struct {
 	triggerRequest    scheduler.TriggerRequest
 	updateErr         error
 	triggerErr        error
+	runPlan           scheduler.PipelineRunPlan
+	hasRunPlan        bool
+	runPlanErr        error
+	runUnits          []scheduler.PipelineRunUnit
 }
 
 func (s *schedulerHandlerStub) ListSchedules(context.Context) ([]scheduler.PipelineSchedule, error) {
@@ -59,6 +63,14 @@ func (s *schedulerHandlerStub) GetRun(context.Context, string) (scheduler.Pipeli
 	return scheduler.PipelineRun{}, nil, nil, nil
 }
 
+func (s *schedulerHandlerStub) GetRunPlan(context.Context, string) (scheduler.PipelineRunPlan, bool, error) {
+	return s.runPlan, s.hasRunPlan, s.runPlanErr
+}
+
+func (s *schedulerHandlerStub) ListRunUnits(context.Context, string) ([]scheduler.PipelineRunUnit, error) {
+	return s.runUnits, nil
+}
+
 func TestHandleTriggerPipelineRejectsInvalidOrClientOwnedContext(t *testing.T) {
 	t.Parallel()
 
@@ -83,6 +95,31 @@ func TestHandleTriggerPipelineRejectsInvalidOrClientOwnedContext(t *testing.T) {
 			assert.Zero(t, stub.triggerCalls)
 		})
 	}
+}
+
+func TestHandleGetRunIncludesReviewedPlanWhenPresent(t *testing.T) {
+	t.Parallel()
+	stub := &schedulerHandlerStub{
+		hasRunPlan: true,
+		runUnits: []scheduler.PipelineRunUnit{{
+			Position: 0, AssetName: "analytics.orders", Status: scheduler.PipelineRunUnitQueued,
+		}},
+		runPlan: scheduler.PipelineRunPlan{
+			Version:  scheduler.PipelineRunPlanVersionV1,
+			PlanID:   strings.Repeat("a", 64),
+			Artifact: []byte(`{"id":"reviewed-plan"}`),
+		},
+	}
+	router := chi.NewRouter()
+	RegisterSchedulerRoutes(router, &SchedulerAPI{Service: stub})
+	request := httptest.NewRequest(http.MethodGet, "/api/runs/run-id", nil)
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, request)
+
+	require.Equal(t, http.StatusOK, response.Code)
+	assert.Contains(t, response.Body.String(), `"plan":{"version":1`)
+	assert.Contains(t, response.Body.String(), `"artifact":{"id":"reviewed-plan"}`)
+	assert.Contains(t, response.Body.String(), `"units":[{"position":0`)
 }
 
 func TestHandleUpdatePipelineScheduleRequiresOneStrictJSONObject(t *testing.T) {

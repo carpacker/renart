@@ -1104,16 +1104,20 @@ type PipelineRunSpec struct {
 	Environment  string
 	// Scheduled is derived from the server-owned run origin. A queued manual
 	// run also has a RunID, so RunID must not be used for this distinction.
-	Scheduled            bool
-	SensorMode           string
-	DryRun               bool
-	FullRefresh          bool
-	Backfill             bool
-	StartDate            string
-	EndDate              string
-	ConfirmedEnvironment string
-	SnapshotDir          string
-	SnapshotVersionID    string
+	Scheduled                   bool
+	SensorMode                  string
+	DryRun                      bool
+	FullRefresh                 bool
+	Backfill                    bool
+	StartDate                   string
+	EndDate                     string
+	ConfirmedEnvironment        string
+	SnapshotDir                 string
+	SnapshotVersionID           string
+	ExecutionTime               string
+	ExpectedSourceMerkle        string
+	ExpectedConfigurationDigest string
+	Plan                        *PipelineExecutionPlan
 	// ConfigPath points the executor at .bruin.yml when the target directory
 	// is outside the workspace git repository (snapshot runs).
 	ConfigPath string
@@ -1124,9 +1128,34 @@ type PipelineRunSpec struct {
 	// OnTargetsResolved persists the complete value-only pipeline snapshot
 	// after effective configuration is selected and before the first task.
 	OnTargetsResolved func(ExecutionTargetSnapshot) error
+	// OnUnit persists progress for one exact asset/window execution unit.
+	OnUnit func(PipelineExecutionUnitEvent) error
 	// executionTargetSnapshot is populated internally by the executor callback
 	// and carried only on the synchronous completion event.
 	executionTargetSnapshot *ExecutionTargetSnapshot
+}
+
+type PipelineExecutionPlan struct {
+	SelectionMode string
+	Units         []PipelineExecutionUnit
+}
+
+type PipelineExecutionUnit struct {
+	Position    int
+	AssetID     string
+	AssetName   string
+	StartDate   string
+	EndDate     string
+	RenderIndex int
+	Reason      string
+}
+
+type PipelineExecutionUnitEvent struct {
+	Position   int
+	Status     string
+	StartedAt  *time.Time
+	FinishedAt *time.Time
+	Error      string
 }
 
 type ResolvedPipelineRunContext struct {
@@ -1156,6 +1185,14 @@ func (s *ExecutionService) MaterializePipelineRun(ctx context.Context, spec Pipe
 	spec.StartDate = normalizedContext.StartString()
 	spec.EndDate = normalizedContext.EndString()
 	spec.SensorMode = normalizedContext.SensorMode
+	executionTime := time.Now().UTC()
+	if rawExecutionTime := strings.TrimSpace(spec.ExecutionTime); rawExecutionTime != "" {
+		parsedExecutionTime, parseErr := time.Parse(time.RFC3339Nano, rawExecutionTime)
+		if parseErr != nil {
+			return MaterializeResult{Status: "error", Error: "invalid execution time", ExitCode: 1}
+		}
+		executionTime = parsedExecutionTime.UTC()
+	}
 	if !spec.DryRun && strings.TrimSpace(spec.CompletionID) == "" {
 		spec.CompletionID = strings.TrimSpace(spec.RunID)
 		if spec.CompletionID == "" {
@@ -1186,7 +1223,7 @@ func (s *ExecutionService) MaterializePipelineRun(ctx context.Context, spec Pipe
 	timeWindow := ExecutionTimeWindow{}
 	if !spec.DryRun {
 		var timeWindowErr error
-		timeWindow, timeWindowErr = s.resolvePipelineExecutionTimeWindow(ctx, spec.PipelineID, spec.SnapshotDir, spec.StartDate, spec.EndDate)
+		timeWindow, timeWindowErr = s.resolvePipelineExecutionTimeWindow(ctx, spec.PipelineID, spec.SnapshotDir, spec.StartDate, spec.EndDate, executionTime)
 		if timeWindowErr != nil {
 			return MaterializeResult{Status: "error", Error: timeWindowErr.Error(), ExitCode: 1}
 		}
@@ -1202,6 +1239,11 @@ func (s *ExecutionService) MaterializePipelineRun(ctx context.Context, spec Pipe
 	}
 	observed := newPipelineRunObservation(onAssetEvent)
 	observed.configureTargetWrites(ctx, spec.CompletionID, s.deps.TargetWrites)
+	plannedSelection := spec.Plan != nil && strings.TrimSpace(spec.Plan.SelectionMode) != "" &&
+		strings.TrimSpace(spec.Plan.SelectionMode) != PipelinePlanSelectionAll
+	currentPipeline, _ := s.findPipelineView(spec.PipelineID)
+	plannedChangedAssetIDs := make([]string, 0)
+	var plannedCompletionErr error
 	sensorMode := effectiveSensorMode(spec.SensorMode, spec.Scheduled)
 	if !spec.DryRun && spec.OnContextResolved != nil {
 		if err := spec.OnContextResolved(ResolvedPipelineRunContext{
@@ -1215,7 +1257,64 @@ func (s *ExecutionService) MaterializePipelineRun(ctx context.Context, spec Pipe
 			return MaterializeResult{Status: "error", Error: "persist resolved run context: " + err.Error(), ExitCode: 1}
 		}
 	}
-	output, runErr := s.deps.Executor.RunPipeline(ctx, RunPipelineRequest{
+	unitEvent := func(event PipelineExecutionUnitEvent) error {
+		if spec.OnUnit != nil {
+			if err := spec.OnUnit(event); err != nil {
+				return err
+			}
+		}
+		if !plannedSelection {
+			return nil
+		}
+		unit, ok := pipelineExecutionUnitAt(spec.Plan, event.Position)
+		if !ok {
+			return fmt.Errorf("planned execution unit %d is unavailable", event.Position)
+		}
+		unitCompletionID := pipelineExecutionUnitCompletionID(spec.CompletionID, event.Position)
+		if strings.EqualFold(strings.TrimSpace(event.Status), "running") {
+			observed.setCompletionID(unitCompletionID)
+			return nil
+		}
+		if !terminalPipelineExecutionUnitStatus(event.Status) {
+			return nil
+		}
+		unitWindow, err := executionWindowForPlannedUnit(unit)
+		if err != nil {
+			return err
+		}
+		runAssets, succeededIDs := observed.takeCompletedAssetsForUnit(currentPipeline, unit.AssetName, event.Position)
+		pipelineUUID := observed.pipelineUUID()
+		if pipelineUUID == "" {
+			pipelineUUID = strings.TrimSpace(spec.PipelineUUID)
+		}
+		if pipelineUUID == "" {
+			pipelineUUID = currentPipeline.UUID
+		}
+		if len(runAssets) == 0 {
+			observed.resetCompletedAsset(unit.AssetName)
+			return nil
+		}
+		if pipelineUUID == "" {
+			completedAt := time.Now().UTC()
+			dirtyErr := observed.markSuccessfulTargetWritesDirty(completedAt)
+			observed.resetCompletedAsset(unit.AssetName)
+			return errors.Join(errors.New("planned execution pipeline identity is unavailable"), dirtyErr)
+		}
+		completedAt := time.Now().UTC()
+		unitSpec := spec
+		unitSpec.CompletionID = unitCompletionID
+		completionErr := s.emitRunCompletedForSpec(ctx, unitSpec, pipelineUUID, unitWindow, completedAt, runAssets)
+		if completionErr != nil {
+			completionErr = errors.Join(completionErr, observed.markSuccessfulTargetWritesDirty(completedAt))
+			plannedCompletionErr = errors.Join(plannedCompletionErr, completionErr)
+			observed.resetCompletedAsset(unit.AssetName)
+			return fmt.Errorf("record durable completion for execution unit %d: %w", event.Position, completionErr)
+		}
+		plannedChangedAssetIDs = append(plannedChangedAssetIDs, succeededIDs...)
+		observed.resetCompletedAsset(unit.AssetName)
+		return nil
+	}
+	request := RunPipelineRequest{
 		Target:      target,
 		Environment: spec.Environment,
 		SensorMode:  sensorMode,
@@ -1223,7 +1322,12 @@ func (s *ExecutionService) MaterializePipelineRun(ctx context.Context, spec Pipe
 		StartDate:   timeWindow.StartRFC3339(),
 		EndDate:     timeWindow.EndRFC3339(),
 		AssetEvent:  observed.handle,
+		RunID:       spec.RunID,
 		OnTargetsResolved: func(snapshot ExecutionTargetSnapshot) error {
+			if expected := strings.TrimSpace(spec.ExpectedConfigurationDigest); expected != "" &&
+				(snapshot.ConfigurationFidelity != string(runcontext.IdentityFidelityExact) || snapshot.ConfigurationDigest != expected) {
+				return fmt.Errorf("execution configuration changed after plan confirmation")
+			}
 			if spec.OnTargetsResolved != nil {
 				if err := spec.OnTargetsResolved(snapshot); err != nil {
 					return err
@@ -1236,16 +1340,32 @@ func (s *ExecutionService) MaterializePipelineRun(ctx context.Context, spec Pipe
 			spec.executionTargetSnapshot = &captured
 			return nil
 		},
-		ConfigPath:  spec.ConfigPath,
-		FullRefresh: spec.FullRefresh,
-	}, onChunk)
+		ConfigPath:    spec.ConfigPath,
+		FullRefresh:   spec.FullRefresh,
+		ExecutionTime: executionTime,
+		UnitEvent:     unitEvent,
+	}
+	if spec.Plan != nil {
+		request.SelectionMode = spec.Plan.SelectionMode
+		request.ExecutionUnits = append([]PipelineExecutionUnit(nil), spec.Plan.Units...)
+	}
+	output, runErr := s.deps.Executor.RunPipeline(ctx, request, onChunk)
 
 	changedAssetIDs := make([]string, 0)
 	var materializedAt *time.Time
 	var completionErr error
-	if !spec.DryRun {
+	if plannedSelection {
+		changedAssetIDs = append(changedAssetIDs, plannedChangedAssetIDs...)
+		completionErr = plannedCompletionErr
+		if runErr != nil && completionErr == nil {
+			completionErr = observed.markSuccessfulTargetWritesDirty(time.Now().UTC())
+		}
+		if runErr == nil && completionErr == nil {
+			now := time.Now().UTC()
+			materializedAt = &now
+		}
+	} else if !spec.DryRun {
 		now := time.Now().UTC()
-		currentPipeline, _ := s.findPipelineView(spec.PipelineID)
 		pipelineUUID := observed.pipelineUUID()
 		if pipelineUUID == "" {
 			pipelineUUID = strings.TrimSpace(spec.PipelineUUID)
@@ -1301,6 +1421,42 @@ func (s *ExecutionService) MaterializePipelineRun(ctx context.Context, spec Pipe
 		MaterializedAt:  materializedAt,
 		Warnings:        warnings.snapshot(),
 	}
+}
+
+func terminalPipelineExecutionUnitStatus(status string) bool {
+	switch strings.ToLower(strings.TrimSpace(status)) {
+	case "success", "succeeded", "failed", "cancelled", "canceled", "skipped":
+		return true
+	default:
+		return false
+	}
+}
+
+func pipelineExecutionUnitAt(plan *PipelineExecutionPlan, position int) (PipelineExecutionUnit, bool) {
+	if plan == nil || position < 0 || position >= len(plan.Units) {
+		return PipelineExecutionUnit{}, false
+	}
+	unit := plan.Units[position]
+	if unit.Position != position {
+		return PipelineExecutionUnit{}, false
+	}
+	return unit, true
+}
+
+func pipelineExecutionUnitCompletionID(base string, position int) string {
+	return fmt.Sprintf("%s/unit/%d", strings.TrimSpace(base), position)
+}
+
+func executionWindowForPlannedUnit(unit PipelineExecutionUnit) (ExecutionTimeWindow, error) {
+	start, err := time.Parse(time.RFC3339Nano, strings.TrimSpace(unit.StartDate))
+	if err != nil {
+		return ExecutionTimeWindow{}, fmt.Errorf("planned execution unit %d has an invalid start time", unit.Position)
+	}
+	end, err := time.Parse(time.RFC3339Nano, strings.TrimSpace(unit.EndDate))
+	if err != nil || !start.Before(end) {
+		return ExecutionTimeWindow{}, fmt.Errorf("planned execution unit %d has an invalid end time", unit.Position)
+	}
+	return ExecutionTimeWindow{Start: start.UTC(), End: end.UTC()}, nil
 }
 
 func executionWasCancelled(ctx context.Context, runErr error) bool {
@@ -1362,6 +1518,12 @@ func (o *pipelineRunObservation) configureTargetWrites(ctx context.Context, comp
 	o.targetWriteCtx = ctx
 	o.completionID = strings.TrimSpace(completionID)
 	o.targetWrites = store
+}
+
+func (o *pipelineRunObservation) setCompletionID(completionID string) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	o.completionID = strings.TrimSpace(completionID)
 }
 
 func (o *pipelineRunObservation) handle(event ExecutionAssetEvent) error {
@@ -1691,6 +1853,43 @@ func (o *pipelineRunObservation) completedAssetsForNames(view PipelineView, _ st
 	return runs, succeededIDs
 }
 
+func (o *pipelineRunObservation) takeCompletedAssetsForUnit(
+	view PipelineView,
+	assetName string,
+	completionOrdinal int,
+) ([]bus.AssetRun, []string) {
+	runs, succeededIDs := o.completedAssetsForNames(view, "", []string{assetName})
+	for index := range runs {
+		runs[index].CompletionOrdinal = int64(completionOrdinal)
+		runs[index].HasCompletionOrdinal = true
+	}
+	return runs, succeededIDs
+}
+
+func (o *pipelineRunObservation) resetCompletedAsset(assetName string) {
+	assetName = strings.TrimSpace(assetName)
+	if assetName == "" {
+		return
+	}
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	filtered := o.order[:0]
+	for _, name := range o.order {
+		if name != assetName {
+			filtered = append(filtered, name)
+		}
+	}
+	o.order = filtered
+	delete(o.statuses, assetName)
+	delete(o.startedAt, assetName)
+	delete(o.finishedAt, assetName)
+	delete(o.ordinals, assetName)
+	delete(o.terminal, assetName)
+	delete(o.upstreamWriters, assetName)
+	delete(o.hasUpstreamReads, assetName)
+	delete(o.claims, assetName)
+}
+
 func (o *pipelineRunObservation) pipelineUUID() string {
 	o.mu.Lock()
 	defer o.mu.Unlock()
@@ -1769,12 +1968,12 @@ func (s *ExecutionService) resolveAssetExecutionTimeWindow(ctx context.Context, 
 	return ResolveExecutionTimeWindow(schedule, startDate, endDate, time.Now().UTC())
 }
 
-func (s *ExecutionService) resolvePipelineExecutionTimeWindow(ctx context.Context, pipelineID, snapshotDir, startDate, endDate string) (ExecutionTimeWindow, error) {
+func (s *ExecutionService) resolvePipelineExecutionTimeWindow(ctx context.Context, pipelineID, snapshotDir, startDate, endDate string, executionTime time.Time) (ExecutionTimeWindow, error) {
 	// Explicit bounds are already the authoritative execution context. They do
 	// not depend on either source's pipeline schedule and must survive a pinned
 	// run unchanged.
 	if strings.TrimSpace(startDate) != "" || strings.TrimSpace(endDate) != "" {
-		return ResolveExecutionTimeWindow("", startDate, endDate, time.Now().UTC())
+		return ResolveExecutionTimeWindow("", startDate, endDate, executionTime)
 	}
 
 	// A pinned run executes the pipeline materialized in SnapshotDir. Resolve
@@ -1785,18 +1984,18 @@ func (s *ExecutionService) resolvePipelineExecutionTimeWindow(ctx context.Contex
 		if err != nil {
 			return ExecutionTimeWindow{}, fmt.Errorf("resolve deployed pipeline execution window: %w", err)
 		}
-		return ResolveExecutionTimeWindow(string(schedule), "", "", time.Now().UTC())
+		return ResolveExecutionTimeWindow(string(schedule), "", "", executionTime)
 	}
 
 	if target, err := ResolvePipelineRunTarget(pipelineID); err == nil && s.deps.NewPipelineBuilder != nil {
 		absPipelinePath, joinErr := NewWorkspaceResolver(s.deps.WorkspaceRoot, nil).JoinPath(target)
 		if joinErr == nil {
 			if parsed, parseErr := s.deps.NewPipelineBuilder().CreatePipelineFromPath(ctx, absPipelinePath, pipeline.WithMutate()); parseErr == nil && parsed != nil {
-				return ResolveExecutionTimeWindow(string(parsed.Schedule), startDate, endDate, time.Now().UTC())
+				return ResolveExecutionTimeWindow(string(parsed.Schedule), startDate, endDate, executionTime)
 			}
 		}
 	}
-	return ResolveExecutionTimeWindow("", startDate, endDate, time.Now().UTC())
+	return ResolveExecutionTimeWindow("", startDate, endDate, executionTime)
 }
 
 func readPipelineSchedule(pipelineDir string) (pipeline.Schedule, error) {

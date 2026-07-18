@@ -21,6 +21,8 @@ type SchedulerHandlers interface {
 	TriggerPipeline(ctx context.Context, pipelineID string, req scheduler.TriggerRequest) (scheduler.PipelineRun, error)
 	ListRuns(ctx context.Context, filter scheduler.RunFilter) (scheduler.RunList, error)
 	GetRun(ctx context.Context, runID string) (scheduler.PipelineRun, []scheduler.LogLine, []scheduler.PipelineRunStep, error)
+	GetRunPlan(ctx context.Context, runID string) (scheduler.PipelineRunPlan, bool, error)
+	ListRunUnits(ctx context.Context, runID string) ([]scheduler.PipelineRunUnit, error)
 }
 
 type SchedulerAPI struct {
@@ -155,10 +157,25 @@ func parseRunStatus(value string) scheduler.RunStatus {
 }
 
 func (h *SchedulerAPI) HandleGetRun(w http.ResponseWriter, r *http.Request) {
-	run, logs, steps, err := h.Service.GetRun(r.Context(), chi.URLParam(r, "id"))
+	runID := chi.URLParam(r, "id")
+	run, logs, steps, err := h.Service.GetRun(r.Context(), runID)
 	if err != nil {
 		webapi.WriteBadRequest(w, "run_get_failed", err.Error())
 		return
 	}
-	webapi.WriteJSON(w, http.StatusOK, map[string]any{"status": "ok", "run": run, "logs": logs, "steps": steps})
+	units, err := h.Service.ListRunUnits(r.Context(), runID)
+	if err != nil {
+		webapi.WriteBadRequest(w, "run_get_failed", err.Error())
+		return
+	}
+	plan, hasPlan, err := h.Service.GetRunPlan(r.Context(), runID)
+	if err != nil {
+		webapi.WriteBadRequest(w, "run_get_failed", err.Error())
+		return
+	}
+	var planResponse any
+	if hasPlan {
+		planResponse = plan
+	}
+	webapi.WriteJSON(w, http.StatusOK, map[string]any{"status": "ok", "run": run, "logs": logs, "steps": steps, "plan": planResponse, "units": units})
 }

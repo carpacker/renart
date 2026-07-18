@@ -141,6 +141,14 @@ type TriggerRequest struct {
 	Backfill             bool   `json:"backfill,omitempty"`
 	ConfirmedEnvironment string `json:"confirmed_environment,omitempty"`
 	SensorMode           string `json:"sensor_mode,omitempty"`
+	// Expected identities and the preview execution time are server-owned plan
+	// confirmation evidence. The ordinary trigger JSON endpoint cannot set them.
+	ExpectedSourceMerkle        string `json:"-"`
+	ExpectedConfigurationDigest string `json:"-"`
+	ExecutionTime               string `json:"-"`
+	// ConfirmedPlan is the server-regenerated, redacted plan admitted with this
+	// run. It is never accepted from the ordinary trigger JSON endpoint.
+	ConfirmedPlan *PipelineRunPlan `json:"-"`
 }
 
 type PipelineRun struct {
@@ -174,6 +182,10 @@ type PipelineRun struct {
 	FullRefresh bool   `json:"-"`
 	Backfill    bool   `json:"-"`
 	SensorMode  string `json:"-"`
+	// Plan confirmation evidence is persisted only in the private RunSpec.
+	ExecutionTime               *time.Time `json:"-"`
+	ExpectedSourceMerkle        string     `json:"-"`
+	ExpectedConfigurationDigest string     `json:"-"`
 	// ExecutionContextResolved distinguishes effective execution provenance from
 	// pending, pre-execution-failed, and legacy request-only rows. Callers must
 	// not treat environment, window, or mode fields as executed context while it
@@ -183,6 +195,9 @@ type PipelineRun struct {
 	// captured after runtime context resolution and before the first asset is
 	// executed. It remains private recovery provenance rather than API state.
 	ExecutionTargetSnapshot *ExecutionTargetSnapshot `json:"-"`
+	// ConfirmedPlan is loaded from the immutable reviewed-plan row for worker
+	// execution. It is never exposed through run-list DTOs or SSE events.
+	ConfirmedPlan *PipelineRunPlan `json:"-"`
 }
 
 // ExecutionTargetSnapshot captures the exact source and physical-target
@@ -190,9 +205,11 @@ type PipelineRun struct {
 // persisted run steps use that name; AssetID retains the durable identity used
 // by fingerprint, coverage, and materialization stores.
 type ExecutionTargetSnapshot struct {
-	Version      int                                     `json:"version"`
-	PipelineUUID string                                  `json:"pipeline_uuid,omitempty"`
-	Entries      map[string]ExecutionTargetSnapshotEntry `json:"entries"`
+	Version               int                                     `json:"version"`
+	PipelineUUID          string                                  `json:"pipeline_uuid,omitempty"`
+	ConfigurationDigest   string                                  `json:"configuration_digest,omitempty"`
+	ConfigurationFidelity string                                  `json:"configuration_fidelity,omitempty"`
+	Entries               map[string]ExecutionTargetSnapshotEntry `json:"entries"`
 }
 
 type ExecutionUpstreamSnapshot struct {
@@ -274,22 +291,26 @@ type Context interface {
 }
 
 type RunRequest struct {
-	RunID        string
-	PipelineID   string
-	PipelineUUID string
-	Environment  string
-	Start        string
-	End          string
+	RunID         string
+	PipelineID    string
+	PipelineUUID  string
+	Environment   string
+	Start         string
+	End           string
+	ExecutionTime string
 	// Scheduled is derived from the persisted server-owned run origin. It must
 	// not be inferred from RunID because queued manual runs also have one.
 	Scheduled bool
 	// SnapshotVersionID pins the exact deployed snapshot the run must execute.
 	// Empty identifies a manual working-tree run and is invalid when Scheduled.
-	SnapshotVersionID    string
-	FullRefresh          bool
-	Backfill             bool
-	ConfirmedEnvironment string
-	SensorMode           string
+	SnapshotVersionID           string
+	FullRefresh                 bool
+	Backfill                    bool
+	ConfirmedEnvironment        string
+	SensorMode                  string
+	ExpectedSourceMerkle        string
+	ExpectedConfigurationDigest string
+	ConfirmedPlan               *PipelineRunPlan
 	// OnContextResolved must be called synchronously after execution policy,
 	// source, defaults, and modes are resolved but before the first asset starts.
 	// The scheduler uses it to durably replace admission intent and publish a
@@ -301,6 +322,9 @@ type RunRequest struct {
 	// OnStep is synchronous: a running-step persistence failure must stop before
 	// the physical task, and a terminal persistence failure must fail closed.
 	OnStep func(RunStepEvent) error
+	// OnUnit persists one exact asset/window unit. Unlike OnStep, positions can
+	// represent multiple windows for the same asset.
+	OnUnit func(PipelineRunUnitEvent) error
 }
 
 type RunStepEvent struct {

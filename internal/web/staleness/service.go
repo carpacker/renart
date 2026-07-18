@@ -276,6 +276,21 @@ func (s *Service) Snapshot(ctx context.Context, selection Selection) (Snapshot, 
 	return snapshot, nil
 }
 
+// Evaluate computes a staleness snapshot for an already-resolved pipeline
+// without changing the UI's cached working-tree selection or starting
+// asynchronous warehouse verification. Read-only execution planning uses this
+// for immutable deployment sources whose files do not live in the workspace.
+func (s *Service) Evaluate(
+	ctx context.Context,
+	selection Selection,
+	parsed *pipeline.Pipeline,
+) (Snapshot, error) {
+	if parsed == nil {
+		return Snapshot{}, fmt.Errorf("staleness: parsed pipeline is required")
+	}
+	return s.computeParsed(ctx, selection, parsed)
+}
+
 func verifyKey(selection Selection) string {
 	return selection.PipelineUUID + "\x00" + selection.Environment
 }
@@ -335,7 +350,10 @@ func (s *Service) compute(ctx context.Context, selection Selection) (Snapshot, e
 	if err != nil {
 		return Snapshot{}, err
 	}
+	return s.computeParsed(ctx, selection, parsed)
+}
 
+func (s *Service) computeParsed(ctx context.Context, selection Selection, parsed *pipeline.Pipeline) (Snapshot, error) {
 	vars := fingerprint.EffectiveVars(parsed, selection.VarOverrides)
 	results, err := s.deps.Engine.DAG(parsed, vars)
 	if err != nil {

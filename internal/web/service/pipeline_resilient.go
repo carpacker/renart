@@ -80,9 +80,10 @@ func rawTopLevelYAMLScalar(content, key string) string {
 }
 
 // NewRenartTolerantPipelineBuilder builds pipelines that survive individual asset
-// parse errors. It is used ONLY for computing the displayed workspace state —
-// execution, resolution, and type-checking keep the strict builder so a broken
-// asset still fails loudly where correctness matters.
+// parse errors. It is used for read-only workspace and planning views so one
+// broken asset does not hide its valid siblings. Execution and asset resolution
+// keep the strict builder so a broken asset still fails loudly where correctness
+// matters.
 func NewRenartTolerantPipelineBuilder(fs afero.Fs) *pipeline.Builder {
 	if fs == nil {
 		fs = afero.NewOsFs()

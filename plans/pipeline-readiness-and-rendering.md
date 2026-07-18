@@ -1466,16 +1466,51 @@ hardening concern rather than a Phase 1 blocker.
 
 ### Phase 2: pipeline execution plan
 
-- add `POST /api/pipelines/{id}/plan` and `renart plan`;
-- resolve `needed`, `all`, and asset-closure selections server-side;
-- combine staleness gaps, topological order, code checks, stages, and blockers;
-- return the summary quickly, validate the complete stage graph before
-  authorization, and lazy-load only presentation payloads;
-- add the Readiness and Run-plan UI;
-- make confirmation verify source/config identities and re-resolve data-state
-  selection with the shrink/expand rules;
-- persist final asset-by-window execution units, preview deltas, reasons,
-  stages, and provenance in canonical run history.
+Implementation checkpoint (2026-07-18): `POST /api/pipelines/{id}/plan` and
+`renart plan` share one read-only planner for saved working-tree and exact
+deployment sources. It resolves `all`, `needed`, and asset-closure selection,
+combines target-aware staleness gaps, topological execution units, code checks,
+render stages, policy/active-run blockers, and identity-bound context, and
+omits only large stage content until requested. The plan ID binds source,
+selected configuration, variables, data state, context, selection, and the
+operation graph.
+
+`POST /api/pipelines/{id}/plan/confirm` regenerates the server-owned plan at its
+reviewed execution timestamp and admits all three selection modes. It never
+trusts browser-supplied rendered content. Source/configuration/operation changes
+return the replacement plan as `plan_stale`; Needed plans may shrink only by
+omitting exact units that became fresh, while new, widened, or changed work
+returns `plan_data_changed`. Destructive environment confirmation is checked
+before admission and again before side effects.
+
+Accepted runs atomically persist the redacted plan artifact, selection and
+data-state provenance, final ordered asset/window units, inclusion reasons,
+RunSpec, run/job link, River job, and pipeline run slot. The worker executes
+only those units through the shared hybrid executor, preserves repeated windows
+in order, gives every unit a replay-safe completion identity, and durably tracks
+queued/running/terminal unit state. Working-tree execution uses a verified
+isolated copy; snapshot execution verifies its expected Merkle; selected
+configuration is rechecked before the first unit.
+
+The Build toolbar has one Definition/Data Readiness control and a primary
+Review-run sheet with Summary, Assets, Checks, and lazy Execution content.
+Needed plans run directly from that review. Canonical run details add a live
+Plan tab with final units, safe preview omissions, identities, reasons, windows,
+and redacted stage metadata; `run.unit` SSE updates it independently from legacy
+step consumers. Planning stays asset-scoped for incomplete authoring: malformed
+asset YAML is a blocker without erasing renderable siblings, incomplete SQL
+retains sibling previews, and Python remains explicitly runtime-only where a
+safe static claim is unavailable. Backend coverage includes source modes,
+selection/closure, data-state shrink and expansion, policy, repeated windows,
+durable unit/completion behavior, and partial sources; live coverage exercises
+Needed execution/history, no-deployment `deployed_only`, incomplete source, and
+destructive confirmation on desktop and mobile.
+
+Phase 2 is complete. The remaining universal-ledger gap is broader than this
+phase: direct one-asset, Build-needed, onboarding, and embedded execution paths
+still use the common completion seam without scheduler RunSpecs. Durable
+schedule occurrences, variables, and deploy/schedule plan integration continue
+in Phase 3 and the earlier Phase 0b/0c workstreams.
 
 ### Phase 3: Deploy and schedule integration
 

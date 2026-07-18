@@ -216,6 +216,7 @@ export function useAppAssetMaterializationStatus(assets: AppMaterializationAsset
 
   useEffect(() => {
     if (!schedulerRunEvent) return;
+    if (schedulerRunEvent.type === "run.unit") return;
 
     const eventRunId =
       schedulerRunEvent.type === "run.log" || schedulerRunEvent.type === "run.step"

@@ -150,6 +150,13 @@ func (w *pipelineRunWorker) Work(ctx context.Context, job *river.Job[pipelineRun
 			}
 			return river.JobCancel(err)
 		}
+		var invalidPlan *invalidRunPlanError
+		if errors.As(err, &invalidPlan) {
+			if finishErr := w.service.failRunBeforeExecution(ctx, invalidPlan.RunID, err); finishErr != nil {
+				return errors.Join(err, finishErr)
+			}
+			return river.JobCancel(err)
+		}
 		var invalidSignal *invalidScheduleSignalError
 		if errors.As(err, &invalidSignal) {
 			return river.JobCancel(err)
@@ -1072,25 +1079,42 @@ func (s *Service) Trigger(ctx context.Context, pipeline PipelineSchedule, req Tr
 	start := normalizedContext.Start
 	end := normalizedContext.End
 	sensorMode := normalizedContext.SensorMode
+	var executionTime *time.Time
+	if rawExecutionTime := strings.TrimSpace(req.ExecutionTime); rawExecutionTime != "" {
+		parsedExecutionTime, parseErr := time.Parse(time.RFC3339Nano, rawExecutionTime)
+		if parseErr != nil {
+			return PipelineRun{}, fmt.Errorf("execution_time must be an RFC3339 timestamp: %w", parseErr)
+		}
+		parsedExecutionTime = parsedExecutionTime.UTC()
+		executionTime = &parsedExecutionTime
+	}
 	run := PipelineRun{
-		PipelineID:        pipeline.PipelineID,
-		PipelineUUID:      pipeline.PipelineUUID,
-		Pipeline:          pipeline.PipelineName,
-		Environment:       strings.TrimSpace(req.Environment),
-		Trigger:           RunTriggerManual,
-		Status:            RunStatusQueued,
-		WinStart:          start,
-		WinEnd:            end,
-		SnapshotVersionID: snapshotVersionID,
-		FullRefresh:       req.FullRefresh,
-		Backfill:          req.Backfill,
-		SensorMode:        sensorMode,
+		PipelineID:                  pipeline.PipelineID,
+		PipelineUUID:                pipeline.PipelineUUID,
+		Pipeline:                    pipeline.PipelineName,
+		Environment:                 strings.TrimSpace(req.Environment),
+		Trigger:                     RunTriggerManual,
+		Status:                      RunStatusQueued,
+		WinStart:                    start,
+		WinEnd:                      end,
+		SnapshotVersionID:           snapshotVersionID,
+		FullRefresh:                 req.FullRefresh,
+		Backfill:                    req.Backfill,
+		SensorMode:                  sensorMode,
+		ExecutionTime:               executionTime,
+		ExpectedSourceMerkle:        strings.TrimSpace(req.ExpectedSourceMerkle),
+		ExpectedConfigurationDigest: strings.TrimSpace(req.ExpectedConfigurationDigest),
 	}
 	spec := manualRunSpec(run, source, req.ConfirmedEnvironment)
-	return s.admitQueuedRun(ctx, client, run, spec)
+	if req.ConfirmedPlan != nil {
+		if err := validateRunPlanAdmissionBinding(run, spec, *req.ConfirmedPlan); err != nil {
+			return PipelineRun{}, err
+		}
+	}
+	return s.admitQueuedRun(ctx, client, run, spec, req.ConfirmedPlan)
 }
 
-func (s *Service) admitQueuedRun(ctx context.Context, client *river.Client[*sql.Tx], run PipelineRun, spec runSpecV1) (PipelineRun, error) {
+func (s *Service) admitQueuedRun(ctx context.Context, client *river.Client[*sql.Tx], run PipelineRun, spec runSpecV1, plan *PipelineRunPlan) (PipelineRun, error) {
 	if err := spec.validate(); err != nil {
 		return PipelineRun{}, err
 	}
@@ -1109,6 +1133,9 @@ func (s *Service) admitQueuedRun(ctx context.Context, client *river.Client[*sql.
 		}
 		if err == nil {
 			err = s.store.insertRunSpec(ctx, tx, id, spec)
+		}
+		if err == nil && plan != nil {
+			err = s.store.insertRunPlan(ctx, tx, id, *plan)
 		}
 		var inserted *rivertype.JobInsertResult
 		if err == nil {
@@ -1166,6 +1193,14 @@ func (s *Service) GetRun(ctx context.Context, id string) (PipelineRun, []LogLine
 	return run, trimLegacyOutputReplay(logs), steps, nil
 }
 
+func (s *Service) GetRunPlan(ctx context.Context, id string) (PipelineRunPlan, bool, error) {
+	return s.store.GetRunPlan(ctx, id)
+}
+
+func (s *Service) ListRunUnits(ctx context.Context, id string) ([]PipelineRunUnit, error) {
+	return s.store.ListRunUnits(ctx, id)
+}
+
 func (s *Service) prepareRun(ctx context.Context, riverJobID int64, args pipelineRunJobArgs) (PipelineRun, runSpecV1, bool, error) {
 	if strings.TrimSpace(args.RunID) == "" && riverJobID != 0 {
 		if existingRunID, found, err := s.store.RunIDForRiverJob(ctx, riverJobID); err != nil {
@@ -1221,6 +1256,16 @@ func (s *Service) prepareRun(ctx context.Context, riverJobID int64, args pipelin
 		}
 		if err := s.store.validateActiveRunSpecSlotBinding(ctx, run, spec); err != nil {
 			return PipelineRun{}, runSpecV1{}, false, &invalidRunSpecError{RunID: run.ID, Err: err}
+		}
+		plan, foundPlan, err := s.store.GetRunPlan(ctx, run.ID)
+		if err != nil {
+			return PipelineRun{}, runSpecV1{}, false, err
+		}
+		if foundPlan {
+			if err := validateRunPlanAdmissionBinding(run, spec, plan); err != nil {
+				return PipelineRun{}, runSpecV1{}, false, &invalidRunPlanError{RunID: run.ID, Err: err}
+			}
+			run.ConfirmedPlan = &plan
 		}
 		if run.Status == RunStatusRunning {
 			if err := s.finalizeIndeterminateRetry(ctx, run); err != nil {
@@ -1329,6 +1374,14 @@ func (s *Service) execute(ctx context.Context, run PipelineRun, spec runSpecV1) 
 		ConfirmedEnvironment: spec.Authorization.ConfirmedEnvironment,
 		SensorMode:           spec.Requested.SensorMode,
 	}
+	if spec.Requested.ExecutionTime != nil {
+		req.ExecutionTime = spec.Requested.ExecutionTime.UTC().Format(time.RFC3339Nano)
+	}
+	if spec.Expected != nil {
+		req.ExpectedSourceMerkle = spec.Expected.SourceMerkle
+		req.ExpectedConfigurationDigest = spec.Expected.ConfigurationDigest
+	}
+	req.ConfirmedPlan = run.ConfirmedPlan
 	req.OnContextResolved = func(resolved RunExecutionContext) error {
 		if err := s.store.SetRunExecutionContext(ctx, run.ID, resolved); err != nil {
 			return err
@@ -1355,6 +1408,22 @@ func (s *Service) execute(ctx context.Context, run PipelineRun, spec runSpecV1) 
 	}
 	req.OnStep = func(event RunStepEvent) error {
 		return s.persistRunStep(ctx, run.ID, event)
+	}
+	req.OnUnit = func(event PipelineRunUnitEvent) error {
+		if err := s.store.UpdateRunUnit(ctx, run.ID, event); err != nil {
+			return fmt.Errorf("persist execution unit %d for run %s: %w", event.Position, run.ID, err)
+		}
+		units, err := s.store.ListRunUnits(ctx, run.ID)
+		if err != nil {
+			return err
+		}
+		for _, unit := range units {
+			if unit.Position == event.Position {
+				s.publishRunEvent("run.unit", map[string]any{"run_id": run.ID, "unit": unit})
+				break
+			}
+		}
+		return nil
 	}
 	if run.WinStart != nil {
 		req.Start = run.WinStart.Format(time.RFC3339Nano)

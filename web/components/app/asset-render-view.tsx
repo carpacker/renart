@@ -207,9 +207,9 @@ export function AssetRenderView({
                 <ToggleGroupItem
                   key={stageKeys[index]}
                   value={stageKeys[index]}
-                  title={item.message || stageLabel(item)}
+                  title={item.message || assetRenderStageLabel(item)}
                 >
-                  {stageLabel(item)}
+                  {assetRenderStageLabel(item)}
                 </ToggleGroupItem>
               ))}
             </ToggleGroup>
@@ -264,7 +264,7 @@ function variableSourceLabel(source: string) {
   }
 }
 
-function ReadOnlyRenderedOperation({
+export function ReadOnlyRenderedOperation({
   content,
   language,
   modelKey,
@@ -349,7 +349,7 @@ function RenderCentered({ message, loading = false }: { message: string; loading
   );
 }
 
-function stageLabel(stage: AssetRenderStage) {
+export function assetRenderStageLabel(stage: AssetRenderStage) {
   if (stage.label) return stage.label;
   switch (stage.kind) {
     case "compiled_query":

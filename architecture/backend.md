@@ -11,6 +11,8 @@ main.go → cmd.Root() → urfave/cli commands (cmd/)
   standalone  same server + native window via renart-gui helper  (IDE)
   run         run a pipeline or asset; delegates to a live
               server, else executes in-process                   (Pipeline)
+  plan        preview a pipeline execution plan; delegates to a
+              live server, else plans read-only in-process       (Pipeline)
   render      preview one saved asset without execution; delegates
               to a live server, else renders read-only in-process (Pipeline)
   ls          list pipelines/assets                              (Pipeline)
@@ -107,8 +109,9 @@ contains ingestr assets.
 **CLI ↔ server (delegate-or-embed).** Pipeline commands resolve their
 workspace git-style (walk up to `.bruin.yml` → `.renart` → repo root;
 `cmd/workspace.go`) and their target as a pipeline name, asset name, or
-path. `renart run` and `renart render` delegate to a live server when one has the
-workspace open: servers write `.renart/server.json` (pid, project-mount API
+path. `renart run`, `renart plan`, and `renart render` delegate to a live server
+when one has the workspace open: servers write `.renart/server.json` (pid,
+project-mount API
 base, session token) into every open project root — removed on graceful
 shutdown; `web`/`standalone` trap SIGINT/SIGTERM for exactly this — and
 expose `GET /api/health`. `internal/clientapi` reads the file, health-checks
@@ -118,9 +121,12 @@ comparing symlink-resolved roots), and authenticates with the token
 `--local` forces in-process behavior). A delegated run streams the same
 materialize SSE endpoints the UI uses, so one process owns all SQLite writes
 and the UI's staleness/run history updates live. A delegated render calls the
-same read-only asset-render endpoint as the Build editor. Without a live server,
+same read-only asset-render endpoint as the Build editor, while a delegated plan
+calls the same pipeline-plan endpoint as the review sheet. Without a live server,
 `renart render` invokes the shared read-only service directly; it does not boot
-a server, scheduler, or state database. DuckDB access
+a server, scheduler, or state database. `renart plan` boots the same headless
+service graph needed for local staleness/deployment state, but never starts
+River or executes an asset. DuckDB access
 is additionally serialized per canonical database file as described in §4,
 because one server can run multiple pipelines and child processes concurrently.
 For an asset target, `--refresh-upstreams` first invokes the server-side stale
@@ -169,6 +175,52 @@ admission, and scheduled runs use their exact row pin. Snapshot execution
 validates ownership and content before materializing a fresh temp directory;
 resolution failures fail the run rather than falling back to the working tree
 (see staleness.md §5).
+
+Pipeline planning is read-only at `POST /api/pipelines/{id}/plan` and through
+`renart plan`. It resolves an explicit saved-working-tree or deployment source,
+environment, interval, execution timestamp, sensor/full-refresh/backfill mode,
+and one of `all`, `needed`, or asset-closure selection. The planner combines the
+current code-check report, target-aware staleness and exact uncovered gaps,
+topological order, one asset-by-window execution-unit list, render stages, and
+structured blockers/warnings. Stage metadata is always returned; large
+redacted content blobs are omitted by default and can be requested lazily
+without changing the plan identity. The plan ID binds its source Merkle root,
+selected-configuration and variable identities, data-state token, context,
+selection, and operation graph. Incomplete source remains visible through
+structured findings and honest fidelity rather than fabricated SQL.
+
+`POST /api/pipelines/{id}/plan/confirm` admits `all`, `needed`, and asset-closure
+plans. The server regenerates the plan from the submitted canonical request at
+the reviewed execution timestamp; rendered content supplied by the browser is
+never trusted. A changed source, configuration, context, or operation returns
+`409 plan_stale` with the replacement plan. Needed selection has one narrower
+data-state rule: units that became fresh may be omitted, and the durable preview
+records what disappeared, but a new, widened, or otherwise changed unit returns
+`409 plan_data_changed` for another review. Blocked, empty, non-exact-source, or
+non-exact-configuration plans fail closed. Destructive policy confirmation is
+checked before admission and again at execution.
+
+Accepted confirmation atomically persists the immutable redacted plan in
+`pipeline_run_plans`, its final ordered asset/window units in
+`pipeline_run_units`, the private RunSpec, run row, River job, job link, and run
+slot. Snapshot runs verify the requested snapshot and Merkle root; working-tree
+runs copy the reviewed pipeline into a fresh isolated run directory and verify
+that copy against the same Merkle root before execution. The worker rechecks
+selected configuration before the first unit, uses the reviewed execution
+timestamp for runtime Jinja rendering, and runs only the admitted assets and
+windows through the same hybrid executor used by direct execution. Unit state
+is durable (`queued`, `running`, and terminal statuses), emitted as `run.unit`,
+and each completed unit has its own replay-safe completion identity while
+retaining the parent pipeline run ID. Run details return the retained plan and
+unit ledger beside steps, events, and output.
+
+Planning is partial while execution remains strict. If one asset definition is
+temporarily invalid, the read-only planner uses the same marked placeholder as
+workspace loading, records the parse failure as an asset-scoped code-check
+blocker, omits an execution unit for that asset, and still renders valid
+siblings. Pipeline-level YAML that cannot establish a pipeline remains a
+request error. Incomplete SQL findings likewise do not erase sibling renders;
+Python stays explicitly runtime-only where no safe static claim is available.
 
 Asset rendering is a separate read-only path at
 `POST /api/assets/{assetID}/render`. It always reads the saved working-tree
@@ -358,15 +410,17 @@ SQLite writes. Scheduler-backed runs persist a private, validated, versioned
 `pipeline_run_specs` record outside public run DTOs and SSE. The spec is the
 immutable requested behavior contract; effective environment, window, and
 modes still replace the diagnostic `pipeline_runs` columns immediately before
-execution. Manual/API admission inserts the run, v1 spec, run-ID-only River
-job, run/job link, and namespaced path plus stable-UUID slot aliases in one
-SQLite transaction via `InsertTx`. Stored specs override parallel legacy job
-arguments; unknown versions, unknown fields, and row/spec mismatches fail the
-run closed. The stable UUID in the private spec is independently checked against
-the durable UUID slot before execution, then threaded through scheduler
-execution and snapshot resolution; deployment lookup never has to rediscover
-that identity from a mutable pipeline path. Pre-upgrade jobs without a spec
-retain one strict upgrade decoder.
+execution. Plan-confirmed runs additionally retain the reviewed source/config/
+time identities, redacted plan artifact, and final unit ledger described above.
+Manual/API admission inserts the run, v1 spec, optional confirmed plan and
+units, run-ID-only River job, run/job link, and namespaced path plus stable-UUID
+slot aliases in one SQLite transaction via `InsertTx`. Stored specs override
+parallel legacy job arguments; unknown versions, unknown fields, and row/spec
+mismatches fail the run closed. The stable UUID in the private spec is
+independently checked against the durable UUID slot before execution, then
+threaded through scheduler execution and snapshot resolution; deployment
+lookup never has to rediscover that identity from a mutable pipeline path.
+Pre-upgrade jobs without a spec retain one strict upgrade decoder.
 
 For new scheduler-backed admissions, the durable slot permits one
 queued/running pipeline-scope run per logical pipeline across environments and
@@ -394,12 +448,13 @@ River-argument link recovery is legacy-only. Recovery emits one structured
 count summary, including requeued signals and legacy replays skipped because
 their effective execution context was never persisted (see staleness.md §3).
 
-This is a scheduler-backed foundation, not a universal run ledger. Interactive
-and embedded CLI, one-asset Materialize, Build-stale, and onboarding paths use
-the common target-capture/write-claim/completion seam but do not create a
-RunSpec or claim a pipeline-global run slot. Executable variable overrides,
-durable asset-by-window run units, durable schedule occurrences, and exact
-re-execution remain open.
+Plan-confirmed pipeline execution now has a durable asset/window ledger, but it
+is not yet universal across every mutating path. Interactive and embedded CLI,
+one-asset Materialize, Build-stale, and onboarding paths use the common target-
+capture/write-claim/completion seam but do not create a RunSpec or claim a
+pipeline-global run slot. Executable variable overrides, durable schedule
+occurrences, ledger coverage for those direct paths, and exact re-execution
+remain open.
 
 Before applying either Renart or River migrations, `Store` runs SQLite's
 `quick_check` against the shared state database. A failed check aborts startup

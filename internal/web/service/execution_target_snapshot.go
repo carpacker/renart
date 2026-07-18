@@ -36,9 +36,11 @@ type ExecutionUpstreamSnapshot struct {
 // context resolved immediately before execution. Entries are keyed by the
 // canonical asset name used by scheduler steps and completion events.
 type ExecutionTargetSnapshot struct {
-	Version      int                                     `json:"version"`
-	PipelineUUID string                                  `json:"pipeline_uuid"`
-	Entries      map[string]ExecutionTargetSnapshotEntry `json:"entries"`
+	Version               int                                     `json:"version"`
+	PipelineUUID          string                                  `json:"pipeline_uuid"`
+	ConfigurationDigest   string                                  `json:"configuration_digest,omitempty"`
+	ConfigurationFidelity string                                  `json:"configuration_fidelity,omitempty"`
+	Entries               map[string]ExecutionTargetSnapshotEntry `json:"entries"`
 }
 
 // ExecutionTargetSnapshotEntry deliberately contains no resolved object,
@@ -64,6 +66,15 @@ func (e *HybridBruinExecutor) resolveExecutionTargetSnapshot(
 	cfg *config.Config,
 	selectedAssets []*pipeline.Asset,
 ) (ExecutionTargetSnapshot, error) {
+	return e.resolveExecutionTargetSnapshotForSelection(pl, cfg, selectedAssets, selectedAssets)
+}
+
+func (e *HybridBruinExecutor) resolveExecutionTargetSnapshotForSelection(
+	pl *pipeline.Pipeline,
+	cfg *config.Config,
+	targetAssets []*pipeline.Asset,
+	configurationAssets []*pipeline.Asset,
+) (ExecutionTargetSnapshot, error) {
 	if pl == nil {
 		return ExecutionTargetSnapshot{}, fmt.Errorf("pipeline is required")
 	}
@@ -82,9 +93,9 @@ func (e *HybridBruinExecutor) resolveExecutionTargetSnapshot(
 		return ExecutionTargetSnapshot{}, err
 	}
 
-	entries := make(map[string]ExecutionTargetSnapshotEntry, len(selectedAssets))
+	entries := make(map[string]ExecutionTargetSnapshotEntry, len(targetAssets))
 	varsHash := fingerprint.AllVarsHash(vars)
-	for _, asset := range selectedAssets {
+	for _, asset := range targetAssets {
 		if asset == nil {
 			return ExecutionTargetSnapshot{}, fmt.Errorf("selected asset is nil")
 		}
@@ -127,10 +138,13 @@ func (e *HybridBruinExecutor) resolveExecutionTargetSnapshot(
 		entries[assetName] = entry
 	}
 
+	configurationIdentity := selectedPipelineConfigurationIdentity(cfg, pl, configurationAssets)
 	return ExecutionTargetSnapshot{
-		Version:      ExecutionTargetSnapshotVersion,
-		PipelineUUID: pipelineID,
-		Entries:      entries,
+		Version:               ExecutionTargetSnapshotVersion,
+		PipelineUUID:          pipelineID,
+		ConfigurationDigest:   configurationIdentity.Digest,
+		ConfigurationFidelity: string(configurationIdentity.Fidelity),
+		Entries:               entries,
 	}, nil
 }
 
@@ -154,6 +168,26 @@ func (e *HybridBruinExecutor) notifyExecutionTargetsResolved(
 		return nil
 	}
 	snapshot, err := e.resolveExecutionTargetSnapshot(pl, cfg, selectedAssets)
+	if err != nil {
+		return fmt.Errorf("resolve execution target snapshot: %w", err)
+	}
+	if err := callback(snapshot); err != nil {
+		return fmt.Errorf("persist execution target snapshot: %w", err)
+	}
+	return nil
+}
+
+func (e *HybridBruinExecutor) notifyExecutionTargetsResolvedForSelection(
+	pl *pipeline.Pipeline,
+	cfg *config.Config,
+	targetAssets []*pipeline.Asset,
+	configurationAssets []*pipeline.Asset,
+	callback func(ExecutionTargetSnapshot) error,
+) error {
+	if callback == nil {
+		return nil
+	}
+	snapshot, err := e.resolveExecutionTargetSnapshotForSelection(pl, cfg, targetAssets, configurationAssets)
 	if err != nil {
 		return fmt.Errorf("resolve execution target snapshot: %w", err)
 	}

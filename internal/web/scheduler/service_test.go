@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -602,15 +603,25 @@ func TestTriggerAdmissionPersistsSpecAndRunIDOnlyRiverJob(t *testing.T) {
 
 	start := "2026-07-16T08:00:00.123456789Z"
 	end := "2026-07-16T09:00:00.123456789Z"
+	executionTime := "2026-07-16T08:30:00.123456789Z"
+	confirmedPlan := validPipelineRunPlan(t)
+	confirmedPlan.ExecutionTime = executionTime
+	confirmedPlan.SourceMerkle = strings.Repeat("a", 64)
+	confirmedPlan.ConfigurationDigest = strings.Repeat("b", 64)
+	confirmedPlan.Artifact = pipelineRunPlanArtifact(t, confirmedPlan)
 	run, err := service.Trigger(ctx, PipelineSchedule{PipelineID: "pipeline-id", PipelineName: "analytics"}, TriggerRequest{
-		Environment:          "prod",
-		Start:                start,
-		End:                  end,
-		Source:               RunSourceSnapshot,
-		SnapshotVersionID:    "snapshot-id",
-		FullRefresh:          true,
-		ConfirmedEnvironment: "prod",
-		SensorMode:           "skip",
+		Environment:                 "prod",
+		Start:                       start,
+		End:                         end,
+		Source:                      RunSourceSnapshot,
+		SnapshotVersionID:           "snapshot-id",
+		FullRefresh:                 true,
+		ConfirmedEnvironment:        "prod",
+		SensorMode:                  "skip",
+		ExecutionTime:               executionTime,
+		ExpectedSourceMerkle:        strings.Repeat("a", 64),
+		ExpectedConfigurationDigest: strings.Repeat("b", 64),
+		ConfirmedPlan:               &confirmedPlan,
 	})
 	require.NoError(t, err)
 	require.NotNil(t, run.RiverJobID)
@@ -625,11 +636,72 @@ func TestTriggerAdmissionPersistsSpecAndRunIDOnlyRiverJob(t *testing.T) {
 	assert.True(t, spec.Requested.FullRefresh)
 	assert.Equal(t, "skip", spec.Requested.SensorMode)
 	assert.Equal(t, "prod", spec.Authorization.ConfirmedEnvironment)
+	require.NotNil(t, spec.Requested.ExecutionTime)
+	assert.Equal(t, executionTime, spec.Requested.ExecutionTime.Format(time.RFC3339Nano))
+	require.NotNil(t, spec.Expected)
+	assert.Equal(t, strings.Repeat("a", 64), spec.Expected.SourceMerkle)
+	assert.Equal(t, strings.Repeat("b", 64), spec.Expected.ConfigurationDigest)
 	assert.Nil(t, spec.Schedule)
+	persistedPlan, found, err := store.GetRunPlan(ctx, run.ID)
+	require.NoError(t, err)
+	require.True(t, found)
+	assert.Equal(t, confirmedPlan, persistedPlan)
+	assert.Equal(t, len(confirmedPlan.ExecutionUnits), countRows(t, store, `SELECT COUNT(*) FROM pipeline_run_units WHERE run_id = ?`, run.ID))
 
 	var argsJSON string
 	require.NoError(t, store.db.QueryRowContext(ctx, `SELECT json(args) FROM river_job WHERE id = ?`, *run.RiverJobID).Scan(&argsJSON))
 	assert.JSONEq(t, fmt.Sprintf(`{"run_id":%q}`, run.ID), argsJSON)
+}
+
+func TestConfirmedPlanRunPersistsUnitProgressBeforeSuccess(t *testing.T) {
+	stateDir := t.TempDir()
+	store, err := OpenStore(filepath.Join(stateDir, "state.db"))
+	require.NoError(t, err)
+	defer store.Close()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	confirmedPlan := validPipelineRunPlan(t)
+	service := New(Options{
+		Store:    store,
+		StateDir: stateDir,
+		Runner: func(_ context.Context, req RunRequest, _ func(string)) RunResult {
+			require.NotNil(t, req.ConfirmedPlan)
+			require.Equal(t, confirmedPlan, *req.ConfirmedPlan)
+			require.NotNil(t, req.OnUnit)
+			started := time.Now().UTC()
+			require.NoError(t, req.OnUnit(PipelineRunUnitEvent{
+				Position: 0, Status: PipelineRunUnitRunning, StartedAt: &started,
+			}))
+			finished := started.Add(time.Second)
+			require.NoError(t, req.OnUnit(PipelineRunUnitEvent{
+				Position: 0, Status: PipelineRunUnitSuccess, StartedAt: &started, FinishedAt: &finished,
+			}))
+			return RunResult{Status: "ok"}
+		},
+	})
+	require.NoError(t, service.Start(ctx))
+	defer service.Stop()
+
+	run, err := service.Trigger(ctx, PipelineSchedule{
+		PipelineID: "pipeline-id", PipelineUUID: "pipeline-uuid", PipelineName: "analytics",
+	}, TriggerRequest{
+		Source:                      RunSourceWorkingTree,
+		ExecutionTime:               confirmedPlan.ExecutionTime,
+		ExpectedSourceMerkle:        confirmedPlan.SourceMerkle,
+		ExpectedConfigurationDigest: confirmedPlan.ConfigurationDigest,
+		ConfirmedPlan:               &confirmedPlan,
+	})
+	require.NoError(t, err)
+
+	require.Eventually(t, func() bool {
+		stored, _, _, getErr := service.GetRun(context.Background(), run.ID)
+		if getErr != nil || stored.Status != RunStatusSuccess {
+			return false
+		}
+		units, unitsErr := service.ListRunUnits(context.Background(), run.ID)
+		return unitsErr == nil && len(units) == 1 && units[0].Status == PipelineRunUnitSuccess
+	}, 2*time.Second, 20*time.Millisecond)
 }
 
 func TestConcurrentTriggerAdmissionCreatesOneRunSpecSlotAndRiverJob(t *testing.T) {
@@ -715,12 +787,21 @@ func TestTriggerAdmissionRollsBackRunSpecAndJobWhenRiverInsertFails(t *testing.T
 		END`)
 	require.NoError(t, err)
 
-	_, err = service.Trigger(ctx, PipelineSchedule{PipelineID: "pipeline-id", PipelineName: "analytics"}, TriggerRequest{Source: RunSourceWorkingTree})
+	confirmedPlan := validPipelineRunPlan(t)
+	_, err = service.Trigger(ctx, PipelineSchedule{PipelineID: "pipeline-id", PipelineName: "analytics"}, TriggerRequest{
+		Source:                      RunSourceWorkingTree,
+		ExecutionTime:               confirmedPlan.ExecutionTime,
+		ExpectedSourceMerkle:        confirmedPlan.SourceMerkle,
+		ExpectedConfigurationDigest: confirmedPlan.ConfigurationDigest,
+		ConfirmedPlan:               &confirmedPlan,
+	})
 	require.ErrorContains(t, err, "injected River admission failure")
 	result, err := service.ListRuns(ctx, RunFilter{})
 	require.NoError(t, err)
 	assert.Zero(t, result.Total)
 	assert.Equal(t, 0, countRows(t, store, `SELECT COUNT(*) FROM pipeline_run_specs`))
+	assert.Equal(t, 0, countRows(t, store, `SELECT COUNT(*) FROM pipeline_run_plans`))
+	assert.Equal(t, 0, countRows(t, store, `SELECT COUNT(*) FROM pipeline_run_units`))
 	assert.Equal(t, 0, countRows(t, store, `SELECT COUNT(*) FROM river_job WHERE kind = ?`, pipelineRunJobKind))
 	for _, event := range events {
 		payload, ok := event.(map[string]any)

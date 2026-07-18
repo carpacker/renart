@@ -64,6 +64,7 @@ type webServer struct {
 	sqlLSPSvc        *service.SQLLSPService
 	jinjaRenderSvc   *service.JinjaRenderService
 	assetRenderSvc   *service.AssetRenderService
+	pipelinePlanSvc  *service.PipelinePlanService
 	runSvc           *service.RunService
 	notebookSvc      *service.NotebookService
 	onboardingSvc    *service.OnboardingService
@@ -309,6 +310,7 @@ func (s *webServer) registerRoutes(router chi.Router) {
 	webhttpapi.RegisterSQLLSPRoutes(router, &webhttpapi.SQLLSPAPI{Service: s.sqlLSPSvc})
 	webhttpapi.RegisterJinjaRenderRoutes(router, &webhttpapi.JinjaRenderAPI{Service: s.jinjaRenderSvc})
 	webhttpapi.RegisterAssetRenderRoutes(router, &webhttpapi.AssetRenderAPI{Service: s.assetRenderSvc})
+	webhttpapi.RegisterPipelinePlanRoutes(router, &webhttpapi.PipelinePlanAPI{Service: s.pipelinePlanSvc, Runs: s})
 	webhttpapi.RegisterRunRoutes(router, &webhttpapi.RunAPI{Service: s.runSvc})
 	webhttpapi.RegisterNotebookRoutes(router, &webhttpapi.NotebookAPI{Service: s.notebookSvc})
 	webhttpapi.RegisterPythonPackageRoutes(router, &webhttpapi.PythonPackagesAPI{Search: service.SearchPyPIPackages})
@@ -623,6 +625,20 @@ func (s *webServer) GetRun(ctx context.Context, runID string) (webscheduler.Pipe
 	return s.schedulerSvc.GetRun(ctx, runID)
 }
 
+func (s *webServer) GetRunPlan(ctx context.Context, runID string) (webscheduler.PipelineRunPlan, bool, error) {
+	if s.schedulerSvc == nil {
+		return webscheduler.PipelineRunPlan{}, false, fmt.Errorf("scheduler is not initialized")
+	}
+	return s.schedulerSvc.GetRunPlan(ctx, runID)
+}
+
+func (s *webServer) ListRunUnits(ctx context.Context, runID string) ([]webscheduler.PipelineRunUnit, error) {
+	if s.schedulerSvc == nil {
+		return nil, fmt.Errorf("scheduler is not initialized")
+	}
+	return s.schedulerSvc.ListRunUnits(ctx, runID)
+}
+
 func schedulerStatusFromExecutionStatus(status string) webscheduler.RunStatus {
 	switch strings.ToLower(strings.TrimSpace(status)) {
 	case "success", "succeeded", "ok", "finished":
@@ -730,6 +746,9 @@ func (s *webServer) parsePipelineDir(ctx context.Context, pipelineDir string) (*
 // resolveRunSnapshot materializes an already-resolved exact deployment. It
 // never chooses "latest" and never falls back to the working tree.
 func (s *webServer) resolveRunSnapshot(ctx context.Context, spec *service.PipelineRunSpec, scheduled bool, onLog func(string)) (func(), error) {
+	if spec == nil {
+		return func() {}, fmt.Errorf("pipeline run specification is required")
+	}
 	pipelineUUID := strings.TrimSpace(spec.PipelineUUID)
 	if strings.TrimSpace(spec.SnapshotVersionID) != "" {
 		// New scheduler-backed runs carry the stable UUID in their durable
@@ -742,6 +761,34 @@ func (s *webServer) resolveRunSnapshot(ctx context.Context, spec *service.Pipeli
 				return func() {}, fmt.Errorf("pipeline %s is not in the current workspace", spec.PipelineID)
 			}
 		}
+	} else if expectedMerkle := strings.TrimSpace(spec.ExpectedSourceMerkle); expectedMerkle != "" {
+		target, err := service.ResolvePipelineRunTarget(spec.PipelineID)
+		if err != nil {
+			return func() {}, fmt.Errorf("resolve confirmed pipeline source: %w", err)
+		}
+		pipelineDir, err := service.SafeJoin(s.workspaceRoot, target)
+		if err != nil {
+			return func() {}, fmt.Errorf("resolve confirmed pipeline source: %w", err)
+		}
+		tempDir, err := os.MkdirTemp("", "renart-working-tree-plan-")
+		if err != nil {
+			return func() {}, fmt.Errorf("create confirmed working-tree sandbox: %w", err)
+		}
+		manifest, err := snapshot.CopyPipelineSourceForExecution(pipelineDir, tempDir)
+		if err != nil {
+			_ = os.RemoveAll(tempDir)
+			return func() {}, fmt.Errorf("copy confirmed pipeline source: %w", err)
+		}
+		if len(manifest) == 0 || snapshot.ManifestRoot(manifest) != expectedMerkle {
+			_ = os.RemoveAll(tempDir)
+			return func() {}, fmt.Errorf("pipeline source changed after plan confirmation")
+		}
+		spec.SnapshotDir = tempDir
+		spec.ConfigPath = s.resolveConfigFilePath()
+		if onLog != nil {
+			onLog("executing confirmed working-tree plan\n")
+		}
+		return func() { _ = os.RemoveAll(tempDir) }, nil
 	}
 	return materializeExactRunSnapshot(ctx, s.snapshotStore, pipelineUUID, s.resolveConfigFilePath(), scheduled, spec, onLog)
 }
@@ -772,6 +819,15 @@ func materializeExactRunSnapshot(
 	pipelineUUID = strings.TrimSpace(pipelineUUID)
 	if pipelineUUID == "" {
 		return cleanup, fmt.Errorf("pipeline has no stable ID for deployment %s", versionID)
+	}
+	if expectedMerkle := strings.TrimSpace(spec.ExpectedSourceMerkle); expectedMerkle != "" {
+		deployed, err := store.ValidateMetadata(ctx, versionID, pipelineUUID)
+		if err != nil {
+			return cleanup, fmt.Errorf("validate deployment %s: %w", versionID, err)
+		}
+		if deployed.MerkleRoot != expectedMerkle {
+			return cleanup, fmt.Errorf("pipeline source changed after plan confirmation")
+		}
 	}
 	tempDir, err := os.MkdirTemp("", "renart-snapshot-")
 	if err != nil {

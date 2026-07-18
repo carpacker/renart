@@ -106,7 +106,22 @@ type TypeCheckReport struct {
 // workspaceRoot may be empty (e.g. from the CLI), in which case asset IDs are
 // left blank.
 func CheckPipeline(ctx context.Context, fs afero.Fs, pp *pipeline.Pipeline, workspaceRoot string, tw ExecutionTimeWindow) TypeCheckReport {
-	now := time.Now().UTC()
+	return CheckPipelineAt(ctx, fs, pp, workspaceRoot, tw, time.Now().UTC())
+}
+
+// CheckPipelineAt is the execution-context-aware form used by planning. The
+// ordinary authoring typecheck keeps calling CheckPipeline with the current
+// time, while a run plan checks the exact execution timestamp its renderer
+// will use.
+func CheckPipelineAt(
+	ctx context.Context,
+	fs afero.Fs,
+	pp *pipeline.Pipeline,
+	workspaceRoot string,
+	tw ExecutionTimeWindow,
+	executionTime time.Time,
+) TypeCheckReport {
+	now := executionTime.UTC()
 	macroContent, _ := jinja.LoadMacros(fs, pp.MacrosPath)
 	renderer := jinja.NewRendererWithStartEndDatesAndMacros(
 		&tw.Start, &tw.End, &now, pp.Name, typeCheckRunID, jinja.Context(pp.Variables.Value()), macroContent,

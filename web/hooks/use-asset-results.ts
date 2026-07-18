@@ -328,6 +328,9 @@ export function useAssetResults() {
     if (!schedulerRunEvent) {
       return;
     }
+    if (schedulerRunEvent.type === "run.unit") {
+      return;
+    }
 
     const eventRunId =
       schedulerRunEvent.type === "run.log" || schedulerRunEvent.type === "run.step"
@@ -828,6 +831,36 @@ export function useAssetResults() {
     ],
   );
 
+  const trackConfirmedPipelineRun = useCallback(
+    (run: PipelineRun, timeWindow?: { start: string; end: string } | null) => {
+      const entryId = createMaterializeHistoryId();
+      const startedAt = Date.now();
+      const responseTerminal = terminalSchedulerRun(run);
+      const rememberedTerminal = responseTerminal
+        ? rememberTerminalSchedulerRun(terminalSchedulerRuns.current, responseTerminal)
+        : terminalSchedulerRuns.current.get(run.id);
+      upsertMaterializeEntry(entryId, () =>
+        createMaterializeEntry({
+          id: entryId,
+          kind: "pipeline",
+          label: pipeline?.name ? `Pipeline: ${pipeline.name}` : "Pipeline materialize",
+          pipelineId: run.pipeline_id || pipelineId,
+          pipelineName: run.pipeline || pipeline?.name || null,
+          runId: run.id,
+          output: rememberedTerminal?.output ?? "",
+          status: rememberedTerminal?.status ?? null,
+          error: rememberedTerminal?.error ?? "",
+          loading: !rememberedTerminal,
+          createdAt: startedAt,
+          timeWindow: timeWindow ?? selectedExecutionTimeWindow,
+        }),
+      );
+      void reconcileTerminalSchedulerRun(run.id);
+      return entryId;
+    },
+    [pipeline, pipelineId, reconcileTerminalSchedulerRun, selectedExecutionTimeWindow],
+  );
+
   // runBuildStale delegates the whole "build stale assets" operation to the
   // server: one streamed run in dependency order, one history entry, one log.
   const runBuildStale = useCallback(
@@ -1004,6 +1037,7 @@ export function useAssetResults() {
     runInspectForAsset,
     runMaterializeForAsset,
     runMaterializePipeline,
+    trackConfirmedPipelineRun,
     runBuildStale,
     setMaterializeBatchResult,
     clearResultsAfterDelete,

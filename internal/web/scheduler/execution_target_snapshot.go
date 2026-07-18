@@ -30,6 +30,25 @@ func validateExecutionTargetSnapshot(snapshot ExecutionTargetSnapshot) error {
 			return fmt.Errorf("%w: version %d requires a canonical pipeline_uuid", ErrInvalidExecutionTargetSnapshot, snapshot.Version)
 		}
 	}
+	configurationDigest := strings.TrimSpace(snapshot.ConfigurationDigest)
+	configurationFidelity := strings.TrimSpace(snapshot.ConfigurationFidelity)
+	if configurationDigest != snapshot.ConfigurationDigest || configurationFidelity != snapshot.ConfigurationFidelity {
+		return fmt.Errorf("%w: configuration identity must be canonical", ErrInvalidExecutionTargetSnapshot)
+	}
+	if configurationDigest != "" || configurationFidelity != "" {
+		switch configurationFidelity {
+		case ExecutionTargetFidelityExact:
+			if err := validateRunIdentityDigest("configuration_digest", configurationDigest); err != nil {
+				return fmt.Errorf("%w: %v", ErrInvalidExecutionTargetSnapshot, err)
+			}
+		case ExecutionTargetFidelityRuntimeOnly:
+			if configurationDigest != "" {
+				return fmt.Errorf("%w: runtime-only configuration cannot claim a digest", ErrInvalidExecutionTargetSnapshot)
+			}
+		default:
+			return fmt.Errorf("%w: unsupported configuration_fidelity %q", ErrInvalidExecutionTargetSnapshot, configurationFidelity)
+		}
+	}
 	if len(snapshot.Entries) == 0 {
 		return fmt.Errorf("%w: at least one asset entry is required", ErrInvalidExecutionTargetSnapshot)
 	}

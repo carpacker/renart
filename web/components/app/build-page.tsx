@@ -204,6 +204,7 @@ import { SqlPreview } from "./sql-preview";
 import { LoadParametersEditor } from "./load-parameters-editor";
 import { SemanticParametersEditor } from "./semantic-parameters-editor";
 import { AssetRenderView } from "./asset-render-view";
+import { PipelinePlanSheet } from "./pipeline-plan-sheet";
 import { FilePathPicker } from "./file-path-picker";
 import {
   SemanticAssetCreateFields,
@@ -232,6 +233,8 @@ import {
   stalenessDotClassName,
   stalenessLabel,
 } from "./app-primitives";
+
+const WORKING_TREE_RUN_SOURCE: PipelineRunSource = { source: "working_tree" };
 
 export type AppBuildView = "canvas" | "split" | "code";
 export type AppResultTab =
@@ -296,18 +299,6 @@ function isValidExecutionWindow(start: string, end: string) {
   return (
     !Number.isNaN(startTimestamp) && !Number.isNaN(endTimestamp) && endTimestamp > startTimestamp
   );
-}
-
-function formatRunWindow(window?: { start: string; end: string } | null) {
-  if (!window) return "window resolving";
-  const start = new Date(window.start);
-  const end = new Date(window.end);
-  if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) {
-    return "invalid window";
-  }
-  const startUTC = start.toISOString().slice(0, 16).replace("T", " ");
-  const endUTC = end.toISOString().slice(0, 16).replace("T", " ");
-  return `${startUTC}–${endUTC} UTC`;
 }
 
 type BuildAsset = AppLineageCanvasAsset & {
@@ -556,7 +547,7 @@ export function AppBuildPage({
   const effectiveEnvironment = selectedEnvironment ?? workspace?.selected_environment ?? "";
   const pipelineRunSource = useMemo<PipelineRunSource | null>(() => {
     if (!environmentPolicy?.deployed_only) {
-      return { source: "working_tree" };
+      return WORKING_TREE_RUN_SOURCE;
     }
     const versionId = deployState.status?.version_id?.trim();
     if (
@@ -584,21 +575,7 @@ export function AppBuildPage({
         ? `Run deployed ${pipelineRunSource.snapshot_version_id.slice(0, 8)}`
         : "Deployment required"
     : "Run workspace";
-  const pipelineRunBlockedReason = environmentPolicy?.protected
-    ? "This environment is protected: interactive execution is disabled; deploy and schedule instead"
-    : environmentPolicy?.deployed_only && deployState.loading
-      ? "Resolving the latest deployment for this environment"
-      : environmentPolicy?.deployed_only && deployState.error
-        ? `Deployment status is unavailable: ${deployState.error}`
-        : environmentPolicy?.deployed_only &&
-            deployState.status?.has_snapshot &&
-            !deployState.status.executable
-          ? `The latest deployment failed its integrity check: ${deployState.status.integrity_error ?? "redeploy it before running"}`
-          : environmentPolicy?.deployed_only && !pipelineRunSource
-            ? "This environment requires a deployment before it can run"
-            : undefined;
   const selectedExecutionTimeWindow = useAtomValue(selectedExecutionTimeWindowAtom);
-  const pipelineRunContextLabel = `${pipelineRunSourceLabel.replace(/^Run /, "")} · ${effectiveEnvironment || "default"} · ${formatRunWindow(selectedExecutionTimeWindow)}`;
   const executionWindowBlockedReason = selectedExecutionTimeWindow
     ? undefined
     : "Resolving the execution window";
@@ -750,6 +727,7 @@ export function AppBuildPage({
     setPipelineSettingsOpen(true);
   };
   const [buildStaleOpen, setBuildStaleOpen] = useState(false);
+  const [pipelinePlanOpen, setPipelinePlanOpen] = useState(false);
   const [addedDependencies, setAddedDependencies] = useState<string[]>([]);
   const declaredDependencies = [...pipelineDependencies, ...addedDependencies];
   const [typeCheckReport, setTypeCheckReport] = useState<PipelineTypeCheckReport | null>(null);
@@ -891,15 +869,6 @@ export function AppBuildPage({
     }
     void runTypeCheck(false);
   }, [activePipeline?.id, runTypeCheck]);
-  const runAction = () => {
-    if (!activePipeline || !pipelineRunSource || pipelineRunBlockedReason) {
-      return;
-    }
-    openBottom("materialize");
-    void assetResults.runMaterializePipeline(activePipeline.id, undefined, {
-      source: pipelineRunSource,
-    });
-  };
   const runMaterialize = (assetId: string, name: string, scope: MaterializeScope = "asset") => {
     openBottom("materialize");
     void assetResults.runMaterializeForAsset(assetId, scope);
@@ -1242,7 +1211,7 @@ export function AppBuildPage({
           inspectorCollapsed={inspectorCollapsed}
           onToggleExplorer={() => setExplorerCollapsed((value) => !value)}
           onToggleInspector={() => setInspectorCollapsed((value) => !value)}
-          onRun={runAction}
+          onReviewRun={() => setPipelinePlanOpen(true)}
           typeCheckReport={typeCheckReport}
           typeCheckLoading={typeCheckLoading}
           typeCheckError={typeCheckError}
@@ -1254,14 +1223,9 @@ export function AppBuildPage({
           deployState={deployState}
           executionBlocked={executionBlocked}
           executionBlockedReason={executionBlockedReason}
-          runLabel={pipelineRunSourceLabel}
-          runContextLabel={pipelineRunContextLabel}
-          runDisabled={
-            !pipelineRunSource ||
-            Boolean(pipelineRunBlockedReason) ||
-            Boolean(executionWindowBlockedReason)
-          }
-          runTitle={pipelineRunBlockedReason ?? executionWindowBlockedReason}
+          runSourceLabel={pipelineRunSourceLabel.replace(/^Run /, "")}
+          runDisabled={!activePipeline}
+          runTitle="Review the saved source, readiness checks, and rendered operations before running"
         />
         {isWorkspaceLoading ? (
           <BuildLoadingState />
@@ -1380,6 +1344,24 @@ export function AppBuildPage({
             <Inspector asset={selectedAsset} />
           </SheetContent>
         </Sheet>
+
+        <PipelinePlanSheet
+          open={pipelinePlanOpen}
+          onOpenChange={setPipelinePlanOpen}
+          pipelineId={activePipeline?.id ?? pipelineId}
+          pipelineName={activePipeline?.name ?? pipelineId}
+          environment={effectiveEnvironment}
+          timeWindow={selectedExecutionTimeWindow}
+          source={pipelineRunSource}
+          confirmDestructive={Boolean(environmentPolicy?.confirm_destructive)}
+          onAccepted={(run, plan) => {
+            openBottom("materialize");
+            assetResults.trackConfirmedPipelineRun(run, {
+              start: plan.context.start_date,
+              end: plan.context.end_date,
+            });
+          }}
+        />
 
         <NewAssetDialog
           open={newAssetOpen}
@@ -1614,7 +1596,7 @@ function BuildTopBar({
   inspectorCollapsed = false,
   onToggleExplorer,
   onToggleInspector,
-  onRun,
+  onReviewRun,
   staleCount = 0,
   stalenessLoading = false,
   stalenessError,
@@ -1622,8 +1604,7 @@ function BuildTopBar({
   deployState,
   executionBlocked = false,
   executionBlockedReason,
-  runLabel = "Run workspace",
-  runContextLabel,
+  runSourceLabel,
   runDisabled = false,
   runTitle,
   typeCheckReport,
@@ -1645,7 +1626,7 @@ function BuildTopBar({
   inspectorCollapsed?: boolean;
   onToggleExplorer?: () => void;
   onToggleInspector?: () => void;
-  onRun: () => void;
+  onReviewRun: () => void;
   staleCount?: number;
   stalenessLoading?: boolean;
   stalenessError?: string | null;
@@ -1653,8 +1634,7 @@ function BuildTopBar({
   deployState?: PipelineDeployState;
   executionBlocked?: boolean;
   executionBlockedReason?: string;
-  runLabel?: string;
-  runContextLabel?: string;
+  runSourceLabel?: string;
   runDisabled?: boolean;
   runTitle?: string;
   typeCheckReport?: PipelineTypeCheckReport | null;
@@ -1663,10 +1643,6 @@ function BuildTopBar({
   onTypeCheck?: () => void;
 }) {
   const search: AppBuildSearch = { result: resultTab, editor: editorMode };
-  const freshnessUnavailable = Boolean(stalenessError);
-  const freshnessUnavailableTitle = freshnessUnavailable
-    ? `Freshness unavailable${stalenessError ? `: ${stalenessError}` : ""}. Last known state: ${staleCount} stale asset${staleCount === 1 ? "" : "s"}.`
-    : undefined;
 
   return (
     <div className="flex min-h-12 shrink-0 items-center gap-2 px-3">
@@ -1741,71 +1717,22 @@ function BuildTopBar({
           <Terminal className="size-3.5" /> Ad-hoc
         </Link>
       </Button>
-      <TypeCheckControl
+      <ReadinessControl
         report={typeCheckReport}
-        loading={typeCheckLoading}
-        error={typeCheckError}
-        onClick={onTypeCheck}
+        typeCheckLoading={typeCheckLoading}
+        typeCheckError={typeCheckError}
+        onTypeCheck={onTypeCheck}
+        staleCount={staleCount}
+        stalenessLoading={stalenessLoading}
+        stalenessError={stalenessError}
+        onBuildStale={onBuildStale}
+        buildDisabled={executionBlocked}
+        buildDisabledReason={executionBlockedReason}
       />
-      <Button
-        variant="outline"
-        size="sm"
-        onClick={onBuildStale}
-        disabled={stalenessLoading || freshnessUnavailable || staleCount === 0 || executionBlocked}
-        title={executionBlocked ? executionBlockedReason : freshnessUnavailableTitle}
-        aria-label={
-          stalenessLoading
-            ? "Checking freshness"
-            : freshnessUnavailable
-              ? "Freshness unavailable"
-              : staleCount > 0
-                ? `Build needed: ${staleCount} stale asset${staleCount === 1 ? "" : "s"}`
-                : "Fresh"
-        }
-      >
-        {stalenessLoading ? (
-          <Loader2 data-icon="inline-start" className="animate-spin" />
-        ) : freshnessUnavailable ? (
-          <AlertTriangle data-icon="inline-start" />
-        ) : staleCount > 0 ? (
-          <Hammer data-icon="inline-start" />
-        ) : (
-          <CheckCircle2 data-icon="inline-start" />
-        )}
-        <span className="hidden lg:inline">
-          {stalenessLoading
-            ? "Checking…"
-            : freshnessUnavailable
-              ? "Freshness unavailable"
-              : staleCount > 0
-                ? "Build needed"
-                : "Fresh"}
-        </span>
-        {!stalenessLoading && !freshnessUnavailable && staleCount > 0 ? (
-          <Badge variant="secondary" size="xs">
-            {staleCount}
-          </Badge>
-        ) : null}
-      </Button>
       {deployState ? <DeployButton deployState={deployState} /> : null}
-      {runContextLabel ? (
-        <Badge
-          variant="muted"
-          size="xs"
-          className="hidden min-w-0 max-w-80 font-normal lg:inline-flex"
-          aria-label={`Run context: ${runContextLabel}`}
-          title={runContextLabel}
-        >
-          <span className="truncate">{runContextLabel}</span>
-        </Badge>
-      ) : null}
-      <Button
-        size="sm"
-        onClick={onRun}
-        disabled={runDisabled}
-        title={runTitle ?? (runContextLabel ? `Run ${runContextLabel}` : undefined)}
-      >
-        <Play data-icon="inline-start" /> {runLabel}
+      <Button size="sm" onClick={onReviewRun} disabled={runDisabled} title={runTitle}>
+        <Play data-icon="inline-start" /> Review run
+        {runSourceLabel ? <span className="sr-only"> from {runSourceLabel}</span> : null}
       </Button>
       <Button
         variant="ghost"
@@ -1836,59 +1763,125 @@ function BuildTopBar({
   );
 }
 
-// TypeCheckControl keeps code-check status visible and opens the detailed
-// results. A failed refresh remains distinct from the last successful report.
-function TypeCheckControl({
+// ReadinessControl keeps definition and data readiness in one secondary
+// surface so Deploy and the primary run-review action retain clear hierarchy.
+function ReadinessControl({
   report,
-  loading,
-  error,
-  onClick,
+  typeCheckLoading,
+  typeCheckError,
+  onTypeCheck,
+  staleCount,
+  stalenessLoading,
+  stalenessError,
+  onBuildStale,
+  buildDisabled,
+  buildDisabledReason,
 }: {
   report?: PipelineTypeCheckReport | null;
-  loading?: boolean;
-  error?: string | null;
-  onClick?: () => void;
+  typeCheckLoading?: boolean;
+  typeCheckError?: string | null;
+  onTypeCheck?: () => void;
+  staleCount: number;
+  stalenessLoading?: boolean;
+  stalenessError?: string | null;
+  onBuildStale?: () => void;
+  buildDisabled?: boolean;
+  buildDisabledReason?: string;
 }) {
   const errors = report?.summary.errors ?? 0;
   const warnings = report?.summary.warnings ?? 0;
-  const total = errors + warnings;
-  const label = loading
-    ? "Checking…"
-    : error
-      ? "Checks failed"
-      : total > 0
-        ? `Problems ${total}`
+  const definitionProblems = errors + warnings;
+  const problemCount = definitionProblems + (stalenessError ? 1 : staleCount);
+  const loading = typeCheckLoading || stalenessLoading;
+  const hasError = Boolean(typeCheckError || stalenessError || errors > 0);
+  const definitionLabel = typeCheckLoading
+    ? "Checking definition…"
+    : typeCheckError
+      ? "Definition check failed"
+      : definitionProblems > 0
+        ? `${errors} errors · ${warnings} warnings`
         : report
-          ? "Checks passed"
-          : "Checks";
-  const title = loading
-    ? "Type checking…"
-    : error
-      ? `Type check failed: ${error}`
-      : report
-        ? `Type check: ${errors} error${errors === 1 ? "" : "s"}, ${warnings} warning${warnings === 1 ? "" : "s"}`
-        : "Run type check";
+          ? "Definition ready"
+          : "Definition not checked";
+  const dataLabel = stalenessLoading
+    ? "Checking data…"
+    : stalenessError
+      ? "Freshness unavailable"
+      : staleCount > 0
+        ? `${staleCount} asset${staleCount === 1 ? "" : "s"} need work`
+        : "Data is current";
   return (
-    <Button
-      variant={error ? "destructive" : "outline"}
-      size="sm"
-      onClick={onClick}
-      aria-label={label}
-      title={title}
-    >
-      {loading ? (
-        <Loader2 data-icon="inline-start" className="animate-spin" />
-      ) : error ? (
-        <AlertTriangle data-icon="inline-start" />
-      ) : report && total === 0 ? (
-        <CheckCircle2 data-icon="inline-start" />
-      ) : total > 0 ? (
-        <AlertTriangle data-icon="inline-start" />
-      ) : (
-        <Bell data-icon="inline-start" />
-      )}
-      <span className="hidden lg:inline">{label}</span>
-    </Button>
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <Button
+          variant={hasError ? "destructive" : "outline"}
+          size="sm"
+          aria-label={`Readiness: ${definitionLabel}; ${dataLabel}`}
+          title={`${definitionLabel} · ${dataLabel}`}
+        >
+          {loading ? (
+            <Loader2 data-icon="inline-start" className="animate-spin" />
+          ) : hasError || problemCount > 0 ? (
+            <AlertTriangle data-icon="inline-start" />
+          ) : report ? (
+            <CheckCircle2 data-icon="inline-start" />
+          ) : (
+            <Bell data-icon="inline-start" />
+          )}
+          <span className="hidden lg:inline">Readiness</span>
+          {!loading && problemCount > 0 ? (
+            <Badge variant={hasError ? "destructive" : "secondary"} size="xs">
+              {problemCount}
+            </Badge>
+          ) : null}
+          <ChevronDown data-icon="inline-end" />
+        </Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end" className="w-72">
+        <DropdownMenuGroup>
+          <DropdownMenuLabel>Definition</DropdownMenuLabel>
+          <DropdownMenuItem onSelect={onTypeCheck} disabled={typeCheckLoading}>
+            {typeCheckLoading ? (
+              <Loader2 className="animate-spin" />
+            ) : typeCheckError || definitionProblems > 0 ? (
+              <AlertTriangle />
+            ) : (
+              <CheckCircle2 />
+            )}
+            <div className="min-w-0 flex-1">
+              <div>Code checks</div>
+              <div className="truncate text-[10px] text-muted-foreground">{definitionLabel}</div>
+            </div>
+          </DropdownMenuItem>
+        </DropdownMenuGroup>
+        <DropdownMenuGroup>
+          <DropdownMenuLabel>Data</DropdownMenuLabel>
+          <DropdownMenuItem
+            onSelect={onBuildStale}
+            disabled={
+              stalenessLoading || Boolean(stalenessError) || staleCount === 0 || buildDisabled
+            }
+            title={buildDisabled ? buildDisabledReason : (stalenessError ?? undefined)}
+          >
+            {stalenessLoading ? (
+              <Loader2 className="animate-spin" />
+            ) : stalenessError ? (
+              <AlertTriangle />
+            ) : staleCount > 0 ? (
+              <Hammer />
+            ) : (
+              <CheckCircle2 />
+            )}
+            <div className="min-w-0 flex-1">
+              <div>Build needed</div>
+              <div className="truncate text-[10px] text-muted-foreground">
+                {buildDisabled ? buildDisabledReason : dataLabel}
+              </div>
+            </div>
+          </DropdownMenuItem>
+        </DropdownMenuGroup>
+      </DropdownMenuContent>
+    </DropdownMenu>
   );
 }
 

@@ -130,6 +130,29 @@ const sources = [
     ],
   },
   {
+    file: resolve(repoRoot, "internal", "web", "service", "typecheck.go"),
+    types: ["TypeCheckFinding", "TypeCheckAsset", "TypeCheckSummary", "TypeCheckReport"],
+  },
+  {
+    file: resolve(repoRoot, "internal", "web", "service", "pipeline_plan.go"),
+    types: [
+      "PipelinePlanSourceRequest",
+      "PipelinePlanSelectionRequest",
+      "PipelinePlanRequest",
+      "PipelinePlanConfirmRequest",
+      "PipelinePlanReviewedIdentity",
+      "PipelinePlanContext",
+      "PipelinePlanIssue",
+      "PipelinePlanReadiness",
+      "PipelinePlanSelection",
+      "PipelinePlanRender",
+      "PipelinePlanAsset",
+      "PipelinePlanExecutionUnit",
+      "PipelinePlanSummary",
+      "PipelinePlan",
+    ],
+  },
+  {
     file: resolve(repoRoot, "internal", "web", "model", "dto.go"),
     types: [
       "InspectResult",
@@ -251,6 +274,9 @@ function parseField(line) {
   }
 
   const [, fieldName, rawType, rawTag] = fieldMatch;
+  if (jsonNameFromTag(rawTag, fieldName) === "-") {
+    return null;
+  }
   return {
     fieldName,
     propertyName: jsonNameFromTag(rawTag, fieldName),

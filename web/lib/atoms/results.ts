@@ -1,7 +1,12 @@
 import { atom } from "jotai";
 
 import type { StalenessUpdatedEvent } from "@/lib/api-staleness";
-import type { PipelineRun, PipelineRunLogLine, PipelineRunStep } from "@/lib/types";
+import type {
+  PipelineRun,
+  PipelineRunLogLine,
+  PipelineRunStep,
+  PipelineRunUnit,
+} from "@/lib/types";
 
 export type AssetResultTab = "inspect" | "materialize";
 
@@ -27,7 +32,8 @@ export type MaterializeHistoryEntry = {
 export type SchedulerRunEvent =
   | { type: "run.queued" | "run.started" | "run.finished"; run: PipelineRun }
   | { type: "run.log"; run: { run_id: string; log: PipelineRunLogLine } }
-  | { type: "run.step"; run: PipelineRunStep };
+  | { type: "run.step"; run: PipelineRunStep }
+  | { type: "run.unit"; run: { run_id: string; unit: PipelineRunUnit } };
 
 export type AssetResultsState = {
   resultTab: AssetResultTab;

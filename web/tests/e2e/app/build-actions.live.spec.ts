@@ -293,7 +293,7 @@ select 1 as customer_id,'Ada' as customer_name union all select 2 as customer_id
     });
 
     let saveFinished = false;
-    let saveFinishedWhenTriggered: boolean | undefined;
+    let saveFinishedWhenPlanned: boolean | undefined;
     await page.route(`**/api/pipelines/${pipelineId}/assets/${customersAssetId}`, async (route) => {
       if (route.request().method() !== "PUT") {
         await route.continue();
@@ -307,9 +307,9 @@ select 1 as customer_id,'Ada' as customer_name union all select 2 as customer_id
     page.on("request", (request) => {
       if (
         request.method() === "POST" &&
-        request.url().includes(`/api/pipelines/${pipelineId}/trigger`)
+        request.url().endsWith(`/api/pipelines/${pipelineId}/plan`)
       ) {
-        saveFinishedWhenTriggered = saveFinished;
+        saveFinishedWhenPlanned = saveFinished;
       }
     });
 
@@ -318,30 +318,334 @@ select 1 as customer_id,'Ada' as customer_name union all select 2 as customer_id
     await page.keyboard.press("Control+End");
     await page.keyboard.type("\n-- save barrier e2e");
 
-    const runButton = page.getByRole("button", { name: "Run workspace", exact: true });
-    await expect(runButton).toHaveAttribute(
-      "title",
-      /^Run workspace · default · \d{4}-\d{2}-\d{2} \d{2}:\d{2}–\d{4}-\d{2}-\d{2} \d{2}:\d{2} UTC$/,
-    );
-    await expect(
-      page.getByRole("button", { name: /^(?:Fresh|Build needed: \d+ stale assets?)/ }),
-    ).toBeVisible();
+    const runButton = page.getByRole("button", { name: /^Review run/ });
+    await expect(runButton).toHaveAttribute("title", /Review the saved source/);
+    await expect(page.getByRole("button", { name: /^Readiness:/ })).toBeVisible();
 
-    const triggerResponse = page.waitForResponse(
-      (response) =>
-        response.url().includes(`/api/pipelines/${pipelineId}/trigger`) && response.ok(),
+    const planResponse = page.waitForResponse(
+      (response) => response.url().endsWith(`/api/pipelines/${pipelineId}/plan`) && response.ok(),
       { timeout: 30000 },
     );
     await runButton.click();
-    const response = await triggerResponse;
-    expect(response.request().postDataJSON()).toMatchObject({ source: "working_tree" });
-    expect(saveFinishedWhenTriggered).toBe(true);
+    const planned = await planResponse;
+    expect(planned.request().postDataJSON()).toMatchObject({
+      source: { kind: "working_tree" },
+      selection: { mode: "all" },
+    });
+    expect(saveFinishedWhenPlanned).toBe(true);
+
+    const planSheet = page.getByTestId("pipeline-plan-sheet");
+    await expect(planSheet).toBeVisible();
+    await expect(planSheet).toContainText("Saved working tree");
+    const confirmButton = planSheet.getByRole("button", {
+      name: /^Run \d+ assets? from working tree$/,
+    });
+    await expect(confirmButton).toBeEnabled();
+
+    const renderedPlanResponse = page.waitForResponse(
+      (response) =>
+        response.url().endsWith(`/api/pipelines/${pipelineId}/plan`) &&
+        response.request().postDataJSON().include_stage_content === true &&
+        response.ok(),
+      { timeout: 30000 },
+    );
+    await planSheet.getByRole("tab", { name: "Execution" }).click();
+    const renderedPlan = await renderedPlanResponse;
+    expect(renderedPlan.request().postDataJSON()).toMatchObject({
+      include_stage_content: true,
+      source: { kind: "working_tree" },
+      selection: { mode: "all" },
+    });
+    await expect(planSheet.getByText("Preview — not executed")).toBeVisible();
+    const operationSelect = planSheet.getByRole("combobox", { name: "Operation" });
+    await expect(planSheet.locator(".view-lines").first()).toContainText("save barrier e2e", {
+      timeout: 15000,
+    });
+    await operationSelect.click();
+    await page.getByRole("option", { name: "analytics.customers · Execution SQL" }).click();
+    await expect(planSheet.locator(".view-lines").first()).toContainText(/create.*view/i, {
+      timeout: 15000,
+    });
+
+    const confirmResponse = page.waitForResponse(
+      (response) =>
+        response.url().endsWith(`/api/pipelines/${pipelineId}/plan/confirm`) && response.ok(),
+      { timeout: 30000 },
+    );
+    await confirmButton.click();
+    const confirmed = await confirmResponse;
+    expect(confirmed.request().postDataJSON()).toMatchObject({
+      plan_id: expect.stringMatching(/^[a-f0-9]{64}$/),
+      plan: { source: { kind: "working_tree" }, selection: { mode: "all" } },
+      reviewed: {
+        pipeline_uuid: expect.any(String),
+        source: { kind: "working_tree" },
+        selection: { mode: "all" },
+        execution_units: expect.any(Array),
+      },
+    });
 
     const output = page.locator("pre.font-console").first();
     await expect(output).toContainText("Analyzed the pipeline 'analytics'", {
       timeout: 30000,
     });
     await expect(output).not.toContainText(/Queued manual River run|Run started\.|Run queued\./);
+  });
+
+  test("keeps valid sibling previews when an asset definition is incomplete", async ({
+    liveApp,
+    page,
+  }) => {
+    await writeFile(
+      join(liveApp.workspaceDir, "analytics", "assets", "analytics", "incomplete.asset.yml"),
+      "name: analytics.incomplete\ntype: load\nparameters:\n\tobject: unfinished\n",
+    );
+
+    await page.goto(`${liveApp.baseURL}/pipelines/${pipelineId}/assets/${customersAssetId}/code`);
+    await expect(page.locator(".view-lines").first()).toContainText("customer_id", {
+      timeout: 15000,
+    });
+
+    const planResponse = page.waitForResponse(
+      (response) => response.url().endsWith(`/api/pipelines/${pipelineId}/plan`) && response.ok(),
+      { timeout: 30000 },
+    );
+    await page.getByRole("button", { name: /^Review run/ }).click();
+    const response = await planResponse;
+    const plan = (await response.json()) as {
+      status: string;
+      readiness: { blockers: Array<{ asset_name?: string; message: string }> };
+      assets: Array<{ name: string; renders: unknown[] }>;
+    };
+    expect(plan.status).toBe("blocked");
+    expect(plan.readiness.blockers).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          asset_name: "analytics.incomplete",
+          message: expect.stringContaining("Asset definition could not be parsed"),
+        }),
+      ]),
+    );
+    expect(plan.assets.find((asset) => asset.name === "analytics.customers")?.renders.length).toBe(
+      1,
+    );
+    expect(plan.assets.find((asset) => asset.name === "analytics.incomplete")?.renders).toEqual([]);
+
+    const planSheet = page.getByTestId("pipeline-plan-sheet");
+    await expect(planSheet).toContainText("Asset definition could not be parsed");
+    await expect(planSheet.getByRole("button", { name: /^Run \d+ assets?/ })).toBeDisabled();
+  });
+
+  test("shows an actionable deployed-only blocker when no deployment exists", async ({
+    liveApp,
+    page,
+  }) => {
+    const policyResponse = await page.request.put(
+      `${liveApp.baseURL}/api/config/environment-policies/default`,
+      { data: { protected: false, deployed_only: true, confirm_destructive: false } },
+    );
+    expect(policyResponse.ok()).toBe(true);
+
+    await page.goto(`${liveApp.baseURL}/pipelines/${pipelineId}/assets/${customersAssetId}/code`);
+    await expect(page.locator(".view-lines").first()).toContainText("customer_id", {
+      timeout: 15000,
+    });
+
+    const planResponse = page.waitForResponse(
+      (response) => response.url().endsWith(`/api/pipelines/${pipelineId}/plan`) && response.ok(),
+      { timeout: 30000 },
+    );
+    await page.getByRole("button", { name: /^Review run/ }).click();
+    const plan = (await (await planResponse).json()) as {
+      status: string;
+      source: { kind: string };
+      readiness: { blockers: Array<{ code: string }> };
+    };
+    expect(plan).toMatchObject({
+      status: "blocked",
+      source: { kind: "snapshot" },
+      readiness: {
+        blockers: expect.arrayContaining([
+          expect.objectContaining({ code: "deployment_required" }),
+        ]),
+      },
+    });
+
+    const planSheet = page.getByTestId("pipeline-plan-sheet");
+    await expect(planSheet).toContainText("deploy the pipeline first");
+    await expect(
+      planSheet.getByRole("button", { name: /^Run 0 assets from deployment$/ }),
+    ).toBeDisabled();
+  });
+
+  test("requires the environment name before confirming a destructive plan", async ({
+    liveApp,
+    page,
+  }) => {
+    const policyResponse = await page.request.put(
+      `${liveApp.baseURL}/api/config/environment-policies/default`,
+      { data: { protected: false, deployed_only: false, confirm_destructive: true } },
+    );
+    expect(policyResponse.ok()).toBe(true);
+
+    await page.goto(`${liveApp.baseURL}/pipelines/${pipelineId}/assets/${customersAssetId}/code`);
+    await expect(page.locator(".view-lines").first()).toContainText("customer_id", {
+      timeout: 15000,
+    });
+    await page.getByRole("button", { name: /^Review run/ }).click();
+    const planSheet = page.getByTestId("pipeline-plan-sheet");
+    await expect(planSheet).toBeVisible();
+
+    const destructivePlanResponse = page.waitForResponse(
+      (response) =>
+        response.url().endsWith(`/api/pipelines/${pipelineId}/plan`) &&
+        response.request().postDataJSON().full_refresh === true &&
+        response.ok(),
+      { timeout: 30000 },
+    );
+    await planSheet.getByRole("switch", { name: "Full refresh" }).click();
+    const destructivePlan = (await (await destructivePlanResponse).json()) as {
+      context: { destructive: boolean; environment: string };
+    };
+    expect(destructivePlan.context).toMatchObject({ destructive: true, environment: "default" });
+
+    const confirmButton = planSheet.getByRole("button", {
+      name: /^Run \d+ assets? from working tree$/,
+    });
+    const confirmation = planSheet.getByLabel(/Type default to confirm destructive operations/);
+    await expect(confirmButton).toBeDisabled();
+    await confirmation.fill("production");
+    await expect(confirmButton).toBeDisabled();
+    await confirmation.fill("default");
+    await expect(confirmButton).toBeEnabled();
+
+    const confirmResponse = page.waitForResponse(
+      (response) =>
+        response.url().endsWith(`/api/pipelines/${pipelineId}/plan/confirm`) && response.ok(),
+      { timeout: 30000 },
+    );
+    await confirmButton.click();
+    const confirmed = await confirmResponse;
+    expect(confirmed.request().postDataJSON()).toMatchObject({
+      confirmed_environment: "default",
+      plan: { full_refresh: true },
+    });
+  });
+
+  test("runs the reviewed Needed units and shows their durable plan", async ({ liveApp, page }) => {
+    await page.goto(`${liveApp.baseURL}/pipelines/${pipelineId}/assets/${customersAssetId}/code`);
+    await expect(page.locator(".view-lines").first()).toContainText("customer_id", {
+      timeout: 15000,
+    });
+
+    await page.getByRole("button", { name: /^Review run/ }).click();
+    const planSheet = page.getByTestId("pipeline-plan-sheet");
+    await expect(planSheet).toBeVisible();
+
+    const neededResponse = page.waitForResponse(
+      (response) =>
+        response.url().endsWith(`/api/pipelines/${pipelineId}/plan`) &&
+        response.request().postDataJSON().selection?.mode === "needed" &&
+        response.ok(),
+      { timeout: 30000 },
+    );
+    await planSheet.getByLabel("Scope").click();
+    await page.getByRole("option", { name: "Needed assets" }).click();
+    const neededPlanResponse = await neededResponse;
+    const neededPlan = (await neededPlanResponse.json()) as {
+      id: string;
+      context: { environment?: string; start_date: string; end_date: string };
+      selection: { mode: string; data_state_token?: string };
+      execution_units: Array<{
+        asset_name: string;
+        start_date: string;
+        end_date: string;
+        reason: string;
+      }>;
+      summary: { execution_units: number };
+    };
+    expect(neededPlan.selection.mode).toBe("needed");
+    expect(neededPlan.selection.data_state_token).toMatch(/^renart-data-state-v1:[a-f0-9]{64}$/);
+    expect(neededPlan.summary.execution_units).toBeGreaterThan(0);
+    expect(neededPlan.execution_units).toHaveLength(neededPlan.summary.execution_units);
+
+    const confirmResponse = page.waitForResponse(
+      (response) =>
+        response.url().endsWith(`/api/pipelines/${pipelineId}/plan/confirm`) && response.ok(),
+      { timeout: 30000 },
+    );
+    await planSheet.getByRole("button", { name: /^Run \d+ assets? from working tree$/ }).click();
+    const confirmed = await confirmResponse;
+    expect(confirmed.request().postDataJSON()).toMatchObject({
+      plan_id: neededPlan.id,
+      plan: { selection: { mode: "needed" } },
+      reviewed: {
+        selection: {
+          mode: "needed",
+          data_state_token: neededPlan.selection.data_state_token,
+        },
+        execution_units: neededPlan.execution_units,
+      },
+    });
+    const confirmation = (await confirmed.json()) as {
+      run: { id: string };
+      preview_units_omitted: number;
+    };
+    expect(confirmation.preview_units_omitted).toBe(0);
+
+    let terminalDetail:
+      | {
+          run: { status: string };
+          plan?: { selection: { mode: string }; execution_units: unknown[] };
+          units?: Array<{ position: number; asset_name: string; status: string; reason: string }>;
+        }
+      | undefined;
+    await expect
+      .poll(
+        async () => {
+          const response = await page.request.get(
+            `${liveApp.baseURL}/api/runs/${encodeURIComponent(confirmation.run.id)}`,
+          );
+          if (!response.ok()) return "unavailable";
+          terminalDetail = (await response.json()) as typeof terminalDetail;
+          return terminalDetail?.run.status ?? "unavailable";
+        },
+        { timeout: 90000 },
+      )
+      .toMatch(/^(success|failed|cancelled)$/);
+    expect(terminalDetail?.run.status).toBe("success");
+    expect(terminalDetail?.plan?.selection.mode).toBe("needed");
+    expect(terminalDetail?.units).toHaveLength(neededPlan.execution_units.length);
+    expect(terminalDetail?.units?.every((unit) => unit.status === "success")).toBe(true);
+
+    await page.goto(`${liveApp.baseURL}/runs/${encodeURIComponent(confirmation.run.id)}`);
+    await page.getByRole("tab", { name: "Plan" }).click();
+    const retainedPlan = page.getByTestId("run-plan-panel");
+    await expect(retainedPlan).toBeVisible({ timeout: 15000 });
+    await expect(retainedPlan.getByTestId("run-plan-unit")).toHaveCount(
+      neededPlan.execution_units.length,
+    );
+    await expect(retainedPlan).toContainText("Final asset and window order admitted for this run");
+    await expect(retainedPlan).toContainText("Planned stages");
+
+    const stalenessQuery = new URLSearchParams({
+      environment: neededPlan.context.environment || "default",
+      start: neededPlan.context.start_date,
+      end: neededPlan.context.end_date,
+    });
+    await expect
+      .poll(
+        async () => {
+          const response = await page.request.get(
+            `${liveApp.baseURL}/api/pipelines/${pipelineId}/staleness?${stalenessQuery}`,
+          );
+          if (!response.ok()) return [];
+          const body = (await response.json()) as { assets: Array<{ status: string }> };
+          return body.assets.map((asset) => asset.status);
+        },
+        { timeout: 30000 },
+      )
+      .toEqual(expect.arrayContaining(["fresh", "fresh"]));
   });
 
   test("does not report fresh when the freshness request is unavailable", async ({
@@ -364,16 +668,19 @@ select 1 as customer_id,'Ada' as customer_name union all select 2 as customer_id
       timeout: 15000,
     });
 
-    const freshness = page.getByRole("button", { name: "Freshness unavailable", exact: true });
-    await expect(freshness).toBeVisible();
-    await expect(freshness).toBeDisabled();
-    await expect(freshness).toHaveAttribute("title", /staleness store unavailable/);
-    await expect(page.getByRole("button", { name: "Fresh", exact: true })).toHaveCount(0);
+    const readiness = page.getByRole("button", {
+      name: /Readiness:.*Freshness unavailable/,
+    });
+    await expect(readiness).toBeVisible();
+    await expect(readiness).toHaveAttribute("title", /Freshness unavailable/);
+    await readiness.click();
+    await expect(page.getByText("Freshness unavailable", { exact: true })).toBeVisible();
+    await expect(page.getByRole("menuitem", { name: /Build needed/ })).toBeDisabled();
   });
 
   test("links a rejected pipeline trigger to the already active run", async ({ liveApp, page }) => {
     const activeRunId = "active-run-id";
-    await page.route(`**/api/pipelines/${pipelineId}/trigger`, async (route) => {
+    await page.route(`**/api/pipelines/${pipelineId}/plan/confirm`, async (route) => {
       await route.fulfill({
         status: 409,
         contentType: "application/json",
@@ -393,12 +700,12 @@ select 1 as customer_id,'Ada' as customer_name union all select 2 as customer_id
       timeout: 15000,
     });
 
-    await page.getByRole("button", { name: "Run workspace", exact: true }).click();
-    await expect(page.getByText(`Run ${activeRunId}`, { exact: true })).toBeVisible();
-    await expect(
-      page.getByText(new RegExp(`Run ${activeRunId} is already queued or running`)),
-    ).toBeVisible();
-    await expect(page.getByRole("link", { name: "Open run", exact: true })).toHaveAttribute(
+    await page.getByRole("button", { name: /^Review run/ }).click();
+    const planSheet = page.getByTestId("pipeline-plan-sheet");
+    await expect(planSheet).toBeVisible();
+    await planSheet.getByRole("button", { name: /^Run \d+ assets? from working tree$/ }).click();
+    await expect(planSheet.getByText("Another run was admitted first.")).toBeVisible();
+    await expect(planSheet.getByRole("link", { name: "Open active run" })).toHaveAttribute(
       "href",
       `/runs/${activeRunId}`,
     );

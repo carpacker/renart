@@ -495,6 +495,7 @@ export type AssetRenderRequest = {
 
 export type AssetRenderSource = {
   kind: string;
+  version_id?: string;
   pipeline_path: string;
   merkle_root: string;
 };
@@ -579,6 +580,175 @@ export type AssetRenderResult = {
   stages: AssetRenderStage[];
   issues: AssetRenderIssue[];
   redactions: AssetRenderRedaction[];
+};
+
+export type TypeCheckFinding = {
+  severity: string;
+  message: string;
+  line?: number;
+  column?: number;
+  end_line?: number;
+  end_column?: number;
+};
+
+export type TypeCheckAsset = {
+  id?: string;
+  name: string;
+  type: string;
+  dialect?: string;
+  status: string;
+  findings: TypeCheckFinding[];
+};
+
+export type TypeCheckSummary = {
+  assets: number;
+  errors: number;
+  warnings: number;
+};
+
+export type TypeCheckReport = {
+  status: string;
+  pipeline_id?: string;
+  pipeline_name: string;
+  start_date?: string;
+  end_date?: string;
+  assets: TypeCheckAsset[];
+  summary: TypeCheckSummary;
+};
+
+export type PipelinePlanSourceRequest = {
+  kind?: string;
+  version_id?: string;
+};
+
+export type PipelinePlanSelectionRequest = {
+  mode?: string;
+  asset_name?: string;
+  scope?: string;
+};
+
+export type PipelinePlanRequest = {
+  environment?: string;
+  start_date?: string;
+  end_date?: string;
+  execution_time?: string;
+  full_refresh?: boolean;
+  backfill?: boolean;
+  sensor_mode?: string;
+  source?: PipelinePlanSourceRequest;
+  selection?: PipelinePlanSelectionRequest;
+  include_stage_content?: boolean;
+};
+
+export type PipelinePlanConfirmRequest = {
+  plan_id: string;
+  plan: PipelinePlanRequest;
+  confirmed_environment?: string;
+  reviewed?: PipelinePlanReviewedIdentity;
+};
+
+export type PipelinePlanReviewedIdentity = {
+  pipeline_uuid: string;
+  source: AssetRenderSource;
+  context: PipelinePlanContext;
+  selection: PipelinePlanSelection;
+  execution_units: PipelinePlanExecutionUnit[];
+};
+
+export type PipelinePlanContext = {
+  environment?: string;
+  schema_prefix?: string;
+  start_date: string;
+  end_date: string;
+  execution_time: string;
+  requested_full_refresh: boolean;
+  full_refresh: boolean;
+  backfill: boolean;
+  sensor_mode: string;
+  variables_digest: string;
+  variable_provenance: AssetRenderVariableProvenance[];
+  configuration_digest?: string;
+  configuration_fidelity: string;
+  destructive: boolean;
+};
+
+export type PipelinePlanIssue = {
+  code: string;
+  severity: string;
+  message: string;
+  asset_id?: string;
+  asset_name?: string;
+};
+
+export type PipelinePlanReadiness = {
+  code_checks: TypeCheckReport;
+  blockers: PipelinePlanIssue[];
+  warnings: PipelinePlanIssue[];
+  active_run_id?: string;
+};
+
+export type PipelinePlanSelection = {
+  mode: string;
+  asset_name?: string;
+  scope?: string;
+  data_state_token?: string;
+};
+
+export type PipelinePlanRender = {
+  start_date: string;
+  end_date: string;
+  status: "ok" | "partial" | "unsupported" | "error";
+  full_refresh: boolean;
+  stages: AssetRenderStage[];
+  issues: AssetRenderIssue[];
+  redactions: AssetRenderRedaction[];
+};
+
+export type PipelinePlanAsset = {
+  id: string;
+  workspace_asset_id?: string;
+  name: string;
+  type: string;
+  dialect?: string;
+  connection_name?: string;
+  fingerprint?: string;
+  target: AssetRenderTarget;
+  staleness?: string;
+  inclusion_reasons: string[];
+  renders: PipelinePlanRender[];
+};
+
+export type PipelinePlanExecutionUnit = {
+  asset_id: string;
+  asset_name: string;
+  start_date: string;
+  end_date: string;
+  render_index: number;
+  reason: string;
+};
+
+export type PipelinePlanSummary = {
+  assets: number;
+  execution_units: number;
+  stages: number;
+  destructive_operations: number;
+  blockers: number;
+  warnings: number;
+};
+
+export type PipelinePlan = {
+  id: string;
+  status: string;
+  pipeline_id: string;
+  pipeline_uuid: string;
+  pipeline_name: string;
+  source: AssetRenderSource;
+  context: PipelinePlanContext;
+  readiness: PipelinePlanReadiness;
+  selection: PipelinePlanSelection;
+  assets: PipelinePlanAsset[];
+  execution_units: PipelinePlanExecutionUnit[];
+  summary: PipelinePlanSummary;
 };
 
 export type AssetInspectResponse = {

@@ -15,6 +15,8 @@ import type {
   PipelineConfigDefaults as GeneratedPipelineConfigDefaults,
   PipelineConfigNotification as GeneratedPipelineConfigNotification,
   PipelineConfigVariable as GeneratedPipelineConfigVariable,
+  PipelinePlan,
+  PipelinePlanSelection,
   PipelineMaterializationResponse as GeneratedPipelineMaterializationResponse,
   SqlDiscoveryDatabasesResponse,
   SqlDiscoveryTable,
@@ -170,6 +172,44 @@ export type PipelineRunStep = {
   error?: string;
 };
 
+export type PipelineRunPlanExecutionUnit = {
+  asset_id: string;
+  asset_name: string;
+  start_date: string;
+  end_date: string;
+  render_index: number;
+  reason: string;
+};
+
+export type PipelineRunPlanPreview = {
+  plan_id: string;
+  data_state_token: string;
+  execution_units: PipelineRunPlanExecutionUnit[];
+  omitted_execution_units: PipelineRunPlanExecutionUnit[];
+};
+
+export type PipelineRunPlan = {
+  version: number;
+  plan_id: string;
+  pipeline_id: string;
+  pipeline_uuid: string;
+  source_merkle: string;
+  configuration_digest: string;
+  execution_time: string;
+  selection: PipelinePlanSelection;
+  execution_units: PipelineRunPlanExecutionUnit[];
+  preview?: PipelineRunPlanPreview;
+  artifact: PipelinePlan;
+};
+
+export type PipelineRunUnit = PipelineRunPlanExecutionUnit & {
+  position: number;
+  status: "queued" | "running" | "success" | "failed" | "cancelled" | "skipped";
+  started_at?: string;
+  finished_at?: string;
+  error?: string;
+};
+
 export type SchedulesResponse = {
   status: "ok" | "error";
   schedules: PipelineSchedule[];
@@ -198,6 +238,8 @@ export type RunDetailResponse = {
   run: PipelineRun;
   logs: PipelineRunLogLine[];
   steps: PipelineRunStep[];
+  plan?: PipelineRunPlan | null;
+  units?: PipelineRunUnit[];
 };
 
 export type SourceControlChange = {

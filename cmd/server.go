@@ -397,6 +397,18 @@ func newWebServer(ctx context.Context, cfg serverConfig, logger *zap.Logger) (*w
 		Logger: logger,
 	})
 	server.stalenessSvc.AttachBus(server.eventBus)
+	server.pipelinePlanSvc = service.NewPipelinePlanService(service.PipelinePlanDependencies{
+		WorkspaceRoot:       absRoot,
+		ConfigPath:          resolveConfigFilePath(absRoot),
+		Snapshots:           server.snapshotStore,
+		Staleness:           server.stalenessSvc,
+		ResolvePipelineUUID: server.findPipelineUUIDByID,
+		PolicyFor:           server.policyLoader.For,
+		ActiveRunID:         server.schedulerStore.ActiveRunID,
+		NewPipelineBuilder: func() *pipeline.Builder {
+			return service.NewRenartPipelineBuilder(afero.NewOsFs())
+		},
+	})
 
 	server.schedulerSvc = webscheduler.New(webscheduler.Options{
 		Store:     server.schedulerStore,
@@ -509,9 +521,20 @@ func newWebServer(ctx context.Context, cfg serverConfig, logger *zap.Logger) (*w
 					}
 				}
 				return req.OnTargetsResolved(webscheduler.ExecutionTargetSnapshot{
-					Version:      snapshot.Version,
-					PipelineUUID: snapshot.PipelineUUID,
-					Entries:      entries,
+					Version:               snapshot.Version,
+					PipelineUUID:          snapshot.PipelineUUID,
+					ConfigurationDigest:   snapshot.ConfigurationDigest,
+					ConfigurationFidelity: snapshot.ConfigurationFidelity,
+					Entries:               entries,
+				})
+			}
+			spec.OnUnit = func(event service.PipelineExecutionUnitEvent) error {
+				if req.OnUnit == nil {
+					return fmt.Errorf("scheduler run %s cannot persist execution unit", req.RunID)
+				}
+				return req.OnUnit(webscheduler.PipelineRunUnitEvent{
+					Position: event.Position, Status: schedulerUnitStatusFromExecutionStatus(event.Status),
+					StartedAt: event.StartedAt, FinishedAt: event.FinishedAt, Error: event.Error,
 				})
 			}
 			cleanupSnapshot, err := server.resolveRunSnapshot(ctx, &spec, req.Scheduled, onLog)
@@ -523,41 +546,12 @@ func newWebServer(ctx context.Context, cfg serverConfig, logger *zap.Logger) (*w
 			}
 			defer cleanupSnapshot()
 
+			eventBridge := newSchedulerRunEventBridge(req)
 			result := server.executionSvc.MaterializePipelineRun(ctx, spec, func(chunk []byte) {
 				if onLog != nil {
 					onLog(string(chunk))
 				}
-			}, func(event service.ExecutionAssetEvent) error {
-				if req.OnStep == nil {
-					return fmt.Errorf("scheduler run %s cannot persist execution step", req.RunID)
-				}
-				var upstreamWriters map[string]webscheduler.UpstreamWriterSnapshot
-				if event.HasUpstreamWriterSnapshot {
-					upstreamWriters = make(map[string]webscheduler.UpstreamWriterSnapshot, len(event.UpstreamWriters))
-					for assetID, writer := range event.UpstreamWriters {
-						upstreamWriters[assetID] = webscheduler.UpstreamWriterSnapshot{
-							AssetID:           writer.AssetID,
-							TargetIdentity:    writer.TargetIdentity,
-							Fingerprint:       writer.Fingerprint,
-							VarsHash:          writer.VarsHash,
-							TargetGeneration:  writer.TargetGeneration,
-							CompletionID:      writer.CompletionID,
-							CompletionOrdinal: writer.CompletionOrdinal,
-							MaterializedAt:    writer.MaterializedAt,
-						}
-					}
-				}
-				return req.OnStep(webscheduler.RunStepEvent{
-					Asset:                     event.Asset,
-					Status:                    schedulerStatusFromExecutionStatus(event.Status),
-					StartedAt:                 event.StartedAt,
-					FinishedAt:                event.FinishedAt,
-					Error:                     event.Error,
-					CompletionOrdinal:         event.CompletionOrdinal,
-					UpstreamWriters:           upstreamWriters,
-					HasUpstreamWriterSnapshot: event.HasUpstreamWriterSnapshot,
-				})
-			})
+			}, eventBridge.Handle)
 			// MaterializePipelineRun already forwards every output byte through
 			// the chunk callback above. result.Output is the aggregate copy used
 			// by non-streaming callers; appending it here would replay the run.
@@ -637,19 +631,150 @@ func newWebServer(ctx context.Context, cfg serverConfig, logger *zap.Logger) (*w
 }
 
 func pipelineRunSpecFromSchedulerRequest(req webscheduler.RunRequest) service.PipelineRunSpec {
-	return service.PipelineRunSpec{
-		RunID:                req.RunID,
-		PipelineID:           req.PipelineID,
-		PipelineUUID:         req.PipelineUUID,
-		Environment:          req.Environment,
-		Scheduled:            req.Scheduled,
-		FullRefresh:          req.FullRefresh,
-		Backfill:             req.Backfill,
-		StartDate:            req.Start,
-		EndDate:              req.End,
-		ConfirmedEnvironment: req.ConfirmedEnvironment,
-		SensorMode:           req.SensorMode,
-		SnapshotVersionID:    req.SnapshotVersionID,
+	spec := service.PipelineRunSpec{
+		RunID:                       req.RunID,
+		PipelineID:                  req.PipelineID,
+		PipelineUUID:                req.PipelineUUID,
+		Environment:                 req.Environment,
+		Scheduled:                   req.Scheduled,
+		FullRefresh:                 req.FullRefresh,
+		Backfill:                    req.Backfill,
+		StartDate:                   req.Start,
+		EndDate:                     req.End,
+		ConfirmedEnvironment:        req.ConfirmedEnvironment,
+		SensorMode:                  req.SensorMode,
+		SnapshotVersionID:           req.SnapshotVersionID,
+		ExecutionTime:               req.ExecutionTime,
+		ExpectedSourceMerkle:        req.ExpectedSourceMerkle,
+		ExpectedConfigurationDigest: req.ExpectedConfigurationDigest,
+	}
+	if req.ConfirmedPlan != nil {
+		units := make([]service.PipelineExecutionUnit, 0, len(req.ConfirmedPlan.ExecutionUnits))
+		for position, unit := range req.ConfirmedPlan.ExecutionUnits {
+			units = append(units, service.PipelineExecutionUnit{
+				Position: position, AssetID: unit.AssetID, AssetName: unit.AssetName,
+				StartDate: unit.StartDate, EndDate: unit.EndDate,
+				RenderIndex: unit.RenderIndex, Reason: unit.Reason,
+			})
+		}
+		spec.Plan = &service.PipelineExecutionPlan{
+			SelectionMode: req.ConfirmedPlan.Selection.Mode,
+			Units:         units,
+		}
+	}
+	return spec
+}
+
+func persistAllPlanUnitEvent(req webscheduler.RunRequest, event service.ExecutionAssetEvent) error {
+	if req.OnUnit == nil || req.ConfirmedPlan == nil {
+		return fmt.Errorf("scheduler run %s cannot persist execution unit", req.RunID)
+	}
+	position := -1
+	for index, unit := range req.ConfirmedPlan.ExecutionUnits {
+		if unit.AssetName == event.Asset {
+			if position >= 0 {
+				return fmt.Errorf("all-assets plan contains multiple units for %s", event.Asset)
+			}
+			position = index
+		}
+	}
+	if position < 0 {
+		return fmt.Errorf("execution asset %s is not present in the confirmed plan", event.Asset)
+	}
+	return req.OnUnit(webscheduler.PipelineRunUnitEvent{
+		Position: position, Status: schedulerUnitStatusFromExecutionStatus(event.Status),
+		StartedAt: event.StartedAt, FinishedAt: event.FinishedAt, Error: event.Error,
+	})
+}
+
+type schedulerRunEventBridge struct {
+	req   webscheduler.RunRequest
+	first map[string]int
+	last  map[string]int
+}
+
+func newSchedulerRunEventBridge(req webscheduler.RunRequest) *schedulerRunEventBridge {
+	bridge := &schedulerRunEventBridge{req: req, first: map[string]int{}, last: map[string]int{}}
+	if req.ConfirmedPlan == nil {
+		return bridge
+	}
+	for position, unit := range req.ConfirmedPlan.ExecutionUnits {
+		if _, exists := bridge.first[unit.AssetName]; !exists {
+			bridge.first[unit.AssetName] = position
+		}
+		bridge.last[unit.AssetName] = position
+	}
+	return bridge
+}
+
+func (b *schedulerRunEventBridge) Handle(event service.ExecutionAssetEvent) error {
+	if b == nil || b.req.OnStep == nil {
+		return fmt.Errorf("scheduler run cannot persist execution step")
+	}
+	selectionMode := ""
+	if b.req.ConfirmedPlan != nil {
+		selectionMode = b.req.ConfirmedPlan.Selection.Mode
+	}
+	if selectionMode == service.PipelinePlanSelectionAll {
+		if err := persistAllPlanUnitEvent(b.req, event); err != nil {
+			return err
+		}
+	}
+	completionOrdinal := event.CompletionOrdinal
+	if selectionMode != "" && selectionMode != service.PipelinePlanSelectionAll {
+		if !event.HasUnitPosition || event.UnitPosition < 0 || event.UnitPosition >= len(b.req.ConfirmedPlan.ExecutionUnits) {
+			return fmt.Errorf("execution asset %s has no confirmed unit position", event.Asset)
+		}
+		unit := b.req.ConfirmedPlan.ExecutionUnits[event.UnitPosition]
+		if unit.AssetName != event.Asset {
+			return fmt.Errorf("execution unit %d belongs to %s, not %s", event.UnitPosition, unit.AssetName, event.Asset)
+		}
+		status := schedulerStatusFromExecutionStatus(event.Status)
+		first, last := b.first[event.Asset], b.last[event.Asset]
+		if status == webscheduler.RunStatusRunning && event.UnitPosition != first {
+			return nil
+		}
+		if status == webscheduler.RunStatusSuccess && event.UnitPosition != last {
+			return nil
+		}
+		if status != webscheduler.RunStatusRunning {
+			ordinal := int64(first)
+			completionOrdinal = &ordinal
+		}
+	}
+
+	var upstreamWriters map[string]webscheduler.UpstreamWriterSnapshot
+	if event.HasUpstreamWriterSnapshot {
+		upstreamWriters = make(map[string]webscheduler.UpstreamWriterSnapshot, len(event.UpstreamWriters))
+		for assetID, writer := range event.UpstreamWriters {
+			upstreamWriters[assetID] = webscheduler.UpstreamWriterSnapshot{
+				AssetID: writer.AssetID, TargetIdentity: writer.TargetIdentity,
+				Fingerprint: writer.Fingerprint, VarsHash: writer.VarsHash,
+				TargetGeneration: writer.TargetGeneration, CompletionID: writer.CompletionID,
+				CompletionOrdinal: writer.CompletionOrdinal, MaterializedAt: writer.MaterializedAt,
+			}
+		}
+	}
+	return b.req.OnStep(webscheduler.RunStepEvent{
+		Asset: event.Asset, Status: schedulerStatusFromExecutionStatus(event.Status),
+		StartedAt: event.StartedAt, FinishedAt: event.FinishedAt, Error: event.Error,
+		CompletionOrdinal: completionOrdinal, UpstreamWriters: upstreamWriters,
+		HasUpstreamWriterSnapshot: event.HasUpstreamWriterSnapshot,
+	})
+}
+
+func schedulerUnitStatusFromExecutionStatus(status string) webscheduler.PipelineRunUnitStatus {
+	switch strings.ToLower(strings.TrimSpace(status)) {
+	case "success", "succeeded", "ok", "finished":
+		return webscheduler.PipelineRunUnitSuccess
+	case "failed", "failure", "error", "errored":
+		return webscheduler.PipelineRunUnitFailed
+	case "cancelled", "canceled":
+		return webscheduler.PipelineRunUnitCancelled
+	case "skipped":
+		return webscheduler.PipelineRunUnitSkipped
+	default:
+		return webscheduler.PipelineRunUnitRunning
 	}
 }
 

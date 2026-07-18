@@ -26,13 +26,18 @@ type RunAssetRequest struct {
 }
 
 type RunPipelineRequest struct {
-	Target      string
-	Environment string
-	SensorMode  string
-	DryRun      bool
-	StartDate   string
-	EndDate     string
-	AssetEvent  func(ExecutionAssetEvent) error
+	Target         string
+	Environment    string
+	SensorMode     string
+	DryRun         bool
+	StartDate      string
+	EndDate        string
+	ExecutionTime  time.Time
+	RunID          string
+	AssetEvent     func(ExecutionAssetEvent) error
+	SelectionMode  string
+	ExecutionUnits []PipelineExecutionUnit
+	UnitEvent      func(PipelineExecutionUnitEvent) error
 	// OnTargetsResolved must succeed synchronously after effective execution
 	// context and target resolution but before the first task starts. Dry runs
 	// do not resolve or capture execution targets.
@@ -52,6 +57,8 @@ type ExecutionAssetEvent struct {
 	CompletionOrdinal         *int64
 	UpstreamWriters           map[string]bus.UpstreamWriterSnapshot
 	HasUpstreamWriterSnapshot bool
+	UnitPosition              int
+	HasUnitPosition           bool
 }
 
 type QueryAssetRequest struct {

@@ -6,6 +6,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -26,11 +27,13 @@ func TestStorePersistsAndValidatesVersionedRunSpec(t *testing.T) {
 
 	start := time.Date(2026, 7, 16, 8, 0, 0, 123456789, time.UTC)
 	end := start.Add(time.Hour)
+	executionTime := start.Add(30 * time.Minute)
 	run := PipelineRun{
 		ID: "spec-run", PipelineID: "pipeline-id", Pipeline: "analytics",
 		Environment: "prod", Trigger: RunTriggerManual, Status: RunStatusQueued,
 		WinStart: &start, WinEnd: &end, SnapshotVersionID: "snapshot-id",
-		FullRefresh: true, SensorMode: "skip",
+		FullRefresh: true, SensorMode: "skip", ExecutionTime: &executionTime,
+		ExpectedSourceMerkle: strings.Repeat("a", 64), ExpectedConfigurationDigest: strings.Repeat("b", 64),
 	}
 	spec := manualRunSpec(run, RunSourceSnapshot, "prod")
 	runID, err := store.CreateWithSpec(context.Background(), run, spec)
@@ -41,6 +44,10 @@ func TestStorePersistsAndValidatesVersionedRunSpec(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, found)
 	assert.Equal(t, spec, persisted)
+	assert.Equal(t, executionTime, *persisted.Requested.ExecutionTime)
+	require.NotNil(t, persisted.Expected)
+	assert.Equal(t, strings.Repeat("a", 64), persisted.Expected.SourceMerkle)
+	assert.Equal(t, strings.Repeat("b", 64), persisted.Expected.ConfigurationDigest)
 
 	_, err = store.db.Exec(`UPDATE pipeline_run_specs SET version = 2, body = json_set(body, '$.version', 2) WHERE run_id = ?`, runID)
 	require.NoError(t, err)
@@ -53,6 +60,132 @@ func TestStorePersistsAndValidatesVersionedRunSpec(t *testing.T) {
 	_, found, err = store.GetRunSpec(context.Background(), runID)
 	require.True(t, found)
 	require.ErrorContains(t, err, "unknown field")
+}
+
+func TestStorePersistsValidatesAndCascadesVersionedRunPlan(t *testing.T) {
+	t.Parallel()
+	store, err := OpenStore(filepath.Join(t.TempDir(), "state.db"))
+	require.NoError(t, err)
+	defer store.Close()
+
+	ctx := context.Background()
+	run := PipelineRun{
+		ID: "plan-run", PipelineID: "pipeline-id", Pipeline: "analytics",
+		Trigger: RunTriggerManual, Status: RunStatusQueued,
+	}
+	spec := manualRunSpec(run, RunSourceWorkingTree, "")
+	runID, err := store.CreateWithSpec(ctx, run, spec)
+	require.NoError(t, err)
+	plan := validPipelineRunPlan(t)
+	tx, err := store.db.BeginTx(ctx, nil)
+	require.NoError(t, err)
+	require.NoError(t, store.insertRunPlan(ctx, tx, runID, plan))
+	require.NoError(t, tx.Commit())
+
+	persisted, found, err := store.GetRunPlan(ctx, runID)
+	require.NoError(t, err)
+	require.True(t, found)
+	assert.Equal(t, plan, persisted)
+
+	_, err = store.db.Exec(`UPDATE pipeline_run_plans SET version = 2, body = json_set(body, '$.version', 2) WHERE run_id = ?`, runID)
+	require.NoError(t, err)
+	_, found, err = store.GetRunPlan(ctx, runID)
+	require.True(t, found)
+	require.ErrorIs(t, err, ErrInvalidStoredRunPlan)
+	require.ErrorContains(t, err, "unsupported pipeline run plan version 2")
+
+	_, err = store.db.Exec(`DELETE FROM pipeline_runs WHERE id = ?`, runID)
+	require.NoError(t, err)
+	assert.Equal(t, 0, countRows(t, store, `SELECT COUNT(*) FROM pipeline_run_plans WHERE run_id = ?`, runID))
+	assert.Equal(t, 0, countRows(t, store, `SELECT COUNT(*) FROM pipeline_run_units WHERE run_id = ?`, runID))
+}
+
+func TestStoreTracksPipelineRunUnitsAndClosesUnfinishedWork(t *testing.T) {
+	t.Parallel()
+	store, err := OpenStore(filepath.Join(t.TempDir(), "state.db"))
+	require.NoError(t, err)
+	defer store.Close()
+	ctx := context.Background()
+
+	plan := validPipelineRunPlan(t)
+	plan.ExecutionUnits = append(plan.ExecutionUnits,
+		PipelineRunExecutionUnit{
+			AssetID: "pipeline-uuid:analytics.customers", AssetName: "analytics.customers",
+			StartDate: "2026-07-17T11:00:00Z", EndDate: "2026-07-17T12:00:00Z",
+			Reason: "selected_all",
+		},
+		PipelineRunExecutionUnit{
+			AssetID: "pipeline-uuid:analytics.report", AssetName: "analytics.report",
+			StartDate: "2026-07-17T11:00:00Z", EndDate: "2026-07-17T12:00:00Z",
+			Reason: "selected_all",
+		},
+	)
+	plan.Artifact = pipelineRunPlanArtifact(t, plan)
+	run := PipelineRun{
+		ID: "unit-run", PipelineID: "pipeline-id", Pipeline: "analytics",
+		Trigger: RunTriggerManual, Status: RunStatusRunning,
+	}
+	spec := manualRunSpec(run, RunSourceWorkingTree, "")
+	_, err = store.CreateWithSpec(ctx, run, spec)
+	require.NoError(t, err)
+	tx, err := store.db.BeginTx(ctx, nil)
+	require.NoError(t, err)
+	require.NoError(t, store.insertRunPlan(ctx, tx, run.ID, plan))
+	require.NoError(t, tx.Commit())
+
+	started := time.Date(2026, 7, 17, 12, 1, 0, 0, time.UTC)
+	finished := started.Add(time.Minute)
+	require.NoError(t, store.UpdateRunUnit(ctx, run.ID, PipelineRunUnitEvent{
+		Position: 0, Status: PipelineRunUnitRunning, StartedAt: &started,
+	}))
+	require.NoError(t, store.UpdateRunUnit(ctx, run.ID, PipelineRunUnitEvent{
+		Position: 0, Status: PipelineRunUnitSuccess, FinishedAt: &finished,
+	}))
+	require.NoError(t, store.UpdateRunUnit(ctx, run.ID, PipelineRunUnitEvent{
+		Position: 1, Status: PipelineRunUnitRunning, StartedAt: &started,
+	}))
+	require.NoError(t, store.FinalizeExecution(ctx, run.ID, RunStatusFailed, finished, assert.AnError, "", nil))
+
+	units, err := store.ListRunUnits(ctx, run.ID)
+	require.NoError(t, err)
+	require.Len(t, units, 3)
+	assert.Equal(t, PipelineRunUnitSuccess, units[0].Status)
+	assert.Equal(t, &started, units[0].StartedAt)
+	assert.Equal(t, &finished, units[0].FinishedAt)
+	assert.Equal(t, PipelineRunUnitFailed, units[1].Status)
+	assert.Equal(t, PipelineRunUnitSkipped, units[2].Status)
+	assert.Contains(t, units[2].Error, assert.AnError.Error())
+}
+
+func TestRunSpecExpectedPlanIdentityFailsClosed(t *testing.T) {
+	t.Parallel()
+	executionTime := time.Date(2026, 7, 17, 10, 0, 0, 0, time.UTC)
+	valid := runSpecV1{
+		Version:  runSpecVersionV1,
+		Pipeline: runPipelineIdentity{ID: "pipeline-id", Name: "analytics"},
+		Origin:   RunTriggerManual,
+		Dispatch: runDispatchRiver,
+		Source:   runSourceSpec{Kind: RunSourceWorkingTree},
+		Requested: runRequestedContext{
+			ExecutionTime: &executionTime,
+		},
+		Expected: &runExpectedIdentity{
+			SourceMerkle:        strings.Repeat("a", 64),
+			ConfigurationDigest: strings.Repeat("b", 64),
+		},
+		Selection: runSelectionAll,
+	}
+	require.NoError(t, valid.validate())
+
+	missingTime := valid
+	missingTime.Requested.ExecutionTime = nil
+	require.ErrorContains(t, missingTime.validate(), "requires execution_time")
+	badSource := valid
+	badSource.Expected = &runExpectedIdentity{SourceMerkle: "ABC", ConfigurationDigest: strings.Repeat("b", 64)}
+	require.ErrorContains(t, badSource.validate(), "source_merkle")
+	badConfiguration := valid
+	badConfiguration.Expected = &runExpectedIdentity{SourceMerkle: strings.Repeat("a", 64), ConfigurationDigest: "short"}
+	require.ErrorContains(t, badConfiguration.validate(), "configuration_digest")
 }
 
 func TestStatusFromResultPreservesCancellation(t *testing.T) {
@@ -996,17 +1129,26 @@ func TestStoreDetectsActiveRuns(t *testing.T) {
 	active, err := store.HasActiveRun(ctx, "pipeline-id")
 	require.NoError(t, err)
 	assert.False(t, active)
+	activeRunID, err := store.ActiveRunID(ctx, "pipeline-id", "")
+	require.NoError(t, err)
+	assert.Empty(t, activeRunID)
 
 	id, err := store.Create(ctx, PipelineRun{PipelineID: "pipeline-id", Pipeline: "analytics", Trigger: RunTriggerManual, Status: RunStatusQueued})
 	require.NoError(t, err)
 	active, err = store.HasActiveRun(ctx, "pipeline-id")
 	require.NoError(t, err)
 	assert.True(t, active)
+	activeRunID, err = store.ActiveRunID(ctx, "pipeline-id", "")
+	require.NoError(t, err)
+	assert.Equal(t, id, activeRunID)
 
 	require.NoError(t, store.Finish(ctx, id, RunStatusFailed, assert.AnError))
 	active, err = store.HasActiveRun(ctx, "pipeline-id")
 	require.NoError(t, err)
 	assert.False(t, active)
+	activeRunID, err = store.ActiveRunID(ctx, "pipeline-id", "")
+	require.NoError(t, err)
+	assert.Empty(t, activeRunID)
 }
 
 func TestStoreListFiltersAndPaginatesRuns(t *testing.T) {

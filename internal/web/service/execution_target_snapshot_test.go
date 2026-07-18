@@ -59,6 +59,10 @@ func TestExecutionTargetSnapshotCapturesSecretFreeTargetAndFingerprintEvidence(t
 	require.NoError(t, err)
 	require.Equal(t, ExecutionTargetSnapshotVersion, snapshot.Version)
 	assert.Equal(t, pl.LegacyID, snapshot.PipelineUUID)
+	expectedConfiguration := selectedPipelineConfigurationIdentity(cfg, pl, pl.Assets)
+	assert.Equal(t, expectedConfiguration.Digest, snapshot.ConfigurationDigest)
+	assert.Equal(t, string(expectedConfiguration.Fidelity), snapshot.ConfigurationFidelity)
+	assert.NotEmpty(t, snapshot.ConfigurationDigest)
 	require.Len(t, snapshot.Entries, 2)
 
 	vars := fingerprint.EffectiveVars(pl, nil)
@@ -247,6 +251,159 @@ select * from a_table_that_does_not_exist
 	})
 }
 
+func TestDirectRunPipelineExecutesReviewedUnitsOnly(t *testing.T) {
+	workspaceRoot, _ := createSuccessfulDuckDBWorkspace(t)
+	addExecutionSnapshotPipelineID(t, workspaceRoot)
+	require.NoError(t, os.WriteFile(
+		filepath.Join(workspaceRoot, "analytics", "assets", "omitted.sql"),
+		[]byte(strings.TrimSpace(`
+/* @bruin
+name: analytics.omitted
+type: duckdb.sql
+materialization:
+  type: table
+@bruin */
+
+select * from a_table_that_does_not_exist
+`)+"\n"),
+		0o644,
+	))
+	executor, closeManager := executionSnapshotTestExecutor(t, workspaceRoot)
+	defer closeManager()
+
+	var snapshot ExecutionTargetSnapshot
+	var assetEvents []ExecutionAssetEvent
+	var unitEvents []PipelineExecutionUnitEvent
+	_, err := executor.RunPipeline(context.Background(), RunPipelineRequest{
+		Target:        "analytics",
+		SelectionMode: PipelinePlanSelectionNeeded,
+		ExecutionUnits: []PipelineExecutionUnit{{
+			Position:  0,
+			AssetID:   identity.AssetID("pipeline-target-callback-id", "analytics.customers"),
+			AssetName: "analytics.customers",
+			StartDate: "2026-07-17T10:00:00Z",
+			EndDate:   "2026-07-17T11:00:00Z",
+			Reason:    "missing_materialization",
+		}},
+		OnTargetsResolved: func(resolved ExecutionTargetSnapshot) error {
+			snapshot = resolved
+			return nil
+		},
+		AssetEvent: func(event ExecutionAssetEvent) error {
+			assetEvents = append(assetEvents, event)
+			return nil
+		},
+		UnitEvent: func(event PipelineExecutionUnitEvent) error {
+			unitEvents = append(unitEvents, event)
+			return nil
+		},
+	}, nil)
+
+	require.NoError(t, err)
+	assert.ElementsMatch(t, []string{"analytics.customers", "analytics.omitted"}, executionSnapshotEntryNames(snapshot))
+	require.Len(t, assetEvents, 2)
+	for _, event := range assetEvents {
+		assert.Equal(t, "analytics.customers", event.Asset)
+		assert.True(t, event.HasUnitPosition)
+		assert.Zero(t, event.UnitPosition)
+	}
+	require.Len(t, unitEvents, 2)
+	assert.Equal(t, "running", unitEvents[0].Status)
+	assert.Equal(t, "success", unitEvents[1].Status)
+	assert.True(t, executionSnapshotTableNamedExists(t, executor, "customers"))
+	assert.False(t, executionSnapshotTableNamedExists(t, executor, "omitted"))
+}
+
+func TestDirectRunPipelineExecutesRepeatedReviewedWindowsInOrder(t *testing.T) {
+	workspaceRoot, _ := createSuccessfulDuckDBWorkspace(t)
+	addExecutionSnapshotPipelineID(t, workspaceRoot)
+	executor, closeManager := executionSnapshotTestExecutor(t, workspaceRoot)
+	defer closeManager()
+
+	units := []PipelineExecutionUnit{
+		{
+			Position:  0,
+			AssetID:   identity.AssetID("pipeline-target-callback-id", "analytics.customers"),
+			AssetName: "analytics.customers",
+			StartDate: "2026-07-17T09:00:00Z",
+			EndDate:   "2026-07-17T10:00:00Z",
+			Reason:    "coverage_gap",
+		},
+		{
+			Position:  1,
+			AssetID:   identity.AssetID("pipeline-target-callback-id", "analytics.customers"),
+			AssetName: "analytics.customers",
+			StartDate: "2026-07-17T10:00:00Z",
+			EndDate:   "2026-07-17T11:00:00Z",
+			Reason:    "coverage_gap",
+		},
+	}
+	var assetEvents []ExecutionAssetEvent
+	var unitEvents []PipelineExecutionUnitEvent
+	_, err := executor.RunPipeline(context.Background(), RunPipelineRequest{
+		Target:         "analytics",
+		SelectionMode:  PipelinePlanSelectionNeeded,
+		ExecutionUnits: units,
+		AssetEvent: func(event ExecutionAssetEvent) error {
+			assetEvents = append(assetEvents, event)
+			return nil
+		},
+		UnitEvent: func(event PipelineExecutionUnitEvent) error {
+			unitEvents = append(unitEvents, event)
+			return nil
+		},
+	}, nil)
+
+	require.NoError(t, err)
+	require.Len(t, unitEvents, 4)
+	assert.Equal(t, []int{0, 0, 1, 1}, []int{
+		unitEvents[0].Position, unitEvents[1].Position, unitEvents[2].Position, unitEvents[3].Position,
+	})
+	assert.Equal(t, []string{"running", "success", "running", "success"}, []string{
+		unitEvents[0].Status, unitEvents[1].Status, unitEvents[2].Status, unitEvents[3].Status,
+	})
+	require.Len(t, assetEvents, 4)
+	assert.Equal(t, []int{0, 0, 1, 1}, []int{
+		assetEvents[0].UnitPosition, assetEvents[1].UnitPosition, assetEvents[2].UnitPosition, assetEvents[3].UnitPosition,
+	})
+}
+
+func TestDirectRunPipelineAllowsReviewedNeededPlanToBecomeEmpty(t *testing.T) {
+	workspaceRoot, _ := createSuccessfulDuckDBWorkspace(t)
+	addExecutionSnapshotPipelineID(t, workspaceRoot)
+	executor, closeManager := executionSnapshotTestExecutor(t, workspaceRoot)
+	defer closeManager()
+
+	targetCallbacks := 0
+	assetEvents := 0
+	unitEvents := 0
+	output, err := executor.RunPipeline(context.Background(), RunPipelineRequest{
+		Target:         "analytics",
+		SelectionMode:  PipelinePlanSelectionNeeded,
+		ExecutionUnits: nil,
+		OnTargetsResolved: func(snapshot ExecutionTargetSnapshot) error {
+			targetCallbacks++
+			assert.Contains(t, snapshot.Entries, "analytics.customers")
+			return nil
+		},
+		AssetEvent: func(ExecutionAssetEvent) error {
+			assetEvents++
+			return nil
+		},
+		UnitEvent: func(PipelineExecutionUnitEvent) error {
+			unitEvents++
+			return nil
+		},
+	}, nil)
+
+	require.NoError(t, err)
+	assert.Contains(t, string(output), "No reviewed execution units remain")
+	assert.Equal(t, 1, targetCallbacks)
+	assert.Zero(t, assetEvents)
+	assert.Zero(t, unitEvents)
+	assert.False(t, executionSnapshotTableExists(t, executor))
+}
+
 func TestHybridBruinExecutorSetFingerprintEngine(t *testing.T) {
 	t.Parallel()
 	executor := NewHybridBruinExecutor(t.TempDir(), "", nil, nil)
@@ -294,10 +451,14 @@ func executionSnapshotTestExecutor(t *testing.T, workspaceRoot string) (*HybridB
 }
 
 func executionSnapshotTableExists(t *testing.T, executor *HybridBruinExecutor) bool {
+	return executionSnapshotTableNamedExists(t, executor, "customers")
+}
+
+func executionSnapshotTableNamedExists(t *testing.T, executor *HybridBruinExecutor, tableName string) bool {
 	t.Helper()
 	body, err := executor.QueryConnection(context.Background(), QueryConnectionRequest{
 		ConnectionName: "duckdb-default",
-		Query:          "select count(*) from information_schema.tables where table_schema = 'analytics' and table_name = 'customers'",
+		Query:          "select count(*) from information_schema.tables where table_schema = 'analytics' and table_name = '" + tableName + "'",
 		Output:         "json",
 	})
 	require.NoError(t, err)
@@ -310,4 +471,12 @@ func executionSnapshotTableExists(t *testing.T, executor *HybridBruinExecutor) b
 	count, ok := payload.Rows[0][0].(float64)
 	require.True(t, ok)
 	return count > 0
+}
+
+func executionSnapshotEntryNames(snapshot ExecutionTargetSnapshot) []string {
+	names := make([]string, 0, len(snapshot.Entries))
+	for name := range snapshot.Entries {
+		names = append(names, name)
+	}
+	return names
 }

@@ -179,6 +179,31 @@ func TestCollectManifestHashesMatchesDeployManifest(t *testing.T) {
 	assert.Equal(t, snapshot.ManifestRoot(contentManifest), snapshot.ManifestRoot(hashOnlyManifest))
 }
 
+func TestCopyPipelineSourceForExecutionCopiesCanonicalManifest(t *testing.T) {
+	t.Parallel()
+	dir := writePipelineDir(t, map[string]string{
+		"pipeline.yml":             "id: p\n",
+		"assets/a.sql":             "select 1",
+		"assets/seed.csv":          "id,name\n1,Ada\n",
+		"assets/local.duckdb":      "not source",
+		"assets/__pycache__/a.pyc": "not source",
+	})
+	expected, err := snapshot.CollectManifestHashes(dir)
+	require.NoError(t, err)
+
+	dest := filepath.Join(t.TempDir(), "run")
+	require.NoError(t, os.MkdirAll(dest, 0o755))
+	copied, err := snapshot.CopyPipelineSourceForExecution(dir, dest)
+	require.NoError(t, err)
+	assert.Equal(t, expected, copied)
+	assert.Equal(t, snapshot.ManifestRoot(expected), snapshot.ManifestRoot(copied))
+	require.FileExists(t, filepath.Join(dest, "pipeline.yml"))
+	require.FileExists(t, filepath.Join(dest, "assets", "seed.csv"))
+	require.DirExists(t, filepath.Join(dest, ".git"))
+	assert.NoFileExists(t, filepath.Join(dest, "assets", "local.duckdb"))
+	assert.NoFileExists(t, filepath.Join(dest, "assets", "__pycache__", "a.pyc"))
+}
+
 func TestDriftReport(t *testing.T) {
 	t.Parallel()
 	store := openTestStore(t)

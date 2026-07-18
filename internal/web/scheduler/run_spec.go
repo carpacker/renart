@@ -65,6 +65,7 @@ type runSpecV1 struct {
 	Dispatch      string               `json:"dispatch"`
 	Source        runSourceSpec        `json:"source"`
 	Requested     runRequestedContext  `json:"requested"`
+	Expected      *runExpectedIdentity `json:"expected,omitempty"`
 	Authorization runAuthorization     `json:"authorization"`
 	Selection     string               `json:"selection"`
 	Schedule      *runScheduleIdentity `json:"schedule,omitempty"`
@@ -82,12 +83,18 @@ type runSourceSpec struct {
 }
 
 type runRequestedContext struct {
-	Environment string     `json:"environment"`
-	Start       *time.Time `json:"start,omitempty"`
-	End         *time.Time `json:"end,omitempty"`
-	FullRefresh bool       `json:"full_refresh,omitempty"`
-	Backfill    bool       `json:"backfill,omitempty"`
-	SensorMode  string     `json:"sensor_mode,omitempty"`
+	Environment   string     `json:"environment"`
+	Start         *time.Time `json:"start,omitempty"`
+	End           *time.Time `json:"end,omitempty"`
+	ExecutionTime *time.Time `json:"execution_time,omitempty"`
+	FullRefresh   bool       `json:"full_refresh,omitempty"`
+	Backfill      bool       `json:"backfill,omitempty"`
+	SensorMode    string     `json:"sensor_mode,omitempty"`
+}
+
+type runExpectedIdentity struct {
+	SourceMerkle        string `json:"source_merkle"`
+	ConfigurationDigest string `json:"configuration_digest"`
 }
 
 type runAuthorization struct {
@@ -123,6 +130,17 @@ func (spec runSpecV1) validate() error {
 	}
 	if spec.Requested.Start != nil && !spec.Requested.Start.Before(*spec.Requested.End) {
 		return errors.New("run spec requires an increasing execution window")
+	}
+	if spec.Expected != nil {
+		if err := validateRunIdentityDigest("source_merkle", spec.Expected.SourceMerkle); err != nil {
+			return err
+		}
+		if err := validateRunIdentityDigest("configuration_digest", spec.Expected.ConfigurationDigest); err != nil {
+			return err
+		}
+		if spec.Requested.ExecutionTime == nil {
+			return errors.New("run spec with expected plan identities requires execution_time")
+		}
 	}
 	if spec.Requested.FullRefresh && spec.Requested.Backfill {
 		return errors.New("run spec full refresh and backfill are mutually exclusive")
@@ -167,6 +185,18 @@ func (spec runSpecV1) validate() error {
 		}
 	default:
 		return fmt.Errorf("invalid run spec origin %q", spec.Origin)
+	}
+	return nil
+}
+
+func validateRunIdentityDigest(field, value string) error {
+	if len(value) != 64 || strings.ToLower(value) != value {
+		return fmt.Errorf("run spec %s must be a lowercase SHA-256 digest", field)
+	}
+	for _, character := range value {
+		if (character < '0' || character > '9') && (character < 'a' || character > 'f') {
+			return fmt.Errorf("run spec %s must be a lowercase SHA-256 digest", field)
+		}
 	}
 	return nil
 }
@@ -221,7 +251,7 @@ func unmarshalRunSpec(version int, body []byte) (runSpecV1, error) {
 }
 
 func manualRunSpec(run PipelineRun, source RunSource, confirmedEnvironment string) runSpecV1 {
-	return runSpecV1{
+	spec := runSpecV1{
 		Version: runSpecVersionV1,
 		Pipeline: runPipelineIdentity{
 			ID:   strings.TrimSpace(run.PipelineID),
@@ -235,16 +265,24 @@ func manualRunSpec(run PipelineRun, source RunSource, confirmedEnvironment strin
 			SnapshotVersionID: strings.TrimSpace(run.SnapshotVersionID),
 		},
 		Requested: runRequestedContext{
-			Environment: strings.TrimSpace(run.Environment),
-			Start:       cloneRunTime(run.WinStart),
-			End:         cloneRunTime(run.WinEnd),
-			FullRefresh: run.FullRefresh,
-			Backfill:    run.Backfill,
-			SensorMode:  strings.TrimSpace(run.SensorMode),
+			Environment:   strings.TrimSpace(run.Environment),
+			Start:         cloneRunTime(run.WinStart),
+			End:           cloneRunTime(run.WinEnd),
+			ExecutionTime: cloneRunTime(run.ExecutionTime),
+			FullRefresh:   run.FullRefresh,
+			Backfill:      run.Backfill,
+			SensorMode:    strings.TrimSpace(run.SensorMode),
 		},
 		Authorization: runAuthorization{ConfirmedEnvironment: strings.TrimSpace(confirmedEnvironment)},
 		Selection:     runSelectionAll,
 	}
+	if strings.TrimSpace(run.ExpectedSourceMerkle) != "" || strings.TrimSpace(run.ExpectedConfigurationDigest) != "" {
+		spec.Expected = &runExpectedIdentity{
+			SourceMerkle:        strings.TrimSpace(run.ExpectedSourceMerkle),
+			ConfigurationDigest: strings.TrimSpace(run.ExpectedConfigurationDigest),
+		}
+	}
+	return spec
 }
 
 // validateRunSpecImmutableBinding compares the parts of a persisted RunSpec
@@ -395,6 +433,11 @@ func applyRunSpec(run PipelineRun, spec runSpecV1) PipelineRun {
 	run.FullRefresh = spec.Requested.FullRefresh
 	run.Backfill = spec.Requested.Backfill
 	run.SensorMode = strings.TrimSpace(spec.Requested.SensorMode)
+	run.ExecutionTime = cloneRunTime(spec.Requested.ExecutionTime)
+	if spec.Expected != nil {
+		run.ExpectedSourceMerkle = strings.TrimSpace(spec.Expected.SourceMerkle)
+		run.ExpectedConfigurationDigest = strings.TrimSpace(spec.Expected.ConfigurationDigest)
+	}
 	return run
 }
 
