@@ -152,7 +152,7 @@ func (s *NotebookService) usedTables(sqlText, assetType string) ([]string, error
 func NewNotebookService(deps NotebookDependencies) *NotebookService {
 	return &NotebookService{
 		deps:          deps,
-		store:         notebook.NewSessionStore(filepath.Join(deps.WorkspaceRoot, ".renart", "notebooks")),
+		store:         notebook.NewSessionStore(filepath.Join(deps.WorkspaceRoot, ".renart", "notebooks"), deps.WorkspaceRoot),
 		cellEditLocks: make(map[string]*cellEditLock),
 		runtimes:      newNotebookRuntimes(),
 	}

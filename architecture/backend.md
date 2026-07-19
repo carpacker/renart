@@ -152,6 +152,16 @@ local or hermetic builders. Cargo still owns dependency and source invalidation,
 so unchanged parser builds reuse the release artifacts instead of recompiling
 the dependency graph for every target.
 
+**Binary composition.** Release builds are deliberately self-contained: the Go
+link includes Bruin's native Rust SQL parser and the complete connector/runtime
+graph, while `go:embed` carries the web application, Monaco workers, the
+Polyglot SQL WASM engine, and the `ty` Python-intelligence WASM engine. GoReleaser
+uses `-s -w`, which removes Go debug sections but not those runtime components.
+Consequently the executable remains large even when stripped; connector
+dependencies and generated lookup/type data are a larger share than the visible
+web bundle alone. The DuckDB ADBC driver itself is installed into the runtime
+cache rather than embedded in the executable.
+
 ## 3. Persistence
 
 All durable state lives in SQLite at `.renart/state.db` inside the workspace
@@ -398,6 +408,15 @@ both in sorted order. Waiting is context-cancellable, and an OS-released file
 lock makes a killed process recover without stale lock cleanup. Independent
 external programs do not participate in the advisory protocol, so inspect
 retains bounded retry and a clear DuckDB lock error as a defensive fallback.
+
+DuckDB SQL file references have a separate workspace-scoping rule implemented
+by `internal/web/duckdbworkspace`. Every DuckDB client returned by the web
+server's connection manager sets DuckDB's `file_search_path` in the same
+connection/query as the requested SQL, so relative reads such as
+`"./data.parquet"` resolve from the active workspace rather than Renart's process
+working directory. Notebook session clients use the same wrapper. This avoids a
+process-wide `chdir`, which would couple unrelated server filesystem operations
+to query execution; non-DuckDB connections are passed through unchanged.
 
 Physical-target recovery uses a separate per-workspace execution coordinator.
 Every non-dry `ExecutionService` path holds shared primary and compatibility
@@ -663,6 +682,16 @@ and cluster expressions). `time_interval` requires both a key and `date` or
 that consume them. Hand-authored DDL/SCD/Data Vault strategies are checked against
 the concrete Bruin warehouse support matrix even though their larger contracts do
 not yet have guided controls.
+
+The DTO also advertises `column_inference_sources` per asset. Sources are
+backend capabilities rather than frontend asset-kind branches: definition
+sources include SQL output inference, API fields/OpenAPI, Load upstreams, and
+local seed files; observed sources include sampled API responses and the current
+materialized relation. `POST /api/assets/{assetID}/columns/preview` reads one
+advertised source without writing the asset and returns its columns plus
+added/missing/type-change drift against saved metadata. Applying a preview goes
+through the existing provenance-aware column reconciler, preserving descriptions,
+checks, and user-owned types where possible. Sensors advertise no schema source.
 
 Full refresh is a run-scoped execution option shared by SQL, Python, Load, and
 API table assets. Direct SQL materializers are constructed with that option for

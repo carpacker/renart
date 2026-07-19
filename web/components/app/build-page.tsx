@@ -3534,6 +3534,7 @@ function NewAssetDialog({
   );
   const [creating, setCreating] = useState(false);
   const [error, setError] = useState("");
+  const [kindPickerExpanded, setKindPickerExpanded] = useState(true);
   const resetModeRef = useRef<string | null>(null);
 
   const workspace = useAtomValue(workspaceAtom);
@@ -3594,6 +3595,7 @@ function NewAssetDialog({
     setSourceTable("");
     setDestinationObject("");
     setAPITemplate("openapi");
+    setKindPickerExpanded(true);
     setSemanticDraft(defaultSemanticAssetDraft("seed", semanticCapabilities, semanticConnections));
     setError("");
   }, [open, isDownstream, semanticCapabilities, semanticConnections]);
@@ -3641,7 +3643,7 @@ function NewAssetDialog({
       return;
     }
     const semanticResult = semanticKind
-      ? buildSemanticAssetCreatePayload(semanticKind, semanticDraft, semanticCapabilities)
+      ? buildSemanticAssetCreatePayload(semanticKind, semanticDraft, semanticCapabilities, trimmed)
       : null;
     if (semanticResult?.error) {
       setError(semanticResult.error);
@@ -3709,7 +3711,7 @@ function NewAssetDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="flex max-h-[90dvh] flex-col overflow-hidden sm:max-w-3xl">
+      <DialogContent className="flex max-h-[90dvh] min-w-0 flex-col overflow-hidden sm:max-w-3xl">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <Plus className="size-4 text-primary" />
@@ -3729,36 +3731,83 @@ function NewAssetDialog({
             )}
           </DialogDescription>
         </DialogHeader>
-        <div className="grid min-h-0 flex-1 gap-5 overflow-y-auto">
-          <ToggleGroup
-            type="single"
-            variant="outline"
-            value={selected.id}
-            onValueChange={(nextKind) => {
-              if (!nextKind) return;
-              const next = nextKind as NewAssetKind;
-              setKind(next);
-              if (next === "seed" || next === "sensor") {
-                setSemanticDraft(
-                  defaultSemanticAssetDraft(next, semanticCapabilities, semanticConnections),
-                );
-              }
-            }}
-            className="grid w-full grid-cols-2 items-stretch gap-2 sm:grid-cols-3"
-          >
-            {options.map((option) => (
-              <ToggleGroupItem
-                key={option.id}
-                value={option.id}
-                aria-label={option.label}
-                className="h-24 w-full min-w-0 flex-col items-start justify-start whitespace-normal p-3 text-left data-[state=on]:border-primary data-[state=on]:ring-1 data-[state=on]:ring-primary"
-              >
-                <option.icon className="text-primary" />
-                <div className="font-medium">{option.label}</div>
-                <div className="text-xs text-muted-foreground">{option.description}</div>
-              </ToggleGroupItem>
-            ))}
-          </ToggleGroup>
+        <div className="grid min-h-0 min-w-0 flex-1 gap-5 overflow-x-hidden overflow-y-auto">
+          <div className="min-w-0">
+            <div
+              className={cn(
+                "grid min-w-0 transition-[grid-template-rows,opacity] duration-300 ease-out motion-reduce:transition-none",
+                kindPickerExpanded
+                  ? "grid-rows-[1fr] opacity-100"
+                  : "pointer-events-none grid-rows-[0fr] opacity-0",
+              )}
+              aria-hidden={!kindPickerExpanded}
+              inert={!kindPickerExpanded}
+            >
+              <div className="min-h-0 min-w-0 overflow-hidden">
+                <ToggleGroup
+                  type="single"
+                  variant="outline"
+                  value={selected.id}
+                  onValueChange={(nextKind) => {
+                    setKindPickerExpanded(false);
+                    if (!nextKind) return;
+                    const next = nextKind as NewAssetKind;
+                    setKind(next);
+                    if (next === "seed" || next === "sensor") {
+                      setSemanticDraft(
+                        defaultSemanticAssetDraft(next, semanticCapabilities, semanticConnections),
+                      );
+                    }
+                  }}
+                  className="grid w-full min-w-0 grid-cols-2 items-stretch gap-2 sm:grid-cols-3"
+                >
+                  {options.map((option) => (
+                    <ToggleGroupItem
+                      key={option.id}
+                      value={option.id}
+                      aria-label={option.label}
+                      className="h-24 w-full min-w-0 flex-col items-start justify-start whitespace-normal p-3 text-left data-[state=on]:border-primary data-[state=on]:ring-1 data-[state=on]:ring-primary"
+                    >
+                      <option.icon className="text-primary" />
+                      <div className="font-medium">{option.label}</div>
+                      <div className="text-xs text-muted-foreground">{option.description}</div>
+                    </ToggleGroupItem>
+                  ))}
+                </ToggleGroup>
+              </div>
+            </div>
+            <div
+              className={cn(
+                "grid min-w-0 transition-[grid-template-rows,opacity] duration-300 ease-out motion-reduce:transition-none",
+                kindPickerExpanded
+                  ? "pointer-events-none grid-rows-[0fr] opacity-0"
+                  : "grid-rows-[1fr] opacity-100",
+              )}
+              aria-hidden={kindPickerExpanded}
+              inert={kindPickerExpanded}
+            >
+              <div className="min-h-0 min-w-0 overflow-hidden">
+                <div className="flex min-w-0 items-center gap-2 rounded-md border bg-muted/20 px-2.5 py-2">
+                  <selected.icon className="size-4 shrink-0 text-primary" />
+                  <div className="min-w-0 flex-1">
+                    <div className="text-xs font-medium">{selected.label}</div>
+                    <div className="truncate text-[11px] text-muted-foreground">
+                      {selected.description}
+                    </div>
+                  </div>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="xs"
+                    className="shrink-0"
+                    onClick={() => setKindPickerExpanded(true)}
+                  >
+                    Change type
+                  </Button>
+                </div>
+              </div>
+            </div>
+          </div>
           <Field variant="plain">
             <FieldLabel htmlFor="new-asset-name">Asset name</FieldLabel>
             <Input

@@ -17,6 +17,7 @@ type AssetColumnsHandlers interface {
 	UpdateAssetColumns(ctx context.Context, assetID string, columns []any) (StatusResponse, *APIError)
 	ReconcileAssetColumns(ctx context.Context, assetID string, inferred []WorkspaceColumn) (ColumnReconcileResult, *APIError)
 	RefreshAssetColumnsFromDefinition(ctx context.Context, assetID string) (ColumnReconcileResult, *APIError)
+	PreviewAssetColumns(ctx context.Context, assetID string, sourceID string, environment string) (service.ColumnInferencePreview, *APIError)
 }
 
 type AssetColumnsAPI struct {
@@ -33,6 +34,11 @@ type ReconcileAssetColumnsRequest struct {
 	Columns []WorkspaceColumn `json:"columns"`
 }
 
+type PreviewAssetColumnsRequest struct {
+	Source      string `json:"source"`
+	Environment string `json:"environment,omitempty"`
+}
+
 func RegisterAssetColumnRoutes(router chi.Router, handlers *AssetColumnsAPI) {
 	router.Post("/api/assets/{assetID}/fill-columns-from-db", handlers.HandleFillColumnsFromDB)
 	router.Get("/api/assets/{assetID}/columns/infer", handlers.HandleInferAssetColumns)
@@ -40,6 +46,26 @@ func RegisterAssetColumnRoutes(router chi.Router, handlers *AssetColumnsAPI) {
 	router.Put("/api/assets/{assetID}/columns", handlers.HandleUpdateAssetColumns)
 	router.Post("/api/assets/{assetID}/columns/reconcile", handlers.HandleReconcileAssetColumns)
 	router.Post("/api/assets/{assetID}/columns/refresh-from-definition", handlers.HandleRefreshAssetColumnsFromDefinition)
+	router.Post("/api/assets/{assetID}/columns/preview", handlers.HandlePreviewAssetColumns)
+}
+
+func (h *AssetColumnsAPI) HandlePreviewAssetColumns(w http.ResponseWriter, r *http.Request) {
+	var req PreviewAssetColumnsRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		webapi.WriteBadRequest(w, "invalid_request_body", err.Error())
+		return
+	}
+	preview, apiErr := h.Service.PreviewAssetColumns(
+		r.Context(),
+		chi.URLParam(r, "assetID"),
+		req.Source,
+		req.Environment,
+	)
+	if apiErr != nil {
+		writeAPIError(w, apiErr)
+		return
+	}
+	webapi.WriteJSON(w, http.StatusOK, preview)
 }
 
 func (h *AssetColumnsAPI) HandleFillColumnsFromDB(w http.ResponseWriter, r *http.Request) {

@@ -130,26 +130,20 @@ func (s *AssetService) InferAssetColumns(ctx context.Context, assetID string) (i
 		}, nil
 	}
 
-	queryReq, err := BuildInferAssetColumnsQuery(parsedPipeline, asset, "")
-	if err != nil {
-		return 0, nil, badRequestError("infer_columns_command_build_failed", err.Error())
+	inferred, output, apiErr := s.inferMaterializedAssetColumns(ctx, parsedPipeline, asset, "")
+	queryReq, buildErr := BuildInferAssetColumnsQuery(parsedPipeline, asset, "")
+	if buildErr != nil {
+		return 0, nil, badRequestError("infer_columns_command_build_failed", buildErr.Error())
 	}
 	operation := webmodel.OperationMetadata{Type: "query_connection", ConnectionName: queryReq.ConnectionName, Query: queryReq.Query, Environment: queryReq.Environment}
-
-	output, err := s.deps.Executor.QueryConnection(ctx, queryReq)
-	if err != nil {
+	if apiErr != nil {
 		return http.StatusBadRequest, map[string]any{
 			"status":     "error",
 			"columns":    []WorkspaceColumn{},
 			"raw_output": string(output),
 			"operation":  operation,
-			"error":      err.Error(),
+			"error":      apiErr.Message,
 		}, nil
-	}
-
-	inferred := make([]WorkspaceColumn, 0)
-	for _, column := range InferSQLColumnsFromQueryOutput(output) {
-		inferred = append(inferred, WorkspaceColumn{Name: column.Name, Type: column.Type})
 	}
 	return http.StatusOK, map[string]any{
 		"status":     "ok",
@@ -157,6 +151,31 @@ func (s *AssetService) InferAssetColumns(ctx context.Context, assetID string) (i
 		"raw_output": string(output),
 		"operation":  operation,
 	}, nil
+}
+
+func (s *AssetService) inferMaterializedAssetColumns(
+	ctx context.Context,
+	parsedPipeline *pipeline.Pipeline,
+	asset *pipeline.Asset,
+	environment string,
+) ([]WorkspaceColumn, []byte, *APIError) {
+	queryReq, err := BuildInferAssetColumnsQuery(parsedPipeline, asset, environment)
+	if err != nil {
+		return nil, nil, badRequestError("infer_columns_command_build_failed", err.Error())
+	}
+	if s.deps.Executor == nil {
+		return nil, nil, internalError("infer_columns_unavailable", "query execution is not configured")
+	}
+	output, err := s.deps.Executor.QueryConnection(ctx, queryReq)
+	if err != nil {
+		return nil, output, badRequestError("infer_columns_failed", err.Error())
+	}
+
+	inferred := make([]WorkspaceColumn, 0)
+	for _, column := range InferSQLColumnsFromQueryOutput(output) {
+		inferred = append(inferred, WorkspaceColumn{Name: column.Name, Type: column.Type})
+	}
+	return inferred, output, nil
 }
 
 // UpdateAssetColumns replaces the asset's column definitions and persists

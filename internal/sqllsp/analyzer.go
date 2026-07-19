@@ -464,6 +464,9 @@ func (e *Engine) Complete(doc TextDocumentItem, pos Position) []CompletionItem {
 	if relationPosition(projection.doc.Text, renderedOffset) {
 		return e.relationCompletions()
 	}
+	if joinConditionPosition(projection.doc.Text, renderedOffset) {
+		return joinQualifierCompletions(analysis)
+	}
 	if columnCompletionPosition(projection.doc.Text, renderedOffset) {
 		return columnCompletions(e.columnsForSelectAnalysis(analysis))
 	}
@@ -1542,6 +1545,7 @@ type sqlAnalysis struct {
 }
 
 type aliasRef struct {
+	alias        string
 	name         string
 	columns      []ColumnInfo
 	columnRanges map[string]byteRange
@@ -1794,6 +1798,7 @@ func analyzeSQLWithParent(sql string, resolver scopeResolver, parent *sqlAnalysi
 		bodyAnalysis := analyzeSQLWithParent(cte.body, resolver, &analysis, absoluteBodyStart)
 		columns, columnRanges := outputColumnsWithRanges(cte.body, bodyAnalysis, resolver, absoluteBodyStart)
 		analysis.ctes[strings.ToLower(cte.name)] = aliasRef{
+			alias:        cte.name,
 			name:         cte.name,
 			columns:      columns,
 			columnRanges: columnRanges,
@@ -1811,6 +1816,7 @@ func analyzeSQLWithParent(sql string, resolver scopeResolver, parent *sqlAnalysi
 		if columns, ok := tableFunctionColumns(name, sql, match[5]); ok {
 			alias := shortName(name)
 			analysis.aliases[strings.ToLower(alias)] = aliasRef{
+				alias:   alias,
 				name:    name,
 				columns: columns,
 				kind:    "table-function",
@@ -1833,9 +1839,10 @@ func analyzeSQLWithParent(sql string, resolver scopeResolver, parent *sqlAnalysi
 			alias = candidate
 			aliasStart, aliasEnd = candidateStart, candidateEnd
 		}
-		ref := aliasRef{name: name, kind: "relation", start: baseOffset + aliasStart, end: baseOffset + aliasEnd}
+		ref := aliasRef{alias: alias, name: name, kind: "relation", start: baseOffset + aliasStart, end: baseOffset + aliasEnd}
 		if cte, ok := analysis.ctes[strings.ToLower(name)]; ok {
 			ref = cte
+			ref.alias = alias
 			if aliasStart != match[4] || aliasEnd != match[5] {
 				ref.start, ref.end = baseOffset+aliasStart, baseOffset+aliasEnd
 			}
@@ -1869,6 +1876,7 @@ func analyzeSQLWithParent(sql string, resolver scopeResolver, parent *sqlAnalysi
 		}
 		columns, columnRanges := outputColumnsWithRanges(subquery.body, bodyAnalysis, resolver, absoluteBodyStart)
 		analysis.aliases[strings.ToLower(subquery.alias)] = aliasRef{
+			alias:        subquery.alias,
 			name:         subquery.alias,
 			columns:      columns,
 			columnRanges: columnRanges,
@@ -2338,6 +2346,30 @@ func columnCompletions(columns []ColumnInfo) []CompletionItem {
 	return items
 }
 
+func joinQualifierCompletions(analysis sqlAnalysis) []CompletionItem {
+	items := make([]CompletionItem, 0, len(analysis.aliases))
+	seen := make(map[string]struct{}, len(analysis.aliases))
+	for key, ref := range analysis.aliases {
+		alias := strings.TrimSpace(ref.alias)
+		if alias == "" {
+			alias = key
+		}
+		normalized := strings.ToLower(alias)
+		if _, ok := seen[normalized]; ok {
+			continue
+		}
+		seen[normalized] = struct{}{}
+		items = append(items, CompletionItem{
+			Label:      alias + ".*",
+			Kind:       completionKindField,
+			Detail:     "columns from " + ref.name,
+			InsertText: alias + ".",
+		})
+	}
+	sortCompletionItems(items)
+	return items
+}
+
 func qualifierBeforeDot(text string, offset int) (string, bool) {
 	if offset > len(text) {
 		offset = len(text)
@@ -2403,6 +2435,12 @@ func columnCompletionPosition(text string, offset int) bool {
 		clause == "values"
 }
 
+func joinConditionPosition(text string, offset int) bool {
+	segment := currentSelectSegmentAt(text, offset)
+	clause, ok := lastColumnClauseBefore(segment, len(segment))
+	return ok && clause == "on"
+}
+
 func lastColumnClauseBefore(text string, offset int) (string, bool) {
 	if offset > len(text) {
 		offset = len(text)
@@ -2452,7 +2490,7 @@ func lastColumnClauseBefore(text string, offset int) (string, bool) {
 			} else if previousWord == "order" {
 				clause = "order by"
 			}
-		case "select", "from", "join", "where", "having", "qualify", "into", "update", "set", "values", "limit":
+		case "select", "from", "join", "on", "where", "having", "qualify", "into", "update", "set", "values", "limit":
 			clause = word
 		}
 		previousWord = word

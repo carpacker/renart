@@ -111,9 +111,14 @@ round-trips unknown fields).
 - **Asset creation:** the Build view's creation dialog presents SQL, Python,
   HTTP API, Seed, Sensor, and Load as equal-size choices. Detail forms use the
   plain `Field` variant so inputs are grouped by spacing and labels without a
-  border around every field. Seed workspace paths use the shared file picker;
+  border around every field. Selecting a kind animates the tile grid into a
+  compact selected-kind summary with a Change type action, leaving more room for
+  long Seed and Sensor forms. Seed workspace paths use the shared file picker;
   the request carries a workspace-root-relative selection, while the saved
   Bruin definition remains portable with a path relative to the asset file.
+  Seeds can also be pasted as CSV, TSV, JSON, JSON Lines, or plain text. Auto
+  detection remains an explicit, overridable format choice; TSV and text are
+  normalized to CSV while JSON and JSON Lines keep their native formats.
 - **Guided cards** (`asset-guided-cards.tsx`), rendered in the inspector
   sidebar next to the SQL editor: identity, materialization, dependencies
   (inferred / manual / ignored, with ignore/restore/remove actions), a column
@@ -146,12 +151,16 @@ round-trips unknown fields).
   the query as the `.asset.yml` file content. The inspector retains their generic
   identity and dependencies without duplicating those runtime controls.
   The internal `renart_seed_file` ownership marker is
-  preserved without becoming a guided user setting. Owned local seeds also
-  expose a drop target below the YAML-like parameters. Replacing the file uses
-  `POST /api/assets/{assetID}/seed-file`, updates `path`, `file_type`, and the
-  ownership marker in one server-side write, preserves the remaining definition,
-  and removes the previous owned sidecar. A file with the same name as an
-  unrelated workspace file is rejected instead of overwritten. Relation-producing
+  preserved without becoming a guided user setting. Owned local seeds show
+  `path`, `file_type`, and `enforce_schema` before one replacement textarea that
+  accepts pasted text, dragged files, and file-picker selections. Replacing the
+  file uses `POST /api/assets/{assetID}/seed-file`, updates `path`, `file_type`,
+  and the ownership marker in one server-side write, preserves the remaining
+  definition, and removes the previous owned sidecar. A file with the same name
+  as an unrelated workspace file is rejected instead of overwritten. Every
+  replacement passes through a destructive confirmation that names the current
+  seed before any upload starts. Pasted data exposes the same format detection
+  and override contract as creation. Relation-producing
   assets retain generic columns and checks in the inspector; sensors omit both
   because they gate execution without producing a relation. Asset-type
   selectors in both guided and YAML views group SQL, seed, sensor, and other
@@ -177,15 +186,18 @@ round-trips unknown fields).
   `pipeline.yml` overrides separate from read-only defaults Bruin infers from
   asset types, and each resolved connection links to that exact environment
   connection under project settings.
-- Column refresh actions choose their source by asset kind. SQL and Load infer
-  from definitions/upstream assets; local seeds ask Sling to discover the source
-  file schema, so they work before the first run. HTTP API assets infer from a
-  sampled response. URL seeds and executable non-SQL relation assets import the
-  selected environment's materialized schema. All inferred shapes pass through
-  the same provenance-preserving reconciliation path. Sensors expose no column
-  refresh action. These flows use `/columns/refresh-from-definition`,
-  `/api-infer`, `/api/sql/table-columns`, and `/columns/reconcile`; the older
-  SQL-specific `/fill-columns-from-db` action remains available separately.
+- The backend advertises each asset's available column sources through
+  `column_inference_sources`, so the inspector has one source picker and preview
+  flow instead of asset-kind-specific refresh buttons. Definition sources cover
+  SQL output inference, Load upstreams, local seed files, and API fields/OpenAPI;
+  observed sources cover sampled API responses and current materialized tables.
+  `POST /columns/preview` is non-mutating and reports added, missing, and
+  type-changed columns against saved metadata. The user explicitly applies the
+  preview through `/columns/reconcile`, which retains the existing provenance,
+  descriptions, checks, and owned type rules. Sensors expose no schema source;
+  the older `/columns/refresh-from-definition` and SQL-specific
+  `/fill-columns-from-db` routes remain for compatibility and automatic seed
+  replacement refreshes.
 
 ## 7. Not built (still intent, from the original concept)
 
@@ -195,8 +207,9 @@ round-trips unknown fields).
 - **Raw / detached mode** — granular "renart stops managing this field/asset"
   detachment. `renart_col_own` covers field-level type ownership; whole-path
   detachment is not implemented.
-- **Semantic diff prompts** before applying non-trivial generated changes
-  (today safe additions auto-apply; conflicts surface as reconcile items).
+- **Broader semantic diff prompts** outside schema-source synchronization;
+  column source previews show schema drift, while other generated changes still
+  rely on safe auto-apply plus reconcile items for conflicts.
 - **Command palette metadata actions** beyond what the cards expose.
 - Expression-hash rename memory (`renart_col_map`) is defined in the schema
   but rename suggestions are not yet surfaced in the UI.

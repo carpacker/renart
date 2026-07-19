@@ -27,12 +27,13 @@ type WorkspaceEvent struct {
 // The workspace DTOs are defined once in the model package; these aliases
 // keep service call sites compiling without a parallel type set.
 type (
-	WorkspaceAsset       = webmodel.Asset
-	WorkspaceColumnCheck = webmodel.ColumnCheck
-	WorkspaceColumn      = webmodel.Column
-	WorkspacePipeline    = webmodel.Pipeline
-	WorkspaceNotebook    = webmodel.Notebook
-	WorkspaceState       = webmodel.WorkspaceState
+	WorkspaceAsset         = webmodel.Asset
+	WorkspaceColumnCheck   = webmodel.ColumnCheck
+	WorkspaceColumn        = webmodel.Column
+	ColumnInferencePreview = webmodel.ColumnInferencePreview
+	WorkspacePipeline      = webmodel.Pipeline
+	WorkspaceNotebook      = webmodel.Notebook
+	WorkspaceState         = webmodel.WorkspaceState
 )
 
 type WorkspaceCoordinatorDependencies struct {

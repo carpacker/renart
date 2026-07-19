@@ -971,7 +971,7 @@ func (s *webServer) newConnectionManager(ctx context.Context, environment string
 		return nil, errs[0]
 	}
 
-	return manager, nil
+	return service.WrapConnectionManagerForWorkspace(manager, s.workspaceRoot), nil
 }
 
 func (s *webServer) handleStatic(w http.ResponseWriter, r *http.Request) {

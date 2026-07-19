@@ -34,6 +34,7 @@ type (
 	UpdateAssetRequest           = service.AssetUpdateRequest
 	WorkspaceColumn              = service.WorkspaceColumn
 	ColumnReconcileResult        = service.ColumnReconcileResult
+	ColumnInferencePreview       = service.ColumnInferencePreview
 	AssetTransaction             = service.AssetTransaction
 	AssetTransactionResult       = service.AssetTransactionResult
 	FormatSQLAssetRequest        = service.FormatSQLAssetRequest

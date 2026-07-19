@@ -1182,6 +1182,56 @@ func TestEngineCompletesRelationsForSchemaQualifierInFromClause(t *testing.T) {
 	}
 }
 
+func TestEngineCompletesJoinConditionsWithQueryAliases(t *testing.T) {
+	engine := NewEngine(CanonicalGraph{
+		Version: 1,
+		Relations: []RelationNode{
+			{ID: "left", Name: "prefix.table"},
+			{ID: "right", Name: "other.view"},
+			{ID: "unrelated", Name: "warehouse.unrelated"},
+		},
+		Schemas: []SchemaLayer{
+			{RelationID: "left", Columns: []ColumnInfo{{Name: "id"}, {Name: "left_value"}}},
+			{RelationID: "right", Columns: []ColumnInfo{{Name: "id"}, {Name: "right_value"}}},
+			{RelationID: "unrelated", Columns: []ColumnInfo{{Name: "unrelated_value"}}},
+		},
+	})
+
+	doc := TextDocumentItem{
+		URI:  "file:///query.sql",
+		Text: "select * from prefix.table as x join other.view as y on ",
+	}
+	items := engine.Complete(doc, PositionAt(doc.Text, len(doc.Text)))
+	requireCompletion := func(label, insertText string) {
+		t.Helper()
+		for _, item := range items {
+			if item.Label != label {
+				continue
+			}
+			if item.Kind != completionKindField || item.InsertText != insertText {
+				t.Fatalf("unexpected join completion %#v", item)
+			}
+			return
+		}
+		t.Fatalf("missing join completion %q in %#v", label, items)
+	}
+	requireCompletion("x.*", "x.")
+	requireCompletion("y.*", "y.")
+	if len(items) != 2 {
+		t.Fatalf("expected only query aliases, got %#v", items)
+	}
+
+	doc.Text += "x."
+	columnItems := engine.Complete(doc, PositionAt(doc.Text, len(doc.Text)))
+	labels := completionLabels(columnItems)
+	if !slices.Contains(labels, "id") || !slices.Contains(labels, "left_value") {
+		t.Fatalf("expected x columns after inserted dot, got %#v", labels)
+	}
+	if slices.Contains(labels, "right_value") || slices.Contains(labels, "unrelated_value") {
+		t.Fatalf("expected only x columns after inserted dot, got %#v", labels)
+	}
+}
+
 func TestEngineOffersKeywordCompletionsInGeneralPosition(t *testing.T) {
 	engine := NewEngine(CanonicalGraph{
 		Version:   1,

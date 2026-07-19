@@ -33,20 +33,61 @@ type AssetAuthoringCapability struct {
 	SupportsURL        bool              `json:"supports_url,omitempty"`
 }
 
+// ColumnInferenceSource describes one schema observation an asset can provide.
+// The backend owns these capabilities so adding a new asset kind does not
+// require another frontend inference-mode switch.
+type ColumnInferenceSource struct {
+	ID          string `json:"id"`
+	Label       string `json:"label"`
+	Description string `json:"description"`
+	Category    string `json:"category"`
+}
+
+// ColumnSchemaDriftItem is one difference between saved column metadata and an
+// inferred schema preview.
+type ColumnSchemaDriftItem struct {
+	Column       string `json:"column"`
+	Kind         string `json:"kind"`
+	CurrentType  string `json:"current_type,omitempty"`
+	InferredType string `json:"inferred_type,omitempty"`
+}
+
+// ColumnSchemaDrift summarizes the changes applying an inferred schema would
+// make to the saved metadata.
+type ColumnSchemaDrift struct {
+	Added       int                     `json:"added"`
+	Removed     int                     `json:"removed"`
+	TypeChanged int                     `json:"type_changed"`
+	Unchanged   int                     `json:"unchanged"`
+	Items       []ColumnSchemaDriftItem `json:"items"`
+}
+
+// ColumnInferencePreview is a non-mutating schema observation and its drift
+// from the asset's saved column metadata.
+type ColumnInferencePreview struct {
+	Status        string                `json:"status"`
+	Source        ColumnInferenceSource `json:"source"`
+	Columns       []Column              `json:"columns"`
+	Drift         ColumnSchemaDrift     `json:"drift"`
+	Notes         []string              `json:"notes,omitempty"`
+	SampleRecords *int                  `json:"sample_records,omitempty"`
+}
+
 // Asset represents a web API asset with its metadata. ContentRevision identifies
 // the exact snapshot returned for a notebook cell so saves can use it as an
 // optimistic-concurrency precondition.
 type Asset struct {
-	ID              string            `json:"id"`
-	Name            string            `json:"name"`
-	Type            string            `json:"type"`
-	Path            string            `json:"path"`
-	Content         string            `json:"content"`
-	ContentRevision string            `json:"content_revision,omitempty"`
-	Upstreams       []string          `json:"upstreams"`
-	Parameters      map[string]string `json:"parameters,omitempty"`
-	Meta            map[string]string `json:"meta,omitempty"`
-	Columns         []Column          `json:"columns,omitempty"`
+	ID                     string                  `json:"id"`
+	Name                   string                  `json:"name"`
+	Type                   string                  `json:"type"`
+	Path                   string                  `json:"path"`
+	Content                string                  `json:"content"`
+	ContentRevision        string                  `json:"content_revision,omitempty"`
+	Upstreams              []string                `json:"upstreams"`
+	Parameters             map[string]string       `json:"parameters,omitempty"`
+	Meta                   map[string]string       `json:"meta,omitempty"`
+	Columns                []Column                `json:"columns,omitempty"`
+	ColumnInferenceSources []ColumnInferenceSource `json:"column_inference_sources,omitempty"`
 	// Connection is the effective target connection after applying pipeline
 	// defaults; ExplicitConnection is the persisted asset-level override used by
 	// metadata editors to represent the Auto state without losing runtime context.

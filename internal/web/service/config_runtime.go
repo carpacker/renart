@@ -11,6 +11,8 @@ import (
 	"github.com/bruin-data/bruin/pkg/connection"
 	"github.com/bruin-data/bruin/pkg/pipeline"
 	"github.com/spf13/afero"
+
+	"renart/internal/web/duckdbworkspace"
 )
 
 func loadConfigOrEmpty(configPath string) *config.Config {
@@ -122,6 +124,12 @@ func newConnectionManagerFromConfig(ctx context.Context, cfg *config.Config) (co
 		return nil, errs[0]
 	}
 	return manager, nil
+}
+
+// WrapConnectionManagerForWorkspace keeps DuckDB's relative file references
+// scoped to the workspace without changing the process-wide working directory.
+func WrapConnectionManagerForWorkspace(manager config.ConnectionAndDetailsGetter, workspaceRoot string) config.ConnectionAndDetailsGetter {
+	return duckdbworkspace.WrapManager(manager, workspaceRoot)
 }
 
 func selectConfigAndCreateConnectionManager(ctx context.Context, configPath string, requestedEnvironment string) (*config.Config, config.ConnectionAndDetailsGetter, error) {

@@ -87,15 +87,24 @@ test.describe("seed and sensor assets live", () => {
     await expect(seedEditor.locator(".monaco-editor")).toHaveCount(0);
     await expect(seedEditor.getByLabel("Seed path")).toHaveValue("./regional_customers.csv");
     await expect(seedEditor.getByLabel("Seed file format")).toContainText("csv");
-    const seedDropzone = seedEditor.getByTestId("seed-file-dropzone");
-    await expect(seedDropzone).toBeVisible();
-    const [seedDropzoneBox, seedPathBox] = await Promise.all([
-      seedDropzone.boundingBox(),
+    const seedInput = seedEditor.getByTestId("seed-replacement-input");
+    await expect(seedInput).toBeVisible();
+    await expect(seedInput.getByLabel("Seed data")).toBeVisible();
+    const [seedInputBox, seedPathBox, seedFileTypeBox, enforceSchemaBox] = await Promise.all([
+      seedInput.boundingBox(),
       seedEditor.getByLabel("Seed path").boundingBox(),
+      seedEditor.getByLabel("Seed file format").boundingBox(),
+      seedEditor.getByLabel("Enforce seed schema").boundingBox(),
     ]);
-    expect(seedDropzoneBox).not.toBeNull();
+    expect(seedInputBox).not.toBeNull();
     expect(seedPathBox).not.toBeNull();
-    expect(seedPathBox!.y).toBeGreaterThanOrEqual(seedDropzoneBox!.y + seedDropzoneBox!.height);
+    expect(seedFileTypeBox).not.toBeNull();
+    expect(enforceSchemaBox).not.toBeNull();
+    expect(seedFileTypeBox!.y).toBeGreaterThanOrEqual(seedPathBox!.y + seedPathBox!.height);
+    expect(enforceSchemaBox!.y).toBeGreaterThanOrEqual(
+      seedFileTypeBox!.y + seedFileTypeBox!.height,
+    );
+    expect(seedInputBox!.y).toBeGreaterThanOrEqual(enforceSchemaBox!.y + enforceSchemaBox!.height);
     await expect(
       seedEditor.getByText("Columns and checks are configured in Properties."),
     ).toHaveCount(0);
@@ -137,15 +146,21 @@ test.describe("seed and sensor assets live", () => {
     await expect(seedColumns.getByRole("heading", { name: "Columns" })).toBeVisible({
       timeout: 15000,
     });
-    const initialRefreshResponse = page.waitForResponse(
+    const initialPreviewResponse = page.waitForResponse(
       (response) =>
-        response.url().includes(`/api/assets/${seedAssetId}/columns/refresh-from-definition`) &&
+        response.url().includes(`/api/assets/${seedAssetId}/columns/preview`) &&
         response.request().method() === "POST",
       { timeout: 30000 },
     );
-    await seedColumns.getByRole("button", { name: "Refresh", exact: true }).click();
-    const initialRefresh = await initialRefreshResponse;
-    expect(initialRefresh.ok(), await initialRefresh.text()).toBe(true);
+    await seedColumns.getByRole("button", { name: "Sync schema", exact: true }).click();
+    await expect(
+      seedColumns.getByText("The schema Sling detects in the local seed file."),
+    ).toBeVisible();
+    await seedColumns.getByRole("button", { name: "Preview schema", exact: true }).click();
+    const initialPreview = await initialPreviewResponse;
+    expect(initialPreview.ok(), await initialPreview.text()).toBe(true);
+    await expect(seedColumns.getByText("2 columns", { exact: true })).toBeVisible();
+    await seedColumns.getByRole("button", { name: "Apply to metadata", exact: true }).click();
     await pollAsset(
       liveApp,
       page,
@@ -154,6 +169,23 @@ test.describe("seed and sensor assets live", () => {
         asset.columns?.some((column) => column.name === "customer_id") === true &&
         asset.columns?.some((column) => column.name === "customer_name") === true,
     );
+
+    await seedEditor.getByTestId("seed-file-drop-target").evaluate((element) => {
+      const transfer = new DataTransfer();
+      transfer.items.add(
+        new File(["customer_id,customer_name\n99,Dropped but cancelled\n"], "dropped.csv", {
+          type: "text/csv",
+        }),
+      );
+      element.dispatchEvent(
+        new DragEvent("drop", { bubbles: true, cancelable: true, dataTransfer: transfer }),
+      );
+    });
+    const droppedConfirmation = page.getByRole("alertdialog", {
+      name: "Replace the seed file?",
+    });
+    await expect(droppedConfirmation).toContainText("the dropped file");
+    await droppedConfirmation.getByRole("button", { name: "Cancel", exact: true }).click();
 
     const replacement = Buffer.from(
       "customer_id,customer_name,segment\n20,Replacement Grace,enterprise\n",
@@ -176,6 +208,10 @@ test.describe("seed and sensor assets live", () => {
       mimeType: "text/csv",
       buffer: replacement,
     });
+    const replacementDialog = page.getByRole("alertdialog", { name: "Replace the seed file?" });
+    await expect(replacementDialog).toBeVisible();
+    await expect(replacementDialog).toContainText("./regional_customers.csv");
+    await replacementDialog.getByRole("button", { name: "Replace file", exact: true }).click();
     const [seedUpload, replacementRefresh] = await Promise.all([
       seedUploadResponse,
       replacementRefreshResponse,
@@ -407,8 +443,13 @@ test.describe("seed and sensor assets live", () => {
     expect(new Set(selectorBoxes.map(({ height }) => height)).size).toBe(1);
 
     await dialog.getByRole("radio", { name: "Seed", exact: true }).click();
+    await expect(dialog.getByRole("button", { name: "Change type", exact: true })).toBeVisible();
+    await expect(dialog.getByRole("radio", { name: "Seed", exact: true })).toBeHidden();
+    expect(await dialog.evaluate((element) => element.scrollWidth <= element.clientWidth + 1)).toBe(
+      true,
+    );
     await dialog.getByLabel("Asset name").fill("analytics.workspace_customers");
-    await dialog.getByRole("radio", { name: "Workspace path", exact: true }).click();
+    await dialog.getByRole("radio", { name: "Workspace", exact: true }).click();
     await dialog.getByRole("button", { name: "Choose workspace seed file" }).click();
 
     const pathInput = page.getByPlaceholder("Type a path…");
@@ -445,6 +486,85 @@ test.describe("seed and sensor assets live", () => {
     );
     expect(definition).toContain("path: ../../../data/workspace_customers.csv");
     expect(definition).not.toContain("workspace_path");
+  });
+
+  test("creates and replaces a seed from pasted clipboard data", async ({ liveApp, page }) => {
+    test.setTimeout(120000);
+    test.skip(
+      test.info().project.name.includes("mobile"),
+      "The canvas creation flow is desktop-only.",
+    );
+
+    await page.goto(`${liveApp.baseURL}/pipelines/${pipelineId}/assets/${ordersAssetId}/canvas`);
+    const dialog = await openNewAssetDialog(page);
+    await dialog.getByRole("radio", { name: "Seed", exact: true }).click();
+    await dialog.getByLabel("Asset name").fill("analytics.pasted_customers");
+    await dialog.getByRole("radio", { name: "Paste", exact: true }).click();
+    await dialog.getByLabel("Pasted data").fill("customer_id,customer_name\n30,Clipboard Lin\n");
+    await expect(dialog.getByLabel("Pasted format")).toContainText("Auto (CSV)");
+
+    const createdResponse = page.waitForResponse(
+      (response) =>
+        response.url().includes(`/api/pipelines/${pipelineId}/assets`) &&
+        response.request().method() === "POST",
+      { timeout: 30000 },
+    );
+    await dialog.getByRole("button", { name: "Create", exact: true }).click();
+    const created = await createdResponse;
+    expect(created.ok(), await created.text()).toBe(true);
+
+    const pastedPath = "analytics/assets/analytics/pasted_customers.asset.yml";
+    const pastedAssetId = Buffer.from(pastedPath).toString("base64url");
+    const pasted = await pollAsset(liveApp, page, "analytics.pasted_customers", (asset) =>
+      Boolean(asset.meta?.renart_seed_file),
+    );
+    expect(pasted.parameters).toMatchObject({
+      path: "./pasted_customers.csv",
+      file_type: "csv",
+    });
+    expect(
+      await readFile(
+        join(liveApp.workspaceDir, "analytics/assets/analytics/pasted_customers.csv"),
+        "utf8",
+      ),
+    ).toBe("customer_id,customer_name\n30,Clipboard Lin\n");
+
+    await page.goto(`${liveApp.baseURL}/pipelines/${pipelineId}/assets/${pastedAssetId}/code`);
+    const seedEditor = page.getByTestId("semantic-parameters-editor");
+    await expect(seedEditor).toHaveAttribute("data-asset-kind", "seed");
+    const seedInput = seedEditor.getByTestId("seed-replacement-input");
+    await expect(seedInput).toBeVisible();
+    await seedInput
+      .getByLabel("Seed data")
+      .fill('{"customer_id":31,"customer_name":"Clipboard Mei"}\n');
+    await expect(seedInput.getByLabel("Pasted format")).toContainText("Auto (JSON)");
+    await seedInput.getByRole("button", { name: "Save", exact: true }).click();
+
+    const confirmation = page.getByRole("alertdialog", { name: "Replace the seed file?" });
+    await expect(confirmation).toContainText("pasted JSON data");
+    const uploadResponse = page.waitForResponse(
+      (response) =>
+        response.url().includes(`/api/assets/${pastedAssetId}/seed-file`) &&
+        response.request().method() === "POST",
+      { timeout: 30000 },
+    );
+    await confirmation.getByRole("button", { name: "Replace file", exact: true }).click();
+    const upload = await uploadResponse;
+    expect(upload.ok(), await upload.text()).toBe(true);
+
+    const replaced = await pollAsset(
+      liveApp,
+      page,
+      "analytics.pasted_customers",
+      (asset) => asset.parameters?.path === "./pasted_customers.json",
+    );
+    expect(replaced.parameters?.file_type).toBe("json");
+    expect(
+      await readFile(
+        join(liveApp.workspaceDir, "analytics/assets/analytics/pasted_customers.json"),
+        "utf8",
+      ),
+    ).toBe('{"customer_id":31,"customer_name":"Clipboard Mei"}\n');
   });
 });
 

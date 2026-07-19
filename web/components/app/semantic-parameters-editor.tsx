@@ -3,10 +3,36 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { useAtomValue } from "jotai";
-import { CircleAlert, CloudUpload, Upload } from "lucide-react";
+import { CircleAlert, CloudUpload, FileWarning, Upload } from "lucide-react";
 
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
-import { Button } from "@/components/ui/button";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogMedia,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
+import { Field, FieldDescription, FieldError, FieldLabel } from "@/components/ui/field";
+import {
+  InputGroup,
+  InputGroupAddon,
+  InputGroupButton,
+  InputGroupText,
+  InputGroupTextarea,
+} from "@/components/ui/input-group";
+import {
+  Select,
+  SelectContent,
+  SelectGroup,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { Separator } from "@/components/ui/separator";
 import { Spinner } from "@/components/ui/spinner";
 import { Textarea } from "@/components/ui/textarea";
@@ -21,6 +47,13 @@ import {
 import { workspaceAtom } from "@/lib/atoms/domains/workspace";
 import type { WebAsset } from "@/lib/types";
 import { cn } from "@/lib/utils";
+import {
+  clipboardSeedFileStem,
+  clipboardSeedFormatLabel,
+  detectClipboardSeedFormat,
+  prepareClipboardSeed,
+  type ClipboardSeedFormat,
+} from "@/lib/seed-clipboard";
 
 import { Comment, InlineSelect, InlineText, Key, Line } from "./asset-yaml-editor";
 import { SensorQueryEditor } from "./sensor-query-editor";
@@ -232,14 +265,6 @@ export function SemanticParametersEditor({
 
       {isSeed ? (
         <>
-          <Separator className="my-3" />
-          <SeedFileDropzone
-            currentPath={parameters.path ?? ""}
-            fileTypes={seedFileTypes}
-            uploading={uploading}
-            message={uploadMessage}
-            onFile={(file) => void uploadSeedFile(file)}
-          />
           <Line depth={1}>
             <Key>path</Key>
             <InlineText
@@ -274,6 +299,14 @@ export function SemanticParametersEditor({
               onChange={(value) => saveParameter("enforce_schema", value)}
             />
           </Line>
+          <Separator className="my-3" />
+          <SeedReplacementInput
+            currentPath={parameters.path ?? ""}
+            fileTypes={seedFileTypes}
+            uploading={uploading}
+            message={uploadMessage}
+            onFile={(file) => void uploadSeedFile(file)}
+          />
         </>
       ) : (
         <>
@@ -365,7 +398,7 @@ export function SemanticParametersEditor({
   );
 }
 
-function SeedFileDropzone({
+function SeedReplacementInput({
   currentPath,
   fileTypes,
   uploading,
@@ -380,20 +413,52 @@ function SeedFileDropzone({
 }) {
   const inputRef = useRef<HTMLInputElement>(null);
   const [dragging, setDragging] = useState(false);
+  const [pendingFile, setPendingFile] = useState<File | null>(null);
+  const [pendingMethod, setPendingMethod] = useState("");
+  const [clipboardText, setClipboardText] = useState("");
+  const [clipboardFormat, setClipboardFormat] = useState<ClipboardSeedFormat>("auto");
+  const [clipboardError, setClipboardError] = useState("");
   const accept = fileTypes.map((fileType) => `.${fileType}`).join(",");
+  const detectedClipboardFormat = clipboardText ? detectClipboardSeedFormat(clipboardText) : null;
 
-  const chooseFile = (files: FileList | null) => {
+  const reviewFile = (files: FileList | null, method: string) => {
     const file = files?.[0];
-    if (file) onFile(file);
+    if (!file) return;
+    setPendingFile(file);
+    setPendingMethod(method);
+  };
+
+  const saveClipboard = () => {
+    setClipboardError("");
+    try {
+      const prepared = prepareClipboardSeed(
+        clipboardText,
+        clipboardFormat,
+        clipboardSeedFileStem(currentPath),
+      );
+      setPendingFile(
+        new File([prepared.content], prepared.fileName, {
+          type: prepared.mimeType,
+        }),
+      );
+      setPendingMethod(`pasted ${clipboardSeedFormatLabel(prepared.inputFormat)} data`);
+    } catch (cause) {
+      setClipboardError(cause instanceof Error ? cause.message : "Could not prepare pasted data.");
+    }
   };
 
   return (
-    <div className="flex flex-col gap-1.5" data-testid="seed-file-dropzone">
-      <div
-        className={cn(
-          "flex min-h-32 flex-col items-center justify-center gap-2 rounded-md border border-dashed p-4 text-center transition-colors",
-          dragging && "border-primary bg-accent",
-        )}
+    <Field
+      className="gap-1.5"
+      data-disabled={uploading ? true : undefined}
+      data-invalid={clipboardError ? true : undefined}
+      data-testid="seed-replacement-input"
+    >
+      <FieldLabel htmlFor="seed-editor-data">Seed data</FieldLabel>
+      <InputGroup
+        data-testid="seed-file-drop-target"
+        data-disabled={uploading ? true : undefined}
+        className={cn("border-dashed transition-colors", dragging && "border-primary bg-accent")}
         onDragEnter={(event) => {
           event.preventDefault();
           setDragging(true);
@@ -410,41 +475,142 @@ function SeedFileDropzone({
         onDrop={(event) => {
           event.preventDefault();
           setDragging(false);
-          if (!uploading) chooseFile(event.dataTransfer.files);
+          if (uploading) return;
+          if (event.dataTransfer.files.length > 0) {
+            reviewFile(event.dataTransfer.files, "the dropped file");
+            return;
+          }
+          const text = event.dataTransfer.getData("text/plain");
+          if (text) {
+            setClipboardText(text);
+            setClipboardError("");
+          }
         }}
       >
-        <CloudUpload className="size-5 text-muted-foreground" aria-hidden="true" />
-        <div className="flex flex-col gap-0.5">
-          <p className="text-xs font-medium text-foreground">Drop a seed file here</p>
-          <p className="text-[11px] text-muted-foreground">
-            {currentPath ? `Replace ${currentPath}` : "Upload a file beside the asset definition"}
-          </p>
-        </div>
-        <Button
-          type="button"
-          variant="outline"
-          size="xs"
+        <InputGroupTextarea
+          id="seed-editor-data"
+          className="min-h-32 resize-y font-mono text-xs"
+          value={clipboardText}
           disabled={uploading}
-          onClick={() => inputRef.current?.click()}
-        >
-          {uploading ? <Spinner data-icon="inline-start" /> : <Upload data-icon="inline-start" />}
-          {uploading ? "Uploading" : "Choose file"}
-        </Button>
-        <input
-          ref={inputRef}
-          className="sr-only"
-          type="file"
-          accept={accept}
-          aria-label="Upload seed file"
-          disabled={uploading}
+          aria-invalid={clipboardError ? true : undefined}
           onChange={(event) => {
-            chooseFile(event.target.files);
-            event.target.value = "";
+            setClipboardText(event.target.value);
+            setClipboardError("");
           }}
         />
-      </div>
+        <InputGroupAddon align="block-start">
+          <CloudUpload aria-hidden="true" />
+          <InputGroupText>
+            {dragging
+              ? "Drop the seed file here"
+              : currentPath
+                ? `Paste data or drop a file to replace ${currentPath}`
+                : "Paste data or drop a seed file"}
+          </InputGroupText>
+        </InputGroupAddon>
+        <InputGroupAddon align="block-end" className="flex-wrap gap-1.5">
+          <InputGroupText>Format</InputGroupText>
+          <Select
+            value={clipboardFormat}
+            disabled={uploading}
+            onValueChange={(value) => setClipboardFormat(value as ClipboardSeedFormat)}
+          >
+            <SelectTrigger aria-label="Pasted format" size="sm" className="w-40">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectGroup>
+                <SelectItem value="auto">
+                  Auto
+                  {detectedClipboardFormat
+                    ? ` (${clipboardSeedFormatLabel(detectedClipboardFormat)})`
+                    : ""}
+                </SelectItem>
+                <SelectItem value="csv">CSV</SelectItem>
+                <SelectItem value="tsv">TSV (convert to CSV)</SelectItem>
+                <SelectItem value="json">JSON</SelectItem>
+                <SelectItem value="jsonl">JSON Lines</SelectItem>
+                <SelectItem value="text">Plain text (one column)</SelectItem>
+              </SelectGroup>
+            </SelectContent>
+          </Select>
+          <InputGroupButton
+            variant="outline"
+            disabled={uploading}
+            onClick={() => inputRef.current?.click()}
+          >
+            {uploading ? <Spinner data-icon="inline-start" /> : <Upload data-icon="inline-start" />}
+            {uploading ? "Uploading" : "Choose file"}
+          </InputGroupButton>
+          <InputGroupButton
+            className="ml-auto"
+            variant="default"
+            disabled={uploading || !clipboardText.trim()}
+            onClick={saveClipboard}
+          >
+            Save
+          </InputGroupButton>
+        </InputGroupAddon>
+      </InputGroup>
+      <input
+        ref={inputRef}
+        className="sr-only"
+        type="file"
+        accept={accept}
+        aria-label="Upload seed file"
+        disabled={uploading}
+        onChange={(event) => {
+          reviewFile(event.target.files, "the selected file");
+          event.target.value = "";
+        }}
+      />
+      {clipboardError ? (
+        <FieldError>{clipboardError}</FieldError>
+      ) : (
+        <FieldDescription>
+          Paste text and save, or drop or choose a file. You will confirm before replacing the
+          current seed.
+        </FieldDescription>
+      )}
       {message ? <Comment>{message}</Comment> : null}
-    </div>
+
+      <AlertDialog
+        open={pendingFile !== null}
+        onOpenChange={(open) => {
+          if (!open) {
+            setPendingFile(null);
+            setPendingMethod("");
+          }
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogMedia>
+              <FileWarning />
+            </AlertDialogMedia>
+            <AlertDialogTitle>Replace the seed file?</AlertDialogTitle>
+            <AlertDialogDescription>
+              {pendingMethod ? `Using ${pendingMethod} will replace ` : "This will replace "}
+              {currentPath || "the current seed content"}. The replacement will also refresh the
+              inferred columns.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              variant="destructive"
+              onClick={() => {
+                if (pendingFile) onFile(pendingFile);
+                setPendingFile(null);
+                setPendingMethod("");
+              }}
+            >
+              Replace file
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+    </Field>
   );
 }
 

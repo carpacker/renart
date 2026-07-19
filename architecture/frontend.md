@@ -158,19 +158,24 @@ not underscore-flattened route hacks.
   editors in the same main pane. Query sensors project `parameters.query` into
   the normal SQL Monaco surface, including LSP diagnostics, completion,
   navigation, Jinja support, and formatting; `poke_interval` and `timeout` stay
-  in a compact footer below it. Seed editors add a drag-and-drop file
-  replacement target directly below their parameters; the browser uploads
-  through the Go server and then refreshes columns from the new local file.
+  in a compact footer below it. Seed editors show `path`, `file_type`, and
+  `enforce_schema` before one replacement field that accepts pasted text,
+  dragged files, or file-picker selections. Every replacement requires an
+  explicit confirmation before the browser uploads through the Go server and
+  refreshes columns from the new local file. Pasted CSV, TSV, JSON, JSON Lines,
+  and text share one auto-detection/override utility with creation.
   Generic identity and dependency metadata remains in the inspector, along with
   columns and checks for relation-producing assets; sensors omit columns and
   checks because they do not materialize a relation.
 - The Build view's New asset dialog uses the workspace's backend-provided
   `asset_capabilities` contract for seed and sensor authoring
   ([semantic-asset-create-fields.tsx](../web/components/app/semantic-asset-create-fields.tsx)).
-  Its six top-level asset-kind choices use one fixed tile size, while the
-  creation fields use the plain `Field` variant instead of nesting a bordered
-  card around each input. It filters types and connections together, offers
-  upload/workspace-file/URL seed sources, renders the parameters required by
+  Its six top-level asset-kind choices use one fixed tile size and animate into
+  a compact selected-kind summary once chosen, while the creation fields use the
+  plain `Field` variant instead of nesting a bordered card around each input.
+  The dialog is shrink-safe and suppresses horizontal overflow around long
+  horizontal fields. It filters types and connections together, offers
+  upload/paste/workspace-file/URL seed sources, renders the parameters required by
   each sensor variant, and sends uploaded bytes through the multipart asset API.
   The workspace-file source uses the shared path combobox, restricted to
   supported files below the workspace root. The resulting seed and sensor assets

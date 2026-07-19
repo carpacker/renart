@@ -12,6 +12,10 @@ const sources = [
     types: [
       "MaterializationCapability",
       "AssetAuthoringCapability",
+      "ColumnInferenceSource",
+      "ColumnSchemaDriftItem",
+      "ColumnSchemaDrift",
+      "ColumnInferencePreview",
       "ColumnCheck",
       "Column",
       "Asset",

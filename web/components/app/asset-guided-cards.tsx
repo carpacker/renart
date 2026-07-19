@@ -20,6 +20,7 @@ import { workspaceAtom } from "@/lib/atoms/domains/workspace";
 import { selectedEnvironmentAtom } from "@/lib/atoms/workspace";
 
 import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
 import {
   Command,
   CommandEmpty,
@@ -45,12 +46,14 @@ import {
   AssetReconcileItem,
   applyAssetTransaction,
   reconcileAssetColumns,
-  refreshAssetColumnsFromDefinition,
-  refreshAssetColumnsFromMaterializedOutput,
 } from "@/lib/api-asset-transactions";
 import { updateAsset, updateAssetColumns } from "@/lib/api-assets";
-import { inferAPIAsset } from "@/lib/api-assets-columns";
-import type { APIInferResult, MaterializationCapability } from "@/lib/generated/api-types";
+import { previewAssetColumns } from "@/lib/api-assets-columns";
+import type {
+  ColumnInferencePreview,
+  ColumnInferenceSource,
+  MaterializationCapability,
+} from "@/lib/generated/api-types";
 import { classifyDependencies, columnStatus, parseAssetProvenance } from "@/lib/asset-provenance";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import {
@@ -78,7 +81,9 @@ import { MultiValueInput } from "./multi-value-input";
  * the asset API, and the workspace SSE stream refreshes the asset prop.
  */
 export function AssetGuidedCards({ asset, pipelineId }: { asset: WebAsset; pipelineId: string }) {
-  const supportsColumns = getAssetColumnRefreshMode(asset.type, asset.parameters) !== "none";
+  const supportsColumns =
+    (asset.column_inference_sources?.length ?? 0) > 0 ||
+    getAssetColumnRefreshMode(asset.type, asset.parameters) !== "none";
   return (
     <ScrollArea className="min-h-0 w-full flex-1">
       <div className="divide-y px-3">
@@ -845,11 +850,50 @@ function DepRow({
 
 // --- Columns card (§14.4) ---
 
+function fallbackColumnInferenceSources(asset: WebAsset): ColumnInferenceSource[] {
+  const mode = getAssetColumnRefreshMode(asset.type, asset.parameters);
+  if (mode === "none") return [];
+  if (mode === "api") {
+    return [
+      {
+        id: "live_response",
+        label: "Live response",
+        category: "observed",
+        description: "A sampled API response using the asset's current request settings.",
+      },
+    ];
+  }
+  if (mode === "materialized") {
+    return [
+      {
+        id: "materialized",
+        label: "Current table",
+        category: "observed",
+        description: "The schema currently reported by the asset's warehouse relation.",
+      },
+    ];
+  }
+  return [
+    {
+      id: "definition",
+      label: isSeedAssetType(asset.type) ? "Seed file" : "Asset definition",
+      category: "definition",
+      description: isSeedAssetType(asset.type)
+        ? "The schema Sling detects in the local seed file."
+        : "The output schema inferred from the asset definition.",
+    },
+  ];
+}
+
 function ColumnsCard({ asset }: { asset: WebAsset }) {
   const environment = useAtomValue(selectedEnvironmentAtom);
-  const refreshMode = getAssetColumnRefreshMode(asset.type, asset.parameters);
-  const isAPI = refreshMode === "api";
-  const importsMaterializedOutput = refreshMode === "materialized";
+  const sources = useMemo(
+    () =>
+      asset.column_inference_sources?.length
+        ? asset.column_inference_sources
+        : fallbackColumnInferenceSources(asset),
+    [asset.column_inference_sources, asset.parameters, asset.type],
+  );
   const isSQLMerge =
     isSqlAssetType(asset.type) && asset.materialization_strategy?.toLowerCase() === "merge";
   const provenance = useMemo(() => parseAssetProvenance(asset.meta), [asset.meta]);
@@ -860,26 +904,47 @@ function ColumnsCard({ asset }: { asset: WebAsset }) {
     return [...provenance.colDrop].filter((name) => !present.has(name)).sort();
   }, [provenance, columns]);
   const [reconcileItems, setReconcileItems] = useState<AssetReconcileItem[]>([]);
-  const [refreshing, setRefreshing] = useState(false);
+  const [syncOpen, setSyncOpen] = useState(false);
+  const [selectedSource, setSelectedSource] = useState(sources[0]?.id ?? "");
+  const [preview, setPreview] = useState<ColumnInferencePreview | null>(null);
+  const [previewing, setPreviewing] = useState(false);
+  const [applying, setApplying] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [apiSample, setAPISample] = useState<APIInferResult | null>(null);
 
-  const refreshFromDefinition = async () => {
-    setRefreshing(true);
+  useEffect(() => {
+    if (!sources.some((source) => source.id === selectedSource)) {
+      setSelectedSource(sources[0]?.id ?? "");
+    }
+    setPreview(null);
+    setError(null);
+  }, [asset.id, selectedSource, sources]);
+
+  const runPreview = async () => {
+    if (!selectedSource) return;
+    setPreviewing(true);
     setError(null);
     try {
-      if (isAPI) {
-        setAPISample(await inferAPIAsset(asset.id));
-        return;
-      }
-      const result = importsMaterializedOutput
-        ? await refreshAssetColumnsFromMaterializedOutput(asset, environment)
-        : await refreshAssetColumnsFromDefinition(asset.id);
-      setReconcileItems(result.reconcile_items ?? []);
+      setPreview(await previewAssetColumns(asset.id, selectedSource, environment));
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Failed to refresh columns");
+      setError(e instanceof Error ? e.message : "Failed to preview schema");
     } finally {
-      setRefreshing(false);
+      setPreviewing(false);
+    }
+  };
+
+  const applyPreview = async () => {
+    if (!preview) return;
+    setApplying(true);
+    setError(null);
+    try {
+      const result = await reconcileAssetColumns(asset.id, preview.columns);
+      setReconcileItems(result.reconcile_items ?? []);
+      setPreview(null);
+      setSyncOpen(false);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to apply schema");
+    } finally {
+      setApplying(false);
     }
   };
 
@@ -960,54 +1025,67 @@ function ColumnsCard({ asset }: { asset: WebAsset }) {
         <Button
           variant="outline"
           size="xs"
-          disabled={refreshing}
-          onClick={refreshFromDefinition}
-          title={
-            isAPI
-              ? "Fetch one response page and infer its record shape"
-              : importsMaterializedOutput
-                ? "Import columns from the materialized output"
-                : isSeedAssetType(asset.type)
-                  ? "Infer columns from the seed file with Sling"
-                  : "Derive columns from the definition and upstream assets"
-          }
+          aria-expanded={syncOpen}
+          onClick={() => setSyncOpen((open) => !open)}
+          title="Preview a schema source and consolidate it into the saved metadata"
         >
-          {refreshing ? (
-            <Spinner data-icon="inline-start" />
-          ) : isAPI || importsMaterializedOutput ? (
-            <Database data-icon="inline-start" />
-          ) : (
-            <RefreshCw data-icon="inline-start" />
-          )}
-          {isAPI ? "Test response" : importsMaterializedOutput ? "Import" : "Refresh"}
+          <RefreshCw data-icon="inline-start" />
+          Sync schema
         </Button>
       }
     >
       {error ? <p className="text-[11px] text-destructive">{error}</p> : null}
-      {apiSample ? (
-        <div className="flex flex-col gap-1.5 rounded-md border bg-muted/30 p-2 text-[11px]">
-          <p>
-            Found {apiSample.records_count} records and {apiSample.columns.length} columns.
-          </p>
-          {apiSample.warnings.map((warning) => (
-            <p key={warning} className="text-destructive">
-              {warning}
-            </p>
-          ))}
-          {apiSample.columns.length > 0 ? (
-            <Button
-              variant="outline"
-              size="xs"
-              className="self-start"
-              onClick={() => {
-                void reconcileAssetColumns(asset.id, apiSample.columns).then((result) => {
-                  setReconcileItems(result.reconcile_items ?? []);
-                  setAPISample(null);
-                });
+      {syncOpen ? (
+        <div className="space-y-2.5 rounded-md border bg-muted/20 p-2.5 text-[11px]">
+          <Field className="gap-1.5">
+            <FieldLabel className="text-[11px]">Infer from</FieldLabel>
+            <Select
+              value={selectedSource}
+              onValueChange={(value) => {
+                setSelectedSource(value);
+                setPreview(null);
+                setError(null);
               }}
             >
-              Apply inferred columns
-            </Button>
+              <SelectTrigger size="sm" className="w-full">
+                <SelectValue placeholder="Choose a schema source" />
+              </SelectTrigger>
+              <SelectContent>
+                {sources.map((source) => (
+                  <SelectItem key={source.id} value={source.id}>
+                    {source.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </Field>
+
+          {sources.find((source) => source.id === selectedSource)?.description ? (
+            <p className="text-muted-foreground">
+              {sources.find((source) => source.id === selectedSource)?.description}
+            </p>
+          ) : null}
+
+          <Button
+            variant="outline"
+            size="xs"
+            disabled={!selectedSource || previewing}
+            onClick={() => void runPreview()}
+          >
+            {previewing ? (
+              <Spinner data-icon="inline-start" />
+            ) : (
+              <Database data-icon="inline-start" />
+            )}
+            Preview schema
+          </Button>
+
+          {preview ? (
+            <SchemaInferencePreview
+              preview={preview}
+              applying={applying}
+              onApply={() => void applyPreview()}
+            />
           ) : null}
         </div>
       ) : null}
@@ -1039,7 +1117,7 @@ function ColumnsCard({ asset }: { asset: WebAsset }) {
 
       {columns.length === 0 ? (
         <p className="text-[11px] text-muted-foreground">
-          No columns. Refresh to infer them from the definition.
+          No columns. Sync schema to preview a source before adding it to the metadata.
         </p>
       ) : (
         <div className="divide-y rounded-md border">
@@ -1080,6 +1158,97 @@ function ColumnsCard({ asset }: { asset: WebAsset }) {
         </DepSection>
       ) : null}
     </GuidedCard>
+  );
+}
+
+function SchemaInferencePreview({
+  preview,
+  applying,
+  onApply,
+}: {
+  preview: ColumnInferencePreview;
+  applying: boolean;
+  onApply: () => void;
+}) {
+  const changeCount = preview.drift.added + preview.drift.removed + preview.drift.type_changed;
+  return (
+    <div className="space-y-2 border-t pt-2.5">
+      <div className="flex flex-wrap items-center gap-1.5">
+        <span className="font-medium">
+          {preview.columns.length} column{preview.columns.length === 1 ? "" : "s"}
+        </span>
+        {changeCount === 0 ? (
+          <Badge variant="muted" size="xs">
+            Matches saved metadata
+          </Badge>
+        ) : (
+          <>
+            {preview.drift.added > 0 ? (
+              <Badge variant="secondary" size="xs">
+                +{preview.drift.added} added
+              </Badge>
+            ) : null}
+            {preview.drift.type_changed > 0 ? (
+              <Badge variant="outline" size="xs">
+                {preview.drift.type_changed} type changed
+              </Badge>
+            ) : null}
+            {preview.drift.removed > 0 ? (
+              <Badge variant="outline" size="xs">
+                {preview.drift.removed} missing
+              </Badge>
+            ) : null}
+          </>
+        )}
+      </div>
+
+      {preview.sample_records !== undefined ? (
+        <p className="text-muted-foreground">
+          Sampled {preview.sample_records} record{preview.sample_records === 1 ? "" : "s"}.
+        </p>
+      ) : null}
+      {preview.notes?.map((note) => (
+        <p key={note} className="text-destructive">
+          {note}
+        </p>
+      ))}
+
+      {preview.drift.items.length > 0 ? (
+        <div className="max-h-40 divide-y overflow-y-auto rounded-md border bg-background">
+          {preview.drift.items.map((item) => (
+            <div
+              key={`${item.kind}:${item.column}`}
+              className="flex min-w-0 items-center gap-2 px-2 py-1.5"
+            >
+              <span className="min-w-0 flex-1 truncate font-monaco">{item.column}</span>
+              <span className="shrink-0 text-[10px] text-muted-foreground">
+                {item.kind === "added"
+                  ? `new · ${item.inferred_type || "unknown"}`
+                  : item.kind === "removed"
+                    ? `${item.current_type || "unknown"} · missing`
+                    : `${item.current_type || "unknown"} → ${item.inferred_type || "unknown"}`}
+              </span>
+            </div>
+          ))}
+        </div>
+      ) : null}
+
+      <div className="flex items-center justify-between gap-2">
+        <p className="text-muted-foreground">
+          Applying preserves descriptions, checks, and owned types where possible.
+        </p>
+        <Button
+          variant="default"
+          size="xs"
+          className="shrink-0"
+          disabled={applying || preview.columns.length === 0}
+          onClick={onApply}
+        >
+          {applying ? <Spinner data-icon="inline-start" /> : null}
+          Apply to metadata
+        </Button>
+      </div>
+    </div>
   );
 }
 

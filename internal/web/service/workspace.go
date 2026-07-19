@@ -301,6 +301,7 @@ func (s *WorkspaceService) ComputeState(ctx context.Context) (model.WorkspaceSta
 				Parameters:                  parameters,
 				Meta:                        assetMeta,
 				Columns:                     PipelineColumnsToModelColumns(columns),
+				ColumnInferenceSources:      columnInferenceSourcesForAsset(asset, connectionName),
 				Connection:                  connectionName,
 				ExplicitConnection:          strings.TrimSpace(asset.Connection),
 				MaterializationType:         declaredMatType,

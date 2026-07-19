@@ -125,6 +125,31 @@ test.describe("sql intellisense live", () => {
     ).toBeVisible();
   });
 
+  test("executes relative DuckDB file queries from the workspace root", async ({
+    liveApp,
+    request,
+  }) => {
+    await writeFile(
+      join(liveApp.workspaceDir, "workspace-relative.csv"),
+      "customer_id,customer_name\n41,Workspace Root\n",
+      "utf8",
+    );
+
+    const response = await request.post(`${liveApp.baseURL}/api/sql/query`, {
+      data: {
+        connection: "duckdb-default",
+        environment: "default",
+        query: 'select customer_id, customer_name from "./workspace-relative.csv"',
+      },
+    });
+    expect(response.ok(), await response.text()).toBe(true);
+    expect(await response.json()).toMatchObject({
+      status: "ok",
+      columns: ["customer_id", "customer_name"],
+      rows: [{ customer_id: 41, customer_name: "Workspace Root" }],
+    });
+  });
+
   test("does not report DuckDB file paths as unresolved tables", async ({ liveApp, page }) => {
     await writeFile(
       join(liveApp.workspaceDir, "duckdb-files", "customers.csv"),
@@ -329,6 +354,51 @@ test.describe("sql intellisense live", () => {
       ]),
     );
     await expectVisibleSuggestText(page, "total_amount");
+  });
+
+  test("offers only in-scope aliases in join conditions and chains into columns", async ({
+    liveApp,
+    page,
+  }) => {
+    test.skip(
+      test.info().project.name.includes("mobile"),
+      "Desktop suggest widget exposes stable Monaco completion DOM.",
+    );
+
+    const content = "select * from analytics.customers as x join analytics.orders as y on ";
+    await openCustomersEditor(page, liveApp.baseURL);
+    await replaceEditorContentByInsertText(page, content);
+
+    const completionResponse = await page.request.post(
+      `${liveApp.baseURL}/api/sql/lsp/completions`,
+      {
+        data: {
+          asset_id: customersAssetId,
+          content,
+          position: { line: 0, character: content.length },
+        },
+      },
+    );
+    const body = (await completionResponse.json()) as {
+      status?: string;
+      completions?: Array<{ label?: string; kind?: number; insertText?: string }>;
+    };
+    expect(body.status).toBe("ok");
+    expect(body.completions).toEqual([
+      expect.objectContaining({ label: "x.*", kind: 5, insertText: "x." }),
+      expect.objectContaining({ label: "y.*", kind: 5, insertText: "y." }),
+    ]);
+
+    await setEditorPositionAfterText(page, content);
+    await page.keyboard.press("ControlOrMeta+Space");
+    await expectVisibleSuggestText(page, "x.*");
+    await expectVisibleSuggestText(page, "y.*");
+    await page.keyboard.press("Enter");
+
+    await expect
+      .poll(async () => getFirstEditorValue(page), { timeout: 10000 })
+      .toBe(`${content}x.`);
+    await expectVisibleSuggestText(page, "customer_id");
   });
 
   test("suggests SQL keywords in a general statement position", async ({ liveApp, page }) => {
@@ -784,6 +854,13 @@ async function getEditorMarkerMessages(page: Page) {
     return monaco.editor
       .getModelMarkers({ resource: model.uri })
       .map((marker: { message: string }) => marker.message);
+  });
+}
+
+async function getFirstEditorValue(page: Page) {
+  return await page.evaluate(() => {
+    const monaco = (window as typeof window & { monaco?: any }).monaco;
+    return monaco?.editor.getEditors?.()[0]?.getModel()?.getValue() ?? "";
   });
 }
 

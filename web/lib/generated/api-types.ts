@@ -24,6 +24,37 @@ export type AssetAuthoringCapability = {
   supports_url?: boolean;
 };
 
+export type ColumnInferenceSource = {
+  id: string;
+  label: string;
+  description: string;
+  category: string;
+};
+
+export type ColumnSchemaDriftItem = {
+  column: string;
+  kind: string;
+  current_type?: string;
+  inferred_type?: string;
+};
+
+export type ColumnSchemaDrift = {
+  added: number;
+  removed: number;
+  type_changed: number;
+  unchanged: number;
+  items: ColumnSchemaDriftItem[];
+};
+
+export type ColumnInferencePreview = {
+  status: string;
+  source: ColumnInferenceSource;
+  columns: WebColumn[];
+  drift: ColumnSchemaDrift;
+  notes?: string[];
+  sample_records?: number;
+};
+
 export type WebColumnCheck = {
   name: string;
   value?: unknown;
@@ -57,6 +88,7 @@ export type WebAsset = {
   parameters?: Record<string, string>;
   meta?: Record<string, string>;
   columns?: WebColumn[];
+  column_inference_sources?: ColumnInferenceSource[];
   connection?: string;
   explicit_connection?: string;
   materialization_type?: string;

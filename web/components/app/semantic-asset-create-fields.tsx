@@ -1,5 +1,10 @@
 "use client";
 
+import { useState } from "react";
+
+import { ClipboardPaste } from "lucide-react";
+
+import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
   Field,
@@ -21,17 +26,25 @@ import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import type { AssetAuthoringCapability } from "@/lib/types";
+import {
+  clipboardSeedFormatLabel,
+  detectClipboardSeedFormat,
+  prepareClipboardSeed,
+  type ClipboardSeedFormat,
+} from "@/lib/seed-clipboard";
 
 import { FilePathPicker } from "./file-path-picker";
 
 export type SemanticAssetKind = "seed" | "sensor";
-export type SeedSourceMode = "upload" | "path" | "url";
+export type SeedSourceMode = "upload" | "clipboard" | "path" | "url";
 
 export type SemanticAssetDraft = {
   assetType: string;
   connection: string;
   seedSource: SeedSourceMode;
   seedFile: File | null;
+  seedClipboardText: string;
+  seedClipboardFormat: ClipboardSeedFormat;
   seedPath: string;
   seedFileType: string;
   enforceSchema: boolean;
@@ -78,6 +91,8 @@ export function defaultSemanticAssetDraft(
     connection: "",
     seedSource: "upload",
     seedFile: null,
+    seedClipboardText: "",
+    seedClipboardFormat: "auto",
     seedPath: "",
     seedFileType: "",
     enforceSchema: (capability?.default_parameters?.enforce_schema ?? "true") !== "false",
@@ -94,6 +109,7 @@ export function buildSemanticAssetCreatePayload(
   kind: SemanticAssetKind,
   draft: SemanticAssetDraft,
   capabilities: AssetAuthoringCapability[],
+  assetName = "",
 ): { payload?: SemanticAssetCreatePayload; error?: string } {
   const capability = capabilities.find(
     (candidate) => candidate.kind === kind && candidate.type === draft.assetType,
@@ -106,7 +122,14 @@ export function buildSemanticAssetCreatePayload(
     if (draft.seedSource === "upload" && !draft.seedFile) {
       return { error: "Choose a seed file to upload." };
     }
-    if (draft.seedSource !== "upload" && !draft.seedPath.trim()) {
+    if (draft.seedSource === "clipboard" && !draft.seedClipboardText.trim()) {
+      return { error: "Paste seed data from the clipboard." };
+    }
+    if (
+      draft.seedSource !== "upload" &&
+      draft.seedSource !== "clipboard" &&
+      !draft.seedPath.trim()
+    ) {
       return {
         error:
           draft.seedSource === "url"
@@ -114,20 +137,42 @@ export function buildSemanticAssetCreatePayload(
             : "Choose a seed file from the workspace.",
       };
     }
+    let clipboardFile: File | undefined;
+    let clipboardFileType = "";
+    if (draft.seedSource === "clipboard") {
+      try {
+        const prepared = prepareClipboardSeed(
+          draft.seedClipboardText,
+          draft.seedClipboardFormat,
+          assetName.split(".").at(-1),
+        );
+        clipboardFile = new File([prepared.content], prepared.fileName, {
+          type: prepared.mimeType,
+        });
+        clipboardFileType = prepared.fileType;
+      } catch (cause) {
+        return { error: cause instanceof Error ? cause.message : "Could not prepare pasted data." };
+      }
+    }
     return {
       payload: {
         type: capability.type,
         connection: draft.connection || undefined,
         parameters: {
-          ...(draft.seedSource === "upload"
+          ...(draft.seedSource === "upload" || draft.seedSource === "clipboard"
             ? {}
             : draft.seedSource === "path"
               ? { workspace_path: draft.seedPath.trim() }
               : { path: draft.seedPath.trim() }),
-          ...(draft.seedFileType ? { file_type: draft.seedFileType } : {}),
+          ...(clipboardFileType
+            ? { file_type: clipboardFileType }
+            : draft.seedFileType
+              ? { file_type: draft.seedFileType }
+              : {}),
           enforce_schema: String(draft.enforceSchema),
         },
         ...(draft.seedSource === "upload" && draft.seedFile ? { seedFile: draft.seedFile } : {}),
+        ...(clipboardFile ? { seedFile: clipboardFile } : {}),
       },
     };
   }
@@ -187,9 +232,13 @@ export function SemanticAssetCreateFields({
     : [];
 
   const set = (patch: Partial<SemanticAssetDraft>) => onChange({ ...value, ...patch });
+  const [clipboardError, setClipboardError] = useState("");
+  const detectedClipboardFormat = value.seedClipboardText
+    ? detectClipboardSeedFormat(value.seedClipboardText)
+    : null;
 
   return (
-    <FieldGroup>
+    <FieldGroup className="min-w-0">
       <Field variant="plain">
         <FieldLabel htmlFor="new-semantic-asset-type">
           {kind === "seed" ? "Seed type" : "Sensor type"}
@@ -275,13 +324,16 @@ export function SemanticAssetCreateFields({
               onValueChange={(seedSource) => {
                 if (seedSource) set({ seedSource: seedSource as SeedSourceMode });
               }}
-              className="grid w-full grid-cols-3"
+              className="grid w-full min-w-0 grid-cols-2 sm:grid-cols-4"
             >
               <ToggleGroupItem value="upload" className="w-full">
                 Upload
               </ToggleGroupItem>
+              <ToggleGroupItem value="clipboard" className="w-full">
+                Paste
+              </ToggleGroupItem>
               <ToggleGroupItem value="path" className="w-full">
-                Workspace path
+                Workspace
               </ToggleGroupItem>
               <ToggleGroupItem value="url" className="w-full">
                 URL
@@ -301,6 +353,82 @@ export function SemanticAssetCreateFields({
                 The file is copied beside the asset definition and removed with the asset.
               </FieldDescription>
             </Field>
+          ) : value.seedSource === "clipboard" ? (
+            <>
+              <Field variant="plain">
+                <div className="flex items-center justify-between gap-2">
+                  <FieldLabel htmlFor="new-seed-clipboard">Pasted data</FieldLabel>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="xs"
+                    onClick={async () => {
+                      setClipboardError("");
+                      try {
+                        const seedClipboardText = await navigator.clipboard.readText();
+                        if (!seedClipboardText.trim()) {
+                          setClipboardError("The clipboard is empty.");
+                          return;
+                        }
+                        set({ seedClipboardText, seedClipboardFormat: "auto" });
+                      } catch {
+                        setClipboardError(
+                          "Clipboard access was blocked. Paste directly into the text area instead.",
+                        );
+                      }
+                    }}
+                  >
+                    <ClipboardPaste data-icon="inline-start" />
+                    Paste from clipboard
+                  </Button>
+                </div>
+                <Textarea
+                  id="new-seed-clipboard"
+                  className="min-h-28 resize-y font-mono text-xs"
+                  placeholder="Paste CSV, TSV, JSON, JSON Lines, or plain text…"
+                  value={value.seedClipboardText}
+                  onChange={(event) => {
+                    setClipboardError("");
+                    set({ seedClipboardText: event.target.value });
+                  }}
+                />
+                {clipboardError ? (
+                  <FieldDescription className="text-destructive">{clipboardError}</FieldDescription>
+                ) : (
+                  <FieldDescription>
+                    The pasted data is copied beside the asset definition as a seed file.
+                  </FieldDescription>
+                )}
+              </Field>
+              <Field variant="plain">
+                <FieldLabel htmlFor="new-seed-clipboard-format">Pasted format</FieldLabel>
+                <Select
+                  value={value.seedClipboardFormat}
+                  onValueChange={(seedClipboardFormat) =>
+                    set({ seedClipboardFormat: seedClipboardFormat as ClipboardSeedFormat })
+                  }
+                >
+                  <SelectTrigger id="new-seed-clipboard-format">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectGroup>
+                      <SelectItem value="auto">
+                        Auto
+                        {detectedClipboardFormat
+                          ? ` (${clipboardSeedFormatLabel(detectedClipboardFormat)})`
+                          : ""}
+                      </SelectItem>
+                      <SelectItem value="csv">CSV</SelectItem>
+                      <SelectItem value="tsv">TSV (convert to CSV)</SelectItem>
+                      <SelectItem value="json">JSON</SelectItem>
+                      <SelectItem value="jsonl">JSON Lines</SelectItem>
+                      <SelectItem value="text">Plain text (one column)</SelectItem>
+                    </SelectGroup>
+                  </SelectContent>
+                </Select>
+              </Field>
+            </>
           ) : (
             <Field variant="plain">
               <FieldLabel htmlFor="new-seed-path">
@@ -334,35 +462,38 @@ export function SemanticAssetCreateFields({
               </FieldDescription>
             </Field>
           )}
-          <Field variant="plain">
-            <FieldLabel htmlFor="new-seed-file-type">File format</FieldLabel>
-            <Select
-              value={value.seedFileType || INFER_FILE_TYPE_VALUE}
-              onValueChange={(fileType) =>
-                set({ seedFileType: fileType === INFER_FILE_TYPE_VALUE ? "" : fileType })
-              }
-            >
-              <SelectTrigger id="new-seed-file-type">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectGroup>
-                  <SelectItem value={INFER_FILE_TYPE_VALUE}>Infer from extension</SelectItem>
-                  {(selected.file_types ?? []).map((fileType) => (
-                    <SelectItem key={fileType} value={fileType}>
-                      {fileType}
-                    </SelectItem>
-                  ))}
-                </SelectGroup>
-              </SelectContent>
-            </Select>
-          </Field>
-          <Field orientation="horizontal" variant="plain">
-            <FieldContent>
+          {value.seedSource !== "clipboard" ? (
+            <Field variant="plain">
+              <FieldLabel htmlFor="new-seed-file-type">File format</FieldLabel>
+              <Select
+                value={value.seedFileType || INFER_FILE_TYPE_VALUE}
+                onValueChange={(fileType) =>
+                  set({ seedFileType: fileType === INFER_FILE_TYPE_VALUE ? "" : fileType })
+                }
+              >
+                <SelectTrigger id="new-seed-file-type">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectGroup>
+                    <SelectItem value={INFER_FILE_TYPE_VALUE}>Infer from extension</SelectItem>
+                    {(selected.file_types ?? []).map((fileType) => (
+                      <SelectItem key={fileType} value={fileType}>
+                        {fileType}
+                      </SelectItem>
+                    ))}
+                  </SelectGroup>
+                </SelectContent>
+              </Select>
+            </Field>
+          ) : null}
+          <Field orientation="horizontal" variant="plain" className="min-w-0">
+            <FieldContent className="min-w-0">
               <FieldLabel htmlFor="new-seed-enforce-schema">Enforce schema</FieldLabel>
               <FieldDescription>Reject rows that do not match declared columns.</FieldDescription>
             </FieldContent>
             <Switch
+              className="shrink-0"
               id="new-seed-enforce-schema"
               checked={value.enforceSchema}
               onCheckedChange={(enforceSchema) => set({ enforceSchema })}

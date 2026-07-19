@@ -1065,14 +1065,18 @@ function completionToMonaco(
   item: SQLLSPCompletionItem,
   range: MonacoNS.IRange,
 ): MonacoNS.languages.CompletionItem {
+  const insertText = item.insertText || item.label;
   return {
     label: item.label,
     kind: completionKindToMonaco(monaco, item.kind),
     detail: item.detail,
     documentation: item.documentation ? { value: item.documentation } : undefined,
-    insertText: item.insertText || item.label,
+    insertText,
     range,
     sortText: item.sortText ? `lsp-${item.sortText}` : `lsp-${item.label}`,
+    command: insertText.endsWith(".")
+      ? { id: "editor.action.triggerSuggest", title: "Show column suggestions" }
+      : undefined,
   };
 }
 

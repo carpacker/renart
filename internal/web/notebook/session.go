@@ -11,6 +11,8 @@ import (
 
 	duck "github.com/bruin-data/bruin/pkg/duckdb"
 	"github.com/bruin-data/bruin/pkg/query"
+
+	"renart/internal/web/duckdbworkspace"
 )
 
 // SessionStore manages the per-notebook DuckDB session files under
@@ -20,14 +22,20 @@ type SessionStore struct {
 	// Root is the directory holding session files
 	// (<workspace>/.renart/notebooks).
 	Root string
+	// WorkspaceRoot is the base directory for relative DuckDB file references.
+	WorkspaceRoot string
 
 	mu    sync.Mutex
 	locks map[string]*sync.Mutex
 }
 
 // NewSessionStore creates a store rooted at the given directory.
-func NewSessionStore(root string) *SessionStore {
-	return &SessionStore{Root: root, locks: map[string]*sync.Mutex{}}
+func NewSessionStore(root string, workspaceRoot ...string) *SessionStore {
+	store := &SessionStore{Root: root, locks: map[string]*sync.Mutex{}}
+	if len(workspaceRoot) > 0 {
+		store.WorkspaceRoot = workspaceRoot[0]
+	}
+	return store
 }
 
 // DBPath returns the session database file for a notebook UUID.
@@ -55,7 +63,7 @@ type Session struct {
 	NotebookUUID string
 	Path         string
 
-	client *duck.Client
+	client duck.DuckDBClient
 	unlock func()
 }
 
@@ -69,11 +77,12 @@ func (s *SessionStore) Open(notebookUUID string) (*Session, error) {
 	lock.Lock()
 
 	path := s.DBPath(notebookUUID)
-	client, err := duck.NewClient(duck.Config{Path: path})
+	baseClient, err := duck.NewClient(duck.Config{Path: path})
 	if err != nil {
 		lock.Unlock()
 		return nil, fmt.Errorf("failed to open notebook session db: %w", err)
 	}
+	client := duckdbworkspace.WrapClient(baseClient, s.WorkspaceRoot)
 
 	session := &Session{
 		NotebookUUID: notebookUUID,

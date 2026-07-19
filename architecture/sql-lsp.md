@@ -189,8 +189,13 @@ to `parameters.query`, never to the raw YAML content.
   workspace assets and, in a `from schema.` position,
   `relationCompletionsInSchema` returns schema-stripped inserts — and clause
   **keywords** (`keywordCompletions`, sorted last via a `z` SortText so
-  schema-aware items win). The client keeps only kinds it renders (columns,
-  relations, keywords). Purely-remote warehouse tables (no backing asset) are
+  schema-aware items win). In a `JOIN ... ON` condition, the engine offers only
+  relations visible in that query scope, rendered as field items such as `x.*`;
+  it inserts the effective alias plus `.` and Monaco immediately opens the
+  corresponding column suggestions. It never substitutes the connection's full
+  relation list or the underlying qualified name when an alias exists. The
+  client keeps only kinds it renders (columns, relations, keywords).
+  Purely-remote warehouse tables (no backing asset) are
   not yet completed from the LSP — see `plans/remote-table-intellisense.md`.
 - **Diagnostics**: unresolved relation / alias / column (column checks only fire
   when the relation's columns are known from asset SQL or declared metadata),
