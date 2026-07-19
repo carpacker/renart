@@ -28,11 +28,12 @@ curl -LsSf getrenart.com/install.sh | sh
 Start Renart inside a Git repository:
 
 ```bash
-renart web
+renart
 ```
 
-Renart opens on `127.0.0.1:8080`. If that port is unavailable, it selects the
-next free port and prints the URL.
+This opens the desktop app. Use `renart web` instead to run the browser-based
+server; it listens on `127.0.0.1:8080` by default and selects the next free port
+when that port is unavailable.
 
 ## Documentation
 

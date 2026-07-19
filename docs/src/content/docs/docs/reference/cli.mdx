@@ -9,6 +9,7 @@ version.
 
 | Command | Purpose |
 | --- | --- |
+| `renart` | Start the desktop app (the default). |
 | `renart web` | Start the Renart IDE. |
 | `renart run` | Run a pipeline or asset. |
 | `renart render` | Preview one saved asset without executing it. |
@@ -166,4 +167,5 @@ unless it is already inside one.
 
 Runs Renart as a desktop app (an embedded server plus a native window).
 Takes the same watcher and scheduler flags as `renart web`; `--port`
-defaults to `0`, which picks a free loopback port.
+defaults to `0`, which picks a free loopback port. Running `renart` without a
+subcommand is equivalent to `renart standalone`.

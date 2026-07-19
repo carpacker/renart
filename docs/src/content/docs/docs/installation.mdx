@@ -18,17 +18,19 @@ create.
 Start Renart inside a git repository:
 
 ```bash
-renart web
+renart
 ```
 
-Renart opens on `127.0.0.1:8080` by default. If that port is taken it picks
-the next free one and prints the URL. To choose the address yourself:
+This opens the desktop app. To run Renart in your browser instead, start the web
+server directly. It opens on `127.0.0.1:8080` by default; if that port is taken,
+it picks the next free one and prints the URL. To choose the address yourself:
 
 ```bash
 renart web --host 127.0.0.1 --port 9000 --no-open
 ```
 
-You can also point it at a workspace explicitly: `renart web path/to/repo`.
+You can also point either mode at a workspace explicitly: `renart standalone
+path/to/repo` or `renart web path/to/repo`.
 
 :::note[Renart needs a git repository]
 Renart is built around git-native workspaces: every edit it makes is a plain
