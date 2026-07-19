@@ -44,7 +44,6 @@ import {
   SheetTitle,
   SheetTrigger,
 } from "@/components/ui/sheet";
-import { ScrollArea } from "@/components/ui/scroll-area";
 import { useSourceControl } from "@/hooks/use-source-control";
 import { useWorkspaceTheme } from "@/hooks/use-workspace-theme";
 import { useWorkspaceSettingsData } from "@/hooks/use-workspace-settings-data";
@@ -65,6 +64,7 @@ import { AppCommandPalette } from "./app-command-palette";
 import { navItems } from "./app-data";
 import { NavLinkButton } from "./app-primitives";
 import { ServerOfflineOverlay } from "./server-offline-overlay";
+import { SourceControlDiffViewer } from "./source-control-diff-viewer";
 
 // Stage/unstage row actions reveal on hover on pointer devices, but touch
 // devices have no hover state — so always show them where hover isn't
@@ -507,7 +507,7 @@ function GitSheet({ sourceControl }: { sourceControl: ReturnType<typeof useSourc
       >
         {showDiffPane ? (
           <div className="order-2 h-72 min-h-0 min-w-0 overflow-hidden lg:order-1 lg:h-auto lg:min-h-0">
-            <DiffViewer diff={diff} loading={diffLoading} className="h-full" />
+            <SourceControlDiffViewer diff={diff} loading={diffLoading} className="h-full" />
           </div>
         ) : null}
         <div
@@ -864,84 +864,6 @@ function ChangeFileRow({
       </Button>
     </div>
   );
-}
-
-function DiffViewer({
-  diff,
-  loading,
-  className,
-}: {
-  diff: { path: string; staged: boolean; patch: string } | null;
-  loading: boolean;
-  className?: string;
-}) {
-  if (loading) {
-    return (
-      <div
-        className={cn(
-          "flex items-center gap-2 rounded-lg border p-3 text-xs text-muted-foreground",
-          className,
-        )}
-      >
-        <Loader2 className="size-3.5 animate-spin" />
-        Loading diff...
-      </div>
-    );
-  }
-  if (!diff) {
-    return (
-      <div
-        className={cn(
-          "flex min-w-0 items-center justify-center rounded-lg border border-dashed p-4 text-center text-xs text-muted-foreground",
-          className,
-        )}
-      >
-        Select a changed file to preview its diff.
-      </div>
-    );
-  }
-  const lines = diff.patch ? diff.patch.split("\n") : ["No textual diff available."];
-  return (
-    <div
-      className={cn("flex min-h-0 min-w-0 flex-col overflow-hidden rounded-lg border", className)}
-    >
-      <div className="flex h-8 items-center gap-2 border-b bg-muted/50 px-2 text-xs">
-        <span className="min-w-0 flex-1 truncate font-mono">{diff.path}</span>
-        <span className="rounded bg-background px-1.5 py-0.5 text-[10px] uppercase text-muted-foreground">
-          {diff.staged ? "staged" : "worktree"}
-        </span>
-      </div>
-      <ScrollArea className="min-h-0 min-w-0 flex-1 bg-zinc-950" viewportClassName="h-full">
-        <pre className="min-w-max py-3 font-mono text-[11px] leading-relaxed text-zinc-100">
-          {lines.map((line, index) => (
-            <span
-              key={`${index}-${line}`}
-              className={cn(
-                "block whitespace-pre px-3",
-                diffLineClassName(line, Boolean(diff.patch)),
-              )}
-            >
-              <span className="mr-3 inline-block w-8 select-none text-right text-zinc-600">
-                {index + 1}
-              </span>
-              {line || " "}
-            </span>
-          ))}
-        </pre>
-      </ScrollArea>
-    </div>
-  );
-}
-
-function diffLineClassName(line: string, hasPatch: boolean) {
-  if (!hasPatch) return "text-zinc-500";
-  if (line.startsWith("diff --git") || line.startsWith("index "))
-    return "bg-sky-500/10 text-sky-200";
-  if (line.startsWith("@@")) return "bg-violet-500/15 text-violet-200";
-  if (line.startsWith("+++") || line.startsWith("---")) return "bg-blue-500/10 text-blue-200";
-  if (line.startsWith("+")) return "bg-emerald-500/10 text-emerald-200";
-  if (line.startsWith("-")) return "bg-red-500/10 text-red-200";
-  return "text-zinc-300";
 }
 
 function sourceControlStatusLabel(change: SourceControlChange) {

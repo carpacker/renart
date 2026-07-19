@@ -198,3 +198,43 @@ func TestSourceControlStageDeletedFile(t *testing.T) {
 	assert.True(t, status.Changes[0].Staged)
 	assert.Equal(t, "D", status.Changes[0].StagedStatus)
 }
+
+func TestSourceControlDiffReturnsTextVersionsForInlineViewer(t *testing.T) {
+	workspaceRoot := t.TempDir()
+	repo, err := git.PlainInit(workspaceRoot, false)
+	require.NoError(t, err)
+	path := filepath.Join(workspaceRoot, "orders.sql")
+	require.NoError(t, os.WriteFile(path, []byte("select 1 as order_id\n"), 0o644))
+
+	worktree, err := repo.Worktree()
+	require.NoError(t, err)
+	_, err = worktree.Add("orders.sql")
+	require.NoError(t, err)
+	_, err = worktree.Commit("initial", &git.CommitOptions{Author: &object.Signature{
+		Name: "test", Email: "test@example.com", When: time.Now(),
+	}})
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(path, []byte("select 2 as order_id\n"), 0o644))
+
+	diff, err := NewSourceControlService(workspaceRoot).Diff("orders.sql", false)
+	require.NoError(t, err)
+	assert.Equal(t, "select 1 as order_id\n", diff.Original)
+	assert.Equal(t, "select 2 as order_id\n", diff.Modified)
+	assert.False(t, diff.Binary)
+	assert.Contains(t, diff.Patch, "-select 1 as order_id")
+	assert.Contains(t, diff.Patch, "+select 2 as order_id")
+}
+
+func TestSourceControlDiffDoesNotReturnBinaryContents(t *testing.T) {
+	workspaceRoot := t.TempDir()
+	_, err := git.PlainInit(workspaceRoot, false)
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(filepath.Join(workspaceRoot, "image.bin"), []byte{'a', 0, 'b'}, 0o644))
+
+	diff, err := NewSourceControlService(workspaceRoot).Diff("image.bin", false)
+	require.NoError(t, err)
+	assert.True(t, diff.Binary)
+	assert.Empty(t, diff.Original)
+	assert.Empty(t, diff.Modified)
+	assert.Equal(t, "Binary diff not shown.", diff.Patch)
+}

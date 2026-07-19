@@ -274,6 +274,10 @@ export type SourceControlDiff = {
   path: string;
   staged: boolean;
   patch: string;
+  original: string;
+  modified: string;
+  binary: boolean;
+  files?: SourceControlDiff[];
 };
 
 export type SourceControlStatusResponse = {

@@ -170,7 +170,11 @@ renart's own `renart_*` tables, migrated by a goose runner. Renart-specific
 per-environment policy lives in `.renart/environments.yml`; everything else
 users author is plain Bruin files (`.bruin.yml`, `pipeline.yml`, asset files).
 Runtime lock/discovery files, including `.renart/execution.lock`, are excluded
-from Git by the source-control service.
+from Git by the source-control service. Its diff endpoint resolves the same
+HEAD/index/worktree pairs used for staging and returns both the unified patch
+and original/modified text for the frontend's inline diff editor; binary
+contents are detected before serialization and represented only by a binary
+marker.
 
 ## 4. Execution
 

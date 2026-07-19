@@ -16,7 +16,11 @@ test.describe("app source control live", () => {
     page,
   }) => {
     await initializeGitRepository(liveApp.workspaceDir);
-    await writeFile(join(liveApp.workspaceDir, "e2e-git.txt"), "first line\nsecond line\n", "utf8");
+    await writeFile(
+      join(liveApp.workspaceDir, "e2e-git.sql"),
+      "select 1 as order_id\nfrom analytics.orders\n",
+      "utf8",
+    );
 
     await page.goto(`${liveApp.baseURL}`);
     await page.getByRole("button", { name: "Source control" }).click();
@@ -24,17 +28,21 @@ test.describe("app source control live", () => {
     await expect(page.getByRole("heading", { name: "Source control" })).toBeVisible();
     await expect(page.getByText("Changes · 1")).toBeVisible({ timeout: 15000 });
     await expect(page.getByText("Staged · 0")).toBeHidden();
-    await expect(page.getByRole("button", { name: "e2e-git.txt" })).toBeVisible();
+    await expect(page.getByRole("button", { name: "e2e-git.sql" })).toBeVisible();
 
-    await page.getByRole("button", { name: "e2e-git.txt" }).click();
-    await expect(page.getByText("+++ b/e2e-git.txt")).toBeVisible();
-    await expect(page.getByText("+first line")).toBeVisible();
+    await page.getByRole("button", { name: "e2e-git.sql" }).click();
+    const diffFile = page.getByTestId("source-control-diff-file");
+    await expect(diffFile).toHaveAttribute("data-language", "sql");
+    await expect(diffFile.locator(".monaco-diff-editor")).toBeVisible({ timeout: 15000 });
+    await expect(
+      diffFile.locator(".view-lines").filter({ hasText: "select 1 as order_id" }).last(),
+    ).toBeVisible();
 
     await page.getByRole("button", { name: "Stage", exact: true }).click();
     await expect(page.getByText("Staged · 1")).toBeVisible({ timeout: 15000 });
     await expect(page.getByText("Changes · 0")).toBeHidden();
 
-    await page.getByRole("button", { name: "e2e-git.txt" }).click();
+    await page.getByRole("button", { name: "e2e-git.sql" }).click();
     await expect(page.getByText("staged", { exact: true })).toBeVisible();
     await page.getByRole("button", { name: "Unstage", exact: true }).click();
     await expect(page.getByText("Changes · 1")).toBeVisible({ timeout: 15000 });

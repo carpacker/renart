@@ -42,9 +42,12 @@ type SourceControlCommit struct {
 }
 
 type SourceControlDiff struct {
-	Path   string `json:"path"`
-	Staged bool   `json:"staged"`
-	Patch  string `json:"patch"`
+	Path     string `json:"path"`
+	Staged   bool   `json:"staged"`
+	Patch    string `json:"patch"`
+	Original string `json:"original"`
+	Modified string `json:"modified"`
+	Binary   bool   `json:"binary"`
 }
 
 func NewSourceControlService(workspaceRoot string) *SourceControlService {
@@ -106,8 +109,22 @@ func (s *SourceControlService) Diff(path string, staged bool) (SourceControlDiff
 		}
 		dst, _ = worktreeFileContents(worktree, cleaned)
 	}
+	binary := isBinaryDiff(src, dst)
 	patch := renderDiff(cleaned, src, dst)
-	return SourceControlDiff{Path: cleaned, Staged: staged, Patch: patch}, nil
+	if binary {
+		// Never send NUL-containing content into Monaco. The patch still carries
+		// the user-facing binary-diff message.
+		src = ""
+		dst = ""
+	}
+	return SourceControlDiff{
+		Path:     cleaned,
+		Staged:   staged,
+		Patch:    patch,
+		Original: src,
+		Modified: dst,
+		Binary:   binary,
+	}, nil
 }
 
 func (s *SourceControlService) Branches(ctx context.Context) ([]string, error) {
@@ -592,7 +609,7 @@ func renderDiff(path, src, dst string) string {
 	if src == dst {
 		return ""
 	}
-	if strings.Contains(src, "\x00") || strings.Contains(dst, "\x00") {
+	if isBinaryDiff(src, dst) {
 		return "Binary diff not shown."
 	}
 	var builder strings.Builder
@@ -617,6 +634,10 @@ func renderDiff(path, src, dst string) string {
 		}
 	}
 	return builder.String()
+}
+
+func isBinaryDiff(src, dst string) bool {
+	return strings.Contains(src, "\x00") || strings.Contains(dst, "\x00")
 }
 
 func splitDiffLines(text string) []string {

@@ -163,13 +163,13 @@ export function useSourceControl() {
     setError("");
     try {
       const responses = await Promise.all(paths.map((path) => getSourceControlDiff(path, staged)));
-      const patch = responses
-        .map((response, index) => {
-          const fragment = response.status === "ok" ? response.diff.patch?.trim() : "";
-          return fragment ? fragment : `# ${paths[index]} (no textual diff)`;
-        })
+      const files = responses
+        .filter((response) => response.status === "ok")
+        .map((response) => response.diff);
+      const patch = files
+        .map((file) => file.patch?.trim() || `# ${file.path} (no textual diff)`)
         .join("\n\n");
-      setDiff({ path: label, staged, patch });
+      setDiff({ path: label, staged, patch, original: "", modified: "", binary: false, files });
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to load diff");
     } finally {

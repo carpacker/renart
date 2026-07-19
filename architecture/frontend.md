@@ -83,7 +83,11 @@ not underscore-flattened route hacks.
   [command palette](../web/components/app/app-command-palette.tsx), and the routed
   `<Outlet />`. Unshipped mock surfaces (AI chat, notifications, account menu,
   and cloud-workspace connection) stay hidden behind disabled flags in
-  [app-feature-flags.ts](../web/lib/app-feature-flags.ts).
+  [app-feature-flags.ts](../web/lib/app-feature-flags.ts). The source-control
+  sheet renders worktree and staged changes with Monaco's inline diff editor;
+  SQL, Python, YAML asset definitions, JSON, Markdown, and ordinary project
+  files select syntax highlighting from their path. Notebook-folder selections
+  remain one review unit but render one inline diff per changed cell/file.
 - [components/app/build-page.tsx](../web/components/app/build-page.tsx): the primary
   IDE — the interactive lineage canvas
   ([lineage-canvas.tsx](../web/components/app/lineage-canvas.tsx), React Flow)
