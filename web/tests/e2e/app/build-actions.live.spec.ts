@@ -337,6 +337,11 @@ select 1 as customer_id,'Ada' as customer_name union all select 2 as customer_id
     const planSheet = page.getByTestId("pipeline-plan-sheet");
     await expect(planSheet).toBeVisible();
     await expect(planSheet).toContainText("Saved working tree");
+    await expect(
+      planSheet
+        .getByRole("tablist")
+        .locator('xpath=ancestor::*[@data-slot="scroll-area-viewport"]'),
+    ).toHaveCount(1);
     const confirmButton = planSheet.getByRole("button", {
       name: /^Run \d+ assets? from working tree$/,
     });

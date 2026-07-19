@@ -232,6 +232,14 @@ export function SemanticParametersEditor({
 
       {isSeed ? (
         <>
+          <Separator className="my-3" />
+          <SeedFileDropzone
+            currentPath={parameters.path ?? ""}
+            fileTypes={seedFileTypes}
+            uploading={uploading}
+            message={uploadMessage}
+            onFile={(file) => void uploadSeedFile(file)}
+          />
           <Line depth={1}>
             <Key>path</Key>
             <InlineText
@@ -266,14 +274,6 @@ export function SemanticParametersEditor({
               onChange={(value) => saveParameter("enforce_schema", value)}
             />
           </Line>
-          <Separator className="my-3" />
-          <SeedFileDropzone
-            currentPath={parameters.path ?? ""}
-            fileTypes={seedFileTypes}
-            uploading={uploading}
-            message={uploadMessage}
-            onFile={(file) => void uploadSeedFile(file)}
-          />
         </>
       ) : (
         <>

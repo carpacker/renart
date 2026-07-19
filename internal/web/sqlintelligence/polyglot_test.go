@@ -142,6 +142,53 @@ FROM example.my_sql_asset_3`
 	assert.NotContains(t, diagnosticMessages(parseContext.Diagnostics), "Unresolved column: range")
 }
 
+func TestParseContextWithSchemaPolyglotResolvesShortQualifierForSchemaQualifiedTable(t *testing.T) {
+	query := `SELECT *
+FROM example.parabola p
+JOIN example.range_10
+  ON range_10.range = p.x`
+
+	parseContext, err := ParseContextWithSchemaPolyglot(query, "duckdb", Schema{
+		"example.parabola": {"x": "BIGINT", "y": "BIGINT"},
+		"example.range_10": {"range": "BIGINT"},
+	})
+	require.NoError(t, err)
+
+	assert.Empty(t, parseContext.Diagnostics, "unexpected diagnostics: %+v", parseContext.Diagnostics)
+	var rangeColumn *ParseContextColumn
+	for i := range parseContext.Columns {
+		if parseContext.Columns[i].Name == "range" && parseContext.Columns[i].Qualifier == "range_10" {
+			rangeColumn = &parseContext.Columns[i]
+			break
+		}
+	}
+	require.NotNil(t, rangeColumn)
+	assert.Equal(t, "example.range_10", rangeColumn.ResolvedTable)
+}
+
+func TestPolyglotTableQualifierMapKeepsShortNamesSafe(t *testing.T) {
+	t.Run("ambiguous short names stay unresolved", func(t *testing.T) {
+		qualifiers := polyglotTableQualifierMap([]ParseContextTable{
+			{Name: "sales.orders", ResolvedName: "sales.orders"},
+			{Name: "audit.orders", ResolvedName: "audit.orders"},
+		})
+
+		assert.Equal(t, "sales.orders", qualifiers["sales.orders"])
+		assert.Equal(t, "audit.orders", qualifiers["audit.orders"])
+		assert.NotContains(t, qualifiers, "orders")
+	})
+
+	t.Run("an alias hides the original table qualifiers", func(t *testing.T) {
+		qualifiers := polyglotTableQualifierMap([]ParseContextTable{
+			{Name: "example.range_10", ResolvedName: "example.range_10", Alias: "r"},
+		})
+
+		assert.Equal(t, "example.range_10", qualifiers["r"])
+		assert.NotContains(t, qualifiers, "range_10")
+		assert.NotContains(t, qualifiers, "example.range_10")
+	})
+}
+
 func TestParseContextWithSchemaPolyglotResolvesUnqualifiedTableToUniqueSchemaEntry(t *testing.T) {
 	// pg_get_viewdef drops the schema for tables on the search path, so
 	// imported views reference "accounts" while the asset is "public.accounts".

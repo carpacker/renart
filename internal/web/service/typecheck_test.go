@@ -498,6 +498,57 @@ from analytics.outer
 	assert.Equal(t, typeCheckStatusOK, down.Status, "unexpected findings: %+v", down.Findings)
 }
 
+func TestCheckPipelineResolvesShortQualifierForSchemaQualifiedTable(t *testing.T) {
+	t.Parallel()
+	parsed, root := writeTypeCheckWorkspace(t, "name: example", map[string]string{
+		"parabola.sql": `
+/* @bruin
+name: example.parabola
+type: duckdb.sql
+materialization:
+  type: view
+columns:
+  - name: x
+    type: BIGINT
+  - name: y
+    type: BIGINT
+@bruin */
+select 1 as x, 1 as y
+`,
+		"range_10.sql": `
+/* @bruin
+name: example.range_10
+type: duckdb.sql
+materialization:
+  type: view
+columns:
+  - name: range
+    type: BIGINT
+@bruin */
+select range from range(10)
+`,
+		"downstream.sql": `
+/* @bruin
+name: example.downstream
+type: duckdb.sql
+materialization:
+  type: view
+depends:
+  - example.parabola
+  - example.range_10
+@bruin */
+select *
+from example.parabola p
+join example.range_10
+  on range_10.range = p.x
+`,
+	})
+
+	report := runTypeCheck(t, parsed, root)
+	downstream := findAsset(t, report, "example.downstream")
+	assert.Equal(t, typeCheckStatusOK, downstream.Status, "unexpected findings: %+v", downstream.Findings)
+}
+
 func TestCheckPipelineReportsAssetIDs(t *testing.T) {
 	t.Parallel()
 	parsed, root := writeTypeCheckWorkspace(t, "name: analytics", map[string]string{

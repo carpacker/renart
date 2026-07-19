@@ -134,16 +134,9 @@ func ParseContextWithSchemaPolyglot(query, dialect string, schema Schema, column
 	}
 
 	tables := extractPolyglotTables(query, ast, tokenResp.Tokens, validationSchema, ctes)
-	aliasToTable := map[string]string{}
-	for _, table := range tables {
-		if table.Alias != "" {
-			aliasToTable[strings.ToLower(table.Alias)] = table.ResolvedName
-		} else if table.Name != "" {
-			aliasToTable[strings.ToLower(table.Name)] = table.ResolvedName
-		}
-	}
+	qualifierToTable := polyglotTableQualifierMap(tables)
 
-	columns := extractPolyglotColumns(query, ast, tokenResp.Tokens, aliasToTable, tables)
+	columns := extractPolyglotColumns(query, ast, tokenResp.Tokens, qualifierToTable, tables)
 
 	return &ParseContext{
 		QueryKind:        polyglotQueryKind(ast),
@@ -594,7 +587,55 @@ func qualifiedSchemaTableForShortName(schema Schema, shortName string) string {
 	return match
 }
 
-func extractPolyglotColumns(query string, ast []map[string]any, tokens []polyglotToken, aliasToTable map[string]string, tables []ParseContextTable) []ParseContextColumn {
+// polyglotTableQualifierMap returns the identifiers that may qualify columns.
+// A table alias hides the table name. Without an alias, both the complete name
+// and the final path segment are valid (for example, example.orders and orders).
+// A short name is only added when it identifies one source unambiguously.
+func polyglotTableQualifierMap(tables []ParseContextTable) map[string]string {
+	qualifiers := make(map[string]string, len(tables))
+	shortNames := make(map[string]string)
+	ambiguousShortNames := make(map[string]bool)
+
+	for _, table := range tables {
+		resolvedName := table.ResolvedName
+		if resolvedName == "" {
+			resolvedName = table.Name
+		}
+		if table.Alias != "" {
+			qualifiers[strings.ToLower(table.Alias)] = resolvedName
+			continue
+		}
+		if table.Name == "" {
+			continue
+		}
+
+		nameKey := strings.ToLower(table.Name)
+		qualifiers[nameKey] = resolvedName
+		lastDot := strings.LastIndex(table.Name, ".")
+		if lastDot < 0 || lastDot == len(table.Name)-1 {
+			continue
+		}
+
+		shortKey := strings.ToLower(table.Name[lastDot+1:])
+		if existing, ok := shortNames[shortKey]; ok && !strings.EqualFold(existing, resolvedName) {
+			delete(shortNames, shortKey)
+			ambiguousShortNames[shortKey] = true
+			continue
+		}
+		if !ambiguousShortNames[shortKey] {
+			shortNames[shortKey] = resolvedName
+		}
+	}
+
+	for shortName, resolvedName := range shortNames {
+		if existing, ok := qualifiers[shortName]; !ok || strings.EqualFold(existing, resolvedName) {
+			qualifiers[shortName] = resolvedName
+		}
+	}
+	return qualifiers
+}
+
+func extractPolyglotColumns(query string, ast []map[string]any, tokens []polyglotToken, qualifierToTable map[string]string, tables []ParseContextTable) []ParseContextColumn {
 	var columns []ParseContextColumn
 	usedColumnStarts := map[int]bool{}
 	walkPolyglot(ast, func(key string, value map[string]any) {
@@ -611,7 +652,7 @@ func extractPolyglotColumns(query string, ast []map[string]any, tokens []polyglo
 			parts = []string{qualifier, name}
 		}
 		partRanges := columnPartsToRanges(query, tokens, parts, tables, usedColumnStarts)
-		resolvedTable := aliasToTable[strings.ToLower(qualifier)]
+		resolvedTable := qualifierToTable[strings.ToLower(qualifier)]
 		if qualifier != "" {
 			if fullTable, columnName, fullParts := resolveThreePartPolyglotColumn(query, tokens, qualifier, name, tables, usedColumnStarts); fullTable != "" {
 				qualifier = fullTable

@@ -3709,7 +3709,7 @@ function NewAssetDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="flex max-h-[90dvh] max-w-2xl flex-col overflow-hidden">
+      <DialogContent className="flex max-h-[90dvh] flex-col overflow-hidden sm:max-w-3xl">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <Plus className="size-4 text-primary" />

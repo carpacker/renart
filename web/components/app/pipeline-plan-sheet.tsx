@@ -529,7 +529,7 @@ export function PipelinePlanSheet({
               if (value === "execution") loadStageContent();
             }}
           >
-            <div className="shrink-0 overflow-x-auto border-b px-5 py-2">
+            <ScrollArea className="min-w-0 shrink-0 border-b" viewportClassName="px-5 py-2">
               <TabsList variant="line" className="w-max min-w-full justify-start">
                 <TabsTrigger value="summary">Summary</TabsTrigger>
                 <TabsTrigger value="assets">Assets</TabsTrigger>
@@ -540,7 +540,7 @@ export function PipelinePlanSheet({
                   <TabsTrigger value="schedules">Schedules</TabsTrigger>
                 ) : null}
               </TabsList>
-            </div>
+            </ScrollArea>
             <ScrollArea className="min-h-0 flex-1">
               <TabsContent value="summary" className="m-0 space-y-4 p-5">
                 <PlanSummary plan={plan} intent={intent} deployment={deployment} />

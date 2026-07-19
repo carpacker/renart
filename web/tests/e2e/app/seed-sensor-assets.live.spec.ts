@@ -87,7 +87,15 @@ test.describe("seed and sensor assets live", () => {
     await expect(seedEditor.locator(".monaco-editor")).toHaveCount(0);
     await expect(seedEditor.getByLabel("Seed path")).toHaveValue("./regional_customers.csv");
     await expect(seedEditor.getByLabel("Seed file format")).toContainText("csv");
-    await expect(seedEditor.getByTestId("seed-file-dropzone")).toBeVisible();
+    const seedDropzone = seedEditor.getByTestId("seed-file-dropzone");
+    await expect(seedDropzone).toBeVisible();
+    const [seedDropzoneBox, seedPathBox] = await Promise.all([
+      seedDropzone.boundingBox(),
+      seedEditor.getByLabel("Seed path").boundingBox(),
+    ]);
+    expect(seedDropzoneBox).not.toBeNull();
+    expect(seedPathBox).not.toBeNull();
+    expect(seedPathBox!.y).toBeGreaterThanOrEqual(seedDropzoneBox!.y + seedDropzoneBox!.height);
     await expect(
       seedEditor.getByText("Columns and checks are configured in Properties."),
     ).toHaveCount(0);
@@ -379,6 +387,11 @@ test.describe("seed and sensor assets live", () => {
 
     await page.goto(`${liveApp.baseURL}/pipelines/${pipelineId}/assets/${ordersAssetId}/canvas`);
     const dialog = await openNewAssetDialog(page);
+    expect((await dialog.boundingBox())?.width).toBeGreaterThan(700);
+    await expect(dialog.getByRole("button", { name: "Create", exact: true })).toHaveCSS(
+      "cursor",
+      "pointer",
+    );
 
     const assetKinds = ["SQL", "Python", "HTTP API", "Seed", "Sensor", "Load"];
     const selectorBoxes = await Promise.all(
