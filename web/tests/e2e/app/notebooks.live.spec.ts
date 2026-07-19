@@ -248,13 +248,17 @@ test.describe("app notebooks live", () => {
     const readerCard = page.locator(`[data-notebook-cell-id="${readerCell}"]`);
     const upstreamToken = readerCard.locator(".view-lines span", { hasText: "base" }).last();
     await expect(upstreamToken).toBeVisible({ timeout: 15000 });
-    await upstreamToken.click({ modifiers: ["ControlOrMeta"] });
-
-    await expect(targetCard).toHaveAttribute("data-notebook-cell-jump-highlight", "true", {
-      timeout: 15000,
-    });
+    // The highlight intentionally lasts only for the animation. Start observing
+    // it before the click so a constrained runner cannot miss the transient
+    // attribute while Playwright is returning from the input action.
+    await Promise.all([
+      expect(targetCard).toHaveAttribute("data-notebook-cell-jump-highlight", "true", {
+        timeout: timeoutForRetry(test.info(), 15000),
+      }),
+      upstreamToken.click({ modifiers: ["ControlOrMeta"] }),
+    ]);
     await expect(targetCard).not.toHaveAttribute("data-notebook-cell-jump-highlight", "true", {
-      timeout: 3000,
+      timeout: timeoutForRetry(test.info(), 3000),
     });
   });
 

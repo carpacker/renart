@@ -213,14 +213,21 @@ test.describe("seed and sensor assets live", () => {
       { timeout: 30000 },
     );
     await page.getByRole("button", { name: "Materialize", exact: true }).click();
-    await seedMaterializeResponse;
+    const seedMaterialize = await readMaterializeResult(await seedMaterializeResponse);
+    expect(
+      seedMaterialize.status,
+      seedMaterialize.error || seedMaterialize.output || "seed materialization failed",
+    ).toBe("ok");
     await expect(page.locator("pre.font-console").first()).toContainText(/regional_customers/i, {
       timeout: 30000,
     });
 
     await page.goto(`${liveApp.baseURL}/pipelines/${pipelineId}/assets/${ordersAssetId}/canvas`);
     const ordersMaterialize = await materializeAsset(page, liveApp.baseURL, ordersAssetId);
-    expect(ordersMaterialize.status).toBe("ok");
+    expect(
+      ordersMaterialize.status,
+      ordersMaterialize.error || ordersMaterialize.output || "orders materialization failed",
+    ).toBe("ok");
 
     dialog = await openNewAssetDialog(page);
     await dialog.getByRole("radio", { name: "Sensor", exact: true }).click();
@@ -331,7 +338,10 @@ test.describe("seed and sensor assets live", () => {
       { timeout: 30000 },
     );
     await page.getByRole("button", { name: "Check now", exact: true }).click();
-    await sensorRunResponse;
+    const sensorRun = await readMaterializeResult(await sensorRunResponse);
+    expect(sensorRun.status, sensorRun.error || sensorRun.output || "sensor check failed").toBe(
+      "ok",
+    );
     await expect
       .poll(
         async () => {
@@ -474,14 +484,22 @@ async function materializeAsset(page: Page, baseURL: string, assetId: string) {
   const response = await page.request.post(
     `${baseURL}/api/assets/${assetId}/materialize/stream?environment=default`,
   );
-  expect(response.ok()).toBe(true);
+  return readMaterializeResult(response);
+}
+
+async function readMaterializeResult(response: { ok(): boolean; text(): Promise<string> }) {
   const stream = await response.text();
+  expect(response.ok(), stream).toBe(true);
   const doneLine = stream
     .split(/\r?\n/)
     .reverse()
     .find((line) => line.startsWith("data: ") && line.includes('"status"'));
   if (!doneLine) throw new Error(`materialize stream did not contain a done event:\n${stream}`);
-  return JSON.parse(doneLine.slice("data: ".length)) as { status: string; error?: string };
+  return JSON.parse(doneLine.slice("data: ".length)) as {
+    status: string;
+    output?: string;
+    error?: string;
+  };
 }
 
 async function setMonacoContentAndCursor(page: Page, content: string, cursorAfter: string) {
