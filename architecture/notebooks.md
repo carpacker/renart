@@ -105,6 +105,8 @@ chart settings popover parses and rewrites the directive line — text is the
 single source of truth. `@viz` is the first member of a general
 `-- @word(args)` comment-directive family (`@materialize` is another); all
 directives are comments and therefore outside fingerprints by construction.
+The `@viz` syntax and behavior are explicitly experimental and the user docs
+warn that they are likely to change.
 
 Cell code is edited in Monaco. Its initial height follows the cell's content;
 each cell also has an independent vertical resize handle with pointer and
