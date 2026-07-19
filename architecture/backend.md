@@ -629,7 +629,9 @@ The same deterministic wheel is published to PyPI as `renart` on stable
 Renart release tags for external editors and CI. Release builds inject one
 version into both artifacts; runtime execution still uses the wheel assembled
 inside the Renart binary, so a network lookup or separately installed SDK can
-never introduce runner skew.
+never introduce runner skew. The assembler precompresses wheel members and
+writes their CRC and sizes into descriptor-free local ZIP headers, preserving
+deterministic output while satisfying PyPI Warehouse's archive validation.
 SDK queries stay read-only and execute through the Go connection manager, so
 credentials never enter Python. `internal/web/runstate` lets queries wait for
 in-flight same-environment materializations and rejects same-run ordering

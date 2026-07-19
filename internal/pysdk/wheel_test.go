@@ -3,6 +3,7 @@ package pysdk
 import (
 	"archive/zip"
 	"bytes"
+	"encoding/binary"
 	"io"
 	"io/fs"
 	"os"
@@ -133,6 +134,102 @@ func TestBuildWheelUsesConfiguredVersionAndIsDeterministic(t *testing.T) {
 	}
 	if !bytes.Equal(first, second) {
 		t.Fatal("building the same SDK version twice must produce identical wheel bytes")
+	}
+}
+
+func TestBuildWheelUsesDescriptorFreeLocalHeaders(t *testing.T) {
+	wheelPath, err := BuildWheel(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	wheelBytes, err := os.ReadFile(wheelPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	localHeaders := readDescriptorFreeLocalZIPHeaders(t, wheelBytes)
+
+	reader, err := zip.OpenReader(wheelPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reader.Close()
+	if len(localHeaders) != len(reader.File) {
+		t.Fatalf("read %d local headers for %d wheel members", len(localHeaders), len(reader.File))
+	}
+	for _, file := range reader.File {
+		local, ok := localHeaders[file.Name]
+		if !ok {
+			t.Errorf("wheel member %s has no local header", file.Name)
+			continue
+		}
+		if local.crc32 != file.CRC32 ||
+			uint64(local.compressedSize) != file.CompressedSize64 ||
+			uint64(local.uncompressedSize) != file.UncompressedSize64 {
+			t.Errorf(
+				"wheel member %s local header does not contain its final CRC and sizes",
+				file.Name,
+			)
+		}
+	}
+}
+
+type localZIPHeader struct {
+	crc32            uint32
+	compressedSize   uint32
+	uncompressedSize uint32
+}
+
+func readDescriptorFreeLocalZIPHeaders(t *testing.T, archive []byte) map[string]localZIPHeader {
+	t.Helper()
+	const (
+		localFileHeaderSignature  = 0x04034b50
+		centralDirectorySignature = 0x02014b50
+		localFileHeaderSize       = 30
+		dataDescriptorFlag        = 1 << 3
+	)
+
+	headers := make(map[string]localZIPHeader)
+	for offset := 0; ; {
+		if len(archive)-offset < 4 {
+			t.Fatalf("ZIP ended before its central directory at offset %d", offset)
+		}
+		signature := binary.LittleEndian.Uint32(archive[offset:])
+		if signature == centralDirectorySignature {
+			return headers
+		}
+		if signature != localFileHeaderSignature {
+			t.Fatalf("unexpected ZIP signature 0x%08x at offset %d", signature, offset)
+		}
+		if len(archive)-offset < localFileHeaderSize {
+			t.Fatalf("truncated local ZIP header at offset %d", offset)
+		}
+
+		flags := binary.LittleEndian.Uint16(archive[offset+6:])
+		nameLength := int(binary.LittleEndian.Uint16(archive[offset+26:]))
+		extraLength := int(binary.LittleEndian.Uint16(archive[offset+28:]))
+		nameStart := offset + localFileHeaderSize
+		dataStart := nameStart + nameLength + extraLength
+		if dataStart > len(archive) {
+			t.Fatalf("truncated local ZIP header name at offset %d", offset)
+		}
+		name := string(archive[nameStart : nameStart+nameLength])
+		if flags&dataDescriptorFlag != 0 {
+			t.Fatalf("wheel member %s uses a ZIP data descriptor (flags 0x%04x)", name, flags)
+		}
+
+		header := localZIPHeader{
+			crc32:            binary.LittleEndian.Uint32(archive[offset+14:]),
+			compressedSize:   binary.LittleEndian.Uint32(archive[offset+18:]),
+			uncompressedSize: binary.LittleEndian.Uint32(archive[offset+22:]),
+		}
+		if _, exists := headers[name]; exists {
+			t.Fatalf("wheel contains duplicate local header for %s", name)
+		}
+		headers[name] = header
+		offset = dataStart + int(header.compressedSize)
+		if offset > len(archive) {
+			t.Fatalf("compressed data for %s extends past the ZIP archive", name)
+		}
 	}
 }
 

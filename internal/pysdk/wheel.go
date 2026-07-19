@@ -6,11 +6,14 @@ package pysdk
 
 import (
 	"archive/zip"
+	"bytes"
+	"compress/flate"
 	"crypto/sha256"
 	"embed"
 	"encoding/base64"
 	"encoding/hex"
 	"fmt"
+	"hash/crc32"
 	"io/fs"
 	"os"
 	"path"
@@ -29,8 +32,10 @@ var sdkSource embed.FS
 var Version = "0.3.0"
 
 const (
-	distribution = "renart"
-	wheelTag     = "py3-none-any"
+	distribution       = "renart"
+	wheelTag           = "py3-none-any"
+	wheelDeflateLevel  = 5
+	wheelArchiveFormat = "raw-deflate-v1"
 )
 
 // wheelMetadataFile is the wheel's WHEEL file.
@@ -78,6 +83,13 @@ func WheelFilename() string {
 type wheelEntry struct {
 	name    string
 	content []byte
+}
+
+type compressedWheelEntry struct {
+	name             string
+	content          []byte
+	crc32            uint32
+	uncompressedSize uint64
 }
 
 // SourceFile is one embedded SDK source file. TypeStubFiles exposes the .pyi
@@ -149,7 +161,40 @@ func wheelEntries() ([]wheelEntry, error) {
 	return entries, nil
 }
 
+func compressWheelEntries(entries []wheelEntry) ([]compressedWheelEntry, error) {
+	compressed := make([]compressedWheelEntry, 0, len(entries))
+	for _, entry := range entries {
+		var body bytes.Buffer
+		// archive/zip uses Deflate level 5 by default. Keeping the level explicit
+		// preserves the existing compact, deterministic wheel representation while
+		// allowing us to calculate the local-header sizes before ZIP assembly.
+		compressor, err := flate.NewWriter(&body, wheelDeflateLevel)
+		if err != nil {
+			return nil, fmt.Errorf("create compressor for %s: %w", entry.name, err)
+		}
+		if _, err := compressor.Write(entry.content); err != nil {
+			_ = compressor.Close()
+			return nil, fmt.Errorf("compress %s: %w", entry.name, err)
+		}
+		if err := compressor.Close(); err != nil {
+			return nil, fmt.Errorf("finish compressing %s: %w", entry.name, err)
+		}
+		compressed = append(compressed, compressedWheelEntry{
+			name:             entry.name,
+			content:          body.Bytes(),
+			crc32:            crc32.ChecksumIEEE(entry.content),
+			uncompressedSize: uint64(len(entry.content)),
+		})
+	}
+	return compressed, nil
+}
+
 func buildWheel(target string, entries []wheelEntry) error {
+	compressedEntries, err := compressWheelEntries(entries)
+	if err != nil {
+		return err
+	}
+
 	tmp, err := os.CreateTemp(filepath.Dir(target), ".renart-*.whl")
 	if err != nil {
 		return err
@@ -160,9 +205,17 @@ func buildWheel(target string, entries []wheelEntry) error {
 	}()
 
 	writer := zip.NewWriter(tmp)
-	for _, entry := range entries {
-		// A fixed header (no timestamps) keeps the wheel byte-reproducible.
-		fileWriter, err := writer.CreateHeader(&zip.FileHeader{Name: entry.name, Method: zip.Deflate})
+	for _, entry := range compressedEntries {
+		// CreateRaw writes the precomputed CRC and sizes into the local header.
+		// In particular, flag 0x0008 remains clear and no trailing data descriptor
+		// is emitted; Warehouse rejects descriptor-bearing wheel members.
+		fileWriter, err := writer.CreateRaw(&zip.FileHeader{
+			Name:               entry.name,
+			Method:             zip.Deflate,
+			CRC32:              entry.crc32,
+			CompressedSize64:   uint64(len(entry.content)),
+			UncompressedSize64: entry.uncompressedSize,
+		})
 		if err != nil {
 			return err
 		}
@@ -212,6 +265,9 @@ func EnsureWheel() (string, error) {
 	}
 
 	hasher := sha256.New()
+	// Encoding changes must invalidate previously cached wheels even when the
+	// embedded SDK files are unchanged.
+	hasher.Write([]byte(wheelArchiveFormat))
 	for _, entry := range entries {
 		hasher.Write([]byte(entry.name))
 		hasher.Write(entry.content)
