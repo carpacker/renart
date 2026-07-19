@@ -120,9 +120,7 @@ func (e *HybridBruinExecutor) QueryAsset(ctx context.Context, req QueryAssetRequ
 		}
 	}
 
-	querier, ok := conn.(interface {
-		SelectWithSchema(context.Context, *query.Query) (*query.QueryResult, error)
-	})
+	querier, ok := conn.(directSchemaQuerier)
 	if !ok {
 		err := fmt.Errorf("connection type %s does not support querying", connName)
 		_ = e.executionLogSink().SaveQueryLog(ctx, QueryLogRecord{
@@ -203,9 +201,7 @@ func (e *HybridBruinExecutor) QueryConnection(ctx context.Context, req QueryConn
 		return nil, fmt.Errorf("connection %q not found", req.ConnectionName)
 	}
 
-	querier, ok := conn.(interface {
-		SelectWithSchema(context.Context, *query.Query) (*query.QueryResult, error)
-	})
+	querier, ok := conn.(directSchemaQuerier)
 	if !ok {
 		return nil, fmt.Errorf("connection %q does not support querying", req.ConnectionName)
 	}
@@ -215,7 +211,12 @@ func (e *HybridBruinExecutor) QueryConnection(ctx context.Context, req QueryConn
 	}
 	defer lease.Release()
 
-	result, err := selectWithComplexJSONFallback(ctx, querier, req.Query)
+	var result *query.QueryResult
+	if req.LogicalSchema && strings.EqualFold(strings.TrimSpace(manager.GetConnectionType(req.ConnectionName)), "duckdb") {
+		result, err = selectDuckDBLogicalSchema(ctx, querier, req.Query)
+	} else {
+		result, err = selectWithComplexJSONFallback(ctx, querier, req.Query)
+	}
 	if err != nil {
 		_ = e.executionLogSink().SaveQueryLog(ctx, QueryLogRecord{
 			Query:               req.Query,
@@ -254,6 +255,64 @@ func parseQueryLogLimit(raw string) int64 {
 
 type directSchemaQuerier interface {
 	SelectWithSchema(context.Context, *query.Query) (*query.QueryResult, error)
+}
+
+func selectDuckDBLogicalSchema(ctx context.Context, querier directSchemaQuerier, queryStr string) (*query.QueryResult, error) {
+	describeQuery := "DESCRIBE " + strings.TrimRight(strings.TrimSpace(queryStr), ";")
+	described, err := querier.SelectWithSchema(ctx, &query.Query{Query: describeQuery})
+	if err != nil {
+		return nil, err
+	}
+	if described == nil {
+		return nil, fmt.Errorf("DuckDB returned no schema for query")
+	}
+
+	nameIndex := -1
+	typeIndex := -1
+	for index, column := range described.Columns {
+		switch strings.ToLower(strings.TrimSpace(column)) {
+		case "column_name":
+			nameIndex = index
+		case "column_type":
+			typeIndex = index
+		}
+	}
+	if nameIndex < 0 || typeIndex < 0 {
+		return nil, fmt.Errorf("DuckDB DESCRIBE result did not include column_name and column_type")
+	}
+
+	columns := make([]string, 0, len(described.Rows))
+	columnTypes := make([]string, 0, len(described.Rows))
+	for _, row := range described.Rows {
+		if nameIndex >= len(row) || typeIndex >= len(row) {
+			continue
+		}
+		name := querySchemaValue(row[nameIndex])
+		if name == "" {
+			continue
+		}
+		columns = append(columns, name)
+		columnTypes = append(columnTypes, querySchemaValue(row[typeIndex]))
+	}
+
+	return &query.QueryResult{
+		Columns:     columns,
+		ColumnTypes: columnTypes,
+		Rows:        make([][]interface{}, 0),
+	}, nil
+}
+
+func querySchemaValue(value interface{}) string {
+	switch typed := value.(type) {
+	case nil:
+		return ""
+	case string:
+		return typed
+	case []byte:
+		return string(typed)
+	default:
+		return fmt.Sprint(typed)
+	}
 }
 
 func selectWithComplexJSONFallback(ctx context.Context, querier directSchemaQuerier, queryStr string) (*query.QueryResult, error) {

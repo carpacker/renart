@@ -1,12 +1,23 @@
 # Staleness stack — fingerprints, facts, snapshots, schedules, protection
 
-Status: current state (July 2026). Six
-interlocking subsystems that together answer "what is built, what is stale,
-what runs on a schedule, and what is protected".
+Status: current state (July 2026). Interlocking subsystems together answer
+"what source will run, what is built, what is stale, what runs on a schedule,
+and what is protected".
 
 ```
-identity + bus ──► fingerprints ──► facts/coverage ──► staleness service/UI
-       └────────► snapshots/deploy ──► per-env schedules ──► protection
+saved source ──► fingerprints/render ──► readiness + read-only plan
+      │                                      │
+      └──► snapshots/deploy ──► schedules ───┤
+                                             v
+                                  run/RunSpec/unit ledger
+                                             │
+                                             v
+                              execution ──► completion outbox
+                                             │
+                                             v
+                            target-aware facts/coverage ──► staleness/UI
+
+environment policy ──► plan/admission and pre-side-effect checks
 ```
 
 ## 1. Identity and events
@@ -100,7 +111,7 @@ Immediately before physical execution, the direct runner captures a versioned,
 secret-free snapshot of the full parsed graph: stable pipeline/asset identity,
 target identity and fidelity, fingerprints, dependency edges, coverage mode,
 variables hash, and refresh restriction. Scheduler-backed runs persist this
-snapshot before their first step; interactive asset, scoped, Build-stale,
+snapshot before their first step; interactive asset, scoped, Build-needed,
 legacy `/api/run`, and quickstart builds carry the same evidence directly into
 their completion envelope. At each main-task start Renart captures the exact
 latest-writer read set for its in-pipeline upstream targets, then claims its own
@@ -119,14 +130,16 @@ For a non-windowed table it replaces the marker. Asset-level and selected-
 environment refresh restrictions run configured strategies and therefore keep
 normal union/marker behavior.
 
-Notes: `run_id` is empty for build-mode runs (no run record); scheduled runs
-carry theirs. Every new completion still has a stable `completion_id`. A
-partial unique index keeps one fact per
-`(asset, environment, scheduled run)` while deliberately allowing repeated
-empty build-mode IDs; recorder inserts are no-ops when crash recovery replays a
-fact that already committed. New runs record only their pre-execution captured
-fingerprint/target evidence, so a source or configuration edit during a run
-cannot be mistaken for what executed. Version-two completion evidence is
+Notes: every current user-facing non-dry execution path creates a durable run,
+so its facts carry that `run_id`; empty IDs remain only in pre-ledger facts and
+low-level compatibility inputs. Every new completion also has a stable
+`completion_id`, and multi-window runs derive a distinct ID per execution unit.
+A partial unique index keeps one fact per `(asset, environment, non-empty
+run_id)` while allowing legacy empty IDs; recorder inserts are no-ops when crash
+recovery replays a fact that already committed. New runs record only
+their pre-execution captured fingerprint/target evidence, so a source or
+configuration edit during a run cannot be mistaken for what executed.
+Version-two completion evidence is
 self-contained for recovery and includes the captured dependency graph and
 upstream writers. Legacy version-one evidence is accepted only where current
 source still matches and every in-pipeline upstream needed by a successful
@@ -222,7 +235,7 @@ lease before converting orphaned active claims to dirty; embedded/headless
 invocations skip reconciliation while a live executor owns a shared lease. A
 primary lock outside the worktree survives `git clean`, while
 `.renart/execution.lock` keeps processes with different runtime-cache settings
-in the same lock domain. This applies to pipeline, asset/scope, Build-stale,
+in the same lock domain. This applies to pipeline, asset/scope, Build-needed,
 legacy workspace, and onboarding quickstart materialization paths.
 
 The workspace scheduler lock is acquired before any River worker starts, so a
@@ -288,7 +301,7 @@ attempt without creating coverage.
 Sensors are deliberately classified as `volatile` before and after a successful
 check. Their last attempt is still recorded and displayed, but they are excluded
 from warehouse-object verification and never become fresh from a run fact. The
-Build-stale planner therefore includes them on every requested build; interactive
+Build-needed planner therefore includes them on every requested build; interactive
 execution performs one check, while scheduled execution waits according to the
 sensor's configured interval and timeout.
 
@@ -334,7 +347,7 @@ windows, or changed windows return `plan_data_changed` instead of expanding the
 run silently. Each admitted unit carries its inclusion reason and exact window,
 and terminal unit state is durable even when later work is skipped.
 
-The Build-stale action is server-side: `POST
+The quick **Build needed** action is server-side: `POST
 /api/pipelines/{id}/build-stale/stream` (`httpapi/build_stale.go`) recomputes
 the stale set for the selection, compiles it into a plan (every non-fresh
 asset; for partials exactly the uncovered gap intervals), and
@@ -347,6 +360,10 @@ failed plan member are skipped rather than built stale.
 The whole physical plan holds the workspace execution lease, and every window
 uses the same target-capture, write-claim, and durable completion path as direct
 asset materialization.
+This inline shortcut and a reviewed pipeline plan with `selection=needed`
+consume the same staleness/gap semantics and both use the universal run/unit
+ledger. Only the latter persists a reviewed pipeline-plan artifact and exposes
+the full checks/render confirmation surface before admission.
 The endpoint's optional `upstream_of` selector narrows that same plan to one
 asset's transitive upstream closure. `renart run <asset> --refresh-upstreams`
 uses this selector in delegated mode (and the same planner directly in embedded
@@ -482,6 +499,19 @@ the same flags harder, under the same names.
 
 ## 8. Deferred and known-accepted
 
+- Scheduler followers are intentionally read-only. Heartbeat/fencing,
+  automatic owner takeover, and cross-process schedule-mutation delivery are
+  not implemented.
+- Pre-v2 River signal/run decoders and duplicated compatibility fields remain
+  until jobs persisted by older binaries have drained.
+- Pipeline planning supports `all`, `needed`, and asset closure, not arbitrary
+  custom/Bruin selectors. Working-tree and deployment plans can each render
+  operations, but there is no dedicated side-by-side rendered-SQL diff; the
+  asset-level Render endpoint reads only saved working-tree source.
+- Configurable warning gates, connection-backed warehouse validation,
+  `run when needed`, resource-aware concurrency, and reliable breaking/non-
+  breaking impact categorization are not built. The current conservative slot
+  permits one pipeline-scope mutating run per logical pipeline.
 - **Python fingerprint hardening** (Rust→wasm `renart-pyfp` on
   `ruff_python_parser`: comment/docstring-stripped hash, one-level import
   resolution, runtime-observed variables; the wasm binary's own hash feeds

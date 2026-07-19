@@ -69,3 +69,33 @@ func TestAnnotateOutputColumnsStarExpansion(t *testing.T) {
 		t.Fatalf("star expansion did not carry schema types: %+v", got)
 	}
 }
+
+func TestAnnotateOutputColumnsDuckDBRangeTableFunction(t *testing.T) {
+	got, err := AnnotateOutputColumns(
+		context.Background(),
+		"select range as my_value from range(1, 2, 1)",
+		"duckdb",
+		Schema{},
+	)
+	if err != nil {
+		t.Fatalf("AnnotateOutputColumns: %v", err)
+	}
+	if len(got) != 1 || got[0].Name != "my_value" || got[0].Type != "BIGINT" {
+		t.Fatalf("range projection = %+v, want my_value BIGINT", got)
+	}
+}
+
+func TestAnnotateOutputColumnsDuckDBGenerateSeriesTableFunction(t *testing.T) {
+	got, err := AnnotateOutputColumns(
+		context.Background(),
+		"select generate_series as my_value from generate_series(1, 2, 1)",
+		"duckdb",
+		Schema{},
+	)
+	if err != nil {
+		t.Fatalf("AnnotateOutputColumns: %v", err)
+	}
+	if len(got) != 1 || got[0].Name != "my_value" || got[0].Type != "BIGINT" {
+		t.Fatalf("generate_series projection = %+v, want my_value BIGINT", got)
+	}
+}

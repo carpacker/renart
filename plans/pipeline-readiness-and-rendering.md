@@ -1,8 +1,31 @@
 # Pipeline readiness, execution planning, and rendered SQL
 
-Status: implementation in progress. Shipped slices are recorded in
-`architecture/`; target behavior below remains proposed unless it appears
-there.
+Status: core implementation complete. Phases 0a/0b and 1–3 have shipped; the
+as-built contract is recorded in `architecture/`. This plan remains because
+the scheduler-coordination workstream, rolling legacy-job cleanup, and the
+optional Phase 4 policy/automation work are still open. Target behavior below
+remains proposed unless it appears in `architecture/` or an implementation
+checkpoint.
+
+## 0. Current implementation state (2026-07-19)
+
+| Area | State | As-built boundary |
+| --- | --- | --- |
+| Truthful source/context and immediate safety (Phase 0a) | Complete | Source and invocation origin are server-owned; deployment pins and destructive context fail closed; follower schedule mutations are rejected. |
+| Universal run ledger and dispatch (Phase 0b) | Functionally complete | Pipeline, one-asset/scoped, Build-needed, reviewed, and scheduled execution use durable RunSpecs/runs/units. Pre-v2 River jobs retain a strict compatibility decoder until already-persisted jobs have drained. |
+| Shared asset rendering (Phase 1) | Complete | Saved-source rendering covers exact, semantic, runtime-only, and unsupported stages without opening a warehouse; direct materializer/check/hook paths share construction with execution. |
+| Reviewed pipeline plans (Phase 2) | Complete | Working-tree and exact-deployment plans support `all`, `needed`, and asset-closure selection, lazy stage content, stale-plan/data-state checks, durable plan artifacts, and exact unit execution. |
+| Deploy and schedule integration (Phase 3) | Complete | Reviewed source deployments, file diffs, stable ordinals, explicit pin promotion, schedule-variable planning, durable occurrences, and pinned manual/scheduled execution are implemented. |
+| Scheduler ownership coordination (Workstream 0c) | Open | One process owns each workspace scheduler; followers are visibly read-only. There is no heartbeat/fencing protocol, automatic takeover, or cross-process mutation delivery. |
+| Policy and automation (Phase 4) | Optional / not implemented | Configurable warning gates, warehouse validation, `run when needed`, resource-aware concurrency, and reliable change categorization remain future work. |
+
+Two narrower proposal items also remain outside the shipped boundary: the
+planner has no arbitrary custom/Bruin selector yet, and there is no dedicated
+side-by-side rendered-SQL diff between the working tree and a pinned
+deployment. Either source can be planned independently, and deployment review
+does provide source-file diffs. The asset-level Render endpoint itself remains
+saved-working-tree only; immutable deployment rendering is available through
+the pipeline planner.
 
 ## 1. Recommendation
 
@@ -14,7 +37,7 @@ There are two independent kinds of state:
 2. **Data freshness**: for one environment and time range, which assets are
    missing, stale, partially covered, volatile, running, or fresh?
 
-`Build stale` changes data freshness. It is not inherently a prerequisite for
+`Build needed` changes data freshness. It is not inherently a prerequisite for
 deploying a source snapshot. Conversely, a fresh warehouse does not mean the
 current source is valid or deployed. Putting the actions into a single required
 sequence would hide this distinction and become awkward for normal local work.
@@ -1737,32 +1760,39 @@ operations or exact canonical blobs from the renderer.
 - E2E: protected-environment and destructive-operation confirmation;
 - accessibility and shrink-safe rendering for large plans/long SQL.
 
-## 10. Product decisions still needed
+## 10. Resolved choices and remaining decisions
 
-1. Final UI term: `Build needed`, `Run needed`, or `Update data`. `Build stale`
-   is technically accurate but less approachable; `Build changes` is
-   inaccurate for missing/partial/volatile work.
-2. Whether deterministic errors block Deploy immediately or begin as an
-   advisory policy until render/type-check parity is proven.
-3. Whether redacted rendered SQL is retained by default in run history and for
-   how long.
-4. Whether environment schedules remain operational local state only, or later
-   gain a version-controlled declaration. In either case, keep Bruin's
-   `pipeline.yml` cadence interoperable and clearly distinct.
-5. Whether `run when needed` belongs in the initial implementation.
-   Recommendation: no; first make manual plans and cron execution truthful and
-   observable.
-6. The local retention/garbage-collection limits for per-run sandboxes and any
+The implementation resolved the initial product choices as follows:
+
+- the UI term is **Build needed**;
+- deterministic code/render errors block deployment review, while an
+  unavailable secret-free configuration identity remains advisory;
+- durable run plans retain redacted stage metadata but deliberately exclude
+  rendered stage content;
+- environment schedules remain local operational state in SQLite and stay
+  distinct from Bruin's version-controlled `pipeline.yml` cadence;
+- `run when needed` was not included in the initial implementation.
+
+The remaining decisions are:
+
+1. Whether environment schedules should eventually gain a version-controlled
+   declaration while retaining Bruin interoperability.
+2. The retention/garbage-collection limits for per-run sandboxes and any
    optional immutable verified snapshot cache. Correctness must not depend on
    that cache.
-7. Which operators can report stable write-resource/target identities strongly
+3. Which operators can report stable write-resource/target identities strongly
    enough to allow concurrency or reusable isolated coverage. Environment names
    alone are not sufficient evidence.
+4. Whether any Phase 4 capability—configurable warning gates, warehouse
+   validation, `run when needed`, or change categorization—has enough concrete
+   demand and reliable semantics to justify its added policy surface.
 
 ## 11. Completion
 
-When this work ships, fold the as-built source/run/deploy/schedule contract into
+The shipped source/run/deploy/schedule contract is already folded into
 `architecture/backend.md`, the plan/readiness/render UI into
 `architecture/frontend.md`, and selection/freshness behavior into
-`architecture/staleness.md`. Delete this plan afterward; Git history retains
-the proposal and deviations.
+`architecture/staleness.md`. Keep this plan only while Workstream 0c, rolling
+compatibility cleanup, and any accepted Phase 4 work remain here. Once those
+items are completed, rejected, or split into narrower plans, delete this file;
+Git history retains the proposal and implementation checkpoints.

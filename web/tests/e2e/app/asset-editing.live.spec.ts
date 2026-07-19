@@ -829,6 +829,69 @@ select customer_id, upper(customer_name) as shout from analytics.customers
     expect(byName.get("shout")).toBe("VARCHAR");
   });
 
+  test("schema sync applies safe changes and opens the resolver for known type changes", async ({
+    liveApp,
+    page,
+  }) => {
+    const declare = await page.request.put(
+      `${liveApp.baseURL}/api/assets/${customersAssetId}/columns`,
+      {
+        data: { columns: [{ name: "customer_id", type: "BIGINT" }] },
+      },
+    );
+    expect(declare.ok()).toBe(true);
+
+    await page.goto(`${liveApp.baseURL}/pipelines/${pipelineId}/assets/${customersAssetId}/code`);
+    await expect(page.locator(".monaco-editor").first()).toBeVisible({ timeout: 15000 });
+    const properties = await openAssetProperties(page);
+    const columnsCard = properties.getByRole("heading", { name: "Columns" }).locator("../..");
+    await expect(columnsCard.getByRole("checkbox", { name: "Current table" })).toBeVisible();
+
+    const syncResponse = page.waitForResponse(
+      (response) =>
+        response.url().endsWith(`/api/assets/${customersAssetId}/columns/sync`) &&
+        response.request().method() === "POST",
+      { timeout: 30000 },
+    );
+    await columnsCard.getByRole("button", { name: "Sync schema", exact: true }).click();
+    const sync = await syncResponse;
+    expect(sync.ok(), await sync.text()).toBe(true);
+    expect(((await sync.json()) as { status: string }).status).toBe("conflicts");
+
+    const resolver = page.getByRole("dialog", { name: "Resolve schema differences" });
+    await expect(resolver).toBeVisible();
+    await expect(resolver.getByRole("columnheader", { name: /SQL query/ })).toBeVisible();
+    await expect(resolver.getByRole("columnheader", { name: "Saved metadata" })).toBeVisible();
+
+    const customerIDRow = resolver.getByRole("row").filter({ hasText: "customer_id" });
+    await expect(customerIDRow).toContainText("INTEGER");
+    await expect(customerIDRow).toContainText("BIGINT");
+    await customerIDRow.getByRole("combobox").click();
+    await page.getByRole("option", { name: "Use SQL query · INTEGER" }).click();
+
+    const applyResponse = page.waitForResponse(
+      (response) =>
+        response.url().endsWith(`/api/assets/${customersAssetId}/columns/sync/apply`) &&
+        response.request().method() === "POST",
+      { timeout: 30000 },
+    );
+    await resolver.getByRole("button", { name: "Apply resolution" }).click();
+    const applied = await applyResponse;
+    expect(applied.ok(), await applied.text()).toBe(true);
+    await expect(resolver).toBeHidden();
+
+    const customers = await pollAsset(
+      liveApp,
+      page.request,
+      "analytics.customers",
+      (asset) =>
+        asset.columns?.some(
+          (column) => column.name === "customer_id" && column.type?.toUpperCase() === "INTEGER",
+        ) === true && asset.columns?.some((column) => column.name === "customer_name") === true,
+    );
+    expect(customers.meta?.renart_col_own ?? "").not.toContain("customer_id:type");
+  });
+
   test("column type ownership is preserved across reconciliation", async ({ liveApp, request }) => {
     // Reconcile customers' columns from an inferred set (no declared columns yet).
     const first = await request.post(

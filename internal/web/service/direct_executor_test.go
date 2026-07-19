@@ -74,7 +74,8 @@ func (e *cliCompatExecutor) runMaybeStreaming(ctx context.Context, args []string
 }
 
 type stubConnectionManager struct {
-	conn any
+	conn           any
+	connectionType string
 }
 
 func (s *stubConnectionManager) GetConnection(_ string) any {
@@ -86,6 +87,9 @@ func (s *stubConnectionManager) GetConnectionDetails(_ string) any {
 }
 
 func (s *stubConnectionManager) GetConnectionType(_ string) string {
+	if s.connectionType != "" {
+		return s.connectionType
+	}
 	return "stub"
 }
 
@@ -135,6 +139,22 @@ func (s *stubSchemaQuerier) Ping(_ context.Context) error { return nil }
 
 func (s *stubSchemaQuerier) GetDatabaseSummary(_ context.Context) (*ansisql.DBDatabase, error) {
 	return &ansisql.DBDatabase{}, nil
+}
+
+type stubDuckDBLogicalSchemaQuerier struct {
+	query string
+}
+
+func (s *stubDuckDBLogicalSchemaQuerier) SelectWithSchema(_ context.Context, q *query.Query) (*query.QueryResult, error) {
+	s.query = q.Query
+	return &query.QueryResult{
+		Columns:     []string{"column_name", "column_type", "null", "key", "default", "extra"},
+		ColumnTypes: []string{"VARCHAR", "VARCHAR", "VARCHAR", "VARCHAR", "VARCHAR", "VARCHAR"},
+		Rows: [][]interface{}{
+			{"id", "VARCHAR", "YES", nil, nil, nil},
+			{[]byte("geometry"), []byte("JSON"), "YES", nil, nil, nil},
+		},
+	}, nil
 }
 
 type stubComplexSchemaQuerier struct {
@@ -205,6 +225,38 @@ func TestHybridBruinExecutorQueryConnectionUsesDirectPath(t *testing.T) {
 		"rows": [[1, "alice"]],
 		"connectionName": "warehouse",
 		"query": "select 1 as id, 'alice' as name"
+	}`, string(output))
+}
+
+func TestHybridBruinExecutorQueryConnectionUsesDuckDBLogicalSchema(t *testing.T) {
+	t.Parallel()
+
+	querier := &stubDuckDBLogicalSchemaQuerier{}
+	executor := NewHybridBruinExecutor(
+		".",
+		"bruin",
+		func(context.Context, string) (config.ConnectionAndDetailsGetter, error) {
+			return &stubConnectionManager{conn: querier, connectionType: "duckdb"}, nil
+		},
+		nil,
+	)
+
+	output, err := executor.QueryConnection(context.Background(), QueryConnectionRequest{
+		ConnectionName: "warehouse",
+		Query:          `select * from "example"."api" limit 1;`,
+		Output:         "json",
+		LogicalSchema:  true,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, `DESCRIBE select * from "example"."api" limit 1`, querier.query)
+	assert.JSONEq(t, `{
+		"columns": [
+			{"name": "id", "type": "VARCHAR"},
+			{"name": "geometry", "type": "JSON"}
+		],
+		"rows": [],
+		"connectionName": "warehouse",
+		"query": "select * from \"example\".\"api\" limit 1;"
 	}`, string(output))
 }
 

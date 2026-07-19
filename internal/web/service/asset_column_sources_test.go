@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/bruin-data/bruin/pkg/pipeline"
@@ -59,8 +60,87 @@ func TestColumnInferenceSourcesAreAssetCapabilities(t *testing.T) {
 				ids = append(ids, source.ID)
 			}
 			assert.Equal(t, tt.want, ids)
+			for _, source := range sources {
+				if source.ID == columnSourceLiveResponse {
+					assert.True(t, source.MayOmitColumns, "a sampled response cannot prove a column was deleted")
+				}
+			}
 		})
 	}
+}
+
+func TestAPIColumnInferenceUsesCanonicalTargetConnection(t *testing.T) {
+	asset := &pipeline.Asset{Name: "example.api", Type: pipeline.AssetType("api")}
+	parsedPipeline := &pipeline.Pipeline{
+		DefaultConnections: pipeline.EmptyStringMap{"duckdb": "duckdb-default"},
+	}
+
+	sources := columnInferenceSourcesForPipelineAsset(asset, parsedPipeline)
+	ids := make([]string, 0, len(sources))
+	for _, source := range sources {
+		ids = append(ids, source.ID)
+	}
+	assert.Equal(t, []string{
+		columnSourceDefinition,
+		columnSourceLiveResponse,
+		columnSourceMaterialized,
+	}, ids)
+
+	request, err := BuildInferAssetColumnsQuery(parsedPipeline, asset, "dev")
+	require.NoError(t, err)
+	assert.Equal(t, "duckdb-default", request.ConnectionName)
+	assert.Equal(t, `select * from "example"."api" limit 1`, request.Query)
+	assert.Equal(t, "dev", request.Environment)
+	assert.True(t, request.LogicalSchema)
+}
+
+func TestSyncAssetColumnsAcceptsCurrentTableForAPIAsset(t *testing.T) {
+	workspaceRoot := t.TempDir()
+	pipelineRoot := filepath.Join(workspaceRoot, "analytics")
+	assetsRoot := filepath.Join(pipelineRoot, "assets")
+	require.NoError(t, os.MkdirAll(assetsRoot, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(pipelineRoot, "pipeline.yml"), []byte(`name: analytics
+default_connections:
+  duckdb: duckdb-default
+`), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(assetsRoot, "api.asset.yml"), []byte(`name: analytics.api
+type: api
+parameters:
+  request:
+    url: https://example.invalid/records
+  response:
+    fields:
+      id: id
+columns:
+  - name: id
+    type: VARCHAR
+materialization:
+  type: table
+`), 0o644))
+
+	executor := &stubRunRunner{output: []byte(`{"columns":[{"name":"id","type":"VARCHAR"},{"name":"_sling_loaded_at","type":"TIMESTAMP"}]}`)}
+	service := NewAssetService(AssetDependencies{
+		WorkspaceRoot:                workspaceRoot,
+		ResolveAssetByID:             newAssetTestResolver(workspaceRoot).ResolveAssetByID,
+		Executor:                     executor,
+		SuppressWatcher:              func(string) {},
+		PushWorkspaceUpdateImmediate: func(context.Context, string, string) {},
+	})
+
+	result, apiErr := service.SyncAssetColumns(
+		context.Background(),
+		EncodeID("analytics/assets/api.asset.yml"),
+		[]string{columnSourceMaterialized},
+		"dev",
+	)
+	require.Nil(t, apiErr)
+	assert.Equal(t, columnSyncStatusUnchanged, result.Status)
+	require.Len(t, result.Sources, 2)
+	assert.Equal(t, columnSourceDefinition, result.Sources[0].Source.ID)
+	assert.Equal(t, columnSourceMaterialized, result.Sources[1].Source.ID)
+	assert.Equal(t, []webmodel.Column{{Name: "id", Type: "VARCHAR"}}, result.Sources[1].Columns)
+	assert.Contains(t, result.Sources[1].Notes, "Ignoring legacy Sling metadata column _sling_loaded_at; Renart materializations no longer include it.")
+	assert.Contains(t, executor.args, "duckdb-default")
 }
 
 func TestCompareColumnSchemasReportsMeaningfulDrift(t *testing.T) {

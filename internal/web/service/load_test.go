@@ -83,6 +83,7 @@ func TestLoadRunEnvIncludesResolvedIntervalDates(t *testing.T) {
 
 	env := loadRunEnv(ctx)
 	assert.Contains(t, env, "SLING_DISABLE_TELEMETRY=true")
+	assert.Contains(t, env, slingLoadedAtDisabledEnv)
 	assert.Contains(t, env, "DEBUGINFOD_URLS=")
 	assert.Contains(t, env, "START_DATE=2024-01-01T02:03:04Z")
 	assert.Contains(t, env, "END_DATE=2024-01-02T03:04:05Z")
@@ -327,7 +328,7 @@ func (m loadTestConnectionManager) GetConnection(name string) any {
 func TestHybridBruinExecutorRunsCanonicalLoadAssetWithCLI(t *testing.T) {
 	workspaceRoot := t.TempDir()
 	fakeLoad := filepath.Join(workspaceRoot, "fake-sling")
-	require.NoError(t, os.WriteFile(fakeLoad, []byte("#!/bin/sh\nprintf 'sling %s\\n' \"$*\"\n"), 0o755))
+	require.NoError(t, os.WriteFile(fakeLoad, []byte("#!/bin/sh\nprintf 'sling %s loaded_at=%s\\n' \"$*\" \"$SLING_LOADED_AT_COLUMN\"\n"), 0o755))
 	t.Setenv("RENART_SLING_BINARY", fakeLoad)
 
 	executor := NewHybridBruinExecutor(workspaceRoot, "bruin", nil, nil)
@@ -350,6 +351,7 @@ func TestHybridBruinExecutorRunsCanonicalLoadAssetWithCLI(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, output, chunks.Bytes())
 	assert.Contains(t, string(output), "sling run --src-conn postgresql://source --src-stream public.orders --tgt-conn duckdb://target --tgt-object analytics.orders")
+	assert.Contains(t, string(output), "loaded_at=false")
 }
 
 func TestHybridBruinExecutorRunsLoadAssetThroughUvWhenNoBinaryOverrideExists(t *testing.T) {

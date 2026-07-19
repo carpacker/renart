@@ -1,7 +1,7 @@
 # Renart Go backend — current architecture
 
 Status: current state. Originated as an architecture review (2026-06); the
-refactor items from that review are done except where noted in §6.
+refactor items from that review are done except where noted in §7.
 
 ## 1. Shape
 
@@ -173,6 +173,32 @@ Runtime lock/discovery files, including `.renart/execution.lock`, are excluded
 from Git by the source-control service.
 
 ## 4. Execution
+
+Definition readiness and data freshness are intentionally independent. A
+deployment snapshots reviewed source but does not build data; a Build-needed or
+ordinary working-tree run can update data without changing any deployment or
+schedule pin. The common execution lifecycle is:
+
+```text
+saved source ──► render / pipeline plan ──► confirm ──────────────┐
+      │                                                           │
+      └──► deployment review ──► snapshot ──► pin ──► runtime plan┤
+                                                                  v
+                                                       run + RunSpec + units
+                                                          /             \
+                                             inline stream               River job
+                                                          \             /
+                                                           v           v
+                                                      Bruin/direct execution
+                                                                  │
+                                                                  v
+                                                 completion outbox ──► facts/staleness
+```
+
+Every user-facing non-dry mutating execution is admitted to the same durable
+run ledger before physical work starts. Dispatch may be inline (to preserve
+interactive SSE output) or queued through River; it does not change the source,
+context, provenance, or execution-unit contract.
 
 `BruinCommandExecutor` is a hybrid: a **direct** in-process path that drives
 Bruin's operator/materializer packages (registered per warehouse in
@@ -425,7 +451,7 @@ startup takes them exclusively before converting orphaned active write claims
 to dirty. The primary lock lives in the per-user runtime directory so a
 worktree cleanup cannot split the lock domain, while `.renart/execution.lock`
 coordinates processes whose runtime-directory settings differ. Pipeline,
-asset/scope, Build-stale, delegated/embedded legacy `/api/run`, and onboarding
+asset/scope, Build-needed, delegated/embedded legacy `/api/run`, and onboarding
 quickstart materialization all enter through this boundary. Dry-run/render/
 inspect do not take the lease.
 
@@ -610,6 +636,8 @@ bridge emits Sling-native DSNs where Bruin's ingestr URI convention differs:
 Trino carries `catalog` and `schema` as query properties, while ClickHouse uses
 the database path and exposes only the TLS flag as a query property. Load, API,
 Seed, and non-DuckDB Python materialization all use this same bridge.
+The shared Sling environment disables `_sling_loaded_at`, keeping these writes
+schema-preserving instead of adding a loader-owned output column.
 
 Seed and sensor authoring is likewise semantic rather than raw-file templating.
 The workspace DTO's backend-owned `asset_capabilities` list is the runtime
@@ -687,11 +715,17 @@ The DTO also advertises `column_inference_sources` per asset. Sources are
 backend capabilities rather than frontend asset-kind branches: definition
 sources include SQL output inference, API fields/OpenAPI, Load upstreams, and
 local seed files; observed sources include sampled API responses and the current
-materialized relation. `POST /api/assets/{assetID}/columns/preview` reads one
-advertised source without writing the asset and returns its columns plus
-added/missing/type-change drift against saved metadata. Applying a preview goes
-through the existing provenance-aware column reconciler, preserving descriptions,
-checks, and user-owned types where possible. Sensors advertise no schema source.
+materialized relation. `POST /api/assets/{assetID}/columns/sync` automatically
+uses the definition and adds only the observed sources selected by the caller.
+It immediately reconciles column additions and unknown-to-known type refinements;
+saved-column removals, known-type changes, and source disagreements return a
+non-mutating merge model. `POST /columns/sync/apply` persists the user's row-level
+choices through the same provenance model. Sampled sources are marked as partial,
+so absence in one API sample is not deletion evidence. The older one-source
+preview and direct reconcile routes remain compatibility APIs. Materialized
+Load/API observations ignore legacy `_sling_loaded_at` columns. DuckDB table
+observations use `DESCRIBE` so logical catalog types such as `JSON` survive the
+ADBC/Arrow result boundary. Sensors advertise no schema source.
 
 Full refresh is a run-scoped execution option shared by SQL, Python, Load, and
 API table assets. Direct SQL materializers are constructed with that option for

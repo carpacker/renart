@@ -745,9 +745,6 @@ func (o *renartPythonOperator) loadParquetViaSling(ctx context.Context, run pyth
 	cmd := newStreamingCommand(ctx, cmdName, cmdArgs, run.repo.Path, writer)
 	cmd.Env = append(cmd.Env,
 		"RENART_PY_TARGET="+uri,
-		// Python assets materialize exactly the columns materialize()
-		// returned; no Sling bookkeeping column.
-		"SLING_LOADED_AT_COLUMN=false",
 	)
 	if err := runStreamingCommand(cmd, writer); err != nil {
 		return fmt.Errorf("failed to load the data into %s: %w", run.asset.Name, err)

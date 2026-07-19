@@ -187,17 +187,29 @@ round-trips unknown fields).
   asset types, and each resolved connection links to that exact environment
   connection under project settings.
 - The backend advertises each asset's available column sources through
-  `column_inference_sources`, so the inspector has one source picker and preview
-  flow instead of asset-kind-specific refresh buttons. Definition sources cover
-  SQL output inference, Load upstreams, local seed files, and API fields/OpenAPI;
-  observed sources cover sampled API responses and current materialized tables.
-  `POST /columns/preview` is non-mutating and reports added, missing, and
-  type-changed columns against saved metadata. The user explicitly applies the
-  preview through `/columns/reconcile`, which retains the existing provenance,
-  descriptions, checks, and owned type rules. Sensors expose no schema source;
-  the older `/columns/refresh-from-definition` and SQL-specific
-  `/fill-columns-from-db` routes remain for compatibility and automatic seed
-  replacement refreshes.
+  `column_inference_sources`, so schema synchronization is capability-driven
+  instead of branching on asset kinds in the inspector. Definition sources
+  (SQL output, Load upstream, local seed file, or API fields/OpenAPI) are selected
+  automatically. Observed sources (a sampled API request and the current
+  materialized table) appear as optional advisory checkboxes. Sampled sources
+  declare that they may omit columns, so a missing optional API field is not
+  mistaken for deletion evidence.
+- `POST /columns/sync` observes the selected sources and owns the conservative
+  merge policy. New columns and an unknown saved type becoming known are applied
+  immediately through the provenance-aware reconciler. Deleting a saved column,
+  changing any known type, or finding incompatible source observations returns a
+  non-mutating merge model instead. The inspector opens one scrollable resolver
+  table with a column per source, saved metadata, and the selected result;
+  `POST /columns/sync/apply` persists those choices atomically while retaining
+  descriptions, checks, manual columns, ignored columns, and type ownership.
+  Current-table observations for Load/API assets ignore the legacy Sling
+  `_sling_loaded_at` column. DuckDB observations use logical catalog types, so a
+  stored `JSON` column is not presented as `VARCHAR` merely because of the query
+  result transport.
+  Sensors expose no schema source. `/columns/preview`, `/columns/reconcile`,
+  `/columns/refresh-from-definition`, and SQL-specific `/fill-columns-from-db`
+  remain compatibility routes; automatic seed replacement refreshes still use
+  the definition reconciler.
 
 ## 7. Not built (still intent, from the original concept)
 
@@ -208,8 +220,9 @@ round-trips unknown fields).
   detachment. `renart_col_own` covers field-level type ownership; whole-path
   detachment is not implemented.
 - **Broader semantic diff prompts** outside schema-source synchronization;
-  column source previews show schema drift, while other generated changes still
-  rely on safe auto-apply plus reconcile items for conflicts.
+  the schema resolver shows source and saved-metadata drift, while other
+  generated changes still rely on safe auto-apply plus reconcile items for
+  conflicts.
 - **Command palette metadata actions** beyond what the cards expose.
 - Expression-hash rename memory (`renart_col_map`) is defined in the schema
   but rename suggestions are not yet surfaced in the UI.

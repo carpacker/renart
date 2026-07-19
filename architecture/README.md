@@ -14,9 +14,9 @@ in the plan.
 
 | Doc | Covers |
 | --- | --- |
-| [backend.md](backend.md) | Go backend: layering, runtime model, execution, conventions |
-| [frontend.md](frontend.md) | Web app: stack, routing, app shell, hooks, libraries, layout rules |
-| [staleness.md](staleness.md) | Fingerprints, materialization facts/coverage, staleness service, deploy snapshots, per-env schedules, protected environments |
+| [backend.md](backend.md) | Go backend: layering, runtime model, rendering/planning, universal execution ledger, conventions |
+| [frontend.md](frontend.md) | Web app: stack, routing, Build readiness/review/deploy UX, hooks, libraries, layout rules |
+| [staleness.md](staleness.md) | Fingerprints, target-aware facts/coverage, data readiness, deploy snapshots, occurrences, per-env schedules, protected environments |
 | [notebooks.md](notebooks.md) | Notebook folder format, sessions, rename engine, `@viz`, server-driven auto-recompute, promotion |
 | [asset-editing.md](asset-editing.md) | Asset workbench: ownership model, `assetmeta` provenance keys, reconciliation, transaction API |
 | [sql-lsp.md](sql-lsp.md) | SQL language server: canonical graph, engine, web service caching, notebook cell scoping, column-inference fixpoint |

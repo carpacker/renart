@@ -146,21 +146,18 @@ test.describe("seed and sensor assets live", () => {
     await expect(seedColumns.getByRole("heading", { name: "Columns" })).toBeVisible({
       timeout: 15000,
     });
-    const initialPreviewResponse = page.waitForResponse(
+    const initialSyncResponse = page.waitForResponse(
       (response) =>
-        response.url().includes(`/api/assets/${seedAssetId}/columns/preview`) &&
+        response.url().includes(`/api/assets/${seedAssetId}/columns/sync`) &&
         response.request().method() === "POST",
       { timeout: 30000 },
     );
     await seedColumns.getByRole("button", { name: "Sync schema", exact: true }).click();
-    await expect(
-      seedColumns.getByText("The schema Sling detects in the local seed file."),
-    ).toBeVisible();
-    await seedColumns.getByRole("button", { name: "Preview schema", exact: true }).click();
-    const initialPreview = await initialPreviewResponse;
-    expect(initialPreview.ok(), await initialPreview.text()).toBe(true);
-    await expect(seedColumns.getByText("2 columns", { exact: true })).toBeVisible();
-    await seedColumns.getByRole("button", { name: "Apply to metadata", exact: true }).click();
+    const initialSync = await initialSyncResponse;
+    expect(initialSync.ok(), await initialSync.text()).toBe(true);
+    const initialSyncBody = (await initialSync.json()) as { status: string };
+    expect(initialSyncBody.status).toBe("applied");
+    await expect(seedColumns.getByText(/Safe changes were applied automatically/)).toBeVisible();
     await pollAsset(
       liveApp,
       page,

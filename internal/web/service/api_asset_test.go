@@ -701,7 +701,7 @@ func TestHybridBruinExecutorRunsAPIAssetThroughLoadWithBruinTargetConnection(t *
 	workspaceRoot := t.TempDir()
 	require.NoError(t, os.MkdirAll(filepath.Join(workspaceRoot, ".git"), 0o755))
 	fakeUv := filepath.Join(workspaceRoot, "fake-uv")
-	require.NoError(t, os.WriteFile(fakeUv, []byte("#!/bin/sh\nprintf 'uv %s\\n' \"$*\"\n"), 0o755))
+	require.NoError(t, os.WriteFile(fakeUv, []byte("#!/bin/sh\nprintf 'uv %s loaded_at=%s\\n' \"$*\" \"$SLING_LOADED_AT_COLUMN\"\n"), 0o755))
 	t.Setenv("RENART_UV_BINARY", fakeUv)
 	t.Setenv("RENART_SLING_BINARY", "")
 	t.Setenv("SLING_BINARY", "")
@@ -760,6 +760,7 @@ custom_checks:
 	assert.Contains(t, string(output), "--tgt-conn duckdb:///")
 	assert.Contains(t, string(output), "/duckdb-files/chess.duckdb")
 	assert.Contains(t, string(output), "--tgt-object quickstart.players")
+	assert.Contains(t, string(output), "loaded_at=false")
 	assert.NotContains(t, string(output), "--mode full-refresh")
 }
 

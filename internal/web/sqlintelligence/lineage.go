@@ -6,6 +6,7 @@ import (
 	"errors"
 	"strings"
 
+	"renart/internal/sqlcatalog"
 	"renart/internal/web/sqlformat"
 )
 
@@ -61,7 +62,7 @@ func AnnotateOutputColumns(ctx context.Context, query, dialect string, schema Sc
 	if selectNode == nil {
 		return nil, nil
 	}
-	sourceTables := polyglotSelectSourceTables(selectNode)
+	sourceTables, schema := outputColumnSourceSchema(selectNode, dialect, schema)
 
 	expressions, _ := selectNode["expressions"].([]any)
 	columns := make([]SchemaColumn, 0, len(expressions))
@@ -85,6 +86,55 @@ func AnnotateOutputColumns(ctx context.Context, query, dialect string, schema Sc
 		})
 	}
 	return columns, nil
+}
+
+// outputColumnSourceSchema augments declared asset schemas with the fixed
+// output columns of built-in table functions. The SQL editor has the same
+// knowledge for diagnostics and completion; output inference needs it too so a
+// bare table-function column does not become an unknown type.
+func outputColumnSourceSchema(selectNode map[string]any, dialect string, schema Schema) ([]string, Schema) {
+	sourceTables := polyglotSelectSourceTables(selectNode)
+	if !strings.EqualFold(strings.TrimSpace(dialect), "duckdb") {
+		return sourceTables, schema
+	}
+
+	augmented := schema
+	cloned := false
+	appendSource := func(name string, columns map[string]string) {
+		if !cloned {
+			augmented = make(Schema, len(schema)+1)
+			for tableName, tableColumns := range schema {
+				augmented[tableName] = tableColumns
+			}
+			cloned = true
+		}
+		augmented[name] = columns
+		for _, existing := range sourceTables {
+			if strings.EqualFold(existing, name) {
+				return
+			}
+		}
+		sourceTables = append(sourceTables, name)
+	}
+
+	visit := func(key string, value map[string]any) {
+		if key != "function" {
+			return
+		}
+		name := strings.TrimSpace(polyglotIdentifierName(value["name"]))
+		functionColumns, known := sqlcatalog.DuckDBTableFunctionColumns(name)
+		if !known {
+			return
+		}
+		columns := make(map[string]string, len(functionColumns))
+		for _, column := range functionColumns {
+			columns[column.Name] = column.Type
+		}
+		appendSource(strings.ToLower(name), columns)
+	}
+	walkPolyglot(selectNode["from"], visit)
+	walkPolyglot(selectNode["joins"], visit)
+	return sourceTables, augmented
 }
 
 // outputColumnType resolves a projected expression's type: the annotated

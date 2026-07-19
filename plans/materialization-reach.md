@@ -66,16 +66,7 @@ Acceptance cases: a module-level sync or async definition is accepted; a
 comment/string/nested definition is rejected; run-only Python assets do not get
 the diagnostic.
 
-## 4. Loader keyless-append decision
-
-Load/API append without an update key currently maps to Sling snapshot mode.
-Whether its `_sling_loaded_at` bookkeeping column is part of Renart's public
-schema contract is unresolved and tracked in `plans/questions.md`. Keep the
-existing mapping stable until that product decision is made; do not silently
-change stored table schemas as part of the advanced-editor work.
-
 ## Completion
 
 When these items ship, fold the field contracts and coverage UI into the three
-architecture documents above, resolve the loader question, and delete this
-plan.
+architecture documents above and delete this plan.

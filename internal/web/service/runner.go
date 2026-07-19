@@ -84,6 +84,7 @@ type QueryConnectionRequest struct {
 	Query          string
 	Environment    string
 	Output         string
+	LogicalSchema  bool
 }
 
 type FormatAssetRequest struct {

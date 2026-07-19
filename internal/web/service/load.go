@@ -22,7 +22,11 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-const loadAssetType = "load"
+const (
+	loadAssetType            = "load"
+	slingLoadedAtColumn      = "_sling_loaded_at"
+	slingLoadedAtDisabledEnv = "SLING_LOADED_AT_COLUMN=false"
+)
 
 // ingestrURIConnection is the bruin connection capability that yields a standard
 // connection URI (e.g. postgresql://…, s3://…, duckdb://…). The method name comes
@@ -446,6 +450,9 @@ func newStreamingCommand(ctx context.Context, name string, args []string, dir st
 func loadBaseEnv() []string {
 	return []string{
 		"SLING_DISABLE_TELEMETRY=true",
+		// Renart materializations preserve the asset schema; Sling's optional
+		// ingestion timestamp must not become an undeclared output column.
+		slingLoadedAtDisabledEnv,
 		"PYTHONUNBUFFERED=1",
 		// Sling treats every inherited value containing :// as a potential
 		// connection. DEBUGINFOD_URLS is unrelated and otherwise produces a

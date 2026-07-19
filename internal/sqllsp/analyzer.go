@@ -9,6 +9,8 @@ import (
 	"strings"
 
 	polyglot "github.com/tobilg/polyglot/packages/go"
+
+	"renart/internal/sqlcatalog"
 )
 
 // ErrRenameTemplated reports that rename is unavailable because the document
@@ -1917,14 +1919,15 @@ func tableFunctionColumns(name, sql string, end int) ([]ColumnInfo, bool) {
 	if !isTableFunctionCall(sql, end) {
 		return nil, false
 	}
-	switch strings.ToLower(name) {
-	case "range":
-		return []ColumnInfo{{Name: "range", Type: "BIGINT"}}, true
-	case "generate_series":
-		return []ColumnInfo{{Name: "generate_series", Type: "BIGINT"}}, true
-	default:
+	columns, known := sqlcatalog.DuckDBTableFunctionColumns(name)
+	if !known {
 		return nil, true
 	}
+	result := make([]ColumnInfo, 0, len(columns))
+	for _, column := range columns {
+		result = append(result, ColumnInfo{Name: column.Name, Type: column.Type})
+	}
+	return result, true
 }
 
 func isTableFunctionCall(sql string, end int) bool {

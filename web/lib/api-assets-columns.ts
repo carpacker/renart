@@ -4,7 +4,12 @@ import {
   fetchParsedText,
   FillColumnsFromDBResponse,
 } from "@/lib/api-core";
-import type { APIInferResult, ColumnInferencePreview } from "@/lib/generated/api-types";
+import type {
+  APIInferResult,
+  ColumnInferencePreview,
+  ColumnSchemaResolution,
+  ColumnSchemaSyncResult,
+} from "@/lib/generated/api-types";
 import { InferColumnsResponse, WebColumn } from "@/lib/types";
 
 export async function inferAssetColumns(assetId: string) {
@@ -24,6 +29,34 @@ export async function previewAssetColumns(assetId: string, source: string, envir
     `/api/assets/${assetId}/columns/preview`,
     "POST",
     { source, environment },
+  );
+}
+
+export async function syncAssetColumns(
+  assetId: string,
+  additionalSources: string[],
+  environment?: string,
+) {
+  return fetchJSONWithBody<ColumnSchemaSyncResult>(`/api/assets/${assetId}/columns/sync`, "POST", {
+    additional_sources: additionalSources,
+    environment,
+  });
+}
+
+export async function applyAssetColumnSchemaResolution(
+  assetId: string,
+  sync: Pick<ColumnSchemaSyncResult, "managed_columns" | "candidate_columns" | "columns">,
+  resolutions: ColumnSchemaResolution[],
+) {
+  return fetchJSONWithBody<{ status: string; columns: WebColumn[] }>(
+    `/api/assets/${assetId}/columns/sync/apply`,
+    "POST",
+    {
+      managed_columns: sync.managed_columns,
+      candidate_columns: sync.candidate_columns,
+      current_columns: sync.columns ?? [],
+      resolutions,
+    },
   );
 }
 

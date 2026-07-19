@@ -18,6 +18,8 @@ type AssetColumnsHandlers interface {
 	ReconcileAssetColumns(ctx context.Context, assetID string, inferred []WorkspaceColumn) (ColumnReconcileResult, *APIError)
 	RefreshAssetColumnsFromDefinition(ctx context.Context, assetID string) (ColumnReconcileResult, *APIError)
 	PreviewAssetColumns(ctx context.Context, assetID string, sourceID string, environment string) (service.ColumnInferencePreview, *APIError)
+	SyncAssetColumns(ctx context.Context, assetID string, additionalSourceIDs []string, environment string) (ColumnSchemaSyncResult, *APIError)
+	ApplyAssetColumnSchemaResolution(ctx context.Context, assetID string, managedColumns []WorkspaceColumn, candidateColumns []WorkspaceColumn, expectedCurrent []WorkspaceColumn, resolutions []ColumnSchemaResolution) (ColumnReconcileResult, *APIError)
 }
 
 type AssetColumnsAPI struct {
@@ -39,6 +41,18 @@ type PreviewAssetColumnsRequest struct {
 	Environment string `json:"environment,omitempty"`
 }
 
+type SyncAssetColumnsRequest struct {
+	AdditionalSources []string `json:"additional_sources,omitempty"`
+	Environment       string   `json:"environment,omitempty"`
+}
+
+type ApplyAssetColumnSchemaResolutionRequest struct {
+	ManagedColumns   []WorkspaceColumn        `json:"managed_columns"`
+	CandidateColumns []WorkspaceColumn        `json:"candidate_columns"`
+	CurrentColumns   []WorkspaceColumn        `json:"current_columns"`
+	Resolutions      []ColumnSchemaResolution `json:"resolutions"`
+}
+
 func RegisterAssetColumnRoutes(router chi.Router, handlers *AssetColumnsAPI) {
 	router.Post("/api/assets/{assetID}/fill-columns-from-db", handlers.HandleFillColumnsFromDB)
 	router.Get("/api/assets/{assetID}/columns/infer", handlers.HandleInferAssetColumns)
@@ -47,6 +61,52 @@ func RegisterAssetColumnRoutes(router chi.Router, handlers *AssetColumnsAPI) {
 	router.Post("/api/assets/{assetID}/columns/reconcile", handlers.HandleReconcileAssetColumns)
 	router.Post("/api/assets/{assetID}/columns/refresh-from-definition", handlers.HandleRefreshAssetColumnsFromDefinition)
 	router.Post("/api/assets/{assetID}/columns/preview", handlers.HandlePreviewAssetColumns)
+	router.Post("/api/assets/{assetID}/columns/sync", handlers.HandleSyncAssetColumns)
+	router.Post("/api/assets/{assetID}/columns/sync/apply", handlers.HandleApplyAssetColumnSchemaResolution)
+}
+
+func (h *AssetColumnsAPI) HandleSyncAssetColumns(w http.ResponseWriter, r *http.Request) {
+	var req SyncAssetColumnsRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		webapi.WriteBadRequest(w, "invalid_request_body", err.Error())
+		return
+	}
+	result, apiErr := h.Service.SyncAssetColumns(
+		r.Context(),
+		chi.URLParam(r, "assetID"),
+		req.AdditionalSources,
+		req.Environment,
+	)
+	if apiErr != nil {
+		writeAPIError(w, apiErr)
+		return
+	}
+	webapi.WriteJSON(w, http.StatusOK, result)
+}
+
+func (h *AssetColumnsAPI) HandleApplyAssetColumnSchemaResolution(w http.ResponseWriter, r *http.Request) {
+	var req ApplyAssetColumnSchemaResolutionRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		webapi.WriteBadRequest(w, "invalid_request_body", err.Error())
+		return
+	}
+	result, apiErr := h.Service.ApplyAssetColumnSchemaResolution(
+		r.Context(),
+		chi.URLParam(r, "assetID"),
+		req.ManagedColumns,
+		req.CandidateColumns,
+		req.CurrentColumns,
+		req.Resolutions,
+	)
+	if apiErr != nil {
+		writeAPIError(w, apiErr)
+		return
+	}
+	webapi.WriteJSON(w, http.StatusOK, map[string]any{
+		"status":          "ok",
+		"columns":         result.Columns,
+		"reconcile_items": result.ReconcileItems,
+	})
 }
 
 func (h *AssetColumnsAPI) HandlePreviewAssetColumns(w http.ResponseWriter, r *http.Request) {

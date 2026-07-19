@@ -95,7 +95,12 @@ not underscore-flattened route hacks.
   names, groups, paths, types, and connections. The toolbar groups persistent
   Definition and Data state under one **Readiness** control, keeps Deploy as a
   separate secondary action, and makes **Review run** the primary pipeline
-  action. The review sheet defaults to the entire pipeline and names the exact
+  action. Readiness is a summary rather than a wizard or prerequisite chain:
+  deploying reviewed source does not imply that data is current, and building
+  needed data does not move a deployment or schedule pin. Its **Build needed**
+  shortcut keeps the fast inline path, while **Review run** can select the same
+  Needed work when a full checks/render review is desired. The review sheet
+  defaults to the entire pipeline and names the exact
   saved working tree or immutable deployment, environment, UTC interval,
   refresh/sensor mode, asset and execution-unit counts, checks, blockers,
   warnings, and source/configuration/variable identities. Summary, Assets, and
@@ -166,7 +171,13 @@ not underscore-flattened route hacks.
   and text share one auto-detection/override utility with creation.
   Generic identity and dependency metadata remains in the inspector, along with
   columns and checks for relation-producing assets; sensors omit columns and
-  checks because they do not materialize a relation.
+  checks because they do not materialize a relation. The Columns card's single
+  **Sync schema** action automatically uses the asset definition and places
+  backend-advertised observed sources beside it as optional checkboxes (for
+  example **Live request** and **Current table**). Safe additions and type fills
+  finish inline. Conflicts open a wide, scrollable shadcn dialog whose table
+  compares each source, saved metadata, and the chosen result without replacing
+  the inspector with asset-kind-specific controls.
 - The Build view's New asset dialog uses the workspace's backend-provided
   `asset_capabilities` contract for seed and sensor authoring
   ([semantic-asset-create-fields.tsx](../web/components/app/semantic-asset-create-fields.tsx)).

@@ -31,6 +31,8 @@ type (
 	WorkspaceColumnCheck   = webmodel.ColumnCheck
 	WorkspaceColumn        = webmodel.Column
 	ColumnInferencePreview = webmodel.ColumnInferencePreview
+	ColumnSchemaSyncResult = webmodel.ColumnSchemaSyncResult
+	ColumnSchemaResolution = webmodel.ColumnSchemaResolution
 	WorkspacePipeline      = webmodel.Pipeline
 	WorkspaceNotebook      = webmodel.Notebook
 	WorkspaceState         = webmodel.WorkspaceState

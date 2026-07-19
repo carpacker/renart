@@ -25,6 +25,18 @@ type ColumnReconcileResult struct {
 // inference but still carry user metadata are flagged rather than destroyed.
 // The reconciled columns and provenance are persisted to the asset file.
 func (s *AssetService) ReconcileAssetColumns(ctx context.Context, assetID string, inferred []WorkspaceColumn) (ColumnReconcileResult, *APIError) {
+	return s.reconcileAssetColumns(ctx, assetID, func(_ *pipeline.Asset, _ *assetmeta.RenartMeta) ([]pipeline.Column, *APIError) {
+		return ModelColumnsToPipelineColumns(inferred), nil
+	})
+}
+
+type columnReconcileBuilder func(*pipeline.Asset, *assetmeta.RenartMeta) ([]pipeline.Column, *APIError)
+
+func (s *AssetService) reconcileAssetColumns(
+	ctx context.Context,
+	assetID string,
+	buildInferred columnReconcileBuilder,
+) (ColumnReconcileResult, *APIError) {
 	relAssetPath, err := DecodeID(assetID)
 	if err != nil {
 		return ColumnReconcileResult{}, badRequestError("invalid_asset_id", "invalid asset id")
@@ -42,11 +54,16 @@ func (s *AssetService) ReconcileAssetColumns(ctx context.Context, assetID string
 	if err != nil {
 		return ColumnReconcileResult{}, badRequestError("asset_resolve_failed", err.Error())
 	}
+	meta := assetmeta.Parse(asset.Meta)
+	inferred, apiErr := buildInferred(asset, &meta)
+	if apiErr != nil {
+		return ColumnReconcileResult{}, apiErr
+	}
 
 	final, items, next := assetmeta.ReconcileColumns(assetmeta.ColumnReconcileInput{
-		Inferred: ModelColumnsToPipelineColumns(inferred),
+		Inferred: inferred,
 		Current:  asset.Columns,
-		Prev:     assetmeta.Parse(asset.Meta),
+		Prev:     meta,
 	})
 	asset.Columns = final
 	asset.Meta = pipeline.EmptyStringMap(next.Apply(asset.Meta))

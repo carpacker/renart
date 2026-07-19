@@ -17,7 +17,7 @@ func BuildInferAssetColumnsQuery(parsedPipeline *pipeline.Pipeline, asset *pipel
 		return QueryConnectionRequest{}, fmt.Errorf("asset context is required")
 	}
 
-	connectionName, err := parsedPipeline.GetConnectionNameForAsset(asset)
+	connectionName, err := targetConnectionNameForAsset(asset, parsedPipeline)
 	if err != nil {
 		return QueryConnectionRequest{}, fmt.Errorf("failed to resolve asset connection: %w", err)
 	}
@@ -33,6 +33,7 @@ func BuildInferAssetColumnsQuery(parsedPipeline *pipeline.Pipeline, asset *pipel
 		Query:          query,
 		Environment:    environment,
 		Output:         "json",
+		LogicalSchema:  true,
 	}, nil
 }
 

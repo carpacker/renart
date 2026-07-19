@@ -29,6 +29,7 @@ export type ColumnInferenceSource = {
   label: string;
   description: string;
   category: string;
+  may_omit_columns?: boolean;
 };
 
 export type ColumnSchemaDriftItem = {
@@ -53,6 +54,41 @@ export type ColumnInferencePreview = {
   drift: ColumnSchemaDrift;
   notes?: string[];
   sample_records?: number;
+};
+
+export type ColumnSchemaSourceSnapshot = {
+  source: ColumnInferenceSource;
+  columns: WebColumn[];
+  notes?: string[];
+  sample_records?: number;
+};
+
+export type ColumnSchemaMergeRow = {
+  column: string;
+  current_present: boolean;
+  current_type?: string;
+  proposed_present: boolean;
+  proposed_type?: string;
+  kind: string;
+  detail: string;
+  conflict: boolean;
+};
+
+export type ColumnSchemaSyncResult = {
+  status: string;
+  sources: ColumnSchemaSourceSnapshot[];
+  rows: ColumnSchemaMergeRow[];
+  managed_columns: WebColumn[];
+  candidate_columns: WebColumn[];
+  columns?: WebColumn[];
+  notes?: string[];
+};
+
+export type ColumnSchemaResolution = {
+  column: string;
+  action: string;
+  source?: string;
+  type?: string;
 };
 
 export type WebColumnCheck = {

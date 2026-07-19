@@ -7,7 +7,6 @@ import {
   Ban,
   Check,
   ChevronsUpDown,
-  Database,
   KeyRound,
   Plus,
   RefreshCw,
@@ -20,7 +19,7 @@ import { workspaceAtom } from "@/lib/atoms/domains/workspace";
 import { selectedEnvironmentAtom } from "@/lib/atoms/workspace";
 
 import { Button } from "@/components/ui/button";
-import { Badge } from "@/components/ui/badge";
+import { Checkbox } from "@/components/ui/checkbox";
 import {
   Command,
   CommandEmpty,
@@ -42,16 +41,13 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import {
-  AssetReconcileItem,
-  applyAssetTransaction,
-  reconcileAssetColumns,
-} from "@/lib/api-asset-transactions";
+import { applyAssetTransaction } from "@/lib/api-asset-transactions";
 import { updateAsset, updateAssetColumns } from "@/lib/api-assets";
-import { previewAssetColumns } from "@/lib/api-assets-columns";
+import { applyAssetColumnSchemaResolution, syncAssetColumns } from "@/lib/api-assets-columns";
 import type {
-  ColumnInferencePreview,
   ColumnInferenceSource,
+  ColumnSchemaResolution,
+  ColumnSchemaSyncResult,
   MaterializationCapability,
 } from "@/lib/generated/api-types";
 import { classifyDependencies, columnStatus, parseAssetProvenance } from "@/lib/asset-provenance";
@@ -73,6 +69,7 @@ import { LOCAL_LOAD_CONNECTION, loadConnectionsForEnvironment } from "@/lib/load
 import { cn } from "@/lib/utils";
 import { WebAsset, WebColumn } from "@/lib/types";
 import { MultiValueInput } from "./multi-value-input";
+import { SchemaSyncDialog } from "./schema-sync-dialog";
 
 /**
  * Guided metadata cards for the app asset editor (§13–14 of the asset
@@ -113,7 +110,7 @@ function GuidedCard({
 }) {
   return (
     <section className="flex flex-col gap-2.5 py-4">
-      <div className="flex min-h-5 items-center justify-between gap-2">
+      <div className="flex min-h-5 flex-wrap items-center justify-between gap-2">
         <h3 className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
           {title}
         </h3>
@@ -857,9 +854,10 @@ function fallbackColumnInferenceSources(asset: WebAsset): ColumnInferenceSource[
     return [
       {
         id: "live_response",
-        label: "Live response",
+        label: "Live request",
         category: "observed",
         description: "A sampled API response using the asset's current request settings.",
+        may_omit_columns: true,
       },
     ];
   }
@@ -898,51 +896,78 @@ function ColumnsCard({ asset }: { asset: WebAsset }) {
     isSqlAssetType(asset.type) && asset.materialization_strategy?.toLowerCase() === "merge";
   const provenance = useMemo(() => parseAssetProvenance(asset.meta), [asset.meta]);
   const columns = asset.columns ?? [];
+  const definitionSources = useMemo(
+    () => sources.filter((source) => source.category === "definition"),
+    [sources],
+  );
+  const advisorySources = useMemo(
+    () => sources.filter((source) => source.category === "observed"),
+    [sources],
+  );
   // Columns the user has ignored (renart_col_drop) that aren't currently present.
   const ignored = useMemo(() => {
     const present = new Set(columns.map((column) => column.name.toLowerCase()));
     return [...provenance.colDrop].filter((name) => !present.has(name)).sort();
   }, [provenance, columns]);
-  const [reconcileItems, setReconcileItems] = useState<AssetReconcileItem[]>([]);
-  const [syncOpen, setSyncOpen] = useState(false);
-  const [selectedSource, setSelectedSource] = useState(sources[0]?.id ?? "");
-  const [preview, setPreview] = useState<ColumnInferencePreview | null>(null);
-  const [previewing, setPreviewing] = useState(false);
+  const [selectedAdvisorySources, setSelectedAdvisorySources] = useState<string[]>([]);
+  const [syncResult, setSyncResult] = useState<ColumnSchemaSyncResult | null>(null);
+  const [resolverOpen, setResolverOpen] = useState(false);
+  const [syncing, setSyncing] = useState(false);
   const [applying, setApplying] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
 
   useEffect(() => {
-    if (!sources.some((source) => source.id === selectedSource)) {
-      setSelectedSource(sources[0]?.id ?? "");
-    }
-    setPreview(null);
-    setError(null);
-  }, [asset.id, selectedSource, sources]);
+    const available = new Set(advisorySources.map((source) => source.id));
+    setSelectedAdvisorySources((selected) => selected.filter((source) => available.has(source)));
+  }, [advisorySources]);
 
-  const runPreview = async () => {
-    if (!selectedSource) return;
-    setPreviewing(true);
+  useEffect(() => {
+    setSelectedAdvisorySources([]);
+    setSyncResult(null);
+    setResolverOpen(false);
     setError(null);
+    setNotice(null);
+  }, [asset.id]);
+
+  const runSync = async () => {
+    if (definitionSources.length === 0 && selectedAdvisorySources.length === 0) return;
+    setSyncing(true);
+    setError(null);
+    setNotice(null);
     try {
-      setPreview(await previewAssetColumns(asset.id, selectedSource, environment));
+      const result = await syncAssetColumns(asset.id, selectedAdvisorySources, environment);
+      if (result.status === "conflicts") {
+        setSyncResult(result);
+        setResolverOpen(true);
+      } else {
+        setSyncResult(null);
+        setResolverOpen(false);
+        const baseNotice =
+          result.status === "applied"
+            ? "Schema synced. Safe changes were applied automatically."
+            : "Schema is already in sync.";
+        const sourceNotes = result.sources.flatMap((source) => source.notes ?? []);
+        setNotice([baseNotice, ...(result.notes ?? []), ...sourceNotes].join(" "));
+      }
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Failed to preview schema");
+      setError(e instanceof Error ? e.message : "Failed to sync schema");
     } finally {
-      setPreviewing(false);
+      setSyncing(false);
     }
   };
 
-  const applyPreview = async () => {
-    if (!preview) return;
+  const applyResolution = async (resolutions: ColumnSchemaResolution[]) => {
+    if (!syncResult) return;
     setApplying(true);
     setError(null);
     try {
-      const result = await reconcileAssetColumns(asset.id, preview.columns);
-      setReconcileItems(result.reconcile_items ?? []);
-      setPreview(null);
-      setSyncOpen(false);
+      await applyAssetColumnSchemaResolution(asset.id, syncResult, resolutions);
+      setSyncResult(null);
+      setResolverOpen(false);
+      setNotice("Schema resolution applied.");
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Failed to apply schema");
+      setError(e instanceof Error ? e.message : "Failed to apply schema resolution");
     } finally {
       setApplying(false);
     }
@@ -961,19 +986,6 @@ function ColumnsCard({ asset }: { asset: WebAsset }) {
       type: "column.inferred.drop",
       column,
     });
-    setReconcileItems((items) =>
-      items.filter((i) => i.column.toLowerCase() !== column.toLowerCase()),
-    );
-  };
-
-  const keepAsManual = (column: string, def: WebColumn) => {
-    void applyAssetTransaction(asset.id, {
-      type: "column.manual.add",
-      column_def: def,
-    });
-    setReconcileItems((items) =>
-      items.filter((i) => i.column.toLowerCase() !== column.toLowerCase()),
-    );
   };
 
   const commitType = (column: WebColumn, nextType: string) => {
@@ -1022,102 +1034,75 @@ function ColumnsCard({ asset }: { asset: WebAsset }) {
     <GuidedCard
       title="Columns"
       action={
-        <Button
-          variant="outline"
-          size="xs"
-          aria-expanded={syncOpen}
-          onClick={() => setSyncOpen((open) => !open)}
-          title="Preview a schema source and consolidate it into the saved metadata"
-        >
-          <RefreshCw data-icon="inline-start" />
-          Sync schema
-        </Button>
-      }
-    >
-      {error ? <p className="text-[11px] text-destructive">{error}</p> : null}
-      {syncOpen ? (
-        <div className="space-y-2.5 rounded-md border bg-muted/20 p-2.5 text-[11px]">
-          <Field className="gap-1.5">
-            <FieldLabel className="text-[11px]">Infer from</FieldLabel>
-            <Select
-              value={selectedSource}
-              onValueChange={(value) => {
-                setSelectedSource(value);
-                setPreview(null);
-                setError(null);
-              }}
-            >
-              <SelectTrigger size="sm" className="w-full">
-                <SelectValue placeholder="Choose a schema source" />
-              </SelectTrigger>
-              <SelectContent>
-                {sources.map((source) => (
-                  <SelectItem key={source.id} value={source.id}>
-                    {source.label}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </Field>
-
-          {sources.find((source) => source.id === selectedSource)?.description ? (
-            <p className="text-muted-foreground">
-              {sources.find((source) => source.id === selectedSource)?.description}
-            </p>
-          ) : null}
-
+        <div className="flex min-w-0 flex-wrap items-center justify-end gap-x-2 gap-y-1.5">
+          {advisorySources.map((source) => {
+            const id = `${asset.id}-schema-source-${source.id}`;
+            const checked = selectedAdvisorySources.includes(source.id);
+            return (
+              <Field
+                key={source.id}
+                orientation="horizontal"
+                className="w-auto gap-1.5 *:data-[slot=field-label]:flex-none"
+                title={source.description}
+              >
+                <Checkbox
+                  id={id}
+                  checked={checked}
+                  disabled={syncing || applying}
+                  onCheckedChange={(nextChecked) =>
+                    setSelectedAdvisorySources((selected) =>
+                      nextChecked === true
+                        ? [...new Set([...selected, source.id])]
+                        : selected.filter((sourceID) => sourceID !== source.id),
+                    )
+                  }
+                />
+                <FieldLabel htmlFor={id} className="cursor-pointer text-[11px] font-normal">
+                  {source.label}
+                </FieldLabel>
+              </Field>
+            );
+          })}
           <Button
             variant="outline"
             size="xs"
-            disabled={!selectedSource || previewing}
-            onClick={() => void runPreview()}
+            disabled={
+              syncing ||
+              applying ||
+              (definitionSources.length === 0 && selectedAdvisorySources.length === 0)
+            }
+            onClick={() => void runSync()}
+            title="Infer the asset schema and apply safe changes"
           >
-            {previewing ? (
+            {syncing ? (
               <Spinner data-icon="inline-start" />
             ) : (
-              <Database data-icon="inline-start" />
+              <RefreshCw data-icon="inline-start" />
             )}
-            Preview schema
+            Sync schema
           </Button>
-
-          {preview ? (
-            <SchemaInferencePreview
-              preview={preview}
-              applying={applying}
-              onApply={() => void applyPreview()}
-            />
-          ) : null}
         </div>
+      }
+    >
+      {error && !resolverOpen ? <p className="text-[11px] text-destructive">{error}</p> : null}
+      {notice ? (
+        <p role="status" className="text-[11px] text-muted-foreground">
+          {notice}
+        </p>
       ) : null}
 
-      {reconcileItems.map((item) => {
-        const def = columns.find((c) => c.name.toLowerCase() === item.column.toLowerCase());
-        return (
-          <div
-            key={item.column}
-            className="rounded-md border border-amber-300 bg-amber-50 p-2 text-[11px] dark:border-amber-500/40 dark:bg-amber-950/30"
-          >
-            <div className="font-monaco font-medium text-amber-900 dark:text-amber-200">
-              {item.column}
-            </div>
-            <div className="mb-1.5 text-amber-700 dark:text-amber-300">{item.detail}</div>
-            <div className="flex gap-1.5">
-              {def ? (
-                <Button variant="outline" size="xs" onClick={() => keepAsManual(item.column, def)}>
-                  Keep
-                </Button>
-              ) : null}
-              <Button variant="outline" size="xs" onClick={() => dropColumn(item.column)}>
-                Remove
-              </Button>
-            </div>
-          </div>
-        );
-      })}
+      <SchemaSyncDialog
+        open={resolverOpen}
+        result={syncResult}
+        applying={applying}
+        error={resolverOpen ? error : null}
+        onOpenChange={setResolverOpen}
+        onApply={(resolutions) => void applyResolution(resolutions)}
+      />
 
       {columns.length === 0 ? (
         <p className="text-[11px] text-muted-foreground">
-          No columns. Sync schema to preview a source before adding it to the metadata.
+          No columns. Sync schema to infer them from the asset definition.
         </p>
       ) : (
         <div className="divide-y rounded-md border">
@@ -1158,97 +1143,6 @@ function ColumnsCard({ asset }: { asset: WebAsset }) {
         </DepSection>
       ) : null}
     </GuidedCard>
-  );
-}
-
-function SchemaInferencePreview({
-  preview,
-  applying,
-  onApply,
-}: {
-  preview: ColumnInferencePreview;
-  applying: boolean;
-  onApply: () => void;
-}) {
-  const changeCount = preview.drift.added + preview.drift.removed + preview.drift.type_changed;
-  return (
-    <div className="space-y-2 border-t pt-2.5">
-      <div className="flex flex-wrap items-center gap-1.5">
-        <span className="font-medium">
-          {preview.columns.length} column{preview.columns.length === 1 ? "" : "s"}
-        </span>
-        {changeCount === 0 ? (
-          <Badge variant="muted" size="xs">
-            Matches saved metadata
-          </Badge>
-        ) : (
-          <>
-            {preview.drift.added > 0 ? (
-              <Badge variant="secondary" size="xs">
-                +{preview.drift.added} added
-              </Badge>
-            ) : null}
-            {preview.drift.type_changed > 0 ? (
-              <Badge variant="outline" size="xs">
-                {preview.drift.type_changed} type changed
-              </Badge>
-            ) : null}
-            {preview.drift.removed > 0 ? (
-              <Badge variant="outline" size="xs">
-                {preview.drift.removed} missing
-              </Badge>
-            ) : null}
-          </>
-        )}
-      </div>
-
-      {preview.sample_records !== undefined ? (
-        <p className="text-muted-foreground">
-          Sampled {preview.sample_records} record{preview.sample_records === 1 ? "" : "s"}.
-        </p>
-      ) : null}
-      {preview.notes?.map((note) => (
-        <p key={note} className="text-destructive">
-          {note}
-        </p>
-      ))}
-
-      {preview.drift.items.length > 0 ? (
-        <div className="max-h-40 divide-y overflow-y-auto rounded-md border bg-background">
-          {preview.drift.items.map((item) => (
-            <div
-              key={`${item.kind}:${item.column}`}
-              className="flex min-w-0 items-center gap-2 px-2 py-1.5"
-            >
-              <span className="min-w-0 flex-1 truncate font-monaco">{item.column}</span>
-              <span className="shrink-0 text-[10px] text-muted-foreground">
-                {item.kind === "added"
-                  ? `new · ${item.inferred_type || "unknown"}`
-                  : item.kind === "removed"
-                    ? `${item.current_type || "unknown"} · missing`
-                    : `${item.current_type || "unknown"} → ${item.inferred_type || "unknown"}`}
-              </span>
-            </div>
-          ))}
-        </div>
-      ) : null}
-
-      <div className="flex items-center justify-between gap-2">
-        <p className="text-muted-foreground">
-          Applying preserves descriptions, checks, and owned types where possible.
-        </p>
-        <Button
-          variant="default"
-          size="xs"
-          className="shrink-0"
-          disabled={applying || preview.columns.length === 0}
-          onClick={onApply}
-        >
-          {applying ? <Spinner data-icon="inline-start" /> : null}
-          Apply to metadata
-        </Button>
-      </div>
-    </div>
   );
 }
 

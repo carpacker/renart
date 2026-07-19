@@ -31,8 +31,9 @@ func columnInferenceSourcesForAsset(asset *pipeline.Asset, connectionName string
 				Description: "Declared response fields or the selected OpenAPI response schema.",
 			},
 			webmodel.ColumnInferenceSource{
-				ID: columnSourceLiveResponse, Label: "Live response", Category: "observed",
-				Description: "A sampled API response using the asset's current request settings.",
+				ID: columnSourceLiveResponse, Label: "Live request", Category: "observed",
+				Description:    "A sampled API response using the asset's current request settings.",
+				MayOmitColumns: true,
 			},
 		)
 	case isLoadAsset(asset):
@@ -65,6 +66,14 @@ func columnInferenceSourcesForAsset(asset *pipeline.Asset, connectionName string
 	return sources
 }
 
+func columnInferenceSourcesForPipelineAsset(asset *pipeline.Asset, parsedPipeline *pipeline.Pipeline) []webmodel.ColumnInferenceSource {
+	connectionName := ""
+	if parsedPipeline != nil {
+		connectionName, _ = targetConnectionNameForAsset(asset, parsedPipeline)
+	}
+	return columnInferenceSourcesForAsset(asset, connectionName)
+}
+
 // PreviewAssetColumns observes one advertised schema source without mutating
 // the asset, then compares it with the saved metadata.
 func (s *AssetService) PreviewAssetColumns(
@@ -78,11 +87,7 @@ func (s *AssetService) PreviewAssetColumns(
 		return webmodel.ColumnInferencePreview{}, badRequestError("asset_resolve_failed", err.Error())
 	}
 
-	connectionName := ""
-	if parsedPipeline != nil {
-		connectionName, _ = parsedPipeline.GetConnectionNameForAsset(asset)
-	}
-	sources := columnInferenceSourcesForAsset(asset, connectionName)
+	sources := columnInferenceSourcesForPipelineAsset(asset, parsedPipeline)
 	var source *webmodel.ColumnInferenceSource
 	for index := range sources {
 		if sources[index].ID == strings.TrimSpace(sourceID) {
@@ -94,6 +99,36 @@ func (s *AssetService) PreviewAssetColumns(
 		return webmodel.ColumnInferencePreview{}, badRequestError("unsupported_column_source", "this schema source is not available for the asset")
 	}
 
+	columns, notes, sampleRecords, apiErr := s.observeAssetColumnSource(
+		ctx,
+		assetID,
+		parsedPipeline,
+		asset,
+		*source,
+		environment,
+	)
+	if apiErr != nil {
+		return webmodel.ColumnInferencePreview{}, apiErr
+	}
+
+	return webmodel.ColumnInferencePreview{
+		Status:        "ok",
+		Source:        *source,
+		Columns:       columns,
+		Drift:         compareColumnSchemas(asset.Columns, columns),
+		Notes:         notes,
+		SampleRecords: sampleRecords,
+	}, nil
+}
+
+func (s *AssetService) observeAssetColumnSource(
+	ctx context.Context,
+	assetID string,
+	parsedPipeline *pipeline.Pipeline,
+	asset *pipeline.Asset,
+	source webmodel.ColumnInferenceSource,
+	environment string,
+) ([]WorkspaceColumn, []string, *int, *APIError) {
 	var (
 		columns       []WorkspaceColumn
 		notes         []string
@@ -118,21 +153,33 @@ func (s *AssetService) PreviewAssetColumns(
 		}
 	case columnSourceMaterialized:
 		columns, _, apiErr = s.inferMaterializedAssetColumns(ctx, parsedPipeline, asset, environment)
+		if apiErr == nil && (isAPIAsset(asset) || isLoadAsset(asset)) {
+			var removed bool
+			columns, removed = withoutSlingLoadedAtColumn(columns)
+			if removed {
+				notes = append(notes, "Ignoring legacy Sling metadata column _sling_loaded_at; Renart materializations no longer include it.")
+			}
+		}
 	default:
 		apiErr = badRequestError("unsupported_column_source", fmt.Sprintf("unknown schema source %q", source.ID))
 	}
-	if apiErr != nil {
-		return webmodel.ColumnInferencePreview{}, apiErr
-	}
+	return columns, notes, sampleRecords, apiErr
+}
 
-	return webmodel.ColumnInferencePreview{
-		Status:        "ok",
-		Source:        *source,
-		Columns:       columns,
-		Drift:         compareColumnSchemas(asset.Columns, columns),
-		Notes:         notes,
-		SampleRecords: sampleRecords,
-	}, nil
+func withoutSlingLoadedAtColumn(columns []WorkspaceColumn) ([]WorkspaceColumn, bool) {
+	filtered := make([]WorkspaceColumn, 0, len(columns))
+	removed := false
+	for _, column := range columns {
+		if strings.EqualFold(strings.TrimSpace(column.Name), slingLoadedAtColumn) {
+			removed = true
+			continue
+		}
+		filtered = append(filtered, column)
+	}
+	if !removed {
+		return columns, false
+	}
+	return filtered, true
 }
 
 func compareColumnSchemas(current []pipeline.Column, inferred []WorkspaceColumn) webmodel.ColumnSchemaDrift {

@@ -37,10 +37,11 @@ type AssetAuthoringCapability struct {
 // The backend owns these capabilities so adding a new asset kind does not
 // require another frontend inference-mode switch.
 type ColumnInferenceSource struct {
-	ID          string `json:"id"`
-	Label       string `json:"label"`
-	Description string `json:"description"`
-	Category    string `json:"category"`
+	ID             string `json:"id"`
+	Label          string `json:"label"`
+	Description    string `json:"description"`
+	Category       string `json:"category"`
+	MayOmitColumns bool   `json:"may_omit_columns,omitempty"`
 }
 
 // ColumnSchemaDriftItem is one difference between saved column metadata and an
@@ -71,6 +72,50 @@ type ColumnInferencePreview struct {
 	Drift         ColumnSchemaDrift     `json:"drift"`
 	Notes         []string              `json:"notes,omitempty"`
 	SampleRecords *int                  `json:"sample_records,omitempty"`
+}
+
+// ColumnSchemaSourceSnapshot is one source observation used by a schema sync.
+// Definition sources are primary; selected observed sources remain advisory.
+type ColumnSchemaSourceSnapshot struct {
+	Source        ColumnInferenceSource `json:"source"`
+	Columns       []Column              `json:"columns"`
+	Notes         []string              `json:"notes,omitempty"`
+	SampleRecords *int                  `json:"sample_records,omitempty"`
+}
+
+// ColumnSchemaMergeRow describes how one column compares across the inferred
+// sources and the asset's currently saved metadata.
+type ColumnSchemaMergeRow struct {
+	Column          string `json:"column"`
+	CurrentPresent  bool   `json:"current_present"`
+	CurrentType     string `json:"current_type,omitempty"`
+	ProposedPresent bool   `json:"proposed_present"`
+	ProposedType    string `json:"proposed_type,omitempty"`
+	Kind            string `json:"kind"`
+	Detail          string `json:"detail"`
+	Conflict        bool   `json:"conflict"`
+}
+
+// ColumnSchemaSyncResult is returned by the one-click schema sync. Safe
+// additions and unknown-to-known type refinements are applied immediately;
+// conflicts return the source snapshots and merge rows without writing.
+type ColumnSchemaSyncResult struct {
+	Status           string                       `json:"status"`
+	Sources          []ColumnSchemaSourceSnapshot `json:"sources"`
+	Rows             []ColumnSchemaMergeRow       `json:"rows"`
+	ManagedColumns   []Column                     `json:"managed_columns"`
+	CandidateColumns []Column                     `json:"candidate_columns"`
+	Columns          []Column                     `json:"columns,omitempty"`
+	Notes            []string                     `json:"notes,omitempty"`
+}
+
+// ColumnSchemaResolution is one explicit merge choice. Source is either a
+// source capability ID or "current"; Action is "use" or "remove".
+type ColumnSchemaResolution struct {
+	Column string `json:"column"`
+	Action string `json:"action"`
+	Source string `json:"source,omitempty"`
+	Type   string `json:"type,omitempty"`
 }
 
 // Asset represents a web API asset with its metadata. ContentRevision identifies

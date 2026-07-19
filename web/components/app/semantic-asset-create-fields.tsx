@@ -385,7 +385,6 @@ export function SemanticAssetCreateFields({
                 <Textarea
                   id="new-seed-clipboard"
                   className="min-h-28 resize-y font-mono text-xs"
-                  placeholder="Paste CSV, TSV, JSON, JSON Lines, or plain text…"
                   value={value.seedClipboardText}
                   onChange={(event) => {
                     setClipboardError("");

@@ -34,7 +34,11 @@ and invokes Sling for the warehouse write. For a local DuckDB target, Renart
 acquires the canonical database lease only after extraction and holds it until
 Sling exits, so other pipelines wait instead of racing DuckDB's process-level
 writer lock. JSONL preserves source nulls and nested JSON values without CSV
-coercion. Per-page response bodies are capped at
+coercion. Sling maps nested values to the target's native JSON type when that
+warehouse supports one; for example, DuckDB relations retain logical `JSON`
+columns. Renart disables Sling's optional `_sling_loaded_at` bookkeeping column
+so the materialized relation keeps the asset's declared output schema. Per-page
+response bodies are capped at
 25 MiB. GET requests retry `429` and `5xx` responses up to three attempts and
 honour a capped `Retry-After`; mutating methods are not retried automatically.
 
