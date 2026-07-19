@@ -523,10 +523,11 @@ func (e *HybridBruinExecutor) runAPIAsset(ctx context.Context, pl *pipeline.Pipe
 	if targetObject == "" {
 		return nil, errors.New("api asset target object could not be inferred from asset name")
 	}
-	targetConn, err := loadConnectionURI(manager, connectionName)
+	targetConn, connectionWarning, err := loadConnectionURIWithWarning(manager, connectionName)
 	if err != nil {
 		return nil, err
 	}
+	writeSlingConnectionWarning(writer, connectionWarning)
 
 	cmdDir := e.workspaceRoot
 	if pipelineRoot, err := findPipelineRootForAsset(specPath); err == nil {

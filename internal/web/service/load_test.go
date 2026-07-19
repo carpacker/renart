@@ -73,6 +73,43 @@ func TestLoadConnectionURIUsesSlingClickHouseProperties(t *testing.T) {
 	assert.Equal(t, "clickhouse://renart:p%40ssword@clickhouse.internal:9000/analytics?secure=true", uri)
 }
 
+func TestLoadConnectionURIUsesSupportedPostgresSSLModeForSling(t *testing.T) {
+	t.Parallel()
+
+	manager := loadConnectionManagerWithDetails{
+		connection:     "postgresql://renart:s3cret@postgres.internal:5432/analytics?sslmode=allow&application_name=renart",
+		connectionType: "postgres",
+	}
+
+	uri, warning, err := loadConnectionURIWithWarning(manager, "postgres-default")
+	require.NoError(t, err)
+	assert.Equal(t, "postgresql://renart:s3cret@postgres.internal:5432/analytics?application_name=renart&sslmode=verify-ca", uri)
+	assert.Contains(t, warning, "Sling does not support PostgreSQL sslmode \"allow\"")
+	assert.Contains(t, warning, "postgres-default")
+	assert.NotContains(t, warning, "s3cret")
+}
+
+func TestNormalizeSlingPostgresSSLModeLeavesOtherModesAndDriversAlone(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		uri  string
+	}{
+		{name: "supported postgres mode", uri: "postgres://localhost/db?sslmode=require"},
+		{name: "duckdb option with same name", uri: "duckdb:///tmp/data.db?sslmode=allow"},
+		{name: "postgres without ssl mode", uri: "postgresql://localhost/db"},
+		{name: "malformed URI", uri: "postgresql://localhost/%"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, changed := normalizeSlingPostgresSSLMode(tt.uri)
+			assert.False(t, changed)
+			assert.Equal(t, tt.uri, got)
+		})
+	}
+}
+
 func TestLoadRunEnvIncludesResolvedIntervalDates(t *testing.T) {
 	t.Parallel()
 

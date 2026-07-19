@@ -638,8 +638,13 @@ rewriting the asset definition; `refresh_restricted` assets keep their
 configured strategy and surface a warning instead. The shared Sling connection
 bridge emits Sling-native DSNs where Bruin's ingestr URI convention differs:
 Trino carries `catalog` and `schema` as query properties, while ClickHouse uses
-the database path and exposes only the TLS flag as a query property. Load, API,
-Seed, and non-DuckDB Python materialization all use this same bridge.
+the database path and exposes only the TLS flag as a query property. Because
+Sling's PostgreSQL driver does not accept libpq's opportunistic `sslmode=allow`,
+the bridge changes that mode to `verify-ca` and emits a run-log warning asking
+the user to configure a supported mode explicitly. This compatibility rewrite
+is scoped to Sling; the authored connection and direct Bruin execution keep the
+configured mode. Load, API, Seed, and non-DuckDB Python materialization all use
+this same bridge.
 The shared Sling environment disables `_sling_loaded_at`, keeping these writes
 schema-preserving instead of adding a loader-owned output column.
 

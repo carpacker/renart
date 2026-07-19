@@ -68,10 +68,21 @@ func (o *slingSeedOperator) Run(ctx context.Context, instance scheduler.TaskInst
 	if err != nil {
 		return err
 	}
-	targetURI, err := loadConnectionURI(o.manager, connectionName)
+
+	var output io.Writer
+	if printer, ok := ctx.Value(bruinexecutor.KeyPrinter).(io.Writer); ok {
+		output = printer
+	}
+	writer := &streamCaptureWriter{buffer: bytes.NewBuffer(nil), onChunk: func(chunk []byte) {
+		if output != nil {
+			_, _ = output.Write(chunk)
+		}
+	}}
+	targetURI, connectionWarning, err := loadConnectionURIWithWarning(o.manager, connectionName)
 	if err != nil {
 		return err
 	}
+	writeSlingConnectionWarning(writer, connectionWarning)
 
 	args := []string{
 		"run",
@@ -88,15 +99,6 @@ func (o *slingSeedOperator) Run(ctx context.Context, instance scheduler.TaskInst
 	}
 	args = append(args, columnArgs...)
 
-	var output io.Writer
-	if printer, ok := ctx.Value(bruinexecutor.KeyPrinter).(io.Writer); ok {
-		output = printer
-	}
-	writer := &streamCaptureWriter{buffer: bytes.NewBuffer(nil), onChunk: func(chunk []byte) {
-		if output != nil {
-			_, _ = output.Write(chunk)
-		}
-	}}
 	cmdName, cmdArgs, err := loadCommand(ctx, args, writer)
 	if err != nil {
 		return err

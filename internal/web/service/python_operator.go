@@ -718,10 +718,14 @@ func (o *renartPythonOperator) loadParquetIntoDuckDB(ctx context.Context, run py
 // same strategy mapping. The connection URI travels via an env-named
 // connection so credentials stay off the command line.
 func (o *renartPythonOperator) loadParquetViaSling(ctx context.Context, run pythonRun, connectionName, parquetPath string) error {
-	uri, err := loadConnectionURI(o.manager, connectionName)
+	writer := &streamCaptureWriter{buffer: bytes.NewBuffer(nil), onChunk: func(chunk []byte) {
+		_, _ = run.output.Write(chunk)
+	}}
+	uri, connectionWarning, err := loadConnectionURIWithWarning(o.manager, connectionName)
 	if err != nil {
 		return err
 	}
+	writeSlingConnectionWarning(writer, connectionWarning)
 	modeArgs, err := slingMaterializationArgs(ctx, run.asset)
 	if err != nil {
 		return err
@@ -735,9 +739,6 @@ func (o *renartPythonOperator) loadParquetViaSling(ctx context.Context, run pyth
 	}
 	args = append(args, modeArgs...)
 
-	writer := &streamCaptureWriter{buffer: bytes.NewBuffer(nil), onChunk: func(chunk []byte) {
-		_, _ = run.output.Write(chunk)
-	}}
 	cmdName, cmdArgs, err := loadCommand(ctx, args, writer)
 	if err != nil {
 		return err

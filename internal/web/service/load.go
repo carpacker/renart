@@ -40,6 +40,30 @@ type ingestrURIConnection interface {
 // loadConnectionURI resolves a named bruin connection to a Sling-usable
 // connection URI. It works for any direction (source, target, discovery).
 func loadConnectionURI(manager config.ConnectionGetter, connectionName string) (string, error) {
+	uri, _, err := loadConnectionURIWithWarning(manager, connectionName)
+	return uri, err
+}
+
+// loadConnectionURIWithWarning applies compatibility changes that belong only
+// at the Sling boundary. The authored Bruin connection and every direct
+// warehouse execution path retain their configured values.
+func loadConnectionURIWithWarning(manager config.ConnectionGetter, connectionName string) (string, string, error) {
+	uri, err := resolveLoadConnectionURI(manager, connectionName)
+	if err != nil {
+		return "", "", err
+	}
+	normalized, changed := normalizeSlingPostgresSSLMode(uri)
+	if !changed {
+		return normalized, "", nil
+	}
+	warning := fmt.Sprintf(
+		"Warning: Sling does not support PostgreSQL sslmode %q; using %q for connection %q. Set ssl_mode on this connection to a Sling-supported value to choose a different policy.",
+		"allow", "verify-ca", strings.TrimSpace(connectionName),
+	)
+	return normalized, warning, nil
+}
+
+func resolveLoadConnectionURI(manager config.ConnectionGetter, connectionName string) (string, error) {
 	if manager == nil {
 		return "", errors.New("connection manager is required")
 	}
@@ -74,6 +98,44 @@ func loadConnectionURI(manager config.ConnectionGetter, connectionName string) (
 		return strings.TrimSpace(raw), nil
 	}
 	return "", fmt.Errorf("connection %q cannot be converted to a Load connection URI", name)
+}
+
+// Sling's PostgreSQL driver does not accept libpq's opportunistic `allow`
+// mode. At this boundary only, prefer the supported mode that also verifies the
+// server's certificate authority rather than weakening the connection.
+func normalizeSlingPostgresSSLMode(rawURI string) (string, bool) {
+	parsed, err := url.Parse(rawURI)
+	if err != nil {
+		return rawURI, false
+	}
+	scheme := strings.ToLower(parsed.Scheme)
+	if scheme != "postgres" && scheme != "postgresql" {
+		return rawURI, false
+	}
+
+	query := parsed.Query()
+	sslModeKey := ""
+	for key, values := range query {
+		if strings.EqualFold(key, "sslmode") && len(values) > 0 && strings.EqualFold(strings.TrimSpace(values[0]), "allow") {
+			sslModeKey = key
+			break
+		}
+	}
+	if sslModeKey == "" {
+		return rawURI, false
+	}
+
+	query.Del(sslModeKey)
+	query.Set("sslmode", "verify-ca")
+	parsed.RawQuery = query.Encode()
+	return parsed.String(), true
+}
+
+func writeSlingConnectionWarning(writer io.Writer, warning string) {
+	if writer == nil || warning == "" {
+		return
+	}
+	_, _ = fmt.Fprintln(writer, warning)
 }
 
 // Bruin's ClickHouse ingestr URI includes http_port as a native-driver query
@@ -218,6 +280,10 @@ func loadFileStreamURI(workspaceRoot, rawPath string) string {
 // loadSourceArgs builds the --src-* flags for a run: a file:// stream (no
 // connection) for a local source, otherwise the bridged connection URI + stream.
 func (e *HybridBruinExecutor) loadSourceArgs(manager config.ConnectionGetter, params loadRunParams) ([]string, error) {
+	return e.loadSourceArgsWithWarning(manager, params, nil)
+}
+
+func (e *HybridBruinExecutor) loadSourceArgsWithWarning(manager config.ConnectionGetter, params loadRunParams, reportWarning func(string)) ([]string, error) {
 	if isLocalLoadConnection(params.SourceConnection) {
 		if params.SourceTable == "" {
 			return nil, errors.New("a local load source requires a source_table file path")
@@ -230,9 +296,12 @@ func (e *HybridBruinExecutor) loadSourceArgs(manager config.ConnectionGetter, pa
 	if params.SourceTable == "" {
 		return nil, errors.New("load asset requires a source_table parameter")
 	}
-	uri, err := loadConnectionURI(manager, params.SourceConnection)
+	uri, warning, err := loadConnectionURIWithWarning(manager, params.SourceConnection)
 	if err != nil {
 		return nil, err
+	}
+	if reportWarning != nil && warning != "" {
+		reportWarning(warning)
 	}
 	return []string{"--src-conn", uri, "--src-stream", params.SourceTable}, nil
 }
@@ -241,6 +310,10 @@ func (e *HybridBruinExecutor) loadSourceArgs(manager config.ConnectionGetter, pa
 // always named after the asset; file and object-storage destinations use the
 // explicit destination_object parameter.
 func (e *HybridBruinExecutor) loadTargetArgs(manager config.ConnectionGetter, params loadRunParams) ([]string, error) {
+	return e.loadTargetArgsWithWarning(manager, params, nil)
+}
+
+func (e *HybridBruinExecutor) loadTargetArgsWithWarning(manager config.ConnectionGetter, params loadRunParams, reportWarning func(string)) ([]string, error) {
 	if isLocalLoadConnection(params.DestinationConnection) {
 		if params.DestinationObject == "" {
 			return nil, errors.New("a local load target requires a destination_object file path")
@@ -250,9 +323,12 @@ func (e *HybridBruinExecutor) loadTargetArgs(manager config.ConnectionGetter, pa
 	if params.DestinationConnection == "" {
 		return nil, errors.New("load asset requires a target connection")
 	}
-	uri, err := loadConnectionURI(manager, params.DestinationConnection)
+	uri, warning, err := loadConnectionURIWithWarning(manager, params.DestinationConnection)
 	if err != nil {
 		return nil, err
+	}
+	if reportWarning != nil && warning != "" {
+		reportWarning(warning)
 	}
 	targetObject := strings.TrimSpace(params.AssetName)
 	if details, ok := manager.(config.ConnectionDetailsGetter); ok {
@@ -516,11 +592,19 @@ func (e *HybridBruinExecutor) runLoadAsset(ctx context.Context, pl *pipeline.Pip
 	if err != nil {
 		return writer.buffer.Bytes(), err
 	}
-	srcArgs, err := e.loadSourceArgs(manager, params)
+	seenWarnings := make(map[string]struct{})
+	reportWarning := func(warning string) {
+		if _, ok := seenWarnings[warning]; ok {
+			return
+		}
+		seenWarnings[warning] = struct{}{}
+		writeSlingConnectionWarning(writer, warning)
+	}
+	srcArgs, err := e.loadSourceArgsWithWarning(manager, params, reportWarning)
 	if err != nil {
 		return writer.buffer.Bytes(), err
 	}
-	tgtArgs, err := e.loadTargetArgs(manager, params)
+	tgtArgs, err := e.loadTargetArgsWithWarning(manager, params, reportWarning)
 	if err != nil {
 		return writer.buffer.Bytes(), err
 	}
