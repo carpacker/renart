@@ -20,6 +20,7 @@ var ErrRenameTemplated = errors.New("rename is not available in SQL documents th
 
 const (
 	diagnosticSeverityError = 1
+	diagnosticSeverityWarn  = 2
 	completionKindText      = 1
 	completionKindMethod    = 2
 	completionKindField     = 5
@@ -105,6 +106,7 @@ func (e *Engine) Diagnostics(doc TextDocumentItem) []Diagnostic {
 	analysis := analyzeSQLWithResolver(projection.doc.Text, e)
 	diagnostics := e.polyglotDiagnostics(projection.doc)
 	currentAsset := e.assetForURI(doc.URI)
+	diagnostics = append(diagnostics, e.crossConnectionDiagnostics(projection.doc.Text, analysis, currentAsset)...)
 	for _, use := range analysis.relations {
 		if _, isCTE := analysis.ctes[strings.ToLower(use.name)]; isCTE || strings.HasPrefix(use.name, "{{") {
 			continue
@@ -160,6 +162,59 @@ func (e *Engine) Diagnostics(doc TextDocumentItem) []Diagnostic {
 		for i := range diagnostics {
 			diagnostics[i].Range = projection.rendered.TemplateRangeForGenerated(doc.Text, diagnostics[i].Range)
 		}
+	}
+	return diagnostics
+}
+
+// CrossConnectionDiagnostics reports asset references that cannot be assumed
+// to be queryable by the current asset's connection. It is public so pipeline
+// type-checking can reuse the exact LSP diagnostic without also duplicating the
+// LSP's parser/type diagnostics.
+func (e *Engine) CrossConnectionDiagnostics(doc TextDocumentItem) []Diagnostic {
+	projection := e.renderDocument(doc)
+	analysis := analyzeSQLWithResolver(projection.doc.Text, e)
+	diagnostics := e.crossConnectionDiagnostics(
+		projection.doc.Text,
+		analysis,
+		e.assetForURI(doc.URI),
+	)
+	if projection.changed {
+		for i := range diagnostics {
+			diagnostics[i].Range = projection.rendered.TemplateRangeForGenerated(doc.Text, diagnostics[i].Range)
+		}
+	}
+	return diagnostics
+}
+
+func (e *Engine) crossConnectionDiagnostics(sql string, analysis sqlAnalysis, currentAsset *AssetNode) []Diagnostic {
+	if currentAsset == nil || strings.TrimSpace(currentAsset.Connection) == "" {
+		return nil
+	}
+	var diagnostics []Diagnostic
+	for _, use := range analysis.relations {
+		if _, isCTE := analysis.ctes[strings.ToLower(use.name)]; isCTE || strings.HasPrefix(use.name, "{{") {
+			continue
+		}
+		resolved := e.resolveRelation(use.name)
+		if resolved == nil || resolved.AssetID == "" || resolved.AssetID == currentAsset.ID {
+			continue
+		}
+		upstream, ok := e.index.assetByRelationID[resolved.ID]
+		if !ok || strings.TrimSpace(upstream.Connection) == "" || strings.EqualFold(upstream.Connection, currentAsset.Connection) {
+			continue
+		}
+		diagnostics = append(diagnostics, Diagnostic{
+			Range:    RangeFromOffsets(sql, use.start, use.end),
+			Severity: diagnosticSeverityWarn,
+			Code:     "cross-connection-reference",
+			Source:   "renart-sql-lsp",
+			Message: fmt.Sprintf(
+				"Cross-connection reference: asset %q uses connection %q, while this query uses %q.",
+				upstream.Name,
+				upstream.Connection,
+				currentAsset.Connection,
+			),
+		})
 	}
 	return diagnostics
 }

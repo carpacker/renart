@@ -123,6 +123,49 @@ select id, missing_column from analytics.up
 	assert.Equal(t, typeCheckStatusError, report.Status)
 }
 
+func TestCheckPipelineWarnsForCrossConnectionReferenceThroughLSP(t *testing.T) {
+	t.Parallel()
+	parsed, root := writeTypeCheckWorkspace(t, "name: analytics", map[string]string{
+		"orders.sql": `
+/* @bruin
+name: analytics.orders
+type: pg.sql
+connection: postgres-default
+materialization:
+  type: table
+columns:
+  - name: order_id
+    type: bigint
+@bruin */
+select 1 as order_id
+`,
+		"report.sql": `
+/* @bruin
+name: analytics.report
+type: duckdb.sql
+connection: duckdb-default
+materialization:
+  type: view
+depends:
+  - analytics.orders
+@bruin */
+select order_id from analytics.orders
+`,
+	})
+
+	report := runTypeCheck(t, parsed, root)
+	asset := findAsset(t, report, "analytics.report")
+	assert.Equal(t, typeCheckStatusWarning, asset.Status)
+	assert.True(
+		t,
+		hasFinding(asset, typeCheckSeverityWarning, "Cross-connection reference"),
+		"expected LSP cross-connection warning, got %+v",
+		asset.Findings,
+	)
+	assert.Equal(t, 0, report.Summary.Errors)
+	assert.GreaterOrEqual(t, report.Summary.Warnings, 1)
+}
+
 func TestCheckPipelinePropagatesColumnsThroughSelectStarCTEs(t *testing.T) {
 	t.Parallel()
 	parsed, root := writeTypeCheckWorkspace(t, "name: chess", map[string]string{

@@ -220,6 +220,53 @@ func TestSQLLSPServiceTreatsNonSQLAssetsAsDeclaredRelations(t *testing.T) {
 	}
 }
 
+func TestSQLLSPServiceWarnsForCrossConnectionReference(t *testing.T) {
+	state := model.WorkspaceState{
+		Pipelines: []model.Pipeline{{
+			ID:   "pipeline",
+			Name: "analytics",
+			Assets: []model.Asset{
+				{
+					ID:         "orders",
+					Name:       "analytics.orders",
+					Type:       "pg.sql",
+					Path:       "analytics/assets/analytics/orders.sql",
+					Connection: "postgres-default",
+				},
+				{
+					ID:         "report",
+					Name:       "analytics.report",
+					Type:       "duckdb.sql",
+					Path:       "analytics/assets/analytics/report.sql",
+					Content:    "select * from analytics.orders",
+					Connection: "duckdb-default",
+				},
+			},
+		}},
+	}
+	service := NewSQLLSPService(SQLLSPDependencies{
+		WorkspaceRoot: t.TempDir(),
+		CurrentState:  func() model.WorkspaceState { return state },
+	})
+
+	response, apiErr := service.Diagnostics(context.Background(), SQLLSPRequest{
+		AssetID: "report",
+		Content: "select * from analytics.orders",
+	})
+	if apiErr != nil {
+		t.Fatal(apiErr)
+	}
+	for _, diagnostic := range response.Diagnostics {
+		if diagnostic.Code == "cross-connection-reference" {
+			if diagnostic.Severity != 2 {
+				t.Fatalf("expected warning severity, got %#v", diagnostic)
+			}
+			return
+		}
+	}
+	t.Fatalf("expected cross-connection diagnostic, got %#v", response.Diagnostics)
+}
+
 func TestSQLLSPServiceFindsReferencesAcrossWorkspaceAssets(t *testing.T) {
 	state := model.WorkspaceState{
 		Pipelines: []model.Pipeline{{

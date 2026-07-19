@@ -71,6 +71,39 @@ select nonexistent_col from analytics.customers
 `,
     "utf8",
   );
+  await writeFile(
+    join(assetsDir, "postgres_orders.sql"),
+    `/* @bruin
+name: analytics.postgres_orders
+type: pg.sql
+connection: postgres-default
+materialization:
+  type: table
+columns:
+  - name: order_id
+    type: bigint
+@bruin */
+
+select 1 as order_id
+`,
+    "utf8",
+  );
+  await writeFile(
+    join(assetsDir, "cross_connection.sql"),
+    `/* @bruin
+name: analytics.cross_connection
+type: duckdb.sql
+connection: duckdb-default
+materialization:
+  type: view
+depends:
+  - analytics.postgres_orders
+@bruin */
+
+select order_id from analytics.postgres_orders
+`,
+    "utf8",
+  );
 }
 
 async function pollTypeCheck(
@@ -132,6 +165,15 @@ test.describe("app pipeline type check live", () => {
         f.severity === "error" && /Dependency 'analytics\.missing' does not exist/.test(f.message),
     );
     expect(missingDependency, JSON.stringify(bad?.findings)).toBe(true);
+
+    const crossConnection = byName.get("analytics.cross_connection");
+    expect(crossConnection?.status).toBe("warning");
+    expect(
+      crossConnection?.findings.some(
+        (finding) =>
+          finding.severity === "warning" && /Cross-connection reference/.test(finding.message),
+      ),
+    ).toBe(true);
 
     // A clean upstream asset reports no findings.
     const customers = byName.get("analytics.customers");

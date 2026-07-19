@@ -12,6 +12,7 @@ import (
 	"github.com/bruin-data/bruin/pkg/query"
 	"github.com/spf13/afero"
 
+	"renart/internal/sqllsp"
 	"renart/internal/web/sqlintelligence"
 )
 
@@ -143,9 +144,10 @@ func CheckPipelineAt(
 	sort.SliceStable(assets, func(i, j int) bool { return assets[i].Name < assets[j].Name })
 
 	knownSchema := assetsWithKnownSchema(ctx, pp)
+	connectionEngine := typeCheckConnectionEngine(pp, workspaceRoot)
 
 	for _, asset := range assets {
-		ac := checkAsset(ctx, fs, pp, workspaceRoot, renderer, now, tw, asset, knownSchema)
+		ac := checkAsset(ctx, fs, pp, workspaceRoot, renderer, now, tw, asset, knownSchema, connectionEngine)
 		report.Assets = append(report.Assets, ac)
 		report.Summary.Assets++
 		for _, finding := range ac.Findings {
@@ -168,7 +170,7 @@ func CheckPipelineAt(
 	return report
 }
 
-func checkAsset(ctx context.Context, fs afero.Fs, pp *pipeline.Pipeline, workspaceRoot string, renderer *jinja.Renderer, now time.Time, tw ExecutionTimeWindow, asset *pipeline.Asset, knownSchema map[string]bool) TypeCheckAsset {
+func checkAsset(ctx context.Context, fs afero.Fs, pp *pipeline.Pipeline, workspaceRoot string, renderer *jinja.Renderer, now time.Time, tw ExecutionTimeWindow, asset *pipeline.Asset, knownSchema map[string]bool, connectionEngine *sqllsp.Engine) TypeCheckAsset {
 	ac := TypeCheckAsset{
 		ID:       assetReportID(workspaceRoot, asset),
 		Name:     asset.Name,
@@ -229,6 +231,13 @@ func checkAsset(ctx context.Context, fs afero.Fs, pp *pipeline.Pipeline, workspa
 	}
 
 	for _, renderedQuery := range queries {
+		for _, diagnostic := range connectionEngine.CrossConnectionDiagnostics(sqllsp.TextDocumentItem{
+			URI:        typeCheckAssetURI(workspaceRoot, asset),
+			LanguageID: "sql",
+			Text:       renderedQuery,
+		}) {
+			ac.Findings = append(ac.Findings, findingFromLSPDiagnostic(diagnostic))
+		}
 		parseContext, err := sqlintelligence.ParseContextWithSchema(renderedQuery, dialect, schema, sources)
 		if err != nil {
 			ac.Findings = append(ac.Findings, TypeCheckFinding{
@@ -256,6 +265,37 @@ func checkAsset(ctx context.Context, fs afero.Fs, pp *pipeline.Pipeline, workspa
 
 	ac.Status = statusFromFindings(ac.Findings)
 	return ac
+}
+
+func typeCheckConnectionEngine(pp *pipeline.Pipeline, workspaceRoot string) *sqllsp.Engine {
+	nodes := make([]sqllsp.AssetNode, 0, len(pp.Assets))
+	for _, asset := range pp.Assets {
+		if asset == nil || strings.TrimSpace(asset.Name) == "" {
+			continue
+		}
+		connection, _ := targetConnectionNameForAsset(asset, pp)
+		nodes = append(nodes, sqllsp.AssetNode{
+			ID:         asset.Name,
+			Name:       asset.Name,
+			Connection: strings.TrimSpace(connection),
+			URI:        typeCheckAssetURI(workspaceRoot, asset),
+		})
+	}
+	return sqllsp.NewEngine(sqllsp.GraphFromRenartAssets(sqllsp.FileURI(workspaceRoot), nodes, nil))
+}
+
+func typeCheckAssetURI(workspaceRoot string, asset *pipeline.Asset) sqllsp.URI {
+	path := asset.ExecutableFile.Path
+	if path == "" {
+		path = asset.DefinitionFile.Path
+	}
+	if path == "" {
+		path = strings.ReplaceAll(asset.Name, ".", "_") + ".sql"
+	}
+	if workspaceRoot != "" && !filepath.IsAbs(path) {
+		path = filepath.Join(workspaceRoot, path)
+	}
+	return sqllsp.FileURI(path)
 }
 
 func materializationTypeCheckFindings(asset *pipeline.Asset, pl ...*pipeline.Pipeline) []TypeCheckFinding {
@@ -443,6 +483,21 @@ func findingFromDiagnostic(diagnostic sqlintelligence.ParseContextDiagnostic) Ty
 		finding.EndColumn = diagnostic.Range.EndCol
 	}
 	return finding
+}
+
+func findingFromLSPDiagnostic(diagnostic sqllsp.Diagnostic) TypeCheckFinding {
+	severity := typeCheckSeverityWarning
+	if diagnostic.Severity == 1 {
+		severity = typeCheckSeverityError
+	}
+	return TypeCheckFinding{
+		Severity:  severity,
+		Message:   diagnostic.Message,
+		Line:      diagnostic.Range.Start.Line + 1,
+		Column:    diagnostic.Range.Start.Character + 1,
+		EndLine:   diagnostic.Range.End.Line + 1,
+		EndColumn: diagnostic.Range.End.Character + 1,
+	}
 }
 
 func normalizeSeverity(severity string) string {

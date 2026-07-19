@@ -116,7 +116,7 @@ func loadBruinYAMLAsset(root, path string, graph *CanonicalGraph, provider strin
 	assetID := assetID(provider, name)
 	relationID := relationID(provider, name)
 	provenance := []Provenance{{Provider: provider, ProviderID: assetID, URI: FileURI(path), Confidence: "medium"}}
-	graph.Assets = append(graph.Assets, AssetNode{ID: assetID, Name: name, Kind: "seed", Dialect: DialectFromAssetType(fmt.Sprint(meta["type"])), URI: FileURI(path), OutputRelations: []string{relationID}, Provenance: provenance})
+	graph.Assets = append(graph.Assets, AssetNode{ID: assetID, Name: name, Kind: "seed", Dialect: DialectFromAssetType(fmt.Sprint(meta["type"])), Connection: strings.TrimSpace(fmt.Sprint(meta["connection"])), URI: FileURI(path), OutputRelations: []string{relationID}, Provenance: provenance})
 	graph.Relations = append(graph.Relations, RelationNode{ID: relationID, Name: name, AssetID: assetID, Provenance: provenance})
 	if columns := columnsFromYAML(meta["columns"]); len(columns) > 0 {
 		graph.Schemas = append(graph.Schemas, SchemaLayer{RelationID: relationID, SourceKind: "declared", Completeness: "partial", Columns: columns, Provenance: provenance})
@@ -191,6 +191,7 @@ func addSQLAsset(graph *CanonicalGraph, provider, name, filePath, sql, dialect s
 		Name:            name,
 		Kind:            "sql_model",
 		Dialect:         dialect,
+		Connection:      strings.TrimSpace(fmt.Sprint(meta["connection"])),
 		URI:             FileURI(filePath),
 		OutputRelations: []string{relationID},
 		InputRelations:  inputs,

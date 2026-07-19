@@ -427,11 +427,12 @@ func (s *SQLLSPService) graphAssetNodes(modelAssets []model.Asset) ([]sqllsp.Ass
 			dialect = sqllsp.DialectFromAssetType(asset.Type)
 		}
 		nodes = append(nodes, sqllsp.AssetNode{
-			ID:      asset.ID,
-			Name:    asset.Name,
-			Kind:    kind,
-			Dialect: dialect,
-			URI:     assetURI(s.deps.WorkspaceRoot, asset),
+			ID:         asset.ID,
+			Name:       asset.Name,
+			Kind:       kind,
+			Dialect:    dialect,
+			Connection: asset.Connection,
+			URI:        assetURI(s.deps.WorkspaceRoot, asset),
 		})
 		for _, column := range asset.Columns {
 			columns[asset.ID] = append(columns[asset.ID], sqllsp.ColumnInfo{Name: column.Name, Type: column.Type, Description: column.Description})

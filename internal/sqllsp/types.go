@@ -128,6 +128,7 @@ type AssetNode struct {
 	Name            string       `json:"name"`
 	Kind            string       `json:"kind,omitempty"`
 	Dialect         string       `json:"dialect,omitempty"`
+	Connection      string       `json:"connection,omitempty"`
 	URI             URI          `json:"uri,omitempty"`
 	Range           *Range       `json:"range,omitempty"`
 	OutputRelations []string     `json:"output_relations,omitempty"`

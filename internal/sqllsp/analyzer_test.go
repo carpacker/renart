@@ -273,6 +273,53 @@ from example.range_10`}
 	}
 }
 
+func TestEngineWarnsForCrossConnectionAssetReference(t *testing.T) {
+	queryURI := URI("file:///report.sql")
+	engine := NewEngine(GraphFromRenartAssets("file:///workspace", []AssetNode{
+		{
+			ID:         "orders",
+			Name:       "analytics.orders",
+			Connection: "postgres-default",
+			URI:        "file:///orders.sql",
+		},
+		{
+			ID:         "report",
+			Name:       "analytics.report",
+			Connection: "duckdb-default",
+			URI:        queryURI,
+		},
+	}, nil))
+
+	doc := TextDocumentItem{URI: queryURI, Text: "select * from analytics.orders"}
+	diagnostics := engine.Diagnostics(doc)
+	var warning *Diagnostic
+	for i := range diagnostics {
+		if diagnostics[i].Code == "cross-connection-reference" {
+			warning = &diagnostics[i]
+			break
+		}
+	}
+	if warning == nil {
+		t.Fatalf("expected cross-connection warning, got %#v", diagnostics)
+	}
+	if warning.Severity != diagnosticSeverityWarn {
+		t.Fatalf("expected warning severity, got %#v", warning)
+	}
+	if !strings.Contains(warning.Message, "postgres-default") || !strings.Contains(warning.Message, "duckdb-default") {
+		t.Fatalf("expected both connections in warning, got %q", warning.Message)
+	}
+
+	sameConnection := GraphFromRenartAssets("file:///workspace", []AssetNode{
+		{ID: "orders", Name: "analytics.orders", Connection: "duckdb-default", URI: "file:///orders.sql"},
+		{ID: "report", Name: "analytics.report", Connection: "duckdb-default", URI: queryURI},
+	}, nil)
+	for _, diagnostic := range NewEngine(sameConnection).Diagnostics(doc) {
+		if diagnostic.Code == "cross-connection-reference" {
+			t.Fatalf("did not expect a warning for the same connection: %#v", diagnostic)
+		}
+	}
+}
+
 func TestEngineDoesNotConsumeJoinAsImplicitAlias(t *testing.T) {
 	engine := NewEngine(CanonicalGraph{
 		Version: 1,

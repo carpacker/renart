@@ -749,6 +749,9 @@ rather than trusting the UI.
 Pipeline type checks also validate declared dependency existence and
 materialization configuration: supported strategies, required merge primary
 keys, active incremental/update keys, and time-interval prerequisites.
+For SQL queries they reuse the SQL LSP's cross-connection diagnostic and warn
+when a referenced project asset resolves to a different effective target
+connection; unknown connections do not produce a speculative warning.
 Assets with dedicated runtime semantics and no generic capability profile are
 excluded from this generic materialization validation; in particular, a seed's
 successful Sling write is not reinterpreted as an unsupported `none` mode.

@@ -200,7 +200,11 @@ to `parameters.query`, never to the raw YAML content.
 - **Diagnostics**: unresolved relation / alias / column (column checks only fire
   when the relation's columns are known from asset SQL or declared metadata),
   **circular self-reference** (a used relation that resolves to the current
-  asset), rendered-template diagnostics, and polyglot syntax errors. Column-not-
+  asset), **cross-connection asset references** (warning when both assets have
+  known, different effective connection names), rendered-template diagnostics,
+  and polyglot syntax errors. Pipeline type-check calls the same
+  `Engine.CrossConnectionDiagnostics` path, so Monaco and whole-pipeline reports
+  cannot drift on this rule. Column-not-
   materialized warnings and inspect-error markers are intentionally not surfaced
   in this editor.
 - **Monaco gotcha**: the completion registry is shared across languages, so the
