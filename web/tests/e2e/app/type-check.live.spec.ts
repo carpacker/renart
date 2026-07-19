@@ -149,7 +149,7 @@ test.describe("app pipeline type check live", () => {
     expect(report.status).toBe("error");
   });
 
-  test("readiness control opens the type-check tab in the bottom panel", async ({
+  test("type-check results mark failing nodes and remain available in the bottom panel", async ({
     liveApp,
     page,
   }) => {
@@ -169,10 +169,30 @@ test.describe("app pipeline type check live", () => {
     await page.goto(`${liveApp.baseURL}/pipelines/${pipelineId}/assets/${customersAssetId}/canvas`);
     await typeCheckResponse;
 
-    // Definition and data status now share the Readiness control. Its Code
-    // checks action opens the detailed Type check results tab.
-    await page.getByRole("button", { name: /^Readiness:/ }).click();
-    await page.getByRole("menuitem", { name: /^Code checks/ }).click();
+    const badAssetId = Buffer.from("analytics/assets/analytics/bad_downstream.sql").toString(
+      "base64url",
+    );
+    const badNode = page.locator(`[data-testid="lineage-asset"][data-asset-id="${badAssetId}"]`);
+    await expect(badNode.getByTestId("asset-type-check-error")).toBeVisible({ timeout: 15000 });
+
+    const zoomOut = page.locator(".react-flow__controls-zoomout").first();
+    for (let step = 0; step < 5; step += 1) {
+      await zoomOut.click();
+    }
+    await expect
+      .poll(() =>
+        page
+          .locator(".react-flow__viewport")
+          .first()
+          .evaluate((element) => {
+            return new DOMMatrix(getComputedStyle(element).transform).a;
+          }),
+      )
+      .toBeLessThan(0.5);
+    await expect(badNode.getByTestId("lineage-asset-overview")).toBeVisible();
+
+    await page.getByRole("tab", { name: /Type check/ }).click();
+    await expect(page.getByTestId("type-check-scroll-area")).toBeVisible();
 
     await expect(page.getByText("analytics.bad_downstream").first()).toBeVisible({
       timeout: 15000,

@@ -555,10 +555,12 @@ export function NewAssetDialog({
               ) : null}
             </FieldGroup>
           ) : null}
-          {selected.id === "api" || selected.id === "load" ? (
+          {selected.id === "sql" || selected.id === "api" || selected.id === "load" ? (
             <FieldGroup>
               <Field variant="plain">
-                <FieldLabel htmlFor="new-asset-connection">Destination connection</FieldLabel>
+                <FieldLabel htmlFor="new-asset-connection">
+                  {selected.id === "sql" ? "Target connection" : "Destination connection"}
+                </FieldLabel>
                 <Select
                   value={connection || AUTO_CONNECTION_VALUE}
                   onValueChange={(value) =>
@@ -584,7 +586,9 @@ export function NewAssetDialog({
                 <FieldDescription>
                   {selected.id === "load"
                     ? "Database destinations use the asset name as their table."
-                    : "Where fetched records are loaded. You can change this later."}
+                    : selected.id === "sql"
+                      ? "Where the query is materialized. Auto uses the pipeline default."
+                      : "Where fetched records are loaded. You can change this later."}
                 </FieldDescription>
               </Field>
               {selected.id === "load" && targetNeedsDestinationObject ? (

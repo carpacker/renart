@@ -461,12 +461,6 @@ function PipelineSettingsSectionBody({
     return (
       <div className="space-y-5">
         <NotificationChannelFields
-          title="Slack"
-          value={draft.notifications_slack}
-          onChange={(value) => update("notifications_slack", value)}
-          channelPlaceholder="#data-alerts"
-        />
-        <NotificationChannelFields
           title="Microsoft Teams"
           value={draft.notifications_teams}
           onChange={(value) => update("notifications_teams", value)}

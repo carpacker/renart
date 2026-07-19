@@ -1,4 +1,4 @@
-import { ArrowUpRight, Play, Plus, Trash2 } from "lucide-react";
+import { AlertTriangle, ArrowUpRight, Play, Plus, Trash2 } from "lucide-react";
 import {
   useCallback,
   useEffect,
@@ -14,6 +14,7 @@ import {
   Position,
   ReactFlow,
   useReactFlow,
+  useStore,
   type Edge,
   type Node,
   type NodeProps,
@@ -43,8 +44,9 @@ import {
   initialCenteredViewportX,
   type AppLineageLayoutEdge,
 } from "@/lib/app-lineage-layout";
+import { cn } from "@/lib/utils";
 
-import type { AppAsset } from "./app-data";
+import { kindMeta, type AppAsset } from "./app-data";
 import { AssetNode, AssetNodeMenuItems, type AssetNodeAction } from "./app-primitives";
 
 export type AppLineageCanvasAsset = AppAsset & {
@@ -72,6 +74,8 @@ type PrefixGroupNodeData = {
   height: number;
 };
 
+const overviewZoomThreshold = 0.55;
+
 export function assetNameParts(name: string) {
   const parts = name.split(".").filter(Boolean);
   if (parts.length <= 1) {
@@ -92,22 +96,26 @@ export function assetDisplayName(asset: AppLineageCanvasAsset) {
 }
 
 function PrefixGroupFlowNode({ data }: NodeProps<PrefixGroupNodeData>) {
+  const overview = useStore((state) => state.transform[2] < overviewZoomThreshold);
   return (
     <div
       className="pointer-events-none relative rounded-2xl border bg-background/50"
       style={{ width: data.width, height: data.height }}
     >
-      <div className="absolute left-3 top-2.5 flex items-center gap-2">
-        <span className="font-mono text-xs font-semibold">{data.label}</span>
-        <span className="rounded-full bg-primary/10 px-1.5 text-[10px] text-primary">
-          {data.count}
-        </span>
-      </div>
+      {!overview ? (
+        <div className="absolute left-3 top-2.5 flex items-center gap-2">
+          <span className="font-mono text-xs font-semibold">{data.label}</span>
+          <span className="rounded-full bg-primary/10 px-1.5 text-[10px] text-primary">
+            {data.count}
+          </span>
+        </div>
+      ) : null}
     </div>
   );
 }
 
 function AssetFlowNode({ data }: NodeProps<AssetNodeData>) {
+  const overview = useStore((state) => state.transform[2] < overviewZoomThreshold);
   const displayAsset = {
     ...data.asset,
     name: assetDisplayName(data.asset),
@@ -129,14 +137,18 @@ function AssetFlowNode({ data }: NodeProps<AssetNodeData>) {
         }
       }}
     >
-      <AssetNode
-        asset={displayAsset}
-        selected={data.selected}
-        actions={actions}
-        onOpenConnection={
-          data.onOpenConnection ? () => data.onOpenConnection?.(data.asset.id) : undefined
-        }
-      />
+      {overview ? (
+        <AssetOverviewNode asset={displayAsset} selected={data.selected} />
+      ) : (
+        <AssetNode
+          asset={displayAsset}
+          selected={data.selected}
+          actions={actions}
+          onOpenConnection={
+            data.onOpenConnection ? () => data.onOpenConnection?.(data.asset.id) : undefined
+          }
+        />
+      )}
     </div>
   );
 
@@ -175,6 +187,34 @@ function AssetFlowNode({ data }: NodeProps<AssetNodeData>) {
         >
           <Plus className="size-4" />
         </button>
+      ) : null}
+    </div>
+  );
+}
+
+function AssetOverviewNode({ asset, selected }: { asset: AppAsset; selected: boolean }) {
+  const Icon = kindMeta[asset.kind].icon;
+  const hasError = Boolean(asset.parseError || asset.hasTypeCheckError);
+  return (
+    <div
+      data-testid="lineage-asset-overview"
+      className={cn(
+        "relative flex h-28 w-58 items-center justify-center overflow-hidden rounded-xl border-2 bg-card shadow-sm",
+        hasError ? "border-amber-400" : selected ? "border-primary" : "border-border",
+      )}
+    >
+      <div
+        className={cn(
+          "flex size-14 items-center justify-center rounded-2xl border bg-muted/60 text-muted-foreground",
+          selected && "border-primary/50 bg-primary/10 text-primary",
+        )}
+      >
+        <Icon className="size-7" />
+      </div>
+      {hasError ? (
+        <span className="absolute right-3 top-3 flex size-6 items-center justify-center rounded-full bg-amber-100 text-amber-700 dark:bg-amber-500/20 dark:text-amber-300">
+          <AlertTriangle className="size-3.5" />
+        </span>
       ) : null}
     </div>
   );
@@ -593,6 +633,7 @@ export function AppLineageCanvas({
         deleteKeyCode={null}
         panActivationKeyCode={null}
         proOptions={{ hideAttribution: true }}
+        minZoom={0.15}
         onInit={setFlowInstance}
         onPaneContextMenu={handlePaneContextMenu}
         onPaneClick={() => setPaneMenu(null)}

@@ -695,7 +695,7 @@ select 1 as customer_id,'Ada' as customer_name union all select 2 as customer_id
       .toEqual(expect.arrayContaining(["fresh", "fresh"]));
   });
 
-  test("does not report fresh when the freshness request is unavailable", async ({
+  test("keeps the primary run action clear when freshness is unavailable", async ({
     liveApp,
     page,
   }) => {
@@ -715,14 +715,8 @@ select 1 as customer_id,'Ada' as customer_name union all select 2 as customer_id
       timeout: 15000,
     });
 
-    const readiness = page.getByRole("button", {
-      name: /Readiness:.*Freshness unavailable/,
-    });
-    await expect(readiness).toBeVisible();
-    await expect(readiness).toHaveAttribute("title", /Freshness unavailable/);
-    await readiness.click();
-    await expect(page.getByText("Freshness unavailable", { exact: true })).toBeVisible();
-    await expect(page.getByRole("menuitem", { name: /Build needed/ })).toBeDisabled();
+    await expect(page.getByRole("button", { name: /^Readiness:/ })).toHaveCount(0);
+    await expect(page.getByRole("button", { name: /^Review run/ })).toBeVisible();
   });
 
   test("links a rejected pipeline trigger to the already active run", async ({ liveApp, page }) => {
@@ -782,11 +776,10 @@ select 1 as customer_id,'Ada' as customer_name union all select 2 as customer_id
     await expect(newFolder).toBeVisible();
 
     await newAsset.click();
-    await expect(page.getByRole("dialog", { name: "New asset" })).toBeVisible();
-    await page
-      .getByRole("dialog", { name: "New asset" })
-      .getByRole("button", { name: "Cancel" })
-      .click();
+    const newAssetDialog = page.getByRole("dialog", { name: "New asset" });
+    await expect(newAssetDialog).toBeVisible();
+    await expect(newAssetDialog.getByLabel("Target connection")).toBeVisible();
+    await newAssetDialog.getByRole("button", { name: "Cancel" }).click();
 
     await newFolder.click();
     await expect(page.getByRole("dialog", { name: "New folder" })).toBeVisible();

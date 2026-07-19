@@ -394,6 +394,13 @@ export function AssetNode({
           <Icon className="size-3.5 text-muted-foreground" />
         )}
         <span className="min-w-0 flex-1 truncate font-mono text-xs font-medium">{asset.name}</span>
+        {asset.hasTypeCheckError ? (
+          <AlertTriangle
+            data-testid="asset-type-check-error"
+            className="size-3.5 shrink-0 text-amber-500"
+            aria-label="Type check error"
+          />
+        ) : null}
         {actions && actions.length > 0 ? (
           <DropdownMenu>
             <DropdownMenuTrigger

@@ -138,6 +138,8 @@ export type AppAsset = {
   // Set when the asset file failed to parse; the node renders an error state and
   // the editor shows the message so the user can fix it in place.
   parseError?: string;
+  // Projected from the active pipeline's type-check report; never persisted.
+  hasTypeCheckError?: boolean;
   x: number;
   y: number;
 };

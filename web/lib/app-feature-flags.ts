@@ -1,4 +1,4 @@
-export type AppFeatureFlag = "aiChat" | "notifications" | "profileMenu";
+export type AppFeatureFlag = "aiChat" | "cloudWorkspaces" | "notifications" | "profileMenu";
 
 // Feature flags for the app UI. Flip a flag to true to re-enable the
 // corresponding surface — these gate features that are intentionally hidden
@@ -8,6 +8,8 @@ export type AppFeatureFlag = "aiChat" | "notifications" | "profileMenu";
 export const appFeatureFlags: Record<AppFeatureFlag, boolean> = {
   // AI builder chat (the Sparkles button + side sheet in the top bar).
   aiChat: false,
+  // Cloud workspace connection is not backed by a shipped control plane.
+  cloudWorkspaces: false,
   // Notifications bell in the top bar.
   notifications: false,
   // Account / profile menu in the top bar.

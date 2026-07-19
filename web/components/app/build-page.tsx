@@ -11,7 +11,6 @@ import {
   AlertTriangle,
   Bell,
   BookOpen,
-  Check,
   CheckCircle2,
   ChevronDown,
   ChevronRight,
@@ -69,7 +68,6 @@ import {
   BreadcrumbSeparator,
 } from "@/components/ui/breadcrumb";
 import { Button } from "@/components/ui/button";
-import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import {
   Dialog,
   DialogContent,
@@ -110,12 +108,9 @@ import { InspectInfoCard } from "@/components/inspect-info-card";
 import { WorkspaceMaterializeOutputView } from "@/components/workspace-materialize-output-view";
 import { Spinner } from "@/components/ui/spinner";
 import { runSQLQuery } from "@/lib/api";
-import type { MaterializeStreamPayload } from "@/lib/api-core";
 import type { PipelineRunSource } from "@/lib/api-scheduler";
-import type { StreamAssetEvent } from "@/lib/api-streams";
 import { typeCheckPipeline, type PipelineTypeCheckReport } from "@/lib/api-pipelines";
 import { renderAsset, type AssetRenderResult } from "@/lib/api-asset-render";
-import type { AssetStaleness } from "@/lib/api-staleness";
 import { isSeedAssetType, isSensorAssetType, isSqlAssetType } from "@/lib/asset-types";
 import { editorDraftAtom } from "@/lib/atoms/domains/editor";
 import type { MaterializeHistoryEntry } from "@/lib/atoms/results";
@@ -184,7 +179,6 @@ import {
   lastRunLabel,
   SeverityIcon,
   SimpleTable,
-  StalenessBadge,
   StatusPill,
   stalenessDotClassName,
   stalenessLabel,
@@ -537,6 +531,9 @@ export function AppBuildPage({
     : "Resolving the execution window";
   const editorDraft = useAtomValue(editorDraftAtom);
   const setEditorDraft = useSetAtom(editorDraftAtom);
+  const [typeCheckReport, setTypeCheckReport] = useState<PipelineTypeCheckReport | null>(null);
+  const [typeCheckLoading, setTypeCheckLoading] = useState(false);
+  const [typeCheckError, setTypeCheckError] = useState<string | null>(null);
   const [adhocResult, setAdhocResult] = useState<SqlQueryResponse | null>(null);
   const [adhocRenderedQuery, setAdhocRenderedQuery] = useState<string | null>(null);
   const [adhocLoading, setAdhocLoading] = useState(false);
@@ -547,6 +544,15 @@ export function AppBuildPage({
   const assetRenderRequestId = useRef(0);
   const assetRenderIdentityRef = useRef<string | null>(null);
   const [adhocQuery] = useAdhocQueryDraft(pipelineId);
+  const typeCheckErrorAssetIds = useMemo(
+    () =>
+      new Set(
+        (typeCheckReport?.assets ?? [])
+          .filter((asset) => asset.findings.some((finding) => finding.severity === "error"))
+          .flatMap((asset) => [asset.id, asset.name].filter(Boolean)),
+      ),
+    [typeCheckReport],
+  );
   const displayedPipelineAssets = useMemo(
     () =>
       pipelineAssets.map((asset) => ({
@@ -554,8 +560,10 @@ export function AppBuildPage({
         status: materializationStatusByAssetId[asset.id]?.status ?? asset.status,
         materializedAt: labelForAppMaterializationState(materializationStatusByAssetId[asset.id]),
         staleness: staleness.byAssetName[asset.name],
+        hasTypeCheckError:
+          typeCheckErrorAssetIds.has(asset.id) || typeCheckErrorAssetIds.has(asset.name),
       })),
-    [materializationStatusByAssetId, pipelineAssets, staleness.byAssetName],
+    [materializationStatusByAssetId, pipelineAssets, staleness.byAssetName, typeCheckErrorAssetIds],
   );
   // Transitive stale upstreams of an asset, walked over the dependency graph.
   // Materializing an asset while these are stale reads their outdated tables, so
@@ -682,14 +690,10 @@ export function AppBuildPage({
     setPipelineSettingsSection(section);
     setPipelineSettingsOpen(true);
   };
-  const [buildStaleOpen, setBuildStaleOpen] = useState(false);
   const [pipelinePlanOpen, setPipelinePlanOpen] = useState(false);
   const [deploymentPlanOpen, setDeploymentPlanOpen] = useState(false);
   const [addedDependencies, setAddedDependencies] = useState<string[]>([]);
   const declaredDependencies = [...pipelineDependencies, ...addedDependencies];
-  const [typeCheckReport, setTypeCheckReport] = useState<PipelineTypeCheckReport | null>(null);
-  const [typeCheckLoading, setTypeCheckLoading] = useState(false);
-  const [typeCheckError, setTypeCheckError] = useState<string | null>(null);
   const resultsPanelRef = useRef<PanelImperativeHandle | null>(null);
   const [resultsCollapsed, setResultsCollapsed] = useState(false);
   const toggleResultsPanel = () => {
@@ -818,8 +822,8 @@ export function AppBuildPage({
     },
     [activePipeline, selectedExecutionTimeWindow?.start, selectedExecutionTimeWindow?.end],
   );
-  // Run the type check once per pipeline so the notification badge reflects the
-  // current state; the user can re-run from the bell to pick up edits.
+  // Run the type check once per pipeline so the results badge and node markers
+  // reflect the current state; the user can re-run from the panel after edits.
   useEffect(() => {
     if (!activePipeline) {
       return;
@@ -1170,17 +1174,7 @@ export function AppBuildPage({
           onToggleInspector={() => setInspectorCollapsed((value) => !value)}
           onReviewRun={() => setPipelinePlanOpen(true)}
           onReviewDeploy={() => setDeploymentPlanOpen(true)}
-          typeCheckReport={typeCheckReport}
-          typeCheckLoading={typeCheckLoading}
-          typeCheckError={typeCheckError}
-          onTypeCheck={() => void runTypeCheck(true)}
-          staleCount={staleness.staleAssets.length}
-          stalenessLoading={staleness.loading}
-          stalenessError={staleness.error}
-          onBuildStale={() => setBuildStaleOpen(true)}
           deployState={deployState}
-          executionBlocked={executionBlocked}
-          executionBlockedReason={executionBlockedReason}
           runSourceLabel={pipelineRunSourceLabel.replace(/^Run /, "")}
           runDisabled={!activePipeline}
           runTitle="Review the saved source, readiness checks, and rendered operations before running"
@@ -1526,24 +1520,6 @@ export function AppBuildPage({
             </DialogFooter>
           </DialogContent>
         </Dialog>
-        <BuildStaleDialog
-          open={buildStaleOpen}
-          onOpenChange={setBuildStaleOpen}
-          staleAssets={staleness.staleAssets}
-          onBuild={(onAssetEvent) => {
-            openBottom("materialize");
-            const idByName = new Map(
-              displayedPipelineAssets.map((asset) => [asset.name, asset.id]),
-            );
-            const assetIds = staleness.staleAssets
-              .map((stale) => idByName.get(stale.asset_name))
-              .filter((id): id is string => Boolean(id));
-            return assetResults.runBuildStale(activePipeline?.id ?? pipelineId, {
-              assetIds,
-              onAssetEvent,
-            });
-          }}
-        />
       </AppPage>
     </BuildContext.Provider>
   );
@@ -1566,20 +1542,10 @@ function BuildTopBar({
   onToggleInspector,
   onReviewRun,
   onReviewDeploy,
-  staleCount = 0,
-  stalenessLoading = false,
-  stalenessError,
-  onBuildStale,
   deployState,
-  executionBlocked = false,
-  executionBlockedReason,
   runSourceLabel,
   runDisabled = false,
   runTitle,
-  typeCheckReport,
-  typeCheckLoading = false,
-  typeCheckError,
-  onTypeCheck,
 }: {
   pipelineId: string;
   pipelineLabel: string;
@@ -1597,20 +1563,10 @@ function BuildTopBar({
   onToggleInspector?: () => void;
   onReviewRun: () => void;
   onReviewDeploy: () => void;
-  staleCount?: number;
-  stalenessLoading?: boolean;
-  stalenessError?: string | null;
-  onBuildStale?: () => void;
   deployState?: PipelineDeployState;
-  executionBlocked?: boolean;
-  executionBlockedReason?: string;
   runSourceLabel?: string;
   runDisabled?: boolean;
   runTitle?: string;
-  typeCheckReport?: PipelineTypeCheckReport | null;
-  typeCheckLoading?: boolean;
-  typeCheckError?: string | null;
-  onTypeCheck?: () => void;
 }) {
   const search: AppBuildSearch = { result: resultTab, editor: editorMode };
 
@@ -1687,18 +1643,6 @@ function BuildTopBar({
           <Terminal className="size-3.5" /> Ad-hoc
         </Link>
       </Button>
-      <ReadinessControl
-        report={typeCheckReport}
-        typeCheckLoading={typeCheckLoading}
-        typeCheckError={typeCheckError}
-        onTypeCheck={onTypeCheck}
-        staleCount={staleCount}
-        stalenessLoading={stalenessLoading}
-        stalenessError={stalenessError}
-        onBuildStale={onBuildStale}
-        buildDisabled={executionBlocked}
-        buildDisabledReason={executionBlockedReason}
-      />
       {deployState ? <DeployButton deployState={deployState} onReview={onReviewDeploy} /> : null}
       <Button size="sm" onClick={onReviewRun} disabled={runDisabled} title={runTitle}>
         <Play data-icon="inline-start" /> Review run
@@ -1730,128 +1674,6 @@ function BuildTopBar({
         <PanelRight className="size-3.5" />
       </Button>
     </div>
-  );
-}
-
-// ReadinessControl keeps definition and data readiness in one secondary
-// surface so Deploy and the primary run-review action retain clear hierarchy.
-function ReadinessControl({
-  report,
-  typeCheckLoading,
-  typeCheckError,
-  onTypeCheck,
-  staleCount,
-  stalenessLoading,
-  stalenessError,
-  onBuildStale,
-  buildDisabled,
-  buildDisabledReason,
-}: {
-  report?: PipelineTypeCheckReport | null;
-  typeCheckLoading?: boolean;
-  typeCheckError?: string | null;
-  onTypeCheck?: () => void;
-  staleCount: number;
-  stalenessLoading?: boolean;
-  stalenessError?: string | null;
-  onBuildStale?: () => void;
-  buildDisabled?: boolean;
-  buildDisabledReason?: string;
-}) {
-  const errors = report?.summary.errors ?? 0;
-  const warnings = report?.summary.warnings ?? 0;
-  const definitionProblems = errors + warnings;
-  const problemCount = definitionProblems + (stalenessError ? 1 : staleCount);
-  const loading = typeCheckLoading || stalenessLoading;
-  const hasError = Boolean(typeCheckError || stalenessError || errors > 0);
-  const definitionLabel = typeCheckLoading
-    ? "Checking definition…"
-    : typeCheckError
-      ? "Definition check failed"
-      : definitionProblems > 0
-        ? `${errors} errors · ${warnings} warnings`
-        : report
-          ? "Definition ready"
-          : "Definition not checked";
-  const dataLabel = stalenessLoading
-    ? "Checking data…"
-    : stalenessError
-      ? "Freshness unavailable"
-      : staleCount > 0
-        ? `${staleCount} asset${staleCount === 1 ? "" : "s"} need work`
-        : "Data is current";
-  return (
-    <DropdownMenu>
-      <DropdownMenuTrigger asChild>
-        <Button
-          variant={hasError ? "destructive" : "outline"}
-          size="sm"
-          aria-label={`Readiness: ${definitionLabel}; ${dataLabel}`}
-          title={`${definitionLabel} · ${dataLabel}`}
-        >
-          {loading ? (
-            <Loader2 data-icon="inline-start" className="animate-spin" />
-          ) : hasError || problemCount > 0 ? (
-            <AlertTriangle data-icon="inline-start" />
-          ) : report ? (
-            <CheckCircle2 data-icon="inline-start" />
-          ) : (
-            <Bell data-icon="inline-start" />
-          )}
-          <span className="hidden lg:inline">Readiness</span>
-          {!loading && problemCount > 0 ? (
-            <Badge variant={hasError ? "destructive" : "secondary"} size="xs">
-              {problemCount}
-            </Badge>
-          ) : null}
-          <ChevronDown data-icon="inline-end" />
-        </Button>
-      </DropdownMenuTrigger>
-      <DropdownMenuContent align="end" className="w-72">
-        <DropdownMenuGroup>
-          <DropdownMenuLabel>Definition</DropdownMenuLabel>
-          <DropdownMenuItem onSelect={onTypeCheck} disabled={typeCheckLoading}>
-            {typeCheckLoading ? (
-              <Loader2 className="animate-spin" />
-            ) : typeCheckError || definitionProblems > 0 ? (
-              <AlertTriangle />
-            ) : (
-              <CheckCircle2 />
-            )}
-            <div className="min-w-0 flex-1">
-              <div>Code checks</div>
-              <div className="truncate text-[10px] text-muted-foreground">{definitionLabel}</div>
-            </div>
-          </DropdownMenuItem>
-        </DropdownMenuGroup>
-        <DropdownMenuGroup>
-          <DropdownMenuLabel>Data</DropdownMenuLabel>
-          <DropdownMenuItem
-            onSelect={onBuildStale}
-            disabled={
-              stalenessLoading || Boolean(stalenessError) || staleCount === 0 || buildDisabled
-            }
-            title={buildDisabled ? buildDisabledReason : (stalenessError ?? undefined)}
-          >
-            {stalenessLoading ? (
-              <Loader2 className="animate-spin" />
-            ) : stalenessError ? (
-              <AlertTriangle />
-            ) : staleCount > 0 ? (
-              <Hammer />
-            ) : (
-              <CheckCircle2 />
-            )}
-            <div className="min-w-0 flex-1">
-              <div>Build needed</div>
-              <div className="truncate text-[10px] text-muted-foreground">
-                {buildDisabled ? buildDisabledReason : dataLabel}
-              </div>
-            </div>
-          </DropdownMenuItem>
-        </DropdownMenuGroup>
-      </DropdownMenuContent>
-    </DropdownMenu>
   );
 }
 
@@ -2974,7 +2796,7 @@ function ResultsPanel({
         <TabsContent value="metadata" className="min-h-0 flex-1 overflow-auto p-0">
           <MetadataPanel />
         </TabsContent>
-        <TabsContent value="typecheck" className="min-h-0 flex-1 overflow-auto p-0">
+        <TabsContent value="typecheck" className="min-h-0 flex-1 overflow-hidden p-0">
           <TypeCheckPanel
             report={typeCheckReport ?? null}
             loading={Boolean(typeCheckLoading)}
@@ -3312,144 +3134,6 @@ function DeployButton({
       />
       {deploying ? "Deploying…" : label}
     </Button>
-  );
-}
-
-type BuildStaleProgress = "pending" | "running" | "done" | "failed" | "skipped";
-
-// BuildStaleDialog previews the stale set and hands the whole build to the
-// server, which recomputes the plan (every stale asset; for partially-covered
-// incrementals exactly the uncovered gap intervals), builds it in dependency
-// order as one streamed run, and reports per-asset progress events back here.
-function BuildStaleDialog({
-  open,
-  onOpenChange,
-  staleAssets,
-  onBuild,
-}: {
-  open: boolean;
-  onOpenChange: (open: boolean) => void;
-  staleAssets: AssetStaleness[];
-  onBuild: (
-    onAssetEvent: (event: StreamAssetEvent) => void,
-  ) => Promise<MaterializeStreamPayload | null>;
-}) {
-  const [progress, setProgress] = useState<Record<string, BuildStaleProgress>>({});
-  const [building, setBuilding] = useState(false);
-  const [buildError, setBuildError] = useState<string | null>(null);
-
-  useEffect(() => {
-    if (!open) {
-      setProgress({});
-      setBuilding(false);
-      setBuildError(null);
-    }
-  }, [open]);
-
-  const buildAll = async () => {
-    setBuilding(true);
-    setProgress({});
-    setBuildError(null);
-    try {
-      const result = await onBuild((event) => {
-        if (!event.asset_name || !event.status) {
-          return;
-        }
-        const mapped: BuildStaleProgress =
-          event.status === "running"
-            ? "running"
-            : event.status === "succeeded"
-              ? "done"
-              : event.status === "skipped"
-                ? "skipped"
-                : "failed";
-        const assetName = event.asset_name;
-        setProgress((current) => ({ ...current, [assetName]: mapped }));
-      });
-      if (!result) {
-        setBuildError("The build could not be started. Review the Materialize output for details.");
-      } else if (result.status === "error") {
-        setBuildError(
-          result.error || "The build failed. Review the Materialize output for details.",
-        );
-      }
-    } catch (cause) {
-      setBuildError(cause instanceof Error ? cause.message : "The build could not be started.");
-    } finally {
-      setBuilding(false);
-    }
-  };
-
-  return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-2xl">
-        <DialogHeader>
-          <DialogTitle className="flex items-center gap-2">
-            <Hammer className="size-4 text-primary" />
-            Build stale assets
-          </DialogTitle>
-          <DialogDescription>
-            {staleAssets.length} asset{staleAssets.length === 1 ? "" : "s"} out of date for this
-            environment and time range. The server builds them in dependency order as one run;
-            partial incrementals rebuild only the uncovered gaps.
-          </DialogDescription>
-        </DialogHeader>
-        {buildError ? (
-          <Alert variant="destructive">
-            <AlertTriangle />
-            <AlertTitle>Build needed failed</AlertTitle>
-            <AlertDescription>{buildError}</AlertDescription>
-          </Alert>
-        ) : null}
-        <div className="max-h-80 space-y-1 overflow-y-auto">
-          {staleAssets.map((stale) => (
-            <div
-              key={stale.asset_id}
-              className="flex items-center gap-2 rounded-md border px-2 py-1.5 text-xs"
-            >
-              <span className="min-w-0 flex-1 truncate font-mono">{stale.asset_name}</span>
-              <StalenessBadge staleness={stale} />
-              {stale.gaps?.length ? (
-                <span className="text-[10px] text-muted-foreground">
-                  {stale.gaps.length} gap{stale.gaps.length === 1 ? "" : "s"}
-                </span>
-              ) : null}
-              {progress[stale.asset_name] === "running" ? (
-                <span className="text-[10px] text-sky-600">building…</span>
-              ) : null}
-              {progress[stale.asset_name] === "done" ? (
-                <Check className="size-3.5 text-emerald-600" />
-              ) : null}
-              {progress[stale.asset_name] === "skipped" ? (
-                <span
-                  className="text-[10px] text-muted-foreground"
-                  title="Skipped: a stale upstream failed"
-                >
-                  skipped
-                </span>
-              ) : null}
-              {progress[stale.asset_name] === "failed" ? (
-                <XCircle className="size-3.5 text-red-600" />
-              ) : null}
-            </div>
-          ))}
-          {staleAssets.length === 0 ? (
-            <p className="text-xs text-muted-foreground">Everything is fresh.</p>
-          ) : null}
-        </div>
-        <DialogFooter>
-          <Button variant="outline" onClick={() => onOpenChange(false)} disabled={building}>
-            Close
-          </Button>
-          <Button onClick={buildAll} disabled={building || staleAssets.length === 0}>
-            <Play className="size-4" />
-            {building
-              ? "Building…"
-              : `Build ${staleAssets.length} asset${staleAssets.length === 1 ? "" : "s"}`}
-          </Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
   );
 }
 

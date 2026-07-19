@@ -81,7 +81,9 @@ not underscore-flattened route hacks.
   [project switcher](../web/components/app/project-switcher.tsx), including the
   persisted Light / Dark / System appearance selector, the
   [command palette](../web/components/app/app-command-palette.tsx), and the routed
-  `<Outlet />`.
+  `<Outlet />`. Unshipped mock surfaces (AI chat, notifications, account menu,
+  and cloud-workspace connection) stay hidden behind disabled flags in
+  [app-feature-flags.ts](../web/lib/app-feature-flags.ts).
 - [components/app/build-page.tsx](../web/components/app/build-page.tsx): the primary
   IDE — the interactive lineage canvas
   ([lineage-canvas.tsx](../web/components/app/lineage-canvas.tsx), React Flow)
@@ -91,15 +93,14 @@ not underscore-flattened route hacks.
   view; after an asset is present in the route, later selections preserve the
   explicit code/split/canvas layout. A DAG that fits at the default zoom is
   horizontally centered on initial render, while a wider DAG keeps its layout
-  origin so it remains predictable to pan. The explorer's asset filter searches
-  names, groups, paths, types, and connections. The toolbar groups persistent
-  Definition and Data state under one **Readiness** control, keeps Deploy as a
-  separate secondary action, and makes **Review run** the primary pipeline
-  action. Readiness is a summary rather than a wizard or prerequisite chain:
-  deploying reviewed source does not imply that data is current, and building
-  needed data does not move a deployment or schedule pin. Its **Build needed**
-  shortcut keeps the fast inline path, while **Review run** can select the same
-  Needed work when a full checks/render review is desired. The review sheet
+  origin so it remains predictable to pan. Build and Catalog share the same
+  farther-out zoom range; below the detail threshold, fixed-size asset cards
+  become icon-only overview nodes and group labels disappear so unreadable text
+  does not clutter a whole-DAG view. The explorer's asset filter searches names,
+  groups, paths, types, and connections. The toolbar keeps Deploy as a separate
+  secondary action and makes **Review run** the primary pipeline action. Type
+  checks live in the results panel, which scrolls through a shadcn ScrollArea;
+  failing assets also receive a warning marker on their canvas node. The review sheet
   defaults to the entire pipeline and names the exact
   saved working tree or immutable deployment, environment, UTC interval,
   refresh/sensor mode, asset and execution-unit counts, checks, blockers,
@@ -185,7 +186,8 @@ not underscore-flattened route hacks.
   a compact selected-kind summary once chosen, while the creation fields use the
   plain `Field` variant instead of nesting a bordered card around each input.
   The dialog is shrink-safe and suppresses horizontal overflow around long
-  horizontal fields. It filters types and connections together, offers
+  horizontal fields. SQL assets can select an explicit target connection or use
+  the pipeline default. It filters types and connections together, offers
   upload/paste/workspace-file/URL seed sources, renders the parameters required by
   each sensor variant, and sends uploaded bytes through the multipart asset API.
   The workspace-file source uses the shared path combobox, restricted to
