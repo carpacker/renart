@@ -162,7 +162,7 @@ func TestSlingMaterializationArgs(t *testing.T) {
 	}
 }
 
-func TestSlingMaterializationArgsFullRefreshOverridesStrategy(t *testing.T) {
+func TestSlingMaterializationArgsFullRefreshOverridesIncrementalStrategy(t *testing.T) {
 	t.Parallel()
 	ctx := context.WithValue(context.Background(), pipeline.RunConfigFullRefresh, true)
 	asset := &pipeline.Asset{Type: pipeline.AssetType("api")}
@@ -171,6 +171,17 @@ func TestSlingMaterializationArgsFullRefreshOverridesStrategy(t *testing.T) {
 	args, err := slingMaterializationArgs(ctx, asset)
 	require.NoError(t, err)
 	assert.Equal(t, []string{"--mode", "full-refresh"}, args)
+}
+
+func TestSlingMaterializationArgsFullRefreshPreservesTruncateStrategy(t *testing.T) {
+	t.Parallel()
+	ctx := context.WithValue(context.Background(), pipeline.RunConfigFullRefresh, true)
+	asset := &pipeline.Asset{Type: pipeline.AssetType("load")}
+	asset.Materialization.Strategy = pipeline.MaterializationStrategyTruncateInsert
+
+	args, err := slingMaterializationArgs(ctx, asset)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"--mode", "truncate"}, args)
 }
 
 func TestSlingMaterializationArgsFullRefreshRespectsRestriction(t *testing.T) {

@@ -32,13 +32,20 @@ Local files are a first-class source: choose the **local** entry and point
 the source at a file path (for example `data/exchange_rates.csv`) to load
 a CSV that lives in your repository.
 
-## Modes
+## Write behavior
 
-| Mode | Each run… |
+| Choice | Each run… |
 | --- | --- |
-| `full-refresh` | Replaces the target table with the source's current contents. |
-| `incremental` | Appends or merges new records instead of rewriting everything. |
-| `truncate` | Empties the target, then loads. |
+| **Table (replace)** | Loads into staging and replaces the target table. This is the atomic, schema-refreshing default where the destination supports it. |
+| **Table (truncate)** | Keeps the existing table, empties it, then loads all source rows. Use this when views, grants, or other objects depend on the table. |
+| **Append rows** | Adds source rows without removing existing rows. An optional update key can limit the source read. |
+| **Merge by key** | Updates or inserts rows using the declared primary-key columns. An optional update key can limit the source read. |
+
+On PostgreSQL, replacing a table is blocked when an existing view depends on
+it. Choose **Table (truncate)** for that shape. It preserves the relation and
+its dependents, but it is not an atomic swap and keeps the table's existing
+schema. If the schema needs to change, update the dependent objects before
+using **Table (replace)** again.
 
 ## Columns and lineage
 

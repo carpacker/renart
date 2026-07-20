@@ -484,13 +484,20 @@ func slingMaterializationArgs(ctx context.Context, asset *pipeline.Asset) ([]str
 	if asset == nil {
 		return nil, errors.New("asset is required to resolve materialization")
 	}
+	strategy := strings.ToLower(strings.TrimSpace(string(asset.Materialization.Strategy)))
 	if args := loadRunModeArgs(ctx); len(args) > 0 {
 		if asset.RefreshRestricted == nil || !*asset.RefreshRestricted {
+			// truncate+insert already reloads the complete source while preserving
+			// the target relation. Replacing it with Sling full-refresh would swap
+			// the table instead, breaking dependent Postgres views and grants.
+			switch strategy {
+			case "truncate+insert", "truncate_insert", "truncate":
+				return []string{"--mode", "truncate"}, nil
+			}
 			return args, nil
 		}
 		addExecutionWarning(ctx, fmt.Sprintf("Full refresh is restricted for %s; running its configured materialization strategy instead.", asset.Name))
 	}
-	strategy := strings.ToLower(strings.TrimSpace(string(asset.Materialization.Strategy)))
 	switch strategy {
 	case "", "create+replace", "create_replace", "full-refresh", "full_refresh":
 		return nil, nil

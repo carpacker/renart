@@ -685,9 +685,14 @@ strategy source. Renart invokes Sling from those semantic fields directly; no
 replication sidecar or parallel destination/mode parameter set exists. A
 connectionless API or Load asset follows the SQL/ingestr warehouse majority;
 when there is no such majority and the pipeline configures exactly one default,
-that explicit connection wins before Bruin's synthesized DuckDB fallback. A
-run-scoped full refresh temporarily selects Sling's replace mode without
-rewriting the asset definition; `refresh_restricted` assets keep their
+that explicit connection wins before Bruin's synthesized DuckDB fallback.
+`create+replace` uses Sling's staging-table replacement, while
+`truncate+insert` maps to Sling's in-place truncate mode so relation identity,
+dependent views, and grants survive a reload. The latter keeps the existing
+table schema and is not an atomic swap. A run-scoped full refresh temporarily
+selects Sling's replace mode without rewriting the asset definition, except
+that an already-full `truncate+insert` load remains in truncate mode to preserve
+that explicit dependency-safe contract. `refresh_restricted` assets keep their
 configured strategy and surface a warning instead. The shared Sling connection
 bridge emits Sling-native DSNs where Bruin's ingestr URI convention differs:
 Trino carries `catalog` and `schema` as query properties, while ClickHouse uses
