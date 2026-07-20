@@ -192,7 +192,10 @@ cache rather than embedded in the executable.
 
 Runtime state lives in SQLite at `.renart/state.db` inside the workspace (WAL
 mode, `busy_timeout=5000`), shared between River's job tables and Renart's own
-`renart_*` tables, migrated by a goose runner. Renart-specific project files
+`renart_*` tables, migrated by a goose runner. The SQLite connection encodes
+bound Go timestamps as canonical UTC SQLite values; this is required because
+River orders due jobs with its exact space-separated timestamp representation.
+Renart-specific project files
 include per-environment policy in `.renart/environments.yml` and desired
 per-environment schedules in `.renart/schedules.yml`; ordinary pipeline source
 remains plain Bruin files (`.bruin.yml`, `pipeline.yml`, asset files). Schedule
@@ -631,7 +634,10 @@ start if core recovery state cannot be read or written. It atomically fails
 running rows and queued rows whose queue job is terminal or missing, relinks
 runnable legacy jobs, returns a claimed-but-not-yet-admitted schedule signal to
 River, cancels admitted abandoned jobs, and replays persisted terminal steps
-without rerunning asset code. New manual admissions need no claim/link repair;
+without rerunning asset code. It also normalizes otherwise-live River retry or
+snooze timestamps written by older processes in an unorderable Go or RFC3339
+form, preserving their arguments and attempt count while making them eligible
+for pickup again. New manual admissions need no claim/link repair;
 River-argument link recovery is legacy-only. Recovery emits one structured
 count summary, including requeued signals and legacy replays skipped because
 their effective execution context was never persisted (see staleness.md §3).

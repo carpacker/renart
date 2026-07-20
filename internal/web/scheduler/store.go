@@ -44,7 +44,10 @@ func OpenStore(path string) (*Store, error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return nil, err
 	}
-	db, err := sql.Open("sqlite", path+"?_pragma=journal_mode(WAL)&_pragma=busy_timeout(5000)&_pragma=foreign_keys(ON)")
+	db, err := sql.Open(
+		"sqlite",
+		path+"?_pragma=journal_mode(WAL)&_pragma=busy_timeout(5000)&_pragma=foreign_keys(ON)&_time_format=sqlite&_timezone=UTC",
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -1157,6 +1160,40 @@ func (s *Store) ReconcileInterruptedState(ctx context.Context, reason string) (I
 		return recovery, err
 	}
 	defer func() { _ = tx.Rollback() }()
+	nowTime := time.Now().UTC()
+	now := formatTime(nowTime)
+	riverNow := formatRiverTime(nowTime)
+
+	// River's SQLite state updates bind scheduled_at as time.Time. Without an
+	// explicit modernc time format, a snooze can be stored as time.Time.String
+	// (including a timezone name and monotonic suffix), which SQLite cannot
+	// compare with its canonical timestamps. Older recovery code also wrote
+	// RFC3339 timestamps, which SQLite can parse but River's lexical due-time
+	// comparison cannot order against its space-separated timestamps. Return
+	// only those otherwise-live, non-River timestamps to the queue while
+	// preserving their arguments and attempt.
+	result, err := tx.ExecContext(ctx, `
+		UPDATE river_job
+		SET state = ?, scheduled_at = ?, finalized_at = NULL
+		WHERE queue = ?
+		  AND kind IN (?, ?)
+		  AND state IN (?, ?, ?)
+		  AND (
+			julianday(scheduled_at) IS NULL
+			OR CAST(scheduled_at AS TEXT) NOT GLOB '????-??-?? ??:??:??*'
+		  )`,
+		string(rivertype.JobStateAvailable), riverNow,
+		pipelineRunQueue, pipelineRunJobKind, scheduleSignalJobKind,
+		string(rivertype.JobStateAvailable), string(rivertype.JobStateRetryable), string(rivertype.JobStateScheduled),
+	)
+	if err != nil {
+		return recovery, fmt.Errorf("repair malformed River retry timestamps: %w", err)
+	}
+	repairedRetryTimestamps, err := result.RowsAffected()
+	if err != nil {
+		return recovery, fmt.Errorf("count repaired River retry timestamps: %w", err)
+	}
+	recovery.RiverJobsRequeued += repairedRetryTimestamps
 
 	jobRows, err := tx.QueryContext(ctx, `
 		SELECT id, attempt, kind, json(args)
@@ -1235,7 +1272,7 @@ func (s *Store) ReconcileInterruptedState(ctx context.Context, reason string) (I
 				    scheduled_at = ?,
 				    finalized_at = NULL
 				WHERE id = ? AND state = ?`,
-				string(rivertype.JobStateAvailable), formatTime(time.Now().UTC()), job.id,
+				string(rivertype.JobStateAvailable), riverNow, job.id,
 				string(rivertype.JobStateRunning))
 			if err != nil {
 				return recovery, err
@@ -1273,7 +1310,7 @@ func (s *Store) ReconcileInterruptedState(ctx context.Context, reason string) (I
 				    scheduled_at = ?,
 				    finalized_at = NULL
 				WHERE id = ? AND state = ?`,
-				string(rivertype.JobStateAvailable), formatTime(time.Now().UTC()), job.id, string(rivertype.JobStateRunning))
+				string(rivertype.JobStateAvailable), riverNow, job.id, string(rivertype.JobStateRunning))
 			if err != nil {
 				return recovery, err
 			}
@@ -1346,8 +1383,6 @@ func (s *Store) ReconcileInterruptedState(ctx context.Context, reason string) (I
 		return recovery, err
 	}
 
-	nowTime := time.Now().UTC()
-	now := formatTime(nowTime)
 	for _, runID := range recovery.RunIDs {
 		if err := finishOpenRunSteps(ctx, tx, runID, RunStatusFailed, nowTime, reason); err != nil {
 			return recovery, err
@@ -1379,7 +1414,7 @@ func (s *Store) ReconcileInterruptedState(ctx context.Context, reason string) (I
 			    finalized_at = ?,
 			    errors = jsonb_insert(COALESCE(errors, jsonb('[]')), '$[#]', jsonb(?))
 			WHERE id = ? AND state = ?`,
-			string(rivertype.JobStateCancelled), now, string(errorData), job.id,
+			string(rivertype.JobStateCancelled), riverNow, string(errorData), job.id,
 			string(rivertype.JobStateRunning),
 		)
 		if updateErr != nil {
@@ -2186,6 +2221,13 @@ func parseTimeValue(value string) time.Time {
 
 func formatTime(value time.Time) string {
 	return value.UTC().Format(time.RFC3339Nano)
+}
+
+// formatRiverTime mirrors riversqlite's timestamp encoding. River compares
+// timestamps lexically in SQLite, so RFC3339 and other parseable encodings are
+// not interchangeable here.
+func formatRiverTime(value time.Time) string {
+	return value.UTC().Round(time.Millisecond).Format("2006-01-02 15:04:05.999")
 }
 
 func runsFromDB(rows []storedb.PipelineRun) ([]PipelineRun, error) {

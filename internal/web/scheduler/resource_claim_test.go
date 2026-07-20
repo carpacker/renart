@@ -103,6 +103,15 @@ func TestStoreBindsRuntimeWriteResourcesToReviewedClaims(t *testing.T) {
 	t.Parallel()
 	localA := PipelineRunResourceClaim{Kind: PipelineRunResourceKindLocalFile, Identity: strings.Repeat("a", 64)}
 	localB := PipelineRunResourceClaim{Kind: PipelineRunResourceKindLocalFile, Identity: strings.Repeat("b", 64)}
+	matchingWithUnplannedResource := resourceClaimSnapshot(ExecutionTargetSnapshotVersionV3, localA)
+	addResourceClaimSnapshotEntry(&matchingWithUnplannedResource, "analytics.unplanned", localB)
+	missingPlannedEntry := resourceClaimSnapshot(ExecutionTargetSnapshotVersionV3, localA)
+	addResourceClaimSnapshotEntry(&missingPlannedEntry, "analytics.unplanned", localA)
+	delete(missingPlannedEntry.Entries, "analytics.orders")
+	mismatchedPlannedAssetID := resourceClaimSnapshot(ExecutionTargetSnapshotVersionV3, localA)
+	mismatchedEntry := mismatchedPlannedAssetID.Entries["analytics.orders"]
+	mismatchedEntry.AssetID = "pipeline-uuid:analytics.other"
+	mismatchedPlannedAssetID.Entries["analytics.orders"] = mismatchedEntry
 
 	tests := []struct {
 		name      string
@@ -124,6 +133,29 @@ func TestStoreBindsRuntimeWriteResourcesToReviewedClaims(t *testing.T) {
 			},
 			snapshot:  resourceClaimSnapshot(ExecutionTargetSnapshotVersionV3, localB),
 			wantError: "do not match the reviewed plan",
+		},
+		{
+			name: "unplanned full graph resource does not widen reviewed writes",
+			resources: PipelineRunPlanResources{
+				Isolation: PipelineRunResourceIsolationResources, Claims: []PipelineRunResourceClaim{localA},
+			},
+			snapshot: matchingWithUnplannedResource,
+		},
+		{
+			name: "planned asset is required in full graph snapshot",
+			resources: PipelineRunPlanResources{
+				Isolation: PipelineRunResourceIsolationResources, Claims: []PipelineRunResourceClaim{localA},
+			},
+			snapshot:  missingPlannedEntry,
+			wantError: `planned asset "analytics.orders" is missing`,
+		},
+		{
+			name: "planned asset identity must match full graph snapshot",
+			resources: PipelineRunPlanResources{
+				Isolation: PipelineRunResourceIsolationResources, Claims: []PipelineRunResourceClaim{localA},
+			},
+			snapshot:  mismatchedPlannedAssetID,
+			wantError: `planned asset "analytics.orders" has asset id`,
 		},
 		{
 			name: "legacy target snapshot",
@@ -202,6 +234,22 @@ func resourceClaimSnapshot(version int, claim PipelineRunResourceClaim) Executio
 	}
 	snapshot.Entries["analytics.orders"] = entry
 	return snapshot
+}
+
+func addResourceClaimSnapshotEntry(
+	snapshot *ExecutionTargetSnapshot,
+	assetName string,
+	claim PipelineRunResourceClaim,
+) {
+	entry := snapshot.Entries["analytics.orders"]
+	entry.AssetID = "pipeline-uuid:" + assetName
+	entry.TargetIdentity = "renart-physical-target-v1:" + assetName
+	entry.Fingerprint = "v2:" + assetName
+	entry.OwnContent = "v2:" + assetName + "-own"
+	entry.WriteResourceKind = claim.Kind
+	entry.WriteResourceIdentity = claim.Identity
+	entry.WriteResourceFidelity = ExecutionTargetFidelityExact
+	snapshot.Entries[assetName] = entry
 }
 
 func TestPipelineRunPlanV2ValidatesCanonicalResourceClaims(t *testing.T) {

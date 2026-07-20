@@ -62,6 +62,23 @@ func TestStorePersistsAndValidatesVersionedRunSpec(t *testing.T) {
 	require.ErrorContains(t, err, "unknown field")
 }
 
+func TestOpenStoreEncodesBoundTimesAsCanonicalUTC(t *testing.T) {
+	t.Parallel()
+	store, err := OpenStore(filepath.Join(t.TempDir(), "state.db"))
+	require.NoError(t, err)
+	defer store.Close()
+
+	local := time.FixedZone("test-local", 2*60*60)
+	bound := time.Date(2026, 7, 20, 20, 30, 30, 123456789, local)
+	var encoded string
+	require.NoError(t, store.db.QueryRow(`SELECT CAST(? AS TEXT)`, bound).Scan(&encoded))
+	assert.Equal(t, "2026-07-20 18:30:30.123456789+00:00", encoded)
+	assert.NotContains(t, encoded, "m=")
+	var parseable bool
+	require.NoError(t, store.db.QueryRow(`SELECT julianday(?) IS NOT NULL`, bound).Scan(&parseable))
+	assert.True(t, parseable)
+}
+
 func TestStorePersistsValidatesAndCascadesVersionedRunPlan(t *testing.T) {
 	t.Parallel()
 	store, err := OpenStore(filepath.Join(t.TempDir(), "state.db"))
@@ -748,6 +765,94 @@ func TestReconcileInterruptedStateRepairsQueuedRowsAndRequeuesUnadmittedSchedule
 	// active slot forever after an upgrade.
 	_, err = store.Create(ctx, PipelineRun{PipelineID: "jobless-pipeline", Pipeline: "replacement", Trigger: RunTriggerManual})
 	require.NoError(t, err)
+}
+
+func TestReconcileInterruptedStateRequeuesMalformedRiverRetryTimestamps(t *testing.T) {
+	t.Parallel()
+	store, err := OpenStore(filepath.Join(t.TempDir(), ".renart", "state.db"))
+	require.NoError(t, err)
+	defer store.Close()
+	ctx := context.Background()
+
+	runID, err := store.Create(ctx, PipelineRun{
+		ID: "snoozed-run", PipelineID: "pipeline-id", Pipeline: "analytics",
+		Trigger: RunTriggerManual, Status: RunStatusQueued,
+	})
+	require.NoError(t, err)
+	runJobID := insertTestRiverJob(t, store, pipelineRunJobArgs{RunID: runID})
+	require.NoError(t, store.SetRunRiverJob(ctx, runID, runJobID))
+	signalArgs := scheduleSignalJobArgs{
+		PipelineUUID: "pipeline-uuid", Environment: "prod",
+		Start: "2026-07-20T18:00:00Z", End: "2026-07-20T18:30:00Z",
+		SnapshotVersionID: "snapshot-id",
+	}
+	signalJobID := insertTestRiverJob(t, store, signalArgs)
+	rfc3339JobID := insertTestRiverJob(t, store, scheduleSignalJobArgs{
+		PipelineUUID: "rfc3339-pipeline-uuid", Environment: "prod",
+		Start: "2026-07-20T18:30:00Z", End: "2026-07-20T19:00:00Z",
+		SnapshotVersionID: "snapshot-id",
+	})
+
+	const malformed = "2026-07-20 20:30:30.199198727 +0200 CEST m=+44.500788305"
+	_, err = store.db.ExecContext(ctx, `
+		UPDATE river_job
+		SET state = CASE id WHEN ? THEN ? ELSE ? END,
+		    attempt = CASE id WHEN ? THEN 1 ELSE 0 END,
+		    scheduled_at = ?
+		WHERE id IN (?, ?)`,
+		runJobID, string(rivertype.JobStateRetryable), string(rivertype.JobStateScheduled),
+		runJobID, malformed, runJobID, signalJobID,
+	)
+	require.NoError(t, err)
+	_, err = store.db.ExecContext(ctx, `
+		UPDATE river_job SET state = ?, scheduled_at = ? WHERE id = ?`,
+		string(rivertype.JobStateAvailable), "2026-07-20T19:03:46.243023719Z", rfc3339JobID)
+	require.NoError(t, err)
+	var signalArgsBefore string
+	require.NoError(t, store.db.QueryRowContext(ctx, `SELECT json(args) FROM river_job WHERE id = ?`, signalJobID).Scan(&signalArgsBefore))
+
+	recovery, err := store.ReconcileInterruptedState(ctx, orphanedRunError)
+	require.NoError(t, err)
+	assert.Empty(t, recovery.RunIDs)
+	assert.EqualValues(t, 3, recovery.RiverJobsRequeued)
+	for _, jobID := range []int64{runJobID, signalJobID, rfc3339JobID} {
+		assertRiverJobState(t, store, jobID, rivertype.JobStateAvailable)
+		var scheduledAt string
+		var parseable bool
+		var dueForRiver bool
+		require.NoError(t, store.db.QueryRowContext(ctx, `
+			SELECT CAST(scheduled_at AS TEXT),
+			       julianday(scheduled_at) IS NOT NULL,
+			       CAST(scheduled_at AS TEXT) <= ?
+			FROM river_job WHERE id = ?`, formatRiverTime(time.Now().UTC().Add(time.Second)), jobID).
+			Scan(&scheduledAt, &parseable, &dueForRiver))
+		assert.True(t, parseable)
+		assert.True(t, dueForRiver, "recovered timestamp must be eligible under River's lexical comparison")
+		assert.NotContains(t, scheduledAt, "m=")
+		assert.NotContains(t, scheduledAt, "T")
+	}
+	var runAttempt, signalAttempt int
+	require.NoError(t, store.db.QueryRowContext(ctx, `SELECT attempt FROM river_job WHERE id = ?`, runJobID).Scan(&runAttempt))
+	require.NoError(t, store.db.QueryRowContext(ctx, `SELECT attempt FROM river_job WHERE id = ?`, signalJobID).Scan(&signalAttempt))
+	assert.Equal(t, 1, runAttempt, "timestamp repair must not reinterpret River attempt accounting")
+	assert.Zero(t, signalAttempt)
+	var signalArgsAfter string
+	require.NoError(t, store.db.QueryRowContext(ctx, `SELECT json(args) FROM river_job WHERE id = ?`, signalJobID).Scan(&signalArgsAfter))
+	assert.JSONEq(t, signalArgsBefore, signalArgsAfter)
+	run, _, _, err := store.Get(ctx, runID)
+	require.NoError(t, err)
+	assert.Equal(t, RunStatusQueued, run.Status)
+
+	again, err := store.ReconcileInterruptedState(ctx, orphanedRunError)
+	require.NoError(t, err)
+	assert.Zero(t, again.RiverJobsRequeued, "canonical timestamps are not requeued repeatedly")
+}
+
+func TestFormatRiverTimeMatchesRiverSQLiteOrderingFormat(t *testing.T) {
+	t.Parallel()
+	local := time.FixedZone("test-local", 2*60*60)
+	value := time.Date(2026, 7, 20, 20, 30, 30, 123800000, local)
+	assert.Equal(t, "2026-07-20 18:30:30.124", formatRiverTime(value))
 }
 
 func TestRunRecoveryMigrationBackfillsInterruptedRuns(t *testing.T) {

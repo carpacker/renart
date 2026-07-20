@@ -252,7 +252,11 @@ scheduled compatibility signal with no admitted run is instead returned to
 River with its exact arguments and interval intact. Startup writes a structured
 summary with reconciled-run, cancelled-job, requeued-signal, replay, and
 replay-failure counts; cancelled queue rows retain the interruption as an
-attempt error.
+attempt error. Otherwise-live Renart run and schedule-signal jobs whose retry
+timestamp was written in a pre-canonical Go or RFC3339 encoding are requeued at
+the current time in River's exact sortable SQLite format. Their arguments and
+attempt count are preserved, so an old snoozed occurrence cannot remain
+permanently `available` but ineligible for River's lexical due-time comparison.
 
 Before the unique run-slot migration is applied, a legacy database can contain
 multiple queued/running rows for one pipeline path because old admission was
@@ -597,7 +601,12 @@ stable operator contract is unavailable.
 Immediately before the first step, execution-target snapshot v3 recomputes the
 resource set from the effective operator/configuration and compares it with
 both the immutable reviewed plan and the acquired SQLite claims. Drift fails
-before physical work. Terminalizing a run releases its slot/claim set through
+before physical work. The snapshot still contains the full parsed graph so
+upstream-writer and fingerprint evidence remains self-contained, but this
+write-resource comparison is scoped to the plan's immutable execution units;
+unselected graph members are evidence, not writes owned by the reviewed run.
+Each selected snapshot entry must retain the planned stable asset identity.
+Terminalizing a run releases its slot/claim set through
 the same database transaction and trigger path. Planning's active-run warning
 uses the same conflict rules for guidance; admission remains authoritative
 against races after review.

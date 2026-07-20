@@ -184,7 +184,10 @@ func validateExecutionWriteResource(assetName string, entry ExecutionTargetSnaps
 	return nil
 }
 
-func executionTargetSnapshotResources(snapshot ExecutionTargetSnapshot) (PipelineRunPlanResources, error) {
+func executionTargetSnapshotResources(
+	snapshot ExecutionTargetSnapshot,
+	executionUnits []PipelineRunExecutionUnit,
+) (PipelineRunPlanResources, error) {
 	if snapshot.Version < ExecutionTargetSnapshotVersionV3 {
 		return PipelineRunPlanResources{}, fmt.Errorf(
 			"%w: version %d has no write-resource evidence",
@@ -196,8 +199,44 @@ func executionTargetSnapshotResources(snapshot ExecutionTargetSnapshot) (Pipelin
 		Isolation: PipelineRunResourceIsolationResources,
 		Claims:    []PipelineRunResourceClaim{},
 	}
+	selectedEntries := make(map[string]ExecutionTargetSnapshotEntry, len(executionUnits))
+	selectedAssetIDs := make(map[string]string, len(executionUnits))
+	for _, unit := range executionUnits {
+		assetName := unit.AssetName
+		if previousID, exists := selectedAssetIDs[assetName]; exists {
+			if previousID != unit.AssetID {
+				return PipelineRunPlanResources{}, fmt.Errorf(
+					"%w: planned asset %q has conflicting asset ids %q and %q",
+					ErrInvalidExecutionTargetSnapshot,
+					assetName,
+					previousID,
+					unit.AssetID,
+				)
+			}
+			continue
+		}
+		entry, exists := snapshot.Entries[assetName]
+		if !exists {
+			return PipelineRunPlanResources{}, fmt.Errorf(
+				"%w: planned asset %q is missing from the execution target snapshot",
+				ErrInvalidExecutionTargetSnapshot,
+				assetName,
+			)
+		}
+		if entry.AssetID != unit.AssetID {
+			return PipelineRunPlanResources{}, fmt.Errorf(
+				"%w: planned asset %q has asset id %q in the execution target snapshot, expected %q",
+				ErrInvalidExecutionTargetSnapshot,
+				assetName,
+				entry.AssetID,
+				unit.AssetID,
+			)
+		}
+		selectedAssetIDs[assetName] = unit.AssetID
+		selectedEntries[assetName] = entry
+	}
 	seen := make(map[string]struct{})
-	for _, entry := range snapshot.Entries {
+	for _, entry := range selectedEntries {
 		if entry.WriteResourceFidelity == ExecutionTargetFidelityExact && entry.WriteResourceKind == "none" {
 			continue
 		}
@@ -247,7 +286,7 @@ func validateExecutionTargetResourceBinding(
 	if plan.Version < PipelineRunPlanVersionV2 {
 		return nil
 	}
-	actual, err := executionTargetSnapshotResources(snapshot)
+	actual, err := executionTargetSnapshotResources(snapshot, plan.ExecutionUnits)
 	if err != nil {
 		return err
 	}
