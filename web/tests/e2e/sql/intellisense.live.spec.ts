@@ -356,6 +356,68 @@ test.describe("sql intellisense live", () => {
     await expectVisibleSuggestText(page, "total_amount");
   });
 
+  test("completes VALUES aliases and DESCRIBE result columns", async ({ liveApp, page }) => {
+    test.skip(
+      test.info().project.name.includes("mobile"),
+      "Desktop suggest widget exposes stable Monaco completion DOM.",
+    );
+
+    await openCustomersEditor(page, liveApp.baseURL);
+    await replaceEditorContentByInsertText(page, "select \nfrom (values (1, 2), (3, 4)) n(a, b)");
+    await setEditorPositionAfterText(page, "select ");
+    await page.keyboard.press("ControlOrMeta+Space");
+    await expectVisibleSuggestText(page, "a");
+    await expectVisibleSuggestText(page, "b");
+    await page.keyboard.press("Escape");
+
+    await replaceEditorContentByInsertText(
+      page,
+      "select \nfrom (describe analytics.orders) described",
+    );
+    await setEditorPositionAfterText(page, "select ");
+    await page.keyboard.press("ControlOrMeta+Space");
+    for (const column of ["column_name", "column_type", "null", "key", "default", "extra"]) {
+      await expectVisibleSuggestText(page, column);
+    }
+    const suggestWidget = page.locator(".suggest-widget.visible").first();
+    await expect(suggestWidget.getByText("order_id", { exact: true })).toHaveCount(0);
+    await expect(suggestWidget.getByText("total_amount", { exact: true })).toHaveCount(0);
+  });
+
+  test("highlights the canvas asset referenced under the SQL pointer", async ({
+    liveApp,
+    page,
+  }) => {
+    test.skip(
+      test.info().project.name.includes("mobile"),
+      "The split canvas is a desktop affordance.",
+    );
+
+    await page.goto(
+      `${liveApp.baseURL}/pipelines/${analyticsPipelineId}/assets/${customersAssetId}/split`,
+    );
+    await waitForEditorReady(page, "customer_id");
+    await replaceEditorContentByInsertText(page, "select * from analytics.orders");
+    const upstreamToken = page
+      .locator(".view-lines")
+      .first()
+      .locator("span", { hasText: "orders" })
+      .last();
+    const highlightedNode = page.locator('[data-sql-hover-highlight="true"]').filter({
+      has: page.locator(`[data-testid="lineage-asset"][data-asset-id="${ordersAssetId}"]`),
+    });
+
+    await expect
+      .poll(async () => {
+        await upstreamToken.hover();
+        return highlightedNode.count();
+      })
+      .toBe(1);
+
+    await page.getByRole("link", { name: "Build", exact: true }).first().hover();
+    await expect(highlightedNode).toHaveCount(0);
+  });
+
   test("offers only in-scope aliases in join conditions and chains into columns", async ({
     liveApp,
     page,

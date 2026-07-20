@@ -168,43 +168,6 @@ export function useSQLLSP(
           }
         }
         const dotPrefix = parseDotPrefix(textBeforeCursor);
-        // A `schema.` in a FROM/JOIN position is a relation qualifier, not an
-        // alias whose columns we should fetch from the warehouse — let the LSP
-        // relation completions handle it (and don't hit /api/sql/table-columns).
-        if (dotPrefix && connectionName && !isRelationDotContext(currentModel, position)) {
-          const remoteTableName =
-            resolveRemoteTableName(dotPrefix.tablePart, schemaTables, parseContext) ??
-            dotPrefix.tablePart;
-          const columns = await loadRemoteColumns({
-            connection: connectionName,
-            table: remoteTableName,
-            environment: selectedEnvironment,
-          }).catch(() => []);
-          const range = new monaco.Range(
-            position.lineNumber,
-            position.column - dotPrefix.columnPrefix.length,
-            position.lineNumber,
-            position.column,
-          );
-          const normalizedPrefix = dotPrefix.columnPrefix.trim().toLowerCase();
-          const suggestions = columns
-            .filter(
-              (column) => !normalizedPrefix || column.name.toLowerCase().includes(normalizedPrefix),
-            )
-            .map((column) => ({
-              label: column.name,
-              kind: monaco.languages.CompletionItemKind.Field,
-              detail: column.type
-                ? `${remoteTableName}.${column.name} (${column.type})`
-                : `${remoteTableName}.${column.name}`,
-              insertText: column.name,
-              range,
-              sortText: "1",
-            }));
-          if (suggestions.length > 0) {
-            return { suggestions };
-          }
-        }
         const response = await getSQLLSPCompletions({
           asset_id: asset.id,
           content: currentModel.getValue(),
@@ -223,6 +186,53 @@ export function useSQLLSP(
         const lspSuggestions = (response.completions ?? [])
           .filter((item) => item.kind === 5 || item.kind === 18 || item.kind === 2)
           .map((item) => completionToMonaco(monaco, item, range));
+        // Derived aliases (CTEs, subqueries, VALUES and DESCRIBE) belong to the
+        // local query scope. Prefer their LSP columns before consulting the
+        // warehouse; resolving the alias back to its source relation would
+        // otherwise leak the source table's columns into a derived result.
+        const hasLocalColumnSuggestions = (response.completions ?? []).some(
+          (item) => item.kind === 5,
+        );
+        // A `schema.` in a FROM/JOIN position is a relation qualifier, not an
+        // alias whose columns we should fetch from the warehouse.
+        if (
+          dotPrefix &&
+          connectionName &&
+          !hasLocalColumnSuggestions &&
+          !isRelationIdentifierContext(currentModel, position)
+        ) {
+          const remoteTableName =
+            resolveRemoteTableName(dotPrefix.tablePart, schemaTables, parseContext) ??
+            dotPrefix.tablePart;
+          const columns = await loadRemoteColumns({
+            connection: connectionName,
+            table: remoteTableName,
+            environment: selectedEnvironment,
+          }).catch(() => []);
+          const normalizedPrefix = dotPrefix.columnPrefix.trim().toLowerCase();
+          lspSuggestions.push(
+            ...columns
+              .filter(
+                (column) =>
+                  !normalizedPrefix || column.name.toLowerCase().includes(normalizedPrefix),
+              )
+              .map((column) => ({
+                label: column.name,
+                kind: monaco.languages.CompletionItemKind.Field,
+                detail: column.type
+                  ? `${remoteTableName}.${column.name} (${column.type})`
+                  : `${remoteTableName}.${column.name}`,
+                insertText: column.name,
+                range: new monaco.Range(
+                  position.lineNumber,
+                  position.column - dotPrefix.columnPrefix.length,
+                  position.lineNumber,
+                  position.column,
+                ),
+                sortText: "1",
+              })),
+          );
+        }
         if (connectionName && isTableCompletionContext(currentModel, position)) {
           const remoteTables = await loadRemoteTables({
             connection: connectionName,
@@ -991,7 +1001,10 @@ function formatSQLValueCompletion(value: string | number | boolean | null, insid
   return String(value ?? "NULL");
 }
 
-function isRelationDotContext(model: MonacoNS.editor.ITextModel, position: MonacoNS.Position) {
+function isRelationIdentifierContext(
+  model: MonacoNS.editor.ITextModel,
+  position: MonacoNS.Position,
+) {
   const textBeforeCursor = model
     .getValueInRange({
       startLineNumber: 1,
@@ -1000,7 +1013,7 @@ function isRelationDotContext(model: MonacoNS.editor.ITextModel, position: Monac
       endColumn: position.column,
     })
     .replace(/'[^']*'|"[^"]*"/g, " ");
-  return /\b(?:from|join|into|update)\s+[\w.]+\.\s*$/i.test(textBeforeCursor);
+  return /\b(?:from|join|into|update)\s+[\w.]+\s*$/i.test(textBeforeCursor);
 }
 
 function isTableCompletionContext(model: MonacoNS.editor.ITextModel, position: MonacoNS.Position) {

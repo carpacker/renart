@@ -8,6 +8,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AssetCodeEditor } from "@/components/asset-code-editor";
 import { useJinjaIntellisense } from "@/hooks/use-jinja-intellisense";
 import { useSQLIntellisense } from "@/hooks/use-sql-intellisense";
+import { useSQLLSP } from "@/hooks/use-sql-lsp";
+import { useSQLCanvasHover } from "@/hooks/use-sql-canvas-hover";
 import { useWorkspaceTheme } from "@/hooks/use-workspace-theme";
 import { formatSQLAsset } from "@/lib/api";
 import { selectedAssetSchemaTablesAtom } from "@/lib/atoms/domains/suggestions";
@@ -79,8 +81,17 @@ export function AppAdhocEditor({
     adhocAsset.upstreams ?? [],
     selectedEnvironment,
     onGoToAsset,
+    undefined,
+    {
+      registerGlobalProviders: false,
+      registerLegacyDiagnosticProviders: false,
+      registerParseContextMarkers: false,
+      registerSemanticDecorations: false,
+    },
   );
+  useSQLLSP(monacoInstance, editorInstance, adhocAsset, editorValue, schemaTables, onGoToAsset);
   useJinjaIntellisense(monacoInstance, editorInstance, adhocAsset, editorValue);
+  useSQLCanvasHover(editorInstance, adhocAsset);
 
   // Monaco replaces the whole document when the `value` prop changes in a
   // post-commit effect, which can drop keystrokes if the live draft is fed

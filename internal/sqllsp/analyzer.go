@@ -45,7 +45,7 @@ const (
 
 var (
 	wordPattern         = regexp.MustCompile(`[A-Za-z_][A-Za-z0-9_$]*`)
-	relationPattern     = regexp.MustCompile(`(?i)\b(from|join|into|update|table)\s+((?:"[^"]+"|` + "`" + `[^` + "`" + `]+` + "`" + `|[A-Za-z_][\w$-]*)(?:\s*\.\s*(?:"[^"]+"|` + "`" + `[^` + "`" + `]+` + "`" + `|[A-Za-z_][\w$-]*))*)(?:\s+as\s+([A-Za-z_][\w$]*))?`)
+	relationPattern     = regexp.MustCompile(`(?i)\b(from|join|into|update|table|describe)\s+((?:"[^"]+"|` + "`" + `[^` + "`" + `]+` + "`" + `|[A-Za-z_][\w$-]*)(?:\s*\.\s*(?:"[^"]+"|` + "`" + `[^` + "`" + `]+` + "`" + `|[A-Za-z_][\w$-]*))*)(?:\s+as\s+([A-Za-z_][\w$]*))?`)
 	insertValuesPattern = regexp.MustCompile(`(?is)\binsert\s+into\s+((?:"[^"]+"|` + "`" + `[^` + "`" + `]+` + "`" + `|[A-Za-z_][\w$-]*)(?:\s*\.\s*(?:"[^"]+"|` + "`" + `[^` + "`" + `]+` + "`" + `|[A-Za-z_][\w$-]*))*)\s*(?:\(([^)]*)\))?\s*values\s*\(`)
 	dotColumnPattern    = regexp.MustCompile(`([A-Za-z_][\w$]*)\s*\.\s*([A-Za-z_][\w$]*)`)
 	refCallPattern      = regexp.MustCompile(`(?is)\{\{\s*(ref|source)\s*\(\s*['"]([^'"]*)`)
@@ -1932,6 +1932,23 @@ func analyzeSQLWithParent(sql string, resolver scopeResolver, parent *sqlAnalysi
 			continue
 		}
 		columns, columnRanges := outputColumnsWithRanges(subquery.body, bodyAnalysis, resolver, absoluteBodyStart)
+		if len(subquery.columnAliases) > 0 {
+			aliasedColumns := make([]ColumnInfo, 0, len(subquery.columnAliases))
+			columnRanges = make(map[string]byteRange, len(subquery.columnAliases))
+			for index, columnAlias := range subquery.columnAliases {
+				column := ColumnInfo{Name: columnAlias.name}
+				if index < len(columns) {
+					column = columns[index]
+					column.Name = columnAlias.name
+				}
+				aliasedColumns = append(aliasedColumns, column)
+				columnRanges[strings.ToLower(columnAlias.name)] = byteRange{
+					start: baseOffset + columnAlias.start,
+					end:   baseOffset + columnAlias.end,
+				}
+			}
+			columns = aliasedColumns
+		}
 		analysis.aliases[strings.ToLower(subquery.alias)] = aliasRef{
 			alias:        subquery.alias,
 			name:         subquery.alias,
@@ -2035,6 +2052,12 @@ type subqueryBody struct {
 	body                 string
 	aliasStart, aliasEnd int
 	bodyStart            int
+	columnAliases        []subqueryColumnAlias
+}
+
+type subqueryColumnAlias struct {
+	name       string
+	start, end int
 }
 
 func extractCTEDefs(sql string) []cteBody {
@@ -2086,13 +2109,12 @@ func extractCTEDefs(sql string) []cteBody {
 
 func extractSubqueries(sql string) []subqueryBody {
 	var result []subqueryBody
-	lower := strings.ToLower(sql)
 	for i := 0; i < len(sql); i++ {
 		if sql[i] != '(' {
 			continue
 		}
 		bodyStart := skipSpace(sql, i+1)
-		if !hasWordAt(lower, bodyStart, "select") && !hasWordAt(lower, bodyStart, "with") {
+		if !isQueryBodyStart(sql, bodyStart) {
 			continue
 		}
 		close := findMatchingParen(sql, i)
@@ -2107,9 +2129,50 @@ func extractSubqueries(sql string) []subqueryBody {
 		if alias != "" && isKeyword(alias) {
 			alias = ""
 		}
-		result = append(result, subqueryBody{alias: alias, body: sql[i+1 : close], aliasStart: aliasStart, aliasEnd: aliasEnd, bodyStart: i + 1})
+		var columnAliases []subqueryColumnAlias
+		if alias != "" {
+			columnAliases = readSubqueryColumnAliases(sql, aliasEnd)
+		}
+		result = append(result, subqueryBody{
+			alias:         alias,
+			body:          sql[i+1 : close],
+			aliasStart:    aliasStart,
+			aliasEnd:      aliasEnd,
+			bodyStart:     i + 1,
+			columnAliases: columnAliases,
+		})
 	}
 	return result
+}
+
+func isQueryBodyStart(sql string, start int) bool {
+	return hasWordAt(sql, start, "select") ||
+		hasWordAt(sql, start, "with") ||
+		hasWordAt(sql, start, "values") ||
+		hasWordAt(sql, start, "describe")
+}
+
+func readSubqueryColumnAliases(sql string, aliasEnd int) []subqueryColumnAlias {
+	open := skipSpace(sql, aliasEnd)
+	if open >= len(sql) || sql[open] != '(' {
+		return nil
+	}
+	close := findMatchingParen(sql, open)
+	if close < 0 {
+		return nil
+	}
+	list := sql[open+1 : close]
+	aliases := make([]subqueryColumnAlias, 0)
+	for _, itemRange := range splitTopLevelRanges(list, ',') {
+		start := open + 1 + itemRange.start
+		start = skipSpace(sql, start)
+		name, end := readIdentifier(sql, start)
+		if name == "" {
+			continue
+		}
+		aliases = append(aliases, subqueryColumnAlias{name: name, start: start, end: end})
+	}
+	return aliases
 }
 
 func outputColumns(sql string, analysis sqlAnalysis, resolver scopeResolver) []ColumnInfo {
@@ -2118,6 +2181,9 @@ func outputColumns(sql string, analysis sqlAnalysis, resolver scopeResolver) []C
 }
 
 func outputColumnsWithRanges(sql string, analysis sqlAnalysis, resolver scopeResolver, baseOffset int) ([]ColumnInfo, map[string]byteRange) {
+	if columns, ok := describeOutputColumns(sql); ok {
+		return columns, map[string]byteRange{}
+	}
 	selectBody, selectStart, ok := firstSelectListRange(sql)
 	if !ok {
 		return nil, nil
@@ -2163,6 +2229,19 @@ func outputColumnsWithRanges(sql string, analysis sqlAnalysis, resolver scopeRes
 		}
 	}
 	return columns, columnRanges
+}
+
+func describeOutputColumns(sql string) ([]ColumnInfo, bool) {
+	start := skipSpace(sql, 0)
+	if !hasWordAt(sql, start, "describe") {
+		return nil, false
+	}
+	names := []string{"column_name", "column_type", "null", "key", "default", "extra"}
+	columns := make([]ColumnInfo, 0, len(names))
+	for _, name := range names {
+		columns = append(columns, ColumnInfo{Name: name, Type: "VARCHAR"})
+	}
+	return columns, true
 }
 
 func firstSelectListRange(sql string) (string, int, bool) {
@@ -2309,13 +2388,12 @@ type byteRange struct {
 
 func extractSubqueryRanges(sql string) []byteRange {
 	var ranges []byteRange
-	lower := strings.ToLower(sql)
 	for i := 0; i < len(sql); i++ {
 		if sql[i] != '(' {
 			continue
 		}
 		bodyStart := skipSpace(sql, i+1)
-		if !hasWordAt(lower, bodyStart, "select") && !hasWordAt(lower, bodyStart, "with") {
+		if !isQueryBodyStart(sql, bodyStart) {
 			continue
 		}
 		close := findMatchingParen(sql, i)
@@ -2647,7 +2725,7 @@ func selectScopeRangesAt(text string, offset int) []byteRange {
 
 	for _, open := range openParens {
 		bodyStart := skipSpace(text, open+1)
-		if !hasWordAt(text, bodyStart, "select") && !hasWordAt(text, bodyStart, "with") {
+		if !isQueryBodyStart(text, bodyStart) {
 			continue
 		}
 		end := findMatchingParen(text, open)

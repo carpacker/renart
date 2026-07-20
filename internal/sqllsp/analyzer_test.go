@@ -149,6 +149,72 @@ from (
 	}
 }
 
+func TestEngineCompletesExplicitColumnsFromValuesSubquery(t *testing.T) {
+	engine := NewEngine(CanonicalGraph{Version: 1})
+	doc := TextDocumentItem{URI: "file:///query.sql", Text: `select *
+from (values (1, 2), (3, 4)) n(a, b)`}
+
+	items := engine.Complete(doc, PositionAt(doc.Text, strings.Index(doc.Text, "*")))
+	labels := completionLabels(items)
+	for _, column := range []string{"a", "b"} {
+		if !slices.Contains(labels, column) {
+			t.Fatalf("expected VALUES alias column %s, got %#v", column, labels)
+		}
+	}
+
+	qualified := TextDocumentItem{URI: doc.URI, Text: `select n.
+from (values (1, 2), (3, 4)) n(a, b)`}
+	qualifiedLabels := completionLabels(
+		engine.Complete(qualified, Position{Line: 0, Character: len("select n.")}),
+	)
+	for _, column := range []string{"a", "b"} {
+		if !slices.Contains(qualifiedLabels, column) {
+			t.Fatalf("expected qualified VALUES alias column %s, got %#v", column, qualifiedLabels)
+		}
+	}
+}
+
+func TestEngineUsesDescribeResultColumnsForSubquery(t *testing.T) {
+	engine := NewEngine(CanonicalGraph{
+		Version: 1,
+		Relations: []RelationNode{{
+			ID:   "relation:my-asset",
+			Name: "some_pipeline.my_asset",
+		}},
+		Schemas: []SchemaLayer{{
+			RelationID: "relation:my-asset",
+			Columns: []ColumnInfo{
+				{Name: "actual_id", Type: "INTEGER"},
+				{Name: "actual_value", Type: "VARCHAR"},
+			},
+		}},
+	})
+	doc := TextDocumentItem{URI: "file:///query.sql", Text: `select *
+from (describe some_pipeline.my_asset) described`}
+
+	items := engine.Complete(doc, PositionAt(doc.Text, strings.Index(doc.Text, "*")))
+	labels := completionLabels(items)
+	for _, column := range []string{"column_name", "column_type", "null", "key", "default", "extra"} {
+		if !slices.Contains(labels, column) {
+			t.Fatalf("expected DESCRIBE result column %s, got %#v", column, labels)
+		}
+	}
+	for _, sourceColumn := range []string{"actual_id", "actual_value"} {
+		if slices.Contains(labels, sourceColumn) {
+			t.Fatalf("did not expect source column %s for DESCRIBE result, got %#v", sourceColumn, labels)
+		}
+	}
+
+	output := engine.InferOutputColumns(doc.Text)
+	outputNames := make([]string, 0, len(output))
+	for _, column := range output {
+		outputNames = append(outputNames, column.Name)
+	}
+	if !slices.Equal(outputNames, []string{"column_name", "column_type", "null", "key", "default", "extra"}) {
+		t.Fatalf("unexpected DESCRIBE output columns: %#v", outputNames)
+	}
+}
+
 func TestEngineCompletesColumnsFromNestedSubqueryAlias(t *testing.T) {
 	engine := NewEngine(CanonicalGraph{
 		Version: 1,

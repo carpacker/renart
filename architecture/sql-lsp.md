@@ -86,6 +86,10 @@ In the editor (`notebook-cell-editor.tsx`), SQL cells use `useSQLLSP` with the
 same provider split as the asset editor: the language server owns diagnostics,
 decorations, hover, rename, etc.; `useSQLIntellisense` keeps schema-aware
 completion (which knows notebook run columns the backend cannot see).
+The Build ad-hoc editor also uses this LSP path (with its selected asset as the
+dialect and scope identity) instead of enabling the older global parse-context
+completion provider, so asset, query-sensor, and ad-hoc SQL agree on derived
+query semantics.
 
 Python assets and Python notebook cells project static SQL passed as the first
 argument to `query("...")` or `renart.query("...")` through
@@ -133,6 +137,15 @@ upstream's columns, which may themselves be inferred.
 3. If any asset's inferred column set changed, rebuild the schema layers
    (base + one `inferred` layer per asset) and repeat.
 4. Stop when a round changes nothing or the cap is hit.
+
+Derived-table inference is deliberately syntax-tolerant. Parenthesized
+`SELECT`, `WITH`, `VALUES`, and DuckDB `DESCRIBE` bodies are scoped without
+requiring a complete parser AST. An explicit derived-table column list such as
+`n(a, b)` overrides the body's inferred names, including for `VALUES` rows.
+`DESCRIBE` exposes its result relation (`column_name`, `column_type`, `null`,
+`key`, `default`, `extra`) rather than leaking the described table's columns.
+Monaco asks the LSP for local alias columns before falling back to live
+warehouse discovery, preserving that distinction for qualified aliases too.
 
 With truthful edges, step 2 walks a DAG in one round regardless of chain
 depth; round two confirms stability. The fixpoint loop stays as the
