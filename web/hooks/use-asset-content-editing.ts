@@ -1,12 +1,10 @@
 "use client";
 
 import { useAtomValue, useSetAtom } from "jotai";
-import { useCallback, useEffect, useRef } from "react";
+import { useCallback, useRef } from "react";
 
 import { useDebouncedAssetSave } from "@/hooks/use-debounced-asset-save";
 import { useWorkspaceSaveParticipant } from "@/hooks/use-workspace-save-participant";
-import { refreshAssetColumnsFromDefinition } from "@/lib/api-asset-transactions";
-import { fillAssetColumnsFromDB } from "@/lib/api";
 import { editorDraftAtom, editorProgrammaticContentAtom } from "@/lib/atoms/domains/editor";
 import { WebAsset } from "@/lib/types";
 
@@ -39,7 +37,6 @@ export function useAssetContentEditing({
     saveAssetNow,
   } = useDebouncedAssetSave(saveDelay);
   useWorkspaceSaveParticipant(awaitAllSaves);
-  const fillColumnsTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const lastEditorChangeRef = useRef<{
     assetId: string;
     value: string;
@@ -90,38 +87,9 @@ export function useAssetContentEditing({
         [asset.id]: nextValue,
       }));
       scheduleSave(pipelineId, asset.id, nextValue);
-
-      const isSQLAsset =
-        asset.path.toLowerCase().endsWith(".sql") || asset.type.toLowerCase().includes("sql");
-      const isAPIAsset = asset.type.toLowerCase() === "api";
-      if (!isSQLAsset && !isAPIAsset) {
-        return;
-      }
-
-      if (fillColumnsTimerRef.current) {
-        clearTimeout(fillColumnsTimerRef.current);
-      }
-
-      const currentAssetID = asset.id;
-      fillColumnsTimerRef.current = setTimeout(() => {
-        const refresh = isAPIAsset
-          ? refreshAssetColumnsFromDefinition(currentAssetID)
-          : fillAssetColumnsFromDB(currentAssetID);
-        void refresh.catch(() => {
-          // noop: best-effort post-edit sync
-        });
-      }, 1200);
     },
     [asset, pipelineId, scheduleSave, setEditorDraft],
   );
-
-  useEffect(() => {
-    return () => {
-      if (fillColumnsTimerRef.current) {
-        clearTimeout(fillColumnsTimerRef.current);
-      }
-    };
-  }, []);
 
   const handleSaveSelectedAsset = useCallback(async (): Promise<SaveSelectedAssetResult> => {
     if (!asset || !pipelineId) {

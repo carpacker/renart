@@ -374,11 +374,14 @@ select 1 as customer_id,'Ada' as customer_name union all select 2 as customer_id
 
     const confirmResponse = page.waitForResponse(
       (response) =>
-        response.url().endsWith(`/api/pipelines/${pipelineId}/plan/confirm`) && response.ok(),
+        response.url().endsWith(`/api/pipelines/${pipelineId}/plan/confirm`) &&
+        response.request().method() === "POST",
       { timeout: 30000 },
     );
     await confirmButton.click();
     const confirmed = await confirmResponse;
+    const confirmBody = await confirmed.text();
+    expect(confirmed.ok(), confirmBody).toBe(true);
     expect(confirmed.request().postDataJSON()).toMatchObject({
       plan_id: expect.stringMatching(/^[a-f0-9]{64}$/),
       plan: { source: { kind: "working_tree" }, selection: { mode: "all" } },

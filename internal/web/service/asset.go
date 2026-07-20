@@ -7,7 +7,6 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
-	"time"
 
 	"github.com/bruin-data/bruin/pkg/pipeline"
 	"github.com/spf13/afero"
@@ -189,7 +188,6 @@ type AssetDependencies struct {
 	DerivedAssetContent                        func(string, string, string, string, string) string
 	EnsurePythonProject                        func(string, string, string) error
 	SuppressWatcher                            func(string)
-	PushWorkspaceUpdate                        func(context.Context, string, string)
 	PushWorkspaceUpdateImmediate               func(context.Context, string, string)
 	PushWorkspaceUpdateImmediateWithChangedIDs func(context.Context, string, string, []string)
 	PushAssetContentUpdateImmediate            func(string, string, []string, string)
@@ -199,8 +197,6 @@ type AssetDependencies struct {
 type AssetService struct {
 	deps                    AssetDependencies
 	createMu                sync.Mutex
-	patchMu                 sync.Mutex
-	patchTimers             map[string]*time.Timer
 	assetFileMu             sync.Mutex
 	assetFileLocks          map[string]*sync.Mutex
 	pythonPackageMountMu    sync.Mutex
@@ -213,7 +209,6 @@ type AssetService struct {
 func NewAssetService(deps AssetDependencies) *AssetService {
 	return &AssetService{
 		deps:                    deps,
-		patchTimers:             make(map[string]*time.Timer),
 		assetFileLocks:          make(map[string]*sync.Mutex),
 		pythonPackageMountCache: make(map[string]pythonPackageMountCacheEntry),
 		pythonTySessionFiles:    make(map[string]string),
@@ -221,10 +216,9 @@ func NewAssetService(deps AssetDependencies) *AssetService {
 }
 
 // lockAssetFile serializes read-modify-write access to a single asset file.
-// Without it, an interactive content save (Update) and the async SQL patch
-// (RunSQLPatches) — or two overlapping saves — can interleave their truncate +
-// write cycles, letting one goroutine read a torn/empty file, lose the @bruin
-// header, and persist a headerless file that makes the asset disappear.
+// Without it, two overlapping saves can interleave their truncate + write
+// cycles, letting one goroutine read a torn/empty file, lose the @bruin header,
+// and persist a headerless file that makes the asset disappear.
 // Returns the unlock function. Keyed by the cleaned absolute path.
 func (s *AssetService) lockAssetFile(absPath string) func() {
 	key := filepath.Clean(absPath)
@@ -689,12 +683,9 @@ func (s *AssetService) Update(ctx context.Context, assetID string, req AssetUpda
 		// the user is mid-typing an incomplete query. The content is already
 		// saved, so treat this as best-effort: don't fail the save (which would
 		// surface as a spurious error and leave the editor thinking it lost the
-		// write). The async patch retries reconciliation once the query parses.
+		// write). A later completed editor save retries reconciliation.
 		if err := s.reconcileSQLAssetDependencies(ctx, relAssetPath); err != nil {
-			_ = err // best-effort: keep the saved content, the async patch retries
-		}
-		if executableChanged {
-			s.ScheduleSQLPatches(relAssetPath)
+			_ = err // best-effort: keep the saved content
 		}
 	}
 	if loadAssetUpdated {

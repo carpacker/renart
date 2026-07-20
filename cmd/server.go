@@ -243,7 +243,6 @@ func newWebServer(ctx context.Context, cfg serverConfig, logger *zap.Logger) (*w
 		DerivedAssetContent:          defaultDerivedSQLAssetContent,
 		EnsurePythonProject:          ensurePythonProjectFile,
 		SuppressWatcher:              server.suppressWatcherFor,
-		PushWorkspaceUpdate:          server.pushWorkspaceUpdate,
 		PushWorkspaceUpdateImmediate: server.pushWorkspaceUpdateImmediate,
 		PushWorkspaceUpdateImmediateWithChangedIDs: server.pushWorkspaceUpdateImmediateWithChangedIDs,
 		PushAssetContentUpdateImmediate:            server.pushAssetContentUpdateImmediate,

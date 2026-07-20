@@ -33,24 +33,25 @@ test.describe("app build editor live", () => {
 
     await editor.click();
     await page.keyboard.press("ControlOrMeta+End");
-    const saveResponse = page.waitForResponse(
-      (response) =>
-        response.url().includes(`/api/pipelines/${pipelineId}/assets/`) &&
-        response.request().method() === "PUT" &&
-        response.ok(),
-      { timeout: 15000 },
-    );
-    await page.keyboard.press("End");
-    await page.keyboard.type("\n-- app editor smoke");
-    await saveResponse;
+    const marker = "-- app editor smoke";
+    await page.keyboard.insertText(`\n${marker}`);
+    await expect(page.locator(".view-lines").first()).toContainText(marker);
 
-    const workspaceResponse = await page.request.get(`${liveApp.baseURL}/api/workspace`);
-    expect(workspaceResponse.ok()).toBe(true);
-    const workspace = (await workspaceResponse.json()) as WorkspaceResponse;
-    const customers = workspace.pipelines
-      .flatMap((pipeline) => pipeline.assets)
-      .find((asset) => asset.id === customersAssetId);
-    expect(customers?.content).toContain("-- app editor smoke");
+    await expect
+      .poll(
+        async () => {
+          const workspaceResponse = await page.request.get(`${liveApp.baseURL}/api/workspace`);
+          expect(workspaceResponse.ok()).toBe(true);
+          const workspace = (await workspaceResponse.json()) as WorkspaceResponse;
+          return (
+            workspace.pipelines
+              .flatMap((pipeline) => pipeline.assets)
+              .find((asset) => asset.id === customersAssetId)?.content ?? ""
+          );
+        },
+        { timeout: 30000 },
+      )
+      .toContain(marker);
   });
 
   test("switches between light, dark, and system appearance", async ({ liveApp, page }) => {

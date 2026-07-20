@@ -206,6 +206,9 @@ round-trips unknown fields).
   `_sling_loaded_at` column. DuckDB observations use logical catalog types, so a
   stored `JSON` column is not presented as `VARCHAR` merely because of the query
   result transport.
+  Editing SQL or API source does not implicitly rewrite column metadata; users
+  choose when to run **Sync schema**, so an autosave cannot invalidate an
+  already-open run or deployment review.
   Sensors expose no schema source. `/columns/preview`, `/columns/reconcile`,
   `/columns/refresh-from-definition`, and SQL-specific `/fill-columns-from-db`
   remain compatibility routes; automatic seed replacement refreshes still use

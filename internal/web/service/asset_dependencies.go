@@ -6,7 +6,6 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
-	"time"
 
 	"github.com/bruin-data/bruin/pkg/jinja"
 	"github.com/bruin-data/bruin/pkg/pipeline"
@@ -102,57 +101,6 @@ func (s *AssetService) RefactorDirectDependencies(ctx context.Context, parsedPip
 	}
 
 	return changedIDs, changedPaths, nil
-}
-
-func (s *AssetService) ScheduleSQLPatches(relAssetPath string) {
-	assetPath := filepath.ToSlash(relAssetPath)
-
-	s.patchMu.Lock()
-	if existing, ok := s.patchTimers[assetPath]; ok {
-		existing.Stop()
-	}
-
-	s.patchTimers[assetPath] = time.AfterFunc(1500*time.Millisecond, func() {
-		s.RunSQLPatches(assetPath)
-
-		s.patchMu.Lock()
-		delete(s.patchTimers, assetPath)
-		s.patchMu.Unlock()
-	})
-	s.patchMu.Unlock()
-}
-
-func (s *AssetService) RunSQLPatches(relAssetPath string) {
-	// Serialize against interactive saves (Update) for the same file: both
-	// read-modify-write the asset on disk, and an interleaved truncate would
-	// otherwise let a save observe a torn file and drop the @bruin header.
-	if absPath, err := s.resolver().JoinPath(relAssetPath); err == nil {
-		unlock := s.lockAssetFile(absPath)
-		defer unlock()
-	}
-
-	prefixedPath := relAssetPath
-	if !strings.HasPrefix(prefixedPath, "./") {
-		prefixedPath = "./" + strings.TrimPrefix(prefixedPath, "./")
-	}
-
-	if s.deps.Executor != nil {
-		_, _ = s.deps.Executor.ApplyPatch(context.Background(), PatchRequest{
-			Operation:  "fill-columns-from-db",
-			TargetPath: prefixedPath,
-		})
-	}
-
-	if err := s.reconcileSQLAssetDependencies(context.Background(), relAssetPath); err != nil {
-		return
-	}
-
-	if s.deps.SuppressWatcher != nil {
-		s.deps.SuppressWatcher(relAssetPath)
-	}
-	if s.deps.PushWorkspaceUpdate != nil {
-		s.deps.PushWorkspaceUpdate(context.Background(), "asset.patched", relAssetPath)
-	}
 }
 
 func appendUniqueStrings(values []string, extras ...string) []string {
