@@ -463,6 +463,15 @@ was not persisted, so rename safety cannot be reconstructed for those rows.
 Pre-v2 combined River jobs remain decodable until already-persisted work drains;
 startup returns both legacy and v2 claimed signals to River unchanged.
 
+Row edits use explicit server-side preservation flags. The browser can update
+cadence, timezone, catch-up, pause state, or replace overrides without
+round-tripping the local deployment pin or private values. Preserving the pin
+reads the current SQLite row at mutation time, so a stale browser cannot undo a
+concurrent promotion. Preserving overrides reads the private literal values and
+secret references on the server; it cannot be combined with replacements and
+cannot create a new schedule. A paused declaration that has not been deployed
+yet can still be edited while retaining its empty pin.
+
 Only the process holding `.renart/scheduler.lock` may change rows or enqueue
 runs. `GET /api/env-schedules` reports `owner`, `follower`, or `unavailable`;
 mutations through a follower return `409 scheduler_not_owner` before any

@@ -779,7 +779,19 @@ func shouldFallbackToCLIRunPipeline(foundPipeline *pipeline.Pipeline) bool {
 }
 
 func isDirectRunAssetTypeSupported(assetType pipeline.AssetType) bool {
-	_, ok := directRunAssetTypes[assetType]
+	if _, ok := directRunAssetTypes[assetType]; ok {
+		return true
+	}
+
+	// Imported source assets are dependency anchors rather than executable
+	// transformations. Bruin deliberately registers known *.source types with
+	// no-op operators, so keep those operators intact on Renart's direct path.
+	// Requiring a Bruin registration keeps unknown custom source types on the
+	// CLI fallback path instead of silently treating them as successful.
+	if !isSourceAssetType(assetType) {
+		return false
+	}
+	_, ok := bruinexecutor.DefaultExecutorsV2[assetType]
 	return ok
 }
 

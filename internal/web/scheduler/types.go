@@ -182,7 +182,15 @@ type UpsertEnvScheduleRequest struct {
 	// DeployNow deploys the working tree and pins the schedule to the new
 	// snapshot when none exists yet.
 	DeployNow bool `json:"deploy_now,omitempty"`
-	Paused    bool `json:"paused,omitempty"`
+	// PreserveSnapshot resolves the current pin on the server while updating an
+	// existing declaration. It avoids round-tripping a potentially stale local
+	// deployment pin through the public API.
+	PreserveSnapshot bool `json:"preserve_snapshot,omitempty"`
+	// PreserveVariables keeps private literal values and secret references for
+	// an existing declaration. Public schedule responses intentionally expose
+	// names only, so editors cannot safely round-trip these values.
+	PreserveVariables bool `json:"preserve_variables,omitempty"`
+	Paused            bool `json:"paused,omitempty"`
 }
 
 type EnvSchedulePinSelection struct {

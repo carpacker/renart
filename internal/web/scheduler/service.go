@@ -1072,8 +1072,19 @@ func (s *Service) ListAllEnvSchedules(ctx context.Context) (live []EnvSchedule, 
 // environment). Enabling requires a deployed snapshot: pass an explicit
 // version, set DeployNow, or rely on an already-pinned version.
 func (s *Service) UpsertEnvSchedule(ctx context.Context, pipelineUUID string, req UpsertEnvScheduleRequest) (EnvSchedule, error) {
-	if req.DeployNow && strings.TrimSpace(req.SnapshotVersionID) != "" {
-		return EnvSchedule{}, errors.New("deploy_now and snapshot_version_id are mutually exclusive")
+	snapshotVersionID := strings.TrimSpace(req.SnapshotVersionID)
+	sourceSelections := 0
+	if req.DeployNow {
+		sourceSelections++
+	}
+	if snapshotVersionID != "" {
+		sourceSelections++
+	}
+	if req.PreserveSnapshot {
+		sourceSelections++
+	}
+	if sourceSelections > 1 {
+		return EnvSchedule{}, errors.New("deploy_now, snapshot_version_id, and preserve_snapshot are mutually exclusive")
 	}
 	environment := strings.TrimSpace(req.Environment)
 	if environment == "" {
@@ -1102,20 +1113,6 @@ func (s *Service) UpsertEnvSchedule(ctx context.Context, pipelineUUID string, re
 	if policy == CatchupBackfill && s.pipelineIntervalAware != nil && !s.pipelineIntervalAware(ctx, pipelineUUID) {
 		return EnvSchedule{}, errors.New("backfill catch-up requires interval-aware assets (incremental materialization)")
 	}
-	declaration := normalizeScheduleDeclaration(ScheduleDeclaration{
-		Cron:          cronExpr,
-		Timezone:      timezone,
-		CatchupPolicy: policy,
-		Paused:        req.Paused,
-		Variables:     cloneScheduleVariables(req.Vars),
-		SecretRefs:    cloneScheduleSecretRefs(req.SecretRefs),
-	})
-	if err := validateScheduleDeclaration(declaration); err != nil {
-		return EnvSchedule{}, err
-	}
-	if len(req.SecretRefs) > 0 && s.declarations == nil {
-		return EnvSchedule{}, errors.New("secret references require version-controlled schedule declarations")
-	}
 	if err := s.RequireOwner(); err != nil {
 		return EnvSchedule{}, err
 	}
@@ -1124,9 +1121,42 @@ func (s *Service) UpsertEnvSchedule(ctx context.Context, pipelineUUID string, re
 	if err != nil {
 		return EnvSchedule{}, err
 	}
+	if req.PreserveSnapshot && !found {
+		return EnvSchedule{}, errors.New("preserve_snapshot requires an existing schedule")
+	}
+	if req.PreserveVariables && !found {
+		return EnvSchedule{}, errors.New("preserve_variables requires an existing schedule")
+	}
+	if req.PreserveVariables && (req.Vars != nil || req.SecretRefs != nil) {
+		return EnvSchedule{}, errors.New("preserve_variables cannot be combined with vars or secret_refs")
+	}
 
-	snapshotVersionID := strings.TrimSpace(req.SnapshotVersionID)
-	if snapshotVersionID == "" && found {
+	variables := cloneScheduleVariables(req.Vars)
+	secretRefs := cloneScheduleSecretRefs(req.SecretRefs)
+	if req.PreserveVariables {
+		variables = cloneScheduleVariables(existing.Vars)
+		secretRefs = cloneScheduleSecretRefs(existing.SecretRefs)
+	}
+	declaration := normalizeScheduleDeclaration(ScheduleDeclaration{
+		Cron:          cronExpr,
+		Timezone:      timezone,
+		CatchupPolicy: policy,
+		Paused:        req.Paused,
+		Variables:     variables,
+		SecretRefs:    secretRefs,
+	})
+	if err := validateScheduleDeclaration(declaration); err != nil {
+		return EnvSchedule{}, err
+	}
+	if len(secretRefs) > 0 && s.declarations == nil {
+		return EnvSchedule{}, errors.New("secret references require version-controlled schedule declarations")
+	}
+
+	if req.PreserveSnapshot {
+		snapshotVersionID = existing.SnapshotVersionID
+	} else if snapshotVersionID == "" && found && !req.DeployNow {
+		// Backward compatibility for existing API clients. New editing clients
+		// should use preserve_snapshot so their intent is explicit.
 		snapshotVersionID = existing.SnapshotVersionID
 	}
 	if req.DeployNow {
@@ -1139,18 +1169,22 @@ func (s *Service) UpsertEnvSchedule(ctx context.Context, pipelineUUID string, re
 		}
 		snapshotVersionID = deployed
 	}
-	if snapshotVersionID == "" {
+	if snapshotVersionID == "" && (!found || !req.PreserveSnapshot || !req.Paused) {
 		return EnvSchedule{}, errors.New("a deployed snapshot is required to schedule this pipeline; deploy it first or pass deploy_now")
 	}
-	if err := s.validateScheduleSnapshot(ctx, pipelineUUID, snapshotVersionID); err != nil {
-		return EnvSchedule{}, err
-	}
-	resolvedVariables, err := s.resolveScheduleVariables(ctx, req.Vars, req.SecretRefs)
-	if err != nil {
-		return EnvSchedule{}, err
-	}
-	if err := s.validateScheduleVariableOverrides(ctx, pipelineUUID, snapshotVersionID, resolvedVariables); err != nil {
-		return EnvSchedule{}, err
+	if snapshotVersionID != "" {
+		if err := s.validateScheduleSnapshot(ctx, pipelineUUID, snapshotVersionID); err != nil {
+			return EnvSchedule{}, err
+		}
+		resolvedVariables, err := s.resolveScheduleVariables(ctx, variables, secretRefs)
+		if err != nil {
+			return EnvSchedule{}, err
+		}
+		if err := s.validateScheduleVariableOverrides(ctx, pipelineUUID, snapshotVersionID, resolvedVariables); err != nil {
+			return EnvSchedule{}, err
+		}
+	} else if !req.PreserveVariables && (len(variables) > 0 || len(secretRefs) > 0) {
+		return EnvSchedule{}, errors.New("schedule variables require a deployed snapshot for validation")
 	}
 
 	status := ScheduleStatusActive
@@ -1163,8 +1197,8 @@ func (s *Service) UpsertEnvSchedule(ctx context.Context, pipelineUUID string, re
 		SnapshotVersionID:  snapshotVersionID,
 		Cron:               cronExpr,
 		Timezone:           timezone,
-		Vars:               cloneScheduleVariables(req.Vars),
-		SecretRefs:         cloneScheduleSecretRefs(req.SecretRefs),
+		Vars:               variables,
+		SecretRefs:         secretRefs,
 		DeclarationManaged: s.declarations != nil,
 		CatchupPolicy:      policy,
 		Status:             status,

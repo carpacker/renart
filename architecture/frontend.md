@@ -113,7 +113,10 @@ not underscore-flattened route hacks.
   groups, paths, types, and connections. The toolbar keeps Deploy as a separate
   secondary action and makes **Review run** the primary pipeline action. Type
   checks live in the results panel, which scrolls through a shadcn ScrollArea;
-  failing assets also receive a warning marker on their canvas node. The shared
+  failing assets also receive a warning marker on their canvas node. The Render
+  result keeps its wrapping provenance and comparison controls in a shrinkable
+  ScrollArea so the operation or side-by-side diff retains visible height on
+  narrow screens. The shared
   run/deploy/redeploy review surface is a wide, height-bounded dialog rather
   than a side sheet, so rendered operations and deployment comparisons retain
   useful width. It defaults to the entire pipeline and names the exact
@@ -245,8 +248,11 @@ not underscore-flattened route hacks.
   and runtime-window context in a wrapping metadata area rather than one
   truncated status line. Timeline and actions have dedicated columns: `Run
   pinned #N` is the primary action, reviewed deployment repair/update is
-  secondary, and archive is
-  in the row's overflow menu. The displayed deployment identifies the exact pin
+  secondary, and edit/archive are in the row's overflow menu. The edit dialog
+  keeps pipeline/environment identity fixed, edits the version-controlled
+  cadence and lifecycle fields, and defaults to preserving server-private
+  overrides; replacing or clearing them is an explicit mode. The displayed
+  deployment identifies the exact pin
   used by the run; pinless rows show `Needs deployment`, and rows with stored
   variable overrides show an `Overrides` badge and value-free name tooltip.
   Each row identifies whether its definition comes from

@@ -184,18 +184,40 @@ func TestUpsertEnvScheduleValidation(t *testing.T) {
 	_, err = service.UpsertEnvSchedule(ctx, "uuid-1", UpsertEnvScheduleRequest{Environment: "prod", Cron: "@hourly"})
 	require.ErrorContains(t, err, "deployed snapshot is required")
 
-	created, err := service.UpsertEnvSchedule(ctx, "uuid-1", UpsertEnvScheduleRequest{Environment: "prod", Cron: "@hourly", DeployNow: true})
+	created, err := service.UpsertEnvSchedule(ctx, "uuid-1", UpsertEnvScheduleRequest{
+		Environment: "prod", Cron: "@hourly", DeployNow: true,
+		Vars: map[string]any{"region": "eu"},
+	})
 	require.NoError(t, err)
 	assert.Equal(t, "snap-new", created.SnapshotVersionID)
 	assert.Equal(t, ScheduleStatusActive, created.Status)
 	assert.Equal(t, "enc", created.PipelineID)
 
-	// Updating an existing schedule keeps the pinned snapshot without
-	// requiring a redeploy.
-	updated, err := service.UpsertEnvSchedule(ctx, "uuid-1", UpsertEnvScheduleRequest{Environment: "prod", Cron: "@daily"})
+	// Editing an existing schedule resolves its current pin and private
+	// variables on the server without requiring a redeploy or exposing values.
+	updated, err := service.UpsertEnvSchedule(ctx, "uuid-1", UpsertEnvScheduleRequest{
+		Environment: "prod", Cron: "@daily", PreserveSnapshot: true, PreserveVariables: true,
+	})
 	require.NoError(t, err)
 	assert.Equal(t, "snap-new", updated.SnapshotVersionID)
 	assert.Equal(t, "@daily", updated.Cron)
+	assert.Equal(t, map[string]any{"region": "eu"}, updated.Vars)
+
+	_, err = service.UpsertEnvSchedule(ctx, "uuid-1", UpsertEnvScheduleRequest{
+		Environment: "missing", Cron: "@daily", PreserveSnapshot: true,
+	})
+	require.ErrorContains(t, err, "requires an existing schedule")
+
+	_, err = service.UpsertEnvSchedule(ctx, "uuid-1", UpsertEnvScheduleRequest{
+		Environment: "prod", Cron: "@daily", PreserveSnapshot: true, DeployNow: true,
+	})
+	require.ErrorContains(t, err, "mutually exclusive")
+
+	_, err = service.UpsertEnvSchedule(ctx, "uuid-1", UpsertEnvScheduleRequest{
+		Environment: "prod", Cron: "@daily", PreserveSnapshot: true, PreserveVariables: true,
+		Vars: map[string]any{},
+	})
+	require.ErrorContains(t, err, "cannot be combined")
 
 	_, err = service.UpsertEnvSchedule(ctx, "uuid-1", UpsertEnvScheduleRequest{
 		Environment: "staging", Cron: "@daily", SnapshotVersionID: "wrong",
@@ -244,6 +266,53 @@ func TestUpsertEnvScheduleValidation(t *testing.T) {
 	require.NoError(t, loadErr)
 	require.True(t, found)
 	assert.Equal(t, "snap-new", prod.SnapshotVersionID, "a stale batch must not partially promote")
+}
+
+func TestUpsertEnvScheduleEditsPausedDeclarationBeforeFirstDeployment(t *testing.T) {
+	store := openEnvTestStore(t)
+	declarations := NewScheduleDeclarationStore(filepath.Join(t.TempDir(), ".renart", "schedules.yml"))
+	require.NoError(t, declarations.Set("uuid-1", "prod", ScheduleDeclaration{
+		Cron:      "@hourly",
+		Timezone:  "UTC",
+		Paused:    true,
+		Variables: map[string]any{"region": "eu"},
+	}))
+	service := New(Options{
+		Store:                store,
+		StateDir:             t.TempDir(),
+		Runner:               func(context.Context, RunRequest, func(string)) RunResult { return RunResult{} },
+		ScheduleDeclarations: declarations,
+		ResolvePipelineRef: func(context.Context, string) (PipelineRef, bool) {
+			return PipelineRef{EncodedID: "enc", Name: "analytics"}, true
+		},
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	require.NoError(t, service.Start(ctx))
+	t.Cleanup(func() {
+		cancel()
+		service.Stop()
+	})
+
+	updated, err := service.UpsertEnvSchedule(ctx, "uuid-1", UpsertEnvScheduleRequest{
+		Environment: "prod", Cron: "@daily", Timezone: "Europe/Berlin", Paused: true,
+		PreserveSnapshot: true, PreserveVariables: true,
+	})
+	require.NoError(t, err)
+	assert.Empty(t, updated.SnapshotVersionID)
+	assert.Equal(t, ScheduleStatusPaused, updated.Status)
+	assert.Equal(t, map[string]any{"region": "eu"}, updated.Vars)
+
+	declaration, found, err := declarations.Get("uuid-1", "prod")
+	require.NoError(t, err)
+	require.True(t, found)
+	assert.Equal(t, "@daily", declaration.Cron)
+	assert.Equal(t, "Europe/Berlin", declaration.Timezone)
+	assert.Equal(t, map[string]any{"region": "eu"}, declaration.Variables)
+
+	_, err = service.UpsertEnvSchedule(ctx, "uuid-1", UpsertEnvScheduleRequest{
+		Environment: "prod", Cron: "@daily", PreserveSnapshot: true, PreserveVariables: true,
+	})
+	require.ErrorContains(t, err, "deployed snapshot is required")
 }
 
 func TestEnvScheduledWorkerRunsWithEnvironmentAndWatermark(t *testing.T) {

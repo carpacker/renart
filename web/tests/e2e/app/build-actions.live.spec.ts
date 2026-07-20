@@ -200,10 +200,12 @@ select 1 as customer_id,'Ada' as customer_name union all select 2 as customer_id
     });
     const executionSQL = payload.stages.find((stage) => stage.kind === "execution_sql")?.content;
     expect(executionSQL).toMatch(/create(?:\s+or\s+replace)?\s+view/i);
-    expect(payload.stages.find((stage) => stage.kind === "check")).toMatchObject({
+    const notNullCheck = payload.stages.find((stage) => stage.kind === "check");
+    expect(notNullCheck).toMatchObject({
       label: "customer_id · not_null",
       fidelity: "exact",
     });
+    expect(notNullCheck?.content).toMatch(/customer_id\s+is\s+null/i);
 
     const preview = page.getByTestId("asset-render-view");
     await expect(preview).toBeVisible({ timeout: 15000 });
@@ -219,7 +221,8 @@ select 1 as customer_id,'Ada' as customer_name union all select 2 as customer_id
     );
     await preview.getByRole("radio", { name: "customer_id · not_null" }).click();
     await expect(preview.getByRole("radio", { name: "customer_id · not_null" })).toBeChecked();
-    await expect(preview.locator(".view-lines").first()).toContainText(/customer_id\s+is\s+null/i);
+    await expect(preview).toContainText("Blocking column check");
+    await expect(preview.getByRole("button", { name: "Copy rendered operation" })).toBeEnabled();
     expect(executionRequests).toEqual([]);
 
     const assetEditor = page.locator(".monaco-editor").first();

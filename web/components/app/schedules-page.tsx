@@ -8,6 +8,7 @@ import {
   Loader2,
   MoreHorizontal,
   Package,
+  Pencil,
   Play,
   Plus,
   RefreshCw,
@@ -28,6 +29,16 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
+import { Field, FieldDescription, FieldError, FieldGroup, FieldLabel } from "@/components/ui/field";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { Spinner } from "@/components/ui/spinner";
+import { ScrollArea } from "@/components/ui/scroll-area";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -77,6 +88,7 @@ export function AppSchedulesPage() {
   const [query, setQuery] = useState("");
   const [bucket, setBucket] = useState<(typeof buckets)[number]>("12hr");
   const [newScheduleOpen, setNewScheduleOpen] = useState(false);
+  const [editingSchedule, setEditingSchedule] = useState<EnvSchedule | null>(null);
   const [deploymentReview, setDeploymentReview] = useState<{
     pipelineId: string;
     pipelineName: string;
@@ -229,6 +241,7 @@ export function AppSchedulesPage() {
                   )}
                   onSetStatus={(status) => envSchedules.setStatus(schedule, status)}
                   onArchive={() => envSchedules.archive(schedule)}
+                  onEdit={() => setEditingSchedule(schedule)}
                   onReviewDeployment={() => {
                     if (!schedule.pipeline_id) return;
                     setDeploymentReview({
@@ -263,6 +276,25 @@ export function AppSchedulesPage() {
           );
         }}
       />
+      <EditEnvScheduleDialog
+        schedule={editingSchedule}
+        canMutate={envSchedules.canMutate}
+        ownershipReason={envSchedules.ownershipReason}
+        onOpenChange={(nextOpen) => {
+          if (!nextOpen) setEditingSchedule(null);
+        }}
+        onSave={async (schedule, input) => {
+          if (!schedule.pipeline_id) throw new Error("Pipeline details are unavailable.");
+          await envSchedules.upsert(
+            {
+              pipeline_uuid: schedule.pipeline_uuid,
+              environment: schedule.environment,
+              pipeline_id: schedule.pipeline_id,
+            },
+            input,
+          );
+        }}
+      />
       <ScheduleDeploymentReview
         target={deploymentReview}
         onOpenChange={(nextOpen) => {
@@ -284,6 +316,7 @@ function EnvScheduleRow({
   activeRun,
   onSetStatus,
   onArchive,
+  onEdit,
   onReviewDeployment,
 }: {
   schedule: EnvSchedule;
@@ -295,6 +328,7 @@ function EnvScheduleRow({
   activeRun?: PipelineRun;
   onSetStatus: (status: "active" | "paused") => Promise<void>;
   onArchive: () => Promise<void>;
+  onEdit: () => void;
   onReviewDeployment: () => void;
 }) {
   const deployState = usePipelineDeploy(schedule.pipeline_id);
@@ -636,6 +670,10 @@ function EnvScheduleRow({
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end" className="w-48">
               <DropdownMenuGroup>
+                <DropdownMenuItem onSelect={onEdit}>
+                  <Pencil />
+                  Edit schedule
+                </DropdownMenuItem>
                 <DropdownMenuItem onSelect={() => void archive()}>
                   <ArchiveRestore />
                   Archive schedule
@@ -761,6 +799,289 @@ function ScheduleDeploymentReview({
       onSchedulesChanged={onSchedulesChanged}
     />
   );
+}
+
+function EditEnvScheduleDialog({
+  schedule,
+  canMutate,
+  ownershipReason,
+  onOpenChange,
+  onSave,
+}: {
+  schedule: EnvSchedule | null;
+  canMutate: boolean;
+  ownershipReason: string;
+  onOpenChange: (open: boolean) => void;
+  onSave: (schedule: EnvSchedule, input: UpsertEnvScheduleInput) => Promise<void>;
+}) {
+  const [cron, setCron] = useState("");
+  const [timezone, setTimezone] = useState("UTC");
+  const [catchupPolicy, setCatchupPolicy] = useState<CatchupPolicy>("skip");
+  const [paused, setPaused] = useState(false);
+  const [overrideMode, setOverrideMode] = useState<"preserve" | "replace">("preserve");
+  const [variableOverrides, setVariableOverrides] = useState("{}");
+  const [secretReferences, setSecretReferences] = useState("{}");
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!schedule) return;
+    setCron(schedule.cron);
+    setTimezone(schedule.timezone || "UTC");
+    setCatchupPolicy(schedule.catchup_policy || "skip");
+    setPaused(schedule.status !== "active");
+    setOverrideMode("preserve");
+    setVariableOverrides("{}");
+    setSecretReferences("{}");
+    setError(null);
+  }, [schedule]);
+
+  const submit = async () => {
+    if (!schedule) return;
+    if (!canMutate) {
+      setError(ownershipReason);
+      return;
+    }
+    if (!cron.trim()) {
+      setError("Cron is required.");
+      return;
+    }
+
+    let variableInput: Pick<UpsertEnvScheduleInput, "vars" | "secret_refs" | "preserve_variables">;
+    try {
+      if (overrideMode === "preserve") {
+        variableInput = { preserve_variables: true };
+      } else {
+        const vars = parseVariableOverrides(variableOverrides);
+        variableInput = {
+          vars,
+          secret_refs: parseSecretReferences(secretReferences, vars),
+        };
+      }
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Variable overrides are invalid.");
+      return;
+    }
+
+    setSubmitting(true);
+    setError(null);
+    try {
+      await onSave(schedule, {
+        cron: cron.trim(),
+        timezone: timezone.trim() || "UTC",
+        catchup_policy: catchupPolicy,
+        paused,
+        preserve_snapshot: true,
+        ...variableInput,
+      });
+      onOpenChange(false);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Failed to save schedule.");
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const pipelineLabel = schedule?.pipeline_name || schedule?.pipeline_uuid || "Pipeline";
+  const storedNames = schedule?.variable_names ?? [];
+  const secretNames = schedule?.secret_reference_names ?? [];
+
+  return (
+    <Dialog open={Boolean(schedule)} onOpenChange={onOpenChange}>
+      <DialogContent className="grid max-h-[calc(100dvh-2rem)] max-w-xl grid-rows-[auto_minmax(0,1fr)_auto] overflow-hidden">
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2">
+            <Pencil className="size-4 text-primary" />
+            Edit schedule
+          </DialogTitle>
+          <DialogDescription>
+            Update the version-controlled declaration. The schedule keeps its current local
+            deployment pin unless you explicitly redeploy it from the schedule row.
+          </DialogDescription>
+        </DialogHeader>
+        <ScrollArea className="-mx-1 min-h-0 px-1">
+          <FieldGroup className="pb-1">
+            <div className="grid gap-4 sm:grid-cols-2">
+              <Field>
+                <FieldLabel htmlFor="edit-schedule-pipeline">Pipeline</FieldLabel>
+                <Input id="edit-schedule-pipeline" value={pipelineLabel} readOnly />
+              </Field>
+              <Field>
+                <FieldLabel htmlFor="edit-schedule-environment">Environment</FieldLabel>
+                <Input
+                  id="edit-schedule-environment"
+                  value={schedule?.environment ?? ""}
+                  readOnly
+                />
+              </Field>
+            </div>
+            <div className="grid gap-4 sm:grid-cols-2">
+              <Field data-invalid={!cron.trim()}>
+                <FieldLabel htmlFor="edit-schedule-cron">Cron</FieldLabel>
+                <Input
+                  id="edit-schedule-cron"
+                  className="font-mono"
+                  value={cron}
+                  onChange={(event) => setCron(event.target.value)}
+                  aria-invalid={!cron.trim()}
+                />
+              </Field>
+              <Field>
+                <FieldLabel htmlFor="edit-schedule-timezone">Timezone</FieldLabel>
+                <Input
+                  id="edit-schedule-timezone"
+                  value={timezone}
+                  onChange={(event) => setTimezone(event.target.value)}
+                  placeholder="UTC"
+                />
+              </Field>
+            </div>
+            <Field>
+              <FieldLabel htmlFor="edit-schedule-catchup">Catch-up policy</FieldLabel>
+              <Select
+                value={catchupPolicy}
+                onValueChange={(value) => setCatchupPolicy(value as CatchupPolicy)}
+              >
+                <SelectTrigger id="edit-schedule-catchup" className="w-full">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="skip">Skip missed intervals</SelectItem>
+                  <SelectItem value="run_once">Run once to catch up</SelectItem>
+                  <SelectItem value="backfill">
+                    Backfill each missed interval (incremental assets only)
+                  </SelectItem>
+                </SelectContent>
+              </Select>
+            </Field>
+            <Field orientation="horizontal">
+              <div className="min-w-0 flex-1">
+                <FieldLabel htmlFor="edit-schedule-paused">Pause schedule</FieldLabel>
+                <FieldDescription>
+                  Paused schedules keep their declaration and deployment pin but do not admit runs.
+                </FieldDescription>
+              </div>
+              <Switch id="edit-schedule-paused" checked={paused} onCheckedChange={setPaused} />
+            </Field>
+            <Field>
+              <FieldLabel>Variable overrides</FieldLabel>
+              <ToggleGroup
+                type="single"
+                variant="outline"
+                spacing={0}
+                value={overrideMode}
+                onValueChange={(value) => {
+                  if (value === "preserve" || value === "replace") setOverrideMode(value);
+                }}
+                className="grid w-full grid-cols-2"
+                aria-label="Variable override behavior"
+              >
+                <ToggleGroupItem value="preserve" className="w-full">
+                  Keep stored overrides
+                </ToggleGroupItem>
+                <ToggleGroupItem value="replace" className="w-full">
+                  Replace or clear
+                </ToggleGroupItem>
+              </ToggleGroup>
+              <FieldDescription>
+                {storedNames.length > 0
+                  ? `Stored names: ${[...storedNames].sort().join(", ")}. Values stay private and are never loaded into this form.${
+                      secretNames.length > 0
+                        ? ` Secret-backed: ${[...secretNames].sort().join(", ")}.`
+                        : ""
+                    }`
+                  : "This schedule currently has no stored overrides."}
+              </FieldDescription>
+            </Field>
+            {overrideMode === "replace" ? (
+              <>
+                <Field>
+                  <FieldLabel htmlFor="edit-schedule-vars">Literal overrides</FieldLabel>
+                  <Textarea
+                    id="edit-schedule-vars"
+                    className="min-h-20 font-mono text-xs"
+                    value={variableOverrides}
+                    onChange={(event) => setVariableOverrides(event.target.value)}
+                    spellCheck={false}
+                  />
+                  <FieldDescription>
+                    Saving an empty object clears all stored literal overrides.
+                  </FieldDescription>
+                </Field>
+                <Field>
+                  <FieldLabel htmlFor="edit-schedule-secrets">Secret references</FieldLabel>
+                  <Textarea
+                    id="edit-schedule-secrets"
+                    className="min-h-20 font-mono text-xs"
+                    value={secretReferences}
+                    onChange={(event) => setSecretReferences(event.target.value)}
+                    spellCheck={false}
+                  />
+                  <FieldDescription>
+                    Use env:NAME values. An empty object clears all stored references.
+                  </FieldDescription>
+                </Field>
+              </>
+            ) : null}
+            <FieldError>{error}</FieldError>
+          </FieldGroup>
+        </ScrollArea>
+        <DialogFooter>
+          <Button variant="outline" onClick={() => onOpenChange(false)} disabled={submitting}>
+            Cancel
+          </Button>
+          <Button onClick={() => void submit()} disabled={submitting || !canMutate}>
+            {submitting ? <Spinner data-icon="inline-start" /> : null}
+            Save changes
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function parseVariableOverrides(value: string): Record<string, unknown> {
+  let decoded: unknown;
+  try {
+    decoded = JSON.parse(value.trim() || "{}");
+  } catch {
+    throw new Error("Variable overrides must be valid JSON.");
+  }
+  if (!decoded || typeof decoded !== "object" || Array.isArray(decoded)) {
+    throw new Error("Variable overrides must be a JSON object keyed by declared variable name.");
+  }
+  return decoded as Record<string, unknown>;
+}
+
+function parseSecretReferences(
+  value: string,
+  variables: Record<string, unknown>,
+): Record<string, string> {
+  let decoded: unknown;
+  try {
+    decoded = JSON.parse(value.trim() || "{}");
+  } catch {
+    throw new Error("Secret references must be valid JSON.");
+  }
+  if (!decoded || typeof decoded !== "object" || Array.isArray(decoded)) {
+    throw new Error("Secret references must be a JSON object keyed by declared variable name.");
+  }
+  for (const [name, reference] of Object.entries(decoded as Record<string, unknown>)) {
+    if (
+      !name.trim() ||
+      name.trim() !== name ||
+      typeof reference !== "string" ||
+      !/^env:[A-Za-z_][A-Za-z0-9_]*$/.test(reference)
+    ) {
+      throw new Error("Secret references must use declared variable names and env:NAME values.");
+    }
+    if (Object.prototype.hasOwnProperty.call(variables, name)) {
+      throw new Error(
+        `Variable ${name} cannot have both a literal override and a secret reference.`,
+      );
+    }
+  }
+  return decoded as Record<string, string>;
 }
 
 function NewEnvScheduleDialog({

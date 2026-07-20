@@ -249,6 +249,11 @@ validates ownership and content before materializing a fresh temp directory;
 resolution failures fail the run rather than falling back to the working tree
 (see staleness.md §5).
 
+Recognized imported `*.source` assets keep Bruin's registered no-op main/check
+semantics on the direct path. They are dependency anchors for externally owned
+relations, not transformations to execute. An unknown custom `.source` type is
+not inferred to be safe and still takes the unsupported/CLI-fallback path.
+
 Pipeline planning is read-only at `POST /api/pipelines/{id}/plan` and through
 `renart plan`. It resolves an explicit saved-working-tree or deployment source,
 environment, interval, execution timestamp, sensor/full-refresh/backfill mode,

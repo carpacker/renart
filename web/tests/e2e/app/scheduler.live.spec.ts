@@ -87,6 +87,7 @@ test.describe("app scheduler pages live", () => {
     await expect(actions.getByRole("button", { name: "Review deployment" })).toBeVisible();
     await expect(actions.getByRole("button", { name: "Run pinned" })).toBeDisabled();
     await actions.getByRole("button", { name: /More actions for analytics/ }).click();
+    await expect(page.getByRole("menuitem", { name: "Edit schedule" })).toBeVisible();
     await expect(page.getByRole("menuitem", { name: "Archive schedule" })).toBeVisible();
     await page.keyboard.press("Escape");
   });
@@ -199,6 +200,59 @@ test.describe("app scheduler pages live", () => {
     await olderBadge.hover();
     await expect(page.getByText(/Data freshness is tracked separately/)).toBeVisible();
 
+    const scheduleRow = page.getByTestId("schedule-row").filter({ hasText: "analytics" }).first();
+    const editRequest = page.waitForRequest(
+      (request) =>
+        request.url().endsWith(`/api/pipelines/${analyticsPipelineId}/env-schedules/default`) &&
+        request.method() === "PUT",
+    );
+    await scheduleRow.getByRole("button", { name: /More actions for analytics/ }).click();
+    await page.getByRole("menuitem", { name: "Edit schedule" }).click();
+    const editDialog = page.getByRole("dialog", { name: "Edit schedule" });
+    await expect(editDialog).toBeVisible();
+    await expect(editDialog.getByLabel("Pipeline")).toHaveValue("analytics");
+    await expect(editDialog.getByLabel("Environment")).toHaveValue("default");
+    await editDialog.getByLabel("Cron").fill("15 1 * * *");
+    await editDialog.getByLabel("Timezone").fill("Europe/Berlin");
+    await editDialog.getByLabel("Catch-up policy").click();
+    await page.getByRole("option", { name: "Run once to catch up" }).click();
+    await editDialog.getByRole("button", { name: "Save changes" }).click();
+
+    const editBody = (await editRequest).postDataJSON() as Record<string, unknown>;
+    expect(editBody).toMatchObject({
+      cron: "15 1 * * *",
+      timezone: "Europe/Berlin",
+      catchup_policy: "run_once",
+      preserve_snapshot: true,
+      preserve_variables: true,
+    });
+    expect(editBody).not.toHaveProperty("snapshot_version_id");
+    expect(editBody).not.toHaveProperty("vars");
+    await expect(editDialog).toBeHidden();
+    await expect(scheduleRow.getByTestId("schedule-cadence")).toContainText("15 1 * * *");
+
+    const editedScheduleResponse = await request.get(`${liveApp.baseURL}/api/env-schedules`);
+    expect(editedScheduleResponse.ok()).toBe(true);
+    const editedScheduleBody = (await editedScheduleResponse.json()) as {
+      schedules: Array<{
+        environment: string;
+        snapshot_version_id?: string;
+        variable_names?: string[];
+      }>;
+    };
+    const editedSchedule = editedScheduleBody.schedules.find(
+      (schedule) => schedule.environment === "default",
+    );
+    expect(editedSchedule?.snapshot_version_id).toBe(pinnedVersion);
+    expect(editedSchedule?.variable_names).toEqual(["region"]);
+    expect(JSON.stringify(editedScheduleBody)).not.toContain("private-schedule-value");
+    const editedDeclaration = await readFile(
+      join(liveApp.workspaceDir, ".renart/schedules.yml"),
+      "utf8",
+    );
+    expect(editedDeclaration).toContain("private-schedule-value");
+    expect(editedDeclaration).toContain("Europe/Berlin");
+
     const pinnedRunRequest = page.waitForRequest(
       (request) =>
         request.url().endsWith(`/api/pipelines/${analyticsPipelineId}/env-schedules/default/run`) &&
@@ -223,7 +277,6 @@ test.describe("app scheduler pages live", () => {
         });
       },
     );
-    const scheduleRow = page.getByTestId("schedule-row").filter({ hasText: "analytics" }).first();
     const overridesBadge = scheduleRow.getByText("Overrides", { exact: true });
     await expect(overridesBadge).toBeVisible();
     await overridesBadge.focus();

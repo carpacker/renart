@@ -144,6 +144,17 @@ func TestEnvScheduleMutationBodiesAcceptDeclaredFields(t *testing.T) {
 	assert.NotContains(t, upsertResponse.Body.String(), "private-value")
 	assert.NotContains(t, upsertResponse.Body.String(), "RENART_TOKEN")
 
+	editStub := &envScheduleHandlerStub{}
+	editResponse := envScheduleRequest(
+		editStub,
+		http.MethodPut,
+		"/api/pipelines/pipeline-id/env-schedules/prod",
+		`{"cron":"@hourly","preserve_snapshot":true,"preserve_variables":true}`,
+	)
+	require.Equal(t, http.StatusOK, editResponse.Code)
+	assert.True(t, editStub.upsertReq.PreserveSnapshot)
+	assert.True(t, editStub.upsertReq.PreserveVariables)
+
 	statusStub := &envScheduleHandlerStub{}
 	statusResponse := envScheduleRequest(
 		statusStub,

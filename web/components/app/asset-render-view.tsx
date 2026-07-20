@@ -16,6 +16,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Spinner } from "@/components/ui/spinner";
+import { ScrollArea } from "@/components/ui/scroll-area";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { useWorkspaceTheme } from "@/hooks/use-workspace-theme";
 import type {
@@ -215,166 +216,178 @@ export function AssetRenderView({
       data-testid="asset-render-view"
       aria-busy={loading}
     >
-      <div className="shrink-0 border-b bg-muted/20 px-2 py-1.5">
-        <div className="flex min-w-0 flex-wrap items-center gap-1.5 text-[11px]">
-          <Badge variant="outline" size="xs">
-            Preview — not executed
-          </Badge>
-          <span className="max-w-48 truncate font-mono font-medium" title={result.asset.name}>
-            {result.asset.name}
-          </span>
-          <span className="text-muted-foreground">·</span>
-          <span className="truncate font-medium" title={result.provenance.source.merkle_root}>
-            {sourceLabel}
-          </span>
-          <span className="text-muted-foreground">·</span>
-          <span title={configurationTitle}>{context.environment || "default"}</span>
-          <span className="text-muted-foreground">·</span>
-          <span>{formatRenderWindow(context.start_date, context.end_date)}</span>
-          <span className="text-muted-foreground">·</span>
-          <span>{context.full_refresh ? "full refresh" : "incremental"}</span>
-          {result.asset.dialect ? (
-            <>
-              <span className="text-muted-foreground">·</span>
-              <span>{result.asset.dialect}</span>
-            </>
-          ) : null}
-          {result.asset.connection_name ? (
-            <>
-              <span className="text-muted-foreground">·</span>
-              <span className="truncate font-mono">{result.asset.connection_name}</span>
-            </>
-          ) : null}
-          {result.asset.fingerprint ? (
-            <Badge variant="muted" size="xs" title={fingerprintTitle}>
-              DAG {result.asset.fingerprint.slice(0, 8)}
+      <ScrollArea
+        className="min-h-0 shrink border-b bg-muted/20"
+        horizontalScrollBarClassName="hidden"
+      >
+        <div className="px-2 py-1.5">
+          <div className="flex min-w-0 flex-wrap items-center gap-1.5 text-[11px]">
+            <Badge variant="outline" size="xs">
+              Preview — not executed
             </Badge>
-          ) : null}
-          {target.kind !== "none" || target.fidelity !== "exact" ? (
-            <Badge
-              variant={target.fidelity === "exact" ? "secondary" : "muted"}
-              size="xs"
-              title={targetTitle}
-            >
-              Target {target.identity ? target.identity.slice(0, 8) : "runtime-only"}
-            </Badge>
-          ) : null}
-          {variableProvenance.length > 0 ? (
-            <Badge variant="muted" size="xs" title={variableTitle}>
-              {variableProvenance.length} pipeline{" "}
-              {variableProvenance.length === 1 ? "variable" : "variables"}
-            </Badge>
-          ) : null}
-          {context.configuration_fidelity === "runtime_only" ? (
-            <Badge variant="muted" size="xs" title={configurationTitle}>
-              Config runtime-only
-            </Badge>
-          ) : null}
-          {result.redactions.length > 0 ? (
-            <Badge variant="muted" size="xs" title="Known credential values were masked or omitted">
-              <ShieldCheck className="size-3" data-icon="inline-start" /> Credentials redacted
-            </Badge>
-          ) : null}
-          {pipelineId && result.provenance.source.kind === "working_tree" ? (
-            <Button
-              variant={comparisonOpen ? "secondary" : "outline"}
-              size="xs"
-              className="ml-auto shrink-0"
-              disabled={!canCompare}
-              onClick={() => {
-                if (comparisonOpen) {
-                  comparisonRequestId.current += 1;
-                  setComparisonOpen(false);
-                  setComparisonLoading(false);
-                  return;
-                }
-                setComparisonOpen(true);
-                void loadComparison(selectedSnapshot);
-              }}
-            >
-              <GitCompareArrows data-icon="inline-start" />
-              {comparisonOpen ? "Close comparison" : "Compare deployment"}
-            </Button>
-          ) : null}
-          {loading ? <Spinner className="ml-auto size-3.5" /> : null}
-        </div>
-        {error ? (
-          <div className="mt-1 flex items-center gap-1.5 text-[11px] text-destructive" role="alert">
-            <AlertTriangle className="size-3" />
-            <span className="min-w-0 truncate">Refresh failed: {error}</span>
-          </div>
-        ) : null}
-        {result.issues.length > 0 ? (
-          <div
-            className={cn(
-              "mt-1 truncate text-[11px]",
-              result.issues.some((issue) => issue.severity === "error")
-                ? "text-destructive"
-                : "text-amber-700 dark:text-amber-300",
-            )}
-            title={result.issues.map((issue) => issue.message).join("\n")}
-          >
-            {result.issues.map((issue) => issue.message).join(" · ")}
-          </div>
-        ) : null}
-        {comparisonOpen ? (
-          <AssetRenderComparisonToolbar
-            comparison={comparison}
-            loading={comparisonLoading}
-            snapshots={snapshots}
-            selectedSnapshot={selectedSnapshot}
-            onSnapshotChange={(version) => {
-              setSelectedSnapshot(version);
-              void loadComparison(version);
-            }}
-            selectedStage={selectedComparisonStage}
-            onStageChange={setSelectedComparisonStage}
-          />
-        ) : (
-          <div className="mt-1.5 flex min-w-0 items-center gap-1.5">
-            <div className="min-w-0 flex-1 overflow-x-auto pb-px">
-              <ToggleGroup
-                type="single"
-                value={stageKeys.includes(selectedStage) ? selectedStage : stageKeys[0]}
-                onValueChange={(value) => value && setSelectedStage(value)}
-                variant="outline"
-                size="sm"
-                spacing={0}
-                aria-label="Rendered operation"
+            <span className="max-w-48 truncate font-mono font-medium" title={result.asset.name}>
+              {result.asset.name}
+            </span>
+            <span className="text-muted-foreground">·</span>
+            <span className="truncate font-medium" title={result.provenance.source.merkle_root}>
+              {sourceLabel}
+            </span>
+            <span className="text-muted-foreground">·</span>
+            <span title={configurationTitle}>{context.environment || "default"}</span>
+            <span className="text-muted-foreground">·</span>
+            <span>{formatRenderWindow(context.start_date, context.end_date)}</span>
+            <span className="text-muted-foreground">·</span>
+            <span>{context.full_refresh ? "full refresh" : "incremental"}</span>
+            {result.asset.dialect ? (
+              <>
+                <span className="text-muted-foreground">·</span>
+                <span>{result.asset.dialect}</span>
+              </>
+            ) : null}
+            {result.asset.connection_name ? (
+              <>
+                <span className="text-muted-foreground">·</span>
+                <span className="truncate font-mono">{result.asset.connection_name}</span>
+              </>
+            ) : null}
+            {result.asset.fingerprint ? (
+              <Badge variant="muted" size="xs" title={fingerprintTitle}>
+                DAG {result.asset.fingerprint.slice(0, 8)}
+              </Badge>
+            ) : null}
+            {target.kind !== "none" || target.fidelity !== "exact" ? (
+              <Badge
+                variant={target.fidelity === "exact" ? "secondary" : "muted"}
+                size="xs"
+                title={targetTitle}
               >
-                {result.stages.map((item, index) => (
-                  <ToggleGroupItem
-                    key={stageKeys[index]}
-                    value={stageKeys[index]}
-                    title={item.message || assetRenderStageLabel(item)}
-                  >
-                    {assetRenderStageLabel(item)}
-                  </ToggleGroupItem>
-                ))}
-              </ToggleGroup>
-            </div>
-            {stage ? <StageStatusBadge status={stage.status} fidelity={stage.fidelity} /> : null}
-            <Button
-              variant="outline"
-              size="xs"
-              className="shrink-0"
-              onClick={() => void copyStage()}
-              disabled={!stage?.content}
-              aria-label="Copy rendered operation"
-            >
-              {copied ? <Check data-icon="inline-start" /> : <Copy data-icon="inline-start" />}
-              {copied ? "Copied" : "Copy"}
-            </Button>
+                Target {target.identity ? target.identity.slice(0, 8) : "runtime-only"}
+              </Badge>
+            ) : null}
+            {variableProvenance.length > 0 ? (
+              <Badge variant="muted" size="xs" title={variableTitle}>
+                {variableProvenance.length} pipeline{" "}
+                {variableProvenance.length === 1 ? "variable" : "variables"}
+              </Badge>
+            ) : null}
+            {context.configuration_fidelity === "runtime_only" ? (
+              <Badge variant="muted" size="xs" title={configurationTitle}>
+                Config runtime-only
+              </Badge>
+            ) : null}
+            {result.redactions.length > 0 ? (
+              <Badge
+                variant="muted"
+                size="xs"
+                title="Known credential values were masked or omitted"
+              >
+                <ShieldCheck className="size-3" data-icon="inline-start" /> Credentials redacted
+              </Badge>
+            ) : null}
+            {pipelineId && result.provenance.source.kind === "working_tree" ? (
+              <Button
+                variant={comparisonOpen ? "secondary" : "outline"}
+                size="xs"
+                className="ml-auto shrink-0"
+                disabled={!canCompare}
+                onClick={() => {
+                  if (comparisonOpen) {
+                    comparisonRequestId.current += 1;
+                    setComparisonOpen(false);
+                    setComparisonLoading(false);
+                    return;
+                  }
+                  setComparisonOpen(true);
+                  void loadComparison(selectedSnapshot);
+                }}
+              >
+                <GitCompareArrows data-icon="inline-start" />
+                {comparisonOpen ? "Close comparison" : "Compare deployment"}
+              </Button>
+            ) : null}
+            {loading ? <Spinner className="ml-auto size-3.5" /> : null}
           </div>
-        )}
-        {!comparisonOpen && stage?.message ? (
-          <p className="mt-1 truncate text-[11px] text-muted-foreground" title={stage.message}>
-            {stage.message}
-          </p>
-        ) : null}
-      </div>
+          {error ? (
+            <div
+              className="mt-1 flex items-center gap-1.5 text-[11px] text-destructive"
+              role="alert"
+            >
+              <AlertTriangle className="size-3" />
+              <span className="min-w-0 truncate">Refresh failed: {error}</span>
+            </div>
+          ) : null}
+          {result.issues.length > 0 ? (
+            <div
+              className={cn(
+                "mt-1 truncate text-[11px]",
+                result.issues.some((issue) => issue.severity === "error")
+                  ? "text-destructive"
+                  : "text-amber-700 dark:text-amber-300",
+              )}
+              title={result.issues.map((issue) => issue.message).join("\n")}
+            >
+              {result.issues.map((issue) => issue.message).join(" · ")}
+            </div>
+          ) : null}
+          {comparisonOpen ? (
+            <AssetRenderComparisonToolbar
+              comparison={comparison}
+              loading={comparisonLoading}
+              snapshots={snapshots}
+              selectedSnapshot={selectedSnapshot}
+              onSnapshotChange={(version) => {
+                setSelectedSnapshot(version);
+                void loadComparison(version);
+              }}
+              selectedStage={selectedComparisonStage}
+              onStageChange={setSelectedComparisonStage}
+            />
+          ) : (
+            <div className="mt-1.5 flex min-w-0 items-center gap-1.5">
+              <div className="min-w-0 flex-1 overflow-x-auto pb-px">
+                <ToggleGroup
+                  type="single"
+                  value={stageKeys.includes(selectedStage) ? selectedStage : stageKeys[0]}
+                  onValueChange={(value) => value && setSelectedStage(value)}
+                  variant="outline"
+                  size="sm"
+                  spacing={0}
+                  aria-label="Rendered operation"
+                >
+                  {result.stages.map((item, index) => (
+                    <ToggleGroupItem
+                      key={stageKeys[index]}
+                      value={stageKeys[index]}
+                      title={item.message || assetRenderStageLabel(item)}
+                    >
+                      {assetRenderStageLabel(item)}
+                    </ToggleGroupItem>
+                  ))}
+                </ToggleGroup>
+              </div>
+              {stage ? <StageStatusBadge status={stage.status} fidelity={stage.fidelity} /> : null}
+              <Button
+                variant="outline"
+                size="xs"
+                className="shrink-0"
+                onClick={() => void copyStage()}
+                disabled={!stage?.content}
+                aria-label="Copy rendered operation"
+              >
+                {copied ? <Check data-icon="inline-start" /> : <Copy data-icon="inline-start" />}
+                {copied ? "Copied" : "Copy"}
+              </Button>
+            </div>
+          )}
+          {!comparisonOpen && stage?.message ? (
+            <p className="mt-1 truncate text-[11px] text-muted-foreground" title={stage.message}>
+              {stage.message}
+            </p>
+          ) : null}
+        </div>
+      </ScrollArea>
 
-      <div className="min-h-0 flex-1">
+      <div className="min-h-20 flex-1">
         {comparisonOpen ? (
           <AssetRenderComparisonView
             comparison={comparison}

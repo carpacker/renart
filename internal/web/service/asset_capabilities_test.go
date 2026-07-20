@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	bruinexecutor "github.com/bruin-data/bruin/pkg/executor"
 	"github.com/bruin-data/bruin/pkg/pipeline"
 	"github.com/bruin-data/bruin/pkg/scheduler"
 	"github.com/stretchr/testify/assert"
@@ -80,6 +81,27 @@ func TestDirectSensorExecutorsReplaceNoOpsForChecks(t *testing.T) {
 			assert.NotContains(t, strings.ToLower(fmt.Sprintf("%T", operator)), "noop", "%s %s", assetType, taskType)
 		}
 	}
+}
+
+func TestDirectSourceExecutorsPreserveBruinNoOp(t *testing.T) {
+	t.Parallel()
+
+	assert.True(t, isDirectRunAssetTypeSupported(pipeline.AssetTypePostgresSource))
+	assert.False(t, isDirectRunAssetTypeSupported(pipeline.AssetType("custom.source")))
+	assert.False(t, shouldFallbackToCLIRunAsset(
+		&pipeline.Asset{Type: pipeline.AssetTypePostgresSource},
+		&pipeline.Pipeline{},
+	))
+	assert.True(t, shouldFallbackToCLIRunAsset(
+		&pipeline.Asset{Type: pipeline.AssetType("custom.source")},
+		&pipeline.Pipeline{},
+	))
+
+	executors, err := buildDirectMainExecutors(&stubConnectionManager{}, nil, nil, &pipeline.Pipeline{}, nil, nil, "", false, sensorModeWait)
+	require.NoError(t, err)
+
+	operator := executors[pipeline.AssetTypePostgresSource][scheduler.TaskInstanceTypeMain]
+	assert.IsType(t, bruinexecutor.NoOpOperator{}, operator)
 }
 
 func TestDirectIngestrExecutorUsesDestinationAwareQualityChecks(t *testing.T) {

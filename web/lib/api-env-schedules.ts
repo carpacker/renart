@@ -45,14 +45,16 @@ export type EnvSchedulesResponse = {
 };
 
 type EnvScheduleSourceInput =
-  | { snapshot_version_id: string; deploy_now?: never }
-  | { deploy_now: true; snapshot_version_id?: never };
+  | { snapshot_version_id: string; deploy_now?: never; preserve_snapshot?: never }
+  | { deploy_now: true; snapshot_version_id?: never; preserve_snapshot?: never }
+  | { preserve_snapshot: true; snapshot_version_id?: never; deploy_now?: never };
 
 export type UpsertEnvScheduleInput = {
   cron: string;
   timezone?: string;
   vars?: Record<string, unknown>;
   secret_refs?: Record<string, string>;
+  preserve_variables?: boolean;
   catchup_policy?: CatchupPolicy;
   paused?: boolean;
 } & EnvScheduleSourceInput;
