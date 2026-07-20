@@ -752,9 +752,10 @@ function ChangeGroup({
         return (
           <div key={`${title}-nb-${folder}`}>
             <div
-              className={`group flex min-h-8 items-center gap-1 rounded-md px-1 hover:bg-muted ${selectedPath === folder ? "bg-muted" : ""}`}
+              className={`group flex min-h-8 items-center gap-1 rounded-md hover:bg-muted ${selectedPath === folder ? "bg-muted" : ""}`}
             >
               <button
+                type="button"
                 className="flex size-5 shrink-0 items-center justify-center text-muted-foreground"
                 onClick={() => toggle(folder)}
                 title={isOpen ? "Collapse" : "Expand"}
@@ -765,11 +766,12 @@ function ChangeGroup({
                   <ChevronRight className="size-3.5" />
                 )}
               </button>
-              <BookOpen className="size-3.5 shrink-0 text-primary" />
               <button
-                className="flex min-w-0 flex-1 items-baseline gap-1.5 truncate text-left"
+                type="button"
+                className="flex min-h-8 min-w-0 flex-1 items-center gap-2 truncate rounded-md px-1 text-left"
                 onClick={() => onSelectGroup(paths, folder)}
               >
+                <BookOpen className="size-3.5 shrink-0 text-primary" />
                 <span className="truncate text-xs font-medium">{notebookFolders.get(folder)}</span>
                 <span className="shrink-0 text-[11px] text-muted-foreground">
                   {folderChanges.length} file{folderChanges.length === 1 ? "" : "s"}
@@ -843,16 +845,17 @@ function ChangeFileRow({
 }) {
   return (
     <div
-      className={`group flex min-h-8 items-center gap-2 rounded-md px-2 hover:bg-muted ${selected ? "bg-muted" : ""}`}
+      className={`group flex min-h-8 items-center rounded-md hover:bg-muted ${selected ? "bg-muted" : ""}`}
     >
-      <FileCode className="size-3.5 shrink-0 text-primary" />
       <button
-        className="min-w-0 flex-1 truncate text-left font-mono text-xs"
+        type="button"
+        className="flex min-h-8 min-w-0 flex-1 items-center gap-2 rounded-md px-2 text-left"
         onClick={() => onSelect(change.path)}
       >
-        {displayPath}
+        <FileCode className="size-3.5 shrink-0 text-primary" />
+        <span className="min-w-0 flex-1 truncate font-mono text-xs">{displayPath}</span>
+        <span className="font-mono text-xs text-amber-600">{sourceControlStatusLabel(change)}</span>
       </button>
-      <span className="font-mono text-xs text-amber-600">{sourceControlStatusLabel(change)}</span>
       <Button
         variant="ghost"
         size="xs"

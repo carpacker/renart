@@ -277,7 +277,7 @@ function TableCellContent({ cell }: { cell: FormattedCell }) {
     <HoverCard closeDelay={80} openDelay={250}>
       <HoverCardTrigger asChild>
         <button
-          className="block w-full max-w-48 truncate rounded-sm text-left hover:bg-muted/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
+          className="block w-full min-w-0 truncate rounded-sm text-left hover:bg-muted/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
           type="button"
         >
           {cell.value}

@@ -58,6 +58,24 @@ test.describe("app build actions live", () => {
     await expect(page).toHaveURL(
       new RegExp(`/pipelines/${pipelineId}/assets/${customersAssetId}/split(?:[?].*)?$`),
     );
+    const splitFlow = page.locator(".react-flow").first();
+    const selectedNode = splitFlow.locator(
+      `[data-testid="lineage-asset"][data-asset-id="${customersAssetId}"]`,
+    );
+    await expect(selectedNode).toBeVisible();
+    await expect
+      .poll(async () => {
+        const flowBox = await splitFlow.boundingBox();
+        const nodeBox = await selectedNode.boundingBox();
+        if (!flowBox || !nodeBox) return false;
+        return (
+          nodeBox.x >= flowBox.x &&
+          nodeBox.y >= flowBox.y &&
+          nodeBox.x + nodeBox.width <= flowBox.x + flowBox.width &&
+          nodeBox.y + nodeBox.height <= flowBox.y + flowBox.height
+        );
+      })
+      .toBe(true);
 
     await page.getByRole("link", { name: "Canvas view" }).click();
     await expect(page).toHaveURL(
@@ -371,6 +389,7 @@ select 1 as customer_id,'Ada' as customer_name union all select 2 as customer_id
 
     const planSheet = page.getByTestId("pipeline-plan-sheet");
     await expect(planSheet).toBeVisible();
+    await expect(planSheet).toHaveAttribute("data-slot", "dialog-content");
     await expect(planSheet).toContainText("Saved working tree");
     await expect(
       planSheet
@@ -381,6 +400,12 @@ select 1 as customer_id,'Ada' as customer_name union all select 2 as customer_id
       name: /^Run \d+ assets? from working tree$/,
     });
     await expect(confirmButton).toBeEnabled();
+
+    await planSheet.getByRole("tab", { name: "Checks" }).click();
+    const passingCheck = planSheet.getByLabel("All code checks passed").first();
+    await expect(passingCheck).toBeVisible();
+    await expect(passingCheck).toHaveClass(/text-primary/);
+    await expect(planSheet.getByText("No findings", { exact: true })).toHaveCount(0);
 
     const renderedPlanResponse = page.waitForResponse(
       (response) =>
@@ -482,6 +507,28 @@ select 1 as customer_id,'Ada' as customer_name union all select 2 as customer_id
     });
     expect(selectedPlan.assets.map((asset) => asset.name)).toEqual(["analytics.customers"]);
     await expect(planSheet.getByText("1 asset selected.", { exact: false })).toBeVisible();
+  });
+
+  test("shows deployment file diffs beneath collapsible file rows", async ({ liveApp, page }) => {
+    await page.goto(`${liveApp.baseURL}/pipelines/${pipelineId}/assets/${customersAssetId}/code`);
+    await expect(page.locator(".view-lines").first()).toContainText("customer_id", {
+      timeout: 15000,
+    });
+
+    await page.getByRole("button", { name: "Deploy", exact: true }).click();
+    const planDialog = page.getByTestId("pipeline-plan-sheet");
+    await expect(planDialog).toBeVisible();
+    await planDialog.getByRole("tab", { name: "Files" }).click();
+
+    const fileDisclosure = planDialog.locator('[data-slot="collapsible"]').first();
+    await expect(fileDisclosure).toBeVisible({ timeout: 15000 });
+    const fileDiff = fileDisclosure.locator('[data-slot="collapsible-content"]');
+    await expect(fileDiff).toBeVisible();
+    await expect(fileDiff).toContainText("Current deployment");
+    await expect(fileDiff).toContainText("Saved workspace");
+
+    await fileDisclosure.locator('[data-slot="collapsible-trigger"]').click();
+    await expect(fileDiff).toBeHidden();
   });
 
   test("keeps valid sibling previews when an asset definition is incomplete", async ({

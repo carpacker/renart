@@ -374,10 +374,28 @@ body > .parameter-hints-widget {
   animation: notebook-cell-jump-highlight 1.6s ease-out;
 }
 
+@keyframes asset-canvas-sql-hover-highlight {
+  0%,
+  100% {
+    box-shadow: 0 0 0 1px color-mix(in oklab, var(--primary) 30%, transparent);
+  }
+  50% {
+    box-shadow: 0 0 0 4px color-mix(in oklab, var(--primary) 45%, transparent);
+  }
+}
+
+.asset-canvas-sql-hover-highlight {
+  animation: asset-canvas-sql-hover-highlight 1.15s ease-in-out infinite;
+}
+
 @media (prefers-reduced-motion: reduce) {
   [data-notebook-cell-jump-highlight="true"] > [data-slot="delimited-card"] {
     animation: none;
     box-shadow: 0 0 0 2px var(--ring);
+  }
+  .asset-canvas-sql-hover-highlight {
+    animation: none;
+    box-shadow: 0 0 0 2px color-mix(in oklab, var(--primary) 55%, transparent);
   }
 }
 

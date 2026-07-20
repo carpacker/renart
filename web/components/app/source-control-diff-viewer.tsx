@@ -152,6 +152,7 @@ function SourceControlDiffFile({
               fontSize: 12,
               glyphMargin: false,
               ignoreTrimWhitespace: false,
+              lineDecorationsWidth: 16,
               lineNumbersMinChars: 3,
               minimap: { enabled: false },
               originalEditable: false,

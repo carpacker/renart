@@ -27,6 +27,7 @@ import {
 import { Field, FieldDescription, FieldGroup, FieldLabel } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { ScrollArea } from "@/components/ui/scroll-area";
 import {
   Select,
   SelectContent,
@@ -372,249 +373,264 @@ export function NewAssetDialog({
             )}
           </DialogDescription>
         </DialogHeader>
-        <div className="grid min-h-0 min-w-0 flex-1 gap-5 overflow-x-hidden overflow-y-auto">
-          <div className="min-w-0">
-            <div
-              className={cn(
-                "grid min-w-0 transition-[grid-template-rows,opacity] duration-300 ease-out motion-reduce:transition-none",
-                kindPickerExpanded
-                  ? "grid-rows-[1fr] opacity-100"
-                  : "pointer-events-none grid-rows-[0fr] opacity-0",
-              )}
-              aria-hidden={!kindPickerExpanded}
-              inert={!kindPickerExpanded}
-            >
-              <div className="min-h-0 min-w-0 overflow-hidden">
-                <ToggleGroup
-                  type="single"
-                  variant="outline"
-                  value={selected.id}
-                  onValueChange={(nextKind) => {
-                    setKindPickerExpanded(false);
-                    if (!nextKind) return;
-                    const next = nextKind as NewAssetKind;
-                    setKind(next);
-                    if (next === "seed" || next === "sensor") {
-                      setSemanticDraft(
-                        defaultSemanticAssetDraft(next, semanticCapabilities, semanticConnections),
-                      );
-                    }
-                  }}
-                  className="grid w-full min-w-0 grid-cols-2 items-stretch gap-2 sm:grid-cols-3"
-                >
-                  {options.map((option) => (
-                    <ToggleGroupItem
-                      key={option.id}
-                      value={option.id}
-                      aria-label={option.label}
-                      className="h-24 w-full min-w-0 flex-col items-start justify-start whitespace-normal p-3 text-left data-[state=on]:border-primary data-[state=on]:ring-1 data-[state=on]:ring-primary"
-                    >
-                      <option.icon className="text-primary" />
-                      <div className="font-medium">{option.label}</div>
-                      <div className="text-xs text-muted-foreground">{option.description}</div>
-                    </ToggleGroupItem>
-                  ))}
-                </ToggleGroup>
-              </div>
-            </div>
-            <div
-              className={cn(
-                "grid min-w-0 transition-[grid-template-rows,opacity] duration-300 ease-out motion-reduce:transition-none",
-                kindPickerExpanded
-                  ? "pointer-events-none grid-rows-[0fr] opacity-0"
-                  : "grid-rows-[1fr] opacity-100",
-              )}
-              aria-hidden={kindPickerExpanded}
-              inert={kindPickerExpanded}
-            >
-              <div className="min-h-0 min-w-0 overflow-hidden">
-                <div className="flex min-w-0 items-center gap-2 rounded-md border bg-muted/20 px-2.5 py-2">
-                  <selected.icon className="size-4 shrink-0 text-primary" />
-                  <div className="min-w-0 flex-1">
-                    <div className="text-xs font-medium">{selected.label}</div>
-                    <div className="truncate text-[11px] text-muted-foreground">
-                      {selected.description}
-                    </div>
-                  </div>
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size="xs"
-                    className="shrink-0"
-                    onClick={() => setKindPickerExpanded(true)}
+        <ScrollArea className="min-h-0 min-w-0 flex-1" viewportClassName="p-1">
+          <div className="grid min-w-0 gap-5">
+            <div className="min-w-0">
+              <div
+                className={cn(
+                  "grid min-w-0 transition-[grid-template-rows,opacity] duration-300 ease-out motion-reduce:transition-none",
+                  kindPickerExpanded
+                    ? "grid-rows-[1fr] opacity-100"
+                    : "pointer-events-none grid-rows-[0fr] opacity-0",
+                )}
+                aria-hidden={!kindPickerExpanded}
+                inert={!kindPickerExpanded}
+              >
+                <div className="min-h-0 min-w-0 overflow-hidden p-1">
+                  <ToggleGroup
+                    type="single"
+                    variant="outline"
+                    value={selected.id}
+                    onValueChange={(nextKind) => {
+                      setKindPickerExpanded(false);
+                      if (!nextKind) return;
+                      const next = nextKind as NewAssetKind;
+                      setKind(next);
+                      if (next === "seed" || next === "sensor") {
+                        setSemanticDraft(
+                          defaultSemanticAssetDraft(
+                            next,
+                            semanticCapabilities,
+                            semanticConnections,
+                          ),
+                        );
+                      }
+                    }}
+                    className="grid w-full min-w-0 grid-cols-2 items-stretch gap-2 sm:grid-cols-3"
                   >
-                    Change type
-                  </Button>
+                    {options.map((option) => (
+                      <ToggleGroupItem
+                        key={option.id}
+                        value={option.id}
+                        aria-label={option.label}
+                        className="h-24 w-full min-w-0 flex-col items-start justify-start whitespace-normal p-3 text-left data-[state=on]:border-primary data-[state=on]:ring-1 data-[state=on]:ring-primary"
+                      >
+                        <option.icon className="text-primary" />
+                        <div className="font-medium">{option.label}</div>
+                        <div className="text-xs text-muted-foreground">{option.description}</div>
+                      </ToggleGroupItem>
+                    ))}
+                  </ToggleGroup>
+                </div>
+              </div>
+              <div
+                className={cn(
+                  "grid min-w-0 transition-[grid-template-rows,opacity] duration-300 ease-out motion-reduce:transition-none",
+                  kindPickerExpanded
+                    ? "pointer-events-none grid-rows-[0fr] opacity-0"
+                    : "grid-rows-[1fr] opacity-100",
+                )}
+                aria-hidden={kindPickerExpanded}
+                inert={kindPickerExpanded}
+              >
+                <div className="min-h-0 min-w-0 overflow-hidden p-1">
+                  <div className="flex min-w-0 items-center gap-2 rounded-md border bg-muted/20 px-2.5 py-2">
+                    <selected.icon className="size-4 shrink-0 text-primary" />
+                    <div className="min-w-0 flex-1">
+                      <div className="text-xs font-medium">{selected.label}</div>
+                      <div className="truncate text-[11px] text-muted-foreground">
+                        {selected.description}
+                      </div>
+                    </div>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="xs"
+                      className="shrink-0"
+                      onClick={() => setKindPickerExpanded(true)}
+                    >
+                      Change type
+                    </Button>
+                  </div>
                 </div>
               </div>
             </div>
-          </div>
-          <Field variant="plain">
-            <FieldLabel htmlFor="new-asset-name">Asset name</FieldLabel>
-            <Input
-              id="new-asset-name"
-              className="font-mono"
-              placeholder="analytics.my_asset"
-              value={name}
-              onChange={(event) => setName(event.target.value)}
-              onKeyDown={(event) => {
-                if (event.key === "Enter" && !creating) {
-                  void create();
-                }
-              }}
-              autoFocus
-            />
-            <FieldDescription>
-              Use a <span className="font-mono">prefix.name</span> to group it under{" "}
-              <span className="font-mono">assets/prefix/</span>.
-            </FieldDescription>
-          </Field>
-          {semanticKind ? (
-            <SemanticAssetCreateFields
-              kind={semanticKind}
-              capabilities={semanticCapabilities}
-              connections={semanticConnections}
-              value={semanticDraft}
-              onChange={setSemanticDraft}
-            />
-          ) : null}
-          {selected.id === "api" ? (
-            <FieldGroup>
-              <Field variant="plain">
-                <FieldLabel htmlFor="new-api-template">API source</FieldLabel>
-                <Select
-                  value={apiTemplate}
-                  onValueChange={(value) => setAPITemplate(value as APIAssetTemplateId)}
-                >
-                  <SelectTrigger id="new-api-template">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectGroup>
-                      {API_ASSET_TEMPLATES.map((template) => (
-                        <SelectItem key={template.id} value={template.id}>
-                          {template.label}
+            <Field variant="plain">
+              <FieldLabel htmlFor="new-asset-name">Asset name</FieldLabel>
+              <Input
+                id="new-asset-name"
+                className="font-mono"
+                placeholder="analytics.my_asset"
+                value={name}
+                onChange={(event) => setName(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter" && !creating) {
+                    void create();
+                  }
+                }}
+                autoFocus
+              />
+              <FieldDescription>
+                Use a <span className="font-mono">prefix.name</span> to group it under{" "}
+                <span className="font-mono">assets/prefix/</span>.
+              </FieldDescription>
+            </Field>
+            {semanticKind ? (
+              <SemanticAssetCreateFields
+                kind={semanticKind}
+                capabilities={semanticCapabilities}
+                connections={semanticConnections}
+                value={semanticDraft}
+                onChange={setSemanticDraft}
+              />
+            ) : null}
+            {selected.id === "api" ? (
+              <FieldGroup>
+                <Field variant="plain">
+                  <FieldLabel htmlFor="new-api-template">API source</FieldLabel>
+                  <Select
+                    value={apiTemplate}
+                    onValueChange={(value) => setAPITemplate(value as APIAssetTemplateId)}
+                  >
+                    <SelectTrigger id="new-api-template">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectGroup>
+                        {API_ASSET_TEMPLATES.map((template) => (
+                          <SelectItem key={template.id} value={template.id}>
+                            {template.label}
+                          </SelectItem>
+                        ))}
+                      </SelectGroup>
+                    </SelectContent>
+                  </Select>
+                  <FieldDescription>
+                    {
+                      API_ASSET_TEMPLATES.find((template) => template.id === apiTemplate)
+                        ?.description
+                    }
+                  </FieldDescription>
+                </Field>
+              </FieldGroup>
+            ) : null}
+            {selected.id === "load" ? (
+              <FieldGroup>
+                {!isDownstream ? (
+                  <>
+                    <Field variant="plain">
+                      <FieldLabel htmlFor="new-load-source-connection">
+                        Source connection
+                      </FieldLabel>
+                      <Select value={sourceConnection} onValueChange={setSourceConnection}>
+                        <SelectTrigger id="new-load-source-connection">
+                          <SelectValue placeholder="Choose a source" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectGroup>
+                            {loadConnectionNames.map((connectionName) => (
+                              <SelectItem key={connectionName} value={connectionName}>
+                                {connectionName}
+                              </SelectItem>
+                            ))}
+                          </SelectGroup>
+                        </SelectContent>
+                      </Select>
+                    </Field>
+                    <Field variant="plain">
+                      <FieldLabel htmlFor="new-load-source-table">
+                        {isLocalLoadConnection(sourceConnection)
+                          ? "Source file"
+                          : "Source table or object"}
+                      </FieldLabel>
+                      {isLocalLoadConnection(sourceConnection) ? (
+                        <FilePathPicker
+                          id="new-load-source-table"
+                          variant="field"
+                          ariaLabel="Choose source file"
+                          placeholder="data/orders.csv"
+                          value={sourceTable}
+                          onCommit={setSourceTable}
+                        />
+                      ) : (
+                        <Input
+                          id="new-load-source-table"
+                          className="font-mono"
+                          placeholder="public.orders"
+                          value={sourceTable}
+                          onChange={(event) => setSourceTable(event.target.value)}
+                        />
+                      )}
+                    </Field>
+                  </>
+                ) : null}
+              </FieldGroup>
+            ) : null}
+            {selected.id === "sql" || selected.id === "api" || selected.id === "load" ? (
+              <FieldGroup>
+                <Field variant="plain">
+                  <FieldLabel htmlFor="new-asset-connection">
+                    {selected.id === "sql" ? "Target connection" : "Destination connection"}
+                  </FieldLabel>
+                  <Select
+                    value={connection || AUTO_CONNECTION_VALUE}
+                    onValueChange={(value) =>
+                      setConnection(value === AUTO_CONNECTION_VALUE ? "" : value)
+                    }
+                  >
+                    <SelectTrigger id="new-asset-connection">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectGroup>
+                        <SelectItem value={AUTO_CONNECTION_VALUE}>
+                          Auto (pipeline default)
                         </SelectItem>
-                      ))}
-                    </SelectGroup>
-                  </SelectContent>
-                </Select>
-                <FieldDescription>
-                  {API_ASSET_TEMPLATES.find((template) => template.id === apiTemplate)?.description}
-                </FieldDescription>
-              </Field>
-            </FieldGroup>
-          ) : null}
-          {selected.id === "load" ? (
-            <FieldGroup>
-              {!isDownstream ? (
-                <>
-                  <Field variant="plain">
-                    <FieldLabel htmlFor="new-load-source-connection">Source connection</FieldLabel>
-                    <Select value={sourceConnection} onValueChange={setSourceConnection}>
-                      <SelectTrigger id="new-load-source-connection">
-                        <SelectValue placeholder="Choose a source" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectGroup>
-                          {loadConnectionNames.map((connectionName) => (
+                        {(selected.id === "load" ? loadConnectionNames : connectionNames).map(
+                          (connectionName) => (
                             <SelectItem key={connectionName} value={connectionName}>
                               {connectionName}
                             </SelectItem>
-                          ))}
-                        </SelectGroup>
-                      </SelectContent>
-                    </Select>
-                  </Field>
-                  <Field variant="plain">
-                    <FieldLabel htmlFor="new-load-source-table">
-                      {isLocalLoadConnection(sourceConnection)
-                        ? "Source file"
-                        : "Source table or object"}
-                    </FieldLabel>
-                    {isLocalLoadConnection(sourceConnection) ? (
-                      <FilePathPicker
-                        id="new-load-source-table"
-                        variant="field"
-                        ariaLabel="Choose source file"
-                        placeholder="data/orders.csv"
-                        value={sourceTable}
-                        onCommit={setSourceTable}
-                      />
-                    ) : (
-                      <Input
-                        id="new-load-source-table"
-                        className="font-mono"
-                        placeholder="public.orders"
-                        value={sourceTable}
-                        onChange={(event) => setSourceTable(event.target.value)}
-                      />
-                    )}
-                  </Field>
-                </>
-              ) : null}
-            </FieldGroup>
-          ) : null}
-          {selected.id === "sql" || selected.id === "api" || selected.id === "load" ? (
-            <FieldGroup>
-              <Field variant="plain">
-                <FieldLabel htmlFor="new-asset-connection">
-                  {selected.id === "sql" ? "Target connection" : "Destination connection"}
-                </FieldLabel>
-                <Select
-                  value={connection || AUTO_CONNECTION_VALUE}
-                  onValueChange={(value) =>
-                    setConnection(value === AUTO_CONNECTION_VALUE ? "" : value)
-                  }
-                >
-                  <SelectTrigger id="new-asset-connection">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectGroup>
-                      <SelectItem value={AUTO_CONNECTION_VALUE}>Auto (pipeline default)</SelectItem>
-                      {(selected.id === "load" ? loadConnectionNames : connectionNames).map(
-                        (connectionName) => (
-                          <SelectItem key={connectionName} value={connectionName}>
-                            {connectionName}
-                          </SelectItem>
-                        ),
-                      )}
-                    </SelectGroup>
-                  </SelectContent>
-                </Select>
-                <FieldDescription>
-                  {selected.id === "load"
-                    ? "Database destinations use the asset name as their table."
-                    : selected.id === "sql"
-                      ? "Where the query is materialized. Auto uses the pipeline default."
-                      : "Where fetched records are loaded. You can change this later."}
-                </FieldDescription>
-              </Field>
-              {selected.id === "load" && targetNeedsDestinationObject ? (
-                <Field variant="plain">
-                  <FieldLabel htmlFor="new-load-destination-object">Destination object</FieldLabel>
-                  <Input
-                    id="new-load-destination-object"
-                    className="font-mono"
-                    placeholder={
-                      isLocalLoadConnection(connection) ? "data/orders.csv" : "path/to/object"
-                    }
-                    value={destinationObject}
-                    onChange={(event) => setDestinationObject(event.target.value)}
-                  />
+                          ),
+                        )}
+                      </SelectGroup>
+                    </SelectContent>
+                  </Select>
+                  <FieldDescription>
+                    {selected.id === "load"
+                      ? "Database destinations use the asset name as their table."
+                      : selected.id === "sql"
+                        ? "Where the query is materialized. Auto uses the pipeline default."
+                        : "Where fetched records are loaded. You can change this later."}
+                  </FieldDescription>
                 </Field>
-              ) : null}
-            </FieldGroup>
-          ) : null}
-          {error ? (
-            <Alert variant="destructive">
-              <AlertTriangle />
-              <AlertTitle>Could not create asset</AlertTitle>
-              <AlertDescription>{error}</AlertDescription>
-            </Alert>
-          ) : null}
-        </div>
+                {selected.id === "load" && targetNeedsDestinationObject ? (
+                  <Field variant="plain">
+                    <FieldLabel htmlFor="new-load-destination-object">
+                      Destination object
+                    </FieldLabel>
+                    <Input
+                      id="new-load-destination-object"
+                      className="font-mono"
+                      placeholder={
+                        isLocalLoadConnection(connection) ? "data/orders.csv" : "path/to/object"
+                      }
+                      value={destinationObject}
+                      onChange={(event) => setDestinationObject(event.target.value)}
+                    />
+                  </Field>
+                ) : null}
+              </FieldGroup>
+            ) : null}
+            {error ? (
+              <Alert variant="destructive">
+                <AlertTriangle />
+                <AlertTitle>Could not create asset</AlertTitle>
+                <AlertDescription>{error}</AlertDescription>
+              </Alert>
+            ) : null}
+          </div>
+        </ScrollArea>
         <DialogFooter>
           <Button variant="outline" onClick={() => onOpenChange(false)} disabled={creating}>
             Cancel

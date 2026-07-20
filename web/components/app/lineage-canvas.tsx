@@ -15,6 +15,7 @@ import {
   ReactFlow,
   useReactFlow,
   useStore,
+  useStoreApi,
   type Edge,
   type Node,
   type NodeProps,
@@ -60,6 +61,7 @@ export type AppLineageCanvasAsset = AppAsset & {
 type AssetNodeData = {
   asset: AppLineageCanvasAsset;
   selected: boolean;
+  highlighted: boolean;
   dimmed: boolean;
   onSelect?: (assetId: string) => void;
   onCreateDownstream?: (assetId: string) => void;
@@ -153,7 +155,14 @@ function AssetFlowNode({ data }: NodeProps<AssetNodeData>) {
   );
 
   return (
-    <div className="group relative transition-opacity" style={{ opacity: data.dimmed ? 0.18 : 1 }}>
+    <div
+      data-sql-hover-highlight={data.highlighted ? "true" : undefined}
+      className={cn(
+        "group relative rounded-xl transition-opacity",
+        data.highlighted && "asset-canvas-sql-hover-highlight",
+      )}
+      style={{ opacity: data.dimmed ? 0.18 : 1 }}
+    >
       <Handle className="asset-node-hidden-handle" type="target" position={Position.Left} />
       {actions && actions.length > 0 ? (
         <ContextMenu>
@@ -237,6 +246,7 @@ const assetNodeHeight = 112;
 // so it never fights the user's own panning.
 function ViewportFocus({ assetId, nodes }: { assetId?: string; nodes: Node[] }) {
   const { setCenter } = useReactFlow();
+  const store = useStoreApi();
   const lastFocused = useRef<string | null>(null);
 
   useEffect(() => {
@@ -251,14 +261,39 @@ function ViewportFocus({ assetId, nodes }: { assetId?: string; nodes: Node[] }) 
     if (!node) {
       return;
     }
-    lastFocused.current = assetId;
     const width = node.width ?? assetNodeWidth;
     const height = node.height ?? assetNodeHeight;
-    setCenter(node.position.x + width / 2, node.position.y + height / 2, {
-      zoom: 1,
-      duration: 600,
+    let secondFrame = 0;
+    const firstFrame = window.requestAnimationFrame(() => {
+      secondFrame = window.requestAnimationFrame(() => {
+        lastFocused.current = assetId;
+        const state = store.getState();
+        const [translateX, translateY, zoom] = state.transform;
+        const padding = 40;
+        const left = node.position.x * zoom + translateX;
+        const top = node.position.y * zoom + translateY;
+        const right = left + width * zoom;
+        const bottom = top + height * zoom;
+        const inView =
+          left >= padding &&
+          top >= padding &&
+          right <= state.width - padding &&
+          bottom <= state.height - padding;
+        if (inView) {
+          return;
+        }
+        void setCenter(node.position.x + width / 2, node.position.y + height / 2, {
+          zoom,
+          duration: 500,
+        });
+      });
     });
-  }, [assetId, nodes, setCenter]);
+
+    return () => {
+      window.cancelAnimationFrame(firstFrame);
+      window.cancelAnimationFrame(secondFrame);
+    };
+  }, [assetId, nodes, setCenter, store]);
 
   return null;
 }
@@ -312,6 +347,7 @@ export function AppLineageCanvas({
   links,
   selectedAssetId,
   focusAssetId,
+  highlightAssetId,
   onAssetSelect,
   onCreateDownstream,
   onCreateAsset,
@@ -325,6 +361,7 @@ export function AppLineageCanvas({
   links?: AppLineageLayoutEdge[];
   selectedAssetId?: string;
   focusAssetId?: string;
+  highlightAssetId?: string;
   onAssetSelect?: (assetId: string) => void;
   onCreateDownstream?: (assetId: string) => void;
   // Right-click on the canvas offers "New asset"; when the click lands inside
@@ -434,7 +471,7 @@ export function AppLineageCanvas({
         const minX = Math.min(...positionedAssets.map(({ position }) => position.x)) - 16;
         const minY = Math.min(...positionedAssets.map(({ position }) => position.y)) - 42;
         const maxX = Math.max(...positionedAssets.map(({ position }) => position.x)) + 248;
-        const maxY = Math.max(...positionedAssets.map(({ position }) => position.y)) + 112;
+        const maxY = Math.max(...positionedAssets.map(({ position }) => position.y)) + 128;
         return {
           id: `prefix-group-${group}`,
           type: "prefixGroup",
@@ -493,6 +530,7 @@ export function AppLineageCanvas({
         data: {
           asset,
           selected: asset.id === visuallySelectedAssetId,
+          highlighted: asset.id === highlightAssetId,
           dimmed: Boolean(lineage && !lineage.all.has(asset.id)),
           onSelect: handleSelect,
           onCreateDownstream: hasCreateDownstream ? handleCreateDownstream : undefined,
@@ -527,6 +565,7 @@ export function AppLineageCanvas({
   }, [
     assets,
     goToLabel,
+    highlightAssetId,
     lineageAssetId,
     links,
     selectedAssetId,
@@ -552,11 +591,6 @@ export function AppLineageCanvas({
     if (centeredGraphRef.current === graphKey) {
       return;
     }
-    if (focusAssetId) {
-      centeredGraphRef.current = graphKey;
-      return;
-    }
-
     const frame = window.requestAnimationFrame(() => {
       const viewportWidth = containerRef.current?.getBoundingClientRect().width ?? 0;
       const graphMinX = Math.min(...nodes.map((node) => node.position.x));
@@ -581,7 +615,7 @@ export function AppLineageCanvas({
     });
 
     return () => window.cancelAnimationFrame(frame);
-  }, [flowInstance, focusAssetId, nodes]);
+  }, [flowInstance, nodes]);
 
   const handlePaneContextMenu = useCallback(
     (event: ReactMouseEvent | MouseEvent) => {

@@ -112,7 +112,7 @@ import type { PipelineRunSource } from "@/lib/api-scheduler";
 import { typeCheckPipeline, type PipelineTypeCheckReport } from "@/lib/api-pipelines";
 import { renderPipelineAsset, type AssetRenderResult } from "@/lib/api-asset-render";
 import { isSeedAssetType, isSensorAssetType, isSqlAssetType } from "@/lib/asset-types";
-import { editorDraftAtom } from "@/lib/atoms/domains/editor";
+import { editorDraftAtom, sqlHoveredAssetAtom } from "@/lib/atoms/domains/editor";
 import type { MaterializeHistoryEntry } from "@/lib/atoms/results";
 import {
   routeSelectionAtom,
@@ -2147,10 +2147,13 @@ function PipelineCanvas({ onAssetSelect }: { onAssetSelect: (assetId: string) =>
     goToCatalog,
     openPipelineConnections,
   } = useBuildContext();
+  const sqlHoveredAssetId = useAtomValue(sqlHoveredAssetAtom);
   return (
     <AppLineageCanvas
       assets={pipelineAssets}
       selectedAssetId={routedAssetId}
+      focusAssetId={routedAssetId}
+      highlightAssetId={sqlHoveredAssetId ?? undefined}
       onAssetSelect={onAssetSelect}
       onRunAsset={runAssetById}
       onDeleteAsset={deleteAssetById}

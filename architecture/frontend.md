@@ -87,7 +87,10 @@ not underscore-flattened route hacks.
   sheet renders worktree and staged changes with Monaco's inline diff editor;
   SQL, Python, YAML asset definitions, JSON, Markdown, and ordinary project
   files select syntax highlighting from their path. Notebook-folder selections
-  remain one review unit but render one inline diff per changed cell/file.
+  remain one review unit but render one inline diff per changed cell/file. Each
+  file or notebook row makes its complete non-action area the diff target, so
+  the path, icon, and status behave as one control rather than as separate
+  click hotspots.
 - [components/app/build-page.tsx](../web/components/app/build-page.tsx): the primary
   IDE — the interactive lineage canvas
   ([lineage-canvas.tsx](../web/components/app/lineage-canvas.tsx), React Flow)
@@ -97,19 +100,29 @@ not underscore-flattened route hacks.
   view; after an asset is present in the route, later selections preserve the
   explicit code/split/canvas layout. A DAG that fits at the default zoom is
   horizontally centered on initial render, while a wider DAG keeps its layout
-  origin so it remains predictable to pan. Build and Catalog share the same
+  origin so it remains predictable to pan. After that initial positioning, a
+  routed selection is smoothly brought into view only when it falls outside
+  the current viewport; this preserves the selected node when the canvas is
+  resized into split view without fighting user panning. Hovering an
+  asset-backed relation in the SQL editor resolves it through the definition
+  endpoint and applies a transient, reduced-motion-safe highlight to the same
+  canvas node. Build and Catalog share the same
   farther-out zoom range; below the detail threshold, fixed-size asset cards
   become icon-only overview nodes and group labels disappear so unreadable text
   does not clutter a whole-DAG view. The explorer's asset filter searches names,
   groups, paths, types, and connections. The toolbar keeps Deploy as a separate
   secondary action and makes **Review run** the primary pipeline action. Type
   checks live in the results panel, which scrolls through a shadcn ScrollArea;
-  failing assets also receive a warning marker on their canvas node. The review sheet
-  defaults to the entire pipeline and names the exact
+  failing assets also receive a warning marker on their canvas node. The shared
+  run/deploy/redeploy review surface is a wide, height-bounded dialog rather
+  than a side sheet, so rendered operations and deployment comparisons retain
+  useful width. It defaults to the entire pipeline and names the exact
   saved working tree or immutable deployment, environment, UTC interval,
   refresh/sensor mode, asset and execution-unit counts, checks, blockers,
   warnings, and source/configuration/variable identities. Summary, Assets, and
-  Checks load with the compact plan; opening Execution lazily requests redacted
+  Checks load with the compact plan; successful assets use single-line green
+  checks while assets with findings retain their expanded messages. Opening
+  Execution lazily requests redacted
   stage content and shows compiled queries, generated materialization SQL,
   checks, and semantic/runtime-only operations in read-only Monaco with
   `Preview — not executed`. The selected tab and initial review context stay
@@ -126,11 +139,12 @@ not underscore-flattened route hacks.
   Pipeline and asset execution plus Deploy await every mounted editor's
   pending/in-flight save, so the saved source named by the action includes
   visible Monaco edits.
-  **Deploy** opens the same sheet in a definition-only deployment mode rather
+  **Deploy** opens the same dialog in a definition-only deployment mode rather
   than mutating immediately. It reviews the entire saved working tree, keeps
   execution policy/data freshness out of the gate, shows exact added/changed/
-  removed files with side-by-side deployed/workspace content where safe, and
-  binds the final write to the reviewed source Merkle. Afterward it offers an
+  removed files as collapsible rows whose deployed/workspace comparison opens
+  directly beneath that file, and binds the final write to the reviewed source
+  Merkle. Afterward it offers an
   unchecked list of older schedule pins; only explicitly selected rows move.
   Type-check does the same; transport/save failures remain visible in the bell
   and results panel without erasing the last successful report. Every supported
@@ -194,8 +208,9 @@ not underscore-flattened route hacks.
   Its six top-level asset-kind choices use one fixed tile size and animate into
   a compact selected-kind summary once chosen, while the creation fields use the
   plain `Field` variant instead of nesting a bordered card around each input.
-  The dialog is shrink-safe and suppresses horizontal overflow around long
-  horizontal fields. SQL assets can select an explicit target connection or use
+  The dialog is shrink-safe, keeps focus rings inset inside its shadcn
+  ScrollArea, and suppresses horizontal overflow around long horizontal
+  fields. SQL assets can select an explicit target connection or use
   the pipeline default. It filters types and connections together, offers
   upload/paste/workspace-file/URL seed sources, renders the parameters required by
   each sensor variant, and sends uploaded bytes through the multipart asset API.

@@ -4,6 +4,7 @@ import { Link } from "@tanstack/react-router";
 import {
   AlertTriangle,
   CheckCircle2,
+  ChevronRight,
   CircleAlert,
   FileCode2,
   Loader2,
@@ -22,6 +23,15 @@ import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import {
   Field,
   FieldContent,
@@ -40,14 +50,6 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import {
-  Sheet,
-  SheetContent,
-  SheetDescription,
-  SheetFooter,
-  SheetHeader,
-  SheetTitle,
-} from "@/components/ui/sheet";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -427,28 +429,28 @@ export function PipelinePlanSheet({
       : "Run pipeline";
 
   return (
-    <Sheet open={open} onOpenChange={onOpenChange}>
-      <SheetContent
-        className="w-full gap-0 p-0 sm:max-w-2xl lg:max-w-3xl"
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent
+        className="flex h-[min(92dvh,58rem)] max-h-[calc(100dvh-2rem)] w-[calc(100vw-2rem)] max-w-none flex-col gap-0 overflow-hidden p-0 sm:max-w-6xl xl:max-w-7xl"
         data-testid="pipeline-plan-sheet"
       >
-        <SheetHeader className="shrink-0 border-b px-5 py-4 pr-12">
+        <DialogHeader className="shrink-0 border-b px-5 py-4 pr-12">
           <div className="flex min-w-0 items-center gap-2">
-            <SheetTitle className="truncate">
+            <DialogTitle className="truncate">
               {intent === "deploy" ? "Review deployment" : "Review pipeline run"}
-            </SheetTitle>
+            </DialogTitle>
             {plan ? <PlanStatusBadge status={plan.status} /> : null}
             {(loading || contentLoading) && plan ? (
               <Loader2 className="size-3.5 animate-spin" />
             ) : null}
           </div>
-          <SheetDescription>
+          <DialogDescription>
             {pipelineName} · saved source preview ·{" "}
             {intent === "deploy"
               ? "no data is executed by deployment"
               : "nothing executes until you confirm"}
-          </SheetDescription>
-        </SheetHeader>
+          </DialogDescription>
+        </DialogHeader>
 
         <div className="shrink-0 border-b px-5 py-3">
           <dl className="grid min-w-0 grid-cols-2 gap-x-6 gap-y-2 text-xs sm:grid-cols-4">
@@ -675,7 +677,7 @@ export function PipelinePlanSheet({
           </div>
         )}
 
-        <SheetFooter className="shrink-0 gap-3 border-t bg-muted/10 px-5 py-4">
+        <DialogFooter className="shrink-0 flex-col gap-3 border-t bg-muted/10 px-5 py-4 sm:flex-col sm:justify-start">
           {error && plan ? (
             <Alert variant="destructive">
               <AlertTriangle />
@@ -759,9 +761,9 @@ export function PipelinePlanSheet({
               </Button>
             </div>
           )}
-        </SheetFooter>
-      </SheetContent>
-    </Sheet>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }
 
@@ -970,12 +972,20 @@ function PlanChecks({ plan }: { plan: PipelinePlan }) {
           </span>
         </div>
         <div className="divide-y border-y">
-          {report.assets.map((asset) => (
-            <div key={asset.name} className="py-2.5">
-              <div className="font-mono font-medium">{asset.name}</div>
-              {asset.findings.length === 0 ? (
-                <div className="mt-0.5 text-[11px] text-muted-foreground">No findings</div>
-              ) : (
+          {report.assets.map((asset) =>
+            asset.findings.length === 0 ? (
+              <div key={asset.name} className="flex min-w-0 items-center gap-2 py-1.5">
+                <CheckCircle2
+                  className="size-3.5 shrink-0 text-primary"
+                  aria-label="All code checks passed"
+                />
+                <div className="min-w-0 truncate font-mono font-medium" title={asset.name}>
+                  {asset.name}
+                </div>
+              </div>
+            ) : (
+              <div key={asset.name} className="py-2.5">
+                <div className="font-mono font-medium">{asset.name}</div>
                 <ul className="mt-1 space-y-1">
                   {asset.findings.map((finding, index) => (
                     <li
@@ -990,9 +1000,9 @@ function PlanChecks({ plan }: { plan: PipelinePlan }) {
                     </li>
                   ))}
                 </ul>
-              )}
-            </div>
-          ))}
+              </div>
+            ),
+          )}
         </div>
       </section>
       <section>
@@ -1226,47 +1236,59 @@ function DeploymentFileChanges({
           </AlertDescription>
         </Alert>
       ) : (
-        <div className="grid min-w-0 gap-4 xl:grid-cols-[16rem_minmax(0,1fr)]">
-          <div className="space-y-4">
-            {groups.map((group) => (
-              <section key={group.label} className="space-y-2">
-                <h3 className="text-xs font-medium">
-                  {group.label}{" "}
-                  <span className="text-muted-foreground">({group.paths.length})</span>
-                </h3>
-                <ul className="divide-y overflow-hidden rounded-md border">
-                  {group.paths.map((path) => (
-                    <li key={path}>
-                      <button
-                        type="button"
-                        aria-pressed={selectedPath === path}
-                        className={cn(
-                          "flex w-full min-w-0 items-center gap-2 px-3 py-2 text-left text-xs transition-colors hover:bg-muted/50",
-                          selectedPath === path && "bg-muted",
-                        )}
-                        onClick={() => setSelectedPath(path)}
-                      >
-                        <Badge variant={group.variant} size="xs">
-                          {group.label}
-                        </Badge>
-                        <span className="min-w-0 truncate font-mono" title={path}>
-                          {path}
-                        </span>
-                      </button>
-                    </li>
-                  ))}
-                </ul>
-              </section>
-            ))}
-          </div>
-          <DeploymentFileDiffPreview
-            pipelineId={pipelineId}
-            sourceVersion={status.version_id}
-            path={selectedPath}
-            diff={diff}
-            loading={diffLoading}
-            error={diffError}
-          />
+        <div className="flex min-w-0 flex-col gap-4">
+          {groups.map((group) => (
+            <section key={group.label} className="flex min-w-0 flex-col gap-2">
+              <h3 className="text-xs font-medium">
+                {group.label} <span className="text-muted-foreground">({group.paths.length})</span>
+              </h3>
+              <div className="divide-y overflow-hidden rounded-md border">
+                {group.paths.map((path) => {
+                  const open = selectedPath === path;
+                  return (
+                    <Collapsible
+                      key={path}
+                      open={open}
+                      onOpenChange={(nextOpen) => setSelectedPath(nextOpen ? path : "")}
+                    >
+                      <CollapsibleTrigger asChild>
+                        <button
+                          type="button"
+                          className={cn(
+                            "flex w-full min-w-0 items-center gap-2 px-3 py-2 text-left text-xs transition-colors hover:bg-muted/50",
+                            open && "bg-muted",
+                          )}
+                        >
+                          <ChevronRight
+                            className={cn(
+                              "size-3.5 shrink-0 text-muted-foreground transition-transform",
+                              open && "rotate-90",
+                            )}
+                          />
+                          <Badge variant={group.variant} size="xs">
+                            {group.label}
+                          </Badge>
+                          <span className="min-w-0 flex-1 truncate font-mono" title={path}>
+                            {path}
+                          </span>
+                        </button>
+                      </CollapsibleTrigger>
+                      <CollapsibleContent className="min-w-0 border-t bg-background p-3">
+                        <DeploymentFileDiffPreview
+                          pipelineId={pipelineId}
+                          sourceVersion={status.version_id}
+                          path={path}
+                          diff={open ? diff : null}
+                          loading={open && diffLoading}
+                          error={open ? diffError : null}
+                        />
+                      </CollapsibleContent>
+                    </Collapsible>
+                  );
+                })}
+              </div>
+            </section>
+          ))}
         </div>
       )}
     </div>

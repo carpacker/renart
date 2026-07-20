@@ -10,6 +10,7 @@ import { useJinjaIntellisense } from "@/hooks/use-jinja-intellisense";
 import { usePythonIntellisense } from "@/hooks/use-python-intellisense";
 import { usePythonQueryIntellisense } from "@/hooks/use-python-query-intellisense";
 import { useSQLFormatting } from "@/hooks/use-sql-formatting";
+import { useSQLCanvasHover } from "@/hooks/use-sql-canvas-hover";
 import { useSQLIntellisense } from "@/hooks/use-sql-intellisense";
 import { useSQLLSP } from "@/hooks/use-sql-lsp";
 import { useYAMLIntellisense } from "@/hooks/use-yaml-intellisense";
@@ -81,6 +82,7 @@ export function useAssetMonaco({
     },
   );
   useSQLLSP(monacoInstance, editorInstance, asset, editorValue, schemaTables, onGoToAsset);
+  useSQLCanvasHover(editorInstance, asset);
   useJinjaIntellisense(monacoInstance, editorInstance, asset, editorValue);
   usePythonIntellisense(monacoInstance, editorInstance, asset, editorValue);
   usePythonQueryIntellisense(
