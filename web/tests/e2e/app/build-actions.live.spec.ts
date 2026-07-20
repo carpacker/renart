@@ -320,7 +320,7 @@ select 1 as customer_id,'Ada' as customer_name union all select 2 as customer_id
 
     const runButton = page.getByRole("button", { name: /^Review run/ });
     await expect(runButton).toHaveAttribute("title", /Review the saved source/);
-    await expect(page.getByRole("button", { name: /^Readiness:/ })).toBeVisible();
+    await expect(page.getByRole("button", { name: /^Readiness:/ })).toHaveCount(0);
 
     const planResponse = page.waitForResponse(
       (response) => response.url().endsWith(`/api/pipelines/${pipelineId}/plan`) && response.ok(),

@@ -884,6 +884,7 @@ function fallbackColumnInferenceSources(asset: WebAsset): ColumnInferenceSource[
 }
 
 function ColumnsCard({ asset }: { asset: WebAsset }) {
+  const schemaSourceIdPrefix = `${useId()}-schema-source`;
   const environment = useAtomValue(selectedEnvironmentAtom);
   const sources = useMemo(
     () =>
@@ -1036,7 +1037,7 @@ function ColumnsCard({ asset }: { asset: WebAsset }) {
       action={
         <div className="flex min-w-0 flex-wrap items-center justify-end gap-x-2 gap-y-1.5">
           {advisorySources.map((source) => {
-            const id = `${asset.id}-schema-source-${source.id}`;
+            const id = `${schemaSourceIdPrefix}-${source.id}`;
             const checked = selectedAdvisorySources.includes(source.id);
             return (
               <Field
