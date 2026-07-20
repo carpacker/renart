@@ -42,6 +42,20 @@ Use **Re-execute** on a run's detail page to run the same pipeline against
 the same environment again. Runs started from a schedule execute the
 pipeline's deployed snapshot; manual runs execute the working tree.
 
+## Retention
+
+Renart keeps local history bounded during scheduler startup and daily
+housekeeping. By default it keeps run metadata for 180 days (and at least the
+newest 100 runs per pipeline), while full output logs use a shorter 30-day,
+25-run floor. Raw materialization facts, schedule history, unreferenced
+deployments, and abandoned Renart temporary folders have separate limits.
+
+Change these values under **Project settings → General → Local history
+retention**. They are stored in `.renart/project.yml` as a reviewable project
+policy. Active work, pending completion evidence, current or pinned
+deployments, and compact freshness evidence are never removed merely because
+of age.
+
 ## Related
 
 - [Scheduling](/docs/scheduling/overview/) — where recurring runs come from.

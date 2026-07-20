@@ -67,6 +67,9 @@ type Project struct {
 	// Features are project-scoped feature flags (e.g. "ingestr" re-enables
 	// the ingestr connection types and asset options for bruin users).
 	Features map[string]bool `yaml:"features,omitempty"`
+	// Retention is optional on disk; callers normalize an absent or partial
+	// policy through NormalizeRetentionSettings before using it.
+	Retention *RetentionSettings `yaml:"retention,omitempty"`
 }
 
 // LoadProject reads .renart/project.yml without side effects (no UUID

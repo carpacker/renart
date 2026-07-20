@@ -87,12 +87,12 @@ func TestStorePersistsValidatesAndCascadesVersionedRunPlan(t *testing.T) {
 	require.True(t, found)
 	assert.Equal(t, plan, persisted)
 
-	_, err = store.db.Exec(`UPDATE pipeline_run_plans SET version = 2, body = json_set(body, '$.version', 2) WHERE run_id = ?`, runID)
+	_, err = store.db.Exec(`UPDATE pipeline_run_plans SET version = 99, body = json_set(body, '$.version', 99) WHERE run_id = ?`, runID)
 	require.NoError(t, err)
 	_, found, err = store.GetRunPlan(ctx, runID)
 	require.True(t, found)
 	require.ErrorIs(t, err, ErrInvalidStoredRunPlan)
-	require.ErrorContains(t, err, "unsupported pipeline run plan version 2")
+	require.ErrorContains(t, err, "unsupported pipeline run plan version 99")
 
 	_, err = store.db.Exec(`DELETE FROM pipeline_runs WHERE id = ?`, runID)
 	require.NoError(t, err)
@@ -186,6 +186,32 @@ func TestRunSpecExpectedPlanIdentityFailsClosed(t *testing.T) {
 	badConfiguration := valid
 	badConfiguration.Expected = &runExpectedIdentity{SourceMerkle: strings.Repeat("a", 64), ConfigurationDigest: "short"}
 	require.ErrorContains(t, badConfiguration.validate(), "configuration_digest")
+}
+
+func TestRunSpecVariableReferencesAreStrictAndSecretFree(t *testing.T) {
+	t.Parallel()
+	spec := runSpecV1{
+		Version:  runSpecVersionV1,
+		Pipeline: runPipelineIdentity{ID: "pipeline-id", Name: "analytics"},
+		Origin:   RunTriggerManual, Dispatch: runDispatchRiver,
+		Source: runSourceSpec{Kind: RunSourceWorkingTree}, Selection: runSelectionAll,
+		Requested: runRequestedContext{
+			Variables:          map[string]any{"region": "eu"},
+			VariableReferences: map[string]string{"token": "env:RENART_TOKEN"},
+		},
+	}
+	require.NoError(t, spec.validate())
+	body, err := marshalRunSpec(spec)
+	require.NoError(t, err)
+	assert.Contains(t, string(body), "env:RENART_TOKEN")
+	assert.NotContains(t, string(body), "secret-value")
+
+	duplicate := spec
+	duplicate.Requested.Variables = map[string]any{"token": "secret-value"}
+	require.ErrorContains(t, duplicate.validate(), "both a value and a secret reference")
+	invalid := spec
+	invalid.Requested.VariableReferences = map[string]string{"token": "literal-secret"}
+	require.ErrorContains(t, invalid.validate(), "env:NAME")
 }
 
 func TestStatusFromResultPreservesCancellation(t *testing.T) {

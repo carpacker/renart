@@ -14,7 +14,7 @@ in the plan.
 
 | Doc | Covers |
 | --- | --- |
-| [backend.md](backend.md) | Go backend: layering, runtime model, rendering/planning, universal execution ledger, conventions |
+| [backend.md](backend.md) | Go backend: layering, workspace authority, rendering/planning, universal execution ledger, conventions |
 | [frontend.md](frontend.md) | Web app: stack, routing, Build readiness/review/deploy UX, hooks, libraries, layout rules |
 | [staleness.md](staleness.md) | Fingerprints, target-aware facts/coverage, data readiness, deploy snapshots, occurrences, per-env schedules, protected environments |
 | [notebooks.md](notebooks.md) | Notebook folder format, sessions, rename engine, `@viz`, server-driven auto-recompute, promotion |

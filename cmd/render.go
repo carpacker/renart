@@ -31,6 +31,7 @@ func Render() *cli.Command {
 			"Examples:\n" +
 			"   renart render mart.orders\n" +
 			"   renart render assets/orders.sql --env production\n" +
+			"   renart render mart.orders --source snapshot --snapshot <version>\n" +
 			"   renart render seeds/customers.asset.yml --json",
 		Flags: []cli.Flag{
 			workspaceFlag(),
@@ -53,6 +54,14 @@ func Render() *cli.Command {
 			&cli.BoolFlag{
 				Name:  "full-refresh",
 				Usage: "preview the full-refresh form when the selected environment permits it",
+			},
+			&cli.StringFlag{
+				Name:  "source",
+				Usage: "saved source: working-tree or snapshot",
+			},
+			&cli.StringFlag{
+				Name:  "snapshot",
+				Usage: "exact deployment version (implies --source snapshot)",
 			},
 			&cli.BoolFlag{
 				Name:    "local",
@@ -77,11 +86,6 @@ func renderAction(ctx context.Context, c *cli.Command) error {
 	if err != nil {
 		return cli.Exit(err.Error(), 2)
 	}
-	assetPath, err := resolveRenderAssetPath(ctx, workspaceRoot, cwd, c.Args().Get(0))
-	if err != nil {
-		return cli.Exit(err.Error(), 2)
-	}
-
 	request := service.AssetRenderRequest{
 		Environment:   strings.TrimSpace(c.String("env")),
 		StartDate:     strings.TrimSpace(c.String("start-date")),
@@ -89,16 +93,78 @@ func renderAction(ctx context.Context, c *cli.Command) error {
 		ExecutionTime: strings.TrimSpace(c.String("execution-time")),
 		FullRefresh:   c.Bool("full-refresh"),
 	}
+	source, err := planSource(c.String("source"), c.String("snapshot"))
+	if err != nil {
+		return cli.Exit(err.Error(), 2)
+	}
 
 	client := discoverRenderClient(ctx, workspaceRoot, c.Bool("local"), c.Bool("json"))
 	var result service.AssetRenderResult
-	if client != nil {
-		result, err = client.RenderAsset(ctx, service.EncodeID(assetPath), request)
+	label := strings.TrimSpace(c.Args().Get(0))
+	if source.Kind == service.PipelinePlanSourceSnapshot {
+		var target runTarget
+		if client != nil {
+			state, loadErr := client.Workspace(ctx)
+			if loadErr != nil {
+				return fmt.Errorf("failed to load workspace from the server: %w", loadErr)
+			}
+			target, err = resolveRunTarget(state, workspaceRoot, label, cwd)
+			if err == nil && target.kind != "asset" {
+				err = fmt.Errorf("render requires an asset name or path")
+			}
+			if err == nil {
+				label = target.asset.Name
+				result, err = client.RenderPipelineAsset(ctx, target.pipeline.ID, service.PipelineAssetRenderRequest{
+					AssetName:     target.asset.Name,
+					Source:        source,
+					Environment:   request.Environment,
+					StartDate:     request.StartDate,
+					EndDate:       request.EndDate,
+					ExecutionTime: request.ExecutionTime,
+					FullRefresh:   request.FullRefresh,
+				})
+			}
+		} else {
+			server, cleanup, serverErr := newEmbeddedServer(ctx, workspaceRoot)
+			if serverErr != nil {
+				return serverErr
+			}
+			defer cleanup()
+			target, err = resolveRunTarget(server.currentState(), workspaceRoot, label, cwd)
+			if err == nil && target.kind != "asset" {
+				err = fmt.Errorf("render requires an asset name or path")
+			}
+			if err == nil {
+				label = target.asset.Name
+				var apiErr *service.APIError
+				result, apiErr = server.pipelinePlanSvc.RenderPipelineAsset(ctx, target.pipeline.ID, service.PipelineAssetRenderRequest{
+					AssetName:     target.asset.Name,
+					Source:        source,
+					Environment:   request.Environment,
+					StartDate:     request.StartDate,
+					EndDate:       request.EndDate,
+					ExecutionTime: request.ExecutionTime,
+					FullRefresh:   request.FullRefresh,
+				})
+				if apiErr != nil {
+					err = apiErr
+				}
+			}
+		}
 	} else {
-		result, err = service.NewAssetRenderService(workspaceRoot).RenderPath(ctx, assetPath, request)
+		assetPath, pathErr := resolveRenderAssetPath(ctx, workspaceRoot, cwd, label)
+		if pathErr != nil {
+			return cli.Exit(pathErr.Error(), 2)
+		}
+		label = assetPath
+		if client != nil {
+			result, err = client.RenderAsset(ctx, service.EncodeID(assetPath), request)
+		} else {
+			result, err = service.NewAssetRenderService(workspaceRoot).RenderPath(ctx, assetPath, request)
+		}
 	}
 	if err != nil {
-		return fmt.Errorf("failed to render %s: %w", assetPath, err)
+		return fmt.Errorf("failed to render %s: %w", label, err)
 	}
 
 	if c.Bool("json") {

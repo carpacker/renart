@@ -46,6 +46,7 @@ export function canonicalPipelinePlanRequest(
       mode: plan.selection.mode,
       asset_name: plan.selection.asset_name,
       scope: plan.selection.scope,
+      selector: plan.selection.selector,
     },
     include_stage_content: includeStageContent,
   };
@@ -59,6 +60,7 @@ export function canonicalPipelinePlanReviewedIdentity(
     source: plan.source,
     context: plan.context,
     selection: plan.selection,
+    resources: plan.resources,
     execution_units: plan.execution_units,
   };
 }

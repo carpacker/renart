@@ -16,6 +16,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"renart/internal/web/runcontext"
 	"renart/internal/web/snapshot"
 )
 
@@ -1448,7 +1449,7 @@ select 1 as value
 	manifest, err := snapshot.CollectManifestHashes(filepath.Join(sourceRoot, "analytics"))
 	require.NoError(t, err)
 	merkleRoot := snapshot.ManifestRoot(manifest)
-	service := newAssetRenderServiceForSource(sourceRoot, configPath, AssetRenderSource{
+	service := newAssetRenderServiceForSource(sourceRoot, configRoot, configPath, AssetRenderSource{
 		Kind:         "snapshot",
 		VersionID:    "version-1",
 		PipelinePath: "analytics/pipeline.yml",
@@ -1467,6 +1468,13 @@ select 1 as value
 	assert.Equal(t, merkleRoot, result.Provenance.Source.MerkleRoot)
 	assert.Equal(t, "default", result.Provenance.Context.Environment)
 	assert.NotEmpty(t, result.Stages)
+	expectedResource := runcontext.WriteResourceIdentity(runcontext.WriteResourceCoordinates{
+		Kind: assetWriteResourceDuckDB, FilePath: filepath.Join(configRoot, "local.db"),
+	})
+	require.Equal(t, string(runcontext.IdentityFidelityExact), string(expectedResource.Fidelity), expectedResource.Message)
+	assert.Equal(t, assetWriteResourceDuckDB, result.Asset.Target.WriteResource.Kind)
+	assert.Equal(t, expectedResource.Digest, result.Asset.Target.WriteResource.Identity,
+		"an isolated source directory must not change the runtime output claim")
 
 	service.source.MerkleRoot = strings.Repeat("0", 64)
 	_, err = service.RenderPath(

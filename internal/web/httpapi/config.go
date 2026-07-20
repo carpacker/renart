@@ -61,8 +61,9 @@ type DeleteWorkspaceConnectionRequest struct {
 }
 
 type UpdateWorkspaceProjectRequest struct {
-	Name     string          `json:"name"`
-	Features map[string]bool `json:"features,omitempty"`
+	Name      string                              `json:"name"`
+	Features  map[string]bool                     `json:"features,omitempty"`
+	Retention *service.WorkspaceRetentionSettings `json:"retention,omitempty"`
 }
 
 type TestWorkspaceConnectionRequest struct {
@@ -105,8 +106,8 @@ func (h *ConfigHandlers) HandleUpdateWorkspaceProject(w http.ResponseWriter, r *
 		return
 	}
 	name := strings.TrimSpace(req.Name)
-	if name == "" && req.Features == nil {
-		webapi.WriteBadRequest(w, "missing_project_name", "project name or features are required")
+	if name == "" && req.Features == nil && req.Retention == nil {
+		webapi.WriteBadRequest(w, "missing_project_settings", "project name, features, or retention settings are required")
 		return
 	}
 
@@ -119,6 +120,12 @@ func (h *ConfigHandlers) HandleUpdateWorkspaceProject(w http.ResponseWriter, r *
 	if req.Features != nil {
 		if _, err := h.Service.SetProjectFeatures(req.Features); err != nil {
 			webapi.WriteInternalError(w, "project_update_failed", err.Error())
+			return
+		}
+	}
+	if req.Retention != nil {
+		if _, err := h.Service.SetProjectRetention(*req.Retention); err != nil {
+			webapi.WriteBadRequest(w, "invalid_retention_settings", err.Error())
 			return
 		}
 	}

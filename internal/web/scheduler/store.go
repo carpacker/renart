@@ -383,6 +383,13 @@ func (s *Store) claimRunSlot(ctx context.Context, execer runSlotExecer, run Pipe
 	if status != RunStatusQueued && status != RunStatusRunning {
 		return nil
 	}
+	if ownerRunID, found, err := activeResourceRunForPipeline(ctx, execer, run, runID); err != nil {
+		return err
+	} else if found {
+		return &PipelineRunActiveError{
+			PipelineID: strings.TrimSpace(run.PipelineID), ActiveRunID: ownerRunID,
+		}
+	}
 	slotKeys := runSlotKeys(run)
 	if len(slotKeys) == 0 {
 		return errors.New("active pipeline run requires a stable slot key")
@@ -415,6 +422,127 @@ func (s *Store) claimRunSlot(ctx context.Context, execer runSlotExecer, run Pipe
 	return nil
 }
 
+func (s *Store) claimRunAdmission(
+	ctx context.Context,
+	execer runSlotExecer,
+	run PipelineRun,
+	runID string,
+	plan *PipelineRunPlan,
+) error {
+	if plan == nil || plan.Version < PipelineRunPlanVersionV2 {
+		return s.claimRunSlot(ctx, execer, run, runID)
+	}
+	if err := validatePipelineRunPlanResources(plan.Resources); err != nil {
+		return fmt.Errorf("invalid pipeline run resource claims: %w", err)
+	}
+	status := run.Status
+	if status == "" {
+		status = RunStatusQueued
+	}
+	if status != RunStatusQueued && status != RunStatusRunning {
+		return nil
+	}
+
+	claims := plan.Resources.Claims
+	if plan.Resources.Isolation == PipelineRunResourceIsolationPipeline {
+		if err := s.claimRunSlot(ctx, execer, run, runID); err != nil {
+			return err
+		}
+	} else if len(claims) > 0 {
+		if ownerRunID, found, err := activeRunForSlots(ctx, execer, runSlotKeys(run), runID); err != nil {
+			return err
+		} else if found {
+			return &PipelineRunActiveError{
+				PipelineID: strings.TrimSpace(run.PipelineID), ActiveRunID: ownerRunID,
+			}
+		}
+	}
+
+	if _, err := execer.ExecContext(ctx, `
+		INSERT INTO pipeline_run_claim_sets (
+			run_id, pipeline_id, pipeline_uuid, isolation
+		) VALUES (?, ?, ?, ?)`,
+		runID, strings.TrimSpace(run.PipelineID), strings.TrimSpace(run.PipelineUUID), plan.Resources.Isolation,
+	); err != nil {
+		return err
+	}
+	for _, claim := range claims {
+		claimKey := claim.Kind + ":" + claim.Identity
+		if _, err := execer.ExecContext(ctx, `
+			INSERT INTO pipeline_run_resource_claims (claim_key, run_id, kind, identity)
+			VALUES (?, ?, ?, ?)
+			ON CONFLICT (claim_key) DO NOTHING`, claimKey, runID, claim.Kind, claim.Identity); err != nil {
+			return err
+		}
+		var ownerRunID string
+		if err := execer.QueryRowContext(ctx, `
+			SELECT run_id
+			FROM pipeline_run_resource_claims
+			WHERE claim_key = ?`, claimKey).Scan(&ownerRunID); err != nil {
+			return fmt.Errorf("resolve owner for write-resource claim %q: %w", claim.Kind, err)
+		}
+		if ownerRunID != runID {
+			return &PipelineRunActiveError{
+				PipelineID: strings.TrimSpace(run.PipelineID), ActiveRunID: ownerRunID,
+			}
+		}
+	}
+	return nil
+}
+
+func activeRunForSlots(
+	ctx context.Context,
+	execer runSlotExecer,
+	slotKeys []string,
+	excludeRunID string,
+) (string, bool, error) {
+	for _, slotKey := range slotKeys {
+		var ownerRunID string
+		err := execer.QueryRowContext(ctx, `
+			SELECT run_id FROM pipeline_run_slots WHERE slot_key = ?`, strings.TrimSpace(slotKey)).Scan(&ownerRunID)
+		if errors.Is(err, sql.ErrNoRows) {
+			continue
+		}
+		if err != nil {
+			return "", false, err
+		}
+		if ownerRunID != strings.TrimSpace(excludeRunID) {
+			return ownerRunID, true, nil
+		}
+	}
+	return "", false, nil
+}
+
+func activeResourceRunForPipeline(
+	ctx context.Context,
+	execer runSlotExecer,
+	run PipelineRun,
+	excludeRunID string,
+) (string, bool, error) {
+	var ownerRunID string
+	err := execer.QueryRowContext(ctx, `
+		SELECT claim_set.run_id
+		FROM pipeline_run_claim_sets AS claim_set
+		WHERE claim_set.run_id <> ?
+		  AND (claim_set.pipeline_id = ? OR claim_set.pipeline_uuid = ?)
+		  AND EXISTS (
+			SELECT 1
+			FROM pipeline_run_resource_claims AS resource
+			WHERE resource.run_id = claim_set.run_id
+		  )
+		ORDER BY claim_set.run_id
+		LIMIT 1`,
+		strings.TrimSpace(excludeRunID), strings.TrimSpace(run.PipelineID), strings.TrimSpace(run.PipelineUUID),
+	).Scan(&ownerRunID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", false, nil
+	}
+	if err != nil {
+		return "", false, err
+	}
+	return ownerRunID, true, nil
+}
+
 func ensureRunSpecUUIDSlot(ctx context.Context, tx *sql.Tx, runID string, spec runSpecV1) error {
 	pipelineUUID := strings.TrimSpace(spec.Pipeline.UUID)
 	if pipelineUUID == "" {
@@ -439,9 +567,36 @@ func ensureRunSpecUUIDSlot(ctx context.Context, tx *sql.Tx, runID string, spec r
 }
 
 // validateActiveRunSpecSlotBinding anchors the private stable UUID to durable
-// state that the JSON body cannot rewrite. It also checks the path alias so a
-// stored spec and run row cannot be changed together to escape admission.
+// admission state that the JSON body cannot rewrite. Legacy and conservative
+// runs use path/UUID slots; v2 resource-isolated runs use a bound claim set.
 func (s *Store) validateActiveRunSpecSlotBinding(ctx context.Context, run PipelineRun, spec runSpecV1) error {
+	var claimedPipelineID, claimedPipelineUUID, isolation string
+	err := s.db.QueryRowContext(ctx, `
+		SELECT pipeline_id, pipeline_uuid, isolation
+		FROM pipeline_run_claim_sets
+		WHERE run_id = ?`, run.ID).Scan(&claimedPipelineID, &claimedPipelineUUID, &isolation)
+	if err == nil {
+		if claimedPipelineID != strings.TrimSpace(run.PipelineID) ||
+			claimedPipelineID != strings.TrimSpace(spec.Pipeline.ID) {
+			return errors.New("run spec pipeline path does not match active resource claims")
+		}
+		if claimedPipelineUUID != strings.TrimSpace(spec.Pipeline.UUID) {
+			return errors.New("run spec stable pipeline UUID does not match active resource claims")
+		}
+		switch isolation {
+		case PipelineRunResourceIsolationResources:
+			return nil
+		case PipelineRunResourceIsolationPipeline:
+			// The claim set binds the reviewed resources; pipeline isolation
+			// additionally depends on both legacy-compatible slot aliases below.
+		default:
+			return errors.New("active resource claims have an invalid isolation mode")
+		}
+	}
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return err
+	}
+
 	expectedPath := "path:" + strings.TrimSpace(run.PipelineID)
 	var hasPath bool
 	if err := s.db.QueryRowContext(ctx, `
@@ -583,7 +738,7 @@ func (s *Store) createWithSpecAndPlan(
 		queries := s.queries.WithTx(tx)
 		id, err := s.createRun(ctx, queries, run)
 		if err == nil {
-			err = s.claimRunSlot(ctx, tx, run, id)
+			err = s.claimRunAdmission(ctx, tx, run, id, plan)
 		}
 		if err == nil {
 			err = s.insertRunSpec(ctx, tx, id, spec)
@@ -1709,6 +1864,52 @@ func (s *Store) ActiveRunID(ctx context.Context, pipelineID, pipelineUUID string
 	return active.ActiveRunID, nil
 }
 
+// ConflictingRunID previews the same conservative-slot and exact-resource
+// conflicts enforced transactionally by admission. It is advisory only: the
+// write transaction remains the final authority if state changes after review.
+func (s *Store) ConflictingRunID(
+	ctx context.Context,
+	pipelineID string,
+	pipelineUUID string,
+	resources PipelineRunPlanResources,
+) (string, error) {
+	if err := validatePipelineRunPlanResources(resources); err != nil {
+		return "", err
+	}
+	run := PipelineRun{
+		PipelineID: strings.TrimSpace(pipelineID), PipelineUUID: strings.TrimSpace(pipelineUUID),
+	}
+	if resources.Isolation == PipelineRunResourceIsolationPipeline || len(resources.Claims) > 0 {
+		if ownerRunID, found, err := activeRunForSlots(ctx, s.db, runSlotKeys(run), ""); err != nil {
+			return "", err
+		} else if found {
+			return ownerRunID, nil
+		}
+	}
+	if resources.Isolation == PipelineRunResourceIsolationPipeline {
+		if ownerRunID, found, err := activeResourceRunForPipeline(ctx, s.db, run, ""); err != nil {
+			return "", err
+		} else if found {
+			return ownerRunID, nil
+		}
+	}
+	for _, claim := range resources.Claims {
+		var ownerRunID string
+		err := s.db.QueryRowContext(ctx, `
+			SELECT run_id
+			FROM pipeline_run_resource_claims
+			WHERE claim_key = ?`, claim.Kind+":"+claim.Identity).Scan(&ownerRunID)
+		if errors.Is(err, sql.ErrNoRows) {
+			continue
+		}
+		if err != nil {
+			return "", err
+		}
+		return ownerRunID, nil
+	}
+	return "", nil
+}
+
 func (s *Store) LastInterval(ctx context.Context, pipeline string) (time.Time, bool, error) {
 	raw, err := s.queries.GetScheduleWatermark(ctx, pipeline)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -1753,14 +1954,24 @@ func (s *Store) UpsertEnvSchedule(ctx context.Context, schedule EnvSchedule) err
 		schedule.CreatedAt = now
 	}
 	varsJSON := ""
-	if len(schedule.Vars) > 0 {
-		encoded, err := json.Marshal(schedule.Vars)
+	storedVariables := schedule.Vars
+	if schedule.DeclarationManaged {
+		storedVariables = storedScheduleVariables(schedule.Vars, schedule.SecretRefs)
+	}
+	if len(storedVariables) > 0 {
+		encoded, err := json.Marshal(storedVariables)
 		if err != nil {
 			return err
 		}
 		varsJSON = string(encoded)
 	}
-	return s.queries.UpsertEnvSchedule(ctx, storedb.UpsertEnvScheduleParams{
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	queries := s.queries.WithTx(tx)
+	if err := queries.UpsertEnvSchedule(ctx, storedb.UpsertEnvScheduleParams{
 		PipelineID:        schedule.PipelineUUID,
 		Environment:       schedule.Environment,
 		SnapshotVersionID: schedule.SnapshotVersionID,
@@ -1772,7 +1983,20 @@ func (s *Store) UpsertEnvSchedule(ctx context.Context, schedule EnvSchedule) err
 		ArchivedReason:    schedule.ArchivedReason,
 		CreatedAt:         formatTime(schedule.CreatedAt),
 		UpdatedAt:         formatTime(now),
-	})
+	}); err != nil {
+		return err
+	}
+	if schedule.DeclarationManaged {
+		if _, err := tx.ExecContext(ctx, `
+			INSERT INTO renart_schedule_declarations (pipeline_id, environment)
+			VALUES (?, ?)
+			ON CONFLICT(pipeline_id, environment) DO NOTHING`,
+			schedule.PipelineUUID, schedule.Environment,
+		); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
 }
 
 func (s *Store) PromoteEnvSchedulePins(
@@ -1815,9 +2039,18 @@ func (s *Store) ListEnvSchedules(ctx context.Context) ([]EnvSchedule, error) {
 	if err != nil {
 		return nil, err
 	}
+	managed, err := s.declarationManagedScheduleKeys(ctx)
+	if err != nil {
+		return nil, err
+	}
 	schedules := make([]EnvSchedule, 0, len(rows))
 	for _, row := range rows {
-		schedules = append(schedules, envScheduleFromDB(row))
+		schedule := envScheduleFromDB(row)
+		if _, ok := managed[scheduleDeclarationKey(schedule.PipelineUUID, schedule.Environment)]; ok {
+			schedule.DeclarationManaged = true
+			schedule.Vars, schedule.SecretRefs = splitStoredScheduleVariables(schedule.Vars)
+		}
+		schedules = append(schedules, schedule)
 	}
 	return schedules, nil
 }
@@ -1830,7 +2063,49 @@ func (s *Store) GetEnvSchedule(ctx context.Context, pipelineUUID, environment st
 	if err != nil {
 		return EnvSchedule{}, false, err
 	}
-	return envScheduleFromDB(row), true, nil
+	schedule := envScheduleFromDB(row)
+	managed, err := s.envScheduleDeclarationManaged(ctx, pipelineUUID, environment)
+	if err != nil {
+		return EnvSchedule{}, false, err
+	}
+	if managed {
+		schedule.DeclarationManaged = true
+		schedule.Vars, schedule.SecretRefs = splitStoredScheduleVariables(schedule.Vars)
+	}
+	return schedule, true, nil
+}
+
+func scheduleDeclarationKey(pipelineUUID, environment string) string {
+	return pipelineUUID + "\x00" + environment
+}
+
+func (s *Store) declarationManagedScheduleKeys(ctx context.Context) (map[string]struct{}, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT pipeline_id, environment FROM renart_schedule_declarations`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	result := make(map[string]struct{})
+	for rows.Next() {
+		var pipelineUUID, environment string
+		if err := rows.Scan(&pipelineUUID, &environment); err != nil {
+			return nil, err
+		}
+		result[scheduleDeclarationKey(pipelineUUID, environment)] = struct{}{}
+	}
+	return result, rows.Err()
+}
+
+func (s *Store) envScheduleDeclarationManaged(ctx context.Context, pipelineUUID, environment string) (bool, error) {
+	var marker int
+	err := s.db.QueryRowContext(ctx, `
+		SELECT 1 FROM renart_schedule_declarations
+		WHERE pipeline_id = ? AND environment = ?`, pipelineUUID, environment,
+	).Scan(&marker)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	return err == nil, err
 }
 
 func (s *Store) SetEnvScheduleStatus(ctx context.Context, pipelineUUID, environment string, status ScheduleStatus, archivedReason string) error {

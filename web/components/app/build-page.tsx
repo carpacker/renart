@@ -110,7 +110,7 @@ import { Spinner } from "@/components/ui/spinner";
 import { runSQLQuery } from "@/lib/api";
 import type { PipelineRunSource } from "@/lib/api-scheduler";
 import { typeCheckPipeline, type PipelineTypeCheckReport } from "@/lib/api-pipelines";
-import { renderAsset, type AssetRenderResult } from "@/lib/api-asset-render";
+import { renderPipelineAsset, type AssetRenderResult } from "@/lib/api-asset-render";
 import { isSeedAssetType, isSensorAssetType, isSqlAssetType } from "@/lib/asset-types";
 import { editorDraftAtom } from "@/lib/atoms/domains/editor";
 import type { MaterializeHistoryEntry } from "@/lib/atoms/results";
@@ -940,7 +940,9 @@ export function AppBuildPage({
     setAssetRenderError(null);
     try {
       await awaitWorkspaceSaves();
-      const result = await renderAsset(workspaceAsset.id, {
+      const result = await renderPipelineAsset(activePipeline.id, {
+        asset_name: workspaceAsset.name,
+        source: { kind: "working_tree" },
         environment: effectiveEnvironment || undefined,
         start_date: executionWindow.start,
         end_date: executionWindow.end,
@@ -1239,6 +1241,7 @@ export function AppBuildPage({
                 className="min-h-0"
               >
                 <ResultsPanel
+                  pipelineId={pipelineId}
                   activeTab={resultTab}
                   onTabChange={openBottom}
                   collapsed={resultsCollapsed}
@@ -2607,6 +2610,7 @@ function CodeBlock({
 }
 
 function ResultsPanel({
+  pipelineId,
   activeTab,
   onTabChange,
   collapsed,
@@ -2631,6 +2635,7 @@ function ResultsPanel({
   adhocRenderedQuery,
   adhocLoading,
 }: {
+  pipelineId: string;
   activeTab: AppResultTab;
   onTabChange: (tab: AppResultTab) => void;
   collapsed: boolean;
@@ -2747,6 +2752,7 @@ function ResultsPanel({
         </TabsContent>
         <TabsContent value="render" className="min-h-0 flex-1 overflow-hidden p-0">
           <AssetRenderView
+            pipelineId={pipelineId}
             result={renderResult}
             loading={renderLoading}
             error={renderError}

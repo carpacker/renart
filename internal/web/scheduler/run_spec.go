@@ -53,7 +53,7 @@ func (e *PipelineRunActiveError) Error() string {
 	if e == nil {
 		return ErrPipelineRunActive.Error()
 	}
-	return fmt.Sprintf("pipeline %s already has active run %s", e.PipelineID, e.ActiveRunID)
+	return fmt.Sprintf("pipeline %s execution conflicts with active run %s", e.PipelineID, e.ActiveRunID)
 }
 
 func (e *PipelineRunActiveError) Unwrap() error {
@@ -108,14 +108,15 @@ type runSourceSpec struct {
 }
 
 type runRequestedContext struct {
-	Environment   string         `json:"environment"`
-	Start         *time.Time     `json:"start,omitempty"`
-	End           *time.Time     `json:"end,omitempty"`
-	ExecutionTime *time.Time     `json:"execution_time,omitempty"`
-	Variables     map[string]any `json:"variables,omitempty"`
-	FullRefresh   bool           `json:"full_refresh,omitempty"`
-	Backfill      bool           `json:"backfill,omitempty"`
-	SensorMode    string         `json:"sensor_mode,omitempty"`
+	Environment        string            `json:"environment"`
+	Start              *time.Time        `json:"start,omitempty"`
+	End                *time.Time        `json:"end,omitempty"`
+	ExecutionTime      *time.Time        `json:"execution_time,omitempty"`
+	Variables          map[string]any    `json:"variables,omitempty"`
+	VariableReferences map[string]string `json:"variable_references,omitempty"`
+	FullRefresh        bool              `json:"full_refresh,omitempty"`
+	Backfill           bool              `json:"backfill,omitempty"`
+	SensorMode         string            `json:"sensor_mode,omitempty"`
 }
 
 type runExpectedIdentity struct {
@@ -158,6 +159,9 @@ func (spec runSpecV1) validate() error {
 		return errors.New("run spec start and end must both be set or both be omitted")
 	}
 	if err := validateRunVariableOverrides(spec.Requested.Variables); err != nil {
+		return err
+	}
+	if err := validateRunVariableReferences(spec.Requested.Variables, spec.Requested.VariableReferences); err != nil {
 		return err
 	}
 	if spec.Requested.Start != nil && !spec.Requested.Start.Before(*spec.Requested.End) {
@@ -571,14 +575,15 @@ func scheduledRunSpec(run PipelineRun, args pipelineRunJobArgs) runSpecV1 {
 			SnapshotVersionID: strings.TrimSpace(run.SnapshotVersionID),
 		},
 		Requested: runRequestedContext{
-			Environment:   strings.TrimSpace(run.Environment),
-			Start:         cloneRunTime(run.WinStart),
-			End:           cloneRunTime(run.WinEnd),
-			ExecutionTime: cloneRunTime(run.ExecutionTime),
-			Variables:     args.Variables,
-			FullRefresh:   run.FullRefresh,
-			Backfill:      run.Backfill,
-			SensorMode:    strings.TrimSpace(run.SensorMode),
+			Environment:        strings.TrimSpace(run.Environment),
+			Start:              cloneRunTime(run.WinStart),
+			End:                cloneRunTime(run.WinEnd),
+			ExecutionTime:      cloneRunTime(run.ExecutionTime),
+			Variables:          cloneScheduleVariables(args.Variables),
+			VariableReferences: cloneScheduleSecretRefs(args.VariableReferences),
+			FullRefresh:        run.FullRefresh,
+			Backfill:           run.Backfill,
+			SensorMode:         strings.TrimSpace(run.SensorMode),
 		},
 		Authorization: runAuthorization{ConfirmedEnvironment: strings.TrimSpace(args.ConfirmedEnvironment)},
 		Selection:     runSelectionAll,
@@ -642,6 +647,31 @@ func validateRunVariableOverrides(overrides map[string]any) error {
 	}
 	if len(body) > maxRunVariableOverridesBytes {
 		return fmt.Errorf("run spec variable overrides exceed the %d byte limit", maxRunVariableOverridesBytes)
+	}
+	return nil
+}
+
+func validateRunVariableReferences(values map[string]any, references map[string]string) error {
+	for name, reference := range references {
+		if err := validateScheduleVariableName(name); err != nil {
+			return fmt.Errorf("run spec variable reference: %w", err)
+		}
+		if _, duplicate := values[name]; duplicate {
+			return fmt.Errorf("run spec variable %q cannot have both a value and a secret reference", name)
+		}
+		if err := validateScheduleSecretReference(reference); err != nil {
+			return fmt.Errorf("run spec variable %q: %w", name, err)
+		}
+	}
+	body, err := json.Marshal(struct {
+		Values     map[string]any    `json:"values,omitempty"`
+		References map[string]string `json:"references,omitempty"`
+	}{Values: values, References: references})
+	if err != nil {
+		return errors.New("run spec variable context must be JSON-compatible")
+	}
+	if len(body) > maxRunVariableOverridesBytes {
+		return fmt.Errorf("run spec variable context exceeds the %d byte limit", maxRunVariableOverridesBytes)
 	}
 	return nil
 }

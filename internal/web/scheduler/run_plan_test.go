@@ -100,6 +100,34 @@ func TestPipelineRunPlanAdmissionBinding(t *testing.T) {
 	require.ErrorContains(t, validateRunPlanAdmissionBinding(run, spec, wrongPipeline), "admitted pipeline")
 }
 
+func TestPipelineRunPlanV2BindingUsesPrivateStableIdentityAfterReload(t *testing.T) {
+	t.Parallel()
+	plan := validPipelineRunPlan(t)
+	plan.Version = PipelineRunPlanVersionV2
+	plan.Resources = PipelineRunPlanResources{Isolation: PipelineRunResourceIsolationResources}
+	plan.Artifact = pipelineRunPlanArtifact(t, plan)
+	executionTime, err := time.Parse(time.RFC3339Nano, plan.ExecutionTime)
+	require.NoError(t, err)
+	run := PipelineRun{
+		PipelineID: "pipeline-id", PipelineUUID: plan.PipelineUUID, Pipeline: "analytics",
+		Trigger: RunTriggerManual, Status: RunStatusQueued, ExecutionTime: &executionTime,
+		ExpectedSourceMerkle:        plan.SourceMerkle,
+		ExpectedConfigurationDigest: plan.ConfigurationDigest,
+	}
+	spec := manualRunSpec(run, RunSourceWorkingTree, "")
+	require.NoError(t, validateRunPlanAdmissionBinding(run, spec, plan))
+
+	// PipelineUUID deliberately lives in the private RunSpec and durable
+	// admission claims, not the public pipeline_runs row. Reloading a run must
+	// therefore accept the retained private identity when the public projection
+	// no longer carries the UUID.
+	run.PipelineUUID = ""
+	require.NoError(t, validateRunPlanAdmissionBinding(run, spec, plan))
+
+	run.PipelineUUID = "other-pipeline-uuid"
+	require.ErrorContains(t, validateRunPlanAdmissionBinding(run, spec, plan), "stable pipeline identity")
+}
+
 func TestPipelineRunPlanAllowsRetainedBlockedPlanWithoutExecutionUnits(t *testing.T) {
 	t.Parallel()
 	plan := validPipelineRunPlan(t)
@@ -148,6 +176,25 @@ func TestPipelineRunPlanValidatesNeededPreviewDelta(t *testing.T) {
 	}
 	empty.Artifact = pipelineRunPlanArtifact(t, empty)
 	require.NoError(t, empty.validate())
+
+	selectorNeeded := plan
+	selectorNeeded.Selection.Mode = "selector_needed"
+	selectorNeeded.Selection.Selector = "tag:daily"
+	selectorNeeded.Artifact = pipelineRunPlanArtifact(t, selectorNeeded)
+	require.NoError(t, selectorNeeded.validate())
+}
+
+func TestPipelineRunPlanValidatesSelectorSelection(t *testing.T) {
+	t.Parallel()
+
+	plan := validPipelineRunPlan(t)
+	plan.Selection = PipelineRunPlanSelection{Mode: "selector", Selector: "tag:daily,+analytics.orders"}
+	plan.Artifact = pipelineRunPlanArtifact(t, plan)
+	require.NoError(t, plan.validate())
+
+	plan.Selection.Selector = ""
+	plan.Artifact = pipelineRunPlanArtifact(t, plan)
+	require.ErrorContains(t, plan.validate(), "requires selector")
 }
 
 func validPipelineRunPlan(t testing.TB) PipelineRunPlan {
@@ -196,6 +243,9 @@ func pipelineRunPlanArtifact(t testing.TB, plan PipelineRunPlan) json.RawMessage
 				"stages": []any{map[string]any{"kind": "query", "content": ""}},
 			}},
 		}},
+	}
+	if plan.Version >= PipelineRunPlanVersionV2 {
+		artifact["resources"] = plan.Resources
 	}
 	body, err := json.Marshal(artifact)
 	require.NoError(t, err)

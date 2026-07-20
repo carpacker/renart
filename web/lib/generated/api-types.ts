@@ -228,6 +228,20 @@ export type WorkspaceConfigEnvironment = {
   connections: WorkspaceConfigConnection[];
 };
 
+export type WorkspaceRetentionWindow = {
+  days: number;
+  minimum_per_pipeline: number;
+};
+
+export type WorkspaceRetentionSettings = {
+  run_metadata: WorkspaceRetentionWindow;
+  full_logs: WorkspaceRetentionWindow;
+  materialization_facts_days: number;
+  schedule_history_days: number;
+  deployments: WorkspaceRetentionWindow;
+  temporary_directories_hours: number;
+};
+
 export type WorkspaceConfigResponse = {
   status: string;
   path: string;
@@ -239,6 +253,7 @@ export type WorkspaceConfigResponse = {
   environments: WorkspaceConfigEnvironment[];
   connection_types: WorkspaceConfigConnectionType[];
   features?: Record<string, boolean>;
+  retention: WorkspaceRetentionSettings;
   parse_error?: string;
 };
 
@@ -603,6 +618,14 @@ export type AssetRenderTarget = {
   identity?: string;
   fidelity: "exact" | "semantic" | "runtime_only" | "unsupported";
   message?: string;
+  write_resource: AssetRenderWriteResource;
+};
+
+export type AssetRenderWriteResource = {
+  kind: string;
+  identity?: string;
+  fidelity: "exact" | "semantic" | "runtime_only" | "unsupported";
+  message?: string;
 };
 
 export type AssetRenderAsset = {
@@ -651,6 +674,51 @@ export type AssetRenderResult = {
   redactions: AssetRenderRedaction[];
 };
 
+export type PipelineAssetRenderRequest = {
+  asset_name: string;
+  source?: PipelinePlanSourceRequest;
+  environment?: string;
+  start_date?: string;
+  end_date?: string;
+  execution_time?: string;
+  full_refresh: boolean;
+};
+
+export type PipelineAssetRenderComparisonRequest = {
+  asset_name: string;
+  snapshot_version_id?: string;
+  environment?: string;
+  start_date?: string;
+  end_date?: string;
+  execution_time?: string;
+  full_refresh: boolean;
+};
+
+export type AssetRenderStageComparison = {
+  key: string;
+  status: string;
+  deployment?: AssetRenderStage;
+  working_tree?: AssetRenderStage;
+};
+
+export type AssetRenderComparisonSummary = {
+  added: number;
+  removed: number;
+  changed: number;
+  unchanged: number;
+};
+
+export type PipelineAssetRenderComparison = {
+  status: string;
+  asset_name: string;
+  snapshot: AssetRenderSource;
+  working_tree: AssetRenderSource;
+  deployment?: AssetRenderResult;
+  current?: AssetRenderResult;
+  stages: AssetRenderStageComparison[];
+  summary: AssetRenderComparisonSummary;
+};
+
 export type TypeCheckFinding = {
   severity: string;
   message: string;
@@ -694,6 +762,7 @@ export type PipelinePlanSelectionRequest = {
   mode?: string;
   asset_name?: string;
   scope?: string;
+  selector?: string;
 };
 
 export type PipelinePlanRequest = {
@@ -722,6 +791,7 @@ export type PipelinePlanReviewedIdentity = {
   source: AssetRenderSource;
   context: PipelinePlanContext;
   selection: PipelinePlanSelection;
+  resources: PipelinePlanResources;
   execution_units: PipelinePlanExecutionUnit[];
 };
 
@@ -761,6 +831,7 @@ export type PipelinePlanSelection = {
   mode: string;
   asset_name?: string;
   scope?: string;
+  selector?: string;
   data_state_token?: string;
 };
 
@@ -797,6 +868,16 @@ export type PipelinePlanExecutionUnit = {
   reason: string;
 };
 
+export type PipelinePlanResourceClaim = {
+  kind: string;
+  identity: string;
+};
+
+export type PipelinePlanResources = {
+  isolation: string;
+  claims: PipelinePlanResourceClaim[];
+};
+
 export type PipelinePlanSummary = {
   assets: number;
   execution_units: number;
@@ -816,6 +897,7 @@ export type PipelinePlan = {
   context: PipelinePlanContext;
   readiness: PipelinePlanReadiness;
   selection: PipelinePlanSelection;
+  resources: PipelinePlanResources;
   assets: PipelinePlanAsset[];
   execution_units: PipelinePlanExecutionUnit[];
   summary: PipelinePlanSummary;

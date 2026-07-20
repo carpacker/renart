@@ -123,6 +123,12 @@ columns:
 select 1 as customer_id,'Ada' as customer_name union all select 2 as customer_id,'Grace' as customer_name
 `,
     );
+    const deployResponse = await page.request.post(
+      `${liveApp.baseURL}/api/pipelines/${pipelineId}/deploy`,
+    );
+    expect(deployResponse.ok()).toBe(true);
+    const deployedVersion = ((await deployResponse.json()) as { snapshot: { version_id: string } })
+      .snapshot.version_id;
     await page.goto(`${liveApp.baseURL}/pipelines/${pipelineId}/assets/${customersAssetId}/code`);
     await expect(page.locator(".view-lines").first()).toContainText("customer_id", {
       timeout: 15000,
@@ -142,12 +148,14 @@ select 1 as customer_id,'Ada' as customer_name union all select 2 as customer_id
 
     const renderResponse = page.waitForResponse(
       (response) =>
-        response.url().includes(`/api/assets/${customersAssetId}/render`) && response.ok(),
+        response.url().includes(`/api/pipelines/${pipelineId}/assets/render`) && response.ok(),
       { timeout: 30000 },
     );
     await page.getByRole("button", { name: "Render saved asset", exact: true }).click();
     const response = await renderResponse;
     expect(response.request().postDataJSON()).toMatchObject({
+      asset_name: "analytics.customers",
+      source: { kind: "working_tree" },
       environment: "default",
       full_refresh: false,
     });
@@ -207,7 +215,7 @@ select 1 as customer_id,'Ada' as customer_name union all select 2 as customer_id
 
     const rerenderResponse = page.waitForResponse(
       (candidate) =>
-        candidate.url().includes(`/api/assets/${customersAssetId}/render`) && candidate.ok(),
+        candidate.url().includes(`/api/pipelines/${pipelineId}/assets/render`) && candidate.ok(),
       { timeout: 30000 },
     );
     const savedWorkspaceRefresh = page.waitForResponse(
@@ -241,6 +249,33 @@ select 1 as customer_id,'Ada' as customer_name union all select 2 as customer_id
     await savedWorkspaceRefresh;
     await expect(preview).toBeVisible({ timeout: 15000 });
 
+    const comparisonResponse = page.waitForResponse(
+      (candidate) =>
+        candidate.url().includes(`/api/pipelines/${pipelineId}/assets/render/compare`) &&
+        candidate.ok(),
+      { timeout: 30000 },
+    );
+    await preview.getByRole("button", { name: "Compare deployment", exact: true }).click();
+    const compared = await comparisonResponse;
+    expect(compared.request().postDataJSON()).toMatchObject({
+      asset_name: "analytics.customers",
+    });
+    const comparisonPayload = (await compared.json()) as {
+      snapshot: { version_id: string };
+      summary: { changed: number };
+      current?: { stages: Array<{ kind: string; content?: string }> };
+    };
+    expect(comparisonPayload.snapshot.version_id).toBe(deployedVersion);
+    expect(comparisonPayload.summary.changed).toBeGreaterThan(0);
+    expect(
+      comparisonPayload.current?.stages.find((stage) => stage.kind === "compiled_query")?.content,
+    ).toContain(savedDraftMarker);
+    const comparison = page.getByTestId("asset-render-comparison");
+    await expect(comparison).toBeVisible({ timeout: 15000 });
+    await expect(comparison).toContainText(/Deployment #\d+/);
+    await expect(comparison).toContainText("Saved workspace");
+    await expect(comparison.locator(".monaco-diff-editor")).toBeVisible({ timeout: 15000 });
+
     const savedWorkspaceResponse = await page.request.get(`${liveApp.baseURL}/api/workspace`);
     expect(savedWorkspaceResponse.ok()).toBe(true);
     const savedWorkspace = (await savedWorkspaceResponse.json()) as WorkspaceResponse;
@@ -265,7 +300,7 @@ select 1 as customer_id,'Ada' as customer_name union all select 2 as customer_id
 
     const externalRenderResponse = page.waitForResponse(
       (candidate) =>
-        candidate.url().includes(`/api/assets/${customersAssetId}/render`) && candidate.ok(),
+        candidate.url().includes(`/api/pipelines/${pipelineId}/assets/render`) && candidate.ok(),
       { timeout: 30000 },
     );
     await page.getByRole("button", { name: "Render saved asset", exact: true }).click();
@@ -398,6 +433,55 @@ select 1 as customer_id,'Ada' as customer_name union all select 2 as customer_id
       timeout: 30000,
     });
     await expect(output).not.toContainText(/Queued manual River run|Run started\.|Run queued\./);
+  });
+
+  test("previews assets matched by a custom selector", async ({ liveApp, page }) => {
+    await page.goto(`${liveApp.baseURL}/pipelines/${pipelineId}/assets/${customersAssetId}/code`);
+    await expect(page.locator(".view-lines").first()).toContainText("customer_id", {
+      timeout: 15000,
+    });
+
+    await page.getByRole("button", { name: /^Review run/ }).click();
+    const planSheet = page.getByTestId("pipeline-plan-sheet");
+    await expect(planSheet).toBeVisible();
+
+    const wildcardResponse = page.waitForResponse(
+      (response) =>
+        response.url().endsWith(`/api/pipelines/${pipelineId}/plan`) &&
+        response.request().postDataJSON().selection?.mode === "selector" &&
+        response.request().postDataJSON().selection?.selector === "*" &&
+        response.ok(),
+      { timeout: 30000 },
+    );
+    await planSheet.getByLabel("Scope").click();
+    await page.getByRole("option", { name: "Matching selector", exact: true }).click();
+    await wildcardResponse;
+
+    const selectorInput = planSheet.getByLabel("Asset selector");
+    await expect(selectorInput).toHaveValue("*");
+    await selectorInput.fill("analytics.customers");
+    await expect(
+      planSheet.getByText("Apply the expression to validate it and preview its assets."),
+    ).toBeVisible();
+
+    const selectorResponse = page.waitForResponse(
+      (response) =>
+        response.url().endsWith(`/api/pipelines/${pipelineId}/plan`) &&
+        response.request().postDataJSON().selection?.selector === "analytics.customers" &&
+        response.ok(),
+      { timeout: 30000 },
+    );
+    await planSheet.getByRole("button", { name: "Apply", exact: true }).click();
+    const selectedPlan = (await (await selectorResponse).json()) as {
+      selection: { mode: string; selector?: string };
+      assets: Array<{ name: string }>;
+    };
+    expect(selectedPlan.selection).toMatchObject({
+      mode: "selector",
+      selector: "analytics.customers",
+    });
+    expect(selectedPlan.assets.map((asset) => asset.name)).toEqual(["analytics.customers"]);
+    await expect(planSheet.getByText("1 asset selected.", { exact: false })).toBeVisible();
   });
 
   test("keeps valid sibling previews when an asset definition is incomplete", async ({

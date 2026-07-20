@@ -1,5 +1,5 @@
 import { fetchJSON, fetchJSONWithBody } from "@/lib/api-core";
-import type { EnvironmentPolicy } from "@/lib/generated/api-types";
+import type { EnvironmentPolicy, WorkspaceRetentionSettings } from "@/lib/generated/api-types";
 import { WorkspaceConfigResponse, WorkspaceEnvironmentPolicyResponse } from "@/lib/types";
 
 export async function getWorkspaceConfig(): Promise<WorkspaceConfigResponse> {
@@ -11,6 +11,7 @@ export async function getWorkspaceConfig(): Promise<WorkspaceConfigResponse> {
 export async function updateWorkspaceProject(input: {
   name?: string;
   features?: Record<string, boolean>;
+  retention?: WorkspaceRetentionSettings;
 }): Promise<WorkspaceConfigResponse> {
   return fetchJSONWithBody<WorkspaceConfigResponse>("/api/config/project", "PUT", input);
 }

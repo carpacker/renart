@@ -28,19 +28,33 @@ In **Schedules**, click **New schedule** and pick:
 Creating a schedule for an environment without a deployed snapshot offers
 to **deploy the working tree now and pin this schedule to it**.
 
+Renart writes the desired cadence and environment settings to
+`.renart/schedules.yml`, so schedule changes are ordinary reviewable Git diffs.
+The exact deployment pin and run history stay local to each machine. On a new
+checkout, a declared schedule remains paused until that machine has an explicit
+deployment pin.
+
+Optional variable overrides can be stored directly in the declaration. For a
+secret value, store an `env:NAME` reference instead; Renart resolves it from the
+server process only while validating, planning, or running and does not write
+the resolved value to schedule or run state.
+
 ## Snapshots keep schedules stable
 
 Deploying records a snapshot of the pipeline as it is; the schedule runs
 that snapshot until you redeploy. You can keep editing — and even break —
-the working tree without affecting tonight's run. When you're ready,
-**Redeploy** picks up your changes (or use
-[`renart deploy`](/docs/reference/cli/) from CI).
+the working tree without affecting tonight's run. When you're ready, review a
+new deployment and explicitly select which schedule pins should advance (or
+create the deployment with [`renart deploy`](/docs/reference/cli/) from CI).
 
 ## Managing schedules
 
 Each row in the Schedules view shows the cadence, the last success, and a
 timeline of recent and upcoming runs. From the row you can pause the
-schedule with the toggle, skip the next interval, or **Run** it now.
+schedule with the toggle, run its exact pin now, review a newer deployment, or
+archive it. Removing its declaration keeps local run history and the previous
+pin during the configured schedule-history window, so re-adding the same
+pipeline/environment key can restore it.
 Scheduled runs land in [Runs & history](/docs/workspace/runs-and-history/)
 like any other run.
 

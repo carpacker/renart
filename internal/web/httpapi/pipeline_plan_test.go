@@ -80,12 +80,23 @@ func TestHandlePipelinePlanAcceptsDeclaredReadOnlyContext(t *testing.T) {
 	assert.Contains(t, response.Body.String(), `"id":"plan-id"`)
 }
 
+func TestHandlePipelinePlanAcceptsCustomSelector(t *testing.T) {
+	t.Parallel()
+	stub := &pipelinePlanHandlerStub{plan: service.PipelinePlan{ID: "plan-id", Status: service.PipelinePlanStatusReady}}
+	response := pipelinePlanRequest(stub, `{"selection":{"mode":"selector_needed","selector":"tag:daily,+analytics.orders"}}`)
+
+	require.Equal(t, http.StatusOK, response.Code)
+	require.Equal(t, 1, stub.calls)
+	assert.Equal(t, service.PipelinePlanSelectionSelectorNeeded, stub.req.Selection.Mode)
+	assert.Equal(t, "tag:daily,+analytics.orders", stub.req.Selection.Selector)
+}
+
 func TestHandlePipelinePlanRejectsUnknownOrMalformedInput(t *testing.T) {
 	t.Parallel()
 	for _, body := range []string{
 		`{"run":true}`,
 		`{"source":{"latest":true}}`,
-		`{"selection":{"selector":"tag:daily"}}`,
+		`{"selection":{"expression":"tag:daily"}}`,
 		`null`,
 		`[]`,
 		`{}` + "\n" + `{}`,

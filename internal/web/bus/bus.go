@@ -69,6 +69,9 @@ type ExecutionTargetSnapshotEntry struct {
 	TargetIdentity              string
 	TargetFidelity              string
 	TargetWriteEvidenceRequired bool
+	WriteResourceKind           string
+	WriteResourceIdentity       string
+	WriteResourceFidelity       string
 	Fingerprint                 string
 	OwnContent                  string
 	ConsumedVarsHash            string

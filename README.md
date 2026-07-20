@@ -1,19 +1,27 @@
 # Renart
 
-Renart is an open-source, local-first IDE for building and running data pipelines
-from a Git repository.
+Renart is an open-source, local-first, all-in-one IDE for building and running
+data pipelines from a Git repository.
 
 Build pipelines on a visual canvas, edit SQL and Python with pipeline-aware
 IntelliSense, explore data in notebooks, and inspect or materialize assets from
 one workspace. Renart runs on your machine and keeps your pipeline work as
 plain, reviewable files.
 
+> [!IMPORTANT]
+> **Renart is currently in public alpha.** The core build, inspect, run,
+> schedule, notebook, type-checking, and freshness workflows are available, but
+> expect rough edges and changes before the first stable release. Keep your
+> pipelines in Git, evaluate Renart before relying on it for critical production
+> scheduling, and please report issues on
+> [GitHub](https://github.com/renart-data/renart/issues).
+
 ![Renart pipeline canvas and editor](docs/public/landing/hero-workspace.webp)
 
 ## Highlights
 
 - See assets, dependencies, lineage, and staleness on a visual pipeline canvas.
-- Get schema-aware completion and validation while editing SQL.
+- Get pipeline-aware SQL completion and type-checking while you edit.
 - Inspect data safely before materializing an asset or building a pipeline.
 - Explore data in notebooks and promote useful work into pipeline assets.
 - Run and schedule pipelines per environment, with logs and history in the UI.

@@ -107,6 +107,77 @@ func TestRenderDelegatesToDiscoveredServer(t *testing.T) {
 	}
 }
 
+func TestRenderSnapshotDelegatesThroughPipelineOwnedEndpoint(t *testing.T) {
+	root, _ := writeRenderCLIWorkspace(t)
+	var renderedPath string
+	var renderedRequest service.PipelineAssetRenderRequest
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.URL.Path == "/api/health":
+			fmt.Fprintf(w, `{"status":"ok","version":"test","workspace_root":%q}`, root)
+		case r.URL.Path == "/api/workspace":
+			fmt.Fprintf(w, `{
+				"root":%q,
+				"pipelines":[{
+					"id":"pipeline-id",
+					"name":"marts",
+					"path":"marts/pipeline.yml",
+					"assets":[{
+						"id":"asset-id",
+						"name":"mart.orders",
+						"type":"duckdb.sql",
+						"path":"marts/assets/orders.sql"
+					}]
+				}]
+			}`, root)
+		case r.URL.Path == "/api/pipelines/pipeline-id/assets/render":
+			renderedPath = r.URL.Path
+			if err := json.NewDecoder(r.Body).Decode(&renderedRequest); err != nil {
+				t.Errorf("decode request: %v", err)
+			}
+			fmt.Fprint(w, `{
+				"status":"ok",
+				"provenance":{"source":{"kind":"snapshot","pipeline_path":"marts/pipeline.yml","version_id":"snapshot-7","merkle_root":"abcdef012345"},"pipeline":"marts","context":{}},
+				"asset":{"name":"mart.orders","type":"duckdb.sql"},
+				"stages":[{"kind":"execution_sql","language":"sql","content":"SELECT 1","status":"ok","fidelity":"exact"}],
+				"issues":[],"redactions":[]
+			}`)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	if err := clientapi.WriteServerFile(root, clientapi.ServerFile{
+		PID: os.Getpid(), BaseURL: server.URL, APIBaseURL: server.URL + "/api",
+		WorkspaceRoot: root, Version: "test", StartedAt: time.Now(),
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	var output bytes.Buffer
+	app := Root("test")
+	app.Writer = &output
+	err := app.Run(context.Background(), []string{
+		"renart", "render", "--workspace", root, "--json",
+		"--snapshot", "snapshot-7", "mart.orders",
+	})
+	if err != nil {
+		t.Fatalf("render failed: %v", err)
+	}
+	if renderedPath != "/api/pipelines/pipeline-id/assets/render" {
+		t.Fatalf("rendered path = %q", renderedPath)
+	}
+	if renderedRequest.AssetName != "mart.orders" ||
+		renderedRequest.Source.Kind != service.PipelinePlanSourceSnapshot ||
+		renderedRequest.Source.VersionID != "snapshot-7" {
+		t.Fatalf("render request = %+v", renderedRequest)
+	}
+	if !strings.Contains(output.String(), `"version_id": "snapshot-7"`) {
+		t.Fatalf("snapshot result was not printed: %s", output.String())
+	}
+}
+
 func TestResolveRenderAssetPathRejectsAmbiguousNames(t *testing.T) {
 	root, _ := writeRenderCLIWorkspace(t)
 	secondPipeline := filepath.Join(root, "other")

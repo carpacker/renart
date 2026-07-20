@@ -113,16 +113,26 @@ func TestPlanSelectionAndSourceValidation(t *testing.T) {
 	assetTarget := runTarget{kind: "asset"}
 	assetTarget.asset.Name = "mart.orders"
 
-	selection, err := planSelection(pipelineTarget, false, false, false)
+	selection, err := planSelection(pipelineTarget, false, false, false, "", false)
 	if err != nil || selection.Mode != service.PipelinePlanSelectionNeeded {
 		t.Fatalf("needed selection = %+v, %v", selection, err)
 	}
-	selection, err = planSelection(assetTarget, false, true, true)
+	selection, err = planSelection(assetTarget, false, true, true, "", false)
 	if err != nil || selection.Scope != "asset_with_upstreams_and_downstreams" {
 		t.Fatalf("asset selection = %+v, %v", selection, err)
 	}
-	if _, err := planSelection(pipelineTarget, false, true, false); err == nil {
+	if _, err := planSelection(pipelineTarget, false, true, false, "", false); err == nil {
 		t.Fatal("pipeline upstream selection should fail")
+	}
+	selection, err = planSelection(pipelineTarget, false, false, false, "tag:daily", true)
+	if err != nil || selection.Mode != service.PipelinePlanSelectionSelectorNeeded || selection.Selector != "tag:daily" {
+		t.Fatalf("needed selector selection = %+v, %v", selection, err)
+	}
+	if _, err := planSelection(pipelineTarget, true, false, false, "tag:daily", false); err == nil {
+		t.Fatal("--all with --selector should fail")
+	}
+	if _, err := planSelection(assetTarget, false, false, false, "tag:daily", false); err == nil {
+		t.Fatal("asset target with --selector should fail")
 	}
 	source, err := planSource("snapshot", "version-1")
 	if err != nil || source.Kind != service.PipelinePlanSourceSnapshot || source.VersionID != "version-1" {

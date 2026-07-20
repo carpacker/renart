@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -138,6 +139,11 @@ func TestOutboxRejectsInvalidAndNoncanonicalEnvelopes(t *testing.T) {
 	invalid = completeEvent("completion-no-targets")
 	invalid.ExecutionTargets = nil
 	require.ErrorIs(t, store.Enqueue(ctx, invalid), completion.ErrInvalidEnvelope)
+	invalid = completeEvent("completion-no-write-resource")
+	entry := invalid.ExecutionTargets["analytics.orders"]
+	entry.WriteResourceFidelity = ""
+	invalid.ExecutionTargets["analytics.orders"] = entry
+	require.ErrorIs(t, store.Enqueue(ctx, invalid), completion.ErrInvalidEnvelope)
 
 	event := completeEvent("completion-tampered")
 	require.NoError(t, store.Enqueue(ctx, event))
@@ -177,7 +183,7 @@ func completeEvent(completionID string) bus.RunCompleted {
 			ConsumedVarsHash: "consumed-vars", VarsHash: "all-vars",
 			UpstreamWriters: map[string]bus.UpstreamWriterSnapshot{}, HasUpstreamWriterSnapshot: true,
 		}},
-		ExecutionTargetSnapshotVersion: 2,
+		ExecutionTargetSnapshotVersion: 3,
 		ExecutionPipelineUUID:          "pipeline-uuid",
 		ExecutionTargets: map[string]bus.ExecutionTargetSnapshotEntry{
 			"analytics.orders": {
@@ -185,6 +191,9 @@ func completeEvent(completionID string) bus.RunCompleted {
 				TargetIdentity:              "duckdb|main|analytics|orders",
 				TargetFidelity:              "exact",
 				TargetWriteEvidenceRequired: true,
+				WriteResourceKind:           "duckdb_database",
+				WriteResourceIdentity:       strings.Repeat("a", 64),
+				WriteResourceFidelity:       "exact",
 				Fingerprint:                 "v2:fingerprint", OwnContent: "v2:own",
 				ConsumedVarsHash: "consumed-vars", VarsHash: "all-vars",
 				Upstreams: []bus.ExecutionUpstreamSnapshot{

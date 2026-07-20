@@ -3,6 +3,7 @@ package snapshot_test
 import (
 	"context"
 	"database/sql"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -413,4 +414,95 @@ func TestValidateRejectsManifestThatDoesNotMatchRecordedRoot(t *testing.T) {
 
 	_, err = store.Validate(ctx, deployed.VersionID, "pipeline-a")
 	require.ErrorContains(t, err, "manifest root mismatch")
+}
+
+func TestPruneProtectsLatestPinnedRunAndPendingCompletionDeployments(t *testing.T) {
+	t.Parallel()
+	store, db := openTestStoreWithDB(t)
+	ctx := context.Background()
+	now := time.Date(2026, 7, 20, 12, 0, 0, 0, time.UTC)
+	old := now.AddDate(-1, 0, 0).Format(time.RFC3339Nano)
+	for ordinal, versionID := range []string{
+		"pinned", "run-referenced", "completion-referenced", "deletable", "latest",
+	} {
+		hash := "hash-" + versionID
+		_, err := db.ExecContext(ctx, `
+			INSERT INTO renart_blobs (hash, content) VALUES (?, ?)`, hash, []byte(versionID))
+		require.NoError(t, err)
+		_, err = db.ExecContext(ctx, `
+			INSERT INTO renart_snapshots (
+				version_id, pipeline_id, ordinal, merkle_root, manifest, git_dirty, created_at
+			) VALUES (?, 'pipeline', ?, ?, json_object('pipeline.yml', ?), 0, ?)`,
+			versionID, ordinal+1, "root-"+versionID, hash, old,
+		)
+		require.NoError(t, err)
+	}
+	_, err := db.ExecContext(ctx, `
+		INSERT INTO renart_schedules (
+			pipeline_id, environment, snapshot_version_id, cron, timezone,
+			catchup_policy, status, created_at, updated_at
+		) VALUES ('pipeline', 'prod', 'pinned', '@daily', 'UTC', 'skip', 'active', ?, ?)`, old, old)
+	require.NoError(t, err)
+	_, err = db.ExecContext(ctx, `
+		INSERT INTO pipeline_runs (
+			id, pipeline_id, pipeline, environment, trigger, status, finished_at, snapshot_version_id
+		) VALUES ('run', 'pipeline', 'pipeline', 'prod', 'manual', 'success', ?, 'run-referenced')`, old)
+	require.NoError(t, err)
+	_, err = db.ExecContext(ctx, `
+		INSERT INTO renart_completion_outbox (completion_id, version, body, enqueued_at)
+		VALUES ('completion', 1, ?, ?)`,
+		`{"version":1,"event":{"completion_id":"completion","run_id":"run","snapshot_version_id":"completion-referenced"}}`,
+		old,
+	)
+	require.NoError(t, err)
+
+	result, err := store.Prune(ctx, snapshot.RetentionPolicy{
+		OlderThan: now.AddDate(0, 0, -90), MinimumPerPipeline: 0,
+	})
+	require.NoError(t, err)
+	assert.EqualValues(t, 1, result.Snapshots)
+	assert.EqualValues(t, 1, result.Blobs)
+	for _, versionID := range []string{"pinned", "run-referenced", "completion-referenced", "latest"} {
+		_, err := store.Get(ctx, versionID)
+		require.NoError(t, err)
+	}
+	_, err = store.Get(ctx, "deletable")
+	assert.ErrorIs(t, err, sql.ErrNoRows)
+	var deletableBlobCount int
+	require.NoError(t, db.QueryRowContext(ctx, `
+		SELECT COUNT(*) FROM renart_blobs WHERE hash = 'hash-deletable'`).Scan(&deletableBlobCount))
+	assert.Zero(t, deletableBlobCount)
+}
+
+func TestPruneKeepsPerPipelineFloorAndLatestDeployment(t *testing.T) {
+	t.Parallel()
+	store, db := openTestStoreWithDB(t)
+	ctx := context.Background()
+	now := time.Date(2026, 7, 20, 12, 0, 0, 0, time.UTC)
+	old := now.AddDate(-1, 0, 0).Format(time.RFC3339Nano)
+	for ordinal := 1; ordinal <= 4; ordinal++ {
+		versionID := fmt.Sprintf("version-%d", ordinal)
+		_, err := db.ExecContext(ctx, `
+			INSERT INTO renart_snapshots (
+				version_id, pipeline_id, ordinal, merkle_root, manifest, git_dirty, created_at
+			) VALUES (?, 'pipeline', ?, ?, '{}', 0, ?)`, versionID, ordinal, versionID, old)
+		require.NoError(t, err)
+	}
+	_, err := db.ExecContext(ctx, `
+		INSERT INTO renart_snapshots (
+			version_id, pipeline_id, ordinal, merkle_root, manifest, git_dirty, created_at
+		) VALUES ('only', 'other', 1, 'only', '{}', 0, ?)`, old)
+	require.NoError(t, err)
+
+	result, err := store.Prune(ctx, snapshot.RetentionPolicy{
+		OlderThan: now.AddDate(0, 0, -90), MinimumPerPipeline: 2,
+	})
+	require.NoError(t, err)
+	assert.EqualValues(t, 2, result.Snapshots)
+	items, err := store.List(ctx, "pipeline")
+	require.NoError(t, err)
+	require.Len(t, items, 2)
+	assert.Equal(t, []string{"version-4", "version-3"}, []string{items[0].VersionID, items[1].VersionID})
+	_, err = store.Get(ctx, "only")
+	require.NoError(t, err, "the sole and therefore latest deployment is protected")
 }

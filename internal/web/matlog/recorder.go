@@ -200,6 +200,7 @@ func (r *Recorder) HandleRunCompleted(event bus.RunCompleted) error {
 const (
 	executionTargetSnapshotVersionV1 = 1
 	executionTargetSnapshotVersionV2 = 2
+	executionTargetSnapshotVersionV3 = 3
 )
 
 type executionFingerprintContext struct {
@@ -258,7 +259,8 @@ func (r *Recorder) fingerprintContext(
 		}, nil
 	}
 	if event.ExecutionTargetSnapshotVersion != executionTargetSnapshotVersionV1 &&
-		event.ExecutionTargetSnapshotVersion != executionTargetSnapshotVersionV2 {
+		event.ExecutionTargetSnapshotVersion != executionTargetSnapshotVersionV2 &&
+		event.ExecutionTargetSnapshotVersion != executionTargetSnapshotVersionV3 {
 		return executionFingerprintContext{}, fmt.Errorf("pipeline %s has unsupported execution target snapshot version %d", event.PipelineUUID, event.ExecutionTargetSnapshotVersion)
 	}
 	if len(event.ExecutionTargets) == 0 {
@@ -469,6 +471,13 @@ func validateCapturedExecutionTarget(assetName string, entry bus.ExecutionTarget
 	if entry.TargetWriteEvidenceRequired && (entry.TargetFidelity != "exact" || entry.TargetIdentity == "") {
 		return fmt.Errorf("execution target snapshot entry %s requires write evidence without an exact target", assetName)
 	}
+	if version < executionTargetSnapshotVersionV3 {
+		if entry.WriteResourceKind != "" || entry.WriteResourceIdentity != "" || entry.WriteResourceFidelity != "" {
+			return fmt.Errorf("execution target snapshot entry %s contains write-resource evidence before version three", assetName)
+		}
+	} else if err := validateCapturedWriteResource(assetName, entry); err != nil {
+		return err
+	}
 	if version >= executionTargetSnapshotVersionV2 {
 		switch entry.CoverageMode {
 		case "marker", "union_intervals", "replace_interval":
@@ -480,6 +489,42 @@ func validateCapturedExecutionTarget(assetName string, entry bus.ExecutionTarget
 				return fmt.Errorf("execution target snapshot entry %s has a non-canonical upstream", assetName)
 			}
 		}
+	}
+	return nil
+}
+
+func validateCapturedWriteResource(assetName string, entry bus.ExecutionTargetSnapshotEntry) error {
+	kind := strings.TrimSpace(entry.WriteResourceKind)
+	identity := strings.TrimSpace(entry.WriteResourceIdentity)
+	fidelity := strings.TrimSpace(entry.WriteResourceFidelity)
+	if kind != entry.WriteResourceKind || identity != entry.WriteResourceIdentity || fidelity != entry.WriteResourceFidelity {
+		return fmt.Errorf("execution target snapshot entry %s has a non-canonical write resource", assetName)
+	}
+	switch fidelity {
+	case "exact":
+		switch kind {
+		case "none":
+			if identity != "" {
+				return fmt.Errorf("execution target snapshot entry %s no-write resource claims an identity", assetName)
+			}
+		case "local_file", "duckdb_database":
+			if len(identity) != 64 {
+				return fmt.Errorf("execution target snapshot entry %s has an invalid write-resource identity", assetName)
+			}
+			for _, char := range identity {
+				if (char < '0' || char > '9') && (char < 'a' || char > 'f') {
+					return fmt.Errorf("execution target snapshot entry %s has an invalid write-resource identity", assetName)
+				}
+			}
+		default:
+			return fmt.Errorf("execution target snapshot entry %s has unsupported exact write-resource kind %q", assetName, kind)
+		}
+	case "runtime_only":
+		if kind != "pipeline" || identity != "" {
+			return fmt.Errorf("execution target snapshot entry %s runtime write resource is not pipeline-scoped", assetName)
+		}
+	default:
+		return fmt.Errorf("execution target snapshot entry %s has unsupported write-resource fidelity %q", assetName, fidelity)
 	}
 	return nil
 }

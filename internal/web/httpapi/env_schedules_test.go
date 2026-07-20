@@ -62,7 +62,10 @@ func (s *envScheduleHandlerStub) UpsertEnvSchedule(_ context.Context, pipelineUU
 	if s.mutationErr != nil {
 		return scheduler.EnvSchedule{}, s.mutationErr
 	}
-	return scheduler.EnvSchedule{PipelineUUID: pipelineUUID, Environment: req.Environment, Vars: req.Vars}, nil
+	return scheduler.EnvSchedule{
+		PipelineUUID: pipelineUUID, Environment: req.Environment,
+		Vars: req.Vars, SecretRefs: req.SecretRefs, DeclarationManaged: true,
+	}, nil
 }
 
 func (s *envScheduleHandlerStub) SetEnvScheduleLifecycle(_ context.Context, _, _ string, status scheduler.ScheduleStatus) error {
@@ -127,15 +130,19 @@ func TestEnvScheduleMutationBodiesAcceptDeclaredFields(t *testing.T) {
 		upsertStub,
 		http.MethodPut,
 		"/api/pipelines/pipeline-id/env-schedules/prod",
-		`{"cron":"@daily","timezone":"UTC","snapshot_version_id":"snapshot-id","vars":{"region":"private-value"}}`,
+		`{"cron":"@daily","timezone":"UTC","snapshot_version_id":"snapshot-id","vars":{"region":"private-value"},"secret_refs":{"token":"env:RENART_TOKEN"}}`,
 	)
 	require.Equal(t, http.StatusOK, upsertResponse.Code)
 	assert.Equal(t, 1, upsertStub.upsertCalls)
 	assert.Equal(t, "prod", upsertStub.upsertReq.Environment)
 	assert.Equal(t, "snapshot-id", upsertStub.upsertReq.SnapshotVersionID)
 	assert.Equal(t, "private-value", upsertStub.upsertReq.Vars["region"])
-	assert.Contains(t, upsertResponse.Body.String(), `"variable_names":["region"]`)
+	assert.Equal(t, "env:RENART_TOKEN", upsertStub.upsertReq.SecretRefs["token"])
+	assert.Contains(t, upsertResponse.Body.String(), `"variable_names":["region","token"]`)
+	assert.Contains(t, upsertResponse.Body.String(), `"secret_reference_names":["token"]`)
+	assert.Contains(t, upsertResponse.Body.String(), `"declaration_managed":true`)
 	assert.NotContains(t, upsertResponse.Body.String(), "private-value")
+	assert.NotContains(t, upsertResponse.Body.String(), "RENART_TOKEN")
 
 	statusStub := &envScheduleHandlerStub{}
 	statusResponse := envScheduleRequest(
@@ -165,17 +172,21 @@ func TestEnvScheduleResponsesExposeOnlySortedVariableNames(t *testing.T) {
 	end := start.Add(time.Hour)
 	stub := &envScheduleHandlerStub{live: []scheduler.EnvSchedule{{
 		PipelineUUID: "pipeline-uuid", Environment: "prod", Cron: "@daily", Timezone: "UTC",
-		Vars: map[string]any{"region": "private-region", "limit": 25},
+		Vars:       map[string]any{"region": "private-region", "limit": 25},
+		SecretRefs: map[string]string{"token": "env:PRIVATE_TOKEN"}, DeclarationManaged: true,
 		DeferredOccurrence: &scheduler.DeferredScheduleOccurrence{
 			IntervalStart: start, IntervalEnd: end, AttemptCount: 1,
 		},
 	}}}
 	response := envScheduleRequest(stub, http.MethodGet, "/api/env-schedules", "")
 	require.Equal(t, http.StatusOK, response.Code)
-	assert.Contains(t, response.Body.String(), `"variable_names":["limit","region"]`)
+	assert.Contains(t, response.Body.String(), `"variable_names":["limit","region","token"]`)
+	assert.Contains(t, response.Body.String(), `"secret_reference_names":["token"]`)
+	assert.Contains(t, response.Body.String(), `"declaration_managed":true`)
 	assert.Contains(t, response.Body.String(), `"deferred_occurrence"`)
 	assert.Contains(t, response.Body.String(), `"attempt_count":1`)
 	assert.NotContains(t, response.Body.String(), "private-region")
+	assert.NotContains(t, response.Body.String(), "PRIVATE_TOKEN")
 	assert.NotContains(t, response.Body.String(), `"vars"`)
 	assert.NotContains(t, response.Body.String(), `"occurrence_key"`)
 }

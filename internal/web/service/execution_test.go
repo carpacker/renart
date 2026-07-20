@@ -99,7 +99,8 @@ func (s *stubExecutionExecutor) RunAsset(_ context.Context, req RunAssetRequest,
 		}
 	}
 	if s.runAssetTargets != nil && req.OnTargetsResolved != nil {
-		if err := req.OnTargetsResolved(*s.runAssetTargets); err != nil {
+		snapshot := executionTestSnapshotWithResources(*s.runAssetTargets)
+		if err := req.OnTargetsResolved(snapshot); err != nil {
 			return s.runAssetOutput, err
 		}
 	}
@@ -124,7 +125,8 @@ func (s *stubExecutionExecutor) RunPipeline(_ context.Context, req RunPipelineRe
 		}
 	}
 	if s.runPipelineTargets != nil && req.OnTargetsResolved != nil {
-		if err := req.OnTargetsResolved(*s.runPipelineTargets); err != nil {
+		snapshot := executionTestSnapshotWithResources(*s.runPipelineTargets)
+		if err := req.OnTargetsResolved(snapshot); err != nil {
 			return s.runPipelineOutput, err
 		}
 	}
@@ -142,6 +144,22 @@ func (s *stubExecutionExecutor) RunPipeline(_ context.Context, req RunPipelineRe
 		}
 	}
 	return s.runPipelineOutput, s.runPipelineErr
+}
+
+func executionTestSnapshotWithResources(snapshot ExecutionTargetSnapshot) ExecutionTargetSnapshot {
+	if snapshot.Version < ExecutionTargetSnapshotVersion {
+		return snapshot
+	}
+	entries := make(map[string]ExecutionTargetSnapshotEntry, len(snapshot.Entries))
+	for name, entry := range snapshot.Entries {
+		if entry.WriteResourceKind == "" && entry.WriteResourceFidelity == "" {
+			entry.WriteResourceKind = assetWriteResourcePipeline
+			entry.WriteResourceFidelity = AssetRenderFidelityRuntimeOnly
+		}
+		entries[name] = entry
+	}
+	snapshot.Entries = entries
+	return snapshot
 }
 
 func (s *stubExecutionExecutor) QueryAsset(context.Context, QueryAssetRequest) ([]byte, error) {

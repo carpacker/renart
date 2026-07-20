@@ -5,8 +5,8 @@ import { Font } from 'astro:assets';
 const repoUrl = 'https://github.com/renart-data/renart';
 const installCommand = 'curl -LsSf getrenart.com/install.sh | sh';
 const siteUrl = 'https://getrenart.com';
-const pageTitle = 'Renart - The all-in-one data pipeline IDE';
-const pageDescription = 'Renart is an all-in-one, open-source data pipeline IDE: editor, canvas, notebooks, scheduler, and staleness tracking in a single local binary. Pipelines are plain files in your git repo, running on the warehouse you already use.';
+const pageTitle = 'Renart public alpha - The all-in-one data pipeline IDE';
+const pageDescription = 'Renart is an all-in-one, open-source data pipeline IDE in public alpha: editor, canvas, notebooks, scheduler, type-checking, and staleness tracking in a single local binary. Pipelines are plain files in your git repo, running on the warehouse you already use.';
 const socialImage = `${siteUrl}/landing/og-image.png`;
 const trackingHead = import.meta.env.PUBLIC_RENART_TRACKING_HEAD?.trim() || '{{env "RENART_TRACKING_HEAD"}}';
 
@@ -170,7 +170,7 @@ const stackItems = ['DuckDB', 'Postgres', 'Snowflake', 'BigQuery', 'Redshift', '
           <span class="pip"></span>
           <strong>{latestVersion}</strong>
           <span class="sep">/</span>
-          <strong>alpha</strong>
+          <strong>public alpha</strong>
           <span class="sep">/</span>
           Open source / Apache 2.0
         </span>
@@ -182,6 +182,10 @@ const stackItems = ['DuckDB', 'Postgres', 'Snowflake', 'BigQuery', 'Redshift', '
 
         <p class="hero-sub">
           The editor, the scheduler, and the freshness monitor — one open-source IDE for the whole pipeline lifecycle, with notebooks and lineage built in. Your pipeline is plain files in your git repo, running on the warehouse you already use. No glue code, no cloud.
+        </p>
+
+        <p class="alpha-note">
+          Renart is in public alpha. Expect rough edges and fast changes before the first stable release — early feedback is very welcome.
         </p>
 
         <div class="ctas">
@@ -401,7 +405,7 @@ const stackItems = ['DuckDB', 'Postgres', 'Snowflake', 'BigQuery', 'Redshift', '
       <div class="footer-inner">
         <div class="foot-brand">
           <a href="/" class="logo"><img class="logo-mark" src="/icons/icon.svg" alt="" width="22" height="22" />renart</a>
-          <p>The all-in-one data pipeline IDE. Open source under Apache 2.0.</p>
+          <p>The all-in-one data pipeline IDE. Public alpha, open source under Apache 2.0.</p>
         </div>
         <div class="foot-col">
           <h5>Product</h5>
@@ -429,7 +433,7 @@ const stackItems = ['DuckDB', 'Postgres', 'Snowflake', 'BigQuery', 'Redshift', '
       <div class="foot-bottom">
         <span>© {currentYear} Renart / Apache 2.0</span>
           <div class="meta">
-            <span>{latestVersion}</span>
+            <span>{latestVersion} / public alpha</span>
           </div>
       </div>
     </footer>
@@ -643,7 +647,8 @@ const stackItems = ['DuckDB', 'Postgres', 'Snowflake', 'BigQuery', 'Redshift', '
   }
   .hero h1 em, .h2 em, .final h2 em, .manifesto em { font-style: italic; color: var(--accent); }
   .stroke { color: transparent; -webkit-text-stroke: 1px var(--fg-3); }
-  .hero-sub { font-size: 18px; color: var(--fg-2); max-width: 720px; margin: 0 auto 40px; text-wrap: pretty; }
+  .hero-sub { font-size: 18px; color: var(--fg-2); max-width: 720px; margin: 0 auto 16px; text-wrap: pretty; }
+  .alpha-note { max-width: 660px; margin: 0 auto 36px; color: var(--fg-3); font-family: var(--mono); font-size: 12px; line-height: 1.6; text-wrap: pretty; }
   .ctas { display: inline-flex; gap: 10px; align-items: center; flex-wrap: wrap; justify-content: center; }
   .btn {
     display: inline-flex;

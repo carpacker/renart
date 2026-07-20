@@ -35,6 +35,7 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import {
   Select,
   SelectContent,
+  SelectGroup,
   SelectItem,
   SelectTrigger,
   SelectValue,
@@ -79,7 +80,7 @@ import { awaitWorkspaceSaves } from "@/lib/workspace-save-barrier";
 import { cn } from "@/lib/utils";
 import { deploymentLabel } from "@/lib/deployment-label";
 
-type PlanSelectionMode = "all" | "needed";
+type PlanSelectionMode = "all" | "needed" | "selector" | "selector_needed";
 type SensorMode = "once" | "wait" | "skip";
 type PlanIntent = "run" | "deploy";
 
@@ -127,6 +128,7 @@ export function PipelinePlanSheet({
   const [selectedScheduleKeys, setSelectedScheduleKeys] = useState<Set<string>>(() => new Set());
   const [promoting, setPromoting] = useState(false);
   const [promotionError, setPromotionError] = useState<string | null>(null);
+  const [selectorDraft, setSelectorDraft] = useState("*");
   const requestSerial = useRef(0);
   const initialPlanContext = useRef<string | null>(null);
   const requestedSourceKind = intent === "deploy" ? "working_tree" : source?.source;
@@ -147,6 +149,9 @@ export function PipelinePlanSheet({
         });
         if (serial !== requestSerial.current) return;
         setPlan(next);
+        if (next.selection.mode === "selector" || next.selection.mode === "selector_needed") {
+          setSelectorDraft(next.selection.selector ?? "");
+        }
         setRequest({
           ...canonicalPipelinePlanRequest(next, false),
           purpose: input.purpose,
@@ -186,6 +191,7 @@ export function PipelinePlanSheet({
     setSchedulerOwnership(null);
     setSelectedScheduleKeys(new Set());
     setPromotionError(null);
+    setSelectorDraft("*");
     setLoading(true);
     const serial = ++requestSerial.current;
     void (async () => {
@@ -248,6 +254,14 @@ export function PipelinePlanSheet({
   const selectionMode = (request?.selection?.mode ??
     plan?.selection.mode ??
     "all") as PlanSelectionMode;
+  const selectorMode = selectionMode === "selector" || selectionMode === "selector_needed";
+  const appliedSelector = request?.selection?.selector?.trim() ?? "";
+  const selectorDraftApplied = !selectorMode || selectorDraft.trim() === appliedSelector;
+  const selectorPlanIsCurrent = Boolean(
+    selectorMode &&
+    plan?.selection.mode === selectionMode &&
+    plan.selection.selector === appliedSelector,
+  );
   const sensorMode = (request?.sensor_mode ?? plan?.context.sensor_mode ?? "once") as SensorMode;
   const fullRefresh = Boolean(request?.full_refresh ?? plan?.context.requested_full_refresh);
   const destructiveConfirmationRequired = Boolean(
@@ -262,10 +276,21 @@ export function PipelinePlanSheet({
     plan &&
     !hasBlockers &&
     confirmationMatches &&
+    selectorDraftApplied &&
     !loading &&
+    !error &&
     !deployment &&
     (intent === "deploy" ? plan.summary.assets > 0 : plan.summary.execution_units > 0),
   );
+
+  const applySelector = () => {
+    const selector = selectorDraft.trim();
+    if (!selector || !selectorMode) return;
+    updateRequest((current) => ({
+      ...current,
+      selection: { mode: selectionMode, selector },
+    }));
+  };
 
   const pipelineSchedules = useMemo(
     () =>
@@ -448,66 +473,125 @@ export function PipelinePlanSheet({
             />
           </dl>
           {intent === "run" ? (
-            <div className="mt-3 flex flex-wrap items-end gap-3 border-t pt-3">
-              <div className="min-w-40 flex-1 sm:max-w-52">
-                <Label
-                  htmlFor="pipeline-plan-scope"
-                  className="mb-1 block text-[11px] text-muted-foreground"
+            <>
+              <FieldGroup className="mt-3 flex-row flex-wrap items-end gap-3 border-t pt-3">
+                <Field className="min-w-40 flex-1 gap-1 sm:max-w-52">
+                  <FieldLabel
+                    htmlFor="pipeline-plan-scope"
+                    className="text-[11px] text-muted-foreground"
+                  >
+                    Scope
+                  </FieldLabel>
+                  <Select
+                    value={selectionMode}
+                    onValueChange={(value) => {
+                      const mode = value as PlanSelectionMode;
+                      const usesSelector = mode === "selector" || mode === "selector_needed";
+                      const selector = selectorDraft.trim() || appliedSelector || "*";
+                      if (usesSelector) setSelectorDraft(selector);
+                      updateRequest((current) => ({
+                        ...current,
+                        selection: usesSelector ? { mode, selector } : { mode },
+                      }));
+                    }}
+                  >
+                    <SelectTrigger id="pipeline-plan-scope" size="sm" className="w-full">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectGroup>
+                        <SelectItem value="all">Entire pipeline</SelectItem>
+                        <SelectItem value="needed">Needed assets</SelectItem>
+                        <SelectItem value="selector">Matching selector</SelectItem>
+                        <SelectItem value="selector_needed">Needed matching selector</SelectItem>
+                      </SelectGroup>
+                    </SelectContent>
+                  </Select>
+                </Field>
+                <Field className="min-w-36 flex-1 gap-1 sm:max-w-44">
+                  <FieldLabel
+                    htmlFor="pipeline-plan-sensor"
+                    className="text-[11px] text-muted-foreground"
+                  >
+                    Sensors
+                  </FieldLabel>
+                  <Select
+                    value={sensorMode}
+                    onValueChange={(value) =>
+                      updateRequest((current) => ({ ...current, sensor_mode: value as SensorMode }))
+                    }
+                  >
+                    <SelectTrigger id="pipeline-plan-sensor" size="sm" className="w-full">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectGroup>
+                        <SelectItem value="once">Check once</SelectItem>
+                        <SelectItem value="wait">Wait</SelectItem>
+                        <SelectItem value="skip">Skip</SelectItem>
+                      </SelectGroup>
+                    </SelectContent>
+                  </Select>
+                </Field>
+                <Field
+                  orientation="horizontal"
+                  className="h-8 w-auto rounded-md border px-3 text-xs"
                 >
-                  Scope
-                </Label>
-                <Select
-                  value={selectionMode}
-                  onValueChange={(value) =>
-                    updateRequest((current) => ({
-                      ...current,
-                      selection: { mode: value as PlanSelectionMode },
-                    }))
-                  }
+                  <Switch
+                    id="pipeline-plan-full-refresh"
+                    size="sm"
+                    checked={fullRefresh}
+                    onCheckedChange={(checked) =>
+                      updateRequest((current) => ({ ...current, full_refresh: checked }))
+                    }
+                  />
+                  <FieldLabel htmlFor="pipeline-plan-full-refresh" className="font-normal">
+                    Full refresh
+                  </FieldLabel>
+                </Field>
+              </FieldGroup>
+              {selectorMode ? (
+                <Field
+                  className="mt-3 max-w-3xl border-t pt-3"
+                  data-invalid={!selectorDraft.trim()}
                 >
-                  <SelectTrigger id="pipeline-plan-scope" size="sm" className="w-full">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="all">Entire pipeline</SelectItem>
-                    <SelectItem value="needed">Needed assets</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-              <div className="min-w-36 flex-1 sm:max-w-44">
-                <Label
-                  htmlFor="pipeline-plan-sensor"
-                  className="mb-1 block text-[11px] text-muted-foreground"
-                >
-                  Sensors
-                </Label>
-                <Select
-                  value={sensorMode}
-                  onValueChange={(value) =>
-                    updateRequest((current) => ({ ...current, sensor_mode: value as SensorMode }))
-                  }
-                >
-                  <SelectTrigger id="pipeline-plan-sensor" size="sm" className="w-full">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="once">Check once</SelectItem>
-                    <SelectItem value="wait">Wait</SelectItem>
-                    <SelectItem value="skip">Skip</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-              <Label className="flex h-8 items-center gap-2 rounded-md border px-3 text-xs font-normal">
-                <Switch
-                  size="sm"
-                  checked={fullRefresh}
-                  onCheckedChange={(checked) =>
-                    updateRequest((current) => ({ ...current, full_refresh: checked }))
-                  }
-                />
-                Full refresh
-              </Label>
-            </div>
+                  <FieldLabel htmlFor="pipeline-plan-selector">Asset selector</FieldLabel>
+                  <div className="flex min-w-0 flex-wrap items-center gap-2">
+                    <Input
+                      id="pipeline-plan-selector"
+                      value={selectorDraft}
+                      onChange={(event) => setSelectorDraft(event.target.value)}
+                      onKeyDown={(event) => {
+                        if (event.key === "Enter") {
+                          event.preventDefault();
+                          applySelector();
+                        }
+                      }}
+                      placeholder="tag:daily,path:assets/marts +analytics.orders"
+                      aria-invalid={!selectorDraft.trim()}
+                      className="min-w-56 flex-1 font-mono"
+                    />
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={applySelector}
+                      disabled={!selectorDraft.trim() || selectorDraftApplied || loading}
+                    >
+                      Apply
+                    </Button>
+                  </div>
+                  <FieldDescription>
+                    {!selectorDraftApplied
+                      ? "Apply the expression to validate it and preview its assets."
+                      : loading
+                        ? "Resolving selector…"
+                        : selectorPlanIsCurrent && plan
+                          ? `${plan.summary.assets} ${plan.summary.assets === 1 ? "asset" : "assets"} selected. Use spaces for union, commas for intersection, and + for graph expansion.`
+                          : "Use spaces for union, commas for intersection, and + for graph expansion."}
+                  </FieldDescription>
+                </Field>
+              ) : null}
+            </>
           ) : (
             <Alert className="mt-3">
               <Package />
@@ -657,10 +741,10 @@ export function PipelinePlanSheet({
               <div className="min-w-0 flex-1 text-left text-[11px] text-muted-foreground">
                 {intent === "deploy"
                   ? "Deployment rechecks the saved source identity. It never deploys an unsaved editor buffer."
-                  : selectionMode === "needed"
+                  : selectionMode === "needed" || selectionMode === "selector_needed"
                     ? "Confirmation omits work that became fresh, but never adds new work without another review."
                     : plan?.readiness.active_run_id
-                      ? "This pipeline already has an active run."
+                      ? "Another execution owns a write resource needed by this plan."
                       : "Confirmation rechecks the complete plan before the run is admitted."}
               </div>
               <Button onClick={() => void confirm()} disabled={!canConfirm || confirming}>
@@ -758,8 +842,9 @@ function PlanSummary({
       {intent === "run" && plan.readiness.active_run_id ? (
         <Alert variant="destructive">
           <ShieldAlert />
-          <AlertTitle>Pipeline already running</AlertTitle>
+          <AlertTitle>Conflicting run</AlertTitle>
           <AlertDescription>
+            Another queued or running execution owns a selected write resource.{" "}
             <Link to="/runs/$runId" params={{ runId: plan.readiness.active_run_id }}>
               Open active run
             </Link>

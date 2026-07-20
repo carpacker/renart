@@ -75,6 +75,15 @@ func TestAssetPhysicalTargetResolvesSupportedRelationFamilies(t *testing.T) {
 			assert.Empty(t, target.Message)
 			assert.NotContains(t, target.Object, "internal")
 			assert.NotContains(t, target.Object, root)
+			if tt.name == "duckdb" {
+				assert.Equal(t, assetWriteResourceDuckDB, target.WriteResource.Kind)
+				assert.Equal(t, AssetRenderFidelityExact, target.WriteResource.Fidelity)
+				assert.NotEmpty(t, target.WriteResource.Identity)
+			} else {
+				assert.Equal(t, assetWriteResourcePipeline, target.WriteResource.Kind)
+				assert.Equal(t, AssetRenderFidelityRuntimeOnly, target.WriteResource.Fidelity)
+				assert.Empty(t, target.WriteResource.Identity)
+			}
 		})
 	}
 }
@@ -151,6 +160,8 @@ func TestAssetPhysicalTargetCanonicalizesDuckDBAndLocalFilePaths(t *testing.T) {
 	require.Equal(t, AssetRenderFidelityExact, physical.Fidelity, physical.Message)
 	require.Equal(t, AssetRenderFidelityExact, linked.Fidelity, linked.Message)
 	assert.Equal(t, physical.Identity, linked.Identity)
+	assert.Equal(t, assetWriteResourceDuckDB, physical.WriteResource.Kind)
+	assert.Equal(t, physical.WriteResource.Identity, linked.WriteResource.Identity)
 	assert.NotContains(t, physical.Object, root)
 
 	load := materializedTargetAsset(pipeline.AssetType(loadAssetType), "analytics.export", loadLocalConnectionName)
@@ -160,6 +171,9 @@ func TestAssetPhysicalTargetCanonicalizesDuckDBAndLocalFilePaths(t *testing.T) {
 	assert.Equal(t, assetRenderTargetKindFile, local.Kind)
 	assert.Equal(t, "real/customers.parquet", local.Object)
 	assert.NotContains(t, local.Object, root)
+	assert.Equal(t, assetWriteResourceLocalFile, local.WriteResource.Kind)
+	assert.Equal(t, AssetRenderFidelityExact, local.WriteResource.Fidelity)
+	assert.NotEmpty(t, local.WriteResource.Identity)
 }
 
 func TestAssetPhysicalTargetUsesDeclaredPythonTableDestination(t *testing.T) {
@@ -175,6 +189,8 @@ func TestAssetPhysicalTargetUsesDeclaredPythonTableDestination(t *testing.T) {
 	assert.Equal(t, assetRenderTargetKindRelation, target.Kind)
 	assert.Equal(t, "analytics.python_table", target.Object)
 	assert.NotEmpty(t, target.Identity)
+	assert.Equal(t, assetWriteResourcePipeline, target.WriteResource.Kind)
+	assert.Equal(t, AssetRenderFidelityRuntimeOnly, target.WriteResource.Fidelity)
 
 	script := *table
 	script.Materialization = pipeline.Materialization{Type: pipeline.MaterializationTypeNone}
@@ -251,6 +267,8 @@ func TestAssetPhysicalTargetPreHooksRequireAnExplicitRelation(t *testing.T) {
 	assert.Empty(t, unsafeTarget.Identity)
 	require.Equal(t, AssetRenderFidelityExact, safeTarget.Fidelity, safeTarget.Message)
 	assert.NotEmpty(t, safeTarget.Identity)
+	assert.Equal(t, assetWriteResourcePipeline, safeTarget.WriteResource.Kind)
+	assert.Equal(t, AssetRenderFidelityRuntimeOnly, safeTarget.WriteResource.Fidelity)
 }
 
 func TestAssetPhysicalTargetDDLStillTargetsTheDeclaredAssetRelation(t *testing.T) {
@@ -284,6 +302,9 @@ func TestAssetPhysicalTargetFailsClosedWithoutAProvenTarget(t *testing.T) {
 		require.Equal(t, AssetRenderFidelityExact, target.Fidelity, target.Message)
 		assert.Equal(t, assetRenderTargetKindNone, target.Kind)
 		assert.Empty(t, target.Identity)
+		assert.Equal(t, assetWriteResourceNone, target.WriteResource.Kind)
+		assert.Equal(t, AssetRenderFidelityExact, target.WriteResource.Fidelity)
+		assert.Empty(t, target.WriteResource.Identity)
 	})
 
 	t.Run("seed is an implicit writer", func(t *testing.T) {
@@ -317,6 +338,9 @@ func TestAssetPhysicalTargetFailsClosedWithoutAProvenTarget(t *testing.T) {
 			assert.Equal(t, AssetRenderFidelityRuntimeOnly, target.Fidelity)
 			assert.Empty(t, target.Identity)
 			assert.NotEmpty(t, target.Message)
+			assert.Equal(t, assetWriteResourcePipeline, target.WriteResource.Kind)
+			assert.Equal(t, AssetRenderFidelityRuntimeOnly, target.WriteResource.Fidelity)
+			assert.Empty(t, target.WriteResource.Identity)
 			if tt.name == "materialization none" {
 				assert.Equal(t, assetRenderTargetKindUnknown, target.Kind)
 			}

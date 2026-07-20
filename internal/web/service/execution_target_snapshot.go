@@ -14,7 +14,7 @@ import (
 
 // ExecutionTargetSnapshotVersion is the persisted execution-target contract.
 // Bump it when entry semantics or identity derivation change incompatibly.
-const ExecutionTargetSnapshotVersion = 2
+const ExecutionTargetSnapshotVersion = 3
 
 type ExecutionCoverageMode string
 
@@ -53,6 +53,9 @@ type ExecutionTargetSnapshotEntry struct {
 	TargetIdentity              string                      `json:"target_identity"`
 	TargetFidelity              AssetRenderFidelity         `json:"target_fidelity"`
 	TargetWriteEvidenceRequired bool                        `json:"target_write_evidence_required,omitempty"`
+	WriteResourceKind           string                      `json:"write_resource_kind"`
+	WriteResourceIdentity       string                      `json:"write_resource_identity,omitempty"`
+	WriteResourceFidelity       AssetRenderFidelity         `json:"write_resource_fidelity"`
 	Fingerprint                 string                      `json:"fingerprint"`
 	OwnContent                  string                      `json:"own_content"`
 	ConsumedVarsHash            string                      `json:"consumed_vars_hash"`
@@ -123,6 +126,9 @@ func (e *HybridBruinExecutor) resolveExecutionTargetSnapshotForSelection(
 			TargetIdentity:              target.Identity,
 			TargetFidelity:              target.Fidelity,
 			TargetWriteEvidenceRequired: pythonTargetWriteEvidenceRequired(asset, target),
+			WriteResourceKind:           target.WriteResource.Kind,
+			WriteResourceIdentity:       target.WriteResource.Identity,
+			WriteResourceFidelity:       target.WriteResource.Fidelity,
 			Fingerprint:                 string(result.FP),
 			OwnContent:                  string(result.OwnContent),
 			ConsumedVarsHash:            result.ConsumedVarsHash,

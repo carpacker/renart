@@ -19,6 +19,8 @@ export type EnvSchedule = {
   cron: string;
   timezone: string;
   variable_names?: string[];
+  secret_reference_names?: string[];
+  declaration_managed: boolean;
   catchup_policy: CatchupPolicy;
   status: EnvScheduleStatus;
   archived_reason?: string;
@@ -50,6 +52,7 @@ export type UpsertEnvScheduleInput = {
   cron: string;
   timezone?: string;
   vars?: Record<string, unknown>;
+  secret_refs?: Record<string, string>;
   catchup_policy?: CatchupPolicy;
   paused?: boolean;
 } & EnvScheduleSourceInput;

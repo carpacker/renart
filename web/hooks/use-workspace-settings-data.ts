@@ -17,7 +17,7 @@ import {
   updateWorkspaceProject,
 } from "@/lib/api";
 import { atom } from "jotai";
-import type { EnvironmentPolicy } from "@/lib/generated/api-types";
+import type { EnvironmentPolicy, WorkspaceRetentionSettings } from "@/lib/generated/api-types";
 import { WorkspaceConfigResponse } from "@/lib/types";
 
 const workspaceConfigAtom = atom<WorkspaceConfigResponse | null>(null);
@@ -124,10 +124,18 @@ export function useWorkspaceSettingsData() {
   );
 
   const handleUpdateWorkspaceProject = useCallback(
-    (input: { name?: string; features?: Record<string, boolean> }) =>
+    (input: {
+      name?: string;
+      features?: Record<string, boolean>;
+      retention?: WorkspaceRetentionSettings;
+    }) =>
       runWorkspaceConfigMutation(
         () => updateWorkspaceProject(input),
-        input.name ? `Project renamed to "${input.name}".` : "Project settings updated.",
+        input.name
+          ? `Project renamed to "${input.name}".`
+          : input.retention
+            ? "Retention settings updated."
+            : "Project settings updated.",
       ),
     [runWorkspaceConfigMutation],
   );

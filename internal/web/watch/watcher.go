@@ -212,8 +212,15 @@ func (w *Watcher) takeSnapshot() (Snapshot, error) {
 		if info.IsDir() && slicesContains(bruinpath.SkipDirs, info.Name()) {
 			return filepath.SkipDir
 		}
+		// Directory mtimes change alongside their children. Recording both makes
+		// firstChangedPath report the parent (for example `.renart`) and then
+		// discard the actual file change when the snapshot advances. Empty
+		// directories are not workspace state, so only track relevant files.
+		if info.IsDir() {
+			return nil
+		}
 
-		if !info.IsDir() && !IsRelevantPath(path) {
+		if !IsRelevantPath(path) {
 			return nil
 		}
 

@@ -87,8 +87,9 @@ interval-aware. `BackfillSafe` is the narrower union-safe contract used by the
 scheduler before enabling catch-up and returned with each asset's staleness
 status. The editor uses that same backend fact for its explicit Backfill range
 action; the execution endpoint requires a complete UTC range and revalidates the
-asset before dispatch. A daily River job prunes raw facts (default
-90 days); coverage is the durable summary.
+asset before dispatch. Startup/daily housekeeping prunes raw facts according
+to the tracked project retention policy (default 90 days); coverage is the
+durable summary and is never age-pruned.
 
 Immutable facts and coverage carry
 a secret-free `target_identity` plus a monotonic `target_generation`, and
@@ -185,10 +186,12 @@ continues to use only the persisted effective execution context. New manual
 run/spec/job/link admission is atomic. River-argument link and mode recovery is
 retained only for pre-upgrade jobs, and an unknown or structurally incompatible
 spec fails closed rather than falling back to legacy semantics. The spec's
-stable pipeline UUID is independently bound to the durable UUID run slot before
-execution and travels through scheduler execution into snapshot resolution. A
-pipeline path rename therefore cannot redirect a queued snapshot through a
-newly resolved identity.
+stable pipeline UUID is independently bound to durable admission state before
+execution: legacy/conservative runs use path plus UUID slot aliases, while
+resource-isolated reviewed runs bind the path and UUID in their claim set. The
+UUID travels through scheduler execution into snapshot resolution, so a
+pipeline path rename cannot redirect a queued snapshot through a newly resolved
+identity.
 Synchronous full-pipeline materialization now uses the same ledger with an
 `inline_streaming` dispatch. Its effective window, environment, modes, source,
 and server-authenticated API/CLI origin are admitted before Bruin starts;
@@ -336,7 +339,11 @@ The read-only pipeline planner consumes the same snapshot and
 `data_state_token`. `needed` selection includes every non-fresh/volatile asset
 in topological order and uses exact uncovered intervals for partial assets;
 asset-closure selection applies the same state to a selected asset and its
-requested dependency direction. Each planned asset records why it was included,
+requested dependency direction. Custom selector selection delegates expression
+resolution to Bruin and either includes every match or intersects those matches
+with the same Needed state. The normalized expression and final explicit units
+are retained together so later execution never reinterprets a reviewed selector.
+Each planned asset records why it was included,
 and each final asset/window becomes an explicit execution unit in the response.
 The token is part of the plan identity, so confirmation regenerates against the
 latest generation, coverage, claims, and ambiguity rather than trusting a UI
@@ -368,6 +375,8 @@ The endpoint's optional `upstream_of` selector narrows that same plan to one
 asset's transitive upstream closure. `renart run <asset> --refresh-upstreams`
 uses this selector in delegated mode (and the same planner directly in embedded
 mode), then starts the requested asset only if the upstream plan succeeds.
+The CLI also exposes `--selector` and `--selector-needed`; both preview the
+server-resolved matches before confirmation and persist their final units.
 
 ## 5. Snapshots and deploy (`internal/web/snapshot`, `renart deploy`)
 
@@ -397,16 +406,37 @@ remains `/api/snapshots/{versionId}/file`; status also reports whether the lates
 snapshot is executable so identical-but-corrupt content can be repaired by a
 new Deploy instead of dead-ending the UI.
 
+Snapshot housekeeping removes a version only after it is older than the
+configured window (default 90 days), outside the newest-per-pipeline floor
+(default 20), and is neither that pipeline's latest version nor referenced by
+a schedule, retained run, or pending completion envelope. Blob deletion runs
+in the same transaction and removes only hashes absent from every remaining
+manifest. This makes a zero snapshot floor safe while keeping current and
+in-flight execution reproducible.
+
 ## 6. Per-environment schedules (`renart_schedules`, `/api/env-schedules`)
 
 Schedule identity is `(pipeline UUID, environment)` — no implicit default env.
-Each row carries the pinned snapshot version, cron, env-specific vars, a
-catch-up policy (`skip | run_once | backfill`), and a status
+Desired state for new and edited schedules is the version-controlled
+`.renart/schedules.yml`, keyed by that stable identity. It contains cron,
+timezone, catch-up policy, pause state, ordinary variable overrides, and
+`env:NAME` secret references. It deliberately contains no deployment version,
+watermark, run history, or next-run timestamp. Existing SQLite-only schedules
+remain visible as local legacy rows rather than being copied into Git without
+an explicit user edit.
+
+The corresponding SQLite row carries the machine's pinned snapshot version,
+runtime copy of the declaration, a catch-up policy
+(`skip | run_once | backfill`), and a status
 (`active | paused | archived | delegated` — `delegated` is reserved for cloud).
-The reconciler diffs over the compound key: file deleted / branch switched →
-`archived` tombstone (reason `missing`) with the River handle removed; the
-pipeline reappearing reactivates reconciler tombstones but **not** explicit
-user deletions (reason `user`), which stay archived until restored in the UI.
+The declaration reconciler preserves an existing local pin across file edits.
+A declaration with no local pin is paused and shown as needing deployment; a
+pin is never inferred from Git. Removing a declaration creates an `archived`
+tombstone (`declaration_missing`) while retaining its pin and history, and
+re-adding the same stable key restores it while the tombstone remains inside
+the configured schedule-history window. Pipeline deletion/branch switching
+uses the separate `missing` tombstone and also restores when the UUID
+reappears. Explicit legacy-row deletion (`user`) does not auto-restore.
 River `ByArgs` uniqueness suppresses a duplicate `(pipeline UUID, environment,
 interval)` signal while the first job is active. The authoritative identity is
 also retained in `schedule_occurrences`: a SHA-256 key binds the stable schedule
@@ -414,8 +444,9 @@ identity to its normalized half-open interval, and a durable unique constraint
 prevents a second active or already-successful execution after River forgets a
 terminal job. Failed/cancelled intervals can be retried under the same
 occurrence with numbered run attempts. Occurrence/attempt claim, run, RunSpec,
-retained plan/units, pipeline-global path plus stable-UUID slot aliases, and a
-run-ID-only River execution job/link commit in one SQLite transaction. The v2
+retained plan/units, resource-aware admission claims, and a run-ID-only River
+execution job/link commit in one SQLite transaction. Conservative plans retain
+the pipeline-global path plus stable-UUID slot aliases. The v2
 periodic/catch-up job is only a due signal containing the captured schedule
 revision and interval; physical execution reconstructs behavior exclusively
 from the stored RunSpec. A slot conflict rolls the attempted admission
@@ -432,8 +463,11 @@ Only the process holding `.renart/scheduler.lock` may change rows or enqueue
 runs. `GET /api/env-schedules` reports `owner`, `follower`, or `unavailable`;
 mutations through a follower return `409 scheduler_not_owner` before any
 deployment, `pipeline.yml`, or schedule-store write. Followers remain
-read-only—automatic takeover and cross-process handoff still belong to the
-separate scheduler-coordination workstream.
+read-only. In the supported topology the canonical workspace-server lease
+rejects a second long-lived runtime before it opens `state.db`, so the current
+process is expected to be the scheduler owner. Follower mode remains a
+fail-closed compatibility safeguard, not a hot standby; automatic takeover and
+cross-process handoff are intentionally not implemented.
 
 The schedules UI compares each row's pinned snapshot with the pipeline's latest
 deployed version. A differing pin is shown as **Older deployment**, independently
@@ -460,10 +494,17 @@ exact pinned deployment on create/update, resume, promotion, and reconciliation.
 They are applied before assets are constructed in planning, rendering, and
 execution, so rendered SQL, target/fingerprint evidence, and recorded variable
 hashes share one effective value set. Each actual tick retains an immutable,
-stage-content-free plan for its real interval and admission timestamp; values
-are private RunSpec inputs while plan/run/schedule responses carry only sorted
-names, provenance, and digests. A blocked scheduled plan is persisted as a
-failed auditable run and cannot become executable after worker recovery.
+stage-content-free plan for its real interval and admission timestamp. Literal
+values are private RunSpec inputs. Secret-backed values are resolved from the
+server process only for validation, planning, and execution: declarations,
+River signals, retained RunSpecs, schedule responses, and SSE carry only the
+`env:NAME` reference or sorted variable name, never the resolved value. A
+worker re-resolves references and requires them to reproduce the retained plan
+identity before physical execution; rotation between admission and execution
+therefore fails closed instead of silently running a different configuration.
+Exact re-execution applies the same check. A blocked scheduled plan is
+persisted as a failed auditable run and cannot become executable after worker
+recovery.
 
 Existing database rows from the former pinless contract are migrated once:
 each non-archived row is pinned to that pipeline's then-latest deployment, or
@@ -497,21 +538,87 @@ automatically mislabeled as destructive. Locally these are guardrails, not a
 boundary (the user owns the credentials); the cloud permission model enforces
 the same flags harder, under the same names.
 
-## 8. Deferred and known-accepted
+## 8. Local retention and garbage collection
 
-- Scheduler followers are intentionally read-only. Heartbeat/fencing,
+`.renart/project.yml` may declare `retention`; an absent section uses these
+defaults:
+
+- run metadata: 180 days and at least 100 runs per stable pipeline identity;
+- full run logs: 30 days and at least 25 logged runs per pipeline;
+- raw materialization facts: 90 days;
+- completed schedule occurrences and archived tombstones: 180 days;
+- unreferenced deployments: 90 days and at least 20 per pipeline;
+- abandoned Renart temporary directories: 24 hours.
+
+River runs housekeeping on scheduler startup and daily. Logs and run metadata
+expire independently. Terminal runs are eligible only after their age and
+count floor; queued/running work, recovery-pending rows, live River jobs, and
+runs named by the completion outbox are excluded structurally. Removing run
+metadata cascades its private RunSpec, reviewed plan, units, steps, logs, and
+schedule-attempt link, and removes a matching latest-attempt UI projection.
+Coverage and latest-writer rows remain because they are correctness evidence,
+not history cache.
+
+Completed occurrences and archived schedule tombstones use the independent
+schedule-history cutoff. Removing an old tombstone releases its old pin before
+snapshot GC, while active, paused, and recent archived pins remain protected.
+Temporary cleanup examines only known `renart-*` directory prefixes directly
+below the OS temp root, rejects symlinks and other users' entries, and removes
+only directories older than both the configured cutoff and the current server
+process. That last bound favors safety for unusually long-running work; a later
+Renart process collects any abandoned directory.
+
+## 9. Write-resource admission
+
+Version-two reviewed run plans bind a structured, secret-free mutation claim
+alongside the source, configuration, context, selection, and execution units.
+The same target resolver used by rendering and execution currently recognizes
+these concurrency-safe contracts:
+
+- a sensor without arbitrary hooks has no write claim;
+- an exact local output claims its canonical file;
+- an exact local file-backed DuckDB output claims the whole canonical database
+  file, not one relation, because one transaction/operator may touch several
+  relations;
+- arbitrary Python, any pre/post hooks, network warehouse relations, dynamic or
+  credential-derived routing, remote objects, and unsupported families retain
+  logical-pipeline isolation. Known exact local claims are still retained on a
+  conservative plan so another pipeline cannot write those same files.
+
+Exact claim keys are opaque versioned digests; plans and SQLite never expose a
+database or filesystem path. Atomic admission prevents two active runs from
+owning the same claim even when they belong to different logical pipelines.
+Distinct proven files/databases in one pipeline may run concurrently, and a
+proven no-write plan does not block a writer. Unreviewed, inline, and legacy
+plans keep the path/UUID slot, and that slot conflicts with active exact claims
+in the same pipeline. This preserves the old fail-closed behavior wherever a
+stable operator contract is unavailable.
+
+Immediately before the first step, execution-target snapshot v3 recomputes the
+resource set from the effective operator/configuration and compares it with
+both the immutable reviewed plan and the acquired SQLite claims. Drift fails
+before physical work. Terminalizing a run releases its slot/claim set through
+the same database transaction and trigger path. Planning's active-run warning
+uses the same conflict rules for guidance; admission remains authoritative
+against races after review.
+
+## 10. Deferred and known-accepted
+
+- The single-workspace authority is enforced for long-lived runtimes, but CLI
+  handoff is not universal: `deploy`, `type-check`, and some debug paths still
+  run locally, stateful embedded commands skip the long-lived lease, and a
+  second server reports its owner rather than opening the existing URL. These
+  are delegation cleanup items, not a multi-process scheduler roadmap.
+- Scheduler followers are intentionally read-only defense. Heartbeat/fencing,
   automatic owner takeover, and cross-process schedule-mutation delivery are
   not implemented.
 - Pre-v2 River signal/run decoders and duplicated compatibility fields remain
   until jobs persisted by older binaries have drained.
-- Pipeline planning supports `all`, `needed`, and asset closure, not arbitrary
-  custom/Bruin selectors. Working-tree and deployment plans can each render
-  operations, but there is no dedicated side-by-side rendered-SQL diff; the
-  asset-level Render endpoint reads only saved working-tree source.
-- Configurable warning gates, connection-backed warehouse validation,
-  `run when needed`, resource-aware concurrency, and reliable breaking/non-
-  breaking impact categorization are not built. The current conservative slot
-  permits one pipeline-scope mutating run per logical pipeline.
+- Network relation claims remain deliberately disabled until each direct and
+  fallback operator proves it has no hidden shared staging state. Configurable
+  warning gates, connection-backed warehouse
+  validation, automatic builds, and reliable breaking/non-
+  breaking impact categorization are not built.
 - **Python fingerprint hardening** (Rust→wasm `renart-pyfp` on
   `ruff_python_parser`: comment/docstring-stripped hash, one-level import
   resolution, runtime-observed variables; the wasm binary's own hash feeds

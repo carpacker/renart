@@ -368,7 +368,7 @@ func (s *Store) createScheduleOccurrenceAttemptWithSpecAndPlan(
 	queries := s.queries.WithTx(tx)
 	runID, err := s.createRun(ctx, queries, run)
 	if err == nil {
-		err = s.claimRunSlot(ctx, tx, run, runID)
+		err = s.claimRunAdmission(ctx, tx, run, runID, &plan)
 	}
 	if err == nil {
 		err = s.insertRunSpec(ctx, tx, runID, spec)

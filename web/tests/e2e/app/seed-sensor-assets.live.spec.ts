@@ -123,7 +123,8 @@ test.describe("seed and sensor assets live", () => {
       }
     });
     const seedRenderResponse = page.waitForResponse(
-      (response) => response.url().includes(`/api/assets/${seedAssetId}/render`) && response.ok(),
+      (response) =>
+        response.url().includes(`/api/pipelines/${pipelineId}/assets/render`) && response.ok(),
       { timeout: 30000 },
     );
     await page.getByRole("button", { name: "Render saved asset", exact: true }).click();

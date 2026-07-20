@@ -310,6 +310,7 @@ func (s *webServer) registerRoutes(router chi.Router) {
 	webhttpapi.RegisterSQLLSPRoutes(router, &webhttpapi.SQLLSPAPI{Service: s.sqlLSPSvc})
 	webhttpapi.RegisterJinjaRenderRoutes(router, &webhttpapi.JinjaRenderAPI{Service: s.jinjaRenderSvc})
 	webhttpapi.RegisterAssetRenderRoutes(router, &webhttpapi.AssetRenderAPI{Service: s.assetRenderSvc})
+	webhttpapi.RegisterPipelineAssetRenderRoutes(router, &webhttpapi.PipelineAssetRenderAPI{Service: s.pipelinePlanSvc})
 	webhttpapi.RegisterPipelinePlanRoutes(router, &webhttpapi.PipelinePlanAPI{Service: s.pipelinePlanSvc, Runs: s})
 	webhttpapi.RegisterRunRoutes(router, &webhttpapi.RunAPI{Service: s.runSvc})
 	webhttpapi.RegisterNotebookRoutes(router, &webhttpapi.NotebookAPI{Service: s.notebookSvc})
@@ -578,10 +579,11 @@ func envScheduleTriggerRequest(row webscheduler.EnvSchedule) (webscheduler.Trigg
 		return webscheduler.TriggerRequest{}, fmt.Errorf("delegated schedules cannot run in this Renart server")
 	}
 	return webscheduler.TriggerRequest{
-		Environment:       row.Environment,
-		Source:            webscheduler.RunSourceSnapshot,
-		SnapshotVersionID: row.SnapshotVersionID,
-		VariableOverrides: row.Vars,
+		Environment:        row.Environment,
+		Source:             webscheduler.RunSourceSnapshot,
+		SnapshotVersionID:  row.SnapshotVersionID,
+		VariableOverrides:  row.Vars,
+		VariableReferences: row.SecretRefs,
 	}, nil
 }
 
@@ -1000,6 +1002,23 @@ func (s *webServer) isWatcherSuppressed(eventPath string) bool {
 
 func (s *webServer) pushWorkspaceUpdate(ctx context.Context, eventType, eventPath string) {
 	s.workspaceCoord.PushUpdate(ctx, eventType, eventPath)
+	if s.schedulerSvc != nil && scheduleDeclarationRelevantPath(eventPath) {
+		go func() {
+			if err := s.schedulerSvc.Reconcile(context.Background()); err != nil && s.logger != nil {
+				s.logger.Warn("scheduler reconcile after workspace change failed",
+					zap.String("path", filepath.ToSlash(eventPath)), zap.Error(err))
+			}
+		}()
+	}
+}
+
+func scheduleDeclarationRelevantPath(eventPath string) bool {
+	normalized := strings.TrimPrefix(filepath.ToSlash(strings.TrimSpace(eventPath)), "./")
+	if normalized == "" || normalized == "." || normalized == ".renart/schedules.yml" {
+		return true
+	}
+	base := filepath.Base(normalized)
+	return base == "pipeline.yml" || base == "pipeline.yaml"
 }
 
 // pushWorkspaceUpdateImmediate publishes immediately (bypasses debounce).

@@ -1,0 +1,50 @@
+---
+title: Alpha status
+description: What Renart's public alpha includes and what to expect while evaluating it.
+---
+
+Renart is in public alpha. The main workflow is available today, but the
+product is still changing quickly and may have rough edges. This label sets
+expectations; it does not describe unfinished features as if they already
+worked.
+
+## Available today
+
+- The [pipeline canvas](/docs/workspace/pipeline-canvas/) shows assets,
+  dependencies, lineage, and freshness.
+- The [asset editor](/docs/editing-assets/asset-editor/) provides
+  pipeline-aware SQL completion and type-checking, Inspect previews, and
+  materialization.
+- [Notebooks](/docs/notebooks/overview/) support exploratory SQL and Python
+  work alongside the pipeline.
+- Reviewed runs, rendered operations, logs, and durable
+  [run history](/docs/workspace/runs-and-history/) are available in the IDE.
+- Per-environment [schedules](/docs/scheduling/overview/) run deployed pipeline
+  snapshots and record their results locally.
+
+## What public alpha means
+
+The UI, CLI, and local operational state may change between alpha releases.
+Some connectors and less common asset configurations have received less real-
+world use than the core DuckDB workflow. Keep pipeline changes in Git, review
+the generated diffs, and try Renart against non-critical data before adopting
+it for important workloads.
+
+:::caution[Before relying on schedules]
+Renart's scheduler runs on your machine. The Renart process and that machine
+must remain running for scheduled work to start. Evaluate this setup before
+using it for critical production scheduling.
+:::
+
+## Feedback
+
+Please report reproducible problems and confusing workflows on
+[GitHub](https://github.com/renart-data/renart/issues). Include your Renart
+version, operating system, warehouse, and the smallest example that reproduces
+the issue when possible.
+
+## Related
+
+- [Installation](/docs/installation/)
+- [Quickstart](/docs/quickstart/)
+- [How Renart works](/docs/how-it-works/)

@@ -186,11 +186,18 @@ func publicEnvSchedules(schedules []scheduler.EnvSchedule) []scheduler.EnvSchedu
 
 func publicEnvSchedule(schedule scheduler.EnvSchedule) scheduler.EnvSchedule {
 	result := schedule
-	result.VariableNames = make([]string, 0, len(schedule.Vars))
+	result.VariableNames = make([]string, 0, len(schedule.Vars)+len(schedule.SecretRefs))
 	for name := range schedule.Vars {
 		result.VariableNames = append(result.VariableNames, name)
 	}
+	result.SecretReferenceNames = make([]string, 0, len(schedule.SecretRefs))
+	for name := range schedule.SecretRefs {
+		result.VariableNames = append(result.VariableNames, name)
+		result.SecretReferenceNames = append(result.SecretReferenceNames, name)
+	}
 	sort.Strings(result.VariableNames)
+	sort.Strings(result.SecretReferenceNames)
 	result.Vars = nil
+	result.SecretRefs = nil
 	return result
 }

@@ -87,7 +87,11 @@ func (h *PipelinePlanAPI) HandleConfirmPipelinePlan(w http.ResponseWriter, r *ht
 		return
 	}
 	selectionMode := strings.TrimSpace(req.Plan.Selection.Mode)
-	if selectionMode != service.PipelinePlanSelectionAll && selectionMode != service.PipelinePlanSelectionNeeded && selectionMode != service.PipelinePlanSelectionAsset {
+	if selectionMode != service.PipelinePlanSelectionAll &&
+		selectionMode != service.PipelinePlanSelectionNeeded &&
+		selectionMode != service.PipelinePlanSelectionAsset &&
+		selectionMode != service.PipelinePlanSelectionSelector &&
+		selectionMode != service.PipelinePlanSelectionSelectorNeeded {
 		webapi.WriteBadRequest(w, "plan_selection_not_confirmable", "the selected pipeline plan mode cannot be confirmed")
 		return
 	}
@@ -193,15 +197,26 @@ func durablePipelineRunPlan(plan service.PipelinePlan, preview *scheduler.Pipeli
 			RenderIndex: unit.RenderIndex, Reason: unit.Reason,
 		})
 	}
+	claims := make([]scheduler.PipelineRunResourceClaim, 0, len(plan.Resources.Claims))
+	for _, claim := range plan.Resources.Claims {
+		claims = append(claims, scheduler.PipelineRunResourceClaim{
+			Kind: claim.Kind, Identity: claim.Identity,
+		})
+	}
 	return &scheduler.PipelineRunPlan{
-		Version: scheduler.PipelineRunPlanVersionV1,
+		Version: scheduler.PipelineRunPlanVersionV2,
 		PlanID:  plan.ID, PipelineID: plan.PipelineID, PipelineUUID: plan.PipelineUUID,
 		SourceMerkle:        plan.Source.MerkleRoot,
 		ConfigurationDigest: plan.Context.ConfigurationDigest,
 		ExecutionTime:       plan.Context.ExecutionTime,
 		Selection: scheduler.PipelineRunPlanSelection{
 			Mode: plan.Selection.Mode, AssetName: plan.Selection.AssetName,
-			Scope: plan.Selection.Scope, DataStateToken: plan.Selection.DataStateToken,
+			Scope: plan.Selection.Scope, Selector: plan.Selection.Selector,
+			DataStateToken: plan.Selection.DataStateToken,
+		},
+		Resources: scheduler.PipelineRunPlanResources{
+			Isolation: plan.Resources.Isolation,
+			Claims:    claims,
 		},
 		ExecutionUnits: units,
 		Preview:        preview,
@@ -215,7 +230,9 @@ func (h *PipelinePlanAPI) confirmNeededPlanShrink(
 	req service.PipelinePlanConfirmRequest,
 	current service.PipelinePlan,
 ) (*scheduler.PipelineRunPlanPreview, string) {
-	if strings.TrimSpace(req.Plan.Selection.Mode) != service.PipelinePlanSelectionNeeded || req.Reviewed == nil {
+	selectionMode := strings.TrimSpace(req.Plan.Selection.Mode)
+	if (selectionMode != service.PipelinePlanSelectionNeeded &&
+		selectionMode != service.PipelinePlanSelectionSelectorNeeded) || req.Reviewed == nil {
 		return nil, "stale"
 	}
 	reviewed := *req.Reviewed

@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"sort"
 	"strings"
 )
 
@@ -21,7 +22,9 @@ var (
 )
 
 func validateExecutionTargetSnapshot(snapshot ExecutionTargetSnapshot) error {
-	if snapshot.Version != ExecutionTargetSnapshotVersionV1 && snapshot.Version != ExecutionTargetSnapshotVersionV2 {
+	if snapshot.Version != ExecutionTargetSnapshotVersionV1 &&
+		snapshot.Version != ExecutionTargetSnapshotVersionV2 &&
+		snapshot.Version != ExecutionTargetSnapshotVersionV3 {
 		return fmt.Errorf("%w: unsupported version %d", ErrInvalidExecutionTargetSnapshot, snapshot.Version)
 	}
 	if snapshot.Version >= ExecutionTargetSnapshotVersionV2 {
@@ -104,6 +107,18 @@ func validateExecutionTargetSnapshot(snapshot ExecutionTargetSnapshot) error {
 				assetName,
 			)
 		}
+		if snapshot.Version < ExecutionTargetSnapshotVersionV3 {
+			if entry.WriteResourceKind != "" || entry.WriteResourceIdentity != "" || entry.WriteResourceFidelity != "" {
+				return fmt.Errorf(
+					"%w: entry %q cannot contain write-resource evidence before version %d",
+					ErrInvalidExecutionTargetSnapshot,
+					assetName,
+					ExecutionTargetSnapshotVersionV3,
+				)
+			}
+		} else if err := validateExecutionWriteResource(assetName, entry); err != nil {
+			return err
+		}
 		for field, value := range map[string]string{
 			"fingerprint":        entry.Fingerprint,
 			"own_content":        entry.OwnContent,
@@ -134,6 +149,144 @@ func validateExecutionTargetSnapshot(snapshot ExecutionTargetSnapshot) error {
 				}
 			}
 		}
+	}
+	return nil
+}
+
+func validateExecutionWriteResource(assetName string, entry ExecutionTargetSnapshotEntry) error {
+	kind := strings.TrimSpace(entry.WriteResourceKind)
+	identity := strings.TrimSpace(entry.WriteResourceIdentity)
+	fidelity := strings.TrimSpace(entry.WriteResourceFidelity)
+	if kind != entry.WriteResourceKind || identity != entry.WriteResourceIdentity || fidelity != entry.WriteResourceFidelity {
+		return fmt.Errorf("%w: entry %q write resource must be canonical", ErrInvalidExecutionTargetSnapshot, assetName)
+	}
+	switch fidelity {
+	case ExecutionTargetFidelityExact:
+		switch kind {
+		case "none":
+			if identity != "" {
+				return fmt.Errorf("%w: entry %q no-write resource cannot claim an identity", ErrInvalidExecutionTargetSnapshot, assetName)
+			}
+		case PipelineRunResourceKindLocalFile, PipelineRunResourceKindDuckDBDatabase:
+			if err := validateRunIdentityDigest("write_resource_identity", identity); err != nil {
+				return fmt.Errorf("%w: entry %q: %v", ErrInvalidExecutionTargetSnapshot, assetName, err)
+			}
+		default:
+			return fmt.Errorf("%w: entry %q has unsupported exact write-resource kind %q", ErrInvalidExecutionTargetSnapshot, assetName, kind)
+		}
+	case ExecutionTargetFidelityRuntimeOnly:
+		if kind != "pipeline" || identity != "" {
+			return fmt.Errorf("%w: entry %q runtime write resource must be pipeline-scoped", ErrInvalidExecutionTargetSnapshot, assetName)
+		}
+	default:
+		return fmt.Errorf("%w: entry %q has unsupported write-resource fidelity %q", ErrInvalidExecutionTargetSnapshot, assetName, fidelity)
+	}
+	return nil
+}
+
+func executionTargetSnapshotResources(snapshot ExecutionTargetSnapshot) (PipelineRunPlanResources, error) {
+	if snapshot.Version < ExecutionTargetSnapshotVersionV3 {
+		return PipelineRunPlanResources{}, fmt.Errorf(
+			"%w: version %d has no write-resource evidence",
+			ErrInvalidExecutionTargetSnapshot,
+			snapshot.Version,
+		)
+	}
+	result := PipelineRunPlanResources{
+		Isolation: PipelineRunResourceIsolationResources,
+		Claims:    []PipelineRunResourceClaim{},
+	}
+	seen := make(map[string]struct{})
+	for _, entry := range snapshot.Entries {
+		if entry.WriteResourceFidelity == ExecutionTargetFidelityExact && entry.WriteResourceKind == "none" {
+			continue
+		}
+		if entry.WriteResourceFidelity != ExecutionTargetFidelityExact {
+			result.Isolation = PipelineRunResourceIsolationPipeline
+			continue
+		}
+		claim := PipelineRunResourceClaim{Kind: entry.WriteResourceKind, Identity: entry.WriteResourceIdentity}
+		key := claim.Kind + "\x00" + claim.Identity
+		if _, exists := seen[key]; exists {
+			continue
+		}
+		seen[key] = struct{}{}
+		result.Claims = append(result.Claims, claim)
+	}
+	sort.Slice(result.Claims, func(i, j int) bool {
+		if result.Claims[i].Kind == result.Claims[j].Kind {
+			return result.Claims[i].Identity < result.Claims[j].Identity
+		}
+		return result.Claims[i].Kind < result.Claims[j].Kind
+	})
+	return result, nil
+}
+
+func validateExecutionTargetResourceBinding(
+	ctx context.Context,
+	tx *sql.Tx,
+	runID string,
+	snapshot ExecutionTargetSnapshot,
+) error {
+	var version int
+	var body string
+	err := tx.QueryRowContext(ctx, `
+		SELECT version, body
+		FROM pipeline_run_plans
+		WHERE run_id = ?`, runID).Scan(&version, &body)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	plan, err := unmarshalPipelineRunPlan(version, []byte(body))
+	if err != nil {
+		return fmt.Errorf("load pipeline run plan for resource validation: %w", err)
+	}
+	if plan.Version < PipelineRunPlanVersionV2 {
+		return nil
+	}
+	actual, err := executionTargetSnapshotResources(snapshot)
+	if err != nil {
+		return err
+	}
+	if !equalPipelineRunPlanResources(actual, plan.Resources) {
+		return fmt.Errorf(
+			"%w: execution write resources do not match the reviewed plan",
+			ErrInvalidExecutionTargetSnapshot,
+		)
+	}
+
+	var isolation string
+	if err := tx.QueryRowContext(ctx, `
+		SELECT isolation
+		FROM pipeline_run_claim_sets
+		WHERE run_id = ?`, runID).Scan(&isolation); err != nil {
+		return fmt.Errorf("load admitted write-resource claims: %w", err)
+	}
+	persisted := PipelineRunPlanResources{Isolation: isolation, Claims: []PipelineRunResourceClaim{}}
+	rows, err := tx.QueryContext(ctx, `
+		SELECT kind, identity
+		FROM pipeline_run_resource_claims
+		WHERE run_id = ?
+		ORDER BY kind, identity`, runID)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var claim PipelineRunResourceClaim
+		if err := rows.Scan(&claim.Kind, &claim.Identity); err != nil {
+			return err
+		}
+		persisted.Claims = append(persisted.Claims, claim)
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	if !equalPipelineRunPlanResources(persisted, plan.Resources) {
+		return errors.New("admitted write-resource claims do not match the durable run plan")
 	}
 	return nil
 }
@@ -199,6 +352,9 @@ func (s *Store) SetRunExecutionTargetSnapshot(ctx context.Context, runID string,
 	if status != string(RunStatusQueued) && status != string(RunStatusRunning) {
 		return fmt.Errorf("pipeline run %s is already terminal", runID)
 	}
+	if err := validateExecutionTargetResourceBinding(ctx, tx, runID, snapshot); err != nil {
+		return err
+	}
 	if existing != "" {
 		persisted, err := unmarshalExecutionTargetSnapshot(existing)
 		if err != nil {
@@ -213,7 +369,6 @@ func (s *Store) SetRunExecutionTargetSnapshot(ctx context.Context, runID string,
 		}
 		return fmt.Errorf("%w for run %s", ErrExecutionTargetSnapshotConflict, runID)
 	}
-
 	result, err := tx.ExecContext(ctx, `
 		UPDATE pipeline_runs
 		SET execution_target_snapshot = ?

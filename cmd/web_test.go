@@ -24,17 +24,34 @@ func TestNormalizeTriggerEnvironmentBeforePolicyLookup(t *testing.T) {
 	assert.Equal(t, "dev", normalizeTriggerEnvironment("  ", "  dev  "))
 }
 
+func TestScheduleDeclarationRelevantPath(t *testing.T) {
+	t.Parallel()
+	for path, expected := range map[string]bool{
+		".renart/schedules.yml":          true,
+		"analytics/pipeline.yml":         true,
+		"analytics/pipeline.yaml":        true,
+		".":                              true,
+		"analytics/assets/orders.sql":    false,
+		".renart/environments.yml":       false,
+		"analytics/assets/metadata.yaml": false,
+	} {
+		assert.Equal(t, expected, scheduleDeclarationRelevantPath(path), path)
+	}
+}
+
 func TestEnvScheduleTriggerRequestKeepsPinnedSourceAndPrivateVariables(t *testing.T) {
 	t.Parallel()
 	req, err := envScheduleTriggerRequest(scheduler.EnvSchedule{
 		Environment: "prod", SnapshotVersionID: "deployment-id",
-		Vars: map[string]any{"region": "eu"}, Status: scheduler.ScheduleStatusPaused,
+		Vars: map[string]any{"region": "eu"}, SecretRefs: map[string]string{"token": "env:RENART_TOKEN"},
+		Status: scheduler.ScheduleStatusPaused,
 	})
 	require.NoError(t, err)
 	assert.Equal(t, "prod", req.Environment)
 	assert.Equal(t, scheduler.RunSourceSnapshot, req.Source)
 	assert.Equal(t, "deployment-id", req.SnapshotVersionID)
 	assert.Equal(t, map[string]any{"region": "eu"}, req.VariableOverrides)
+	assert.Equal(t, map[string]string{"token": "env:RENART_TOKEN"}, req.VariableReferences)
 	assert.Empty(t, req.Start)
 	assert.Empty(t, req.End)
 

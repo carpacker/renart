@@ -40,8 +40,11 @@ The rest of what you see in the UI maps to files the same way:
 - **Connections and environments** from Project settings live in the
   project config file at the workspace root.
 - **Notebooks** are folders of cell files.
-- Local state that shouldn't be shared — the scheduler database, deployed
-  snapshots — lives in `.renart/`, which is safe to gitignore.
+- Tracked Renart project settings and desired environment schedules live in
+  `.renart/project.yml` and `.renart/schedules.yml`.
+- Machine-local state that shouldn't be shared — the scheduler database,
+  deployment pins, deployed snapshots, and run history — lives in
+  `.renart/state.db`, which is safe to gitignore.
 
 ## Why it's built this way
 

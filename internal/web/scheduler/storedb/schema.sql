@@ -85,6 +85,42 @@ BEGIN
     DELETE FROM pipeline_run_slots WHERE run_id = NEW.id;
 END;
 
+-- Version-two reviewed plans use explicit write-resource claims. A row with
+-- resource isolation and no child claims is a proven no-write run.
+CREATE TABLE IF NOT EXISTS pipeline_run_claim_sets (
+    run_id TEXT PRIMARY KEY,
+    pipeline_id TEXT NOT NULL CHECK (pipeline_id <> ''),
+    pipeline_uuid TEXT NOT NULL CHECK (pipeline_uuid <> ''),
+    isolation TEXT NOT NULL
+        CHECK (isolation IN ('resources', 'pipeline')),
+    FOREIGN KEY(run_id) REFERENCES pipeline_runs(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_pipeline_run_claim_sets_pipeline
+    ON pipeline_run_claim_sets (pipeline_uuid, pipeline_id, isolation, run_id);
+
+CREATE TABLE IF NOT EXISTS pipeline_run_resource_claims (
+    claim_key TEXT PRIMARY KEY,
+    run_id TEXT NOT NULL,
+    kind TEXT NOT NULL
+        CHECK (kind IN ('local_file', 'duckdb_database')),
+    identity TEXT NOT NULL
+        CHECK (length(identity) = 64 AND identity = lower(identity)),
+    UNIQUE (run_id, kind, identity),
+    FOREIGN KEY(run_id) REFERENCES pipeline_run_claim_sets(run_id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_pipeline_run_resource_claims_run
+    ON pipeline_run_resource_claims (run_id, kind, identity);
+
+CREATE TRIGGER IF NOT EXISTS release_pipeline_run_resource_claims
+AFTER UPDATE OF status ON pipeline_runs
+WHEN OLD.status IN ('queued', 'running')
+ AND NEW.status NOT IN ('queued', 'running')
+BEGIN
+    DELETE FROM pipeline_run_claim_sets WHERE run_id = NEW.id;
+END;
+
 -- Durable identity for each actual due/catch-up interval. River's ByArgs
 -- uniqueness remains a useful active-signal guard, but is not the execution
 -- ledger and expires when a queue job becomes terminal.
@@ -317,4 +353,15 @@ CREATE TABLE IF NOT EXISTS renart_schedules (
     created_at          TEXT NOT NULL,
     updated_at          TEXT NOT NULL,
     PRIMARY KEY (pipeline_id, environment)
+);
+
+-- Existing schedules predate version-controlled declarations. Keeping the
+-- marker separate prevents an upgrade from copying unknown historical values
+-- into Git and lets rows be adopted one at a time.
+CREATE TABLE IF NOT EXISTS renart_schedule_declarations (
+    pipeline_id TEXT NOT NULL,
+    environment TEXT NOT NULL,
+    PRIMARY KEY (pipeline_id, environment),
+    FOREIGN KEY (pipeline_id, environment)
+        REFERENCES renart_schedules (pipeline_id, environment) ON DELETE CASCADE
 );

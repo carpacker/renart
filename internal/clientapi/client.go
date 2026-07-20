@@ -140,6 +140,15 @@ func (c *Client) RenderAsset(ctx context.Context, assetID string, request servic
 	return result, err
 }
 
+// RenderPipelineAsset previews an asset by stable pipeline identity and asset
+// name, allowing the server to resolve either the saved working tree or one
+// exact deployment without accepting a client-owned filesystem root.
+func (c *Client) RenderPipelineAsset(ctx context.Context, pipelineID string, request service.PipelineAssetRenderRequest) (service.AssetRenderResult, error) {
+	var result service.AssetRenderResult
+	err := c.postJSON(ctx, "/pipelines/"+url.PathEscape(pipelineID)+"/assets/render", request, &result)
+	return result, err
+}
+
 // PlanPipeline resolves a read-only execution plan through the same service
 // used by the Build review surface.
 func (c *Client) PlanPipeline(ctx context.Context, pipelineID string, request service.PipelinePlanRequest) (service.PipelinePlan, error) {

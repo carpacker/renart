@@ -246,16 +246,22 @@ Before approving a docs PR, confirm:
 Folded here from `plans/docs-alpha.md` and `plans/landing-page.md` when they
 shipped (July 2026; git history keeps the full plans).
 
-- **The alpha page set** is deliberately small: ~17 real pages instead of the
+- **The alpha page set** is deliberately small: ~18 real pages instead of the
   46-stub IA from the earlier rollout plan. Deleted stubs come back from git
   as their features stabilise, at the position the rollout IA assigned them.
   The sidebar in `docs/astro.config.mjs` is the authoritative list; every
   entry must be a real page (verification: `pnpm build` in `docs/` green, no
-  dead links, `grep -ri bruin docs/src` empty).
+  dead links, `grep -ri bruin docs/src` empty). The Introduction group includes
+  a concise **Alpha status** page that distinguishes shipped workflows from
+  release-stage caveats without becoming a roadmap.
 - **The landing page** (`docs/src/pages/index.astro`) tells one story —
   "the all-in-one, git-native data pipeline IDE" — as hero → logo marquee →
   four lifecycle rows (Build / Explore / Run / Trust) → bento (runs, catalog,
-  diffs, quality) → manifesto → principles → CTA.
+  diffs, quality) → manifesto → principles → CTA. While the product is in
+  public alpha, the page title/description, hero badge, visible expectation
+  note, and footer say so directly; the repository README carries the same
+  status. Alpha is a release-stage disclosure, not a substitute for describing
+  what currently works.
 - **Landing media** comes from `make landing-media` only (same staged acme
   demo as `make docs-media`, §5): hero at 1920×1080, lifecycle shots at
   1400×900, bento at 1200×675, the schedules-dialog shot at 1176×756; webp

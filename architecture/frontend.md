@@ -141,6 +141,11 @@ not underscore-flattened route hacks.
   stage's fidelity and redaction, gives each runtime quality check its own
   column/custom-check label and SQL tab when renderable, and always identifies
   the saved source, environment, interval, and `Preview — not executed` status.
+  For a working-tree preview, **Compare deployment** defaults to the latest
+  deployment and allows selecting an older snapshot. The server renders both
+  sources with one context and aligns semantic stages; Build presents the
+  selected operation in Monaco's side-by-side read-only diff editor with
+  explicit Deployment/Saved workspace labels and added/removed/changed status.
   Compact badges show the asset/DAG fingerprint and either the opaque exact
   physical-target identity or its runtime-only state; full target context stays
   in the badge title without exposing endpoint coordinates.
@@ -205,6 +210,11 @@ not underscore-flattened route hacks.
   [settings-pages.tsx](../web/components/app/settings-pages.tsx),
   [object-pages.tsx](../web/components/app/object-pages.tsx),
   [welcome-page.tsx](../web/components/app/welcome-page.tsx).
+  Project **General** settings expose the effective tracked retention policy
+  from `.renart/project.yml`: age windows for runs, logs, raw materialization
+  facts, schedule history, deployments, and abandoned temporary directories,
+  plus the per-pipeline run/log/deployment floors. Integer validation happens
+  in both the form and Go service; saving replaces the complete policy.
   Run details use semantic event badges, link current-workspace asset events
   back to the split Build view, and render timeline asset names in a dedicated
   wrapping column with tooltips so short duration bars never truncate identity.
@@ -224,19 +234,27 @@ not underscore-flattened route hacks.
   in the row's overflow menu. The displayed deployment identifies the exact pin
   used by the run; pinless rows show `Needs deployment`, and rows with stored
   variable overrides show an `Overrides` badge and value-free name tooltip.
-  Schedule creation accepts an optional JSON object, validates it against the
-  exact chosen deployment, and explicitly chooses an existing executable
-  deployment or reviews and deploys the saved workspace before pinning the
-  returned version. A due interval waiting for planning or the pipeline slot is
+  Each row identifies whether its definition comes from
+  `.renart/schedules.yml` or is a local legacy row. Schedule creation accepts
+  optional JSON objects for literal overrides and `env:NAME` secret references,
+  validates the resolved context against the exact chosen deployment, writes
+  desired state to the project file, and explicitly chooses an existing
+  executable deployment or reviews and deploys the saved workspace before
+  pinning the returned version locally. Declaration-removal tombstones explain
+  that the project file must be re-added instead of presenting a nonfunctional
+  Restore action. A due interval waiting for planning or the pipeline slot is
   exposed as `Run waiting`; after a failed/cancelled attempt it becomes `Retry
   waiting`. Its tooltip shows only the retained interval, and a dedicated
   `schedule.occurrence` SSE event refreshes the schedule response without
-  polling or exposing the private occurrence key. `Run pinned #N` calls the row-owned endpoint, so the browser
-  never has to resend private values. Standalone deployment never changes
+  polling or exposing the private occurrence key. `Run pinned #N` calls the
+  row-owned endpoint, so the browser never has to resend private values.
+  Standalone deployment never changes
   existing pins implicitly; explicit multi-schedule promotion is one
   compare-and-swap batch. The
-  page reports whether this server is the scheduler owner. Followers and
-  unavailable instances keep schedules and timelines readable but disable
+  page reports whether the scheduler is available. A supported workspace
+  runtime is its sole server and therefore its scheduler owner. The follower
+  state is a fail-closed compatibility safeguard, not a hot standby; follower
+  and unavailable instances keep schedules and timelines readable but disable
   creation, pin changes,
   pause/resume/archive/restore, and queued runs with an explanatory alert;
   ownership is unknown and therefore fail-closed while the request loads. Run

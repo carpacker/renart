@@ -2,6 +2,7 @@ package matlog_test
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -55,6 +56,8 @@ func TestRecorderUsesCapturedTargetsAndDurableLatestUpstreamWriter(t *testing.T)
 	}
 	snapshotEntries[upstream.Name] = withCapturedSemantics(snapshotEntries[upstream.Name], upstream)
 	snapshotEntries[downstream.Name] = withCapturedSemantics(snapshotEntries[downstream.Name], downstream)
+	snapshotEntries[upstream.Name] = withCapturedWriteResource(snapshotEntries[upstream.Name])
+	snapshotEntries[downstream.Name] = withCapturedWriteResource(snapshotEntries[downstream.Name])
 	// Mutate the live graph after capture. Version-two recording must never ask
 	// the resolver for this changed source or combine it with captured hashes.
 	downstream.Upstreams = []pipeline.Upstream{{Type: "asset", Value: "analytics.different_upstream"}}
@@ -66,7 +69,7 @@ func TestRecorderUsesCapturedTargetsAndDurableLatestUpstreamWriter(t *testing.T)
 	event := bus.RunCompleted{
 		RunID: "downstream-run", CompletionID: "downstream-run",
 		PipelineUUID: pl.LegacyID, Environment: "prod", CompletedAt: finished.Add(time.Minute),
-		ExecutionTargetSnapshotVersion: 2, ExecutionPipelineUUID: pl.LegacyID, ExecutionTargets: snapshotEntries,
+		ExecutionTargetSnapshotVersion: 3, ExecutionPipelineUUID: pl.LegacyID, ExecutionTargets: snapshotEntries,
 		Assets: []bus.AssetRun{{
 			AssetID: downstreamID, AssetName: downstream.Name, Status: "succeeded",
 			FinishedAt: &finished, CompletionOrdinal: 0, HasCompletionOrdinal: true,
@@ -425,6 +428,13 @@ func recorderTargetEntry(assetID, targetIdentity string, result fingerprint.Resu
 		Fingerprint: string(result.FP), OwnContent: string(result.OwnContent),
 		ConsumedVarsHash: result.ConsumedVarsHash, VarsHash: varsHash,
 	}
+}
+
+func withCapturedWriteResource(entry bus.ExecutionTargetSnapshotEntry) bus.ExecutionTargetSnapshotEntry {
+	entry.WriteResourceKind = "duckdb_database"
+	entry.WriteResourceIdentity = strings.Repeat("a", 64)
+	entry.WriteResourceFidelity = "exact"
+	return entry
 }
 
 func withCapturedSemantics(entry bus.ExecutionTargetSnapshotEntry, asset *pipeline.Asset) bus.ExecutionTargetSnapshotEntry {

@@ -1,5 +1,5 @@
 import { expect, type APIRequestContext } from "@playwright/test";
-import { appendFile, writeFile } from "node:fs/promises";
+import { appendFile, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
 import { liveTest as test, type LiveApp } from "../live-app-fixture";
@@ -7,6 +7,7 @@ import { liveTest as test, type LiveApp } from "../live-app-fixture";
 type ScheduleResponse = {
   status: "ok" | "error";
   schedules: Array<{ pipeline_id: string; pipeline_name: string }>;
+  archived?: Array<{ environment: string; archived_reason?: string }>;
 };
 
 type TriggerResponse = {
@@ -172,6 +173,12 @@ test.describe("app scheduler pages live", () => {
     expect(pinnedVersion).toBeTruthy();
     expect(pinBody.schedule.variable_names).toEqual(["region"]);
     expect(JSON.stringify(pinBody)).not.toContain("private-schedule-value");
+    const declaration = await readFile(join(liveApp.workspaceDir, ".renart/schedules.yml"), "utf8");
+    expect(declaration).toContain("version: 1");
+    expect(declaration).toContain("cron:");
+    expect(declaration).toContain("0 0 * * *");
+    expect(declaration).not.toContain("snapshot_version_id");
+    expect(declaration).not.toContain(pinnedVersion);
 
     await appendFile(
       join(liveApp.workspaceDir, "analytics/assets/analytics/orders.sql"),
@@ -259,6 +266,20 @@ test.describe("app scheduler pages live", () => {
       )
       .toBe(latestVersion);
     await expect(olderBadge).toBeHidden({ timeout: 15000 });
+
+    await rm(join(liveApp.workspaceDir, ".renart/schedules.yml"));
+    await expect
+      .poll(
+        async () => {
+          const response = await request.get(`${liveApp.baseURL}/api/env-schedules`);
+          if (!response.ok()) return "";
+          const body = (await response.json()) as ScheduleResponse;
+          return body.archived?.find((schedule) => schedule.environment === "default")
+            ?.archived_reason;
+        },
+        { timeout: 15000 },
+      )
+      .toBe("declaration_missing");
   });
 
   test("blocks a corrupt latest pin and offers repair", async ({ liveApp, page, request }) => {

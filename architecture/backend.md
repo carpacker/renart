@@ -48,15 +48,16 @@ is pointed directly at the owning service.
 
 ## 2. Runtime model
 
-The **filesystem is the source of truth**. One server process serves one
-workspace root (positional CLI argument). A watcher (`internal/web/watch`)
-triggers full workspace re-parses through the `WorkspaceCoordinator`; the
-resulting state is pushed to all clients over a single SSE endpoint
-(`/api/events`). The hub (`internal/web/events`) uses buffered per-client
-channels with non-blocking drop-on-slow sends, debounce-with-coalescing for
-watcher noise, and `PublishImmediate` for handler-triggered events.
-Self-write suppression (a short window in `WorkspaceCoordinator`) prevents
-the server's own file writes from echoing back as change events.
+The **filesystem is the source of truth**. Each project runtime serves one
+workspace root; one process can host several such runtimes. A watcher
+(`internal/web/watch`) triggers full workspace re-parses through the
+`WorkspaceCoordinator`; the resulting state is pushed to all clients over a
+single SSE endpoint (`/api/events`). The hub (`internal/web/events`) uses
+buffered per-client channels with non-blocking drop-on-slow sends,
+debounce-with-coalescing for watcher noise, and `PublishImmediate` for
+handler-triggered events. Self-write suppression (a short window in
+`WorkspaceCoordinator`) prevents the server's own file writes from echoing
+back as change events.
 
 Concurrent file writes are serialized by a per-file lock in the asset write
 path (fast successive edits used to race read-modify-write cycles and drop
@@ -82,6 +83,13 @@ releases both leases on graceful close or process exit; persistent unlocked
 files are inert. Embedded CLI execution does not take this long-lived-server
 lease.
 
+This exclusivity is the supported product topology, not a precursor to leader
+election. A workspace has one long-lived authority for its state database,
+watcher, SSE hub, River client, and scheduler registrations. The scheduler's
+`follower` state remains a fail-closed compatibility safeguard for old or
+misconfigured processes; Renart does not provide heartbeat takeover,
+cross-process schedule mutation, or hot standby for one workspace.
+
 At startup, Renart adds its state database, discovery file, and compatibility
 locks to the repository-local `.git/info/exclude` rather than modifying the
 user's tracked `.gitignore`. Source-control status also hides only untracked
@@ -105,6 +113,11 @@ surfaces the UI hides by default — `/api/config` filters ingestr source
 connection types out unless the flag is set, and the frontend
 (`web/lib/features.ts`) additionally shows them when the workspace already
 contains ingestr assets.
+The same tracked project file carries the local history-retention policy.
+`/api/config` always returns its effective values, using conservative defaults
+when the block is absent, and Project settings writes the complete validated
+policy back as a reviewable Git diff. Invalid explicit retention values stop
+startup instead of allowing a destructive housekeeping guess.
 
 **CLI ↔ server (delegate-or-embed).** Pipeline commands resolve their
 workspace git-style (walk up to `.bruin.yml` → `.renart` → repo root;
@@ -121,14 +134,27 @@ comparing symlink-resolved roots), and authenticates with the token
 `--local` forces in-process behavior). A delegated run streams the same
 materialize SSE endpoints the UI uses, so one process owns all SQLite writes
 and the UI's staleness/run history updates live. A delegated render calls the
-same read-only asset-render endpoint as the Build editor, while a delegated plan
-calls the same pipeline-plan endpoint as the review sheet. Without a live server,
-`renart render` invokes the shared read-only service directly; it does not boot
-a server, scheduler, or state database. `renart plan` boots the same headless
-service graph needed for local staleness/deployment state, but never starts
-River or executes an asset. DuckDB access
+same read-only pipeline-owned asset-render endpoint as the Build editor when a
+deployment source is requested; ordinary working-tree rendering retains the
+asset-ID convenience endpoint so incomplete saved definitions can still be
+addressed by path. A delegated plan calls the same pipeline-plan endpoint as
+the review sheet. Without a live server, working-tree `renart render` invokes
+the shared read-only service directly and does not open scheduler state;
+deployment rendering and `renart plan` boot the same headless service graph
+needed for local snapshot/staleness state, but never start River or execute an
+asset. DuckDB access
 is additionally serialized per canonical database file as described in §4,
 because one server can run multiple pipelines and child processes concurrently.
+
+`renart ls` also prefers the server's parsed workspace. The handoff is not yet
+universal: `deploy` opens the state store directly, `type-check` and some debug
+commands still run locally, stateful embedded commands skip the long-lived
+workspace lease, and `--local` can bypass discovery. A second `web` or
+`standalone` launch currently exits with owner details rather than opening the
+existing server. These are bounded single-authority handoff gaps, tracked in
+`plans/pipeline-readiness-and-rendering.md`; they are not a supported
+multi-server mode.
+
 For an asset target, `--refresh-upstreams` first invokes the server-side stale
 planner narrowed to that asset's transitive upstream closure; only non-fresh
 upstreams run, with their configured strategies, and a failed refresh prevents
@@ -164,11 +190,15 @@ cache rather than embedded in the executable.
 
 ## 3. Persistence
 
-All durable state lives in SQLite at `.renart/state.db` inside the workspace
-(WAL mode, `busy_timeout=5000`), shared between River's job tables and
-renart's own `renart_*` tables, migrated by a goose runner. Renart-specific
-per-environment policy lives in `.renart/environments.yml`; everything else
-users author is plain Bruin files (`.bruin.yml`, `pipeline.yml`, asset files).
+Runtime state lives in SQLite at `.renart/state.db` inside the workspace (WAL
+mode, `busy_timeout=5000`), shared between River's job tables and Renart's own
+`renart_*` tables, migrated by a goose runner. Renart-specific project files
+include per-environment policy in `.renart/environments.yml` and desired
+per-environment schedules in `.renart/schedules.yml`; ordinary pipeline source
+remains plain Bruin files (`.bruin.yml`, `pipeline.yml`, asset files). Schedule
+deployment pins, watermarks, occurrence/run history, and derived next-run times
+are machine-local SQLite state and never enter the version-controlled schedule
+declaration.
 Runtime lock/discovery files, including `.renart/execution.lock`, are excluded
 from Git by the source-control service. Its diff endpoint resolves the same
 HEAD/index/worktree pairs used for staging and returns both the unified patch
@@ -219,15 +249,20 @@ resolution failures fail the run rather than falling back to the working tree
 Pipeline planning is read-only at `POST /api/pipelines/{id}/plan` and through
 `renart plan`. It resolves an explicit saved-working-tree or deployment source,
 environment, interval, execution timestamp, sensor/full-refresh/backfill mode,
-and one of `all`, `needed`, or asset-closure selection. The planner combines the
+and one of `all`, `needed`, asset-closure, all selector matches, or needed
+selector matches. Custom expressions are resolved by Bruin's selector engine;
+Renart intersects the result with its own Needed state only for the explicit
+needed-matches mode. The planner combines the
 current code-check report, target-aware staleness and exact uncovered gaps,
 topological order, one asset-by-window execution-unit list, render stages, and
 structured blockers/warnings. Stage metadata is always returned; large
 redacted content blobs are omitted by default and can be requested lazily
 without changing the plan identity. The plan ID binds its source Merkle root,
 selected-configuration and variable identities, data-state token, context,
-selection, and operation graph. Incomplete source remains visible through
-structured findings and honest fidelity rather than fabricated SQL.
+selection, structured write-resource claims, and operation graph. Local files
+and whole DuckDB database files can be exact; unproven operators remain
+pipeline-conservative. Incomplete source remains visible through structured
+findings and honest fidelity rather than fabricated SQL.
 
 The same endpoint accepts a distinct `deployment` purpose for reviewing the
 entire saved working tree before Deploy. That purpose is definition-only: it
@@ -238,8 +273,10 @@ advisory. Deployment-purpose requests require `working_tree` plus `all`, and
 the run-confirm endpoint rejects them; they cannot be reused as an execution
 policy bypass.
 
-`POST /api/pipelines/{id}/plan/confirm` admits `all`, `needed`, and asset-closure
-execution plans. The server regenerates the plan from the submitted canonical request at
+`POST /api/pipelines/{id}/plan/confirm` admits all supported execution
+selections, including custom selector matches. The normalized selector and its
+final explicit units are both retained in the durable plan. The server
+regenerates the plan from the submitted canonical request at
 the reviewed execution timestamp; rendered content supplied by the browser is
 never trusted. A changed source, configuration, context, or operation returns
 `409 plan_stale` with the replacement plan. Needed selection has one narrower
@@ -271,11 +308,16 @@ siblings. Pipeline-level YAML that cannot establish a pipeline remains a
 request error. Incomplete SQL findings likewise do not erase sibling renders;
 Python stays explicitly runtime-only where no safe static claim is available.
 
-Asset rendering is a separate read-only path at
-`POST /api/assets/{assetID}/render`. It always reads the saved working-tree
-asset identified by the route (never a request-supplied path or editor buffer),
-uses a server-owned preview run ID, strictly parses the environment/window/
-execution-time/full-refresh context, and never opens a warehouse connection.
+Asset rendering is a separate read-only path. The working-tree convenience
+route is `POST /api/assets/{assetID}/render`; it reads the saved asset identified
+by the route and is retained for path-addressable/incomplete definitions. The
+source-aware route is `POST /api/pipelines/{id}/assets/render`: it accepts an
+asset name plus only a server-owned source selector (`working_tree` or a
+snapshot version) and resolves both the pipeline root and asset path itself.
+It never accepts a request-supplied filesystem path or editor buffer. Snapshot
+source integrity and ownership are checked exactly as for planning. Both routes
+use a server-owned preview run ID, strictly parse the environment/window/
+execution-time/full-refresh context, and never open a warehouse connection.
 The response includes the same source Merkle identity Deploy computes, the
 canonical asset/DAG fingerprint, the full-variable coverage hash, the
 effective-variable digest with value-free, sorted variable provenance, and a
@@ -418,6 +460,13 @@ the canonical source manifest by streaming each file through the content hash;
 unlike Deploy, it never retains source blobs in memory, which keeps pipelines
 with large seed files bounded.
 
+`POST /api/pipelines/{id}/assets/render/compare` renders the saved working tree
+and an exact (or server-resolved latest) deployment with one identical resolved
+context. It aligns operations by semantic stage identity and occurrence rather
+than list position, classifies them as added/removed/changed/unchanged, and
+returns both redacted render results. The comparison therefore covers generated
+materialization/check/hook operations, not just the authored query text.
+
 Before either a pipeline or a single asset starts, the direct runner validates
 declared dependencies across the whole parsed pipeline. Non-URI dependencies
 must resolve to another asset; a missing edge produces the same
@@ -460,13 +509,14 @@ quickstart materialization all enter through this boundary. Dry-run/render/
 inspect do not take the lease.
 
 Successful physical work is handed to a durable SQLite completion outbox before
-the request returns. The outbox carries the version-two target/fingerprint
-snapshot, per-task upstream-writer read sets, terminal coordinates, and run
-context needed by materialization facts and staleness. Subscriber failure leaves
-the envelope pending for idempotent startup/housekeeping replay instead of
-turning a completed warehouse write into a false execution failure. Cancelled
-operators retain a cancelled terminal status through asset events, the
-materialization result, and scheduler finalization.
+the request returns. The outbox carries the version-three target/fingerprint and
+write-resource snapshot, per-task upstream-writer read sets, terminal
+coordinates, and run context needed by materialization facts and staleness.
+Version-two envelopes remain readable for rolling compatibility. Subscriber
+failure leaves the envelope pending for idempotent startup/housekeeping replay
+instead of turning a completed warehouse write into a false execution failure.
+Cancelled operators retain a cancelled terminal status through asset events,
+the materialization result, and scheduler finalization.
 
 The scheduler is built on River with the SQLite driver: `Store` owns
 persistence/migrations, `Service` owns orchestration (catch-up windows,
@@ -476,7 +526,10 @@ registration; startup acquires it before River workers start. The service
 exposes `owner`, `follower`, or `unavailable` ownership through the environment
 schedule API. Only an active owner may mutate schedules or queue runs; follower
 requests fail with `409 scheduler_not_owner` before deployment, workspace, or
-SQLite writes. Queued runs and inline mutations persist a private,
+SQLite writes. Under the supported topology, the earlier workspace lease means
+this runtime is the only current server able to reach the scheduler. `follower`
+is defense in depth, not an automatically promoted standby. Queued runs and
+inline mutations persist a private,
 validated, versioned `pipeline_run_specs` record outside public run DTOs and
 SSE. The spec is the immutable behavior contract; scheduler-backed rows replace
 their diagnostic context with effective values immediately before execution,

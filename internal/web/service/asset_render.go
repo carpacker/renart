@@ -137,8 +137,20 @@ type AssetRenderProvenance struct {
 // is deliberately empty unless Fidelity is exact. Object is presentation-only
 // and never contains connection endpoint coordinates or a DuckDB database path.
 type AssetRenderTarget struct {
+	Kind          string                   `json:"kind"`
+	Object        string                   `json:"object,omitempty"`
+	Identity      string                   `json:"identity,omitempty"`
+	Fidelity      AssetRenderFidelity      `json:"fidelity"`
+	Message       string                   `json:"message,omitempty"`
+	WriteResource AssetRenderWriteResource `json:"write_resource"`
+}
+
+// AssetRenderWriteResource is the exclusive mutation resource selected by the
+// same resolver as execution. Identity is an opaque secret-free digest. A
+// pipeline-scoped runtime-only claim deliberately prevents optimistic
+// destination isolation.
+type AssetRenderWriteResource struct {
 	Kind     string              `json:"kind"`
-	Object   string              `json:"object,omitempty"`
 	Identity string              `json:"identity,omitempty"`
 	Fidelity AssetRenderFidelity `json:"fidelity"`
 	Message  string              `json:"message,omitempty"`
@@ -196,6 +208,7 @@ type AssetRenderResult struct {
 // expose secret-free semantic or runtime-only operation descriptions.
 type AssetRenderService struct {
 	workspaceRoot      string
+	physicalTargetRoot string
 	fs                 afero.Fs
 	now                func() time.Time
 	collectManifest    assetRenderManifestCollector
@@ -213,6 +226,7 @@ type AssetRenderService struct {
 func NewAssetRenderService(workspaceRoot string) *AssetRenderService {
 	return &AssetRenderService{
 		workspaceRoot:      workspaceRoot,
+		physicalTargetRoot: workspaceRoot,
 		fs:                 afero.NewOsFs(),
 		now:                func() time.Time { return time.Now().UTC() },
 		collectManifest:    snapshot.CollectManifestHashes,
@@ -222,14 +236,18 @@ func NewAssetRenderService(workspaceRoot string) *AssetRenderService {
 }
 
 // newAssetRenderServiceForSource creates the exact-source renderer used by
-// pipeline planning. It remains package-private so HTTP asset rendering cannot
-// accept client-owned paths or source metadata.
+// pipeline planning. Source files may live in an isolated snapshot directory,
+// while physicalTargetRoot remains the real runtime workspace used to resolve
+// relative output paths. It remains package-private so HTTP asset rendering
+// cannot accept client-owned paths or source metadata.
 func newAssetRenderServiceForSource(
-	workspaceRoot string,
+	sourceRoot string,
+	physicalTargetRoot string,
 	configPath string,
 	source AssetRenderSource,
 ) *AssetRenderService {
-	service := NewAssetRenderService(workspaceRoot)
+	service := NewAssetRenderService(sourceRoot)
+	service.physicalTargetRoot = physicalTargetRoot
 	service.configPath = configPath
 	service.source = source
 	return service
@@ -287,11 +305,15 @@ func (s *AssetRenderService) RenderAsset(ctx context.Context, assetID string, re
 	if err == nil {
 		return result, nil
 	}
+	return AssetRenderResult{}, assetRenderAPIError(err)
+}
+
+func assetRenderAPIError(err error) *APIError {
 	if errors.Is(err, ErrAssetNotFound) {
-		return AssetRenderResult{}, &APIError{Status: 404, Code: "asset_not_found", Message: "asset was not found"}
+		return &APIError{Status: 404, Code: "asset_not_found", Message: "asset was not found"}
 	}
 	if errors.Is(err, ErrAssetRenderSourceChanged) {
-		return AssetRenderResult{}, &APIError{
+		return &APIError{
 			Status:  409,
 			Code:    "source_changed",
 			Message: "asset source changed while rendering; retry the preview",
@@ -299,7 +321,7 @@ func (s *AssetRenderService) RenderAsset(ctx context.Context, assetID string, re
 	}
 	var boundaryErr *assetRenderBoundaryError
 	if errors.As(err, &boundaryErr) {
-		return AssetRenderResult{}, &APIError{
+		return &APIError{
 			Status:  boundaryErr.status,
 			Code:    boundaryErr.code,
 			Message: boundaryErr.message,
@@ -309,7 +331,7 @@ func (s *AssetRenderService) RenderAsset(ctx context.Context, assetID string, re
 	// failures are classified at the point where they occur so they cannot be
 	// mistaken for a bad saved asset without turning incomplete authoring into a
 	// server fault.
-	return AssetRenderResult{}, &APIError{Status: 400, Code: "asset_render_failed", Message: "asset could not be rendered"}
+	return &APIError{Status: 400, Code: "asset_render_failed", Message: "asset could not be rendered"}
 }
 
 // RenderPath is the in-process/CLI entry point. HTTP handlers must use
@@ -566,7 +588,11 @@ func (s *AssetRenderService) renderPath(ctx context.Context, assetPath string, r
 	result.Provenance.Context.VariableProvenance = assetRenderVariableProvenanceWithOverrides(
 		pp.Pipeline, s.variableOverrides, s.variableOverrideSource,
 	)
-	result.Asset.Target = resolveAssetPhysicalTarget(s.workspaceRoot, pp)
+	targetRoot := s.physicalTargetRoot
+	if strings.TrimSpace(targetRoot) == "" {
+		targetRoot = s.workspaceRoot
+	}
+	result.Asset.Target = resolveAssetPhysicalTarget(targetRoot, pp)
 	if result.Asset.Target.Fidelity == AssetRenderFidelityRuntimeOnly {
 		result.Status = mergeAssetRenderStatus(result.Status, AssetRenderStatusPartial)
 	}

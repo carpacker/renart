@@ -19,6 +19,10 @@ const (
 	assetRenderTargetKindUnknown  = "unknown"
 	assetRenderTargetKindRelation = "relation"
 	assetRenderTargetKindFile     = "file"
+	assetWriteResourceNone        = "none"
+	assetWriteResourcePipeline    = "pipeline"
+	assetWriteResourceLocalFile   = "local_file"
+	assetWriteResourceDuckDB      = "duckdb_database"
 )
 
 // SelectedPhysicalTarget is the value-only physical output selected for an
@@ -80,7 +84,12 @@ func resolveAssetPhysicalTarget(workspaceRoot string, info *directPipelineInfo) 
 	// Sensors observe state but do not own a mutable output. This is exact even
 	// when their condition uses a warehouse connection.
 	if isSensorAssetType(asset.Type) {
-		return AssetRenderTarget{Kind: assetRenderTargetKindNone, Fidelity: AssetRenderFidelityExact}
+		return applyAssetWriteResourceSafety(asset, AssetRenderTarget{
+			Kind: assetRenderTargetKindNone, Fidelity: AssetRenderFidelityExact,
+			WriteResource: AssetRenderWriteResource{
+				Kind: assetWriteResourceNone, Fidelity: AssetRenderFidelityExact,
+			},
+		})
 	}
 
 	targetKind, displayObject := assetTargetIntent(asset, info.Pipeline)
@@ -104,7 +113,7 @@ func resolveAssetPhysicalTarget(workspaceRoot string, info *directPipelineInfo) 
 			return runtimeOnlyAssetTarget(targetKind, displayObject, "the Load target connection could not be resolved")
 		}
 		if isLocalLoadConnection(params.DestinationConnection) {
-			return resolveLocalFileAssetTarget(workspaceRoot, params.DestinationObject)
+			return applyAssetWriteResourceSafety(asset, resolveLocalFileAssetTarget(workspaceRoot, params.DestinationObject))
 		}
 	}
 
@@ -141,7 +150,22 @@ func resolveAssetPhysicalTarget(workspaceRoot string, info *directPipelineInfo) 
 	if !ok {
 		return runtimeOnlyAssetTarget(assetRenderTargetKindRelation, firstNonEmpty(object, strings.TrimSpace(asset.Name)), message)
 	}
-	return exactAssetTarget(assetRenderTargetKindRelation, object, coordinates)
+	return applyAssetWriteResourceSafety(asset, exactAssetTarget(assetRenderTargetKindRelation, object, coordinates))
+}
+
+func applyAssetWriteResourceSafety(asset *pipeline.Asset, target AssetRenderTarget) AssetRenderTarget {
+	if asset == nil {
+		return target
+	}
+	if asset.Type == pipeline.AssetTypePython {
+		target.WriteResource = conservativeAssetWriteResource("Python execution can mutate resources beyond its declared table output")
+		return target
+	}
+	if len(asset.Hooks.Pre) == 0 && len(asset.Hooks.Post) == 0 {
+		return target
+	}
+	target.WriteResource = conservativeAssetWriteResource("asset hooks can mutate resources beyond the declared output")
+	return target
 }
 
 func selectedTargetEnvironment(cfg *config.Config) *config.Environment {
@@ -179,20 +203,54 @@ func exactAssetTarget(kind, object string, coordinates runcontext.PhysicalTarget
 	if identity.Fidelity != runcontext.IdentityFidelityExact {
 		return runtimeOnlyAssetTarget(kind, object, identity.Message)
 	}
+	resource := conservativeAssetWriteResource("this operator does not yet have a proven isolated write-resource contract")
+	switch coordinates.Platform {
+	case "local_file":
+		resource = exactAssetWriteResource(assetWriteResourceLocalFile, coordinates.FilePath, "")
+	case "duckdb_file":
+		// DuckDB coordinates identify a relation for freshness, but every writer
+		// claims the whole canonical database file because operators and hooks can
+		// touch more than one relation inside it.
+		resource = exactAssetWriteResource(assetWriteResourceDuckDB, coordinates.FilePath, "")
+	}
 	return AssetRenderTarget{
-		Kind:     kind,
-		Object:   object,
-		Identity: identity.Digest,
-		Fidelity: AssetRenderFidelityExact,
+		Kind:          kind,
+		Object:        object,
+		Identity:      identity.Digest,
+		Fidelity:      AssetRenderFidelityExact,
+		WriteResource: resource,
 	}
 }
 
 func runtimeOnlyAssetTarget(kind, object, message string) AssetRenderTarget {
 	return AssetRenderTarget{
-		Kind:     kind,
-		Object:   object,
-		Fidelity: AssetRenderFidelityRuntimeOnly,
-		Message:  message,
+		Kind:          kind,
+		Object:        object,
+		Fidelity:      AssetRenderFidelityRuntimeOnly,
+		Message:       message,
+		WriteResource: conservativeAssetWriteResource(message),
+	}
+}
+
+func exactAssetWriteResource(kind, filePath, targetIdentity string) AssetRenderWriteResource {
+	identity := runcontext.WriteResourceIdentity(runcontext.WriteResourceCoordinates{
+		Kind: kind, FilePath: filePath, TargetIdentity: targetIdentity,
+	})
+	if identity.Fidelity != runcontext.IdentityFidelityExact || identity.Digest == "" {
+		return conservativeAssetWriteResource(identity.Message)
+	}
+	return AssetRenderWriteResource{
+		Kind: kind, Identity: identity.Digest, Fidelity: AssetRenderFidelityExact,
+	}
+}
+
+func conservativeAssetWriteResource(message string) AssetRenderWriteResource {
+	if strings.TrimSpace(message) == "" {
+		message = "the write resource is only available at runtime"
+	}
+	return AssetRenderWriteResource{
+		Kind: assetWriteResourcePipeline, Fidelity: AssetRenderFidelityRuntimeOnly,
+		Message: message,
 	}
 }
 

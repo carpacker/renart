@@ -48,6 +48,8 @@ type Service struct {
 	checkSnapshot             func(context.Context, string, string) error
 	validateSnapshot          func(context.Context, string, string) error
 	validateScheduleVariables func(context.Context, string, string, map[string]any) error
+	resolveScheduleSecrets    func(context.Context, map[string]string) (map[string]any, error)
+	declarations              *ScheduleDeclarationStore
 	planScheduledRun          func(context.Context, ScheduledRunPlanRequest) (ScheduledRunPlanResult, error)
 	validateReexecution       func(context.Context, RunReexecutionValidationRequest) error
 	snapshotOrdinal           func(context.Context, string) (int64, error)
@@ -94,6 +96,13 @@ type Options struct {
 	// ValidateScheduleVariables checks overrides against the declarations in
 	// the exact pinned snapshot without connecting to a destination.
 	ValidateScheduleVariables func(context.Context, string, string, map[string]any) error
+	// ResolveScheduleSecrets resolves stable declaration references just in
+	// time. Resolved values are used for planning/execution but are never
+	// persisted in declarations, River signals, or retained RunSpecs.
+	ResolveScheduleSecrets func(context.Context, map[string]string) (map[string]any, error)
+	// ScheduleDeclarations is the version-controlled desired-state store. Nil
+	// preserves the legacy local-only behavior for isolated tests/embedders.
+	ScheduleDeclarations *ScheduleDeclarationStore
 	// PlanScheduledRun produces the redacted immutable plan for an actual due
 	// interval. Admission persists it atomically with the RunSpec and run slot.
 	PlanScheduledRun func(context.Context, ScheduledRunPlanRequest) (ScheduledRunPlanResult, error)
@@ -116,15 +125,16 @@ type pipelineRunJobArgs struct {
 	// The remaining fields decode pre-v2 scheduled jobs that can survive an
 	// upgrade in River. New execution jobs carry RunID only; new due intervals
 	// use scheduleSignalJobArgs below.
-	PipelineUUID      string         `json:"pipeline_uuid,omitempty" river:"unique"`
-	Environment       string         `json:"environment,omitempty" river:"unique"`
-	Trigger           RunTrigger     `json:"trigger,omitempty"`
-	Schedule          string         `json:"schedule,omitempty"`
-	Timezone          string         `json:"timezone,omitempty"`
-	Start             string         `json:"start,omitempty" river:"unique"`
-	End               string         `json:"end,omitempty" river:"unique"`
-	SnapshotVersionID string         `json:"snapshot_version_id,omitempty"`
-	Variables         map[string]any `json:"variables,omitempty"`
+	PipelineUUID       string            `json:"pipeline_uuid,omitempty" river:"unique"`
+	Environment        string            `json:"environment,omitempty" river:"unique"`
+	Trigger            RunTrigger        `json:"trigger,omitempty"`
+	Schedule           string            `json:"schedule,omitempty"`
+	Timezone           string            `json:"timezone,omitempty"`
+	Start              string            `json:"start,omitempty" river:"unique"`
+	End                string            `json:"end,omitempty" river:"unique"`
+	SnapshotVersionID  string            `json:"snapshot_version_id,omitempty"`
+	Variables          map[string]any    `json:"variables,omitempty"`
+	VariableReferences map[string]string `json:"variable_references,omitempty"`
 	// These fields remain only for strict decoding of pre-RunSpec River jobs.
 	// New manual and scheduled execution jobs reconstruct behavior from RunID.
 	Backfill             bool   `json:"backfill,omitempty"`
@@ -143,31 +153,33 @@ func (pipelineRunJobArgs) Kind() string { return pipelineRunJobKind }
 // the physical execution contract; the resulting worker job carries only a
 // durable run ID.
 type scheduleSignalJobArgs struct {
-	PipelineUUID      string         `json:"pipeline_uuid" river:"unique"`
-	PipelineName      string         `json:"pipeline_name,omitempty"`
-	Environment       string         `json:"environment" river:"unique"`
-	Schedule          string         `json:"schedule,omitempty"`
-	Timezone          string         `json:"timezone,omitempty"`
-	Start             string         `json:"start" river:"unique"`
-	End               string         `json:"end" river:"unique"`
-	SnapshotVersionID string         `json:"snapshot_version_id"`
-	Variables         map[string]any `json:"variables,omitempty"`
+	PipelineUUID       string            `json:"pipeline_uuid" river:"unique"`
+	PipelineName       string            `json:"pipeline_name,omitempty"`
+	Environment        string            `json:"environment" river:"unique"`
+	Schedule           string            `json:"schedule,omitempty"`
+	Timezone           string            `json:"timezone,omitempty"`
+	Start              string            `json:"start" river:"unique"`
+	End                string            `json:"end" river:"unique"`
+	SnapshotVersionID  string            `json:"snapshot_version_id"`
+	Variables          map[string]any    `json:"variables,omitempty"`
+	VariableReferences map[string]string `json:"variable_references,omitempty"`
 }
 
 func (scheduleSignalJobArgs) Kind() string { return scheduleSignalJobKind }
 
 func (args scheduleSignalJobArgs) admissionArgs() pipelineRunJobArgs {
 	return pipelineRunJobArgs{
-		PipelineUUID:      args.PipelineUUID,
-		PipelineName:      args.PipelineName,
-		Environment:       args.Environment,
-		Trigger:           RunTriggerSchedule,
-		Schedule:          args.Schedule,
-		Timezone:          args.Timezone,
-		Start:             args.Start,
-		End:               args.End,
-		SnapshotVersionID: args.SnapshotVersionID,
-		Variables:         args.Variables,
+		PipelineUUID:       args.PipelineUUID,
+		PipelineName:       args.PipelineName,
+		Environment:        args.Environment,
+		Trigger:            RunTriggerSchedule,
+		Schedule:           args.Schedule,
+		Timezone:           args.Timezone,
+		Start:              args.Start,
+		End:                args.End,
+		SnapshotVersionID:  args.SnapshotVersionID,
+		Variables:          args.Variables,
+		VariableReferences: args.VariableReferences,
 	}
 }
 
@@ -327,6 +339,10 @@ func (s cronPeriodicSchedule) Next(current time.Time) time.Time {
 }
 
 func New(options Options) *Service {
+	resolveScheduleSecrets := options.ResolveScheduleSecrets
+	if resolveScheduleSecrets == nil {
+		resolveScheduleSecrets = resolveEnvironmentScheduleSecrets
+	}
 	return &Service{
 		store:                     options.Store,
 		runner:                    options.Runner,
@@ -342,6 +358,8 @@ func New(options Options) *Service {
 		checkSnapshot:             options.CheckSnapshot,
 		validateSnapshot:          options.ValidateSnapshot,
 		validateScheduleVariables: options.ValidateScheduleVariables,
+		resolveScheduleSecrets:    resolveScheduleSecrets,
+		declarations:              options.ScheduleDeclarations,
 		planScheduledRun:          options.PlanScheduledRun,
 		validateReexecution:       options.ValidateReexecution,
 		snapshotOrdinal:           options.SnapshotOrdinal,
@@ -595,6 +613,9 @@ func (s *Service) Reconcile(ctx context.Context) error {
 	if err := s.migrateLegacySchedules(ctx); err != nil {
 		return err
 	}
+	if err := s.reconcileScheduleDeclarations(ctx); err != nil {
+		return err
+	}
 
 	rows, err := s.store.ListEnvSchedules(ctx)
 	if err != nil {
@@ -667,9 +688,7 @@ func (s *Service) Reconcile(ctx context.Context) error {
 			}
 			continue
 		}
-		if variablesErr := s.validateScheduleVariableOverrides(
-			ctx, row.PipelineUUID, row.SnapshotVersionID, row.Vars,
-		); variablesErr != nil {
+		if variablesErr := s.validateEnvScheduleVariables(ctx, row); variablesErr != nil {
 			slog.Warn("pausing schedule with invalid variable overrides", "pipeline_uuid", row.PipelineUUID, "environment", row.Environment, "error", variablesErr)
 			if pauseErr := s.store.SetEnvScheduleStatus(ctx, row.PipelineUUID, row.Environment, ScheduleStatusPaused, ""); pauseErr != nil {
 				if fatalErr := logRowError(row, "pause invalid variables", pauseErr); fatalErr != nil {
@@ -707,13 +726,14 @@ func (s *Service) Reconcile(ctx context.Context) error {
 
 		jobs = append(jobs, river.NewPeriodicJob(cronPeriodicSchedule{schedule: schedule}, func() (river.JobArgs, *river.InsertOpts) {
 			args := scheduleSignalJobArgs{
-				PipelineUUID:      row.PipelineUUID,
-				PipelineName:      ref.Name,
-				Environment:       row.Environment,
-				Schedule:          row.Cron,
-				Timezone:          row.Timezone,
-				SnapshotVersionID: row.SnapshotVersionID,
-				Variables:         row.Vars,
+				PipelineUUID:       row.PipelineUUID,
+				PipelineName:       ref.Name,
+				Environment:        row.Environment,
+				Schedule:           row.Cron,
+				Timezone:           row.Timezone,
+				SnapshotVersionID:  row.SnapshotVersionID,
+				Variables:          row.Vars,
+				VariableReferences: row.SecretRefs,
 			}
 			if start, end, ok := previousScheduleInterval(schedule, time.Now().UTC()); ok {
 				args.Start = start.UTC().Format(time.RFC3339Nano)
@@ -894,15 +914,16 @@ func (s *Service) catchUp(ctx context.Context, client *river.Client[*sql.Tx], ro
 
 	insertCatchupJob := func(start, end time.Time) error {
 		args := scheduleSignalJobArgs{
-			PipelineUUID:      row.PipelineUUID,
-			PipelineName:      ref.Name,
-			Environment:       row.Environment,
-			Schedule:          row.Cron,
-			Timezone:          row.Timezone,
-			Start:             start.UTC().Format(time.RFC3339Nano),
-			End:               end.UTC().Format(time.RFC3339Nano),
-			SnapshotVersionID: row.SnapshotVersionID,
-			Variables:         row.Vars,
+			PipelineUUID:       row.PipelineUUID,
+			PipelineName:       ref.Name,
+			Environment:        row.Environment,
+			Schedule:           row.Cron,
+			Timezone:           row.Timezone,
+			Start:              start.UTC().Format(time.RFC3339Nano),
+			End:                end.UTC().Format(time.RFC3339Nano),
+			SnapshotVersionID:  row.SnapshotVersionID,
+			Variables:          row.Vars,
+			VariableReferences: row.SecretRefs,
 		}
 		_, err := client.Insert(ctx, args, scheduleSignalInsertOpts())
 		return err
@@ -1081,6 +1102,20 @@ func (s *Service) UpsertEnvSchedule(ctx context.Context, pipelineUUID string, re
 	if policy == CatchupBackfill && s.pipelineIntervalAware != nil && !s.pipelineIntervalAware(ctx, pipelineUUID) {
 		return EnvSchedule{}, errors.New("backfill catch-up requires interval-aware assets (incremental materialization)")
 	}
+	declaration := normalizeScheduleDeclaration(ScheduleDeclaration{
+		Cron:          cronExpr,
+		Timezone:      timezone,
+		CatchupPolicy: policy,
+		Paused:        req.Paused,
+		Variables:     cloneScheduleVariables(req.Vars),
+		SecretRefs:    cloneScheduleSecretRefs(req.SecretRefs),
+	})
+	if err := validateScheduleDeclaration(declaration); err != nil {
+		return EnvSchedule{}, err
+	}
+	if len(req.SecretRefs) > 0 && s.declarations == nil {
+		return EnvSchedule{}, errors.New("secret references require version-controlled schedule declarations")
+	}
 	if err := s.RequireOwner(); err != nil {
 		return EnvSchedule{}, err
 	}
@@ -1110,7 +1145,11 @@ func (s *Service) UpsertEnvSchedule(ctx context.Context, pipelineUUID string, re
 	if err := s.validateScheduleSnapshot(ctx, pipelineUUID, snapshotVersionID); err != nil {
 		return EnvSchedule{}, err
 	}
-	if err := s.validateScheduleVariableOverrides(ctx, pipelineUUID, snapshotVersionID, req.Vars); err != nil {
+	resolvedVariables, err := s.resolveScheduleVariables(ctx, req.Vars, req.SecretRefs)
+	if err != nil {
+		return EnvSchedule{}, err
+	}
+	if err := s.validateScheduleVariableOverrides(ctx, pipelineUUID, snapshotVersionID, resolvedVariables); err != nil {
 		return EnvSchedule{}, err
 	}
 
@@ -1119,17 +1158,24 @@ func (s *Service) UpsertEnvSchedule(ctx context.Context, pipelineUUID string, re
 		status = ScheduleStatusPaused
 	}
 	schedule := EnvSchedule{
-		PipelineUUID:      pipelineUUID,
-		Environment:       environment,
-		SnapshotVersionID: snapshotVersionID,
-		Cron:              cronExpr,
-		Timezone:          timezone,
-		Vars:              req.Vars,
-		CatchupPolicy:     policy,
-		Status:            status,
+		PipelineUUID:       pipelineUUID,
+		Environment:        environment,
+		SnapshotVersionID:  snapshotVersionID,
+		Cron:               cronExpr,
+		Timezone:           timezone,
+		Vars:               cloneScheduleVariables(req.Vars),
+		SecretRefs:         cloneScheduleSecretRefs(req.SecretRefs),
+		DeclarationManaged: s.declarations != nil,
+		CatchupPolicy:      policy,
+		Status:             status,
 	}
 	if found {
 		schedule.CreatedAt = existing.CreatedAt
+	}
+	if s.declarations != nil {
+		if err := s.declarations.Set(pipelineUUID, environment, declaration); err != nil {
+			return EnvSchedule{}, fmt.Errorf("write schedule declaration: %w", err)
+		}
 	}
 	if err := s.store.UpsertEnvSchedule(ctx, schedule); err != nil {
 		return EnvSchedule{}, err
@@ -1193,7 +1239,9 @@ func (s *Service) PromoteEnvSchedules(ctx context.Context, pipelineUUID string, 
 		if existing.SnapshotVersionID != expectedVersion {
 			return nil, fmt.Errorf("schedule %s changed after deployment review", environment)
 		}
-		if err := s.validateScheduleVariableOverrides(ctx, pipelineUUID, versionID, existing.Vars); err != nil {
+		candidate := existing
+		candidate.SnapshotVersionID = versionID
+		if err := s.validateEnvScheduleVariables(ctx, candidate); err != nil {
 			return nil, fmt.Errorf("schedule %s cannot use the selected deployment: %w", environment, err)
 		}
 		if expectedVersion == versionID {
@@ -1250,8 +1298,24 @@ func (s *Service) SetEnvScheduleLifecycle(ctx context.Context, pipelineUUID, env
 		if err := s.validateScheduleSnapshot(ctx, pipelineUUID, existing.SnapshotVersionID); err != nil {
 			return err
 		}
-		if err := s.validateScheduleVariableOverrides(ctx, pipelineUUID, existing.SnapshotVersionID, existing.Vars); err != nil {
+		if err := s.validateEnvScheduleVariables(ctx, existing); err != nil {
 			return err
+		}
+	}
+	if existing.DeclarationManaged {
+		if s.declarations == nil {
+			return errors.New("schedule declaration store is unavailable")
+		}
+		declaration, found, err := s.declarations.Get(pipelineUUID, environment)
+		if err != nil {
+			return err
+		}
+		if !found {
+			return errors.New("schedule declaration is missing")
+		}
+		declaration.Paused = status == ScheduleStatusPaused
+		if err := s.declarations.Set(pipelineUUID, environment, declaration); err != nil {
+			return fmt.Errorf("write schedule declaration: %w", err)
 		}
 	}
 	if err := s.store.SetEnvScheduleStatus(ctx, pipelineUUID, environment, status, ""); err != nil {
@@ -1261,12 +1325,31 @@ func (s *Service) SetEnvScheduleLifecycle(ctx context.Context, pipelineUUID, env
 }
 
 // ArchiveEnvSchedule is the user-facing delete: the row becomes a tombstone
-// (run history stays addressable) and is never auto-restored.
+// and run history stays addressable. Declaration-managed rows restore only if
+// the same stable key is later re-added to .renart/schedules.yml; local legacy
+// rows require an explicit lifecycle restore.
 func (s *Service) ArchiveEnvSchedule(ctx context.Context, pipelineUUID, environment string) error {
 	if err := s.RequireOwner(); err != nil {
 		return err
 	}
-	if err := s.store.SetEnvScheduleStatus(ctx, pipelineUUID, environment, ScheduleStatusArchived, ArchivedReasonUser); err != nil {
+	existing, found, err := s.store.GetEnvSchedule(ctx, pipelineUUID, environment)
+	if err != nil {
+		return err
+	}
+	if !found {
+		return errors.New("schedule not found")
+	}
+	reason := ArchivedReasonUser
+	if existing.DeclarationManaged {
+		if s.declarations == nil {
+			return errors.New("schedule declaration store is unavailable")
+		}
+		if err := s.declarations.Remove(pipelineUUID, environment); err != nil {
+			return fmt.Errorf("remove schedule declaration: %w", err)
+		}
+		reason = ArchivedReasonDeclarationMissing
+	}
+	if err := s.store.SetEnvScheduleStatus(ctx, pipelineUUID, environment, ScheduleStatusArchived, reason); err != nil {
 		return err
 	}
 	return s.Reconcile(ctx)
@@ -1330,6 +1413,10 @@ func (s *Service) Trigger(ctx context.Context, pipeline PipelineSchedule, req Tr
 		ExpectedConfigurationDigest: strings.TrimSpace(req.ExpectedConfigurationDigest),
 	}
 	spec := manualRunSpec(run, source, req.ConfirmedEnvironment)
+	spec.Requested.VariableReferences = cloneScheduleSecretRefs(req.VariableReferences)
+	if err := spec.validate(); err != nil {
+		return PipelineRun{}, err
+	}
 	if req.ConfirmedPlan != nil {
 		if err := validateRunPlanAdmissionBinding(run, spec, *req.ConfirmedPlan); err != nil {
 			return PipelineRun{}, err
@@ -1505,7 +1592,7 @@ func (s *Service) admitQueuedRun(ctx context.Context, client *river.Client[*sql.
 		queries := s.store.queries.WithTx(tx)
 		id, err := s.store.createRun(ctx, queries, run)
 		if err == nil {
-			err = s.store.claimRunSlot(ctx, tx, run, id)
+			err = s.store.claimRunAdmission(ctx, tx, run, id, plan)
 		}
 		if err == nil {
 			err = s.store.insertRunSpec(ctx, tx, id, spec)
@@ -1682,8 +1769,12 @@ func (s *Service) prepareRun(ctx context.Context, riverJobID int64, args pipelin
 			}
 			return PipelineRun{}, runSpecV1{}, false, nil
 		}
+		executionSpec, err := s.resolveRunSpecForExecution(ctx, spec, plan, foundPlan)
+		if err != nil {
+			return PipelineRun{}, runSpecV1{}, false, &invalidRunPlanError{RunID: run.ID, Err: err}
+		}
 		run.RiverJobID = &riverJobID
-		return applyRunSpec(run, spec), spec, true, nil
+		return applyRunSpec(run, executionSpec), executionSpec, true, nil
 	}
 
 	prepared, shouldAdmit, err := s.prepareScheduledRunAdmission(ctx, args)
@@ -1770,6 +1861,10 @@ func (s *Service) prepareScheduledRunAdmission(
 		return scheduledRunAdmission{}, false, nil
 	}
 	args.OccurrenceKey = occurrence.Key
+	resolvedVariables, err := s.resolveScheduleVariables(ctx, args.Variables, args.VariableReferences)
+	if err != nil {
+		return scheduledRunAdmission{}, false, &invalidScheduleSignalError{err: fmt.Errorf("resolve scheduled variables: %w", err)}
+	}
 	run := PipelineRun{
 		PipelineID:        encodedPipelineID,
 		PipelineUUID:      pipelineUUID,
@@ -1783,7 +1878,7 @@ func (s *Service) prepareScheduledRunAdmission(
 		FullRefresh:       args.FullRefresh,
 		Backfill:          args.Backfill,
 		SensorMode:        strings.TrimSpace(args.SensorMode),
-		VariableOverrides: args.Variables,
+		VariableOverrides: cloneScheduleVariables(args.Variables),
 	}
 	executionTime := time.Now().UTC()
 	run.ExecutionTime = &executionTime
@@ -1795,7 +1890,7 @@ func (s *Service) prepareScheduledRunAdmission(
 		PipelineID: encodedPipelineID, PipelineUUID: pipelineUUID,
 		Environment: run.Environment, SnapshotVersionID: run.SnapshotVersionID,
 		Start: start, End: end, ExecutionTime: executionTime,
-		VariableOverrides: args.Variables,
+		VariableOverrides: resolvedVariables,
 	})
 	if err != nil {
 		return scheduledRunAdmission{}, false, fmt.Errorf("plan scheduled run: %w", err)

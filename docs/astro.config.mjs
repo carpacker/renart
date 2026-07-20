@@ -101,6 +101,7 @@ export default defineConfig({
           label: 'Introduction',
           items: [
             { label: 'Overview', slug: 'docs' },
+            { label: 'Alpha status', slug: 'docs/alpha-status' },
             { label: 'Concepts', slug: 'docs/concepts' },
             { label: 'How it works', slug: 'docs/how-it-works' },
           ],

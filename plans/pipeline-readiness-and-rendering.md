@@ -1,31 +1,35 @@
 # Pipeline readiness, execution planning, and rendered SQL
 
 Status: core implementation complete. Phases 0a/0b and 1–3 have shipped; the
-as-built contract is recorded in `architecture/`. This plan remains because
-the scheduler-coordination workstream, rolling legacy-job cleanup, and the
-optional Phase 4 policy/automation work are still open. Target behavior below
-remains proposed unless it appears in `architecture/` or an implementation
-checkpoint.
+as-built contract is recorded in `architecture/`. Multi-process scheduler
+coordination is intentionally not part of the supported topology: each mounted
+workspace has one long-lived Renart authority, while one UI process may host
+many isolated workspace runtimes. This plan remains for the bounded
+command-handoff cleanup, rolling legacy-job cleanup, and optional future
+policy/automation work. Target behavior below remains proposed unless it
+appears in `architecture/` or an implementation checkpoint.
 
-## 0. Current implementation state (2026-07-19)
+## 0. Current implementation state (2026-07-20)
 
 | Area | State | As-built boundary |
 | --- | --- | --- |
-| Truthful source/context and immediate safety (Phase 0a) | Complete | Source and invocation origin are server-owned; deployment pins and destructive context fail closed; follower schedule mutations are rejected. |
+| Truthful source/context and immediate safety (Phase 0a) | Complete | Source and invocation origin are server-owned; deployment pins and destructive context fail closed; unsupported scheduler followers reject mutations. |
 | Universal run ledger and dispatch (Phase 0b) | Functionally complete | Pipeline, one-asset/scoped, Build-needed, reviewed, and scheduled execution use durable RunSpecs/runs/units. Pre-v2 River jobs retain a strict compatibility decoder until already-persisted jobs have drained. |
 | Shared asset rendering (Phase 1) | Complete | Saved-source rendering covers exact, semantic, runtime-only, and unsupported stages without opening a warehouse; direct materializer/check/hook paths share construction with execution. |
-| Reviewed pipeline plans (Phase 2) | Complete | Working-tree and exact-deployment plans support `all`, `needed`, and asset-closure selection, lazy stage content, stale-plan/data-state checks, durable plan artifacts, and exact unit execution. |
+| Reviewed pipeline plans (Phase 2) | Complete | Working-tree and exact-deployment plans support `all`, `needed`, asset-closure, and custom-selector selection, lazy stage content, stale-plan/data-state checks, durable plan artifacts, and exact unit execution. |
 | Deploy and schedule integration (Phase 3) | Complete | Reviewed source deployments, file diffs, stable ordinals, explicit pin promotion, schedule-variable planning, durable occurrences, and pinned manual/scheduled execution are implemented. |
-| Scheduler ownership coordination (Workstream 0c) | Open | One process owns each workspace scheduler; followers are visibly read-only. There is no heartbeat/fencing protocol, automatic takeover, or cross-process mutation delivery. |
-| Policy and automation (Phase 4) | Optional / not implemented | Configurable warning gates, warehouse validation, `run when needed`, resource-aware concurrency, and reliable change categorization remain future work. |
+| Single-workspace authority (replacement for Workstream 0c) | Direction complete; handoff cleanup open | A per-workspace lease prevents a second long-lived process from opening the same state database. Run/plan/render/ls delegate to the owner; graceful second-launch handoff and full coverage for remaining stateful CLI commands are still open. |
+| Policy and automation (Phase 4) | Accepted slice complete | Version-controlled environment schedule declarations, tracked bounded retention, and conservative structured resource claims are implemented. Configurable deployment gates and automatic `run when needed` are deferred; warehouse validation and change categorization remain optional. |
 
-Two narrower proposal items also remain outside the shipped boundary: the
-planner has no arbitrary custom/Bruin selector yet, and there is no dedicated
-side-by-side rendered-SQL diff between the working tree and a pinned
-deployment. Either source can be planned independently, and deployment review
-does provide source-file diffs. The asset-level Render endpoint itself remains
-saved-working-tree only; immutable deployment rendering is available through
-the pipeline planner.
+The narrower selector/rendering follow-up is complete: custom expressions use
+Bruin's resolver with explicit all-matches and needed-matches modes; the
+pipeline-owned asset Render endpoint selects working-tree or deployment source
+without accepting client paths; and Build compares semantically aligned
+rendered operations side by side against the latest or a selected deployment.
+The narrower accepted Phase 4 slice is complete. Remaining work in this plan is
+limited to command-handoff and rolling persisted-job compatibility cleanup;
+warehouse validation, impact categorization, and Auto-build when needed remain
+optional future proposals rather than committed scope.
 
 ## 1. Recommendation
 
@@ -313,13 +317,18 @@ The UI should call the former the pipeline's **default interval/cadence** and
 the latter an **environment schedule**. Editing one must not imply that the
 other has changed.
 
-Scheduler ownership is another hidden part of current schedule state. Only one
-process owns the scheduler lock. A follower attempts that lock once, does not
-take over automatically if the owner exits, and can accept durable schedule
-changes that do not reach the owner's in-memory registrations. It may still
-display calculated next-run times even though it dispatches nothing. This is a
-reliability issue, not merely missing copy: ownership, heartbeat, handoff, and
-cross-process reconciliation need a real contract as well as visible status.
+At audit time, scheduler ownership was another hidden part of schedule state.
+Only one process owned the scheduler lock. A follower attempted that lock once,
+did not take over automatically if the owner exited, and could accept durable
+schedule changes that did not reach the owner's in-memory registrations. It
+could still display calculated next-run times even though it dispatched
+nothing. That was a reliability issue, not merely missing copy.
+
+This was the pre-Phase-0 risk. The implemented workspace-server lease now
+rejects a second long-lived runtime before it opens `state.db`, and Phase 0a
+rejects follower mutations as a compatibility safeguard. The product decision
+is to keep that single-authority topology instead of adding leader election;
+the replacement workstream in §8 records the remaining command handoff work.
 
 ### 2.7 Rendering checkpoint
 
@@ -513,8 +522,9 @@ Opening it shows:
 - schedules on the latest deployment;
 - schedules pinned to older deployments;
 - paused/active state and next run;
-- scheduler ownership/liveness (`active here`, `managed by another process`, or
-  `unavailable`) plus last heartbeat/reconciliation;
+- scheduler availability (`active here` or `unavailable`); a defensive
+  `managed by another process` state remains only for compatibility and
+  unsupported lock topologies;
 - an active pipeline execution, with a link to its run details.
 
 The summary must show positive states (`Checks pass`, `All data fresh`,
@@ -565,7 +575,7 @@ while the eventual path silently changes it to `wait`.
 
 Scope presets:
 
-- **Needed**: the current Build-stale selection and exact gap intervals;
+- **Needed**: the current needed-work selection and exact gap intervals;
 - **Entire pipeline**: all assets regardless of freshness;
 - **Selected asset**: selected asset, optionally with upstream/downstream
   closure;
@@ -1102,11 +1112,10 @@ Before a new UI relies on the plan contract:
 10. **Make re-execution honest.** Exact re-execution requires the original
     immutable source and a resolvable matching context. Otherwise prompt for
     missing inputs or say `Run again with current settings`.
-11. **Make scheduler ownership fail closed, then design coordination.** Expose
-    owner state now and reject mutations on a follower that cannot deliver
-    them. Specify heartbeat/fencing, handoff, durable revision delivery,
-    cross-process reconciliation, and SSE behavior in the separate ownership
-    workstream before implementing takeover.
+11. **Keep one authority per workspace.** Acquire the canonical workspace
+    lease before opening state, reject unsupported followers before mutation,
+    and delegate commands to the process that owns the workspace. Do not add
+    leader election, automatic takeover, or cross-process scheduler mutation.
 12. **Give deployments stable human identity.** Persist per-pipeline ordinals,
     deterministically backfill existing snapshots, and use the same label in
     pins, plans, comparisons, and run provenance.
@@ -1140,7 +1149,8 @@ This slice works against the current execution paths and lands independently:
   default-context freshness;
 - preserve only genuinely exact re-execution; otherwise use the honest label;
 - expose owner/follower/unavailable scheduler state and reject schedule
-  mutations on a follower that cannot deliver them;
+  mutations on a follower that cannot deliver them; the workspace lease makes
+  followers a defensive compatibility state rather than a supported topology;
 - remove fixture plan/variant behavior, fix labels and transport-error handling,
   retain one-click asset Materialize, and show source/window/environment at the
   action.
@@ -1191,8 +1201,9 @@ Long-lived runtimes also now take an authoritative canonical-workspace lease
 outside the worktree while retaining `.renart/server.lock` for compatibility.
 Runtime database/discovery/lock files are added to `.git/info/exclude` without
 editing tracked ignore rules. This closes the hole where worktree cleanup could
-unlink the only lock while a server still owned the workspace; it remains
-separate from the scheduler ownership/handoff workstream below.
+unlink the only lock while a server still owned the workspace. This lease is
+the product's ownership boundary: another long-lived process may serve a
+different workspace, but it may not mount this one.
 
 This began as only the scheduler-backed foundation. Exact re-execution,
 asset/scoped and Build-needed execution, effective variables, full-pipeline
@@ -1290,22 +1301,60 @@ This is the architectural prerequisite for the pipeline plan:
 Phase 1 rendering can proceed in parallel once Phase 0a establishes truthful
 source/context semantics. Phase 2 requires both Phase 1 and Phase 0b.
 
-### Workstream 0c: scheduler ownership and cross-process reconciliation
+### Workstream 0c replacement: one workspace authority and command handoff
 
-Phase 0a closes the immediate hole by exposing follower state and refusing
-mutations it cannot deliver. Full coordination deserves a separate design
-before implementation, covering:
+Decision (2026-07-19): do not support multiple long-lived Renart processes for
+one canonical workspace. The heartbeat/fencing/takeover/outbox proposal is
+rejected for the local product: it would reproduce distributed-control-plane
+complexity without providing real multi-host availability over a local
+filesystem and SQLite database.
 
-- lease/heartbeat and fencing semantics;
-- takeover, lock loss, stale-owner cleanup, and split-brain behavior;
-- durable schedule revision/outbox representation;
-- follower-to-owner delivery versus owner-only mutation;
-- reconciliation after restart/ownership change and SSE publication;
-- interaction with River periodic registration and due-occurrence admission.
+The supported topology is:
 
-This workstream does not block single-owner local planning/rendering. It does
-block any claim that schedule mutations are reliable through an arbitrary
-Renart process.
+- one long-lived project runtime owns a canonical workspace and its `state.db`,
+  file watcher, SSE hub, River client, and scheduler registrations;
+- one UI process may own many isolated workspace runtimes, and independent
+  processes may own different workspaces;
+- a second `web` or `standalone` launch never opens the occupied workspace;
+- commands address the existing owner through authenticated discovery; if no
+  owner exists, a stateful embedded command holds short-lived exclusive
+  workspace authority for its duration;
+- scheduler `follower` remains fail-closed defense for old binaries,
+  mismatched runtime directories, and unexpected lock failures. It is not a
+  hot-standby mode and never takes over automatically.
+
+Already shipped:
+
+- canonical, symlink-resolved workspace leases acquired before `state.db`,
+  with an out-of-worktree authoritative lock, an in-worktree compatibility
+  lock, and bounded live-server discovery;
+- OS-release-on-exit plus normal scheduler startup recovery, occurrence
+  reconciliation, and catch-up when another server is started later;
+- authenticated delegation for `run`, `plan`, and `render`, and server-backed
+  workspace reads for `ls`;
+- a typed startup error naming the existing process and URL where available.
+
+Remaining bounded cleanup:
+
+- make a second `web` launch print/open the existing URL and exit successfully;
+  make `standalone` point its window at that URL instead of starting a backend;
+- delegate `deploy`, `type-check`, and every other command that writes project
+  or state metadata when an owner exists;
+- make stateful embedded commands acquire the workspace lease for their
+  duration when no server exists, closing the race where a server starts during
+  the command;
+- reject stateful `--local` bypass while an owner is live; genuinely read-only
+  diagnostic commands may remain local only when they do not open state or
+  mutate inferred identity/metadata;
+- return the same typed owner/URL conflict when one server tries to mount a
+  project already owned by another server.
+
+Acceptance tests cover canonical and symlinked roots, different workspaces,
+second web/standalone handoff, delegation for every stateful command, a server
+starting alongside an embedded command, OS-lock release after clean and
+unclean exit, and startup recovery/catch-up after restart. There are no
+heartbeat, split-brain, cross-process SSE, or automatic-takeover tests because
+those are explicit non-goals.
 
 ### Phase 1: shared asset render service
 
@@ -1516,20 +1565,21 @@ writer mutation. Legacy targetless rows remain generation zero. The schema is
 now active across pre-execution capture, recovery transport, recorder, and
 staleness selection.
 
-Execution-evidence checkpoint (2026-07-17): immediately before execution the
-direct runner captures a version-two, secret-free snapshot of the full parsed
-graph, including stable identity, exact/runtime-only target fidelity,
-fingerprints, authored upstream edges, coverage mode, variable hash, and refresh
-restriction. Scheduler runs persist it before their first step; all completion-
-aware interactive paths carry it directly. At each main-task start Renart
+Execution-evidence checkpoint (updated 2026-07-20): immediately before execution
+the direct runner captures a version-three, secret-free snapshot of the full
+parsed graph, including stable identity, exact/runtime-only target fidelity,
+write-resource evidence, fingerprints, authored upstream edges, coverage mode,
+variable hash, and refresh restriction. Scheduler runs persist it before their
+first step; all completion-aware interactive paths carry it through the durable
+outbox. At each main-task start Renart
 captures the visible latest writers for exact in-pipeline upstream targets and
 claims ordinary outputs before physical work. Evidence-required Python tables
 instead claim immediately before their Go-side load; the recorder grants
 coverage only when that durable claim (or an already committed matching fact)
 exists. Failed/cancelled claims become dirty, successful facts clear matching
 claims in the same writer/fact/coverage transaction, and active/dirty claims
-suppress the prior writer. Recovery uses self-contained v2 evidence; v1 replay
-fails closed where a successful consumer lacks a successful in-pipeline
+suppress the prior writer. Recovery uses self-contained v2/v3 evidence; v1
+replay fails closed where a successful consumer lacks a successful in-pipeline
 upstream.
 
 Completion/recovery checkpoint (2026-07-17): a durable SQLite outbox is the
@@ -1540,7 +1590,7 @@ Every non-dry mutating service path holds a shared per-workspace OS lease throug
 that hand-off; startup takes it exclusively before marking orphaned active
 claims dirty, and headless invocations skip reconciliation behind a live
 executor. Legacy workspace runs and quickstart materialization now route through
-the same completion-aware service, and Build-stale holds the lease across its
+the same completion-aware service, and Build-needed holds the lease across its
 whole ordered plan. Cancelled execution remains cancelled through the direct
 event, service result, and scheduler status.
 
@@ -1669,16 +1719,30 @@ above.
 
 ### Phase 4: optional policy and automation
 
-- configurable deployment gates for deterministic errors and acknowledged
-  warnings;
 - optional warehouse validation per environment;
-- opt-in `run when needed` automation alongside cron, with explainable
-  staleness reasons;
-- resource/destination-aware concurrency that can safely relax the initial
-  pipeline-global run slot;
+- version-controlled environment schedule declarations whose desired cadence,
+  timezone, catch-up policy, enabled state, ordinary overrides, and secret
+  references reconcile into SQLite while deployment pins, watermarks,
+  occurrences, attempts, and River job identity remain local operational
+  state;
+- configurable retention for run history, logs, materialization facts,
+  schedule history, and unreferenced deployments, with referenced/pinned/latest
+  snapshots and compact writer/coverage evidence protected independently of
+  age;
+- **Complete:** explicit operator resource claims are the prerequisite for any future
+  destination-aware concurrency. Initially keep same-target writes serialized,
+  give DuckDB a database-file claim, and relax the pipeline-global slot only
+  for distinct resources whose operator implementation has integration parity;
 - change categorization/impact analysis only when Renart can infer it reliably;
 - consider immutable compiled artifacts or isolated environments only if a
   concrete need justifies Option C.
+
+Configurable deployment gates are explicitly out of scope. `Run when needed`
+would mean automatic execution after Renart observes a stable transition to
+needed work; it is not the existing behavior that limits a user-requested run
+to needed units. Rename that possible feature to **Auto-build when needed** and
+defer it until debounce, coalescing, failure-loop, and environment-safety
+semantics justify automatic warehouse writes.
 
 ## 9. Validation requirements
 
@@ -1726,7 +1790,8 @@ above.
   across the upgrade;
 - a manual dev run blocking a production occurrence leaves it visibly deferred
   with its original interval, then executes it exactly once;
-- scheduler owner loss, takeover, and cross-process reconciliation tests;
+- canonical/symlink workspace exclusivity, second-launch handoff, command
+  delegation, and restart recovery/catch-up tests;
 - malformed body/time/source/variables/mode rejection tests;
 - selection/topological/gap tests that reuse current staleness fixtures;
 - Needed confirmation tests for data-state shrink versus expansion/blockers;
@@ -1753,14 +1818,15 @@ operations or exact canonical blobs from the renderer.
 - E2E: one-click asset Materialize and its stale-upstream prompt remain intact;
 - E2E: occupied run slot disables/links before confirmation and a race returns
   the typed active-run result;
-- E2E: scheduler ownership/handoff state updates through SSE;
+- E2E: a second launch hands off to the existing workspace owner, while an
+  unexpected follower remains visibly read-only;
 - E2E: deploy -> choose schedules -> only selected pins advance;
 - E2E: working-tree versus pinned rendered SQL diff;
 - E2E: incomplete source remains editable while Run shows a blocker;
 - E2E: protected-environment and destructive-operation confirmation;
 - accessibility and shrink-safe rendering for large plans/long SQL.
 
-## 10. Resolved choices and remaining decisions
+## 10. Resolved choices and accepted follow-up
 
 The implementation resolved the initial product choices as follows:
 
@@ -1769,30 +1835,67 @@ The implementation resolved the initial product choices as follows:
   unavailable secret-free configuration identity remains advisory;
 - durable run plans retain redacted stage metadata but deliberately exclude
   rendered stage content;
-- environment schedules remain local operational state in SQLite and stay
-  distinct from Bruin's version-controlled `pipeline.yml` cadence;
-- `run when needed` was not included in the initial implementation.
+- environment schedule runtime state remains in SQLite and stays distinct from
+  the pipeline's version-controlled default cadence; desired environment
+  schedules will gain their own version-controlled Renart declaration;
+- `run when needed` was not included in the initial implementation;
+- one canonical workspace has one long-lived Renart authority; automatic
+  scheduler takeover and cross-process coordination are explicit non-goals.
 
-The remaining decisions are:
+The accepted follow-up contract is:
 
-1. Whether environment schedules should eventually gain a version-controlled
-   declaration while retaining Bruin interoperability.
-2. The retention/garbage-collection limits for per-run sandboxes and any
-   optional immutable verified snapshot cache. Correctness must not depend on
-   that cache.
-3. Which operators can report stable write-resource/target identities strongly
-   enough to allow concurrency or reusable isolated coverage. Environment names
-   alone are not sufficient evidence.
-4. Whether any Phase 4 capability—configurable warning gates, warehouse
-   validation, `run when needed`, or change categorization—has enough concrete
-   demand and reliable semantics to justify its added policy surface.
+1. Add custom selector planning by delegating the bounded selector grammar to
+   Bruin. The UI keeps the simple presets and exposes an advanced selector with
+   validation, a matched-assets preview, and two explicit modes: all matching
+   assets or only needed matching assets. Persist both the normalized
+   expression and the final reviewed units.
+2. Add deployment-aware standalone asset rendering using only a server-owned
+   source selector (`working_tree` or exact `snapshot` version). Keep the
+   existing asset-ID endpoint as a working-tree convenience and add a
+   pipeline-owned route that resolves the asset name inside the chosen source.
+3. Add a side-by-side rendered-operation diff. Build defaults to the latest
+   deployment, a schedule defaults to its pin, and the user may select another
+   snapshot. Render both sides with identical context and align stages by
+   semantic identity before showing SQL or structured-text differences.
+4. **Complete:** store desired environment schedules in `.renart/schedules.yml`, keyed by
+   stable pipeline UUID and environment. Track ordinary override values and
+   stable secret references, never resolved secrets. File removal archives the
+   schedule while retaining runtime history; deployment pins remain local and
+   are never inferred from the declaration.
+5. **Complete:** tracked project retention settings use these defaults: run metadata
+   180 days and at least 100 runs per pipeline; full logs 30 days and at least
+   25 runs per pipeline; materialization facts 90 days; schedule history 180
+   days; unreferenced deployments 90 days and at least 20 snapshots per
+   pipeline. Remove abandoned Renart temporary directories after 24 hours.
+   Protect current/pinned/referenced deployments, active work, pending
+   completion evidence, and compact latest-writer/coverage rows regardless of
+   age. Correctness never depends on an optional cache. Startup/daily River
+   housekeeping applies independent log/run/schedule/fact/deployment cutoffs,
+   prunes blobs transactionally after reference checks, and only removes
+   allowlisted same-user temp directories left by an earlier process.
+6. **Complete:** model operator stability with structured resource claims. Sensors claim no
+   write resource; exact local outputs claim their normalized file; DuckDB
+   claims its database file; an exact network relation may claim that relation
+   only after its direct/fallback implementation is proven not to share hidden
+   staging state. Dynamic Python outputs, credential-derived routing,
+   ambiguous hooks, remote object targets without canonical identity, and
+   unsupported connection families remain conservative. No same-relation
+   concurrent mutation is initially allowed. Reviewed plan v2 persists opaque
+   sorted claims atomically; exact files/databases may run concurrently only
+   when distinct, while legacy/unreviewed and unproven work retains the
+   path/UUID pipeline slot. Execution-target snapshot v3 revalidates the
+   effective resources against the plan and admitted rows before the first
+   step. Arbitrary Python and any asset hooks remain conservative; network
+   relation claims are still disabled pending operator-specific parity proof.
+7. Do not add configurable deployment gates or automatic builds in this slice.
+   Warehouse validation and change categorization remain optional future work.
 
 ## 11. Completion
 
 The shipped source/run/deploy/schedule contract is already folded into
 `architecture/backend.md`, the plan/readiness/render UI into
 `architecture/frontend.md`, and selection/freshness behavior into
-`architecture/staleness.md`. Keep this plan only while Workstream 0c, rolling
-compatibility cleanup, and any accepted Phase 4 work remain here. Once those
-items are completed, rejected, or split into narrower plans, delete this file;
-Git history retains the proposal and implementation checkpoints.
+`architecture/staleness.md`. Keep this plan only while the command-handoff
+cleanup, rolling compatibility cleanup, and any accepted Phase 4 work remain.
+Once those items are completed, rejected, or split into narrower plans, delete
+this file; Git history retains the proposal and implementation checkpoints.

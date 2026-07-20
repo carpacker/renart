@@ -28,6 +28,8 @@ func Plan() *cli.Command {
 			"Examples:\n" +
 			"   renart plan marts\n" +
 			"   renart plan marts --all\n" +
+			"   renart plan marts --selector 'tag:daily,+fct_orders'\n" +
+			"   renart plan marts --selector 'tag:daily' --selector-needed\n" +
 			"   renart plan mart.orders --upstream\n" +
 			"   renart plan marts --source snapshot --snapshot <version> --json",
 		Flags: []cli.Flag{
@@ -39,6 +41,8 @@ func Plan() *cli.Command {
 			&cli.StringFlag{Name: "source", Usage: "saved source: working-tree or snapshot"},
 			&cli.StringFlag{Name: "snapshot", Usage: "exact deployment version (implies --source snapshot)"},
 			&cli.BoolFlag{Name: "all", Usage: "plan every asset rather than only assets needing work"},
+			&cli.StringFlag{Name: "selector", Usage: "pipeline targets only: plan assets matched by a selector expression"},
+			&cli.BoolFlag{Name: "selector-needed", Usage: "with --selector, keep only matching assets that need work"},
 			&cli.BoolFlag{Name: "upstream", Usage: "asset targets only: include upstream dependencies"},
 			&cli.BoolFlag{Name: "downstream", Usage: "asset targets only: include downstream dependents"},
 			&cli.BoolFlag{Name: "full-refresh", Usage: "preview the effective full-refresh form"},
@@ -87,7 +91,14 @@ func planAction(ctx context.Context, c *cli.Command) error {
 	if err != nil {
 		return cli.Exit(err.Error(), 2)
 	}
-	selection, err := planSelection(target, c.Bool("all"), c.Bool("upstream"), c.Bool("downstream"))
+	selection, err := planSelection(
+		target,
+		c.Bool("all"),
+		c.Bool("upstream"),
+		c.Bool("downstream"),
+		c.String("selector"),
+		c.Bool("selector-needed"),
+	)
 	if err != nil {
 		return cli.Exit(err.Error(), 2)
 	}
@@ -141,10 +152,24 @@ func planAction(ctx context.Context, c *cli.Command) error {
 	return nil
 }
 
-func planSelection(target runTarget, all, upstream, downstream bool) (service.PipelinePlanSelectionRequest, error) {
+func planSelection(target runTarget, all, upstream, downstream bool, rawSelector string, selectorNeeded bool) (service.PipelinePlanSelectionRequest, error) {
+	selector := strings.TrimSpace(rawSelector)
+	if selectorNeeded && selector == "" {
+		return service.PipelinePlanSelectionRequest{}, fmt.Errorf("--selector-needed requires --selector")
+	}
 	if target.kind == "pipeline" {
 		if upstream || downstream {
 			return service.PipelinePlanSelectionRequest{}, fmt.Errorf("--upstream and --downstream apply only to asset targets")
+		}
+		if all && selector != "" {
+			return service.PipelinePlanSelectionRequest{}, fmt.Errorf("--all and --selector cannot be combined")
+		}
+		if selector != "" {
+			mode := service.PipelinePlanSelectionSelector
+			if selectorNeeded {
+				mode = service.PipelinePlanSelectionSelectorNeeded
+			}
+			return service.PipelinePlanSelectionRequest{Mode: mode, Selector: selector}, nil
 		}
 		mode := service.PipelinePlanSelectionNeeded
 		if all {
@@ -152,8 +177,8 @@ func planSelection(target runTarget, all, upstream, downstream bool) (service.Pi
 		}
 		return service.PipelinePlanSelectionRequest{Mode: mode}, nil
 	}
-	if all {
-		return service.PipelinePlanSelectionRequest{}, fmt.Errorf("--all applies to pipeline targets; omit it for an asset closure")
+	if all || selector != "" {
+		return service.PipelinePlanSelectionRequest{}, fmt.Errorf("--all and --selector apply to pipeline targets; omit them for an asset closure")
 	}
 	scope := "asset"
 	switch {
@@ -227,8 +252,12 @@ func printPipelinePlan(w interface{ Write([]byte) (int, error) }, plan service.P
 		valueOrDefault(plan.Context.Environment, "default"), plan.Context.StartDate, plan.Context.EndDate,
 		valueOrDefault(plan.Context.SensorMode, "once"),
 	)
+	selection := plan.Selection.Mode
+	if plan.Selection.Selector != "" {
+		selection += " " + plan.Selection.Selector
+	}
 	fmt.Fprintf(w, "Selection: %s · %d asset(s) · %d execution unit(s) · %d stage(s)\n",
-		plan.Selection.Mode, plan.Summary.Assets, plan.Summary.ExecutionUnits, plan.Summary.Stages,
+		selection, plan.Summary.Assets, plan.Summary.ExecutionUnits, plan.Summary.Stages,
 	)
 	if plan.Context.Destructive {
 		fmt.Fprintf(w, "%s\n", warn(fmt.Sprintf("Destructive operations: %d", plan.Summary.DestructiveOperations)))

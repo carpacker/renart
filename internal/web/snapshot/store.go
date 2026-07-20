@@ -103,6 +103,16 @@ type FileComparison struct {
 	TooLarge     bool   `json:"too_large"`
 }
 
+type RetentionPolicy struct {
+	OlderThan          time.Time
+	MinimumPerPipeline int
+}
+
+type PruneResult struct {
+	Snapshots int64
+	Blobs     int64
+}
+
 func hashBytes(content []byte) string {
 	sum := sha256.Sum256(content)
 	return hex.EncodeToString(sum[:])
@@ -441,6 +451,93 @@ func (s *Store) List(ctx context.Context, pipelineUUID string) ([]Snapshot, erro
 		snapshots = append(snapshots, snapshot)
 	}
 	return snapshots, rows.Err()
+}
+
+// Prune removes old deployments only when they are outside the per-pipeline
+// floor and unreferenced by schedules, retained runs, or pending completion
+// evidence. The latest deployment is protected explicitly even when the floor
+// is configured as zero. Orphaned content-addressed blobs are removed in the
+// same transaction after snapshot metadata changes.
+func (s *Store) Prune(ctx context.Context, policy RetentionPolicy) (PruneResult, error) {
+	if s == nil || s.db == nil {
+		return PruneResult{}, errors.New("snapshot store is not initialized")
+	}
+	if policy.OlderThan.IsZero() {
+		return PruneResult{}, errors.New("snapshot retention cutoff is required")
+	}
+	if policy.MinimumPerPipeline < 0 {
+		return PruneResult{}, errors.New("snapshot retention minimum per pipeline cannot be negative")
+	}
+
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return PruneResult{}, err
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	deletedSnapshots, err := tx.ExecContext(ctx, `
+		WITH ranked_snapshots AS (
+			SELECT version_id,
+			       pipeline_id,
+			       ordinal,
+			       created_at,
+			       ROW_NUMBER() OVER (
+				   PARTITION BY pipeline_id
+				   ORDER BY ordinal DESC, version_id DESC
+			       ) AS retention_rank,
+			       MAX(ordinal) OVER (PARTITION BY pipeline_id) AS latest_ordinal
+			FROM renart_snapshots
+		),
+		retention_candidates AS (
+			SELECT snapshot.version_id
+			FROM ranked_snapshots AS snapshot
+			WHERE snapshot.created_at < ?
+			  AND snapshot.retention_rank > ?
+			  AND snapshot.ordinal < snapshot.latest_ordinal
+			  AND NOT EXISTS (
+				  SELECT 1 FROM renart_schedules AS schedule
+				  WHERE schedule.snapshot_version_id = snapshot.version_id
+			  )
+			  AND NOT EXISTS (
+				  SELECT 1 FROM pipeline_runs AS run
+				  WHERE run.snapshot_version_id = snapshot.version_id
+			  )
+			  AND NOT EXISTS (
+				  SELECT 1 FROM renart_completion_outbox AS outbox
+				  WHERE json_extract(outbox.body, '$.event.snapshot_version_id') = snapshot.version_id
+			  )
+		)
+		DELETE FROM renart_snapshots
+		WHERE version_id IN (SELECT version_id FROM retention_candidates)`,
+		policy.OlderThan.UTC().Format(timeLayout),
+		policy.MinimumPerPipeline,
+	)
+	if err != nil {
+		return PruneResult{}, fmt.Errorf("prune snapshots: %w", err)
+	}
+	result := PruneResult{}
+	if result.Snapshots, err = deletedSnapshots.RowsAffected(); err != nil {
+		return PruneResult{}, fmt.Errorf("count pruned snapshots: %w", err)
+	}
+
+	deletedBlobs, err := tx.ExecContext(ctx, `
+		DELETE FROM renart_blobs
+		WHERE NOT EXISTS (
+			SELECT 1
+			FROM renart_snapshots AS snapshot, json_each(snapshot.manifest) AS entry
+			WHERE entry.value = renart_blobs.hash
+		)`)
+	if err != nil {
+		return PruneResult{}, fmt.Errorf("prune snapshot blobs: %w", err)
+	}
+	if result.Blobs, err = deletedBlobs.RowsAffected(); err != nil {
+		return PruneResult{}, fmt.Errorf("count pruned snapshot blobs: %w", err)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return PruneResult{}, fmt.Errorf("commit snapshot retention: %w", err)
+	}
+	return result, nil
 }
 
 type rowScanner interface {

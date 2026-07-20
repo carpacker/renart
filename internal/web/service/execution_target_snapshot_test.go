@@ -83,9 +83,15 @@ func TestExecutionTargetSnapshotCapturesSecretFreeTargetAndFingerprintEvidence(t
 	exactEntry := snapshot.Entries[exact.Name]
 	assert.Equal(t, AssetRenderFidelityExact, exactEntry.TargetFidelity)
 	assert.NotEmpty(t, exactEntry.TargetIdentity)
+	assert.Equal(t, assetWriteResourcePipeline, exactEntry.WriteResourceKind)
+	assert.Equal(t, AssetRenderFidelityRuntimeOnly, exactEntry.WriteResourceFidelity)
+	assert.Empty(t, exactEntry.WriteResourceIdentity)
 	runtimeEntry := snapshot.Entries[runtimeOnly.Name]
 	assert.Equal(t, AssetRenderFidelityRuntimeOnly, runtimeEntry.TargetFidelity)
 	assert.Empty(t, runtimeEntry.TargetIdentity)
+	assert.Equal(t, assetWriteResourcePipeline, runtimeEntry.WriteResourceKind)
+	assert.Equal(t, AssetRenderFidelityRuntimeOnly, runtimeEntry.WriteResourceFidelity)
+	assert.Empty(t, runtimeEntry.WriteResourceIdentity)
 
 	body, err := json.Marshal(snapshot)
 	require.NoError(t, err)
@@ -95,11 +101,13 @@ func TestExecutionTargetSnapshotCapturesSecretFreeTargetAndFingerprintEvidence(t
 	}
 	require.NoError(t, json.Unmarshal(body, &wire))
 	require.Len(t, wire.Entries, 2)
-	for _, entry := range wire.Entries {
-		assert.ElementsMatch(t, []string{
+	for name, entry := range wire.Entries {
+		expectedKeys := []string{
 			"asset_id",
 			"target_identity",
 			"target_fidelity",
+			"write_resource_kind",
+			"write_resource_fidelity",
 			"fingerprint",
 			"own_content",
 			"consumed_vars_hash",
@@ -107,7 +115,11 @@ func TestExecutionTargetSnapshotCapturesSecretFreeTargetAndFingerprintEvidence(t
 			"upstreams",
 			"coverage_mode",
 			"refresh_restricted",
-		}, mapKeys(entry))
+		}
+		if wireEntry := snapshot.Entries[name]; wireEntry.WriteResourceIdentity != "" {
+			expectedKeys = append(expectedKeys, "write_resource_identity")
+		}
+		assert.ElementsMatch(t, expectedKeys, mapKeys(entry))
 	}
 	for _, secret := range []string{
 		"private-environment",

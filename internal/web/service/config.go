@@ -48,6 +48,20 @@ type WorkspaceConfigEnvironment struct {
 	Connections  []WorkspaceConfigConnection `json:"connections"`
 }
 
+type WorkspaceRetentionWindow struct {
+	Days               int `json:"days"`
+	MinimumPerPipeline int `json:"minimum_per_pipeline"`
+}
+
+type WorkspaceRetentionSettings struct {
+	RunMetadata               WorkspaceRetentionWindow `json:"run_metadata"`
+	FullLogs                  WorkspaceRetentionWindow `json:"full_logs"`
+	MaterializationFactsDays  int                      `json:"materialization_facts_days"`
+	ScheduleHistoryDays       int                      `json:"schedule_history_days"`
+	Deployments               WorkspaceRetentionWindow `json:"deployments"`
+	TemporaryDirectoriesHours int                      `json:"temporary_directories_hours"`
+}
+
 type WorkspaceConfigResponse struct {
 	Status              string                          `json:"status"`
 	Path                string                          `json:"path"`
@@ -59,6 +73,7 @@ type WorkspaceConfigResponse struct {
 	Environments        []WorkspaceConfigEnvironment    `json:"environments"`
 	ConnectionTypes     []WorkspaceConfigConnectionType `json:"connection_types"`
 	Features            map[string]bool                 `json:"features,omitempty"`
+	Retention           WorkspaceRetentionSettings      `json:"retention"`
 	ParseError          string                          `json:"parse_error,omitempty"`
 }
 
@@ -159,6 +174,42 @@ func (s *ConfigService) SetProjectFeatures(features map[string]bool) (identity.P
 	return project, nil
 }
 
+// SetProjectRetention validates and persists the complete tracked retention
+// policy. The API always sends the effective values shown in settings, so the
+// resulting project.yml is self-explanatory and reviewable.
+func (s *ConfigService) SetProjectRetention(settings WorkspaceRetentionSettings) (identity.Project, error) {
+	fs := afero.NewOsFs()
+	project, err := identity.EnsureProject(fs, s.projectYmlPath(), s.defaultProjectName())
+	if err != nil {
+		return identity.Project{}, err
+	}
+	normalized, err := identity.NormalizeRetentionSettings(&identity.RetentionSettings{
+		RunMetadata: identity.RetentionWindow{
+			Days:               settings.RunMetadata.Days,
+			MinimumPerPipeline: settings.RunMetadata.MinimumPerPipeline,
+		},
+		FullLogs: identity.RetentionWindow{
+			Days:               settings.FullLogs.Days,
+			MinimumPerPipeline: settings.FullLogs.MinimumPerPipeline,
+		},
+		MaterializationFactsDays: settings.MaterializationFactsDays,
+		ScheduleHistoryDays:      settings.ScheduleHistoryDays,
+		Deployments: identity.RetentionWindow{
+			Days:               settings.Deployments.Days,
+			MinimumPerPipeline: settings.Deployments.MinimumPerPipeline,
+		},
+		TemporaryDirectoriesHours: settings.TemporaryDirectoriesHours,
+	})
+	if err != nil {
+		return identity.Project{}, err
+	}
+	project.Retention = &normalized
+	if err := identity.SaveProject(fs, s.projectYmlPath(), project); err != nil {
+		return identity.Project{}, err
+	}
+	return project, nil
+}
+
 func (s *ConfigService) LoadForEditing() (*config.Config, string, error) {
 	cfg, err := config.LoadOrCreateWithoutPathAbsolutization(afero.NewOsFs(), s.configPath)
 	if err != nil {
@@ -197,6 +248,7 @@ func (s *ConfigService) BuildResponse(configPath string, cfg *config.Config) Wor
 		Environments:        []WorkspaceConfigEnvironment{},
 		ConnectionTypes:     BuildWorkspaceConfigConnectionTypes(),
 		Features:            project.Features,
+		Retention:           workspaceRetentionSettings(project.Retention),
 	}
 
 	environmentNames := cfg.GetEnvironmentNames()
@@ -224,7 +276,32 @@ func (s *ConfigService) BuildParseErrorResponse(parseErr error) WorkspaceConfigR
 		Environments:    []WorkspaceConfigEnvironment{},
 		ConnectionTypes: BuildWorkspaceConfigConnectionTypes(),
 		Features:        project.Features,
+		Retention:       workspaceRetentionSettings(project.Retention),
 		ParseError:      parseErr.Error(),
+	}
+}
+
+func workspaceRetentionSettings(settings *identity.RetentionSettings) WorkspaceRetentionSettings {
+	normalized, err := identity.NormalizeRetentionSettings(settings)
+	if err != nil {
+		normalized = identity.DefaultRetentionSettings()
+	}
+	return WorkspaceRetentionSettings{
+		RunMetadata: WorkspaceRetentionWindow{
+			Days:               normalized.RunMetadata.Days,
+			MinimumPerPipeline: normalized.RunMetadata.MinimumPerPipeline,
+		},
+		FullLogs: WorkspaceRetentionWindow{
+			Days:               normalized.FullLogs.Days,
+			MinimumPerPipeline: normalized.FullLogs.MinimumPerPipeline,
+		},
+		MaterializationFactsDays: normalized.MaterializationFactsDays,
+		ScheduleHistoryDays:      normalized.ScheduleHistoryDays,
+		Deployments: WorkspaceRetentionWindow{
+			Days:               normalized.Deployments.Days,
+			MinimumPerPipeline: normalized.Deployments.MinimumPerPipeline,
+		},
+		TemporaryDirectoriesHours: normalized.TemporaryDirectoriesHours,
 	}
 }
 
@@ -530,9 +607,9 @@ func buildWorkspaceConfigConnections(connections *config.Connections) []Workspac
 			}
 
 			items = append(items, WorkspaceConfigConnection{
-				Name:          named.GetName(),
-				Type:          typeName,
-				Values:        buildWorkspaceConfigConnectionValues(connectionInterface, typeName),
+				Name:         named.GetName(),
+				Type:         typeName,
+				Values:       buildWorkspaceConfigConnectionValues(connectionInterface, typeName),
 				LoadCategory: loadConnectionCategory(typeName),
 			})
 		}

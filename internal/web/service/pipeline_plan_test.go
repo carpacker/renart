@@ -457,6 +457,68 @@ select * from analytics.middle
 	assert.Contains(t, pipelinePlanIssueCodes(plan.Readiness.Blockers), "pipeline_already_running")
 }
 
+func TestPipelinePlanResolvesCustomSelectorsAndNeededIntersection(t *testing.T) {
+	_, root := writeTypeCheckWorkspace(t, "id: pipeline-uuid\nname: analytics", map[string]string{
+		"up.sql": `
+/* @bruin
+name: analytics.up
+type: duckdb.sql
+tags: [daily]
+@bruin */
+select 1 as id
+`,
+		"middle.sql": `
+/* @bruin
+name: analytics.middle
+type: duckdb.sql
+tags: [daily]
+depends: [analytics.up]
+@bruin */
+select * from analytics.up
+`,
+		"down.sql": `
+/* @bruin
+name: analytics.down
+type: duckdb.sql
+tags: [adhoc]
+depends: [analytics.middle]
+@bruin */
+select * from analytics.middle
+`,
+	})
+	stale := &pipelinePlanStalenessStub{snapshot: staleness.Snapshot{
+		DataStateToken: "token",
+		Assets: []staleness.AssetStatus{
+			{AssetName: "analytics.up", Status: staleness.StatusFresh},
+			{AssetName: "analytics.middle", Status: staleness.StatusNeverBuilt},
+			{AssetName: "analytics.down", Status: staleness.StatusNeverBuilt},
+		},
+	}}
+	svc := newTestPipelinePlanService(root, stale, nil)
+
+	matching, apiErr := svc.Plan(context.Background(), EncodeID("analytics"), PipelinePlanRequest{
+		Selection: PipelinePlanSelectionRequest{Mode: PipelinePlanSelectionSelector, Selector: "tag:daily"},
+	})
+	require.Nil(t, apiErr)
+	require.Len(t, matching.Assets, 2)
+	assert.Equal(t, []string{"analytics.up", "analytics.middle"}, []string{
+		matching.Assets[0].Name,
+		matching.Assets[1].Name,
+	})
+	assert.Equal(t, "tag:daily", matching.Selection.Selector)
+	assert.Equal(t, []string{"selector_match"}, matching.Assets[0].InclusionReasons)
+
+	needed, apiErr := svc.Plan(context.Background(), EncodeID("analytics"), PipelinePlanRequest{
+		Selection: PipelinePlanSelectionRequest{Mode: PipelinePlanSelectionSelectorNeeded, Selector: "tag:daily"},
+	})
+	require.Nil(t, apiErr)
+	require.Len(t, needed.Assets, 1)
+	assert.Equal(t, "analytics.middle", needed.Assets[0].Name)
+	assert.Equal(t, []string{"never_built", "selector_match"}, needed.Assets[0].InclusionReasons)
+	require.Len(t, needed.ExecutionUnits, 1)
+	assert.Equal(t, "never_built", needed.ExecutionUnits[0].Reason)
+}
+
 func TestPipelinePlanKeepsRenderableSiblingsWhenAssetYAMLIsIncomplete(t *testing.T) {
 	_, root := writeTypeCheckWorkspace(t, "id: pipeline-uuid\nname: analytics", map[string]string{
 		"good.sql": `
@@ -591,6 +653,46 @@ select 1 as id
 	assert.True(t, plan.Context.Destructive)
 	assert.Greater(t, plan.Summary.DestructiveOperations, 0)
 	assert.Contains(t, pipelinePlanIssueCodes(plan.Readiness.Warnings), "destructive_confirmation_required")
+}
+
+func TestPipelinePlanResourcesKeepExactClaimsAndFailClosed(t *testing.T) {
+	t.Parallel()
+	localIdentity := strings.Repeat("a", 64)
+	duckIdentity := strings.Repeat("b", 64)
+	assets := []PipelinePlanAsset{
+		{Target: AssetRenderTarget{WriteResource: AssetRenderWriteResource{
+			Kind: assetWriteResourceDuckDB, Identity: duckIdentity, Fidelity: AssetRenderFidelityExact,
+		}}},
+		{Target: AssetRenderTarget{WriteResource: AssetRenderWriteResource{
+			Kind: assetWriteResourceNone, Fidelity: AssetRenderFidelityExact,
+		}}},
+		{Target: AssetRenderTarget{WriteResource: AssetRenderWriteResource{
+			Kind: assetWriteResourceLocalFile, Identity: localIdentity, Fidelity: AssetRenderFidelityExact,
+		}}},
+		{Target: AssetRenderTarget{WriteResource: AssetRenderWriteResource{
+			Kind: assetWriteResourceLocalFile, Identity: localIdentity, Fidelity: AssetRenderFidelityExact,
+		}}},
+	}
+
+	exact := pipelinePlanResources(assets)
+	assert.Equal(t, PipelinePlanResourceIsolationResources, exact.Isolation)
+	assert.Equal(t, []PipelinePlanResourceClaim{
+		{Kind: assetWriteResourceDuckDB, Identity: duckIdentity},
+		{Kind: assetWriteResourceLocalFile, Identity: localIdentity},
+	}, exact.Claims)
+
+	assets = append(assets, PipelinePlanAsset{Target: AssetRenderTarget{WriteResource: AssetRenderWriteResource{
+		Kind: assetWriteResourcePipeline, Fidelity: AssetRenderFidelityRuntimeOnly,
+	}}})
+	conservative := pipelinePlanResources(assets)
+	assert.Equal(t, PipelinePlanResourceIsolationPipeline, conservative.Isolation)
+	assert.Equal(t, exact.Claims, conservative.Claims, "known exact outputs remain serialized across pipelines")
+
+	noWrite := pipelinePlanResources([]PipelinePlanAsset{{Target: AssetRenderTarget{WriteResource: AssetRenderWriteResource{
+		Kind: assetWriteResourceNone, Fidelity: AssetRenderFidelityExact,
+	}}}})
+	assert.Equal(t, PipelinePlanResourceIsolationResources, noWrite.Isolation)
+	assert.Empty(t, noWrite.Claims)
 }
 
 func newTestPipelinePlanService(

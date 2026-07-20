@@ -26,6 +26,7 @@ import (
 	"renart/internal/web/identity"
 	"renart/internal/web/matlog"
 	"renart/internal/web/policy"
+	webretention "renart/internal/web/retention"
 	webscheduler "renart/internal/web/scheduler"
 	"renart/internal/web/service"
 	"renart/internal/web/snapshot"
@@ -145,6 +146,7 @@ func serverConfigFromCommand(c *cli.Command) (serverConfig, error) {
 // stops when ctx is cancelled.
 func newWebServer(ctx context.Context, cfg serverConfig, logger *zap.Logger) (*webServer, func(), error) {
 	absRoot := cfg.workspaceRoot
+	processStartedAt := time.Now().UTC()
 	serverLease, err := acquireRuntimeWorkspaceLease(ctx, cfg)
 	if err != nil {
 		return nil, nil, err
@@ -176,6 +178,9 @@ func newWebServer(ctx context.Context, cfg serverConfig, logger *zap.Logger) (*w
 	)
 	if err != nil {
 		return nil, nil, err
+	}
+	if _, err := identity.NormalizeRetentionSettings(project.Retention); err != nil {
+		return nil, nil, fmt.Errorf("invalid retention settings in .renart/project.yml: %w", err)
 	}
 
 	server := &webServer{
@@ -405,15 +410,27 @@ func newWebServer(ctx context.Context, cfg serverConfig, logger *zap.Logger) (*w
 		ResolvePipelineUUID: server.findPipelineUUIDByID,
 		PolicyFor:           server.policyLoader.For,
 		ActiveRunID:         server.schedulerStore.ActiveRunID,
+		ConflictingRunID: func(ctx context.Context, pipelineID, pipelineUUID string, resources service.PipelinePlanResources) (string, error) {
+			claims := make([]webscheduler.PipelineRunResourceClaim, 0, len(resources.Claims))
+			for _, claim := range resources.Claims {
+				claims = append(claims, webscheduler.PipelineRunResourceClaim{
+					Kind: claim.Kind, Identity: claim.Identity,
+				})
+			}
+			return server.schedulerStore.ConflictingRunID(ctx, pipelineID, pipelineUUID, webscheduler.PipelineRunPlanResources{
+				Isolation: resources.Isolation, Claims: claims,
+			})
+		},
 		NewPipelineBuilder: func() *pipeline.Builder {
 			return service.NewRenartPipelineBuilder(afero.NewOsFs())
 		},
 	})
 
 	server.schedulerSvc = webscheduler.New(webscheduler.Options{
-		Store:     server.schedulerStore,
-		StateDir:  filepath.Dir(cfg.schedulerStatePath),
-		Pipelines: server.pipelineSvc.ListSchedules,
+		Store:                server.schedulerStore,
+		StateDir:             filepath.Dir(cfg.schedulerStatePath),
+		Pipelines:            server.pipelineSvc.ListSchedules,
+		ScheduleDeclarations: webscheduler.NewScheduleDeclarationStore(filepath.Join(absRoot, ".renart", "schedules.yml")),
 		Publish: func(event any) {
 			server.hub.PublishImmediate(event)
 		},
@@ -421,8 +438,70 @@ func newWebServer(ctx context.Context, cfg serverConfig, logger *zap.Logger) (*w
 			if replayErr := server.replayPendingCompletions(ctx); replayErr != nil {
 				return replayErr
 			}
-			_, pruneErr := server.matlogStore.Prune(ctx, time.Now().UTC().AddDate(0, 0, -90))
-			return pruneErr
+			project, err := identity.LoadProject(
+				afero.NewOsFs(),
+				filepath.Join(absRoot, ".renart", "project.yml"),
+			)
+			if err != nil {
+				return fmt.Errorf("load retention settings: %w", err)
+			}
+			retentionSettings, err := identity.NormalizeRetentionSettings(project.Retention)
+			if err != nil {
+				return fmt.Errorf("validate retention settings: %w", err)
+			}
+			now := time.Now().UTC()
+			historyResult, err := server.schedulerStore.PruneHistory(ctx, webscheduler.HistoryRetentionPolicy{
+				Runs: webscheduler.RetentionWindow{
+					OlderThan:          now.AddDate(0, 0, -retentionSettings.RunMetadata.Days),
+					MinimumPerPipeline: retentionSettings.RunMetadata.MinimumPerPipeline,
+				},
+				Logs: webscheduler.RetentionWindow{
+					OlderThan:          now.AddDate(0, 0, -retentionSettings.FullLogs.Days),
+					MinimumPerPipeline: retentionSettings.FullLogs.MinimumPerPipeline,
+				},
+				ScheduleHistoryBefore: now.AddDate(0, 0, -retentionSettings.ScheduleHistoryDays),
+			})
+			if err != nil {
+				return err
+			}
+			materializationFacts, err := server.matlogStore.Prune(
+				ctx,
+				now.AddDate(0, 0, -retentionSettings.MaterializationFactsDays),
+			)
+			if err != nil {
+				return fmt.Errorf("prune materialization facts: %w", err)
+			}
+			snapshotResult, err := server.snapshotStore.Prune(ctx, snapshot.RetentionPolicy{
+				OlderThan:          now.AddDate(0, 0, -retentionSettings.Deployments.Days),
+				MinimumPerPipeline: retentionSettings.Deployments.MinimumPerPipeline,
+			})
+			if err != nil {
+				return err
+			}
+			temporaryDirectories, err := webretention.CleanupTemporaryDirectories(
+				os.TempDir(),
+				now.Add(-time.Duration(retentionSettings.TemporaryDirectoriesHours)*time.Hour),
+				processStartedAt,
+			)
+			if err != nil {
+				return err
+			}
+			if historyResult.RunLogs > 0 || historyResult.Runs > 0 ||
+				historyResult.ScheduleOccurrences > 0 || historyResult.ArchivedSchedules > 0 ||
+				materializationFacts > 0 || snapshotResult.Snapshots > 0 ||
+				snapshotResult.Blobs > 0 || temporaryDirectories > 0 {
+				logger.Info("completed local history retention",
+					zap.Int64("run_logs", historyResult.RunLogs),
+					zap.Int64("runs", historyResult.Runs),
+					zap.Int64("schedule_occurrences", historyResult.ScheduleOccurrences),
+					zap.Int64("archived_schedules", historyResult.ArchivedSchedules),
+					zap.Int64("materialization_facts", materializationFacts),
+					zap.Int64("snapshots", snapshotResult.Snapshots),
+					zap.Int64("snapshot_blobs", snapshotResult.Blobs),
+					zap.Int("temporary_directories", temporaryDirectories),
+				)
+			}
+			return nil
 		},
 		ResolvePipelineRef: func(ctx context.Context, pipelineUUID string) (webscheduler.PipelineRef, bool) {
 			for _, p := range server.currentState().Pipelines {
@@ -610,6 +689,9 @@ func newWebServer(ctx context.Context, cfg serverConfig, logger *zap.Logger) (*w
 						TargetIdentity:              entry.TargetIdentity,
 						TargetFidelity:              string(entry.TargetFidelity),
 						TargetWriteEvidenceRequired: entry.TargetWriteEvidenceRequired,
+						WriteResourceKind:           entry.WriteResourceKind,
+						WriteResourceIdentity:       entry.WriteResourceIdentity,
+						WriteResourceFidelity:       string(entry.WriteResourceFidelity),
 						Fingerprint:                 entry.Fingerprint,
 						OwnContent:                  entry.OwnContent,
 						ConsumedVarsHash:            entry.ConsumedVarsHash,
@@ -779,8 +861,14 @@ func scheduledPipelineRunPlan(plan service.PipelinePlan, blockers []string) (web
 			RenderIndex: unit.RenderIndex, Reason: unit.Reason,
 		})
 	}
+	claims := make([]webscheduler.PipelineRunResourceClaim, 0, len(plan.Resources.Claims))
+	for _, claim := range plan.Resources.Claims {
+		claims = append(claims, webscheduler.PipelineRunResourceClaim{
+			Kind: claim.Kind, Identity: claim.Identity,
+		})
+	}
 	return webscheduler.PipelineRunPlan{
-		Version: webscheduler.PipelineRunPlanVersionV1,
+		Version: webscheduler.PipelineRunPlanVersionV2,
 		PlanID:  plan.ID, PipelineID: plan.PipelineID, PipelineUUID: plan.PipelineUUID,
 		SourceMerkle: plan.Source.MerkleRoot, ConfigurationDigest: plan.Context.ConfigurationDigest,
 		ExecutionTime: plan.Context.ExecutionTime, Blocked: plan.Status == service.PipelinePlanStatusBlocked,
@@ -788,6 +876,10 @@ func scheduledPipelineRunPlan(plan service.PipelinePlan, blockers []string) (web
 		Selection: webscheduler.PipelineRunPlanSelection{
 			Mode: plan.Selection.Mode, AssetName: plan.Selection.AssetName,
 			Scope: plan.Selection.Scope, DataStateToken: plan.Selection.DataStateToken,
+		},
+		Resources: webscheduler.PipelineRunPlanResources{
+			Isolation: plan.Resources.Isolation,
+			Claims:    claims,
 		},
 		ExecutionUnits: units,
 		Artifact:       artifact,

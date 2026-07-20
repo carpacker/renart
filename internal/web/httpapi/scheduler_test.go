@@ -272,7 +272,7 @@ func TestTriggerPipelineReportsActiveRunConflictWithRunID(t *testing.T) {
 		"status":"error",
 		"error":{
 			"code":"pipeline_run_active",
-			"message":"pipeline pipeline-id already has active run active-run-id",
+			"message":"pipeline pipeline-id execution conflicts with active run active-run-id",
 			"details":{"pipeline_id":"pipeline-id","active_run_id":"active-run-id"}
 		}
 	}`, response.Body.String())

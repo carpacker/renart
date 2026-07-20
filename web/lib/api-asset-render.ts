@@ -3,6 +3,9 @@ import type {
   AssetRenderRequest,
   AssetRenderResult,
   AssetRenderStage,
+  PipelineAssetRenderComparison,
+  PipelineAssetRenderComparisonRequest,
+  PipelineAssetRenderRequest,
 } from "@/lib/generated/api-types";
 
 export type AssetRenderFidelity = AssetRenderStage["fidelity"];
@@ -14,11 +17,35 @@ export type {
   AssetRenderResult,
   AssetRenderStage,
   AssetRenderTarget,
+  AssetRenderStageComparison,
+  AssetRenderComparisonSummary,
+  PipelineAssetRenderComparison,
+  PipelineAssetRenderComparisonRequest,
+  PipelineAssetRenderRequest,
 } from "@/lib/generated/api-types";
 
 export function renderAsset(assetId: string, request: AssetRenderRequest) {
   return fetchJSONWithBody<AssetRenderResult>(
     `/api/assets/${encodeURIComponent(assetId)}/render`,
+    "POST",
+    request,
+  );
+}
+
+export function renderPipelineAsset(pipelineId: string, request: PipelineAssetRenderRequest) {
+  return fetchJSONWithBody<AssetRenderResult>(
+    `/api/pipelines/${encodeURIComponent(pipelineId)}/assets/render`,
+    "POST",
+    request,
+  );
+}
+
+export function comparePipelineAssetRenders(
+  pipelineId: string,
+  request: PipelineAssetRenderComparisonRequest,
+) {
+  return fetchJSONWithBody<PipelineAssetRenderComparison>(
+    `/api/pipelines/${encodeURIComponent(pipelineId)}/assets/render/compare`,
     "POST",
     request,
   );

@@ -304,6 +304,7 @@ function EnvScheduleRow({
   const pinnedVersion = schedule.snapshot_version_id?.trim() ?? "";
   const pinnedDeployment = deploymentLabel(schedule.snapshot_ordinal, pinnedVersion, "deployment");
   const overrideNames = [...(schedule.variable_names ?? [])].sort();
+  const secretReferenceNames = [...(schedule.secret_reference_names ?? [])].sort();
   const deferredOccurrence = schedule.deferred_occurrence;
   const deploymentOutdated = Boolean(
     latestVersion && pinnedVersion && latestVersion !== pinnedVersion,
@@ -360,7 +361,7 @@ function EnvScheduleRow({
       const conflict = activePipelineRunConflict(cause);
       setActionError({
         message: conflict
-          ? "A run is already queued or running for this pipeline."
+          ? "Another queued or running execution conflicts with this run."
           : cause instanceof Error
             ? cause.message
             : "Failed to queue the run.",
@@ -457,6 +458,11 @@ function EnvScheduleRow({
             <ScheduleMetadata label="Window">
               <span className="break-words text-foreground">Pinned pipeline schedule</span>
             </ScheduleMetadata>
+            <ScheduleMetadata label="Definition">
+              <span className="break-words text-foreground">
+                {schedule.declaration_managed ? ".renart/schedules.yml" : "Local legacy schedule"}
+              </span>
+            </ScheduleMetadata>
           </dl>
           {sourceBlockReason ||
           deploymentOutdated ||
@@ -476,7 +482,10 @@ function EnvScheduleRow({
                     </Badge>
                   </TooltipTrigger>
                   <TooltipContent>
-                    Applied from this schedule to its pinned deployment: {overrideNames.join(", ")}
+                    Applied from this schedule to its pinned deployment: {overrideNames.join(", ")}.
+                    {secretReferenceNames.length > 0
+                      ? ` Values for ${secretReferenceNames.join(", ")} are resolved from environment references only when planning or running.`
+                      : ""}
                   </TooltipContent>
                 </Tooltip>
               ) : null}
@@ -707,10 +716,12 @@ function ArchivedSection({
           <span className="truncate">
             {schedule.archived_reason === "missing"
               ? "pipeline file missing (restores automatically when it reappears)"
-              : "archived"}
+              : schedule.archived_reason === "declaration_missing"
+                ? "removed from .renart/schedules.yml (re-add or create it again)"
+                : "archived"}
           </span>
           <span className="ml-auto" />
-          {schedule.pipeline_id ? (
+          {schedule.pipeline_id && schedule.archived_reason !== "declaration_missing" ? (
             <Button
               size="sm"
               variant="ghost"
@@ -777,6 +788,7 @@ function NewEnvScheduleDialog({
   const [timezone, setTimezone] = useState("UTC");
   const [catchupPolicy, setCatchupPolicy] = useState<CatchupPolicy>("skip");
   const [variableOverrides, setVariableOverrides] = useState("{}");
+  const [secretReferences, setSecretReferences] = useState("{}");
   const deployState = usePipelineDeploy(pipelineId || undefined);
   const [sourceMode, setSourceMode] = useState<"existing" | "deploy">("deploy");
   const [submitting, setSubmitting] = useState(false);
@@ -789,6 +801,7 @@ function NewEnvScheduleDialog({
       timezone: string;
       catchup_policy: CatchupPolicy;
       vars?: Record<string, unknown>;
+      secret_refs?: Record<string, string>;
     };
   } | null>(null);
 
@@ -798,6 +811,7 @@ function NewEnvScheduleDialog({
       setEnvironment(workspace?.selected_environment ?? "");
       setSourceMode("deploy");
       setVariableOverrides("{}");
+      setSecretReferences("{}");
       setError(null);
       setPendingDeployment(null);
     }
@@ -834,12 +848,41 @@ function NewEnvScheduleDialog({
       setError("Variable overrides must be valid JSON.");
       return;
     }
+    let secretRefs: Record<string, string> | undefined;
+    try {
+      const decoded: unknown = JSON.parse(secretReferences.trim() || "{}");
+      if (!decoded || typeof decoded !== "object" || Array.isArray(decoded)) {
+        setError("Secret references must be a JSON object keyed by declared variable name.");
+        return;
+      }
+      const entries = Object.entries(decoded as Record<string, unknown>);
+      for (const [name, reference] of entries) {
+        if (
+          !name.trim() ||
+          name.trim() !== name ||
+          typeof reference !== "string" ||
+          !/^env:[A-Za-z_][A-Za-z0-9_]*$/.test(reference)
+        ) {
+          setError("Secret references must use declared variable names and env:NAME values.");
+          return;
+        }
+        if (vars && Object.prototype.hasOwnProperty.call(vars, name)) {
+          setError(`Variable ${name} cannot have both a literal override and a secret reference.`);
+          return;
+        }
+      }
+      if (entries.length > 0) secretRefs = decoded as Record<string, string>;
+    } catch {
+      setError("Secret references must be valid JSON.");
+      return;
+    }
     const selectedPipeline = { id: pipeline.id, uuid: pipeline.uuid, name: pipeline.name };
     const scheduleInput = {
       cron: cron.trim(),
       timezone: timezone.trim() || "UTC",
       catchup_policy: catchupPolicy,
       vars,
+      secret_refs: secretRefs,
     };
     if (sourceMode === "deploy") {
       setPendingDeployment({
@@ -876,7 +919,8 @@ function NewEnvScheduleDialog({
               New schedule
             </DialogTitle>
             <DialogDescription>
-              Schedules are per pipeline and environment, and execute a deployed snapshot.
+              Desired schedule settings are saved in .renart/schedules.yml. Each machine keeps its
+              exact deployment pin and run history locally.
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-3">
@@ -950,6 +994,21 @@ function NewEnvScheduleDialog({
               <span className="block text-[11px] text-muted-foreground">
                 Optional JSON values are validated against the declarations in the pinned
                 deployment. Plans and schedule responses expose names and digests, not values.
+              </span>
+            </label>
+            <label className="block space-y-1.5">
+              <span className="text-xs font-medium text-muted-foreground">Secret references</span>
+              <Textarea
+                className="min-h-20 font-mono text-xs"
+                value={secretReferences}
+                onChange={(event) => setSecretReferences(event.target.value)}
+                placeholder={'{"api_token":"env:RENART_API_TOKEN"}'}
+                spellCheck={false}
+              />
+              <span className="block text-[11px] text-muted-foreground">
+                Only env:NAME references are committed. Renart resolves their values from the server
+                process when planning and running; resolved values are never written to schedule or
+                run state.
               </span>
             </label>
             <div className="space-y-1.5">

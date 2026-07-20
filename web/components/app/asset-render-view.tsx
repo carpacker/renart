@@ -1,22 +1,34 @@
 "use client";
 
 import type { Monaco } from "@monaco-editor/react";
-import { AlertTriangle, Check, Copy, FileCode2, ShieldCheck } from "lucide-react";
-import { lazy, Suspense, useCallback, useEffect, useMemo, useState } from "react";
+import { AlertTriangle, Check, Copy, FileCode2, GitCompareArrows, ShieldCheck } from "lucide-react";
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import {
+  Select,
+  SelectContent,
+  SelectGroup,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { Spinner } from "@/components/ui/spinner";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { useWorkspaceTheme } from "@/hooks/use-workspace-theme";
 import type {
   AssetRenderFidelity,
+  AssetRenderStageComparison,
   AssetRenderResult,
   AssetRenderStage,
   AssetRenderStageStatus,
+  PipelineAssetRenderComparison,
 } from "@/lib/api-asset-render";
+import { comparePipelineAssetRenders } from "@/lib/api-asset-render";
 import { copyTextToClipboard } from "@/lib/copy-to-clipboard";
+import { listSnapshots, type SnapshotSummary } from "@/lib/api-deploy";
 import { loadMonacoEditorModule } from "@/lib/load-monaco-editor";
 import { defineBruinMonacoThemes } from "@/lib/monaco-theme";
 import { cn } from "@/lib/utils";
@@ -26,19 +38,35 @@ const MonacoEditor = lazy(async () => {
   return { default: module.default };
 });
 
+const MonacoDiffEditor = lazy(async () => {
+  const module = await loadMonacoEditorModule();
+  return { default: module.DiffEditor };
+});
+
 export function AssetRenderView({
   result,
   loading,
   error,
   onRetry,
+  pipelineId,
 }: {
   result: AssetRenderResult | null;
   loading: boolean;
   error: string | null;
   onRetry: () => void;
+  pipelineId?: string;
 }) {
   const [selectedStage, setSelectedStage] = useState("");
   const [copied, setCopied] = useState(false);
+  const [comparisonOpen, setComparisonOpen] = useState(false);
+  const [comparison, setComparison] = useState<PipelineAssetRenderComparison | null>(null);
+  const [comparisonLoading, setComparisonLoading] = useState(false);
+  const [comparisonError, setComparisonError] = useState<string | null>(null);
+  const [snapshots, setSnapshots] = useState<SnapshotSummary[]>([]);
+  const [selectedSnapshot, setSelectedSnapshot] = useState("latest");
+  const [selectedComparisonStage, setSelectedComparisonStage] = useState("");
+  const comparisonRequestId = useRef(0);
+  const snapshotRequestId = useRef(0);
   const stageKeys = useMemo(
     () => result?.stages.map((stage, index) => `${index}:${stage.kind}`) ?? [],
     [result],
@@ -51,8 +79,84 @@ export function AssetRenderView({
     setCopied(false);
   }, [result?.asset.id, result?.provenance.source.merkle_root, stageKeys]);
 
+  const resultIdentity = result
+    ? `${result.asset.name}:${result.provenance.source.kind}:${result.provenance.source.merkle_root}`
+    : "";
+  useEffect(() => {
+    comparisonRequestId.current += 1;
+    snapshotRequestId.current += 1;
+    setComparisonOpen(false);
+    setComparison(null);
+    setComparisonError(null);
+    setComparisonLoading(false);
+    setSnapshots([]);
+    setSelectedSnapshot("latest");
+    setSelectedComparisonStage("");
+  }, [resultIdentity, pipelineId]);
+
+  useEffect(() => {
+    if (!comparisonOpen || !pipelineId) return;
+    const requestId = ++snapshotRequestId.current;
+    void listSnapshots(pipelineId)
+      .then(({ snapshots: availableSnapshots }) => {
+        if (snapshotRequestId.current === requestId) setSnapshots(availableSnapshots);
+      })
+      .catch(() => {
+        if (snapshotRequestId.current === requestId) setSnapshots([]);
+      });
+  }, [comparisonOpen, pipelineId]);
+
+  const loadComparison = useCallback(
+    async (snapshotVersion: string) => {
+      if (!pipelineId || !result) return;
+      const requestId = ++comparisonRequestId.current;
+      setComparisonLoading(true);
+      setComparisonError(null);
+      try {
+        const context = result.provenance.context;
+        const next = await comparePipelineAssetRenders(pipelineId, {
+          asset_name: result.asset.name,
+          snapshot_version_id: snapshotVersion === "latest" ? undefined : snapshotVersion,
+          environment: context.environment,
+          start_date: context.start_date,
+          end_date: context.end_date,
+          execution_time: context.execution_time,
+          full_refresh: context.requested_full_refresh,
+        });
+        if (comparisonRequestId.current === requestId) setComparison(next);
+      } catch (cause) {
+        if (comparisonRequestId.current === requestId) {
+          setComparisonError(
+            cause instanceof Error ? cause.message : "Rendered operation comparison failed.",
+          );
+        }
+      } finally {
+        if (comparisonRequestId.current === requestId) setComparisonLoading(false);
+      }
+    },
+    [pipelineId, result],
+  );
+
+  useEffect(() => {
+    const comparisonStages = comparison?.stages ?? [];
+    setSelectedComparisonStage(
+      comparisonStages.find(
+        (item) =>
+          item.status !== "unchanged" &&
+          Boolean(item.working_tree?.content || item.deployment?.content),
+      )?.key ??
+        comparisonStages.find((item) => item.working_tree?.content || item.deployment?.content)
+          ?.key ??
+        comparisonStages[0]?.key ??
+        "",
+    );
+  }, [comparison]);
+
   const selectedIndex = stageKeys.indexOf(selectedStage);
   const stage = selectedIndex >= 0 ? result?.stages[selectedIndex] : result?.stages[0];
+  const canCompare = Boolean(
+    pipelineId && result?.provenance.source.kind === "working_tree" && !loading,
+  );
   const copyStage = useCallback(async () => {
     if (!stage?.content || !(await copyTextToClipboard(stage.content))) return;
     setCopied(true);
@@ -171,6 +275,27 @@ export function AssetRenderView({
               <ShieldCheck className="size-3" data-icon="inline-start" /> Credentials redacted
             </Badge>
           ) : null}
+          {pipelineId && result.provenance.source.kind === "working_tree" ? (
+            <Button
+              variant={comparisonOpen ? "secondary" : "outline"}
+              size="xs"
+              className="ml-auto shrink-0"
+              disabled={!canCompare}
+              onClick={() => {
+                if (comparisonOpen) {
+                  comparisonRequestId.current += 1;
+                  setComparisonOpen(false);
+                  setComparisonLoading(false);
+                  return;
+                }
+                setComparisonOpen(true);
+                void loadComparison(selectedSnapshot);
+              }}
+            >
+              <GitCompareArrows data-icon="inline-start" />
+              {comparisonOpen ? "Close comparison" : "Compare deployment"}
+            </Button>
+          ) : null}
           {loading ? <Spinner className="ml-auto size-3.5" /> : null}
         </div>
         {error ? (
@@ -192,42 +317,57 @@ export function AssetRenderView({
             {result.issues.map((issue) => issue.message).join(" · ")}
           </div>
         ) : null}
-        <div className="mt-1.5 flex min-w-0 items-center gap-1.5">
-          <div className="min-w-0 flex-1 overflow-x-auto pb-px">
-            <ToggleGroup
-              type="single"
-              value={stageKeys.includes(selectedStage) ? selectedStage : stageKeys[0]}
-              onValueChange={(value) => value && setSelectedStage(value)}
+        {comparisonOpen ? (
+          <AssetRenderComparisonToolbar
+            comparison={comparison}
+            loading={comparisonLoading}
+            snapshots={snapshots}
+            selectedSnapshot={selectedSnapshot}
+            onSnapshotChange={(version) => {
+              setSelectedSnapshot(version);
+              void loadComparison(version);
+            }}
+            selectedStage={selectedComparisonStage}
+            onStageChange={setSelectedComparisonStage}
+          />
+        ) : (
+          <div className="mt-1.5 flex min-w-0 items-center gap-1.5">
+            <div className="min-w-0 flex-1 overflow-x-auto pb-px">
+              <ToggleGroup
+                type="single"
+                value={stageKeys.includes(selectedStage) ? selectedStage : stageKeys[0]}
+                onValueChange={(value) => value && setSelectedStage(value)}
+                variant="outline"
+                size="sm"
+                spacing={0}
+                aria-label="Rendered operation"
+              >
+                {result.stages.map((item, index) => (
+                  <ToggleGroupItem
+                    key={stageKeys[index]}
+                    value={stageKeys[index]}
+                    title={item.message || assetRenderStageLabel(item)}
+                  >
+                    {assetRenderStageLabel(item)}
+                  </ToggleGroupItem>
+                ))}
+              </ToggleGroup>
+            </div>
+            {stage ? <StageStatusBadge status={stage.status} fidelity={stage.fidelity} /> : null}
+            <Button
               variant="outline"
-              size="sm"
-              spacing={0}
-              aria-label="Rendered operation"
+              size="xs"
+              className="shrink-0"
+              onClick={() => void copyStage()}
+              disabled={!stage?.content}
+              aria-label="Copy rendered operation"
             >
-              {result.stages.map((item, index) => (
-                <ToggleGroupItem
-                  key={stageKeys[index]}
-                  value={stageKeys[index]}
-                  title={item.message || assetRenderStageLabel(item)}
-                >
-                  {assetRenderStageLabel(item)}
-                </ToggleGroupItem>
-              ))}
-            </ToggleGroup>
+              {copied ? <Check data-icon="inline-start" /> : <Copy data-icon="inline-start" />}
+              {copied ? "Copied" : "Copy"}
+            </Button>
           </div>
-          {stage ? <StageStatusBadge status={stage.status} fidelity={stage.fidelity} /> : null}
-          <Button
-            variant="outline"
-            size="xs"
-            className="shrink-0"
-            onClick={() => void copyStage()}
-            disabled={!stage?.content}
-            aria-label="Copy rendered operation"
-          >
-            {copied ? <Check data-icon="inline-start" /> : <Copy data-icon="inline-start" />}
-            {copied ? "Copied" : "Copy"}
-          </Button>
-        </div>
-        {stage?.message ? (
+        )}
+        {!comparisonOpen && stage?.message ? (
           <p className="mt-1 truncate text-[11px] text-muted-foreground" title={stage.message}>
             {stage.message}
           </p>
@@ -235,7 +375,15 @@ export function AssetRenderView({
       </div>
 
       <div className="min-h-0 flex-1">
-        {stage?.content ? (
+        {comparisonOpen ? (
+          <AssetRenderComparisonView
+            comparison={comparison}
+            loading={comparisonLoading}
+            error={comparisonError}
+            selectedStage={selectedComparisonStage}
+            onRetry={() => void loadComparison(selectedSnapshot)}
+          />
+        ) : stage?.content ? (
           <ReadOnlyRenderedOperation
             content={stage.content}
             language={stage.language || "sql"}
@@ -249,6 +397,187 @@ export function AssetRenderView({
       </div>
     </div>
   );
+}
+
+function AssetRenderComparisonToolbar({
+  comparison,
+  loading,
+  snapshots,
+  selectedSnapshot,
+  onSnapshotChange,
+  selectedStage,
+  onStageChange,
+}: {
+  comparison: PipelineAssetRenderComparison | null;
+  loading: boolean;
+  snapshots: SnapshotSummary[];
+  selectedSnapshot: string;
+  onSnapshotChange: (version: string) => void;
+  selectedStage: string;
+  onStageChange: (stage: string) => void;
+}) {
+  return (
+    <div className="mt-1.5 flex min-w-0 flex-wrap items-center gap-1.5">
+      <span className="text-[11px] text-muted-foreground">Against</span>
+      <Select value={selectedSnapshot} onValueChange={onSnapshotChange} disabled={loading}>
+        <SelectTrigger size="sm" className="max-w-52" aria-label="Deployment to compare">
+          <SelectValue placeholder="Latest deployment" />
+        </SelectTrigger>
+        <SelectContent>
+          <SelectGroup>
+            <SelectItem value="latest">Latest deployment</SelectItem>
+            {snapshots.map((snapshot) => (
+              <SelectItem key={snapshot.version_id} value={snapshot.version_id}>
+                Deployment #{snapshot.ordinal} · {snapshot.merkle_root.slice(0, 8)}
+              </SelectItem>
+            ))}
+          </SelectGroup>
+        </SelectContent>
+      </Select>
+      {comparison?.stages.length ? (
+        <Select value={selectedStage} onValueChange={onStageChange} disabled={loading}>
+          <SelectTrigger size="sm" className="min-w-36 max-w-64" aria-label="Operation to compare">
+            <SelectValue placeholder="Rendered operation" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectGroup>
+              {comparison.stages.map((item) => (
+                <SelectItem key={item.key} value={item.key}>
+                  {comparisonStageLabel(item)} · {item.status}
+                </SelectItem>
+              ))}
+            </SelectGroup>
+          </SelectContent>
+        </Select>
+      ) : null}
+      {comparison ? (
+        <span className="min-w-0 truncate text-[11px] text-muted-foreground">
+          {formatComparisonSummary(comparison)}
+        </span>
+      ) : null}
+      {loading ? <Spinner className="size-3.5" /> : null}
+    </div>
+  );
+}
+
+function AssetRenderComparisonView({
+  comparison,
+  loading,
+  error,
+  selectedStage,
+  onRetry,
+}: {
+  comparison: PipelineAssetRenderComparison | null;
+  loading: boolean;
+  error: string | null;
+  selectedStage: string;
+  onRetry: () => void;
+}) {
+  if (loading && !comparison) {
+    return <RenderCentered loading message="Comparing rendered operations…" />;
+  }
+  if (error && !comparison) {
+    return (
+      <div className="flex h-full min-h-0 items-center justify-center overflow-auto p-3">
+        <Alert variant="destructive" className="max-w-xl">
+          <AlertTriangle />
+          <AlertTitle>Comparison failed</AlertTitle>
+          <AlertDescription className="flex items-center justify-between gap-3">
+            <span>{error}</span>
+            <Button variant="outline" size="xs" onClick={onRetry}>
+              Retry
+            </Button>
+          </AlertDescription>
+        </Alert>
+      </div>
+    );
+  }
+  if (!comparison) {
+    return <RenderCentered message="Choose a deployment to compare rendered operations." />;
+  }
+
+  const stage =
+    comparison.stages.find((item) => item.key === selectedStage) ?? comparison.stages[0];
+  if (!stage) {
+    return (
+      <RenderCentered message="Neither source produced a rendered operation for this asset." />
+    );
+  }
+  const deployment = stage.deployment;
+  const workingTree = stage.working_tree;
+  const language = workingTree?.language || deployment?.language || "sql";
+  const sourceLabel = comparison.snapshot.deployment_ordinal
+    ? `Deployment #${comparison.snapshot.deployment_ordinal}`
+    : `Deployment ${comparison.snapshot.merkle_root.slice(0, 8)}`;
+  const hasContent = Boolean(deployment?.content || workingTree?.content);
+
+  return (
+    <div className="flex h-full min-h-0 flex-col" data-testid="asset-render-comparison">
+      <div className="grid shrink-0 grid-cols-2 border-b bg-muted/20 text-[11px]">
+        <div className="min-w-0 truncate border-r px-2 py-1 font-medium" title={sourceLabel}>
+          {sourceLabel}
+        </div>
+        <div className="flex min-w-0 items-center gap-2 px-2 py-1 font-medium">
+          <span className="min-w-0 flex-1 truncate">Saved workspace</span>
+          <ComparisonStatusBadge status={stage.status} />
+        </div>
+      </div>
+      <div className="min-h-0 flex-1">
+        {hasContent ? (
+          <ReadOnlyRenderedOperationDiff
+            original={deployment?.content ?? ""}
+            modified={workingTree?.content ?? ""}
+            language={language}
+            modelKey={`${comparison.asset_name}:${comparison.snapshot.version_id ?? comparison.snapshot.merkle_root}:${stage.key}`}
+          />
+        ) : (
+          <RenderCentered
+            message={
+              workingTree?.message ||
+              deployment?.message ||
+              "This operation is semantic or runtime-dependent and has no textual SQL diff."
+            }
+          />
+        )}
+      </div>
+    </div>
+  );
+}
+
+function ComparisonStatusBadge({ status }: { status: string }) {
+  return (
+    <Badge
+      variant={
+        status === "removed" ? "destructive" : status === "unchanged" ? "muted" : "secondary"
+      }
+      size="xs"
+      className={cn(
+        "shrink-0",
+        status === "added" && "text-emerald-700 dark:text-emerald-300",
+        status === "changed" && "text-amber-700 dark:text-amber-300",
+      )}
+    >
+      {status}
+    </Badge>
+  );
+}
+
+function comparisonStageLabel(comparison: AssetRenderStageComparison) {
+  const stage = comparison.working_tree ?? comparison.deployment;
+  return stage ? assetRenderStageLabel(stage) : "Rendered operation";
+}
+
+function formatComparisonSummary(comparison: PipelineAssetRenderComparison) {
+  const { added, removed, changed, unchanged } = comparison.summary;
+  if (comparison.status === "unchanged") return `${unchanged} unchanged`;
+  return [
+    added ? `${added} added` : "",
+    removed ? `${removed} removed` : "",
+    changed ? `${changed} changed` : "",
+    unchanged ? `${unchanged} unchanged` : "",
+  ]
+    .filter(Boolean)
+    .join(" · ");
 }
 
 function variableSourceLabel(source: string) {
@@ -295,6 +624,56 @@ export function ReadOnlyRenderedOperation({
           lineNumbersMinChars: 3,
           renderLineHighlight: "none",
           scrollBeyondLastLine: false,
+          wordWrap: "on",
+        }}
+      />
+    </Suspense>
+  );
+}
+
+function ReadOnlyRenderedOperationDiff({
+  original,
+  modified,
+  language,
+  modelKey,
+}: {
+  original: string;
+  modified: string;
+  language: string;
+  modelKey: string;
+}) {
+  const { monacoTheme } = useWorkspaceTheme();
+  const beforeMount = useCallback((monaco: Monaco) => defineBruinMonacoThemes(monaco), []);
+  const extension = language === "sql" ? "sql" : language === "json" ? "json" : "txt";
+  const encodedKey = encodeURIComponent(modelKey);
+
+  return (
+    <Suspense fallback={<RenderCentered loading message="Loading comparison…" />}>
+      <MonacoDiffEditor
+        original={original}
+        modified={modified}
+        language={language}
+        originalModelPath={`inmemory://renart/render-diff/deployment/${encodedKey}.${extension}`}
+        modifiedModelPath={`inmemory://renart/render-diff/working-tree/${encodedKey}.${extension}`}
+        theme={monacoTheme}
+        beforeMount={beforeMount}
+        options={{
+          automaticLayout: true,
+          diffCodeLens: false,
+          domReadOnly: true,
+          enableSplitViewResizing: true,
+          folding: true,
+          fontSize: 12,
+          glyphMargin: false,
+          ignoreTrimWhitespace: false,
+          lineNumbersMinChars: 3,
+          minimap: { enabled: false },
+          originalEditable: false,
+          readOnly: true,
+          renderOverviewRuler: false,
+          renderSideBySide: true,
+          scrollBeyondLastLine: false,
+          useInlineViewWhenSpaceIsLimited: false,
           wordWrap: "on",
         }}
       />

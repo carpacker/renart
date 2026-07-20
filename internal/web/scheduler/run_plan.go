@@ -12,8 +12,14 @@ import (
 
 const (
 	PipelineRunPlanVersionV1 = 1
+	PipelineRunPlanVersionV2 = 2
 	maxPipelineRunPlanBytes  = 8 << 20
 	pipelineDataStateTokenV1 = "renart-data-state-v1"
+
+	PipelineRunResourceIsolationResources = "resources"
+	PipelineRunResourceIsolationPipeline  = "pipeline"
+	PipelineRunResourceKindLocalFile      = "local_file"
+	PipelineRunResourceKindDuckDBDatabase = "duckdb_database"
 )
 
 var ErrInvalidStoredRunPlan = errors.New("stored pipeline run plan is invalid")
@@ -32,6 +38,7 @@ type PipelineRunPlan struct {
 	Blocked             bool                       `json:"blocked,omitempty"`
 	Blockers            []string                   `json:"blockers,omitempty"`
 	Selection           PipelineRunPlanSelection   `json:"selection"`
+	Resources           PipelineRunPlanResources   `json:"resources,omitempty"`
 	ExecutionUnits      []PipelineRunExecutionUnit `json:"execution_units"`
 	Preview             *PipelineRunPlanPreview    `json:"preview,omitempty"`
 	Artifact            json.RawMessage            `json:"artifact"`
@@ -51,7 +58,18 @@ type PipelineRunPlanSelection struct {
 	Mode           string `json:"mode"`
 	AssetName      string `json:"asset_name,omitempty"`
 	Scope          string `json:"scope,omitempty"`
+	Selector       string `json:"selector,omitempty"`
 	DataStateToken string `json:"data_state_token,omitempty"`
+}
+
+type PipelineRunResourceClaim struct {
+	Kind     string `json:"kind"`
+	Identity string `json:"identity"`
+}
+
+type PipelineRunPlanResources struct {
+	Isolation string                     `json:"isolation"`
+	Claims    []PipelineRunResourceClaim `json:"claims"`
 }
 
 type PipelineRunExecutionUnit struct {
@@ -113,8 +131,15 @@ func (e *invalidRunPlanError) Unwrap() error {
 }
 
 func (plan PipelineRunPlan) validate() error {
-	if plan.Version != PipelineRunPlanVersionV1 {
+	if plan.Version != PipelineRunPlanVersionV1 && plan.Version != PipelineRunPlanVersionV2 {
 		return fmt.Errorf("unsupported pipeline run plan version %d", plan.Version)
+	}
+	if plan.Version == PipelineRunPlanVersionV1 {
+		if plan.Resources.Isolation != "" || len(plan.Resources.Claims) != 0 {
+			return errors.New("pipeline run plan v1 cannot contain resource claims")
+		}
+	} else if err := validatePipelineRunPlanResources(plan.Resources); err != nil {
+		return err
 	}
 	if err := validateRunIdentityDigest("plan_id", strings.TrimSpace(plan.PlanID)); err != nil {
 		return err
@@ -134,7 +159,8 @@ func (plan PipelineRunPlan) validate() error {
 	if err := validatePipelineRunPlanSelection(plan.Selection); err != nil {
 		return err
 	}
-	if len(plan.ExecutionUnits) == 0 && !plan.Blocked && (plan.Preview == nil || plan.Selection.Mode != "needed" || len(plan.Preview.ExecutionUnits) == 0) {
+	if len(plan.ExecutionUnits) == 0 && !plan.Blocked &&
+		(plan.Preview == nil || !pipelineRunPlanSelectionUsesNeededState(plan.Selection.Mode) || len(plan.Preview.ExecutionUnits) == 0) {
 		return errors.New("pipeline run plan requires at least one execution unit unless a reviewed needed plan became empty")
 	}
 	if plan.Blocked != (len(plan.Blockers) > 0) {
@@ -174,8 +200,8 @@ func (plan PipelineRunPlan) validate() error {
 		return err
 	}
 	if plan.Preview != nil {
-		if plan.Selection.Mode != "needed" {
-			return errors.New("pipeline run plan preview is only valid for needed selection")
+		if !pipelineRunPlanSelectionUsesNeededState(plan.Selection.Mode) {
+			return errors.New("pipeline run plan preview is only valid for a needed selection")
 		}
 		if plan.Preview.PlanID == plan.PlanID {
 			return errors.New("pipeline run plan preview and final plan identities must differ")
@@ -184,6 +210,34 @@ func (plan PipelineRunPlan) validate() error {
 		if expanded || !equalPipelineRunExecutionUnitsIgnoringRenderIndex(omitted, plan.Preview.OmittedExecutionUnits) {
 			return errors.New("pipeline run plan preview delta does not match final execution units")
 		}
+	}
+	return nil
+}
+
+func validatePipelineRunPlanResources(resources PipelineRunPlanResources) error {
+	switch resources.Isolation {
+	case PipelineRunResourceIsolationResources, PipelineRunResourceIsolationPipeline:
+	default:
+		return fmt.Errorf("unsupported pipeline run resource isolation %q", resources.Isolation)
+	}
+	previous := ""
+	for index, claim := range resources.Claims {
+		if claim.Kind != strings.TrimSpace(claim.Kind) || claim.Identity != strings.TrimSpace(claim.Identity) {
+			return fmt.Errorf("pipeline run resource claim %d must be canonical", index)
+		}
+		switch claim.Kind {
+		case PipelineRunResourceKindLocalFile, PipelineRunResourceKindDuckDBDatabase:
+		default:
+			return fmt.Errorf("pipeline run resource claim %d has unsupported kind %q", index, claim.Kind)
+		}
+		if err := validateRunIdentityDigest(fmt.Sprintf("resources.claims[%d].identity", index), claim.Identity); err != nil {
+			return err
+		}
+		key := claim.Kind + "\x00" + claim.Identity
+		if previous != "" && key <= previous {
+			return errors.New("pipeline run resource claims must be sorted and unique")
+		}
+		previous = key
 	}
 	return nil
 }
@@ -218,14 +272,22 @@ func validatePipelineRunPlanSelection(selection PipelineRunPlanSelection) error 
 	selection.Mode = strings.TrimSpace(selection.Mode)
 	selection.AssetName = strings.TrimSpace(selection.AssetName)
 	selection.Scope = strings.TrimSpace(selection.Scope)
+	selection.Selector = strings.TrimSpace(selection.Selector)
 	switch selection.Mode {
 	case "all", "needed":
-		if selection.AssetName != "" || selection.Scope != "" {
-			return errors.New("pipeline run plan all/needed selection cannot contain asset_name or scope")
+		if selection.AssetName != "" || selection.Scope != "" || selection.Selector != "" {
+			return errors.New("pipeline run plan all/needed selection cannot contain asset_name, scope, or selector")
 		}
 	case "asset":
-		if selection.AssetName == "" || selection.Scope == "" {
+		if selection.AssetName == "" || selection.Scope == "" || selection.Selector != "" {
 			return errors.New("pipeline run plan asset selection requires asset_name and scope")
+		}
+	case "selector", "selector_needed":
+		if selection.AssetName != "" || selection.Scope != "" || selection.Selector == "" {
+			return errors.New("pipeline run plan selector selection requires selector without asset_name or scope")
+		}
+		if len(selection.Selector) > 4096 {
+			return errors.New("pipeline run plan selector exceeds the 4096 byte limit")
 		}
 	default:
 		return fmt.Errorf("unsupported pipeline run plan selection %q", selection.Mode)
@@ -236,6 +298,15 @@ func validatePipelineRunPlanSelection(selection PipelineRunPlanSelection) error 
 		}
 	}
 	return nil
+}
+
+func pipelineRunPlanSelectionUsesNeededState(mode string) bool {
+	switch strings.TrimSpace(mode) {
+	case "needed", "selector_needed":
+		return true
+	default:
+		return false
+	}
 }
 
 func validatePipelineDataStateToken(field, value string) error {
@@ -289,6 +360,7 @@ func validatePipelineRunPlanArtifact(plan PipelineRunPlan) error {
 			} `json:"blockers"`
 		} `json:"readiness"`
 		Selection      PipelineRunPlanSelection   `json:"selection"`
+		Resources      PipelineRunPlanResources   `json:"resources"`
 		ExecutionUnits []PipelineRunExecutionUnit `json:"execution_units"`
 		Assets         []struct {
 			Renders []struct {
@@ -316,6 +388,9 @@ func validatePipelineRunPlanArtifact(plan PipelineRunPlan) error {
 	if artifact.Selection != plan.Selection {
 		return errors.New("pipeline run plan artifact selection does not match its durable binding")
 	}
+	if plan.Version >= PipelineRunPlanVersionV2 && !equalPipelineRunPlanResources(artifact.Resources, plan.Resources) {
+		return errors.New("pipeline run plan artifact resources do not match their durable binding")
+	}
 	if plan.Blocked != (strings.TrimSpace(artifact.Status) == "blocked") {
 		return errors.New("pipeline run plan artifact blocked status does not match its durable binding")
 	}
@@ -341,6 +416,18 @@ func validatePipelineRunPlanArtifact(plan PipelineRunPlan) error {
 		}
 	}
 	return nil
+}
+
+func equalPipelineRunPlanResources(left, right PipelineRunPlanResources) bool {
+	if left.Isolation != right.Isolation || len(left.Claims) != len(right.Claims) {
+		return false
+	}
+	for index := range left.Claims {
+		if left.Claims[index] != right.Claims[index] {
+			return false
+		}
+	}
+	return true
 }
 
 func equalStrings(left, right []string) bool {
@@ -437,7 +524,14 @@ func validateRunPlanAdmissionBinding(run PipelineRun, spec runSpecV1, plan Pipel
 		strings.TrimSpace(plan.PipelineID) != strings.TrimSpace(run.PipelineID) {
 		return errors.New("confirmed pipeline run plan does not match the admitted pipeline")
 	}
-	if strings.TrimSpace(spec.Pipeline.UUID) != "" && strings.TrimSpace(plan.PipelineUUID) != strings.TrimSpace(spec.Pipeline.UUID) {
+	planUUID := strings.TrimSpace(plan.PipelineUUID)
+	specUUID := strings.TrimSpace(spec.Pipeline.UUID)
+	runUUID := strings.TrimSpace(run.PipelineUUID)
+	if plan.Version >= PipelineRunPlanVersionV2 &&
+		(specUUID == "" || planUUID != specUUID || (runUUID != "" && planUUID != runUUID)) {
+		return errors.New("confirmed pipeline run plan requires the admitted stable pipeline identity")
+	}
+	if specUUID != "" && planUUID != specUUID {
 		return errors.New("confirmed pipeline run plan stable identity does not match the admitted pipeline")
 	}
 	return nil
@@ -451,7 +545,7 @@ func marshalPipelineRunPlan(plan PipelineRunPlan) ([]byte, error) {
 }
 
 func unmarshalPipelineRunPlan(version int, body []byte) (PipelineRunPlan, error) {
-	if version != PipelineRunPlanVersionV1 {
+	if version != PipelineRunPlanVersionV1 && version != PipelineRunPlanVersionV2 {
 		return PipelineRunPlan{}, fmt.Errorf("unsupported pipeline run plan version %d", version)
 	}
 	var plan PipelineRunPlan

@@ -120,3 +120,40 @@ func TestEnsureProjectLeavesUnparseableFileUntouched(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, corrupt, string(content))
 }
+
+func TestNormalizeRetentionSettingsUsesDefaultsAndSupportsPartialPolicy(t *testing.T) {
+	t.Parallel()
+
+	defaults, err := NormalizeRetentionSettings(nil)
+	require.NoError(t, err)
+	assert.Equal(t, DefaultRetentionSettings(), defaults)
+
+	partial, err := NormalizeRetentionSettings(&RetentionSettings{
+		RunMetadata:              RetentionWindow{Days: 45, MinimumPerPipeline: 0},
+		MaterializationFactsDays: 30,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, RetentionWindow{Days: 45, MinimumPerPipeline: 0}, partial.RunMetadata)
+	assert.Equal(t, DefaultRetentionSettings().FullLogs, partial.FullLogs)
+	assert.Equal(t, 30, partial.MaterializationFactsDays)
+	assert.Equal(t, DefaultRetentionSettings().Deployments, partial.Deployments)
+}
+
+func TestNormalizeRetentionSettingsRejectsUnsafeValues(t *testing.T) {
+	t.Parallel()
+
+	_, err := NormalizeRetentionSettings(&RetentionSettings{
+		RunMetadata: RetentionWindow{Days: -1, MinimumPerPipeline: 10},
+	})
+	require.ErrorContains(t, err, "run metadata retention")
+
+	_, err = NormalizeRetentionSettings(&RetentionSettings{
+		RunMetadata: RetentionWindow{Days: 1, MinimumPerPipeline: -1},
+	})
+	require.ErrorContains(t, err, "minimum per pipeline")
+
+	_, err = NormalizeRetentionSettings(&RetentionSettings{
+		TemporaryDirectoriesHours: -1,
+	})
+	require.ErrorContains(t, err, "temporary directory retention")
+}

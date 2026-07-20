@@ -325,12 +325,12 @@ export function AppRunDetailPage({
       const conflict = activePipelineRunConflict(cause);
       setRerunError({
         message: conflict
-          ? "A run is already queued or running for this pipeline."
+          ? "Another queued or running execution conflicts with this run."
           : cause instanceof Error
             ? cause.message
             : "Failed to queue the run.",
         linkedRunId: conflict?.activeRunId,
-        title: conflict ? "Pipeline already running" : undefined,
+        title: conflict ? "Conflicting run" : undefined,
         linkLabel: conflict ? "Open active run" : undefined,
       });
       return;
@@ -829,6 +829,10 @@ function formatRunPlanSource(kind: string, versionId?: string, ordinal?: number)
 }
 
 function formatRunPlanSelection(plan: PipelineRunPlan) {
+  if (plan.selection.mode === "selector" || plan.selection.mode === "selector_needed") {
+    const prefix = plan.selection.mode === "selector_needed" ? "Needed matching" : "Matching";
+    return `${prefix} · ${plan.selection.selector || "Unknown selector"}`;
+  }
   if (plan.selection.mode !== "asset") {
     return humanizePlanValue(plan.selection.mode);
   }

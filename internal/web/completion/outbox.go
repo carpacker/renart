@@ -21,6 +21,7 @@ import (
 const (
 	envelopeVersionV1       = 1
 	targetSnapshotVersionV2 = 2
+	targetSnapshotVersionV3 = 3
 )
 
 var (
@@ -260,6 +261,9 @@ type executionTargetV1 struct {
 	TargetIdentity              string                `json:"target_identity"`
 	TargetFidelity              string                `json:"target_fidelity"`
 	TargetWriteEvidenceRequired bool                  `json:"target_write_evidence_required,omitempty"`
+	WriteResourceKind           string                `json:"write_resource_kind,omitempty"`
+	WriteResourceIdentity       string                `json:"write_resource_identity,omitempty"`
+	WriteResourceFidelity       string                `json:"write_resource_fidelity,omitempty"`
 	Fingerprint                 string                `json:"fingerprint"`
 	OwnContent                  string                `json:"own_content"`
 	ConsumedVarsHash            string                `json:"consumed_vars_hash"`
@@ -359,12 +363,12 @@ func validateEvent(event bus.RunCompleted) error {
 	if pipelineUUID == "" || pipelineUUID != event.PipelineUUID {
 		return fmt.Errorf("%w: pipeline_uuid must be non-empty and canonical", ErrInvalidEnvelope)
 	}
-	if event.ExecutionTargetSnapshotVersion != targetSnapshotVersionV2 {
+	if event.ExecutionTargetSnapshotVersion != targetSnapshotVersionV2 &&
+		event.ExecutionTargetSnapshotVersion != targetSnapshotVersionV3 {
 		return fmt.Errorf(
-			"%w: execution target snapshot version %d is not self-contained version %d",
+			"%w: execution target snapshot version %d is not a supported self-contained version",
 			ErrInvalidEnvelope,
 			event.ExecutionTargetSnapshotVersion,
-			targetSnapshotVersionV2,
 		)
 	}
 	if event.ExecutionPipelineUUID != pipelineUUID {
@@ -399,7 +403,7 @@ func validateEvent(event bus.RunCompleted) error {
 			)
 		}
 		assetIDs[entry.AssetID] = assetName
-		if err := validateExecutionTarget(assetName, entry); err != nil {
+		if err := validateExecutionTarget(assetName, entry, event.ExecutionTargetSnapshotVersion); err != nil {
 			return err
 		}
 		if commonVarsHash == "" {
@@ -484,7 +488,7 @@ func validateUpstreamWriters(
 	return nil
 }
 
-func validateExecutionTarget(assetName string, entry bus.ExecutionTargetSnapshotEntry) error {
+func validateExecutionTarget(assetName string, entry bus.ExecutionTargetSnapshotEntry, version int) error {
 	if strings.TrimSpace(entry.TargetIdentity) != entry.TargetIdentity {
 		return fmt.Errorf("%w: execution target %q has a non-canonical target_identity", ErrInvalidEnvelope, assetName)
 	}
@@ -499,6 +503,13 @@ func validateExecutionTarget(assetName string, entry bus.ExecutionTargetSnapshot
 	}
 	if entry.TargetWriteEvidenceRequired && (entry.TargetFidelity != "exact" || entry.TargetIdentity == "") {
 		return fmt.Errorf("%w: execution target %q requires write evidence without an exact target", ErrInvalidEnvelope, assetName)
+	}
+	if version < targetSnapshotVersionV3 {
+		if entry.WriteResourceKind != "" || entry.WriteResourceIdentity != "" || entry.WriteResourceFidelity != "" {
+			return fmt.Errorf("%w: execution target %q contains write-resource evidence before version %d", ErrInvalidEnvelope, assetName, targetSnapshotVersionV3)
+		}
+	} else if err := validateExecutionWriteResource(assetName, entry); err != nil {
+		return err
 	}
 	for field, value := range map[string]string{
 		"fingerprint":        entry.Fingerprint,
@@ -520,6 +531,42 @@ func validateExecutionTarget(assetName string, entry bus.ExecutionTargetSnapshot
 			strings.TrimSpace(upstream.Value) == "" || strings.TrimSpace(upstream.Value) != upstream.Value {
 			return fmt.Errorf("%w: execution target %q upstream %d is not canonical", ErrInvalidEnvelope, assetName, index)
 		}
+	}
+	return nil
+}
+
+func validateExecutionWriteResource(assetName string, entry bus.ExecutionTargetSnapshotEntry) error {
+	kind := strings.TrimSpace(entry.WriteResourceKind)
+	identity := strings.TrimSpace(entry.WriteResourceIdentity)
+	fidelity := strings.TrimSpace(entry.WriteResourceFidelity)
+	if kind != entry.WriteResourceKind || identity != entry.WriteResourceIdentity || fidelity != entry.WriteResourceFidelity {
+		return fmt.Errorf("%w: execution target %q write resource is not canonical", ErrInvalidEnvelope, assetName)
+	}
+	switch fidelity {
+	case "exact":
+		switch kind {
+		case "none":
+			if identity != "" {
+				return fmt.Errorf("%w: execution target %q no-write resource claims an identity", ErrInvalidEnvelope, assetName)
+			}
+		case "local_file", "duckdb_database":
+			if len(identity) != 64 {
+				return fmt.Errorf("%w: execution target %q write resource requires a SHA-256 identity", ErrInvalidEnvelope, assetName)
+			}
+			for _, char := range identity {
+				if (char < '0' || char > '9') && (char < 'a' || char > 'f') {
+					return fmt.Errorf("%w: execution target %q write resource requires a lowercase SHA-256 identity", ErrInvalidEnvelope, assetName)
+				}
+			}
+		default:
+			return fmt.Errorf("%w: execution target %q has unsupported exact write-resource kind %q", ErrInvalidEnvelope, assetName, kind)
+		}
+	case "runtime_only":
+		if kind != "pipeline" || identity != "" {
+			return fmt.Errorf("%w: execution target %q runtime write resource must be pipeline-scoped", ErrInvalidEnvelope, assetName)
+		}
+	default:
+		return fmt.Errorf("%w: execution target %q has unsupported write-resource fidelity %q", ErrInvalidEnvelope, assetName, fidelity)
 	}
 	return nil
 }
@@ -555,8 +602,10 @@ func eventToV1(event bus.RunCompleted) completedRunV1 {
 		targets[assetName] = executionTargetV1{
 			AssetID: target.AssetID, TargetIdentity: target.TargetIdentity,
 			TargetFidelity: target.TargetFidelity, TargetWriteEvidenceRequired: target.TargetWriteEvidenceRequired,
-			Fingerprint: target.Fingerprint,
-			OwnContent:  target.OwnContent, ConsumedVarsHash: target.ConsumedVarsHash,
+			WriteResourceKind: target.WriteResourceKind, WriteResourceIdentity: target.WriteResourceIdentity,
+			WriteResourceFidelity: target.WriteResourceFidelity,
+			Fingerprint:           target.Fingerprint,
+			OwnContent:            target.OwnContent, ConsumedVarsHash: target.ConsumedVarsHash,
 			VarsHash: target.VarsHash, Upstreams: upstreams, CoverageMode: target.CoverageMode,
 			RefreshRestricted: target.RefreshRestricted,
 		}
@@ -603,8 +652,10 @@ func eventFromV1(event completedRunV1) bus.RunCompleted {
 		targets[assetName] = bus.ExecutionTargetSnapshotEntry{
 			AssetID: target.AssetID, TargetIdentity: target.TargetIdentity,
 			TargetFidelity: target.TargetFidelity, TargetWriteEvidenceRequired: target.TargetWriteEvidenceRequired,
-			Fingerprint: target.Fingerprint,
-			OwnContent:  target.OwnContent, ConsumedVarsHash: target.ConsumedVarsHash,
+			WriteResourceKind: target.WriteResourceKind, WriteResourceIdentity: target.WriteResourceIdentity,
+			WriteResourceFidelity: target.WriteResourceFidelity,
+			Fingerprint:           target.Fingerprint,
+			OwnContent:            target.OwnContent, ConsumedVarsHash: target.ConsumedVarsHash,
 			VarsHash: target.VarsHash, Upstreams: upstreams, CoverageMode: target.CoverageMode,
 			RefreshRestricted: target.RefreshRestricted,
 		}

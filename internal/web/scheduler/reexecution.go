@@ -146,6 +146,12 @@ func (s *Service) exactReexecutionCandidate(ctx context.Context, runID string) (
 	if err := validateRunPlanAdmissionBinding(run, spec, plan); err != nil {
 		return exactReexecutionCandidate{}, &ExactReexecutionUnavailableError{Reason: "the retained plan no longer matches its execution contract"}
 	}
+	resolvedSpec, err := s.resolveRunSpecForExecution(ctx, spec, plan, true)
+	if err != nil {
+		return exactReexecutionCandidate{}, &ExactReexecutionUnavailableError{
+			Reason: "the original variable references no longer resolve to its reviewed plan",
+		}
+	}
 
 	return exactReexecutionCandidate{
 		spec: spec,
@@ -159,7 +165,7 @@ func (s *Service) exactReexecutionCandidate(ctx context.Context, runID string) (
 			SnapshotVersionID:           spec.Source.SnapshotVersionID,
 			ExpectedSourceMerkle:        spec.Expected.SourceMerkle,
 			ExpectedConfigurationDigest: spec.Expected.ConfigurationDigest,
-			VariableOverrides:           spec.Requested.Variables,
+			VariableOverrides:           resolvedSpec.Requested.Variables,
 			ConfigurationAssetNames:     reexecutionConfigurationAssetNames(plan),
 			FullRefresh:                 spec.Requested.FullRefresh,
 			Backfill:                    spec.Requested.Backfill,
