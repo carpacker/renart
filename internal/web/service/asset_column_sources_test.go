@@ -139,7 +139,7 @@ materialization:
 	assert.Equal(t, columnSourceDefinition, result.Sources[0].Source.ID)
 	assert.Equal(t, columnSourceMaterialized, result.Sources[1].Source.ID)
 	assert.Equal(t, []webmodel.Column{{Name: "id", Type: "VARCHAR"}}, result.Sources[1].Columns)
-	assert.Contains(t, result.Sources[1].Notes, "Ignoring legacy Sling metadata column _sling_loaded_at; Renart materializations no longer include it.")
+	assert.Empty(t, result.Sources[1].Notes)
 	assert.Contains(t, executor.args, "duckdb-default")
 }
 

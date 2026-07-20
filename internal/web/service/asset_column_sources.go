@@ -154,11 +154,7 @@ func (s *AssetService) observeAssetColumnSource(
 	case columnSourceMaterialized:
 		columns, _, apiErr = s.inferMaterializedAssetColumns(ctx, parsedPipeline, asset, environment)
 		if apiErr == nil && (isAPIAsset(asset) || isLoadAsset(asset)) {
-			var removed bool
-			columns, removed = withoutSlingLoadedAtColumn(columns)
-			if removed {
-				notes = append(notes, "Ignoring legacy Sling metadata column _sling_loaded_at; Renart materializations no longer include it.")
-			}
+			columns, _ = withoutSlingLoadedAtColumn(columns)
 		}
 	default:
 		apiErr = badRequestError("unsupported_column_source", fmt.Sprintf("unknown schema source %q", source.ID))
