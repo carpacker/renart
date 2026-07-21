@@ -153,8 +153,12 @@ round-trips unknown fields).
   The internal `renart_seed_file` ownership marker is
   preserved without becoming a guided user setting. Owned local seeds show
   `path`, `file_type`, and `enforce_schema` before one replacement textarea that
-  accepts pasted text, dragged files, and file-picker selections. Replacing the
-  file uses `POST /api/assets/{assetID}/seed-file`, updates `path`, `file_type`,
+  accepts pasted text, dragged files, and file-picker selections. For local
+  UTF-8 CSV/JSON/JSONL/NDJSON files up to 1 MiB, that textarea first loads the
+  existing content through the path-derived `GET /api/assets/{assetID}/seed-file`
+  contract. Remote, runtime-rendered, binary, non-UTF-8, and larger seeds stay
+  replaceable without being read into the browser. Replacing the file uses
+  `POST /api/assets/{assetID}/seed-file`, updates `path`, `file_type`,
   and the ownership marker in one server-side write, preserves the remaining
   definition, and removes the previous owned sidecar. A file with the same name
   as an unrelated workspace file is rejected instead of overwritten. Every

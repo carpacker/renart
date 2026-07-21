@@ -176,9 +176,14 @@ export async function launchStagedDemo({ port }) {
   console.log("staging: creating env schedules…");
   await api(`/api/pipelines/${ACME}/env-schedules/default`, {
     method: "PUT",
-    body: { cron: "0 6 * * *", timezone: "Europe/Berlin", catchup_policy: "skip" },
+    body: {
+      cron: "0 6 * * *",
+      timezone: "Europe/Berlin",
+      catchup_policy: "skip",
+      deploy_now: true,
+    },
   });
-  // non-default environments need a deployed snapshot to schedule against
+  // Every environment schedule pins an exact deployed snapshot.
   await api(`/api/pipelines/${ACME}/env-schedules/production`, {
     method: "PUT",
     body: {
@@ -329,7 +334,9 @@ ORDER BY revenue DESC`,
 async function waitForStalenessSettled(api) {
   const deadline = Date.now() + 120_000;
   while (Date.now() < deadline) {
-    const staleness = await api(`/api/pipelines/${ACME}/staleness`).catch(() => null);
+    const staleness = await api(
+      `/api/pipelines/${ACME}/staleness?environment=default`,
+    ).catch(() => null);
     const states = JSON.stringify(staleness ?? {});
     const workspace = await api("/api/workspace").catch(() => null);
     const acme = workspace?.pipelines?.find((pipeline) => pipeline.name === "acme");

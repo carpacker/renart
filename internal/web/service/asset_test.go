@@ -621,6 +621,46 @@ select 1 as order_id
 	assert.Equal(t, "analytics.orders_child_1", asset.Name)
 }
 
+func TestAssetServiceCreateMergesExecutableContentIntoSQLTemplate(t *testing.T) {
+	t.Parallel()
+
+	workspaceRoot := t.TempDir()
+	pipelineRoot := filepath.Join(workspaceRoot, "analytics")
+	require.NoError(t, os.MkdirAll(filepath.Join(pipelineRoot, "assets", "analytics"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(pipelineRoot, "pipeline.yml"), []byte(strings.TrimSpace(`
+name: analytics
+schedule: daily
+start_date: "2024-01-01"
+default_connections:
+  duckdb: duckdb-default
+`)+"\n"), 0o644))
+
+	service := NewAssetService(AssetDependencies{
+		WorkspaceRoot:                workspaceRoot,
+		ResolveAssetByID:             newAssetTestResolver(workspaceRoot).ResolveAssetByID,
+		DefaultAssetContent:          DefaultAssetContent,
+		DerivedAssetContent:          DefaultDerivedSQLAssetContent,
+		EnsurePythonProject:          func(string, string, string) error { return nil },
+		SuppressWatcher:              func(string) {},
+		PushWorkspaceUpdateImmediate: func(context.Context, string, string) {},
+	})
+
+	response, apiErr := service.Create(context.Background(), EncodeID("analytics"), CreateAssetParams{
+		Name:              "analytics.report",
+		Type:              "duckdb.sql",
+		Path:              "assets/analytics/report.sql",
+		ExecutableContent: "select 7 as value\n",
+	})
+	require.Nil(t, apiErr)
+	require.Equal(t, "ok", response.Status)
+
+	content, err := os.ReadFile(filepath.Join(workspaceRoot, filepath.FromSlash(response.AssetPath)))
+	require.NoError(t, err)
+	assert.Contains(t, string(content), "@bruin")
+	assert.Contains(t, string(content), "type: duckdb.sql")
+	assert.Equal(t, "select 7 as value", strings.TrimSpace(ExtractExecutableContent(string(content))))
+}
+
 func TestAssetServiceCreateDownstreamFromUnprefixedSource(t *testing.T) {
 	t.Parallel()
 

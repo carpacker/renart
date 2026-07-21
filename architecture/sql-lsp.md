@@ -82,10 +82,13 @@ assets, but their visibility mirrors the per-notebook DuckDB session
   pipeline-asset requests never see notebook cells.
 - References from a cell also search sibling cell documents.
 
-In the editor (`notebook-cell-editor.tsx`), SQL cells use `useSQLLSP` with the
-same provider split as the asset editor: the language server owns diagnostics,
-decorations, hover, rename, etc.; `useSQLIntellisense` keeps schema-aware
-completion (which knows notebook run columns the backend cannot see).
+In the editor (`notebook-cell-editor.tsx`), SQL cells use `useSQLLSP` for the
+complete provider surface: diagnostics, completion, decorations, hover,
+rename, and navigation. The hook supplements an LSP completion response only
+with ephemeral columns from a sibling's last notebook run, which the backend
+intentionally cannot see. The older schema-wide provider is not registered for
+notebook SQL models, so derived `VALUES`, `DESCRIBE`, CTE, and subquery scopes
+cannot be polluted by unrelated workspace columns.
 The Build ad-hoc editor also uses this LSP path (with its selected asset as the
 dialect and scope identity) instead of enabling the older global parse-context
 completion provider, so asset, query-sensor, and ad-hoc SQL agree on derived

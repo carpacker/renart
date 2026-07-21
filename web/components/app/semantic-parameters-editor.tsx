@@ -37,7 +37,12 @@ import { Separator } from "@/components/ui/separator";
 import { Spinner } from "@/components/ui/spinner";
 import { Textarea } from "@/components/ui/textarea";
 import { refreshAssetColumnsFromDefinition } from "@/lib/api-asset-transactions";
-import { replaceSeedAssetFile, updateAsset } from "@/lib/api-assets";
+import {
+  getSeedAssetFilePreview,
+  replaceSeedAssetFile,
+  type SeedFilePreview,
+  updateAsset,
+} from "@/lib/api-assets";
 import {
   getAssetAuthoringCapability,
   isQuerySensorAssetType,
@@ -301,7 +306,10 @@ export function SemanticParametersEditor({
           </Line>
           <Separator className="my-3" />
           <SeedReplacementInput
+            assetId={asset.id}
             currentPath={parameters.path ?? ""}
+            persistedPath={asset.parameters?.path ?? ""}
+            persistedFileType={asset.parameters?.file_type ?? ""}
             fileTypes={seedFileTypes}
             uploading={uploading}
             message={uploadMessage}
@@ -399,13 +407,19 @@ export function SemanticParametersEditor({
 }
 
 function SeedReplacementInput({
+  assetId,
   currentPath,
+  persistedPath,
+  persistedFileType,
   fileTypes,
   uploading,
   message,
   onFile,
 }: {
+  assetId: string;
   currentPath: string;
+  persistedPath: string;
+  persistedFileType: string;
   fileTypes: string[];
   uploading: boolean;
   message: string;
@@ -418,8 +432,42 @@ function SeedReplacementInput({
   const [clipboardText, setClipboardText] = useState("");
   const [clipboardFormat, setClipboardFormat] = useState<ClipboardSeedFormat>("auto");
   const [clipboardError, setClipboardError] = useState("");
+  const [preview, setPreview] = useState<SeedFilePreview | null>(null);
+  const [previewLoading, setPreviewLoading] = useState(false);
+  const [previewError, setPreviewError] = useState("");
   const accept = fileTypes.map((fileType) => `.${fileType}`).join(",");
   const detectedClipboardFormat = clipboardText ? detectClipboardSeedFormat(clipboardText) : null;
+  const busy = uploading || previewLoading;
+
+  useEffect(() => {
+    const controller = new AbortController();
+    setPreview(null);
+    setPreviewError("");
+    setClipboardError("");
+    setClipboardText("");
+    setClipboardFormat("auto");
+    if (!persistedPath.trim()) {
+      setPreviewLoading(false);
+      return () => controller.abort();
+    }
+
+    setPreviewLoading(true);
+    void getSeedAssetFilePreview(assetId, controller.signal)
+      .then((next) => {
+        setPreview(next);
+        if (next.displayable) setClipboardText(next.content ?? "");
+      })
+      .catch((cause: unknown) => {
+        if (cause instanceof Error && cause.name === "AbortError") return;
+        setPreviewError(
+          cause instanceof Error ? cause.message : "Could not load the current seed data.",
+        );
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) setPreviewLoading(false);
+      });
+    return () => controller.abort();
+  }, [assetId, persistedFileType, persistedPath]);
 
   const reviewFile = (files: FileList | null, method: string) => {
     const file = files?.[0];
@@ -450,14 +498,15 @@ function SeedReplacementInput({
   return (
     <Field
       className="gap-1.5"
-      data-disabled={uploading ? true : undefined}
+      data-disabled={busy ? true : undefined}
       data-invalid={clipboardError ? true : undefined}
       data-testid="seed-replacement-input"
     >
       <FieldLabel htmlFor="seed-editor-data">Seed data</FieldLabel>
       <InputGroup
         data-testid="seed-file-drop-target"
-        data-disabled={uploading ? true : undefined}
+        data-disabled={busy ? true : undefined}
+        aria-busy={previewLoading ? true : undefined}
         className={cn("border-dashed transition-colors", dragging && "border-primary bg-accent")}
         onDragEnter={(event) => {
           event.preventDefault();
@@ -475,7 +524,7 @@ function SeedReplacementInput({
         onDrop={(event) => {
           event.preventDefault();
           setDragging(false);
-          if (uploading) return;
+          if (busy) return;
           if (event.dataTransfer.files.length > 0) {
             reviewFile(event.dataTransfer.files, "the dropped file");
             return;
@@ -491,7 +540,7 @@ function SeedReplacementInput({
           id="seed-editor-data"
           className="min-h-32 resize-y font-mono text-xs"
           value={clipboardText}
-          disabled={uploading}
+          disabled={busy}
           aria-invalid={clipboardError ? true : undefined}
           onChange={(event) => {
             setClipboardText(event.target.value);
@@ -499,20 +548,24 @@ function SeedReplacementInput({
           }}
         />
         <InputGroupAddon align="block-start">
-          <CloudUpload aria-hidden="true" />
+          {previewLoading ? <Spinner aria-hidden="true" /> : <CloudUpload aria-hidden="true" />}
           <InputGroupText>
-            {dragging
-              ? "Drop the seed file here"
-              : currentPath
-                ? `Paste data or drop a file to replace ${currentPath}`
-                : "Paste data or drop a seed file"}
+            {previewLoading
+              ? "Loading current seed data"
+              : dragging
+                ? "Drop the seed file here"
+                : preview?.displayable && currentPath
+                  ? `Editing ${currentPath}`
+                  : currentPath
+                    ? `Paste data or drop a file to replace ${currentPath}`
+                    : "Paste data or drop a seed file"}
           </InputGroupText>
         </InputGroupAddon>
         <InputGroupAddon align="block-end" className="flex-wrap gap-1.5">
           <InputGroupText>Format</InputGroupText>
           <Select
             value={clipboardFormat}
-            disabled={uploading}
+            disabled={busy}
             onValueChange={(value) => setClipboardFormat(value as ClipboardSeedFormat)}
           >
             <SelectTrigger aria-label="Pasted format" size="sm" className="w-40">
@@ -536,7 +589,7 @@ function SeedReplacementInput({
           </Select>
           <InputGroupButton
             variant="outline"
-            disabled={uploading}
+            disabled={busy}
             onClick={() => inputRef.current?.click()}
           >
             {uploading ? <Spinner data-icon="inline-start" /> : <Upload data-icon="inline-start" />}
@@ -545,7 +598,7 @@ function SeedReplacementInput({
           <InputGroupButton
             className="ml-auto"
             variant="default"
-            disabled={uploading || !clipboardText.trim()}
+            disabled={busy || !clipboardText.trim()}
             onClick={saveClipboard}
           >
             Save
@@ -558,7 +611,7 @@ function SeedReplacementInput({
         type="file"
         accept={accept}
         aria-label="Upload seed file"
-        disabled={uploading}
+        disabled={busy}
         onChange={(event) => {
           reviewFile(event.target.files, "the selected file");
           event.target.value = "";
@@ -568,8 +621,7 @@ function SeedReplacementInput({
         <FieldError>{clipboardError}</FieldError>
       ) : (
         <FieldDescription>
-          Paste text and save, or drop or choose a file. You will confirm before replacing the
-          current seed.
+          {seedPreviewDescription(preview, previewLoading, previewError)}
         </FieldDescription>
       )}
       {message ? <Comment>{message}</Comment> : null}
@@ -612,6 +664,39 @@ function SeedReplacementInput({
       </AlertDialog>
     </Field>
   );
+}
+
+function seedPreviewDescription(preview: SeedFilePreview | null, loading: boolean, error: string) {
+  if (loading) return "Loading the current local seed file.";
+  if (error) {
+    return `The current seed could not be loaded: ${error} You can still paste, drop, or choose a replacement.`;
+  }
+  if (preview?.displayable) {
+    const size = formatSeedFileSize(preview.size_bytes ?? new Blob([preview.content ?? ""]).size);
+    return `Loaded the current ${preview.file_type?.toUpperCase() || "text"} seed (${size}). Edit and save it, or drop or choose a replacement file.`;
+  }
+  switch (preview?.unavailable_reason) {
+    case "remote":
+      return "Remote seed content is not loaded into the editor. Paste, drop, or choose a local replacement.";
+    case "runtime_path":
+      return "This seed path is resolved at runtime, so its content is not loaded. Paste, drop, or choose a replacement.";
+    case "binary_format":
+      return "Binary seed content is not shown as text. Drop or choose a replacement file, or paste text to convert it.";
+    case "too_large":
+      return `This seed is ${formatSeedFileSize(preview.size_bytes ?? 0)}, above the 1 MiB editor limit. Drop or choose a replacement file, or paste new text.`;
+    case "non_utf8":
+      return "This seed is not UTF-8 text, so its content is not shown. Drop or choose a replacement file.";
+    case "missing_path":
+      return "Set a seed path, or paste, drop, or choose a replacement file.";
+    default:
+      return "Paste text and save, or drop or choose a file. You will confirm before replacing the current seed.";
+  }
+}
+
+function formatSeedFileSize(bytes: number) {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(bytes < 10 * 1024 ? 1 : 0)} KiB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MiB`;
 }
 
 function InlineParameterTextarea({

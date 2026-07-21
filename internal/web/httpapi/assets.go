@@ -64,12 +64,14 @@ type (
 	PythonDepsResponse           = service.PythonDepsResponse
 	AddPythonDependencyRequest   = service.AddPythonDependencyRequest
 	AssetMutationResponse        = service.AssetMutationResponse
+	SeedFilePreviewResponse      = service.SeedFilePreviewResponse
 	StatusResponse               = service.StatusResponse
 )
 
 type AssetHandlers interface {
 	Create(ctx context.Context, pipelineID string, req CreateAssetRequest) (AssetMutationResponse, *APIError)
 	Update(ctx context.Context, assetID string, req UpdateAssetRequest) (AssetMutationResponse, *APIError)
+	SeedFilePreview(ctx context.Context, assetID string) (SeedFilePreviewResponse, *APIError)
 	ReplaceSeedFile(ctx context.Context, assetID, fileName string, fileBytes []byte) (AssetMutationResponse, *APIError)
 	Delete(ctx context.Context, assetID string) (StatusResponse, *APIError)
 	FormatSQL(ctx context.Context, assetID string, req FormatSQLAssetRequest) (FormatSQLAssetResponse, *APIError)
@@ -93,6 +95,7 @@ const maxSeedUploadBytes int64 = 256 << 20
 func RegisterAssetRoutes(router chi.Router, handlers *AssetsAPI) {
 	router.Post("/api/pipelines/{id}/assets", handlers.HandleCreateAsset)
 	router.Put("/api/pipelines/{pipelineID}/assets/{assetID}", handlers.HandleUpdateAsset)
+	router.Get("/api/assets/{assetID}/seed-file", handlers.HandleSeedFilePreview)
 	router.Post("/api/assets/{assetID}/seed-file", handlers.HandleReplaceSeedFile)
 	router.Delete("/api/pipelines/{pipelineID}/assets/{assetID}", handlers.HandleDeleteAsset)
 	router.Post("/api/assets/{assetID}/format-sql", handlers.HandleFormatSQLAsset)
@@ -192,6 +195,15 @@ func (h *AssetsAPI) HandleReplaceSeedFile(w http.ResponseWriter, r *http.Request
 		fileName,
 		fileBytes,
 	)
+	if apiErr != nil {
+		writeAPIError(w, apiErr)
+		return
+	}
+	webapi.WriteJSON(w, http.StatusOK, resp)
+}
+
+func (h *AssetsAPI) HandleSeedFilePreview(w http.ResponseWriter, r *http.Request) {
+	resp, apiErr := h.Service.SeedFilePreview(r.Context(), chi.URLParam(r, "assetID"))
 	if apiErr != nil {
 		writeAPIError(w, apiErr)
 		return

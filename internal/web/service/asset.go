@@ -36,6 +36,19 @@ type AssetMutationResponse struct {
 	AssetPath string `json:"asset_path,omitempty"`
 }
 
+// SeedFilePreviewResponse is the bounded, text-only view of a seed sidecar
+// used by the guided editor. Displayable is false for sources that should not
+// be read into the browser (for example remote, binary, or oversized files).
+type SeedFilePreviewResponse struct {
+	Status            string `json:"status"`
+	AssetID           string `json:"asset_id"`
+	FileType          string `json:"file_type,omitempty"`
+	SizeBytes         int64  `json:"size_bytes,omitempty"`
+	Displayable       bool   `json:"displayable"`
+	Content           string `json:"content,omitempty"`
+	UnavailableReason string `json:"unavailable_reason,omitempty"`
+}
+
 type StatusResponse struct {
 	Status string `json:"status"`
 }
@@ -368,11 +381,16 @@ func (s *AssetService) Create(ctx context.Context, pipelineID string, req Create
 		if renderErr != nil {
 			return AssetMutationResponse{}, newAPIError(400, "invalid_load_asset", renderErr.Error())
 		}
-	} else if content == "" {
-		if sourceAsset != nil {
-			content = s.deps.DerivedAssetContent(assetName, assetType, relAssetPath, sourceAsset.Name, sourceConnectionName)
-		} else {
-			content = s.deps.DefaultAssetContent(assetName, assetType, relAssetPath)
+	} else {
+		if content == "" {
+			if sourceAsset != nil {
+				content = s.deps.DerivedAssetContent(assetName, assetType, relAssetPath, sourceAsset.Name, sourceConnectionName)
+			} else {
+				content = s.deps.DefaultAssetContent(assetName, assetType, relAssetPath)
+			}
+		}
+		if req.ExecutableContent != "" {
+			content = MergeExecutableContent(content, req.ExecutableContent)
 		}
 	}
 
@@ -448,16 +466,17 @@ func (s *AssetService) Create(ctx context.Context, pipelineID string, req Create
 }
 
 type CreateAssetParams struct {
-	Name            string            `json:"name"`
-	Type            string            `json:"type"`
-	Path            string            `json:"path"`
-	Content         string            `json:"content"`
-	Connection      string            `json:"connection"`
-	Parameters      map[string]string `json:"parameters"`
-	SourceAssetID   string            `json:"source_asset_id"`
-	SeedFileName    string            `json:"seed_file_name"`
-	SeedFileContent string            `json:"seed_file_content"`
-	SeedFileBytes   []byte            `json:"-"`
+	Name              string            `json:"name"`
+	Type              string            `json:"type"`
+	Path              string            `json:"path"`
+	Content           string            `json:"content"`
+	ExecutableContent string            `json:"executable_content"`
+	Connection        string            `json:"connection"`
+	Parameters        map[string]string `json:"parameters"`
+	SourceAssetID     string            `json:"source_asset_id"`
+	SeedFileName      string            `json:"seed_file_name"`
+	SeedFileContent   string            `json:"seed_file_content"`
+	SeedFileBytes     []byte            `json:"-"`
 }
 
 func (s *AssetService) Update(ctx context.Context, assetID string, req AssetUpdateRequest) (AssetMutationResponse, *APIError) {

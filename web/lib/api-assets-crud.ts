@@ -14,6 +14,7 @@ export type CreateAssetInput = {
   type?: string;
   path?: string;
   content?: string;
+  executable_content?: string;
   connection?: string;
   parameters?: Record<string, string>;
   source_asset_id?: string;
@@ -76,6 +77,29 @@ export async function replaceSeedAssetFile(assetId: string, file: File) {
   return fetchJSON<{ status: string; asset_id?: string; asset_path?: string }>(
     `/api/assets/${assetId}/seed-file`,
     { method: "POST", body },
+  );
+}
+
+export type SeedFilePreview = {
+  status: "ok";
+  asset_id: string;
+  file_type?: string;
+  size_bytes?: number;
+  displayable: boolean;
+  content?: string;
+  unavailable_reason?:
+    | "missing_path"
+    | "runtime_path"
+    | "remote"
+    | "binary_format"
+    | "too_large"
+    | "non_utf8";
+};
+
+export async function getSeedAssetFilePreview(assetId: string, signal?: AbortSignal) {
+  return fetchJSON<SeedFilePreview>(
+    `/api/assets/${assetId}/seed-file`,
+    signal ? { signal } : undefined,
   );
 }
 

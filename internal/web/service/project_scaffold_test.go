@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/bruin-data/bruin/pkg/pipeline"
@@ -32,8 +33,10 @@ func TestScaffoldProjectRetailDemoIntoFreshDirectory(t *testing.T) {
 
 	for _, relPath := range []string{
 		"retail/pipeline.yml",
-		"retail/assets/raw/customers.sql",
-		"retail/assets/raw/orders.sql",
+		"retail/assets/raw/customers.asset.yml",
+		"retail/assets/raw/customers.csv",
+		"retail/assets/raw/orders.asset.yml",
+		"retail/assets/raw/orders.csv",
 		"retail/assets/analytics/customer_orders.sql",
 		"retail/assets/analytics/daily_revenue.sql",
 		".bruin.yml",
@@ -48,6 +51,29 @@ func TestScaffoldProjectRetailDemoIntoFreshDirectory(t *testing.T) {
 	require.NoError(t, err)
 	assert.Contains(t, string(configContents), "duckdb-default")
 	assert.Contains(t, string(configContents), "duckdb-files/retail.duckdb")
+
+	customersDefinition, err := os.ReadFile(filepath.Join(target, "retail", "assets", "raw", "customers.asset.yml"))
+	require.NoError(t, err)
+	assert.Contains(t, string(customersDefinition), "type: duckdb.seed")
+	assert.Contains(t, string(customersDefinition), "path: ./customers.csv")
+	assert.Contains(t, string(customersDefinition), "renart_seed_file: customers.csv")
+	ordersDefinition, err := os.ReadFile(filepath.Join(target, "retail", "assets", "raw", "orders.asset.yml"))
+	require.NoError(t, err)
+	assert.Contains(t, string(ordersDefinition), "type: duckdb.seed")
+	assert.Contains(t, string(ordersDefinition), "path: ./orders.csv")
+	assert.Contains(t, string(ordersDefinition), "renart_seed_file: orders.csv")
+
+	customersCSV, err := os.ReadFile(filepath.Join(target, "retail", "assets", "raw", "customers.csv"))
+	require.NoError(t, err)
+	assert.Len(t, strings.Split(strings.TrimSpace(string(customersCSV)), "\n"), 13)
+	ordersCSV, err := os.ReadFile(filepath.Join(target, "retail", "assets", "raw", "orders.csv"))
+	require.NoError(t, err)
+	orderRows := strings.Split(strings.TrimSpace(string(ordersCSV)), "\n")
+	assert.Len(t, orderRows, 481)
+	assert.Equal(t, "1,8,2024-01-14,4.87,completed", orderRows[1])
+	assert.Equal(t, "480,1,2024-01-01,92.10,returned", orderRows[480])
+	assert.NoFileExists(t, filepath.Join(target, "retail", "assets", "raw", "customers.sql"))
+	assert.NoFileExists(t, filepath.Join(target, "retail", "assets", "raw", "orders.sql"))
 
 	repo, err := gogit.PlainOpen(target)
 	require.NoError(t, err)
@@ -222,6 +248,9 @@ func TestScaffoldedTemplatesParseAsPipelines(t *testing.T) {
 			names := make([]string, 0, len(parsed.Assets))
 			for _, asset := range parsed.Assets {
 				names = append(names, asset.Name)
+				if tpl.ID == ProjectTemplateRetailDemo && strings.HasPrefix(asset.Name, "raw.") {
+					assert.Equal(t, pipeline.AssetTypeDuckDBSeed, asset.Type, asset.Name)
+				}
 			}
 			assert.ElementsMatch(t, tpl.AssetNames, names)
 

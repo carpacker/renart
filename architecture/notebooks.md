@@ -113,12 +113,21 @@ each cell also has an independent vertical resize handle with pointer and
 keyboard controls. Resizing is presentation-only and stays in frontend state.
 
 `buildNotebookSchemaTables` supplies sibling relations to both SQL cells and
-plain SQL string literals inside Python `query(...)` calls. A sibling's last
+plain SQL string literals inside Python `query(...)` calls. Native SQL cells
+register only the canonical LSP provider; the provider merges the narrow set of
+ephemeral `notebook-run` columns into the LSP response rather than registering
+the older schema-wide completion provider beside it. A sibling's last
 successful run columns take precedence over declared columns, so outputs that
 cannot be inferred statically (including arbitrary Python materializations)
 become available to column completion after a run. The Python adapter keeps the
 Monaco document in Python mode, projects completion ranges into the embedded
 SQL string, and renders SQL lexical plus semantic decorations there.
+
+Build's ad-hoc query editor can copy its current SQL draft into either an
+existing notebook or a newly created one. Existing notebooks receive a new SQL
+cell; a new notebook's seeded example cell is renamed and replaced so the
+conversion leaves one intentional cell rather than an unrelated starter. The
+draft remains available in Build after the filesystem mutation.
 
 ## 6. Server-driven auto-recompute (`service/notebook_autorecompute.go`)
 

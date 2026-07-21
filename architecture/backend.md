@@ -99,7 +99,8 @@ from opening; the out-of-worktree lease remains authoritative.
 `POST /api/projects` scaffolds a project from a template
 (`service.ScaffoldProject`: `demo:chess` — native `type: api` Chess.com
 profiles and games feeding SQL performance and opening analysis,
-`demo:retail` — offline SQL-only demo, `empty`, `bare` for the import
+`demo:retail` — bundled CSV seed assets feeding an offline SQL demo, `empty`,
+`bare` for the import
 flow) — pipeline files, a `duckdb-default` connection, default .gitignore
 patterns, `.renart/project.yml` identity, and `git init` + an initial commit
 when the target has no repository — then opens/registers the project and
@@ -728,6 +729,12 @@ the new `.asset.yml` definition. Uploaded files are staged beside that
 definition and marked with `meta.renart_seed_file` so deleting the asset removes
 only the file Renart owns. Sensor definitions use flat typed parameters for
 query, table, or S3-key conditions plus `poke_interval` and `timeout`.
+The guided editor reads existing seed content through
+`GET /api/assets/{assetID}/seed-file`; the server derives the path from the
+asset definition and returns only local UTF-8 CSV/JSON/JSONL/NDJSON files up to
+1 MiB. Remote, runtime-rendered, binary, non-UTF-8, and larger sources return a
+reason without content and remain replaceable through the multipart `POST` on
+the same route. Seed bytes are never added to the workspace DTO.
 
 Every advertised seed main task runs through Renart's Sling operator, separately
 from generic ingestr assets. The operator resolves local sources relative to the

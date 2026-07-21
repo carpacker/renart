@@ -29,6 +29,10 @@ import { selectedEnvironmentAtom, workspaceAtom } from "@/lib/atoms/domains/work
 import { sqlDiscoveryColumnsAtom, sqlDiscoveryTablesAtom } from "@/lib/atoms/sql-discovery";
 import { useSQLParseContext } from "@/hooks/use-sql-parse-context";
 import { fetchJSON } from "@/lib/api-core";
+import {
+  provideLocalSQLCompletionItems,
+  schemaTablesReferencedAtPosition,
+} from "@/lib/monaco-sql-providers";
 import { resolveConnection, SchemaTable } from "@/lib/sql-schema";
 import { WebAsset, WorkspaceState } from "@/lib/types";
 
@@ -44,6 +48,7 @@ export function useSQLLSP(
   // Notebook cells resolve to sibling cells too; those have no pipeline, so
   // navigation goes through this callback (scroll/focus the cell card).
   onGoToCell?: (cellId: string) => void,
+  options?: { includeNotebookRuntimeColumns?: boolean },
 ) {
   const workspace = useAtomValue(workspaceAtom);
   const selectedEnvironment = useAtomValue(selectedEnvironmentAtom);
@@ -52,6 +57,7 @@ export function useSQLLSP(
   const parseContext = useSQLParseContext(asset, sqlContent, schemaTables);
   const connectionName =
     asset && workspace ? resolveConnection(asset, workspace.connections ?? {}) : null;
+  const includeNotebookRuntimeColumns = options?.includeNotebookRuntimeColumns ?? false;
 
   // The Monaco providers below are registered once per (editor, asset) and read
   // their live inputs through this ref. Keeping them off the effect's dependency
@@ -186,6 +192,28 @@ export function useSQLLSP(
         const lspSuggestions = (response.completions ?? [])
           .filter((item) => item.kind === 5 || item.kind === 18 || item.kind === 2)
           .map((item) => completionToMonaco(monaco, item, range));
+        if (includeNotebookRuntimeColumns) {
+          const runtimeTables = schemaTables.filter((table) =>
+            table.columns.some((column) => column.sourceMethods?.includes("notebook-run")),
+          );
+          const runtimeSources = schemaTablesReferencedAtPosition(
+            currentModel,
+            position,
+            runtimeTables,
+          );
+          const runtimeCompletionTables = runtimeSources.hasSource
+            ? runtimeSources.tables
+            : runtimeTables;
+          if (runtimeCompletionTables.length > 0) {
+            lspSuggestions.push(
+              ...provideLocalSQLCompletionItems(monaco, currentModel, position, {
+                getTables: () => runtimeCompletionTables,
+                getUpstreamNames: () => asset.upstreams ?? [],
+                getTableSuggestionContext: () => undefined,
+              }).suggestions,
+            );
+          }
+        }
         // Derived aliases (CTEs, subqueries, VALUES and DESCRIBE) belong to the
         // local query scope. Prefer their LSP columns before consulting the
         // warehouse; resolving the alias back to its source relation would
@@ -267,7 +295,7 @@ export function useSQLLSP(
               })),
           );
         }
-        return { suggestions: lspSuggestions };
+        return { suggestions: dedupeSQLCompletions(lspSuggestions) };
       },
     });
 
@@ -528,7 +556,14 @@ export function useSQLLSP(
     // Register once per (editor, asset); live inputs (workspace, parseContext,
     // schemaTables, connection, environment, callbacks) are read from
     // providerStateRef so an SSE update does not re-register the providers.
-  }, [monaco, editor, asset?.id, loadRemoteColumns, loadRemoteTables]);
+  }, [
+    monaco,
+    editor,
+    asset?.id,
+    includeNotebookRuntimeColumns,
+    loadRemoteColumns,
+    loadRemoteTables,
+  ]);
 
   useEffect(() => {
     if (!monaco || !editor || !asset || !isSQLAsset(asset)) {
@@ -1091,6 +1126,19 @@ function completionToMonaco(
       ? { id: "editor.action.triggerSuggest", title: "Show column suggestions" }
       : undefined,
   };
+}
+
+function dedupeSQLCompletions(
+  suggestions: MonacoNS.languages.CompletionItem[],
+): MonacoNS.languages.CompletionItem[] {
+  const seen = new Set<string>();
+  return suggestions.filter((suggestion) => {
+    const label = typeof suggestion.label === "string" ? suggestion.label : suggestion.label.label;
+    const key = `${label.toLowerCase()}::${suggestion.insertText.toLowerCase()}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
 }
 
 function completionKindToMonaco(monaco: typeof MonacoNS, kind?: number) {

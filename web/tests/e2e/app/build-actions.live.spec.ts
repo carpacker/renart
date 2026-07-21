@@ -1014,6 +1014,63 @@ select 1 as customer_id,'Ada' as customer_name union all select 2 as customer_id
     await expect(disclosure).not.toContainText("{{");
   });
 
+  test("converts an ad hoc query to an asset and a notebook cell", async ({ liveApp, page }) => {
+    test.skip(
+      test.info().project.name.includes("mobile"),
+      "The desktop Build header exposes the ad-hoc conversion actions.",
+    );
+
+    await page.goto(`${liveApp.baseURL}/pipelines/${pipelineId}/assets/${customersAssetId}/code`);
+    await page.getByRole("button", { name: "Ad-hoc query" }).click();
+    const editor = page.locator(".monaco-editor").first();
+    await expect(editor).toBeVisible({ timeout: 15000 });
+    const query = "select 42 as converted_marker";
+    await editor.click();
+    await page.keyboard.press("ControlOrMeta+a");
+    await page.keyboard.insertText(query);
+
+    await page.getByRole("button", { name: "Convert to asset" }).click();
+    const assetDialog = page.getByRole("dialog", { name: "New asset" });
+    await expect(assetDialog).toBeVisible();
+    await assetDialog.getByLabel("Asset name").fill("analytics.adhoc_converted");
+    await assetDialog.getByRole("button", { name: "Create", exact: true }).click();
+    await expect(assetDialog).toBeHidden({ timeout: 15000 });
+
+    await expect
+      .poll(
+        async () => {
+          const response = await page.request.get(`${liveApp.baseURL}/api/workspace`);
+          const workspace = (await response.json()) as WorkspaceResponse;
+          return (
+            workspace.pipelines
+              .flatMap((pipeline) => pipeline.assets)
+              .find((asset) => asset.name === "analytics.adhoc_converted")?.content ?? ""
+          );
+        },
+        { timeout: 30000 },
+      )
+      .toContain(query);
+
+    await page.getByRole("button", { name: "Ad-hoc query" }).click();
+    await expect(page.locator(".view-lines").first()).toContainText("converted_marker", {
+      timeout: 15000,
+    });
+    await page.getByRole("button", { name: "Convert to notebook cell" }).click();
+    const notebookDialog = page.getByRole("dialog", { name: "Convert to notebook cell" });
+    await expect(notebookDialog).toBeVisible();
+    await notebookDialog.getByRole("combobox", { name: "Notebook", exact: true }).click();
+    await page.getByRole("option", { name: "New notebook…" }).click();
+    await notebookDialog.getByLabel("Notebook title").fill("Converted exploration");
+    await notebookDialog.getByLabel("Cell name").fill("adhoc_query");
+    await notebookDialog.getByRole("button", { name: "Create cell" }).click();
+
+    await expect(page).toHaveURL(/\/notebooks\//, { timeout: 15000 });
+    await expect(page.getByText("Converted exploration").first()).toBeVisible({ timeout: 15000 });
+    await expect(page.locator(".view-lines").first()).toContainText("converted_marker", {
+      timeout: 15000,
+    });
+  });
+
   test("ad hoc mode adds a split editor to canvas and preserves full-size code", async ({
     liveApp,
     page,

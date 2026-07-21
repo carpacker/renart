@@ -3,12 +3,14 @@ package service
 import (
 	"context"
 	"fmt"
+	"io"
 	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/bruin-data/bruin/pkg/pipeline"
 	"github.com/spf13/afero"
@@ -17,7 +19,10 @@ import (
 	"renart/internal/web/model"
 )
 
-const renartOwnedSeedFileMetaKey = "renart_seed_file"
+const (
+	renartOwnedSeedFileMetaKey = "renart_seed_file"
+	maxSeedPreviewBytes        = 1 << 20
+)
 
 // seedWorkspacePathParameter is accepted only by semantic seed creation. The
 // UI's workspace picker speaks workspace-relative paths; canonical Bruin seed
@@ -350,6 +355,141 @@ func containsString(values []string, wanted string) bool {
 		}
 	}
 	return false
+}
+
+// SeedFilePreview reads only modest, local text seeds for the guided editor.
+// The asset definition remains the authority for the path; callers cannot
+// submit a filesystem path of their own.
+func (s *AssetService) SeedFilePreview(ctx context.Context, assetID string) (SeedFilePreviewResponse, *APIError) {
+	response := SeedFilePreviewResponse{Status: "ok", AssetID: assetID}
+	relAssetPath, err := DecodeID(assetID)
+	if err != nil {
+		return SeedFilePreviewResponse{}, badRequestError("invalid_asset_id", "invalid asset id")
+	}
+	absAssetPath, err := s.resolver().JoinPath(relAssetPath)
+	if err != nil {
+		return SeedFilePreviewResponse{}, badRequestError("invalid_asset_path", err.Error())
+	}
+
+	unlock := s.lockAssetFile(absAssetPath)
+	defer unlock()
+
+	_, _, asset, err := s.deps.ResolveAssetByID(ctx, assetID)
+	if err != nil {
+		return SeedFilePreviewResponse{}, badRequestError("asset_resolve_failed", err.Error())
+	}
+	if !strings.HasSuffix(strings.ToLower(strings.TrimSpace(string(asset.Type))), ".seed") {
+		return SeedFilePreviewResponse{}, badRequestError("unsupported_asset_type", "seed file preview is supported for seed assets only")
+	}
+
+	seedPath, _ := asset.Parameters.GetString("path")
+	seedPath = strings.TrimSpace(seedPath)
+	fileType, _ := asset.Parameters.GetString("file_type")
+	fileType = strings.ToLower(strings.TrimSpace(fileType))
+	if fileType == "" {
+		fileType = seedFileTypeFromPath(seedPath)
+	}
+	response.FileType = fileType
+	if seedPath == "" {
+		response.UnavailableReason = "missing_path"
+		return response, nil
+	}
+	if strings.Contains(seedPath, "{{") || strings.Contains(seedPath, "{%") {
+		response.UnavailableReason = "runtime_path"
+		return response, nil
+	}
+
+	parsedURL, parseErr := url.Parse(seedPath)
+	if parseErr != nil {
+		return SeedFilePreviewResponse{}, badRequestError("invalid_seed_path", parseErr.Error())
+	}
+	if parsedURL.IsAbs() {
+		if (parsedURL.Scheme == "http" || parsedURL.Scheme == "https") && parsedURL.Host != "" {
+			response.UnavailableReason = "remote"
+			return response, nil
+		}
+		return SeedFilePreviewResponse{}, badRequestError("invalid_seed_path", "seed URLs must use http or https")
+	}
+	if filepath.IsAbs(filepath.FromSlash(seedPath)) {
+		return SeedFilePreviewResponse{}, badRequestError("invalid_seed_path", "local seed paths must be relative to the asset definition")
+	}
+	if !isTextSeedFileType(fileType) {
+		response.UnavailableReason = "binary_format"
+		return response, nil
+	}
+
+	seedFilePath := filepath.Clean(filepath.Join(filepath.Dir(absAssetPath), filepath.FromSlash(seedPath)))
+	workspaceRoot, absErr := filepath.Abs(s.deps.WorkspaceRoot)
+	if absErr != nil {
+		return SeedFilePreviewResponse{}, internalError("seed_file_stat_failed", absErr.Error())
+	}
+	seedFilePath, absErr = filepath.Abs(seedFilePath)
+	if absErr != nil || !renderPathIsWithin(workspaceRoot, seedFilePath) {
+		return SeedFilePreviewResponse{}, badRequestError("invalid_seed_path", "seed path must stay inside the workspace")
+	}
+	if _, isOSFS := s.fs().(*afero.OsFs); isOSFS {
+		resolvedRoot, resolveErr := filepath.EvalSymlinks(workspaceRoot)
+		if resolveErr != nil {
+			return SeedFilePreviewResponse{}, internalError("seed_file_stat_failed", resolveErr.Error())
+		}
+		resolvedSeed, resolveErr := filepath.EvalSymlinks(seedFilePath)
+		if resolveErr != nil {
+			if os.IsNotExist(resolveErr) {
+				return SeedFilePreviewResponse{}, newAPIError(404, "seed_file_not_found", fmt.Sprintf("seed file %q does not exist", seedPath))
+			}
+			return SeedFilePreviewResponse{}, internalError("seed_file_stat_failed", resolveErr.Error())
+		}
+		if !renderPathIsWithin(resolvedRoot, resolvedSeed) {
+			return SeedFilePreviewResponse{}, badRequestError("invalid_seed_path", "seed path must stay inside the workspace")
+		}
+	}
+
+	info, statErr := s.fs().Stat(seedFilePath)
+	if statErr != nil {
+		if os.IsNotExist(statErr) {
+			return SeedFilePreviewResponse{}, newAPIError(404, "seed_file_not_found", fmt.Sprintf("seed file %q does not exist", seedPath))
+		}
+		return SeedFilePreviewResponse{}, internalError("seed_file_stat_failed", statErr.Error())
+	}
+	if info.IsDir() {
+		return SeedFilePreviewResponse{}, badRequestError("invalid_seed_path", "seed path must select a file")
+	}
+	response.SizeBytes = info.Size()
+	if info.Size() > maxSeedPreviewBytes {
+		response.UnavailableReason = "too_large"
+		return response, nil
+	}
+
+	file, openErr := s.fs().Open(seedFilePath)
+	if openErr != nil {
+		return SeedFilePreviewResponse{}, internalError("seed_file_read_failed", openErr.Error())
+	}
+	defer file.Close()
+	contents, readErr := io.ReadAll(io.LimitReader(file, maxSeedPreviewBytes+1))
+	if readErr != nil {
+		return SeedFilePreviewResponse{}, internalError("seed_file_read_failed", readErr.Error())
+	}
+	response.SizeBytes = int64(len(contents))
+	if len(contents) > maxSeedPreviewBytes {
+		response.UnavailableReason = "too_large"
+		return response, nil
+	}
+	if !utf8.Valid(contents) {
+		response.UnavailableReason = "non_utf8"
+		return response, nil
+	}
+	response.Displayable = true
+	response.Content = string(contents)
+	return response, nil
+}
+
+func isTextSeedFileType(fileType string) bool {
+	switch strings.ToLower(strings.TrimSpace(fileType)) {
+	case "csv", "json", "jsonl", "ndjson":
+		return true
+	default:
+		return false
+	}
 }
 
 // ReplaceSeedFile copies a new user upload beside an existing seed definition,

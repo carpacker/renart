@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/bruin-data/bruin/pkg/config"
 	bruingit "github.com/bruin-data/bruin/pkg/git"
@@ -75,7 +76,7 @@ func projectTemplates() []projectTemplate {
 			info: ProjectTemplateInfo{
 				ID:           ProjectTemplateRetailDemo,
 				Title:        "Retail analytics",
-				Description:  "A small retail warehouse built from bundled sample data — every asset runs fully offline against local DuckDB.",
+				Description:  "A small retail warehouse built from bundled CSV seed data — every asset runs fully offline against local DuckDB.",
 				Offline:      true,
 				PipelineName: "retail",
 				AssetNames:   []string{"raw.customers", "raw.orders", "analytics.customer_orders", "analytics.daily_revenue"},
@@ -84,8 +85,10 @@ func projectTemplates() []projectTemplate {
 			files: func() map[string]string {
 				return map[string]string{
 					"pipeline.yml":                         retailPipelineYAML(),
-					"assets/raw/customers.sql":             retailRawCustomersSQL(),
-					"assets/raw/orders.sql":                retailRawOrdersSQL(),
+					"assets/raw/customers.asset.yml":       retailRawCustomersSeedYAML(),
+					"assets/raw/customers.csv":             retailRawCustomersCSV(),
+					"assets/raw/orders.asset.yml":          retailRawOrdersSeedYAML(),
+					"assets/raw/orders.csv":                retailRawOrdersCSV(),
 					"assets/analytics/customer_orders.sql": retailCustomerOrdersSQL(),
 					"assets/analytics/daily_revenue.sql":   retailDailyRevenueSQL(),
 				}
@@ -362,50 +365,94 @@ default_connections:
 `
 }
 
-func retailRawCustomersSQL() string {
-	return `/* @bruin
-name: raw.customers
-type: duckdb.sql
-materialization:
-  type: table
-@bruin */
-
-SELECT *
-FROM (
-    VALUES
-    (1, 'Ada Lovelace', 'London', DATE '2023-10-04'),
-    (2, 'Grace Hopper', 'New York', DATE '2023-10-19'),
-    (3, 'Alan Turing', 'Manchester', DATE '2023-11-02'),
-    (4, 'Katherine Johnson', 'Hampton', DATE '2023-11-15'),
-    (5, 'Margaret Hamilton', 'Boston', DATE '2023-11-28'),
-    (6, 'Claude Shannon', 'Ann Arbor', DATE '2023-12-06'),
-    (7, 'Edsger Dijkstra', 'Rotterdam', DATE '2023-12-14'),
-    (8, 'Barbara Liskov', 'Los Angeles', DATE '2023-12-22'),
-    (9, 'Donald Knuth', 'Milwaukee', DATE '2024-01-03'),
-    (10, 'Radia Perlman', 'Portsmouth', DATE '2024-01-11'),
-    (11, 'John von Neumann', 'Budapest', DATE '2024-01-18'),
-    (12, 'Annie Easley', 'Birmingham', DATE '2024-01-25')
-) AS customers (customer_id, customer_name, city, signed_up_at)
+func retailRawCustomersSeedYAML() string {
+	return `name: raw.customers
+type: duckdb.seed
+description: Bundled customer records for the offline retail demo.
+meta:
+  renart_seed_file: customers.csv
+parameters:
+  path: ./customers.csv
+  file_type: csv
+  enforce_schema: true
+columns:
+  - name: customer_id
+    type: integer
+  - name: customer_name
+    type: string
+  - name: city
+    type: string
+  - name: signed_up_at
+    type: date
 `
 }
 
-func retailRawOrdersSQL() string {
-	return `/* @bruin
-name: raw.orders
-type: duckdb.sql
-materialization:
-  type: table
-@bruin */
-
--- Deterministic synthetic orders so the demo runs offline with no seed files.
-SELECT
-    seq AS order_id,
-    1 + (seq * 7) % 12 AS customer_id,
-    DATE '2024-01-01' + CAST((seq * 13) % 120 AS INTEGER) AS ordered_at,
-    ROUND(4.50 + ((seq * 37) % 9000) / 100.0, 2) AS order_total,
-    CASE WHEN (seq * 11) % 10 = 0 THEN 'returned' ELSE 'completed' END AS status
-FROM range(1, 481) AS orders (seq)
+func retailRawCustomersCSV() string {
+	return `customer_id,customer_name,city,signed_up_at
+1,Ada Lovelace,London,2023-10-04
+2,Grace Hopper,New York,2023-10-19
+3,Alan Turing,Manchester,2023-11-02
+4,Katherine Johnson,Hampton,2023-11-15
+5,Margaret Hamilton,Boston,2023-11-28
+6,Claude Shannon,Ann Arbor,2023-12-06
+7,Edsger Dijkstra,Rotterdam,2023-12-14
+8,Barbara Liskov,Los Angeles,2023-12-22
+9,Donald Knuth,Milwaukee,2024-01-03
+10,Radia Perlman,Portsmouth,2024-01-11
+11,John von Neumann,Budapest,2024-01-18
+12,Annie Easley,Birmingham,2024-01-25
 `
+}
+
+func retailRawOrdersSeedYAML() string {
+	return `name: raw.orders
+type: duckdb.seed
+description: Bundled deterministic orders for the offline retail demo.
+meta:
+  renart_seed_file: orders.csv
+parameters:
+  path: ./orders.csv
+  file_type: csv
+  enforce_schema: true
+columns:
+  - name: order_id
+    type: integer
+  - name: customer_id
+    type: integer
+  - name: ordered_at
+    type: date
+  - name: order_total
+    type: decimal(10,2)
+  - name: status
+    type: string
+`
+}
+
+func retailRawOrdersCSV() string {
+	var result strings.Builder
+	result.Grow(20 << 10)
+	result.WriteString("order_id,customer_id,ordered_at,order_total,status\n")
+	start := time.Date(2024, time.January, 1, 0, 0, 0, 0, time.UTC)
+	for sequence := 1; sequence <= 480; sequence++ {
+		customerID := 1 + (sequence*7)%12
+		orderedAt := start.AddDate(0, 0, (sequence*13)%120)
+		totalCents := 450 + (sequence*37)%9000
+		status := "completed"
+		if (sequence*11)%10 == 0 {
+			status = "returned"
+		}
+		_, _ = fmt.Fprintf(
+			&result,
+			"%d,%d,%s,%d.%02d,%s\n",
+			sequence,
+			customerID,
+			orderedAt.Format("2006-01-02"),
+			totalCents/100,
+			totalCents%100,
+			status,
+		)
+	}
+	return result.String()
 }
 
 func retailCustomerOrdersSQL() string {

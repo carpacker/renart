@@ -153,6 +153,7 @@ export function NewAssetDialog({
   existingAssetNames,
   downstreamSource,
   namePrefix,
+  initialExecutableContent,
   onCreated,
 }: {
   open: boolean;
@@ -162,6 +163,7 @@ export function NewAssetDialog({
   existingAssetNames: Set<string>;
   downstreamSource?: { id: string; name: string } | null;
   namePrefix?: string | null;
+  initialExecutableContent?: string | null;
   onCreated?: (assetId: string) => void;
 }) {
   const [kind, setKind] = useState<NewAssetKind>("sql");
@@ -312,6 +314,9 @@ export function NewAssetDialog({
           ? { name: trimmed, source_asset_id: downstreamSource.id }
           : { name: trimmed, source_asset_id: downstreamSource.id, type: selected.id }
         : buildCreateAssetInput(trimmed, selected.id, undefined, connection, apiTemplate);
+    if (selected.id === "sql" && initialExecutableContent?.trim()) {
+      input = { ...input, executable_content: initialExecutableContent };
+    }
     if (selected.id === "load") {
       input = {
         ...input,

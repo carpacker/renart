@@ -17,7 +17,6 @@ import { AssetCodeEditor } from "@/components/asset-code-editor";
 import { useJinjaIntellisense } from "@/hooks/use-jinja-intellisense";
 import { usePythonIntellisense } from "@/hooks/use-python-intellisense";
 import { usePythonQueryIntellisense } from "@/hooks/use-python-query-intellisense";
-import { useSQLIntellisense } from "@/hooks/use-sql-intellisense";
 import { useSQLLSP } from "@/hooks/use-sql-lsp";
 import { useVizIntellisense } from "@/hooks/use-viz-intellisense";
 import { useWorkspaceTheme } from "@/hooks/use-workspace-theme";
@@ -129,7 +128,6 @@ export function NotebookCellMonaco({
   value,
   schemaTables,
   resultColumns,
-  environment,
   onChange,
   onCommit,
   onRun,
@@ -141,7 +139,6 @@ export function NotebookCellMonaco({
   value: string;
   schemaTables: SchemaTable[];
   resultColumns: string[];
-  environment?: string;
   onChange: (value: string) => void;
   onCommit: () => void;
   onRun: () => void;
@@ -174,27 +171,9 @@ export function NotebookCellMonaco({
   // back to Monaco's built-in Python highlighting.
   const sqlMonaco = isPython ? null : monacoInstance;
   const sqlEditor = isPython ? null : editorInstance;
-  useSQLIntellisense(
-    sqlMonaco,
-    sqlEditor,
-    cell,
-    value,
-    schemaTables,
-    cell.upstreams ?? [],
-    environment,
-    onGoToAsset,
-    undefined,
-    // The SQL language server below owns diagnostics and decorations, same
-    // split as the asset editor; the shared global providers stay on so cells
-    // get schema-aware table/column completion (sibling cells + pipeline
-    // assets from schemaTables) exactly like the asset editor.
-    {
-      registerLegacyDiagnosticProviders: false,
-      registerParseContextMarkers: false,
-      registerSemanticDecorations: false,
-    },
-  );
-  useSQLLSP(sqlMonaco, sqlEditor, cell, value, schemaTables, onGoToAsset, onGoToCell);
+  useSQLLSP(sqlMonaco, sqlEditor, cell, value, schemaTables, onGoToAsset, onGoToCell, {
+    includeNotebookRuntimeColumns: true,
+  });
   useJinjaIntellisense(sqlMonaco, sqlEditor, cell, value);
   useVizIntellisense(sqlMonaco, sqlEditor, value, resultColumns);
 

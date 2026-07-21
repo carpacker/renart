@@ -1416,7 +1416,6 @@ function NotebookCellCard({
           value={draft}
           schemaTables={schemaTables}
           resultColumns={result?.columns ?? []}
-          environment={selectedEnvironment}
           onChange={setDraft}
           onCommit={commit}
           onRun={onRun}

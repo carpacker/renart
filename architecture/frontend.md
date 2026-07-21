@@ -96,10 +96,13 @@ not underscore-flattened route hacks.
   ([lineage-canvas.tsx](../web/components/app/lineage-canvas.tsx), React Flow)
   beside the asset editor. Bare asset URLs default to this split view; ad-hoc
   queries preserve code/split layout and add the editor beside a canvas-only
-  view. The first asset selection from a pipeline-only canvas opens the split
-  view; after an asset is present in the route, later selections preserve the
-  explicit code/split/canvas layout. A DAG that fits at the default zoom is
-  horizontally centered on initial render, while a wider DAG keeps its layout
+  view. The ad-hoc editor can copy its current draft into a new or existing
+  notebook cell, or open the New asset dialog as a SQL asset with the draft
+  prefilled. Both conversions use the normal Go mutation APIs and keep the
+  in-memory draft intact. The first asset selection from a pipeline-only canvas
+  opens the split view; after an asset is present in the route, later selections
+  preserve the explicit code/split/canvas layout. A DAG that fits at the default
+  zoom is horizontally centered on initial render, while a wider DAG keeps its layout
   origin so it remains predictable to pan. After that initial positioning, a
   routed selection is smoothly brought into view only when it falls outside
   the current viewport; this preserves the selected node when the canvas is
@@ -213,7 +216,10 @@ not underscore-flattened route hacks.
   plain `Field` variant instead of nesting a bordered card around each input.
   The dialog is shrink-safe, keeps focus rings inset inside its shadcn
   ScrollArea, and suppresses horizontal overflow around long horizontal
-  fields. SQL assets can select an explicit target connection or use
+  fields. When opened from the ad-hoc editor, SQL creation sends the draft as
+  executable content so the backend composes it with the canonical generated
+  asset header instead of treating the query as a complete asset file. SQL
+  assets can select an explicit target connection or use
   the pipeline default. It filters types and connections together, offers
   upload/paste/workspace-file/URL seed sources, renders the parameters required by
   each sensor variant, and sends uploaded bytes through the multipart asset API.

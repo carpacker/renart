@@ -152,6 +152,7 @@ import {
   schemaRows,
   tests,
 } from "./app-data";
+import { AdhocToNotebookDialog } from "./adhoc-convert-dialog";
 import { AppAdhocEditor, useAdhocQueryDraft } from "./adhoc-editor";
 import { AppAssetEditor } from "./asset-editor";
 import { ApiParametersEditor } from "./api-parameters-editor";
@@ -298,6 +299,8 @@ type BuildContextValue = {
   inspectSelectedAsset: () => void;
   renderSelectedAsset: () => void;
   runAdhocQuery: () => void;
+  convertAdhocToAsset: () => void;
+  convertAdhocToNotebook: () => void;
   adhocContextAsset: WebAsset | null;
   adhocLoading: boolean;
   materializeLoading: boolean;
@@ -673,6 +676,10 @@ export function AppBuildPage({
       : "xl:grid-cols-[248px_minmax(0,1fr)_320px]";
   const [newAssetOpen, setNewAssetOpen] = useState(false);
   const [newAssetPrefix, setNewAssetPrefix] = useState<string | null>(null);
+  const [newAssetInitialExecutableContent, setNewAssetInitialExecutableContent] = useState<
+    string | null
+  >(null);
+  const [adhocNotebookOpen, setAdhocNotebookOpen] = useState(false);
   const [newPipelineOpen, setNewPipelineOpen] = useState(false);
   const [newFolderOpen, setNewFolderOpen] = useState(false);
   // Path of a pipeline just created here; once the workspace SSE update lists
@@ -1103,6 +1110,7 @@ export function AppBuildPage({
   const openNewAsset = () => {
     setDownstreamSource(null);
     setNewAssetPrefix(null);
+    setNewAssetInitialExecutableContent(null);
     setNewAssetOpen(true);
   };
   // Canvas right-click entry point: seeds the dialog's name suggestion with
@@ -1110,11 +1118,19 @@ export function AppBuildPage({
   const openNewAssetInGroup = (prefix?: string) => {
     setDownstreamSource(null);
     setNewAssetPrefix(prefix ?? null);
+    setNewAssetInitialExecutableContent(null);
     setNewAssetOpen(true);
   };
   const createDownstreamAsset = (source: { id: string; name: string }) => {
     setDownstreamSource(source);
     setNewAssetPrefix(null);
+    setNewAssetInitialExecutableContent(null);
+    setNewAssetOpen(true);
+  };
+  const convertAdhocToAsset = () => {
+    setDownstreamSource(null);
+    setNewAssetPrefix(null);
+    setNewAssetInitialExecutableContent(adhocQuery);
     setNewAssetOpen(true);
   };
   const buildContext: BuildContextValue = {
@@ -1146,6 +1162,8 @@ export function AppBuildPage({
     inspectSelectedAsset,
     renderSelectedAsset: () => void renderSelectedAsset(),
     runAdhocQuery,
+    convertAdhocToAsset,
+    convertAdhocToNotebook: () => setAdhocNotebookOpen(true),
     adhocContextAsset,
     adhocLoading,
     materializeLoading: assetResults.materializeLoading,
@@ -1335,6 +1353,7 @@ export function AppBuildPage({
             if (!open) {
               setDownstreamSource(null);
               setNewAssetPrefix(null);
+              setNewAssetInitialExecutableContent(null);
             }
           }}
           pipelineId={activePipeline?.id}
@@ -1342,7 +1361,14 @@ export function AppBuildPage({
           existingAssetNames={existingAssetNames}
           downstreamSource={downstreamSource}
           namePrefix={newAssetPrefix}
+          initialExecutableContent={newAssetInitialExecutableContent}
           onCreated={(assetId) => goToAsset(activePipeline?.id ?? pipelineId, assetId)}
+        />
+        <AdhocToNotebookDialog
+          open={adhocNotebookOpen}
+          onOpenChange={setAdhocNotebookOpen}
+          notebooks={workspace?.notebooks ?? []}
+          query={adhocQuery}
         />
         <NewPipelineDialog
           open={newPipelineOpen}
@@ -2511,11 +2537,35 @@ function AdhocEditor({ showActionLabels }: { showActionLabels: boolean }) {
     adhocContextAsset,
     adhocLoading,
     runAdhocQuery,
+    convertAdhocToAsset,
+    convertAdhocToNotebook,
     goToAsset,
   } = useBuildContext();
   return (
     <div className="relative flex h-full min-h-0 flex-col">
       <EditorFilenameHeader filename="Ad-hoc query">
+        <Button
+          variant="outline"
+          size={showActionLabels ? "sm" : "icon-sm"}
+          onClick={convertAdhocToNotebook}
+          disabled={!adhocContextAsset}
+          aria-label="Convert to notebook cell"
+          title="Convert to notebook cell"
+        >
+          <BookOpen className="size-3.5" />
+          {showActionLabels ? "Notebook cell" : <span className="sr-only">Notebook cell</span>}
+        </Button>
+        <Button
+          variant="outline"
+          size={showActionLabels ? "sm" : "icon-sm"}
+          onClick={convertAdhocToAsset}
+          disabled={!adhocContextAsset}
+          aria-label="Convert to asset"
+          title="Convert to asset"
+        >
+          <FilePlus2 className="size-3.5" />
+          {showActionLabels ? "Asset" : <span className="sr-only">Asset</span>}
+        </Button>
         <Button
           size={showActionLabels ? "sm" : "icon-sm"}
           onClick={runAdhocQuery}

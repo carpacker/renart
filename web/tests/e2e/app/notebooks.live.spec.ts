@@ -154,6 +154,59 @@ async function setNotebookEditorValue(
 test.describe("app notebooks live", () => {
   test.use({ fixtureName: "configured-workspace" });
 
+  test("uses LSP-derived columns for a VALUES source", async ({ liveApp, page }) => {
+    test.skip(
+      test.info().project.name.includes("mobile"),
+      "Desktop suggest widget exposes stable Monaco completion DOM.",
+    );
+    const notebook = await createNotebook(page.request, liveApp.baseURL, "VALUES IntelliSense");
+    const baseCellId = await addCell(page.request, liveApp.baseURL, notebook.id, "runtime_base");
+    await setCell(
+      page.request,
+      liveApp.baseURL,
+      notebook.id,
+      baseCellId,
+      "select 7 as unrelated_runtime",
+    );
+    const runResponse = await page.request.post(
+      `${liveApp.baseURL}/api/notebooks/${notebook.id}/run`,
+      { data: { cells: [baseCellId] } },
+    );
+    expect(runResponse.ok()).toBe(true);
+    const cellId = await addCell(page.request, liveApp.baseURL, notebook.id, "values_query");
+    await setCell(page.request, liveApp.baseURL, notebook.id, cellId, "select 1 as placeholder");
+    const assetId = await getCellAssetId(page.request, liveApp.baseURL, notebook.id, cellId);
+    const query = "select *,  from (values (1), (2)) x(a)";
+    const cursorOffset = "select *, ".length;
+
+    const lspResponse = await page.request.post(`${liveApp.baseURL}/api/sql/lsp/completions`, {
+      data: {
+        asset_id: assetId,
+        content: query,
+        position: { line: 0, character: cursorOffset },
+      },
+    });
+    expect(lspResponse.ok()).toBe(true);
+    const lspPayload = (await lspResponse.json()) as {
+      completions?: Array<{ label: string }>;
+    };
+    expect(lspPayload.completions?.map((completion) => completion.label)).toContain("a");
+
+    await page.goto(`${liveApp.baseURL}/notebooks/${notebook.id}`);
+    await expect(page.locator(`[data-notebook-cell-id="${cellId}"] .monaco-editor`)).toBeVisible({
+      timeout: 15000,
+    });
+    await setNotebookEditorValue(page, cellId, query, { cursorOffset, triggerSuggest: true });
+
+    const suggestWidget = page.locator(".suggest-widget.visible").first();
+    await expect(suggestWidget).toBeVisible({ timeout: 15000 });
+    await expect(suggestWidget.getByText("a", { exact: true }).first()).toBeVisible({
+      timeout: 15000,
+    });
+    await expect(suggestWidget.getByText("customer_id", { exact: true })).toHaveCount(0);
+    await expect(suggestWidget.getByText("unrelated_runtime", { exact: true })).toHaveCount(0);
+  });
+
   test("Jinja in a SQL cell is rendered when the cell runs", async ({ liveApp, page }) => {
     const { request } = page;
     const notebook = await createNotebook(request, liveApp.baseURL, "Jinja Run");

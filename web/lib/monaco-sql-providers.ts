@@ -688,6 +688,40 @@ function resolveReferencedTables(
   return referenced;
 }
 
+function schemaTablesReferencedByStatement(sqlText: string, tables: SchemaTable[]) {
+  const referenced: SchemaTable[] = [];
+  const seen = new Set<string>();
+  let hasSource = false;
+  const sanitized = stripSQLTriviaPreservingIdentifiers(sqlText);
+  const relationPattern = /\b(?:from|join|into|update)\s+(\(|[\w."]+)/gi;
+
+  for (const match of sanitized.matchAll(relationPattern)) {
+    hasSource = true;
+    const identifier = match[1]?.replaceAll('"', "");
+    if (!identifier || identifier === "(") continue;
+    const table = findTableByIdentifier(tables, identifier);
+    if (!table) continue;
+    const key = table.name.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    referenced.push(table);
+  }
+
+  return { hasSource, tables: referenced };
+}
+
+export function schemaTablesReferencedAtPosition(
+  model: MonacoNS.editor.ITextModel,
+  position: MonacoNS.Position,
+  tables: SchemaTable[],
+) {
+  const statement = currentTopLevelSelectStatementText(
+    model.getValue(),
+    model.getOffsetAt(position),
+  );
+  return schemaTablesReferencedByStatement(statement, tables);
+}
+
 function schemaNameFromTableName(name: string): string | null {
   const parts = name
     .split(".")
@@ -1436,10 +1470,20 @@ export function provideLocalSQLCompletionItems(
     endLineNumber: position.lineNumber,
     endColumn: position.column,
   });
-  const currentSelectTextBeforeCursor = currentTopLevelSelectText(sqlTextBeforeCursor);
-  const aliasMap = buildAliasMap(currentSelectTextBeforeCursor, tables);
-  const referencedTables = resolveReferencedTables(tables, upstreamNames, aliasMap);
-  const columnSuggestionTables = referencedTables.length > 0 ? referencedTables : tables;
+  const currentSelectStatement = currentTopLevelSelectStatementText(
+    model.getValue(),
+    model.getOffsetAt(position),
+  );
+  const aliasMap = buildAliasMap(currentSelectStatement, tables);
+  const explicitSources = schemaTablesReferencedAtPosition(model, position, tables);
+  const referencedTables =
+    explicitSources.tables.length > 0
+      ? explicitSources.tables
+      : explicitSources.hasSource
+        ? []
+        : resolveReferencedTables(tables, upstreamNames, aliasMap);
+  const columnSuggestionTables =
+    referencedTables.length > 0 ? referencedTables : explicitSources.hasSource ? [] : tables;
   const { inTableCtx, inColumnCtx } = getCompletionContext(sqlTextBeforeCursor);
   const suggestions: MonacoNS.languages.CompletionItem[] = [];
 
@@ -1477,7 +1521,11 @@ export function provideLocalSQLCompletionItems(
 
   if (inColumnCtx) {
     suggestions.push(...collectColumnSuggestions(monaco, columnSuggestionTables, range));
-    if (suggestions.length === 0 && columnSuggestionTables !== tables) {
+    if (
+      suggestions.length === 0 &&
+      columnSuggestionTables !== tables &&
+      !explicitSources.hasSource
+    ) {
       suggestions.push(...collectColumnSuggestions(monaco, tables, range));
     }
   }

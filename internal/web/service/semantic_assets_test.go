@@ -1,6 +1,7 @@
 package service
 
 import (
+	"bytes"
 	"context"
 	"os"
 	"path/filepath"
@@ -313,4 +314,110 @@ func TestAssetServiceReplaceSeedFilePreservesDefinitionAndRemovesOldUpload(t *te
 	assert.Contains(t, text, "custom_setting:")
 	assert.Contains(t, text, "name: id")
 	assert.Contains(t, text, "name: name")
+}
+
+func TestAssetServiceSeedFilePreviewReadsModestLocalTextSeed(t *testing.T) {
+	t.Parallel()
+	service, _ := newSemanticAssetTestService(t, nil)
+	contents := []byte("customer_id,customer_name\n1,Ada\n")
+	created, createErr := service.Create(context.Background(), EncodeID("analytics"), CreateAssetParams{
+		Name:          "analytics.customers",
+		Type:          "duckdb.seed",
+		SeedFileName:  "customers.csv",
+		SeedFileBytes: contents,
+	})
+	require.Nil(t, createErr)
+
+	preview, apiErr := service.SeedFilePreview(context.Background(), created.AssetID)
+	require.Nil(t, apiErr)
+	assert.Equal(t, "ok", preview.Status)
+	assert.Equal(t, created.AssetID, preview.AssetID)
+	assert.Equal(t, "csv", preview.FileType)
+	assert.Equal(t, int64(len(contents)), preview.SizeBytes)
+	assert.True(t, preview.Displayable)
+	assert.Equal(t, string(contents), preview.Content)
+	assert.Empty(t, preview.UnavailableReason)
+}
+
+func TestAssetServiceSeedFilePreviewSkipsSourcesUnsuitableForBrowserEditing(t *testing.T) {
+	t.Parallel()
+	service, _ := newSemanticAssetTestService(t, nil)
+
+	remote, createErr := service.Create(context.Background(), EncodeID("analytics"), CreateAssetParams{
+		Name: "analytics.remote_customers",
+		Type: "duckdb.seed",
+		Parameters: map[string]string{
+			"path":      "https://example.com/customers.csv",
+			"file_type": "csv",
+		},
+	})
+	require.Nil(t, createErr)
+	remotePreview, apiErr := service.SeedFilePreview(context.Background(), remote.AssetID)
+	require.Nil(t, apiErr)
+	assert.False(t, remotePreview.Displayable)
+	assert.Equal(t, "remote", remotePreview.UnavailableReason)
+
+	binary, createErr := service.Create(context.Background(), EncodeID("analytics"), CreateAssetParams{
+		Name:          "analytics.binary_customers",
+		Type:          "duckdb.seed",
+		SeedFileName:  "binary_customers.parquet",
+		SeedFileBytes: []byte("PAR1\x00\xff"),
+	})
+	require.Nil(t, createErr)
+	binaryPreview, apiErr := service.SeedFilePreview(context.Background(), binary.AssetID)
+	require.Nil(t, apiErr)
+	assert.False(t, binaryPreview.Displayable)
+	assert.Equal(t, "binary_format", binaryPreview.UnavailableReason)
+
+	largeContents := bytes.Repeat([]byte("x"), maxSeedPreviewBytes+1)
+	large, createErr := service.Create(context.Background(), EncodeID("analytics"), CreateAssetParams{
+		Name:          "analytics.large_customers",
+		Type:          "duckdb.seed",
+		SeedFileName:  "large_customers.csv",
+		SeedFileBytes: largeContents,
+	})
+	require.Nil(t, createErr)
+	largePreview, apiErr := service.SeedFilePreview(context.Background(), large.AssetID)
+	require.Nil(t, apiErr)
+	assert.False(t, largePreview.Displayable)
+	assert.Equal(t, int64(len(largeContents)), largePreview.SizeBytes)
+	assert.Equal(t, "too_large", largePreview.UnavailableReason)
+
+	nonUTF8, createErr := service.Create(context.Background(), EncodeID("analytics"), CreateAssetParams{
+		Name:          "analytics.legacy_customers",
+		Type:          "duckdb.seed",
+		SeedFileName:  "legacy_customers.csv",
+		SeedFileBytes: []byte{'i', 'd', '\n', 0xff, '\n'},
+	})
+	require.Nil(t, createErr)
+	nonUTF8Preview, apiErr := service.SeedFilePreview(context.Background(), nonUTF8.AssetID)
+	require.Nil(t, apiErr)
+	assert.False(t, nonUTF8Preview.Displayable)
+	assert.Equal(t, "non_utf8", nonUTF8Preview.UnavailableReason)
+}
+
+func TestAssetServiceSeedFilePreviewRejectsSymlinkOutsideWorkspace(t *testing.T) {
+	t.Parallel()
+	service, pipelineRoot := newSemanticAssetTestService(t, nil)
+	outsideDir := t.TempDir()
+	outsideFile := filepath.Join(outsideDir, "customers.csv")
+	require.NoError(t, os.WriteFile(outsideFile, []byte("id\n1\n"), 0o644))
+	linkedFile := filepath.Join(pipelineRoot, "assets", "analytics", "linked.csv")
+	if err := os.Symlink(outsideFile, linkedFile); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+
+	created, createErr := service.Create(context.Background(), EncodeID("analytics"), CreateAssetParams{
+		Name: "analytics.linked_customers",
+		Type: "duckdb.seed",
+		Parameters: map[string]string{
+			"path":      "./linked.csv",
+			"file_type": "csv",
+		},
+	})
+	require.Nil(t, createErr)
+
+	_, apiErr := service.SeedFilePreview(context.Background(), created.AssetID)
+	require.NotNil(t, apiErr)
+	assert.Equal(t, "invalid_seed_path", apiErr.Code)
 }

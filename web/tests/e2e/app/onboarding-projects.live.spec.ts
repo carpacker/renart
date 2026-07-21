@@ -17,7 +17,7 @@ type WorkspaceResponse = {
   pipelines: Array<{
     id: string;
     name: string;
-    assets: Array<{ id: string; name: string }>;
+    assets: Array<{ id: string; name: string; type: string }>;
   }>;
 };
 
@@ -100,8 +100,10 @@ test.describe("first-run onboarding", () => {
 
     for (const relPath of [
       "retail/pipeline.yml",
-      "retail/assets/raw/customers.sql",
-      "retail/assets/raw/orders.sql",
+      "retail/assets/raw/customers.asset.yml",
+      "retail/assets/raw/customers.csv",
+      "retail/assets/raw/orders.asset.yml",
+      "retail/assets/raw/orders.csv",
       "retail/assets/analytics/customer_orders.sql",
       "retail/assets/analytics/daily_revenue.sql",
     ]) {
@@ -120,6 +122,10 @@ test.describe("first-run onboarding", () => {
     expect(workspace.selected_environment).toBe("default");
     const retail = workspace.pipelines.find((pipeline) => pipeline.name === "retail");
     expect(retail).toBeTruthy();
+    expect(retail!.assets.find((asset) => asset.name === "raw.customers")?.type).toBe(
+      "duckdb.seed",
+    );
+    expect(retail!.assets.find((asset) => asset.name === "raw.orders")?.type).toBe("duckdb.seed");
 
     await expect
       .poll(

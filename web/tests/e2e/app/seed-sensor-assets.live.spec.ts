@@ -89,7 +89,10 @@ test.describe("seed and sensor assets live", () => {
     await expect(seedEditor.getByLabel("Seed file format")).toContainText("csv");
     const seedInput = seedEditor.getByTestId("seed-replacement-input");
     await expect(seedInput).toBeVisible();
-    await expect(seedInput.getByLabel("Seed data")).toBeVisible();
+    await expect(seedInput.getByLabel("Seed data")).toHaveValue(
+      "customer_id,customer_name\n10,Seed Ada\n",
+    );
+    await expect(seedInput).toContainText("Loaded the current CSV seed");
     const [seedInputBox, seedPathBox, seedFileTypeBox, enforceSchemaBox] = await Promise.all([
       seedInput.boundingBox(),
       seedEditor.getByLabel("Seed path").boundingBox(),
@@ -248,6 +251,8 @@ test.describe("seed and sensor assets live", () => {
     expect(replacedDefinition).toContain("path: ./regional_customers_v2.csv");
     expect(replacedDefinition).toContain("renart_seed_file: regional_customers_v2.csv");
     expect(replacedDefinition).toContain("name: segment");
+    await expect(seedEditor.getByLabel("Seed path")).toHaveValue("./regional_customers_v2.csv");
+    await expect(seedInput.getByLabel("Seed data")).toHaveValue(replacement.toString("utf8"));
 
     const seedMaterializeResponse = page.waitForResponse(
       (response) =>
@@ -532,6 +537,9 @@ test.describe("seed and sensor assets live", () => {
     await expect(seedEditor).toHaveAttribute("data-asset-kind", "seed");
     const seedInput = seedEditor.getByTestId("seed-replacement-input");
     await expect(seedInput).toBeVisible();
+    await expect(seedInput.getByLabel("Seed data")).toHaveValue(
+      "customer_id,customer_name\n30,Clipboard Lin\n",
+    );
     await seedInput
       .getByLabel("Seed data")
       .fill('{"customer_id":31,"customer_name":"Clipboard Mei"}\n');
