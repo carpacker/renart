@@ -22,7 +22,7 @@ import (
 	"strings"
 )
 
-//go:embed src/renart/*
+//go:embed src/renart/* stubs/*/*.pyi
 var sdkSource embed.FS
 
 // Version is the SDK's wheel version. Release builds inject the Renart release
@@ -101,23 +101,28 @@ type SourceFile struct {
 }
 
 // TypeStubFiles returns fresh copies of the SDK's embedded .pyi files under
-// their package-relative paths.
+// their site-packages-relative paths. Small dependency fallbacks keep the
+// embedded language server useful when the runtime-only SDK dependencies have
+// not also been installed into the workspace's editor environment.
 func TypeStubFiles() []SourceFile {
-	files := make([]SourceFile, 0, 3)
-	_ = fs.WalkDir(sdkSource, "src/renart", func(p string, d fs.DirEntry, err error) error {
-		if err != nil || d.IsDir() || !strings.HasSuffix(p, ".pyi") {
-			return err
-		}
-		content, readErr := sdkSource.ReadFile(p)
-		if readErr != nil {
-			return readErr
-		}
-		files = append(files, SourceFile{
-			Path:    path.Join("renart", strings.TrimPrefix(p, "src/renart/")),
-			Content: string(content),
+	files := make([]SourceFile, 0, 5)
+	for _, root := range []string{"src/renart", "stubs"} {
+		_ = fs.WalkDir(sdkSource, root, func(p string, d fs.DirEntry, err error) error {
+			if err != nil || d.IsDir() || !strings.HasSuffix(p, ".pyi") {
+				return err
+			}
+			content, readErr := sdkSource.ReadFile(p)
+			if readErr != nil {
+				return readErr
+			}
+			stubPath := strings.TrimPrefix(p, "stubs/")
+			if root == "src/renart" {
+				stubPath = path.Join("renart", strings.TrimPrefix(p, "src/renart/"))
+			}
+			files = append(files, SourceFile{Path: stubPath, Content: string(content)})
+			return nil
 		})
-		return nil
-	})
+	}
 	sort.Slice(files, func(i, j int) bool { return files[i].Path < files[j].Path })
 	return files
 }

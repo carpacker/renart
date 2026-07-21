@@ -1199,7 +1199,6 @@ function NotebookCellCard({
   onGoToCell?: (cellId: string) => void;
 }) {
   const workspace = useAtomValue(workspaceAtom);
-  const selectedEnvironment = useAtomValue(selectedEnvironmentAtom);
   const schemaTables = useMemo(
     () => buildNotebookSchemaTables(workspace, cells, cell, resultColumnsByCell),
     [workspace, cells, cell, resultColumnsByCell],

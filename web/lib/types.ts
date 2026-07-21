@@ -1,5 +1,13 @@
 import type {
+  AssetCreationCandidate,
+  AssetCreationConnection,
+  AssetCreationDefault,
+  AssetCreationKindProfile as GeneratedAssetCreationKindProfile,
+  AssetCreationPortabilityWarning,
+  AssetCreationProfile as GeneratedAssetCreationProfile,
+  AssetCreationRoleProfile as GeneratedAssetCreationRoleProfile,
   AssetAuthoringCapability,
+  AssetMutationResponse,
   AssetInspectResponse as GeneratedAssetInspectResponse,
   FormatSQLAssetResponse as GeneratedFormatSQLAssetResponse,
   InferColumnsResponse as GeneratedInferColumnsResponse,
@@ -49,7 +57,12 @@ import type {
 } from "@/lib/generated/api-types";
 
 export type {
+  AssetCreationCandidate,
+  AssetCreationConnection,
+  AssetCreationDefault,
+  AssetCreationPortabilityWarning,
   AssetAuthoringCapability,
+  AssetMutationResponse,
   IngestrSuggestion,
   IngestrSuggestionsResponse,
   OnboardingImportFormState,
@@ -85,6 +98,21 @@ export type WorkspaceConfigConnectionType = Omit<
   "fields"
 > & {
   fields: WorkspaceConfigFieldDef[];
+};
+
+export type AssetCreationRoleProfile = Omit<
+  GeneratedAssetCreationRoleProfile,
+  "connection_types"
+> & {
+  connection_types: WorkspaceConfigConnectionType[];
+};
+
+export type AssetCreationKindProfile = Omit<GeneratedAssetCreationKindProfile, "roles"> & {
+  roles: AssetCreationRoleProfile[];
+};
+
+export type AssetCreationProfile = Omit<GeneratedAssetCreationProfile, "kinds"> & {
+  kinds: AssetCreationKindProfile[];
 };
 
 export type WorkspaceConfigResponse = Omit<

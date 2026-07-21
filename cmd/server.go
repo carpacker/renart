@@ -103,7 +103,6 @@ func serverConfigFromCommand(c *cli.Command) (serverConfig, error) {
 	}
 
 	if _, err := git.FindRepoFromPath(absRoot); err != nil {
-		_, _ = fmt.Fprintf(os.Stderr, "Renart must be started inside a git repository.\n")
 		return serverConfig{}, fmt.Errorf("renart must be started inside a git repository: %w", err)
 	}
 
@@ -242,6 +241,7 @@ func newWebServer(ctx context.Context, cfg serverConfig, logger *zap.Logger) (*w
 	server.assetSvc = service.NewAssetService(service.AssetDependencies{
 		Fs:                           afero.NewOsFs(),
 		WorkspaceRoot:                absRoot,
+		ConfigPath:                   resolveConfigFilePath(absRoot),
 		Executor:                     server.executor,
 		ResolveAssetByID:             server.resolveAssetByID,
 		DefaultAssetContent:          defaultAssetContent,
@@ -254,6 +254,7 @@ func newWebServer(ctx context.Context, cfg serverConfig, logger *zap.Logger) (*w
 		ConnectionTypeFor: func(connectionName string) string {
 			return server.currentState().Connections[connectionName]
 		},
+		SelectedEnvironment: func() string { return server.currentState().SelectedEnvironment },
 	})
 
 	server.sqlSvc = service.NewSQLService(service.SQLDependencies{

@@ -192,6 +192,95 @@ result = query("select 1")
       .poll(async () => await getPythonQuerySQLMarkers(page), { timeout: 10000 })
       .toEqual([]);
   });
+
+  test("uses renart.query's explicit connection for SQL diagnostics", async ({ liveApp, page }) => {
+    test.skip(
+      test.info().project.name.includes("mobile"),
+      "Monaco marker APIs are only stable in the desktop editor.",
+    );
+
+    const postgresAssetName = "analytics.postgres_orders";
+    await writeFile(
+      join(liveApp.workspaceDir, "analytics/assets/analytics/postgres_orders.sql"),
+      `/* @bruin
+name: ${postgresAssetName}
+type: pg.sql
+connection: postgres-default
+materialization:
+  type: view
+@bruin */
+
+select 1 as order_id
+`,
+      "utf8",
+    );
+    await writeFile(
+      join(liveApp.workspaceDir, pythonAssetPath),
+      `"""@bruin
+name: ${pythonAssetName}
+type: python
+connection: duckdb-default
+@bruin"""
+
+from renart import query
+
+result = query("select * from ${postgresAssetName}", connection="postgres-default")
+`,
+      "utf8",
+    );
+    await waitForWorkspaceAsset(page, liveApp.baseURL, postgresAssetName);
+    await waitForWorkspaceAsset(page, liveApp.baseURL, pythonAssetName);
+    await openAssetEditor(page, liveApp.baseURL, {
+      assetId: pythonAssetId,
+      contentToken: "postgres_orders",
+    });
+
+    await expect
+      .poll(
+        async () =>
+          (await getPythonQuerySQLMarkers(page)).filter(
+            (marker) => marker.code === "cross-connection-reference",
+          ),
+        { timeout: 15000 },
+      )
+      .toEqual([]);
+
+    await replaceEditorContent(
+      page,
+      [
+        "from renart import query",
+        "",
+        `result = query("select * from ${postgresAssetName}", connection="duckdb-default")`,
+      ].join("\n"),
+    );
+    await expect
+      .poll(
+        async () =>
+          (await getPythonQuerySQLMarkers(page)).some(
+            (marker) => marker.code === "cross-connection-reference",
+          ),
+        { timeout: 15000 },
+      )
+      .toBe(true);
+
+    await replaceEditorContent(
+      page,
+      [
+        "from renart import query",
+        "",
+        `result = query("select * from ${postgresAssetName}", connection="postgres-default")`,
+      ].join("\n"),
+    );
+    await expect
+      .poll(
+        async () =>
+          (await getPythonQuerySQLMarkers(page)).filter(
+            (marker) => marker.code === "cross-connection-reference",
+          ),
+        { timeout: 15000 },
+      )
+      .toEqual([]);
+  });
 });
 
 async function openAssetEditor(
@@ -250,7 +339,9 @@ async function getPythonTyMarkers(page: Page) {
 }
 
 async function getPythonQuerySQLMarkers(page: Page) {
-  return await page.evaluate<Array<{ owner?: string; message: string; severity: number }>>(() => {
+  return await page.evaluate<
+    Array<{ owner?: string; message: string; severity: number; code?: string }>
+  >(() => {
     const monaco = (window as typeof window & { monaco?: any }).monaco;
     const editor = monaco?.editor.getEditors?.()[0];
     const model = editor?.getModel();
@@ -258,10 +349,11 @@ async function getPythonQuerySQLMarkers(page: Page) {
     return monaco.editor
       .getModelMarkers({ resource: model.uri })
       .filter((marker: { owner?: string }) => marker.owner === "renart-python-query-sql")
-      .map((marker: { owner?: string; message: string; severity: number }) => ({
+      .map((marker: { owner?: string; message: string; severity: number; code?: string }) => ({
         owner: marker.owner,
         message: marker.message,
         severity: marker.severity,
+        code: marker.code?.toString(),
       }));
   });
 }

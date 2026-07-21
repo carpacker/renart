@@ -35,20 +35,14 @@ import { updateAsset } from "@/lib/api-assets";
 import { inferAPIAsset, updateAssetColumns } from "@/lib/api-assets-columns";
 import { classifyDependencies, parseAssetProvenance } from "@/lib/asset-provenance";
 import {
-  NON_SQL_ASSET_TYPES,
-  SEED_ASSET_TYPES,
-  SQL_ASSET_TYPES,
   type AssetColumnRefreshMode,
   getAssetColumnRefreshMode,
-  groupAssetTypesByKind,
   isSeedAssetType,
   isSensorAssetType,
 } from "@/lib/asset-types";
-import { useIngestrEnabled } from "@/lib/features";
 import { selectedEnvironmentAtom, workspaceAtom } from "@/lib/atoms/workspace";
 import { WebAsset, WebColumn } from "@/lib/types";
-import { useWorkspaceSettingsData } from "@/hooks/use-workspace-settings-data";
-import { LOCAL_LOAD_CONNECTION, loadConnectionsForEnvironment } from "@/lib/load-assets";
+import { assetCreationKindForType } from "@/lib/asset-creation-profile";
 
 import {
   COLUMN_CHECK_NAMES,
@@ -267,78 +261,8 @@ export function RemoveButton({ label, onClick }: { label: string; onClick: () =>
 
 // --- Sections ---
 
-const AUTO_CONNECTION_VALUE = "__auto__";
-
 function IdentitySection({ asset, pipelineId }: { asset: WebAsset; pipelineId: string }) {
-  const ingestrEnabled = useIngestrEnabled();
-  const workspace = useAtomValue(workspaceAtom);
-  const environment = useAtomValue(selectedEnvironmentAtom);
-  const { workspaceConfig } = useWorkspaceSettingsData();
-  const normalizedType = asset.type.trim().toLowerCase();
-  const hasTargetConnection =
-    normalizedType === "api" ||
-    normalizedType === "load" ||
-    normalizedType.includes("python") ||
-    isSeedAssetType(normalizedType) ||
-    isSensorAssetType(normalizedType);
-  const connectionOptions = useMemo(() => {
-    if (!hasTargetConnection) return [];
-    const explicit = (asset.explicit_connection ?? "").trim();
-    const names =
-      normalizedType === "load"
-        ? loadConnectionsForEnvironment(workspaceConfig, environment).map(
-            (connection) => connection.name,
-          )
-        : isSeedAssetType(normalizedType) || isSensorAssetType(normalizedType)
-          ? Object.entries(workspace?.connections ?? {})
-              .filter(([, type]) => {
-                const capability = (workspace?.asset_capabilities ?? []).find(
-                  (candidate) => candidate.type === asset.type,
-                );
-                return capability?.connection_types.includes(type);
-              })
-              .map(([name]) => name)
-          : Object.keys(workspace?.connections ?? {});
-    if (normalizedType === "load" && !names.includes(LOCAL_LOAD_CONNECTION)) {
-      names.push(LOCAL_LOAD_CONNECTION);
-    }
-    if (explicit && !names.includes(explicit)) {
-      names.push(explicit);
-    }
-    const effective = (asset.connection ?? "").trim();
-    return [
-      {
-        value: AUTO_CONNECTION_VALUE,
-        label: effective ? `auto (${effective})` : "auto (pipeline default)",
-      },
-      ...names.sort((a, b) => a.localeCompare(b)).map((name) => ({ value: name, label: name })),
-    ];
-  }, [
-    asset.connection,
-    asset.explicit_connection,
-    environment,
-    hasTargetConnection,
-    normalizedType,
-    asset.type,
-    workspace?.asset_capabilities,
-    workspace?.connections,
-    workspaceConfig,
-  ]);
-  const assetTypeGroups = useMemo(
-    () =>
-      groupAssetTypesByKind(
-        Array.from(
-          new Set([
-            ...SQL_ASSET_TYPES,
-            ...SEED_ASSET_TYPES,
-            ...NON_SQL_ASSET_TYPES,
-            ...(workspace?.asset_capabilities ?? []).map((capability) => capability.type),
-            asset.type,
-          ]),
-        ).filter((type) => ingestrEnabled || type !== "ingestr" || type === asset.type),
-      ),
-    [asset.type, ingestrEnabled, workspace?.asset_capabilities],
-  );
+  const hasTargetConnection = Boolean(assetCreationKindForType(asset.type));
   const tags = asset.tags ?? [];
 
   const setTags = (next: string[]) => {
@@ -369,44 +293,15 @@ function IdentitySection({ asset, pipelineId }: { asset: WebAsset; pipelineId: s
       </Line>
       <Line>
         <Key>type</Key>
-        <InlineSelect
-          value={asset.type}
-          groups={[
-            {
-              label: "SQL assets",
-              options: assetTypeGroups.sql.map((type) => ({ value: type, label: type })),
-            },
-            {
-              label: "Non-SQL assets",
-              options: assetTypeGroups.nonSql.map((type) => ({ value: type, label: type })),
-            },
-            {
-              label: "Seeds",
-              options: assetTypeGroups.seed.map((type) => ({ value: type, label: type })),
-            },
-            {
-              label: "Sensors",
-              options: assetTypeGroups.sensor.map((type) => ({ value: type, label: type })),
-            },
-          ]}
-          onChange={(type) => {
-            if (type && type !== asset.type) void updateAsset(pipelineId, asset.id, { type });
-          }}
-        />
+        <span className="text-foreground">{asset.type}</span>
       </Line>
       {hasTargetConnection ? (
         <Line>
           <Key>connection</Key>
-          <InlineSelect
-            value={(asset.explicit_connection ?? "").trim() || AUTO_CONNECTION_VALUE}
-            options={connectionOptions}
-            onChange={(connection) => {
-              const next = connection === AUTO_CONNECTION_VALUE ? "" : connection;
-              if (next !== (asset.explicit_connection ?? "").trim()) {
-                void updateAsset(pipelineId, asset.id, { connection: next });
-              }
-            }}
-          />
+          <span className="truncate text-foreground">
+            {(asset.explicit_connection ?? "").trim() ||
+              (asset.connection ? `auto (${asset.connection})` : "auto")}
+          </span>
         </Line>
       ) : null}
       <Line>

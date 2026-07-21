@@ -156,6 +156,13 @@ existing server. These are bounded single-authority handoff gaps, tracked in
 `plans/pipeline-readiness-and-rendering.md`; they are not a supported
 multi-server mode.
 
+`renart standalone` starts its loopback server before opening the optional
+`renart-gui` helper. If the helper is missing, cannot start, or exits with an
+error, the command reports the cause and browser URL on stdout, opens that URL
+through the same browser helper as `renart web`, and keeps serving until normal
+shutdown. A missing desktop webview therefore degrades to the browser UI rather
+than taking the workspace server down.
+
 For an asset target, `--refresh-upstreams` first invokes the server-side stale
 planner narrowed to that asset's transitive upstream closure; only non-fresh
 upstreams run, with their configured strategies, and a failed refresh prevents
@@ -249,6 +256,13 @@ admission, and scheduled runs use their exact row pin. Snapshot execution
 validates ownership and content before materializing a fresh temp directory;
 resolution failures fail the run rather than falling back to the working tree
 (see staleness.md §5).
+
+Browser-triggered materialization streams mark their intent with a UI-only
+header. The same-origin middleware converts that marker to the server-owned
+`manual` origin only after the browser origin has passed validation. Token-
+authenticated CLI delegation remains `cli`, and header-only or ordinary HTTP
+clients remain `api`; callers cannot directly submit a trusted run origin in a
+request body.
 
 Recognized imported `*.source` assets keep Bruin's registered no-op main/check
 semantics on the direct path. They are dependency anchors for externally owned
@@ -736,6 +750,44 @@ asset definition and returns only local UTF-8 CSV/JSON/JSONL/NDJSON files up to
 reason without content and remain replaceable through the multipart `POST` on
 the same route. Seed bytes are never added to the workspace DTO.
 
+New asset creation has a broader pipeline/environment-scoped contract at
+`GET /api/pipelines/{pipelineID}/asset-creation-profile`. The response is
+secret-free and describes compatible configured connections, the resolved or
+unavailable pipeline default, derived Bruin type/dialect/operator candidates,
+cross-environment portability warnings, and role-filtered connection schemas
+for SQL, Python, API, Load, Seed, and Sensor. SQL choices are the intersection
+of Bruin's type mapping, Renart's direct executor, and Renart's SQL-intelligence
+dialects; partially supported engines are not advertised as creatable. Python
+and API targets are currently relation-producing database destinations, while
+Load exposes distinct source and destination roles (including the synthetic
+`local` file endpoint). Each role also maps a creatable connection type to its
+candidate asset types. That lets both creation and editing filter a newly added
+connection without copying the compatibility matrix into TypeScript.
+
+`POST /api/pipelines/{pipelineID}/assets` accepts the semantic `kind`, selected
+environment, explicit connection or explicit pipeline-default choice, and a
+Sensor variant. The service re-resolves the profile, validates both Load roles,
+derives the persisted concrete type, and returns the effective type,
+connection, and dialect. SQL/Python headers and API YAML identity are
+server-overlaid so submitted content cannot disagree with the reviewed choice;
+Seed, Sensor, and Load already render from canonical semantic fields. The
+legacy concrete-`type` request remains available for existing callers but
+rejects an explicit type/connection mismatch. Connection type is treated as
+identity: ordinary project-settings edits may rename or change values, but a
+connection definition's type cannot be changed in place.
+
+Existing asset updates have a parallel semantic `connection_selection`
+contract on `PUT /api/pipelines/{pipelineID}/assets/{assetID}`. It carries the
+selected environment, explicit connection or pipeline-default choice, the
+expected current asset type, and an explicit migration confirmation. Under the
+asset file lock, the service reloads the profile, keeps the current Seed/Sensor
+variant, derives the next concrete type, and writes Type plus connection in one
+canonical update. Same-type changes need no confirmation. Cross-engine changes
+return `asset_type_migration_required` until confirmed, and a stale expected
+type returns `asset_type_changed`. Raw type changes and direct cross-engine
+connection updates are rejected, so callers cannot persist a dialect/runtime
+mismatch by bypassing the guided UI.
+
 Every advertised seed main task runs through Renart's Sling operator, separately
 from generic ingestr assets. The operator resolves local sources relative to the
 asset definition (or accepts HTTP(S)), supplies an explicit source format, and
@@ -770,11 +822,15 @@ in-flight same-environment materializations and rejects same-run ordering
 deadlocks. `materialize()` results stage as Parquet, then load natively through
 the DuckDB materializer or through Sling for other warehouses; the Python path
 does not use ingestr. `query()` returns a PyArrow Table by default; callers can
-convert explicitly with `.to_pandas()` or request `format="pandas"`. The SDK's
-`.pyi` files are also mounted into the embedded Python language server, and
-pipeline type-check warns when a literal `query()` reads a project asset missing
-from `depends`. Before a pyproject-backed run, the operator compares the project
-environment and uv cache filesystems. If they differ and the user has not set a
+convert explicitly with `.to_pandas()` or request `format="pandas"`. Overloaded
+runtime annotations and `.pyi` files expose those concrete return types. The
+embedded Python language server mounts the SDK stubs plus small PyArrow/Pandas
+fallbacks when the workspace has not installed those editor packages, so
+result-member completion remains available without weakening the runtime
+dependency contract. Pipeline type-check warns when a literal `query()` reads a
+project asset missing from `depends`. Before a pyproject-backed run, the
+operator compares the project environment and uv cache filesystems. If they
+differ and the user has not set a
 cache or link policy, that invocation selects uv's copy mode up front; same-
 filesystem runs retain uv's faster default linking behavior.
 Notebook Python cells use the same operator in collection-only mode: broker

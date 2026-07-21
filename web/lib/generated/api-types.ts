@@ -554,6 +554,64 @@ export type FormatSQLAssetResponse = {
   error?: string;
 };
 
+export type AssetMutationResponse = {
+  status: string;
+  asset_id?: string;
+  asset_path?: string;
+  asset_type?: string;
+  connection?: string;
+  dialect?: string;
+};
+
+export type AssetCreationProfile = {
+  status: string;
+  environment: string;
+  kinds: AssetCreationKindProfile[];
+};
+
+export type AssetCreationKindProfile = {
+  kind: string;
+  roles: AssetCreationRoleProfile[];
+};
+
+export type AssetCreationRoleProfile = {
+  role: string;
+  allow_default: boolean;
+  connections: AssetCreationConnection[];
+  default: AssetCreationDefault;
+  connection_types: WorkspaceConfigConnectionType[];
+  connection_type_candidates: Record<string, AssetCreationCandidate[]>;
+};
+
+export type AssetCreationConnection = {
+  name: string;
+  connection_type: string;
+  category?: string;
+  candidates: AssetCreationCandidate[];
+  portability_warnings?: AssetCreationPortabilityWarning[];
+};
+
+export type AssetCreationCandidate = {
+  variant?: string;
+  asset_type: string;
+  dialect?: string;
+  operator: string;
+};
+
+export type AssetCreationDefault = {
+  status: string;
+  reason?: string;
+  connection?: string;
+  connection_type?: string;
+  candidates?: AssetCreationCandidate[];
+};
+
+export type AssetCreationPortabilityWarning = {
+  environment: string;
+  code: string;
+  message: string;
+};
+
 export type PipelineMaterializationState = {
   asset_id: string;
   is_materialized: boolean;

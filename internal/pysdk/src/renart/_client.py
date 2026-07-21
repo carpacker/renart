@@ -12,7 +12,11 @@ import json
 import os
 import urllib.error
 import urllib.request
-from typing import Any, Optional
+from typing import TYPE_CHECKING, Any, Literal, Optional, Union, overload
+
+if TYPE_CHECKING:
+    from pandas import DataFrame
+    from pyarrow import Table
 
 
 class RenartError(Exception):
@@ -56,7 +60,36 @@ def _raise_from_response(exc: urllib.error.HTTPError) -> "None":
     raise QueryError(message, code) from None
 
 
-def query(sql: str, connection: Optional[str] = None, format: str = "arrow") -> Any:
+@overload
+def query(
+    sql: str,
+    connection: Optional[str] = None,
+    format: Literal["arrow"] = "arrow",
+) -> "Table": ...
+
+
+@overload
+def query(
+    sql: str,
+    connection: Optional[str] = None,
+    *,
+    format: Literal["pandas"],
+) -> "DataFrame": ...
+
+
+@overload
+def query(
+    sql: str,
+    connection: Optional[str],
+    format: Literal["pandas"],
+) -> "DataFrame": ...
+
+
+def query(
+    sql: str,
+    connection: Optional[str] = None,
+    format: Literal["arrow", "pandas"] = "arrow",
+) -> "Union[Table, DataFrame]":
     """Run a read-only SQL query through the renart runner.
 
     Args:

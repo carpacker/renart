@@ -41,7 +41,9 @@ test.describe("seed and sensor assets live", () => {
     let dialog = await openNewAssetDialog(page);
     await dialog.getByRole("radio", { name: "Seed", exact: true }).click();
     await dialog.getByLabel("Asset name").fill("analytics.regional_customers");
-    await expect(dialog.getByLabel("Seed type")).toContainText("duckdb.seed");
+    await expect(dialog.getByLabel("Target connection")).toContainText(
+      "Pipeline default — duckdb-default",
+    );
     await dialog.locator('input[type="file"]').setInputFiles({
       name: "regional_customers.csv",
       mimeType: "text/csv",
@@ -279,7 +281,9 @@ test.describe("seed and sensor assets live", () => {
     dialog = await openNewAssetDialog(page);
     await dialog.getByRole("radio", { name: "Sensor", exact: true }).click();
     await dialog.getByLabel("Asset name").fill("analytics.orders_ready");
-    await expect(dialog.getByLabel("Sensor type")).toContainText("duckdb.sensor.query");
+    await expect(dialog.getByLabel("Connection to check")).toContainText(
+      "Pipeline default — duckdb-default",
+    );
     await dialog.getByLabel("Ready condition query").fill("select true");
 
     const sensorCreatedResponse = page.waitForResponse(
@@ -446,12 +450,30 @@ test.describe("seed and sensor assets live", () => {
     expect(new Set(selectorBoxes.map(({ height }) => height)).size).toBe(1);
 
     await dialog.getByRole("radio", { name: "Seed", exact: true }).click();
+    await expect(dialog.getByLabel("Target connection")).toBeVisible();
+    await expect(dialog).not.toContainText("duckdb.seed");
     await expect(dialog.getByRole("button", { name: "Change type", exact: true })).toBeVisible();
     await expect(dialog.getByRole("radio", { name: "Seed", exact: true })).toBeHidden();
     expect(await dialog.evaluate((element) => element.scrollWidth <= element.clientWidth + 1)).toBe(
       true,
     );
     await dialog.getByLabel("Asset name").fill("analytics.workspace_customers");
+
+    await dialog.getByLabel("Target connection").click();
+    await page.getByRole("option", { name: "New connection…", exact: true }).click();
+    const connectionDialog = page.getByRole("dialog", { name: "New connection" });
+    await expect(connectionDialog).toBeVisible();
+    await expect(connectionDialog.getByLabel("Environment")).toBeDisabled();
+    await expect(connectionDialog.getByLabel("Environment")).toContainText("default");
+    await connectionDialog.getByLabel("Name").fill("seed-secondary");
+    await connectionDialog.getByLabel("Type").click();
+    await page.getByRole("option", { name: "duckdb", exact: true }).click();
+    await connectionDialog.getByLabel("path").fill("duckdb-files/seed-secondary.db");
+    await connectionDialog.getByRole("button", { name: "Create connection" }).click();
+    await expect(connectionDialog).toBeHidden({ timeout: 15000 });
+
+    await expect(dialog.getByLabel("Asset name")).toHaveValue("analytics.workspace_customers");
+    await expect(dialog.getByLabel("Target connection")).toContainText("seed-secondary");
     await dialog.getByRole("radio", { name: "Workspace", exact: true }).click();
     await dialog.getByRole("button", { name: "Choose workspace seed file" }).click();
 
@@ -488,6 +510,7 @@ test.describe("seed and sensor assets live", () => {
       "utf8",
     );
     expect(definition).toContain("path: ../../../data/workspace_customers.csv");
+    expect(definition).toContain("connection: seed-secondary");
     expect(definition).not.toContain("workspace_path");
   });
 
@@ -501,6 +524,8 @@ test.describe("seed and sensor assets live", () => {
     await page.goto(`${liveApp.baseURL}/pipelines/${pipelineId}/assets/${ordersAssetId}/canvas`);
     const dialog = await openNewAssetDialog(page);
     await dialog.getByRole("radio", { name: "Seed", exact: true }).click();
+    await expect(dialog.getByLabel("Target connection")).toBeVisible();
+    await expect(dialog).not.toContainText("duckdb.seed");
     await dialog.getByLabel("Asset name").fill("analytics.pasted_customers");
     await dialog.getByRole("radio", { name: "Paste", exact: true }).click();
     await dialog.getByLabel("Pasted data").fill("customer_id,customer_name\n30,Clipboard Lin\n");

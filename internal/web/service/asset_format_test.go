@@ -270,6 +270,63 @@ func TestAssetServicePythonIntelligenceResolvesInjectedRenartSDK(t *testing.T) {
 	require.Nil(t, apiErr)
 	require.Equal(t, "ok", completions.Status)
 	assert.Contains(t, pythonCompletionLabels(completions.Completions), "run_id")
+
+	completions, apiErr = service.PythonCompletions(context.Background(), assetID, PythonCompletionsRequest{
+		Content:  "from renart import query\n\nresult = query(\"select 1\")\nresult.",
+		Line:     4,
+		Column:   8,
+		Snippets: true,
+	})
+	require.Nil(t, apiErr)
+	require.Equal(t, "ok", completions.Status)
+	assert.Contains(t, pythonCompletionLabels(completions.Completions), "to_pandas")
+
+	completions, apiErr = service.PythonCompletions(context.Background(), assetID, PythonCompletionsRequest{
+		Content:  "from renart import query\n\nresult = query(\"select 1\", format=\"pandas\")\nresult.",
+		Line:     4,
+		Column:   8,
+		Snippets: true,
+	})
+	require.Nil(t, apiErr)
+	require.Equal(t, "ok", completions.Status)
+	assert.Contains(t, pythonCompletionLabels(completions.Completions), "head")
+}
+
+func TestAssetServicePythonIntelligencePrefersInstalledSDKDependencyStub(t *testing.T) {
+	workspaceRoot := t.TempDir()
+	assetPath := filepath.Join("analytics", "assets", "task.py")
+	absAssetPath := filepath.Join(workspaceRoot, assetPath)
+	pandasPath := filepath.Join(
+		workspaceRoot,
+		".venv",
+		"lib",
+		"python3.11",
+		"site-packages",
+		"pandas",
+	)
+	require.NoError(t, os.MkdirAll(filepath.Dir(absAssetPath), 0o755))
+	require.NoError(t, os.WriteFile(absAssetPath, []byte("from renart import query\nimport pandas\n"), 0o644))
+	require.NoError(t, os.MkdirAll(pandasPath, 0o755))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(pandasPath, "__init__.pyi"),
+		[]byte("class DataFrame:\n    def workspace_method(self) -> None: ...\n"),
+		0o644,
+	))
+
+	service := NewAssetService(AssetDependencies{WorkspaceRoot: workspaceRoot})
+	files, _ := service.installedPythonPackageStubs(
+		assetPath,
+		absAssetPath,
+		"from renart import query\nimport pandas\n",
+	)
+	pandasFiles := make([]pyintelligence.VirtualFile, 0, 1)
+	for _, file := range files {
+		if file.Path == "/site-packages/pandas/__init__.pyi" {
+			pandasFiles = append(pandasFiles, file)
+		}
+	}
+	require.Len(t, pandasFiles, 1)
+	assert.Contains(t, pandasFiles[0].Content, "workspace_method")
 }
 
 func TestAssetServicePythonCompletionsReturnsTySuggestions(t *testing.T) {

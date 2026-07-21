@@ -134,6 +134,121 @@ async function expectCompactAssetDescription(page: Page, description: string) {
 test.describe("app asset editing workbench live", () => {
   test.use({ fixtureName: "configured-workspace" });
 
+  test("keeps downstream SQL on the upstream warehouse", async ({ liveApp, page }) => {
+    test.skip(
+      test.info().project.name.includes("mobile"),
+      "The canvas downstream affordance is desktop-only.",
+    );
+
+    await page.goto(`${liveApp.baseURL}/pipelines/${pipelineId}/assets/${customersAssetId}/canvas`);
+    const node = page.getByTestId(`rf__node-${customersAssetId}`);
+    await node.hover();
+    await node.getByRole("button", { name: "Create downstream asset" }).click();
+
+    const dialog = page.getByRole("dialog", { name: "New downstream asset" });
+    await expect(dialog).toBeVisible({ timeout: 15000 });
+    await expect(dialog.getByLabel("Target connection")).toHaveCount(0);
+    await expect(dialog.getByText(/bruin/i)).toHaveCount(0);
+
+    await dialog.getByRole("radio", { name: "Python", exact: true }).click();
+    await expect(dialog.getByLabel("Target connection")).toBeVisible();
+    await dialog.getByRole("button", { name: "Change type" }).click();
+    await dialog.getByRole("radio", { name: "SQL", exact: true }).click();
+    await expect(dialog.getByLabel("Target connection")).toHaveCount(0);
+  });
+
+  test("reviews cross-engine connection migrations and keeps type read-only", async ({
+    liveApp,
+    page,
+  }) => {
+    const createConnection = await page.request.post(`${liveApp.baseURL}/api/config/connections`, {
+      data: {
+        environment_name: "default",
+        name: "review-postgres",
+        type: "postgres",
+        values: {
+          host: "127.0.0.1",
+          port: 5432,
+          username: "renart",
+          password: "renart",
+          database: "analytics",
+        },
+      },
+    });
+    expect(createConnection.ok()).toBe(true);
+
+    const connectDownstream = await page.request.put(
+      `${liveApp.baseURL}/api/pipelines/${pipelineId}/assets/${ordersAssetId}`,
+      {
+        data: {
+          content: `/* @bruin
+type: duckdb.sql
+materialization:
+  type: view
+@bruin */
+
+select customer_id from analytics.customers
+`,
+        },
+      },
+    );
+    expect(connectDownstream.ok()).toBe(true);
+    await pollAsset(liveApp, page.request, "analytics.orders", (asset) =>
+      asset.upstreams.includes("analytics.customers"),
+    );
+
+    await page.goto(`${liveApp.baseURL}/pipelines/${pipelineId}/assets/${customersAssetId}/code`);
+    const properties = await openAssetProperties(page);
+    const type = properties.getByRole("textbox", { name: "Type" });
+    await expect(type).toHaveValue("duckdb.sql");
+    await expect(type).toHaveAttribute("readonly", "");
+    await expect(properties.getByRole("combobox", { name: "Type" })).toHaveCount(0);
+
+    const connection = properties.getByRole("combobox", { name: "Connection" });
+    await connection.click();
+    await page.getByRole("option", { name: "review-postgres", exact: true }).click();
+
+    const migration = page.getByTestId("asset-connection-migration-dialog");
+    await expect(migration).toBeVisible();
+    await expect(migration).toContainText("duckdb.sql");
+    await expect(migration).toContainText("pg.sql");
+    const lineageWarning = migration.getByTestId("asset-connection-lineage-warning");
+    await expect(lineageWarning).toContainText("Pure SQL cannot query across connections");
+    await expect(lineageWarning).toContainText("analytics.orders");
+    await migration.getByRole("button", { name: "Cancel" }).click();
+
+    const unchanged = await fetchAsset(liveApp, page.request, "analytics.customers");
+    expect(unchanged?.type).toBe("duckdb.sql");
+
+    await connection.click();
+    await page.getByRole("option", { name: "review-postgres", exact: true }).click();
+    const updateResponse = page.waitForResponse(
+      (response) =>
+        response.url().includes(`/api/pipelines/${pipelineId}/assets/${customersAssetId}`) &&
+        response.request().method() === "PUT",
+      { timeout: 15000 },
+    );
+    await migration.getByRole("button", { name: "Change engine" }).click();
+    const response = await updateResponse;
+    expect(response.ok()).toBe(true);
+    expect(response.request().postDataJSON()).toMatchObject({
+      connection_selection: {
+        connection: "review-postgres",
+        expected_asset_type: "duckdb.sql",
+        confirm_type_migration: true,
+      },
+    });
+
+    const migrated = await pollAsset(
+      liveApp,
+      page.request,
+      "analytics.customers",
+      (asset) => asset.type === "pg.sql" && asset.explicit_connection === "review-postgres",
+    );
+    expect(migrated.connection).toBe("review-postgres");
+    await expect(type).toHaveValue("pg.sql", { timeout: 15000 });
+  });
+
   test("keeps asset descriptions left of connections on both canvases", async ({
     liveApp,
     page,
@@ -181,9 +296,12 @@ test.describe("app asset editing workbench live", () => {
     await expect(properties.getByRole("heading", { name: "Columns" })).toBeVisible();
 
     const identity = properties.getByRole("heading", { name: "Identity" }).locator("../..");
-    await identity.getByRole("combobox").first().click();
-    await expect(page.getByText("SQL assets", { exact: true })).toBeVisible();
-    await expect(page.getByText("Non-SQL assets", { exact: true })).toBeVisible();
+    await expect(identity.getByRole("textbox", { name: "Type" })).toHaveValue("duckdb.sql");
+    await expect(identity.getByRole("textbox", { name: "Type" })).toHaveAttribute("readonly", "");
+    await identity.getByRole("combobox", { name: "Connection" }).click();
+    await expect(
+      page.getByRole("option", { name: /Pipeline default — duckdb-default/ }),
+    ).toBeVisible();
     await page.keyboard.press("Escape");
 
     const descriptionInput = properties.getByPlaceholder("What this asset produces");
@@ -342,9 +460,11 @@ test.describe("app asset editing workbench live", () => {
     ).toHaveAttribute("data-orientation", "vertical");
     await expect(
       properties
-        .getByRole("combobox", { name: "Type" })
+        .getByRole("textbox", { name: "Type" })
         .locator('xpath=ancestor::*[@data-slot="field"]'),
     ).toHaveAttribute("data-orientation", "vertical");
+    await expect(properties.getByRole("textbox", { name: "Type" })).toHaveAttribute("readonly", "");
+    await expect(properties.getByRole("combobox", { name: "Type" })).toHaveCount(0);
 
     const unsetResponse = page.waitForResponse(
       (response) =>

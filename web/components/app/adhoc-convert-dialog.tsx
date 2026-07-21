@@ -2,7 +2,7 @@
 
 import { useNavigate } from "@tanstack/react-router";
 import { AlertTriangle, BookPlus, CheckCircle2 } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
@@ -75,13 +75,19 @@ export function AdhocToNotebookDialog({
   const [cellName, setCellName] = useState("query");
   const [creating, setCreating] = useState(false);
   const [error, setError] = useState("");
+  const initializedOpenRef = useRef(false);
   const selectedNotebook = useMemo(
     () => notebooks.find((notebook) => notebook.id === target),
     [notebooks, target],
   );
 
   useEffect(() => {
-    if (!open) return;
+    if (!open) {
+      initializedOpenRef.current = false;
+      return;
+    }
+    if (initializedOpenRef.current) return;
+    initializedOpenRef.current = true;
     const initialTarget = notebooks[0]?.id ?? NEW_NOTEBOOK;
     setTarget(initialTarget);
     setTitle(nextNotebookTitle(notebooks));

@@ -154,7 +154,14 @@ func SameOriginGuardWithToken(token string) func(http.Handler) http.Handler {
 			// keeps working; web pages can never run on a loopback origin
 			// unless something local already serves them.
 			if strings.EqualFold(parsed.Host, r.Host) || isLoopbackHost(parsed.Hostname()) {
-				next.ServeHTTP(w, r)
+				ctx := r.Context()
+				if strings.EqualFold(strings.TrimSpace(r.Header.Get("X-Renart-UI-Execution-Origin")), "manual") {
+					// Only a browser request that already passed the same-origin check
+					// may identify itself as a user-triggered UI execution. Header-only
+					// API clients remain API-originated, and discovery-token calls remain CLI.
+					ctx = service.WithExecutionOrigin(ctx, webscheduler.RunTriggerManual)
+				}
+				next.ServeHTTP(w, r.WithContext(ctx))
 				return
 			}
 

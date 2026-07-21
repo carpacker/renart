@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"os"
@@ -30,7 +31,7 @@ const guiHelperName = "renart-gui"
 // platform webview libraries at load time (webkit2gtk/gtk3 on Linux), so
 // compiling it into this binary would prevent the whole CLI - including
 // `renart web` - from starting on machines without those libraries. With the
-// helper, only this command fails there, with an actionable error.
+// helper, a machine without those libraries can still use the browser UI.
 func Standalone() *cli.Command {
 	return &cli.Command{
 		Name:      "standalone",
@@ -68,10 +69,7 @@ func runStandalone(ctx context.Context, c *cli.Command) error {
 	ctx, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	helperPath, err := locateGUIHelper(c.String("gui-binary"))
-	if err != nil {
-		return err
-	}
+	helperPath, helperErr := locateGUIHelper(c.String("gui-binary"))
 
 	cfg, err := serverConfigFromCommand(c)
 	if err != nil {
@@ -132,12 +130,31 @@ func runStandalone(ctx context.Context, c *cli.Command) error {
 		_ = httpServer.Shutdown(shutdownCtx)
 	}()
 	logger.Info("standalone server listening", zap.String("url", appURL))
+	if helperErr != nil {
+		return waitForStandaloneWebFallback(
+			ctx,
+			os.Stdout,
+			appURL,
+			address,
+			serveErr,
+			helperErr,
+			openBrowserWhenReachable,
+		)
+	}
 
 	helper := exec.CommandContext(ctx, helperPath, "--url", appURL)
 	helper.Stdout = os.Stdout
 	helper.Stderr = os.Stderr
 	if err := helper.Start(); err != nil {
-		return fmt.Errorf("failed to start %s: %w", guiHelperName, err)
+		return waitForStandaloneWebFallback(
+			ctx,
+			os.Stdout,
+			appURL,
+			address,
+			serveErr,
+			fmt.Errorf("failed to start %s: %w", guiHelperName, err),
+			openBrowserWhenReachable,
+		)
 	}
 
 	helperDone := make(chan error, 1)
@@ -146,9 +163,14 @@ func runStandalone(ctx context.Context, c *cli.Command) error {
 	select {
 	case err := <-helperDone:
 		if err != nil && ctx.Err() == nil {
-			return fmt.Errorf(
-				"%s exited with an error: %w\n(on Linux this usually means the webview libraries are missing; install gtk3 and webkit2gtk)",
-				guiHelperName, err,
+			return waitForStandaloneWebFallback(
+				ctx,
+				os.Stdout,
+				appURL,
+				address,
+				serveErr,
+				fmt.Errorf("%s exited with an error: %w", guiHelperName, err),
+				openBrowserWhenReachable,
 			)
 		}
 		return nil
@@ -156,6 +178,34 @@ func runStandalone(ctx context.Context, c *cli.Command) error {
 		// Server died underneath the window; take the helper down too.
 		_ = helper.Process.Kill()
 		<-helperDone
+		if err != nil {
+			return fmt.Errorf("embedded server failed: %w", err)
+		}
+		return nil
+	}
+}
+
+func waitForStandaloneWebFallback(
+	ctx context.Context,
+	out io.Writer,
+	appURL string,
+	address string,
+	serveErr <-chan error,
+	cause error,
+	openBrowser func(context.Context, string, string),
+) error {
+	_, _ = fmt.Fprintf(
+		out,
+		"Renart GUI is unavailable (%v). Falling back to the web interface at %s\n",
+		cause,
+		appURL,
+	)
+	go openBrowser(ctx, appURL, address)
+
+	select {
+	case <-ctx.Done():
+		return nil
+	case err := <-serveErr:
 		if err != nil {
 			return fmt.Errorf("embedded server failed: %w", err)
 		}

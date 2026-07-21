@@ -64,11 +64,13 @@ type (
 	PythonDepsResponse           = service.PythonDepsResponse
 	AddPythonDependencyRequest   = service.AddPythonDependencyRequest
 	AssetMutationResponse        = service.AssetMutationResponse
+	AssetCreationProfile         = service.AssetCreationProfile
 	SeedFilePreviewResponse      = service.SeedFilePreviewResponse
 	StatusResponse               = service.StatusResponse
 )
 
 type AssetHandlers interface {
+	AssetCreationProfile(ctx context.Context, pipelineID, environment string) (AssetCreationProfile, *APIError)
 	Create(ctx context.Context, pipelineID string, req CreateAssetRequest) (AssetMutationResponse, *APIError)
 	Update(ctx context.Context, assetID string, req UpdateAssetRequest) (AssetMutationResponse, *APIError)
 	SeedFilePreview(ctx context.Context, assetID string) (SeedFilePreviewResponse, *APIError)
@@ -93,6 +95,7 @@ type AssetsAPI struct {
 const maxSeedUploadBytes int64 = 256 << 20
 
 func RegisterAssetRoutes(router chi.Router, handlers *AssetsAPI) {
+	router.Get("/api/pipelines/{id}/asset-creation-profile", handlers.HandleAssetCreationProfile)
 	router.Post("/api/pipelines/{id}/assets", handlers.HandleCreateAsset)
 	router.Put("/api/pipelines/{pipelineID}/assets/{assetID}", handlers.HandleUpdateAsset)
 	router.Get("/api/assets/{assetID}/seed-file", handlers.HandleSeedFilePreview)
@@ -108,6 +111,19 @@ func RegisterAssetRoutes(router chi.Router, handlers *AssetsAPI) {
 	router.Get("/api/assets/{assetID}/python-deps", handlers.HandlePythonDeps)
 	router.Post("/api/assets/{assetID}/python-deps", handlers.HandleAddPythonDependency)
 	router.Post("/api/assets/{assetID}/transactions", handlers.HandleApplyAssetTransaction)
+}
+
+func (h *AssetsAPI) HandleAssetCreationProfile(w http.ResponseWriter, r *http.Request) {
+	resp, apiErr := h.Service.AssetCreationProfile(
+		r.Context(),
+		chi.URLParam(r, "id"),
+		r.URL.Query().Get("environment"),
+	)
+	if apiErr != nil {
+		writeAPIError(w, apiErr)
+		return
+	}
+	webapi.WriteJSON(w, http.StatusOK, resp)
 }
 
 func (h *AssetsAPI) HandleCreateAsset(w http.ResponseWriter, r *http.Request) {

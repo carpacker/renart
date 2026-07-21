@@ -102,9 +102,14 @@ UTF-16 source map, then the adapter translates completion, diagnostics, hover,
 definition/navigation, signature-help, and semantic-token positions to and
 from the existing SQL LSP. Interpolated strings, bytes, variables,
 concatenation, and other runtime expressions remain Python-only because they do
-not represent one stable SQL document. This projection uses the Python asset's
-existing graph identity, so a notebook query sees only its sibling cells and
-the same pipeline relations as an SQL cell.
+not represent one stable SQL document. A static connection supplied as the
+second positional argument or `connection="..."` keyword is projected too. The
+Go service clones the cached canonical graph for that request and replaces only
+the host document's effective connection, so cross-connection diagnostics match
+the query's runtime target without mutating workspace state. Dynamic connection
+expressions fall back to the Python asset's saved graph identity. Notebook
+queries still see only sibling cells and the same pipeline relations as SQL
+cells.
 
 Completion has two inputs, matching native notebook SQL cells: canonical graph
 suggestions from the LSP and the editor's `schemaTables` context. The latter

@@ -117,7 +117,19 @@ const sources = [
   },
   {
     file: resolve(repoRoot, "internal", "web", "service", "asset.go"),
-    types: ["FormatSQLAssetResponse"],
+    types: ["FormatSQLAssetResponse", "AssetMutationResponse"],
+  },
+  {
+    file: resolve(repoRoot, "internal", "web", "service", "asset_creation_profile.go"),
+    types: [
+      "AssetCreationProfile",
+      "AssetCreationKindProfile",
+      "AssetCreationRoleProfile",
+      "AssetCreationConnection",
+      "AssetCreationCandidate",
+      "AssetCreationDefault",
+      "AssetCreationPortabilityWarning",
+    ],
   },
   {
     file: resolve(repoRoot, "internal", "web", "service", "execution.go"),

@@ -14,6 +14,7 @@ import {
   SQLLSPCompletionItem,
   SQLLSPPosition,
   SQLLSPRange,
+  SQLLSPRequest,
   SQLLSPSignatureHelp,
 } from "@/lib/api-sql-lsp";
 import { workspaceAtom } from "@/lib/atoms/domains/workspace";
@@ -121,10 +122,7 @@ export function usePythonQueryIntellisense(
       semanticTimer = window.setTimeout(() => {
         void Promise.all(
           literals.map((literal) =>
-            getSQLLSPSemanticTokens({
-              asset_id: asset.id,
-              content: literal.sql,
-            }).catch(() => null),
+            getSQLLSPSemanticTokens(sqlLSPRequestForLiteral(asset.id, literal)).catch(() => null),
           ),
         ).then((responses) => {
           if (disposed || revision !== refreshRevision) {
@@ -169,11 +167,11 @@ export function usePythonQueryIntellisense(
       }
       event.event.preventDefault();
       event.event.stopPropagation();
-      void getSQLLSPDefinition({
-        asset_id: asset.id,
-        content: projected.literal.sql,
-        position: projected.sqlPosition,
-      })
+      void getSQLLSPDefinition(
+        sqlLSPRequestForLiteral(asset.id, projected.literal, {
+          position: projected.sqlPosition,
+        }),
+      )
         .then((response) => {
           const location = (response.locations ?? []).find((candidate) => candidate.asset_id);
           if (!location?.asset_id) {
@@ -213,10 +211,7 @@ export function usePythonQueryIntellisense(
       void Promise.all(
         literals.map(async (literal) => ({
           literal,
-          response: await getSQLLSPDiagnostics({
-            asset_id: asset.id,
-            content: literal.sql,
-          }),
+          response: await getSQLLSPDiagnostics(sqlLSPRequestForLiteral(asset.id, literal)),
         })),
       )
         .then((results) => {
@@ -301,11 +296,11 @@ function registerPythonQueryProviders(monaco: typeof MonacoNS): MonacoNS.IDispos
       } finally {
         sqlModel.dispose();
       }
-      const response = await getSQLLSPCompletions({
-        asset_id: state.asset.id,
-        content: projected.literal.sql,
-        position: projected.sqlPosition,
-      }).catch(() => null);
+      const response = await getSQLLSPCompletions(
+        sqlLSPRequestForLiteral(state.asset.id, projected.literal, {
+          position: projected.sqlPosition,
+        }),
+      ).catch(() => null);
       if (token.isCancellationRequested) {
         return { suggestions: [] };
       }
@@ -342,11 +337,11 @@ function registerPythonQueryProviders(monaco: typeof MonacoNS): MonacoNS.IDispos
       if (!state?.asset?.id || !projected) {
         return null;
       }
-      const response = await getSQLLSPHover({
-        asset_id: state.asset.id,
-        content: projected.literal.sql,
-        position: projected.sqlPosition,
-      }).catch(() => null);
+      const response = await getSQLLSPHover(
+        sqlLSPRequestForLiteral(state.asset.id, projected.literal, {
+          position: projected.sqlPosition,
+        }),
+      ).catch(() => null);
       if (!response?.hover || token.isCancellationRequested) {
         return null;
       }
@@ -366,11 +361,11 @@ function registerPythonQueryProviders(monaco: typeof MonacoNS): MonacoNS.IDispos
       if (!state?.asset?.id || !projected) {
         return [];
       }
-      const response = await getSQLLSPDefinition({
-        asset_id: state.asset.id,
-        content: projected.literal.sql,
-        position: projected.sqlPosition,
-      }).catch(() => null);
+      const response = await getSQLLSPDefinition(
+        sqlLSPRequestForLiteral(state.asset.id, projected.literal, {
+          position: projected.sqlPosition,
+        }),
+      ).catch(() => null);
       if (!response || token.isCancellationRequested) {
         return [];
       }
@@ -406,11 +401,11 @@ function registerPythonQueryProviders(monaco: typeof MonacoNS): MonacoNS.IDispos
       if (!state?.asset?.id || !projected) {
         return null;
       }
-      const response = await getSQLLSPSignatureHelp({
-        asset_id: state.asset.id,
-        content: projected.literal.sql,
-        position: projected.sqlPosition,
-      }).catch(() => null);
+      const response = await getSQLLSPSignatureHelp(
+        sqlLSPRequestForLiteral(state.asset.id, projected.literal, {
+          position: projected.sqlPosition,
+        }),
+      ).catch(() => null);
       if (!response?.signature || token.isCancellationRequested) {
         return null;
       }
@@ -425,6 +420,19 @@ function registerPythonQueryProviders(monaco: typeof MonacoNS): MonacoNS.IDispos
       definition.dispose();
       signature.dispose();
     },
+  };
+}
+
+function sqlLSPRequestForLiteral(
+  assetID: string,
+  literal: PythonQueryLiteral,
+  extra: Partial<SQLLSPRequest> = {},
+): SQLLSPRequest {
+  return {
+    asset_id: assetID,
+    content: literal.sql,
+    ...(literal.connection ? { connection: literal.connection } : {}),
+    ...extra,
   };
 }
 

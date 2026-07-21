@@ -18,7 +18,6 @@ import {
   SelectContent,
   SelectGroup,
   SelectItem,
-  SelectLabel,
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
@@ -63,7 +62,6 @@ export type SemanticAssetCreatePayload = {
   seedFile?: File;
 };
 
-const AUTO_CONNECTION_VALUE = "__auto__";
 const INFER_FILE_TYPE_VALUE = "__infer__";
 
 export function defaultSemanticAssetDraft(
@@ -207,29 +205,16 @@ export function buildSemanticAssetCreatePayload(
 export function SemanticAssetCreateFields({
   kind,
   capabilities,
-  connections,
   value,
   onChange,
 }: {
   kind: SemanticAssetKind;
   capabilities: AssetAuthoringCapability[];
-  connections: Record<string, string>;
   value: SemanticAssetDraft;
   onChange: (value: SemanticAssetDraft) => void;
 }) {
   const candidates = capabilities.filter((capability) => capability.kind === kind);
   const selected = candidates.find((capability) => capability.type === value.assetType);
-  const configuredTypes = new Set(Object.values(connections));
-  const configured = candidates.filter((capability) =>
-    capability.connection_types.some((type) => configuredTypes.has(type)),
-  );
-  const other = candidates.filter((capability) => !configured.includes(capability));
-  const compatibleConnections = selected
-    ? Object.entries(connections)
-        .filter(([, type]) => selected.connection_types.includes(type))
-        .map(([name]) => name)
-        .sort((left, right) => left.localeCompare(right))
-    : [];
 
   const set = (patch: Partial<SemanticAssetDraft>) => onChange({ ...value, ...patch });
   const [clipboardError, setClipboardError] = useState("");
@@ -239,80 +224,6 @@ export function SemanticAssetCreateFields({
 
   return (
     <FieldGroup className="min-w-0">
-      <Field variant="plain">
-        <FieldLabel htmlFor="new-semantic-asset-type">
-          {kind === "seed" ? "Seed type" : "Sensor type"}
-        </FieldLabel>
-        <Select
-          value={value.assetType}
-          onValueChange={(assetType) => {
-            const nextCapability = candidates.find((capability) => capability.type === assetType);
-            const connectionCompatible = nextCapability
-              ? nextCapability.connection_types.includes(connections[value.connection])
-              : false;
-            set({ assetType, ...(connectionCompatible ? {} : { connection: "" }) });
-          }}
-        >
-          <SelectTrigger id="new-semantic-asset-type">
-            <SelectValue placeholder={`Choose a ${kind} type`} />
-          </SelectTrigger>
-          <SelectContent>
-            {configured.length > 0 ? (
-              <SelectGroup>
-                <SelectLabel>Configured platforms</SelectLabel>
-                {configured.map((capability) => (
-                  <SelectItem key={capability.type} value={capability.type}>
-                    {semanticAssetTypeLabel(capability)}
-                  </SelectItem>
-                ))}
-              </SelectGroup>
-            ) : null}
-            {other.length > 0 ? (
-              <SelectGroup>
-                <SelectLabel>Other platforms</SelectLabel>
-                {other.map((capability) => (
-                  <SelectItem key={capability.type} value={capability.type}>
-                    {semanticAssetTypeLabel(capability)}
-                  </SelectItem>
-                ))}
-              </SelectGroup>
-            ) : null}
-          </SelectContent>
-        </Select>
-        <FieldDescription>
-          Renart only lists asset types supported by the embedded Bruin runtime.
-        </FieldDescription>
-      </Field>
-
-      <Field variant="plain">
-        <FieldLabel htmlFor="new-semantic-connection">Connection</FieldLabel>
-        <Select
-          value={value.connection || AUTO_CONNECTION_VALUE}
-          onValueChange={(connection) =>
-            set({ connection: connection === AUTO_CONNECTION_VALUE ? "" : connection })
-          }
-        >
-          <SelectTrigger id="new-semantic-connection">
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectGroup>
-              <SelectItem value={AUTO_CONNECTION_VALUE}>Auto (pipeline default)</SelectItem>
-              {compatibleConnections.map((connection) => (
-                <SelectItem key={connection} value={connection}>
-                  {connection}
-                </SelectItem>
-              ))}
-            </SelectGroup>
-          </SelectContent>
-        </Select>
-        <FieldDescription>
-          {compatibleConnections.length > 0
-            ? "Only connections compatible with the selected asset type are shown."
-            : "No compatible explicit connection is configured; Auto uses the pipeline default."}
-        </FieldDescription>
-      </Field>
-
       {kind === "seed" && selected ? (
         <>
           <Field variant="plain">
@@ -581,23 +492,6 @@ export function SemanticAssetCreateFields({
       ) : null}
     </FieldGroup>
   );
-}
-
-function semanticAssetTypeLabel(capability: AssetAuthoringCapability) {
-  const [provider] = capability.type.split(".");
-  const providerLabel =
-    {
-      bq: "BigQuery",
-      ms: "SQL Server",
-      my: "MySQL",
-      pg: "Postgres",
-      rs: "Redshift",
-      sf: "Snowflake",
-      s3: "Amazon S3",
-    }[provider] ?? provider.charAt(0).toUpperCase() + provider.slice(1);
-  return capability.kind === "seed"
-    ? `${providerLabel} · ${capability.type}`
-    : `${providerLabel} ${capability.variant} · ${capability.type}`;
 }
 
 function sensorParameterLabel(parameter: string) {

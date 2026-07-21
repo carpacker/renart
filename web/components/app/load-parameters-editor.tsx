@@ -15,21 +15,14 @@ import {
   CommandList,
 } from "@/components/ui/command";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
-import { Separator } from "@/components/ui/separator";
-import { refreshAssetColumnsFromDefinition } from "@/lib/api-asset-transactions";
 import { updateAsset } from "@/lib/api-assets";
 import { discoverLoadStreams, LoadDiscoveryStream } from "@/lib/api-load";
 import { selectedEnvironmentAtom, workspaceAtom } from "@/lib/atoms/workspace";
-import { WebAsset, WorkspaceConfigConnection } from "@/lib/types";
+import { assetCreationRole } from "@/lib/asset-creation-profile";
+import { useAssetCreationProfile } from "@/hooks/use-asset-creation-profile";
+import { AssetCreationConnection, WebAsset } from "@/lib/types";
 import { cn } from "@/lib/utils";
-import { useWorkspaceSettingsData } from "@/hooks/use-workspace-settings-data";
-import {
-  LOCAL_LOAD_CONNECTION_OPTION,
-  isLocalLoadConnection,
-  loadConnectionCategory,
-  loadConnectionsForEnvironment,
-  loadTargetNeedsDestinationObject,
-} from "@/lib/load-assets";
+import { isLocalLoadConnection, loadTargetNeedsDestinationObject } from "@/lib/load-assets";
 
 import { Comment, Key, Line } from "./asset-yaml-editor";
 import { FilePathPicker } from "./file-path-picker";
@@ -53,7 +46,7 @@ function categoryIcon(category: string | undefined) {
  * source intent under flat `parameters`; its target connection lives in the
  * shared metadata editor and database targets always use the asset name.
  * Generic metadata (name, columns, dependencies, …) stays in the Properties
- * sidebar; the upstream dependency and columns are inferred from the source.
+ * sidebar; dependencies and columns are inferred from the source.
  */
 export function LoadParametersEditor({
   asset,
@@ -66,18 +59,26 @@ export function LoadParametersEditor({
 }) {
   const environment = useAtomValue(selectedEnvironmentAtom);
   const workspace = useAtomValue(workspaceAtom);
-  const { workspaceConfig } = useWorkspaceSettingsData();
+  const { profile } = useAssetCreationProfile(pipelineId);
   const params = asset.parameters ?? {};
 
-  const configuredConnections = useMemo(
-    () => loadConnectionsForEnvironment(workspaceConfig, environment),
-    [workspaceConfig, environment],
-  );
-  const connections = useMemo(
-    () => [LOCAL_LOAD_CONNECTION_OPTION, ...configuredConnections],
-    [configuredConnections],
-  );
-  const targetCategory = loadConnectionCategory(configuredConnections, asset.connection);
+  const sourceRole = assetCreationRole(profile, "load", "source");
+  const destinationRole = assetCreationRole(profile, "load", "destination");
+  const connections = useMemo(() => {
+    const available = [...(sourceRole?.connections ?? [])];
+    const current = (params.source_connection ?? "").trim();
+    if (current && !available.some((connection) => connection.name === current)) {
+      available.push({
+        name: current,
+        connection_type: workspace?.connections?.[current] ?? "unknown",
+        candidates: [],
+      });
+    }
+    return available;
+  }, [params.source_connection, sourceRole?.connections, workspace?.connections]);
+  const targetCategory = destinationRole?.connections.find(
+    (connection) => connection.name === asset.connection,
+  )?.category;
   const targetNeedsObject = loadTargetNeedsDestinationObject(targetCategory);
 
   const sourceAsset = useMemo(() => {
@@ -198,17 +199,11 @@ export function LoadParametersEditor({
           <span className="truncate text-foreground">{asset.name}</span>
         </Line>
       )}
-
-      <Separator className="mt-3" />
-      <div className="pt-2">
-        <Comment>The upstream dependency is inferred from the source on save.</Comment>
-        <InferColumnsButton asset={asset} />
-      </div>
     </div>
   );
 }
 
-// ConnectionValue is a combobox showing the chosen bruin connection; the picker
+// ConnectionValue is a combobox showing the chosen configured connection; the picker
 // is grouped by Load category (database / storage / file).
 function ConnectionValue({
   value,
@@ -216,15 +211,15 @@ function ConnectionValue({
   onPick,
 }: {
   value: string;
-  connections: WorkspaceConfigConnection[];
+  connections: AssetCreationConnection[];
   onPick: (name: string) => void;
 }) {
   const [open, setOpen] = useState(false);
 
   const grouped = useMemo(() => {
-    const byCategory = new Map<string, WorkspaceConfigConnection[]>();
+    const byCategory = new Map<string, AssetCreationConnection[]>();
     for (const connection of connections) {
-      const category = connection.load_category ?? "database";
+      const category = connection.category ?? "database";
       const list = byCategory.get(category) ?? [];
       list.push(connection);
       byCategory.set(category, list);
@@ -262,7 +257,7 @@ function ConnectionValue({
                 heading={CATEGORY_LABELS[group.category] ?? group.category}
               >
                 {group.items.map((connection) => {
-                  const Icon = categoryIcon(connection.load_category);
+                  const Icon = categoryIcon(connection.category);
                   const selected = connection.name === value;
                   return (
                     <CommandItem
@@ -279,7 +274,9 @@ function ConnectionValue({
                       {selected ? (
                         <Check className="size-3 text-muted-foreground" />
                       ) : (
-                        <span className="text-[10px] text-muted-foreground">{connection.type}</span>
+                        <span className="text-[10px] text-muted-foreground">
+                          {connection.connection_type}
+                        </span>
                       )}
                     </CommandItem>
                   );
@@ -434,43 +431,5 @@ function StreamValue({
         </Command>
       </PopoverContent>
     </Popover>
-  );
-}
-
-// InferColumnsButton mirrors the source asset's declared columns into this asset
-// (definition-driven, the same model SQL assets use).
-function InferColumnsButton({ asset }: { asset: WebAsset }) {
-  const [state, setState] = useState<"idle" | "loading" | "error">("idle");
-  const [message, setMessage] = useState<string | null>(null);
-
-  const run = async () => {
-    setState("loading");
-    setMessage(null);
-    try {
-      await refreshAssetColumnsFromDefinition(asset.id);
-      setState("idle");
-    } catch (cause) {
-      setState("error");
-      setMessage(cause instanceof Error ? cause.message : "Could not infer columns.");
-    }
-  };
-
-  return (
-    <div className="mt-0.5">
-      <button
-        type="button"
-        onClick={() => void run()}
-        disabled={state === "loading"}
-        className="font-monaco flex items-center gap-1 rounded-sm px-1 text-[11px] text-muted-foreground hover:bg-muted hover:text-foreground disabled:opacity-50"
-      >
-        {state === "loading" ? (
-          <Loader2 className="size-3 animate-spin" />
-        ) : (
-          <Database className="size-3" />
-        )}
-        infer columns from source
-      </button>
-      {message ? <Comment>{message}</Comment> : null}
-    </div>
   );
 }

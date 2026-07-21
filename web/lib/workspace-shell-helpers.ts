@@ -1,5 +1,4 @@
 import { NewAssetKind } from "@/components/new-asset-node";
-import { buildAPIAssetTemplate, type APIAssetTemplateId } from "@/lib/api-asset-templates";
 
 export function buildSuggestedAssetName(
   kind: NewAssetKind,
@@ -28,92 +27,6 @@ export function buildSuggestedAssetName(
 
 export function normalizeAssetName(input: string): string {
   return input.trim().toLowerCase();
-}
-
-export function buildCreateAssetInput(
-  name: string,
-  kind: NewAssetKind,
-  preferredSqlAssetType = "duckdb.sql",
-  connection?: string,
-  apiTemplate: APIAssetTemplateId = "openapi",
-): {
-  name: string;
-  type: string;
-  path?: string;
-  content?: string;
-  connection?: string;
-  parameters?: Record<string, string>;
-} {
-  const path = buildAssetPathFromName(name, kind);
-  if (kind === "python") {
-    return {
-      name,
-      type: "python",
-      path,
-    };
-  }
-
-  if (kind === "ingestr") {
-    return {
-      name,
-      type: "ingestr",
-      path,
-      content: `type: ingestr
-
-parameters:
-  source_connection: your-source-connection
-  source_table: your_source_table
-  destination: duckdb
-`,
-    };
-  }
-
-  if (kind === "load") {
-    return {
-      name,
-      type: "load",
-      path,
-      connection,
-    };
-  }
-
-  if (kind === "api") {
-    return {
-      name,
-      type: "api",
-      path,
-      content: buildAPIAssetTemplate(apiTemplate, connection),
-    };
-  }
-
-  if (kind === "seed" || kind === "sensor") {
-    return {
-      name,
-      type: kind === "seed" ? "duckdb.seed" : "duckdb.sensor.query",
-      path,
-    };
-  }
-
-  return {
-    name,
-    type: preferredSqlAssetType,
-    path,
-  };
-}
-
-function buildAssetPathFromName(name: string, kind: NewAssetKind): string {
-  const parts = name.split(".").map((part) => slugifyPipelinePrefix(part));
-  const extensionByKind: Record<NewAssetKind, string> = {
-    sql: ".sql",
-    python: ".py",
-    ingestr: ".asset.yml",
-    load: ".asset.yml",
-    api: ".asset.yml",
-    seed: ".asset.yml",
-    sensor: ".asset.yml",
-  };
-  const leaf = parts.pop() ?? "asset";
-  return ["assets", ...parts, `${leaf}${extensionByKind[kind]}`].join("/");
 }
 
 export function buildOnboardingPythonStarterQuery(): string {

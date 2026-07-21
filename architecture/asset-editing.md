@@ -109,13 +109,55 @@ round-trips unknown fields).
 ## 6. UI (`web/components/app/`)
 
 - **Asset creation:** the Build view's creation dialog presents SQL, Python,
-  HTTP API, Seed, Sensor, and Load as equal-size choices. Detail forms use the
-  plain `Field` variant so inputs are grouped by spacing and labels without a
-  border around every field. Selecting a kind animates the tile grid into a
-  compact selected-kind summary with a Change type action, leaving more room for
-  long Seed and Sensor forms. Seed workspace paths use the shared file picker;
-  the request carries a workspace-root-relative selection, while the saved
-  Bruin definition remains portable with a path relative to the asset file.
+  HTTP API, Seed, Sensor, and Load as equal-size intent choices. The second axis
+  is always a backend-profiled connection role rather than another platform or
+  SQL-dialect selector: SQL/Python/Seed use a target, API uses a destination,
+  Sensor uses a connection to check, and Load has source plus destination. The
+  selected connection determines the concrete asset type and SQL dialect on the
+  server; those implementation details are not repeated as a second summary in
+  the dialog. A pipeline-default option is selectable only when the backend
+  resolves one compatible connection; ambiguous, missing, and incompatible
+  defaults explain why they are unavailable. Partially supported engines stay
+  out of ordinary creation.
+
+  Each picker can open a role-filtered, environment-locked New connection
+  dialog without unmounting the asset draft. It reuses the project-settings
+  connection form and Verify action, refreshes the creation profile after save,
+  then selects the new connection. Full connection management remains an
+  explicit navigation to Project settings. The creation dialog describes the
+  resulting Renart asset without exposing runtime-engine terminology. HTTP API
+  creation defaults to a custom OpenAPI starter, requires a spec URL, and writes
+  that URL into the saved YAML so the normal editor intelligence is available
+  immediately.
+
+  Existing assets use the same profile-backed connection field. Their concrete
+  Type is read-only in both the guided inspector and the currently hidden expert
+  editor. A same-engine connection change is an ordinary metadata update; a
+  cross-engine choice opens a confirmation that names the old and new types,
+  then sends one semantic mutation that persists Type and connection together.
+  The request includes the type the browser reviewed, so a concurrent filesystem
+  edit fails with a reload message instead of being overwritten. Unknown or no
+  longer compatible hand-authored connections remain visible for repair. Direct
+  API attempts to change Type, or to pair the old Type with a different engine,
+  are rejected in favor of this reviewed path. When a SQL asset has inferred
+  upstream or downstream relations, the migration confirmation names those
+  connected assets and warns that the new cross-connection SQL edges will not
+  execute; Renart does not silently migrate the rest of the graph.
+
+  Detail forms use the plain `Field` variant so inputs are grouped by spacing
+  and labels without a border around every field. Selecting a kind animates the
+  tile grid into a compact selected-kind summary with a Change type action,
+  leaving more room for long Seed and Sensor forms. Converting an ad-hoc query
+  retains its effective connection. Downstream SQL stays on the source asset's
+  effective warehouse because pure SQL cannot cross connections; downstream
+  Python starts there but may select another compatible target, and a downstream
+  Load fixes that warehouse as its source while asking for its destination. An
+  incompatible carried value remains visible and must be changed explicitly;
+  creation never silently falls back to another dialect. Generated downstream
+  Python uses the runner-injected `renart` SDK. Seed
+  workspace paths use the shared file picker; the request carries a
+  workspace-root-relative selection, while the saved Bruin definition remains
+  portable with a path relative to the asset file.
   Seeds can also be pasted as CSV, TSV, JSON, JSON Lines, or plain text. Auto
   detection remains an explicit, overridable format choice; TSV and text are
   normalized to CSV while JSON and JSON Lines keep their native formats.
@@ -166,9 +208,10 @@ round-trips unknown fields).
   seed before any upload starts. Pasted data exposes the same format detection
   and override contract as creation. Relation-producing
   assets retain generic columns and checks in the inspector; sensors omit both
-  because they gate execution without producing a relation. Asset-type
-  selectors in both guided and YAML views group SQL, seed, sensor, and other
-  non-SQL kinds separately while preserving unknown current values for repair.
+  because they gate execution without producing a relation. Asset Type is a
+  static identity field; compatible connection options and reviewed migrations
+  come from the backend profile instead of client-maintained SQL/seed/sensor or
+  Load connection maps.
 - **Run-scoped full refresh:** supported table assets expose a Full refresh
   action without mutating their saved strategy. The destructive dialog names
   the selected environment and current execution window; environments with

@@ -476,10 +476,16 @@ func (s *AssetService) installedPythonPackageStubs(relAssetPath, absAssetPath, c
 	sort.Strings(moduleNames)
 	installedCount = len(moduleNames)
 
-	files := make([]pyintelligence.VirtualFile, 0, len(moduleNames)+3)
+	files := make([]pyintelligence.VirtualFile, 0, len(moduleNames)+5)
 	fingerprintHash := sha256.New()
 	if modules[renartSDKModule] {
 		for _, stub := range pysdk.TypeStubFiles() {
+			stubModule := strings.SplitN(stub.Path, "/", 2)[0]
+			if stubModule != renartSDKModule && modulePaths[stubModule] != "" {
+				// Prefer a workspace-installed dependency over the SDK's small
+				// editor fallback. The installed mount is appended below.
+				continue
+			}
 			virtualPath := "/site-packages/" + stub.Path
 			files = append(files, pyintelligence.VirtualFile{Path: virtualPath, Content: stub.Content})
 			_, _ = fingerprintHash.Write([]byte(virtualPath))

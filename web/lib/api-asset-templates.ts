@@ -9,8 +9,8 @@ export type APIAssetTemplate = {
 export const API_ASSET_TEMPLATES: APIAssetTemplate[] = [
   {
     id: "openapi",
-    label: "OpenAPI starter",
-    description: "Weather alerts with OpenAPI inference and warning-level validation.",
+    label: "OpenAPI spec",
+    description: "Start from your own spec, then choose an endpoint with editor suggestions.",
   },
   {
     id: "paginated",
@@ -24,7 +24,11 @@ export const API_ASSET_TEMPLATES: APIAssetTemplate[] = [
   },
 ];
 
-export function buildAPIAssetTemplate(templateId: APIAssetTemplateId, connection?: string): string {
+export function buildAPIAssetTemplate(
+  templateId: APIAssetTemplateId,
+  connection?: string,
+  openapiURL?: string,
+): string {
   const connectionLine = connection?.trim() ? `connection: ${connection.trim()}\n` : "";
 
   if (templateId === "paginated") {
@@ -102,17 +106,17 @@ materialization:
 
 parameters:
   openapi:
-    url: https://api.weather.gov/openapi.json
+    url: ${JSON.stringify(openapiURL?.trim() ?? "")}
     validation: warn
 
   request:
-    url: https://api.weather.gov/alerts/active?area=CA
+    url: ""
     method: GET
     headers:
-      Accept: application/geo+json
+      Accept: application/json
       User-Agent: Renart/alpha (https://getrenart.com)
 
   response:
-    records_path: features
+    records_path: ""
 `;
 }

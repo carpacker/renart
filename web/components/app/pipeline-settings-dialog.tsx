@@ -1,9 +1,21 @@
 import { Link } from "@tanstack/react-router";
 import { useAtomValue } from "jotai";
-import { ExternalLink, Loader2, Plus, Trash2 } from "lucide-react";
+import {
+  AlertTriangle,
+  Bell,
+  Braces,
+  CalendarClock,
+  Database,
+  ExternalLink,
+  Loader2,
+  Plus,
+  Settings2,
+  Trash2,
+} from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 
 import { Badge } from "@/components/ui/badge";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -16,6 +28,7 @@ import {
 import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Switch } from "@/components/ui/switch";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { getPipelineConfig, updatePipelineConfig } from "@/lib/api-pipelines";
 import { selectedEnvironmentAtom } from "@/lib/atoms/domains/workspace";
 import type {
@@ -28,11 +41,11 @@ import { cn } from "@/lib/utils";
 import { MultiValueInput } from "./multi-value-input";
 
 const pipelineSettingsSections = [
-  { id: "general", label: "General" },
-  { id: "schedule", label: "Schedule" },
-  { id: "connections", label: "Connections" },
-  { id: "notifications", label: "Notifications" },
-  { id: "variables", label: "Variables" },
+  { id: "general", label: "General", icon: Settings2 },
+  { id: "schedule", label: "Schedule", icon: CalendarClock },
+  { id: "connections", label: "Connections", icon: Database },
+  { id: "notifications", label: "Notifications", icon: Bell },
+  { id: "variables", label: "Variables", icon: Braces },
 ] as const;
 
 export type PipelineSettingsSection = (typeof pipelineSettingsSections)[number]["id"];
@@ -127,19 +140,36 @@ export function PipelineSettingsDialog({
             <span className="font-mono">pipeline.yml</span>.
           </DialogDescription>
         </DialogHeader>
-        <div className="grid min-h-80 gap-4 md:grid-cols-[180px_minmax(0,1fr)]">
-          <div className="flex gap-2 overflow-x-auto md:block md:space-y-1">
+        <Tabs
+          value={section}
+          onValueChange={(value) => setSection(value as PipelineSettingsSection)}
+          orientation="vertical"
+          className="grid min-h-80 gap-4 md:grid-cols-[10.5rem_minmax(0,1fr)]"
+        >
+          <div className="flex gap-2 overflow-x-auto md:hidden">
             {pipelineSettingsSections.map((item) => (
               <Button
                 key={item.id}
+                type="button"
                 variant={section === item.id ? "secondary" : "ghost"}
-                className="justify-start"
+                className="shrink-0 justify-start"
                 onClick={() => setSection(item.id)}
               >
                 {item.label}
               </Button>
             ))}
           </div>
+          <TabsList
+            aria-label="Pipeline settings sections"
+            className="hidden h-fit w-full items-stretch justify-start border bg-muted/30 p-1 md:flex"
+          >
+            {pipelineSettingsSections.map(({ id, label, icon: Icon }) => (
+              <TabsTrigger key={id} value={id} className="h-8 flex-none justify-start px-2">
+                <Icon data-icon="inline-start" />
+                {label}
+              </TabsTrigger>
+            ))}
+          </TabsList>
           <ScrollArea
             className="max-h-[26rem] min-h-0 rounded-lg border"
             data-testid="pipeline-settings-content"
@@ -151,17 +181,27 @@ export function PipelineSettingsDialog({
                   Loading settings…
                 </div>
               ) : (
-                <PipelineSettingsSectionBody
-                  section={section}
-                  draft={draft}
-                  update={update}
-                  inferredDefaultConnections={inferredDefaultConnections}
-                />
+                pipelineSettingsSections.map((item) => (
+                  <TabsContent key={item.id} value={item.id} className="m-0">
+                    <PipelineSettingsSectionBody
+                      section={item.id}
+                      draft={draft}
+                      update={update}
+                      inferredDefaultConnections={inferredDefaultConnections}
+                    />
+                  </TabsContent>
+                ))
               )}
             </div>
           </ScrollArea>
-        </div>
-        {error ? <p className="text-xs text-red-600">{error}</p> : null}
+        </Tabs>
+        {error ? (
+          <Alert variant="destructive">
+            <AlertTriangle />
+            <AlertTitle>Could not save pipeline settings</AlertTitle>
+            <AlertDescription>{error}</AlertDescription>
+          </Alert>
+        ) : null}
         <DialogFooter>
           <Button variant="outline" onClick={() => onOpenChange(false)} disabled={saving}>
             Cancel

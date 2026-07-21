@@ -15,7 +15,6 @@ import {
   X,
 } from "lucide-react";
 
-import { workspaceAtom } from "@/lib/atoms/domains/workspace";
 import { selectedEnvironmentAtom } from "@/lib/atoms/workspace";
 
 import { Button } from "@/components/ui/button";
@@ -29,7 +28,7 @@ import {
   CommandList,
 } from "@/components/ui/command";
 import { Input } from "@/components/ui/input";
-import { Field, FieldGroup, FieldLabel } from "@/components/ui/field";
+import { Field, FieldDescription, FieldGroup, FieldLabel } from "@/components/ui/field";
 import { Spinner } from "@/components/ui/spinner";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import {
@@ -37,7 +36,6 @@ import {
   SelectContent,
   SelectGroup,
   SelectItem,
-  SelectLabel,
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
@@ -52,22 +50,10 @@ import type {
 } from "@/lib/generated/api-types";
 import { classifyDependencies, columnStatus, parseAssetProvenance } from "@/lib/asset-provenance";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import {
-  NON_SQL_ASSET_TYPES,
-  SEED_ASSET_TYPES,
-  SQL_ASSET_TYPES,
-  getAssetAuthoringCapability,
-  getAssetColumnRefreshMode,
-  groupAssetTypesByKind,
-  isSeedAssetType,
-  isSensorAssetType,
-  isSqlAssetType,
-} from "@/lib/asset-types";
-import { useIngestrEnabled } from "@/lib/features";
-import { useWorkspaceSettingsData } from "@/hooks/use-workspace-settings-data";
-import { LOCAL_LOAD_CONNECTION, loadConnectionsForEnvironment } from "@/lib/load-assets";
+import { getAssetColumnRefreshMode, isSeedAssetType, isSqlAssetType } from "@/lib/asset-types";
 import { cn } from "@/lib/utils";
 import { WebAsset, WebColumn } from "@/lib/types";
+import { AssetConnectionEditor } from "./asset-connection-editor";
 import { MultiValueInput } from "./multi-value-input";
 import { SchemaSyncDialog } from "./schema-sync-dialog";
 
@@ -123,107 +109,9 @@ function GuidedCard({
 
 // --- Identity card (§14.1) ---
 
-// Sentinel Select value for "no explicit connection" — an empty SelectItem value
-// is disallowed, and clearing the field lets the asset fall back to the
-// pipeline's default connection.
-const AUTO_CONNECTION_VALUE = "__auto__";
-
-/**
- * Target connection picker for API, Python, and Load assets. The connection is a top-level
- * `connection:` key (not part of the request `parameters` spec), so it belongs in
- * the guided editor — especially once raw editing is scoped to `parameters`.
- * Leaving it on "Auto" omits the key and lets the asset use the pipeline default.
- */
-function ConnectionField({ asset, pipelineId }: { asset: WebAsset; pipelineId: string }) {
-  const fieldId = `${useId()}-connection`;
-  const workspace = useAtomValue(workspaceAtom);
-  const environment = useAtomValue(selectedEnvironmentAtom);
-  const { workspaceConfig } = useWorkspaceSettingsData();
-  const current = (asset.explicit_connection ?? "").trim();
-  const effective = (asset.connection ?? "").trim();
-  const isLoad = asset.type.trim().toLowerCase() === "load";
-  const capability = getAssetAuthoringCapability(asset.type, workspace?.asset_capabilities);
-  const connectionNames = useMemo(() => {
-    const names = isLoad
-      ? loadConnectionsForEnvironment(workspaceConfig, environment).map(
-          (connection) => connection.name,
-        )
-      : capability
-        ? Object.entries(workspace?.connections ?? {})
-            .filter(([, type]) => capability.connection_types.includes(type))
-            .map(([name]) => name)
-        : Object.keys(workspace?.connections ?? {});
-    if (isLoad && !names.includes(LOCAL_LOAD_CONNECTION)) {
-      names.push(LOCAL_LOAD_CONNECTION);
-    }
-    // Keep an explicitly-set connection selectable even if it isn't (yet) in the
-    // active environment's connection list.
-    if (current && !names.includes(current)) {
-      names.push(current);
-    }
-    return names.sort((a, b) => a.localeCompare(b));
-  }, [workspace?.connections, workspaceConfig, environment, current, isLoad, capability]);
-
-  return (
-    <FieldRow label="Connection" htmlFor={fieldId}>
-      <Select
-        value={current || AUTO_CONNECTION_VALUE}
-        onValueChange={(value) => {
-          const next = value === AUTO_CONNECTION_VALUE ? "" : value;
-          if (next !== current) void updateAsset(pipelineId, asset.id, { connection: next });
-        }}
-      >
-        <SelectTrigger id={fieldId} className="h-8">
-          <SelectValue />
-        </SelectTrigger>
-        <SelectContent>
-          <SelectGroup>
-            <SelectItem value={AUTO_CONNECTION_VALUE}>
-              {effective ? `Auto (${effective})` : "Auto (pipeline default)"}
-            </SelectItem>
-            {connectionNames.map((name) => (
-              <SelectItem key={name} value={name}>
-                {name}
-              </SelectItem>
-            ))}
-          </SelectGroup>
-        </SelectContent>
-      </Select>
-    </FieldRow>
-  );
-}
-
 function IdentityCard({ asset, pipelineId }: { asset: WebAsset; pipelineId: string }) {
   const fieldIdPrefix = `${useId()}-identity`;
   const fieldId = (name: string) => `${fieldIdPrefix}-${name}`;
-  const ingestrEnabled = useIngestrEnabled();
-  const workspace = useAtomValue(workspaceAtom);
-  const normalizedType = asset.type.trim().toLowerCase();
-  const hasTargetConnection =
-    normalizedType === "api" ||
-    normalizedType === "load" ||
-    normalizedType.includes("python") ||
-    isSeedAssetType(normalizedType) ||
-    isSensorAssetType(normalizedType);
-  const assetTypeGroups = useMemo(
-    () =>
-      groupAssetTypesByKind(
-        Array.from(
-          new Set([
-            ...SQL_ASSET_TYPES,
-            ...SEED_ASSET_TYPES,
-            ...NON_SQL_ASSET_TYPES,
-            ...(workspace?.asset_capabilities ?? []).map((capability) => capability.type),
-            asset.type,
-          ]),
-        ).filter(
-          // A broken/half-typed YAML asset can parse to an empty type; a Select
-          // item must never have an empty value, so drop it.
-          (type) => Boolean(type) && (ingestrEnabled || type !== "ingestr" || type === asset.type),
-        ),
-      ),
-    [asset.type, ingestrEnabled, workspace?.asset_capabilities],
-  );
 
   const updateMetaDescription = (description: string) => {
     const nextMeta = { ...(asset.meta ?? {}) };
@@ -252,56 +140,16 @@ function IdentityCard({ asset, pipelineId }: { asset: WebAsset; pipelineId: stri
           />
         </FieldRow>
         <FieldRow label="Type" htmlFor={fieldId("type")}>
-          <Select
+          <Input
+            id={fieldId("type")}
             value={asset.type}
-            onValueChange={(type) => {
-              if (type && type !== asset.type) void updateAsset(pipelineId, asset.id, { type });
-            }}
-          >
-            <SelectTrigger id={fieldId("type")} className="h-8">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectGroup>
-                <SelectLabel>SQL assets</SelectLabel>
-                {assetTypeGroups.sql.map((type) => (
-                  <SelectItem key={type} value={type}>
-                    {type}
-                  </SelectItem>
-                ))}
-              </SelectGroup>
-              <SelectGroup>
-                <SelectLabel>Non-SQL assets</SelectLabel>
-                {assetTypeGroups.nonSql.map((type) => (
-                  <SelectItem key={type} value={type}>
-                    {type}
-                  </SelectItem>
-                ))}
-              </SelectGroup>
-              {assetTypeGroups.seed.length > 0 ? (
-                <SelectGroup>
-                  <SelectLabel>Seeds</SelectLabel>
-                  {assetTypeGroups.seed.map((type) => (
-                    <SelectItem key={type} value={type}>
-                      {type}
-                    </SelectItem>
-                  ))}
-                </SelectGroup>
-              ) : null}
-              {assetTypeGroups.sensor.length > 0 ? (
-                <SelectGroup>
-                  <SelectLabel>Sensors</SelectLabel>
-                  {assetTypeGroups.sensor.map((type) => (
-                    <SelectItem key={type} value={type}>
-                      {type}
-                    </SelectItem>
-                  ))}
-                </SelectGroup>
-              ) : null}
-            </SelectContent>
-          </Select>
+            className="h-8 font-monaco text-xs"
+            readOnly
+            aria-readonly="true"
+          />
+          <FieldDescription>Managed by the asset kind and connection.</FieldDescription>
         </FieldRow>
-        {hasTargetConnection ? <ConnectionField asset={asset} pipelineId={pipelineId} /> : null}
+        <AssetConnectionEditor asset={asset} pipelineId={pipelineId} />
         <FieldRow label="Owner" htmlFor={fieldId("owner")}>
           <CommitInput
             id={fieldId("owner")}

@@ -334,9 +334,9 @@ ORDER BY revenue DESC`,
 async function waitForStalenessSettled(api) {
   const deadline = Date.now() + 120_000;
   while (Date.now() < deadline) {
-    const staleness = await api(
-      `/api/pipelines/${ACME}/staleness?environment=default`,
-    ).catch(() => null);
+    const staleness = await api(`/api/pipelines/${ACME}/staleness?environment=default`).catch(
+      () => null,
+    );
     const states = JSON.stringify(staleness ?? {});
     const workspace = await api("/api/workspace").catch(() => null);
     const acme = workspace?.pipelines?.find((pipeline) => pipeline.name === "acme");

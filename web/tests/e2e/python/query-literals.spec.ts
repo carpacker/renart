@@ -51,6 +51,27 @@ test.describe("Python query literal projection", () => {
     expect(literal.sourceEnd).toBe(source.length);
     expect(pythonQueryLiteralAtOffset(source, source.length)).toEqual(literal);
   });
+
+  test("extracts static query connection overrides", () => {
+    const source = [
+      'first = query("select * from analytics.orders", connection="postgres-default")',
+      'second = renart.query("select 1", r"duckdb-default", format="arrow")',
+      'third = query("select 2", format="pandas", connection = "snowflake-prod")',
+      'dynamic = query("select 3", connection=connection_name)',
+    ].join("\n");
+
+    expect(
+      findPythonQueryLiterals(source).map((literal) => ({
+        sql: literal.sql,
+        connection: literal.connection,
+      })),
+    ).toEqual([
+      { sql: "select * from analytics.orders", connection: "postgres-default" },
+      { sql: "select 1", connection: "duckdb-default" },
+      { sql: "select 2", connection: "snowflake-prod" },
+      { sql: "select 3", connection: undefined },
+    ]);
+  });
 });
 
 test.describe("Monaco external model synchronization", () => {

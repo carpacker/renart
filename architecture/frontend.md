@@ -149,8 +149,10 @@ not underscore-flattened route hacks.
   than mutating immediately. It reviews the entire saved working tree, keeps
   execution policy/data freshness out of the gate, shows exact added/changed/
   removed files as collapsible rows whose deployed/workspace comparison opens
-  directly beneath that file, and binds the final write to the reviewed source
-  Merkle. Afterward it offers an
+  directly beneath that file. Each comparison uses Monaco's real DiffEditor,
+  including its native inserted/deleted line and character highlighting, and
+  the final write remains bound to the reviewed source Merkle. Afterward it
+  offers an
   unchecked list of older schedule pins; only explicitly selected rows move.
   Type-check does the same; transport/save failures remain visible in the bell
   and results panel without erasing the last successful report. Every supported
@@ -208,25 +210,58 @@ not underscore-flattened route hacks.
   finish inline. Conflicts open a wide, scrollable shadcn dialog whose table
   compares each source, saved metadata, and the chosen result without replacing
   the inspector with asset-kind-specific controls.
-- The Build view's New asset dialog uses the workspace's backend-provided
-  `asset_capabilities` contract for seed and sensor authoring
+- The Build view's New asset dialog loads the selected pipeline/environment's
+  secret-free `asset-creation-profile`. The six equal-size choices are authoring
+  intents; `AssetConnectionField` presents only compatible configured
+  connections (two roles for Load), a resolved pipeline default, portability
+  warnings, and no separate dialect or concrete-type choice. It never derives a
+  SQL type in TypeScript. `useAssetCreationProfile` is shared by creation and
+  existing-asset editors, and the backend profile also supplies the candidates
+  behind each creatable connection type. `WorkspaceConnectionDialog` composes
+  the existing connection hook and form in a wide, independently scrollable
+  shadcn dialog. It locks the current environment, filters connection types to
+  the opening role, preserves the mounted asset draft, refreshes the profile
+  after save, and selects the new connection. Manage connections is the explicit
+  exit to the complete settings surface. Seed and Sensor detail fields continue to
+  consume the workspace's backend-provided `asset_capabilities` contract
   ([semantic-asset-create-fields.tsx](../web/components/app/semantic-asset-create-fields.tsx)).
   Its six top-level asset-kind choices use one fixed tile size and animate into
   a compact selected-kind summary once chosen, while the creation fields use the
   plain `Field` variant instead of nesting a bordered card around each input.
   The dialog is shrink-safe, keeps focus rings inset inside its shadcn
   ScrollArea, and suppresses horizontal overflow around long horizontal
-  fields. When opened from the ad-hoc editor, SQL creation sends the draft as
+  fields. HTTP API creation defaults to the custom OpenAPI template and requires
+  the user's spec URL; that URL is persisted into the starter and immediately
+  drives endpoint, parameter, record-path, and response-field suggestions.
+  When opened from the ad-hoc editor, SQL creation sends the draft as
   executable content so the backend composes it with the canonical generated
   asset header instead of treating the query as a complete asset file. SQL
-  assets can select an explicit target connection or use
-  the pipeline default. It filters types and connections together, offers
+  creation carries the ad-hoc editor's effective connection. Downstream SQL is
+  fixed to the source target and therefore omits a target picker; downstream
+  Python initializes from that connection but can choose another compatible
+  target, while downstream Load fixes it as the source connection. Unsupported
+  carried values remain visible for an explicit correction rather than falling
+  back to another dialect. It offers
   upload/paste/workspace-file/URL seed sources, renders the parameters required by
   each sensor variant, and sends uploaded bytes through the multipart asset API.
   The workspace-file source uses the shared path combobox, restricted to
   supported files below the workspace root. The resulting seed and sensor assets
   have distinct canvas/catalog classifications while remaining ordinary Bruin
   files in the workspace.
+- The guided identity card shows asset Type as a read-only value and uses
+  `AssetConnectionEditor` for SQL, Python, API, Load, Seed, and Sensor assets.
+  The editor narrows the same backend profile to the existing Seed/Sensor
+  variant, preserves invalid current values, and asks for confirmation before a
+  connection change that also changes the concrete type. Its semantic update
+  includes the expected current type and saves both fields through the Go
+  server. For SQL assets with inferred upstreams or downstreams, that
+  confirmation also names the connected assets and warns that pure SQL cannot
+  span the resulting connection boundary; it remains an explicit migration
+  rather than silently rewriting the graph. The Load source editor now consumes
+  the profile's source role and destination category as well; the old client-side
+  SQL-type and Load-category compatibility tables have been removed. The raw YAML editor is not exposed,
+  but its Type and connection identity fields are also static so re-enabling it
+  cannot bypass the reviewed migration.
 - Other pages: [catalog-page.tsx](../web/components/app/catalog-page.tsx),
   [notebook-page.tsx](../web/components/app/notebook-page.tsx),
   [runs-page.tsx](../web/components/app/runs-page.tsx),
@@ -239,6 +274,9 @@ not underscore-flattened route hacks.
   facts, schedule history, deployments, and abandoned temporary directories,
   plus the per-pipeline run/log/deployment floors. Integer validation happens
   in both the form and Go service; saving replaces the complete policy.
+  Pipeline settings use a vertical, icon-labelled shadcn tab menu at desktop
+  widths and retain the compact horizontally scrollable section buttons on
+  mobile. Both layouts control the same mounted form and ScrollArea.
   Run details use semantic event badges, link current-workspace asset events
   back to the split Build view, and render timeline asset names in a dedicated
   wrapping column with tooltips so short duration bars never truncate identity.
@@ -323,7 +361,9 @@ than hand-rolled `div` shells.
   maps static SQL string literals in Python `query(...)` calls onto the same Go
   LSP, merges schema-aware client completions (including notebook run columns),
   and translates SQL completions, diagnostics, navigation, and highlighting
-  back into the Python Monaco model.
+  back into the Python Monaco model. A static second positional connection or
+  `connection="..."` keyword accompanies every projected LSP request; dynamic
+  connection expressions deliberately remain runtime-only.
 - [use-asset-results.ts](../web/hooks/use-asset-results.ts): inspect and materialize
   flows, including API-asset full refresh, scheduler-run links, and terminal
   event/trigger-response correlation for very fast runs.
@@ -365,8 +405,10 @@ than hand-rolled `div` shells.
 - [lib/sql-schema.ts](../web/lib/sql-schema.ts): schema context for SQL
   intellisense.
 - [lib/api-asset-templates.ts](../web/lib/api-asset-templates.ts): the three
-  pattern-focused HTTP API starters used by the New asset dialog. API assets
-  also have sampled response inference, OpenAPI/path diagnostics, and persisted
+  pattern-focused HTTP API starters used by the New asset dialog. The default
+  starter accepts the user's OpenAPI URL rather than embedding a demo service.
+  API assets also have sampled response inference, OpenAPI/path diagnostics,
+  relative `response.fields` completion below `records_path`, and persisted
   cursor controls in the guided editor; see
   [http-api-assets.md](http-api-assets.md).
 

@@ -87,6 +87,7 @@ export type SQLLSPSignatureHelp = {
 export type SQLLSPRequest = {
   asset_id: string;
   content: string;
+  connection?: string;
   position?: SQLLSPPosition;
   include_declaration?: boolean;
   new_name?: string;

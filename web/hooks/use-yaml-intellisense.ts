@@ -386,9 +386,9 @@ function buildAPIValueSuggestions({
 }
 
 // buildAPIOpenAPIValueSuggestions resolves live completions for spec-driven
-// fields — `request.url` (OpenAPI paths plus query names/enum values) and
+// fields — `request.url` (OpenAPI paths plus query names/enum values),
 // `response.records_path` (record locations in the selected endpoint's response
-// schema), plus pagination response paths. Returns null when the field isn't
+// schema), `response.fields` mappings, plus pagination response paths. Returns null when the field isn't
 // spec-driven or no OpenAPI URL is set yet, so the caller falls back to the
 // static sample suggestions.
 async function buildAPIOpenAPIValueSuggestions({
@@ -416,11 +416,19 @@ async function buildAPIOpenAPIValueSuggestions({
   const isHasMorePath =
     pathEndsWith(fieldContext.path, ["parameters", "pagination"]) &&
     fieldContext.key === "has_more_path";
-  if (!isRequestURL && !isRecordsPath && !isNextURLPath && !isCursorPath && !isHasMorePath) {
+  const isResponseField = pathEndsWith(fieldContext.path, ["parameters", "response", "fields"]);
+  if (
+    !isRequestURL &&
+    !isRecordsPath &&
+    !isNextURLPath &&
+    !isCursorPath &&
+    !isHasMorePath &&
+    !isResponseField
+  ) {
     return null;
   }
 
-  const { openapiUrl, requestUrl, method } = parseAPIYaml(content);
+  const { openapiUrl, requestUrl, method, recordsPath } = parseAPIYaml(content);
   if (!openapiUrl) {
     return null;
   }
@@ -474,6 +482,30 @@ async function buildAPIOpenAPIValueSuggestions({
     return matchingPaths.map((item) =>
       toCompletionItem(monaco, {
         detail: item.detail,
+        filterText: filterTextForCurrentYamlValue(fieldContext, item.path),
+        insertText: insertTextForYamlValue(item.path, fieldContext),
+        kind: monaco.languages.CompletionItemKind.Field,
+        label: item.path,
+        range: fieldContext.range,
+      }),
+    );
+  }
+
+  if (isResponseField) {
+    const recordsPrefix = recordsPath ? `${recordsPath}.` : "";
+    const fields = responsePaths
+      .filter((item) => !recordsPrefix || item.path.startsWith(recordsPrefix))
+      .map((item) => ({
+        ...item,
+        path: recordsPrefix ? item.path.slice(recordsPrefix.length) : item.path,
+      }))
+      .filter((item) => item.path !== "");
+    if (fields.length === 0) {
+      return null;
+    }
+    return fields.map((item) =>
+      toCompletionItem(monaco, {
+        detail: item.detail ? `${item.detail} response field` : "OpenAPI response field",
         filterText: filterTextForCurrentYamlValue(fieldContext, item.path),
         insertText: insertTextForYamlValue(item.path, fieldContext),
         kind: monaco.languages.CompletionItemKind.Field,

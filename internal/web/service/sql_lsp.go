@@ -18,6 +18,7 @@ import (
 type SQLLSPRequest struct {
 	AssetID            string                   `json:"asset_id"`
 	Content            string                   `json:"content"`
+	Connection         string                   `json:"connection,omitempty"`
 	Position           sqllsp.Position          `json:"position,omitempty"`
 	IncludeDeclaration bool                     `json:"include_declaration,omitempty"`
 	NewName            string                   `json:"new_name,omitempty"`
@@ -251,7 +252,31 @@ func (s *SQLLSPService) engineAndDocument(req SQLLSPRequest) (*sqllsp.Engine, sq
 		content, _ = sqlLSPDocumentContent(asset)
 	}
 	doc := sqllsp.TextDocumentItem{URI: assetURI(s.deps.WorkspaceRoot, asset), LanguageID: "sql", Text: content}
-	return sqllsp.NewEngineWithPolyglot(s.graphForRequest(state, notebook), s.polyglotClient()), doc, nil
+	graph := s.graphForRequest(state, notebook)
+	if connection := strings.TrimSpace(req.Connection); connection != "" {
+		graph = graphWithDocumentConnection(graph, doc.URI, connection)
+	}
+	return sqllsp.NewEngineWithPolyglot(graph, s.polyglotClient()), doc, nil
+}
+
+// graphWithDocumentConnection gives an embedded SQL query its runtime-selected
+// connection without mutating the revision-cached workspace graph. Python's
+// renart.query(..., connection="...") is the current caller; ordinary SQL
+// assets omit the override and retain their saved connection identity.
+func graphWithDocumentConnection(
+	graph sqllsp.CanonicalGraph,
+	documentURI sqllsp.URI,
+	connection string,
+) sqllsp.CanonicalGraph {
+	assets := append([]sqllsp.AssetNode(nil), graph.Assets...)
+	for index := range assets {
+		if assets[index].URI == documentURI {
+			assets[index].Connection = connection
+			break
+		}
+	}
+	graph.Assets = assets
+	return graph
 }
 
 // selectedAsset finds the asset an LSP request targets: a pipeline asset or a

@@ -65,7 +65,7 @@ func TestQueryDefaultsToArrow(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(clientSource), `format: str = "arrow"`) {
+	if !strings.Contains(string(clientSource), `format: Literal["arrow", "pandas"] = "arrow"`) {
 		t.Fatal("runtime query() must default to Arrow")
 	}
 
@@ -73,18 +73,31 @@ func TestQueryDefaultsToArrow(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(clientStub), `format: Literal["arrow", "pandas"] = "arrow"`) {
+	if !strings.Contains(string(clientStub), `format: Literal["arrow"] = "arrow"`) ||
+		!strings.Contains(string(clientStub), `) -> Table: ...`) ||
+		!strings.Contains(string(clientStub), `) -> DataFrame: ...`) {
 		t.Fatal("query() type stub must advertise the Arrow default")
 	}
 }
 
 func TestTypeStubFiles(t *testing.T) {
 	files := TypeStubFiles()
-	if len(files) != 3 {
-		t.Fatalf("expected three SDK stub files, got %d", len(files))
+	if len(files) != 5 {
+		t.Fatalf("expected five SDK and fallback stub files, got %d", len(files))
 	}
-	if files[0].Path != "renart/__init__.pyi" {
-		t.Fatalf("stub files must be sorted and package-relative, got %q", files[0].Path)
+	paths := make([]string, 0, len(files))
+	for _, file := range files {
+		paths = append(paths, file.Path)
+	}
+	wantPaths := []string{
+		"pandas/__init__.pyi",
+		"pyarrow/__init__.pyi",
+		"renart/__init__.pyi",
+		"renart/_client.pyi",
+		"renart/context.pyi",
+	}
+	if strings.Join(paths, "\n") != strings.Join(wantPaths, "\n") {
+		t.Fatalf("unexpected stub paths: got %q, want %q", paths, wantPaths)
 	}
 	for _, file := range files {
 		if file.Content == "" {

@@ -644,7 +644,7 @@ export function ReadOnlyRenderedOperation({
   );
 }
 
-function ReadOnlyRenderedOperationDiff({
+export function ReadOnlyRenderedOperationDiff({
   original,
   modified,
   language,

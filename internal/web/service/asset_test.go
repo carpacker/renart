@@ -621,6 +621,23 @@ select 1 as order_id
 	assert.Equal(t, "analytics.orders_child_1", asset.Name)
 }
 
+func TestDefaultDerivedPythonAssetContentUsesRenartSDK(t *testing.T) {
+	t.Parallel()
+
+	content := DefaultDerivedSQLAssetContent(
+		"analytics.orders_downstream",
+		"python",
+		"assets/analytics/orders_downstream.py",
+		"analytics.orders",
+		"warehouse",
+	)
+
+	assert.Contains(t, content, "from renart import query")
+	assert.Contains(t, content, `return query("select * from analytics.orders")`)
+	assert.NotContains(t, content, "from bruin import")
+	assert.NotContains(t, content, "bruin-sdk")
+}
+
 func TestAssetServiceCreateMergesExecutableContentIntoSQLTemplate(t *testing.T) {
 	t.Parallel()
 

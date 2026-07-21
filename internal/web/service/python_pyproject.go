@@ -49,8 +49,8 @@ func writePyprojectDependencies(path, projectName string, deps []string) error {
 		project["version"] = "0.0.0"
 	}
 	if _, ok := project["requires-python"]; !ok {
-		// 3.10+ so the Bruin Python SDK (bruin-sdk, which uses PEP 604 unions)
-		// works out of the box in Python assets.
+		// 3.10+ matches the Python runtime supported by Renart's asset runner and
+		// the injected SDK.
 		project["requires-python"] = ">=3.10"
 	}
 	if deps == nil {

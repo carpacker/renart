@@ -7,7 +7,13 @@ import { liveTest as test } from "../live-app-fixture";
 type WorkspaceResponse = {
   pipelines: Array<{
     id: string;
-    assets: Array<{ id: string; name: string; content: string }>;
+    assets: Array<{
+      id: string;
+      name: string;
+      type: string;
+      content: string;
+      explicit_connection?: string;
+    }>;
   }>;
 };
 
@@ -101,6 +107,20 @@ test.describe("app build actions live", () => {
     await page.getByRole("button", { name: "Materialize", exact: true }).click();
     await materializeResponse;
 
+    await expect
+      .poll(
+        async () => {
+          const response = await page.request.get(
+            `${liveApp.baseURL}/api/runs?pipeline_id=${pipelineId}&limit=5`,
+          );
+          if (!response.ok()) return "";
+          const body = (await response.json()) as { runs?: Array<{ trigger?: string }> };
+          return body.runs?.[0]?.trigger ?? "";
+        },
+        { timeout: 15000 },
+      )
+      .toBe("manual");
+
     // The results panel switches to the materialize tab and shows run output.
     await expect(page.locator("pre.font-console").first()).toContainText(/\S/, {
       timeout: 15000,
@@ -122,6 +142,43 @@ test.describe("app build actions live", () => {
     await expect(disclosure).toContainText(/select/i);
     await disclosure.getByRole("button", { expanded: false }).click();
     await expect(disclosure.locator("pre")).toContainText(/select/i);
+  });
+
+  test("records a canvas context-menu run as manual", async ({ liveApp, page }) => {
+    test.skip(
+      test.info().project.name.includes("mobile"),
+      "The canvas context menu is a desktop affordance.",
+    );
+
+    await page.goto(`${liveApp.baseURL}/pipelines/${pipelineId}/canvas`);
+    const assetNode = page.locator(
+      `[data-testid="lineage-asset"][data-asset-id="${customersAssetId}"]`,
+    );
+    await expect(assetNode).toBeVisible({ timeout: 15000 });
+
+    const materializeResponse = page.waitForResponse(
+      (response) =>
+        response.url().includes(`/api/assets/${customersAssetId}/materialize/stream`) &&
+        response.ok(),
+      { timeout: 30000 },
+    );
+    await assetNode.click({ button: "right" });
+    await page.getByRole("menuitem", { name: "Run", exact: true }).click();
+    await materializeResponse;
+
+    await expect
+      .poll(
+        async () => {
+          const response = await page.request.get(
+            `${liveApp.baseURL}/api/runs?pipeline_id=${pipelineId}&limit=5`,
+          );
+          if (!response.ok()) return "";
+          const body = (await response.json()) as { runs?: Array<{ trigger?: string }> };
+          return body.runs?.[0]?.trigger ?? "";
+        },
+        { timeout: 15000 },
+      )
+      .toBe("manual");
   });
 
   test("renders saved execution SQL without running the asset", async ({ liveApp, page }) => {
@@ -529,6 +586,14 @@ select 1 as customer_id,'Ada' as customer_name union all select 2 as customer_id
     await expect(fileDiff).toBeVisible();
     await expect(fileDiff).toContainText("Current deployment");
     await expect(fileDiff).toContainText("Saved workspace");
+    await expect(fileDiff.locator(".monaco-diff-editor")).toBeVisible({ timeout: 15000 });
+    const insertedLine = fileDiff.locator(".monaco-diff-editor .line-insert").first();
+    await expect(insertedLine).toBeVisible({ timeout: 15000 });
+    await expect
+      .poll(async () =>
+        insertedLine.evaluate((element) => getComputedStyle(element).backgroundColor),
+      )
+      .not.toBe("rgba(0, 0, 0, 0)");
 
     await fileDisclosure.locator('[data-slot="collapsible-trigger"]').click();
     await expect(fileDiff).toBeHidden();
@@ -1050,6 +1115,14 @@ select 1 as customer_id,'Ada' as customer_name union all select 2 as customer_id
         { timeout: 30000 },
       )
       .toContain(query);
+
+    const convertedResponse = await page.request.get(`${liveApp.baseURL}/api/workspace`);
+    const convertedWorkspace = (await convertedResponse.json()) as WorkspaceResponse;
+    const convertedAsset = convertedWorkspace.pipelines
+      .flatMap((pipeline) => pipeline.assets)
+      .find((asset) => asset.name === "analytics.adhoc_converted");
+    expect(convertedAsset?.type).toBe("duckdb.sql");
+    expect(convertedAsset?.explicit_connection).toBe("duckdb-default");
 
     await page.getByRole("button", { name: "Ad-hoc query" }).click();
     await expect(page.locator(".view-lines").first()).toContainText("converted_marker", {

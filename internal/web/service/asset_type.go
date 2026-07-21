@@ -1,6 +1,7 @@
 package service
 
 import (
+	"sort"
 	"strings"
 
 	"github.com/bruin-data/bruin/pkg/pipeline"
@@ -43,13 +44,20 @@ func queryAssetTypeForConnectionType(connectionType string) (pipeline.AssetType,
 		return "", false
 	}
 
+	candidates := make([]pipeline.AssetType, 0, 1)
 	for assetType, mappedConnectionType := range pipeline.AssetTypeConnectionMapping {
 		if normalizeConnectionType(mappedConnectionType) == canonical && isQueryAssetType(assetType) {
-			return assetType, true
+			if assetType == pipeline.AssetTypeFabricQueryLegacy {
+				continue
+			}
+			candidates = append(candidates, assetType)
 		}
 	}
-
-	return "", false
+	sort.Slice(candidates, func(i, j int) bool { return candidates[i] < candidates[j] })
+	if len(candidates) == 0 {
+		return "", false
+	}
+	return candidates[0], true
 }
 
 func sourceAssetTypeForConnectionType(connectionType string) (pipeline.AssetType, bool) {
@@ -58,13 +66,17 @@ func sourceAssetTypeForConnectionType(connectionType string) (pipeline.AssetType
 		return "", false
 	}
 
+	candidates := make([]pipeline.AssetType, 0, 1)
 	for assetType, mappedConnectionType := range pipeline.AssetTypeConnectionMapping {
 		if normalizeConnectionType(mappedConnectionType) == canonical && isSourceAssetType(assetType) {
-			return assetType, true
+			candidates = append(candidates, assetType)
 		}
 	}
-
-	return "", false
+	sort.Slice(candidates, func(i, j int) bool { return candidates[i] < candidates[j] })
+	if len(candidates) == 0 {
+		return "", false
+	}
+	return candidates[0], true
 }
 
 func convertDirectSourceTypeToQueryType(sourceType pipeline.AssetType) pipeline.AssetType {

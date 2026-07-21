@@ -350,6 +350,15 @@ func (s *ConfigService) UpdateConnection(cfg *config.Config, params UpsertWorksp
 	if currentName == "" {
 		currentName = strings.TrimSpace(params.Name)
 	}
+	environment, exists := cfg.Environments[environmentName]
+	if !exists || environment.Connections == nil {
+		return fmt.Errorf("environment %q does not contain connection %q", environmentName, currentName)
+	}
+	currentType := normalizeConnectionType(environment.Connections.ConnectionsSummaryList()[currentName])
+	nextType := normalizeConnectionType(params.Type)
+	if currentType != "" && nextType != "" && currentType != nextType {
+		return fmt.Errorf("connection type is immutable; create a new %s connection instead of changing %q from %s", nextType, currentName, currentType)
+	}
 
 	if err := cfg.DeleteConnection(environmentName, currentName); err != nil {
 		return err

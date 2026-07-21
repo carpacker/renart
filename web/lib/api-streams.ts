@@ -84,6 +84,7 @@ export async function streamMaterialization(
     method: "POST",
     headers: {
       Accept: "text/event-stream",
+      "X-Renart-UI-Execution-Origin": "manual",
     },
   });
 

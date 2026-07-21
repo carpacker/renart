@@ -267,6 +267,49 @@ func TestSQLLSPServiceWarnsForCrossConnectionReference(t *testing.T) {
 	t.Fatalf("expected cross-connection diagnostic, got %#v", response.Diagnostics)
 }
 
+func TestSQLLSPServiceUsesRequestConnectionForEmbeddedQuery(t *testing.T) {
+	state := model.WorkspaceState{
+		Pipelines: []model.Pipeline{{
+			ID:   "pipeline",
+			Name: "analytics",
+			Assets: []model.Asset{
+				{
+					ID:         "orders",
+					Name:       "analytics.orders",
+					Type:       "pg.sql",
+					Path:       "analytics/assets/analytics/orders.sql",
+					Connection: "postgres-default",
+				},
+				{
+					ID:         "task",
+					Name:       "analytics.task",
+					Type:       "python",
+					Path:       "analytics/assets/analytics/task.py",
+					Connection: "duckdb-default",
+				},
+			},
+		}},
+	}
+	service := NewSQLLSPService(SQLLSPDependencies{
+		WorkspaceRoot: t.TempDir(),
+		CurrentState:  func() model.WorkspaceState { return state },
+	})
+
+	response, apiErr := service.Diagnostics(context.Background(), SQLLSPRequest{
+		AssetID:    "task",
+		Content:    "select * from analytics.orders",
+		Connection: "postgres-default",
+	})
+	if apiErr != nil {
+		t.Fatal(apiErr)
+	}
+	for _, diagnostic := range response.Diagnostics {
+		if diagnostic.Code == "cross-connection-reference" {
+			t.Fatalf("request connection should match the referenced asset: %#v", response.Diagnostics)
+		}
+	}
+}
+
 func TestSQLLSPServiceFindsReferencesAcrossWorkspaceAssets(t *testing.T) {
 	state := model.WorkspaceState{
 		Pipelines: []model.Pipeline{{

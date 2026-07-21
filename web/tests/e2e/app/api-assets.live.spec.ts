@@ -388,6 +388,53 @@ parameters:
     }
   });
 
+  test("OpenAPI response fields complete relative to records_path", async ({ liveApp, page }) => {
+    const specServer = await startRecordsPathOpenAPIServer();
+    try {
+      const assetContent = `name: analytics.players_api
+type: api
+
+parameters:
+  openapi:
+    url: ${specServer.url}/openapi.yaml
+  request:
+    url: https://api.example.com/players/Ada
+    method: GET
+  response:
+    records_path: data
+    fields:
+      display_name: user
+`;
+      await writeFile(join(liveApp.workspaceDir, apiAssetPath), assetContent, "utf8");
+      await waitForWorkspaceAssetContent(page, liveApp.baseURL, apiAssetId, specServer.url);
+
+      await page.goto(`${liveApp.baseURL}/pipelines/${pipelineId}/assets/${apiAssetId}/code`);
+      await expect(page.locator(".monaco-editor").first()).toBeVisible({ timeout: 15000 });
+      const suggestionsResponse = page.waitForResponse(
+        (response) =>
+          response.url().includes("/api/api-assets/openapi-suggestions") &&
+          response.url().includes("request_url=") &&
+          response.ok(),
+        { timeout: 15000 },
+      );
+      await setEditorContentAtYamlField(page, assetContent, "display_name", "user");
+      await page.keyboard.press("ControlOrMeta+Space");
+      const response = await suggestionsResponse;
+      const body = (await response.json()) as {
+        response_paths?: Array<{ path: string; detail?: string }>;
+      };
+      expect(body.response_paths?.map((item) => item.path)).toContain("data.username");
+
+      const suggestWidget = page.locator(".suggest-widget.visible").first();
+      await expect(suggestWidget.getByText("username", { exact: true })).toBeVisible({
+        timeout: 15000,
+      });
+      await expect(suggestWidget.getByText("data.username", { exact: true })).toHaveCount(0);
+    } finally {
+      await new Promise<void>((resolve) => specServer.server.close(() => resolve()));
+    }
+  });
+
   test("API YAML editor stays mounted while parameters YAML is incomplete", async ({
     liveApp,
     page,

@@ -1,5 +1,6 @@
 export type PythonQueryLiteral = {
   sql: string;
+  connection?: string;
   callStart: number;
   sourceStart: number;
   sourceEnd: number;
@@ -123,9 +124,13 @@ function parseQueryLiteral(source: string, callStart: number, afterName: number)
     // because their runtime value has no stable source map.
     return null;
   }
+  const connection = parsed.terminated
+    ? readStaticQueryConnection(source, afterLiteral)
+    : undefined;
   return {
     literal: {
       sql: parsed.value,
+      ...(connection ? { connection } : {}),
       callStart,
       sourceStart: parsed.bodyStart,
       sourceEnd: parsed.bodyEnd,
@@ -133,6 +138,85 @@ function parseQueryLiteral(source: string, callStart: number, afterName: number)
     },
     end: parsed.end,
   };
+}
+
+// The runtime accepts the connection as either the second positional argument
+// or a keyword argument. This deliberately recognizes only a static ordinary
+// string: variables and expressions remain runtime-only, while incomplete SQL
+// in the first argument continues to be projected as before.
+function readStaticQueryConnection(source: string, afterLiteral: number): string | undefined {
+  if (source[afterLiteral] !== ",") {
+    return undefined;
+  }
+
+  let index = skipPythonTrivia(source, afterLiteral + 1);
+  const positional = readStaticPythonStringAt(source, index);
+  if (positional) {
+    return positional.value.trim() || undefined;
+  }
+
+  let depth = 0;
+  while (index < source.length) {
+    const current = source[index];
+    if (current === "#") {
+      index = skipPythonComment(source, index);
+      continue;
+    }
+    if (current === '"' || current === "'") {
+      index = scanPythonStringEnd(source, index, false);
+      continue;
+    }
+    if (current === "(" || current === "[" || current === "{") {
+      depth += 1;
+      index += 1;
+      continue;
+    }
+    if (current === ")") {
+      if (depth === 0) return undefined;
+      depth -= 1;
+      index += 1;
+      continue;
+    }
+    if (current === "]" || current === "}") {
+      depth = Math.max(0, depth - 1);
+      index += 1;
+      continue;
+    }
+    if (depth === 0 && isIdentifierStart(current)) {
+      const nameStart = index;
+      index += 1;
+      while (index < source.length && isIdentifierContinue(source[index])) {
+        index += 1;
+      }
+      if (source.slice(nameStart, index) !== "connection") {
+        continue;
+      }
+      index = skipPythonTrivia(source, index);
+      if (source[index] !== "=") {
+        continue;
+      }
+      const keyword = readStaticPythonStringAt(source, skipPythonTrivia(source, index + 1));
+      return keyword?.value.trim() || undefined;
+    }
+    index += 1;
+  }
+  return undefined;
+}
+
+function readStaticPythonStringAt(source: string, start: number) {
+  let index = start;
+  while (index < source.length && /[rRuUbBfF]/.test(source[index])) {
+    index += 1;
+  }
+  const prefix = source.slice(start, index).toLowerCase();
+  if (prefix.includes("f") || prefix.includes("b") || !["", "r", "u"].includes(prefix)) {
+    return null;
+  }
+  if (source[index] !== '"' && source[index] !== "'") {
+    return null;
+  }
+  const parsed = readPythonString(source, index, prefix.includes("r"));
+  return parsed?.terminated ? parsed : null;
 }
 
 function readPythonString(source: string, quoteStart: number, raw: boolean) {
@@ -282,6 +366,18 @@ function skipWhitespace(source: string, start: number) {
   let index = start;
   while (index < source.length && /\s/.test(source[index])) {
     index += 1;
+  }
+  return index;
+}
+
+function skipPythonTrivia(source: string, start: number) {
+  let index = start;
+  while (index < source.length) {
+    index = skipWhitespace(source, index);
+    if (source[index] !== "#") {
+      return index;
+    }
+    index = skipPythonComment(source, index);
   }
   return index;
 }

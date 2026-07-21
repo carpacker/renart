@@ -13,27 +13,44 @@ import (
 )
 
 type AssetUpdateRequest struct {
-	Name                    *string           `json:"name,omitempty"`
-	Type                    *string           `json:"type,omitempty"`
-	Content                 *string           `json:"content,omitempty"`
-	Connection              *string           `json:"connection,omitempty"`
-	MaterializationType     *string           `json:"materialization_type,omitempty"`
-	MaterializationStrategy *string           `json:"materialization_strategy,omitempty"`
-	IncrementalKey          *string           `json:"incremental_key,omitempty"`
-	PartitionBy             *string           `json:"partition_by,omitempty"`
-	ClusterBy               []string          `json:"cluster_by,omitempty"`
-	TimeGranularity         *string           `json:"time_granularity,omitempty"`
-	Owner                   *string           `json:"owner,omitempty"`
-	Tags                    []string          `json:"tags,omitempty"`
-	Meta                    map[string]string `json:"meta,omitempty"`
-	Upstreams               []string          `json:"upstreams,omitempty"`
-	Parameters              map[string]string `json:"parameters,omitempty"`
+	Name                    *string                          `json:"name,omitempty"`
+	Type                    *string                          `json:"type,omitempty"`
+	Content                 *string                          `json:"content,omitempty"`
+	Connection              *string                          `json:"connection,omitempty"`
+	ConnectionSelection     *AssetConnectionSelectionRequest `json:"connection_selection,omitempty"`
+	MaterializationType     *string                          `json:"materialization_type,omitempty"`
+	MaterializationStrategy *string                          `json:"materialization_strategy,omitempty"`
+	IncrementalKey          *string                          `json:"incremental_key,omitempty"`
+	PartitionBy             *string                          `json:"partition_by,omitempty"`
+	ClusterBy               []string                         `json:"cluster_by,omitempty"`
+	TimeGranularity         *string                          `json:"time_granularity,omitempty"`
+	Owner                   *string                          `json:"owner,omitempty"`
+	Tags                    []string                         `json:"tags,omitempty"`
+	Meta                    map[string]string                `json:"meta,omitempty"`
+	Upstreams               []string                         `json:"upstreams,omitempty"`
+	Parameters              map[string]string                `json:"parameters,omitempty"`
+}
+
+// AssetConnectionSelectionRequest is the semantic existing-asset connection
+// edit contract. The server derives the concrete asset type from the selected
+// connection and keeps the type/connection write atomic. Cross-engine changes
+// require an explicit confirmation and an expected current type so a stale UI
+// cannot silently migrate a newer filesystem edit.
+type AssetConnectionSelectionRequest struct {
+	Environment          string `json:"environment,omitempty"`
+	Connection           string `json:"connection,omitempty"`
+	UsePipelineDefault   bool   `json:"use_pipeline_default,omitempty"`
+	ExpectedAssetType    string `json:"expected_asset_type,omitempty"`
+	ConfirmTypeMigration bool   `json:"confirm_type_migration,omitempty"`
 }
 
 type AssetMutationResponse struct {
-	Status    string `json:"status"`
-	AssetID   string `json:"asset_id,omitempty"`
-	AssetPath string `json:"asset_path,omitempty"`
+	Status     string `json:"status"`
+	AssetID    string `json:"asset_id,omitempty"`
+	AssetPath  string `json:"asset_path,omitempty"`
+	AssetType  string `json:"asset_type,omitempty"`
+	Connection string `json:"connection,omitempty"`
+	Dialect    string `json:"dialect,omitempty"`
 }
 
 // SeedFilePreviewResponse is the bounded, text-only view of a seed sidecar
@@ -195,6 +212,7 @@ type PythonGotoTarget struct {
 type AssetDependencies struct {
 	Fs                                         afero.Fs
 	WorkspaceRoot                              string
+	ConfigPath                                 string
 	Executor                                   BruinCommandExecutor
 	ResolveAssetByID                           func(context.Context, string) (string, *pipeline.Pipeline, *pipeline.Asset, error)
 	DefaultAssetContent                        func(string, string, string) string
@@ -205,6 +223,7 @@ type AssetDependencies struct {
 	PushWorkspaceUpdateImmediateWithChangedIDs func(context.Context, string, string, []string)
 	PushAssetContentUpdateImmediate            func(string, string, []string, string)
 	ConnectionTypeFor                          func(string) string
+	SelectedEnvironment                        func() string
 }
 
 type AssetService struct {
@@ -286,6 +305,29 @@ func (s *AssetService) Create(ctx context.Context, pipelineID string, req Create
 		if conn, connErr := targetConnectionNameForAsset(sourceAsset, sourcePipeline); connErr == nil {
 			sourceConnectionName = conn
 		}
+	}
+	if normalizeAssetCreationKind(req.Kind) == assetCreationKindLoad && sourceAsset != nil {
+		if req.Parameters == nil {
+			req.Parameters = map[string]string{}
+		}
+		if strings.TrimSpace(req.Parameters[loadParamSourceConnection]) == "" {
+			req.Parameters[loadParamSourceConnection] = sourceConnectionName
+		}
+		if strings.TrimSpace(req.Parameters[loadParamSourceTable]) == "" {
+			req.Parameters[loadParamSourceTable] = sourceAsset.Name
+		}
+	}
+
+	var creationResolution AssetCreationResolution
+	if strings.TrimSpace(req.Kind) != "" {
+		resolved, resolveErr := s.resolveAssetCreation(ctx, pipelinePath, req)
+		if resolveErr != nil {
+			return AssetMutationResponse{}, resolveErr
+		}
+		creationResolution = resolved
+		req.Type = resolved.AssetType
+	} else if validationErr := s.validateLegacyAssetCreation(ctx, pipelinePath, req); validationErr != nil {
+		return AssetMutationResponse{}, validationErr
 	}
 
 	assetName := strings.TrimSpace(req.Name)
@@ -392,6 +434,15 @@ func (s *AssetService) Create(ctx context.Context, pipelineID string, req Create
 		if req.ExecutableContent != "" {
 			content = MergeExecutableContent(content, req.ExecutableContent)
 		}
+		if creationResolution.Kind == assetCreationKindAPI {
+			var canonicalizeErr error
+			content, canonicalizeErr = canonicalizeCreatedAPIAssetContent(content, req.Connection)
+			if canonicalizeErr != nil {
+				return AssetMutationResponse{}, newAPIError(400, "invalid_api_asset", canonicalizeErr.Error())
+			}
+		} else if creationResolution.Kind == assetCreationKindSQL || creationResolution.Kind == assetCreationKindPython {
+			content = applyCreatedExecutableConnection(content, req.Connection)
+		}
 	}
 
 	// Semantic seed/sensor definitions are rendered above. Uploaded seed bytes
@@ -434,14 +485,6 @@ func (s *AssetService) Create(ctx context.Context, pipelineID string, req Create
 			return AssetMutationResponse{}, newAPIError(500, "pyproject_write_failed", err.Error())
 		}
 	}
-	// A downstream Python asset reads its upstream via the Bruin Python SDK
-	// (`from bruin import query`), provided by the bruin-sdk package, so declare
-	// it as a dependency for the new asset. Best-effort: a failure here just
-	// surfaces later as a missing-dependency hint.
-	if sourceAsset != nil && (strings.Contains(strings.ToLower(assetType), "python") || strings.HasSuffix(strings.ToLower(relAssetPath), ".py")) {
-		_, _ = s.addAssetPyprojectDependency(absAssetPath, "bruin-sdk")
-	}
-
 	relWorkspaceAssetPath, _ := filepath.Rel(s.deps.WorkspaceRoot, absAssetPath)
 	assetPath := filepath.ToSlash(relWorkspaceAssetPath)
 	if semanticFiles.sidecarPath != "" {
@@ -462,21 +505,84 @@ func (s *AssetService) Create(ctx context.Context, pipelineID string, req Create
 	}
 	s.deps.SuppressWatcher(assetPath)
 	s.deps.PushWorkspaceUpdateImmediate(ctx, "asset.created", assetPath)
-	return AssetMutationResponse{Status: "ok", AssetID: EncodeID(assetPath), AssetPath: assetPath}, nil
+	dialect := creationResolution.Dialect
+	if dialect == "" {
+		dialect, _ = AssetTypeToDialect(pipeline.AssetType(assetType))
+	}
+	effectiveConnection := creationResolution.EffectiveConnection
+	if effectiveConnection == "" {
+		effectiveConnection = strings.TrimSpace(req.Connection)
+	}
+	return AssetMutationResponse{
+		Status:     "ok",
+		AssetID:    EncodeID(assetPath),
+		AssetPath:  assetPath,
+		AssetType:  assetType,
+		Connection: effectiveConnection,
+		Dialect:    dialect,
+	}, nil
 }
 
 type CreateAssetParams struct {
-	Name              string            `json:"name"`
-	Type              string            `json:"type"`
-	Path              string            `json:"path"`
-	Content           string            `json:"content"`
-	ExecutableContent string            `json:"executable_content"`
-	Connection        string            `json:"connection"`
-	Parameters        map[string]string `json:"parameters"`
-	SourceAssetID     string            `json:"source_asset_id"`
-	SeedFileName      string            `json:"seed_file_name"`
-	SeedFileContent   string            `json:"seed_file_content"`
-	SeedFileBytes     []byte            `json:"-"`
+	Name               string            `json:"name"`
+	Kind               string            `json:"kind,omitempty"`
+	Type               string            `json:"type"`
+	Path               string            `json:"path"`
+	Content            string            `json:"content"`
+	ExecutableContent  string            `json:"executable_content"`
+	Connection         string            `json:"connection"`
+	Environment        string            `json:"environment,omitempty"`
+	UsePipelineDefault bool              `json:"use_pipeline_default,omitempty"`
+	Variant            string            `json:"variant,omitempty"`
+	Parameters         map[string]string `json:"parameters"`
+	SourceAssetID      string            `json:"source_asset_id"`
+	SeedFileName       string            `json:"seed_file_name"`
+	SeedFileContent    string            `json:"seed_file_content"`
+	SeedFileBytes      []byte            `json:"-"`
+}
+
+// applyCreatedExecutableConnection only operates on Renart's freshly generated
+// SQL/Python templates. It keeps an explicit target in the @bruin header, or
+// removes the Python starter's historical DuckDB default when the user chose
+// the resolved pipeline default.
+func applyCreatedExecutableConnection(content, connection string) string {
+	lines := strings.Split(strings.ReplaceAll(content, "\r\n", "\n"), "\n")
+	headerEnd := -1
+	connectionLine := -1
+	insertAfter := -1
+	for index, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if index > 0 && (trimmed == "@bruin */" || trimmed == `@bruin \"\"\"`) {
+			headerEnd = index
+			break
+		}
+		if strings.HasPrefix(trimmed, "connection:") {
+			connectionLine = index
+		}
+		if strings.HasPrefix(trimmed, "type:") || strings.HasPrefix(trimmed, "image:") {
+			insertAfter = index
+		}
+	}
+	if headerEnd < 0 {
+		return content
+	}
+	connection = strings.TrimSpace(connection)
+	if connectionLine >= 0 {
+		if connection == "" {
+			lines = append(lines[:connectionLine], lines[connectionLine+1:]...)
+		} else {
+			lines[connectionLine] = "connection: " + connection
+		}
+		return strings.Join(lines, "\n")
+	}
+	if connection == "" {
+		return strings.Join(lines, "\n")
+	}
+	if insertAfter < 0 || insertAfter >= headerEnd {
+		insertAfter = 0
+	}
+	lines = append(lines[:insertAfter+1], append([]string{"connection: " + connection}, lines[insertAfter+1:]...)...)
+	return strings.Join(lines, "\n")
 }
 
 func (s *AssetService) Update(ctx context.Context, assetID string, req AssetUpdateRequest) (AssetMutationResponse, *APIError) {
@@ -517,11 +623,29 @@ func (s *AssetService) Update(ctx context.Context, assetID string, req AssetUpda
 	// would clobber the codec's output for api assets whose definition == executable).
 	persistedViaCodec := false
 	loadAssetUpdated := false
+	connectionResolution := AssetCreationResolution{}
+	hasConnectionResolution := false
 
-	if req.Name != nil || req.Type != nil || req.Connection != nil || req.MaterializationType != nil || req.MaterializationStrategy != nil || req.IncrementalKey != nil || req.PartitionBy != nil || req.ClusterBy != nil || req.TimeGranularity != nil || req.Owner != nil || req.Tags != nil || req.Meta != nil || req.Upstreams != nil || req.Parameters != nil {
+	if req.Name != nil || req.Type != nil || req.Connection != nil || req.ConnectionSelection != nil || req.MaterializationType != nil || req.MaterializationStrategy != nil || req.IncrementalKey != nil || req.PartitionBy != nil || req.ClusterBy != nil || req.TimeGranularity != nil || req.Owner != nil || req.Tags != nil || req.Meta != nil || req.Upstreams != nil || req.Parameters != nil {
 		_, parsedPipeline, asset, resolveErr := s.deps.ResolveAssetByID(ctx, assetID)
 		if resolveErr != nil {
 			return AssetMutationResponse{}, newAPIError(400, "asset_resolve_failed", resolveErr.Error())
+		}
+		pipelinePath := filepath.Dir(parsedPipeline.DefinitionFile.Path)
+		if req.ConnectionSelection != nil {
+			if req.Type != nil || req.Connection != nil {
+				return AssetMutationResponse{}, newAPIError(400, "conflicting_connection_update", "connection_selection cannot be combined with type or connection")
+			}
+			resolved, selectionErr := s.resolveAssetConnectionSelection(ctx, pipelinePath, asset, *req.ConnectionSelection)
+			if selectionErr != nil {
+				return AssetMutationResponse{}, selectionErr
+			}
+			nextType := resolved.AssetType
+			nextConnection := strings.TrimSpace(req.ConnectionSelection.Connection)
+			req.Type = &nextType
+			req.Connection = &nextConnection
+			connectionResolution = resolved
+			hasConnectionResolution = true
 		}
 		if isLoadAsset(asset) {
 			originalHadExplicitName = true
@@ -555,6 +679,9 @@ func (s *AssetService) Update(ctx context.Context, assetID string, req AssetUpda
 			if nextType == "" {
 				return AssetMutationResponse{}, newAPIError(400, "invalid_asset_type", "asset type cannot be empty")
 			}
+			if nextType != strings.TrimSpace(string(asset.Type)) && !hasConnectionResolution {
+				return AssetMutationResponse{}, newAPIError(409, "asset_type_change_requires_migration", "asset type is derived from its connection; use the reviewed connection migration")
+			}
 			asset.Type = pipeline.AssetType(nextType)
 		}
 		if req.MaterializationType != nil {
@@ -582,6 +709,11 @@ func (s *AssetService) Update(ctx context.Context, assetID string, req AssetUpda
 			}
 		}
 		if req.Connection != nil {
+			if !hasConnectionResolution {
+				if connectionErr := s.validateDirectAssetConnectionUpdate(ctx, pipelinePath, asset, *req.Connection); connectionErr != nil {
+					return AssetMutationResponse{}, connectionErr
+				}
+			}
 			asset.Connection = strings.TrimSpace(*req.Connection)
 		}
 		if req.Owner != nil {
@@ -746,7 +878,13 @@ func (s *AssetService) Update(ctx context.Context, assetID string, req AssetUpda
 		s.deps.SuppressWatcher(changedPath)
 	}
 	s.deps.PushWorkspaceUpdateImmediateWithChangedIDs(ctx, "asset.updated", nextRelAssetPath, changedAssetIDs)
-	return AssetMutationResponse{Status: "ok", AssetID: nextAssetID, AssetPath: nextRelAssetPath}, nil
+	response := AssetMutationResponse{Status: "ok", AssetID: nextAssetID, AssetPath: nextRelAssetPath}
+	if hasConnectionResolution {
+		response.AssetType = connectionResolution.AssetType
+		response.Connection = connectionResolution.EffectiveConnection
+		response.Dialect = connectionResolution.Dialect
+	}
+	return response, nil
 }
 
 func (s *AssetService) Delete(ctx context.Context, assetID string) (StatusResponse, *APIError) {
@@ -915,17 +1053,15 @@ func DefaultDerivedSQLAssetContent(assetName, assetType, assetPath, sourceAssetN
 	}
 	lowered := strings.ToLower(strings.TrimSpace(assetType))
 
-	// Python downstream: a Bruin Python asset that reads the upstream table with
-	// the Bruin Python SDK (query()) and returns it, declaring the dependency so
-	// lineage/ordering are correct. The SDK is the bruin-sdk package (the editor
-	// flags it as a missing import to add); it requires Python >=3.10, which the
-	// seeded pyproject targets.
+	// Python downstream: a Python asset that reads the upstream table through
+	// the runner-injected Renart SDK and declares the dependency so lineage and
+	// execution ordering stay correct.
 	if lowered == "python" || strings.HasSuffix(strings.ToLower(assetPath), ".py") {
 		connectionLine := ""
 		if strings.TrimSpace(connectionName) != "" {
 			connectionLine = fmt.Sprintf("connection: %s\n", strings.TrimSpace(connectionName))
 		}
-		return fmt.Sprintf("\"\"\" @bruin\n\nname: %s\ntype: python\n%smaterialization:\n  type: table\n\ndepends:\n  - %s\n\n@bruin \"\"\"\n\nfrom bruin import query\n\n\ndef materialize():\n    return query(\"select * from %s\")\n", assetName, connectionLine, sourceAssetName, queryTarget)
+		return fmt.Sprintf("\"\"\" @bruin\n\nname: %s\ntype: python\n%smaterialization:\n  type: table\n\ndepends:\n  - %s\n\n@bruin \"\"\"\n\nfrom renart import query\n\n\ndef materialize():\n    return query(\"select * from %s\")\n", assetName, connectionLine, sourceAssetName, queryTarget)
 	}
 
 	// Load downstream: a single flat-parameter .asset.yml that reads the upstream

@@ -176,6 +176,35 @@ func stripYAMLTopLevelKey(content []byte, key string) ([]byte, error) {
 	return out.Bytes(), nil
 }
 
+// canonicalizeCreatedAPIAssetContent keeps the user-selected starter template
+// but makes the semantic create request authoritative for identity. Without
+// this overlay, a caller could submit kind=api with a different YAML type or
+// connection than the server-reviewed creation profile.
+func canonicalizeCreatedAPIAssetContent(content, connection string) (string, error) {
+	var doc yaml.Node
+	if err := yaml.Unmarshal([]byte(content), &doc); err != nil {
+		return "", fmt.Errorf("parse API asset definition: %w", err)
+	}
+	root := documentMappingNode(&doc)
+	setMappingValue(root, "type", &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: apiAssetType})
+	if connection = strings.TrimSpace(connection); connection == "" {
+		deleteMappingKey(root, "connection")
+	} else {
+		setMappingValue(root, "connection", &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: connection})
+	}
+
+	out := bytes.NewBuffer(nil)
+	enc := yaml.NewEncoder(out)
+	enc.SetIndent(2)
+	if err := enc.Encode(&doc); err != nil {
+		return "", fmt.Errorf("encode API asset definition: %w", err)
+	}
+	if err := enc.Close(); err != nil {
+		return "", err
+	}
+	return out.String(), nil
+}
+
 // documentMappingNode returns the root mapping node of a YAML document, turning
 // an empty/non-mapping document into an empty mapping so callers can edit it.
 func documentMappingNode(doc *yaml.Node) *yaml.Node {

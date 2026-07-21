@@ -22,7 +22,6 @@ import {
   FileCode,
   FilePlus2,
   FolderPlus,
-  GitBranchPlus,
   GitCompare,
   Hammer,
   Layers,
@@ -679,6 +678,7 @@ export function AppBuildPage({
   const [newAssetInitialExecutableContent, setNewAssetInitialExecutableContent] = useState<
     string | null
   >(null);
+  const [newAssetInitialConnection, setNewAssetInitialConnection] = useState<string | null>(null);
   const [adhocNotebookOpen, setAdhocNotebookOpen] = useState(false);
   const [newPipelineOpen, setNewPipelineOpen] = useState(false);
   const [newFolderOpen, setNewFolderOpen] = useState(false);
@@ -688,12 +688,14 @@ export function AppBuildPage({
   const [downstreamSource, setDownstreamSource] = useState<{
     id: string;
     name: string;
+    connection?: string;
   } | null>(null);
   const [pipelineSettingsOpen, setPipelineSettingsOpen] = useState(false);
   const [pipelineSettingsSection, setPipelineSettingsSection] = useState<
     PipelineSettingsSection | undefined
   >(undefined);
   const openPipelineSettings = (section?: PipelineSettingsSection) => {
+    setExplorerOpen(false);
     setPipelineSettingsSection(section);
     setPipelineSettingsOpen(true);
   };
@@ -1111,6 +1113,7 @@ export function AppBuildPage({
     setDownstreamSource(null);
     setNewAssetPrefix(null);
     setNewAssetInitialExecutableContent(null);
+    setNewAssetInitialConnection(null);
     setNewAssetOpen(true);
   };
   // Canvas right-click entry point: seeds the dialog's name suggestion with
@@ -1119,18 +1122,30 @@ export function AppBuildPage({
     setDownstreamSource(null);
     setNewAssetPrefix(prefix ?? null);
     setNewAssetInitialExecutableContent(null);
+    setNewAssetInitialConnection(null);
     setNewAssetOpen(true);
   };
   const createDownstreamAsset = (source: { id: string; name: string }) => {
-    setDownstreamSource(source);
+    const sourceAsset = activePipeline?.assets.find((asset) => asset.id === source.id);
+    const sourceConnection = sourceAsset
+      ? resolveConnection(sourceAsset, workspace?.connections ?? {})
+      : null;
+    setDownstreamSource({
+      ...source,
+      ...(sourceConnection ? { connection: sourceConnection } : {}),
+    });
     setNewAssetPrefix(null);
     setNewAssetInitialExecutableContent(null);
+    setNewAssetInitialConnection(null);
     setNewAssetOpen(true);
   };
   const convertAdhocToAsset = () => {
     setDownstreamSource(null);
     setNewAssetPrefix(null);
     setNewAssetInitialExecutableContent(adhocQuery);
+    setNewAssetInitialConnection(
+      adhocContextAsset ? resolveConnection(adhocContextAsset, workspace?.connections ?? {}) : null,
+    );
     setNewAssetOpen(true);
   };
   const buildContext: BuildContextValue = {
@@ -1354,6 +1369,7 @@ export function AppBuildPage({
               setDownstreamSource(null);
               setNewAssetPrefix(null);
               setNewAssetInitialExecutableContent(null);
+              setNewAssetInitialConnection(null);
             }
           }}
           pipelineId={activePipeline?.id}
@@ -1362,6 +1378,7 @@ export function AppBuildPage({
           downstreamSource={downstreamSource}
           namePrefix={newAssetPrefix}
           initialExecutableContent={newAssetInitialExecutableContent}
+          initialConnection={newAssetInitialConnection}
           onCreated={(assetId) => goToAsset(activePipeline?.id ?? pipelineId, assetId)}
         />
         <AdhocToNotebookDialog
@@ -1601,7 +1618,13 @@ function BuildTopBar({
 
   return (
     <div className="flex min-h-12 shrink-0 items-center gap-2 px-3">
-      <Button variant="ghost" size="sm" className="xl:hidden" onClick={onOpenExplorer}>
+      <Button
+        variant="ghost"
+        size="sm"
+        className="xl:hidden"
+        onClick={onOpenExplorer}
+        aria-label="Open explorer"
+      >
         <PanelLeft className="size-3.5" />
       </Button>
       <Button
@@ -1905,7 +1928,7 @@ function Explorer({
           aria-label="New pipeline"
           title="New pipeline"
         >
-          <GitBranchPlus data-icon="inline-start" />
+          <Plus data-icon="inline-start" />
         </Button>
       </DelimitedCardHeader>
       <div className="border-b p-2">

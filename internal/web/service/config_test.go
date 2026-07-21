@@ -58,6 +58,38 @@ func TestPrepareDraftConnectionReplacesExistingConnection(t *testing.T) {
 	assert.Equal(t, "updated", env.Connections.Postgres[0].Password)
 }
 
+func TestUpdateConnectionRejectsConnectionTypeMutation(t *testing.T) {
+	t.Parallel()
+	svc := NewConfigService("/tmp/workspace", "/tmp/workspace/.bruin.yml")
+	cfg := &config.Config{
+		DefaultEnvironmentName:  "default",
+		SelectedEnvironmentName: "default",
+		Environments: map[string]config.Environment{
+			"default": {Connections: &config.Connections{}},
+		},
+	}
+	require.NoError(t, svc.AddConnection(cfg, UpsertWorkspaceConnectionParams{
+		EnvironmentName: "default",
+		Name:            "warehouse",
+		Type:            "duckdb",
+		Values:          map[string]any{"path": "warehouse.duckdb"},
+	}))
+
+	err := svc.UpdateConnection(cfg, UpsertWorkspaceConnectionParams{
+		EnvironmentName: "default",
+		CurrentName:     "warehouse",
+		Name:            "warehouse",
+		Type:            "postgres",
+		Values: map[string]any{
+			"host": "localhost", "port": 5432, "database": "analytics",
+			"username": "renart", "password": "renart",
+		},
+	})
+	require.ErrorContains(t, err, "connection type is immutable")
+	environment := cfg.Environments["default"]
+	assert.Equal(t, "duckdb", environment.Connections.ConnectionsSummaryList()["warehouse"])
+}
+
 func TestSetProjectRetentionPersistsValidatedTrackedSettings(t *testing.T) {
 	t.Parallel()
 	root := t.TempDir()

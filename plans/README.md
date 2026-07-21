@@ -10,7 +10,6 @@ the original.
 
 | Doc | Status |
 | --- | --- |
-| [connection-driven-asset-creation.md](connection-driven-asset-creation.md) | proposal — derive concrete Bruin type and SQL dialect from a backend-validated connection choice |
 | [cross-pipeline-dependencies.md](cross-pipeline-dependencies.md) | proposal — Bruin-compatible URI lineage, workspace-wide freshness, and interval-aware schedule prerequisites |
 | [dbt-assets.md](dbt-assets.md) | evaluation — enabling renart intelligence on existing dbt projects |
 | [materialization-reach.md](materialization-reach.md) | proposed reach — guided advanced SQL modes, coverage timeline, Python pre-run diagnostic |

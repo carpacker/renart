@@ -21,6 +21,7 @@ import { Label } from "@/components/ui/label";
 import {
   Select,
   SelectContent,
+  SelectGroup,
   SelectItem,
   SelectTrigger,
   SelectValue,
@@ -46,6 +47,7 @@ export function WorkspaceConnectionFormFields({
   selectedConnectionType,
   selectedEnvironment,
   environmentDisabled = false,
+  typeDisabled = false,
   showEnvironmentSelector = true,
   validateBusy,
   validateMessage,
@@ -67,6 +69,7 @@ export function WorkspaceConnectionFormFields({
   selectedConnectionType: WorkspaceConfigConnectionType | null;
   selectedEnvironment?: string | null;
   environmentDisabled?: boolean;
+  typeDisabled?: boolean;
   showEnvironmentSelector?: boolean;
   validateBusy: boolean;
   validateMessage: string | null;
@@ -83,21 +86,23 @@ export function WorkspaceConnectionFormFields({
     <div className="grid gap-4">
       {showEnvironmentSelector ? (
         <div className="grid gap-1.5">
-          <Label>Environment</Label>
+          <Label htmlFor="workspace-connection-environment">Environment</Label>
           <Select
             value={connectionForm.environmentName || selectedEnvironment || undefined}
             onValueChange={onEnvironmentChange}
             disabled={environmentDisabled}
           >
-            <SelectTrigger className="w-full">
+            <SelectTrigger id="workspace-connection-environment" className="w-full">
               <SelectValue placeholder="Select environment" />
             </SelectTrigger>
             <SelectContent>
-              {environments.map((environment) => (
-                <SelectItem key={environment.name} value={environment.name}>
-                  {environment.name}
-                </SelectItem>
-              ))}
+              <SelectGroup>
+                {environments.map((environment) => (
+                  <SelectItem key={environment.name} value={environment.name}>
+                    {environment.name}
+                  </SelectItem>
+                ))}
+              </SelectGroup>
             </SelectContent>
           </Select>
         </div>
@@ -105,25 +110,32 @@ export function WorkspaceConnectionFormFields({
 
       <div className="grid gap-4 sm:grid-cols-2">
         <div className="grid gap-1.5">
-          <Label>Name</Label>
+          <Label htmlFor="workspace-connection-name">Name</Label>
           <Input
+            id="workspace-connection-name"
             value={connectionForm.name}
             onChange={(event) => onNameChange(event.target.value)}
             placeholder="postgres-default"
           />
         </div>
         <div className="grid gap-1.5">
-          <Label>Type</Label>
-          <Select value={connectionForm.type || undefined} onValueChange={onTypeChange}>
-            <SelectTrigger className="w-full">
+          <Label htmlFor="workspace-connection-type">Type</Label>
+          <Select
+            value={connectionForm.type || undefined}
+            onValueChange={onTypeChange}
+            disabled={typeDisabled}
+          >
+            <SelectTrigger id="workspace-connection-type" className="w-full">
               <SelectValue placeholder="Select connection type" />
             </SelectTrigger>
             <SelectContent>
-              {connectionTypes.map((connectionType) => (
-                <SelectItem key={connectionType.type_name} value={connectionType.type_name}>
-                  {connectionType.type_name}
-                </SelectItem>
-              ))}
+              <SelectGroup>
+                {connectionTypes.map((connectionType) => (
+                  <SelectItem key={connectionType.type_name} value={connectionType.type_name}>
+                    {connectionType.type_name}
+                  </SelectItem>
+                ))}
+              </SelectGroup>
             </SelectContent>
           </Select>
         </div>
@@ -192,6 +204,7 @@ export function WorkspaceConnectionFormFields({
                 </div>
                 <div className="px-4 py-1.5 transition-colors focus-within:bg-emerald-500/10 dark:focus-within:bg-emerald-500/15">
                   <Input
+                    aria-label={field.name}
                     type={field.type === "int" ? "number" : secretInputType(field.name)}
                     value={
                       fieldValue === undefined || fieldValue === null

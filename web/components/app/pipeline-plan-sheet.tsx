@@ -17,6 +17,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import {
   ReadOnlyRenderedOperation,
+  ReadOnlyRenderedOperationDiff,
   assetRenderStageLabel,
 } from "@/components/app/asset-render-view";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
@@ -1339,51 +1340,24 @@ function DeploymentFileDiffPreview({
   const language = deploymentFileLanguage(path);
   const modelPrefix = `deployment-diff:${pipelineId}:${sourceVersion ?? "first"}:${path}`;
   return (
-    <div className="grid min-w-0 gap-3 lg:grid-cols-2">
-      <DeploymentFileVersion
-        title="Current deployment"
-        exists={diff.before_exists}
-        content={diff.before ?? ""}
-        language={language}
-        modelKey={`${modelPrefix}:before`}
-      />
-      <DeploymentFileVersion
-        title="Saved workspace"
-        exists={diff.after_exists}
-        content={diff.after ?? ""}
-        language={language}
-        modelKey={`${modelPrefix}:after`}
-      />
-    </div>
-  );
-}
-
-function DeploymentFileVersion({
-  title,
-  exists,
-  content,
-  language,
-  modelKey,
-}: {
-  title: string;
-  exists: boolean;
-  content: string;
-  language: string;
-  modelKey: string;
-}) {
-  return (
-    <section className="min-w-0 overflow-hidden rounded-md border">
-      <div className="border-b bg-muted/30 px-3 py-2 text-xs font-medium">{title}</div>
-      <div className="h-80 min-w-0">
-        {exists ? (
-          <ReadOnlyRenderedOperation content={content} language={language} modelKey={modelKey} />
-        ) : (
-          <div className="flex h-full items-center justify-center p-4 text-center text-xs text-muted-foreground">
-            File does not exist in this source version.
-          </div>
-        )}
+    <div className="min-w-0 overflow-hidden rounded-md border" data-testid="deployment-file-diff">
+      <div className="grid grid-cols-2 border-b bg-muted/30 text-xs font-medium">
+        <div className="min-w-0 truncate border-r px-3 py-2">
+          Current deployment{diff.before_exists ? "" : " · not present"}
+        </div>
+        <div className="min-w-0 truncate px-3 py-2">
+          Saved workspace{diff.after_exists ? "" : " · not present"}
+        </div>
       </div>
-    </section>
+      <div className="h-80 min-w-0">
+        <ReadOnlyRenderedOperationDiff
+          original={diff.before_exists ? (diff.before ?? "") : ""}
+          modified={diff.after_exists ? (diff.after ?? "") : ""}
+          language={language}
+          modelKey={modelPrefix}
+        />
+      </div>
+    </div>
   );
 }
 

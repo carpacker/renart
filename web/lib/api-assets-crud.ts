@@ -1,5 +1,7 @@
 import { fetchJSON, fetchJSONWithBody } from "@/lib/api-core";
 import {
+  AssetCreationProfile,
+  AssetMutationResponse,
   FormatPythonAssetResponse,
   FormatSQLAssetResponse,
   PythonCompletionsResponse,
@@ -11,11 +13,15 @@ import {
 
 export type CreateAssetInput = {
   name?: string;
+  kind?: "sql" | "python" | "api" | "load" | "seed" | "sensor";
   type?: string;
   path?: string;
   content?: string;
   executable_content?: string;
   connection?: string;
+  environment?: string;
+  use_pipeline_default?: boolean;
+  variant?: string;
   parameters?: Record<string, string>;
   source_asset_id?: string;
   seed_file_name?: string;
@@ -31,15 +37,29 @@ export async function createAsset(
     const body = new FormData();
     body.set("request", JSON.stringify(input));
     body.set("file", options.seedFile, options.seedFile.name);
-    return fetchJSON<{ status: string; asset_id?: string; asset_path?: string }>(
-      `/api/pipelines/${pipelineId}/assets`,
-      { method: "POST", body },
-    );
+    return fetchJSON<AssetMutationResponse>(`/api/pipelines/${pipelineId}/assets`, {
+      method: "POST",
+      body,
+    });
   }
-  return fetchJSONWithBody<{ status: string; asset_id?: string; asset_path?: string }>(
+  return fetchJSONWithBody<AssetMutationResponse>(
     `/api/pipelines/${pipelineId}/assets`,
     "POST",
     input,
+  );
+}
+
+export async function getAssetCreationProfile(
+  pipelineId: string,
+  environment: string,
+  signal?: AbortSignal,
+) {
+  const query = new URLSearchParams();
+  if (environment.trim()) query.set("environment", environment.trim());
+  const suffix = query.size > 0 ? `?${query.toString()}` : "";
+  return fetchJSON<AssetCreationProfile>(
+    `/api/pipelines/${pipelineId}/asset-creation-profile${suffix}`,
+    signal ? { signal } : undefined,
   );
 }
 
@@ -51,6 +71,13 @@ export async function updateAsset(
     type?: string;
     content?: string;
     connection?: string;
+    connection_selection?: {
+      environment?: string;
+      connection?: string;
+      use_pipeline_default?: boolean;
+      expected_asset_type?: string;
+      confirm_type_migration?: boolean;
+    };
     materialization_type?: string;
     materialization_strategy?: string;
     incremental_key?: string;
@@ -64,7 +91,7 @@ export async function updateAsset(
     parameters?: Record<string, string>;
   },
 ) {
-  return fetchJSONWithBody<Record<string, string>>(
+  return fetchJSONWithBody<AssetMutationResponse>(
     `/api/pipelines/${pipelineId}/assets/${assetId}`,
     "PUT",
     input,

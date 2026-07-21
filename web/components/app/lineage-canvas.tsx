@@ -673,7 +673,12 @@ export function AppLineageCanvas({
         onPaneClick={() => setPaneMenu(null)}
         onMoveStart={() => setPaneMenu(null)}
       >
-        <Background gap={22} size={1} color="var(--border)" />
+        <Background
+          gap={22}
+          size={1.2}
+          color="var(--muted-foreground)"
+          className="opacity-40 dark:opacity-50"
+        />
         <Controls position="bottom-left" />
         <ViewportFocus assetId={focusAssetId} nodes={nodes} />
       </ReactFlow>

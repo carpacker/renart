@@ -13,7 +13,6 @@ import {
 } from "lucide-react";
 import { type ComponentType, useEffect, useMemo, useRef, useState } from "react";
 
-import type { NewAssetKind } from "@/components/new-asset-node";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import {
@@ -28,6 +27,7 @@ import { Field, FieldDescription, FieldGroup, FieldLabel } from "@/components/ui
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import { Skeleton } from "@/components/ui/skeleton";
 import {
   Select,
   SelectContent,
@@ -38,21 +38,22 @@ import {
 } from "@/components/ui/select";
 import { Spinner } from "@/components/ui/spinner";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
-import { useWorkspaceSettingsData } from "@/hooks/use-workspace-settings-data";
 import { createAsset } from "@/lib/api-assets";
-import { API_ASSET_TEMPLATES, type APIAssetTemplateId } from "@/lib/api-asset-templates";
+import {
+  API_ASSET_TEMPLATES,
+  buildAPIAssetTemplate,
+  type APIAssetTemplateId,
+} from "@/lib/api-asset-templates";
 import { createPipeline } from "@/lib/api-pipelines";
 import { selectedEnvironmentAtom, workspaceAtom } from "@/lib/atoms/domains/workspace";
-import {
-  LOCAL_LOAD_CONNECTION,
-  isLocalLoadConnection,
-  loadConnectionCategory,
-  loadConnectionsForEnvironment,
-  loadTargetNeedsDestinationObject,
-} from "@/lib/load-assets";
+import { assetCreationRole, type AssetCreationKind } from "@/lib/asset-creation-profile";
+import { isLocalLoadConnection, loadTargetNeedsDestinationObject } from "@/lib/load-assets";
+import type { AssetCreationCandidate } from "@/lib/types";
 import { cn } from "@/lib/utils";
-import { buildCreateAssetInput, buildSuggestedAssetName } from "@/lib/workspace-shell-helpers";
+import { buildSuggestedAssetName } from "@/lib/workspace-shell-helpers";
+import { useAssetCreationProfile } from "@/hooks/use-asset-creation-profile";
 
+import { AssetConnectionField, resolveAssetConnectionSelection } from "./asset-connection-field";
 import { FilePathPicker } from "./file-path-picker";
 import {
   SemanticAssetCreateFields,
@@ -61,13 +62,13 @@ import {
   type SemanticAssetDraft,
   type SemanticAssetKind,
 } from "./semantic-asset-create-fields";
+import { WorkspaceConnectionDialog } from "./workspace-connection-dialog";
 
 // Asset kinds the creation dialog can produce, mapped to real backend create
-// calls. Standalone: SQL/Python transforms, "HTTP API" (Bruin api asset) and
-// "Load" (renart load asset). Downstream (created from a canvas node): SQL,
-// Python (via the Bruin Python SDK) and Load, each depending on the source.
+// calls. Standalone: SQL/Python transforms, HTTP API, Seed, Sensor, and Load.
+// Downstream assets can be SQL, Python, or Load, each depending on the source.
 type AssetKindOption = {
-  id: NewAssetKind;
+  id: AssetCreationKind;
   label: string;
   description: string;
   icon: ComponentType<{ className?: string }>;
@@ -128,7 +129,7 @@ function suggestDownstreamName(sourceName: string, existing: Set<string>): strin
 // suggestPrefixedAssetName seeds a unique name under an explicit prefix
 // (from the canvas prefix-group the user right-clicked in).
 function suggestPrefixedAssetName(
-  kind: NewAssetKind,
+  kind: AssetCreationKind,
   prefix: string,
   existing: Set<string>,
 ): string {
@@ -140,10 +141,17 @@ function suggestPrefixedAssetName(
   return `${base}${index}`;
 }
 
-// Sentinel Select value for "no explicit connection" (an empty SelectItem value
-// is disallowed); it maps back to an empty connection so the asset uses the
-// pipeline default.
-const AUTO_CONNECTION_VALUE = "__auto__";
+type CreationConnectionRole = "target" | "source" | "destination";
+
+function selectedCreationCandidate(
+  candidates: AssetCreationCandidate[],
+  variant: string,
+): AssetCreationCandidate | undefined {
+  if (variant) {
+    return candidates.find((candidate) => candidate.variant === variant);
+  }
+  return candidates.length === 1 ? candidates[0] : undefined;
+}
 
 export function NewAssetDialog({
   open,
@@ -154,6 +162,7 @@ export function NewAssetDialog({
   downstreamSource,
   namePrefix,
   initialExecutableContent,
+  initialConnection,
   onCreated,
 }: {
   open: boolean;
@@ -161,21 +170,25 @@ export function NewAssetDialog({
   pipelineId?: string;
   pipelineName?: string;
   existingAssetNames: Set<string>;
-  downstreamSource?: { id: string; name: string } | null;
+  downstreamSource?: { id: string; name: string; connection?: string } | null;
   namePrefix?: string | null;
   initialExecutableContent?: string | null;
+  initialConnection?: string | null;
   onCreated?: (assetId: string) => void;
 }) {
-  const [kind, setKind] = useState<NewAssetKind>("sql");
+  const [kind, setKind] = useState<AssetCreationKind>("sql");
   const [name, setName] = useState("");
   const [connection, setConnection] = useState("");
   const [sourceConnection, setSourceConnection] = useState("");
   const [sourceTable, setSourceTable] = useState("");
   const [destinationObject, setDestinationObject] = useState("");
   const [apiTemplate, setAPITemplate] = useState<APIAssetTemplateId>("openapi");
+  const [openapiSpecURL, setOpenAPISpecURL] = useState("");
+  const [sensorVariant, setSensorVariant] = useState("");
   const [semanticDraft, setSemanticDraft] = useState<SemanticAssetDraft>(() =>
     defaultSemanticAssetDraft("seed", [], {}),
   );
+  const [newConnectionRole, setNewConnectionRole] = useState<CreationConnectionRole | null>(null);
   const [creating, setCreating] = useState(false);
   const [error, setError] = useState("");
   const [kindPickerExpanded, setKindPickerExpanded] = useState(true);
@@ -183,35 +196,51 @@ export function NewAssetDialog({
 
   const workspace = useAtomValue(workspaceAtom);
   const environment = useAtomValue(selectedEnvironmentAtom);
-  const { workspaceConfig } = useWorkspaceSettingsData();
+  const {
+    profile,
+    loading: profileLoading,
+    error: profileError,
+    refresh: refreshProfile,
+  } = useAssetCreationProfile(pipelineId, open);
   const semanticCapabilities = useMemo(
     () => workspace?.asset_capabilities ?? [],
     [workspace?.asset_capabilities],
   );
   const semanticConnections = useMemo(() => workspace?.connections ?? {}, [workspace?.connections]);
-  const connectionNames = useMemo(
-    () => Object.keys(workspace?.connections ?? {}).sort((a, b) => a.localeCompare(b)),
-    [workspace?.connections],
-  );
-  const loadConnections = useMemo(
-    () => loadConnectionsForEnvironment(workspaceConfig, environment),
-    [workspaceConfig, environment],
-  );
-  const loadConnectionNames = useMemo(
-    () => [
-      ...loadConnections
-        .map((candidate) => candidate.name)
-        .filter((name) => name !== LOCAL_LOAD_CONNECTION),
-      LOCAL_LOAD_CONNECTION,
-    ],
-    [loadConnections],
-  );
-  const targetLoadCategory = loadConnectionCategory(loadConnections, connection);
-  const targetNeedsDestinationObject = loadTargetNeedsDestinationObject(targetLoadCategory);
 
   const isDownstream = Boolean(downstreamSource);
   const options = isDownstream ? DOWNSTREAM_ASSETS : CREATABLE_ASSETS;
   const selected = options.find((option) => option.id === kind) ?? options[0];
+  const targetRoleName = selected.id === "load" ? "destination" : "target";
+  const targetRole = assetCreationRole(profile, selected.id, targetRoleName);
+  const sourceRole = assetCreationRole(profile, selected.id, "source");
+  const currentConnectionType = connection
+    ? (workspace?.connections?.[connection] ?? undefined)
+    : undefined;
+  const targetSelection = useMemo(
+    () => resolveAssetConnectionSelection(targetRole, connection, currentConnectionType),
+    [connection, currentConnectionType, targetRole],
+  );
+  const candidate = useMemo(
+    () => selectedCreationCandidate(targetSelection?.candidates ?? [], sensorVariant),
+    [sensorVariant, targetSelection?.candidates],
+  );
+  const sourceSelection = useMemo(
+    () =>
+      resolveAssetConnectionSelection(
+        sourceRole,
+        sourceConnection,
+        sourceConnection ? workspace?.connections?.[sourceConnection] : undefined,
+      ),
+    [sourceConnection, sourceRole, workspace?.connections],
+  );
+  const targetConnectionProfile = targetRole?.connections.find(
+    (item) => item.name === targetSelection?.name,
+  );
+  const targetNeedsDestinationObject = loadTargetNeedsDestinationObject(
+    targetConnectionProfile?.category ?? "",
+  );
+  const isDownstreamSQL = isDownstream && selected.id === "sql";
 
   // Seed a unique, prefixed name suggestion (the backend requires a prefix).
   const suggestedName = useMemo(() => {
@@ -234,43 +263,80 @@ export function NewAssetDialog({
     if (resetModeRef.current === resetMode) return;
     resetModeRef.current = resetMode;
     setKind("sql");
-    setConnection("");
-    setSourceConnection("");
+    setConnection(initialConnection?.trim() || downstreamSource?.connection?.trim() || "");
+    setSourceConnection(downstreamSource?.connection?.trim() || "");
     setSourceTable("");
     setDestinationObject("");
     setAPITemplate("openapi");
+    setOpenAPISpecURL("");
+    setSensorVariant("");
     setKindPickerExpanded(true);
+    setNewConnectionRole(null);
     setSemanticDraft(defaultSemanticAssetDraft("seed", semanticCapabilities, semanticConnections));
     setError("");
-  }, [open, isDownstream, semanticCapabilities, semanticConnections]);
+  }, [
+    downstreamSource?.connection,
+    initialConnection,
+    isDownstream,
+    open,
+    semanticCapabilities,
+    semanticConnections,
+  ]);
   useEffect(() => {
     if (open) {
       setName(suggestedName);
     }
   }, [open, suggestedName]);
 
-  useEffect(() => {
-    if (open && selected.id === "load" && !isDownstream && !sourceConnection) {
-      setSourceConnection(loadConnectionNames[0] ?? "");
-    }
-  }, [isDownstream, loadConnectionNames, open, selected.id, sourceConnection]);
-
   const semanticKind: SemanticAssetKind | null =
     selected.id === "seed" || selected.id === "sensor" ? selected.id : null;
   useEffect(() => {
-    if (
-      open &&
-      semanticKind &&
-      !semanticCapabilities.some(
-        (capability) =>
-          capability.kind === semanticKind && capability.type === semanticDraft.assetType,
-      )
-    ) {
-      setSemanticDraft(
-        defaultSemanticAssetDraft(semanticKind, semanticCapabilities, semanticConnections),
-      );
+    if (!open || !targetSelection || targetSelection.incompatible) return;
+    const candidates = targetSelection.candidates;
+    if (selected.id === "sensor") {
+      const nextVariant = candidates.some((item) => item.variant === sensorVariant)
+        ? sensorVariant
+        : (candidates[0]?.variant ?? "");
+      if (nextVariant !== sensorVariant) setSensorVariant(nextVariant);
     }
-  }, [open, semanticCapabilities, semanticConnections, semanticDraft.assetType, semanticKind]);
+    const nextCandidate = selectedCreationCandidate(
+      candidates,
+      selected.id === "sensor"
+        ? candidates.some((item) => item.variant === sensorVariant)
+          ? sensorVariant
+          : (candidates[0]?.variant ?? "")
+        : "",
+    );
+    if (!semanticKind || !nextCandidate) return;
+    setSemanticDraft((current) => ({
+      ...current,
+      assetType: nextCandidate.asset_type,
+      connection,
+    }));
+  }, [connection, open, selected.id, semanticKind, sensorVariant, targetSelection]);
+
+  const openConnectionDialog = (role: CreationConnectionRole) => {
+    setNewConnectionRole(role);
+  };
+
+  const manageConnections = () => {
+    onOpenChange(false);
+    window.location.assign("/project/connections");
+  };
+
+  const newConnectionProfile = newConnectionRole
+    ? assetCreationRole(profile, selected.id, newConnectionRole)
+    : undefined;
+
+  const selectCreatedConnection = async (connectionName: string) => {
+    if (!pipelineId || !newConnectionRole) return;
+    await refreshProfile();
+    if (newConnectionRole === "source") {
+      setSourceConnection(connectionName);
+    } else {
+      setConnection(connectionName);
+    }
+  };
 
   const create = async () => {
     const trimmed = name.trim();
@@ -286,19 +352,32 @@ export function NewAssetDialog({
       setError(`An asset named "${trimmed}" already exists.`);
       return;
     }
+    if (!targetSelection || targetSelection.incompatible || !candidate) {
+      setError("Choose a compatible connection and asset variant.");
+      return;
+    }
     const semanticResult = semanticKind
-      ? buildSemanticAssetCreatePayload(semanticKind, semanticDraft, semanticCapabilities, trimmed)
+      ? buildSemanticAssetCreatePayload(
+          semanticKind,
+          { ...semanticDraft, assetType: candidate.asset_type, connection },
+          semanticCapabilities,
+          trimmed,
+        )
       : null;
     if (semanticResult?.error) {
       setError(semanticResult.error);
       return;
     }
-    if (selected.id === "load" && !isDownstream) {
+    if (selected.id === "load") {
       if (!sourceConnection.trim()) {
         setError("A source connection is required for a Load asset.");
         return;
       }
-      if (!sourceTable.trim()) {
+      if (!sourceSelection || sourceSelection.incompatible) {
+        setError("Choose a compatible source connection for this Load asset.");
+        return;
+      }
+      if (!isDownstream && !sourceTable.trim()) {
         setError("A source table or object is required for a Load asset.");
         return;
       }
@@ -307,28 +386,34 @@ export function NewAssetDialog({
       setError("This target connection requires a destination object or file path.");
       return;
     }
+    if (selected.id === "api" && apiTemplate === "openapi" && !openapiSpecURL.trim()) {
+      setError("An OpenAPI spec URL is required for this API source.");
+      return;
+    }
 
-    let input: Parameters<typeof createAsset>[1] =
-      isDownstream && downstreamSource
-        ? selected.id === "sql"
-          ? { name: trimmed, source_asset_id: downstreamSource.id }
-          : { name: trimmed, source_asset_id: downstreamSource.id, type: selected.id }
-        : buildCreateAssetInput(trimmed, selected.id, undefined, connection, apiTemplate);
+    let input: Parameters<typeof createAsset>[1] = {
+      name: trimmed,
+      kind: selected.id as "sql" | "python" | "api" | "load" | "seed" | "sensor",
+      connection,
+      environment: profile?.environment || environment || undefined,
+      use_pipeline_default: !connection,
+      ...(isDownstream && downstreamSource ? { source_asset_id: downstreamSource.id } : {}),
+    };
     if (selected.id === "sql" && initialExecutableContent?.trim()) {
       input = { ...input, executable_content: initialExecutableContent };
+    }
+    if (selected.id === "api") {
+      input = {
+        ...input,
+        content: buildAPIAssetTemplate(apiTemplate, connection, openapiSpecURL),
+      };
     }
     if (selected.id === "load") {
       input = {
         ...input,
-        type: "load",
-        connection,
         parameters: {
-          ...(isDownstream
-            ? {}
-            : {
-                source_connection: sourceConnection.trim(),
-                source_table: sourceTable.trim(),
-              }),
+          source_connection: sourceConnection.trim(),
+          ...(isDownstream ? {} : { source_table: sourceTable.trim() }),
           ...(targetNeedsDestinationObject && destinationObject.trim()
             ? { destination_object: destinationObject.trim() }
             : {}),
@@ -337,9 +422,13 @@ export function NewAssetDialog({
     }
     let seedFile: File | undefined;
     if (semanticResult?.payload) {
-      const { seedFile: payloadFile, ...semanticInput } = semanticResult.payload;
+      const { seedFile: payloadFile, parameters } = semanticResult.payload;
       seedFile = payloadFile;
-      input = { ...input, ...semanticInput };
+      input = {
+        ...input,
+        parameters,
+        ...(selected.id === "sensor" ? { variant: candidate.variant } : {}),
+      };
     }
     setCreating(true);
     setError("");
@@ -357,300 +446,383 @@ export function NewAssetDialog({
   };
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="flex max-h-[90dvh] min-w-0 flex-col overflow-hidden sm:max-w-3xl">
-        <DialogHeader>
-          <DialogTitle className="flex items-center gap-2">
-            <Plus className="size-4 text-primary" />
-            {isDownstream ? "New downstream asset" : "New asset"}
-          </DialogTitle>
-          <DialogDescription>
-            {isDownstream && downstreamSource ? (
-              <>
-                Depends on <span className="font-mono">{downstreamSource.name}</span>.
-              </>
-            ) : (
-              <>
-                Create an asset in{" "}
-                {pipelineName ? <span className="font-mono">{pipelineName}</span> : "this pipeline"}
-                .
-              </>
-            )}
-          </DialogDescription>
-        </DialogHeader>
-        <ScrollArea className="min-h-0 min-w-0 flex-1" viewportClassName="p-1">
-          <div className="grid min-w-0 gap-5">
-            <div className="min-w-0">
-              <div
-                className={cn(
-                  "grid min-w-0 transition-[grid-template-rows,opacity] duration-300 ease-out motion-reduce:transition-none",
-                  kindPickerExpanded
-                    ? "grid-rows-[1fr] opacity-100"
-                    : "pointer-events-none grid-rows-[0fr] opacity-0",
-                )}
-                aria-hidden={!kindPickerExpanded}
-                inert={!kindPickerExpanded}
-              >
-                <div className="min-h-0 min-w-0 overflow-hidden p-1">
-                  <ToggleGroup
-                    type="single"
-                    variant="outline"
-                    value={selected.id}
-                    onValueChange={(nextKind) => {
-                      setKindPickerExpanded(false);
-                      if (!nextKind) return;
-                      const next = nextKind as NewAssetKind;
-                      setKind(next);
-                      if (next === "seed" || next === "sensor") {
-                        setSemanticDraft(
-                          defaultSemanticAssetDraft(
-                            next,
-                            semanticCapabilities,
-                            semanticConnections,
-                          ),
+    <>
+      <Dialog open={open} onOpenChange={onOpenChange}>
+        <DialogContent className="flex max-h-[90dvh] min-w-0 flex-col overflow-hidden sm:max-w-3xl">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Plus className="size-4 text-primary" />
+              {isDownstream ? "New downstream asset" : "New asset"}
+            </DialogTitle>
+            <DialogDescription>
+              {isDownstream && downstreamSource ? (
+                <>
+                  Depends on <span className="font-mono">{downstreamSource.name}</span>.
+                </>
+              ) : (
+                <>
+                  Create an asset in{" "}
+                  {pipelineName ? (
+                    <span className="font-mono">{pipelineName}</span>
+                  ) : (
+                    "this pipeline"
+                  )}
+                  .
+                </>
+              )}
+            </DialogDescription>
+          </DialogHeader>
+          <ScrollArea className="min-h-0 min-w-0 flex-1" viewportClassName="p-1">
+            <div className="grid min-w-0 gap-5">
+              <div className="min-w-0">
+                <div
+                  className={cn(
+                    "grid min-w-0 transition-[grid-template-rows,opacity] duration-300 ease-out motion-reduce:transition-none",
+                    kindPickerExpanded
+                      ? "grid-rows-[1fr] opacity-100"
+                      : "pointer-events-none grid-rows-[0fr] opacity-0",
+                  )}
+                  aria-hidden={!kindPickerExpanded}
+                  inert={!kindPickerExpanded}
+                >
+                  <div className="min-h-0 min-w-0 overflow-hidden p-1">
+                    <ToggleGroup
+                      type="single"
+                      variant="outline"
+                      value={selected.id}
+                      onValueChange={(nextKind) => {
+                        setKindPickerExpanded(false);
+                        if (!nextKind) return;
+                        const next = nextKind as AssetCreationKind;
+                        setKind(next);
+                        setSensorVariant("");
+                        setConnection(
+                          next === "sql" && initialConnection?.trim()
+                            ? initialConnection.trim()
+                            : (next === "sql" || next === "python") && downstreamSource?.connection
+                              ? downstreamSource.connection
+                              : "",
                         );
-                      }
-                    }}
-                    className="grid w-full min-w-0 grid-cols-2 items-stretch gap-2 sm:grid-cols-3"
-                  >
-                    {options.map((option) => (
-                      <ToggleGroupItem
-                        key={option.id}
-                        value={option.id}
-                        aria-label={option.label}
-                        className="h-24 w-full min-w-0 flex-col items-start justify-start whitespace-normal p-3 text-left data-[state=on]:border-primary data-[state=on]:ring-1 data-[state=on]:ring-primary"
-                      >
-                        <option.icon className="text-primary" />
-                        <div className="font-medium">{option.label}</div>
-                        <div className="text-xs text-muted-foreground">{option.description}</div>
-                      </ToggleGroupItem>
-                    ))}
-                  </ToggleGroup>
-                </div>
-              </div>
-              <div
-                className={cn(
-                  "grid min-w-0 transition-[grid-template-rows,opacity] duration-300 ease-out motion-reduce:transition-none",
-                  kindPickerExpanded
-                    ? "pointer-events-none grid-rows-[0fr] opacity-0"
-                    : "grid-rows-[1fr] opacity-100",
-                )}
-                aria-hidden={kindPickerExpanded}
-                inert={kindPickerExpanded}
-              >
-                <div className="min-h-0 min-w-0 overflow-hidden p-1">
-                  <div className="flex min-w-0 items-center gap-2 rounded-md border bg-muted/20 px-2.5 py-2">
-                    <selected.icon className="size-4 shrink-0 text-primary" />
-                    <div className="min-w-0 flex-1">
-                      <div className="text-xs font-medium">{selected.label}</div>
-                      <div className="truncate text-[11px] text-muted-foreground">
-                        {selected.description}
-                      </div>
-                    </div>
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      size="xs"
-                      className="shrink-0"
-                      onClick={() => setKindPickerExpanded(true)}
+                        if (next === "load") {
+                          setSourceConnection(downstreamSource?.connection?.trim() || "");
+                        }
+                        if (next === "seed" || next === "sensor") {
+                          setSemanticDraft(
+                            defaultSemanticAssetDraft(
+                              next,
+                              semanticCapabilities,
+                              semanticConnections,
+                            ),
+                          );
+                        }
+                      }}
+                      className="grid w-full min-w-0 grid-cols-2 items-stretch gap-2 sm:grid-cols-3"
                     >
-                      Change type
-                    </Button>
+                      {options.map((option) => (
+                        <ToggleGroupItem
+                          key={option.id}
+                          value={option.id}
+                          aria-label={option.label}
+                          className="h-24 w-full min-w-0 flex-col items-start justify-start whitespace-normal p-3 text-left data-[state=on]:border-primary data-[state=on]:ring-1 data-[state=on]:ring-primary"
+                        >
+                          <option.icon className="text-primary" />
+                          <div className="font-medium">{option.label}</div>
+                          <div className="text-xs text-muted-foreground">{option.description}</div>
+                        </ToggleGroupItem>
+                      ))}
+                    </ToggleGroup>
+                  </div>
+                </div>
+                <div
+                  className={cn(
+                    "grid min-w-0 transition-[grid-template-rows,opacity] duration-300 ease-out motion-reduce:transition-none",
+                    kindPickerExpanded
+                      ? "pointer-events-none grid-rows-[0fr] opacity-0"
+                      : "grid-rows-[1fr] opacity-100",
+                  )}
+                  aria-hidden={kindPickerExpanded}
+                  inert={kindPickerExpanded}
+                >
+                  <div className="min-h-0 min-w-0 overflow-hidden p-1">
+                    <div className="flex min-w-0 items-center gap-2 rounded-md border bg-muted/20 px-2.5 py-2">
+                      <selected.icon className="size-4 shrink-0 text-primary" />
+                      <div className="min-w-0 flex-1">
+                        <div className="text-xs font-medium">{selected.label}</div>
+                        <div className="truncate text-[11px] text-muted-foreground">
+                          {selected.description}
+                        </div>
+                      </div>
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="xs"
+                        className="shrink-0"
+                        onClick={() => setKindPickerExpanded(true)}
+                      >
+                        Change type
+                      </Button>
+                    </div>
                   </div>
                 </div>
               </div>
-            </div>
-            <Field variant="plain">
-              <FieldLabel htmlFor="new-asset-name">Asset name</FieldLabel>
-              <Input
-                id="new-asset-name"
-                className="font-mono"
-                placeholder="analytics.my_asset"
-                value={name}
-                onChange={(event) => setName(event.target.value)}
-                onKeyDown={(event) => {
-                  if (event.key === "Enter" && !creating) {
-                    void create();
+              <Field variant="plain">
+                <FieldLabel htmlFor="new-asset-name">Asset name</FieldLabel>
+                <Input
+                  id="new-asset-name"
+                  className="font-mono"
+                  placeholder="analytics.my_asset"
+                  value={name}
+                  onChange={(event) => setName(event.target.value)}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter" && !creating) {
+                      void create();
+                    }
+                  }}
+                  autoFocus
+                />
+                <FieldDescription>
+                  Use a <span className="font-mono">prefix.name</span> to group it under{" "}
+                  <span className="font-mono">assets/prefix/</span>.
+                </FieldDescription>
+              </Field>
+              {profileLoading && !profile ? (
+                <div className="grid gap-2" aria-label="Loading compatible connections">
+                  <Skeleton className="h-7 w-full" />
+                  <Skeleton className="h-14 w-full" />
+                </div>
+              ) : null}
+              {profileError ? (
+                <Alert variant="destructive">
+                  <AlertTriangle />
+                  <AlertTitle>Could not load connections</AlertTitle>
+                  <AlertDescription>{profileError}</AlertDescription>
+                </Alert>
+              ) : null}
+              {selected.id === "load" ? (
+                <FieldGroup>
+                  {isDownstream ? (
+                    <Field variant="plain">
+                      <FieldLabel htmlFor="new-load-source-connection">
+                        Source connection
+                      </FieldLabel>
+                      <Input
+                        id="new-load-source-connection"
+                        value={sourceConnection}
+                        className="font-mono"
+                        disabled
+                      />
+                      <FieldDescription>
+                        Uses the selected upstream asset&apos;s effective target connection.
+                      </FieldDescription>
+                    </Field>
+                  ) : (
+                    <>
+                      <AssetConnectionField
+                        id="new-load-source-connection"
+                        label="Source connection"
+                        role={sourceRole}
+                        value={sourceConnection}
+                        currentConnectionType={workspace?.connections?.[sourceConnection]}
+                        onChange={setSourceConnection}
+                        onNewConnection={() => openConnectionDialog("source")}
+                        onManageConnections={manageConnections}
+                      />
+                      <Field variant="plain">
+                        <FieldLabel htmlFor="new-load-source-table">
+                          {isLocalLoadConnection(sourceConnection)
+                            ? "Source file"
+                            : "Source table or object"}
+                        </FieldLabel>
+                        {isLocalLoadConnection(sourceConnection) ? (
+                          <FilePathPicker
+                            id="new-load-source-table"
+                            variant="field"
+                            ariaLabel="Choose source file"
+                            placeholder="data/orders.csv"
+                            value={sourceTable}
+                            onCommit={setSourceTable}
+                          />
+                        ) : (
+                          <Input
+                            id="new-load-source-table"
+                            className="font-mono"
+                            placeholder="public.orders"
+                            value={sourceTable}
+                            onChange={(event) => setSourceTable(event.target.value)}
+                          />
+                        )}
+                      </Field>
+                    </>
+                  )}
+                </FieldGroup>
+              ) : null}
+              {!isDownstreamSQL ? (
+                <AssetConnectionField
+                  id="new-asset-connection"
+                  label={
+                    selected.id === "sensor"
+                      ? "Connection to check"
+                      : selected.id === "api" || selected.id === "load"
+                        ? "Destination connection"
+                        : "Target connection"
                   }
-                }}
-                autoFocus
-              />
-              <FieldDescription>
-                Use a <span className="font-mono">prefix.name</span> to group it under{" "}
-                <span className="font-mono">assets/prefix/</span>.
-              </FieldDescription>
-            </Field>
-            {semanticKind ? (
-              <SemanticAssetCreateFields
-                kind={semanticKind}
-                capabilities={semanticCapabilities}
-                connections={semanticConnections}
-                value={semanticDraft}
-                onChange={setSemanticDraft}
-              />
-            ) : null}
-            {selected.id === "api" ? (
-              <FieldGroup>
+                  role={targetRole}
+                  value={connection}
+                  currentConnectionType={currentConnectionType}
+                  onChange={setConnection}
+                  onNewConnection={() => openConnectionDialog(targetRoleName)}
+                  onManageConnections={manageConnections}
+                />
+              ) : !targetSelection || targetSelection.incompatible || !candidate ? (
+                <Alert variant="destructive">
+                  <AlertTriangle />
+                  <AlertTitle>SQL downstream unavailable</AlertTitle>
+                  <AlertDescription>
+                    A SQL downstream must use the upstream asset&apos;s warehouse. Choose Python or
+                    Load when the data needs to move to another connection.
+                  </AlertDescription>
+                </Alert>
+              ) : null}
+              {selected.id === "sensor" && (targetSelection?.candidates.length ?? 0) > 0 ? (
                 <Field variant="plain">
-                  <FieldLabel htmlFor="new-api-template">API source</FieldLabel>
-                  <Select
-                    value={apiTemplate}
-                    onValueChange={(value) => setAPITemplate(value as APIAssetTemplateId)}
-                  >
-                    <SelectTrigger id="new-api-template">
-                      <SelectValue />
+                  <FieldLabel htmlFor="new-sensor-variant">Condition</FieldLabel>
+                  <Select value={sensorVariant} onValueChange={setSensorVariant}>
+                    <SelectTrigger id="new-sensor-variant" className="w-full">
+                      <SelectValue placeholder="Choose a condition" />
                     </SelectTrigger>
                     <SelectContent>
                       <SelectGroup>
-                        {API_ASSET_TEMPLATES.map((template) => (
-                          <SelectItem key={template.id} value={template.id}>
-                            {template.label}
+                        {targetSelection?.candidates.map((item) => (
+                          <SelectItem key={item.asset_type} value={item.variant ?? item.asset_type}>
+                            {item.variant === "query"
+                              ? "Query returns true"
+                              : item.variant === "table"
+                                ? "Table exists"
+                                : item.variant === "key"
+                                  ? "Object key exists"
+                                  : item.operator}
                           </SelectItem>
                         ))}
                       </SelectGroup>
                     </SelectContent>
                   </Select>
-                  <FieldDescription>
-                    {
-                      API_ASSET_TEMPLATES.find((template) => template.id === apiTemplate)
-                        ?.description
-                    }
-                  </FieldDescription>
                 </Field>
-              </FieldGroup>
-            ) : null}
-            {selected.id === "load" ? (
-              <FieldGroup>
-                {!isDownstream ? (
-                  <>
-                    <Field variant="plain">
-                      <FieldLabel htmlFor="new-load-source-connection">
-                        Source connection
-                      </FieldLabel>
-                      <Select value={sourceConnection} onValueChange={setSourceConnection}>
-                        <SelectTrigger id="new-load-source-connection">
-                          <SelectValue placeholder="Choose a source" />
-                        </SelectTrigger>
-                        <SelectContent>
-                          <SelectGroup>
-                            {loadConnectionNames.map((connectionName) => (
-                              <SelectItem key={connectionName} value={connectionName}>
-                                {connectionName}
-                              </SelectItem>
-                            ))}
-                          </SelectGroup>
-                        </SelectContent>
-                      </Select>
-                    </Field>
-                    <Field variant="plain">
-                      <FieldLabel htmlFor="new-load-source-table">
-                        {isLocalLoadConnection(sourceConnection)
-                          ? "Source file"
-                          : "Source table or object"}
-                      </FieldLabel>
-                      {isLocalLoadConnection(sourceConnection) ? (
-                        <FilePathPicker
-                          id="new-load-source-table"
-                          variant="field"
-                          ariaLabel="Choose source file"
-                          placeholder="data/orders.csv"
-                          value={sourceTable}
-                          onCommit={setSourceTable}
-                        />
-                      ) : (
-                        <Input
-                          id="new-load-source-table"
-                          className="font-mono"
-                          placeholder="public.orders"
-                          value={sourceTable}
-                          onChange={(event) => setSourceTable(event.target.value)}
-                        />
-                      )}
-                    </Field>
-                  </>
-                ) : null}
-              </FieldGroup>
-            ) : null}
-            {selected.id === "sql" || selected.id === "api" || selected.id === "load" ? (
-              <FieldGroup>
-                <Field variant="plain">
-                  <FieldLabel htmlFor="new-asset-connection">
-                    {selected.id === "sql" ? "Target connection" : "Destination connection"}
-                  </FieldLabel>
-                  <Select
-                    value={connection || AUTO_CONNECTION_VALUE}
-                    onValueChange={(value) =>
-                      setConnection(value === AUTO_CONNECTION_VALUE ? "" : value)
-                    }
-                  >
-                    <SelectTrigger id="new-asset-connection">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectGroup>
-                        <SelectItem value={AUTO_CONNECTION_VALUE}>
-                          Auto (pipeline default)
-                        </SelectItem>
-                        {(selected.id === "load" ? loadConnectionNames : connectionNames).map(
-                          (connectionName) => (
-                            <SelectItem key={connectionName} value={connectionName}>
-                              {connectionName}
-                            </SelectItem>
-                          ),
-                        )}
-                      </SelectGroup>
-                    </SelectContent>
-                  </Select>
-                  <FieldDescription>
-                    {selected.id === "load"
-                      ? "Database destinations use the asset name as their table."
-                      : selected.id === "sql"
-                        ? "Where the query is materialized. Auto uses the pipeline default."
-                        : "Where fetched records are loaded. You can change this later."}
-                  </FieldDescription>
-                </Field>
-                {selected.id === "load" && targetNeedsDestinationObject ? (
+              ) : null}
+              {selected.id === "api" ? (
+                <FieldGroup>
                   <Field variant="plain">
-                    <FieldLabel htmlFor="new-load-destination-object">
-                      Destination object
-                    </FieldLabel>
-                    <Input
-                      id="new-load-destination-object"
-                      className="font-mono"
-                      placeholder={
-                        isLocalLoadConnection(connection) ? "data/orders.csv" : "path/to/object"
+                    <FieldLabel htmlFor="new-api-template">API source</FieldLabel>
+                    <Select
+                      value={apiTemplate}
+                      onValueChange={(value) => setAPITemplate(value as APIAssetTemplateId)}
+                    >
+                      <SelectTrigger id="new-api-template" className="w-full">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectGroup>
+                          {API_ASSET_TEMPLATES.map((template) => (
+                            <SelectItem key={template.id} value={template.id}>
+                              {template.label}
+                            </SelectItem>
+                          ))}
+                        </SelectGroup>
+                      </SelectContent>
+                    </Select>
+                    <FieldDescription>
+                      {
+                        API_ASSET_TEMPLATES.find((template) => template.id === apiTemplate)
+                          ?.description
                       }
-                      value={destinationObject}
-                      onChange={(event) => setDestinationObject(event.target.value)}
-                    />
+                    </FieldDescription>
                   </Field>
-                ) : null}
-              </FieldGroup>
-            ) : null}
-            {error ? (
-              <Alert variant="destructive">
-                <AlertTriangle />
-                <AlertTitle>Could not create asset</AlertTitle>
-                <AlertDescription>{error}</AlertDescription>
-              </Alert>
-            ) : null}
-          </div>
-        </ScrollArea>
-        <DialogFooter>
-          <Button variant="outline" onClick={() => onOpenChange(false)} disabled={creating}>
-            Cancel
-          </Button>
-          <Button onClick={() => void create()} disabled={creating || !pipelineId}>
-            {creating ? (
-              <Spinner data-icon="inline-start" />
-            ) : (
-              <CheckCircle2 data-icon="inline-start" />
-            )}
-            Create
-          </Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
+                  {apiTemplate === "openapi" ? (
+                    <Field variant="plain">
+                      <FieldLabel htmlFor="new-api-openapi-url">OpenAPI spec URL</FieldLabel>
+                      <Input
+                        id="new-api-openapi-url"
+                        type="url"
+                        className="font-mono"
+                        value={openapiSpecURL}
+                        placeholder="https://api.example.com/openapi.json"
+                        onChange={(event) => setOpenAPISpecURL(event.target.value)}
+                      />
+                      <FieldDescription>
+                        Renart uses the spec for endpoint, parameter, and response-field
+                        suggestions.
+                      </FieldDescription>
+                    </Field>
+                  ) : null}
+                </FieldGroup>
+              ) : null}
+              {semanticKind ? (
+                <SemanticAssetCreateFields
+                  kind={semanticKind}
+                  capabilities={semanticCapabilities}
+                  value={semanticDraft}
+                  onChange={setSemanticDraft}
+                />
+              ) : null}
+              {selected.id === "load" && targetNeedsDestinationObject ? (
+                <Field variant="plain">
+                  <FieldLabel htmlFor="new-load-destination-object">Destination object</FieldLabel>
+                  <Input
+                    id="new-load-destination-object"
+                    className="font-mono"
+                    placeholder={
+                      isLocalLoadConnection(targetSelection?.name ?? "")
+                        ? "data/orders.csv"
+                        : "path/to/object"
+                    }
+                    value={destinationObject}
+                    onChange={(event) => setDestinationObject(event.target.value)}
+                  />
+                </Field>
+              ) : null}
+              {error ? (
+                <Alert variant="destructive">
+                  <AlertTriangle />
+                  <AlertTitle>Could not create asset</AlertTitle>
+                  <AlertDescription>{error}</AlertDescription>
+                </Alert>
+              ) : null}
+            </div>
+          </ScrollArea>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => onOpenChange(false)} disabled={creating}>
+              Cancel
+            </Button>
+            <Button
+              onClick={() => void create()}
+              disabled={creating || !pipelineId || profileLoading || !candidate}
+            >
+              {creating ? (
+                <Spinner data-icon="inline-start" />
+              ) : (
+                <CheckCircle2 data-icon="inline-start" />
+              )}
+              Create
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+      {newConnectionRole && newConnectionProfile ? (
+        <WorkspaceConnectionDialog
+          open
+          onOpenChange={(nextOpen) => {
+            if (!nextOpen) setNewConnectionRole(null);
+          }}
+          environment={profile?.environment || environment || "default"}
+          connectionTypes={newConnectionProfile.connection_types}
+          requestedConnectionType={
+            newConnectionRole === "source"
+              ? sourceSelection?.connectionType
+              : targetSelection?.connectionType
+          }
+          onCreated={selectCreatedConnection}
+        />
+      ) : null}
+    </>
   );
 }
 

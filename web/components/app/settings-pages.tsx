@@ -1160,6 +1160,7 @@ function ConnectionSheet({
               selectedConnectionType={form.selectedConnectionType}
               selectedEnvironment={state?.environment ?? null}
               environmentDisabled={mode === "edit"}
+              typeDisabled={mode === "edit"}
               validateBusy={validateBusy}
               validateMessage={validateMessage}
               validateTone={validateTone}

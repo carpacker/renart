@@ -167,6 +167,14 @@ select customer_id, customer_name from analytics.customers
     const dialog = page.getByRole("dialog", { name: /Pipeline settings/ });
     await expect(dialog).toBeVisible({ timeout: 15000 });
     expect((await dialog.boundingBox())?.width).toBeGreaterThan(700);
+    const settingsSidebar = dialog.getByRole("tablist", {
+      name: "Pipeline settings sections",
+    });
+    await expect(settingsSidebar).toBeVisible();
+    await expect(settingsSidebar.getByRole("tab", { name: "General" })).toHaveAttribute(
+      "aria-selected",
+      "true",
+    );
     await expect(dialog.getByTestId("pipeline-settings-content")).toHaveAttribute(
       "data-slot",
       "scroll-area",
@@ -197,6 +205,27 @@ select customer_id, customer_name from analytics.customers
     const config = (await configResponse.json()) as { tags?: string[]; domains?: string[] };
     expect(config.tags).toContain("finance, north");
     expect(config.domains).toContain("sales, enterprise");
+  });
+
+  test("pipeline settings keep compact horizontal navigation on mobile", async ({
+    liveApp,
+    page,
+  }) => {
+    test.skip(
+      !test.info().project.name.includes("mobile"),
+      "The desktop pipeline settings navigation is covered separately.",
+    );
+
+    await page.goto(`${liveApp.baseURL}/pipelines/${pipelineId}/assets/${customersAssetId}/code`);
+    await expect(page.locator(".monaco-editor").first()).toBeVisible({ timeout: 15000 });
+    await page.getByRole("button", { name: "Open explorer" }).click();
+    await page.getByRole("button", { name: "Pipeline settings" }).click();
+
+    const dialog = page.getByRole("dialog", { name: /Pipeline settings/ });
+    await expect(dialog).toBeVisible({ timeout: 15000 });
+    await expect(dialog.getByRole("tablist", { name: "Pipeline settings sections" })).toBeHidden();
+    await dialog.getByRole("button", { name: "Schedule", exact: true }).click();
+    await expect(dialog.getByRole("textbox", { name: /^Schedule/ })).toBeVisible();
   });
 
   test("inferred pipeline defaults are shown and link to the project connection", async ({
