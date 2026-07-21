@@ -1,4 +1,4 @@
-GO ?= /usr/local/go/bin/go
+GO ?= $(or $(shell command -v go 2>/dev/null),/usr/local/go/bin/go)
 PNPM ?= corepack pnpm
 DOCKER ?= docker
 DOCS_IMAGE ?= renart-docs:local
@@ -54,10 +54,10 @@ release-check: rustsqlparser licenses-check
 	$(PNPM) --dir extensions/vscode audit
 
 licenses:
-	node scripts/generate-third-party-notices.mjs
+	GO="$(GO)" node scripts/generate-third-party-notices.mjs
 
 licenses-check:
-	./scripts/check-third-party-licenses.sh
+	GO="$(GO)" ./scripts/check-third-party-licenses.sh
 
 rustsqlparser:
 	@test -n "$(HOST_RUST_TARGET)" || (echo "unable to resolve the Rust host target for toolchain $(RUST_TOOLCHAIN)" >&2; exit 1)
