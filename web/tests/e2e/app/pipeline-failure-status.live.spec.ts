@@ -2,7 +2,7 @@ import { expect, type APIRequestContext } from "@playwright/test";
 import { mkdir, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
-import { liveTest as test, type LiveApp } from "../live-app-fixture";
+import { liveTest as test, timeoutForRetry, type LiveApp } from "../live-app-fixture";
 
 const pipelinePath = "failure-flow";
 const pipelineId = Buffer.from(pipelinePath).toString("base64url");
@@ -46,9 +46,9 @@ test.describe("pipeline failure asset status live", () => {
       test.info().project.name.includes("mobile"),
       "Canvas status transitions are a desktop affordance.",
     );
-    test.setTimeout(150000);
+    test.setTimeout(timeoutForRetry(test.info(), 240000, 60000));
 
-    const sentinelPath = await addFailurePipeline(liveApp);
+    const { sentinelPath, releasePath } = await addFailurePipeline(liveApp);
     await waitForPipelineAssets(liveApp, request);
 
     // Establish successful attempts for all three assets. SQL outputs have
@@ -75,10 +75,19 @@ test.describe("pipeline failure asset status live", () => {
     // has not started and must never inherit pipeline-level pending state.
     await rm(sentinelPath);
     const failedRunId = await triggerPipeline(liveApp, request);
+    await waitForStepStatus(
+      liveApp,
+      request,
+      failedRunId,
+      gateAssetName,
+      "running",
+      timeoutForRetry(test.info(), 90000, 30000),
+    );
     await expect(gateNode.getByText("Running", { exact: true })).toBeVisible({
-      timeout: 30000,
+      timeout: timeoutForRetry(test.info(), 15000),
     });
     await expect(childNode.getByText("Running", { exact: true })).toHaveCount(0);
+    await writeFile(releasePath, "release\n", "utf8");
 
     const failed = await waitForTerminalRun(liveApp, request, failedRunId);
     expect(failed.run.status).toBe("failed");
@@ -130,6 +139,7 @@ async function addFailurePipeline(liveApp: LiveApp) {
   const pipelineDir = join(liveApp.workspaceDir, pipelinePath);
   const assetsDir = join(pipelineDir, "assets", "failure_flow");
   const sentinelPath = join(liveApp.workspaceDir, "failure-flow-sentinel.txt");
+  const releasePath = join(liveApp.workspaceDir, "failure-flow-release.txt");
   await mkdir(assetsDir, { recursive: true });
   await writeFile(sentinelPath, "present\n", "utf8");
   await Promise.all([
@@ -169,7 +179,10 @@ depends:
 import os
 import time
 
-time.sleep(2)
+if not os.path.exists(${JSON.stringify(sentinelPath)}):
+    deadline = time.monotonic() + 120
+    while not os.path.exists(${JSON.stringify(releasePath)}) and time.monotonic() < deadline:
+        time.sleep(0.05)
 assert os.path.exists(${JSON.stringify(sentinelPath)}), "sentinel missing"
 print("gate open")
 `,
@@ -191,7 +204,7 @@ select 3 as value
       "utf8",
     ),
   ]);
-  return sentinelPath;
+  return { sentinelPath, releasePath };
 }
 
 async function waitForPipelineAssets(liveApp: LiveApp, request: APIRequestContext) {
@@ -240,6 +253,25 @@ async function waitForTerminalRun(liveApp: LiveApp, request: APIRequestContext, 
   const detail = await getRun(liveApp, request, runId);
   if (!detail) throw new Error(`Run ${runId} disappeared after reaching a terminal state.`);
   return detail;
+}
+
+async function waitForStepStatus(
+  liveApp: LiveApp,
+  request: APIRequestContext,
+  runId: string,
+  assetName: string,
+  status: string,
+  timeout: number,
+) {
+  await expect
+    .poll(
+      async () => {
+        const detail = await getRun(liveApp, request, runId);
+        return detail ? stepStatus(detail, assetName) : undefined;
+      },
+      { timeout },
+    )
+    .toBe(status);
 }
 
 async function getRun(liveApp: LiveApp, request: APIRequestContext, runId: string) {

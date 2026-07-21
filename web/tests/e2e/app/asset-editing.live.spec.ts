@@ -199,7 +199,7 @@ select customer_id from analytics.customers
 
     await page.goto(`${liveApp.baseURL}/pipelines/${pipelineId}/assets/${customersAssetId}/code`);
     const properties = await openAssetProperties(page);
-    const type = properties.getByRole("textbox", { name: "Type" });
+    const type = properties.getByRole("textbox", { name: "Type", exact: true });
     await expect(type).toHaveValue("duckdb.sql");
     await expect(type).toHaveAttribute("readonly", "");
     await expect(properties.getByRole("combobox", { name: "Type" })).toHaveCount(0);
@@ -296,8 +296,13 @@ select customer_id from analytics.customers
     await expect(properties.getByRole("heading", { name: "Columns" })).toBeVisible();
 
     const identity = properties.getByRole("heading", { name: "Identity" }).locator("../..");
-    await expect(identity.getByRole("textbox", { name: "Type" })).toHaveValue("duckdb.sql");
-    await expect(identity.getByRole("textbox", { name: "Type" })).toHaveAttribute("readonly", "");
+    await expect(identity.getByRole("textbox", { name: "Type", exact: true })).toHaveValue(
+      "duckdb.sql",
+    );
+    await expect(identity.getByRole("textbox", { name: "Type", exact: true })).toHaveAttribute(
+      "readonly",
+      "",
+    );
     await identity.getByRole("combobox", { name: "Connection" }).click();
     await expect(
       page.getByRole("option", { name: /Pipeline default — duckdb-default/ }),
@@ -460,10 +465,13 @@ select customer_id from analytics.customers
     ).toHaveAttribute("data-orientation", "vertical");
     await expect(
       properties
-        .getByRole("textbox", { name: "Type" })
+        .getByRole("textbox", { name: "Type", exact: true })
         .locator('xpath=ancestor::*[@data-slot="field"]'),
     ).toHaveAttribute("data-orientation", "vertical");
-    await expect(properties.getByRole("textbox", { name: "Type" })).toHaveAttribute("readonly", "");
+    await expect(properties.getByRole("textbox", { name: "Type", exact: true })).toHaveAttribute(
+      "readonly",
+      "",
+    );
     await expect(properties.getByRole("combobox", { name: "Type" })).toHaveCount(0);
 
     const unsetResponse = page.waitForResponse(
