@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"net/http"
 	"sort"
 	"sync"
 	"time"
@@ -53,9 +54,19 @@ type notebookRuntime struct {
 
 	debounce   *time.Timer
 	passActive bool
-	// cancelWave interrupts the currently-executing wave so the pass re-loops
-	// with fresh content (a new edit superseded it).
-	cancelWave context.CancelFunc
+
+	// Active manual and auto runs are registered before they enter the shared
+	// notebook session. The cancel endpoint cancels them and waits for their
+	// done channels, so returning from Stop is a barrier: a following run can
+	// acquire the session instead of racing a still-unwinding DuckDB query.
+	manualRuns map[*activeNotebookRun]struct{}
+	autoRun    *activeNotebookRun
+	cancelling bool
+}
+
+type activeNotebookRun struct {
+	cancel context.CancelFunc
+	done   chan struct{}
 }
 
 func newNotebookRuntime() *notebookRuntime {
@@ -64,6 +75,92 @@ func newNotebookRuntime() *notebookRuntime {
 		results:       map[string]notebook.CellRunResult{},
 		autoFailed:    map[string]bool{},
 		autoRecompute: true,
+		manualRuns:    map[*activeNotebookRun]struct{}{},
+	}
+}
+
+func (rt *notebookRuntime) beginManualRun(parent context.Context) (context.Context, func()) {
+	ctx, cancel := context.WithCancel(parent)
+	run := &activeNotebookRun{cancel: cancel, done: make(chan struct{})}
+
+	rt.mu.Lock()
+	rt.manualRuns[run] = struct{}{}
+	cancelling := rt.cancelling
+	rt.mu.Unlock()
+	if cancelling {
+		cancel()
+	}
+
+	return ctx, func() {
+		cancel()
+		rt.mu.Lock()
+		delete(rt.manualRuns, run)
+		close(run.done)
+		rt.mu.Unlock()
+	}
+}
+
+func (rt *notebookRuntime) beginAutoRun(parent context.Context) (context.Context, func()) {
+	ctx, cancel := context.WithCancel(parent)
+	run := &activeNotebookRun{cancel: cancel, done: make(chan struct{})}
+
+	rt.mu.Lock()
+	rt.autoRun = run
+	cancelling := rt.cancelling
+	rt.mu.Unlock()
+	if cancelling {
+		cancel()
+	}
+
+	return ctx, func() {
+		cancel()
+		rt.mu.Lock()
+		if rt.autoRun == run {
+			rt.autoRun = nil
+		}
+		close(run.done)
+		rt.mu.Unlock()
+	}
+}
+
+// cancelActiveRuns cancels every run currently registered for this notebook
+// and waits until each one has completely unwound. Runs that enter while the
+// barrier is active are cancelled too; a run entering after it returns is a
+// new request and may proceed normally.
+func (rt *notebookRuntime) cancelActiveRuns(ctx context.Context) error {
+	rt.mu.Lock()
+	rt.cancelling = true
+	rt.mu.Unlock()
+
+	for {
+		rt.mu.Lock()
+		runs := make([]*activeNotebookRun, 0, len(rt.manualRuns)+1)
+		for run := range rt.manualRuns {
+			runs = append(runs, run)
+		}
+		if rt.autoRun != nil {
+			runs = append(runs, rt.autoRun)
+		}
+		if len(runs) == 0 {
+			rt.cancelling = false
+			rt.mu.Unlock()
+			return nil
+		}
+		rt.mu.Unlock()
+
+		for _, run := range runs {
+			run.cancel()
+		}
+		for _, run := range runs {
+			select {
+			case <-run.done:
+			case <-ctx.Done():
+				rt.mu.Lock()
+				rt.cancelling = false
+				rt.mu.Unlock()
+				return ctx.Err()
+			}
+		}
 	}
 }
 
@@ -314,22 +411,26 @@ func (s *NotebookService) SetAutoRecompute(notebookID string, enabled bool, envi
 	return nil
 }
 
-// CancelAutoRecompute stops an in-flight pass and parks the still-stale cells so
-// they are not auto-retried until edited (the Stop button during auto runs).
-func (s *NotebookService) CancelAutoRecompute(notebookID string) *APIError {
+// CancelRuns stops manual and auto-recompute work and waits for the notebook
+// session to be released. Stale auto cells are parked until edited so the pass
+// does not immediately restart work the user explicitly stopped.
+func (s *NotebookService) CancelRuns(ctx context.Context, notebookID string) *APIError {
 	nb, apiErr := s.load(notebookID)
 	if apiErr != nil {
 		return apiErr
 	}
 	rt := s.runtimes.get(nb.UUID)
 	rt.mu.Lock()
-	cancel := rt.cancelWave
 	for id := range rt.stale {
 		rt.autoFailed[id] = true
 	}
 	rt.mu.Unlock()
-	if cancel != nil {
-		cancel()
+	if err := rt.cancelActiveRuns(ctx); err != nil {
+		return &APIError{
+			Status:  http.StatusRequestTimeout,
+			Code:    "notebook_cancel_interrupted",
+			Message: "notebook cancellation was interrupted before the active run stopped",
+		}
 	}
 	s.publishRuntime(notebookID, nb.UUID, nil, nil, nil)
 	return nil

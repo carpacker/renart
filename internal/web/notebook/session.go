@@ -9,10 +9,7 @@ import (
 	"strings"
 	"sync"
 
-	duck "github.com/bruin-data/bruin/pkg/duckdb"
 	"github.com/bruin-data/bruin/pkg/query"
-
-	"renart/internal/web/duckdbworkspace"
 )
 
 // SessionStore manages the per-notebook DuckDB session files under
@@ -63,7 +60,7 @@ type Session struct {
 	NotebookUUID string
 	Path         string
 
-	client duck.DuckDBClient
+	client *notebookDuckDBClient
 	unlock func()
 }
 
@@ -77,12 +74,11 @@ func (s *SessionStore) Open(notebookUUID string) (*Session, error) {
 	lock.Lock()
 
 	path := s.DBPath(notebookUUID)
-	baseClient, err := duck.NewClient(duck.Config{Path: path})
+	client, err := newNotebookDuckDBClient(context.Background(), path, s.WorkspaceRoot)
 	if err != nil {
 		lock.Unlock()
 		return nil, fmt.Errorf("failed to open notebook session db: %w", err)
 	}
-	client := duckdbworkspace.WrapClient(baseClient, s.WorkspaceRoot)
 
 	session := &Session{
 		NotebookUUID: notebookUUID,
@@ -195,7 +191,7 @@ func removeSessionFiles(path string) error {
 // Close releases the session handle and the per-notebook lock.
 func (s *Session) Close() {
 	if s.client != nil {
-		s.client.Close()
+		s.client.close()
 		s.client = nil
 	}
 	if s.unlock != nil {
@@ -206,12 +202,12 @@ func (s *Session) Close() {
 
 // Exec runs a statement without returning rows.
 func (s *Session) Exec(ctx context.Context, sql string) error {
-	return s.client.RunQueryWithoutResult(ctx, &query.Query{Query: sql})
+	return s.client.exec(ctx, sql)
 }
 
 // Query runs a statement and returns the full result.
 func (s *Session) Query(ctx context.Context, sql string) (*query.QueryResult, error) {
-	return s.client.SelectWithSchema(ctx, &query.Query{Query: sql})
+	return s.client.query(ctx, sql)
 }
 
 // objectType returns the information_schema.tables table_type of an object

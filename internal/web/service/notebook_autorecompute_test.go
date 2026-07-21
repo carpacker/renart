@@ -1,9 +1,11 @@
 package service
 
 import (
+	"context"
 	"reflect"
 	"sort"
 	"testing"
+	"time"
 )
 
 // base (stale, clean) -> doubled (stale, clean): only base runs this wave.
@@ -75,5 +77,66 @@ func TestComputeAutoRecomputeWaveExcludesPythonAndUnloaded(t *testing.T) {
 	}
 	if got := computeAutoRecomputeWave(cells); len(got) != 0 {
 		t.Fatalf("expected empty wave, got %v", got)
+	}
+}
+
+func TestNotebookRuntimeCancelActiveRunsWaitsForRelease(t *testing.T) {
+	rt := newNotebookRuntime()
+	manualCtx, finishManual := rt.beginManualRun(context.Background())
+	autoCtx, finishAuto := rt.beginAutoRun(context.Background())
+
+	manualCancelled := make(chan struct{})
+	autoCancelled := make(chan struct{})
+	releaseManual := make(chan struct{})
+	releaseAuto := make(chan struct{})
+	go func() {
+		<-manualCtx.Done()
+		close(manualCancelled)
+		<-releaseManual
+		finishManual()
+	}()
+	go func() {
+		<-autoCtx.Done()
+		close(autoCancelled)
+		<-releaseAuto
+		finishAuto()
+	}()
+
+	cancelCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	cancelled := make(chan error, 1)
+	go func() { cancelled <- rt.cancelActiveRuns(cancelCtx) }()
+
+	for name, observed := range map[string]<-chan struct{}{
+		"manual": manualCancelled,
+		"auto":   autoCancelled,
+	} {
+		select {
+		case <-observed:
+		case <-time.After(time.Second):
+			t.Fatalf("%s run was not cancelled", name)
+		}
+	}
+	select {
+	case err := <-cancelled:
+		t.Fatalf("cancel returned before either run released the session: %v", err)
+	default:
+	}
+
+	close(releaseManual)
+	select {
+	case err := <-cancelled:
+		t.Fatalf("cancel returned while the auto run was still active: %v", err)
+	default:
+	}
+
+	close(releaseAuto)
+	select {
+	case err := <-cancelled:
+		if err != nil {
+			t.Fatalf("cancel failed: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("cancel did not return after both runs released the session")
 	}
 }

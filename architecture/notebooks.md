@@ -53,6 +53,12 @@ notebooks/
 - One `.duckdb` file per notebook UUID, serialized by a per-UUID in-process
   mutex. Cells materialize as views by default; `@materialize(table)` pins a
   table (Python cells always materialize tables).
+- Session statements use a narrow ADBC adapter that retains each native
+  statement handle and bridges Go context cancellation to the thread-safe ADBC
+  `AdbcStatementCancel` operation. This is necessary because the upstream Go
+  driver-manager execution wrapper does not itself propagate `ExecuteQuery`'s
+  context into the C call; cancelling only the HTTP request would otherwise
+  leave a DuckDB query and the serialized notebook session running.
 - **Import resolver:** a cell referencing a pipeline asset gets the data
   brought into the session. Fast path for DuckDB-backed assets is a zero-copy
   batched `ATTACH; CTAS; DETACH` (ATTACH visibility is per-connection, so it's
@@ -141,9 +147,11 @@ is typing" (a typing→save debounce) and rendering.
   the pass runs wave by wave against the session's *real* schemas,
   re-validating between waves (validation is `ParseContextService.Parse`
   injected as the `ValidateSQL` dep — identical semantics to what the client
-  used to request). A new edit ctx-cancels an in-flight wave; Stop
-  (`POST …/cancel`) halts a server pass. Manual `Run` folds results into the
-  runtime and can unblock downstreams.
+  used to request). A new edit ctx-cancels an in-flight wave. Stop
+  (`POST …/cancel`) cancels both manual and automatic work and does not return
+  until each run has unwound and released the serialized notebook session;
+  the client therefore cannot race a new run against the query it just stopped.
+  Manual `Run` folds results into the runtime and can unblock downstreams.
 - Transport: a single `notebook.runtime` SSE event
   (stale / auto_pending / running / results-delta) tagged with the notebook
   id, via `PublishImmediate`. Endpoints: `GET …/runtime` (seed snapshot),

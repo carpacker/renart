@@ -845,6 +845,9 @@ func (s *NotebookService) Run(ctx context.Context, notebookID string, req RunNot
 	if apiErr != nil {
 		return RunNotebookResult{}, apiErr
 	}
+	rt := s.runtimes.get(nb.UUID)
+	runCtx, finishRun := rt.beginManualRun(ctx)
+	defer finishRun()
 
 	cells, selectErr := s.selectRunCells(nb, req)
 	if selectErr != nil {
@@ -861,10 +864,11 @@ func (s *NotebookService) Run(ctx context.Context, notebookID string, req RunNot
 
 	runner := s.newRunner(renderSQL, req.Environment)
 
-	results, runErr := runner.RunCells(ctx, nb, cells, notebook.RunOptions{RefreshImports: req.RefreshImports})
+	results, runErr := runner.RunCells(runCtx, nb, cells, notebook.RunOptions{RefreshImports: req.RefreshImports})
 	if runErr != nil {
-		// A cancelled run (client aborted, ctx done) is not a server error.
-		if ctx.Err() != nil {
+		// A cancelled run is an expected response, whether cancellation came
+		// from the request context or the explicit Stop endpoint.
+		if runCtx.Err() != nil {
 			return RunNotebookResult{Status: "cancelled", Results: []notebook.CellRunResult{}}, nil
 		}
 		return RunNotebookResult{}, &APIError{Status: http.StatusInternalServerError, Code: "notebook_run_failed", Message: runErr.Error()}
@@ -872,7 +876,6 @@ func (s *NotebookService) Run(ctx context.Context, notebookID string, req RunNot
 
 	// Fold a manual run into the runtime so the server stays the source of
 	// truth, then push the update to any other open tabs.
-	rt := s.runtimes.get(nb.UUID)
 	s.recordResults(rt, results)
 	s.publishRuntimeResultsDelta(notebookID, nb.UUID, results)
 	// A manual run may unblock downstream cells (their upstream is now fresh);

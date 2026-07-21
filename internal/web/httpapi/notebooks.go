@@ -27,7 +27,7 @@ type NotebookHandlers interface {
 	Run(ctx context.Context, notebookID string, req service.RunNotebookRequest) (service.RunNotebookResult, *service.APIError)
 	Runtime(notebookID string) (service.NotebookRuntimeSnapshot, *service.APIError)
 	SetAutoRecompute(notebookID string, enabled bool, environment string) *service.APIError
-	CancelAutoRecompute(notebookID string) *service.APIError
+	CancelRuns(ctx context.Context, notebookID string) *service.APIError
 }
 
 // NotebookAPI exposes notebook CRUD and execution.
@@ -251,7 +251,7 @@ func (h *NotebookAPI) HandleSettings(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *NotebookAPI) HandleCancel(w http.ResponseWriter, r *http.Request) {
-	if apiErr := h.Service.CancelAutoRecompute(chi.URLParam(r, "id")); apiErr != nil {
+	if apiErr := h.Service.CancelRuns(r.Context(), chi.URLParam(r, "id")); apiErr != nil {
 		writeNotebookError(w, apiErr)
 		return
 	}

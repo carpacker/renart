@@ -266,7 +266,9 @@ export function AppNotebookLivePage({ notebookId }: { notebookId: string }) {
   const [staleCells, setStaleCells] = useState<Set<string>>(new Set());
   const [autoPending, setAutoPending] = useState<Set<string>>(new Set());
   const [runningCells, setRunningCells] = useState<Set<string>>(new Set());
-  const [busy, setBusy] = useState(false);
+  const [runBusy, setRunBusy] = useState(false);
+  const [stopping, setStopping] = useState(false);
+  const busy = runBusy || stopping;
   const [actionError, setActionError] = useState("");
   const [notebookScrolled, setNotebookScrolled] = useState(false);
   const [pendingBlock, setPendingBlock] = useState<{
@@ -498,9 +500,9 @@ export function AppNotebookLivePage({ notebookId }: { notebookId: string }) {
     }
   }, []);
 
-  // The in-flight run's abort handle, so the user can stop a slow cell. Aborting
-  // disconnects the request, which cancels the server's context and interrupts
-  // the running DuckDB statement.
+  // The in-flight request is aborted immediately when Stop is pressed, while
+  // the explicit cancellation endpoint provides the durable server-side
+  // barrier that waits for DuckDB to release the notebook session.
   const runAbortRef = useRef<AbortController | null>(null);
   const runRequest = useCallback(
     async (
@@ -509,7 +511,7 @@ export function AppNotebookLivePage({ notebookId }: { notebookId: string }) {
     ) => {
       const controller = new AbortController();
       runAbortRef.current = controller;
-      setBusy(true);
+      setRunBusy(true);
       setActionError("");
       setRunningCells(new Set(targetIds));
       try {
@@ -538,19 +540,23 @@ export function AppNotebookLivePage({ notebookId }: { notebookId: string }) {
         if (runAbortRef.current === controller) {
           runAbortRef.current = null;
         }
-        setBusy(false);
+        setRunBusy(false);
         setRunningCells(new Set());
       }
     },
     [applyResults, flushPendingSaves, notebookId, selectedEnvironment, selectedExecutionTimeWindow],
   );
 
-  // Stop both a manual run (abort the request → cancels the server context and
-  // interrupts the DuckDB statement) and any server-side auto-recompute pass.
+  // Stop both manual and automatic work. Keep the notebook busy until the
+  // server confirms every run has unwound and released the session lock.
   const cancelRun = useCallback(() => {
+    if (stopping) return;
+    setStopping(true);
     runAbortRef.current?.abort();
-    void cancelNotebookRun(notebookId).catch(() => undefined);
-  }, [notebookId]);
+    void cancelNotebookRun(notebookId)
+      .catch((error) => setActionError(String(error)))
+      .finally(() => setStopping(false));
+  }, [notebookId, stopping]);
 
   const allCellIds = useMemo(
     () => (notebook?.cells ?? []).map((cell) => cell.cell_id ?? "").filter(Boolean),
@@ -822,9 +828,13 @@ export function AppNotebookLivePage({ notebookId }: { notebookId: string }) {
                 </Button>
               ) : null}
               {busy || runningCells.size > 0 ? (
-                <Button size="sm" variant="outline" onClick={cancelRun}>
-                  <Square className="size-3.5 fill-current" />
-                  Stop
+                <Button size="sm" variant="outline" disabled={stopping} onClick={cancelRun}>
+                  {stopping ? (
+                    <Loader2 className="size-3.5 animate-spin" />
+                  ) : (
+                    <Square className="size-3.5 fill-current" />
+                  )}
+                  {stopping ? "Stopping…" : "Stop"}
                 </Button>
               ) : (
                 <Button

@@ -29,7 +29,7 @@ func (s *NotebookService) onCellChanged(notebookID string, nb *notebook.Notebook
 		// A fresh edit gives the whole affected subgraph another auto attempt.
 		delete(rt.autoFailed, id)
 	}
-	cancel := rt.cancelWave
+	autoRun := rt.autoRun
 	auto := rt.autoRecompute
 	// Optimistically treat all stale cells as auto-pending so an edit does not
 	// flash the stale treatment; the pass demotes any that won't refresh
@@ -38,8 +38,8 @@ func (s *NotebookService) onCellChanged(notebookID string, nb *notebook.Notebook
 	rt.mu.Unlock()
 
 	// Interrupt any wave in flight so the pass re-loops against the new content.
-	if cancel != nil {
-		cancel()
+	if autoRun != nil {
+		autoRun.cancel()
 	}
 
 	s.publishRuntime(notebookID, nb.UUID, optimisticPending, nil, nil)
@@ -147,16 +147,8 @@ func (s *NotebookService) runAutoWave(uuid string, nb *notebook.Notebook, wave [
 		return nil, false
 	}
 
-	ctx, cancel := context.WithCancel(context.Background())
-	rt.mu.Lock()
-	rt.cancelWave = cancel
-	rt.mu.Unlock()
-	defer func() {
-		rt.mu.Lock()
-		rt.cancelWave = nil
-		rt.mu.Unlock()
-		cancel()
-	}()
+	ctx, finishRun := rt.beginAutoRun(context.Background())
+	defer finishRun()
 
 	runner := s.newRunner(renderSQL, environment)
 	results, runErr := runner.RunCells(ctx, nb, cells, notebook.RunOptions{})
