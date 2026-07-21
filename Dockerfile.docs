@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1
 
-FROM node:24-alpine AS build
+FROM node:24-alpine@sha256:a0b9bf06e4e6193cf7a0f58816cc935ff8c2a908f81e6f1a95432d679c54fbfd AS build
 
 WORKDIR /app
 
@@ -9,7 +9,7 @@ ARG RENART_COMMIT
 ENV RENART_VERSION=${RENART_VERSION}
 ENV RENART_COMMIT=${RENART_COMMIT}
 
-RUN corepack enable && corepack prepare pnpm@10.24.0 --activate
+RUN corepack enable && corepack prepare pnpm@10.33.0 --activate
 
 COPY docs/package.json docs/pnpm-lock.yaml ./docs/
 WORKDIR /app/docs
@@ -22,7 +22,7 @@ COPY web/public/icons/icon.svg ./web/public/icons/icon.svg
 WORKDIR /app/docs
 RUN pnpm build
 
-FROM caddy:2-alpine AS runtime
+FROM caddy:2-alpine@sha256:5f5c8640aae01df9654968d946d8f1a56c497f1dd5c5cda4cf95ab7c14d58648 AS runtime
 
 COPY docs/Caddyfile /etc/caddy/Caddyfile
 COPY --from=build /app/docs/dist /usr/share/caddy

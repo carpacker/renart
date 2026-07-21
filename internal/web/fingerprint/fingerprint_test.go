@@ -157,6 +157,18 @@ func TestConfigChangeChangesFingerprint(t *testing.T) {
 	assert.NotEqual(t, before["pipeline-uuid:a"].FP, after["pipeline-uuid:a"].FP)
 }
 
+func TestIncrementalPredicateChangesFingerprintWithoutDestabilizingEmptyMaterializations(t *testing.T) {
+	t.Parallel()
+	baseAsset := sqlAsset("a", "select 1")
+	predicateAsset := sqlAsset("a", "select 1")
+	predicateAsset.Materialization.IncrementalPredicate = "event_at >= '{{ start_datetime }}'"
+
+	base := dagOf(t, testPipeline(baseAsset), Vars{})
+	withPredicate := dagOf(t, testPipeline(predicateAsset), Vars{})
+
+	assert.NotEqual(t, base["pipeline-uuid:a"].FP, withPredicate["pipeline-uuid:a"].FP)
+}
+
 func TestPinnedVersionEscapeHatchReplacesContentHash(t *testing.T) {
 	t.Parallel()
 	pinned := func(content string) map[string]Result {

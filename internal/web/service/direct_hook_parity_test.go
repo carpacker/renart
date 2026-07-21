@@ -17,6 +17,22 @@ type hookParityBatchConnection struct {
 	queries []string
 }
 
+type databricksHookParityBatchConnection struct {
+	*hookParityBatchConnection
+}
+
+func (c *databricksHookParityBatchConnection) CreateSchemaIfNotExist(_ context.Context, _ *pipeline.Asset, _ string) error {
+	return nil
+}
+
+func newHookParityConnection(assetType pipeline.AssetType) (*hookParityBatchConnection, any) {
+	recorder := &hookParityBatchConnection{}
+	if assetType == pipeline.AssetTypeDatabricksQuery {
+		return recorder, &databricksHookParityBatchConnection{hookParityBatchConnection: recorder}
+	}
+	return recorder, recorder
+}
+
 func (c *hookParityBatchConnection) RunQueryWithoutResult(_ context.Context, queryToRun *query.Query) error {
 	c.queries = append(c.queries, queryToRun.Query)
 	return nil
@@ -78,10 +94,10 @@ select 'main' as phase
 `, test.assetType)
 			_, root := writeTypeCheckWorkspace(t, pipelineYAML, map[string]string{"report.sql": assetSQL})
 
-			connection := &hookParityBatchConnection{}
+			connection, runtimeConnection := newHookParityConnection(test.assetType)
 			executor := newCompatDirectExecutor(root, "")
 			executor.newConnectionManager = func(context.Context, string) (config.ConnectionAndDetailsGetter, error) {
-				return &stubConnectionManager{conn: connection}, nil
+				return &stubConnectionManager{conn: runtimeConnection}, nil
 			}
 
 			_, err := executor.RunAsset(context.Background(), RunAssetRequest{

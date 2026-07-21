@@ -24,6 +24,19 @@ func TestNormalizeTriggerEnvironmentBeforePolicyLookup(t *testing.T) {
 	assert.Equal(t, "dev", normalizeTriggerEnvironment("  ", "  dev  "))
 }
 
+func TestValidateWebBindHostRequiresExplicitRemoteOptIn(t *testing.T) {
+	t.Parallel()
+
+	for _, host := range []string{"127.0.0.1", "127.0.0.42", "::1", "[::1]", "::1%lo", "localhost", "LOCALHOST"} {
+		assert.NoError(t, validateWebBindHost(host, false), host)
+	}
+	for _, host := range []string{"", "0.0.0.0", "::", "192.168.1.10", "renart.internal"} {
+		err := validateWebBindHost(host, false)
+		require.ErrorContains(t, err, "--unsafe-allow-remote", host)
+		assert.NoError(t, validateWebBindHost(host, true), host)
+	}
+}
+
 func TestScheduleDeclarationRelevantPath(t *testing.T) {
 	t.Parallel()
 	for path, expected := range map[string]bool{

@@ -1,8 +1,10 @@
 {
   "name": "renart-sql-lsp",
   "displayName": "Renart SQL LSP",
-  "description": "SQL language server support for dbt and Bruin data pipeline projects.",
+  "description": "Experimental SQL language-server client for Renart projects.",
   "version": "0.1.0",
+  "private": true,
+  "packageManager": "pnpm@10.33.0",
   "publisher": "renart",
   "engines": {
     "vscode": "^1.96.0"
@@ -43,7 +45,8 @@
   "scripts": {
     "build": "tsc -p .",
     "watch": "tsc -w -p .",
-    "typecheck": "tsc --noEmit -p ."
+    "typecheck": "tsc --noEmit -p .",
+    "audit": "pnpm audit --audit-level=low"
   },
   "dependencies": {
     "vscode-languageclient": "^10.1.0"

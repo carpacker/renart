@@ -13,6 +13,12 @@ This installs a single `renart` binary — the web UI, the scheduler, and the
 CLI are all inside it. There is no service to stand up and no account to
 create.
 
+Public-alpha archives are available for Linux (x86-64 and ARM64), macOS
+(Intel and Apple silicon), and Windows x86-64. Linux builds require glibc 2.31
+or newer. Release archives include checksums, a software bill of materials,
+and third-party notices; the installer verifies the downloaded archive against
+the published checksum.
+
 ## Start Renart
 
 Start Renart inside a git repository:
@@ -21,16 +27,19 @@ Start Renart inside a git repository:
 renart
 ```
 
-This opens the desktop app. To run Renart in your browser instead, start the web
-server directly. It opens on `127.0.0.1:8080` by default; if that port is taken,
-it picks the next free one and prints the URL. To choose the address yourself:
+This opens the Renart IDE in your browser. It listens on `127.0.0.1:8080` by
+default; if that port is taken, it picks the next free one and prints the URL.
+To choose the port yourself:
 
 ```bash
-renart web --host 127.0.0.1 --port 9000 --no-open
+renart web --port 9000 --no-open
 ```
 
-You can also point either mode at a workspace explicitly: `renart standalone
-path/to/repo` or `renart web path/to/repo`.
+You can also point it at a workspace explicitly: `renart web path/to/repo`.
+
+The source tree includes an optional `renart-gui` native-window helper for
+contributors. It is not included in the public-alpha release archives; when the
+helper is unavailable, `renart standalone` uses the browser UI as well.
 
 :::note[Renart needs a git repository]
 Renart is built around git-native workspaces: every edit it makes is a plain

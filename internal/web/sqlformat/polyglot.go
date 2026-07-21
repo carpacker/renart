@@ -18,7 +18,7 @@ import (
 	"github.com/tetratelabs/wazero/api"
 )
 
-// The embedded WASM is dist/polyglot_sql.wasm from @polyglot-sql/sdk@0.4.3.
+// The embedded WASM is dist/polyglot_sql.wasm from @polyglot-sql/sdk@0.5.15.
 //
 //go:embed polyglot_sql.wasm
 var wasmFS embed.FS

@@ -431,15 +431,30 @@ func assetContent(asset *pipeline.Asset) string {
 // changes what lands in the warehouse. Display-only metadata (description,
 // owner, tags) is deliberately excluded.
 type fingerprintedConfig struct {
-	Name              string                     `json:"name"`
-	Type              string                     `json:"type"`
-	Connection        string                     `json:"connection"`
-	Materialization   pipeline.Materialization   `json:"materialization"`
-	Parameters        pipeline.ParameterMap      `json:"parameters,omitempty"`
-	Image             string                     `json:"image,omitempty"`
-	Instance          string                     `json:"instance,omitempty"`
-	IntervalModifiers pipeline.IntervalModifiers `json:"interval_modifiers"`
-	Columns           []fingerprintedColumn      `json:"columns,omitempty"`
+	Name              string                        `json:"name"`
+	Type              string                        `json:"type"`
+	Connection        string                        `json:"connection"`
+	Materialization   *fingerprintedMaterialization `json:"materialization"`
+	Parameters        pipeline.ParameterMap         `json:"parameters,omitempty"`
+	Image             string                        `json:"image,omitempty"`
+	Instance          string                        `json:"instance,omitempty"`
+	IntervalModifiers pipeline.IntervalModifiers    `json:"interval_modifiers"`
+	Columns           []fingerprintedColumn         `json:"columns,omitempty"`
+}
+
+// fingerprintedMaterialization is deliberately owned by Renart instead of
+// embedding pipeline.Materialization. Bruin occasionally adds execution
+// fields to its struct; an empty new field must not silently change Renart's
+// existing fingerprint version. New fields that affect produced data can be
+// added here with omitempty so existing assets remain stable.
+type fingerprintedMaterialization struct {
+	Type                 pipeline.MaterializationType            `json:"type"`
+	Strategy             pipeline.MaterializationStrategy        `json:"strategy"`
+	PartitionBy          string                                  `json:"partition_by"`
+	ClusterBy            []string                                `json:"cluster_by"`
+	IncrementalKey       string                                  `json:"incremental_key"`
+	TimeGranularity      pipeline.MaterializationTimeGranularity `json:"time_granularity"`
+	IncrementalPredicate string                                  `json:"incremental_predicate,omitempty"`
 }
 
 type fingerprintedColumn struct {
@@ -476,7 +491,7 @@ func configHash(asset *pipeline.Asset, p *pipeline.Pipeline) string {
 		Name:              asset.Name,
 		Type:              string(asset.Type),
 		Connection:        connection,
-		Materialization:   asset.Materialization,
+		Materialization:   materializationForFingerprint(asset.Materialization),
 		Parameters:        asset.Parameters,
 		Image:             asset.Image,
 		Instance:          asset.Instance,
@@ -484,6 +499,28 @@ func configHash(asset *pipeline.Asset, p *pipeline.Pipeline) string {
 		Columns:           columns,
 	}
 	return hashHex("config", canonicalJSON(cfg))
+}
+
+func materializationForFingerprint(materialization pipeline.Materialization) *fingerprintedMaterialization {
+	if materialization.Type == "" &&
+		materialization.Strategy == "" &&
+		materialization.PartitionBy == "" &&
+		len(materialization.ClusterBy) == 0 &&
+		materialization.IncrementalKey == "" &&
+		materialization.TimeGranularity == "" &&
+		materialization.IncrementalPredicate == "" {
+		return nil
+	}
+
+	return &fingerprintedMaterialization{
+		Type:                 materialization.Type,
+		Strategy:             materialization.Strategy,
+		PartitionBy:          materialization.PartitionBy,
+		ClusterBy:            materialization.ClusterBy,
+		IncrementalKey:       materialization.IncrementalKey,
+		TimeGranularity:      materialization.TimeGranularity,
+		IncrementalPredicate: materialization.IncrementalPredicate,
+	}
 }
 
 func topoSort(p *pipeline.Pipeline) ([]*pipeline.Asset, error) {

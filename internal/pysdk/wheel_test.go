@@ -36,17 +36,18 @@ func TestEnsureWheelProducesValidWheel(t *testing.T) {
 	defer reader.Close()
 
 	want := map[string]bool{
-		"renart/__init__.py":                             false,
-		"renart/__init__.pyi":                            false,
-		"renart/_client.py":                              false,
-		"renart/_client.pyi":                             false,
-		"renart/context.py":                              false,
-		"renart/context.pyi":                             false,
-		"renart/py.typed":                                false,
-		"renart-" + Version + ".dist-info/METADATA":      false,
-		"renart-" + Version + ".dist-info/WHEEL":         false,
-		"renart-" + Version + ".dist-info/RECORD":        false,
-		"renart-" + Version + ".dist-info/top_level.txt": false,
+		"renart/__init__.py":                                false,
+		"renart/__init__.pyi":                               false,
+		"renart/_client.py":                                 false,
+		"renart/_client.pyi":                                false,
+		"renart/context.py":                                 false,
+		"renart/context.pyi":                                false,
+		"renart/py.typed":                                   false,
+		"renart-" + Version + ".dist-info/METADATA":         false,
+		"renart-" + Version + ".dist-info/WHEEL":            false,
+		"renart-" + Version + ".dist-info/RECORD":           false,
+		"renart-" + Version + ".dist-info/top_level.txt":    false,
+		"renart-" + Version + ".dist-info/licenses/LICENSE": false,
 	}
 	for _, file := range reader.File {
 		if _, ok := want[file.Name]; ok {
@@ -135,6 +136,22 @@ func TestBuildWheelUsesConfiguredVersionAndIsDeterministic(t *testing.T) {
 	metadata := readWheelFile(t, path, "renart-1.2.3.dist-info/METADATA")
 	if !strings.Contains(metadata, "Name: renart\nVersion: 1.2.3\n") {
 		t.Fatalf("wheel metadata does not contain the configured version:\n%s", metadata)
+	}
+	for _, field := range []string{
+		"Metadata-Version: 2.4\n",
+		"License-Expression: Apache-2.0\n",
+		"License-File: licenses/LICENSE\n",
+		"Classifier: Development Status :: 3 - Alpha\n",
+		"Classifier: Typing :: Typed\n",
+		"Requires-Dist: pandas>=1.5\n",
+	} {
+		if !strings.Contains(metadata, field) {
+			t.Errorf("wheel metadata is missing %q:\n%s", field, metadata)
+		}
+	}
+	license := readWheelFile(t, path, "renart-1.2.3.dist-info/licenses/LICENSE")
+	if !strings.Contains(license, "Apache License") || !strings.Contains(license, "Version 2.0") {
+		t.Fatal("wheel does not contain the Apache-2.0 license")
 	}
 
 	path, err = BuildWheel(dir)

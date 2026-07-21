@@ -22,14 +22,15 @@ import (
 	"strings"
 )
 
-//go:embed src/renart/* stubs/*/*.pyi
+//go:embed LICENSE src/renart/* stubs/*/*.pyi
 var sdkSource embed.FS
 
 // Version is the SDK's wheel version. Release builds inject the Renart release
 // version with -X so the wheel embedded in the binary and the wheel published
-// to PyPI always have the same version. The default is the next release version
-// used by development and snapshot builds.
-var Version = "0.3.0"
+// to PyPI always have the same version. Development builds deliberately use a
+// PEP 440 development version so their cache key can never masquerade as a
+// published release.
+var Version = "0.0.0.dev0"
 
 const (
 	distribution       = "renart"
@@ -50,17 +51,21 @@ Tag: ` + wheelTag + `
 // format="pandas" calls and pyarrow.Table.to_pandas().
 func packageMetadata() string {
 	return strings.TrimLeft(`
-Metadata-Version: 2.1
+Metadata-Version: 2.4
 Name: renart
 Version: `+Version+`
 Summary: Renart SDK for Python assets: query project data through the renart runner.
 Home-page: https://getrenart.com
 Project-URL: Documentation, https://getrenart.com/docs/asset-types/python-assets/
 Project-URL: Source, https://github.com/renart-data/renart
-License: Apache-2.0
+License-Expression: Apache-2.0
+License-File: licenses/LICENSE
 Requires-Python: >=3.9
 Requires-Dist: pyarrow>=15.0.0
 Requires-Dist: pandas>=1.5
+Classifier: Development Status :: 3 - Alpha
+Classifier: Programming Language :: Python :: 3
+Classifier: Typing :: Typed
 Description-Content-Type: text/markdown
 
 # Renart Python SDK
@@ -149,10 +154,15 @@ func wheelEntries() ([]wheelEntry, error) {
 	sort.Slice(entries, func(i, j int) bool { return entries[i].name < entries[j].name })
 
 	distInfo := distribution + "-" + Version + ".dist-info"
+	license, err := sdkSource.ReadFile("LICENSE")
+	if err != nil {
+		return nil, fmt.Errorf("read SDK license: %w", err)
+	}
 	entries = append(entries,
 		wheelEntry{name: distInfo + "/METADATA", content: []byte(packageMetadata())},
 		wheelEntry{name: distInfo + "/WHEEL", content: []byte(wheelMetadataFile)},
 		wheelEntry{name: distInfo + "/top_level.txt", content: []byte("renart\n")},
+		wheelEntry{name: distInfo + "/licenses/LICENSE", content: license},
 	)
 
 	record := &strings.Builder{}

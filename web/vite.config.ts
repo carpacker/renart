@@ -30,8 +30,17 @@ function prepareMonacoAssetsPlugin(): Plugin {
       return;
     }
 
-    const loaderPath = require.resolve("monaco-editor/min/vs/loader.js");
-    const sourceDir = path.dirname(loaderPath);
+    let packageRoot = path.dirname(require.resolve("monaco-editor"));
+    while (
+      packageRoot !== path.dirname(packageRoot) &&
+      !fs.existsSync(path.join(packageRoot, "package.json"))
+    ) {
+      packageRoot = path.dirname(packageRoot);
+    }
+    const sourceDir = path.join(packageRoot, "min", "vs");
+    if (!fs.existsSync(path.join(sourceDir, "loader.js"))) {
+      throw new Error(`Monaco AMD assets were not found under ${sourceDir}`);
+    }
     const targetDir = path.resolve(__dirname, "public/monaco/vs");
 
     fs.rmSync(targetDir, { recursive: true, force: true });

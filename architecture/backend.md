@@ -59,6 +59,15 @@ handler-triggered events. Self-write suppression (a short window in
 `WorkspaceCoordinator`) prevents the server's own file writes from echoing
 back as change events.
 
+The browser server binds to loopback by default. Because the HTTP API can edit
+workspace files and execute user-authored pipeline code, `renart web` rejects
+non-loopback hosts unless the operator explicitly supplies
+`--unsafe-allow-remote`. That override logs and prints a warning; it does not
+add remote authentication and is intended only behind a trusted access layer.
+The `standalone` server always binds to loopback. Renart commands do not install
+Bruin's command telemetry hooks, so the application itself sends no usage
+telemetry.
+
 Concurrent file writes are serialized by a per-file lock in the asset write
 path (fast successive edits used to race read-modify-write cycles and drop
 content).
@@ -926,7 +935,12 @@ asset.
 - **Deployment.** Single binary: embedded frontend, embedded Python (uv),
   pure-Go SQLite. Port fallback, browser auto-open, graceful shutdown
   (scheduler `Stop()` drains River, then escalates to context cancellation if
-  workers do not stop within the grace period).
+  workers do not stop within the grace period). Bruin's Rust SQL-parser archive
+  is built with the pinned Rust toolchain into Renart's external cache and
+  supplied through `CGO_LDFLAGS`; release and local builds never modify the Go
+  module cache. Linux releases use checksum-pinned Zig with a glibc 2.31 target,
+  and archive smoke tests enforce that ceiling alongside checksums, SBOMs,
+  third-party notices, and executable startup.
 
 ## 6. Embedded engines & memory
 

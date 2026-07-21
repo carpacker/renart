@@ -18,12 +18,9 @@
     "test:e2e": "playwright test",
     "test:e2e:headed": "playwright test --headed",
     "test:e2e:live": "corepack pnpm build && PWTEST_CACHE_DIR=/dev/shm/bruin-playwright/cache playwright test --config=playwright.live.config.ts",
-    "docs:screenshots": "corepack pnpm build && node ./scripts/capture-onboarding-screenshots.mjs",
     "landing:media": "corepack pnpm build && node ./scripts/capture-landing-media.mjs",
     "docs:media": "corepack pnpm build && node ./scripts/capture-docs-media.mjs",
-    "tutorial:quick-tour": "corepack pnpm build && node ./scripts/tutorials/render-tutorial.mjs ./scripts/tutorials/tutorial-01-quick-tour.json",
-    "tutorial:build-pipeline": "corepack pnpm build && node ./scripts/tutorials/render-tutorial.mjs ./scripts/tutorials/tutorial-02-build-a-pipeline.json",
-    "audit": "pnpm audit --audit-level=high"
+    "audit": "pnpm audit --audit-level=low"
   },
   "dependencies": {
     "@base-ui/react": "^1.6.0",
@@ -47,7 +44,6 @@
     "react-resizable-panels": "^4.12.1",
     "reactflow": "^11.11.4",
     "recharts": "3.9.2",
-    "shadcn": "^4.13.0",
     "swr": "^2.4.2",
     "tailwind-merge": "^3.6.0",
     "tw-animate-css": "^1.4.0"
@@ -62,11 +58,19 @@
     "@types/react": "^19.2.17",
     "@types/react-dom": "^19.2.3",
     "@vitejs/plugin-react": "^6.0.3",
-    "monaco-editor": "0.55.1",
+    "monaco-editor": "0.56.0",
     "oxfmt": "^0.58.0",
     "oxlint": "^1.73.0",
+    "shadcn": "^4.13.1",
     "tailwindcss": "^4.3.2",
     "typescript": "^7.0.2",
     "vite": "^8.1.4"
+  },
+  "packageManager": "pnpm@10.33.0",
+  "pnpm": {
+    "overrides": {
+      "@hono/node-server": "2.0.5",
+      "dompurify": "3.4.12"
+    }
   }
 }

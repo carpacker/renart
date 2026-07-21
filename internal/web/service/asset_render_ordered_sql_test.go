@@ -71,10 +71,10 @@ hooks:
 select 'main' as phase
 `, tt.assetType)})
 
-			connection := &hookParityBatchConnection{}
+			connection, runtimeConnection := newHookParityConnection(tt.assetType)
 			executor := newCompatDirectExecutor(root, "")
 			executor.newConnectionManager = func(context.Context, string) (config.ConnectionAndDetailsGetter, error) {
-				return &stubConnectionManager{conn: connection}, nil
+				return &stubConnectionManager{conn: runtimeConnection}, nil
 			}
 			_, err := executor.RunAsset(context.Background(), RunAssetRequest{
 				AssetPath: filepath.Join(root, "analytics", "assets", "report.sql"),

@@ -19,7 +19,6 @@ import (
 	"github.com/bruin-data/bruin/pkg/connection"
 	"github.com/bruin-data/bruin/pkg/git"
 	"github.com/bruin-data/bruin/pkg/pipeline"
-	"github.com/bruin-data/bruin/pkg/telemetry"
 	"github.com/go-chi/chi/v5"
 	"github.com/spf13/afero"
 	"github.com/urfave/cli/v3"
@@ -103,6 +102,10 @@ func Web() *cli.Command {
 				Value: 8080,
 				Usage: "HTTP port",
 			},
+			&cli.BoolFlag{
+				Name:  "unsafe-allow-remote",
+				Usage: "allow binding to a non-loopback host without remote authentication",
+			},
 			&cli.StringFlag{
 				Name:  "tls-cert",
 				Usage: "optional TLS certificate path; enables HTTPS and HTTP/2 when used with --tls-key",
@@ -123,6 +126,11 @@ func Web() *cli.Command {
 			ctx, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
 			defer stop()
 
+			host := strings.TrimSpace(c.String("host"))
+			if err := validateWebBindHost(host, c.Bool("unsafe-allow-remote")); err != nil {
+				return err
+			}
+
 			cfg, err := serverConfigFromCommand(c)
 			if err != nil {
 				return err
@@ -133,6 +141,13 @@ func Web() *cli.Command {
 				return err
 			}
 			defer func() { _ = logger.Sync() }()
+			if !isLoopbackBindHost(host) {
+				logger.Warn("Renart is listening on a non-loopback interface without remote authentication",
+					zap.String("host", host),
+					zap.String("warning", "any client that can reach this server may edit workspace files and run pipeline code"),
+				)
+				fmt.Fprintf(os.Stderr, "WARNING: --unsafe-allow-remote exposes Renart without remote authentication; reachable clients may edit files and run code.\n")
+			}
 
 			defaultRuntime, err := newProjectRuntime(ctx, logger, cfg)
 			if err != nil {
@@ -149,7 +164,6 @@ func Web() *cli.Command {
 			sessionToken := newSessionToken()
 			router := buildRootRouter(manager, defaultRuntime, sessionToken)
 
-			host := c.String("host")
 			port := c.Int("port")
 			tlsCert := strings.TrimSpace(c.String("tls-cert"))
 			tlsKey := strings.TrimSpace(c.String("tls-key"))
@@ -202,9 +216,27 @@ func Web() *cli.Command {
 
 			return nil
 		},
-		Before: telemetry.BeforeCommand,
-		After:  telemetry.AfterCommand,
 	}
+}
+
+func validateWebBindHost(host string, allowRemote bool) error {
+	if isLoopbackBindHost(host) || allowRemote {
+		return nil
+	}
+	return fmt.Errorf("refusing to bind Renart to non-loopback host %q: the API can edit workspace files and run code and does not provide remote authentication; use --unsafe-allow-remote only behind a trusted access layer", host)
+}
+
+func isLoopbackBindHost(host string) bool {
+	host = strings.TrimSpace(host)
+	if strings.EqualFold(host, "localhost") {
+		return true
+	}
+	host = strings.TrimPrefix(strings.TrimSuffix(host, "]"), "[")
+	if zoneIndex := strings.LastIndexByte(host, '%'); zoneIndex >= 0 {
+		host = host[:zoneIndex]
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
 }
 
 // loopbackAddress rewrites a wildcard listen address into one a local CLI

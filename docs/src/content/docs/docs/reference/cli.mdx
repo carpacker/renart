@@ -9,7 +9,7 @@ version.
 
 | Command | Purpose |
 | --- | --- |
-| `renart` | Start the desktop app (the default). |
+| `renart` | Start the browser-based IDE (the default release behavior). |
 | `renart web` | Start the Renart IDE. |
 | `renart run` | Run a pipeline or asset. |
 | `renart render` | Preview one saved asset without executing it. |
@@ -17,7 +17,7 @@ version.
 | `renart type-check` | Validate a pipeline's saved assets. |
 | `renart deploy` | Snapshot a pipeline for scheduled execution. |
 | `renart init` | Scaffold a project. |
-| `renart standalone` | Start the desktop app. |
+| `renart standalone` | Use the optional native helper, falling back to the browser. |
 
 Commands that take a pipeline or asset find your workspace the way git
 finds a repository: they walk up from the current directory, so you can run
@@ -34,9 +34,10 @@ renart web [options] [workspace root]
 
 | Flag | Default | Meaning |
 | --- | --- | --- |
-| `--host` | `127.0.0.1` | Host interface to bind. |
+| `--host` | `127.0.0.1` | Host interface to bind. Non-loopback hosts require `--unsafe-allow-remote`. |
 | `--port` | `8080` | HTTP port; if taken, the next free port is used. |
 | `--no-open` | | Don't open the browser after startup. |
+| `--unsafe-allow-remote` | | Allow an unauthenticated non-loopback listener. Unsafe; prefer a local tunnel. |
 | `--watch-mode` | `auto` | Workspace watcher: `auto`, `fsnotify`, or `poll`. |
 | `--watch-poll-interval` | `2s` | Poll interval when polling. |
 | `--scheduler` | | Run the local in-process scheduler. |
@@ -165,7 +166,8 @@ unless it is already inside one.
 
 ## renart standalone
 
-Runs Renart as a desktop app (an embedded server plus a native window).
-Takes the same watcher and scheduler flags as `renart web`; `--port`
-defaults to `0`, which picks a free loopback port. Running `renart` without a
-subcommand is equivalent to `renart standalone`.
+Starts the same embedded server as `renart web` and uses the optional
+`renart-gui` helper when it is installed next to the Renart binary. Public-alpha
+archives do not include that helper, so the command logs the fallback and opens
+the browser instead. `--port` defaults to `0`, which picks a free loopback port.
+Running `renart` without a subcommand is equivalent to `renart standalone`.

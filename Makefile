@@ -4,14 +4,22 @@ DOCKER ?= docker
 DOCS_IMAGE ?= renart-docs:local
 RENART_VERSION ?= $(shell git describe --tags --abbrev=0 2>/dev/null || echo local)
 RENART_COMMIT ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo unknown)
+RENART_CACHE_HOME ?= $(if $(XDG_CACHE_HOME),$(XDG_CACHE_HOME),$(HOME)/.cache)
+RUST_TOOLCHAIN ?= 1.96.0
+HOST_RUST_TARGET = $(shell rustup run $(RUST_TOOLCHAIN) rustc -vV 2>/dev/null | sed -n 's/^host: //p')
+RUSTSQLPARSER_LIB_DIR = $(RENART_CACHE_HOME)/renart/rustsqlparser/target/$(HOST_RUST_TARGET)/release
 
-.PHONY: help dev build test check go-build go-test standalone-build web-install web-build web-typecheck web-test-live web-sync-polyglot-wasm docs-install docs-build docs-dev docs-preview docs-screenshots landing-media docs-media docs-docker docs-docker-run sync-install clean
+.PHONY: help dev build test check release-check licenses licenses-check rustsqlparser go-build go-test standalone-build web-install web-build web-typecheck web-test-live web-sync-polyglot-wasm docs-install docs-build docs-dev docs-preview landing-media docs-media docs-docker docs-docker-run sync-install clean
 
 help:
 	@printf "Renart build targets\n\n"
 	@printf "  make dev               Hot-reload dev servers (Go backend + Vite frontend)\n"
 	@printf "  make build             Build Go binary, web app, and docs\n"
 	@printf "  make check             Run Go tests plus web/docs builds\n"
+	@printf "  make release-check     Run local alpha release checks\n"
+	@printf "  make licenses          Regenerate third-party notices\n"
+	@printf "  make licenses-check    Verify dependency licenses and notices\n"
+	@printf "  make rustsqlparser     Build the pinned Bruin parser into the external cache\n"
 	@printf "  make go-build          Build Renart CLI\n"
 	@printf "  make standalone-build  Build Renart CLI plus the renart-gui desktop helper\n"
 	@printf "  make go-test           Run Go tests\n"
@@ -21,7 +29,6 @@ help:
 	@printf "  make web-test-live     Run live Playwright tests\n"
 	@printf "  make docs-build        Build Astro/Starlight docs\n"
 	@printf "  make docs-dev          Start docs dev server\n"
-	@printf "  make docs-screenshots  Regenerate docs quickstart screenshots\n"
 	@printf "  make landing-media     Regenerate landing media\n"
 	@printf "  make docs-media        Regenerate docs screenshots\n"
 	@printf "  make docs-docker       Build Caddy docs image\n"
@@ -35,10 +42,31 @@ dev:
 
 check: go-test web-build docs-build
 
+release-check: rustsqlparser licenses-check
+	$(GO) mod verify
+	CGO_LDFLAGS="-L$(RUSTSQLPARSER_LIB_DIR) $(CGO_LDFLAGS)" $(GO) test -p=1 ./...
+	CGO_LDFLAGS="-L$(RUSTSQLPARSER_LIB_DIR) $(CGO_LDFLAGS)" $(GO) vet -p=1 ./...
+	$(PNPM) --dir web check
+	$(PNPM) --dir web audit
+	$(PNPM) --dir docs build
+	$(PNPM) --dir docs audit
+	$(PNPM) --dir extensions/vscode typecheck
+	$(PNPM) --dir extensions/vscode audit
+
+licenses:
+	node scripts/generate-third-party-notices.mjs
+
+licenses-check:
+	./scripts/check-third-party-licenses.sh
+
+rustsqlparser:
+	@test -n "$(HOST_RUST_TARGET)" || (echo "unable to resolve the Rust host target for toolchain $(RUST_TOOLCHAIN)" >&2; exit 1)
+	GO="$(GO)" RENART_RUST_TOOLCHAIN="$(RUST_TOOLCHAIN)" ./scripts/build_rustsqlparser_release_lib.sh "$(HOST_RUST_TARGET)"
+
 test: go-test
 
-go-build:
-	$(GO) build .
+go-build: rustsqlparser
+	CGO_LDFLAGS="-L$(RUSTSQLPARSER_LIB_DIR) $(CGO_LDFLAGS)" $(GO) build .
 
 # Builds the desktop helper used by `renart standalone`. Platform deps:
 # Linux needs gtk3 + webkit2gtk dev packages, macOS needs the Xcode command
@@ -46,8 +74,8 @@ go-build:
 standalone-build: go-build
 	$(GO) build -tags webkit2_41,standalone,desktop,production -o renart-gui ./cmd/renart-gui
 
-go-test:
-	$(GO) test ./...
+go-test: rustsqlparser
+	CGO_LDFLAGS="-L$(RUSTSQLPARSER_LIB_DIR) $(CGO_LDFLAGS)" $(GO) test ./...
 
 web-install:
 	$(PNPM) --dir web install --frozen-lockfile
@@ -75,9 +103,6 @@ docs-dev:
 
 docs-preview:
 	$(PNPM) --dir docs preview
-
-docs-screenshots:
-	$(PNPM) --dir web docs:screenshots
 
 landing-media:
 	$(PNPM) --dir web landing:media

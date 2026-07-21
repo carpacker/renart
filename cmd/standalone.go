@@ -15,7 +15,6 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/bruin-data/bruin/pkg/telemetry"
 	"github.com/urfave/cli/v3"
 	"go.uber.org/zap"
 	"renart/internal/clientapi"
@@ -58,8 +57,6 @@ func Standalone() *cli.Command {
 			}
 			return nil
 		},
-		Before: telemetry.BeforeCommand,
-		After:  telemetry.AfterCommand,
 	}
 }
 

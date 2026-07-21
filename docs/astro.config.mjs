@@ -153,6 +153,7 @@ export default defineConfig({
           label: 'Reference',
           items: [
             { label: 'CLI reference', slug: 'docs/reference/cli' },
+            { label: 'Security & privacy', slug: 'docs/reference/security-and-privacy' },
           ],
         },
       ],

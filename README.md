@@ -39,9 +39,14 @@ Start Renart inside a Git repository:
 renart
 ```
 
-This opens the desktop app. Use `renart web` instead to run the browser-based
-server; it listens on `127.0.0.1:8080` by default and selects the next free port
-when that port is unavailable.
+This opens the Renart IDE in your browser. It listens on `127.0.0.1:8080` by
+default and selects the next free port when that port is unavailable. A native
+window helper can be built from source, but it is not part of the alpha release
+archives.
+
+Release archives support Linux x86-64/ARM64 (glibc 2.31+), macOS
+Intel/Apple silicon, and Windows x86-64. See the
+[installation guide](https://getrenart.com/docs/installation/) for details.
 
 ## Documentation
 
@@ -52,3 +57,8 @@ when that port is unavailable.
 ## License
 
 Renart is licensed under the Apache License 2.0. See [`LICENSE`](LICENSE).
+Licenses and required notices for bundled third-party software are collected in
+[`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md).
+
+See [`CONTRIBUTING.md`](CONTRIBUTING.md) to contribute. Please report suspected
+vulnerabilities privately as described in [`SECURITY.md`](SECURITY.md).

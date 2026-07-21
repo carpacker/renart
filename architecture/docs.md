@@ -49,6 +49,11 @@ a PR; change them here first if they need to change.
    here).
 6. **Ownership: a "docs touched?" gate.** A user-facing change ships with its docs.
    PRs carry a docs checkbox (§7); reviewers enforce it.
+7. **Security copy is literal.** The Security & privacy page describes the
+   current local trust boundary only. The static build contains no analytics by
+   default; deployments may inject the explicitly documented self-hosted
+   analytics script. Caddy supplies CSP, framing, MIME-sniffing, permissions,
+   referrer, and HSTS headers for the deployed site.
 
 ## 1. The four modes (Diátaxis)
 

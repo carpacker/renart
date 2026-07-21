@@ -5,9 +5,10 @@ builds:
     binary: renart
     main: ./
     env:
-      - CC=x86_64-linux-gnu-gcc
-      - CXX=x86_64-linux-gnu-g++
+      - CC=/root/.cache/renart/zig/0.15.2/zig cc -target x86_64-linux-gnu.2.31
+      - CXX=/root/.cache/renart/zig/0.15.2/zig c++ -target x86_64-linux-gnu.2.31
       - CGO_ENABLED=1
+      - CGO_LDFLAGS=-L/root/.cache/renart/rustsqlparser/target/x86_64-unknown-linux-gnu/release
     flags:
       - -trimpath
       - -tags=no_duckdb_arrow
@@ -25,9 +26,10 @@ builds:
     binary: renart
     main: ./
     env:
-      - CC=aarch64-linux-gnu-gcc
-      - CXX=aarch64-linux-gnu-g++
+      - CC=/root/.cache/renart/zig/0.15.2/zig cc -target aarch64-linux-gnu.2.31
+      - CXX=/root/.cache/renart/zig/0.15.2/zig c++ -target aarch64-linux-gnu.2.31
       - CGO_ENABLED=1
+      - CGO_LDFLAGS=-L/root/.cache/renart/rustsqlparser/target/aarch64-unknown-linux-gnu/release
     flags:
       - -trimpath
       - -tags=no_duckdb_arrow
@@ -48,6 +50,7 @@ builds:
       - CC=o64-clang
       - CXX=o64-clang++
       - CGO_ENABLED=1
+      - CGO_LDFLAGS=-L/root/.cache/renart/rustsqlparser/target/x86_64-apple-darwin/release
       - MACOSX_DEPLOYMENT_TARGET=10.15
     flags:
       - -trimpath
@@ -69,6 +72,7 @@ builds:
       - CC=oa64-clang
       - CXX=oa64-clang++
       - CGO_ENABLED=1
+      - CGO_LDFLAGS=-L/root/.cache/renart/rustsqlparser/target/aarch64-apple-darwin/release
       - MACOSX_DEPLOYMENT_TARGET=10.15
     flags:
       - -trimpath
@@ -90,7 +94,7 @@ builds:
       - CC=x86_64-w64-mingw32-gcc
       - CXX=x86_64-w64-mingw32-g++
       - CGO_ENABLED=1
-      - CGO_LDFLAGS=-static-libgcc -static-libstdc++ -Wl,-Bstatic -lstdc++ -lwinpthread -Wl,-Bdynamic
+      - CGO_LDFLAGS=-L/root/.cache/renart/rustsqlparser/target/x86_64-pc-windows-gnu/release -static-libgcc -static-libstdc++ -Wl,-Bstatic -lstdc++ -lwinpthread -Wl,-Bdynamic
     flags:
       - -trimpath
       - -tags=no_duckdb_arrow
@@ -107,7 +111,7 @@ builds:
 
 archives:
   - id: renart-duckdb-archives
-    builds:
+    ids:
       - renart-duckdb-linux-amd64
       - renart-duckdb-linux-arm64
       - renart-duckdb-darwin-amd64
@@ -120,13 +124,23 @@ archives:
       _duckdb
     format_overrides:
       - goos: windows
-        format: zip
+        formats:
+          - zip
+    files:
+      - LICENSE
+      - README.md
+      - THIRD_PARTY_NOTICES.md
+      - third_party/licenses/**
 
 checksum:
   name_template: checksums.txt
 
+sboms:
+  - artifacts: archive
+
 release:
-  make_latest: true
+  draft: true
+  make_latest: false
 
 changelog:
   sort: asc

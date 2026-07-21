@@ -20,33 +20,32 @@ jobs:
     timeout-minutes: 60
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
       - name: Set up Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with:
-          go-version: stable
+          go-version: 1.26.5
           cache: true
           cache-dependency-path: go.sum
 
-      - name: Make Go module cache writable
-        run: echo "GOFLAGS=-modcacherw" >> "$GITHUB_ENV"
-
       - name: Set up Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4
+        with:
+          toolchain: 1.96.0
 
       - name: Set up Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
-          node-version: 22
+          node-version: 22.22.1
 
       - name: Set up pnpm
-        uses: pnpm/action-setup@v4
+        uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa # v4
         with:
-          version: 10
+          version: 10.33.0
 
       - name: Cache pnpm store
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: ~/.local/share/pnpm/store
           key: ${{ runner.os }}-pnpm-${{ hashFiles('web/pnpm-lock.yaml') }}
@@ -54,7 +53,7 @@ jobs:
             ${{ runner.os }}-pnpm-
 
       - name: Cache Playwright browsers
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: ~/.cache/ms-playwright
           key: ${{ runner.os }}-playwright-${{ hashFiles('web/pnpm-lock.yaml') }}
@@ -62,7 +61,7 @@ jobs:
             ${{ runner.os }}-playwright-
 
       - name: Cache Cargo dependencies
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: |
             ~/.cargo/registry
@@ -72,10 +71,10 @@ jobs:
             ${{ runner.os }}-cargo-
 
       - name: Cache Rust SQL parser build
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: ~/.cache/renart/rustsqlparser/target
-          key: ${{ runner.os }}-rustsqlparser-${{ hashFiles('go.sum') }}
+          key: ${{ runner.os }}-rust-1.96.0-rustsqlparser-${{ hashFiles('go.sum', 'scripts/build_rustsqlparser_release_lib.sh') }}
           restore-keys: |
             ${{ runner.os }}-rustsqlparser-
 
@@ -92,7 +91,12 @@ jobs:
         run: corepack pnpm build
 
       - name: Build Bruin Rust SQL parser library
-        run: ./scripts/build_rustsqlparser_release_lib.sh x86_64-unknown-linux-gnu
+        run: |
+          libdir="$(./scripts/build_rustsqlparser_release_lib.sh x86_64-unknown-linux-gnu)"
+          echo "CGO_LDFLAGS=-L${libdir}" >> "$GITHUB_ENV"
+
+      - name: Verify Go module cache integrity
+        run: go mod verify
 
       - name: Build Renart binary
         run: go build -o renart .
@@ -107,7 +111,7 @@ jobs:
 
       - name: Upload Playwright artifacts
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: live-e2e-artifacts
           path: /dev/shm/bruin-playwright/test-results

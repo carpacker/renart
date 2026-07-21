@@ -1,9 +1,8 @@
 # Contributing to the Renart docs
 
 These docs follow a fixed authoring contract. The full version lives in
-[`architecture/docs.md`](../architecture/docs.md);
-the companion [`plans/user-docs-rollout.md`](../plans/user-docs-rollout.md)
-holds the information architecture and rollout. This page is the short version.
+[`architecture/docs.md`](../architecture/docs.md). This page is the short
+version.
 
 ## The rules
 
