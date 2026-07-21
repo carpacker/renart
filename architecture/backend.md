@@ -113,7 +113,11 @@ flags (`internal/web/identity`): `features.ingestr` re-enables the ingestr
 surfaces the UI hides by default — `/api/config` filters ingestr source
 connection types out unless the flag is set, and the frontend
 (`web/lib/features.ts`) additionally shows them when the workspace already
-contains ingestr assets.
+contains ingestr assets. Direct execution likewise leaves Bruin's Ingestr main
+operator disabled unless the parsed pipeline already contains an Ingestr
+asset. Ordinary Renart pipelines therefore do not initialize Ingestr or cause
+its Python package to be resolved; an existing Ingestr asset enables the
+operator and the package is fetched only when that asset is executed.
 The same tracked project file carries the local history-retention policy.
 `/api/config` always returns its effective values, using conservative defaults
 when the block is absent, and Project settings writes the complete validated

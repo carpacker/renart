@@ -240,18 +240,32 @@ func buildDirectMainExecutors(manager config.ConnectionAndDetailsGetter, rendere
 		duckDBCoordinator: coordinator,
 		workspaceRoot:     workspaceRoot,
 	})
-	ingestrOperator, err := bruiningestr.NewBasicOperator(manager, renderer)
-	if err != nil {
-		return nil, err
+	if pipelineUsesIngestr(pl) {
+		ingestrOperator, err := bruiningestr.NewBasicOperator(manager, renderer)
+		if err != nil {
+			return nil, err
+		}
+		ensureExecutorConfig(pipeline.AssetTypeIngestr)
+		executors[pipeline.AssetTypeIngestr][scheduler.TaskInstanceTypeMain] = ingestrOperator
 	}
-	ensureExecutorConfig(pipeline.AssetTypeIngestr)
-	executors[pipeline.AssetTypeIngestr][scheduler.TaskInstanceTypeMain] = ingestrOperator
 	sharedCheckExecutors, err := buildDirectCheckExecutors(manager, renderer)
 	if err != nil {
 		return nil, err
 	}
 	mergeDirectCheckExecutors(executors, sharedCheckExecutors)
 	return executors, nil
+}
+
+func pipelineUsesIngestr(pl *pipeline.Pipeline) bool {
+	if pl == nil {
+		return false
+	}
+	for _, asset := range pl.Assets {
+		if asset != nil && asset.Type == pipeline.AssetTypeIngestr {
+			return true
+		}
+	}
+	return false
 }
 
 func directPythonEnvVariables(pl *pipeline.Pipeline) map[string]string {

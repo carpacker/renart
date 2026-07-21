@@ -111,6 +111,7 @@ func TestDirectIngestrExecutorUsesDestinationAwareQualityChecks(t *testing.T) {
 
 	config := executors[pipeline.AssetTypeIngestr]
 	require.NotNil(t, config)
+	assert.IsType(t, bruinexecutor.NoOpOperator{}, config[scheduler.TaskInstanceTypeMain])
 	for _, taskType := range []scheduler.TaskInstanceType{
 		scheduler.TaskInstanceTypeColumnCheck,
 		scheduler.TaskInstanceTypeCustomCheck,
@@ -119,6 +120,21 @@ func TestDirectIngestrExecutorUsesDestinationAwareQualityChecks(t *testing.T) {
 		require.NotNil(t, operator, taskType)
 		assert.NotContains(t, strings.ToLower(fmt.Sprintf("%T", operator)), "noop", taskType)
 	}
+}
+
+func TestDirectIngestrExecutorIsEnabledOnlyForExistingIngestrAssets(t *testing.T) {
+	t.Parallel()
+
+	assert.False(t, pipelineUsesIngestr(nil))
+	assert.False(t, pipelineUsesIngestr(&pipeline.Pipeline{Assets: []*pipeline.Asset{nil, {Type: pipeline.AssetTypeDuckDBQuery}}}))
+	withIngestr := &pipeline.Pipeline{Assets: []*pipeline.Asset{{Type: pipeline.AssetTypeIngestr}}}
+	assert.True(t, pipelineUsesIngestr(withIngestr))
+
+	executors, err := buildDirectMainExecutors(&stubConnectionManager{}, nil, nil, withIngestr, nil, nil, "", false, sensorModeWait)
+	require.NoError(t, err)
+	main := executors[pipeline.AssetTypeIngestr][scheduler.TaskInstanceTypeMain]
+	require.NotNil(t, main)
+	assert.NotContains(t, strings.ToLower(fmt.Sprintf("%T", main)), "noop")
 }
 
 func TestEffectiveSensorModeDefaultsByRunKind(t *testing.T) {
