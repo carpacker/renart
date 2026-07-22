@@ -49,6 +49,7 @@ builds:
     env:
       - CC=o64-clang
       - CXX=o64-clang++
+      - AR=llvm-ar --format=darwin
       - CGO_ENABLED=1
       - CGO_LDFLAGS=-L/root/.cache/renart/bruin-sqlparser-stub/darwin-amd64/release
       - MACOSX_DEPLOYMENT_TARGET=10.15
@@ -71,6 +72,7 @@ builds:
     env:
       - CC=oa64-clang
       - CXX=oa64-clang++
+      - AR=llvm-ar --format=darwin
       - CGO_ENABLED=1
       - CGO_LDFLAGS=-L/root/.cache/renart/bruin-sqlparser-stub/darwin-arm64/release
       - MACOSX_DEPLOYMENT_TARGET=10.15
