@@ -200,7 +200,8 @@ func checkAsset(ctx context.Context, pp *pipeline.Pipeline, workspaceRoot string
 	}
 
 	ac.Dialect = dialect
-	if strings.TrimSpace(asset.ExecutableFile.Content) == "" {
+	sourceText := assetSQLSource(asset)
+	if strings.TrimSpace(sourceText) == "" {
 		ac.Status = statusFromFindings(ac.Findings)
 		return ac
 	}
@@ -223,7 +224,7 @@ func checkAsset(ctx context.Context, pp *pipeline.Pipeline, workspaceRoot string
 			LanguageID: "sql",
 			Text:       renderedQuery,
 		}) {
-			ac.Findings = append(ac.Findings, findingFromMappedLSPDiagnostic(asset.ExecutableFile.Content, unit, renderedQuery, diagnostic))
+			ac.Findings = append(ac.Findings, findingFromMappedLSPDiagnostic(sourceText, unit, renderedQuery, diagnostic))
 		}
 		var expectedOutput []sqlintelligence.SchemaColumn
 		if unitIndex == len(units)-1 {
@@ -251,7 +252,7 @@ func checkAsset(ctx context.Context, pp *pipeline.Pipeline, workspaceRoot string
 			continue
 		}
 		for _, diagnostic := range validation.Diagnostics {
-			ac.Findings = append(ac.Findings, findingFromMappedAuthoringDiagnostic(asset.ExecutableFile.Content, unit, diagnostic))
+			ac.Findings = append(ac.Findings, findingFromMappedAuthoringDiagnostic(sourceText, unit, diagnostic))
 		}
 	}
 
@@ -310,7 +311,7 @@ func CheckPipelineAssetFindings(
 	result := make([]TypeCheckAsset, 0, len(assets))
 	for _, asset := range assets {
 		findings := assetLevelTypeCheckFindings(ctx, asset, pp, false)
-		if _, dialectErr := AssetTypeToDialect(asset.Type); dialectErr == nil && strings.TrimSpace(asset.ExecutableFile.Content) != "" {
+		if _, dialectErr := AssetTypeToDialect(asset.Type); dialectErr == nil && strings.TrimSpace(assetSQLSource(asset)) != "" {
 			if _, err := renderAssetQueries(ctx, fs, renderer, now, tw, pp, asset); err != nil {
 				findings = append(findings, templateRenderFinding(err))
 			}
@@ -416,7 +417,8 @@ func buildTypeCheckSchemaSnapshot(ctx context.Context, fs afero.Fs, pp *pipeline
 			}
 		}
 
-		if dialectErr != nil || strings.TrimSpace(asset.ExecutableFile.Content) == "" {
+		sourceText := assetSQLSource(asset)
+		if dialectErr != nil || strings.TrimSpace(sourceText) == "" {
 			continue
 		}
 		queries, err := renderAssetQueries(ctx, fs, renderer, now, tw, pp, asset)
@@ -426,7 +428,7 @@ func buildTypeCheckSchemaSnapshot(ctx context.Context, fs afero.Fs, pp *pipeline
 		}
 		units := make([]sqllsp.RenderedSQL, 0, len(queries))
 		for _, renderedQuery := range queries {
-			units = append(units, sqllsp.ProjectRenderedSQL(node.URI, asset.ExecutableFile.Content, renderedQuery))
+			units = append(units, sqllsp.ProjectRenderedSQL(node.URI, sourceText, renderedQuery))
 		}
 		snapshot.RenderedUnits[asset] = units
 		if len(queries) == 0 {
@@ -613,7 +615,7 @@ func renderAssetQueries(ctx context.Context, fs afero.Fs, renderer *jinja.Render
 	if err != nil {
 		return nil, err
 	}
-	extracted, err := cloned.ExtractQueriesFromString(asset.ExecutableFile.Content)
+	extracted, err := cloned.ExtractQueriesFromString(assetSQLSource(asset))
 	if err != nil {
 		return nil, err
 	}
@@ -625,6 +627,21 @@ func renderAssetQueries(ctx context.Context, fs afero.Fs, renderer *jinja.Render
 		}
 	}
 	return queries, nil
+}
+
+// assetSQLSource keeps semantic validation aligned with the editor document.
+// Query sensors store their editable SQL in parameters.query rather than in an
+// executable file; treating the YAML definition as SQL produces false syntax
+// diagnostics and maps ranges to the wrong source text.
+func assetSQLSource(asset *pipeline.Asset) string {
+	if asset == nil {
+		return ""
+	}
+	if strings.HasSuffix(strings.ToLower(strings.TrimSpace(string(asset.Type))), ".sensor.query") {
+		queryText, _ := asset.Parameters.GetString("query")
+		return queryText
+	}
+	return asset.ExecutableFile.Content
 }
 
 func findingFromMappedLSPDiagnostic(sourceText string, unit sqllsp.RenderedSQL, renderedSQL string, diagnostic sqllsp.Diagnostic) TypeCheckFinding {

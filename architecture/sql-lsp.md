@@ -62,10 +62,10 @@ coordinator's `WorkspaceState` rather than the filesystem:
 - Every pipeline asset becomes an asset node + relation; declared
   `model.Column`s become a `declared` schema layer, including nullable,
   primary-key, and foreign-key metadata.
-- Bruin query sensors are SQL documents even though their definition path ends
-  in `.asset.yml`: the adapter projects `parameters.query`, assigns the dialect
-  from the sensor provider, and includes that projected document in workspace
-  reference search.
+- Query sensors are SQL documents even though their definition path ends in
+  `.asset.yml`: the HTTP/LSP adapter and pipeline type-check both project
+  `parameters.query`, assign the dialect from the sensor provider, and validate
+  or search references against that SQL rather than the YAML definition.
 - The graph is **cached by `WorkspaceState.Revision`** (monotonic, bumped on
   every mutation). Editing issues LSP requests per keystroke against the same
   saved state, so rebuilding per request was wasted work. `Revision == 0`

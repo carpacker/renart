@@ -9,11 +9,23 @@ import {
   PipelineConfigResponse,
   PipelineMaterializationResponse,
   PipelinePythonDependenciesResponse,
+  PipelineTemplatesResponse,
   UpdatePipelineConfigRequest,
   UpdatePipelinePythonDependenciesRequest,
 } from "@/lib/types";
 
-export async function createPipeline(input: { path: string; name?: string; content?: string }) {
+export async function getPipelineTemplates() {
+  return fetchJSON<PipelineTemplatesResponse>("/api/pipelines/templates", {
+    cache: "no-store",
+  });
+}
+
+export async function createPipeline(input: {
+  path: string;
+  name?: string;
+  content?: string;
+  template?: string;
+}) {
   return fetchJSONWithBody<Record<string, string>>("/api/pipelines", "POST", input);
 }
 

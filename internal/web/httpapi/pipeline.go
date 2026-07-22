@@ -23,9 +23,10 @@ type PipelineHandlers struct {
 }
 
 type CreatePipelineRequest struct {
-	Path    string `json:"path"`
-	Name    string `json:"name"`
-	Content string `json:"content"`
+	Path     string `json:"path"`
+	Name     string `json:"name"`
+	Content  string `json:"content"`
+	Template string `json:"template,omitempty"`
 }
 
 type UpdatePipelineRequest struct {
@@ -35,6 +36,7 @@ type UpdatePipelineRequest struct {
 }
 
 func RegisterPipelineRoutes(router chi.Router, handlers *PipelineHandlers) {
+	router.Get("/api/pipelines/templates", handlers.HandlePipelineTemplates)
 	router.Post("/api/pipelines", handlers.HandleCreatePipeline)
 	router.Put("/api/pipelines", handlers.HandleUpdatePipeline)
 	router.Get("/api/pipelines/{id}/config", handlers.HandleGetPipelineConfig)
@@ -43,6 +45,13 @@ func RegisterPipelineRoutes(router chi.Router, handlers *PipelineHandlers) {
 	router.Put("/api/pipelines/{id}/python-dependencies", handlers.HandleUpdatePipelinePythonDependencies)
 	router.Get("/api/pipelines/{id}/type-check", handlers.HandleTypeCheckPipeline)
 	router.Delete("/api/pipelines/{id}", handlers.HandleDeletePipeline)
+}
+
+func (h *PipelineHandlers) HandlePipelineTemplates(w http.ResponseWriter, _ *http.Request) {
+	webapi.WriteJSON(w, http.StatusOK, service.PipelineTemplatesResponse{
+		Status:    "ok",
+		Templates: service.PipelineTemplates(),
+	})
 }
 
 func (h *PipelineHandlers) HandleTypeCheckPipeline(w http.ResponseWriter, r *http.Request) {
@@ -73,10 +82,22 @@ func (h *PipelineHandlers) HandleCreatePipeline(w http.ResponseWriter, r *http.R
 		return
 	}
 
-	relPath, err := h.Service.Create(r.Context(), req.Path, req.Name, req.Content)
+	relPath, err := h.Service.Create(r.Context(), req.Path, req.Name, req.Content, req.Template)
 	if err != nil {
+		if strings.Contains(err.Error(), "unknown pipeline template") || strings.Contains(err.Error(), "cannot be combined") {
+			webapi.WriteBadRequest(w, "invalid_pipeline_template", err.Error())
+			return
+		}
+		if strings.Contains(err.Error(), "invalid pipeline config") || strings.Contains(err.Error(), "pipeline config must be a YAML mapping") {
+			webapi.WriteBadRequest(w, "invalid_pipeline_config", err.Error())
+			return
+		}
 		if strings.Contains(err.Error(), "invalid path") {
 			webapi.WriteBadRequest(w, "invalid_pipeline_path", err.Error())
+			return
+		}
+		if strings.Contains(err.Error(), "already exists") {
+			webapi.WriteConflict(w, "pipeline_exists", err.Error())
 			return
 		}
 		if strings.Contains(err.Error(), "mkdir") || strings.Contains(err.Error(), "permission") {

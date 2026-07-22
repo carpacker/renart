@@ -7,6 +7,8 @@ import { liveTest as test } from "../live-app-fixture";
 type WorkspaceResponse = {
   pipelines: Array<{
     id: string;
+    name?: string;
+    path?: string;
     assets: Array<{
       id: string;
       name: string;
@@ -987,6 +989,55 @@ select 1 as customer_id,'Ada' as customer_name union all select 2 as customer_id
       .getByRole("dialog", { name: "New folder" })
       .getByRole("button", { name: "Cancel" })
       .click();
+  });
+
+  test("creates a feature demo from the new pipeline flow", async ({ liveApp, page }) => {
+    test.skip(
+      test.info().project.name.includes("mobile"),
+      "The explorer action toolbar is desktop-only.",
+    );
+
+    await page.goto(`${liveApp.baseURL}/pipelines/${pipelineId}/assets/${customersAssetId}/code`);
+    await page.getByRole("button", { name: "New pipeline", exact: true }).click();
+
+    const dialog = page.getByRole("dialog", { name: "New pipeline" });
+    const productStarter = dialog.getByRole("radio", { name: /Product analytics/ });
+    await expect(productStarter).toBeVisible();
+    await productStarter.click();
+    await expect(dialog.getByLabel("Directory")).toHaveValue("product_analytics");
+    await expect(dialog.getByLabel("Pipeline name (optional)")).toHaveValue("Product analytics");
+
+    const createResponse = page.waitForResponse(
+      (response) =>
+        response.url().endsWith("/api/pipelines") &&
+        response.request().method() === "POST" &&
+        (response.request().postData() ?? "").includes('"template":"demo:product"'),
+    );
+    await dialog.getByRole("button", { name: "Create", exact: true }).click();
+    await expect((await createResponse).status()).toBe(201);
+
+    let createdPipelineID = "";
+    await expect
+      .poll(async () => {
+        const response = await page.request.get(`${liveApp.baseURL}/api/workspace`);
+        if (!response.ok()) return [];
+        const workspace = (await response.json()) as WorkspaceResponse;
+        const created = workspace.pipelines.find(
+          (pipeline) => pipeline.path === "product_analytics",
+        );
+        createdPipelineID = created?.id ?? "";
+        return (created?.assets ?? []).map((asset) => asset.name).sort();
+      })
+      .toEqual(
+        [
+          "product.activation_funnel",
+          "product.daily_active_users",
+          "product.events",
+          "product.user_journeys",
+          "product.users",
+        ].sort(),
+      );
+    await expect(page).toHaveURL(new RegExp(`/pipelines/${createdPipelineID}/canvas`));
   });
 
   test("ad hoc editor uses Monaco with SQL intellisense and runs queries", async ({

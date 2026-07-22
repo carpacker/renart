@@ -472,6 +472,14 @@ columns:
   - name: lifetime_value
     type: double
     description: Total revenue from the customer's completed orders
+  - name: customer_name
+    type: varchar
+  - name: city
+    type: varchar
+  - name: order_count
+    type: bigint
+  - name: last_ordered_at
+    type: date
 @bruin */
 
 SELECT

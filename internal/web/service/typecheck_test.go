@@ -177,6 +177,38 @@ select order_id from analytics.orders
 	assert.GreaterOrEqual(t, report.Summary.Warnings, 1)
 }
 
+func TestCheckPipelineValidatesQuerySensorParameterSQL(t *testing.T) {
+	t.Parallel()
+	parsed, root := writeTypeCheckWorkspace(t, "name: analytics", map[string]string{
+		"events.sql": `
+/* @bruin
+name: analytics.events
+type: duckdb.sql
+materialization:
+  type: table
+columns:
+  - name: event_id
+    type: integer
+@bruin */
+select 1 as event_id
+`,
+		"events_ready.asset.yml": `
+name: analytics.events_ready
+type: duckdb.sensor.query
+depends:
+  - analytics.events
+parameters:
+  query: select count(*) from analytics.events
+  poke_interval: 5
+`,
+	})
+
+	report := runTypeCheck(t, parsed, root)
+	sensor := findAsset(t, report, "analytics.events_ready")
+	assert.Equal(t, typeCheckStatusOK, sensor.Status)
+	assert.Empty(t, sensor.Findings)
+}
+
 func TestCheckPipelinePropagatesColumnsThroughSelectStarCTEs(t *testing.T) {
 	t.Parallel()
 	parsed, root := writeTypeCheckWorkspace(t, "name: chess", map[string]string{

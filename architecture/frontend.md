@@ -215,6 +215,13 @@ not underscore-flattened route hacks.
   finish inline. Conflicts open a wide, scrollable shadcn dialog whose table
   compares each source, saved metadata, and the chosen result without replacing
   the inspector with asset-kind-specific controls.
+- The Build view's **New pipeline** dialog loads the backend template catalog
+  and presents a blank option plus feature-focused runnable starters. Selecting
+  a starter fills its suggested directory and name without overwriting a user's
+  custom values, shows its assets and feature tags, and distinguishes offline
+  starters from those that need network access. The fixed-height, scrollable
+  dialog sends only the selected template ID and names; generated files remain
+  a backend concern and the workspace SSE update remains the navigation signal.
 - The Build view's New asset dialog loads the selected pipeline/environment's
   secret-free `asset-creation-profile`. The six equal-size choices are authoring
   intents; `AssetConnectionField` presents only compatible configured
@@ -251,7 +258,7 @@ not underscore-flattened route hacks.
   each sensor variant, and sends uploaded bytes through the multipart asset API.
   The workspace-file source uses the shared path combobox, restricted to
   supported files below the workspace root. The resulting seed and sensor assets
-  have distinct canvas/catalog classifications while remaining ordinary Bruin
+  have distinct canvas/catalog classifications while remaining ordinary asset
   files in the workspace.
 - The guided identity card shows asset Type as a read-only value and uses
   `AssetConnectionEditor` for SQL, Python, API, Load, Seed, and Sensor assets.

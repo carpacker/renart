@@ -127,6 +127,18 @@ operator disabled unless the parsed pipeline already contains an Ingestr
 asset. Ordinary Renart pipelines therefore do not initialize Ingestr or cause
 its Python package to be resolved; an existing Ingestr asset enables the
 operator and the package is fetched only when that asset is executed.
+
+Inside an open project, `GET /api/pipelines/templates` exposes the
+backend-owned catalog used by the **New pipeline** dialog. Alongside a blank
+pipeline it offers product analytics, retail seed data, operations monitoring,
+Python scoring, and Chess API starters. `POST /api/pipelines` accepts the
+selected template ID and writes its ordinary pipeline and asset files into a
+new directory; the backend validates `pipeline.yml`, refuses to replace an
+existing directory, removes a partially written pipeline on failure, and adds
+the local DuckDB connection only when the starter needs it. Keeping the catalog
+and generated files in `service` prevents the frontend from carrying a second
+copy of scaffold contents.
+
 The same tracked project file carries the local history-retention policy.
 `/api/config` always returns its effective values, using conservative defaults
 when the block is absent, and Project settings writes the complete validated

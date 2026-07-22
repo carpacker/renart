@@ -9,11 +9,14 @@ import {
   Globe,
   Plus,
   Radar,
+  Sparkles,
   Sprout,
+  WifiOff,
 } from "lucide-react";
 import { type ComponentType, useEffect, useMemo, useRef, useState } from "react";
 
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -44,11 +47,11 @@ import {
   buildAPIAssetTemplate,
   type APIAssetTemplateId,
 } from "@/lib/api-asset-templates";
-import { createPipeline } from "@/lib/api-pipelines";
+import { createPipeline, getPipelineTemplates } from "@/lib/api-pipelines";
 import { selectedEnvironmentAtom, workspaceAtom } from "@/lib/atoms/domains/workspace";
 import { assetCreationRole, type AssetCreationKind } from "@/lib/asset-creation-profile";
 import { isLocalLoadConnection, loadTargetNeedsDestinationObject } from "@/lib/load-assets";
-import type { AssetCreationCandidate } from "@/lib/types";
+import type { AssetCreationCandidate, PipelineTemplateInfo } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import { buildSuggestedAssetName } from "@/lib/workspace-shell-helpers";
 import { useAssetCreationProfile } from "@/hooks/use-asset-creation-profile";
@@ -826,9 +829,9 @@ export function NewAssetDialog({
   );
 }
 
-// NewPipelineDialog creates a pipeline directory (pipeline.yml + assets/) at
-// the given workspace-relative path; the workspace SSE update then lists it
-// and the page navigates onto it.
+// NewPipelineDialog creates either an empty pipeline or one of the backend-owned
+// demo scaffolds. The workspace SSE update then lists it and the page navigates
+// onto it.
 export function NewPipelineDialog({
   open,
   onOpenChange,
@@ -842,16 +845,54 @@ export function NewPipelineDialog({
 }) {
   const [path, setPath] = useState("");
   const [name, setName] = useState("");
+  const [templateId, setTemplateId] = useState("blank");
+  const [templates, setTemplates] = useState<PipelineTemplateInfo[]>([]);
+  const [templatesLoading, setTemplatesLoading] = useState(false);
   const [creating, setCreating] = useState(false);
   const [error, setError] = useState("");
 
   useEffect(() => {
-    if (open) {
-      setPath("");
-      setName("");
-      setError("");
-    }
+    if (!open) return;
+
+    let active = true;
+    setPath("");
+    setName("");
+    setTemplateId("blank");
+    setError("");
+    setTemplatesLoading(true);
+    void getPipelineTemplates()
+      .then((response) => {
+        if (active) setTemplates(response.templates);
+      })
+      .catch((caught) => {
+        if (active) setError(`Could not load pipeline templates: ${String(caught)}`);
+      })
+      .finally(() => {
+        if (active) setTemplatesLoading(false);
+      });
+
+    return () => {
+      active = false;
+    };
   }, [open]);
+
+  const selectedTemplate = templates.find((template) => template.id === templateId);
+
+  const chooseTemplate = (template: PipelineTemplateInfo) => {
+    const previous = templates.find((candidate) => candidate.id === templateId);
+    const blank = template.id === "blank";
+    setPath((current) =>
+      !current || current === previous?.suggested_path
+        ? blank
+          ? ""
+          : template.suggested_path
+        : current,
+    );
+    setName((current) =>
+      !current || current === previous?.title ? (blank ? "" : template.title) : current,
+    );
+    setTemplateId(template.id);
+  };
 
   const create = async () => {
     const trimmedPath = path.trim().replace(/^\/+|\/+$/g, "");
@@ -874,7 +915,11 @@ export function NewPipelineDialog({
     setCreating(true);
     setError("");
     try {
-      await createPipeline({ path: trimmedPath, name: name.trim() || undefined });
+      await createPipeline({
+        path: trimmedPath,
+        name: name.trim() || undefined,
+        template: templateId,
+      });
       onOpenChange(false);
       onCreated(trimmedPath);
     } catch (caught) {
@@ -886,59 +931,147 @@ export function NewPipelineDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-md">
+      <DialogContent className="flex max-h-[min(88vh,46rem)] flex-col overflow-hidden sm:max-w-2xl">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <Plus className="size-4 text-primary" />
             New pipeline
           </DialogTitle>
           <DialogDescription>
-            Creates a directory with a <span className="font-mono">pipeline.yml</span> and an empty{" "}
-            <span className="font-mono">assets/</span> folder.
+            Start with an empty canvas or a runnable demo that showcases a Renart workflow. Every
+            option creates ordinary pipeline files in your repository.
           </DialogDescription>
         </DialogHeader>
-        <div className="grid gap-4">
-          <div className="grid gap-2">
-            <Label htmlFor="new-pipeline-path">Directory</Label>
-            <Input
-              id="new-pipeline-path"
-              className="font-mono"
-              placeholder="marketing_pipeline"
-              value={path}
-              onChange={(event) => setPath(event.target.value)}
-              onKeyDown={(event) => {
-                if (event.key === "Enter" && !creating) {
-                  void create();
-                }
-              }}
-              autoFocus
-            />
+        <ScrollArea className="-mx-1 min-h-0 flex-1 px-1">
+          <div className="grid gap-5 pb-1">
+            <FieldGroup>
+              <Field variant="plain">
+                <FieldLabel>Starter</FieldLabel>
+                <FieldDescription>
+                  Offline starters need no network access. Network starters call a service or may
+                  install dependencies.
+                </FieldDescription>
+                <div
+                  className="grid gap-2 sm:grid-cols-2"
+                  role="radiogroup"
+                  aria-label="Pipeline starter"
+                >
+                  {templatesLoading && templates.length === 0
+                    ? Array.from({ length: 4 }, (_, index) => (
+                        <Skeleton key={index} className="h-28 rounded-lg" />
+                      ))
+                    : templates.map((template) => {
+                        const selected = template.id === templateId;
+                        return (
+                          <button
+                            key={template.id}
+                            type="button"
+                            role="radio"
+                            aria-checked={selected}
+                            onClick={() => chooseTemplate(template)}
+                            className={cn(
+                              "flex min-h-28 flex-col gap-2 rounded-lg border p-3 text-left transition-colors hover:bg-muted/50",
+                              selected && "border-primary bg-primary/5 ring-1 ring-primary/20",
+                            )}
+                          >
+                            <div className="flex min-w-0 items-start gap-2">
+                              <div className="min-w-0 flex-1">
+                                <div className="flex flex-wrap items-center gap-1.5 text-sm font-medium">
+                                  {template.id === "blank" ? (
+                                    <Plus className="size-3.5 text-primary" />
+                                  ) : (
+                                    <Sparkles className="size-3.5 text-primary" />
+                                  )}
+                                  {template.title}
+                                  {template.offline ? (
+                                    <Badge variant="secondary" className="gap-1 text-[10px]">
+                                      <WifiOff className="size-3" />
+                                      offline
+                                    </Badge>
+                                  ) : (
+                                    <Badge variant="outline" className="gap-1 text-[10px]">
+                                      <Globe className="size-3" />
+                                      network
+                                    </Badge>
+                                  )}
+                                </div>
+                              </div>
+                              <CheckCircle2
+                                className={cn(
+                                  "size-4 shrink-0",
+                                  selected ? "text-primary" : "text-transparent",
+                                )}
+                              />
+                            </div>
+                            <p className="text-xs leading-relaxed text-muted-foreground">
+                              {template.description}
+                            </p>
+                            <div className="mt-auto flex flex-wrap gap-1">
+                              {template.features.map((feature) => (
+                                <span
+                                  key={feature}
+                                  className="rounded bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground"
+                                >
+                                  {feature}
+                                </span>
+                              ))}
+                            </div>
+                          </button>
+                        );
+                      })}
+                </div>
+                {selectedTemplate?.asset_names?.length ? (
+                  <FieldDescription>
+                    Creates {selectedTemplate.asset_names.length} assets:{" "}
+                    <span className="font-mono">{selectedTemplate.asset_names.join(", ")}</span>
+                  </FieldDescription>
+                ) : null}
+              </Field>
+              <Field variant="plain">
+                <FieldLabel htmlFor="new-pipeline-path">Directory</FieldLabel>
+                <Input
+                  id="new-pipeline-path"
+                  className="font-mono"
+                  placeholder="marketing_pipeline"
+                  value={path}
+                  onChange={(event) => setPath(event.target.value)}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter" && !creating) {
+                      void create();
+                    }
+                  }}
+                  autoFocus
+                />
+              </Field>
+              <Field variant="plain">
+                <FieldLabel htmlFor="new-pipeline-name">Pipeline name (optional)</FieldLabel>
+                <Input
+                  id="new-pipeline-name"
+                  placeholder="Marketing"
+                  value={name}
+                  onChange={(event) => setName(event.target.value)}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter" && !creating) {
+                      void create();
+                    }
+                  }}
+                />
+              </Field>
+            </FieldGroup>
+            {error ? (
+              <Alert variant="destructive">
+                <AlertTriangle />
+                <AlertTitle>Could not create pipeline</AlertTitle>
+                <AlertDescription>{error}</AlertDescription>
+              </Alert>
+            ) : null}
           </div>
-          <div className="grid gap-2">
-            <Label htmlFor="new-pipeline-name">Display name (optional)</Label>
-            <Input
-              id="new-pipeline-name"
-              placeholder="Marketing"
-              value={name}
-              onChange={(event) => setName(event.target.value)}
-              onKeyDown={(event) => {
-                if (event.key === "Enter" && !creating) {
-                  void create();
-                }
-              }}
-            />
-          </div>
-          {error ? (
-            <div className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700 dark:border-red-500/25 dark:bg-red-500/10 dark:text-red-300">
-              {error}
-            </div>
-          ) : null}
-        </div>
+        </ScrollArea>
         <DialogFooter>
           <Button variant="outline" onClick={() => onOpenChange(false)} disabled={creating}>
             Cancel
           </Button>
-          <Button onClick={() => void create()} disabled={creating}>
+          <Button onClick={() => void create()} disabled={creating || templatesLoading}>
             {creating ? <Spinner className="size-4" /> : <CheckCircle2 className="size-4" />}Create
           </Button>
         </DialogFooter>

@@ -345,6 +345,21 @@ export type ProjectTemplatesResponse = {
   templates: ProjectTemplateInfo[];
 };
 
+export type PipelineTemplateInfo = {
+  id: string;
+  title: string;
+  description: string;
+  offline: boolean;
+  suggested_path: string;
+  asset_names: string[];
+  features: string[];
+};
+
+export type PipelineTemplatesResponse = {
+  status: string;
+  templates: PipelineTemplateInfo[];
+};
+
 export type OnboardingImportFormState = {
   database?: string;
   pipeline_name?: string;

@@ -30,32 +30,95 @@ func (s *PipelineService) resolver() *WorkspaceResolver {
 	})
 }
 
-func (s *PipelineService) Create(ctx context.Context, relPath, name, content string) (string, error) {
+func (s *PipelineService) Create(ctx context.Context, relPath, name, content, templateID string) (string, error) {
+	templateID = strings.TrimSpace(templateID)
+	if templateID == "" {
+		templateID = PipelineTemplateBlank
+	}
+	template, ok := pipelineTemplateByID(templateID)
+	if !ok {
+		return "", fmt.Errorf("unknown pipeline template %q", templateID)
+	}
+	if templateID != PipelineTemplateBlank && strings.TrimSpace(content) != "" {
+		return "", fmt.Errorf("pipeline template %q cannot be combined with custom content", templateID)
+	}
+
 	absPath, err := SafeJoin(s.workspaceRoot, relPath)
 	if err != nil {
 		return "", err
 	}
 	fs := afero.NewOsFs()
+	if exists, existsErr := afero.Exists(fs, absPath); existsErr != nil {
+		return "", existsErr
+	} else if exists {
+		return "", fmt.Errorf("pipeline directory %q already exists", filepath.ToSlash(relPath))
+	}
+
+	if strings.TrimSpace(name) == "" {
+		name = filepath.Base(absPath)
+	}
+	files := template.files(name)
+	if strings.TrimSpace(content) != "" {
+		files["pipeline.yml"] = content
+	}
+	if strings.TrimSpace(files["pipeline.yml"]) == "" {
+		files["pipeline.yml"] = basicPipelineYAML(name)
+	}
+	var pipelineDocument yaml.Node
+	if err := yaml.Unmarshal([]byte(files["pipeline.yml"]), &pipelineDocument); err != nil {
+		return "", fmt.Errorf("invalid pipeline config: %w", err)
+	}
+	pipelineRoot := yamlDocumentMapping(&pipelineDocument)
+	if pipelineRoot == nil {
+		return "", fmt.Errorf("pipeline config must be a YAML mapping")
+	}
+
+	if template.duckdbFile != "" {
+		if err := ensureScaffoldDuckDBConnection(
+			s.workspaceRoot,
+			filepath.Join(s.workspaceRoot, ".bruin.yml"),
+			"duckdb-files/"+template.duckdbFile,
+		); err != nil {
+			return "", err
+		}
+		if err := fs.MkdirAll(filepath.Join(s.workspaceRoot, "duckdb-files"), 0o755); err != nil {
+			return "", err
+		}
+	}
 
 	if err := fs.MkdirAll(absPath, 0o755); err != nil {
 		return "", err
 	}
-
-	if strings.TrimSpace(content) == "" {
-		if strings.TrimSpace(name) == "" {
-			name = filepath.Base(absPath)
+	created := false
+	defer func() {
+		if !created {
+			_ = fs.RemoveAll(absPath)
 		}
-		content = fmt.Sprintf("name: %s\n", name)
-	}
+	}()
 
+	paths := make([]string, 0, len(files))
+	for relFile := range files {
+		paths = append(paths, relFile)
+	}
+	sort.Strings(paths)
+	for _, relFile := range paths {
+		filePath := filepath.Join(absPath, filepath.FromSlash(relFile))
+		if err := fs.MkdirAll(filepath.Dir(filePath), 0o755); err != nil {
+			return "", err
+		}
+		if err := afero.WriteFile(fs, filePath, []byte(files[relFile]), 0o644); err != nil {
+			return "", err
+		}
+	}
 	pipelineYmlPath := filepath.Join(absPath, "pipeline.yml")
-	if err := afero.WriteFile(fs, pipelineYmlPath, []byte(content), 0o644); err != nil {
+	if err := fs.MkdirAll(filepath.Join(absPath, "assets"), 0o755); err != nil {
 		return "", err
 	}
 	if _, _, err := identity.EnsurePipelineID(fs, pipelineYmlPath); err != nil {
 		return "", err
 	}
 
+	created = true
 	return filepath.ToSlash(relPath), nil
 }
 

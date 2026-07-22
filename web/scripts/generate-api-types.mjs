@@ -67,6 +67,10 @@ const sources = [
     types: ["ProjectTemplateInfo", "ProjectTemplatesResponse"],
   },
   {
+    file: resolve(repoRoot, "internal", "web", "service", "pipeline_templates.go"),
+    types: ["PipelineTemplateInfo", "PipelineTemplatesResponse"],
+  },
+  {
     file: resolve(repoRoot, "internal", "web", "service", "onboarding.go"),
     types: [
       "OnboardingImportFormState",
