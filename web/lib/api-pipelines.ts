@@ -8,7 +8,9 @@ import { streamMaterialization } from "@/lib/api-streams";
 import {
   PipelineConfigResponse,
   PipelineMaterializationResponse,
+  PipelinePythonDependenciesResponse,
   UpdatePipelineConfigRequest,
+  UpdatePipelinePythonDependenciesRequest,
 } from "@/lib/types";
 
 export async function createPipeline(input: { path: string; name?: string; content?: string }) {
@@ -33,12 +35,16 @@ export async function getPipelineConfig(pipelineId: string) {
 }
 
 export type PipelineTypeCheckFinding = {
+  code: string;
+  source: string;
   severity: "error" | "warning";
   message: string;
   line?: number;
   column?: number;
   end_line?: number;
   end_column?: number;
+  scope?: "document" | "asset" | "pipeline";
+  confidence?: "high" | "medium" | "low";
 };
 
 export type PipelineTypeCheckAsset = {
@@ -78,6 +84,24 @@ export async function typeCheckPipeline(
 export async function updatePipelineConfig(pipelineId: string, input: UpdatePipelineConfigRequest) {
   return fetchJSONWithBody<PipelineConfigResponse>(
     `/api/pipelines/${pipelineId}/config`,
+    "PUT",
+    input,
+  );
+}
+
+export async function getPipelinePythonDependencies(pipelineId: string) {
+  return fetchJSON<PipelinePythonDependenciesResponse>(
+    `/api/pipelines/${pipelineId}/python-dependencies`,
+    { method: "GET", cache: "no-store" },
+  );
+}
+
+export async function updatePipelinePythonDependencies(
+  pipelineId: string,
+  input: UpdatePipelinePythonDependenciesRequest,
+) {
+  return fetchJSONWithBody<PipelinePythonDependenciesResponse>(
+    `/api/pipelines/${pipelineId}/python-dependencies`,
     "PUT",
     input,
   );

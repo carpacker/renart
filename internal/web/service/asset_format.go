@@ -4,7 +4,7 @@ import (
 	"context"
 	"strings"
 
-	"renart/internal/web/sqlformat"
+	"renart/internal/sqlformat"
 
 	"github.com/bruin-data/bruin/pkg/pipeline"
 	"github.com/spf13/afero"

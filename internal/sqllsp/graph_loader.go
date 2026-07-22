@@ -15,11 +15,9 @@ import (
 )
 
 var (
-	bruinBlockPattern      = regexp.MustCompile(`(?is)/\*\s*@bruin\s*(.*?)\s*@bruin\s*\*/`)
-	dbtRefPattern          = regexp.MustCompile(`(?is)\{\{\s*ref\s*\(\s*['"]([^'"]+)['"]`)
-	dbtSourcePattern       = regexp.MustCompile(`(?is)\{\{\s*source\s*\(\s*['"]([^'"]+)['"]\s*,\s*['"]([^'"]+)['"]`)
-	selectAliasPatternLSP  = regexp.MustCompile(`(?i)\bas\s+([A-Za-z_][\w$]*)`)
-	selectColumnPatternLSP = regexp.MustCompile(`(?is)\bselect\s+(.*?)\bfrom\b`)
+	bruinBlockPattern = regexp.MustCompile(`(?is)/\*\s*@bruin\s*(.*?)\s*@bruin\s*\*/`)
+	dbtRefPattern     = regexp.MustCompile(`(?is)\{\{\s*ref\s*\(\s*['"]([^'"]+)['"]`)
+	dbtSourcePattern  = regexp.MustCompile(`(?is)\{\{\s*source\s*\(\s*['"]([^'"]+)['"]\s*,\s*['"]([^'"]+)['"]`)
 )
 
 func LoadGraphFromDir(ctx context.Context, root string) (CanonicalGraph, error) {
@@ -32,12 +30,14 @@ func LoadGraphFromDir(ctx context.Context, root string) (CanonicalGraph, error) 
 		if err := loadDBTGraph(ctx, absRoot, &graph); err != nil {
 			return graph, err
 		}
-		return normalizeGraph(graph), nil
+		graph = normalizeGraph(graph)
+		return InferSchemaSnapshot(ctx, graph, nil), nil
 	}
 	if err := loadBruinGraph(ctx, absRoot, &graph, "bruin"); err != nil {
 		return graph, err
 	}
-	return normalizeGraph(graph), nil
+	graph = normalizeGraph(graph)
+	return InferSchemaSnapshot(ctx, graph, nil), nil
 }
 
 func GraphFromRenartAssets(workspaceURI URI, assets []AssetNode, columns map[string][]ColumnInfo) CanonicalGraph {
@@ -48,9 +48,12 @@ func GraphFromRenartAssets(workspaceURI URI, assets []AssetNode, columns map[str
 		asset.Provenance = append(asset.Provenance, Provenance{Provider: "renart", ProviderID: asset.ID, URI: asset.URI, Confidence: "high"})
 		graph.Assets = append(graph.Assets, asset)
 		graph.Relations = append(graph.Relations, RelationNode{ID: relationID, Name: asset.Name, AssetID: asset.ID, Provenance: asset.Provenance})
-		if cols := columns[asset.ID]; len(cols) > 0 {
-			graph.Schemas = append(graph.Schemas, SchemaLayer{RelationID: relationID, SourceKind: "declared", Completeness: "partial", Columns: cols, Provenance: asset.Provenance})
+		cols := columns[asset.ID]
+		layer := SchemaLayer{RelationID: relationID, SourceKind: "unknown", Completeness: "unknown", Confidence: "low", Columns: []ColumnInfo{}, Provenance: asset.Provenance}
+		if len(cols) > 0 {
+			layer = SchemaLayer{RelationID: relationID, SourceKind: "declared", Completeness: "complete", Confidence: "high", Columns: cols, Provenance: asset.Provenance}
 		}
+		graph.Schemas = append(graph.Schemas, layer)
 	}
 	return normalizeGraph(graph)
 }
@@ -118,9 +121,12 @@ func loadBruinYAMLAsset(root, path string, graph *CanonicalGraph, provider strin
 	provenance := []Provenance{{Provider: provider, ProviderID: assetID, URI: FileURI(path), Confidence: "medium"}}
 	graph.Assets = append(graph.Assets, AssetNode{ID: assetID, Name: name, Kind: "seed", Dialect: DialectFromAssetType(fmt.Sprint(meta["type"])), Connection: strings.TrimSpace(fmt.Sprint(meta["connection"])), URI: FileURI(path), OutputRelations: []string{relationID}, Provenance: provenance})
 	graph.Relations = append(graph.Relations, RelationNode{ID: relationID, Name: name, AssetID: assetID, Provenance: provenance})
-	if columns := columnsFromYAML(meta["columns"]); len(columns) > 0 {
-		graph.Schemas = append(graph.Schemas, SchemaLayer{RelationID: relationID, SourceKind: "declared", Completeness: "partial", Columns: columns, Provenance: provenance})
+	columns := columnsFromYAML(meta["columns"])
+	layer := SchemaLayer{RelationID: relationID, SourceKind: "unknown", Completeness: "unknown", Confidence: "low", Columns: []ColumnInfo{}, Provenance: provenance}
+	if len(columns) > 0 {
+		layer = SchemaLayer{RelationID: relationID, SourceKind: "declared", Completeness: "complete", Confidence: "high", Columns: columns, Provenance: provenance}
 	}
+	graph.Schemas = append(graph.Schemas, layer)
 	return nil
 }
 
@@ -155,7 +161,7 @@ func loadDBTGraph(ctx context.Context, root string, graph *CanonicalGraph) error
 		relationID := relationID("dbt", sourceName)
 		provenance := []Provenance{{Provider: "dbt", ProviderID: "source:" + sourceName, Confidence: "medium"}}
 		graph.Relations = append(graph.Relations, RelationNode{ID: relationID, Name: sourceName, Provenance: provenance})
-		graph.Schemas = append(graph.Schemas, SchemaLayer{RelationID: relationID, SourceKind: "declared", Completeness: "partial", Columns: columns, Provenance: provenance})
+		graph.Schemas = append(graph.Schemas, SchemaLayer{RelationID: relationID, SourceKind: "declared", Completeness: "complete", Confidence: "high", Columns: columns, Provenance: provenance})
 	}
 	return filepath.WalkDir(root, func(path string, entry fs.DirEntry, err error) error {
 		if err != nil {
@@ -206,13 +212,15 @@ func addSQLAsset(graph *CanonicalGraph, provider, name, filePath, sql, dialect s
 	rendered.Provenance = provenance
 	graph.Renderings = append(graph.Renderings, rendered)
 	graph.Relations = append(graph.Relations, RelationNode{ID: relationID, Name: name, AssetID: assetID, Provenance: provenance})
-	columns := columnsFromSQL(sql)
+	columns := columnsFromYAML(meta["columns"])
 	if declared, ok := meta["declared_columns"].([]ColumnInfo); ok && len(declared) > 0 {
 		columns = mergeColumns(declared, columns)
 	}
+	layer := SchemaLayer{RelationID: relationID, SourceKind: "unknown", Completeness: "unknown", Confidence: "low", Columns: []ColumnInfo{}, Provenance: provenance}
 	if len(columns) > 0 {
-		graph.Schemas = append(graph.Schemas, SchemaLayer{RelationID: relationID, SourceKind: "inferred", Completeness: "partial", Columns: columns, Provenance: provenance})
+		layer = SchemaLayer{RelationID: relationID, SourceKind: "declared", Completeness: "complete", Confidence: "high", Columns: columns, Provenance: provenance}
 	}
+	graph.Schemas = append(graph.Schemas, layer)
 	for _, ref := range referencesFromSQL(provider, assetID, sql) {
 		graph.References = append(graph.References, ref)
 	}
@@ -335,36 +343,29 @@ func columnsFromYAML(value any) []ColumnInfo {
 		if name == "" {
 			continue
 		}
-		columns = append(columns, ColumnInfo{Name: name, Type: strings.TrimSpace(fmt.Sprint(item["type"]))})
+		column := ColumnInfo{
+			Name:       name,
+			Type:       strings.TrimSpace(fmt.Sprint(item["type"])),
+			PrimaryKey: boolFromYAML(item["primary_key"]),
+		}
+		if nullable, ok := item["nullable"].(bool); ok {
+			column.Nullable = &nullable
+		}
+		if foreignKey, ok := item["foreign_key"].(map[string]any); ok {
+			table := strings.TrimSpace(fmt.Sprint(foreignKey["table"]))
+			targetColumn := strings.TrimSpace(fmt.Sprint(foreignKey["column"]))
+			if table != "" && table != "<nil>" && targetColumn != "" && targetColumn != "<nil>" {
+				column.ForeignKey = &ColumnReference{Table: table, Column: targetColumn}
+			}
+		}
+		columns = append(columns, column)
 	}
 	return columns
 }
 
-func columnsFromSQL(sql string) []ColumnInfo {
-	seen := map[string]bool{}
-	var columns []ColumnInfo
-	for _, match := range selectAliasPatternLSP.FindAllStringSubmatch(sql, -1) {
-		name := match[1]
-		if !seen[strings.ToLower(name)] {
-			seen[strings.ToLower(name)] = true
-			columns = append(columns, ColumnInfo{Name: name})
-		}
-	}
-	selectMatch := selectColumnPatternLSP.FindStringSubmatch(stripTemplates(sql))
-	if len(selectMatch) >= 2 {
-		for _, part := range strings.Split(selectMatch[1], ",") {
-			part = strings.TrimSpace(part)
-			if part == "" || strings.Contains(part, "(") || strings.Contains(part, "*") {
-				continue
-			}
-			fields := strings.Fields(part)
-			if len(fields) == 1 && wordPattern.MatchString(fields[0]) && !seen[strings.ToLower(fields[0])] {
-				seen[strings.ToLower(fields[0])] = true
-				columns = append(columns, ColumnInfo{Name: fields[0]})
-			}
-		}
-	}
-	return columns
+func boolFromYAML(value any) bool {
+	result, _ := value.(bool)
+	return result
 }
 
 func stripTemplates(sql string) string {

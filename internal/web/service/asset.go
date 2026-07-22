@@ -117,11 +117,15 @@ type PythonDiagnosticsResponse struct {
 }
 
 type PythonDiagnostic struct {
-	ID       string       `json:"id"`
-	Message  string       `json:"message"`
-	Severity string       `json:"severity"`
-	Range    *PythonRange `json:"range,omitempty"`
-	Display  string       `json:"display,omitempty"`
+	ID         string       `json:"id"`
+	Code       string       `json:"code,omitempty"`
+	Source     string       `json:"source,omitempty"`
+	Message    string       `json:"message"`
+	Severity   string       `json:"severity"`
+	Range      *PythonRange `json:"range,omitempty"`
+	Display    string       `json:"display,omitempty"`
+	Scope      string       `json:"scope,omitempty"`
+	Confidence string       `json:"confidence,omitempty"`
 }
 
 type PythonRange struct {
@@ -224,6 +228,12 @@ type AssetDependencies struct {
 	PushAssetContentUpdateImmediate            func(string, string, []string, string)
 	ConnectionTypeFor                          func(string) string
 	SelectedEnvironment                        func() string
+	CurrentState                               func() WorkspaceState
+	// MaterializedSchemaFresh reports whether the selected asset's current
+	// materialized output was produced from its current source fingerprint. It
+	// is optional; schema reconciliation fails closed to advisory trust when the
+	// staleness service is unavailable.
+	MaterializedSchemaFresh func(context.Context, string, string, string) (bool, error)
 }
 
 type AssetService struct {
@@ -1086,8 +1096,8 @@ func DefaultDerivedSQLAssetContent(assetName, assetType, assetPath, sourceAssetN
 	return header + fmt.Sprintf("select * from %s\n", queryTarget)
 }
 
-// EnsurePythonProjectFile seeds a default pyproject.toml (pandas) beside a new
-// Python asset so it runs out of the box with uv. It is a no-op when any
+// EnsurePythonProjectFile seeds a default pipeline-level pyproject.toml (pandas)
+// for a new Python asset so it runs out of the box with uv. It is a no-op when any
 // ancestor up to the workspace root already declares Python dependencies
 // (pyproject.toml or a legacy requirements.txt), avoiding redundant manifests.
 func EnsurePythonProjectFile(absAssetPath, assetType, relAssetPath string) error {
@@ -1102,7 +1112,11 @@ func EnsurePythonProjectFile(absAssetPath, assetType, relAssetPath string) error
 		nearestPythonDependencyFile(startDir, workspaceRoot, "requirements.txt") != "" {
 		return nil
 	}
-	return writePyprojectDependencies(filepath.Join(startDir, pyprojectFile), "renart-pipeline", []string{"pandas"})
+	projectDir := nearestPipelineRoot(startDir, workspaceRoot)
+	if projectDir == "" {
+		projectDir = startDir
+	}
+	return writePyprojectDependencies(filepath.Join(projectDir, pyprojectFile), "renart-pipeline", []string{"pandas"})
 }
 
 func defaultDerivedSQLAssetContent(assetName, assetType, assetPath, sourceAssetName, connectionName string) string {

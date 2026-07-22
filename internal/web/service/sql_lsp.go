@@ -3,22 +3,26 @@ package service
 import (
 	"context"
 	"path/filepath"
-	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 
+	"github.com/bruin-data/bruin/pkg/pipeline"
+	"github.com/spf13/afero"
 	polyglot "github.com/tobilg/polyglot/packages/go"
 
+	"renart/internal/authoringdiag"
+	"renart/internal/sqlformat"
 	"renart/internal/sqllsp"
 	"renart/internal/web/model"
-	"renart/internal/web/sqlformat"
 )
 
 type SQLLSPRequest struct {
 	AssetID            string                   `json:"asset_id"`
 	Content            string                   `json:"content"`
 	Connection         string                   `json:"connection,omitempty"`
+	DocumentContext    string                   `json:"document_context,omitempty"`
 	Position           sqllsp.Position          `json:"position,omitempty"`
 	IncludeDeclaration bool                     `json:"include_declaration,omitempty"`
 	NewName            string                   `json:"new_name,omitempty"`
@@ -41,8 +45,9 @@ type SQLLSPResponse struct {
 }
 
 type SQLLSPDependencies struct {
-	WorkspaceRoot string
-	CurrentState  func() model.WorkspaceState
+	WorkspaceRoot    string
+	CurrentState     func() model.WorkspaceState
+	ResolveAssetByID func(context.Context, string) (string, *pipeline.Pipeline, *pipeline.Asset, error)
 	// PolyglotClient returns a shared SQL validation client, or nil when one is
 	// not (yet) available. It is consulted on every request so an
 	// asynchronously-loaded client is picked up as soon as it is ready. May be
@@ -61,10 +66,23 @@ type SQLLSPService struct {
 	cachedGraph      sqllsp.CanonicalGraph
 	cachedGraphReady bool
 	buildCount       atomic.Int64
+
+	assetCacheMu       sync.Mutex
+	assetCacheRevision int64
+	assetCacheEntries  map[string]*assetDiagnosticCacheEntry
+}
+
+type assetDiagnosticCacheEntry struct {
+	done     chan struct{}
+	findings map[string][]TypeCheckFinding
+	valid    bool
 }
 
 func NewSQLLSPService(deps SQLLSPDependencies) *SQLLSPService {
-	return &SQLLSPService{deps: deps}
+	return &SQLLSPService{
+		deps:              deps,
+		assetCacheEntries: map[string]*assetDiagnosticCacheEntry{},
+	}
 }
 
 // NewLazyPolyglotClient returns a getter suitable for
@@ -105,15 +123,200 @@ func (s *SQLLSPService) polyglotClient() *polyglot.Client {
 }
 
 func (s *SQLLSPService) Diagnostics(ctx context.Context, req SQLLSPRequest) (SQLLSPResponse, *APIError) {
-	engine, doc, apiErr := s.engineAndDocument(req)
+	graph, doc, apiErr := s.graphAndDocument(ctx, req)
 	if apiErr != nil {
 		return SQLLSPResponse{}, apiErr
 	}
-	return SQLLSPResponse{Status: "ok", Diagnostics: engine.Diagnostics(doc)}, nil
+	engine := sqllsp.NewEngineWithPolyglot(graph, s.polyglotClient())
+	diagnostics := engine.DiagnosticsContext(ctx, doc)
+	if strings.EqualFold(strings.TrimSpace(req.DocumentContext), "adhoc") {
+		diagnostics = diagnosticsWithoutCode(diagnostics, "circular-dependency")
+	} else {
+		diagnostics = appendUniqueServiceDiagnostics(diagnostics, s.assetDiagnostics(ctx, req.AssetID, doc)...)
+	}
+	return SQLLSPResponse{Status: "ok", Diagnostics: diagnostics}, nil
+}
+
+func diagnosticsWithoutCode(diagnostics []sqllsp.Diagnostic, code string) []sqllsp.Diagnostic {
+	filtered := make([]sqllsp.Diagnostic, 0, len(diagnostics))
+	for _, diagnostic := range diagnostics {
+		if strings.EqualFold(strings.TrimSpace(diagnostic.Code), code) {
+			continue
+		}
+		filtered = append(filtered, diagnostic)
+	}
+	return filtered
+}
+
+// assetDiagnostics adds the non-SQL authoring checks that pipeline type-check
+// owns (dependencies, materialization metadata, missing declared output
+// columns, and template rendering). They are computed once per saved
+// workspace revision and pipeline rather than on every editor keystroke.
+//
+// Document-scoped SQL findings are deliberately excluded here: the shared
+// semantic validator above already evaluates the current unsaved buffer. A
+// range-less asset finding is attached to the beginning of the document
+// without pretending that an arbitrary SQL token caused a metadata problem.
+func (s *SQLLSPService) assetDiagnostics(ctx context.Context, assetID string, doc sqllsp.TextDocumentItem) []sqllsp.Diagnostic {
+	if s.deps.ResolveAssetByID == nil {
+		return nil
+	}
+
+	state := s.deps.CurrentState()
+	pipelineID, ok := pipelineIDForAsset(state, assetID)
+	if !ok {
+		// Notebook cells use a synthetic pipeline and do not have a stable
+		// pipeline revision/cache identity. Their SQL is still validated by
+		// the shared semantic path above.
+		return nil
+	}
+
+	findings, ok := s.cachedAssetFindings(ctx, state.Revision, pipelineID, assetID)
+	if !ok {
+		return nil
+	}
+	return lspAssetDiagnostics(doc.Text, findings)
+}
+
+func pipelineIDForAsset(state model.WorkspaceState, assetID string) (string, bool) {
+	for _, candidate := range state.Pipelines {
+		for _, asset := range candidate.Assets {
+			if asset.ID == assetID {
+				pipelineKey := candidate.ID
+				if pipelineKey == "" {
+					pipelineKey = candidate.Path
+				}
+				if pipelineKey == "" {
+					pipelineKey = candidate.Name
+				}
+				return pipelineKey, true
+			}
+		}
+	}
+	return "", false
+}
+
+func (s *SQLLSPService) cachedAssetFindings(ctx context.Context, revision int64, pipelineID, assetID string) ([]TypeCheckFinding, bool) {
+	if revision <= 0 {
+		findings := s.buildAssetFindings(ctx, assetID)
+		result, ok := findings[assetID]
+		return result, ok
+	}
+
+	s.assetCacheMu.Lock()
+	if revision < s.assetCacheRevision {
+		s.assetCacheMu.Unlock()
+		return nil, false
+	}
+	if s.assetCacheRevision != revision {
+		s.assetCacheRevision = revision
+		s.assetCacheEntries = map[string]*assetDiagnosticCacheEntry{}
+	}
+	entry, exists := s.assetCacheEntries[pipelineID]
+	if !exists {
+		entry = &assetDiagnosticCacheEntry{done: make(chan struct{})}
+		s.assetCacheEntries[pipelineID] = entry
+	}
+	s.assetCacheMu.Unlock()
+
+	if exists {
+		select {
+		case <-ctx.Done():
+			return nil, false
+		case <-entry.done:
+			if !entry.valid {
+				return nil, false
+			}
+			result, ok := entry.findings[assetID]
+			return result, ok
+		}
+	}
+
+	entry.findings = s.buildAssetFindings(ctx, assetID)
+	entry.valid = ctx.Err() == nil
+	if ctx.Err() != nil {
+		// Do not make an abandoned editor request the cached answer for the
+		// rest of this workspace revision. Wake current waiters, then let the
+		// next request retry the pipeline-level checks.
+		s.assetCacheMu.Lock()
+		if current := s.assetCacheEntries[pipelineID]; current == entry {
+			delete(s.assetCacheEntries, pipelineID)
+		}
+		s.assetCacheMu.Unlock()
+	}
+	close(entry.done)
+	if !entry.valid {
+		return nil, false
+	}
+	result, ok := entry.findings[assetID]
+	return result, ok
+}
+
+func (s *SQLLSPService) buildAssetFindings(ctx context.Context, assetID string) map[string][]TypeCheckFinding {
+	result := map[string][]TypeCheckFinding{}
+	_, parsed, _, err := s.deps.ResolveAssetByID(ctx, assetID)
+	if err != nil || parsed == nil {
+		return result
+	}
+	tw, err := ResolveExecutionTimeWindow(string(parsed.Schedule), "", "", time.Now().UTC())
+	if err != nil {
+		return result
+	}
+	for _, asset := range CheckPipelineAssetFindings(ctx, afero.NewOsFs(), parsed, s.deps.WorkspaceRoot, tw) {
+		if asset.ID == "" {
+			continue
+		}
+		result[asset.ID] = append([]TypeCheckFinding(nil), asset.Findings...)
+	}
+	return result
+}
+
+func lspAssetDiagnostics(text string, findings []TypeCheckFinding) []sqllsp.Diagnostic {
+	result := make([]sqllsp.Diagnostic, 0, len(findings))
+	end := sqllsp.Position{}
+	if text != "" {
+		end = sqllsp.PositionAt(text, min(1, len(text)))
+	}
+	for _, finding := range findings {
+		delivery, registered := authoringdiag.TypeCheckDelivery(finding.Code)
+		if !registered || delivery != authoringdiag.DeliveryAssetHeader {
+			continue
+		}
+		severity := 2
+		if finding.Severity == typeCheckSeverityError {
+			severity = 1
+		}
+		result = append(result, sqllsp.Diagnostic{
+			Range:      sqllsp.Range{Start: sqllsp.Position{}, End: end},
+			Severity:   severity,
+			Code:       finding.Code,
+			Source:     finding.Source,
+			Message:    finding.Message,
+			Scope:      string(authoringdiag.ScopeAsset),
+			Confidence: finding.Confidence,
+		})
+	}
+	return result
+}
+
+func appendUniqueServiceDiagnostics(existing []sqllsp.Diagnostic, candidates ...sqllsp.Diagnostic) []sqllsp.Diagnostic {
+	for _, candidate := range candidates {
+		duplicate := false
+		for _, current := range existing {
+			if current.Code == candidate.Code && current.Message == candidate.Message && current.Range == candidate.Range {
+				duplicate = true
+				break
+			}
+		}
+		if !duplicate {
+			existing = append(existing, candidate)
+		}
+	}
+	return existing
 }
 
 func (s *SQLLSPService) Completions(ctx context.Context, req SQLLSPRequest) (SQLLSPResponse, *APIError) {
-	engine, doc, apiErr := s.engineAndDocument(req)
+	engine, doc, apiErr := s.engineAndDocument(ctx, req)
 	if apiErr != nil {
 		return SQLLSPResponse{}, apiErr
 	}
@@ -121,7 +324,7 @@ func (s *SQLLSPService) Completions(ctx context.Context, req SQLLSPRequest) (SQL
 }
 
 func (s *SQLLSPService) Definition(ctx context.Context, req SQLLSPRequest) (SQLLSPResponse, *APIError) {
-	engine, doc, apiErr := s.engineAndDocument(req)
+	engine, doc, apiErr := s.engineAndDocument(ctx, req)
 	if apiErr != nil {
 		return SQLLSPResponse{}, apiErr
 	}
@@ -139,13 +342,13 @@ func (s *SQLLSPService) References(ctx context.Context, req SQLLSPRequest) (SQLL
 		content, _ = sqlLSPDocumentContent(asset)
 	}
 	doc := sqllsp.TextDocumentItem{URI: assetURI(s.deps.WorkspaceRoot, asset), LanguageID: "sql", Text: content}
-	engine := sqllsp.NewEngineWithPolyglot(s.graphForRequest(state, notebook), s.polyglotClient())
+	engine := sqllsp.NewEngineWithPolyglot(s.graphForRequest(ctx, state, notebook), s.polyglotClient())
 	docs := s.documentsForState(state, notebook, req.AssetID, content)
 	return SQLLSPResponse{Status: "ok", Locations: engine.WorkspaceReferences(doc, req.Position, docs, req.IncludeDeclaration)}, nil
 }
 
 func (s *SQLLSPService) Rename(ctx context.Context, req SQLLSPRequest) (SQLLSPResponse, *APIError) {
-	engine, doc, apiErr := s.engineAndDocument(req)
+	engine, doc, apiErr := s.engineAndDocument(ctx, req)
 	if apiErr != nil {
 		return SQLLSPResponse{}, apiErr
 	}
@@ -159,7 +362,7 @@ func (s *SQLLSPService) Rename(ctx context.Context, req SQLLSPRequest) (SQLLSPRe
 }
 
 func (s *SQLLSPService) CodeActions(ctx context.Context, req SQLLSPRequest) (SQLLSPResponse, *APIError) {
-	engine, doc, apiErr := s.engineAndDocument(req)
+	engine, doc, apiErr := s.engineAndDocument(ctx, req)
 	if apiErr != nil {
 		return SQLLSPResponse{}, apiErr
 	}
@@ -167,7 +370,7 @@ func (s *SQLLSPService) CodeActions(ctx context.Context, req SQLLSPRequest) (SQL
 }
 
 func (s *SQLLSPService) Hover(ctx context.Context, req SQLLSPRequest) (SQLLSPResponse, *APIError) {
-	engine, doc, apiErr := s.engineAndDocument(req)
+	engine, doc, apiErr := s.engineAndDocument(ctx, req)
 	if apiErr != nil {
 		return SQLLSPResponse{}, apiErr
 	}
@@ -175,7 +378,7 @@ func (s *SQLLSPService) Hover(ctx context.Context, req SQLLSPRequest) (SQLLSPRes
 }
 
 func (s *SQLLSPService) SemanticTokens(ctx context.Context, req SQLLSPRequest) (SQLLSPResponse, *APIError) {
-	engine, doc, apiErr := s.engineAndDocument(req)
+	engine, doc, apiErr := s.engineAndDocument(ctx, req)
 	if apiErr != nil {
 		return SQLLSPResponse{}, apiErr
 	}
@@ -188,7 +391,7 @@ func (s *SQLLSPService) SemanticTokens(ctx context.Context, req SQLLSPRequest) (
 }
 
 func (s *SQLLSPService) DocumentSymbols(ctx context.Context, req SQLLSPRequest) (SQLLSPResponse, *APIError) {
-	engine, doc, apiErr := s.engineAndDocument(req)
+	engine, doc, apiErr := s.engineAndDocument(ctx, req)
 	if apiErr != nil {
 		return SQLLSPResponse{}, apiErr
 	}
@@ -196,7 +399,7 @@ func (s *SQLLSPService) DocumentSymbols(ctx context.Context, req SQLLSPRequest) 
 }
 
 func (s *SQLLSPService) Formatting(ctx context.Context, req SQLLSPRequest) (SQLLSPResponse, *APIError) {
-	_, doc, apiErr := s.engineAndDocument(req)
+	_, doc, apiErr := s.engineAndDocument(ctx, req)
 	if apiErr != nil {
 		return SQLLSPResponse{}, apiErr
 	}
@@ -215,7 +418,7 @@ func (s *SQLLSPService) Formatting(ctx context.Context, req SQLLSPRequest) (SQLL
 }
 
 func (s *SQLLSPService) SignatureHelp(ctx context.Context, req SQLLSPRequest) (SQLLSPResponse, *APIError) {
-	engine, doc, apiErr := s.engineAndDocument(req)
+	engine, doc, apiErr := s.engineAndDocument(ctx, req)
 	if apiErr != nil {
 		return SQLLSPResponse{}, apiErr
 	}
@@ -241,22 +444,30 @@ func (s *SQLLSPService) dialectForDocument(doc sqllsp.TextDocumentItem) string {
 	return sqlformat.DialectGeneric
 }
 
-func (s *SQLLSPService) engineAndDocument(req SQLLSPRequest) (*sqllsp.Engine, sqllsp.TextDocumentItem, *APIError) {
+func (s *SQLLSPService) engineAndDocument(ctx context.Context, req SQLLSPRequest) (*sqllsp.Engine, sqllsp.TextDocumentItem, *APIError) {
+	graph, doc, apiErr := s.graphAndDocument(ctx, req)
+	if apiErr != nil {
+		return nil, sqllsp.TextDocumentItem{}, apiErr
+	}
+	return sqllsp.NewEngineWithPolyglot(graph, s.polyglotClient()), doc, nil
+}
+
+func (s *SQLLSPService) graphAndDocument(ctx context.Context, req SQLLSPRequest) (sqllsp.CanonicalGraph, sqllsp.TextDocumentItem, *APIError) {
 	state := s.deps.CurrentState()
 	asset, notebook, ok := s.selectedAsset(state, req.AssetID)
 	if !ok {
-		return nil, sqllsp.TextDocumentItem{}, &APIError{Status: 400, Code: "asset_not_found", Message: "asset not found"}
+		return sqllsp.CanonicalGraph{}, sqllsp.TextDocumentItem{}, &APIError{Status: 400, Code: "asset_not_found", Message: "asset not found"}
 	}
 	content := req.Content
 	if strings.TrimSpace(content) == "" {
 		content, _ = sqlLSPDocumentContent(asset)
 	}
 	doc := sqllsp.TextDocumentItem{URI: assetURI(s.deps.WorkspaceRoot, asset), LanguageID: "sql", Text: content}
-	graph := s.graphForRequest(state, notebook)
+	graph := s.graphForRequest(ctx, state, notebook)
 	if connection := strings.TrimSpace(req.Connection); connection != "" {
 		graph = graphWithDocumentConnection(graph, doc.URI, connection)
 	}
-	return sqllsp.NewEngineWithPolyglot(graph, s.polyglotClient()), doc, nil
+	return graph, doc, nil
 }
 
 // graphWithDocumentConnection gives an embedded SQL query its runtime-selected
@@ -346,7 +557,7 @@ func sqlLSPDocumentContent(asset model.Asset) (string, bool) {
 // saved state, and rebuilding the graph each time is wasted work. A Revision of
 // 0 (an unmanaged/initial state) is never cached so callers always see fresh
 // results.
-func (s *SQLLSPService) graphForState(state model.WorkspaceState) sqllsp.CanonicalGraph {
+func (s *SQLLSPService) graphForState(ctx context.Context, state model.WorkspaceState) sqllsp.CanonicalGraph {
 	revision := state.Revision
 	if revision > 0 {
 		s.cacheMu.Lock()
@@ -358,19 +569,21 @@ func (s *SQLLSPService) graphForState(state model.WorkspaceState) sqllsp.Canonic
 		s.cacheMu.Unlock()
 	}
 
-	graph := s.buildGraph(state)
+	graph := s.buildGraph(ctx, state)
 
 	if revision > 0 {
 		s.cacheMu.Lock()
-		s.cachedRevision = revision
-		s.cachedGraph = graph
-		s.cachedGraphReady = true
+		if !s.cachedGraphReady || revision >= s.cachedRevision {
+			s.cachedRevision = revision
+			s.cachedGraph = graph
+			s.cachedGraphReady = true
+		}
 		s.cacheMu.Unlock()
 	}
 	return graph
 }
 
-func (s *SQLLSPService) buildGraph(state model.WorkspaceState) sqllsp.CanonicalGraph {
+func (s *SQLLSPService) buildGraph(ctx context.Context, state model.WorkspaceState) sqllsp.CanonicalGraph {
 	s.buildCount.Add(1)
 	var pipelineAssets []model.Asset
 	for _, pipeline := range state.Pipelines {
@@ -378,19 +591,19 @@ func (s *SQLLSPService) buildGraph(state model.WorkspaceState) sqllsp.CanonicalG
 	}
 	nodes, columns := s.graphAssetNodes(pipelineAssets)
 	graph := sqllsp.GraphFromRenartAssets(sqllsp.FileURI(s.deps.WorkspaceRoot), nodes, columns)
-	return s.withInferredColumns(graph, pipelineAssets, columns)
+	return sqllsp.InferSchemaSnapshot(ctx, graph, inferenceAssetsFromModels(s.deps.WorkspaceRoot, pipelineAssets))
 }
 
 // graphForRequest returns the revision-cached pipeline graph, extended with the
 // requesting notebook's cells when the request targets one. Cells are scoped to
 // their notebook — pipeline assets and other notebooks never see them —
 // mirroring the per-notebook DuckDB session.
-func (s *SQLLSPService) graphForRequest(state model.WorkspaceState, notebook *model.Notebook) sqllsp.CanonicalGraph {
-	graph := s.graphForState(state)
+func (s *SQLLSPService) graphForRequest(ctx context.Context, state model.WorkspaceState, notebook *model.Notebook) sqllsp.CanonicalGraph {
+	graph := s.graphForState(ctx, state)
 	if notebook == nil {
 		return graph
 	}
-	return s.graphWithNotebookCells(graph, *notebook)
+	return s.graphWithNotebookCells(ctx, graph, *notebook)
 }
 
 // graphWithNotebookCells extends base with the notebook's cells (relations with
@@ -399,7 +612,7 @@ func (s *SQLLSPService) graphForRequest(state model.WorkspaceState, notebook *mo
 // warehouse tables do not surface as unresolved relations. base is the shared
 // cached graph, so the extension builds fresh slices instead of appending in
 // place.
-func (s *SQLLSPService) graphWithNotebookCells(base sqllsp.CanonicalGraph, notebook model.Notebook) sqllsp.CanonicalGraph {
+func (s *SQLLSPService) graphWithNotebookCells(ctx context.Context, base sqllsp.CanonicalGraph, notebook model.Notebook) sqllsp.CanonicalGraph {
 	nodes, columns := s.graphAssetNodes(notebook.Cells)
 	cellGraph := sqllsp.GraphFromRenartAssets(base.WorkspaceURI, nodes, columns)
 
@@ -426,7 +639,7 @@ func (s *SQLLSPService) graphWithNotebookCells(base sqllsp.CanonicalGraph, noteb
 		}
 	}
 
-	return s.withInferredColumns(merged, notebook.Cells, columns)
+	return sqllsp.InferSchemaSnapshot(ctx, merged, inferenceAssetsFromModels(s.deps.WorkspaceRoot, notebook.Cells))
 }
 
 // graphAssetNodes converts workspace assets (pipeline assets or notebook cells)
@@ -460,145 +673,55 @@ func (s *SQLLSPService) graphAssetNodes(modelAssets []model.Asset) ([]sqllsp.Ass
 			URI:        assetURI(s.deps.WorkspaceRoot, asset),
 		})
 		for _, column := range asset.Columns {
-			columns[asset.ID] = append(columns[asset.ID], sqllsp.ColumnInfo{Name: column.Name, Type: column.Type, Description: column.Description})
+			columns[asset.ID] = append(columns[asset.ID], columnInfoFromModelColumn(column))
 		}
 	}
 	return nodes, columns
 }
 
-// maxInferenceRounds caps the column-inference fixpoint. Targets are processed
-// upstream-first with in-round index updates, so a well-formed DAG converges in
-// two rounds (one to propagate, one to confirm stability) regardless of chain
-// depth; the cap only bites when declared upstreams are missing, stale, or
-// cyclic, where each round still propagates at least one hop. Chains that
-// exhaust it degrade to missing columns (no completions, no column
-// validation), never false diagnostics.
-const maxInferenceRounds = 5
-
-// withInferredColumns appends inferred schema layers for the SQL assets that
-// declare no columns. Inference is self-referential — a `select *` asset
-// copies its upstream's columns, which may themselves be inferred — so it runs
-// to a fixpoint: rounds repeat until no inferred column set changes (or
-// maxInferenceRounds). Each round re-infers every undeclared asset (partial
-// results can grow, e.g. `select a.x, *`) and applies each result to the
-// engine's index immediately, so later assets in the same round see it.
-// Processing upstream-first (topoOrderInferenceTargets, using the
-// auto-reconciled declared upstreams) makes that in-round chaining resolve a
-// DAG in a single round; the fixpoint remains the correctness net when the
-// edges lie. The final result is the least fixpoint either way — order only
-// affects how fast it converges, not what it converges to.
-func (s *SQLLSPService) withInferredColumns(graph sqllsp.CanonicalGraph, modelAssets []model.Asset, columns map[string][]sqllsp.ColumnInfo) sqllsp.CanonicalGraph {
-	relationByAssetID := map[string]sqllsp.RelationNode{}
-	for _, relation := range graph.Relations {
-		if relation.AssetID != "" {
-			relationByAssetID[relation.AssetID] = relation
+func columnInfoFromModelColumn(column model.Column) sqllsp.ColumnInfo {
+	result := sqllsp.ColumnInfo{
+		Name:        column.Name,
+		Type:        column.Type,
+		Description: column.Description,
+		Nullable:    cloneBool(column.Nullable),
+		PrimaryKey:  column.PrimaryKey,
+	}
+	if column.ForeignKey != nil {
+		table := strings.TrimSpace(column.ForeignKey.Table)
+		targetColumn := strings.TrimSpace(column.ForeignKey.Column)
+		if table != "" && targetColumn != "" {
+			result.ForeignKey = &sqllsp.ColumnReference{Table: table, Column: targetColumn}
 		}
 	}
-	var targets []model.Asset
-	for _, asset := range modelAssets {
-		if len(columns[asset.ID]) > 0 || !strings.HasSuffix(strings.ToLower(asset.Type), ".sql") {
-			continue
-		}
-		if _, ok := relationByAssetID[asset.ID]; !ok {
-			continue
-		}
-		targets = append(targets, asset)
-	}
-	if len(targets) == 0 {
-		return graph
-	}
-	targets = topoOrderInferenceTargets(targets)
-
-	baseSchemas := graph.Schemas
-	inferred := map[string][]sqllsp.ColumnInfo{}
-	for round := 0; round < maxInferenceRounds; round++ {
-		engine := sqllsp.NewEngine(graph)
-		changed := false
-		for _, asset := range targets {
-			next := engine.InferOutputColumns(asset.Content)
-			if slices.Equal(next, inferred[asset.ID]) {
-				continue
-			}
-			inferred[asset.ID] = next
-			engine.SetRelationColumns(relationByAssetID[asset.ID].ID, next)
-			changed = true
-		}
-		if !changed {
-			break
-		}
-		// Rebuild the schema list from the base each round so a relation never
-		// carries stale layers from earlier rounds; base is shared with the
-		// cached graph, so append onto a fresh slice.
-		schemas := append(make([]sqllsp.SchemaLayer, 0, len(baseSchemas)+len(targets)), baseSchemas...)
-		for _, asset := range targets {
-			cols := inferred[asset.ID]
-			if len(cols) == 0 {
-				continue
-			}
-			relation := relationByAssetID[asset.ID]
-			schemas = append(schemas, sqllsp.SchemaLayer{
-				RelationID:   relation.ID,
-				SourceKind:   "inferred",
-				Completeness: "partial",
-				Columns:      cols,
-				Provenance:   relation.Provenance,
-			})
-		}
-		graph.Schemas = schemas
-	}
-	return graph
+	return result
 }
 
-// topoOrderInferenceTargets orders inference targets upstream-first (Kahn's
-// algorithm) using their declared upstreams, which are kept truthful by
-// dependency reconciliation on asset save and by the notebook loader's
-// used-tables scan. Only edges between targets matter — an upstream with
-// declared columns needs no inference. Assets on cycles (or with indegrees
-// the queue never drains) are appended in their original order; the caller's
-// fixpoint absorbs them.
-func topoOrderInferenceTargets(targets []model.Asset) []model.Asset {
-	indexByName := map[string]int{}
-	for i, asset := range targets {
-		indexByName[strings.ToLower(strings.TrimSpace(asset.Name))] = i
+func cloneBool(value *bool) *bool {
+	if value == nil {
+		return nil
 	}
-	downstream := make([][]int, len(targets))
-	indegree := make([]int, len(targets))
-	for i, asset := range targets {
-		for _, upstream := range asset.Upstreams {
-			j, ok := indexByName[strings.ToLower(strings.TrimSpace(upstream))]
-			if !ok || j == i {
-				continue
-			}
-			downstream[j] = append(downstream[j], i)
-			indegree[i]++
+	copy := *value
+	return &copy
+}
+
+func inferenceAssetsFromModels(root string, assets []model.Asset) []sqllsp.InferenceAsset {
+	result := make([]sqllsp.InferenceAsset, 0, len(assets))
+	for _, asset := range assets {
+		content, isSQL := sqlLSPDocumentContent(asset)
+		if !isSQL || strings.TrimSpace(content) == "" {
+			continue
 		}
+		result = append(result, sqllsp.InferenceAsset{
+			ID:        asset.ID,
+			Name:      asset.Name,
+			URI:       assetURI(root, asset),
+			SQL:       content,
+			Dialect:   sqllsp.DialectFromAssetType(asset.Type),
+			Upstreams: append([]string(nil), asset.Upstreams...),
+		})
 	}
-	ordered := make([]model.Asset, 0, len(targets))
-	visited := make([]bool, len(targets))
-	queue := make([]int, 0, len(targets))
-	for i := range targets {
-		if indegree[i] == 0 {
-			queue = append(queue, i)
-		}
-	}
-	for len(queue) > 0 {
-		i := queue[0]
-		queue = queue[1:]
-		visited[i] = true
-		ordered = append(ordered, targets[i])
-		for _, j := range downstream[i] {
-			indegree[j]--
-			if indegree[j] == 0 {
-				queue = append(queue, j)
-			}
-		}
-	}
-	for i := range targets {
-		if !visited[i] {
-			ordered = append(ordered, targets[i])
-		}
-	}
-	return ordered
+	return result
 }
 
 func assetURI(root string, asset model.Asset) sqllsp.URI {

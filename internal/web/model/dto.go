@@ -81,6 +81,10 @@ type ColumnSchemaSourceSnapshot struct {
 	Columns       []Column              `json:"columns"`
 	Notes         []string              `json:"notes,omitempty"`
 	SampleRecords *int                  `json:"sample_records,omitempty"`
+	// Fresh is set for materialized-table observations when Renart can compare
+	// the current pipeline fingerprint with its materialization record. It is
+	// runtime evidence only and is never persisted in asset metadata.
+	Fresh *bool `json:"fresh,omitempty"`
 }
 
 // ColumnSchemaMergeRow describes how one column compares across the inferred
@@ -178,10 +182,16 @@ type Column struct {
 	UpdateOnMerge bool              `json:"update_on_merge,omitempty"`
 	MergeSQL      string            `json:"merge_sql,omitempty"`
 	Nullable      *bool             `json:"nullable,omitempty"`
+	ForeignKey    *ColumnReference  `json:"foreign_key,omitempty"`
 	Owner         string            `json:"owner,omitempty"`
 	Domains       []string          `json:"domains,omitempty"`
 	Meta          map[string]string `json:"meta,omitempty"`
 	Checks        []ColumnCheck     `json:"checks,omitempty"`
+}
+
+type ColumnReference struct {
+	Table  string `json:"table"`
+	Column string `json:"column"`
 }
 
 // ColumnCheck represents a check on a column.
@@ -381,6 +391,20 @@ type UpdatePipelineConfigRequest struct {
 	NotificationsTeams   PipelineConfigNotification `json:"notifications_teams"`
 	Defaults             PipelineConfigDefaults     `json:"defaults"`
 	Variables            []PipelineConfigVariable   `json:"variables"`
+}
+
+// PipelinePythonDependenciesResponse is the editable Python environment shared
+// by assets in one pipeline. Path is workspace-relative and points to the
+// canonical pyproject.toml even before that file is created.
+type PipelinePythonDependenciesResponse struct {
+	Status       string   `json:"status"`
+	PipelineID   string   `json:"pipeline_id"`
+	Path         string   `json:"path"`
+	Dependencies []string `json:"dependencies"`
+}
+
+type UpdatePipelinePythonDependenciesRequest struct {
+	Dependencies []string `json:"dependencies"`
 }
 
 // CreateAssetRequest is the request body for creating an asset.

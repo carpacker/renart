@@ -13,6 +13,7 @@ export const RENART_META = {
   colAdd: "renart_col_add",
   colDrop: "renart_col_drop",
   colOwn: "renart_col_own",
+  colSource: "renart_col_src",
 } as const;
 
 export type DependencyMode = "full" | "symbolic";
@@ -30,6 +31,7 @@ export type AssetProvenance = {
   colAdd: Set<string>;
   colDrop: Set<string>;
   colOwn: Map<string, Set<string>>;
+  colSource: Map<string, string>;
 };
 
 function splitList(raw?: string): string[] {
@@ -76,6 +78,19 @@ function parseOwn(raw?: string): Map<string, Set<string>> {
   return out;
 }
 
+function parseMap(raw?: string): Map<string, string> {
+  const out = new Map<string, string>();
+  if (!raw) return out;
+  for (const entry of raw.split(";")) {
+    const separator = entry.lastIndexOf(":");
+    if (separator <= 0 || separator === entry.length - 1) continue;
+    const key = entry.slice(0, separator).trim().toLowerCase();
+    const value = entry.slice(separator + 1).trim();
+    if (key && value) out.set(key, value);
+  }
+  return out;
+}
+
 export function parseAssetProvenance(meta?: Record<string, string>): AssetProvenance {
   return {
     depAdd: splitList(meta?.[RENART_META.depAdd]).map(parseDependencyKey),
@@ -83,6 +98,7 @@ export function parseAssetProvenance(meta?: Record<string, string>): AssetProven
     colAdd: new Set(splitList(meta?.[RENART_META.colAdd]).map((n) => n.toLowerCase())),
     colDrop: new Set(splitList(meta?.[RENART_META.colDrop]).map((n) => n.toLowerCase())),
     colOwn: parseOwn(meta?.[RENART_META.colOwn]),
+    colSource: parseMap(meta?.[RENART_META.colSource]),
   };
 }
 
@@ -126,12 +142,19 @@ export function classifyDependencies(asset: WebAsset): DependencyClassification 
   return { inferred, manual, ignored };
 }
 
-export type ColumnStatus = "inferred" | "manual" | "type-owned";
+export type ColumnStatus =
+  | "inferred"
+  | "manual"
+  | "type-owned"
+  | "table-inferred"
+  | "live-inferred";
 
 /** Best-effort status for a column row, for the Columns card markers. */
 export function columnStatus(columnName: string, provenance: AssetProvenance): ColumnStatus {
   const lower = columnName.toLowerCase();
   if (provenance.colAdd.has(lower)) return "manual";
   if (provenance.colOwn.get(lower)?.has("type")) return "type-owned";
+  if (provenance.colSource.get(lower) === "m") return "table-inferred";
+  if (provenance.colSource.get(lower) === "l") return "live-inferred";
   return "inferred";
 }

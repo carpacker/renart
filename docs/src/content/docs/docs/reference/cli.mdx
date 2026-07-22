@@ -105,6 +105,10 @@ its fidelity; a semantic or runtime-only stage is not presented as exact SQL.
 Configured column and custom quality checks are listed as individually named
 stages, with their exact destination-specific SQL when the direct runtime can
 render it without a warehouse. Credential values are redacted or omitted.
+In an interactive terminal, SQL and other structured stage bodies are syntax
+highlighted using terminal light/dark hints when available. Piped or redirected output stays
+plain; set `NO_COLOR=1` to disable color explicitly. `--json` never includes
+ANSI formatting.
 
 Exit codes: `0` preview produced, `1` render error or unsupported asset, `2`
 usage error.

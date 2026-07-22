@@ -280,10 +280,19 @@ export function usePythonIntellisense(
       if (!model) {
         return;
       }
+      const requestVersion = model.getVersionId();
+      const requestContent = model.getValue();
 
-      void getPythonDiagnostics(asset.id, content, controller.signal)
+      void getPythonDiagnostics(asset.id, requestContent, controller.signal)
         .then((response) => {
-          if (controller.signal.aborted || response.status !== "ok") {
+          if (
+            controller.signal.aborted ||
+            response.status !== "ok" ||
+            model.isDisposed() ||
+            editor.getModel() !== model ||
+            model.getVersionId() !== requestVersion ||
+            model.getValue() !== requestContent
+          ) {
             return;
           }
           monaco.editor.setModelMarkers(
@@ -458,6 +467,8 @@ function diagnosticToMarker(
     {
       severity: severityToMarker(monaco, diagnostic.severity),
       message: diagnostic.message,
+      code: diagnostic.code ?? diagnostic.id,
+      source: diagnostic.source,
       startLineNumber: range.start.line,
       startColumn: range.start.column,
       endLineNumber: range.end.line,

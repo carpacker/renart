@@ -12,8 +12,9 @@ import (
 	"github.com/bruin-data/bruin/pkg/query"
 	"github.com/spf13/afero"
 
+	"renart/internal/authoringdiag"
+	"renart/internal/sqlintelligence"
 	"renart/internal/sqllsp"
-	"renart/internal/web/sqlintelligence"
 )
 
 const typeCheckRunID = "renart-type-check"
@@ -54,15 +55,20 @@ const (
 
 // TypeCheckFinding is a single diagnostic about an asset (a type/column error
 // from the SQL parser, a template-rendering failure, or an asset-source
-// warning). Line/column are 1-based and point into the rendered SQL for SQL
-// findings or the Python source for Python findings.
+// warning). Line/column are 1-based and point into the authoring source when a
+// trustworthy render/source mapping exists, or the Python source for Python
+// findings. Generated SQL without a defensible mapping remains range-less.
 type TypeCheckFinding struct {
-	Severity  string `json:"severity"`
-	Message   string `json:"message"`
-	Line      int    `json:"line,omitempty"`
-	Column    int    `json:"column,omitempty"`
-	EndLine   int    `json:"end_line,omitempty"`
-	EndColumn int    `json:"end_column,omitempty"`
+	Code       string `json:"code"`
+	Source     string `json:"source"`
+	Severity   string `json:"severity"`
+	Message    string `json:"message"`
+	Line       int    `json:"line,omitempty"`
+	Column     int    `json:"column,omitempty"`
+	EndLine    int    `json:"end_line,omitempty"`
+	EndColumn  int    `json:"end_column,omitempty"`
+	Scope      string `json:"scope,omitempty"`
+	Confidence string `json:"confidence,omitempty"`
 }
 
 // TypeCheckAsset is the per-asset result of a pipeline type check.
@@ -143,11 +149,11 @@ func CheckPipelineAt(
 	}
 	sort.SliceStable(assets, func(i, j int) bool { return assets[i].Name < assets[j].Name })
 
-	knownSchema := assetsWithKnownSchema(ctx, pp)
-	connectionEngine := typeCheckConnectionEngine(pp, workspaceRoot)
+	snapshot := buildTypeCheckSchemaSnapshot(ctx, fs, pp, workspaceRoot, renderer, now, tw, assets)
+	connectionEngine := sqllsp.NewEngine(snapshot.Graph)
 
 	for _, asset := range assets {
-		ac := checkAsset(ctx, fs, pp, workspaceRoot, renderer, now, tw, asset, knownSchema, connectionEngine)
+		ac := checkAsset(ctx, pp, workspaceRoot, asset, snapshot, connectionEngine)
 		report.Assets = append(report.Assets, ac)
 		report.Summary.Assets++
 		for _, finding := range ac.Findings {
@@ -170,27 +176,25 @@ func CheckPipelineAt(
 	return report
 }
 
-func checkAsset(ctx context.Context, fs afero.Fs, pp *pipeline.Pipeline, workspaceRoot string, renderer *jinja.Renderer, now time.Time, tw ExecutionTimeWindow, asset *pipeline.Asset, knownSchema map[string]bool, connectionEngine *sqllsp.Engine) TypeCheckAsset {
+type typeCheckSchemaSnapshot struct {
+	Graph         sqllsp.CanonicalGraph
+	Schema        sqlintelligence.Schema
+	Constraints   sqlintelligence.SchemaConstraints
+	Confidence    map[string]sqlintelligence.RelationConfidence
+	RenderedUnits map[*pipeline.Asset][]sqllsp.RenderedSQL
+	RenderErrors  map[*pipeline.Asset]error
+}
+
+func checkAsset(ctx context.Context, pp *pipeline.Pipeline, workspaceRoot string, asset *pipeline.Asset, snapshot typeCheckSchemaSnapshot, connectionEngine *sqllsp.Engine) TypeCheckAsset {
 	ac := TypeCheckAsset{
 		ID:       assetReportID(workspaceRoot, asset),
 		Name:     asset.Name,
 		Type:     string(asset.Type),
-		Findings: []TypeCheckFinding{},
+		Findings: assetLevelTypeCheckFindings(ctx, asset, pp, true),
 	}
-	ac.Findings = append(ac.Findings, dependencyTypeCheckFindings(ctx, asset, pp)...)
-	ac.Findings = append(ac.Findings, materializationTypeCheckFindings(asset, pp)...)
 
 	dialect, dialectErr := AssetTypeToDialect(asset.Type)
 	if dialectErr != nil {
-		ac.Findings = append(ac.Findings, pythonQueryDependencyFindings(asset, pp)...)
-		// Non-SQL asset: we cannot infer its output schema. Warn when a
-		// table-producing asset declares no columns so the gap is visible.
-		if nonSQLColumnsExpected(asset) && !assetHasDeclaredColumns(ctx, asset) {
-			ac.Findings = append(ac.Findings, TypeCheckFinding{
-				Severity: typeCheckSeverityWarning,
-				Message:  "Declares no columns; types cannot be inferred for " + string(asset.Type) + " assets. Declare columns to enable downstream type checking.",
-			})
-		}
 		ac.Status = statusFromFindings(ac.Findings)
 		return ac
 	}
@@ -201,65 +205,53 @@ func checkAsset(ctx context.Context, fs afero.Fs, pp *pipeline.Pipeline, workspa
 		return ac
 	}
 
-	queries, renderErr := renderAssetQueries(ctx, fs, renderer, now, tw, pp, asset)
+	units := snapshot.RenderedUnits[asset]
+	renderErr := snapshot.RenderErrors[asset]
 	if renderErr != nil {
-		ac.Findings = append(ac.Findings, TypeCheckFinding{
-			Severity: typeCheckSeverityError,
-			Message:  "Failed to render template: " + renderErr.Error(),
-		})
+		ac.Findings = append(ac.Findings, templateRenderFinding(renderErr))
 		ac.Status = typeCheckStatusError
 		return ac
 	}
 
-	schema := sqlintelligence.Schema{}
 	sources := sqlintelligence.SchemaColumnSourceMethods{}
-	ApplyAssetSQLDefinitionColumns(ctx, pp, asset, schema, sources)
-	// Register every other pipeline asset as a resolvable table even when its
-	// columns are unknown, so references to it are not flagged "Unresolved
-	// table". Column checks against unknown-schema tables are suppressed below.
-	for _, other := range pp.Assets {
-		if other == nil || other == asset {
-			continue
-		}
-		name := strings.TrimSpace(other.Name)
-		if name == "" {
-			continue
-		}
-		if _, exists := schema[name]; !exists {
-			schema[name] = map[string]string{}
-		}
-	}
+	ApplyAssetSQLDefinitionColumns(ctx, pp, asset, sqlintelligence.Schema{}, sources)
 
-	for _, renderedQuery := range queries {
+	for unitIndex, unit := range units {
+		renderedQuery := unit.RenderedSQL
 		for _, diagnostic := range connectionEngine.CrossConnectionDiagnostics(sqllsp.TextDocumentItem{
 			URI:        typeCheckAssetURI(workspaceRoot, asset),
 			LanguageID: "sql",
 			Text:       renderedQuery,
 		}) {
-			ac.Findings = append(ac.Findings, findingFromLSPDiagnostic(diagnostic))
+			ac.Findings = append(ac.Findings, findingFromMappedLSPDiagnostic(asset.ExecutableFile.Content, unit, renderedQuery, diagnostic))
 		}
-		parseContext, err := sqlintelligence.ParseContextWithSchema(renderedQuery, dialect, schema, sources)
+		var expectedOutput []sqlintelligence.SchemaColumn
+		if unitIndex == len(units)-1 {
+			expectedOutput = declaredAssetOutputColumns(asset)
+		}
+		validation, err := sqlintelligence.ValidateSQL(ctx, sqlintelligence.ValidationRequest{
+			URI:                 string(typeCheckAssetURI(workspaceRoot, asset)),
+			SQL:                 renderedQuery,
+			Dialect:             dialect,
+			Schema:              snapshot.Schema,
+			SchemaConstraints:   snapshot.Constraints,
+			RelationConfidence:  snapshot.Confidence,
+			ColumnSourceMethods: sources,
+			ExpectedOutput:      expectedOutput,
+		})
 		if err != nil {
 			ac.Findings = append(ac.Findings, TypeCheckFinding{
-				Severity: typeCheckSeverityError,
-				Message:  "Failed to parse SQL: " + err.Error(),
+				Code:       authoringdiag.CodeSQLValidationFailed,
+				Source:     authoringdiag.SourceRenart,
+				Severity:   typeCheckSeverityError,
+				Message:    "Failed to parse SQL: " + err.Error(),
+				Scope:      string(authoringdiag.ScopeDocument),
+				Confidence: string(authoringdiag.ConfidenceLow),
 			})
 			continue
 		}
-		// When the query reads from an upstream whose schema we cannot infer
-		// (an undeclared Python/API/Load asset, already flagged on the producer),
-		// we cannot verify column references against it — so suppress the
-		// cascading "unresolved column/table" errors rather than blaming the
-		// consumer for the producer's missing column declarations.
-		suppressUnresolved := referencesUnknownSchema(parseContext, knownSchema)
-		for _, diagnostic := range parseContext.Diagnostics {
-			if suppressUnresolved && isUnresolvedMessage(diagnostic.Message) {
-				continue
-			}
-			ac.Findings = append(ac.Findings, findingFromDiagnostic(diagnostic))
-		}
-		for _, parseErr := range parseContext.Errors {
-			ac.Findings = append(ac.Findings, TypeCheckFinding{Severity: typeCheckSeverityError, Message: parseErr})
+		for _, diagnostic := range validation.Diagnostics {
+			ac.Findings = append(ac.Findings, findingFromMappedAuthoringDiagnostic(asset.ExecutableFile.Content, unit, diagnostic))
 		}
 	}
 
@@ -267,21 +259,220 @@ func checkAsset(ctx context.Context, fs afero.Fs, pp *pipeline.Pipeline, workspa
 	return ac
 }
 
-func typeCheckConnectionEngine(pp *pipeline.Pipeline, workspaceRoot string) *sqllsp.Engine {
-	nodes := make([]sqllsp.AssetNode, 0, len(pp.Assets))
+func declaredAssetOutputColumns(asset *pipeline.Asset) []sqlintelligence.SchemaColumn {
+	if asset == nil || len(asset.Columns) == 0 {
+		return nil
+	}
+	columns := make([]sqlintelligence.SchemaColumn, 0, len(asset.Columns))
+	for _, column := range asset.Columns {
+		name := strings.TrimSpace(column.Name)
+		if name == "" {
+			continue
+		}
+		var nullable *bool
+		if column.Nullable.Value != nil {
+			value := *column.Nullable.Value
+			nullable = &value
+		}
+		columns = append(columns, sqlintelligence.SchemaColumn{Name: name, Type: strings.TrimSpace(column.Type), Nullable: nullable})
+	}
+	return columns
+}
+
+// CheckPipelineAssetFindings runs the typecheck rules that describe an asset
+// or its authoring metadata without running semantic SQL validation. The LSP
+// uses this pass when a saved workspace revision changes, while per-edit SQL
+// diagnostics continue through the shared semantic validator against the
+// unsaved document.
+func CheckPipelineAssetFindings(
+	ctx context.Context,
+	fs afero.Fs,
+	pp *pipeline.Pipeline,
+	workspaceRoot string,
+	tw ExecutionTimeWindow,
+) []TypeCheckAsset {
+	if pp == nil {
+		return nil
+	}
+	now := time.Now().UTC()
+	macroContent, _ := jinja.LoadMacros(fs, pp.MacrosPath)
+	renderer := jinja.NewRendererWithStartEndDatesAndMacros(
+		&tw.Start, &tw.End, &now, pp.Name, typeCheckRunID, jinja.Context(pp.Variables.Value()), macroContent,
+	)
+	assets := make([]*pipeline.Asset, 0, len(pp.Assets))
 	for _, asset := range pp.Assets {
+		if asset != nil {
+			assets = append(assets, asset)
+		}
+	}
+	sort.SliceStable(assets, func(i, j int) bool { return assets[i].Name < assets[j].Name })
+
+	result := make([]TypeCheckAsset, 0, len(assets))
+	for _, asset := range assets {
+		findings := assetLevelTypeCheckFindings(ctx, asset, pp, false)
+		if _, dialectErr := AssetTypeToDialect(asset.Type); dialectErr == nil && strings.TrimSpace(asset.ExecutableFile.Content) != "" {
+			if _, err := renderAssetQueries(ctx, fs, renderer, now, tw, pp, asset); err != nil {
+				findings = append(findings, templateRenderFinding(err))
+			}
+		}
+		result = append(result, TypeCheckAsset{
+			ID:       assetReportID(workspaceRoot, asset),
+			Name:     asset.Name,
+			Type:     string(asset.Type),
+			Status:   statusFromFindings(findings),
+			Findings: findings,
+		})
+	}
+	return result
+}
+
+func assetLevelTypeCheckFindings(ctx context.Context, asset *pipeline.Asset, pp *pipeline.Pipeline, includeDocumentFindings bool) []TypeCheckFinding {
+	findings := make([]TypeCheckFinding, 0)
+	if parseError := pipelineAssetParseError(asset); parseError != "" {
+		findings = append(findings, TypeCheckFinding{
+			Code:       authoringdiag.CodeAssetDefinitionParseFailed,
+			Source:     authoringdiag.SourceRenart,
+			Severity:   typeCheckSeverityError,
+			Message:    "Asset definition could not be parsed: " + parseError,
+			Scope:      string(authoringdiag.ScopeAsset),
+			Confidence: string(authoringdiag.ConfidenceHigh),
+		})
+	}
+	findings = append(findings, dependencyTypeCheckFindings(ctx, asset, pp)...)
+	findings = append(findings, materializationTypeCheckFindings(asset, pp)...)
+	if _, dialectErr := AssetTypeToDialect(asset.Type); dialectErr == nil {
+		return findings
+	}
+	if includeDocumentFindings {
+		findings = append(findings, pythonQueryDependencyFindings(ctx, asset, pp)...)
+	}
+	// Non-SQL asset: we cannot infer its output schema. Warn when a
+	// table-producing asset declares no columns so the gap is visible.
+	if nonSQLColumnsExpected(asset) && !assetHasDeclaredColumns(ctx, asset) {
+		findings = append(findings, TypeCheckFinding{
+			Code:       authoringdiag.CodeMissingDeclaredColumns,
+			Source:     authoringdiag.SourceRenart,
+			Severity:   typeCheckSeverityWarning,
+			Message:    "Declares no columns; types cannot be inferred for " + string(asset.Type) + " assets. Declare columns to enable downstream type checking.",
+			Scope:      string(authoringdiag.ScopeAsset),
+			Confidence: string(authoringdiag.ConfidenceHigh),
+		})
+	}
+	return findings
+}
+
+func pipelineAssetParseError(asset *pipeline.Asset) string {
+	if asset == nil || asset.Meta == nil {
+		return ""
+	}
+	return strings.TrimSpace(asset.Meta[parseErrorMetaKey])
+}
+
+func templateRenderFinding(err error) TypeCheckFinding {
+	return TypeCheckFinding{
+		Code:       authoringdiag.CodeTemplateRenderFailed,
+		Source:     authoringdiag.SourceRenart,
+		Severity:   typeCheckSeverityError,
+		Message:    "Failed to render template: " + err.Error(),
+		Scope:      string(authoringdiag.ScopeAsset),
+		Confidence: string(authoringdiag.ConfidenceHigh),
+	}
+}
+
+func buildTypeCheckSchemaSnapshot(ctx context.Context, fs afero.Fs, pp *pipeline.Pipeline, workspaceRoot string, renderer *jinja.Renderer, now time.Time, tw ExecutionTimeWindow, assets []*pipeline.Asset) typeCheckSchemaSnapshot {
+	snapshot := typeCheckSchemaSnapshot{
+		RenderedUnits: map[*pipeline.Asset][]sqllsp.RenderedSQL{},
+		RenderErrors:  map[*pipeline.Asset]error{},
+	}
+	nodes := make([]sqllsp.AssetNode, 0, len(assets))
+	columns := make(map[string][]sqllsp.ColumnInfo, len(assets))
+	inferenceAssets := make([]sqllsp.InferenceAsset, 0, len(assets))
+	for _, asset := range assets {
 		if asset == nil || strings.TrimSpace(asset.Name) == "" {
 			continue
 		}
 		connection, _ := targetConnectionNameForAsset(asset, pp)
-		nodes = append(nodes, sqllsp.AssetNode{
+		dialect, dialectErr := AssetTypeToDialect(asset.Type)
+		node := sqllsp.AssetNode{
 			ID:         asset.Name,
 			Name:       asset.Name,
+			Kind:       strings.ToLower(strings.TrimSpace(string(asset.Type))),
 			Connection: strings.TrimSpace(connection),
 			URI:        typeCheckAssetURI(workspaceRoot, asset),
+		}
+		if dialectErr == nil {
+			node.Kind = "sql_model"
+			node.Dialect = dialect
+		}
+		nodes = append(nodes, node)
+
+		declaredColumns := asset.Columns
+		if len(declaredColumns) == 0 && isAPIAsset(asset) {
+			declaredColumns = apiResponseFieldColumns(ctx, asset)
+		}
+		for _, column := range declaredColumns {
+			if strings.TrimSpace(column.Name) != "" {
+				columns[asset.Name] = append(columns[asset.Name], columnInfoFromPipelineColumn(column))
+			}
+		}
+
+		if dialectErr != nil || strings.TrimSpace(asset.ExecutableFile.Content) == "" {
+			continue
+		}
+		queries, err := renderAssetQueries(ctx, fs, renderer, now, tw, pp, asset)
+		if err != nil {
+			snapshot.RenderErrors[asset] = err
+			continue
+		}
+		units := make([]sqllsp.RenderedSQL, 0, len(queries))
+		for _, renderedQuery := range queries {
+			units = append(units, sqllsp.ProjectRenderedSQL(node.URI, asset.ExecutableFile.Content, renderedQuery))
+		}
+		snapshot.RenderedUnits[asset] = units
+		if len(queries) == 0 {
+			continue
+		}
+		upstreams := make([]string, 0, len(asset.Upstreams))
+		for _, upstream := range asset.Upstreams {
+			if upstream.Type == "asset" && strings.TrimSpace(upstream.Value) != "" {
+				upstreams = append(upstreams, upstream.Value)
+			}
+		}
+		inferenceAssets = append(inferenceAssets, sqllsp.InferenceAsset{
+			ID:        asset.Name,
+			Name:      asset.Name,
+			URI:       node.URI,
+			SQL:       units[len(units)-1].RenderedSQL,
+			Dialect:   dialect,
+			Upstreams: upstreams,
 		})
 	}
-	return sqllsp.NewEngine(sqllsp.GraphFromRenartAssets(sqllsp.FileURI(workspaceRoot), nodes, nil))
+
+	snapshot.Graph = sqllsp.GraphFromRenartAssets(sqllsp.FileURI(workspaceRoot), nodes, columns)
+	snapshot.Graph = sqllsp.InferSchemaSnapshot(ctx, snapshot.Graph, inferenceAssets)
+	snapshot.Schema, snapshot.Constraints, snapshot.Confidence = sqllsp.ValidationSchemaWithConstraints(snapshot.Graph)
+	return snapshot
+}
+
+func columnInfoFromPipelineColumn(column pipeline.Column) sqllsp.ColumnInfo {
+	result := sqllsp.ColumnInfo{
+		Name:        column.Name,
+		Type:        column.Type,
+		Description: column.Description,
+		PrimaryKey:  column.PrimaryKey,
+	}
+	if column.Nullable.Value != nil {
+		nullable := *column.Nullable.Value
+		result.Nullable = &nullable
+	}
+	if column.ForeignKey != nil {
+		table := strings.TrimSpace(column.ForeignKey.Table)
+		targetColumn := strings.TrimSpace(column.ForeignKey.Column)
+		if table != "" && targetColumn != "" {
+			result.ForeignKey = &sqllsp.ColumnReference{Table: table, Column: targetColumn}
+		}
+	}
+	return result
 }
 
 func typeCheckAssetURI(workspaceRoot string, asset *pipeline.Asset) sqllsp.URI {
@@ -304,10 +495,24 @@ func materializationTypeCheckFindings(asset *pipeline.Asset, pl ...*pipeline.Pip
 	}
 	findings := make([]TypeCheckFinding, 0, 3)
 	addError := func(message string) {
-		findings = append(findings, TypeCheckFinding{Severity: typeCheckSeverityError, Message: message})
+		findings = append(findings, TypeCheckFinding{
+			Code:       authoringdiag.CodeInvalidMaterialization,
+			Source:     authoringdiag.SourceRenart,
+			Severity:   typeCheckSeverityError,
+			Message:    message,
+			Scope:      string(authoringdiag.ScopeAsset),
+			Confidence: string(authoringdiag.ConfidenceHigh),
+		})
 	}
 	addWarning := func(message string) {
-		findings = append(findings, TypeCheckFinding{Severity: typeCheckSeverityWarning, Message: message})
+		findings = append(findings, TypeCheckFinding{
+			Code:       authoringdiag.CodeInactiveMaterialization,
+			Source:     authoringdiag.SourceRenart,
+			Severity:   typeCheckSeverityWarning,
+			Message:    message,
+			Scope:      string(authoringdiag.ScopeAsset),
+			Confidence: string(authoringdiag.ConfidenceHigh),
+		})
 	}
 
 	var parsedPipeline *pipeline.Pipeline
@@ -397,55 +602,6 @@ func assetHasColumn(asset *pipeline.Asset, name string) bool {
 	return false
 }
 
-// assetsWithKnownSchema maps each asset name (lower-cased) to whether its output
-// columns can be determined statically — via declared columns, API response
-// fields, or (for SQL assets) the column names in its SELECT list.
-func assetsWithKnownSchema(ctx context.Context, pp *pipeline.Pipeline) map[string]bool {
-	known := make(map[string]bool, len(pp.Assets))
-	for _, asset := range pp.Assets {
-		if asset == nil {
-			continue
-		}
-		name := strings.ToLower(strings.TrimSpace(asset.Name))
-		if name == "" {
-			continue
-		}
-		isKnown := assetHasDeclaredColumns(ctx, asset)
-		if !isKnown {
-			if _, err := AssetTypeToDialect(asset.Type); err == nil {
-				isKnown = len(ExtractSQLDefinitionColumns(asset.ExecutableFile.Content)) > 0
-			}
-		}
-		known[name] = isKnown
-	}
-	return known
-}
-
-func referencesUnknownSchema(parseContext *sqlintelligence.ParseContext, knownSchema map[string]bool) bool {
-	// With no resolved tables the FROM clause is a table-valued function,
-	// subquery, or literal the parser cannot introspect (e.g. DuckDB's
-	// `range(...)`), so any "unresolved column" is a parser limitation rather
-	// than a real type error — don't trust column checks here.
-	if len(parseContext.Tables) == 0 {
-		return true
-	}
-	for _, table := range parseContext.Tables {
-		name := strings.ToLower(strings.TrimSpace(table.ResolvedName))
-		if name == "" {
-			name = strings.ToLower(strings.TrimSpace(table.Name))
-		}
-		if isKnown, exists := knownSchema[name]; exists && !isKnown {
-			return true
-		}
-	}
-	return false
-}
-
-func isUnresolvedMessage(message string) bool {
-	return strings.HasPrefix(message, "Unresolved column") ||
-		strings.HasPrefix(message, "Unresolved table")
-}
-
 func renderAssetQueries(ctx context.Context, fs afero.Fs, renderer *jinja.Renderer, now time.Time, tw ExecutionTimeWindow, pp *pipeline.Pipeline, asset *pipeline.Asset) ([]string, error) {
 	fetchCtx := context.WithValue(ctx, pipeline.RunConfigStartDate, tw.Start)
 	fetchCtx = context.WithValue(fetchCtx, pipeline.RunConfigEndDate, tw.End)
@@ -471,33 +627,80 @@ func renderAssetQueries(ctx context.Context, fs afero.Fs, renderer *jinja.Render
 	return queries, nil
 }
 
-func findingFromDiagnostic(diagnostic sqlintelligence.ParseContextDiagnostic) TypeCheckFinding {
-	finding := TypeCheckFinding{
-		Severity: normalizeSeverity(diagnostic.Severity),
-		Message:  diagnostic.Message,
-	}
-	if diagnostic.Range != nil {
-		finding.Line = diagnostic.Range.Line
-		finding.Column = diagnostic.Range.Col
-		finding.EndLine = diagnostic.Range.EndLine
-		finding.EndColumn = diagnostic.Range.EndCol
-	}
-	return finding
-}
-
-func findingFromLSPDiagnostic(diagnostic sqllsp.Diagnostic) TypeCheckFinding {
+func findingFromMappedLSPDiagnostic(sourceText string, unit sqllsp.RenderedSQL, renderedSQL string, diagnostic sqllsp.Diagnostic) TypeCheckFinding {
 	severity := typeCheckSeverityWarning
 	if diagnostic.Severity == 1 {
 		severity = typeCheckSeverityError
 	}
-	return TypeCheckFinding{
-		Severity:  severity,
-		Message:   diagnostic.Message,
-		Line:      diagnostic.Range.Start.Line + 1,
-		Column:    diagnostic.Range.Start.Character + 1,
-		EndLine:   diagnostic.Range.End.Line + 1,
-		EndColumn: diagnostic.Range.End.Character + 1,
+	finding := TypeCheckFinding{
+		Code:       diagnostic.Code,
+		Source:     diagnostic.Source,
+		Severity:   severity,
+		Message:    diagnostic.Message,
+		Scope:      diagnostic.Scope,
+		Confidence: string(authoringdiag.ConfidenceLow),
 	}
+	generatedStart := sqllsp.ByteOffset(renderedSQL, diagnostic.Range.Start)
+	generatedEnd := sqllsp.ByteOffset(renderedSQL, diagnostic.Range.End)
+	templateStart, templateEnd, confidence, ok := unit.TemplateOffsetsForGenerated(generatedStart, generatedEnd)
+	if !ok {
+		return finding
+	}
+	start := sqllsp.PositionAt(sourceText, templateStart)
+	end := sqllsp.PositionAt(sourceText, templateEnd)
+	finding.Line = start.Line + 1
+	finding.Column = start.Character + 1
+	finding.EndLine = end.Line + 1
+	finding.EndColumn = end.Character + 1
+	finding.Confidence = lowerDiagnosticConfidence(diagnostic.Confidence, confidence)
+	return finding
+}
+
+func findingFromMappedAuthoringDiagnostic(sourceText string, unit sqllsp.RenderedSQL, diagnostic authoringdiag.Diagnostic) TypeCheckFinding {
+	finding := TypeCheckFinding{
+		Code:       diagnostic.Code,
+		Source:     diagnostic.Source,
+		Severity:   normalizeSeverity(string(diagnostic.Severity)),
+		Message:    diagnostic.Message,
+		Scope:      string(diagnostic.Scope),
+		Confidence: string(diagnostic.Confidence),
+	}
+	if diagnostic.StartByte == nil || diagnostic.EndByte == nil {
+		return finding
+	}
+	templateStart, templateEnd, confidence, ok := unit.TemplateOffsetsForGenerated(*diagnostic.StartByte, *diagnostic.EndByte)
+	if !ok {
+		finding.Confidence = string(authoringdiag.ConfidenceLow)
+		return finding
+	}
+	start := sqllsp.PositionAt(sourceText, templateStart)
+	end := sqllsp.PositionAt(sourceText, templateEnd)
+	finding.Line = start.Line + 1
+	finding.Column = start.Character + 1
+	finding.EndLine = end.Line + 1
+	finding.EndColumn = end.Character + 1
+	finding.Confidence = lowerDiagnosticConfidence(string(diagnostic.Confidence), confidence)
+	return finding
+}
+
+func lowerDiagnosticConfidence(left, right string) string {
+	rank := func(value string) int {
+		switch value {
+		case string(authoringdiag.ConfidenceHigh):
+			return 3
+		case string(authoringdiag.ConfidenceMedium):
+			return 2
+		default:
+			return 1
+		}
+	}
+	if rank(left) <= rank(right) {
+		if left == "" {
+			return string(authoringdiag.ConfidenceLow)
+		}
+		return left
+	}
+	return right
 }
 
 func normalizeSeverity(severity string) string {

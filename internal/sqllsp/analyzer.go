@@ -1,6 +1,7 @@
 package sqllsp
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"path"
@@ -10,7 +11,9 @@ import (
 
 	polyglot "github.com/tobilg/polyglot/packages/go"
 
+	"renart/internal/authoringdiag"
 	"renart/internal/sqlcatalog"
+	"renart/internal/sqlintelligence"
 )
 
 // ErrRenameTemplated reports that rename is unavailable because the document
@@ -102,32 +105,39 @@ func NewEngineWithPolyglot(graph CanonicalGraph, client *polyglot.Client) *Engin
 }
 
 func (e *Engine) Diagnostics(doc TextDocumentItem) []Diagnostic {
+	return e.DiagnosticsContext(context.Background(), doc)
+}
+
+func (e *Engine) DiagnosticsContext(ctx context.Context, doc TextDocumentItem) []Diagnostic {
 	projection := e.renderDocument(doc)
 	analysis := analyzeSQLWithResolver(projection.doc.Text, e)
-	diagnostics := e.polyglotDiagnostics(projection.doc)
+	diagnostics, semanticOK := e.semanticDiagnostics(ctx, projection.doc)
+	if !semanticOK {
+		diagnostics = e.polyglotDiagnostics(projection.doc)
+	}
 	currentAsset := e.assetForURI(doc.URI)
-	diagnostics = append(diagnostics, e.crossConnectionDiagnostics(projection.doc.Text, analysis, currentAsset)...)
+	diagnostics = appendUniqueDiagnostics(diagnostics, e.crossConnectionDiagnostics(projection.doc.Text, analysis, currentAsset)...)
 	for _, use := range analysis.relations {
 		if _, isCTE := analysis.ctes[strings.ToLower(use.name)]; isCTE || strings.HasPrefix(use.name, "{{") {
 			continue
 		}
 		resolved := e.resolveRelation(use.name)
 		if resolved == nil {
-			diagnostics = append(diagnostics, Diagnostic{
+			diagnostics = appendUniqueDiagnostics(diagnostics, Diagnostic{
 				Range:    RangeFromOffsets(projection.doc.Text, use.start, use.end),
 				Severity: diagnosticSeverityError,
-				Code:     "unresolved-relation",
-				Source:   "renart-sql-lsp",
+				Code:     authoringdiag.CodeUnresolvedRelation,
+				Source:   authoringdiag.SourceRenart,
 				Message:  "Unresolved relation: " + use.name,
 			})
 			continue
 		}
 		if currentAsset != nil && resolved.AssetID != "" && resolved.AssetID == currentAsset.ID {
-			diagnostics = append(diagnostics, Diagnostic{
+			diagnostics = appendUniqueDiagnostics(diagnostics, Diagnostic{
 				Range:    RangeFromOffsets(projection.doc.Text, use.start, use.end),
 				Severity: diagnosticSeverityError,
 				Code:     "circular-dependency",
-				Source:   "renart-sql-lsp",
+				Source:   authoringdiag.SourceRenart,
 				Message:  "Circular dependency: asset '" + currentAsset.Name + "' references itself.",
 			})
 		}
@@ -135,11 +145,11 @@ func (e *Engine) Diagnostics(doc TextDocumentItem) []Diagnostic {
 	for _, col := range analysis.columns {
 		ref := analysis.resolveAliasRef(col.qualifier)
 		if ref == nil {
-			diagnostics = append(diagnostics, Diagnostic{
+			diagnostics = appendUniqueDiagnostics(diagnostics, Diagnostic{
 				Range:    RangeFromOffsets(projection.doc.Text, col.qualStart, col.qualEnd),
 				Severity: diagnosticSeverityError,
-				Code:     "unresolved-alias",
-				Source:   "renart-sql-lsp",
+				Code:     authoringdiag.CodeUnresolvedAlias,
+				Source:   authoringdiag.SourceRenart,
 				Message:  "Unresolved table or alias: " + col.qualifier,
 			})
 			continue
@@ -149,11 +159,11 @@ func (e *Engine) Diagnostics(doc TextDocumentItem) []Diagnostic {
 			continue
 		}
 		if !hasColumn(columns, col.name) {
-			diagnostics = append(diagnostics, Diagnostic{
+			diagnostics = appendUniqueDiagnostics(diagnostics, Diagnostic{
 				Range:    RangeFromOffsets(projection.doc.Text, col.nameStart, col.nameEnd),
 				Severity: diagnosticSeverityError,
-				Code:     "unresolved-column",
-				Source:   "renart-sql-lsp",
+				Code:     authoringdiag.CodeUnresolvedColumn,
+				Source:   authoringdiag.SourceRenart,
 				Message:  "Unresolved column: " + col.name,
 			})
 		}
@@ -161,9 +171,140 @@ func (e *Engine) Diagnostics(doc TextDocumentItem) []Diagnostic {
 	if projection.changed {
 		for i := range diagnostics {
 			diagnostics[i].Range = projection.rendered.TemplateRangeForGenerated(doc.Text, diagnostics[i].Range)
+			diagnostics[i].Confidence = string(authoringdiag.ConfidenceMedium)
 		}
 	}
+	for i := range diagnostics {
+		if diagnostics[i].Scope == "" {
+			diagnostics[i].Scope = string(authoringdiag.ScopeDocument)
+		}
+		if diagnostics[i].Confidence == "" {
+			diagnostics[i].Confidence = string(authoringdiag.ConfidenceHigh)
+		}
+	}
+	diagnostics = appendUniqueAssetDiagnostics(diagnostics, e.assetDiagnostics(doc)...)
 	return diagnostics
+}
+
+func (e *Engine) assetDiagnostics(doc TextDocumentItem) []Diagnostic {
+	currentAsset := e.assetForURI(doc.URI)
+	result := make([]Diagnostic, 0)
+	for _, candidate := range e.graph.AssetDiagnostics {
+		if candidate.URI != "" && candidate.URI != doc.URI {
+			continue
+		}
+		if candidate.URI == "" && (currentAsset == nil || candidate.AssetID == "" || candidate.AssetID != currentAsset.ID) {
+			continue
+		}
+		result = append(result, diagnosticFromAuthoring(doc.Text, candidate.Diagnostic))
+	}
+	return result
+}
+
+func appendUniqueAssetDiagnostics(existing []Diagnostic, candidates ...Diagnostic) []Diagnostic {
+	for _, candidate := range candidates {
+		duplicate := false
+		for _, current := range existing {
+			if current.Code == candidate.Code && current.Message == candidate.Message && current.Range == candidate.Range {
+				duplicate = true
+				break
+			}
+		}
+		if !duplicate {
+			existing = append(existing, candidate)
+		}
+	}
+	return existing
+}
+
+func (e *Engine) semanticDiagnostics(ctx context.Context, doc TextDocumentItem) ([]Diagnostic, bool) {
+	schema, constraints, confidence := e.semanticValidationSchema()
+	result, err := sqlintelligence.ValidateSQL(ctx, sqlintelligence.ValidationRequest{
+		URI:                string(doc.URI),
+		SQL:                doc.Text,
+		Dialect:            e.dialectForDocument(doc),
+		Schema:             schema,
+		SchemaConstraints:  constraints,
+		RelationConfidence: confidence,
+		ExpectedOutput:     e.declaredOutputColumns(doc.URI),
+	})
+	if err != nil {
+		return nil, false
+	}
+	diagnostics := make([]Diagnostic, 0, len(result.Diagnostics))
+	for _, diagnostic := range result.Diagnostics {
+		diagnostics = append(diagnostics, diagnosticFromAuthoring(doc.Text, diagnostic))
+	}
+	return diagnostics, true
+}
+
+func (e *Engine) semanticValidationSchema() (sqlintelligence.Schema, sqlintelligence.SchemaConstraints, map[string]sqlintelligence.RelationConfidence) {
+	return ValidationSchemaWithConstraints(e.graph)
+}
+
+func (e *Engine) declaredOutputColumns(uri URI) []sqlintelligence.SchemaColumn {
+	asset := e.assetForURI(uri)
+	if asset == nil {
+		return nil
+	}
+	relationIDs := map[string]struct{}{}
+	for _, relation := range e.graph.Relations {
+		if relation.AssetID == asset.ID {
+			relationIDs[relation.ID] = struct{}{}
+		}
+	}
+	var result []sqlintelligence.SchemaColumn
+	for _, layer := range e.graph.Schemas {
+		if !strings.EqualFold(layer.SourceKind, "declared") {
+			continue
+		}
+		if _, ok := relationIDs[layer.RelationID]; !ok {
+			continue
+		}
+		for _, column := range layer.Columns {
+			result = append(result, sqlintelligence.SchemaColumn{Name: column.Name, Type: column.Type, Nullable: column.Nullable})
+		}
+	}
+	return result
+}
+
+func diagnosticFromAuthoring(text string, diagnostic authoringdiag.Diagnostic) Diagnostic {
+	severity := diagnosticSeverityWarn
+	if diagnostic.Severity == authoringdiag.SeverityError {
+		severity = diagnosticSeverityError
+	}
+	start, end := 0, min(1, len(text))
+	if diagnostic.StartByte != nil {
+		start = *diagnostic.StartByte
+	}
+	if diagnostic.EndByte != nil {
+		end = *diagnostic.EndByte
+	}
+	return Diagnostic{
+		Range:      RangeFromOffsets(text, start, end),
+		Severity:   severity,
+		Code:       diagnostic.Code,
+		Source:     diagnostic.Source,
+		Message:    diagnostic.Message,
+		Scope:      string(diagnostic.Scope),
+		Confidence: string(diagnostic.Confidence),
+	}
+}
+
+func appendUniqueDiagnostics(existing []Diagnostic, candidates ...Diagnostic) []Diagnostic {
+	for _, candidate := range candidates {
+		duplicate := false
+		for _, current := range existing {
+			if current.Code == candidate.Code && current.Range == candidate.Range {
+				duplicate = true
+				break
+			}
+		}
+		if !duplicate {
+			existing = append(existing, candidate)
+		}
+	}
+	return existing
 }
 
 // CrossConnectionDiagnostics reports asset references that cannot be assumed
@@ -204,10 +345,12 @@ func (e *Engine) crossConnectionDiagnostics(sql string, analysis sqlAnalysis, cu
 			continue
 		}
 		diagnostics = append(diagnostics, Diagnostic{
-			Range:    RangeFromOffsets(sql, use.start, use.end),
-			Severity: diagnosticSeverityWarn,
-			Code:     "cross-connection-reference",
-			Source:   "renart-sql-lsp",
+			Range:      RangeFromOffsets(sql, use.start, use.end),
+			Severity:   diagnosticSeverityWarn,
+			Code:       authoringdiag.CodeCrossConnectionReference,
+			Source:     authoringdiag.SourceRenart,
+			Scope:      string(authoringdiag.ScopeDocument),
+			Confidence: string(authoringdiag.ConfidenceHigh),
 			Message: fmt.Sprintf(
 				"Cross-connection reference: asset %q uses connection %q, while this query uses %q.",
 				upstream.Name,

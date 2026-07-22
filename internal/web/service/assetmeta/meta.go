@@ -24,6 +24,8 @@
 //	renart_col_drop  inferred columns the user omitted (names)
 //	renart_col_own   generated columns whose fields the user now owns
 //	                 (col:field|field;col2:field)
+//	renart_col_src   non-default type sources (col:m;col2:l); SQL/definition
+//	                 inference is the implicit default and is never listed
 //	renart_col_map   rename memory (e:<exprhash>:col); optional
 //
 // All functions in this package are pure: they operate on values, never touch
@@ -47,6 +49,7 @@ const (
 	KeyColAdd    = "renart_col_add"
 	KeyColDrop   = "renart_col_drop"
 	KeyColOwn    = "renart_col_own"
+	KeyColSource = "renart_col_src"
 	KeyColMap    = "renart_col_map"
 
 	// KeyLegacyInferredUpstreams is the pre-provenance key that listed the
@@ -57,7 +60,7 @@ const (
 
 // Schema and generator versions written into freshly reconciled assets.
 const (
-	SchemaVersion    = 1
+	SchemaVersion    = 2
 	GeneratorVersion = 1
 )
 
@@ -65,7 +68,7 @@ const (
 // values that no longer apply.
 var allManagedKeys = []string{
 	KeyVersion, KeyGenerator, KeySigDeps, KeySigCols,
-	KeyDepAdd, KeyDepDrop, KeyColAdd, KeyColDrop, KeyColOwn, KeyColMap,
+	KeyDepAdd, KeyDepDrop, KeyColAdd, KeyColDrop, KeyColOwn, KeyColSource, KeyColMap,
 	KeyLegacyInferredUpstreams,
 }
 
@@ -89,6 +92,12 @@ type RenartMeta struct {
 	// (e.g. {"order_total": {"type"}}).
 	ColOwn map[string][]string
 
+	// ColSource maps a column name to a compact non-default inference source
+	// code. Definition/SQL inference is implicit and therefore absent. The
+	// service currently writes "m" for a materialized table and "l" for a live
+	// response.
+	ColSource map[string]string
+
 	// ColMap is optional rename memory: expression hash -> column name.
 	ColMap map[string]string
 
@@ -110,6 +119,7 @@ func Parse(meta map[string]string) RenartMeta {
 		ColAdd:    splitList(meta[KeyColAdd]),
 		ColDrop:   splitList(meta[KeyColDrop]),
 		ColOwn:    decodeOwn(meta[KeyColOwn]),
+		ColSource: decodeMap(meta[KeyColSource]),
 		ColMap:    decodeMap(meta[KeyColMap]),
 
 		LegacyInferred: splitList(meta[KeyLegacyInferredUpstreams]),
@@ -149,6 +159,7 @@ func (m RenartMeta) Apply(meta map[string]string) map[string]string {
 	set(KeyColAdd, joinList(m.ColAdd))
 	set(KeyColDrop, joinList(m.ColDrop))
 	set(KeyColOwn, encodeOwn(m.ColOwn))
+	set(KeyColSource, encodeMap(m.ColSource))
 	set(KeyColMap, encodeMap(m.ColMap))
 
 	if len(out) == 0 {

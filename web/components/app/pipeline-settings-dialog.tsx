@@ -2,12 +2,12 @@ import { Link } from "@tanstack/react-router";
 import { useAtomValue } from "jotai";
 import {
   AlertTriangle,
-  Bell,
   Braces,
   CalendarClock,
   Database,
   ExternalLink,
   Loader2,
+  Package,
   Plus,
   Settings2,
   Trash2,
@@ -29,7 +29,12 @@ import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { getPipelineConfig, updatePipelineConfig } from "@/lib/api-pipelines";
+import {
+  getPipelineConfig,
+  getPipelinePythonDependencies,
+  updatePipelineConfig,
+  updatePipelinePythonDependencies,
+} from "@/lib/api-pipelines";
 import { selectedEnvironmentAtom } from "@/lib/atoms/domains/workspace";
 import type {
   PipelineConfigConnection,
@@ -44,7 +49,7 @@ const pipelineSettingsSections = [
   { id: "general", label: "General", icon: Settings2 },
   { id: "schedule", label: "Schedule", icon: CalendarClock },
   { id: "connections", label: "Connections", icon: Database },
-  { id: "notifications", label: "Notifications", icon: Bell },
+  { id: "python", label: "Python", icon: Package },
   { id: "variables", label: "Variables", icon: Braces },
 ] as const;
 
@@ -52,9 +57,9 @@ export type PipelineSettingsSection = (typeof pipelineSettingsSections)[number][
 
 type PipelineConfigDraft = UpdatePipelineConfigRequest;
 
-// The full pipeline config lives in pipeline.yml; the backend exposes it through
-// GET/PUT /api/pipelines/:id/config. This dialog edits every writable field and
-// persists via the same endpoint — SSE then reconciles the workspace.
+// Pipeline settings live in pipeline.yml, while Python dependencies live in the
+// pipeline-root pyproject.toml. Both write through Go endpoints and SSE then
+// reconciles the workspace.
 export function PipelineSettingsDialog({
   open,
   onOpenChange,
@@ -74,6 +79,9 @@ export function PipelineSettingsDialog({
   const [inferredDefaultConnections, setInferredDefaultConnections] = useState<
     PipelineConfigConnection[]
   >([]);
+  const [pythonDependencies, setPythonDependencies] = useState<string[]>([]);
+  const [initialPythonDependencies, setInitialPythonDependencies] = useState<string[]>([]);
+  const [pythonDependencyPath, setPythonDependencyPath] = useState("");
 
   // Re-fetch whenever the dialog opens so the form always reflects on-disk state
   // (a code edit or CLI run may have changed pipeline.yml since last time).
@@ -82,17 +90,32 @@ export function PipelineSettingsDialog({
     setSection(initialSection ?? "general");
     setError(null);
     setLoading(true);
+    setDraft(null);
     setInferredDefaultConnections([]);
+    setPythonDependencies([]);
+    setInitialPythonDependencies([]);
+    setPythonDependencyPath("");
     let cancelled = false;
-    getPipelineConfig(pipelineId)
-      .then((config) => {
+    Promise.allSettled([getPipelineConfig(pipelineId), getPipelinePythonDependencies(pipelineId)])
+      .then(([configResult, pythonResult]) => {
         if (cancelled) return;
-        setDraft(configResponseToDraft(config));
-        setInferredDefaultConnections(config.inferred_default_connections ?? []);
-      })
-      .catch((cause) => {
-        if (cancelled) return;
-        setError(cause instanceof Error ? cause.message : "Failed to load pipeline settings.");
+        const messages: string[] = [];
+        if (configResult.status === "fulfilled") {
+          const config = configResult.value;
+          setDraft(configResponseToDraft(config));
+          setInferredDefaultConnections(config.inferred_default_connections ?? []);
+        } else {
+          messages.push(errorMessage(configResult.reason, "Failed to load pipeline settings."));
+        }
+        if (pythonResult.status === "fulfilled") {
+          const python = pythonResult.value;
+          setPythonDependencies(python.dependencies ?? []);
+          setInitialPythonDependencies(python.dependencies ?? []);
+          setPythonDependencyPath(python.path);
+        } else {
+          messages.push(errorMessage(pythonResult.reason, "Failed to load Python dependencies."));
+        }
+        setError(messages.length > 0 ? messages.join(" ") : null);
       })
       .finally(() => {
         if (!cancelled) setLoading(false);
@@ -114,9 +137,22 @@ export function PipelineSettingsDialog({
     setSaving(true);
     setError(null);
     try {
-      const response = await updatePipelineConfig(pipelineId, draft);
+      const dependenciesChanged = !sameStringArray(pythonDependencies, initialPythonDependencies);
+      const [response, dependencyResponse] = await Promise.all([
+        updatePipelineConfig(pipelineId, draft),
+        dependenciesChanged
+          ? updatePipelinePythonDependencies(pipelineId, {
+              dependencies: pythonDependencies,
+            })
+          : Promise.resolve(null),
+      ]);
       setDraft(configResponseToDraft(response));
       setInferredDefaultConnections(response.inferred_default_connections ?? []);
+      if (dependencyResponse) {
+        setPythonDependencies(dependencyResponse.dependencies);
+        setInitialPythonDependencies(dependencyResponse.dependencies);
+        setPythonDependencyPath(dependencyResponse.path);
+      }
       onOpenChange(false);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Failed to save pipeline settings.");
@@ -127,8 +163,8 @@ export function PipelineSettingsDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-3xl">
-        <DialogHeader>
+      <DialogContent className="flex h-[min(42rem,90dvh)] min-h-0 flex-col overflow-hidden sm:max-w-3xl">
+        <DialogHeader className="shrink-0">
           <DialogTitle>
             Pipeline settings{" "}
             <span className="font-mono text-xs text-muted-foreground">
@@ -136,15 +172,14 @@ export function PipelineSettingsDialog({
             </span>
           </DialogTitle>
           <DialogDescription>
-            Edit the pipeline configuration stored in{" "}
-            <span className="font-mono">pipeline.yml</span>.
+            Edit version-controlled pipeline configuration and runtime dependencies.
           </DialogDescription>
         </DialogHeader>
         <Tabs
           value={section}
           onValueChange={(value) => setSection(value as PipelineSettingsSection)}
           orientation="vertical"
-          className="grid min-h-80 gap-4 md:grid-cols-[10.5rem_minmax(0,1fr)]"
+          className="grid min-h-0 flex-1 grid-rows-[auto_minmax(0,1fr)] gap-4 md:grid-cols-[10.5rem_minmax(0,1fr)] md:grid-rows-1"
         >
           <div className="flex gap-2 overflow-x-auto md:hidden">
             {pipelineSettingsSections.map((item) => (
@@ -161,7 +196,7 @@ export function PipelineSettingsDialog({
           </div>
           <TabsList
             aria-label="Pipeline settings sections"
-            className="hidden h-fit w-full items-stretch justify-start border bg-muted/30 p-1 md:flex"
+            className="hidden h-full min-h-0 w-full self-stretch items-stretch justify-start border bg-muted/30 p-1 group-data-vertical/tabs:h-full md:flex"
           >
             {pipelineSettingsSections.map(({ id, label, icon: Icon }) => (
               <TabsTrigger key={id} value={id} className="h-8 flex-none justify-start px-2">
@@ -171,15 +206,17 @@ export function PipelineSettingsDialog({
             ))}
           </TabsList>
           <ScrollArea
-            className="max-h-[26rem] min-h-0 rounded-lg border"
+            className="h-full min-h-0 rounded-lg border"
             data-testid="pipeline-settings-content"
           >
             <div className="flex flex-col gap-4 p-4">
-              {loading || !draft ? (
+              {loading ? (
                 <div className="flex items-center gap-2 text-sm text-muted-foreground">
                   <Loader2 className="size-4 animate-spin" />
                   Loading settings…
                 </div>
+              ) : !draft ? (
+                <p className="text-sm text-muted-foreground">Pipeline settings are unavailable.</p>
               ) : (
                 pipelineSettingsSections.map((item) => (
                   <TabsContent key={item.id} value={item.id} className="m-0">
@@ -188,6 +225,9 @@ export function PipelineSettingsDialog({
                       draft={draft}
                       update={update}
                       inferredDefaultConnections={inferredDefaultConnections}
+                      pythonDependencies={pythonDependencies}
+                      onPythonDependenciesChange={setPythonDependencies}
+                      pythonDependencyPath={pythonDependencyPath}
                     />
                   </TabsContent>
                 ))
@@ -196,13 +236,13 @@ export function PipelineSettingsDialog({
           </ScrollArea>
         </Tabs>
         {error ? (
-          <Alert variant="destructive">
+          <Alert variant="destructive" className="shrink-0">
             <AlertTriangle />
-            <AlertTitle>Could not save pipeline settings</AlertTitle>
+            <AlertTitle>Could not load or save pipeline settings</AlertTitle>
             <AlertDescription>{error}</AlertDescription>
           </Alert>
         ) : null}
-        <DialogFooter>
+        <DialogFooter className="shrink-0">
           <Button variant="outline" onClick={() => onOpenChange(false)} disabled={saving}>
             Cancel
           </Button>
@@ -273,11 +313,17 @@ function PipelineSettingsSectionBody({
   draft,
   update,
   inferredDefaultConnections,
+  pythonDependencies,
+  onPythonDependenciesChange,
+  pythonDependencyPath,
 }: {
   section: PipelineSettingsSection;
   draft: PipelineConfigDraft;
   update: <K extends keyof PipelineConfigDraft>(key: K, value: PipelineConfigDraft[K]) => void;
   inferredDefaultConnections: PipelineConfigConnection[];
+  pythonDependencies: string[];
+  onPythonDependenciesChange: (value: string[]) => void;
+  pythonDependencyPath: string;
 }) {
   const environment = useAtomValue(selectedEnvironmentAtom);
   if (section === "general") {
@@ -497,15 +543,26 @@ function PipelineSettingsSectionBody({
       </div>
     );
   }
-  if (section === "notifications") {
+  if (section === "python") {
     return (
-      <div className="space-y-5">
-        <NotificationChannelFields
-          title="Microsoft Teams"
-          value={draft.notifications_teams}
-          onChange={(value) => update("notifications_teams", value)}
-          channelPlaceholder="Data alerts"
+      <div className="space-y-4">
+        <div>
+          <p className="text-sm font-medium">Pipeline dependencies</p>
+          <p className="mt-1 text-xs text-muted-foreground">
+            Packages are shared by Python assets in this pipeline and installed by uv on their next
+            run.
+          </p>
+        </div>
+        <SettingsMultiValueField
+          label="Packages"
+          value={pythonDependencies}
+          onChange={onPythonDependenciesChange}
+          placeholder="Add package, for example pandas>=2"
         />
+        <p className="text-xs text-muted-foreground">
+          Stored in <span className="font-mono">{pythonDependencyPath || "pyproject.toml"}</span>.
+          Existing pipeline-level requirements.txt dependencies are migrated on save.
+        </p>
       </div>
     );
   }
@@ -595,60 +652,6 @@ function PipelineSettingsSectionBody({
     );
   }
   return null;
-}
-
-function NotificationChannelFields({
-  title,
-  value,
-  onChange,
-  channelPlaceholder,
-}: {
-  title: string;
-  value: PipelineConfigDraft["notifications_slack"];
-  onChange: (value: PipelineConfigDraft["notifications_slack"]) => void;
-  channelPlaceholder: string;
-}) {
-  return (
-    <div className="space-y-3">
-      <SettingsToggleField
-        label={title}
-        description={`Send ${title} messages for this pipeline's runs.`}
-        checked={value.enabled}
-        onChange={(enabled) => onChange({ ...value, enabled })}
-      />
-      {value.enabled ? (
-        <div className="space-y-3 border-l pl-3">
-          <SettingsTextField
-            label="Channel"
-            value={value.channel ?? ""}
-            onChange={(channel) => onChange({ ...value, channel })}
-            placeholder={channelPlaceholder}
-          />
-          <SettingsTextField
-            label="Connection"
-            value={value.connection ?? ""}
-            onChange={(connection) => onChange({ ...value, connection })}
-            placeholder="slack-default"
-            hint="Named connection that authenticates the message."
-          />
-          <div className="flex gap-4">
-            <SettingsToggleField
-              compact
-              label="On success"
-              checked={value.success}
-              onChange={(success) => onChange({ ...value, success })}
-            />
-            <SettingsToggleField
-              compact
-              label="On failure"
-              checked={value.failure}
-              onChange={(failure) => onChange({ ...value, failure })}
-            />
-          </div>
-        </div>
-      ) : null}
-    </div>
-  );
 }
 
 function PipelineConnectionSettingsLink({
@@ -792,4 +795,12 @@ function variableValueToText(value: unknown): string {
   if (value === null || value === undefined) return "";
   if (typeof value === "string") return value;
   return String(value);
+}
+
+function sameStringArray(left: string[], right: string[]): boolean {
+  return left.length === right.length && left.every((value, index) => value === right[index]);
+}
+
+function errorMessage(cause: unknown, fallback: string): string {
+  return cause instanceof Error ? cause.message : fallback;
 }

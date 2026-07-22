@@ -82,7 +82,7 @@ export function useAssetMonaco({
     },
   );
   useSQLLSP(monacoInstance, editorInstance, asset, editorValue, schemaTables, onGoToAsset);
-  useSQLCanvasHover(editorInstance, asset);
+  useSQLCanvasHover(monacoInstance, editorInstance, asset);
   useJinjaIntellisense(monacoInstance, editorInstance, asset, editorValue);
   usePythonIntellisense(monacoInstance, editorInstance, asset, editorValue);
   usePythonQueryIntellisense(

@@ -1,5 +1,7 @@
 package sqllsp
 
+import "renart/internal/authoringdiag"
+
 type URI string
 
 type Position struct {
@@ -19,11 +21,13 @@ type Location struct {
 }
 
 type Diagnostic struct {
-	Range    Range  `json:"range"`
-	Severity int    `json:"severity"`
-	Code     string `json:"code,omitempty"`
-	Source   string `json:"source,omitempty"`
-	Message  string `json:"message"`
+	Range      Range  `json:"range"`
+	Severity   int    `json:"severity"`
+	Code       string `json:"code,omitempty"`
+	Source     string `json:"source,omitempty"`
+	Message    string `json:"message"`
+	Scope      string `json:"scope,omitempty"`
+	Confidence string `json:"confidence,omitempty"`
 }
 
 type CompletionItem struct {
@@ -121,6 +125,16 @@ type CanonicalGraph struct {
 	Lineage      []LineageEdge      `json:"lineage,omitempty"`
 	Renderings   []RenderedSQL      `json:"rendered_sql,omitempty"`
 	References   []LogicalReference `json:"references,omitempty"`
+	// AssetDiagnostics are provider-specific authoring findings computed when
+	// the saved workspace graph is loaded. They are intentionally not part of
+	// the provider-neutral serialized graph contract.
+	AssetDiagnostics []AssetDiagnostic `json:"-"`
+}
+
+type AssetDiagnostic struct {
+	AssetID    string
+	URI        URI
+	Diagnostic authoringdiag.Diagnostic
 }
 
 type AssetNode struct {
@@ -147,14 +161,23 @@ type SchemaLayer struct {
 	RelationID   string       `json:"relation_id"`
 	SourceKind   string       `json:"source_kind,omitempty"`
 	Completeness string       `json:"completeness,omitempty"`
+	Confidence   string       `json:"confidence,omitempty"`
 	Columns      []ColumnInfo `json:"columns"`
 	Provenance   []Provenance `json:"provenance,omitempty"`
 }
 
 type ColumnInfo struct {
-	Name        string `json:"name"`
-	Type        string `json:"type,omitempty"`
-	Description string `json:"description,omitempty"`
+	Name        string           `json:"name"`
+	Type        string           `json:"type,omitempty"`
+	Description string           `json:"description,omitempty"`
+	Nullable    *bool            `json:"nullable,omitempty"`
+	PrimaryKey  bool             `json:"primary_key,omitempty"`
+	ForeignKey  *ColumnReference `json:"foreign_key,omitempty"`
+}
+
+type ColumnReference struct {
+	Table  string `json:"table"`
+	Column string `json:"column"`
 }
 
 type LineageEdge struct {

@@ -7,7 +7,7 @@ import (
 	"strings"
 
 	"github.com/bruin-data/bruin/pkg/pipeline"
-	"renart/internal/web/sqlintelligence"
+	"renart/internal/sqlintelligence"
 )
 
 var assetTypeDialectMap = map[pipeline.AssetType]string{
@@ -75,6 +75,8 @@ type ParseContextPart struct {
 }
 
 type ParseContextDiagnostic struct {
+	Code     string             `json:"code,omitempty"`
+	Source   string             `json:"source,omitempty"`
 	Message  string             `json:"message"`
 	Severity string             `json:"severity"`
 	Range    *ParseContextRange `json:"range,omitempty"`
@@ -149,7 +151,7 @@ func (s *ParseContextService) Parse(ctx context.Context, assetID, content string
 	columnSourceMethods := BuildParseContextColumnSourceMethods(asset, schemaTables)
 	ApplyAssetSQLDefinitionColumns(ctx, parsedPipeline, asset, schema, columnSourceMethods)
 
-	parseContext, err := sqlintelligence.ParseContextWithSchema(content, dialect, schema, columnSourceMethods)
+	parseContext, err := sqlintelligence.ParseContextWithSchemaContext(ctx, content, dialect, schema, columnSourceMethods)
 	if err != nil {
 		return ParseContextResult{
 			Status:  "error",
@@ -681,7 +683,7 @@ func ParseContextColumnsFromParser(input []sqlintelligence.ParseContextColumn) [
 func ParseContextDiagnosticsFromParser(input []sqlintelligence.ParseContextDiagnostic) []ParseContextDiagnostic {
 	result := make([]ParseContextDiagnostic, 0, len(input))
 	for _, diagnostic := range input {
-		item := ParseContextDiagnostic{Message: diagnostic.Message, Severity: diagnostic.Severity}
+		item := ParseContextDiagnostic{Code: diagnostic.Code, Source: diagnostic.Source, Message: diagnostic.Message, Severity: diagnostic.Severity}
 		if diagnostic.Range != nil {
 			rangeValue := ParseContextRangeFromParser(*diagnostic.Range)
 			item.Range = &rangeValue

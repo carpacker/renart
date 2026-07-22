@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -290,6 +291,98 @@ func TestPrintAssetRenderResultShowsValueFreeContextProvenance(t *testing.T) {
 	}
 	if strings.Contains(printed, "secret-value") {
 		t.Fatalf("variable values must not be printed: %s", printed)
+	}
+}
+
+func TestHighlightRenderContentPreservesSourceAcrossStageLanguages(t *testing.T) {
+	ansiPattern := regexp.MustCompile(`\x1b\[[0-9;]*m`)
+	tests := map[string]string{
+		"sql":    "SELECT id, 'value' AS label FROM analytics.orders -- comment",
+		"json":   `{"operation":"copy","enabled":true,"limit":10}`,
+		"python": "result = query(\"select 1\")\n",
+		"yaml":   "operation: copy\nenabled: true\n",
+	}
+	for language, source := range tests {
+		t.Run(language, func(t *testing.T) {
+			highlighted := highlightRenderContent(source, language, "monokai")
+			if !strings.Contains(highlighted, "\x1b[") {
+				t.Fatalf("%s content was not highlighted: %q", language, highlighted)
+			}
+			if plain := ansiPattern.ReplaceAllString(highlighted, ""); plain != source {
+				t.Fatalf("highlighting changed %s source:\nwant %q\n got %q", language, source, plain)
+			}
+		})
+	}
+
+	source := "opaque render operation"
+	if got := highlightRenderContent(source, "unsupported-language", "monokai"); got != source {
+		t.Fatalf("unknown language should fall back to plain content: %q", got)
+	}
+}
+
+func TestPrintAssetRenderResultHighlightsOnlyWhenEnabled(t *testing.T) {
+	result := service.AssetRenderResult{
+		Status: service.AssetRenderStatusOK,
+		Provenance: service.AssetRenderProvenance{
+			Source: service.AssetRenderSource{Kind: "working_tree"},
+			Context: service.AssetRenderContext{
+				StartDate: "2026-07-15T00:00:00Z",
+				EndDate:   "2026-07-16T00:00:00Z",
+			},
+		},
+		Asset: service.AssetRenderAsset{Name: "mart.orders", Type: "duckdb.sql"},
+		Stages: []service.AssetRenderStage{{
+			Kind: "execution_sql", Language: "sql", Content: "SELECT 1 AS id",
+			Status: service.AssetRenderStageStatusOK, Fidelity: service.AssetRenderFidelityExact,
+		}},
+	}
+
+	var plain bytes.Buffer
+	printAssetRenderResult(&plain, result)
+	if strings.Contains(plain.String(), "\x1b[") {
+		t.Fatalf("plain writer received ANSI escapes: %q", plain.String())
+	}
+
+	var highlighted bytes.Buffer
+	printAssetRenderResultWithHighlight(&highlighted, result, true)
+	if !strings.Contains(highlighted.String(), "\x1b[") {
+		t.Fatalf("enabled render output was not highlighted: %q", highlighted.String())
+	}
+	if renderOutputSupportsColor(&highlighted) {
+		t.Fatal("a redirected buffer must not be treated as an interactive terminal")
+	}
+}
+
+func TestRenderHighlightUsesPassiveTerminalHints(t *testing.T) {
+	t.Setenv("TERM_BACKGROUND", "")
+	t.Setenv("COLORFGBG", "0;15")
+	if style := renderHighlightStyle(&bytes.Buffer{}); style != "github" {
+		t.Fatalf("light COLORFGBG style = %q, want github", style)
+	}
+
+	t.Setenv("COLORFGBG", "15;0")
+	if style := renderHighlightStyle(&bytes.Buffer{}); style != "monokai" {
+		t.Fatalf("dark COLORFGBG style = %q, want monokai", style)
+	}
+
+	t.Setenv("TERM_BACKGROUND", "light")
+	if style := renderHighlightStyle(&bytes.Buffer{}); style != "github" {
+		t.Fatalf("TERM_BACKGROUND light style = %q, want github", style)
+	}
+}
+
+func TestRenderOutputDoesNotTreatDevNullAsTerminal(t *testing.T) {
+	t.Setenv("NO_COLOR", "")
+	t.Setenv("TERM", "xterm-256color")
+	t.Setenv("CLICOLOR", "")
+	t.Setenv("CLICOLOR_FORCE", "")
+	devNull, err := os.OpenFile(os.DevNull, os.O_WRONLY, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer devNull.Close()
+	if renderOutputSupportsColor(devNull) {
+		t.Fatal("a /dev/null-style character device must not be treated as a terminal")
 	}
 }
 

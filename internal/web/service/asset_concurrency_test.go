@@ -9,7 +9,6 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/bruin-data/bruin/pkg/sqlparser"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -58,7 +57,9 @@ select 1 as id
 // per-asset file lock every save must observe a complete file.
 func TestAssetServiceUpdateKeepsHeaderUnderConcurrentSaves(t *testing.T) {
 	previousFactory := newDependencyParser
-	newDependencyParser = func() (sqlparser.Parser, error) { return &stubDependencyParser{usedTables: []string{"analytics.orders"}}, nil }
+	newDependencyParser = func(context.Context) (dependencyParser, error) {
+		return &stubDependencyParser{usedTables: []string{"analytics.orders"}}, nil
+	}
 	t.Cleanup(func() { newDependencyParser = previousFactory })
 
 	service, assetID, absAssetPath := writeConcurrencyAssetWorkspace(t)
@@ -95,7 +96,7 @@ func TestAssetServiceUpdateKeepsHeaderUnderConcurrentSaves(t *testing.T) {
 // the header preserved, rather than returning a spurious dependency error.
 func TestAssetServiceUpdateIncompleteSQLSucceeds(t *testing.T) {
 	previousFactory := newDependencyParser
-	newDependencyParser = func() (sqlparser.Parser, error) {
+	newDependencyParser = func(context.Context) (dependencyParser, error) {
 		return &stubDependencyParser{err: fmt.Errorf("could not parse incomplete query")}, nil
 	}
 	t.Cleanup(func() { newDependencyParser = previousFactory })

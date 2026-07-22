@@ -159,6 +159,41 @@ result = query("select 1")
         .first(),
     ).toBeVisible({ timeout: 15000 });
 
+    await page.keyboard.press("Escape");
+    const projectionQuery = [
+      "from renart import query",
+      "",
+      'result = query("select *,from analytics.orders")',
+    ].join("\n");
+    await replaceEditorContent(page, projectionQuery);
+    await page.evaluate(() => {
+      const monaco = (window as typeof window & { monaco?: any }).monaco;
+      const editor = monaco?.editor.getEditors?.()[0];
+      const model = editor?.getModel();
+      if (!editor || !model) return;
+      const offset = model.getValue().indexOf("*,from") + 2;
+      editor.setPosition(model.getPositionAt(offset));
+      editor.focus();
+    });
+    const projectionCompletions = page.waitForResponse(
+      (response) => {
+        if (!response.url().includes("/api/sql/lsp/completions") || !response.ok()) return false;
+        const body = response.request().postDataJSON() as { content?: string; position?: unknown };
+        return body.content === "select *, from analytics.orders" && body.position !== undefined;
+      },
+      { timeout: 15000 },
+    );
+    await page.keyboard.type(" ");
+    const projectionPayload = (await (await projectionCompletions).json()) as {
+      completions?: Array<{ label?: string; kind?: number }>;
+    };
+    expect(projectionPayload.completions ?? []).toContainEqual(
+      expect.objectContaining({ label: "order_id", kind: 5 }),
+    );
+    await expect(
+      page.locator(".suggest-widget .monaco-list-row").filter({ hasText: "order_id" }).first(),
+    ).toBeVisible({ timeout: 15000 });
+
     await replaceEditorContent(
       page,
       [
@@ -173,7 +208,8 @@ result = query("select 1")
         expect.arrayContaining([
           expect.objectContaining({
             owner: "renart-python-query-sql",
-            message: expect.stringContaining("Unresolved relation: analytics.does_not_exist"),
+            code: "unresolved-relation",
+            message: expect.stringContaining("analytics.does_not_exist"),
           }),
         ]),
       );

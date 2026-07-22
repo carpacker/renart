@@ -130,7 +130,11 @@ export function SchemaSyncDialog({
                         <span className="font-normal text-muted-foreground">
                           {snapshot.source.category === "definition"
                             ? "Asset inference"
-                            : "Advisory"}
+                            : snapshot.fresh === true
+                              ? "Fresh output"
+                              : snapshot.fresh === false
+                                ? "Stale output"
+                                : "Advisory"}
                           {snapshot.sample_records !== undefined
                             ? ` · ${snapshot.sample_records} sampled`
                             : ""}
@@ -258,7 +262,7 @@ function resolutionOptions(row: ColumnSchemaMergeRow, sources: ColumnSchemaSourc
   if (row.current_present) {
     options.push({
       value: CURRENT_CHOICE,
-      label: `Keep saved · ${displayType(row.current_type)}`,
+      label: `Keep saved · ${schemaValueLabel(row.column, row.current_type)}`,
     });
   }
   for (const snapshot of sources) {
@@ -266,7 +270,7 @@ function resolutionOptions(row: ColumnSchemaMergeRow, sources: ColumnSchemaSourc
     if (!column) continue;
     options.push({
       value: sourceChoice(snapshot.source.id),
-      label: `Use ${snapshot.source.label} · ${displayType(column.type)}`,
+      label: `Use ${snapshot.source.label} · ${schemaValueLabel(row.column, column.type)}`,
     });
   }
   options.push({ value: REMOVE_CHOICE, label: "Remove column" });
@@ -337,13 +341,9 @@ function SchemaValue({
   type?: string;
 }) {
   if (!present) {
-    return (
-      <span className="font-mono text-muted-foreground line-through">
-        {column} · {displayType(type)}
-      </span>
-    );
+    return <span className="font-mono text-muted-foreground line-through">{column}:------</span>;
   }
-  return <span className="font-mono">{displayType(type)}</span>;
+  return <span className="font-mono">{schemaValueLabel(column, type)}</span>;
 }
 
 function SchemaRowBadge({ row }: { row: ColumnSchemaMergeRow }) {
@@ -375,6 +375,13 @@ function SchemaRowBadge({ row }: { row: ColumnSchemaMergeRow }) {
       </Badge>
     );
   }
+  if (row.kind === "provenance") {
+    return (
+      <Badge variant="outline" size="xs">
+        Sourced
+      </Badge>
+    );
+  }
   if (row.kind === "manual") {
     return (
       <Badge variant="muted" size="xs">
@@ -395,5 +402,9 @@ function columnKey(name: string) {
 }
 
 function displayType(type?: string) {
-  return type?.trim() || "unknown";
+  return type?.trim() || "?";
+}
+
+function schemaValueLabel(column: string, type?: string) {
+  return `${column}:${displayType(type)}`;
 }

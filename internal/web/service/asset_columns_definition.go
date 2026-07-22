@@ -7,7 +7,7 @@ import (
 	"github.com/bruin-data/bruin/pkg/jinja"
 	"github.com/bruin-data/bruin/pkg/pipeline"
 
-	"renart/internal/web/sqlintelligence"
+	"renart/internal/sqlintelligence"
 )
 
 // InferAssetColumnsFromDefinition derives a SQL asset's output columns (name +

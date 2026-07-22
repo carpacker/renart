@@ -1258,6 +1258,15 @@ function ColumnStatusBadge({
     inferred: "bg-muted text-muted-foreground",
     manual: "bg-blue-100 text-blue-700 dark:bg-blue-950 dark:text-blue-300",
     "type-owned": "bg-purple-100 text-purple-700 dark:bg-purple-950 dark:text-purple-300",
+    "table-inferred": "bg-secondary text-secondary-foreground",
+    "live-inferred": "bg-secondary text-secondary-foreground",
+  };
+  const labels: Record<string, string> = {
+    inferred: "SQL inferred",
+    manual: "manual",
+    "type-owned": "type owned",
+    "table-inferred": "table inferred",
+    "live-inferred": "live inferred",
   };
   return (
     <span className="flex items-center gap-1">
@@ -1267,7 +1276,7 @@ function ColumnStatusBadge({
         </span>
       ) : null}
       <span className={cn("rounded px-1 text-[10px]", styles[status] ?? styles.inferred)}>
-        {status}
+        {labels[status] ?? status}
       </span>
     </span>
   );

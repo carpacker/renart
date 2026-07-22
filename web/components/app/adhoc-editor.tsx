@@ -89,9 +89,18 @@ export function AppAdhocEditor({
       registerSemanticDecorations: false,
     },
   );
-  useSQLLSP(monacoInstance, editorInstance, adhocAsset, editorValue, schemaTables, onGoToAsset);
+  useSQLLSP(
+    monacoInstance,
+    editorInstance,
+    adhocAsset,
+    editorValue,
+    schemaTables,
+    onGoToAsset,
+    undefined,
+    { documentContext: "adhoc" },
+  );
   useJinjaIntellisense(monacoInstance, editorInstance, adhocAsset, editorValue);
-  useSQLCanvasHover(editorInstance, adhocAsset);
+  useSQLCanvasHover(monacoInstance, editorInstance, adhocAsset);
 
   // Monaco replaces the whole document when the `value` prop changes in a
   // post-commit effect, which can drop keystrokes if the live draft is fed

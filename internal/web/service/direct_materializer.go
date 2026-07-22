@@ -16,11 +16,12 @@ import (
 	pg "github.com/bruin-data/bruin/pkg/postgres"
 	"github.com/bruin-data/bruin/pkg/query"
 	sf "github.com/bruin-data/bruin/pkg/snowflake"
-	"github.com/bruin-data/bruin/pkg/sqlparser"
 	syn "github.com/bruin-data/bruin/pkg/synapse"
 	tri "github.com/bruin-data/bruin/pkg/trino"
 	vert "github.com/bruin-data/bruin/pkg/vertica"
 	"github.com/spf13/afero"
+
+	"renart/internal/bruincompat"
 )
 
 // newDirectStringExecutionMaterializer is the single construction seam for
@@ -56,13 +57,10 @@ func newDirectStringExecutionMaterializer(assetType pipeline.AssetType, fullRefr
 	}
 
 	// Bruin passes the same DECLARE hoister to every hook-aware string
-	// materializer. Keep that behavior here so supported previews and direct
-	// runs cannot drift from Bruin when a multi-statement script contains a
-	// top-level DECLARE.
-	hoister, err := sqlparser.NewRustSQLParser(false)
-	if err != nil {
-		return pipeline.HookWrapperMaterializer{}, true, err
-	}
+	// materializer. Renart preserves that behavior with its shared Polyglot
+	// runtime so previews and direct runs cannot drift when a multi-statement
+	// script contains a top-level DECLARE.
+	hoister := bruincompat.NewDeclareHoister()
 	return pipeline.HookWrapperMaterializer{
 		Mat:     materializer,
 		Hoister: hoister,
@@ -79,10 +77,7 @@ func newDirectQueryBatchExecutionMaterializer(assetType pipeline.AssetType, full
 		return nil, false, nil
 	}
 
-	hoister, err := sqlparser.NewRustSQLParser(false)
-	if err != nil {
-		return nil, true, err
-	}
+	hoister := bruincompat.NewDeclareHoister()
 	return &directQueryBatchExecutionMaterializer{
 		materializer: materializer,
 		hoister:      hoister,
@@ -114,10 +109,7 @@ func newDirectQueryBatchBaseMaterializer(assetType pipeline.AssetType, fullRefre
 }
 
 func newDirectAthenaExecutionMaterializer(fullRefresh bool) (athenaBatchMaterializer, error) {
-	hoister, err := sqlparser.NewRustSQLParser(false)
-	if err != nil {
-		return nil, err
-	}
+	hoister := bruincompat.NewDeclareHoister()
 	return pipeline.HookWrapperMaterializerListWithLocation{
 		Mat: refreshRestrictedAthenaMaterializer{
 			configured: ath.NewMaterializer(false),

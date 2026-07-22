@@ -18,6 +18,7 @@ const relationHoverDelay = 120;
  * deduplicated so ordinary pointer motion does not spam the LSP endpoint.
  */
 export function useSQLCanvasHover(
+  monaco: typeof MonacoNS | null,
   editor: MonacoNS.editor.IStandaloneCodeEditor | null,
   asset: WebAsset | null,
 ) {
@@ -26,7 +27,7 @@ export function useSQLCanvasHover(
   useEffect(() => {
     const sqlAsset = asset && (isSqlAssetType(asset.type) || isQuerySensorAssetType(asset.type));
     const model = editor?.getModel();
-    if (!editor || !asset || !sqlAsset || !model) {
+    if (!monaco || !editor || !asset || !sqlAsset || !model) {
       setHoveredAsset(null);
       return;
     }
@@ -43,6 +44,14 @@ export function useSQLCanvasHover(
     };
 
     const mouseMove = editor.onMouseMove((event) => {
+      // Monaco clamps CONTENT_EMPTY positions after a short line to the
+      // line's final column. Calling getWordAtPosition there therefore returns
+      // the last relation token even when the pointer is far to its right.
+      // Only actual painted text is eligible for canvas highlighting.
+      if (event.target.type !== monaco.editor.MouseTargetType.CONTENT_TEXT) {
+        if (lastTokenKey) clear();
+        return;
+      }
       const position = event.target.position;
       const word = position ? model.getWordAtPosition(position) : null;
       if (!position || !word) {
@@ -83,5 +92,5 @@ export function useSQLCanvasHover(
       blur.dispose();
       modelChange.dispose();
     };
-  }, [asset, editor, setHoveredAsset]);
+  }, [asset, editor, monaco, setHoveredAsset]);
 }

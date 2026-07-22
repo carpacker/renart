@@ -36,6 +36,32 @@ from recent_orders r`}
 	}
 }
 
+func TestEngineReportsPolyglotExpressionTypeMismatch(t *testing.T) {
+	engine := NewEngine(CanonicalGraph{
+		Version:   1,
+		Relations: []RelationNode{{ID: "relation:values", Name: "values_table"}},
+		Schemas: []SchemaLayer{{
+			RelationID: "relation:values",
+			SourceKind: "declared",
+			Columns:    []ColumnInfo{{Name: "id", Type: "INTEGER"}},
+		}},
+	})
+
+	diagnostics := engine.Diagnostics(TextDocumentItem{
+		URI:  "file:///query.sql",
+		Text: "select id + 'not a number' from values_table",
+	})
+	for _, diagnostic := range diagnostics {
+		if diagnostic.Code == "sql-type-mismatch" {
+			if diagnostic.Severity != diagnosticSeverityError {
+				t.Fatalf("type mismatch severity = %d, want error", diagnostic.Severity)
+			}
+			return
+		}
+	}
+	t.Fatalf("expected sql-type-mismatch diagnostic, got %#v", diagnostics)
+}
+
 func TestEngineCompletesColumnsInsideCTEs(t *testing.T) {
 	engine := NewEngine(CanonicalGraph{
 		Version: 1,
@@ -574,6 +600,30 @@ from blub`}
 	}
 	if !slices.Contains(labels, "bli") {
 		t.Fatalf("expected current UNION branch column in completions, got %#v", labels)
+	}
+}
+
+func TestEngineCompletesColumnsAtEmptySameLineProjection(t *testing.T) {
+	engine := NewEngine(CanonicalGraph{
+		Version: 1,
+		Relations: []RelationNode{{
+			ID:   "relation:analytics.orders",
+			Name: "analytics.orders",
+		}},
+		Schemas: []SchemaLayer{{
+			RelationID: "relation:analytics.orders",
+			Columns: []ColumnInfo{
+				{Name: "order_id", Type: "integer"},
+				{Name: "customer_id", Type: "integer"},
+			},
+		}},
+	})
+	doc := TextDocumentItem{URI: "file:///query.sql", Text: `select *, from analytics.orders`}
+
+	items := engine.Complete(doc, Position{Line: 0, Character: len("select *, ")})
+	labels := completionLabels(items)
+	if !slices.Contains(labels, "order_id") || !slices.Contains(labels, "customer_id") {
+		t.Fatalf("expected source columns at an empty projection, got %#v", labels)
 	}
 }
 

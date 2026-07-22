@@ -109,7 +109,9 @@ not underscore-flattened route hacks.
   resized into split view without fighting user panning. Hovering an
   asset-backed relation in the SQL editor resolves it through the definition
   endpoint and applies a transient, reduced-motion-safe highlight to the same
-  canvas node. Build and Catalog share the same
+  canvas node. Only Monaco's painted text targets are eligible; empty space to
+  the right of a short line cannot inherit the line's final relation token and
+  spuriously animate a node. Build and Catalog share the same
   farther-out zoom range; below the detail threshold, fixed-size asset cards
   become icon-only overview nodes and group labels disappear so unreadable text
   does not clutter a whole-DAG view. The explorer's asset filter searches names,
@@ -163,6 +165,9 @@ not underscore-flattened route hacks.
   stage's fidelity and redaction, gives each runtime quality check its own
   column/custom-check label and SQL tab when renderable, and always identifies
   the saved source, environment, interval, and `Preview — not executed` status.
+  While the Render tab is open, changing the selected asset, saved-intent
+  content, environment, or interval automatically loads the matching latest
+  render after a short typing debounce; users do not have to press Render again.
   For a working-tree preview, **Compare deployment** defaults to the latest
   deployment and allows selecting an older snapshot. The server renders both
   sources with one context and aligns semantic stages; Build presents the
@@ -276,7 +281,12 @@ not underscore-flattened route hacks.
   in both the form and Go service; saving replaces the complete policy.
   Pipeline settings use a vertical, icon-labelled shadcn tab menu at desktop
   widths and retain the compact horizontally scrollable section buttons on
-  mobile. Both layouts control the same mounted form and ScrollArea.
+  mobile. The dialog has one fixed viewport-relative height, its desktop sidebar
+  stretches through the available body, and the shared ScrollArea absorbs
+  section-length changes instead of resizing the dialog. The Python section
+  edits the pipeline-root `pyproject.toml` dependency list; Microsoft Teams has
+  no settings surface, while any existing unsupported notification fields are
+  preserved when another section is saved.
   Run details use semantic event badges, link current-workspace asset events
   back to the split Build view, and render timeline asset names in a dedicated
   wrapping column with tooltips so short duration bars never truncate identity.

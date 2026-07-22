@@ -17,6 +17,7 @@ func TestParseApplyRoundTrip(t *testing.T) {
 		KeyColAdd:    "loaded_at",
 		KeyColDrop:   "debug_rank",
 		KeyColOwn:    "order_total:type",
+		KeyColSource: "customer_id:m;email:l",
 		KeyColMap:    "e:9cc83f4a:order_total",
 	}
 
@@ -33,12 +34,15 @@ func TestParseApplyRoundTrip(t *testing.T) {
 	if !reflect.DeepEqual(parsed.ColOwn, map[string][]string{"order_total": {"type"}}) {
 		t.Fatalf("col_own: %#v", parsed.ColOwn)
 	}
+	if !reflect.DeepEqual(parsed.ColSource, map[string]string{"customer_id": "m", "email": "l"}) {
+		t.Fatalf("col_src: %#v", parsed.ColSource)
+	}
 	if parsed.ColMap["e:9cc83f4a"] != "order_total" {
 		t.Fatalf("col_map: %#v", parsed.ColMap)
 	}
 
 	applied := parsed.Apply(map[string]string{"owner": "data-team"})
-	for _, key := range []string{KeyVersion, KeySigDeps, KeyDepAdd, KeyColOwn, KeyColMap} {
+	for _, key := range []string{KeyVersion, KeySigDeps, KeyDepAdd, KeyColOwn, KeyColSource, KeyColMap} {
 		if applied[key] == "" {
 			t.Fatalf("apply dropped %s: %#v", key, applied)
 		}

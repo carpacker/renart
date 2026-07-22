@@ -27,7 +27,7 @@ The `pypi` GitHub environment must require the intended reviewers and have a
 trusted publisher configured for the `renart` project. No long-lived PyPI token
 belongs in repository secrets.
 
-The cross-builder image, Rust toolchain, Zig linker, and Syft SBOM generator are
+The cross-builder image, Zig linker, and Syft SBOM generator are
 all pinned. Update their versions and checksums deliberately, then validate a
 snapshot before changing a release tag.
 

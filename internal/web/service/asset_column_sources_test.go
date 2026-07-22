@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/bruin-data/bruin/pkg/pipeline"
@@ -11,6 +12,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	webmodel "renart/internal/web/model"
+	"renart/internal/web/service/assetmeta"
 )
 
 func TestColumnInferenceSourcesAreAssetCapabilities(t *testing.T) {
@@ -134,13 +136,31 @@ materialization:
 		"dev",
 	)
 	require.Nil(t, apiErr)
-	assert.Equal(t, columnSyncStatusUnchanged, result.Status)
+	assert.Equal(t, columnSyncStatusApplied, result.Status)
 	require.Len(t, result.Sources, 2)
 	assert.Equal(t, columnSourceDefinition, result.Sources[0].Source.ID)
 	assert.Equal(t, columnSourceMaterialized, result.Sources[1].Source.ID)
 	assert.Equal(t, []webmodel.Column{{Name: "id", Type: "VARCHAR"}}, result.Sources[1].Columns)
 	assert.Empty(t, result.Sources[1].Notes)
 	assert.Contains(t, executor.args, "duckdb-default")
+
+	_, _, syncedAsset, err := service.deps.ResolveAssetByID(context.Background(), EncodeID("analytics/assets/api.asset.yml"))
+	require.NoError(t, err)
+	assert.Equal(t, map[string]string{"id": columnSourceCodeMaterialized}, assetmeta.Parse(syncedAsset.Meta).ColSource)
+
+	// Once the exception is recorded, a normal sync re-observes its source even
+	// when the UI does not explicitly select Current table again.
+	result, apiErr = service.SyncAssetColumns(
+		context.Background(),
+		EncodeID("analytics/assets/api.asset.yml"),
+		nil,
+		"dev",
+	)
+	require.Nil(t, apiErr)
+	assert.Equal(t, columnSyncStatusUnchanged, result.Status)
+	require.Len(t, result.Sources, 2)
+	assert.Equal(t, columnSourceMaterialized, result.Sources[1].Source.ID)
+	assert.Contains(t, strings.Join(result.Notes, " "), "saved type source")
 }
 
 func TestCompareColumnSchemasReportsMeaningfulDrift(t *testing.T) {

@@ -95,7 +95,8 @@ func (s *AssetService) addAssetPyprojectDependency(absAssetPath, pkg string) (st
 
 // assetPyprojectPath chooses where the asset's dependencies live: an existing
 // pyproject.toml up the tree, else beside a legacy requirements.txt (so it can be
-// migrated in place), else beside the asset.
+// migrated in place), else at the owning pipeline root. A path outside a parsed
+// pipeline falls back to the asset directory for compatibility.
 func (s *AssetService) assetPyprojectPath(absAssetPath string) string {
 	startDir := filepath.Dir(absAssetPath)
 	if existing := nearestPythonDependencyFile(startDir, s.deps.WorkspaceRoot, pyprojectFile); existing != "" {
@@ -103,6 +104,9 @@ func (s *AssetService) assetPyprojectPath(absAssetPath string) string {
 	}
 	if requirements := nearestPythonDependencyFile(startDir, s.deps.WorkspaceRoot, "requirements.txt"); requirements != "" {
 		return filepath.Join(filepath.Dir(requirements), pyprojectFile)
+	}
+	if pipelineRoot := nearestPipelineRoot(startDir, s.deps.WorkspaceRoot); pipelineRoot != "" {
+		return filepath.Join(pipelineRoot, pyprojectFile)
 	}
 	return filepath.Join(startDir, pyprojectFile)
 }

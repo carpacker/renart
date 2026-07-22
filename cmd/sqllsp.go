@@ -8,6 +8,7 @@ import (
 	polyglot "github.com/tobilg/polyglot/packages/go"
 	"github.com/urfave/cli/v3"
 	"renart/internal/sqllsp"
+	"renart/internal/web/service"
 )
 
 func SQLLSP() *cli.Command {
@@ -37,7 +38,7 @@ func SQLLSP() *cli.Command {
 					return err
 				}
 			}
-			graph, graphErr := sqllsp.LoadGraphFromDir(ctx, workspace)
+			graph, graphErr := service.LoadSQLLSPGraph(ctx, workspace)
 			if graphErr != nil {
 				fmt.Fprintf(os.Stderr, "renart sql-lsp: workspace graph unavailable, continuing with syntax analysis: %v\n", graphErr)
 				graph = sqllsp.CanonicalGraph{Version: 1, WorkspaceURI: sqllsp.FileURI(workspace)}
@@ -51,7 +52,7 @@ func SQLLSP() *cli.Command {
 				defer client.Close()
 				fmt.Fprintf(os.Stderr, "renart sql-lsp: using Polyglot FFI %s\n", path)
 			}
-			server := sqllsp.NewWorkspaceServer(workspace, graph, client)
+			server := sqllsp.NewWorkspaceServerWithLoader(workspace, graph, client, service.LoadSQLLSPGraph)
 			return server.Serve(ctx, os.Stdin, os.Stdout)
 		},
 	}

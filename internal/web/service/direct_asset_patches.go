@@ -12,11 +12,10 @@ import (
 	"github.com/bruin-data/bruin/pkg/pipeline"
 	"github.com/bruin-data/bruin/pkg/postgres"
 	"github.com/bruin-data/bruin/pkg/query"
-	"github.com/bruin-data/bruin/pkg/sqlparser"
 	"github.com/spf13/afero"
 )
 
-func updateDirectAssetDependencies(ctx context.Context, asset *pipeline.Asset, p *pipeline.Pipeline, sp sqlparser.Parser, renderer *jinja.Renderer, fs afero.Fs) error {
+func updateDirectAssetDependencies(ctx context.Context, asset *pipeline.Asset, p *pipeline.Pipeline, sp dependencyParser, renderer *jinja.Renderer, fs afero.Fs) error {
 	if asset == nil || p == nil {
 		return fmt.Errorf("pipeline and asset are required to update direct asset dependencies")
 	}

@@ -17,7 +17,7 @@ func (e *HybridBruinExecutor) applyFillAssetDependencies(ctx context.Context, ta
 		return nil, fmt.Errorf("direct fill-asset-dependencies requires a pipeline builder")
 	}
 
-	sqlParserInstance, err := newDependencyParser()
+	sqlParserInstance, err := newDependencyParser(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create sql parser: %w", err)
 	}

@@ -880,9 +880,9 @@ function RunTimelinePanel({ run, steps }: { run: PipelineRun; steps: PipelineRun
       <ScrollArea className="max-h-72 min-w-0" viewportClassName="min-h-0">
         <div className="grid grid-cols-[minmax(7rem,12rem)_minmax(0,1fr)] items-center gap-x-3 gap-y-2 p-3">
           <div aria-hidden="true" />
-          <div className="flex text-[11px] text-muted-foreground">
-            {timelineTicks(bounds).map((tick) => (
-              <div key={tick.label} className="min-w-0 flex-1 font-mono">
+          <div className="flex text-[11px] text-muted-foreground" data-testid="run-timeline-axis">
+            {timelineTicks(bounds).map((tick, index) => (
+              <div key={`${index}-${tick.label}`} className="min-w-0 flex-1 font-mono">
                 {tick.label}
               </div>
             ))}
@@ -1138,6 +1138,9 @@ function timelineTicks(bounds: { start: number; end: number }) {
   const duration = bounds.end - bounds.start;
   return Array.from({ length: 5 }, (_, index) => {
     const offset = (duration / 4) * index;
+    if (duration <= 1000) {
+      return { label: `${Math.round(offset)}ms` };
+    }
     const seconds = Math.round(offset / 1000);
     return {
       label: seconds < 60 ? `${seconds}s` : `${Math.floor(seconds / 60)}m ${seconds % 60}s`,

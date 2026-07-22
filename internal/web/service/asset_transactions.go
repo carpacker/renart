@@ -159,6 +159,7 @@ func applyTransactionToAsset(asset *pipeline.Asset, meta *assetmeta.RenartMeta, 
 		asset.Columns = upsertColumn(asset.Columns, cols[0])
 		meta.ColAdd = appendName(meta.ColAdd, tx.ColumnDef.Name)
 		meta.ColDrop = removeName(meta.ColDrop, tx.ColumnDef.Name)
+		meta.ColSource = removeColumnSource(meta.ColSource, tx.ColumnDef.Name)
 
 	case TxColumnInferredDrop:
 		if strings.TrimSpace(tx.Column) == "" {
@@ -166,6 +167,7 @@ func applyTransactionToAsset(asset *pipeline.Asset, meta *assetmeta.RenartMeta, 
 		}
 		meta.ColDrop = appendName(meta.ColDrop, tx.Column)
 		meta.ColAdd = removeName(meta.ColAdd, tx.Column)
+		meta.ColSource = removeColumnSource(meta.ColSource, tx.Column)
 		asset.Columns = removeColumnByName(asset.Columns, tx.Column)
 
 	case TxColumnInferredRestore:
@@ -179,6 +181,9 @@ func applyTransactionToAsset(asset *pipeline.Asset, meta *assetmeta.RenartMeta, 
 			return badRequestError("invalid_transaction", "column and field are required")
 		}
 		meta.ColOwn = ownField(meta.ColOwn, tx.Column, tx.Field)
+		if strings.EqualFold(strings.TrimSpace(tx.Field), "type") {
+			meta.ColSource = removeColumnSource(meta.ColSource, tx.Column)
+		}
 
 	case TxColumnFieldDisown:
 		if strings.TrimSpace(tx.Column) == "" || strings.TrimSpace(tx.Field) == "" {
@@ -399,4 +404,28 @@ func disownField(own map[string][]string, column, field string) map[string][]str
 		own[key] = fields
 	}
 	return own
+}
+
+func setColumnSource(sources map[string]string, column, source string) map[string]string {
+	key := columnNameKey(column)
+	source = strings.TrimSpace(source)
+	if key == "" || source == "" {
+		return removeColumnSource(sources, column)
+	}
+	if sources == nil {
+		sources = make(map[string]string)
+	}
+	sources[key] = source
+	return sources
+}
+
+func removeColumnSource(sources map[string]string, column string) map[string]string {
+	if sources == nil {
+		return nil
+	}
+	delete(sources, columnNameKey(column))
+	if len(sources) == 0 {
+		return nil
+	}
+	return sources
 }

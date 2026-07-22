@@ -171,6 +171,36 @@ func TestAnalyzeColumnSchemaUsesConservativeSafetyRules(t *testing.T) {
 			},
 			wantKinds: []string{"owned"},
 		},
+		{
+			name:    "materialized provenance preserves a known type when sql is unknown",
+			current: []pipeline.Column{{Name: "id", Type: "BIGINT"}},
+			meta:    assetmeta.RenartMeta{ColSource: map[string]string{"id": columnSourceCodeMaterialized}},
+			snapshots: []webmodel.ColumnSchemaSourceSnapshot{
+				definitionSnapshot(webmodel.Column{Name: "id"}),
+			},
+			wantKinds: []string{"provenance"},
+		},
+		{
+			name:    "fresh materialized provenance wins over conflicting static inference",
+			current: []pipeline.Column{{Name: "id", Type: "BIGINT"}},
+			meta:    assetmeta.RenartMeta{ColSource: map[string]string{"id": columnSourceCodeMaterialized}},
+			snapshots: []webmodel.ColumnSchemaSourceSnapshot{
+				definitionSnapshot(webmodel.Column{Name: "id", Type: "INTEGER"}),
+				observedSnapshotWithFresh("materialized", false, true, webmodel.Column{Name: "id", Type: "BIGINT"}),
+			},
+			wantKinds: []string{"provenance"},
+		},
+		{
+			name:    "stale materialized provenance does not hide conflicting inference",
+			current: []pipeline.Column{{Name: "id", Type: "BIGINT"}},
+			meta:    assetmeta.RenartMeta{ColSource: map[string]string{"id": columnSourceCodeMaterialized}},
+			snapshots: []webmodel.ColumnSchemaSourceSnapshot{
+				definitionSnapshot(webmodel.Column{Name: "id", Type: "INTEGER"}),
+				observedSnapshotWithFresh("materialized", false, false, webmodel.Column{Name: "id", Type: "BIGINT"}),
+			},
+			wantKinds:     []string{"source_conflict"},
+			wantConflicts: true,
+		},
 	}
 
 	for _, tt := range tests {
@@ -295,7 +325,7 @@ columns:
 	assert.Equal(t, map[string][]string{"order_id": {"type"}}, assetmeta.Parse(asset.Meta).ColOwn)
 }
 
-func TestApplyAssetColumnSchemaResolutionKeepsAdvisoryOnlyColumnsManual(t *testing.T) {
+func TestApplyAssetColumnSchemaResolutionTracksAdvisoryOnlyColumnSource(t *testing.T) {
 	header := strings.TrimSpace(`
 /* @bruin
 name: analytics.customers
@@ -328,8 +358,9 @@ columns:
 	_, _, asset, err := service.deps.ResolveAssetByID(context.Background(), assetID)
 	require.NoError(t, err)
 	meta := assetmeta.Parse(asset.Meta)
-	assert.Equal(t, []string{"warehouse_only"}, meta.ColAdd)
-	assert.Equal(t, map[string][]string{"warehouse_only": {"type"}}, meta.ColOwn)
+	assert.Empty(t, meta.ColAdd)
+	assert.Empty(t, meta.ColOwn)
+	assert.Equal(t, map[string]string{"warehouse_only": columnSourceCodeMaterialized}, meta.ColSource)
 }
 
 func TestApplyAssetColumnSchemaResolutionUsesAdvisoryTypeForExistingColumn(t *testing.T) {
@@ -361,7 +392,9 @@ columns:
 
 	_, _, asset, err := service.deps.ResolveAssetByID(context.Background(), assetID)
 	require.NoError(t, err)
-	assert.Equal(t, map[string][]string{"order_id": {"type"}}, assetmeta.Parse(asset.Meta).ColOwn)
+	meta := assetmeta.Parse(asset.Meta)
+	assert.Empty(t, meta.ColOwn)
+	assert.Equal(t, map[string]string{"order_id": columnSourceCodeMaterialized}, meta.ColSource)
 }
 
 func TestApplyAssetColumnSchemaResolutionRejectsStaleSavedSchema(t *testing.T) {
@@ -405,6 +438,17 @@ func observedSnapshot(id string, mayOmit bool, columns ...webmodel.Column) webmo
 		},
 		Columns: columns,
 	}
+}
+
+func observedSnapshotWithFresh(
+	id string,
+	mayOmit bool,
+	fresh bool,
+	columns ...webmodel.Column,
+) webmodel.ColumnSchemaSourceSnapshot {
+	snapshot := observedSnapshot(id, mayOmit, columns...)
+	snapshot.Fresh = &fresh
+	return snapshot
 }
 
 func workspaceColumnNames(columns []WorkspaceColumn) []string {

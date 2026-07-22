@@ -9,7 +9,7 @@ CI verifies that the checked-in inventory is current.
 
 - [shadcn/ui generated components](https://github.com/shadcn-ui/ui) shadcn CLI 4.13.1 — [license](third_party/licenses/1564074e13439397221ffd522e2e504d56561994a23d371aa5e3ad43e4f5423f.txt)
 - [Ruff Python intelligence engine](https://github.com/astral-sh/ruff) commit 7287ad8623d11935a64d65ce0eb0a0755a5d87ca — [license](third_party/licenses/2597d854122b77ddc71971564ca2350a37608575ce324adc5650a2b2051c8f18.txt)
-- [Polyglot SQL formatter](https://github.com/tobilg/polyglot) v0.5.15 — [license](third_party/licenses/1e63f135949fa11c4557ca23d40cc0d6ad944be21ecfa665284c35b87dbdd709.txt)
+- [Polyglot SQL WASM engine](https://github.com/tobilg/polyglot) v0.6.2 — [license](third_party/licenses/1e63f135949fa11c4557ca23d40cc0d6ad944be21ecfa665284c35b87dbdd709.txt)
 - [Inconsolata variable font](https://fontsource.org/fonts/inconsolata) @fontsource-variable/inconsolata 5.3.0 — [license](third_party/licenses/11527366bb615a5246481b961bcc1f4e51cf5d44294a0bea01f59b61f400e299.txt)
 - [SQLGlot embedded SQL engine](https://github.com/tobymao/sqlglot) 30.7.0 (Bruin v0.11.691) — [license](third_party/licenses/b0bf909b472ddf9bd4eab30f6e6fd8b33bf3997ce038b882fe0663f291958d2d.txt)
 - [CPython embedded runtime](https://www.python.org/) 3.14.5 (v0.0.0-3.14.5-20260510-2) — [license](third_party/licenses/b0e25a78cffb43f4d92de8b61ccfa1f1f98ecbc22330b54b5251e7b6ba010231.txt)
@@ -33,6 +33,7 @@ CI verifies that the checked-in inventory is current.
 | filippo.io/edwards25519 | v1.2.0 | [license](third_party/licenses/2d36597f7117c38b006835ae7f537487207d8ec407aa9d9980794b2030cbc067.txt) |
 | github.com/99designs/go-keychain | v0.0.0-20191008050251-8e49817e8af4 | [license](third_party/licenses/bda882a9e8f29deea13eb8c2b25ea1edf0e4a16656182d9a698dd28df8bd15ec.txt) |
 | github.com/99designs/keyring | v1.2.2 | [license](third_party/licenses/b1eb377f13a39b7f3e8869c95901a19c325b70c9fbe4bd675c94ede6be3ab7a8.txt) |
+| github.com/alecthomas/chroma/v2 | v2.23.1 | [license](third_party/licenses/e7bf754e7153012a3a8ff697d21acd6c12e590d6a55f2aef8ee83616aa9a795f.txt) |
 | github.com/andybalholm/brotli | v1.2.1 | [license](third_party/licenses/3d180008e36922a4e8daec11c34c7af264fed5962d07924aea928c38e8663c94.txt) |
 | github.com/apache/arrow-adbc/go/adbc | v1.11.0 | [license](third_party/licenses/cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30.txt) |
 | github.com/apache/arrow-go/v18 | v18.6.0 | [license](third_party/licenses/ff2fe52b8dfd2574c6ea7f0c407948c857f62672c2a3a9a17083ee10af8067ef.txt), [license](third_party/licenses/c02e3dc1587f49e4876c8b75ae9e534739a00e834b609395cc2bb2fd24452dfe.txt) |
@@ -87,6 +88,7 @@ CI verifies that the checked-in inventory is current.
 | github.com/databricks/databricks-sql-go | v1.14.0 | [license](third_party/licenses/5a0566d95a5f6770ac51f3e7743d8d782ac421c140e1407e6279d6e1e8f171b1.txt) |
 | github.com/davecgh/go-spew | v1.1.2-0.20180830191138-d8f796af33cc | [license](third_party/licenses/1b93a317849ee09d3d7e4f1d20c2b78ddb230b4becb12d7c224c927b9d470251.txt) |
 | github.com/denisbrodbeck/machineid | v1.0.1 | [license](third_party/licenses/1b5036318126618111b864b7707db0bd80cbb6be4fb43b846b4454edf7d0e939.txt) |
+| github.com/dlclark/regexp2 | v1.11.5 | [license](third_party/licenses/9be5d04bb4d706914d5bf943710da4afeb42048f7c529902fb57c82762a991a9.txt) |
 | github.com/dustin/go-humanize | v1.0.1 | [license](third_party/licenses/a973b4498c13eb74baa2a8e5c351426a6826f2fcdd909916dbe53ee2e755fd71.txt) |
 | github.com/dvsekhvalnov/jose2go | v1.8.0 | [license](third_party/licenses/2a41b4da4e95c95c4a9c09f87652f67cb92d7072316cc12fc16db1773976e5e3.txt) |
 | github.com/ebitengine/purego | v0.10.0 | [license](third_party/licenses/b40930bbcf80744c86c46a12bc9da056641d722716c378f5659b9e555ef833e1.txt) |
@@ -210,7 +212,7 @@ CI verifies that the checked-in inventory is current.
 | github.com/tidwall/match | v1.2.0 | [license](third_party/licenses/be83ad53208d03a9fe08c7fac231cabf79422989ef5706bff217bd35104ebf07.txt) |
 | github.com/tidwall/pretty | v1.2.1 | [license](third_party/licenses/0ca70311227fe097c662dece3f359e3317fa7f9d41f8d29eb45fc5135e216139.txt) |
 | github.com/tidwall/sjson | v1.2.5 | [license](third_party/licenses/be83ad53208d03a9fe08c7fac231cabf79422989ef5706bff217bd35104ebf07.txt) |
-| github.com/tobilg/polyglot/packages/go | v0.5.15 | [license](third_party/licenses/1e63f135949fa11c4557ca23d40cc0d6ad944be21ecfa665284c35b87dbdd709.txt) |
+| github.com/tobilg/polyglot/packages/go | v0.6.2 | [license](third_party/licenses/1e63f135949fa11c4557ca23d40cc0d6ad944be21ecfa665284c35b87dbdd709.txt) |
 | github.com/trinodb/trino-go-client | v0.326.0 | [license](third_party/licenses/cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30.txt) |
 | github.com/uber-go/tally | v3.3.17+incompatible | [license](third_party/licenses/06738824e7714c8c666cd3dffd99825ea7a95c34d159a7759d07fd79893e7928.txt) |
 | github.com/uber/athenadriver | v1.1.15 | [license](third_party/licenses/111c0a160faceceea1d13f135b2b6d9e1a10ab58a7b4f2badfbba2e179d6d979.txt) |
@@ -272,26 +274,6 @@ CI verifies that the checked-in inventory is current.
 | modernc.org/mathutil | v1.7.1 | [license](third_party/licenses/bfa9bf72a72ca009fd62a8f84fca3dca67e51d93af96352723646599898b6cf5.txt) |
 | modernc.org/memory | v1.11.0 | [license](third_party/licenses/59895e669f48f168b6b858358f6005779cdf40a265f7828813061b56af67b496.txt), [license](third_party/licenses/2d36597f7117c38b006835ae7f537487207d8ec407aa9d9980794b2030cbc067.txt), [license](third_party/licenses/5ae5bee3072a841376451b48d8cfcec7188e10543926d5870828d36c8a750dc5.txt), [license](third_party/licenses/121d4529907b7d822d7665bde14ae142dc8a119356991fbc759ed562444dc02f.txt) |
 | modernc.org/sqlite | v1.53.0 | [license](third_party/licenses/c6fe05491a60ae13bcd223088d2705e36dede24e5587226231d2459ada5c4822.txt) |
-
-## Rust crates
-
-| Crate | Version | Declared license | License texts |
-| --- | --- | --- | --- |
-| [itoa](https://github.com/dtolnay/itoa) | 1.0.17 | MIT OR Apache-2.0 | [license](third_party/licenses/62c7a1e35f56406896d7aa7ca52d0cc0d272ac022b5d2796e7d6905db8a3636a.txt), [license](third_party/licenses/23f18e03dc49df91622fe2a76176497404e46ced8a715d9d2b67a7446571cca3.txt) |
-| [memchr](https://github.com/BurntSushi/memchr) | 2.8.0 | Unlicense OR MIT | [license](third_party/licenses/01c266bced4a434da0051174d6bee16a4c82cf634e2679b6155d40d75012390f.txt), [license](third_party/licenses/0f96a83840e146e43c0ec96a22ec1f392e0680e6c1226e6f3ba87e0740af850f.txt) |
-| [polyglot-sql](https://github.com/tobilg/polyglot) | 0.2.0 | MIT | [license](third_party/licenses/1e63f135949fa11c4557ca23d40cc0d6ad944be21ecfa665284c35b87dbdd709.txt) |
-| [proc-macro2](https://github.com/dtolnay/proc-macro2) | 1.0.106 | MIT OR Apache-2.0 | [license](third_party/licenses/62c7a1e35f56406896d7aa7ca52d0cc0d272ac022b5d2796e7d6905db8a3636a.txt), [license](third_party/licenses/23f18e03dc49df91622fe2a76176497404e46ced8a715d9d2b67a7446571cca3.txt) |
-| [quote](https://github.com/dtolnay/quote) | 1.0.45 | MIT OR Apache-2.0 | [license](third_party/licenses/62c7a1e35f56406896d7aa7ca52d0cc0d272ac022b5d2796e7d6905db8a3636a.txt), [license](third_party/licenses/23f18e03dc49df91622fe2a76176497404e46ced8a715d9d2b67a7446571cca3.txt) |
-| [serde](https://github.com/serde-rs/serde) | 1.0.228 | MIT OR Apache-2.0 | [license](third_party/licenses/62c7a1e35f56406896d7aa7ca52d0cc0d272ac022b5d2796e7d6905db8a3636a.txt), [license](third_party/licenses/23f18e03dc49df91622fe2a76176497404e46ced8a715d9d2b67a7446571cca3.txt) |
-| [serde_core](https://github.com/serde-rs/serde) | 1.0.228 | MIT OR Apache-2.0 | [license](third_party/licenses/62c7a1e35f56406896d7aa7ca52d0cc0d272ac022b5d2796e7d6905db8a3636a.txt), [license](third_party/licenses/23f18e03dc49df91622fe2a76176497404e46ced8a715d9d2b67a7446571cca3.txt) |
-| [serde_derive](https://github.com/serde-rs/serde) | 1.0.228 | MIT OR Apache-2.0 | [license](third_party/licenses/62c7a1e35f56406896d7aa7ca52d0cc0d272ac022b5d2796e7d6905db8a3636a.txt), [license](third_party/licenses/23f18e03dc49df91622fe2a76176497404e46ced8a715d9d2b67a7446571cca3.txt) |
-| [serde_json](https://github.com/serde-rs/json) | 1.0.149 | MIT OR Apache-2.0 | [license](third_party/licenses/62c7a1e35f56406896d7aa7ca52d0cc0d272ac022b5d2796e7d6905db8a3636a.txt), [license](third_party/licenses/23f18e03dc49df91622fe2a76176497404e46ced8a715d9d2b67a7446571cca3.txt) |
-| [syn](https://github.com/dtolnay/syn) | 2.0.117 | MIT OR Apache-2.0 | [license](third_party/licenses/62c7a1e35f56406896d7aa7ca52d0cc0d272ac022b5d2796e7d6905db8a3636a.txt), [license](third_party/licenses/23f18e03dc49df91622fe2a76176497404e46ced8a715d9d2b67a7446571cca3.txt) |
-| [thiserror](https://github.com/dtolnay/thiserror) | 1.0.69 | MIT OR Apache-2.0 | [license](third_party/licenses/62c7a1e35f56406896d7aa7ca52d0cc0d272ac022b5d2796e7d6905db8a3636a.txt), [license](third_party/licenses/23f18e03dc49df91622fe2a76176497404e46ced8a715d9d2b67a7446571cca3.txt) |
-| [thiserror-impl](https://github.com/dtolnay/thiserror) | 1.0.69 | MIT OR Apache-2.0 | [license](third_party/licenses/62c7a1e35f56406896d7aa7ca52d0cc0d272ac022b5d2796e7d6905db8a3636a.txt), [license](third_party/licenses/23f18e03dc49df91622fe2a76176497404e46ced8a715d9d2b67a7446571cca3.txt) |
-| [unicode-ident](https://github.com/dtolnay/unicode-ident) | 1.0.24 | (MIT OR Apache-2.0) AND Unicode-3.0 | [license](third_party/licenses/62c7a1e35f56406896d7aa7ca52d0cc0d272ac022b5d2796e7d6905db8a3636a.txt), [license](third_party/licenses/23f18e03dc49df91622fe2a76176497404e46ced8a715d9d2b67a7446571cca3.txt), [license](third_party/licenses/f7db81051789b729fea528a63ec4c938fdcb93d9d61d97dc8cc2e9df6d47f2a1.txt) |
-| [unicode-segmentation](https://github.com/unicode-rs/unicode-segmentation) | 1.12.0 | MIT OR Apache-2.0 | [license](third_party/licenses/23860c2a7b5d96b21569afedf033469bab9fe14a1b24a35068b8641c578ce24d.txt), [license](third_party/licenses/a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2.txt), [license](third_party/licenses/7b63ecd5f1902af1b63729947373683c32745c16a10e8e6292e2e2dcd7e90ae0.txt) |
-| [zmij](https://github.com/dtolnay/zmij) | 1.0.21 | MIT | [license](third_party/licenses/23f18e03dc49df91622fe2a76176497404e46ced8a715d9d2b67a7446571cca3.txt) |
 
 ## Web application packages
 

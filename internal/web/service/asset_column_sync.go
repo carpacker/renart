@@ -22,9 +22,16 @@ type columnSchemaAnalysis struct {
 	rows             []webmodel.ColumnSchemaMergeRow
 	managedColumns   []WorkspaceColumn
 	candidateColumns []WorkspaceColumn
+	typeSources      map[string]string
+	provenanceChange bool
 	hasChanges       bool
 	hasConflicts     bool
 }
+
+const (
+	columnSourceCodeMaterialized = "m"
+	columnSourceCodeLiveResponse = "l"
+)
 
 // SyncAssetColumns automatically observes the asset definition plus any
 // explicitly selected advisory sources. Additions and unknown-to-known type
@@ -43,10 +50,13 @@ func (s *AssetService) SyncAssetColumns(
 	}
 
 	capabilities := columnInferenceSourcesForPipelineAsset(asset, parsedPipeline)
+	meta := assetmeta.Parse(asset.Meta)
 	selected := make(map[string]struct{}, len(additionalSourceIDs))
+	explicitlySelected := make(map[string]struct{}, len(additionalSourceIDs))
 	for _, sourceID := range additionalSourceIDs {
 		if sourceID = strings.TrimSpace(sourceID); sourceID != "" {
 			selected[sourceID] = struct{}{}
+			explicitlySelected[sourceID] = struct{}{}
 		}
 	}
 
@@ -64,12 +74,28 @@ func (s *AssetService) SyncAssetColumns(
 			)
 		}
 	}
+	// Re-observe non-default sources already responsible for saved types. SQL /
+	// definition provenance is implicit, so ordinary assets add no metadata and
+	// no extra observation. A missing or retired capability is ignored and the
+	// stored type remains usable as historical evidence when SQL is still
+	// unknown.
+	provenanceSelected := make(map[string]struct{})
+	for _, code := range meta.ColSource {
+		sourceID := columnSourceIDForCode(code)
+		if _, available := availableObserved[sourceID]; !available {
+			continue
+		}
+		selected[sourceID] = struct{}{}
+		if _, explicit := explicitlySelected[sourceID]; !explicit {
+			provenanceSelected[sourceID] = struct{}{}
+		}
+	}
 
 	snapshots := make([]webmodel.ColumnSchemaSourceSnapshot, 0, len(capabilities))
 	notes := make([]string, 0)
 	for _, source := range capabilities {
-		_, explicitlySelected := selected[source.ID]
-		if source.Category != "definition" && !explicitlySelected {
+		_, sourceSelected := selected[source.ID]
+		if source.Category != "definition" && !sourceSelected {
 			continue
 		}
 		columns, sourceNotes, sampleRecords, apiErr := s.observeAssetColumnSource(
@@ -88,17 +114,33 @@ func (s *AssetService) SyncAssetColumns(
 				notes = append(notes, "No response schema is declared; using the live request as the primary inference source.")
 				continue
 			}
+			if _, automatic := provenanceSelected[source.ID]; automatic {
+				notes = append(notes, fmt.Sprintf("Could not refresh %s provenance; keeping the last saved evidence for unresolved SQL types.", source.Label))
+				continue
+			}
 			return webmodel.ColumnSchemaSyncResult{}, apiErr
 		}
 		if columns == nil {
 			columns = []WorkspaceColumn{}
 		}
-		snapshots = append(snapshots, webmodel.ColumnSchemaSourceSnapshot{
+		snapshot := webmodel.ColumnSchemaSourceSnapshot{
 			Source:        source,
 			Columns:       columns,
 			Notes:         sourceNotes,
 			SampleRecords: sampleRecords,
-		})
+		}
+		if source.ID == columnSourceMaterialized && s.deps.MaterializedSchemaFresh != nil {
+			fresh, freshErr := s.deps.MaterializedSchemaFresh(ctx, assetID, asset.Name, environment)
+			if freshErr != nil {
+				notes = append(notes, "Current-table freshness could not be verified, so its schema remains advisory.")
+			} else {
+				snapshot.Fresh = &fresh
+			}
+		}
+		snapshots = append(snapshots, snapshot)
+		if _, automatic := provenanceSelected[source.ID]; automatic {
+			notes = append(notes, fmt.Sprintf("Included %s because it is the saved type source for one or more columns.", source.Label))
+		}
 	}
 	if len(snapshots) == 0 {
 		return webmodel.ColumnSchemaSyncResult{}, badRequestError(
@@ -107,7 +149,7 @@ func (s *AssetService) SyncAssetColumns(
 		)
 	}
 
-	analysis := analyzeColumnSchema(asset.Columns, assetmeta.Parse(asset.Meta), snapshots)
+	analysis := analyzeColumnSchema(asset.Columns, meta, snapshots)
 	result := webmodel.ColumnSchemaSyncResult{
 		Sources:          snapshots,
 		Rows:             analysis.rows,
@@ -120,12 +162,20 @@ func (s *AssetService) SyncAssetColumns(
 		result.Status = columnSyncStatusConflicts
 		return result, nil
 	}
-	if !analysis.hasChanges {
+	if !analysis.hasChanges && !analysis.provenanceChange {
 		result.Status = columnSyncStatusUnchanged
 		return result, nil
 	}
 
-	reconciled, apiErr := s.ReconcileAssetColumns(ctx, assetID, analysis.managedColumns)
+	reconciled, apiErr := s.reconcileAssetColumns(ctx, assetID, func(_ *pipeline.Asset, nextMeta *assetmeta.RenartMeta) ([]pipeline.Column, *APIError) {
+		for column, sourceCode := range analysis.typeSources {
+			nextMeta.ColSource = setColumnSource(nextMeta.ColSource, column, sourceCode)
+			if sourceCode != "" {
+				nextMeta.ColOwn = disownField(nextMeta.ColOwn, column, "type")
+			}
+		}
+		return ModelColumnsToPipelineColumns(analysis.managedColumns), nil
+	})
 	if apiErr != nil {
 		return webmodel.ColumnSchemaSyncResult{}, apiErr
 	}
@@ -136,8 +186,9 @@ func (s *AssetService) SyncAssetColumns(
 
 // ApplyAssetColumnSchemaResolution applies the user's merge choices in one
 // provenance-aware write. Keeping the saved type takes ownership of that field;
-// choosing the definition releases ownership; removing an inferred candidate
-// records a durable drop marker.
+// choosing the definition releases ownership and uses the implicit default;
+// choosing an observed source records its compact source code; removing an
+// inferred candidate records a durable drop marker.
 func (s *AssetService) ApplyAssetColumnSchemaResolution(
 	ctx context.Context,
 	assetID string,
@@ -159,7 +210,6 @@ func (s *AssetService) ApplyAssetColumnSchemaResolution(
 			managedNames[key] = struct{}{}
 		}
 	}
-
 	return s.reconcileAssetColumns(ctx, assetID, func(asset *pipeline.Asset, meta *assetmeta.RenartMeta) ([]pipeline.Column, *APIError) {
 		if !sameColumnSchema(asset.Columns, expectedCurrent) {
 			return nil, newAPIError(
@@ -203,11 +253,13 @@ func (s *AssetService) ApplyAssetColumnSchemaResolution(
 					meta.ColDrop = appendName(meta.ColDrop, candidate.Name)
 					meta.ColAdd = removeName(meta.ColAdd, candidate.Name)
 					meta.ColOwn = disownField(meta.ColOwn, candidate.Name, "type")
+					meta.ColSource = removeColumnSource(meta.ColSource, candidate.Name)
 				} else {
 					asset.Columns = removeColumnByName(asset.Columns, resolution.Column)
 					meta.ColAdd = removeName(meta.ColAdd, resolution.Column)
 					meta.ColDrop = removeName(meta.ColDrop, resolution.Column)
 					meta.ColOwn = disownField(meta.ColOwn, resolution.Column, "type")
+					meta.ColSource = removeColumnSource(meta.ColSource, resolution.Column)
 				}
 
 			case "use":
@@ -223,10 +275,12 @@ func (s *AssetService) ApplyAssetColumnSchemaResolution(
 						meta.ColAdd = removeName(meta.ColAdd, candidate.Name)
 						meta.ColDrop = removeName(meta.ColDrop, candidate.Name)
 						meta.ColOwn = ownField(meta.ColOwn, candidate.Name, "type")
+						meta.ColSource = removeColumnSource(meta.ColSource, candidate.Name)
 					} else {
 						meta.ColAdd = appendName(meta.ColAdd, currentColumn.Name)
 						meta.ColDrop = removeName(meta.ColDrop, currentColumn.Name)
 						meta.ColOwn = ownField(meta.ColOwn, currentColumn.Name, "type")
+						meta.ColSource = removeColumnSource(meta.ColSource, currentColumn.Name)
 					}
 					continue
 				}
@@ -234,25 +288,19 @@ func (s *AssetService) ApplyAssetColumnSchemaResolution(
 					return nil, badRequestError("invalid_schema_resolution", fmt.Sprintf("inferred source for column %q is not available", resolution.Column))
 				}
 				candidate.Type = strings.TrimSpace(resolution.Type)
-				if !isManagedCandidate {
-					asset.Columns = upsertColumnType(asset.Columns, candidate)
-					meta.ColAdd = appendName(meta.ColAdd, candidate.Name)
-					meta.ColDrop = removeName(meta.ColDrop, candidate.Name)
-					meta.ColOwn = ownField(meta.ColOwn, candidate.Name, "type")
-					continue
-				}
 				inferred = upsertColumn(inferred, candidate)
 				meta.ColAdd = removeName(meta.ColAdd, candidate.Name)
 				meta.ColDrop = removeName(meta.ColDrop, candidate.Name)
 				if source == columnSourceDefinition {
 					meta.ColOwn = disownField(meta.ColOwn, candidate.Name, "type")
+					meta.ColSource = removeColumnSource(meta.ColSource, candidate.Name)
 				} else {
-					// Ownership makes the reconciler preserve the saved value, so
-					// first update that value to the explicitly selected advisory
-					// type. Otherwise choosing Current table or Live request would
-					// leave the previous saved type in place.
+					// An observed-source choice remains generated rather than
+					// becoming a manual column/type. Update the saved value before
+					// reconciliation and remember only the compact non-default source.
 					asset.Columns = upsertColumnType(asset.Columns, candidate)
-					meta.ColOwn = ownField(meta.ColOwn, candidate.Name, "type")
+					meta.ColOwn = disownField(meta.ColOwn, candidate.Name, "type")
+					meta.ColSource = setColumnSource(meta.ColSource, candidate.Name, columnSourceCode(source))
 				}
 
 			default:
@@ -295,6 +343,7 @@ func analyzeColumnSchema(
 		rows:             []webmodel.ColumnSchemaMergeRow{},
 		managedColumns:   []WorkspaceColumn{},
 		candidateColumns: []WorkspaceColumn{},
+		typeSources:      map[string]string{},
 	}
 	if len(snapshots) == 0 {
 		return analysis
@@ -314,15 +363,20 @@ func analyzeColumnSchema(
 	}
 	managed := append([]WorkspaceColumn(nil), snapshots[primaryIndex].Columns...)
 	managedIndex := make(map[string]int, len(managed))
+	managedTypeSources := make(map[string]string, len(managed))
 	for index := range managed {
 		key := columnNameKey(managed[index].Name)
 		if key == "" {
 			continue
 		}
 		managedIndex[key] = index
+		if strings.TrimSpace(managed[index].Type) != "" {
+			managedTypeSources[key] = snapshots[primaryIndex].Source.ID
+		}
 		if strings.TrimSpace(managed[index].Type) == "" {
-			if inferredType := firstKnownSourceType(key, sourceMaps); inferredType != "" {
+			if inferredType, sourceID := firstKnownSourceType(key, snapshots, sourceMaps); inferredType != "" {
 				managed[index].Type = inferredType
+				managedTypeSources[key] = sourceID
 			}
 		}
 	}
@@ -341,12 +395,16 @@ func analyzeColumnSchema(
 			if _, present := managedIndex[key]; present {
 				continue
 			}
-			columnType := firstKnownSourceType(key, sourceMaps)
+			columnType, sourceID := firstKnownSourceType(key, snapshots, sourceMaps)
 			if columnType == "" {
 				columnType = currentColumn.Type
+				sourceID = columnSourceIDForCode(columnSourceForColumn(meta.ColSource, key))
 			}
 			managedIndex[key] = len(managed)
 			managed = append(managed, WorkspaceColumn{Name: currentColumn.Name, Type: columnType})
+			if sourceID != "" {
+				managedTypeSources[key] = sourceID
+			}
 			primaryOmitted[key] = struct{}{}
 		}
 	}
@@ -395,7 +453,21 @@ func analyzeColumnSchema(
 		_, ignored := dropped[key]
 		_, manuallyAdded := manual[key]
 		ownedType := columnTypeOwned(meta, key)
+		provenanceSourceID := columnSourceIDForCode(columnSourceForColumn(meta.ColSource, key))
 		_, omittedByPartialPrimary := primaryOmitted[key]
+		provenanceBacked := false
+
+		// A known saved type with non-default provenance remains useful when the
+		// SQL/definition source can only say "unknown". This is the central compact
+		// provenance rule: absence from renart_col_src means SQL owns the type;
+		// presence means an observed source supplied the last known value.
+		if proposedPresent && currentPresent && strings.TrimSpace(proposedColumn.Type) == "" &&
+			strings.TrimSpace(currentColumn.Type) != "" && provenanceSourceID != "" {
+			proposedColumn.Type = currentColumn.Type
+			managed[managedPosition].Type = currentColumn.Type
+			managedTypeSources[key] = provenanceSourceID
+			provenanceBacked = true
+		}
 
 		anySourcePresent := false
 		for _, sourceMap := range sourceMaps {
@@ -412,6 +484,19 @@ func analyzeColumnSchema(
 		sourceTypeConflict := sourceTypesConflict(key, sourceMaps)
 		if sourceTypeConflict && ownedType && currentPresent && currentMatchesAnySource(currentColumn.Type, key, sourceMaps) {
 			sourceTypeConflict = false
+		}
+		if sourceTypeConflict && proposedPresent && currentPresent && provenanceSourceID != "" {
+			if sourceType, fresh := freshProvenanceSourceType(provenanceSourceID, key, snapshots, sourceMaps); fresh && equivalentColumnType(currentColumn.Type, sourceType) {
+				// A current materialization built from this source is stronger
+				// evidence than a conflicting static inference. Keep the observed
+				// type without a resolver round-trip; stale observations remain
+				// advisory and still surface the conflict.
+				sourceTypeConflict = false
+				proposedColumn.Type = sourceType
+				managed[managedPosition].Type = sourceType
+				managedTypeSources[key] = provenanceSourceID
+				provenanceBacked = true
+			}
 		}
 		sourceMissing := false
 		if proposedPresent {
@@ -460,6 +545,13 @@ func analyzeColumnSchema(
 			row.Kind = "owned"
 			row.Detail = "The saved type is explicitly owned and remains unchanged."
 			row.ProposedType = currentColumn.Type
+		case proposedPresent && currentPresent && provenanceBacked && equivalentColumnType(currentColumn.Type, proposedColumn.Type):
+			row.Kind = "provenance"
+			if provenanceSourceID == columnSourceMaterialized {
+				row.Detail = "The saved type comes from the current table; SQL does not provide stronger conflicting evidence."
+			} else {
+				row.Detail = "The saved type comes from a previously selected schema source; the definition does not provide a known type."
+			}
 		case proposedPresent && currentPresent && omittedByPartialPrimary && equivalentColumnType(currentColumn.Type, proposedColumn.Type):
 			row.Kind = "partial_unobserved"
 			row.Detail = "The sampled source did not include this saved column, so it was retained."
@@ -494,6 +586,16 @@ func analyzeColumnSchema(
 
 		if row.Conflict {
 			analysis.hasConflicts = true
+		}
+		if proposedPresent && !manuallyAdded {
+			desiredSource := ""
+			if !ownedType {
+				desiredSource = columnSourceCode(managedTypeSources[key])
+			}
+			analysis.typeSources[row.Column] = desiredSource
+			if !strings.EqualFold(columnSourceForColumn(meta.ColSource, key), desiredSource) {
+				analysis.provenanceChange = true
+			}
 		}
 		analysis.rows = append(analysis.rows, row)
 	}
@@ -551,13 +653,33 @@ func columnsByName(columns []WorkspaceColumn) map[string]WorkspaceColumn {
 	return result
 }
 
-func firstKnownSourceType(key string, sourceMaps []map[string]WorkspaceColumn) string {
-	for _, sourceMap := range sourceMaps {
+func firstKnownSourceType(
+	key string,
+	snapshots []webmodel.ColumnSchemaSourceSnapshot,
+	sourceMaps []map[string]WorkspaceColumn,
+) (string, string) {
+	for index, sourceMap := range sourceMaps {
 		if column, ok := sourceMap[key]; ok && strings.TrimSpace(column.Type) != "" {
-			return column.Type
+			return column.Type, snapshots[index].Source.ID
 		}
 	}
-	return ""
+	return "", ""
+}
+
+func freshProvenanceSourceType(
+	sourceID, key string,
+	snapshots []webmodel.ColumnSchemaSourceSnapshot,
+	sourceMaps []map[string]WorkspaceColumn,
+) (string, bool) {
+	for index, snapshot := range snapshots {
+		if snapshot.Source.ID != sourceID || snapshot.Fresh == nil || !*snapshot.Fresh {
+			continue
+		}
+		if column, ok := sourceMaps[index][key]; ok && strings.TrimSpace(column.Type) != "" {
+			return column.Type, true
+		}
+	}
+	return "", false
 }
 
 func sourceTypesConflict(key string, sourceMaps []map[string]WorkspaceColumn) bool {
@@ -596,6 +718,41 @@ func columnTypeOwned(meta assetmeta.RenartMeta, key string) bool {
 		}
 	}
 	return false
+}
+
+func columnSourceForColumn(sources map[string]string, key string) string {
+	for column, source := range sources {
+		if columnNameKey(column) == key {
+			return strings.TrimSpace(source)
+		}
+	}
+	return ""
+}
+
+func columnSourceCode(sourceID string) string {
+	switch strings.TrimSpace(sourceID) {
+	case "", columnSourceDefinition:
+		return ""
+	case columnSourceMaterialized:
+		return columnSourceCodeMaterialized
+	case columnSourceLiveResponse:
+		return columnSourceCodeLiveResponse
+	default:
+		// Future observed sources remain forward-compatible. Known sources use
+		// one-byte codes; an unknown exception pays only for its own full ID.
+		return strings.TrimSpace(sourceID)
+	}
+}
+
+func columnSourceIDForCode(code string) string {
+	switch strings.TrimSpace(code) {
+	case columnSourceCodeMaterialized:
+		return columnSourceMaterialized
+	case columnSourceCodeLiveResponse:
+		return columnSourceLiveResponse
+	default:
+		return strings.TrimSpace(code)
+	}
 }
 
 func stringSet(values []string) map[string]struct{} {

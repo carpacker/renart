@@ -14,6 +14,7 @@ the original.
 | [dbt-assets.md](dbt-assets.md) | evaluation — enabling renart intelligence on existing dbt projects |
 | [materialization-reach.md](materialization-reach.md) | proposed reach — guided advanced SQL modes, coverage timeline, Python pre-run diagnostic |
 | [pipeline-readiness-and-rendering.md](pipeline-readiness-and-rendering.md) | core complete — Phases 0a/0b and 1–3 plus version-controlled schedules and bounded retention have shipped; single-workspace command handoff, resource claims, and rolling compatibility cleanup remain |
+| [polyglot-typechecking.md](polyglot-typechecking.md) | evaluation — cached compact analysis, richer schema constraints, and optional SQL lint policy |
 | [remote-table-intellisense.md](remote-table-intellisense.md) | proposal — surface warehouse tables with no backing asset via the LSP |
 | [python-asset-sdk.md](python-asset-sdk.md) | phases 1–2 + upstream refresh + PyPI publication implemented — credential-free `query()`, ingestr-free uploads, editor/notebook parity; policy and protocol reach items open |
 | [python-cross-connection-policy.md](python-cross-connection-policy.md) | proposal — opt-in per-environment connection scopes for Python SDK queries |

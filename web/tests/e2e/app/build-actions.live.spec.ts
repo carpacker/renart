@@ -282,15 +282,6 @@ select 1 as customer_id,'Ada' as customer_name union all select 2 as customer_id
     await expect(preview.getByRole("button", { name: "Copy rendered operation" })).toBeEnabled();
     expect(executionRequests).toEqual([]);
 
-    const assetEditor = page.locator(".monaco-editor").first();
-    await assetEditor.click();
-    await page.keyboard.press("ControlOrMeta+End");
-    const savedDraftMarker = "-- render saved draft";
-    await page.keyboard.type(`\n${savedDraftMarker}`);
-    await expect(
-      page.getByText("Render an asset to preview its saved operations here."),
-    ).toBeVisible();
-
     const rerenderResponse = page.waitForResponse(
       (candidate) =>
         candidate.url().includes(`/api/pipelines/${pipelineId}/assets/render`) && candidate.ok(),
@@ -301,7 +292,11 @@ select 1 as customer_id,'Ada' as customer_name union all select 2 as customer_id
         candidate.url().includes(`/api/pipelines/${pipelineId}/type-check`) && candidate.ok(),
       { timeout: 30000 },
     );
-    await page.getByRole("button", { name: "Render saved asset", exact: true }).click();
+    const assetEditor = page.locator(".monaco-editor").first();
+    await assetEditor.click();
+    await page.keyboard.press("ControlOrMeta+End");
+    const savedDraftMarker = "-- render saved draft";
+    await page.keyboard.type(`\n${savedDraftMarker}`);
     const rerenderPayload = (await (await rerenderResponse).json()) as {
       stages: Array<{ kind: string; content?: string }>;
     };
@@ -362,6 +357,11 @@ select 1 as customer_id,'Ada' as customer_name union all select 2 as customer_id
       .find((asset) => asset.id === customersAssetId)?.content;
     expect(savedContent).toContain(savedDraftMarker);
     const externalMarker = "-- external workspace change";
+    const externalRenderResponse = page.waitForResponse(
+      (candidate) =>
+        candidate.url().includes(`/api/pipelines/${pipelineId}/assets/render`) && candidate.ok(),
+      { timeout: 30000 },
+    );
     const externalUpdate = await page.request.put(
       `${liveApp.baseURL}/api/pipelines/${pipelineId}/assets/${customersAssetId}`,
       {
@@ -371,17 +371,6 @@ select 1 as customer_id,'Ada' as customer_name union all select 2 as customer_id
       },
     );
     expect(externalUpdate.ok()).toBe(true);
-    await expect(
-      page.getByText("Render an asset to preview its saved operations here."),
-    ).toBeVisible({ timeout: 30000 });
-    await expect(preview).toHaveCount(0);
-
-    const externalRenderResponse = page.waitForResponse(
-      (candidate) =>
-        candidate.url().includes(`/api/pipelines/${pipelineId}/assets/render`) && candidate.ok(),
-      { timeout: 30000 },
-    );
-    await page.getByRole("button", { name: "Render saved asset", exact: true }).click();
     const externalRenderPayload = (await (await externalRenderResponse).json()) as {
       stages: Array<{ kind: string; content?: string }>;
     };
@@ -392,11 +381,20 @@ select 1 as customer_id,'Ada' as customer_name union all select 2 as customer_id
 
     await assetEditor.click();
     await page.keyboard.press("ControlOrMeta+End");
-    await page.keyboard.type("\n-- newer unsaved render intent");
-    await expect(
-      page.getByText("Render an asset to preview its saved operations here."),
-    ).toBeVisible();
-    await expect(preview).toHaveCount(0);
+    const newestMarker = "-- newer unsaved render intent";
+    const newestRenderResponse = page.waitForResponse(
+      (candidate) =>
+        candidate.url().includes(`/api/pipelines/${pipelineId}/assets/render`) && candidate.ok(),
+      { timeout: 30000 },
+    );
+    await page.keyboard.type(`\n${newestMarker}`);
+    const newestRenderPayload = (await (await newestRenderResponse).json()) as {
+      stages: Array<{ kind: string; content?: string }>;
+    };
+    expect(
+      newestRenderPayload.stages.find((stage) => stage.kind === "compiled_query")?.content,
+    ).toContain(newestMarker);
+    await expect(preview).toBeVisible({ timeout: 15000 });
   });
 
   test("pipeline run button triggers a scheduler run", async ({ liveApp, page }) => {
@@ -1037,6 +1035,32 @@ select 1 as customer_id,'Ada' as customer_name union all select 2 as customer_id
       /ring-primary/,
     );
     await expect(page.getByRole("link", { name: "Ad-hoc" }).first()).toHaveClass(/ring-primary/);
+
+    // The selected asset supplies dialect/graph context, but this document is
+    // not the asset itself. Querying it must not manufacture a self-cycle.
+    const selfQueryDiagnostics = page.waitForResponse(
+      (response) => {
+        if (!response.url().includes("/api/sql/lsp/diagnostics") || !response.ok()) return false;
+        const body = response.request().postDataJSON() as {
+          content?: string;
+          document_context?: string;
+        };
+        return (
+          body.document_context === "adhoc" &&
+          body.content?.includes("analytics.customers") === true
+        );
+      },
+      { timeout: 15000 },
+    );
+    await editor.click();
+    await page.keyboard.press("ControlOrMeta+a");
+    await page.keyboard.type("select * from analytics.customers");
+    const selfQueryPayload = (await (await selfQueryDiagnostics).json()) as {
+      diagnostics?: Array<{ code?: string }>;
+    };
+    expect(selfQueryPayload.diagnostics ?? []).not.toContainEqual(
+      expect.objectContaining({ code: "circular-dependency" }),
+    );
 
     // Replace the default draft with a marker query that needs Jinja rendering.
     await editor.click();

@@ -434,7 +434,6 @@ func (s *PipelinePlanService) Plan(
 		executionTime,
 	)
 	base.Readiness.CodeChecks.PipelineID = pipelineID
-	addPipelineAssetParseFindings(&base.Readiness.CodeChecks, resolved.parsed, resolved.root)
 	s.addCodeCheckIssues(&base)
 	staleSnapshot := staleness.Snapshot{}
 	dataStateAvailable := false
@@ -1123,51 +1122,6 @@ func safePipelinePlanRenderError(err error) string {
 		return boundary.message
 	}
 	return "asset could not be rendered for this execution context"
-}
-
-func pipelineAssetParseError(asset *pipeline.Asset) string {
-	if asset == nil || asset.Meta == nil {
-		return ""
-	}
-	return strings.TrimSpace(asset.Meta[parseErrorMetaKey])
-}
-
-func addPipelineAssetParseFindings(report *TypeCheckReport, parsed *pipeline.Pipeline, workspaceRoot string) {
-	if report == nil || parsed == nil {
-		return
-	}
-	for _, asset := range parsed.Assets {
-		parseError := pipelineAssetParseError(asset)
-		if parseError == "" {
-			continue
-		}
-		finding := TypeCheckFinding{
-			Severity: typeCheckSeverityError,
-			Message:  "Asset definition could not be parsed: " + parseError,
-		}
-		found := false
-		for index := range report.Assets {
-			if report.Assets[index].Name != asset.Name {
-				continue
-			}
-			report.Assets[index].Findings = append(report.Assets[index].Findings, finding)
-			report.Assets[index].Status = typeCheckStatusError
-			found = true
-			break
-		}
-		if !found {
-			report.Assets = append(report.Assets, TypeCheckAsset{
-				ID:       assetReportID(workspaceRoot, asset),
-				Name:     asset.Name,
-				Type:     string(asset.Type),
-				Status:   typeCheckStatusError,
-				Findings: []TypeCheckFinding{finding},
-			})
-			report.Summary.Assets++
-		}
-		report.Summary.Errors++
-		report.Status = typeCheckStatusError
-	}
 }
 
 func (s *PipelinePlanService) addCodeCheckIssues(plan *PipelinePlan) {

@@ -174,7 +174,7 @@ func renderAction(ctx context.Context, c *cli.Command) error {
 		}
 		fmt.Fprintln(c.Writer, string(encoded))
 	} else {
-		printAssetRenderResult(c.Writer, result)
+		printAssetRenderResultWithHighlight(c.Writer, result, renderOutputSupportsColor(c.Writer))
 	}
 	if result.Status == service.AssetRenderStatusError || result.Status == service.AssetRenderStatusUnsupported {
 		return cli.Exit("", 1)
@@ -277,9 +277,23 @@ func resolveRenderAssetPath(ctx context.Context, workspaceRoot, cwd, target stri
 }
 
 func printAssetRenderResult(w interface{ Write([]byte) (int, error) }, result service.AssetRenderResult) {
-	dim := color.New(color.Faint).SprintFunc()
-	warn := color.New(color.FgYellow).SprintFunc()
-	bad := color.New(color.FgRed).SprintFunc()
+	printAssetRenderResultWithHighlight(w, result, false)
+}
+
+func printAssetRenderResultWithHighlight(w interface{ Write([]byte) (int, error) }, result service.AssetRenderResult, highlight bool) {
+	dimColor := color.New(color.Faint)
+	warnColor := color.New(color.FgYellow)
+	badColor := color.New(color.FgRed)
+	for _, printer := range []*color.Color{dimColor, warnColor, badColor} {
+		if highlight {
+			printer.EnableColor()
+		} else {
+			printer.DisableColor()
+		}
+	}
+	dim := dimColor.SprintFunc()
+	warn := warnColor.SprintFunc()
+	bad := badColor.SprintFunc()
 
 	fmt.Fprintf(w, "Preview — not executed: %s %s\n", result.Asset.Name, dim("("+result.Asset.Type+")"))
 	fmt.Fprintf(w, "Source: %s %s · environment %s · %s → %s\n",
@@ -341,10 +355,14 @@ func printAssetRenderResult(w interface{ Write([]byte) (int, error) }, result se
 		}
 		fmt.Fprintf(w, "%s: %s\n", label, issue.Message)
 	}
+	highlightStyle := ""
+	if highlight {
+		highlightStyle = renderHighlightStyle(w)
+	}
 	for _, stage := range result.Stages {
 		fmt.Fprintf(w, "\n%s %s\n", renderStageTitle(stage), dim("["+string(stage.Fidelity)+"]"))
 		if stage.Content != "" {
-			fmt.Fprintln(w, stage.Content)
+			fmt.Fprintln(w, highlightRenderContent(stage.Content, stage.Language, highlightStyle))
 		}
 		if stage.Message != "" {
 			fmt.Fprintln(w, dim(stage.Message))

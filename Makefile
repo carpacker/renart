@@ -5,11 +5,10 @@ DOCS_IMAGE ?= renart-docs:local
 RENART_VERSION ?= $(shell git describe --tags --abbrev=0 2>/dev/null || echo local)
 RENART_COMMIT ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo unknown)
 RENART_CACHE_HOME ?= $(if $(XDG_CACHE_HOME),$(XDG_CACHE_HOME),$(HOME)/.cache)
-RUST_TOOLCHAIN ?= 1.96.0
-HOST_RUST_TARGET = $(shell rustup run $(RUST_TOOLCHAIN) rustc -vV 2>/dev/null | sed -n 's/^host: //p')
-RUSTSQLPARSER_LIB_DIR = $(RENART_CACHE_HOME)/renart/rustsqlparser/target/$(HOST_RUST_TARGET)/release
+HOST_SQLPARSER_TARGET = $(shell $(GO) env GOOS)-$(shell $(GO) env GOARCH)
+BRUIN_SQLPARSER_STUB_LIB_DIR = $(RENART_CACHE_HOME)/renart/bruin-sqlparser-stub/$(HOST_SQLPARSER_TARGET)/release
 
-.PHONY: help dev build test check release-check licenses licenses-check rustsqlparser go-build go-test standalone-build web-install web-build web-typecheck web-test-live web-sync-polyglot-wasm docs-install docs-build docs-dev docs-preview landing-media docs-media docs-docker docs-docker-run sync-install clean
+.PHONY: help dev build test check release-check licenses licenses-check bruin-sqlparser-stub go-build go-test standalone-build web-install web-build web-typecheck web-test-live web-sync-polyglot-wasm docs-install docs-build docs-dev docs-preview landing-media docs-media docs-docker docs-docker-run sync-install clean
 
 help:
 	@printf "Renart build targets\n\n"
@@ -19,7 +18,7 @@ help:
 	@printf "  make release-check     Run local alpha release checks\n"
 	@printf "  make licenses          Regenerate third-party notices\n"
 	@printf "  make licenses-check    Verify dependency licenses and notices\n"
-	@printf "  make rustsqlparser     Build the pinned Bruin parser into the external cache\n"
+	@printf "  make bruin-sqlparser-stub  Build Bruin's compatibility link shim\n"
 	@printf "  make go-build          Build Renart CLI\n"
 	@printf "  make standalone-build  Build Renart CLI plus the renart-gui desktop helper\n"
 	@printf "  make go-test           Run Go tests\n"
@@ -42,10 +41,10 @@ dev:
 
 check: go-test web-build docs-build
 
-release-check: rustsqlparser licenses-check
+release-check: bruin-sqlparser-stub licenses-check
 	$(GO) mod verify
-	CGO_LDFLAGS="-L$(RUSTSQLPARSER_LIB_DIR) $(CGO_LDFLAGS)" $(GO) test -p=1 ./...
-	CGO_LDFLAGS="-L$(RUSTSQLPARSER_LIB_DIR) $(CGO_LDFLAGS)" $(GO) vet -p=1 ./...
+	CGO_LDFLAGS="-L$(BRUIN_SQLPARSER_STUB_LIB_DIR) $(CGO_LDFLAGS)" $(GO) test -p=1 ./...
+	CGO_LDFLAGS="-L$(BRUIN_SQLPARSER_STUB_LIB_DIR) $(CGO_LDFLAGS)" $(GO) vet -p=1 ./...
 	$(PNPM) --dir web check
 	$(PNPM) --dir web audit
 	$(PNPM) --dir docs build
@@ -59,14 +58,13 @@ licenses:
 licenses-check:
 	GO="$(GO)" ./scripts/check-third-party-licenses.sh
 
-rustsqlparser:
-	@test -n "$(HOST_RUST_TARGET)" || (echo "unable to resolve the Rust host target for toolchain $(RUST_TOOLCHAIN)" >&2; exit 1)
-	GO="$(GO)" RENART_RUST_TOOLCHAIN="$(RUST_TOOLCHAIN)" ./scripts/build_rustsqlparser_release_lib.sh "$(HOST_RUST_TARGET)"
+bruin-sqlparser-stub:
+	./scripts/build_bruin_sqlparser_stub.sh "$(HOST_SQLPARSER_TARGET)"
 
 test: go-test
 
-go-build: rustsqlparser
-	CGO_LDFLAGS="-L$(RUSTSQLPARSER_LIB_DIR) $(CGO_LDFLAGS)" $(GO) build .
+go-build: bruin-sqlparser-stub
+	CGO_LDFLAGS="-L$(BRUIN_SQLPARSER_STUB_LIB_DIR) $(CGO_LDFLAGS)" $(GO) build .
 
 # Builds the desktop helper used by `renart standalone`. Platform deps:
 # Linux needs gtk3 + webkit2gtk dev packages, macOS needs the Xcode command
@@ -74,8 +72,8 @@ go-build: rustsqlparser
 standalone-build: go-build
 	$(GO) build -tags webkit2_41,standalone,desktop,production -o renart-gui ./cmd/renart-gui
 
-go-test: rustsqlparser
-	CGO_LDFLAGS="-L$(RUSTSQLPARSER_LIB_DIR) $(CGO_LDFLAGS)" $(GO) test ./...
+go-test: bruin-sqlparser-stub
+	CGO_LDFLAGS="-L$(BRUIN_SQLPARSER_STUB_LIB_DIR) $(CGO_LDFLAGS)" $(GO) test -p=1 ./...
 
 web-install:
 	$(PNPM) --dir web install --frozen-lockfile

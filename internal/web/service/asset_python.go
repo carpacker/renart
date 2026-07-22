@@ -122,8 +122,50 @@ func (s *AssetService) PythonDiagnostics(ctx context.Context, assetID string, re
 	}
 	s.markPythonTySessionFilesReady(sessionID, sessionFingerprint)
 	response := PythonDiagnosticsResponse{Status: "ok", AssetID: assetID, Diagnostics: pythonDiagnosticsFromTy(checked.Diagnostics)}
+	response.Diagnostics = append(response.Diagnostics, s.pythonQueryDependencyDiagnostics(ctx, assetID, content)...)
 	trace.Step("map_response")
 	return response, nil
+}
+
+func (s *AssetService) pythonQueryDependencyDiagnostics(ctx context.Context, assetID, content string) []PythonDiagnostic {
+	if s.deps.CurrentState == nil {
+		return nil
+	}
+	state := s.deps.CurrentState()
+	for _, candidate := range state.Pipelines {
+		for _, asset := range candidate.Assets {
+			if asset.ID != assetID {
+				continue
+			}
+			known := make([]string, 0, len(candidate.Assets))
+			for _, pipelineAsset := range candidate.Assets {
+				known = append(known, pipelineAsset.Name)
+			}
+			findings := pythonQueryDependencyFindingsForSource(ctx, content, asset.Name, asset.Upstreams, known)
+			result := make([]PythonDiagnostic, 0, len(findings))
+			for _, finding := range findings {
+				var diagnosticRange *PythonRange
+				if finding.Line > 0 && finding.Column > 0 {
+					diagnosticRange = &PythonRange{
+						Start: PythonPosition{Line: finding.Line, Column: finding.Column},
+						End:   PythonPosition{Line: finding.EndLine, Column: finding.EndColumn},
+					}
+				}
+				result = append(result, PythonDiagnostic{
+					ID:         finding.Code,
+					Code:       finding.Code,
+					Source:     finding.Source,
+					Message:    finding.Message,
+					Severity:   finding.Severity,
+					Range:      diagnosticRange,
+					Scope:      finding.Scope,
+					Confidence: finding.Confidence,
+				})
+			}
+			return result
+		}
+	}
+	return nil
 }
 
 func (s *AssetService) PythonCompletions(ctx context.Context, assetID string, req PythonCompletionsRequest) (PythonCompletionsResponse, *APIError) {

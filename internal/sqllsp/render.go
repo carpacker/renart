@@ -7,6 +7,7 @@ import (
 )
 
 var jinjaSQLCallPattern = regexp.MustCompile(`(?is)\{\{\s*(ref|source)\s*\((.*?)\)\s*\}\}`)
+var jinjaTemplatePattern = regexp.MustCompile(`(?s)\{\{.*?\}\}|\{%.*?%\}|\{#.*?#\}`)
 
 type renderProjection struct {
 	doc      TextDocumentItem
@@ -141,25 +142,37 @@ func (r RenderedSQL) TemplateRangeForGenerated(text string, generatedRange Range
 }
 
 func (r RenderedSQL) TemplateRangeForGeneratedOffsets(templateText string, start, end int) Range {
-	if end < start {
-		end = start
-	}
-	templateStart, okStart := r.templateOffsetForGeneratedBoundary(start, false)
-	endLookup := end
-	if end > start {
-		endLookup = end - 1
-	}
-	templateEnd, okEnd := r.templateOffsetForGeneratedBoundary(endLookup, true)
-	if okStart && okEnd {
-		if templateEnd < templateStart {
-			templateEnd = templateStart
-		}
+	templateStart, templateEnd, _, ok := r.TemplateOffsetsForGenerated(start, end)
+	if ok {
 		return RangeFromOffsets(templateText, templateStart, templateEnd)
 	}
 	return RangeFromOffsets(templateText, 0, min(1, len(templateText)))
 }
 
-func (r RenderedSQL) templateOffsetForGeneratedBoundary(offset int, endBoundary bool) (int, bool) {
+func (r RenderedSQL) TemplateOffsetsForGenerated(start, end int) (int, int, string, bool) {
+	if end < start {
+		end = start
+	}
+	templateStart, startConfidence, okStart := r.templateOffsetForGeneratedBoundary(start, false)
+	endLookup := end
+	if end > start {
+		endLookup = end - 1
+	}
+	templateEnd, endConfidence, okEnd := r.templateOffsetForGeneratedBoundary(endLookup, true)
+	if okStart && okEnd {
+		if templateEnd < templateStart {
+			templateEnd = templateStart
+		}
+		confidence := startConfidence
+		if confidenceRank(endConfidence) < confidenceRank(confidence) {
+			confidence = endConfidence
+		}
+		return templateStart, templateEnd, confidence, true
+	}
+	return 0, 0, "low", false
+}
+
+func (r RenderedSQL) templateOffsetForGeneratedBoundary(offset int, endBoundary bool) (int, string, bool) {
 	for _, segment := range r.SourceMap.Segments {
 		if segment.TemplateStart == nil || segment.TemplateEnd == nil {
 			continue
@@ -169,17 +182,103 @@ func (r RenderedSQL) templateOffsetForGeneratedBoundary(offset int, endBoundary 
 		}
 		if segment.Kind != "LiteralSql" {
 			if endBoundary {
-				return *segment.TemplateEnd, true
+				return *segment.TemplateEnd, segment.Confidence, true
 			}
-			return *segment.TemplateStart, true
+			return *segment.TemplateStart, segment.Confidence, true
 		}
 		delta := offset - segment.GeneratedStart
 		if endBoundary {
 			delta++
 		}
-		return min(*segment.TemplateStart+delta, *segment.TemplateEnd), true
+		return min(*segment.TemplateStart+delta, *segment.TemplateEnd), segment.Confidence, true
 	}
-	return 0, false
+	return 0, "low", false
+}
+
+func confidenceRank(confidence string) int {
+	switch confidence {
+	case "high":
+		return 3
+	case "medium":
+		return 2
+	default:
+		return 1
+	}
+}
+
+// ProjectRenderedSQL builds an honest best-effort source map from a fully
+// rendered/extracted SQL unit back to its template. Literal source fragments
+// are mapped exactly. Generated text between those fragments maps to the
+// corresponding template expression at medium confidence; output that cannot
+// be aligned remains unmapped.
+func ProjectRenderedSQL(templateURI URI, templateText, renderedSQL string) RenderedSQL {
+	result := RenderedSQL{
+		TemplateURI: templateURI,
+		RenderedSQL: renderedSQL,
+		SourceMap:   SQLSourceMap{TemplateURI: templateURI},
+	}
+	if renderedSQL == templateText {
+		start, end := 0, len(templateText)
+		result.SourceMap.Segments = []SourceSegment{{GeneratedStart: 0, GeneratedEnd: len(renderedSQL), TemplateStart: &start, TemplateEnd: &end, Kind: "LiteralSql", Confidence: "high"}}
+		return result
+	}
+	if index := strings.Index(templateText, renderedSQL); index >= 0 {
+		start, end := index, index+len(renderedSQL)
+		result.SourceMap.Segments = []SourceSegment{{GeneratedStart: 0, GeneratedEnd: len(renderedSQL), TemplateStart: &start, TemplateEnd: &end, Kind: "LiteralSql", Confidence: "high"}}
+		return result
+	}
+
+	matches := jinjaTemplatePattern.FindAllStringIndex(templateText, -1)
+	if len(matches) == 0 {
+		return result
+	}
+	generatedCursor := 0
+	templateCursor := 0
+	pendingStart, pendingEnd := -1, -1
+	hasLiteralAnchor := false
+	for _, match := range matches {
+		literal := templateText[templateCursor:match[0]]
+		if literal != "" {
+			if relative := strings.Index(renderedSQL[generatedCursor:], literal); relative >= 0 {
+				generatedStart := generatedCursor + relative
+				if generatedStart > generatedCursor && pendingStart >= 0 {
+					start, end := pendingStart, pendingEnd
+					result.SourceMap.Segments = append(result.SourceMap.Segments, SourceSegment{GeneratedStart: generatedCursor, GeneratedEnd: generatedStart, TemplateStart: &start, TemplateEnd: &end, Kind: "TemplateExpansion", Confidence: "medium"})
+				}
+				start, end := templateCursor, match[0]
+				result.SourceMap.Segments = append(result.SourceMap.Segments, SourceSegment{GeneratedStart: generatedStart, GeneratedEnd: generatedStart + len(literal), TemplateStart: &start, TemplateEnd: &end, Kind: "LiteralSql", Confidence: "high"})
+				generatedCursor = generatedStart + len(literal)
+				hasLiteralAnchor = true
+				pendingStart, pendingEnd = -1, -1
+			}
+		}
+		if pendingStart < 0 {
+			pendingStart = match[0]
+		}
+		pendingEnd = match[1]
+		templateCursor = match[1]
+	}
+
+	literal := templateText[templateCursor:]
+	if literal != "" {
+		if relative := strings.Index(renderedSQL[generatedCursor:], literal); relative >= 0 {
+			generatedStart := generatedCursor + relative
+			if generatedStart > generatedCursor && pendingStart >= 0 {
+				start, end := pendingStart, pendingEnd
+				result.SourceMap.Segments = append(result.SourceMap.Segments, SourceSegment{GeneratedStart: generatedCursor, GeneratedEnd: generatedStart, TemplateStart: &start, TemplateEnd: &end, Kind: "TemplateExpansion", Confidence: "medium"})
+			}
+			start, end := templateCursor, len(templateText)
+			result.SourceMap.Segments = append(result.SourceMap.Segments, SourceSegment{GeneratedStart: generatedStart, GeneratedEnd: generatedStart + len(literal), TemplateStart: &start, TemplateEnd: &end, Kind: "LiteralSql", Confidence: "high"})
+			generatedCursor = generatedStart + len(literal)
+			hasLiteralAnchor = true
+			pendingStart, pendingEnd = -1, -1
+		}
+	}
+	if generatedCursor < len(renderedSQL) && pendingStart >= 0 && hasLiteralAnchor {
+		start, end := pendingStart, pendingEnd
+		result.SourceMap.Segments = append(result.SourceMap.Segments, SourceSegment{GeneratedStart: generatedCursor, GeneratedEnd: len(renderedSQL), TemplateStart: &start, TemplateEnd: &end, Kind: "TemplateExpansion", Confidence: "medium"})
+	}
+	return result
 }
 
 func (r RenderedSQL) GeneratedOffsetForTemplateOffset(templateOffset int) int {

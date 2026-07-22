@@ -85,6 +85,23 @@ func TestReconcileColumnsTypeOwnership(t *testing.T) {
 	}
 }
 
+func TestReconcileColumnsPreservesKnownAlternateSourceTypeWhenDefinitionIsUnknown(t *testing.T) {
+	current := []pipeline.Column{col("order_total", "numeric")}
+	inferred := []pipeline.Column{col("order_total", "")}
+
+	final, _, next := ReconcileColumns(ColumnReconcileInput{
+		Inferred: inferred,
+		Current:  current,
+		Prev:     RenartMeta{ColSource: map[string]string{"order_total": "m"}},
+	})
+	if got, _ := findColumn(final, "order_total"); got.Type != "numeric" {
+		t.Fatalf("materialized type was erased by unknown definition type: %q", got.Type)
+	}
+	if next.ColSource["order_total"] != "m" {
+		t.Fatalf("alternate source provenance not carried forward: %+v", next.ColSource)
+	}
+}
+
 func TestReconcileColumnsStaleColumnFlagged(t *testing.T) {
 	// debug_rank had a description but is no longer inferred → stale, kept.
 	current := []pipeline.Column{

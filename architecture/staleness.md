@@ -44,7 +44,7 @@ Python: H(fp_version ‖ file_bytes ‖ lockfile_hash ‖ shared_dir_hash ‖ co
 ```
 
 - **SQL canonicalization runs through the embedded wasm formatter**: comments
-  stripped, statement formatted per-asset-dialect (`internal/web/sqlformat`),
+  stripped, statement formatted per-asset-dialect (`internal/sqlformat`),
   whitespace collapsed — format-on-save, keyword-case edits, and trailing
   commas never change a fingerprint; identifier case stays significant. A
   format call costs ~66 ms, so results are cached by content hash (content

@@ -23,6 +23,7 @@ import type {
   PipelineConfigDefaults as GeneratedPipelineConfigDefaults,
   PipelineConfigNotification as GeneratedPipelineConfigNotification,
   PipelineConfigVariable as GeneratedPipelineConfigVariable,
+  PipelinePythonDependenciesResponse as GeneratedPipelinePythonDependenciesResponse,
   PipelinePlan,
   PipelinePlanSelection,
   PipelineMaterializationResponse as GeneratedPipelineMaterializationResponse,
@@ -44,6 +45,7 @@ import type {
   WebNotebookBlock,
   WebPipeline as GeneratedWebPipeline,
   WebUpdatePipelineConfigRequest as GeneratedWebUpdatePipelineConfigRequest,
+  UpdatePipelinePythonDependenciesRequest as GeneratedUpdatePipelinePythonDependenciesRequest,
   WebColumn,
   WebColumnCheck,
   WorkspaceConfigConnection,
@@ -423,10 +425,14 @@ export type PythonGotoDefinitionResponse = {
 
 export type PythonDiagnostic = {
   id: string;
+  code?: string;
+  source?: string;
   message: string;
   severity: "info" | "warning" | "error" | "fatal";
   range?: PythonRange;
   display?: string;
+  scope?: string;
+  confidence?: string;
 };
 
 export type PythonRange = {
@@ -512,3 +518,8 @@ export type UpdatePipelineConfigRequest = Omit<
 > & {
   variables: PipelineConfigVariable[];
 };
+
+export type PipelinePythonDependenciesResponse = GeneratedPipelinePythonDependenciesResponse;
+
+export type UpdatePipelinePythonDependenciesRequest =
+  GeneratedUpdatePipelinePythonDependenciesRequest;

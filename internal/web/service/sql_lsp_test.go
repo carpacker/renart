@@ -1,17 +1,582 @@
 package service
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"net/http"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/bruin-data/bruin/pkg/pipeline"
 	polyglot "github.com/tobilg/polyglot/packages/go"
+	"renart/internal/authoringdiag"
 	"renart/internal/sqllsp"
 	"renart/internal/web/model"
 )
+
+func TestSQLDiagnosticParityAcrossTypeCheckHTTPAndStdio(t *testing.T) {
+	parsed, typeCheckRoot := writeTypeCheckWorkspace(t, "name: a", map[string]string{
+		"example_asset.sql": `
+/* @bruin
+name: a.example_asset
+type: duckdb.sql
+materialization:
+  type: table
+@bruin */
+select a from (values (1), (2)) n(a)
+`,
+		"another_asset.sql": `
+/* @bruin
+name: a.another_asset
+type: duckdb.sql
+materialization:
+  type: view
+depends:
+  - a.example_asset
+@bruin */
+select a, b from a.example_asset
+`,
+	})
+	typeCheck := runTypeCheck(t, parsed, typeCheckRoot)
+	typeCheckAsset := findAsset(t, typeCheck, "a.another_asset")
+	typeCheckDiagnostic := findTypeCheckFindingByCode(typeCheckAsset.Findings, "unresolved-column")
+	if typeCheckDiagnostic == nil {
+		t.Fatalf("type-check did not report unresolved-column: %#v", typeCheckAsset.Findings)
+	}
+
+	state := model.WorkspaceState{Revision: 1, Pipelines: []model.Pipeline{{
+		ID:   "pipeline",
+		Name: "a",
+		Assets: []model.Asset{
+			{ID: "example-asset", Name: "a.example_asset", Type: "duckdb.sql", Path: "a/assets/example_asset.sql", Content: "select a from (values (1), (2)) n(a)"},
+			{ID: "another-asset", Name: "a.another_asset", Type: "duckdb.sql", Path: "a/assets/another_asset.sql", Content: "select a, b from a.example_asset", Upstreams: []string{"a.example_asset"}},
+		},
+	}}}
+	root := t.TempDir()
+	service := NewSQLLSPService(SQLLSPDependencies{
+		WorkspaceRoot: root,
+		CurrentState:  func() model.WorkspaceState { return state },
+	})
+	httpResponse, apiErr := service.Diagnostics(context.Background(), SQLLSPRequest{
+		AssetID: "another-asset",
+		Content: "select a, b from a.example_asset",
+	})
+	if apiErr != nil {
+		t.Fatal(apiErr)
+	}
+	httpDiagnostic := findLSPDiagnosticByCode(httpResponse.Diagnostics, "unresolved-column")
+	if httpDiagnostic == nil {
+		t.Fatalf("HTTP LSP did not report unresolved-column: %#v", httpResponse.Diagnostics)
+	}
+
+	graph := service.graphForState(context.Background(), state)
+	server := sqllsp.NewServer(graph, nil)
+	uri := assetURI(root, state.Pipelines[0].Assets[1])
+	openPayload, err := json.Marshal(map[string]any{
+		"jsonrpc": "2.0",
+		"method":  "textDocument/didOpen",
+		"params": map[string]any{"textDocument": map[string]any{
+			"uri": uri, "languageId": "sql", "version": 1,
+			"text": "select a, b from a.example_asset",
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var output bytes.Buffer
+	if err := server.Serve(context.Background(), bytes.NewReader(sqllsp.EncodeMessage(openPayload)), &output); err != nil {
+		t.Fatal(err)
+	}
+	stdioDiagnostics := decodePublishedDiagnostics(t, output.Bytes())
+	stdioDiagnostic := findLSPDiagnosticByCode(stdioDiagnostics, "unresolved-column")
+	if stdioDiagnostic == nil {
+		t.Fatalf("stdio LSP did not report unresolved-column: %#v", stdioDiagnostics)
+	}
+
+	if typeCheckDiagnostic.Message != httpDiagnostic.Message || typeCheckDiagnostic.Message != stdioDiagnostic.Message {
+		t.Fatalf("diagnostic messages differ: typecheck=%q http=%q stdio=%q", typeCheckDiagnostic.Message, httpDiagnostic.Message, stdioDiagnostic.Message)
+	}
+	if typeCheckDiagnostic.Severity != "error" || httpDiagnostic.Severity != 1 || stdioDiagnostic.Severity != 1 {
+		t.Fatalf("diagnostic severities differ: typecheck=%q http=%d stdio=%d", typeCheckDiagnostic.Severity, httpDiagnostic.Severity, stdioDiagnostic.Severity)
+	}
+	wantRange := sqllsp.Range{Start: sqllsp.Position{Line: 0, Character: 10}, End: sqllsp.Position{Line: 0, Character: 11}}
+	if httpDiagnostic.Range != wantRange || stdioDiagnostic.Range != wantRange {
+		t.Fatalf("diagnostic ranges differ: http=%#v stdio=%#v want=%#v", httpDiagnostic.Range, stdioDiagnostic.Range, wantRange)
+	}
+}
+
+func TestSQLLSPServiceAllowsSelectedAssetReferencesInAdHocDocuments(t *testing.T) {
+	state := model.WorkspaceState{Revision: 1, Pipelines: []model.Pipeline{{
+		ID: "pipeline",
+		Assets: []model.Asset{{
+			ID: "report", Name: "analytics.report", Type: "duckdb.sql", Path: "analytics/assets/report.sql",
+		}},
+	}}}
+	service := NewSQLLSPService(SQLLSPDependencies{
+		WorkspaceRoot: t.TempDir(),
+		CurrentState:  func() model.WorkspaceState { return state },
+	})
+
+	assetResponse, apiErr := service.Diagnostics(context.Background(), SQLLSPRequest{
+		AssetID: "report",
+		Content: "select * from analytics.report",
+	})
+	if apiErr != nil {
+		t.Fatal(apiErr)
+	}
+	if findLSPDiagnosticByCode(assetResponse.Diagnostics, "circular-dependency") == nil {
+		t.Fatalf("asset document should still report self-reference: %#v", assetResponse.Diagnostics)
+	}
+
+	adhocResponse, apiErr := service.Diagnostics(context.Background(), SQLLSPRequest{
+		AssetID:         "report",
+		Content:         "select * from analytics.report",
+		DocumentContext: "adhoc",
+	})
+	if apiErr != nil {
+		t.Fatal(apiErr)
+	}
+	if diagnostic := findLSPDiagnosticByCode(adhocResponse.Diagnostics, "circular-dependency"); diagnostic != nil {
+		t.Fatalf("ad-hoc document inherited the context asset's self-reference rule: %#v", diagnostic)
+	}
+}
+
+func TestAmbiguousJoinColumnParityAcrossTypeCheckHTTPAndStdio(t *testing.T) {
+	parsed, typeCheckRoot := writeTypeCheckWorkspace(t, "name: analytics", map[string]string{
+		"users.sql": `
+/* @bruin
+name: analytics.users
+type: duckdb.sql
+columns:
+  - name: id
+    type: INTEGER
+    primary_key: true
+@bruin */
+select 1 as id
+`,
+		"orders.sql": `
+/* @bruin
+name: analytics.orders
+type: duckdb.sql
+columns:
+  - name: id
+    type: INTEGER
+  - name: user_id
+    type: INTEGER
+    foreign_key:
+      table: analytics.users
+      column: id
+@bruin */
+select 1 as id, 1 as user_id
+`,
+		"report.sql": `
+/* @bruin
+name: analytics.report
+type: duckdb.sql
+depends:
+  - analytics.users
+  - analytics.orders
+@bruin */
+select id from analytics.users u join analytics.orders o on u.id = o.user_id
+`,
+	})
+	typeCheck := runTypeCheck(t, parsed, typeCheckRoot)
+	typeCheckAsset := findAsset(t, typeCheck, "analytics.report")
+	typeCheckDiagnostic := findTypeCheckFindingByCode(typeCheckAsset.Findings, authoringdiag.CodeUnresolvedColumn)
+	if typeCheckDiagnostic == nil || !strings.Contains(typeCheckDiagnostic.Message, "Ambiguous unqualified column 'id'") {
+		t.Fatalf("type-check did not report the ambiguous join column: %#v", typeCheckAsset.Findings)
+	}
+
+	root := t.TempDir()
+	nullable := false
+	state := model.WorkspaceState{Revision: 1, Pipelines: []model.Pipeline{{
+		ID:   "pipeline",
+		Name: "analytics",
+		Assets: []model.Asset{
+			{ID: "users", Name: "analytics.users", Type: "duckdb.sql", Path: "analytics/assets/users.sql", Content: "select 1 as id", Columns: []model.Column{{Name: "id", Type: "INTEGER", Nullable: &nullable, PrimaryKey: true}}},
+			{ID: "orders", Name: "analytics.orders", Type: "duckdb.sql", Path: "analytics/assets/orders.sql", Content: "select 1 as id, 1 as user_id", Columns: []model.Column{
+				{Name: "id", Type: "INTEGER"},
+				{Name: "user_id", Type: "INTEGER", ForeignKey: &model.ColumnReference{Table: "analytics.users", Column: "id"}},
+			}},
+			{ID: "report", Name: "analytics.report", Type: "duckdb.sql", Path: "analytics/assets/report.sql", Content: "select 1", Upstreams: []string{"analytics.users", "analytics.orders"}},
+		},
+	}}}
+	service := NewSQLLSPService(SQLLSPDependencies{
+		WorkspaceRoot: root,
+		CurrentState:  func() model.WorkspaceState { return state },
+	})
+	const unsavedSQL = "select id from analytics.users u join analytics.orders o on u.id = o.user_id"
+	httpResponse, apiErr := service.Diagnostics(context.Background(), SQLLSPRequest{AssetID: "report", Content: unsavedSQL})
+	if apiErr != nil {
+		t.Fatal(apiErr)
+	}
+	httpDiagnostic := findLSPDiagnosticByCode(httpResponse.Diagnostics, authoringdiag.CodeUnresolvedColumn)
+	if httpDiagnostic == nil || !strings.Contains(httpDiagnostic.Message, "Ambiguous unqualified column 'id'") {
+		t.Fatalf("HTTP LSP did not report the ambiguous join column: %#v", httpResponse.Diagnostics)
+	}
+
+	graph := service.graphForState(context.Background(), state)
+	constraints := sqllsp.ValidationSchemaConstraints(graph)
+	if foreignKey := constraints["analytics.orders"].Columns["user_id"].ForeignKey; foreignKey == nil || foreignKey.Table != "analytics.users" {
+		t.Fatalf("web graph dropped declared constraints: %#v", constraints)
+	}
+	server := sqllsp.NewServer(graph, nil)
+	uri := assetURI(root, state.Pipelines[0].Assets[2])
+	openPayload, err := json.Marshal(map[string]any{
+		"jsonrpc": "2.0",
+		"method":  "textDocument/didOpen",
+		"params": map[string]any{"textDocument": map[string]any{
+			"uri": uri, "languageId": "sql", "version": 1, "text": unsavedSQL,
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var output bytes.Buffer
+	if err := server.Serve(context.Background(), bytes.NewReader(sqllsp.EncodeMessage(openPayload)), &output); err != nil {
+		t.Fatal(err)
+	}
+	stdioDiagnostic := findLSPDiagnosticByCode(decodePublishedDiagnostics(t, output.Bytes()), authoringdiag.CodeUnresolvedColumn)
+	if stdioDiagnostic == nil || !strings.Contains(stdioDiagnostic.Message, "Ambiguous unqualified column 'id'") {
+		t.Fatal("stdio LSP did not report the ambiguous join column")
+	}
+
+	if typeCheckDiagnostic.Message != httpDiagnostic.Message || typeCheckDiagnostic.Message != stdioDiagnostic.Message {
+		t.Fatalf("ambiguity messages differ: typecheck=%q http=%q stdio=%q", typeCheckDiagnostic.Message, httpDiagnostic.Message, stdioDiagnostic.Message)
+	}
+	wantRange := sqllsp.Range{Start: sqllsp.Position{Line: 0, Character: 7}, End: sqllsp.Position{Line: 0, Character: 9}}
+	if httpDiagnostic.Range != wantRange || stdioDiagnostic.Range != wantRange {
+		t.Fatalf("ambiguity ranges differ: http=%#v stdio=%#v want=%#v", httpDiagnostic.Range, stdioDiagnostic.Range, wantRange)
+	}
+}
+
+func TestDeclaredOutputTypeDriftParityAcrossTypeCheckHTTPAndStdio(t *testing.T) {
+	parsed, typeCheckRoot := writeTypeCheckWorkspace(t, "name: analytics", map[string]string{
+		"typed_asset.sql": `
+/* @bruin
+name: analytics.typed_asset
+type: duckdb.sql
+materialization:
+  type: table
+columns:
+  - name: id
+    type: VARCHAR
+@bruin */
+select 1 as id
+`,
+	})
+	typeCheck := runTypeCheck(t, parsed, typeCheckRoot)
+	typeCheckAsset := findAsset(t, typeCheck, "analytics.typed_asset")
+	typeCheckDiagnostic := findTypeCheckFindingByCode(typeCheckAsset.Findings, authoringdiag.CodeDeclaredColumnTypeDrift)
+	if typeCheckDiagnostic == nil {
+		t.Fatalf("type-check did not report declared output type drift: %#v", typeCheckAsset.Findings)
+	}
+
+	root := t.TempDir()
+	state := model.WorkspaceState{Revision: 1, Pipelines: []model.Pipeline{{
+		ID:   "pipeline",
+		Name: "analytics",
+		Assets: []model.Asset{{
+			ID:      "typed-asset",
+			Name:    "analytics.typed_asset",
+			Type:    "duckdb.sql",
+			Path:    "analytics/assets/typed_asset.sql",
+			Content: "select 'saved value' as id",
+			Columns: []model.Column{{Name: "id", Type: "VARCHAR"}},
+		}},
+	}}}
+	service := NewSQLLSPService(SQLLSPDependencies{
+		WorkspaceRoot: root,
+		CurrentState:  func() model.WorkspaceState { return state },
+	})
+	const unsavedSQL = "select 1 as id"
+	httpResponse, apiErr := service.Diagnostics(context.Background(), SQLLSPRequest{
+		AssetID: "typed-asset",
+		Content: unsavedSQL,
+	})
+	if apiErr != nil {
+		t.Fatal(apiErr)
+	}
+	httpDiagnostic := findLSPDiagnosticByCode(httpResponse.Diagnostics, authoringdiag.CodeDeclaredColumnTypeDrift)
+	if httpDiagnostic == nil {
+		t.Fatalf("HTTP LSP did not report drift from unsaved SQL: %#v", httpResponse.Diagnostics)
+	}
+
+	graph := service.graphForState(context.Background(), state)
+	server := sqllsp.NewServer(graph, nil)
+	uri := assetURI(root, state.Pipelines[0].Assets[0])
+	openPayload, err := json.Marshal(map[string]any{
+		"jsonrpc": "2.0",
+		"method":  "textDocument/didOpen",
+		"params": map[string]any{"textDocument": map[string]any{
+			"uri": uri, "languageId": "sql", "version": 1, "text": unsavedSQL,
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var output bytes.Buffer
+	if err := server.Serve(context.Background(), bytes.NewReader(sqllsp.EncodeMessage(openPayload)), &output); err != nil {
+		t.Fatal(err)
+	}
+	stdioDiagnostic := findLSPDiagnosticByCode(decodePublishedDiagnostics(t, output.Bytes()), authoringdiag.CodeDeclaredColumnTypeDrift)
+	if stdioDiagnostic == nil {
+		t.Fatal("stdio LSP did not report declared output type drift")
+	}
+
+	if typeCheckDiagnostic.Message != httpDiagnostic.Message || typeCheckDiagnostic.Message != stdioDiagnostic.Message {
+		t.Fatalf("drift messages differ: typecheck=%q http=%q stdio=%q", typeCheckDiagnostic.Message, httpDiagnostic.Message, stdioDiagnostic.Message)
+	}
+	if typeCheckDiagnostic.Severity != "warning" || httpDiagnostic.Severity != 2 || stdioDiagnostic.Severity != 2 {
+		t.Fatalf("drift severities differ: typecheck=%q http=%d stdio=%d", typeCheckDiagnostic.Severity, httpDiagnostic.Severity, stdioDiagnostic.Severity)
+	}
+	if httpDiagnostic.Scope != "asset" || stdioDiagnostic.Scope != "asset" {
+		t.Fatalf("drift scope differs: http=%q stdio=%q", httpDiagnostic.Scope, stdioDiagnostic.Scope)
+	}
+}
+
+func TestDeclaredOutputNullabilityDriftParityAcrossTypeCheckHTTPAndStdio(t *testing.T) {
+	parsed, typeCheckRoot := writeTypeCheckWorkspace(t, "name: analytics", map[string]string{
+		"nullable_asset.sql": `
+/* @bruin
+name: analytics.nullable_asset
+type: duckdb.sql
+materialization:
+  type: table
+columns:
+  - name: id
+    type: INTEGER
+    nullable: false
+@bruin */
+select cast(null as integer) as id
+`,
+	})
+	typeCheck := runTypeCheck(t, parsed, typeCheckRoot)
+	typeCheckAsset := findAsset(t, typeCheck, "analytics.nullable_asset")
+	typeCheckDiagnostic := findTypeCheckFindingByCode(typeCheckAsset.Findings, authoringdiag.CodeDeclaredColumnNullabilityDrift)
+	if typeCheckDiagnostic == nil {
+		t.Fatalf("type-check did not report declared output nullability drift: %#v", typeCheckAsset.Findings)
+	}
+
+	root := t.TempDir()
+	notNullable := false
+	state := model.WorkspaceState{Revision: 1, Pipelines: []model.Pipeline{{
+		ID:   "pipeline",
+		Name: "analytics",
+		Assets: []model.Asset{{
+			ID:      "nullable-asset",
+			Name:    "analytics.nullable_asset",
+			Type:    "duckdb.sql",
+			Path:    "analytics/assets/nullable_asset.sql",
+			Content: "select 1 as id",
+			Columns: []model.Column{{Name: "id", Type: "INTEGER", Nullable: &notNullable}},
+		}},
+	}}}
+	service := NewSQLLSPService(SQLLSPDependencies{
+		WorkspaceRoot: root,
+		CurrentState:  func() model.WorkspaceState { return state },
+	})
+	const unsavedSQL = "select cast(null as integer) as id"
+	httpResponse, apiErr := service.Diagnostics(context.Background(), SQLLSPRequest{
+		AssetID: "nullable-asset",
+		Content: unsavedSQL,
+	})
+	if apiErr != nil {
+		t.Fatal(apiErr)
+	}
+	httpDiagnostic := findLSPDiagnosticByCode(httpResponse.Diagnostics, authoringdiag.CodeDeclaredColumnNullabilityDrift)
+	if httpDiagnostic == nil {
+		t.Fatalf("HTTP LSP did not report nullability drift from unsaved SQL: %#v", httpResponse.Diagnostics)
+	}
+
+	graph := service.graphForState(context.Background(), state)
+	server := sqllsp.NewServer(graph, nil)
+	uri := assetURI(root, state.Pipelines[0].Assets[0])
+	openPayload, err := json.Marshal(map[string]any{
+		"jsonrpc": "2.0",
+		"method":  "textDocument/didOpen",
+		"params": map[string]any{"textDocument": map[string]any{
+			"uri": uri, "languageId": "sql", "version": 1, "text": unsavedSQL,
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var output bytes.Buffer
+	if err := server.Serve(context.Background(), bytes.NewReader(sqllsp.EncodeMessage(openPayload)), &output); err != nil {
+		t.Fatal(err)
+	}
+	stdioDiagnostic := findLSPDiagnosticByCode(decodePublishedDiagnostics(t, output.Bytes()), authoringdiag.CodeDeclaredColumnNullabilityDrift)
+	if stdioDiagnostic == nil {
+		t.Fatal("stdio LSP did not report declared output nullability drift")
+	}
+
+	if typeCheckDiagnostic.Message != httpDiagnostic.Message || typeCheckDiagnostic.Message != stdioDiagnostic.Message {
+		t.Fatalf("nullability drift messages differ: typecheck=%q http=%q stdio=%q", typeCheckDiagnostic.Message, httpDiagnostic.Message, stdioDiagnostic.Message)
+	}
+	if typeCheckDiagnostic.Severity != "warning" || httpDiagnostic.Severity != 2 || stdioDiagnostic.Severity != 2 {
+		t.Fatalf("nullability drift severities differ: typecheck=%q http=%d stdio=%d", typeCheckDiagnostic.Severity, httpDiagnostic.Severity, stdioDiagnostic.Severity)
+	}
+	if httpDiagnostic.Scope != "asset" || stdioDiagnostic.Scope != "asset" {
+		t.Fatalf("nullability drift scope differs: http=%q stdio=%q", httpDiagnostic.Scope, stdioDiagnostic.Scope)
+	}
+}
+
+func TestDeclaredOutputNameDriftParityAcrossTypeCheckHTTPAndStdio(t *testing.T) {
+	parsed, typeCheckRoot := writeTypeCheckWorkspace(t, "name: example", map[string]string{
+		"range_10.sql": `
+/* @bruin
+name: example.range_10
+type: duckdb.sql
+materialization:
+  type: view
+columns:
+  - name: range
+@bruin */
+select range as ronge from range(10)
+`,
+	})
+	typeCheck := runTypeCheck(t, parsed, typeCheckRoot)
+	typeCheckAsset := findAsset(t, typeCheck, "example.range_10")
+	typeCheckDiagnostic := findTypeCheckFindingByCode(typeCheckAsset.Findings, authoringdiag.CodeDeclaredOutputSchemaDrift)
+	if typeCheckDiagnostic == nil {
+		t.Fatalf("type-check did not report declared output name drift: %#v", typeCheckAsset.Findings)
+	}
+
+	root := t.TempDir()
+	state := model.WorkspaceState{Revision: 1, Pipelines: []model.Pipeline{{
+		ID:   "pipeline",
+		Name: "example",
+		Assets: []model.Asset{{
+			ID:      "range-10",
+			Name:    "example.range_10",
+			Type:    "duckdb.sql",
+			Path:    "example/assets/example/range_10.sql",
+			Content: "select range as range from range(10)",
+			Columns: []model.Column{{Name: "range"}},
+		}},
+	}}}
+	service := NewSQLLSPService(SQLLSPDependencies{
+		WorkspaceRoot: root,
+		CurrentState:  func() model.WorkspaceState { return state },
+	})
+	const unsavedSQL = "select range as ronge from range(10)"
+	httpResponse, apiErr := service.Diagnostics(context.Background(), SQLLSPRequest{
+		AssetID: "range-10",
+		Content: unsavedSQL,
+	})
+	if apiErr != nil {
+		t.Fatal(apiErr)
+	}
+	httpDiagnostic := findLSPDiagnosticByCode(httpResponse.Diagnostics, authoringdiag.CodeDeclaredOutputSchemaDrift)
+	if httpDiagnostic == nil {
+		t.Fatalf("HTTP LSP did not report name drift from unsaved SQL: %#v", httpResponse.Diagnostics)
+	}
+
+	graph := service.graphForState(context.Background(), state)
+	server := sqllsp.NewServer(graph, nil)
+	uri := assetURI(root, state.Pipelines[0].Assets[0])
+	openPayload, err := json.Marshal(map[string]any{
+		"jsonrpc": "2.0",
+		"method":  "textDocument/didOpen",
+		"params": map[string]any{"textDocument": map[string]any{
+			"uri": uri, "languageId": "sql", "version": 1, "text": unsavedSQL,
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var output bytes.Buffer
+	if err := server.Serve(context.Background(), bytes.NewReader(sqllsp.EncodeMessage(openPayload)), &output); err != nil {
+		t.Fatal(err)
+	}
+	stdioDiagnostic := findLSPDiagnosticByCode(decodePublishedDiagnostics(t, output.Bytes()), authoringdiag.CodeDeclaredOutputSchemaDrift)
+	if stdioDiagnostic == nil {
+		t.Fatal("stdio LSP did not report declared output name drift")
+	}
+
+	if typeCheckDiagnostic.Message != httpDiagnostic.Message || typeCheckDiagnostic.Message != stdioDiagnostic.Message {
+		t.Fatalf("drift messages differ: typecheck=%q http=%q stdio=%q", typeCheckDiagnostic.Message, httpDiagnostic.Message, stdioDiagnostic.Message)
+	}
+	if typeCheckDiagnostic.Severity != "warning" || httpDiagnostic.Severity != 2 || stdioDiagnostic.Severity != 2 {
+		t.Fatalf("drift severities differ: typecheck=%q http=%d stdio=%d", typeCheckDiagnostic.Severity, httpDiagnostic.Severity, stdioDiagnostic.Severity)
+	}
+	if httpDiagnostic.Scope != "asset" || stdioDiagnostic.Scope != "asset" {
+		t.Fatalf("drift scope differs: http=%q stdio=%q", httpDiagnostic.Scope, stdioDiagnostic.Scope)
+	}
+}
+
+func findTypeCheckFindingByCode(findings []TypeCheckFinding, code string) *TypeCheckFinding {
+	for i := range findings {
+		if findings[i].Code == code {
+			return &findings[i]
+		}
+	}
+	return nil
+}
+
+func TestLSPAssetAdapterCoversEveryRegisteredHeaderDiagnostic(t *testing.T) {
+	findings := make([]TypeCheckFinding, 0)
+	wantCodes := map[string]bool{}
+	for _, code := range authoringdiag.RegisteredTypeCheckCodes() {
+		delivery, _ := authoringdiag.TypeCheckDelivery(code)
+		if delivery != authoringdiag.DeliveryAssetHeader {
+			continue
+		}
+		wantCodes[code] = true
+		findings = append(findings, TypeCheckFinding{
+			Code:       code,
+			Source:     authoringdiag.SourceRenart,
+			Severity:   typeCheckSeverityError,
+			Message:    "fixture: " + code,
+			Scope:      string(authoringdiag.ScopeAsset),
+			Confidence: string(authoringdiag.ConfidenceHigh),
+		})
+	}
+
+	diagnostics := lspAssetDiagnostics("select 1", findings)
+	gotCodes := map[string]bool{}
+	for _, diagnostic := range diagnostics {
+		gotCodes[diagnostic.Code] = true
+		if diagnostic.Scope != string(authoringdiag.ScopeAsset) {
+			t.Fatalf("diagnostic %q lost asset scope: %#v", diagnostic.Code, diagnostic)
+		}
+	}
+	if !maps.Equal(gotCodes, wantCodes) {
+		t.Fatalf("asset/header adapter coverage differs: got=%v want=%v", gotCodes, wantCodes)
+	}
+}
+
+func findLSPDiagnosticByCode(diagnostics []sqllsp.Diagnostic, code string) *sqllsp.Diagnostic {
+	for i := range diagnostics {
+		if diagnostics[i].Code == code {
+			return &diagnostics[i]
+		}
+	}
+	return nil
+}
+
+func decodePublishedDiagnostics(t *testing.T, framed []byte) []sqllsp.Diagnostic {
+	t.Helper()
+	separator := bytes.Index(framed, []byte("\r\n\r\n"))
+	if separator < 0 {
+		t.Fatalf("invalid LSP frame: %q", framed)
+	}
+	var message struct {
+		Params struct {
+			Diagnostics []sqllsp.Diagnostic `json:"diagnostics"`
+		} `json:"params"`
+	}
+	if err := json.Unmarshal(framed[separator+4:], &message); err != nil {
+		t.Fatal(err)
+	}
+	return message.Params.Diagnostics
+}
 
 func TestSQLLSPServiceCompletesFromRenartWorkspaceState(t *testing.T) {
 	state := model.WorkspaceState{
@@ -156,6 +721,129 @@ func TestSQLLSPServiceCompletesInferredRenartAssetColumns(t *testing.T) {
 	}
 	if !labels["order_id"] || !labels["total_amount"] {
 		t.Fatalf("expected inferred Renart workspace columns in completions, got %#v", response.Completions)
+	}
+}
+
+func TestSQLLSPServiceCompletesEmptyProjectionForPythonQueryDocument(t *testing.T) {
+	state := model.WorkspaceState{
+		Revision: 1,
+		Pipelines: []model.Pipeline{{
+			ID:   "pipeline",
+			Name: "analytics",
+			Assets: []model.Asset{
+				{
+					ID:      "orders",
+					Name:    "analytics.orders",
+					Type:    "duckdb.sql",
+					Path:    "analytics/assets/analytics/orders.sql",
+					Content: "select 100 as order_id, 1 as customer_id, 42 as total_amount",
+				},
+				{
+					ID:   "python-report",
+					Name: "analytics.python_report",
+					Type: "python",
+					Path: "analytics/assets/analytics/python_report.py",
+				},
+			},
+		}},
+	}
+	service := NewSQLLSPService(SQLLSPDependencies{
+		WorkspaceRoot: t.TempDir(),
+		CurrentState:  func() model.WorkspaceState { return state },
+	})
+
+	response, apiErr := service.Completions(context.Background(), SQLLSPRequest{
+		AssetID: "python-report",
+		Content: "select *, from analytics.orders",
+		Position: sqllsp.Position{
+			Line:      0,
+			Character: len("select *, "),
+		},
+	})
+	if apiErr != nil {
+		t.Fatal(apiErr)
+	}
+	labels := map[string]bool{}
+	for _, item := range response.Completions {
+		labels[item.Label] = true
+	}
+	if !labels["order_id"] || !labels["customer_id"] {
+		t.Fatalf("expected inferred columns at the empty Python SQL projection, got %#v", response.Completions)
+	}
+}
+
+func TestSQLLSPServiceDiagnosesUnqualifiedColumnMissingFromInferredUpstream(t *testing.T) {
+	state := model.WorkspaceState{
+		Pipelines: []model.Pipeline{{
+			ID:   "pipeline",
+			Name: "a",
+			Assets: []model.Asset{
+				{
+					ID:      "example-asset",
+					Name:    "a.example_asset",
+					Type:    "duckdb.sql",
+					Path:    "a/assets/example_asset.sql",
+					Content: "select a from (values (1), (2)) n(a)",
+				},
+				{
+					ID:        "another-asset",
+					Name:      "a.another_asset",
+					Type:      "duckdb.sql",
+					Path:      "a/assets/another_asset.sql",
+					Content:   "select a, b from a.example_asset",
+					Upstreams: []string{"a.example_asset"},
+				},
+			},
+		}},
+	}
+	service := NewSQLLSPService(SQLLSPDependencies{
+		WorkspaceRoot: t.TempDir(),
+		CurrentState:  func() model.WorkspaceState { return state },
+	})
+
+	response, apiErr := service.Diagnostics(context.Background(), SQLLSPRequest{
+		AssetID: "another-asset",
+		Content: "select a, b from a.example_asset",
+	})
+	if apiErr != nil {
+		t.Fatal(apiErr)
+	}
+
+	unresolved := make([]sqllsp.Diagnostic, 0)
+	for _, diagnostic := range response.Diagnostics {
+		if diagnostic.Code == "unresolved-column" {
+			unresolved = append(unresolved, diagnostic)
+		}
+	}
+	if len(unresolved) != 1 {
+		t.Fatalf("expected exactly one unresolved-column diagnostic, got %#v", response.Diagnostics)
+	}
+	diagnostic := unresolved[0]
+	if diagnostic.Message != "Unresolved column: b" {
+		t.Fatalf("unexpected unresolved-column diagnostic: %#v", diagnostic)
+	}
+	if diagnostic.Range != (sqllsp.Range{
+		Start: sqllsp.Position{Line: 0, Character: 10},
+		End:   sqllsp.Position{Line: 0, Character: 11},
+	}) {
+		t.Fatalf("unexpected diagnostic range for b: %#v", diagnostic.Range)
+	}
+
+	qualified, apiErr := service.Diagnostics(context.Background(), SQLLSPRequest{
+		AssetID: "another-asset",
+		Content: "select e.b from a.example_asset e",
+	})
+	if apiErr != nil {
+		t.Fatal(apiErr)
+	}
+	unresolved = unresolved[:0]
+	for _, diagnostic := range qualified.Diagnostics {
+		if diagnostic.Code == "unresolved-column" {
+			unresolved = append(unresolved, diagnostic)
+		}
+	}
+	if len(unresolved) != 1 || unresolved[0].Message != "Unresolved column: b" {
+		t.Fatalf("expected the qualified diagnostic to be deduplicated, got %#v", qualified.Diagnostics)
 	}
 }
 
@@ -455,6 +1143,205 @@ func TestSQLLSPServiceCachesGraphByRevision(t *testing.T) {
 	}
 	if got := service.buildCount.Load(); got != 2 {
 		t.Fatalf("expected exactly one rebuild after revision bump, got build count %d", got)
+	}
+}
+
+func TestSQLLSPServiceCachesAssetHeaderDiagnosticsByRevision(t *testing.T) {
+	parsed, root := writeTypeCheckWorkspace(t, "name: analytics", map[string]string{
+		"reader.sql": `
+/* @bruin
+name: analytics.reader
+type: duckdb.sql
+materialization:
+  type: view
+depends:
+  - analytics.missing
+@bruin */
+select 1 as id
+`,
+	})
+	reader := parsed.Assets[0]
+	assetID := assetReportID(root, reader)
+	current := model.WorkspaceState{Revision: 1, Pipelines: []model.Pipeline{{
+		ID:   "analytics-pipeline",
+		Name: "analytics",
+		Assets: []model.Asset{{
+			ID:      assetID,
+			Name:    reader.Name,
+			Type:    string(reader.Type),
+			Path:    reader.ExecutableFile.Path,
+			Content: reader.ExecutableFile.Content,
+		}},
+	}}}
+	resolverCalls := 0
+	service := NewSQLLSPService(SQLLSPDependencies{
+		WorkspaceRoot: root,
+		CurrentState:  func() model.WorkspaceState { return current },
+		ResolveAssetByID: func(_ context.Context, requested string) (string, *pipeline.Pipeline, *pipeline.Asset, error) {
+			resolverCalls++
+			if requested != assetID {
+				return "", nil, nil, fmt.Errorf("unexpected asset %q", requested)
+			}
+			return reader.ExecutableFile.Path, parsed, reader, nil
+		},
+	})
+
+	request := SQLLSPRequest{AssetID: assetID, Content: reader.ExecutableFile.Content}
+	for attempt := 0; attempt < 2; attempt++ {
+		response, apiErr := service.Diagnostics(context.Background(), request)
+		if apiErr != nil {
+			t.Fatal(apiErr)
+		}
+		diagnostic := findLSPDiagnosticByCode(response.Diagnostics, "missing-dependency")
+		if diagnostic == nil {
+			t.Fatalf("expected missing dependency asset diagnostic, got %#v", response.Diagnostics)
+		}
+		if diagnostic.Scope != "asset" || diagnostic.Range.Start != (sqllsp.Position{}) {
+			t.Fatalf("expected range-honest asset/header diagnostic, got %#v", diagnostic)
+		}
+	}
+	if resolverCalls != 1 {
+		t.Fatalf("expected one full pipeline check for a saved revision, got %d", resolverCalls)
+	}
+
+	current.Revision = 2
+	if _, apiErr := service.Diagnostics(context.Background(), request); apiErr != nil {
+		t.Fatal(apiErr)
+	}
+	if resolverCalls != 2 {
+		t.Fatalf("expected revision bump to invalidate asset diagnostics, got %d resolver calls", resolverCalls)
+	}
+}
+
+func TestSQLLSPServiceRetriesAssetDiagnosticsAfterCancellation(t *testing.T) {
+	parsed, root := writeTypeCheckWorkspace(t, "name: analytics", map[string]string{
+		"reader.sql": `
+/* @bruin
+name: analytics.reader
+type: duckdb.sql
+@bruin */
+select 1 as id
+`,
+	})
+	reader := parsed.Assets[0]
+	assetID := assetReportID(root, reader)
+	resolverCalls := 0
+	service := NewSQLLSPService(SQLLSPDependencies{
+		WorkspaceRoot: root,
+		ResolveAssetByID: func(context.Context, string) (string, *pipeline.Pipeline, *pipeline.Asset, error) {
+			resolverCalls++
+			return reader.ExecutableFile.Path, parsed, reader, nil
+		},
+	})
+
+	canceled, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, ok := service.cachedAssetFindings(canceled, 1, "analytics", assetID); ok {
+		t.Fatal("canceled asset diagnostics unexpectedly became cacheable")
+	}
+	if _, ok := service.cachedAssetFindings(context.Background(), 1, "analytics", assetID); !ok {
+		t.Fatal("active request did not retry canceled asset diagnostics")
+	}
+	if resolverCalls != 2 {
+		t.Fatalf("expected canceled build plus one retry, got %d resolver calls", resolverCalls)
+	}
+}
+
+func TestSQLLSPServiceSingleFlightsConcurrentAssetDiagnostics(t *testing.T) {
+	parsed, root := writeTypeCheckWorkspace(t, "name: analytics", map[string]string{
+		"reader.sql": `
+/* @bruin
+name: analytics.reader
+type: duckdb.sql
+@bruin */
+select 1 as id
+`,
+	})
+	reader := parsed.Assets[0]
+	assetID := assetReportID(root, reader)
+	resolverStarted := make(chan struct{})
+	releaseResolver := make(chan struct{})
+	resolverCalls := 0
+	service := NewSQLLSPService(SQLLSPDependencies{
+		WorkspaceRoot: root,
+		ResolveAssetByID: func(context.Context, string) (string, *pipeline.Pipeline, *pipeline.Asset, error) {
+			resolverCalls++
+			close(resolverStarted)
+			<-releaseResolver
+			return reader.ExecutableFile.Path, parsed, reader, nil
+		},
+	})
+
+	firstResult := make(chan bool, 1)
+	go func() {
+		_, ok := service.cachedAssetFindings(context.Background(), 1, "analytics", assetID)
+		firstResult <- ok
+	}()
+	<-resolverStarted
+
+	waiterCtx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+	if _, ok := service.cachedAssetFindings(waiterCtx, 1, "analytics", assetID); ok {
+		t.Fatal("canceled waiter unexpectedly received in-flight findings")
+	}
+
+	thirdResult := make(chan bool, 1)
+	go func() {
+		_, ok := service.cachedAssetFindings(context.Background(), 1, "analytics", assetID)
+		thirdResult <- ok
+	}()
+	close(releaseResolver)
+	if !<-firstResult || !<-thirdResult {
+		t.Fatal("active requests did not receive single-flight findings")
+	}
+	if resolverCalls != 1 {
+		t.Fatalf("expected one resolver call for concurrent requests, got %d", resolverCalls)
+	}
+}
+
+func TestFilesystemStdioLSPPublishesTypecheckAssetDiagnostics(t *testing.T) {
+	parsed, root := writeTypeCheckWorkspace(t, "name: analytics", map[string]string{
+		"reader.sql": `
+/* @bruin
+name: analytics.reader
+type: duckdb.sql
+materialization:
+  type: view
+depends:
+  - analytics.missing
+@bruin */
+select 1 as id
+`,
+	})
+	graph, err := LoadSQLLSPGraph(context.Background(), root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reader := parsed.Assets[0]
+	uri := typeCheckAssetURI(root, reader)
+	server := sqllsp.NewServer(graph, nil)
+	openPayload, err := json.Marshal(map[string]any{
+		"jsonrpc": "2.0",
+		"method":  "textDocument/didOpen",
+		"params": map[string]any{"textDocument": map[string]any{
+			"uri": uri, "languageId": "sql", "version": 1,
+			"text": reader.ExecutableFile.Content,
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var output bytes.Buffer
+	if err := server.Serve(context.Background(), bytes.NewReader(sqllsp.EncodeMessage(openPayload)), &output); err != nil {
+		t.Fatal(err)
+	}
+	diagnostics := decodePublishedDiagnostics(t, output.Bytes())
+	diagnostic := findLSPDiagnosticByCode(diagnostics, "missing-dependency")
+	if diagnostic == nil {
+		t.Fatalf("expected stdio missing dependency diagnostic, got %#v", diagnostics)
+	}
+	if diagnostic.Scope != "asset" || diagnostic.Range.Start != (sqllsp.Position{}) {
+		t.Fatalf("expected range-honest stdio asset/header diagnostic, got %#v", diagnostic)
 	}
 }
 

@@ -10,6 +10,8 @@ import (
 	"github.com/bruin-data/bruin/pkg/lint"
 	"github.com/bruin-data/bruin/pkg/pipeline"
 	"github.com/fatih/color"
+
+	"renart/internal/authoringdiag"
 )
 
 const dependencyExistsRule = "dependency-exists"
@@ -58,8 +60,12 @@ func dependencyTypeCheckFindings(ctx context.Context, asset *pipeline.Asset, pl 
 	assetIssues, err := lint.EnsureDependencyExistsForASingleAsset(ctx, pl, asset)
 	if err != nil {
 		return []TypeCheckFinding{{
-			Severity: typeCheckSeverityError,
-			Message:  "Failed to validate dependencies: " + err.Error(),
+			Code:       authoringdiag.CodeDependencyValidationFailed,
+			Source:     authoringdiag.SourceRenart,
+			Severity:   typeCheckSeverityError,
+			Message:    "Failed to validate dependencies: " + err.Error(),
+			Scope:      string(authoringdiag.ScopeAsset),
+			Confidence: string(authoringdiag.ConfidenceHigh),
 		}}
 	}
 
@@ -69,8 +75,12 @@ func dependencyTypeCheckFindings(ctx context.Context, asset *pipeline.Asset, pl 
 			continue
 		}
 		findings = append(findings, TypeCheckFinding{
-			Severity: typeCheckSeverityError,
-			Message:  issue.Description,
+			Code:       authoringdiag.CodeMissingDependency,
+			Source:     authoringdiag.SourceRenart,
+			Severity:   typeCheckSeverityError,
+			Message:    issue.Description,
+			Scope:      string(authoringdiag.ScopeAsset),
+			Confidence: string(authoringdiag.ConfidenceHigh),
 		})
 	}
 	return findings

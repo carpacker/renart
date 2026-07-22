@@ -98,6 +98,23 @@ func TestAssetServiceAddPythonDependencyCreatesPyprojectWhenMissing(t *testing.T
 	assert.Equal(t, []string{"scikit-learn"}, deps)
 }
 
+func TestAssetServiceAddPythonDependencyDefaultsToPipelinePyproject(t *testing.T) {
+	workspaceRoot := t.TempDir()
+	pipelineRoot := filepath.Join(workspaceRoot, "analytics")
+	assetPath := filepath.Join("analytics", "assets", "models", "predict.py")
+	require.NoError(t, os.MkdirAll(filepath.Dir(filepath.Join(workspaceRoot, assetPath)), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(pipelineRoot, "pipeline.yml"), []byte("name: analytics\n"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(workspaceRoot, assetPath), []byte("def materialize():\n    return None\n"), 0o644))
+
+	service := NewAssetService(AssetDependencies{WorkspaceRoot: workspaceRoot})
+	_, apiErr := service.AddPythonDependency(context.Background(), EncodeID(assetPath), AddPythonDependencyRequest{Package: "polars>=1"})
+	require.Nil(t, apiErr)
+
+	assert.Equal(t, []string{"polars>=1"}, readPyprojectDependencies(filepath.Join(pipelineRoot, "pyproject.toml")))
+	_, statErr := os.Stat(filepath.Join(filepath.Dir(filepath.Join(workspaceRoot, assetPath)), "pyproject.toml"))
+	assert.True(t, os.IsNotExist(statErr), "must not create an asset-local manifest inside a pipeline")
+}
+
 func TestAssetServiceAddPythonDependencyAppendsToExistingPyproject(t *testing.T) {
 	workspaceRoot := t.TempDir()
 	_, assetID := writePythonAsset(t, workspaceRoot)
@@ -139,6 +156,22 @@ func TestEnsurePythonProjectFileSkipsWhenAncestorDeclaresDeps(t *testing.T) {
 
 	_, statErr := os.Stat(filepath.Join(workspaceRoot, "ml", "sub", "pyproject.toml"))
 	assert.True(t, os.IsNotExist(statErr), "must not create a redundant pyproject.toml when an ancestor declares deps")
+}
+
+func TestEnsurePythonProjectFileDefaultsToPipelineRoot(t *testing.T) {
+	workspaceRoot := t.TempDir()
+	pipelineRoot := filepath.Join(workspaceRoot, "analytics")
+	relPath := filepath.Join("analytics", "assets", "models", "new_model.py")
+	abs := filepath.Join(workspaceRoot, relPath)
+	require.NoError(t, os.MkdirAll(filepath.Dir(abs), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(pipelineRoot, "pipeline.yml"), []byte("name: analytics\n"), 0o644))
+	require.NoError(t, os.WriteFile(abs, []byte("import pandas as pd\n"), 0o644))
+
+	require.NoError(t, EnsurePythonProjectFile(abs, "python", relPath))
+
+	assert.Equal(t, []string{"pandas"}, readPyprojectDependencies(filepath.Join(pipelineRoot, "pyproject.toml")))
+	_, statErr := os.Stat(filepath.Join(filepath.Dir(abs), "pyproject.toml"))
+	assert.True(t, os.IsNotExist(statErr), "must not create an asset-local manifest inside a pipeline")
 }
 
 func TestAssetServiceAddPythonDependencyRejectsEmpty(t *testing.T) {

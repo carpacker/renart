@@ -16,6 +16,8 @@ export type SQLLSPDiagnostic = {
   code?: string;
   source?: string;
   message: string;
+  scope?: string;
+  confidence?: string;
 };
 
 export type SQLLSPCompletionItem = {
@@ -88,6 +90,7 @@ export type SQLLSPRequest = {
   asset_id: string;
   content: string;
   connection?: string;
+  document_context?: "asset" | "adhoc";
   position?: SQLLSPPosition;
   include_declaration?: boolean;
   new_name?: string;
@@ -112,8 +115,10 @@ export type SQLLSPResponse = {
   error?: string;
 };
 
-export function getSQLLSPDiagnostics(request: SQLLSPRequest) {
-  return fetchJSONWithBody<SQLLSPResponse>("/api/sql/lsp/diagnostics", "POST", request);
+export function getSQLLSPDiagnostics(request: SQLLSPRequest, signal?: AbortSignal) {
+  return fetchJSONWithBody<SQLLSPResponse>("/api/sql/lsp/diagnostics", "POST", request, {
+    signal,
+  });
 }
 
 export function getSQLLSPCompletions(request: SQLLSPRequest) {

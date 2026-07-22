@@ -1,13 +1,15 @@
 package service
 
 import (
+	"context"
 	"strconv"
 	"strings"
 	"unicode"
 
 	"github.com/bruin-data/bruin/pkg/pipeline"
 
-	"renart/internal/web/sqlintelligence"
+	"renart/internal/authoringdiag"
+	"renart/internal/sqlintelligence"
 )
 
 type pythonQueryLiteral struct {
@@ -20,37 +22,58 @@ type pythonQueryLiteral struct {
 // in Python assets. The runtime broker performs the same check for every
 // query, including dynamic SQL; type-check intentionally stays best-effort and
 // warn-only because it cannot evaluate Python expressions.
-func pythonQueryDependencyFindings(asset *pipeline.Asset, pp *pipeline.Pipeline) []TypeCheckFinding {
+func pythonQueryDependencyFindings(ctx context.Context, asset *pipeline.Asset, pp *pipeline.Pipeline) []TypeCheckFinding {
 	if asset == nil || pp == nil || !strings.Contains(strings.ToLower(string(asset.Type)), "python") {
 		return nil
 	}
-	literals := pythonQueryStringLiterals(asset.ExecutableFile.Content)
+	knownAssets := make([]string, 0, len(pp.Assets))
+	for _, candidate := range pp.Assets {
+		if candidate != nil && strings.TrimSpace(candidate.Name) != "" {
+			knownAssets = append(knownAssets, candidate.Name)
+		}
+	}
+	declaredDependencies := make([]string, 0, len(asset.Upstreams))
+	for _, upstream := range asset.Upstreams {
+		if upstream.Type == "asset" {
+			declaredDependencies = append(declaredDependencies, upstream.Value)
+		}
+	}
+	return pythonQueryDependencyFindingsForSource(
+		ctx,
+		asset.ExecutableFile.Content,
+		asset.Name,
+		declaredDependencies,
+		knownAssets,
+	)
+}
+
+func pythonQueryDependencyFindingsForSource(ctx context.Context, source, currentAsset string, declaredDependencies, knownAssets []string) []TypeCheckFinding {
+	literals := pythonQueryStringLiterals(source)
 	if len(literals) == 0 {
 		return nil
 	}
 
-	known := make(map[string]string, len(pp.Assets))
+	known := make(map[string]string, len(knownAssets))
 	schema := sqlintelligence.Schema{}
-	for _, candidate := range pp.Assets {
-		if candidate == nil || strings.TrimSpace(candidate.Name) == "" {
+	for _, candidate := range knownAssets {
+		if strings.TrimSpace(candidate) == "" {
 			continue
 		}
-		ref := normalizePythonQueryRef(candidate.Name)
-		known[ref] = candidate.Name
-		schema[candidate.Name] = map[string]string{}
+		ref := normalizePythonQueryRef(candidate)
+		known[ref] = candidate
+		schema[candidate] = map[string]string{}
 	}
-	declared := make(map[string]struct{}, len(asset.Upstreams))
-	for _, upstream := range asset.Upstreams {
-		if upstream.Type == "asset" {
-			declared[normalizePythonQueryRef(upstream.Value)] = struct{}{}
-		}
+	declared := make(map[string]struct{}, len(declaredDependencies))
+	for _, dependency := range declaredDependencies {
+		declared[normalizePythonQueryRef(dependency)] = struct{}{}
 	}
-	self := normalizePythonQueryRef(asset.Name)
+	self := normalizePythonQueryRef(currentAsset)
 	seen := map[string]struct{}{}
 	findings := make([]TypeCheckFinding, 0)
 
 	for _, literal := range literals {
-		parsed, err := sqlintelligence.ParseContextWithSchema(
+		parsed, err := sqlintelligence.ParseContextWithSchemaContext(
+			ctx,
 			literal.SQL,
 			"duckdb",
 			schema,
@@ -77,13 +100,17 @@ func pythonQueryDependencyFindings(asset *pipeline.Asset, pp *pipeline.Pipeline)
 			}
 			seen[ref] = struct{}{}
 			findings = append(findings, TypeCheckFinding{
+				Code:     authoringdiag.CodePythonUndeclaredQueryDependency,
+				Source:   authoringdiag.SourceRenart,
 				Severity: typeCheckSeverityWarning,
 				Message: "Reads asset " + displayName + " through renart.query() without declaring it in depends; " +
 					"run ordering is only guaranteed for declared dependencies.",
-				Line:      literal.Line,
-				Column:    literal.Column,
-				EndLine:   literal.Line,
-				EndColumn: literal.Column + len("query"),
+				Line:       literal.Line,
+				Column:     literal.Column,
+				EndLine:    literal.Line,
+				EndColumn:  literal.Column + len("query"),
+				Scope:      string(authoringdiag.ScopeDocument),
+				Confidence: string(authoringdiag.ConfidenceHigh),
 			})
 		}
 	}

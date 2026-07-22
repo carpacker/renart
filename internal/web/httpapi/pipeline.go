@@ -3,6 +3,7 @@ package httpapi
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"strings"
 
@@ -38,6 +39,8 @@ func RegisterPipelineRoutes(router chi.Router, handlers *PipelineHandlers) {
 	router.Put("/api/pipelines", handlers.HandleUpdatePipeline)
 	router.Get("/api/pipelines/{id}/config", handlers.HandleGetPipelineConfig)
 	router.Put("/api/pipelines/{id}/config", handlers.HandleUpdatePipelineConfig)
+	router.Get("/api/pipelines/{id}/python-dependencies", handlers.HandleGetPipelinePythonDependencies)
+	router.Put("/api/pipelines/{id}/python-dependencies", handlers.HandleUpdatePipelinePythonDependencies)
 	router.Get("/api/pipelines/{id}/type-check", handlers.HandleTypeCheckPipeline)
 	router.Delete("/api/pipelines/{id}", handlers.HandleDeletePipeline)
 }
@@ -170,6 +173,47 @@ func (h *PipelineHandlers) HandleUpdatePipelineConfig(w http.ResponseWriter, r *
 		h.Publisher.WorkspaceChanged(r.Context(), relPath, "pipeline.updated")
 	}
 	webapi.WriteJSON(w, http.StatusOK, resp)
+}
+
+func (h *PipelineHandlers) HandleGetPipelinePythonDependencies(w http.ResponseWriter, r *http.Request) {
+	resp, err := h.Service.PythonDependencies(r.Context(), chi.URLParam(r, "id"))
+	if err != nil {
+		h.writePipelinePythonDependenciesError(w, err)
+		return
+	}
+	webapi.WriteJSON(w, http.StatusOK, resp)
+}
+
+func (h *PipelineHandlers) HandleUpdatePipelinePythonDependencies(w http.ResponseWriter, r *http.Request) {
+	var req webmodel.UpdatePipelinePythonDependenciesRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		webapi.WriteBadRequest(w, "invalid_request_body", err.Error())
+		return
+	}
+
+	relPath, resp, err := h.Service.UpdatePythonDependencies(r.Context(), chi.URLParam(r, "id"), req)
+	if err != nil {
+		h.writePipelinePythonDependenciesError(w, err)
+		return
+	}
+	if h.Publisher != nil {
+		h.Publisher.WorkspaceChanged(r.Context(), relPath, "pipeline.dependencies")
+	}
+	webapi.WriteJSON(w, http.StatusOK, resp)
+}
+
+func (h *PipelineHandlers) writePipelinePythonDependenciesError(w http.ResponseWriter, err error) {
+	message := err.Error()
+	switch {
+	case errors.Is(err, service.ErrInvalidPythonDependency):
+		webapi.WriteBadRequest(w, "pipeline_python_dependencies_invalid", message)
+	case strings.Contains(message, "illegal base64"):
+		webapi.WriteBadRequest(w, "invalid_pipeline_id", "invalid pipeline id")
+	case strings.Contains(message, "invalid path"):
+		webapi.WriteBadRequest(w, "invalid_pipeline_path", message)
+	default:
+		webapi.WriteInternalError(w, "pipeline_python_dependencies_failed", message)
+	}
 }
 
 func (h *PipelineHandlers) writePipelineConfigError(w http.ResponseWriter, err error) {

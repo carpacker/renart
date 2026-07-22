@@ -57,18 +57,22 @@ renart_dep_drop  inferred dependencies the user suppressed
 renart_col_add   manual columns (names)
 renart_col_drop  inferred columns the user omitted
 renart_col_own   generated columns whose fields the user owns (col:field|field;…)
+renart_col_src   non-default type sources (col:m;col2:l;…)
 renart_col_map   rename memory (e:<exprhash>:col); optional
 ```
 
 Only _exceptions_ are stored — inferred things are never listed; the file's
 real `depends:`/`columns:` plus these keys reconstruct intent on the next
-reconcile. The key strings are stable; changing one is a file-format
+reconcile. SQL/definition inference is the implicit type source and therefore
+costs no metadata. `renart_col_src` records only exceptions: `m` means the
+materialized/current table supplied the saved type and `l` means a live response
+did. The key strings and source codes are stable; changing one is a file-format
 migration. All `assetmeta` functions are pure and unit-tested.
 
 ## 4. Reconciliation
 
-**Dependencies** (`service/asset_dependencies.go`): inferred from the SQL AST
-(Rust sqlparser with fallback), then
+**Dependencies** (`service/asset_dependencies.go`): inferred from the embedded
+Polyglot WASM SQL AST, then
 
 ```
 final depends = (inferred − renart_dep_drop) + renart_dep_add
@@ -223,8 +227,8 @@ round-trips unknown fields).
   the execution service independently rejects missing ranges, multi-asset scopes,
   and materializations whose windows cannot be safely accumulated.
 - **Provenance classification client-side** (`lib/asset-provenance.ts`)
-  mirrors the flat-key schema for display (source chips: "inferred from SQL" /
-  "manual").
+  mirrors the flat-key schema for display (source chips: SQL inferred / table
+  inferred / live inferred / manual / type owned).
 - **Expert YAML mode** (`asset-yaml-editor.tsx`) remains implemented but is not
   currently exposed in the asset metadata inspector. The inspector shows only
   the guided form while the raw mode is being held back from the product UI.
@@ -246,9 +250,20 @@ round-trips unknown fields).
   immediately through the provenance-aware reconciler. Deleting a saved column,
   changing any known type, or finding incompatible source observations returns a
   non-mutating merge model instead. The inspector opens one scrollable resolver
-  table with a column per source, saved metadata, and the selected result;
+  table with a column per source, saved metadata, and the selected result. Every
+  cell repeats `column:type`; unknown values use `column:?` and absent values use
+  a struck-through `column:------` so rows remain understandable without tracing
+  back to the first column;
   `POST /columns/sync/apply` persists those choices atomically while retaining
   descriptions, checks, manual columns, ignored columns, and type ownership.
+  Selecting an observed source keeps the field generated and records its compact
+  source code instead of claiming manual ownership. Later ordinary syncs
+  re-observe only those recorded exception sources. If SQL can infer only an
+  unknown type, a known table/live-derived saved type is retained without a
+  conflict. A materialized observation's freshness is evaluated at sync time and
+  is never persisted: a fresh observation matching its saved provenance can beat
+  conflicting static inference, while a stale or unverifiable observation stays
+  advisory and opens the resolver.
   Current-table observations for Load/API assets ignore the legacy Sling
   `_sling_loaded_at` column. DuckDB observations use logical catalog types, so a
   stored `JSON` column is not presented as `VARCHAR` merely because of the query

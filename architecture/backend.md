@@ -160,6 +160,11 @@ asset. DuckDB access
 is additionally serialized per canonical database file as described in §4,
 because one server can run multiple pipelines and child processes concurrently.
 
+The human `renart render` view syntax-highlights SQL, JSON, Python, and YAML
+stage bodies when stdout is an interactive terminal, using passive terminal
+color hints for light/dark selection and a dark-safe default. Redirected output, `NO_COLOR`, and
+`TERM=dumb` stay plain, and `--json` remains unchanged for scripts.
+
 `renart ls` also prefers the server's parsed workspace. The handoff is not yet
 universal: `deploy` opens the state store directly, `type-check` and some debug
 commands still run locally, stateful embedded commands skip the long-lived
@@ -189,21 +194,23 @@ schedulers on one state DB would duplicate runs); run facts still land in
 `.renart/state.db`. The visible command surface is pinned by
 `cmd/root_test.go`.
 
-**Release parser build cache.** Release and live-E2E builds compile Bruin's
-`bruinsqlparser` Rust static library before linking the Go binary. The build
-script keeps Cargo's target directory outside the Go module cache at
-`${XDG_CACHE_HOME:-$HOME/.cache}/renart/rustsqlparser/target`; CI caches that
-directory and the containerized GoReleaser jobs mount it into the build
-container. `RENART_RUSTSQLPARSER_TARGET_DIR` provides an explicit override for
-local or hermetic builders. Cargo still owns dependency and source invalidation,
-so unchanged parser builds reuse the release artifacts instead of recompiling
-the dependency graph for every target.
+**Bruin SQL-parser link shim.** Renart does not call Bruin's Rust SQL parser;
+dependency extraction and `DECLARE` hoisting use the embedded Polyglot WASM
+engine. Bruin's `pkg/sqlparser` nevertheless adds `-lbruin_rustsqlparser`
+unconditionally to CGo builds on Linux and macOS, including when Renart uses
+only its Python-backed APIs. `scripts/build_bruin_sqlparser_stub.sh` therefore
+builds a tiny fail-closed C ABI shim in
+`${XDG_CACHE_HOME:-$HOME/.cache}/renart/bruin-sqlparser-stub`. It exists only to
+satisfy that upstream linker contract: every entry point returns an explicit
+disabled error, so a missed runtime call cannot silently use a second parser.
+`RENART_BRUIN_SQLPARSER_STUB_DIR` overrides the cache root for hermetic builds.
 
 **Binary composition.** Release builds are deliberately self-contained: the Go
-link includes Bruin's native Rust SQL parser and the complete connector/runtime
-graph, while `go:embed` carries the web application, Monaco workers, the
-Polyglot SQL WASM engine, and the `ty` Python-intelligence WASM engine. GoReleaser
-uses `-s -w`, which removes Go debug sections but not those runtime components.
+link includes the small Bruin compatibility shim and the complete
+connector/runtime graph, while `go:embed` carries the web application, Monaco
+workers, the Polyglot SQL WASM engine, and the `ty` Python-intelligence WASM
+engine. GoReleaser uses `-s -w`, which removes Go debug sections but not those
+runtime components.
 Consequently the executable remains large even when stripped; connector
 dependencies and generated lookup/type data are a larger share than the visible
 web bundle alone. The DuckDB ADBC driver itself is installed into the runtime
@@ -841,7 +848,13 @@ embedded Python language server mounts the SDK stubs plus small PyArrow/Pandas
 fallbacks when the workspace has not installed those editor packages, so
 result-member completion remains available without weakening the runtime
 dependency contract. Pipeline type-check warns when a literal `query()` reads a
-project asset missing from `depends`. Before a pyproject-backed run, the
+project asset missing from `depends`. Python assets look upward for an existing
+dependency manifest, but a newly created manifest defaults to the owning
+pipeline root so assets share one environment. `GET/PUT
+/api/pipelines/{id}/python-dependencies` manages that `pyproject.toml` through
+the Go server, preserves unrelated TOML tables, and migrates a pipeline-root
+legacy `requirements.txt` only after a successful write. Malformed TOML is
+reported rather than replaced. Before a pyproject-backed run, the
 operator compares the project environment and uv cache filesystems. If they
 differ and the user has not set a
 cache or link policy, that invocation selects uv's copy mode up front; same-
@@ -935,9 +948,9 @@ asset.
 - **Deployment.** Single binary: embedded frontend, embedded Python (uv),
   pure-Go SQLite. Port fallback, browser auto-open, graceful shutdown
   (scheduler `Stop()` drains River, then escalates to context cancellation if
-  workers do not stop within the grace period). Bruin's Rust SQL-parser archive
-  is built with the pinned Rust toolchain into Renart's external cache and
-  supplied through `CGO_LDFLAGS`; release and local builds never modify the Go
+  workers do not stop within the grace period). A tiny C compatibility archive
+  satisfies Bruin's unused Rust-parser linker flag through `CGO_LDFLAGS`;
+  release and local builds require no Rust toolchain and never modify the Go
   module cache. Linux releases use checksum-pinned Zig with a glibc 2.31 target,
   and archive smoke tests enforce that ceiling alongside checksums, SBOMs,
   third-party notices, and executable startup.
@@ -948,8 +961,12 @@ SQL intelligence (parse/lineage/validation) and formatting run on the embedded
 Polyglot SQL wasm engine (`sqlintelligence`, `sqlformat`); Python intelligence
 runs ty as wasm (`pyintelligence`).
 All run under wazero with an on-disk compilation cache (`renart debug warm-cache`
-pre-warms it). RSS is dominated by these engines; retiring the interpreter
-fallback + the disk cache brought idle memory to roughly 360 MB.
+pre-warms it). Polyglot modules use a bounded reusable pool rather than
+call-count recycling: at most four modules, a 256 MiB per-module hard limit,
+and eviction after more than 16 MiB of retained growth. The pinned Go SDK, web
+SDK, and embedded artifact are all Polyglot 0.6.2; the web check task verifies
+the artifact byte-for-byte. RSS is dominated by the embedded engines; the
+interpreter fallback is retired once the cached optimizing compiler is ready.
 
 ## 7. Open items
 

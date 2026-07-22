@@ -979,6 +979,20 @@ export function AppBuildPage({
       }
     }
   };
+  useEffect(() => {
+    if (
+      resultTab !== "render" ||
+      selectedAssetRenderIdentity === null ||
+      assetRenderSource?.identity === selectedAssetRenderIdentity
+    ) {
+      return;
+    }
+    const timer = window.setTimeout(() => void renderSelectedAsset(), 350);
+    // The render identity includes the asset, saved-intent content,
+    // environment, and execution window. Changing any of them while the Render
+    // tab is active therefore loads the latest preview after typing settles.
+    return () => window.clearTimeout(timer);
+  }, [assetRenderSource?.identity, resultTab, selectedAssetRenderIdentity]);
   // SQL context for the ad hoc editor: the selected asset when it is SQL,
   // otherwise the first SQL asset of the pipeline (dialect + connection).
   const adhocContextAsset = useMemo(() => {

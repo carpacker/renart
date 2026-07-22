@@ -5,10 +5,12 @@ go 1.26
 toolchain go1.26.5
 
 require (
+	github.com/alecthomas/chroma/v2 v2.23.1
 	github.com/bruin-data/bruin v0.11.691
 	github.com/fatih/color v1.19.0
 	github.com/fsnotify/fsnotify v1.10.1
 	github.com/go-chi/chi/v5 v5.3.1
+	github.com/mattn/go-isatty v0.0.21
 	github.com/pelletier/go-toml/v2 v2.4.3
 	github.com/pkg/errors v0.9.1
 	github.com/riverqueue/river v0.40.0
@@ -18,7 +20,7 @@ require (
 	github.com/spf13/afero v1.15.0
 	github.com/stretchr/testify v1.11.1
 	github.com/tetratelabs/wazero v1.12.0
-	github.com/tobilg/polyglot/packages/go v0.5.15
+	github.com/tobilg/polyglot/packages/go v0.6.2
 	github.com/urfave/cli/v3 v3.10.1
 	github.com/wailsapp/wails/v2 v2.13.0
 	go.uber.org/zap v1.28.0
@@ -67,6 +69,7 @@ require (
 	github.com/cenkalti/backoff/v5 v5.0.3 // indirect
 	github.com/clipperhouse/uax29/v2 v2.7.0 // indirect
 	github.com/columnar-tech/dbc v0.3.0 // indirect
+	github.com/dlclark/regexp2 v1.11.5 // indirect
 	github.com/ebitengine/purego v0.10.0 // indirect
 	github.com/go-faster/jx v1.2.0 // indirect
 	github.com/go-faster/yaml v0.4.6 // indirect
@@ -220,7 +223,6 @@ require (
 	github.com/mailru/easyjson v0.9.0 // indirect
 	github.com/manifoldco/promptui v0.9.0 // indirect
 	github.com/mattn/go-colorable v0.1.14 // indirect
-	github.com/mattn/go-isatty v0.0.21 // indirect
 	github.com/mattn/go-runewidth v0.0.20 // indirect
 	github.com/microsoft/go-mssqldb v1.10.0 // indirect
 	github.com/minio/asm2plan9s v0.0.0-20200509001527-cdd76441f9d8 // indirect

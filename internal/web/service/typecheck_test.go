@@ -12,6 +12,9 @@ import (
 	"github.com/spf13/afero"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"renart/internal/authoringdiag"
+	"renart/internal/web/model"
 )
 
 // writeTypeCheckWorkspace lays out a minimal bruin workspace (a `.git` marker, a
@@ -53,7 +56,15 @@ func runTypeCheck(t *testing.T, parsed *pipeline.Pipeline, workspaceRoot string)
 	t.Helper()
 	tw, err := ResolveExecutionTimeWindow(string(parsed.Schedule), "", "", time.Now().UTC())
 	require.NoError(t, err)
-	return CheckPipeline(context.Background(), afero.NewOsFs(), parsed, workspaceRoot, tw)
+	report := CheckPipeline(context.Background(), afero.NewOsFs(), parsed, workspaceRoot, tw)
+	for _, asset := range report.Assets {
+		for _, finding := range asset.Findings {
+			require.NotEmpty(t, finding.Code, "finding has no stable code: asset=%s finding=%#v", asset.Name, finding)
+			_, registered := authoringdiag.TypeCheckDelivery(finding.Code)
+			require.True(t, registered, "finding code %q has no editor delivery: asset=%s finding=%#v", finding.Code, asset.Name, finding)
+		}
+	}
+	return report
 }
 
 func findAsset(t *testing.T, report TypeCheckReport, name string) TypeCheckAsset {
@@ -87,7 +98,7 @@ materialization:
   type: table
 columns:
   - name: id
-    type: BIGINT
+    type: INTEGER
   - name: amount
     type: DOUBLE
 @bruin */
@@ -326,6 +337,30 @@ def materialize():
 			assert.Greater(t, finding.Column, 0)
 		}
 	}
+}
+
+func TestPythonEditorPublishesUndeclaredQueryDependency(t *testing.T) {
+	state := model.WorkspaceState{Pipelines: []model.Pipeline{{
+		ID: "analytics",
+		Assets: []model.Asset{
+			{ID: "up", Name: "analytics.up", Type: "duckdb.sql"},
+			{ID: "reader", Name: "analytics.reader", Type: "python"},
+		},
+	}}}
+	service := NewAssetService(AssetDependencies{
+		CurrentState: func() WorkspaceState { return state },
+	})
+	diagnostics := service.pythonQueryDependencyDiagnostics(
+		context.Background(),
+		"reader",
+		"from renart import query\n\ndef materialize():\n    return query(\"select id from analytics.up\")\n",
+	)
+	require.Len(t, diagnostics, 1)
+	assert.Equal(t, authoringdiag.CodePythonUndeclaredQueryDependency, diagnostics[0].Code)
+	assert.Equal(t, authoringdiag.SourceRenart, diagnostics[0].Source)
+	assert.Equal(t, "warning", diagnostics[0].Severity)
+	require.NotNil(t, diagnostics[0].Range)
+	assert.Equal(t, PythonPosition{Line: 4, Column: 12}, diagnostics[0].Range.Start)
 }
 
 func TestCheckPipelineAcceptsDeclaredPythonQueryAsset(t *testing.T) {

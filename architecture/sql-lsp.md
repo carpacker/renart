@@ -1,43 +1,52 @@
 # SQL language server — current architecture
 
-Status: current state (built on the `sql-language-server` branch, July 2026).
+Status: current state (July 2026).
 A Go implementation in `internal/sqllsp` serving two frontends: a stdio
 JSON-RPC LSP server (`renart debug sql-lsp`) for external editors, and HTTP
 endpoints (`/api/sql/lsp/*`) consumed by the web UI's Monaco editors —
 including notebook cells.
 
-> The original design exploration (`renart-sql-lsp-plan.md`, deleted — see git
-> history) sketched a Rust core. The as-built engine is pure Go with the same
-> provider-neutral graph boundary; the Rust split never became necessary
-> because the analysis layer is regex-based rather than a full parser.
+The implementation is Go around an embedded parser-backed Polyglot SQL WASM
+engine. A tolerant Go analyzer remains additive for incomplete SQL and for LSP
+features such as navigation, completion, and code actions.
 
 ## 1. Layering
 
 ```
-Graph sources
-  web WorkspaceState (pipelines + notebooks)   LoadGraphFromDir (bruin + dbt folders)
-        ↓                                            ↓
-Canonical graph  (assets, relations, schemas, provenance — provider-neutral)
+Graph/provider sources
+  web WorkspaceState                  filesystem Bruin/dbt loaders
+        ↓                                      ↓
+Canonical graph + schema confidence + saved asset diagnostics
         ↓
-Engine  (internal/sqllsp/analyzer.go: regex scope analysis, per-request)
-        ↓                          ↓
-stdio JSON-RPC server        web service (internal/web/service/sql_lsp.go)
-(cmd/sqllsp.go)              → httpapi /api/sql/lsp/* → web/hooks/use-sql-lsp.ts
+shared SQL validator (internal/sqlintelligence, embedded Polyglot WASM)
+        + tolerant/policy analyzer (internal/sqllsp)
+        ↓                                      ↓
+HTTP/Monaco adapter                     stdio JSON-RPC adapter
 ```
 
 - **Canonical graph** (`types.go`): `CanonicalGraph{Assets, Relations,
-  Schemas, …}` with per-node `Provenance`. Renart/Bruin/dbt are provenance,
-  not core concepts — the engine never branches on provider.
+  Schemas, …}` with per-node `Provenance`. Declared schema columns retain
+  nullability, primary-key, and foreign-key metadata; inferred columns never
+  manufacture constraints. Renart/Bruin/dbt are provenance, not core concepts
+  — the engine never branches on provider.
+- **Diagnostic contract** (`internal/authoringdiag`): stable codes, source,
+  severity, byte offsets, scope, and confidence are shared by pipeline
+  type-check, HTTP diagnostics, and stdio diagnostics. A registry classifies
+  every type-check code as document, asset/header, or pipeline-only delivery.
+- **Shared semantic validator** (`internal/sqlintelligence`): validates the
+  unsaved document against the canonical schema with the embedded Polyglot
+  WASM runtime. Type-check calls the same validator for rendered SQL. Strict
+  identifier, expression-type, and reference checks are enabled; declared
+  column constraints are sent in the schema payload. Unknown schema confidence
+  suppresses only findings that depend on that relation. Heuristic join-quality
+  warnings remain lint-policy candidates rather than default type errors.
 - **Engine** (`analyzer.go`): stateless over an immutable graph plus an
-  in-memory index (`NewEngine` builds name→asset/relation/columns maps; cheap,
-  ~1 ms for 500 assets). Each request analyzes the open document's SQL with
-  regexes — no persisted AST, no incremental state. Features: diagnostics,
-  completion, definition, hover, references, rename, quick-fix code actions,
-  semantic tokens, document symbols, signature help.
-- **Syntax validation** is delegated to the optional polyglot FFI library
-  (`polyglot_ffi.go`, downloaded to a version-keyed cache or pointed at via
-  `POLYGLOT_SQL_FFI_PATH`). When absent, diagnostics degrade to the regex
-  checks (unresolved relation/alias/column); nothing else changes.
+  in-memory index. Its tolerant analyzer remains the fallback when semantic
+  validation cannot run and supplies additive LSP policy checks such as
+  circular and cross-connection references. Overlapping findings deduplicate
+  by stable code and range.
+- **Native Polyglot FFI** (`polyglot_ffi.go`) is an optional syntax fallback;
+  it is not required for schema-aware diagnostics or offline operation.
 - **Templates**: `{{ ref(...) }}` / `{{ source(...) }}` calls are rendered
   length-aware with a source map (`render.go`); diagnostics and tokens map
   back to template ranges. Rename refuses templated documents with
@@ -51,7 +60,8 @@ stdio JSON-RPC server        web service (internal/web/service/sql_lsp.go)
 coordinator's `WorkspaceState` rather than the filesystem:
 
 - Every pipeline asset becomes an asset node + relation; declared
-  `model.Column`s become a `declared` schema layer.
+  `model.Column`s become a `declared` schema layer, including nullable,
+  primary-key, and foreign-key metadata.
 - Bruin query sensors are SQL documents even though their definition path ends
   in `.asset.yml`: the adapter projects `parameters.query`, assigns the dialect
   from the sensor provider, and includes that projected document in workspace
@@ -60,9 +70,18 @@ coordinator's `WorkspaceState` rather than the filesystem:
   every mutation). Editing issues LSP requests per keystroke against the same
   saved state, so rebuilding per request was wasted work. `Revision == 0`
   (unmanaged/initial state) is never cached.
-- The polyglot client is shared and loaded lazily in the background
-  (`NewLazyPolyglotClient`); requests never block on it and pick it up as
-  soon as it is ready.
+- Asset/header rules shared with type-check (dependency existence,
+  materialization metadata, missing output declarations, render failures, and
+  resilient asset-parse failures) run once per `(revision, pipeline)` through
+  `CheckPipelineAssetFindings`. This pass does not rerun semantic SQL. Only the
+  requested asset's findings are merged into its editor result, at the
+  document header when no honest metadata range exists.
+- Per-edit diagnostics always validate the current unsaved content against the
+  saved revision snapshot. The browser aborts superseded requests and checks
+  the Monaco model version and content before installing markers, so response
+  N cannot overwrite markers for N+1.
+- The optional native Polyglot client is shared and loaded lazily; requests
+  never wait for a native download before publishing embedded-WASM results.
 
 ## 3. Notebook cells
 
@@ -92,7 +111,10 @@ cannot be polluted by unrelated workspace columns.
 The Build ad-hoc editor also uses this LSP path (with its selected asset as the
 dialect and scope identity) instead of enabling the older global parse-context
 completion provider, so asset, query-sensor, and ad-hoc SQL agree on derived
-query semantics.
+query semantics. It marks requests as an ad-hoc document: the selected asset is
+still borrowed for dialect and graph context, but asset/header diagnostics are
+not attached and a reference to that selected asset is not treated as the
+asset circularly referencing itself.
 
 Python assets and Python notebook cells project static SQL passed as the first
 argument to `query("...")` or `renart.query("...")` through
@@ -118,32 +140,61 @@ columns, which are intentionally ephemeral and therefore absent from
 `WorkspaceState`. LSP suggestions win when both sources describe the same
 item. Arbitrary Python output consequently gains column completion after that
 cell has run, without moving runtime state into the canonical graph.
+Completion is also triggered at SQL separators inside the string (including a
+space after `SELECT *,`) so an empty column prefix offers the same schema-aware
+list as typing its first letter.
 
 The adapter also projects Monaco's SQL lexical tokens into decorations inside
 the Python string, then overlays LSP semantic relation tokens when they arrive.
 This keeps SQL syntax highlighting immediate for both closed strings and the
 unfinished plain literals produced while a user is typing.
 
-## 4. Column inference: fixpoint
+## 4. Shared schema inference: AST first, tolerant fallback
 
-SQL assets that declare no columns get an `inferred` schema layer so
-completion and column validation work against them. Inference reads the
-asset's SQL (`InferOutputColumns`): named projections directly, `select *` /
-`alias.*` by copying the referenced relation's columns *from the engine's
-index*. That makes inference self-referential — a `select *` asset needs its
-upstream's columns, which may themselves be inferred.
+`InferSchemaSnapshot` is the one output-schema pipeline used by type-check and
+both LSP graph adapters. Declared/provider columns are applied first. For an
+undeclared SQL relation, Polyglot AST/type annotation is the fast path for
+explicit projections. If projection names are incomplete (most importantly,
+`SELECT *`), a bounded compact-analysis cache keyed by SQL, normalized dialect,
+and deterministic schema payload supplies scope-aware expansion through joins
+and CTEs. The tolerant Go projection analyzer is the final fallback for
+incomplete or unsupported SQL. Every schema layer records completeness and
+confidence explicitly; a partial layer contributes known columns but does not
+make the relation's full schema authoritative for unresolved-column checks.
 
-`withInferredColumns` therefore runs a **topologically ordered fixpoint**
-(capped at `maxInferenceRounds = 5`):
+Declared SQL schemas are also an output contract. On the final executable
+query, the shared validator infers the projection with Polyglot. When every
+output name is explicit, it compares the declared and inferred name sets and
+emits `declared-output-schema-drift` for missing or undeclared columns; name-only
+declarations participate in this check. The annotated AST remains the fast
+path. Compact analysis runs only when names are incomplete, a declared type has
+no fast-path inferred type, or the asset declares a `nullable: false` contract.
+It fills transitive types through nested CTEs and can expand stars when every
+physical source has a complete schema. `SELECT *` name-set comparisons over a
+partial graph schema stay silent.
 
-1. Order the undeclared assets upstream-first (`topoOrderInferenceTargets`,
+Same-name columns are compared by type. Polyglot's standalone data-type parser
+canonicalizes dialect spellings (`INT`/`INTEGER`, `TEXT`/`VARCHAR`,
+`NUMERIC`/`DECIMAL`, timestamp timezone spellings, and parameterized types), so
+only meaningful differences produce `declared-column-type-drift` warnings.
+Compact analysis also carries schema nullability through expressions, CTEs,
+and outer joins. If a projection is provably nullable while its declared
+contract is `nullable: false`, the validator emits
+`declared-column-nullability-drift`. Unknown nullability and the safe inverse
+(a non-null expression written to a nullable column) stay silent. All drift
+checks run against the current unsaved LSP document as well as rendered
+type-check SQL; because declaration metadata has no honest SQL token range,
+the warnings are asset-scoped at the document header.
+
+Inference runs a **topologically ordered fixpoint** (capped at five rounds):
+
+1. Order the undeclared assets upstream-first (`topoOrderInferenceAssets`,
    Kahn's algorithm over the declared upstreams; cyclic leftovers keep their
    original order).
-2. Infer each asset against the current graph, applying every result to the
-   engine's index **immediately** (`Engine.SetRelationColumns`), so later
-   assets in the same round see it.
-3. If any asset's inferred column set changed, rebuild the schema layers
-   (base + one `inferred` layer per asset) and repeat.
+2. Infer each asset against the current graph, applying every result and its
+   completeness immediately so later assets in the same round see it.
+3. If any result changed, rebuild `inferred-ast` / `inferred-tolerant` layers
+   and repeat.
 4. Stop when a round changes nothing or the cap is hit.
 
 Derived-table inference is deliberately syntax-tolerant. Parenthesized
@@ -162,16 +213,16 @@ correctness net for when the edges lie.
 Design notes, in decreasing order of importance:
 
 - **The edges are cheap and reliable**: pipeline `depends:` is auto-reconciled
-  on every asset save (`reconcileSQLAssetDependencies` parses the SQL with the
-  bruin sqlparser and persists the result; async retry while mid-edit SQL
-  doesn't parse), and notebook cell upstreams are derived at load time by the
-  same used-tables scan (in memory only — cell files are never rewritten).
+  on every asset save (`reconcileSQLAssetDependencies` uses the shared embedded
+  Polyglot WASM table scan and persists the result; async retry while mid-edit
+  SQL doesn't parse), and notebook cell upstreams are derived at load time by
+  the same used-tables policy (in memory only — cell files are never rewritten).
   Both arrive in `model.Asset.Upstreams`, name-keyed like the graph's
   relations, so ordering needs no extra SQL parsing. This is why topo ordering
   is worth having *inside* the fixpoint but not as a replacement: on its own
   it would inherit every staleness window of those edges.
-- **Every round re-infers all undeclared assets**, not just the still-empty
-  ones: partial results can grow (`select a.x, * from …` yields `x` before
+- **Every round re-infers all undeclared assets**, not just still-empty ones:
+  partial results can grow (`select a.x, * from …` yields `x` before
   the `*` resolves).
 - **Determinism**: the result is the least fixpoint, independent of asset
   iteration order — ordering affects how fast it converges, never what it
@@ -184,18 +235,17 @@ Design notes, in decreasing order of importance:
   chain is deeper than the cap do columns go missing. An empty column set
   suppresses unknown-column diagnostics, so the worst case is "no
   completions", never false errors.
-- **Cost placement**: for pipeline assets the fixpoint runs inside the
-  revision-cached graph build (once per workspace save; ~50 ms per round per
-  500 assets, and DAGs now take two rounds). For notebooks it runs in the
-  per-request augmentation, over that notebook's cells only (a few ms).
+- **Cost placement**: pipeline inference runs in the revision-cached graph
+  build. Notebook augmentation runs over that notebook's cells only.
 
 ## 5. stdio server
 
-`renart debug sql-lsp` (`cmd/sqllsp.go`) loads the graph from the workspace folder
-(`LoadGraphFromDir` understands bruin pipelines and dbt projects incl.
-`schema.yml`), serves LSP over stdio, and reloads the graph on
-`workspace/didChangeWatchedFiles`. A missing graph degrades to syntax-only
-analysis. Message size is capped at 64 MiB (`maxMessageBytes`).
+`renart debug sql-lsp` (`cmd/sqllsp.go`) uses `LoadSQLLSPGraph`: the canonical
+filesystem loader indexes Bruin and dbt projects, then the Bruin adapter adds
+the same cached-style asset/header findings used by the web service. The
+configured loader is reused on `workspace/didChangeWatchedFiles`, so reloads do
+not silently lose metadata diagnostics. A missing graph degrades to local
+syntax/tolerant analysis. Message size is capped at 64 MiB.
 
 ## 6. Completion & diagnostic surface (web editor)
 
@@ -220,15 +270,45 @@ to `parameters.query`, never to the raw YAML content.
   not yet completed from the LSP — see `plans/remote-table-intellisense.md`.
 - **Diagnostics**: unresolved relation / alias / column (column checks only fire
   when the relation's columns are known from asset SQL or declared metadata),
+  ambiguous unqualified columns in multi-relation scopes, Polyglot expression
+  type incompatibilities, declared-versus-inferred output name, type, and
+  unsafe nullability drift warnings,
   **circular self-reference** (a used relation that resolves to the current
   asset), **cross-connection asset references** (warning when both assets have
-  known, different effective connection names), rendered-template diagnostics,
-  and polyglot syntax errors. Pipeline type-check calls the same
-  `Engine.CrossConnectionDiagnostics` path, so Monaco and whole-pipeline reports
-  cannot drift on this rule. Column-not-
-  materialized warnings and inspect-error markers are intentionally not surfaced
-  in this editor.
+  known, different effective connection names), template-projected diagnostics,
+  and parser syntax errors. Qualified and unqualified column resolution comes
+  from the same semantic validator as pipeline type-check. Saved asset/header
+  findings are merged without manufacturing SQL-token ranges. Static Python
+  `query()` dependency declarations are delivered by the Python editor adapter,
+  which owns the correct host-language range. Inspect-error markers remain a
+  separate execution concern.
 - **Monaco gotcha**: the completion registry is shared across languages, so the
   python/yaml completion providers must register once (keyed on `asset?.id`,
   live state via a ref) — re-registering them on a workspace/SSE update
   re-triggers any open SQL suggestion widget and drops its selection.
+
+## 7. Embedded Polyglot runtime lifetime
+
+The semantic core and formatter use the exact WASM artifact shipped by
+`@polyglot-sql/sdk` 0.6.2. `web/scripts/sync-polyglot-wasm.mjs --check` fails CI
+when the checked-in artifact differs from the pinned package, and a runtime
+test verifies the module's exported version.
+
+Schema validation enables Polyglot's opt-in expression type checks. Syntax
+diagnostics consume the structured byte offsets returned by the WASM response;
+the older line/column text parser remains only as compatibility fallback.
+Standalone data-type parses are cached by dialect and normalized type text so
+live drift checks do not repeatedly cross the WASM boundary for common types.
+Compact query analysis is likewise cached by SQL, normalized dialect, and the
+deterministic schema-plus-constraint payload. It is not added to ordinary
+explicit-projection edits unless the faster inference is missing a fact needed
+by a declared output contract.
+
+Wazero uses the optimizing compiler plus an on-disk compilation cache, with an
+interpreter only as a cold-start bridge. Module instances live in a bounded
+channel pool (at most four), each has a 256 MiB hard memory limit, and an
+instance is discarded only if a call leaves more than 16 MiB of extra linear
+memory retained. Healthy modules are reused indefinitely instead of being
+re-created after a call count. Cancellation closes an executing module; closed
+modules are never returned to the pool. The interpreter is retired once the
+compiled engine is ready.

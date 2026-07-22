@@ -12,7 +12,7 @@ import (
 	"sync"
 
 	polyglot "github.com/tobilg/polyglot/packages/go"
-	"renart/internal/web/sqlformat"
+	"renart/internal/sqlformat"
 )
 
 type Server struct {
@@ -24,7 +24,10 @@ type Server struct {
 	graph         CanonicalGraph
 	poly          *polyglot.Client
 	workspaceRoot string
+	graphLoader   WorkspaceGraphLoader
 }
+
+type WorkspaceGraphLoader func(context.Context, string) (CanonicalGraph, error)
 
 func NewServer(graph CanonicalGraph, poly *polyglot.Client) *Server {
 	return &Server{
@@ -36,8 +39,13 @@ func NewServer(graph CanonicalGraph, poly *polyglot.Client) *Server {
 }
 
 func NewWorkspaceServer(workspaceRoot string, graph CanonicalGraph, poly *polyglot.Client) *Server {
+	return NewWorkspaceServerWithLoader(workspaceRoot, graph, poly, LoadGraphFromDir)
+}
+
+func NewWorkspaceServerWithLoader(workspaceRoot string, graph CanonicalGraph, poly *polyglot.Client, loader WorkspaceGraphLoader) *Server {
 	server := NewServer(graph, poly)
 	server.workspaceRoot = workspaceRoot
+	server.graphLoader = loader
 	return server
 }
 
@@ -59,7 +67,7 @@ func (s *Server) Serve(ctx context.Context, in io.Reader, out io.Writer) error {
 		if len(payload) == 0 {
 			continue
 		}
-		response, notify, err := s.handle(payload)
+		response, notify, err := s.handleContext(ctx, payload)
 		if err != nil {
 			return err
 		}
@@ -91,6 +99,10 @@ type rpcError struct {
 }
 
 func (s *Server) handle(payload []byte) ([]byte, [][]byte, error) {
+	return s.handleContext(context.Background(), payload)
+}
+
+func (s *Server) handleContext(ctx context.Context, payload []byte) ([]byte, [][]byte, error) {
 	var msg rpcMessage
 	if err := json.Unmarshal(payload, &msg); err != nil {
 		return nil, nil, err
@@ -138,7 +150,7 @@ func (s *Server) handle(payload []byte) ([]byte, [][]byte, error) {
 			return nil, nil, err
 		}
 		s.setDocument(doc.TextDocument)
-		return nil, s.publishDiagnostics(doc.TextDocument.URI), nil
+		return nil, s.publishDiagnosticsContext(ctx, doc.TextDocument.URI), nil
 	case "textDocument/didChange":
 		change := didChangeDocument{}
 		if err := json.Unmarshal(msg.Params, &change); err != nil {
@@ -147,13 +159,13 @@ func (s *Server) handle(payload []byte) ([]byte, [][]byte, error) {
 		if len(change.ContentChanges) > 0 {
 			doc := TextDocumentItem{URI: change.TextDocument.URI, Version: change.TextDocument.Version, Text: change.ContentChanges[len(change.ContentChanges)-1].Text}
 			s.setDocument(doc)
-			return nil, s.publishDiagnostics(doc.URI), nil
+			return nil, s.publishDiagnosticsContext(ctx, doc.URI), nil
 		}
 	case "workspace/didChangeWatchedFiles":
-		if err := s.reloadWorkspaceGraph(); err != nil {
+		if err := s.reloadWorkspaceGraphContext(ctx); err != nil {
 			return nil, s.windowLog("warning", "renart sql-lsp: reload workspace graph failed: "+err.Error()), nil
 		}
-		return nil, s.publishAllDiagnostics(), nil
+		return nil, s.publishAllDiagnosticsContext(ctx), nil
 	case "textDocument/completion":
 		var params positionedDocument
 		if err := json.Unmarshal(msg.Params, &params); err != nil {
@@ -284,10 +296,18 @@ func (s *Server) currentEngine() *Engine {
 }
 
 func (s *Server) reloadWorkspaceGraph() error {
+	return s.reloadWorkspaceGraphContext(context.Background())
+}
+
+func (s *Server) reloadWorkspaceGraphContext(ctx context.Context) error {
 	if strings.TrimSpace(s.workspaceRoot) == "" {
 		return nil
 	}
-	graph, err := LoadGraphFromDir(context.Background(), s.workspaceRoot)
+	loader := s.graphLoader
+	if loader == nil {
+		loader = LoadGraphFromDir
+	}
+	graph, err := loader(ctx, s.workspaceRoot)
 	if err != nil {
 		return err
 	}
@@ -322,6 +342,10 @@ func (s *Server) allDocuments() []TextDocumentItem {
 }
 
 func (s *Server) publishDiagnostics(uri URI) [][]byte {
+	return s.publishDiagnosticsContext(context.Background(), uri)
+}
+
+func (s *Server) publishDiagnosticsContext(ctx context.Context, uri URI) [][]byte {
 	doc, ok := s.document(uri)
 	if !ok {
 		return nil
@@ -336,7 +360,7 @@ func (s *Server) publishDiagnostics(uri URI) [][]byte {
 		Method:  "textDocument/publishDiagnostics",
 		Params: map[string]any{
 			"uri":         uri,
-			"diagnostics": engine.Diagnostics(doc),
+			"diagnostics": engine.DiagnosticsContext(ctx, doc),
 		},
 	}
 	payload, _ := json.Marshal(msg)
@@ -344,6 +368,10 @@ func (s *Server) publishDiagnostics(uri URI) [][]byte {
 }
 
 func (s *Server) publishAllDiagnostics() [][]byte {
+	return s.publishAllDiagnosticsContext(context.Background())
+}
+
+func (s *Server) publishAllDiagnosticsContext(ctx context.Context) [][]byte {
 	s.mu.RLock()
 	uris := make([]URI, 0, len(s.docs))
 	for uri := range s.docs {
@@ -352,7 +380,7 @@ func (s *Server) publishAllDiagnostics() [][]byte {
 	s.mu.RUnlock()
 	var payloads [][]byte
 	for _, uri := range uris {
-		payloads = append(payloads, s.publishDiagnostics(uri)...)
+		payloads = append(payloads, s.publishDiagnosticsContext(ctx, uri)...)
 	}
 	return payloads
 }

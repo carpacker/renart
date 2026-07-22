@@ -8,8 +8,8 @@ import (
 
 	"github.com/urfave/cli/v3"
 
+	"renart/internal/sqlformat"
 	"renart/internal/web/pyintelligence"
-	"renart/internal/web/sqlformat"
 )
 
 // WarmCache compiles the embedded WASM modules (the polyglot SQL formatter and

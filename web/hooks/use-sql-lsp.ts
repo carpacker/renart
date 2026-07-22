@@ -48,7 +48,10 @@ export function useSQLLSP(
   // Notebook cells resolve to sibling cells too; those have no pipeline, so
   // navigation goes through this callback (scroll/focus the cell card).
   onGoToCell?: (cellId: string) => void,
-  options?: { includeNotebookRuntimeColumns?: boolean },
+  options?: {
+    includeNotebookRuntimeColumns?: boolean;
+    documentContext?: "asset" | "adhoc";
+  },
 ) {
   const workspace = useAtomValue(workspaceAtom);
   const selectedEnvironment = useAtomValue(selectedEnvironmentAtom);
@@ -58,6 +61,7 @@ export function useSQLLSP(
   const connectionName =
     asset && workspace ? resolveConnection(asset, workspace.connections ?? {}) : null;
   const includeNotebookRuntimeColumns = options?.includeNotebookRuntimeColumns ?? false;
+  const documentContext = options?.documentContext ?? "asset";
 
   // The Monaco providers below are registered once per (editor, asset) and read
   // their live inputs through this ref. Keeping them off the effect's dependency
@@ -573,14 +577,26 @@ export function useSQLLSP(
     if (!model) {
       return;
     }
-    let cancelled = false;
+    const controller = new AbortController();
     const timer = window.setTimeout(async () => {
+      const requestVersion = model.getVersionId();
+      const requestContent = model.getValue();
       try {
-        const response = await getSQLLSPDiagnostics({
-          asset_id: asset.id,
-          content: model.getValue(),
-        });
-        if (cancelled) {
+        const response = await getSQLLSPDiagnostics(
+          {
+            asset_id: asset.id,
+            content: requestContent,
+            document_context: documentContext,
+          },
+          controller.signal,
+        );
+        if (
+          controller.signal.aborted ||
+          model.isDisposed() ||
+          editor.getModel() !== model ||
+          model.getVersionId() !== requestVersion ||
+          model.getValue() !== requestContent
+        ) {
           return;
         }
         monaco.editor.setModelMarkers(
@@ -604,10 +620,10 @@ export function useSQLLSP(
     }, 250);
 
     return () => {
-      cancelled = true;
+      controller.abort();
       window.clearTimeout(timer);
     };
-  }, [asset, editor, monaco, sqlContent]);
+  }, [asset, documentContext, editor, monaco, sqlContent]);
 }
 
 function isSQLAsset(asset: WebAsset) {

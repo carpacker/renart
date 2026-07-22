@@ -90,8 +90,8 @@ importers:
         specifier: ^1.61.1
         version: 1.61.1
       '@polyglot-sql/sdk':
-        specifier: 0.5.15
-        version: 0.5.15
+        specifier: 0.6.2
+        version: 0.6.2
       '@tailwindcss/postcss':
         specifier: ^4.3.2
         version: 4.3.2
@@ -644,8 +644,8 @@ packages:
     engines: {node: '>=18'}
     hasBin: true
 
-  '@polyglot-sql/sdk@0.5.15':
-    resolution: {integrity: sha512-vPT7D3J9UkVESUXwlHqOUOiPGh+r7u4Mv9zA7CbVrLc/HY1N08YDrGeq8N4ONVIFrjwSbGlTLNGivJ1wonS53Q==}
+  '@polyglot-sql/sdk@0.6.2':
+    resolution: {integrity: sha512-2xpdEMlREkw5B2XX4+tE7GaneI3i/Pc/2+T6RkZfMJUo3NVuuwvTfVIfy/7seI0xC3vcAJht58oQjG8g945oqw==}
     engines: {node: '>=22', pnpm: '>=10'}
 
   '@radix-ui/number@1.1.2':
@@ -4311,7 +4311,7 @@ snapshots:
     dependencies:
       playwright: 1.61.1
 
-  '@polyglot-sql/sdk@0.5.15': {}
+  '@polyglot-sql/sdk@0.6.2': {}
 
   '@radix-ui/number@1.1.2': {}
 

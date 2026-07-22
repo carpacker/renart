@@ -201,21 +201,39 @@ export function usePythonQueryIntellisense(
     if (!model) {
       return;
     }
-    let cancelled = false;
+    const controller = new AbortController();
     const timer = window.setTimeout(() => {
-      const literals = findPythonQueryLiterals(model.getValue());
+      const requestVersion = model.getVersionId();
+      const requestContent = model.getValue();
+      const literals = findPythonQueryLiterals(requestContent);
       if (literals.length === 0) {
-        monaco.editor.setModelMarkers(model, PYTHON_QUERY_SQL_MARKER_OWNER, []);
+        if (
+          !controller.signal.aborted &&
+          !model.isDisposed() &&
+          editor.getModel() === model &&
+          model.getVersionId() === requestVersion
+        ) {
+          monaco.editor.setModelMarkers(model, PYTHON_QUERY_SQL_MARKER_OWNER, []);
+        }
         return;
       }
       void Promise.all(
         literals.map(async (literal) => ({
           literal,
-          response: await getSQLLSPDiagnostics(sqlLSPRequestForLiteral(asset.id, literal)),
+          response: await getSQLLSPDiagnostics(
+            sqlLSPRequestForLiteral(asset.id, literal),
+            controller.signal,
+          ),
         })),
       )
         .then((results) => {
-          if (cancelled) {
+          if (
+            controller.signal.aborted ||
+            model.isDisposed() ||
+            editor.getModel() !== model ||
+            model.getVersionId() !== requestVersion ||
+            model.getValue() !== requestContent
+          ) {
             return;
           }
           monaco.editor.setModelMarkers(
@@ -242,7 +260,7 @@ export function usePythonQueryIntellisense(
     }, 250);
 
     return () => {
-      cancelled = true;
+      controller.abort();
       window.clearTimeout(timer);
     };
   }, [asset?.id, content, editor, isPythonAsset, monaco]);
@@ -273,7 +291,10 @@ function registerPythonQueryProviders(monaco: typeof MonacoNS): MonacoNS.IDispos
     pythonQueryEntries.get(model.uri.toString())?.current ?? null;
 
   const completion = monaco.languages.registerCompletionItemProvider("python", {
-    triggerCharacters: ["."],
+    // Python tokenizes the whole query literal as a string. Trigger after the
+    // SQL separators that commonly start a new projection expression so users
+    // see columns at `select *, |` without guessing the first letter.
+    triggerCharacters: [".", ",", " "],
     async provideCompletionItems(model, position, _context, token) {
       const state = resolveState(model);
       const projected = projectPosition(model, position);
@@ -541,6 +562,7 @@ function completionToMonaco(
   item: SQLLSPCompletionItem,
   range: MonacoNS.IRange,
 ): MonacoNS.languages.CompletionItem {
+  const sortGroup = item.kind === 5 ? "0" : item.kind === 18 ? "4" : "8";
   return {
     label: item.label,
     kind:
@@ -553,7 +575,11 @@ function completionToMonaco(
     documentation: item.documentation ? { value: item.documentation } : undefined,
     insertText: item.insertText || item.label,
     range,
-    sortText: item.sortText ? `sql-${item.sortText}` : `sql-${item.label}`,
+    // Local SQL suggestions use numeric groups (columns first, then tables,
+    // then keywords). Keep LSP results in that same ordering scheme so an
+    // empty-prefix column is visible instead of landing below the complete
+    // asset/keyword catalogue in Monaco's virtualized list.
+    sortText: `${sortGroup}-sql-${item.sortText || item.label}`,
   };
 }
 

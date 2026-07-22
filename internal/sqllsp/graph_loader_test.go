@@ -49,6 +49,46 @@ from analytics.orders o`)
 	}
 }
 
+func TestLoadGraphFromDirPreservesBruinColumnConstraints(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, root, "analytics/pipeline.yml", "name: analytics\n")
+	writeFile(t, root, "analytics/assets/users.sql", `/* @bruin
+name: analytics.users
+type: duckdb.sql
+columns:
+  - name: id
+    type: integer
+    nullable: false
+    primary_key: true
+@bruin */
+select 1 as id`)
+	writeFile(t, root, "analytics/assets/orders.sql", `/* @bruin
+name: analytics.orders
+type: duckdb.sql
+columns:
+  - name: user_id
+    type: integer
+    foreign_key:
+      table: analytics.users
+      column: id
+@bruin */
+select 1 as user_id`)
+
+	graph, err := LoadGraphFromDir(context.Background(), root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	constraints := ValidationSchemaConstraints(graph)
+	users := constraints["analytics.users"].Columns["id"]
+	if users.Nullable == nil || *users.Nullable || !users.PrimaryKey {
+		t.Fatalf("user constraints were not preserved: %#v", users)
+	}
+	orders := constraints["analytics.orders"].Columns["user_id"]
+	if orders.ForeignKey == nil || orders.ForeignKey.Table != "analytics.users" || orders.ForeignKey.Column != "id" {
+		t.Fatalf("foreign key was not preserved: %#v", orders)
+	}
+}
+
 func TestLoadGraphFromDirDBTDemo(t *testing.T) {
 	root := t.TempDir()
 	writeFile(t, root, "dbt_project.yml", "name: demo\nversion: '1.0'\n")

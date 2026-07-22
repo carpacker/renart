@@ -115,6 +115,49 @@ test.describe("app scheduler pages live", () => {
     await expect(page.getByText("Loading run details", { exact: true })).toHaveCount(0);
   });
 
+  test("uses millisecond timeline ticks for sub-second runs", async ({ liveApp, page }) => {
+    const run = {
+      id: "sub-second-run",
+      pipeline_id: analyticsPipelineId,
+      pipeline: "analytics",
+      environment: "default",
+      trigger: "manual",
+      status: "success",
+      started_at: "2026-07-22T08:00:00.000Z",
+      finished_at: "2026-07-22T08:00:00.900Z",
+      execution_context_resolved: true,
+    };
+    await page.route("**/api/runs/sub-second-run", async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          status: "ok",
+          run,
+          logs: [],
+          steps: [
+            {
+              run_id: run.id,
+              asset: "analytics.fast_asset",
+              status: "success",
+              started_at: run.started_at,
+              finished_at: run.finished_at,
+            },
+          ],
+        }),
+      });
+    });
+
+    await page.goto(`${liveApp.baseURL}/runs/${run.id}`);
+    await expect(page.getByTestId("run-timeline-axis").locator(":scope > div")).toHaveText([
+      "0ms",
+      "250ms",
+      "500ms",
+      "750ms",
+      "1000ms",
+    ]);
+  });
+
   test("renders follower ownership as read-only", async ({ liveApp, page }) => {
     await page.route("**/api/env-schedules", async (route) => {
       if (route.request().method() !== "GET") {

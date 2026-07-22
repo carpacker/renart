@@ -8,7 +8,7 @@ builds:
       - CC=/root/.cache/renart/zig/0.15.2/zig cc -target x86_64-linux-gnu.2.31
       - CXX=/root/.cache/renart/zig/0.15.2/zig c++ -target x86_64-linux-gnu.2.31
       - CGO_ENABLED=1
-      - CGO_LDFLAGS=-L/root/.cache/renart/rustsqlparser/target/x86_64-unknown-linux-gnu/release
+      - CGO_LDFLAGS=-L/root/.cache/renart/bruin-sqlparser-stub/linux-amd64/release
     flags:
       - -trimpath
       - -tags=no_duckdb_arrow
@@ -20,7 +20,7 @@ builds:
       - amd64
     hooks:
       pre:
-        - cmd: ./scripts/build_rustsqlparser_release_lib.sh x86_64-unknown-linux-gnu
+        - cmd: ./scripts/build_bruin_sqlparser_stub.sh linux-amd64
 
   - id: renart-duckdb-linux-arm64
     binary: renart
@@ -29,7 +29,7 @@ builds:
       - CC=/root/.cache/renart/zig/0.15.2/zig cc -target aarch64-linux-gnu.2.31
       - CXX=/root/.cache/renart/zig/0.15.2/zig c++ -target aarch64-linux-gnu.2.31
       - CGO_ENABLED=1
-      - CGO_LDFLAGS=-L/root/.cache/renart/rustsqlparser/target/aarch64-unknown-linux-gnu/release
+      - CGO_LDFLAGS=-L/root/.cache/renart/bruin-sqlparser-stub/linux-arm64/release
     flags:
       - -trimpath
       - -tags=no_duckdb_arrow
@@ -41,7 +41,7 @@ builds:
       - arm64
     hooks:
       pre:
-        - cmd: ./scripts/build_rustsqlparser_release_lib.sh aarch64-unknown-linux-gnu
+        - cmd: ./scripts/build_bruin_sqlparser_stub.sh linux-arm64
 
   - id: renart-duckdb-darwin-amd64
     binary: renart
@@ -50,7 +50,7 @@ builds:
       - CC=o64-clang
       - CXX=o64-clang++
       - CGO_ENABLED=1
-      - CGO_LDFLAGS=-L/root/.cache/renart/rustsqlparser/target/x86_64-apple-darwin/release
+      - CGO_LDFLAGS=-L/root/.cache/renart/bruin-sqlparser-stub/darwin-amd64/release
       - MACOSX_DEPLOYMENT_TARGET=10.15
     flags:
       - -trimpath
@@ -63,7 +63,7 @@ builds:
       - amd64
     hooks:
       pre:
-        - cmd: ./scripts/build_rustsqlparser_release_lib.sh x86_64-apple-darwin
+        - cmd: ./scripts/build_bruin_sqlparser_stub.sh darwin-amd64
 
   - id: renart-duckdb-darwin-arm64
     binary: renart
@@ -72,7 +72,7 @@ builds:
       - CC=oa64-clang
       - CXX=oa64-clang++
       - CGO_ENABLED=1
-      - CGO_LDFLAGS=-L/root/.cache/renart/rustsqlparser/target/aarch64-apple-darwin/release
+      - CGO_LDFLAGS=-L/root/.cache/renart/bruin-sqlparser-stub/darwin-arm64/release
       - MACOSX_DEPLOYMENT_TARGET=10.15
     flags:
       - -trimpath
@@ -85,7 +85,7 @@ builds:
       - arm64
     hooks:
       pre:
-        - cmd: ./scripts/build_rustsqlparser_release_lib.sh aarch64-apple-darwin
+        - cmd: ./scripts/build_bruin_sqlparser_stub.sh darwin-arm64
 
   - id: renart-duckdb-windows-amd64
     binary: renart
@@ -94,7 +94,7 @@ builds:
       - CC=x86_64-w64-mingw32-gcc
       - CXX=x86_64-w64-mingw32-g++
       - CGO_ENABLED=1
-      - CGO_LDFLAGS=-L/root/.cache/renart/rustsqlparser/target/x86_64-pc-windows-gnu/release -static-libgcc -static-libstdc++ -Wl,-Bstatic -lstdc++ -lwinpthread -Wl,-Bdynamic
+      - CGO_LDFLAGS=-static-libgcc -static-libstdc++ -Wl,-Bstatic -lstdc++ -lwinpthread -Wl,-Bdynamic
     flags:
       - -trimpath
       - -tags=no_duckdb_arrow
@@ -105,10 +105,6 @@ builds:
       - windows
     goarch:
       - amd64
-    hooks:
-      pre:
-        - cmd: ./scripts/build_rustsqlparser_release_lib.sh x86_64-pc-windows-gnu
-
 archives:
   - id: renart-duckdb-archives
     ids:

@@ -44,6 +44,13 @@ if [ ! -e "$WORKSPACE" ]; then
   exit 1
 fi
 
+# Bruin's sqlparser package still carries an unconditional native linker flag
+# on Linux and macOS. Renart does not call its Rust parser, but the tiny shim is
+# required until upstream offers a build tag that omits that link dependency.
+sqlparser_target="$("$GO" env GOOS)-$("$GO" env GOARCH)"
+sqlparser_libdir="$(./scripts/build_bruin_sqlparser_stub.sh "$sqlparser_target")"
+export CGO_LDFLAGS="-L${sqlparser_libdir} ${CGO_LDFLAGS:-}"
+
 # Locate air, installing it on first use if necessary.
 locate_air() {
   if command -v air >/dev/null 2>&1; then

@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	"renart/internal/web/sqlformat"
+	"renart/internal/sqlformat"
 
 	"github.com/bruin-data/bruin/pkg/ansisql"
 	"github.com/bruin-data/bruin/pkg/mssql"

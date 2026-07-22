@@ -414,6 +414,16 @@ test.describe("sql intellisense live", () => {
       })
       .toBe(1);
 
+    const editorBounds = await page.locator(".monaco-editor").first().boundingBox();
+    const tokenBounds = await upstreamToken.boundingBox();
+    expect(editorBounds).not.toBeNull();
+    expect(tokenBounds).not.toBeNull();
+    await page.mouse.move(
+      editorBounds!.x + editorBounds!.width - 8,
+      tokenBounds!.y + tokenBounds!.height / 2,
+    );
+    await expect(highlightedNode).toHaveCount(0);
+
     await page.getByRole("link", { name: "Build", exact: true }).first().hover();
     await expect(highlightedNode).toHaveCount(0);
   });
@@ -546,6 +556,127 @@ test.describe("sql intellisense live", () => {
       .toEqual(
         expect.arrayContaining([expect.stringContaining("Unresolved column: custmer_name")]),
       );
+  });
+
+  test("flags unqualified unresolved columns in Monaco", async ({ liveApp, page }) => {
+    test.skip(
+      test.info().project.name.includes("mobile"),
+      "Monaco diagnostics are only stable in the desktop editor.",
+    );
+
+    await openCustomersEditor(page, liveApp.baseURL);
+    await replaceEditorContentByInsertText(
+      page,
+      "select order_id, missing_order_column\nfrom analytics.orders",
+    );
+
+    await expect
+      .poll(async () => getEditorMarkers(page), { timeout: 15000 })
+      .toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            message: "Unresolved column: missing_order_column",
+            severity: 8,
+          }),
+        ]),
+      );
+  });
+
+  test("does not let stale diagnostic responses replace newer markers", async ({
+    liveApp,
+    page,
+  }) => {
+    test.skip(
+      test.info().project.name.includes("mobile"),
+      "Monaco diagnostics are only stable in the desktop editor.",
+    );
+
+    await openCustomersEditor(page, liveApp.baseURL);
+
+    let sawStaleRequest = false;
+    let releaseStaleResponse: () => void = () => {};
+    const staleGate = new Promise<void>((resolve) => {
+      releaseStaleResponse = resolve;
+    });
+    await page.route("**/api/sql/lsp/diagnostics", async (route) => {
+      const request = route.request().postDataJSON() as { content?: string };
+      const content = request.content ?? "";
+      if (content.includes("stale_missing_column")) {
+        sawStaleRequest = true;
+        await staleGate;
+        await route
+          .fulfill({
+            json: {
+              status: "ok",
+              diagnostics: [
+                {
+                  range: {
+                    start: { line: 0, character: 7 },
+                    end: { line: 0, character: 27 },
+                  },
+                  severity: 1,
+                  code: "unresolved-column",
+                  source: "polyglot",
+                  message: "Unresolved column: stale_missing_column",
+                },
+              ],
+            },
+          })
+          .catch(() => undefined);
+        return;
+      }
+      if (content.includes("current_missing_column")) {
+        await route.fulfill({
+          json: {
+            status: "ok",
+            diagnostics: [
+              {
+                range: {
+                  start: { line: 0, character: 7 },
+                  end: { line: 0, character: 29 },
+                },
+                severity: 1,
+                code: "unresolved-column",
+                source: "polyglot",
+                message: "Unresolved column: current_missing_column",
+              },
+            ],
+          },
+        });
+        return;
+      }
+      await route.continue();
+    });
+
+    await replaceEditorContentByInsertText(
+      page,
+      "select stale_missing_column\nfrom analytics.orders",
+    );
+    await expect.poll(() => sawStaleRequest, { timeout: 15000 }).toBe(true);
+
+    await replaceEditorContentByInsertText(
+      page,
+      "select current_missing_column\nfrom analytics.orders",
+    );
+    await expect
+      .poll(async () => getEditorMarkerMessages(page), { timeout: 15000 })
+      .toEqual(
+        expect.arrayContaining([
+          expect.stringContaining("Unresolved column: current_missing_column"),
+        ]),
+      );
+
+    releaseStaleResponse();
+    await page.waitForTimeout(500);
+    const messages = await getEditorMarkerMessages(page);
+    expect(messages).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining("Unresolved column: current_missing_column"),
+      ]),
+    );
+    expect(messages).not.toEqual(
+      expect.arrayContaining([expect.stringContaining("Unresolved column: stale_missing_column")]),
+    );
   });
 
   test("reports self references as circular dependencies", async ({ liveApp, page }) => {

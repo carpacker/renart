@@ -22,8 +22,8 @@ import (
 	"time"
 
 	"github.com/bruin-data/bruin/pkg/pipeline"
+	"renart/internal/sqlformat"
 	"renart/internal/web/identity"
-	"renart/internal/web/sqlformat"
 )
 
 // Version is the fingerprint algorithm version. It is baked into every hash

@@ -10,11 +10,11 @@ import (
 
 	"github.com/bruin-data/bruin/pkg/jinja"
 	"github.com/bruin-data/bruin/pkg/pipeline"
-	"github.com/bruin-data/bruin/pkg/sqlparser"
 	"github.com/spf13/afero"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"renart/internal/bruincompat"
 	"renart/internal/web/service/assetmeta"
 )
 
@@ -45,28 +45,12 @@ func (s *stubDependencyParser) Start() error {
 	return nil
 }
 
-func (s *stubDependencyParser) ColumnLineage(string, string, sqlparser.Schema) (*sqlparser.Lineage, error) {
-	return nil, nil
-}
-
 func (s *stubDependencyParser) UsedTables(string, string) ([]string, error) {
 	s.usedTablesCall++
 	if s.err != nil {
 		return nil, s.err
 	}
 	return append([]string(nil), s.usedTables...), nil
-}
-
-func (s *stubDependencyParser) RenameTables(string, string, map[string]string) (string, error) {
-	return "", nil
-}
-
-func (s *stubDependencyParser) AddLimit(string, int, string) (string, error) {
-	return "", nil
-}
-
-func (s *stubDependencyParser) IsSingleSelectQuery(string, string) (bool, error) {
-	return true, nil
 }
 
 func (s *stubDependencyParser) GetMissingDependenciesForAsset(*pipeline.Asset, *pipeline.Pipeline, jinja.RendererInterface) ([]string, error) {
@@ -186,8 +170,7 @@ func TestReconcileSQLAssetDependenciesRemovesOnlyTrackedInferred(t *testing.T) {
 		Assets: []*pipeline.Asset{asset, customers, manual},
 	}
 
-	parser, err := sqlparser.NewRustSQLParser(false)
-	require.NoError(t, err)
+	parser := bruincompat.NewDependencyParser(context.Background())
 	defer parser.Close()
 
 	renderer := jinja.NewRendererWithYesterday("analytics", "test-run")
@@ -530,7 +513,7 @@ select 1 as customer_id
 	resolveAssetByID := newAssetTestResolver(workspaceRoot).ResolveAssetByID
 	parser := &stubDependencyParser{missingDependencies: []string{"analytics.orders"}}
 	previousFactory := newDependencyParser
-	newDependencyParser = func() (sqlparser.Parser, error) { return parser, nil }
+	newDependencyParser = func(context.Context) (dependencyParser, error) { return parser, nil }
 	t.Cleanup(func() {
 		newDependencyParser = previousFactory
 	})
@@ -889,7 +872,7 @@ select 1 as customer_id
 	resolveAssetByID := newAssetTestResolver(workspaceRoot).ResolveAssetByID
 	parser := &stubDependencyParser{missingDependencies: []string{"analytics.orders"}}
 	previousFactory := newDependencyParser
-	newDependencyParser = func() (sqlparser.Parser, error) { return parser, nil }
+	newDependencyParser = func(context.Context) (dependencyParser, error) { return parser, nil }
 	t.Cleanup(func() {
 		newDependencyParser = previousFactory
 	})
@@ -935,8 +918,7 @@ func TestReconcileSQLAssetDependenciesResolvesSameSchemaUnqualifiedNames(t *test
 		Assets: []*pipeline.Asset{asset, orders},
 	}
 
-	parser, err := sqlparser.NewRustSQLParser(false)
-	require.NoError(t, err)
+	parser := bruincompat.NewDependencyParser(context.Background())
 	defer parser.Close()
 
 	renderer := jinja.NewRendererWithYesterday("analytics", "test-run")

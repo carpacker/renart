@@ -482,6 +482,10 @@ func PipelineColumnsToModelColumns(columns []pipeline.Column) []model.Column {
 				Description: check.Description,
 			})
 		}
+		var foreignKey *model.ColumnReference
+		if column.ForeignKey != nil {
+			foreignKey = &model.ColumnReference{Table: column.ForeignKey.Table, Column: column.ForeignKey.Column}
+		}
 
 		result = append(result, model.Column{
 			Name:          column.Name,
@@ -492,6 +496,7 @@ func PipelineColumnsToModelColumns(columns []pipeline.Column) []model.Column {
 			UpdateOnMerge: column.UpdateOnMerge,
 			MergeSQL:      column.MergeSQL,
 			Nullable:      nullable,
+			ForeignKey:    foreignKey,
 			Owner:         column.Owner,
 			Domains:       column.Domains,
 			Meta:          column.Meta,
@@ -514,6 +519,10 @@ func ModelColumnsToPipelineColumns(columns []model.Column) []pipeline.Column {
 				Description: check.Description,
 			})
 		}
+		var foreignKey *pipeline.ColumnReference
+		if column.ForeignKey != nil {
+			foreignKey = &pipeline.ColumnReference{Table: column.ForeignKey.Table, Column: column.ForeignKey.Column}
+		}
 
 		result = append(result, pipeline.Column{
 			Name:          column.Name,
@@ -524,6 +533,7 @@ func ModelColumnsToPipelineColumns(columns []model.Column) []pipeline.Column {
 			UpdateOnMerge: column.UpdateOnMerge,
 			MergeSQL:      column.MergeSQL,
 			Nullable:      pipeline.DefaultTrueBool{Value: column.Nullable},
+			ForeignKey:    foreignKey,
 			Owner:         column.Owner,
 			Domains:       column.Domains,
 			Meta:          column.Meta,

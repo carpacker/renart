@@ -44,17 +44,6 @@ const npmLicenseOverrides = new Map([
   ["victory-vendor", path.join(root, "third_party", "npm", "victory-vendor", "LICENSE")],
 ]);
 
-const allowedRustLicenseExpressions = new Set([
-  "(MIT OR Apache-2.0) AND Unicode-3.0",
-  "MIT",
-  "MIT OR Apache-2.0",
-  "Unlicense OR MIT",
-]);
-
-const rustLicenseOverrides = new Map([
-  ["polyglot-sql", [path.join(root, "third_party", "embedded", "polyglot", "LICENSE")]],
-]);
-
 const staticEmbeddedComponents = [
   {
     name: "shadcn/ui generated components",
@@ -69,8 +58,8 @@ const staticEmbeddedComponents = [
     files: [path.join(root, "third_party", "embedded", "ruff", "LICENSE")],
   },
   {
-    name: "Polyglot SQL formatter",
-    version: "v0.5.15",
+    name: "Polyglot SQL WASM engine",
+    version: "v0.6.2",
     source: "https://github.com/tobilg/polyglot",
     files: [path.join(root, "third_party", "embedded", "polyglot", "LICENSE")],
   },
@@ -168,52 +157,6 @@ function collectGoModules() {
     .sort((a, b) => a.name.localeCompare(b.name) || a.version.localeCompare(b.version));
 }
 
-function collectRustCrates() {
-  const bruin = goModuleDetails("github.com/bruin-data/bruin");
-  const manifest = path.join(bruin.directory, "pkg", "sqlparser", "rustffi", "Cargo.toml");
-  const toolchain = process.env.RENART_RUST_TOOLCHAIN || "1.96.0";
-  const metadata = JSON.parse(
-    run("rustup", [
-      "run",
-      toolchain,
-      "cargo",
-      "metadata",
-      "--locked",
-      "--format-version",
-      "1",
-      "--manifest-path",
-      manifest,
-    ]),
-  );
-  const resolved = new Set((metadata.resolve?.nodes || []).map((node) => node.id));
-
-  return metadata.packages
-    .filter((pkg) => pkg.source && resolved.has(pkg.id))
-    .map((pkg) => {
-      const expression = pkg.license || "unknown";
-      if (!allowedRustLicenseExpressions.has(expression)) {
-        throw new Error(
-          `Rust crate ${pkg.name}@${pkg.version} uses an unreviewed license expression: ${expression}`,
-        );
-      }
-      let files = findLicenseFiles(path.dirname(pkg.manifest_path));
-      if (files.length === 0 && rustLicenseOverrides.has(pkg.name)) {
-        files = rustLicenseOverrides.get(pkg.name);
-      }
-      if (!files || files.length === 0) {
-        throw new Error(`Rust crate ${pkg.name}@${pkg.version} has no license file or reviewed override`);
-      }
-      return {
-        name: pkg.name,
-        version: pkg.version,
-        expression,
-        source: pkg.repository || `https://crates.io/crates/${pkg.name}`,
-        licenses: files.map(registerLicense),
-      };
-    })
-    .sort((a, b) => a.name.localeCompare(b.name) || a.version.localeCompare(b.version));
-}
-
 function collectEmbeddedComponents() {
   const bruin = goModuleDetails("github.com/bruin-data/bruin");
   const embeddedPython = goModuleDetails("github.com/kluctl/go-embed-python");
@@ -278,7 +221,7 @@ function licenseLinks(files) {
   return [...new Set(files)].map((file) => `[license](${file})`).join(", ");
 }
 
-function renderNotices(goModules, rustCrates, webPackages, embeddedComponents) {
+function renderNotices(goModules, webPackages, embeddedComponents) {
   const lines = [
     "# Third-party notices",
     "",
@@ -297,12 +240,6 @@ function renderNotices(goModules, rustCrates, webPackages, embeddedComponents) {
   lines.push("", "## Go modules", "", "| Module | Version | License and notice texts |", "| --- | --- | --- |");
   for (const module of goModules) {
     lines.push(`| ${markdown(module.name)} | ${markdown(module.version)} | ${licenseLinks(module.licenses)} |`);
-  }
-  lines.push("", "## Rust crates", "", "| Crate | Version | Declared license | License texts |", "| --- | --- | --- | --- |");
-  for (const crate of rustCrates) {
-    lines.push(
-      `| [${markdown(crate.name)}](${crate.source}) | ${markdown(crate.version)} | ${markdown(crate.expression)} | ${licenseLinks(crate.licenses)} |`,
-    );
   }
   lines.push("", "## Web application packages", "", "| Package | Version | Declared license | License and notice texts |", "| --- | --- | --- | --- |");
   for (const pkg of webPackages) {
@@ -356,20 +293,19 @@ function write(files) {
 }
 
 const goModules = collectGoModules();
-const rustCrates = collectRustCrates();
 const webPackages = collectWebPackages();
 const embeddedComponents = collectEmbeddedComponents();
-const notices = renderNotices(goModules, rustCrates, webPackages, embeddedComponents);
+const notices = renderNotices(goModules, webPackages, embeddedComponents);
 const files = expectedFiles(notices);
 
 if (checkOnly) {
   verify(files);
   console.log(
-    `Third-party notices are current (${goModules.length} Go modules, ${rustCrates.length} Rust crates, ${webPackages.length} web packages).`,
+    `Third-party notices are current (${goModules.length} Go modules, ${webPackages.length} web packages).`,
   );
 } else {
   write(files);
   console.log(
-    `Generated third-party notices for ${goModules.length} Go modules, ${rustCrates.length} Rust crates, and ${webPackages.length} web packages.`,
+    `Generated third-party notices for ${goModules.length} Go modules and ${webPackages.length} web packages.`,
   );
 }

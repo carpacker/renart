@@ -51,6 +51,7 @@ func ReconcileColumns(in ColumnReconcileInput) (final []pipeline.Column, items [
 	dropSet := lowerSet(in.Prev.ColDrop)
 	addSet := lowerSet(in.Prev.ColAdd)
 	own := cloneOwn(in.Prev.ColOwn)
+	sources := cloneStringMapLower(in.Prev.ColSource)
 
 	emitted := make(map[string]struct{})
 	final = make([]pipeline.Column, 0, len(in.Current)+len(in.Inferred))
@@ -77,7 +78,7 @@ func ReconcileColumns(in ColumnReconcileInput) (final []pipeline.Column, items [
 			final = append(final, inferred)
 			continue
 		}
-		final = append(final, mergeColumn(current, inferred, own[name]))
+		final = append(final, mergeColumn(current, inferred, own[name], sources[name]))
 	}
 
 	// 2. Remaining current columns: manual, stale, or obsolete generated.
@@ -157,6 +158,19 @@ func ReconcileColumns(in ColumnReconcileInput) (final []pipeline.Column, items [
 		next.ColOwn = own
 	}
 
+	// Keep non-default source provenance only for columns still present. SQL /
+	// definition inference is the implicit default, so it never needs an entry.
+	for name := range sources {
+		if _, ok := presentNames[name]; !ok {
+			delete(sources, name)
+		}
+	}
+	if len(sources) == 0 {
+		next.ColSource = nil
+	} else {
+		next.ColSource = sources
+	}
+
 	next.SigCols = ColumnProjectionHash(managedNotDropped(managed, dropSet))
 	return final, items, next
 }
@@ -166,10 +180,11 @@ func ReconcileColumns(in ColumnReconcileInput) (final []pipeline.Column, items [
 // soft-generated field: inference owns it and may freely update it (e.g. a
 // schema change integer→bigint) unless the user has explicitly taken ownership
 // (c.own[col] contains "type"), in which case the user's type is preserved.
-func mergeColumn(current, inferred pipeline.Column, ownedFields []string) pipeline.Column {
+func mergeColumn(current, inferred pipeline.Column, ownedFields []string, source string) pipeline.Column {
 	merged := current
 	merged.Name = inferred.Name // canonical casing from inference
-	if !containsFold(ownedFields, ownTypeField) {
+	if !containsFold(ownedFields, ownTypeField) &&
+		!(strings.TrimSpace(source) != "" && strings.TrimSpace(current.Type) != "" && strings.TrimSpace(inferred.Type) == "") {
 		merged.Type = inferred.Type
 	}
 	return merged
@@ -248,6 +263,21 @@ func cloneOwn(own map[string][]string) map[string][]string {
 	out := make(map[string][]string, len(own))
 	for k, v := range own {
 		out[lowerName(k)] = append([]string(nil), v...)
+	}
+	return out
+}
+
+func cloneStringMapLower(values map[string]string) map[string]string {
+	if len(values) == 0 {
+		return make(map[string]string)
+	}
+	out := make(map[string]string, len(values))
+	for key, value := range values {
+		key = lowerName(key)
+		value = strings.TrimSpace(value)
+		if key != "" && value != "" {
+			out[key] = value
+		}
 	}
 	return out
 }

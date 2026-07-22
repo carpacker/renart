@@ -21,6 +21,7 @@ const sources = [
       "ColumnSchemaSyncResult",
       "ColumnSchemaResolution",
       "ColumnCheck",
+      "ColumnReference",
       "Column",
       "Asset",
       "Pipeline",
@@ -199,6 +200,8 @@ const sources = [
       "PipelineConfigVariable",
       "PipelineConfigResponse",
       "UpdatePipelineConfigRequest",
+      "PipelinePythonDependenciesResponse",
+      "UpdatePipelinePythonDependenciesRequest",
     ],
   },
 ];

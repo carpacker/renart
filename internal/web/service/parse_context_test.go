@@ -6,7 +6,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"renart/internal/web/sqlintelligence"
+	"renart/internal/sqlintelligence"
 
 	"github.com/bruin-data/bruin/pkg/pipeline"
 	"github.com/stretchr/testify/assert"

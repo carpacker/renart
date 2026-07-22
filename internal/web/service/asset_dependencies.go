@@ -9,21 +9,21 @@ import (
 
 	"github.com/bruin-data/bruin/pkg/jinja"
 	"github.com/bruin-data/bruin/pkg/pipeline"
-	"github.com/bruin-data/bruin/pkg/sqlparser"
 	"github.com/spf13/afero"
 
+	"renart/internal/bruincompat"
 	"renart/internal/web/service/assetmeta"
 )
 
-var newDependencyParser = func() (sqlparser.Parser, error) {
-	rustParser, err := sqlparser.NewRustSQLParser(false)
-	if err == nil {
-		if startErr := rustParser.Start(); startErr == nil {
-			return rustParser, nil
-		}
-	}
+type dependencyParser interface {
+	Start() error
+	UsedTables(query, dialect string) ([]string, error)
+	GetMissingDependenciesForAsset(asset *pipeline.Asset, pl *pipeline.Pipeline, renderer jinja.RendererInterface) ([]string, error)
+	Close() error
+}
 
-	return sqlparser.NewSQLParser(false)
+var newDependencyParser = func(ctx context.Context) (dependencyParser, error) {
+	return bruincompat.NewDependencyParser(ctx), nil
 }
 
 func (s *AssetService) RefactorDirectDependencies(ctx context.Context, parsedPipeline *pipeline.Pipeline, oldName, newName string) ([]string, []string, error) {
@@ -31,7 +31,7 @@ func (s *AssetService) RefactorDirectDependencies(ctx context.Context, parsedPip
 		return nil, nil, nil
 	}
 
-	sqlParserInstance, err := newDependencyParser()
+	sqlParserInstance, err := newDependencyParser(ctx)
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to create sql parser: %w", err)
 	}
@@ -147,7 +147,7 @@ func isSQLAssetFile(asset *pipeline.Asset) bool {
 	return strings.HasSuffix(assetPath, ".sql") || strings.Contains(assetType, "sql")
 }
 
-func updateSQLAssetDependencies(ctx context.Context, asset *pipeline.Asset, parsedPipeline *pipeline.Pipeline, sqlParserInstance sqlparser.Parser, renderer *jinja.Renderer) error {
+func updateSQLAssetDependencies(ctx context.Context, asset *pipeline.Asset, parsedPipeline *pipeline.Pipeline, sqlParserInstance dependencyParser, renderer *jinja.Renderer) error {
 	return reconcileSQLAssetDependencies(ctx, asset, parsedPipeline, sqlParserInstance, renderer)
 }
 
@@ -158,7 +158,7 @@ func (s *AssetService) reconcileSQLAssetDependencies(ctx context.Context, relAss
 		return err
 	}
 
-	sqlParserInstance, err := newDependencyParser()
+	sqlParserInstance, err := newDependencyParser(ctx)
 	if err != nil {
 		return err
 	}
@@ -168,7 +168,7 @@ func (s *AssetService) reconcileSQLAssetDependencies(ctx context.Context, relAss
 	return reconcileSQLAssetDependenciesFS(ctx, s.fs(), asset, parsedPipeline, sqlParserInstance, renderer)
 }
 
-func reconcileSQLAssetDependencies(ctx context.Context, asset *pipeline.Asset, parsedPipeline *pipeline.Pipeline, sqlParserInstance sqlparser.Parser, renderer *jinja.Renderer) error {
+func reconcileSQLAssetDependencies(ctx context.Context, asset *pipeline.Asset, parsedPipeline *pipeline.Pipeline, sqlParserInstance dependencyParser, renderer *jinja.Renderer) error {
 	return reconcileSQLAssetDependenciesFS(ctx, afero.NewOsFs(), asset, parsedPipeline, sqlParserInstance, renderer)
 }
 
@@ -210,7 +210,7 @@ func (s *AssetService) reconcileLoadAssetDependencies(ctx context.Context, relAs
 	return nil
 }
 
-func reconcileSQLAssetDependenciesFS(ctx context.Context, fs afero.Fs, asset *pipeline.Asset, parsedPipeline *pipeline.Pipeline, sqlParserInstance sqlparser.Parser, renderer *jinja.Renderer) error {
+func reconcileSQLAssetDependenciesFS(ctx context.Context, fs afero.Fs, asset *pipeline.Asset, parsedPipeline *pipeline.Pipeline, sqlParserInstance dependencyParser, renderer *jinja.Renderer) error {
 	if asset == nil || parsedPipeline == nil {
 		return nil
 	}
@@ -248,7 +248,7 @@ func reconcileSQLAssetDependenciesFS(ctx context.Context, fs afero.Fs, asset *pi
 	return nil
 }
 
-func inferAllSQLAssetDependencies(ctx context.Context, asset *pipeline.Asset, parsedPipeline *pipeline.Pipeline, sqlParserInstance sqlparser.Parser, renderer *jinja.Renderer) ([]string, error) {
+func inferAllSQLAssetDependencies(ctx context.Context, asset *pipeline.Asset, parsedPipeline *pipeline.Pipeline, sqlParserInstance dependencyParser, renderer *jinja.Renderer) ([]string, error) {
 	cloned := *asset
 	cloned.Upstreams = nil
 
@@ -288,12 +288,12 @@ func inferAllSQLAssetDependencies(ctx context.Context, asset *pipeline.Asset, pa
 	return result, nil
 }
 
-func inferSQLAssetDependenciesFromUsedTables(asset *pipeline.Asset, parsedPipeline *pipeline.Pipeline, sqlParserInstance sqlparser.Parser, renderer jinja.RendererInterface) ([]string, error) {
+func inferSQLAssetDependenciesFromUsedTables(asset *pipeline.Asset, parsedPipeline *pipeline.Pipeline, sqlParserInstance dependencyParser, renderer jinja.RendererInterface) ([]string, error) {
 	if asset == nil || parsedPipeline == nil {
 		return nil, nil
 	}
 
-	dialect, err := sqlparser.AssetTypeToDialect(asset.Type)
+	dialect, err := bruincompat.AssetTypeToDialect(asset.Type)
 	if err != nil {
 		return nil, nil
 	}

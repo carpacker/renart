@@ -18,6 +18,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/spf13/afero"
 	"github.com/urfave/cli/v3"
+	"renart/internal/sqlformat"
 	"renart/internal/web/bus"
 	"renart/internal/web/completion"
 	"renart/internal/web/events"
@@ -30,7 +31,6 @@ import (
 	webscheduler "renart/internal/web/scheduler"
 	"renart/internal/web/service"
 	"renart/internal/web/snapshot"
-	"renart/internal/web/sqlformat"
 	"renart/internal/web/staleness"
 	webstatic "renart/internal/web/static"
 	"renart/internal/web/watch"
@@ -255,6 +255,43 @@ func newWebServer(ctx context.Context, cfg serverConfig, logger *zap.Logger) (*w
 			return server.currentState().Connections[connectionName]
 		},
 		SelectedEnvironment: func() string { return server.currentState().SelectedEnvironment },
+		CurrentState:        func() service.WorkspaceState { return server.currentState() },
+		MaterializedSchemaFresh: func(ctx context.Context, assetID, assetName, environment string) (bool, error) {
+			if server.stalenessSvc == nil {
+				return false, nil
+			}
+			state := server.currentState()
+			if strings.TrimSpace(environment) == "" {
+				environment = state.SelectedEnvironment
+			}
+			for _, candidate := range state.Pipelines {
+				found := false
+				for _, candidateAsset := range candidate.Assets {
+					if candidateAsset.ID == assetID {
+						found = true
+						break
+					}
+				}
+				if !found || strings.TrimSpace(candidate.UUID) == "" {
+					continue
+				}
+				statuses, err := server.stalenessSvc.Statuses(ctx, staleness.Selection{
+					PipelineUUID:      candidate.UUID,
+					EncodedPipelineID: candidate.ID,
+					Environment:       environment,
+				})
+				if err != nil {
+					return false, err
+				}
+				for _, status := range statuses {
+					if status.AssetName == assetName {
+						return status.Status == staleness.StatusFresh, nil
+					}
+				}
+				return false, nil
+			}
+			return false, nil
+		},
 	})
 
 	server.sqlSvc = service.NewSQLService(service.SQLDependencies{
@@ -296,7 +333,8 @@ func newWebServer(ctx context.Context, cfg serverConfig, logger *zap.Logger) (*w
 		ResolveAssetByID: server.resolveAssetByID,
 	})
 	server.sqlLSPSvc = service.NewSQLLSPService(service.SQLLSPDependencies{
-		WorkspaceRoot: absRoot,
+		WorkspaceRoot:    absRoot,
+		ResolveAssetByID: server.resolveAssetByID,
 		CurrentState: func() service.WorkspaceState {
 			return server.currentState()
 		},

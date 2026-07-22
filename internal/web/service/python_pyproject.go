@@ -1,7 +1,9 @@
 package service
 
 import (
+	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/pelletier/go-toml/v2"
@@ -15,9 +17,20 @@ const pyprojectFile = "pyproject.toml"
 // readPyprojectDependencies returns `[project].dependencies` from the
 // pyproject.toml at path, or nil when it is missing or unreadable.
 func readPyprojectDependencies(path string) []string {
+	dependencies, _ := readPyprojectDependenciesStrict(path)
+	return dependencies
+}
+
+// readPyprojectDependenciesStrict is the user-facing variant used by settings:
+// malformed project files are reported instead of being presented as an empty
+// dependency list that a later save could accidentally replace.
+func readPyprojectDependenciesStrict(path string) ([]string, error) {
 	raw, err := os.ReadFile(path)
 	if err != nil {
-		return nil
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, err
 	}
 	var doc struct {
 		Project struct {
@@ -25,9 +38,9 @@ func readPyprojectDependencies(path string) []string {
 		} `toml:"project"`
 	}
 	if err := toml.Unmarshal(raw, &doc); err != nil {
-		return nil
+		return nil, fmt.Errorf("parse %s: %w", filepath.Base(path), err)
 	}
-	return doc.Project.Dependencies
+	return doc.Project.Dependencies, nil
 }
 
 // writePyprojectDependencies sets `[project].dependencies` in the pyproject.toml
@@ -36,7 +49,11 @@ func readPyprojectDependencies(path string) []string {
 func writePyprojectDependencies(path, projectName string, deps []string) error {
 	doc := map[string]any{}
 	if raw, err := os.ReadFile(path); err == nil {
-		_ = toml.Unmarshal(raw, &doc)
+		if err := toml.Unmarshal(raw, &doc); err != nil {
+			return fmt.Errorf("parse %s: %w", filepath.Base(path), err)
+		}
+	} else if !os.IsNotExist(err) {
+		return err
 	}
 	project, _ := doc["project"].(map[string]any)
 	if project == nil {
@@ -64,6 +81,29 @@ func writePyprojectDependencies(path, projectName string, deps []string) error {
 		return err
 	}
 	return os.WriteFile(path, out, 0o644)
+}
+
+// nearestPipelineRoot finds the closest directory containing a Bruin pipeline
+// definition. It is used only as the default location when no nearer dependency
+// manifest already exists, so existing nested Python projects keep working.
+func nearestPipelineRoot(startDir, workspaceRoot string) string {
+	stopDir := filepath.Clean(workspaceRoot)
+	dir := filepath.Clean(startDir)
+	for {
+		for _, filename := range PipelineDefinitionFiles {
+			if info, err := os.Stat(filepath.Join(dir, filename)); err == nil && !info.IsDir() {
+				return dir
+			}
+		}
+		if dir == stopDir || dir == string(filepath.Separator) || dir == "." {
+			return ""
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			return ""
+		}
+		dir = parent
+	}
 }
 
 // requirementSpecifiers returns the full, comment-free package specifiers from a

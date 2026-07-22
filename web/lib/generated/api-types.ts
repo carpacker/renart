@@ -61,6 +61,7 @@ export type ColumnSchemaSourceSnapshot = {
   columns: WebColumn[];
   notes?: string[];
   sample_records?: number;
+  fresh?: boolean;
 };
 
 export type ColumnSchemaMergeRow = {
@@ -98,6 +99,11 @@ export type WebColumnCheck = {
   description?: string;
 };
 
+export type ColumnReference = {
+  table: string;
+  column: string;
+};
+
 export type WebColumn = {
   name: string;
   type?: string;
@@ -107,6 +113,7 @@ export type WebColumn = {
   update_on_merge?: boolean;
   merge_sql?: string;
   nullable?: boolean;
+  foreign_key?: ColumnReference;
   owner?: string;
   domains?: string[];
   meta?: Record<string, string>;
@@ -528,6 +535,8 @@ export type SqlParseContextColumn = {
 };
 
 export type SqlParseContextDiagnostic = {
+  code?: string;
+  source?: string;
   message: string;
   severity: string;
   range?: SqlParseContextRange;
@@ -778,12 +787,16 @@ export type PipelineAssetRenderComparison = {
 };
 
 export type TypeCheckFinding = {
+  code: string;
+  source: string;
   severity: string;
   message: string;
   line?: number;
   column?: number;
   end_line?: number;
   end_column?: number;
+  scope?: string;
+  confidence?: string;
 };
 
 export type TypeCheckAsset = {
@@ -1070,4 +1083,15 @@ export type WebUpdatePipelineConfigRequest = {
   notifications_teams: PipelineConfigNotification;
   defaults: PipelineConfigDefaults;
   variables: PipelineConfigVariable[];
+};
+
+export type PipelinePythonDependenciesResponse = {
+  status: string;
+  pipeline_id: string;
+  path: string;
+  dependencies: string[];
+};
+
+export type UpdatePipelinePythonDependenciesRequest = {
+  dependencies: string[];
 };
