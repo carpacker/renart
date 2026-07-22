@@ -145,7 +145,10 @@ function collectGoModules() {
       [
         "list",
         "-deps",
-        "-tags=no_duckdb_arrow",
+        // Release metadata is generated before web/dist exists. The webdev
+        // variant only replaces the embed wrapper and keeps the Go dependency
+        // graph used by the inventory unchanged.
+        "-tags=no_duckdb_arrow,webdev",
         "-f",
         "{{if .Module}}{{if not .Module.Main}}{{.Module.Path}}\t{{.Module.Version}}\t{{.Module.Dir}}{{end}}{{end}}",
         ".",

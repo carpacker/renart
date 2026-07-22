@@ -69,8 +69,9 @@
   "packageManager": "pnpm@10.33.0",
   "pnpm": {
     "overrides": {
-      "@hono/node-server": "2.0.5",
-      "dompurify": "3.4.12"
+      "@hono/node-server": "2.0.10",
+      "dompurify": "3.4.12",
+      "fast-uri": "3.1.4"
     }
   }
 }

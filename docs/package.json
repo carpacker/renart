@@ -22,6 +22,7 @@
   },
   "pnpm": {
     "overrides": {
+      "fast-uri": "3.1.4",
       "svgo": "4.0.2"
     }
   }
