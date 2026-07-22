@@ -510,7 +510,7 @@ function PipelineSettingsSectionBody({
                 Inferred defaults
               </div>
               <p className="mt-1 text-xs text-muted-foreground">
-                Bruin derives these from asset types when no pipeline override exists.
+                These are inferred from asset types when no pipeline override exists.
               </p>
             </div>
             {inferredDefaultConnections.map((connection) => (
