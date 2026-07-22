@@ -37,6 +37,7 @@ const (
 	wheelTag           = "py3-none-any"
 	wheelDeflateLevel  = 5
 	wheelArchiveFormat = "raw-deflate-v1"
+	sdkLicenseFile     = "LICENSE"
 )
 
 // wheelMetadataFile is the wheel's WHEEL file.
@@ -59,7 +60,7 @@ Home-page: https://getrenart.com
 Project-URL: Documentation, https://getrenart.com/docs/asset-types/python-assets/
 Project-URL: Source, https://github.com/renart-data/renart
 License-Expression: Apache-2.0
-License-File: licenses/LICENSE
+License-File: `+sdkLicenseFile+`
 Requires-Python: >=3.9
 Requires-Dist: pyarrow>=15.0.0
 Requires-Dist: pandas>=1.5
@@ -154,7 +155,7 @@ func wheelEntries() ([]wheelEntry, error) {
 	sort.Slice(entries, func(i, j int) bool { return entries[i].name < entries[j].name })
 
 	distInfo := distribution + "-" + Version + ".dist-info"
-	license, err := sdkSource.ReadFile("LICENSE")
+	license, err := sdkSource.ReadFile(sdkLicenseFile)
 	if err != nil {
 		return nil, fmt.Errorf("read SDK license: %w", err)
 	}
@@ -162,7 +163,7 @@ func wheelEntries() ([]wheelEntry, error) {
 		wheelEntry{name: distInfo + "/METADATA", content: []byte(packageMetadata())},
 		wheelEntry{name: distInfo + "/WHEEL", content: []byte(wheelMetadataFile)},
 		wheelEntry{name: distInfo + "/top_level.txt", content: []byte("renart\n")},
-		wheelEntry{name: distInfo + "/licenses/LICENSE", content: license},
+		wheelEntry{name: path.Join(distInfo, "licenses", sdkLicenseFile), content: license},
 	)
 
 	record := &strings.Builder{}

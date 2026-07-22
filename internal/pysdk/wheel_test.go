@@ -7,6 +7,7 @@ import (
 	"io"
 	"io/fs"
 	"os"
+	"path"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -140,7 +141,7 @@ func TestBuildWheelUsesConfiguredVersionAndIsDeterministic(t *testing.T) {
 	for _, field := range []string{
 		"Metadata-Version: 2.4\n",
 		"License-Expression: Apache-2.0\n",
-		"License-File: licenses/LICENSE\n",
+		"License-File: LICENSE\n",
 		"Classifier: Development Status :: 3 - Alpha\n",
 		"Classifier: Typing :: Typed\n",
 		"Requires-Dist: pandas>=1.5\n",
@@ -164,6 +165,45 @@ func TestBuildWheelUsesConfiguredVersionAndIsDeterministic(t *testing.T) {
 	}
 	if !bytes.Equal(first, second) {
 		t.Fatal("building the same SDK version twice must produce identical wheel bytes")
+	}
+}
+
+func TestBuildWheelLicenseMetadataMatchesArchive(t *testing.T) {
+	wheelPath, err := BuildWheel(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	distInfo := distribution + "-" + Version + ".dist-info"
+	metadata := readWheelFile(t, wheelPath, distInfo+"/METADATA")
+	licenseFiles := make([]string, 0, 1)
+	for _, line := range strings.Split(metadata, "\n") {
+		if value, ok := strings.CutPrefix(line, "License-File: "); ok {
+			licenseFiles = append(licenseFiles, strings.TrimSpace(value))
+		}
+	}
+	if len(licenseFiles) == 0 {
+		t.Fatal("wheel metadata declares no License-File")
+	}
+
+	reader, err := zip.OpenReader(wheelPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reader.Close()
+	members := make(map[string]struct{}, len(reader.File))
+	for _, file := range reader.File {
+		members[file.Name] = struct{}{}
+	}
+	for _, licenseFile := range licenseFiles {
+		if !fs.ValidPath(licenseFile) {
+			t.Errorf("License-File %q is not a valid relative path", licenseFile)
+			continue
+		}
+		member := path.Join(distInfo, "licenses", licenseFile)
+		if _, ok := members[member]; !ok {
+			t.Errorf("License-File %q requires missing wheel member %q", licenseFile, member)
+		}
 	}
 }
 
