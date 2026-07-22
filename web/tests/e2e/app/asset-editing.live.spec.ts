@@ -995,7 +995,7 @@ select customer_id, upper(customer_name) as shout from analytics.customers
     await expect(customerIDRow).toContainText("INTEGER");
     await expect(customerIDRow).toContainText("BIGINT");
     await customerIDRow.getByRole("combobox").click();
-    await page.getByRole("option", { name: "Use SQL query · INTEGER" }).click();
+    await page.getByRole("option", { name: "Use SQL query · customer_id: INTEGER" }).click();
 
     const applyResponse = page.waitForResponse(
       (response) =>

@@ -341,7 +341,11 @@ function SchemaValue({
   type?: string;
 }) {
   if (!present) {
-    return <span className="font-mono text-muted-foreground line-through">{column}:------</span>;
+    return (
+      <span className="font-mono text-muted-foreground">
+        <span className="line-through">{column}</span>: missing
+      </span>
+    );
   }
   return <span className="font-mono">{schemaValueLabel(column, type)}</span>;
 }
@@ -406,5 +410,5 @@ function displayType(type?: string) {
 }
 
 function schemaValueLabel(column: string, type?: string) {
-  return `${column}:${displayType(type)}`;
+  return `${column}: ${displayType(type)}`;
 }

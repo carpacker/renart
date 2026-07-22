@@ -520,7 +520,7 @@ test.describe("sql intellisense live", () => {
     expect(body.diagnostics ?? []).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
-          message: "Unresolved relation: missing_orders",
+          message: "Unresolved table: missing_orders",
           range: expect.objectContaining({
             start: expect.objectContaining({ line: 1, character: 5 }),
           }),
@@ -531,7 +531,7 @@ test.describe("sql intellisense live", () => {
     await expect
       .poll(async () => getEditorMarkerMessages(page), { timeout: 15000 })
       .toEqual(
-        expect.arrayContaining([expect.stringContaining("Unresolved relation: missing_orders")]),
+        expect.arrayContaining([expect.stringContaining("Unresolved table: missing_orders")]),
       );
   });
 
@@ -713,7 +713,7 @@ test.describe("sql intellisense live", () => {
     );
 
     // The app editor drives SQL diagnostics through the server LSP, which
-    // reports the misspelled table as "Unresolved relation: <name>". The old
+    // reports the misspelled table as "Unresolved table: <name>". The old
     // parse-context editor phrased this as a "Did you mean ...?" quick fix; that
     // suggestion wording is not (yet) surfaced by the LSP path.
     await openCustomersEditor(page, liveApp.baseURL);
@@ -723,7 +723,7 @@ test.describe("sql intellisense live", () => {
     await expect
       .poll(async () => getEditorMarkerMessages(page), { timeout: 15000 })
       .toEqual(
-        expect.arrayContaining([expect.stringContaining("Unresolved relation: analytics.ordrs")]),
+        expect.arrayContaining([expect.stringContaining("Unresolved table: analytics.ordrs")]),
       );
   });
 
