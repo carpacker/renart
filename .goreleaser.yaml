@@ -96,6 +96,7 @@ builds:
       - CC=x86_64-w64-mingw32-gcc
       - CXX=x86_64-w64-mingw32-g++
       - CGO_ENABLED=1
+      - CGO_CPPFLAGS=-I/src/scripts/mingw-compat
       - CGO_LDFLAGS=-static-libgcc -static-libstdc++ -Wl,-Bstatic -lstdc++ -lwinpthread -Wl,-Bdynamic
     flags:
       - -trimpath
