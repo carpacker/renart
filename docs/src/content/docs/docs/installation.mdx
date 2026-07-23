@@ -9,15 +9,15 @@ Install Renart with the one-line installer:
 curl -LsSf getrenart.com/install.sh | sh
 ```
 
-This installs a single `renart` binary — the web UI, the scheduler, and the
-CLI are all inside it. There is no service to stand up and no account to
-create.
+This installs the `renart` CLI/server and its small native-window helper. The
+web UI and scheduler remain embedded in `renart`; there is no service to stand
+up and no account to create.
 
 Public-alpha archives are available for Linux (x86-64 and ARM64), macOS
 (Intel and Apple silicon), and Windows x86-64. Linux builds require glibc 2.31
-or newer. Release archives include checksums, a software bill of materials,
-and third-party notices; the installer verifies the downloaded archive against
-the published checksum.
+or newer. Each release archive includes the matching `renart-gui` helper,
+checksums, a software bill of materials, and third-party notices; the installer
+verifies the downloaded archive against the published checksum.
 
 ## Start Renart
 
@@ -27,19 +27,16 @@ Start Renart inside a git repository:
 renart
 ```
 
-This opens the Renart IDE in your browser. It listens on `127.0.0.1:8080` by
-default; if that port is taken, it picks the next free one and prints the URL.
-To choose the port yourself:
+This opens the Renart IDE in a native window. On Linux the helper uses GTK 3
+and either WebKitGTK 4.1 or 4.0, whichever is available. If the platform
+webview is unavailable, Renart reports the reason and opens the same UI in your
+browser instead. To run the browser mode explicitly:
 
 ```bash
 renart web --port 9000 --no-open
 ```
 
 You can also point it at a workspace explicitly: `renart web path/to/repo`.
-
-The source tree includes an optional `renart-gui` native-window helper for
-contributors. It is not included in the public-alpha release archives; when the
-helper is unavailable, `renart standalone` uses the browser UI as well.
 
 :::note[Renart needs a git repository]
 Renart is built around git-native workspaces: every edit it makes is a plain

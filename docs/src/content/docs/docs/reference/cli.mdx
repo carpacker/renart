@@ -171,7 +171,8 @@ unless it is already inside one.
 ## renart standalone
 
 Starts the same embedded server as `renart web` and uses the optional
-`renart-gui` helper when it is installed next to the Renart binary. Public-alpha
-archives do not include that helper, so the command logs the fallback and opens
-the browser instead. `--port` defaults to `0`, which picks a free loopback port.
-Running `renart` without a subcommand is equivalent to `renart standalone`.
+`renart-gui` helper installed next to the Renart binary. Release archives and
+the one-line installer include the matching helper. If its platform webview is
+unavailable, the command logs the fallback and opens the browser instead.
+`--port` defaults to `0`, which picks a free loopback port. Running `renart`
+without a subcommand is equivalent to `renart standalone`.

@@ -8,9 +8,10 @@ checkout or bypass the release workflow for an ordinary release.
 1. Start a `release/vX.Y.Z` branch and update release-facing versions and
    notes.
 2. Run `make release-check` and the full live Playwright suite.
-3. Confirm the release snapshot workflow passes. It cross-builds every archive,
-   validates checksums, licenses, SBOMs, executable startup, and the Linux
-   glibc 2.31 compatibility ceiling.
+3. Confirm the release snapshot workflow passes. It natively builds the
+   standalone helper matrix, cross-builds every CLI archive, and validates
+   checksums, licenses, SBOMs, executable startup, and the Linux compatibility
+   ceilings.
 4. Review the generated change log and the public-alpha limitations.
 
 ## Publish
@@ -18,7 +19,9 @@ checkout or bypass the release workflow for an ordinary release.
 Create and push an annotated stable `vMAJOR.MINOR.PATCH` tag. The workflow:
 
 1. builds and validates the Python SDK wheel;
-2. creates a draft GitHub release with checksum, SBOM, and provenance data;
+2. builds the native standalone helpers and creates a draft GitHub release with
+   the CLI and helper in every platform archive, plus checksum, SBOM, and
+   provenance data;
 3. smoke-tests the release archives;
 4. publishes the wheel through PyPI trusted publishing; and
 5. makes the GitHub release public only after PyPI succeeds.

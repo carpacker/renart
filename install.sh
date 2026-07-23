@@ -586,6 +586,26 @@ execute() {
     install "${BINARY_PATH}" "${INSTALL_PATH}"
     log_info "${BINARY_NAME} installation complete!"
   fi
+
+  case "${UNAME_OS}" in
+    linux) COMPANION_NAMES="renart-gui renart-gui-webkit2_40 renart-gui-webkit2_41" ;;
+    darwin) COMPANION_NAMES="renart-gui" ;;
+    windows) COMPANION_NAMES="renart-gui.exe" ;;
+    *) COMPANION_NAMES="" ;;
+  esac
+  for COMPANION_NAME in ${COMPANION_NAMES}; do
+    COMPANION_PATH="${TMPDIR}/${COMPANION_NAME}"
+    if [ ! -f "${COMPANION_PATH}" ]; then
+      continue
+    fi
+    COMPANION_INSTALL_PATH="${BINDIR}/${COMPANION_NAME}"
+    if [ "$DRY_RUN" = "1" ]; then
+      log_info "[DRY RUN] Would install ${COMPANION_NAME} to ${COMPANION_INSTALL_PATH}"
+    else
+      install "${COMPANION_PATH}" "${COMPANION_INSTALL_PATH}"
+      log_info "${COMPANION_NAME} installation complete!"
+    fi
+  done
 }
 
 # --- Configuration  ---

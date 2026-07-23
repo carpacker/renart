@@ -197,7 +197,9 @@ multi-server mode.
 error, the command reports the cause and browser URL on stdout, opens that URL
 through the same browser helper as `renart web`, and keeps serving until normal
 shutdown. A missing desktop webview therefore degrades to the browser UI rather
-than taking the workspace server down.
+than taking the workspace server down. Release archives colocate the native
+helper with the CLI. Linux archives carry WebKitGTK 4.1 and 4.0 variants behind
+a small launcher that selects the variant whose shared libraries are available.
 
 For an asset target, `--refresh-upstreams` first invokes the server-side stale
 planner narrowed to that asset's transitive upstream closure; only non-fresh
@@ -984,15 +986,16 @@ asset.
   timeout off; read/idle timeouts are set.
 - **Path safety.** All asset/pipeline ID decoding funnels through
   `WorkspaceResolver.SafeJoin`.
-- **Deployment.** Single binary: embedded frontend, embedded Python (uv),
-  pure-Go SQLite. Port fallback, browser auto-open, graceful shutdown
+- **Deployment.** The CLI/server remains one self-contained binary: embedded
+  frontend, embedded Python (uv), pure-Go SQLite. Release archives additionally
+  colocate the optional native-window helper. Port fallback, browser auto-open, graceful shutdown
   (scheduler `Stop()` drains River, then escalates to context cancellation if
   workers do not stop within the grace period). A tiny C compatibility archive
   satisfies Bruin's unused Rust-parser linker flag through `CGO_LDFLAGS`;
   release and local builds require no Rust toolchain and never modify the Go
   module cache. Linux releases use checksum-pinned Zig with a glibc 2.31 target,
-  and archive smoke tests enforce that ceiling alongside checksums, SBOMs,
-  third-party notices, and executable startup.
+  and archive smoke tests enforce that ceiling alongside the helper matrix,
+  checksums, SBOMs, third-party notices, and executable startup.
 
 ## 6. Embedded engines & memory
 

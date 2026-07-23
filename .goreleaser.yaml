@@ -130,6 +130,11 @@ archives:
       - README.md
       - THIRD_PARTY_NOTICES.md
       - third_party/licenses/**
+      - src: .release/standalone/renart-gui-{{ .Os }}-{{ .Arch }}/*
+        dst: .
+        strip_parent: true
+        info:
+          mode: 0755
 
 checksum:
   name_template: checksums.txt

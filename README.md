@@ -39,10 +39,9 @@ Start Renart inside a Git repository:
 renart
 ```
 
-This opens the Renart IDE in your browser. It listens on `127.0.0.1:8080` by
-default and selects the next free port when that port is unavailable. A native
-window helper can be built from source, but it is not part of the alpha release
-archives.
+This opens the Renart IDE in a native window, with an automatic browser fallback
+when the platform webview is unavailable. The matching native-window helper is
+included in each release archive and installed by the one-line installer.
 
 Release archives support Linux x86-64/ARM64 (glibc 2.31+), macOS
 Intel/Apple silicon, and Windows x86-64. See the

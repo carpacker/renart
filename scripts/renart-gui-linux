@@ -1,0 +1,28 @@
+#!/usr/bin/env sh
+
+set -u
+
+helper_dir="$(CDPATH= cd "$(dirname "$0")" && pwd)"
+webkit41="${helper_dir}/renart-gui-webkit2_41"
+webkit40="${helper_dir}/renart-gui-webkit2_40"
+
+has_missing_library() {
+	if ! command -v ldd >/dev/null 2>&1; then
+		return 1
+	fi
+	ldd "$1" 2>&1 | grep -q 'not found'
+}
+
+if [ -x "${webkit41}" ] && ! has_missing_library "${webkit41}"; then
+	exec "${webkit41}" "$@"
+fi
+
+if [ -x "${webkit40}" ] && ! has_missing_library "${webkit40}"; then
+	exec "${webkit40}" "$@"
+fi
+
+# Preserve the dynamic loader's useful error if neither variant can start.
+if [ -x "${webkit41}" ]; then
+	exec "${webkit41}" "$@"
+fi
+exec "${webkit40}" "$@"

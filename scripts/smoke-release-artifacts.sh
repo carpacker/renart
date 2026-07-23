@@ -7,6 +7,42 @@ dist="$(cd "${dist}" && pwd)"
 workdir="$(mktemp -d)"
 trap 'rm -rf "${workdir}"' EXIT
 
+require_file() {
+	local root="$1"
+	local filename="$2"
+	local archive_name="$3"
+	local description="$4"
+	local result
+	result="$(find "${root}" -type f -name "${filename}" -print -quit)"
+	if [ -z "${result}" ]; then
+		echo "${archive_name} does not contain ${description} (${filename})" >&2
+		exit 1
+	fi
+	printf '%s\n' "${result}"
+}
+
+assert_go_helper() {
+	local helper="$1"
+	local archive_name="$2"
+	if ! go version -m "${helper}" | grep -F $'path\trenart/cmd/renart-gui' >/dev/null; then
+		echo "${archive_name} contains an invalid standalone helper: ${helper}" >&2
+		exit 1
+	fi
+}
+
+assert_glibc_ceiling() {
+	local binary="$1"
+	local ceiling="$2"
+	local label="$3"
+	local max_glibc
+	max_glibc="$(readelf --version-info "${binary}" | grep -Eo 'GLIBC_[0-9]+\.[0-9]+' | sed 's/GLIBC_//' | sort -Vu | tail -1)"
+	if [ -z "${max_glibc}" ] || [ "$(printf '%s\n' "${ceiling}" "${max_glibc}" | sort -V | tail -1)" != "${ceiling}" ]; then
+		echo "${label} requires unsupported GLIBC_${max_glibc:-unknown}; release maximum is GLIBC_${ceiling}" >&2
+		exit 1
+	fi
+	printf '%s requires at most GLIBC_%s\n' "${label}" "${max_glibc}"
+}
+
 mapfile -t archives < <(find "${dist}" -maxdepth 1 -type f \( -name '*.tar.gz' -o -name '*.zip' \) -print | sort)
 if [ "${#archives[@]}" -ne 5 ]; then
 	echo "expected 5 release archives, found ${#archives[@]}" >&2
@@ -37,19 +73,32 @@ for archive in "${archives[@]}"; do
 		exit 1
 	fi
 
+	if [[ "${name}" == *Windows* ]]; then
+		binary="$(require_file "${target}" renart.exe "${name}" "the Renart CLI")"
+		helper="$(require_file "${target}" renart-gui.exe "${name}" "the standalone helper")"
+	else
+		binary="$(require_file "${target}" renart "${name}" "the Renart CLI")"
+		helper="$(require_file "${target}" renart-gui "${name}" "the standalone helper")"
+	fi
+	if [ ! -x "${binary}" ] || [ ! -x "${helper}" ]; then
+		echo "${name} contains a non-executable CLI or standalone helper" >&2
+		exit 1
+	fi
+
+	if [[ "${name}" == *Linux* ]]; then
+		webkit40="$(require_file "${target}" renart-gui-webkit2_40 "${name}" "the WebKitGTK 4.0 standalone helper")"
+		webkit41="$(require_file "${target}" renart-gui-webkit2_41 "${name}" "the WebKitGTK 4.1 standalone helper")"
+		assert_go_helper "${webkit40}" "${name}"
+		assert_go_helper "${webkit41}" "${name}"
+		assert_glibc_ceiling "${webkit40}" "2.31" "${name} WebKitGTK 4.0 helper"
+		assert_glibc_ceiling "${webkit41}" "2.34" "${name} WebKitGTK 4.1 helper"
+	else
+		assert_go_helper "${helper}" "${name}"
+	fi
+
 	if [[ "${name}" == *Linux_x86_64* ]]; then
-		binary="$(find "${target}" -type f -name renart -print -quit)"
-		if [ -z "${binary}" ]; then
-			echo "${name} does not contain the Renart binary" >&2
-			exit 1
-		fi
 		"${binary}" --version | grep -F 'renart version' >/dev/null
-		max_glibc="$(readelf --version-info "${binary}" | grep -Eo 'GLIBC_[0-9]+\.[0-9]+' | sed 's/GLIBC_//' | sort -Vu | tail -1)"
-		if [ -z "${max_glibc}" ] || [ "$(printf '%s\n' "2.31" "${max_glibc}" | sort -V | tail -1)" != "2.31" ]; then
-			echo "${name} requires unsupported GLIBC_${max_glibc:-unknown}; release maximum is GLIBC_2.31" >&2
-			exit 1
-		fi
-		printf '%s requires at most GLIBC_%s\n' "${name}" "${max_glibc}"
+		assert_glibc_ceiling "${binary}" "2.31" "${name} CLI"
 	fi
 	rm -rf "${target}"
 done
