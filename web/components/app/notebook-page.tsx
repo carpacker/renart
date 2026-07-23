@@ -1,6 +1,5 @@
 "use client";
 
-import { projectApiPath } from "@/lib/project-context";
 import { useNavigate } from "@tanstack/react-router";
 import { useAtomValue } from "jotai";
 import {
@@ -76,7 +75,6 @@ import {
   getNotebookRuntime,
   joinCellContent,
   NotebookCellRunResult,
-  NotebookRuntimeEvent,
   promoteNotebookCell,
   renameNotebookCell,
   runNotebook,
@@ -87,11 +85,13 @@ import {
   updateNotebookDependencies,
   VizKind,
 } from "@/lib/api-notebooks";
+import { notebookRuntimeEventsAtom } from "@/lib/atoms/domains/results";
 import {
   selectedEnvironmentAtom,
   selectedExecutionTimeWindowAtom,
   workspaceAtom,
 } from "@/lib/atoms/domains/workspace";
+import { usesPythonSource } from "@/lib/asset-types";
 import { addDependency, missingPythonImports } from "@/lib/notebook-python-deps";
 import { WebAsset, WebNotebook, WebNotebookBlock } from "@/lib/types";
 import { cn } from "@/lib/utils";
@@ -219,6 +219,9 @@ export function AppNotebooksIndexPage() {
 
 export function AppNotebookLivePage({ notebookId }: { notebookId: string }) {
   const workspace = useAtomValue(workspaceAtom);
+  const notebookRuntimeEvent = useAtomValue(notebookRuntimeEventsAtom)[notebookId] ?? null;
+  const notebookRuntimeEventRef = useRef(notebookRuntimeEvent);
+  notebookRuntimeEventRef.current = notebookRuntimeEvent;
   const selectedEnvironment = useAtomValue(selectedEnvironmentAtom);
   const selectedExecutionTimeWindow = useAtomValue(selectedExecutionTimeWindowAtom);
   const navigate = useNavigate();
@@ -563,35 +566,28 @@ export function AppNotebookLivePage({ notebookId }: { notebookId: string }) {
     [notebook?.cells],
   );
 
-  // Seed from the server's current runtime, then follow it live: the server
-  // owns staleness, the running set, auto-pending, and results, pushing changes
-  // as notebook.runtime events on the workspace SSE stream.
+  // Seed from the server's current runtime. Live updates arrive through the
+  // app shell's single workspace SSE connection.
   useEffect(() => {
     let cancelled = false;
+    const runtimeEventAtRequest = notebookRuntimeEventRef.current;
     getNotebookRuntime(notebookId)
       .then((snapshot) => {
-        if (!cancelled) {
+        if (!cancelled && notebookRuntimeEventRef.current === runtimeEventAtRequest) {
           applyRuntime(snapshot);
         }
       })
       .catch(() => undefined);
-
-    const source = new EventSource(projectApiPath("/api/events"));
-    source.onmessage = (event) => {
-      try {
-        const payload = JSON.parse(event.data) as Partial<NotebookRuntimeEvent>;
-        if (payload?.type === "notebook.runtime" && payload.notebook_id === notebookId) {
-          applyRuntime(payload as NotebookRuntimeEvent);
-        }
-      } catch {
-        // ignore malformed events
-      }
-    };
     return () => {
       cancelled = true;
-      source.close();
     };
   }, [notebookId, applyRuntime]);
+
+  useEffect(() => {
+    if (notebookRuntimeEvent?.notebook_id === notebookId) {
+      applyRuntime(notebookRuntimeEvent);
+    }
+  }, [applyRuntime, notebookId, notebookRuntimeEvent]);
 
   // Each cell's last successful run columns, so a cell that reads from a sibling
   // gets that sibling's real output columns for intellisense and parse-context.
@@ -679,10 +675,7 @@ export function AppNotebookLivePage({ notebookId }: { notebookId: string }) {
     [notebook?.installed_modules],
   );
   const hasPythonCell = useMemo(
-    () =>
-      (notebook?.cells ?? []).some(
-        (cell) => cell.type?.toLowerCase() === "python" || cell.path.toLowerCase().endsWith(".py"),
-      ),
+    () => (notebook?.cells ?? []).some((cell) => usesPythonSource(cell)),
     [notebook?.cells],
   );
   const updateDependencies = useCallback(
@@ -1213,8 +1206,7 @@ function NotebookCellCard({
     () => buildNotebookSchemaTables(workspace, cells, cell, resultColumnsByCell),
     [workspace, cells, cell, resultColumnsByCell],
   );
-  const isPythonCell =
-    cell.type?.toLowerCase() === "python" || cell.path.toLowerCase().endsWith(".py");
+  const isPythonCell = usesPythonSource(cell);
   const { body } = useMemo(() => splitCellContent(cell.content), [cell.content]);
   const [draft, setDraft] = useState(body);
 

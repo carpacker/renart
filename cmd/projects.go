@@ -48,6 +48,9 @@ type projectManager struct {
 	mu        sync.Mutex
 	defaultID string
 	runtimes  map[string]*projectRuntime
+	// bootstrapDefault marks the temporary runtime used when Renart was
+	// launched without a workspace. It is never registered as a user project.
+	bootstrapDefault bool
 	// discovery, when set, makes the manager maintain .renart/server.json in
 	// every open project root so the CLI can find and delegate to this
 	// server (plans/cli-v1.md §2.1).
@@ -78,14 +81,17 @@ func newProjectManager(ctx context.Context, logger *zap.Logger, baseCfg serverCo
 	}
 
 	manager := &projectManager{
-		ctx:       ctx,
-		logger:    logger,
-		baseCfg:   baseCfg,
-		registry:  registry.New(regPath),
-		defaultID: defaultRuntime.id,
-		runtimes:  map[string]*projectRuntime{defaultRuntime.id: defaultRuntime},
+		ctx:              ctx,
+		logger:           logger,
+		baseCfg:          baseCfg,
+		registry:         registry.New(regPath),
+		defaultID:        defaultRuntime.id,
+		runtimes:         map[string]*projectRuntime{defaultRuntime.id: defaultRuntime},
+		bootstrapDefault: baseCfg.bootstrapRoot != "",
 	}
-	manager.record(defaultRuntime)
+	if !manager.bootstrapDefault {
+		manager.record(defaultRuntime)
+	}
 	return manager, nil
 }
 
@@ -231,6 +237,9 @@ func (m *projectManager) CreateProject(req webhttpapi.CreateProjectRequest) (web
 // the caller's choice, else next to the default project, else the home dir.
 func (m *projectManager) resolveCreateParentDir(parentDir string) (string, error) {
 	parent := strings.TrimSpace(parentDir)
+	if parent == "" && m.bootstrapDefault {
+		parent = strings.TrimSpace(m.baseCfg.suggestedCreateParentDir)
+	}
 	if parent == "" {
 		m.mu.Lock()
 		defaultRuntime := m.runtimes[m.defaultID]
@@ -362,6 +371,8 @@ func (m *projectManager) openPath(path string) (*projectRuntime, error) {
 	cfg := m.baseCfg
 	cfg.workspaceRoot = absRoot
 	cfg.schedulerStatePath = filepath.Join(absRoot, ".renart", "state.db")
+	cfg.bootstrapRoot = ""
+	cfg.suggestedCreateParentDir = ""
 
 	rt, err := newProjectRuntime(m.ctx, m.logger, cfg)
 	if err != nil {
@@ -411,6 +422,7 @@ func (m *projectManager) ListProjects() webhttpapi.ProjectListResponse {
 	response := webhttpapi.ProjectListResponse{
 		Status:           "ok",
 		DefaultProjectID: m.defaultID,
+		Bootstrap:        m.bootstrapDefault,
 		Projects:         []webhttpapi.ProjectInfo{},
 	}
 
@@ -544,6 +556,9 @@ func (m *projectManager) DisableDiscovery() {
 // just misses out on delegation.
 func (m *projectManager) writeDiscoveryFileLocked(rt *projectRuntime) {
 	if m.discovery == nil {
+		return
+	}
+	if m.bootstrapDefault && rt.id == m.defaultID {
 		return
 	}
 	err := clientapi.WriteServerFile(rt.root, clientapi.ServerFile{

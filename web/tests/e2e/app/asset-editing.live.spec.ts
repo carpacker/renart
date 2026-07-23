@@ -36,6 +36,14 @@ type WorkspaceAsset = {
     update_on_merge?: boolean;
     merge_sql?: string;
   }>;
+  custom_checks?: Array<{
+    name: string;
+    description?: string;
+    value: number;
+    count?: number;
+    blocking?: boolean;
+    query: string;
+  }>;
 };
 type WorkspaceResponse = { pipelines: Array<{ id: string; assets: WorkspaceAsset[] }> };
 
@@ -1132,6 +1140,66 @@ select customer_id, upper(customer_name) as shout from analytics.customers
     await removed;
     await expect(card.getByRole("button", { name: "Remove not_null from customer_id" })).toBeHidden(
       { timeout: 15000 },
+    );
+  });
+
+  test("quality checks card authors a custom SQL check", async ({ liveApp, page }) => {
+    await page.goto(`${liveApp.baseURL}/pipelines/${pipelineId}/assets/${customersAssetId}/code`);
+    await expect(page.locator(".monaco-editor").first()).toBeVisible({ timeout: 15000 });
+    const properties = await openAssetProperties(page);
+    const customChecks = properties.getByTestId("asset-custom-checks");
+
+    await customChecks.getByRole("button", { name: "Add", exact: true }).click();
+    const dialog = page.getByRole("dialog", { name: "Add custom check" });
+    await dialog.getByLabel("Name").fill("no invalid customers");
+    await dialog.getByLabel("Description").fill("Customer identifiers stay positive");
+    await expect(dialog.locator(".monaco-editor")).toBeVisible({ timeout: 15000 });
+    await page.evaluate(() => {
+      const monaco = (window as typeof window & { monaco?: any }).monaco;
+      const model = monaco?.editor
+        .getModels?.()
+        .find((candidate: any) => candidate.uri?.toString?.().includes("/custom-check/"));
+      if (!model) throw new Error("Custom check Monaco model is not ready");
+      model.setValue("select * from analytics.customers where customer_id <= 0");
+    });
+
+    const saved = page.waitForResponse(
+      (response) =>
+        response.url().includes(`/api/assets/${customersAssetId}/transactions`) && response.ok(),
+      { timeout: 15000 },
+    );
+    await dialog.getByRole("button", { name: "Save check" }).click();
+    await saved;
+
+    const asset = await pollAsset(liveApp, page.request, "analytics.customers", (candidate) =>
+      Boolean(candidate.custom_checks?.some((check) => check.name === "no invalid customers")),
+    );
+    expect(asset.custom_checks?.[0]).toMatchObject({
+      name: "no invalid customers",
+      count: 0,
+      query: "select * from analytics.customers where customer_id <= 0",
+    });
+    expect(asset.custom_checks?.[0]?.blocking ?? true).toBe(true);
+    await expect(customChecks.getByText("no invalid customers", { exact: true })).toBeVisible({
+      timeout: 15000,
+    });
+
+    const removed = page.waitForResponse(
+      (response) =>
+        response.url().includes(`/api/assets/${customersAssetId}/transactions`) && response.ok(),
+      { timeout: 15000 },
+    );
+    await customChecks
+      .getByRole("button", {
+        name: "Remove custom check no invalid customers",
+      })
+      .click();
+    await removed;
+    await pollAsset(
+      liveApp,
+      page.request,
+      "analytics.customers",
+      (candidate) => (candidate.custom_checks ?? []).length === 0,
     );
   });
 });

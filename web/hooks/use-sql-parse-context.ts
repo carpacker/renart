@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 
-import { getSQLParseContext } from "@/lib/api";
+import { getSQLParseContext } from "@/lib/api-sql-discovery";
 import { isQuerySensorAssetType, isSqlAssetType } from "@/lib/asset-types";
 import { SchemaTable } from "@/lib/sql-schema";
 import { SqlParseContextResponse, WebAsset } from "@/lib/types";

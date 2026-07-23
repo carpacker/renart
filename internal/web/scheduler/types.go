@@ -353,6 +353,11 @@ type PipelineRun struct {
 	FinishedAt   *time.Time `json:"finished_at,omitempty"`
 	Error        string     `json:"error,omitempty"`
 	LogRef       string     `json:"log_ref,omitempty"`
+	// Cancellable is derived from the linked River job when loading run
+	// details. CancellationRequestedAt remains visible while a running worker
+	// cooperatively unwinds after a user abort request.
+	Cancellable             bool       `json:"cancellable,omitempty"`
+	CancellationRequestedAt *time.Time `json:"cancellation_requested_at,omitempty"`
 	// SnapshotVersionID records the deployed snapshot the run executed;
 	// empty for working-tree builds.
 	SnapshotVersionID string `json:"snapshot_version_id,omitempty"`

@@ -2,18 +2,13 @@ import { Link, Outlet, useNavigate } from "@tanstack/react-router";
 import {
   Boxes,
   CheckCircle2,
-  Cloud,
   Copy,
-  CreditCard,
   LoaderCircle,
   Pencil,
   Plug,
   Plus,
-  Shield,
   Sliders,
   Trash2,
-  User,
-  Users,
 } from "lucide-react";
 import { ComponentType, HTMLAttributes, ReactNode, useEffect, useMemo, useState } from "react";
 
@@ -59,14 +54,14 @@ import { Switch } from "@/components/ui/switch";
 import { useWorkspaceConnectionForm } from "@/hooks/use-workspace-connection-form";
 import { useWorkspaceEnvironmentForm } from "@/hooks/use-workspace-environment-form";
 import { useWorkspaceSettingsData } from "@/hooks/use-workspace-settings-data";
-import { testWorkspaceConnection } from "@/lib/api";
+import { testWorkspaceConnection } from "@/lib/api-config";
 import { useIngestrEnabled, visibleConnectionTypes } from "@/lib/features";
 import type { EnvironmentPolicy, WorkspaceRetentionSettings } from "@/lib/generated/api-types";
 import { buildConnectionFieldDefaults } from "@/lib/settings-form-utils";
 import type { WorkspaceConfigConnection, WorkspaceConfigEnvironment } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
-import { IntegrationBadge, PageHeader, AppPage, SimpleTable } from "./app-primitives";
+import { IntegrationBadge, PageHeader, AppPage } from "./app-primitives";
 
 const emptyPolicy: EnvironmentPolicy = {
   protected: false,
@@ -167,13 +162,6 @@ const projectSections = [
   { id: "connections", label: "Connections", icon: Plug, to: "/project/connections" },
 ] as const;
 
-const accountSections = [
-  { id: "profile", label: "Account", icon: User, to: "/account/profile" },
-  { id: "members", label: "Members", icon: Users, to: "/account/members" },
-  { id: "workspaces", label: "Workspaces", icon: Cloud, to: "/account/workspaces" },
-  { id: "billing", label: "Billing", icon: CreditCard, to: "/account/billing" },
-] as const;
-
 export function AppProjectSettingsShell() {
   const { workspaceConfig } = useWorkspaceSettingsData();
   const projectName = workspaceConfig?.project_name || "Project";
@@ -184,17 +172,6 @@ export function AppProjectSettingsShell() {
       subtitle={`${projectName} defaults, connections, and environments`}
       eyebrow={`Project · ${projectName}`}
       sections={projectSections}
-    />
-  );
-}
-
-export function AppAccountSettingsShell() {
-  return (
-    <SettingsShell
-      title="Account"
-      subtitle="Profile, members, workspaces, and billing"
-      eyebrow="Account"
-      sections={accountSections}
     />
   );
 }
@@ -1239,97 +1216,6 @@ function ConnectionSheet({
   );
 }
 
-export function AppAccountProfilePage() {
-  return (
-    <SettingsCard title="Profile">
-      <div className="grid gap-4 md:grid-cols-2">
-        <MockField label="Name" value="Jane Doe" />
-        <MockField label="Email" value="jane@acme.io" />
-      </div>
-    </SettingsCard>
-  );
-}
-
-export function AppAccountMembersPage() {
-  return (
-    <SettingsCard
-      title="Members & permissions"
-      action={
-        <Button size="sm">
-          <Plus data-icon="inline-start" />
-          Invite
-        </Button>
-      }
-    >
-      <SimpleTable
-        columns={["Member", "Email", "Role"]}
-        rows={[
-          ["Jane Doe", "jane@acme.io", "Owner"],
-          ["Alex Rivera", "alex@acme.io", "Editor"],
-          ["Sam Lee", "sam@acme.io", "Viewer"],
-          ["CI Bot", "ci@acme.io", "Editor"],
-        ]}
-      />
-      <p className="mt-3 flex items-center gap-2 text-xs text-muted-foreground">
-        <Shield className="size-3.5" />
-        Owner manages billing and members, Editor builds pipelines, Viewer is read-only.
-      </p>
-    </SettingsCard>
-  );
-}
-
-export function AppAccountWorkspacesPage() {
-  return (
-    <div className="flex flex-col gap-4">
-      {["data_platform", "marketing_analytics"].map((workspace, index) => (
-        <SettingsCard
-          key={workspace}
-          title={workspace}
-          action={
-            index === 0 ? (
-              <Badge variant="secondary">Connected</Badge>
-            ) : (
-              <Button size="sm">Connect</Button>
-            )
-          }
-        >
-          <p className="text-sm text-muted-foreground">
-            {index === 0
-              ? "Cloud workspace · branch main · synced 2m ago"
-              : "Local workspace · not connected"}
-          </p>
-        </SettingsCard>
-      ))}
-    </div>
-  );
-}
-
-export function AppAccountBillingPage() {
-  return (
-    <SettingsCard
-      title="Billing"
-      action={
-        <Button variant="outline" size="sm">
-          Manage plan
-        </Button>
-      }
-    >
-      <div className="grid gap-4 md:grid-cols-3">
-        {[
-          ["Seats used", "4 / 5"],
-          ["Pipeline runs", "1,284 / mo"],
-          ["Cloud compute", "38 hrs"],
-        ].map(([label, value]) => (
-          <div key={label} className="grid gap-1">
-            <div className="text-sm text-muted-foreground">{label}</div>
-            <div className="text-lg font-semibold">{value}</div>
-          </div>
-        ))}
-      </div>
-    </SettingsCard>
-  );
-}
-
 function SettingsCard({
   title,
   description,
@@ -1444,15 +1330,6 @@ function RetentionNumberField({
         onChange={(event) => onChange(event.target.value)}
       />
       <p className="text-xs text-muted-foreground">{description}</p>
-    </PlainField>
-  );
-}
-
-function MockField({ label, value }: { label: string; value: string }) {
-  return (
-    <PlainField>
-      <Label>{label}</Label>
-      <Input defaultValue={value} />
     </PlainField>
   );
 }

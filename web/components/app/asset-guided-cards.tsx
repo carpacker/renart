@@ -1,9 +1,10 @@
 "use client";
 
-import { useEffect, useId, useMemo, useState } from "react";
+import { useEffect, useId, useMemo, useRef, useState } from "react";
 
 import { useAtomValue } from "jotai";
 import {
+  AlertTriangle,
   Ban,
   Check,
   ChevronsUpDown,
@@ -16,6 +17,7 @@ import {
 } from "lucide-react";
 
 import { selectedEnvironmentAtom } from "@/lib/atoms/workspace";
+import type { AssetStaleness, FailedQualityCheck } from "@/lib/api-staleness";
 
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -54,6 +56,7 @@ import { getAssetColumnRefreshMode, isSeedAssetType, isSqlAssetType } from "@/li
 import { cn } from "@/lib/utils";
 import { WebAsset, WebColumn } from "@/lib/types";
 import { AssetConnectionEditor } from "./asset-connection-editor";
+import { AssetCustomChecks } from "./asset-custom-checks";
 import { MultiValueInput } from "./multi-value-input";
 import { SchemaSyncDialog } from "./schema-sync-dialog";
 
@@ -63,10 +66,25 @@ import { SchemaSyncDialog } from "./schema-sync-dialog";
  * users edit asset intent without touching raw YAML; every edit flows through
  * the asset API, and the workspace SSE stream refreshes the asset prop.
  */
-export function AssetGuidedCards({ asset, pipelineId }: { asset: WebAsset; pipelineId: string }) {
+export type QualityCheckFocus = FailedQualityCheck & { token: number };
+
+export function AssetGuidedCards({
+  asset,
+  pipelineId,
+  quality,
+  focusedCheck,
+}: {
+  asset: WebAsset;
+  pipelineId: string;
+  quality?: AssetStaleness;
+  focusedCheck?: QualityCheckFocus | null;
+}) {
   const supportsColumns =
     (asset.column_inference_sources?.length ?? 0) > 0 ||
     getAssetColumnRefreshMode(asset.type, asset.parameters) !== "none";
+  const [localFocus, setLocalFocus] = useState<QualityCheckFocus | null>(null);
+  useEffect(() => setLocalFocus(null), [focusedCheck?.token]);
+  const activeFocus = localFocus ?? focusedCheck;
   return (
     <ScrollArea className="min-h-0 w-full flex-1">
       <div className="divide-y px-3">
@@ -74,7 +92,14 @@ export function AssetGuidedCards({ asset, pipelineId }: { asset: WebAsset; pipel
         <MaterializationCard asset={asset} pipelineId={pipelineId} />
         <DependenciesCard asset={asset} />
         {supportsColumns ? <ColumnsCard asset={asset} /> : null}
-        {supportsColumns ? <QualityChecksCard asset={asset} /> : null}
+        {supportsColumns ? (
+          <QualityChecksCard
+            asset={asset}
+            quality={quality}
+            focusedCheck={activeFocus}
+            onFocusCheck={(check) => setLocalFocus({ ...check, token: Date.now() })}
+          />
+        ) : null}
       </div>
     </ScrollArea>
   );
@@ -1036,12 +1061,43 @@ export function formatCheckValue(value: unknown): string {
   return `: ${String(value)}`;
 }
 
-function QualityChecksCard({ asset }: { asset: WebAsset }) {
+function columnCheckKey(column: string, name: string) {
+  return `${column.trim().toLowerCase()}\u0000${name.trim().toLowerCase()}`;
+}
+
+function QualityChecksCard({
+  asset,
+  quality,
+  focusedCheck,
+  onFocusCheck,
+}: {
+  asset: WebAsset;
+  quality?: AssetStaleness;
+  focusedCheck?: QualityCheckFocus | null;
+  onFocusCheck: (check: FailedQualityCheck) => void;
+}) {
   const columns = asset.columns ?? [];
   const columnsWithChecks = columns.filter((column) => (column.checks?.length ?? 0) > 0);
   const [column, setColumn] = useState("");
   const [checkName, setCheckName] = useState<string>(COLUMN_CHECK_NAMES[0]);
   const [value, setValue] = useState("");
+  const [highlightedColumnCheck, setHighlightedColumnCheck] = useState("");
+  const columnCheckElements = useRef(new Map<string, HTMLSpanElement>());
+  const failedChecks =
+    quality?.quality_status === "failed" && quality.quality_on_current_content
+      ? (quality.failed_checks ?? [])
+      : [];
+
+  useEffect(() => {
+    if (focusedCheck?.kind !== "column" || !focusedCheck.column) return;
+    const key = columnCheckKey(focusedCheck.column, focusedCheck.name);
+    const element = columnCheckElements.current.get(key);
+    if (!element) return;
+    element.scrollIntoView({ behavior: "smooth", block: "center" });
+    setHighlightedColumnCheck(key);
+    const timeout = window.setTimeout(() => setHighlightedColumnCheck(""), 2200);
+    return () => window.clearTimeout(timeout);
+  }, [focusedCheck?.column, focusedCheck?.kind, focusedCheck?.name, focusedCheck?.token]);
 
   const apply = (tx: Parameters<typeof applyAssetTransaction>[1]) => {
     void applyAssetTransaction(asset.id, tx);
@@ -1056,99 +1112,159 @@ function QualityChecksCard({ asset }: { asset: WebAsset }) {
     setValue("");
   };
 
-  if (columns.length === 0) {
-    return (
-      <GuidedCard title="Quality checks">
-        <p className="text-[11px] text-muted-foreground">Add columns first to attach checks.</p>
-      </GuidedCard>
-    );
-  }
-
   return (
     <GuidedCard title="Quality checks">
-      {columnsWithChecks.length === 0 ? (
-        <p className="text-[11px] text-muted-foreground">No checks yet.</p>
-      ) : null}
-      {columnsWithChecks.map((col) => (
-        <div key={col.name} className="space-y-1">
-          <div className="font-monaco text-[11px] text-foreground">{col.name}</div>
-          <div className="flex flex-wrap gap-1">
-            {(col.checks ?? []).map((check, index) => (
-              <span
-                key={`${check.name}-${index}`}
-                className="inline-flex items-center gap-1 rounded-full border bg-muted/40 px-2 py-0.5 text-[10px]"
+      {failedChecks.length > 0 ? (
+        <div
+          data-testid="failed-quality-checks"
+          className="rounded-md border border-destructive/30 bg-destructive/5 p-2.5"
+        >
+          <div className="flex items-start gap-2">
+            <AlertTriangle className="mt-0.5 size-3.5 shrink-0 text-destructive" />
+            <div className="min-w-0">
+              <p className="text-[11px] font-medium text-foreground">
+                {failedChecks.length === 1
+                  ? "The latest check failed"
+                  : `${failedChecks.length} checks failed`}
+              </p>
+              <p className="mt-0.5 text-[10px] text-muted-foreground">
+                The materialized data is still tracked separately from these assertions.
+              </p>
+            </div>
+          </div>
+          <div className="mt-2 flex flex-wrap gap-1">
+            {failedChecks.map((check) => (
+              <button
+                key={`${check.kind}:${check.column ?? ""}:${check.name}`}
+                type="button"
+                className="rounded-full border bg-background px-2 py-0.5 font-mono text-[10px] text-foreground outline-none hover:bg-muted focus-visible:ring-1 focus-visible:ring-ring"
+                onClick={() => onFocusCheck(check)}
               >
-                {check.name}
-                {formatCheckValue(check.value)}
-                <button
-                  type="button"
-                  className="text-muted-foreground hover:text-foreground"
-                  aria-label={`Remove ${check.name} from ${col.name}`}
-                  onClick={() =>
-                    apply({
-                      type: "column.check.remove",
-                      column: col.name,
-                      check: { name: check.name },
-                    })
-                  }
-                >
-                  <X className="size-2.5" />
-                </button>
-              </span>
+                {check.kind === "column" && check.column
+                  ? `${check.column} · ${check.name}`
+                  : check.name}
+              </button>
             ))}
           </div>
         </div>
-      ))}
-      <div className="space-y-1.5">
-        <div className="flex items-center gap-1.5">
-          <Select value={column} onValueChange={setColumn}>
-            <SelectTrigger className="h-7 text-xs">
-              <SelectValue placeholder="Column" />
-            </SelectTrigger>
-            <SelectContent>
-              {columns
-                .filter((col) => col.name)
-                .map((col) => (
-                  <SelectItem key={col.name} value={col.name}>
-                    {col.name}
-                  </SelectItem>
-                ))}
-            </SelectContent>
-          </Select>
-          <Select value={checkName} onValueChange={setCheckName}>
-            <SelectTrigger className="h-7 text-xs">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              {COLUMN_CHECK_NAMES.map((name) => (
-                <SelectItem key={name} value={name}>
-                  {name}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        </div>
-        {VALUE_CHECKS.has(checkName) ? (
-          <Input
-            className="h-7 text-xs"
-            placeholder={
-              checkName === "accepted_values"
-                ? "a, b, c"
-                : checkName === "pattern"
-                  ? "regex"
-                  : "number"
-            }
-            value={value}
-            onChange={(event) => setValue(event.target.value)}
-            onKeyDown={(event) => {
-              if (event.key === "Enter") addCheck();
-            }}
-          />
-        ) : null}
-        <Button variant="outline" size="xs" disabled={!column} onClick={addCheck}>
-          <Plus className="size-3" />
-          Add check
-        </Button>
+      ) : null}
+      <AssetCustomChecks
+        asset={asset}
+        focusedCheck={
+          focusedCheck?.kind === "custom"
+            ? { name: focusedCheck.name, token: focusedCheck.token }
+            : undefined
+        }
+      />
+      <div className="space-y-2.5 border-t pt-3">
+        <p className="text-[11px] font-medium text-foreground">Column checks</p>
+        {columns.length === 0 ? (
+          <p className="text-[11px] text-muted-foreground">
+            Add columns first to attach column checks.
+          </p>
+        ) : (
+          <>
+            {columnsWithChecks.length === 0 ? (
+              <p className="text-[11px] text-muted-foreground">No column checks yet.</p>
+            ) : null}
+            {columnsWithChecks.map((col) => (
+              <div key={col.name} className="space-y-1">
+                <div className="font-monaco text-[11px] text-foreground">{col.name}</div>
+                <div className="flex flex-wrap gap-1">
+                  {(col.checks ?? []).map((check, index) => (
+                    <span
+                      key={`${check.name}-${index}`}
+                      ref={(element) => {
+                        const key = columnCheckKey(col.name, check.name);
+                        if (element) columnCheckElements.current.set(key, element);
+                        else columnCheckElements.current.delete(key);
+                      }}
+                      data-column-check={`${col.name}:${check.name}`}
+                      data-highlighted={
+                        highlightedColumnCheck === columnCheckKey(col.name, check.name)
+                          ? "true"
+                          : undefined
+                      }
+                      className={cn(
+                        "inline-flex items-center gap-1 rounded-full border bg-muted/40 px-2 py-0.5 text-[10px] transition-[border-color,box-shadow,background-color] duration-500",
+                        highlightedColumnCheck === columnCheckKey(col.name, check.name) &&
+                          "border-destructive/70 bg-destructive/5 ring-2 ring-destructive/20",
+                      )}
+                    >
+                      {check.name}
+                      {formatCheckValue(check.value)}
+                      <button
+                        type="button"
+                        className="text-muted-foreground hover:text-foreground"
+                        aria-label={`Remove ${check.name} from ${col.name}`}
+                        onClick={() =>
+                          apply({
+                            type: "column.check.remove",
+                            column: col.name,
+                            check: { name: check.name },
+                          })
+                        }
+                      >
+                        <X className="size-2.5" />
+                      </button>
+                    </span>
+                  ))}
+                </div>
+              </div>
+            ))}
+            <div className="space-y-1.5">
+              <div className="flex items-center gap-1.5">
+                <Select value={column} onValueChange={setColumn}>
+                  <SelectTrigger className="h-7 text-xs">
+                    <SelectValue placeholder="Column" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {columns
+                      .filter((col) => col.name)
+                      .map((col) => (
+                        <SelectItem key={col.name} value={col.name}>
+                          {col.name}
+                        </SelectItem>
+                      ))}
+                  </SelectContent>
+                </Select>
+                <Select value={checkName} onValueChange={setCheckName}>
+                  <SelectTrigger className="h-7 text-xs">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {COLUMN_CHECK_NAMES.map((name) => (
+                      <SelectItem key={name} value={name}>
+                        {name}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              {VALUE_CHECKS.has(checkName) ? (
+                <Input
+                  className="h-7 text-xs"
+                  placeholder={
+                    checkName === "accepted_values"
+                      ? "a, b, c"
+                      : checkName === "pattern"
+                        ? "regex"
+                        : "number"
+                  }
+                  value={value}
+                  onChange={(event) => setValue(event.target.value)}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter") addCheck();
+                  }}
+                />
+              ) : null}
+              <Button variant="outline" size="xs" disabled={!column} onClick={addCheck}>
+                <Plus className="size-3" />
+                Add check
+              </Button>
+            </div>
+          </>
+        )}
       </div>
     </GuidedCard>
   );

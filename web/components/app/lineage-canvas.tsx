@@ -45,6 +45,7 @@ import {
   initialCenteredViewportX,
   type AppLineageLayoutEdge,
 } from "@/lib/app-lineage-layout";
+import { assetNameParts } from "@/lib/asset-presentation";
 import { cn } from "@/lib/utils";
 
 import { kindMeta, type AppAsset } from "./app-data";
@@ -66,6 +67,7 @@ type AssetNodeData = {
   onSelect?: (assetId: string) => void;
   onCreateDownstream?: (assetId: string) => void;
   onOpenConnection?: (assetId: string) => void;
+  onReviewFailedCheck?: (assetId: string) => void;
   actions?: AssetNodeAction[];
 };
 
@@ -78,16 +80,7 @@ type PrefixGroupNodeData = {
 
 const overviewZoomThreshold = 0.55;
 
-export function assetNameParts(name: string) {
-  const parts = name.split(".").filter(Boolean);
-  if (parts.length <= 1) {
-    return { title: name };
-  }
-  return {
-    prefix: parts.slice(0, -1).join("."),
-    title: parts[parts.length - 1],
-  };
-}
+export { assetNameParts } from "@/lib/asset-presentation";
 
 export function assetGroupName(asset: AppLineageCanvasAsset) {
   return asset.prefix || asset.group || "root";
@@ -148,6 +141,9 @@ function AssetFlowNode({ data }: NodeProps<AssetNodeData>) {
           actions={actions}
           onOpenConnection={
             data.onOpenConnection ? () => data.onOpenConnection?.(data.asset.id) : undefined
+          }
+          onReviewFailedCheck={
+            data.onReviewFailedCheck ? () => data.onReviewFailedCheck?.(data.asset.id) : undefined
           }
         />
       )}
@@ -355,6 +351,7 @@ export function AppLineageCanvas({
   onDeleteAsset,
   onGoToAsset,
   onAssetConnectionClick,
+  onReviewFailedCheck,
   goToLabel,
 }: {
   assets: AppLineageCanvasAsset[];
@@ -373,6 +370,8 @@ export function AppLineageCanvas({
   // Clicking a node's connection badge; used to jump to the pipeline's
   // connection settings.
   onAssetConnectionClick?: (assetId: string) => void;
+  // Opens the asset properties focused on the first failed quality assertion.
+  onReviewFailedCheck?: (assetId: string) => void;
   goToLabel?: string;
 }) {
   const [lineageAssetId, setLineageAssetId] = useState<string | null>(null);
@@ -399,6 +398,7 @@ export function AppLineageCanvas({
     onDeleteAsset,
     onGoToAsset,
     onAssetConnectionClick,
+    onReviewFailedCheck,
   });
   callbacksRef.current = {
     selectedAssetId,
@@ -408,6 +408,7 @@ export function AppLineageCanvas({
     onDeleteAsset,
     onGoToAsset,
     onAssetConnectionClick,
+    onReviewFailedCheck,
   };
 
   const handleSelect = useCallback((assetId: string) => {
@@ -431,9 +432,14 @@ export function AppLineageCanvas({
     (assetId: string) => callbacksRef.current.onAssetConnectionClick?.(assetId),
     [],
   );
+  const handleReviewFailedCheck = useCallback(
+    (assetId: string) => callbacksRef.current.onReviewFailedCheck?.(assetId),
+    [],
+  );
 
   const hasCreateDownstream = Boolean(onCreateDownstream);
   const hasConnectionClick = Boolean(onAssetConnectionClick);
+  const hasQualityReview = Boolean(onReviewFailedCheck);
   const hasRun = Boolean(onRunAsset);
   const hasGoTo = Boolean(onGoToAsset);
   const hasDelete = Boolean(onDeleteAsset);
@@ -535,6 +541,7 @@ export function AppLineageCanvas({
           onSelect: handleSelect,
           onCreateDownstream: hasCreateDownstream ? handleCreateDownstream : undefined,
           onOpenConnection: hasConnectionClick ? handleOpenConnection : undefined,
+          onReviewFailedCheck: hasQualityReview ? handleReviewFailedCheck : undefined,
           actions: actions.length > 0 ? actions : undefined,
         },
         zIndex: 2,
@@ -572,12 +579,14 @@ export function AppLineageCanvas({
     flowInstance,
     hasCreateDownstream,
     hasConnectionClick,
+    hasQualityReview,
     hasRun,
     hasGoTo,
     hasDelete,
     handleSelect,
     handleCreateDownstream,
     handleOpenConnection,
+    handleReviewFailedCheck,
   ]);
 
   const centeredGraphRef = useRef<string | null>(null);

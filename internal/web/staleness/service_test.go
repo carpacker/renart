@@ -343,6 +343,43 @@ func TestUnchangedContentButLastRunFailed(t *testing.T) {
 	assert.True(t, s.LastRunOnCurrentContent)
 }
 
+func TestFreshAssetRetainsFailedQualityOutcome(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t, sqlAsset("a", "select 1"))
+	f.recordRun(t, "dev", nil, "a")
+
+	results, err := f.engine.DAG(f.pipeline, fingerprint.EffectiveVars(f.pipeline, nil))
+	require.NoError(t, err)
+	checkedAt := time.Now().UTC().Add(time.Second)
+	require.NoError(t, f.store.RecordRun(context.Background(), matlog.AssetRunRecord{
+		AssetID:       identity.AssetID("p", "a"),
+		Environment:   "dev",
+		Fingerprint:   string(results[identity.AssetID("p", "a")].FP),
+		Status:        "succeeded",
+		RunID:         "quality-run",
+		RanAt:         checkedAt,
+		QualityStatus: bus.QualityStatusFailed,
+		FailedChecks: []bus.QualityCheckFailure{{
+			Kind: bus.QualityCheckKindCustom, Name: "no invalid rows", Blocking: true,
+		}},
+	}))
+
+	s := f.statuses(t, "dev", nil, nil)["a"]
+	assert.Equal(t, StatusFresh, s.Status, "the successful write remains reusable")
+	assert.Equal(t, "succeeded", s.LastRunStatus)
+	assert.Equal(t, bus.QualityStatusFailed, s.QualityStatus)
+	assert.True(t, s.QualityOnCurrentContent)
+	assert.Equal(t, "quality-run", s.QualityRunID)
+	assert.Equal(t, checkedAt, *s.QualityCheckedAt)
+	assert.Equal(t, []bus.QualityCheckFailure{{
+		Kind: bus.QualityCheckKindCustom, Name: "no invalid rows", Blocking: true,
+	}}, s.FailedChecks)
+
+	f.pipeline.Assets[0].ExecutableFile.Content = "select 2"
+	edited := f.statuses(t, "dev", nil, nil)["a"]
+	assert.False(t, edited.QualityOnCurrentContent, "an old failure must not be blamed on edited SQL")
+}
+
 func TestEditFlipsAssetAndCone(t *testing.T) {
 	t.Parallel()
 	f := newFixture(t,

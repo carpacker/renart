@@ -169,7 +169,15 @@ round-trips unknown fields).
   sidebar next to the SQL editor: identity, materialization, dependencies
   (inferred / manual / ignored, with ignore/restore/remove actions), a column
   workbench (status markers for inferred/manual/stale/type-overridden,
-  checks, descriptions), and reconcile prompts. Merge editing includes
+  checks, descriptions), custom SQL checks, and reconcile prompts. Custom
+  checks open in a focused Monaco SQL dialog with named row-count or scalar
+  expectations, descriptions, and blocking behavior; add/edit/remove actions
+  use semantic asset transactions and keep the ordinary asset file as the only
+  source of truth. Runtime failure evidence is not written back into that asset
+  file. Instead, the state database retains only the failed check identity for
+  the latest run; a current-content canvas warning can open this card and
+  highlight the matching custom or column check without exposing query or error
+  text in workspace metadata. Merge editing includes
   column-scoped primary keys, `update_on_merge`, custom `merge_sql`, and a
   column-backed update-key combobox where the active execution path supports
   one. The backend-provided per-asset capability profile drives the available

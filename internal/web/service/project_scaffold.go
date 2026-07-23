@@ -34,14 +34,20 @@ type projectTemplate struct {
 }
 
 const (
-	ProjectTemplateEmpty      = "empty"
-	ProjectTemplateBare       = "bare"
-	ProjectTemplateChessDemo  = "demo:chess"
-	ProjectTemplateRetailDemo = "demo:retail"
+	ProjectTemplateEmpty          = "empty"
+	ProjectTemplateBare           = "bare"
+	ProjectTemplateChessDemo      = "demo:chess"
+	ProjectTemplateRetailDemo     = "demo:retail"
+	ProjectTemplateProductDemo    = PipelineTemplateProductDemo
+	ProjectTemplateOperationsDemo = PipelineTemplateOperationsDemo
+	ProjectTemplatePythonDemo     = PipelineTemplatePythonDemo
 )
 
 func projectTemplates() []projectTemplate {
 	return []projectTemplate{
+		projectTemplateFromPipelineStarter(ProjectTemplateProductDemo),
+		projectTemplateFromPipelineStarter(ProjectTemplateOperationsDemo),
+		projectTemplateFromPipelineStarter(ProjectTemplatePythonDemo),
 		{
 			info: ProjectTemplateInfo{
 				ID:           ProjectTemplateChessDemo,
@@ -122,6 +128,32 @@ func projectTemplates() []projectTemplate {
 			},
 			duckdbFile: "local.duckdb",
 			files:      func() map[string]string { return map[string]string{} },
+		},
+	}
+}
+
+// projectTemplateFromPipelineStarter promotes a backend-owned pipeline starter
+// into first-run onboarding without copying its files or catalog text into a
+// second implementation. Retail and Chess keep their older project-specific
+// wrappers because their pipeline variants already source files from those
+// wrappers.
+func projectTemplateFromPipelineStarter(id string) projectTemplate {
+	starter, ok := pipelineTemplateByID(id)
+	if !ok {
+		panic(fmt.Sprintf("project template references unknown pipeline starter %q", id))
+	}
+	return projectTemplate{
+		info: ProjectTemplateInfo{
+			ID:           starter.info.ID,
+			Title:        starter.info.Title,
+			Description:  starter.info.Description,
+			Offline:      starter.info.Offline,
+			PipelineName: starter.info.SuggestedPath,
+			AssetNames:   starter.info.AssetNames,
+		},
+		duckdbFile: starter.duckdbFile,
+		files: func() map[string]string {
+			return starter.files(starter.info.SuggestedPath)
 		},
 	}
 }

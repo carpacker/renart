@@ -99,6 +99,16 @@ export type WebColumnCheck = {
   description?: string;
 };
 
+export type WebCustomCheck = {
+  name: string;
+  description?: string;
+  value: number;
+  count?: number;
+  blocking?: boolean;
+  query: string;
+  retries?: number;
+};
+
 export type ColumnReference = {
   table: string;
   column: string;
@@ -131,6 +141,7 @@ export type WebAsset = {
   parameters?: Record<string, string>;
   meta?: Record<string, string>;
   columns?: WebColumn[];
+  custom_checks?: WebCustomCheck[];
   column_inference_sources?: ColumnInferenceSource[];
   connection?: string;
   explicit_connection?: string;
@@ -284,6 +295,7 @@ export type ProjectInfo = {
 export type ProjectListResponse = {
   status: string;
   default_project_id: string;
+  bootstrap: boolean;
   projects: ProjectInfo[];
 };
 

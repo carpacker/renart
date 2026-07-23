@@ -51,7 +51,7 @@ export type SuggestionTableState = {
   pipelineId?: string;
   assetId?: string;
   assetPath?: string;
-  isBruinAsset: boolean;
+  isWorkspaceAsset: boolean;
   isMaterialized?: boolean;
   remoteSuggestionKind?: string;
   remoteSuggestionDetail?: string;

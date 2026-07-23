@@ -301,6 +301,7 @@ func (s *WorkspaceService) ComputeState(ctx context.Context) (model.WorkspaceSta
 				Parameters:                  parameters,
 				Meta:                        assetMeta,
 				Columns:                     PipelineColumnsToModelColumns(columns),
+				CustomChecks:                PipelineCustomChecksToModelCustomChecks(asset.CustomChecks),
 				ColumnInferenceSources:      columnInferenceSourcesForAsset(asset, connectionName),
 				Connection:                  connectionName,
 				ExplicitConnection:          strings.TrimSpace(asset.Connection),
@@ -541,6 +542,34 @@ func ModelColumnsToPipelineColumns(columns []model.Column) []pipeline.Column {
 		})
 	}
 	return result
+}
+
+func PipelineCustomChecksToModelCustomChecks(checks []pipeline.CustomCheck) []model.CustomCheck {
+	result := make([]model.CustomCheck, 0, len(checks))
+	for _, check := range checks {
+		result = append(result, model.CustomCheck{
+			Name:        check.Name,
+			Description: check.Description,
+			Value:       check.Value,
+			Count:       check.Count,
+			Blocking:    check.Blocking.Value,
+			Query:       check.Query,
+			Retries:     check.Retries,
+		})
+	}
+	return result
+}
+
+func ModelCustomCheckToPipelineCustomCheck(check model.CustomCheck) pipeline.CustomCheck {
+	return pipeline.CustomCheck{
+		Name:        strings.TrimSpace(check.Name),
+		Description: strings.TrimSpace(check.Description),
+		Value:       check.Value,
+		Count:       check.Count,
+		Blocking:    pipeline.DefaultTrueBool{Value: check.Blocking},
+		Query:       strings.TrimSpace(check.Query),
+		Retries:     check.Retries,
+	}
 }
 
 func columnCheckValueToAny(value pipeline.ColumnCheckValue) any {

@@ -260,6 +260,7 @@ func apiAwareYamlTaskCreator(fs afero.Fs) pipeline.TaskCreator {
 				asset.Tags = metaAsset.Tags
 				asset.Description = metaAsset.Description
 				asset.Materialization = metaAsset.Materialization
+				asset.CustomChecks = metaAsset.CustomChecks
 			}
 		}
 		return asset, nil

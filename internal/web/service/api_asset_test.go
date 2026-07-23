@@ -700,6 +700,7 @@ func TestWriteAPIAssetJSONLPaginatesByLinkHeader(t *testing.T) {
 func TestHybridBruinExecutorRunsAPIAssetThroughLoadWithBruinTargetConnection(t *testing.T) {
 	workspaceRoot := t.TempDir()
 	require.NoError(t, os.MkdirAll(filepath.Join(workspaceRoot, ".git"), 0o755))
+	require.NoError(t, os.MkdirAll(filepath.Join(workspaceRoot, "duckdb-files"), 0o755))
 	fakeUv := filepath.Join(workspaceRoot, "fake-uv")
 	require.NoError(t, os.WriteFile(fakeUv, []byte("#!/bin/sh\nprintf 'uv %s loaded_at=%s\\n' \"$*\" \"$SLING_LOADED_AT_COLUMN\"\n"), 0o755))
 	t.Setenv("RENART_UV_BINARY", fakeUv)

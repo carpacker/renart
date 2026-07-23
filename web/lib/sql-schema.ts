@@ -3,7 +3,7 @@ import { WebAsset, WebColumn, WorkspaceState } from "@/lib/types";
 /**
  * A table known to the SQL editor for autocompletion and go-to-definition.
  *
- * `isBruinAsset` marks tables derived from Bruin assets on the same connection
+ * `isWorkspaceAsset` marks tables derived from pipeline assets on the same connection
  * so they rank higher in completion results.
  */
 export type SchemaTable = {
@@ -13,17 +13,17 @@ export type SchemaTable = {
   shortName: string;
   /** Column definitions when available. */
   columns: SchemaColumn[];
-  /** True when the table originates from a Bruin asset (priority source). */
-  isBruinAsset: boolean;
+  /** True when the table originates from a workspace asset (priority source). */
+  isWorkspaceAsset: boolean;
   /** True when the asset is known to have been materialized before. */
   isMaterialized?: boolean;
-  /** The asset id — only present for Bruin asset tables. */
+  /** The asset id — only present for workspace asset tables. */
   assetId?: string;
   /** The pipeline id that owns this asset. */
   pipelineId?: string;
   /** Source asset file path, useful for definition hints. */
   assetPath?: string;
-  /** Resolved Bruin connection name when known. */
+  /** Effective workspace connection name when known. */
   connectionName?: string;
   /** Resolved connection platform type when known. */
   connectionType?: string;
@@ -41,62 +41,30 @@ export type SchemaColumn = {
   sourceMethods?: string[];
 };
 
-/** SQL asset type prefixes that target a specific connection platform. */
-const SQL_TYPE_PREFIXES: Record<string, string> = {
-  "bq.sql": "google_cloud_platform",
-  "sf.sql": "snowflake",
-  "pg.sql": "postgres",
-  "ms.sql": "mssql",
-  "my.sql": "mysql",
-  "rs.sql": "redshift",
-  "duckdb.sql": "duckdb",
-  "clickhouse.sql": "clickhouse",
-  "databricks.sql": "databricks",
-  "synapse.sql": "synapse",
-  "fabric.sql": "fabric",
-  "fw.sql": "fabric",
-  "athena.sql": "athena",
-  "trino.sql": "trino",
-  "motherduck.sql": "motherduck",
-  "oracle.sql": "oracle",
-};
-
 /**
- * Derive the "platform family" for an asset type so we can decide which assets
- * share a connection namespace.  Returns `null` for non-SQL types.
+ * Return the effective connection resolved by the backend after applying
+ * pipeline defaults. Never infer one from the asset type: multiple connections
+ * can share a platform and only the backend has the pipeline/environment
+ * context needed to choose between them.
  */
-export function platformForAssetType(assetType: string): string | null {
-  const lower = assetType.toLowerCase();
-  return SQL_TYPE_PREFIXES[lower] ?? null;
+export function effectiveConnectionForAsset(asset: Pick<WebAsset, "connection">): string | null {
+  return asset.connection?.trim() || null;
 }
 
 /**
- * Resolve the effective connection name for an asset.
- *
- * If the asset has an explicit `connection` field we use that.  Otherwise we
- * fall back to the platform-default connection.
+ * Resolve the platform type for an asset's effective connection. This keeps
+ * editor behavior tied to the backend-selected connection instead of guessing
+ * from the asset type.
  */
-export function resolveConnection(
-  asset: WebAsset,
-  connections: Record<string, string>,
+export function effectiveConnectionTypeForAsset(
+  workspace: Pick<WorkspaceState, "connections">,
+  asset: Pick<WebAsset, "connection">,
 ): string | null {
-  if (asset.connection) {
-    return asset.connection;
-  }
-
-  const platform = platformForAssetType(asset.type);
-  if (!platform) {
+  const connectionName = effectiveConnectionForAsset(asset);
+  if (!connectionName) {
     return null;
   }
-
-  // Find the first connection whose *type* matches the platform.
-  for (const [name, type] of Object.entries(connections)) {
-    if (type === platform) {
-      return name;
-    }
-  }
-
-  return null;
+  return workspace.connections?.[connectionName]?.trim().toLowerCase() || null;
 }
 
 function toSchemaColumns(columns?: WebColumn[]): SchemaColumn[] {
@@ -149,16 +117,16 @@ export function buildSchemaForAsset(
   currentAsset: WebAsset,
 ): SchemaTable[] {
   const connections = workspace.connections ?? {};
-  const currentConnection = resolveConnection(currentAsset, connections);
+  const currentConnection = effectiveConnectionForAsset(currentAsset);
 
   const tables: SchemaTable[] = [];
   const seen = new Set<string>();
 
   for (const pipeline of workspace.pipelines) {
     for (const asset of pipeline.assets) {
-      const assetConnection = resolveConnection(asset, connections);
+      const assetConnection = effectiveConnectionForAsset(asset);
 
-      // Skip assets on a different connection (or non-SQL assets).
+      // Skip assets on a different or unresolved connection.
       if (!assetConnection || assetConnection !== currentConnection) {
         continue;
       }
@@ -175,7 +143,7 @@ export function buildSchemaForAsset(
         name,
         shortName: tableParts.shortName,
         columns: toSchemaColumns(asset.columns),
-        isBruinAsset: true,
+        isWorkspaceAsset: true,
         isMaterialized: asset.is_materialized,
         assetId: asset.id,
         pipelineId: pipeline.id,

@@ -3,14 +3,19 @@
 import { useEffect, useMemo, useRef } from "react";
 import type * as MonacoNS from "monaco-editor";
 
-import { getSQLPathSuggestions } from "@/lib/api";
+import { getSQLPathSuggestions } from "@/lib/api-sql-discovery";
 import {
   registerSQLProviders,
   resolveTableAtPosition,
   RemoteSQLResolver,
   SQLProviderEntry,
 } from "@/lib/monaco-sql-providers";
-import { findTableByIdentifier, resolveConnection, SchemaTable } from "@/lib/sql-schema";
+import {
+  effectiveConnectionForAsset,
+  effectiveConnectionTypeForAsset,
+  findTableByIdentifier,
+  SchemaTable,
+} from "@/lib/sql-schema";
 import { SqlParseContextDiagnostic, WebAsset, WorkspaceState } from "@/lib/types";
 import { useAtomValue, useSetAtom } from "jotai";
 
@@ -27,15 +32,14 @@ import { fetchJSON } from "@/lib/api-core";
 import { buildInspectDiagnosticMarker, InspectDiagnosticSnapshot } from "@/lib/inspect-diagnostics";
 
 function buildValueSuggestionQuery(
-  assetType: string | undefined,
+  connectionType: string | null,
   quotedTable: string,
   quotedColumn: string,
   trimmedPrefix: string,
 ) {
   const escapedPrefix = trimmedPrefix.replaceAll("'", "''");
-  const normalizedAssetType = assetType?.toLowerCase() ?? "";
 
-  if (normalizedAssetType !== "duckdb.sql") {
+  if (connectionType !== "duckdb") {
     return "";
   }
   return trimmedPrefix
@@ -597,8 +601,7 @@ export function useSQLIntellisense(
 
   useSQLSemanticDecorations(registerSemanticDecorations ? editor : null, activeParseContext);
 
-  const connectionName =
-    asset && workspace ? resolveConnection(asset, workspace.connections ?? {}) : null;
+  const connectionName = asset && workspace ? effectiveConnectionForAsset(asset) : null;
   const currentPipelineId = asset
     ? ((workspace?.pipelines ?? []).find((pipeline) =>
         pipeline.assets.some((candidate) => candidate.id === asset.id),
@@ -770,8 +773,11 @@ export function useSQLIntellisense(
         range,
         insideQuotes,
       }) {
-        const { activeParseContext, asset, connectionName, environment } = latestStateRef.current;
-        if (!connectionName || !activeParseContext || asset?.type?.toLowerCase() !== "duckdb.sql") {
+        const { activeParseContext, asset, connectionName, environment, workspace } =
+          latestStateRef.current;
+        const connectionType =
+          asset && workspace ? effectiveConnectionTypeForAsset(workspace, asset) : null;
+        if (!connectionName || !activeParseContext || connectionType !== "duckdb") {
           return [];
         }
 
@@ -793,7 +799,7 @@ export function useSQLIntellisense(
         const quotedTable = quoteSQLIdentifier(resolvedTable);
         const quotedColumn = quoteSQLIdentifier(columnName);
         const valueQuery = buildValueSuggestionQuery(
-          asset?.type,
+          connectionType,
           quotedTable,
           quotedColumn,
           trimmedPrefix,

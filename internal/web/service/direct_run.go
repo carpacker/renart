@@ -795,11 +795,38 @@ func isDirectRunAssetTypeSupported(assetType pipeline.AssetType) bool {
 	return ok
 }
 
+const (
+	executionTaskKindMain        = "main"
+	executionTaskKindColumnCheck = "column_check"
+	executionTaskKindCustomCheck = "custom_check"
+)
+
 func emitDirectRunAssetEvent(onEvent func(ExecutionAssetEvent) error, instance scheduler.TaskInstance, status string, startedAt, finishedAt time.Time, err error) error {
-	if onEvent == nil || instance == nil || instance.GetAsset() == nil || instance.GetType() != scheduler.TaskInstanceTypeMain {
+	if onEvent == nil || instance == nil || instance.GetAsset() == nil {
 		return nil
 	}
 	event := ExecutionAssetEvent{Asset: instance.GetAsset().Name, Status: status}
+	switch task := instance.(type) {
+	case *scheduler.AssetInstance:
+		event.TaskKind = executionTaskKindMain
+	case *scheduler.ColumnCheckInstance:
+		if task.Column == nil || task.Check == nil {
+			return nil
+		}
+		event.TaskKind = executionTaskKindColumnCheck
+		event.CheckName = task.Check.Name
+		event.CheckColumn = task.Column.Name
+		event.CheckBlocking = task.Blocking()
+	case *scheduler.CustomCheckInstance:
+		if task.Check == nil {
+			return nil
+		}
+		event.TaskKind = executionTaskKindCustomCheck
+		event.CheckName = task.Check.Name
+		event.CheckBlocking = task.Blocking()
+	default:
+		return nil
+	}
 	if !startedAt.IsZero() {
 		start := startedAt.UTC()
 		event.StartedAt = &start

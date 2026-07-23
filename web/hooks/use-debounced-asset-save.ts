@@ -3,7 +3,7 @@
 import { useSetAtom } from "jotai";
 import { useCallback, useRef } from "react";
 
-import { updateAsset } from "@/lib/api";
+import { updateAsset } from "@/lib/api-assets-crud";
 import { changedAssetIdsAtom } from "@/lib/atoms/domains/results";
 
 type PendingAssetSave = {

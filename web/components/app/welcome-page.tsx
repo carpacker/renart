@@ -42,7 +42,12 @@ import {
   updateWorkspaceConnection,
 } from "@/lib/api-config";
 import { importOnboardingDatabase, previewOnboardingDiscovery } from "@/lib/api-onboarding";
-import { browseProjectDirs, createProject, getProjectTemplates } from "@/lib/api-projects";
+import {
+  browseProjectDirs,
+  createProject,
+  getProjectTemplates,
+  listProjects,
+} from "@/lib/api-projects";
 import { buildStalePipelineStream } from "@/lib/api-staleness";
 import type { StreamAssetEvent } from "@/lib/api-streams";
 import { getWorkspace } from "@/lib/api-workspace";
@@ -79,6 +84,7 @@ export function WelcomePage({ forceNew = false }: { forceNew?: boolean }) {
 
   const [templates, setTemplates] = useState<ProjectTemplateInfo[]>([]);
   const [workspaceEmpty, setWorkspaceEmpty] = useState<boolean | null>(null);
+  const [bootstrapMode, setBootstrapMode] = useState<boolean | null>(null);
   const [workspacePath, setWorkspacePath] = useState("");
   const [connectionTypes, setConnectionTypes] = useState<WorkspaceConfigConnectionType[]>([]);
 
@@ -117,6 +123,9 @@ export function WelcomePage({ forceNew = false }: { forceNew?: boolean }) {
         setDemoId((current) => current || firstDemo?.id || "");
       })
       .catch(() => setTemplates([]));
+    void listProjects()
+      .then((response) => setBootstrapMode(response.bootstrap))
+      .catch(() => setBootstrapMode(true));
     void getWorkspace()
       .then((workspace) => setWorkspaceEmpty(workspace.pipelines.length === 0))
       .catch(() => setWorkspaceEmpty(false));
@@ -134,7 +143,7 @@ export function WelcomePage({ forceNew = false }: { forceNew?: boolean }) {
 
   // Scaffolding into the open (empty) workspace is the first-run default;
   // "New project" from the switcher always creates a fresh directory.
-  const inPlace = !forceNew && workspaceEmpty === true;
+  const inPlace = !forceNew && bootstrapMode === false && workspaceEmpty === true;
   const demoTemplates = useMemo(
     () => templates.filter((template) => template.id.startsWith("demo:")),
     [templates],
@@ -338,9 +347,9 @@ export function WelcomePage({ forceNew = false }: { forceNew?: boolean }) {
           </p>
         </header>
 
-        {error ? (
+        {error && stage !== "target" ? (
           <Alert variant="destructive" className="mb-4">
-            <CircleAlert className="size-4" />
+            <CircleAlert />
             <AlertTitle>Something went wrong</AlertTitle>
             <AlertDescription>{error}</AlertDescription>
           </Alert>
@@ -393,6 +402,7 @@ export function WelcomePage({ forceNew = false }: { forceNew?: boolean }) {
                     key={template.id}
                     type="button"
                     onClick={() => {
+                      setError(null);
                       setDemoId(template.id);
                       setProjectName((current) =>
                         !current || current === demoSuggestedName(demoId)
@@ -462,7 +472,10 @@ export function WelcomePage({ forceNew = false }: { forceNew?: boolean }) {
                   <Input
                     id="welcome-project-name"
                     value={projectName}
-                    onChange={(event) => setProjectName(event.target.value)}
+                    onChange={(event) => {
+                      setProjectName(event.target.value);
+                      setError(null);
+                    }}
                     placeholder={intent === "demo" ? demoSuggestedName(demoId) : "analytics"}
                     autoFocus
                   />
@@ -498,8 +511,23 @@ export function WelcomePage({ forceNew = false }: { forceNew?: boolean }) {
               </>
             )}
 
+            {error ? (
+              <Alert variant="destructive">
+                <CircleAlert />
+                <AlertTitle>Project could not be created</AlertTitle>
+                <AlertDescription>{error}</AlertDescription>
+              </Alert>
+            ) : null}
+
             <div className="flex justify-between">
-              <Button variant="ghost" onClick={() => setStage("choose")} disabled={busy}>
+              <Button
+                variant="ghost"
+                onClick={() => {
+                  setError(null);
+                  setStage("choose");
+                }}
+                disabled={busy}
+              >
                 <ArrowLeft data-icon="inline-start" />
                 Back
               </Button>
@@ -597,13 +625,13 @@ export function WelcomePage({ forceNew = false }: { forceNew?: boolean }) {
             </div>
             {runLog ? (
               <ScrollArea
-                className="h-32 rounded-md border bg-zinc-950"
-                viewportClassName="max-h-32"
+                className="h-64 rounded-md border bg-zinc-950"
+                viewportClassName="max-h-64"
                 viewportRef={runLogViewportRef}
               >
                 <AnsiOutput
                   output={runLog}
-                  className="whitespace-pre-wrap p-2 font-mono text-[10px] leading-relaxed text-zinc-300"
+                  className="whitespace-pre-wrap p-3 font-mono text-[11px] leading-relaxed text-zinc-300"
                 />
               </ScrollArea>
             ) : null}
@@ -852,7 +880,10 @@ export function WelcomePage({ forceNew = false }: { forceNew?: boolean }) {
           description="Choose the folder that will contain the new project directory."
           confirmLabel="Use this directory"
           allowCreate
-          onSelect={setParentDir}
+          onSelect={(path) => {
+            setParentDir(path);
+            setError(null);
+          }}
         />
       ) : null}
     </div>

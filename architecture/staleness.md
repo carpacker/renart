@@ -149,11 +149,16 @@ terminal asset events even when the overall run fails: completed assets record
 success facts, the failing asset records a failed attempt, and assets the
 executor never reached record nothing.
 
-**Last run attempt.** Facts only capture successes, so the recorder also upserts
-`renart_asset_runs` — one row per `(asset, environment)` with the target
-fingerprint, `succeeded|failed|cancelled`, and timestamp (a later run overwrites
-it, so a success clears a prior failure). The upsert is monotonic by timestamp:
-an older or equal-time recovery event cannot replace a newer attempt.
+**Last run attempt and quality.** Facts only capture successes, so the recorder
+also upserts `renart_asset_runs` — one row per `(asset, environment)` with the
+target fingerprint, `succeeded|failed|cancelled`, timestamp, and the optional
+runtime quality outcome. Main-task and quality status are orthogonal: a
+successful write records coverage and can remain `fresh` while a later custom
+or column check is `failed`. Only stable failed-check identities are stored;
+check SQL and runtime errors remain in the run log. A later run overwrites the
+row, so its main and quality outcomes replace the prior attempt together. The
+upsert is monotonic by timestamp: an older or equal-time recovery event cannot
+replace a newer attempt.
 Interactive, stale-plan, and full
 pipeline materialization all emit `RunCompleted` for the assets they actually
 attempted, including terminal failures.
@@ -279,7 +284,12 @@ claims, and ambiguity. Each asset also exposes its selected target
 fidelity/identity and the current `latest_output` writer metadata when that
 target is trustworthy. Equivalent reruns in the same generation do not churn
 the token; generation changes, coverage expansion, ambiguity, and active/dirty
-claims do. Recompute triggers: selection change (batched coverage query),
+claims do. Quality is delivered in the same snapshot but deliberately does not
+enter `data_state_token`, because assertions do not change which physical data
+exists. The quality fields include the originating run/time and whether its
+fingerprint still matches the current asset, so an old failed assertion is not
+presented as a failure of newly edited SQL. Recompute triggers: selection change
+(batched coverage query),
 `AssetSaved` (invalidate + recompute the downstream cone), `RunCompleted` (flip
 the touched assets), and `TargetWriteChanged` (publish the fail-closed claim
 state).

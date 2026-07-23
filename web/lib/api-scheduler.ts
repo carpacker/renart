@@ -1,33 +1,10 @@
 import { APIError, fetchJSON, fetchJSONWithBody } from "@/lib/api-core";
 import type {
   PipelineRun,
-  PipelineSchedule,
   RunDetailResponse,
   RunsResponse,
-  SchedulesResponse,
   TriggerPipelineResponse,
-  UpdateScheduleResponse,
 } from "@/lib/types";
-
-export async function getSchedules() {
-  return fetchJSON<SchedulesResponse>("/api/schedules");
-}
-
-export async function updatePipelineSchedule(
-  pipelineId: string,
-  input: {
-    enabled: boolean;
-    schedule: string;
-    timezone: string;
-    catchup: boolean;
-  },
-) {
-  return fetchJSONWithBody<UpdateScheduleResponse>(
-    `/api/pipelines/${pipelineId}/schedule`,
-    "PUT",
-    input,
-  );
-}
 
 export type PipelineRunSource =
   | { source: "working_tree"; snapshot_version_id?: never }
@@ -109,4 +86,8 @@ export async function reexecutePipelineRun(runId: PipelineRun["id"]) {
   return fetchJSONWithBody<TriggerPipelineResponse>(`/api/runs/${runId}/reexecute`, "POST", {});
 }
 
-export type { PipelineRun, PipelineSchedule };
+export async function cancelPipelineRun(runId: PipelineRun["id"]) {
+  return fetchJSONWithBody<TriggerPipelineResponse>(`/api/runs/${runId}/cancel`, "POST", {});
+}
+
+export type { PipelineRun };

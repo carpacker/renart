@@ -135,6 +135,7 @@ func Web() *cli.Command {
 			if err != nil {
 				return err
 			}
+			defer cleanupServerBootstrap(cfg)
 
 			logger, err := newServerLogger()
 			if err != nil {
@@ -727,6 +728,13 @@ func (s *webServer) ReexecuteRun(ctx context.Context, runID string) (webschedule
 		return webscheduler.PipelineRun{}, fmt.Errorf("scheduler is not initialized")
 	}
 	return s.schedulerSvc.ReexecuteRun(ctx, runID)
+}
+
+func (s *webServer) CancelRun(ctx context.Context, runID string) (webscheduler.PipelineRun, error) {
+	if s.schedulerSvc == nil {
+		return webscheduler.PipelineRun{}, fmt.Errorf("scheduler is not initialized")
+	}
+	return s.schedulerSvc.CancelRun(ctx, runID)
 }
 
 func schedulerStatusFromExecutionStatus(status string) webscheduler.RunStatus {

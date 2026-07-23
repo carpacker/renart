@@ -110,6 +110,14 @@ type AssetStatus struct {
 	LastRunStatus           string     `json:"last_run_status,omitempty"` // "succeeded" | "failed" | "cancelled"
 	LastRunAt               *time.Time `json:"last_run_at,omitempty"`
 	LastRunOnCurrentContent bool       `json:"last_run_on_current_content,omitempty"`
+	// Quality is the latest completed assertion outcome, independent of data
+	// freshness and the main-task status. QualityOnCurrentContent prevents an
+	// old failure from being presented as a problem with newly edited SQL.
+	QualityStatus           bus.QualityStatus         `json:"quality_status,omitempty"`
+	FailedChecks            []bus.QualityCheckFailure `json:"failed_checks,omitempty"`
+	QualityRunID            string                    `json:"quality_run_id,omitempty"`
+	QualityCheckedAt        *time.Time                `json:"quality_checked_at,omitempty"`
+	QualityOnCurrentContent bool                      `json:"quality_on_current_content,omitempty"`
 	// TargetFidelity and TargetIdentity describe the output selected by the
 	// current environment/configuration. LatestOutput describes what is
 	// physically present there, when that fact is durably known. Exact targets
@@ -743,6 +751,16 @@ func applyLastRun(status *AssetStatus, lastRun matlog.AssetRunRecord, result fin
 		status.LastRunAt = &at
 	}
 	status.LastRunOnCurrentContent = lastRun.Fingerprint == string(result.FP)
+	if lastRun.QualityStatus != "" {
+		status.QualityStatus = lastRun.QualityStatus
+		status.FailedChecks = append([]bus.QualityCheckFailure(nil), lastRun.FailedChecks...)
+		status.QualityRunID = lastRun.RunID
+		status.QualityOnCurrentContent = status.LastRunOnCurrentContent
+		if !lastRun.RanAt.IsZero() {
+			at := lastRun.RanAt
+			status.QualityCheckedAt = &at
+		}
+	}
 }
 
 func classify(asset *pipeline.Asset, assetID string, result fingerprint.Result, rows []matlog.CoverageRow, anyBuilt bool, lastOwnContent string, selectedRange *Interval) AssetStatus {

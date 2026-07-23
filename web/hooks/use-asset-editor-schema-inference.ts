@@ -2,7 +2,7 @@
 
 import { useEffect, useRef } from "react";
 
-import { inferAssetColumns } from "@/lib/api";
+import { inferAssetColumns } from "@/lib/api-assets-columns";
 import { RegisterAssetColumnsPayload } from "@/lib/atoms/suggestion-types";
 import { WebAsset } from "@/lib/types";
 

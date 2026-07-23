@@ -14,6 +14,7 @@ var version = "dev"
 
 func main() {
 	color.NoColor = false
+	configureManagedInstallerEnvironment()
 
 	err := cmd.Root(version).Run(context.Background(), argsWithDefaultCommand(os.Args))
 	if err != nil {
@@ -21,6 +22,15 @@ func main() {
 		cli.HandleExitCoder(err)
 		os.Exit(1) //nolint:gocritic
 	}
+}
+
+// configureManagedInstallerEnvironment keeps installers used internally by
+// Renart from editing the user's shell startup files. The uv installer honors
+// UV_NO_MODIFY_PATH; the dependency checker's older variable spelling is not
+// recognized by current uv releases, so set the supported variable in the
+// parent process where every Python and load-asset execution inherits it.
+func configureManagedInstallerEnvironment() {
+	_ = os.Setenv("UV_NO_MODIFY_PATH", "1")
 }
 
 // argsWithDefaultCommand makes the desktop app the natural entry point while

@@ -10,6 +10,7 @@ the original.
 
 | Doc | Status |
 | --- | --- |
+| [agentic-notebooks.md](agentic-notebooks.md) | research proposal — staged native notebook agent, safe tool/change-set foundation, and external-agent bridge option |
 | [cross-pipeline-dependencies.md](cross-pipeline-dependencies.md) | proposal — Bruin-compatible URI lineage, workspace-wide freshness, and interval-aware schedule prerequisites |
 | [dbt-assets.md](dbt-assets.md) | evaluation — enabling renart intelligence on existing dbt projects |
 | [materialization-reach.md](materialization-reach.md) | proposed reach — guided advanced SQL modes, coverage timeline, Python pre-run diagnostic |

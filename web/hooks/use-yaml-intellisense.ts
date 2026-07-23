@@ -4,7 +4,8 @@ import { useAtomValue, useSetAtom } from "jotai";
 import { useEffect, useRef, type MutableRefObject } from "react";
 import type * as MonacoNS from "monaco-editor";
 
-import { getIngestrSuggestions, getOpenAPISuggestions } from "@/lib/api";
+import { getIngestrSuggestions, getOpenAPISuggestions } from "@/lib/api-ingestr";
+import { isAPIAssetType } from "@/lib/asset-types";
 import type {
   OpenAPIQueryParameterSuggestion,
   OpenAPISuggestionsResult,
@@ -145,7 +146,7 @@ export function useYAMLIntellisense(
         const isIngestr = isIngestrYaml(content);
         // The API asset editor scopes the buffer to the `parameters:` block, so
         // `type: api` isn't in view — fall back to the asset's own type.
-        const isAPI = isAPIYaml(content) || asset.type.toLowerCase() === "api";
+        const isAPI = isAPIYaml(content) || isAPIAssetType(asset.type);
         if (!isIngestr && !isAPI) {
           return { suggestions: [] };
         }
@@ -200,13 +201,7 @@ export function useYAMLIntellisense(
   }, [monaco]);
 
   useEffect(() => {
-    if (
-      !monaco ||
-      !editor ||
-      !asset ||
-      !isYamlPath(asset.path) ||
-      asset.type.toLowerCase() !== "api"
-    ) {
+    if (!monaco || !editor || !asset || !isYamlPath(asset.path) || !isAPIAssetType(asset.type)) {
       return;
     }
     const owner = "renart-api-yaml";

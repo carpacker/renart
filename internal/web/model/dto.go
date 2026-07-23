@@ -136,6 +136,7 @@ type Asset struct {
 	Parameters             map[string]string       `json:"parameters,omitempty"`
 	Meta                   map[string]string       `json:"meta,omitempty"`
 	Columns                []Column                `json:"columns,omitempty"`
+	CustomChecks           []CustomCheck           `json:"custom_checks,omitempty"`
 	ColumnInferenceSources []ColumnInferenceSource `json:"column_inference_sources,omitempty"`
 	// Connection is the effective target connection after applying pipeline
 	// defaults; ExplicitConnection is the persisted asset-level override used by
@@ -200,6 +201,19 @@ type ColumnCheck struct {
 	Value       any    `json:"value,omitempty"`
 	Blocking    *bool  `json:"blocking,omitempty"`
 	Description string `json:"description,omitempty"`
+}
+
+// CustomCheck represents an asset-level SQL quality check. Count is set when
+// Query returns the rows that violate the assertion; otherwise Query must
+// return a scalar integer matching Value.
+type CustomCheck struct {
+	Name        string `json:"name"`
+	Description string `json:"description,omitempty"`
+	Value       int64  `json:"value"`
+	Count       *int64 `json:"count,omitempty"`
+	Blocking    *bool  `json:"blocking,omitempty"`
+	Query       string `json:"query"`
+	Retries     *int   `json:"retries,omitempty"`
 }
 
 // Pipeline represents a web API pipeline.

@@ -50,6 +50,7 @@ import type {
   UpdatePipelinePythonDependenciesRequest as GeneratedUpdatePipelinePythonDependenciesRequest,
   WebColumn,
   WebColumnCheck,
+  WebCustomCheck,
   WorkspaceConfigConnection,
   WorkspaceConfigConnectionType as GeneratedWorkspaceConfigConnectionType,
   WorkspaceConfigEnvironment,
@@ -89,6 +90,7 @@ export type {
   WebColumn,
   WebNotebookBlock,
   WebColumnCheck,
+  WebCustomCheck,
   WorkspaceConfigConnection,
   WorkspaceConfigEnvironment,
 };
@@ -164,17 +166,6 @@ export type WorkspaceEvent = Omit<GeneratedWorkspaceEvent, "workspace"> & {
   workspace: WorkspaceState;
 };
 
-export type PipelineSchedule = {
-  pipeline_id: string;
-  pipeline_name: string;
-  pipeline_path: string;
-  schedule: string;
-  timezone: string;
-  catchup: boolean;
-  enabled: boolean;
-  next_run_at?: string;
-};
-
 export type PipelineRun = {
   id: string;
   pipeline_id: string;
@@ -188,6 +179,8 @@ export type PipelineRun = {
   finished_at?: string;
   error?: string;
   log_ref?: string;
+  cancellable?: boolean;
+  cancellation_requested_at?: string;
   snapshot_version_id?: string;
   snapshot_ordinal?: number;
   execution_context_resolved?: boolean;
@@ -250,16 +243,6 @@ export type PipelineRunReexecution = {
   reason?: string;
   selection?: "all" | "needed" | "asset" | string;
   execution_units?: number;
-};
-
-export type SchedulesResponse = {
-  status: "ok" | "error";
-  schedules: PipelineSchedule[];
-};
-
-export type UpdateScheduleResponse = {
-  status: "ok" | "error";
-  schedule: PipelineSchedule;
 };
 
 export type TriggerPipelineResponse = {

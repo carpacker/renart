@@ -9,7 +9,7 @@ import {
   initSourceControlRepository,
   stageSourceControlPaths,
   unstageSourceControlPaths,
-} from "@/lib/api";
+} from "@/lib/api-source-control";
 import type { SourceControlChange, SourceControlDiff, SourceControlRepository } from "@/lib/types";
 
 export function useSourceControl() {

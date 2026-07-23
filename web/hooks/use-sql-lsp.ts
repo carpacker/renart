@@ -33,7 +33,11 @@ import {
   provideLocalSQLCompletionItems,
   schemaTablesReferencedAtPosition,
 } from "@/lib/monaco-sql-providers";
-import { resolveConnection, SchemaTable } from "@/lib/sql-schema";
+import {
+  effectiveConnectionForAsset,
+  effectiveConnectionTypeForAsset,
+  SchemaTable,
+} from "@/lib/sql-schema";
 import { WebAsset, WorkspaceState } from "@/lib/types";
 
 const SQL_LSP_MARKER_OWNER = "renart-sql-lsp";
@@ -58,8 +62,7 @@ export function useSQLLSP(
   const loadRemoteTables = useSetAtom(sqlDiscoveryTablesAtom);
   const loadRemoteColumns = useSetAtom(sqlDiscoveryColumnsAtom);
   const parseContext = useSQLParseContext(asset, sqlContent, schemaTables);
-  const connectionName =
-    asset && workspace ? resolveConnection(asset, workspace.connections ?? {}) : null;
+  const connectionName = asset && workspace ? effectiveConnectionForAsset(asset) : null;
   const includeNotebookRuntimeColumns = options?.includeNotebookRuntimeColumns ?? false;
   const documentContext = options?.documentContext ?? "asset";
 
@@ -142,7 +145,10 @@ export function useSQLLSP(
           .getLineContent(position.lineNumber)
           .slice(0, position.column - 1);
         const valueContext = parseEqualityValueContext(textBeforeCursor);
-        if (valueContext && connectionName && parseContext && isDuckDBAsset(asset)) {
+        const connectionType = providerStateRef.current.workspace
+          ? effectiveConnectionTypeForAsset(providerStateRef.current.workspace, asset)
+          : null;
+        if (valueContext && connectionName && parseContext && connectionType === "duckdb") {
           const resolvedTable = resolveValueSuggestionTable(
             parseContext,
             schemaTables,
@@ -151,9 +157,9 @@ export function useSQLLSP(
           );
           if (resolvedTable) {
             const values = await fetchColumnValues({
-              assetType: asset.type,
               columnName: valueContext.columnName,
               connectionName,
+              connectionType,
               environment: selectedEnvironment,
               prefix: valueContext.prefix,
               resolvedTable,
@@ -976,20 +982,16 @@ function identifiersEqual(left: string, right: string) {
   );
 }
 
-function isDuckDBAsset(asset: WebAsset) {
-  return asset.type?.toLowerCase() === "duckdb.sql";
-}
-
 async function fetchColumnValues(options: {
-  assetType: string | undefined;
   columnName: string;
   connectionName: string;
+  connectionType: string;
   environment?: string;
   prefix: string;
   resolvedTable: string;
 }) {
   const query = buildValueSuggestionQuery(
-    options.assetType,
+    options.connectionType,
     quoteSQLIdentifier(options.resolvedTable),
     quoteSQLIdentifier(options.columnName),
     options.prefix.trim(),
@@ -1016,15 +1018,14 @@ async function fetchColumnValues(options: {
 }
 
 function buildValueSuggestionQuery(
-  assetType: string | undefined,
+  connectionType: string,
   quotedTable: string,
   quotedColumn: string,
   trimmedPrefix: string,
 ) {
   const escapedPrefix = trimmedPrefix.replaceAll("'", "''");
-  const normalizedAssetType = assetType?.toLowerCase() ?? "";
 
-  if (normalizedAssetType !== "duckdb.sql") {
+  if (connectionType !== "duckdb") {
     return "";
   }
   return trimmedPrefix

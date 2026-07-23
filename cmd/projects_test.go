@@ -25,6 +25,28 @@ func TestProjectManagerSuggestedCreateParentDir(t *testing.T) {
 	require.Equal(t, parent, got)
 }
 
+func TestProjectManagerSuggestedCreateParentDirUsesLaunchDirectoryForBootstrap(t *testing.T) {
+	launchRoot := t.TempDir()
+	bootstrapParent := t.TempDir()
+	bootstrapWorkspace := filepath.Join(bootstrapParent, "welcome")
+	require.NoError(t, os.Mkdir(bootstrapWorkspace, 0o755))
+
+	manager := &projectManager{
+		baseCfg: serverConfig{
+			suggestedCreateParentDir: launchRoot,
+		},
+		bootstrapDefault: true,
+		defaultID:        "bootstrap",
+		runtimes: map[string]*projectRuntime{
+			"bootstrap": {root: bootstrapWorkspace},
+		},
+	}
+
+	got, err := manager.SuggestedCreateParentDir()
+	require.NoError(t, err)
+	require.Equal(t, launchRoot, got)
+}
+
 func TestProjectManagerCreateDirectory(t *testing.T) {
 	parent := t.TempDir()
 	manager := &projectManager{}

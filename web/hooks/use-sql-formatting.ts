@@ -4,7 +4,7 @@ import { useSetAtom } from "jotai";
 import { useCallback, useEffect, useMemo } from "react";
 import type * as MonacoNS from "monaco-editor";
 
-import { formatSQLAsset } from "@/lib/api";
+import { formatSQLAsset } from "@/lib/api-assets-crud";
 import { isQuerySensorAssetType, isSqlAssetType } from "@/lib/asset-types";
 import { editorDraftAtom, editorProgrammaticContentAtom } from "@/lib/atoms/domains/editor";
 import { WebAsset } from "@/lib/types";

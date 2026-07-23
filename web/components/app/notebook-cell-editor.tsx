@@ -20,7 +20,8 @@ import { usePythonQueryIntellisense } from "@/hooks/use-python-query-intellisens
 import { useSQLLSP } from "@/hooks/use-sql-lsp";
 import { useVizIntellisense } from "@/hooks/use-viz-intellisense";
 import { useWorkspaceTheme } from "@/hooks/use-workspace-theme";
-import { formatSQLAsset } from "@/lib/api";
+import { formatSQLAsset } from "@/lib/api-assets-crud";
+import { usesPythonSource } from "@/lib/asset-types";
 import { defineBruinMonacoThemes } from "@/lib/monaco-theme";
 import { applyExternalModelValue } from "@/lib/monaco-model-sync";
 import { normalizeVizDirectiveLine } from "@/components/app/notebook-viz-directive";
@@ -83,7 +84,7 @@ export function buildNotebookSchemaTables(
       name,
       shortName: parts.shortName,
       columns,
-      isBruinAsset: true,
+      isWorkspaceAsset: true,
       assetId: cell.id,
       assetPath: cell.path,
       databaseName: parts.databaseName,
@@ -163,7 +164,7 @@ export function NotebookCellMonaco({
   const applyingExternalValueRef = useRef(false);
 
   const cellId = cell.cell_id ?? cell.id;
-  const isPython = cell.type?.toLowerCase() === "python" || cell.path.toLowerCase().endsWith(".py");
+  const isPython = usesPythonSource(cell);
   const ext = isPython ? "py" : "sql";
 
   // SQL intellisense (completion, parse-context, @viz, Jinja) is SQL-only;

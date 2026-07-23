@@ -12,15 +12,14 @@ filesystem-changing action. There is no Node.js runtime in production.
 - **Styling:** Tailwind CSS v4 + shadcn/ui + Radix primitives + Base UI where used
 - **Canvas / DAG:** React Flow
 - **Editor:** Monaco via `@monaco-editor/react`
-- **State:** Jotai, plus SWR where hooks already use remote-cache semantics
-- **Forms:** React Hook Form and TanStack Form where already adopted
+- **State:** Jotai for shared domain state, with component-local React state for
+  transient view state
 - **Charts:** Recharts
 - **Panels:** `react-resizable-panels`
-- **Tables:** `@tanstack/react-virtual`
 - **Command UI:** `cmdk`
-- **Icons:** `lucide-react`, `react-icons`
+- **Icons:** `lucide-react`
 - **Markdown:** `react-markdown`
-- **Quality tooling:** Oxlint for linting and Oxfmt for formatting
+- **Quality tooling:** Oxlint, Oxfmt, and Vitest
 - **Realtime sync:** Server-Sent Events (see [backend.md](backend.md) §2)
 
 ## 2. Dev server
@@ -48,17 +47,23 @@ File-based routes under [src/routes](../web/src/routes):
   a pathless layout route that renders the app shell.
 - Pages live under [src/routes/_shell](../web/src/routes/_shell): the build IDE at
   `/pipelines/$pipelineId/...`, plus `catalog`, `notebooks`, `runs`, `schedules`,
-  `project` (settings), `account`, `dashboards`. `/` waits for the workspace,
-  then redirects to the first pipeline's canvas — or to `/welcome` when the
-  workspace has no pipelines.
+  and `project` (settings). `/` waits for the workspace, then redirects to the
+  first pipeline's canvas — or to `/welcome` when the workspace has no
+  pipelines.
 - [welcome.tsx](../web/src/routes/welcome.tsx) (`/welcome`, outside the shell)
   is the first-run onboarding and new-project wizard
   ([welcome-page.tsx](../web/components/app/welcome-page.tsx)): demo / import /
   empty flows against `POST /api/projects`, with `?new=1` (the project
   switcher's "New project...") forcing creation of a fresh directory instead of
-  scaffolding into the current empty workspace. New-project location uses the
+  scaffolding into the current empty workspace. The project-directory response
+  marks launcher bootstrap mode, which also forces a fresh project directory
+  instead of scaffolding into the server's temporary welcome runtime.
+  New-project location uses the
   server-backed directory picker shared with the project switcher; it starts at
-  the effective suggested parent and can create child folders. Demo creation
+  the effective suggested parent and can create child folders. Creation
+  conflicts such as an existing target directory stay visible beside the
+  create action instead of rendering above a long, scrolled target form, and
+  clear when the user changes the project name or location. Demo creation
   bootstraps the workspace with the `build-stale/stream` run (fresh assets are
   all `never_built`) and renders its per-asset SSE progress and ANSI-colored
   output.
@@ -67,7 +72,8 @@ File-based routes under [src/routes](../web/src/routes):
 - The route tree is generated into
   [src/routeTree.gen.ts](../web/src/routeTree.gen.ts) **by the build** — never edit
   it by hand. After changing route files, rerun the web build so it matches the
-  filesystem routes.
+  filesystem routes. TanStack Router's automatic code splitting keeps route
+  components out of the initial application chunk.
 
 For hierarchical URLs that should not visually nest parent pages, use pathful
 layout routes (`route.tsx` renders `<Outlet />`) with leaf `index.tsx` files —
@@ -81,10 +87,8 @@ not underscore-flattened route hacks.
   [project switcher](../web/components/app/project-switcher.tsx), including the
   persisted Light / Dark / System appearance selector, the
   [command palette](../web/components/app/app-command-palette.tsx), and the routed
-  `<Outlet />`. Unshipped mock surfaces (AI chat, notifications, account menu,
-  and cloud-workspace connection) stay hidden behind disabled flags in
-  [app-feature-flags.ts](../web/lib/app-feature-flags.ts). The source-control
-  sheet renders worktree and staged changes with Monaco's inline diff editor;
+  `<Outlet />`. The source-control sheet renders worktree and staged changes
+  with Monaco's inline diff editor;
   SQL, Python, YAML asset definitions, JSON, Markdown, and ordinary project
   files select syntax highlighting from their path. Notebook-folder selections
   remain one review unit but render one inline diff per changed cell/file. Each
@@ -103,7 +107,10 @@ not underscore-flattened route hacks.
   opens the split view; after an asset is present in the route, later selections
   preserve the explicit code/split/canvas layout. A DAG that fits at the default
   zoom is horizontally centered on initial render, while a wider DAG keeps its layout
-  origin so it remains predictable to pan. After that initial positioning, a
+  origin so it remains predictable to pan. Layer-band layout reserves deterministic
+  empty row slots for same-prefix dependencies that skip intermediate ranks; when
+  such a lane is unambiguous, intermediate asset nodes cannot sit directly on the
+  rendered edge. After that initial positioning, a
   routed selection is smoothly brought into view only when it falls outside
   the current viewport; this preserves the selected node when the canvas is
   resized into split view without fighting user panning. Hovering an
@@ -118,7 +125,13 @@ not underscore-flattened route hacks.
   groups, paths, types, and connections. The toolbar keeps Deploy as a separate
   secondary action and makes **Review run** the primary pipeline action. Type
   checks live in the results panel, which scrolls through a shadcn ScrollArea;
-  failing assets also receive a warning marker on their canvas node. The Render
+  failing assets also receive a warning marker on their canvas node. Assets
+  whose latest successful write has failed runtime assertions receive a
+  separate **Checks failed** badge only while that outcome matches the current
+  asset content. Selecting it opens the asset properties and scrolls to and
+  briefly highlights the exact failed custom or column check; the quality card
+  lists every failure when more than one check failed. This does not replace the
+  asset's independent freshness or last-build state. The Render
   result keeps its wrapping provenance and comparison controls in a shrinkable
   ScrollArea so the operation or side-by-side diff retains visible height on
   narrow screens. The shared
@@ -127,16 +140,25 @@ not underscore-flattened route hacks.
   useful width. It defaults to the entire pipeline and names the exact
   saved working tree or immutable deployment, environment, UTC interval,
   refresh/sensor mode, asset and execution-unit counts, checks, blockers,
-  warnings, and source/configuration/variable identities. Summary, Assets, and
-  Checks load with the compact plan; successful assets use single-line green
-  checks while assets with findings retain their expanded messages. Opening
-  Execution lazily requests redacted
+  warnings, and source/configuration/variable identities. Run review is one
+  linear reading path: readiness issues, exact ordered asset/window units with
+  their operation/check sequence, and code-check findings. Run options stay
+  visible in a compact responsive row: scope receives the most room, sensor
+  policy stays secondary, full refresh is an explicit switch, and the selector
+  editor only appears when that scope needs it. Source identities, resource
+  claims, and write isolation remain available under Plan details without
+  competing with the decision. The dialog heading, context, options, and review
+  body share one vertical ScrollArea so the scrollbar never changes the width
+  between its upper and middle sections; confirmation remains fixed beneath it.
+  Successful code checks use one compact green result while assets with
+  findings retain their expanded messages. Opening Rendered operations lazily
+  requests redacted
   stage content and shows compiled queries, generated materialization SQL,
   checks, and semantic/runtime-only operations in read-only Monaco with
-  `Preview — not executed`. The selected tab and initial review context stay
-  stable while background workspace/deployment refreshes arrive; confirmation
-  still revalidates every identity server-side and replaces a stale plan for
-  another review. Entire-pipeline and Needed plans execute their exact reviewed
+  `Preview — not executed`. The initial review context stays stable while
+  background workspace/deployment refreshes arrive; confirmation still
+  revalidates every identity server-side and replaces a stale plan for another
+  review. Entire-pipeline and Needed plans execute their exact reviewed
   asset/window units. Needed confirmation may visibly omit units that became
   fresh, but never adds or widens work without another review. Destructive
   policy requires typing the exact environment. Active-run blockers and
@@ -149,12 +171,16 @@ not underscore-flattened route hacks.
   visible Monaco edits.
   **Deploy** opens the same dialog in a definition-only deployment mode rather
   than mutating immediately. It reviews the entire saved working tree, keeps
-  execution policy/data freshness out of the gate, shows exact added/changed/
-  removed files as collapsible rows whose deployed/workspace comparison opens
-  directly beneath that file. Each comparison uses Monaco's real DiffEditor,
-  including its native inserted/deleted line and character highlighting, and
-  the final write remains bound to the reviewed source Merkle. Afterward it
-  offers an
+  execution policy/data freshness out of the gate, and follows one linear
+  reading path instead of dividing the decision across tabs: source changes and
+  code checks come first, followed by compact disclosures for deployment
+  contents, runtime checks, plan identities, representative execution, and
+  schedules. Exact added/changed/removed files are collapsible rows whose
+  deployed/workspace comparison opens directly beneath that file. Each
+  comparison uses Monaco's real DiffEditor, including its native
+  inserted/deleted line and character highlighting, and the final write remains
+  bound to the reviewed source Merkle. Afterward the schedules disclosure opens
+  and offers an
   unchecked list of older schedule pins; only explicitly selected rows move.
   Type-check does the same; transport/save failures remain visible in the bell
   and results panel without erasing the last successful report. Every supported
@@ -208,7 +234,9 @@ not underscore-flattened route hacks.
   and text share one auto-detection/override utility with creation.
   Generic identity and dependency metadata remains in the inspector, along with
   columns and checks for relation-producing assets; sensors omit columns and
-  checks because they do not materialize a relation. The Columns card's single
+  checks because they do not materialize a relation. Custom SQL checks remain
+  available for other supported asset types even when they do not expose a
+  column workbench. The Columns card's single
   **Sync schema** action automatically uses the asset definition and places
   backend-advertised observed sources beside it as optional checkboxes (for
   example **Live request** and **Current table**). Safe additions and type fills
@@ -279,7 +307,6 @@ not underscore-flattened route hacks.
   [runs-page.tsx](../web/components/app/runs-page.tsx),
   [schedules-page.tsx](../web/components/app/schedules-page.tsx),
   [settings-pages.tsx](../web/components/app/settings-pages.tsx),
-  [object-pages.tsx](../web/components/app/object-pages.tsx),
   [welcome-page.tsx](../web/components/app/welcome-page.tsx).
   Project **General** settings expose the effective tracked retention policy
   from `.renart/project.yml`: age windows for runs, logs, raw materialization
@@ -297,6 +324,10 @@ not underscore-flattened route hacks.
   Run details use semantic event badges, link current-workspace asset events
   back to the split Build view, and render timeline asset names in a dedicated
   wrapping column with tooltips so short duration bars never truncate identity.
+  Queue-backed active runs expose a destructive, confirmed Abort run action.
+  A running cancellation shows `Stopping` from River's durable request state
+  until the terminal SSE event replaces it; queued cancellation becomes
+  terminal immediately.
   Runs admitted from a reviewed plan add a Plan tab with the immutable final
   unit order and statuses, inclusion reasons and exact windows, safe Needed
   preview omissions, source/configuration/data identities, and retained
@@ -364,7 +395,9 @@ than hand-rolled `div` shells.
 
 - [use-workspace-sync.ts](../web/hooks/use-workspace-sync.ts): fetches
   `/api/workspace`, subscribes to `/api/events` (SSE), reconciles workspace state,
-  preserves asset `content` on lite SSE updates when appropriate.
+  preserves asset `content` on lite SSE updates when appropriate, and dispatches
+  run, schedule, staleness, and per-notebook runtime events to their Jotai
+  domains. The app shell owns this single browser SSE connection.
 - [use-asset-content-editing.ts](../web/hooks/use-asset-content-editing.ts): editor
   draft state, display-value sync, and the Ctrl/Cmd+S save path.
 - [use-debounced-asset-save.ts](../web/hooks/use-debounced-asset-save.ts): debounced
@@ -388,17 +421,20 @@ than hand-rolled `div` shells.
   freshness / materialization enrichment with a post-terminal event guard.
 - [use-pipeline-staleness.ts](../web/hooks/use-pipeline-staleness.ts): per-pipeline
   request state and selection-matched SSE/HTTP ordering.
-- [use-pipeline-scheduler.ts](../web/hooks/use-pipeline-scheduler.ts),
+- [use-pipeline-runs.ts](../web/hooks/use-pipeline-runs.ts),
+  [use-env-schedules.ts](../web/hooks/use-env-schedules.ts),
   [use-pipeline-deploy.ts](../web/hooks/use-pipeline-deploy.ts),
-  [use-source-control.ts](../web/hooks/use-source-control.ts): run / schedule /
-  deploy / VCS surfaces.
+  [use-source-control.ts](../web/hooks/use-source-control.ts): run, per-environment
+  schedule, deploy, and VCS surfaces. Run state does not load or mutate the
+  retired single-environment schedule API.
 
 ## 5. Libraries / helpers
 
-- [lib/api.ts](../web/lib/api.ts): barrel re-exporting the per-domain `api-*.ts`
-  modules (`api-assets`, `api-pipelines`, `api-config`, `api-sql`, `api-sql-lsp`,
-  `api-scheduler`, `api-source-control`, …) — the frontend surface for every Go
-  endpoint. These modules are authoritative for the live API surface.
+- [lib/api-\*.ts](../web/lib/api-core.ts): per-domain clients (`api-assets`,
+  `api-pipelines`, `api-config`, `api-sql-discovery`, `api-sql-lsp`,
+  `api-scheduler`, `api-source-control`, …) are the frontend surface for Go
+  endpoints. Callers import the owning domain directly; there is no
+  application-wide API barrel.
 - [lib/types.ts](../web/lib/types.ts): shared web-side types; re-exports the
   generated API types. The generated types come from the Go DTOs via
   `web/scripts/generate-api-types.mjs` (see [backend.md](backend.md) §5) — don't
@@ -420,7 +456,9 @@ than hand-rolled `div` shells.
   `.renart/project.yml` sets `features.ingestr` or the workspace already
   contains ingestr assets (see [backend.md](backend.md) §2).
 - [lib/sql-schema.ts](../web/lib/sql-schema.ts): schema context for SQL
-  intellisense.
+  intellisense. It scopes tables using only the effective connection resolved by
+  the backend; it never guesses a connection from an asset type or selects an
+  arbitrary same-platform connection.
 - [lib/api-asset-templates.ts](../web/lib/api-asset-templates.ts): the three
   pattern-focused HTTP API starters used by the New asset dialog. The default
   starter accepts the user's OpenAPI URL rather than embedding a demo service.
@@ -453,7 +491,8 @@ Relevant files: [asset-editor.tsx](../web/components/app/asset-editor.tsx),
 
 ## 8. Validation
 
-Run `pnpm check` from `web/` to verify Oxfmt, Oxlint, TypeScript, and the Vite
-production build (prefer `pnpm` over `npm`). For behavior that touches workspace
-sync, canvas interactions, inspect/materialize, or Monaco, run the live e2e
-suite: `corepack pnpm test:e2e:live` in `web/`.
+Run `pnpm check` from `web/` to verify the embedded wasm build, Oxfmt, Oxlint,
+Vitest, TypeScript, and the Vite production build (prefer `pnpm` over `npm`).
+For behavior that touches workspace sync, canvas interactions,
+inspect/materialize, or Monaco, run the live e2e suite:
+`corepack pnpm test:e2e:live` in `web/`.

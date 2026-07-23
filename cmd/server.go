@@ -15,7 +15,7 @@ import (
 
 	"github.com/bruin-data/bruin/pkg/git"
 	"github.com/bruin-data/bruin/pkg/pipeline"
-	"github.com/go-chi/chi/v5"
+	gogit "github.com/go-git/go-git/v5"
 	"github.com/spf13/afero"
 	"github.com/urfave/cli/v3"
 	"renart/internal/sqlformat"
@@ -23,7 +23,6 @@ import (
 	"renart/internal/web/completion"
 	"renart/internal/web/events"
 	"renart/internal/web/fingerprint"
-	webhttpapi "renart/internal/web/httpapi"
 	"renart/internal/web/identity"
 	"renart/internal/web/matlog"
 	"renart/internal/web/policy"
@@ -48,6 +47,12 @@ type serverConfig struct {
 	watchPoll          time.Duration
 	schedulerEnabled   bool
 	schedulerStatePath string
+	// bootstrapRoot is a temporary Git-backed workspace used only when the
+	// no-argument launcher starts outside a project. It lets the welcome UI
+	// load without treating the launch directory as a project or writing
+	// Renart state into it.
+	bootstrapRoot            string
+	suggestedCreateParentDir string
 	// headless is the embedded-CLI mode (plans/cli-v1.md §2.4): the same
 	// service graph without the pieces only a long-lived UI server needs —
 	// no static assets, no filesystem watcher, no fingerprint pre-warm (and
@@ -92,23 +97,20 @@ func serverFlags() []cli.Flag {
 // serverConfigFromCommand resolves and validates the shared server settings
 // from CLI flags and the positional workspace root argument.
 func serverConfigFromCommand(c *cli.Command) (serverConfig, error) {
-	root := c.Args().Get(0)
+	rootArg := strings.TrimSpace(c.Args().Get(0))
+	root := rootArg
 	if root == "" {
 		root = "."
 	}
 
-	absRoot, err := filepath.Abs(root)
+	launchRoot, err := filepath.Abs(root)
 	if err != nil {
 		return serverConfig{}, fmt.Errorf("failed to resolve workspace root: %w", err)
 	}
 
-	if _, err := git.FindRepoFromPath(absRoot); err != nil {
-		return serverConfig{}, fmt.Errorf("renart must be started inside a git repository: %w", err)
-	}
-
 	staticDir := c.String("static-dir")
 	if !filepath.IsAbs(staticDir) {
-		staticDir = filepath.Join(absRoot, staticDir)
+		staticDir = filepath.Join(launchRoot, staticDir)
 	}
 
 	watchMode := strings.ToLower(strings.TrimSpace(c.String("watch-mode")))
@@ -124,19 +126,54 @@ func serverConfigFromCommand(c *cli.Command) (serverConfig, error) {
 		return serverConfig{}, fmt.Errorf("watch-poll-interval must be greater than zero")
 	}
 
+	workspaceRoot, bootstrapRoot, err := resolveServerWorkspaceRoot(launchRoot, rootArg == "")
+	if err != nil {
+		return serverConfig{}, err
+	}
+
 	statePath := c.String("scheduler-state")
 	if !filepath.IsAbs(statePath) {
-		statePath = filepath.Join(absRoot, statePath)
+		statePath = filepath.Join(workspaceRoot, statePath)
 	}
 
 	return serverConfig{
-		workspaceRoot:      absRoot,
-		staticDir:          staticDir,
-		watchMode:          watchMode,
-		watchPoll:          watchPoll,
-		schedulerEnabled:   c.Bool("scheduler"),
-		schedulerStatePath: statePath,
+		workspaceRoot:            workspaceRoot,
+		staticDir:                staticDir,
+		watchMode:                watchMode,
+		watchPoll:                watchPoll,
+		schedulerEnabled:         c.Bool("scheduler"),
+		schedulerStatePath:       statePath,
+		bootstrapRoot:            bootstrapRoot,
+		suggestedCreateParentDir: launchRoot,
 	}, nil
+}
+
+// resolveServerWorkspaceRoot preserves explicit project validation while
+// allowing the no-argument desktop/browser launcher to open from an arbitrary
+// working directory. The temporary workspace is a real Git repository, so the
+// per-project runtime keeps the same invariants as every user project.
+func resolveServerWorkspaceRoot(launchRoot string, implicit bool) (string, string, error) {
+	if _, err := git.FindRepoFromPath(launchRoot); err == nil {
+		return launchRoot, "", nil
+	} else if !implicit || !errors.Is(err, git.ErrNoGitRepoFound) {
+		return "", "", fmt.Errorf("renart projects must live inside a git repository: %w", err)
+	}
+
+	bootstrapRoot, err := os.MkdirTemp("", "renart-welcome-")
+	if err != nil {
+		return "", "", fmt.Errorf("failed to prepare the welcome workspace: %w", err)
+	}
+	if _, err := gogit.PlainInit(bootstrapRoot, false); err != nil {
+		_ = os.RemoveAll(bootstrapRoot)
+		return "", "", fmt.Errorf("failed to initialize the welcome workspace: %w", err)
+	}
+	return bootstrapRoot, bootstrapRoot, nil
+}
+
+func cleanupServerBootstrap(cfg serverConfig) {
+	if cfg.bootstrapRoot != "" {
+		_ = os.RemoveAll(cfg.bootstrapRoot)
+	}
 }
 
 // newWebServer wires all services, starts the scheduler (when enabled) and
@@ -215,7 +252,13 @@ func newWebServer(ctx context.Context, cfg serverConfig, logger *zap.Logger) (*w
 			for _, pipeline := range state.Pipelines {
 				assets := make([]service.AssetView, 0, len(pipeline.Assets))
 				for _, asset := range pipeline.Assets {
-					assets = append(assets, service.AssetView{ID: asset.ID, Name: asset.Name})
+					qualityCheckCount := len(asset.CustomChecks)
+					for _, column := range asset.Columns {
+						qualityCheckCount += len(column.Checks)
+					}
+					assets = append(assets, service.AssetView{
+						ID: asset.ID, Name: asset.Name, QualityCheckCount: qualityCheckCount,
+					})
 				}
 				pipelines = append(pipelines, service.PipelineView{ID: pipeline.ID, UUID: pipeline.UUID, Name: pipeline.Name, Assets: assets})
 			}
@@ -1036,19 +1079,6 @@ func schedulerUnitStatusFromExecutionStatus(status string) webscheduler.Pipeline
 	default:
 		return webscheduler.PipelineRunUnitRunning
 	}
-}
-
-// buildRouter assembles the chi router with the standard middleware stack
-// and all API routes.
-func (s *webServer) buildRouter(sessionToken string) chi.Router {
-	router := chi.NewRouter()
-	router.Use(
-		webhttpapi.Recoverer(s.logger),
-		webhttpapi.SameOriginGuardWithToken(sessionToken),
-		webhttpapi.RequestLogger(s.logger),
-	)
-	s.registerRoutes(router)
-	return router
 }
 
 // newSessionToken mints the per-process secret written into the discovery

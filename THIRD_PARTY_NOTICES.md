@@ -378,17 +378,11 @@ CI verifies that the checked-in inventory is current.
 | @reduxjs/toolkit | 2.12.0 | MIT | [license](third_party/licenses/49784961ec6c4941437b7a2c54d8977d0528076a9e7c73dd40f7d0942b8f106d.txt) |
 | @standard-schema/spec | 1.1.0 | MIT | [license](third_party/licenses/6c19f173cf807e59ad48df621b2840bd2e2d7194d948d3cb1766f17b63335030.txt) |
 | @standard-schema/utils | 0.3.0 | MIT | [license](third_party/licenses/13dc70601979b9f8bb3f3c080e7b0aa67f947c852f3fcc5f5a97e45870f52353.txt) |
-| @tanstack/devtools-event-client | 0.4.4 | MIT | [license](third_party/licenses/de86d3f4c6d93bcd529b389aaae7d4297072e623af8b5b701db3564f4b89ec90.txt) |
-| @tanstack/form-core | 1.33.1 | MIT | [license](third_party/licenses/a405ee70c632bb938acb7ac5f210e814409b3760ea9d2329d8ed8ffcfd11a0e7.txt) |
 | @tanstack/history | 1.162.0 | MIT | [license](third_party/licenses/a405ee70c632bb938acb7ac5f210e814409b3760ea9d2329d8ed8ffcfd11a0e7.txt) |
-| @tanstack/pacer-lite | 0.1.1 | MIT | [license](third_party/licenses/9fe9970f409e5b1d2067c0107ac0201761d5fddc53e9b20b66619fb0d2b4122f.txt) |
-| @tanstack/react-form | 1.33.1 | MIT | [license](third_party/licenses/a405ee70c632bb938acb7ac5f210e814409b3760ea9d2329d8ed8ffcfd11a0e7.txt) |
 | @tanstack/react-router | 1.170.17 | MIT | [license](third_party/licenses/a405ee70c632bb938acb7ac5f210e814409b3760ea9d2329d8ed8ffcfd11a0e7.txt) |
-| @tanstack/react-store | 0.9.3, 0.11.0 | MIT | [license](third_party/licenses/cb4a7917af22bd56340e877f10a5c5aa4fded7af2459162630ff7fcb48bb45c7.txt) |
-| @tanstack/react-virtual | 3.14.5 | MIT | [license](third_party/licenses/a405ee70c632bb938acb7ac5f210e814409b3760ea9d2329d8ed8ffcfd11a0e7.txt) |
+| @tanstack/react-store | 0.9.3 | MIT | [license](third_party/licenses/cb4a7917af22bd56340e877f10a5c5aa4fded7af2459162630ff7fcb48bb45c7.txt) |
 | @tanstack/router-core | 1.171.14 | MIT | [license](third_party/licenses/a405ee70c632bb938acb7ac5f210e814409b3760ea9d2329d8ed8ffcfd11a0e7.txt) |
-| @tanstack/store | 0.9.3, 0.11.0 | MIT | [license](third_party/licenses/cb4a7917af22bd56340e877f10a5c5aa4fded7af2459162630ff7fcb48bb45c7.txt) |
-| @tanstack/virtual-core | 3.17.3 | MIT | [license](third_party/licenses/a405ee70c632bb938acb7ac5f210e814409b3760ea9d2329d8ed8ffcfd11a0e7.txt) |
+| @tanstack/store | 0.9.3 | MIT | [license](third_party/licenses/cb4a7917af22bd56340e877f10a5c5aa4fded7af2459162630ff7fcb48bb45c7.txt) |
 | @types/d3 | 7.4.3 | MIT | [license](third_party/licenses/c2cfccb812fe482101a8f04597dfc5a9991a6b2748266c47ac91b6a5aae15383.txt) |
 | @types/d3-array | 3.2.2 | MIT | [license](third_party/licenses/c2cfccb812fe482101a8f04597dfc5a9991a6b2748266c47ac91b6a5aae15383.txt) |
 | @types/d3-axis | 3.0.6 | MIT | [license](third_party/licenses/c2cfccb812fe482101a8f04597dfc5a9991a6b2748266c47ac91b6a5aae15383.txt) |
@@ -468,7 +462,6 @@ CI verifies that the checked-in inventory is current.
 | d3-timer | 3.0.1 | ISC | [license](third_party/licenses/e008c5e25a6be382593089c29bfabbc553c6378eee02895aec46ce396cc404ee.txt) |
 | d3-transition | 3.0.1 | ISC | [license](third_party/licenses/e008c5e25a6be382593089c29bfabbc553c6378eee02895aec46ce396cc404ee.txt) |
 | d3-zoom | 3.0.0 | ISC | [license](third_party/licenses/e008c5e25a6be382593089c29bfabbc553c6378eee02895aec46ce396cc404ee.txt) |
-| dagre | 0.8.5 | MIT | [license](third_party/licenses/6a349742a6cb219d5a2fc8d0844f6d89a6efc62e20c664450d884fc7ff2d6015.txt) |
 | debug | 4.4.3 | MIT | [license](third_party/licenses/23eb8602cd5902bcfca56b23aa08e8672a809f5a12eaf8bb56abfa9d44e1a4fd.txt) |
 | decimal.js-light | 2.5.1 | MIT | [license](third_party/licenses/40ed7588fd8de038381346bf4bbde330ae81741c852e66d85acc1cabab225d35.txt) |
 | decode-named-character-reference | 1.3.0 | MIT | [license](third_party/licenses/dd1081884a92952802f4803110a6bb543acea9a814c786d58605b4c1219b5ebb.txt) |
@@ -485,7 +478,6 @@ CI verifies that the checked-in inventory is current.
 | extend | 3.0.2 | MIT | [license](third_party/licenses/c354ef13b369579d85651430d10bfdbad7a129dec4834d5d666e32bfe33a001e.txt) |
 | gensync | 1.0.0-beta.2 | MIT | [license](third_party/licenses/e3a956681ee067f971ac413994171b3d90ca801ec6324e76c9c55366cfe31cb0.txt) |
 | get-nonce | 1.0.1 | MIT | [license](third_party/licenses/acf3b087b348d2f2e731b9d4131af185aad694c1204ce14a46909483fd42da05.txt) |
-| graphlib | 2.1.8 | MIT | [license](third_party/licenses/6a349742a6cb219d5a2fc8d0844f6d89a6efc62e20c664450d884fc7ff2d6015.txt) |
 | hast-util-to-jsx-runtime | 2.3.6 | MIT | [license](third_party/licenses/dd1081884a92952802f4803110a6bb543acea9a814c786d58605b4c1219b5ebb.txt) |
 | hast-util-whitespace | 3.0.0 | MIT | [license](third_party/licenses/ca4662cb5d1b738fbe5350c0d5485ba11773b4b7208974082ae6e129a52d631d.txt) |
 | html-url-attributes | 3.0.1 | MIT | [license](third_party/licenses/e18cf5173e928f808f0cd208097fee8fbec9d28fc0255213938e4c559e29ff58.txt) |
@@ -502,7 +494,6 @@ CI verifies that the checked-in inventory is current.
 | js-tokens | 4.0.0 | MIT | [license](third_party/licenses/2213d91c606205c71eb051a199478cdc2adde945893404d7f1421436dd6d5cc1.txt) |
 | jsesc | 3.1.0 | MIT | [license](third_party/licenses/483acb265f182907d1caf6cff9c16c96f31325ed23792832cc5d8b12d5f88c8a.txt) |
 | json5 | 2.2.3 | MIT | [license](third_party/licenses/53e59feb13058722d977c699eb0407c7bce2f93c949b681bbd2ff31698535927.txt) |
-| lodash | 4.18.1 | MIT | [license](third_party/licenses/f71e8ed126b46346494aad5486874cd8f0aafe95092ed67d2e3cb6110f939abc.txt) |
 | longest-streak | 3.1.0 | MIT | [license](third_party/licenses/9f084fac69d8cf1e6ce983ba5a3499c7695ed74a26ec625c38f0fd19fddd5e10.txt) |
 | lru-cache | 5.1.1 | ISC | [license](third_party/licenses/4ec3d4c66cd87f5c8d8ad911b10f99bf27cb00cdfcff82621956e379186b016b.txt) |
 | lucide-react | 1.24.0 | ISC | [license](third_party/licenses/b495047bd93a9b06913511076f504daba17d5bbeb3e0650f3bb53a4220329c57.txt) |
@@ -545,8 +536,6 @@ CI verifies that the checked-in inventory is current.
 | radix-ui | 1.6.2 | MIT | [license](third_party/licenses/0e80a2d229d2fd4fc7e8636142ec5d0ff0bc031f14c15b682e2ac01dfd5b5138.txt) |
 | react | 19.2.7 | MIT | [license](third_party/licenses/da6d3703ed11cbe42bd212c725957c98da23cbff1998c05fa4b3d976d1a58e93.txt) |
 | react-dom | 19.2.7 | MIT | [license](third_party/licenses/da6d3703ed11cbe42bd212c725957c98da23cbff1998c05fa4b3d976d1a58e93.txt) |
-| react-hook-form | 7.81.0 | MIT | [license](third_party/licenses/e8eeb472f0a5889c2c51625b86a3f9b8630680adb9f49a125352e2e426392780.txt) |
-| react-icons | 5.7.0 | MIT | [license](third_party/licenses/a0c1e5484fb4c79e2a683834253864e640e1ca57cb57b807bd5bddb72bbbf74f.txt) |
 | react-is | 19.2.7 | MIT | [license](third_party/licenses/da6d3703ed11cbe42bd212c725957c98da23cbff1998c05fa4b3d976d1a58e93.txt) |
 | react-markdown | 10.1.0 | MIT | [license](third_party/licenses/f6196c64e144f9a6fa9154c3a80bc8b89615a9567934b83a8951879f06ba2aef.txt) |
 | react-redux | 9.3.0 | MIT | [license](third_party/licenses/f2da73c752c6b87624755edacf927cbd915fa76555d383e74494bad4a5155ab3.txt) |
@@ -570,7 +559,6 @@ CI verifies that the checked-in inventory is current.
 | stringify-entities | 4.0.4 | MIT | [license](third_party/licenses/9f084fac69d8cf1e6ce983ba5a3499c7695ed74a26ec625c38f0fd19fddd5e10.txt) |
 | style-to-js | 1.1.21 | MIT | [license](third_party/licenses/bbb380e5c1a717079378d6ea4d33c8a5a81655d4612b749f882e34e46712aab5.txt) |
 | style-to-object | 1.0.14 | MIT | [license](third_party/licenses/896c9fd6b5fc48ac31800b9d29a6e3ffcb0c2d534ed077ebfa5c2fa388cc38b7.txt) |
-| swr | 2.4.2 | MIT | [license](third_party/licenses/2eb01c9bb506815f353fc3053a396b0a4ec1b15255cdcf292a437ecc9f5e6ae2.txt) |
 | tailwind-merge | 3.6.0 | MIT | [license](third_party/licenses/d4c70c7ce38cea8778f0aed3fc0bef0a9dbd27f13bd8b6773cbd6d37941971e5.txt) |
 | tiny-invariant | 1.3.3 | MIT | [license](third_party/licenses/f4e18aba04bb3e39a492dd49ee4843c33318bbd6dcb397853c6d42238f4329f6.txt) |
 | trim-lines | 3.0.1 | MIT | [license](third_party/licenses/9f084fac69d8cf1e6ce983ba5a3499c7695ed74a26ec625c38f0fd19fddd5e10.txt) |

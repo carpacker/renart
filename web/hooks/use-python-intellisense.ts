@@ -10,7 +10,8 @@ import {
   getPythonGotoDefinition,
   getPythonHover,
   getPythonSignatureHelp,
-} from "@/lib/api";
+} from "@/lib/api-assets-crud";
+import { usesPythonSource } from "@/lib/asset-types";
 import type {
   PythonCompletion,
   PythonDiagnostic,
@@ -20,7 +21,7 @@ import type {
   WebAsset,
 } from "@/lib/types";
 
-const pythonMarkerOwner = "bruin-python-ty";
+const pythonMarkerOwner = "renart-python-ty";
 
 // The "python" providers are global per Monaco, so they are registered once and
 // resolve each editor's asset by model URI — registering per editor would let
@@ -62,8 +63,7 @@ function registerPythonProviders(
   resolveAsset: (model: MonacoNS.editor.ITextModel) => WebAsset | null,
 ): MonacoNS.IDisposable {
   const isPython = (asset: WebAsset | null): asset is WebAsset =>
-    !!asset?.id &&
-    (asset.path.toLowerCase().endsWith(".py") || asset.type?.toLowerCase() === "python");
+    Boolean(asset?.id && usesPythonSource(asset));
 
   const formatting = monaco.languages.registerDocumentFormattingEditProvider("python", {
     async provideDocumentFormattingEdits(model) {
@@ -235,9 +235,7 @@ export function usePythonIntellisense(
   asset: WebAsset | null,
   content: string,
 ) {
-  const isPythonAsset =
-    !!asset?.id &&
-    (asset.path.toLowerCase().endsWith(".py") || asset.type?.toLowerCase() === "python");
+  const isPythonAsset = Boolean(asset?.id && usesPythonSource(asset));
 
   // Register this editor's asset by model URI and acquire the shared global
   // providers. The providers resolve the asset for whichever model they run on,

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"os"
 	"reflect"
 	"testing"
 )
@@ -24,5 +25,15 @@ func TestArgsWithDefaultCommand(t *testing.T) {
 				t.Fatalf("argsWithDefaultCommand(%v) = %v, want %v", tt.args, got, tt.want)
 			}
 		})
+	}
+}
+
+func TestConfigureManagedInstallerEnvironmentDisablesProfileChanges(t *testing.T) {
+	t.Setenv("UV_NO_MODIFY_PATH", "0")
+
+	configureManagedInstallerEnvironment()
+
+	if got := os.Getenv("UV_NO_MODIFY_PATH"); got != "1" {
+		t.Fatalf("UV_NO_MODIFY_PATH = %q, want 1", got)
 	}
 }

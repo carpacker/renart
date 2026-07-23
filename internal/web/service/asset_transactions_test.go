@@ -207,6 +207,76 @@ columns:
 	assert.Empty(t, res.Columns[0].Checks, "the check should have been removed")
 }
 
+func TestApplyTransactionCustomCheckAddUpdateAndRemove(t *testing.T) {
+	service, assetID, absPath := newTransactionWorkspace(t, txCustomersHeader)
+	expected := int64(0)
+
+	res, apiErr := service.ApplyAssetTransaction(context.Background(), assetID, AssetTransaction{
+		Type: TxCustomCheckUpsert,
+		CustomCheck: &webmodel.CustomCheck{
+			Name:        "valid orders",
+			Description: "No invalid order IDs",
+			Count:       &expected,
+			Query:       "select * from analytics.customers where order_id < 0",
+		},
+	})
+	require.Nil(t, apiErr)
+	require.Len(t, res.CustomChecks, 1)
+	assert.Equal(t, "valid orders", res.CustomChecks[0].Name)
+	assert.Equal(t, int64(0), *res.CustomChecks[0].Count)
+
+	res, apiErr = service.ApplyAssetTransaction(context.Background(), assetID, AssetTransaction{
+		Type:            TxCustomCheckUpsert,
+		CustomCheckName: "valid orders",
+		CustomCheck: &webmodel.CustomCheck{
+			Name:  "non-negative orders",
+			Value: 1,
+			Query: "select 1",
+		},
+	})
+	require.Nil(t, apiErr)
+	require.Len(t, res.CustomChecks, 1)
+	assert.Equal(t, "non-negative orders", res.CustomChecks[0].Name)
+	assert.Nil(t, res.CustomChecks[0].Count)
+	assert.Equal(t, int64(1), res.CustomChecks[0].Value)
+
+	content, err := os.ReadFile(absPath)
+	require.NoError(t, err)
+	assert.Contains(t, string(content), "custom_checks:")
+	assert.Contains(t, string(content), "name: non-negative orders")
+	assert.NotContains(t, string(content), "name: valid orders")
+
+	res, apiErr = service.ApplyAssetTransaction(context.Background(), assetID, AssetTransaction{
+		Type:            TxCustomCheckRemove,
+		CustomCheckName: "non-negative orders",
+	})
+	require.Nil(t, apiErr)
+	assert.Empty(t, res.CustomChecks)
+}
+
+func TestApplyTransactionCustomCheckRejectsDuplicateName(t *testing.T) {
+	header := `/* @bruin
+name: analytics.customers
+type: duckdb.sql
+custom_checks:
+  - name: first
+    value: 0
+    query: select 0
+  - name: second
+    value: 0
+    query: select 0
+@bruin */`
+	service, assetID, _ := newTransactionWorkspace(t, header)
+
+	_, apiErr := service.ApplyAssetTransaction(context.Background(), assetID, AssetTransaction{
+		Type:            TxCustomCheckUpsert,
+		CustomCheckName: "first",
+		CustomCheck:     &webmodel.CustomCheck{Name: "second", Query: "select 0"},
+	})
+	require.NotNil(t, apiErr)
+	assert.Equal(t, "duplicate_custom_check", apiErr.Code)
+}
+
 func TestApplyTransactionUnknownTypeErrors(t *testing.T) {
 	service, assetID, _ := newTransactionWorkspace(t, txCustomersHeader)
 	_, apiErr := service.ApplyAssetTransaction(context.Background(), assetID, AssetTransaction{Type: "bogus.tx"})

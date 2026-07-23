@@ -39,6 +39,8 @@ import {
   FieldDescription,
   FieldGroup,
   FieldLabel,
+  FieldLegend,
+  FieldSet,
 } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -53,7 +55,6 @@ import {
 } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Switch } from "@/components/ui/switch";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { APIError } from "@/lib/api-core";
 import {
   getDeploymentFileDiff,
@@ -123,7 +124,7 @@ export function PipelinePlanSheet({
   const [confirming, setConfirming] = useState(false);
   const [confirmation, setConfirmation] = useState("");
   const [activeRunId, setActiveRunId] = useState<string | null>(null);
-  const [activeTab, setActiveTab] = useState("summary");
+  const [deploySchedulesOpen, setDeploySchedulesOpen] = useState(false);
   const [deployStatus, setDeployStatus] = useState<DeployStatus | null>(null);
   const [deployment, setDeployment] = useState<DeployResponse | null>(null);
   const [schedules, setSchedules] = useState<EnvSchedule[]>([]);
@@ -186,7 +187,7 @@ export function PipelinePlanSheet({
     setError(null);
     setActiveRunId(null);
     setConfirmation("");
-    setActiveTab("summary");
+    setDeploySchedulesOpen(false);
     setStageContentLoaded(false);
     setDeployStatus(null);
     setDeployment(null);
@@ -337,7 +338,7 @@ export function PipelinePlanSheet({
         setSchedules(scheduleResponse.schedules ?? []);
         setSchedulerOwnership(scheduleResponse.scheduler);
         setSelectedScheduleKeys(new Set());
-        setActiveTab("schedules");
+        setDeploySchedulesOpen(true);
         return;
       }
       const response = await confirmPipelinePlan(pipelineId, {
@@ -435,248 +436,233 @@ export function PipelinePlanSheet({
         className="flex h-[min(92dvh,58rem)] max-h-[calc(100dvh-2rem)] w-[calc(100vw-2rem)] max-w-none flex-col gap-0 overflow-hidden p-0 sm:max-w-6xl xl:max-w-7xl"
         data-testid="pipeline-plan-sheet"
       >
-        <DialogHeader className="shrink-0 border-b px-5 py-4 pr-12">
-          <div className="flex min-w-0 items-center gap-2">
-            <DialogTitle className="truncate">
-              {intent === "deploy" ? "Review deployment" : "Review pipeline run"}
-            </DialogTitle>
-            {plan ? <PlanStatusBadge status={plan.status} /> : null}
-            {(loading || contentLoading) && plan ? (
-              <Loader2 className="size-3.5 animate-spin" />
-            ) : null}
-          </div>
-          <DialogDescription>
-            {pipelineName} · saved source preview ·{" "}
-            {intent === "deploy"
-              ? "no data is executed by deployment"
-              : "nothing executes until you confirm"}
-          </DialogDescription>
-        </DialogHeader>
-
-        <div className="shrink-0 border-b px-5 py-3">
-          <dl className="grid min-w-0 grid-cols-2 gap-x-6 gap-y-2 text-xs sm:grid-cols-4">
-            <PlanContextItem label="Source" value={sourceLabel} />
-            <PlanContextItem
-              label="Environment"
-              value={plan?.context.environment || environment || "default"}
-            />
-            <PlanContextItem
-              label="Window"
-              value={
-                plan
-                  ? formatPlanWindow(plan.context.start_date, plan.context.end_date)
-                  : timeWindow
-                    ? formatPlanWindow(timeWindow.start, timeWindow.end)
-                    : "Resolving…"
-              }
-            />
-            <PlanContextItem
-              label="Mode"
-              value={`${fullRefresh ? "full refresh" : "incremental"} · sensor ${sensorMode}`}
-            />
-          </dl>
-          {intent === "run" ? (
-            <>
-              <FieldGroup className="mt-3 flex-row flex-wrap items-end gap-3 border-t pt-3">
-                <Field className="min-w-40 flex-1 gap-1 sm:max-w-52">
-                  <FieldLabel
-                    htmlFor="pipeline-plan-scope"
-                    className="text-[11px] text-muted-foreground"
-                  >
-                    Scope
-                  </FieldLabel>
-                  <Select
-                    value={selectionMode}
-                    onValueChange={(value) => {
-                      const mode = value as PlanSelectionMode;
-                      const usesSelector = mode === "selector" || mode === "selector_needed";
-                      const selector = selectorDraft.trim() || appliedSelector || "*";
-                      if (usesSelector) setSelectorDraft(selector);
-                      updateRequest((current) => ({
-                        ...current,
-                        selection: usesSelector ? { mode, selector } : { mode },
-                      }));
-                    }}
-                  >
-                    <SelectTrigger id="pipeline-plan-scope" size="sm" className="w-full">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectGroup>
-                        <SelectItem value="all">Entire pipeline</SelectItem>
-                        <SelectItem value="needed">Needed assets</SelectItem>
-                        <SelectItem value="selector">Matching selector</SelectItem>
-                        <SelectItem value="selector_needed">Needed matching selector</SelectItem>
-                      </SelectGroup>
-                    </SelectContent>
-                  </Select>
-                </Field>
-                <Field className="min-w-36 flex-1 gap-1 sm:max-w-44">
-                  <FieldLabel
-                    htmlFor="pipeline-plan-sensor"
-                    className="text-[11px] text-muted-foreground"
-                  >
-                    Sensors
-                  </FieldLabel>
-                  <Select
-                    value={sensorMode}
-                    onValueChange={(value) =>
-                      updateRequest((current) => ({ ...current, sensor_mode: value as SensorMode }))
-                    }
-                  >
-                    <SelectTrigger id="pipeline-plan-sensor" size="sm" className="w-full">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectGroup>
-                        <SelectItem value="once">Check once</SelectItem>
-                        <SelectItem value="wait">Wait</SelectItem>
-                        <SelectItem value="skip">Skip</SelectItem>
-                      </SelectGroup>
-                    </SelectContent>
-                  </Select>
-                </Field>
-                <Field
-                  orientation="horizontal"
-                  className="h-8 w-auto rounded-md border px-3 text-xs"
-                >
-                  <Switch
-                    id="pipeline-plan-full-refresh"
-                    size="sm"
-                    checked={fullRefresh}
-                    onCheckedChange={(checked) =>
-                      updateRequest((current) => ({ ...current, full_refresh: checked }))
-                    }
-                  />
-                  <FieldLabel htmlFor="pipeline-plan-full-refresh" className="font-normal">
-                    Full refresh
-                  </FieldLabel>
-                </Field>
-              </FieldGroup>
-              {selectorMode ? (
-                <Field
-                  className="mt-3 max-w-3xl border-t pt-3"
-                  data-invalid={!selectorDraft.trim()}
-                >
-                  <FieldLabel htmlFor="pipeline-plan-selector">Asset selector</FieldLabel>
-                  <div className="flex min-w-0 flex-wrap items-center gap-2">
-                    <Input
-                      id="pipeline-plan-selector"
-                      value={selectorDraft}
-                      onChange={(event) => setSelectorDraft(event.target.value)}
-                      onKeyDown={(event) => {
-                        if (event.key === "Enter") {
-                          event.preventDefault();
-                          applySelector();
-                        }
-                      }}
-                      placeholder="tag:daily,path:assets/marts +analytics.orders"
-                      aria-invalid={!selectorDraft.trim()}
-                      className="min-w-56 flex-1 font-mono"
-                    />
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={applySelector}
-                      disabled={!selectorDraft.trim() || selectorDraftApplied || loading}
-                    >
-                      Apply
-                    </Button>
-                  </div>
-                  <FieldDescription>
-                    {!selectorDraftApplied
-                      ? "Apply the expression to validate it and preview its assets."
-                      : loading
-                        ? "Resolving selector…"
-                        : selectorPlanIsCurrent && plan
-                          ? `${plan.summary.assets} ${plan.summary.assets === 1 ? "asset" : "assets"} selected. Use spaces for union, commas for intersection, and + for graph expansion.`
-                          : "Use spaces for union, commas for intersection, and + for graph expansion."}
-                  </FieldDescription>
-                </Field>
+        <ScrollArea className="min-h-0 flex-1" data-testid="pipeline-plan-scroll">
+          <DialogHeader className="border-b px-5 py-4 pr-12">
+            <div className="flex min-w-0 items-center gap-2">
+              <DialogTitle className="truncate">
+                {intent === "deploy" ? "Review deployment" : "Review pipeline run"}
+              </DialogTitle>
+              {plan ? <PlanStatusBadge status={plan.status} /> : null}
+              {(loading || contentLoading) && plan ? (
+                <Loader2 className="size-3.5 animate-spin" />
               ) : null}
-            </>
-          ) : (
-            <Alert className="mt-3">
-              <Package />
-              <AlertTitle>Representative execution preview</AlertTitle>
-              <AlertDescription>
-                Deployment stores this saved source, not rendered SQL. Scheduled runs render it
-                again with their actual interval, environment, and variables.
-              </AlertDescription>
-            </Alert>
-          )}
-        </div>
+            </div>
+            <DialogDescription>
+              {pipelineName} · saved source preview ·{" "}
+              {intent === "deploy"
+                ? "no data is executed by deployment"
+                : "nothing executes until you confirm"}
+            </DialogDescription>
+          </DialogHeader>
 
-        {plan ? (
-          <Tabs
-            value={activeTab}
-            className="min-h-0 flex-1 gap-0"
-            onValueChange={(value) => {
-              setActiveTab(value);
-              if (value === "execution") loadStageContent();
-            }}
-          >
-            <ScrollArea className="min-w-0 shrink-0 border-b" viewportClassName="px-5 py-2">
-              <TabsList variant="line" className="w-max min-w-full justify-start">
-                <TabsTrigger value="summary">Summary</TabsTrigger>
-                <TabsTrigger value="assets">Assets</TabsTrigger>
-                <TabsTrigger value="checks">Checks</TabsTrigger>
-                <TabsTrigger value="execution">Execution</TabsTrigger>
-                {intent === "deploy" ? <TabsTrigger value="changes">Files</TabsTrigger> : null}
-                {intent === "deploy" ? (
-                  <TabsTrigger value="schedules">Schedules</TabsTrigger>
-                ) : null}
-              </TabsList>
-            </ScrollArea>
-            <ScrollArea className="min-h-0 flex-1">
-              <TabsContent value="summary" className="m-0 space-y-4 p-5">
-                <PlanSummary plan={plan} intent={intent} deployment={deployment} />
-              </TabsContent>
-              <TabsContent value="assets" className="m-0 p-5">
-                <PlanAssets plan={plan} />
-              </TabsContent>
-              <TabsContent value="checks" className="m-0 p-5">
-                <PlanChecks plan={plan} />
-              </TabsContent>
-              <TabsContent value="execution" className="m-0 p-5">
-                <PlanExecution
-                  plan={plan}
-                  contentLoading={contentLoading}
-                  contentLoaded={stageContentLoaded}
+          <div className="border-b px-5 py-3">
+            <dl
+              className={cn(
+                "grid min-w-0 grid-cols-2 gap-x-6 gap-y-2 text-xs",
+                intent === "run" ? "sm:grid-cols-3" : "sm:grid-cols-4",
+              )}
+            >
+              <PlanContextItem label="Source" value={sourceLabel} />
+              <PlanContextItem
+                label="Environment"
+                value={plan?.context.environment || environment || "default"}
+              />
+              <PlanContextItem
+                label="Window"
+                value={
+                  plan
+                    ? formatPlanWindow(plan.context.start_date, plan.context.end_date)
+                    : timeWindow
+                      ? formatPlanWindow(timeWindow.start, timeWindow.end)
+                      : "Resolving…"
+                }
+              />
+              {intent === "deploy" ? (
+                <PlanContextItem
+                  label="Mode"
+                  value={`${fullRefresh ? "full refresh" : "incremental"} · sensor ${sensorMode}`}
                 />
-              </TabsContent>
-              {intent === "deploy" ? (
-                <TabsContent value="changes" className="m-0 p-5">
-                  <DeploymentFileChanges pipelineId={pipelineId} status={deployStatus} />
-                </TabsContent>
               ) : null}
-              {intent === "deploy" ? (
-                <TabsContent value="schedules" className="m-0 p-5">
-                  <DeploymentSchedulePromotion
-                    schedules={pipelineSchedules}
-                    candidates={promotionCandidates}
-                    deployment={deployment}
-                    ownership={schedulerOwnership}
-                    selected={selectedScheduleKeys}
-                    onSelectedChange={setSelectedScheduleKeys}
-                    error={promotionError}
-                  />
-                </TabsContent>
-              ) : null}
-            </ScrollArea>
-          </Tabs>
-        ) : (
-          <div className="min-h-0 flex-1 p-5">
-            {loading ? <PlanLoading /> : null}
-            {!loading && error ? (
-              <Alert variant="destructive">
-                <AlertTriangle />
-                <AlertTitle>Plan failed</AlertTitle>
-                <AlertDescription>{error}</AlertDescription>
+            </dl>
+            {intent === "run" ? (
+              <FieldSet className="mt-3 gap-3 border-t pt-3">
+                <FieldLegend
+                  variant="label"
+                  className="mb-0 text-[10px] tracking-wide text-muted-foreground uppercase"
+                >
+                  Run options
+                </FieldLegend>
+                <FieldGroup className="grid grid-cols-1 gap-3 sm:grid-cols-[minmax(0,1.4fr)_minmax(0,1fr)_auto] sm:items-end">
+                  <Field className="gap-1">
+                    <FieldLabel
+                      htmlFor="pipeline-plan-scope"
+                      className="text-[11px] text-muted-foreground"
+                    >
+                      Scope
+                    </FieldLabel>
+                    <Select
+                      value={selectionMode}
+                      onValueChange={(value) => {
+                        const mode = value as PlanSelectionMode;
+                        const usesSelector = mode === "selector" || mode === "selector_needed";
+                        const selector = selectorDraft.trim() || appliedSelector || "*";
+                        if (usesSelector) setSelectorDraft(selector);
+                        updateRequest((current) => ({
+                          ...current,
+                          selection: usesSelector ? { mode, selector } : { mode },
+                        }));
+                      }}
+                    >
+                      <SelectTrigger id="pipeline-plan-scope" size="sm" className="w-full">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectGroup>
+                          <SelectItem value="all">Entire pipeline</SelectItem>
+                          <SelectItem value="needed">Needed assets</SelectItem>
+                          <SelectItem value="selector">Matching selector</SelectItem>
+                          <SelectItem value="selector_needed">Needed matching selector</SelectItem>
+                        </SelectGroup>
+                      </SelectContent>
+                    </Select>
+                  </Field>
+                  <Field className="gap-1">
+                    <FieldLabel
+                      htmlFor="pipeline-plan-sensor"
+                      className="text-[11px] text-muted-foreground"
+                    >
+                      Sensors
+                    </FieldLabel>
+                    <Select
+                      value={sensorMode}
+                      onValueChange={(value) =>
+                        updateRequest((current) => ({
+                          ...current,
+                          sensor_mode: value as SensorMode,
+                        }))
+                      }
+                    >
+                      <SelectTrigger id="pipeline-plan-sensor" size="sm" className="w-full">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectGroup>
+                          <SelectItem value="once">Check once</SelectItem>
+                          <SelectItem value="wait">Wait</SelectItem>
+                          <SelectItem value="skip">Skip</SelectItem>
+                        </SelectGroup>
+                      </SelectContent>
+                    </Select>
+                  </Field>
+                  <Field
+                    orientation="horizontal"
+                    className="h-8 w-full self-end rounded-md border px-3 text-xs sm:w-auto"
+                  >
+                    <Switch
+                      id="pipeline-plan-full-refresh"
+                      size="sm"
+                      checked={fullRefresh}
+                      onCheckedChange={(checked) =>
+                        updateRequest((current) => ({ ...current, full_refresh: checked }))
+                      }
+                    />
+                    <FieldLabel htmlFor="pipeline-plan-full-refresh" className="font-normal">
+                      Full refresh
+                    </FieldLabel>
+                  </Field>
+                  {selectorMode ? (
+                    <Field
+                      className="border-t pt-3 sm:col-span-3"
+                      data-invalid={!selectorDraft.trim()}
+                    >
+                      <FieldLabel htmlFor="pipeline-plan-selector">Asset selector</FieldLabel>
+                      <div className="flex min-w-0 flex-wrap items-center gap-2">
+                        <Input
+                          id="pipeline-plan-selector"
+                          value={selectorDraft}
+                          onChange={(event) => setSelectorDraft(event.target.value)}
+                          onKeyDown={(event) => {
+                            if (event.key === "Enter") {
+                              event.preventDefault();
+                              applySelector();
+                            }
+                          }}
+                          placeholder="tag:daily,path:assets/marts +analytics.orders"
+                          aria-invalid={!selectorDraft.trim()}
+                          className="min-w-56 flex-1 font-mono"
+                        />
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={applySelector}
+                          disabled={!selectorDraft.trim() || selectorDraftApplied || loading}
+                        >
+                          Apply
+                        </Button>
+                      </div>
+                      <FieldDescription>
+                        {!selectorDraftApplied
+                          ? "Apply the expression to validate it and preview its assets."
+                          : loading
+                            ? "Resolving selector…"
+                            : selectorPlanIsCurrent && plan
+                              ? `${plan.summary.assets} ${plan.summary.assets === 1 ? "asset" : "assets"} selected. Use spaces for union, commas for intersection, and + for graph expansion.`
+                              : "Use spaces for union, commas for intersection, and + for graph expansion."}
+                      </FieldDescription>
+                    </Field>
+                  ) : null}
+                </FieldGroup>
+              </FieldSet>
+            ) : (
+              <Alert className="mt-3">
+                <Package />
+                <AlertTitle>Representative execution preview</AlertTitle>
+                <AlertDescription>
+                  Deployment stores this saved source, not rendered SQL. Scheduled runs render it
+                  again with their actual interval, environment, and variables.
+                </AlertDescription>
               </Alert>
-            ) : null}
+            )}
           </div>
-        )}
+
+          {plan && intent === "run" ? (
+            <RunPlanReview
+              plan={plan}
+              contentLoading={contentLoading}
+              contentLoaded={stageContentLoaded}
+              onLoadStageContent={loadStageContent}
+            />
+          ) : plan ? (
+            <DeployPlanReview
+              pipelineId={pipelineId}
+              plan={plan}
+              status={deployStatus}
+              deployment={deployment}
+              contentLoading={contentLoading}
+              contentLoaded={stageContentLoaded}
+              onLoadStageContent={loadStageContent}
+              schedules={pipelineSchedules}
+              promotionCandidates={promotionCandidates}
+              schedulerOwnership={schedulerOwnership}
+              selectedScheduleKeys={selectedScheduleKeys}
+              onSelectedScheduleKeysChange={setSelectedScheduleKeys}
+              promotionError={promotionError}
+              schedulesOpen={deploySchedulesOpen}
+              onSchedulesOpenChange={setDeploySchedulesOpen}
+            />
+          ) : (
+            <div className="p-5">
+              {loading ? <PlanLoading /> : null}
+              {!loading && error ? (
+                <Alert variant="destructive">
+                  <AlertTriangle />
+                  <AlertTitle>Plan failed</AlertTitle>
+                  <AlertDescription>{error}</AlertDescription>
+                </Alert>
+              ) : null}
+            </div>
+          )}
+        </ScrollArea>
 
         <DialogFooter className="shrink-0 flex-col gap-3 border-t bg-muted/10 px-5 py-4 sm:flex-col sm:justify-start">
           {error && plan ? (
@@ -781,6 +767,571 @@ function PlanContextItem({ label, value }: { label: string; value: string }) {
   );
 }
 
+function RunPlanReview({
+  plan,
+  contentLoading,
+  contentLoaded,
+  onLoadStageContent,
+}: {
+  plan: PipelinePlan;
+  contentLoading: boolean;
+  contentLoaded: boolean;
+  onLoadStageContent: () => void;
+}) {
+  const [detailsOpen, setDetailsOpen] = useState(false);
+  const [operationsOpen, setOperationsOpen] = useState(false);
+  const runtimeChecks = plan.assets.flatMap((asset) =>
+    asset.renders.flatMap((render) => render.stages.filter((stage) => stage.kind === "check")),
+  );
+
+  return (
+    <div className="mx-auto w-full max-w-5xl space-y-5 p-5">
+      <PlanIssues title="Blockers" issues={plan.readiness.blockers} destructive />
+      <PlanIssues title="Warnings" issues={plan.readiness.warnings} />
+      {plan.readiness.active_run_id ? (
+        <Alert variant="destructive">
+          <ShieldAlert />
+          <AlertTitle>Conflicting run</AlertTitle>
+          <AlertDescription>
+            Another queued or running execution owns a selected write resource.{" "}
+            <Link to="/runs/$runId" params={{ runId: plan.readiness.active_run_id }}>
+              Open active run
+            </Link>
+          </AlertDescription>
+        </Alert>
+      ) : null}
+
+      <section aria-labelledby="pipeline-plan-execution-order">
+        <div className="mb-2 flex flex-wrap items-end justify-between gap-2">
+          <div>
+            <h3 id="pipeline-plan-execution-order" className="text-sm font-medium">
+              Execution order
+            </h3>
+            <p className="text-xs text-muted-foreground">
+              {plan.summary.execution_units} {plan.summary.execution_units === 1 ? "step" : "steps"}{" "}
+              across {plan.summary.assets} {plan.summary.assets === 1 ? "asset" : "assets"}
+            </p>
+          </div>
+          <div className="flex flex-wrap gap-1">
+            {runtimeChecks.length > 0 ? (
+              <Badge variant="outline" size="xs">
+                {runtimeChecks.length} runtime {runtimeChecks.length === 1 ? "check" : "checks"}
+              </Badge>
+            ) : null}
+            {plan.summary.destructive_operations > 0 ? (
+              <Badge variant="destructive" size="xs">
+                {plan.summary.destructive_operations} destructive
+              </Badge>
+            ) : null}
+          </div>
+        </div>
+        <PlanExecutionSequence plan={plan} />
+      </section>
+
+      <PlanCodeReview plan={plan} />
+
+      <Collapsible open={detailsOpen} onOpenChange={setDetailsOpen} className="rounded-lg border">
+        <CollapsibleTrigger asChild>
+          <Button variant="ghost" className="h-auto w-full justify-start rounded-lg px-3 py-2.5">
+            <ChevronRight
+              className={cn("size-4 shrink-0 transition-transform", detailsOpen && "rotate-90")}
+            />
+            <span className="font-medium">Plan details</span>
+            <span className="truncate text-xs font-normal text-muted-foreground">
+              source, identities, and write isolation
+            </span>
+          </Button>
+        </CollapsibleTrigger>
+        <CollapsibleContent className="border-t p-3">
+          <RunPlanDetails plan={plan} />
+        </CollapsibleContent>
+      </Collapsible>
+
+      <Collapsible
+        open={operationsOpen}
+        onOpenChange={(nextOpen) => {
+          setOperationsOpen(nextOpen);
+          if (nextOpen) onLoadStageContent();
+        }}
+        className="rounded-lg border"
+      >
+        <CollapsibleTrigger asChild>
+          <Button variant="ghost" className="h-auto w-full justify-start rounded-lg px-3 py-2.5">
+            <ChevronRight
+              className={cn("size-4 shrink-0 transition-transform", operationsOpen && "rotate-90")}
+            />
+            <span className="font-medium">Rendered operations</span>
+            <span className="truncate text-xs font-normal text-muted-foreground">
+              inspect generated SQL and runtime operations
+            </span>
+          </Button>
+        </CollapsibleTrigger>
+        <CollapsibleContent className="border-t p-3">
+          <PlanExecution
+            plan={plan}
+            contentLoading={contentLoading}
+            contentLoaded={contentLoaded}
+          />
+        </CollapsibleContent>
+      </Collapsible>
+    </div>
+  );
+}
+
+function DeployPlanReview({
+  pipelineId,
+  plan,
+  status,
+  deployment,
+  contentLoading,
+  contentLoaded,
+  onLoadStageContent,
+  schedules,
+  promotionCandidates,
+  schedulerOwnership,
+  selectedScheduleKeys,
+  onSelectedScheduleKeysChange,
+  promotionError,
+  schedulesOpen,
+  onSchedulesOpenChange,
+}: {
+  pipelineId: string;
+  plan: PipelinePlan;
+  status: DeployStatus | null;
+  deployment: DeployResponse | null;
+  contentLoading: boolean;
+  contentLoaded: boolean;
+  onLoadStageContent: () => void;
+  schedules: EnvSchedule[];
+  promotionCandidates: EnvSchedule[];
+  schedulerOwnership: SchedulerOwnership | null;
+  selectedScheduleKeys: Set<string>;
+  onSelectedScheduleKeysChange: (selected: Set<string>) => void;
+  promotionError: string | null;
+  schedulesOpen: boolean;
+  onSchedulesOpenChange: (open: boolean) => void;
+}) {
+  const [assetsOpen, setAssetsOpen] = useState(false);
+  const [checksOpen, setChecksOpen] = useState(false);
+  const [detailsOpen, setDetailsOpen] = useState(false);
+  const [operationsOpen, setOperationsOpen] = useState(false);
+  const schedulesRef = useRef<HTMLDivElement | null>(null);
+  const runtimeChecks = plan.assets.flatMap((asset) =>
+    asset.renders.flatMap((render) => render.stages.filter((stage) => stage.kind === "check")),
+  );
+  const changedFiles = status
+    ? (status.added_files?.length ?? 0) +
+      (status.changed_files?.length ?? 0) +
+      (status.removed_files?.length ?? 0)
+    : null;
+
+  useEffect(() => {
+    if (!deployment || !schedulesOpen) return;
+    const frame = window.requestAnimationFrame(() =>
+      schedulesRef.current?.scrollIntoView({ behavior: "smooth", block: "nearest" }),
+    );
+    return () => window.cancelAnimationFrame(frame);
+  }, [deployment, schedulesOpen]);
+
+  return (
+    <div className="mx-auto flex w-full max-w-5xl flex-col gap-5 p-5">
+      <PlanIssues title="Blockers" issues={plan.readiness.blockers} destructive />
+      <PlanIssues title="Warnings" issues={plan.readiness.warnings} />
+
+      {deployment ? (
+        <Alert>
+          <CheckCircle2 />
+          <AlertTitle>
+            {deployment.created ? "Deployment created" : "Deployment already current"}
+          </AlertTitle>
+          <AlertDescription>
+            {deploymentLabel(deployment.snapshot.ordinal, deployment.snapshot.version_id)} ·{" "}
+            {deployment.snapshot.file_count} files · source{" "}
+            {deployment.snapshot.merkle_root.slice(0, 8)}
+          </AlertDescription>
+        </Alert>
+      ) : plan.readiness.blockers.length === 0 && plan.readiness.warnings.length === 0 ? (
+        <Alert>
+          <CheckCircle2 />
+          <AlertTitle>Ready to deploy</AlertTitle>
+          <AlertDescription>
+            The saved source and representative operation graph passed planning.
+          </AlertDescription>
+        </Alert>
+      ) : null}
+
+      <section aria-labelledby="pipeline-deploy-source-changes">
+        <div className="mb-2 flex flex-wrap items-end justify-between gap-2">
+          <div>
+            <h3 id="pipeline-deploy-source-changes" className="text-sm font-medium">
+              Source changes
+            </h3>
+            <p className="text-xs text-muted-foreground">
+              {changedFiles === null
+                ? "Comparing the saved workspace with the latest deployment…"
+                : changedFiles === 0
+                  ? "The saved workspace matches the latest deployment."
+                  : `${changedFiles} changed ${changedFiles === 1 ? "file" : "files"} will be captured.`}
+            </p>
+          </div>
+          <Badge variant="outline" size="xs">
+            {plan.summary.assets} {plan.summary.assets === 1 ? "asset" : "assets"}
+          </Badge>
+        </div>
+        <DeploymentFileChanges pipelineId={pipelineId} status={status} autoOpenFirst={false} />
+      </section>
+
+      <PlanCodeReview plan={plan} />
+
+      <Collapsible open={assetsOpen} onOpenChange={setAssetsOpen} className="rounded-lg border">
+        <CollapsibleTrigger asChild>
+          <Button variant="ghost" className="h-auto w-full justify-start rounded-lg px-3 py-2.5">
+            <ChevronRight
+              className={cn("size-4 shrink-0 transition-transform", assetsOpen && "rotate-90")}
+            />
+            <span className="font-medium">Deployment contents</span>
+            <span className="truncate text-xs font-normal text-muted-foreground">
+              {plan.summary.assets} {plan.summary.assets === 1 ? "asset" : "assets"} ·{" "}
+              {plan.summary.execution_units} representative{" "}
+              {plan.summary.execution_units === 1 ? "step" : "steps"}
+            </span>
+          </Button>
+        </CollapsibleTrigger>
+        <CollapsibleContent className="border-t p-3">
+          <PlanAssets plan={plan} />
+        </CollapsibleContent>
+      </Collapsible>
+
+      {runtimeChecks.length > 0 ? (
+        <Collapsible open={checksOpen} onOpenChange={setChecksOpen} className="rounded-lg border">
+          <CollapsibleTrigger asChild>
+            <Button variant="ghost" className="h-auto w-full justify-start rounded-lg px-3 py-2.5">
+              <ChevronRight
+                className={cn("size-4 shrink-0 transition-transform", checksOpen && "rotate-90")}
+              />
+              <span className="font-medium">Runtime quality checks</span>
+              <span className="truncate text-xs font-normal text-muted-foreground">
+                {runtimeChecks.length} {runtimeChecks.length === 1 ? "check" : "checks"} previewed
+              </span>
+            </Button>
+          </CollapsibleTrigger>
+          <CollapsibleContent className="border-t p-3">
+            <RuntimeChecksReview plan={plan} />
+          </CollapsibleContent>
+        </Collapsible>
+      ) : null}
+
+      <Collapsible open={detailsOpen} onOpenChange={setDetailsOpen} className="rounded-lg border">
+        <CollapsibleTrigger asChild>
+          <Button variant="ghost" className="h-auto w-full justify-start rounded-lg px-3 py-2.5">
+            <ChevronRight
+              className={cn("size-4 shrink-0 transition-transform", detailsOpen && "rotate-90")}
+            />
+            <span className="font-medium">Plan identities</span>
+            <span className="truncate text-xs font-normal text-muted-foreground">
+              saved source, configuration, and variables
+            </span>
+          </Button>
+        </CollapsibleTrigger>
+        <CollapsibleContent className="border-t p-3">
+          <DeploymentPlanDetails plan={plan} />
+        </CollapsibleContent>
+      </Collapsible>
+
+      <Collapsible
+        open={operationsOpen}
+        onOpenChange={(nextOpen) => {
+          setOperationsOpen(nextOpen);
+          if (nextOpen) onLoadStageContent();
+        }}
+        className="rounded-lg border"
+      >
+        <CollapsibleTrigger asChild>
+          <Button variant="ghost" className="h-auto w-full justify-start rounded-lg px-3 py-2.5">
+            <ChevronRight
+              className={cn("size-4 shrink-0 transition-transform", operationsOpen && "rotate-90")}
+            />
+            <span className="font-medium">Representative execution</span>
+            <span className="truncate text-xs font-normal text-muted-foreground">
+              inspect generated SQL and runtime operations
+            </span>
+          </Button>
+        </CollapsibleTrigger>
+        <CollapsibleContent className="border-t p-3">
+          <PlanExecution
+            plan={plan}
+            contentLoading={contentLoading}
+            contentLoaded={contentLoaded}
+          />
+        </CollapsibleContent>
+      </Collapsible>
+
+      <div ref={schedulesRef}>
+        <Collapsible
+          open={schedulesOpen}
+          onOpenChange={onSchedulesOpenChange}
+          className="rounded-lg border"
+        >
+          <CollapsibleTrigger asChild>
+            <Button variant="ghost" className="h-auto w-full justify-start rounded-lg px-3 py-2.5">
+              <ChevronRight
+                className={cn("size-4 shrink-0 transition-transform", schedulesOpen && "rotate-90")}
+              />
+              <span className="font-medium">Schedules</span>
+              <span className="truncate text-xs font-normal text-muted-foreground">
+                {deployment
+                  ? promotionCandidates.length > 0
+                    ? `${promotionCandidates.length} ${promotionCandidates.length === 1 ? "pin can" : "pins can"} move`
+                    : "all pins current"
+                  : `${schedules.length} current ${schedules.length === 1 ? "pin" : "pins"}`}
+              </span>
+            </Button>
+          </CollapsibleTrigger>
+          <CollapsibleContent className="border-t p-3">
+            <DeploymentSchedulePromotion
+              schedules={schedules}
+              candidates={promotionCandidates}
+              deployment={deployment}
+              ownership={schedulerOwnership}
+              selected={selectedScheduleKeys}
+              onSelectedChange={onSelectedScheduleKeysChange}
+              error={promotionError}
+            />
+          </CollapsibleContent>
+        </Collapsible>
+      </div>
+    </div>
+  );
+}
+
+function PlanExecutionSequence({ plan }: { plan: PipelinePlan }) {
+  const assetsByID = new Map(plan.assets.map((asset) => [asset.id, asset]));
+  const assetsByName = new Map(plan.assets.map((asset) => [asset.name, asset]));
+
+  if (plan.execution_units.length === 0) {
+    return (
+      <div className="rounded-lg border px-3 py-4 text-sm text-muted-foreground">
+        {plan.assets.length === 0
+          ? "No assets are selected."
+          : "No executable steps were produced. Review the planning issues above."}
+      </div>
+    );
+  }
+
+  return (
+    <ol className="divide-y rounded-lg border">
+      {plan.execution_units.map((unit, index) => {
+        const asset = assetsByID.get(unit.asset_id) ?? assetsByName.get(unit.asset_name);
+        const render = asset?.renders[unit.render_index];
+        const stages = render?.stages ?? [];
+        const checks = stages.filter((stage) => stage.kind === "check");
+        const operations = stages.filter((stage) => stage.kind !== "check");
+        return (
+          <li
+            key={`${unit.asset_id}:${unit.render_index}:${unit.start_date}:${unit.end_date}`}
+            className="grid min-w-0 grid-cols-[1.75rem_minmax(0,1fr)] gap-3 px-3 py-3"
+          >
+            <span className="flex size-7 items-center justify-center rounded-full border bg-muted/40 text-xs font-medium tabular-nums">
+              {index + 1}
+            </span>
+            <div className="min-w-0">
+              <div className="flex min-w-0 flex-wrap items-center gap-1.5">
+                <span className="truncate font-mono text-sm font-medium" title={unit.asset_name}>
+                  {unit.asset_name}
+                </span>
+                {asset?.type ? (
+                  <Badge variant="outline" size="xs">
+                    {asset.type}
+                  </Badge>
+                ) : null}
+                {asset?.staleness ? (
+                  <Badge variant="muted" size="xs">
+                    {humanizePlanToken(asset.staleness)}
+                  </Badge>
+                ) : null}
+              </div>
+              <div className="mt-1 flex flex-wrap gap-x-2 gap-y-0.5 text-[11px] text-muted-foreground">
+                <span>{formatPlanWindow(unit.start_date, unit.end_date)}</span>
+                <span>{humanizePlanToken(unit.reason)}</span>
+                <span>
+                  {operations.length} {operations.length === 1 ? "operation" : "operations"}
+                  {checks.length > 0
+                    ? ` · ${checks.length} ${checks.length === 1 ? "check" : "checks"}`
+                    : ""}
+                </span>
+              </div>
+              {stages.length > 0 ? (
+                <div className="mt-1.5 flex flex-wrap items-center gap-x-1 text-[11px] text-muted-foreground">
+                  {stages.map((stage, stageIndex) => (
+                    <span
+                      key={`${stage.kind}:${stage.label ?? stage.check_name ?? stageIndex}`}
+                      className="inline-flex items-center gap-1"
+                    >
+                      {stageIndex > 0 ? <span aria-hidden="true">→</span> : null}
+                      <span>{assetRenderStageLabel(stage)}</span>
+                    </span>
+                  ))}
+                </div>
+              ) : null}
+              {render?.issues?.length ? (
+                <ul className="mt-2 space-y-1 text-xs text-amber-700 dark:text-amber-300">
+                  {(render.issues ?? []).map((issue, issueIndex) => (
+                    <li key={`${issue.code}:${issueIndex}`}>{issue.message}</li>
+                  ))}
+                </ul>
+              ) : null}
+            </div>
+          </li>
+        );
+      })}
+    </ol>
+  );
+}
+
+function PlanCodeReview({ plan }: { plan: PipelinePlan }) {
+  const report = plan.readiness.code_checks;
+  const withFindings = report.assets.filter((asset) => asset.findings.length > 0);
+  const passing = report.assets.length - withFindings.length;
+  return (
+    <section aria-labelledby="pipeline-plan-code-review">
+      <div className="mb-2 flex flex-wrap items-end justify-between gap-2">
+        <div>
+          <h3 id="pipeline-plan-code-review" className="text-sm font-medium">
+            Code checks
+          </h3>
+          <p className="text-xs text-muted-foreground">
+            {report.summary.errors} errors · {report.summary.warnings} warnings
+          </p>
+        </div>
+        {passing > 0 ? (
+          <span className="text-[11px] text-muted-foreground">
+            {passing} {passing === 1 ? "asset" : "assets"} passed
+          </span>
+        ) : null}
+      </div>
+      {withFindings.length === 0 ? (
+        <div className="flex items-center gap-2 rounded-lg border px-3 py-2.5 text-sm">
+          <CheckCircle2
+            className="size-4 shrink-0 text-primary"
+            aria-label="All code checks passed"
+          />
+          <span>All code checks passed.</span>
+        </div>
+      ) : (
+        <div className="divide-y rounded-lg border">
+          {withFindings.map((asset) => (
+            <div key={asset.name} className="px-3 py-2.5">
+              <div className="font-mono text-sm font-medium">{asset.name}</div>
+              <ul className="mt-1 space-y-1 text-xs">
+                {asset.findings.map((finding, index) => (
+                  <li
+                    key={`${finding.code}:${finding.message}:${index}`}
+                    className={
+                      finding.severity === "error"
+                        ? "text-destructive"
+                        : "text-amber-700 dark:text-amber-300"
+                    }
+                  >
+                    {finding.message}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          ))}
+        </div>
+      )}
+    </section>
+  );
+}
+
+function RunPlanDetails({ plan }: { plan: PipelinePlan }) {
+  return (
+    <div className="space-y-3">
+      <div className="grid grid-cols-2 divide-x divide-y rounded-lg border sm:grid-cols-4 sm:divide-y-0">
+        <SummaryMetric label="Assets" value={plan.summary.assets} />
+        <SummaryMetric label="Execution units" value={plan.summary.execution_units} />
+        <SummaryMetric label="Operations" value={plan.summary.stages} />
+        <SummaryMetric label="Destructive" value={plan.summary.destructive_operations} />
+      </div>
+      <dl className="grid gap-x-6 gap-y-2 text-xs sm:grid-cols-2">
+        <PlanDetailItem label="Source identity" value={plan.source.merkle_root} />
+        <PlanDetailItem label="Variables identity" value={plan.context.variables_digest} />
+        <PlanDetailItem
+          label="Configuration identity"
+          value={plan.context.configuration_digest || "not available"}
+        />
+        <PlanDetailItem
+          label="Configuration fidelity"
+          value={humanizePlanToken(plan.context.configuration_fidelity)}
+        />
+        <PlanDetailItem
+          label="Write isolation"
+          value={humanizePlanToken(plan.resources.isolation)}
+        />
+        <PlanDetailItem
+          label="Write claims"
+          value={`${plan.resources.claims.length} ${plan.resources.claims.length === 1 ? "resource" : "resources"}`}
+        />
+      </dl>
+      {plan.resources.claims.length > 0 ? (
+        <div className="flex flex-wrap gap-1">
+          {plan.resources.claims.map((claim) => (
+            <Badge
+              key={`${claim.kind}:${claim.identity}`}
+              variant="muted"
+              size="xs"
+              title={claim.identity}
+            >
+              {humanizePlanToken(claim.kind)} · {claim.identity.slice(0, 10)}
+            </Badge>
+          ))}
+        </div>
+      ) : null}
+      <p className="text-[11px] text-muted-foreground">
+        These identities and the complete ordered plan are rechecked when you confirm and before
+        execution starts.
+      </p>
+    </div>
+  );
+}
+
+function DeploymentPlanDetails({ plan }: { plan: PipelinePlan }) {
+  return (
+    <div className="flex flex-col gap-3">
+      <dl className="grid gap-x-6 gap-y-2 text-xs sm:grid-cols-2">
+        <PlanDetailItem label="Source identity" value={plan.source.merkle_root} />
+        <PlanDetailItem label="Variables identity" value={plan.context.variables_digest} />
+        <PlanDetailItem
+          label="Configuration identity"
+          value={plan.context.configuration_digest || "not available"}
+        />
+        <PlanDetailItem
+          label="Configuration fidelity"
+          value={humanizePlanToken(plan.context.configuration_fidelity)}
+        />
+      </dl>
+      <p className="text-[11px] text-muted-foreground">
+        Deployment rechecks the saved source identity before capturing files. The configuration,
+        variables, and operations describe representative future execution; scheduled runs render
+        them again with their own context.
+      </p>
+    </div>
+  );
+}
+
+function PlanDetailItem({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="min-w-0">
+      <dt className="text-[10px] font-medium tracking-wide text-muted-foreground uppercase">
+        {label}
+      </dt>
+      <dd className="truncate font-mono" title={value}>
+        {value}
+      </dd>
+    </div>
+  );
+}
+
 function PlanStatusBadge({ status }: { status: string }) {
   return (
     <Badge
@@ -796,81 +1347,6 @@ function PlanStatusBadge({ status }: { status: string }) {
       )}
       {status}
     </Badge>
-  );
-}
-
-function PlanSummary({
-  plan,
-  intent,
-  deployment,
-}: {
-  plan: PipelinePlan;
-  intent: PlanIntent;
-  deployment: DeployResponse | null;
-}) {
-  return (
-    <>
-      <div className="grid grid-cols-2 divide-x divide-y rounded-lg border sm:grid-cols-4 sm:divide-y-0">
-        <SummaryMetric label="Assets" value={plan.summary.assets} />
-        <SummaryMetric label="Execution units" value={plan.summary.execution_units} />
-        <SummaryMetric label="Operations" value={plan.summary.stages} />
-        <SummaryMetric label="Destructive" value={plan.summary.destructive_operations} />
-      </div>
-      <PlanIssues title="Blockers" issues={plan.readiness.blockers} destructive />
-      <PlanIssues title="Warnings" issues={plan.readiness.warnings} />
-      {deployment ? (
-        <Alert>
-          <CheckCircle2 />
-          <AlertTitle>
-            {deployment.created ? "Deployment created" : "Deployment already current"}
-          </AlertTitle>
-          <AlertDescription>
-            {deploymentLabel(deployment.snapshot.ordinal, deployment.snapshot.version_id)} ·{" "}
-            {deployment.snapshot.file_count} files · source{" "}
-            {deployment.snapshot.merkle_root.slice(0, 8)}
-          </AlertDescription>
-        </Alert>
-      ) : null}
-      {!deployment &&
-      plan.readiness.blockers.length === 0 &&
-      plan.readiness.warnings.length === 0 ? (
-        <Alert>
-          <CheckCircle2 />
-          <AlertTitle>{intent === "deploy" ? "Ready to deploy" : "Ready to run"}</AlertTitle>
-          <AlertDescription>
-            The saved source and complete operation graph passed planning.
-          </AlertDescription>
-        </Alert>
-      ) : null}
-      {intent === "run" && plan.readiness.active_run_id ? (
-        <Alert variant="destructive">
-          <ShieldAlert />
-          <AlertTitle>Conflicting run</AlertTitle>
-          <AlertDescription>
-            Another queued or running execution owns a selected write resource.{" "}
-            <Link to="/runs/$runId" params={{ runId: plan.readiness.active_run_id }}>
-              Open active run
-            </Link>
-          </AlertDescription>
-        </Alert>
-      ) : null}
-      <div className="space-y-2 border-t pt-3 text-[11px] text-muted-foreground">
-        <div className="flex flex-wrap gap-2">
-          <Badge variant="muted" size="xs" title={plan.source.merkle_root}>
-            Source {plan.source.merkle_root.slice(0, 8)}
-          </Badge>
-          {plan.context.configuration_digest ? (
-            <Badge variant="muted" size="xs" title={plan.context.configuration_digest}>
-              Config {plan.context.configuration_digest.slice(0, 8)}
-            </Badge>
-          ) : null}
-          <Badge variant="muted" size="xs" title={plan.context.variables_digest}>
-            Variables {plan.context.variables_digest.slice(0, 8)}
-          </Badge>
-        </div>
-        <p>These identities are rechecked when you confirm and again before the first task.</p>
-      </div>
-    </>
   );
 }
 
@@ -954,8 +1430,7 @@ function PlanAssets({ plan }: { plan: PipelinePlan }) {
   );
 }
 
-function PlanChecks({ plan }: { plan: PipelinePlan }) {
-  const report = plan.readiness.code_checks;
+function RuntimeChecksReview({ plan }: { plan: PipelinePlan }) {
   const runtimeChecks = plan.assets.flatMap((asset) =>
     asset.renders.flatMap((render) =>
       render.stages
@@ -963,74 +1438,25 @@ function PlanChecks({ plan }: { plan: PipelinePlan }) {
         .map((stage) => ({ asset: asset.name, stage })),
     ),
   );
+  if (runtimeChecks.length === 0) {
+    return <p className="text-muted-foreground">No runtime checks are planned.</p>;
+  }
   return (
-    <div className="space-y-5">
-      <section>
-        <div className="mb-2 flex items-center justify-between">
-          <h3 className="font-medium">Code checks</h3>
-          <span className="text-[11px] text-muted-foreground">
-            {report.summary.errors} errors · {report.summary.warnings} warnings
-          </span>
-        </div>
-        <div className="divide-y border-y">
-          {report.assets.map((asset) =>
-            asset.findings.length === 0 ? (
-              <div key={asset.name} className="flex min-w-0 items-center gap-2 py-1.5">
-                <CheckCircle2
-                  className="size-3.5 shrink-0 text-primary"
-                  aria-label="All code checks passed"
-                />
-                <div className="min-w-0 truncate font-mono font-medium" title={asset.name}>
-                  {asset.name}
-                </div>
-              </div>
-            ) : (
-              <div key={asset.name} className="py-2.5">
-                <div className="font-mono font-medium">{asset.name}</div>
-                <ul className="mt-1 space-y-1">
-                  {asset.findings.map((finding, index) => (
-                    <li
-                      key={`${finding.message}:${index}`}
-                      className={
-                        finding.severity === "error"
-                          ? "text-destructive"
-                          : "text-amber-700 dark:text-amber-300"
-                      }
-                    >
-                      {finding.message}
-                    </li>
-                  ))}
-                </ul>
-              </div>
-            ),
-          )}
-        </div>
-      </section>
-      <section>
-        <h3 className="mb-2 font-medium">Runtime quality checks</h3>
-        {runtimeChecks.length === 0 ? (
-          <p className="text-muted-foreground">No runtime checks are planned.</p>
-        ) : (
-          <div className="divide-y border-y">
-            {runtimeChecks.map(({ asset, stage }, index) => (
-              <div
-                key={`${asset}:${stage.label ?? stage.kind}:${index}`}
-                className="flex items-center justify-between gap-3 py-2.5"
-              >
-                <div className="min-w-0">
-                  <div className="truncate font-medium">{stage.label || "Quality check"}</div>
-                  <div className="truncate font-mono text-[11px] text-muted-foreground">
-                    {asset}
-                  </div>
-                </div>
-                <Badge variant={stage.status === "ok" ? "outline" : "destructive"} size="xs">
-                  {stage.fidelity}
-                </Badge>
-              </div>
-            ))}
+    <div className="divide-y border-y">
+      {runtimeChecks.map(({ asset, stage }, index) => (
+        <div
+          key={`${asset}:${stage.label ?? stage.kind}:${index}`}
+          className="flex items-center justify-between gap-3 py-2.5"
+        >
+          <div className="min-w-0">
+            <div className="truncate font-medium">{stage.label || "Quality check"}</div>
+            <div className="truncate font-mono text-[11px] text-muted-foreground">{asset}</div>
           </div>
-        )}
-      </section>
+          <Badge variant={stage.status === "ok" ? "outline" : "destructive"} size="xs">
+            {stage.fidelity}
+          </Badge>
+        </div>
+      ))}
     </div>
   );
 }
@@ -1138,9 +1564,11 @@ type DeploymentChange = {
 function DeploymentFileChanges({
   pipelineId,
   status,
+  autoOpenFirst = true,
 }: {
   pipelineId: string;
   status: DeployStatus | null;
+  autoOpenFirst?: boolean;
 }) {
   const changes = useMemo<DeploymentChange[]>(
     () =>
@@ -1172,9 +1600,13 @@ function DeploymentFileChanges({
 
   useEffect(() => {
     setSelectedPath((current) =>
-      changes.some((change) => change.path === current) ? current : (changes[0]?.path ?? ""),
+      changes.some((change) => change.path === current)
+        ? current
+        : autoOpenFirst
+          ? (changes[0]?.path ?? "")
+          : "",
     );
-  }, [changes]);
+  }, [autoOpenFirst, changes]);
 
   useEffect(() => {
     if (!status || !selectedPath) {
@@ -1559,6 +1991,10 @@ function runSourceLabel(plan: PipelinePlan) {
         plan.source.version_id || plan.source.merkle_root,
         "deployment",
       );
+}
+
+function humanizePlanToken(value: string) {
+  return value.replaceAll("_", " ").replace(/\b\w/g, (character) => character.toUpperCase());
 }
 
 function formatPlanWindow(start: string, end: string) {

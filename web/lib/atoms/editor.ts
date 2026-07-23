@@ -8,10 +8,6 @@ export type EditorProgrammaticContentState = Record<string, { content: string; r
 
 export const editorProgrammaticContentAtom = atom<EditorProgrammaticContentState>({});
 
-export type AssetEditorTab = "configuration" | "checks" | "visualization" | "dependencies";
-
-export const assetEditorTabAtom = atom<AssetEditorTab>("configuration");
-
 // Transient editor-to-canvas affordance. This is intentionally not persisted:
 // it exists only while the pointer rests on a SQL relation reference.
 export const sqlHoveredAssetAtom = atom<string | null>(null);

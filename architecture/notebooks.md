@@ -155,7 +155,9 @@ is typing" (a typing→save debounce) and rendering.
 - Transport: a single `notebook.runtime` SSE event
   (stale / auto_pending / running / results-delta) tagged with the notebook
   id, via `PublishImmediate`. Endpoints: `GET …/runtime` (seed snapshot),
-  `PUT …/settings` (toggle + environment), `POST …/cancel`.
+  `PUT …/settings` (toggle + environment), `POST …/cancel`. The app-shell
+  event reducer accumulates result deltas per notebook, so a following
+  state-only event cannot erase a completed result before React renders it.
 - Optimistic staleness: on edit the server publishes stale cells as
   auto_pending up front so the hatch doesn't flash, then demotes any that
   won't actually refresh (Python, non-SELECT, errors).

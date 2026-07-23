@@ -40,6 +40,17 @@ test.describe("first-run onboarding", () => {
     await expect(page.getByRole("button", { name: /Start from a demo/ })).toBeVisible();
     await expect(page.getByRole("button", { name: /Import existing tables/ })).toBeVisible();
     await expect(page.getByRole("button", { name: /Start empty/ })).toBeVisible();
+
+    await page.getByRole("button", { name: /Start from a demo/ }).click();
+    for (const demo of [
+      "Product analytics",
+      "Operations monitoring",
+      "Python risk scoring",
+      "Chess performance",
+      "Retail analytics",
+    ]) {
+      await expect(page.getByRole("button", { name: new RegExp(demo) })).toBeVisible();
+    }
   });
 
   test("creates an empty project in place with git init and initial commit", async ({
@@ -157,6 +168,32 @@ test.describe("first-run onboarding", () => {
         page.getByTestId(`rf__node-${asset.id}`).locator('[title="Staleness: Fresh"]'),
       ).toBeVisible({ timeout: timeoutForRetry(test.info(), 30000) });
     }
+  });
+
+  test("keeps an existing project directory warning beside the create action", async ({
+    liveApp,
+    page,
+  }) => {
+    await page.goto(`${liveApp.baseURL}/welcome?new=1`);
+
+    await page.getByRole("button", { name: /Start from a demo/ }).click();
+    await page.getByLabel("Project name").fill(basename(liveApp.workspaceDir));
+    await expect(page.getByRole("button", { name: "Choose project location" })).toContainText(
+      dirname(liveApp.workspaceDir),
+    );
+
+    const createResponse = page.waitForResponse(
+      (response) =>
+        new URL(response.url()).pathname === "/api/projects" &&
+        response.request().method() === "POST",
+    );
+    await page.getByRole("button", { name: "Create project" }).click();
+    expect((await createResponse).status()).toBe(400);
+
+    const warning = page.getByRole("alert");
+    await expect(warning).toContainText("already exists");
+    await expect(warning).toBeInViewport();
+    await expect(page.getByRole("button", { name: "Create project" })).toBeEnabled();
   });
 
   test("creates a new project directory from the New project flow", async ({ liveApp, page }) => {

@@ -15,7 +15,7 @@ import {
   updateWorkspaceConnection,
   updateWorkspaceEnvironment,
   updateWorkspaceProject,
-} from "@/lib/api";
+} from "@/lib/api-config";
 import { atom } from "jotai";
 import type { EnvironmentPolicy, WorkspaceRetentionSettings } from "@/lib/generated/api-types";
 import { WorkspaceConfigResponse } from "@/lib/types";

@@ -451,17 +451,23 @@ select 1 as customer_id,'Ada' as customer_name union all select 2 as customer_id
     await expect(planSheet).toBeVisible();
     await expect(planSheet).toHaveAttribute("data-slot", "dialog-content");
     await expect(planSheet).toContainText("Saved working tree");
+    await expect(planSheet.getByRole("tablist")).toHaveCount(0);
+    const reviewViewport = planSheet
+      .getByTestId("pipeline-plan-scroll")
+      .locator(':scope > [data-slot="scroll-area-viewport"]');
     await expect(
-      planSheet
-        .getByRole("tablist")
-        .locator('xpath=ancestor::*[@data-slot="scroll-area-viewport"]'),
-    ).toHaveCount(1);
+      reviewViewport.getByRole("heading", { name: "Review pipeline run" }),
+    ).toBeVisible();
+    await expect(reviewViewport.getByRole("heading", { name: "Execution order" })).toBeVisible();
+    await expect(planSheet.getByText("Run options", { exact: true })).toBeVisible();
+    await expect(planSheet.getByLabel("Scope")).toBeVisible();
+    await expect(planSheet.getByLabel("Sensors")).toBeVisible();
+    await expect(planSheet.getByRole("switch", { name: "Full refresh" })).toBeVisible();
     const confirmButton = planSheet.getByRole("button", {
       name: /^Run \d+ assets? from working tree$/,
     });
     await expect(confirmButton).toBeEnabled();
 
-    await planSheet.getByRole("tab", { name: "Checks" }).click();
     const passingCheck = planSheet.getByLabel("All code checks passed").first();
     await expect(passingCheck).toBeVisible();
     await expect(passingCheck).toHaveClass(/text-primary/);
@@ -474,7 +480,7 @@ select 1 as customer_id,'Ada' as customer_name union all select 2 as customer_id
         response.ok(),
       { timeout: 30000 },
     );
-    await planSheet.getByRole("tab", { name: "Execution" }).click();
+    await planSheet.getByRole("button", { name: /Rendered operations/ }).click();
     const renderedPlan = await renderedPlanResponse;
     expect(renderedPlan.request().postDataJSON()).toMatchObject({
       include_stage_content: true,
@@ -578,11 +584,17 @@ select 1 as customer_id,'Ada' as customer_name union all select 2 as customer_id
     await page.getByRole("button", { name: "Deploy", exact: true }).click();
     const planDialog = page.getByTestId("pipeline-plan-sheet");
     await expect(planDialog).toBeVisible();
-    await planDialog.getByRole("tab", { name: "Files" }).click();
+    await expect(planDialog.getByRole("tablist")).toHaveCount(0);
+    await expect(planDialog.getByRole("heading", { name: "Source changes" })).toBeVisible();
 
-    const fileDisclosure = planDialog.locator('[data-slot="collapsible"]').first();
+    const fileDisclosure = planDialog
+      .locator('section[aria-labelledby="pipeline-deploy-source-changes"]')
+      .locator('[data-slot="collapsible"]')
+      .first();
     await expect(fileDisclosure).toBeVisible({ timeout: 15000 });
     const fileDiff = fileDisclosure.locator('[data-slot="collapsible-content"]');
+    await expect(fileDiff).toBeHidden();
+    await fileDisclosure.locator('[data-slot="collapsible-trigger"]').click();
     await expect(fileDiff).toBeVisible();
     await expect(fileDiff).toContainText("Current deployment");
     await expect(fileDiff).toContainText("Saved workspace");

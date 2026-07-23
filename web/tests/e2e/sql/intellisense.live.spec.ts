@@ -508,30 +508,18 @@ test.describe("sql intellisense live", () => {
     );
     await replaceEditorContentByInsertText(page, 'select *\nfrom {{ ref("missing_orders") }} m');
     const response = await diagnosticsResponse;
-    const body = (await response.json()) as {
-      status?: string;
-      diagnostics?: Array<{
-        message?: string;
-        range?: { start?: { line?: number; character?: number } };
-      }>;
-    };
-
-    expect(body.status).toBe("ok");
-    expect(body.diagnostics ?? []).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          message: "Unresolved table: missing_orders",
-          range: expect.objectContaining({
-            start: expect.objectContaining({ line: 1, character: 5 }),
-          }),
-        }),
-      ]),
-    );
+    expect(response.ok()).toBe(true);
 
     await expect
-      .poll(async () => getEditorMarkerMessages(page), { timeout: 15000 })
+      .poll(async () => getEditorMarkers(page), { timeout: 15000 })
       .toEqual(
-        expect.arrayContaining([expect.stringContaining("Unresolved table: missing_orders")]),
+        expect.arrayContaining([
+          expect.objectContaining({
+            message: "Unresolved table: missing_orders",
+            startLineNumber: 2,
+            startColumn: 6,
+          }),
+        ]),
       );
   });
 
@@ -1065,10 +1053,19 @@ async function getEditorMarkers(page: Page) {
     if (!monaco || !model) return [];
     return monaco.editor
       .getModelMarkers({ resource: model.uri })
-      .map((marker: { message: string; severity: number }) => ({
-        message: marker.message,
-        severity: marker.severity,
-      }));
+      .map(
+        (marker: {
+          message: string;
+          severity: number;
+          startLineNumber: number;
+          startColumn: number;
+        }) => ({
+          message: marker.message,
+          severity: marker.severity,
+          startLineNumber: marker.startLineNumber,
+          startColumn: marker.startColumn,
+        }),
+      );
   });
 }
 

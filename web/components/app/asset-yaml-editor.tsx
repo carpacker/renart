@@ -39,6 +39,7 @@ import {
   getAssetColumnRefreshMode,
   isSeedAssetType,
   isSensorAssetType,
+  usesSQLSource,
 } from "@/lib/asset-types";
 import { selectedEnvironmentAtom, workspaceAtom } from "@/lib/atoms/workspace";
 import { WebAsset, WebColumn } from "@/lib/types";
@@ -65,10 +66,7 @@ import {
  * two stay in sync through the workspace SSE stream.
  */
 export function AssetYamlEditor({ asset, pipelineId }: { asset: WebAsset; pipelineId: string }) {
-  const isSql = useMemo(
-    () => asset.path?.toLowerCase().endsWith(".sql") ?? asset.type.toLowerCase().includes("sql"),
-    [asset.path, asset.type],
-  );
+  const isSql = useMemo(() => usesSQLSource(asset), [asset]);
   const columnRefreshMode = getAssetColumnRefreshMode(asset.type, asset.parameters);
 
   return (

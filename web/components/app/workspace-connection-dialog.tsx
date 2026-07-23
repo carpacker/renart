@@ -18,7 +18,7 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { Spinner } from "@/components/ui/spinner";
 import { useWorkspaceConnectionForm } from "@/hooks/use-workspace-connection-form";
 import { useWorkspaceSettingsData } from "@/hooks/use-workspace-settings-data";
-import { testWorkspaceConnection } from "@/lib/api";
+import { testWorkspaceConnection } from "@/lib/api-config";
 import { buildConnectionFieldDefaults } from "@/lib/settings-form-utils";
 import type { WorkspaceConfigConnectionType } from "@/lib/types";
 

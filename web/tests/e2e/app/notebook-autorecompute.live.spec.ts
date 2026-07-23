@@ -62,18 +62,24 @@ test.describe("notebook auto-recompute", () => {
     await expect(page.getByText("AutoSelf").first()).toBeVisible({ timeout: 15000 });
 
     // The cell auto-computes from the API save; wait for the baseline.
-    await expect(page.getByText("111", { exact: true }).first()).toBeVisible({ timeout: 20000 });
-
-    // Edit the cell itself and blur. Its own output table must update — no manual
-    // run, no downstream involved.
     const srcCard = page
       .locator('[data-slot="delimited-card"]')
       .filter({ has: page.getByRole("button", { name: "src", exact: true }) });
+    await expect(srcCard.getByRole("cell", { name: "111", exact: true })).toBeVisible({
+      timeout: 20000,
+    });
+
+    // Edit the cell itself and blur. Its own output table must update — no manual
+    // run, no downstream involved.
     await replaceEditorContent(page, srcCard, "select 222 as n");
     await page.getByText("AutoSelf").first().click(); // blur → save → recompute
 
-    await expect(page.getByText("222", { exact: true }).first()).toBeVisible({ timeout: 20000 });
-    await expect(page.getByText("111", { exact: true })).toBeHidden({ timeout: 20000 });
+    await expect(srcCard.getByRole("cell", { name: "222", exact: true })).toBeVisible({
+      timeout: 20000,
+    });
+    await expect(srcCard.getByRole("cell", { name: "111", exact: true })).toBeHidden({
+      timeout: 20000,
+    });
   });
 
   test("a UNION (read-only compound) cell auto-recomputes", async ({ liveApp, page }) => {
@@ -92,17 +98,24 @@ test.describe("notebook auto-recompute", () => {
 
     await page.goto(`${liveApp.baseURL}/notebooks/${notebook.id}`);
     await expect(page.getByText("AutoUnion").first()).toBeVisible({ timeout: 15000 });
-    await expect(page.getByText("111", { exact: true }).first()).toBeVisible({ timeout: 20000 });
-
     const card = page
       .locator('[data-slot="delimited-card"]')
       .filter({ has: page.getByRole("button", { name: "u", exact: true }) });
+    await expect(card.getByRole("cell", { name: "111", exact: true })).toBeVisible({
+      timeout: 20000,
+    });
     await replaceEditorContent(page, card, "select 333 as n union all select 444");
     await page.getByText("AutoUnion").first().click(); // blur → save → recompute
 
-    await expect(page.getByText("333", { exact: true }).first()).toBeVisible({ timeout: 20000 });
-    await expect(page.getByText("444", { exact: true }).first()).toBeVisible({ timeout: 20000 });
-    await expect(page.getByText("111", { exact: true })).toBeHidden({ timeout: 20000 });
+    await expect(card.getByRole("cell", { name: "333", exact: true })).toBeVisible({
+      timeout: 20000,
+    });
+    await expect(card.getByRole("cell", { name: "444", exact: true })).toBeVisible({
+      timeout: 20000,
+    });
+    await expect(card.getByRole("cell", { name: "111", exact: true })).toBeHidden({
+      timeout: 20000,
+    });
     // It is not flagged stale — auto-recompute handled it.
     await expect(page.getByText(/\d+ stale/)).toBeHidden({ timeout: 15000 });
   });

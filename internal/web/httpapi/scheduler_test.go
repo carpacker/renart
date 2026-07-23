@@ -32,6 +32,9 @@ type schedulerHandlerStub struct {
 	reexecuteCalls    int
 	reexecuteRunID    string
 	reexecuteErr      error
+	cancelCalls       int
+	cancelRunID       string
+	cancelErr         error
 }
 
 func (s *schedulerHandlerStub) ListSchedules(context.Context) ([]scheduler.PipelineSchedule, error) {
@@ -86,6 +89,15 @@ func (s *schedulerHandlerStub) ReexecuteRun(_ context.Context, runID string) (sc
 		return scheduler.PipelineRun{}, s.reexecuteErr
 	}
 	return scheduler.PipelineRun{ID: "reexecuted-run", Trigger: scheduler.RunTriggerManual}, nil
+}
+
+func (s *schedulerHandlerStub) CancelRun(_ context.Context, runID string) (scheduler.PipelineRun, error) {
+	s.cancelCalls++
+	s.cancelRunID = runID
+	if s.cancelErr != nil {
+		return scheduler.PipelineRun{}, s.cancelErr
+	}
+	return scheduler.PipelineRun{ID: runID, Status: scheduler.RunStatusCancelled}, nil
 }
 
 func TestHandleTriggerPipelineRejectsInvalidOrClientOwnedContext(t *testing.T) {
@@ -174,6 +186,34 @@ func TestHandleReexecuteRunReportsUnavailableAndActiveConflicts(t *testing.T) {
 	require.Equal(t, http.StatusConflict, response.Code)
 	assert.Contains(t, response.Body.String(), `"code":"pipeline_run_active"`)
 	assert.Contains(t, response.Body.String(), `"active_run_id":"active-run"`)
+}
+
+func TestHandleCancelRunRequiresEmptyObjectAndReturnsAcceptedRun(t *testing.T) {
+	t.Parallel()
+	for _, body := range []string{`null`, `{"unexpected":true}`, `{}` + "\n" + `{}`} {
+		stub := &schedulerHandlerStub{}
+		response := cancelRunRequest(stub, body)
+		assert.Equal(t, http.StatusBadRequest, response.Code)
+		assert.Contains(t, response.Body.String(), `"code":"invalid_request_body"`)
+		assert.Zero(t, stub.cancelCalls)
+	}
+
+	stub := &schedulerHandlerStub{}
+	response := cancelRunRequest(stub, `{}`)
+	require.Equal(t, http.StatusAccepted, response.Code)
+	assert.Equal(t, 1, stub.cancelCalls)
+	assert.Equal(t, "active-run", stub.cancelRunID)
+	assert.Contains(t, response.Body.String(), `"status":"cancelled"`)
+}
+
+func TestHandleCancelRunReportsUnavailableConflict(t *testing.T) {
+	t.Parallel()
+	response := cancelRunRequest(&schedulerHandlerStub{
+		cancelErr: &scheduler.RunCancellationUnavailableError{Reason: "the run has already finished"},
+	}, `{}`)
+	require.Equal(t, http.StatusConflict, response.Code)
+	assert.Contains(t, response.Body.String(), `"code":"run_cancellation_unavailable"`)
+	assert.Contains(t, response.Body.String(), `"reason":"the run has already finished"`)
 }
 
 func TestHandleUpdatePipelineScheduleRequiresOneStrictJSONObject(t *testing.T) {
@@ -300,6 +340,15 @@ func reexecuteRequest(stub *schedulerHandlerStub, body string) *httptest.Respons
 	router := chi.NewRouter()
 	RegisterSchedulerRoutes(router, &SchedulerAPI{Service: stub})
 	request := httptest.NewRequest(http.MethodPost, "/api/runs/original-run/reexecute", strings.NewReader(body))
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, request)
+	return response
+}
+
+func cancelRunRequest(stub *schedulerHandlerStub, body string) *httptest.ResponseRecorder {
+	router := chi.NewRouter()
+	RegisterSchedulerRoutes(router, &SchedulerAPI{Service: stub})
+	request := httptest.NewRequest(http.MethodPost, "/api/runs/active-run/cancel", strings.NewReader(body))
 	response := httptest.NewRecorder()
 	router.ServeHTTP(response, request)
 	return response

@@ -9,6 +9,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"renart/internal/web/bus"
 	"renart/internal/web/matlog"
 	"renart/internal/web/scheduler"
 )
@@ -30,12 +31,20 @@ func TestRecordRunUpsertsLatestAttempt(t *testing.T) {
 	ctx := context.Background()
 
 	require.NoError(t, store.RecordRun(ctx, matlog.AssetRunRecord{
-		AssetID: "p:a", Environment: "dev", Fingerprint: "fp1", Status: "failed", RunID: "run-1", RanAt: ts(1),
+		AssetID: "p:a", Environment: "dev", Fingerprint: "fp1", Status: "succeeded", RunID: "run-1", RanAt: ts(1),
+		QualityStatus: bus.QualityStatusFailed,
+		FailedChecks: []bus.QualityCheckFailure{{
+			Kind: bus.QualityCheckKindColumn, Name: "not_null", Column: "customer_id", Blocking: true,
+		}},
 	}))
 	runs, err := store.LastRuns(ctx, []string{"p:a"}, "dev")
 	require.NoError(t, err)
-	assert.Equal(t, "failed", runs["p:a"].Status)
+	assert.Equal(t, "succeeded", runs["p:a"].Status)
 	assert.Equal(t, "fp1", runs["p:a"].Fingerprint)
+	assert.Equal(t, bus.QualityStatusFailed, runs["p:a"].QualityStatus)
+	assert.Equal(t, []bus.QualityCheckFailure{{
+		Kind: bus.QualityCheckKindColumn, Name: "not_null", Column: "customer_id", Blocking: true,
+	}}, runs["p:a"].FailedChecks)
 
 	// A later run of either outcome overwrites the previous row (one per key), so
 	// a success clears the prior failure.
@@ -47,6 +56,8 @@ func TestRecordRunUpsertsLatestAttempt(t *testing.T) {
 	assert.Equal(t, "succeeded", runs["p:a"].Status)
 	assert.Equal(t, "fp2", runs["p:a"].Fingerprint)
 	assert.Equal(t, "run-2", runs["p:a"].RunID)
+	assert.Empty(t, runs["p:a"].QualityStatus, "a newer unobserved quality result clears the old failure")
+	assert.Empty(t, runs["p:a"].FailedChecks)
 
 	// Startup recovery can replay an older persisted run after a newer attempt
 	// was already recorded. It must not move the latest-attempt row backwards.

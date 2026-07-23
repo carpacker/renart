@@ -16,6 +16,7 @@ import { Input } from "@/components/ui/input";
 import { useAssetResults } from "@/hooks/use-asset-results";
 import { usePipelinesStaleness } from "@/hooks/use-pipeline-staleness";
 import { deleteAsset } from "@/lib/api-assets";
+import { assetPresentationFields, type AssetKind } from "@/lib/asset-presentation";
 import { workspaceAtom } from "@/lib/atoms/domains/workspace";
 import type { WebAsset, WebPipeline } from "@/lib/types";
 import {
@@ -23,8 +24,8 @@ import {
   useAppAssetMaterializationStatus,
 } from "@/hooks/use-app-asset-materialization-status";
 
-import { assets, edges, kindForAssetType, kindMeta, type AssetKind } from "./app-data";
-import { AppLineageCanvas, assetNameParts, type AppLineageCanvasAsset } from "./lineage-canvas";
+import { kindMeta } from "./app-data";
+import { AppLineageCanvas, type AppLineageCanvasAsset } from "./lineage-canvas";
 import { PageHeader, AppPage, AppPanel } from "./app-primitives";
 
 function catalogAssetsForPipeline(pipeline: WebPipeline): AppLineageCanvasAsset[] {
@@ -32,18 +33,8 @@ function catalogAssetsForPipeline(pipeline: WebPipeline): AppLineageCanvasAsset[
 }
 
 function catalogAssetFromWorkspace(asset: WebAsset, pipeline: WebPipeline): AppLineageCanvasAsset {
-  const canonicalName = asset.name || assetFileName(asset.path);
-  const { prefix, title } = assetNameParts(canonicalName);
   return {
-    id: asset.id,
-    name: canonicalName,
-    displayName: title,
-    prefix: prefix ?? assetDirectory(asset.path, pipeline.path),
-    kind: kindForAssetType(asset.type),
-    group: prefix ?? "ASSETS",
-    integration: integrationForAsset(asset),
-    description: asset.meta?.description ?? "",
-    dir: assetDirectory(asset.path, pipeline.path),
+    ...assetPresentationFields(asset, pipeline),
     status: asset.is_materialized ? "success" : "pending",
     materializedAt: asset.is_materialized ? "current" : "not materialized",
     pipelineId: pipeline.id,
@@ -54,35 +45,7 @@ function catalogAssetFromWorkspace(asset: WebAsset, pipeline: WebPipeline): AppL
   };
 }
 
-function integrationForAsset(asset: WebAsset) {
-  if (asset.connection) return asset.connection;
-  const provider = asset.type.split(".")[0]?.toLowerCase();
-  if (provider === "duckdb") return "DuckDB";
-  if (provider === "python") return "Python";
-  if (provider === "load") return "Load";
-  if (provider === "ingestr") return "ingestr";
-  return provider || "Asset";
-}
-
-function assetDirectory(assetPath: string, pipelinePath: string) {
-  const pipelineRoot = pipelinePath.replace(/\/?pipeline\.ya?ml$/i, "");
-  let relative = assetPath;
-  if (pipelineRoot && relative.startsWith(`${pipelineRoot}/`)) {
-    relative = relative.slice(pipelineRoot.length + 1);
-  }
-  if (relative.startsWith("assets/")) {
-    relative = relative.slice("assets/".length);
-  }
-  const dir = relative.split("/").slice(0, -1).join("/");
-  return dir || undefined;
-}
-
-function assetFileName(assetPath: string) {
-  const file = assetPath.split("/").pop() ?? assetPath;
-  return file.replace(/\.[^.]+$/, "");
-}
-
-// Strip Bruin asset-selector decorations (++name+, -name) so the box behaves as
+// Strip asset-selector decorations (++name+, -name) so the box behaves as
 // a plain substring filter over asset names.
 function normalizeFilterQuery(value: string) {
   return value
@@ -108,8 +71,7 @@ export function AppCatalogPage({ selectedAssetId }: { selectedAssetId?: string }
   const [hiddenKinds, setHiddenKinds] = useState<Set<AssetKind>>(() => new Set());
 
   const catalogAssets = useMemo<AppLineageCanvasAsset[]>(
-    () =>
-      workspace?.pipelines.length ? workspace.pipelines.flatMap(catalogAssetsForPipeline) : assets,
+    () => workspace?.pipelines.flatMap(catalogAssetsForPipeline) ?? [],
     [workspace?.pipelines],
   );
   const catalogPipelineIds = useMemo(
@@ -171,16 +133,6 @@ export function AppCatalogPage({ selectedAssetId }: { selectedAssetId?: string }
       return true;
     });
   }, [displayedCatalogAssets, hiddenKinds, query]);
-
-  const catalogLinks = useMemo(() => {
-    if (workspace?.pipelines.length) {
-      return undefined;
-    }
-    const visibleIds = new Set(filteredAssets.map((asset) => asset.id));
-    return edges
-      .map(([source, target]) => ({ source, target }))
-      .filter((edge) => visibleIds.has(edge.source) && visibleIds.has(edge.target));
-  }, [filteredAssets, workspace?.pipelines.length]);
 
   const toggleKind = (kind: AssetKind) => {
     setHiddenKinds((current) => {
@@ -271,7 +223,6 @@ export function AppCatalogPage({ selectedAssetId }: { selectedAssetId?: string }
           {workspace ? (
             <AppLineageCanvas
               assets={filteredAssets}
-              links={catalogLinks}
               selectedAssetId={selectedAssetId}
               focusAssetId={selectedAssetId}
               onRunAsset={runAsset}

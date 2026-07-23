@@ -18,13 +18,14 @@ import {
   selectedEnvironmentAtom,
 } from "@/lib/atoms/domains/workspace";
 import { useAssetInspect } from "@/hooks/use-asset-inspect";
+import { materializeAssetStream } from "@/lib/api-assets-inspect";
+import { materializePipelineStream } from "@/lib/api-pipelines";
 import {
+  activePipelineRunConflict,
   getRun,
-  materializeAssetStream,
-  materializePipelineStream,
   triggerPipelineRun,
-} from "@/lib/api";
-import { activePipelineRunConflict, type PipelineRunSource } from "@/lib/api-scheduler";
+  type PipelineRunSource,
+} from "@/lib/api-scheduler";
 import { buildStalePipelineStream } from "@/lib/api-staleness";
 import type { StreamAssetEvent } from "@/lib/api-streams";
 import { MaterializeScope, labelForMaterializeScope } from "@/lib/materialize-scope";

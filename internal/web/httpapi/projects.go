@@ -30,6 +30,7 @@ type ProjectInfo struct {
 type ProjectListResponse struct {
 	Status           string        `json:"status"`
 	DefaultProjectID string        `json:"default_project_id"`
+	Bootstrap        bool          `json:"bootstrap"`
 	Projects         []ProjectInfo `json:"projects"`
 }
 

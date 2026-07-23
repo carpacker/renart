@@ -59,7 +59,11 @@ function prepareMonacoAssetsPlugin(): Plugin {
 }
 
 export default defineConfig({
-  plugins: [TanStackRouterVite({ target: "react" }), react(), prepareMonacoAssetsPlugin()],
+  plugins: [
+    TanStackRouterVite({ target: "react", autoCodeSplitting: true }),
+    react(),
+    prepareMonacoAssetsPlugin(),
+  ],
   build: {
     rollupOptions: {
       output: {
@@ -68,7 +72,7 @@ export default defineConfig({
             return undefined;
           }
 
-          if (id.includes("reactflow") || id.includes("dagre")) {
+          if (id.includes("reactflow")) {
             return "graph-vendor";
           }
 
@@ -76,16 +80,7 @@ export default defineConfig({
             return "router-vendor";
           }
 
-          if (id.includes("@tanstack/react-virtual")) {
-            return "table-vendor";
-          }
-
-          if (
-            id.includes("jotai") ||
-            id.includes("react-hook-form") ||
-            id.includes("@base-ui/react") ||
-            id.includes("radix-ui")
-          ) {
+          if (id.includes("jotai") || id.includes("@base-ui/react") || id.includes("radix-ui")) {
             return "ui-vendor";
           }
 

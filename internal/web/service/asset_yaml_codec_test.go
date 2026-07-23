@@ -92,6 +92,11 @@ columns:
 		},
 		Owner: "data@example.com",
 		Meta:  pipeline.EmptyStringMap{"renart_v": "1"},
+		CustomChecks: []pipeline.CustomCheck{{
+			Name:  "no duplicates",
+			Count: int64Pointer(0),
+			Query: "select id from example.my_api_asset_2 group by id having count(*) > 1",
+		}},
 	}
 
 	merged, err := mergeYAMLAssetDefinition([]byte(existing), asset)
@@ -123,6 +128,14 @@ columns:
 	if !ok || len(cols) != 2 {
 		t.Fatalf("expected 2 columns, got %v:\n%s", parsed["columns"], merged)
 	}
+	checks, ok := parsed["custom_checks"].([]any)
+	if !ok || len(checks) != 1 {
+		t.Fatalf("expected 1 custom check, got %v:\n%s", parsed["custom_checks"], merged)
+	}
+}
+
+func int64Pointer(value int64) *int64 {
+	return &value
 }
 
 func TestMergeYAMLAssetDefinitionManagesLoadFlatParameters(t *testing.T) {

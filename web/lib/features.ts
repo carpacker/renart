@@ -1,5 +1,6 @@
 import { useAtomValue } from "jotai";
 
+import { isIngestrAssetType } from "@/lib/asset-types";
 import { workspaceAtom } from "@/lib/atoms/workspace";
 import type { WorkspaceConfigConnectionType, WorkspaceConfigResponse } from "@/lib/types";
 
@@ -17,7 +18,7 @@ export function useIngestrEnabled(
     return true;
   }
   return (workspace?.pipelines ?? []).some((pipeline) =>
-    pipeline.assets.some((asset) => asset.type.toLowerCase().startsWith("ingestr")),
+    pipeline.assets.some((asset) => isIngestrAssetType(asset.type)),
   );
 }
 

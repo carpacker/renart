@@ -5,7 +5,7 @@ import type * as MonacoNS from "monaco-editor";
 import { lazy, Suspense, useMemo, useState } from "react";
 
 import { SqlFormatOverlayButton } from "@/components/sql-format-overlay-button";
-import { isQuerySensorAssetType } from "@/lib/asset-types";
+import { isQuerySensorAssetType, usesPythonSource } from "@/lib/asset-types";
 import { loadMonacoEditorModule } from "@/lib/load-monaco-editor";
 import { WebAsset } from "@/lib/types";
 
@@ -50,9 +50,7 @@ export function AssetCodeEditor({
   onMount: (editor: MonacoNS.editor.IStandaloneCodeEditor, monaco: Monaco) => void;
 }) {
   const [showFormatButton, setShowFormatButton] = useState(false);
-  const isPythonAsset = Boolean(
-    asset && (asset.path.toLowerCase().endsWith(".py") || asset.type?.toLowerCase() === "python"),
-  );
+  const isPythonAsset = usesPythonSource(asset);
   const editorOptions = useMemo(
     () => ({
       minimap: { enabled: false },
@@ -128,7 +126,7 @@ function editorLanguageForAsset(asset: WebAsset): "sql" | "python" | "yaml" {
     return "sql";
   }
   const lowerPath = asset.path.toLowerCase();
-  if (lowerPath.endsWith(".py") || asset.type?.toLowerCase() === "python") {
+  if (usesPythonSource(asset)) {
     return "python";
   }
   if (lowerPath.endsWith(".yml") || lowerPath.endsWith(".yaml")) {

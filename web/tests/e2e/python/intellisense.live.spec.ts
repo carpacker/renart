@@ -78,7 +78,7 @@ df = pd.DataFrame({"a": [1]})
       .toEqual(
         expect.arrayContaining([
           expect.objectContaining({
-            owner: "bruin-python-ty",
+            owner: "renart-python-ty",
             message: expect.stringMatching(/str|int|assignable|return/i),
           }),
         ]),
@@ -365,7 +365,7 @@ async function getPythonTyMarkers(page: Page) {
     if (!monaco || !model) return [];
     return monaco.editor
       .getModelMarkers({ resource: model.uri })
-      .filter((marker: { owner?: string }) => marker.owner === "bruin-python-ty")
+      .filter((marker: { owner?: string }) => marker.owner === "renart-python-ty")
       .map((marker: { owner?: string; message: string; severity: number }) => ({
         owner: marker.owner,
         message: marker.message,

@@ -121,4 +121,31 @@ test.describe("app lineage layout engine", () => {
       layout.positions.get("raw.orders")!.y,
     );
   });
+
+  test("reserves a deterministic lane for same-band edges that skip a dependency rank", () => {
+    const layout = computeAppLineageLayout({
+      nodes: [
+        node("ops.device_events"),
+        node("ops.events_ready"),
+        node("ops.device_health"),
+        node("ops.incident_queue"),
+        node("ops.fleet_overview"),
+      ],
+      edges: [
+        edge("ops.device_events", "ops.events_ready"),
+        edge("ops.device_events", "ops.device_health"),
+        edge("ops.events_ready", "ops.device_health"),
+        edge("ops.device_health", "ops.incident_queue"),
+        edge("ops.device_health", "ops.fleet_overview"),
+      ],
+    });
+
+    const events = layout.positions.get("ops.device_events")!;
+    const sensor = layout.positions.get("ops.events_ready")!;
+    const health = layout.positions.get("ops.device_health")!;
+
+    expect(layout.layoutId).toBe("bands");
+    expect(events.y).toBe(health.y);
+    expect(sensor.y).toBeGreaterThan(events.y + 96);
+  });
 });

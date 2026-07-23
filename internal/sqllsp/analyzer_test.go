@@ -5,6 +5,8 @@ import (
 	"slices"
 	"strings"
 	"testing"
+
+	"renart/internal/authoringdiag"
 )
 
 func TestEngineCompletesColumnsFromCTE(t *testing.T) {
@@ -706,6 +708,24 @@ from recent_orders r`}
 	for _, diagnostic := range engine.Diagnostics(doc) {
 		if diagnostic.Code == "unresolved-relation" {
 			t.Fatalf("unexpected unresolved relation diagnostic: %#v", diagnostic)
+		}
+	}
+}
+
+func TestEngineIgnoresRelationKeywordsInsideStringLiteralsAndComments(t *testing.T) {
+	engine := NewEngine(CanonicalGraph{Version: 1})
+	doc := TextDocumentItem{URI: "file:///query.sql", Text: `select
+  42 as answer,
+  'hello from renart' as greeting,
+  'join missing.table and read missing.column' as detail
+-- from commented_relation
+/* join block_commented_relation */`}
+
+	for _, diagnostic := range engine.Diagnostics(doc) {
+		if diagnostic.Code == authoringdiag.CodeUnresolvedRelation ||
+			diagnostic.Code == authoringdiag.CodeUnresolvedAlias ||
+			diagnostic.Code == authoringdiag.CodeUnresolvedColumn {
+			t.Fatalf("unexpected diagnostic from literal or comment text: %#v", diagnostic)
 		}
 	}
 }

@@ -193,7 +193,7 @@ const stackItems = ['DuckDB', 'Postgres', 'Snowflake', 'BigQuery', 'Redshift', '
           <a href="/docs/" class="btn btn-ghost">Read the docs <span class="arrow">-&gt;</span></a>
         </div>
 
-        <div class="install" id="install">
+        <div class="install install-hero" id="install">
           <span class="install-cmd">
             <span class="prompt">$</span>
             <span>{installCommand}</span>
@@ -243,8 +243,8 @@ const stackItems = ['DuckDB', 'Postgres', 'Snowflake', 'BigQuery', 'Redshift', '
               <img
                 src="/landing/lifecycle-build.webp"
                 alt="The Renart editor mid-keystroke: a completion popup lists columns from the upstream raw.customers table, with the column's type shown inline"
-                width="1400"
-                height="900"
+                width="910"
+                height="585"
                 loading="lazy"
               />
             </div>
@@ -260,8 +260,8 @@ const stackItems = ['DuckDB', 'Postgres', 'Snowflake', 'BigQuery', 'Redshift', '
               <img
                 src="/landing/lifecycle-notebook.webp"
                 alt="A Renart SQL notebook: a query cell with its result table, a chart cell rendering a revenue line chart, and the cell menu open on the Promote to pipeline action"
-                width="1400"
-                height="900"
+                width="1008"
+                height="648"
                 loading="lazy"
               />
             </div>
@@ -276,9 +276,9 @@ const stackItems = ['DuckDB', 'Postgres', 'Snowflake', 'BigQuery', 'Redshift', '
             <div class="life-media">
               <img
                 src="/landing/lifecycle-schedules.webp"
-                alt="Creating a schedule in Renart: a dialog with pipeline, environment, cron, timezone, and catch-up policy fields over a list of existing schedules with their runs plotted on a timeline"
-                width="1176"
-                height="756"
+                alt="The Renart schedules overview: populated pipeline environments show their cron cadence, pinned deployment, latest run state, and upcoming runs on a shared timeline"
+                width="1120"
+                height="720"
                 loading="lazy"
               />
             </div>
@@ -294,8 +294,8 @@ const stackItems = ['DuckDB', 'Postgres', 'Snowflake', 'BigQuery', 'Redshift', '
               <img
                 src="/landing/lifecycle-staleness.webp"
                 alt="The Renart pipeline canvas after an edit: the changed staging asset is marked Edited, its downstream marts are marked Upstream changed, a new asset shows Never built, and untouched assets stay Fresh"
-                width="1400"
-                height="900"
+                width="1176"
+                height="756"
                 loading="lazy"
               />
             </div>
@@ -308,7 +308,7 @@ const stackItems = ['DuckDB', 'Postgres', 'Snowflake', 'BigQuery', 'Redshift', '
         <h2 class="h2">The parts you'd otherwise <em>bolt on</em>.</h2>
 
         <div class="bento">
-          <article class="card span-3">
+          <article class="card card--feature span-6">
             <div class="card-visual">
               <img
                 src="/landing/feature-runs.webp"
@@ -325,7 +325,7 @@ const stackItems = ['DuckDB', 'Postgres', 'Snowflake', 'BigQuery', 'Redshift', '
             </div>
           </article>
 
-          <article class="card span-3">
+          <article class="card card--feature span-6">
             <div class="card-visual">
               <img
                 src="/landing/feature-catalog.webp"
@@ -697,6 +697,11 @@ const stackItems = ['DuckDB', 'Postgres', 'Snowflake', 'BigQuery', 'Redshift', '
   }
   .install-copy:hover, .install-copy.copied { color: var(--accent); background: var(--bg-2); }
   .install-copy svg { width: 12px; height: 12px; }
+  .install-hero {
+    display: flex;
+    width: fit-content;
+    margin: 32px auto 0;
+  }
 
   .hero-media {
     margin: 72px auto 0;
@@ -770,6 +775,7 @@ const stackItems = ['DuckDB', 'Postgres', 'Snowflake', 'BigQuery', 'Redshift', '
   .card-visual { flex: none; aspect-ratio: 16 / 9; background: var(--bg); border-bottom: 1px solid var(--line); position: relative; overflow: hidden; }
   .card-visual img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; display: block; transition: transform 0.5s ease; }
   .card:hover .card-visual img { transform: scale(1.015); }
+  .card--feature .card-content { max-width: 72ch; }
   .card--text { justify-content: center; }
   .card-content { padding: 22px 24px 24px; }
   .card-tag { font-family: var(--mono); font-size: 10.5px; color: var(--accent); text-transform: uppercase; letter-spacing: 0.1em; margin-bottom: 10px; }
@@ -792,7 +798,7 @@ const stackItems = ['DuckDB', 'Postgres', 'Snowflake', 'BigQuery', 'Redshift', '
   .final::before { content: ''; position: absolute; top: -1px; left: 50%; transform: translateX(-50%); width: 320px; height: 320px; background: radial-gradient(circle, var(--accent-glow), transparent 60%); pointer-events: none; }
   .final h2 { font-family: var(--serif); font-weight: 400; font-size: clamp(44px, 6vw, 76px); line-height: 1.02; letter-spacing: -0.025em; margin: 0 0 24px; position: relative; }
   .final p { font-size: 17px; color: var(--fg-2); max-width: 54ch; margin: 0 auto 36px; position: relative; }
-  .install-final { margin-top: 28px; }
+  .install-final { display: flex; width: fit-content; margin: 32px auto 0; }
 
   footer { border-top: 1px solid var(--line); background: var(--bg-1); }
   .footer-inner { max-width: 1200px; margin: 0 auto; padding: 56px 28px 48px; display: grid; grid-template-columns: 2fr 1fr 1fr 1fr; gap: 48px; }

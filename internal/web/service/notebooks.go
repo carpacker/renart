@@ -109,6 +109,7 @@ func (s *WorkspaceService) notebookToModel(nb *notebook.Notebook) model.Notebook
 			Upstreams:       upstreams,
 			Meta:            cell.Asset.Meta,
 			Columns:         PipelineColumnsToModelColumns(cell.Asset.Columns),
+			CustomChecks:    PipelineCustomChecksToModelCustomChecks(cell.Asset.CustomChecks),
 			Class:           notebook.ClassNotebook,
 			CellID:          cell.ID,
 			ExternalRefs:    cell.ExternalRefs,

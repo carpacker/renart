@@ -1,6 +1,7 @@
 import { atom } from "jotai";
 
 import type { StalenessUpdatedEvent } from "@/lib/api-staleness";
+import type { NotebookRuntimeEvent } from "@/lib/api-notebooks";
 import type {
   PipelineRun,
   PipelineRunLogLine,
@@ -30,7 +31,10 @@ export type MaterializeHistoryEntry = {
 };
 
 export type SchedulerRunEvent =
-  | { type: "run.queued" | "run.started" | "run.finished"; run: PipelineRun }
+  | {
+      type: "run.queued" | "run.started" | "run.finished" | "run.cancellation_requested";
+      run: PipelineRun;
+    }
   | { type: "run.log"; run: { run_id: string; log: PipelineRunLogLine } }
   | { type: "run.step"; run: PipelineRunStep }
   | { type: "run.unit"; run: { run_id: string; unit: PipelineRunUnit } };
@@ -60,3 +64,27 @@ export const schedulerRunEventAtom = atom<SchedulerRunEvent | null>(null);
 export const scheduleOccurrenceEventAtom = atom<ScheduleOccurrenceEvent | null>(null);
 
 export const stalenessEventAtom = atom<StalenessUpdatedEvent | null>(null);
+
+export type NotebookRuntimeEvents = Record<string, NotebookRuntimeEvent>;
+
+export function mergeNotebookRuntimeEvent(
+  current: NotebookRuntimeEvents,
+  event: NotebookRuntimeEvent,
+): NotebookRuntimeEvents {
+  const previous = current[event.notebook_id];
+  return {
+    ...current,
+    [event.notebook_id]: {
+      ...event,
+      // Runtime events carry result deltas. Keep the accumulated snapshot so a
+      // following state-only event cannot erase a result before React observes
+      // it (several recompute events can arrive in one browser task).
+      results: {
+        ...(previous?.results ?? {}),
+        ...(event.results ?? {}),
+      },
+    },
+  };
+}
+
+export const notebookRuntimeEventsAtom = atom<NotebookRuntimeEvents>({});

@@ -2,15 +2,14 @@ import { useAtomValue } from "jotai";
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import {
+  cancelPipelineRun,
   type GetRunsOptions,
   getRun,
   getRuns,
-  getSchedules,
   reexecutePipelineRun,
   triggerPipelineRun,
-  updatePipelineSchedule,
-} from "@/lib/api";
-import type { TriggerPipelineRunInput } from "@/lib/api-scheduler";
+  type TriggerPipelineRunInput,
+} from "@/lib/api-scheduler";
 import { schedulerRunEventAtom } from "@/lib/atoms/domains/results";
 import type {
   PipelineRun,
@@ -19,18 +18,12 @@ import type {
   PipelineRunReexecution,
   PipelineRunStep,
   PipelineRunUnit,
-  PipelineSchedule,
 } from "@/lib/types";
 
-type SchedulePatch = Partial<
-  Pick<PipelineSchedule, "enabled" | "schedule" | "timezone" | "catchup">
->;
-
-export function usePipelineScheduler({
+export function usePipelineRuns({
   selectedRunId,
   runsQuery,
 }: { selectedRunId?: string; runsQuery?: GetRunsOptions } = {}) {
-  const [schedules, setSchedules] = useState<PipelineSchedule[]>([]);
   const [runs, setRuns] = useState<PipelineRun[]>([]);
   const [runsTotal, setRunsTotal] = useState(0);
   const [runsLimit, setRunsLimit] = useState(runsQuery?.limit ?? 100);
@@ -43,8 +36,8 @@ export function usePipelineScheduler({
   const [reexecution, setReexecution] = useState<PipelineRunReexecution | null>(null);
   const [loading, setLoading] = useState(true);
   const [busyPipeline, setBusyPipeline] = useState<string | null>(null);
+  const [cancellingRunId, setCancellingRunId] = useState<string | null>(null);
   const [loadingRunId, setLoadingRunId] = useState<string | null>(null);
-  const [schedulesError, setSchedulesError] = useState<string | null>(null);
   const [runsError, setRunsError] = useState<string | null>(null);
   const [runDetailError, setRunDetailError] = useState<string | null>(null);
   const schedulerRunEvent = useAtomValue(schedulerRunEventAtom);
@@ -77,29 +70,14 @@ export function usePipelineScheduler({
     }
   }, [runsQuery]);
 
-  const refreshSchedules = useCallback(async () => {
-    try {
-      const response = await getSchedules();
-      if (response.status !== "ok") {
-        throw new Error("The server could not refresh pipeline schedules.");
-      }
-      setSchedules(response.schedules ?? []);
-      setSchedulesError(null);
-    } catch (cause) {
-      setSchedulesError(errorMessage(cause, "Pipeline schedules could not be refreshed."));
-    }
-  }, []);
-
   const refresh = useCallback(async () => {
     setLoading(true);
     try {
-      // These resources fail independently. A runs outage must not hide the
-      // last readable schedule state (or vice versa).
-      await Promise.all([refreshSchedules(), refreshRuns()]);
+      await refreshRuns();
     } finally {
       setLoading(false);
     }
-  }, [refreshRuns, refreshSchedules]);
+  }, [refreshRuns]);
 
   const selectRun = useCallback(async (runOrId: PipelineRun | PipelineRun["id"]) => {
     const runId = typeof runOrId === "string" ? runOrId : runOrId.id;
@@ -148,45 +126,6 @@ export function usePipelineScheduler({
     }
   }, []);
 
-  const patchScheduleDraft = useCallback((pipelineId: string, patch: SchedulePatch) => {
-    setSchedules((current) =>
-      current.map((schedule) =>
-        schedule.pipeline_id === pipelineId ? { ...schedule, ...patch } : schedule,
-      ),
-    );
-  }, []);
-
-  const updateSchedule = useCallback(
-    async (item: PipelineSchedule, patch: SchedulePatch) => {
-      setBusyPipeline(item.pipeline_id);
-      try {
-        const next = { ...item, ...patch };
-        const response = await updatePipelineSchedule(item.pipeline_id, {
-          enabled: next.enabled,
-          schedule: next.schedule,
-          timezone: next.timezone || "UTC",
-          catchup: next.catchup,
-        });
-        if (response.status === "ok") {
-          setSchedules((current) =>
-            current.map((schedule) =>
-              schedule.pipeline_id === item.pipeline_id
-                ? {
-                    ...response.schedule,
-                    next_run_at: response.schedule.next_run_at ?? schedule.next_run_at,
-                  }
-                : schedule,
-            ),
-          );
-          void refreshSchedules();
-        }
-      } finally {
-        setBusyPipeline(null);
-      }
-    },
-    [refreshSchedules],
-  );
-
   const triggerPipeline = useCallback(
     async (pipelineId: string, input: TriggerPipelineRunInput) => {
       const triggeredFromRunDetail = Boolean(selectedRunIdRef.current);
@@ -231,6 +170,23 @@ export function usePipelineScheduler({
       return response;
     } finally {
       setBusyPipeline(null);
+    }
+  }, []);
+
+  const cancelRun = useCallback(async (run: PipelineRun) => {
+    setCancellingRunId(run.id);
+    try {
+      const response = await cancelPipelineRun(run.id);
+      if (response.status === "ok") {
+        setRuns((current) => [
+          response.run,
+          ...current.filter((candidate) => candidate.id !== response.run.id),
+        ]);
+        setSelectedRun((current) => (current?.id === response.run.id ? response.run : current));
+      }
+      return response;
+    } finally {
+      setCancellingRunId(null);
     }
   }, []);
 
@@ -317,18 +273,9 @@ export function usePipelineScheduler({
       void selectRun(run.id);
     }
     void refreshRuns();
-    void refreshSchedules();
-  }, [
-    refreshRuns,
-    refreshSchedules,
-    schedulerRunEvent,
-    selectRun,
-    selectedRunForRequest?.id,
-    selectedRunId,
-  ]);
+  }, [refreshRuns, schedulerRunEvent, selectRun, selectedRunForRequest?.id, selectedRunId]);
 
   return {
-    schedules,
     runs,
     runsTotal,
     runsLimit,
@@ -340,18 +287,17 @@ export function usePipelineScheduler({
     units,
     reexecution,
     loading,
-    schedulesError,
     runsError,
     runDetailError,
     busyPipeline,
+    cancellingRunId,
     loadingRunId,
     refresh,
     refreshRuns,
     selectRun,
-    patchScheduleDraft,
-    updateSchedule,
     triggerPipeline,
     reexecuteRun,
+    cancelRun,
   };
 }
 

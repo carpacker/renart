@@ -12,15 +12,15 @@ export const routeSelectionAtom = atom<{
   asset: null,
 });
 
-export const activePipelineAtom = atom<string | null>((get) => {
+const activePipelineAtom = atom<string | null>((get) => {
   return get(routeSelectionAtom).pipeline;
 });
 
-export const selectedAssetAtom = atom<string | null>((get) => {
+const selectedAssetAtom = atom<string | null>((get) => {
   return get(routeSelectionAtom).asset;
 });
 
-export const resolvedActivePipelineAtom = atom<string | null>((get) => {
+const resolvedActivePipelineAtom = atom<string | null>((get) => {
   const workspace = get(workspaceAtom);
   const activePipeline = get(activePipelineAtom);
 

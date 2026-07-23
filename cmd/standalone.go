@@ -17,7 +17,6 @@ import (
 
 	"github.com/urfave/cli/v3"
 	"go.uber.org/zap"
-	"renart/internal/clientapi"
 )
 
 const guiHelperName = "renart-gui"
@@ -72,6 +71,7 @@ func runStandalone(ctx context.Context, c *cli.Command) error {
 	if err != nil {
 		return err
 	}
+	defer cleanupServerBootstrap(cfg)
 
 	logger, err := newServerLogger()
 	if err != nil {
@@ -79,11 +79,17 @@ func runStandalone(ctx context.Context, c *cli.Command) error {
 	}
 	defer func() { _ = logger.Sync() }()
 
-	server, cleanup, err := newWebServer(ctx, cfg, logger)
+	defaultRuntime, err := newProjectRuntime(ctx, logger, cfg)
 	if err != nil {
 		return err
 	}
-	defer cleanup()
+	defer defaultRuntime.cleanup()
+
+	manager, err := newProjectManager(ctx, logger, cfg, defaultRuntime)
+	if err != nil {
+		return err
+	}
+	defer manager.closeAll()
 
 	listener, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", c.Int("port")))
 	if err != nil {
@@ -94,23 +100,10 @@ func runStandalone(ctx context.Context, c *cli.Command) error {
 	address := listener.Addr().String()
 	appURL := "http://" + address + "/"
 	sessionToken := newSessionToken()
-	httpServer := newHTTPServer(address, server.buildRouter(sessionToken))
+	httpServer := newHTTPServer(address, buildRootRouter(manager, defaultRuntime, sessionToken))
 
-	// Single-project discovery: the CLI delegates to this server while the
-	// desktop app is open. The workspace is served unprefixed here.
-	if err := clientapi.WriteServerFile(cfg.workspaceRoot, clientapi.ServerFile{
-		PID:           os.Getpid(),
-		BaseURL:       "http://" + address,
-		APIBaseURL:    "http://" + address + "/api",
-		ProjectID:     server.projectID,
-		WorkspaceRoot: cfg.workspaceRoot,
-		Version:       buildVersion,
-		Token:         sessionToken,
-		StartedAt:     time.Now().UTC(),
-	}); err != nil {
-		logger.Warn("failed to write server discovery file", zap.Error(err))
-	}
-	defer clientapi.RemoveServerFile(cfg.workspaceRoot)
+	manager.EnableDiscovery("http://"+address, sessionToken)
+	defer manager.DisableDiscovery()
 
 	serveErr := make(chan error, 1)
 	go func() {

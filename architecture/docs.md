@@ -268,8 +268,9 @@ shipped (July 2026; git history keeps the full plans).
   status. Alpha is a release-stage disclosure, not a substitute for describing
   what currently works.
 - **Landing media** comes from `make landing-media` only (same staged acme
-  demo as `make docs-media`, §5): hero at 1920×1080, lifecycle shots at
-  1400×900, bento at 1200×675, the schedules-dialog shot at 1176×756; webp
-  q92 plus a 1200×675 PNG og-image, all written to `docs/public/landing/`.
-  If a capture changes dimensions, update the matching `<img>` width/height
-  in `index.astro`.
+  demo as `make docs-media`, §5): hero at 1920×1080; focused lifecycle crops
+  at 910×585 (Build), 1008×648 (Explore), 1120×720 (Run), and 1176×756
+  (Trust); bento at 1200×675. The shared 2× device scale emits retina webp
+  files, plus a 1200×675 PNG og-image, under `docs/public/landing/`. If a
+  capture changes dimensions, update the matching `<img>` width/height in
+  `index.astro`.

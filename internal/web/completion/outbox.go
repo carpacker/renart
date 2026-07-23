@@ -231,6 +231,8 @@ type assetRunV1 struct {
 	AssetID                   string                      `json:"asset_id"`
 	AssetName                 string                      `json:"asset_name"`
 	Status                    string                      `json:"status"`
+	QualityStatus             bus.QualityStatus           `json:"quality_status,omitempty"`
+	FailedChecks              []qualityCheckFailureV1     `json:"failed_checks,omitempty"`
 	StartedAt                 *time.Time                  `json:"started_at"`
 	FinishedAt                *time.Time                  `json:"finished_at"`
 	CompletionOrdinal         int64                       `json:"completion_ordinal"`
@@ -243,6 +245,13 @@ type assetRunV1 struct {
 	VarsHash                  string                      `json:"vars_hash"`
 	UpstreamWriters           map[string]upstreamWriterV1 `json:"upstream_writers"`
 	HasUpstreamWriterSnapshot bool                        `json:"has_upstream_writer_snapshot"`
+}
+
+type qualityCheckFailureV1 struct {
+	Kind     bus.QualityCheckKind `json:"kind"`
+	Name     string               `json:"name"`
+	Column   string               `json:"column,omitempty"`
+	Blocking bool                 `json:"blocking,omitempty"`
 }
 
 type upstreamWriterV1 struct {
@@ -429,6 +438,9 @@ func validateEvent(event bus.RunCompleted) error {
 		default:
 			return fmt.Errorf("%w: completed asset %q has non-terminal status %q", ErrInvalidEnvelope, asset.AssetName, asset.Status)
 		}
+		if err := validateQualityOutcome(asset); err != nil {
+			return err
+		}
 		if asset.FinishedAt == nil || asset.FinishedAt.IsZero() || !asset.HasCompletionOrdinal || asset.CompletionOrdinal < 0 {
 			return fmt.Errorf("%w: completed asset %q has incomplete terminal coordinates", ErrInvalidEnvelope, asset.AssetName)
 		}
@@ -455,6 +467,54 @@ func validateEvent(event bus.RunCompleted) error {
 				return err
 			}
 		}
+	}
+	return nil
+}
+
+func validateQualityOutcome(asset bus.AssetRun) error {
+	switch asset.QualityStatus {
+	case "":
+		if len(asset.FailedChecks) > 0 {
+			return fmt.Errorf("%w: completed asset %q has failures without a quality status", ErrInvalidEnvelope, asset.AssetName)
+		}
+		return nil
+	case bus.QualityStatusPassed:
+		if len(asset.FailedChecks) > 0 {
+			return fmt.Errorf("%w: completed asset %q passed quality checks but carries failures", ErrInvalidEnvelope, asset.AssetName)
+		}
+		return nil
+	case bus.QualityStatusFailed:
+		if len(asset.FailedChecks) == 0 {
+			return fmt.Errorf("%w: completed asset %q failed quality checks without an identity", ErrInvalidEnvelope, asset.AssetName)
+		}
+	default:
+		return fmt.Errorf("%w: completed asset %q has invalid quality status %q", ErrInvalidEnvelope, asset.AssetName, asset.QualityStatus)
+	}
+
+	previous := ""
+	for _, failure := range asset.FailedChecks {
+		name := strings.TrimSpace(failure.Name)
+		column := strings.TrimSpace(failure.Column)
+		if name == "" || name != failure.Name || column != failure.Column {
+			return fmt.Errorf("%w: completed asset %q has a non-canonical failed check", ErrInvalidEnvelope, asset.AssetName)
+		}
+		switch failure.Kind {
+		case bus.QualityCheckKindCustom:
+			if column != "" {
+				return fmt.Errorf("%w: completed asset %q custom check %q has a column", ErrInvalidEnvelope, asset.AssetName, name)
+			}
+		case bus.QualityCheckKindColumn:
+			if column == "" {
+				return fmt.Errorf("%w: completed asset %q column check %q has no column", ErrInvalidEnvelope, asset.AssetName, name)
+			}
+		default:
+			return fmt.Errorf("%w: completed asset %q has invalid failed check kind %q", ErrInvalidEnvelope, asset.AssetName, failure.Kind)
+		}
+		key := string(failure.Kind) + "\x00" + column + "\x00" + name
+		if previous != "" && key <= previous {
+			return fmt.Errorf("%w: completed asset %q failed checks are duplicated or unsorted", ErrInvalidEnvelope, asset.AssetName)
+		}
+		previous = key
 	}
 	return nil
 }
@@ -583,8 +643,15 @@ func eventToV1(event bus.RunCompleted) completedRunV1 {
 				CompletionOrdinal: writer.CompletionOrdinal, MaterializedAt: writer.MaterializedAt.UTC(),
 			}
 		}
+		failedChecks := make([]qualityCheckFailureV1, len(asset.FailedChecks))
+		for failureIndex, failure := range asset.FailedChecks {
+			failedChecks[failureIndex] = qualityCheckFailureV1{
+				Kind: failure.Kind, Name: failure.Name, Column: failure.Column, Blocking: failure.Blocking,
+			}
+		}
 		assets[index] = assetRunV1{
 			AssetID: asset.AssetID, AssetName: asset.AssetName, Status: asset.Status,
+			QualityStatus: asset.QualityStatus, FailedChecks: failedChecks,
 			StartedAt: utcTimePointer(asset.StartedAt), FinishedAt: utcTimePointer(asset.FinishedAt),
 			CompletionOrdinal: asset.CompletionOrdinal, HasCompletionOrdinal: asset.HasCompletionOrdinal,
 			TargetIdentity: asset.TargetIdentity, TargetFidelity: asset.TargetFidelity,
@@ -633,8 +700,15 @@ func eventFromV1(event completedRunV1) bus.RunCompleted {
 				CompletionOrdinal: writer.CompletionOrdinal, MaterializedAt: writer.MaterializedAt.UTC(),
 			}
 		}
+		failedChecks := make([]bus.QualityCheckFailure, len(asset.FailedChecks))
+		for failureIndex, failure := range asset.FailedChecks {
+			failedChecks[failureIndex] = bus.QualityCheckFailure{
+				Kind: failure.Kind, Name: failure.Name, Column: failure.Column, Blocking: failure.Blocking,
+			}
+		}
 		assets[index] = bus.AssetRun{
 			AssetID: asset.AssetID, AssetName: asset.AssetName, Status: asset.Status,
+			QualityStatus: asset.QualityStatus, FailedChecks: failedChecks,
 			StartedAt: utcTimePointer(asset.StartedAt), FinishedAt: utcTimePointer(asset.FinishedAt),
 			CompletionOrdinal: asset.CompletionOrdinal, HasCompletionOrdinal: asset.HasCompletionOrdinal,
 			TargetIdentity: asset.TargetIdentity, TargetFidelity: asset.TargetFidelity,

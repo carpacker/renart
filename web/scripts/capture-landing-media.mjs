@@ -37,21 +37,29 @@ try {
   browser = await chromium.launch();
   const { withPage, goto, shot } = makeCapture(browser, demo.baseURL, outputDir);
 
+  // Supporting shots are shown in narrower landing-page columns. Keep their
+  // desktop viewport for faithful app layout, then crop in CSS pixels around
+  // the story being told. The shared 2x device scale still emits retina media.
+
   // hero: split view of a staging asset — editor, canvas, results, workbench
   await withPage({ width: 1920, height: 1080 }, async (page) => {
     await goto(page, `/pipelines/${ACME}/assets/${STAGING_ORDERS}/split`, 6000);
     await shot(page, "hero-workspace");
   });
 
-  // notebook: table + line chart in view, cell-actions menu open on the chart
-  // cell so "Promote to pipeline" is visible
+  // notebook: the end of the table result plus the complete chart in view,
+  // with the cell-actions menu open so "Promote to pipeline" is visible
   await withPage({ width: 1400, height: 900 }, async (page) => {
     await goto(page, `/notebooks/${demo.notebookId}`, 5000);
     await page.evaluate(() => {
-      const scroller = Array.from(document.querySelectorAll("*")).find(
-        (el) => el.scrollHeight > el.clientHeight + 100 && el.clientHeight > 400,
-      );
-      (scroller ?? document.scrollingElement).scrollTop = 760;
+      const scroller = Array.from(
+        document.querySelectorAll('[data-slot="scroll-area-viewport"]'),
+      ).find((element) => element.querySelector("[data-notebook-cell-id]"));
+      if (!scroller) {
+        throw new Error("notebook viewport was not found");
+      }
+      scroller.scrollTop = 350;
+      scroller.dispatchEvent(new Event("scroll", { bubbles: true }));
     });
     await page.waitForTimeout(1200);
     const menuButtons = page.getByRole("button", { name: "Cell actions" });
@@ -59,37 +67,35 @@ try {
       await menuButtons.nth(1).click();
       await page.waitForTimeout(900);
     }
-    await shot(page, "lifecycle-notebook");
+    await shot(page, "lifecycle-notebook", {
+      clip: { x: 190, y: 160, width: 1008, height: 648 },
+    });
   });
 
-  // schedules: New-schedule dialog with realistic values over the gantt; a
-  // tighter 14:9 viewport so the dialog fills the frame
-  await withPage({ width: 1176, height: 756 }, async (page) => {
+  // schedules: populated environment schedules with their pinned deployment
+  // metadata and projected run timeline. The crop keeps the schedule identity
+  // and useful timeline detail legible instead of shrinking the entire shell.
+  await withPage({ width: 1400, height: 900 }, async (page) => {
     await goto(page, "/schedules", 3500);
-    await page.getByRole("button", { name: /New schedule/i }).click();
+    await page.waitForFunction(
+      () => document.querySelectorAll('[data-testid="schedule-row"]').length >= 3,
+    );
     await page.waitForTimeout(800);
-    const dialog = page.locator('[role="dialog"]').last();
-    await dialog.locator("select").first().selectOption({ label: "marketing" });
-    const inputs = dialog.locator("input:not([type=checkbox])");
-    await inputs.nth(0).fill("production");
-    await inputs.nth(1).fill("0 7 * * 1-5");
-    await inputs.nth(2).fill("Europe/Berlin");
-    await page.evaluate(() => document.activeElement?.blur());
-    await page.waitForTimeout(600);
-    await shot(page, "lifecycle-schedules");
+    await shot(page, "lifecycle-schedules", {
+      clip: { x: 0, y: 48, width: 1120, height: 720 },
+    });
   });
 
-  // staleness: full canvas with all four badges, the stale mart selected
+  // staleness: an unobstructed full canvas with all four freshness badges
   await withPage({ width: 1400, height: 900 }, async (page) => {
     await goto(page, `/pipelines/${ACME}/canvas`, 5000);
     await page
-      .locator(`.react-flow__node`, { hasText: "customer_ltv" })
-      .first()
-      .click()
-      .catch(() => console.log("could not select customer_ltv node"));
-    await page.waitForTimeout(1000);
-    await page
       .getByRole("button", { name: "Hide explorer" })
+      .click()
+      .catch(() => {});
+    await page.waitForTimeout(600);
+    await page
+      .getByRole("button", { name: "Hide properties" })
       .click()
       .catch(() => {});
     await page.waitForTimeout(600);
@@ -104,7 +110,16 @@ try {
       .click()
       .catch(() => {});
     await page.waitForTimeout(1200);
-    await shot(page, "lifecycle-staleness");
+    await page.evaluate(() => {
+      for (const element of Array.from(document.querySelectorAll("button"))) {
+        if (element.textContent?.includes("New asset")) {
+          element.remove();
+        }
+      }
+    });
+    await shot(page, "lifecycle-staleness", {
+      clip: { x: 112, y: 105, width: 1176, height: 756 },
+    });
   });
 
   // runs: the failed run's detail — per-asset gantt + the binder error events
@@ -126,8 +141,30 @@ try {
   const stagingOrdersFile = path.join(demo.workspaceDir, "acme", "assets", "staging", "orders.sql");
   const stagingOrdersContent = await readFile(stagingOrdersFile, "utf8");
   try {
+    const buildCaptureContent = stagingOrdersContent.replace(
+      "    o.total_amount\nFROM raw.orders o",
+      `    o.total_amount,
+    DATE_TRUNC('week', o.order_date) AS order_week,
+    CASE
+        WHEN o.total_amount >= 200 THEN 'high_value'
+        WHEN o.total_amount >= 100 THEN 'mid_value'
+        ELSE 'standard'
+    END AS order_segment
+FROM raw.orders o`,
+    );
+    if (buildCaptureContent === stagingOrdersContent) {
+      throw new Error("build capture could not enrich staging.orders");
+    }
+    await writeFile(stagingOrdersFile, buildCaptureContent);
+    await new Promise((resolve) => setTimeout(resolve, 1800));
+
     await withPage({ width: 1400, height: 900 }, async (page) => {
       await goto(page, `/pipelines/${ACME}/assets/${STAGING_ORDERS}/code`, 5000);
+      await page
+        .getByRole("button", { name: "Hide properties" })
+        .click()
+        .catch(() => {});
+      await page.waitForTimeout(600);
       await page.getByText("o.total_amount").first().click();
       await page.keyboard.press("End");
       await page.keyboard.press("Enter");
@@ -149,7 +186,9 @@ try {
           }
         }
       });
-      await shot(page, "lifecycle-build");
+      await shot(page, "lifecycle-build", {
+        clip: { x: 250, y: 80, width: 910, height: 585 },
+      });
     });
   } finally {
     await writeFile(stagingOrdersFile, stagingOrdersContent);

@@ -21,6 +21,7 @@ const sources = [
       "ColumnSchemaSyncResult",
       "ColumnSchemaResolution",
       "ColumnCheck",
+      "CustomCheck",
       "ColumnReference",
       "Column",
       "Asset",
@@ -227,6 +228,7 @@ const scalarMap = new Map([
 const renameMap = new Map([
   ["Asset", "WebAsset"],
   ["ColumnCheck", "WebColumnCheck"],
+  ["CustomCheck", "WebCustomCheck"],
   ["Pipeline", "WebPipeline"],
   ["Notebook", "WebNotebook"],
   ["NotebookBlock", "WebNotebookBlock"],

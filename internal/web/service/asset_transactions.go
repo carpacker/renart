@@ -28,6 +28,11 @@ type AssetTransaction struct {
 	Description string                `json:"description,omitempty"`
 	Check       *webmodel.ColumnCheck `json:"check,omitempty"`
 	ColumnDef   *webmodel.Column      `json:"column_def,omitempty"`
+
+	// Asset-level custom-check transactions. CustomCheckName identifies the
+	// current check for updates/removals so its display name can be changed.
+	CustomCheckName string                `json:"custom_check_name,omitempty"`
+	CustomCheck     *webmodel.CustomCheck `json:"custom_check,omitempty"`
 }
 
 // TransactionDependency describes a dependency to add manually.
@@ -43,6 +48,7 @@ type AssetTransactionResult struct {
 	Status         string                    `json:"status"`
 	Upstreams      []string                  `json:"upstreams"`
 	Columns        []WorkspaceColumn         `json:"columns"`
+	CustomChecks   []webmodel.CustomCheck    `json:"custom_checks"`
 	ReconcileItems []assetmeta.ReconcileItem `json:"reconcile_items,omitempty"`
 }
 
@@ -60,6 +66,8 @@ const (
 	TxColumnCheckAdd            = "column.check.add"
 	TxColumnCheckRemove         = "column.check.remove"
 	TxColumnDescriptionSet      = "column.description.set"
+	TxCustomCheckUpsert         = "custom_check.upsert"
+	TxCustomCheckRemove         = "custom_check.remove"
 )
 
 // ApplyAssetTransaction applies a single semantic transaction to an asset,
@@ -105,9 +113,10 @@ func (s *AssetService) ApplyAssetTransaction(ctx context.Context, assetID string
 	}
 
 	return AssetTransactionResult{
-		Status:    "ok",
-		Upstreams: upstreamNames(asset.Upstreams),
-		Columns:   PipelineColumnsToModelColumns(asset.Columns),
+		Status:       "ok",
+		Upstreams:    upstreamNames(asset.Upstreams),
+		Columns:      PipelineColumnsToModelColumns(asset.Columns),
+		CustomChecks: PipelineCustomChecksToModelCustomChecks(asset.CustomChecks),
 	}, nil
 }
 
@@ -215,10 +224,81 @@ func applyTransactionToAsset(asset *pipeline.Asset, meta *assetmeta.RenartMeta, 
 			return badRequestError("unknown_column", fmt.Sprintf("column %q not found", tx.Column))
 		}
 
+	case TxCustomCheckUpsert:
+		if tx.CustomCheck == nil {
+			return badRequestError("invalid_transaction", "custom_check is required")
+		}
+		if apiErr := upsertCustomCheck(asset, tx.CustomCheckName, *tx.CustomCheck); apiErr != nil {
+			return apiErr
+		}
+
+	case TxCustomCheckRemove:
+		name := strings.TrimSpace(tx.CustomCheckName)
+		if name == "" {
+			return badRequestError("invalid_transaction", "custom_check_name is required")
+		}
+		if !removeCustomCheck(asset, name) {
+			return badRequestError("unknown_custom_check", fmt.Sprintf("custom check %q not found", name))
+		}
+
 	default:
 		return badRequestError("unknown_transaction", fmt.Sprintf("unknown transaction type %q", tx.Type))
 	}
 	return nil
+}
+
+func upsertCustomCheck(asset *pipeline.Asset, existingName string, check webmodel.CustomCheck) *APIError {
+	name := strings.TrimSpace(check.Name)
+	query := strings.TrimSpace(check.Query)
+	if name == "" || query == "" {
+		return badRequestError("invalid_custom_check", "custom check name and query are required")
+	}
+	existingName = strings.TrimSpace(existingName)
+	if existingName == "" {
+		existingName = name
+	}
+
+	existingIndex := -1
+	for index := range asset.CustomChecks {
+		if strings.EqualFold(asset.CustomChecks[index].Name, existingName) {
+			existingIndex = index
+			break
+		}
+	}
+	for index := range asset.CustomChecks {
+		if index != existingIndex && strings.EqualFold(asset.CustomChecks[index].Name, name) {
+			return badRequestError(
+				"duplicate_custom_check",
+				fmt.Sprintf("custom check %q already exists", name),
+			)
+		}
+	}
+
+	converted := ModelCustomCheckToPipelineCustomCheck(check)
+	if existingIndex >= 0 {
+		// Notifications are not part of the guided editor yet. Preserve them (and
+		// the parser-assigned runtime ID) when editing the fields Renart exposes.
+		converted.ID = asset.CustomChecks[existingIndex].ID
+		converted.Notifications = asset.CustomChecks[existingIndex].Notifications
+		asset.CustomChecks[existingIndex] = converted
+		return nil
+	}
+	asset.CustomChecks = append(asset.CustomChecks, converted)
+	return nil
+}
+
+func removeCustomCheck(asset *pipeline.Asset, name string) bool {
+	for index := range asset.CustomChecks {
+		if !strings.EqualFold(asset.CustomChecks[index].Name, name) {
+			continue
+		}
+		asset.CustomChecks = append(
+			asset.CustomChecks[:index],
+			asset.CustomChecks[index+1:]...,
+		)
+		return true
+	}
+	return false
 }
 
 // --- dependency helpers ---

@@ -903,6 +903,83 @@ func TestPipelineRunObservationPersistsTerminalCoordinatesBeforeForwarding(t *te
 	assert.Equal(t, []string{"encoded-asset-id"}, succeeded)
 }
 
+func TestPipelineRunObservationKeepsQualityFailureSeparateFromMainSuccess(t *testing.T) {
+	t.Parallel()
+	started := time.Date(2026, 7, 17, 12, 0, 0, 0, time.UTC)
+	finished := started.Add(time.Second)
+	var forwarded []ExecutionAssetEvent
+	observed := newPipelineRunObservation(func(event ExecutionAssetEvent) error {
+		forwarded = append(forwarded, event)
+		return nil
+	})
+
+	require.NoError(t, observed.handle(ExecutionAssetEvent{
+		Asset: "analytics.orders", Status: "running", StartedAt: &started,
+	}))
+	require.NoError(t, observed.handle(ExecutionAssetEvent{
+		Asset: "analytics.orders", Status: "success", StartedAt: &started, FinishedAt: &finished,
+	}))
+	require.NoError(t, observed.handle(ExecutionAssetEvent{
+		Asset: "analytics.orders", Status: "running",
+		TaskKind: executionTaskKindCustomCheck, CheckName: "no invalid orders", CheckBlocking: true,
+	}))
+	require.NoError(t, observed.handle(ExecutionAssetEvent{
+		Asset: "analytics.orders", Status: "failed",
+		TaskKind: executionTaskKindCustomCheck, CheckName: "no invalid orders", CheckBlocking: true,
+	}))
+
+	runs, succeeded := observed.completedAssets(PipelineView{
+		UUID: "pipeline-uuid",
+		Assets: []AssetView{{
+			ID: "encoded-asset-id", Name: "analytics.orders", QualityCheckCount: 1,
+		}},
+	}, "failed")
+	require.Len(t, runs, 1)
+	assert.Equal(t, "succeeded", runs[0].Status)
+	assert.Equal(t, bus.QualityStatusFailed, runs[0].QualityStatus)
+	assert.Equal(t, []bus.QualityCheckFailure{{
+		Kind: bus.QualityCheckKindCustom, Name: "no invalid orders", Blocking: true,
+	}}, runs[0].FailedChecks)
+	assert.Equal(t, []string{"encoded-asset-id"}, succeeded)
+	assert.Len(t, forwarded, 2, "quality events must not masquerade as scheduler asset steps")
+}
+
+func TestPipelineRunObservationMarksQualityPassedOnlyAfterEveryCheck(t *testing.T) {
+	t.Parallel()
+	started := time.Date(2026, 7, 17, 12, 0, 0, 0, time.UTC)
+	finished := started.Add(time.Second)
+	observed := newPipelineRunObservation(nil)
+	require.NoError(t, observed.handle(ExecutionAssetEvent{
+		Asset: "analytics.orders", Status: "running", StartedAt: &started,
+	}))
+	require.NoError(t, observed.handle(ExecutionAssetEvent{
+		Asset: "analytics.orders", Status: "success", StartedAt: &started, FinishedAt: &finished,
+	}))
+	require.NoError(t, observed.handle(ExecutionAssetEvent{
+		Asset: "analytics.orders", Status: "success",
+		TaskKind: executionTaskKindColumnCheck, CheckName: "not_null", CheckColumn: "order_id",
+	}))
+
+	view := PipelineView{
+		UUID: "pipeline-uuid",
+		Assets: []AssetView{{
+			ID: "encoded-asset-id", Name: "analytics.orders", QualityCheckCount: 2,
+		}},
+	}
+	runs, _ := observed.completedAssets(view, "succeeded")
+	require.Len(t, runs, 1)
+	assert.Empty(t, runs[0].QualityStatus, "one successful check does not prove the full suite passed")
+
+	require.NoError(t, observed.handle(ExecutionAssetEvent{
+		Asset: "analytics.orders", Status: "success",
+		TaskKind: executionTaskKindCustomCheck, CheckName: "no invalid orders",
+	}))
+	runs, _ = observed.completedAssets(view, "succeeded")
+	require.Len(t, runs, 1)
+	assert.Equal(t, bus.QualityStatusPassed, runs[0].QualityStatus)
+	assert.Empty(t, runs[0].FailedChecks)
+}
+
 func TestPipelineRunObservationClaimsBeforeExecutionAndMarksFailuresDirty(t *testing.T) {
 	t.Parallel()
 	started := time.Date(2026, 7, 17, 12, 0, 0, 0, time.UTC)

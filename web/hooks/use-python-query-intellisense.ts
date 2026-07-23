@@ -17,6 +17,7 @@ import {
   SQLLSPRequest,
   SQLLSPSignatureHelp,
 } from "@/lib/api-sql-lsp";
+import { usesPythonSource } from "@/lib/asset-types";
 import { workspaceAtom } from "@/lib/atoms/domains/workspace";
 import {
   findPythonQueryLiterals,
@@ -748,10 +749,7 @@ function embeddedSQLSemanticDecorations(
 }
 
 function isPython(asset: WebAsset | null): asset is WebAsset {
-  return Boolean(
-    asset?.id &&
-    (asset.path.toLowerCase().endsWith(".py") || asset.type?.toLowerCase() === "python"),
-  );
+  return Boolean(asset?.id && usesPythonSource(asset));
 }
 
 function clearPythonQueryMarkers(

@@ -11,7 +11,7 @@ import { useSQLIntellisense } from "@/hooks/use-sql-intellisense";
 import { useSQLLSP } from "@/hooks/use-sql-lsp";
 import { useSQLCanvasHover } from "@/hooks/use-sql-canvas-hover";
 import { useWorkspaceTheme } from "@/hooks/use-workspace-theme";
-import { formatSQLAsset } from "@/lib/api";
+import { formatSQLAsset } from "@/lib/api-assets-crud";
 import { selectedAssetSchemaTablesAtom } from "@/lib/atoms/domains/suggestions";
 import { selectedEnvironmentAtom } from "@/lib/atoms/domains/workspace";
 import { defineBruinMonacoThemes } from "@/lib/monaco-theme";

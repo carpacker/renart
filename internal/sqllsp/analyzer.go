@@ -2009,6 +2009,9 @@ func analyzeSQLWithParent(sql string, resolver scopeResolver, parent *sqlAnalysi
 	}
 	scanSQL := maskNestedQueries(sql)
 	for _, match := range relationPattern.FindAllStringSubmatchIndex(scanSQL, -1) {
+		if !offsetInSQLCode(sql, match[4]) {
+			continue
+		}
 		name := normalizeRelation(sql[match[4]:match[5]])
 		if name == "" || isKeyword(name) {
 			continue
@@ -2104,6 +2107,9 @@ func analyzeSQLWithParent(sql string, resolver scopeResolver, parent *sqlAnalysi
 		analysis.localAliases[strings.ToLower(subquery.alias)] = struct{}{}
 	}
 	for _, match := range dotColumnPattern.FindAllStringSubmatchIndex(scanSQL, -1) {
+		if !offsetInSQLCode(sql, match[2]) {
+			continue
+		}
 		if rangeInsideRelationUse(analysis.relations, baseOffset+match[0], baseOffset+match[1]) {
 			continue
 		}

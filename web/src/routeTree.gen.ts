@@ -18,21 +18,14 @@ import { Route as ShellSchedulesRouteImport } from './routes/_shell/schedules'
 import { Route as ShellCatalogRouteImport } from './routes/_shell/catalog'
 import { Route as ShellRunsRouteRouteImport } from './routes/_shell/runs/route'
 import { Route as ShellProjectRouteRouteImport } from './routes/_shell/project/route'
-import { Route as ShellAccountRouteRouteImport } from './routes/_shell/account/route'
 import { Route as ShellRunsIndexRouteImport } from './routes/_shell/runs/index'
 import { Route as ShellProjectIndexRouteImport } from './routes/_shell/project/index'
 import { Route as ShellNotebooksIndexRouteImport } from './routes/_shell/notebooks/index'
-import { Route as ShellAccountIndexRouteImport } from './routes/_shell/account/index'
 import { Route as ShellRunsRunIdRouteImport } from './routes/_shell/runs/$runId'
 import { Route as ShellProjectGeneralRouteImport } from './routes/_shell/project/general'
 import { Route as ShellProjectEnvironmentsRouteImport } from './routes/_shell/project/environments'
 import { Route as ShellProjectConnectionsRouteImport } from './routes/_shell/project/connections'
 import { Route as ShellNotebooksNotebookIdRouteImport } from './routes/_shell/notebooks/$notebookId'
-import { Route as ShellDashboardsDashboardIdRouteImport } from './routes/_shell/dashboards/$dashboardId'
-import { Route as ShellAccountWorkspacesRouteImport } from './routes/_shell/account/workspaces'
-import { Route as ShellAccountProfileRouteImport } from './routes/_shell/account/profile'
-import { Route as ShellAccountMembersRouteImport } from './routes/_shell/account/members'
-import { Route as ShellAccountBillingRouteImport } from './routes/_shell/account/billing'
 import { Route as ShellPipelinesPipelineIdRouteRouteImport } from './routes/_shell/pipelines/$pipelineId/route'
 import { Route as ShellPipelinesPipelineIdIndexRouteImport } from './routes/_shell/pipelines/$pipelineId/index'
 import { Route as ShellPipelinesPipelineIdSplitRouteImport } from './routes/_shell/pipelines/$pipelineId/split'
@@ -88,11 +81,6 @@ const ShellProjectRouteRoute = ShellProjectRouteRouteImport.update({
   path: '/project',
   getParentRoute: () => ShellRoute,
 } as any)
-const ShellAccountRouteRoute = ShellAccountRouteRouteImport.update({
-  id: '/account',
-  path: '/account',
-  getParentRoute: () => ShellRoute,
-} as any)
 const ShellRunsIndexRoute = ShellRunsIndexRouteImport.update({
   id: '/',
   path: '/',
@@ -107,11 +95,6 @@ const ShellNotebooksIndexRoute = ShellNotebooksIndexRouteImport.update({
   id: '/notebooks/',
   path: '/notebooks/',
   getParentRoute: () => ShellRoute,
-} as any)
-const ShellAccountIndexRoute = ShellAccountIndexRouteImport.update({
-  id: '/',
-  path: '/',
-  getParentRoute: () => ShellAccountRouteRoute,
 } as any)
 const ShellRunsRunIdRoute = ShellRunsRunIdRouteImport.update({
   id: '/$runId',
@@ -140,32 +123,6 @@ const ShellNotebooksNotebookIdRoute =
     path: '/notebooks/$notebookId',
     getParentRoute: () => ShellRoute,
   } as any)
-const ShellDashboardsDashboardIdRoute =
-  ShellDashboardsDashboardIdRouteImport.update({
-    id: '/dashboards/$dashboardId',
-    path: '/dashboards/$dashboardId',
-    getParentRoute: () => ShellRoute,
-  } as any)
-const ShellAccountWorkspacesRoute = ShellAccountWorkspacesRouteImport.update({
-  id: '/workspaces',
-  path: '/workspaces',
-  getParentRoute: () => ShellAccountRouteRoute,
-} as any)
-const ShellAccountProfileRoute = ShellAccountProfileRouteImport.update({
-  id: '/profile',
-  path: '/profile',
-  getParentRoute: () => ShellAccountRouteRoute,
-} as any)
-const ShellAccountMembersRoute = ShellAccountMembersRouteImport.update({
-  id: '/members',
-  path: '/members',
-  getParentRoute: () => ShellAccountRouteRoute,
-} as any)
-const ShellAccountBillingRoute = ShellAccountBillingRouteImport.update({
-  id: '/billing',
-  path: '/billing',
-  getParentRoute: () => ShellAccountRouteRoute,
-} as any)
 const ShellPipelinesPipelineIdRouteRoute =
   ShellPipelinesPipelineIdRouteRouteImport.update({
     id: '/pipelines/$pipelineId',
@@ -230,7 +187,6 @@ const ShellPipelinesPipelineIdAssetsAssetIdCanvasRoute =
 export interface FileRoutesByFullPath {
   '/': typeof ShellIndexRoute
   '/welcome': typeof WelcomeRoute
-  '/account': typeof ShellAccountRouteRouteWithChildren
   '/project': typeof ShellProjectRouteRouteWithChildren
   '/runs': typeof ShellRunsRouteRouteWithChildren
   '/catalog': typeof ShellCatalogRoute
@@ -238,17 +194,11 @@ export interface FileRoutesByFullPath {
   '/redesign/$': typeof RedesignSplatRoute
   '/redesign/': typeof RedesignIndexRoute
   '/pipelines/$pipelineId': typeof ShellPipelinesPipelineIdRouteRouteWithChildren
-  '/account/billing': typeof ShellAccountBillingRoute
-  '/account/members': typeof ShellAccountMembersRoute
-  '/account/profile': typeof ShellAccountProfileRoute
-  '/account/workspaces': typeof ShellAccountWorkspacesRoute
-  '/dashboards/$dashboardId': typeof ShellDashboardsDashboardIdRoute
   '/notebooks/$notebookId': typeof ShellNotebooksNotebookIdRoute
   '/project/connections': typeof ShellProjectConnectionsRoute
   '/project/environments': typeof ShellProjectEnvironmentsRoute
   '/project/general': typeof ShellProjectGeneralRoute
   '/runs/$runId': typeof ShellRunsRunIdRoute
-  '/account/': typeof ShellAccountIndexRoute
   '/notebooks/': typeof ShellNotebooksIndexRoute
   '/project/': typeof ShellProjectIndexRoute
   '/runs/': typeof ShellRunsIndexRoute
@@ -269,17 +219,11 @@ export interface FileRoutesByTo {
   '/redesign/$': typeof RedesignSplatRoute
   '/': typeof ShellIndexRoute
   '/redesign': typeof RedesignIndexRoute
-  '/account/billing': typeof ShellAccountBillingRoute
-  '/account/members': typeof ShellAccountMembersRoute
-  '/account/profile': typeof ShellAccountProfileRoute
-  '/account/workspaces': typeof ShellAccountWorkspacesRoute
-  '/dashboards/$dashboardId': typeof ShellDashboardsDashboardIdRoute
   '/notebooks/$notebookId': typeof ShellNotebooksNotebookIdRoute
   '/project/connections': typeof ShellProjectConnectionsRoute
   '/project/environments': typeof ShellProjectEnvironmentsRoute
   '/project/general': typeof ShellProjectGeneralRoute
   '/runs/$runId': typeof ShellRunsRunIdRoute
-  '/account': typeof ShellAccountIndexRoute
   '/notebooks': typeof ShellNotebooksIndexRoute
   '/project': typeof ShellProjectIndexRoute
   '/runs': typeof ShellRunsIndexRoute
@@ -296,7 +240,6 @@ export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/_shell': typeof ShellRouteWithChildren
   '/welcome': typeof WelcomeRoute
-  '/_shell/account': typeof ShellAccountRouteRouteWithChildren
   '/_shell/project': typeof ShellProjectRouteRouteWithChildren
   '/_shell/runs': typeof ShellRunsRouteRouteWithChildren
   '/_shell/catalog': typeof ShellCatalogRoute
@@ -305,17 +248,11 @@ export interface FileRoutesById {
   '/_shell/': typeof ShellIndexRoute
   '/redesign/': typeof RedesignIndexRoute
   '/_shell/pipelines/$pipelineId': typeof ShellPipelinesPipelineIdRouteRouteWithChildren
-  '/_shell/account/billing': typeof ShellAccountBillingRoute
-  '/_shell/account/members': typeof ShellAccountMembersRoute
-  '/_shell/account/profile': typeof ShellAccountProfileRoute
-  '/_shell/account/workspaces': typeof ShellAccountWorkspacesRoute
-  '/_shell/dashboards/$dashboardId': typeof ShellDashboardsDashboardIdRoute
   '/_shell/notebooks/$notebookId': typeof ShellNotebooksNotebookIdRoute
   '/_shell/project/connections': typeof ShellProjectConnectionsRoute
   '/_shell/project/environments': typeof ShellProjectEnvironmentsRoute
   '/_shell/project/general': typeof ShellProjectGeneralRoute
   '/_shell/runs/$runId': typeof ShellRunsRunIdRoute
-  '/_shell/account/': typeof ShellAccountIndexRoute
   '/_shell/notebooks/': typeof ShellNotebooksIndexRoute
   '/_shell/project/': typeof ShellProjectIndexRoute
   '/_shell/runs/': typeof ShellRunsIndexRoute
@@ -334,7 +271,6 @@ export interface FileRouteTypes {
   fullPaths:
     | '/'
     | '/welcome'
-    | '/account'
     | '/project'
     | '/runs'
     | '/catalog'
@@ -342,17 +278,11 @@ export interface FileRouteTypes {
     | '/redesign/$'
     | '/redesign/'
     | '/pipelines/$pipelineId'
-    | '/account/billing'
-    | '/account/members'
-    | '/account/profile'
-    | '/account/workspaces'
-    | '/dashboards/$dashboardId'
     | '/notebooks/$notebookId'
     | '/project/connections'
     | '/project/environments'
     | '/project/general'
     | '/runs/$runId'
-    | '/account/'
     | '/notebooks/'
     | '/project/'
     | '/runs/'
@@ -373,17 +303,11 @@ export interface FileRouteTypes {
     | '/redesign/$'
     | '/'
     | '/redesign'
-    | '/account/billing'
-    | '/account/members'
-    | '/account/profile'
-    | '/account/workspaces'
-    | '/dashboards/$dashboardId'
     | '/notebooks/$notebookId'
     | '/project/connections'
     | '/project/environments'
     | '/project/general'
     | '/runs/$runId'
-    | '/account'
     | '/notebooks'
     | '/project'
     | '/runs'
@@ -399,7 +323,6 @@ export interface FileRouteTypes {
     | '__root__'
     | '/_shell'
     | '/welcome'
-    | '/_shell/account'
     | '/_shell/project'
     | '/_shell/runs'
     | '/_shell/catalog'
@@ -408,17 +331,11 @@ export interface FileRouteTypes {
     | '/_shell/'
     | '/redesign/'
     | '/_shell/pipelines/$pipelineId'
-    | '/_shell/account/billing'
-    | '/_shell/account/members'
-    | '/_shell/account/profile'
-    | '/_shell/account/workspaces'
-    | '/_shell/dashboards/$dashboardId'
     | '/_shell/notebooks/$notebookId'
     | '/_shell/project/connections'
     | '/_shell/project/environments'
     | '/_shell/project/general'
     | '/_shell/runs/$runId'
-    | '/_shell/account/'
     | '/_shell/notebooks/'
     | '/_shell/project/'
     | '/_shell/runs/'
@@ -505,13 +422,6 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ShellProjectRouteRouteImport
       parentRoute: typeof ShellRoute
     }
-    '/_shell/account': {
-      id: '/_shell/account'
-      path: '/account'
-      fullPath: '/account'
-      preLoaderRoute: typeof ShellAccountRouteRouteImport
-      parentRoute: typeof ShellRoute
-    }
     '/_shell/runs/': {
       id: '/_shell/runs/'
       path: '/'
@@ -532,13 +442,6 @@ declare module '@tanstack/react-router' {
       fullPath: '/notebooks/'
       preLoaderRoute: typeof ShellNotebooksIndexRouteImport
       parentRoute: typeof ShellRoute
-    }
-    '/_shell/account/': {
-      id: '/_shell/account/'
-      path: '/'
-      fullPath: '/account/'
-      preLoaderRoute: typeof ShellAccountIndexRouteImport
-      parentRoute: typeof ShellAccountRouteRoute
     }
     '/_shell/runs/$runId': {
       id: '/_shell/runs/$runId'
@@ -574,41 +477,6 @@ declare module '@tanstack/react-router' {
       fullPath: '/notebooks/$notebookId'
       preLoaderRoute: typeof ShellNotebooksNotebookIdRouteImport
       parentRoute: typeof ShellRoute
-    }
-    '/_shell/dashboards/$dashboardId': {
-      id: '/_shell/dashboards/$dashboardId'
-      path: '/dashboards/$dashboardId'
-      fullPath: '/dashboards/$dashboardId'
-      preLoaderRoute: typeof ShellDashboardsDashboardIdRouteImport
-      parentRoute: typeof ShellRoute
-    }
-    '/_shell/account/workspaces': {
-      id: '/_shell/account/workspaces'
-      path: '/workspaces'
-      fullPath: '/account/workspaces'
-      preLoaderRoute: typeof ShellAccountWorkspacesRouteImport
-      parentRoute: typeof ShellAccountRouteRoute
-    }
-    '/_shell/account/profile': {
-      id: '/_shell/account/profile'
-      path: '/profile'
-      fullPath: '/account/profile'
-      preLoaderRoute: typeof ShellAccountProfileRouteImport
-      parentRoute: typeof ShellAccountRouteRoute
-    }
-    '/_shell/account/members': {
-      id: '/_shell/account/members'
-      path: '/members'
-      fullPath: '/account/members'
-      preLoaderRoute: typeof ShellAccountMembersRouteImport
-      parentRoute: typeof ShellAccountRouteRoute
-    }
-    '/_shell/account/billing': {
-      id: '/_shell/account/billing'
-      path: '/billing'
-      fullPath: '/account/billing'
-      preLoaderRoute: typeof ShellAccountBillingRouteImport
-      parentRoute: typeof ShellAccountRouteRoute
     }
     '/_shell/pipelines/$pipelineId': {
       id: '/_shell/pipelines/$pipelineId'
@@ -682,25 +550,6 @@ declare module '@tanstack/react-router' {
     }
   }
 }
-
-interface ShellAccountRouteRouteChildren {
-  ShellAccountBillingRoute: typeof ShellAccountBillingRoute
-  ShellAccountMembersRoute: typeof ShellAccountMembersRoute
-  ShellAccountProfileRoute: typeof ShellAccountProfileRoute
-  ShellAccountWorkspacesRoute: typeof ShellAccountWorkspacesRoute
-  ShellAccountIndexRoute: typeof ShellAccountIndexRoute
-}
-
-const ShellAccountRouteRouteChildren: ShellAccountRouteRouteChildren = {
-  ShellAccountBillingRoute: ShellAccountBillingRoute,
-  ShellAccountMembersRoute: ShellAccountMembersRoute,
-  ShellAccountProfileRoute: ShellAccountProfileRoute,
-  ShellAccountWorkspacesRoute: ShellAccountWorkspacesRoute,
-  ShellAccountIndexRoute: ShellAccountIndexRoute,
-}
-
-const ShellAccountRouteRouteWithChildren =
-  ShellAccountRouteRoute._addFileChildren(ShellAccountRouteRouteChildren)
 
 interface ShellProjectRouteRouteChildren {
   ShellProjectConnectionsRoute: typeof ShellProjectConnectionsRoute
@@ -781,20 +630,17 @@ const ShellPipelinesPipelineIdRouteRouteWithChildren =
   )
 
 interface ShellRouteChildren {
-  ShellAccountRouteRoute: typeof ShellAccountRouteRouteWithChildren
   ShellProjectRouteRoute: typeof ShellProjectRouteRouteWithChildren
   ShellRunsRouteRoute: typeof ShellRunsRouteRouteWithChildren
   ShellCatalogRoute: typeof ShellCatalogRoute
   ShellSchedulesRoute: typeof ShellSchedulesRoute
   ShellIndexRoute: typeof ShellIndexRoute
   ShellPipelinesPipelineIdRouteRoute: typeof ShellPipelinesPipelineIdRouteRouteWithChildren
-  ShellDashboardsDashboardIdRoute: typeof ShellDashboardsDashboardIdRoute
   ShellNotebooksNotebookIdRoute: typeof ShellNotebooksNotebookIdRoute
   ShellNotebooksIndexRoute: typeof ShellNotebooksIndexRoute
 }
 
 const ShellRouteChildren: ShellRouteChildren = {
-  ShellAccountRouteRoute: ShellAccountRouteRouteWithChildren,
   ShellProjectRouteRoute: ShellProjectRouteRouteWithChildren,
   ShellRunsRouteRoute: ShellRunsRouteRouteWithChildren,
   ShellCatalogRoute: ShellCatalogRoute,
@@ -802,7 +648,6 @@ const ShellRouteChildren: ShellRouteChildren = {
   ShellIndexRoute: ShellIndexRoute,
   ShellPipelinesPipelineIdRouteRoute:
     ShellPipelinesPipelineIdRouteRouteWithChildren,
-  ShellDashboardsDashboardIdRoute: ShellDashboardsDashboardIdRoute,
   ShellNotebooksNotebookIdRoute: ShellNotebooksNotebookIdRoute,
   ShellNotebooksIndexRoute: ShellNotebooksIndexRoute,
 }

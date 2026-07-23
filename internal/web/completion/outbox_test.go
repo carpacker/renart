@@ -144,6 +144,17 @@ func TestOutboxRejectsInvalidAndNoncanonicalEnvelopes(t *testing.T) {
 	entry.WriteResourceFidelity = ""
 	invalid.ExecutionTargets["analytics.orders"] = entry
 	require.ErrorIs(t, store.Enqueue(ctx, invalid), completion.ErrInvalidEnvelope)
+	invalid = completeEvent("completion-invalid-quality")
+	invalid.Assets[0].QualityStatus = bus.QualityStatusFailed
+	invalid.Assets[0].FailedChecks = nil
+	require.ErrorIs(t, store.Enqueue(ctx, invalid), completion.ErrInvalidEnvelope)
+	invalid = completeEvent("completion-unsorted-quality")
+	invalid.Assets[0].QualityStatus = bus.QualityStatusFailed
+	invalid.Assets[0].FailedChecks = []bus.QualityCheckFailure{
+		{Kind: bus.QualityCheckKindCustom, Name: "z"},
+		{Kind: bus.QualityCheckKindColumn, Name: "not_null", Column: "id"},
+	}
+	require.ErrorIs(t, store.Enqueue(ctx, invalid), completion.ErrInvalidEnvelope)
 
 	event := completeEvent("completion-tampered")
 	require.NoError(t, store.Enqueue(ctx, event))
@@ -177,6 +188,10 @@ func completeEvent(completionID string) bus.RunCompleted {
 		Assets: []bus.AssetRun{{
 			AssetID: "pipeline-uuid:analytics.orders", AssetName: "analytics.orders",
 			Status: "succeeded", StartedAt: &started, FinishedAt: &finished,
+			QualityStatus: bus.QualityStatusFailed,
+			FailedChecks: []bus.QualityCheckFailure{{
+				Kind: bus.QualityCheckKindCustom, Name: "no duplicate orders", Blocking: true,
+			}},
 			CompletionOrdinal: 3, HasCompletionOrdinal: true,
 			TargetIdentity: "duckdb|main|analytics|orders", TargetFidelity: "exact",
 			Fingerprint: "v2:fingerprint", OwnContent: "v2:own",

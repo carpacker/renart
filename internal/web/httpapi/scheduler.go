@@ -25,6 +25,7 @@ type SchedulerHandlers interface {
 	ListRunUnits(ctx context.Context, runID string) ([]scheduler.PipelineRunUnit, error)
 	GetRunReexecution(ctx context.Context, runID string) (scheduler.PipelineRunReexecution, error)
 	ReexecuteRun(ctx context.Context, runID string) (scheduler.PipelineRun, error)
+	CancelRun(ctx context.Context, runID string) (scheduler.PipelineRun, error)
 }
 
 type SchedulerAPI struct {
@@ -39,6 +40,7 @@ func RegisterSchedulerRoutes(router chi.Router, handlers *SchedulerAPI) {
 	router.Get("/api/runs", handlers.HandleListRuns)
 	router.Get("/api/runs/{id}", handlers.HandleGetRun)
 	router.Post("/api/runs/{id}/reexecute", handlers.HandleReexecuteRun)
+	router.Post("/api/runs/{id}/cancel", handlers.HandleCancelRun)
 }
 
 func (h *SchedulerAPI) HandleListSchedules(w http.ResponseWriter, r *http.Request) {
@@ -217,6 +219,30 @@ func (h *SchedulerAPI) HandleReexecuteRun(w http.ResponseWriter, r *http.Request
 			return
 		}
 		webapi.WriteBadRequest(w, "run_reexecution_failed", err.Error())
+		return
+	}
+	webapi.WriteJSON(w, http.StatusAccepted, map[string]any{"status": "ok", "run": run})
+}
+
+func (h *SchedulerAPI) HandleCancelRun(w http.ResponseWriter, r *http.Request) {
+	if _, err := decodeStrictJSONObject[struct{}](r.Body); err != nil {
+		webapi.WriteBadRequest(w, "invalid_request_body", err.Error())
+		return
+	}
+	run, err := h.Service.CancelRun(r.Context(), chi.URLParam(r, "id"))
+	if err != nil {
+		if errors.Is(err, scheduler.ErrSchedulerNotOwner) {
+			webapi.WriteConflict(w, "scheduler_not_owner", err.Error())
+			return
+		}
+		var unavailable *scheduler.RunCancellationUnavailableError
+		if errors.As(err, &unavailable) {
+			webapi.WriteErrorWithDetails(w, http.StatusConflict, "run_cancellation_unavailable", err.Error(), map[string]string{
+				"reason": strings.TrimSpace(unavailable.Reason),
+			})
+			return
+		}
+		webapi.WriteBadRequest(w, "run_cancellation_failed", err.Error())
 		return
 	}
 	webapi.WriteJSON(w, http.StatusAccepted, map[string]any{"status": "ok", "run": run})

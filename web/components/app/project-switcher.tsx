@@ -3,7 +3,6 @@ import {
   Building2,
   Check,
   ChevronDown,
-  Cloud,
   FolderPlus,
   FolderSearch,
   Monitor,
@@ -29,7 +28,6 @@ import {
 import { useWorkspaceSettingsData } from "@/hooks/use-workspace-settings-data";
 import { type WorkspaceThemePreference, useWorkspaceTheme } from "@/hooks/use-workspace-theme";
 import { listProjects, openProject, removeProject } from "@/lib/api-projects";
-import { appFeatureFlags } from "@/lib/app-feature-flags";
 import type { ProjectListResponse } from "@/lib/generated/api-types";
 import { getPinnedProjectId, pinProject } from "@/lib/project-context";
 import { cn } from "@/lib/utils";
@@ -145,14 +143,6 @@ export function ProjectSwitcher() {
               Project settings
             </Link>
           </DropdownMenuItem>
-          {appFeatureFlags.cloudWorkspaces ? (
-            <DropdownMenuItem asChild>
-              <Link to="/account/workspaces">
-                <Cloud className="size-4" />
-                Connect cloud workspace
-              </Link>
-            </DropdownMenuItem>
-          ) : null}
           <DropdownMenuSeparator />
           <DropdownMenuLabel>Appearance</DropdownMenuLabel>
           <DropdownMenuRadioGroup

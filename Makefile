@@ -8,7 +8,7 @@ RENART_CACHE_HOME ?= $(if $(XDG_CACHE_HOME),$(XDG_CACHE_HOME),$(HOME)/.cache)
 HOST_SQLPARSER_TARGET = $(shell $(GO) env GOOS)-$(shell $(GO) env GOARCH)
 BRUIN_SQLPARSER_STUB_LIB_DIR = $(RENART_CACHE_HOME)/renart/bruin-sqlparser-stub/$(HOST_SQLPARSER_TARGET)/release
 
-.PHONY: help dev build test check release-check licenses licenses-check bruin-sqlparser-stub go-build go-test standalone-build web-install web-build web-typecheck web-test-live web-sync-polyglot-wasm docs-install docs-build docs-dev docs-preview landing-media docs-media docs-docker docs-docker-run sync-install clean
+.PHONY: help dev build test check release-check licenses licenses-check bruin-sqlparser-stub go-build go-test standalone-build web-install web-build web-typecheck web-test-live web-sync-polyglot-wasm docs-install docs-build docs-dev docs-preview vscode-install landing-media docs-media docs-docker docs-docker-run sync-install clean
 
 help:
 	@printf "Renart build targets\n\n"
@@ -28,6 +28,7 @@ help:
 	@printf "  make web-test-live     Run live Playwright tests\n"
 	@printf "  make docs-build        Build Astro/Starlight docs\n"
 	@printf "  make docs-dev          Start docs dev server\n"
+	@printf "  make vscode-install    Install VS Code extension dependencies\n"
 	@printf "  make landing-media     Regenerate landing media\n"
 	@printf "  make docs-media        Regenerate docs screenshots\n"
 	@printf "  make docs-docker       Build Caddy docs image\n"
@@ -41,7 +42,7 @@ dev:
 
 check: go-test web-build docs-build
 
-release-check: bruin-sqlparser-stub licenses-check
+release-check: bruin-sqlparser-stub web-install docs-install vscode-install licenses-check
 	$(GO) mod verify
 	CGO_LDFLAGS="-L$(BRUIN_SQLPARSER_STUB_LIB_DIR) $(CGO_LDFLAGS)" $(GO) test -p=1 ./...
 	CGO_LDFLAGS="-L$(BRUIN_SQLPARSER_STUB_LIB_DIR) $(CGO_LDFLAGS)" $(GO) vet -p=1 ./...
@@ -101,6 +102,9 @@ docs-dev:
 
 docs-preview:
 	$(PNPM) --dir docs preview
+
+vscode-install:
+	$(PNPM) --dir extensions/vscode install --frozen-lockfile
 
 landing-media:
 	$(PNPM) --dir web landing:media

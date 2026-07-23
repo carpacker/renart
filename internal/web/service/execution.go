@@ -127,8 +127,9 @@ type PipelineView struct {
 }
 
 type AssetView struct {
-	ID   string
-	Name string
+	ID                string
+	Name              string
+	QualityCheckCount int
 }
 
 type PipelineMaterializationInfo struct {
@@ -1867,6 +1868,8 @@ type pipelineRunObservation struct {
 	finishedAt       map[string]*time.Time
 	ordinals         map[string]int64
 	terminal         map[string]bool
+	qualityTerminal  map[string]map[string]string
+	qualityFailures  map[string]map[string]bus.QualityCheckFailure
 	nextOrdinal      int64
 	executionTargets ExecutionTargetSnapshot
 }
@@ -1882,6 +1885,8 @@ func newPipelineRunObservation(onEvent func(ExecutionAssetEvent) error) *pipelin
 		finishedAt:       make(map[string]*time.Time),
 		ordinals:         make(map[string]int64),
 		terminal:         make(map[string]bool),
+		qualityTerminal:  make(map[string]map[string]string),
+		qualityFailures:  make(map[string]map[string]bus.QualityCheckFailure),
 	}
 }
 
@@ -1902,6 +1907,10 @@ func (o *pipelineRunObservation) setCompletionID(completionID string) {
 func (o *pipelineRunObservation) handle(event ExecutionAssetEvent) error {
 	assetName := strings.TrimSpace(event.Asset)
 	if assetName == "" {
+		return nil
+	}
+	if isQualityCheckTask(event.TaskKind) {
+		o.observeQualityCheck(assetName, event)
 		return nil
 	}
 	status := completedExecutionStatus(event.Status)
@@ -1976,6 +1985,53 @@ func (o *pipelineRunObservation) handle(event ExecutionAssetEvent) error {
 		return o.onEvent(event)
 	}
 	return nil
+}
+
+func isQualityCheckTask(kind string) bool {
+	switch strings.TrimSpace(kind) {
+	case executionTaskKindColumnCheck, executionTaskKindCustomCheck:
+		return true
+	default:
+		return false
+	}
+}
+
+func (o *pipelineRunObservation) observeQualityCheck(assetName string, event ExecutionAssetEvent) {
+	status := completedExecutionStatus(event.Status)
+	if status == "" {
+		return
+	}
+	name := strings.TrimSpace(event.CheckName)
+	column := strings.TrimSpace(event.CheckColumn)
+	kind := strings.TrimSpace(event.TaskKind)
+	if name == "" || (kind == executionTaskKindColumnCheck && column == "") {
+		return
+	}
+	key := kind + "\x00" + column + "\x00" + name
+
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	if o.qualityTerminal[assetName] == nil {
+		o.qualityTerminal[assetName] = make(map[string]string)
+	}
+	o.qualityTerminal[assetName][key] = status
+	if o.qualityFailures[assetName] == nil {
+		o.qualityFailures[assetName] = make(map[string]bus.QualityCheckFailure)
+	}
+	if status != "failed" {
+		delete(o.qualityFailures[assetName], key)
+		return
+	}
+	checkKind := bus.QualityCheckKindCustom
+	if kind == executionTaskKindColumnCheck {
+		checkKind = bus.QualityCheckKindColumn
+	}
+	o.qualityFailures[assetName][key] = bus.QualityCheckFailure{
+		Kind:     checkKind,
+		Name:     name,
+		Column:   column,
+		Blocking: event.CheckBlocking,
+	}
 }
 
 func (o *pipelineRunObservation) captureUpstreamWriterSnapshot(assetName string) (map[string]bus.UpstreamWriterSnapshot, bool, error) {
@@ -2205,6 +2261,28 @@ func (o *pipelineRunObservation) completedAssetsForNames(view PipelineView, _ st
 			Status:    status,
 		})
 		run := &runs[len(runs)-1]
+		failures := make([]bus.QualityCheckFailure, 0, len(o.qualityFailures[name]))
+		for _, failure := range o.qualityFailures[name] {
+			failures = append(failures, failure)
+		}
+		sort.Slice(failures, func(i, j int) bool {
+			left, right := failures[i], failures[j]
+			if left.Kind != right.Kind {
+				return left.Kind < right.Kind
+			}
+			if left.Column != right.Column {
+				return left.Column < right.Column
+			}
+			return left.Name < right.Name
+		})
+		switch {
+		case len(failures) > 0:
+			run.QualityStatus = bus.QualityStatusFailed
+			run.FailedChecks = failures
+		case asset.QualityCheckCount > 0 &&
+			qualityChecksAllSucceeded(o.qualityTerminal[name], asset.QualityCheckCount):
+			run.QualityStatus = bus.QualityStatusPassed
+		}
 		if started := o.startedAt[name]; started != nil {
 			value := started.UTC()
 			run.StartedAt = &value
@@ -2266,9 +2344,23 @@ func (o *pipelineRunObservation) resetCompletedAsset(assetName string) {
 	delete(o.finishedAt, assetName)
 	delete(o.ordinals, assetName)
 	delete(o.terminal, assetName)
+	delete(o.qualityTerminal, assetName)
+	delete(o.qualityFailures, assetName)
 	delete(o.upstreamWriters, assetName)
 	delete(o.hasUpstreamReads, assetName)
 	delete(o.claims, assetName)
+}
+
+func qualityChecksAllSucceeded(statuses map[string]string, expected int) bool {
+	if expected <= 0 || len(statuses) < expected {
+		return false
+	}
+	for _, status := range statuses {
+		if status != "succeeded" {
+			return false
+		}
+	}
+	return true
 }
 
 func (o *pipelineRunObservation) pipelineUUID() string {

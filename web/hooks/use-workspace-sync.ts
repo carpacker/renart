@@ -9,11 +9,14 @@ import {
   workspaceAtom,
   workspaceSyncSourceAtom,
 } from "@/lib/atoms/domains/workspace";
-import { getWorkspace } from "@/lib/api";
+import { getWorkspace } from "@/lib/api-workspace";
+import type { NotebookRuntimeEvent } from "@/lib/api-notebooks";
 import type { StalenessUpdatedEvent } from "@/lib/api-staleness";
 import {
   ScheduleOccurrenceEvent,
   SchedulerRunEvent,
+  mergeNotebookRuntimeEvent,
+  notebookRuntimeEventsAtom,
   scheduleOccurrenceEventAtom,
   schedulerRunEventAtom,
   stalenessEventAtom,
@@ -117,12 +120,30 @@ function isStalenessEvent(payload: unknown): payload is StalenessUpdatedEvent {
   );
 }
 
+function isNotebookRuntimeEvent(payload: unknown): payload is NotebookRuntimeEvent {
+  return (
+    typeof payload === "object" &&
+    payload !== null &&
+    "type" in payload &&
+    payload.type === "notebook.runtime" &&
+    "notebook_id" in payload &&
+    typeof payload.notebook_id === "string" &&
+    "stale" in payload &&
+    Array.isArray(payload.stale) &&
+    "auto_pending" in payload &&
+    Array.isArray(payload.auto_pending) &&
+    "running" in payload &&
+    Array.isArray(payload.running)
+  );
+}
+
 export function useWorkspaceSync() {
   const workspace = useAtomValue(workspaceAtom);
   const setWorkspace = useSetAtom(workspaceAtom);
   const setSchedulerRunEvent = useSetAtom(schedulerRunEventAtom);
   const setScheduleOccurrenceEvent = useSetAtom(scheduleOccurrenceEventAtom);
   const setStalenessEvent = useSetAtom(stalenessEventAtom);
+  const setNotebookRuntimeEvents = useSetAtom(notebookRuntimeEventsAtom);
   const setWorkspaceSyncSource = useSetAtom(workspaceSyncSourceAtom);
   const setServerOnline = useSetAtom(serverOnlineAtom);
 
@@ -200,6 +221,11 @@ export function useWorkspaceSync() {
           return;
         }
 
+        if (isNotebookRuntimeEvent(payload)) {
+          setNotebookRuntimeEvents((current) => mergeNotebookRuntimeEvent(current, payload));
+          return;
+        }
+
         if (!isWorkspaceEvent(payload)) {
           return;
         }
@@ -244,6 +270,7 @@ export function useWorkspaceSync() {
     };
   }, [
     setSchedulerRunEvent,
+    setNotebookRuntimeEvents,
     setServerOnline,
     setStalenessEvent,
     setWorkspace,

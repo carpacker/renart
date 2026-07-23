@@ -4,12 +4,13 @@
 //
 // Used by capture-landing-media.mjs (make landing-media) and
 // capture-docs-media.mjs (make docs-media).
-import { spawn } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 import { mkdtemp, readFile, rm, unlink, writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { promisify } from "node:util";
 import {
   createAcmeWorkspace,
   addMarketingPipeline,
@@ -26,9 +27,31 @@ export const STAGING_ORDERS = id("acme/assets/staging/orders.sql");
 
 // sharp lives in docs/ (the docs site needs it anyway).
 const docsRequire = createRequire(path.join(repoRoot, "docs", "package.json"));
+const execFileAsync = promisify(execFile);
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function buildSQLParserLinkShim(goBinary) {
+  const { stdout: goEnv } = await execFileAsync(goBinary, ["env", "GOOS", "GOARCH"], {
+    cwd: repoRoot,
+  });
+  const [goos, goarch] = goEnv.trim().split(/\s+/);
+  if (!goos || !goarch) {
+    throw new Error(`could not determine the Go host target from: ${JSON.stringify(goEnv)}`);
+  }
+
+  const { stdout } = await execFileAsync(
+    path.join(repoRoot, "scripts", "build_bruin_sqlparser_stub.sh"),
+    [`${goos}-${goarch}`],
+    { cwd: repoRoot, env: process.env },
+  );
+  const libDir = stdout.trim().split(/\r?\n/).at(-1);
+  if (!libDir) {
+    throw new Error("Bruin SQL parser link shim did not report its library directory");
+  }
+  return libDir;
 }
 
 // Builds the demo workspace, boots a renart server on `port`, and stages the
@@ -37,6 +60,8 @@ export async function launchStagedDemo({ port }) {
   const baseURL = `http://127.0.0.1:${port}`;
   const goBinary =
     process.env.GO_BIN ?? (existsSync("/usr/local/go/bin/go") ? "/usr/local/go/bin/go" : "go");
+  const sqlParserLibDir = await buildSQLParserLinkShim(goBinary);
+  const cgoLdflags = [`-L${sqlParserLibDir}`, process.env.CGO_LDFLAGS].filter(Boolean).join(" ");
   // nested so the project switcher in the shots shows "acme-ws", not a temp name
   const tempRoot = await mkdtemp(path.join(tmpdir(), "renart-demo-media-"));
   const workspaceDir = path.join(tempRoot, "acme-ws");
@@ -60,11 +85,23 @@ export async function launchStagedDemo({ port }) {
       "poll",
       "--no-open",
     ],
-    { cwd: repoRoot, detached: true, stdio: ["ignore", "pipe", "pipe"] },
+    {
+      cwd: repoRoot,
+      detached: true,
+      env: { ...process.env, CGO_LDFLAGS: cgoLdflags },
+      stdio: ["ignore", "pipe", "pipe"],
+    },
   );
   let serverOutput = "";
+  let serverExit;
   server.stdout.on("data", (chunk) => (serverOutput += chunk.toString()));
   server.stderr.on("data", (chunk) => (serverOutput += chunk.toString()));
+  server.once("error", (error) => {
+    serverExit = `failed to start: ${error.message}`;
+  });
+  server.once("exit", (code, signal) => {
+    serverExit = signal ? `exited from signal ${signal}` : `exited with code ${code}`;
+  });
 
   async function api(pathname, { method = "GET", body } = {}) {
     const response = await fetch(baseURL + pathname, {
@@ -131,6 +168,10 @@ export async function launchStagedDemo({ port }) {
   // wait for the server
   const deadline = Date.now() + 180_000;
   for (;;) {
+    if (serverExit) {
+      await rm(tempRoot, { recursive: true, force: true }).catch(() => undefined);
+      throw new Error(`renart server ${serverExit} before startup.\n${serverOutput}`);
+    }
     if (Date.now() > deadline) {
       throw new Error(`renart server did not start in time.\n${serverOutput}`);
     }
@@ -380,8 +421,8 @@ export function makeCapture(browser, baseURL, outputDir) {
     await page.waitForTimeout(settle);
   }
 
-  async function shot(page, name) {
-    await page.screenshot({ path: path.join(outputDir, `${name}.png`) });
+  async function shot(page, name, options = {}) {
+    await page.screenshot({ ...options, path: path.join(outputDir, `${name}.png`) });
     console.log("captured", name);
   }
 

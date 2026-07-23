@@ -50,7 +50,7 @@ import { Switch } from "@/components/ui/switch";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { envScheduleKey, useEnvSchedules } from "@/hooks/use-env-schedules";
-import { formatSchedulerDate, usePipelineScheduler } from "@/hooks/use-pipeline-scheduler";
+import { formatSchedulerDate, usePipelineRuns } from "@/hooks/use-pipeline-runs";
 import { usePipelineDeploy } from "@/hooks/use-pipeline-deploy";
 import { activePipelineRunConflict } from "@/lib/api-scheduler";
 import {
@@ -78,12 +78,7 @@ type TimelineSchedule = {
 };
 
 export function AppSchedulesPage() {
-  const {
-    runs,
-    runsError,
-    schedulesError,
-    refresh: refreshPipelineScheduler,
-  } = usePipelineScheduler();
+  const { runs, runsError, refreshRuns } = usePipelineRuns();
   const envSchedules = useEnvSchedules();
   const [query, setQuery] = useState("");
   const [bucket, setBucket] = useState<(typeof buckets)[number]>("12hr");
@@ -106,7 +101,7 @@ export function AppSchedulesPage() {
       schedule.cron.toLowerCase().includes(value)
     );
   });
-  const schedulerRefreshError = [runsError, schedulesError].filter(Boolean).join(" ");
+  const schedulerRefreshError = runsError;
 
   return (
     <AppPage>
@@ -156,7 +151,7 @@ export function AppSchedulesPage() {
               <span>
                 {schedulerRefreshError} Last successfully loaded activity remains visible.
               </span>
-              <Button variant="outline" size="xs" onClick={() => void refreshPipelineScheduler()}>
+              <Button variant="outline" size="xs" onClick={() => void refreshRuns()}>
                 <RefreshCw />
                 Retry
               </Button>

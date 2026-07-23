@@ -31,6 +31,13 @@ export type LatestPhysicalOutput = {
   ambiguous: boolean;
 };
 
+export type FailedQualityCheck = {
+  kind: "custom" | "column";
+  name: string;
+  column?: string;
+  blocking?: boolean;
+};
+
 export type AssetStaleness = {
   asset_id: string;
   asset_name: string;
@@ -50,6 +57,13 @@ export type AssetStaleness = {
   last_run_status?: "succeeded" | "failed" | "cancelled";
   last_run_at?: string;
   last_run_on_current_content?: boolean;
+  // Post-write assertions are independent of freshness. A successful write can
+  // remain fresh while its latest checks fail.
+  quality_status?: "passed" | "failed";
+  failed_checks?: FailedQualityCheck[];
+  quality_run_id?: string;
+  quality_checked_at?: string;
+  quality_on_current_content?: boolean;
   // The selected physical output and the latest durable fact about what is
   // present there. Runtime-only and unresolved targets deliberately omit a
   // reusable target identity/output.

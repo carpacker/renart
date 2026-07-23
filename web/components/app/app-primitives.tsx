@@ -332,6 +332,66 @@ export function LastRunBadge({ staleness }: { staleness?: AssetStaleness }) {
   );
 }
 
+function qualityFailureLabel(staleness: AssetStaleness) {
+  const failures = staleness.failed_checks ?? [];
+  if (failures.length === 0) return "Checks failed";
+  const first = failures[0];
+  const check =
+    first.kind === "column" && first.column ? `${first.column} · ${first.name}` : first.name;
+  return failures.length === 1 ? `Check failed: ${check}` : `${failures.length} checks failed`;
+}
+
+export function QualityFailureBadge({
+  staleness,
+  onReview,
+}: {
+  staleness?: AssetStaleness;
+  onReview?: () => void;
+}) {
+  if (
+    staleness?.quality_status !== "failed" ||
+    !staleness.quality_on_current_content ||
+    (staleness.failed_checks?.length ?? 0) === 0
+  ) {
+    return null;
+  }
+  const label = qualityFailureLabel(staleness);
+  const className =
+    "nodrag inline-flex max-w-full shrink-0 items-center gap-1 truncate rounded bg-destructive/10 px-1.5 py-0.5 text-[10px] font-medium text-destructive outline-none hover:bg-destructive/15 focus-visible:ring-1 focus-visible:ring-destructive/50";
+  const content = (
+    <>
+      <AlertTriangle className="size-2.5 shrink-0" />
+      <span className="truncate">Checks failed</span>
+    </>
+  );
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        {onReview ? (
+          <button
+            type="button"
+            className={className}
+            data-quality-status="failed"
+            aria-label={`${label}. Open quality checks`}
+            onClick={(event) => {
+              event.stopPropagation();
+              onReview();
+            }}
+            onKeyDown={(event) => event.stopPropagation()}
+          >
+            {content}
+          </button>
+        ) : (
+          <span className={className} data-quality-status="failed" tabIndex={0} aria-label={label}>
+            {content}
+          </span>
+        )}
+      </TooltipTrigger>
+      <TooltipContent>{onReview ? `${label}. Open the failed check.` : label}</TooltipContent>
+    </Tooltip>
+  );
+}
+
 export function stalenessDotClassName(staleness: AssetStaleness) {
   return resolveFreshnessDisplay(staleness).dotClassName;
 }
@@ -350,11 +410,13 @@ export function AssetNode({
   selected,
   actions,
   onOpenConnection,
+  onReviewFailedCheck,
 }: {
   asset: AppAsset;
   selected?: boolean;
   actions?: AssetNodeAction[];
   onOpenConnection?: () => void;
+  onReviewFailedCheck?: () => void;
 }) {
   const meta = kindMeta[asset.kind];
   const Icon = meta.icon;
@@ -370,6 +432,10 @@ export function AssetNode({
     asset.status === "pending" ||
     asset.status === "overdue" ||
     (asset.status === "failed" && !showLastRun);
+  const showQualityFailure =
+    asset.staleness?.quality_status === "failed" &&
+    asset.staleness.quality_on_current_content &&
+    (asset.staleness.failed_checks?.length ?? 0) > 0;
   return (
     <div
       data-slot="asset-node"
@@ -447,6 +513,9 @@ export function AssetNode({
               <>
                 <StalenessBadge staleness={asset.staleness} className="shrink-0" />
                 {showLastRun ? <LastRunBadge staleness={asset.staleness} /> : null}
+                {showQualityFailure ? (
+                  <QualityFailureBadge staleness={asset.staleness} onReview={onReviewFailedCheck} />
+                ) : null}
                 {showTransientRunStatus ? (
                   <span
                     className={cn(
@@ -457,7 +526,7 @@ export function AssetNode({
                   >
                     {statusMeta.label}
                   </span>
-                ) : !showLastRun && asset.materializedAt ? (
+                ) : !showLastRun && !showQualityFailure && asset.materializedAt ? (
                   <span
                     className="inline-flex min-w-0 items-center gap-1 truncate text-[10px] text-muted-foreground"
                     title={`Last built: ${asset.materializedAt}`}

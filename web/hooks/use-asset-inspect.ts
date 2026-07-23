@@ -3,7 +3,7 @@
 import { useAtom, useAtomValue, useSetAtom } from "jotai";
 import { useCallback, useEffect, useMemo, useRef } from "react";
 
-import { inspectAsset } from "@/lib/api";
+import { inspectAsset } from "@/lib/api-assets-inspect";
 import {
   assetInspectAtom,
   changedAssetIdsAtom,

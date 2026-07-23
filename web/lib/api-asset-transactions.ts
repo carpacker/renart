@@ -1,6 +1,6 @@
 import { fetchJSON, fetchJSONWithBody } from "@/lib/api-core";
 import { getSQLTableColumns } from "@/lib/api-sql-discovery";
-import { WebColumn } from "@/lib/types";
+import { WebColumn, WebCustomCheck } from "@/lib/types";
 
 /**
  * Client for the asset provenance/transaction endpoints (§11 of the asset
@@ -18,6 +18,7 @@ export type AssetTransactionResult = {
   status: string;
   upstreams: string[];
   columns: WebColumn[];
+  custom_checks: WebCustomCheck[];
   reconcile_items?: AssetReconcileItem[];
 };
 
@@ -40,7 +41,13 @@ export type AssetTransaction =
       check: { name: string; value?: unknown; blocking?: boolean; description?: string };
     }
   | { type: "column.check.remove"; column: string; check: { name: string } }
-  | { type: "column.description.set"; column: string; description: string };
+  | { type: "column.description.set"; column: string; description: string }
+  | {
+      type: "custom_check.upsert";
+      custom_check_name?: string;
+      custom_check: WebCustomCheck;
+    }
+  | { type: "custom_check.remove"; custom_check_name: string };
 
 /** Apply a single semantic transaction to an asset. */
 export async function applyAssetTransaction(assetId: string, tx: AssetTransaction) {

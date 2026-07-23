@@ -312,6 +312,9 @@ CREATE TABLE IF NOT EXISTS renart_asset_runs (
     fingerprint  TEXT NOT NULL,
     status       TEXT NOT NULL,
     run_id       TEXT NOT NULL DEFAULT '',
+    quality_status TEXT NOT NULL DEFAULT ''
+        CHECK (quality_status IN ('', 'passed', 'failed')),
+    failed_checks TEXT NOT NULL DEFAULT '[]',
     ran_at       TEXT NOT NULL,
     PRIMARY KEY (asset_id, environment)
 );

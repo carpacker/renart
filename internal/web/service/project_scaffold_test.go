@@ -110,13 +110,15 @@ func TestScaffoldProjectChessDemoAvoidsCatalogSchemaCollision(t *testing.T) {
 	require.NoError(t, err)
 	assert.Contains(t, string(configContents), "duckdb-files/chess_playground.duckdb")
 	assert.NotContains(t, string(configContents), "duckdb-files/chess.duckdb")
+	template, ok := projectTemplateByID(ProjectTemplateChessDemo)
+	require.True(t, ok)
 	assert.ElementsMatch(t, []string{
 		"chess.players",
 		"chess.games",
 		"chess.game_results",
 		"chess.player_performance",
 		"chess.opening_repertoire",
-	}, projectTemplates()[0].info.AssetNames)
+	}, template.info.AssetNames)
 	assert.Contains(t, result.Files, "chess/assets/chess/game_results.sql")
 	assert.Contains(t, result.Files, "chess/assets/chess/player_performance.sql")
 	assert.Contains(t, result.Files, "chess/assets/chess/opening_repertoire.sql")
@@ -210,13 +212,24 @@ func TestProjectTemplatesListsAllTemplates(t *testing.T) {
 			assert.NotEmpty(t, tpl.AssetNames)
 		}
 	}
-	assert.Equal(t, []string{ProjectTemplateChessDemo, ProjectTemplateRetailDemo, ProjectTemplateEmpty, ProjectTemplateBare}, ids)
+	assert.Equal(t, []string{
+		ProjectTemplateProductDemo,
+		ProjectTemplateOperationsDemo,
+		ProjectTemplatePythonDemo,
+		ProjectTemplateChessDemo,
+		ProjectTemplateRetailDemo,
+		ProjectTemplateEmpty,
+		ProjectTemplateBare,
+	}, ids)
 
 	offline := map[string]bool{}
 	for _, tpl := range templates {
 		offline[tpl.ID] = tpl.Offline
 	}
 	assert.False(t, offline[ProjectTemplateChessDemo])
+	assert.True(t, offline[ProjectTemplateProductDemo])
+	assert.True(t, offline[ProjectTemplateOperationsDemo])
+	assert.False(t, offline[ProjectTemplatePythonDemo])
 	assert.True(t, offline[ProjectTemplateRetailDemo])
 	assert.True(t, offline[ProjectTemplateEmpty])
 }

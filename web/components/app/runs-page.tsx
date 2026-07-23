@@ -3,6 +3,7 @@ import { useAtomValue } from "jotai";
 import {
   ArrowLeft,
   AlertTriangle,
+  CircleStop,
   ChevronLeft,
   ChevronRight,
   ListTree,
@@ -17,6 +18,16 @@ import { useEffect, useMemo, useRef, useState } from "react";
 
 import { AnsiOutput } from "@/components/ansi-output";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -31,7 +42,7 @@ import {
 } from "@/components/ui/table";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { formatSchedulerDate, usePipelineScheduler } from "@/hooks/use-pipeline-scheduler";
+import { formatSchedulerDate, usePipelineRuns } from "@/hooks/use-pipeline-runs";
 import { workspaceAtom } from "@/lib/atoms/domains/workspace";
 import { activePipelineRunConflict, type PipelineRunSource } from "@/lib/api-scheduler";
 import type {
@@ -93,7 +104,7 @@ export function AppRunsPage({
     }),
     [q, requestedPage, status],
   );
-  const { runs, loading, runsTotal, runsOffset, runsError, refreshRuns } = usePipelineScheduler({
+  const { runs, loading, runsTotal, runsOffset, runsError, refreshRuns } = usePipelineRuns({
     runsQuery,
   });
   const pages = Math.max(1, Math.ceil(runsTotal / pageSize));
@@ -263,11 +274,13 @@ export function AppRunDetailPage({
     reexecution,
     loadingRunId,
     busyPipeline,
+    cancellingRunId,
     runDetailError,
     selectRun,
     triggerPipeline,
     reexecuteRun,
-  } = usePipelineScheduler({
+    cancelRun,
+  } = usePipelineRuns({
     selectedRunId: runId,
   });
   const run = selectedRun;
@@ -277,6 +290,8 @@ export function AppRunDetailPage({
     title?: string;
     linkLabel?: string;
   } | null>(null);
+  const [cancelDialogOpen, setCancelDialogOpen] = useState(false);
+  const [cancelError, setCancelError] = useState<string | null>(null);
   const output = useMemo(() => combineRunOutput(logs, run?.error), [logs, run?.error]);
   const assetIdsByName = useMemo(() => {
     const pipeline = workspace?.pipelines.find((candidate) => candidate.id === run?.pipeline_id);
@@ -350,6 +365,18 @@ export function AppRunDetailPage({
       });
     }
   };
+  const abortRun = async () => {
+    if (!run) return;
+    setCancelError(null);
+    try {
+      const response = await cancelRun(run);
+      if (response.status !== "ok") {
+        throw new Error("The run could not be stopped.");
+      }
+    } catch (cause) {
+      setCancelError(cause instanceof Error ? cause.message : "The run could not be stopped.");
+    }
+  };
 
   if (!run) {
     if (runDetailError) {
@@ -414,6 +441,10 @@ export function AppRunDetailPage({
   const runEnvironmentLabel = executionContextResolved
     ? run.environment || "default"
     : "execution context unavailable";
+  const cancellationRequested = Boolean(run.cancellation_requested_at);
+  const showAbortAction =
+    (run.status === "queued" || run.status === "running") &&
+    (Boolean(run.cancellable) || cancellationRequested);
 
   return (
     <AppPage>
@@ -428,6 +459,22 @@ export function AppRunDetailPage({
               </Link>
             </Button>
             <StatusPill status={run.status} />
+            {showAbortAction ? (
+              <Button
+                variant="destructive"
+                size="sm"
+                onClick={() => setCancelDialogOpen(true)}
+                disabled={cancellingRunId === run.id || cancellationRequested}
+                aria-busy={cancellingRunId === run.id}
+              >
+                {cancellingRunId === run.id || cancellationRequested ? (
+                  <Loader2 data-icon="inline-start" className="animate-spin" />
+                ) : (
+                  <CircleStop data-icon="inline-start" />
+                )}
+                {cancellationRequested ? "Stopping" : "Abort run"}
+              </Button>
+            ) : null}
             <Tooltip>
               <TooltipTrigger asChild>
                 <Button
@@ -496,6 +543,15 @@ export function AppRunDetailPage({
                 </Button>
               ) : null}
             </AlertDescription>
+          </Alert>
+        </div>
+      ) : null}
+      {cancelError ? (
+        <div className="px-3 pb-2">
+          <Alert variant="destructive">
+            <AlertTriangle />
+            <AlertTitle>Could not stop run</AlertTitle>
+            <AlertDescription>{cancelError}</AlertDescription>
           </Alert>
         </div>
       ) : null}
@@ -573,6 +629,30 @@ export function AppRunDetailPage({
           </Tabs>
         </AppPanel>
       </div>
+      <AlertDialog open={cancelDialogOpen} onOpenChange={setCancelDialogOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Abort this run?</AlertDialogTitle>
+            <AlertDialogDescription>
+              {run.status === "queued"
+                ? "The queued execution will be cancelled before any work starts."
+                : "Renart will stop the active executor and preserve the completed events and output recorded so far."}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={cancellingRunId === run.id}>
+              Keep running
+            </AlertDialogCancel>
+            <AlertDialogAction
+              variant="destructive"
+              disabled={cancellingRunId === run.id}
+              onClick={() => void abortRun()}
+            >
+              Abort run
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </AppPage>
   );
 }

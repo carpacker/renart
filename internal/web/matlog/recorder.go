@@ -183,12 +183,14 @@ func (r *Recorder) HandleRunCompleted(event bus.RunCompleted) error {
 			continue
 		}
 		if err := r.store.RecordRun(ctx, AssetRunRecord{
-			AssetID:     assetRun.AssetID,
-			Environment: event.Environment,
-			Fingerprint: string(result.FP),
-			Status:      assetRun.Status,
-			RunID:       event.RunID,
-			RanAt:       assetRunCompletionTime(assetRun, event.CompletedAt),
+			AssetID:       assetRun.AssetID,
+			Environment:   event.Environment,
+			Fingerprint:   string(result.FP),
+			Status:        assetRun.Status,
+			RunID:         event.RunID,
+			RanAt:         assetRunCompletionTime(assetRun, event.CompletedAt),
+			QualityStatus: assetRun.QualityStatus,
+			FailedChecks:  append([]bus.QualityCheckFailure(nil), assetRun.FailedChecks...),
 		}); err != nil {
 			r.warn("failed to record run attempt", assetRun.AssetID, err)
 			recordErrs = append(recordErrs, fmt.Errorf("record run attempt for %s: %w", assetRun.AssetID, err))

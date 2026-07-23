@@ -338,8 +338,20 @@ test.describe("app scheduler pages live", () => {
       { timeout: 15000 },
     );
     await scheduleRow.getByRole("button", { name: "Review deployment" }).click();
-    await expect(page.getByRole("heading", { name: "Review deployment" })).toBeVisible();
-    await page.getByRole("button", { name: /^Deploy \d+ assets?$/ }).click();
+    const planSheet = page.getByTestId("pipeline-plan-sheet");
+    await expect(planSheet.getByRole("heading", { name: "Review deployment" })).toBeVisible();
+    await expect(planSheet.getByRole("tablist")).toHaveCount(0);
+    await expect(planSheet.getByRole("heading", { name: "Source changes" })).toBeVisible();
+    await expect(planSheet.getByRole("button", { name: /Deployment contents/ })).toBeVisible();
+    await expect(planSheet.getByRole("button", { name: /Plan identities/ })).toBeVisible();
+    await expect(planSheet.getByRole("button", { name: /Representative execution/ })).toBeVisible();
+    await expect(planSheet.getByRole("button", { name: /Schedules/ })).toBeVisible();
+    const reviewViewport = planSheet
+      .getByTestId("pipeline-plan-scroll")
+      .locator(':scope > [data-slot="scroll-area-viewport"]');
+    await expect(reviewViewport.getByRole("heading", { name: "Review deployment" })).toBeVisible();
+    await expect(reviewViewport.getByRole("heading", { name: "Source changes" })).toBeVisible();
+    await planSheet.getByRole("button", { name: /^Deploy \d+ assets?$/ }).click();
     await expect(page.getByText(/still pinned to an older deployment/)).toBeVisible({
       timeout: 15000,
     });

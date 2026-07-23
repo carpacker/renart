@@ -1,27 +1,19 @@
 import { Link, Outlet, useLocation, useParams } from "@tanstack/react-router";
 import {
-  Bell,
   BookOpen,
-  Bot,
   Boxes,
   Check,
   ChevronDown,
   ChevronRight,
-  CreditCard,
   FileCode,
   GitBranch,
   GitCommit,
   Loader2,
   Lock,
-  LogOut,
   RefreshCw,
-  Send,
-  Sparkles,
-  User,
-  Users,
   Clock,
 } from "lucide-react";
-import { ReactNode, useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useAtomValue, useSetAtom } from "jotai";
 
 import { Button } from "@/components/ui/button";
@@ -39,7 +31,6 @@ import {
   Sheet,
   SheetContent,
   SheetDescription,
-  SheetFooter,
   SheetHeader,
   SheetTitle,
   SheetTrigger,
@@ -55,7 +46,6 @@ import {
   workspaceAtom,
 } from "@/lib/atoms/domains/workspace";
 import { findExecutionTimeOption, getExecutionTimeOptions } from "@/lib/execution-time";
-import { appFeatureFlags } from "@/lib/app-feature-flags";
 import type { SourceControlChange, WebNotebook } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
@@ -122,72 +112,6 @@ export function AppShell() {
           <GitSheet sourceControl={sourceControl} />
         </Sheet>
         <AppCommandPalette />
-        {appFeatureFlags.notifications ? (
-          <Button
-            variant="ghost"
-            size="icon"
-            className="size-8 text-zinc-400 hover:bg-zinc-800 hover:text-white"
-          >
-            <Bell className="size-4" />
-          </Button>
-        ) : null}
-        {appFeatureFlags.aiChat ? (
-          <Sheet>
-            <SheetTrigger asChild>
-              <Button
-                variant="ghost"
-                size="icon"
-                className="size-8 text-zinc-400 hover:bg-zinc-800 hover:text-white"
-              >
-                <Sparkles className="size-4" />
-              </Button>
-            </SheetTrigger>
-            <AiSheet />
-          </Sheet>
-        ) : null}
-        {appFeatureFlags.profileMenu ? (
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <Button
-                variant="ghost"
-                size="icon"
-                className="size-8 rounded-full bg-teal-600 text-white hover:bg-teal-700"
-              >
-                <User className="size-4" />
-              </Button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="end" className="w-60">
-              <div className="px-2 py-2">
-                <div className="text-sm font-medium">Jane Doe</div>
-                <div className="text-xs text-muted-foreground">jane@acme.io · Owner</div>
-              </div>
-              <DropdownMenuSeparator />
-              <DropdownMenuItem asChild>
-                <Link to="/account/profile">
-                  <User className="size-4" />
-                  Account settings
-                </Link>
-              </DropdownMenuItem>
-              <DropdownMenuItem asChild>
-                <Link to="/account/members">
-                  <Users className="size-4" />
-                  Members & permissions
-                </Link>
-              </DropdownMenuItem>
-              <DropdownMenuItem asChild>
-                <Link to="/account/billing">
-                  <CreditCard className="size-4" />
-                  Billing
-                </Link>
-              </DropdownMenuItem>
-              <DropdownMenuSeparator />
-              <DropdownMenuItem>
-                <LogOut className="size-4" />
-                Sign out
-              </DropdownMenuItem>
-            </DropdownMenuContent>
-          </DropdownMenu>
-        ) : null}
       </header>
 
       <main className="min-h-0 flex-1 overflow-hidden">
@@ -345,46 +269,6 @@ function AppExecutionSelector() {
         ) : null}
       </DropdownMenuContent>
     </DropdownMenu>
-  );
-}
-
-function AiSheet() {
-  return (
-    <SheetContent className="w-full sm:max-w-md">
-      <SheetHeader>
-        <SheetTitle className="flex items-center gap-2">
-          <Sparkles className="size-4 text-primary" />
-          AI builder
-        </SheetTitle>
-        <SheetDescription>
-          Preview AI-assisted pipeline changes before applying them.
-        </SheetDescription>
-      </SheetHeader>
-      <div className="flex-1 space-y-3 overflow-auto px-4">
-        <ChatBubble who="user">Add a Stripe source and a daily revenue rollup.</ChatBubble>
-        <ChatBubble who="ai">
-          I'll create <span className="font-mono">stripe_orders</span>,{" "}
-          <span className="font-mono">revenue_daily</span>, and wire the lineage edge.
-        </ChatBubble>
-        <div className="flex gap-2 rounded-lg border bg-muted/40 p-3 text-xs">
-          <Button size="xs">Apply</Button>
-          <Button variant="outline" size="xs">
-            Preview diff
-          </Button>
-        </div>
-      </div>
-      <SheetFooter>
-        <div className="flex items-end gap-2 rounded-xl border bg-background p-2">
-          <textarea
-            className="min-h-8 flex-1 resize-none bg-transparent px-1 text-sm outline-none"
-            placeholder="Describe a change..."
-          />
-          <Button size="icon-sm">
-            <Send className="size-3.5" />
-          </Button>
-        </div>
-      </SheetFooter>
-    </SheetContent>
   );
 }
 
@@ -873,22 +757,4 @@ function sourceControlStatusLabel(change: SourceControlChange) {
   const staged = change.staged_status.trim();
   const worktree = change.worktree_status.trim();
   return staged || worktree || "M";
-}
-
-function ChatBubble({ who, children }: { who: "user" | "ai"; children: ReactNode }) {
-  const ai = who === "ai";
-  return (
-    <div className={`flex gap-2 ${ai ? "" : "flex-row-reverse"}`}>
-      <div
-        className={`flex size-7 shrink-0 items-center justify-center rounded-full ${ai ? "bg-primary text-primary-foreground" : "bg-muted text-muted-foreground"}`}
-      >
-        {ai ? <Bot className="size-3.5" /> : "J"}
-      </div>
-      <div
-        className={`max-w-72 rounded-xl px-3 py-2 text-xs ${ai ? "bg-muted" : "bg-primary text-primary-foreground"}`}
-      >
-        {children}
-      </div>
-    </div>
-  );
 }

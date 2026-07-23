@@ -763,7 +763,7 @@ function buildLocalTableSortText(
   }
 
   const clauseBucket = options.inTableCtx ? "0" : "4";
-  const sourceBucket = table.isBruinAsset ? "0" : "1";
+  const sourceBucket = table.isWorkspaceAsset ? "0" : "1";
 
   return `${clauseBucket}${rank}${sourceBucket}${table.name.toLowerCase()}`;
 }
@@ -783,7 +783,7 @@ function buildLocalTableSuggestionKind(
   table: SchemaTable,
   context?: TableSuggestionContext,
 ) {
-  if (!table.isBruinAsset) {
+  if (!table.isWorkspaceAsset) {
     const currentSchemaName = context?.currentSchemaName?.toLowerCase() ?? null;
     const tableSchemaName = schemaNameFromTableName(table.name);
     if (currentSchemaName && tableSchemaName === currentSchemaName) {
@@ -1533,10 +1533,10 @@ export function provideLocalSQLCompletionItems(
   for (const table of tables) {
     const hasRemoteMatch = hasMatchingRemoteTable(table, tableSuggestionContext);
     const kindTag = hasRemoteMatch
-      ? table.isBruinAsset
+      ? table.isWorkspaceAsset
         ? "Table + Asset"
         : "Table"
-      : table.isBruinAsset
+      : table.isWorkspaceAsset
         ? "Asset"
         : "Table";
     suggestions.push({
@@ -1810,10 +1810,10 @@ export function registerSQLProviders(
         for (const table of tables) {
           const hasRemoteMatch = hasMatchingRemoteTable(table, tableSuggestionContext);
           const kindTag = hasRemoteMatch
-            ? table.isBruinAsset
+            ? table.isWorkspaceAsset
               ? "Table + Asset"
               : "Table"
-            : table.isBruinAsset
+            : table.isWorkspaceAsset
               ? "Asset"
               : "Table";
           const suggestionLabel = buildLocalTableSuggestionLabel(table);
@@ -2143,7 +2143,7 @@ export function registerSQLProviders(
         }
 
         const parts: string[] = [`**${resolvedTable.name}**`];
-        if (resolvedTable.isBruinAsset) {
+        if (resolvedTable.isWorkspaceAsset) {
           parts.push("_Asset_ — Ctrl+Click to navigate");
         }
         if (resolvedTable.assetPath) {

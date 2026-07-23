@@ -1,4 +1,4 @@
-import { resolveConnection, SchemaColumn, SchemaTable } from "@/lib/sql-schema";
+import { effectiveConnectionForAsset, SchemaColumn, SchemaTable } from "@/lib/sql-schema";
 import { IngestrSuggestion, WebAsset, WorkspaceState } from "@/lib/types";
 
 import {
@@ -113,7 +113,7 @@ export function getSchemaSuggestionTablesForAsset(
     return [];
   }
 
-  const currentConnection = resolveConnection(asset, workspace.connections ?? {});
+  const currentConnection = effectiveConnectionForAsset(asset);
   if (!currentConnection) {
     return [];
   }
@@ -141,7 +141,7 @@ export function toSchemaTables(
         primaryKey: column.primaryKey,
         sourceMethods: column.sourceMethods,
       })),
-    isBruinAsset: table.isBruinAsset,
+    isWorkspaceAsset: table.isWorkspaceAsset,
     isMaterialized: table.isMaterialized,
     assetId: table.assetId,
     pipelineId: table.pipelineId,
@@ -153,12 +153,12 @@ export function toSchemaTables(
   }));
 
   for (const table of schemaTables) {
-    if (!table.isBruinAsset) {
+    if (!table.isWorkspaceAsset) {
       continue;
     }
 
     for (const externalTable of schemaTables) {
-      if (externalTable.isBruinAsset || externalTable.connectionName !== table.connectionName) {
+      if (externalTable.isWorkspaceAsset || externalTable.connectionName !== table.connectionName) {
         continue;
       }
 
@@ -219,7 +219,7 @@ export function getIngestrTableSuggestionsFromCatalog(
 
   return catalog.tables
     .filter((table) => {
-      if (table.isBruinAsset || table.connectionName !== options.connectionName) {
+      if (table.isWorkspaceAsset || table.connectionName !== options.connectionName) {
         return false;
       }
 

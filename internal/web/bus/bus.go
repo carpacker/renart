@@ -10,12 +10,39 @@ import (
 	"time"
 )
 
+type QualityStatus string
+
+const (
+	QualityStatusPassed QualityStatus = "passed"
+	QualityStatusFailed QualityStatus = "failed"
+
+	QualityCheckKindCustom QualityCheckKind = "custom"
+	QualityCheckKindColumn QualityCheckKind = "column"
+)
+
+type QualityCheckKind string
+
+// QualityCheckFailure identifies a failed assertion without persisting its
+// rendered SQL or runtime error. The run log remains the source for potentially
+// sensitive execution details.
+type QualityCheckFailure struct {
+	Kind     QualityCheckKind `json:"kind"`
+	Name     string           `json:"name"`
+	Column   string           `json:"column,omitempty"`
+	Blocking bool             `json:"blocking,omitempty"`
+}
+
 // AssetRun describes one asset that a completed run materialized.
 type AssetRun struct {
 	// AssetID is the durable identifier (pipeline UUID + ":" + asset name).
 	AssetID   string
 	AssetName string
 	Status    string // "succeeded" / "failed" / "cancelled"
+	// QualityStatus describes the checks that ran after the main task. It is
+	// intentionally separate from Status: a successful materialization can be
+	// fresh while its assertions fail.
+	QualityStatus QualityStatus
+	FailedChecks  []QualityCheckFailure
 	// StartedAt/FinishedAt describe the main task that can write the physical
 	// output. They deliberately exclude checks and metadata tasks. A recorder
 	// may fall back to RunCompleted.CompletedAt for legacy/synthetic events.

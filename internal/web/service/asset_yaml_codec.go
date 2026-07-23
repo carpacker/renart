@@ -33,6 +33,7 @@ var baseManagedYAMLAssetKeys = []string{
 	"tags",
 	"depends",
 	"columns",
+	"custom_checks",
 	"materialization",
 	"meta",
 }

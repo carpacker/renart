@@ -7,6 +7,7 @@ import { useAssetContentEditing } from "@/hooks/use-asset-content-editing";
 import { useAssetMonaco } from "@/hooks/use-asset-monaco";
 import { useWorkspaceTheme } from "@/hooks/use-workspace-theme";
 import { addAssetPythonDependency, AssetPythonDeps, getAssetPythonDeps } from "@/lib/api-assets";
+import { usesPythonSource } from "@/lib/asset-types";
 import { missingPythonImports } from "@/lib/notebook-python-deps";
 import { WebAsset } from "@/lib/types";
 
@@ -42,7 +43,7 @@ export function AppAssetEditor({
       onSave: handleSaveSelectedAsset,
     });
 
-  const isPythonAsset = asset.path?.toLowerCase().endsWith(".py") ?? false;
+  const isPythonAsset = usesPythonSource(asset);
   const { missingImports, addDependency } = useAssetPythonDeps(
     asset.id,
     isPythonAsset,

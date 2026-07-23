@@ -1,4 +1,8 @@
-import { parseQualifiedTableName, resolveConnection, SchemaColumn } from "@/lib/sql-schema";
+import {
+  effectiveConnectionForAsset,
+  parseQualifiedTableName,
+  SchemaColumn,
+} from "@/lib/sql-schema";
 import { WebAsset, WebColumn, WorkspaceState } from "@/lib/types";
 
 import { MaterializationByAssetId } from "./materialization";
@@ -389,7 +393,7 @@ function upsertTable(
     pipelineId: current.pipelineId ?? input.pipelineId,
     assetId: current.assetId ?? input.assetId,
     assetPath: current.assetPath ?? input.assetPath,
-    isBruinAsset: current.isBruinAsset || input.isBruinAsset,
+    isWorkspaceAsset: current.isWorkspaceAsset || input.isWorkspaceAsset,
     remoteSuggestionKind: current.remoteSuggestionKind ?? input.remoteSuggestionKind,
     remoteSuggestionDetail: current.remoteSuggestionDetail ?? input.remoteSuggestionDetail,
     sourceMethods: addSourceMethod(current.sourceMethods, source.method),
@@ -493,7 +497,7 @@ function buildCatalogFromWorkspace(
   for (const pipeline of workspace.pipelines ?? []) {
     for (const asset of pipeline.assets ?? []) {
       const materialization = materializationByAssetId[asset.id];
-      const connectionName = resolveConnection(asset, workspace.connections ?? {});
+      const connectionName = effectiveConnectionForAsset(asset);
       const connectionType = connectionName
         ? (workspace.connections?.[connectionName] ?? null)
         : null;
@@ -553,7 +557,7 @@ function buildCatalogFromWorkspace(
           pipelineId: pipeline.id,
           assetId: asset.id,
           assetPath: asset.path,
-          isBruinAsset: true,
+          isWorkspaceAsset: true,
           isMaterialized: materialization?.is_materialized ?? asset.is_materialized,
         },
         tableSource,
@@ -642,7 +646,7 @@ function mergeDynamicSuggestions(
       ? assetTableKey(assetId, workspaceAsset.pipelineId)
       : assetTableKey(assetId);
     const connectionName = workspaceAsset
-      ? resolveConnection(workspaceAsset.asset, workspace?.connections ?? {})
+      ? effectiveConnectionForAsset(workspaceAsset.asset)
       : null;
     const connectionType = connectionName
       ? (workspace?.connections?.[connectionName] ?? null)
@@ -666,7 +670,7 @@ function mergeDynamicSuggestions(
         pipelineId: workspaceAsset?.pipelineId,
         assetId,
         assetPath: workspaceAsset?.asset.path,
-        isBruinAsset: true,
+        isWorkspaceAsset: true,
       },
       {
         method: observations[0]?.method ?? "asset-column-inference",
@@ -768,7 +772,7 @@ function mergeDynamicSuggestions(
             connectionKey: key,
             connectionName: observation.connectionName,
             connectionType: observation.connectionType ?? null,
-            isBruinAsset: false,
+            isWorkspaceAsset: false,
             remoteSuggestionKind: remoteTable.kind,
             remoteSuggestionDetail: remoteTable.detail,
           },
@@ -833,7 +837,7 @@ function mergeDynamicSuggestions(
           connectionKey: key,
           connectionName: observation.connectionName,
           connectionType: observation.connectionType ?? null,
-          isBruinAsset: false,
+          isWorkspaceAsset: false,
         },
         source,
       );

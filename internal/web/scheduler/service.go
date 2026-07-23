@@ -56,6 +56,7 @@ type Service struct {
 	recoverRun                func(context.Context, PipelineRun, []PipelineRunStep) error
 	lock                      *flock.Flock
 	riverClient               *river.Client[*sql.Tx]
+	activeRunCancels          map[string]context.CancelFunc
 	mu                        sync.Mutex
 	schedulerOn               bool
 	ownershipState            SchedulerOwnershipState
@@ -364,6 +365,7 @@ func New(options Options) *Service {
 		validateReexecution:       options.ValidateReexecution,
 		snapshotOrdinal:           options.SnapshotOrdinal,
 		recoverRun:                options.RecoverRun,
+		activeRunCancels:          make(map[string]context.CancelFunc),
 		ownershipState:            SchedulerOwnershipUnavailable,
 		ownerMessage:              "scheduler has not started",
 	}
@@ -1696,6 +1698,9 @@ func (s *Service) GetRun(ctx context.Context, id string) (PipelineRun, []LogLine
 		return PipelineRun{}, nil, nil, err
 	}
 	s.hydrateSnapshotOrdinal(ctx, &run.SnapshotOrdinal, run.SnapshotVersionID)
+	if err := s.hydrateRunCancellation(ctx, &run); err != nil {
+		return PipelineRun{}, nil, nil, err
+	}
 	return run, trimLegacyOutputReplay(logs), steps, nil
 }
 
@@ -1993,6 +1998,17 @@ func (s *Service) admitScheduledSignal(
 }
 
 func (s *Service) execute(ctx context.Context, run PipelineRun, spec runSpecV1) error {
+	executionCtx, cancelExecution := context.WithCancel(ctx)
+	s.mu.Lock()
+	s.activeRunCancels[run.ID] = cancelExecution
+	s.mu.Unlock()
+	defer func() {
+		cancelExecution()
+		s.mu.Lock()
+		delete(s.activeRunCancels, run.ID)
+		s.mu.Unlock()
+	}()
+	ctx = executionCtx
 	defer func() {
 		if recovered := recover(); recovered != nil {
 			err := fmt.Errorf("pipeline run panicked: %v", recovered)

@@ -7,26 +7,21 @@ import {
   Separator as PanelResizeHandle,
 } from "react-resizable-panels";
 import {
-  Activity,
   AlertTriangle,
   Bell,
   BookOpen,
-  CheckCircle2,
   ChevronDown,
   ChevronRight,
   ChevronUp,
-  Circle,
   Columns2,
   Database,
   Eye,
   FileCode,
   FilePlus2,
   FolderPlus,
-  GitCompare,
   Hammer,
   Layers,
   Loader2,
-  MoreHorizontal,
   Package,
   PanelLeft,
   PanelLeftClose,
@@ -42,7 +37,6 @@ import {
   Table2,
   Terminal,
   X,
-  XCircle,
 } from "lucide-react";
 import {
   ComponentType,
@@ -56,7 +50,6 @@ import {
   useState,
 } from "react";
 
-import { Badge } from "@/components/ui/badge";
 import { ButtonGroup } from "@/components/ui/button-group";
 import {
   Breadcrumb,
@@ -106,11 +99,20 @@ import { InspectWarningCard } from "@/components/inspect-warning-card";
 import { InspectInfoCard } from "@/components/inspect-info-card";
 import { WorkspaceMaterializeOutputView } from "@/components/workspace-materialize-output-view";
 import { Spinner } from "@/components/ui/spinner";
-import { runSQLQuery } from "@/lib/api";
+import { runSQLQuery } from "@/lib/api-sql-discovery";
 import type { PipelineRunSource } from "@/lib/api-scheduler";
 import { typeCheckPipeline, type PipelineTypeCheckReport } from "@/lib/api-pipelines";
 import { renderPipelineAsset, type AssetRenderResult } from "@/lib/api-asset-render";
-import { isSeedAssetType, isSensorAssetType, isSqlAssetType } from "@/lib/asset-types";
+import { assetPresentationFields } from "@/lib/asset-presentation";
+import {
+  isAPIAssetType,
+  isIngestrAssetType,
+  isLoadAssetType,
+  isPythonAssetType,
+  isSeedAssetType,
+  isSensorAssetType,
+  isSqlAssetType,
+} from "@/lib/asset-types";
 import { editorDraftAtom, sqlHoveredAssetAtom } from "@/lib/atoms/domains/editor";
 import type { MaterializeHistoryEntry } from "@/lib/atoms/results";
 import {
@@ -120,7 +122,7 @@ import {
   workspaceAtom,
 } from "@/lib/atoms/domains/workspace";
 import { renderJinjaAsset } from "@/lib/jinja-intellisense";
-import { resolveConnection } from "@/lib/sql-schema";
+import { effectiveConnectionForAsset } from "@/lib/sql-schema";
 import { awaitWorkspaceSaves } from "@/lib/workspace-save-barrier";
 import type { AssetInspectResponse, SqlQueryResponse, WebAsset, WebPipeline } from "@/lib/types";
 import { cn } from "@/lib/utils";
@@ -137,25 +139,12 @@ import {
   useAppAssetMaterializationStatus,
 } from "@/hooks/use-app-asset-materialization-status";
 
-import {
-  assets,
-  diagnostics,
-  editorLinesFor,
-  kindForAssetType,
-  kindMeta,
-  missingPythonDependencies,
-  objectGroups,
-  packageForImport,
-  parsePythonImport,
-  pipelineDependencies,
-  schemaRows,
-  tests,
-} from "./app-data";
+import { kindMeta } from "./app-data";
 import { AdhocToNotebookDialog } from "./adhoc-convert-dialog";
 import { AppAdhocEditor, useAdhocQueryDraft } from "./adhoc-editor";
 import { AppAssetEditor } from "./asset-editor";
 import { ApiParametersEditor } from "./api-parameters-editor";
-import { AssetGuidedCards } from "./asset-guided-cards";
+import { AssetGuidedCards, type QualityCheckFocus } from "./asset-guided-cards";
 import { NewAssetDialog, NewFolderDialog, NewPipelineDialog } from "./build-create-dialogs";
 import { ErrorBoundary } from "@/components/ui/error-boundary";
 import { SqlPreview } from "./sql-preview";
@@ -177,9 +166,7 @@ import {
   AppPage,
   AppPanel,
   lastRunLabel,
-  SeverityIcon,
-  SimpleTable,
-  StatusPill,
+  PageHeader,
   stalenessDotClassName,
   stalenessLabel,
 } from "./app-primitives";
@@ -187,15 +174,7 @@ import {
 const WORKING_TREE_RUN_SOURCE: PipelineRunSource = { source: "working_tree" };
 
 export type AppBuildView = "canvas" | "split" | "code";
-export type AppResultTab =
-  | "inspect"
-  | "render"
-  | "materialize"
-  | "query"
-  | "typecheck"
-  | "tests"
-  | "diagnostics"
-  | "metadata";
+export type AppResultTab = "inspect" | "render" | "materialize" | "query" | "typecheck";
 export type AppEditorMode = "asset" | "adhoc";
 
 export type AppBuildSearch = {
@@ -203,16 +182,7 @@ export type AppBuildSearch = {
   editor?: AppEditorMode;
 };
 
-const resultTabs: AppResultTab[] = [
-  "inspect",
-  "render",
-  "materialize",
-  "query",
-  "typecheck",
-  "tests",
-  "diagnostics",
-  "metadata",
-];
+const resultTabs: AppResultTab[] = ["inspect", "render", "materialize", "query", "typecheck"];
 const editorModes: AppEditorMode[] = ["asset", "adhoc"];
 
 export function normalizeAppBuildSearch(search: Record<string, unknown>): AppBuildSearch {
@@ -279,8 +249,6 @@ type BuildContextValue = {
   view: AppBuildView;
   buildSearch: AppBuildSearch;
   editorMode: AppEditorMode;
-  declaredDependencies: string[];
-  addDependency: (dependency: string) => void;
   selectAsset: (assetId: string) => void;
   goToAsset: (pipelineId: string, assetId: string) => void;
   runAssetById: (assetId: string) => void;
@@ -291,6 +259,7 @@ type BuildContextValue = {
   openNewAssetInGroup: (prefix?: string) => void;
   createDownstreamAsset: (source: { id: string; name: string }) => void;
   openInspector: () => void;
+  reviewFailedCheck: (assetId: string) => void;
   openBottom: (tab: AppResultTab) => void;
   materializeSelectedAsset: () => void;
   fullRefreshSelectedAsset: () => void;
@@ -320,77 +289,21 @@ function useBuildContext() {
   return context;
 }
 
-function fallbackBuildAssets(): BuildAsset[] {
-  return assets;
-}
-
 function assetsForPipeline(pipeline: WebPipeline): BuildAsset[] {
   return pipeline.assets.map((asset) => ({
-    ...assetDisplayFields(asset, pipeline),
+    ...assetPresentationFields(asset, pipeline),
     workspaceAsset: asset,
     pipelineId: pipeline.id,
     path: asset.path,
     type: asset.type,
     connection: asset.connection,
     upstreams: asset.upstreams,
-    x: 0,
-    y: 0,
-  }));
-}
-
-function assetDisplayFields(
-  asset: WebAsset,
-  pipeline: WebPipeline,
-): Omit<BuildAsset, "workspaceAsset" | "path" | "type" | "connection" | "upstreams" | "x" | "y"> {
-  const canonicalName = asset.name || assetFileName(asset.path);
-  const { prefix, title } = assetNameParts(canonicalName);
-  return {
-    id: asset.id,
-    name: canonicalName,
-    displayName: title,
-    prefix: prefix ?? assetDirectory(asset.path, pipeline.path),
-    kind: kindForAssetType(asset.type),
-    group: prefix ?? "ASSETS",
-    integration: integrationForAsset(asset),
-    // No path fallback: the node header already carries the name and the
-    // inspector shows the file; repeating the path on every node is noise.
-    description: asset.meta?.description ?? "",
-    dir: assetDirectory(asset.path, pipeline.path),
-    imports: importsFromContent(asset.content),
     status: asset.is_materialized ? "success" : "pending",
     materializedAt: asset.is_materialized ? "current" : "not materialized",
     parseError: asset.parse_error,
-  };
-}
-
-function integrationForAsset(asset: WebAsset) {
-  if (asset.connection) {
-    return asset.connection;
-  }
-  const provider = asset.type.split(".")[0]?.toLowerCase();
-  if (provider === "duckdb") return "DuckDB";
-  if (provider === "python") return "Python";
-  if (provider === "load") return "Load";
-  if (provider === "ingestr") return "ingestr";
-  return provider || "Asset";
-}
-
-function assetDirectory(assetPath: string, pipelinePath: string) {
-  const pipelineRoot = pipelinePath.replace(/\/?pipeline\.ya?ml$/i, "");
-  let relative = assetPath;
-  if (pipelineRoot && relative.startsWith(`${pipelineRoot}/`)) {
-    relative = relative.slice(pipelineRoot.length + 1);
-  }
-  if (relative.startsWith("assets/")) {
-    relative = relative.slice("assets/".length);
-  }
-  const dir = relative.split("/").slice(0, -1).join("/");
-  return dir || undefined;
-}
-
-function assetFileName(assetPath: string) {
-  const file = assetPath.split("/").pop() ?? assetPath;
-  return file.replace(/\.[^.]+$/, "");
+    x: 0,
+    y: 0,
+  }));
 }
 
 function normalizeAssetContentIdentity(content: string) {
@@ -413,15 +326,8 @@ function assetSidebarName(asset: BuildAsset) {
   return `${assetDisplayName(asset)}${kindMeta[asset.kind].ext}`;
 }
 
-function importsFromContent(content: string) {
-  return content
-    .split(/\r?\n/)
-    .map(parsePythonImport)
-    .filter((value): value is string => Boolean(value));
-}
-
-// Shown in the editor/canvas area while the workspace is still loading, so the
-// page never flashes the placeholder demo assets on refresh.
+// Shown in the editor/canvas area while the workspace or a redirected pipeline
+// route is still resolving.
 function BuildLoadingState() {
   return (
     <div className="flex min-h-0 flex-1 items-center justify-center px-3 pb-3">
@@ -453,16 +359,12 @@ export function AppBuildPage({
     () => ({ result: resultTab, editor: editorMode }),
     [editorMode, resultTab],
   );
-  // Until the workspace has loaded (e.g. right after a page refresh) there is no
-  // real pipeline to render; the derived assets fall back to placeholder demo
-  // data, so we show a loading state over the content area instead.
-  const isWorkspaceLoading = !workspace;
   const activePipeline = useMemo(
     () => workspace?.pipelines.find((pipeline) => pipeline.id === pipelineId),
     [pipelineId, workspace?.pipelines],
   );
   const pipelineAssets = useMemo(
-    () => (activePipeline ? assetsForPipeline(activePipeline) : fallbackBuildAssets()),
+    () => (activePipeline ? assetsForPipeline(activePipeline) : []),
     [activePipeline],
   );
   const existingAssetNames = useMemo(
@@ -611,15 +513,14 @@ export function AppBuildPage({
   } | null>(null);
   const [destructiveMaterializationConfirmation, setDestructiveMaterializationConfirmation] =
     useState("");
-  const firstAssetId = displayedPipelineAssets[0]?.id ?? "revenue_daily";
+  const firstAssetId = displayedPipelineAssets[0]?.id ?? "";
   const [visualSelectedAssetId, setVisualSelectedAssetId] = useState(
     selectedAssetId ?? firstAssetId,
   );
   const effectiveSelectedAssetId = visualSelectedAssetId ?? selectedAssetId ?? firstAssetId;
   const selectedAsset =
     displayedPipelineAssets.find((asset) => asset.id === effectiveSelectedAssetId) ??
-    displayedPipelineAssets[0] ??
-    fallbackBuildAssets()[0];
+    displayedPipelineAssets[0];
   const selectedWorkspaceAsset = selectedAsset?.workspaceAsset;
   const selectedAssetSavedIntentContent = selectedWorkspaceAsset
     ? (editorDraft[selectedWorkspaceAsset.id] ?? selectedWorkspaceAsset.content)
@@ -666,6 +567,10 @@ export function AppBuildPage({
   // reopened from the top-bar toggles.
   const [explorerCollapsed, setExplorerCollapsed] = useState(false);
   const [inspectorCollapsed, setInspectorCollapsed] = useState(false);
+  const [focusedQualityCheck, setFocusedQualityCheck] = useState<
+    (QualityCheckFocus & { assetId: string }) | null
+  >(null);
+  const qualityFocusToken = useRef(0);
   const sidePanelGridColsClass = explorerCollapsed
     ? inspectorCollapsed
       ? "xl:grid-cols-[minmax(0,1fr)]"
@@ -701,8 +606,6 @@ export function AppBuildPage({
   };
   const [pipelinePlanOpen, setPipelinePlanOpen] = useState(false);
   const [deploymentPlanOpen, setDeploymentPlanOpen] = useState(false);
-  const [addedDependencies, setAddedDependencies] = useState<string[]>([]);
-  const declaredDependencies = [...pipelineDependencies, ...addedDependencies];
   const resultsPanelRef = useRef<PanelImperativeHandle | null>(null);
   const [resultsCollapsed, setResultsCollapsed] = useState(false);
   const toggleResultsPanel = () => {
@@ -801,11 +704,6 @@ export function AppBuildPage({
     // Make sure the results are visible when something routes output here.
     resultsPanelRef.current?.expand();
   };
-  const addDependency = (dependency: string) => {
-    setAddedDependencies((current) =>
-      current.includes(dependency) ? current : [...current, dependency],
-    );
-  };
   const runTypeCheck = useCallback(
     async (openTab = false) => {
       if (!activePipeline) {
@@ -858,7 +756,7 @@ export function AppBuildPage({
     if (!activePipeline || !workspaceAsset || !selectedExecutionTimeWindow) {
       return;
     }
-    requestMaterialize(workspaceAsset.id, selectedAsset.name);
+    requestMaterialize(workspaceAsset.id, workspaceAsset.name);
   };
   const fullRefreshSelectedAsset = () => {
     const workspaceAsset = selectedAsset?.workspaceAsset;
@@ -869,7 +767,7 @@ export function AppBuildPage({
     setDestructiveMaterializationPrompt({
       kind: "full-refresh",
       assetId: workspaceAsset.id,
-      assetName: selectedAsset.name,
+      assetName: workspaceAsset.name,
       start: selectedExecutionTimeWindow?.start ?? "",
       end: selectedExecutionTimeWindow?.end ?? "",
     });
@@ -883,7 +781,7 @@ export function AppBuildPage({
     setDestructiveMaterializationPrompt({
       kind: "backfill",
       assetId: workspaceAsset.id,
-      assetName: selectedAsset.name,
+      assetName: workspaceAsset.name,
       start: selectedExecutionTimeWindow?.start ?? "",
       end: selectedExecutionTimeWindow?.end ?? "",
     });
@@ -1010,9 +908,7 @@ export function AppBuildPage({
       return;
     }
     openBottom("query");
-    const connection = adhocContextAsset
-      ? resolveConnection(adhocContextAsset, workspace?.connections ?? {})
-      : null;
+    const connection = adhocContextAsset ? effectiveConnectionForAsset(adhocContextAsset) : null;
     if (!connection || !adhocContextAsset) {
       setAdhocRenderedQuery(null);
       setAdhocResult({
@@ -1074,6 +970,19 @@ export function AppBuildPage({
     setVisualSelectedAssetId(assetId);
     onAssetSelect?.(assetId);
     setExplorerOpen(false);
+  };
+  const reviewFailedCheck = (assetId: string) => {
+    const target = displayedPipelineAssets.find((asset) => asset.id === assetId);
+    const failure = target?.staleness?.failed_checks?.[0];
+    if (!failure || !target?.staleness?.quality_on_current_content) return;
+    selectAsset(assetId);
+    qualityFocusToken.current += 1;
+    setFocusedQualityCheck({ assetId, ...failure, token: qualityFocusToken.current });
+    if (window.matchMedia("(min-width: 1280px)").matches) {
+      setInspectorCollapsed(false);
+    } else {
+      setInspectorOpen(true);
+    }
   };
   const goToAsset = (targetPipelineId: string, assetId: string) => {
     void navigate({
@@ -1141,9 +1050,7 @@ export function AppBuildPage({
   };
   const createDownstreamAsset = (source: { id: string; name: string }) => {
     const sourceAsset = activePipeline?.assets.find((asset) => asset.id === source.id);
-    const sourceConnection = sourceAsset
-      ? resolveConnection(sourceAsset, workspace?.connections ?? {})
-      : null;
+    const sourceConnection = sourceAsset ? effectiveConnectionForAsset(sourceAsset) : null;
     setDownstreamSource({
       ...source,
       ...(sourceConnection ? { connection: sourceConnection } : {}),
@@ -1158,10 +1065,95 @@ export function AppBuildPage({
     setNewAssetPrefix(null);
     setNewAssetInitialExecutableContent(adhocQuery);
     setNewAssetInitialConnection(
-      adhocContextAsset ? resolveConnection(adhocContextAsset, workspace?.connections ?? {}) : null,
+      adhocContextAsset ? effectiveConnectionForAsset(adhocContextAsset) : null,
     );
     setNewAssetOpen(true);
   };
+
+  if (!workspace) {
+    return (
+      <AppPage>
+        <BuildLoadingState />
+      </AppPage>
+    );
+  }
+
+  if (!activePipeline) {
+    if (workspace.pipelines.length > 0) {
+      return (
+        <AppPage>
+          <BuildLoadingState />
+        </AppPage>
+      );
+    }
+    return (
+      <AppPage>
+        <PageHeader title="Build" subtitle="Create a pipeline to start building assets" />
+        <div className="flex min-h-0 flex-1 items-center justify-center px-3 pb-3">
+          <AppPanel className="flex max-w-md flex-col items-center gap-3 p-6 text-center">
+            <Layers className="size-8 text-muted-foreground" />
+            <div>
+              <h2 className="font-medium">No pipelines yet</h2>
+              <p className="mt-1 text-sm text-muted-foreground">
+                Create a pipeline to add assets and see their lineage.
+              </p>
+            </div>
+            <Button onClick={() => setNewPipelineOpen(true)}>
+              <Plus data-icon="inline-start" />
+              New pipeline
+            </Button>
+          </AppPanel>
+        </div>
+        <NewPipelineDialog
+          open={newPipelineOpen}
+          onOpenChange={setNewPipelineOpen}
+          existingPaths={new Set()}
+          onCreated={(path) => setPendingPipelinePath(path)}
+        />
+      </AppPage>
+    );
+  }
+
+  if (!selectedAsset) {
+    return (
+      <AppPage>
+        <PageHeader
+          title={activePipeline.name}
+          subtitle="This pipeline does not contain any assets yet"
+          actions={
+            <Button onClick={openNewAsset}>
+              <FilePlus2 data-icon="inline-start" />
+              New asset
+            </Button>
+          }
+        />
+        <div className="flex min-h-0 flex-1 items-center justify-center px-3 pb-3">
+          <AppPanel className="flex max-w-md flex-col items-center gap-3 p-6 text-center">
+            <FileCode className="size-8 text-muted-foreground" />
+            <div>
+              <h2 className="font-medium">No assets yet</h2>
+              <p className="mt-1 text-sm text-muted-foreground">
+                Add the first asset to begin shaping this pipeline.
+              </p>
+            </div>
+            <Button onClick={openNewAsset}>
+              <FilePlus2 data-icon="inline-start" />
+              New asset
+            </Button>
+          </AppPanel>
+        </div>
+        <NewAssetDialog
+          open={newAssetOpen}
+          onOpenChange={setNewAssetOpen}
+          pipelineId={activePipeline.id}
+          pipelineName={activePipeline.name}
+          existingAssetNames={existingAssetNames}
+          onCreated={(assetId) => goToAsset(activePipeline.id, assetId)}
+        />
+      </AppPage>
+    );
+  }
+
   const buildContext: BuildContextValue = {
     pipelineId,
     pipeline: activePipeline,
@@ -1172,8 +1164,6 @@ export function AppBuildPage({
     view,
     buildSearch,
     editorMode,
-    declaredDependencies,
-    addDependency,
     selectAsset,
     goToAsset,
     runAssetById,
@@ -1184,6 +1174,7 @@ export function AppBuildPage({
     openNewAssetInGroup,
     createDownstreamAsset,
     openInspector: () => setInspectorOpen(true),
+    reviewFailedCheck,
     openBottom,
     materializeSelectedAsset,
     fullRefreshSelectedAsset,
@@ -1228,101 +1219,99 @@ export function AppBuildPage({
           runDisabled={!activePipeline}
           runTitle="Review the saved source, readiness checks, and rendered operations before running"
         />
-        {isWorkspaceLoading ? (
-          <BuildLoadingState />
-        ) : (
-          <div
-            className={cn(
-              "grid min-h-0 flex-1 grid-cols-1 gap-3 px-3 pb-3",
-              sidePanelGridColsClass,
-            )}
-          >
-            {!explorerCollapsed ? (
-              <AppPanel className="hidden min-h-0 xl:flex xl:flex-col">
-                <Explorer
-                  pipelineId={pipelineId}
-                  selectedAssetId={effectiveSelectedAssetId}
-                  buildSearch={buildSearch}
-                  onAssetSelect={selectAsset}
-                  onAdhoc={openAdhoc}
-                  onNewAsset={openNewAsset}
-                  onNewPipeline={() => setNewPipelineOpen(true)}
-                  onNewFolder={() => setNewFolderOpen(true)}
-                  onPipelineSettings={() => openPipelineSettings()}
-                />
-              </AppPanel>
-            ) : null}
-
-            <PanelGroup orientation="vertical" className="h-full min-h-0">
-              <Panel minSize="120px" className="min-h-0">
-                <AppPanel className="relative flex h-full min-h-0 overflow-hidden">
-                  <DelimitedCardContent className="h-full min-h-0 flex-1 p-0">
-                    <Outlet />
-                  </DelimitedCardContent>
-                  {view !== "code" ? (
-                    <FloatingViewSwitcher
-                      pipelineId={pipelineId}
-                      selectedAssetId={effectiveSelectedAssetId}
-                      currentView={view}
-                      search={buildSearch}
-                      onNewAsset={openNewAsset}
-                    />
-                  ) : null}
-                </AppPanel>
-              </Panel>
-              <PanelResizeHandle
-                className={cn(
-                  "my-1.5 h-1.5 shrink-0 cursor-row-resize rounded-full bg-border transition-colors hover:bg-primary/40",
-                  resultsCollapsed && "pointer-events-none opacity-0",
-                )}
+        <div
+          className={cn("grid min-h-0 flex-1 grid-cols-1 gap-3 px-3 pb-3", sidePanelGridColsClass)}
+        >
+          {!explorerCollapsed ? (
+            <AppPanel className="hidden min-h-0 xl:flex xl:flex-col">
+              <Explorer
+                pipelineId={pipelineId}
+                selectedAssetId={effectiveSelectedAssetId}
+                buildSearch={buildSearch}
+                onAssetSelect={selectAsset}
+                onAdhoc={openAdhoc}
+                onNewAsset={openNewAsset}
+                onNewPipeline={() => setNewPipelineOpen(true)}
+                onNewFolder={() => setNewFolderOpen(true)}
+                onPipelineSettings={() => openPipelineSettings()}
               />
-              <Panel
-                collapsible
-                collapsedSize="38px"
-                minSize="120px"
-                defaultSize="224px"
-                panelRef={resultsPanelRef}
-                onResize={() =>
-                  setResultsCollapsed(Boolean(resultsPanelRef.current?.isCollapsed()))
-                }
-                className="min-h-0"
-              >
-                <ResultsPanel
-                  pipelineId={pipelineId}
-                  activeTab={resultTab}
-                  onTabChange={openBottom}
-                  collapsed={resultsCollapsed}
-                  onToggleCollapse={toggleResultsPanel}
-                  typeCheckReport={typeCheckReport}
-                  typeCheckLoading={typeCheckLoading}
-                  typeCheckError={typeCheckError}
-                  onRunTypeCheck={() => void runTypeCheck(false)}
-                  onSelectAsset={selectAsset}
-                  inspectResult={assetResults.inspectResult}
-                  inspectLoading={assetResults.inspectLoading}
-                  renderResult={visibleAssetRenderResult}
-                  renderLoading={visibleAssetRenderLoading}
-                  renderError={visibleAssetRenderError}
-                  onRender={() => void renderSelectedAsset()}
-                  canLoadMoreInspectRows={assetResults.canLoadMoreInspectRows}
-                  onLoadMoreInspectRows={assetResults.loadMoreInspectRows}
-                  selectedMaterializeEntry={assetResults.selectedMaterializeEntry}
-                  materializeOutputHtml={assetResults.materializeOutputHtml}
-                  pipelineMaterializeLoading={assetResults.pipelineMaterializeLoading}
-                  adhocResult={adhocResult}
-                  adhocRenderedQuery={adhocRenderedQuery}
-                  adhocLoading={adhocLoading}
-                />
-              </Panel>
-            </PanelGroup>
+            </AppPanel>
+          ) : null}
 
-            {!inspectorCollapsed ? (
-              <AppPanel className="hidden min-h-0 xl:flex xl:flex-col">
-                <Inspector asset={selectedAsset} />
+          <PanelGroup orientation="vertical" className="h-full min-h-0">
+            <Panel minSize="120px" className="min-h-0">
+              <AppPanel className="relative flex h-full min-h-0 overflow-hidden">
+                <DelimitedCardContent className="h-full min-h-0 flex-1 p-0">
+                  <Outlet />
+                </DelimitedCardContent>
+                {view !== "code" ? (
+                  <FloatingViewSwitcher
+                    pipelineId={pipelineId}
+                    selectedAssetId={effectiveSelectedAssetId}
+                    currentView={view}
+                    search={buildSearch}
+                    onNewAsset={openNewAsset}
+                  />
+                ) : null}
               </AppPanel>
-            ) : null}
-          </div>
-        )}
+            </Panel>
+            <PanelResizeHandle
+              className={cn(
+                "my-1.5 h-1.5 shrink-0 cursor-row-resize rounded-full bg-border transition-colors hover:bg-primary/40",
+                resultsCollapsed && "pointer-events-none opacity-0",
+              )}
+            />
+            <Panel
+              collapsible
+              collapsedSize="38px"
+              minSize="120px"
+              defaultSize="224px"
+              panelRef={resultsPanelRef}
+              onResize={() => setResultsCollapsed(Boolean(resultsPanelRef.current?.isCollapsed()))}
+              className="min-h-0"
+            >
+              <ResultsPanel
+                pipelineId={pipelineId}
+                activeTab={resultTab}
+                onTabChange={openBottom}
+                collapsed={resultsCollapsed}
+                onToggleCollapse={toggleResultsPanel}
+                typeCheckReport={typeCheckReport}
+                typeCheckLoading={typeCheckLoading}
+                typeCheckError={typeCheckError}
+                onRunTypeCheck={() => void runTypeCheck(false)}
+                onSelectAsset={selectAsset}
+                inspectResult={assetResults.inspectResult}
+                inspectLoading={assetResults.inspectLoading}
+                renderResult={visibleAssetRenderResult}
+                renderLoading={visibleAssetRenderLoading}
+                renderError={visibleAssetRenderError}
+                onRender={() => void renderSelectedAsset()}
+                canLoadMoreInspectRows={assetResults.canLoadMoreInspectRows}
+                onLoadMoreInspectRows={assetResults.loadMoreInspectRows}
+                selectedMaterializeEntry={assetResults.selectedMaterializeEntry}
+                materializeOutputHtml={assetResults.materializeOutputHtml}
+                pipelineMaterializeLoading={assetResults.pipelineMaterializeLoading}
+                adhocResult={adhocResult}
+                adhocRenderedQuery={adhocRenderedQuery}
+                adhocLoading={adhocLoading}
+              />
+            </Panel>
+          </PanelGroup>
+
+          {!inspectorCollapsed ? (
+            <AppPanel className="hidden min-h-0 xl:flex xl:flex-col">
+              <Inspector
+                asset={selectedAsset}
+                focusedCheck={
+                  focusedQualityCheck?.assetId === selectedAsset.id
+                    ? focusedQualityCheck
+                    : undefined
+                }
+              />
+            </AppPanel>
+          ) : null}
+        </div>
 
         <Sheet open={explorerOpen} onOpenChange={setExplorerOpen}>
           <SheetContent side="left" className="w-80 gap-0 p-0 sm:max-w-80">
@@ -1343,7 +1332,12 @@ export function AppBuildPage({
         <Sheet open={inspectorOpen} onOpenChange={setInspectorOpen}>
           <SheetContent side="right" className="w-[22rem] gap-0 p-0 sm:max-w-[22rem]">
             <SheetTitle className="sr-only">Asset properties</SheetTitle>
-            <Inspector asset={selectedAsset} />
+            <Inspector
+              asset={selectedAsset}
+              focusedCheck={
+                focusedQualityCheck?.assetId === selectedAsset.id ? focusedQualityCheck : undefined
+              }
+            />
           </SheetContent>
         </Sheet>
 
@@ -1887,15 +1881,9 @@ function Explorer({
   onPipelineSettings: () => void;
 }) {
   const workspace = useAtomValue(workspaceAtom);
-  const pipelineGroup = objectGroups.find((group) => group.id === "pipeline");
-  const notebookGroup = objectGroups.find((group) => group.id === "notebook");
-  const PipelineIcon = pipelineGroup?.icon ?? Layers;
-  const NotebookIcon = notebookGroup?.icon ?? BookOpen;
-  const { declaredDependencies, pipelineAssets } = useBuildContext();
+  const { pipelineAssets } = useBuildContext();
   const adhocActive = buildSearch.editor === "adhoc";
-  const pipelineItems = workspace?.pipelines.length
-    ? workspace.pipelines
-    : [{ id: "simple", name: "simple", path: "", assets: [] } satisfies WebPipeline];
+  const pipelineItems = workspace?.pipelines ?? [];
   const notebookItems = workspace?.notebooks ?? [];
   const [newNotebookOpen, setNewNotebookOpen] = useState(false);
   const [assetFilter, setAssetFilter] = useState("");
@@ -1980,11 +1968,7 @@ function Explorer({
         viewportClassName="[&>div]:!block"
       >
         <div className="space-y-2 p-2">
-          <ExplorerSection
-            label={pipelineGroup?.label ?? "Pipelines"}
-            icon={PipelineIcon}
-            count={pipelineItems.length}
-          >
+          <ExplorerSection label="Pipelines" icon={Layers} count={pipelineItems.length}>
             {pipelineItems.map((item) => {
               const activePipeline = item.id === pipelineId;
               const pipelineLabel = item.name || item.path || item.id;
@@ -2002,7 +1986,7 @@ function Explorer({
                       search={buildSearch}
                       className="flex min-w-0 flex-1 items-center gap-1.5 px-2 text-left font-mono text-xs"
                     >
-                      <PipelineIcon className="size-3.5 text-primary" />
+                      <Layers className="size-3.5 text-primary" />
                       <span className="truncate">{pipelineLabel}</span>
                     </Link>
                     {activePipeline ? (
@@ -2042,7 +2026,6 @@ function Explorer({
                               <AssetButton
                                 key={asset.id}
                                 asset={asset}
-                                declaredDependencies={declaredDependencies}
                                 selected={!adhocActive && selectedAssetId === asset.id}
                                 onSelect={() => onAssetSelect(asset.id)}
                               />
@@ -2083,11 +2066,7 @@ function Explorer({
             })}
           </ExplorerSection>
 
-          <ExplorerSection
-            label={notebookGroup?.label ?? "Notebooks"}
-            icon={NotebookIcon}
-            count={notebookItems.length}
-          >
+          <ExplorerSection label="Notebooks" icon={BookOpen} count={notebookItems.length}>
             {notebookItems.length > 0 ? (
               notebookItems.map((notebook) => (
                 <Link
@@ -2097,7 +2076,7 @@ function Explorer({
                   className="flex h-7 w-full items-center gap-1.5 rounded-md px-2 text-left font-mono text-xs text-muted-foreground hover:bg-muted"
                   activeProps={{ className: "bg-muted text-foreground" }}
                 >
-                  <NotebookIcon className="size-3.5 text-primary" />
+                  <BookOpen className="size-3.5 text-primary" />
                   <span className="truncate">{notebook.title || notebook.path || notebook.id}</span>
                 </Link>
               ))
@@ -2143,18 +2122,14 @@ function ExplorerSection({
 
 function AssetButton({
   asset,
-  declaredDependencies,
   selected,
   onSelect,
 }: {
   asset: BuildAsset;
-  declaredDependencies: string[];
   selected: boolean;
   onSelect: () => void;
 }) {
   const Icon = kindMeta[asset.kind].icon;
-  const missingCount =
-    asset.kind === "python" ? missingPythonDependencies(asset, declaredDependencies).length : 0;
   const latestAttemptFailed =
     asset.status === "failed" && asset.staleness?.last_run_status === "failed";
   const latestAttemptCancelled =
@@ -2189,12 +2164,6 @@ function AssetButton({
           )}
         />
       ) : null}
-      {missingCount > 0 ? (
-        <span
-          title={`${missingCount} imports not in dependencies`}
-          className="size-1.5 rounded-full bg-amber-500"
-        />
-      ) : null}
     </button>
   );
 }
@@ -2209,6 +2178,7 @@ function PipelineCanvas({ onAssetSelect }: { onAssetSelect: (assetId: string) =>
     deleteAssetById,
     goToCatalog,
     openPipelineConnections,
+    reviewFailedCheck,
   } = useBuildContext();
   const sqlHoveredAssetId = useAtomValue(sqlHoveredAssetAtom);
   return (
@@ -2222,6 +2192,7 @@ function PipelineCanvas({ onAssetSelect }: { onAssetSelect: (assetId: string) =>
       onDeleteAsset={deleteAssetById}
       onGoToAsset={(assetId) => goToCatalog(assetId)}
       onAssetConnectionClick={() => openPipelineConnections()}
+      onReviewFailedCheck={reviewFailedCheck}
       goToLabel="Open in catalog"
       onCreateAsset={({ prefix }) => openNewAssetInGroup(prefix)}
       onCreateDownstream={(assetId) => {
@@ -2265,10 +2236,7 @@ function EditorWorkspace({ asset, adhoc }: { asset: BuildAsset; adhoc: boolean }
     selectedAssetId,
     view,
     buildSearch,
-    declaredDependencies,
-    addDependency,
     goToAsset,
-    openBottom,
     openInspector,
     materializeSelectedAsset,
     fullRefreshSelectedAsset,
@@ -2289,13 +2257,6 @@ function EditorWorkspace({ asset, adhoc }: { asset: BuildAsset; adhoc: boolean }
     return <AdhocEditor showActionLabels={showActionLabels} />;
   }
 
-  // Real workspace assets get the live missing-dependency banner from
-  // AppAssetEditor (driven by the asset's actual requirements.txt); this
-  // mock affordance only covers the demo/sample assets that have no editor.
-  const missingDependencies =
-    !asset.workspaceAsset && asset.kind === "python"
-      ? missingPythonDependencies(asset, declaredDependencies)
-      : [];
   const actionLabel =
     asset.kind === "source"
       ? "Validate"
@@ -2356,17 +2317,6 @@ function EditorWorkspace({ asset, adhoc }: { asset: BuildAsset; adhoc: boolean }
           />
         ) : null}
       </EditorFilenameHeader>
-      {missingDependencies.length > 0 ? (
-        <Button
-          variant="outline"
-          size="xs"
-          className="absolute left-3 top-9 z-20 border-amber-300 bg-amber-50 text-amber-700 shadow-sm hover:bg-amber-100 dark:border-amber-500/40 dark:bg-amber-500/10 dark:text-amber-300 dark:hover:bg-amber-500/20"
-          onClick={() => openBottom("diagnostics")}
-        >
-          <AlertTriangle className="size-3" />
-          {missingDependencies.length} not in deps
-        </Button>
-      ) : null}
       <div className="flex min-h-0 flex-1">
         <div className="flex min-w-0 flex-1 flex-col">
           {asset.workspaceAsset?.parse_error ? (
@@ -2383,7 +2333,7 @@ function EditorWorkspace({ asset, adhoc }: { asset: BuildAsset; adhoc: boolean }
           ) : null}
           {asset.workspaceAsset &&
           asset.pipelineId &&
-          asset.workspaceAsset.type.toLowerCase() === "load" ? (
+          isLoadAssetType(asset.workspaceAsset.type) ? (
             <LoadParametersEditor
               asset={asset.workspaceAsset}
               pipelineId={asset.pipelineId}
@@ -2391,7 +2341,7 @@ function EditorWorkspace({ asset, adhoc }: { asset: BuildAsset; adhoc: boolean }
             />
           ) : asset.workspaceAsset &&
             asset.pipelineId &&
-            asset.workspaceAsset.type.toLowerCase() === "api" ? (
+            isAPIAssetType(asset.workspaceAsset.type) ? (
             <ApiParametersEditor
               key={asset.workspaceAsset.id}
               asset={asset.workspaceAsset}
@@ -2418,12 +2368,7 @@ function EditorWorkspace({ asset, adhoc }: { asset: BuildAsset; adhoc: boolean }
               onGoToAsset={goToAsset}
             />
           ) : (
-            <CodeBlock
-              lines={editorLinesFor(asset)}
-              asset={asset}
-              declaredDependencies={declaredDependencies}
-              onAddDependency={addDependency}
-            />
+            <ResultsEmpty label="The asset source is unavailable." />
           )}
         </div>
       </div>
@@ -2638,64 +2583,9 @@ function AdhocEditor({ showActionLabels }: { showActionLabels: boolean }) {
           onGoToAsset={goToAsset}
         />
       ) : (
-        <CodeBlock lines={["select * from revenue_daily limit 100;"]} />
+        <ResultsEmpty label="Select an asset before opening an ad hoc query." />
       )}
     </div>
-  );
-}
-
-function CodeBlock({
-  lines,
-  asset,
-  declaredDependencies = [],
-  onAddDependency,
-}: {
-  lines: string[];
-  asset?: BuildAsset;
-  declaredDependencies?: string[];
-  onAddDependency?: (dependency: string) => void;
-}) {
-  const isPython = asset?.kind === "python";
-  return (
-    <ScrollArea className="min-h-0 flex-1 bg-zinc-950 font-mono text-xs text-zinc-100">
-      <div className="py-3">
-        {lines.map((line, index) => {
-          const importName = isPython ? parsePythonImport(line) : null;
-          const dependency = importName ? packageForImport(importName) : null;
-          const missing = Boolean(dependency && !declaredDependencies.includes(dependency));
-          return (
-            <div
-              key={index}
-              className={cn(
-                "flex min-h-5 items-center",
-                missing ? "bg-amber-500/10 shadow-[inset_2px_0_0_#f59e0b]" : null,
-              )}
-            >
-              <span
-                className={cn(
-                  "w-11 shrink-0 select-none pr-3 text-right",
-                  missing ? "text-amber-400" : "text-zinc-500",
-                )}
-              >
-                {index + 1}
-              </span>
-              <pre className="min-w-0 whitespace-pre">{line}</pre>
-              {missing && dependency ? (
-                <Button
-                  variant="outline"
-                  size="xs"
-                  className="ml-3 h-5 border-amber-300 bg-amber-50 px-1.5 text-[10px] text-amber-700 hover:bg-amber-100 dark:border-amber-500/40 dark:bg-amber-500/10 dark:text-amber-300 dark:hover:bg-amber-500/20"
-                  onClick={() => onAddDependency?.(dependency)}
-                >
-                  <Package className="size-3" />
-                  add {dependency}
-                </Button>
-              ) : null}
-            </div>
-          );
-        })}
-      </div>
-    </ScrollArea>
   );
 }
 
@@ -2883,15 +2773,6 @@ function ResultsPanel({
             <ResultsEmpty label="Run an ad hoc query to see results here." />
           )}
         </TabsContent>
-        <TabsContent value="tests" className="min-h-0 flex-1 overflow-auto p-3">
-          <UnitTests />
-        </TabsContent>
-        <TabsContent value="diagnostics" className="min-h-0 flex-1 overflow-auto p-0">
-          <DiagnosticsList />
-        </TabsContent>
-        <TabsContent value="metadata" className="min-h-0 flex-1 overflow-auto p-0">
-          <MetadataPanel />
-        </TabsContent>
         <TabsContent value="typecheck" className="min-h-0 flex-1 overflow-hidden p-0">
           <TypeCheckPanel
             report={typeCheckReport ?? null}
@@ -2977,7 +2858,13 @@ function ResultsEmpty({ label }: { label: string }) {
   );
 }
 
-function Inspector({ asset }: { asset: BuildAsset }) {
+function Inspector({
+  asset,
+  focusedCheck,
+}: {
+  asset: BuildAsset;
+  focusedCheck?: QualityCheckFocus;
+}) {
   const workspaceAsset = asset.workspaceAsset;
   const editable = Boolean(workspaceAsset && asset.pipelineId);
 
@@ -3007,7 +2894,12 @@ function Inspector({ asset }: { asset: BuildAsset }) {
             </div>
           }
         >
-          <AssetGuidedCards asset={workspaceAsset} pipelineId={asset.pipelineId} />
+          <AssetGuidedCards
+            asset={workspaceAsset}
+            pipelineId={asset.pipelineId}
+            quality={asset.staleness}
+            focusedCheck={focusedCheck}
+          />
         </ErrorBoundary>
       ) : (
         <div className="flex min-h-0 flex-1 items-center justify-center p-6 text-center text-xs text-muted-foreground">
@@ -3015,158 +2907,6 @@ function Inspector({ asset }: { asset: BuildAsset }) {
         </div>
       )}
     </div>
-  );
-}
-
-function UnitTests({ compact, onOpenResults }: { compact?: boolean; onOpenResults?: () => void }) {
-  return (
-    <div className="space-y-2">
-      <div className="flex items-center gap-2">
-        <span className="text-xs font-medium">Unit tests</span>
-        <Badge
-          variant="outline"
-          className="bg-emerald-50 text-emerald-700 dark:bg-emerald-500/10 dark:text-emerald-300"
-        >
-          2 passed
-        </Badge>
-        <Badge
-          variant="outline"
-          className="bg-red-50 text-red-700 dark:bg-red-500/10 dark:text-red-300"
-        >
-          1 failed
-        </Badge>
-        <Button variant="outline" size="xs" className="ml-auto">
-          <Plus className="size-3" />
-          New
-        </Button>
-        <Button size="xs" onClick={onOpenResults}>
-          <Play className="size-3" />
-          Run all
-        </Button>
-      </div>
-      {tests.map((test) => (
-        <div key={test.id} className="rounded-lg border p-2 text-xs">
-          <div className="flex items-center gap-2">
-            <StatusPill status={test.status} />
-            <span className="min-w-0 flex-1 truncate font-mono font-medium">{test.name}</span>
-            {compact ? <MoreHorizontal className="size-3.5 text-muted-foreground" /> : null}
-          </div>
-          <div className="mt-1 flex flex-wrap gap-3 text-muted-foreground">
-            <span>given: {test.given}</span>
-            <span>expect: {test.expect}</span>
-          </div>
-          {"got" in test ? (
-            <div className="mt-2 rounded bg-muted p-2 font-mono text-red-600">got: {test.got}</div>
-          ) : null}
-        </div>
-      ))}
-    </div>
-  );
-}
-
-function DiagnosticsList() {
-  return (
-    <div>
-      <div className="sticky top-0 flex h-9 items-center gap-3 border-b bg-card px-3 text-xs">
-        <span className="flex items-center gap-1 text-red-500">
-          <XCircle className="size-3.5" />2
-        </span>
-        <span className="flex items-center gap-1 text-amber-500">
-          <AlertTriangle className="size-3.5" />2
-        </span>
-        <span className="flex items-center gap-1 text-muted-foreground">
-          <Activity className="size-3.5" />0
-        </span>
-      </div>
-      {diagnostics.map((diagnostic) => (
-        <div
-          key={`${diagnostic.asset}-${diagnostic.message}`}
-          className="flex items-start gap-2 border-b px-3 py-2 text-xs"
-        >
-          <SeverityIcon severity={diagnostic.severity} />
-          <div className="min-w-0 flex-1">
-            <span className="font-mono text-primary">{diagnostic.asset}</span>
-            <span className="text-muted-foreground"> - {diagnostic.message}</span>
-          </div>
-          <Button variant="outline" size="xs">
-            {diagnostic.action}
-          </Button>
-        </div>
-      ))}
-    </div>
-  );
-}
-
-function MetadataPanel({ compact, onFull }: { compact?: boolean; onFull?: () => void }) {
-  if (compact) {
-    return (
-      <div className="space-y-2">
-        <div className="flex items-center gap-2 text-xs">
-          <GitCompare className="size-3.5 text-muted-foreground" /> Declared vs table
-          <Badge variant="outline" className="bg-amber-50 text-amber-700">
-            drift detected
-          </Badge>
-          <Button variant="link" size="xs" className="ml-auto h-auto p-0" onClick={onFull}>
-            Full diff
-          </Button>
-        </div>
-        {schemaRows.map((row) => (
-          <div key={row.name} className="rounded-lg border p-2 text-xs">
-            <div className="flex items-center justify-between">
-              <span className="font-mono">{row.name}</span>
-              <SchemaStatus status={row.status} />
-            </div>
-            <div className="mt-1 flex gap-3 font-mono text-muted-foreground">
-              <span>decl: {row.declared}</span>
-              <span>table: {row.actual}</span>
-            </div>
-          </div>
-        ))}
-      </div>
-    );
-  }
-
-  return (
-    <SimpleTable
-      columns={["Column", "Declared", "In table", "Description", "Status"]}
-      rows={schemaRows.map((row) => [
-        row.name,
-        row.declared,
-        row.actual,
-        row.description || "no description",
-        <SchemaStatus key={row.name} status={row.status} />,
-      ])}
-    />
-  );
-}
-
-function SchemaStatus({ status }: { status: string }) {
-  if (status === "match")
-    return (
-      <Badge variant="outline" className="bg-emerald-50 text-emerald-700">
-        <CheckCircle2 className="size-3" />
-        in sync
-      </Badge>
-    );
-  if (status === "drift")
-    return (
-      <Badge variant="outline" className="bg-amber-50 text-amber-700">
-        <AlertTriangle className="size-3" />
-        type drift
-      </Badge>
-    );
-  if (status === "missing")
-    return (
-      <Badge variant="outline" className="bg-muted">
-        <Circle className="size-3" />
-        missing
-      </Badge>
-    );
-  return (
-    <Badge variant="outline" className="bg-sky-50 text-sky-700">
-      <Plus className="size-3" />
-      extra
-    </Badge>
   );
 }
 
@@ -3238,14 +2978,13 @@ function SettingsIcon() {
 }
 
 function isRenderableAssetType(assetType: string) {
-  const normalized = assetType.trim().toLowerCase();
   return (
-    isSqlAssetType(normalized) ||
-    isSeedAssetType(normalized) ||
-    isSensorAssetType(normalized) ||
-    normalized === "python" ||
-    normalized === "load" ||
-    normalized === "api" ||
-    normalized === "ingestr"
+    isSqlAssetType(assetType) ||
+    isSeedAssetType(assetType) ||
+    isSensorAssetType(assetType) ||
+    isPythonAssetType(assetType) ||
+    isLoadAssetType(assetType) ||
+    isAPIAssetType(assetType) ||
+    isIngestrAssetType(assetType)
   );
 }

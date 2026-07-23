@@ -1,7 +1,7 @@
 import { useAtomValue } from "jotai";
 import { useEffect, useMemo, useRef, useState } from "react";
 
-import { getRun, getRuns } from "@/lib/api";
+import { getRun, getRuns } from "@/lib/api-scheduler";
 import type { AssetStaleness } from "@/lib/api-staleness";
 import { schedulerRunEventAtom } from "@/lib/atoms/domains/results";
 import { selectedEnvironmentAtom } from "@/lib/atoms/domains/workspace";

@@ -539,14 +539,69 @@ function orderBandCells(
   maxRank: number,
 ) {
   let stableIndex = 0;
+  const rankById = new Map(
+    graph.nodes.map((node) => [node.id, analysis.nodeRank.get(node.id) ?? 0]),
+  );
+  const layerById = new Map(graph.nodes.map((node) => [node.id, node.layer]));
+  const virtualItems = new Map<string, LayeredLayoutItem[]>();
+  const layeredEdges: LayeredLayoutEdge[] = [];
+
+  graph.edges
+    .slice()
+    .sort((a, b) => a.key.localeCompare(b.key))
+    .forEach((edge) => {
+      const sourceRank = rankById.get(edge.source);
+      const targetRank = rankById.get(edge.target);
+      const sourceLayer = layerById.get(edge.source);
+      const targetLayer = layerById.get(edge.target);
+      if (sourceRank === undefined || targetRank === undefined || targetRank <= sourceRank) {
+        return;
+      }
+
+      let previous = edge.source;
+      // A long edge inside one band is rendered directly by React Flow. Reserve
+      // an empty row in each rank it crosses so a real node cannot be placed on
+      // top of that edge. Cross-band skip edges cannot be represented by one
+      // unambiguous band-local lane, so they remain out of the row heuristic.
+      if (sourceLayer === targetLayer && sourceLayer && targetRank > sourceRank + 1) {
+        for (let rank = sourceRank + 1; rank < targetRank; rank++) {
+          const virtualId = `__band-virtual:${edge.key}:${rank}`;
+          const key = `${sourceLayer}\u0000${rank}`;
+          virtualItems.set(key, [
+            ...(virtualItems.get(key) ?? []),
+            {
+              id: virtualId,
+              realId: null,
+              rank,
+              stableIndex: stableIndex++,
+            },
+          ]);
+          layeredEdges.push({ source: previous, target: virtualId });
+          previous = virtualId;
+        }
+      }
+
+      if (targetRank === sourceRank + 1 || previous !== edge.source) {
+        layeredEdges.push({ source: previous, target: edge.target });
+      }
+    });
+
   const cellItems = new Map<string, LayeredLayoutItem[]>();
   analysis.layerOrder.forEach((layer) => {
     for (let rank = 0; rank <= maxRank; rank++) {
       const key = `${layer}\u0000${rank}`;
-      const items = (cells.get(key) ?? [])
-        .slice()
-        .sort((a, b) => a.id.localeCompare(b.id))
-        .map((node) => ({ id: node.id, realId: node.id, rank, stableIndex: stableIndex++ }));
+      const items = [
+        ...(virtualItems.get(key) ?? []),
+        ...(cells.get(key) ?? [])
+          .slice()
+          .sort((a, b) => a.id.localeCompare(b.id))
+          .map((node) => ({
+            id: node.id,
+            realId: node.id,
+            rank,
+            stableIndex: stableIndex++,
+          })),
+      ];
       cellItems.set(key, items);
     }
   });
@@ -555,17 +610,7 @@ function orderBandCells(
     graphNodeCount: graph.nodes.length,
     graphEdgeCount: graph.edges.length,
   });
-  const rankById = new Map(
-    graph.nodes.map((node) => [node.id, analysis.nodeRank.get(node.id) ?? 0]),
-  );
-  const orderedEdges = graph.edges
-    .filter((edge) => {
-      const sourceRank = rankById.get(edge.source);
-      const targetRank = rankById.get(edge.target);
-      return sourceRank !== undefined && targetRank !== undefined && targetRank === sourceRank + 1;
-    })
-    .sort((a, b) => a.key.localeCompare(b.key));
-  const { preds, succs } = buildLayeredAdjacency(orderedEdges);
+  const { preds, succs } = buildLayeredAdjacency(layeredEdges);
 
   const allRanks = () => {
     const ranks = Array.from({ length: maxRank + 1 }, () => [] as LayeredLayoutItem[]);
@@ -575,7 +620,7 @@ function orderBandCells(
     });
     return ranks;
   };
-  const allEdgesByRank = () => edgesBetweenRanks(orderedEdges, allRanks());
+  const allEdgesByRank = () => edgesBetweenRanks(layeredEdges, allRanks());
   const allCrossings = (rank: number) => crossingWindow(allRanks(), allEdgesByRank(), rank);
   const positions = () => rankPositionMap(allRanks());
 
@@ -700,7 +745,13 @@ function layoutBands(graph: Graph, analysis: Analysis) {
       const rank = analysis.nodeRank.get(node.id) ?? 0;
       byRank.set(rank, [...(byRank.get(rank) ?? []), node]);
     });
-    const rows = Math.max(1, ...[...byRank.values()].map((nodes) => nodes.length));
+    const rows = Math.max(
+      1,
+      ...Array.from(
+        { length: maxRank + 1 },
+        (_, rank) => cellItems.get(`${layer}\u0000${rank}`)?.length ?? 0,
+      ),
+    );
     byRank.forEach((nodes, rank) => {
       const orderedIds =
         cellItems.get(`${layer}\u0000${rank}`)?.map((item) => item.id) ??

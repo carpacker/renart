@@ -76,7 +76,14 @@ content).
 (`~/.config/renart/projects.json`; `RENART_PROJECTS_REGISTRY` overrides for
 tests) plus one lazily-opened per-project runtime each, mounted at
 `/api/projects/{id}/*` (`cmd/projects.go`); the argv root stays aliased at the
-unprefixed `/api/*`. Before opening a workspace state database, every
+unprefixed `/api/*`. Both `web` and `standalone` use this process-level router,
+so onboarding, project templates, and directory browsing have the same API
+surface in browser and desktop mode. A no-argument launch outside a repository
+uses an unregistered temporary Git-backed runtime solely to host `/welcome`;
+new projects are created under the launch directory and opened as ordinary
+registered runtimes. The temporary root is removed at shutdown and is never
+presented as a user project. Explicit workspace arguments remain Git-validated.
+Before opening a workspace state database, every
 non-headless runtime acquires an authoritative per-user lease outside the Git
 worktree, keyed by the canonical (absolute, symlink-resolved) workspace root.
 The default location is under `XDG_RUNTIME_DIR`, falling back to the user cache;
@@ -106,15 +113,14 @@ runtime artifacts, so an accidentally tracked runtime file remains visible.
 Failure to update Git metadata is a warning and does not prevent the workspace
 from opening; the out-of-worktree lease remains authoritative.
 `POST /api/projects` scaffolds a project from a template
-(`service.ScaffoldProject`: `demo:chess` — native `type: api` Chess.com
-profiles and games feeding SQL performance and opening analysis,
-`demo:retail` — bundled CSV seed assets feeding an offline SQL demo, `empty`,
-`bare` for the import
-flow) — pipeline files, a `duckdb-default` connection, default .gitignore
-patterns, `.renart/project.yml` identity, and `git init` + an initial commit
-when the target has no repository — then opens/registers the project and
-refreshes its workspace. `GET /api/projects/templates` lists the templates
-for the welcome UI. The process-level `/api/projects/browse` directory picker
+(`service.ScaffoldProject`) from the same backend-owned Product, Operations,
+Python, Retail, and Chess demo definitions used by the in-project starter
+catalog, plus `empty` and `bare` for the import flow. It writes the pipeline
+files, a `duckdb-default` connection, default .gitignore patterns,
+`.renart/project.yml` identity, and `git init` + an initial commit when the
+target has no repository, then opens/registers the project and refreshes its
+workspace. `GET /api/projects/templates` lists the templates for the welcome
+UI. The process-level `/api/projects/browse` directory picker
 uses the same default-parent resolution as project creation, and
 `POST /api/projects/directories` creates one visible child folder selected by
 the user. `.renart/project.yml` also carries project-scoped feature
@@ -442,6 +448,16 @@ Targets without a SQL check operator remain explicitly unsupported. API and
 Load use their dedicated HTTP/Sling path only for the main task; check tasks
 use the shared sequential registry, and destination-resolved metadata tasks
 are explicit no-ops so neither path can repeat the side-effecting main work.
+Direct execution also reports main tasks and runtime checks as distinct task
+events. Completion evidence therefore keeps the main write status separate
+from an optional `passed|failed` quality outcome. A successful write can
+produce reusable freshness coverage even when a later assertion fails. Failed
+quality evidence persists only the stable check identity (custom or column,
+name, optional column, and blocking flag); rendered SQL and warehouse errors
+remain in the run log rather than being copied into asset metadata or the
+staleness API. A quality result is marked passed only when every check declared
+on the captured asset completed successfully. CLI fallback execution does not
+invent check-level evidence when the runtime cannot report those identities.
 Scheduler-created metadata-push post-tasks are rendered after checks and use the
 same explicit PostgreSQL-compatible, BigQuery, and Snowflake asset-type mapping
 as direct execution. Warehouse mutations remain `runtime_only`, while
@@ -666,6 +682,14 @@ For new scheduler-backed admissions, the durable slot permits one
 queued/running pipeline-scope run per logical pipeline across environments and
 claims both path and stable-UUID aliases, preserving exclusion across a rename.
 Manual races return `409 pipeline_run_active` with the active run ID.
+Run details derive their abort capability and any pending stop request from the
+linked River job rather than duplicating queue state in the run row.
+`POST /api/runs/{id}/cancel` immediately terminalizes a queued run as
+`cancelled`; for a running job it records River's durable cancellation request,
+cancels the in-process execution context, and leaves the run active until the
+ordinary context-detached finalizer closes its steps, units, occurrence, and
+resource claims. Inline streaming runs have no River job and therefore do not
+advertise this queue-owned abort action.
 New periodic/catch-up jobs use the distinct `renart-schedule-signal-v2` kind and
 snooze for 30 seconds while another run holds the slot. River jobs persisted
 under the older combined kind still decode and execute through the legacy path
@@ -870,7 +894,10 @@ reported rather than replaced. Before a pyproject-backed run, the
 operator compares the project environment and uv cache filesystems. If they
 differ and the user has not set a
 cache or link policy, that invocation selects uv's copy mode up front; same-
-filesystem runs retain uv's faster default linking behavior.
+filesystem runs retain uv's faster default linking behavior. Renart also sets
+uv's supported no-profile-modification installer flag in the parent process,
+so first-use installation never edits shell startup files (including immutable
+profiles on NixOS).
 Notebook Python cells use the same operator in collection-only mode: broker
 queries run against the notebook's already-open live session and the resulting
 Parquet file is loaded directly into that session, without input or output

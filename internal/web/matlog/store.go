@@ -7,10 +7,14 @@ package matlog
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"sort"
+	"strings"
 	"time"
+
+	"renart/internal/web/bus"
 )
 
 // Store wraps the shared scheduler SQLite database (the same one River
@@ -1321,6 +1325,10 @@ type AssetRunRecord struct {
 	Status      string // "succeeded" | "failed" | "cancelled"
 	RunID       string
 	RanAt       time.Time
+	// QualityStatus is independent of Status. A main task can succeed and
+	// produce reusable coverage while a post-write assertion fails.
+	QualityStatus bus.QualityStatus
+	FailedChecks  []bus.QualityCheckFailure
 }
 
 // RecordRun upserts the latest run attempt for an asset+environment. Older or
@@ -1329,6 +1337,10 @@ type AssetRunRecord struct {
 func (s *Store) RecordRun(ctx context.Context, r AssetRunRecord) error {
 	if r.AssetID == "" || r.Fingerprint == "" || r.Status == "" {
 		return fmt.Errorf("matlog: asset_id, fingerprint and status are required")
+	}
+	failedChecks, err := encodeFailedChecks(r.QualityStatus, r.FailedChecks)
+	if err != nil {
+		return err
 	}
 	if r.RanAt.IsZero() {
 		r.RanAt = time.Now().UTC()
@@ -1354,12 +1366,14 @@ func (s *Store) RecordRun(ctx context.Context, r AssetRunRecord) error {
 
 	_, err = tx.ExecContext(ctx, `
 		INSERT INTO renart_asset_runs
-			(asset_id, environment, fingerprint, status, run_id, ran_at)
-		VALUES (?, ?, ?, ?, ?, ?)
+			(asset_id, environment, fingerprint, status, run_id, quality_status, failed_checks, ran_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT (asset_id, environment)
 		DO UPDATE SET fingerprint = excluded.fingerprint, status = excluded.status,
-			run_id = excluded.run_id, ran_at = excluded.ran_at`,
-		r.AssetID, r.Environment, r.Fingerprint, r.Status, r.RunID, formatTime(r.RanAt))
+			run_id = excluded.run_id, quality_status = excluded.quality_status,
+			failed_checks = excluded.failed_checks, ran_at = excluded.ran_at`,
+		r.AssetID, r.Environment, r.Fingerprint, r.Status, r.RunID,
+		r.QualityStatus, failedChecks, formatTime(r.RanAt))
 	if err != nil {
 		return err
 	}
@@ -1372,7 +1386,8 @@ func (s *Store) LastRuns(ctx context.Context, assetIDs []string, environment str
 		return map[string]AssetRunRecord{}, nil
 	}
 	query := `
-		SELECT asset_id, fingerprint, status, run_id, ran_at FROM renart_asset_runs
+		SELECT asset_id, fingerprint, status, run_id, quality_status, failed_checks, ran_at
+		FROM renart_asset_runs
 		WHERE environment = ? AND asset_id IN (?` + repeatPlaceholder(len(assetIDs)-1) + `)`
 	args := make([]any, 0, len(assetIDs)+1)
 	args = append(args, environment)
@@ -1388,15 +1403,83 @@ func (s *Store) LastRuns(ctx context.Context, assetIDs []string, environment str
 	result := make(map[string]AssetRunRecord)
 	for rows.Next() {
 		var rec AssetRunRecord
-		var ranAt string
-		if err := rows.Scan(&rec.AssetID, &rec.Fingerprint, &rec.Status, &rec.RunID, &ranAt); err != nil {
+		var ranAt, failedChecks string
+		if err := rows.Scan(
+			&rec.AssetID,
+			&rec.Fingerprint,
+			&rec.Status,
+			&rec.RunID,
+			&rec.QualityStatus,
+			&failedChecks,
+			&ranAt,
+		); err != nil {
 			return nil, err
+		}
+		if err := json.Unmarshal([]byte(failedChecks), &rec.FailedChecks); err != nil {
+			return nil, fmt.Errorf("matlog: decode failed checks for %s: %w", rec.AssetID, err)
 		}
 		rec.Environment = environment
 		rec.RanAt = parseTime(ranAt)
 		result[rec.AssetID] = rec
 	}
 	return result, rows.Err()
+}
+
+func encodeFailedChecks(status bus.QualityStatus, failures []bus.QualityCheckFailure) (string, error) {
+	switch status {
+	case "":
+		if len(failures) > 0 {
+			return "", fmt.Errorf("matlog: failed checks require a quality status")
+		}
+	case bus.QualityStatusPassed:
+		if len(failures) > 0 {
+			return "", fmt.Errorf("matlog: passed quality status cannot carry failed checks")
+		}
+	case bus.QualityStatusFailed:
+		if len(failures) == 0 {
+			return "", fmt.Errorf("matlog: failed quality status requires a failed check")
+		}
+	default:
+		return "", fmt.Errorf("matlog: invalid quality status %q", status)
+	}
+
+	canonical := append([]bus.QualityCheckFailure(nil), failures...)
+	sort.Slice(canonical, func(i, j int) bool {
+		left, right := canonical[i], canonical[j]
+		if left.Kind != right.Kind {
+			return left.Kind < right.Kind
+		}
+		if left.Column != right.Column {
+			return left.Column < right.Column
+		}
+		return left.Name < right.Name
+	})
+	for _, failure := range canonical {
+		if strings.TrimSpace(failure.Name) == "" || strings.TrimSpace(failure.Name) != failure.Name ||
+			strings.TrimSpace(failure.Column) != failure.Column {
+			return "", fmt.Errorf("matlog: failed check identity is not canonical")
+		}
+		switch failure.Kind {
+		case bus.QualityCheckKindCustom:
+			if failure.Column != "" {
+				return "", fmt.Errorf("matlog: custom check cannot carry a column")
+			}
+		case bus.QualityCheckKindColumn:
+			if failure.Column == "" {
+				return "", fmt.Errorf("matlog: column check requires a column")
+			}
+		default:
+			return "", fmt.Errorf("matlog: invalid quality check kind %q", failure.Kind)
+		}
+	}
+	if canonical == nil {
+		canonical = []bus.QualityCheckFailure{}
+	}
+	encoded, err := json.Marshal(canonical)
+	if err != nil {
+		return "", fmt.Errorf("matlog: encode failed checks: %w", err)
+	}
+	return string(encoded), nil
 }
 
 // Prune deletes raw materialization facts older than the cutoff. Coverage

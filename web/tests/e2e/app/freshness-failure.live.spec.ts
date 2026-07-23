@@ -122,6 +122,107 @@ test.describe("app freshness failure states live", () => {
     await expect(customersNode.locator('[data-last-run="failed"]')).toHaveText("Build failed");
   });
 
+  test("keeps a successful write fresh when checks fail and opens the failed check", async ({
+    liveApp,
+    page,
+  }) => {
+    test.skip(
+      test.info().project.name.includes("mobile"),
+      "The full Build canvas is a desktop affordance.",
+    );
+
+    const configureCheck = await page.request.post(
+      `${liveApp.baseURL}/api/assets/${customersAssetId}/transactions`,
+      {
+        data: {
+          type: "custom_check.upsert",
+          custom_check: {
+            name: "no invalid customers",
+            value: 0,
+            count: 0,
+            blocking: true,
+            query: "select * from analytics.customers where customer_id = 1",
+          },
+        },
+      },
+    );
+    expect(configureCheck.ok()).toBe(true);
+    await expect
+      .poll(
+        async () => {
+          const response = await page.request.get(`${liveApp.baseURL}/api/workspace`);
+          if (!response.ok()) return false;
+          const workspace = (await response.json()) as {
+            pipelines: Array<{
+              assets: Array<{ id: string; custom_checks?: Array<{ name: string }> }>;
+            }>;
+          };
+          return Boolean(
+            workspace.pipelines
+              .flatMap((pipeline) => pipeline.assets)
+              .find((asset) => asset.id === customersAssetId)
+              ?.custom_checks?.some((check) => check.name === "no invalid customers"),
+          );
+        },
+        { timeout: 20000 },
+      )
+      .toBe(true);
+    await page.goto(`${liveApp.baseURL}/pipelines/${pipelineId}/assets/${customersAssetId}/code`);
+    await expect(page.locator(".view-lines").first()).toContainText("customer_id", {
+      timeout: 15000,
+    });
+
+    const materialize = page.waitForResponse(
+      (response) => response.url().includes(`/api/assets/${customersAssetId}/materialize/stream`),
+      { timeout: 30000 },
+    );
+    await page.getByRole("button", { name: "Materialize", exact: true }).click();
+    await materialize;
+
+    await expect
+      .poll(
+        async () => {
+          const response = await page.request.get(
+            `${liveApp.baseURL}/api/pipelines/${pipelineId}/staleness?environment=default`,
+          );
+          if (!response.ok()) return null;
+          const body = (await response.json()) as {
+            assets: Array<{
+              asset_name: string;
+              status: string;
+              last_run_status?: string;
+              quality_status?: string;
+              quality_on_current_content?: boolean;
+              failed_checks?: Array<{ kind: string; name: string }>;
+            }>;
+          };
+          return body.assets.find((asset) => asset.asset_name === "analytics.customers") ?? null;
+        },
+        { timeout: 20000 },
+      )
+      .toMatchObject({
+        status: "fresh",
+        last_run_status: "succeeded",
+        quality_status: "failed",
+        quality_on_current_content: true,
+        failed_checks: [{ kind: "custom", name: "no invalid customers" }],
+      });
+
+    await page.goto(`${liveApp.baseURL}/pipelines/${pipelineId}/assets/${customersAssetId}/canvas`);
+    const customersNode = page.locator(
+      `[data-testid="lineage-asset"][data-asset-id="${customersAssetId}"]`,
+    );
+    const failedBadge = customersNode.locator('button[data-quality-status="failed"]');
+    await expect(failedBadge).toBeVisible({ timeout: 20000 });
+    await failedBadge.click();
+
+    const inspector = page.locator('[data-testid="asset-inspector"]:visible');
+    await expect(inspector.getByTestId("failed-quality-checks")).toBeVisible();
+    await expect(
+      inspector.locator('[data-custom-check="no invalid customers"][data-highlighted="true"]'),
+    ).toBeVisible();
+  });
+
   test("keeps runtime-only Python attempts separate from physical freshness", async ({
     liveApp,
     page,

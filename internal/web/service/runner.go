@@ -59,6 +59,10 @@ type RunPipelineRequest struct {
 type ExecutionAssetEvent struct {
 	Asset                     string
 	Status                    string
+	TaskKind                  string
+	CheckName                 string
+	CheckColumn               string
+	CheckBlocking             bool
 	StartedAt                 *time.Time
 	FinishedAt                *time.Time
 	Error                     string

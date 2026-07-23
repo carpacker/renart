@@ -1,6 +1,6 @@
 import { atom } from "jotai";
 
-import { getSQLDatabases, getSQLTableColumns, getSQLTables } from "@/lib/api";
+import { getSQLDatabases, getSQLTableColumns, getSQLTables } from "@/lib/api-sql-discovery";
 
 type SQLTableDiscoveryEntry = {
   name: string;

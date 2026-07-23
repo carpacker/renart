@@ -1,4 +1,11 @@
-import { isSeedAssetType, isSensorAssetType, isSqlAssetType } from "@/lib/asset-types";
+import {
+  isAPIAssetType,
+  isLoadAssetType,
+  isPythonAssetType,
+  isSeedAssetType,
+  isSensorAssetType,
+  isSqlAssetType,
+} from "@/lib/asset-types";
 import type {
   AssetAuthoringCapability,
   AssetCreationCandidate,
@@ -12,9 +19,9 @@ export type AssetCreationRole = "target" | "source" | "destination";
 export function assetCreationKindForType(assetType: string): AssetCreationKind | null {
   const normalized = assetType.trim().toLowerCase();
   if (isSqlAssetType(normalized)) return "sql";
-  if (normalized === "python" || normalized.includes("python")) return "python";
-  if (normalized === "api") return "api";
-  if (normalized === "load") return "load";
+  if (isPythonAssetType(normalized)) return "python";
+  if (isAPIAssetType(normalized)) return "api";
+  if (isLoadAssetType(normalized)) return "load";
   if (isSeedAssetType(normalized)) return "seed";
   if (isSensorAssetType(normalized)) return "sensor";
   return null;
