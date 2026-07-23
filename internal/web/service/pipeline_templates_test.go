@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/bruin-data/bruin/pkg/pipeline"
 	gogit "github.com/go-git/go-git/v5"
@@ -90,6 +91,70 @@ func TestPipelineServiceCreatesEveryTemplateAsParseablePipeline(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestOfflinePipelineDemoTemplatesExecute(t *testing.T) {
+	for _, template := range PipelineTemplates() {
+		if template.ID == PipelineTemplateBlank || !template.Offline {
+			continue
+		}
+		t.Run(template.ID, func(t *testing.T) {
+			executePipelineTemplate(t, template, 2*time.Minute)
+		})
+	}
+}
+
+func TestOnlinePipelineDemoTemplatesExecute(t *testing.T) {
+	if os.Getenv("RENART_RUN_ONLINE_TEMPLATE_TESTS") != "1" {
+		t.Skip("set RENART_RUN_ONLINE_TEMPLATE_TESTS=1 to execute network-dependent demo templates")
+	}
+
+	for _, template := range PipelineTemplates() {
+		if template.ID == PipelineTemplateBlank || template.Offline {
+			continue
+		}
+		t.Run(template.ID, func(t *testing.T) {
+			executePipelineTemplate(t, template, 5*time.Minute)
+		})
+	}
+}
+
+func executePipelineTemplate(t *testing.T, template PipelineTemplateInfo, timeout time.Duration) {
+	t.Helper()
+
+	workspaceRoot := t.TempDir()
+	_, err := gogit.PlainInit(workspaceRoot, false)
+	require.NoError(t, err)
+
+	relPath, err := NewPipelineService(workspaceRoot).Create(
+		context.Background(),
+		template.SuggestedPath,
+		template.Title,
+		"",
+		template.ID,
+	)
+	require.NoError(t, err)
+
+	executor := NewHybridBruinExecutor(
+		workspaceRoot,
+		"",
+		nil,
+		func() *pipeline.Builder {
+			return NewRenartPipelineBuilder(afero.NewOsFs())
+		},
+	)
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+
+	output, err := executor.RunPipeline(ctx, RunPipelineRequest{
+		Target:        relPath,
+		SensorMode:    "once",
+		StartDate:     "2026-07-22T00:00:00Z",
+		EndDate:       "2026-07-23T00:00:00Z",
+		ExecutionTime: time.Date(2026, time.July, 23, 0, 0, 0, 0, time.UTC),
+	}, nil)
+	require.NoError(t, err, "%s\n%s", template.ID, string(output))
+	assert.Contains(t, string(output), "bruin run completed successfully")
 }
 
 func TestPipelineServiceTemplateCreationRejectsUnsafeOverwritesAndRollsBackInvalidContent(t *testing.T) {
