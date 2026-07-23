@@ -71,7 +71,7 @@ go-build: bruin-sqlparser-stub
 # Linux needs gtk3 + webkit2gtk dev packages, macOS needs the Xcode command
 # line tools, Windows needs the WebView2 runtime (no build deps).
 standalone-build: go-build
-	$(GO) build -tags webkit2_41,standalone,desktop,production -o renart-gui ./cmd/renart-gui
+	GO="$(GO)" ./scripts/build_standalone_helper.sh "$(shell $(GO) env GOOS)" "$(shell $(GO) env GOARCH)" .
 
 go-test: bruin-sqlparser-stub
 	CGO_LDFLAGS="-L$(BRUIN_SQLPARSER_STUB_LIB_DIR) $(CGO_LDFLAGS)" $(GO) test -p=1 ./...
