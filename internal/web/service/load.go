@@ -3,6 +3,7 @@ package service
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -26,6 +27,8 @@ const (
 	loadAssetType            = "load"
 	slingLoadedAtColumn      = "_sling_loaded_at"
 	slingLoadedAtDisabledEnv = "SLING_LOADED_AT_COLUMN=false"
+	slingSourceConnectionEnv = "RENART_SLING_SOURCE"
+	slingTargetConnectionEnv = "RENART_SLING_TARGET"
 )
 
 // ingestrURIConnection is the bruin connection capability that yields a standard
@@ -78,6 +81,18 @@ func resolveLoadConnectionURI(manager config.ConnectionGetter, connectionName st
 			return slingClickHouseConnectionURI(*connection)
 		case config.ClickHouseConnection:
 			return slingClickHouseConnectionURI(connection)
+		case *config.DuckDBConnection:
+			if connection.Lakehouse != nil {
+				return slingDuckLakeConnectionURI(*connection)
+			}
+		case config.DuckDBConnection:
+			if connection.Lakehouse != nil {
+				return slingDuckLakeConnectionURI(connection)
+			}
+		case *config.StarRocksConnection:
+			return slingStarRocksConnectionURI(*connection)
+		case config.StarRocksConnection:
+			return slingStarRocksConnectionURI(connection)
 		case *config.TrinoConnection:
 			return slingTrinoConnectionURI(*connection)
 		case config.TrinoConnection:
@@ -165,6 +180,136 @@ func slingClickHouseConnectionURI(connection config.ClickHouseConnection) (strin
 		u.RawQuery = url.Values{"secure": []string{"true"}}.Encode()
 	}
 	return u.String(), nil
+}
+
+// The DuckLake connection keys accepted by Sling intentionally differ from the
+// serialized lakehouse keys used by the upstream Go connection. Keep that
+// translation at the Sling boundary so direct DuckDB/DuckLake execution keeps
+// using the structured connection unchanged.
+func slingDuckLakeConnectionURI(connection config.DuckDBConnection) (string, error) {
+	lakehouse := connection.Lakehouse
+	if lakehouse == nil || lakehouse.Format != config.LakehouseFormatDuckLake {
+		return "", fmt.Errorf("DuckDB connection %q is not configured as DuckLake", connection.Name)
+	}
+
+	query := url.Values{
+		"catalog_type": []string{string(lakehouse.Catalog.Type)},
+	}
+	switch lakehouse.Catalog.Type {
+	case config.CatalogTypePostgres:
+		catalog := lakehouse.Catalog
+		if strings.TrimSpace(catalog.Host) == "" || catalog.Port == 0 || strings.TrimSpace(catalog.Database) == "" {
+			return "", fmt.Errorf("DuckLake connection %q requires PostgreSQL catalog host, port, and database for Sling", connection.Name)
+		}
+		query.Set("catalog_conn_string", postgresCatalogConnectionURI(catalog))
+	case config.CatalogTypeDuckDB, config.CatalogTypeSQLite:
+		path := strings.TrimSpace(lakehouse.Catalog.Path)
+		if path == "" {
+			return "", fmt.Errorf("DuckLake connection %q requires a catalog path for Sling", connection.Name)
+		}
+		query.Set("catalog_conn_string", path)
+	default:
+		return "", fmt.Errorf("DuckLake connection %q has unsupported Sling catalog type %q", connection.Name, lakehouse.Catalog.Type)
+	}
+
+	storage := lakehouse.Storage
+	if storage.Path != "" {
+		query.Set("data_path", storage.Path)
+	}
+	if storage.Region != "" {
+		query.Set("s3_region", storage.Region)
+	}
+	if storage.Endpoint != "" {
+		query.Set("s3_endpoint", storage.Endpoint)
+	}
+	if storage.URLStyle != "" {
+		query.Set("url_style", storage.URLStyle)
+	}
+	if storage.UseSSL != nil {
+		query.Set("use_ssl", strconv.FormatBool(*storage.UseSSL))
+	}
+	switch storage.Type {
+	case config.StorageTypeS3:
+		if storage.Auth.AccessKey != "" {
+			query.Set("s3_access_key_id", storage.Auth.AccessKey)
+		}
+		if storage.Auth.SecretKey != "" {
+			query.Set("s3_secret_access_key", storage.Auth.SecretKey)
+		}
+		if storage.Auth.SessionToken != "" {
+			query.Set("s3_session_token", storage.Auth.SessionToken)
+		}
+	case config.StorageTypeGCS:
+		if storage.Auth.AccessKey != "" {
+			query.Set("gcs_access_key_id", storage.Auth.AccessKey)
+		}
+		if storage.Auth.SecretKey != "" {
+			query.Set("gcs_secret_access_key", storage.Auth.SecretKey)
+		}
+	default:
+		return "", fmt.Errorf("DuckLake connection %q has unsupported Sling storage type %q", connection.Name, storage.Type)
+	}
+
+	return "ducklake://?" + query.Encode(), nil
+}
+
+// Sling expects the Stream Load endpoint as a top-level fe_url connection
+// property. Putting it in the URL query makes the MySQL driver treat it as a
+// StarRocks session variable, so use Sling's environment-variable JSON form.
+// replication_num remains native-only and must not cross this boundary either.
+func slingStarRocksConnectionURI(connection config.StarRocksConnection) (string, error) {
+	host := strings.TrimSpace(connection.Host)
+	database := strings.TrimSpace(connection.Database)
+	if host == "" || database == "" {
+		return "", fmt.Errorf("StarRocks connection %q requires a host and database for Sling", connection.Name)
+	}
+	port := connection.Port
+	if port == 0 {
+		port = 9030
+	}
+	properties := map[string]any{
+		"type":     "starrocks",
+		"host":     host,
+		"port":     port,
+		"database": database,
+	}
+	if connection.Username != "" {
+		properties["user"] = connection.Username
+	}
+	if connection.Password != "" {
+		properties["password"] = connection.Password
+	}
+	if connection.HTTPPort != 0 {
+		httpScheme := "http"
+		if strings.EqualFold(strings.TrimSpace(connection.SSL), "true") {
+			httpScheme = "https"
+		}
+		properties["fe_url"] = (&url.URL{
+			Scheme: httpScheme,
+			Host:   net.JoinHostPort(host, strconv.Itoa(connection.HTTPPort)),
+		}).String()
+	}
+	payload, err := json.Marshal(properties)
+	if err != nil {
+		return "", fmt.Errorf("encode StarRocks connection %q for Sling: %w", connection.Name, err)
+	}
+	return string(payload), nil
+}
+
+func postgresCatalogConnectionURI(catalog config.CatalogConfig) string {
+	connectionURI := &url.URL{
+		Scheme: "postgresql",
+		Host:   net.JoinHostPort(strings.TrimSpace(catalog.Host), strconv.Itoa(catalog.Port)),
+		Path:   "/" + strings.TrimPrefix(strings.TrimSpace(catalog.Database), "/"),
+	}
+	if catalog.Auth.Username != "" {
+		if catalog.Auth.Password == "" {
+			connectionURI.User = url.User(catalog.Auth.Username)
+		} else {
+			connectionURI.User = url.UserPassword(catalog.Auth.Username, catalog.Auth.Password)
+		}
+	}
+	return connectionURI.String()
 }
 
 // Bruin's Trino ingestr URI encodes the catalog as a path segment. Sling's
@@ -469,6 +614,33 @@ func loadCommand(ctx context.Context, loadArgs []string, output io.Writer) (stri
 	return uvBinaryPath, append(cmdline, loadArgs...), nil
 }
 
+// slingCommandConnectionEnv keeps credentials out of argv and lets Sling parse
+// both URL and structured YAML/JSON connection payloads through its documented
+// environment-variable connection mechanism.
+func slingCommandConnectionEnv(args []string) ([]string, []string) {
+	normalized := append([]string(nil), args...)
+	var env []string
+	for i := 0; i+1 < len(normalized); i++ {
+		var name string
+		switch normalized[i] {
+		case "--src-conn":
+			name = slingSourceConnectionEnv
+		case "--tgt-conn":
+			name = slingTargetConnectionEnv
+		default:
+			continue
+		}
+		value := normalized[i+1]
+		if value == "" {
+			continue
+		}
+		normalized[i+1] = name
+		env = append(env, name+"="+value)
+		i++
+	}
+	return normalized, env
+}
+
 func loadRunModeArgs(ctx context.Context) []string {
 	fullRefresh, _ := ctx.Value(pipeline.RunConfigFullRefresh).(bool)
 	if !fullRefresh {
@@ -623,12 +795,14 @@ func (e *HybridBruinExecutor) runLoadAsset(ctx context.Context, pl *pipeline.Pip
 		return writer.buffer.Bytes(), err
 	}
 	args = append(args, modeArgs...)
+	args, connectionEnv := slingCommandConnectionEnv(args)
 
 	cmdName, cmdArgs, err := loadCommand(ctx, args, writer)
 	if err != nil {
 		return writer.buffer.Bytes(), err
 	}
 	cmd := newStreamingCommand(ctx, cmdName, cmdArgs, e.workspaceRoot, writer)
+	cmd.Env = append(cmd.Env, connectionEnv...)
 	lease, err := e.acquireDuckDBConnections(ctx, manager, []string{params.SourceConnection, params.DestinationConnection}, directTaskLeaseOwner(ctx, pl, asset), writer)
 	if err != nil {
 		return writer.buffer.Bytes(), err

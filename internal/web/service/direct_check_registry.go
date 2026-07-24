@@ -26,6 +26,7 @@ import (
 	"github.com/bruin-data/bruin/pkg/sail"
 	"github.com/bruin-data/bruin/pkg/scheduler"
 	sf "github.com/bruin-data/bruin/pkg/snowflake"
+	sr "github.com/bruin-data/bruin/pkg/starrocks"
 	vert "github.com/bruin-data/bruin/pkg/vertica"
 )
 
@@ -226,6 +227,12 @@ func buildDirectCheckExecutors(manager config.ConnectionGetter, renderer *jinja.
 		pipeline.AssetTypeClickHouse, pipeline.AssetTypeClickHouseSeed,
 		pipeline.AssetTypeClickHouseQuerySensor, pipeline.AssetTypeClickHouseTableSensor,
 	}, clickHouseChecks, customCheck)
+
+	starRocksChecks := sr.NewColumnCheckOperator(manager)
+	assign([]pipeline.AssetType{
+		pipeline.AssetTypeStarRocksQuery, pipeline.AssetTypeStarRocksSeed,
+		pipeline.AssetTypeStarRocksQuerySensor, pipeline.AssetTypeStarRocksTableSensor,
+	}, starRocksChecks, customCheck)
 
 	assign([]pipeline.AssetType{pipeline.AssetTypeSailQuerySensor}, sail.NewColumnCheckOperator(manager), customCheck)
 

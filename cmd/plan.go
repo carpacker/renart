@@ -35,8 +35,8 @@ func Plan() *cli.Command {
 		Flags: []cli.Flag{
 			workspaceFlag(),
 			&cli.StringFlag{Name: "env", Usage: "environment whose policy and configuration should be planned"},
-			&cli.StringFlag{Name: "start-date", Usage: "ISO start date for the execution window"},
-			&cli.StringFlag{Name: "end-date", Usage: "ISO end date for the execution window"},
+			&cli.StringFlag{Name: "start-date", Usage: "RFC3339 start timestamp for the execution window"},
+			&cli.StringFlag{Name: "end-date", Usage: "RFC3339 end timestamp for the execution window"},
 			&cli.StringFlag{Name: "execution-time", Usage: "RFC3339 execution timestamp used by templates (default: now)"},
 			&cli.StringFlag{Name: "source", Usage: "saved source: working-tree or snapshot"},
 			&cli.StringFlag{Name: "snapshot", Usage: "exact deployment version (implies --source snapshot)"},

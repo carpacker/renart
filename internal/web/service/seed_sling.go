@@ -218,6 +218,12 @@ func slingSeedColumnArgs(asset *pipeline.Asset) ([]string, error) {
 		}
 		args = append(args, "--columns", string(encoded))
 	}
+	if primaryKeys := asset.ColumnNamesWithPrimaryKey(); len(primaryKeys) > 0 {
+		// Besides preserving the authored table key, this prevents Sling's
+		// StarRocks fallback from inventing _sling_row_id after the explicit
+		// schema projection has already been fixed.
+		args = append(args, "--primary-key", strings.Join(primaryKeys, ","))
+	}
 	return args, nil
 }
 

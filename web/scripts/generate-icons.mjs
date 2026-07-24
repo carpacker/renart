@@ -4,7 +4,9 @@ import { execFileSync } from "node:child_process";
 import { chromium } from "@playwright/test";
 
 const webRoot = resolve(import.meta.dirname, "..");
+const repoRoot = resolve(webRoot, "..");
 const iconDir = resolve(webRoot, "public", "icons");
+const docsIconDir = resolve(repoRoot, "docs", "public", "icons");
 const sourceSvg = resolve(iconDir, "icon.svg");
 const svgMarkup = readFileSync(sourceSvg, "utf8");
 const svgDataUrl = `data:image/svg+xml;base64,${Buffer.from(svgMarkup).toString("base64")}`;
@@ -135,3 +137,8 @@ const favicon = createIcoFromPngs([
   readFileSync(resolve(iconDir, "icon-32.png")),
 ]);
 writeFileIfChanged(resolve(iconDir, "favicon.ico"), favicon);
+
+mkdirSync(docsIconDir, { recursive: true });
+for (const fileName of ["icon.svg", "icon-32.png", "icon-64.png", "apple-touch-icon.png"]) {
+  writeFileIfChanged(resolve(docsIconDir, fileName), readFileSync(resolve(iconDir, fileName)));
+}

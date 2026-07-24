@@ -35,7 +35,7 @@ func TestSlingSeedOperatorRunsSeedThroughSling(t *testing.T) {
 			"enforce_schema": "true",
 		},
 		Columns: []pipeline.Column{
-			{Name: "customer_id", Type: "integer"},
+			{Name: "customer_id", Type: "integer", PrimaryKey: true},
 			{Name: "customer_name", Type: "varchar(100)"},
 		},
 		ExecutableFile: pipeline.ExecutableFile{Path: filepath.Join(assetDir, "customers.asset.yml")},
@@ -56,7 +56,7 @@ func TestSlingSeedOperatorRunsSeedThroughSling(t *testing.T) {
 	assert.Contains(t, text, "--tgt-conn "+seedTargetConnectionEnv)
 	assert.Contains(t, text, "--tgt-object analytics.customers --mode full-refresh")
 	assert.Contains(t, text, `--tgt-options {"column_casing":"snake"}`)
-	assert.Contains(t, text, `--select customer_id,customer_name --columns {"customer_id":"integer","customer_name":"string(100)"}`)
+	assert.Contains(t, text, `--select customer_id,customer_name --columns {"customer_id":"integer","customer_name":"string(100)"} --primary-key customer_id`)
 	assert.NotContains(t, text, "ingestr")
 }
 

@@ -16,12 +16,22 @@ const trinoCatalogDir = resolve(
 const POSTGRES_IMAGE = "postgres:16-alpine";
 const CLICKHOUSE_IMAGE = "clickhouse/clickhouse-server:25.8.28-alpine";
 const TRINO_IMAGE = "trinodb/trino:482";
+const STARROCKS_IMAGE = "starrocks/allin1-ubuntu:3.5-latest";
+const MINIO_IMAGE = "quay.io/minio/minio:RELEASE.2025-06-13T11-33-47Z";
+const MINIO_CLIENT_IMAGE = "quay.io/minio/mc:RELEASE.2025-05-21T01-59-54Z";
+const MINIO_ACCESS_KEY = "renart";
+const MINIO_SECRET_KEY = "renart-secret";
+const DUCKLAKE_BUCKET = "renart-ducklake";
 
 export type LiveWarehouseMatrix = {
   postgresPort: number;
   clickhouseNativePort: number;
   clickhouseHTTPPort: number;
   trinoPort: number;
+  starrocksMySQLPort: number;
+  starrocksHTTPPort: number;
+  starrocksStreamLoadPort: number;
+  minioPort: number;
   dispose: () => Promise<void>;
 };
 
@@ -31,12 +41,18 @@ export async function createLiveWarehouseMatrix(): Promise<LiveWarehouseMatrix> 
   const postgresName = `renart-e2e-pg-${suffix}`;
   const clickhouseName = `renart-e2e-ch-${suffix}`;
   const trinoName = `renart-e2e-trino-${suffix}`;
-  const [postgresPort, clickhouseNativePort, clickhouseHTTPPort, trinoPort] = await Promise.all([
-    getAvailablePort(),
-    getAvailablePort(),
-    getAvailablePort(),
-    getAvailablePort(),
-  ]);
+  const starrocksName = `renart-e2e-starrocks-${suffix}`;
+  const minioName = `renart-e2e-minio-${suffix}`;
+  const [
+    postgresPort,
+    clickhouseNativePort,
+    clickhouseHTTPPort,
+    trinoPort,
+    starrocksMySQLPort,
+    starrocksHTTPPort,
+    starrocksStreamLoadPort,
+    minioPort,
+  ] = await Promise.all(Array.from({ length: 8 }, () => getAvailablePort()));
 
   const containers: string[] = [];
   let networkCreated = false;
@@ -209,11 +225,96 @@ insert into analytics.customer_activity_source (customer_id, activity_score) val
       "create schema if not exists analytics",
     ]);
 
+    await runCommand([
+      "docker",
+      "run",
+      "--rm",
+      "-d",
+      "--name",
+      starrocksName,
+      "--network",
+      networkName,
+      "--tmpfs",
+      "/data/deploy/starrocks/be/storage:rw,noexec,nosuid,size=2g",
+      "-p",
+      `127.0.0.1:${starrocksMySQLPort}:9030`,
+      "-p",
+      `127.0.0.1:${starrocksHTTPPort}:8030`,
+      "-p",
+      `127.0.0.1:${starrocksStreamLoadPort}:8040`,
+      STARROCKS_IMAGE,
+    ]);
+    containers.push(starrocksName);
+    await waitForCommand([
+      "docker",
+      "exec",
+      starrocksName,
+      "bash",
+      "-lc",
+      `mysql -P 9030 -h 127.0.0.1 -u root -N -e "show backends" | grep -q $'\\ttrue\\t'`,
+    ]);
+    await runCommand([
+      "docker",
+      "exec",
+      starrocksName,
+      "mysql",
+      "-P",
+      "9030",
+      "-h",
+      "127.0.0.1",
+      "-u",
+      "root",
+      "-e",
+      "create database if not exists analytics",
+    ]);
+
+    await runCommand([
+      "docker",
+      "run",
+      "--rm",
+      "-d",
+      "--name",
+      minioName,
+      "--network",
+      networkName,
+      "--network-alias",
+      "minio",
+      "-e",
+      `MINIO_ROOT_USER=${MINIO_ACCESS_KEY}`,
+      "-e",
+      `MINIO_ROOT_PASSWORD=${MINIO_SECRET_KEY}`,
+      "--tmpfs",
+      "/data:rw,noexec,nosuid,size=512m",
+      "-p",
+      `127.0.0.1:${minioPort}:9000`,
+      MINIO_IMAGE,
+      "server",
+      "/data",
+    ]);
+    containers.push(minioName);
+    await waitForHTTP(`http://127.0.0.1:${minioPort}/minio/health/live`);
+    await runCommand([
+      "docker",
+      "run",
+      "--rm",
+      "--network",
+      networkName,
+      "--entrypoint",
+      "/bin/sh",
+      MINIO_CLIENT_IMAGE,
+      "-c",
+      `mc alias set local http://minio:9000 ${MINIO_ACCESS_KEY} ${MINIO_SECRET_KEY} >/dev/null && mc mb --ignore-existing local/${DUCKLAKE_BUCKET}`,
+    ]);
+
     return {
       postgresPort,
       clickhouseNativePort,
       clickhouseHTTPPort,
       trinoPort,
+      starrocksMySQLPort,
+      starrocksHTTPPort,
+      starrocksStreamLoadPort,
+      minioPort,
       dispose,
     };
   } catch (error) {
@@ -235,6 +336,22 @@ async function waitForCommand(args: string[]) {
     }
   }
   throw lastError ?? new Error(`Timed out waiting for ${args.join(" ")}`);
+}
+
+async function waitForHTTP(url: string) {
+  const deadline = Date.now() + 180_000;
+  let lastError: unknown;
+  while (Date.now() < deadline) {
+    try {
+      const response = await fetch(url);
+      if (response.ok) return;
+      lastError = new Error(`${url} returned ${response.status}`);
+    } catch (error) {
+      lastError = error;
+    }
+    await new Promise((resolveDelay) => setTimeout(resolveDelay, 500));
+  }
+  throw lastError ?? new Error(`Timed out waiting for ${url}`);
 }
 
 function getAvailablePort() {

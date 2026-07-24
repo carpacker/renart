@@ -83,6 +83,7 @@ func TestLoadConnectionCategory(t *testing.T) {
 		"Postgres":  LoadCategoryDatabase,
 		"snowflake": LoadCategoryDatabase,
 		"duckdb":    LoadCategoryDatabase,
+		"starrocks": LoadCategoryDatabase,
 		"s3":        LoadCategoryStorage,
 		"gcs":       LoadCategoryStorage,
 		"sftp":      LoadCategoryFile,

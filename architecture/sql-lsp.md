@@ -66,6 +66,11 @@ coordinator's `WorkspaceState` rather than the filesystem:
   `.asset.yml`: the HTTP/LSP adapter and pipeline type-check both project
   `parameters.query`, assign the dialect from the sensor provider, and validate
   or search references against that SQL rather than the YAML definition.
+- A custom assertion query is an explicit `custom_check` document context.
+  It uses the owning asset's canonical graph and effective target-connection
+  dialect, including for Python, API, Seed, and Load assets. Reading the owning
+  materialized relation is valid, so circular-self-reference and saved
+  asset-body diagnostics are suppressed only for this context.
 - The graph is **cached by `WorkspaceState.Revision`** (monotonic, bumped on
   every mutation). Editing issues LSP requests per keystroke against the same
   saved state, so rebuilding per request was wasted work. `Revision == 0`
@@ -115,6 +120,13 @@ query semantics. It marks requests as an ad-hoc document: the selected asset is
 still borrowed for dialect and graph context, but asset/header diagnostics are
 not attached and a reference to that selected asset is not treated as the
 asset circularly referencing itself.
+
+The custom-check dialog uses the same hook for completion and diagnostics.
+Its Monaco model is independent from the asset body, so markers point at the
+assertion SQL itself. Pipeline type-check renders every saved custom check with
+the asset's Jinja context and validates it against the same schema snapshot.
+CLI findings repeat the check name but remain range-less because a line in an
+embedded metadata block is not the same coordinate space as the asset SQL body.
 
 Python assets and Python notebook cells project static SQL passed as the first
 argument to `query("...")` or `renart.query("...")` through
@@ -249,8 +261,9 @@ syntax/tolerant analysis. Message size is capped at 64 MiB.
 
 ## 6. Completion & diagnostic surface (web editor)
 
-The app's Monaco asset editors (`web/components/app/asset-editor.tsx` and the
-query-sensor editor) drive SQL intellisense **entirely through the LSP**
+The app's Monaco asset editors (`web/components/app/asset-editor.tsx`), the
+query-sensor editor, and custom-check dialog drive SQL intellisense **entirely
+through the LSP**
 (`web/hooks/use-sql-lsp.ts`); the older client-side parse-context providers are
 deliberately disabled, so the LSP is the single source of truth. Query sensors
 use an in-memory `.sql` Monaco model while persisting edits and formatting back

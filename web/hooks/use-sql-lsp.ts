@@ -54,7 +54,8 @@ export function useSQLLSP(
   onGoToCell?: (cellId: string) => void,
   options?: {
     includeNotebookRuntimeColumns?: boolean;
-    documentContext?: "asset" | "adhoc";
+    documentContext?: "asset" | "adhoc" | "custom_check";
+    allowNonSQLDocument?: boolean;
   },
 ) {
   const workspace = useAtomValue(workspaceAtom);
@@ -65,6 +66,7 @@ export function useSQLLSP(
   const connectionName = asset && workspace ? effectiveConnectionForAsset(asset) : null;
   const includeNotebookRuntimeColumns = options?.includeNotebookRuntimeColumns ?? false;
   const documentContext = options?.documentContext ?? "asset";
+  const allowNonSQLDocument = options?.allowNonSQLDocument ?? false;
 
   // The Monaco providers below are registered once per (editor, asset) and read
   // their live inputs through this ref. Keeping them off the effect's dependency
@@ -94,7 +96,7 @@ export function useSQLLSP(
   };
 
   useEffect(() => {
-    if (!monaco || !editor || !asset || !isSQLAsset(asset)) {
+    if (!monaco || !editor || !asset || (!isSQLAsset(asset) && !allowNonSQLDocument)) {
       return;
     }
     const model = editor.getModel();
@@ -187,6 +189,7 @@ export function useSQLLSP(
         const response = await getSQLLSPCompletions({
           asset_id: asset.id,
           content: currentModel.getValue(),
+          document_context: documentContext,
           position: monacoPositionToLSP(position),
         });
         const word = currentModel.getWordUntilPosition(position);
@@ -571,12 +574,14 @@ export function useSQLLSP(
     editor,
     asset?.id,
     includeNotebookRuntimeColumns,
+    allowNonSQLDocument,
+    documentContext,
     loadRemoteColumns,
     loadRemoteTables,
   ]);
 
   useEffect(() => {
-    if (!monaco || !editor || !asset || !isSQLAsset(asset)) {
+    if (!monaco || !editor || !asset || (!isSQLAsset(asset) && !allowNonSQLDocument)) {
       return;
     }
     const model = editor.getModel();

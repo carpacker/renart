@@ -1,6 +1,9 @@
 "use client";
 
-import { lazy, Suspense, useEffect, useRef, useState } from "react";
+import type { Monaco } from "@monaco-editor/react";
+import { useAtomValue } from "jotai";
+import type * as MonacoNS from "monaco-editor";
+import { lazy, Suspense, useCallback, useEffect, useRef, useState } from "react";
 import { Pencil, Plus, Trash2 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
@@ -23,9 +26,12 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
+import { useSQLLSP } from "@/hooks/use-sql-lsp";
 import { useWorkspaceTheme } from "@/hooks/use-workspace-theme";
 import { applyAssetTransaction } from "@/lib/api-asset-transactions";
+import { selectedAssetSchemaTablesAtom } from "@/lib/atoms/domains/suggestions";
 import { loadMonacoEditorModule } from "@/lib/load-monaco-editor";
+import { defineBruinMonacoThemes } from "@/lib/monaco-theme";
 import type { WebAsset, WebCustomCheck } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
@@ -44,11 +50,11 @@ type CheckDraft = {
   retries?: number;
 };
 
-function draftFor(check?: WebCustomCheck): CheckDraft {
+function draftFor(check: WebCustomCheck | undefined, assetName: string): CheckDraft {
   return {
     name: check?.name ?? "",
     description: check?.description ?? "",
-    query: check?.query ?? "select *\nfrom my_schema.my_table\nwhere false",
+    query: check?.query ?? `select *\nfrom ${assetName}\nwhere false`,
     evaluation: check ? (check.count === undefined ? "scalar" : "row_count") : "row_count",
     expected: String(check?.count ?? check?.value ?? 0),
     blocking: check?.blocking ?? true,
@@ -183,15 +189,47 @@ function CustomCheckDialog({
   onOpenChange: (open: boolean) => void;
 }) {
   const { monacoTheme } = useWorkspaceTheme();
-  const [draft, setDraft] = useState<CheckDraft>(() => draftFor(check ?? undefined));
+  const schemaTables = useAtomValue(selectedAssetSchemaTablesAtom);
+  const [draft, setDraft] = useState<CheckDraft>(() =>
+    draftFor(check ?? undefined, asset.name),
+  );
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
+  const [monacoInstance, setMonacoInstance] = useState<Monaco | null>(null);
+  const [editorInstance, setEditorInstance] =
+    useState<MonacoNS.editor.IStandaloneCodeEditor | null>(null);
+
+  useSQLLSP(
+    monacoInstance,
+    editorInstance,
+    asset,
+    draft.query,
+    schemaTables,
+    undefined,
+    undefined,
+    {
+      documentContext: "custom_check",
+      allowNonSQLDocument: true,
+    },
+  );
+
+  const handleBeforeMount = useCallback((monaco: Monaco) => {
+    defineBruinMonacoThemes(monaco);
+  }, []);
+  const handleMount = useCallback(
+    (editor: MonacoNS.editor.IStandaloneCodeEditor, monaco: Monaco) => {
+      defineBruinMonacoThemes(monaco);
+      setEditorInstance(editor);
+      setMonacoInstance(monaco);
+    },
+    [],
+  );
 
   useEffect(() => {
     if (!open) return;
-    setDraft(draftFor(check ?? undefined));
+    setDraft(draftFor(check ?? undefined, asset.name));
     setError("");
-  }, [check, open]);
+  }, [asset.name, check, open]);
 
   const expected = Number(draft.expected);
   const validExpected = Number.isSafeInteger(expected);
@@ -274,6 +312,8 @@ function CustomCheckDialog({
                     path={`inmemory://renart/custom-check/${asset.id}/${encodeURIComponent(check?.name ?? "new")}.sql`}
                     value={draft.query}
                     theme={monacoTheme}
+                    beforeMount={handleBeforeMount}
+                    onMount={handleMount}
                     onChange={(query) =>
                       setDraft((current) => ({ ...current, query: query ?? "" }))
                     }

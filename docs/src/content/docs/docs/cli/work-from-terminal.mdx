@@ -1,0 +1,100 @@
+---
+title: Work from the terminal
+description: Inspect, validate, preview, and run a Renart pipeline from the command line.
+---
+
+import TerminalRecording from "../../../../components/TerminalRecording.astro";
+
+Use the Renart CLI when you want the same pipeline model in a shell, script, or
+CI job. Commands discover the project by walking up from your current directory,
+the same way Git does.
+
+## Before you start
+
+- [Install Renart](/docs/installation/).
+- Open a terminal anywhere inside a Renart project.
+
+## Inspect and validate the project
+
+List the available assets, then type-check the pipeline before you execute
+anything:
+
+```bash
+renart ls assets
+renart type-check retail
+```
+
+Type-check validates dependencies, SQL columns and types, declared output
+schemas, materialization settings, and custom SQL checks. Add `--strict` in CI
+when warnings should also fail the job.
+
+<TerminalRecording
+  src="/cli-recordings/workflow.cast"
+  label="Interactive terminal recording that lists assets, type-checks a pipeline, and reviews its execution plan"
+  rows={16}
+/>
+
+## Review what would run
+
+`plan` explains the selection, readiness, execution units, and operation count
+without writing to a warehouse. It plans assets that need work by default:
+
+```bash
+renart plan retail
+renart plan retail --all
+renart plan retail --selector 'tag:daily,+analytics.daily_revenue'
+```
+
+Use `render` when you need the exact preview for one asset:
+
+```bash
+renart render analytics.daily_revenue
+renart render analytics.daily_revenue --json
+```
+
+<TerminalRecording
+  src="/cli-recordings/render.cast"
+  label="Interactive terminal recording of an asset render preview"
+  caption="The preview separates compiled SQL, setup operations, and execution SQL without running them."
+  rows={34}
+/>
+
+## Execute the pipeline
+
+Run the whole pipeline, one asset, or an asset plus its downstream dependents:
+
+```bash
+renart run retail
+renart run analytics.daily_revenue
+renart run analytics.customer_orders --downstream
+```
+
+When the IDE already has this project open, the command delegates to that local
+server so Runs, freshness, and results update immediately. Otherwise the command
+runs locally. Use `--json` for JSON Lines events or `--quiet` for a concise CI
+result.
+
+:::caution
+`renart run` writes to the selected environment. Review `renart plan` first,
+especially before `--full-refresh`.
+:::
+
+## Deploy a schedule snapshot
+
+After you review the current working tree, snapshot the pipeline version used by
+scheduled runs:
+
+```bash
+renart deploy retail
+```
+
+## Result
+
+You can inspect and validate a project, review exact operations, execute a
+selection, and deploy a schedule snapshot without leaving the terminal.
+
+## Related
+
+- [CLI reference](/docs/reference/cli/)
+- [Runs and history](/docs/workspace/runs-and-history/)
+- [How Renart works](/docs/how-it-works/)

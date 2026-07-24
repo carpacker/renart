@@ -22,18 +22,18 @@ import (
 func TypeCheck() *cli.Command {
 	return &cli.Command{
 		Name:      "type-check",
-		Usage:     "type-check a pipeline's dependencies, SQL columns/types, and declarations",
+		Usage:     "type-check a pipeline's dependencies, SQL declarations, and custom checks",
 		ArgsUsage: "[pipeline name or directory]",
 		Category:  categoryPipeline,
 		Flags: []cli.Flag{
 			workspaceFlag(),
 			&cli.StringFlag{
 				Name:  "start-date",
-				Usage: "ISO start date used for the Jinja date context (defaults to the pipeline schedule)",
+				Usage: "RFC3339 start timestamp used for the Jinja date context (defaults to the pipeline schedule)",
 			},
 			&cli.StringFlag{
 				Name:  "end-date",
-				Usage: "ISO end date used for the Jinja date context (defaults to the pipeline schedule)",
+				Usage: "RFC3339 end timestamp used for the Jinja date context (defaults to the pipeline schedule)",
 			},
 			&cli.BoolFlag{
 				Name:  "json",

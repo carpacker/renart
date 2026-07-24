@@ -129,7 +129,8 @@ func (s *SQLLSPService) Diagnostics(ctx context.Context, req SQLLSPRequest) (SQL
 	}
 	engine := sqllsp.NewEngineWithPolyglot(graph, s.polyglotClient())
 	diagnostics := engine.DiagnosticsContext(ctx, doc)
-	if strings.EqualFold(strings.TrimSpace(req.DocumentContext), "adhoc") {
+	documentContext := strings.ToLower(strings.TrimSpace(req.DocumentContext))
+	if documentContext == "adhoc" || documentContext == "custom_check" {
 		diagnostics = diagnosticsWithoutCode(diagnostics, "circular-dependency")
 	} else {
 		diagnostics = appendUniqueServiceDiagnostics(diagnostics, s.assetDiagnostics(ctx, req.AssetID, doc)...)
@@ -464,10 +465,40 @@ func (s *SQLLSPService) graphAndDocument(ctx context.Context, req SQLLSPRequest)
 	}
 	doc := sqllsp.TextDocumentItem{URI: assetURI(s.deps.WorkspaceRoot, asset), LanguageID: "sql", Text: content}
 	graph := s.graphForRequest(ctx, state, notebook)
+	if strings.EqualFold(strings.TrimSpace(req.DocumentContext), "custom_check") {
+		graph = graphWithCustomCheckDialect(graph, doc.URI, asset, state.Connections)
+	}
 	if connection := strings.TrimSpace(req.Connection); connection != "" {
 		graph = graphWithDocumentConnection(graph, doc.URI, connection)
 	}
 	return graph, doc, nil
+}
+
+func graphWithCustomCheckDialect(
+	graph sqllsp.CanonicalGraph,
+	documentURI sqllsp.URI,
+	asset model.Asset,
+	connectionTypes map[string]string,
+) sqllsp.CanonicalGraph {
+	dialect := sqllsp.DialectFromAssetType(asset.Type)
+	if dialect == "generic" {
+		connectionType := strings.TrimSpace(connectionTypes[asset.Connection])
+		if queryType, ok := queryAssetTypeForConnectionType(connectionType); ok {
+			dialect = sqllsp.DialectFromAssetType(string(queryType))
+		}
+	}
+	if dialect == "" {
+		dialect = "generic"
+	}
+	assets := append([]sqllsp.AssetNode(nil), graph.Assets...)
+	for index := range assets {
+		if assets[index].URI == documentURI {
+			assets[index].Dialect = dialect
+			break
+		}
+	}
+	graph.Assets = assets
+	return graph
 }
 
 // graphWithDocumentConnection gives an embedded SQL query its runtime-selected

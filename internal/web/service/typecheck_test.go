@@ -134,6 +134,45 @@ select id, missing_column from analytics.up
 	assert.Equal(t, typeCheckStatusError, report.Status)
 }
 
+func TestCheckPipelineValidatesCustomCheckSQLAgainstMaterializedAsset(t *testing.T) {
+	t.Parallel()
+	parsed, root := writeTypeCheckWorkspace(t, "name: analytics", map[string]string{
+		"orders.sql": `
+/* @bruin
+name: analytics.orders
+type: duckdb.sql
+materialization:
+  type: table
+columns:
+  - name: order_id
+    type: INTEGER
+custom_checks:
+  - name: positive totals
+    value: 0
+    query: |
+      select missing_total
+      from analytics.orders
+@bruin */
+select 1 as order_id
+`,
+	})
+
+	report := runTypeCheck(t, parsed, root)
+	orders := findAsset(t, report, "analytics.orders")
+	assert.Equal(t, typeCheckStatusError, orders.Status)
+	assert.True(
+		t,
+		hasFinding(orders, typeCheckSeverityError, `Custom check "positive totals": Unresolved column: missing_total`),
+		"expected custom-check SQL diagnostic, got %+v",
+		orders.Findings,
+	)
+	for _, finding := range orders.Findings {
+		if strings.Contains(finding.Message, `Custom check "positive totals"`) {
+			assert.Zero(t, finding.Line, "custom-check ranges must not point into the asset body")
+		}
+	}
+}
+
 func TestCheckPipelineWarnsForCrossConnectionReferenceThroughLSP(t *testing.T) {
 	t.Parallel()
 	parsed, root := writeTypeCheckWorkspace(t, "name: analytics", map[string]string{

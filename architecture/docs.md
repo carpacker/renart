@@ -188,6 +188,12 @@ every shipped image is the verbatim output of a script.
 - **Maintenance.** When the UI changes a surface, rerun the make target in the
   same PR and commit the regenerated images. If a capture's dimensions change,
   update the `width`/`height` where the image is referenced.
+- **Terminal recordings are generated too.** `make cli-recordings` builds the
+  current binary, scaffolds a disposable project, executes the documented
+  read-only CLI workflow, and writes deterministic asciicast v2 files under
+  `docs/public/cli-recordings/`. The self-hosted player is loaded only by pages
+  that embed `TerminalRecording.astro`; recordings are never uploaded to an
+  external service.
 
 ## 6. Conventions
 
@@ -271,6 +277,8 @@ shipped (July 2026; git history keeps the full plans).
   demo as `make docs-media`, §5): hero at 1920×1080; focused lifecycle crops
   at 910×585 (Build), 1008×648 (Explore), 1120×720 (Run), and 1176×756
   (Trust); bento at 1200×675. The shared 2× device scale emits retina webp
-  files, plus a 1200×675 PNG og-image, under `docs/public/landing/`. If a
-  capture changes dimensions, update the matching `<img>` width/height in
-  `index.astro`.
+  source files, responsive 480/768/1280-pixel variants (plus 1920-pixel
+  variants for wide media), and a 1200×675 PNG og-image under
+  `docs/public/landing/`. The landing page selects them with `srcset` and
+  `sizes`; if a capture changes dimensions, update the matching dimensions
+  and source descriptors in `index.astro`.

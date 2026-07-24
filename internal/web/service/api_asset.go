@@ -562,11 +562,13 @@ func (e *HybridBruinExecutor) runAPIAsset(ctx context.Context, pl *pipeline.Pipe
 		return writer.buffer.Bytes(), err
 	}
 	args = append(args, materializationArgs...)
+	args, connectionEnv := slingCommandConnectionEnv(args)
 	cmdName, cmdArgs, err := loadCommand(ctx, args, writer)
 	if err != nil {
 		return writer.buffer.Bytes(), err
 	}
 	cmd := newStreamingCommand(ctx, cmdName, cmdArgs, cmdDir, writer)
+	cmd.Env = append(cmd.Env, connectionEnv...)
 	lease, err := e.acquireDuckDBConnections(ctx, manager, []string{connectionName}, directTaskLeaseOwner(ctx, pl, asset), writer)
 	if err != nil {
 		return writer.buffer.Bytes(), err

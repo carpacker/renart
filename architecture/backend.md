@@ -778,9 +778,15 @@ selects Sling's replace mode without rewriting the asset definition, except
 that an already-full `truncate+insert` load remains in truncate mode to preserve
 that explicit dependency-safe contract. `refresh_restricted` assets keep their
 configured strategy and surface a warning instead. The shared Sling connection
-bridge emits Sling-native DSNs where Bruin's ingestr URI convention differs:
-Trino carries `catalog` and `schema` as query properties, while ClickHouse uses
-the database path and exposes only the TLS flag as a query property. Because
+bridge emits Sling-native connection shapes where the runtime URI convention
+differs: Trino carries `catalog` and `schema` as query properties, ClickHouse
+uses the database path and exposes only the TLS flag as a query property,
+DuckLake translates catalog/storage settings to its `catalog_conn_string` and
+`data_path` contract, and StarRocks uses a structured payload so `fe_url` is a
+connection property rather than a MySQL session variable. Source and target
+connections are passed through per-process environment aliases instead of
+argv, which also allows structured payloads without exposing credentials to
+process listings. Because
 Sling's PostgreSQL driver does not accept libpq's opportunistic `sslmode=allow`,
 the bridge changes that mode to `verify-ca` and emits a run-log warning asking
 the user to configure a supported mode explicitly. This compatibility rewrite
@@ -851,7 +857,9 @@ from generic ingestr assets. The operator resolves local sources relative to the
 asset definition (or accepts HTTP(S)), supplies an explicit source format, and
 full-refreshes the canonical asset name through the resolved target connection.
 With `enforce_schema` and declared columns, it also passes the source selection,
-renames, and supported type casts to Sling. The normal per-warehouse column and
+renames, supported type casts, and declared primary key to Sling. The key is
+required by StarRocks when an explicit projection prevents Sling from adding
+its synthetic row identifier. The normal per-warehouse column and
 custom checks still run around that main task. Renart additionally owns the
 `trino.seed` type and maps it to `default_connections.trino`; the pinned Bruin
 version has no equivalent type, so this asset remains intentionally Renart-only
@@ -863,6 +871,14 @@ configured timeout. HTTP and CLI execution can explicitly select
 effective mode rather than relying on UI behavior. The default is derived from
 the server-owned scheduled origin, not from the presence of a durable run ID,
 because queued manual runs also have IDs.
+
+The live warehouse parity test runs the same seven-asset graph through DuckDB,
+DuckLake (DuckDB catalog plus S3-compatible object storage), PostgreSQL, Trino,
+ClickHouse, and StarRocks. It covers seed, API extraction, cross-database Load,
+SQL, a query sensor, Python materialization, checks, and final inspection. The
+fixture gives each process an isolated ADBC configuration directory so a stale
+developer-installed DuckDB driver cannot change the result; optional local
+warehouse filtering only shortens focused debugging and never narrows CI.
 
 Python assets run through Renart's in-process operator
 (`service/python_operator.go`). Each task receives an embedded, version-locked

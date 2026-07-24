@@ -386,6 +386,27 @@ func TestRenderOutputDoesNotTreatDevNullAsTerminal(t *testing.T) {
 	}
 }
 
+func TestRenderOutputHonorsForcedColorForFileDescriptor(t *testing.T) {
+	t.Setenv("NO_COLOR", "")
+	t.Setenv("TERM", "xterm-256color")
+	t.Setenv("CLICOLOR", "")
+	t.Setenv("CLICOLOR_FORCE", "1")
+	devNull, err := os.OpenFile(os.DevNull, os.O_WRONLY, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer devNull.Close()
+
+	if !renderOutputSupportsColor(devNull) {
+		t.Fatal("CLICOLOR_FORCE should enable color for a file descriptor")
+	}
+
+	t.Setenv("NO_COLOR", "1")
+	if renderOutputSupportsColor(devNull) {
+		t.Fatal("NO_COLOR should override CLICOLOR_FORCE")
+	}
+}
+
 func writeRenderCLIWorkspace(t *testing.T) (string, string) {
 	t.Helper()
 	root := t.TempDir()

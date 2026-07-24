@@ -117,7 +117,8 @@ const stackItems = ['DuckDB', 'Postgres', 'Snowflake', 'BigQuery', 'Redshift', '
     <meta name="robots" content="index, follow" />
     <meta name="keywords" content="Renart, data pipeline IDE, data pipeline scheduler, staleness tracking, data lineage, SQL notebooks, git-native data pipelines, data engineering, analytics engineering" />
     <meta name="author" content="Renart" />
-    <link rel="icon" href="/icons/icon.svg" type="image/svg+xml" />
+    <link rel="icon" href="/icons/icon-32.png" type="image/png" sizes="32x32" />
+    <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png" sizes="180x180" />
     <link rel="canonical" href={siteUrl} />
     <link rel="sitemap" type="application/xml" href={`${siteUrl}/sitemap-index.xml`} />
     <meta property="og:type" content="website" />
@@ -146,7 +147,14 @@ const stackItems = ['DuckDB', 'Postgres', 'Snowflake', 'BigQuery', 'Redshift', '
     <header class="nav">
       <div class="nav-inner">
         <a href="/" class="logo" aria-label="Renart home">
-          <img class="logo-mark" src="/icons/icon.svg" alt="" width="22" height="22" />
+          <img
+            class="logo-mark"
+            src="/icons/icon-32.png"
+            srcset="/icons/icon-32.png 1x, /icons/icon-64.png 2x"
+            alt=""
+            width="22"
+            height="22"
+          />
           renart
         </a>
         <nav class="nav-links" aria-label="Primary navigation">
@@ -210,8 +218,11 @@ const stackItems = ['DuckDB', 'Postgres', 'Snowflake', 'BigQuery', 'Redshift', '
             alt="The Renart workspace: a SQL editor and live pipeline canvas side by side, with fresh and edited status badges on assets, inferred dependencies, and a query preview panel"
             width="1920"
             height="1080"
+            srcset="/landing/hero-workspace-480.webp 480w, /landing/hero-workspace-768.webp 768w, /landing/hero-workspace-1280.webp 1280w, /landing/hero-workspace-1920.webp 1920w, /landing/hero-workspace.webp 3840w"
+            sizes="(max-width: 760px) calc(100vw - 40px), (max-width: 1200px) calc(100vw - 56px), 1144px"
             loading="eager"
             fetchpriority="high"
+            decoding="async"
           />
         </div>
       </section>
@@ -245,7 +256,10 @@ const stackItems = ['DuckDB', 'Postgres', 'Snowflake', 'BigQuery', 'Redshift', '
                 alt="The Renart editor mid-keystroke: a completion popup lists columns from the upstream raw.customers table, with the column's type shown inline"
                 width="910"
                 height="585"
+                srcset="/landing/lifecycle-build-480.webp 480w, /landing/lifecycle-build-768.webp 768w, /landing/lifecycle-build-1280.webp 1280w, /landing/lifecycle-build.webp 1820w"
+                sizes="(max-width: 760px) calc(100vw - 40px), (max-width: 1100px) calc(100vw - 56px), 635px"
                 loading="lazy"
+                decoding="async"
               />
             </div>
           </article>
@@ -262,7 +276,10 @@ const stackItems = ['DuckDB', 'Postgres', 'Snowflake', 'BigQuery', 'Redshift', '
                 alt="A Renart SQL notebook: a query cell with its result table, a chart cell rendering a revenue line chart, and the cell menu open on the Promote to pipeline action"
                 width="1008"
                 height="648"
+                srcset="/landing/lifecycle-notebook-480.webp 480w, /landing/lifecycle-notebook-768.webp 768w, /landing/lifecycle-notebook-1280.webp 1280w, /landing/lifecycle-notebook.webp 2016w"
+                sizes="(max-width: 760px) calc(100vw - 40px), (max-width: 1100px) calc(100vw - 56px), 635px"
                 loading="lazy"
+                decoding="async"
               />
             </div>
           </article>
@@ -279,7 +296,10 @@ const stackItems = ['DuckDB', 'Postgres', 'Snowflake', 'BigQuery', 'Redshift', '
                 alt="The Renart schedules overview: populated pipeline environments show their cron cadence, pinned deployment, latest run state, and upcoming runs on a shared timeline"
                 width="1120"
                 height="720"
+                srcset="/landing/lifecycle-schedules-480.webp 480w, /landing/lifecycle-schedules-768.webp 768w, /landing/lifecycle-schedules-1280.webp 1280w, /landing/lifecycle-schedules.webp 2240w"
+                sizes="(max-width: 760px) calc(100vw - 40px), (max-width: 1100px) calc(100vw - 56px), 635px"
                 loading="lazy"
+                decoding="async"
               />
             </div>
           </article>
@@ -296,7 +316,10 @@ const stackItems = ['DuckDB', 'Postgres', 'Snowflake', 'BigQuery', 'Redshift', '
                 alt="The Renart pipeline canvas after an edit: the changed staging asset is marked Edited, its downstream marts are marked Upstream changed, a new asset shows Never built, and untouched assets stay Fresh"
                 width="1176"
                 height="756"
+                srcset="/landing/lifecycle-staleness-480.webp 480w, /landing/lifecycle-staleness-768.webp 768w, /landing/lifecycle-staleness-1280.webp 1280w, /landing/lifecycle-staleness.webp 2352w"
+                sizes="(max-width: 760px) calc(100vw - 40px), (max-width: 1100px) calc(100vw - 56px), 635px"
                 loading="lazy"
+                decoding="async"
               />
             </div>
           </article>
@@ -315,7 +338,10 @@ const stackItems = ['DuckDB', 'Postgres', 'Snowflake', 'BigQuery', 'Redshift', '
                 alt="A failed run in Renart: a per-asset execution timeline with one asset in red, and the event log pinpointing the exact SQL error that stopped the run"
                 width="1200"
                 height="675"
+                srcset="/landing/feature-runs-480.webp 480w, /landing/feature-runs-768.webp 768w, /landing/feature-runs-1280.webp 1280w, /landing/feature-runs-1920.webp 1920w, /landing/feature-runs.webp 2400w"
+                sizes="(max-width: 760px) calc(100vw - 40px), (max-width: 1200px) calc(100vw - 56px), 1144px"
                 loading="lazy"
+                decoding="async"
               />
             </div>
             <div class="card-content">
@@ -332,7 +358,10 @@ const stackItems = ['DuckDB', 'Postgres', 'Snowflake', 'BigQuery', 'Redshift', '
                 alt="The Renart catalog: lineage across every pipeline in the workspace, with one asset selected and its upstream path highlighted through the graph"
                 width="1200"
                 height="675"
+                srcset="/landing/feature-catalog-480.webp 480w, /landing/feature-catalog-768.webp 768w, /landing/feature-catalog-1280.webp 1280w, /landing/feature-catalog-1920.webp 1920w, /landing/feature-catalog.webp 2400w"
+                sizes="(max-width: 760px) calc(100vw - 40px), (max-width: 1200px) calc(100vw - 56px), 1144px"
                 loading="lazy"
+                decoding="async"
               />
             </div>
             <div class="card-content">
@@ -404,11 +433,21 @@ const stackItems = ['DuckDB', 'Postgres', 'Snowflake', 'BigQuery', 'Redshift', '
     <footer>
       <div class="footer-inner">
         <div class="foot-brand">
-          <a href="/" class="logo"><img class="logo-mark" src="/icons/icon.svg" alt="" width="22" height="22" />renart</a>
+          <a href="/" class="logo">
+            <img
+              class="logo-mark"
+              src="/icons/icon-32.png"
+              srcset="/icons/icon-32.png 1x, /icons/icon-64.png 2x"
+              alt=""
+              width="22"
+              height="22"
+            />
+            renart
+          </a>
           <p>The all-in-one data pipeline IDE. Public alpha, open source under Apache 2.0.</p>
         </div>
         <div class="foot-col">
-          <h5>Product</h5>
+          <h2>Product</h2>
           <ul>
             <li><a href="#lifecycle">Lifecycle</a></li>
             <li><a href="#features">Features</a></li>
@@ -416,7 +455,7 @@ const stackItems = ['DuckDB', 'Postgres', 'Snowflake', 'BigQuery', 'Redshift', '
           </ul>
         </div>
         <div class="foot-col">
-          <h5>Resources</h5>
+          <h2>Resources</h2>
           <ul>
             <li><a href="/docs/">Docs</a></li>
             <li><a href="/docs/installation/">Installation</a></li>
@@ -424,7 +463,7 @@ const stackItems = ['DuckDB', 'Postgres', 'Snowflake', 'BigQuery', 'Redshift', '
           </ul>
         </div>
         <div class="foot-col">
-          <h5>Community</h5>
+          <h2>Community</h2>
           <ul>
             <li><a href={repoUrl}>GitHub</a></li>
           </ul>
@@ -480,10 +519,6 @@ const stackItems = ['DuckDB', 'Postgres', 'Snowflake', 'BigQuery', 'Redshift', '
           { rootMargin: '0px 0px -8% 0px', threshold: 0.1 }
         );
         targets.forEach((el, index) => {
-          // Leave anything already on screen alone so nothing flashes at load.
-          if (el.getBoundingClientRect().top < window.innerHeight * 0.9) {
-            return;
-          }
           // Stagger cards within the bento grid; everything else reveals on its own.
           if (el.matches('.bento .card')) {
             el.style.setProperty('--reveal-delay', `${(index % 4) * 70}ms`);
@@ -804,11 +839,11 @@ const stackItems = ['DuckDB', 'Postgres', 'Snowflake', 'BigQuery', 'Redshift', '
   .footer-inner { max-width: 1200px; margin: 0 auto; padding: 56px 28px 48px; display: grid; grid-template-columns: 2fr 1fr 1fr 1fr; gap: 48px; }
   .foot-brand .logo { margin-bottom: 16px; }
   .foot-brand p { font-size: 13px; color: var(--fg-3); max-width: 32ch; margin: 16px 0 0; }
-  .foot-col h5 { font-family: var(--mono); font-size: 10.5px; color: var(--fg-4); text-transform: uppercase; letter-spacing: 0.1em; font-weight: 500; margin: 0 0 14px; }
+  .foot-col h2 { font-family: var(--mono); font-size: 10.5px; color: var(--fg-3); text-transform: uppercase; letter-spacing: 0.1em; font-weight: 500; margin: 0 0 14px; }
   .foot-col ul { list-style: none; display: flex; flex-direction: column; gap: 8px; margin: 0; padding: 0; }
   .foot-col a { font-size: 13.5px; color: var(--fg-2); }
   .foot-col a:hover { color: var(--accent); }
-  .foot-bottom { max-width: 1200px; margin: 0 auto; padding: 20px 28px; border-top: 1px solid var(--line); display: flex; align-items: center; justify-content: space-between; gap: 16px; font-family: var(--mono); font-size: 11.5px; color: var(--fg-4); }
+  .foot-bottom { max-width: 1200px; margin: 0 auto; padding: 20px 28px; border-top: 1px solid var(--line); display: flex; align-items: center; justify-content: space-between; gap: 16px; font-family: var(--mono); font-size: 11.5px; color: var(--fg-3); }
   .meta { display: flex; gap: 16px; align-items: center; }
   .toast { position: fixed; bottom: 24px; left: 50%; transform: translate(-50%, 12px); background: var(--bg-2); color: var(--accent); border: 1px solid var(--accent-soft-2); font-family: var(--mono); font-size: 12px; padding: 8px 14px; border-radius: var(--r-2); box-shadow: var(--shadow-pop); z-index: 1000; opacity: 0; pointer-events: none; transition: opacity 0.2s, transform 0.2s; }
   .toast.show { opacity: 1; transform: translate(-50%, 0); }

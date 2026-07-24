@@ -1149,11 +1149,75 @@ select customer_id, upper(customer_name) as shout from analytics.customers
     const properties = await openAssetProperties(page);
     const customChecks = properties.getByTestId("asset-custom-checks");
 
+    const initialDiagnostics = page.waitForResponse(
+      (response) =>
+        response.url().includes("/api/sql/lsp/diagnostics") &&
+        response.request().method() === "POST" &&
+        response.request().postDataJSON()?.document_context === "custom_check",
+      { timeout: 15000 },
+    );
     await customChecks.getByRole("button", { name: "Add", exact: true }).click();
     const dialog = page.getByRole("dialog", { name: "Add custom check" });
     await dialog.getByLabel("Name").fill("no invalid customers");
     await dialog.getByLabel("Description").fill("Customer identifiers stay positive");
     await expect(dialog.locator(".monaco-editor")).toBeVisible({ timeout: 15000 });
+    expect((await initialDiagnostics).ok()).toBe(true);
+
+    const completionQuery = "select c.\nfrom analytics.customers c";
+    const completionResponse = await page.request.post(
+      `${liveApp.baseURL}/api/sql/lsp/completions`,
+      {
+        data: {
+          asset_id: customersAssetId,
+          content: completionQuery,
+          document_context: "custom_check",
+          position: { line: 0, character: "select c.".length },
+        },
+      },
+    );
+    expect(completionResponse.ok()).toBe(true);
+    const completionPayload = (await completionResponse.json()) as {
+      status?: string;
+      completions?: Array<{ label?: string }>;
+    };
+    expect(completionPayload.status).toBe("ok");
+    expect(completionPayload.completions?.map((completion) => completion.label)).toEqual(
+      expect.arrayContaining(["customer_id", "customer_name"]),
+    );
+
+    if (!test.info().project.name.includes("mobile")) {
+      const editorCompletion = page.waitForResponse(
+        (response) =>
+          response.url().includes("/api/sql/lsp/completions") &&
+          response.request().method() === "POST" &&
+          response.request().postDataJSON()?.document_context === "custom_check",
+        { timeout: 15000 },
+      );
+      await page.evaluate((query) => {
+        const monaco = (window as typeof window & { monaco?: any }).monaco;
+        const model = monaco?.editor
+          .getModels?.()
+          .find((candidate: any) => candidate.uri?.toString?.().includes("/custom-check/"));
+        const editor = monaco?.editor
+          .getEditors?.()
+          .find((candidate: any) => candidate.getModel?.() === model);
+        if (!model || !editor) throw new Error("Custom check Monaco editor is not ready");
+        editor.setValue(query);
+        editor.setPosition(model.getPositionAt("select c.".length));
+        editor.focus();
+        editor.trigger("test", "editor.action.triggerSuggest", {});
+      }, completionQuery);
+      expect((await editorCompletion).ok()).toBe(true);
+      await expect(
+        page
+          .locator(".suggest-widget.visible")
+          .first()
+          .locator(".monaco-list-row")
+          .filter({ hasText: "customer_id" })
+          .first(),
+      ).toBeVisible({ timeout: 15000 });
+    }
+
     await page.evaluate(() => {
       const monaco = (window as typeof window & { monaco?: any }).monaco;
       const model = monaco?.editor

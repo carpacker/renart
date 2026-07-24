@@ -43,11 +43,13 @@ const postgresLockPath = resolve(e2eWorkspaceRoot, "postgres.lock");
 
 export const liveTest = base.extend<{
   fixtureName: string;
+  isolateUserConfig: boolean;
   liveAppEnv: Record<string, string | undefined>;
   liveApp: LiveApp;
   livePostgres: LivePostgres | null;
 }>({
   fixtureName: ["basic-workspace", { option: true }],
+  isolateUserConfig: [false, { option: true }],
   liveAppEnv: [{}, { option: true }],
   livePostgres: [
     async ({ fixtureName }, use) => {
@@ -146,7 +148,7 @@ export const liveTest = base.extend<{
       }
     }
   },
-  liveApp: async ({ fixtureName, livePostgres, liveAppEnv }, use) => {
+  liveApp: async ({ fixtureName, isolateUserConfig, livePostgres, liveAppEnv }, use) => {
     void livePostgres;
     if (!existsSync(binaryPath)) {
       throw new Error(
@@ -193,6 +195,9 @@ export const liveTest = base.extend<{
         // ~/.config/renart/projects.json. It dies with the workspace dir.
         env: {
           ...process.env,
+          ...(isolateUserConfig
+            ? { XDG_CONFIG_HOME: join(workspaceDir, ".renart", "config") }
+            : {}),
           RENART_PROJECTS_REGISTRY: join(workspaceDir, ".renart", "projects.json"),
           ...liveAppEnv,
         },

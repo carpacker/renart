@@ -173,8 +173,12 @@ round-trips unknown fields).
   checks open in a focused Monaco SQL dialog with named row-count or scalar
   expectations, descriptions, and blocking behavior; add/edit/remove actions
   use semantic asset transactions and keep the ordinary asset file as the only
-  source of truth. Runtime failure evidence is not written back into that asset
-  file. Instead, the state database retains only the failed check identity for
+  source of truth. The dialog uses the canonical SQL LSP for schema-aware
+  completion and live diagnostics. A check may query its owning materialized
+  asset without triggering a circular-dependency error, and non-SQL assets
+  inherit the SQL dialect of their effective target connection. Runtime failure
+  evidence is not written back into that asset file. Instead, the state database
+  retains only the failed check identity for
   the latest run; a current-content canvas warning can open this card and
   highlight the matching custom or column check without exposing query or error
   text in workspace metadata. Merge editing includes

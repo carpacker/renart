@@ -35,6 +35,8 @@ var assetTypeDialectMap = map[pipeline.AssetType]string{
 	pipeline.AssetTypeFabricQueryLegacy:     "fabric",
 	pipeline.AssetTypeMySQLQuery:            "mysql",
 	pipeline.AssetTypeMySQLQuerySensor:      "mysql",
+	pipeline.AssetTypeStarRocksQuery:        "mysql",
+	pipeline.AssetTypeStarRocksQuerySensor:  "mysql",
 	pipeline.AssetTypeOracleQuery:           "oracle",
 	pipeline.AssetTypeVerticaQuery:          "postgres",
 	pipeline.AssetTypeDuckDBQuery:           "duckdb",

@@ -21,12 +21,17 @@ func renderOutputSupportsColor(w io.Writer) bool {
 	if strings.TrimSpace(os.Getenv("NO_COLOR")) != "" || strings.EqualFold(strings.TrimSpace(os.Getenv("TERM")), "dumb") {
 		return false
 	}
-	if os.Getenv("CLICOLOR") == "0" && (os.Getenv("CLICOLOR_FORCE") == "" || os.Getenv("CLICOLOR_FORCE") == "0") {
+	forceColor := strings.TrimSpace(os.Getenv("CLICOLOR_FORCE"))
+	forced := forceColor != "" && forceColor != "0"
+	if os.Getenv("CLICOLOR") == "0" && !forced {
 		return false
 	}
 	terminal, ok := w.(fileDescriptorWriter)
 	if !ok {
 		return false
+	}
+	if forced {
+		return true
 	}
 	return isatty.IsTerminal(terminal.Fd()) || isatty.IsCygwinTerminal(terminal.Fd())
 }

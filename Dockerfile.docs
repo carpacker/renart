@@ -17,7 +17,7 @@ RUN pnpm install --frozen-lockfile
 
 WORKDIR /app
 COPY docs ./docs
-COPY web/public/icons/icon.svg ./web/public/icons/icon.svg
+COPY web/public/icons/icon-64.png ./web/public/icons/icon-64.png
 
 WORKDIR /app/docs
 RUN pnpm build

@@ -47,11 +47,11 @@ func Run() *cli.Command {
 			},
 			&cli.StringFlag{
 				Name:  "start-date",
-				Usage: "ISO start date for the run window (defaults to the pipeline schedule)",
+				Usage: "RFC3339 start timestamp for the run window (defaults to the pipeline schedule)",
 			},
 			&cli.StringFlag{
 				Name:  "end-date",
-				Usage: "ISO end date for the run window (defaults to the pipeline schedule)",
+				Usage: "RFC3339 end timestamp for the run window (defaults to the pipeline schedule)",
 			},
 			&cli.BoolFlag{
 				Name:  "downstream",

@@ -7,7 +7,7 @@ import { liveTest as test, type LiveApp } from "../live-app-fixture";
 import { createLiveWarehouseMatrix, type LiveWarehouseMatrix } from "../live-warehouse-matrix";
 
 type WarehouseVariant = {
-  name: "duckdb" | "postgres" | "trino" | "clickhouse";
+  name: "duckdb" | "ducklake" | "postgres" | "trino" | "clickhouse" | "starrocks";
   connection: string;
   defaultConnectionType: string;
   seedType: string;
@@ -49,6 +49,14 @@ const variants: WarehouseVariant[] = [
     sqlType: "duckdb.sql",
   },
   {
+    name: "ducklake",
+    connection: "ducklake-matrix",
+    defaultConnectionType: "duckdb",
+    seedType: "duckdb.seed",
+    sensorType: "duckdb.sensor.query",
+    sqlType: "duckdb.sql",
+  },
+  {
     name: "postgres",
     connection: "postgres-matrix",
     defaultConnectionType: "postgres",
@@ -72,7 +80,26 @@ const variants: WarehouseVariant[] = [
     sensorType: "clickhouse.sensor.query",
     sqlType: "clickhouse.sql",
   },
+  {
+    name: "starrocks",
+    connection: "starrocks-matrix",
+    defaultConnectionType: "starrocks",
+    seedType: "starrocks.seed",
+    sensorType: "starrocks.sensor.query",
+    sqlType: "starrocks.sql",
+  },
 ];
+
+const requestedVariants = new Set(
+  (process.env.RENART_E2E_WAREHOUSES ?? "")
+    .split(",")
+    .map((name) => name.trim())
+    .filter(Boolean),
+);
+const selectedVariants =
+  requestedVariants.size === 0
+    ? variants
+    : variants.filter((variant) => requestedVariants.has(variant.name));
 
 const expectedRows: FinalRow[] = [
   {
@@ -108,17 +135,14 @@ const expectedRows: FinalRow[] = [
 ];
 
 test.describe("multi-warehouse pipeline live", () => {
-  test.use({ fixtureName: "empty-workspace" });
+  test.use({ fixtureName: "empty-workspace", isolateUserConfig: true });
   test.skip(
     ({ isMobile }) => Boolean(isMobile),
     "The backend warehouse matrix only needs one browser project.",
   );
 
-  test("produces identical results on DuckDB, Postgres, Trino, and ClickHouse", async ({
-    liveApp,
-    page,
-  }) => {
-    test.setTimeout(20 * 60_000);
+  test("produces identical results across the live warehouse matrix", async ({ liveApp, page }) => {
+    test.setTimeout(30 * 60_000);
     const api = await startRegionsAPI();
     let warehouses: LiveWarehouseMatrix | undefined;
     try {
@@ -126,7 +150,7 @@ test.describe("multi-warehouse pipeline live", () => {
       await writeConnections(liveApp, warehouses);
 
       const results = new Map<string, FinalRow[]>();
-      for (const variant of variants) {
+      for (const variant of selectedVariants) {
         await writePipelineVariant(liveApp, variant, api.url);
         const pipeline = await waitForPipelineVariant(page, liveApp.baseURL, variant);
         const done = await materializePipeline(page, liveApp.baseURL, pipeline.id);
@@ -151,9 +175,9 @@ test.describe("multi-warehouse pipeline live", () => {
       }
 
       expect(Object.fromEntries(results)).toEqual(
-        Object.fromEntries(variants.map((variant) => [variant.name, expectedRows])),
+        Object.fromEntries(selectedVariants.map((variant) => [variant.name, expectedRows])),
       );
-      expect(api.requests).toBe(variants.length);
+      expect(api.requests).toBe(selectedVariants.length);
     } finally {
       if (warehouses) await warehouses.dispose();
       await new Promise<void>((resolveClose) => api.server.close(() => resolveClose()));
@@ -162,6 +186,12 @@ test.describe("multi-warehouse pipeline live", () => {
 });
 
 async function writeConnections(liveApp: LiveApp, warehouses: LiveWarehouseMatrix) {
+  const duckLakeCatalogDir = join(liveApp.workspaceDir, "duckdb-files");
+  await mkdir(duckLakeCatalogDir, { recursive: true });
+  const duckLakeCatalogPath = join(duckLakeCatalogDir, "ducklake-catalog.duckdb").replaceAll(
+    "\\",
+    "/",
+  );
   await writeFile(
     join(liveApp.workspaceDir, ".bruin.yml"),
     `default_environment: default
@@ -171,6 +201,23 @@ environments:
       duckdb:
         - name: duckdb-matrix
           path: duckdb-files/warehouse-matrix.duckdb
+        - name: ducklake-matrix
+          path: duckdb-files/ducklake-matrix.duckdb
+          lakehouse:
+            format: ducklake
+            catalog:
+              type: duckdb
+              path: ${JSON.stringify(duckLakeCatalogPath)}
+            storage:
+              type: s3
+              path: s3://renart-ducklake/warehouse
+              region: us-east-1
+              endpoint: 127.0.0.1:${warehouses.minioPort}
+              url_style: path
+              use_ssl: false
+              auth:
+                access_key: renart
+                secret_key: renart-secret
       postgres:
         - name: postgres-matrix
           host: 127.0.0.1
@@ -204,6 +251,17 @@ environments:
           password: renart
           database: analytics
           secure: 0
+      starrocks:
+        - name: starrocks-matrix
+          host: 127.0.0.1
+          port: ${warehouses.starrocksMySQLPort}
+          # The all-in-one image advertises its backend on container port 8040.
+          # Use the mapped backend endpoint directly so Stream Load does not
+          # follow a container-internal redirect from the host test process.
+          http_port: ${warehouses.starrocksStreamLoadPort}
+          username: root
+          database: analytics
+          replication_num: 1
 `,
     "utf8",
   );

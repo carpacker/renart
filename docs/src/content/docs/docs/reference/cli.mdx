@@ -1,32 +1,41 @@
 ---
 title: CLI reference
-description: Commands and flags for the renart CLI.
+description: Commands, flags, output modes, and exit behavior for the Renart CLI.
 ---
 
-The `renart` binary contains the whole product. `renart --help` and
-`renart <command> --help` are always authoritative for your installed
-version.
+# CLI reference
+
+The `renart` binary contains the IDE and its command-line workflows. Run
+`renart --help` or `renart <command> --help` for the exact reference shipped
+with your installed version.
+
+## Commands
 
 | Command | Purpose |
 | --- | --- |
-| `renart` | Start the browser-based IDE (the default release behavior). |
-| `renart web` | Start the Renart IDE. |
-| `renart run` | Run a pipeline or asset. |
-| `renart render` | Preview one saved asset without executing it. |
+| `renart` | Start the desktop app; fall back to the browser when the native helper is unavailable. |
+| `renart web` | Start the browser-based IDE. |
+| `renart standalone` | Start the desktop app explicitly. |
+| `renart run` | Execute a pipeline or asset. |
+| `renart plan` | Review readiness, selection, and planned operations without executing. |
+| `renart render` | Preview the saved operations for one asset without executing. |
 | `renart ls` | List pipelines or assets. |
-| `renart type-check` | Validate a pipeline's saved assets. |
+| `renart type-check` | Validate a pipeline's saved assets and custom SQL checks. |
 | `renart deploy` | Snapshot a pipeline for scheduled execution. |
 | `renart init` | Scaffold a project. |
-| `renart standalone` | Use the optional native helper, falling back to the browser. |
 
-Commands that take a pipeline or asset find your workspace the way git
-finds a repository: they walk up from the current directory, so you can run
-them from anywhere inside a project. Pass `--workspace` to point somewhere
-else.
+Pipeline commands walk up from the current directory to find the project. Use
+`--workspace` on commands that support it to select another project explicitly.
 
-## renart web
+## Exit codes
 
-Starts the Renart IDE in your browser.
+| Code | Meaning |
+| --- | --- |
+| `0` | The command completed successfully. |
+| `1` | Execution, planning, rendering, or validation completed with a blocking failure. |
+| `2` | The arguments or selected target are invalid. |
+
+## `renart web`
 
 ```bash
 renart web [options] [workspace root]
@@ -34,145 +43,205 @@ renart web [options] [workspace root]
 
 | Flag | Default | Meaning |
 | --- | --- | --- |
-| `--host` | `127.0.0.1` | Host interface to bind. Non-loopback hosts require `--unsafe-allow-remote`. |
-| `--port` | `8080` | HTTP port; if taken, the next free port is used. |
-| `--no-open` | | Don't open the browser after startup. |
-| `--unsafe-allow-remote` | | Allow an unauthenticated non-loopback listener. Unsafe; prefer a local tunnel. |
+| `--static-dir` | `web/dist` | Override the directory containing static web assets. |
 | `--watch-mode` | `auto` | Workspace watcher: `auto`, `fsnotify`, or `poll`. |
-| `--watch-poll-interval` | `2s` | Poll interval when polling. |
-| `--scheduler` | | Run the local in-process scheduler. |
+| `--watch-poll-interval` | `2s` | Poll interval used by `poll` and by the polling fallback in `auto`. |
+| `--scheduler` | off | Run the local in-process scheduler. |
 | `--scheduler-state` | `.renart/state.db` | Scheduler SQLite state path. |
-| `--tls-cert`, `--tls-key` | | Serve HTTPS/HTTP2 with the given cert and key. |
+| `--host` | `127.0.0.1` | Interface to bind. A non-loopback host requires `--unsafe-allow-remote`. |
+| `--port` | `8080` | HTTP port; Renart selects the next free port when it is occupied. |
+| `--unsafe-allow-remote` | off | Allow an unauthenticated non-loopback listener. Prefer a local tunnel. |
+| `--tls-cert` | | TLS certificate path; use with `--tls-key`. |
+| `--tls-key` | | TLS private-key path; use with `--tls-cert`. |
+| `--no-open` | off | Do not open the default browser after startup. |
 
-## renart run
-
-Runs a pipeline or a single asset and streams the output. Without an
-argument it runs the pipeline enclosing the current directory.
-
-```bash
-renart run                    # the pipeline around you
-renart run acme_shop          # a pipeline by name
-renart run marts.daily_revenue
-renart run acme_shop/assets/marts/daily_revenue.sql
-```
-
-If the Renart IDE is open on the same workspace, the run goes through it —
-run history, freshness badges, and the results panel update live, exactly
-as if you had pressed Build. Without one, the run executes in-process and
-the IDE picks up the results the next time it starts.
-
-| Flag | Meaning |
-| --- | --- |
-| `--downstream` | Asset targets only: also run everything downstream. |
-| `--refresh-upstreams` | Asset targets only: first build stale transitive upstreams using their configured strategies. |
-| `--full-refresh` | Rebuild from scratch instead of running incrementally. |
-| `--env` | Environment to run against (default: the workspace's selected environment). |
-| `--start-date`, `--end-date` | ISO dates for the run window (default: the pipeline schedule). |
-| `--json` | JSON-lines events for scripting. |
-| `--quiet` | Only the final status line — good for CI. |
-| `--local` | Run in-process even when the IDE is open (not recommended: the two can contend for the warehouse). |
-
-Exit codes: `0` success, `1` the run failed, `2` usage error.
-
-## renart render
-
-Previews the saved operations for one asset without executing them or
-connecting to a warehouse.
-
-| Flag | Meaning |
-| --- | --- |
-| `--workspace` | Use a workspace other than the one found from the current directory. |
-| `--env` | Environment whose render context is used. |
-| `--start-date`, `--end-date` | ISO dates for the preview window (default: the pipeline schedule). |
-| `--execution-time` | RFC 3339 timestamp used by templates (default: now). |
-| `--full-refresh` | Preview full-refresh behavior when the environment permits it. |
-| `--json` | Emit the structured render response as JSON. |
-| `--local` | Render in-process even when the IDE is open. |
+## `renart standalone`
 
 ```bash
-renart render marts.daily_revenue
-renart render --json acme_shop/assets/raw/customers.asset.yml
+renart standalone [options] [workspace root]
 ```
 
-If the IDE has the workspace open, the command delegates to that server and
-uses the same render service as the Build workbench. Otherwise it uses the
-read-only service in-process without starting the scheduler or state database.
+`renart standalone` starts the same embedded server as `renart web` and opens
+it with the optional `renart-gui` helper installed beside the CLI. If the
+platform webview is unavailable, it opens the browser instead.
 
-SQL stages distinguish the exact compiled query from execution SQL. Non-SQL
-assets can show semantic operations, while Python is marked runtime-only
-because its code decides the final operations at runtime. Every stage reports
-its fidelity; a semantic or runtime-only stage is not presented as exact SQL.
-Configured column and custom quality checks are listed as individually named
-stages, with their exact destination-specific SQL when the direct runtime can
-render it without a warehouse. Credential values are redacted or omitted.
-In an interactive terminal, SQL and other structured stage bodies are syntax
-highlighted using terminal light/dark hints when available. Piped or redirected output stays
-plain; set `NO_COLOR=1` to disable color explicitly. `--json` never includes
-ANSI formatting.
+| Flag | Default | Meaning |
+| --- | --- | --- |
+| `--static-dir` | `web/dist` | Override the directory containing static web assets. |
+| `--watch-mode` | `auto` | Workspace watcher: `auto`, `fsnotify`, or `poll`. |
+| `--watch-poll-interval` | `2s` | Poll interval used by `poll` and by the polling fallback in `auto`. |
+| `--scheduler` | off | Run the local in-process scheduler. |
+| `--scheduler-state` | `.renart/state.db` | Scheduler SQLite state path. |
+| `--port` | `0` | Loopback port; `0` selects a free port. |
+| `--gui-binary` | beside `renart` | Override the native-helper path. The `RENART_GUI_BINARY` environment variable provides the same override. |
 
-Exit codes: `0` preview produced, `1` render error or unsupported asset, `2`
-usage error.
-
-## renart ls
-
-Lists pipelines or assets in the workspace.
+## `renart run`
 
 ```bash
-renart ls                  # pipelines: name, assets, schedule
-renart ls assets           # every asset
-renart ls assets acme_shop # assets of one pipeline
+renart run [options] [pipeline, asset name, or path]
 ```
 
-`--json` emits the same listing as JSON.
+Without a target, the command runs the pipeline enclosing the current
+directory. When the IDE already has the same project open, the command delegates
+to that local server; `--local` bypasses it.
 
-## renart type-check
+```bash
+renart run
+renart run retail
+renart run analytics.daily_revenue
+renart run analytics.customer_orders --downstream
+```
 
-Type-checks a pipeline's assets — declared dependency existence, SQL columns
-and types, materialization configuration, and missing column declarations. Exit
-code is non-zero on errors, which makes it a natural CI step.
+| Flag | Default | Meaning |
+| --- | --- | --- |
+| `--workspace` | discovered | Select a project root. |
+| `--env` | selected environment | Environment to execute against. |
+| `--start-date` | schedule window | RFC 3339 start timestamp for the execution window. |
+| `--end-date` | schedule window | RFC 3339 end timestamp for the execution window. |
+| `--downstream` | off | Asset targets only: include every downstream asset. |
+| `--refresh-upstreams` | off | Asset targets only: build stale transitive upstreams first. |
+| `--full-refresh` | off | Rebuild from scratch instead of using the saved incremental strategy. |
+| `--sensor-mode` | `once` | Sensor behavior: `once`, `wait`, or `skip`. |
+| `--confirm-environment` | | Supply the environment name when its policy requires explicit confirmation. |
+| `--local` | off | Execute in-process even when the IDE is open. `RENART_NO_SERVER` provides the same override. |
+| `--json` | off | Emit JSON Lines events. |
+| `--quiet`, `-q` | off | Suppress streamed output and print only the final status. |
+
+## `renart plan`
+
+```bash
+renart plan [options] [pipeline, asset name, or path]
+```
+
+The default selection contains assets that need work. Pass an asset to plan its
+closure, `--all` for the whole pipeline, or `--selector` for an expression.
+
+```bash
+renart plan retail
+renart plan retail --all
+renart plan retail --selector 'tag:daily,+analytics.daily_revenue'
+renart plan analytics.daily_revenue --upstream
+```
+
+| Flag | Default | Meaning |
+| --- | --- | --- |
+| `--workspace` | discovered | Select a project root. |
+| `--env` | selected environment | Environment whose configuration and policy to use. |
+| `--start-date` | schedule window | RFC 3339 start timestamp for the planned window. |
+| `--end-date` | schedule window | RFC 3339 end timestamp for the planned window. |
+| `--execution-time` | now | RFC 3339 timestamp used by templates. |
+| `--source` | working tree | Saved source: `working-tree` or `snapshot`. |
+| `--snapshot` | | Exact deployment version; implies `--source snapshot`. |
+| `--all` | off | Plan every asset instead of only assets that need work. |
+| `--selector` | | Pipeline targets only: select assets with an expression. |
+| `--selector-needed` | off | With `--selector`, retain only matching assets that need work. |
+| `--upstream` | off | Asset targets only: include upstream dependencies. |
+| `--downstream` | off | Asset targets only: include downstream dependents. |
+| `--full-refresh` | off | Preview the effective full-refresh form. |
+| `--backfill` | off | Mark an explicit single-asset window as a backfill. |
+| `--sensor-mode` | `once` | Sensor behavior: `once`, `wait`, or `skip`. |
+| `--include-stage-content` | off | Include rendered operation bodies in human output. |
+| `--local` | off | Plan in-process even when the IDE is open. `RENART_NO_SERVER` provides the same override. |
+| `--json` | off | Emit the structured plan response as JSON. |
+
+## `renart render`
+
+```bash
+renart render [options] <asset name or path>
+```
+
+The preview distinguishes compiled SQL, execution SQL, semantic operations, and
+runtime-only stages. It lists column and custom quality checks as named stages.
+Interactive output highlights structured stage bodies; redirected output and
+`--json` contain no ANSI formatting. Set `NO_COLOR=1` to disable color.
+
+```bash
+renart render analytics.daily_revenue
+renart render analytics.daily_revenue --source snapshot --snapshot deployment-id
+renart render raw.customers --json
+```
+
+| Flag | Default | Meaning |
+| --- | --- | --- |
+| `--workspace` | discovered | Select a project root. |
+| `--env` | selected environment | Environment whose render context to use. |
+| `--start-date` | schedule window | RFC 3339 start timestamp for the preview window. |
+| `--end-date` | schedule window | RFC 3339 end timestamp for the preview window. |
+| `--execution-time` | now | RFC 3339 timestamp used by templates. |
+| `--full-refresh` | off | Preview the full-refresh form when policy permits it. |
+| `--source` | working tree | Saved source: `working-tree` or `snapshot`. |
+| `--snapshot` | | Exact deployment version; implies `--source snapshot`. |
+| `--local` | off | Render in-process even when the IDE is open. `RENART_NO_SERVER` provides the same override. |
+| `--json` | off | Emit the structured render response as JSON. |
+
+## `renart ls`
+
+```bash
+renart ls [options] [pipelines|assets] [pipeline]
+```
+
+```bash
+renart ls
+renart ls assets
+renart ls assets retail
+```
+
+| Flag | Default | Meaning |
+| --- | --- | --- |
+| `--workspace` | discovered | Select a project root. |
+| `--json` | off | Emit JSON instead of a table. |
+
+## `renart type-check`
 
 ```bash
 renart type-check [options] [pipeline name or directory]
 ```
 
-| Flag | Meaning |
-| --- | --- |
-| `--json` | Emit the full report as JSON. |
-| `--strict` | Also fail on warnings. |
-| `--start-date`, `--end-date` | ISO dates for the template date context (default: the pipeline schedule). |
+Type-check validates dependencies, SQL columns and types, declared output
+schemas, materialization configuration, required declarations, and custom SQL
+checks. It exits with code `1` on errors.
 
-## renart deploy
+| Flag | Default | Meaning |
+| --- | --- | --- |
+| `--workspace` | discovered | Select a project root. |
+| `--start-date` | schedule window | RFC 3339 start timestamp for the template context. |
+| `--end-date` | schedule window | RFC 3339 end timestamp for the template context. |
+| `--json` | off | Emit the full report as JSON. |
+| `--strict` | off | Also exit with code `1` when the report contains warnings. |
 
-Snapshots a pipeline so scheduled runs execute the deployed version, no
-matter what you edit afterwards. The same action as **Deploy** in the
-schedules view.
-
-```bash
-renart deploy [pipeline name or directory]
-```
-
-## renart init
-
-Scaffolds a new project — the same templates the welcome screen offers.
+## `renart deploy`
 
 ```bash
-renart init my-project --template retail
+renart deploy [options] [pipeline name or directory]
 ```
+
+Creates the same immutable schedule snapshot as **Deploy** in Schedules.
+
+| Flag | Default | Meaning |
+| --- | --- | --- |
+| `--workspace` | discovered | Select a project root. |
+
+## `renart init`
+
+```bash
+renart init [options] [directory]
+```
+
+The directory defaults to the current directory. Renart initializes a Git
+repository when no repository encloses it.
+
+| Flag | Default | Meaning |
+| --- | --- | --- |
+| `--template` | `empty` | Project template: `empty`, `retail`, or `chess`. |
 
 | Template | Contents |
 | --- | --- |
-| `empty` | A minimal pipeline to build on (default). |
-| `retail` | An offline seed-and-SQL demo with bundled CSV data. |
-| `chess` | A live demo pulling from the public Chess.com API. |
+| `empty` | A minimal pipeline to build on. |
+| `retail` | An offline seed-and-SQL example with bundled CSV data. |
+| `chess` | A live example that reads the public Chess.com API. |
 
-The directory becomes its own git repository (with an initial commit)
-unless it is already inside one.
+## Related
 
-## renart standalone
-
-Starts the same embedded server as `renart web` and uses the optional
-`renart-gui` helper installed next to the Renart binary. Release archives and
-the one-line installer include the matching helper. If its platform webview is
-unavailable, the command logs the fallback and opens the browser instead.
-`--port` defaults to `0`, which picks a free loopback port. Running `renart`
-without a subcommand is equivalent to `renart standalone`.
+- [Work from the terminal](/docs/cli/work-from-terminal/)
+- [Installation](/docs/installation/)
+- [Runs and history](/docs/workspace/runs-and-history/)

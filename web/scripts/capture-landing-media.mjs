@@ -3,8 +3,8 @@
 // Run with `make landing-media` (or `pnpm landing:media` in web/, which builds
 // web/dist first). The demo workspace, server, and staged state come from
 // demo-media-lib.mjs (shared with make docs-media); this script captures the
-// seven landing shots, converts them to webp (q92), and renders the 1200x675
-// og-image.
+// seven landing shots, converts them to webp (q92), emits responsive webp
+// variants for the site, and renders the 1200x675 og-image.
 //
 // Env overrides: RENART_LANDING_MEDIA_DIR (output dir),
 // RENART_LANDING_MEDIA_PORT, GO_BIN, RENART_KEEP_LANDING_WORKSPACE=1.
@@ -25,6 +25,29 @@ const outputDir = path.resolve(
   process.env.RENART_LANDING_MEDIA_DIR ?? path.join(repoRoot, "docs", "public", "landing"),
 );
 const port = Number(process.env.RENART_LANDING_MEDIA_PORT ?? "18183");
+const responsiveWidths = {
+  "hero-workspace": [480, 768, 1280, 1920],
+  "lifecycle-build": [480, 768, 1280],
+  "lifecycle-notebook": [480, 768, 1280],
+  "lifecycle-schedules": [480, 768, 1280],
+  "lifecycle-staleness": [480, 768, 1280],
+  "feature-runs": [480, 768, 1280, 1920],
+  "feature-catalog": [480, 768, 1280, 1920],
+};
+
+async function writeResponsiveVariants() {
+  const sharpLib = sharp();
+  for (const [name, widths] of Object.entries(responsiveWidths)) {
+    const source = path.join(outputDir, `${name}.webp`);
+    for (const width of widths) {
+      const info = await sharpLib(source)
+        .resize({ width, withoutEnlargement: true })
+        .webp({ quality: 86, smartSubsample: true, effort: 6 })
+        .toFile(path.join(outputDir, `${name}-${width}.webp`));
+      console.log(`${name}-${width}.webp ${info.width}x${info.height} ${info.size} bytes`);
+    }
+  }
+}
 
 let demo;
 let browser;
@@ -212,6 +235,7 @@ FROM raw.orders o`,
     "feature-runs",
     "feature-catalog",
   ]);
+  await writeResponsiveVariants();
   console.log(`\nLanding media written to ${outputDir}`);
   console.log(
     "If a capture changed size, update the <img> width/height in docs/src/pages/index.astro.",

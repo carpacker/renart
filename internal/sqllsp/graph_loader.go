@@ -407,6 +407,8 @@ func DialectFromAssetType(assetType string) string {
 		return "trino"
 	case "my.sql", "my.sensor.query":
 		return "mysql"
+	case "starrocks.sql", "starrocks.sensor.query":
+		return "mysql"
 	case "oracle.sql":
 		return "oracle"
 	default:

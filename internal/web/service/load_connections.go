@@ -37,6 +37,7 @@ var loadDatabaseConnectionTypes = map[string]struct{}{
 	"snowflake":             {},
 	"spanner":               {},
 	"sqlite":                {},
+	"starrocks":             {},
 	"synapse":               {},
 	"trino":                 {},
 	"vertica":               {},

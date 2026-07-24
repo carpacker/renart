@@ -878,7 +878,7 @@ func (s *AssetRenderService) renderPath(ctx context.Context, assetPath string, r
 				Status:      AssetRenderStageStatusOK,
 				Fidelity:    AssetRenderFidelitySemantic,
 				Conditional: true,
-				Message:     "executed until Bruin's connection-local schema cache records this schema",
+				Message:     "executed until the connection-local schema cache records this schema",
 			})
 		}
 	}
@@ -995,7 +995,7 @@ func appendDatabricksPreparationStage(result *AssetRenderResult, label, sql stri
 		Status:      AssetRenderStageStatusOK,
 		Fidelity:    AssetRenderFidelitySemantic,
 		Conditional: true,
-		Message:     "executed until Bruin's connection-local preparation cache records this object",
+		Message:     "executed until the connection-local preparation cache records this object",
 	})
 }
 

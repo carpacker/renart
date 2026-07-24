@@ -3,6 +3,8 @@ package service
 import (
 	"bytes"
 	"context"
+	"encoding/json"
+	"net/url"
 	"os"
 	"path/filepath"
 	"testing"
@@ -71,6 +73,100 @@ func TestLoadConnectionURIUsesSlingClickHouseProperties(t *testing.T) {
 	uri, err := loadConnectionURI(manager, "clickhouse-default")
 	require.NoError(t, err)
 	assert.Equal(t, "clickhouse://renart:p%40ssword@clickhouse.internal:9000/analytics?secure=true", uri)
+}
+
+func TestLoadConnectionURIUsesSlingDuckLakeProperties(t *testing.T) {
+	t.Parallel()
+
+	useSSL := false
+	manager := loadConnectionManagerWithDetails{
+		connection:     "ducklake://?catalog_database=metadata",
+		connectionType: "duckdb",
+		details: &config.DuckDBConnection{
+			ConnectionMetadata: config.ConnectionMetadata{Name: "ducklake-default"},
+			Path:               "/tmp/runner.duckdb",
+			Lakehouse: &config.LakehouseConfig{
+				Format: config.LakehouseFormatDuckLake,
+				Catalog: config.CatalogConfig{
+					Type:     config.CatalogTypePostgres,
+					Host:     "postgres.internal",
+					Port:     5432,
+					Database: "metadata",
+					Auth: config.CatalogAuth{
+						Username: "renart",
+						Password: "p'ass word",
+					},
+				},
+				Storage: config.StorageConfig{
+					Type:     config.StorageTypeS3,
+					Path:     "s3://warehouse/data",
+					Region:   "us-east-1",
+					Endpoint: "minio.internal:9000",
+					URLStyle: "path",
+					UseSSL:   &useSSL,
+					Auth: config.StorageAuth{
+						AccessKey:    "access",
+						SecretKey:    "secret",
+						SessionToken: "session",
+					},
+				},
+			},
+		},
+	}
+
+	rawURI, err := loadConnectionURI(manager, "ducklake-default")
+	require.NoError(t, err)
+	parsed, err := url.Parse(rawURI)
+	require.NoError(t, err)
+	assert.Equal(t, "ducklake", parsed.Scheme)
+	assert.Equal(t, "postgres", parsed.Query().Get("catalog_type"))
+	assert.Equal(
+		t,
+		"postgresql://renart:p%27ass%20word@postgres.internal:5432/metadata",
+		parsed.Query().Get("catalog_conn_string"),
+	)
+	assert.Equal(t, "s3://warehouse/data", parsed.Query().Get("data_path"))
+	assert.Equal(t, "minio.internal:9000", parsed.Query().Get("s3_endpoint"))
+	assert.Equal(t, "access", parsed.Query().Get("s3_access_key_id"))
+	assert.Equal(t, "secret", parsed.Query().Get("s3_secret_access_key"))
+	assert.Equal(t, "session", parsed.Query().Get("s3_session_token"))
+	assert.Equal(t, "path", parsed.Query().Get("url_style"))
+	assert.Equal(t, "false", parsed.Query().Get("use_ssl"))
+	assert.Empty(t, parsed.Query().Get("catalog_host"))
+	assert.Empty(t, parsed.Query().Get("storage_path"))
+}
+
+func TestLoadConnectionURIUsesSlingStarRocksProperties(t *testing.T) {
+	t.Parallel()
+
+	manager := loadConnectionManagerWithDetails{
+		connection:     "starrocks://renart:p%40ssword@starrocks.internal:9030/analytics?http_port=8030&replication_num=1",
+		connectionType: "starrocks",
+		details: &config.StarRocksConnection{
+			ConnectionMetadata: config.ConnectionMetadata{Name: "starrocks-default"},
+			Host:               "starrocks.internal",
+			Port:               9030,
+			HTTPPort:           8030,
+			Username:           "renart",
+			Password:           "p@ssword",
+			Database:           "analytics",
+			ReplicationNum:     1,
+		},
+	}
+
+	payload, err := loadConnectionURI(manager, "starrocks-default")
+	require.NoError(t, err)
+	var properties map[string]any
+	require.NoError(t, json.Unmarshal([]byte(payload), &properties))
+	assert.Equal(t, "starrocks", properties["type"])
+	assert.Equal(t, "starrocks.internal", properties["host"])
+	assert.Equal(t, float64(9030), properties["port"])
+	assert.Equal(t, "analytics", properties["database"])
+	assert.Equal(t, "renart", properties["user"])
+	assert.Equal(t, "p@ssword", properties["password"])
+	assert.Equal(t, "http://starrocks.internal:8030", properties["fe_url"])
+	assert.NotContains(t, payload, "http_port")
+	assert.NotContains(t, payload, "replication_num")
 }
 
 func TestLoadConnectionURIUsesSupportedPostgresSSLModeForSling(t *testing.T) {
@@ -376,7 +472,7 @@ func (m loadTestConnectionManager) GetConnection(name string) any {
 func TestHybridBruinExecutorRunsCanonicalLoadAssetWithCLI(t *testing.T) {
 	workspaceRoot := t.TempDir()
 	fakeLoad := filepath.Join(workspaceRoot, "fake-sling")
-	require.NoError(t, os.WriteFile(fakeLoad, []byte("#!/bin/sh\nprintf 'sling %s loaded_at=%s\\n' \"$*\" \"$SLING_LOADED_AT_COLUMN\"\n"), 0o755))
+	require.NoError(t, os.WriteFile(fakeLoad, []byte("#!/bin/sh\nprintf 'sling %s loaded_at=%s source=%s target=%s\\n' \"$*\" \"$SLING_LOADED_AT_COLUMN\" \"$RENART_SLING_SOURCE\" \"$RENART_SLING_TARGET\"\n"), 0o755))
 	t.Setenv("RENART_SLING_BINARY", fakeLoad)
 
 	executor := NewHybridBruinExecutor(workspaceRoot, "bruin", nil, nil)
@@ -398,7 +494,8 @@ func TestHybridBruinExecutorRunsCanonicalLoadAssetWithCLI(t *testing.T) {
 	})
 	require.NoError(t, err)
 	assert.Equal(t, output, chunks.Bytes())
-	assert.Contains(t, string(output), "sling run --src-conn postgresql://source --src-stream public.orders --tgt-conn duckdb://target --tgt-object analytics.orders")
+	assert.Contains(t, string(output), "sling run --src-conn RENART_SLING_SOURCE --src-stream public.orders --tgt-conn RENART_SLING_TARGET --tgt-object analytics.orders")
+	assert.Contains(t, string(output), "source=postgresql://source target=duckdb://target")
 	assert.Contains(t, string(output), "loaded_at=false")
 }
 

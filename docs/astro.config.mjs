@@ -23,6 +23,10 @@ const docsStructuredData = JSON.stringify({
 
 export default defineConfig({
   site,
+  // The docs and landing page are static and link-light. Starlight otherwise
+  // enables a global prefetch observer on every page, which adds avoidable
+  // startup work to the landing page for a marginal navigation benefit.
+  prefetch: false,
   fonts: [
     {
       provider: fontProviders.google(),
@@ -62,9 +66,9 @@ export default defineConfig({
         Head: './src/components/Head.astro',
       },
       logo: {
-	src: '../web/public/icons/icon.svg',
+        src: '../web/public/icons/icon-64.png',
       },
-      favicon: '/icons/icon.svg',
+      favicon: '/icons/icon-32.png',
       plugins: [starlightThemeRapide()],
       description: docsDescription,
       head: [
@@ -111,6 +115,7 @@ export default defineConfig({
           items: [
             { label: 'Installation', slug: 'docs/installation' },
             { label: 'Quickstart', slug: 'docs/quickstart' },
+            { label: 'Work from the terminal', slug: 'docs/cli/work-from-terminal' },
           ],
         },
         {

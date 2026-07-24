@@ -8,6 +8,7 @@
     "start": "astro dev",
     "build": "astro check && astro build",
     "preview": "astro preview",
+    "recordings:cli": "node ../scripts/generate-cli-recordings.mjs",
     "audit": "pnpm audit --audit-level=low"
   },
   "dependencies": {
@@ -18,6 +19,7 @@
   },
   "devDependencies": {
     "@astrojs/check": "^0.9.9",
+    "asciinema-player": "3.17.0",
     "typescript": "^6.0.3"
   },
   "pnpm": {

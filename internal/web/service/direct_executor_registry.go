@@ -26,11 +26,13 @@ import (
 	"github.com/bruin-data/bruin/pkg/scheduler"
 	sf "github.com/bruin-data/bruin/pkg/snowflake"
 	"github.com/bruin-data/bruin/pkg/sqlparser"
+	sr "github.com/bruin-data/bruin/pkg/starrocks"
 	syn "github.com/bruin-data/bruin/pkg/synapse"
 	tri "github.com/bruin-data/bruin/pkg/trino"
 	vert "github.com/bruin-data/bruin/pkg/vertica"
 	"github.com/spf13/afero"
 
+	"renart/internal/bruincompat"
 	"renart/internal/web/duckcoord"
 	"renart/internal/web/runstate"
 )
@@ -189,6 +191,11 @@ func buildDirectMainExecutors(manager config.ConnectionAndDetailsGetter, rendere
 	assignSeedExecutor(pipeline.AssetTypeClickHouseSeed)
 	assignSensorExecutor(pipeline.AssetTypeClickHouseQuerySensor, ansisql.NewQuerySensor(manager, wholeFileExtractor, sensorMode))
 	assignSensorExecutor(pipeline.AssetTypeClickHouseTableSensor, ansisql.NewTableSensor(manager, sensorMode, wholeFileExtractor))
+	ensureExecutorConfig(pipeline.AssetTypeStarRocksQuery)
+	executors[pipeline.AssetTypeStarRocksQuery][scheduler.TaskInstanceTypeMain] = sr.NewBasicOperator(manager, wholeFileExtractor, fullRefresh, bruincompat.NewDeclareHoister(), parser)
+	assignSeedExecutor(pipeline.AssetTypeStarRocksSeed)
+	assignSensorExecutor(pipeline.AssetTypeStarRocksQuerySensor, ansisql.NewQuerySensor(manager, wholeFileExtractor, sensorMode))
+	assignSensorExecutor(pipeline.AssetTypeStarRocksTableSensor, ansisql.NewTableSensor(manager, sensorMode, wholeFileExtractor))
 	trinoMaterializer, _, err := newDirectStringExecutionMaterializer(pipeline.AssetTypeTrinoQuery, fullRefresh)
 	if err != nil {
 		return nil, err

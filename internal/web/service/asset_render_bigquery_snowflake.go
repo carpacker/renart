@@ -277,7 +277,7 @@ func appendSnowflakeSchemaStage(outcome *assetRenderSemanticOutcome, label, sql 
 		Status:      AssetRenderStageStatusOK,
 		Fidelity:    AssetRenderFidelitySemantic,
 		Conditional: true,
-		Message:     "executed until Bruin's connection-local preparation cache records this object",
+		Message:     "executed until the connection-local preparation cache records this object",
 	})
 }
 

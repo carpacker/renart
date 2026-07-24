@@ -144,6 +144,18 @@ func TestSQLLSPServiceAllowsSelectedAssetReferencesInAdHocDocuments(t *testing.T
 	if diagnostic := findLSPDiagnosticByCode(adhocResponse.Diagnostics, "circular-dependency"); diagnostic != nil {
 		t.Fatalf("ad-hoc document inherited the context asset's self-reference rule: %#v", diagnostic)
 	}
+
+	customCheckResponse, apiErr := service.Diagnostics(context.Background(), SQLLSPRequest{
+		AssetID:         "report",
+		Content:         "select * from analytics.report",
+		DocumentContext: "custom_check",
+	})
+	if apiErr != nil {
+		t.Fatal(apiErr)
+	}
+	if diagnostic := findLSPDiagnosticByCode(customCheckResponse.Diagnostics, "circular-dependency"); diagnostic != nil {
+		t.Fatalf("custom check inherited the asset body's self-reference rule: %#v", diagnostic)
+	}
 }
 
 func TestAmbiguousJoinColumnParityAcrossTypeCheckHTTPAndStdio(t *testing.T) {
@@ -676,6 +688,48 @@ func TestSQLLSPServiceCompletesQuerySensorFromParameterSQL(t *testing.T) {
 	}
 	if !labels["order_id"] || !labels["total_amount"] {
 		t.Fatalf("expected workspace columns for query sensor SQL, got %#v", response.Completions)
+	}
+}
+
+func TestSQLLSPServiceCompletesCustomCheckOnNonSQLAsset(t *testing.T) {
+	state := model.WorkspaceState{
+		Connections: map[string]string{"duckdb-default": "duckdb"},
+		Pipelines: []model.Pipeline{{
+			ID:   "pipeline",
+			Name: "analytics",
+			Assets: []model.Asset{{
+				ID:         "regions-api",
+				Name:       "analytics.regions_api",
+				Type:       "api",
+				Path:       "analytics/assets/analytics/regions_api.asset.yml",
+				Connection: "duckdb-default",
+				Columns: []model.Column{
+					{Name: "region_id", Type: "integer"},
+					{Name: "region_name", Type: "string"},
+				},
+			}},
+		}},
+	}
+	service := NewSQLLSPService(SQLLSPDependencies{
+		WorkspaceRoot: t.TempDir(),
+		CurrentState:  func() model.WorkspaceState { return state },
+	})
+
+	response, apiErr := service.Completions(context.Background(), SQLLSPRequest{
+		AssetID:         "regions-api",
+		Content:         "select r.\nfrom analytics.regions_api r",
+		DocumentContext: "custom_check",
+		Position:        sqllsp.Position{Line: 0, Character: len("select r.")},
+	})
+	if apiErr != nil {
+		t.Fatal(apiErr)
+	}
+	labels := map[string]bool{}
+	for _, item := range response.Completions {
+		labels[item.Label] = true
+	}
+	if !labels["region_id"] || !labels["region_name"] {
+		t.Fatalf("expected custom-check columns for a non-SQL asset, got %#v", response.Completions)
 	}
 }
 

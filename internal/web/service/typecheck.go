@@ -4,6 +4,7 @@ import (
 	"context"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -183,6 +184,7 @@ type typeCheckSchemaSnapshot struct {
 	Confidence    map[string]sqlintelligence.RelationConfidence
 	RenderedUnits map[*pipeline.Asset][]sqllsp.RenderedSQL
 	RenderErrors  map[*pipeline.Asset]error
+	Renderer      *jinja.Renderer
 }
 
 func checkAsset(ctx context.Context, pp *pipeline.Pipeline, workspaceRoot string, asset *pipeline.Asset, snapshot typeCheckSchemaSnapshot, connectionEngine *sqllsp.Engine) TypeCheckAsset {
@@ -195,23 +197,20 @@ func checkAsset(ctx context.Context, pp *pipeline.Pipeline, workspaceRoot string
 
 	dialect, dialectErr := AssetTypeToDialect(asset.Type)
 	if dialectErr != nil {
-		ac.Status = statusFromFindings(ac.Findings)
-		return ac
+		return finishAssetTypeCheck(ctx, pp, workspaceRoot, asset, snapshot, connectionEngine, ac)
 	}
 
 	ac.Dialect = dialect
 	sourceText := assetSQLSource(asset)
 	if strings.TrimSpace(sourceText) == "" {
-		ac.Status = statusFromFindings(ac.Findings)
-		return ac
+		return finishAssetTypeCheck(ctx, pp, workspaceRoot, asset, snapshot, connectionEngine, ac)
 	}
 
 	units := snapshot.RenderedUnits[asset]
 	renderErr := snapshot.RenderErrors[asset]
 	if renderErr != nil {
 		ac.Findings = append(ac.Findings, templateRenderFinding(renderErr))
-		ac.Status = typeCheckStatusError
-		return ac
+		return finishAssetTypeCheck(ctx, pp, workspaceRoot, asset, snapshot, connectionEngine, ac)
 	}
 
 	sources := sqlintelligence.SchemaColumnSourceMethods{}
@@ -256,8 +255,152 @@ func checkAsset(ctx context.Context, pp *pipeline.Pipeline, workspaceRoot string
 		}
 	}
 
+	return finishAssetTypeCheck(ctx, pp, workspaceRoot, asset, snapshot, connectionEngine, ac)
+}
+
+func finishAssetTypeCheck(
+	ctx context.Context,
+	pp *pipeline.Pipeline,
+	workspaceRoot string,
+	asset *pipeline.Asset,
+	snapshot typeCheckSchemaSnapshot,
+	connectionEngine *sqllsp.Engine,
+	ac TypeCheckAsset,
+) TypeCheckAsset {
+	findings, dialect := customCheckTypeCheckFindings(
+		ctx,
+		pp,
+		workspaceRoot,
+		asset,
+		snapshot,
+		connectionEngine,
+	)
+	ac.Findings = append(ac.Findings, findings...)
+	if ac.Dialect == "" && len(asset.CustomChecks) > 0 {
+		ac.Dialect = dialect
+	}
 	ac.Status = statusFromFindings(ac.Findings)
 	return ac
+}
+
+func customCheckTypeCheckFindings(
+	ctx context.Context,
+	pp *pipeline.Pipeline,
+	workspaceRoot string,
+	asset *pipeline.Asset,
+	snapshot typeCheckSchemaSnapshot,
+	connectionEngine *sqllsp.Engine,
+) ([]TypeCheckFinding, string) {
+	if asset == nil || len(asset.CustomChecks) == 0 {
+		return nil, ""
+	}
+	dialect := customCheckDialect(asset, pp)
+	var renderer jinja.RendererInterface
+	if snapshot.Renderer != nil {
+		renderer = snapshot.Renderer
+		if cloned, err := snapshot.Renderer.CloneForAsset(ctx, pp, asset); err == nil {
+			renderer = cloned
+		}
+	}
+	findings := make([]TypeCheckFinding, 0)
+	for _, check := range asset.CustomChecks {
+		queryText := strings.TrimSpace(check.Query)
+		if queryText == "" {
+			continue
+		}
+		label := strings.TrimSpace(check.Name)
+		if label == "" {
+			label = "unnamed"
+		}
+		prefix := "Custom check " + strconv.Quote(label) + ": "
+		renderedQuery := queryText
+		if renderer != nil {
+			var err error
+			renderedQuery, err = renderer.Render(queryText)
+			if err != nil {
+				finding := templateRenderFinding(err)
+				finding.Message = prefix + finding.Message
+				findings = append(findings, finding)
+				continue
+			}
+		}
+		doc := sqllsp.TextDocumentItem{
+			URI:        typeCheckAssetURI(workspaceRoot, asset),
+			LanguageID: "sql",
+			Text:       renderedQuery,
+		}
+		for _, diagnostic := range connectionEngine.CrossConnectionDiagnostics(doc) {
+			severity := typeCheckSeverityWarning
+			if diagnostic.Severity == 1 {
+				severity = typeCheckSeverityError
+			}
+			findings = append(findings, TypeCheckFinding{
+				Code:       diagnostic.Code,
+				Source:     diagnostic.Source,
+				Severity:   severity,
+				Message:    prefix + diagnostic.Message,
+				Scope:      string(authoringdiag.ScopeDocument),
+				Confidence: diagnostic.Confidence,
+			})
+		}
+		validation, err := sqlintelligence.ValidateSQL(ctx, sqlintelligence.ValidationRequest{
+			URI:                string(doc.URI),
+			SQL:                renderedQuery,
+			Dialect:            dialect,
+			Schema:             snapshot.Schema,
+			SchemaConstraints:  snapshot.Constraints,
+			RelationConfidence: snapshot.Confidence,
+		})
+		if err != nil {
+			findings = append(findings, TypeCheckFinding{
+				Code:       authoringdiag.CodeSQLValidationFailed,
+				Source:     authoringdiag.SourceRenart,
+				Severity:   typeCheckSeverityError,
+				Message:    prefix + "Failed to parse SQL: " + err.Error(),
+				Scope:      string(authoringdiag.ScopeDocument),
+				Confidence: string(authoringdiag.ConfidenceLow),
+			})
+			continue
+		}
+		for _, diagnostic := range validation.Diagnostics {
+			findings = append(findings, TypeCheckFinding{
+				Code:       diagnostic.Code,
+				Source:     diagnostic.Source,
+				Severity:   normalizeSeverity(string(diagnostic.Severity)),
+				Message:    prefix + diagnostic.Message,
+				Scope:      string(diagnostic.Scope),
+				Confidence: string(diagnostic.Confidence),
+			})
+		}
+	}
+	return findings, dialect
+}
+
+func customCheckDialect(asset *pipeline.Asset, pp *pipeline.Pipeline) string {
+	if dialect, err := AssetTypeToDialect(asset.Type); err == nil {
+		return dialect
+	}
+	if connectionType, ok := pipeline.AssetTypeConnectionMapping[asset.Type]; ok {
+		if queryType, found := queryAssetTypeForConnectionType(connectionType); found {
+			if dialect, err := AssetTypeToDialect(queryType); err == nil {
+				return dialect
+			}
+		}
+	}
+	if pp == nil {
+		return "generic"
+	}
+	connection, _ := targetConnectionNameForAsset(asset, pp)
+	for connectionType, connectionName := range pp.DefaultConnections {
+		if strings.EqualFold(strings.TrimSpace(connectionName), strings.TrimSpace(connection)) {
+			if queryType, ok := queryAssetTypeForConnectionType(connectionType); ok {
+				if dialect, err := AssetTypeToDialect(queryType); err == nil {
+					return dialect
+				}
+			}
+		}
+	}
+	return "generic"
 }
 
 func declaredAssetOutputColumns(asset *pipeline.Asset) []sqlintelligence.SchemaColumn {
@@ -384,6 +527,7 @@ func buildTypeCheckSchemaSnapshot(ctx context.Context, fs afero.Fs, pp *pipeline
 	snapshot := typeCheckSchemaSnapshot{
 		RenderedUnits: map[*pipeline.Asset][]sqllsp.RenderedSQL{},
 		RenderErrors:  map[*pipeline.Asset]error{},
+		Renderer:      renderer,
 	}
 	nodes := make([]sqllsp.AssetNode, 0, len(assets))
 	columns := make(map[string][]sqllsp.ColumnInfo, len(assets))

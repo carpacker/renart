@@ -41,11 +41,11 @@ func Render() *cli.Command {
 			},
 			&cli.StringFlag{
 				Name:  "start-date",
-				Usage: "ISO start date for the render window (defaults to the pipeline schedule)",
+				Usage: "RFC3339 start timestamp for the render window (defaults to the pipeline schedule)",
 			},
 			&cli.StringFlag{
 				Name:  "end-date",
-				Usage: "ISO end date for the render window (defaults to the pipeline schedule)",
+				Usage: "RFC3339 end timestamp for the render window (defaults to the pipeline schedule)",
 			},
 			&cli.StringFlag{
 				Name:  "execution-time",
