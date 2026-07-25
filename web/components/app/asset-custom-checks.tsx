@@ -190,9 +190,7 @@ function CustomCheckDialog({
 }) {
   const { monacoTheme } = useWorkspaceTheme();
   const schemaTables = useAtomValue(selectedAssetSchemaTablesAtom);
-  const [draft, setDraft] = useState<CheckDraft>(() =>
-    draftFor(check ?? undefined, asset.name),
-  );
+  const [draft, setDraft] = useState<CheckDraft>(() => draftFor(check ?? undefined, asset.name));
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const [monacoInstance, setMonacoInstance] = useState<Monaco | null>(null);

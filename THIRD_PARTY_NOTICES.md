@@ -231,7 +231,7 @@ CI verifies that the checked-in inventory is current.
 | github.com/yourbasic/graph | v0.0.0-20210606180040-8ecfec1c2869 | [license](third_party/licenses/15b162926414ffc1f5a23b84acaeb454d1e3e59b0ff7f26c84016a9c117d5e05.txt) |
 | github.com/zeebo/xxh3 | v1.1.0 | [license](third_party/licenses/f19854b341534d1f2314c0c70d9cd2bb4fa1f7c86fffdc4444ca33cccce412ba.txt) |
 | github.com/zeroshade/machine-id | v0.0.0-20251223181436-930511047eef | [license](third_party/licenses/c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4.txt) |
-| go.mongodb.org/mongo-driver | v1.17.6 | [license](third_party/licenses/c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4.txt) |
+| go.mongodb.org/mongo-driver | v1.17.7 | [license](third_party/licenses/c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4.txt) |
 | go.opentelemetry.io/auto/sdk | v1.2.1 | [license](third_party/licenses/c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4.txt) |
 | go.opentelemetry.io/contrib/detectors/gcp | v1.42.0 | [license](third_party/licenses/6b747bfc5952d5d71d5d384dfe2131b0d3bccd7a90c6b3c280bc28d539963e2f.txt) |
 | go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc | v0.63.0 | [license](third_party/licenses/6b747bfc5952d5d71d5d384dfe2131b0d3bccd7a90c6b3c280bc28d539963e2f.txt) |
