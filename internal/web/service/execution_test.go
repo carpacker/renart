@@ -84,6 +84,7 @@ type stubExecutionExecutor struct {
 	queryConnOutput          []byte
 	queryConnErr             error
 	queryConnReqs            []QueryConnectionRequest
+	queryConnection          func(QueryConnectionRequest) ([]byte, error)
 	runWithRetry             func(context.Context, QueryAssetRequest, int, time.Duration) ([]byte, error, int)
 	onRunAsset               func()
 	onRunPipeline            func()
@@ -192,6 +193,9 @@ func (s *stubExecutionExecutor) QueryAsset(context.Context, QueryAssetRequest) (
 
 func (s *stubExecutionExecutor) QueryConnection(_ context.Context, req QueryConnectionRequest) ([]byte, error) {
 	s.queryConnReqs = append(s.queryConnReqs, req)
+	if s.queryConnection != nil {
+		return s.queryConnection(req)
+	}
 	return s.queryConnOutput, s.queryConnErr
 }
 

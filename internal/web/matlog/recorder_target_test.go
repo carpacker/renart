@@ -69,6 +69,7 @@ func TestRecorderUsesCapturedTargetsAndDurableLatestUpstreamWriter(t *testing.T)
 	event := bus.RunCompleted{
 		RunID: "downstream-run", CompletionID: "downstream-run",
 		PipelineUUID: pl.LegacyID, Environment: "prod", CompletedAt: finished.Add(time.Minute),
+		SnapshotVersionID:              "snapshot-7",
 		ExecutionTargetSnapshotVersion: 3, ExecutionPipelineUUID: pl.LegacyID, ExecutionTargets: snapshotEntries,
 		Assets: []bus.AssetRun{{
 			AssetID: downstreamID, AssetName: downstream.Name, Status: "succeeded",
@@ -97,6 +98,7 @@ func TestRecorderUsesCapturedTargetsAndDurableLatestUpstreamWriter(t *testing.T)
 		"the downstream target is current even though its upstream raw fact was pruned")
 	assert.Equal(t, finished, writer.MaterializedAt, "per-asset task completion orders the physical write")
 	assert.Equal(t, "downstream-run", writer.CompletionID)
+	assert.Equal(t, "snapshot-7", writer.SnapshotVersionID)
 
 	coverage, err := store.CurrentTargetCoverage(ctx, map[string]string{downstreamID: "target-downstream"}, "prod", varsHash)
 	require.NoError(t, err)

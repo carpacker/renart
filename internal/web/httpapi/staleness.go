@@ -18,6 +18,7 @@ type StalenessAPI struct {
 	// ResolvePipelineUUID maps the path-encoded API pipeline ID to the
 	// stable pipeline UUID.
 	ResolvePipelineUUID func(pipelineID string) (string, bool)
+	SelectedEnvironment func() string
 }
 
 func RegisterStalenessRoutes(router chi.Router, handlers *StalenessAPI) {
@@ -35,7 +36,10 @@ func (h *StalenessAPI) HandleGetStaleness(w http.ResponseWriter, r *http.Request
 	selection := staleness.Selection{
 		PipelineUUID:      pipelineUUID,
 		EncodedPipelineID: pipelineID,
-		Environment:       strings.TrimSpace(r.URL.Query().Get("environment")),
+		Environment: resolveRequestEnvironment(
+			r.URL.Query().Get("environment"),
+			h.SelectedEnvironment,
+		),
 	}
 	if start, ok := parseQueryTime(r, "start"); ok {
 		selection.Start = &start
@@ -57,6 +61,14 @@ func (h *StalenessAPI) HandleGetStaleness(w http.ResponseWriter, r *http.Request
 		"data_state_token": snapshot.DataStateToken,
 		"assets":           snapshot.Assets,
 	})
+}
+
+func resolveRequestEnvironment(raw string, selectedEnvironment func() string) string {
+	environment := strings.TrimSpace(raw)
+	if environment == "" && selectedEnvironment != nil {
+		environment = strings.TrimSpace(selectedEnvironment())
+	}
+	return environment
 }
 
 func parseQueryTime(r *http.Request, key string) (time.Time, bool) {

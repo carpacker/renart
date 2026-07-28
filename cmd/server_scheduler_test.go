@@ -4,7 +4,9 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	webscheduler "renart/internal/web/scheduler"
+	"renart/internal/web/service"
 )
 
 func TestPipelineRunSpecFromSchedulerRequestPreservesDestructiveContext(t *testing.T) {
@@ -36,4 +38,37 @@ func TestPipelineRunSpecFromSchedulerRequestPreservesDestructiveContext(t *testi
 	assert.Equal(t, req.ConfirmedEnvironment, spec.ConfirmedEnvironment)
 	assert.Equal(t, req.SensorMode, spec.SensorMode)
 	assert.Equal(t, req.VariableOverrides, spec.VariableOverrides)
+}
+
+func TestPersistSchedulerResolvedExecutionUnitsPreservesRuntimePlan(t *testing.T) {
+	t.Parallel()
+	var persisted []webscheduler.PipelineRunExecutionUnit
+	req := webscheduler.RunRequest{
+		RunID: "run-id",
+		OnExecutionUnitsResolved: func(units []webscheduler.PipelineRunExecutionUnit) error {
+			persisted = append([]webscheduler.PipelineRunExecutionUnit(nil), units...)
+			return nil
+		},
+	}
+	units := []service.PipelineExecutionUnit{
+		{
+			Position: 0, AssetID: "pipeline:left", AssetName: "analytics.left",
+			StartDate: "2026-07-28T08:00:00Z", EndDate: "2026-07-28T09:00:00Z",
+			RenderIndex: 0, Reason: "all",
+		},
+		{
+			Position: 1, AssetID: "pipeline:right", AssetName: "analytics.right",
+			StartDate: "2026-07-28T08:00:00Z", EndDate: "2026-07-28T09:00:00Z",
+			RenderIndex: 1, Reason: "all", DependencyPositions: []int{0},
+		},
+	}
+
+	require.NoError(t, persistSchedulerResolvedExecutionUnits(req, units))
+	require.Len(t, persisted, 2)
+	assert.Equal(t, units[1].AssetID, persisted[1].AssetID)
+	assert.Equal(t, units[1].RenderIndex, persisted[1].RenderIndex)
+	assert.Equal(t, []int{0}, persisted[1].DependencyPositions)
+
+	units[1].Position = 4
+	require.ErrorContains(t, persistSchedulerResolvedExecutionUnits(req, units), "has position 4")
 }

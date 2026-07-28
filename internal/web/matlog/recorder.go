@@ -145,6 +145,7 @@ func (r *Recorder) HandleRunCompleted(event bus.RunCompleted) error {
 			OwnContent:        string(result.OwnContent),
 			VarsHash:          varsHashes[assetRun.AssetID],
 			RunID:             event.RunID,
+			SnapshotVersionID: event.SnapshotVersionID,
 			TargetIdentity:    targetsByID[assetRun.AssetID].TargetIdentity,
 			CompletionID:      event.CompletionID,
 			CompletionOrdinal: assetRun.CompletionOrdinal,

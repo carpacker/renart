@@ -17,6 +17,9 @@ type renderProjection struct {
 
 func (e *Engine) renderDocument(doc TextDocumentItem) renderProjection {
 	rendered := renderTemplateSQL(doc, e)
+	if doc.Projection != nil && doc.Projection.TemplateURI == doc.URI {
+		rendered = *doc.Projection
+	}
 	if rendered.RenderedSQL == doc.Text {
 		return renderProjection{doc: doc, rendered: rendered}
 	}

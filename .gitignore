@@ -139,6 +139,7 @@ logs/*.log
 docs/.vitepress/dist
 docs/.vitepress/cache
 node_modules/
+/web/.pnpm-store/
 glossary.yaml
 .vscode
 

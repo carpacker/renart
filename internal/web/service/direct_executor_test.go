@@ -1248,7 +1248,7 @@ func TestRuntimePipelineExecutionUnitsUseTopologicalOrder(t *testing.T) {
 	assert.Equal(t, []int{0}, units[1].DependencyPositions)
 }
 
-func TestDirectPipelineRunSerializesSameDuckDBTarget(t *testing.T) {
+func TestDirectPipelineRunParallelizesDistinctRelationsInSameDuckDBFile(t *testing.T) {
 	workspaceRoot := createParallelDuckDBWorkspace(t, 1)
 	executor := newCompatDirectExecutor(workspaceRoot, "")
 	firstRelease := make(chan struct{})
@@ -1285,11 +1285,11 @@ func TestDirectPipelineRunSerializesSameDuckDBTarget(t *testing.T) {
 	_ = receiveString(t, firstStarted)
 	select {
 	case name := <-secondStarted:
-		t.Fatalf("same DuckDB file admitted %s while the first writer was active", name)
-	case <-time.After(50 * time.Millisecond):
+		assert.Contains(t, []string{"analytics.left", "analytics.right"}, name)
+	case <-time.After(3 * time.Second):
+		t.Fatal("distinct relations in the same DuckDB file were not admitted concurrently")
 	}
 	close(firstRelease)
-	_ = receiveString(t, secondStarted)
 	require.NoError(t, <-done)
 }
 

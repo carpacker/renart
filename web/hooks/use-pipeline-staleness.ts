@@ -42,6 +42,7 @@ type StalenessEventVersions = {
 
 const staleStatuses = new Set([
   "stale_edited",
+  "stale_deployment",
   "stale_upstream",
   "partial",
   "volatile",

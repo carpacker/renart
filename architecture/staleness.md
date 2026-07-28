@@ -169,10 +169,15 @@ from `.renart/state.db`; transient running state comes from scheduler steps and
 SSE. In particular, a terminal run-log snapshot may still call an untouched
 asset `pending`, and Renart never persists that value as asset state.
 
-After an unclean server stop, scheduler startup first marks the orphaned run and
-every open step failed. It then re-emits only the persisted terminal steps
-through the same synchronous `RunCompleted` bus: prior successes remain
-successes, the interrupted step is failed, and unreached assets remain absent.
+After an unclean server stop, scheduler startup first marks the orphaned run,
+every open step, and every running execution unit failed; queued units become
+skipped. It then re-emits only attempted terminal work through the same
+synchronous `RunCompleted` bus. Unit-backed runs retain each unit's exact
+window, position-derived completion ID, and completion ordinal, while legacy
+runs without a unit ledger retain aggregate step replay. Prior successes remain
+successes, the interrupted unit is failed, and unreached assets remain absent.
+Pending recoveries first close any unit rows left open by older Renart builds,
+so an upgrade can repair the ledger before replaying derived state.
 The run row stores the requested execution modes at admission, then atomically
 replaces them with the effective environment, window, full-refresh/backfill
 mode, and sensor mode immediately before the first asset starts. If that write
@@ -212,6 +217,12 @@ reason and run-derived completion identity. Earlier successful windows remain
 successful if a later window fails; remaining windows and downstream assets are
 durably skipped. Asset-level steps stay aggregated for compatibility while the
 unit ledger remains the exact execution record.
+An unreviewed queued run can likewise discover parallel full-pipeline work only
+after parsing its working tree or pinned deployment. It already owns the
+conservative pipeline slot; after persisting the effective context, the worker
+atomically inserts the runtime-derived units before target capture or the first
+unit transition. The private RunSpec remains the original all-assets request,
+while the unit ledger records the exact work that actually became executable.
 An exact re-execution is a new manual run admitted from a terminal run's
 retained private RunSpec and immutable plan. Before admission Renart revalidates
 current policy, the original source Merkle, and the selected secret-free
@@ -294,20 +305,30 @@ presented as a failure of newly edited SQL. Recompute triggers: selection change
 the touched assets), and `TargetWriteChanged` (publish the fail-closed claim
 state).
 
-| Status           | Meaning                                                                                                      |
-| ---------------- | ------------------------------------------------------------------------------------------------------------ |
-| `fresh`          | coverage exists for current fp + vars + range                                                                |
-| `stale_edited`   | own definition changed since last build (own-content sub-hash mismatch)                                      |
-| `stale_upstream` | inherited via the Merkle cascade — also covers variable-value changes (own-content matches, full fp doesn't) |
-| `partial`        | incremental: some intervals covered (built/total surfaced as covered/total seconds)                          |
-| `never_built`    | no row for this asset in this env at any fingerprint                                                         |
-| `missing`        | materialization history says fresh, async verification couldn't find the table                               |
-| `volatile`       | sensor check has no durable output coverage and must run again in every stale plan                           |
+| Status             | Meaning                                                                                                      |
+| ------------------ | ------------------------------------------------------------------------------------------------------------ |
+| `fresh`            | coverage exists for current fp + vars + range                                                                |
+| `stale_edited`     | own definition changed since last build (own-content sub-hash mismatch)                                      |
+| `stale_deployment` | latest output was written by a deployed snapshot whose own definition differs from the saved working tree    |
+| `stale_upstream`   | inherited via the Merkle cascade — also covers variable-value changes (own-content matches, full fp doesn't) |
+| `partial`          | incremental: some intervals covered (built/total surfaced as covered/total seconds)                          |
+| `never_built`      | no row for this asset in this env at any fingerprint                                                         |
+| `missing`          | materialization history says fresh, async verification couldn't find the table                               |
+| `volatile`         | sensor check has no durable output coverage and must run again in every stale plan                           |
 
 The `missing` downgrade only applies to assets whose output is a warehouse
 object named after the asset (`verifiableByName`: SQL, seed, and database-backed
 Load). Local-, file-, and object-storage-backed Load assets use an explicit
 `destination_object` and rest on their exact target-aware run facts instead.
+Verification distinguishes a confirmed absent relation from an unavailable
+connection. A locked credential vault, missing environment secret, or
+temporarily unreachable warehouse leaves durable fact-based freshness intact;
+it cannot be promoted into evidence that the relation is missing. A successful
+materialization clears any previously remembered missing observation for that
+asset and makes the newly written output eligible for one new verification.
+An omitted HTTP environment selection resolves to the workspace-selected
+environment, so the default selection uses the same namespace as execution
+records.
 Non-materialized Python assets may write anywhere and remain
 `runtime_only`/`never_built` while their latest attempt is still recorded and
 displayed. Declared Python tables use their supported destination relation as
@@ -324,6 +345,14 @@ sensor's configured interval and timeout.
 
 Unsaved editor buffers get a purely-frontend "modified" dot; the service only
 sees saved state.
+
+Materialization facts and the durable latest-writer row retain the deployed
+snapshot version that produced them. When an older pinned schedule overwrites
+the same physical target after an interactive working-tree build, Renart keeps
+the output non-fresh but reports **Deployment differs** rather than implying
+that the user edited the asset. This provenance is stored with the writer
+instead of being joined from retained run history, so pruning old runs cannot
+erase the explanation.
 
 Each `AssetStatus` also carries the last run attempt (`last_run_status`,
 `last_run_at`, `last_run_on_current_content` — the latter true when the run's
@@ -503,12 +532,14 @@ The schedules UI compares each row's pinned snapshot with the pipeline's latest
 deployed version. A differing pin is shown as **Older deployment**, independently
 of data freshness and last-run status. Repair/update opens the saved-source
 deployment review; after deployment the user explicitly selects zero or more
-older pins. The server validates the target deployment and compare-and-swaps
-all selected rows in one transaction, so a concurrently changed pin rejects
-the whole batch. The row-level manual action is a server-owned endpoint that
-loads the displayed exact pin and stored overrides; it remains a manual run, so
-it cannot advance the schedule watermark. Rows without a pin show **Needs
-deployment** instead of silently running the working tree.
+schedules not yet using it. The server validates the target deployment and
+compare-and-swaps all selected rows in one transaction, so a concurrently
+changed pin rejects the whole batch. A paused declaration that has never been
+deployed participates with an explicit empty expected pin; omitting the expected
+pin is still an invalid request. The row-level manual action is a server-owned
+endpoint that loads the displayed exact pin and stored overrides; it remains a
+manual run, so it cannot advance the schedule watermark. Rows without a pin
+show **Needs deployment** instead of silently running the working tree.
 For an actual scheduled tick, the successful run status and its environment-
 scoped watermark advance commit in one SQLite transaction. A crash or write
 failure therefore leaves the interval retryable instead of recording success
@@ -610,9 +641,13 @@ these concurrency-safe contracts:
 
 - a sensor without arbitrary hooks has no write claim;
 - an exact local output claims its canonical file;
-- an exact local file-backed DuckDB output claims the whole canonical database
-  file, not one relation, because one transaction/operator may touch several
-  relations;
+- an audited native local file-backed DuckDB SQL materialization claims its
+  exact resolved relation; those assets share one in-process database session
+  while using separate connections, and the session retains the whole-file
+  lease against child-process/dynamic writers;
+- unaudited DuckDB operations claim the whole canonical database file because
+  their operator, hooks, routing, or separate runtime may touch several
+  relations or open an independent database handle;
 - audited native PostgreSQL, Trino, ClickHouse, and StarRocks SQL
   materializations claim the exact resolved warehouse relation;
 - arbitrary Python, any pre/post hooks, seed/Load/API transfers, unaudited

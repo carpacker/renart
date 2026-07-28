@@ -368,11 +368,13 @@ func (s *webServer) registerRoutes(router chi.Router) {
 	webhttpapi.RegisterStalenessRoutes(router, &webhttpapi.StalenessAPI{
 		Service:             s.stalenessSvc,
 		ResolvePipelineUUID: s.findPipelineUUIDByID,
+		SelectedEnvironment: func() string { return s.currentState().SelectedEnvironment },
 	})
 	webhttpapi.RegisterBuildStaleRoutes(router, &webhttpapi.BuildStaleAPI{
 		Staleness:                 s.stalenessSvc,
 		ResolvePipelineUUID:       s.findPipelineUUIDByID,
 		ResolveUpstreamAssetNames: s.findPipelineUpstreamNames,
+		SelectedEnvironment:       func() string { return s.currentState().SelectedEnvironment },
 		Execution:                 s.executionSvc,
 	})
 	webhttpapi.RegisterDeployRoutes(router, &webhttpapi.DeployAPI{
@@ -810,9 +812,20 @@ func (s *webServer) verifyMaterializedAssets(ctx context.Context, selection stal
 	if apiErr != nil {
 		return nil, apiErr
 	}
-	existsByName := make(map[string]bool, len(resp.Assets))
-	for _, asset := range resp.Assets {
-		if name := s.findAssetNameByID(asset.AssetID); name != "" {
+	return verifiedMaterializationPresence(resp.Assets, assetNames, s.findAssetNameByID), nil
+}
+
+func verifiedMaterializationPresence(
+	assets []service.PipelineMaterializationState,
+	assetNames []string,
+	findAssetNameByID func(string) string,
+) map[string]bool {
+	existsByName := make(map[string]bool, len(assets))
+	for _, asset := range assets {
+		if !asset.VerificationAvailable {
+			continue
+		}
+		if name := findAssetNameByID(asset.AssetID); name != "" {
 			existsByName[name] = asset.IsMaterialized
 		}
 	}
@@ -822,7 +835,7 @@ func (s *webServer) verifyMaterializedAssets(ctx context.Context, selection stal
 			result[name] = present
 		}
 	}
-	return result, nil
+	return result
 }
 
 // resolvePipelineForDeploy maps the encoded pipeline ID to (UUID, absolute

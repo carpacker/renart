@@ -114,6 +114,10 @@ type TextDocumentItem struct {
 	LanguageID string `json:"languageId,omitempty"`
 	Version    int    `json:"version,omitempty"`
 	Text       string `json:"text"`
+	// Projection is an optional, request-local rendering of Text. It is never
+	// serialized over LSP; HTTP integrations that can render the document with
+	// the pipeline's real Jinja context attach it before invoking the engine.
+	Projection *RenderedSQL `json:"-"`
 }
 
 type CanonicalGraph struct {

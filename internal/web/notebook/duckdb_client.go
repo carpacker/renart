@@ -1,40 +1,21 @@
 package notebook
 
-/*
-#include <stdint.h>
-
-struct AdbcStatement;
-extern uint8_t AdbcStatementCancel(struct AdbcStatement* statement, void* error);
-
-static uint8_t renart_adbc_statement_cancel(void* statement) {
-	return AdbcStatementCancel((struct AdbcStatement*)statement, NULL);
-}
-*/
-import "C"
-
 import (
 	"context"
 	"fmt"
 	"math"
 	"path/filepath"
-	"reflect"
-	"runtime"
 	"strings"
 	"time"
-	"unsafe"
 
-	"github.com/apache/arrow-adbc/go/adbc"
 	"github.com/apache/arrow-adbc/go/adbc/drivermgr"
 	"github.com/apache/arrow-go/v18/arrow"
 	"github.com/apache/arrow-go/v18/arrow/array"
 	"github.com/apache/arrow-go/v18/arrow/decimal128"
 	duck "github.com/bruin-data/bruin/pkg/duckdb"
 	"github.com/bruin-data/bruin/pkg/query"
-)
 
-const (
-	adbcStatusOK           = 0
-	adbcStatusInvalidState = 6
+	"renart/internal/web/adbcutil"
 )
 
 // notebookDuckDBClient is the notebook session's narrow DuckDB adapter. Bruin's
@@ -92,11 +73,10 @@ func (c *notebookDuckDBClient) execute(ctx context.Context, sqlText string, retu
 		return nil, err
 	}
 
-	rawStatement, err := adbcStatementPointer(statement)
+	stopWatching, err := adbcutil.WatchStatementCancellation(ctx, statement)
 	if err != nil {
 		return nil, err
 	}
-	stopWatching := watchADBCStatementCancellation(ctx, statement, rawStatement)
 	defer stopWatching()
 
 	reader, affected, err := statement.ExecuteQuery(ctx)
@@ -137,58 +117,6 @@ func cleanNotebookWorkspaceRoot(root string) string {
 		return ""
 	}
 	return filepath.Clean(root)
-}
-
-// adbcStatementPointer validates the one implementation detail the ADBC Go
-// driver manager does not currently expose: its statement's C handle. Keeping
-// the check strict makes an upstream representation change fail closed instead
-// of silently making notebook cancellation unreliable.
-func adbcStatementPointer(statement adbc.Statement) (unsafe.Pointer, error) {
-	value := reflect.ValueOf(statement)
-	if value.Kind() != reflect.Pointer || value.IsNil() {
-		return nil, fmt.Errorf("ADBC statement cancellation is unavailable for %T", statement)
-	}
-	typeInfo := value.Elem().Type()
-	if typeInfo.PkgPath() != "github.com/apache/arrow-adbc/go/adbc/drivermgr" || typeInfo.Name() != "stmt" {
-		return nil, fmt.Errorf("ADBC statement cancellation is unavailable for %T", statement)
-	}
-	field := value.Elem().FieldByName("st")
-	if !field.IsValid() || field.Kind() != reflect.Pointer || field.IsNil() {
-		return nil, fmt.Errorf("ADBC driver-manager statement handle is unavailable")
-	}
-	return unsafe.Pointer(field.Pointer()), nil
-}
-
-// watchADBCStatementCancellation bridges context cancellation to the ADBC 1.1
-// cancellation API. AdbcStatementCancel is explicitly thread-safe. An
-// INVALID_STATE result can occur in the tiny window before ExecuteQuery marks
-// the statement active, so retry until execution starts or finishes.
-func watchADBCStatementCancellation(ctx context.Context, statement adbc.Statement, rawStatement unsafe.Pointer) func() {
-	finished := make(chan struct{})
-	done := make(chan struct{})
-	go func() {
-		defer close(done)
-		select {
-		case <-ctx.Done():
-			for {
-				status := uint8(C.renart_adbc_statement_cancel(rawStatement))
-				runtime.KeepAlive(statement)
-				if status == adbcStatusOK || status != adbcStatusInvalidState {
-					return
-				}
-				select {
-				case <-finished:
-					return
-				case <-time.After(time.Millisecond):
-				}
-			}
-		case <-finished:
-		}
-	}()
-	return func() {
-		close(finished)
-		<-done
-	}
 }
 
 func bufferNotebookArrowResult(reader array.RecordReader) (*query.QueryResult, error) {

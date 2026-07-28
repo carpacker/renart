@@ -69,6 +69,10 @@ type Materialization struct {
 	// loaders use this rather than claiming universal or cumulative coverage.
 	ReplaceCoverage bool
 	RunID           string
+	// SnapshotVersionID identifies the immutable deployed source that produced
+	// this output. Empty means the saved working tree (or a legacy fact whose
+	// source predates provenance tracking).
+	SnapshotVersionID string
 	// TargetIdentity is the secret-free canonical identity of the physical
 	// object this outcome wrote. Empty identities retain the generation-zero
 	// legacy behavior and do not claim a latest physical writer.
@@ -106,6 +110,7 @@ type LatestSuccessfulWriter struct {
 	Fingerprint       string
 	VarsHash          string
 	RunID             string
+	SnapshotVersionID string
 	MaterializedAt    time.Time
 	CompletionID      string
 	CompletionOrdinal int64
@@ -401,13 +406,15 @@ func (s *Store) Record(ctx context.Context, m Materialization) error {
 		INSERT INTO renart_materializations
 			(asset_id, environment, fingerprint, own_content, vars_hash,
 			 target_identity, target_generation, interval_start, interval_end,
-			 run_id, materialized_at, completion_id, completion_ordinal)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			 run_id, materialized_at, completion_id, completion_ordinal,
+			 snapshot_version_id)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT DO NOTHING`,
 		m.AssetID, m.Environment, m.Fingerprint, m.OwnContent, m.VarsHash,
 		m.TargetIdentity, targetGeneration,
 		optionalTimeString(m.IntervalStart), optionalTimeString(m.IntervalEnd),
-		m.RunID, formatTime(m.MaterializedAt), m.CompletionID, m.CompletionOrdinal)
+		m.RunID, formatTime(m.MaterializedAt), m.CompletionID, m.CompletionOrdinal,
+		m.SnapshotVersionID)
 	if err != nil {
 		return err
 	}
@@ -539,6 +546,7 @@ type recordedMaterializationFact struct {
 	MaterializedAt    string
 	CompletionID      string
 	CompletionOrdinal int64
+	SnapshotVersionID string
 }
 
 // validateRecordedMaterializationReplay checks the partial unique fact key
@@ -555,7 +563,7 @@ func validateRecordedMaterializationReplay(
 		SELECT fingerprint, own_content, vars_hash,
 		       target_identity, target_generation,
 		       interval_start, interval_end, materialized_at,
-		       completion_id, completion_ordinal
+		       completion_id, completion_ordinal, snapshot_version_id
 		FROM renart_materializations
 		WHERE asset_id = ? AND environment = ? AND run_id = ?`,
 		m.AssetID,
@@ -572,6 +580,7 @@ func validateRecordedMaterializationReplay(
 		&recorded.MaterializedAt,
 		&recorded.CompletionID,
 		&recorded.CompletionOrdinal,
+		&recorded.SnapshotVersionID,
 	)
 	if errors.Is(err, sql.ErrNoRows) {
 		return false, nil
@@ -588,7 +597,8 @@ func validateRecordedMaterializationReplay(
 		recorded.IntervalEnd == optionalTimeString(m.IntervalEnd) &&
 		recorded.MaterializedAt == formatTime(m.MaterializedAt) &&
 		recorded.CompletionID == m.CompletionID &&
-		recorded.CompletionOrdinal == m.CompletionOrdinal
+		recorded.CompletionOrdinal == m.CompletionOrdinal &&
+		recorded.SnapshotVersionID == m.SnapshotVersionID
 	if m.TargetIdentity == "" {
 		exact = exact && recorded.TargetGeneration == 0
 	} else {
@@ -686,7 +696,7 @@ func loadLatestWriterState(ctx context.Context, tx *sql.Tx, targetIdentity strin
 	err := tx.QueryRowContext(ctx, `
 		SELECT target_identity, target_generation, asset_id, environment,
 		       fingerprint, vars_hash, run_id, materialized_at,
-		       completion_id, completion_ordinal, ambiguous
+		       completion_id, completion_ordinal, ambiguous, snapshot_version_id
 		FROM renart_latest_successful_writers
 		WHERE target_identity = ?`, targetIdentity).Scan(
 		&state.TargetIdentity,
@@ -700,6 +710,7 @@ func loadLatestWriterState(ctx context.Context, tx *sql.Tx, targetIdentity strin
 		&state.CompletionID,
 		&state.CompletionOrdinal,
 		&ambiguous,
+		&state.SnapshotVersionID,
 	)
 	if err != nil {
 		return nil, err
@@ -755,8 +766,8 @@ func persistLatestWriter(
 			INSERT INTO renart_latest_successful_writers
 				(target_identity, target_generation, asset_id, environment,
 				 fingerprint, vars_hash, run_id, materialized_at,
-				 completion_id, completion_ordinal, ambiguous)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)`,
+				 completion_id, completion_ordinal, ambiguous, snapshot_version_id)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?)`,
 			m.TargetIdentity,
 			targetGeneration,
 			m.AssetID,
@@ -767,6 +778,7 @@ func persistLatestWriter(
 			formatTime(m.MaterializedAt),
 			m.CompletionID,
 			m.CompletionOrdinal,
+			m.SnapshotVersionID,
 		)
 		return err
 	}
@@ -775,7 +787,8 @@ func persistLatestWriter(
 		UPDATE renart_latest_successful_writers
 		SET target_generation = ?, asset_id = ?, environment = ?,
 		    fingerprint = ?, vars_hash = ?, run_id = ?, materialized_at = ?,
-		    completion_id = ?, completion_ordinal = ?, ambiguous = 0
+		    completion_id = ?, completion_ordinal = ?, ambiguous = 0,
+		    snapshot_version_id = ?
 		WHERE target_identity = ?
 		  AND target_generation = ?
 		  AND materialized_at = ?
@@ -790,6 +803,7 @@ func persistLatestWriter(
 		formatTime(m.MaterializedAt),
 		m.CompletionID,
 		m.CompletionOrdinal,
+		m.SnapshotVersionID,
 		m.TargetIdentity,
 		previous.TargetGeneration,
 		previous.materializedAtRaw,
@@ -962,7 +976,7 @@ func (s *Store) LatestWriters(
 	query := `
 		SELECT target_identity, target_generation, asset_id, environment,
 		       fingerprint, vars_hash, run_id, materialized_at,
-		       completion_id, completion_ordinal, ambiguous
+		       completion_id, completion_ordinal, ambiguous, snapshot_version_id
 		FROM renart_latest_successful_writers AS writer
 		WHERE writer.target_identity IN (?` + repeatPlaceholder(len(nonEmpty)-1) + `)
 		  AND NOT EXISTS (
@@ -997,6 +1011,7 @@ func (s *Store) LatestWriters(
 			&writer.CompletionID,
 			&writer.CompletionOrdinal,
 			&ambiguous,
+			&writer.SnapshotVersionID,
 		); err != nil {
 			return nil, err
 		}

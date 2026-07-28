@@ -917,6 +917,10 @@ func TestAssetRenderServiceDescribesAPIExtractionAndRedactsCredentials(t *testin
 name: analytics
 default_connections:
   duckdb: duckdb-default
+variables:
+  min_magnitude:
+    type: integer
+    default: 3
 `, map[string]string{
 		"events.asset.yml": `
 name: analytics.events
@@ -932,6 +936,8 @@ parameters:
     headers:
       Authorization: Bearer secret-header
       Accept: application/json
+    params:
+      minmagnitude: "{{ var.min_magnitude }}"
   auth:
     type: bearer
     token: another-secret
@@ -956,6 +962,8 @@ parameters:
 	assert.NotContains(t, result.Stages[0].Content, "another-secret")
 	assert.NotContains(t, result.Stages[0].Content, "google-credential")
 	assert.NotContains(t, result.Stages[0].Content, "google-signature")
+	assert.Contains(t, result.Stages[0].Content, "minmagnitude=3")
+	assert.NotContains(t, result.Stages[0].Content, "{{")
 	assert.Contains(t, result.Stages[1].Content, `"operation": "sling_load_jsonlines"`)
 	require.Len(t, result.Redactions, 1)
 }
@@ -1469,7 +1477,9 @@ select 1 as value
 	assert.Equal(t, "default", result.Provenance.Context.Environment)
 	assert.NotEmpty(t, result.Stages)
 	expectedResource := runcontext.WriteResourceIdentity(runcontext.WriteResourceCoordinates{
-		Kind: assetWriteResourceDuckDB, FilePath: filepath.Join(configRoot, "local.db"),
+		Kind:           assetWriteResourceDuckDB,
+		FilePath:       filepath.Join(configRoot, "local.db"),
+		TargetIdentity: result.Asset.Target.Identity,
 	})
 	require.Equal(t, string(runcontext.IdentityFidelityExact), string(expectedResource.Fidelity), expectedResource.Message)
 	assert.Equal(t, assetWriteResourceDuckDB, result.Asset.Target.WriteResource.Kind)

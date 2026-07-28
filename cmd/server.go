@@ -856,6 +856,11 @@ func newWebServer(ctx context.Context, cfg serverConfig, logger *zap.Logger) (*w
 					Entries:               entries,
 				})
 			}
+			if req.ConfirmedPlan == nil {
+				spec.OnExecutionUnitsResolved = func(units []service.PipelineExecutionUnit) error {
+					return persistSchedulerResolvedExecutionUnits(req, units)
+				}
+			}
 			spec.OnUnit = func(event service.PipelineExecutionUnitEvent) error {
 				if req.OnUnit == nil {
 					return fmt.Errorf("scheduler run %s cannot persist execution unit", req.RunID)
@@ -998,6 +1003,39 @@ func pipelineRunSpecFromSchedulerRequest(req webscheduler.RunRequest) service.Pi
 		}
 	}
 	return spec
+}
+
+func persistSchedulerResolvedExecutionUnits(
+	req webscheduler.RunRequest,
+	units []service.PipelineExecutionUnit,
+) error {
+	if len(units) == 0 {
+		return nil
+	}
+	if req.OnExecutionUnitsResolved == nil {
+		return fmt.Errorf("scheduler run %s cannot persist resolved execution units", req.RunID)
+	}
+	resolved := make([]webscheduler.PipelineRunExecutionUnit, 0, len(units))
+	for position, unit := range units {
+		if unit.Position != position {
+			return fmt.Errorf(
+				"scheduler run %s resolved unit %d has position %d",
+				req.RunID,
+				position,
+				unit.Position,
+			)
+		}
+		resolved = append(resolved, webscheduler.PipelineRunExecutionUnit{
+			AssetID:             unit.AssetID,
+			AssetName:           unit.AssetName,
+			StartDate:           unit.StartDate,
+			EndDate:             unit.EndDate,
+			RenderIndex:         unit.RenderIndex,
+			Reason:              unit.Reason,
+			DependencyPositions: append([]int(nil), unit.DependencyPositions...),
+		})
+	}
+	return req.OnExecutionUnitsResolved(resolved)
 }
 
 func scheduledPipelineRunPlan(plan service.PipelinePlan, blockers []string) (webscheduler.PipelineRunPlan, error) {

@@ -34,10 +34,11 @@ import (
 
 	"renart/internal/bruincompat"
 	"renart/internal/web/duckcoord"
+	"renart/internal/web/duckdbsession"
 	"renart/internal/web/runstate"
 )
 
-func buildDirectMainExecutors(manager config.ConnectionAndDetailsGetter, renderer *jinja.Renderer, parser *sqlparser.SQLParser, pl *pipeline.Pipeline, registry *runstate.Registry, coordinator *duckcoord.Coordinator, workspaceRoot string, fullRefresh bool, sensorMode string) (map[pipeline.AssetType]bruinexecutor.Config, error) {
+func buildDirectMainExecutors(manager config.ConnectionAndDetailsGetter, renderer *jinja.Renderer, parser *sqlparser.SQLParser, pl *pipeline.Pipeline, cfg *config.Config, registry *runstate.Registry, coordinator *duckcoord.Coordinator, sessions *duckdbsession.Manager, workspaceRoot string, fullRefresh bool, sensorMode string) (map[pipeline.AssetType]bruinexecutor.Config, error) {
 	executors := make(map[pipeline.AssetType]bruinexecutor.Config, len(bruinexecutor.DefaultExecutorsV2))
 	for assetType, cfg := range bruinexecutor.DefaultExecutorsV2 {
 		if cfg == nil {
@@ -85,7 +86,18 @@ func buildDirectMainExecutors(manager config.ConnectionAndDetailsGetter, rendere
 	if err != nil {
 		return nil, err
 	}
-	executors[pipeline.AssetTypeDuckDBQuery][scheduler.TaskInstanceTypeMain] = duck.NewBasicOperator(manager, wholeFileExtractor, duckDBMaterializer, parser)
+	if coordinator == nil {
+		coordinator = duckcoord.New(duckcoord.Options{})
+	}
+	if sessions == nil {
+		sessions = duckdbsession.New(coordinator)
+	}
+	duckDBFallback := duck.NewBasicOperator(manager, wholeFileExtractor, duckDBMaterializer, parser)
+	executors[pipeline.AssetTypeDuckDBQuery][scheduler.TaskInstanceTypeMain] = &directDuckDBOperator{
+		manager: manager, extractor: wholeFileExtractor, materializer: duckDBMaterializer,
+		fallback: duckDBFallback, sessions: sessions, coordinator: coordinator,
+		cfg: cfg, workspaceRoot: workspaceRoot,
+	}
 	assignSeedExecutor(pipeline.AssetTypeDuckDBSeed)
 	ensureExecutorConfig(pipeline.AssetTypeMotherduckQuery)
 	executors[pipeline.AssetTypeMotherduckQuery][scheduler.TaskInstanceTypeMain] = duck.NewBasicOperator(manager, wholeFileExtractor, duckDBMaterializer, parser)

@@ -48,11 +48,19 @@ func renderSemanticAsset(
 	case asset.Type == pipeline.AssetTypePython:
 		return renderPythonSemanticAsset(asset, connectionName, effectiveFullRefresh, workspaceRoot)
 	case strings.HasSuffix(strings.ToLower(strings.TrimSpace(string(asset.Type))), ".seed"):
-		return renderSeedSemanticAsset(asset, renderer, connectionName)
+		assetRenderer, err := semanticAssetRenderer(renderer, renderCtx, info.Pipeline, asset)
+		if err != nil {
+			return semanticRenderError("materialization", "seed_template_context_failed", err.Error())
+		}
+		return renderSeedSemanticAsset(asset, assetRenderer, connectionName)
 	case isLoadAsset(asset):
 		return renderLoadSemanticAsset(asset, info.Config, renderCtx, connectionName)
 	case isAPIAsset(asset):
-		return renderAPISemanticAsset(asset, info.Pipeline, renderer, renderCtx, connectionName)
+		assetRenderer, err := semanticAssetRenderer(renderer, renderCtx, info.Pipeline, asset)
+		if err != nil {
+			return semanticRenderError("extraction", "api_template_context_failed", err.Error())
+		}
+		return renderAPISemanticAsset(asset, info.Pipeline, assetRenderer, renderCtx, connectionName)
 	case isSensorAssetType(asset.Type) && !isQuerySensorAssetType(asset.Type):
 		outcome := renderConditionSensorSemanticAsset(asset, connectionName)
 		if asset.Type == pipeline.AssetTypeBigqueryTableSensor && outcome.status != AssetRenderStatusError {
@@ -72,6 +80,26 @@ func renderSemanticAsset(
 	default:
 		return assetRenderSemanticOutcome{}
 	}
+}
+
+func semanticAssetRenderer(
+	renderer *jinja.Renderer,
+	renderCtx context.Context,
+	pl *pipeline.Pipeline,
+	asset *pipeline.Asset,
+) (*jinja.Renderer, error) {
+	if renderer == nil {
+		return nil, fmt.Errorf("asset renderer is missing")
+	}
+	scoped, err := renderer.CloneForAsset(renderCtx, pl, asset)
+	if err != nil {
+		return nil, fmt.Errorf("build asset template context: %w", err)
+	}
+	concrete, ok := scoped.(*jinja.Renderer)
+	if !ok {
+		return nil, fmt.Errorf("asset renderer has an unsupported implementation")
+	}
+	return concrete, nil
 }
 
 func renderPythonSemanticAsset(asset *pipeline.Asset, connectionName string, effectiveFullRefresh bool, workspaceRoot string) assetRenderSemanticOutcome {

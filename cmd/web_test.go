@@ -37,6 +37,32 @@ func TestValidateWebBindHostRequiresExplicitRemoteOptIn(t *testing.T) {
 	}
 }
 
+func TestVerifiedMaterializationPresenceKeepsUnavailableConnectionsUnknown(t *testing.T) {
+	t.Parallel()
+
+	result := verifiedMaterializationPresence(
+		[]service.PipelineMaterializationState{
+			{AssetID: "available", IsMaterialized: true, VerificationAvailable: true},
+			{AssetID: "missing", IsMaterialized: false, VerificationAvailable: true},
+			{AssetID: "vault-locked", IsMaterialized: false, VerificationAvailable: false},
+		},
+		[]string{"analytics.available", "analytics.missing", "analytics.vault_locked"},
+		func(assetID string) string {
+			return map[string]string{
+				"available":    "analytics.available",
+				"missing":      "analytics.missing",
+				"vault-locked": "analytics.vault_locked",
+			}[assetID]
+		},
+	)
+
+	assert.Equal(t, map[string]bool{
+		"analytics.available": true,
+		"analytics.missing":   false,
+	}, result)
+	assert.NotContains(t, result, "analytics.vault_locked")
+}
+
 func TestScheduleDeclarationRelevantPath(t *testing.T) {
 	t.Parallel()
 	for path, expected := range map[string]bool{

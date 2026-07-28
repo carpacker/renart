@@ -13,7 +13,9 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"renart/internal/web/bus"
+	"renart/internal/web/fingerprint"
 	"renart/internal/web/identity"
+	"renart/internal/web/matlog"
 	webscheduler "renart/internal/web/scheduler"
 	"renart/internal/web/snapshot"
 )
@@ -82,7 +84,7 @@ func TestReplayRecoveredRunEmitsPersistedStepsAgainstPinnedSnapshot(t *testing.T
 		{Asset: "analytics.finished", Status: webscheduler.RunStatusSuccess, StartedAt: &firstStarted, FinishedAt: &firstFinished, CompletionOrdinal: &firstOrdinal},
 		{Asset: "analytics.interrupted", Status: webscheduler.RunStatusFailed, StartedAt: &secondStarted, FinishedAt: &secondFinished, CompletionOrdinal: &secondOrdinal},
 		{Asset: "analytics.unreached", Status: webscheduler.RunStatusQueued},
-	})
+	}, nil)
 	require.NoError(t, err)
 
 	assert.Equal(t, "run-id", got.RunID)
@@ -188,7 +190,7 @@ func TestReplayRecoveredWorkingTreeRunUsesSelfContainedV2Snapshot(t *testing.T) 
 				MaterializedAt:    upstreamMaterializedAt,
 			},
 		},
-	}})
+	}}, nil)
 	require.NoError(t, err)
 
 	assert.Equal(t, pipelineUUID, got.PipelineUUID)
@@ -272,7 +274,7 @@ func TestReplayRecoveredRunPreservesVersionFourExecutionContract(t *testing.T) {
 		CompletionOrdinal:         &ordinal,
 		UpstreamWriters:           map[string]webscheduler.UpstreamWriterSnapshot{},
 		HasUpstreamWriterSnapshot: true,
-	}})
+	}}, nil)
 	require.NoError(t, err)
 
 	require.Equal(t, webscheduler.ExecutionTargetSnapshotVersionV4, got.ExecutionTargetSnapshotVersion)
@@ -281,6 +283,124 @@ func TestReplayRecoveredRunPreservesVersionFourExecutionContract(t *testing.T) {
 	assert.Equal(t, assetName, entry.ExecutionContract.AssetName)
 	assert.Equal(t, []string{strings.Repeat("a", 64)}, entry.ExecutionContract.ConnectionKeys)
 	assert.NoError(t, bus.ValidateExecutionContract(assetName, entry))
+}
+
+func TestReplayRecoveredRunUsesPersistedUnitCompletionCoordinates(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	schedulerStore, err := webscheduler.OpenStore(filepath.Join(t.TempDir(), "state.db"))
+	require.NoError(t, err)
+	defer schedulerStore.Close()
+
+	materializations := matlog.NewStore(schedulerStore.DB())
+	engine := fingerprint.NewEngine()
+	recorder := matlog.NewRecorder(materializations, engine, nil, nil, nil)
+	events := bus.New()
+	events.OnRunCompleted(recorder.HandleRunCompleted)
+	server := &webServer{eventBus: events}
+
+	pipelineUUID := "pipeline-uuid"
+	assetName := "analytics.finished"
+	assetID := identity.AssetID(pipelineUUID, assetName)
+	start := time.Date(2026, 7, 28, 9, 0, 0, 0, time.UTC)
+	end := start.Add(time.Hour)
+	finished := start.Add(time.Minute)
+	unitFinished := finished.Add(15 * time.Millisecond)
+	entry := bus.ExecutionTargetSnapshotEntry{
+		AssetID:          assetID,
+		TargetIdentity:   "duckdb:analytics.finished",
+		TargetFidelity:   "exact",
+		Fingerprint:      "v2:finished",
+		OwnContent:       "v2:finished-own",
+		ConsumedVarsHash: "consumed",
+		VarsHash:         "vars",
+		CoverageMode:     "marker",
+	}
+	runAsset := bus.AssetRun{
+		AssetID:                   assetID,
+		AssetName:                 assetName,
+		Status:                    "succeeded",
+		FinishedAt:                &finished,
+		CompletionOrdinal:         0,
+		HasCompletionOrdinal:      true,
+		TargetIdentity:            entry.TargetIdentity,
+		TargetFidelity:            entry.TargetFidelity,
+		Fingerprint:               entry.Fingerprint,
+		OwnContent:                entry.OwnContent,
+		ConsumedVarsHash:          entry.ConsumedVarsHash,
+		VarsHash:                  entry.VarsHash,
+		UpstreamWriters:           map[string]bus.UpstreamWriterSnapshot{},
+		HasUpstreamWriterSnapshot: true,
+	}
+	require.NoError(t, recorder.HandleRunCompleted(bus.RunCompleted{
+		RunID:                          "interrupted-run",
+		CompletionID:                   "interrupted-run/unit/0",
+		PipelineUUID:                   pipelineUUID,
+		Environment:                    "prod",
+		WinStart:                       &start,
+		WinEnd:                         &end,
+		CompletedAt:                    finished,
+		Assets:                         []bus.AssetRun{runAsset},
+		ExecutionTargetSnapshotVersion: webscheduler.ExecutionTargetSnapshotVersionV2,
+		ExecutionPipelineUUID:          pipelineUUID,
+		ExecutionTargets:               map[string]bus.ExecutionTargetSnapshotEntry{assetName: entry},
+	}))
+
+	ordinal := int64(23)
+	err = server.replayRecoveredRun(ctx, webscheduler.PipelineRun{
+		ID:                       "interrupted-run",
+		PipelineUUID:             pipelineUUID,
+		Environment:              "prod",
+		ExecutionContextResolved: true,
+		ExecutionTargetSnapshot: &webscheduler.ExecutionTargetSnapshot{
+			Version:      webscheduler.ExecutionTargetSnapshotVersionV2,
+			PipelineUUID: pipelineUUID,
+			Entries: map[string]webscheduler.ExecutionTargetSnapshotEntry{
+				assetName: {
+					AssetID:          assetID,
+					TargetIdentity:   entry.TargetIdentity,
+					TargetFidelity:   entry.TargetFidelity,
+					Fingerprint:      entry.Fingerprint,
+					OwnContent:       entry.OwnContent,
+					ConsumedVarsHash: entry.ConsumedVarsHash,
+					VarsHash:         entry.VarsHash,
+					CoverageMode:     entry.CoverageMode,
+				},
+			},
+		},
+	}, []webscheduler.PipelineRunStep{{
+		Asset:                     assetName,
+		Status:                    webscheduler.RunStatusSuccess,
+		FinishedAt:                &finished,
+		CompletionOrdinal:         &ordinal,
+		UpstreamWriters:           map[string]webscheduler.UpstreamWriterSnapshot{},
+		HasUpstreamWriterSnapshot: true,
+	}}, []webscheduler.PipelineRunUnit{{
+		Position: 0, AssetID: assetID, AssetName: assetName,
+		StartDate:  start.Format(time.RFC3339Nano),
+		EndDate:    end.Format(time.RFC3339Nano),
+		Status:     webscheduler.PipelineRunUnitSuccess,
+		FinishedAt: &unitFinished,
+	}, {
+		Position: 1, AssetID: "unreached", AssetName: "analytics.unreached",
+		StartDate:  start.Format(time.RFC3339Nano),
+		EndDate:    end.Format(time.RFC3339Nano),
+		Status:     webscheduler.PipelineRunUnitSkipped,
+		FinishedAt: &finished,
+	}})
+	require.NoError(t, err, "unit-aware recovery must acknowledge an already committed unit fact")
+
+	var completionID string
+	var completionOrdinal int64
+	require.NoError(t, schedulerStore.DB().QueryRowContext(ctx, `
+		SELECT completion_id, completion_ordinal
+		FROM renart_materializations
+		WHERE asset_id = ? AND environment = ? AND run_id = ?`,
+		assetID, "prod", "interrupted-run",
+	).Scan(&completionID, &completionOrdinal))
+	assert.Equal(t, "interrupted-run/unit/0", completionID)
+	assert.Zero(t, completionOrdinal)
 }
 
 func TestReplayRecoveredDeployedRunDoesNotMaterializeSelfContainedV2Snapshot(t *testing.T) {
@@ -342,7 +462,7 @@ func TestReplayRecoveredDeployedRunDoesNotMaterializeSelfContainedV2Snapshot(t *
 		CompletionOrdinal:         &ordinal,
 		UpstreamWriters:           map[string]webscheduler.UpstreamWriterSnapshot{},
 		HasUpstreamWriterSnapshot: true,
-	}})
+	}}, nil)
 	require.NoError(t, err, "v2 recovery should read snapshot metadata without materializing corrupt blobs")
 
 	assert.Equal(t, deployed.VersionID, got.SnapshotVersionID)
@@ -380,7 +500,7 @@ func TestReplayRecoveredRunPropagatesCompletionPersistenceFailure(t *testing.T) 
 	}, []webscheduler.PipelineRunStep{{
 		Asset:  "analytics.finished",
 		Status: webscheduler.RunStatusSuccess,
-	}})
+	}}, nil)
 	require.ErrorContains(t, err, "completion subscriber failed")
 }
 
@@ -401,7 +521,7 @@ func TestReplayRecoveredRunSkipsSourceResolutionWithoutTerminalSteps(t *testing.
 
 	err := server.replayRecoveredRun(context.Background(), webscheduler.PipelineRun{
 		ID: "pre-execution", SnapshotVersionID: "missing",
-	}, []webscheduler.PipelineRunStep{{Asset: "analytics.pending", Status: webscheduler.RunStatusRunning}})
+	}, []webscheduler.PipelineRunStep{{Asset: "analytics.pending", Status: webscheduler.RunStatusRunning}}, nil)
 	require.NoError(t, err)
 	assert.False(t, emitted)
 }
@@ -415,7 +535,7 @@ func TestReplayRecoveredRunSkipsUnresolvedContextWithTerminalSteps(t *testing.T)
 
 	err := server.replayRecoveredRun(context.Background(), webscheduler.PipelineRun{
 		ID: "legacy-unresolved", SnapshotVersionID: "must-not-be-resolved",
-	}, []webscheduler.PipelineRunStep{{Asset: "analytics.finished", Status: webscheduler.RunStatusSuccess}})
+	}, []webscheduler.PipelineRunStep{{Asset: "analytics.finished", Status: webscheduler.RunStatusSuccess}}, nil)
 	require.NoError(t, err)
 	assert.False(t, emitted)
 }
@@ -443,7 +563,7 @@ func TestReplayRecoveredRunRejectsCorruptPinnedSnapshotWithTerminalSteps(t *test
 	err = server.replayRecoveredRun(ctx, webscheduler.PipelineRun{
 		ID: "corrupt-run", SnapshotVersionID: deployed.VersionID,
 		ExecutionContextResolved: true,
-	}, []webscheduler.PipelineRunStep{{Asset: "analytics.finished", Status: webscheduler.RunStatusSuccess}})
+	}, []webscheduler.PipelineRunStep{{Asset: "analytics.finished", Status: webscheduler.RunStatusSuccess}}, nil)
 	require.ErrorContains(t, err, "blob hash mismatch")
 	assert.False(t, emitted)
 }

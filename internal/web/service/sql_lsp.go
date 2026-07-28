@@ -464,6 +464,7 @@ func (s *SQLLSPService) graphAndDocument(ctx context.Context, req SQLLSPRequest)
 		content, _ = sqlLSPDocumentContent(asset)
 	}
 	doc := sqllsp.TextDocumentItem{URI: assetURI(s.deps.WorkspaceRoot, asset), LanguageID: "sql", Text: content}
+	doc = s.withJinjaProjection(ctx, req.AssetID, doc)
 	graph := s.graphForRequest(ctx, state, notebook)
 	if strings.EqualFold(strings.TrimSpace(req.DocumentContext), "custom_check") {
 		graph = graphWithCustomCheckDialect(graph, doc.URI, asset, state.Connections)
@@ -472,6 +473,48 @@ func (s *SQLLSPService) graphAndDocument(ctx context.Context, req SQLLSPRequest)
 		graph = graphWithDocumentConnection(graph, doc.URI, connection)
 	}
 	return graph, doc, nil
+}
+
+// withJinjaProjection gives the live HTTP LSP fully rendered SQL from the same
+// asset-scoped renderer used by preview and type-check. The projection retains
+// an honest source map back to the unsaved Monaco buffer, so diagnostics and
+// language features stay in template coordinates while Polyglot never sees raw
+// Jinja delimiters.
+//
+// Rendering is best-effort while a template is being edited. If the current
+// buffer is incomplete, the engine falls back to its lightweight ref/source
+// expansion instead of making every LSP feature unavailable.
+func (s *SQLLSPService) withJinjaProjection(
+	ctx context.Context,
+	assetID string,
+	doc sqllsp.TextDocumentItem,
+) sqllsp.TextDocumentItem {
+	if s.deps.ResolveAssetByID == nil || !containsJinjaTemplate(doc.Text) {
+		return doc
+	}
+	_, parsed, asset, err := s.deps.ResolveAssetByID(ctx, assetID)
+	if err != nil || parsed == nil || asset == nil {
+		return doc
+	}
+	renderer, err := buildJinjaPreviewRenderer(ctx, parsed, asset, "", "")
+	if err != nil {
+		return doc
+	}
+	rendered, err := renderer.Render(doc.Text)
+	if err != nil {
+		return doc
+	}
+	projection := sqllsp.ProjectRenderedSQL(doc.URI, doc.Text, rendered)
+	projection.ID = string(doc.URI) + "#jinja-preview"
+	projection.AssetID = assetID
+	doc.Projection = &projection
+	return doc
+}
+
+func containsJinjaTemplate(content string) bool {
+	return strings.Contains(content, "{{") ||
+		strings.Contains(content, "{%") ||
+		strings.Contains(content, "{#")
 }
 
 func graphWithCustomCheckDialect(

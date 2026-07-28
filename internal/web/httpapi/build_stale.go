@@ -26,6 +26,7 @@ type BuildStaleAPI struct {
 	// in-pipeline upstream closure. It is used by the CLI's explicit
 	// --refresh-upstreams mode; ordinary Build stale requests leave it unused.
 	ResolveUpstreamAssetNames func(pipelineID, assetName string) (map[string]struct{}, bool)
+	SelectedEnvironment       func() string
 	Execution                 BuildStaleExecutionHandlers
 }
 
@@ -82,7 +83,7 @@ func (h *BuildStaleAPI) HandleBuildStaleStream(w http.ResponseWriter, r *http.Re
 	selection := staleness.Selection{
 		PipelineUUID:      pipelineUUID,
 		EncodedPipelineID: pipelineID,
-		Environment:       query.Get("environment"),
+		Environment:       resolveRequestEnvironment(query.Get("environment"), h.SelectedEnvironment),
 	}
 	startDate := normalized.StartString()
 	endDate := normalized.EndString()

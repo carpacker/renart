@@ -1,12 +1,14 @@
 # Pipeline execution parallelism
 
-> **Status (2026-07-27): core implementation complete; warehouse rollout in
+> **Status (2026-07-28): core implementation and the first DuckDB optimization
+> complete; warehouse rollout in
 > progress.** Durable v3 contracts, the shared unit graph, full/reviewed/Needed
 > convergence, bounded local resources, cancellation/failure semantics, and the
 > run-review controls are implemented. Native PostgreSQL, Trino, ClickHouse,
-> and StarRocks SQL relations are the first audited remote families. Remaining
-> operator-family audits, wait-time telemetry, and optional DuckDB relation
-> concurrency stay in this plan.
+> and StarRocks SQL relations are the first audited remote families. Audited
+> native local DuckDB table/view materializations now use relation claims and a
+> shared in-process database session. Remaining operator-family audits and
+> wait-time telemetry stay in this plan.
 
 ## 1. Decision summary
 
@@ -123,6 +125,7 @@ Reviewed plans and execution-target snapshots distinguish:
 - no write;
 - exact local file;
 - exact DuckDB database; and
+- exact DuckDB relation for an audited native materialization; and
 - conservative pipeline isolation.
 
 The run store uses the aggregate claims to serialize conflicting runs while
@@ -141,10 +144,10 @@ protect a target from another scheduled or inline run.
 - provides context-cancellable process-local locks; and
 - uses advisory file locks to coordinate Renart processes for the same user.
 
-Direct SQL tasks acquire this lease around the operator. API and Python assets
-perform network or compute work first, then acquire the target lease around the
-final load. Load assets acquire their relevant DuckDB paths around the Sling
-transfer.
+Audited native SQL tasks hold this lease through a shared in-process database
+session; each active asset has its own connection. API and Python assets perform
+network or compute work first, then acquire the target lease around the final
+load. Load assets acquire their relevant DuckDB paths around the Sling transfer.
 
 That coordinator remains the last line of defense. It currently coordinates
 DuckDB access for reads and checks as well as writes. The unit scheduler should
@@ -153,9 +156,9 @@ that wastes a worker slot and obscures the wait reason.
 
 DuckDB supports multiple writer threads in one process, but concurrent writes
 can conflict, and several Renart paths use child processes or separate database
-handles. The initial contract should therefore remain deliberately stronger:
-**one Renart writer per canonical DuckDB database file**, even when relations
-are distinct.
+handles. Audited native table/view materializations therefore use exact
+relation claims plus bounded conflict retry; every other DuckDB path keeps the
+stronger **one Renart writer per canonical database file** contract.
 
 This requires distinguishing two related contracts:
 
@@ -167,7 +170,8 @@ This requires distinguishing two related contracts:
 
 Both use canonical, secret-free identities. A no-write DuckDB sensor has no
 mutation claim, but it does have a runtime coordination claim for the database
-file. The existing DuckDB coordinator still protects the cross-run case.
+file. The DuckDB coordinator protects separate runtimes while the shared
+session allows audited native relations to overlap within one process.
 
 See DuckDB's
 [official concurrency documentation](https://duckdb.org/docs/current/connect/concurrency)
@@ -422,7 +426,8 @@ admission and within-run dispatch.
 | Sensor or proven no-write unit | May overlap when dependencies and connection limits allow; an accessed DuckDB file still carries an exclusive runtime coordination claim | Add read/write modes only if the operator layer can honor them consistently |
 | Same canonical local file | Serialize | Consider atomic temp-write + rename where the operator owns the complete write |
 | Different canonical local files | May overlap | Add live coverage for each file materialization family |
-| Same DuckDB database file | Serialize the whole file | Consider shared in-process handles only after operator-family benchmarks and conflict tests |
+| Distinct audited native relations in one DuckDB file | May overlap through the shared in-process database session | Audit further native operator shapes individually |
+| Any unaudited or separate-runtime access to the same DuckDB file | Serialize the whole file | Promote only after the operator can join the shared session safely |
 | Different DuckDB files | May overlap | None required |
 | Exact network warehouse relation | Pipeline-exclusive initially | Add a secret-free `warehouse_relation` key per proven operator family; serialize the same relation and allow distinct relations |
 | Arbitrary Python | Pipeline-exclusive | Permit finer claims only through an explicit, reviewable output contract |
@@ -652,20 +657,22 @@ conservative until they have explicit contracts.
 8. Keep an internal kill switch that forces effective parallelism to `1`
    during the initial release; do not make it a permanent user-facing mode.
 
-### Phase 5 — optional DuckDB optimization
+### Phase 5 — DuckDB optimization (implemented)
 
-Only if profiling shows worthwhile headroom:
+Audited native local `duckdb.sql` table/view materializations without hooks,
+schema-prefix rewriting, DDL strategy, path options, read-only mode, or
+lakehouse routing now share one in-process ADBC `Database` per canonical file
+and use one connection per active asset. Their scheduler claims are
+relation-scoped, with DuckDB's ASCII case-insensitive identifier semantics.
+Explicit transaction/catalog conflicts receive a bounded retry.
 
-1. classify which operators execute through a shared in-process DuckDB owner
-   and which invoke child processes;
-2. benchmark concurrent distinct-table writes on representative assets;
-3. test transaction conflicts, DDL, schema creation, checks, and cancellation;
-4. allow relation-level concurrency only for a proven in-process subset; and
-5. keep whole-file exclusion whenever any participating writer is external or
-   unclassified.
-
-This phase is independent of the main parallelism value. Different DuckDB files
-can already run concurrently under Phase 1.
+The shared database retains the existing whole-file coordinator lease until
+all active connections drain. Child-process writers, transfers, Python,
+checks/hooks, dynamic routing, and every unclassified fallback therefore
+remain whole-file exclusive. Cancellation, durability after session close,
+conflict retry, and native-versus-child exclusion have focused unit/live
+coverage. The default DuckDB connection budget is `2`; an explicit
+`max_concurrent_assets` remains authoritative.
 
 ## 10. Validation strategy
 
@@ -713,7 +720,10 @@ Add deterministic fixtures proving:
 - multiple windows of one asset remain serial;
 - completion/freshness is committed before downstream admission;
 - the same local file serializes while different files overlap;
-- the same DuckDB file serializes while different database files overlap;
+- distinct audited native DuckDB relations overlap while the same relation
+  serializes;
+- a child-process or fallback DuckDB writer waits for the shared native session
+  to drain;
 - a lower connection limit wins over `max_active_steps`;
 - cancellation stops admission and closes every durable unit;
 - `max_active_steps: 1` retains sequential output; and
@@ -750,7 +760,10 @@ Use reproducible benchmarks with four independent equal-duration units:
 - at `max_active_steps: 1`, duration should remain approximately the sum;
 - at `max_active_steps: 4`, duration should approach the longest branch plus
   bounded scheduler overhead;
-- four writers to one DuckDB file should remain serial and error-free;
+- four audited native writers to distinct relations in one DuckDB file should
+  overlap and remain durable;
+- a conflicting/fallback writer to that file should remain serial and
+  error-free;
 - four writers to four DuckDB files should overlap;
 - event/log persistence should not dominate short units; and
 - cancellation latency and goroutine count should return to baseline.

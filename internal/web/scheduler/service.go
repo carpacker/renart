@@ -54,7 +54,7 @@ type Service struct {
 	planScheduledRun          func(context.Context, ScheduledRunPlanRequest) (ScheduledRunPlanResult, error)
 	validateReexecution       func(context.Context, RunReexecutionValidationRequest) error
 	snapshotOrdinal           func(context.Context, string) (int64, error)
-	recoverRun                func(context.Context, PipelineRun, []PipelineRunStep) error
+	recoverRun                func(context.Context, PipelineRun, []PipelineRunStep, []PipelineRunUnit) error
 	lock                      *flock.Flock
 	riverClient               *river.Client[*sql.Tx]
 	activeRunCancels          map[string]context.CancelFunc
@@ -115,9 +115,10 @@ type Options struct {
 	// A missing historical deployment never blocks run or schedule history.
 	SnapshotOrdinal func(context.Context, string) (int64, error)
 	// RecoverRun observes a run reconciled after an unclean stop. The callback
-	// receives the persisted terminal steps after open steps have been failed;
-	// it may rebuild derived state, but must never execute the pipeline again.
-	RecoverRun func(context.Context, PipelineRun, []PipelineRunStep) error
+	// receives the persisted terminal steps and execution units after open work
+	// has been failed and unreached units have been skipped. It may rebuild
+	// derived state, but must never execute the pipeline again.
+	RecoverRun func(context.Context, PipelineRun, []PipelineRunStep, []PipelineRunUnit) error
 }
 
 type pipelineRunJobArgs struct {
@@ -516,6 +517,21 @@ func (s *Service) recoverOrphanedRuns(ctx context.Context) (startupRecoverySumma
 		if getErr != nil {
 			return summary, fmt.Errorf("load reconciled run %s: %w", id, getErr)
 		}
+		finishedAt := time.Now().UTC()
+		if run.FinishedAt != nil && !run.FinishedAt.IsZero() {
+			finishedAt = run.FinishedAt.UTC()
+		}
+		var recoveredRunErr error
+		if message := strings.TrimSpace(run.Error); message != "" {
+			recoveredRunErr = errors.New(message)
+		}
+		if unitsErr := s.store.FinishOpenUnits(ctx, id, run.Status, finishedAt, recoveredRunErr); unitsErr != nil {
+			return summary, fmt.Errorf("close reconciled run units %s: %w", id, unitsErr)
+		}
+		units, unitsErr := s.store.ListRunUnits(ctx, id)
+		if unitsErr != nil {
+			return summary, fmt.Errorf("load reconciled run units %s: %w", id, unitsErr)
+		}
 		if spec, found, specErr := s.store.GetRunSpec(ctx, id); specErr != nil {
 			return summary, fmt.Errorf("load reconciled run spec %s: %w", id, specErr)
 		} else if found {
@@ -539,7 +555,7 @@ func (s *Service) recoverOrphanedRuns(ctx context.Context) (startupRecoverySumma
 			continue
 		}
 		if s.recoverRun != nil {
-			if recoverErr := s.recoverRun(ctx, run, steps); recoverErr != nil {
+			if recoverErr := s.recoverRun(ctx, run, steps, units); recoverErr != nil {
 				slog.Warn("failed to replay reconciled pipeline run", "run_id", id, "error", recoverErr)
 				summary.ReplayFailures++
 				s.publishRunEvent("run.finished", run)
@@ -1259,14 +1275,14 @@ func (s *Service) PromoteEnvSchedules(ctx context.Context, pipelineUUID string, 
 		return nil, err
 	}
 
-	selections := make([]EnvSchedulePinSelection, 0, len(req.Schedules))
+	selections := make([]envSchedulePinExpectation, 0, len(req.Schedules))
 	seen := make(map[string]struct{}, len(req.Schedules))
 	for _, requested := range req.Schedules {
 		environment := strings.TrimSpace(requested.Environment)
-		expectedVersion := strings.TrimSpace(requested.ExpectedSnapshotVersionID)
-		if environment == "" || expectedVersion == "" {
+		if environment == "" || requested.ExpectedSnapshotVersionID == nil {
 			return nil, errors.New("each selected schedule requires environment and expected_snapshot_version_id")
 		}
+		expectedVersion := strings.TrimSpace(*requested.ExpectedSnapshotVersionID)
 		if _, duplicate := seen[environment]; duplicate {
 			return nil, fmt.Errorf("schedule %s was selected more than once", environment)
 		}
@@ -1289,7 +1305,7 @@ func (s *Service) PromoteEnvSchedules(ctx context.Context, pipelineUUID string, 
 		if expectedVersion == versionID {
 			continue
 		}
-		selections = append(selections, EnvSchedulePinSelection{
+		selections = append(selections, envSchedulePinExpectation{
 			Environment: environment, ExpectedSnapshotVersionID: expectedVersion,
 		})
 	}
@@ -2100,6 +2116,12 @@ func (s *Service) execute(ctx context.Context, run PipelineRun, spec runSpecV1) 
 		captured := snapshot
 		run.ExecutionTargetSnapshot = &captured
 		return nil
+	}
+	req.OnExecutionUnitsResolved = func(units []PipelineRunExecutionUnit) error {
+		if len(units) == 0 {
+			return nil
+		}
+		return s.store.BindQueuedRunExecutionUnits(ctx, run.ID, units)
 	}
 	req.OnStep = func(event RunStepEvent) error {
 		return s.persistRunStep(ctx, run.ID, event)

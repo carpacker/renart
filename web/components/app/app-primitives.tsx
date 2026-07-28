@@ -199,6 +199,11 @@ const stalenessMeta: Record<
     className: "bg-amber-100 text-amber-700 dark:bg-amber-500/15 dark:text-amber-300",
     dotClassName: "bg-amber-500",
   },
+  stale_deployment: {
+    label: "Deployment differs",
+    className: "bg-amber-100 text-amber-700 dark:bg-amber-500/15 dark:text-amber-300",
+    dotClassName: "bg-amber-500",
+  },
   stale_upstream: {
     label: "Upstream changed",
     className: "bg-amber-50 text-amber-600 dark:bg-amber-500/10 dark:text-amber-300",
@@ -281,7 +286,9 @@ export function lastRunLabel(staleness: AssetStaleness) {
   if (staleness.last_run_status === "cancelled") return "Last run cancelled";
   if (
     staleness.last_run_on_current_content &&
-    (staleness.status === "stale_edited" || staleness.status === "never_built")
+    (staleness.status === "stale_edited" ||
+      staleness.status === "stale_deployment" ||
+      staleness.status === "never_built")
   ) {
     return "Build failed";
   }

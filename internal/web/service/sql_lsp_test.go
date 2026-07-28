@@ -1871,6 +1871,90 @@ func openTestPolyglotClient(t *testing.T) *polyglot.Client {
 	return client
 }
 
+func variableTemplateSQLLSPService(
+	t *testing.T,
+	client *polyglot.Client,
+) (*SQLLSPService, SQLLSPRequest) {
+	t.Helper()
+	const query = `select 42 as answer
+where 42 >= {{ var.notable_magnitude }}
+order by answer`
+	parsed, root := writeTypeCheckWorkspace(t, `
+name: earthquakes
+variables:
+  notable_magnitude:
+    type: integer
+    default: 5
+`, map[string]string{
+		"notable_events.sql": `
+/* @bruin
+name: earthquakes.notable_events
+type: duckdb.sql
+@bruin */
+` + query,
+	})
+	if len(parsed.Assets) != 1 {
+		t.Fatalf("expected one parsed asset, got %d", len(parsed.Assets))
+	}
+	asset := parsed.Assets[0]
+	assetID := assetReportID(root, asset)
+	state := model.WorkspaceState{
+		Revision: 1,
+		Pipelines: []model.Pipeline{{
+			ID:   "earthquakes",
+			Name: "earthquakes",
+			Assets: []model.Asset{{
+				ID:      assetID,
+				Name:    asset.Name,
+				Type:    string(asset.Type),
+				Path:    asset.ExecutableFile.Path,
+				Content: asset.ExecutableFile.Content,
+			}},
+		}},
+	}
+	return NewSQLLSPService(SQLLSPDependencies{
+			WorkspaceRoot: root,
+			CurrentState:  func() model.WorkspaceState { return state },
+			ResolveAssetByID: func(_ context.Context, requested string) (string, *pipeline.Pipeline, *pipeline.Asset, error) {
+				if requested != assetID {
+					return "", nil, nil, fmt.Errorf("unexpected asset %q", requested)
+				}
+				return asset.ExecutableFile.Path, parsed, asset, nil
+			},
+			PolyglotClient: func() *polyglot.Client { return client },
+		}),
+		SQLLSPRequest{AssetID: assetID, Content: asset.ExecutableFile.Content}
+}
+
+func TestSQLLSPServiceProjectsPipelineVariablesForLiveDocuments(t *testing.T) {
+	service, request := variableTemplateSQLLSPService(t, nil)
+	_, doc, apiErr := service.graphAndDocument(context.Background(), request)
+	if apiErr != nil {
+		t.Fatal(apiErr)
+	}
+	if doc.Projection == nil {
+		t.Fatal("expected live Jinja document to carry a rendered SQL projection")
+	}
+	if strings.Contains(doc.Projection.RenderedSQL, "{{") ||
+		!strings.Contains(doc.Projection.RenderedSQL, "42 >= 5") {
+		t.Fatalf("unexpected live Jinja projection: %q", doc.Projection.RenderedSQL)
+	}
+}
+
+func TestSQLLSPServiceDoesNotSendRenderedVariablesToPolyglotAsJinja(t *testing.T) {
+	client := openTestPolyglotClient(t)
+	service, request := variableTemplateSQLLSPService(t, client)
+	response, apiErr := service.Diagnostics(context.Background(), request)
+	if apiErr != nil {
+		t.Fatal(apiErr)
+	}
+	for _, diagnostic := range response.Diagnostics {
+		if diagnostic.Source == "polyglot" {
+			t.Fatalf("valid variable template produced a Polyglot diagnostic: %#v", diagnostic)
+		}
+	}
+}
+
 func TestSQLLSPServiceReportsPolyglotSyntaxDiagnostics(t *testing.T) {
 	client := openTestPolyglotClient(t)
 	state := model.WorkspaceState{

@@ -166,6 +166,18 @@ func TestEnvScheduleMutationBodiesAcceptDeclaredFields(t *testing.T) {
 	assert.Equal(t, 1, statusStub.statusCalls)
 	assert.Equal(t, scheduler.ScheduleStatusPaused, statusStub.status)
 
+	promoteStub := &envScheduleHandlerStub{}
+	promoteResponse := envScheduleRequest(
+		promoteStub,
+		http.MethodPost,
+		"/api/pipelines/pipeline-id/env-schedules/promote",
+		`{"snapshot_version_id":"snapshot-id","schedules":[{"environment":"prod","expected_snapshot_version_id":""}]}`,
+	)
+	require.Equal(t, http.StatusOK, promoteResponse.Code)
+	require.Len(t, promoteStub.promoteReq.Schedules, 1)
+	require.NotNil(t, promoteStub.promoteReq.Schedules[0].ExpectedSnapshotVersionID)
+	assert.Empty(t, *promoteStub.promoteReq.Schedules[0].ExpectedSnapshotVersionID)
+
 	runStub := &envScheduleHandlerStub{}
 	runResponse := envScheduleRequest(
 		runStub, http.MethodPost, "/api/pipelines/pipeline-id/env-schedules/prod/run", "",

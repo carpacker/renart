@@ -84,8 +84,11 @@ func TestStalenessHTTPIncludesDataStateSnapshotContract(t *testing.T) {
 		ResolvePipelineUUID: func(pipelineID string) (string, bool) {
 			return "pipeline-uuid", pipelineID == "encoded-pipeline"
 		},
+		SelectedEnvironment: func() string { return "dev" },
 	})
-	request := httptest.NewRequest(http.MethodGet, "/api/pipelines/encoded-pipeline/staleness?environment=dev", nil)
+	// Omitting the environment means the workspace-selected environment, not
+	// an unrelated empty materialization namespace.
+	request := httptest.NewRequest(http.MethodGet, "/api/pipelines/encoded-pipeline/staleness", nil)
 	response := httptest.NewRecorder()
 	router.ServeHTTP(response, request)
 	require.Equal(t, http.StatusOK, response.Code)
@@ -105,4 +108,13 @@ func TestStalenessHTTPIncludesDataStateSnapshotContract(t *testing.T) {
 	require.Len(t, payload.Assets, 1)
 	assert.Equal(t, staleness.TargetFidelityExact, payload.Assets[0].TargetFidelity)
 	assert.Equal(t, target, payload.Assets[0].TargetIdentity)
+}
+
+func TestResolveRequestEnvironmentPrefersExplicitSelection(t *testing.T) {
+	t.Parallel()
+
+	selected := func() string { return "default" }
+	assert.Equal(t, "prod", resolveRequestEnvironment(" prod ", selected))
+	assert.Equal(t, "default", resolveRequestEnvironment("", selected))
+	assert.Empty(t, resolveRequestEnvironment("", nil))
 }

@@ -13,7 +13,12 @@ import {
 type RunDetail = {
   status: "ok" | "error";
   run: { id: string; status: string; error?: string };
-  steps?: Array<{ asset: string; status: string }>;
+  steps?: Array<{
+    asset: string;
+    status: string;
+    started_at?: string;
+    finished_at?: string;
+  }>;
 };
 
 function findDuckDBBinary(): string | null {
@@ -127,6 +132,58 @@ SQL
   return { workspaceDir, databasePath, fakeSlingPath, lockMarkerPath };
 }
 
+function buildNativeParallelWorkspace(): {
+  workspaceDir: string;
+  databasePath: string;
+} {
+  const root = join(liveServerRepoRoot, ".playwright-live-workspaces");
+  mkdirSync(root, { recursive: true });
+  const workspaceDir = mkdtempSync(join(root, "renart-duckdb-native-parallel-"));
+  mkdirSync(join(workspaceDir, ".git"));
+  mkdirSync(join(workspaceDir, "duckdb-files"));
+  const databasePath = join(workspaceDir, "duckdb-files", "shared.duckdb");
+  writeFileSync(
+    join(workspaceDir, ".bruin.yml"),
+    `environments:
+  default:
+    connections:
+      duckdb:
+        - name: duckdb-default
+          path: duckdb-files/shared.duckdb
+          max_concurrent_assets: 2
+`,
+  );
+
+  const pipelineDir = join(workspaceDir, "analytics");
+  mkdirSync(join(pipelineDir, "assets"), { recursive: true });
+  writeFileSync(
+    join(pipelineDir, "pipeline.yml"),
+    `name: analytics
+schedule: daily
+start_date: "2024-01-01"
+catchup: false
+max_active_steps: 2
+default_connections:
+  duckdb: duckdb-default
+`,
+  );
+  for (const name of ["left", "right"]) {
+    writeFileSync(
+      join(pipelineDir, "assets", `${name}.sql`),
+      `/* @bruin
+name: analytics.${name}
+type: duckdb.sql
+materialization:
+  type: table
+@bruin */
+
+select sleep_ms(1500) as waited
+`,
+    );
+  }
+  return { workspaceDir, databasePath };
+}
+
 async function waitForRun(
   request: APIRequestContext,
   baseURL: string,
@@ -149,6 +206,67 @@ async function waitForRun(
 }
 
 test.describe("DuckDB pipeline coordination (live)", () => {
+  test("runs distinct native relations concurrently through one database session", async () => {
+    test.skip(test.info().project.name.includes("mobile"), "Backend concurrency needs one run.");
+    test.setTimeout(90000);
+    const duckDBBinary = findDuckDBBinary();
+    test.skip(!duckDBBinary, "DuckDB CLI is required to verify durable catalog writes.");
+
+    const { workspaceDir, databasePath } = buildNativeParallelWorkspace();
+    let server: SpawnedServer | null = null;
+    try {
+      server = await startLiveServer(workspaceDir);
+      const request = await apiRequest.newContext();
+      const schedulesResponse = await request.get(`${server.baseURL}/api/schedules`);
+      expect(schedulesResponse.ok()).toBe(true);
+      const schedules = (await schedulesResponse.json()) as {
+        schedules: Array<{ pipeline_id: string; pipeline_name: string }>;
+      };
+      const pipeline = schedules.schedules.find((item) => item.pipeline_name === "analytics");
+      expect(pipeline).toBeTruthy();
+
+      const triggerResponse = await request.post(
+        `${server.baseURL}/api/pipelines/${encodeURIComponent(pipeline!.pipeline_id)}/trigger`,
+        { data: { environment: "default" } },
+      );
+      expect(triggerResponse.ok()).toBe(true);
+      const runId = ((await triggerResponse.json()) as { run: { id: string } }).run.id;
+      const detail = await waitForRun(request, server.baseURL, runId);
+      expect(detail.run.status).toBe("success");
+
+      const left = detail.steps?.find((step) => step.asset === "analytics.left");
+      const right = detail.steps?.find((step) => step.asset === "analytics.right");
+      expect(left?.status).toBe("success");
+      expect(right?.status).toBe("success");
+      expect(left?.started_at).toBeTruthy();
+      expect(left?.finished_at).toBeTruthy();
+      expect(right?.started_at).toBeTruthy();
+      expect(right?.finished_at).toBeTruthy();
+
+      const starts = [Date.parse(left!.started_at!), Date.parse(right!.started_at!)];
+      const finishes = [Date.parse(left!.finished_at!), Date.parse(right!.finished_at!)];
+      expect(Math.max(...starts)).toBeLessThan(Math.min(...finishes));
+      expect(Math.max(...finishes) - Math.min(...starts)).toBeLessThan(2800);
+
+      const tables = execFileSync(
+        duckDBBinary!,
+        [
+          databasePath,
+          "select table_schema || '.' || table_name from information_schema.tables where table_schema = 'analytics' order by 1",
+        ],
+        { encoding: "utf8" },
+      );
+      expect(tables).toContain("analytics.left");
+      expect(tables).toContain("analytics.right");
+      await request.dispose();
+    } finally {
+      if (server) {
+        await stopLiveServer(server, "SIGTERM").catch(() => undefined);
+      }
+      rmSync(workspaceDir, { recursive: true, force: true });
+    }
+  });
+
   test("serializes a child-process load and another pipeline writing the same file", async () => {
     test.skip(test.info().project.name.includes("mobile"), "Backend concurrency needs one run.");
     test.setTimeout(150000);

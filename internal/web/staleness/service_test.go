@@ -187,6 +187,37 @@ func (f *fixture) recordTargetRun(
 	window *Interval,
 	assetName string,
 ) matlog.Materialization {
+	return f.recordTargetRunFromSource(t, environment, targetIdentity, window, assetName, "")
+}
+
+func (f *fixture) recordTargetRunFromSnapshot(
+	t *testing.T,
+	environment string,
+	targetIdentity string,
+	window *Interval,
+	assetName string,
+	snapshotVersionID string,
+) matlog.Materialization {
+	t.Helper()
+	require.NotEmpty(t, snapshotVersionID)
+	return f.recordTargetRunFromSource(
+		t,
+		environment,
+		targetIdentity,
+		window,
+		assetName,
+		snapshotVersionID,
+	)
+}
+
+func (f *fixture) recordTargetRunFromSource(
+	t *testing.T,
+	environment string,
+	targetIdentity string,
+	window *Interval,
+	assetName string,
+	snapshotVersionID string,
+) matlog.Materialization {
 	t.Helper()
 	f.nextRun++
 	runID := fmt.Sprintf("target-run-%d", f.nextRun)
@@ -204,6 +235,7 @@ func (f *fixture) recordTargetRun(
 		OwnContent:        string(result.OwnContent),
 		VarsHash:          fingerprint.AllVarsHash(vars),
 		RunID:             runID,
+		SnapshotVersionID: snapshotVersionID,
 		TargetIdentity:    targetIdentity,
 		CompletionID:      runID,
 		CompletionOrdinal: 0,
@@ -661,6 +693,31 @@ func TestTargetAwareSnapshotExposesSelectedTargetAndLatestOutput(t *testing.T) {
 	assert.False(t, status.LatestOutput.Ambiguous)
 }
 
+func TestTargetAwareStalenessDistinguishesDeployedSourceFromWorkingTreeEdit(t *testing.T) {
+	t.Parallel()
+	asset := sqlAsset("a", "select 1")
+	f := newFixture(t, asset)
+	const target = "renart-physical-target-v1:deployment-drift"
+	f.enableTargetAware(map[string]PhysicalTarget{
+		"p:a": {Identity: target, Exact: true},
+	})
+
+	f.recordTargetRunFromSnapshot(t, "dev", target, nil, "a", "snapshot-old")
+	asset.ExecutableFile.Content = "select 2"
+
+	status := f.statuses(t, "dev", nil, nil)["a"]
+	assert.Equal(t, StatusStaleDeployment, status.Status)
+	require.NotNil(t, status.LatestOutput)
+	assert.Equal(t, "snapshot-old", status.LatestOutput.SnapshotVersionID)
+
+	// Once the saved version itself writes the target, later edits are ordinary
+	// working-tree drift and must keep the established Edited classification.
+	f.recordTargetRun(t, "dev", target, nil, "a")
+	require.Equal(t, StatusFresh, f.statuses(t, "dev", nil, nil)["a"].Status)
+	asset.ExecutableFile.Content = "select 3"
+	assert.Equal(t, StatusStaleEdited, f.statuses(t, "dev", nil, nil)["a"].Status)
+}
+
 func TestTargetAwareDataStateTokenTracksGenerationButNotEquivalentRerunMetadata(t *testing.T) {
 	t.Parallel()
 	asset := sqlAsset("a", "select 1")
@@ -930,6 +987,88 @@ func TestVerificationDowngradesToMissing(t *testing.T) {
 			}
 		case <-deadline:
 			t.Fatal("asset never downgraded to missing")
+		}
+	}
+}
+
+func TestUnavailableVerificationKeepsRecordedCoverageFresh(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t, sqlAsset("a", "select 1"))
+	f.recordRun(t, "dev", nil, "a")
+	verifyCalls := make(chan struct{}, 1)
+	f.service.deps.Verify = func(
+		context.Context,
+		Selection,
+		[]string,
+	) (map[string]bool, error) {
+		verifyCalls <- struct{}{}
+		// An omitted asset is unknown, not confirmed absent. This is how a
+		// locked local vault or temporarily unavailable warehouse is reported.
+		return map[string]bool{}, nil
+	}
+
+	assert.Equal(t, StatusFresh, f.statuses(t, "dev", nil, nil)["a"].Status)
+	select {
+	case <-verifyCalls:
+	case <-time.After(5 * time.Second):
+		t.Fatal("verifier never called")
+	}
+	assert.Equal(t, StatusFresh, f.statuses(t, "dev", nil, nil)["a"].Status)
+}
+
+func TestSuccessfulRunClearsRememberedMissingVerification(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t, sqlAsset("a", "select 1"))
+	f.recordRun(t, "dev", nil, "a")
+	present := false
+	f.service.deps.Verify = func(
+		context.Context,
+		Selection,
+		[]string,
+	) (map[string]bool, error) {
+		return map[string]bool{"a": present}, nil
+	}
+
+	assert.Equal(t, StatusFresh, f.statuses(t, "dev", nil, nil)["a"].Status)
+	deadline := time.After(5 * time.Second)
+	for {
+		select {
+		case event := <-f.pushed:
+			payload := event.(map[string]any)
+			statuses := payload["assets"].([]AssetStatus)
+			if statuses[0].Status == StatusMissing {
+				goto missingObserved
+			}
+		case <-deadline:
+			t.Fatal("asset never became missing")
+		}
+	}
+
+missingObserved:
+	present = true
+	f.recordRun(t, "dev", nil, "a")
+	f.events.EmitRunCompleted(bus.RunCompleted{
+		PipelineUUID: "p",
+		Environment:  "dev",
+		CompletedAt:  time.Now().UTC(),
+		Assets: []bus.AssetRun{{
+			AssetID:   "p:a",
+			AssetName: "a",
+			Status:    "succeeded",
+		}},
+	})
+
+	deadline = time.After(5 * time.Second)
+	for {
+		select {
+		case event := <-f.pushed:
+			payload := event.(map[string]any)
+			statuses := payload["assets"].([]AssetStatus)
+			if statuses[0].Status == StatusFresh {
+				return
+			}
+		case <-deadline:
+			t.Fatal("successful run did not clear the remembered missing status")
 		}
 	}
 }

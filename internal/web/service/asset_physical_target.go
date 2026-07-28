@@ -152,7 +152,7 @@ func resolveAssetPhysicalTarget(workspaceRoot string, info *directPipelineInfo) 
 		return runtimeOnlyAssetTarget(assetRenderTargetKindRelation, firstNonEmpty(object, strings.TrimSpace(asset.Name)), message)
 	}
 	target := exactAssetTarget(assetRenderTargetKindRelation, object, coordinates)
-	target = applyExactWarehouseWriteResource(asset, coordinates, target)
+	target = applyExactWarehouseWriteResource(info.Config, asset, connection, coordinates, target)
 	return applyAssetWriteResourceSafety(asset, target)
 }
 
@@ -162,17 +162,33 @@ func resolveAssetPhysicalTarget(workspaceRoot string, info *directPipelineInfo) 
 // aliases that reach the same relation still serialize without persisting
 // endpoint or credential material.
 //
-// Seeds, Load/API assets, Python, hooks, schema-prefixed environments, and
-// every unaudited warehouse family remain pipeline-exclusive.
+// Audited local DuckDB SQL uses a relation claim backed by its shared database
+// session. Other DuckDB operators retain their whole-file claim. Seeds,
+// Load/API assets, Python, hooks, schema-prefixed environments, and every
+// unaudited network warehouse family remain pipeline-exclusive.
 func applyExactWarehouseWriteResource(
+	cfg *config.Config,
 	asset *pipeline.Asset,
+	connection any,
 	coordinates runcontext.PhysicalTargetCoordinates,
 	target AssetRenderTarget,
 ) AssetRenderTarget {
 	if asset == nil ||
 		target.Fidelity != AssetRenderFidelityExact ||
-		target.Identity == "" ||
-		!auditedConcurrentWarehouseAsset(asset.Type, coordinates.Platform) {
+		target.Identity == "" {
+		return target
+	}
+	if coordinates.Platform == "duckdb_file" {
+		if !isConcurrentNativeDuckDBTarget(cfg, asset, connection, coordinates) {
+			return target
+		}
+		resource := exactAssetWriteResource(assetWriteResourceDuckDB, coordinates.FilePath, target.Identity)
+		if resource.Fidelity == AssetRenderFidelityExact {
+			target.WriteResource = resource
+		}
+		return target
+	}
+	if !auditedConcurrentWarehouseAsset(asset.Type, coordinates.Platform) {
 		return target
 	}
 	resource := exactAssetWriteResource(assetWriteResourceWarehouse, "", target.Identity)
@@ -181,6 +197,45 @@ func applyExactWarehouseWriteResource(
 	}
 	target.WriteResource = resource
 	return target
+}
+
+func isConcurrentNativeDuckDBTarget(
+	cfg *config.Config,
+	asset *pipeline.Asset,
+	connection any,
+	coordinates runcontext.PhysicalTargetCoordinates,
+) bool {
+	if asset == nil ||
+		asset.Type != pipeline.AssetTypeDuckDBQuery ||
+		coordinates.Platform != "duckdb_file" ||
+		strings.TrimSpace(coordinates.FilePath) == "" ||
+		(asset.Materialization.Type != pipeline.MaterializationTypeTable &&
+			asset.Materialization.Type != pipeline.MaterializationTypeView) ||
+		asset.Materialization.Strategy == pipeline.MaterializationStrategyDDL ||
+		len(asset.Hooks.Pre) > 0 ||
+		len(asset.Hooks.Post) > 0 {
+		return false
+	}
+	if cfg != nil && cfg.SelectedEnvironment != nil &&
+		strings.TrimSpace(cfg.SelectedEnvironment.SchemaPrefix) != "" {
+		return false
+	}
+
+	var duckDBConnection *config.DuckDBConnection
+	switch typed := connection.(type) {
+	case *config.DuckDBConnection:
+		duckDBConnection = typed
+	case config.DuckDBConnection:
+		clone := typed
+		duckDBConnection = &clone
+	}
+	if duckDBConnection == nil ||
+		duckDBConnection.ReadOnly ||
+		duckDBConnection.Lakehouse != nil {
+		return false
+	}
+	path := strings.TrimSpace(duckDBConnection.Path)
+	return path != "" && !strings.ContainsAny(path, "?#")
 }
 
 func auditedConcurrentWarehouseAsset(assetType pipeline.AssetType, platform string) bool {
@@ -253,9 +308,8 @@ func exactAssetTarget(kind, object string, coordinates runcontext.PhysicalTarget
 	case "local_file":
 		resource = exactAssetWriteResource(assetWriteResourceLocalFile, coordinates.FilePath, "")
 	case "duckdb_file":
-		// DuckDB coordinates identify a relation for freshness, but every writer
-		// claims the whole canonical database file because operators and hooks can
-		// touch more than one relation inside it.
+		// DuckDB defaults to a whole-file claim. Audited native SQL assets are
+		// promoted to relation-scoped claims by applyExactWarehouseWriteResource.
 		resource = exactAssetWriteResource(assetWriteResourceDuckDB, coordinates.FilePath, "")
 	}
 	return AssetRenderTarget{
@@ -350,9 +404,9 @@ func resolveRelationTargetCoordinates(workspaceRoot, rawConnectionType string, c
 		return runcontext.PhysicalTargetCoordinates{
 			Kind:     assetRenderTargetKindRelation,
 			Platform: "duckdb_file",
-			Catalog:  relation.Catalog,
-			Schema:   relation.Schema,
-			Object:   relation.Table,
+			Catalog:  duckDBIdentifierIdentity(relation.Catalog),
+			Schema:   duckDBIdentifierIdentity(relation.Schema),
+			Object:   duckDBIdentifierIdentity(relation.Table),
 			FilePath: canonical,
 		}, object, "", true
 
@@ -536,6 +590,19 @@ func canonicalTargetHost(raw string) (string, bool) {
 
 func containsRawRoutingMaterial(value string) bool {
 	return strings.Contains(value, "://") || strings.ContainsAny(value, "/?#@{}$")
+}
+
+// duckDBIdentifierIdentity matches DuckDB's ASCII-based case-insensitive
+// identifier comparison without changing the user-facing relation spelling.
+// Non-ASCII bytes remain untouched because DuckDB does not case-fold them.
+func duckDBIdentifierIdentity(value string) string {
+	bytes := []byte(strings.TrimSpace(value))
+	for index, character := range bytes {
+		if character >= 'A' && character <= 'Z' {
+			bytes[index] = character + ('a' - 'A')
+		}
+	}
+	return string(bytes)
 }
 
 func resolvePhysicalRelation(platform, rawObject string, defaults tablename.Defaults, requireCatalog, requireSchema bool) (tablename.TableName, string, bool) {

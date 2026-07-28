@@ -84,7 +84,7 @@ func (e *HybridBruinExecutor) RunAsset(ctx context.Context, req RunAssetRequest,
 			return printer.buffer.Bytes(), err
 		}
 	} else {
-		mainExecutors, err = buildDirectMainExecutors(manager, renderer, parser, pp.Pipeline, e.runRegistry, e.duckDBCoordinator, e.workspaceRoot, req.FullRefresh, effectiveSensorMode(req.SensorMode, false))
+		mainExecutors, err = buildDirectMainExecutors(manager, renderer, parser, pp.Pipeline, pp.Config, e.runRegistry, e.duckDBCoordinator, e.duckDBSessions, e.workspaceRoot, req.FullRefresh, effectiveSensorMode(req.SensorMode, false))
 		if err != nil {
 			return printer.buffer.Bytes(), err
 		}
@@ -287,7 +287,7 @@ func (e *HybridBruinExecutor) RunPipeline(ctx context.Context, req RunPipelineRe
 			return printer.buffer.Bytes(), err
 		}
 	}
-	mainExecutors, err := buildDirectMainExecutors(manager, renderer, parser, foundPipeline, e.runRegistry, e.duckDBCoordinator, e.workspaceRoot, req.FullRefresh, effectiveSensorMode(req.SensorMode, false))
+	mainExecutors, err := buildDirectMainExecutors(manager, renderer, parser, foundPipeline, cfg, e.runRegistry, e.duckDBCoordinator, e.duckDBSessions, e.workspaceRoot, req.FullRefresh, effectiveSensorMode(req.SensorMode, false))
 	if err != nil {
 		return printer.buffer.Bytes(), err
 	}
@@ -789,6 +789,8 @@ func pipelineExecutionConnectionLimits(
 	manager config.ConnectionAndDetailsGetter,
 	used map[string]struct{},
 ) (map[string]int, error) {
+	const defaultDuckDBConcurrentAssets = 2
+
 	limits := make(map[string]int)
 	if cfg != nil && cfg.SelectedEnvironment != nil && cfg.SelectedEnvironment.Connections != nil {
 		configured, err := cfg.SelectedEnvironment.Connections.ConnectionConcurrencyLimits()
@@ -808,10 +810,14 @@ func pipelineExecutionConnectionLimits(
 		switch connection := manager.GetConnectionDetails(name).(type) {
 		case *config.DuckDBConnection:
 			if connection != nil {
-				limits[name] = 1
+				if _, configured := limits[name]; !configured {
+					limits[name] = defaultDuckDBConcurrentAssets
+				}
 			}
 		case config.DuckDBConnection:
-			limits[name] = 1
+			if _, configured := limits[name]; !configured {
+				limits[name] = defaultDuckDBConcurrentAssets
+			}
 		}
 	}
 	return limits, nil
@@ -864,8 +870,8 @@ func (e *HybridBruinExecutor) runPlannedPipelineUnit(
 		mainExecutors, err = buildDirectCheckExecutors(manager, renderer)
 	} else {
 		mainExecutors, err = buildDirectMainExecutors(
-			manager, renderer, parser, pp.Pipeline, e.runRegistry, e.duckDBCoordinator,
-			sourceRoot, req.FullRefresh, effectiveSensorMode(req.SensorMode, false),
+			manager, renderer, parser, pp.Pipeline, pp.Config, e.runRegistry, e.duckDBCoordinator,
+			e.duckDBSessions, sourceRoot, req.FullRefresh, effectiveSensorMode(req.SensorMode, false),
 		)
 	}
 	if err != nil {
@@ -1074,6 +1080,8 @@ func (e *HybridBruinExecutor) runDirectTask(
 			_, runErr = e.runAPIAsset(taskCtx, pl, asset, renderer, manager, forward)
 		case isLoadAsset(asset) && instance.GetType() == scheduler.TaskInstanceTypeMain:
 			_, runErr = e.runLoadAsset(taskCtx, pl, asset, manager, forward)
+		case directTaskOwnsDuckDBCoordination(instance):
+			runErr = seq.RunSingleTask(taskCtx, instance)
 		default:
 			lease, leaseErr := e.acquireDuckDBConnections(
 				taskCtx,
@@ -1098,6 +1106,13 @@ func (e *HybridBruinExecutor) runDirectTask(
 		runErr = flushErr
 	}
 	return runErr
+}
+
+func directTaskOwnsDuckDBCoordination(instance scheduler.TaskInstance) bool {
+	return instance != nil &&
+		instance.GetType() == scheduler.TaskInstanceTypeMain &&
+		instance.GetAsset() != nil &&
+		instance.GetAsset().Type == pipeline.AssetTypeDuckDBQuery
 }
 
 func directTaskConnectionNames(pl *pipeline.Pipeline, instance scheduler.TaskInstance) ([]string, error) {

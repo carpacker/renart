@@ -1202,6 +1202,8 @@ func pipelinePlanStalenessReason(status staleness.AssetStatus) string {
 	switch status.Status {
 	case staleness.StatusStaleEdited:
 		return "stale_edited"
+	case staleness.StatusStaleDeployment:
+		return "stale_deployment"
 	case staleness.StatusStaleUpstream:
 		return "stale_upstream"
 	case staleness.StatusPartial:

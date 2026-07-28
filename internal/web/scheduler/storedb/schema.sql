@@ -238,7 +238,8 @@ CREATE TABLE IF NOT EXISTS renart_materializations (
     target_identity   TEXT NOT NULL DEFAULT '',
     target_generation INTEGER NOT NULL DEFAULT 0 CHECK (target_generation >= 0),
     completion_id     TEXT NOT NULL DEFAULT '',
-    completion_ordinal INTEGER NOT NULL DEFAULT 0 CHECK (completion_ordinal >= 0)
+    completion_ordinal INTEGER NOT NULL DEFAULT 0 CHECK (completion_ordinal >= 0),
+    snapshot_version_id TEXT NOT NULL DEFAULT ''
 );
 
 CREATE INDEX IF NOT EXISTS idx_renart_mat_lookup ON renart_materializations
@@ -283,7 +284,8 @@ CREATE TABLE IF NOT EXISTS renart_latest_successful_writers (
     materialized_at    TEXT NOT NULL,
     completion_id      TEXT NOT NULL CHECK (completion_id <> ''),
     completion_ordinal INTEGER NOT NULL CHECK (completion_ordinal >= 0),
-    ambiguous          INTEGER NOT NULL DEFAULT 0 CHECK (ambiguous IN (0, 1))
+    ambiguous          INTEGER NOT NULL DEFAULT 0 CHECK (ambiguous IN (0, 1)),
+    snapshot_version_id TEXT NOT NULL DEFAULT ''
 );
 
 -- Durable fail-closed marker spanning physical execution and materialization

@@ -9,6 +9,8 @@ import (
 	"github.com/bruin-data/bruin/pkg/pipeline"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"renart/internal/web/duckcoord"
 )
 
 func TestAssetPhysicalTargetResolvesSupportedRelationFamilies(t *testing.T) {
@@ -219,7 +221,14 @@ func TestAssetPhysicalTargetCanonicalizesDuckDBAndLocalFilePaths(t *testing.T) {
 	require.Equal(t, AssetRenderFidelityExact, linked.Fidelity, linked.Message)
 	assert.Equal(t, physical.Identity, linked.Identity)
 	assert.Equal(t, assetWriteResourceDuckDB, physical.WriteResource.Kind)
-	assert.Equal(t, physical.WriteResource.Identity, linked.WriteResource.Identity)
+	assert.NotEqual(t, physical.WriteResource.Identity, linked.WriteResource.Identity,
+		"connection options keep the writer on the conservative whole-database claim")
+	canonicalPath, err := duckcoord.CanonicalPath(root, filepath.Join("linked", "warehouse.duckdb"))
+	require.NoError(t, err)
+	assert.Equal(t,
+		exactAssetWriteResource(assetWriteResourceDuckDB, canonicalPath, "").Identity,
+		linked.WriteResource.Identity,
+	)
 	assert.NotContains(t, physical.Object, root)
 
 	load := materializedTargetAsset(pipeline.AssetType(loadAssetType), "analytics.export", loadLocalConnectionName)
@@ -232,6 +241,33 @@ func TestAssetPhysicalTargetCanonicalizesDuckDBAndLocalFilePaths(t *testing.T) {
 	assert.Equal(t, assetWriteResourceLocalFile, local.WriteResource.Kind)
 	assert.Equal(t, AssetRenderFidelityExact, local.WriteResource.Fidelity)
 	assert.NotEmpty(t, local.WriteResource.Identity)
+}
+
+func TestDuckDBPhysicalTargetIdentityUsesASCIICaseInsensitiveIdentifiers(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	connection := &config.Connections{DuckDB: []config.DuckDBConnection{{
+		ConnectionMetadata: targetMetadata("warehouse"),
+		Path:               filepath.Join(root, "warehouse.duckdb"),
+	}}}
+	resolve := func(name string) AssetRenderTarget {
+		asset := materializedTargetAsset(pipeline.AssetTypeDuckDBQuery, name, "warehouse")
+		return resolveAssetPhysicalTarget(root, targetInfo(asset, connection, ""))
+	}
+
+	mixedCase := resolve("Analytics.Customers")
+	lowerCase := resolve("analytics.customers")
+	require.Equal(t, AssetRenderFidelityExact, mixedCase.Fidelity, mixedCase.Message)
+	require.Equal(t, AssetRenderFidelityExact, lowerCase.Fidelity, lowerCase.Message)
+	assert.Equal(t, "Analytics.Customers", mixedCase.Object)
+	assert.Equal(t, mixedCase.Identity, lowerCase.Identity)
+	assert.Equal(t, mixedCase.WriteResource.Identity, lowerCase.WriteResource.Identity)
+
+	accentedUpper := resolve("analytics.Áccounts")
+	accentedLower := resolve("analytics.áccounts")
+	assert.NotEqual(t, accentedUpper.Identity, accentedLower.Identity,
+		"DuckDB's identifier comparison only folds ASCII characters")
 }
 
 func TestAssetPhysicalTargetUsesDeclaredPythonTableDestination(t *testing.T) {
@@ -341,6 +377,58 @@ func TestAssetPhysicalTargetDDLStillTargetsTheDeclaredAssetRelation(t *testing.T
 	require.Equal(t, AssetRenderFidelityExact, target.Fidelity, target.Message)
 	assert.Equal(t, "analytics.public.customers", target.Object)
 	assert.NotEmpty(t, target.Identity)
+}
+
+func TestDuckDBRelationScopedWriteResourceRequiresAuditedNativeExecution(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	path := filepath.Join(root, "warehouse.duckdb")
+	connection := config.DuckDBConnection{
+		ConnectionMetadata: targetMetadata("warehouse"),
+		Path:               path,
+	}
+	resolve := func(asset *pipeline.Asset, conn config.DuckDBConnection, schemaPrefix string) AssetRenderTarget {
+		return resolveAssetPhysicalTarget(root, targetInfo(asset, &config.Connections{
+			DuckDB: []config.DuckDBConnection{conn},
+		}, schemaPrefix))
+	}
+	databaseResource := exactAssetWriteResource(assetWriteResourceDuckDB, path, "")
+
+	safeAsset := materializedTargetAsset(
+		pipeline.AssetTypeDuckDBQuery,
+		"analytics.customers",
+		"warehouse",
+	)
+	safe := resolve(safeAsset, connection, "")
+	require.Equal(t, AssetRenderFidelityExact, safe.WriteResource.Fidelity, safe.WriteResource.Message)
+	assert.Equal(t, assetWriteResourceDuckDB, safe.WriteResource.Kind)
+	assert.NotEqual(t, databaseResource.Identity, safe.WriteResource.Identity)
+
+	ddlAsset := *safeAsset
+	ddlAsset.Materialization.Strategy = pipeline.MaterializationStrategyDDL
+	ddl := resolve(&ddlAsset, connection, "")
+	assert.Equal(t, databaseResource.Identity, ddl.WriteResource.Identity)
+
+	readOnlyConnection := connection
+	readOnlyConnection.ReadOnly = true
+	readOnly := resolve(safeAsset, readOnlyConnection, "")
+	assert.Equal(t, databaseResource.Identity, readOnly.WriteResource.Identity)
+
+	optionsConnection := connection
+	optionsConnection.Path += "?access_mode=read_write"
+	withOptions := resolve(safeAsset, optionsConnection, "")
+	assert.Equal(t, databaseResource.Identity, withOptions.WriteResource.Identity)
+
+	hookedAsset := *safeAsset
+	hookedAsset.Hooks.Pre = []pipeline.Hook{{Query: "select 1"}}
+	hooked := resolve(&hookedAsset, connection, "")
+	assert.Equal(t, assetWriteResourcePipeline, hooked.WriteResource.Kind)
+	assert.Equal(t, AssetRenderFidelityRuntimeOnly, hooked.WriteResource.Fidelity)
+
+	prefixed := resolve(safeAsset, connection, "dev_")
+	assert.Equal(t, assetWriteResourcePipeline, prefixed.WriteResource.Kind)
+	assert.Equal(t, AssetRenderFidelityRuntimeOnly, prefixed.WriteResource.Fidelity)
 }
 
 func TestSafeFileObjectDoesNotExposeAbsoluteOrRemoteLocations(t *testing.T) {

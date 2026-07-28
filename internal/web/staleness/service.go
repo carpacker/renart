@@ -32,6 +32,9 @@ const (
 	StatusFresh Status = "fresh"
 	// StatusStaleEdited: this asset's own definition changed since last build.
 	StatusStaleEdited Status = "stale_edited"
+	// StatusStaleDeployment: the latest physical output came from a deployed
+	// snapshot whose asset definition differs from the saved working tree.
+	StatusStaleDeployment Status = "stale_deployment"
 	// StatusStaleUpstream: inherited staleness via the Merkle cascade (or a
 	// changed variable value — own content matches, the full hash does not).
 	StatusStaleUpstream Status = "stale_upstream"
@@ -82,6 +85,7 @@ type LatestPhysicalOutput struct {
 	Fingerprint       string    `json:"fingerprint"`
 	VarsHash          string    `json:"vars_hash"`
 	RunID             string    `json:"run_id,omitempty"`
+	SnapshotVersionID string    `json:"snapshot_version_id,omitempty"`
 	MaterializedAt    time.Time `json:"materialized_at"`
 	CompletionID      string    `json:"completion_id"`
 	CompletionOrdinal int64     `json:"completion_ordinal"`
@@ -236,6 +240,7 @@ func (s *Service) AttachBus(events bus.Events) {
 		s.recomputePipeline(event.PipelineUUID, "asset saved")
 	})
 	events.OnRunCompleted(func(event bus.RunCompleted) error {
+		s.clearMissingAfterSuccessfulRun(event)
 		s.recomputePipeline(event.PipelineUUID, "run completed")
 		return nil
 	})
@@ -246,6 +251,34 @@ func (s *Service) AttachBus(events bus.Events) {
 		// completion event can be persisted.
 		go s.recomputePipeline(event.PipelineUUID, "target write changed")
 	})
+}
+
+func (s *Service) clearMissingAfterSuccessfulRun(event bus.RunCompleted) {
+	key := verifyKey(Selection{
+		PipelineUUID: event.PipelineUUID,
+		Environment:  event.Environment,
+	})
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	missing := s.missingByPanel[key]
+	succeeded := false
+	for _, asset := range event.Assets {
+		if asset.Status != "succeeded" || strings.TrimSpace(asset.AssetName) == "" {
+			continue
+		}
+		succeeded = true
+		delete(missing, asset.AssetName)
+	}
+	if !succeeded {
+		return
+	}
+	if missing != nil && len(missing) == 0 {
+		delete(s.missingByPanel, key)
+	}
+	// The completed write invalidates the old warehouse observation. Allow the
+	// next panel fetch to verify the newly written output once.
+	delete(s.verified, key)
 }
 
 // Statuses preserves the original asset-only API for planners and other
@@ -411,7 +444,12 @@ func (s *Service) computeParsed(ctx context.Context, selection Selection, parsed
 			coverageContext.lastOwnContent[assetID],
 			selectedRange,
 		)
-		applyTargetContext(&status, coverageContext.targets[assetID], coverageContext.writers)
+		applyTargetContext(
+			&status,
+			selection.Environment,
+			coverageContext.targets[assetID],
+			coverageContext.writers,
+		)
 		applyLastRun(&status, lastRuns[assetID], result)
 		if status.Status == StatusFresh && missing != nil && missing[asset.Name] && verifiableByName(asset) {
 			status.Status = StatusMissing
@@ -552,6 +590,7 @@ func normalizeSelectedTarget(target PhysicalTarget, present bool) selectedTarget
 
 func applyTargetContext(
 	status *AssetStatus,
+	environment string,
 	target selectedTarget,
 	writers map[string]matlog.LatestSuccessfulWriter,
 ) {
@@ -572,10 +611,18 @@ func applyTargetContext(
 		Fingerprint:       writer.Fingerprint,
 		VarsHash:          writer.VarsHash,
 		RunID:             writer.RunID,
+		SnapshotVersionID: writer.SnapshotVersionID,
 		MaterializedAt:    writer.MaterializedAt,
 		CompletionID:      writer.CompletionID,
 		CompletionOrdinal: writer.CompletionOrdinal,
 		Ambiguous:         writer.Ambiguous,
+	}
+	if status.Status == StatusStaleEdited &&
+		!writer.Ambiguous &&
+		writer.AssetID == status.AssetID &&
+		writer.Environment == environment &&
+		writer.SnapshotVersionID != "" {
+		status.Status = StatusStaleDeployment
 	}
 }
 

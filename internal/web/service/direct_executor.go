@@ -15,6 +15,7 @@ import (
 	"github.com/spf13/afero"
 
 	"renart/internal/web/duckcoord"
+	"renart/internal/web/duckdbsession"
 	"renart/internal/web/executiongraph"
 	"renart/internal/web/fingerprint"
 	"renart/internal/web/runstate"
@@ -26,6 +27,7 @@ type HybridBruinExecutor struct {
 	workspaceRoot        string
 	logSink              ExecutionLogSink
 	duckDBCoordinator    *duckcoord.Coordinator
+	duckDBSessions       *duckdbsession.Manager
 	fingerprintEngine    *fingerprint.Engine
 	workspaceBudget      *executiongraph.Budget
 	directTaskGate       func(context.Context, bruinscheduler.TaskInstance) error
@@ -44,12 +46,14 @@ func NewHybridBruinExecutor(
 	if strings.TrimSpace(workspaceRoot) != "" && filepath.IsAbs(workspaceRoot) {
 		logSink = NewBruinFileExecutionLogSink(workspaceRoot)
 	}
+	duckDBCoordinator := duckcoord.New(duckcoord.Options{})
 	return &HybridBruinExecutor{
 		newConnectionManager: newConnectionManager,
 		newPipelineBuilder:   newPipelineBuilder,
 		workspaceRoot:        workspaceRoot,
 		logSink:              logSink,
-		duckDBCoordinator:    duckcoord.New(duckcoord.Options{}),
+		duckDBCoordinator:    duckDBCoordinator,
+		duckDBSessions:       duckdbsession.New(duckDBCoordinator),
 		fingerprintEngine:    fingerprint.NewEngine(),
 		workspaceBudget:      executiongraph.NewBudget(executionWorkspaceLimit()),
 		runRegistry:          runstate.NewRegistry(),
@@ -86,7 +90,11 @@ func executionMaxActiveSteps(requested int) int {
 // SetDuckDBCoordinator replaces the database coordinator. It is primarily
 // useful for tests that need an isolated lock directory.
 func (e *HybridBruinExecutor) SetDuckDBCoordinator(coordinator *duckcoord.Coordinator) {
+	if coordinator == nil {
+		coordinator = duckcoord.New(duckcoord.Options{})
+	}
 	e.duckDBCoordinator = coordinator
+	e.duckDBSessions = duckdbsession.New(coordinator)
 }
 
 func (e *HybridBruinExecutor) SetExecutionWorkspaceBudget(budget *executiongraph.Budget) {

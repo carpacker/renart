@@ -136,7 +136,7 @@ func TestSlingSeedColumnArgsCanDisableSchemaEnforcement(t *testing.T) {
 }
 
 func TestDirectSeedExecutorsAllUseSling(t *testing.T) {
-	executors, err := buildDirectMainExecutors(&stubConnectionManager{}, nil, nil, &pipeline.Pipeline{}, nil, nil, "", false, sensorModeOnce)
+	executors, err := buildDirectMainExecutors(&stubConnectionManager{}, nil, nil, &pipeline.Pipeline{}, nil, nil, nil, nil, "", false, sensorModeOnce)
 	require.NoError(t, err)
 
 	for _, capability := range assetAuthoringCapabilities() {

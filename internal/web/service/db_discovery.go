@@ -28,6 +28,7 @@ func (s *ExecutionService) fetchObjectsForConnection(ctx context.Context, connec
 			continue
 		}
 		rows = qRows
+		lastErr = nil
 		break
 	}
 

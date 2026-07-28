@@ -52,6 +52,31 @@ func TestAcquireDuckDBConnectionsUsesCanonicalConnectionPath(t *testing.T) {
 	assert.True(t, waited)
 }
 
+func TestPipelineExecutionConnectionLimitsUseSafeDuckDBDefaultAndHonorConfiguration(t *testing.T) {
+	t.Parallel()
+
+	configuredLimit := 4
+	manager := duckDBCoordinationManager{details: map[string]any{
+		"implicit":   &config.DuckDBConnection{ConnectionMetadata: config.ConnectionMetadata{Name: "implicit"}},
+		"configured": &config.DuckDBConnection{ConnectionMetadata: config.ConnectionMetadata{Name: "configured"}},
+	}}
+	cfg := &config.Config{SelectedEnvironment: &config.Environment{
+		Connections: &config.Connections{DuckDB: []config.DuckDBConnection{
+			{ConnectionMetadata: config.ConnectionMetadata{Name: "implicit"}},
+			{ConnectionMetadata: config.ConnectionMetadata{
+				Name: "configured", MaxConcurrentAssets: &configuredLimit,
+			}},
+		}},
+	}}
+
+	limits, err := pipelineExecutionConnectionLimits(cfg, manager, map[string]struct{}{
+		"implicit": {}, "configured": {},
+	})
+	require.NoError(t, err)
+	assert.Equal(t, 2, limits["implicit"])
+	assert.Equal(t, 4, limits["configured"])
+}
+
 func TestDuckDBConnectionNamesForAssetIncludesBothIngestrEnds(t *testing.T) {
 	t.Parallel()
 

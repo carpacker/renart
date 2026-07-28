@@ -134,21 +134,27 @@ type AssetView struct {
 }
 
 type PipelineMaterializationInfo struct {
-	AssetName       string
-	Connection      string
-	IsMaterialized  bool
-	MaterializedAs  string
-	RowCount        *int64
-	DeclaredMatType string
+	AssetName             string
+	Connection            string
+	IsMaterialized        bool
+	VerificationAvailable bool
+	MaterializedAs        string
+	RowCount              *int64
+	DeclaredMatType       string
 }
 
 type PipelineMaterializationState struct {
-	AssetID         string `json:"asset_id"`
-	IsMaterialized  bool   `json:"is_materialized"`
-	MaterializedAs  string `json:"materialized_as,omitempty"`
-	RowCount        *int64 `json:"row_count,omitempty"`
-	Connection      string `json:"connection,omitempty"`
-	DeclaredMatType string `json:"materialization_type,omitempty"`
+	AssetID        string `json:"asset_id"`
+	IsMaterialized bool   `json:"is_materialized"`
+	// VerificationAvailable is process-local evidence for the staleness
+	// trust-but-verify pass. It is not part of the browser response: callers
+	// must not reinterpret an unavailable credential/warehouse as a confirmed
+	// missing relation.
+	VerificationAvailable bool   `json:"-"`
+	MaterializedAs        string `json:"materialized_as,omitempty"`
+	RowCount              *int64 `json:"row_count,omitempty"`
+	Connection            string `json:"connection,omitempty"`
+	DeclaredMatType       string `json:"materialization_type,omitempty"`
 }
 
 type PipelineMaterializationResponse struct {
@@ -1293,6 +1299,7 @@ func (s *ExecutionService) GetPipelineMaterialization(ctx context.Context, pipel
 
 		if info, ok := matInfo[key]; ok {
 			item.IsMaterialized = info.IsMaterialized
+			item.VerificationAvailable = info.VerificationAvailable
 			item.MaterializedAs = info.MaterializedAs
 			item.RowCount = info.RowCount
 			if info.DeclaredMatType != "" {
@@ -2847,9 +2854,10 @@ func (s *ExecutionService) inspectPipelineMaterializations(ctx context.Context, 
 			for _, asset := range assets {
 				key := MaterializationAssetKey(asset.Name, connName)
 				result[key] = PipelineMaterializationInfo{
-					AssetName:       asset.Name,
-					Connection:      connName,
-					DeclaredMatType: string(asset.Materialization.Type),
+					AssetName:             asset.Name,
+					Connection:            connName,
+					VerificationAvailable: err == nil,
+					DeclaredMatType:       string(asset.Materialization.Type),
 				}
 			}
 			continue
@@ -2902,9 +2910,10 @@ func (s *ExecutionService) inspectPipelineMaterializations(ctx context.Context, 
 
 			key := MaterializationAssetKey(asset.Name, connName)
 			item := PipelineMaterializationInfo{
-				AssetName:       asset.Name,
-				Connection:      connName,
-				DeclaredMatType: string(asset.Materialization.Type),
+				AssetName:             asset.Name,
+				Connection:            connName,
+				VerificationAvailable: true,
+				DeclaredMatType:       string(asset.Materialization.Type),
 			}
 
 			if ok {

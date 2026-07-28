@@ -161,13 +161,16 @@ func TestScheduledRunFactReplayIsIdempotent(t *testing.T) {
 
 	original := matlog.Materialization{
 		AssetID: "p:a", Environment: "prod", Fingerprint: "v1:first", VarsHash: "vh",
-		RunID: "scheduled-run", MaterializedAt: ts(1),
+		RunID: "scheduled-run", SnapshotVersionID: "snapshot-a", MaterializedAt: ts(1),
 	}
 	require.NoError(t, store.Record(ctx, original))
 	// A crash after the first transaction committed can cause startup recovery
 	// to emit the same completion again. An exact fact is a no-op, while reused
 	// run coordinates with different evidence fail closed.
 	require.NoError(t, store.Record(ctx, original))
+	differentSource := original
+	differentSource.SnapshotVersionID = "snapshot-b"
+	require.ErrorIs(t, store.Record(ctx, differentSource), matlog.ErrMaterializationReplayConflict)
 	require.ErrorIs(t, store.Record(ctx, matlog.Materialization{
 		AssetID: "p:a", Environment: "prod", Fingerprint: "v1:replayed", VarsHash: "vh",
 		RunID: "scheduled-run", MaterializedAt: ts(2),

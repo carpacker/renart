@@ -697,7 +697,7 @@ export function PipelinePlanSheet({
             <div className="flex flex-wrap items-center justify-between gap-2">
               <div className="min-w-0 flex-1 text-left text-[11px] text-muted-foreground">
                 {promotionCandidates.length > 0
-                  ? `${promotionCandidates.length} schedule${promotionCandidates.length === 1 ? " is" : "s are"} still pinned to an older deployment. Only selected schedules will move.`
+                  ? `${promotionCandidates.length} schedule${promotionCandidates.length === 1 ? " is" : "s are"} not using this deployment. Only selected schedules will move.`
                   : "Every schedule for this pipeline is already on this deployment."}
               </div>
               <div className="flex items-center gap-2">
@@ -1935,7 +1935,7 @@ function DeploymentSchedulePromotion({
             deployment.snapshot.version_id,
             "deployment",
           )}
-          . Unchecked schedules keep running their current deployment.
+          . Unchecked schedules keep their current deployment state.
         </p>
       </div>
       {!canPromote ? (

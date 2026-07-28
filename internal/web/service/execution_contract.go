@@ -78,6 +78,7 @@ func executionContractForAsset(
 	})
 	mutation := executionMutationResources(target)
 	coordination := clonePipelinePlanResources(mutation)
+	targetConnectionName, _ := targetConnectionNameForAsset(asset, pl)
 	if coordination.Isolation != PipelinePlanResourceIsolationPipeline {
 		for _, name := range connections {
 			connection, ok := selectedConfigurationConnection(cfg, name)
@@ -93,6 +94,9 @@ func executionContractForAsset(
 			if err != nil || strings.TrimSpace(canonicalPath) == "" {
 				coordination = pipelineExclusiveResources()
 				break
+			}
+			if name == targetConnectionName && hasRelationScopedDuckDBWriteResource(target, canonicalPath) {
+				continue
 			}
 			resource := exactAssetWriteResource(assetWriteResourceDuckDB, canonicalPath, "")
 			if resource.Fidelity != AssetRenderFidelityExact || resource.Identity == "" {
@@ -112,6 +116,19 @@ func executionContractForAsset(
 		MutationResources:     canonicalPipelinePlanResources(mutation),
 		CoordinationResources: coordination,
 	}, nil
+}
+
+func hasRelationScopedDuckDBWriteResource(target AssetRenderTarget, canonicalPath string) bool {
+	resource := target.WriteResource
+	if resource.Fidelity != AssetRenderFidelityExact ||
+		resource.Kind != assetWriteResourceDuckDB ||
+		strings.TrimSpace(resource.Identity) == "" {
+		return false
+	}
+	databaseResource := exactAssetWriteResource(assetWriteResourceDuckDB, canonicalPath, "")
+	return databaseResource.Fidelity == AssetRenderFidelityExact &&
+		databaseResource.Identity != "" &&
+		resource.Identity != databaseResource.Identity
 }
 
 func executionConnectionKeys(names []string) []string {

@@ -15,10 +15,15 @@ import (
 )
 
 // replayRecoveredRun rebuilds the canonical materialization/run-attempt state
-// from scheduler steps that were durable before an unclean server stop. It
-// emits the same completion event as normal execution, but never reruns an
-// asset or replays textual logs.
-func (s *webServer) replayRecoveredRun(ctx context.Context, run webscheduler.PipelineRun, steps []webscheduler.PipelineRunStep) error {
+// from scheduler steps and execution units that were durable before an unclean
+// server stop. It emits the same completion events as normal execution, but
+// never reruns an asset or replays textual logs.
+func (s *webServer) replayRecoveredRun(
+	ctx context.Context,
+	run webscheduler.PipelineRun,
+	steps []webscheduler.PipelineRunStep,
+	units []webscheduler.PipelineRunUnit,
+) error {
 	if s == nil || s.eventBus == nil {
 		return nil
 	}
@@ -32,19 +37,103 @@ func (s *webServer) replayRecoveredRun(ctx context.Context, run webscheduler.Pip
 		return nil
 	}
 	if s.logger != nil {
-		s.logger.Info("replaying persisted steps for interrupted run", zap.String("run_id", run.ID), zap.Int("steps", len(steps)))
+		s.logger.Info(
+			"replaying persisted execution state for interrupted run",
+			zap.String("run_id", run.ID),
+			zap.Int("steps", len(steps)),
+			zap.Int("units", len(units)),
+		)
 	}
 	type recoveredAsset struct {
-		step   webscheduler.PipelineRunStep
-		name   string
-		status string
+		step                 webscheduler.PipelineRunStep
+		name                 string
+		ledgerAssetID        string
+		status               string
+		startedAt            *time.Time
+		finishedAt           *time.Time
+		completionID         string
+		completionOrdinal    int64
+		hasCompletionOrdinal bool
+		winStart             *time.Time
+		winEnd               *time.Time
+		eventCompletedAt     *time.Time
 	}
-	recovered := make([]recoveredAsset, 0, len(steps))
+	stepsByAsset := make(map[string]webscheduler.PipelineRunStep, len(steps))
 	for _, step := range steps {
-		status, terminal := recoveredAssetRunStatus(step.Status)
-		assetName := strings.TrimSpace(step.Asset)
-		if terminal && assetName != "" {
-			recovered = append(recovered, recoveredAsset{step: step, name: assetName, status: status})
+		if assetName := strings.TrimSpace(step.Asset); assetName != "" {
+			stepsByAsset[assetName] = step
+		}
+	}
+	recovered := make([]recoveredAsset, 0, max(len(steps), len(units)))
+	unitAware := len(units) > 0
+	if unitAware {
+		for _, unit := range units {
+			status, attempted := recoveredUnitAssetRunStatus(unit.Status)
+			assetName := strings.TrimSpace(unit.AssetName)
+			if !attempted || assetName == "" {
+				continue
+			}
+			winStart, winEnd, err := recoveredUnitWindow(unit)
+			if err != nil {
+				return fmt.Errorf("recovered run %s: %w", run.ID, err)
+			}
+			step, hasStep := stepsByAsset[assetName]
+			if unit.Status == webscheduler.PipelineRunUnitSuccess && !hasStep {
+				return fmt.Errorf(
+					"recovered run %s successful unit %d has no persisted asset step",
+					run.ID,
+					unit.Position,
+				)
+			}
+			startedAt := unit.StartedAt
+			finishedAt := unit.FinishedAt
+			if hasStep {
+				if step.StartedAt != nil {
+					startedAt = step.StartedAt
+				}
+				if step.FinishedAt != nil {
+					finishedAt = step.FinishedAt
+				}
+			}
+			recovered = append(recovered, recoveredAsset{
+				step:                 step,
+				name:                 assetName,
+				ledgerAssetID:        strings.TrimSpace(unit.AssetID),
+				status:               status,
+				startedAt:            startedAt,
+				finishedAt:           finishedAt,
+				completionID:         recoveredUnitCompletionID(run.ID, unit.Position),
+				completionOrdinal:    int64(unit.Position),
+				hasCompletionOrdinal: true,
+				winStart:             winStart,
+				winEnd:               winEnd,
+				eventCompletedAt:     unit.FinishedAt,
+			})
+		}
+	} else {
+		for index, step := range steps {
+			status, terminal := recoveredAssetRunStatus(step.Status)
+			assetName := strings.TrimSpace(step.Asset)
+			if !terminal || assetName == "" {
+				continue
+			}
+			asset := recoveredAsset{
+				step:         step,
+				name:         assetName,
+				status:       status,
+				startedAt:    step.StartedAt,
+				finishedAt:   step.FinishedAt,
+				completionID: run.ID,
+				winStart:     run.WinStart,
+				winEnd:       run.WinEnd,
+			}
+			if step.CompletionOrdinal != nil {
+				asset.completionOrdinal = *step.CompletionOrdinal
+				asset.hasCompletionOrdinal = true
+			} else {
+				asset.completionOrdinal = int64(index)
+			}
+			recovered = append(recovered, asset)
 		}
 	}
 	if len(recovered) == 0 {
@@ -104,20 +193,23 @@ func (s *webServer) replayRecoveredRun(ctx context.Context, run webscheduler.Pip
 	}
 
 	assets := make([]bus.AssetRun, 0, len(recovered))
-	for index, asset := range recovered {
+	for _, asset := range recovered {
 		runAsset := bus.AssetRun{
 			AssetID:    identity.AssetID(pipelineUUID, asset.name),
 			AssetName:  asset.name,
 			Status:     asset.status,
-			StartedAt:  asset.step.StartedAt,
-			FinishedAt: asset.step.FinishedAt,
+			StartedAt:  asset.startedAt,
+			FinishedAt: asset.finishedAt,
 		}
-		if asset.step.CompletionOrdinal != nil {
-			runAsset.CompletionOrdinal = *asset.step.CompletionOrdinal
-			runAsset.HasCompletionOrdinal = true
-		} else {
-			runAsset.CompletionOrdinal = int64(index)
+		if unitAware && asset.ledgerAssetID != runAsset.AssetID {
+			return fmt.Errorf(
+				"recovered run %s unit asset identity does not match %s",
+				run.ID,
+				asset.name,
+			)
 		}
+		runAsset.CompletionOrdinal = asset.completionOrdinal
+		runAsset.HasCompletionOrdinal = asset.hasCompletionOrdinal
 		if asset.step.HasUpstreamWriterSnapshot {
 			runAsset.UpstreamWriters = make(map[string]bus.UpstreamWriterSnapshot, len(asset.step.UpstreamWriters))
 			for assetID, writer := range asset.step.UpstreamWriters {
@@ -139,7 +231,7 @@ func (s *webServer) replayRecoveredRun(ctx context.Context, run webscheduler.Pip
 			if !exists {
 				return fmt.Errorf("recovered run %s target snapshot has no entry for %s", run.ID, asset.name)
 			}
-			if asset.status == "succeeded" && (asset.step.FinishedAt == nil || asset.step.CompletionOrdinal == nil) {
+			if asset.status == "succeeded" && (asset.finishedAt == nil || !asset.hasCompletionOrdinal) {
 				return fmt.Errorf("recovered run %s successful step %s has incomplete completion coordinates", run.ID, asset.name)
 			}
 			if snapshot.Version >= webscheduler.ExecutionTargetSnapshotVersionV2 && asset.status == "succeeded" && !asset.step.HasUpstreamWriterSnapshot {
@@ -205,11 +297,39 @@ func (s *webServer) replayRecoveredRun(ctx context.Context, run webscheduler.Pip
 			}
 		}
 	}
-	if err := s.eventBus.EmitRunCompleted(event); err != nil {
+	if unitAware {
+		for index, asset := range recovered {
+			unitEvent := event
+			unitEvent.CompletionID = asset.completionID
+			unitEvent.WinStart = asset.winStart
+			unitEvent.WinEnd = asset.winEnd
+			unitEvent.Assets = []bus.AssetRun{assets[index]}
+			if asset.eventCompletedAt != nil && !asset.eventCompletedAt.IsZero() {
+				unitEvent.CompletedAt = asset.eventCompletedAt.UTC()
+			}
+			if err := s.eventBus.EmitRunCompleted(unitEvent); err != nil {
+				return fmt.Errorf(
+					"replay recovered run %s completion %s: %w",
+					run.ID,
+					asset.completionID,
+					err,
+				)
+			}
+		}
+	} else if err := s.eventBus.EmitRunCompleted(event); err != nil {
 		return fmt.Errorf("replay recovered run %s completion: %w", run.ID, err)
 	}
 	if s.logger != nil {
-		s.logger.Info("replayed persisted steps for interrupted run", zap.String("run_id", run.ID), zap.Int("assets", len(assets)))
+		completions := 1
+		if unitAware {
+			completions = len(recovered)
+		}
+		s.logger.Info(
+			"replayed persisted execution state for interrupted run",
+			zap.String("run_id", run.ID),
+			zap.Int("assets", len(assets)),
+			zap.Int("completions", completions),
+		)
 	}
 	return nil
 }
@@ -252,4 +372,40 @@ func recoveredAssetRunStatus(status webscheduler.RunStatus) (string, bool) {
 	default:
 		return "", false
 	}
+}
+
+func recoveredUnitAssetRunStatus(status webscheduler.PipelineRunUnitStatus) (string, bool) {
+	switch status {
+	case webscheduler.PipelineRunUnitSuccess:
+		return "succeeded", true
+	case webscheduler.PipelineRunUnitFailed:
+		return "failed", true
+	case webscheduler.PipelineRunUnitCancelled:
+		return "cancelled", true
+	default:
+		// Queued units were never attempted, and reconciliation converts them
+		// to skipped. Neither state is evidence of an asset run.
+		return "", false
+	}
+}
+
+func recoveredUnitCompletionID(runID string, position int) string {
+	return fmt.Sprintf("%s/unit/%d", strings.TrimSpace(runID), position)
+}
+
+func recoveredUnitWindow(unit webscheduler.PipelineRunUnit) (*time.Time, *time.Time, error) {
+	if unit.Position < 0 {
+		return nil, nil, fmt.Errorf("execution unit has invalid position %d", unit.Position)
+	}
+	start, err := time.Parse(time.RFC3339Nano, strings.TrimSpace(unit.StartDate))
+	if err != nil {
+		return nil, nil, fmt.Errorf("execution unit %d has an invalid start time", unit.Position)
+	}
+	end, err := time.Parse(time.RFC3339Nano, strings.TrimSpace(unit.EndDate))
+	if err != nil || !start.Before(end) {
+		return nil, nil, fmt.Errorf("execution unit %d has an invalid end time", unit.Position)
+	}
+	start = start.UTC()
+	end = end.UTC()
+	return &start, &end, nil
 }

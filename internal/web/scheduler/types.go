@@ -195,8 +195,12 @@ type UpsertEnvScheduleRequest struct {
 }
 
 type EnvSchedulePinSelection struct {
-	Environment               string `json:"environment"`
-	ExpectedSnapshotVersionID string `json:"expected_snapshot_version_id"`
+	Environment string `json:"environment"`
+	// ExpectedSnapshotVersionID is a pointer so the promotion API can
+	// distinguish a missing concurrency token from an explicit empty token.
+	// Empty is the valid current pin for a paused schedule that has never been
+	// deployed.
+	ExpectedSnapshotVersionID *string `json:"expected_snapshot_version_id"`
 }
 
 type PromoteEnvSchedulesRequest struct {
@@ -517,6 +521,10 @@ type RunRequest struct {
 	// OnTargetsResolved persists the value-only execution target snapshot after
 	// effective configuration is selected and before the first task starts.
 	OnTargetsResolved func(ExecutionTargetSnapshot) error
+	// OnExecutionUnitsResolved persists a full-pipeline unit selection that
+	// could only be derived after parsing the selected source. It must complete
+	// before the first unit can transition to running.
+	OnExecutionUnitsResolved func([]PipelineRunExecutionUnit) error
 	// OnStep is synchronous: a running-step persistence failure must stop before
 	// the physical task, and a terminal persistence failure must fail closed.
 	OnStep func(RunStepEvent) error

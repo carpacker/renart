@@ -42,16 +42,33 @@ func TestRecoverOrphanedRunsReplaysPersistedTerminalStepsOnce(t *testing.T) {
 		RunID: runID, Asset: "analytics.interrupted", Status: RunStatusRunning,
 		StartedAt: &finished,
 	}))
+	_, err = store.DB().ExecContext(ctx, `
+		INSERT INTO pipeline_run_units
+			(run_id, position, asset_id, asset_name, start_date, end_date,
+			 render_index, reason, status, started_at, finished_at)
+		VALUES
+			(?, 0, 'asset-finished', 'analytics.finished', ?, ?, 0, 'full_run', 'success', ?, ?),
+			(?, 1, 'asset-interrupted', 'analytics.interrupted', ?, ?, 0, 'full_run', 'running', ?, NULL),
+			(?, 2, 'asset-unreached', 'analytics.unreached', ?, ?, 0, 'full_run', 'queued', NULL, NULL)`,
+		runID, started.Format(time.RFC3339Nano), finished.Format(time.RFC3339Nano),
+		started.Format(time.RFC3339Nano), finished.Format(time.RFC3339Nano),
+		runID, started.Format(time.RFC3339Nano), finished.Format(time.RFC3339Nano),
+		finished.Format(time.RFC3339Nano),
+		runID, started.Format(time.RFC3339Nano), finished.Format(time.RFC3339Nano),
+	)
+	require.NoError(t, err)
 
 	callbackCount := 0
 	var recoveredRun PipelineRun
 	var recoveredSteps []PipelineRunStep
+	var recoveredUnits []PipelineRunUnit
 	service := New(Options{
 		Store: store,
-		RecoverRun: func(_ context.Context, run PipelineRun, steps []PipelineRunStep) error {
+		RecoverRun: func(_ context.Context, run PipelineRun, steps []PipelineRunStep, units []PipelineRunUnit) error {
 			callbackCount++
 			recoveredRun = run
 			recoveredSteps = append([]PipelineRunStep(nil), steps...)
+			recoveredUnits = append([]PipelineRunUnit(nil), units...)
 			return nil
 		},
 	})
@@ -74,12 +91,75 @@ func TestRecoverOrphanedRunsReplaysPersistedTerminalStepsOnce(t *testing.T) {
 	assert.Equal(t, RunStatusSuccess, recoveredSteps[0].Status)
 	assert.Equal(t, RunStatusFailed, recoveredSteps[1].Status)
 	assert.Equal(t, orphanedRunError, recoveredSteps[1].Error)
+	require.Len(t, recoveredUnits, 3)
+	assert.Equal(t, PipelineRunUnitSuccess, recoveredUnits[0].Status)
+	assert.Equal(t, PipelineRunUnitFailed, recoveredUnits[1].Status)
+	assert.Equal(t, orphanedRunError, recoveredUnits[1].Error)
+	assert.Equal(t, PipelineRunUnitSkipped, recoveredUnits[2].Status)
+	assert.Equal(t, orphanedRunError, recoveredUnits[2].Error)
 
 	summary, err = service.recoverOrphanedRuns(ctx)
 	require.NoError(t, err)
 	assert.Equal(t, 1, callbackCount, "already reconciled runs must not replay twice")
 	assert.Zero(t, summary.ReconciledRuns)
 	assert.Zero(t, summary.ReplayedRuns)
+}
+
+func TestRecoverOrphanedRunsClosesUnitsLeftOpenByOlderRecovery(t *testing.T) {
+	store, err := OpenStore(filepath.Join(t.TempDir(), "state.db"))
+	require.NoError(t, err)
+	defer store.Close()
+
+	ctx := context.Background()
+	started := time.Date(2026, 7, 28, 9, 0, 0, 0, time.UTC)
+	finished := started.Add(time.Minute)
+	runID, err := store.Create(ctx, PipelineRun{
+		ID: "older-recovery", PipelineID: "pipeline-id", Pipeline: "analytics",
+		Environment: "prod", Trigger: RunTriggerSchedule, Status: RunStatusQueued,
+		WinStart: &started, WinEnd: &finished, SensorMode: "once",
+		ExecutionContextResolved: true,
+	})
+	require.NoError(t, err)
+	_, err = store.DB().ExecContext(ctx, `
+		UPDATE pipeline_runs
+		SET status = 'failed', started_at = ?, finished_at = ?, error = ?, recovery_pending = 1
+		WHERE id = ?`,
+		started.Format(time.RFC3339Nano),
+		finished.Format(time.RFC3339Nano),
+		orphanedRunError,
+		runID,
+	)
+	require.NoError(t, err)
+	_, err = store.DB().ExecContext(ctx, `
+		INSERT INTO pipeline_run_units
+			(run_id, position, asset_id, asset_name, start_date, end_date,
+			 render_index, reason, status, started_at)
+		VALUES
+			(?, 0, 'asset-running', 'analytics.running', ?, ?, 0, 'full_run', 'running', ?),
+			(?, 1, 'asset-queued', 'analytics.queued', ?, ?, 0, 'full_run', 'queued', NULL)`,
+		runID, started.Format(time.RFC3339Nano), finished.Format(time.RFC3339Nano), started.Format(time.RFC3339Nano),
+		runID, started.Format(time.RFC3339Nano), finished.Format(time.RFC3339Nano),
+	)
+	require.NoError(t, err)
+
+	var recoveredUnits []PipelineRunUnit
+	service := New(Options{
+		Store: store,
+		RecoverRun: func(_ context.Context, _ PipelineRun, _ []PipelineRunStep, units []PipelineRunUnit) error {
+			recoveredUnits = append([]PipelineRunUnit(nil), units...)
+			return nil
+		},
+	})
+
+	summary, err := service.recoverOrphanedRuns(ctx)
+	require.NoError(t, err)
+	assert.Zero(t, summary.ReconciledRuns)
+	assert.Equal(t, 1, summary.ReplayedRuns)
+	require.Len(t, recoveredUnits, 2)
+	assert.Equal(t, PipelineRunUnitFailed, recoveredUnits[0].Status)
+	assert.Equal(t, PipelineRunUnitSkipped, recoveredUnits[1].Status)
+	assert.Equal(t, orphanedRunError, recoveredUnits[0].Error)
+	assert.Equal(t, orphanedRunError, recoveredUnits[1].Error)
 }
 
 func TestRecoverOrphanedRunsPreservesResolvedContextWhenRunSpecHasRequestedContext(t *testing.T) {
@@ -200,7 +280,7 @@ func TestRecoverOrphanedRunsPreservesResolvedContextWhenRunSpecHasRequestedConte
 			var recovered PipelineRun
 			service := New(Options{
 				Store: store,
-				RecoverRun: func(_ context.Context, run PipelineRun, _ []PipelineRunStep) error {
+				RecoverRun: func(_ context.Context, run PipelineRun, _ []PipelineRunStep, _ []PipelineRunUnit) error {
 					recovered = run
 					return nil
 				},
@@ -247,7 +327,7 @@ func TestRecoverOrphanedRunsSkipsUnresolvedLegacyContext(t *testing.T) {
 	callbackCount := 0
 	service := New(Options{
 		Store: store,
-		RecoverRun: func(context.Context, PipelineRun, []PipelineRunStep) error {
+		RecoverRun: func(context.Context, PipelineRun, []PipelineRunStep, []PipelineRunUnit) error {
 			callbackCount++
 			return nil
 		},
@@ -293,7 +373,7 @@ func TestRecoverOrphanedRunsRetriesUnacknowledgedReplay(t *testing.T) {
 	attempts := 0
 	service := New(Options{
 		Store: store,
-		RecoverRun: func(context.Context, PipelineRun, []PipelineRunStep) error {
+		RecoverRun: func(context.Context, PipelineRun, []PipelineRunStep, []PipelineRunUnit) error {
 			attempts++
 			if attempts == 1 {
 				return errors.New("temporary replay failure")
@@ -547,6 +627,91 @@ func TestServicePersistsStructuredRunSteps(t *testing.T) {
 			steps[0].HasUpstreamWriterSnapshot &&
 			len(steps[0].UpstreamWriters) == 1
 	}, 2*time.Second, 20*time.Millisecond)
+}
+
+func TestPlanlessQueuedRunBindsRuntimeParallelUnitsBeforeProgress(t *testing.T) {
+	stateDir := t.TempDir()
+	store, err := OpenStore(filepath.Join(stateDir, "state.db"))
+	require.NoError(t, err)
+	defer store.Close()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	start := time.Date(2026, 7, 28, 8, 0, 0, 0, time.UTC)
+	end := start.Add(time.Hour)
+	done := make(chan struct{})
+	service := New(Options{
+		Store:    store,
+		StateDir: stateDir,
+		Runner: func(_ context.Context, req RunRequest, _ func(string)) RunResult {
+			require.Nil(t, req.ConfirmedPlan)
+			require.NotNil(t, req.OnContextResolved)
+			require.NotNil(t, req.OnExecutionUnitsResolved)
+			require.NotNil(t, req.OnUnit)
+			require.NoError(t, req.OnContextResolved(RunExecutionContext{
+				Environment: "default",
+				WinStart:    start,
+				WinEnd:      end,
+				SensorMode:  "once",
+			}))
+			require.NoError(t, req.OnExecutionUnitsResolved([]PipelineRunExecutionUnit{
+				{
+					AssetID: "pipeline-uuid:left", AssetName: "analytics.left",
+					StartDate: start.Format(time.RFC3339Nano), EndDate: end.Format(time.RFC3339Nano),
+					Reason: "all",
+				},
+				{
+					AssetID: "pipeline-uuid:right", AssetName: "analytics.right",
+					StartDate: start.Format(time.RFC3339Nano), EndDate: end.Format(time.RFC3339Nano),
+					Reason: "all", DependencyPositions: []int{0},
+				},
+			}))
+			for position := 0; position < 2; position++ {
+				startedAt := start.Add(time.Duration(position) * time.Second)
+				require.NoError(t, req.OnUnit(PipelineRunUnitEvent{
+					Position: position, Status: PipelineRunUnitRunning, StartedAt: &startedAt,
+				}))
+				finishedAt := startedAt.Add(500 * time.Millisecond)
+				require.NoError(t, req.OnUnit(PipelineRunUnitEvent{
+					Position: position, Status: PipelineRunUnitSuccess,
+					StartedAt: &startedAt, FinishedAt: &finishedAt,
+				}))
+			}
+			close(done)
+			return RunResult{Status: "ok"}
+		},
+	})
+	require.NoError(t, service.Start(ctx))
+	defer service.Stop()
+
+	run, err := service.Trigger(ctx, PipelineSchedule{
+		PipelineID: "pipeline-id", PipelineUUID: "pipeline-uuid", PipelineName: "analytics",
+	}, TriggerRequest{
+		Environment: "default",
+		Start:       start.Format(time.RFC3339Nano),
+		End:         end.Format(time.RFC3339Nano),
+		Source:      RunSourceWorkingTree,
+	})
+	require.NoError(t, err)
+
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("runner did not bind and execute runtime units")
+	}
+	require.Eventually(t, func() bool {
+		stored, _, _, getErr := service.GetRun(context.Background(), run.ID)
+		return getErr == nil && stored.Status == RunStatusSuccess
+	}, 2*time.Second, 20*time.Millisecond)
+
+	units, err := service.ListRunUnits(context.Background(), run.ID)
+	require.NoError(t, err)
+	require.Len(t, units, 2)
+	assert.Equal(t, PipelineRunUnitSuccess, units[0].Status)
+	assert.Equal(t, PipelineRunUnitSuccess, units[1].Status)
+	_, hasPlan, err := service.GetRunPlan(context.Background(), run.ID)
+	require.NoError(t, err)
+	assert.False(t, hasPlan)
 }
 
 func TestServiceTriggerRejectsActiveRun(t *testing.T) {

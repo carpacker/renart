@@ -198,6 +198,90 @@ columns:
 	assert.NotContains(t, pipelinePlanIssueCodes(plan.Readiness.Blockers), "configuration_identity_unavailable")
 }
 
+func TestPipelinePlanRendersVariablesForAPIAndSQLAssets(t *testing.T) {
+	t.Parallel()
+
+	_, root := writeTypeCheckWorkspace(t, `
+id: pipeline-uuid
+name: earthquake_monitoring
+schedule: "@hourly"
+default_connections:
+  duckdb: duckdb-default
+variables:
+  min_magnitude:
+    type: integer
+    default: 3
+  notable_magnitude:
+    type: integer
+    default: 5
+`, map[string]string{
+		"events.asset.yml": `
+name: earthquakes.events
+type: api
+connection: duckdb-default
+materialization:
+  type: table
+  strategy: create+replace
+parameters:
+  request:
+    url: https://example.test/events
+    params:
+      minmagnitude: "{{ var.min_magnitude }}"
+  response:
+    records_path: events
+    fields:
+      magnitude: magnitude
+columns:
+  - name: magnitude
+    type: double
+`,
+		"notable_events.sql": `
+/* @bruin
+name: earthquakes.notable_events
+type: duckdb.sql
+depends:
+  - earthquakes.events
+materialization:
+  type: table
+columns:
+  - name: magnitude
+    type: double
+@bruin */
+select magnitude
+from earthquakes.events
+where magnitude >= {{ var.notable_magnitude }}
+`,
+	})
+	stale := &pipelinePlanStalenessStub{}
+
+	plan, apiErr := newTestPipelinePlanService(root, stale, nil).Plan(
+		context.Background(),
+		EncodeID("analytics"),
+		PipelinePlanRequest{
+			Selection:           PipelinePlanSelectionRequest{Mode: PipelinePlanSelectionAll},
+			SkipDataStateCheck:  true,
+			IncludeStageContent: true,
+		},
+	)
+	require.Nil(t, apiErr)
+	assert.Equal(t, PipelinePlanStatusReady, plan.Status, plan.Readiness)
+	assert.Empty(t, plan.Readiness.Blockers)
+
+	events := findPipelinePlanAsset(t, plan, "earthquakes.events")
+	require.Len(t, events.Renders, 1)
+	assert.Equal(t, AssetRenderStatusOK, events.Renders[0].Status)
+	require.NotEmpty(t, events.Renders[0].Stages)
+	assert.Contains(t, events.Renders[0].Stages[0].Content, "minmagnitude=3")
+	assert.NotContains(t, events.Renders[0].Stages[0].Content, "{{")
+
+	notable := findPipelinePlanAsset(t, plan, "earthquakes.notable_events")
+	require.Len(t, notable.Renders, 1)
+	assert.Equal(t, AssetRenderStatusOK, notable.Renders[0].Status)
+	require.NotEmpty(t, notable.Renders[0].Stages)
+	assert.Contains(t, notable.Renders[0].Stages[0].Content, "magnitude >= 5")
+	assert.NotContains(t, notable.Renders[0].Stages[0].Content, "{{")
+}
+
 func TestPipelinePlanSnapshotUsesImmutableSourceAndTopologicalOrder(t *testing.T) {
 	_, root := writeTypeCheckWorkspace(t, `
 id: pipeline-uuid

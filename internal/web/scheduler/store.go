@@ -1022,6 +1022,112 @@ func (s *Store) BindInlineRunExecutionUnits(
 	return tx.Commit()
 }
 
+// BindQueuedRunExecutionUnits durably records the exact unit ledger for a
+// planless queued run whose source only revealed parallel execution after the
+// worker parsed it. Admission already holds the conservative pipeline slot;
+// this transaction completes before any unit can transition to running.
+func (s *Store) BindQueuedRunExecutionUnits(
+	ctx context.Context,
+	runID string,
+	units []PipelineRunExecutionUnit,
+) error {
+	runID = strings.TrimSpace(runID)
+	if runID == "" {
+		return errors.New("run id is required")
+	}
+	if len(units) == 0 {
+		return errors.New("queued execution units are required")
+	}
+	if len(units) > maxRunSelectionUnits {
+		return fmt.Errorf("queued execution units exceed the %d unit limit", maxRunSelectionUnits)
+	}
+	for position, unit := range units {
+		if err := validatePipelineRunExecutionUnit(unit); err != nil {
+			return fmt.Errorf("queued execution unit %d: %w", position, err)
+		}
+		if err := validatePipelineRunExecutionDependencies(position, unit.DependencyPositions); err != nil {
+			return fmt.Errorf("queued execution unit %d: %w", position, err)
+		}
+	}
+
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	var (
+		version                  int
+		body                     string
+		status                   string
+		winStart                 sql.NullString
+		winEnd                   sql.NullString
+		executionContextResolved bool
+		retainedPlans            int
+		retainedUnits            int
+	)
+	if err := tx.QueryRowContext(ctx, `
+		SELECT specs.version, specs.body, runs.status, runs.win_start, runs.win_end,
+		       runs.execution_context_resolved,
+		       (SELECT COUNT(*) FROM pipeline_run_plans WHERE run_id = runs.id),
+		       (SELECT COUNT(*) FROM pipeline_run_units WHERE run_id = runs.id)
+		FROM pipeline_run_specs AS specs
+		JOIN pipeline_runs AS runs ON runs.id = specs.run_id
+		WHERE specs.run_id = ?`, runID).Scan(
+		&version,
+		&body,
+		&status,
+		&winStart,
+		&winEnd,
+		&executionContextResolved,
+		&retainedPlans,
+		&retainedUnits,
+	); err != nil {
+		return err
+	}
+	spec, err := unmarshalRunSpec(version, []byte(body))
+	if err != nil {
+		return &invalidRunSpecError{RunID: runID, Err: err}
+	}
+	if spec.Dispatch != runDispatchRiver {
+		return errors.New("run is not a queued River execution")
+	}
+	if RunStatus(status) != RunStatusRunning {
+		return fmt.Errorf("queued run %s cannot bind execution units from status %s", runID, status)
+	}
+	if !executionContextResolved || !winStart.Valid || !winEnd.Valid {
+		return fmt.Errorf("queued run %s cannot bind units before its execution context", runID)
+	}
+	if spec.Version != runSpecVersionV1 ||
+		spec.Selection != runSelectionAll ||
+		spec.SelectionDetails != nil {
+		return fmt.Errorf("queued run %s already has an exact execution selection", runID)
+	}
+	if retainedPlans != 0 || retainedUnits != 0 {
+		return fmt.Errorf("queued run %s already has a durable execution plan or units", runID)
+	}
+	effectiveStart := parseTimeValue(winStart.String)
+	effectiveEnd := parseTimeValue(winEnd.String)
+	if effectiveStart.IsZero() || effectiveEnd.IsZero() || !effectiveStart.Before(effectiveEnd) {
+		return fmt.Errorf("queued run %s has an invalid effective execution window", runID)
+	}
+	for position, unit := range units {
+		start, _ := time.Parse(time.RFC3339Nano, strings.TrimSpace(unit.StartDate))
+		end, _ := time.Parse(time.RFC3339Nano, strings.TrimSpace(unit.EndDate))
+		if start.Before(effectiveStart) || end.After(effectiveEnd) {
+			return fmt.Errorf(
+				"queued execution unit %d falls outside run %s's effective window",
+				position,
+				runID,
+			)
+		}
+	}
+	if err := s.insertRunUnits(ctx, tx, runID, units); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
 func expectOneRunUnitUpdate(result sql.Result, err error, runID string, position int, status PipelineRunUnitStatus) error {
 	if err != nil {
 		return err
@@ -1500,6 +1606,9 @@ func (s *Store) ReconcileInterruptedState(ctx context.Context, reason string) (I
 		if err := finishOpenRunSteps(ctx, tx, runID, RunStatusFailed, nowTime, reason); err != nil {
 			return recovery, err
 		}
+		if err := finishOpenRunUnits(ctx, tx, runID, RunStatusFailed, nowTime, reason); err != nil {
+			return recovery, err
+		}
 		if _, err := tx.ExecContext(ctx, `
 			UPDATE pipeline_runs
 			SET status = ?, finished_at = ?, error = ?, recovery_pending = 1
@@ -1723,6 +1832,15 @@ func (s *Store) FinalizeExecution(
 }
 
 func finishOpenRunUnits(ctx context.Context, execer runSlotExecer, runID string, status RunStatus, at time.Time, message string) error {
+	if strings.TrimSpace(runID) == "" {
+		return errors.New("run id is required")
+	}
+	if !isTerminalRunStatus(status) {
+		return fmt.Errorf("cannot finish open execution units with non-terminal status %q", status)
+	}
+	if at.IsZero() {
+		return errors.New("execution unit completion time is required")
+	}
 	if status == RunStatusSuccess {
 		var open int
 		if err := execer.QueryRowContext(ctx, `
@@ -1930,6 +2048,17 @@ func (s *Store) FinishOpenSteps(ctx context.Context, runID string, status RunSta
 		message = runErr.Error()
 	}
 	return finishOpenRunSteps(ctx, s.db, runID, status, at, message)
+}
+
+// FinishOpenUnits closes a retained execution-unit ledger without changing the
+// parent run. Startup recovery uses it for runs reconciled by builds that
+// predate unit-aware orphan cleanup.
+func (s *Store) FinishOpenUnits(ctx context.Context, runID string, status RunStatus, at time.Time, runErr error) error {
+	message := ""
+	if runErr != nil {
+		message = runErr.Error()
+	}
+	return finishOpenRunUnits(ctx, s.db, runID, status, at, message)
 }
 
 type runStepExecer interface {
@@ -2147,11 +2276,16 @@ func (s *Store) UpsertEnvSchedule(ctx context.Context, schedule EnvSchedule) err
 	return tx.Commit()
 }
 
+type envSchedulePinExpectation struct {
+	Environment               string
+	ExpectedSnapshotVersionID string
+}
+
 func (s *Store) PromoteEnvSchedulePins(
 	ctx context.Context,
 	pipelineUUID string,
 	snapshotVersionID string,
-	selections []EnvSchedulePinSelection,
+	selections []envSchedulePinExpectation,
 ) error {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {

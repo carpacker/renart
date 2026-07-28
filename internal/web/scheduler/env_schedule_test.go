@@ -246,8 +246,8 @@ func TestUpsertEnvScheduleValidation(t *testing.T) {
 	promoted, err := service.PromoteEnvSchedules(ctx, "uuid-1", PromoteEnvSchedulesRequest{
 		SnapshotVersionID: "snap-new",
 		Schedules: []EnvSchedulePinSelection{
-			{Environment: "prod", ExpectedSnapshotVersionID: "snap-new"},
-			{Environment: "variables", ExpectedSnapshotVersionID: "snap-existing"},
+			{Environment: "prod", ExpectedSnapshotVersionID: scheduleSnapshotExpectation("snap-new")},
+			{Environment: "variables", ExpectedSnapshotVersionID: scheduleSnapshotExpectation("snap-existing")},
 		},
 	})
 	require.NoError(t, err)
@@ -257,8 +257,8 @@ func TestUpsertEnvScheduleValidation(t *testing.T) {
 	_, err = service.PromoteEnvSchedules(ctx, "uuid-1", PromoteEnvSchedulesRequest{
 		SnapshotVersionID: "snap-existing",
 		Schedules: []EnvSchedulePinSelection{
-			{Environment: "prod", ExpectedSnapshotVersionID: "stale-client-pin"},
-			{Environment: "variables", ExpectedSnapshotVersionID: "snap-new"},
+			{Environment: "prod", ExpectedSnapshotVersionID: scheduleSnapshotExpectation("stale-client-pin")},
+			{Environment: "variables", ExpectedSnapshotVersionID: scheduleSnapshotExpectation("snap-new")},
 		},
 	})
 	require.ErrorContains(t, err, "changed after deployment review")
@@ -282,6 +282,10 @@ func TestUpsertEnvScheduleEditsPausedDeclarationBeforeFirstDeployment(t *testing
 		StateDir:             t.TempDir(),
 		Runner:               func(context.Context, RunRequest, func(string)) RunResult { return RunResult{} },
 		ScheduleDeclarations: declarations,
+		ValidateSnapshot:     func(context.Context, string, string) error { return nil },
+		ValidateScheduleVariables: func(context.Context, string, string, map[string]any) error {
+			return nil
+		},
 		ResolvePipelineRef: func(context.Context, string) (PipelineRef, bool) {
 			return PipelineRef{EncodedID: "enc", Name: "analytics"}, true
 		},
@@ -313,6 +317,30 @@ func TestUpsertEnvScheduleEditsPausedDeclarationBeforeFirstDeployment(t *testing
 		Environment: "prod", Cron: "@daily", PreserveSnapshot: true, PreserveVariables: true,
 	})
 	require.ErrorContains(t, err, "deployed snapshot is required")
+
+	promoted, err := service.PromoteEnvSchedules(ctx, "uuid-1", PromoteEnvSchedulesRequest{
+		SnapshotVersionID: "snap-first",
+		Schedules: []EnvSchedulePinSelection{{
+			Environment:               "prod",
+			ExpectedSnapshotVersionID: scheduleSnapshotExpectation(""),
+		}},
+	})
+	require.NoError(t, err)
+	require.Len(t, promoted, 1)
+	assert.Equal(t, "snap-first", promoted[0].SnapshotVersionID)
+	assert.Equal(t, ScheduleStatusPaused, promoted[0].Status)
+
+	_, err = service.PromoteEnvSchedules(ctx, "uuid-1", PromoteEnvSchedulesRequest{
+		SnapshotVersionID: "snap-second",
+		Schedules: []EnvSchedulePinSelection{{
+			Environment: "prod",
+		}},
+	})
+	require.ErrorContains(t, err, "expected_snapshot_version_id")
+}
+
+func scheduleSnapshotExpectation(value string) *string {
+	return &value
 }
 
 func TestEnvScheduledWorkerRunsWithEnvironmentAndWatermark(t *testing.T) {

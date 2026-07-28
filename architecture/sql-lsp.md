@@ -47,12 +47,19 @@ HTTP/Monaco adapter                     stdio JSON-RPC adapter
   by stable code and range.
 - **Native Polyglot FFI** (`polyglot_ffi.go`) is an optional syntax fallback;
   it is not required for schema-aware diagnostics or offline operation.
-- **Templates**: `{{ ref(...) }}` / `{{ source(...) }}` calls are rendered
-  length-aware with a source map (`render.go`); diagnostics and tokens map
-  back to template ranges. Rename refuses templated documents with
-  `ErrRenameTemplated` — edits against rendered SQL cannot be mapped back
-  safely — and both frontends surface the reason (LSP `RequestFailed`,
-  Monaco `rejectReason`).
+- **Templates**: the HTTP/Monaco adapter resolves the owning pipeline and asset,
+  renders the unsaved document with the same variable defaults, macros,
+  platform built-ins, and `this` value as preview/type-check plus a
+  schedule-derived preview window, then attaches a request-local
+  `ProjectRenderedSQL` source map. Polyglot and every tolerant LSP feature
+  therefore analyze rendered SQL while ranges map back to the template buffer.
+  If an in-progress template cannot render, the core engine falls back to its
+  length-aware `{{ ref(...) }}` / `{{ source(...) }}` expansion rather than
+  disabling the LSP. The filesystem-only stdio adapter uses that lightweight
+  expansion because it has no web workspace resolver. Rename refuses templated
+  documents with `ErrRenameTemplated` — edits against rendered SQL cannot be
+  mapped back safely — and both frontends surface the reason (LSP
+  `RequestFailed`, Monaco `rejectReason`).
 
 ## 2. Web service: state → graph, caching
 
@@ -82,9 +89,12 @@ coordinator's `WorkspaceState` rather than the filesystem:
   requested asset's findings are merged into its editor result, at the
   document header when no honest metadata range exists.
 - Per-edit diagnostics always validate the current unsaved content against the
-  saved revision snapshot. The browser aborts superseded requests and checks
-  the Monaco model version and content before installing markers, so response
-  N cannot overwrite markers for N+1.
+  saved revision snapshot. For Jinja documents the request additionally carries
+  a source-mapped rendering made from the saved pipeline context, so raw
+  delimiters never reach Polyglot and completion/hover/navigation use the same
+  generated SQL. The browser aborts superseded requests and checks the Monaco
+  model version and content before installing markers, so response N cannot
+  overwrite markers for N+1.
 - The optional native Polyglot client is shared and loaded lazily; requests
   never wait for a native download before publishing embedded-WASM results.
 

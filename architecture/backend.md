@@ -273,9 +273,9 @@ the review sheet. Without a live server, working-tree `renart render` invokes
 the shared read-only service directly and does not open scheduler state;
 deployment rendering and `renart plan` boot the same headless service graph
 needed for local snapshot/staleness state, but never start River or execute an
-asset. DuckDB access
-is additionally serialized per canonical database file as described in §4,
-because one server can run multiple pipelines and child processes concurrently.
+asset. DuckDB access is additionally coordinated per canonical database file
+as described in §4: audited native writers share one in-process database
+session, while separate runtimes remain serialized.
 
 The human `renart render` view syntax-highlights SQL, JSON, Python, and YAML
 stage bodies when stdout is an interactive terminal, using passive terminal
@@ -424,11 +424,11 @@ redacted content blobs are omitted by default and can be requested lazily
 without changing the plan identity. The plan ID binds its source Merkle root,
 selected-configuration and variable identities, data-state token, context,
 selection, structured write-resource claims, and operation graph. Local files
-and whole DuckDB database files can be exact. Audited native PostgreSQL, Trino,
-ClickHouse, and StarRocks SQL materializations claim an exact warehouse
-relation; unproven operators remain pipeline-conservative. Incomplete source
-remains visible through structured findings and honest fidelity rather than
-fabricated SQL.
+and local DuckDB database files can be exact. Audited native DuckDB,
+PostgreSQL, Trino, ClickHouse, and StarRocks SQL materializations claim an exact
+relation; unproven operators remain database- or pipeline-conservative.
+Incomplete source remains visible through structured findings and honest
+fidelity rather than fabricated SQL.
 
 The same endpoint accepts a distinct `deployment` purpose for reviewing the
 entire saved working tree before Deploy. That purpose is definition-only: it
@@ -481,6 +481,13 @@ work. Pre-resolved full runs retain the same exact unit provenance at admission.
 This keeps `run.unit` transitions fail-closed without requiring inline work to
 be replayable after a process interruption.
 
+Unreviewed queued full runs retain their conservative pipeline-wide admission
+claim. If parsing the selected working tree or pinned deployment reveals
+runtime parallelism, the worker persists the effective context and atomically
+binds the derived units before target capture or physical work. Unit progress
+therefore has a durable row even though the legacy/manual admission has no
+reviewed plan artifact.
+
 All version-three full, reviewed, selector, and Build-needed runs use
 `internal/web/executiongraph`. Its deterministic ready queue admits the lowest
 plan position whose selected upstream units succeeded and whose budgets are
@@ -491,7 +498,8 @@ sequentially. The effective bound is the minimum of:
 - the pipeline's `max_active_steps` (omitted or `1` is sequential);
 - the process-wide workspace budget (default `8`, overridable with
   `RENART_EXECUTION_WORKSPACE_MAX_ACTIVE_STEPS`);
-- every used connection's `max_concurrent_assets`; and
+- every used connection's `max_concurrent_assets` (local DuckDB defaults to
+  `2` when omitted); and
 - exclusive runtime/write-resource availability.
 
 The workspace budget is FIFO across runs, so scheduled and interactive work
@@ -646,10 +654,12 @@ Hook templates are resolved with the selected asset context before
 materializer construction by the same request-local helper used for direct
 asset and pipeline execution, including each asset's effective full-refresh
 restriction. String materializers retain hooks in one execution-SQL blob.
-The direct renderer carries the parsed pipeline's resolved variable values;
-API assets additionally clone it for the running asset before rendering request
-URLs, parameters, headers, or bodies, so their `var`, date-window, environment,
-and `this` context matches SQL execution.
+The renderer carries the parsed pipeline's resolved variable values. Read-only
+API and Seed plan previews clone the base renderer for the selected asset before
+rendering request fields or source paths, just as their runtime paths do, so
+their `var`, date-window, environment, platform built-ins, and `this` context
+match SQL execution. The clone is request-local; per-item API values cannot
+leak into another asset's preview.
 Databricks, ClickHouse, and Synapse expose separate pre/main/post stages only
 when the final list is byte-for-byte equal to the unhoisted wrapper order; if
 `DECLARE` hoisting moves statements, the exact elements remain available as
@@ -706,15 +716,29 @@ deterministically colored asset label, and `>>` marker to every logical line.
 
 Local DuckDB files use the coordinator in `internal/web/duckcoord`. Connection
 paths are made absolute, symlink-resolved, deduplicated, and sorted before an
-exclusive lease is acquired. A process-local keyed lock serializes goroutines
-and a per-user advisory file lock serializes separate Renart processes. The
-parent keeps the lease for the entire database-touching phase, including the
-lifetime of Sling and ingestr children; API fetching and Python computation
-stay outside that phase. Loads that read and write two DuckDB files acquire
-both in sorted order. Waiting is context-cancellable, and an OS-released file
-lock makes a killed process recover without stale lock cleanup. Independent
-external programs do not participate in the advisory protocol, so inspect
-retains bounded retry and a clear DuckDB lock error as a defensive fallback.
+exclusive lease is acquired. A process-local keyed lock coordinates goroutines
+and a per-user advisory file lock coordinates separate Renart processes.
+
+Audited native `duckdb.sql` table/view assets without hooks, schema prefixes,
+lakehouse routing, connection options, read-only mode, or the DDL strategy use
+`internal/web/duckdbsession`. Overlapping assets for the same canonical file
+share one ADBC `Database` and open a separate connection per asset, which is
+DuckDB's supported single-process concurrency model. Schema creation is
+deduplicated, explicit transaction/catalog conflicts receive a small bounded
+retry, and the database closes only after the overlapping batch drains.
+Distinct target relations have distinct scheduler claims; the same relation
+still serializes.
+
+The shared session holds the existing whole-file coordinator lease throughout
+its lifetime. Sling, ingestr, Python loads, hooks, DDL, configured/dynamic
+routing, and every other fallback therefore wait until all native connections
+close before opening the file through a separate database handle or child
+process. Loads that read and write two DuckDB files acquire both in sorted
+order. Waiting and active ADBC statements are context-cancellable, and an
+OS-released file lock makes a killed process recover without stale lock cleanup.
+Independent external programs do not participate in the advisory protocol, so
+inspect retains bounded retry and a clear DuckDB lock error as a defensive
+fallback.
 
 DuckDB SQL file references have a separate workspace-scoping rule implemented
 by `internal/web/duckdbworkspace`. Every DuckDB client returned by the web
@@ -877,11 +901,13 @@ leaving an apparently active row unapplied. Startup fails before River workers
 start if core recovery state cannot be read or written. It atomically fails
 running rows and queued rows whose queue job is terminal or missing, relinks
 runnable legacy jobs, returns a claimed-but-not-yet-admitted schedule signal to
-River, cancels admitted abandoned jobs, and replays persisted terminal steps
-without rerunning asset code. It also normalizes otherwise-live River retry or
-snooze timestamps written by older processes in an unorderable Go or RFC3339
-form, preserving their arguments and attempt count while making them eligible
-for pickup again. New manual admissions need no claim/link repair;
+River, cancels admitted abandoned jobs, closes their running/queued execution
+units, and replays attempted terminal units with their original completion
+identity and window without rerunning asset code. Legacy runs without a unit
+ledger replay their persisted terminal steps. It also normalizes otherwise-live
+River retry or snooze timestamps written by older processes in an unorderable
+Go or RFC3339 form, preserving their arguments and attempt count while making
+them eligible for pickup again. New manual admissions need no claim/link repair;
 River-argument link recovery is legacy-only. Recovery emits one structured
 count summary, including requeued signals and legacy replays skipped because
 their effective execution context was never persisted (see staleness.md §3).

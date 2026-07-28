@@ -29,3 +29,26 @@ func TestProjectRenderedSQLLeavesUnalignableOutputUnmapped(t *testing.T) {
 		t.Fatal("expected unalignable generated SQL to remain unmapped")
 	}
 }
+
+func TestRenderDocumentPrefersRequestLocalProjection(t *testing.T) {
+	source := "select * from events where magnitude >= {{ var.notable_magnitude }}"
+	rendered := "select * from events where magnitude >= 5"
+	projection := ProjectRenderedSQL("file:///query.sql", source, rendered)
+	doc := TextDocumentItem{
+		URI:        "file:///query.sql",
+		LanguageID: "sql",
+		Text:       source,
+		Projection: &projection,
+	}
+
+	result := NewEngine(CanonicalGraph{}).renderDocument(doc)
+	if !result.changed || result.doc.Text != rendered {
+		t.Fatalf("request-local projection was not analyzed: %#v", result)
+	}
+
+	generatedStart := strings.Index(rendered, "5")
+	start, end, confidence, ok := result.rendered.TemplateOffsetsForGenerated(generatedStart, generatedStart+1)
+	if !ok || source[start:end] != "{{ var.notable_magnitude }}" || confidence != "medium" {
+		t.Fatalf("projected variable mapping = (%d, %d, %q, %t), text=%q", start, end, confidence, ok, source[start:end])
+	}
+}

@@ -31,6 +31,7 @@ type RunDetailResponse = {
   };
   logs?: Array<{ at: string; line: string }>;
   steps?: Array<{ asset: string; status: string }>;
+  units?: Array<{ position: number; asset_name: string; status: string }>;
 };
 
 const analyticsPipelineId = Buffer.from("analytics").toString("base64url");
@@ -90,6 +91,73 @@ test.describe("app scheduler pages live", () => {
     await expect(page.getByRole("menuitem", { name: "Edit schedule" })).toBeVisible();
     await expect(page.getByRole("menuitem", { name: "Archive schedule" })).toBeVisible();
     await page.keyboard.press("Escape");
+  });
+
+  test("deploys and pins a schedule that has no previous deployment", async ({
+    liveApp,
+    page,
+    request,
+  }) => {
+    await page.goto(`${liveApp.baseURL}/schedules`);
+    const scheduleRow = page.getByTestId("schedule-row").filter({ hasText: "analytics" }).first();
+    await expect(scheduleRow.getByText("Needs deployment", { exact: true })).toBeVisible({
+      timeout: 15000,
+    });
+
+    await scheduleRow.getByRole("button", { name: "Review deployment" }).click();
+    const planSheet = page.getByTestId("pipeline-plan-sheet");
+    await expect(planSheet.getByRole("heading", { name: "Review deployment" })).toBeVisible();
+
+    const deployResponsePromise = page.waitForResponse(
+      (response) =>
+        response.url().endsWith(`/api/pipelines/${analyticsPipelineId}/deploy`) &&
+        response.request().method() === "POST",
+    );
+    await planSheet.getByRole("button", { name: /^Deploy \d+ assets?$/ }).click();
+    const deployResponse = await deployResponsePromise;
+    expect(deployResponse.ok()).toBe(true);
+    const deployedVersion = ((await deployResponse.json()) as { snapshot: { version_id: string } })
+      .snapshot.version_id;
+
+    await expect(planSheet.getByText(/not using this deployment/)).toBeVisible();
+    await planSheet.getByRole("checkbox", { name: "default" }).check();
+    const promotionRequestPromise = page.waitForRequest(
+      (request) =>
+        request.url().endsWith(`/api/pipelines/${analyticsPipelineId}/env-schedules/promote`) &&
+        request.method() === "POST",
+    );
+    const promotionResponsePromise = page.waitForResponse(
+      (response) =>
+        response.url().endsWith(`/api/pipelines/${analyticsPipelineId}/env-schedules/promote`) &&
+        response.request().method() === "POST",
+    );
+    await planSheet.getByRole("button", { name: "Update 1 schedule" }).click();
+
+    expect((await promotionRequestPromise).postDataJSON()).toEqual({
+      snapshot_version_id: deployedVersion,
+      schedules: [
+        {
+          environment: "default",
+          expected_snapshot_version_id: "",
+        },
+      ],
+    });
+    expect((await promotionResponsePromise).ok()).toBe(true);
+
+    await expect
+      .poll(
+        async () => {
+          const response = await request.get(`${liveApp.baseURL}/api/env-schedules`);
+          if (!response.ok()) return "";
+          const body = (await response.json()) as {
+            schedules: Array<{ environment: string; snapshot_version_id?: string }>;
+          };
+          return body.schedules.find((schedule) => schedule.environment === "default")
+            ?.snapshot_version_id;
+        },
+        { timeout: 15000 },
+      )
+      .toBe(deployedVersion);
   });
 
   test("surfaces run list and run-detail transport failures", async ({ liveApp, page }) => {
@@ -352,7 +420,7 @@ test.describe("app scheduler pages live", () => {
     await expect(reviewViewport.getByRole("heading", { name: "Review deployment" })).toBeVisible();
     await expect(reviewViewport.getByRole("heading", { name: "Source changes" })).toBeVisible();
     await planSheet.getByRole("button", { name: /^Deploy \d+ assets?$/ }).click();
-    await expect(page.getByText(/still pinned to an older deployment/)).toBeVisible({
+    await expect(page.getByText(/not using this deployment/)).toBeVisible({
       timeout: 15000,
     });
     await page.getByRole("checkbox", { name: "default" }).check();
@@ -388,6 +456,60 @@ test.describe("app scheduler pages live", () => {
         { timeout: 15000 },
       )
       .toBe("declaration_missing");
+  });
+
+  test("runs a pinned deployment whose parallel units are resolved at runtime", async ({
+    liveApp,
+    request,
+  }) => {
+    await appendFile(
+      join(liveApp.workspaceDir, "analytics/pipeline.yml"),
+      "\nmax_active_steps: 2\n",
+      "utf8",
+    );
+    const pinResponse = await request.put(
+      `${liveApp.baseURL}/api/pipelines/${analyticsPipelineId}/env-schedules/default`,
+      {
+        data: {
+          cron: "0 0 * * *",
+          timezone: "UTC",
+          catchup_policy: "skip",
+          deploy_now: true,
+        },
+      },
+    );
+    expect(pinResponse.ok()).toBe(true);
+    const pinnedVersion = (
+      (await pinResponse.json()) as { schedule: { snapshot_version_id: string } }
+    ).schedule.snapshot_version_id;
+
+    const triggerResponse = await request.post(
+      `${liveApp.baseURL}/api/pipelines/${analyticsPipelineId}/env-schedules/default/run`,
+    );
+    expect(triggerResponse.status()).toBe(202);
+    const runID = ((await triggerResponse.json()) as TriggerResponse).run.id;
+
+    await expect
+      .poll(
+        async () => {
+          const response = await request.get(`${liveApp.baseURL}/api/runs/${runID}`);
+          if (!response.ok()) return `http:${response.status()}`;
+          const detail = (await response.json()) as RunDetailResponse;
+          if (detail.run.status === "failed") {
+            return `failed:${detail.run.error ?? "unknown error"}`;
+          }
+          return detail.run.status;
+        },
+        { timeout: 60000 },
+      )
+      .toBe("success");
+
+    const detailResponse = await request.get(`${liveApp.baseURL}/api/runs/${runID}`);
+    expect(detailResponse.ok()).toBe(true);
+    const detail = (await detailResponse.json()) as RunDetailResponse;
+    expect(detail.run.snapshot_version_id).toBe(pinnedVersion);
+    expect(detail.units?.length).toBeGreaterThan(1);
+    expect(detail.units?.every((unit) => unit.status === "success")).toBe(true);
   });
 
   test("blocks a corrupt latest pin and offers repair", async ({ liveApp, page, request }) => {

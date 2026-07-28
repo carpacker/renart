@@ -4,6 +4,7 @@ import { streamMaterialization, type StreamAssetEvent } from "@/lib/api-streams"
 export type AssetStalenessStatus =
   | "fresh"
   | "stale_edited"
+  | "stale_deployment"
   | "stale_upstream"
   | "partial"
   | "volatile"
@@ -25,6 +26,7 @@ export type LatestPhysicalOutput = {
   fingerprint: string;
   vars_hash: string;
   run_id?: string;
+  snapshot_version_id?: string;
   materialized_at: string;
   completion_id: string;
   completion_ordinal: number;
