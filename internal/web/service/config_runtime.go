@@ -132,20 +132,6 @@ func WrapConnectionManagerForWorkspace(manager config.ConnectionAndDetailsGetter
 	return duckdbworkspace.WrapManager(manager, workspaceRoot)
 }
 
-func selectConfigAndCreateConnectionManager(ctx context.Context, configPath string, requestedEnvironment string) (*config.Config, config.ConnectionAndDetailsGetter, error) {
-	cfg, err := loadSelectedConfig(configPath, requestedEnvironment)
-	if err != nil {
-		return nil, nil, err
-	}
-
-	manager, err := newConnectionManagerFromConfig(ctx, cfg)
-	if err != nil {
-		return nil, nil, err
-	}
-
-	return cfg, manager, nil
-}
-
 func requireEnvironmentName(cfg *config.Config, requestedEnvironment string) (string, error) {
 	selected, err := selectConfigEnvironment(cfg, requestedEnvironment)
 	if err != nil {

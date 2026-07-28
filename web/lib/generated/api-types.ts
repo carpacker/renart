@@ -225,6 +225,17 @@ export type WorkspaceConfigFieldDef = {
   type: string;
   default_value?: string;
   is_required: boolean;
+  is_sensitive: boolean;
+  is_sensitive_file: boolean;
+};
+
+export type WorkspaceConfigSecretField = {
+  status: string;
+  provider?: string;
+  reference?: string;
+  message?: string;
+  writable: boolean;
+  rotatable: boolean;
 };
 
 export type WorkspaceConfigConnectionType = {
@@ -237,6 +248,7 @@ export type WorkspaceConfigConnection = {
   name: string;
   type: string;
   values: Record<string, unknown>;
+  secret_fields?: Record<string, WorkspaceConfigSecretField>;
   load_category?: string;
 };
 
@@ -273,6 +285,7 @@ export type WorkspaceConfigResponse = {
   features?: Record<string, boolean>;
   retention: WorkspaceRetentionSettings;
   parse_error?: string;
+  secret_bindings_error?: string;
 };
 
 export type WorkspaceEnvironmentPolicyResponse = {

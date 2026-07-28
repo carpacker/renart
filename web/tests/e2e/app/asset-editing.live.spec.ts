@@ -4,6 +4,12 @@ import { join } from "node:path";
 
 import { liveTest as test, timeoutForRetry, type LiveApp } from "../live-app-fixture";
 
+test.use({
+  liveAppEnv: {
+    RENART_E2E_REVIEW_POSTGRES_PASSWORD: "renart",
+  },
+});
+
 const pipelineId = Buffer.from("analytics").toString("base64url");
 const customersAssetId = Buffer.from("analytics/assets/analytics/customers.sql").toString(
   "base64url",
@@ -178,8 +184,13 @@ test.describe("app asset editing workbench live", () => {
           host: "127.0.0.1",
           port: 5432,
           username: "renart",
-          password: "renart",
           database: "analytics",
+        },
+        secret_changes: {
+          password: {
+            action: "replace",
+            binding: { ref: "env:RENART_E2E_REVIEW_POSTGRES_PASSWORD" },
+          },
         },
       },
     });

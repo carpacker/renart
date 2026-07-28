@@ -21,9 +21,11 @@ import (
 
 	"renart/internal/web/identity"
 	"renart/internal/web/runstate"
+	"renart/internal/web/secretstore"
 )
 
 func (e *HybridBruinExecutor) RunAsset(ctx context.Context, req RunAssetRequest, onChunk func([]byte)) ([]byte, error) {
+	ctx = secretstore.WithPurpose(ctx, secretstore.PurposeMaterialize)
 	if e.newPipelineBuilder == nil {
 		return nil, fmt.Errorf("direct run requires a pipeline builder")
 	}
@@ -188,6 +190,7 @@ func (e *HybridBruinExecutor) RunAsset(ctx context.Context, req RunAssetRequest,
 }
 
 func (e *HybridBruinExecutor) RunPipeline(ctx context.Context, req RunPipelineRequest, onChunk func([]byte)) ([]byte, error) {
+	ctx = secretstore.WithPurpose(ctx, secretstore.PurposeMaterialize)
 	if e.newPipelineBuilder == nil {
 		return nil, fmt.Errorf("direct pipeline run requires a pipeline builder")
 	}

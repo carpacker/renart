@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"renart/internal/sqlformat"
+	"renart/internal/web/secretstore"
 
 	"github.com/bruin-data/bruin/pkg/ansisql"
 	"github.com/bruin-data/bruin/pkg/mssql"
@@ -21,6 +22,7 @@ import (
 )
 
 func (e *HybridBruinExecutor) ImportDatabase(ctx context.Context, req ImportDatabaseRequest) ([]byte, error) {
+	ctx = secretstore.WithPurpose(ctx, secretstore.PurposeInspect)
 	if e.newConnectionManager == nil || e.newPipelineBuilder == nil {
 		return nil, fmt.Errorf("direct database import requires a connection manager and pipeline builder")
 	}

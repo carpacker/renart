@@ -57,7 +57,10 @@ import { useWorkspaceSettingsData } from "@/hooks/use-workspace-settings-data";
 import { testWorkspaceConnection } from "@/lib/api-config";
 import { useIngestrEnabled, visibleConnectionTypes } from "@/lib/features";
 import type { EnvironmentPolicy, WorkspaceRetentionSettings } from "@/lib/generated/api-types";
-import { buildConnectionFieldDefaults } from "@/lib/settings-form-utils";
+import {
+  buildConnectionFieldDefaults,
+  buildConnectionSecretChanges,
+} from "@/lib/settings-form-utils";
 import type { WorkspaceConfigConnection, WorkspaceConfigEnvironment } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
@@ -906,6 +909,7 @@ export function AppProjectConnectionsPage({
   return (
     <div className="flex min-h-0 flex-col gap-4">
       <SettingsStatus message={workspaceConfigStatusMessage} tone={workspaceConfigStatusTone} />
+      <SecretBindingsAlert message={workspaceConfig?.secret_bindings_error} />
       {normalizedConfigEnvironments.length === 0 ? (
         <SettingsCard title="Connections">
           <p className="text-sm text-muted-foreground">
@@ -1072,6 +1076,7 @@ function ConnectionSheet({
         name: form.connectionForm.name,
         type: form.connectionForm.type,
         values: form.connectionForm.values,
+        secret_changes: form.connectionForm.secretChanges,
       });
       setValidateMessage(response.message ?? "Connection validated.");
       setValidateTone("success");
@@ -1111,8 +1116,8 @@ function ConnectionSheet({
           </SheetTitle>
           <SheetDescription>
             {mode === "create"
-              ? "Credentials are stored in the project config, scoped to one environment."
-              : `Stored in the project config under the ${state?.environment ?? ""} environment.`}
+              ? "Sensitive values are write-only and scoped to this environment."
+              : `Leave sensitive fields blank to keep their current value in ${state?.environment ?? ""}.`}
           </SheetDescription>
         </SheetHeader>
         <div className="flex-1 overflow-auto px-4">
@@ -1123,18 +1128,21 @@ function ConnectionSheet({
                 tone={workspaceConfigStatusTone}
               />
             ) : null}
+            <SecretBindingsAlert message={workspaceConfig?.secret_bindings_error} />
             <WorkspaceConnectionFormFields
               busy={workspaceConfigBusy}
               canValidate={Boolean(
                 form.connectionForm.environmentName &&
                 form.connectionForm.name.trim() &&
-                form.connectionForm.type,
+                form.connectionForm.type &&
+                form.secretFieldsReady,
               )}
               connectionForm={form.connectionForm}
               connectionTypes={connectionTypes}
               environments={normalizedConfigEnvironments}
               mode={mode}
               selectedConnectionType={form.selectedConnectionType}
+              secretFields={form.activeConnection?.secret_fields}
               selectedEnvironment={state?.environment ?? null}
               environmentDisabled={mode === "edit"}
               typeDisabled={mode === "edit"}
@@ -1154,6 +1162,12 @@ function ConnectionSheet({
               onNameChange={(value) =>
                 form.setConnectionForm((current) => ({ ...current, name: value }))
               }
+              onSecretChange={(fieldName, change) =>
+                form.setConnectionForm((current) => ({
+                  ...current,
+                  secretChanges: { ...current.secretChanges, [fieldName]: change },
+                }))
+              }
               onSave={() => void save()}
               onTypeChange={(value) =>
                 form.setConnectionForm((current) => ({
@@ -1165,6 +1179,9 @@ function ConnectionSheet({
                     previousValues: current.values,
                     typeName: value,
                   }),
+                  secretChanges: buildConnectionSecretChanges(
+                    connectionTypes.find((connectionType) => connectionType.type_name === value),
+                  ),
                 }))
               }
               onValidate={() => void validateConnection()}
@@ -1186,7 +1203,12 @@ function ConnectionSheet({
               <Button
                 size="sm"
                 variant="outline"
-                disabled={workspaceConfigBusy || validateBusy || !form.connectionForm.name.trim()}
+                disabled={
+                  workspaceConfigBusy ||
+                  validateBusy ||
+                  !form.connectionForm.name.trim() ||
+                  !form.secretFieldsReady
+                }
                 onClick={() => void validateConnection()}
               >
                 {validateBusy ? (
@@ -1202,7 +1224,8 @@ function ConnectionSheet({
                   workspaceConfigBusy ||
                   !form.connectionForm.environmentName ||
                   !form.connectionForm.name.trim() ||
-                  !form.connectionForm.type
+                  !form.connectionForm.type ||
+                  !form.secretFieldsReady
                 }
                 onClick={() => void save()}
               >
@@ -1253,6 +1276,18 @@ function SettingsStatus({
     <Alert variant={tone === "error" ? "destructive" : "default"}>
       <AlertTitle>{tone === "error" ? "Settings update failed" : "Settings saved"}</AlertTitle>
       <AlertDescription>{message}</AlertDescription>
+    </Alert>
+  );
+}
+
+function SecretBindingsAlert({ message }: { message?: string }) {
+  if (!message) {
+    return null;
+  }
+  return (
+    <Alert variant="destructive">
+      <AlertTitle>Secret bindings need attention</AlertTitle>
+      <AlertDescription className="whitespace-pre-wrap">{message}</AlertDescription>
     </Alert>
   );
 }

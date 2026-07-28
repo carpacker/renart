@@ -355,9 +355,9 @@ func (s *PipelinePlanService) Plan(
 		Assets:         []PipelinePlanAsset{},
 		ExecutionUnits: []PipelinePlanExecutionUnit{},
 	}
-	initialConfigIdentity := runcontext.SelectedConfigurationIdentity(
-		environment,
-		cfg.SelectedEnvironment,
+	initialConfigIdentity := selectedConfigurationIdentityWithBindings(
+		s.deps.WorkspaceRoot,
+		cfg,
 		nil,
 	)
 	base.Context = PipelinePlanContext{
@@ -517,7 +517,12 @@ func (s *PipelinePlanService) Plan(
 			configurationAssets = append(configurationAssets, asset)
 		}
 	}
-	selectedConfiguration := selectedPipelineConfigurationIdentity(cfg, resolved.parsed, configurationAssets)
+	selectedConfiguration := selectedPipelineConfigurationIdentity(
+		s.deps.WorkspaceRoot,
+		cfg,
+		resolved.parsed,
+		configurationAssets,
+	)
 	base.Context.ConfigurationDigest = selectedConfiguration.Digest
 	base.Context.ConfigurationFidelity = string(selectedConfiguration.Fidelity)
 	if len(selectedAssets) > 0 && (selectedConfiguration.Fidelity != runcontext.IdentityFidelityExact || selectedConfiguration.Digest == "") {

@@ -6,10 +6,12 @@ import (
 	"fmt"
 	"path/filepath"
 
+	"github.com/bruin-data/bruin/pkg/config"
 	"github.com/bruin-data/bruin/pkg/git"
 	"github.com/bruin-data/bruin/pkg/jinja"
 	"github.com/bruin-data/bruin/pkg/pipeline"
 	"github.com/spf13/afero"
+	"renart/internal/web/secretstore"
 )
 
 func (e *HybridBruinExecutor) applyFillAssetDependencies(ctx context.Context, targetPath string) ([]byte, error) {
@@ -74,12 +76,23 @@ func (e *HybridBruinExecutor) applyFillAssetDependencies(ctx context.Context, ta
 
 func (e *HybridBruinExecutor) applyFillColumnsFromDB(ctx context.Context, targetPath string) ([]byte, error) {
 	fs := afero.NewOsFs()
+	var manager config.ConnectionAndDetailsGetter
+	if e.newConnectionManager != nil {
+		var err error
+		manager, err = e.newConnectionManager(
+			secretstore.WithPurpose(ctx, secretstore.PurposeInspect),
+			"",
+		)
+		if err != nil {
+			return nil, fmt.Errorf("failed to create connection manager: %w", err)
+		}
+	}
 	if directPathReferencesAsset(targetPath) {
 		pp, err := getDirectPipelineAndAsset(ctx, e.workspaceRoot, targetPath, fs)
 		if err != nil {
 			return nil, err
 		}
-		status, err := fillDirectColumnsFromDB(ctx, pp, fs, "", nil)
+		status, err := fillDirectColumnsFromDB(ctx, pp, fs, "", manager)
 		if err != nil {
 			return nil, fmt.Errorf("failed to fill columns from DB for asset '%s': %w", pp.Asset.Name, err)
 		}
@@ -108,7 +121,7 @@ func (e *HybridBruinExecutor) applyFillColumnsFromDB(ctx context.Context, target
 			continue
 		}
 		pp := &directPipelineInfo{Pipeline: foundPipeline, Asset: asset, Config: cm}
-		status, err := fillDirectColumnsFromDB(ctx, pp, fs, "", nil)
+		status, err := fillDirectColumnsFromDB(ctx, pp, fs, "", manager)
 		switch status {
 		case fillStatusUpdated:
 			updatedAssets = append(updatedAssets, asset.Name)

@@ -42,10 +42,11 @@ type ImportDatabaseRequest struct {
 }
 
 type OnboardingDiscoveryRequest struct {
-	EnvironmentName string         `json:"environment_name"`
-	Type            string         `json:"type"`
-	Values          map[string]any `json:"values"`
-	Database        string         `json:"database"`
+	EnvironmentName string                                             `json:"environment_name"`
+	Type            string                                             `json:"type"`
+	Values          map[string]any                                     `json:"values"`
+	SecretChanges   map[string]service.WorkspaceConnectionSecretChange `json:"secret_changes,omitempty"`
+	Database        string                                             `json:"database"`
 }
 
 type OnboardingQuickstartRequest struct {
@@ -148,6 +149,7 @@ func (h *OnboardingAPI) HandlePreviewDiscovery(w http.ResponseWriter, r *http.Re
 		EnvironmentName: strings.TrimSpace(req.EnvironmentName),
 		Type:            strings.TrimSpace(req.Type),
 		Values:          req.Values,
+		SecretChanges:   req.SecretChanges,
 		Database:        strings.TrimSpace(req.Database),
 	})
 	webapi.WriteJSON(w, status, result)

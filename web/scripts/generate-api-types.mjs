@@ -40,6 +40,7 @@ const sources = [
     file: resolve(repoRoot, "internal", "web", "service", "config.go"),
     types: [
       "WorkspaceConfigFieldDef",
+      "WorkspaceConfigSecretField",
       "WorkspaceConfigConnectionType",
       "WorkspaceConfigConnection",
       "WorkspaceConfigEnvironment",

@@ -13,6 +13,7 @@ import (
 	"github.com/bruin-data/bruin/pkg/git"
 	bruinpath "github.com/bruin-data/bruin/pkg/path"
 	"github.com/spf13/afero"
+	"renart/internal/web/secretstore"
 )
 
 type OnboardingImportRequest struct {
@@ -64,6 +65,7 @@ type OnboardingDiscoveryRequest struct {
 	EnvironmentName string
 	Type            string
 	Values          map[string]any
+	SecretChanges   map[string]WorkspaceConnectionSecretChange
 	Database        string
 }
 
@@ -191,6 +193,7 @@ func (s *OnboardingService) PreviewDiscovery(ctx context.Context, req Onboarding
 		Name:            connectionName,
 		Type:            typeName,
 		Values:          values,
+		SecretChanges:   req.SecretChanges,
 	}); err != nil {
 		return OnboardingDiscoveryResult{Status: "error", Databases: []string{}, Tables: []SQLDiscoveryTableItem{}, Error: err.Error()}, 400
 	}
@@ -199,10 +202,29 @@ func (s *OnboardingService) PreviewDiscovery(ctx context.Context, req Onboarding
 	if err != nil {
 		return OnboardingDiscoveryResult{Status: "error", Databases: []string{}, Tables: []SQLDiscoveryTableItem{}, Error: err.Error()}, 400
 	}
-
-	manager, err := newConnectionManagerFromConfig(ctx, selectedCfg)
+	factory := NewResolvedConnectionFactory(
+		s.workspaceRoot,
+		s.configPath,
+		configService.ProjectIdentity().ID,
+		configService.secretResolver,
+	)
+	resolved, err := factory.ResolveConfig(
+		ctx,
+		selectedCfg,
+		environmentName,
+		secretstore.PurposeInspect,
+	)
 	if err != nil {
-		return OnboardingDiscoveryResult{Status: "error", Databases: []string{}, Tables: []SQLDiscoveryTableItem{}, Error: err.Error()}, 400
+		return OnboardingDiscoveryResult{
+			Status: "error", Databases: []string{}, Tables: []SQLDiscoveryTableItem{},
+			Error: safeSecretResolutionMessage(err),
+		}, 400
+	}
+	defer resolved.Close(ctx)
+
+	manager, err := newConnectionManagerFromConfig(ctx, resolved.Config)
+	if err != nil {
+		return OnboardingDiscoveryResult{Status: "error", Databases: []string{}, Tables: []SQLDiscoveryTableItem{}, Error: resolved.Redactor.Mask(err.Error())}, 400
 	}
 
 	conn := manager.GetConnection(connectionName)
@@ -227,7 +249,7 @@ func (s *OnboardingService) PreviewDiscovery(ctx context.Context, req Onboarding
 
 	databases, err := fetcher.GetDatabases(ctx)
 	if err != nil {
-		return OnboardingDiscoveryResult{Status: "error", Databases: []string{}, Tables: []SQLDiscoveryTableItem{}, Error: err.Error()}, 400
+		return OnboardingDiscoveryResult{Status: "error", Databases: []string{}, Tables: []SQLDiscoveryTableItem{}, Error: redactWorkspaceConnectionMessage(selectedCfg, err.Error())}, 400
 	}
 	sort.Strings(databases)
 	result.Databases = databases
@@ -241,7 +263,7 @@ func (s *OnboardingService) PreviewDiscovery(ctx context.Context, req Onboarding
 	}); ok {
 		items, err := fetcherWithSchemas.GetTablesWithSchemas(ctx, selectedDatabase)
 		if err != nil {
-			return OnboardingDiscoveryResult{Status: "error", Databases: databases, Tables: []SQLDiscoveryTableItem{}, Error: err.Error()}, 400
+			return OnboardingDiscoveryResult{Status: "error", Databases: databases, Tables: []SQLDiscoveryTableItem{}, Error: redactWorkspaceConnectionMessage(selectedCfg, err.Error())}, 400
 		}
 		result.Tables = BuildSQLDiscoveryTableItems(selectedDatabase, items)
 		return result, 200
@@ -252,7 +274,7 @@ func (s *OnboardingService) PreviewDiscovery(ctx context.Context, req Onboarding
 	}); ok {
 		items, err := tableFetcher.GetTables(ctx, selectedDatabase)
 		if err != nil {
-			return OnboardingDiscoveryResult{Status: "error", Databases: databases, Tables: []SQLDiscoveryTableItem{}, Error: err.Error()}, 400
+			return OnboardingDiscoveryResult{Status: "error", Databases: databases, Tables: []SQLDiscoveryTableItem{}, Error: redactWorkspaceConnectionMessage(selectedCfg, err.Error())}, 400
 		}
 		result.Tables = BuildSQLDiscoveryTableItemsWithoutSchemas(selectedDatabase, items)
 		return result, 200
@@ -327,7 +349,7 @@ func normalizeOnboardingSessionState(state OnboardingSessionState) OnboardingSes
 		Step:            step,
 		SelectedType:    strings.TrimSpace(state.SelectedType),
 		EnvironmentName: strings.TrimSpace(state.EnvironmentName),
-		DraftValues:     cloneAnyMap(state.DraftValues),
+		DraftValues:     nonSensitiveWorkspaceConnectionValues(state.SelectedType, state.DraftValues),
 		ImportForm: OnboardingImportFormState{
 			Database:       strings.TrimSpace(state.ImportForm.Database),
 			PipelineName:   strings.TrimSpace(state.ImportForm.PipelineName),
@@ -351,6 +373,29 @@ func normalizeOnboardingSessionState(state OnboardingSessionState) OnboardingSes
 		}
 	}
 
+	return result
+}
+
+func nonSensitiveWorkspaceConnectionValues(typeName string, values map[string]any) map[string]any {
+	fieldDefs := workspaceConnectionFieldDefsForType(strings.TrimSpace(typeName))
+	if len(fieldDefs) == 0 {
+		return nil
+	}
+	allowed := make(map[string]struct{}, len(fieldDefs))
+	for _, fieldDef := range fieldDefs {
+		if !fieldDef.IsSensitive && !fieldDef.IsSensitiveFile {
+			allowed[fieldDef.Name] = struct{}{}
+		}
+	}
+	result := make(map[string]any)
+	for name, value := range values {
+		if _, ok := allowed[name]; ok {
+			result[name] = value
+		}
+	}
+	if len(result) == 0 {
+		return nil
+	}
 	return result
 }
 

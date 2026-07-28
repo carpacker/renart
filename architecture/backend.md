@@ -33,6 +33,8 @@ cmd/web.go     route registration + a thin webServer adapter
   ├── internal/web/{model, api}   canonical DTOs, response envelope
   ├── internal/web/{bus, identity, fingerprint, matlog, staleness,
   │                snapshot, policy}          → see staleness.md
+  ├── internal/web/secretstore                → typed secret references,
+  │                                             providers, leases, bindings
   ├── internal/web/notebook                   → see notebooks.md
   ├── internal/web/service/assetmeta          → see asset-editing.md
   ├── internal/web/{sqlintelligence, pyintelligence, sqlformat,
@@ -151,6 +153,45 @@ when the block is absent, and Project settings writes the complete validated
 policy back as a reviewable Git diff. Invalid explicit retention values stop
 startup instead of allowing a destructive housekeeping guess.
 
+Connection configuration has a write-only boundary for fields tagged
+`sensitive:"true"` or `sensitive_file:"true"` by Bruin's connection structs.
+`GET /api/config` and every create/update response omit those fields from
+`values`; `secret_fields` reports only configured/missing/unavailable status,
+provider identity, a safe reference, and provider capabilities. Create,
+update, connection-test, and onboarding-discovery drafts accept sensitive input
+only through explicit `keep`, `replace`, or `clear` changes. The reflected field
+metadata and generated TypeScript types carry the authoritative sensitivity
+flags, so newly tagged connection fields fail into the same boundary without
+frontend name heuristics.
+
+For ordinary sensitive values, a replacement defaults to the native OS
+credential store and the config receives only a `${RENART_…}` placeholder.
+Users can instead bind the field to an existing `env:NAME`, which keeps
+headless/CI operation first-class and sends no value through the request.
+`.renart/secrets.yml` maps the selected environment, connection, and field to a
+typed `local:` or `env:` reference; it never contains the value. The local key
+is scoped by stable project ID and environment. macOS Keychain, Windows
+Credential Manager, and Linux Secret Service are accessed through the
+replaceable `secretstore.Provider` interface. A missing, locked, or unavailable
+credential store fails closed—there is no plaintext fallback. Existing inline
+credentials remain readable for compatibility and are migrated to the local
+store on replacement. Config writes use owner-only permissions because an
+untouched legacy credential may still be present. `sensitive_file` fields retain
+their write-only path behavior; provider-backed temporary file leases are not
+built yet.
+
+Config and binding updates are serialized and applied as one compensating
+transaction across the provider, binding manifest, and config files. Rename,
+clone, delete, clear, and connection rename move/copy/remove local values as
+needed; a failed provider or file operation restores prior provider values and
+files. Provider resolution is operation-scoped and purpose-tagged. One
+`ResolvedConnectionFactory` overlays only tagged placeholder fields in a
+freshly selected in-memory config, seeds redaction before constructing drivers,
+and never mutates the process environment. Production query, inspect,
+materialize, schema/discovery, onboarding, schedule, and notebook-import paths
+use the shared resolver. Resolved leases and values are never written to plans,
+run records, snapshots, SSE, or public API responses.
+
 **CLI ↔ server (delegate-or-embed).** Pipeline commands resolve their
 workspace git-style (walk up to `.bruin.yml` → `.renart` → repo root;
 `cmd/workspace.go`) and their target as a pipeline name, asset name, or
@@ -245,11 +286,13 @@ bound Go timestamps as canonical UTC SQLite values; this is required because
 River orders due jobs with its exact space-separated timestamp representation.
 Renart-specific project files
 include per-environment policy in `.renart/environments.yml` and desired
-per-environment schedules in `.renart/schedules.yml`; ordinary pipeline source
-remains plain Bruin files (`.bruin.yml`, `pipeline.yml`, asset files). Schedule
-deployment pins, watermarks, occurrence/run history, and derived next-run times
-are machine-local SQLite state and never enter the version-controlled schedule
-declaration.
+per-environment schedules in `.renart/schedules.yml`. The versioned
+`.renart/secrets.yml` contains only environment/connection/field coordinates,
+placeholder symbols, and typed provider references; values remain in the
+provider. Ordinary pipeline source remains plain Bruin files (`.bruin.yml`,
+`pipeline.yml`, asset files). Schedule deployment pins, watermarks,
+occurrence/run history, and derived next-run times are machine-local SQLite
+state and never enter the version-controlled schedule declaration.
 Runtime lock/discovery files, including `.renart/execution.lock`, are excluded
 from Git by the source-control service. Its diff endpoint resolves the same
 HEAD/index/worktree pairs used for staging and returns both the unified patch
@@ -396,6 +439,12 @@ custom marshalers. Opaque maps/interfaces and non-empty URL, DSN, endpoint, or
 raw options fields fail closed as `runtime_only` with an empty digest instead
 of risking credential exposure or silently omitting behavior. This
 configuration identity is separate from the asset's physical-target identity.
+When a tracked placeholder has a binding, the digest adds only its consumer
+coordinates, symbol, and typed provider reference. Rebinding therefore
+invalidates a confirmed plan, while rotating the value behind the same
+reference does not change configuration identity or freshness. A malformed
+binding manifest or placeholder/binding drift fails the identity closed as
+`runtime_only`; credential bytes are never hashed.
 For Load assets the reserved Sling `local` endpoint is not treated as a named
 Bruin connection: authored source/destination paths remain in source identity,
 and an exact local destination has its own canonical physical-target identity.
@@ -649,10 +698,15 @@ exact deployment, environment, normalized interval, and admission-time
 execution timestamp. Schedule overrides are validated against declarations in
 that immutable deployment, normalized through the same pre-asset Bruin
 pipeline mutator used by rendering and execution, and contribute to variable
-digests/fingerprints without entering the plan artifact. Their values remain in
-private schedule state, the compatibility signal, and the RunSpec; public
-schedule responses expose sorted names only. Scheduled sensor semantics are
-planned and executed as `wait`.
+digests/fingerprints without entering the plan artifact. Schedule
+`secret_refs` use the same typed parser and shared resolver as connection
+bindings; `env:` and project/environment-scoped `local:` references are
+resolved for validation and again for execution so rotation takes effect.
+For secret-backed entries, only references remain in declarations, River
+signals, and retained RunSpecs; literal overrides remain private, while
+provider-resolved values are operation-scoped. Public schedule responses expose
+sorted names only. Scheduled sensor semantics are planned and executed as
+`wait`.
 
 The worker atomically admits the run, RunSpec, pipeline slot, redacted plan, and
 ordered units before physical execution. A deterministic blocker still creates

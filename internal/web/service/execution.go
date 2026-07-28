@@ -541,7 +541,17 @@ func (s *ExecutionService) ensureAssetInspectable(ctx context.Context, assetID, 
 		return nil
 	}
 
-	_, _, queryStr, err := getDirectConnectionAndQuery(ctx, &directPipelineInfo{Pipeline: parsedPipeline, Asset: asset, Config: loadExecutionConfigOrEmpty(s.deps.ConfigPath)}, environment, startDate, endDate)
+	queryStr, err := getDirectRenderedQuery(
+		ctx,
+		&directPipelineInfo{
+			Pipeline: parsedPipeline,
+			Asset:    asset,
+			Config:   loadExecutionConfigOrEmpty(s.deps.ConfigPath),
+		},
+		environment,
+		startDate,
+		endDate,
+	)
 	if err != nil {
 		return nil
 	}

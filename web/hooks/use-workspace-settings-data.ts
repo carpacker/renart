@@ -1,6 +1,6 @@
 "use client";
 
-import { useAtom } from "jotai";
+import { atom, useAtom } from "jotai";
 import { useCallback, useEffect, useMemo } from "react";
 
 import {
@@ -16,9 +16,8 @@ import {
   updateWorkspaceEnvironment,
   updateWorkspaceProject,
 } from "@/lib/api-config";
-import { atom } from "jotai";
 import type { EnvironmentPolicy, WorkspaceRetentionSettings } from "@/lib/generated/api-types";
-import { WorkspaceConfigResponse } from "@/lib/types";
+import { WorkspaceConfigResponse, type WorkspaceConnectionSecretChanges } from "@/lib/types";
 
 const workspaceConfigAtom = atom<WorkspaceConfigResponse | null>(null);
 const workspaceEnvironmentPoliciesAtom = atom<Record<string, EnvironmentPolicy>>({});
@@ -192,6 +191,7 @@ export function useWorkspaceSettingsData() {
       name: string;
       type: string;
       values: Record<string, unknown>;
+      secret_changes?: WorkspaceConnectionSecretChanges;
     }) =>
       runWorkspaceConfigMutation(
         () => createWorkspaceConnection(input),
@@ -207,6 +207,7 @@ export function useWorkspaceSettingsData() {
       name: string;
       type: string;
       values: Record<string, unknown>;
+      secret_changes?: WorkspaceConnectionSecretChanges;
     }) =>
       runWorkspaceConfigMutation(
         () => updateWorkspaceConnection(input),

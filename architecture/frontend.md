@@ -313,6 +313,19 @@ not underscore-flattened route hacks.
   facts, schedule history, deployments, and abandoned temporary directories,
   plus the per-pipeline run/log/deployment floors. Integer validation happens
   in both the form and Go service; saving replaces the complete policy.
+  Connection sheets consume backend-provided `is_sensitive` and
+  `is_sensitive_file` metadata. Sensitive inputs never populate browser state
+  with a saved value. They show configured/missing/unavailable status and the
+  safe provider/reference descriptor, with explicit keep, replace, and clear
+  behavior. Ordinary credentials default to **Credential store**; the
+  two-choice source control can instead save only an environment-variable name
+  for headless/CI use. Environment mode validates `env:NAME` without accepting
+  a value, while local replacement remains a write-only password input.
+  Credential-file fields use the same control for a write-only path or an
+  environment-supplied path. Leaving an existing field unchanged means keep.
+  Provider/manifest parse failures remain visible as shadcn alerts instead of
+  silently resetting the form. The same write-only form contract is used by
+  inline asset connection creation and onboarding database import.
   Pipeline settings use a vertical, icon-labelled shadcn tab menu at desktop
   widths and retain the compact horizontally scrollable section buttons on
   mobile. The dialog has one fixed viewport-relative height, its desktop sidebar
@@ -349,9 +362,10 @@ not underscore-flattened route hacks.
   variable overrides show an `Overrides` badge and value-free name tooltip.
   Each row identifies whether its definition comes from
   `.renart/schedules.yml` or is a local legacy row. Schedule creation accepts
-  optional JSON objects for literal overrides and `env:NAME` secret references,
-  validates the resolved context against the exact chosen deployment, writes
-  desired state to the project file, and explicitly chooses an existing
+  optional JSON objects for literal overrides and typed `env:NAME` or
+  `local:alias` secret references, validates the resolved context against the
+  exact chosen deployment, writes only references into desired state, and
+  explicitly chooses an existing
   executable deployment or reviews and deploys the saved workspace before
   pinning the returned version locally. Declaration-removal tombstones explain
   that the project file must be re-added instead of presenting a nonfunctional

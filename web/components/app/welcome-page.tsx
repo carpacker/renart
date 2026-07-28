@@ -51,12 +51,13 @@ import {
 import { buildStalePipelineStream } from "@/lib/api-staleness";
 import type { StreamAssetEvent } from "@/lib/api-streams";
 import { getWorkspace } from "@/lib/api-workspace";
+import { splitConnectionDraftValues } from "@/lib/settings-form-utils";
+import type { CreateProjectResponse, ProjectTemplateInfo } from "@/lib/generated/api-types";
 import type {
-  CreateProjectResponse,
-  ProjectTemplateInfo,
+  OnboardingDiscoveryResponse,
+  OnboardingImportResponse,
   WorkspaceConfigConnectionType,
-} from "@/lib/generated/api-types";
-import type { OnboardingDiscoveryResponse, OnboardingImportResponse } from "@/lib/types";
+} from "@/lib/types";
 import { pinProject } from "@/lib/project-context";
 import { cn } from "@/lib/utils";
 
@@ -276,10 +277,13 @@ export function WelcomePage({ forceNew = false }: { forceNew?: boolean }) {
       setError(null);
       try {
         const values: Record<string, unknown> = { ...connectionValues };
+        const connectionTypeDef = connectionTypes.find((type) => type.type_name === connectionType);
+        const draft = splitConnectionDraftValues(connectionTypeDef, values);
         const response = await previewOnboardingDiscovery({
           environment_name: IMPORT_ENVIRONMENT,
           type: connectionType,
-          values,
+          values: draft.values,
+          secret_changes: draft.secretChanges,
           database,
         });
         if (response.status === "error") {
@@ -293,7 +297,7 @@ export function WelcomePage({ forceNew = false }: { forceNew?: boolean }) {
           // Discovery only previews the connection; the import step reads the
           // saved workspace config, so persist the connection now.
           await persistImportConnection(
-            connectionType,
+            connectionTypeDef,
             values,
             database ?? response.selected_database ?? "",
           );
@@ -702,7 +706,7 @@ export function WelcomePage({ forceNew = false }: { forceNew?: boolean }) {
                         type={
                           field.type === "int"
                             ? "number"
-                            : isSecretField(field.name)
+                            : field.is_sensitive || field.is_sensitive_file
                               ? "password"
                               : "text"
                         }
@@ -978,6 +982,9 @@ function demoSuggestedName(templateId: string) {
 function defaultConnectionValues(connectionType?: WorkspaceConfigConnectionType) {
   const values: Record<string, string | boolean> = {};
   for (const field of connectionType?.fields ?? []) {
+    if (field.is_sensitive || field.is_sensitive_file) {
+      continue;
+    }
     if (field.default_value) {
       values[field.name] =
         field.type === "bool" ? field.default_value === "true" : field.default_value;
@@ -986,29 +993,25 @@ function defaultConnectionValues(connectionType?: WorkspaceConfigConnectionType)
   return values;
 }
 
-function isSecretField(name: string) {
-  const lowered = name.toLowerCase();
-  return ["password", "secret", "token", "key", "credentials"].some((needle) =>
-    lowered.includes(needle),
-  );
-}
-
 // Saves the import flow's connection as `<type>-default` in the workspace
 // config; the import endpoint resolves the connection from the saved config.
 async function persistImportConnection(
-  connectionType: string,
+  connectionType: WorkspaceConfigConnectionType | undefined,
   values: Record<string, unknown>,
   database: string,
 ) {
   const connectionValues = { ...values };
-  if (database && connectionType !== "duckdb" && !connectionValues.database) {
+  if (database && connectionType?.type_name !== "duckdb" && !connectionValues.database) {
     connectionValues.database = database;
   }
+  const draft = splitConnectionDraftValues(connectionType, connectionValues);
+  const typeName = connectionType?.type_name ?? "";
   const input = {
     environment_name: IMPORT_ENVIRONMENT,
-    name: `${connectionType}-default`,
-    type: connectionType,
-    values: connectionValues,
+    name: `${typeName}-default`,
+    type: typeName,
+    values: draft.values,
+    secret_changes: draft.secretChanges,
   };
   try {
     await createWorkspaceConnection(input);

@@ -28,6 +28,7 @@ import (
 	"renart/internal/web/policy"
 	webretention "renart/internal/web/retention"
 	webscheduler "renart/internal/web/scheduler"
+	"renart/internal/web/secretstore"
 	"renart/internal/web/service"
 	"renart/internal/web/snapshot"
 	"renart/internal/web/staleness"
@@ -219,6 +220,8 @@ func newWebServer(ctx context.Context, cfg serverConfig, logger *zap.Logger) (*w
 		return nil, nil, fmt.Errorf("invalid retention settings in .renart/project.yml: %w", err)
 	}
 
+	secretResolver := secretstore.NewDefaultResolver()
+	configPath := resolveConfigFilePath(absRoot)
 	server := &webServer{
 		projectID:     project.ID,
 		projectName:   project.Name,
@@ -226,14 +229,20 @@ func newWebServer(ctx context.Context, cfg serverConfig, logger *zap.Logger) (*w
 		staticDir:     cfg.staticDir,
 		watchMode:     cfg.watchMode,
 		watchPoll:     cfg.watchPoll,
-		workspaceSvc:  service.NewWorkspaceService(absRoot, resolveConfigFilePath(absRoot)),
-		configSvc:     service.NewConfigService(absRoot, resolveConfigFilePath(absRoot)),
+		workspaceSvc:  service.NewWorkspaceService(absRoot, configPath),
+		configSvc:     service.NewConfigService(absRoot, configPath, service.WithSecretResolver(secretResolver)),
 		pipelineSvc:   service.NewPipelineService(absRoot),
 		hub:           events.NewDebouncedHub(150 * time.Millisecond),
 		executor:      nil,
 		eventBus:      bus.New(),
 		logger:        logger,
 	}
+	server.connectionFactory = service.NewResolvedConnectionFactory(
+		absRoot,
+		configPath,
+		project.ID,
+		secretResolver,
+	)
 
 	hybridExecutor := service.NewHybridBruinExecutor(absRoot, "", server.newConnectionManager, server.newPipelineBuilder)
 	server.executor = hybridExecutor
@@ -349,10 +358,22 @@ func newWebServer(ctx context.Context, cfg serverConfig, logger *zap.Logger) (*w
 	})
 
 	server.notebookSvc = service.NewNotebookService(service.NotebookDependencies{
-		WorkspaceRoot:       absRoot,
-		ConfigPath:          resolveConfigFilePath(absRoot),
-		CurrentState:        func() service.WorkspaceState { return server.currentState() },
-		RunConnectionQuery:  server.executionSvc.RunConnectionQueryForEnvironment,
+		WorkspaceRoot: absRoot,
+		ConfigPath:    resolveConfigFilePath(absRoot),
+		CurrentState:  func() service.WorkspaceState { return server.currentState() },
+		RunConnectionQuery: func(
+			ctx context.Context,
+			connection string,
+			environment string,
+			query string,
+		) ([]string, []map[string]any, error) {
+			return server.executionSvc.RunConnectionQueryForEnvironment(
+				secretstore.WithPurpose(ctx, secretstore.PurposeNotebookQuery),
+				connection,
+				environment,
+				query,
+			)
+		},
 		PushWorkspaceUpdate: server.pushWorkspaceUpdate,
 		// Validate cells for server-side auto-recompute with the same
 		// parse-context the editor uses (constructed below; referenced lazily).
@@ -513,6 +534,41 @@ func newWebServer(ctx context.Context, cfg serverConfig, logger *zap.Logger) (*w
 		StateDir:             filepath.Dir(cfg.schedulerStatePath),
 		Pipelines:            server.pipelineSvc.ListSchedules,
 		ScheduleDeclarations: webscheduler.NewScheduleDeclarationStore(filepath.Join(absRoot, ".renart", "schedules.yml")),
+		ResolveScheduleSecrets: func(
+			ctx context.Context,
+			environment string,
+			references map[string]string,
+		) (map[string]any, error) {
+			requests := make([]secretstore.NamedRequest, 0, len(references))
+			for variable, rawReference := range references {
+				reference, err := secretstore.ParseRef(rawReference)
+				if err != nil {
+					return nil, fmt.Errorf("schedule variable %q: %w", variable, err)
+				}
+				requests = append(requests, secretstore.NamedRequest{
+					Name: variable,
+					Request: secretstore.ResolveRequest{
+						ProjectID:   project.ID,
+						Environment: environment,
+						Reference:   reference,
+						Purpose: secretstore.PurposeFromContext(
+							ctx,
+							secretstore.PurposeScheduleValidation,
+						),
+					},
+				})
+			}
+			bundle, err := secretResolver.ResolveAll(ctx, requests)
+			if err != nil {
+				return nil, err
+			}
+			defer bundle.Close(ctx)
+			resolved := make(map[string]any, len(references))
+			for variable := range references {
+				resolved[variable] = string(bundle.Value(variable))
+			}
+			return resolved, nil
+		},
 		Publish: func(event any) {
 			server.hub.PublishImmediate(event)
 		},

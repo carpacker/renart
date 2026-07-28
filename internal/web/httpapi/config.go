@@ -48,11 +48,12 @@ type DeleteWorkspaceEnvironmentRequest struct {
 }
 
 type UpsertWorkspaceConnectionRequest struct {
-	EnvironmentName string         `json:"environment_name"`
-	CurrentName     string         `json:"current_name,omitempty"`
-	Name            string         `json:"name"`
-	Type            string         `json:"type"`
-	Values          map[string]any `json:"values"`
+	EnvironmentName string                                             `json:"environment_name"`
+	CurrentName     string                                             `json:"current_name,omitempty"`
+	Name            string                                             `json:"name"`
+	Type            string                                             `json:"type"`
+	Values          map[string]any                                     `json:"values"`
+	SecretChanges   map[string]service.WorkspaceConnectionSecretChange `json:"secret_changes,omitempty"`
 }
 
 type DeleteWorkspaceConnectionRequest struct {
@@ -67,11 +68,12 @@ type UpdateWorkspaceProjectRequest struct {
 }
 
 type TestWorkspaceConnectionRequest struct {
-	EnvironmentName string         `json:"environment_name"`
-	CurrentName     string         `json:"current_name,omitempty"`
-	Name            string         `json:"name"`
-	Type            string         `json:"type,omitempty"`
-	Values          map[string]any `json:"values,omitempty"`
+	EnvironmentName string                                             `json:"environment_name"`
+	CurrentName     string                                             `json:"current_name,omitempty"`
+	Name            string                                             `json:"name"`
+	Type            string                                             `json:"type,omitempty"`
+	Values          map[string]any                                     `json:"values,omitempty"`
+	SecretChanges   map[string]service.WorkspaceConnectionSecretChange `json:"secret_changes,omitempty"`
 }
 
 func RegisterConfigRoutes(router chi.Router, handlers *ConfigHandlers) {
@@ -197,21 +199,19 @@ func (h *ConfigHandlers) HandleCreateWorkspaceEnvironment(w http.ResponseWriter,
 		return
 	}
 
-	cfg, configPath, err := h.Service.LoadForEditing()
+	change, err := h.Service.CreateEnvironmentAndPersist(
+		req.Name,
+		req.SchemaPrefix,
+		req.SetAsDefault,
+	)
 	if err != nil {
-		webapi.WriteInternalError(w, "config_load_failed", err.Error())
-		return
-	}
-
-	if err := cfg.AddEnvironment(strings.TrimSpace(req.Name), strings.TrimSpace(req.SchemaPrefix)); err != nil {
 		webapi.WriteBadRequest(w, "environment_create_failed", err.Error())
 		return
 	}
-	if req.SetAsDefault {
-		cfg.DefaultEnvironmentName = strings.TrimSpace(req.Name)
+	if h.Publisher != nil {
+		h.Publisher.ConfigChanged(r.Context(), change.RelPath, "config.updated")
 	}
-
-	h.persistAndRespond(r.Context(), w, cfg, configPath)
+	webapi.WriteJSON(w, http.StatusOK, h.Service.BuildResponse(change.ConfigPath, change.Config))
 }
 
 func (h *ConfigHandlers) HandleUpdateWorkspaceEnvironment(w http.ResponseWriter, r *http.Request) {
@@ -221,23 +221,21 @@ func (h *ConfigHandlers) HandleUpdateWorkspaceEnvironment(w http.ResponseWriter,
 		return
 	}
 
-	cfg, configPath, err := h.Service.LoadForEditing()
-	if err != nil {
-		webapi.WriteInternalError(w, "config_load_failed", err.Error())
-		return
-	}
-
 	currentName := strings.TrimSpace(req.Name)
 	nextName := strings.TrimSpace(req.NewName)
 	if nextName == "" {
 		nextName = currentName
 	}
-	if err := cfg.UpdateEnvironment(currentName, nextName, strings.TrimSpace(req.SchemaPrefix)); err != nil {
+	change, err := h.Service.UpdateEnvironmentAndPersist(
+		r.Context(),
+		currentName,
+		nextName,
+		req.SchemaPrefix,
+		req.SetAsDefault,
+	)
+	if err != nil {
 		webapi.WriteBadRequest(w, "environment_update_failed", err.Error())
 		return
-	}
-	if req.SetAsDefault {
-		cfg.DefaultEnvironmentName = nextName
 	}
 
 	// Renaming must carry the renart policy along, otherwise the guardrails
@@ -249,8 +247,11 @@ func (h *ConfigHandlers) HandleUpdateWorkspaceEnvironment(w http.ResponseWriter,
 			}
 		}
 	}
-
-	h.persistAndRespond(r.Context(), w, cfg, configPath)
+	if h.Publisher != nil {
+		h.Publisher.ConfigChanged(r.Context(), change.RelPath, "config.updated")
+		h.Publisher.ConfigChanged(r.Context(), ".renart/secrets.yml", "config.updated")
+	}
+	webapi.WriteJSON(w, http.StatusOK, h.Service.BuildResponse(change.ConfigPath, change.Config))
 }
 
 func (h *ConfigHandlers) HandleCloneWorkspaceEnvironment(w http.ResponseWriter, r *http.Request) {
@@ -260,13 +261,14 @@ func (h *ConfigHandlers) HandleCloneWorkspaceEnvironment(w http.ResponseWriter, 
 		return
 	}
 
-	cfg, configPath, err := h.Service.LoadForEditing()
+	change, err := h.Service.CloneEnvironmentAndPersist(
+		r.Context(),
+		req.SourceName,
+		req.TargetName,
+		req.SchemaPrefix,
+		req.SetAsDefault,
+	)
 	if err != nil {
-		webapi.WriteInternalError(w, "config_load_failed", err.Error())
-		return
-	}
-
-	if err := cfg.CloneEnvironment(strings.TrimSpace(req.SourceName), strings.TrimSpace(req.TargetName), strings.TrimSpace(req.SchemaPrefix)); err != nil {
 		webapi.WriteBadRequest(w, "environment_clone_failed", err.Error())
 		return
 	}
@@ -278,11 +280,11 @@ func (h *ConfigHandlers) HandleCloneWorkspaceEnvironment(w http.ResponseWriter, 
 			_, _ = h.Policies.Set(strings.TrimSpace(req.TargetName), envPolicy)
 		}
 	}
-	if req.SetAsDefault {
-		cfg.DefaultEnvironmentName = strings.TrimSpace(req.TargetName)
+	if h.Publisher != nil {
+		h.Publisher.ConfigChanged(r.Context(), change.RelPath, "config.updated")
+		h.Publisher.ConfigChanged(r.Context(), ".renart/secrets.yml", "config.updated")
 	}
-
-	h.persistAndRespond(r.Context(), w, cfg, configPath)
+	webapi.WriteJSON(w, http.StatusOK, h.Service.BuildResponse(change.ConfigPath, change.Config))
 }
 
 func (h *ConfigHandlers) HandleDeleteWorkspaceEnvironment(w http.ResponseWriter, r *http.Request) {
@@ -292,13 +294,8 @@ func (h *ConfigHandlers) HandleDeleteWorkspaceEnvironment(w http.ResponseWriter,
 		return
 	}
 
-	cfg, configPath, err := h.Service.LoadForEditing()
+	change, err := h.Service.DeleteEnvironmentAndPersist(r.Context(), req.Name)
 	if err != nil {
-		webapi.WriteInternalError(w, "config_load_failed", err.Error())
-		return
-	}
-
-	if err := cfg.DeleteEnvironment(strings.TrimSpace(req.Name)); err != nil {
 		webapi.WriteBadRequest(w, "environment_delete_failed", err.Error())
 		return
 	}
@@ -306,7 +303,11 @@ func (h *ConfigHandlers) HandleDeleteWorkspaceEnvironment(w http.ResponseWriter,
 		_, _ = h.Policies.Set(strings.TrimSpace(req.Name), policy.EnvironmentPolicy{})
 	}
 
-	h.persistAndRespond(r.Context(), w, cfg, configPath)
+	if h.Publisher != nil {
+		h.Publisher.ConfigChanged(r.Context(), change.RelPath, "config.updated")
+		h.Publisher.ConfigChanged(r.Context(), ".renart/secrets.yml", "config.updated")
+	}
+	webapi.WriteJSON(w, http.StatusOK, h.Service.BuildResponse(change.ConfigPath, change.Config))
 }
 
 func (h *ConfigHandlers) HandleCreateWorkspaceConnection(w http.ResponseWriter, r *http.Request) {
@@ -316,24 +317,23 @@ func (h *ConfigHandlers) HandleCreateWorkspaceConnection(w http.ResponseWriter, 
 		return
 	}
 
-	cfg, configPath, err := h.Service.LoadForEditing()
-	if err != nil {
-		webapi.WriteInternalError(w, "config_load_failed", err.Error())
-		return
-	}
-
-	if err := h.Service.AddConnection(cfg, service.UpsertWorkspaceConnectionParams{
+	change, err := h.Service.CreateConnectionAndPersist(r.Context(), service.UpsertWorkspaceConnectionParams{
 		EnvironmentName: req.EnvironmentName,
 		CurrentName:     req.CurrentName,
 		Name:            req.Name,
 		Type:            req.Type,
 		Values:          req.Values,
-	}); err != nil {
+		SecretChanges:   req.SecretChanges,
+	})
+	if err != nil {
 		webapi.WriteBadRequest(w, "connection_create_failed", err.Error())
 		return
 	}
-
-	h.persistAndRespond(r.Context(), w, cfg, configPath)
+	if h.Publisher != nil {
+		h.Publisher.ConfigChanged(r.Context(), change.RelPath, "config.updated")
+		h.Publisher.ConfigChanged(r.Context(), ".renart/secrets.yml", "config.updated")
+	}
+	webapi.WriteJSON(w, http.StatusOK, h.Service.BuildResponse(change.ConfigPath, change.Config))
 }
 
 func (h *ConfigHandlers) HandleUpdateWorkspaceConnection(w http.ResponseWriter, r *http.Request) {
@@ -343,24 +343,23 @@ func (h *ConfigHandlers) HandleUpdateWorkspaceConnection(w http.ResponseWriter, 
 		return
 	}
 
-	cfg, configPath, err := h.Service.LoadForEditing()
-	if err != nil {
-		webapi.WriteInternalError(w, "config_load_failed", err.Error())
-		return
-	}
-
-	if err := h.Service.UpdateConnection(cfg, service.UpsertWorkspaceConnectionParams{
+	change, err := h.Service.UpdateConnectionAndPersist(r.Context(), service.UpsertWorkspaceConnectionParams{
 		EnvironmentName: req.EnvironmentName,
 		CurrentName:     req.CurrentName,
 		Name:            req.Name,
 		Type:            req.Type,
 		Values:          req.Values,
-	}); err != nil {
+		SecretChanges:   req.SecretChanges,
+	})
+	if err != nil {
 		webapi.WriteBadRequest(w, "connection_update_failed", err.Error())
 		return
 	}
-
-	h.persistAndRespond(r.Context(), w, cfg, configPath)
+	if h.Publisher != nil {
+		h.Publisher.ConfigChanged(r.Context(), change.RelPath, "config.updated")
+		h.Publisher.ConfigChanged(r.Context(), ".renart/secrets.yml", "config.updated")
+	}
+	webapi.WriteJSON(w, http.StatusOK, h.Service.BuildResponse(change.ConfigPath, change.Config))
 }
 
 func (h *ConfigHandlers) HandleDeleteWorkspaceConnection(w http.ResponseWriter, r *http.Request) {
@@ -370,18 +369,20 @@ func (h *ConfigHandlers) HandleDeleteWorkspaceConnection(w http.ResponseWriter, 
 		return
 	}
 
-	cfg, configPath, err := h.Service.LoadForEditing()
+	change, err := h.Service.DeleteConnectionAndPersist(
+		r.Context(),
+		req.EnvironmentName,
+		req.Name,
+	)
 	if err != nil {
-		webapi.WriteInternalError(w, "config_load_failed", err.Error())
-		return
-	}
-
-	if err := cfg.DeleteConnection(strings.TrimSpace(req.EnvironmentName), strings.TrimSpace(req.Name)); err != nil {
 		webapi.WriteBadRequest(w, "connection_delete_failed", err.Error())
 		return
 	}
-
-	h.persistAndRespond(r.Context(), w, cfg, configPath)
+	if h.Publisher != nil {
+		h.Publisher.ConfigChanged(r.Context(), change.RelPath, "config.updated")
+		h.Publisher.ConfigChanged(r.Context(), ".renart/secrets.yml", "config.updated")
+	}
+	webapi.WriteJSON(w, http.StatusOK, h.Service.BuildResponse(change.ConfigPath, change.Config))
 }
 
 func (h *ConfigHandlers) HandleTestWorkspaceConnection(w http.ResponseWriter, r *http.Request) {
@@ -403,6 +404,7 @@ func (h *ConfigHandlers) HandleTestWorkspaceConnection(w http.ResponseWriter, r 
 		Name:            req.Name,
 		Type:            req.Type,
 		Values:          req.Values,
+		SecretChanges:   req.SecretChanges,
 	})
 	if err != nil {
 		trimmed := strings.TrimSpace(err.Error())

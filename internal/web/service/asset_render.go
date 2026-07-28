@@ -571,9 +571,9 @@ func (s *AssetRenderService) renderPath(ctx context.Context, assetPath string, r
 			Message:  connectionErr.Error(),
 		})
 	}
-	configurationIdentity := runcontext.SelectedConfigurationIdentity(
-		pp.Config.SelectedEnvironmentName,
-		pp.Config.SelectedEnvironment,
+	configurationIdentity := selectedConfigurationIdentityWithBindings(
+		s.workspaceRoot,
+		pp.Config,
 		assetRenderConfigurationConnectionNames(pp, result.Asset.ConnectionName),
 	)
 	if connectionErr != nil && !assetRenderAssetIsConnectionless(pp) {

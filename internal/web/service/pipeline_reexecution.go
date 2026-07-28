@@ -95,7 +95,12 @@ func (s *PipelinePlanService) ValidateRetainedRunContext(
 		selected = append(selected, asset)
 	}
 
-	identity := selectedPipelineConfigurationIdentity(cfg, resolved.parsed, selected)
+	identity := selectedPipelineConfigurationIdentity(
+		s.deps.WorkspaceRoot,
+		cfg,
+		resolved.parsed,
+		selected,
+	)
 	if identity.Fidelity != runcontext.IdentityFidelityExact || strings.TrimSpace(identity.Digest) == "" {
 		return fmt.Errorf("the original selected configuration can no longer be verified")
 	}

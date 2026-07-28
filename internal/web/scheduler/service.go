@@ -20,6 +20,7 @@ import (
 	"github.com/riverqueue/river/rivertype"
 	"github.com/robfig/cron/v3"
 	"renart/internal/web/runcontext"
+	"renart/internal/web/secretstore"
 )
 
 const (
@@ -48,7 +49,7 @@ type Service struct {
 	checkSnapshot             func(context.Context, string, string) error
 	validateSnapshot          func(context.Context, string, string) error
 	validateScheduleVariables func(context.Context, string, string, map[string]any) error
-	resolveScheduleSecrets    func(context.Context, map[string]string) (map[string]any, error)
+	resolveScheduleSecrets    func(context.Context, string, map[string]string) (map[string]any, error)
 	declarations              *ScheduleDeclarationStore
 	planScheduledRun          func(context.Context, ScheduledRunPlanRequest) (ScheduledRunPlanResult, error)
 	validateReexecution       func(context.Context, RunReexecutionValidationRequest) error
@@ -100,7 +101,7 @@ type Options struct {
 	// ResolveScheduleSecrets resolves stable declaration references just in
 	// time. Resolved values are used for planning/execution but are never
 	// persisted in declarations, River signals, or retained RunSpecs.
-	ResolveScheduleSecrets func(context.Context, map[string]string) (map[string]any, error)
+	ResolveScheduleSecrets func(context.Context, string, map[string]string) (map[string]any, error)
 	// ScheduleDeclarations is the version-controlled desired-state store. Nil
 	// preserves the legacy local-only behavior for isolated tests/embedders.
 	ScheduleDeclarations *ScheduleDeclarationStore
@@ -1178,7 +1179,12 @@ func (s *Service) UpsertEnvSchedule(ctx context.Context, pipelineUUID string, re
 		if err := s.validateScheduleSnapshot(ctx, pipelineUUID, snapshotVersionID); err != nil {
 			return EnvSchedule{}, err
 		}
-		resolvedVariables, err := s.resolveScheduleVariables(ctx, variables, secretRefs)
+		resolvedVariables, err := s.resolveScheduleVariables(
+			secretstore.WithPurpose(ctx, secretstore.PurposeScheduleValidation),
+			environment,
+			variables,
+			secretRefs,
+		)
 		if err != nil {
 			return EnvSchedule{}, err
 		}
@@ -1900,7 +1906,12 @@ func (s *Service) prepareScheduledRunAdmission(
 		return scheduledRunAdmission{}, false, nil
 	}
 	args.OccurrenceKey = occurrence.Key
-	resolvedVariables, err := s.resolveScheduleVariables(ctx, args.Variables, args.VariableReferences)
+	resolvedVariables, err := s.resolveScheduleVariables(
+		secretstore.WithPurpose(ctx, secretstore.PurposeScheduledRun),
+		args.Environment,
+		args.Variables,
+		args.VariableReferences,
+	)
 	if err != nil {
 		return scheduledRunAdmission{}, false, &invalidScheduleSignalError{err: fmt.Errorf("resolve scheduled variables: %w", err)}
 	}

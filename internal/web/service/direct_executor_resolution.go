@@ -131,31 +131,17 @@ func getDirectPipelineAndAssetWithConfigLoaderAndMutator(
 	return &directPipelineInfo{Pipeline: foundPipeline, Asset: asset, Config: cm}, nil
 }
 
-func getDirectConnectionAndQuery(ctx context.Context, pp *directPipelineInfo, environment, start, end string) (string, interface{}, string, error) {
+func getDirectRenderedQuery(ctx context.Context, pp *directPipelineInfo, environment, start, end string) (string, error) {
 	if environment != "" {
 		if _, err := selectConfigEnvironment(pp.Config, environment); err != nil {
-			return "", nil, "", err
+			return "", err
 		}
-	}
-
-	manager, err := newConnectionManagerFromConfig(ctx, pp.Config)
-	if err != nil {
-		return "", nil, "", err
-	}
-
-	connName, err := pp.Pipeline.GetConnectionNameForAsset(pp.Asset)
-	if err != nil {
-		return "", nil, "", err
-	}
-	conn := manager.GetConnection(connName)
-	if conn == nil {
-		return "", nil, "", fmt.Errorf("connection %q not found", connName)
 	}
 
 	now := time.Now().UTC()
 	timeWindow, err := ResolveExecutionTimeWindow(string(pp.Pipeline.Schedule), start, end, now)
 	if err != nil {
-		return "", nil, "", err
+		return "", err
 	}
 	renderer := jinja.NewRendererWithStartEndDates(&timeWindow.Start, &timeWindow.End, &now, pp.Pipeline.Name, "renart-query", nil)
 	fetchCtx := context.WithValue(ctx, config.EnvironmentContextKey, pp.Config.SelectedEnvironment)
@@ -167,15 +153,15 @@ func getDirectConnectionAndQuery(ctx context.Context, pp *directPipelineInfo, en
 	extractor := &query.WholeFileExtractor{Fs: afero.NewOsFs(), Renderer: renderer}
 	clonedExtractor, err := extractor.CloneForAsset(fetchCtx, pp.Pipeline, pp.Asset)
 	if err != nil {
-		return "", nil, "", err
+		return "", err
 	}
 	queries, err := clonedExtractor.ExtractQueriesFromString(pp.Asset.ExecutableFile.Content)
 	if err != nil {
-		return "", nil, "", err
+		return "", err
 	}
 	if len(queries) == 0 {
-		return "", nil, "", fmt.Errorf("no query found in asset")
+		return "", fmt.Errorf("no query found in asset")
 	}
 
-	return connName, conn, queries[0].Query, nil
+	return queries[0].Query, nil
 }

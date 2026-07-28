@@ -14,12 +14,12 @@ import (
 	"sync"
 
 	"gopkg.in/yaml.v3"
+	"renart/internal/web/secretstore"
 )
 
 const (
 	scheduleDeclarationsVersion = 1
 	maxScheduleDeclarationsSize = 1 << 20
-	secretReferencePrefix       = "env:"
 	storedSecretReferenceKey    = "$renart_secret_ref"
 )
 
@@ -302,10 +302,12 @@ func validateScheduleVariableName(name string) error {
 }
 
 func validateScheduleSecretReference(reference string) error {
-	reference = strings.TrimSpace(reference)
-	name, found := strings.CutPrefix(reference, secretReferencePrefix)
-	if !found || !validEnvironmentVariableName(name) {
-		return errors.New("secret reference must use env:NAME with a valid environment variable name")
+	parsed, err := secretstore.ParseRef(reference)
+	if err != nil {
+		return fmt.Errorf("invalid secret reference: %w", err)
+	}
+	if parsed.Provider != "env" && parsed.Provider != "local" {
+		return fmt.Errorf("invalid secret reference: provider %q is not available", parsed.Provider)
 	}
 	return nil
 }
@@ -346,40 +348,44 @@ func splitStoredScheduleVariables(stored map[string]any) (map[string]any, map[st
 	return variables, secretRefs
 }
 
-func validEnvironmentVariableName(name string) bool {
-	if name == "" || len(name) > 256 {
-		return false
-	}
-	for index, character := range name {
-		if (character >= 'A' && character <= 'Z') || (character >= 'a' && character <= 'z') || character == '_' {
-			continue
-		}
-		if index > 0 && character >= '0' && character <= '9' {
-			continue
-		}
-		return false
-	}
-	return true
-}
-
 func resolveEnvironmentScheduleSecrets(
-	_ context.Context,
+	ctx context.Context,
+	environment string,
 	references map[string]string,
 ) (map[string]any, error) {
 	if len(references) == 0 {
 		return nil, nil
 	}
-	resolved := make(map[string]any, len(references))
+	resolver, err := secretstore.NewResolver(secretstore.NewEnvironmentProvider())
+	if err != nil {
+		return nil, err
+	}
+	requests := make([]secretstore.NamedRequest, 0, len(references))
 	for variable, reference := range references {
-		if err := validateScheduleSecretReference(reference); err != nil {
+		parsed, err := secretstore.ParseRef(reference)
+		if err != nil {
 			return nil, fmt.Errorf("schedule variable %q: %w", variable, err)
 		}
-		environmentName := strings.TrimPrefix(strings.TrimSpace(reference), secretReferencePrefix)
-		value, found := os.LookupEnv(environmentName)
-		if !found {
-			return nil, fmt.Errorf("schedule variable %q references unavailable environment variable %s", variable, environmentName)
-		}
-		resolved[variable] = value
+		requests = append(requests, secretstore.NamedRequest{
+			Name: variable,
+			Request: secretstore.ResolveRequest{
+				Environment: environment,
+				Reference:   parsed,
+				Purpose: secretstore.PurposeFromContext(
+					ctx,
+					secretstore.PurposeScheduleValidation,
+				),
+			},
+		})
+	}
+	bundle, err := resolver.ResolveAll(ctx, requests)
+	if err != nil {
+		return nil, err
+	}
+	defer bundle.Close(ctx)
+	resolved := make(map[string]any, len(references))
+	for variable := range references {
+		resolved[variable] = string(bundle.Value(variable))
 	}
 	return resolved, nil
 }

@@ -16,7 +16,6 @@ import (
 	"time"
 
 	"github.com/bruin-data/bruin/pkg/config"
-	"github.com/bruin-data/bruin/pkg/connection"
 	"github.com/bruin-data/bruin/pkg/git"
 	"github.com/bruin-data/bruin/pkg/pipeline"
 	"github.com/go-chi/chi/v5"
@@ -44,37 +43,38 @@ import (
 type workspaceState = service.WorkspaceState
 
 type webServer struct {
-	workspaceRoot    string
-	projectID        string
-	projectName      string
-	staticDir        string
-	staticHandler    http.Handler
-	watchMode        string
-	watchPoll        time.Duration
-	workspaceSvc     *service.WorkspaceService
-	configSvc        *service.ConfigService
-	pipelineSvc      *service.PipelineService
-	executionSvc     *service.ExecutionService
-	assetSvc         *service.AssetService
-	sqlSvc           *service.SQLService
-	loadSvc          *service.LoadService
-	suggestionsSvc   *service.SuggestionsService
-	parseContextSvc  *service.ParseContextService
-	sqlLSPSvc        *service.SQLLSPService
-	jinjaRenderSvc   *service.JinjaRenderService
-	assetRenderSvc   *service.AssetRenderService
-	pipelinePlanSvc  *service.PipelinePlanService
-	runSvc           *service.RunService
-	notebookSvc      *service.NotebookService
-	onboardingSvc    *service.OnboardingService
-	sourceControlSvc *service.SourceControlService
-	schedulerSvc     *webscheduler.Service
-	schedulerStore   *webscheduler.Store
-	completionStore  *completion.Store
-	stalenessSvc     *staleness.Service
-	snapshotStore    *snapshot.Store
-	policyLoader     *policy.Loader
-	workspaceCoord   *service.WorkspaceCoordinator
+	workspaceRoot     string
+	projectID         string
+	projectName       string
+	staticDir         string
+	staticHandler     http.Handler
+	watchMode         string
+	watchPoll         time.Duration
+	workspaceSvc      *service.WorkspaceService
+	configSvc         *service.ConfigService
+	connectionFactory *service.ResolvedConnectionFactory
+	pipelineSvc       *service.PipelineService
+	executionSvc      *service.ExecutionService
+	assetSvc          *service.AssetService
+	sqlSvc            *service.SQLService
+	loadSvc           *service.LoadService
+	suggestionsSvc    *service.SuggestionsService
+	parseContextSvc   *service.ParseContextService
+	sqlLSPSvc         *service.SQLLSPService
+	jinjaRenderSvc    *service.JinjaRenderService
+	assetRenderSvc    *service.AssetRenderService
+	pipelinePlanSvc   *service.PipelinePlanService
+	runSvc            *service.RunService
+	notebookSvc       *service.NotebookService
+	onboardingSvc     *service.OnboardingService
+	sourceControlSvc  *service.SourceControlService
+	schedulerSvc      *webscheduler.Service
+	schedulerStore    *webscheduler.Store
+	completionStore   *completion.Store
+	stalenessSvc      *staleness.Service
+	snapshotStore     *snapshot.Store
+	policyLoader      *policy.Loader
+	workspaceCoord    *service.WorkspaceCoordinator
 
 	hub               *events.Hub
 	executor          service.BruinCommandExecutor
@@ -996,24 +996,10 @@ func (s *webServer) resolvePipelineByUUID(ctx context.Context, pipelineUUID stri
 }
 
 func (s *webServer) newConnectionManager(ctx context.Context, environment string) (config.ConnectionAndDetailsGetter, error) {
-	configPath := s.resolveConfigFilePath()
-	cfg, err := config.LoadOrCreate(afero.NewOsFs(), configPath)
-	if err != nil {
-		return nil, fmt.Errorf("failed to load config: %w", err)
+	if s.connectionFactory == nil {
+		return nil, fmt.Errorf("connection factory is unavailable")
 	}
-
-	if environment != "" {
-		if err := cfg.SelectEnvironment(environment); err != nil {
-			return nil, fmt.Errorf("failed to select environment '%s': %w", environment, err)
-		}
-	}
-
-	manager, errs := connection.NewManagerFromConfigWithContext(ctx, cfg)
-	if len(errs) > 0 {
-		return nil, errs[0]
-	}
-
-	return service.WrapConnectionManagerForWorkspace(manager, s.workspaceRoot), nil
+	return s.connectionFactory.NewConnectionManager(ctx, environment)
 }
 
 func (s *webServer) handleStatic(w http.ResponseWriter, r *http.Request) {

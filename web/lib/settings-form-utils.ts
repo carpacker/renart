@@ -1,7 +1,9 @@
 import {
   WorkspaceConfigConnection,
+  WorkspaceConfigConnectionType,
   WorkspaceConfigEnvironment,
   WorkspaceConfigResponse,
+  WorkspaceConnectionSecretChanges,
 } from "@/lib/types";
 
 export function findEnvironmentByName(
@@ -61,6 +63,8 @@ export function buildConnectionFieldDefaults({
       name: string;
       type: string;
       default_value?: string;
+      is_sensitive?: boolean;
+      is_sensitive_file?: boolean;
     }>;
   }>;
   existingConnection: WorkspaceConfigConnection | null;
@@ -71,6 +75,9 @@ export function buildConnectionFieldDefaults({
   const values: Record<string, string | number | boolean | string[]> = {};
 
   for (const field of connectionType?.fields ?? []) {
+    if (field.is_sensitive || field.is_sensitive_file) {
+      continue;
+    }
     const existingValue = existingConnection?.values[field.name];
     const previousValue = previousValues?.[field.name];
     if (existingValue !== undefined && existingValue !== null) {
@@ -102,4 +109,73 @@ export function buildConnectionFieldDefaults({
   }
 
   return values;
+}
+
+export function buildConnectionSecretChanges(
+  connectionType: WorkspaceConfigConnectionType | null | undefined,
+): WorkspaceConnectionSecretChanges {
+  const changes: WorkspaceConnectionSecretChanges = {};
+  for (const field of connectionType?.fields ?? []) {
+    if (field.is_sensitive || field.is_sensitive_file) {
+      changes[field.name] = { action: "keep" };
+    }
+  }
+  return changes;
+}
+
+export function splitConnectionDraftValues(
+  connectionType: WorkspaceConfigConnectionType | null | undefined,
+  draftValues: Record<string, unknown>,
+) {
+  const sensitiveFields = new Set(
+    (connectionType?.fields ?? [])
+      .filter((field) => field.is_sensitive || field.is_sensitive_file)
+      .map((field) => field.name),
+  );
+  const values: Record<string, unknown> = {};
+  const secretChanges: WorkspaceConnectionSecretChanges = {};
+
+  for (const [name, value] of Object.entries(draftValues)) {
+    if (!sensitiveFields.has(name)) {
+      values[name] = value;
+      continue;
+    }
+    const secretValue = typeof value === "string" ? value : String(value ?? "");
+    secretChanges[name] = secretValue
+      ? { action: "replace", value: secretValue }
+      : { action: "keep" };
+  }
+  for (const name of sensitiveFields) {
+    secretChanges[name] ??= { action: "keep" };
+  }
+
+  return { values, secretChanges };
+}
+
+export function connectionSecretsReady({
+  connection,
+  connectionType,
+  secretChanges,
+}: {
+  connection: WorkspaceConfigConnection | null;
+  connectionType: WorkspaceConfigConnectionType | null;
+  secretChanges: WorkspaceConnectionSecretChanges;
+}) {
+  return (connectionType?.fields ?? []).every((field) => {
+    if ((!field.is_sensitive && !field.is_sensitive_file) || !field.is_required) {
+      return true;
+    }
+    const change = secretChanges[field.name];
+    if (change?.action === "replace") {
+      if (change.binding?.ref.startsWith("env:")) {
+        return /^env:[A-Za-z_][A-Za-z0-9_]*$/.test(change.binding.ref);
+      }
+      return Boolean(change.value);
+    }
+    if (change?.action === "clear") {
+      return false;
+    }
+    const descriptor = connection?.secret_fields?.[field.name];
+    return descriptor?.status === "configured" || Boolean(descriptor?.reference);
+  });
 }

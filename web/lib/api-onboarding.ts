@@ -4,6 +4,7 @@ import {
   OnboardingImportResponse,
   OnboardingPathSuggestionsResponse,
   OnboardingSessionState,
+  WorkspaceConnectionSecretChanges,
 } from "@/lib/types";
 
 let cachedOnboardingState: OnboardingSessionState | null = null;
@@ -70,6 +71,7 @@ export async function previewOnboardingDiscovery(input: {
   environment_name: string;
   type: string;
   values: Record<string, unknown>;
+  secret_changes?: WorkspaceConnectionSecretChanges;
   database?: string;
 }): Promise<OnboardingDiscoveryResponse> {
   return fetchJSONWithBody<OnboardingDiscoveryResponse>("/api/onboarding/discovery", "POST", input);

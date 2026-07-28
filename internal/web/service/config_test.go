@@ -1,7 +1,10 @@
 package service
 
 import (
+	"encoding/json"
 	"path/filepath"
+	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/bruin-data/bruin/pkg/config"
@@ -32,7 +35,9 @@ func TestPrepareDraftConnectionReplacesExistingConnection(t *testing.T) {
 			"port":     5432,
 			"database": "bruin",
 			"username": "postgres",
-			"password": "secret",
+		},
+		SecretChanges: map[string]WorkspaceConnectionSecretChange{
+			"password": {Action: "replace", Value: "secret"},
 		},
 	}))
 
@@ -46,7 +51,9 @@ func TestPrepareDraftConnectionReplacesExistingConnection(t *testing.T) {
 			"port":     5433,
 			"database": "bruin",
 			"username": "postgres",
-			"password": "updated",
+		},
+		SecretChanges: map[string]WorkspaceConnectionSecretChange{
+			"password": {Action: "replace", Value: "updated"},
 		},
 	}))
 
@@ -88,6 +95,194 @@ func TestUpdateConnectionRejectsConnectionTypeMutation(t *testing.T) {
 	require.ErrorContains(t, err, "connection type is immutable")
 	environment := cfg.Environments["default"]
 	assert.Equal(t, "duckdb", environment.Connections.ConnectionsSummaryList()["warehouse"])
+}
+
+func TestConnectionSecretsAreWriteOnlyAndUseExplicitChanges(t *testing.T) {
+	t.Parallel()
+	svc := NewConfigService("/tmp/workspace", "/tmp/workspace/.bruin.yml")
+	cfg := &config.Config{
+		DefaultEnvironmentName:  "default",
+		SelectedEnvironmentName: "default",
+		Environments: map[string]config.Environment{
+			"default": {Connections: &config.Connections{}},
+		},
+	}
+
+	err := svc.AddConnection(cfg, UpsertWorkspaceConnectionParams{
+		EnvironmentName: "default",
+		Name:            "warehouse",
+		Type:            "postgres",
+		Values: map[string]any{
+			"host": "localhost", "port": 5432, "database": "analytics",
+			"username": "renart", "password": "must-not-be-accepted",
+		},
+	})
+	require.ErrorContains(t, err, `sensitive connection field "password" must use secret_changes`)
+
+	require.NoError(t, svc.AddConnection(cfg, UpsertWorkspaceConnectionParams{
+		EnvironmentName: "default",
+		Name:            "warehouse",
+		Type:            "postgres",
+		Values: map[string]any{
+			"host": "localhost", "port": 5432, "database": "analytics", "username": "renart",
+		},
+		SecretChanges: map[string]WorkspaceConnectionSecretChange{
+			"password": {Action: "replace", Value: "write-only-canary"},
+		},
+	}))
+
+	response := svc.BuildResponse("/tmp/workspace/.bruin.yml", cfg)
+	require.Len(t, response.Environments, 1)
+	require.Len(t, response.Environments[0].Connections, 1)
+	connection := response.Environments[0].Connections[0]
+	assert.NotContains(t, connection.Values, "password")
+	assert.Equal(t, "configured", connection.SecretFields["password"].Status)
+	payload, err := json.Marshal(response)
+	require.NoError(t, err)
+	assert.NotContains(t, string(payload), "write-only-canary")
+
+	require.NoError(t, svc.UpdateConnection(cfg, UpsertWorkspaceConnectionParams{
+		EnvironmentName: "default",
+		CurrentName:     "warehouse",
+		Name:            "warehouse",
+		Type:            "postgres",
+		Values: map[string]any{
+			"host": "db.internal", "port": 5432, "database": "analytics", "username": "renart",
+		},
+		SecretChanges: map[string]WorkspaceConnectionSecretChange{
+			"password": {Action: "keep"},
+		},
+	}))
+	environment := cfg.Environments["default"]
+	require.Len(t, environment.Connections.Postgres, 1)
+	assert.Equal(t, "write-only-canary", environment.Connections.Postgres[0].Password)
+
+	require.NoError(t, svc.UpdateConnection(cfg, UpsertWorkspaceConnectionParams{
+		EnvironmentName: "default",
+		CurrentName:     "warehouse",
+		Name:            "warehouse",
+		Type:            "postgres",
+		Values: map[string]any{
+			"host": "db.internal", "port": 5432, "database": "analytics", "username": "renart",
+		},
+		SecretChanges: map[string]WorkspaceConnectionSecretChange{
+			"password": {Action: "clear"},
+		},
+	}))
+	environment = cfg.Environments["default"]
+	require.Len(t, environment.Connections.Postgres, 1)
+	assert.Empty(t, environment.Connections.Postgres[0].Password)
+}
+
+func TestConnectionFieldMetadataClassifiesAndOmitsEveryTaggedSecret(t *testing.T) {
+	t.Parallel()
+	const canary = "renart-secret-api-canary"
+	connectionTypes := make(map[string]WorkspaceConfigConnectionType)
+	for _, connectionType := range BuildWorkspaceConfigConnectionTypes() {
+		connectionTypes[connectionType.TypeName] = connectionType
+	}
+
+	connectionsType := reflect.TypeFor[config.Connections]()
+	for index := 0; index < connectionsType.NumField(); index++ {
+		connectionSetField := connectionsType.Field(index)
+		if connectionSetField.Type.Kind() != reflect.Slice {
+			continue
+		}
+		typeName := strings.Split(connectionSetField.Tag.Get("yaml"), ",")[0]
+		elementType := connectionSetField.Type.Elem()
+		if elementType.Kind() == reflect.Pointer {
+			elementType = elementType.Elem()
+		}
+		if elementType.Kind() != reflect.Struct {
+			continue
+		}
+		definition, exists := connectionTypes[typeName]
+		require.True(t, exists, "missing connection definition for %s", typeName)
+		definitionsByName := make(map[string]WorkspaceConfigFieldDef, len(definition.Fields))
+		for _, field := range definition.Fields {
+			definitionsByName[field.Name] = field
+		}
+
+		value := reflect.New(elementType)
+		taggedFields := plantConnectionSecretCanary(value.Elem(), canary)
+		for fieldName, sensitiveFile := range taggedFields {
+			field, exists := definitionsByName[fieldName]
+			require.True(t, exists, "%s.%s is tagged but absent from API metadata", typeName, fieldName)
+			if sensitiveFile {
+				assert.True(t, field.IsSensitiveFile, "%s.%s", typeName, fieldName)
+			} else {
+				assert.True(t, field.IsSensitive, "%s.%s", typeName, fieldName)
+			}
+		}
+
+		publicValues := buildWorkspaceConfigConnectionValues(value.Interface(), typeName)
+		payload, err := json.Marshal(publicValues)
+		require.NoError(t, err)
+		assert.NotContains(t, string(payload), canary, "connection type %s leaked a tagged field", typeName)
+	}
+}
+
+func TestWorkspaceConnectionErrorsAreRedacted(t *testing.T) {
+	t.Parallel()
+	cfg := &config.Config{
+		DefaultEnvironmentName:  "default",
+		SelectedEnvironmentName: "default",
+		Environments: map[string]config.Environment{
+			"default": {
+				Connections: &config.Connections{
+					Postgres: []config.PostgresConnection{{
+						ConnectionMetadata: config.ConnectionMetadata{Name: "warehouse"},
+						Password:           "error-secret-canary",
+					}},
+				},
+			},
+		},
+	}
+	require.NoError(t, cfg.SelectEnvironment("default"))
+
+	redacted := redactWorkspaceConnectionMessage(
+		cfg,
+		"driver failed for postgres://renart:error-secret-canary@db.internal/analytics",
+	)
+	assert.NotContains(t, redacted, "error-secret-canary")
+	assert.Contains(t, redacted, "****")
+}
+
+func plantConnectionSecretCanary(value reflect.Value, canary string) map[string]bool {
+	result := make(map[string]bool)
+	valueType := value.Type()
+	for index := 0; index < value.NumField(); index++ {
+		structField := valueType.Field(index)
+		if !structField.IsExported() {
+			continue
+		}
+		fieldValue := value.Field(index)
+		if structField.Anonymous {
+			embedded := fieldValue
+			if embedded.Kind() == reflect.Pointer {
+				if embedded.IsNil() {
+					embedded.Set(reflect.New(embedded.Type().Elem()))
+				}
+				embedded = embedded.Elem()
+			}
+			if embedded.Kind() == reflect.Struct {
+				for name, isFile := range plantConnectionSecretCanary(embedded, canary) {
+					result[name] = isFile
+				}
+			}
+		}
+		isSensitive := structField.Tag.Get("sensitive") == "true"
+		isSensitiveFile := structField.Tag.Get("sensitive_file") == "true"
+		if (!isSensitive && !isSensitiveFile) || fieldValue.Kind() != reflect.String {
+			continue
+		}
+		fieldValue.SetString(canary)
+		fieldName := strings.Split(structField.Tag.Get("mapstructure"), ",")[0]
+		if fieldName != "" {
+			result[fieldName] = isSensitiveFile
+		}
+	}
+	return result
 }
 
 func TestSetProjectRetentionPersistsValidatedTrackedSettings(t *testing.T) {

@@ -19,7 +19,10 @@ import { Spinner } from "@/components/ui/spinner";
 import { useWorkspaceConnectionForm } from "@/hooks/use-workspace-connection-form";
 import { useWorkspaceSettingsData } from "@/hooks/use-workspace-settings-data";
 import { testWorkspaceConnection } from "@/lib/api-config";
-import { buildConnectionFieldDefaults } from "@/lib/settings-form-utils";
+import {
+  buildConnectionFieldDefaults,
+  buildConnectionSecretChanges,
+} from "@/lib/settings-form-utils";
 import type { WorkspaceConfigConnectionType } from "@/lib/types";
 
 export function WorkspaceConnectionDialog({
@@ -62,7 +65,8 @@ export function WorkspaceConnectionDialog({
   const canValidate = Boolean(
     form.connectionForm.environmentName &&
     form.connectionForm.name.trim() &&
-    form.connectionForm.type,
+    form.connectionForm.type &&
+    form.secretFieldsReady,
   );
 
   const validate = async () => {
@@ -75,6 +79,7 @@ export function WorkspaceConnectionDialog({
         name: form.connectionForm.name.trim(),
         type: form.connectionForm.type,
         values: form.connectionForm.values,
+        secret_changes: form.connectionForm.secretChanges,
       });
       setValidateMessage(response.message ?? "Connection validated.");
       setValidateTone("success");
@@ -108,7 +113,7 @@ export function WorkspaceConnectionDialog({
           </DialogTitle>
           <DialogDescription>
             Add a compatible connection to <span className="font-mono">{environment}</span>.
-            Credentials are written to this project&apos;s configuration.
+            Sensitive values are write-only and never returned to the browser.
           </DialogDescription>
         </DialogHeader>
         <ScrollArea className="min-h-0 min-w-0 flex-1" viewportClassName="p-1">
@@ -121,6 +126,7 @@ export function WorkspaceConnectionDialog({
               environments={settings.normalizedConfigEnvironments}
               mode="create"
               selectedConnectionType={form.selectedConnectionType}
+              secretFields={form.activeConnection?.secret_fields}
               selectedEnvironment={environment}
               environmentDisabled
               validateBusy={validateBusy}
@@ -135,6 +141,12 @@ export function WorkspaceConnectionDialog({
                 }))
               }
               onNameChange={(name) => form.setConnectionForm((current) => ({ ...current, name }))}
+              onSecretChange={(fieldName, change) =>
+                form.setConnectionForm((current) => ({
+                  ...current,
+                  secretChanges: { ...current.secretChanges, [fieldName]: change },
+                }))
+              }
               onSave={() => void save()}
               onTypeChange={(type) =>
                 form.setConnectionForm((current) => ({
@@ -145,6 +157,9 @@ export function WorkspaceConnectionDialog({
                     typeName: type,
                     existingConnection: null,
                   }),
+                  secretChanges: buildConnectionSecretChanges(
+                    connectionTypes.find((connectionType) => connectionType.type_name === type),
+                  ),
                 }))
               }
               onValidate={() => void validate()}

@@ -4,7 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+
 	"log/slog"
+	"renart/internal/web/secretstore"
 	"strings"
 )
 
@@ -101,6 +103,7 @@ func (s *Service) reconcileScheduleDeclarations(ctx context.Context) error {
 
 func (s *Service) resolveScheduleVariables(
 	ctx context.Context,
+	environment string,
 	variables map[string]any,
 	secretRefs map[string]string,
 ) (map[string]any, error) {
@@ -124,7 +127,7 @@ func (s *Service) resolveScheduleVariables(
 	if s.resolveScheduleSecrets == nil {
 		return nil, errors.New("schedule secret resolution is unavailable")
 	}
-	resolvedSecrets, err := s.resolveScheduleSecrets(ctx, cloneScheduleSecretRefs(secretRefs))
+	resolvedSecrets, err := s.resolveScheduleSecrets(ctx, environment, cloneScheduleSecretRefs(secretRefs))
 	if err != nil {
 		return nil, err
 	}
@@ -152,11 +155,13 @@ func (s *Service) resolveScheduleVariables(
 // returned values exist only for the request; callers must retain the row's
 // SecretRefs separately in the private RunSpec.
 func (s *Service) ResolveEnvScheduleVariables(ctx context.Context, row EnvSchedule) (map[string]any, error) {
-	return s.resolveScheduleVariables(ctx, row.Vars, row.SecretRefs)
+	ctx = secretstore.WithPurpose(ctx, secretstore.PurposeScheduleValidation)
+	return s.resolveScheduleVariables(ctx, row.Environment, row.Vars, row.SecretRefs)
 }
 
 func (s *Service) validateEnvScheduleVariables(ctx context.Context, row EnvSchedule) error {
-	resolved, err := s.resolveScheduleVariables(ctx, row.Vars, row.SecretRefs)
+	ctx = secretstore.WithPurpose(ctx, secretstore.PurposeScheduleValidation)
+	resolved, err := s.resolveScheduleVariables(ctx, row.Environment, row.Vars, row.SecretRefs)
 	if err != nil {
 		return err
 	}
@@ -173,7 +178,8 @@ func (s *Service) resolveRunSpecForExecution(
 	hasRetainedPlan bool,
 ) (runSpecV1, error) {
 	resolved, err := s.resolveScheduleVariables(
-		ctx,
+		secretstore.WithPurpose(ctx, secretstore.PurposeScheduledRun),
+		spec.Requested.Environment,
 		spec.Requested.Variables,
 		spec.Requested.VariableReferences,
 	)

@@ -63,9 +63,12 @@ notebooks/
   brought into the session. Fast path for DuckDB-backed assets is a zero-copy
   batched `ATTACH; CTAS; DETACH` (ATTACH visibility is per-connection, so it's
   one batch); everything else falls back to a row-capped generic `Fetch`
-  through the connection. `SourceFetcher` is the swappable seam for a future
-  cloud gateway. Unknown refs (`ErrUnknownSource`) are left untouched so the
-  session yields a clear missing-table error. Provenance is tracked in a
+  through the connection. That named-connection fetch runs through the shared
+  operation-scoped connection factory with the `notebook_query` secret purpose;
+  provider values remain in Go and never enter the notebook file, browser, or
+  Python process. `SourceFetcher` is the swappable seam for a future cloud
+  gateway. Unknown refs (`ErrUnknownSource`) are left untouched so the session
+  yields a clear missing-table error. Provenance is tracked in a
   `__renart_imports` table inside each session DB.
 - **Cleanup = delete the file.** Close-notebook and delete-notebook remove the
   session file; startup `SweepSessions` removes files whose notebook no longer
@@ -196,6 +199,9 @@ prompt to build it.
   for `@viz`.
 - Warehouse-backed `notebook_target` (sandbox schemas + manifest/TTL janitor);
   the DuckDB-file default with delete-on-close + startup sweep is what exists.
+- Direct Python/SQL cell queries against an arbitrary named project connection;
+  today non-DuckDB connections are reached only while importing referenced
+  pipeline assets into the local notebook session.
 - Parked by decision: Python auto-recompute, parameters/widgets,
   cross-notebook references (workaround: promotion), result persistence
   (reopen re-queries head N), notebook sharing/cloud (folders of files travel

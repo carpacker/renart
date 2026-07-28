@@ -1,6 +1,10 @@
 import { fetchJSON, fetchJSONWithBody } from "@/lib/api-core";
 import type { EnvironmentPolicy, WorkspaceRetentionSettings } from "@/lib/generated/api-types";
-import { WorkspaceConfigResponse, WorkspaceEnvironmentPolicyResponse } from "@/lib/types";
+import {
+  WorkspaceConfigResponse,
+  WorkspaceConnectionSecretChanges,
+  WorkspaceEnvironmentPolicyResponse,
+} from "@/lib/types";
 
 export async function getWorkspaceConfig(): Promise<WorkspaceConfigResponse> {
   return fetchJSON<WorkspaceConfigResponse>("/api/config", {
@@ -75,6 +79,7 @@ export async function createWorkspaceConnection(input: {
   name: string;
   type: string;
   values: Record<string, unknown>;
+  secret_changes?: WorkspaceConnectionSecretChanges;
 }): Promise<WorkspaceConfigResponse> {
   return fetchJSONWithBody<WorkspaceConfigResponse>("/api/config/connections", "POST", input);
 }
@@ -85,6 +90,7 @@ export async function updateWorkspaceConnection(input: {
   name: string;
   type: string;
   values: Record<string, unknown>;
+  secret_changes?: WorkspaceConnectionSecretChanges;
 }): Promise<WorkspaceConfigResponse> {
   return fetchJSONWithBody<WorkspaceConfigResponse>("/api/config/connections", "PUT", input);
 }
@@ -102,6 +108,7 @@ export async function testWorkspaceConnection(input: {
   name: string;
   type?: string;
   values?: Record<string, unknown>;
+  secret_changes?: WorkspaceConnectionSecretChanges;
 }): Promise<{ status: string; message?: string }> {
   return fetchJSONWithBody<{ status: string; message?: string }>(
     "/api/config/connections/test",

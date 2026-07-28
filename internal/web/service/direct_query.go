@@ -17,9 +17,11 @@ import (
 	"github.com/spf13/afero"
 
 	"renart/internal/web/duckcoord"
+	"renart/internal/web/secretstore"
 )
 
 func (e *HybridBruinExecutor) QueryAsset(ctx context.Context, req QueryAssetRequest) ([]byte, error) {
+	ctx = secretstore.WithPurpose(ctx, secretstore.PurposeQuery)
 	queryStartedAt := time.Now()
 	if e.newPipelineBuilder == nil {
 		return nil, fmt.Errorf("direct asset query requires a pipeline builder")
@@ -186,6 +188,7 @@ func (e *HybridBruinExecutor) QueryAsset(ctx context.Context, req QueryAssetRequ
 }
 
 func (e *HybridBruinExecutor) QueryConnection(ctx context.Context, req QueryConnectionRequest) ([]byte, error) {
+	ctx = secretstore.WithPurpose(ctx, secretstore.PurposeQuery)
 	queryStartedAt := time.Now()
 	if e.newConnectionManager == nil {
 		return nil, fmt.Errorf("direct connection query requires a connection manager")

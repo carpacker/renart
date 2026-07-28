@@ -3,6 +3,8 @@
 import { useState } from "react";
 import { CheckCircle2, LoaderCircle } from "lucide-react";
 
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
   Combobox,
@@ -17,7 +19,7 @@ import {
   useComboboxAnchor,
 } from "@/components/ui/combobox";
 import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
+import { Field, FieldGroup, FieldLabel, FieldLegend, FieldSet } from "@/components/ui/field";
 import {
   Select,
   SelectContent,
@@ -27,15 +29,14 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
-import { ConnectionMode } from "@/hooks/use-workspace-connection-form";
-import { WorkspaceConfigConnectionType, WorkspaceConfigEnvironment } from "@/lib/types";
-
-type ConnectionFormState = {
-  environmentName: string;
-  name: string;
-  type: string;
-  values: Record<string, string | number | boolean | string[]>;
-};
+import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
+import type { ConnectionFormState, ConnectionMode } from "@/hooks/use-workspace-connection-form";
+import type {
+  WorkspaceConfigConnectionType,
+  WorkspaceConfigEnvironment,
+  WorkspaceConfigSecretField,
+  WorkspaceConnectionSecretChange,
+} from "@/lib/types";
 
 export function WorkspaceConnectionFormFields({
   busy,
@@ -45,6 +46,7 @@ export function WorkspaceConnectionFormFields({
   environments,
   mode,
   selectedConnectionType,
+  secretFields,
   selectedEnvironment,
   environmentDisabled = false,
   typeDisabled = false,
@@ -56,6 +58,7 @@ export function WorkspaceConnectionFormFields({
   onEnvironmentChange,
   onFieldValueChange,
   onNameChange,
+  onSecretChange,
   onSave,
   onTypeChange,
   onValidate,
@@ -67,6 +70,7 @@ export function WorkspaceConnectionFormFields({
   environments: WorkspaceConfigEnvironment[];
   mode: ConnectionMode;
   selectedConnectionType: WorkspaceConfigConnectionType | null;
+  secretFields?: Record<string, WorkspaceConfigSecretField>;
   selectedEnvironment?: string | null;
   environmentDisabled?: boolean;
   typeDisabled?: boolean;
@@ -78,15 +82,16 @@ export function WorkspaceConnectionFormFields({
   onEnvironmentChange: (value: string) => void;
   onFieldValueChange: (fieldName: string, value: string | number | boolean | string[]) => void;
   onNameChange: (value: string) => void;
+  onSecretChange: (fieldName: string, change: WorkspaceConnectionSecretChange) => void;
   onSave: () => void;
   onTypeChange: (value: string) => void;
   onValidate: () => void;
 }) {
   return (
-    <div className="grid gap-4">
+    <FieldGroup>
       {showEnvironmentSelector ? (
-        <div className="grid gap-1.5">
-          <Label htmlFor="workspace-connection-environment">Environment</Label>
+        <Field>
+          <FieldLabel htmlFor="workspace-connection-environment">Environment</FieldLabel>
           <Select
             value={connectionForm.environmentName || selectedEnvironment || undefined}
             onValueChange={onEnvironmentChange}
@@ -105,21 +110,21 @@ export function WorkspaceConnectionFormFields({
               </SelectGroup>
             </SelectContent>
           </Select>
-        </div>
+        </Field>
       ) : null}
 
       <div className="grid gap-4 sm:grid-cols-2">
-        <div className="grid gap-1.5">
-          <Label htmlFor="workspace-connection-name">Name</Label>
+        <Field>
+          <FieldLabel htmlFor="workspace-connection-name">Name</FieldLabel>
           <Input
             id="workspace-connection-name"
             value={connectionForm.name}
             onChange={(event) => onNameChange(event.target.value)}
             placeholder="postgres-default"
           />
-        </div>
-        <div className="grid gap-1.5">
-          <Label htmlFor="workspace-connection-type">Type</Label>
+        </Field>
+        <Field>
+          <FieldLabel htmlFor="workspace-connection-type">Type</FieldLabel>
           <Select
             value={connectionForm.type || undefined}
             onValueChange={onTypeChange}
@@ -138,14 +143,146 @@ export function WorkspaceConnectionFormFields({
               </SelectGroup>
             </SelectContent>
           </Select>
-        </div>
+        </Field>
       </div>
 
-      <div className="grid gap-3">
-        <Label>Configured Values</Label>
+      <FieldSet>
+        <FieldLegend>Connection values</FieldLegend>
         <div className="overflow-hidden rounded-lg border">
           {selectedConnectionType?.fields.map((field) => {
             const fieldValue = connectionForm.values[field.name];
+            if (field.is_sensitive || field.is_sensitive_file) {
+              const change = connectionForm.secretChanges[field.name] ?? { action: "keep" };
+              const descriptor = secretFields?.[field.name];
+              const display = secretFieldDisplay(change, descriptor);
+              const storageMode = secretStorageMode(change, descriptor);
+              const environmentName = secretEnvironmentName(change, descriptor);
+              const inputValue =
+                change.action === "clear"
+                  ? ""
+                  : storageMode === "env"
+                    ? environmentName
+                    : change.action === "replace"
+                      ? (change.value ?? "")
+                      : "";
+              const environmentNameInvalid =
+                storageMode === "env" &&
+                environmentName.length > 0 &&
+                !validEnvironmentName(environmentName);
+              return (
+                <div
+                  key={field.name}
+                  className="grid border-t first:border-t-0 sm:grid-cols-[160px_minmax(0,1fr)]"
+                >
+                  <div className="flex min-w-0 items-center justify-between gap-2 bg-muted/30 px-4 py-2">
+                    <span
+                      className="truncate text-xs text-muted-foreground"
+                      style={{
+                        fontFamily: '"Geist Mono", ui-monospace, SFMono-Regular, monospace',
+                      }}
+                    >
+                      {field.name}
+                    </span>
+                    <Badge variant={display.variant} size="xs">
+                      {display.label}
+                    </Badge>
+                  </div>
+                  <div className="grid gap-1 px-4 py-2 transition-colors focus-within:bg-primary/5">
+                    <div className="flex min-w-0 items-center gap-2">
+                      <Input
+                        aria-label={field.name}
+                        aria-invalid={environmentNameInvalid || undefined}
+                        type={
+                          storageMode === "env" || field.is_sensitive_file ? "text" : "password"
+                        }
+                        autoComplete={storageMode === "local" ? "new-password" : "off"}
+                        value={inputValue}
+                        onChange={(event) => {
+                          const value = event.target.value;
+                          if (storageMode === "env") {
+                            onSecretChange(field.name, {
+                              action: "replace",
+                              binding: { ref: `env:${value}` },
+                            });
+                            return;
+                          }
+                          onSecretChange(
+                            field.name,
+                            value ? { action: "replace", value } : { action: "keep" },
+                          );
+                        }}
+                        placeholder={
+                          change.action === "clear"
+                            ? "Will be removed when saved"
+                            : storageMode === "env"
+                              ? "Environment variable name"
+                              : descriptor?.status === "configured"
+                                ? "Leave blank to keep current value"
+                                : field.is_sensitive_file
+                                  ? "Enter a credential file path"
+                                  : "Enter a value"
+                        }
+                        className="h-7 min-w-0 font-mono text-xs"
+                      />
+                      {descriptor?.status === "configured" ? (
+                        <Button
+                          type="button"
+                          size="xs"
+                          variant={change.action === "clear" ? "outline" : "ghost"}
+                          onClick={() =>
+                            onSecretChange(
+                              field.name,
+                              change.action === "clear" ? { action: "keep" } : { action: "clear" },
+                            )
+                          }
+                        >
+                          {change.action === "clear" ? "Keep" : "Clear"}
+                        </Button>
+                      ) : null}
+                    </div>
+                    <div className="flex min-w-0 flex-col gap-1 sm:flex-row sm:items-center">
+                      <ToggleGroup
+                        type="single"
+                        variant="outline"
+                        size="sm"
+                        spacing={0}
+                        value={storageMode}
+                        aria-label={`${field.name} secret source`}
+                        onValueChange={(nextMode) => {
+                          if (!nextMode || nextMode === storageMode) {
+                            return;
+                          }
+                          onSecretChange(
+                            field.name,
+                            nextMode === "env"
+                              ? { action: "replace", binding: { ref: "env:" } }
+                              : { action: "replace", value: "" },
+                          );
+                        }}
+                      >
+                        <ToggleGroupItem value="local">
+                          {field.is_sensitive_file ? "File path" : "Credential store"}
+                        </ToggleGroupItem>
+                        <ToggleGroupItem value="env">Environment</ToggleGroupItem>
+                      </ToggleGroup>
+                      <p className="min-w-0 text-[0.6875rem] leading-relaxed text-muted-foreground">
+                        {secretFieldHelp(field.is_sensitive_file, storageMode, change, descriptor)}
+                      </p>
+                    </div>
+                    {environmentNameInvalid ? (
+                      <p className="text-[0.6875rem] leading-relaxed text-destructive">
+                        Use a valid environment variable name, such as WAREHOUSE_PASSWORD.
+                      </p>
+                    ) : null}
+                    {descriptor?.message ? (
+                      <p className="text-[0.6875rem] leading-relaxed text-muted-foreground">
+                        {descriptor.message}
+                      </p>
+                    ) : null}
+                  </div>
+                </div>
+              );
+            }
             if (field.type === "bool") {
               return (
                 <div
@@ -205,7 +342,7 @@ export function WorkspaceConnectionFormFields({
                 <div className="px-4 py-1.5 transition-colors focus-within:bg-emerald-500/10 dark:focus-within:bg-emerald-500/15">
                   <Input
                     aria-label={field.name}
-                    type={field.type === "int" ? "number" : secretInputType(field.name)}
+                    type={field.type === "int" ? "number" : "text"}
                     value={
                       fieldValue === undefined || fieldValue === null
                         ? ""
@@ -237,23 +374,17 @@ export function WorkspaceConnectionFormFields({
             );
           })}
         </div>
-      </div>
+      </FieldSet>
 
       {validateMessage ? (
-        <div
-          className={`rounded-md border px-3 py-2 text-sm ${
-            validateTone === "error"
-              ? "border-destructive/40 bg-destructive/10 text-destructive"
-              : "border-emerald-500/40 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300"
-          }`}
-        >
-          <div className="font-medium">
+        <Alert variant={validateTone === "error" ? "destructive" : "default"}>
+          <AlertTitle>
             {validateTone === "error"
               ? "Connection validation failed"
               : "Connection validation succeeded"}
-          </div>
-          <div className="mt-1 whitespace-pre-wrap text-xs sm:text-sm">{validateMessage}</div>
-        </div>
+          </AlertTitle>
+          <AlertDescription className="whitespace-pre-wrap">{validateMessage}</AlertDescription>
+        </Alert>
       ) : null}
 
       {showActions ? (
@@ -276,18 +407,13 @@ export function WorkspaceConnectionFormFields({
             className="w-full sm:w-auto"
             type="button"
             onClick={onSave}
-            disabled={
-              busy ||
-              !connectionForm.environmentName ||
-              !connectionForm.name.trim() ||
-              !connectionForm.type
-            }
+            disabled={busy || !canValidate}
           >
             {mode === "create" ? "Create Connection" : "Save Changes"}
           </Button>
         </div>
       ) : null}
-    </div>
+    </FieldGroup>
   );
 }
 
@@ -407,13 +533,95 @@ function compactUnique(values: string[]) {
   return result;
 }
 
-function secretInputType(name: string) {
-  return isSecretField(name) ? "password" : "text";
+function secretFieldDisplay(
+  change: WorkspaceConnectionSecretChange,
+  descriptor?: WorkspaceConfigSecretField,
+): {
+  label: string;
+  variant: "secondary" | "destructive" | "outline" | "muted";
+} {
+  if (change.action === "replace") {
+    return {
+      label: change.binding?.ref.startsWith("env:") ? "Environment ref" : "New value",
+      variant: "secondary",
+    };
+  }
+  if (change.action === "clear") {
+    return { label: "Will clear", variant: "destructive" };
+  }
+  switch (descriptor?.status) {
+    case "configured":
+      return {
+        label:
+          descriptor.provider === "local"
+            ? "Configured · Local"
+            : descriptor.provider === "env"
+              ? "Configured · Env"
+              : "Configured",
+        variant: "outline",
+      };
+    case "unavailable":
+      return { label: "Unavailable", variant: "destructive" };
+    case "permission_required":
+      return { label: "Permission required", variant: "destructive" };
+    default:
+      return { label: "Missing", variant: "muted" };
+  }
 }
 
-function isSecretField(name: string) {
-  const lower = name.toLowerCase();
-  return ["password", "secret", "token", "api_key", "private_key", "access_key"].some((part) =>
-    lower.includes(part),
-  );
+function secretFieldHelp(
+  isSensitiveFile: boolean,
+  storageMode: SecretStorageMode,
+  change: WorkspaceConnectionSecretChange,
+  descriptor?: WorkspaceConfigSecretField,
+) {
+  if (storageMode === "env") {
+    return "Only the environment variable name is saved. Renart resolves its value when the connection is used.";
+  }
+  if (isSensitiveFile) {
+    return "Write-only credential file path. Renart never returns the current path to the browser.";
+  }
+  if (change.action === "replace") {
+    return "Saved in your system credential store when you save. Renart never returns the value to the browser.";
+  }
+  if (descriptor?.provider === "local") {
+    return descriptor.reference
+      ? `System credential store · ${descriptor.reference}`
+      : "Stored in your system credential store.";
+  }
+  if (descriptor?.provider === "env") {
+    return descriptor.reference
+      ? `Provided by ${descriptor.reference}. Entering a replacement moves this field to your system credential store.`
+      : "Provided by the process environment.";
+  }
+  return "Write-only. Entering a replacement moves this field to your system credential store.";
+}
+
+type SecretStorageMode = "local" | "env";
+
+function secretStorageMode(
+  change: WorkspaceConnectionSecretChange,
+  descriptor?: WorkspaceConfigSecretField,
+): SecretStorageMode {
+  if (change.binding?.ref.startsWith("env:")) {
+    return "env";
+  }
+  if (change.action === "keep" && descriptor?.provider === "env") {
+    return "env";
+  }
+  return "local";
+}
+
+function secretEnvironmentName(
+  change: WorkspaceConnectionSecretChange,
+  descriptor?: WorkspaceConfigSecretField,
+) {
+  const reference =
+    change.binding?.ref ??
+    (change.action === "keep" && descriptor?.provider === "env" ? descriptor.reference : undefined);
+  return reference?.startsWith("env:") ? reference.slice("env:".length) : "";
+}
+
+function validEnvironmentName(value: string) {
+  return /^[A-Za-z_][A-Za-z0-9_]*$/.test(value);
 }

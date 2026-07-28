@@ -83,7 +83,7 @@ CI verifies that the checked-in inventory is current.
 | github.com/columnar-tech/dbc | v0.3.0 | [license](third_party/licenses/c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4.txt) |
 | github.com/coreos/go-oidc/v3 | v3.5.0 | [license](third_party/licenses/a8ad31b1c3f40dca5a84119351b8fa8ddc868edd77fad8a8ebf6d8f2d16fa4ae.txt), [license](third_party/licenses/dccd26c6fd9c296daf44d0bc56bb4efc566edd4880381b3331c9a63e6e471338.txt) |
 | github.com/cyphar/filepath-securejoin | v0.6.1 | [license](third_party/licenses/83e36e42b3dacc3d447eca3049848b3e2ff66b6e1768a6a3cf3f27a57079bda4.txt), [license](third_party/licenses/26be8a79415737dfe8edf1be62e71afeb8c770ed5a5605a06270d5701830f47c.txt), [license](third_party/licenses/3f3d9e0024b1921b067d6f7f88deb4a60cbe7a78e76c64e3f1d7fc3b779b9d04.txt) |
-| github.com/danieljoos/wincred | v1.2.2 | [license](third_party/licenses/2a3d157da1fe64fcb6c62aa72e936cb400e2b246bdfb5428cd24aa8079c44e9a.txt) |
+| github.com/danieljoos/wincred | v1.2.3 | [license](third_party/licenses/2a3d157da1fe64fcb6c62aa72e936cb400e2b246bdfb5428cd24aa8079c44e9a.txt) |
 | github.com/DATA-DOG/go-sqlmock | v1.5.2 | [license](third_party/licenses/e3a6ae97f6eef8ce17e44d5f22adba594c4ea2b592c4be7ee9b387c441ef34d6.txt) |
 | github.com/databricks/databricks-sql-go | v1.14.0 | [license](third_party/licenses/5a0566d95a5f6770ac51f3e7743d8d782ac421c140e1407e6279d6e1e8f171b1.txt) |
 | github.com/davecgh/go-spew | v1.1.2-0.20180830191138-d8f796af33cc | [license](third_party/licenses/1b93a317849ee09d3d7e4f1d20c2b78ddb230b4becb12d7c224c927b9d470251.txt) |
@@ -117,6 +117,7 @@ CI verifies that the checked-in inventory is current.
 | github.com/go-sql-driver/mysql | v1.10.0 | [license](third_party/licenses/1f256ecad192880510e84ad60474eab7589218784b9a50bc7ceee34c2b91f1d5.txt) |
 | github.com/go-viper/mapstructure/v2 | v2.5.0 | [license](third_party/licenses/22adc4abdece712a737573672f082fd61ac2b21df878efb87ffcff4354a07f26.txt) |
 | github.com/goccy/go-json | v0.10.6 | [license](third_party/licenses/a707cd425201945d57500566c47c74dc9fb8cd02ef91b9a761abddeb2401e6a7.txt) |
+| github.com/godbus/dbus/v5 | v5.2.2 | [license](third_party/licenses/e4646a82a976369d7ae8f6ed5c11d35dc0af18433a8ccc24c85b459ad8b95128.txt) |
 | github.com/gofrs/flock | v0.13.0 | [license](third_party/licenses/f4c7b0fbdba9660126feab6388ceed10ff744b2c772a63132f64f9ab2ee5fa29.txt) |
 | github.com/golang-jwt/jwt/v5 | v5.3.1 | [license](third_party/licenses/2ce2d18a4c90147990d4ea9b690bcb7a5e13239e8a31ef68bedd0f99f79e0cf6.txt) |
 | github.com/golang-sql/civil | v0.0.0-20220223132316-b832511892a9 | [license](third_party/licenses/cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30.txt) |
@@ -229,6 +230,7 @@ CI verifies that the checked-in inventory is current.
 | github.com/xwb1989/sqlparser | v0.0.0-20180606152119-120387863bf2 | [license](third_party/licenses/c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4.txt) |
 | github.com/youmark/pkcs8 | v0.0.0-20240726163527-a2c0da244d78 | [license](third_party/licenses/e71725b8bb3e3c2ebf3a88c5f76b03246b71fe8b7784f4a56bf2e815737dca21.txt) |
 | github.com/yourbasic/graph | v0.0.0-20210606180040-8ecfec1c2869 | [license](third_party/licenses/15b162926414ffc1f5a23b84acaeb454d1e3e59b0ff7f26c84016a9c117d5e05.txt) |
+| github.com/zalando/go-keyring | v0.2.8 | [license](third_party/licenses/14bc00f1a298eb6af250216b9e60027a4386c8a84fa2c7ddc2b5c10908e06d0d.txt) |
 | github.com/zeebo/xxh3 | v1.1.0 | [license](third_party/licenses/f19854b341534d1f2314c0c70d9cd2bb4fa1f7c86fffdc4444ca33cccce412ba.txt) |
 | github.com/zeroshade/machine-id | v0.0.0-20251223181436-930511047eef | [license](third_party/licenses/c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4.txt) |
 | go.mongodb.org/mongo-driver | v1.17.7 | [license](third_party/licenses/c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4.txt) |

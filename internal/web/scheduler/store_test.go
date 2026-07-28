@@ -228,7 +228,7 @@ func TestRunSpecVariableReferencesAreStrictAndSecretFree(t *testing.T) {
 	require.ErrorContains(t, duplicate.validate(), "both a value and a secret reference")
 	invalid := spec
 	invalid.Requested.VariableReferences = map[string]string{"token": "literal-secret"}
-	require.ErrorContains(t, invalid.validate(), "env:NAME")
+	require.ErrorContains(t, invalid.validate(), "provider:key")
 }
 
 func TestStatusFromResultPreservesCancellation(t *testing.T) {

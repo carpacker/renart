@@ -2,25 +2,41 @@ package service
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 	"reflect"
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 
 	"github.com/bruin-data/bruin/pkg/config"
+	"github.com/bruin-data/bruin/pkg/mask"
 	"github.com/bruin-data/bruin/pkg/pipeline"
 	"github.com/spf13/afero"
 	"renart/internal/web/identity"
 	"renart/internal/web/policy"
+	"renart/internal/web/secretstore"
 )
 
 type WorkspaceConfigFieldDef struct {
-	Name         string `json:"name"`
-	Type         string `json:"type"`
-	DefaultValue string `json:"default_value,omitempty"`
-	IsRequired   bool   `json:"is_required"`
+	Name            string `json:"name"`
+	Type            string `json:"type"`
+	DefaultValue    string `json:"default_value,omitempty"`
+	IsRequired      bool   `json:"is_required"`
+	IsSensitive     bool   `json:"is_sensitive"`
+	IsSensitiveFile bool   `json:"is_sensitive_file"`
+}
+
+type WorkspaceConfigSecretField struct {
+	Status    string `json:"status"`
+	Provider  string `json:"provider,omitempty"`
+	Reference string `json:"reference,omitempty"`
+	Message   string `json:"message,omitempty"`
+	Writable  bool   `json:"writable"`
+	Rotatable bool   `json:"rotatable"`
 }
 
 type WorkspaceConfigConnectionType struct {
@@ -33,9 +49,10 @@ type WorkspaceConfigConnectionType struct {
 }
 
 type WorkspaceConfigConnection struct {
-	Name   string         `json:"name"`
-	Type   string         `json:"type"`
-	Values map[string]any `json:"values"`
+	Name         string                                `json:"name"`
+	Type         string                                `json:"type"`
+	Values       map[string]any                        `json:"values"`
+	SecretFields map[string]WorkspaceConfigSecretField `json:"secret_fields,omitempty"`
 	// LoadCategory is "database", "storage", "file" for connections a Load
 	// asset can move data between, or "" for connections that are not Load-movable
 	// data stores. The asset editor's source/target pickers filter on it.
@@ -75,6 +92,7 @@ type WorkspaceConfigResponse struct {
 	Features            map[string]bool                 `json:"features,omitempty"`
 	Retention           WorkspaceRetentionSettings      `json:"retention"`
 	ParseError          string                          `json:"parse_error,omitempty"`
+	SecretBindingsError string                          `json:"secret_bindings_error,omitempty"`
 }
 
 type WorkspaceEnvironmentPolicyResponse struct {
@@ -89,6 +107,7 @@ type UpsertWorkspaceConnectionParams struct {
 	Name            string
 	Type            string
 	Values          map[string]any
+	SecretChanges   map[string]WorkspaceConnectionSecretChange
 }
 
 type TestWorkspaceConnectionParams struct {
@@ -97,19 +116,52 @@ type TestWorkspaceConnectionParams struct {
 	Name            string
 	Type            string
 	Values          map[string]any
+	SecretChanges   map[string]WorkspaceConnectionSecretChange
+}
+
+type WorkspaceConnectionSecretChange struct {
+	Action  string                            `json:"action"`
+	Value   string                            `json:"value,omitempty"`
+	Binding *WorkspaceConnectionSecretBinding `json:"binding,omitempty"`
+}
+
+type WorkspaceConnectionSecretBinding struct {
+	Ref string `json:"ref"`
 }
 
 type ConfigService struct {
-	workspaceRoot string
-	configPath    string
+	workspaceRoot  string
+	configPath     string
+	secretResolver *secretstore.Resolver
+	mu             sync.Mutex
 }
 
-func NewConfigService(workspaceRoot, configPath string) *ConfigService {
+type ConfigServiceOption func(*ConfigService)
+
+func WithSecretResolver(resolver *secretstore.Resolver) ConfigServiceOption {
+	return func(service *ConfigService) {
+		if resolver != nil {
+			service.secretResolver = resolver
+		}
+	}
+}
+
+func NewConfigService(workspaceRoot, configPath string, options ...ConfigServiceOption) *ConfigService {
 	if strings.TrimSpace(configPath) == "" {
 		configPath = filepath.Join(workspaceRoot, ".bruin.yml")
 	}
 
-	return &ConfigService{workspaceRoot: workspaceRoot, configPath: configPath}
+	service := &ConfigService{
+		workspaceRoot:  workspaceRoot,
+		configPath:     configPath,
+		secretResolver: secretstore.NewDefaultResolver(),
+	}
+	for _, option := range options {
+		if option != nil {
+			option(service)
+		}
+	}
+	return service
 }
 
 func (s *ConfigService) ConfigPath() string {
@@ -226,6 +278,12 @@ func (s *ConfigService) Persist(cfg *config.Config) (string, error) {
 	if err := cfg.Persist(); err != nil {
 		return "", err
 	}
+	// The config should contain only secret placeholders after managed writes,
+	// but legacy inline credentials remain supported until they are replaced.
+	// Keep either form private on disk.
+	if err := os.Chmod(s.configPath, 0o600); err != nil {
+		return "", fmt.Errorf("secure config permissions: %w", err)
+	}
 
 	relPath, err := filepath.Rel(s.workspaceRoot, s.configPath)
 	if err != nil {
@@ -237,6 +295,7 @@ func (s *ConfigService) Persist(cfg *config.Config) (string, error) {
 
 func (s *ConfigService) BuildResponse(configPath string, cfg *config.Config) WorkspaceConfigResponse {
 	project := s.ProjectIdentity()
+	manifest, manifestErr := secretstore.LoadManifest(filepath.Join(s.workspaceRoot, ".renart", "secrets.yml"))
 	response := WorkspaceConfigResponse{
 		Status:              "ok",
 		Path:                filepath.Base(configPath),
@@ -250,19 +309,151 @@ func (s *ConfigService) BuildResponse(configPath string, cfg *config.Config) Wor
 		Features:            project.Features,
 		Retention:           workspaceRetentionSettings(project.Retention),
 	}
+	if manifestErr != nil {
+		response.SecretBindingsError = manifestErr.Error()
+		manifest = secretstore.NewManifest()
+	}
 
 	environmentNames := cfg.GetEnvironmentNames()
 	sort.Strings(environmentNames)
 	for _, envName := range environmentNames {
 		env := cfg.Environments[envName]
+		connections := buildWorkspaceConfigConnections(env.Connections)
+		s.decorateWorkspaceConnectionSecrets(project.ID, envName, env.Connections, connections, manifest)
 		response.Environments = append(response.Environments, WorkspaceConfigEnvironment{
 			Name:         envName,
 			SchemaPrefix: env.SchemaPrefix,
-			Connections:  buildWorkspaceConfigConnections(env.Connections),
+			Connections:  connections,
 		})
 	}
 
 	return response
+}
+
+func (s *ConfigService) decorateWorkspaceConnectionSecrets(
+	projectID string,
+	environmentName string,
+	connections *config.Connections,
+	items []WorkspaceConfigConnection,
+	manifest secretstore.Manifest,
+) {
+	if connections == nil {
+		return
+	}
+	for itemIndex := range items {
+		item := &items[itemIndex]
+		rawValues := buildWorkspaceConfigConnectionRawValues(
+			connections.GetConnection(item.Name),
+			item.Type,
+		)
+		for _, fieldDef := range workspaceConnectionFieldDefsForType(item.Type) {
+			if !fieldDef.IsSensitive && !fieldDef.IsSensitiveFile {
+				continue
+			}
+			descriptor := item.SecretFields[fieldDef.Name]
+			rawValue, _ := rawValues[fieldDef.Name].(string)
+			symbolMatch := exactSecretSymbolPattern.FindStringSubmatch(rawValue)
+			binding, hasBinding := manifest.Binding(environmentName, item.Name, fieldDef.Name)
+			if len(symbolMatch) != 2 {
+				switch {
+				case rawValue == "":
+					descriptor.Status = string(secretstore.StatusMissing)
+					descriptor.Provider = "local"
+					descriptor.Writable = true
+					descriptor.Rotatable = true
+				case fieldDef.IsSensitiveFile:
+					descriptor.Status = string(secretstore.StatusConfigured)
+					descriptor.Provider = "file"
+					descriptor.Writable = true
+					descriptor.Rotatable = true
+				default:
+					descriptor.Status = string(secretstore.StatusConfigured)
+					descriptor.Provider = "inline"
+					descriptor.Writable = true
+					descriptor.Rotatable = true
+					descriptor.Message = "Replace this value to move it from the local config into the system credential store."
+				}
+				if hasBinding {
+					descriptor.Message = fmt.Sprintf(
+						"The tracked binding expects ${%s}, but this connection does not use that placeholder.",
+						binding.Symbol,
+					)
+				}
+				item.SecretFields[fieldDef.Name] = descriptor
+				continue
+			}
+
+			symbol := symbolMatch[1]
+			if !hasBinding {
+				binding = secretstore.Binding{
+					Symbol:    symbol,
+					Reference: secretstore.Ref{Provider: "env", Key: symbol},
+				}
+			}
+			descriptor.Provider = binding.Reference.Provider
+			descriptor.Reference = binding.Reference.String()
+			if binding.Symbol != symbol {
+				descriptor.Status = string(secretstore.StatusUnavailable)
+				descriptor.Writable = false
+				descriptor.Rotatable = false
+				descriptor.Message = fmt.Sprintf(
+					"The tracked binding expects ${%s}, but the connection uses ${%s}.",
+					binding.Symbol,
+					symbol,
+				)
+				item.SecretFields[fieldDef.Name] = descriptor
+				continue
+			}
+
+			status, err := s.secretResolver.Stat(context.Background(), secretstore.ResolveRequest{
+				ProjectID:   projectID,
+				Environment: environmentName,
+				Reference:   binding.Reference,
+				Purpose:     secretstore.PurposeSecretAdministration,
+			})
+			if status.State == "" {
+				status.State = secretstore.StatusUnavailable
+			}
+			descriptor.Status = string(status.State)
+			descriptor.Writable = status.Writable
+			descriptor.Rotatable = status.Rotatable
+			if err != nil {
+				descriptor.Message = safeSecretStatusMessage(binding.Reference.Provider, err)
+			}
+			item.SecretFields[fieldDef.Name] = descriptor
+		}
+	}
+}
+
+func safeSecretStatusMessage(provider string, err error) string {
+	switch {
+	case errors.Is(err, secretstore.ErrPermissionRequired):
+		return fmt.Sprintf("%s credential access requires permission.", provider)
+	case errors.Is(err, secretstore.ErrUnavailable):
+		if provider == "local" {
+			return "The system credential store is unavailable or locked. Use an environment reference on headless systems."
+		}
+		return fmt.Sprintf("The %s secret provider is unavailable.", provider)
+	case errors.Is(err, secretstore.ErrUnknownProvider):
+		return fmt.Sprintf("The %s secret provider is not installed.", provider)
+	default:
+		return "The secret status could not be checked."
+	}
+}
+
+func safeSecretResolutionMessage(err error) string {
+	switch {
+	case errors.Is(err, secretstore.ErrNotFound):
+		return "A required secret is missing. Add it in the connection settings or provide the referenced environment variable."
+	case errors.Is(err, secretstore.ErrPermissionRequired):
+		return "A required credential needs permission from the system credential store."
+	case errors.Is(err, secretstore.ErrUnavailable):
+		return "The required secret provider is unavailable or locked."
+	case errors.Is(err, secretstore.ErrUnknownProvider):
+		return "A required secret uses a provider that is not available in this Renart installation."
+	default:
+		return "The connection secrets could not be resolved."
+	}
 }
 
 func (s *ConfigService) BuildParseErrorResponse(parseErr error) WorkspaceConfigResponse {
@@ -336,7 +527,7 @@ func (s *ConfigService) AddConnection(cfg *config.Config, params UpsertWorkspace
 		}
 	}
 
-	values, err := normalizeWorkspaceConnectionValues(typeName, params.Values)
+	values, err := assembleWorkspaceConnectionValues(typeName, params.Values, params.SecretChanges, nil)
 	if err != nil {
 		return err
 	}
@@ -346,9 +537,13 @@ func (s *ConfigService) AddConnection(cfg *config.Config, params UpsertWorkspace
 
 func (s *ConfigService) UpdateConnection(cfg *config.Config, params UpsertWorkspaceConnectionParams) error {
 	environmentName := strings.TrimSpace(params.EnvironmentName)
+	name := strings.TrimSpace(params.Name)
+	if environmentName == "" || name == "" {
+		return fmt.Errorf("environment and name are required")
+	}
 	currentName := strings.TrimSpace(params.CurrentName)
 	if currentName == "" {
-		currentName = strings.TrimSpace(params.Name)
+		currentName = name
 	}
 	environment, exists := cfg.Environments[environmentName]
 	if !exists || environment.Connections == nil {
@@ -359,12 +554,24 @@ func (s *ConfigService) UpdateConnection(cfg *config.Config, params UpsertWorksp
 	if currentType != "" && nextType != "" && currentType != nextType {
 		return fmt.Errorf("connection type is immutable; create a new %s connection instead of changing %q from %s", nextType, currentName, currentType)
 	}
+	if nextType == "" {
+		nextType = currentType
+	}
+	if nextType == "" {
+		return fmt.Errorf("connection type is required")
+	}
+
+	existingValues := buildWorkspaceConfigConnectionRawValues(environment.Connections.GetConnection(currentName), currentType)
+	values, err := assembleWorkspaceConnectionValues(nextType, params.Values, params.SecretChanges, existingValues)
+	if err != nil {
+		return err
+	}
 
 	if err := cfg.DeleteConnection(environmentName, currentName); err != nil {
 		return err
 	}
 
-	return s.AddConnection(cfg, params)
+	return cfg.AddConnection(environmentName, name, nextType, values)
 }
 
 func (s *ConfigService) TestConnection(ctx context.Context, cfg *config.Config, params TestWorkspaceConnectionParams) (string, error) {
@@ -378,6 +585,19 @@ func (s *ConfigService) TestConnection(ctx context.Context, cfg *config.Config, 
 		return "", fmt.Errorf("connection name is required")
 	}
 
+	resolvedSecretChanges, draftSecretBundle, err := s.resolveDraftConnectionSecretChanges(
+		ctx,
+		environmentName,
+		params.SecretChanges,
+	)
+	if err != nil {
+		return "", err
+	}
+	if draftSecretBundle != nil {
+		defer draftSecretBundle.Close(ctx)
+	}
+	params.SecretChanges = resolvedSecretChanges
+
 	if strings.TrimSpace(params.Type) != "" {
 		if err := s.prepareDraftConnection(cfg, TestWorkspaceConnectionParams{
 			EnvironmentName: environmentName,
@@ -385,6 +605,7 @@ func (s *ConfigService) TestConnection(ctx context.Context, cfg *config.Config, 
 			Name:            connectionName,
 			Type:            params.Type,
 			Values:          params.Values,
+			SecretChanges:   params.SecretChanges,
 		}); err != nil {
 			return "", err
 		}
@@ -394,10 +615,27 @@ func (s *ConfigService) TestConnection(ctx context.Context, cfg *config.Config, 
 	if err != nil {
 		return "", err
 	}
-
-	manager, err := newConnectionManagerFromConfig(ctx, selectedCfg)
+	factory := NewResolvedConnectionFactory(
+		s.workspaceRoot,
+		s.configPath,
+		s.ProjectIdentity().ID,
+		s.secretResolver,
+	)
+	resolved, err := factory.ResolveConfig(
+		ctx,
+		selectedCfg,
+		environmentName,
+		secretstore.PurposeConnectionValidation,
+	)
 	if err != nil {
 		return "", err
+	}
+	defer resolved.Close(ctx)
+	redactor := resolved.Redactor
+
+	manager, err := newConnectionManagerFromConfig(ctx, resolved.Config)
+	if err != nil {
+		return "", errors.New(redactor.Mask(err.Error()))
 	}
 
 	conn := manager.GetConnection(connectionName)
@@ -411,10 +649,76 @@ func (s *ConfigService) TestConnection(ctx context.Context, cfg *config.Config, 
 	}
 
 	if err := tester.Ping(ctx); err != nil {
-		return "", fmt.Errorf("failed to test connection '%s': %w", connectionName, err)
+		return "", fmt.Errorf("failed to test connection '%s': %s", connectionName, redactor.Mask(err.Error()))
 	}
 
 	return fmt.Sprintf("Successfully validated connection '%s' in environment %s.", connectionName, environmentName), nil
+}
+
+func (s *ConfigService) resolveDraftConnectionSecretChanges(
+	ctx context.Context,
+	environmentName string,
+	changes map[string]WorkspaceConnectionSecretChange,
+) (map[string]WorkspaceConnectionSecretChange, *secretstore.Bundle, error) {
+	result := cloneWorkspaceSecretChanges(changes)
+	requests := make([]secretstore.NamedRequest, 0)
+	fieldsByRequest := make(map[string]string)
+
+	for fieldName, change := range result {
+		if strings.ToLower(strings.TrimSpace(change.Action)) != "replace" ||
+			change.Binding == nil ||
+			strings.TrimSpace(change.Binding.Ref) == "" {
+			continue
+		}
+		reference, err := secretstore.ParseRef(change.Binding.Ref)
+		if err != nil {
+			return nil, nil, fmt.Errorf("invalid binding for connection secret field %q: %w", fieldName, err)
+		}
+		switch reference.Provider {
+		case "local":
+			// Local replacements carry the write-only value in this request.
+			// The connection test uses it in memory but does not persist it.
+			continue
+		case "env":
+			if change.Value != "" {
+				return nil, nil, fmt.Errorf(
+					"environment binding for connection secret field %q cannot include a secret value",
+					fieldName,
+				)
+			}
+		default:
+			return nil, nil, fmt.Errorf(
+				"connection secret field %q supports only local: and env: bindings in the editor",
+				fieldName,
+			)
+		}
+
+		requestName := "draft." + fieldName
+		requests = append(requests, secretstore.NamedRequest{
+			Name: requestName,
+			Request: secretstore.ResolveRequest{
+				ProjectID:   s.ProjectIdentity().ID,
+				Environment: environmentName,
+				Reference:   reference,
+				Purpose:     secretstore.PurposeConnectionValidation,
+			},
+		})
+		fieldsByRequest[requestName] = fieldName
+	}
+	if len(requests) == 0 {
+		return result, nil, nil
+	}
+
+	bundle, err := s.secretResolver.ResolveAll(ctx, requests)
+	if err != nil {
+		return nil, nil, err
+	}
+	for requestName, fieldName := range fieldsByRequest {
+		change := result[fieldName]
+		change.Value = string(bundle.Value(requestName))
+		result[fieldName] = change
+	}
+	return result, bundle, nil
 }
 
 func (s *ConfigService) prepareDraftConnection(cfg *config.Config, params TestWorkspaceConnectionParams) error {
@@ -442,13 +746,22 @@ func (s *ConfigService) prepareDraftConnection(cfg *config.Config, params TestWo
 		currentName = name
 	}
 
-	if err := cfg.DeleteConnection(environmentName, currentName); err != nil && !strings.Contains(err.Error(), "does not exist") {
+	environment := cfg.Environments[environmentName]
+	existingType := normalizeConnectionType(environment.Connections.ConnectionsSummaryList()[currentName])
+	var existingValues map[string]any
+	if existingType == normalizeConnectionType(typeName) {
+		existingValues = buildWorkspaceConfigConnectionRawValues(environment.Connections.GetConnection(currentName), existingType)
+	}
+
+	values, err := assembleWorkspaceConnectionValues(typeName, params.Values, params.SecretChanges, existingValues)
+	if err != nil {
 		return err
 	}
 
-	values, err := normalizeWorkspaceConnectionValues(typeName, params.Values)
-	if err != nil {
-		return err
+	if environment.Connections.Exists(currentName) {
+		if err := cfg.DeleteConnection(environmentName, currentName); err != nil {
+			return err
+		}
 	}
 
 	return cfg.AddConnection(environmentName, name, typeName, values)
@@ -514,10 +827,25 @@ func BuildWorkspaceConfigConnectionTypes() []WorkspaceConfigConnectionType {
 
 func buildWorkspaceConfigFieldDefs(connectionType reflect.Type) []WorkspaceConfigFieldDef {
 	fields := make([]WorkspaceConfigFieldDef, 0, connectionType.NumField())
+	appendWorkspaceConfigFieldDefs(connectionType, &fields)
+	return fields
+}
+
+func appendWorkspaceConfigFieldDefs(connectionType reflect.Type, fields *[]WorkspaceConfigFieldDef) {
 	for index := 0; index < connectionType.NumField(); index++ {
 		structField := connectionType.Field(index)
 		if !structField.IsExported() {
 			continue
+		}
+		if structField.Anonymous {
+			embeddedType := structField.Type
+			if embeddedType.Kind() == reflect.Pointer {
+				embeddedType = embeddedType.Elem()
+			}
+			if embeddedType.Kind() == reflect.Struct {
+				appendWorkspaceConfigFieldDefs(embeddedType, fields)
+				continue
+			}
 		}
 
 		mapstructureTag := structField.Tag.Get("mapstructure")
@@ -548,18 +876,21 @@ func buildWorkspaceConfigFieldDefs(connectionType reflect.Type) []WorkspaceConfi
 		}
 
 		yamlTag := structField.Tag.Get("yaml")
-		fields = append(fields, WorkspaceConfigFieldDef{
-			Name:         mapstructureTag,
-			Type:         fieldType,
-			DefaultValue: defaultValue,
-			IsRequired:   !strings.Contains(yamlTag, "omitempty"),
+		*fields = append(*fields, WorkspaceConfigFieldDef{
+			Name:            mapstructureTag,
+			Type:            fieldType,
+			DefaultValue:    defaultValue,
+			IsRequired:      !strings.Contains(yamlTag, "omitempty"),
+			IsSensitive:     structField.Tag.Get("sensitive") == "true",
+			IsSensitiveFile: structField.Tag.Get("sensitive_file") == "true",
 		})
 	}
-
-	return fields
 }
 
 func buildWorkspaceConfigFieldType(fieldType reflect.Type) string {
+	if fieldType.Kind() == reflect.Pointer {
+		fieldType = fieldType.Elem()
+	}
 	switch fieldType.Kind() { //nolint:exhaustive
 	case reflect.String:
 		return "string"
@@ -619,6 +950,7 @@ func buildWorkspaceConfigConnections(connections *config.Connections) []Workspac
 				Name:         named.GetName(),
 				Type:         typeName,
 				Values:       buildWorkspaceConfigConnectionValues(connectionInterface, typeName),
+				SecretFields: buildWorkspaceConfigConnectionSecretFields(connectionInterface, typeName),
 				LoadCategory: loadConnectionCategory(typeName),
 			})
 		}
@@ -635,6 +967,22 @@ func buildWorkspaceConfigConnections(connections *config.Connections) []Workspac
 }
 
 func buildWorkspaceConfigConnectionValues(connectionValue any, typeName string) map[string]any {
+	return buildWorkspaceConfigConnectionValuesMatching(connectionValue, typeName, func(field WorkspaceConfigFieldDef) bool {
+		return !field.IsSensitive && !field.IsSensitiveFile
+	})
+}
+
+func buildWorkspaceConfigConnectionRawValues(connectionValue any, typeName string) map[string]any {
+	return buildWorkspaceConfigConnectionValuesMatching(connectionValue, typeName, func(WorkspaceConfigFieldDef) bool {
+		return true
+	})
+}
+
+func buildWorkspaceConfigConnectionValuesMatching(
+	connectionValue any,
+	typeName string,
+	include func(WorkspaceConfigFieldDef) bool,
+) map[string]any {
 	result := make(map[string]any)
 	fieldDefs := workspaceConnectionFieldDefsForType(typeName)
 	if len(fieldDefs) == 0 {
@@ -649,41 +997,175 @@ func buildWorkspaceConfigConnectionValues(connectionValue any, typeName string) 
 		return result
 	}
 
-	valueType := value.Type()
 	for _, fieldDef := range fieldDefs {
-		for index := 0; index < value.NumField(); index++ {
-			structField := valueType.Field(index)
-			mapstructureTag := structField.Tag.Get("mapstructure")
-			if separator := strings.Index(mapstructureTag, ","); separator >= 0 {
-				mapstructureTag = mapstructureTag[:separator]
+		if !include(fieldDef) {
+			continue
+		}
+		fieldValue, ok := workspaceConnectionFieldValue(value, fieldDef.Name)
+		if !ok {
+			continue
+		}
+		for fieldValue.Kind() == reflect.Pointer {
+			if fieldValue.IsNil() {
+				ok = false
+				break
 			}
-			if mapstructureTag != fieldDef.Name {
+			fieldValue = fieldValue.Elem()
+		}
+		if !ok {
+			continue
+		}
+		switch fieldValue.Kind() { //nolint:exhaustive
+		case reflect.String:
+			result[fieldDef.Name] = fieldValue.String()
+		case reflect.Bool:
+			result[fieldDef.Name] = fieldValue.Bool()
+		case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
+			result[fieldDef.Name] = fieldValue.Int()
+		case reflect.Slice:
+			if fieldValue.Type().Elem().Kind() != reflect.String {
 				continue
 			}
-
-			fieldValue := value.Field(index)
-			switch fieldValue.Kind() { //nolint:exhaustive
-			case reflect.String:
-				result[fieldDef.Name] = fieldValue.String()
-			case reflect.Bool:
-				result[fieldDef.Name] = fieldValue.Bool()
-			case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
-				result[fieldDef.Name] = fieldValue.Int()
-			case reflect.Slice:
-				if fieldValue.Type().Elem().Kind() != reflect.String {
-					continue
-				}
-				values := make([]string, 0, fieldValue.Len())
-				for itemIndex := 0; itemIndex < fieldValue.Len(); itemIndex++ {
-					values = append(values, fieldValue.Index(itemIndex).String())
-				}
-				result[fieldDef.Name] = values
+			values := make([]string, 0, fieldValue.Len())
+			for itemIndex := 0; itemIndex < fieldValue.Len(); itemIndex++ {
+				values = append(values, fieldValue.Index(itemIndex).String())
 			}
-			break
+			result[fieldDef.Name] = values
 		}
 	}
 
 	return result
+}
+
+func workspaceConnectionFieldValue(value reflect.Value, fieldName string) (reflect.Value, bool) {
+	for value.Kind() == reflect.Pointer {
+		if value.IsNil() {
+			return reflect.Value{}, false
+		}
+		value = value.Elem()
+	}
+	if !value.IsValid() || value.Kind() != reflect.Struct {
+		return reflect.Value{}, false
+	}
+	valueType := value.Type()
+	for index := 0; index < value.NumField(); index++ {
+		structField := valueType.Field(index)
+		if !structField.IsExported() {
+			continue
+		}
+		if structField.Anonymous {
+			if nested, ok := workspaceConnectionFieldValue(value.Field(index), fieldName); ok {
+				return nested, true
+			}
+		}
+		mapstructureTag := structField.Tag.Get("mapstructure")
+		if separator := strings.Index(mapstructureTag, ","); separator >= 0 {
+			mapstructureTag = mapstructureTag[:separator]
+		}
+		if mapstructureTag == fieldName {
+			return value.Field(index), true
+		}
+	}
+	return reflect.Value{}, false
+}
+
+func buildWorkspaceConfigConnectionSecretFields(connectionValue any, typeName string) map[string]WorkspaceConfigSecretField {
+	result := make(map[string]WorkspaceConfigSecretField)
+	rawValues := buildWorkspaceConfigConnectionRawValues(connectionValue, typeName)
+	for _, fieldDef := range workspaceConnectionFieldDefsForType(typeName) {
+		if !fieldDef.IsSensitive && !fieldDef.IsSensitiveFile {
+			continue
+		}
+		status := "missing"
+		if workspaceConnectionValueConfigured(rawValues[fieldDef.Name]) {
+			status = "configured"
+		}
+		result[fieldDef.Name] = WorkspaceConfigSecretField{
+			Status:    status,
+			Writable:  true,
+			Rotatable: true,
+		}
+	}
+	return result
+}
+
+func workspaceConnectionValueConfigured(value any) bool {
+	switch typed := value.(type) {
+	case nil:
+		return false
+	case string:
+		return typed != ""
+	case []string:
+		return len(typed) > 0
+	default:
+		return !reflect.ValueOf(value).IsZero()
+	}
+}
+
+func assembleWorkspaceConnectionValues(
+	typeName string,
+	values map[string]any,
+	secretChanges map[string]WorkspaceConnectionSecretChange,
+	existingValues map[string]any,
+) (map[string]any, error) {
+	fieldDefs := workspaceConnectionFieldDefsForType(typeName)
+	fieldsByName := make(map[string]WorkspaceConfigFieldDef, len(fieldDefs))
+	for _, fieldDef := range fieldDefs {
+		fieldsByName[fieldDef.Name] = fieldDef
+	}
+
+	result := make(map[string]any, len(values)+len(secretChanges))
+	for name, value := range values {
+		fieldDef, exists := fieldsByName[name]
+		if !exists {
+			// Preserve the existing config-editor behavior: provider-specific
+			// discovery drafts may carry harmless coordinates (for example a
+			// selected database) that are not persisted by this connection type.
+			continue
+		}
+		if fieldDef.IsSensitive || fieldDef.IsSensitiveFile {
+			return nil, fmt.Errorf("sensitive connection field %q must use secret_changes", name)
+		}
+		result[name] = value
+	}
+
+	for name, change := range secretChanges {
+		fieldDef, exists := fieldsByName[name]
+		if !exists {
+			return nil, fmt.Errorf("unknown connection secret field %q for type %q", name, typeName)
+		}
+		if !fieldDef.IsSensitive && !fieldDef.IsSensitiveFile {
+			return nil, fmt.Errorf("connection field %q is not sensitive", name)
+		}
+		switch strings.ToLower(strings.TrimSpace(change.Action)) {
+		case "keep":
+			if existingValue, ok := existingValues[name]; ok {
+				result[name] = existingValue
+			}
+		case "replace":
+			if change.Value == "" {
+				return nil, fmt.Errorf("replacement value for connection secret field %q is required", name)
+			}
+			result[name] = change.Value
+		case "clear":
+			if change.Value != "" {
+				return nil, fmt.Errorf("clear action for connection secret field %q cannot include a value", name)
+			}
+		default:
+			return nil, fmt.Errorf("connection secret field %q action must be keep, replace, or clear", name)
+		}
+	}
+
+	for _, fieldDef := range fieldDefs {
+		if (!fieldDef.IsSensitive && !fieldDef.IsSensitiveFile) || secretChanges[fieldDef.Name].Action != "" {
+			continue
+		}
+		if existingValue, ok := existingValues[fieldDef.Name]; ok {
+			result[fieldDef.Name] = existingValue
+		}
+	}
+
+	return normalizeWorkspaceConnectionValues(typeName, result)
 }
 
 func normalizeWorkspaceConnectionValues(typeName string, values map[string]any) (map[string]any, error) {
@@ -697,7 +1179,11 @@ func normalizeWorkspaceConnectionValues(typeName string, values map[string]any) 
 
 		switch fieldDef.Type {
 		case "string":
-			result[fieldDef.Name] = strings.TrimSpace(fmt.Sprint(rawValue))
+			stringValue := fmt.Sprint(rawValue)
+			if !fieldDef.IsSensitive && !fieldDef.IsSensitiveFile {
+				stringValue = strings.TrimSpace(stringValue)
+			}
+			result[fieldDef.Name] = stringValue
 		case "bool":
 			boolValue, err := normalizeWorkspaceBoolValue(rawValue)
 			if err != nil {
@@ -716,6 +1202,54 @@ func normalizeWorkspaceConnectionValues(typeName string, values map[string]any) 
 	}
 
 	return result, nil
+}
+
+func workspaceConnectionSensitiveValues(cfg *config.Config) []string {
+	if cfg == nil || cfg.SelectedEnvironment == nil || cfg.SelectedEnvironment.Connections == nil {
+		return nil
+	}
+	values, _ := mask.SensitiveValues(cfg.SelectedEnvironment.Connections)
+	appendWorkspaceSensitiveFilePaths(reflect.ValueOf(cfg.SelectedEnvironment.Connections), &values)
+	return values
+}
+
+func redactWorkspaceConnectionMessage(cfg *config.Config, message string) string {
+	return mask.New(workspaceConnectionSensitiveValues(cfg)).Mask(message)
+}
+
+func appendWorkspaceSensitiveFilePaths(value reflect.Value, values *[]string) {
+	for value.Kind() == reflect.Pointer || value.Kind() == reflect.Interface {
+		if value.IsNil() {
+			return
+		}
+		value = value.Elem()
+	}
+	switch value.Kind() { //nolint:exhaustive
+	case reflect.Struct:
+		valueType := value.Type()
+		for index := 0; index < value.NumField(); index++ {
+			structField := valueType.Field(index)
+			if !structField.IsExported() {
+				continue
+			}
+			fieldValue := value.Field(index)
+			if structField.Tag.Get("sensitive_file") == "true" && fieldValue.Kind() == reflect.String {
+				if path := fieldValue.String(); path != "" {
+					*values = append(*values, path)
+				}
+				continue
+			}
+			appendWorkspaceSensitiveFilePaths(fieldValue, values)
+		}
+	case reflect.Slice, reflect.Array:
+		for index := 0; index < value.Len(); index++ {
+			appendWorkspaceSensitiveFilePaths(value.Index(index), values)
+		}
+	case reflect.Map:
+		for _, key := range value.MapKeys() {
+			appendWorkspaceSensitiveFilePaths(value.MapIndex(key), values)
+		}
+	}
 }
 
 func workspaceConnectionFieldDefsForType(typeName string) []WorkspaceConfigFieldDef {

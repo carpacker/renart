@@ -38,7 +38,8 @@ func TestScheduleDeclarationReconcileKeepsDeploymentPinsLocal(t *testing.T) {
 		ResolvePipelineRef: func(context.Context, string) (PipelineRef, bool) {
 			return PipelineRef{EncodedID: "pipeline-id", Name: "analytics"}, true
 		},
-		ResolveScheduleSecrets: func(_ context.Context, refs map[string]string) (map[string]any, error) {
+		ResolveScheduleSecrets: func(_ context.Context, environment string, refs map[string]string) (map[string]any, error) {
+			assert.Equal(t, "prod", environment)
 			assert.Equal(t, map[string]string{"token": "env:RENART_TOKEN"}, refs)
 			return map[string]any{"token": "resolved-secret"}, nil
 		},
@@ -101,7 +102,7 @@ func TestScheduledSecretReferencesResolveEphemerallyAndFailOnPlanDrift(t *testin
 		ResolvePipelineRef: func(context.Context, string) (PipelineRef, bool) {
 			return PipelineRef{EncodedID: "pipeline-id", Name: "analytics"}, true
 		},
-		ResolveScheduleSecrets: func(context.Context, map[string]string) (map[string]any, error) {
+		ResolveScheduleSecrets: func(context.Context, string, map[string]string) (map[string]any, error) {
 			return map[string]any{"token": secret}, nil
 		},
 		PlanScheduledRun: func(ctx context.Context, req ScheduledRunPlanRequest) (ScheduledRunPlanResult, error) {

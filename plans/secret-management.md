@@ -1,9 +1,14 @@
 # Secret management
 
-> **Status (2026-07-24): concept and implementation proposal only — not
-> implemented.** This document describes a staged direction for local and
-> hosted secret management. Nothing here should appear as an available feature
-> in user-facing documentation until the corresponding phase ships.
+> **Status (2026-07-26): Phase 0 and the core local Phase 1 path are
+> implemented; schedule convergence from Phase 2 has started.** Connection
+> credentials are write-only, `local:` values use the OS credential store,
+> `env:` remains first-class for headless systems, `.renart/secrets.yml` tracks
+> value-free bindings, and production connection-manager paths resolve through
+> one operation-scoped service. Schedules use the same typed resolver. CLI
+> administration, provider-backed temporary files, explicit Python injection,
+> team providers, and the hosted provider model remain in progress and must not
+> appear as available features in user-facing documentation.
 
 ## 1. Decision summary
 
@@ -60,9 +65,9 @@ CI, self-hosted runners, and a future hosted service the same project contract.
 
 ## 3. Current-state audit
 
-### 3.1 Connection editing currently exposes values
+### 3.1 Connection editing before Phase 0 exposed values
 
-`ConfigService.BuildResponse` reflects each connection into
+Before Phase 0, `ConfigService.BuildResponse` reflected each connection into
 `WorkspaceConfigConnection.Values`. Sensitive fields therefore cross
 `GET /api/config`, enter browser state, and are populated into ordinary form
 inputs. The UI only chooses password-style rendering by inspecting field names.
@@ -72,11 +77,13 @@ The connection structs already provide a stronger source of truth:
 definition currently drops those tags even though it retains field type,
 requiredness, and defaults.
 
-Connection create, update, and test requests also use one undifferentiated
+Connection create, update, and test requests also used one undifferentiated
 `values` map. Updating a connection deletes and rebuilds it, so simply omitting
-a secret from a request would currently clear it. A write-only API therefore
-needs explicit keep/replace/clear semantics before responses can stop returning
-values.
+a secret from a request would clear it. A write-only API therefore
+needed explicit keep/replace/clear semantics before responses could stop
+returning values. Phase 0 now provides that boundary; plaintext persistence
+remains supported only as a legacy input and moves to the OS credential store
+when the user replaces it through the connection editor.
 
 ### 3.2 The config format already has a portable reference
 
@@ -414,11 +421,11 @@ unlocked collection is available. Headless Linux is common for scheduled
 runs; environment variables and external providers remain first-class rather
 than silently falling back to plaintext.
 
-A Go adapter such as
-[`zalando/go-keyring`](https://github.com/zalando/go-keyring) demonstrates the
-cross-platform surface, but its size limits and subprocess/platform behavior
-must be evaluated before selection. The provider interface should keep that
-choice replaceable.
+The current `local:` provider uses
+[`zalando/go-keyring`](https://github.com/zalando/go-keyring) behind Renart's
+own provider interface. The interface keeps the adapter replaceable and lets
+tests use an in-memory credential-store implementation without adding a
+production plaintext fallback.
 
 Local schedules need a startup preflight. A locked keychain should mark the
 schedule blocked with an actionable status; it must not repeatedly prompt or
@@ -506,26 +513,42 @@ Required invariants:
 
 ### Phase 0 — stop round-tripping credentials
 
-- expose sensitive field tags in generated API types;
-- add keep/replace/clear request semantics;
-- omit sensitive values from config responses and SSE-derived state;
-- add regression tests that plant recognizable canary values across every
-  connection type and assert they never cross the HTTP API;
-- keep existing plaintext persistence temporarily behind the write-only API.
+Implemented on 2026-07-26:
+
+- sensitive field tags are exposed in generated API types;
+- connection mutations and draft tests use keep/replace/clear semantics;
+- config responses and SSE-derived reloads omit sensitive values;
+- reflection and HTTP canary tests cover tagged connection fields and response
+  boundaries.
 
 Estimated effort: 4–6 engineering days. This is independently valuable and
 should ship first.
 
 ### Phase 1 — local bindings and keychain
 
-- add the versioned `.renart/secrets.yml` parser and typed references;
-- implement `env:` and `local:` providers;
-- add the resolved-config factory and migrate connection test, inspect,
-  materialize, render, typecheck schema access, notebooks, and ad-hoc queries;
-- migrate a plaintext field to `${NAME}` + keychain in one transaction with a
-  previewable Git diff;
-- add CLI commands for set/status/remove and a scoped `exec`/environment bridge
-  for terminal interoperability.
+Implemented on 2026-07-26:
+
+- the strict, versioned `.renart/secrets.yml` parser and typed references;
+- `env:` plus native OS credential-store-backed `local:` providers, with
+  operation-scoped leases and explicit configured/missing/unavailable status;
+- one resolved-config factory for production connection construction across
+  connection test, inspect/query, materialization, schema/discovery,
+  onboarding, notebook imports, and ad-hoc queries;
+- compensating provider/manifest/config updates for connection and environment
+  create, rename, clone, replace, clear, and delete flows;
+- a connection-editor source choice between the credential store and
+  environment-variable references, including actionable headless errors;
+- secret-free binding identity in plans and freshness: rebinding changes the
+  digest, while rotating a value behind the same reference does not.
+
+Still open in this phase:
+
+- CLI set/status/remove commands and a scoped `exec`/environment bridge for
+  terminal interoperability;
+- an explicit migration preview and stronger crash-injection coverage across
+  the provider plus two filesystem writes;
+- provider-backed `sensitive_file` leases that materialize private temporary
+  files for one operation.
 
 Estimated effort: 2–3 weeks. The migration must be crash-safe: write the
 keychain value, verify it, update project files atomically, then optionally
@@ -533,8 +556,17 @@ remove the old literal.
 
 ### Phase 2 — schedules and Python convergence
 
-- generalize schedule references through the shared resolver;
-- add headless availability status;
+Implemented so far:
+
+- schedule references use the shared typed parser and resolver, preserve only
+  refs in durable state, and resolve separately for validation and execution;
+- connection settings expose provider health and an environment-reference path
+  when a desktop credential service is unavailable;
+- notebook imports that need a named project connection use the
+  `notebook_query` purpose through the Go connection factory.
+
+Still open:
+
 - move remaining Python connection use behind the broker where possible;
 - make all redaction and subprocess boundaries consume the resolved bundle.
 

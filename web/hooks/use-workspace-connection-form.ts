@@ -4,6 +4,8 @@ import { Dispatch, SetStateAction, useEffect, useMemo, useState } from "react";
 
 import {
   buildConnectionFieldDefaults,
+  buildConnectionSecretChanges,
+  connectionSecretsReady,
   findConnectionByName,
   findEnvironmentByName,
   getFallbackEnvironmentName,
@@ -13,15 +15,17 @@ import {
   WorkspaceConfigConnectionType,
   WorkspaceConfigEnvironment,
   WorkspaceConfigResponse,
+  WorkspaceConnectionSecretChanges,
 } from "@/lib/types";
 
 export type ConnectionMode = "edit" | "create";
 
-type ConnectionFormState = {
+export type ConnectionFormState = {
   environmentName: string;
   name: string;
   type: string;
   values: Record<string, string | number | boolean | string[]>;
+  secretChanges: WorkspaceConnectionSecretChanges;
 };
 
 export function useWorkspaceConnectionForm({
@@ -48,6 +52,7 @@ export function useWorkspaceConnectionForm({
     name: string;
     type: string;
     values: Record<string, unknown>;
+    secret_changes?: WorkspaceConnectionSecretChanges;
   }) => Promise<WorkspaceConfigResponse>;
   onDeleteConnection: (input: {
     environment_name: string;
@@ -62,6 +67,7 @@ export function useWorkspaceConnectionForm({
     name: string;
     type: string;
     values: Record<string, unknown>;
+    secret_changes?: WorkspaceConnectionSecretChanges;
   }) => Promise<WorkspaceConfigResponse>;
   requestedConnectionType?: string;
   selectedConnectionName?: string | null;
@@ -72,6 +78,7 @@ export function useWorkspaceConnectionForm({
     name: "",
     type: "",
     values: {},
+    secretChanges: {},
   });
 
   const activeEnvironment = useMemo(
@@ -112,6 +119,9 @@ export function useWorkspaceConnectionForm({
           typeName: fallbackType,
           existingConnection: null,
         }),
+        secretChanges: buildConnectionSecretChanges(
+          connectionTypes.find((connectionType) => connectionType.type_name === fallbackType),
+        ),
       });
       return;
     }
@@ -126,6 +136,7 @@ export function useWorkspaceConnectionForm({
           typeName: connectionTypes[0]?.type_name ?? "",
           existingConnection: null,
         }),
+        secretChanges: buildConnectionSecretChanges(connectionTypes[0]),
       });
       return;
     }
@@ -139,6 +150,11 @@ export function useWorkspaceConnectionForm({
         typeName: activeConnection.type,
         existingConnection: activeConnection,
       }),
+      secretChanges: buildConnectionSecretChanges(
+        connectionTypes.find(
+          (connectionType) => connectionType.type_name === activeConnection.type,
+        ),
+      ),
     });
   }, [
     activeConnection,
@@ -157,6 +173,7 @@ export function useWorkspaceConnectionForm({
       name: connectionForm.name.trim(),
       type: connectionForm.type,
       values: connectionForm.values,
+      secret_changes: connectionForm.secretChanges,
     };
 
     if (mode === "create") {
@@ -204,6 +221,11 @@ export function useWorkspaceConnectionForm({
     activeEnvironment,
     connectionForm,
     selectedConnectionType,
+    secretFieldsReady: connectionSecretsReady({
+      connection: activeConnection,
+      connectionType: selectedConnectionType,
+      secretChanges: connectionForm.secretChanges,
+    }),
     setConnectionForm: setConnectionForm as Dispatch<SetStateAction<ConnectionFormState>>,
     handleDelete,
     handleSave,

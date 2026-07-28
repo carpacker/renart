@@ -146,7 +146,12 @@ func (e *HybridBruinExecutor) resolveExecutionTargetSnapshotForSelection(
 		entries[assetName] = entry
 	}
 
-	configurationIdentity := selectedPipelineConfigurationIdentity(cfg, pl, configurationAssets)
+	configurationIdentity := selectedPipelineConfigurationIdentity(
+		e.workspaceRoot,
+		cfg,
+		pl,
+		configurationAssets,
+	)
 	return ExecutionTargetSnapshot{
 		Version:               ExecutionTargetSnapshotVersion,
 		PipelineUUID:          pipelineID,

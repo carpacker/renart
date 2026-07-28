@@ -52,6 +52,7 @@ import type {
   WebColumnCheck,
   WebCustomCheck,
   WorkspaceConfigConnection,
+  WorkspaceConfigSecretField,
   WorkspaceConfigConnectionType as GeneratedWorkspaceConfigConnectionType,
   WorkspaceConfigEnvironment,
   WorkspaceConfigFieldDef as GeneratedWorkspaceConfigFieldDef,
@@ -92,10 +93,23 @@ export type {
   WebColumnCheck,
   WebCustomCheck,
   WorkspaceConfigConnection,
+  WorkspaceConfigSecretField,
   WorkspaceConfigEnvironment,
 };
 
 export type WorkspaceConfigFieldType = "string" | "int" | "bool" | "string_array";
+
+export type WorkspaceConnectionSecretAction = "keep" | "replace" | "clear";
+
+export type WorkspaceConnectionSecretChange = {
+  action: WorkspaceConnectionSecretAction;
+  value?: string;
+  binding?: {
+    ref: string;
+  };
+};
+
+export type WorkspaceConnectionSecretChanges = Record<string, WorkspaceConnectionSecretChange>;
 
 export type WorkspaceConfigFieldDef = Omit<GeneratedWorkspaceConfigFieldDef, "type"> & {
   type: WorkspaceConfigFieldType;

@@ -59,7 +59,7 @@ func TestExecutionTargetSnapshotCapturesSecretFreeTargetAndFingerprintEvidence(t
 	require.NoError(t, err)
 	require.Equal(t, ExecutionTargetSnapshotVersion, snapshot.Version)
 	assert.Equal(t, pl.LegacyID, snapshot.PipelineUUID)
-	expectedConfiguration := selectedPipelineConfigurationIdentity(cfg, pl, pl.Assets)
+	expectedConfiguration := selectedPipelineConfigurationIdentity("", cfg, pl, pl.Assets)
 	assert.Equal(t, expectedConfiguration.Digest, snapshot.ConfigurationDigest)
 	assert.Equal(t, string(expectedConfiguration.Fidelity), snapshot.ConfigurationFidelity)
 	assert.NotEmpty(t, snapshot.ConfigurationDigest)
