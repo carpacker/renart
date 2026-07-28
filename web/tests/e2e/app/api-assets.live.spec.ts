@@ -60,6 +60,52 @@ parameters:
     await expect(suggestWidget.getByText("response", { exact: true })).toBeVisible();
   });
 
+  test("API YAML editor previews rendered Jinja values", async ({ liveApp, page }) => {
+    await writeFile(
+      join(liveApp.workspaceDir, apiAssetPath),
+      `name: analytics.players_api
+type: api
+
+parameters:
+  request:
+    url: https://api.example.com/players?since={{ start_date }}
+    method: GET
+`,
+      "utf8",
+    );
+    await waitForWorkspaceAsset(page, liveApp.baseURL, apiAssetId);
+
+    const renderResponse = page.waitForResponse(
+      (response) =>
+        response.url().includes(`/api/assets/${apiAssetId}/render-jinja`) &&
+        response.request().method() === "POST",
+    );
+    await page.goto(`${liveApp.baseURL}/pipelines/${pipelineId}/assets/${apiAssetId}/code`);
+    await expect(page.locator(".monaco-editor").first()).toBeVisible({ timeout: 15000 });
+
+    const response = await renderResponse;
+    expect(response.ok()).toBe(true);
+    const body = (await response.json()) as {
+      status: string;
+      spans: Array<{ expression: string; rendered_text: string }>;
+    };
+    expect(body.status).toBe("ok");
+    expect(body.spans).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          expression: "start_date",
+          rendered_text: expect.stringMatching(/\d{4}-\d{2}-\d{2}/),
+        }),
+      ]),
+    );
+
+    if (!test.info().project.name.includes("mobile")) {
+      await expect(page.locator(".bruin-jinja-rendered-ghost").first()).toBeVisible({
+        timeout: 10000,
+      });
+    }
+  });
+
   test("OpenAPI columns feed workspace and SQL parse-context", async ({ liveApp, page }) => {
     const specServer = await startOpenAPIServer();
     try {

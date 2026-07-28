@@ -149,86 +149,89 @@ export function registerJinjaProviders(
 ): MonacoNS.IDisposable {
   const disposables: MonacoNS.IDisposable[] = [];
 
-  disposables.push(
-    monaco.languages.registerCompletionItemProvider("sql", {
-      triggerCharacters: ["{", ".", "|", "%", " "],
-      provideCompletionItems(model, position) {
-        const span = jinjaSpanAtPosition(model, position);
-        if (!span || span.type === "comment") {
-          return { suggestions: [] };
-        }
+  for (const language of ["sql", "yaml"]) {
+    disposables.push(
+      monaco.languages.registerCompletionItemProvider(language, {
+        triggerCharacters: ["{", ".", "|", "%", " "],
+        provideCompletionItems(model, position) {
+          const span = jinjaSpanAtPosition(model, position);
+          if (!span || span.type === "comment") {
+            return { suggestions: [] };
+          }
 
-        const word = model.getWordUntilPosition(position);
-        const range = {
-          startLineNumber: position.lineNumber,
-          endLineNumber: position.lineNumber,
-          startColumn: word.startColumn,
-          endColumn: word.endColumn,
-        };
-        const before = model.getValueInRange({
-          startLineNumber: span.startLine,
-          startColumn: span.startColumn,
-          endLineNumber: position.lineNumber,
-          endColumn: position.column,
-        });
-        const renderResult = getRenderResult(model);
-        const variables = renderResult?.variables ?? [];
+          const word = model.getWordUntilPosition(position);
+          const range = {
+            startLineNumber: position.lineNumber,
+            endLineNumber: position.lineNumber,
+            startColumn: word.startColumn,
+            endColumn: word.endColumn,
+          };
+          const before = model.getValueInRange({
+            startLineNumber: span.startLine,
+            startColumn: span.startColumn,
+            endLineNumber: position.lineNumber,
+            endColumn: position.column,
+          });
+          const renderResult = getRenderResult(model);
+          const variables = renderResult?.variables ?? [];
 
-        if (/\|\s*[A-Za-z_]*$/.test(before)) {
-          return { suggestions: filterSuggestions(monaco, range) };
-        }
+          if (/\|\s*[A-Za-z_]*$/.test(before)) {
+            return { suggestions: filterSuggestions(monaco, range) };
+          }
 
-        if (/\bvar\.[A-Za-z_]*$/.test(before)) {
-          return { suggestions: variablePropertySuggestions(monaco, variables, range) };
-        }
+          if (/\bvar\.[A-Za-z_]*$/.test(before)) {
+            return { suggestions: variablePropertySuggestions(monaco, variables, range) };
+          }
 
-        if (span.type === "statement") {
-          const statementBefore = before.replace(/^\{%[-]?\s*/, "");
-          const suggestions = statementExpressionSuggestions(
-            monaco,
-            variables,
-            renderResult?.macros ?? [],
-            range,
-            statementBefore,
+          if (span.type === "statement") {
+            const statementBefore = before.replace(/^\{%[-]?\s*/, "");
+            const suggestions = statementExpressionSuggestions(
+              monaco,
+              variables,
+              renderResult?.macros ?? [],
+              range,
+              statementBefore,
+            );
+            return { suggestions };
+          }
+
+          return {
+            suggestions: [
+              ...builtinVariableSuggestions(monaco, range),
+              ...macroSuggestions(monaco, renderResult?.macros ?? [], range),
+            ],
+          };
+        },
+      }),
+    );
+
+    disposables.push(
+      monaco.languages.registerHoverProvider(language, {
+        provideHover(model, position) {
+          const span = jinjaSpanAtPosition(model, position);
+          if (!span) return null;
+          const rendered = getRenderResult(model)?.spans.find(
+            (candidate) =>
+              candidate.start_line === span.startLine &&
+              candidate.start_column === span.startColumn,
           );
-          return { suggestions };
-        }
-
-        return {
-          suggestions: [
-            ...builtinVariableSuggestions(monaco, range),
-            ...macroSuggestions(monaco, renderResult?.macros ?? [], range),
-          ],
-        };
-      },
-    }),
-  );
-
-  disposables.push(
-    monaco.languages.registerHoverProvider("sql", {
-      provideHover(model, position) {
-        const span = jinjaSpanAtPosition(model, position);
-        if (!span) return null;
-        const rendered = getRenderResult(model)?.spans.find(
-          (candidate) =>
-            candidate.start_line === span.startLine && candidate.start_column === span.startColumn,
-        );
-        const contents = [
-          { value: span.type === "expression" ? "**Jinja expression**" : "**Jinja statement**" },
-          { value: `\`${span.content}\`` },
-        ];
-        if (rendered?.rendered_text) {
-          contents.push({ value: `Rendered: \`${rendered.rendered_text}\`` });
-        } else if (rendered?.error) {
-          contents.push({ value: `Render error: \`${rendered.error}\`` });
-        }
-        return {
-          range: new monaco.Range(span.startLine, span.startColumn, span.endLine, span.endColumn),
-          contents,
-        };
-      },
-    }),
-  );
+          const contents = [
+            { value: span.type === "expression" ? "**Jinja expression**" : "**Jinja statement**" },
+            { value: `\`${span.content}\`` },
+          ];
+          if (rendered?.rendered_text) {
+            contents.push({ value: `Rendered: \`${rendered.rendered_text}\`` });
+          } else if (rendered?.error) {
+            contents.push({ value: `Render error: \`${rendered.error}\`` });
+          }
+          return {
+            range: new monaco.Range(span.startLine, span.startColumn, span.endLine, span.endColumn),
+            contents,
+          };
+        },
+      }),
+    );
+  }
 
   return { dispose: () => disposables.forEach((disposable) => disposable.dispose()) };
 }

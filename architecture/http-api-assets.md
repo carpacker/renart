@@ -118,6 +118,10 @@ integrations. Credentials remain environment references in the YAML.
 
 The API parameters editor owns the nested request YAML. Guided metadata cards
 own connection, materialization, columns, and response testing.
+The shared Jinja preview adapter also runs on this YAML model: request URLs,
+headers, query values, and bodies get the same inline rendered-value
+decorations, hover details, and variable/filter completion as SQL editors,
+using the selected execution window.
 Creation templates live in `web/lib/api-asset-templates.ts`; HTTP calls and
 generated DTOs live in `web/lib/api-assets-columns.ts` and
 `web/lib/generated/api-types.ts`.

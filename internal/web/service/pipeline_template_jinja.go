@@ -30,7 +30,7 @@ func jinjaOrdersSQL() string {
 	return `/* @bruin
 name: jinja.orders
 type: duckdb.sql
-description: Deterministic source rows used by each Jinja example.
+description: Window-aligned source rows used by each Jinja example.
 materialization:
   type: table
   strategy: create+replace
@@ -52,14 +52,14 @@ columns:
 
 SELECT *
 FROM (VALUES
-    (1, 'enterprise', 'web',     'completed', DATE '2026-07-20', 140),
-    (2, 'self_serve', 'store',   'completed', DATE '2026-07-20', 35),
-    (3, 'enterprise', 'partner', 'cancelled', DATE '2026-07-21', 220),
-    (4, 'self_serve', 'web',     'completed', DATE '2026-07-21', 80),
-    (5, 'mid_market', 'partner', 'completed', DATE '2026-07-22', 175),
-    (6, 'mid_market', 'store',   'completed', DATE '2026-07-22', 95),
-    (7, 'enterprise', 'web',     'completed', DATE '2026-07-23', 260),
-    (8, 'self_serve', 'partner', 'cancelled', DATE '2026-07-23', 60)
+    (1, 'enterprise', 'web',     'completed', DATE '{{ start_date }}', 140),
+    (2, 'self_serve', 'store',   'completed', DATE '{{ start_date }}', 35),
+    (3, 'enterprise', 'partner', 'cancelled', DATE '{{ start_date }}', 220),
+    (4, 'self_serve', 'web',     'completed', DATE '{{ start_date }}', 80),
+    (5, 'mid_market', 'partner', 'completed', DATE '{{ end_date }}' - 1, 175),
+    (6, 'mid_market', 'store',   'completed', DATE '{{ end_date }}' - 1, 95),
+    (7, 'enterprise', 'web',     'completed', DATE '{{ end_date }}' - 1, 260),
+    (8, 'self_serve', 'partner', 'cancelled', DATE '{{ end_date }}' - 1, 60)
 ) AS orders(order_id, customer_segment, channel, status, ordered_at, order_value)
 `
 }
@@ -86,6 +86,10 @@ columns:
     type: date
   - name: order_value
     type: integer
+custom_checks:
+  - name: selected date window contains orders
+    count: 0
+    query: select 1 from jinja.windowed_orders having count(*) = 0
 @bruin */
 
 SELECT *
@@ -162,60 +166,5 @@ SELECT
 FROM jinja.conditional_orders
 GROUP BY customer_segment
 ORDER BY total_revenue DESC
-`
-}
-
-func jinjaSegmentMetricsSQL() string {
-	return `/* @bruin
-name: jinja.segment_metrics
-type: duckdb.sql
-description: A reusable macro that contains a loop, expressions, and guarded division.
-depends:
-  - jinja.conditional_orders
-materialization:
-  type: table
-  strategy: create+replace
-columns:
-  - name: customer_segment
-    type: varchar
-  - name: orders
-    type: bigint
-  - name: total_revenue
-    type: decimal
-  - name: average_order_value
-    type: double
-  - name: web_orders
-    type: bigint
-  - name: partner_orders
-    type: bigint
-  - name: store_orders
-    type: bigint
-meta:
-  web_view: table
-@bruin */
-
-{{ segment_metrics('jinja.conditional_orders', var.channels) }}
-`
-}
-
-func jinjaMetricsMacroSQL() string {
-	return `{# Reusable project macros are available to every SQL asset. #}
-
-{% macro segment_metrics(relation, channels) -%}
-SELECT
-    customer_segment,
-    count(*) AS orders,
-    sum(order_value) AS total_revenue,
-    CASE
-        WHEN count(*) = 0 THEN 0
-        ELSE sum(order_value)::DOUBLE / count(*)
-    END AS average_order_value,
-{% for channel in channels %}
-    count(*) FILTER (WHERE channel = '{{ channel }}') AS {{ channel }}_orders{% if not loop.last %},{% endif %}
-{% endfor %}
-FROM {{ relation }}
-GROUP BY customer_segment
-ORDER BY total_revenue DESC
-{%- endmacro %}
 `
 }

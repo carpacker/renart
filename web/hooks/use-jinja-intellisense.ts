@@ -11,7 +11,7 @@ import {
   renderJinjaAsset,
 } from "@/lib/jinja-intellisense";
 import { selectedExecutionTimeWindowAtom } from "@/lib/atoms/domains/workspace";
-import { isQuerySensorAssetType, isSqlAssetType } from "@/lib/asset-types";
+import { isAPIAssetType, isQuerySensorAssetType, isSqlAssetType } from "@/lib/asset-types";
 import { WebAsset } from "@/lib/types";
 
 // One global Jinja provider set per Monaco, shared across editors. Each editor
@@ -66,6 +66,7 @@ export function useJinjaIntellisense(
     (asset.path.toLowerCase().endsWith(".sql") ||
       isSqlAssetType(asset.type) ||
       isQuerySensorAssetType(asset.type));
+  const supportsJinjaPreview = isSqlAsset || (asset !== null && isAPIAssetType(asset.type));
   const spanKey = useMemo(
     () =>
       JSON.stringify(
@@ -88,7 +89,7 @@ export function useJinjaIntellisense(
   }, [monaco, editor]);
 
   useEffect(() => {
-    if (!assetId || !isSqlAsset || !content.includes("{")) {
+    if (!assetId || !supportsJinjaPreview || !content.includes("{")) {
       setRenderResult(null);
       return;
     }
@@ -116,10 +117,10 @@ export function useJinjaIntellisense(
       controller.abort();
       window.clearTimeout(timer);
     };
-  }, [assetId, content, isSqlAsset, selectedExecutionTimeWindow]);
+  }, [assetId, content, selectedExecutionTimeWindow, supportsJinjaPreview]);
 
   useEffect(() => {
-    if (!editor || !monaco || !isSqlAsset) return;
+    if (!editor || !monaco || !supportsJinjaPreview) return;
 
     let decorations: string[] = [];
     const update = () => {
@@ -171,5 +172,5 @@ export function useJinjaIntellisense(
       decorations = editor.deltaDecorations(decorations, []);
       disposables.forEach((disposable) => disposable.dispose());
     };
-  }, [editor, monaco, isSqlAsset, spanKey, renderResult]);
+  }, [editor, monaco, renderResult, spanKey, supportsJinjaPreview]);
 }

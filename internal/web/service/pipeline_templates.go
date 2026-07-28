@@ -207,7 +207,7 @@ func pipelineTemplates() []pipelineTemplate {
 			info: PipelineTemplateInfo{
 				ID:            PipelineTemplateJinjaDemo,
 				Title:         "Jinja workshop",
-				Description:   "Progress from date and variable expressions to conditionals, loops, and reusable SQL macros.",
+				Description:   "Progress from date and variable expressions to conditionals and generated SQL loops.",
 				Category:      PipelineTemplateCategoryExplore,
 				Offline:       true,
 				SuggestedPath: "jinja_workshop",
@@ -216,9 +216,8 @@ func pipelineTemplates() []pipelineTemplate {
 					"jinja.windowed_orders",
 					"jinja.conditional_orders",
 					"jinja.channel_pivot",
-					"jinja.segment_metrics",
 				},
-				Features: []string{"Variables", "Date windows", "Conditionals + loops", "Macros"},
+				Features: []string{"Variables", "Date windows", "Conditionals", "Generated columns"},
 			},
 			duckdbFile: "jinja_workshop.duckdb",
 			files: func(pipelineName string) map[string]string {
@@ -228,8 +227,6 @@ func pipelineTemplates() []pipelineTemplate {
 					"assets/jinja/windowed_orders.sql":    jinjaWindowedOrdersSQL(),
 					"assets/jinja/conditional_orders.sql": jinjaConditionalOrdersSQL(),
 					"assets/jinja/channel_pivot.sql":      jinjaChannelPivotSQL(),
-					"assets/jinja/segment_metrics.sql":    jinjaSegmentMetricsSQL(),
-					"macros/segment_metrics.sql":          jinjaMetricsMacroSQL(),
 				}
 			},
 		},
