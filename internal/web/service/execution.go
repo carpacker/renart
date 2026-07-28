@@ -112,6 +112,7 @@ type ExecutionDependencies struct {
 type InlineRunLedger interface {
 	AdmitInlineRun(context.Context, webscheduler.InlineRunAdmission) (webscheduler.PipelineRun, error)
 	StartInlineRun(context.Context, string, time.Time) error
+	BindInlineRunExecutionUnits(context.Context, string, []webscheduler.RunSelectionUnit) error
 	SetInlineRunExecutionTargetSnapshot(context.Context, string, webscheduler.ExecutionTargetSnapshot) error
 	RecordInlineRunStep(context.Context, string, webscheduler.RunStepEvent) error
 	RecordInlineRunUnit(context.Context, string, webscheduler.PipelineRunUnitEvent) error
@@ -249,6 +250,7 @@ func (s *ExecutionService) emitRunCompletedForSpec(ctx context.Context, spec Pip
 				WriteResourceKind:           entry.WriteResourceKind,
 				WriteResourceIdentity:       entry.WriteResourceIdentity,
 				WriteResourceFidelity:       string(entry.WriteResourceFidelity),
+				ExecutionContract:           busExecutionContract(entry.ExecutionContract),
 				Fingerprint:                 entry.Fingerprint,
 				OwnContent:                  entry.OwnContent,
 				ConsumedVarsHash:            entry.ConsumedVarsHash,
@@ -1391,6 +1393,9 @@ type PipelineRunSpec struct {
 	// OnTargetsResolved persists the complete value-only pipeline snapshot
 	// after effective configuration is selected and before the first task.
 	OnTargetsResolved func(ExecutionTargetSnapshot) error
+	// OnExecutionUnitsResolved persists a dynamically resolved full-pipeline
+	// unit selection before any unit can start.
+	OnExecutionUnitsResolved func([]PipelineExecutionUnit) error
 	// OnUnit persists progress for one exact asset/window execution unit.
 	OnUnit func(PipelineExecutionUnitEvent) error
 	// executionTargetSnapshot is populated internally by the executor callback
@@ -1399,18 +1404,60 @@ type PipelineRunSpec struct {
 }
 
 type PipelineExecutionPlan struct {
-	SelectionMode string
-	Units         []PipelineExecutionUnit
+	Version        int
+	SelectionMode  string
+	MaxActiveSteps int
+	Contracts      []PipelinePlanExecutionContract
+	Units          []PipelineExecutionUnit
 }
 
 type PipelineExecutionUnit struct {
-	Position    int
-	AssetID     string
-	AssetName   string
-	StartDate   string
-	EndDate     string
-	RenderIndex int
-	Reason      string
+	Position            int
+	AssetID             string
+	AssetName           string
+	AssetPath           string
+	StartDate           string
+	EndDate             string
+	RenderIndex         int
+	Reason              string
+	DependencyPositions []int
+}
+
+func inlineRunSelection(plan *PipelineExecutionPlan) webscheduler.RunSelection {
+	selection := webscheduler.RunSelection{Mode: webscheduler.RunSelectionAll}
+	if plan == nil {
+		return selection
+	}
+	switch strings.TrimSpace(plan.SelectionMode) {
+	case PipelinePlanSelectionNeeded, PipelinePlanSelectionSelectorNeeded:
+		selection.Mode = webscheduler.RunSelectionNeeded
+	case PipelinePlanSelectionAsset:
+		selection.Mode = webscheduler.RunSelectionAsset
+	default:
+		selection.Mode = webscheduler.RunSelectionAll
+	}
+	selection.Units = schedulerInlineRunExecutionUnits(plan.Units)
+	return selection
+}
+
+func schedulerInlineRunExecutionUnits(
+	units []PipelineExecutionUnit,
+) []webscheduler.RunSelectionUnit {
+	selectionUnits := make([]webscheduler.RunSelectionUnit, 0, len(units))
+	for _, unit := range units {
+		start, startErr := time.Parse(time.RFC3339Nano, strings.TrimSpace(unit.StartDate))
+		end, endErr := time.Parse(time.RFC3339Nano, strings.TrimSpace(unit.EndDate))
+		var startPointer, endPointer *time.Time
+		if startErr == nil && endErr == nil && start.Before(end) {
+			start, end = start.UTC(), end.UTC()
+			startPointer, endPointer = &start, &end
+		}
+		selectionUnits = append(selectionUnits, webscheduler.RunSelectionUnit{
+			AssetID: unit.AssetID, AssetName: unit.AssetName, AssetPath: unit.AssetPath,
+			Start: startPointer, End: endPointer, Reason: unit.Reason,
+		})
+	}
+	return selectionUnits
 }
 
 type PipelineExecutionUnitEvent struct {
@@ -1526,6 +1573,7 @@ func (s *ExecutionService) MaterializePipelineRun(ctx context.Context, spec Pipe
 				Backfill:             spec.Backfill,
 				ConfirmedEnvironment: spec.ConfirmedEnvironment,
 				SensorMode:           effectiveSensorMode(spec.SensorMode, false),
+				Selection:            inlineRunSelection(spec.Plan),
 			})
 			if admitErr != nil {
 				return MaterializeResult{
@@ -1547,6 +1595,24 @@ func (s *ExecutionService) MaterializePipelineRun(ctx context.Context, spec Pipe
 				}
 			}
 
+			if spec.Plan == nil {
+				existingUnitsResolved := spec.OnExecutionUnitsResolved
+				spec.OnExecutionUnitsResolved = func(units []PipelineExecutionUnit) error {
+					if len(units) > 0 {
+						if err := inlineLedger.BindInlineRunExecutionUnits(
+							ctx,
+							inlineRunID,
+							schedulerInlineRunExecutionUnits(units),
+						); err != nil {
+							return fmt.Errorf("persist inline execution units: %w", err)
+						}
+					}
+					if existingUnitsResolved != nil {
+						return existingUnitsResolved(units)
+					}
+					return nil
+				}
+			}
 			existingTargetsResolved := spec.OnTargetsResolved
 			spec.OnTargetsResolved = func(snapshot ExecutionTargetSnapshot) error {
 				if err := inlineLedger.SetInlineRunExecutionTargetSnapshot(
@@ -1559,10 +1625,27 @@ func (s *ExecutionService) MaterializePipelineRun(ctx context.Context, spec Pipe
 				}
 				return nil
 			}
+			existingUnitEvent := spec.OnUnit
+			spec.OnUnit = func(event PipelineExecutionUnitEvent) error {
+				if err := inlineLedger.RecordInlineRunUnit(ctx, inlineRunID, schedulerPipelineRunUnitEvent(event)); err != nil {
+					return fmt.Errorf("persist inline execution unit: %w", err)
+				}
+				if existingUnitEvent != nil {
+					return existingUnitEvent(event)
+				}
+				return nil
+			}
 			existingAssetEvent := onAssetEvent
+			stepEvents := newPipelineAssetStepEvents(spec.Plan)
 			onAssetEvent = func(event ExecutionAssetEvent) error {
-				if err := inlineLedger.RecordInlineRunStep(ctx, inlineRunID, schedulerRunStepEvent(event)); err != nil {
-					return fmt.Errorf("persist inline execution step: %w", err)
+				persist, err := stepEvents.shouldPersist(event)
+				if err != nil {
+					return fmt.Errorf("resolve inline execution step: %w", err)
+				}
+				if persist {
+					if err := inlineLedger.RecordInlineRunStep(ctx, inlineRunID, schedulerRunStepEvent(event)); err != nil {
+						return fmt.Errorf("persist inline execution step: %w", err)
+					}
 				}
 				if existingAssetEvent != nil {
 					return existingAssetEvent(event)
@@ -1608,11 +1691,11 @@ func (s *ExecutionService) MaterializePipelineRun(ctx context.Context, spec Pipe
 	}
 	observed := newPipelineRunObservation(onAssetEvent)
 	observed.configureTargetWrites(ctx, spec.CompletionID, s.deps.TargetWrites)
-	plannedSelection := spec.Plan != nil && strings.TrimSpace(spec.Plan.SelectionMode) != "" &&
-		strings.TrimSpace(spec.Plan.SelectionMode) != PipelinePlanSelectionAll
+	plannedExecution := spec.Plan != nil && strings.TrimSpace(spec.Plan.SelectionMode) != ""
 	currentPipeline, _ := s.findPipelineView(spec.PipelineID)
 	plannedChangedAssetIDs := make([]string, 0)
 	var plannedCompletionErr error
+	var plannedCompletionMu sync.Mutex
 	sensorMode := effectiveSensorMode(spec.SensorMode, spec.Scheduled)
 	if !spec.DryRun && spec.OnContextResolved != nil {
 		if err := spec.OnContextResolved(ResolvedPipelineRunContext{
@@ -1632,7 +1715,7 @@ func (s *ExecutionService) MaterializePipelineRun(ctx context.Context, spec Pipe
 				return err
 			}
 		}
-		if !plannedSelection {
+		if !plannedExecution {
 			return nil
 		}
 		unit, ok := pipelineExecutionUnitAt(spec.Plan, event.Position)
@@ -1641,7 +1724,7 @@ func (s *ExecutionService) MaterializePipelineRun(ctx context.Context, spec Pipe
 		}
 		unitCompletionID := pipelineExecutionUnitCompletionID(spec.CompletionID, event.Position)
 		if strings.EqualFold(strings.TrimSpace(event.Status), "running") {
-			observed.setCompletionID(unitCompletionID)
+			observed.setAssetCompletionID(unit.AssetName, unitCompletionID)
 			return nil
 		}
 		if !terminalPipelineExecutionUnitStatus(event.Status) {
@@ -1675,11 +1758,15 @@ func (s *ExecutionService) MaterializePipelineRun(ctx context.Context, spec Pipe
 		completionErr := s.emitRunCompletedForSpec(ctx, unitSpec, pipelineUUID, unitWindow, completedAt, runAssets)
 		if completionErr != nil {
 			completionErr = errors.Join(completionErr, observed.markSuccessfulTargetWritesDirty(completedAt))
+			plannedCompletionMu.Lock()
 			plannedCompletionErr = errors.Join(plannedCompletionErr, completionErr)
+			plannedCompletionMu.Unlock()
 			observed.resetCompletedAsset(unit.AssetName)
 			return fmt.Errorf("record durable completion for execution unit %d: %w", event.Position, completionErr)
 		}
+		plannedCompletionMu.Lock()
 		plannedChangedAssetIDs = append(plannedChangedAssetIDs, succeededIDs...)
+		plannedCompletionMu.Unlock()
 		observed.resetCompletedAsset(unit.AssetName)
 		return nil
 	}
@@ -1710,14 +1797,21 @@ func (s *ExecutionService) MaterializePipelineRun(ctx context.Context, spec Pipe
 			spec.executionTargetSnapshot = &captured
 			return nil
 		},
-		ConfigPath:        spec.ConfigPath,
-		FullRefresh:       spec.FullRefresh,
-		ExecutionTime:     executionTime,
-		VariableOverrides: spec.VariableOverrides,
-		UnitEvent:         unitEvent,
+		ConfigPath:               spec.ConfigPath,
+		FullRefresh:              spec.FullRefresh,
+		ExecutionTime:            executionTime,
+		VariableOverrides:        spec.VariableOverrides,
+		OnExecutionUnitsResolved: spec.OnExecutionUnitsResolved,
+		UnitEvent:                unitEvent,
 	}
 	if spec.Plan != nil {
+		request.PlanVersion = spec.Plan.Version
 		request.SelectionMode = spec.Plan.SelectionMode
+		request.MaxActiveSteps = spec.Plan.MaxActiveSteps
+		request.ExecutionContracts = append(
+			[]PipelinePlanExecutionContract(nil),
+			spec.Plan.Contracts...,
+		)
 		request.ExecutionUnits = append([]PipelineExecutionUnit(nil), spec.Plan.Units...)
 	}
 	output, runErr := s.deps.Executor.RunPipeline(ctx, request, onChunk)
@@ -1725,9 +1819,11 @@ func (s *ExecutionService) MaterializePipelineRun(ctx context.Context, spec Pipe
 	changedAssetIDs := make([]string, 0)
 	var materializedAt *time.Time
 	var completionErr error
-	if plannedSelection {
+	if plannedExecution {
+		plannedCompletionMu.Lock()
 		changedAssetIDs = append(changedAssetIDs, plannedChangedAssetIDs...)
 		completionErr = plannedCompletionErr
+		plannedCompletionMu.Unlock()
 		if runErr != nil && completionErr == nil {
 			completionErr = observed.markSuccessfulTargetWritesDirty(time.Now().UTC())
 		}
@@ -1864,39 +1960,41 @@ func (s *ExecutionService) acquireExecutionLease(ctx context.Context) (func() er
 }
 
 type pipelineRunObservation struct {
-	mu               sync.Mutex
-	onEvent          func(ExecutionAssetEvent) error
-	targetWriteCtx   context.Context
-	targetWrites     TargetWriteStore
-	completionID     string
-	claims           map[string]matlog.TargetWriteClaim
-	upstreamWriters  map[string]map[string]bus.UpstreamWriterSnapshot
-	hasUpstreamReads map[string]bool
-	order            []string
-	statuses         map[string]string
-	startedAt        map[string]*time.Time
-	finishedAt       map[string]*time.Time
-	ordinals         map[string]int64
-	terminal         map[string]bool
-	qualityTerminal  map[string]map[string]string
-	qualityFailures  map[string]map[string]bus.QualityCheckFailure
-	nextOrdinal      int64
-	executionTargets ExecutionTargetSnapshot
+	mu                 sync.Mutex
+	onEvent            func(ExecutionAssetEvent) error
+	targetWriteCtx     context.Context
+	targetWrites       TargetWriteStore
+	completionID       string
+	assetCompletionIDs map[string]string
+	claims             map[string]matlog.TargetWriteClaim
+	upstreamWriters    map[string]map[string]bus.UpstreamWriterSnapshot
+	hasUpstreamReads   map[string]bool
+	order              []string
+	statuses           map[string]string
+	startedAt          map[string]*time.Time
+	finishedAt         map[string]*time.Time
+	ordinals           map[string]int64
+	terminal           map[string]bool
+	qualityTerminal    map[string]map[string]string
+	qualityFailures    map[string]map[string]bus.QualityCheckFailure
+	nextOrdinal        int64
+	executionTargets   ExecutionTargetSnapshot
 }
 
 func newPipelineRunObservation(onEvent func(ExecutionAssetEvent) error) *pipelineRunObservation {
 	return &pipelineRunObservation{
-		onEvent:          onEvent,
-		claims:           make(map[string]matlog.TargetWriteClaim),
-		upstreamWriters:  make(map[string]map[string]bus.UpstreamWriterSnapshot),
-		hasUpstreamReads: make(map[string]bool),
-		statuses:         make(map[string]string),
-		startedAt:        make(map[string]*time.Time),
-		finishedAt:       make(map[string]*time.Time),
-		ordinals:         make(map[string]int64),
-		terminal:         make(map[string]bool),
-		qualityTerminal:  make(map[string]map[string]string),
-		qualityFailures:  make(map[string]map[string]bus.QualityCheckFailure),
+		onEvent:            onEvent,
+		claims:             make(map[string]matlog.TargetWriteClaim),
+		upstreamWriters:    make(map[string]map[string]bus.UpstreamWriterSnapshot),
+		hasUpstreamReads:   make(map[string]bool),
+		statuses:           make(map[string]string),
+		startedAt:          make(map[string]*time.Time),
+		finishedAt:         make(map[string]*time.Time),
+		ordinals:           make(map[string]int64),
+		terminal:           make(map[string]bool),
+		qualityTerminal:    make(map[string]map[string]string),
+		qualityFailures:    make(map[string]map[string]bus.QualityCheckFailure),
+		assetCompletionIDs: make(map[string]string),
 	}
 }
 
@@ -1908,10 +2006,14 @@ func (o *pipelineRunObservation) configureTargetWrites(ctx context.Context, comp
 	o.targetWrites = store
 }
 
-func (o *pipelineRunObservation) setCompletionID(completionID string) {
+func (o *pipelineRunObservation) setAssetCompletionID(assetName, completionID string) {
 	o.mu.Lock()
 	defer o.mu.Unlock()
-	o.completionID = strings.TrimSpace(completionID)
+	assetName = strings.TrimSpace(assetName)
+	if assetName == "" {
+		return
+	}
+	o.assetCompletionIDs[assetName] = strings.TrimSpace(completionID)
 }
 
 func (o *pipelineRunObservation) handle(event ExecutionAssetEvent) error {
@@ -2142,7 +2244,7 @@ func (o *pipelineRunObservation) claimTargetWrite(assetName string, startedAt *t
 	}
 	claim := matlog.TargetWriteClaim{
 		TargetIdentity: entry.TargetIdentity,
-		CompletionID:   o.completionID,
+		CompletionID:   firstNonEmpty(o.assetCompletionIDs[assetName], o.completionID),
 		AssetID:        entry.AssetID,
 		ClaimedAt:      claimedAt,
 	}
@@ -2359,6 +2461,7 @@ func (o *pipelineRunObservation) resetCompletedAsset(assetName string) {
 	delete(o.upstreamWriters, assetName)
 	delete(o.hasUpstreamReads, assetName)
 	delete(o.claims, assetName)
+	delete(o.assetCompletionIDs, assetName)
 }
 
 func qualityChecksAllSucceeded(statuses map[string]string, expected int) bool {
@@ -2436,6 +2539,7 @@ func schedulerExecutionTargetSnapshot(snapshot ExecutionTargetSnapshot) websched
 			WriteResourceKind:           entry.WriteResourceKind,
 			WriteResourceIdentity:       entry.WriteResourceIdentity,
 			WriteResourceFidelity:       string(entry.WriteResourceFidelity),
+			ExecutionContract:           schedulerPipelineRunExecutionContract(entry.ExecutionContract),
 			Fingerprint:                 entry.Fingerprint,
 			OwnContent:                  entry.OwnContent,
 			ConsumedVarsHash:            entry.ConsumedVarsHash,
@@ -2451,6 +2555,62 @@ func schedulerExecutionTargetSnapshot(snapshot ExecutionTargetSnapshot) websched
 		ConfigurationDigest:   snapshot.ConfigurationDigest,
 		ConfigurationFidelity: snapshot.ConfigurationFidelity,
 		Entries:               entries,
+	}
+}
+
+func schedulerPipelineRunExecutionContract(
+	contract PipelinePlanExecutionContract,
+) webscheduler.PipelineRunExecutionContract {
+	return webscheduler.PipelineRunExecutionContract{
+		AssetID:               contract.AssetID,
+		AssetName:             contract.AssetName,
+		ConnectionKeys:        append([]string(nil), contract.ConnectionKeys...),
+		MutationResources:     schedulerPipelineRunPlanResources(contract.MutationResources),
+		CoordinationResources: schedulerPipelineRunPlanResources(contract.CoordinationResources),
+	}
+}
+
+func busExecutionContract(
+	contract PipelinePlanExecutionContract,
+) bus.ExecutionContractSnapshot {
+	return bus.ExecutionContractSnapshot{
+		AssetID:        contract.AssetID,
+		AssetName:      contract.AssetName,
+		ConnectionKeys: append([]string(nil), contract.ConnectionKeys...),
+		MutationResources: busExecutionResources(
+			contract.MutationResources,
+		),
+		CoordinationResources: busExecutionResources(
+			contract.CoordinationResources,
+		),
+	}
+}
+
+func busExecutionResources(resources PipelinePlanResources) bus.ExecutionResources {
+	claims := make([]bus.ExecutionResourceClaim, 0, len(resources.Claims))
+	for _, claim := range resources.Claims {
+		claims = append(claims, bus.ExecutionResourceClaim{
+			Kind: claim.Kind, Identity: claim.Identity,
+		})
+	}
+	return bus.ExecutionResources{
+		Isolation: resources.Isolation,
+		Claims:    claims,
+	}
+}
+
+func schedulerPipelineRunPlanResources(
+	resources PipelinePlanResources,
+) webscheduler.PipelineRunPlanResources {
+	claims := make([]webscheduler.PipelineRunResourceClaim, 0, len(resources.Claims))
+	for _, claim := range resources.Claims {
+		claims = append(claims, webscheduler.PipelineRunResourceClaim{
+			Kind: claim.Kind, Identity: claim.Identity,
+		})
+	}
+	return webscheduler.PipelineRunPlanResources{
+		Isolation: resources.Isolation,
+		Claims:    claims,
 	}
 }
 
@@ -2472,6 +2632,79 @@ func schedulerRunStepEvent(event ExecutionAssetEvent) webscheduler.RunStepEvent 
 		StartedAt: event.StartedAt, FinishedAt: event.FinishedAt, Error: event.Error,
 		CompletionOrdinal: event.CompletionOrdinal, UpstreamWriters: upstreamWriters,
 		HasUpstreamWriterSnapshot: event.HasUpstreamWriterSnapshot,
+	}
+}
+
+func schedulerPipelineRunUnitEvent(event PipelineExecutionUnitEvent) webscheduler.PipelineRunUnitEvent {
+	status := webscheduler.PipelineRunUnitRunning
+	switch strings.ToLower(strings.TrimSpace(event.Status)) {
+	case "success", "succeeded", "ok", "finished":
+		status = webscheduler.PipelineRunUnitSuccess
+	case "failed", "failure", "error", "errored":
+		status = webscheduler.PipelineRunUnitFailed
+	case "cancelled", "canceled":
+		status = webscheduler.PipelineRunUnitCancelled
+	case "skipped":
+		status = webscheduler.PipelineRunUnitSkipped
+	}
+	return webscheduler.PipelineRunUnitEvent{
+		Position: event.Position, Status: status,
+		StartedAt: event.StartedAt, FinishedAt: event.FinishedAt, Error: event.Error,
+	}
+}
+
+type pipelineAssetStepEvents struct {
+	plan  *PipelineExecutionPlan
+	first map[string]int
+	last  map[string]int
+}
+
+func newPipelineAssetStepEvents(plan *PipelineExecutionPlan) *pipelineAssetStepEvents {
+	events := &pipelineAssetStepEvents{
+		plan:  plan,
+		first: make(map[string]int),
+		last:  make(map[string]int),
+	}
+	if plan == nil || plan.Version < PipelineExecutionPlanVersionV3 {
+		return events
+	}
+	for position, unit := range plan.Units {
+		if _, exists := events.first[unit.AssetName]; !exists {
+			events.first[unit.AssetName] = position
+		}
+		events.last[unit.AssetName] = position
+	}
+	return events
+}
+
+// shouldPersist keeps one durable run step per asset while execution units
+// retain the exact status of every asset/window pair. The first window opens
+// the aggregate step, the last successful window closes it, and any failure or
+// cancellation closes it immediately.
+func (e *pipelineAssetStepEvents) shouldPersist(event ExecutionAssetEvent) (bool, error) {
+	if e == nil || e.plan == nil || e.plan.Version < PipelineExecutionPlanVersionV3 {
+		return true, nil
+	}
+	if !event.HasUnitPosition ||
+		event.UnitPosition < 0 ||
+		event.UnitPosition >= len(e.plan.Units) {
+		return false, fmt.Errorf("execution asset %s has no confirmed unit position", event.Asset)
+	}
+	unit := e.plan.Units[event.UnitPosition]
+	if unit.AssetName != event.Asset {
+		return false, fmt.Errorf(
+			"execution unit %d belongs to %s, not %s",
+			event.UnitPosition, unit.AssetName, event.Asset,
+		)
+	}
+	status := schedulerRunStatus(event.Status)
+	switch status {
+	case webscheduler.RunStatusRunning:
+		return event.UnitPosition == e.first[event.Asset], nil
+	case webscheduler.RunStatusSuccess:
+		return event.UnitPosition == e.last[event.Asset], nil
+	default:
+		return true, nil
 	}
 }
 

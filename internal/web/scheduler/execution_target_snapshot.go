@@ -24,7 +24,8 @@ var (
 func validateExecutionTargetSnapshot(snapshot ExecutionTargetSnapshot) error {
 	if snapshot.Version != ExecutionTargetSnapshotVersionV1 &&
 		snapshot.Version != ExecutionTargetSnapshotVersionV2 &&
-		snapshot.Version != ExecutionTargetSnapshotVersionV3 {
+		snapshot.Version != ExecutionTargetSnapshotVersionV3 &&
+		snapshot.Version != ExecutionTargetSnapshotVersionV4 {
 		return fmt.Errorf("%w: unsupported version %d", ErrInvalidExecutionTargetSnapshot, snapshot.Version)
 	}
 	if snapshot.Version >= ExecutionTargetSnapshotVersionV2 {
@@ -119,6 +120,18 @@ func validateExecutionTargetSnapshot(snapshot ExecutionTargetSnapshot) error {
 		} else if err := validateExecutionWriteResource(assetName, entry); err != nil {
 			return err
 		}
+		if snapshot.Version < ExecutionTargetSnapshotVersionV4 {
+			if !emptyPipelineRunExecutionContract(entry.ExecutionContract) {
+				return fmt.Errorf(
+					"%w: entry %q cannot contain an execution contract before version %d",
+					ErrInvalidExecutionTargetSnapshot,
+					assetName,
+					ExecutionTargetSnapshotVersionV4,
+				)
+			}
+		} else if err := validateExecutionTargetContract(assetName, entry); err != nil {
+			return err
+		}
 		for field, value := range map[string]string{
 			"fingerprint":        entry.Fingerprint,
 			"own_content":        entry.OwnContent,
@@ -153,6 +166,98 @@ func validateExecutionTargetSnapshot(snapshot ExecutionTargetSnapshot) error {
 	return nil
 }
 
+func emptyPipelineRunExecutionContract(contract PipelineRunExecutionContract) bool {
+	return contract.AssetID == "" &&
+		contract.AssetName == "" &&
+		len(contract.ConnectionKeys) == 0 &&
+		contract.MutationResources.Isolation == "" &&
+		len(contract.MutationResources.Claims) == 0 &&
+		contract.CoordinationResources.Isolation == "" &&
+		len(contract.CoordinationResources.Claims) == 0
+}
+
+func validateExecutionTargetContract(
+	assetName string,
+	entry ExecutionTargetSnapshotEntry,
+) error {
+	contract := entry.ExecutionContract
+	if contract.AssetID != entry.AssetID || contract.AssetName != assetName {
+		return fmt.Errorf(
+			"%w: entry %q execution contract has mismatched asset identity",
+			ErrInvalidExecutionTargetSnapshot,
+			assetName,
+		)
+	}
+	if err := validatePipelineRunExecutionContracts(
+		[]PipelineRunExecutionContract{contract},
+		[]PipelineRunExecutionUnit{{AssetID: entry.AssetID, AssetName: assetName}},
+	); err != nil {
+		return fmt.Errorf("%w: entry %q execution contract: %v", ErrInvalidExecutionTargetSnapshot, assetName, err)
+	}
+	expectedMutation := executionTargetEntryMutationResources(entry)
+	if !equalPipelineRunPlanResources(expectedMutation, contract.MutationResources) {
+		return fmt.Errorf(
+			"%w: entry %q execution contract mutation resources do not match its target",
+			ErrInvalidExecutionTargetSnapshot,
+			assetName,
+		)
+	}
+	if contract.MutationResources.Isolation == PipelineRunResourceIsolationPipeline {
+		if contract.CoordinationResources.Isolation != PipelineRunResourceIsolationPipeline {
+			return fmt.Errorf(
+				"%w: entry %q pipeline-isolated mutation must remain pipeline-isolated at runtime",
+				ErrInvalidExecutionTargetSnapshot,
+				assetName,
+			)
+		}
+		return nil
+	}
+	if contract.CoordinationResources.Isolation != PipelineRunResourceIsolationResources {
+		return fmt.Errorf(
+			"%w: entry %q exact mutation resources require resource coordination",
+			ErrInvalidExecutionTargetSnapshot,
+			assetName,
+		)
+	}
+	coordination := make(map[string]struct{}, len(contract.CoordinationResources.Claims))
+	for _, claim := range contract.CoordinationResources.Claims {
+		coordination[claim.Kind+"\x00"+claim.Identity] = struct{}{}
+	}
+	for _, claim := range contract.MutationResources.Claims {
+		if _, exists := coordination[claim.Kind+"\x00"+claim.Identity]; !exists {
+			return fmt.Errorf(
+				"%w: entry %q runtime coordination omits a mutation resource",
+				ErrInvalidExecutionTargetSnapshot,
+				assetName,
+			)
+		}
+	}
+	return nil
+}
+
+func executionTargetEntryMutationResources(
+	entry ExecutionTargetSnapshotEntry,
+) PipelineRunPlanResources {
+	if entry.WriteResourceFidelity != ExecutionTargetFidelityExact {
+		return PipelineRunPlanResources{
+			Isolation: PipelineRunResourceIsolationPipeline,
+			Claims:    []PipelineRunResourceClaim{},
+		}
+	}
+	if entry.WriteResourceKind == "none" {
+		return PipelineRunPlanResources{
+			Isolation: PipelineRunResourceIsolationResources,
+			Claims:    []PipelineRunResourceClaim{},
+		}
+	}
+	return PipelineRunPlanResources{
+		Isolation: PipelineRunResourceIsolationResources,
+		Claims: []PipelineRunResourceClaim{{
+			Kind: entry.WriteResourceKind, Identity: entry.WriteResourceIdentity,
+		}},
+	}
+}
+
 func validateExecutionWriteResource(assetName string, entry ExecutionTargetSnapshotEntry) error {
 	kind := strings.TrimSpace(entry.WriteResourceKind)
 	identity := strings.TrimSpace(entry.WriteResourceIdentity)
@@ -167,7 +272,9 @@ func validateExecutionWriteResource(assetName string, entry ExecutionTargetSnaps
 			if identity != "" {
 				return fmt.Errorf("%w: entry %q no-write resource cannot claim an identity", ErrInvalidExecutionTargetSnapshot, assetName)
 			}
-		case PipelineRunResourceKindLocalFile, PipelineRunResourceKindDuckDBDatabase:
+		case PipelineRunResourceKindLocalFile,
+			PipelineRunResourceKindDuckDBDatabase,
+			PipelineRunResourceKindWarehouse:
 			if err := validateRunIdentityDigest("write_resource_identity", identity); err != nil {
 				return fmt.Errorf("%w: entry %q: %v", ErrInvalidExecutionTargetSnapshot, assetName, err)
 			}
@@ -295,6 +402,32 @@ func validateExecutionTargetResourceBinding(
 			"%w: execution write resources do not match the reviewed plan",
 			ErrInvalidExecutionTargetSnapshot,
 		)
+	}
+	if plan.Version >= PipelineRunPlanVersionV3 {
+		if snapshot.Version < ExecutionTargetSnapshotVersionV4 {
+			return fmt.Errorf(
+				"%w: execution snapshot has no reviewed runtime contracts",
+				ErrInvalidExecutionTargetSnapshot,
+			)
+		}
+		actualContracts := make([]PipelineRunExecutionContract, 0, len(plan.ExecutionContracts))
+		for _, reviewed := range plan.ExecutionContracts {
+			entry, exists := snapshot.Entries[reviewed.AssetName]
+			if !exists || entry.AssetID != reviewed.AssetID {
+				return fmt.Errorf(
+					"%w: execution contract for %q is missing from the target snapshot",
+					ErrInvalidExecutionTargetSnapshot,
+					reviewed.AssetName,
+				)
+			}
+			actualContracts = append(actualContracts, entry.ExecutionContract)
+		}
+		if !equalPipelineRunExecutionContracts(actualContracts, plan.ExecutionContracts) {
+			return fmt.Errorf(
+				"%w: execution runtime contracts do not match the reviewed plan",
+				ErrInvalidExecutionTargetSnapshot,
+			)
+		}
 	}
 
 	var isolation string

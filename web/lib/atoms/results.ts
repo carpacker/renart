@@ -39,6 +39,16 @@ export type SchedulerRunEvent =
   | { type: "run.step"; run: PipelineRunStep }
   | { type: "run.unit"; run: { run_id: string; unit: PipelineRunUnit } };
 
+export type SequencedSchedulerRunEvent = {
+  sequence: number;
+  event: SchedulerRunEvent;
+};
+
+export type SchedulerRunEventBuffer = {
+  sequence: number;
+  events: SequencedSchedulerRunEvent[];
+};
+
 export type ScheduleOccurrenceEvent = {
   type: "schedule.occurrence";
   pipeline_uuid: string;
@@ -59,7 +69,27 @@ export const assetResultsAtom = atom<AssetResultsState>({
 
 export const changedAssetIdsAtom = atom<Set<string>>(new Set<string>());
 
-export const schedulerRunEventAtom = atom<SchedulerRunEvent | null>(null);
+const maxBufferedSchedulerRunEvents = 2048;
+
+export function appendSchedulerRunEvent(
+  current: SchedulerRunEventBuffer,
+  event: SchedulerRunEvent,
+): SchedulerRunEventBuffer {
+  const sequence = current.sequence + 1;
+  return {
+    sequence,
+    events: [...current.events, { sequence, event }].slice(-maxBufferedSchedulerRunEvents),
+  };
+}
+
+export const schedulerRunEventsAtom = atom<SchedulerRunEventBuffer>({
+  sequence: 0,
+  events: [],
+});
+
+export const appendSchedulerRunEventAtom = atom(null, (get, set, event: SchedulerRunEvent) => {
+  set(schedulerRunEventsAtom, appendSchedulerRunEvent(get(schedulerRunEventsAtom), event));
+});
 
 export const scheduleOccurrenceEventAtom = atom<ScheduleOccurrenceEvent | null>(null);
 

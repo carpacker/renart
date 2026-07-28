@@ -783,6 +783,8 @@ function RunPlanReview({
   const runtimeChecks = plan.assets.flatMap((asset) =>
     asset.renders.flatMap((render) => render.stages.filter((stage) => stage.kind === "check")),
   );
+  const maxActiveSteps = plan.context.max_active_steps;
+  const conservativelySerializedAssets = conservativeTargetIsolationCount(plan);
 
   return (
     <div className="mx-auto w-full max-w-5xl space-y-5 p-5">
@@ -809,10 +811,22 @@ function RunPlanReview({
             </h3>
             <p className="text-xs text-muted-foreground">
               {plan.summary.execution_units} {plan.summary.execution_units === 1 ? "step" : "steps"}{" "}
-              across {plan.summary.assets} {plan.summary.assets === 1 ? "asset" : "assets"}
+              across {plan.summary.assets} {plan.summary.assets === 1 ? "asset" : "assets"}, shown
+              in stable plan order
+            </p>
+            <p className="text-xs text-muted-foreground">
+              {maxActiveSteps > 1
+                ? `Up to ${maxActiveSteps} assets may run concurrently. Dependencies, connection limits, and shared targets can reduce that number.`
+                : "Assets will run one at a time for this pipeline."}
+              {conservativelySerializedAssets > 0
+                ? ` ${conservativelySerializedAssets} ${conservativelySerializedAssets === 1 ? "asset uses" : "assets use"} conservative target isolation and will run alone.`
+                : ""}
             </p>
           </div>
           <div className="flex flex-wrap gap-1">
+            <Badge variant="outline" size="xs">
+              {maxActiveSteps > 1 ? `Up to ${maxActiveSteps} active` : "Sequential"}
+            </Badge>
             {runtimeChecks.length > 0 ? (
               <Badge variant="outline" size="xs">
                 {runtimeChecks.length} runtime {runtimeChecks.length === 1 ? "check" : "checks"}
@@ -1153,6 +1167,14 @@ function PlanExecutionSequence({ plan }: { plan: PipelinePlan }) {
               <div className="mt-1 flex flex-wrap gap-x-2 gap-y-0.5 text-[11px] text-muted-foreground">
                 <span>{formatPlanWindow(unit.start_date, unit.end_date)}</span>
                 <span>{humanizePlanToken(unit.reason)}</span>
+                {unit.dependency_positions.length > 0 ? (
+                  <span>
+                    after{" "}
+                    {unit.dependency_positions.map((position) => `step ${position + 1}`).join(", ")}
+                  </span>
+                ) : (
+                  <span>ready immediately</span>
+                )}
                 <span>
                   {operations.length} {operations.length === 1 ? "operation" : "operations"}
                   {checks.length > 0
@@ -1245,6 +1267,7 @@ function PlanCodeReview({ plan }: { plan: PipelinePlan }) {
 }
 
 function RunPlanDetails({ plan }: { plan: PipelinePlan }) {
+  const conservativelySerializedAssets = conservativeTargetIsolationCount(plan);
   return (
     <div className="space-y-3">
       <div className="grid grid-cols-2 divide-x divide-y rounded-lg border sm:grid-cols-4 sm:divide-y-0">
@@ -1272,6 +1295,14 @@ function RunPlanDetails({ plan }: { plan: PipelinePlan }) {
           label="Write claims"
           value={`${plan.resources.claims.length} ${plan.resources.claims.length === 1 ? "resource" : "resources"}`}
         />
+        <PlanDetailItem
+          label="Maximum active steps"
+          value={String(plan.context.max_active_steps)}
+        />
+        <PlanDetailItem
+          label="Conservative target isolation"
+          value={`${conservativelySerializedAssets} ${conservativelySerializedAssets === 1 ? "asset" : "assets"}`}
+        />
       </dl>
       {plan.resources.claims.length > 0 ? (
         <div className="flex flex-wrap gap-1">
@@ -1293,6 +1324,12 @@ function RunPlanDetails({ plan }: { plan: PipelinePlan }) {
       </p>
     </div>
   );
+}
+
+function conservativeTargetIsolationCount(plan: PipelinePlan) {
+  return plan.execution_contracts.filter(
+    (contract) => contract.coordination_resources.isolation === "pipeline",
+  ).length;
 }
 
 function DeploymentPlanDetails({ plan }: { plan: PipelinePlan }) {

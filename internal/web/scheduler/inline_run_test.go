@@ -152,6 +152,96 @@ func TestInlineAssetRunPersistsVersionedSelectionAndUnits(t *testing.T) {
 	require.NoError(t, service.FinishInlineRun(ctx, run.ID, RunStatusSuccess, nil))
 }
 
+func TestInlineFullRunPersistsPreResolvedExecutionUnits(t *testing.T) {
+	t.Parallel()
+	store, err := OpenStore(filepath.Join(t.TempDir(), "state.db"))
+	require.NoError(t, err)
+	defer store.Close()
+	service := New(Options{Store: store})
+	ctx := context.Background()
+	start := time.Date(2026, 7, 18, 8, 0, 0, 123456789, time.UTC)
+	end := start.Add(time.Hour)
+
+	run, err := service.AdmitInlineRun(ctx, InlineRunAdmission{
+		PipelineID: "pipeline-id", PipelineUUID: "pipeline-uuid", PipelineName: "analytics",
+		Environment: "prod", Origin: RunTriggerAPI, Source: RunSourceWorkingTree,
+		Start: start, End: end, ExecutionTime: start.Add(time.Minute), SensorMode: "once",
+		Selection: RunSelection{
+			Mode: RunSelectionAll,
+			Units: []RunSelectionUnit{{
+				AssetID: "asset-orders", AssetName: "analytics.orders",
+				AssetPath: "analytics/assets/orders.sql", Start: &start, End: &end,
+				Reason: "full_run",
+			}},
+		},
+	})
+	require.NoError(t, err)
+	spec, found, err := store.GetRunSpec(ctx, run.ID)
+	require.NoError(t, err)
+	require.True(t, found)
+	assert.Equal(t, runSpecVersionV3, spec.Version)
+	assert.Equal(t, runSelectionAll, spec.Selection)
+	require.NotNil(t, spec.SelectionDetails)
+	require.Len(t, spec.SelectionDetails.Units, 1)
+
+	units, err := store.ListRunUnits(ctx, run.ID)
+	require.NoError(t, err)
+	require.Len(t, units, 1)
+	assert.Equal(t, "analytics.orders", units[0].AssetName)
+	assert.Equal(t, PipelineRunUnitQueued, units[0].Status)
+}
+
+func TestInlineFullRunBindsDynamicallyResolvedExecutionUnits(t *testing.T) {
+	t.Parallel()
+	store, err := OpenStore(filepath.Join(t.TempDir(), "state.db"))
+	require.NoError(t, err)
+	defer store.Close()
+	service := New(Options{Store: store})
+	ctx := context.Background()
+	start := time.Date(2026, 7, 18, 8, 0, 0, 123456789, time.UTC)
+	end := start.Add(time.Hour)
+
+	run, err := service.AdmitInlineRun(ctx, InlineRunAdmission{
+		PipelineID: "pipeline-id", PipelineUUID: "pipeline-uuid", PipelineName: "analytics",
+		Environment: "prod", Origin: RunTriggerAPI, Source: RunSourceWorkingTree,
+		Start: start, End: end, ExecutionTime: start.Add(time.Minute), SensorMode: "once",
+	})
+	require.NoError(t, err)
+	require.NoError(t, service.StartInlineRun(ctx, run.ID, start))
+	require.NoError(t, service.BindInlineRunExecutionUnits(ctx, run.ID, []RunSelectionUnit{
+		{
+			AssetID: "asset-left", AssetName: "analytics.left",
+			AssetPath: "analytics/assets/left.sql", Start: &start, End: &end,
+			Reason: "full_run",
+		},
+		{
+			AssetID: "asset-right", AssetName: "analytics.right",
+			AssetPath: "analytics/assets/right.sql", Start: &start, End: &end,
+			Reason: "full_run",
+		},
+	}))
+
+	spec, found, err := store.GetRunSpec(ctx, run.ID)
+	require.NoError(t, err)
+	require.True(t, found)
+	assert.Equal(t, runSpecVersionV3, spec.Version)
+	require.NotNil(t, spec.SelectionDetails)
+	require.Len(t, spec.SelectionDetails.Units, 2)
+	units, err := store.ListRunUnits(ctx, run.ID)
+	require.NoError(t, err)
+	require.Len(t, units, 2)
+	assert.Equal(t, []string{"analytics.left", "analytics.right"}, []string{
+		units[0].AssetName, units[1].AssetName,
+	})
+
+	require.NoError(t, service.RecordInlineRunUnit(ctx, run.ID, PipelineRunUnitEvent{
+		Position: 0, Status: PipelineRunUnitRunning, StartedAt: &start,
+	}))
+	require.NoError(t, service.RecordInlineRunUnit(ctx, run.ID, PipelineRunUnitEvent{
+		Position: 0, Status: PipelineRunUnitSuccess, FinishedAt: &end,
+	}))
+}
+
 func TestInlineAssetRunRejectsUnsafeOrInconsistentSelection(t *testing.T) {
 	t.Parallel()
 	store, err := OpenStore(filepath.Join(t.TempDir(), "state.db"))

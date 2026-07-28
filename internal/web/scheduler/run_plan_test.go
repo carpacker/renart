@@ -29,6 +29,83 @@ func TestPipelineRunPlanStrictRoundTrip(t *testing.T) {
 	require.ErrorContains(t, err, "unknown field")
 }
 
+func TestPipelineRunPlanV3StrictRoundTrip(t *testing.T) {
+	t.Parallel()
+	plan := validPipelineRunPlanV3(t)
+
+	body, err := marshalPipelineRunPlan(plan)
+	require.NoError(t, err)
+	persisted, err := unmarshalPipelineRunPlan(plan.Version, body)
+	require.NoError(t, err)
+	assert.Equal(t, plan, persisted)
+}
+
+func TestPipelineRunPlanV3AllowsWarehouseRelationClaims(t *testing.T) {
+	t.Parallel()
+
+	plan := validPipelineRunPlanV3(t)
+	for contractIndex := range plan.ExecutionContracts {
+		for claimIndex := range plan.ExecutionContracts[contractIndex].MutationResources.Claims {
+			plan.ExecutionContracts[contractIndex].MutationResources.Claims[claimIndex].Kind =
+				PipelineRunResourceKindWarehouse
+		}
+		for claimIndex := range plan.ExecutionContracts[contractIndex].CoordinationResources.Claims {
+			plan.ExecutionContracts[contractIndex].CoordinationResources.Claims[claimIndex].Kind =
+				PipelineRunResourceKindWarehouse
+		}
+	}
+	for claimIndex := range plan.Resources.Claims {
+		plan.Resources.Claims[claimIndex].Kind = PipelineRunResourceKindWarehouse
+	}
+	plan.Artifact = pipelineRunPlanArtifact(t, plan)
+
+	body, err := marshalPipelineRunPlan(plan)
+	require.NoError(t, err)
+	persisted, err := unmarshalPipelineRunPlan(plan.Version, body)
+	require.NoError(t, err)
+	assert.Equal(t, plan, persisted)
+}
+
+func TestPipelineRunPlanV3ValidatesDependenciesAndRuntimeContracts(t *testing.T) {
+	t.Parallel()
+
+	t.Run("future dependency", func(t *testing.T) {
+		plan := validPipelineRunPlanV3(t)
+		plan.ExecutionUnits[0].DependencyPositions = []int{1}
+		plan.Artifact = pipelineRunPlanArtifact(t, plan)
+		require.ErrorContains(t, plan.validate(), "must refer to an earlier")
+	})
+
+	t.Run("missing contract", func(t *testing.T) {
+		plan := validPipelineRunPlanV3(t)
+		plan.ExecutionContracts = plan.ExecutionContracts[:1]
+		plan.Artifact = pipelineRunPlanArtifact(t, plan)
+		require.ErrorContains(t, plan.validate(), "one execution contract per selected asset")
+	})
+
+	t.Run("aggregate resource drift", func(t *testing.T) {
+		plan := validPipelineRunPlanV3(t)
+		plan.Resources.Claims = nil
+		plan.Artifact = pipelineRunPlanArtifact(t, plan)
+		require.ErrorContains(t, plan.validate(), "aggregate resources")
+	})
+
+	t.Run("non canonical connection key", func(t *testing.T) {
+		plan := validPipelineRunPlanV3(t)
+		plan.ExecutionContracts[0].ConnectionKeys = []string{"warehouse"}
+		plan.Artifact = pipelineRunPlanArtifact(t, plan)
+		require.ErrorContains(t, plan.validate(), "lowercase SHA-256")
+	})
+
+	t.Run("legacy contract", func(t *testing.T) {
+		plan := validPipelineRunPlanV3(t)
+		plan.Version = PipelineRunPlanVersionV2
+		plan.MaxActiveSteps = 0
+		plan.Artifact = pipelineRunPlanArtifact(t, plan)
+		require.ErrorContains(t, plan.validate(), "cannot contain execution contracts")
+	})
+}
+
 func TestPipelineRunPlanRejectsArtifactTamperingAndStageContent(t *testing.T) {
 	t.Parallel()
 
@@ -216,6 +293,58 @@ func validPipelineRunPlan(t testing.TB) PipelineRunPlan {
 	return plan
 }
 
+func validPipelineRunPlanV3(t testing.TB) PipelineRunPlan {
+	t.Helper()
+	plan := validPipelineRunPlan(t)
+	plan.Version = PipelineRunPlanVersionV3
+	plan.MaxActiveSteps = 2
+	plan.ExecutionUnits = append(plan.ExecutionUnits, PipelineRunExecutionUnit{
+		AssetID: "pipeline-uuid:analytics.items", AssetName: "analytics.items",
+		StartDate: "2026-07-17T11:00:00Z", EndDate: "2026-07-17T12:00:00Z",
+		RenderIndex: 0, Reason: "selected_all", DependencyPositions: []int{0},
+	})
+	localIdentity := strings.Repeat("d", 64)
+	connectionKey := strings.Repeat("e", 64)
+	plan.Resources = PipelineRunPlanResources{
+		Isolation: PipelineRunResourceIsolationResources,
+		Claims: []PipelineRunResourceClaim{{
+			Kind: PipelineRunResourceKindLocalFile, Identity: localIdentity,
+		}},
+	}
+	plan.ExecutionContracts = []PipelineRunExecutionContract{
+		{
+			AssetID: "pipeline-uuid:analytics.items", AssetName: "analytics.items",
+			ConnectionKeys: []string{connectionKey},
+			MutationResources: PipelineRunPlanResources{
+				Isolation: PipelineRunResourceIsolationResources,
+				Claims:    []PipelineRunResourceClaim{},
+			},
+			CoordinationResources: PipelineRunPlanResources{
+				Isolation: PipelineRunResourceIsolationResources,
+				Claims:    []PipelineRunResourceClaim{},
+			},
+		},
+		{
+			AssetID: "pipeline-uuid:analytics.orders", AssetName: "analytics.orders",
+			ConnectionKeys: []string{connectionKey},
+			MutationResources: PipelineRunPlanResources{
+				Isolation: PipelineRunResourceIsolationResources,
+				Claims: []PipelineRunResourceClaim{{
+					Kind: PipelineRunResourceKindLocalFile, Identity: localIdentity,
+				}},
+			},
+			CoordinationResources: PipelineRunPlanResources{
+				Isolation: PipelineRunResourceIsolationResources,
+				Claims: []PipelineRunResourceClaim{{
+					Kind: PipelineRunResourceKindLocalFile, Identity: localIdentity,
+				}},
+			},
+		},
+	}
+	plan.Artifact = pipelineRunPlanArtifact(t, plan)
+	return plan
+}
+
 func pipelineRunPlanArtifact(t testing.TB, plan PipelineRunPlan) json.RawMessage {
 	t.Helper()
 	artifact := map[string]any{
@@ -246,6 +375,10 @@ func pipelineRunPlanArtifact(t testing.TB, plan PipelineRunPlan) json.RawMessage
 	}
 	if plan.Version >= PipelineRunPlanVersionV2 {
 		artifact["resources"] = plan.Resources
+	}
+	if plan.Version >= PipelineRunPlanVersionV3 {
+		artifact["context"].(map[string]any)["max_active_steps"] = plan.MaxActiveSteps
+		artifact["execution_contracts"] = plan.ExecutionContracts
 	}
 	body, err := json.Marshal(artifact)
 	require.NoError(t, err)

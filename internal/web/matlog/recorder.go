@@ -203,6 +203,7 @@ const (
 	executionTargetSnapshotVersionV1 = 1
 	executionTargetSnapshotVersionV2 = 2
 	executionTargetSnapshotVersionV3 = 3
+	executionTargetSnapshotVersionV4 = 4
 )
 
 type executionFingerprintContext struct {
@@ -262,7 +263,8 @@ func (r *Recorder) fingerprintContext(
 	}
 	if event.ExecutionTargetSnapshotVersion != executionTargetSnapshotVersionV1 &&
 		event.ExecutionTargetSnapshotVersion != executionTargetSnapshotVersionV2 &&
-		event.ExecutionTargetSnapshotVersion != executionTargetSnapshotVersionV3 {
+		event.ExecutionTargetSnapshotVersion != executionTargetSnapshotVersionV3 &&
+		event.ExecutionTargetSnapshotVersion != executionTargetSnapshotVersionV4 {
 		return executionFingerprintContext{}, fmt.Errorf("pipeline %s has unsupported execution target snapshot version %d", event.PipelineUUID, event.ExecutionTargetSnapshotVersion)
 	}
 	if len(event.ExecutionTargets) == 0 {
@@ -480,6 +482,13 @@ func validateCapturedExecutionTarget(assetName string, entry bus.ExecutionTarget
 	} else if err := validateCapturedWriteResource(assetName, entry); err != nil {
 		return err
 	}
+	if version < executionTargetSnapshotVersionV4 {
+		if !bus.ExecutionContractIsEmpty(entry.ExecutionContract) {
+			return fmt.Errorf("execution target snapshot entry %s contains an execution contract before version four", assetName)
+		}
+	} else if err := bus.ValidateExecutionContract(assetName, entry); err != nil {
+		return fmt.Errorf("execution target snapshot entry %s has an invalid execution contract: %w", assetName, err)
+	}
 	if version >= executionTargetSnapshotVersionV2 {
 		switch entry.CoverageMode {
 		case "marker", "union_intervals", "replace_interval":
@@ -509,7 +518,7 @@ func validateCapturedWriteResource(assetName string, entry bus.ExecutionTargetSn
 			if identity != "" {
 				return fmt.Errorf("execution target snapshot entry %s no-write resource claims an identity", assetName)
 			}
-		case "local_file", "duckdb_database":
+		case "local_file", "duckdb_database", "warehouse_relation":
 			if len(identity) != 64 {
 				return fmt.Errorf("execution target snapshot entry %s has an invalid write-resource identity", assetName)
 			}

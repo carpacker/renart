@@ -23,6 +23,7 @@ const (
 	assetWriteResourcePipeline    = "pipeline"
 	assetWriteResourceLocalFile   = "local_file"
 	assetWriteResourceDuckDB      = "duckdb_database"
+	assetWriteResourceWarehouse   = "warehouse_relation"
 )
 
 // SelectedPhysicalTarget is the value-only physical output selected for an
@@ -150,7 +151,51 @@ func resolveAssetPhysicalTarget(workspaceRoot string, info *directPipelineInfo) 
 	if !ok {
 		return runtimeOnlyAssetTarget(assetRenderTargetKindRelation, firstNonEmpty(object, strings.TrimSpace(asset.Name)), message)
 	}
-	return applyAssetWriteResourceSafety(asset, exactAssetTarget(assetRenderTargetKindRelation, object, coordinates))
+	target := exactAssetTarget(assetRenderTargetKindRelation, object, coordinates)
+	target = applyExactWarehouseWriteResource(asset, coordinates, target)
+	return applyAssetWriteResourceSafety(asset, target)
+}
+
+// applyExactWarehouseWriteResource promotes only native SQL operator families
+// whose shared clients and materializers have been audited for concurrent
+// execution. The claim uses the already-secret-free physical target digest, so
+// aliases that reach the same relation still serialize without persisting
+// endpoint or credential material.
+//
+// Seeds, Load/API assets, Python, hooks, schema-prefixed environments, and
+// every unaudited warehouse family remain pipeline-exclusive.
+func applyExactWarehouseWriteResource(
+	asset *pipeline.Asset,
+	coordinates runcontext.PhysicalTargetCoordinates,
+	target AssetRenderTarget,
+) AssetRenderTarget {
+	if asset == nil ||
+		target.Fidelity != AssetRenderFidelityExact ||
+		target.Identity == "" ||
+		!auditedConcurrentWarehouseAsset(asset.Type, coordinates.Platform) {
+		return target
+	}
+	resource := exactAssetWriteResource(assetWriteResourceWarehouse, "", target.Identity)
+	if resource.Fidelity != AssetRenderFidelityExact {
+		return target
+	}
+	target.WriteResource = resource
+	return target
+}
+
+func auditedConcurrentWarehouseAsset(assetType pipeline.AssetType, platform string) bool {
+	switch platform {
+	case "postgres":
+		return assetType == pipeline.AssetTypePostgresQuery
+	case "trino":
+		return assetType == pipeline.AssetTypeTrinoQuery
+	case "clickhouse":
+		return assetType == pipeline.AssetTypeClickHouse
+	case "starrocks":
+		return assetType == pipeline.AssetTypeStarRocksQuery
+	default:
+		return false
+	}
 }
 
 func applyAssetWriteResourceSafety(asset *pipeline.Asset, target AssetRenderTarget) AssetRenderTarget {
@@ -382,6 +427,17 @@ func resolveRelationTargetCoordinates(workspaceRoot, rawConnectionType string, c
 			return unresolvedRelation("the Trino target configuration has an unexpected shape")
 		}
 		return networkRelationTarget("trino", "trino", rawObject, conn.Host, conn.Port, 0, tablename.Defaults{Catalog: conn.Catalog, Schema: conn.Schema}, true, true)
+
+	case "starrocks":
+		conn, ok := connection.(*config.StarRocksConnection)
+		if !ok || conn == nil {
+			return unresolvedRelation("the StarRocks target configuration has an unexpected shape")
+		}
+		// Native StarRocks execution uses the MySQL protocol and selects the
+		// configured database. Catalog affects Sling URIs, not this native SQL
+		// connection, so including it would let aliases for the same relation
+		// evade exclusion.
+		return networkRelationTarget("starrocks", "starrocks", rawObject, conn.Host, conn.Port, 9030, tablename.Defaults{Schema: conn.Database}, false, true)
 
 	case "databricks":
 		conn, ok := connection.(*config.DatabricksConnection)

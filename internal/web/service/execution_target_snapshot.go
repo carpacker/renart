@@ -14,7 +14,7 @@ import (
 
 // ExecutionTargetSnapshotVersion is the persisted execution-target contract.
 // Bump it when entry semantics or identity derivation change incompatibly.
-const ExecutionTargetSnapshotVersion = 3
+const ExecutionTargetSnapshotVersion = 4
 
 type ExecutionCoverageMode string
 
@@ -49,20 +49,21 @@ type ExecutionTargetSnapshot struct {
 // runtime-only targets remain explicit through TargetFidelity and an empty
 // TargetIdentity.
 type ExecutionTargetSnapshotEntry struct {
-	AssetID                     string                      `json:"asset_id"`
-	TargetIdentity              string                      `json:"target_identity"`
-	TargetFidelity              AssetRenderFidelity         `json:"target_fidelity"`
-	TargetWriteEvidenceRequired bool                        `json:"target_write_evidence_required,omitempty"`
-	WriteResourceKind           string                      `json:"write_resource_kind"`
-	WriteResourceIdentity       string                      `json:"write_resource_identity,omitempty"`
-	WriteResourceFidelity       AssetRenderFidelity         `json:"write_resource_fidelity"`
-	Fingerprint                 string                      `json:"fingerprint"`
-	OwnContent                  string                      `json:"own_content"`
-	ConsumedVarsHash            string                      `json:"consumed_vars_hash"`
-	VarsHash                    string                      `json:"vars_hash"`
-	Upstreams                   []ExecutionUpstreamSnapshot `json:"upstreams"`
-	CoverageMode                ExecutionCoverageMode       `json:"coverage_mode"`
-	RefreshRestricted           bool                        `json:"refresh_restricted"`
+	AssetID                     string                        `json:"asset_id"`
+	TargetIdentity              string                        `json:"target_identity"`
+	TargetFidelity              AssetRenderFidelity           `json:"target_fidelity"`
+	TargetWriteEvidenceRequired bool                          `json:"target_write_evidence_required,omitempty"`
+	WriteResourceKind           string                        `json:"write_resource_kind"`
+	WriteResourceIdentity       string                        `json:"write_resource_identity,omitempty"`
+	WriteResourceFidelity       AssetRenderFidelity           `json:"write_resource_fidelity"`
+	ExecutionContract           PipelinePlanExecutionContract `json:"execution_contract"`
+	Fingerprint                 string                        `json:"fingerprint"`
+	OwnContent                  string                        `json:"own_content"`
+	ConsumedVarsHash            string                        `json:"consumed_vars_hash"`
+	VarsHash                    string                        `json:"vars_hash"`
+	Upstreams                   []ExecutionUpstreamSnapshot   `json:"upstreams"`
+	CoverageMode                ExecutionCoverageMode         `json:"coverage_mode"`
+	RefreshRestricted           bool                          `json:"refresh_restricted"`
 }
 
 func (e *HybridBruinExecutor) resolveExecutionTargetSnapshot(
@@ -121,6 +122,16 @@ func (e *HybridBruinExecutor) resolveExecutionTargetSnapshotForSelection(
 			Asset:    asset,
 			Config:   cfg,
 		})
+		executionContract, err := executionContractForAsset(
+			e.workspaceRoot,
+			cfg,
+			pl,
+			asset,
+			target,
+		)
+		if err != nil {
+			return ExecutionTargetSnapshot{}, err
+		}
 		entry := ExecutionTargetSnapshotEntry{
 			AssetID:                     assetID,
 			TargetIdentity:              target.Identity,
@@ -129,6 +140,7 @@ func (e *HybridBruinExecutor) resolveExecutionTargetSnapshotForSelection(
 			WriteResourceKind:           target.WriteResource.Kind,
 			WriteResourceIdentity:       target.WriteResource.Identity,
 			WriteResourceFidelity:       target.WriteResource.Fidelity,
+			ExecutionContract:           executionContract,
 			Fingerprint:                 string(result.FP),
 			OwnContent:                  string(result.OwnContent),
 			ConsumedVarsHash:            result.ConsumedVarsHash,

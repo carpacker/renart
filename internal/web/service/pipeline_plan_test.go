@@ -56,6 +56,7 @@ func TestPipelinePlanNeededSelectionRendersExactGapWithoutStageContent(t *testin
 id: pipeline-uuid
 name: analytics
 schedule: daily
+max_active_steps: 3
 `, map[string]string{
 		"up.sql": `
 /* @bruin
@@ -124,9 +125,42 @@ select id from analytics.up
 	require.Len(t, plan.ExecutionUnits, 1)
 	assert.Equal(t, "pipeline-uuid:analytics.down", plan.ExecutionUnits[0].AssetID)
 	assert.Equal(t, "uncovered_interval", plan.ExecutionUnits[0].Reason)
+	assert.Equal(t, 3, plan.Context.MaxActiveSteps)
+	require.Len(t, plan.ExecutionContracts, 1)
+	assert.Equal(t, "analytics.down", plan.ExecutionContracts[0].AssetName)
+	require.Len(t, plan.ExecutionContracts[0].ConnectionKeys, 1)
+	assert.Len(t, plan.ExecutionContracts[0].ConnectionKeys[0], 64)
 	assert.Equal(t, "default", stale.selectn.Environment)
 	assert.NotNil(t, stale.parsed)
 	assert.NotEmpty(t, plan.ID)
+}
+
+func TestBindPipelinePlanExecutionDependenciesChainsWindowsAndSelectedUpstreams(t *testing.T) {
+	t.Parallel()
+	pl := &pipeline.Pipeline{Assets: []*pipeline.Asset{
+		{Name: "analytics.up"},
+		{
+			Name: "analytics.down",
+			Upstreams: []pipeline.Upstream{{
+				Type: "asset", Value: "analytics.up",
+			}},
+		},
+		{Name: "analytics.independent"},
+	}}
+	units := []PipelinePlanExecutionUnit{
+		{AssetName: "analytics.up"},
+		{AssetName: "analytics.up"},
+		{AssetName: "analytics.down"},
+		{AssetName: "analytics.down"},
+		{AssetName: "analytics.independent"},
+	}
+
+	require.NoError(t, bindPipelinePlanExecutionDependencies(pl, units))
+	assert.Empty(t, units[0].DependencyPositions)
+	assert.Equal(t, []int{0}, units[1].DependencyPositions)
+	assert.Equal(t, []int{1}, units[2].DependencyPositions)
+	assert.Equal(t, []int{2}, units[3].DependencyPositions)
+	assert.Empty(t, units[4].DependencyPositions)
 }
 
 func TestPipelinePlanDoesNotBlockLocalLoadPseudoConnection(t *testing.T) {
@@ -659,6 +693,7 @@ func TestPipelinePlanResourcesKeepExactClaimsAndFailClosed(t *testing.T) {
 	t.Parallel()
 	localIdentity := strings.Repeat("a", 64)
 	duckIdentity := strings.Repeat("b", 64)
+	warehouseIdentity := strings.Repeat("c", 64)
 	assets := []PipelinePlanAsset{
 		{Target: AssetRenderTarget{WriteResource: AssetRenderWriteResource{
 			Kind: assetWriteResourceDuckDB, Identity: duckIdentity, Fidelity: AssetRenderFidelityExact,
@@ -672,27 +707,41 @@ func TestPipelinePlanResourcesKeepExactClaimsAndFailClosed(t *testing.T) {
 		{Target: AssetRenderTarget{WriteResource: AssetRenderWriteResource{
 			Kind: assetWriteResourceLocalFile, Identity: localIdentity, Fidelity: AssetRenderFidelityExact,
 		}}},
+		{Target: AssetRenderTarget{WriteResource: AssetRenderWriteResource{
+			Kind: assetWriteResourceWarehouse, Identity: warehouseIdentity, Fidelity: AssetRenderFidelityExact,
+		}}},
 	}
 
-	exact := pipelinePlanResources(assets)
+	exact := aggregatePipelinePlanMutationResources(testExecutionContractsForTargets(assets))
 	assert.Equal(t, PipelinePlanResourceIsolationResources, exact.Isolation)
 	assert.Equal(t, []PipelinePlanResourceClaim{
 		{Kind: assetWriteResourceDuckDB, Identity: duckIdentity},
 		{Kind: assetWriteResourceLocalFile, Identity: localIdentity},
+		{Kind: assetWriteResourceWarehouse, Identity: warehouseIdentity},
 	}, exact.Claims)
 
 	assets = append(assets, PipelinePlanAsset{Target: AssetRenderTarget{WriteResource: AssetRenderWriteResource{
 		Kind: assetWriteResourcePipeline, Fidelity: AssetRenderFidelityRuntimeOnly,
 	}}})
-	conservative := pipelinePlanResources(assets)
+	conservative := aggregatePipelinePlanMutationResources(testExecutionContractsForTargets(assets))
 	assert.Equal(t, PipelinePlanResourceIsolationPipeline, conservative.Isolation)
 	assert.Equal(t, exact.Claims, conservative.Claims, "known exact outputs remain serialized across pipelines")
 
-	noWrite := pipelinePlanResources([]PipelinePlanAsset{{Target: AssetRenderTarget{WriteResource: AssetRenderWriteResource{
+	noWrite := aggregatePipelinePlanMutationResources(testExecutionContractsForTargets([]PipelinePlanAsset{{Target: AssetRenderTarget{WriteResource: AssetRenderWriteResource{
 		Kind: assetWriteResourceNone, Fidelity: AssetRenderFidelityExact,
-	}}}})
+	}}}}))
 	assert.Equal(t, PipelinePlanResourceIsolationResources, noWrite.Isolation)
 	assert.Empty(t, noWrite.Claims)
+}
+
+func testExecutionContractsForTargets(assets []PipelinePlanAsset) []PipelinePlanExecutionContract {
+	contracts := make([]PipelinePlanExecutionContract, 0, len(assets))
+	for _, asset := range assets {
+		contracts = append(contracts, PipelinePlanExecutionContract{
+			MutationResources: executionMutationResources(asset.Target),
+		})
+	}
+	return contracts
 }
 
 func newTestPipelinePlanService(

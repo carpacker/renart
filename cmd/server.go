@@ -830,6 +830,7 @@ func newWebServer(ctx context.Context, cfg serverConfig, logger *zap.Logger) (*w
 						WriteResourceKind:           entry.WriteResourceKind,
 						WriteResourceIdentity:       entry.WriteResourceIdentity,
 						WriteResourceFidelity:       string(entry.WriteResourceFidelity),
+						ExecutionContract:           schedulerExecutionContractFromService(entry.ExecutionContract),
 						Fingerprint:                 entry.Fingerprint,
 						OwnContent:                  entry.OwnContent,
 						ConsumedVarsHash:            entry.ConsumedVarsHash,
@@ -976,11 +977,15 @@ func pipelineRunSpecFromSchedulerRequest(req webscheduler.RunRequest) service.Pi
 				Position: position, AssetID: unit.AssetID, AssetName: unit.AssetName,
 				StartDate: unit.StartDate, EndDate: unit.EndDate,
 				RenderIndex: unit.RenderIndex, Reason: unit.Reason,
+				DependencyPositions: append([]int(nil), unit.DependencyPositions...),
 			})
 		}
 		spec.Plan = &service.PipelineExecutionPlan{
-			SelectionMode: req.ConfirmedPlan.Selection.Mode,
-			Units:         units,
+			Version:        req.ConfirmedPlan.Version,
+			SelectionMode:  req.ConfirmedPlan.Selection.Mode,
+			MaxActiveSteps: req.ConfirmedPlan.MaxActiveSteps,
+			Contracts:      serviceExecutionContractsFromScheduler(req.ConfirmedPlan.ExecutionContracts),
+			Units:          units,
 		}
 	}
 	return spec
@@ -997,6 +1002,7 @@ func scheduledPipelineRunPlan(plan service.PipelinePlan, blockers []string) (web
 			AssetID: unit.AssetID, AssetName: unit.AssetName,
 			StartDate: unit.StartDate, EndDate: unit.EndDate,
 			RenderIndex: unit.RenderIndex, Reason: unit.Reason,
+			DependencyPositions: append([]int(nil), unit.DependencyPositions...),
 		})
 	}
 	claims := make([]webscheduler.PipelineRunResourceClaim, 0, len(plan.Resources.Claims))
@@ -1005,11 +1011,16 @@ func scheduledPipelineRunPlan(plan service.PipelinePlan, blockers []string) (web
 			Kind: claim.Kind, Identity: claim.Identity,
 		})
 	}
+	contracts := make([]webscheduler.PipelineRunExecutionContract, 0, len(plan.ExecutionContracts))
+	for _, contract := range plan.ExecutionContracts {
+		contracts = append(contracts, schedulerExecutionContractFromService(contract))
+	}
 	return webscheduler.PipelineRunPlan{
-		Version: webscheduler.PipelineRunPlanVersionV2,
+		Version: webscheduler.PipelineRunPlanVersionV3,
 		PlanID:  plan.ID, PipelineID: plan.PipelineID, PipelineUUID: plan.PipelineUUID,
 		SourceMerkle: plan.Source.MerkleRoot, ConfigurationDigest: plan.Context.ConfigurationDigest,
-		ExecutionTime: plan.Context.ExecutionTime, Blocked: plan.Status == service.PipelinePlanStatusBlocked,
+		ExecutionTime: plan.Context.ExecutionTime, MaxActiveSteps: plan.Context.MaxActiveSteps,
+		Blocked:  plan.Status == service.PipelinePlanStatusBlocked,
 		Blockers: append([]string(nil), blockers...),
 		Selection: webscheduler.PipelineRunPlanSelection{
 			Mode: plan.Selection.Mode, AssetName: plan.Selection.AssetName,
@@ -1019,9 +1030,68 @@ func scheduledPipelineRunPlan(plan service.PipelinePlan, blockers []string) (web
 			Isolation: plan.Resources.Isolation,
 			Claims:    claims,
 		},
-		ExecutionUnits: units,
-		Artifact:       artifact,
+		ExecutionContracts: contracts,
+		ExecutionUnits:     units,
+		Artifact:           artifact,
 	}, nil
+}
+
+func schedulerExecutionContractFromService(
+	contract service.PipelinePlanExecutionContract,
+) webscheduler.PipelineRunExecutionContract {
+	return webscheduler.PipelineRunExecutionContract{
+		AssetID:               contract.AssetID,
+		AssetName:             contract.AssetName,
+		ConnectionKeys:        append([]string(nil), contract.ConnectionKeys...),
+		MutationResources:     schedulerResourcesFromService(contract.MutationResources),
+		CoordinationResources: schedulerResourcesFromService(contract.CoordinationResources),
+	}
+}
+
+func schedulerResourcesFromService(
+	resources service.PipelinePlanResources,
+) webscheduler.PipelineRunPlanResources {
+	claims := make([]webscheduler.PipelineRunResourceClaim, 0, len(resources.Claims))
+	for _, claim := range resources.Claims {
+		claims = append(claims, webscheduler.PipelineRunResourceClaim{
+			Kind: claim.Kind, Identity: claim.Identity,
+		})
+	}
+	return webscheduler.PipelineRunPlanResources{
+		Isolation: resources.Isolation,
+		Claims:    claims,
+	}
+}
+
+func serviceExecutionContractsFromScheduler(
+	contracts []webscheduler.PipelineRunExecutionContract,
+) []service.PipelinePlanExecutionContract {
+	result := make([]service.PipelinePlanExecutionContract, 0, len(contracts))
+	for _, contract := range contracts {
+		result = append(result, service.PipelinePlanExecutionContract{
+			AssetID:               contract.AssetID,
+			AssetName:             contract.AssetName,
+			ConnectionKeys:        append([]string(nil), contract.ConnectionKeys...),
+			MutationResources:     serviceResourcesFromScheduler(contract.MutationResources),
+			CoordinationResources: serviceResourcesFromScheduler(contract.CoordinationResources),
+		})
+	}
+	return result
+}
+
+func serviceResourcesFromScheduler(
+	resources webscheduler.PipelineRunPlanResources,
+) service.PipelinePlanResources {
+	claims := make([]service.PipelinePlanResourceClaim, 0, len(resources.Claims))
+	for _, claim := range resources.Claims {
+		claims = append(claims, service.PipelinePlanResourceClaim{
+			Kind: claim.Kind, Identity: claim.Identity,
+		})
+	}
+	return service.PipelinePlanResources{
+		Isolation: resources.Isolation,
+		Claims:    claims,
+	}
 }
 
 func persistAllPlanUnitEvent(req webscheduler.RunRequest, event service.ExecutionAssetEvent) error {
@@ -1074,13 +1144,16 @@ func (b *schedulerRunEventBridge) Handle(event service.ExecutionAssetEvent) erro
 	if b.req.ConfirmedPlan != nil {
 		selectionMode = b.req.ConfirmedPlan.Selection.Mode
 	}
-	if selectionMode == service.PipelinePlanSelectionAll {
+	if selectionMode == service.PipelinePlanSelectionAll &&
+		(b.req.ConfirmedPlan == nil || b.req.ConfirmedPlan.Version < webscheduler.PipelineRunPlanVersionV3) {
 		if err := persistAllPlanUnitEvent(b.req, event); err != nil {
 			return err
 		}
 	}
 	completionOrdinal := event.CompletionOrdinal
-	if selectionMode != "" && selectionMode != service.PipelinePlanSelectionAll {
+	hasDurableUnitEvents := b.req.ConfirmedPlan != nil &&
+		b.req.ConfirmedPlan.Version >= webscheduler.PipelineRunPlanVersionV3
+	if selectionMode != "" && (selectionMode != service.PipelinePlanSelectionAll || hasDurableUnitEvents) {
 		if !event.HasUnitPosition || event.UnitPosition < 0 || event.UnitPosition >= len(b.req.ConfirmedPlan.ExecutionUnits) {
 			return fmt.Errorf("execution asset %s has no confirmed unit position", event.Asset)
 		}
@@ -1095,10 +1168,6 @@ func (b *schedulerRunEventBridge) Handle(event service.ExecutionAssetEvent) erro
 		}
 		if status == webscheduler.RunStatusSuccess && event.UnitPosition != last {
 			return nil
-		}
-		if status != webscheduler.RunStatusRunning {
-			ordinal := int64(first)
-			completionOrdinal = &ordinal
 		}
 	}
 

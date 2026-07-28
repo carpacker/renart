@@ -366,9 +366,11 @@ redacted content blobs are omitted by default and can be requested lazily
 without changing the plan identity. The plan ID binds its source Merkle root,
 selected-configuration and variable identities, data-state token, context,
 selection, structured write-resource claims, and operation graph. Local files
-and whole DuckDB database files can be exact; unproven operators remain
-pipeline-conservative. Incomplete source remains visible through structured
-findings and honest fidelity rather than fabricated SQL.
+and whole DuckDB database files can be exact. Audited native PostgreSQL, Trino,
+ClickHouse, and StarRocks SQL materializations claim an exact warehouse
+relation; unproven operators remain pipeline-conservative. Incomplete source
+remains visible through structured findings and honest fidelity rather than
+fabricated SQL.
 
 The same endpoint accepts a distinct `deployment` purpose for reviewing the
 entire saved working tree before Deploy. That purpose is definition-only: it
@@ -405,6 +407,48 @@ is durable (`queued`, `running`, and terminal statuses), emitted as `run.unit`,
 and each completed unit has its own replay-safe completion identity while
 retaining the parent pipeline run ID. Run details return the retained plan and
 unit ledger beside steps, events, and output.
+
+Version-three plans bind the effective `max_active_steps`, stable dependency
+positions for every asset/window unit, and one secret-free execution contract
+per selected asset. The contract contains hashed connection keys plus separate
+mutation and runtime-coordination claims. Version-one and version-two plans
+remain readable and execute sequentially; Renart never guesses missing unit
+contracts during recovery.
+
+Inline full-pipeline runs are admitted before their mutable working tree is
+parsed. When such a run opts into overlap without a reviewed plan, the executor
+resolves its topological unit list and atomically upgrades the private RunSpec
+to version three, inserting every queued unit before target capture or physical
+work. Pre-resolved full runs retain the same exact unit provenance at admission.
+This keeps `run.unit` transitions fail-closed without requiring inline work to
+be replayable after a process interruption.
+
+All version-three full, reviewed, selector, and Build-needed runs use
+`internal/web/executiongraph`. Its deterministic ready queue admits the lowest
+plan position whose selected upstream units succeeded and whose budgets are
+available. Multiple windows of one asset form an explicit chain. A unit owns at
+most one active-step slot while its main task, checks, and metadata work run
+sequentially. The effective bound is the minimum of:
+
+- the pipeline's `max_active_steps` (omitted or `1` is sequential);
+- the process-wide workspace budget (default `8`, overridable with
+  `RENART_EXECUTION_WORKSPACE_MAX_ACTIVE_STEPS`);
+- every used connection's `max_concurrent_assets`; and
+- exclusive runtime/write-resource availability.
+
+The workspace budget is FIFO across runs, so scheduled and interactive work
+cannot multiply their per-pipeline worker counts without a process-wide bound.
+`RENART_EXECUTION_FORCE_SEQUENTIAL=true` is the initial internal rollback
+switch. It changes dispatch only; the durable reviewed plan remains intact.
+
+A unit is durably marked running before its physical operator starts. Successful
+completion, quality evidence, metadata, and freshness hand-off finish before
+its dependency edges are released. A blocking failure skips only selected
+downstreams (and later windows of the same asset); independent branches
+continue. Cancellation stops admission, cancels active operators, drains every
+worker result, and closes never-started units durably. Streamed lifecycle and
+child output reflects real timing, while the terminal human summary is emitted
+once in stable plan order.
 
 Planning is partial while execution remains strict. If one asset definition is
 temporarily invalid, the read-only planner uses the same marked placeholder as

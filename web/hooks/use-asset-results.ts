@@ -2,14 +2,13 @@
 
 import AnsiToHtml from "ansi-to-html";
 import { useAtom, useAtomValue, useSetAtom } from "jotai";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useMemo, useRef, useState } from "react";
 
 import {
   assetResultsAtom,
   changedAssetIdsAtom,
   enrichedSelectedAssetAtom,
   materializingAssetIdsAtom,
-  schedulerRunEventAtom,
 } from "@/lib/atoms/domains/results";
 import {
   pipelineAtom,
@@ -18,6 +17,7 @@ import {
   selectedEnvironmentAtom,
 } from "@/lib/atoms/domains/workspace";
 import { useAssetInspect } from "@/hooks/use-asset-inspect";
+import { useSchedulerRunEvents } from "@/hooks/use-scheduler-run-events";
 import { materializeAssetStream } from "@/lib/api-assets-inspect";
 import { materializePipelineStream } from "@/lib/api-pipelines";
 import {
@@ -184,7 +184,6 @@ export function useAssetResults() {
   const pipelineId = pipeline?.id ?? null;
   const selectedAssetId = useAtomValue(resolvedSelectedAssetAtom);
   const selectedExecutionTimeWindow = useAtomValue(selectedExecutionTimeWindowAtom);
-  const schedulerRunEvent = useAtomValue(schedulerRunEventAtom);
   const terminalSchedulerRuns = useRef(new Map<string, TerminalSchedulerRun>());
   const inspectAssets = useMemo(() => (asset ? [asset] : []), [asset]);
   const {
@@ -325,10 +324,7 @@ export function useAssetResults() {
     [applyTerminalSchedulerRun],
   );
 
-  useEffect(() => {
-    if (!schedulerRunEvent) {
-      return;
-    }
+  useSchedulerRunEvents((schedulerRunEvent) => {
     if (schedulerRunEvent.type === "run.unit") {
       return;
     }
@@ -399,7 +395,7 @@ export function useAssetResults() {
         materializeHistory: nextHistory,
       };
     });
-  }, [applyTerminalSchedulerRun, reconcileTerminalSchedulerRun, schedulerRunEvent, setResults]);
+  });
 
   const runInspectForAsset = useCallback(
     async (assetId: string, contentSnapshot?: string) => {

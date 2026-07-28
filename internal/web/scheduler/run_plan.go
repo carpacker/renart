@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"sort"
 	"strings"
 	"time"
 )
@@ -13,6 +14,7 @@ import (
 const (
 	PipelineRunPlanVersionV1 = 1
 	PipelineRunPlanVersionV2 = 2
+	PipelineRunPlanVersionV3 = 3
 	maxPipelineRunPlanBytes  = 8 << 20
 	pipelineDataStateTokenV1 = "renart-data-state-v1"
 
@@ -20,6 +22,7 @@ const (
 	PipelineRunResourceIsolationPipeline  = "pipeline"
 	PipelineRunResourceKindLocalFile      = "local_file"
 	PipelineRunResourceKindDuckDBDatabase = "duckdb_database"
+	PipelineRunResourceKindWarehouse      = "warehouse_relation"
 )
 
 var ErrInvalidStoredRunPlan = errors.New("stored pipeline run plan is invalid")
@@ -28,20 +31,22 @@ var ErrInvalidStoredRunPlan = errors.New("stored pipeline run plan is invalid")
 // Typed selection and execution units are kept beside the presentation
 // artifact so recovery/execution never has to infer behavior from UI JSON.
 type PipelineRunPlan struct {
-	Version             int                        `json:"version"`
-	PlanID              string                     `json:"plan_id"`
-	PipelineID          string                     `json:"pipeline_id"`
-	PipelineUUID        string                     `json:"pipeline_uuid"`
-	SourceMerkle        string                     `json:"source_merkle"`
-	ConfigurationDigest string                     `json:"configuration_digest"`
-	ExecutionTime       string                     `json:"execution_time"`
-	Blocked             bool                       `json:"blocked,omitempty"`
-	Blockers            []string                   `json:"blockers,omitempty"`
-	Selection           PipelineRunPlanSelection   `json:"selection"`
-	Resources           PipelineRunPlanResources   `json:"resources,omitempty"`
-	ExecutionUnits      []PipelineRunExecutionUnit `json:"execution_units"`
-	Preview             *PipelineRunPlanPreview    `json:"preview,omitempty"`
-	Artifact            json.RawMessage            `json:"artifact"`
+	Version             int                            `json:"version"`
+	PlanID              string                         `json:"plan_id"`
+	PipelineID          string                         `json:"pipeline_id"`
+	PipelineUUID        string                         `json:"pipeline_uuid"`
+	SourceMerkle        string                         `json:"source_merkle"`
+	ConfigurationDigest string                         `json:"configuration_digest"`
+	ExecutionTime       string                         `json:"execution_time"`
+	MaxActiveSteps      int                            `json:"max_active_steps,omitempty"`
+	Blocked             bool                           `json:"blocked,omitempty"`
+	Blockers            []string                       `json:"blockers,omitempty"`
+	Selection           PipelineRunPlanSelection       `json:"selection"`
+	Resources           PipelineRunPlanResources       `json:"resources,omitempty"`
+	ExecutionContracts  []PipelineRunExecutionContract `json:"execution_contracts,omitempty"`
+	ExecutionUnits      []PipelineRunExecutionUnit     `json:"execution_units"`
+	Preview             *PipelineRunPlanPreview        `json:"preview,omitempty"`
+	Artifact            json.RawMessage                `json:"artifact"`
 }
 
 // PipelineRunPlanPreview records a reviewed needed-plan that safely shrank at
@@ -72,13 +77,22 @@ type PipelineRunPlanResources struct {
 	Claims    []PipelineRunResourceClaim `json:"claims"`
 }
 
+type PipelineRunExecutionContract struct {
+	AssetID               string                   `json:"asset_id"`
+	AssetName             string                   `json:"asset_name"`
+	ConnectionKeys        []string                 `json:"connection_keys"`
+	MutationResources     PipelineRunPlanResources `json:"mutation_resources"`
+	CoordinationResources PipelineRunPlanResources `json:"coordination_resources"`
+}
+
 type PipelineRunExecutionUnit struct {
-	AssetID     string `json:"asset_id"`
-	AssetName   string `json:"asset_name"`
-	StartDate   string `json:"start_date"`
-	EndDate     string `json:"end_date"`
-	RenderIndex int    `json:"render_index"`
-	Reason      string `json:"reason"`
+	AssetID             string `json:"asset_id"`
+	AssetName           string `json:"asset_name"`
+	StartDate           string `json:"start_date"`
+	EndDate             string `json:"end_date"`
+	RenderIndex         int    `json:"render_index"`
+	Reason              string `json:"reason"`
+	DependencyPositions []int  `json:"dependency_positions,omitempty"`
 }
 
 type PipelineRunUnitStatus string
@@ -131,7 +145,9 @@ func (e *invalidRunPlanError) Unwrap() error {
 }
 
 func (plan PipelineRunPlan) validate() error {
-	if plan.Version != PipelineRunPlanVersionV1 && plan.Version != PipelineRunPlanVersionV2 {
+	if plan.Version != PipelineRunPlanVersionV1 &&
+		plan.Version != PipelineRunPlanVersionV2 &&
+		plan.Version != PipelineRunPlanVersionV3 {
 		return fmt.Errorf("unsupported pipeline run plan version %d", plan.Version)
 	}
 	if plan.Version == PipelineRunPlanVersionV1 {
@@ -140,6 +156,16 @@ func (plan PipelineRunPlan) validate() error {
 		}
 	} else if err := validatePipelineRunPlanResources(plan.Resources); err != nil {
 		return err
+	}
+	if plan.Version < PipelineRunPlanVersionV3 {
+		if plan.MaxActiveSteps != 0 {
+			return fmt.Errorf("pipeline run plan v%d cannot contain max_active_steps", plan.Version)
+		}
+		if len(plan.ExecutionContracts) != 0 {
+			return fmt.Errorf("pipeline run plan v%d cannot contain execution contracts", plan.Version)
+		}
+	} else if plan.MaxActiveSteps < 1 {
+		return errors.New("pipeline run plan v3 requires max_active_steps greater than zero")
 	}
 	if err := validateRunIdentityDigest("plan_id", strings.TrimSpace(plan.PlanID)); err != nil {
 		return err
@@ -179,6 +205,18 @@ func (plan PipelineRunPlan) validate() error {
 		if err := validatePipelineRunExecutionUnit(unit); err != nil {
 			return fmt.Errorf("pipeline run plan execution unit %d: %w", index, err)
 		}
+		if plan.Version < PipelineRunPlanVersionV3 && len(unit.DependencyPositions) > 0 {
+			return fmt.Errorf(
+				"pipeline run plan v%d execution unit %d cannot contain dependencies",
+				plan.Version,
+				index,
+			)
+		}
+		if plan.Version >= PipelineRunPlanVersionV3 {
+			if err := validatePipelineRunExecutionDependencies(index, unit.DependencyPositions); err != nil {
+				return fmt.Errorf("pipeline run plan execution unit %d: %w", index, err)
+			}
+		}
 		key := strings.Join([]string{
 			strings.TrimSpace(unit.AssetID),
 			strings.TrimSpace(unit.StartDate),
@@ -189,6 +227,17 @@ func (plan PipelineRunPlan) validate() error {
 			return fmt.Errorf("pipeline run plan execution unit %d is duplicated", index)
 		}
 		seen[key] = struct{}{}
+	}
+	if plan.Version >= PipelineRunPlanVersionV3 {
+		if err := validatePipelineRunExecutionContracts(plan.ExecutionContracts, plan.ExecutionUnits); err != nil {
+			return err
+		}
+		if !equalPipelineRunPlanResources(
+			aggregatePipelineRunMutationResources(plan.ExecutionContracts),
+			plan.Resources,
+		) {
+			return errors.New("pipeline run plan aggregate resources do not match its execution contracts")
+		}
 	}
 	if len(plan.Artifact) == 0 || len(plan.Artifact) > maxPipelineRunPlanBytes {
 		return fmt.Errorf("pipeline run plan artifact must be between 1 and %d bytes", maxPipelineRunPlanBytes)
@@ -214,6 +263,93 @@ func (plan PipelineRunPlan) validate() error {
 	return nil
 }
 
+func validatePipelineRunExecutionContracts(
+	contracts []PipelineRunExecutionContract,
+	units []PipelineRunExecutionUnit,
+) error {
+	expected := make(map[string]string)
+	for _, unit := range units {
+		expected[unit.AssetID] = unit.AssetName
+	}
+	if len(contracts) != len(expected) {
+		return errors.New("pipeline run plan requires one execution contract per selected asset")
+	}
+	previousAssetID := ""
+	seen := make(map[string]struct{}, len(contracts))
+	for index, contract := range contracts {
+		assetID := strings.TrimSpace(contract.AssetID)
+		assetName := strings.TrimSpace(contract.AssetName)
+		if assetID == "" || assetID != contract.AssetID || assetName == "" || assetName != contract.AssetName {
+			return fmt.Errorf("pipeline run execution contract %d requires canonical asset identity", index)
+		}
+		if index > 0 && assetID <= previousAssetID {
+			return errors.New("pipeline run execution contracts must be sorted by asset_id")
+		}
+		previousAssetID = assetID
+		if expected[assetID] != assetName {
+			return fmt.Errorf("pipeline run execution contract %d does not match a selected asset", index)
+		}
+		if _, exists := seen[assetID]; exists {
+			return fmt.Errorf("pipeline run execution contract %d is duplicated", index)
+		}
+		seen[assetID] = struct{}{}
+		if err := validateCanonicalConnectionKeys(contract.ConnectionKeys); err != nil {
+			return fmt.Errorf("pipeline run execution contract %d: %w", index, err)
+		}
+		if err := validatePipelineRunPlanResources(contract.MutationResources); err != nil {
+			return fmt.Errorf("pipeline run execution contract %d mutation resources: %w", index, err)
+		}
+		if err := validatePipelineRunPlanResources(contract.CoordinationResources); err != nil {
+			return fmt.Errorf("pipeline run execution contract %d coordination resources: %w", index, err)
+		}
+	}
+	return nil
+}
+
+func validateCanonicalConnectionKeys(keys []string) error {
+	previous := ""
+	for index, key := range keys {
+		if err := validateRunIdentityDigest(fmt.Sprintf("connection_keys[%d]", index), key); err != nil {
+			return err
+		}
+		if index > 0 && key <= previous {
+			return errors.New("connection keys must be sorted and unique")
+		}
+		previous = key
+	}
+	return nil
+}
+
+func aggregatePipelineRunMutationResources(
+	contracts []PipelineRunExecutionContract,
+) PipelineRunPlanResources {
+	result := PipelineRunPlanResources{
+		Isolation: PipelineRunResourceIsolationResources,
+		Claims:    []PipelineRunResourceClaim{},
+	}
+	seen := make(map[string]struct{})
+	for _, contract := range contracts {
+		if contract.MutationResources.Isolation == PipelineRunResourceIsolationPipeline {
+			result.Isolation = PipelineRunResourceIsolationPipeline
+		}
+		for _, claim := range contract.MutationResources.Claims {
+			key := claim.Kind + "\x00" + claim.Identity
+			if _, exists := seen[key]; exists {
+				continue
+			}
+			seen[key] = struct{}{}
+			result.Claims = append(result.Claims, claim)
+		}
+	}
+	sort.Slice(result.Claims, func(i, j int) bool {
+		if result.Claims[i].Kind == result.Claims[j].Kind {
+			return result.Claims[i].Identity < result.Claims[j].Identity
+		}
+		return result.Claims[i].Kind < result.Claims[j].Kind
+	})
+	return result
+}
+
 func validatePipelineRunPlanResources(resources PipelineRunPlanResources) error {
 	switch resources.Isolation {
 	case PipelineRunResourceIsolationResources, PipelineRunResourceIsolationPipeline:
@@ -226,7 +362,9 @@ func validatePipelineRunPlanResources(resources PipelineRunPlanResources) error 
 			return fmt.Errorf("pipeline run resource claim %d must be canonical", index)
 		}
 		switch claim.Kind {
-		case PipelineRunResourceKindLocalFile, PipelineRunResourceKindDuckDBDatabase:
+		case PipelineRunResourceKindLocalFile,
+			PipelineRunResourceKindDuckDBDatabase,
+			PipelineRunResourceKindWarehouse:
 		default:
 			return fmt.Errorf("pipeline run resource claim %d has unsupported kind %q", index, claim.Kind)
 		}
@@ -341,6 +479,23 @@ func validatePipelineRunExecutionUnit(unit PipelineRunExecutionUnit) error {
 	return nil
 }
 
+func validatePipelineRunExecutionDependencies(position int, dependencies []int) error {
+	previous := -1
+	for index, dependency := range dependencies {
+		if dependency < 0 || dependency >= position {
+			return fmt.Errorf(
+				"dependency_positions[%d] must refer to an earlier execution unit",
+				index,
+			)
+		}
+		if index > 0 && dependency <= previous {
+			return errors.New("dependency_positions must be sorted and unique")
+		}
+		previous = dependency
+	}
+	return nil
+}
+
 func validatePipelineRunPlanArtifact(plan PipelineRunPlan) error {
 	var artifact struct {
 		ID           string `json:"id"`
@@ -352,6 +507,7 @@ func validatePipelineRunPlanArtifact(plan PipelineRunPlan) error {
 		Context struct {
 			ExecutionTime       string `json:"execution_time"`
 			ConfigurationDigest string `json:"configuration_digest"`
+			MaxActiveSteps      int    `json:"max_active_steps"`
 		} `json:"context"`
 		Status    string `json:"status"`
 		Readiness struct {
@@ -359,10 +515,11 @@ func validatePipelineRunPlanArtifact(plan PipelineRunPlan) error {
 				Message string `json:"message"`
 			} `json:"blockers"`
 		} `json:"readiness"`
-		Selection      PipelineRunPlanSelection   `json:"selection"`
-		Resources      PipelineRunPlanResources   `json:"resources"`
-		ExecutionUnits []PipelineRunExecutionUnit `json:"execution_units"`
-		Assets         []struct {
+		Selection          PipelineRunPlanSelection       `json:"selection"`
+		Resources          PipelineRunPlanResources       `json:"resources"`
+		ExecutionContracts []PipelineRunExecutionContract `json:"execution_contracts"`
+		ExecutionUnits     []PipelineRunExecutionUnit     `json:"execution_units"`
+		Assets             []struct {
 			Renders []struct {
 				Stages []struct {
 					Content string `json:"content"`
@@ -385,11 +542,18 @@ func validatePipelineRunPlanArtifact(plan PipelineRunPlan) error {
 		strings.TrimSpace(artifact.Context.ExecutionTime) != strings.TrimSpace(plan.ExecutionTime) {
 		return errors.New("pipeline run plan artifact identity does not match its durable binding")
 	}
+	if plan.Version >= PipelineRunPlanVersionV3 && artifact.Context.MaxActiveSteps != plan.MaxActiveSteps {
+		return errors.New("pipeline run plan artifact max_active_steps does not match its durable binding")
+	}
 	if artifact.Selection != plan.Selection {
 		return errors.New("pipeline run plan artifact selection does not match its durable binding")
 	}
 	if plan.Version >= PipelineRunPlanVersionV2 && !equalPipelineRunPlanResources(artifact.Resources, plan.Resources) {
 		return errors.New("pipeline run plan artifact resources do not match their durable binding")
+	}
+	if plan.Version >= PipelineRunPlanVersionV3 &&
+		!equalPipelineRunExecutionContracts(artifact.ExecutionContracts, plan.ExecutionContracts) {
+		return errors.New("pipeline run plan artifact execution contracts do not match their durable binding")
 	}
 	if plan.Blocked != (strings.TrimSpace(artifact.Status) == "blocked") {
 		return errors.New("pipeline run plan artifact blocked status does not match its durable binding")
@@ -430,6 +594,24 @@ func equalPipelineRunPlanResources(left, right PipelineRunPlanResources) bool {
 	return true
 }
 
+func equalPipelineRunExecutionContracts(
+	left, right []PipelineRunExecutionContract,
+) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for index := range left {
+		if left[index].AssetID != right[index].AssetID ||
+			left[index].AssetName != right[index].AssetName ||
+			!equalStrings(left[index].ConnectionKeys, right[index].ConnectionKeys) ||
+			!equalPipelineRunPlanResources(left[index].MutationResources, right[index].MutationResources) ||
+			!equalPipelineRunPlanResources(left[index].CoordinationResources, right[index].CoordinationResources) {
+			return false
+		}
+	}
+	return true
+}
+
 func equalStrings(left, right []string) bool {
 	if len(left) != len(right) {
 		return false
@@ -447,7 +629,7 @@ func equalPipelineRunExecutionUnits(left, right []PipelineRunExecutionUnit) bool
 		return false
 	}
 	for index := range left {
-		if left[index] != right[index] {
+		if !equalPipelineRunExecutionUnit(left[index], right[index], false) {
 			return false
 		}
 	}
@@ -459,9 +641,29 @@ func equalPipelineRunExecutionUnitsIgnoringRenderIndex(left, right []PipelineRun
 		return false
 	}
 	for index := range left {
-		leftUnit, rightUnit := left[index], right[index]
-		leftUnit.RenderIndex, rightUnit.RenderIndex = 0, 0
-		if leftUnit != rightUnit {
+		if !equalPipelineRunExecutionUnit(left[index], right[index], true) {
+			return false
+		}
+	}
+	return true
+}
+
+func equalPipelineRunExecutionUnit(left, right PipelineRunExecutionUnit, ignoreReviewOnly bool) bool {
+	if ignoreReviewOnly {
+		left.RenderIndex, right.RenderIndex = 0, 0
+		left.DependencyPositions, right.DependencyPositions = nil, nil
+	}
+	if left.AssetID != right.AssetID ||
+		left.AssetName != right.AssetName ||
+		left.StartDate != right.StartDate ||
+		left.EndDate != right.EndDate ||
+		left.RenderIndex != right.RenderIndex ||
+		left.Reason != right.Reason ||
+		len(left.DependencyPositions) != len(right.DependencyPositions) {
+		return false
+	}
+	for index := range left.DependencyPositions {
+		if left.DependencyPositions[index] != right.DependencyPositions[index] {
 			return false
 		}
 	}
@@ -545,7 +747,9 @@ func marshalPipelineRunPlan(plan PipelineRunPlan) ([]byte, error) {
 }
 
 func unmarshalPipelineRunPlan(version int, body []byte) (PipelineRunPlan, error) {
-	if version != PipelineRunPlanVersionV1 && version != PipelineRunPlanVersionV2 {
+	if version != PipelineRunPlanVersionV1 &&
+		version != PipelineRunPlanVersionV2 &&
+		version != PipelineRunPlanVersionV3 {
 		return PipelineRunPlan{}, fmt.Errorf("unsupported pipeline run plan version %d", version)
 	}
 	var plan PipelineRunPlan

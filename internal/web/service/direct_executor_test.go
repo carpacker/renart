@@ -11,13 +11,16 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/bruin-data/bruin/pkg/ansisql"
 	"github.com/bruin-data/bruin/pkg/config"
 	"github.com/bruin-data/bruin/pkg/jinja"
 	"github.com/bruin-data/bruin/pkg/pipeline"
 	"github.com/bruin-data/bruin/pkg/query"
+	bruinscheduler "github.com/bruin-data/bruin/pkg/scheduler"
 	"github.com/spf13/afero"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -108,6 +111,12 @@ func TestUpdateDirectAssetDependenciesRejectsMissingPipelineInfo(t *testing.T) {
 	err := updateDirectAssetDependencies(context.Background(), nil, nil, nil, nil, afero.NewMemMapFs())
 
 	require.Error(t, err)
+}
+
+func TestExecutionMaxActiveStepsForceSequentialKillSwitch(t *testing.T) {
+	t.Setenv(executionForceSequentialEnvironment, "true")
+
+	assert.Equal(t, 1, executionMaxActiveSteps(8))
 }
 
 type stubSchemaQuerier struct {
@@ -1132,6 +1141,530 @@ func newCompatDirectExecutor(workspaceRoot, bruinBinary string) *HybridBruinExec
 			)
 		},
 	)
+}
+
+func TestDirectPipelineRunParallelizesIndependentDistinctDuckDBTargets(t *testing.T) {
+	workspaceRoot := createParallelDuckDBWorkspace(t, 2)
+	executor := newCompatDirectExecutor(workspaceRoot, "")
+	release := make(chan struct{})
+	started := make(chan string, 2)
+	executor.SetDirectTaskGate(func(ctx context.Context, instance bruinscheduler.TaskInstance) error {
+		if instance.GetType() != bruinscheduler.TaskInstanceTypeMain {
+			return nil
+		}
+		started <- instance.GetAsset().Name
+		select {
+		case <-release:
+			return nil
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	})
+	var (
+		eventMu       sync.Mutex
+		events        []PipelineExecutionUnitEvent
+		resolvedUnits []PipelineExecutionUnit
+	)
+	type runResult struct {
+		output []byte
+		err    error
+	}
+	done := make(chan runResult, 1)
+	go func() {
+		output, err := executor.RunPipeline(context.Background(), RunPipelineRequest{
+			Target: "analytics",
+			OnExecutionUnitsResolved: func(units []PipelineExecutionUnit) error {
+				resolvedUnits = append([]PipelineExecutionUnit(nil), units...)
+				return nil
+			},
+			UnitEvent: func(event PipelineExecutionUnitEvent) error {
+				eventMu.Lock()
+				events = append(events, event)
+				eventMu.Unlock()
+				return nil
+			},
+		}, nil)
+		done <- runResult{output: output, err: err}
+	}()
+
+	first := receiveString(t, started)
+	second := receiveString(t, started)
+	assert.ElementsMatch(t, []string{"analytics.left", "analytics.right"}, []string{first, second})
+	close(release)
+	result := <-done
+	require.NoError(t, result.err)
+	output := normalizeRunCompatibilityText(string(result.output))
+	assert.Equal(t, 1, strings.Count(output, "=================================================="))
+	assert.Equal(t, 1, strings.Count(output, "Interval:"))
+	assert.Equal(t, 1, strings.Count(output, "Starting the pipeline execution..."))
+	leftSummary := strings.Index(output, "PASS analytics.left")
+	rightSummary := strings.Index(output, "PASS analytics.right")
+	require.NotEqual(t, -1, leftSummary, output)
+	require.NotEqual(t, -1, rightSummary, output)
+	assert.Less(t, leftSummary, rightSummary, "final summary follows stable plan order")
+	require.Len(t, resolvedUnits, 2)
+	assert.Equal(t, "analytics/assets/left.sql", resolvedUnits[0].AssetPath)
+	assert.Equal(t, "analytics/assets/right.sql", resolvedUnits[1].AssetPath)
+
+	eventMu.Lock()
+	defer eventMu.Unlock()
+	running := 0
+	success := 0
+	for _, event := range events {
+		switch event.Status {
+		case "running":
+			running++
+		case "success":
+			success++
+		}
+	}
+	assert.Equal(t, 2, running)
+	assert.Equal(t, 2, success)
+}
+
+func TestRuntimePipelineExecutionUnitsUseTopologicalOrder(t *testing.T) {
+	t.Parallel()
+	pl := &pipeline.Pipeline{
+		LegacyID: "pipeline-id",
+		Assets: []*pipeline.Asset{
+			{
+				Name:      "analytics.downstream",
+				Upstreams: []pipeline.Upstream{{Type: "asset", Value: "analytics.upstream"}},
+			},
+			{Name: "analytics.upstream"},
+		},
+	}
+	window := ExecutionTimeWindow{
+		Start: time.Date(2026, 7, 26, 0, 0, 0, 0, time.UTC),
+		End:   time.Date(2026, 7, 27, 0, 0, 0, 0, time.UTC),
+	}
+
+	units, err := runtimePipelineExecutionUnits(pl, window)
+	require.NoError(t, err)
+	require.Len(t, units, 2)
+	assert.Equal(t, "analytics.upstream", units[0].AssetName)
+	assert.Empty(t, units[0].DependencyPositions)
+	assert.Equal(t, "analytics.downstream", units[1].AssetName)
+	assert.Equal(t, []int{0}, units[1].DependencyPositions)
+}
+
+func TestDirectPipelineRunSerializesSameDuckDBTarget(t *testing.T) {
+	workspaceRoot := createParallelDuckDBWorkspace(t, 1)
+	executor := newCompatDirectExecutor(workspaceRoot, "")
+	firstRelease := make(chan struct{})
+	firstStarted := make(chan string, 1)
+	secondStarted := make(chan string, 1)
+	var gateMu sync.Mutex
+	startCount := 0
+	executor.SetDirectTaskGate(func(ctx context.Context, instance bruinscheduler.TaskInstance) error {
+		if instance.GetType() != bruinscheduler.TaskInstanceTypeMain {
+			return nil
+		}
+		gateMu.Lock()
+		startCount++
+		current := startCount
+		gateMu.Unlock()
+		if current == 1 {
+			firstStarted <- instance.GetAsset().Name
+			select {
+			case <-firstRelease:
+				return nil
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+		}
+		secondStarted <- instance.GetAsset().Name
+		return nil
+	})
+	done := make(chan error, 1)
+	go func() {
+		_, err := executor.RunPipeline(context.Background(), RunPipelineRequest{Target: "analytics"}, nil)
+		done <- err
+	}()
+
+	_ = receiveString(t, firstStarted)
+	select {
+	case name := <-secondStarted:
+		t.Fatalf("same DuckDB file admitted %s while the first writer was active", name)
+	case <-time.After(50 * time.Millisecond):
+	}
+	close(firstRelease)
+	_ = receiveString(t, secondStarted)
+	require.NoError(t, <-done)
+}
+
+func TestDirectPipelineRunParallelizesAuditedWarehouseRelations(t *testing.T) {
+	tests := []struct {
+		name        string
+		assetType   pipeline.AssetType
+		connections string
+	}{
+		{
+			name:      "postgres",
+			assetType: pipeline.AssetTypePostgresQuery,
+			connections: `postgres:
+        - name: warehouse
+          host: 127.0.0.1
+          port: 5432
+          username: renart
+          password: renart
+          database: warehouse
+          schema: analytics
+          ssl_mode: disable`,
+		},
+		{
+			name:      "trino",
+			assetType: pipeline.AssetTypeTrinoQuery,
+			connections: `trino:
+        - name: warehouse
+          host: 127.0.0.1
+          port: 8080
+          username: renart
+          catalog: memory
+          schema: analytics`,
+		},
+		{
+			name:      "clickhouse",
+			assetType: pipeline.AssetTypeClickHouse,
+			connections: `clickhouse:
+        - name: warehouse
+          host: 127.0.0.1
+          port: 9000
+          username: renart
+          password: renart
+          database: analytics`,
+		},
+		{
+			name:      "starrocks",
+			assetType: pipeline.AssetTypeStarRocksQuery,
+			connections: `starrocks:
+        - name: warehouse
+          host: 127.0.0.1
+          port: 9030
+          username: root
+          database: analytics`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			workspaceRoot := createParallelWarehouseWorkspace(t, tt.assetType, tt.connections)
+			executor := newCompatDirectExecutor(workspaceRoot, "")
+			started := make(chan string, 2)
+			executor.SetDirectTaskGate(func(ctx context.Context, instance bruinscheduler.TaskInstance) error {
+				if instance.GetType() != bruinscheduler.TaskInstanceTypeMain {
+					return nil
+				}
+				started <- instance.GetAsset().Name
+				<-ctx.Done()
+				return ctx.Err()
+			})
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			done := make(chan error, 1)
+			go func() {
+				_, err := executor.RunPipeline(
+					ctx,
+					RunPipelineRequest{Target: "analytics"},
+					nil,
+				)
+				done <- err
+			}()
+
+			first := receiveString(t, started)
+			second := receiveString(t, started)
+			assert.ElementsMatch(
+				t,
+				[]string{"analytics.left", "analytics.right"},
+				[]string{first, second},
+			)
+			cancel()
+			require.ErrorIs(t, <-done, context.Canceled)
+		})
+	}
+}
+
+func TestDirectPipelineRunHonorsWarehouseConnectionLimit(t *testing.T) {
+	workspaceRoot := createParallelWarehouseWorkspace(
+		t,
+		pipeline.AssetTypePostgresQuery,
+		`postgres:
+        - name: warehouse
+          max_concurrent_assets: 1
+          host: 127.0.0.1
+          port: 5432
+          username: renart
+          password: renart
+          database: warehouse
+          schema: analytics
+          ssl_mode: disable`,
+	)
+	executor := newCompatDirectExecutor(workspaceRoot, "")
+	gateErr := errors.New("test task stopped before physical execution")
+	firstRelease := make(chan struct{})
+	firstStarted := make(chan string, 1)
+	secondStarted := make(chan string, 1)
+	var (
+		gateMu     sync.Mutex
+		startCount int
+	)
+	executor.SetDirectTaskGate(func(ctx context.Context, instance bruinscheduler.TaskInstance) error {
+		if instance.GetType() != bruinscheduler.TaskInstanceTypeMain {
+			return nil
+		}
+		gateMu.Lock()
+		startCount++
+		current := startCount
+		gateMu.Unlock()
+		if current == 1 {
+			firstStarted <- instance.GetAsset().Name
+			select {
+			case <-firstRelease:
+				return gateErr
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+		}
+		secondStarted <- instance.GetAsset().Name
+		return gateErr
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() {
+		_, err := executor.RunPipeline(ctx, RunPipelineRequest{Target: "analytics"}, nil)
+		done <- err
+	}()
+
+	_ = receiveString(t, firstStarted)
+	select {
+	case name := <-secondStarted:
+		t.Fatalf("connection limit admitted %s while the first unit was active", name)
+	case <-time.After(50 * time.Millisecond):
+	}
+	close(firstRelease)
+	_ = receiveString(t, secondStarted)
+	require.ErrorIs(t, <-done, gateErr)
+}
+
+func TestDirectPipelineRunWaitsForSelectedUpstream(t *testing.T) {
+	workspaceRoot := createParallelDuckDBWorkspace(t, 2)
+	rightPath := filepath.Join(workspaceRoot, "analytics", "assets", "right.sql")
+	require.NoError(t, os.WriteFile(rightPath, []byte(strings.TrimSpace(`
+/* @bruin
+name: analytics.right
+type: duckdb.sql
+connection: duck-right
+depends:
+  - analytics.left
+materialization:
+  type: table
+@bruin */
+select 1 as value
+`)+"\n"), 0o644))
+
+	executor := newCompatDirectExecutor(workspaceRoot, "")
+	leftRelease := make(chan struct{})
+	leftStarted := make(chan struct{}, 1)
+	rightStarted := make(chan struct{}, 1)
+	executor.SetDirectTaskGate(func(ctx context.Context, instance bruinscheduler.TaskInstance) error {
+		if instance.GetType() != bruinscheduler.TaskInstanceTypeMain {
+			return nil
+		}
+		if instance.GetAsset().Name == "analytics.left" {
+			leftStarted <- struct{}{}
+			select {
+			case <-leftRelease:
+				return nil
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+		}
+		rightStarted <- struct{}{}
+		return nil
+	})
+	done := make(chan error, 1)
+	go func() {
+		_, err := executor.RunPipeline(context.Background(), RunPipelineRequest{Target: "analytics"}, nil)
+		done <- err
+	}()
+
+	select {
+	case <-leftStarted:
+	case <-time.After(10 * time.Second):
+		t.Fatal("upstream did not start")
+	}
+	select {
+	case <-rightStarted:
+		t.Fatal("downstream started before its upstream completed")
+	case <-time.After(50 * time.Millisecond):
+	}
+	close(leftRelease)
+	select {
+	case <-rightStarted:
+	case <-time.After(3 * time.Second):
+		t.Fatal("downstream did not start after its upstream completed")
+	}
+	require.NoError(t, <-done)
+}
+
+func TestDirectPipelineRunCancellationClosesQueuedUnits(t *testing.T) {
+	workspaceRoot := createParallelDuckDBWorkspace(t, 1)
+	executor := newCompatDirectExecutor(workspaceRoot, "")
+	started := make(chan struct{}, 1)
+	executor.SetDirectTaskGate(func(ctx context.Context, instance bruinscheduler.TaskInstance) error {
+		if instance.GetType() != bruinscheduler.TaskInstanceTypeMain {
+			return nil
+		}
+		started <- struct{}{}
+		<-ctx.Done()
+		return ctx.Err()
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	var (
+		eventMu sync.Mutex
+		events  []PipelineExecutionUnitEvent
+	)
+	done := make(chan error, 1)
+	go func() {
+		_, err := executor.RunPipeline(ctx, RunPipelineRequest{
+			Target: "analytics",
+			UnitEvent: func(event PipelineExecutionUnitEvent) error {
+				eventMu.Lock()
+				events = append(events, event)
+				eventMu.Unlock()
+				return nil
+			},
+		}, nil)
+		done <- err
+	}()
+	select {
+	case <-started:
+	case <-time.After(3 * time.Second):
+		t.Fatal("first unit did not start")
+	}
+	cancel()
+	require.ErrorIs(t, <-done, context.Canceled)
+
+	eventMu.Lock()
+	defer eventMu.Unlock()
+	cancelled := 0
+	succeeded := 0
+	for _, event := range events {
+		switch event.Status {
+		case "cancelled":
+			cancelled++
+		case "success":
+			succeeded++
+		}
+	}
+	assert.Equal(t, 2, cancelled, "running and queued units both close durably")
+	assert.Zero(t, succeeded)
+}
+
+func createParallelDuckDBWorkspace(t *testing.T, databaseCount int) string {
+	t.Helper()
+	workspaceRoot := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(workspaceRoot, ".git"), 0o755))
+	require.NoError(t, os.MkdirAll(filepath.Join(workspaceRoot, "analytics", "assets"), 0o755))
+	require.NoError(t, os.MkdirAll(filepath.Join(workspaceRoot, "duckdb-files"), 0o755))
+	rightPath := "duckdb-files/left.db"
+	if databaseCount > 1 {
+		rightPath = "duckdb-files/right.db"
+	}
+	require.NoError(t, os.WriteFile(filepath.Join(workspaceRoot, ".bruin.yml"), []byte(fmt.Sprintf(strings.TrimSpace(`
+default_environment: default
+environments:
+  default:
+    connections:
+      duckdb:
+        - name: duck-left
+          path: duckdb-files/left.db
+        - name: duck-right
+          path: %s
+`)+"\n", rightPath)), 0o644))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(workspaceRoot, "analytics", "pipeline.yml"),
+		[]byte("id: pipeline-parallel\nname: analytics\nmax_active_steps: 2\n"),
+		0o644,
+	))
+	for _, asset := range []struct {
+		file       string
+		name       string
+		connection string
+	}{
+		{file: "left.sql", name: "analytics.left", connection: "duck-left"},
+		{file: "right.sql", name: "analytics.right", connection: "duck-right"},
+	} {
+		content := fmt.Sprintf(strings.TrimSpace(`
+/* @bruin
+name: %s
+type: duckdb.sql
+connection: %s
+materialization:
+  type: table
+@bruin */
+select 1 as value
+`)+"\n", asset.name, asset.connection)
+		require.NoError(t, os.WriteFile(
+			filepath.Join(workspaceRoot, "analytics", "assets", asset.file),
+			[]byte(content),
+			0o644,
+		))
+	}
+	return workspaceRoot
+}
+
+func createParallelWarehouseWorkspace(
+	t *testing.T,
+	assetType pipeline.AssetType,
+	connections string,
+) string {
+	t.Helper()
+	workspaceRoot := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(workspaceRoot, ".git"), 0o755))
+	require.NoError(t, os.MkdirAll(filepath.Join(workspaceRoot, "analytics", "assets"), 0o755))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(workspaceRoot, ".bruin.yml"),
+		[]byte("default_environment: default\nenvironments:\n  default:\n    connections:\n      "+connections+"\n"),
+		0o644,
+	))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(workspaceRoot, "analytics", "pipeline.yml"),
+		[]byte("id: pipeline-parallel\nname: analytics\nmax_active_steps: 2\n"),
+		0o644,
+	))
+	for _, name := range []string{"left", "right"} {
+		content := fmt.Sprintf(strings.TrimSpace(`
+/* @bruin
+name: analytics.%s
+type: %s
+connection: warehouse
+materialization:
+  type: view
+@bruin */
+select 1 as value
+`)+"\n", name, assetType)
+		require.NoError(t, os.WriteFile(
+			filepath.Join(workspaceRoot, "analytics", "assets", name+".sql"),
+			[]byte(content),
+			0o644,
+		))
+	}
+	return workspaceRoot
+}
+
+func receiveString(t *testing.T, values <-chan string) string {
+	t.Helper()
+	select {
+	case value := <-values:
+		return value
+	case <-time.After(10 * time.Second):
+		t.Fatal("timed out waiting for execution task")
+		return ""
+	}
 }
 
 func createFailingDuckDBWorkspace(t *testing.T) (string, string) {

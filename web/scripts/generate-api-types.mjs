@@ -190,6 +190,7 @@ const sources = [
       "PipelinePlanExecutionUnit",
       "PipelinePlanResourceClaim",
       "PipelinePlanResources",
+      "PipelinePlanExecutionContract",
       "PipelinePlanSummary",
       "PipelinePlan",
     ],

@@ -1567,6 +1567,19 @@ func (s *Service) SetInlineRunExecutionTargetSnapshot(ctx context.Context, runID
 	return s.store.SetRunExecutionTargetSnapshot(ctx, strings.TrimSpace(runID), snapshot)
 }
 
+// BindInlineRunExecutionUnits persists the exact full-pipeline work selected
+// after the working tree is parsed and before the first physical task starts.
+func (s *Service) BindInlineRunExecutionUnits(
+	ctx context.Context,
+	runID string,
+	units []RunSelectionUnit,
+) error {
+	if s == nil || s.store == nil {
+		return errors.New("run ledger is not configured")
+	}
+	return s.store.BindInlineRunExecutionUnits(ctx, strings.TrimSpace(runID), units)
+}
+
 func (s *Service) RecordInlineRunStep(ctx context.Context, runID string, event RunStepEvent) error {
 	if s == nil || s.store == nil {
 		return errors.New("run ledger is not configured")

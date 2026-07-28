@@ -13,6 +13,7 @@ import (
 const (
 	runSpecVersionV1             = 1
 	runSpecVersionV2             = 2
+	runSpecVersionV3             = 3
 	runDispatchRiver             = "river"
 	runDispatchInlineStreaming   = "inline_streaming"
 	runSelectionAll              = "all"
@@ -62,7 +63,8 @@ func (e *PipelineRunActiveError) Unwrap() error {
 
 // runSpecV1 is the private, replayable behavior contract for queued and inline
 // runs. Version 1 represents an entire pipeline; version 2 adds exact
-// asset/window selection provenance. It is stored separately from the public
+// asset/window selection provenance; version 3 records the exact units chosen
+// for an all-pipeline execution. It is stored separately from the public
 // run row so authorization and future secret references cannot leak through
 // run-list JSON or SSE events.
 // Requested context stays immutable; effective post-policy context continues
@@ -138,7 +140,9 @@ type runScheduleIdentity struct {
 }
 
 func (spec runSpecV1) validate() error {
-	if spec.Version != runSpecVersionV1 && spec.Version != runSpecVersionV2 {
+	if spec.Version != runSpecVersionV1 &&
+		spec.Version != runSpecVersionV2 &&
+		spec.Version != runSpecVersionV3 {
 		return fmt.Errorf("unsupported run spec version %d", spec.Version)
 	}
 	if strings.TrimSpace(spec.Pipeline.ID) == "" || strings.TrimSpace(spec.Pipeline.Name) == "" {
@@ -259,10 +263,15 @@ func validateRunSelection(spec runSpecV1) error {
 
 	switch selection {
 	case runSelectionAll:
-		if spec.SelectionDetails != nil {
-			return errors.New("run spec all selection cannot contain selection details")
+		if spec.Version < runSpecVersionV3 {
+			if spec.SelectionDetails != nil {
+				return errors.New("run spec all selection cannot contain selection details before v3")
+			}
+			return nil
 		}
-		return nil
+		if spec.SelectionDetails == nil {
+			return errors.New("run spec v3 all selection requires execution units")
+		}
 	case runSelectionAsset, runSelectionNeeded:
 	default:
 		return fmt.Errorf("unsupported run selection %q", spec.Selection)
@@ -290,7 +299,7 @@ func validateRunSelection(spec runSpecV1) error {
 			return errors.New("run spec asset selection requires an anchor asset id")
 		}
 	} else if scope != "" || anchor != "" {
-		return errors.New("run spec needed selection cannot contain asset scope provenance")
+		return errors.New("run spec non-asset selection cannot contain asset scope provenance")
 	}
 
 	seen := make(map[string]struct{}, len(details.Units))
@@ -362,10 +371,12 @@ func applyInlineRunSelection(spec *runSpecV1, selection RunSelection) error {
 		mode = RunSelectionAll
 	}
 	if mode == RunSelectionAll {
-		if strings.TrimSpace(selection.Scope) != "" || strings.TrimSpace(selection.AnchorAssetID) != "" || len(selection.Units) != 0 {
-			return errors.New("inline all selection cannot contain asset or unit details")
+		if strings.TrimSpace(selection.Scope) != "" || strings.TrimSpace(selection.AnchorAssetID) != "" {
+			return errors.New("inline all selection cannot contain asset scope details")
 		}
-		return nil
+		if len(selection.Units) == 0 {
+			return nil
+		}
 	}
 
 	details := &runSelectionDetails{
@@ -384,6 +395,9 @@ func applyInlineRunSelection(spec *runSpecV1, selection RunSelection) error {
 		})
 	}
 	spec.Version = runSpecVersionV2
+	if mode == RunSelectionAll {
+		spec.Version = runSpecVersionV3
+	}
 	spec.Selection = string(mode)
 	spec.SelectionDetails = details
 	return spec.validate()
@@ -426,7 +440,9 @@ func marshalRunSpec(spec runSpecV1) ([]byte, error) {
 }
 
 func unmarshalRunSpec(version int, body []byte) (runSpecV1, error) {
-	if version != runSpecVersionV1 && version != runSpecVersionV2 {
+	if version != runSpecVersionV1 &&
+		version != runSpecVersionV2 &&
+		version != runSpecVersionV3 {
 		return runSpecV1{}, fmt.Errorf("unsupported run spec version %d", version)
 	}
 	var spec runSpecV1

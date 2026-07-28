@@ -1,9 +1,9 @@
 import { useAtomValue } from "jotai";
 import { useEffect, useMemo, useRef, useState } from "react";
 
+import { useSchedulerRunEvents } from "@/hooks/use-scheduler-run-events";
 import { getRun, getRuns } from "@/lib/api-scheduler";
 import type { AssetStaleness } from "@/lib/api-staleness";
-import { schedulerRunEventAtom } from "@/lib/atoms/domains/results";
 import { selectedEnvironmentAtom } from "@/lib/atoms/domains/workspace";
 import type { PipelineRunStep } from "@/lib/types";
 
@@ -146,10 +146,9 @@ export function labelForAppMaterializationState(state?: AppAssetMaterializationD
 }
 
 export function useAppAssetMaterializationStatus(assets: AppMaterializationAsset[]) {
-  const schedulerRunEvent = useAtomValue(schedulerRunEventAtom);
   const selectedEnvironment = useAtomValue(selectedEnvironmentAtom);
   const [statusByKey, setStatusByKey] = useState<StatusByKey>({});
-  const [runContextById, setRunContextById] = useState<RunContextById>({});
+  const runContextById = useRef<RunContextById>({});
   const finishedRunIds = useRef(new Set<string>());
   const [loading, setLoading] = useState(true);
   const pipelineIds = useMemo(
@@ -204,7 +203,7 @@ export function useAppAssetMaterializationStatus(assets: AppMaterializationAsset
           return next;
         });
       }
-      setRunContextById(contexts);
+      runContextById.current = contexts;
       setLoading(false);
     }
 
@@ -214,8 +213,7 @@ export function useAppAssetMaterializationStatus(assets: AppMaterializationAsset
     };
   }, [assets, pipelineIds, selectedEnvironment]);
 
-  useEffect(() => {
-    if (!schedulerRunEvent) return;
+  useSchedulerRunEvents((schedulerRunEvent) => {
     if (schedulerRunEvent.type === "run.unit") return;
 
     const eventRunId =
@@ -232,16 +230,10 @@ export function useAppAssetMaterializationStatus(assets: AppMaterializationAsset
       const run = schedulerRunEvent.run;
       if (pipelineIds.size > 0 && !pipelineIds.has(run.pipeline_id)) return;
       if (!matchesSelectedEnvironment(run.environment, selectedEnvironment)) return;
-      setRunContextById((current) => {
-        const existing = current[run.id];
-        if (existing?.pipelineId === run.pipeline_id && existing.environment === run.environment) {
-          return current;
-        }
-        return {
-          ...current,
-          [run.id]: { pipelineId: run.pipeline_id, environment: run.environment },
-        };
-      });
+      runContextById.current = {
+        ...runContextById.current,
+        [run.id]: { pipelineId: run.pipeline_id, environment: run.environment },
+      };
       return;
     }
 
@@ -253,19 +245,18 @@ export function useAppAssetMaterializationStatus(assets: AppMaterializationAsset
           Object.entries(current).filter(([, entry]) => entry.runId !== run.id),
         );
       });
-      setRunContextById((current) => {
-        if (!(run.id in current)) return current;
-        const next = { ...current };
+      if (run.id in runContextById.current) {
+        const next = { ...runContextById.current };
         delete next[run.id];
-        return next;
-      });
+        runContextById.current = next;
+      }
       return;
     }
 
     if (schedulerRunEvent.type !== "run.step") return;
 
     const step = schedulerRunEvent.run;
-    const runContext = runContextById[step.run_id];
+    const runContext = runContextById.current[step.run_id];
     if (runContext) {
       if (pipelineIds.size > 0 && !pipelineIds.has(runContext.pipelineId)) return;
       if (!matchesSelectedEnvironment(runContext.environment, selectedEnvironment)) return;
@@ -273,7 +264,7 @@ export function useAppAssetMaterializationStatus(assets: AppMaterializationAsset
     const keys = keysForStepAsset(step.asset, assets, runContext?.pipelineId);
     if (keys.length === 0) return;
     setStatusByKey((current) => applyStep(current, step, keys));
-  }, [assets, pipelineIds, runContextById, schedulerRunEvent, selectedEnvironment]);
+  });
 
   return useMemo(() => {
     const result: Record<string, AppAssetMaterializationDisplayState> = {};

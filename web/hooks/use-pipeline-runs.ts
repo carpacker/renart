@@ -1,6 +1,6 @@
-import { useAtomValue } from "jotai";
 import { useCallback, useEffect, useRef, useState } from "react";
 
+import { useSchedulerRunEvents } from "@/hooks/use-scheduler-run-events";
 import {
   cancelPipelineRun,
   type GetRunsOptions,
@@ -10,7 +10,6 @@ import {
   triggerPipelineRun,
   type TriggerPipelineRunInput,
 } from "@/lib/api-scheduler";
-import { schedulerRunEventAtom } from "@/lib/atoms/domains/results";
 import type {
   PipelineRun,
   PipelineRunLogLine,
@@ -40,7 +39,6 @@ export function usePipelineRuns({
   const [loadingRunId, setLoadingRunId] = useState<string | null>(null);
   const [runsError, setRunsError] = useState<string | null>(null);
   const [runDetailError, setRunDetailError] = useState<string | null>(null);
-  const schedulerRunEvent = useAtomValue(schedulerRunEventAtom);
   const selectedRunIdRef = useRef(selectedRunId);
   const selectRunRequestIdRef = useRef(0);
   selectedRunIdRef.current = selectedRunId;
@@ -216,10 +214,7 @@ export function usePipelineRuns({
     void selectRun(selectedRunId);
   }, [selectedRunId, selectRun]);
 
-  useEffect(() => {
-    if (!schedulerRunEvent) {
-      return;
-    }
+  useSchedulerRunEvents((schedulerRunEvent) => {
     if (schedulerRunEvent.type === "run.log") {
       const { run_id, log } = schedulerRunEvent.run;
       if (selectedRunId ? selectedRunId === run_id : selectedRunForRequest?.id === run_id) {
@@ -273,7 +268,7 @@ export function usePipelineRuns({
       void selectRun(run.id);
     }
     void refreshRuns();
-  }, [refreshRuns, schedulerRunEvent, selectRun, selectedRunForRequest?.id, selectedRunId]);
+  });
 
   return {
     runs,

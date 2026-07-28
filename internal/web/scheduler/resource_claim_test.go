@@ -191,6 +191,99 @@ func TestStoreBindsRuntimeWriteResourcesToReviewedClaims(t *testing.T) {
 	}
 }
 
+func TestStoreBindsV3RuntimeContractsToReviewedPlan(t *testing.T) {
+	t.Parallel()
+	for _, test := range []struct {
+		name      string
+		mutate    func(*ExecutionTargetSnapshot)
+		wantError string
+	}{
+		{name: "matching"},
+		{
+			name: "connection drift",
+			mutate: func(snapshot *ExecutionTargetSnapshot) {
+				entry := snapshot.Entries["analytics.orders"]
+				entry.ExecutionContract.ConnectionKeys = []string{strings.Repeat("f", 64)}
+				snapshot.Entries["analytics.orders"] = entry
+			},
+			wantError: "runtime contracts do not match",
+		},
+		{
+			name: "legacy snapshot",
+			mutate: func(snapshot *ExecutionTargetSnapshot) {
+				snapshot.Version = ExecutionTargetSnapshotVersionV3
+				for name, entry := range snapshot.Entries {
+					entry.ExecutionContract = PipelineRunExecutionContract{}
+					snapshot.Entries[name] = entry
+				}
+			},
+			wantError: "has no reviewed runtime contracts",
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			store, err := OpenStore(filepath.Join(t.TempDir(), "state.db"))
+			require.NoError(t, err)
+			defer store.Close()
+			plan := validPipelineRunPlanV3(t)
+			executionTime, err := time.Parse(time.RFC3339Nano, plan.ExecutionTime)
+			require.NoError(t, err)
+			run := PipelineRun{
+				ID: "run", PipelineID: plan.PipelineID, PipelineUUID: plan.PipelineUUID,
+				Pipeline: "analytics", Trigger: RunTriggerManual, Status: RunStatusQueued,
+				ExecutionTime: &executionTime, ExpectedSourceMerkle: plan.SourceMerkle,
+				ExpectedConfigurationDigest: plan.ConfigurationDigest,
+			}
+			spec := manualRunSpec(run, RunSourceWorkingTree, "")
+			_, err = store.CreateWithSpecAndPlan(context.Background(), run, spec, plan)
+			require.NoError(t, err)
+
+			snapshot := executionContractSnapshot(plan)
+			if test.mutate != nil {
+				test.mutate(&snapshot)
+			}
+			err = store.SetRunExecutionTargetSnapshot(context.Background(), run.ID, snapshot)
+			if test.wantError == "" {
+				require.NoError(t, err)
+			} else {
+				require.ErrorContains(t, err, test.wantError)
+			}
+		})
+	}
+}
+
+func executionContractSnapshot(plan PipelineRunPlan) ExecutionTargetSnapshot {
+	entries := make(map[string]ExecutionTargetSnapshotEntry, len(plan.ExecutionContracts))
+	for _, contract := range plan.ExecutionContracts {
+		entry := ExecutionTargetSnapshotEntry{
+			AssetID:           contract.AssetID,
+			TargetFidelity:    ExecutionTargetFidelityExact,
+			Fingerprint:       "v2:" + contract.AssetName,
+			OwnContent:        "v2:" + contract.AssetName + "-own",
+			ConsumedVarsHash:  "consumed-" + contract.AssetName,
+			VarsHash:          "all-vars",
+			CoverageMode:      "marker",
+			ExecutionContract: contract,
+		}
+		if len(contract.MutationResources.Claims) == 0 {
+			entry.WriteResourceKind = "none"
+			entry.WriteResourceFidelity = ExecutionTargetFidelityExact
+		} else {
+			claim := contract.MutationResources.Claims[0]
+			entry.TargetIdentity = "renart-physical-target-v1:" + contract.AssetName
+			entry.WriteResourceKind = claim.Kind
+			entry.WriteResourceIdentity = claim.Identity
+			entry.WriteResourceFidelity = ExecutionTargetFidelityExact
+		}
+		entries[contract.AssetName] = entry
+	}
+	return ExecutionTargetSnapshot{
+		Version: ExecutionTargetSnapshotVersionV4, PipelineUUID: plan.PipelineUUID,
+		ConfigurationDigest:   plan.ConfigurationDigest,
+		ConfigurationFidelity: ExecutionTargetFidelityExact,
+		Entries:               entries,
+	}
+}
+
 func resourceClaimAdmission(
 	t testing.TB,
 	runID string,

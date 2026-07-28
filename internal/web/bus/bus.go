@@ -87,6 +87,26 @@ type ExecutionUpstreamSnapshot struct {
 	Value string
 }
 
+type ExecutionResourceClaim struct {
+	Kind     string
+	Identity string
+}
+
+type ExecutionResources struct {
+	Isolation string
+	Claims    []ExecutionResourceClaim
+}
+
+// ExecutionContractSnapshot is the secret-free per-asset admission contract
+// retained by version-four execution target snapshots.
+type ExecutionContractSnapshot struct {
+	AssetID               string
+	AssetName             string
+	ConnectionKeys        []string
+	MutationResources     ExecutionResources
+	CoordinationResources ExecutionResources
+}
+
 // ExecutionTargetSnapshotEntry is one value-only entry captured before any
 // main task starts. The RunCompleted map is keyed by canonical asset name so
 // an executed downstream can still resolve the captured identity of an
@@ -99,6 +119,7 @@ type ExecutionTargetSnapshotEntry struct {
 	WriteResourceKind           string
 	WriteResourceIdentity       string
 	WriteResourceFidelity       string
+	ExecutionContract           ExecutionContractSnapshot
 	Fingerprint                 string
 	OwnContent                  string
 	ConsumedVarsHash            string

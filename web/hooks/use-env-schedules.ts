@@ -1,6 +1,7 @@
 import { useAtomValue } from "jotai";
 import { useCallback, useEffect, useState } from "react";
 
+import { useSchedulerRunEvents } from "@/hooks/use-scheduler-run-events";
 import {
   archiveEnvSchedule,
   getEnvSchedules,
@@ -10,7 +11,7 @@ import {
   type SchedulerOwnership,
   type UpsertEnvScheduleInput,
 } from "@/lib/api-env-schedules";
-import { scheduleOccurrenceEventAtom, schedulerRunEventAtom } from "@/lib/atoms/domains/results";
+import { scheduleOccurrenceEventAtom } from "@/lib/atoms/domains/results";
 
 export function envScheduleKey(schedule: Pick<EnvSchedule, "pipeline_uuid" | "environment">) {
   return `${schedule.pipeline_uuid}::${schedule.environment}`;
@@ -18,7 +19,6 @@ export function envScheduleKey(schedule: Pick<EnvSchedule, "pipeline_uuid" | "en
 
 // useEnvSchedules manages the per-(pipeline, environment) schedule rows.
 export function useEnvSchedules() {
-  const runEvent = useAtomValue(schedulerRunEventAtom);
   const occurrenceEvent = useAtomValue(scheduleOccurrenceEventAtom);
   const [schedules, setSchedules] = useState<EnvSchedule[]>([]);
   const [archived, setArchived] = useState<EnvSchedule[]>([]);
@@ -54,15 +54,15 @@ export function useEnvSchedules() {
   }, [refresh]);
 
   // Run lifecycle events update last-run displays.
-  useEffect(() => {
+  useSchedulerRunEvents((runEvent) => {
     if (
-      runEvent?.type === "run.queued" ||
-      runEvent?.type === "run.finished" ||
-      runEvent?.type === "run.started"
+      runEvent.type === "run.queued" ||
+      runEvent.type === "run.finished" ||
+      runEvent.type === "run.started"
     ) {
       void refresh();
     }
-  }, [refresh, runEvent]);
+  });
 
   useEffect(() => {
     if (occurrenceEvent?.type === "schedule.occurrence") {

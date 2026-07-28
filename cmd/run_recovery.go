@@ -194,6 +194,7 @@ func (s *webServer) replayRecoveredRun(ctx context.Context, run webscheduler.Pip
 				WriteResourceKind:           entry.WriteResourceKind,
 				WriteResourceIdentity:       entry.WriteResourceIdentity,
 				WriteResourceFidelity:       entry.WriteResourceFidelity,
+				ExecutionContract:           recoveredExecutionContract(entry.ExecutionContract),
 				Fingerprint:                 entry.Fingerprint,
 				OwnContent:                  entry.OwnContent,
 				ConsumedVarsHash:            entry.ConsumedVarsHash,
@@ -211,6 +212,33 @@ func (s *webServer) replayRecoveredRun(ctx context.Context, run webscheduler.Pip
 		s.logger.Info("replayed persisted steps for interrupted run", zap.String("run_id", run.ID), zap.Int("assets", len(assets)))
 	}
 	return nil
+}
+
+func recoveredExecutionContract(
+	contract webscheduler.PipelineRunExecutionContract,
+) bus.ExecutionContractSnapshot {
+	return bus.ExecutionContractSnapshot{
+		AssetID:               contract.AssetID,
+		AssetName:             contract.AssetName,
+		ConnectionKeys:        append([]string(nil), contract.ConnectionKeys...),
+		MutationResources:     recoveredExecutionResources(contract.MutationResources),
+		CoordinationResources: recoveredExecutionResources(contract.CoordinationResources),
+	}
+}
+
+func recoveredExecutionResources(
+	resources webscheduler.PipelineRunPlanResources,
+) bus.ExecutionResources {
+	claims := make([]bus.ExecutionResourceClaim, 0, len(resources.Claims))
+	for _, claim := range resources.Claims {
+		claims = append(claims, bus.ExecutionResourceClaim{
+			Kind: claim.Kind, Identity: claim.Identity,
+		})
+	}
+	return bus.ExecutionResources{
+		Isolation: resources.Isolation,
+		Claims:    claims,
+	}
 }
 
 func recoveredAssetRunStatus(status webscheduler.RunStatus) (string, bool) {

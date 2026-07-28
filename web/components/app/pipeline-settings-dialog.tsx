@@ -12,7 +12,7 @@ import {
   Settings2,
   Trash2,
 } from "lucide-react";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useId, useState } from "react";
 
 import { Badge } from "@/components/ui/badge";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
@@ -25,6 +25,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { Field, FieldDescription, FieldGroup, FieldLabel } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Switch } from "@/components/ui/switch";
@@ -353,24 +354,30 @@ function PipelineSettingsSectionBody({
           onChange={(value) => update("domains", value)}
           placeholder="Add domain"
         />
-        <div className="grid grid-cols-2 gap-3">
+        <FieldGroup className="grid grid-cols-1 gap-3 sm:grid-cols-2">
           <SettingsNumberField
             label="Retries"
             value={draft.retries}
             onChange={(value) => update("retries", value ?? 0)}
+            min={0}
           />
           <SettingsNumberField
-            label="Concurrency"
+            label="Overlapping pipeline runs"
             value={draft.concurrency}
             onChange={(value) => update("concurrency", value ?? 0)}
+            hint="Limits how many runs of this pipeline may overlap. This is separate from parallel assets inside one run."
+            min={0}
           />
-        </div>
-        <SettingsNumberField
-          label="Max active steps"
-          value={draft.max_active_steps}
-          onChange={(value) => update("max_active_steps", value)}
-          hint="Leave blank for no limit."
-        />
+          <SettingsNumberField
+            className="sm:col-span-2"
+            label="Maximum active steps"
+            value={draft.max_active_steps}
+            onChange={(value) => update("max_active_steps", value)}
+            hint="Leave blank to run one asset at a time. Values above 1 let independent assets overlap; dependencies, connections, and shared targets can still serialize them."
+            min={1}
+            placeholder="1"
+          />
+        </FieldGroup>
         <SettingsToggleField
           label="Push metadata to BigQuery"
           description="Sync asset metadata to BigQuery after each run."
@@ -725,29 +732,41 @@ function SettingsMultiValueField({
 }
 
 function SettingsNumberField({
+  className,
   label,
   value,
   onChange,
   hint,
+  min,
+  placeholder,
 }: {
+  className?: string;
   label: string;
   value?: number;
   onChange: (value: number | undefined) => void;
   hint?: string;
+  min?: number;
+  placeholder?: string;
 }) {
+  const id = useId();
   return (
-    <label className="block space-y-1.5">
-      <span className="text-xs font-medium text-muted-foreground">{label}</span>
+    <Field className={cn("gap-1.5", className)}>
+      <FieldLabel htmlFor={id} className="text-xs text-muted-foreground">
+        {label}
+      </FieldLabel>
       <Input
+        id={id}
         type="number"
+        min={min}
+        placeholder={placeholder}
         value={value ?? ""}
         onChange={(event) => {
           const raw = event.target.value.trim();
           onChange(raw === "" ? undefined : Number(raw));
         }}
       />
-      {hint ? <span className="block text-[11px] text-muted-foreground">{hint}</span> : null}
-    </label>
+      {hint ? <FieldDescription className="text-[11px]">{hint}</FieldDescription> : null}
+    </Field>
   );
 }
 

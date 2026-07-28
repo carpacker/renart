@@ -179,6 +179,14 @@ select customer_id, customer_name from analytics.customers
       "data-slot",
       "scroll-area",
     );
+    await expect(
+      dialog.getByRole("spinbutton", { name: "Overlapping pipeline runs" }),
+    ).toBeVisible();
+    await expect(dialog.getByRole("spinbutton", { name: "Maximum active steps" })).toHaveAttribute(
+      "placeholder",
+      "1",
+    );
+    await expect(dialog).toContainText("Leave blank to run one asset at a time.");
 
     await dialog.getByRole("textbox", { name: "Tags" }).fill("finance, north");
     await dialog.getByRole("textbox", { name: "Tags" }).press("Enter");

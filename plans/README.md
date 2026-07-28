@@ -13,6 +13,7 @@ the original.
 | [agentic-notebooks.md](agentic-notebooks.md) | research proposal — staged native notebook agent, safe tool/change-set foundation, and external-agent bridge option |
 | [cross-pipeline-dependencies.md](cross-pipeline-dependencies.md) | proposal — Bruin-compatible URI lineage, workspace-wide freshness, and interval-aware schedule prerequisites |
 | [dbt-assets.md](dbt-assets.md) | evaluation — enabling renart intelligence on existing dbt projects |
+| [execution-parallelism.md](execution-parallelism.md) | proposal — bounded asset/window DAG execution with connection and resource safety |
 | [materialization-reach.md](materialization-reach.md) | proposed reach — guided advanced SQL modes, coverage timeline, Python pre-run diagnostic |
 | [open-project-links.md](open-project-links.md) | investigation — safe docs-to-local open intents, native protocol registration, and hosted routing |
 | [pipeline-readiness-and-rendering.md](pipeline-readiness-and-rendering.md) | core complete — Phases 0a/0b and 1–3 plus version-controlled schedules and bounded retention have shipped; single-workspace command handoff, resource claims, and rolling compatibility cleanup remain |

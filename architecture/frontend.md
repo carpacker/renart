@@ -20,7 +20,10 @@ filesystem-changing action. There is no Node.js runtime in production.
 - **Icons:** `lucide-react`
 - **Markdown:** `react-markdown`
 - **Quality tooling:** Oxlint, Oxfmt, and Vitest
-- **Realtime sync:** Server-Sent Events (see [backend.md](backend.md) §2)
+- **Realtime sync:** Server-Sent Events (see [backend.md](backend.md) §2).
+  Scheduler lifecycle messages are held in a bounded, sequenced frontend
+  buffer so adjacent unit, step, and log events cannot be coalesced into a
+  single last-value update before consumers observe them.
 
 ## 2. Dev server
 
@@ -333,7 +336,10 @@ not underscore-flattened route hacks.
   section-length changes instead of resizing the dialog. The Python section
   edits the pipeline-root `pyproject.toml` dependency list; Microsoft Teams has
   no settings surface, while any existing unsupported notification fields are
-  preserved when another section is saved.
+  preserved when another section is saved. General settings distinguish
+  **Overlapping pipeline runs** (`concurrency`) from **Maximum active steps**
+  (`max_active_steps`). A blank step value explains the sequential default;
+  values above one opt safe independent assets into bounded overlap.
   Run details use semantic event badges, link current-workspace asset events
   back to the split Build view, and render timeline asset names in a dedicated
   wrapping column with tooltips so short duration bars never truncate identity.
@@ -344,7 +350,10 @@ not underscore-flattened route hacks.
   Runs admitted from a reviewed plan add a Plan tab with the immutable final
   unit order and statuses, inclusion reasons and exact windows, safe Needed
   preview omissions, source/configuration/data identities, and retained
-  redacted stage metadata. `run.unit` SSE updates that ledger live without
+  redacted stage metadata. Run review states the effective active-step limit,
+  keeps units in stable plan order, and explains that dependencies,
+  per-connection limits, and conservative/shared targets can lower effective
+  overlap. `run.unit` SSE updates that ledger live without
   teaching unrelated asset-result consumers to treat units as pipeline steps.
   The asset timeline scrolls independently when a run has many assets, keeping
   the event/output panel usable, and duration tooltips anchor to the duration

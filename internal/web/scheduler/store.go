@@ -933,6 +933,95 @@ func (s *Store) UpdateRunUnit(ctx context.Context, runID string, event PipelineR
 	return expectOneRunUnitUpdate(result, err, runID, event.Position, event.Status)
 }
 
+// BindInlineRunExecutionUnits durably records a full-pipeline unit selection
+// that could only be resolved after parsing the working tree. The transaction
+// completes before any unit can transition to running, so an interrupted
+// inline execution never has physical work without its exact unit ledger.
+func (s *Store) BindInlineRunExecutionUnits(
+	ctx context.Context,
+	runID string,
+	units []RunSelectionUnit,
+) error {
+	runID = strings.TrimSpace(runID)
+	if runID == "" {
+		return errors.New("run id is required")
+	}
+	if len(units) == 0 {
+		return errors.New("inline execution units are required")
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	var (
+		version int
+		body    string
+		status  string
+	)
+	if err := tx.QueryRowContext(ctx, `
+		SELECT specs.version, specs.body, runs.status
+		FROM pipeline_run_specs AS specs
+		JOIN pipeline_runs AS runs ON runs.id = specs.run_id
+		WHERE specs.run_id = ?`, runID).Scan(&version, &body, &status); err != nil {
+		return err
+	}
+	spec, err := unmarshalRunSpec(version, []byte(body))
+	if err != nil {
+		return &invalidRunSpecError{RunID: runID, Err: err}
+	}
+	if spec.Dispatch != runDispatchInlineStreaming {
+		return errors.New("run is not an inline-streaming execution")
+	}
+	if RunStatus(status) != RunStatusRunning {
+		return fmt.Errorf("inline run %s cannot bind execution units from status %s", runID, status)
+	}
+	if spec.Version != runSpecVersionV1 ||
+		spec.Selection != runSelectionAll ||
+		spec.SelectionDetails != nil {
+		return fmt.Errorf("inline run %s already has an exact execution selection", runID)
+	}
+	if err := applyInlineRunSelection(&spec, RunSelection{
+		Mode:  RunSelectionAll,
+		Units: units,
+	}); err != nil {
+		return fmt.Errorf("normalize inline execution units: %w", err)
+	}
+	updatedBody, err := marshalRunSpec(spec)
+	if err != nil {
+		return err
+	}
+	result, err := tx.ExecContext(ctx, `
+		UPDATE pipeline_run_specs
+		SET version = ?, body = ?
+		WHERE run_id = ? AND version = ?`,
+		spec.Version, string(updatedBody), runID, version)
+	if err != nil {
+		return err
+	}
+	updated, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if updated != 1 {
+		return fmt.Errorf("inline run %s execution selection changed while binding units", runID)
+	}
+	executionUnits := make([]PipelineRunExecutionUnit, 0, len(spec.SelectionDetails.Units))
+	for _, unit := range spec.SelectionDetails.Units {
+		executionUnits = append(executionUnits, PipelineRunExecutionUnit{
+			AssetID: unit.AssetID, AssetName: unit.AssetName,
+			StartDate: unit.Start.UTC().Format(time.RFC3339Nano),
+			EndDate:   unit.End.UTC().Format(time.RFC3339Nano),
+			Reason:    unit.Reason,
+		})
+	}
+	if err := s.insertRunUnits(ctx, tx, runID, executionUnits); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
 func expectOneRunUnitUpdate(result sql.Result, err error, runID string, position int, status PipelineRunUnitStatus) error {
 	if err != nil {
 		return err

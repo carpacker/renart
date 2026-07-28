@@ -489,8 +489,6 @@ parameters:
       });
       const editor = page.locator(".monaco-editor").first();
       await expect(editor).toBeVisible({ timeout: 15000 });
-      await setEditorContentAtYamlField(page, assetContent, "next_url_path", "pag");
-
       const suggestionsResponse = page.waitForResponse(
         (response) =>
           response.url().includes("/api/api-assets/openapi-suggestions") &&
@@ -498,6 +496,7 @@ parameters:
           response.ok(),
         { timeout: 15000 },
       );
+      await setEditorContentAtYamlField(page, assetContent, "next_url_path", "pag");
       await page.keyboard.press("ControlOrMeta+Space");
       const response = await suggestionsResponse;
       const body = (await response.json()) as {

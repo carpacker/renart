@@ -18,45 +18,49 @@ func TestAssetPhysicalTargetResolvesSupportedRelationFamilies(t *testing.T) {
 		name        string
 		assetType   pipeline.AssetType
 		assetName   string
+		resource    string
 		connections func(string) *config.Connections
 	}{
-		{"duckdb", pipeline.AssetTypeDuckDBQuery, "analytics.customers", func(root string) *config.Connections {
+		{"duckdb", pipeline.AssetTypeDuckDBQuery, "analytics.customers", assetWriteResourceDuckDB, func(root string) *config.Connections {
 			return &config.Connections{DuckDB: []config.DuckDBConnection{{ConnectionMetadata: targetMetadata("warehouse"), Path: filepath.Join(root, "warehouse.duckdb")}}}
 		}},
-		{"postgres", pipeline.AssetTypePostgresQuery, "customers", func(string) *config.Connections {
+		{"postgres", pipeline.AssetTypePostgresQuery, "customers", assetWriteResourceWarehouse, func(string) *config.Connections {
 			return &config.Connections{Postgres: []config.PostgresConnection{{ConnectionMetadata: targetMetadata("warehouse"), Host: "pg.internal", Port: 5432, Database: "analytics", Schema: "public"}}}
 		}},
-		{"redshift", pipeline.AssetTypeRedshiftQuery, "customers", func(string) *config.Connections {
+		{"redshift", pipeline.AssetTypeRedshiftQuery, "customers", assetWriteResourcePipeline, func(string) *config.Connections {
 			return &config.Connections{RedShift: []config.RedshiftConnection{{ConnectionMetadata: targetMetadata("warehouse"), Host: "rs.internal", Port: 5439, Database: "analytics", Schema: "public"}}}
 		}},
-		{"mysql", pipeline.AssetTypeMySQLQuery, "customers", func(string) *config.Connections {
+		{"mysql", pipeline.AssetTypeMySQLQuery, "customers", assetWriteResourcePipeline, func(string) *config.Connections {
 			return &config.Connections{MySQL: []config.MySQLConnection{{ConnectionMetadata: targetMetadata("warehouse"), Host: "mysql.internal", Port: 3306, Database: "analytics"}}}
 		}},
-		{"mssql", pipeline.AssetTypeMsSQLQuery, "dbo.customers", func(string) *config.Connections {
+		{"mssql", pipeline.AssetTypeMsSQLQuery, "dbo.customers", assetWriteResourcePipeline, func(string) *config.Connections {
 			return &config.Connections{MsSQL: []config.MsSQLConnection{{ConnectionMetadata: targetMetadata("warehouse"), Host: "mssql.internal", Port: 1433, Database: "analytics"}}}
 		}},
-		{"fabric", pipeline.AssetTypeFabricQuery, "dbo.customers", func(string) *config.Connections {
+		{"fabric", pipeline.AssetTypeFabricQuery, "dbo.customers", assetWriteResourcePipeline, func(string) *config.Connections {
 			return &config.Connections{Fabric: []config.FabricConnection{{ConnectionMetadata: targetMetadata("warehouse"), Host: "fabric.internal", Port: 1433, Database: "analytics"}}}
 		}},
-		{"synapse", pipeline.AssetTypeSynapseQuery, "dbo.customers", func(string) *config.Connections {
+		{"synapse", pipeline.AssetTypeSynapseQuery, "dbo.customers", assetWriteResourcePipeline, func(string) *config.Connections {
 			return &config.Connections{Synapse: []config.SynapseConnection{{ConnectionMetadata: targetMetadata("warehouse"), Host: "synapse.internal", Port: 1433, Database: "analytics"}}}
 		}},
-		{"vertica", pipeline.AssetTypeVerticaQuery, "customers", func(string) *config.Connections {
+		{"vertica", pipeline.AssetTypeVerticaQuery, "customers", assetWriteResourcePipeline, func(string) *config.Connections {
 			return &config.Connections{Vertica: []config.VerticaConnection{{ConnectionMetadata: targetMetadata("warehouse"), Host: "vertica.internal", Port: 5433, Database: "analytics", Schema: "public"}}}
 		}},
-		{"clickhouse", pipeline.AssetTypeClickHouse, "customers", func(string) *config.Connections {
+		{"clickhouse", pipeline.AssetTypeClickHouse, "customers", assetWriteResourceWarehouse, func(string) *config.Connections {
 			return &config.Connections{ClickHouse: []config.ClickHouseConnection{{ConnectionMetadata: targetMetadata("warehouse"), Host: "clickhouse.internal", Port: 9000, Database: "analytics"}}}
 		}},
-		{"trino", pipeline.AssetTypeTrinoQuery, "customers", func(string) *config.Connections {
+		{"trino", pipeline.AssetTypeTrinoQuery, "customers", assetWriteResourceWarehouse, func(string) *config.Connections {
 			return &config.Connections{Trino: []config.TrinoConnection{{ConnectionMetadata: targetMetadata("warehouse"), Host: "trino.internal", Port: 8080, Catalog: "lakehouse", Schema: "analytics"}}}
 		}},
-		{"databricks", pipeline.AssetTypeDatabricksQuery, "analytics.customers", func(string) *config.Connections {
+		{"starrocks", pipeline.AssetTypeStarRocksQuery, "customers", assetWriteResourceWarehouse, func(string) *config.Connections {
+			return &config.Connections{StarRocks: []config.StarRocksConnection{{ConnectionMetadata: targetMetadata("warehouse"), Host: "starrocks.internal", Database: "analytics"}}}
+		}},
+		{"databricks", pipeline.AssetTypeDatabricksQuery, "analytics.customers", assetWriteResourcePipeline, func(string) *config.Connections {
 			return &config.Connections{Databricks: []config.DatabricksConnection{{ConnectionMetadata: targetMetadata("warehouse"), Host: "dbc.internal", Port: 443, Path: "sql/1.0/warehouses/abc", Catalog: "main"}}}
 		}},
-		{"snowflake", pipeline.AssetTypeSnowflakeQuery, "customers", func(string) *config.Connections {
+		{"snowflake", pipeline.AssetTypeSnowflakeQuery, "customers", assetWriteResourcePipeline, func(string) *config.Connections {
 			return &config.Connections{Snowflake: []config.SnowflakeConnection{{ConnectionMetadata: targetMetadata("warehouse"), Account: "account", Region: "eu-central-1", Database: "analytics", Schema: "public"}}}
 		}},
-		{"bigquery", pipeline.AssetTypeBigqueryQuery, "dataset.customers", func(string) *config.Connections {
+		{"bigquery", pipeline.AssetTypeBigqueryQuery, "dataset.customers", assetWriteResourcePipeline, func(string) *config.Connections {
 			return &config.Connections{GoogleCloudPlatform: []config.GoogleCloudPlatformConnection{{ConnectionMetadata: targetMetadata("warehouse"), ProjectID: "analytics-project"}}}
 		}},
 	}
@@ -75,12 +79,11 @@ func TestAssetPhysicalTargetResolvesSupportedRelationFamilies(t *testing.T) {
 			assert.Empty(t, target.Message)
 			assert.NotContains(t, target.Object, "internal")
 			assert.NotContains(t, target.Object, root)
-			if tt.name == "duckdb" {
-				assert.Equal(t, assetWriteResourceDuckDB, target.WriteResource.Kind)
+			assert.Equal(t, tt.resource, target.WriteResource.Kind)
+			if tt.resource != assetWriteResourcePipeline {
 				assert.Equal(t, AssetRenderFidelityExact, target.WriteResource.Fidelity)
 				assert.NotEmpty(t, target.WriteResource.Identity)
 			} else {
-				assert.Equal(t, assetWriteResourcePipeline, target.WriteResource.Kind)
 				assert.Equal(t, AssetRenderFidelityRuntimeOnly, target.WriteResource.Fidelity)
 				assert.Empty(t, target.WriteResource.Identity)
 			}
@@ -103,7 +106,62 @@ func TestAssetPhysicalTargetIdentityIgnoresAliasesPrincipalsAndCredentials(t *te
 	require.Equal(t, AssetRenderFidelityExact, left.Fidelity, left.Message)
 	require.Equal(t, AssetRenderFidelityExact, right.Fidelity, right.Message)
 	assert.Equal(t, left.Identity, right.Identity)
+	assert.Equal(t, assetWriteResourceWarehouse, left.WriteResource.Kind)
+	assert.Equal(t, left.WriteResource.Identity, right.WriteResource.Identity)
 	assert.NotContains(t, left.Message, "secret")
+}
+
+func TestStarRocksWriteIdentityMatchesNativeRoutingDefaults(t *testing.T) {
+	t.Parallel()
+
+	asset := materializedTargetAsset(pipeline.AssetTypeStarRocksQuery, "analytics.customers", "warehouse")
+	resolve := func(port int, catalog string) AssetRenderTarget {
+		return resolveAssetPhysicalTarget(t.TempDir(), targetInfo(asset, &config.Connections{
+			StarRocks: []config.StarRocksConnection{{
+				ConnectionMetadata: targetMetadata("warehouse"),
+				Host:               "starrocks.internal",
+				Port:               port,
+				Database:           "analytics",
+				Catalog:            catalog,
+			}},
+		}, ""))
+	}
+
+	implicit := resolve(0, "")
+	explicit := resolve(9030, "lakehouse_catalog")
+	require.Equal(t, AssetRenderFidelityExact, implicit.Fidelity, implicit.Message)
+	require.Equal(t, AssetRenderFidelityExact, explicit.Fidelity, explicit.Message)
+	assert.Equal(t, implicit.Identity, explicit.Identity)
+	assert.Equal(t, implicit.WriteResource.Identity, explicit.WriteResource.Identity)
+	assert.Equal(t, assetWriteResourceWarehouse, implicit.WriteResource.Kind)
+}
+
+func TestAssetPhysicalTargetKeepsUnauditedWarehouseWritersExclusive(t *testing.T) {
+	t.Parallel()
+
+	connections := &config.Connections{Postgres: []config.PostgresConnection{{
+		ConnectionMetadata: targetMetadata("warehouse"),
+		Host:               "pg.internal",
+		Port:               5432,
+		Database:           "analytics",
+		Schema:             "public",
+	}}}
+	for _, asset := range []*pipeline.Asset{
+		{Name: "public.seeded", Type: pipeline.AssetTypePostgresSeed, Connection: "warehouse"},
+		{Name: "public.loaded", Type: pipeline.AssetType(loadAssetType), Connection: "warehouse"},
+		{Name: "public.fetched", Type: pipeline.AssetType(apiAssetType), Connection: "warehouse"},
+		materializedTargetAsset(pipeline.AssetTypePython, "public.python", "warehouse"),
+	} {
+		target := resolveAssetPhysicalTarget(t.TempDir(), targetInfo(asset, connections, ""))
+		assert.Equal(t, assetWriteResourcePipeline, target.WriteResource.Kind, asset.Type)
+		assert.Equal(t, AssetRenderFidelityRuntimeOnly, target.WriteResource.Fidelity, asset.Type)
+	}
+
+	hooked := materializedTargetAsset(pipeline.AssetTypePostgresQuery, "public.hooked", "warehouse")
+	hooked.Hooks.Post = []pipeline.Hook{{Query: "select 1"}}
+	target := resolveAssetPhysicalTarget(t.TempDir(), targetInfo(hooked, connections, ""))
+	assert.Equal(t, assetWriteResourcePipeline, target.WriteResource.Kind)
+	assert.Equal(t, AssetRenderFidelityRuntimeOnly, target.WriteResource.Fidelity)
 }
 
 func TestResolvePipelinePhysicalTargetsUsesSelectedConfigurationWithoutWriting(t *testing.T) {

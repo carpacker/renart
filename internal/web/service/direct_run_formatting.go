@@ -17,9 +17,15 @@ type directRunFormatting struct {
 }
 
 type directRunSummary struct {
-	results      []*scheduler.TaskExecutionResult
-	failedAssets []string
-	duration     time.Duration
+	results              []*scheduler.TaskExecutionResult
+	failedAssets         []string
+	supplementalFailures []directRunFailure
+	duration             time.Duration
+}
+
+type directRunFailure struct {
+	assetName string
+	err       error
 }
 
 var directRunTimePrinter = color.New(color.FgWhite, color.Faint).SprintfFunc()
@@ -49,6 +55,39 @@ func writeDirectRunWindow(w io.Writer, formatting directRunFormatting) {
 		return
 	}
 	_, _ = fmt.Fprintf(w, "\nInterval: %s - %s\n", formatting.startDate.Format(time.RFC3339), formatting.endDate.Format(time.RFC3339))
+	_, _ = fmt.Fprint(w, "\nStarting the pipeline execution...\n\n")
+}
+
+func writeDirectPlannedRunWindows(w io.Writer, units []plannedPipelineUnit) {
+	if w == nil || len(units) == 0 {
+		return
+	}
+	first := units[0].window
+	oneWindow := true
+	for _, unit := range units[1:] {
+		if !unit.window.Start.Equal(first.Start) || !unit.window.End.Equal(first.End) {
+			oneWindow = false
+			break
+		}
+	}
+	if oneWindow {
+		writeDirectRunWindow(w, directRunFormatting{
+			startDate: first.Start,
+			endDate:   first.End,
+		})
+		return
+	}
+
+	_, _ = fmt.Fprint(w, "\nIntervals:\n")
+	for _, unit := range units {
+		_, _ = fmt.Fprintf(
+			w,
+			"  %s: %s - %s\n",
+			unit.unit.AssetName,
+			unit.window.Start.Format(time.RFC3339),
+			unit.window.End.Format(time.RFC3339),
+		)
+	}
 	_, _ = fmt.Fprint(w, "\nStarting the pipeline execution...\n\n")
 }
 
@@ -100,10 +139,13 @@ func writeDirectRunSummary(w io.Writer, summary directRunSummary) {
 
 	_, _ = fmt.Fprint(w, "\n==================================================\n\n")
 	mainSucceeded := 0
+	printedAssets := make(map[string]struct{})
 	for _, result := range summary.results {
 		if result == nil || result.Instance == nil || result.Instance.GetType() != scheduler.TaskInstanceTypeMain {
 			continue
 		}
+		assetName := result.Instance.GetAsset().Name
+		printedAssets[assetName] = struct{}{}
 		status := "PASS"
 		statusPrinter := directRunGreenPrinter
 		if result.Error != nil {
@@ -112,7 +154,18 @@ func writeDirectRunSummary(w io.Writer, summary directRunSummary) {
 		} else {
 			mainSucceeded++
 		}
-		_, _ = fmt.Fprintf(w, "%s %s\n", statusPrinter(status), result.Instance.GetAsset().Name)
+		_, _ = fmt.Fprintf(w, "%s %s\n", statusPrinter(status), assetName)
+	}
+	for _, failure := range summary.supplementalFailures {
+		if _, exists := printedAssets[failure.assetName]; exists {
+			continue
+		}
+		name := failure.assetName
+		if strings.TrimSpace(name) == "" {
+			name = "pipeline execution"
+		}
+		printedAssets[name] = struct{}{}
+		_, _ = fmt.Fprintf(w, "%s %s\n", directRunRedPrinter("FAIL"), name)
 	}
 
 	if len(summary.failedAssets) > 0 {
@@ -125,6 +178,21 @@ func writeDirectRunSummary(w io.Writer, summary directRunSummary) {
 			}
 			_, _ = fmt.Fprintf(w, "└── %s\n", result.Instance.GetAsset().Name)
 			for _, line := range strings.Split(strings.TrimSpace(result.Error.Error()), "\n") {
+				if trimmed := strings.TrimSpace(line); trimmed != "" {
+					_, _ = fmt.Fprintf(w, "└── %s\n", trimmed)
+				}
+			}
+		}
+		for _, failure := range summary.supplementalFailures {
+			name := failure.assetName
+			if strings.TrimSpace(name) == "" {
+				name = "pipeline execution"
+			}
+			_, _ = fmt.Fprintf(w, "└── %s\n", name)
+			if failure.err == nil {
+				continue
+			}
+			for _, line := range strings.Split(strings.TrimSpace(failure.err.Error()), "\n") {
 				if trimmed := strings.TrimSpace(line); trimmed != "" {
 					_, _ = fmt.Fprintf(w, "└── %s\n", trimmed)
 				}

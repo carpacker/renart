@@ -2,6 +2,7 @@ package bus
 
 import (
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -70,4 +71,36 @@ func TestNilBusEmitIsSafe(t *testing.T) {
 	assert.NoError(t, b.EmitRunCompleted(RunCompleted{}))
 	b.EmitAssetSaved(AssetSaved{})
 	b.EmitTargetWriteChanged(TargetWriteChanged{})
+}
+
+func TestValidateExecutionContractRequiresCoordinatedMutationResources(t *testing.T) {
+	t.Parallel()
+	resource := ExecutionResourceClaim{
+		Kind: "warehouse_relation", Identity: strings.Repeat("a", 64),
+	}
+	entry := ExecutionTargetSnapshotEntry{
+		AssetID:               "pipeline:analytics.orders",
+		WriteResourceKind:     resource.Kind,
+		WriteResourceIdentity: resource.Identity,
+		WriteResourceFidelity: "exact",
+		ExecutionContract: ExecutionContractSnapshot{
+			AssetID:        "pipeline:analytics.orders",
+			AssetName:      "analytics.orders",
+			ConnectionKeys: []string{strings.Repeat("b", 64)},
+			MutationResources: ExecutionResources{
+				Isolation: "resources", Claims: []ExecutionResourceClaim{resource},
+			},
+			CoordinationResources: ExecutionResources{
+				Isolation: "resources", Claims: []ExecutionResourceClaim{resource},
+			},
+		},
+	}
+
+	assert.NoError(t, ValidateExecutionContract("analytics.orders", entry))
+	entry.ExecutionContract.CoordinationResources.Claims = nil
+	assert.ErrorContains(
+		t,
+		ValidateExecutionContract("analytics.orders", entry),
+		"coordination omits",
+	)
 }

@@ -19,6 +19,7 @@ import (
 	"github.com/spf13/afero"
 	"go.uber.org/zap"
 
+	"renart/internal/web/executiongraph"
 	"renart/internal/web/identity"
 	"renart/internal/web/runstate"
 	"renart/internal/web/secretstore"
@@ -232,8 +233,10 @@ func (e *HybridBruinExecutor) RunPipeline(ctx context.Context, req RunPipelineRe
 	if err := validateDirectRunDependencies(ctx, printer, foundPipeline, e.workspaceRoot); err != nil {
 		return printer.buffer.Bytes(), err
 	}
-	plannedSelection := strings.TrimSpace(req.SelectionMode) != "" && strings.TrimSpace(req.SelectionMode) != PipelinePlanSelectionAll
-	if !plannedSelection && shouldFallbackToCLIRunPipeline(foundPipeline) {
+	selectionMode := strings.TrimSpace(req.SelectionMode)
+	plannedExecution := selectionMode != "" &&
+		(selectionMode != PipelinePlanSelectionAll || req.PlanVersion >= PipelineExecutionPlanVersionV3)
+	if !plannedExecution && shouldFallbackToCLIRunPipeline(foundPipeline) {
 		return printer.buffer.Bytes(), fmt.Errorf("direct pipeline run is not supported for one or more asset types")
 	}
 	applySelectedEnvironmentRefreshRestriction(cfg, foundPipeline.Assets)
@@ -251,12 +254,22 @@ func (e *HybridBruinExecutor) RunPipeline(ctx context.Context, req RunPipelineRe
 	if req.ExecutionTime.IsZero() {
 		executionTime = time.Now().UTC()
 	}
-	if plannedSelection {
+	if plannedExecution {
 		return e.runPlannedPipeline(ctx, req, pp, manager, printer, executionTime, runID, resolvedTarget)
 	}
 	timeWindow, err := ResolveExecutionTimeWindow(string(foundPipeline.Schedule), req.StartDate, req.EndDate, executionTime)
 	if err != nil {
 		return printer.buffer.Bytes(), err
+	}
+	if effectivePipelineMaxActiveSteps(foundPipeline) > 1 {
+		req.PlanVersion = PipelineExecutionPlanVersionV3
+		req.SelectionMode = PipelinePlanSelectionAll
+		req.MaxActiveSteps = effectivePipelineMaxActiveSteps(foundPipeline)
+		req.ExecutionUnits, err = runtimePipelineExecutionUnits(foundPipeline, timeWindow)
+		if err != nil {
+			return printer.buffer.Bytes(), err
+		}
+		return e.runPlannedPipeline(ctx, req, pp, manager, printer, executionTime, runID, resolvedTarget)
 	}
 	runCtx, parser, cleanup, err := buildDirectRunAssetContext(ctx, pp, timeWindow, executionTime, runID)
 	if err != nil {
@@ -411,19 +424,63 @@ func (e *HybridBruinExecutor) runPlannedPipeline(
 		if shouldFallbackToCLIRunAsset(asset, pp.Pipeline) {
 			return printer.buffer.Bytes(), fmt.Errorf("direct run is not supported for planned asset type %q", asset.Type)
 		}
+		if strings.TrimSpace(unit.AssetPath) == "" {
+			req.ExecutionUnits[index].AssetPath = assetRunPathForPipelineAsset(e.workspaceRoot, asset)
+		}
 		if _, exists := seenAssets[asset.Name]; !exists {
 			seenAssets[asset.Name] = struct{}{}
 			configurationAssets = append(configurationAssets, asset)
 		}
 	}
-	if err := e.notifyExecutionTargetsResolvedForSelection(
+	if req.PlanVersion >= PipelineExecutionPlanVersionV3 &&
+		req.MaxActiveSteps != effectivePipelineMaxActiveSteps(pp.Pipeline) {
+		return printer.buffer.Bytes(), fmt.Errorf(
+			"planned max_active_steps changed during execution: reviewed %d, current %d",
+			req.MaxActiveSteps,
+			effectivePipelineMaxActiveSteps(pp.Pipeline),
+		)
+	}
+	if req.PlanVersion >= PipelineExecutionPlanVersionV3 && req.MaxActiveSteps < 1 {
+		return printer.buffer.Bytes(), errors.New("planned max_active_steps must be greater than zero")
+	}
+	if err := validatePipelineExecutionUnits(req.ExecutionUnits, req.PlanVersion); err != nil {
+		return printer.buffer.Bytes(), err
+	}
+	if req.OnExecutionUnitsResolved != nil {
+		if err := req.OnExecutionUnitsResolved(
+			append([]PipelineExecutionUnit(nil), req.ExecutionUnits...),
+		); err != nil {
+			return printer.buffer.Bytes(), fmt.Errorf("persist resolved execution units: %w", err)
+		}
+	}
+	snapshot, err := e.resolveExecutionTargetSnapshotForSelection(
 		pp.Pipeline,
 		pp.Config,
 		pp.Pipeline.Assets,
 		configurationAssets,
-		req.OnTargetsResolved,
-	); err != nil {
-		return printer.buffer.Bytes(), err
+	)
+	if err != nil {
+		return printer.buffer.Bytes(), fmt.Errorf("resolve execution target snapshot: %w", err)
+	}
+	if req.PlanVersion >= PipelineExecutionPlanVersionV3 {
+		actualContracts, contractErr := executionContractsForUnits(snapshot, req.ExecutionUnits)
+		if contractErr != nil {
+			return printer.buffer.Bytes(), contractErr
+		}
+		if req.ExecutionContracts == nil {
+			// Unreviewed full runs are normalized locally immediately before
+			// execution. Reviewed and recovered runs always carry contracts.
+			req.ExecutionContracts = actualContracts
+		} else if !equalPipelinePlanExecutionContracts(req.ExecutionContracts, actualContracts) {
+			return printer.buffer.Bytes(), errors.New(
+				"planned execution connection or resource contract changed during execution",
+			)
+		}
+	}
+	if req.OnTargetsResolved != nil {
+		if err := req.OnTargetsResolved(snapshot); err != nil {
+			return printer.buffer.Bytes(), fmt.Errorf("persist execution target snapshot: %w", err)
+		}
 	}
 	if len(req.ExecutionUnits) == 0 {
 		_, _ = printer.Write([]byte("No reviewed execution units remain; the Needed run is complete.\n"))
@@ -440,6 +497,23 @@ func (e *HybridBruinExecutor) runPlannedPipeline(
 		defer regRun.End()
 	}
 
+	if req.PlanVersion >= PipelineExecutionPlanVersionV3 {
+		err := e.runPlannedPipelineUnits(
+			ctx,
+			req,
+			pp,
+			manager,
+			printer,
+			executionTime,
+			runID,
+			sourceRoot,
+			assetByName,
+			snapshot,
+			regRun,
+		)
+		return printer.buffer.Bytes(), err
+	}
+
 	for _, unit := range req.ExecutionUnits {
 		asset := assetByName[unit.AssetName]
 		window, err := ResolveExecutionTimeWindow(
@@ -451,11 +525,296 @@ func (e *HybridBruinExecutor) runPlannedPipeline(
 		if err := validatePlannedExecutionWindow(unit, window); err != nil {
 			return printer.buffer.Bytes(), err
 		}
-		if err := e.runPlannedPipelineUnit(ctx, req, pp, manager, printer, executionTime, runID, sourceRoot, unit, asset, window, regRun); err != nil {
+		if err := e.runPlannedPipelineUnit(ctx, req, pp, manager, printer, executionTime, runID, sourceRoot, unit, asset, window, regRun, nil); err != nil {
 			return printer.buffer.Bytes(), err
 		}
 	}
 	return printer.buffer.Bytes(), nil
+}
+
+type plannedPipelineUnit struct {
+	unit   PipelineExecutionUnit
+	asset  *pipeline.Asset
+	window ExecutionTimeWindow
+	node   executiongraph.Node
+}
+
+func (e *HybridBruinExecutor) runPlannedPipelineUnits(
+	ctx context.Context,
+	req RunPipelineRequest,
+	pp *directPipelineInfo,
+	manager config.ConnectionAndDetailsGetter,
+	printer *streamCaptureWriter,
+	executionTime time.Time,
+	runID string,
+	sourceRoot string,
+	assetByName map[string]*pipeline.Asset,
+	snapshot ExecutionTargetSnapshot,
+	regRun *runstate.Run,
+) error {
+	units := make([]plannedPipelineUnit, 0, len(req.ExecutionUnits))
+	usedConnections := make(map[string]struct{})
+	for _, unit := range req.ExecutionUnits {
+		asset := assetByName[unit.AssetName]
+		window, err := ResolveExecutionTimeWindow(
+			string(pp.Pipeline.Schedule),
+			unit.StartDate,
+			unit.EndDate,
+			executionTime,
+		)
+		if err != nil {
+			return fmt.Errorf("resolve planned window for %s: %w", unit.AssetName, err)
+		}
+		if err := validatePlannedExecutionWindow(unit, window); err != nil {
+			return err
+		}
+		entry, exists := snapshot.Entries[unit.AssetName]
+		if !exists || entry.AssetID != unit.AssetID {
+			return fmt.Errorf("planned execution target for %q is unavailable", unit.AssetName)
+		}
+		contract := entry.ExecutionContract
+		connections := executionConnectionNames(&directPipelineInfo{
+			Pipeline: pp.Pipeline,
+			Asset:    asset,
+			Config:   pp.Config,
+		})
+		if !equalStringSlices(executionConnectionKeys(connections), contract.ConnectionKeys) {
+			return fmt.Errorf("execution connection contract for %q changed", asset.Name)
+		}
+		for _, name := range connections {
+			usedConnections[name] = struct{}{}
+		}
+		resources, exclusive := pipelineExecutionResources(contract.CoordinationResources)
+		units = append(units, plannedPipelineUnit{
+			unit:   unit,
+			asset:  asset,
+			window: window,
+			node: executiongraph.Node{
+				Position:     unit.Position,
+				Dependencies: append([]int(nil), unit.DependencyPositions...),
+				Connections:  connections,
+				Resources:    resources,
+				Exclusive:    exclusive,
+			},
+		})
+	}
+	connectionLimits, err := pipelineExecutionConnectionLimits(pp.Config, manager, usedConnections)
+	if err != nil {
+		return err
+	}
+	nodes := make([]executiongraph.Node, len(units))
+	for index := range units {
+		nodes[index] = units[index].node
+	}
+	runner := executiongraph.Runner{
+		MaxActive:        executionMaxActiveSteps(req.MaxActiveSteps),
+		Workspace:        e.workspaceBudget,
+		ConnectionLimits: connectionLimits,
+		OnBypass: func(event executiongraph.Bypass) error {
+			finishedAt := time.Now().UTC()
+			status := string(event.Status)
+			eventErr := event.Err
+			if event.Status == executiongraph.BypassSkipped && len(event.BlockedBy) > 0 {
+				blockedNames := make([]string, 0, len(event.BlockedBy))
+				for _, position := range event.BlockedBy {
+					if position >= 0 && position < len(units) {
+						blockedNames = append(blockedNames, units[position].unit.AssetName)
+					}
+				}
+				if len(blockedNames) > 0 {
+					eventErr = fmt.Errorf(
+						"upstream execution failed: %s",
+						strings.Join(blockedNames, ", "),
+					)
+				}
+			}
+			return emitPipelineExecutionUnitEvent(
+				req.UnitEvent,
+				event.Node.Position,
+				status,
+				nil,
+				&finishedAt,
+				eventErr,
+			)
+		},
+	}
+	writeDirectPlannedRunWindows(printer, units)
+	runStartedAt := time.Now()
+	unitSummaries := make([]*directRunSummary, len(units))
+	unitErrors := make([]error, len(units))
+	runErr := runner.Run(ctx, nodes, func(ctx context.Context, node executiongraph.Node) error {
+		unit := units[node.Position]
+		err := e.runPlannedPipelineUnit(
+			ctx,
+			req,
+			pp,
+			manager,
+			printer,
+			executionTime,
+			runID,
+			sourceRoot,
+			unit.unit,
+			unit.asset,
+			unit.window,
+			regRun,
+			func(summary directRunSummary) {
+				unitSummaries[node.Position] = &summary
+			},
+		)
+		unitErrors[node.Position] = err
+		return err
+	})
+	writeDirectRunSummary(
+		printer,
+		buildPlannedPipelineRunSummary(units, unitSummaries, unitErrors, runErr, time.Since(runStartedAt)),
+	)
+	return runErr
+}
+
+func buildPlannedPipelineRunSummary(
+	units []plannedPipelineUnit,
+	unitSummaries []*directRunSummary,
+	unitErrors []error,
+	runErr error,
+	duration time.Duration,
+) directRunSummary {
+	results := make([]*scheduler.TaskExecutionResult, 0)
+	for _, summary := range unitSummaries {
+		if summary != nil {
+			results = append(results, summary.results...)
+		}
+	}
+	combined := buildDirectRunSummary(results, duration)
+	seenFailures := make(map[string]struct{}, len(combined.failedAssets))
+	for _, assetName := range combined.failedAssets {
+		seenFailures[assetName] = struct{}{}
+	}
+	for position, err := range unitErrors {
+		if err == nil {
+			continue
+		}
+		assetName := ""
+		if position < len(units) {
+			assetName = units[position].unit.AssetName
+		}
+		if _, exists := seenFailures[assetName]; exists {
+			continue
+		}
+		seenFailures[assetName] = struct{}{}
+		combined.failedAssets = append(combined.failedAssets, assetName)
+		combined.supplementalFailures = append(combined.supplementalFailures, directRunFailure{
+			assetName: assetName,
+			err:       err,
+		})
+	}
+	if runErr != nil && len(combined.failedAssets) == 0 {
+		combined.failedAssets = append(combined.failedAssets, "pipeline execution")
+		combined.supplementalFailures = append(combined.supplementalFailures, directRunFailure{
+			assetName: "pipeline execution",
+			err:       runErr,
+		})
+	}
+	return combined
+}
+
+func runtimePipelineExecutionUnits(
+	pl *pipeline.Pipeline,
+	window ExecutionTimeWindow,
+) ([]PipelineExecutionUnit, error) {
+	if pl == nil {
+		return nil, errors.New("pipeline is required")
+	}
+	orderedAssets := pipelineAssetsInTopologicalOrder(pl)
+	planned := make([]PipelinePlanExecutionUnit, 0, len(orderedAssets))
+	for _, asset := range orderedAssets {
+		planned = append(planned, PipelinePlanExecutionUnit{
+			AssetID:     identity.AssetID(pl.LegacyID, asset.Name),
+			AssetName:   asset.Name,
+			StartDate:   window.StartRFC3339(),
+			EndDate:     window.EndRFC3339(),
+			RenderIndex: 0,
+			Reason:      "entire_pipeline",
+		})
+	}
+	if err := bindPipelinePlanExecutionDependencies(pl, planned); err != nil {
+		return nil, fmt.Errorf("bind runtime execution dependencies: %w", err)
+	}
+	units := make([]PipelineExecutionUnit, 0, len(planned))
+	for position, unit := range planned {
+		units = append(units, PipelineExecutionUnit{
+			Position: position, AssetID: unit.AssetID, AssetName: unit.AssetName,
+			StartDate: unit.StartDate, EndDate: unit.EndDate,
+			RenderIndex: unit.RenderIndex, Reason: unit.Reason,
+			DependencyPositions: append([]int(nil), unit.DependencyPositions...),
+		})
+	}
+	return units, nil
+}
+
+func validatePipelineExecutionUnits(units []PipelineExecutionUnit, planVersion int) error {
+	for position, unit := range units {
+		if unit.Position != position {
+			return fmt.Errorf("planned execution unit %d has position %d", position, unit.Position)
+		}
+		if planVersion < PipelineExecutionPlanVersionV3 && len(unit.DependencyPositions) > 0 {
+			return fmt.Errorf("legacy execution unit %d contains dependency positions", position)
+		}
+		previous := -1
+		for _, dependency := range unit.DependencyPositions {
+			if dependency < 0 || dependency >= position || dependency <= previous {
+				return fmt.Errorf("planned execution unit %d has invalid dependencies", position)
+			}
+			previous = dependency
+		}
+	}
+	return nil
+}
+
+func pipelineExecutionResources(resources PipelinePlanResources) ([]string, bool) {
+	if resources.Isolation != PipelinePlanResourceIsolationResources {
+		return nil, true
+	}
+	result := make([]string, 0, len(resources.Claims))
+	for _, claim := range resources.Claims {
+		if strings.TrimSpace(claim.Kind) == "" || strings.TrimSpace(claim.Identity) == "" {
+			return nil, true
+		}
+		result = append(result, claim.Kind+"\x00"+claim.Identity)
+	}
+	return result, false
+}
+
+func pipelineExecutionConnectionLimits(
+	cfg *config.Config,
+	manager config.ConnectionAndDetailsGetter,
+	used map[string]struct{},
+) (map[string]int, error) {
+	limits := make(map[string]int)
+	if cfg != nil && cfg.SelectedEnvironment != nil && cfg.SelectedEnvironment.Connections != nil {
+		configured, err := cfg.SelectedEnvironment.Connections.ConnectionConcurrencyLimits()
+		if err != nil {
+			return nil, fmt.Errorf("resolve connection concurrency limits: %w", err)
+		}
+		for name, limit := range configured {
+			if _, exists := used[name]; exists {
+				limits[name] = limit
+			}
+		}
+	}
+	if manager == nil {
+		return limits, nil
+	}
+	for name := range used {
+		switch connection := manager.GetConnectionDetails(name).(type) {
+		case *config.DuckDBConnection:
+			if connection != nil {
+				limits[name] = 1
+			}
+		case config.DuckDBConnection:
+			limits[name] = 1
+		}
+	}
+	return limits, nil
 }
 
 func validatePlannedExecutionWindow(unit PipelineExecutionUnit, window ExecutionTimeWindow) error {
@@ -480,6 +839,7 @@ func (e *HybridBruinExecutor) runPlannedPipelineUnit(
 	asset *pipeline.Asset,
 	window ExecutionTimeWindow,
 	regRun *runstate.Run,
+	onSummary func(directRunSummary),
 ) (resultErr error) {
 	unitRunID := fmt.Sprintf("%s-unit-%d", runID, unit.Position)
 	runCtx, parser, cleanup, err := buildDirectRunAssetContext(ctx, pp, window, executionTime, unitRunID)
@@ -523,7 +883,9 @@ func (e *HybridBruinExecutor) runPlannedPipelineUnit(
 	}
 
 	formatting := directRunFormatting{startDate: window.Start, endDate: window.End}
-	writeDirectRunWindow(printer, formatting)
+	if onSummary == nil {
+		writeDirectRunWindow(printer, formatting)
+	}
 	runCtx = context.WithValue(runCtx, bruinexecutor.ContextLogger, zap.NewNop().Sugar())
 	startedAt := time.Now().UTC()
 	if err := emitPipelineExecutionUnitEvent(req.UnitEvent, unit.Position, "running", &startedAt, nil, nil); err != nil {
@@ -580,7 +942,11 @@ func (e *HybridBruinExecutor) runPlannedPipelineUnit(
 				}
 				results = append(results, &scheduler.TaskExecutionResult{Instance: instance, Error: resultErr})
 				writeDirectRunLifecycle(printer, instance, resultErr, false, time.Since(taskStartedAt))
-				writeDirectRunSummary(printer, buildDirectRunSummary(results, time.Since(unitStartedAt)))
+				emitPlannedPipelineUnitSummary(
+					printer,
+					onSummary,
+					buildDirectRunSummary(results, time.Since(unitStartedAt)),
+				)
 				finishedAt := time.Now().UTC()
 				unitStatus := "failed"
 				if status == "cancelled" {
@@ -614,12 +980,28 @@ func (e *HybridBruinExecutor) runPlannedPipelineUnit(
 			return resultErr
 		}
 	}
-	writeDirectRunSummary(printer, buildDirectRunSummary(results, time.Since(unitStartedAt)))
+	emitPlannedPipelineUnitSummary(
+		printer,
+		onSummary,
+		buildDirectRunSummary(results, time.Since(unitStartedAt)),
+	)
 	finishedAt := time.Now().UTC()
 	if err := emitPipelineExecutionUnitEvent(req.UnitEvent, unit.Position, "success", &startedAt, &finishedAt, nil); err != nil {
 		return fmt.Errorf("persist successful execution unit %d: %w", unit.Position, err)
 	}
 	return nil
+}
+
+func emitPlannedPipelineUnitSummary(
+	printer *streamCaptureWriter,
+	onSummary func(directRunSummary),
+	summary directRunSummary,
+) {
+	if onSummary != nil {
+		onSummary(summary)
+		return
+	}
+	writeDirectRunSummary(printer, summary)
 }
 
 func emitPipelineExecutionUnitEvent(
@@ -675,24 +1057,29 @@ func (e *HybridBruinExecutor) runDirectTask(
 	}
 
 	var runErr error
-	switch {
-	case isAPIAsset(asset) && instance.GetType() == scheduler.TaskInstanceTypeMain:
-		_, runErr = e.runAPIAsset(taskCtx, pl, asset, renderer, manager, forward)
-	case isLoadAsset(asset) && instance.GetType() == scheduler.TaskInstanceTypeMain:
-		_, runErr = e.runLoadAsset(taskCtx, pl, asset, manager, forward)
-	default:
-		lease, leaseErr := e.acquireDuckDBConnections(
-			taskCtx,
-			manager,
-			directTaskDuckDBConnectionNames(pl, instance),
-			directTaskLeaseOwner(taskCtx, pl, asset),
-			assetWriter,
-		)
-		if leaseErr != nil {
-			runErr = leaseErr
-		} else {
-			runErr = seq.RunSingleTask(taskCtx, instance)
-			lease.Release()
+	if e.directTaskGate != nil {
+		runErr = e.directTaskGate(taskCtx, instance)
+	}
+	if runErr == nil {
+		switch {
+		case isAPIAsset(asset) && instance.GetType() == scheduler.TaskInstanceTypeMain:
+			_, runErr = e.runAPIAsset(taskCtx, pl, asset, renderer, manager, forward)
+		case isLoadAsset(asset) && instance.GetType() == scheduler.TaskInstanceTypeMain:
+			_, runErr = e.runLoadAsset(taskCtx, pl, asset, manager, forward)
+		default:
+			lease, leaseErr := e.acquireDuckDBConnections(
+				taskCtx,
+				manager,
+				directTaskDuckDBConnectionNames(pl, instance),
+				directTaskLeaseOwner(taskCtx, pl, asset),
+				assetWriter,
+			)
+			if leaseErr != nil {
+				runErr = leaseErr
+			} else {
+				runErr = seq.RunSingleTask(taskCtx, instance)
+				lease.Release()
+			}
 		}
 	}
 

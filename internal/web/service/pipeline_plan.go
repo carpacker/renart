@@ -101,12 +101,13 @@ type PipelinePlanConfirmRequest struct {
 // plan ID. Confirmation can therefore validate a prior preview without
 // accepting rendered statements back from the client.
 type PipelinePlanReviewedIdentity struct {
-	PipelineUUID   string                      `json:"pipeline_uuid"`
-	Source         AssetRenderSource           `json:"source"`
-	Context        PipelinePlanContext         `json:"context"`
-	Selection      PipelinePlanSelection       `json:"selection"`
-	Resources      PipelinePlanResources       `json:"resources"`
-	ExecutionUnits []PipelinePlanExecutionUnit `json:"execution_units"`
+	PipelineUUID       string                          `json:"pipeline_uuid"`
+	Source             AssetRenderSource               `json:"source"`
+	Context            PipelinePlanContext             `json:"context"`
+	Selection          PipelinePlanSelection           `json:"selection"`
+	Resources          PipelinePlanResources           `json:"resources"`
+	ExecutionContracts []PipelinePlanExecutionContract `json:"execution_contracts"`
+	ExecutionUnits     []PipelinePlanExecutionUnit     `json:"execution_units"`
 }
 
 type PipelinePlanContext struct {
@@ -115,6 +116,7 @@ type PipelinePlanContext struct {
 	StartDate             string                          `json:"start_date"`
 	EndDate               string                          `json:"end_date"`
 	ExecutionTime         string                          `json:"execution_time"`
+	MaxActiveSteps        int                             `json:"max_active_steps"`
 	RequestedFullRefresh  bool                            `json:"requested_full_refresh"`
 	FullRefresh           bool                            `json:"full_refresh"`
 	Backfill              bool                            `json:"backfill"`
@@ -174,12 +176,13 @@ type PipelinePlanAsset struct {
 }
 
 type PipelinePlanExecutionUnit struct {
-	AssetID     string `json:"asset_id"`
-	AssetName   string `json:"asset_name"`
-	StartDate   string `json:"start_date"`
-	EndDate     string `json:"end_date"`
-	RenderIndex int    `json:"render_index"`
-	Reason      string `json:"reason"`
+	AssetID             string `json:"asset_id"`
+	AssetName           string `json:"asset_name"`
+	StartDate           string `json:"start_date"`
+	EndDate             string `json:"end_date"`
+	RenderIndex         int    `json:"render_index"`
+	Reason              string `json:"reason"`
+	DependencyPositions []int  `json:"dependency_positions"`
 }
 
 // PipelinePlanResourceClaim is one exclusive, secret-free mutation resource.
@@ -199,6 +202,17 @@ type PipelinePlanResources struct {
 	Claims    []PipelinePlanResourceClaim `json:"claims"`
 }
 
+// PipelinePlanExecutionContract is the reviewed, secret-free runtime policy
+// for one selected asset. It is stored once even when the asset has multiple
+// execution windows.
+type PipelinePlanExecutionContract struct {
+	AssetID               string                `json:"asset_id"`
+	AssetName             string                `json:"asset_name"`
+	ConnectionKeys        []string              `json:"connection_keys"`
+	MutationResources     PipelinePlanResources `json:"mutation_resources"`
+	CoordinationResources PipelinePlanResources `json:"coordination_resources"`
+}
+
 type PipelinePlanSummary struct {
 	Assets                int `json:"assets"`
 	ExecutionUnits        int `json:"execution_units"`
@@ -209,19 +223,20 @@ type PipelinePlanSummary struct {
 }
 
 type PipelinePlan struct {
-	ID             string                      `json:"id"`
-	Status         string                      `json:"status"`
-	PipelineID     string                      `json:"pipeline_id"`
-	PipelineUUID   string                      `json:"pipeline_uuid"`
-	PipelineName   string                      `json:"pipeline_name"`
-	Source         AssetRenderSource           `json:"source"`
-	Context        PipelinePlanContext         `json:"context"`
-	Readiness      PipelinePlanReadiness       `json:"readiness"`
-	Selection      PipelinePlanSelection       `json:"selection"`
-	Resources      PipelinePlanResources       `json:"resources"`
-	Assets         []PipelinePlanAsset         `json:"assets"`
-	ExecutionUnits []PipelinePlanExecutionUnit `json:"execution_units"`
-	Summary        PipelinePlanSummary         `json:"summary"`
+	ID                 string                          `json:"id"`
+	Status             string                          `json:"status"`
+	PipelineID         string                          `json:"pipeline_id"`
+	PipelineUUID       string                          `json:"pipeline_uuid"`
+	PipelineName       string                          `json:"pipeline_name"`
+	Source             AssetRenderSource               `json:"source"`
+	Context            PipelinePlanContext             `json:"context"`
+	Readiness          PipelinePlanReadiness           `json:"readiness"`
+	Selection          PipelinePlanSelection           `json:"selection"`
+	Resources          PipelinePlanResources           `json:"resources"`
+	Assets             []PipelinePlanAsset             `json:"assets"`
+	ExecutionContracts []PipelinePlanExecutionContract `json:"execution_contracts"`
+	ExecutionUnits     []PipelinePlanExecutionUnit     `json:"execution_units"`
+	Summary            PipelinePlanSummary             `json:"summary"`
 }
 
 type PipelinePlanSnapshotStore interface {
@@ -352,8 +367,9 @@ func (s *PipelinePlanService) Plan(
 			Isolation: PipelinePlanResourceIsolationPipeline,
 			Claims:    []PipelinePlanResourceClaim{},
 		},
-		Assets:         []PipelinePlanAsset{},
-		ExecutionUnits: []PipelinePlanExecutionUnit{},
+		Assets:             []PipelinePlanAsset{},
+		ExecutionContracts: []PipelinePlanExecutionContract{},
+		ExecutionUnits:     []PipelinePlanExecutionUnit{},
 	}
 	initialConfigIdentity := selectedConfigurationIdentityWithBindings(
 		s.deps.WorkspaceRoot,
@@ -363,6 +379,7 @@ func (s *PipelinePlanService) Plan(
 	base.Context = PipelinePlanContext{
 		Environment:           environment,
 		ExecutionTime:         executionTime.Format(time.RFC3339Nano),
+		MaxActiveSteps:        1,
 		RequestedFullRefresh:  req.FullRefresh,
 		Backfill:              req.Backfill,
 		SensorMode:            effectiveSensorMode(normalized.SensorMode, req.Scheduled),
@@ -410,6 +427,7 @@ func (s *PipelinePlanService) Plan(
 		StartDate:            timeWindow.StartRFC3339(),
 		EndDate:              timeWindow.EndRFC3339(),
 		ExecutionTime:        executionTime.Format(time.RFC3339Nano),
+		MaxActiveSteps:       effectivePipelineMaxActiveSteps(resolved.parsed),
 		RequestedFullRefresh: req.FullRefresh,
 		Backfill:             req.Backfill,
 		SensorMode:           effectiveSensorMode(normalized.SensorMode, req.Scheduled),
@@ -631,7 +649,27 @@ func (s *PipelinePlanService) Plan(
 		}
 		base.Assets = append(base.Assets, planAsset)
 	}
-	base.Resources = pipelinePlanResources(base.Assets)
+	if err := bindPipelinePlanExecutionDependencies(resolved.parsed, base.ExecutionUnits); err != nil {
+		return PipelinePlan{}, &APIError{
+			Status:  500,
+			Code:    "execution_graph_invalid",
+			Message: "selected execution dependencies could not be bound",
+		}
+	}
+	base.ExecutionContracts, err = pipelinePlanExecutionContracts(
+		s.deps.WorkspaceRoot,
+		cfg,
+		resolved.parsed,
+		base.Assets,
+	)
+	if err != nil {
+		return PipelinePlan{}, &APIError{
+			Status:  500,
+			Code:    "execution_contract_invalid",
+			Message: "selected execution resources could not be bound",
+		}
+	}
+	base.Resources = aggregatePipelinePlanMutationResources(base.ExecutionContracts)
 	if purpose == PipelinePlanPurposeExecution && !req.SkipActiveRunCheck {
 		s.addActiveRunIssue(ctx, &base)
 	}
@@ -666,6 +704,83 @@ func (s *PipelinePlanService) Plan(
 	}
 	base.ID = pipelinePlanID(base)
 	return base, nil
+}
+
+func effectivePipelineMaxActiveSteps(pl *pipeline.Pipeline) int {
+	if pl == nil || pl.MaxActiveSteps == nil || *pl.MaxActiveSteps < 1 {
+		return 1
+	}
+	return *pl.MaxActiveSteps
+}
+
+// bindPipelinePlanExecutionDependencies records a conservative, stable unit
+// DAG. Multiple windows for one asset are chained. The first selected window
+// waits for the final selected window of every selected in-pipeline upstream;
+// unselected upstreams remain reviewed data-state preconditions rather than
+// runtime nodes.
+func bindPipelinePlanExecutionDependencies(pl *pipeline.Pipeline, units []PipelinePlanExecutionUnit) error {
+	if len(units) == 0 {
+		return nil
+	}
+	if pl == nil {
+		return errors.New("pipeline is required")
+	}
+	assetByName := make(map[string]*pipeline.Asset, len(pl.Assets))
+	positionsByAsset := make(map[string][]int, len(pl.Assets))
+	for _, asset := range pl.Assets {
+		if asset != nil {
+			assetByName[asset.Name] = asset
+		}
+	}
+	for position := range units {
+		name := strings.TrimSpace(units[position].AssetName)
+		if assetByName[name] == nil {
+			return fmt.Errorf("execution unit %d references unknown asset %q", position, name)
+		}
+		positionsByAsset[name] = append(positionsByAsset[name], position)
+	}
+	for assetName, positions := range positionsByAsset {
+		asset := assetByName[assetName]
+		for index, position := range positions {
+			dependencies := make([]int, 0, len(asset.Upstreams)+1)
+			if index > 0 {
+				dependencies = append(dependencies, positions[index-1])
+			} else {
+				for _, upstream := range asset.Upstreams {
+					upstreamPositions := positionsByAsset[strings.TrimSpace(upstream.Value)]
+					if len(upstreamPositions) > 0 {
+						dependencies = append(dependencies, upstreamPositions[len(upstreamPositions)-1])
+					}
+				}
+			}
+			sort.Ints(dependencies)
+			dependencies = dedupeSortedInts(dependencies)
+			for _, dependency := range dependencies {
+				if dependency < 0 || dependency >= position {
+					return fmt.Errorf(
+						"execution unit %d has non-topological dependency %d",
+						position,
+						dependency,
+					)
+				}
+			}
+			units[position].DependencyPositions = dependencies
+		}
+	}
+	return nil
+}
+
+func dedupeSortedInts(values []int) []int {
+	if len(values) < 2 {
+		return values
+	}
+	result := values[:1]
+	for _, value := range values[1:] {
+		if value != result[len(result)-1] {
+			result = append(result, value)
+		}
+	}
+	return result
 }
 
 func (s *PipelinePlanService) resolvePipelineUUID(pipelineID string) (string, bool) {
@@ -1260,12 +1375,13 @@ func pipelinePlanPartialRenderWarning(result AssetRenderResult) (string, bool) {
 
 func pipelinePlanID(plan PipelinePlan) string {
 	return PipelinePlanReviewedIdentityID(PipelinePlanReviewedIdentity{
-		PipelineUUID:   plan.PipelineUUID,
-		Source:         plan.Source,
-		Context:        plan.Context,
-		Selection:      plan.Selection,
-		Resources:      plan.Resources,
-		ExecutionUnits: plan.ExecutionUnits,
+		PipelineUUID:       plan.PipelineUUID,
+		Source:             plan.Source,
+		Context:            plan.Context,
+		Selection:          plan.Selection,
+		Resources:          plan.Resources,
+		ExecutionContracts: plan.ExecutionContracts,
+		ExecutionUnits:     plan.ExecutionUnits,
 	})
 }
 
@@ -1279,42 +1395,9 @@ func PipelinePlanReviewedIdentityFromPlan(plan PipelinePlan) PipelinePlanReviewe
 	return PipelinePlanReviewedIdentity{
 		PipelineUUID: plan.PipelineUUID, Source: plan.Source, Context: plan.Context,
 		Selection: plan.Selection, Resources: plan.Resources,
-		ExecutionUnits: append([]PipelinePlanExecutionUnit(nil), plan.ExecutionUnits...),
+		ExecutionContracts: append([]PipelinePlanExecutionContract(nil), plan.ExecutionContracts...),
+		ExecutionUnits:     append([]PipelinePlanExecutionUnit(nil), plan.ExecutionUnits...),
 	}
-}
-
-func pipelinePlanResources(assets []PipelinePlanAsset) PipelinePlanResources {
-	result := PipelinePlanResources{
-		Isolation: PipelinePlanResourceIsolationResources,
-		Claims:    []PipelinePlanResourceClaim{},
-	}
-	seen := make(map[string]struct{})
-	for _, asset := range assets {
-		resource := asset.Target.WriteResource
-		kind := strings.TrimSpace(resource.Kind)
-		identity := strings.TrimSpace(resource.Identity)
-		if resource.Fidelity == AssetRenderFidelityExact && kind == assetWriteResourceNone && identity == "" {
-			continue
-		}
-		if resource.Fidelity != AssetRenderFidelityExact || identity == "" ||
-			(kind != assetWriteResourceLocalFile && kind != assetWriteResourceDuckDB) {
-			result.Isolation = PipelinePlanResourceIsolationPipeline
-			continue
-		}
-		key := kind + "\x00" + identity
-		if _, exists := seen[key]; exists {
-			continue
-		}
-		seen[key] = struct{}{}
-		result.Claims = append(result.Claims, PipelinePlanResourceClaim{Kind: kind, Identity: identity})
-	}
-	sort.Slice(result.Claims, func(i, j int) bool {
-		if result.Claims[i].Kind == result.Claims[j].Kind {
-			return result.Claims[i].Identity < result.Claims[j].Identity
-		}
-		return result.Claims[i].Kind < result.Claims[j].Kind
-	})
-	return result
 }
 
 func (s *PipelinePlanService) addActiveRunIssue(ctx context.Context, plan *PipelinePlan) {

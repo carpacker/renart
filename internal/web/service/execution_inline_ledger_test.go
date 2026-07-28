@@ -17,15 +17,16 @@ import (
 )
 
 type stubInlineRunLedger struct {
-	admission webscheduler.InlineRunAdmission
-	admitErr  error
-	started   bool
-	targets   []webscheduler.ExecutionTargetSnapshot
-	steps     []webscheduler.RunStepEvent
-	units     []webscheduler.PipelineRunUnitEvent
-	logs      []string
-	status    webscheduler.RunStatus
-	finishErr error
+	admission  webscheduler.InlineRunAdmission
+	admitErr   error
+	started    bool
+	boundUnits []webscheduler.RunSelectionUnit
+	targets    []webscheduler.ExecutionTargetSnapshot
+	steps      []webscheduler.RunStepEvent
+	units      []webscheduler.PipelineRunUnitEvent
+	logs       []string
+	status     webscheduler.RunStatus
+	finishErr  error
 }
 
 func (s *stubInlineRunLedger) AdmitInlineRun(_ context.Context, admission webscheduler.InlineRunAdmission) (webscheduler.PipelineRun, error) {
@@ -38,6 +39,15 @@ func (s *stubInlineRunLedger) AdmitInlineRun(_ context.Context, admission websch
 
 func (s *stubInlineRunLedger) StartInlineRun(context.Context, string, time.Time) error {
 	s.started = true
+	return nil
+}
+
+func (s *stubInlineRunLedger) BindInlineRunExecutionUnits(
+	_ context.Context,
+	_ string,
+	units []webscheduler.RunSelectionUnit,
+) error {
+	s.boundUnits = append([]webscheduler.RunSelectionUnit(nil), units...)
 	return nil
 }
 
@@ -74,6 +84,13 @@ func TestExecutionServiceRecordsInlinePipelineRunWithoutChangingStreaming(t *tes
 	executor := &stubExecutionExecutor{
 		runPipelineOutput: []byte("pipeline complete\n"),
 		runPipelineChunks: [][]byte{[]byte("pipeline "), []byte("complete\n")},
+		runPipelineResolvedUnits: []PipelineExecutionUnit{{
+			Position: 0, AssetID: "asset-id", AssetName: "analytics.orders",
+			AssetPath: "pipelines/orders/assets/orders.sql",
+			StartDate: started.Format(time.RFC3339Nano),
+			EndDate:   finished.Format(time.RFC3339Nano),
+			Reason:    "full_run",
+		}},
 		runPipelineEvents: []ExecutionAssetEvent{
 			{Asset: "analytics.orders", Status: "running", StartedAt: &started},
 			{Asset: "analytics.orders", Status: "success", StartedAt: &started, FinishedAt: &finished},
@@ -122,6 +139,8 @@ func TestExecutionServiceRecordsInlinePipelineRunWithoutChangingStreaming(t *tes
 	assert.Equal(t, "analytics", ledger.admission.PipelineName)
 	assert.True(t, ledger.admission.Start.Before(ledger.admission.End))
 	assert.True(t, ledger.started)
+	require.Len(t, ledger.boundUnits, 1)
+	assert.Equal(t, "analytics.orders", ledger.boundUnits[0].AssetName)
 	require.Len(t, executor.runPipelineReqs, 1)
 	assert.Equal(t, "inline-run-id", executor.runPipelineReqs[0].RunID)
 	require.Len(t, ledger.targets, 1)
@@ -320,40 +339,67 @@ select * from analytics.orders
 	secondStarted := middle.Add(time.Second)
 	secondFinished := secondStarted.Add(time.Second)
 	call := 0
-	executor := &stubExecutionExecutor{}
-	executor.onRunAsset = func() {
-		call++
-		executor.runAssetOutput = []byte("window output\n")
-		executor.runAssetTargets = &ExecutionTargetSnapshot{
-			Version: ExecutionTargetSnapshotVersion, PipelineUUID: "0b73db88-ab55-4ed1-8f50-ef38089fc2d2",
+	executor := &stubExecutionExecutor{
+		runPipelineOutput: []byte("window output\n"),
+		runPipelineChunks: [][]byte{[]byte("window output\n")},
+		runPipelineTargets: &ExecutionTargetSnapshot{
+			Version: 3, PipelineUUID: "0b73db88-ab55-4ed1-8f50-ef38089fc2d2",
 			Entries: map[string]ExecutionTargetSnapshotEntry{
 				"analytics.orders": {
 					AssetID:        "0b73db88-ab55-4ed1-8f50-ef38089fc2d2:analytics.orders",
 					TargetIdentity: "target-orders", TargetFidelity: AssetRenderFidelityExact,
+					WriteResourceKind: assetWriteResourcePipeline, WriteResourceFidelity: AssetRenderFidelityRuntimeOnly,
 					Fingerprint: "v2:orders", OwnContent: "v2:orders-own",
 					ConsumedVarsHash: "consumed", VarsHash: "vars", CoverageMode: ExecutionCoverageMarker,
 				},
 				"analytics.report": {
 					AssetID:        "0b73db88-ab55-4ed1-8f50-ef38089fc2d2:analytics.report",
 					TargetIdentity: "target-report", TargetFidelity: AssetRenderFidelityExact,
+					WriteResourceKind: assetWriteResourcePipeline, WriteResourceFidelity: AssetRenderFidelityRuntimeOnly,
 					Fingerprint: "v2:report", OwnContent: "v2:report-own",
 					ConsumedVarsHash: "consumed", VarsHash: "vars", CoverageMode: ExecutionCoverageMarker,
 				},
 			},
-		}
-		if call == 1 {
-			executor.runAssetErr = nil
-			executor.runAssetEvents = []ExecutionAssetEvent{
-				{Asset: "analytics.orders", Status: "running", StartedAt: &start},
-				{Asset: "analytics.orders", Status: "success", StartedAt: &start, FinishedAt: &firstFinished},
-			}
-			return
-		}
-		executor.runAssetErr = errors.New("second gap failed")
-		executor.runAssetEvents = []ExecutionAssetEvent{
-			{Asset: "analytics.orders", Status: "running", StartedAt: &secondStarted},
-			{Asset: "analytics.orders", Status: "failed", StartedAt: &secondStarted, FinishedAt: &secondFinished, Error: "second gap failed"},
-		}
+		},
+	}
+	executor.runPipelineExecute = func(req RunPipelineRequest) error {
+		call++
+		require.Len(t, req.ExecutionUnits, 3)
+		require.NoError(t, req.UnitEvent(PipelineExecutionUnitEvent{
+			Position: 0, Status: "running", StartedAt: &start,
+		}))
+		require.NoError(t, req.AssetEvent(ExecutionAssetEvent{
+			Asset: "analytics.orders", Status: "running", StartedAt: &start,
+			UnitPosition: 0, HasUnitPosition: true,
+		}))
+		require.NoError(t, req.AssetEvent(ExecutionAssetEvent{
+			Asset: "analytics.orders", Status: "success", StartedAt: &start, FinishedAt: &firstFinished,
+			UnitPosition: 0, HasUnitPosition: true,
+		}))
+		require.NoError(t, req.UnitEvent(PipelineExecutionUnitEvent{
+			Position: 0, Status: "success", StartedAt: &start, FinishedAt: &firstFinished,
+		}))
+		require.NoError(t, req.UnitEvent(PipelineExecutionUnitEvent{
+			Position: 1, Status: "running", StartedAt: &secondStarted,
+		}))
+		require.NoError(t, req.AssetEvent(ExecutionAssetEvent{
+			Asset: "analytics.orders", Status: "running", StartedAt: &secondStarted,
+			UnitPosition: 1, HasUnitPosition: true,
+		}))
+		failure := errors.New("analytics.orders second gap failed")
+		require.NoError(t, req.AssetEvent(ExecutionAssetEvent{
+			Asset: "analytics.orders", Status: "failed", StartedAt: &secondStarted, FinishedAt: &secondFinished,
+			Error: failure.Error(), UnitPosition: 1, HasUnitPosition: true,
+		}))
+		require.NoError(t, req.UnitEvent(PipelineExecutionUnitEvent{
+			Position: 1, Status: "failed", StartedAt: &secondStarted, FinishedAt: &secondFinished,
+			Error: failure.Error(),
+		}))
+		require.NoError(t, req.UnitEvent(PipelineExecutionUnitEvent{
+			Position: 2, Status: "skipped", FinishedAt: &secondFinished,
+			Error: "upstream analytics.orders failed",
+		}))
+		return failure
 	}
 	events := bus.New()
 	completed := make([]bus.RunCompleted, 0, 2)
@@ -383,7 +429,7 @@ select * from analytics.orders
 	)
 	require.Equal(t, "error", result.Status)
 	assert.Contains(t, result.Error, "analytics.orders")
-	assert.Equal(t, 2, call, "the downstream asset must not execute after its upstream failed")
+	assert.Equal(t, 1, call, "Build needed executes through one pipeline unit graph")
 
 	runs, err := store.List(context.Background(), webscheduler.RunFilter{PipelineID: pipelineID})
 	require.NoError(t, err)

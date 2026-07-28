@@ -83,9 +83,9 @@ func TestExecutionTargetSnapshotCapturesSecretFreeTargetAndFingerprintEvidence(t
 	exactEntry := snapshot.Entries[exact.Name]
 	assert.Equal(t, AssetRenderFidelityExact, exactEntry.TargetFidelity)
 	assert.NotEmpty(t, exactEntry.TargetIdentity)
-	assert.Equal(t, assetWriteResourcePipeline, exactEntry.WriteResourceKind)
-	assert.Equal(t, AssetRenderFidelityRuntimeOnly, exactEntry.WriteResourceFidelity)
-	assert.Empty(t, exactEntry.WriteResourceIdentity)
+	assert.Equal(t, assetWriteResourceWarehouse, exactEntry.WriteResourceKind)
+	assert.Equal(t, AssetRenderFidelityExact, exactEntry.WriteResourceFidelity)
+	assert.NotEmpty(t, exactEntry.WriteResourceIdentity)
 	runtimeEntry := snapshot.Entries[runtimeOnly.Name]
 	assert.Equal(t, AssetRenderFidelityRuntimeOnly, runtimeEntry.TargetFidelity)
 	assert.Empty(t, runtimeEntry.TargetIdentity)
@@ -108,6 +108,7 @@ func TestExecutionTargetSnapshotCapturesSecretFreeTargetAndFingerprintEvidence(t
 			"target_fidelity",
 			"write_resource_kind",
 			"write_resource_fidelity",
+			"execution_contract",
 			"fingerprint",
 			"own_content",
 			"consumed_vars_hash",

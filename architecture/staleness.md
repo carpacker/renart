@@ -373,11 +373,13 @@ The quick **Build needed** action is server-side: `POST
 the stale set for the selection, compiles it into a plan (every non-fresh
 asset; for partials exactly the uncovered gap intervals), and
 `ExecutionService.MaterializeStaleAssetsStream` builds it in topological order
-as one SSE-streamed run — one combined log, per-asset `asset` progress events,
-one `RunCompleted` bus emit per built window (so coverage and achieved
-fingerprints reflect exactly what ran, and downstreams built later in the same
-plan already see the fresh upstream fingerprints). Assets downstream of a
-failed plan member are skipped rather than built stale.
+as one SSE-streamed, version-three execution-unit graph — one combined log,
+per-asset `asset` progress events, and one `RunCompleted` bus emit per built
+window. Independent safe branches may overlap up to the pipeline, workspace,
+connection, and resource limits. Multiple gaps for one asset remain chained,
+and selected downstreams become runnable only after their upstream completion
+and freshness hand-off. Assets downstream of a failed plan member are skipped;
+independent branches continue.
 The whole physical plan holds the workspace execution lease, and every window
 uses the same target-capture, write-claim, and durable completion path as direct
 asset materialization.
@@ -593,9 +595,12 @@ Renart process collects any abandoned directory.
 
 ## 9. Write-resource admission
 
-Version-two reviewed run plans bind a structured, secret-free mutation claim
-alongside the source, configuration, context, selection, and execution units.
-The same target resolver used by rendering and execution currently recognizes
+Version-three reviewed run plans bind aggregate cross-run mutation claims and a
+typed, secret-free execution contract per selected asset alongside the source,
+configuration, context, selection, and execution units. The per-asset contract
+separates mutation claims from runtime coordination and supplies the in-run
+graph scheduler without reconstructing behavior from presentation JSON. The
+same target resolver used by rendering and execution currently recognizes
 these concurrency-safe contracts:
 
 - a sensor without arbitrary hooks has no write claim;
@@ -603,32 +608,40 @@ these concurrency-safe contracts:
 - an exact local file-backed DuckDB output claims the whole canonical database
   file, not one relation, because one transaction/operator may touch several
   relations;
-- arbitrary Python, any pre/post hooks, network warehouse relations, dynamic or
-  credential-derived routing, remote objects, and unsupported families retain
-  logical-pipeline isolation. Known exact local claims are still retained on a
-  conservative plan so another pipeline cannot write those same files.
+- audited native PostgreSQL, Trino, ClickHouse, and StarRocks SQL
+  materializations claim the exact resolved warehouse relation;
+- arbitrary Python, any pre/post hooks, seed/Load/API transfers, unaudited
+  warehouse operators, dynamic or credential-derived routing, remote objects,
+  and unsupported families retain logical-pipeline isolation. Known exact
+  claims are still retained on a conservative plan so another pipeline cannot
+  write those same resources.
 
 Exact claim keys are opaque versioned digests; plans and SQLite never expose a
 database or filesystem path. Atomic admission prevents two active runs from
 owning the same claim even when they belong to different logical pipelines.
-Distinct proven files/databases in one pipeline may run concurrently, and a
-proven no-write plan does not block a writer. Unreviewed, inline, and legacy
-plans keep the path/UUID slot, and that slot conflicts with active exact claims
-in the same pipeline. This preserves the old fail-closed behavior wherever a
-stable operator contract is unavailable.
+Distinct proven files, databases, or audited warehouse relations in one
+pipeline may run concurrently, and a proven no-write plan does not block a
+writer. The same relation reached through two connection aliases hashes to the
+same claim without storing aliases, endpoints, principals, or credentials.
+Unreviewed and legacy plans keep the path/UUID slot, and that slot conflicts
+with active exact claims in the same pipeline. This preserves the old
+fail-closed behavior wherever a stable operator contract is unavailable.
 
-Immediately before the first step, execution-target snapshot v3 recomputes the
-resource set from the effective operator/configuration and compares it with
-both the immutable reviewed plan and the acquired SQLite claims. Drift fails
-before physical work. The snapshot still contains the full parsed graph so
-upstream-writer and fingerprint evidence remains self-contained, but this
-write-resource comparison is scoped to the plan's immutable execution units;
-unselected graph members are evidence, not writes owned by the reviewed run.
-Each selected snapshot entry must retain the planned stable asset identity.
-Terminalizing a run releases its slot/claim set through
-the same database transaction and trigger path. Planning's active-run warning
-uses the same conflict rules for guidance; admission remains authoritative
-against races after review.
+Immediately before the first step, execution-target snapshot v4 recomputes the
+resource and connection contracts from the effective operator/configuration
+and compares them with both the immutable reviewed plan and the acquired SQLite
+claims. Drift fails before physical work. The snapshot still contains the full
+parsed graph so upstream-writer and fingerprint evidence remains
+self-contained, but this comparison is scoped to the plan's immutable
+execution units; unselected graph members are evidence, not writes owned by the
+reviewed run. Each selected snapshot entry must retain the planned stable asset
+identity. Version-four contracts travel through the durable completion outbox
+and are revalidated by its shared bus-level validator before materialization
+facts are recorded, so crash replay cannot silently downgrade the captured
+contract. Terminalizing a run releases its slot/claim set through the same
+database transaction and trigger path. Planning's active-run warning uses the
+same conflict rules for guidance; admission remains authoritative against races
+after review.
 
 ## 10. Deferred and known-accepted
 
@@ -642,9 +655,9 @@ against races after review.
   not implemented.
 - Pre-v2 River signal/run decoders and duplicated compatibility fields remain
   until jobs persisted by older binaries have drained.
-- Network relation claims remain deliberately disabled until each direct and
-  fallback operator proves it has no hidden shared staging state. Configurable
-  warning gates, connection-backed warehouse
+- Additional network relation families remain deliberately disabled until each
+  direct and fallback operator proves it has no hidden shared staging state.
+  Configurable warning gates, connection-backed warehouse
   validation, automatic builds, and reliable breaking/non-
   breaking impact categorization are not built.
 - **Python fingerprint hardening** (Rust→wasm `renart-pyfp` on

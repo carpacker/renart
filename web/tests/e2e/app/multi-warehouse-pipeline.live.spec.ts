@@ -158,6 +158,8 @@ test.describe("multi-warehouse pipeline live", () => {
           "ok",
         );
         for (const assetName of [
+          "analytics.branch_a",
+          "analytics.branch_b",
           "analytics.customers_seed",
           "analytics.customer_activity",
           "analytics.regions_api",
@@ -277,12 +279,29 @@ name: ${pipelineName}
 schedule: daily
 start_date: "2026-01-01"
 concurrency: 3
+max_active_steps: 4
 
 default_connections:
   ${variant.defaultConnectionType}: ${variant.connection}
 `,
     "utf8",
   );
+  for (const branch of ["a", "b"]) {
+    await writeFile(
+      join(assetDir, `branch_${branch}.sql`),
+      `/* @bruin
+name: analytics.branch_${branch}
+type: ${variant.sqlType}
+connection: ${variant.connection}
+materialization:
+  type: view
+@bruin */
+
+select '${branch}' as branch_name, ${branch === "a" ? 1 : 2} as branch_value
+`,
+      "utf8",
+    );
+  }
   await writeFile(
     join(assetDir, "customers.csv"),
     `customer_id,customer_name,segment,region_id
@@ -545,6 +564,8 @@ connection: ${variant.connection}
 depends:
   - analytics.segment_metrics
   - analytics.regions_api
+  - analytics.branch_a
+  - analytics.branch_b
 materialization:
   type: view
 @bruin */
@@ -573,6 +594,8 @@ async function waitForPipelineVariant(page: Page, baseURL: string, variant: Ware
     "python",
     variant.seedType,
     variant.sensorType,
+    variant.sqlType,
+    variant.sqlType,
     variant.sqlType,
     variant.sqlType,
   ].sort();

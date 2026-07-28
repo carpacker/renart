@@ -67,25 +67,26 @@ func newExecutionTestResolver(workspaceRoot string) *WorkspaceResolver {
 }
 
 type stubExecutionExecutor struct {
-	runAssetOutput     []byte
-	runAssetErr        error
-	runAssetChunks     [][]byte
-	runAssetEvents     []ExecutionAssetEvent
-	runAssetTargets    *ExecutionTargetSnapshot
-	runAssetRequests   []RunAssetRequest
-	runPipelineOutput  []byte
-	runPipelineErr     error
-	runPipelineChunks  [][]byte
-	runPipelineEvents  []ExecutionAssetEvent
-	runPipelineTargets *ExecutionTargetSnapshot
-	runPipelineReqs    []RunPipelineRequest
-	runPipelineExecute func(RunPipelineRequest) error
-	queryConnOutput    []byte
-	queryConnErr       error
-	queryConnReqs      []QueryConnectionRequest
-	runWithRetry       func(context.Context, QueryAssetRequest, int, time.Duration) ([]byte, error, int)
-	onRunAsset         func()
-	onRunPipeline      func()
+	runAssetOutput           []byte
+	runAssetErr              error
+	runAssetChunks           [][]byte
+	runAssetEvents           []ExecutionAssetEvent
+	runAssetTargets          *ExecutionTargetSnapshot
+	runAssetRequests         []RunAssetRequest
+	runPipelineOutput        []byte
+	runPipelineErr           error
+	runPipelineChunks        [][]byte
+	runPipelineEvents        []ExecutionAssetEvent
+	runPipelineTargets       *ExecutionTargetSnapshot
+	runPipelineResolvedUnits []PipelineExecutionUnit
+	runPipelineReqs          []RunPipelineRequest
+	runPipelineExecute       func(RunPipelineRequest) error
+	queryConnOutput          []byte
+	queryConnErr             error
+	queryConnReqs            []QueryConnectionRequest
+	runWithRetry             func(context.Context, QueryAssetRequest, int, time.Duration) ([]byte, error, int)
+	onRunAsset               func()
+	onRunPipeline            func()
 }
 
 func (s *stubExecutionExecutor) RunAsset(_ context.Context, req RunAssetRequest, onChunk func([]byte)) ([]byte, error) {
@@ -124,6 +125,11 @@ func (s *stubExecutionExecutor) RunPipeline(_ context.Context, req RunPipelineRe
 			onChunk(chunk)
 		}
 	}
+	if len(s.runPipelineResolvedUnits) > 0 && req.OnExecutionUnitsResolved != nil {
+		if err := req.OnExecutionUnitsResolved(s.runPipelineResolvedUnits); err != nil {
+			return s.runPipelineOutput, err
+		}
+	}
 	if s.runPipelineTargets != nil && req.OnTargetsResolved != nil {
 		snapshot := executionTestSnapshotWithResources(*s.runPipelineTargets)
 		if err := req.OnTargetsResolved(snapshot); err != nil {
@@ -155,6 +161,24 @@ func executionTestSnapshotWithResources(snapshot ExecutionTargetSnapshot) Execut
 		if entry.WriteResourceKind == "" && entry.WriteResourceFidelity == "" {
 			entry.WriteResourceKind = assetWriteResourcePipeline
 			entry.WriteResourceFidelity = AssetRenderFidelityRuntimeOnly
+		}
+		if entry.ExecutionContract.AssetID == "" && entry.ExecutionContract.AssetName == "" {
+			mutation := pipelineExclusiveResources()
+			if entry.WriteResourceFidelity == AssetRenderFidelityExact {
+				mutation = PipelinePlanResources{
+					Isolation: PipelinePlanResourceIsolationResources,
+					Claims:    []PipelinePlanResourceClaim{},
+				}
+				if entry.WriteResourceKind != assetWriteResourceNone {
+					mutation.Claims = append(mutation.Claims, PipelinePlanResourceClaim{
+						Kind: entry.WriteResourceKind, Identity: entry.WriteResourceIdentity,
+					})
+				}
+			}
+			entry.ExecutionContract = PipelinePlanExecutionContract{
+				AssetID: entry.AssetID, AssetName: name, ConnectionKeys: []string{},
+				MutationResources: mutation, CoordinationResources: clonePipelinePlanResources(mutation),
+			}
 		}
 		entries[name] = entry
 	}

@@ -22,6 +22,7 @@ const (
 	envelopeVersionV1       = 1
 	targetSnapshotVersionV2 = 2
 	targetSnapshotVersionV3 = 3
+	targetSnapshotVersionV4 = 4
 )
 
 var (
@@ -273,6 +274,7 @@ type executionTargetV1 struct {
 	WriteResourceKind           string                `json:"write_resource_kind,omitempty"`
 	WriteResourceIdentity       string                `json:"write_resource_identity,omitempty"`
 	WriteResourceFidelity       string                `json:"write_resource_fidelity,omitempty"`
+	ExecutionContract           *executionContractV1  `json:"execution_contract,omitempty"`
 	Fingerprint                 string                `json:"fingerprint"`
 	OwnContent                  string                `json:"own_content"`
 	ConsumedVarsHash            string                `json:"consumed_vars_hash"`
@@ -280,6 +282,24 @@ type executionTargetV1 struct {
 	Upstreams                   []executionUpstreamV1 `json:"upstreams"`
 	CoverageMode                string                `json:"coverage_mode"`
 	RefreshRestricted           bool                  `json:"refresh_restricted"`
+}
+
+type executionContractV1 struct {
+	AssetID               string               `json:"asset_id"`
+	AssetName             string               `json:"asset_name"`
+	ConnectionKeys        []string             `json:"connection_keys"`
+	MutationResources     executionResourcesV1 `json:"mutation_resources"`
+	CoordinationResources executionResourcesV1 `json:"coordination_resources"`
+}
+
+type executionResourcesV1 struct {
+	Isolation string                     `json:"isolation"`
+	Claims    []executionResourceClaimV1 `json:"claims"`
+}
+
+type executionResourceClaimV1 struct {
+	Kind     string `json:"kind"`
+	Identity string `json:"identity"`
 }
 
 type executionUpstreamV1 struct {
@@ -373,7 +393,8 @@ func validateEvent(event bus.RunCompleted) error {
 		return fmt.Errorf("%w: pipeline_uuid must be non-empty and canonical", ErrInvalidEnvelope)
 	}
 	if event.ExecutionTargetSnapshotVersion != targetSnapshotVersionV2 &&
-		event.ExecutionTargetSnapshotVersion != targetSnapshotVersionV3 {
+		event.ExecutionTargetSnapshotVersion != targetSnapshotVersionV3 &&
+		event.ExecutionTargetSnapshotVersion != targetSnapshotVersionV4 {
 		return fmt.Errorf(
 			"%w: execution target snapshot version %d is not a supported self-contained version",
 			ErrInvalidEnvelope,
@@ -571,6 +592,23 @@ func validateExecutionTarget(assetName string, entry bus.ExecutionTargetSnapshot
 	} else if err := validateExecutionWriteResource(assetName, entry); err != nil {
 		return err
 	}
+	if version < targetSnapshotVersionV4 {
+		if !bus.ExecutionContractIsEmpty(entry.ExecutionContract) {
+			return fmt.Errorf(
+				"%w: execution target %q contains an execution contract before version %d",
+				ErrInvalidEnvelope,
+				assetName,
+				targetSnapshotVersionV4,
+			)
+		}
+	} else if err := bus.ValidateExecutionContract(assetName, entry); err != nil {
+		return fmt.Errorf(
+			"%w: execution target %q has an invalid execution contract: %v",
+			ErrInvalidEnvelope,
+			assetName,
+			err,
+		)
+	}
 	for field, value := range map[string]string{
 		"fingerprint":        entry.Fingerprint,
 		"own_content":        entry.OwnContent,
@@ -609,7 +647,7 @@ func validateExecutionWriteResource(assetName string, entry bus.ExecutionTargetS
 			if identity != "" {
 				return fmt.Errorf("%w: execution target %q no-write resource claims an identity", ErrInvalidEnvelope, assetName)
 			}
-		case "local_file", "duckdb_database":
+		case "local_file", "duckdb_database", "warehouse_relation":
 			if len(identity) != 64 {
 				return fmt.Errorf("%w: execution target %q write resource requires a SHA-256 identity", ErrInvalidEnvelope, assetName)
 			}
@@ -666,11 +704,17 @@ func eventToV1(event bus.RunCompleted) completedRunV1 {
 		for index, upstream := range target.Upstreams {
 			upstreams[index] = executionUpstreamV1{Type: upstream.Type, Value: upstream.Value}
 		}
+		var executionContract *executionContractV1
+		if !bus.ExecutionContractIsEmpty(target.ExecutionContract) {
+			contract := executionContractToV1(target.ExecutionContract)
+			executionContract = &contract
+		}
 		targets[assetName] = executionTargetV1{
 			AssetID: target.AssetID, TargetIdentity: target.TargetIdentity,
 			TargetFidelity: target.TargetFidelity, TargetWriteEvidenceRequired: target.TargetWriteEvidenceRequired,
 			WriteResourceKind: target.WriteResourceKind, WriteResourceIdentity: target.WriteResourceIdentity,
 			WriteResourceFidelity: target.WriteResourceFidelity,
+			ExecutionContract:     executionContract,
 			Fingerprint:           target.Fingerprint,
 			OwnContent:            target.OwnContent, ConsumedVarsHash: target.ConsumedVarsHash,
 			VarsHash: target.VarsHash, Upstreams: upstreams, CoverageMode: target.CoverageMode,
@@ -723,11 +767,16 @@ func eventFromV1(event completedRunV1) bus.RunCompleted {
 		for index, upstream := range target.Upstreams {
 			upstreams[index] = bus.ExecutionUpstreamSnapshot{Type: upstream.Type, Value: upstream.Value}
 		}
+		var executionContract bus.ExecutionContractSnapshot
+		if target.ExecutionContract != nil {
+			executionContract = executionContractFromV1(*target.ExecutionContract)
+		}
 		targets[assetName] = bus.ExecutionTargetSnapshotEntry{
 			AssetID: target.AssetID, TargetIdentity: target.TargetIdentity,
 			TargetFidelity: target.TargetFidelity, TargetWriteEvidenceRequired: target.TargetWriteEvidenceRequired,
 			WriteResourceKind: target.WriteResourceKind, WriteResourceIdentity: target.WriteResourceIdentity,
 			WriteResourceFidelity: target.WriteResourceFidelity,
+			ExecutionContract:     executionContract,
 			Fingerprint:           target.Fingerprint,
 			OwnContent:            target.OwnContent, ConsumedVarsHash: target.ConsumedVarsHash,
 			VarsHash: target.VarsHash, Upstreams: upstreams, CoverageMode: target.CoverageMode,
@@ -743,6 +792,54 @@ func eventFromV1(event completedRunV1) bus.RunCompleted {
 		ExecutionPipelineUUID:          event.ExecutionPipelineUUID, ExecutionTargets: targets,
 		SnapshotVersionID: event.SnapshotVersionID,
 	}
+}
+
+func executionContractToV1(contract bus.ExecutionContractSnapshot) executionContractV1 {
+	return executionContractV1{
+		AssetID:        contract.AssetID,
+		AssetName:      contract.AssetName,
+		ConnectionKeys: append([]string(nil), contract.ConnectionKeys...),
+		MutationResources: executionResourcesToV1(
+			contract.MutationResources,
+		),
+		CoordinationResources: executionResourcesToV1(
+			contract.CoordinationResources,
+		),
+	}
+}
+
+func executionResourcesToV1(resources bus.ExecutionResources) executionResourcesV1 {
+	claims := make([]executionResourceClaimV1, 0, len(resources.Claims))
+	for _, claim := range resources.Claims {
+		claims = append(claims, executionResourceClaimV1{
+			Kind: claim.Kind, Identity: claim.Identity,
+		})
+	}
+	return executionResourcesV1{Isolation: resources.Isolation, Claims: claims}
+}
+
+func executionContractFromV1(contract executionContractV1) bus.ExecutionContractSnapshot {
+	return bus.ExecutionContractSnapshot{
+		AssetID:        contract.AssetID,
+		AssetName:      contract.AssetName,
+		ConnectionKeys: append([]string(nil), contract.ConnectionKeys...),
+		MutationResources: executionResourcesFromV1(
+			contract.MutationResources,
+		),
+		CoordinationResources: executionResourcesFromV1(
+			contract.CoordinationResources,
+		),
+	}
+}
+
+func executionResourcesFromV1(resources executionResourcesV1) bus.ExecutionResources {
+	claims := make([]bus.ExecutionResourceClaim, 0, len(resources.Claims))
+	for _, claim := range resources.Claims {
+		claims = append(claims, bus.ExecutionResourceClaim{
+			Kind: claim.Kind, Identity: claim.Identity,
+		})
+	}
+	return bus.ExecutionResources{Isolation: resources.Isolation, Claims: claims}
 }
 
 func utcTimePointer(value *time.Time) *time.Time {

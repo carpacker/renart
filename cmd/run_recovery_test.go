@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -212,6 +213,74 @@ func TestReplayRecoveredWorkingTreeRunUsesSelfContainedV2Snapshot(t *testing.T) 
 	assert.Equal(t, []bus.ExecutionUpstreamSnapshot{{Type: "asset", Value: "analytics.source"}}, got.ExecutionTargets["analytics.finished"].Upstreams)
 	assert.Equal(t, "union_intervals", got.ExecutionTargets["analytics.finished"].CoverageMode)
 	assert.True(t, got.ExecutionTargets["analytics.finished"].RefreshRestricted)
+}
+
+func TestReplayRecoveredRunPreservesVersionFourExecutionContract(t *testing.T) {
+	t.Parallel()
+
+	events := bus.New()
+	server := &webServer{eventBus: events}
+	var got bus.RunCompleted
+	events.OnRunCompleted(func(event bus.RunCompleted) error {
+		got = event
+		return nil
+	})
+
+	pipelineUUID := "pipeline-uuid"
+	assetName := "analytics.finished"
+	assetID := identity.AssetID(pipelineUUID, assetName)
+	contract := webscheduler.PipelineRunExecutionContract{
+		AssetID:        assetID,
+		AssetName:      assetName,
+		ConnectionKeys: []string{strings.Repeat("a", 64)},
+		MutationResources: webscheduler.PipelineRunPlanResources{
+			Isolation: "resources",
+			Claims:    []webscheduler.PipelineRunResourceClaim{},
+		},
+		CoordinationResources: webscheduler.PipelineRunPlanResources{
+			Isolation: "resources",
+			Claims:    []webscheduler.PipelineRunResourceClaim{},
+		},
+	}
+	finishedAt := time.Date(2026, 7, 27, 10, 0, 0, 0, time.UTC)
+	ordinal := int64(0)
+	err := server.replayRecoveredRun(context.Background(), webscheduler.PipelineRun{
+		ID:                       "version-four-run",
+		PipelineUUID:             pipelineUUID,
+		ExecutionContextResolved: true,
+		ExecutionTargetSnapshot: &webscheduler.ExecutionTargetSnapshot{
+			Version:      webscheduler.ExecutionTargetSnapshotVersionV4,
+			PipelineUUID: pipelineUUID,
+			Entries: map[string]webscheduler.ExecutionTargetSnapshotEntry{
+				assetName: {
+					AssetID:               assetID,
+					TargetFidelity:        "exact",
+					WriteResourceKind:     "none",
+					WriteResourceFidelity: "exact",
+					ExecutionContract:     contract,
+					Fingerprint:           "v2:finished",
+					OwnContent:            "v2:finished-own",
+					ConsumedVarsHash:      "consumed",
+					VarsHash:              "vars",
+				},
+			},
+		},
+	}, []webscheduler.PipelineRunStep{{
+		Asset:                     assetName,
+		Status:                    webscheduler.RunStatusSuccess,
+		FinishedAt:                &finishedAt,
+		CompletionOrdinal:         &ordinal,
+		UpstreamWriters:           map[string]webscheduler.UpstreamWriterSnapshot{},
+		HasUpstreamWriterSnapshot: true,
+	}})
+	require.NoError(t, err)
+
+	require.Equal(t, webscheduler.ExecutionTargetSnapshotVersionV4, got.ExecutionTargetSnapshotVersion)
+	entry := got.ExecutionTargets[assetName]
+	assert.Equal(t, assetID, entry.ExecutionContract.AssetID)
+	assert.Equal(t, assetName, entry.ExecutionContract.AssetName)
+	assert.Equal(t, []string{strings.Repeat("a", 64)}, entry.ExecutionContract.ConnectionKeys)
+	assert.NoError(t, bus.ValidateExecutionContract(assetName, entry))
 }
 
 func TestReplayRecoveredDeployedRunDoesNotMaterializeSelfContainedV2Snapshot(t *testing.T) {

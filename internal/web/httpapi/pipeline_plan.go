@@ -195,6 +195,7 @@ func durablePipelineRunPlan(plan service.PipelinePlan, preview *scheduler.Pipeli
 			AssetID: unit.AssetID, AssetName: unit.AssetName,
 			StartDate: unit.StartDate, EndDate: unit.EndDate,
 			RenderIndex: unit.RenderIndex, Reason: unit.Reason,
+			DependencyPositions: append([]int(nil), unit.DependencyPositions...),
 		})
 	}
 	claims := make([]scheduler.PipelineRunResourceClaim, 0, len(plan.Resources.Claims))
@@ -203,12 +204,17 @@ func durablePipelineRunPlan(plan service.PipelinePlan, preview *scheduler.Pipeli
 			Kind: claim.Kind, Identity: claim.Identity,
 		})
 	}
+	contracts := make([]scheduler.PipelineRunExecutionContract, 0, len(plan.ExecutionContracts))
+	for _, contract := range plan.ExecutionContracts {
+		contracts = append(contracts, schedulerPipelineRunExecutionContract(contract))
+	}
 	return &scheduler.PipelineRunPlan{
-		Version: scheduler.PipelineRunPlanVersionV2,
+		Version: scheduler.PipelineRunPlanVersionV3,
 		PlanID:  plan.ID, PipelineID: plan.PipelineID, PipelineUUID: plan.PipelineUUID,
 		SourceMerkle:        plan.Source.MerkleRoot,
 		ConfigurationDigest: plan.Context.ConfigurationDigest,
 		ExecutionTime:       plan.Context.ExecutionTime,
+		MaxActiveSteps:      plan.Context.MaxActiveSteps,
 		Selection: scheduler.PipelineRunPlanSelection{
 			Mode: plan.Selection.Mode, AssetName: plan.Selection.AssetName,
 			Scope: plan.Selection.Scope, Selector: plan.Selection.Selector,
@@ -218,9 +224,37 @@ func durablePipelineRunPlan(plan service.PipelinePlan, preview *scheduler.Pipeli
 			Isolation: plan.Resources.Isolation,
 			Claims:    claims,
 		},
-		ExecutionUnits: units,
-		Preview:        preview,
-		Artifact:       artifact,
+		ExecutionContracts: contracts,
+		ExecutionUnits:     units,
+		Preview:            preview,
+		Artifact:           artifact,
+	}
+}
+
+func schedulerPipelineRunExecutionContract(
+	contract service.PipelinePlanExecutionContract,
+) scheduler.PipelineRunExecutionContract {
+	return scheduler.PipelineRunExecutionContract{
+		AssetID:               contract.AssetID,
+		AssetName:             contract.AssetName,
+		ConnectionKeys:        append([]string(nil), contract.ConnectionKeys...),
+		MutationResources:     schedulerPipelinePlanResources(contract.MutationResources),
+		CoordinationResources: schedulerPipelinePlanResources(contract.CoordinationResources),
+	}
+}
+
+func schedulerPipelinePlanResources(
+	resources service.PipelinePlanResources,
+) scheduler.PipelineRunPlanResources {
+	claims := make([]scheduler.PipelineRunResourceClaim, 0, len(resources.Claims))
+	for _, claim := range resources.Claims {
+		claims = append(claims, scheduler.PipelineRunResourceClaim{
+			Kind: claim.Kind, Identity: claim.Identity,
+		})
+	}
+	return scheduler.PipelineRunPlanResources{
+		Isolation: resources.Isolation,
+		Claims:    claims,
 	}
 }
 
@@ -274,6 +308,16 @@ func (h *PipelinePlanAPI) confirmNeededPlanShrink(
 func sameNeededPlanNonDataIdentity(reviewed service.PipelinePlanReviewedIdentity, current service.PipelinePlan) bool {
 	if reviewed.PipelineUUID != current.PipelineUUID || reviewed.Source != current.Source {
 		return false
+	}
+	reviewedContracts := make(map[string]service.PipelinePlanExecutionContract, len(reviewed.ExecutionContracts))
+	for _, contract := range reviewed.ExecutionContracts {
+		reviewedContracts[contract.AssetID] = contract
+	}
+	for _, contract := range current.ExecutionContracts {
+		if reviewedContract, exists := reviewedContracts[contract.AssetID]; !exists ||
+			!reflect.DeepEqual(reviewedContract, contract) {
+			return false
+		}
 	}
 	reviewedSelection := reviewed.Selection
 	currentSelection := current.Selection
@@ -332,6 +376,7 @@ func schedulerExecutionUnits(units []service.PipelinePlanExecutionUnit) []schedu
 			AssetID: unit.AssetID, AssetName: unit.AssetName,
 			StartDate: unit.StartDate, EndDate: unit.EndDate,
 			RenderIndex: unit.RenderIndex, Reason: unit.Reason,
+			DependencyPositions: append([]int(nil), unit.DependencyPositions...),
 		})
 	}
 	return result

@@ -12,6 +12,8 @@ import (
 	"renart/internal/web/bus"
 )
 
+const PipelineExecutionPlanVersionV3 = 3
+
 type RunAssetRequest struct {
 	AssetPath   string
 	Environment string
@@ -39,13 +41,19 @@ type RunPipelineRequest struct {
 	ExecutionTime time.Time
 	// VariableOverrides is a private normalized RunSpec input. It is applied as
 	// a pipeline mutator before assets are constructed.
-	VariableOverrides map[string]any
-	RunID             string
-	AssetEvent        func(ExecutionAssetEvent) error
-	SelectionMode     string
-	ExecutionUnits    []PipelineExecutionUnit
-	UnitEvent         func(PipelineExecutionUnitEvent) error
-	BeforeTargetWrite func(assetName string) error
+	VariableOverrides  map[string]any
+	RunID              string
+	AssetEvent         func(ExecutionAssetEvent) error
+	SelectionMode      string
+	PlanVersion        int
+	MaxActiveSteps     int
+	ExecutionContracts []PipelinePlanExecutionContract
+	ExecutionUnits     []PipelineExecutionUnit
+	UnitEvent          func(PipelineExecutionUnitEvent) error
+	// OnExecutionUnitsResolved must succeed after a dynamic full-pipeline plan
+	// is normalized and before the first unit starts.
+	OnExecutionUnitsResolved func([]PipelineExecutionUnit) error
+	BeforeTargetWrite        func(assetName string) error
 	// OnTargetsResolved must succeed synchronously after effective execution
 	// context and target resolution but before the first task starts. Dry runs
 	// do not resolve or capture execution targets.

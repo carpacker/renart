@@ -903,6 +903,7 @@ export type PipelinePlanReviewedIdentity = {
   context: PipelinePlanContext;
   selection: PipelinePlanSelection;
   resources: PipelinePlanResources;
+  execution_contracts: PipelinePlanExecutionContract[];
   execution_units: PipelinePlanExecutionUnit[];
 };
 
@@ -912,6 +913,7 @@ export type PipelinePlanContext = {
   start_date: string;
   end_date: string;
   execution_time: string;
+  max_active_steps: number;
   requested_full_refresh: boolean;
   full_refresh: boolean;
   backfill: boolean;
@@ -977,6 +979,7 @@ export type PipelinePlanExecutionUnit = {
   end_date: string;
   render_index: number;
   reason: string;
+  dependency_positions: number[];
 };
 
 export type PipelinePlanResourceClaim = {
@@ -987,6 +990,14 @@ export type PipelinePlanResourceClaim = {
 export type PipelinePlanResources = {
   isolation: string;
   claims: PipelinePlanResourceClaim[];
+};
+
+export type PipelinePlanExecutionContract = {
+  asset_id: string;
+  asset_name: string;
+  connection_keys: string[];
+  mutation_resources: PipelinePlanResources;
+  coordination_resources: PipelinePlanResources;
 };
 
 export type PipelinePlanSummary = {
@@ -1010,6 +1021,7 @@ export type PipelinePlan = {
   selection: PipelinePlanSelection;
   resources: PipelinePlanResources;
   assets: PipelinePlanAsset[];
+  execution_contracts: PipelinePlanExecutionContract[];
   execution_units: PipelinePlanExecutionUnit[];
   summary: PipelinePlanSummary;
 };

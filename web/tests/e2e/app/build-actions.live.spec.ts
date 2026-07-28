@@ -459,6 +459,9 @@ select 1 as customer_id,'Ada' as customer_name union all select 2 as customer_id
       reviewViewport.getByRole("heading", { name: "Review pipeline run" }),
     ).toBeVisible();
     await expect(reviewViewport.getByRole("heading", { name: "Execution order" })).toBeVisible();
+    await expect(reviewViewport).toContainText("shown in stable plan order");
+    await expect(reviewViewport).toContainText("Assets will run one at a time for this pipeline.");
+    await expect(reviewViewport.getByText("Sequential", { exact: true })).toBeVisible();
     await expect(planSheet.getByText("Run options", { exact: true })).toBeVisible();
     await expect(planSheet.getByLabel("Scope")).toBeVisible();
     await expect(planSheet.getByLabel("Sensors")).toBeVisible();

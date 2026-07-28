@@ -48,6 +48,36 @@ func TestOutboxRoundTripsCompleteExecutionEvidence(t *testing.T) {
 	assert.NotContains(t, body, event.SnapshotDir, "ephemeral snapshot paths must never enter durable state")
 }
 
+func TestOutboxRoundTripsVersionFourExecutionContracts(t *testing.T) {
+	t.Parallel()
+	store, _ := newOutboxStore(t)
+	ctx := context.Background()
+	event := completeEvent("completion-v4")
+	event.ExecutionTargetSnapshotVersion = 4
+	entry := event.ExecutionTargets["analytics.orders"]
+	resource := bus.ExecutionResourceClaim{
+		Kind: entry.WriteResourceKind, Identity: entry.WriteResourceIdentity,
+	}
+	entry.ExecutionContract = bus.ExecutionContractSnapshot{
+		AssetID:        entry.AssetID,
+		AssetName:      "analytics.orders",
+		ConnectionKeys: []string{strings.Repeat("b", 64)},
+		MutationResources: bus.ExecutionResources{
+			Isolation: "resources", Claims: []bus.ExecutionResourceClaim{resource},
+		},
+		CoordinationResources: bus.ExecutionResources{
+			Isolation: "resources", Claims: []bus.ExecutionResourceClaim{resource},
+		},
+	}
+	event.ExecutionTargets["analytics.orders"] = entry
+
+	require.NoError(t, store.Enqueue(ctx, event))
+	pending, err := store.ListPending(ctx)
+	require.NoError(t, err)
+	require.Len(t, pending, 1)
+	assert.Equal(t, entry.ExecutionContract, pending[0].Event.ExecutionTargets["analytics.orders"].ExecutionContract)
+}
+
 func TestOutboxRejectsConflictingCompletionEvidence(t *testing.T) {
 	t.Parallel()
 	store, _ := newOutboxStore(t)

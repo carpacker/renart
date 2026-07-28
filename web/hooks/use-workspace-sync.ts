@@ -15,10 +15,10 @@ import type { StalenessUpdatedEvent } from "@/lib/api-staleness";
 import {
   ScheduleOccurrenceEvent,
   SchedulerRunEvent,
+  appendSchedulerRunEventAtom,
   mergeNotebookRuntimeEvent,
   notebookRuntimeEventsAtom,
   scheduleOccurrenceEventAtom,
-  schedulerRunEventAtom,
   stalenessEventAtom,
 } from "@/lib/atoms/domains/results";
 import { WebAsset, WorkspaceEvent, WorkspaceState } from "@/lib/types";
@@ -140,7 +140,7 @@ function isNotebookRuntimeEvent(payload: unknown): payload is NotebookRuntimeEve
 export function useWorkspaceSync() {
   const workspace = useAtomValue(workspaceAtom);
   const setWorkspace = useSetAtom(workspaceAtom);
-  const setSchedulerRunEvent = useSetAtom(schedulerRunEventAtom);
+  const appendSchedulerRunEvent = useSetAtom(appendSchedulerRunEventAtom);
   const setScheduleOccurrenceEvent = useSetAtom(scheduleOccurrenceEventAtom);
   const setStalenessEvent = useSetAtom(stalenessEventAtom);
   const setNotebookRuntimeEvents = useSetAtom(notebookRuntimeEventsAtom);
@@ -207,7 +207,7 @@ export function useWorkspaceSync() {
         const payload = JSON.parse(event.data) as unknown;
 
         if (isSchedulerRunEvent(payload)) {
-          setSchedulerRunEvent(payload);
+          appendSchedulerRunEvent(payload);
           return;
         }
 
@@ -269,7 +269,7 @@ export function useWorkspaceSync() {
       source.close();
     };
   }, [
-    setSchedulerRunEvent,
+    appendSchedulerRunEvent,
     setNotebookRuntimeEvents,
     setServerOnline,
     setStalenessEvent,

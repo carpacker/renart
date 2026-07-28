@@ -6,6 +6,7 @@ const (
 	ExecutionTargetSnapshotVersionV1 = 1
 	ExecutionTargetSnapshotVersionV2 = 2
 	ExecutionTargetSnapshotVersionV3 = 3
+	ExecutionTargetSnapshotVersionV4 = 4
 )
 
 type RunStatus string
@@ -409,20 +410,21 @@ type ExecutionUpstreamSnapshot struct {
 }
 
 type ExecutionTargetSnapshotEntry struct {
-	AssetID                     string                      `json:"asset_id"`
-	TargetIdentity              string                      `json:"target_identity,omitempty"`
-	TargetFidelity              string                      `json:"target_fidelity"`
-	TargetWriteEvidenceRequired bool                        `json:"target_write_evidence_required,omitempty"`
-	WriteResourceKind           string                      `json:"write_resource_kind,omitempty"`
-	WriteResourceIdentity       string                      `json:"write_resource_identity,omitempty"`
-	WriteResourceFidelity       string                      `json:"write_resource_fidelity,omitempty"`
-	Fingerprint                 string                      `json:"fingerprint"`
-	OwnContent                  string                      `json:"own_content"`
-	ConsumedVarsHash            string                      `json:"consumed_vars_hash"`
-	VarsHash                    string                      `json:"vars_hash"`
-	Upstreams                   []ExecutionUpstreamSnapshot `json:"upstreams,omitempty"`
-	CoverageMode                string                      `json:"coverage_mode,omitempty"`
-	RefreshRestricted           bool                        `json:"refresh_restricted,omitempty"`
+	AssetID                     string                       `json:"asset_id"`
+	TargetIdentity              string                       `json:"target_identity,omitempty"`
+	TargetFidelity              string                       `json:"target_fidelity"`
+	TargetWriteEvidenceRequired bool                         `json:"target_write_evidence_required,omitempty"`
+	WriteResourceKind           string                       `json:"write_resource_kind,omitempty"`
+	WriteResourceIdentity       string                       `json:"write_resource_identity,omitempty"`
+	WriteResourceFidelity       string                       `json:"write_resource_fidelity,omitempty"`
+	ExecutionContract           PipelineRunExecutionContract `json:"execution_contract,omitempty"`
+	Fingerprint                 string                       `json:"fingerprint"`
+	OwnContent                  string                       `json:"own_content"`
+	ConsumedVarsHash            string                       `json:"consumed_vars_hash"`
+	VarsHash                    string                       `json:"vars_hash"`
+	Upstreams                   []ExecutionUpstreamSnapshot  `json:"upstreams,omitempty"`
+	CoverageMode                string                       `json:"coverage_mode,omitempty"`
+	RefreshRestricted           bool                         `json:"refresh_restricted,omitempty"`
 }
 
 type PipelineRunStep struct {

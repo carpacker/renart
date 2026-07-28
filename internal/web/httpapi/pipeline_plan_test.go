@@ -161,7 +161,11 @@ func TestHandleConfirmPipelinePlanRegeneratesAndTriggersExactPlan(t *testing.T) 
 	assert.Equal(t, strings.Repeat("b", 64), runs.req.ExpectedConfigurationDigest)
 	require.NotNil(t, runs.req.ConfirmedPlan)
 	assert.Equal(t, plan.ID, runs.req.ConfirmedPlan.PlanID)
+	assert.Equal(t, scheduler.PipelineRunPlanVersionV3, runs.req.ConfirmedPlan.Version)
+	assert.Equal(t, 2, runs.req.ConfirmedPlan.MaxActiveSteps)
 	assert.Equal(t, plan.Selection.DataStateToken, runs.req.ConfirmedPlan.Selection.DataStateToken)
+	require.Len(t, runs.req.ConfirmedPlan.ExecutionContracts, 1)
+	assert.Equal(t, "asset-1", runs.req.ConfirmedPlan.ExecutionContracts[0].AssetID)
 	require.Len(t, runs.req.ConfirmedPlan.ExecutionUnits, 1)
 	assert.Equal(t, "analytics.orders", runs.req.ConfirmedPlan.ExecutionUnits[0].AssetName)
 	assert.NotContains(t, string(runs.req.ConfirmedPlan.Artifact), `"content":"select`)
@@ -319,11 +323,30 @@ func TestHandleConfirmPipelinePlanAcceptsOnlyNeededPlanShrink(t *testing.T) {
 			StartDate: "2026-07-17T11:00:00Z", EndDate: "2026-07-17T12:00:00Z",
 			Reason: "uncovered_interval",
 		})
+		reviewed.ExecutionContracts = append(
+			reviewed.ExecutionContracts,
+			service.PipelinePlanExecutionContract{
+				AssetID: "asset-2", AssetName: "analytics.customers",
+				ConnectionKeys: []string{strings.Repeat("c", 64)},
+				MutationResources: service.PipelinePlanResources{
+					Isolation: service.PipelinePlanResourceIsolationResources,
+					Claims:    []service.PipelinePlanResourceClaim{},
+				},
+				CoordinationResources: service.PipelinePlanResources{
+					Isolation: service.PipelinePlanResourceIsolationResources,
+					Claims:    []service.PipelinePlanResourceClaim{},
+				},
+			},
+		)
 		reviewed.ID = service.PipelinePlanReviewedIdentityID(service.PipelinePlanReviewedIdentityFromPlan(reviewed))
 
 		current := reviewed
 		current.Selection.DataStateToken = "renart-data-state-v1:" + strings.Repeat("e", 64)
 		current.ExecutionUnits = append([]service.PipelinePlanExecutionUnit(nil), reviewed.ExecutionUnits[:1]...)
+		current.ExecutionContracts = append(
+			[]service.PipelinePlanExecutionContract(nil),
+			reviewed.ExecutionContracts[:1]...,
+		)
 		current.ID = service.PipelinePlanReviewedIdentityID(service.PipelinePlanReviewedIdentityFromPlan(current))
 		planner := &pipelinePlanHandlerStub{plan: current}
 		runs := &pipelinePlanRunStub{run: scheduler.PipelineRun{ID: "run-shrunk"}}
@@ -406,7 +429,7 @@ func confirmablePipelinePlan() service.PipelinePlan {
 		Context: service.PipelinePlanContext{
 			Environment: "dev", StartDate: "2026-07-17T11:00:00Z", EndDate: "2026-07-17T12:00:00Z",
 			ExecutionTime: "2026-07-17T12:00:00Z", FullRefresh: true, SensorMode: "once",
-			ConfigurationDigest: strings.Repeat("b", 64), ConfigurationFidelity: "exact",
+			MaxActiveSteps: 2, ConfigurationDigest: strings.Repeat("b", 64), ConfigurationFidelity: "exact",
 		},
 		Readiness: service.PipelinePlanReadiness{Blockers: []service.PipelinePlanIssue{}, Warnings: []service.PipelinePlanIssue{}},
 		Selection: service.PipelinePlanSelection{
@@ -418,6 +441,22 @@ func confirmablePipelinePlan() service.PipelinePlan {
 				StartDate: "2026-07-17T11:00:00Z", EndDate: "2026-07-17T12:00:00Z",
 				Stages: []service.AssetRenderStage{{Kind: "query", Content: ""}},
 			}},
+		}},
+		Resources: service.PipelinePlanResources{
+			Isolation: service.PipelinePlanResourceIsolationResources,
+			Claims:    []service.PipelinePlanResourceClaim{},
+		},
+		ExecutionContracts: []service.PipelinePlanExecutionContract{{
+			AssetID: "asset-1", AssetName: "analytics.orders",
+			ConnectionKeys: []string{strings.Repeat("c", 64)},
+			MutationResources: service.PipelinePlanResources{
+				Isolation: service.PipelinePlanResourceIsolationResources,
+				Claims:    []service.PipelinePlanResourceClaim{},
+			},
+			CoordinationResources: service.PipelinePlanResources{
+				Isolation: service.PipelinePlanResourceIsolationResources,
+				Claims:    []service.PipelinePlanResourceClaim{},
+			},
 		}},
 		ExecutionUnits: []service.PipelinePlanExecutionUnit{{
 			AssetID: "asset-1", AssetName: "analytics.orders",

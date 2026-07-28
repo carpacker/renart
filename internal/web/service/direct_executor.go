@@ -3,15 +3,19 @@ package service
 import (
 	"context"
 	"fmt"
+	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/bruin-data/bruin/pkg/config"
 	"github.com/bruin-data/bruin/pkg/pipeline"
+	bruinscheduler "github.com/bruin-data/bruin/pkg/scheduler"
 	"github.com/spf13/afero"
 
 	"renart/internal/web/duckcoord"
+	"renart/internal/web/executiongraph"
 	"renart/internal/web/fingerprint"
 	"renart/internal/web/runstate"
 )
@@ -23,6 +27,8 @@ type HybridBruinExecutor struct {
 	logSink              ExecutionLogSink
 	duckDBCoordinator    *duckcoord.Coordinator
 	fingerprintEngine    *fingerprint.Engine
+	workspaceBudget      *executiongraph.Budget
+	directTaskGate       func(context.Context, bruinscheduler.TaskInstance) error
 	// runRegistry tracks in-flight materializations across every run this
 	// executor performs, so the python run broker can wait on them.
 	runRegistry *runstate.Registry
@@ -45,14 +51,57 @@ func NewHybridBruinExecutor(
 		logSink:              logSink,
 		duckDBCoordinator:    duckcoord.New(duckcoord.Options{}),
 		fingerprintEngine:    fingerprint.NewEngine(),
+		workspaceBudget:      executiongraph.NewBudget(executionWorkspaceLimit()),
 		runRegistry:          runstate.NewRegistry(),
 	}
+}
+
+const (
+	executionWorkspaceLimitEnvironment  = "RENART_EXECUTION_WORKSPACE_MAX_ACTIVE_STEPS"
+	executionForceSequentialEnvironment = "RENART_EXECUTION_FORCE_SEQUENTIAL"
+)
+
+func executionWorkspaceLimit() int {
+	const fallback = 8
+	raw := strings.TrimSpace(os.Getenv(executionWorkspaceLimitEnvironment))
+	if raw == "" {
+		return fallback
+	}
+	limit, err := strconv.Atoi(raw)
+	if err != nil || limit < 1 {
+		return fallback
+	}
+	return limit
+}
+
+func executionMaxActiveSteps(requested int) int {
+	raw := strings.TrimSpace(os.Getenv(executionForceSequentialEnvironment))
+	forceSequential, err := strconv.ParseBool(raw)
+	if err == nil && forceSequential {
+		return 1
+	}
+	return requested
 }
 
 // SetDuckDBCoordinator replaces the database coordinator. It is primarily
 // useful for tests that need an isolated lock directory.
 func (e *HybridBruinExecutor) SetDuckDBCoordinator(coordinator *duckcoord.Coordinator) {
 	e.duckDBCoordinator = coordinator
+}
+
+func (e *HybridBruinExecutor) SetExecutionWorkspaceBudget(budget *executiongraph.Budget) {
+	if budget == nil {
+		budget = executiongraph.NewBudget(executionWorkspaceLimit())
+	}
+	e.workspaceBudget = budget
+}
+
+// SetDirectTaskGate installs a cancellable test seam immediately before a
+// physical task. Production leaves it nil.
+func (e *HybridBruinExecutor) SetDirectTaskGate(
+	gate func(context.Context, bruinscheduler.TaskInstance) error,
+) {
+	e.directTaskGate = gate
 }
 
 func (e *HybridBruinExecutor) SetExecutionLogSink(sink ExecutionLogSink) {

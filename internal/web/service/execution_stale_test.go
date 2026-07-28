@@ -72,6 +72,26 @@ func TestOrderStalePlanReportsUnknownAndKeepsCycles(t *testing.T) {
 	}
 }
 
+func TestPipelineAssetsInTopologicalOrderUsesDeclarationOrderForTies(t *testing.T) {
+	parsed := stalePipeline(
+		staleAsset("early_downstream", "root_b"),
+		staleAsset("later_downstream", "root_a"),
+		staleAsset("root_a"),
+		staleAsset("root_b"),
+	)
+
+	ordered := pipelineAssetsInTopologicalOrder(parsed)
+	names := make([]string, 0, len(ordered))
+	for _, asset := range ordered {
+		names = append(names, asset.Name)
+	}
+	assert.Equal(
+		t,
+		[]string{"root_a", "later_downstream", "root_b", "early_downstream"},
+		names,
+	)
+}
+
 func TestFailedUpstreamForWalksTransitively(t *testing.T) {
 	parsed := stalePipeline(
 		staleAsset("a"),
