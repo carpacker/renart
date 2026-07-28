@@ -1363,5 +1363,13 @@ func buildDirectRunAssetRenderer(pp *directPipelineInfo, timeWindow ExecutionTim
 	}
 
 	executionTime = executionTime.UTC()
-	return jinja.NewRendererWithStartEndDatesAndMacros(&timeWindow.Start, &timeWindow.End, &executionTime, pp.Pipeline.Name, runID, nil, macroContent), nil
+	return jinja.NewRendererWithStartEndDatesAndMacros(
+		&timeWindow.Start,
+		&timeWindow.End,
+		&executionTime,
+		pp.Pipeline.Name,
+		runID,
+		jinja.Context(pp.Pipeline.Variables.Value()),
+		macroContent,
+	), nil
 }

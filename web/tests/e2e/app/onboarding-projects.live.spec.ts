@@ -45,11 +45,13 @@ test.describe("first-run onboarding", () => {
     for (const demo of [
       "Product analytics",
       "Operations monitoring",
+      "Earthquake monitoring",
       "Python risk scoring",
+      "Jinja workshop",
       "Chess performance",
       "Retail analytics",
     ]) {
-      await expect(page.getByRole("button", { name: new RegExp(demo) })).toBeVisible();
+      await expect(page.getByRole("radio", { name: new RegExp(demo) })).toBeVisible();
     }
   });
 
@@ -91,7 +93,7 @@ test.describe("first-run onboarding", () => {
     await page.goto(`${liveApp.baseURL}/welcome`);
 
     await page.getByRole("button", { name: /Start from a demo/ }).click();
-    await page.getByRole("button", { name: /Retail analytics/ }).click();
+    await page.getByRole("radio", { name: /Retail analytics/ }).click();
     const createResponse = page.waitForResponse(
       (response) =>
         new URL(response.url()).pathname === "/api/projects" &&
@@ -235,7 +237,10 @@ test.describe("first-run onboarding", () => {
 });
 
 test.describe("import onboarding", () => {
-  test.use({ fixtureName: "empty-workspace-postgres" });
+  test.use({
+    fixtureName: "empty-workspace-postgres",
+    liveAppEnv: { RENART_E2E_ONBOARDING_POSTGRES_PASSWORD: "postgres" },
+  });
 
   test("imports postgres tables as source assets through the welcome flow", async ({
     liveApp,
@@ -254,7 +259,10 @@ test.describe("import onboarding", () => {
     await page.getByLabel(/^host/).fill(postgres.host);
     await page.getByLabel(/^port/).fill(String(postgres.port));
     await page.getByLabel(/^username/).fill(postgres.user);
-    await page.getByLabel(/^password/).fill(postgres.password);
+    await page.getByRole("radio", { name: "Environment" }).click();
+    await page
+      .getByRole("textbox", { name: "password", exact: true })
+      .fill("RENART_E2E_ONBOARDING_POSTGRES_PASSWORD");
     await page.getByLabel(/^database/).fill(postgres.database);
     await page.getByRole("button", { name: "Connect" }).click();
 

@@ -110,6 +110,9 @@ while [ "$#" -gt 0 ]; do
   fi
   shift
 done
+case "$target" in
+  RENART_*) target="$(printenv "$target")" ;;
+esac
 database="\${target#duckdb:///}"
 "$DUCKDB_BIN" "$database" <<SQL
 .shell touch "$SLING_LOCK_MARKER"

@@ -12,6 +12,8 @@ import (
 	"github.com/spf13/afero"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"renart/internal/web/scheduler"
 )
 
 func TestScaffoldProjectRetailDemoIntoFreshDirectory(t *testing.T) {
@@ -125,6 +127,53 @@ func TestScaffoldProjectChessDemoAvoidsCatalogSchemaCollision(t *testing.T) {
 	assert.NoFileExists(t, filepath.Join(target, "chess", "assets", "chess", "my_python_asset.py"))
 }
 
+func TestScaffoldProjectEarthquakeDemoIncludesEnvironmentSchedules(t *testing.T) {
+	t.Parallel()
+
+	target := t.TempDir()
+	result, err := ScaffoldProject(ScaffoldProjectRequest{
+		TargetDir:     target,
+		Template:      ProjectTemplateEarthquakeDemo,
+		NewRepository: true,
+	})
+	require.NoError(t, err)
+
+	assert.Contains(t, result.Files, ".renart/schedules.yml")
+	assert.FileExists(t, filepath.Join(target, ".renart", "schedules.yml"))
+
+	configContents, err := os.ReadFile(filepath.Join(target, ".bruin.yml"))
+	require.NoError(t, err)
+	assert.Contains(t, string(configContents), "earthquake_monitoring.duckdb")
+	assert.Contains(t, string(configContents), "earthquake_monitoring_production.duckdb")
+	assert.Contains(t, string(configContents), "production:")
+
+	parsed, err := NewRenartPipelineBuilder(afero.NewOsFs()).CreatePipelineFromPath(
+		context.Background(),
+		filepath.Join(target, "earthquake_monitoring"),
+		pipeline.WithMutate(),
+	)
+	require.NoError(t, err)
+	require.NotEmpty(t, parsed.LegacyID)
+
+	declarations, err := scheduler.NewScheduleDeclarationStore(
+		filepath.Join(target, ".renart", "schedules.yml"),
+	).List()
+	require.NoError(t, err)
+	require.Len(t, declarations, 2)
+
+	byEnvironment := make(map[string]scheduler.ScheduleDeclaration, len(declarations))
+	for _, declaration := range declarations {
+		assert.Equal(t, parsed.LegacyID, declaration.PipelineUUID)
+		byEnvironment[declaration.Environment] = declaration.Declaration
+	}
+	assert.Equal(t, "0 */6 * * *", byEnvironment["default"].Cron)
+	assert.Equal(t, scheduler.CatchupSkip, byEnvironment["default"].CatchupPolicy)
+	assert.EqualValues(t, 3, byEnvironment["default"].Variables["min_magnitude"])
+	assert.Equal(t, "15 * * * *", byEnvironment["production"].Cron)
+	assert.Equal(t, scheduler.CatchupRunOnce, byEnvironment["production"].CatchupPolicy)
+	assert.EqualValues(t, 6, byEnvironment["production"].Variables["notable_magnitude"])
+}
+
 func TestScaffoldProjectIntoWorkspaceWithBareDotGitDirectory(t *testing.T) {
 	t.Parallel()
 
@@ -207,6 +256,8 @@ func TestProjectTemplatesListsAllTemplates(t *testing.T) {
 	for _, tpl := range templates {
 		ids = append(ids, tpl.ID)
 		assert.NotEmpty(t, tpl.Title)
+		assert.NotEmpty(t, tpl.Category)
+		assert.NotEmpty(t, tpl.Features)
 		if tpl.ID != ProjectTemplateBare {
 			assert.NotEmpty(t, tpl.PipelineName)
 			assert.NotEmpty(t, tpl.AssetNames)
@@ -215,7 +266,9 @@ func TestProjectTemplatesListsAllTemplates(t *testing.T) {
 	assert.Equal(t, []string{
 		ProjectTemplateProductDemo,
 		ProjectTemplateOperationsDemo,
+		ProjectTemplateEarthquakeDemo,
 		ProjectTemplatePythonDemo,
+		ProjectTemplateJinjaDemo,
 		ProjectTemplateChessDemo,
 		ProjectTemplateRetailDemo,
 		ProjectTemplateEmpty,
@@ -229,7 +282,9 @@ func TestProjectTemplatesListsAllTemplates(t *testing.T) {
 	assert.False(t, offline[ProjectTemplateChessDemo])
 	assert.True(t, offline[ProjectTemplateProductDemo])
 	assert.True(t, offline[ProjectTemplateOperationsDemo])
+	assert.False(t, offline[ProjectTemplateEarthquakeDemo])
 	assert.False(t, offline[ProjectTemplatePythonDemo])
+	assert.True(t, offline[ProjectTemplateJinjaDemo])
 	assert.True(t, offline[ProjectTemplateRetailDemo])
 	assert.True(t, offline[ProjectTemplateEmpty])
 }

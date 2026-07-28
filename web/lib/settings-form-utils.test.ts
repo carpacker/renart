@@ -60,6 +60,27 @@ describe("connection secret form helpers", () => {
     });
   });
 
+  it("turns onboarding environment secret fields into references without exposing values", () => {
+    expect(
+      splitConnectionDraftValues(
+        postgresType,
+        {
+          host: "db.internal",
+          password: "WAREHOUSE_PASSWORD",
+        },
+        { password: "env" },
+      ),
+    ).toEqual({
+      values: { host: "db.internal" },
+      secretChanges: {
+        password: {
+          action: "replace",
+          binding: { ref: "env:WAREHOUSE_PASSWORD" },
+        },
+      },
+    });
+  });
+
   it("accepts keep only when a required secret is already configured", () => {
     expect(
       connectionSecretsReady({

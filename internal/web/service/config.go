@@ -1191,6 +1191,11 @@ func normalizeWorkspaceConnectionValues(typeName string, values map[string]any) 
 			}
 			result[fieldDef.Name] = boolValue
 		case "int":
+			if stringValue, ok := rawValue.(string); ok &&
+				strings.TrimSpace(stringValue) == "" &&
+				!fieldDef.IsRequired {
+				continue
+			}
 			intValue, err := normalizeWorkspaceIntValue(rawValue)
 			if err != nil {
 				return nil, fmt.Errorf("invalid value for %s: %w", fieldDef.Name, err)

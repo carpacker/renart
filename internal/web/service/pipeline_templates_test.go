@@ -13,6 +13,8 @@ import (
 	"github.com/spf13/afero"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"renart/internal/web/scheduler"
 )
 
 func TestPipelineTemplatesExposeFeatureFocusedStarters(t *testing.T) {
@@ -24,6 +26,7 @@ func TestPipelineTemplatesExposeFeatureFocusedStarters(t *testing.T) {
 		ids = append(ids, template.ID)
 		assert.NotEmpty(t, template.Title)
 		assert.NotEmpty(t, template.Description)
+		assert.NotEmpty(t, template.Category)
 		assert.NotEmpty(t, template.SuggestedPath)
 		assert.NotNil(t, template.AssetNames)
 		assert.NotEmpty(t, template.Features)
@@ -37,7 +40,9 @@ func TestPipelineTemplatesExposeFeatureFocusedStarters(t *testing.T) {
 		PipelineTemplateProductDemo,
 		ProjectTemplateRetailDemo,
 		PipelineTemplateOperationsDemo,
+		PipelineTemplateEarthquakeDemo,
 		PipelineTemplatePythonDemo,
+		PipelineTemplateJinjaDemo,
 		ProjectTemplateChessDemo,
 	}, ids)
 }
@@ -117,6 +122,52 @@ func TestOnlinePipelineDemoTemplatesExecute(t *testing.T) {
 			executePipelineTemplate(t, template, 5*time.Minute)
 		})
 	}
+}
+
+func TestPipelineServiceEarthquakeTemplateIncludesEnvironmentSchedules(t *testing.T) {
+	t.Parallel()
+
+	workspaceRoot := t.TempDir()
+	_, err := gogit.PlainInit(workspaceRoot, false)
+	require.NoError(t, err)
+
+	relPath, err := NewPipelineService(workspaceRoot).Create(
+		context.Background(),
+		"earthquake_monitoring",
+		"Earthquake monitoring",
+		"",
+		PipelineTemplateEarthquakeDemo,
+	)
+	require.NoError(t, err)
+
+	parsed, err := NewRenartPipelineBuilder(afero.NewOsFs()).CreatePipelineFromPath(
+		context.Background(),
+		filepath.Join(workspaceRoot, relPath),
+		pipeline.WithMutate(),
+	)
+	require.NoError(t, err)
+	require.NotEmpty(t, parsed.LegacyID)
+
+	declarations, err := scheduler.NewScheduleDeclarationStore(
+		filepath.Join(workspaceRoot, ".renart", "schedules.yml"),
+	).List()
+	require.NoError(t, err)
+	require.Len(t, declarations, 2)
+
+	byEnvironment := make(map[string]scheduler.ScheduleDeclaration, len(declarations))
+	for _, declaration := range declarations {
+		assert.Equal(t, parsed.LegacyID, declaration.PipelineUUID)
+		byEnvironment[declaration.Environment] = declaration.Declaration
+	}
+	assert.Equal(t, "0 */6 * * *", byEnvironment["default"].Cron)
+	assert.Equal(t, scheduler.CatchupSkip, byEnvironment["default"].CatchupPolicy)
+	assert.Equal(t, "15 * * * *", byEnvironment["production"].Cron)
+	assert.Equal(t, scheduler.CatchupRunOnce, byEnvironment["production"].CatchupPolicy)
+
+	configContents, err := os.ReadFile(filepath.Join(workspaceRoot, ".bruin.yml"))
+	require.NoError(t, err)
+	assert.Contains(t, string(configContents), "earthquake_monitoring.duckdb")
+	assert.Contains(t, string(configContents), "earthquake_monitoring_production.duckdb")
 }
 
 func executePipelineTemplate(t *testing.T, template PipelineTemplateInfo, timeout time.Duration) {

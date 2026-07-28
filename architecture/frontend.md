@@ -66,7 +66,10 @@ File-based routes under [src/routes](../web/src/routes):
   the effective suggested parent and can create child folders. Creation
   conflicts such as an existing target directory stay visible beside the
   create action instead of rendering above a long, scrolled target form, and
-  clear when the user changes the project name or location. Demo creation
+  clear when the user changes the project name or location. Demo selection
+  reuses the categorized template catalog from the Build view: every starter
+  remains visible in one scrollable list while the adjacent pane describes the
+  selected starter's connectivity, features, and assets. Demo creation
   bootstraps the workspace with the `build-stale/stream` run (fresh assets are
   all `never_built`) and renders its per-asset SSE progress and ANSI-colored
   output.
@@ -247,12 +250,15 @@ not underscore-flattened route hacks.
   compares each source, saved metadata, and the chosen result without replacing
   the inspector with asset-kind-specific controls.
 - The Build view's **New pipeline** dialog loads the backend template catalog
-  and presents a blank option plus feature-focused runnable starters. Selecting
-  a starter fills its suggested directory and name without overwriting a user's
-  custom values, shows its assets and feature tags, and distinguishes offline
-  starters from those that need network access. The fixed-height, scrollable
-  dialog sends only the selected template ID and names; generated files remain
-  a backend concern and the workspace SSE update remains the navigation signal.
+  and presents the blank option plus feature-focused runnable starters in the
+  same compact catalog used by onboarding. Category headings organize one
+  scrollable, single-click list; an adjacent detail pane shows only the selected
+  starter's description, assets, feature tags, and offline/network requirement,
+  so adding starters does not turn the dialog into a long card grid or a nested
+  menu. Selecting a starter fills its suggested directory and name without
+  overwriting a user's custom values. The height-bounded dialog sends only the
+  selected template ID and names; generated files remain a backend concern and
+  the workspace SSE update remains the navigation signal.
 - The Build view's New asset dialog loads the selected pipeline/environment's
   secret-free `asset-creation-profile`. The six equal-size choices are authoring
   intents; `AssetConnectionField` presents only compatible configured

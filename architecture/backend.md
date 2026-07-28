@@ -116,13 +116,17 @@ Failure to update Git metadata is a warning and does not prevent the workspace
 from opening; the out-of-worktree lease remains authoritative.
 `POST /api/projects` scaffolds a project from a template
 (`service.ScaffoldProject`) from the same backend-owned Product, Operations,
-Python, Retail, and Chess demo definitions used by the in-project starter
-catalog, plus `empty` and `bare` for the import flow. It writes the pipeline
-files, a `duckdb-default` connection, default .gitignore patterns,
+Earthquake, Python, Jinja, Retail, and Chess demo definitions used by the
+in-project starter catalog, plus `empty` and `bare` for the import flow. It
+writes the pipeline files, a `duckdb-default` connection, default .gitignore patterns,
 `.renart/project.yml` identity, and `git init` + an initial commit when the
 target has no repository, then opens/registers the project and refreshes its
-workspace. `GET /api/projects/templates` lists the templates for the welcome
-UI. The process-level `/api/projects/browse` directory picker
+workspace. Templates may also declare environment-specific DuckDB connections
+and tracked schedules. The Earthquake demo uses this path to scaffold default
+and production connections plus two UUID-bound declarations in
+`.renart/schedules.yml`; those files are part of the initial commit.
+`GET /api/projects/templates` lists the categorized templates and feature
+summaries for the welcome UI. The process-level `/api/projects/browse` directory picker
 uses the same default-parent resolution as project creation, and
 `POST /api/projects/directories` creates one visible child folder selected by
 the user. `.renart/project.yml` also carries project-scoped feature
@@ -139,13 +143,21 @@ operator and the package is fetched only when that asset is executed.
 Inside an open project, `GET /api/pipelines/templates` exposes the
 backend-owned catalog used by the **New pipeline** dialog. Alongside a blank
 pipeline it offers product analytics, retail seed data, operations monitoring,
-Python scoring, and Chess API starters. `POST /api/pipelines` accepts the
-selected template ID and writes its ordinary pipeline and asset files into a
-new directory; the backend validates `pipeline.yml`, refuses to replace an
-existing directory, removes a partially written pipeline on failure, and adds
-the local DuckDB connection only when the starter needs it. Keeping the catalog
-and generated files in `service` prevents the frontend from carrying a second
-copy of scaffold contents.
+USGS earthquake monitoring, Python scoring, a progressively complex Jinja
+workshop, and Chess API starters. The catalog groups starters into stable
+categories and describes features and generated assets without exposing their
+file implementation to the browser. `POST /api/pipelines` accepts the selected
+template ID and writes its ordinary pipeline and asset files into a new
+directory; the backend validates `pipeline.yml`, refuses to replace an existing
+directory, removes a partially written pipeline on failure, and adds the local
+DuckDB connection only when the starter needs it. Creating the Earthquake
+starter inside an existing project also adds schedule declarations for the
+primary environment and a production companion (or development when
+production is already primary), with matching DuckDB connections. This keeps
+the project and in-project templates aligned rather than advertising a schedule
+that exists only during onboarding. Keeping the catalog and generated files in
+`service` prevents the frontend from carrying a second copy of scaffold
+contents.
 
 The same tracked project file carries the local history-retention policy.
 `/api/config` always returns its effective values, using conservative defaults
@@ -588,6 +600,10 @@ Hook templates are resolved with the selected asset context before
 materializer construction by the same request-local helper used for direct
 asset and pipeline execution, including each asset's effective full-refresh
 restriction. String materializers retain hooks in one execution-SQL blob.
+The direct renderer carries the parsed pipeline's resolved variable values;
+API assets additionally clone it for the running asset before rendering request
+URLs, parameters, headers, or bodies, so their `var`, date-window, environment,
+and `this` context matches SQL execution.
 Databricks, ClickHouse, and Synapse expose separate pre/main/post stages only
 when the final list is byte-for-byte equal to the unhoisted wrapper order; if
 `DECLARE` hoisting moves statements, the exact elements remain available as
@@ -953,15 +969,19 @@ mismatch by bypassing the guided UI.
 Every advertised seed main task runs through Renart's Sling operator, separately
 from generic ingestr assets. The operator resolves local sources relative to the
 asset definition (or accepts HTTP(S)), supplies an explicit source format, and
-full-refreshes the canonical asset name through the resolved target connection.
-With `enforce_schema` and declared columns, it also passes the source selection,
-renames, supported type casts, and declared primary key to Sling. The key is
-required by StarRocks when an explicit projection prevents Sling from adding
-its synthetic row identifier. The normal per-warehouse column and
-custom checks still run around that main task. Renart additionally owns the
-`trino.seed` type and maps it to `default_connections.trino`; the pinned Bruin
-version has no equivalent type, so this asset remains intentionally Renart-only
-until Bruin exposes the same contract. Sensor main tasks use Bruin's
+materializes the canonical asset name through the resolved target connection.
+An unconfigured seed retains Sling's replacement behavior, while an authored
+strategy uses the shared Sling materialization mapping; notably,
+`truncate+insert` reloads rows without replacing the relation, including during
+a run-level full refresh. With `enforce_schema` and declared columns, the
+operator also passes the source selection, renames, supported type casts, and
+declared primary key to Sling. The key is required by StarRocks when an explicit
+projection prevents Sling from adding its synthetic row identifier. The normal
+per-warehouse column and custom checks still run around that main task. Renart
+additionally owns the `trino.seed` type and maps it to
+`default_connections.trino`; the pinned Bruin version has no equivalent type,
+so this asset remains intentionally Renart-only until Bruin exposes the same
+contract. Sensor main tasks use Bruin's
 native sensor operators: interactive runs default to one bounded check, while
 scheduled runs retain dependency-gate semantics and wait until success or the
 configured timeout. HTTP and CLI execution can explicitly select
@@ -970,13 +990,16 @@ effective mode rather than relying on UI behavior. The default is derived from
 the server-owned scheduled origin, not from the presence of a durable run ID,
 because queued manual runs also have IDs.
 
-The live warehouse parity test runs the same seven-asset graph through DuckDB,
+The live warehouse parity test runs the same nine-asset graph through DuckDB,
 DuckLake (DuckDB catalog plus S3-compatible object storage), PostgreSQL, Trino,
 ClickHouse, and StarRocks. It covers seed, API extraction, cross-database Load,
-SQL, a query sensor, Python materialization, checks, and final inspection. The
-fixture gives each process an isolated ADBC configuration directory so a stale
-developer-installed DuckDB driver cannot change the result; optional local
-warehouse filtering only shortens focused debugging and never narrows CI.
+SQL, a query sensor, Python materialization, checks, and final inspection. Every
+warehouse executes two explicit date windows, first as a full refresh and then
+as an incremental run; `truncate+insert`, `append`, and `time_interval`
+materializations verify both dependency-safe reloads and retained per-window
+rows. The fixture gives each process an isolated ADBC configuration directory
+so a stale developer-installed DuckDB driver cannot change the result; optional
+local warehouse filtering only shortens focused debugging and never narrows CI.
 
 Python assets run through Renart's in-process operator
 (`service/python_operator.go`). Each task receives an embedded, version-locked

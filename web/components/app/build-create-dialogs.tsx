@@ -9,14 +9,11 @@ import {
   Globe,
   Plus,
   Radar,
-  Sparkles,
   Sprout,
-  WifiOff,
 } from "lucide-react";
 import { type ComponentType, useEffect, useMemo, useRef, useState } from "react";
 
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -65,6 +62,7 @@ import {
   type SemanticAssetDraft,
   type SemanticAssetKind,
 } from "./semantic-asset-create-fields";
+import { TemplateCatalog } from "./template-catalog";
 import { WorkspaceConnectionDialog } from "./workspace-connection-dialog";
 
 // Asset kinds the creation dialog can produce, mapped to real backend create
@@ -876,7 +874,19 @@ export function NewPipelineDialog({
     };
   }, [open]);
 
-  const selectedTemplate = templates.find((template) => template.id === templateId);
+  const templateCatalogItems = useMemo(
+    () =>
+      templates.map((template) => ({
+        id: template.id,
+        title: template.title,
+        description: template.description,
+        category: template.category,
+        offline: template.offline,
+        features: template.features,
+        assetNames: template.asset_names,
+      })),
+    [templates],
+  );
 
   const chooseTemplate = (template: PipelineTemplateInfo) => {
     const previous = templates.find((candidate) => candidate.id === templateId);
@@ -931,7 +941,7 @@ export function NewPipelineDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="flex max-h-[min(88vh,46rem)] flex-col overflow-hidden sm:max-w-2xl">
+      <DialogContent className="flex max-h-[min(88vh,46rem)] flex-col overflow-hidden sm:max-w-3xl">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <Plus className="size-4 text-primary" />
@@ -951,81 +961,16 @@ export function NewPipelineDialog({
                   Offline starters need no network access. Network starters call a service or may
                   install dependencies.
                 </FieldDescription>
-                <div
-                  className="grid gap-2 sm:grid-cols-2"
-                  role="radiogroup"
-                  aria-label="Pipeline starter"
-                >
-                  {templatesLoading && templates.length === 0
-                    ? Array.from({ length: 4 }, (_, index) => (
-                        <Skeleton key={index} className="h-28 rounded-lg" />
-                      ))
-                    : templates.map((template) => {
-                        const selected = template.id === templateId;
-                        return (
-                          <button
-                            key={template.id}
-                            type="button"
-                            role="radio"
-                            aria-checked={selected}
-                            onClick={() => chooseTemplate(template)}
-                            className={cn(
-                              "flex min-h-28 flex-col gap-2 rounded-lg border p-3 text-left transition-colors hover:bg-muted/50",
-                              selected && "border-primary bg-primary/5 ring-1 ring-primary/20",
-                            )}
-                          >
-                            <div className="flex min-w-0 items-start gap-2">
-                              <div className="min-w-0 flex-1">
-                                <div className="flex flex-wrap items-center gap-1.5 text-sm font-medium">
-                                  {template.id === "blank" ? (
-                                    <Plus className="size-3.5 text-primary" />
-                                  ) : (
-                                    <Sparkles className="size-3.5 text-primary" />
-                                  )}
-                                  {template.title}
-                                  {template.offline ? (
-                                    <Badge variant="secondary" className="gap-1 text-[10px]">
-                                      <WifiOff className="size-3" />
-                                      offline
-                                    </Badge>
-                                  ) : (
-                                    <Badge variant="outline" className="gap-1 text-[10px]">
-                                      <Globe className="size-3" />
-                                      network
-                                    </Badge>
-                                  )}
-                                </div>
-                              </div>
-                              <CheckCircle2
-                                className={cn(
-                                  "size-4 shrink-0",
-                                  selected ? "text-primary" : "text-transparent",
-                                )}
-                              />
-                            </div>
-                            <p className="text-xs leading-relaxed text-muted-foreground">
-                              {template.description}
-                            </p>
-                            <div className="mt-auto flex flex-wrap gap-1">
-                              {template.features.map((feature) => (
-                                <span
-                                  key={feature}
-                                  className="rounded bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground"
-                                >
-                                  {feature}
-                                </span>
-                              ))}
-                            </div>
-                          </button>
-                        );
-                      })}
-                </div>
-                {selectedTemplate?.asset_names?.length ? (
-                  <FieldDescription>
-                    Creates {selectedTemplate.asset_names.length} assets:{" "}
-                    <span className="font-mono">{selectedTemplate.asset_names.join(", ")}</span>
-                  </FieldDescription>
-                ) : null}
+                <TemplateCatalog
+                  items={templateCatalogItems}
+                  selectedId={templateId}
+                  ariaLabel="Pipeline starter"
+                  loading={templatesLoading}
+                  onSelect={(item) => {
+                    const template = templates.find((candidate) => candidate.id === item.id);
+                    if (template) chooseTemplate(template);
+                  }}
+                />
               </Field>
               <Field variant="plain">
                 <FieldLabel htmlFor="new-pipeline-path">Directory</FieldLabel>

@@ -712,6 +712,7 @@ func TestHybridBruinExecutorRunsAPIAssetThroughLoadWithBruinTargetConnection(t *
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		requestCount++
 		assert.Equal(t, "/player/Hikaru", r.URL.Path)
+		assert.Equal(t, "2700", r.URL.Query().Get("min_rating"))
 		_, _ = w.Write([]byte(`{"username":"Hikaru","name":"Hikaru Nakamura"}`))
 	}))
 	defer server.Close()
@@ -719,13 +720,22 @@ func TestHybridBruinExecutorRunsAPIAssetThroughLoadWithBruinTargetConnection(t *
 	pipelineRoot := filepath.Join(workspaceRoot, "quickstart")
 	require.NoError(t, os.MkdirAll(filepath.Join(pipelineRoot, "assets/quickstart"), 0o755))
 	require.NoError(t, os.WriteFile(filepath.Join(workspaceRoot, ".bruin.yml"), []byte("environments:\n  default:\n    connections:\n      duckdb:\n        - name: duckdb-default\n          path: duckdb-files/chess.duckdb\n"), 0o644))
-	require.NoError(t, os.WriteFile(filepath.Join(pipelineRoot, "pipeline.yml"), []byte("name: quickstart\ndefault_connections:\n  duckdb: duckdb-default\n"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(pipelineRoot, "pipeline.yml"), []byte(`name: quickstart
+default_connections:
+  duckdb: duckdb-default
+variables:
+  min_rating:
+    type: integer
+    default: 2700
+`), 0o644))
 	require.NoError(t, os.WriteFile(filepath.Join(pipelineRoot, "assets/quickstart/players.asset.yml"), []byte(`type: api
 
 parameters:
   request:
     url: `+server.URL+`/player/{{ username }}
     method: GET
+    params:
+      min_rating: "{{ var.min_rating }}"
 
   iterate:
     as: username

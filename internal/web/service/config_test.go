@@ -97,6 +97,32 @@ func TestUpdateConnectionRejectsConnectionTypeMutation(t *testing.T) {
 	assert.Equal(t, "duckdb", environment.Connections.ConnectionsSummaryList()["warehouse"])
 }
 
+func TestAddConnectionOmitsBlankOptionalIntegerValues(t *testing.T) {
+	t.Parallel()
+	svc := NewConfigService("/tmp/workspace", "/tmp/workspace/.bruin.yml")
+	cfg := &config.Config{
+		DefaultEnvironmentName:  "default",
+		SelectedEnvironmentName: "default",
+		Environments: map[string]config.Environment{
+			"default": {Connections: &config.Connections{}},
+		},
+	}
+
+	require.NoError(t, svc.AddConnection(cfg, UpsertWorkspaceConnectionParams{
+		EnvironmentName: "default",
+		Name:            "warehouse",
+		Type:            "duckdb",
+		Values: map[string]any{
+			"path":                  "warehouse.duckdb",
+			"max_concurrent_assets": "",
+		},
+	}))
+
+	environment := cfg.Environments["default"]
+	require.Len(t, environment.Connections.DuckDB, 1)
+	assert.Nil(t, environment.Connections.DuckDB[0].MaxConcurrentAssets)
+}
+
 func TestConnectionSecretsAreWriteOnlyAndUseExplicitChanges(t *testing.T) {
 	t.Parallel()
 	svc := NewConfigService("/tmp/workspace", "/tmp/workspace/.bruin.yml")

@@ -14,6 +14,7 @@ import (
 	"github.com/spf13/afero"
 
 	"renart/internal/web/identity"
+	"renart/internal/web/scheduler"
 )
 
 // ProjectTemplateInfo describes one create-project template for the
@@ -22,15 +23,23 @@ type ProjectTemplateInfo struct {
 	ID           string   `json:"id"`
 	Title        string   `json:"title"`
 	Description  string   `json:"description"`
+	Category     string   `json:"category"`
 	Offline      bool     `json:"offline"`
 	PipelineName string   `json:"pipeline_name"`
 	AssetNames   []string `json:"asset_names"`
+	Features     []string `json:"features"`
+}
+
+type templateEnvironmentSchedule struct {
+	duckdbFile  string
+	declaration scheduler.ScheduleDeclaration
 }
 
 type projectTemplate struct {
-	info       ProjectTemplateInfo
-	duckdbFile string
-	files      func() map[string]string
+	info                 ProjectTemplateInfo
+	duckdbFile           string
+	files                func() map[string]string
+	environmentSchedules func(primaryEnvironment string) map[string]templateEnvironmentSchedule
 }
 
 const (
@@ -40,19 +49,24 @@ const (
 	ProjectTemplateRetailDemo     = "demo:retail"
 	ProjectTemplateProductDemo    = PipelineTemplateProductDemo
 	ProjectTemplateOperationsDemo = PipelineTemplateOperationsDemo
+	ProjectTemplateEarthquakeDemo = PipelineTemplateEarthquakeDemo
 	ProjectTemplatePythonDemo     = PipelineTemplatePythonDemo
+	ProjectTemplateJinjaDemo      = PipelineTemplateJinjaDemo
 )
 
 func projectTemplates() []projectTemplate {
 	return []projectTemplate{
 		projectTemplateFromPipelineStarter(ProjectTemplateProductDemo),
 		projectTemplateFromPipelineStarter(ProjectTemplateOperationsDemo),
+		projectTemplateFromPipelineStarter(ProjectTemplateEarthquakeDemo),
 		projectTemplateFromPipelineStarter(ProjectTemplatePythonDemo),
+		projectTemplateFromPipelineStarter(ProjectTemplateJinjaDemo),
 		{
 			info: ProjectTemplateInfo{
 				ID:           ProjectTemplateChessDemo,
 				Title:        "Chess performance",
 				Description:  "Loads profiles and January 2024 games for popular players, then compares their results, ratings, and opening choices in DuckDB.",
+				Category:     PipelineTemplateCategoryExplore,
 				Offline:      false,
 				PipelineName: "chess",
 				AssetNames: []string{
@@ -62,6 +76,7 @@ func projectTemplates() []projectTemplate {
 					"chess.player_performance",
 					"chess.opening_repertoire",
 				},
+				Features: []string{"HTTP API", "Iteration", "SQL lineage", "Charts"},
 			},
 			// Keep the DuckDB catalog name distinct from the asset schema. A
 			// database named chess.duckdb makes chess.games ambiguous to DuckDB
@@ -83,9 +98,11 @@ func projectTemplates() []projectTemplate {
 				ID:           ProjectTemplateRetailDemo,
 				Title:        "Retail analytics",
 				Description:  "A small retail warehouse built from bundled CSV seed data — every asset runs fully offline against local DuckDB.",
+				Category:     PipelineTemplateCategoryAnalytics,
 				Offline:      true,
 				PipelineName: "retail",
 				AssetNames:   []string{"raw.customers", "raw.orders", "analytics.customer_orders", "analytics.daily_revenue"},
+				Features:     []string{"Seed files", "Schema metadata", "SQL lineage", "Tables"},
 			},
 			duckdbFile: "retail.duckdb",
 			files: func() map[string]string {
@@ -105,9 +122,11 @@ func projectTemplates() []projectTemplate {
 				ID:           ProjectTemplateEmpty,
 				Title:        "Empty project",
 				Description:  "A minimal pipeline with one example SQL asset against local DuckDB.",
+				Category:     PipelineTemplateCategoryStart,
 				Offline:      true,
 				PipelineName: "analytics",
 				AssetNames:   []string{"example.hello"},
+				Features:     []string{"Example SQL"},
 			},
 			duckdbFile: "analytics.duckdb",
 			files: func() map[string]string {
@@ -124,7 +143,9 @@ func projectTemplates() []projectTemplate {
 				ID:          ProjectTemplateBare,
 				Title:       "Bare project",
 				Description: "Project scaffolding only; a pipeline is added by the import step.",
+				Category:    PipelineTemplateCategoryStart,
 				Offline:     true,
+				Features:    []string{"Project files only"},
 			},
 			duckdbFile: "local.duckdb",
 			files:      func() map[string]string { return map[string]string{} },
@@ -142,20 +163,24 @@ func projectTemplateFromPipelineStarter(id string) projectTemplate {
 	if !ok {
 		panic(fmt.Sprintf("project template references unknown pipeline starter %q", id))
 	}
-	return projectTemplate{
+	template := projectTemplate{
 		info: ProjectTemplateInfo{
 			ID:           starter.info.ID,
 			Title:        starter.info.Title,
 			Description:  starter.info.Description,
+			Category:     starter.info.Category,
 			Offline:      starter.info.Offline,
 			PipelineName: starter.info.SuggestedPath,
 			AssetNames:   starter.info.AssetNames,
+			Features:     starter.info.Features,
 		},
-		duckdbFile: starter.duckdbFile,
+		duckdbFile:           starter.duckdbFile,
+		environmentSchedules: starter.environmentSchedules,
 		files: func() map[string]string {
 			return starter.files(starter.info.SuggestedPath)
 		},
 	}
+	return template
 }
 
 type ProjectTemplatesResponse struct {
@@ -255,8 +280,35 @@ func ScaffoldProject(req ScaffoldProjectRequest) (ScaffoldProjectResult, error) 
 		configPath = filepath.Join(target, ".bruin.yml")
 	}
 	configExisted, _ := afero.Exists(fs, configPath)
-	if err := ensureScaffoldDuckDBConnection(target, configPath, "duckdb-files/"+tpl.duckdbFile); err != nil {
+	primaryEnvironment, err := ensureScaffoldDuckDBConnectionWithEnvironment(
+		target,
+		configPath,
+		"duckdb-files/"+tpl.duckdbFile,
+	)
+	if err != nil {
 		return ScaffoldProjectResult{}, err
+	}
+	var environmentSchedules map[string]templateEnvironmentSchedule
+	if tpl.environmentSchedules != nil {
+		environmentSchedules = tpl.environmentSchedules(primaryEnvironment)
+		environments := make([]string, 0, len(environmentSchedules))
+		for environment := range environmentSchedules {
+			environments = append(environments, environment)
+		}
+		sort.Strings(environments)
+		for _, environment := range environments {
+			if environment == primaryEnvironment {
+				continue
+			}
+			if err := ensureScaffoldDuckDBConnectionInEnvironment(
+				target,
+				configPath,
+				environment,
+				"duckdb-files/"+environmentSchedules[environment].duckdbFile,
+			); err != nil {
+				return ScaffoldProjectResult{}, err
+			}
+		}
 	}
 	if !configExisted {
 		if rel, relErr := filepath.Rel(target, configPath); relErr == nil && !strings.HasPrefix(rel, "..") {
@@ -278,10 +330,39 @@ func ScaffoldProject(req ScaffoldProjectRequest) (ScaffoldProjectResult, error) 
 		created = append(created, filepath.ToSlash(filepath.Join(tpl.info.PipelineName, relPath)))
 	}
 
+	var pipelineUUID string
+	if tpl.info.PipelineName != "" {
+		pipelineUUID, _, err = identity.EnsurePipelineID(
+			fs,
+			filepath.Join(pipelineDir, "pipeline.yml"),
+		)
+		if err != nil {
+			return ScaffoldProjectResult{}, err
+		}
+	}
+
 	if _, err := identity.EnsureProject(fs, filepath.Join(target, ".renart", "project.yml"), filepath.Base(target)); err != nil {
 		return ScaffoldProjectResult{}, err
 	}
 	created = append(created, ".renart/project.yml")
+	if len(environmentSchedules) > 0 {
+		store := scheduler.NewScheduleDeclarationStore(filepath.Join(target, ".renart", "schedules.yml"))
+		environments := make([]string, 0, len(environmentSchedules))
+		for environment := range environmentSchedules {
+			environments = append(environments, environment)
+		}
+		sort.Strings(environments)
+		for _, environment := range environments {
+			if err := store.Set(
+				pipelineUUID,
+				environment,
+				environmentSchedules[environment].declaration,
+			); err != nil {
+				return ScaffoldProjectResult{}, err
+			}
+		}
+		created = append(created, ".renart/schedules.yml")
+	}
 	sort.Strings(created)
 
 	if initialized {
@@ -342,10 +423,19 @@ func commitScaffold(repo *gogit.Repository, paths []string) error {
 // default environment with a `duckdb-default` connection, without touching
 // connections a user already configured.
 func ensureScaffoldDuckDBConnection(workspaceRoot, configPath, databasePath string) error {
+	_, err := ensureScaffoldDuckDBConnectionWithEnvironment(workspaceRoot, configPath, databasePath)
+	return err
+}
+
+func ensureScaffoldDuckDBConnectionWithEnvironment(
+	workspaceRoot,
+	configPath,
+	databasePath string,
+) (string, error) {
 	configService := NewConfigService(workspaceRoot, configPath)
 	cfg, _, err := configService.LoadForEditing()
 	if err != nil {
-		return err
+		return "", err
 	}
 
 	environmentName := strings.TrimSpace(cfg.DefaultEnvironmentName)
@@ -354,7 +444,7 @@ func ensureScaffoldDuckDBConnection(workspaceRoot, configPath, databasePath stri
 	}
 	if _, exists := cfg.Environments[environmentName]; !exists {
 		if err := cfg.AddEnvironment(environmentName, ""); err != nil {
-			return err
+			return "", err
 		}
 	}
 	if strings.TrimSpace(cfg.DefaultEnvironmentName) == "" {
@@ -366,10 +456,46 @@ func ensureScaffoldDuckDBConnection(workspaceRoot, configPath, databasePath stri
 
 	if !workspaceConfigHasConnection(cfg, environmentName, "duckdb-default") {
 		if err := cfg.AddConnection(environmentName, "duckdb-default", "duckdb", map[string]any{"path": databasePath}); err != nil {
-			return err
+			return "", err
 		}
 	}
 
+	if _, err = configService.Persist(cfg); err != nil {
+		return "", err
+	}
+	return environmentName, nil
+}
+
+func ensureScaffoldDuckDBConnectionInEnvironment(
+	workspaceRoot,
+	configPath,
+	environmentName,
+	databasePath string,
+) error {
+	configService := NewConfigService(workspaceRoot, configPath)
+	cfg, _, err := configService.LoadForEditing()
+	if err != nil {
+		return err
+	}
+	environmentName = strings.TrimSpace(environmentName)
+	if environmentName == "" {
+		return fmt.Errorf("scaffold environment is required")
+	}
+	if _, exists := cfg.Environments[environmentName]; !exists {
+		if err := cfg.AddEnvironment(environmentName, ""); err != nil {
+			return err
+		}
+	}
+	if !workspaceConfigHasConnection(cfg, environmentName, "duckdb-default") {
+		if err := cfg.AddConnection(
+			environmentName,
+			"duckdb-default",
+			"duckdb",
+			map[string]any{"path": databasePath},
+		); err != nil {
+			return err
+		}
+	}
 	_, err = configService.Persist(cfg)
 	return err
 }

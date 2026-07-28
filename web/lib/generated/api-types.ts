@@ -360,9 +360,11 @@ export type ProjectTemplateInfo = {
   id: string;
   title: string;
   description: string;
+  category: string;
   offline: boolean;
   pipeline_name: string;
   asset_names: string[];
+  features: string[];
 };
 
 export type ProjectTemplatesResponse = {
@@ -374,6 +376,7 @@ export type PipelineTemplateInfo = {
   id: string;
   title: string;
   description: string;
+  category: string;
   offline: boolean;
   suggested_path: string;
   asset_names: string[];

@@ -14,6 +14,7 @@ type PipelineTemplateInfo struct {
 	ID            string   `json:"id"`
 	Title         string   `json:"title"`
 	Description   string   `json:"description"`
+	Category      string   `json:"category"`
 	Offline       bool     `json:"offline"`
 	SuggestedPath string   `json:"suggested_path"`
 	AssetNames    []string `json:"asset_names"`
@@ -26,16 +27,24 @@ type PipelineTemplatesResponse struct {
 }
 
 type pipelineTemplate struct {
-	info       PipelineTemplateInfo
-	duckdbFile string
-	files      func(pipelineName string) map[string]string
+	info                 PipelineTemplateInfo
+	duckdbFile           string
+	files                func(pipelineName string) map[string]string
+	environmentSchedules func(primaryEnvironment string) map[string]templateEnvironmentSchedule
 }
 
 const (
 	PipelineTemplateBlank          = "blank"
 	PipelineTemplateProductDemo    = "demo:product"
 	PipelineTemplateOperationsDemo = "demo:operations"
+	PipelineTemplateEarthquakeDemo = "demo:earthquakes"
 	PipelineTemplatePythonDemo     = "demo:python"
+	PipelineTemplateJinjaDemo      = "demo:jinja"
+
+	PipelineTemplateCategoryStart      = "Start"
+	PipelineTemplateCategoryAnalytics  = "Analytics"
+	PipelineTemplateCategoryOperations = "Operations"
+	PipelineTemplateCategoryExplore    = "Explore features"
 )
 
 func pipelineTemplates() []pipelineTemplate {
@@ -45,6 +54,7 @@ func pipelineTemplates() []pipelineTemplate {
 				ID:            PipelineTemplateBlank,
 				Title:         "Blank pipeline",
 				Description:   "Just pipeline.yml and an empty assets folder, ready for your own model.",
+				Category:      PipelineTemplateCategoryStart,
 				Offline:       true,
 				SuggestedPath: "my_pipeline",
 				AssetNames:    []string{},
@@ -59,6 +69,7 @@ func pipelineTemplates() []pipelineTemplate {
 				ID:            PipelineTemplateProductDemo,
 				Title:         "Product analytics",
 				Description:   "Model synthetic product events into user journeys, an activation funnel, and daily activity charts.",
+				Category:      PipelineTemplateCategoryAnalytics,
 				Offline:       true,
 				SuggestedPath: "product_analytics",
 				AssetNames: []string{
@@ -87,6 +98,7 @@ func pipelineTemplates() []pipelineTemplate {
 				ID:            ProjectTemplateRetailDemo,
 				Title:         "Retail analytics",
 				Description:   "Load bundled CSV seeds and turn them into customer and daily revenue models.",
+				Category:      PipelineTemplateCategoryAnalytics,
 				Offline:       true,
 				SuggestedPath: "retail_analytics",
 				AssetNames: []string{
@@ -109,6 +121,7 @@ func pipelineTemplates() []pipelineTemplate {
 				ID:            PipelineTemplateOperationsDemo,
 				Title:         "Operations monitoring",
 				Description:   "Gate a device-health model with a query sensor, then surface fleet health and an incident queue.",
+				Category:      PipelineTemplateCategoryOperations,
 				Offline:       true,
 				SuggestedPath: "operations_monitoring",
 				AssetNames: []string{
@@ -134,9 +147,40 @@ func pipelineTemplates() []pipelineTemplate {
 		},
 		{
 			info: PipelineTemplateInfo{
+				ID:            PipelineTemplateEarthquakeDemo,
+				Title:         "Earthquake monitoring",
+				Description:   "Ingest windowed USGS earthquake data and exercise merge, time-interval, append, truncate, and view materializations.",
+				Category:      PipelineTemplateCategoryOperations,
+				Offline:       false,
+				SuggestedPath: "earthquake_monitoring",
+				AssetNames: []string{
+					"earthquakes.events",
+					"earthquakes.notable_events",
+					"earthquakes.window_summary",
+					"earthquakes.magnitude_bands",
+					"earthquakes.run_log",
+				},
+				Features: []string{"HTTP API", "Run windows", "4 table strategies", "Schedules"},
+			},
+			duckdbFile:           "earthquake_monitoring.duckdb",
+			environmentSchedules: earthquakeTemplateSchedules,
+			files: func(pipelineName string) map[string]string {
+				return map[string]string{
+					"pipeline.yml":                           earthquakePipelineYAML(pipelineName),
+					"assets/earthquakes/events.asset.yml":    earthquakeEventsAPIYAML(),
+					"assets/earthquakes/notable_events.sql":  earthquakeNotableEventsSQL(),
+					"assets/earthquakes/window_summary.sql":  earthquakeWindowSummarySQL(),
+					"assets/earthquakes/magnitude_bands.sql": earthquakeMagnitudeBandsSQL(),
+					"assets/earthquakes/run_log.sql":         earthquakeRunLogSQL(),
+				}
+			},
+		},
+		{
+			info: PipelineTemplateInfo{
 				ID:            PipelineTemplatePythonDemo,
 				Title:         "Python risk scoring",
 				Description:   "Build account features in SQL, score them with renart.query in Python, and aggregate the result back in SQL.",
+				Category:      PipelineTemplateCategoryExplore,
 				Offline:       false,
 				SuggestedPath: "python_risk_scoring",
 				AssetNames: []string{
@@ -161,9 +205,40 @@ func pipelineTemplates() []pipelineTemplate {
 		},
 		{
 			info: PipelineTemplateInfo{
+				ID:            PipelineTemplateJinjaDemo,
+				Title:         "Jinja workshop",
+				Description:   "Progress from date and variable expressions to conditionals, loops, and reusable SQL macros.",
+				Category:      PipelineTemplateCategoryExplore,
+				Offline:       true,
+				SuggestedPath: "jinja_workshop",
+				AssetNames: []string{
+					"jinja.orders",
+					"jinja.windowed_orders",
+					"jinja.conditional_orders",
+					"jinja.channel_pivot",
+					"jinja.segment_metrics",
+				},
+				Features: []string{"Variables", "Date windows", "Conditionals + loops", "Macros"},
+			},
+			duckdbFile: "jinja_workshop.duckdb",
+			files: func(pipelineName string) map[string]string {
+				return map[string]string{
+					"pipeline.yml":                        jinjaWorkshopPipelineYAML(pipelineName),
+					"assets/jinja/orders.sql":             jinjaOrdersSQL(),
+					"assets/jinja/windowed_orders.sql":    jinjaWindowedOrdersSQL(),
+					"assets/jinja/conditional_orders.sql": jinjaConditionalOrdersSQL(),
+					"assets/jinja/channel_pivot.sql":      jinjaChannelPivotSQL(),
+					"assets/jinja/segment_metrics.sql":    jinjaSegmentMetricsSQL(),
+					"macros/segment_metrics.sql":          jinjaMetricsMacroSQL(),
+				}
+			},
+		},
+		{
+			info: PipelineTemplateInfo{
 				ID:            ProjectTemplateChessDemo,
 				Title:         "Chess API analytics",
 				Description:   "Iterate over Chess.com API endpoints and compare player results, ratings, and openings.",
+				Category:      PipelineTemplateCategoryExplore,
 				Offline:       false,
 				SuggestedPath: "chess_api_analytics",
 				AssetNames: []string{

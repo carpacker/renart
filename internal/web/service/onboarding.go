@@ -188,12 +188,26 @@ func (s *OnboardingService) PreviewDiscovery(ctx context.Context, req Onboarding
 	if err := cfg.DeleteConnection(environmentName, connectionName); err != nil && !strings.Contains(err.Error(), "does not exist") {
 		return OnboardingDiscoveryResult{Status: "error", Databases: []string{}, Tables: []SQLDiscoveryTableItem{}, Error: err.Error()}, 400
 	}
+	resolvedSecretChanges, draftSecretBundle, err := configService.resolveDraftConnectionSecretChanges(
+		ctx,
+		environmentName,
+		req.SecretChanges,
+	)
+	if err != nil {
+		return OnboardingDiscoveryResult{
+			Status: "error", Databases: []string{}, Tables: []SQLDiscoveryTableItem{},
+			Error: safeSecretResolutionMessage(err),
+		}, 400
+	}
+	if draftSecretBundle != nil {
+		defer draftSecretBundle.Close(ctx)
+	}
 	if err := configService.AddConnection(cfg, UpsertWorkspaceConnectionParams{
 		EnvironmentName: environmentName,
 		Name:            connectionName,
 		Type:            typeName,
 		Values:          values,
-		SecretChanges:   req.SecretChanges,
+		SecretChanges:   resolvedSecretChanges,
 	}); err != nil {
 		return OnboardingDiscoveryResult{Status: "error", Databases: []string{}, Tables: []SQLDiscoveryTableItem{}, Error: err.Error()}, 400
 	}

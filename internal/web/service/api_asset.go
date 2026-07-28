@@ -492,6 +492,15 @@ func (e *HybridBruinExecutor) runAPIAsset(ctx context.Context, pl *pipeline.Pipe
 	if renderer == nil {
 		return nil, errors.New("api asset renderer is required")
 	}
+	clonedRenderer, err := renderer.CloneForAsset(ctx, pl, asset)
+	if err != nil {
+		return nil, fmt.Errorf("build API asset renderer: %w", err)
+	}
+	concreteRenderer, ok := clonedRenderer.(*jinja.Renderer)
+	if !ok {
+		return nil, errors.New("API asset renderer has an unsupported implementation")
+	}
+	renderer = concreteRenderer
 
 	specPath := asset.ExecutableFile.Path
 	if strings.TrimSpace(specPath) == "" {

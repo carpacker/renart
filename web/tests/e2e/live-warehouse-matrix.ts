@@ -35,7 +35,17 @@ export type LiveWarehouseMatrix = {
   dispose: () => Promise<void>;
 };
 
-export async function createLiveWarehouseMatrix(): Promise<LiveWarehouseMatrix> {
+export async function createLiveWarehouseMatrix(
+  enabledWarehouses: Iterable<string> = [
+    "duckdb",
+    "ducklake",
+    "postgres",
+    "trino",
+    "clickhouse",
+    "starrocks",
+  ],
+): Promise<LiveWarehouseMatrix> {
+  const enabled = new Set(enabledWarehouses);
   const suffix = randomUUID().slice(0, 8);
   const networkName = `renart-e2e-warehouse-${suffix}`;
   const postgresName = `renart-e2e-pg-${suffix}`;
@@ -158,153 +168,161 @@ insert into analytics.customer_activity_source (customer_id, activity_score) val
   (5, 6);`,
     ]);
 
-    await runCommand([
-      "docker",
-      "run",
-      "--rm",
-      "-d",
-      "--name",
-      clickhouseName,
-      "--network",
-      networkName,
-      "-e",
-      "CLICKHOUSE_DB=analytics",
-      "-e",
-      "CLICKHOUSE_USER=renart",
-      "-e",
-      "CLICKHOUSE_PASSWORD=renart",
-      "-e",
-      "CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT=1",
-      "--tmpfs",
-      "/var/lib/clickhouse:rw,noexec,nosuid,size=512m",
-      "-p",
-      `127.0.0.1:${clickhouseNativePort}:9000`,
-      "-p",
-      `127.0.0.1:${clickhouseHTTPPort}:8123`,
-      CLICKHOUSE_IMAGE,
-    ]);
-    containers.push(clickhouseName);
-    await waitForCommand([
-      "docker",
-      "exec",
-      clickhouseName,
-      "clickhouse-client",
-      "--user",
-      "renart",
-      "--password",
-      "renart",
-      "--query",
-      "select 1",
-    ]);
+    if (enabled.has("clickhouse")) {
+      await runCommand([
+        "docker",
+        "run",
+        "--rm",
+        "-d",
+        "--name",
+        clickhouseName,
+        "--network",
+        networkName,
+        "-e",
+        "CLICKHOUSE_DB=analytics",
+        "-e",
+        "CLICKHOUSE_USER=renart",
+        "-e",
+        "CLICKHOUSE_PASSWORD=renart",
+        "-e",
+        "CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT=1",
+        "--tmpfs",
+        "/var/lib/clickhouse:rw,noexec,nosuid,size=512m",
+        "-p",
+        `127.0.0.1:${clickhouseNativePort}:9000`,
+        "-p",
+        `127.0.0.1:${clickhouseHTTPPort}:8123`,
+        CLICKHOUSE_IMAGE,
+      ]);
+      containers.push(clickhouseName);
+      await waitForCommand([
+        "docker",
+        "exec",
+        clickhouseName,
+        "clickhouse-client",
+        "--user",
+        "renart",
+        "--password",
+        "renart",
+        "--query",
+        "select 1",
+      ]);
+    }
 
-    await runCommand([
-      "docker",
-      "run",
-      "--rm",
-      "-d",
-      "--name",
-      trinoName,
-      "--network",
-      networkName,
-      "-p",
-      `127.0.0.1:${trinoPort}:8080`,
-      "--volume",
-      `${trinoCatalogDir}:/etc/trino/catalog:ro`,
-      TRINO_IMAGE,
-    ]);
-    containers.push(trinoName);
-    await waitForCommand(["docker", "exec", trinoName, "trino", "--execute", "select 1"]);
-    await runCommand([
-      "docker",
-      "exec",
-      trinoName,
-      "trino",
-      "--catalog",
-      "memory",
-      "--execute",
-      "create schema if not exists analytics",
-    ]);
+    if (enabled.has("trino")) {
+      await runCommand([
+        "docker",
+        "run",
+        "--rm",
+        "-d",
+        "--name",
+        trinoName,
+        "--network",
+        networkName,
+        "-p",
+        `127.0.0.1:${trinoPort}:8080`,
+        "--volume",
+        `${trinoCatalogDir}:/etc/trino/catalog:ro`,
+        TRINO_IMAGE,
+      ]);
+      containers.push(trinoName);
+      await waitForCommand(["docker", "exec", trinoName, "trino", "--execute", "select 1"]);
+      await runCommand([
+        "docker",
+        "exec",
+        trinoName,
+        "trino",
+        "--catalog",
+        "memory",
+        "--execute",
+        "create schema if not exists analytics",
+      ]);
+    }
 
-    await runCommand([
-      "docker",
-      "run",
-      "--rm",
-      "-d",
-      "--name",
-      starrocksName,
-      "--network",
-      networkName,
-      "--tmpfs",
-      "/data/deploy/starrocks/be/storage:rw,noexec,nosuid,size=2g",
-      "-p",
-      `127.0.0.1:${starrocksMySQLPort}:9030`,
-      "-p",
-      `127.0.0.1:${starrocksHTTPPort}:8030`,
-      "-p",
-      `127.0.0.1:${starrocksStreamLoadPort}:8040`,
-      STARROCKS_IMAGE,
-    ]);
-    containers.push(starrocksName);
-    await waitForCommand([
-      "docker",
-      "exec",
-      starrocksName,
-      "bash",
-      "-lc",
-      `mysql -P 9030 -h 127.0.0.1 -u root -N -e "show backends" | grep -q $'\\ttrue\\t'`,
-    ]);
-    await runCommand([
-      "docker",
-      "exec",
-      starrocksName,
-      "mysql",
-      "-P",
-      "9030",
-      "-h",
-      "127.0.0.1",
-      "-u",
-      "root",
-      "-e",
-      "create database if not exists analytics",
-    ]);
+    if (enabled.has("starrocks")) {
+      await runCommand([
+        "docker",
+        "run",
+        "--rm",
+        "-d",
+        "--name",
+        starrocksName,
+        "--network",
+        networkName,
+        "--tmpfs",
+        "/data/deploy/starrocks/be/storage:rw,noexec,nosuid,size=2g",
+        "-p",
+        `127.0.0.1:${starrocksMySQLPort}:9030`,
+        "-p",
+        `127.0.0.1:${starrocksHTTPPort}:8030`,
+        "-p",
+        `127.0.0.1:${starrocksStreamLoadPort}:8040`,
+        STARROCKS_IMAGE,
+      ]);
+      containers.push(starrocksName);
+      await waitForCommand([
+        "docker",
+        "exec",
+        starrocksName,
+        "bash",
+        "-lc",
+        `mysql -P 9030 -h 127.0.0.1 -u root -N -e "show backends" | grep -q $'\\ttrue\\t'`,
+      ]);
+      await runCommand([
+        "docker",
+        "exec",
+        starrocksName,
+        "mysql",
+        "-P",
+        "9030",
+        "-h",
+        "127.0.0.1",
+        "-u",
+        "root",
+        "-e",
+        "create database if not exists analytics",
+      ]);
+    }
 
-    await runCommand([
-      "docker",
-      "run",
-      "--rm",
-      "-d",
-      "--name",
-      minioName,
-      "--network",
-      networkName,
-      "--network-alias",
-      "minio",
-      "-e",
-      `MINIO_ROOT_USER=${MINIO_ACCESS_KEY}`,
-      "-e",
-      `MINIO_ROOT_PASSWORD=${MINIO_SECRET_KEY}`,
-      "--tmpfs",
-      "/data:rw,noexec,nosuid,size=512m",
-      "-p",
-      `127.0.0.1:${minioPort}:9000`,
-      MINIO_IMAGE,
-      "server",
-      "/data",
-    ]);
-    containers.push(minioName);
-    await waitForHTTP(`http://127.0.0.1:${minioPort}/minio/health/live`);
-    await runCommand([
-      "docker",
-      "run",
-      "--rm",
-      "--network",
-      networkName,
-      "--entrypoint",
-      "/bin/sh",
-      MINIO_CLIENT_IMAGE,
-      "-c",
-      `mc alias set local http://minio:9000 ${MINIO_ACCESS_KEY} ${MINIO_SECRET_KEY} >/dev/null && mc mb --ignore-existing local/${DUCKLAKE_BUCKET}`,
-    ]);
+    if (enabled.has("ducklake")) {
+      await runCommand([
+        "docker",
+        "run",
+        "--rm",
+        "-d",
+        "--name",
+        minioName,
+        "--network",
+        networkName,
+        "--network-alias",
+        "minio",
+        "-e",
+        `MINIO_ROOT_USER=${MINIO_ACCESS_KEY}`,
+        "-e",
+        `MINIO_ROOT_PASSWORD=${MINIO_SECRET_KEY}`,
+        "--tmpfs",
+        "/data:rw,noexec,nosuid,size=512m",
+        "-p",
+        `127.0.0.1:${minioPort}:9000`,
+        MINIO_IMAGE,
+        "server",
+        "/data",
+      ]);
+      containers.push(minioName);
+      await waitForHTTP(`http://127.0.0.1:${minioPort}/minio/health/live`);
+      await runCommand([
+        "docker",
+        "run",
+        "--rm",
+        "--network",
+        networkName,
+        "--entrypoint",
+        "/bin/sh",
+        MINIO_CLIENT_IMAGE,
+        "-c",
+        `mc alias set local http://minio:9000 ${MINIO_ACCESS_KEY} ${MINIO_SECRET_KEY} >/dev/null && mc mb --ignore-existing local/${DUCKLAKE_BUCKET}`,
+      ]);
+    }
 
     return {
       postgresPort,

@@ -301,15 +301,32 @@ test.describe("app notebooks live", () => {
     const readerCard = page.locator(`[data-notebook-cell-id="${readerCell}"]`);
     const upstreamToken = readerCard.locator(".view-lines span", { hasText: "base" }).last();
     await expect(upstreamToken).toBeVisible({ timeout: 15000 });
-    // The highlight intentionally lasts only for the animation. Start observing
-    // it before the click so a constrained runner cannot miss the transient
-    // attribute while Playwright is returning from the input action.
-    await Promise.all([
-      expect(targetCard).toHaveAttribute("data-notebook-cell-jump-highlight", "true", {
-        timeout: timeoutForRetry(test.info(), 15000),
-      }),
-      upstreamToken.click({ modifiers: ["ControlOrMeta"] }),
-    ]);
+    const upstreamTokenBox = await upstreamToken.boundingBox();
+    expect(upstreamTokenBox).not.toBeNull();
+    const renderedLine = await upstreamToken.innerText();
+    const relationOffset = renderedLine.lastIndexOf("base");
+    expect(relationOffset).toBeGreaterThanOrEqual(0);
+    const relationX =
+      upstreamTokenBox!.x +
+      (upstreamTokenBox!.width * (relationOffset + "base".length / 2)) / renderedLine.length;
+    const relationY = upstreamTokenBox!.y + upstreamTokenBox!.height / 2;
+    const modifier = process.platform === "darwin" ? "Meta" : "Control";
+    // Monaco can merge the whole line into one visual span. Click the center of
+    // "base", and retry until the editor's definition handler has mounted.
+    // Reading the transient attribute inside the poll also avoids missing the
+    // short highlight while Playwright returns from an asynchronous click.
+    await expect
+      .poll(
+        async () => {
+          await page.keyboard.down(modifier);
+          await page.mouse.click(relationX, relationY);
+          await page.keyboard.up(modifier);
+          await page.waitForTimeout(100);
+          return targetCard.getAttribute("data-notebook-cell-jump-highlight");
+        },
+        { timeout: timeoutForRetry(test.info(), 15000) },
+      )
+      .toBe("true");
     await expect(targetCard).not.toHaveAttribute("data-notebook-cell-jump-highlight", "true", {
       timeout: timeoutForRetry(test.info(), 3000),
     });

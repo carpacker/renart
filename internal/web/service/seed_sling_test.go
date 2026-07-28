@@ -10,6 +10,8 @@ import (
 	bruinexecutor "github.com/bruin-data/bruin/pkg/executor"
 	"github.com/bruin-data/bruin/pkg/pipeline"
 	"github.com/bruin-data/bruin/pkg/scheduler"
+	gogit "github.com/go-git/go-git/v5"
+	"github.com/spf13/afero"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -29,6 +31,9 @@ func TestSlingSeedOperatorRunsSeedThroughSling(t *testing.T) {
 		Name:       "analytics.customers",
 		Type:       pipeline.AssetTypeDuckDBSeed,
 		Connection: "duckdb-default",
+		Materialization: pipeline.Materialization{
+			Strategy: pipeline.MaterializationStrategyTruncateInsert,
+		},
 		Parameters: pipeline.ParameterMap{
 			"path":           "./customers.csv",
 			"file_type":      "csv",
@@ -54,10 +59,51 @@ func TestSlingSeedOperatorRunsSeedThroughSling(t *testing.T) {
 	assert.Contains(t, text, "run --src-stream file://"+filepath.ToSlash(seedPath))
 	assert.Contains(t, text, `--src-options {"format":"csv"}`)
 	assert.Contains(t, text, "--tgt-conn "+seedTargetConnectionEnv)
-	assert.Contains(t, text, "--tgt-object analytics.customers --mode full-refresh")
+	assert.Contains(t, text, "--tgt-object analytics.customers --mode truncate")
 	assert.Contains(t, text, `--tgt-options {"column_casing":"snake"}`)
 	assert.Contains(t, text, `--select customer_id,customer_name --columns {"customer_id":"integer","customer_name":"string(100)"} --primary-key customer_id`)
 	assert.NotContains(t, text, "ingestr")
+}
+
+func TestParsedSeedRetainsConfiguredMaterialization(t *testing.T) {
+	workspaceRoot := t.TempDir()
+	_, err := gogit.PlainInit(workspaceRoot, false)
+	require.NoError(t, err)
+	pipelineRoot := filepath.Join(workspaceRoot, "analytics")
+	assetDir := filepath.Join(pipelineRoot, "assets")
+	require.NoError(t, os.MkdirAll(assetDir, 0o755))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(pipelineRoot, "pipeline.yml"),
+		[]byte("name: analytics\ndefault_connections:\n  duckdb: duckdb-default\n"),
+		0o644,
+	))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(assetDir, "customers.csv"),
+		[]byte("customer_id\n1\n"),
+		0o644,
+	))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(assetDir, "customers.asset.yml"),
+		[]byte(`name: analytics.customers
+type: duckdb.seed
+parameters:
+  path: ./customers.csv
+materialization:
+  type: table
+  strategy: truncate+insert
+`),
+		0o644,
+	))
+
+	parsed, err := NewRenartPipelineBuilder(afero.NewOsFs()).CreatePipelineFromPath(
+		context.Background(),
+		pipelineRoot,
+		pipeline.WithMutate(),
+	)
+	require.NoError(t, err)
+	require.Len(t, parsed.Assets, 1)
+	assert.Equal(t, pipeline.MaterializationTypeTable, parsed.Assets[0].Materialization.Type)
+	assert.Equal(t, pipeline.MaterializationStrategyTruncateInsert, parsed.Assets[0].Materialization.Strategy)
 }
 
 func TestResolveSlingSeedSource(t *testing.T) {

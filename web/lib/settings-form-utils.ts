@@ -126,6 +126,7 @@ export function buildConnectionSecretChanges(
 export function splitConnectionDraftValues(
   connectionType: WorkspaceConfigConnectionType | null | undefined,
   draftValues: Record<string, unknown>,
+  secretStorageModes: Record<string, "local" | "env"> = {},
 ) {
   const sensitiveFields = new Set(
     (connectionType?.fields ?? [])
@@ -141,9 +142,15 @@ export function splitConnectionDraftValues(
       continue;
     }
     const secretValue = typeof value === "string" ? value : String(value ?? "");
-    secretChanges[name] = secretValue
-      ? { action: "replace", value: secretValue }
-      : { action: "keep" };
+    if (secretStorageModes[name] === "env") {
+      secretChanges[name] = secretValue
+        ? { action: "replace", binding: { ref: `env:${secretValue}` } }
+        : { action: "keep" };
+    } else {
+      secretChanges[name] = secretValue
+        ? { action: "replace", value: secretValue }
+        : { action: "keep" };
+    }
   }
   for (const name of sensitiveFields) {
     secretChanges[name] ??= { action: "keep" };

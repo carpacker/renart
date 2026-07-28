@@ -2,7 +2,6 @@ import { Link } from "@tanstack/react-router";
 import {
   ArrowLeft,
   ArrowRight,
-  Check,
   CheckCircle2,
   CircleAlert,
   Database,
@@ -13,15 +12,14 @@ import {
   Play,
   Rocket,
   Sparkles,
-  WifiOff,
   XCircle,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { AnsiOutput } from "@/components/ansi-output";
 import { DirectoryPickerDialog } from "@/components/app/directory-picker-dialog";
+import { TemplateCatalog } from "@/components/app/template-catalog";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
@@ -35,6 +33,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
+import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { useWorkspaceTheme } from "@/hooks/use-workspace-theme";
 import {
   createWorkspaceConnection,
@@ -109,6 +108,9 @@ export function WelcomePage({ forceNew = false }: { forceNew?: boolean }) {
 
   const [connectionType, setConnectionType] = useState("");
   const [connectionValues, setConnectionValues] = useState<Record<string, string | boolean>>({});
+  const [connectionSecretModes, setConnectionSecretModes] = useState<
+    Record<string, "local" | "env">
+  >({});
   const [discovery, setDiscovery] = useState<OnboardingDiscoveryResponse | null>(null);
   const [selectedDatabase, setSelectedDatabase] = useState("");
   const [selectedTables, setSelectedTables] = useState<Set<string>>(new Set());
@@ -148,6 +150,19 @@ export function WelcomePage({ forceNew = false }: { forceNew?: boolean }) {
   const demoTemplates = useMemo(
     () => templates.filter((template) => template.id.startsWith("demo:")),
     [templates],
+  );
+  const demoCatalogItems = useMemo(
+    () =>
+      demoTemplates.map((template) => ({
+        id: template.id,
+        title: template.title,
+        description: template.description,
+        category: template.category,
+        offline: template.offline,
+        features: template.features,
+        assetNames: template.asset_names,
+      })),
+    [demoTemplates],
   );
   const selectedTemplateId = intent === "demo" ? demoId : intent === "import" ? "bare" : "empty";
 
@@ -278,7 +293,7 @@ export function WelcomePage({ forceNew = false }: { forceNew?: boolean }) {
       try {
         const values: Record<string, unknown> = { ...connectionValues };
         const connectionTypeDef = connectionTypes.find((type) => type.type_name === connectionType);
-        const draft = splitConnectionDraftValues(connectionTypeDef, values);
+        const draft = splitConnectionDraftValues(connectionTypeDef, values, connectionSecretModes);
         const response = await previewOnboardingDiscovery({
           environment_name: IMPORT_ENVIRONMENT,
           type: connectionType,
@@ -299,6 +314,7 @@ export function WelcomePage({ forceNew = false }: { forceNew?: boolean }) {
           await persistImportConnection(
             connectionTypeDef,
             values,
+            connectionSecretModes,
             database ?? response.selected_database ?? "",
           );
           setStage("import-tables");
@@ -309,7 +325,7 @@ export function WelcomePage({ forceNew = false }: { forceNew?: boolean }) {
         setBusy(false);
       }
     },
-    [connectionType, connectionValues],
+    [connectionSecretModes, connectionType, connectionValues],
   );
 
   const handleImport = useCallback(async () => {
@@ -340,7 +356,12 @@ export function WelcomePage({ forceNew = false }: { forceNew?: boolean }) {
 
   return (
     <div className="flex min-h-dvh flex-col items-center overflow-auto bg-muted/40 px-4 py-10 text-foreground">
-      <div className="w-full max-w-2xl">
+      <div
+        className={cn(
+          "w-full",
+          stage === "target" && intent === "demo" ? "max-w-3xl" : "max-w-2xl",
+        )}
+      >
         <header className="mb-8 flex flex-col items-center gap-2 text-center">
           <img src="/icons/icon.svg" alt="" aria-hidden className="size-12 rounded-xl" />
           <h1 className="text-2xl font-semibold tracking-tight">
@@ -401,58 +422,20 @@ export function WelcomePage({ forceNew = false }: { forceNew?: boolean }) {
             {intent === "demo" ? (
               <div className="grid gap-2">
                 <Label>Demo</Label>
-                {demoTemplates.map((template) => (
-                  <button
-                    key={template.id}
-                    type="button"
-                    onClick={() => {
-                      setError(null);
-                      setDemoId(template.id);
-                      setProjectName((current) =>
-                        !current || current === demoSuggestedName(demoId)
-                          ? demoSuggestedName(template.id)
-                          : current,
-                      );
-                    }}
-                    className={cn(
-                      "flex items-start gap-3 rounded-lg border p-3 text-left transition-colors hover:bg-muted/50",
-                      demoId === template.id && "border-primary bg-primary/5",
-                    )}
-                  >
-                    <div
-                      className={cn(
-                        "mt-0.5 flex size-5 shrink-0 items-center justify-center rounded-full border",
-                        demoId === template.id
-                          ? "border-primary bg-primary text-primary-foreground"
-                          : "text-transparent",
-                      )}
-                    >
-                      <Check className="size-3" />
-                    </div>
-                    <div className="min-w-0">
-                      <div className="flex flex-wrap items-center gap-2 text-sm font-medium">
-                        {template.title}
-                        {template.offline ? (
-                          <Badge variant="secondary" className="gap-1 text-[10px]">
-                            <WifiOff className="size-3" />
-                            works offline
-                          </Badge>
-                        ) : null}
-                      </div>
-                      <p className="mt-0.5 text-xs text-muted-foreground">{template.description}</p>
-                      <div className="mt-1.5 flex flex-wrap gap-1">
-                        {template.asset_names.map((assetName) => (
-                          <span
-                            key={assetName}
-                            className="rounded bg-muted px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground"
-                          >
-                            {assetName}
-                          </span>
-                        ))}
-                      </div>
-                    </div>
-                  </button>
-                ))}
+                <TemplateCatalog
+                  items={demoCatalogItems}
+                  selectedId={demoId}
+                  ariaLabel="Demo pipeline"
+                  onSelect={(template) => {
+                    setError(null);
+                    setDemoId(template.id);
+                    setProjectName((current) =>
+                      !current || current === demoSuggestedName(demoId)
+                        ? demoSuggestedName(template.id)
+                        : current,
+                    );
+                  }}
+                />
               </div>
             ) : null}
 
@@ -666,6 +649,11 @@ export function WelcomePage({ forceNew = false }: { forceNew?: boolean }) {
                       connectionTypes.find((type) => type.type_name === value),
                     ),
                   );
+                  setConnectionSecretModes(
+                    defaultConnectionSecretModes(
+                      connectionTypes.find((type) => type.type_name === value),
+                    ),
+                  );
                   setDiscovery(null);
                 }}
               >
@@ -706,19 +694,62 @@ export function WelcomePage({ forceNew = false }: { forceNew?: boolean }) {
                         type={
                           field.type === "int"
                             ? "number"
-                            : field.is_sensitive || field.is_sensitive_file
+                            : field.is_sensitive &&
+                                !field.is_sensitive_file &&
+                                connectionSecretModes[field.name] !== "env"
                               ? "password"
                               : "text"
                         }
                         value={String(connectionValues[field.name] ?? "")}
-                        placeholder={field.default_value || undefined}
                         onChange={(event) =>
                           setConnectionValues((values) => ({
                             ...values,
                             [field.name]: event.target.value,
                           }))
                         }
+                        placeholder={
+                          connectionSecretModes[field.name] === "env"
+                            ? "Environment variable name"
+                            : field.default_value || undefined
+                        }
                       />
+                      {field.is_sensitive || field.is_sensitive_file ? (
+                        <div className="flex min-w-0 flex-col gap-1 sm:flex-row sm:items-center">
+                          <ToggleGroup
+                            type="single"
+                            variant="outline"
+                            size="sm"
+                            spacing={0}
+                            value={connectionSecretModes[field.name] ?? "local"}
+                            aria-label={`${field.name} secret source`}
+                            onValueChange={(nextMode) => {
+                              if (nextMode !== "local" && nextMode !== "env") {
+                                return;
+                              }
+                              setConnectionSecretModes((modes) => ({
+                                ...modes,
+                                [field.name]: nextMode,
+                              }));
+                              setConnectionValues((values) => ({
+                                ...values,
+                                [field.name]: "",
+                              }));
+                            }}
+                          >
+                            <ToggleGroupItem value="local">
+                              {field.is_sensitive_file ? "File path" : "Credential store"}
+                            </ToggleGroupItem>
+                            <ToggleGroupItem value="env">Environment</ToggleGroupItem>
+                          </ToggleGroup>
+                          <p className="text-xs text-muted-foreground">
+                            {connectionSecretModes[field.name] === "env"
+                              ? "Only the variable name is saved; its value stays in the environment."
+                              : field.is_sensitive_file
+                                ? "The credential file path is kept write-only."
+                                : "The value is saved in your operating system credential store."}
+                          </p>
+                        </div>
+                      ) : null}
                     </>
                   )}
                 </div>
@@ -993,18 +1024,27 @@ function defaultConnectionValues(connectionType?: WorkspaceConfigConnectionType)
   return values;
 }
 
+function defaultConnectionSecretModes(connectionType?: WorkspaceConfigConnectionType) {
+  return Object.fromEntries(
+    (connectionType?.fields ?? [])
+      .filter((field) => field.is_sensitive || field.is_sensitive_file)
+      .map((field) => [field.name, "local" as const]),
+  );
+}
+
 // Saves the import flow's connection as `<type>-default` in the workspace
 // config; the import endpoint resolves the connection from the saved config.
 async function persistImportConnection(
   connectionType: WorkspaceConfigConnectionType | undefined,
   values: Record<string, unknown>,
+  secretStorageModes: Record<string, "local" | "env">,
   database: string,
 ) {
   const connectionValues = { ...values };
   if (database && connectionType?.type_name !== "duckdb" && !connectionValues.database) {
     connectionValues.database = database;
   }
-  const draft = splitConnectionDraftValues(connectionType, connectionValues);
+  const draft = splitConnectionDraftValues(connectionType, connectionValues, secretStorageModes);
   const typeName = connectionType?.type_name ?? "";
   const input = {
     environment_name: IMPORT_ENVIRONMENT,
@@ -1017,7 +1057,7 @@ async function persistImportConnection(
     await createWorkspaceConnection(input);
   } catch (createError) {
     const message = createError instanceof Error ? createError.message : "";
-    if (!/exist/i.test(message)) {
+    if (!/already exists/i.test(message)) {
       throw createError;
     }
     await updateWorkspaceConnection({ ...input, current_name: input.name });

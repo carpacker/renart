@@ -73,13 +73,36 @@ func (s *PipelineService) Create(ctx context.Context, relPath, name, content, te
 		return "", fmt.Errorf("pipeline config must be a YAML mapping")
 	}
 
+	var environmentSchedules map[string]templateEnvironmentSchedule
 	if template.duckdbFile != "" {
-		if err := ensureScaffoldDuckDBConnection(
+		primaryEnvironment, connectionErr := ensureScaffoldDuckDBConnectionWithEnvironment(
 			s.workspaceRoot,
 			filepath.Join(s.workspaceRoot, ".bruin.yml"),
 			"duckdb-files/"+template.duckdbFile,
-		); err != nil {
-			return "", err
+		)
+		if connectionErr != nil {
+			return "", connectionErr
+		}
+		if template.environmentSchedules != nil {
+			environmentSchedules = template.environmentSchedules(primaryEnvironment)
+			environments := make([]string, 0, len(environmentSchedules))
+			for environment := range environmentSchedules {
+				environments = append(environments, environment)
+			}
+			sort.Strings(environments)
+			for _, environment := range environments {
+				if environment == primaryEnvironment {
+					continue
+				}
+				if err := ensureScaffoldDuckDBConnectionInEnvironment(
+					s.workspaceRoot,
+					filepath.Join(s.workspaceRoot, ".bruin.yml"),
+					environment,
+					"duckdb-files/"+environmentSchedules[environment].duckdbFile,
+				); err != nil {
+					return "", err
+				}
+			}
 		}
 		if err := fs.MkdirAll(filepath.Join(s.workspaceRoot, "duckdb-files"), 0o755); err != nil {
 			return "", err
@@ -114,8 +137,28 @@ func (s *PipelineService) Create(ctx context.Context, relPath, name, content, te
 	if err := fs.MkdirAll(filepath.Join(absPath, "assets"), 0o755); err != nil {
 		return "", err
 	}
-	if _, _, err := identity.EnsurePipelineID(fs, pipelineYmlPath); err != nil {
+	pipelineUUID, _, err := identity.EnsurePipelineID(fs, pipelineYmlPath)
+	if err != nil {
 		return "", err
+	}
+	if len(environmentSchedules) > 0 {
+		store := scheduler.NewScheduleDeclarationStore(
+			filepath.Join(s.workspaceRoot, ".renart", "schedules.yml"),
+		)
+		environments := make([]string, 0, len(environmentSchedules))
+		for environment := range environmentSchedules {
+			environments = append(environments, environment)
+		}
+		sort.Strings(environments)
+		for _, environment := range environments {
+			if err := store.Set(
+				pipelineUUID,
+				environment,
+				environmentSchedules[environment].declaration,
+			); err != nil {
+				return "", err
+			}
+		}
 	}
 
 	created = true

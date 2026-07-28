@@ -90,9 +90,13 @@ func (o *slingSeedOperator) Run(ctx context.Context, instance scheduler.TaskInst
 		"--src-options", sourceOptions,
 		"--tgt-conn", seedTargetConnectionEnv,
 		"--tgt-object", asset.Name,
-		"--mode", "full-refresh",
-		"--tgt-options", `{"column_casing":"snake"}`,
 	}
+	materializationArgs, err := slingMaterializationArgs(ctx, asset)
+	if err != nil {
+		return err
+	}
+	args = append(args, materializationArgs...)
+	args = append(args, "--tgt-options", `{"column_casing":"snake"}`)
 	columnArgs, err := slingSeedColumnArgs(asset)
 	if err != nil {
 		return err

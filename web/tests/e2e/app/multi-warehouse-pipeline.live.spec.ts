@@ -1,6 +1,6 @@
 import { expect, type Page } from "@playwright/test";
 import { createServer, type Server } from "node:http";
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
 import { liveTest as test, type LiveApp } from "../live-app-fixture";
@@ -13,6 +13,7 @@ type WarehouseVariant = {
   seedType: string;
   sensorType: string;
   sqlType: string;
+  supportsIncrementalSQL?: boolean;
 };
 
 type WorkspaceResponse = {
@@ -38,6 +39,21 @@ const pipelineName = "warehouse_matrix";
 const pipelinePath = "warehouse-matrix";
 const finalAssetPath = `${pipelinePath}/assets/analytics/final_report.sql`;
 const finalAssetId = Buffer.from(finalAssetPath).toString("base64url");
+
+const runWindows = [
+  {
+    start: "2026-02-03T00:00:00Z",
+    end: "2026-02-04T00:00:00Z",
+    date: "2026-02-03",
+    fullRefresh: true,
+  },
+  {
+    start: "2026-03-10T00:00:00Z",
+    end: "2026-03-11T00:00:00Z",
+    date: "2026-03-10",
+    fullRefresh: false,
+  },
+] as const;
 
 const variants: WarehouseVariant[] = [
   {
@@ -71,6 +87,10 @@ const variants: WarehouseVariant[] = [
     seedType: "trino.seed",
     sensorType: "trino.sensor.query",
     sqlType: "trino.sql",
+    // The lightweight memory catalog exercises Trino queries but deliberately
+    // has no data-lake table properties. Bruin's Trino table materializer
+    // targets Hive/Iceberg-style catalogs and emits `format = 'PARQUET'`.
+    supportsIncrementalSQL: false,
   },
   {
     name: "clickhouse",
@@ -146,40 +166,73 @@ test.describe("multi-warehouse pipeline live", () => {
     const api = await startRegionsAPI();
     let warehouses: LiveWarehouseMatrix | undefined;
     try {
-      warehouses = await createLiveWarehouseMatrix();
+      warehouses = await createLiveWarehouseMatrix(selectedVariants.map((variant) => variant.name));
       await writeConnections(liveApp, warehouses);
 
       const results = new Map<string, FinalRow[]>();
       for (const variant of selectedVariants) {
         await writePipelineVariant(liveApp, variant, api.url);
         const pipeline = await waitForPipelineVariant(page, liveApp.baseURL, variant);
-        const done = await materializePipeline(page, liveApp.baseURL, pipeline.id);
-        expect(done.status, `${variant.name}: ${done.error ?? done.output}\n${done.raw}`).toBe(
-          "ok",
-        );
-        for (const assetName of [
-          "analytics.branch_a",
-          "analytics.branch_b",
-          "analytics.customers_seed",
-          "analytics.customer_activity",
-          "analytics.regions_api",
-          "analytics.enriched_orders",
-          "analytics.orders_ready",
-          "analytics.segment_metrics",
-          "analytics.final_report",
-        ]) {
-          expect(done.output, `${variant.name} did not report ${assetName}`).toContain(assetName);
+        for (const window of runWindows) {
+          const done = await materializePipeline(page, liveApp.baseURL, pipeline.id, window);
+          expect(
+            done.status,
+            `${variant.name} ${window.date}: ${done.error ?? done.output}\n${done.raw}`,
+          ).toBe("ok");
+          const expectedAssetNames = [
+            "analytics.branch_a",
+            "analytics.branch_b",
+            "analytics.customers_seed",
+            "analytics.customer_activity",
+            "analytics.regions_api",
+            "analytics.enriched_orders",
+            "analytics.orders_ready",
+            "analytics.segment_metrics",
+            "analytics.final_report",
+          ];
+          if (variant.supportsIncrementalSQL !== false) {
+            expectedAssetNames.push("analytics.run_audit", "analytics.window_metrics");
+          }
+          for (const assetName of expectedAssetNames) {
+            expect(
+              done.output,
+              `${variant.name} ${window.date} did not report ${assetName}`,
+            ).toContain(assetName);
+          }
         }
 
         const rows = await inspectFinalRows(page, liveApp.baseURL);
         expect(rows, `${variant.name} produced unexpected rows`).toEqual(expectedRows);
+        if (variant.supportsIncrementalSQL !== false) {
+          const expectedDates = runWindows.map((window) => window.date);
+          expect(
+            await inspectMaterializationDates(
+              page,
+              liveApp.baseURL,
+              variant.connection,
+              "analytics.run_audit",
+              "run_date",
+            ),
+            `${variant.name} append materialization did not retain both run dates`,
+          ).toEqual(expectedDates);
+          expect(
+            await inspectMaterializationDates(
+              page,
+              liveApp.baseURL,
+              variant.connection,
+              "analytics.window_metrics",
+              "window_date",
+            ),
+            `${variant.name} windowed incremental materialization did not retain both windows`,
+          ).toEqual(expectedDates);
+        }
         results.set(variant.name, rows);
       }
 
       expect(Object.fromEntries(results)).toEqual(
         Object.fromEntries(selectedVariants.map((variant) => [variant.name, expectedRows])),
       );
-      expect(api.requests).toBe(selectedVariants.length);
+      expect(api.requests).toBe(selectedVariants.length * runWindows.length);
     } finally {
       if (warehouses) await warehouses.dispose();
       await new Promise<void>((resolveClose) => api.server.close(() => resolveClose()));
@@ -324,6 +377,10 @@ parameters:
   file_type: csv
   enforce_schema: true
 
+materialization:
+  type: table
+  strategy: truncate+insert
+
 columns:
   - name: customer_id
     type: integer
@@ -351,7 +408,7 @@ parameters:
 
 materialization:
   type: table
-  strategy: create+replace
+  strategy: truncate+insert
 `,
     "utf8",
   );
@@ -383,7 +440,7 @@ columns:
 
 materialization:
   type: table
-  strategy: create+replace
+  strategy: truncate+insert
 `,
     "utf8",
   );
@@ -454,7 +511,7 @@ depends:
   - analytics.orders_ready
 materialization:
   type: table
-  strategy: create+replace
+  strategy: truncate+insert
 @bruin """
 
 from collections import defaultdict
@@ -555,6 +612,65 @@ def materialize():
 `,
     "utf8",
   );
+  const runAuditPath = join(assetDir, "run_audit.sql");
+  const windowMetricsPath = join(assetDir, "window_metrics.sql");
+  if (variant.supportsIncrementalSQL === false) {
+    await Promise.all([rm(runAuditPath, { force: true }), rm(windowMetricsPath, { force: true })]);
+  } else {
+    // StarRocks 3.5 rejects the predicates currently emitted by Bruin's
+    // time_interval and delete+insert materializers. Its native primary-key
+    // merge is the supported incremental replacement path for this variant.
+    const windowMaterialization =
+      variant.name === "starrocks"
+        ? "  strategy: merge"
+        : "  strategy: time_interval\n  incremental_key: window_date\n  time_granularity: date";
+    await writeFile(
+      runAuditPath,
+      `/* @bruin
+name: analytics.run_audit
+type: ${variant.sqlType}
+connection: ${variant.connection}
+materialization:
+  type: table
+  strategy: append
+columns:
+  - name: run_date
+    type: date
+    primary_key: true
+  - name: completed_batch
+    type: integer
+@bruin */
+
+select
+  cast('{{ start_date }}' as date) as run_date,
+  1 as completed_batch
+`,
+      "utf8",
+    );
+    await writeFile(
+      windowMetricsPath,
+      `/* @bruin
+name: analytics.window_metrics
+type: ${variant.sqlType}
+connection: ${variant.connection}
+materialization:
+  type: table
+${windowMaterialization}
+columns:
+  - name: window_date
+    type: date
+    primary_key: true
+  - name: materialized_rows
+    type: integer
+@bruin */
+
+select
+  cast('{{ start_date }}' as date) as window_date,
+  1 as materialized_rows
+`,
+      "utf8",
+    );
+  }
   await writeFile(
     join(assetDir, "final_report.sql"),
     `/* @bruin
@@ -599,6 +715,10 @@ async function waitForPipelineVariant(page: Page, baseURL: string, variant: Ware
     variant.sqlType,
     variant.sqlType,
   ].sort();
+  if (variant.supportsIncrementalSQL !== false) {
+    expectedTypes.push(variant.sqlType, variant.sqlType);
+    expectedTypes.sort();
+  }
   let found: WorkspaceResponse["pipelines"][number] | undefined;
   await expect
     .poll(
@@ -622,9 +742,21 @@ async function waitForPipelineVariant(page: Page, baseURL: string, variant: Ware
   return found!;
 }
 
-async function materializePipeline(page: Page, baseURL: string, pipelineId: string) {
+async function materializePipeline(
+  page: Page,
+  baseURL: string,
+  pipelineId: string,
+  window: (typeof runWindows)[number],
+) {
+  const query = new URLSearchParams({
+    environment: "default",
+    sensor_mode: "once",
+    start_date: window.start,
+    end_date: window.end,
+    full_refresh: String(window.fullRefresh),
+  });
   const response = await page.request.post(
-    `${baseURL}/api/pipelines/${pipelineId}/materialize/stream?environment=default&sensor_mode=once`,
+    `${baseURL}/api/pipelines/${pipelineId}/materialize/stream?${query.toString()}`,
     { timeout: 12 * 60_000 },
   );
   const text = await response.text();
@@ -642,6 +774,34 @@ async function materializePipeline(page: Page, baseURL: string, pipelineId: stri
     }),
     raw: text,
   };
+}
+
+async function inspectMaterializationDates(
+  page: Page,
+  baseURL: string,
+  connection: string,
+  relation: string,
+  field: string,
+): Promise<string[]> {
+  const response = await page.request.post(`${baseURL}/api/sql/query`, {
+    data: {
+      connection,
+      environment: "default",
+      query: `select ${field} from ${relation} order by ${field}`,
+      limit: 20,
+    },
+    timeout: 120_000,
+  });
+  const body = (await response.json()) as {
+    status: string;
+    rows?: Array<Record<string, unknown>>;
+    error?: string;
+  };
+  expect(response.ok(), body.error).toBe(true);
+  expect(body.status, body.error).toBe("ok");
+  return (body.rows ?? [])
+    .map((row) => String(row[field]).slice(0, 10))
+    .sort((left, right) => left.localeCompare(right));
 }
 
 async function inspectFinalRows(page: Page, baseURL: string): Promise<FinalRow[]> {
