@@ -107,6 +107,31 @@ func TestRunCellsExecutesDAGInSession(t *testing.T) {
 	}
 }
 
+func TestRunCellsHidesSlingLoadedAtFromResults(t *testing.T) {
+	nb := loadRunFixture(t, map[string]string{
+		ManifestFileName: "id: 11111111-0000-0000-0000-0000000000f1\nblocks:\n  - cell: aaaa1111\n",
+		"loaded.sql":     "/* @bruin\nid: aaaa1111\ntype: duckdb.sql\n@bruin */\nselect 42 as answer, current_timestamp as _sling_loaded_at\n",
+	})
+	runner := &Runner{
+		Store:        NewSessionStore(filepath.Join(t.TempDir(), "sessions")),
+		RenameTables: realRenameTables(t),
+	}
+
+	results, err := runner.RunCells(context.Background(), nb, TopoOrder(nb), RunOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(results) != 1 || results[0].Status != CellRunOK {
+		t.Fatalf("unexpected result: %+v", results)
+	}
+	if got := results[0].Columns; len(got) != 1 || got[0] != "answer" {
+		t.Fatalf("expected only the user column, got %v", got)
+	}
+	if got := results[0].Rows; len(got) != 1 || len(got[0]) != 1 || fmt.Sprint(got[0][0]) != "42" {
+		t.Fatalf("bookkeeping column was not removed from rows: %v", got)
+	}
+}
+
 func TestRunCellsIsRepeatable(t *testing.T) {
 	nb := loadRunFixture(t, map[string]string{
 		ManifestFileName: "id: 11111111-0000-0000-0000-0000000000a1\nblocks:\n  - cell: aaaa1111\n",

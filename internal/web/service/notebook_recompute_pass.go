@@ -60,11 +60,20 @@ func (s *NotebookService) scheduleRecompute(notebookID, uuid string) {
 	rt.debounce = time.AfterFunc(autoRecomputeDebounce, func() {
 		rt.mu.Lock()
 		rt.debounce = nil
-		if rt.passActive || !rt.autoRecompute {
+		if !rt.autoRecompute {
+			rt.mu.Unlock()
+			return
+		}
+		if rt.passActive {
+			// Do not lose the edit when an older pass is just about to park
+			// because the previous SQL was invalid. The active pass consumes
+			// this wake-up before it exits.
+			rt.recomputeRequested = true
 			rt.mu.Unlock()
 			return
 		}
 		rt.passActive = true
+		rt.recomputeRequested = false
 		rt.mu.Unlock()
 		s.runRecomputePass(notebookID, uuid)
 	})
@@ -79,6 +88,7 @@ func (s *NotebookService) runRecomputePass(notebookID, uuid string) {
 		rt.mu.Lock()
 		if !rt.autoRecompute || len(rt.stale) == 0 {
 			rt.passActive = false
+			rt.recomputeRequested = false
 			rt.mu.Unlock()
 			s.publishRuntime(notebookID, uuid, nil, nil, nil)
 			return
@@ -89,6 +99,7 @@ func (s *NotebookService) runRecomputePass(notebookID, uuid string) {
 		if apiErr != nil {
 			rt.mu.Lock()
 			rt.passActive = false
+			rt.recomputeRequested = false
 			rt.mu.Unlock()
 			return
 		}
@@ -99,6 +110,11 @@ func (s *NotebookService) runRecomputePass(notebookID, uuid string) {
 		s.publishRuntime(notebookID, uuid, sortedKeys(closure), wave, nil)
 		if len(wave) == 0 {
 			rt.mu.Lock()
+			if rt.recomputeRequested {
+				rt.recomputeRequested = false
+				rt.mu.Unlock()
+				continue
+			}
 			rt.passActive = false
 			rt.mu.Unlock()
 			return

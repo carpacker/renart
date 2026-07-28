@@ -484,6 +484,13 @@ func (s *NotebookService) UpdateCell(notebookID, cellID string, req UpdateCellRe
 	}
 
 	normalized := notebook.NormalizeCellID(req.Content, cellID, notebook.IsPythonCell(cell))
+	if normalized == notebook.NormalizeCellID(currentContent, cellID, notebook.IsPythonCell(cell)) {
+		// Blur and focus transitions can race the client's acknowledgement of
+		// an autosave. Treat an identical revision-checked save as a true no-op:
+		// rewriting the file would emit workspace churn and, more importantly,
+		// incorrectly mark the cell and all descendants stale.
+		return s.toModel(nb), nil
+	}
 	if err := os.WriteFile(cell.Path, []byte(normalized), 0o644); err != nil {
 		return model.Notebook{}, &APIError{Status: http.StatusInternalServerError, Code: "cell_update_failed", Message: err.Error()}
 	}

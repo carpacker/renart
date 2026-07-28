@@ -52,8 +52,9 @@ type notebookRuntime struct {
 	// auto runs (set by the client via the settings endpoint).
 	environment string
 
-	debounce   *time.Timer
-	passActive bool
+	debounce           *time.Timer
+	passActive         bool
+	recomputeRequested bool
 
 	// Active manual and auto runs are registered before they enter the shared
 	// notebook session. The cancel endpoint cancels them and waits for their

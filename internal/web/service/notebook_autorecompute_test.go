@@ -80,6 +80,30 @@ func TestComputeAutoRecomputeWaveExcludesPythonAndUnloaded(t *testing.T) {
 	}
 }
 
+func TestScheduleRecomputeRecordsWakeupWhilePassIsActive(t *testing.T) {
+	svc := &NotebookService{runtimes: newNotebookRuntimes()}
+	rt := svc.runtimes.get("notebook-uuid")
+	rt.mu.Lock()
+	rt.passActive = true
+	rt.mu.Unlock()
+
+	svc.scheduleRecompute("notebook-id", "notebook-uuid")
+
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		rt.mu.Lock()
+		requested := rt.recomputeRequested
+		rt.mu.Unlock()
+		if requested {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("recompute request was dropped while another pass was active")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
 func TestNotebookRuntimeCancelActiveRunsWaitsForRelease(t *testing.T) {
 	rt := newNotebookRuntime()
 	manualCtx, finishManual := rt.beginManualRun(context.Background())

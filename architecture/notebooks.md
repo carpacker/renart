@@ -130,7 +130,10 @@ successful run columns take precedence over declared columns, so outputs that
 cannot be inferred statically (including arbitrary Python materializations)
 become available to column completion after a run. The Python adapter keeps the
 Monaco document in Python mode, projects completion ranges into the embedded
-SQL string, and renders SQL lexical plus semantic decorations there.
+SQL string, and renders SQL lexical plus semantic decorations there. Notebook
+result DTOs remove Sling's transport-only `_sling_loaded_at` column (and the
+corresponding row value) before results reach the table, visualizations, or
+runtime completion schema.
 
 Build's ad-hoc query editor can copy its current SQL draft into either an
 existing notebook or a newly created one. Existing notebooks receive a new SQL
@@ -154,7 +157,10 @@ is typing" (a typing→save debounce) and rendering.
   (`POST …/cancel`) cancels both manual and automatic work and does not return
   until each run has unwound and released the serialized notebook session;
   the client therefore cannot race a new run against the query it just stopped.
-  Manual `Run` folds results into the runtime and can unblock downstreams.
+  A debounce that fires while a pass is active records a pending wake-up; the
+  pass consumes it before parking, so a valid edit cannot be lost behind an
+  older invalid-SQL pass. Manual `Run` folds results into the runtime and can
+  unblock downstreams.
 - Transport: a single `notebook.runtime` SSE event
   (stale / auto_pending / running / results-delta) tagged with the notebook
   id, via `PublishImmediate`. Endpoints: `GET …/runtime` (seed snapshot),
@@ -172,7 +178,9 @@ is typing" (a typing→save debounce) and rendering.
   cell and returns `409 cell_edit_conflict` when that snapshot is stale. A
   delayed response therefore cannot replace newer typing, while another Renart
   tab or revision-aware API client cannot silently overwrite a newer save.
-  Unsaved drafts remain in Monaco on conflict.
+  Unsaved drafts remain in Monaco on conflict. After the revision check, a
+  normalized payload identical to the current file is a no-op; focus/blur save
+  races therefore do not rewrite the file or mark the dependency closure stale.
 - This is snapshot concurrency control, not collaborative text merging. The
   acknowledged snapshot is the boundary where a future OT/CRDT adapter can
   exchange operations; until then, conflicts are explicit and the filesystem

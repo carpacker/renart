@@ -310,6 +310,47 @@ func TestNotebookCellUpdateRejectsStaleRevision(t *testing.T) {
 	}
 }
 
+func TestNotebookCellIdenticalUpdateDoesNotBecomeStale(t *testing.T) {
+	root := t.TempDir()
+	if err := os.Mkdir(filepath.Join(root, ".git"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	events := 0
+	svc := NewNotebookService(NotebookDependencies{
+		WorkspaceRoot: root,
+		PublishEvent: func(any) {
+			events++
+		},
+	})
+	created, apiErr := svc.Create(CreateNotebookRequest{Title: "Stable Focus"})
+	if apiErr != nil {
+		t.Fatalf("create failed: %+v", apiErr)
+	}
+	cell := created.Cells[0]
+
+	updated, apiErr := svc.UpdateCell(created.ID, cell.CellID, UpdateCellRequest{
+		Content:      cell.Content,
+		BaseRevision: cell.ContentRevision,
+	})
+	if apiErr != nil {
+		t.Fatalf("identical update failed: %+v", apiErr)
+	}
+	if updated.Cells[0].ContentRevision != cell.ContentRevision {
+		t.Fatalf("identical update changed the revision: before=%q after=%q", cell.ContentRevision, updated.Cells[0].ContentRevision)
+	}
+	runtime, apiErr := svc.Runtime(created.ID)
+	if apiErr != nil {
+		t.Fatalf("runtime failed: %+v", apiErr)
+	}
+	if len(runtime.Stale) != 0 {
+		t.Fatalf("identical update marked the cell stale: %v", runtime.Stale)
+	}
+	if events != 0 {
+		t.Fatalf("identical update emitted %d runtime events", events)
+	}
+}
+
 func TestNotebookServicePromoteCell(t *testing.T) {
 	root := t.TempDir()
 	if err := os.Mkdir(filepath.Join(root, ".git"), 0o755); err != nil {

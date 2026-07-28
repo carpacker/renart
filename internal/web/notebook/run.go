@@ -304,10 +304,10 @@ func (r *Runner) runOne(ctx context.Context, session *Session, nb *Notebook, cel
 		result.DurationMS = time.Since(startedAt).Milliseconds()
 		return result
 	}
-	result.Columns = preview.Columns
-	result.Rows = normalizeRows(preview.Rows)
+	result.Columns, result.Rows = stripNotebookBookkeepingColumns(preview.Columns, preview.Rows)
+	result.Rows = normalizeRows(result.Rows)
 	if viz != nil {
-		result.VizDiagnostics = append(result.VizDiagnostics, ValidateVizColumns(viz, preview.Columns, 0)...)
+		result.VizDiagnostics = append(result.VizDiagnostics, ValidateVizColumns(viz, result.Columns, 0)...)
 	}
 
 	if count, countErr := session.Query(ctx, fmt.Sprintf("select count(*) from %s", object)); countErr == nil && len(count.Rows) == 1 && len(count.Rows[0]) == 1 {
@@ -538,6 +538,39 @@ func normalizeRows(rows [][]any) [][]any {
 		normalized[rowIndex] = out
 	}
 	return normalized
+}
+
+// Sling adds this bookkeeping column when it moves tabular data between
+// connections. It is useful to the transport, but exposing it in notebook
+// results makes imported data look as if the user selected an extra column and
+// also pollutes runtime completion schemas.
+const slingLoadedAtColumn = "_sling_loaded_at"
+
+func stripNotebookBookkeepingColumns(columns []string, rows [][]any) ([]string, [][]any) {
+	keep := make([]int, 0, len(columns))
+	filteredColumns := make([]string, 0, len(columns))
+	for index, column := range columns {
+		if strings.EqualFold(strings.TrimSpace(column), slingLoadedAtColumn) {
+			continue
+		}
+		keep = append(keep, index)
+		filteredColumns = append(filteredColumns, column)
+	}
+	if len(keep) == len(columns) {
+		return columns, rows
+	}
+
+	filteredRows := make([][]any, len(rows))
+	for rowIndex, row := range rows {
+		filteredRow := make([]any, 0, len(keep))
+		for _, columnIndex := range keep {
+			if columnIndex < len(row) {
+				filteredRow = append(filteredRow, row[columnIndex])
+			}
+		}
+		filteredRows[rowIndex] = filteredRow
+	}
+	return filteredColumns, filteredRows
 }
 
 func toInt64(value any) int64 {
