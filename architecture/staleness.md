@@ -475,6 +475,11 @@ was not persisted, so rename safety cannot be reconstructed for those rows.
 Pre-v2 combined River jobs remain decodable until already-persisted work drains;
 startup returns both legacy and v2 claimed signals to River unchanged.
 
+Exact resource claims cover local files, DuckDB database files, and warehouse
+relations. These kinds are part of both the reviewed-plan contract and the
+SQLite admission constraint; adding a new kind requires migrating both
+together so a valid plan cannot be rejected while admitting a scheduled run.
+
 Row edits use explicit server-side preservation flags. The browser can update
 cadence, timezone, catch-up, pause state, or replace overrides without
 round-tripping the local deployment pin or private values. Preserving the pin

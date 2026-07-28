@@ -30,6 +30,31 @@ Renart stores local operational state in the workspace's `.renart` directory.
 Keep pipeline source in Git, but do not commit state databases, credentials, or
 generated runtime files.
 
+## Connection credentials
+
+Connection secret values are write-only in the IDE. A replacement is stored in
+the operating system's credential store by default, or it can be bound to an
+existing environment variable for CI and headless machines. An encrypted local
+vault is also available when the system credential service cannot be used. It
+uses age's authenticated passphrase encryption, stores one per-project file in
+the user's application configuration directory outside Git, and holds its
+unlocked state only in the running Renart process. The project-side
+`.renart/secrets.yml` file contains provider references and connection-field
+coordinates, not resolved values, so it can be reviewed in Git.
+
+Renart resolves a credential only for the operation that needs it. It does not
+return current values to the browser or write them into plans, run records, or
+deployment snapshots. Existing inline credentials remain supported for
+compatibility until they are replaced; keep any config containing them private.
+
+The encrypted vault cannot recover a forgotten passphrase. It locks when
+Renart stops, so it is intended for interactive local or SSH sessions.
+Unattended schedules need a non-interactive source of trust, such as an
+environment binding; Renart never silently downgrades to plaintext.
+
+See [Manage connection credentials](/docs/connections-environments/managing-credentials/)
+for the UI workflow, source-selection guidance, and terminal commands.
+
 ## Website analytics
 
 The Renart application has no analytics integration. The documentation site's

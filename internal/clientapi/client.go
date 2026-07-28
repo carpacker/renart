@@ -132,6 +132,47 @@ func (c *Client) Workspace(ctx context.Context) (model.WorkspaceState, error) {
 	return state, err
 }
 
+func (c *Client) WorkspaceConfig(ctx context.Context) (service.WorkspaceConfigResponse, error) {
+	var result service.WorkspaceConfigResponse
+	err := c.getJSON(ctx, "/config", &result)
+	return result, err
+}
+
+func (c *Client) InitializeLocalVault(
+	ctx context.Context,
+	passphrase string,
+) (service.WorkspaceConfigResponse, error) {
+	return c.updateLocalVault(ctx, "/config/secrets/vault/initialize", passphrase)
+}
+
+func (c *Client) UnlockLocalVault(
+	ctx context.Context,
+	passphrase string,
+) (service.WorkspaceConfigResponse, error) {
+	return c.updateLocalVault(ctx, "/config/secrets/vault/unlock", passphrase)
+}
+
+func (c *Client) LockLocalVault(ctx context.Context) (service.WorkspaceConfigResponse, error) {
+	return c.updateLocalVault(ctx, "/config/secrets/vault/lock", "")
+}
+
+func (c *Client) ChangeLocalVaultPassphrase(
+	ctx context.Context,
+	passphrase string,
+) (service.WorkspaceConfigResponse, error) {
+	return c.updateLocalVault(ctx, "/config/secrets/vault/change-passphrase", passphrase)
+}
+
+func (c *Client) updateLocalVault(
+	ctx context.Context,
+	path string,
+	passphrase string,
+) (service.WorkspaceConfigResponse, error) {
+	var result service.WorkspaceConfigResponse
+	err := c.postJSON(ctx, path, map[string]string{"passphrase": passphrase}, &result)
+	return result, err
+}
+
 // RenderAsset previews the saved asset through the same read-only service used
 // by the Build editor. The server owns the decoded path and preview run ID.
 func (c *Client) RenderAsset(ctx context.Context, assetID string, request service.AssetRenderRequest) (service.AssetRenderResult, error) {

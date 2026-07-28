@@ -306,7 +306,7 @@ func validateScheduleSecretReference(reference string) error {
 	if err != nil {
 		return fmt.Errorf("invalid secret reference: %w", err)
 	}
-	if parsed.Provider != "env" && parsed.Provider != "local" {
+	if parsed.Provider != "env" && parsed.Provider != "local" && parsed.Provider != "local-vault" {
 		return fmt.Errorf("invalid secret reference: provider %q is not available", parsed.Provider)
 	}
 	return nil

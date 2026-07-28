@@ -83,12 +83,12 @@ func (s *ConfigService) UpdateEnvironmentAndPersist(
 	if currentName != nextName {
 		environment, found := nextManifest.Environments[currentName]
 		if found {
-			localReferences := uniqueLocalReferences(environment)
-			copyMutations, err := s.copyLocalSecretMutations(
+			storedReferences := uniqueStoredReferences(environment)
+			copyMutations, err := s.copyStoredSecretMutations(
 				ctx,
 				currentName,
 				nextName,
-				localReferences,
+				storedReferences,
 				true,
 			)
 			if err != nil {
@@ -147,11 +147,11 @@ func (s *ConfigService) CloneEnvironmentAndPersist(
 	nextManifest := cloneSecretManifest(manifest)
 	mutations := make([]providerMutation, 0)
 	if environment, found := manifest.Environments[sourceName]; found {
-		copyMutations, err := s.copyLocalSecretMutations(
+		copyMutations, err := s.copyStoredSecretMutations(
 			ctx,
 			sourceName,
 			targetName,
-			uniqueLocalReferences(environment),
+			uniqueStoredReferences(environment),
 			false,
 		)
 		if err != nil {
@@ -200,7 +200,7 @@ func (s *ConfigService) DeleteEnvironmentAndPersist(
 	nextManifest := cloneSecretManifest(manifest)
 	mutations := make([]providerMutation, 0)
 	if environment, found := nextManifest.Environments[environmentName]; found {
-		for _, reference := range uniqueLocalReferences(environment) {
+		for _, reference := range uniqueStoredReferences(environment) {
 			mutations = append(mutations, providerMutation{
 				environment: environmentName,
 				reference:   reference,
@@ -257,7 +257,7 @@ func (s *ConfigService) DeleteConnectionAndPersist(
 	if environment, found := nextManifest.Environments[environmentName]; found {
 		for fieldName, binding := range environment.Connections[connectionName] {
 			nextManifest.RemoveBinding(environmentName, connectionName, fieldName)
-			if binding.Reference.Provider == "local" {
+			if isEditorStoredSecretProvider(binding.Reference.Provider) {
 				mutations = append(mutations, providerMutation{
 					environment: environmentName,
 					reference:   binding.Reference,
@@ -414,7 +414,7 @@ func (s *ConfigService) prepareManagedConnectionSecrets(
 				}
 				change.Value = "${" + symbol + "}"
 				transformed.SecretChanges[field.Name] = change
-				if hasOldBinding && oldBinding.Reference.Provider == "local" &&
+				if hasOldBinding && isEditorStoredSecretProvider(oldBinding.Reference.Provider) &&
 					oldBinding.Reference.String() != reference.String() {
 					if err := appendProviderMutation(
 						&mutations,
@@ -430,9 +430,9 @@ func (s *ConfigService) prepareManagedConnectionSecrets(
 				}
 				continue
 			}
-			if hasRequestedBinding && reference.Provider != "local" {
+			if hasRequestedBinding && !isEditorStoredSecretProvider(reference.Provider) {
 				return params, nil, fmt.Errorf(
-					"connection secret field %q supports only local: and env: bindings in the editor",
+					"connection secret field %q supports only local:, local-vault:, and env: bindings in the editor",
 					field.Name,
 				)
 			}
@@ -450,7 +450,7 @@ func (s *ConfigService) prepareManagedConnectionSecrets(
 				if currentName != connectionName {
 					manifest.RemoveBinding(environmentName, connectionName, field.Name)
 				}
-				if hasOldBinding && oldBinding.Reference.Provider == "local" {
+				if hasOldBinding && isEditorStoredSecretProvider(oldBinding.Reference.Provider) {
 					if err := appendProviderMutation(
 						&mutations,
 						mutationByReference,
@@ -486,7 +486,7 @@ func (s *ConfigService) prepareManagedConnectionSecrets(
 			); err != nil {
 				return params, nil, err
 			}
-			if hasOldBinding && oldBinding.Reference.Provider == "local" &&
+			if hasOldBinding && isEditorStoredSecretProvider(oldBinding.Reference.Provider) &&
 				oldBinding.Reference.String() != reference.String() {
 				if err := appendProviderMutation(
 					&mutations,
@@ -505,7 +505,7 @@ func (s *ConfigService) prepareManagedConnectionSecrets(
 			if connectionName != currentName {
 				manifest.RemoveBinding(environmentName, connectionName, field.Name)
 			}
-			if hasOldBinding && oldBinding.Reference.Provider == "local" {
+			if hasOldBinding && isEditorStoredSecretProvider(oldBinding.Reference.Provider) {
 				if err := appendProviderMutation(
 					&mutations,
 					mutationByReference,
@@ -546,7 +546,19 @@ func managedSecretBinding(
 		symbol = managedSecretSymbol(connectionName, fieldName)
 	}
 	if requested == nil || strings.TrimSpace(requested.Ref) == "" {
-		if existing.Reference.Provider == "local" {
+		if requested != nil && strings.TrimSpace(requested.Provider) != "" {
+			provider := strings.TrimSpace(requested.Provider)
+			if !isEditorStoredSecretProvider(provider) {
+				return secretstore.Ref{}, "", false, fmt.Errorf(
+					"connection secret storage provider must be local or local-vault",
+				)
+			}
+			return secretstore.Ref{
+				Provider: provider,
+				Key:      managedSecretAlias(connectionName, fieldName),
+			}, symbol, true, nil
+		}
+		if isEditorStoredSecretProvider(existing.Reference.Provider) {
 			return existing.Reference, symbol, false, nil
 		}
 		return secretstore.Ref{
@@ -558,7 +570,17 @@ func managedSecretBinding(
 	if err != nil {
 		return secretstore.Ref{}, "", false, err
 	}
+	if provider := strings.TrimSpace(requested.Provider); provider != "" &&
+		provider != reference.Provider {
+		return secretstore.Ref{}, "", false, errors.New(
+			"connection secret binding provider does not match its reference",
+		)
+	}
 	return reference, symbol, true, nil
+}
+
+func isEditorStoredSecretProvider(provider string) bool {
+	return provider == "local" || provider == "local-vault"
 }
 
 func managedSecretSymbol(connectionName, fieldName string) string {
@@ -693,12 +715,12 @@ func manifestUsesSecretReference(
 	return false
 }
 
-func uniqueLocalReferences(environment secretstore.EnvironmentBindings) []secretstore.Ref {
+func uniqueStoredReferences(environment secretstore.EnvironmentBindings) []secretstore.Ref {
 	seen := make(map[string]struct{})
 	references := make([]secretstore.Ref, 0)
 	for _, fields := range environment.Connections {
 		for _, binding := range fields {
-			if binding.Reference.Provider != "local" {
+			if !isEditorStoredSecretProvider(binding.Reference.Provider) {
 				continue
 			}
 			key := binding.Reference.String()
@@ -712,7 +734,7 @@ func uniqueLocalReferences(environment secretstore.EnvironmentBindings) []secret
 	return references
 }
 
-func (s *ConfigService) copyLocalSecretMutations(
+func (s *ConfigService) copyStoredSecretMutations(
 	ctx context.Context,
 	sourceEnvironment string,
 	targetEnvironment string,
@@ -733,7 +755,7 @@ func (s *ConfigService) copyLocalSecretMutations(
 		}
 		if err != nil {
 			clearSecretMutationSnapshots(mutations)
-			return nil, fmt.Errorf("read local secret for environment %s: %w", sourceEnvironment, err)
+			return nil, fmt.Errorf("read stored secret for environment %s: %w", sourceEnvironment, err)
 		}
 		value := append([]byte(nil), lease.Bytes()...)
 		_ = lease.Close(ctx)

@@ -222,11 +222,12 @@ func (s *OnboardingService) PreviewDiscovery(ctx context.Context, req Onboarding
 		configService.ProjectIdentity().ID,
 		configService.secretResolver,
 	)
-	resolved, err := factory.ResolveConfig(
+	resolved, err := factory.ResolveConfigForConnections(
 		ctx,
 		selectedCfg,
 		environmentName,
 		secretstore.PurposeInspect,
+		connectionName,
 	)
 	if err != nil {
 		return OnboardingDiscoveryResult{
@@ -241,7 +242,13 @@ func (s *OnboardingService) PreviewDiscovery(ctx context.Context, req Onboarding
 		return OnboardingDiscoveryResult{Status: "error", Databases: []string{}, Tables: []SQLDiscoveryTableItem{}, Error: resolved.Redactor.Mask(err.Error())}, 400
 	}
 
-	conn := manager.GetConnection(connectionName)
+	conn, err := resolveRuntimeConnection(manager, connectionName)
+	if err != nil {
+		return OnboardingDiscoveryResult{
+			Status: "error", Databases: []string{}, Tables: []SQLDiscoveryTableItem{},
+			Error: safeSecretResolutionMessage(err),
+		}, 400
+	}
 	if conn == nil {
 		return OnboardingDiscoveryResult{Status: "error", Databases: []string{}, Tables: []SQLDiscoveryTableItem{}, Error: fmt.Sprintf("connection '%s' not found", connectionName)}, 400
 	}

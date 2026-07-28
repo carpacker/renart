@@ -52,7 +52,10 @@ func (s *SuggestionsService) Ingestr(ctx context.Context, connectionName, prefix
 		return IngestrSuggestionsResult{}, &APIError{Status: 500, Code: "connection_manager_failed", Message: err.Error()}
 	}
 
-	conn := manager.GetConnection(connectionName)
+	conn, err := resolveRuntimeConnection(manager, connectionName)
+	if err != nil {
+		return IngestrSuggestionsResult{}, &APIError{Status: 400, Code: "connection_resolution_failed", Message: err.Error()}
+	}
 	if conn == nil {
 		return IngestrSuggestionsResult{}, &APIError{Status: 400, Code: "connection_not_found", Message: fmt.Sprintf("connection '%s' not found", connectionName)}
 	}
@@ -166,7 +169,13 @@ func (s *SuggestionsService) BuildSQLS3PathSuggestionItems(ctx context.Context, 
 	var firstErr error
 
 	for _, connConfig := range cfg.SelectedEnvironment.Connections.S3 {
-		conn := manager.GetConnection(connConfig.Name)
+		conn, resolveErr := resolveRuntimeConnection(manager, connConfig.Name)
+		if resolveErr != nil {
+			if firstErr == nil {
+				firstErr = resolveErr
+			}
+			continue
+		}
 		if conn == nil {
 			continue
 		}

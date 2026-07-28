@@ -244,6 +244,12 @@ export type WorkspaceConfigConnectionType = {
   category: string;
 };
 
+export type WorkspaceLocalVault = {
+  state: string;
+  secret_count: number;
+  message?: string;
+};
+
 export type WorkspaceConfigConnection = {
   name: string;
   type: string;
@@ -284,6 +290,7 @@ export type WorkspaceConfigResponse = {
   connection_types: WorkspaceConfigConnectionType[];
   features?: Record<string, boolean>;
   retention: WorkspaceRetentionSettings;
+  secret_vault: WorkspaceLocalVault;
   parse_error?: string;
   secret_bindings_error?: string;
 };

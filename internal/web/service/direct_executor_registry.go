@@ -324,7 +324,10 @@ func (o directOracleBasicOperator) RunTask(ctx context.Context, p *pipeline.Pipe
 	if err != nil {
 		return err
 	}
-	rawConn := o.connection.GetConnection(connName)
+	rawConn, err := resolveRuntimeConnection(o.connection, connName)
+	if err != nil {
+		return err
+	}
 	if rawConn == nil {
 		return config.NewConnectionNotFoundError(ctx, "", connName)
 	}

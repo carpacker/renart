@@ -13,7 +13,7 @@ BRUIN_SQLPARSER_STUB_LIB_DIR = $(RENART_CACHE_HOME)/renart/bruin-sqlparser-stub/
 help:
 	@printf "Renart build targets\n\n"
 	@printf "  make dev               Hot-reload dev servers (Go backend + Vite frontend)\n"
-	@printf "  make build             Build Go binary, web app, and docs\n"
+	@printf "  make build             Build web app, Go binary, and docs\n"
 	@printf "  make check             Run Go tests plus web/docs builds\n"
 	@printf "  make release-check     Run local alpha release checks\n"
 	@printf "  make licenses          Regenerate third-party notices\n"
@@ -35,7 +35,7 @@ help:
 	@printf "  make docs-docker       Build Caddy docs image\n"
 	@printf "  make docs-docker-run   Serve docs image on http://127.0.0.1:8099\n"
 
-build: go-build web-build docs-build
+build: web-build go-build docs-build
 
 # Hot-reload dev environment. Override the workspace with WORKSPACE=path.
 dev:
@@ -65,7 +65,7 @@ bruin-sqlparser-stub:
 
 test: go-test
 
-go-build: bruin-sqlparser-stub
+go-build: web-build bruin-sqlparser-stub
 	CGO_LDFLAGS="-L$(BRUIN_SQLPARSER_STUB_LIB_DIR) $(CGO_LDFLAGS)" $(GO) build .
 
 # Builds the desktop helper used by `renart standalone`. Platform deps:

@@ -174,7 +174,7 @@ export function connectionSecretsReady({
     }
     const change = secretChanges[field.name];
     if (change?.action === "replace") {
-      if (change.binding?.ref.startsWith("env:")) {
+      if (change.binding?.ref?.startsWith("env:")) {
         return /^env:[A-Za-z_][A-Za-z0-9_]*$/.test(change.binding.ref);
       }
       return Boolean(change.value);

@@ -193,6 +193,7 @@ export function AssetConnectionEditor({
           onChange={reviewSelection}
           onNewConnection={() => setNewConnectionOpen(true)}
           onManageConnections={manageConnections}
+          onOpenConnection={currentConnectionName ? manageConnections : undefined}
         />
       )}
       {profileError ? (

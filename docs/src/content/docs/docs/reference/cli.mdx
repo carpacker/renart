@@ -23,6 +23,7 @@ with your installed version.
 | `renart type-check` | Validate a pipeline's saved assets and custom SQL checks. |
 | `renart deploy` | Snapshot a pipeline for scheduled execution. |
 | `renart init` | Scaffold a project. |
+| `renart secrets` | Manage write-only connection credentials and scoped child-process access. |
 
 Pipeline commands walk up from the current directory to find the project. Use
 `--workspace` on commands that support it to select another project explicitly.
@@ -239,6 +240,95 @@ repository when no repository encloses it.
 | `empty` | A minimal pipeline to build on. |
 | `retail` | An offline seed-and-SQL example with bundled CSV data. |
 | `chess` | A live example that reads the public Chess.com API. |
+
+## `renart secrets`
+
+Connection secret values are write-only. The CLI can replace a value, bind a
+field to an existing environment variable, inspect safe provider metadata, or
+remove a binding; it never prints or reveals the current value.
+
+```bash
+renart secrets status [options] [connection] [field]
+renart secrets set [options] <connection> <field>
+renart secrets remove [options] <connection> <field>
+renart secrets exec [options] <command> [args...]
+renart secrets vault <status|init|unlock|lock|change-passphrase>
+```
+
+| Command | Purpose |
+| --- | --- |
+| `status [connection] [field]` | Show provider, reference, and configured/missing/locked status without resolving or printing values. |
+| `set <connection> <field>` | Replace a value through a hidden prompt or standard input. |
+| `remove <connection> <field>` | Remove the binding and any value Renart owns in its selected local store. |
+| `exec <command> [args...]` | Resolve the selected environment for one child process. |
+| `vault status` | Show whether the project vault is uninitialized, locked, unlocked, or unavailable. |
+| `vault init` | Create the per-project encrypted vault. |
+| `vault unlock` | Unlock the vault inside the running Renart server. |
+| `vault lock` | Lock the vault inside the running Renart server. |
+| `vault change-passphrase` | Replace the passphrase of an unlocked vault. |
+
+Store a replacement in the operating system's credential store. An interactive
+terminal shows a hidden prompt; automation can pipe the value through stdin:
+
+```bash
+renart secrets set warehouse password
+printf '%s' "$NEW_PASSWORD" | renart secrets set warehouse password
+```
+
+Use the encrypted local vault when the operating-system credential service is
+unavailable. `init` prompts twice and creates a per-project encrypted file
+outside the repository. If a Renart server is running, initialization leaves
+its vault session unlocked; otherwise the new vault is locked when the command
+finishes.
+
+```bash
+renart secrets vault init
+renart secrets vault unlock
+renart secrets set --store vault warehouse password
+renart secrets vault lock
+```
+
+`unlock`, `lock`, and `change-passphrase` manage the session in a running
+Renart web or standalone process. Other CLI commands use an isolated session
+and prompt when they need to open the vault. Hidden passphrase prompts require
+an interactive terminal. Automation can set `RENART_VAULT_PASSPHRASE` for one
+command; Renart removes that variable from children started by `secrets exec`.
+Unattended runs are usually better served by an environment binding.
+Restarting Renart locks the vault.
+
+For CI or a headless machine, bind the field to an environment variable without
+sending its value to Renart:
+
+```bash
+renart secrets set warehouse password --from-env WAREHOUSE_PASSWORD
+renart secrets status warehouse password
+```
+
+`exec` resolves all managed connection secrets in the selected environment and
+adds their symbolic names only to one child process. Put the environment and
+workspace flags before the command:
+
+```bash
+renart secrets exec --env production -- your-command --flag
+```
+
+The child can read the configured symbols; the parent environment, command
+arguments, and project files do not receive resolved values. Like any process
+given credentials, the child itself can read or print them, so use this only
+with commands you trust.
+
+| Subcommand flag | Default | Meaning |
+| --- | --- | --- |
+| `--workspace` | discovered | Select a project root. |
+| `--env`, `--environment` | selected environment | Select the connection environment. |
+| `status --json` | off | Emit provider/reference metadata as JSON. Values remain excluded. |
+| `set --store` | `credential-store` | Store a replacement in `credential-store` or `vault`. |
+| `set --from-env NAME` | unset | Record an environment-variable binding instead of reading a replacement. |
+| `remove --yes` | interactive confirmation | Confirm removal; required in non-interactive sessions. |
+| `vault status --json` | off | Emit vault state and secret count as JSON. Values remain excluded. |
+
+For the end-to-end UI workflow and source-selection guidance, see
+[Manage connection credentials](/docs/connections-environments/managing-credentials/).
 
 ## Related
 

@@ -3,12 +3,15 @@ import {
   Boxes,
   CheckCircle2,
   Copy,
+  KeyRound,
   LoaderCircle,
+  LockKeyhole,
   Pencil,
   Plug,
   Plus,
   Sliders,
   Trash2,
+  UnlockKeyhole,
 } from "lucide-react";
 import { ComponentType, HTMLAttributes, ReactNode, useEffect, useMemo, useState } from "react";
 
@@ -24,6 +27,14 @@ import {
   DelimitedCardHeader,
   DelimitedCardTitle,
 } from "@/components/ui/delimited-card";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import {
   Field,
   FieldContent,
@@ -207,7 +218,7 @@ function SettingsShell({
             ))}
           </div>
         </aside>
-        <div className="min-h-0 overflow-hidden">
+        <div className="min-h-0 min-w-0 overflow-hidden">
           <ScrollArea
             className="mb-3 md:hidden"
             horizontalScrollBarClassName="hidden"
@@ -219,8 +230,8 @@ function SettingsShell({
               ))}
             </div>
           </ScrollArea>
-          <ScrollArea className="h-full min-h-0">
-            <div className="mx-auto max-w-4xl">
+          <ScrollArea className="h-full min-h-0" viewportClassName="[&>div]:!block [&>div]:w-full">
+            <div className="mx-auto w-full min-w-0 max-w-4xl">
               <Outlet />
             </div>
           </ScrollArea>
@@ -910,6 +921,7 @@ export function AppProjectConnectionsPage({
     <div className="flex min-h-0 flex-col gap-4">
       <SettingsStatus message={workspaceConfigStatusMessage} tone={workspaceConfigStatusTone} />
       <SecretBindingsAlert message={workspaceConfig?.secret_bindings_error} />
+      {workspaceConfig?.secret_vault ? <LocalVaultCard settings={settings} /> : null}
       {normalizedConfigEnvironments.length === 0 ? (
         <SettingsCard title="Connections">
           <p className="text-sm text-muted-foreground">
@@ -971,6 +983,210 @@ export function AppProjectConnectionsPage({
       )}
       <ConnectionSheet state={sheetState} onClose={closeSheet} settings={settings} />
     </div>
+  );
+}
+
+type LocalVaultDialogMode = "initialize" | "unlock" | "change";
+
+function LocalVaultCard({ settings }: { settings: ReturnType<typeof useWorkspaceSettingsData> }) {
+  const {
+    handleChangeLocalVaultPassphrase,
+    handleInitializeLocalVault,
+    handleLockLocalVault,
+    handleUnlockLocalVault,
+    workspaceConfig,
+    workspaceConfigBusy,
+  } = settings;
+  const vault = workspaceConfig?.secret_vault;
+  const [dialogMode, setDialogMode] = useState<LocalVaultDialogMode | null>(null);
+  const [passphrase, setPassphrase] = useState("");
+  const [confirmation, setConfirmation] = useState("");
+  const [error, setError] = useState("");
+
+  if (!vault) {
+    return null;
+  }
+
+  const closeDialog = () => {
+    setDialogMode(null);
+    setPassphrase("");
+    setConfirmation("");
+    setError("");
+  };
+  const needsConfirmation = dialogMode === "initialize" || dialogMode === "change";
+  const passphraseValid =
+    passphrase.length > 0 &&
+    (!needsConfirmation || (Array.from(passphrase).length >= 12 && passphrase === confirmation));
+
+  const submit = async () => {
+    if (!dialogMode || !passphraseValid) {
+      return;
+    }
+    setError("");
+    try {
+      if (dialogMode === "initialize") {
+        await handleInitializeLocalVault(passphrase);
+      } else if (dialogMode === "unlock") {
+        await handleUnlockLocalVault(passphrase);
+      } else {
+        await handleChangeLocalVaultPassphrase(passphrase);
+      }
+      closeDialog();
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Could not update the encrypted vault.");
+    }
+  };
+
+  const badgeVariant = vault.state === "unlocked" ? "secondary" : "outline";
+  const statusLabel =
+    vault.state === "uninitialized"
+      ? "Not set up"
+      : vault.state === "unavailable"
+        ? "Unavailable"
+        : vault.state === "unlocked"
+          ? "Unlocked"
+          : "Locked";
+
+  return (
+    <>
+      <SettingsCard
+        title={
+          <span className="flex items-center gap-2">
+            <KeyRound className="size-4 text-primary" />
+            Encrypted vault
+            <Badge variant={badgeVariant}>{statusLabel}</Badge>
+          </span>
+        }
+        description="A passphrase-protected credential fallback for SSH, headless sessions, and systems without a credential service."
+        action={
+          vault.state === "uninitialized" ? (
+            <Button
+              size="sm"
+              variant="outline"
+              disabled={workspaceConfigBusy}
+              onClick={() => setDialogMode("initialize")}
+            >
+              Set up
+            </Button>
+          ) : vault.state === "locked" ? (
+            <Button
+              size="sm"
+              variant="outline"
+              disabled={workspaceConfigBusy}
+              onClick={() => setDialogMode("unlock")}
+            >
+              <UnlockKeyhole data-icon="inline-start" />
+              Unlock
+            </Button>
+          ) : vault.state === "unlocked" ? (
+            <Button
+              size="sm"
+              variant="outline"
+              disabled={workspaceConfigBusy}
+              onClick={() => void handleLockLocalVault().catch(() => {})}
+            >
+              <LockKeyhole data-icon="inline-start" />
+              Lock
+            </Button>
+          ) : null
+        }
+      >
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+          <p className="text-sm text-muted-foreground">
+            {vault.message} The encrypted file lives outside this Git repository.
+          </p>
+          {vault.state === "unlocked" ? (
+            <div className="flex shrink-0 items-center gap-2">
+              <span className="text-xs text-muted-foreground">
+                {vault.secret_count} secret{vault.secret_count === 1 ? "" : "s"}
+              </span>
+              <Button
+                size="sm"
+                variant="ghost"
+                disabled={workspaceConfigBusy}
+                onClick={() => setDialogMode("change")}
+              >
+                Change passphrase
+              </Button>
+            </div>
+          ) : null}
+        </div>
+      </SettingsCard>
+
+      <Dialog open={dialogMode !== null} onOpenChange={(open) => !open && closeDialog()}>
+        <DialogContent>
+          <form
+            className="grid gap-4"
+            onSubmit={(event) => {
+              event.preventDefault();
+              void submit();
+            }}
+          >
+            <DialogHeader>
+              <DialogTitle>
+                {dialogMode === "initialize"
+                  ? "Set up encrypted vault"
+                  : dialogMode === "change"
+                    ? "Change vault passphrase"
+                    : "Unlock encrypted vault"}
+              </DialogTitle>
+              <DialogDescription>
+                {dialogMode === "unlock"
+                  ? "The passphrase stays in this Renart process until you lock the vault or stop Renart."
+                  : "Use at least 12 characters. Renart cannot recover a forgotten passphrase."}
+              </DialogDescription>
+            </DialogHeader>
+            <FieldGroup>
+              <Field>
+                <Label htmlFor="local-vault-passphrase">
+                  {dialogMode === "change" ? "New passphrase" : "Passphrase"}
+                </Label>
+                <Input
+                  id="local-vault-passphrase"
+                  type="password"
+                  autoComplete={dialogMode === "unlock" ? "current-password" : "new-password"}
+                  value={passphrase}
+                  onChange={(event) => setPassphrase(event.target.value)}
+                  autoFocus
+                />
+              </Field>
+              {needsConfirmation ? (
+                <Field>
+                  <Label htmlFor="local-vault-passphrase-confirmation">Confirm passphrase</Label>
+                  <Input
+                    id="local-vault-passphrase-confirmation"
+                    type="password"
+                    autoComplete="new-password"
+                    value={confirmation}
+                    onChange={(event) => setConfirmation(event.target.value)}
+                  />
+                </Field>
+              ) : null}
+            </FieldGroup>
+            {needsConfirmation && passphrase && Array.from(passphrase).length < 12 ? (
+              <p className="text-xs text-destructive">Use at least 12 characters.</p>
+            ) : null}
+            {needsConfirmation && confirmation && passphrase !== confirmation ? (
+              <p className="text-xs text-destructive">The passphrases do not match.</p>
+            ) : null}
+            {error ? <p className="text-xs text-destructive">{error}</p> : null}
+            <DialogFooter>
+              <Button type="button" variant="outline" onClick={closeDialog}>
+                Cancel
+              </Button>
+              <Button type="submit" disabled={!passphraseValid || workspaceConfigBusy}>
+                {workspaceConfigBusy ? <LoaderCircle className="animate-spin" /> : null}
+                {dialogMode === "initialize"
+                  ? "Set up vault"
+                  : dialogMode === "change"
+                    ? "Change passphrase"
+                    : "Unlock"}
+              </Button>
+            </DialogFooter>
+          </form>
+        </DialogContent>
+      </Dialog>
+    </>
   );
 }
 
@@ -1108,8 +1324,8 @@ function ConnectionSheet({
 
   return (
     <Sheet open={state !== null} onOpenChange={(open) => !open && onClose()}>
-      <SheetContent className="w-full sm:max-w-xl">
-        <SheetHeader>
+      <SheetContent className="min-h-0 overflow-hidden data-[side=right]:w-full data-[side=right]:max-w-full data-[side=right]:sm:max-w-xl">
+        <SheetHeader className="shrink-0 p-4 sm:p-6">
           <SheetTitle className="flex items-center gap-2">
             <Plug className="size-4 text-primary" />
             {mode === "create" ? "New connection" : (form.activeConnection?.name ?? "Connection")}
@@ -1120,7 +1336,10 @@ function ConnectionSheet({
               : `Leave sensitive fields blank to keep their current value in ${state?.environment ?? ""}.`}
           </SheetDescription>
         </SheetHeader>
-        <div className="flex-1 overflow-auto px-4">
+        <ScrollArea
+          className="min-h-0 flex-1"
+          viewportClassName="px-4 pb-4 [&>div]:!block [&>div]:w-full"
+        >
           <div className="grid gap-4">
             {workspaceConfigStatusTone === "error" ? (
               <SettingsStatus
@@ -1142,6 +1361,7 @@ function ConnectionSheet({
               environments={normalizedConfigEnvironments}
               mode={mode}
               selectedConnectionType={form.selectedConnectionType}
+              localVaultState={workspaceConfig?.secret_vault.state}
               secretFields={form.activeConnection?.secret_fields}
               selectedEnvironment={state?.environment ?? null}
               environmentDisabled={mode === "edit"}
@@ -1187,9 +1407,9 @@ function ConnectionSheet({
               onValidate={() => void validateConnection()}
             />
           </div>
-        </div>
-        <SheetFooter>
-          <div className="flex w-full items-center justify-between gap-2">
+        </ScrollArea>
+        <SheetFooter className="shrink-0 p-4 sm:p-6">
+          <div className="flex w-full flex-wrap items-center justify-between gap-2">
             <div className="flex items-center gap-2">
               {mode === "edit" && form.activeConnection ? (
                 <ConfirmDeleteButton
@@ -1253,7 +1473,7 @@ function SettingsCard({
   return (
     <DelimitedCard>
       <DelimitedCardHeader>
-        <div className="min-w-0">
+        <div className="min-w-0 flex-1">
           <DelimitedCardTitle>{title}</DelimitedCardTitle>
           {description ? <DelimitedCardDescription>{description}</DelimitedCardDescription> : null}
         </div>

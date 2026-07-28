@@ -53,6 +53,7 @@ import { ProjectSwitcher } from "./project-switcher";
 import { AppCommandPalette } from "./app-command-palette";
 import { navItems } from "./app-data";
 import { NavLinkButton } from "./app-primitives";
+import { LocalVaultControl } from "./local-vault-control";
 import { ServerOfflineOverlay } from "./server-offline-overlay";
 import { SourceControlDiffViewer } from "./source-control-diff-viewer";
 
@@ -89,6 +90,7 @@ export function AppShell() {
         <div className="flex-1" />
 
         <AppExecutionSelector />
+        <LocalVaultControl />
 
         <Sheet>
           <SheetTrigger asChild>

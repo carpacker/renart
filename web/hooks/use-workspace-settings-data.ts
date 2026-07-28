@@ -4,6 +4,7 @@ import { atom, useAtom } from "jotai";
 import { useCallback, useEffect, useMemo } from "react";
 
 import {
+  changeLocalVaultPassphrase,
   cloneWorkspaceEnvironment,
   createWorkspaceConnection,
   createWorkspaceEnvironment,
@@ -11,6 +12,9 @@ import {
   deleteWorkspaceEnvironment,
   getWorkspaceConfig,
   getWorkspaceEnvironmentPolicy,
+  initializeLocalVault,
+  lockLocalVault,
+  unlockLocalVault,
   updateWorkspaceEnvironmentPolicy,
   updateWorkspaceConnection,
   updateWorkspaceEnvironment,
@@ -225,6 +229,38 @@ export function useWorkspaceSettingsData() {
     [runWorkspaceConfigMutation],
   );
 
+  const handleInitializeLocalVault = useCallback(
+    (passphrase: string) =>
+      runWorkspaceConfigMutation(
+        () => initializeLocalVault(passphrase),
+        "Encrypted vault set up and unlocked for this Renart session.",
+      ),
+    [runWorkspaceConfigMutation],
+  );
+
+  const handleUnlockLocalVault = useCallback(
+    (passphrase: string) =>
+      runWorkspaceConfigMutation(
+        () => unlockLocalVault(passphrase),
+        "Encrypted vault unlocked for this Renart session.",
+      ),
+    [runWorkspaceConfigMutation],
+  );
+
+  const handleLockLocalVault = useCallback(
+    () => runWorkspaceConfigMutation(() => lockLocalVault(), "Encrypted vault locked."),
+    [runWorkspaceConfigMutation],
+  );
+
+  const handleChangeLocalVaultPassphrase = useCallback(
+    (passphrase: string) =>
+      runWorkspaceConfigMutation(
+        () => changeLocalVaultPassphrase(passphrase),
+        "Encrypted vault passphrase changed.",
+      ),
+    [runWorkspaceConfigMutation],
+  );
+
   const loadWorkspaceEnvironmentPolicy = useCallback(
     async (environment: string) => {
       const response = await getWorkspaceEnvironmentPolicy(environment);
@@ -271,15 +307,19 @@ export function useWorkspaceSettingsData() {
 
   return {
     fallbackConfigEnvironment,
+    handleChangeLocalVaultPassphrase,
     handleCloneWorkspaceEnvironment,
     handleCreateWorkspaceConnection,
     handleCreateWorkspaceEnvironment,
     handleDeleteWorkspaceConnection,
     handleDeleteWorkspaceEnvironment,
+    handleInitializeLocalVault,
+    handleLockLocalVault,
     handleUpdateWorkspaceConnection,
     handleUpdateWorkspaceEnvironment,
     handleUpdateWorkspaceEnvironmentPolicy,
     handleUpdateWorkspaceProject,
+    handleUnlockLocalVault,
     loadWorkspaceEnvironmentPolicy,
     loadWorkspaceConfig,
     normalizedConfigEnvironments,

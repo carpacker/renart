@@ -71,7 +71,10 @@ func resolveLoadConnectionURI(manager config.ConnectionGetter, connectionName st
 		return "", errors.New("connection manager is required")
 	}
 	name := strings.TrimSpace(connectionName)
-	conn := manager.GetConnection(name)
+	conn, err := resolveRuntimeConnection(manager, name)
+	if err != nil {
+		return "", err
+	}
 	if conn == nil {
 		return "", fmt.Errorf("connection %q was not found", name)
 	}

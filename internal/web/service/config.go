@@ -48,6 +48,12 @@ type WorkspaceConfigConnectionType struct {
 	Category string `json:"category"`
 }
 
+type WorkspaceLocalVault struct {
+	State       string `json:"state"`
+	SecretCount int    `json:"secret_count"`
+	Message     string `json:"message,omitempty"`
+}
+
 type WorkspaceConfigConnection struct {
 	Name         string                                `json:"name"`
 	Type         string                                `json:"type"`
@@ -91,6 +97,7 @@ type WorkspaceConfigResponse struct {
 	ConnectionTypes     []WorkspaceConfigConnectionType `json:"connection_types"`
 	Features            map[string]bool                 `json:"features,omitempty"`
 	Retention           WorkspaceRetentionSettings      `json:"retention"`
+	SecretVault         WorkspaceLocalVault             `json:"secret_vault"`
 	ParseError          string                          `json:"parse_error,omitempty"`
 	SecretBindingsError string                          `json:"secret_bindings_error,omitempty"`
 }
@@ -126,13 +133,15 @@ type WorkspaceConnectionSecretChange struct {
 }
 
 type WorkspaceConnectionSecretBinding struct {
-	Ref string `json:"ref"`
+	Ref      string `json:"ref,omitempty"`
+	Provider string `json:"provider,omitempty"`
 }
 
 type ConfigService struct {
 	workspaceRoot  string
 	configPath     string
 	secretResolver *secretstore.Resolver
+	secretVault    *secretstore.LocalVaultProvider
 	mu             sync.Mutex
 }
 
@@ -146,15 +155,25 @@ func WithSecretResolver(resolver *secretstore.Resolver) ConfigServiceOption {
 	}
 }
 
+func WithSecretVault(vault *secretstore.LocalVaultProvider) ConfigServiceOption {
+	return func(service *ConfigService) {
+		if vault != nil {
+			service.secretVault = vault
+		}
+	}
+}
+
 func NewConfigService(workspaceRoot, configPath string, options ...ConfigServiceOption) *ConfigService {
 	if strings.TrimSpace(configPath) == "" {
 		configPath = filepath.Join(workspaceRoot, ".bruin.yml")
 	}
 
+	vault := secretstore.NewLocalVaultProvider("")
 	service := &ConfigService{
 		workspaceRoot:  workspaceRoot,
 		configPath:     configPath,
-		secretResolver: secretstore.NewDefaultResolver(),
+		secretResolver: secretstore.NewDefaultResolverWithLocalVault(vault),
+		secretVault:    vault,
 	}
 	for _, option := range options {
 		if option != nil {
@@ -162,6 +181,25 @@ func NewConfigService(workspaceRoot, configPath string, options ...ConfigService
 		}
 	}
 	return service
+}
+
+func (s *ConfigService) InitializeLocalVault(ctx context.Context, passphrase []byte) error {
+	return s.secretVault.Initialize(ctx, s.ProjectIdentity().ID, passphrase)
+}
+
+func (s *ConfigService) UnlockLocalVault(ctx context.Context, passphrase []byte) error {
+	return s.secretVault.Unlock(ctx, s.ProjectIdentity().ID, passphrase)
+}
+
+func (s *ConfigService) LockLocalVault() {
+	s.secretVault.Lock(s.ProjectIdentity().ID)
+}
+
+func (s *ConfigService) ChangeLocalVaultPassphrase(
+	ctx context.Context,
+	passphrase []byte,
+) error {
+	return s.secretVault.ChangePassphrase(ctx, s.ProjectIdentity().ID, passphrase)
 }
 
 func (s *ConfigService) ConfigPath() string {
@@ -267,7 +305,33 @@ func (s *ConfigService) LoadForEditing() (*config.Config, string, error) {
 	if err != nil {
 		return nil, s.configPath, err
 	}
+	if err := restoreManagedSecretPlaceholders(
+		afero.NewOsFs(),
+		s.configPath,
+		cfg,
+		false,
+	); err != nil {
+		return nil, s.configPath, err
+	}
 
+	return cfg, s.configPath, nil
+}
+
+// LoadReadOnly loads the effective config without creating project files or
+// updating .gitignore. Runtime paths may be made absolute by Bruin; callers
+// must not persist this representation.
+func (s *ConfigService) LoadReadOnly() (*config.Config, string, error) {
+	fs := afero.NewOsFs()
+	cfg, err := config.LoadFromFileOrEnv(fs, s.configPath)
+	if err != nil {
+		return nil, s.configPath, err
+	}
+	if cfg == nil {
+		cfg = &config.Config{}
+	}
+	if err := restoreManagedSecretPlaceholders(fs, s.configPath, cfg, true); err != nil {
+		return nil, s.configPath, err
+	}
 	return cfg, s.configPath, nil
 }
 
@@ -308,6 +372,7 @@ func (s *ConfigService) BuildResponse(configPath string, cfg *config.Config) Wor
 		ConnectionTypes:     BuildWorkspaceConfigConnectionTypes(),
 		Features:            project.Features,
 		Retention:           workspaceRetentionSettings(project.Retention),
+		SecretVault:         workspaceLocalVaultStatus(s.secretVault.Status(project.ID)),
 	}
 	if manifestErr != nil {
 		response.SecretBindingsError = manifestErr.Error()
@@ -356,11 +421,20 @@ func (s *ConfigService) decorateWorkspaceConnectionSecrets(
 			binding, hasBinding := manifest.Binding(environmentName, item.Name, fieldDef.Name)
 			if len(symbolMatch) != 2 {
 				switch {
-				case rawValue == "":
+				case rawValue == "" && fieldDef.IsSensitiveFile:
 					descriptor.Status = string(secretstore.StatusMissing)
-					descriptor.Provider = "local"
+					descriptor.Provider = "file"
 					descriptor.Writable = true
 					descriptor.Rotatable = true
+				case rawValue == "":
+					descriptor = s.describeWorkspaceSecret(
+						projectID,
+						environmentName,
+						secretstore.Ref{
+							Provider: "local",
+							Key:      managedSecretAlias(item.Name, fieldDef.Name),
+						},
+					)
 				case fieldDef.IsSensitiveFile:
 					descriptor.Status = string(secretstore.StatusConfigured)
 					descriptor.Provider = "file"
@@ -371,7 +445,20 @@ func (s *ConfigService) decorateWorkspaceConnectionSecrets(
 					descriptor.Provider = "inline"
 					descriptor.Writable = true
 					descriptor.Rotatable = true
-					descriptor.Message = "Replace this value to move it from the local config into the system credential store."
+					localDescriptor := s.describeWorkspaceSecret(
+						projectID,
+						environmentName,
+						secretstore.Ref{
+							Provider: "local",
+							Key:      managedSecretAlias(item.Name, fieldDef.Name),
+						},
+					)
+					if localDescriptor.Status == string(secretstore.StatusPermissionRequired) ||
+						localDescriptor.Status == string(secretstore.StatusUnavailable) {
+						descriptor.Message = "The current inline value remains usable. " + localDescriptor.Message
+					} else {
+						descriptor.Message = "Replace this value to move it from the local config into the system credential store."
+					}
 				}
 				if hasBinding {
 					descriptor.Message = fmt.Sprintf(
@@ -390,9 +477,9 @@ func (s *ConfigService) decorateWorkspaceConnectionSecrets(
 					Reference: secretstore.Ref{Provider: "env", Key: symbol},
 				}
 			}
-			descriptor.Provider = binding.Reference.Provider
-			descriptor.Reference = binding.Reference.String()
 			if binding.Symbol != symbol {
+				descriptor.Provider = binding.Reference.Provider
+				descriptor.Reference = binding.Reference.String()
 				descriptor.Status = string(secretstore.StatusUnavailable)
 				descriptor.Writable = false
 				descriptor.Rotatable = false
@@ -405,33 +492,55 @@ func (s *ConfigService) decorateWorkspaceConnectionSecrets(
 				continue
 			}
 
-			status, err := s.secretResolver.Stat(context.Background(), secretstore.ResolveRequest{
-				ProjectID:   projectID,
-				Environment: environmentName,
-				Reference:   binding.Reference,
-				Purpose:     secretstore.PurposeSecretAdministration,
-			})
-			if status.State == "" {
-				status.State = secretstore.StatusUnavailable
-			}
-			descriptor.Status = string(status.State)
-			descriptor.Writable = status.Writable
-			descriptor.Rotatable = status.Rotatable
-			if err != nil {
-				descriptor.Message = safeSecretStatusMessage(binding.Reference.Provider, err)
-			}
+			descriptor = s.describeWorkspaceSecret(projectID, environmentName, binding.Reference)
 			item.SecretFields[fieldDef.Name] = descriptor
 		}
 	}
 }
 
+func (s *ConfigService) describeWorkspaceSecret(
+	projectID string,
+	environmentName string,
+	reference secretstore.Ref,
+) WorkspaceConfigSecretField {
+	descriptor := WorkspaceConfigSecretField{
+		Provider:  reference.Provider,
+		Reference: reference.String(),
+	}
+	status, err := s.secretResolver.Stat(context.Background(), secretstore.ResolveRequest{
+		ProjectID:   projectID,
+		Environment: environmentName,
+		Reference:   reference,
+		Purpose:     secretstore.PurposeSecretAdministration,
+	})
+	if status.State == "" {
+		status.State = secretstore.StatusUnavailable
+	}
+	descriptor.Status = string(status.State)
+	descriptor.Writable = status.Writable
+	descriptor.Rotatable = status.Rotatable
+	if err != nil {
+		descriptor.Message = safeSecretStatusMessage(reference.Provider, err)
+	}
+	return descriptor
+}
+
 func safeSecretStatusMessage(provider string, err error) string {
 	switch {
 	case errors.Is(err, secretstore.ErrPermissionRequired):
+		if provider == "local" {
+			return "The system credential store is locked. Unlock it in this user session or choose Environment for SSH and headless sessions."
+		}
+		if provider == "local-vault" {
+			return "The encrypted local vault is locked. Unlock it in Connection settings for this Renart session."
+		}
 		return fmt.Sprintf("%s credential access requires permission.", provider)
 	case errors.Is(err, secretstore.ErrUnavailable):
 		if provider == "local" {
-			return "The system credential store is unavailable or locked. Use an environment reference on headless systems."
+			return "The system credential store is unavailable. Choose Encrypted vault or Environment for SSH and headless sessions."
+		}
+		if provider == "local-vault" {
+			return "The encrypted local vault is unavailable or has not been set up."
 		}
 		return fmt.Sprintf("The %s secret provider is unavailable.", provider)
 	case errors.Is(err, secretstore.ErrUnknownProvider):
@@ -468,7 +577,16 @@ func (s *ConfigService) BuildParseErrorResponse(parseErr error) WorkspaceConfigR
 		ConnectionTypes: BuildWorkspaceConfigConnectionTypes(),
 		Features:        project.Features,
 		Retention:       workspaceRetentionSettings(project.Retention),
+		SecretVault:     workspaceLocalVaultStatus(s.secretVault.Status(project.ID)),
 		ParseError:      parseErr.Error(),
+	}
+}
+
+func workspaceLocalVaultStatus(status secretstore.LocalVaultStatus) WorkspaceLocalVault {
+	return WorkspaceLocalVault{
+		State:       string(status.State),
+		SecretCount: status.SecretCount,
+		Message:     status.Message,
 	}
 }
 
@@ -621,11 +739,12 @@ func (s *ConfigService) TestConnection(ctx context.Context, cfg *config.Config, 
 		s.ProjectIdentity().ID,
 		s.secretResolver,
 	)
-	resolved, err := factory.ResolveConfig(
+	resolved, err := factory.ResolveConfigForConnections(
 		ctx,
 		selectedCfg,
 		environmentName,
 		secretstore.PurposeConnectionValidation,
+		connectionName,
 	)
 	if err != nil {
 		return "", err
@@ -638,7 +757,10 @@ func (s *ConfigService) TestConnection(ctx context.Context, cfg *config.Config, 
 		return "", errors.New(redactor.Mask(err.Error()))
 	}
 
-	conn := manager.GetConnection(connectionName)
+	conn, err := resolveRuntimeConnection(manager, connectionName)
+	if err != nil {
+		return "", err
+	}
 	if conn == nil {
 		return "", fmt.Errorf("connection %q not found", connectionName)
 	}
@@ -675,8 +797,8 @@ func (s *ConfigService) resolveDraftConnectionSecretChanges(
 			return nil, nil, fmt.Errorf("invalid binding for connection secret field %q: %w", fieldName, err)
 		}
 		switch reference.Provider {
-		case "local":
-			// Local replacements carry the write-only value in this request.
+		case "local", "local-vault":
+			// Stored replacements carry the write-only value in this request.
 			// The connection test uses it in memory but does not persist it.
 			continue
 		case "env":
@@ -688,7 +810,7 @@ func (s *ConfigService) resolveDraftConnectionSecretChanges(
 			}
 		default:
 			return nil, nil, fmt.Errorf(
-				"connection secret field %q supports only local: and env: bindings in the editor",
+				"connection secret field %q supports only local:, local-vault:, and env: bindings in the editor",
 				fieldName,
 			)
 		}
@@ -828,7 +950,37 @@ func BuildWorkspaceConfigConnectionTypes() []WorkspaceConfigConnectionType {
 func buildWorkspaceConfigFieldDefs(connectionType reflect.Type) []WorkspaceConfigFieldDef {
 	fields := make([]WorkspaceConfigFieldDef, 0, connectionType.NumField())
 	appendWorkspaceConfigFieldDefs(connectionType, &fields)
+	sort.SliceStable(fields, func(left, right int) bool {
+		return workspaceConnectionFieldOrder(fields[left]) < workspaceConnectionFieldOrder(fields[right])
+	})
 	return fields
+}
+
+// workspaceConnectionFieldOrder keeps connector-specific fields in their
+// declared order inside broad user-facing groups: destination details first,
+// authentication next, and tuning controls last.
+func workspaceConnectionFieldOrder(field WorkspaceConfigFieldDef) int {
+	name := strings.ToLower(field.Name)
+	if name == "max_concurrent_assets" {
+		return 100
+	}
+	if strings.HasPrefix(name, "max_") ||
+		strings.HasPrefix(name, "pool_") ||
+		strings.Contains(name, "timeout") ||
+		strings.Contains(name, "page_size") ||
+		strings.Contains(name, "prefetch") ||
+		strings.HasPrefix(name, "disable_") {
+		return 80
+	}
+	if field.IsSensitive || field.IsSensitiveFile {
+		return 60
+	}
+	switch name {
+	case "username", "user", "profile", "client_id", "tenant_id":
+		return 50
+	default:
+		return 20
+	}
 }
 
 func appendWorkspaceConfigFieldDefs(connectionType reflect.Type, fields *[]WorkspaceConfigFieldDef) {

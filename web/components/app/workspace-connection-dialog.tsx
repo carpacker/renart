@@ -116,7 +116,10 @@ export function WorkspaceConnectionDialog({
             Sensitive values are write-only and never returned to the browser.
           </DialogDescription>
         </DialogHeader>
-        <ScrollArea className="min-h-0 min-w-0 flex-1" viewportClassName="p-1">
+        <ScrollArea
+          className="min-h-0 min-w-0 flex-1"
+          viewportClassName="p-1 [&>div]:!block [&>div]:w-full"
+        >
           <div className="grid min-w-0 gap-4">
             <WorkspaceConnectionFormFields
               busy={settings.workspaceConfigBusy}
@@ -126,6 +129,7 @@ export function WorkspaceConnectionDialog({
               environments={settings.normalizedConfigEnvironments}
               mode="create"
               selectedConnectionType={form.selectedConnectionType}
+              localVaultState={settings.workspaceConfig?.secret_vault.state}
               secretFields={form.activeConnection?.secret_fields}
               selectedEnvironment={environment}
               environmentDisabled

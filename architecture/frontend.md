@@ -93,7 +93,13 @@ not underscore-flattened route hacks.
   [project switcher](../web/components/app/project-switcher.tsx), including the
   persisted Light / Dark / System appearance selector, the
   [command palette](../web/components/app/app-command-palette.tsx), and the routed
-  `<Outlet />`. The source-control sheet renders worktree and staged changes
+  `<Outlet />`. Once an encrypted local vault exists, the header shows its
+  lock state beside the environment and time-range selector. The session can
+  be locked or unlocked from a compact desktop popover or a mobile dialog;
+  setup and passphrase changes remain in Project settings. The control uses the
+  shared workspace-config state, so it reflects the same process-local vault
+  session used by connection execution. The source-control sheet renders
+  worktree and staged changes
   with Monaco's inline diff editor;
   SQL, Python, YAML asset definitions, JSON, Markdown, and ordinary project
   files select syntax highlighting from their path. Notebook-folder selections

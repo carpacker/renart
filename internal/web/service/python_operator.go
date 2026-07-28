@@ -353,7 +353,10 @@ func (o *renartPythonOperator) startBroker(ctx context.Context, p *pipeline.Pipe
 // runBrokerQuery executes one SDK query on a named project connection,
 // inside this process — the Python side never sees the credentials.
 func (o *renartPythonOperator) runBrokerQuery(ctx context.Context, connectionName, sql string) (*query.QueryResult, error) {
-	conn := o.manager.GetConnection(connectionName)
+	conn, err := resolveRuntimeConnection(o.manager, connectionName)
+	if err != nil {
+		return nil, err
+	}
 	if conn == nil {
 		return nil, fmt.Errorf("connection %q was not found in the project", connectionName)
 	}
@@ -690,7 +693,10 @@ func (o *renartPythonOperator) destinationIsDuckDB(connectionName string) bool {
 // asset's query, so create+replace / append / delete+insert / merge behave
 // exactly as they do for SQL assets — and there is no second writer process.
 func (o *renartPythonOperator) loadParquetIntoDuckDB(ctx context.Context, run pythonRun, connectionName, parquetPath string) error {
-	rawConn := o.manager.GetConnection(connectionName)
+	rawConn, err := resolveRuntimeConnection(o.manager, connectionName)
+	if err != nil {
+		return err
+	}
 	conn, ok := rawConn.(duck.DuckDBClient)
 	if !ok {
 		return fmt.Errorf("connection %q is not a duckdb connection", connectionName)

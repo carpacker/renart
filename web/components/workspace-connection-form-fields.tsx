@@ -46,6 +46,7 @@ export function WorkspaceConnectionFormFields({
   environments,
   mode,
   selectedConnectionType,
+  localVaultState,
   secretFields,
   selectedEnvironment,
   environmentDisabled = false,
@@ -70,6 +71,7 @@ export function WorkspaceConnectionFormFields({
   environments: WorkspaceConfigEnvironment[];
   mode: ConnectionMode;
   selectedConnectionType: WorkspaceConfigConnectionType | null;
+  localVaultState?: string;
   secretFields?: Record<string, WorkspaceConfigSecretField>;
   selectedEnvironment?: string | null;
   environmentDisabled?: boolean;
@@ -156,6 +158,12 @@ export function WorkspaceConnectionFormFields({
               const descriptor = secretFields?.[field.name];
               const display = secretFieldDisplay(change, descriptor);
               const storageMode = secretStorageMode(change, descriptor);
+              const help = secretFieldHelp(
+                field.is_sensitive_file,
+                storageMode,
+                change,
+                descriptor,
+              );
               const environmentName = secretEnvironmentName(change, descriptor);
               const inputValue =
                 change.action === "clear"
@@ -195,7 +203,11 @@ export function WorkspaceConnectionFormFields({
                         type={
                           storageMode === "env" || field.is_sensitive_file ? "text" : "password"
                         }
-                        autoComplete={storageMode === "local" ? "new-password" : "off"}
+                        autoComplete={
+                          storageMode === "local" || storageMode === "local-vault"
+                            ? "new-password"
+                            : "off"
+                        }
                         value={inputValue}
                         onChange={(event) => {
                           const value = event.target.value;
@@ -208,7 +220,15 @@ export function WorkspaceConnectionFormFields({
                           }
                           onSecretChange(
                             field.name,
-                            value ? { action: "replace", value } : { action: "keep" },
+                            value
+                              ? {
+                                  action: "replace",
+                                  value,
+                                  binding: field.is_sensitive_file
+                                    ? undefined
+                                    : { provider: storageMode },
+                                }
+                              : { action: "keep" },
                           );
                         }}
                         placeholder={
@@ -240,12 +260,13 @@ export function WorkspaceConnectionFormFields({
                         </Button>
                       ) : null}
                     </div>
-                    <div className="flex min-w-0 flex-col gap-1 sm:flex-row sm:items-center">
+                    <div className="flex min-w-0 flex-col items-start gap-1">
                       <ToggleGroup
                         type="single"
                         variant="outline"
                         size="sm"
                         spacing={0}
+                        className="grid w-full grid-cols-1 sm:w-auto sm:grid-cols-3"
                         value={storageMode}
                         aria-label={`${field.name} secret source`}
                         onValueChange={(nextMode) => {
@@ -256,17 +277,34 @@ export function WorkspaceConnectionFormFields({
                             field.name,
                             nextMode === "env"
                               ? { action: "replace", binding: { ref: "env:" } }
-                              : { action: "replace", value: "" },
+                              : {
+                                  action: "replace",
+                                  value: "",
+                                  binding: field.is_sensitive_file
+                                    ? undefined
+                                    : {
+                                        provider:
+                                          nextMode === "local-vault" ? "local-vault" : "local",
+                                      },
+                                },
                           );
                         }}
                       >
                         <ToggleGroupItem value="local">
                           {field.is_sensitive_file ? "File path" : "Credential store"}
                         </ToggleGroupItem>
+                        {!field.is_sensitive_file ? (
+                          <ToggleGroupItem
+                            value="local-vault"
+                            disabled={localVaultState !== "unlocked"}
+                          >
+                            Encrypted vault
+                          </ToggleGroupItem>
+                        ) : null}
                         <ToggleGroupItem value="env">Environment</ToggleGroupItem>
                       </ToggleGroup>
                       <p className="min-w-0 text-[0.6875rem] leading-relaxed text-muted-foreground">
-                        {secretFieldHelp(field.is_sensitive_file, storageMode, change, descriptor)}
+                        {help}
                       </p>
                     </div>
                     {environmentNameInvalid ? (
@@ -274,7 +312,7 @@ export function WorkspaceConnectionFormFields({
                         Use a valid environment variable name, such as WAREHOUSE_PASSWORD.
                       </p>
                     ) : null}
-                    {descriptor?.message ? (
+                    {descriptor?.message && descriptor.message !== help ? (
                       <p className="text-[0.6875rem] leading-relaxed text-muted-foreground">
                         {descriptor.message}
                       </p>
@@ -542,7 +580,7 @@ function secretFieldDisplay(
 } {
   if (change.action === "replace") {
     return {
-      label: change.binding?.ref.startsWith("env:") ? "Environment ref" : "New value",
+      label: change.binding?.ref?.startsWith("env:") ? "Environment ref" : "New value",
       variant: "secondary",
     };
   }
@@ -555,9 +593,11 @@ function secretFieldDisplay(
         label:
           descriptor.provider === "local"
             ? "Configured · Local"
-            : descriptor.provider === "env"
-              ? "Configured · Env"
-              : "Configured",
+            : descriptor.provider === "local-vault"
+              ? "Configured · Vault"
+              : descriptor.provider === "env"
+                ? "Configured · Env"
+                : "Configured",
         variant: "outline",
       };
     case "unavailable":
@@ -578,6 +618,17 @@ function secretFieldHelp(
   if (storageMode === "env") {
     return "Only the environment variable name is saved. Renart resolves its value when the connection is used.";
   }
+  if (storageMode === "local-vault") {
+    if (descriptor?.message) {
+      return descriptor.message;
+    }
+    return change.action === "replace"
+      ? "Encrypted outside this Git repository when you save. The vault stays unlocked only for this Renart session."
+      : "Stored in the passphrase-protected local vault outside this Git repository.";
+  }
+  if (descriptor?.message) {
+    return descriptor.message;
+  }
   if (isSensitiveFile) {
     return "Write-only credential file path. Renart never returns the current path to the browser.";
   }
@@ -597,17 +648,29 @@ function secretFieldHelp(
   return "Write-only. Entering a replacement moves this field to your system credential store.";
 }
 
-type SecretStorageMode = "local" | "env";
+type SecretStorageMode = "local" | "local-vault" | "env";
 
 function secretStorageMode(
   change: WorkspaceConnectionSecretChange,
   descriptor?: WorkspaceConfigSecretField,
 ): SecretStorageMode {
-  if (change.binding?.ref.startsWith("env:")) {
+  if (change.binding?.ref?.startsWith("env:")) {
     return "env";
+  }
+  if (
+    change.binding?.provider === "local-vault" ||
+    change.binding?.ref?.startsWith("local-vault:")
+  ) {
+    return "local-vault";
+  }
+  if (change.binding?.provider === "local") {
+    return "local";
   }
   if (change.action === "keep" && descriptor?.provider === "env") {
     return "env";
+  }
+  if (change.action === "keep" && descriptor?.provider === "local-vault") {
+    return "local-vault";
   }
   return "local";
 }

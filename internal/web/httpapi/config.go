@@ -3,6 +3,7 @@ package httpapi
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"strings"
 
@@ -10,8 +11,11 @@ import (
 	"github.com/go-chi/chi/v5"
 	webapi "renart/internal/web/api"
 	"renart/internal/web/policy"
+	"renart/internal/web/secretstore"
 	"renart/internal/web/service"
 )
+
+const maxVaultRequestBytes = 4 << 10
 
 type ConfigChangePublisher interface {
 	ConfigChanged(ctx context.Context, relPath, eventType string)
@@ -76,6 +80,10 @@ type TestWorkspaceConnectionRequest struct {
 	SecretChanges   map[string]service.WorkspaceConnectionSecretChange `json:"secret_changes,omitempty"`
 }
 
+type VaultPassphraseRequest struct {
+	Passphrase string `json:"passphrase"`
+}
+
 func RegisterConfigRoutes(router chi.Router, handlers *ConfigHandlers) {
 	router.Get("/api/config", handlers.HandleGetWorkspaceConfig)
 	router.Put("/api/config/project", handlers.HandleUpdateWorkspaceProject)
@@ -89,6 +97,10 @@ func RegisterConfigRoutes(router chi.Router, handlers *ConfigHandlers) {
 	router.Put("/api/config/connections", handlers.HandleUpdateWorkspaceConnection)
 	router.Delete("/api/config/connections", handlers.HandleDeleteWorkspaceConnection)
 	router.Post("/api/config/connections/test", handlers.HandleTestWorkspaceConnection)
+	router.Post("/api/config/secrets/vault/initialize", handlers.HandleInitializeLocalVault)
+	router.Post("/api/config/secrets/vault/unlock", handlers.HandleUnlockLocalVault)
+	router.Post("/api/config/secrets/vault/lock", handlers.HandleLockLocalVault)
+	router.Post("/api/config/secrets/vault/change-passphrase", handlers.HandleChangeLocalVaultPassphrase)
 }
 
 func (h *ConfigHandlers) HandleGetWorkspaceConfig(w http.ResponseWriter, _ *http.Request) {
@@ -99,6 +111,100 @@ func (h *ConfigHandlers) HandleGetWorkspaceConfig(w http.ResponseWriter, _ *http
 	}
 
 	webapi.WriteJSON(w, http.StatusOK, h.Service.BuildResponse(configPath, cfg))
+}
+
+func (h *ConfigHandlers) HandleInitializeLocalVault(w http.ResponseWriter, r *http.Request) {
+	passphrase, ok := decodeVaultPassphrase(w, r)
+	if !ok {
+		return
+	}
+	defer clearStringBytes(passphrase)
+	if err := h.Service.InitializeLocalVault(r.Context(), passphrase); err != nil {
+		writeVaultError(w, err)
+		return
+	}
+	h.writeWorkspaceConfig(w)
+}
+
+func (h *ConfigHandlers) HandleUnlockLocalVault(w http.ResponseWriter, r *http.Request) {
+	passphrase, ok := decodeVaultPassphrase(w, r)
+	if !ok {
+		return
+	}
+	defer clearStringBytes(passphrase)
+	if err := h.Service.UnlockLocalVault(r.Context(), passphrase); err != nil {
+		writeVaultError(w, err)
+		return
+	}
+	h.writeWorkspaceConfig(w)
+}
+
+func (h *ConfigHandlers) HandleLockLocalVault(w http.ResponseWriter, _ *http.Request) {
+	h.Service.LockLocalVault()
+	h.writeWorkspaceConfig(w)
+}
+
+func (h *ConfigHandlers) HandleChangeLocalVaultPassphrase(w http.ResponseWriter, r *http.Request) {
+	passphrase, ok := decodeVaultPassphrase(w, r)
+	if !ok {
+		return
+	}
+	defer clearStringBytes(passphrase)
+	if err := h.Service.ChangeLocalVaultPassphrase(r.Context(), passphrase); err != nil {
+		writeVaultError(w, err)
+		return
+	}
+	h.writeWorkspaceConfig(w)
+}
+
+func (h *ConfigHandlers) writeWorkspaceConfig(w http.ResponseWriter) {
+	cfg, configPath, err := h.Service.LoadForEditing()
+	if err != nil {
+		webapi.WriteJSON(w, http.StatusOK, h.Service.BuildParseErrorResponse(err))
+		return
+	}
+	webapi.WriteJSON(w, http.StatusOK, h.Service.BuildResponse(configPath, cfg))
+}
+
+func decodeVaultPassphrase(w http.ResponseWriter, r *http.Request) ([]byte, bool) {
+	r.Body = http.MaxBytesReader(w, r.Body, maxVaultRequestBytes)
+	var request VaultPassphraseRequest
+	decoder := json.NewDecoder(r.Body)
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&request); err != nil {
+		webapi.WriteBadRequest(w, "invalid_request_body", "Enter a valid vault passphrase.")
+		return nil, false
+	}
+	passphrase := []byte(request.Passphrase)
+	request.Passphrase = ""
+	if len(passphrase) == 0 {
+		webapi.WriteBadRequest(w, "missing_passphrase", "Vault passphrase is required.")
+		return nil, false
+	}
+	return passphrase, true
+}
+
+func writeVaultError(w http.ResponseWriter, err error) {
+	switch {
+	case errors.Is(err, secretstore.ErrVaultInvalidPassphrase):
+		webapi.WriteError(w, http.StatusUnauthorized, "invalid_vault_passphrase", "The vault passphrase is incorrect.")
+	case errors.Is(err, secretstore.ErrVaultAlreadyInitialized):
+		webapi.WriteConflict(w, "vault_already_initialized", "The encrypted vault is already initialized.")
+	case errors.Is(err, secretstore.ErrVaultNotInitialized):
+		webapi.WriteConflict(w, "vault_not_initialized", "Set up the encrypted vault before unlocking it.")
+	case errors.Is(err, secretstore.ErrPermissionRequired):
+		webapi.WriteError(w, http.StatusLocked, "vault_locked", "Unlock the encrypted vault first.")
+	case errors.Is(err, secretstore.ErrUnavailable):
+		webapi.WriteError(w, http.StatusServiceUnavailable, "vault_unavailable", "The encrypted vault is unavailable.")
+	default:
+		webapi.WriteBadRequest(w, "vault_update_failed", err.Error())
+	}
+}
+
+func clearStringBytes(value []byte) {
+	for index := range value {
+		value[index] = 0
+	}
 }
 
 func (h *ConfigHandlers) HandleUpdateWorkspaceProject(w http.ResponseWriter, r *http.Request) {

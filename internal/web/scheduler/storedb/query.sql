@@ -13,10 +13,17 @@ SET environment = @environment,
     execution_context_resolved = 1
 WHERE id = @id AND status IN ('queued', 'running');
 
--- name: SetRunRiverJob :exec
+-- name: SetRunRiverJob :execrows
 UPDATE pipeline_runs
 SET river_job_id = @river_job_id
 WHERE id = @id;
+
+-- name: ReleaseTerminalRunRiverJob :exec
+UPDATE pipeline_runs
+SET river_job_id = NULL
+WHERE river_job_id = @river_job_id
+  AND id <> @id
+  AND status NOT IN ('queued', 'running');
 
 -- name: MarkRunRunning :exec
 UPDATE pipeline_runs

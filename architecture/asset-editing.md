@@ -136,9 +136,11 @@ round-trips unknown fields).
 
   Existing assets use the same profile-backed connection field. Their concrete
   Type is read-only in both the guided inspector and the currently hidden expert
-  editor. A same-engine connection change is an ordinary metadata update; a
-  cross-engine choice opens a confirmation that names the old and new types,
-  then sends one semantic mutation that persists Type and connection together.
+  editor. A go-to action beside the selector opens that connection in the active
+  environment's project settings. A same-engine connection change is an ordinary
+  metadata update; a cross-engine choice opens a confirmation that names the old
+  and new types, then sends one semantic mutation that persists Type and
+  connection together.
   The request includes the type the browser reviewed, so a concurrent filesystem
   edit fails with a reload message instead of being overwritten. Unknown or no
   longer compatible hand-authored connections remain visible for repair. Direct

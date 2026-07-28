@@ -141,6 +141,45 @@ func (s *memoryCredentialStore) Delete(service, user string) error {
 	return nil
 }
 
+type probingCredentialStore struct {
+	state       credentialStoreProbeState
+	probeErr    error
+	value       string
+	getCalls    int
+	setCalls    int
+	deleteCalls int
+}
+
+func (s *probingCredentialStore) Probe(
+	context.Context,
+	string,
+	string,
+) (credentialStoreProbeState, error) {
+	return s.state, s.probeErr
+}
+
+func (s *probingCredentialStore) Set(_, _, password string) error {
+	s.setCalls++
+	s.value = password
+	s.state = credentialStoreProbeConfigured
+	return nil
+}
+
+func (s *probingCredentialStore) Get(_, _ string) (string, error) {
+	s.getCalls++
+	if s.state == credentialStoreProbeMissing {
+		return "", keyring.ErrNotFound
+	}
+	return s.value, nil
+}
+
+func (s *probingCredentialStore) Delete(_, _ string) error {
+	s.deleteCalls++
+	s.value = ""
+	s.state = credentialStoreProbeMissing
+	return nil
+}
+
 func TestLocalProviderScopesValuesAndFailsClosed(t *testing.T) {
 	t.Parallel()
 
@@ -173,6 +212,88 @@ func TestLocalProviderScopesValuesAndFailsClosed(t *testing.T) {
 	})
 	assert.Equal(t, StatusUnavailable, status.State)
 	assert.ErrorIs(t, err, ErrUnavailable)
+}
+
+func TestLocalProviderProbeAvoidsInteractiveCredentialStoreAccess(t *testing.T) {
+	t.Parallel()
+
+	request := ResolveRequest{
+		ProjectID: "project-a", Environment: "default",
+		Reference: Ref{Provider: "local", Key: "warehouse/password"},
+		Purpose:   PurposeSecretAdministration,
+	}
+
+	t.Run("locked", func(t *testing.T) {
+		t.Parallel()
+		store := &probingCredentialStore{state: credentialStoreProbePermissionRequired}
+		provider := newLocalProviderWithStore(store)
+
+		status, err := provider.Stat(t.Context(), request)
+		assert.Equal(t, StatusPermissionRequired, status.State)
+		assert.False(t, status.Writable)
+		assert.ErrorIs(t, err, ErrPermissionRequired)
+
+		_, err = provider.Resolve(t.Context(), request)
+		assert.ErrorIs(t, err, ErrPermissionRequired)
+		_, err = provider.Put(t.Context(), PutRequest{
+			ProjectID: request.ProjectID, Environment: request.Environment,
+			Reference: request.Reference, Purpose: request.Purpose, Value: []byte("secret"),
+		})
+		assert.ErrorIs(t, err, ErrPermissionRequired)
+		err = provider.Delete(t.Context(), DeleteRequest{
+			ProjectID: request.ProjectID, Environment: request.Environment,
+			Reference: request.Reference, Purpose: request.Purpose,
+		})
+		assert.ErrorIs(t, err, ErrPermissionRequired)
+
+		assert.Zero(t, store.getCalls)
+		assert.Zero(t, store.setCalls)
+		assert.Zero(t, store.deleteCalls)
+	})
+
+	t.Run("unavailable", func(t *testing.T) {
+		t.Parallel()
+		store := &probingCredentialStore{
+			state:    credentialStoreProbeUnknown,
+			probeErr: errors.New("session bus unavailable"),
+		}
+		provider := newLocalProviderWithStore(store)
+
+		status, err := provider.Stat(t.Context(), request)
+		assert.Equal(t, StatusUnavailable, status.State)
+		assert.False(t, status.Writable)
+		assert.ErrorIs(t, err, ErrUnavailable)
+		assert.Zero(t, store.getCalls)
+	})
+
+	t.Run("unlocked", func(t *testing.T) {
+		t.Parallel()
+		store := &probingCredentialStore{state: credentialStoreProbeMissing}
+		provider := newLocalProviderWithStore(store)
+
+		status, err := provider.Stat(t.Context(), request)
+		require.NoError(t, err)
+		assert.Equal(t, StatusMissing, status.State)
+		assert.True(t, status.Writable)
+		assert.Zero(t, store.getCalls)
+
+		_, err = provider.Resolve(t.Context(), request)
+		assert.ErrorIs(t, err, ErrNotFound)
+		assert.Zero(t, store.getCalls)
+
+		_, err = provider.Put(t.Context(), PutRequest{
+			ProjectID: request.ProjectID, Environment: request.Environment,
+			Reference: request.Reference, Purpose: request.Purpose, Value: []byte("secret"),
+		})
+		require.NoError(t, err)
+		assert.Equal(t, 1, store.setCalls)
+
+		lease, err := provider.Resolve(t.Context(), request)
+		require.NoError(t, err)
+		assert.Equal(t, []byte("secret"), lease.Bytes())
+		assert.Equal(t, 1, store.getCalls)
+		require.NoError(t, lease.Close(t.Context()))
+	})
 }
 
 func TestResolverClosesPartialBundleOnFailure(t *testing.T) {

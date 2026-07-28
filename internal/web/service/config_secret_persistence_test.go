@@ -8,15 +8,19 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/bruin-data/bruin/pkg/config"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"renart/internal/web/secretstore"
 )
 
 type statefulSecretProvider struct {
-	mu     sync.Mutex
-	values map[string][]byte
-	putErr error
+	mu        sync.Mutex
+	name      string
+	values    map[string][]byte
+	putErr    error
+	statState secretstore.StatusState
+	statErr   error
 }
 
 func newStatefulSecretResolver(t *testing.T) (*secretstore.Resolver, *statefulSecretProvider) {
@@ -27,7 +31,12 @@ func newStatefulSecretResolver(t *testing.T) (*secretstore.Resolver, *statefulSe
 	return resolver, provider
 }
 
-func (p *statefulSecretProvider) Name() string { return "local" }
+func (p *statefulSecretProvider) Name() string {
+	if p.name != "" {
+		return p.name
+	}
+	return "local"
+}
 
 func (p *statefulSecretProvider) key(request secretstore.ResolveRequest) string {
 	return request.ProjectID + "\x00" + request.Environment + "\x00" + request.Reference.String()
@@ -39,6 +48,15 @@ func (p *statefulSecretProvider) Stat(
 ) (secretstore.Status, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	if p.statState != "" || p.statErr != nil {
+		state := p.statState
+		if state == "" {
+			state = secretstore.StatusUnavailable
+		}
+		return secretstore.Status{
+			State: state, Provider: p.Name(), Reference: request.Reference.String(),
+		}, p.statErr
+	}
 	state := secretstore.StatusMissing
 	if _, found := p.values[p.key(request)]; found {
 		state = secretstore.StatusConfigured
@@ -88,6 +106,46 @@ func (p *statefulSecretProvider) Delete(
 	key := request.ProjectID + "\x00" + request.Environment + "\x00" + request.Reference.String()
 	delete(p.values, key)
 	return nil
+}
+
+func TestConnectionSecretDescriptorReportsLockedLocalStore(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	resolver, provider := newStatefulSecretResolver(t)
+	provider.statState = secretstore.StatusPermissionRequired
+	provider.statErr = secretstore.ErrPermissionRequired
+	service := NewConfigService(
+		root,
+		filepath.Join(root, ".bruin.yml"),
+		WithSecretResolver(resolver),
+	)
+	cfg := &config.Config{
+		DefaultEnvironmentName:  "default",
+		SelectedEnvironmentName: "default",
+		Environments: map[string]config.Environment{
+			"default": {Connections: &config.Connections{}},
+		},
+	}
+	require.NoError(t, service.AddConnection(cfg, UpsertWorkspaceConnectionParams{
+		EnvironmentName: "default",
+		Name:            "warehouse",
+		Type:            "postgres",
+		Values: map[string]any{
+			"host": "localhost", "port": 5432, "database": "analytics", "username": "renart",
+		},
+	}))
+
+	response := service.BuildResponse(filepath.Join(root, ".bruin.yml"), cfg)
+	require.Len(t, response.Environments, 1)
+	require.Len(t, response.Environments[0].Connections, 1)
+	descriptor := response.Environments[0].Connections[0].SecretFields["password"]
+	assert.Equal(t, "permission_required", descriptor.Status)
+	assert.Equal(t, "local", descriptor.Provider)
+	assert.Equal(t, "local:warehouse/password", descriptor.Reference)
+	assert.False(t, descriptor.Writable)
+	assert.Contains(t, descriptor.Message, "locked")
+	assert.Contains(t, descriptor.Message, "Environment")
 }
 
 func TestPersistedConnectionSecretsUseCredentialStoreAndTrackedBinding(t *testing.T) {
@@ -163,6 +221,61 @@ func TestPersistedConnectionSecretsUseCredentialStoreAndTrackedBinding(t *testin
 		resolved.Config.SelectedEnvironment.Connections.Postgres[0].Password,
 	)
 	require.NoError(t, resolved.Close(t.Context()))
+}
+
+func TestPersistedConnectionSecretsCanUseEncryptedVaultBinding(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	localProvider := &statefulSecretProvider{name: "local", values: make(map[string][]byte)}
+	vaultProvider := &statefulSecretProvider{name: "local-vault", values: make(map[string][]byte)}
+	resolver, err := secretstore.NewResolver(localProvider, vaultProvider)
+	require.NoError(t, err)
+	configService := NewConfigService(
+		root,
+		filepath.Join(root, ".bruin.yml"),
+		WithSecretResolver(resolver),
+	)
+	change, err := configService.CreateConnectionAndPersist(
+		t.Context(),
+		UpsertWorkspaceConnectionParams{
+			EnvironmentName: "default",
+			Name:            "warehouse",
+			Type:            "postgres",
+			Values: map[string]any{
+				"host": "localhost", "port": 5432, "database": "analytics", "username": "renart",
+			},
+			SecretChanges: map[string]WorkspaceConnectionSecretChange{
+				"password": {
+					Action:  "replace",
+					Value:   "vault-provider-canary",
+					Binding: &WorkspaceConnectionSecretBinding{Provider: "local-vault"},
+				},
+			},
+		},
+	)
+	require.NoError(t, err)
+
+	manifest, err := secretstore.LoadManifest(filepath.Join(root, ".renart", "secrets.yml"))
+	require.NoError(t, err)
+	binding, found := manifest.Binding("default", "warehouse", "password")
+	require.True(t, found)
+	assert.Equal(t, "local-vault:warehouse/password", binding.Reference.String())
+	assert.Empty(t, localProvider.values)
+
+	projectID := configService.ProjectIdentity().ID
+	vaultProvider.mu.Lock()
+	assert.Equal(
+		t,
+		[]byte("vault-provider-canary"),
+		vaultProvider.values[projectID+"\x00default\x00local-vault:warehouse/password"],
+	)
+	vaultProvider.mu.Unlock()
+
+	response := configService.BuildResponse(change.ConfigPath, change.Config)
+	descriptor := response.Environments[0].Connections[0].SecretFields["password"]
+	assert.Equal(t, "configured", descriptor.Status)
+	assert.Equal(t, "local-vault", descriptor.Provider)
 }
 
 func TestPersistedConnectionSecretsCanUseEnvironmentBindings(t *testing.T) {
@@ -249,6 +362,48 @@ func TestPersistedConnectionSecretsCanUseEnvironmentBindings(t *testing.T) {
 	require.NotNil(t, draftBundle)
 	assert.Equal(t, "environment-canary", draftChanges["password"].Value)
 	require.NoError(t, draftBundle.Close(t.Context()))
+}
+
+func TestConnectionUpdateDoesNotPersistAmbientManagedSymbolValue(t *testing.T) {
+	t.Setenv("RENART_TEST_SOURCE_PASSWORD", "provider-value")
+
+	root := t.TempDir()
+	service := NewConfigService(root, filepath.Join(root, ".bruin.yml"))
+	_, err := service.CreateConnectionAndPersist(t.Context(), UpsertWorkspaceConnectionParams{
+		EnvironmentName: "default",
+		Name:            "warehouse",
+		Type:            "postgres",
+		Values: map[string]any{
+			"host": "localhost", "port": 5432, "database": "analytics", "username": "renart",
+		},
+		SecretChanges: map[string]WorkspaceConnectionSecretChange{
+			"password": {
+				Action:  "replace",
+				Binding: &WorkspaceConnectionSecretBinding{Ref: "env:RENART_TEST_SOURCE_PASSWORD"},
+			},
+		},
+	})
+	require.NoError(t, err)
+
+	t.Setenv("RENART_WAREHOUSE_PASSWORD", "ambient-value-must-not-persist")
+	_, err = service.UpdateConnectionAndPersist(t.Context(), UpsertWorkspaceConnectionParams{
+		EnvironmentName: "default",
+		CurrentName:     "warehouse",
+		Name:            "warehouse",
+		Type:            "postgres",
+		Values: map[string]any{
+			"host": "db.internal", "port": 5432, "database": "analytics", "username": "renart",
+		},
+		SecretChanges: map[string]WorkspaceConnectionSecretChange{
+			"password": {Action: "keep"},
+		},
+	})
+	require.NoError(t, err)
+
+	contents, err := os.ReadFile(filepath.Join(root, ".bruin.yml"))
+	require.NoError(t, err)
+	assert.Contains(t, string(contents), "${RENART_WAREHOUSE_PASSWORD}")
+	assert.NotContains(t, string(contents), "ambient-value-must-not-persist")
 }
 
 func TestEnvironmentBindingRejectsAnInlineValue(t *testing.T) {

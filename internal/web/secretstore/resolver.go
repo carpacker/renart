@@ -25,7 +25,14 @@ func NewResolver(providers ...Provider) (*Resolver, error) {
 }
 
 func NewDefaultResolver() *Resolver {
-	resolver, err := NewResolver(NewEnvironmentProvider(), NewLocalProvider())
+	return NewDefaultResolverWithLocalVault(nil)
+}
+
+func NewDefaultResolverWithLocalVault(vault *LocalVaultProvider) *Resolver {
+	if vault == nil {
+		vault = NewLocalVaultProvider("")
+	}
+	resolver, err := NewResolver(NewEnvironmentProvider(), NewLocalProvider(), vault)
 	if err != nil {
 		panic(err)
 	}

@@ -2,7 +2,6 @@ package service
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"path/filepath"
 	"reflect"
@@ -52,35 +51,49 @@ func (f *ResolvedConnectionFactory) NewConnectionManager(
 	if err != nil {
 		return nil, fmt.Errorf("failed to load config: %w", err)
 	}
-	resolved, err := f.ResolveConfig(
+	manager := newResolvedConnectionManager(
 		ctx,
+		f,
 		cfg,
 		environment,
 		secretstore.PurposeFromContext(ctx, secretstore.PurposeQuery),
 	)
-	if err != nil {
-		return nil, err
-	}
-	defer resolved.Close(ctx)
-
-	manager, err := newConnectionManagerFromConfig(ctx, resolved.Config)
-	if err != nil {
-		return nil, errors.New(resolved.Redactor.Mask(err.Error()))
-	}
 	return WrapConnectionManagerForWorkspace(manager, f.workspaceRoot), nil
 }
 
 type ResolvedConnectionConfig struct {
-	Config   *config.Config
-	Redactor *mask.Masker
-	bundle   *secretstore.Bundle
+	Config      *config.Config
+	Redactor    *mask.Masker
+	bundle      *secretstore.Bundle
+	environment map[string]string
 }
 
 func (r *ResolvedConnectionConfig) Close(ctx context.Context) error {
-	if r == nil || r.bundle == nil {
+	if r == nil {
+		return nil
+	}
+	for name := range r.environment {
+		r.environment[name] = ""
+		delete(r.environment, name)
+	}
+	if r.bundle == nil {
 		return nil
 	}
 	return r.bundle.Close(ctx)
+}
+
+// EnvironmentVariables returns the symbolic secret overlay for a scoped child
+// process. Callers must keep the result operation-local and close the resolved
+// config as soon as the child exits.
+func (r *ResolvedConnectionConfig) EnvironmentVariables() map[string]string {
+	if r == nil || len(r.environment) == 0 {
+		return nil
+	}
+	result := make(map[string]string, len(r.environment))
+	for name, value := range r.environment {
+		result[name] = value
+	}
+	return result
 }
 
 func (f *ResolvedConnectionFactory) ResolveConfig(
@@ -88,6 +101,44 @@ func (f *ResolvedConnectionFactory) ResolveConfig(
 	cfg *config.Config,
 	environment string,
 	purpose secretstore.Purpose,
+) (*ResolvedConnectionConfig, error) {
+	return f.resolveConfig(ctx, cfg, environment, purpose, nil)
+}
+
+// ResolveConfigForConnections overlays secrets for only the named connections.
+// This is used by connection-scoped operations such as validation and import;
+// ResolveConfig remains the explicit environment-wide path for `secrets exec`.
+func (f *ResolvedConnectionFactory) ResolveConfigForConnections(
+	ctx context.Context,
+	cfg *config.Config,
+	environment string,
+	purpose secretstore.Purpose,
+	connectionNames ...string,
+) (*ResolvedConnectionConfig, error) {
+	allowedConnections := make(map[string]struct{}, len(connectionNames))
+	for _, name := range connectionNames {
+		name = strings.TrimSpace(name)
+		if name != "" {
+			allowedConnections[name] = struct{}{}
+		}
+	}
+	selected, err := selectConfigEnvironment(cfg, environment)
+	if err != nil {
+		return nil, err
+	}
+	scoped, err := configForConnections(selected, connectionNames...)
+	if err != nil {
+		return nil, err
+	}
+	return f.resolveConfig(ctx, scoped, environment, purpose, allowedConnections)
+}
+
+func (f *ResolvedConnectionFactory) resolveConfig(
+	ctx context.Context,
+	cfg *config.Config,
+	environment string,
+	purpose secretstore.Purpose,
+	allowedConnections map[string]struct{},
 ) (*ResolvedConnectionConfig, error) {
 	selected, err := selectConfigEnvironment(cfg, environment)
 	if err != nil {
@@ -104,7 +155,12 @@ func (f *ResolvedConnectionFactory) ResolveConfig(
 	if err != nil {
 		return nil, err
 	}
-	requests, targets, err := f.connectionSecretRequests(selected, manifest, purpose)
+	requests, targets, err := f.connectionSecretRequests(
+		selected,
+		manifest,
+		purpose,
+		allowedConnections,
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -112,28 +168,44 @@ func (f *ResolvedConnectionFactory) ResolveConfig(
 	if err != nil {
 		return nil, err
 	}
+	secretEnvironment := make(map[string]string, len(targets))
 	for _, target := range targets {
-		target.field.SetString(string(bundle.Value(target.name)))
+		value := string(bundle.Value(target.name))
+		if existing, found := secretEnvironment[target.symbol]; found && existing != value {
+			_ = bundle.Close(ctx)
+			return nil, fmt.Errorf(
+				"secret symbol %s resolves to conflicting values; use a unique symbol for each binding",
+				target.symbol,
+			)
+		}
+		secretEnvironment[target.symbol] = value
+	}
+	for _, target := range targets {
+		value := secretEnvironment[target.symbol]
+		target.field.SetString(value)
 	}
 
 	redactionValues := workspaceConnectionSensitiveValues(selected)
 	redactionValues = append(redactionValues, bundle.RedactionValues()...)
 	return &ResolvedConnectionConfig{
-		Config:   selected,
-		Redactor: mask.New(redactionValues),
-		bundle:   bundle,
+		Config:      selected,
+		Redactor:    mask.New(redactionValues),
+		bundle:      bundle,
+		environment: secretEnvironment,
 	}, nil
 }
 
 type connectionSecretTarget struct {
-	name  string
-	field reflect.Value
+	name   string
+	symbol string
+	field  reflect.Value
 }
 
 func (f *ResolvedConnectionFactory) connectionSecretRequests(
 	cfg *config.Config,
 	manifest secretstore.Manifest,
 	purpose secretstore.Purpose,
+	allowedConnections map[string]struct{},
 ) ([]secretstore.NamedRequest, []connectionSecretTarget, error) {
 	connections := reflect.ValueOf(cfg.SelectedEnvironment.Connections)
 	if connections.Kind() == reflect.Pointer {
@@ -157,6 +229,11 @@ func (f *ResolvedConnectionFactory) connectionSecretRequests(
 				continue
 			}
 			connectionName := named.GetName()
+			if allowedConnections != nil {
+				if _, allowed := allowedConnections[connectionName]; !allowed {
+					continue
+				}
+			}
 			for _, fieldDef := range fieldDefs {
 				if !fieldDef.IsSensitive && !fieldDef.IsSensitiveFile {
 					continue
@@ -203,7 +280,9 @@ func (f *ResolvedConnectionFactory) connectionSecretRequests(
 						Purpose:     purpose,
 					},
 				})
-				targets = append(targets, connectionSecretTarget{name: name, field: field})
+				targets = append(targets, connectionSecretTarget{
+					name: name, symbol: symbol, field: field,
+				})
 			}
 		}
 	}

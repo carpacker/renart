@@ -199,7 +199,10 @@ func (e *HybridBruinExecutor) QueryConnection(ctx context.Context, req QueryConn
 		return nil, err
 	}
 
-	conn := manager.GetConnection(req.ConnectionName)
+	conn, err := resolveRuntimeConnection(manager, req.ConnectionName)
+	if err != nil {
+		return nil, err
+	}
 	if conn == nil {
 		return nil, fmt.Errorf("connection %q not found", req.ConnectionName)
 	}
@@ -423,7 +426,10 @@ func (e *HybridBruinExecutor) buildDirectAssetQuery(ctx context.Context, pp *dir
 	if err != nil {
 		return "", nil, "", nil, fmt.Errorf("failed to get connection: %w", err)
 	}
-	conn := manager.GetConnection(connName)
+	conn, err := resolveRuntimeConnection(manager, connName)
+	if err != nil {
+		return "", nil, "", nil, fmt.Errorf("failed to resolve connection %q: %w", connName, err)
+	}
 	if conn == nil {
 		return "", nil, "", nil, fmt.Errorf("connection %q not found", connName)
 	}

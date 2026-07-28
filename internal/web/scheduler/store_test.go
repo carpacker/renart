@@ -79,6 +79,94 @@ func TestOpenStoreEncodesBoundTimesAsCanonicalUTC(t *testing.T) {
 	assert.True(t, parseable)
 }
 
+func TestSetRunRiverJobReleasesOnlyTerminalHistoricalLink(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	t.Run("terminal link", func(t *testing.T) {
+		t.Parallel()
+		store, err := OpenStore(filepath.Join(t.TempDir(), "state.db"))
+		require.NoError(t, err)
+		defer store.Close()
+
+		reusedJobID := int64(42)
+		terminalID, err := store.Create(ctx, PipelineRun{
+			ID: "terminal", PipelineID: "old-pipeline", Pipeline: "old",
+			Trigger: RunTriggerSchedule, Status: RunStatusSuccess, RiverJobID: &reusedJobID,
+		})
+		require.NoError(t, err)
+		queuedID, err := store.Create(ctx, PipelineRun{
+			ID: "queued", PipelineID: "new-pipeline", Pipeline: "new",
+			Trigger: RunTriggerSchedule, Status: RunStatusQueued,
+		})
+		require.NoError(t, err)
+
+		require.NoError(t, store.SetRunRiverJob(ctx, queuedID, reusedJobID))
+
+		terminal, _, _, err := store.Get(ctx, terminalID)
+		require.NoError(t, err)
+		assert.Nil(t, terminal.RiverJobID)
+		queued, _, _, err := store.Get(ctx, queuedID)
+		require.NoError(t, err)
+		require.NotNil(t, queued.RiverJobID)
+		assert.Equal(t, reusedJobID, *queued.RiverJobID)
+		linkedRunID, found, err := store.RunIDForRiverJob(ctx, reusedJobID)
+		require.NoError(t, err)
+		assert.True(t, found)
+		assert.Equal(t, queuedID, linkedRunID)
+	})
+
+	t.Run("active link", func(t *testing.T) {
+		t.Parallel()
+		store, err := OpenStore(filepath.Join(t.TempDir(), "state.db"))
+		require.NoError(t, err)
+		defer store.Close()
+
+		reusedJobID := int64(42)
+		activeID, err := store.Create(ctx, PipelineRun{
+			ID: "active", PipelineID: "active-pipeline", Pipeline: "active",
+			Trigger: RunTriggerManual, Status: RunStatusRunning, RiverJobID: &reusedJobID,
+		})
+		require.NoError(t, err)
+		queuedID, err := store.Create(ctx, PipelineRun{
+			ID: "queued", PipelineID: "new-pipeline", Pipeline: "new",
+			Trigger: RunTriggerManual, Status: RunStatusQueued,
+		})
+		require.NoError(t, err)
+
+		require.Error(t, store.SetRunRiverJob(ctx, queuedID, reusedJobID))
+
+		active, _, _, err := store.Get(ctx, activeID)
+		require.NoError(t, err)
+		require.NotNil(t, active.RiverJobID)
+		assert.Equal(t, reusedJobID, *active.RiverJobID)
+		queued, _, _, err := store.Get(ctx, queuedID)
+		require.NoError(t, err)
+		assert.Nil(t, queued.RiverJobID)
+	})
+
+	t.Run("missing replacement run", func(t *testing.T) {
+		t.Parallel()
+		store, err := OpenStore(filepath.Join(t.TempDir(), "state.db"))
+		require.NoError(t, err)
+		defer store.Close()
+
+		reusedJobID := int64(42)
+		terminalID, err := store.Create(ctx, PipelineRun{
+			ID: "terminal", PipelineID: "old-pipeline", Pipeline: "old",
+			Trigger: RunTriggerSchedule, Status: RunStatusFailed, RiverJobID: &reusedJobID,
+		})
+		require.NoError(t, err)
+
+		require.ErrorContains(t, store.SetRunRiverJob(ctx, "missing", reusedJobID), "was not found")
+
+		terminal, _, _, err := store.Get(ctx, terminalID)
+		require.NoError(t, err)
+		require.NotNil(t, terminal.RiverJobID)
+		assert.Equal(t, reusedJobID, *terminal.RiverJobID)
+	})
+}
+
 func TestStorePersistsValidatesAndCascadesVersionedRunPlan(t *testing.T) {
 	t.Parallel()
 	store, err := OpenStore(filepath.Join(t.TempDir(), "state.db"))

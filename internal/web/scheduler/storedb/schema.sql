@@ -103,7 +103,7 @@ CREATE TABLE IF NOT EXISTS pipeline_run_resource_claims (
     claim_key TEXT PRIMARY KEY,
     run_id TEXT NOT NULL,
     kind TEXT NOT NULL
-        CHECK (kind IN ('local_file', 'duckdb_database')),
+        CHECK (kind IN ('local_file', 'duckdb_database', 'warehouse_relation')),
     identity TEXT NOT NULL
         CHECK (length(identity) = 64 AND identity = lower(identity)),
     UNIQUE (run_id, kind, identity),

@@ -63,9 +63,9 @@ func (r Ref) Validate() error {
 		if r.Field != "" || r.Version != "" || !envNamePattern.MatchString(r.Key) {
 			return fmt.Errorf("environment secret reference must be env:NAME")
 		}
-	case "local":
+	case "local", localVaultProviderName:
 		if r.Field != "" || r.Version != "" || !validLocalAlias(r.Key) {
-			return fmt.Errorf("local secret reference must use a portable alias")
+			return fmt.Errorf("%s secret reference must use a portable alias", r.Provider)
 		}
 	}
 	return nil

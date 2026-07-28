@@ -30,7 +30,9 @@ CI verifies that the checked-in inventory is current.
 | cloud.google.com/go/monitoring | v1.24.3 | [license](third_party/licenses/cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30.txt) |
 | cloud.google.com/go/storage | v1.59.2 | [license](third_party/licenses/cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30.txt) |
 | dario.cat/mergo | v1.0.2 | [license](third_party/licenses/cb7684632b729955293cab8a0bbf4134d53d9532a30761c33c8a4878302a7bd3.txt) |
+| filippo.io/age | v1.3.1 | [license](third_party/licenses/c5d65279d02955c0fc2294ae417c3add650d228f4f5c82bd6d531fc26c89cd96.txt) |
 | filippo.io/edwards25519 | v1.2.0 | [license](third_party/licenses/2d36597f7117c38b006835ae7f537487207d8ec407aa9d9980794b2030cbc067.txt) |
+| filippo.io/hpke | v0.4.0 | [license](third_party/licenses/911f8f5782931320f5b8d1160a76365b83aea6447ee6c04fa6d5591467db9dad.txt) |
 | github.com/99designs/go-keychain | v0.0.0-20191008050251-8e49817e8af4 | [license](third_party/licenses/bda882a9e8f29deea13eb8c2b25ea1edf0e4a16656182d9a698dd28df8bd15ec.txt) |
 | github.com/99designs/keyring | v1.2.2 | [license](third_party/licenses/b1eb377f13a39b7f3e8869c95901a19c325b70c9fbe4bd675c94ede6be3ab7a8.txt) |
 | github.com/alecthomas/chroma/v2 | v2.23.1 | [license](third_party/licenses/e7bf754e7153012a3a8ff697d21acd6c12e590d6a55f2aef8ee83616aa9a795f.txt) |

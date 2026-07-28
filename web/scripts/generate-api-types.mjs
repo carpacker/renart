@@ -42,6 +42,7 @@ const sources = [
       "WorkspaceConfigFieldDef",
       "WorkspaceConfigSecretField",
       "WorkspaceConfigConnectionType",
+      "WorkspaceLocalVault",
       "WorkspaceConfigConnection",
       "WorkspaceConfigEnvironment",
       "WorkspaceRetentionWindow",

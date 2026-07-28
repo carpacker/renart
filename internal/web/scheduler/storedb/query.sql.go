@@ -499,6 +499,24 @@ func (q *Queries) MarkRunRunning(ctx context.Context, arg MarkRunRunningParams) 
 	return err
 }
 
+const releaseTerminalRunRiverJob = `-- name: ReleaseTerminalRunRiverJob :exec
+UPDATE pipeline_runs
+SET river_job_id = NULL
+WHERE river_job_id = ?1
+  AND id <> ?2
+  AND status NOT IN ('queued', 'running')
+`
+
+type ReleaseTerminalRunRiverJobParams struct {
+	RiverJobID sql.NullInt64
+	ID         string
+}
+
+func (q *Queries) ReleaseTerminalRunRiverJob(ctx context.Context, arg ReleaseTerminalRunRiverJobParams) error {
+	_, err := q.db.ExecContext(ctx, releaseTerminalRunRiverJob, arg.RiverJobID, arg.ID)
+	return err
+}
+
 const setEnvScheduleNextRun = `-- name: SetEnvScheduleNextRun :exec
 UPDATE renart_schedules
 SET next_run_at = ?1
@@ -579,7 +597,7 @@ func (q *Queries) SetRunExecutionContext(ctx context.Context, arg SetRunExecutio
 	return result.RowsAffected()
 }
 
-const setRunRiverJob = `-- name: SetRunRiverJob :exec
+const setRunRiverJob = `-- name: SetRunRiverJob :execrows
 UPDATE pipeline_runs
 SET river_job_id = ?1
 WHERE id = ?2
@@ -590,9 +608,12 @@ type SetRunRiverJobParams struct {
 	ID         string
 }
 
-func (q *Queries) SetRunRiverJob(ctx context.Context, arg SetRunRiverJobParams) error {
-	_, err := q.db.ExecContext(ctx, setRunRiverJob, arg.RiverJobID, arg.ID)
-	return err
+func (q *Queries) SetRunRiverJob(ctx context.Context, arg SetRunRiverJobParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, setRunRiverJob, arg.RiverJobID, arg.ID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
 }
 
 const setRunSnapshotVersion = `-- name: SetRunSnapshotVersion :exec

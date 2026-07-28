@@ -32,7 +32,10 @@ func (e *HybridBruinExecutor) ImportDatabase(ctx context.Context, req ImportData
 		return nil, fmt.Errorf("failed to create connection manager: %w", err)
 	}
 
-	conn := manager.GetConnection(req.ConnectionName)
+	conn, err := resolveRuntimeConnection(manager, req.ConnectionName)
+	if err != nil {
+		return nil, fmt.Errorf("failed to resolve connection %q: %w", req.ConnectionName, err)
+	}
 	if conn == nil {
 		return nil, fmt.Errorf("connection %q not found", req.ConnectionName)
 	}

@@ -1169,14 +1169,38 @@ func validateRunExecutionContext(execution RunExecutionContext) error {
 // SetRunRiverJob links a run created before queue insertion (manual/API runs)
 // to the River job that owns its execution.
 func (s *Store) SetRunRiverJob(ctx context.Context, runID string, riverJobID int64) error {
-	return s.setRunRiverJob(ctx, s.queries, runID, riverJobID)
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	if err := s.setRunRiverJob(ctx, s.queries.WithTx(tx), runID, riverJobID); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 func (s *Store) setRunRiverJob(ctx context.Context, queries *storedb.Queries, runID string, riverJobID int64) error {
-	return queries.SetRunRiverJob(ctx, storedb.SetRunRiverJobParams{
+	// River's SQLite sequence may reuse an ID after finalized jobs are pruned.
+	// A terminal run can safely release that historical link; active links still
+	// retain the unique-index guard and fail closed if state is inconsistent.
+	if err := queries.ReleaseTerminalRunRiverJob(ctx, storedb.ReleaseTerminalRunRiverJobParams{
+		RiverJobID: sql.NullInt64{Int64: riverJobID, Valid: true},
+		ID:         runID,
+	}); err != nil {
+		return err
+	}
+	updated, err := queries.SetRunRiverJob(ctx, storedb.SetRunRiverJobParams{
 		ID:         runID,
 		RiverJobID: sql.NullInt64{Int64: riverJobID, Valid: true},
 	})
+	if err != nil {
+		return err
+	}
+	if updated != 1 {
+		return fmt.Errorf("pipeline run %s was not found", runID)
+	}
+	return nil
 }
 
 func (s *Store) RunIDForRiverJob(ctx context.Context, riverJobID int64) (string, bool, error) {

@@ -1,8 +1,9 @@
 "use client";
 
-import { Plus, Settings } from "lucide-react";
+import { ArrowUpRight, Plus, Settings } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { Field, FieldDescription, FieldLabel } from "@/components/ui/field";
 import {
   Select,
@@ -14,6 +15,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import type {
   AssetCreationCandidate,
   AssetCreationConnection,
@@ -85,6 +87,7 @@ export function AssetConnectionField({
   onChange,
   onNewConnection,
   onManageConnections,
+  onOpenConnection,
 }: {
   id: string;
   label: string;
@@ -96,6 +99,7 @@ export function AssetConnectionField({
   onChange: (value: string) => void;
   onNewConnection: () => void;
   onManageConnections: () => void;
+  onOpenConnection?: () => void;
 }) {
   const selection = resolveAssetConnectionSelection(role, value, currentConnectionType);
   const defaultSelectable = role?.default.status === "resolved";
@@ -104,65 +108,86 @@ export function AssetConnectionField({
   return (
     <Field variant="plain" className="min-w-0">
       <FieldLabel htmlFor={id}>{label}</FieldLabel>
-      <Select
-        value={value || PIPELINE_DEFAULT_VALUE}
-        disabled={!role || disabled}
-        onValueChange={(nextValue) => {
-          if (nextValue === NEW_CONNECTION_VALUE) {
-            onNewConnection();
-            return;
-          }
-          if (nextValue === MANAGE_CONNECTIONS_VALUE) {
-            onManageConnections();
-            return;
-          }
-          onChange(nextValue === PIPELINE_DEFAULT_VALUE ? "" : nextValue);
-        }}
-      >
-        <SelectTrigger id={id} className="w-full">
-          <SelectValue placeholder={role ? "Choose a connection" : "Loading connections…"} />
-        </SelectTrigger>
-        <SelectContent>
-          <SelectGroup>
-            <SelectLabel>Available connections</SelectLabel>
-            {role?.allow_default ? (
-              <SelectItem value={PIPELINE_DEFAULT_VALUE} disabled={!defaultSelectable}>
-                {pipelineDefaultLabel(role)}
-              </SelectItem>
-            ) : null}
-            {currentIsMissing ? (
-              <SelectItem value={value} aria-label={value} disabled>
-                <span className="flex min-w-0 items-center gap-2">
-                  <span className="truncate">{value}</span>
-                  <Badge variant="destructive" size="xs" aria-hidden="true">
-                    incompatible
-                  </Badge>
-                </span>
-              </SelectItem>
-            ) : null}
-            {role?.connections.map((connection) => (
-              <SelectItem
-                key={connection.name}
-                value={connection.name}
-                aria-label={connection.name}
+      <div className="flex min-w-0 items-center gap-2">
+        <div className="min-w-0 flex-1">
+          <Select
+            value={value || PIPELINE_DEFAULT_VALUE}
+            disabled={!role || disabled}
+            onValueChange={(nextValue) => {
+              if (nextValue === NEW_CONNECTION_VALUE) {
+                onNewConnection();
+                return;
+              }
+              if (nextValue === MANAGE_CONNECTIONS_VALUE) {
+                onManageConnections();
+                return;
+              }
+              onChange(nextValue === PIPELINE_DEFAULT_VALUE ? "" : nextValue);
+            }}
+          >
+            <SelectTrigger id={id} className="w-full">
+              <SelectValue placeholder={role ? "Choose a connection" : "Loading connections…"} />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectGroup>
+                <SelectLabel>Available connections</SelectLabel>
+                {role?.allow_default ? (
+                  <SelectItem value={PIPELINE_DEFAULT_VALUE} disabled={!defaultSelectable}>
+                    {pipelineDefaultLabel(role)}
+                  </SelectItem>
+                ) : null}
+                {currentIsMissing ? (
+                  <SelectItem value={value} aria-label={value} disabled>
+                    <span className="flex min-w-0 items-center gap-2">
+                      <span className="truncate">{value}</span>
+                      <Badge variant="destructive" size="xs" aria-hidden="true">
+                        incompatible
+                      </Badge>
+                    </span>
+                  </SelectItem>
+                ) : null}
+                {role?.connections.map((connection) => (
+                  <SelectItem
+                    key={connection.name}
+                    value={connection.name}
+                    aria-label={connection.name}
+                  >
+                    <ConnectionOption connection={connection} />
+                  </SelectItem>
+                ))}
+              </SelectGroup>
+              <SelectSeparator />
+              <SelectGroup>
+                <SelectItem value={NEW_CONNECTION_VALUE} disabled={!role?.connection_types.length}>
+                  <Plus />
+                  New connection…
+                </SelectItem>
+                <SelectItem value={MANAGE_CONNECTIONS_VALUE}>
+                  <Settings />
+                  Manage connections…
+                </SelectItem>
+              </SelectGroup>
+            </SelectContent>
+          </Select>
+        </div>
+        {onOpenConnection && selection ? (
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                type="button"
+                variant="outline"
+                size="icon"
+                aria-label={`Go to connection ${selection.name}`}
+                disabled={disabled}
+                onClick={onOpenConnection}
               >
-                <ConnectionOption connection={connection} />
-              </SelectItem>
-            ))}
-          </SelectGroup>
-          <SelectSeparator />
-          <SelectGroup>
-            <SelectItem value={NEW_CONNECTION_VALUE} disabled={!role?.connection_types.length}>
-              <Plus />
-              New connection…
-            </SelectItem>
-            <SelectItem value={MANAGE_CONNECTIONS_VALUE}>
-              <Settings />
-              Manage connections…
-            </SelectItem>
-          </SelectGroup>
-        </SelectContent>
-      </Select>
+                <ArrowUpRight />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent>Go to connection</TooltipContent>
+          </Tooltip>
+        ) : null}
+      </div>
       {!role ? (
         <FieldDescription>
           Loading compatible connections and the pipeline default.

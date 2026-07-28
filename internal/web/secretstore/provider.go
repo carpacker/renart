@@ -28,6 +28,7 @@ const (
 	PurposeScheduledRun         Purpose = "scheduled_run"
 	PurposeNotebookQuery        Purpose = "notebook_query"
 	PurposePythonInjection      Purpose = "python_injection"
+	PurposeCLIExec              Purpose = "cli_exec"
 	PurposeSecretAdministration Purpose = "secret_administration"
 )
 
@@ -41,6 +42,7 @@ func (p Purpose) Valid() bool {
 		PurposeScheduledRun,
 		PurposeNotebookQuery,
 		PurposePythonInjection,
+		PurposeCLIExec,
 		PurposeSecretAdministration:
 		return true
 	default:

@@ -1,14 +1,16 @@
 # Secret management
 
-> **Status (2026-07-26): Phase 0 and the core local Phase 1 path are
+> **Status (2026-07-27): Phase 0 and the core local Phase 1 path are
 > implemented; schedule convergence from Phase 2 has started.** Connection
 > credentials are write-only, `local:` values use the OS credential store,
-> `env:` remains first-class for headless systems, `.renart/secrets.yml` tracks
+> `local-vault:` values use a passphrase-protected age file outside Git, and
+> `env:` remains first-class for headless systems. `.renart/secrets.yml` tracks
 > value-free bindings, and production connection-manager paths resolve through
-> one operation-scoped service. Schedules use the same typed resolver. CLI
-> administration, provider-backed temporary files, explicit Python injection,
-> team providers, and the hosted provider model remain in progress and must not
-> appear as available features in user-facing documentation.
+> one operation-scoped service. Schedules and the local CLI administration and
+> child-process bridge use the same typed resolver. Provider-backed temporary
+> files, explicit Python injection, team providers, and the hosted provider
+> model remain in progress and must not appear as available features in
+> user-facing documentation.
 
 ## 1. Decision summary
 
@@ -192,6 +194,7 @@ Initial reference forms:
 | ----------------------- | ------------------------------------------------------------------------------------- |
 | `env:NAME`              | Read an existing process environment variable.                                        |
 | `local:alias`           | Read the value under project UUID + environment + alias from the OS credential store. |
+| `local-vault:alias`     | Read the value from Renart's passphrase-protected per-project local vault.             |
 | `sops:path#key`         | Decrypt one key from a tracked SOPS document. Optional later provider.                |
 | `vault:path#key`        | Resolve a Vault value using an external provider profile.                             |
 | `aws-sm:identifier#key` | Resolve an AWS Secrets Manager value or JSON member.                                  |
@@ -229,6 +232,37 @@ or Azure. Renart should remain compatible with that mode, but it is too coarse
 as the primary IDE model: non-sensitive topology becomes invisible to Git,
 mixed providers are difficult, and editing one credential means replacing an
 opaque connection object.
+
+#### Built-in passphrase-locked local vault
+
+This is the implemented fallback for systems without a usable native credential
+store. Renart keeps one small encrypted
+vault in the operating system's per-user application-data directory, keyed by
+stable project UUID and environment. The tracked manifest continues to
+contain references only. A passphrase entered in the web/standalone UI or
+`renart secrets vault unlock` derives the decryption key; only the running
+local process retains that key in memory. A later local unlock agent could
+share the session across processes.
+
+Using age's passphrase recipient is preferable to inventing a file format: it
+provides authenticated file encryption and a deliberately expensive scrypt
+derivation. This mode is well suited to an interactive local or SSH session
+and does not require exporting each connection value. It does have one honest
+operational limit: after a process or machine restart, scheduled runs remain
+blocked until the vault is unlocked. Unattended startup requires a
+non-interactive root of trust such as a native unlocked store, an age identity
+file or hardware plugin, environment injection, workload identity, or an
+external secret manager; an encrypted file cannot remove that requirement.
+
+The first version keeps the unlocked document and passphrase inside the Renart
+server and serializes whole-vault rewrites with a cross-process lock and atomic
+replacement. It detects out-of-process ciphertext changes before updates. A
+cross-process local agent over a
+Unix socket or Windows named pipe would make CLI and web unlock state shared,
+but adds lifecycle, peer-authentication, and stale-socket work and should be a
+separate phase. Restart-blocked schedules are an explicit limit of this
+interactive fallback; unattended systems should use environment or workload
+identity backed providers.
 
 #### Plaintext in SQLite encrypted by an application key
 
@@ -538,15 +572,17 @@ Implemented on 2026-07-26:
   create, rename, clone, replace, clear, and delete flows;
 - a connection-editor source choice between the credential store and
   environment-variable references, including actionable headless errors;
+- CLI status/set/remove commands plus an operation-scoped child-process
+  environment bridge that never puts values in argv or the parent environment;
 - secret-free binding identity in plans and freshness: rebinding changes the
   digest, while rotating a value behind the same reference does not.
 
 Still open in this phase:
 
-- CLI set/status/remove commands and a scoped `exec`/environment bridge for
-  terminal interoperability;
 - an explicit migration preview and stronger crash-injection coverage across
   the provider plus two filesystem writes;
+- decide and implement the passphrase-locked user-local vault described above
+  for machines without a usable native credential service;
 - provider-backed `sensitive_file` leases that materialize private temporary
   files for one operation.
 

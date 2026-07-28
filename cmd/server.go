@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -220,7 +221,8 @@ func newWebServer(ctx context.Context, cfg serverConfig, logger *zap.Logger) (*w
 		return nil, nil, fmt.Errorf("invalid retention settings in .renart/project.yml: %w", err)
 	}
 
-	secretResolver := secretstore.NewDefaultResolver()
+	secretVault := secretstore.NewLocalVaultProvider("")
+	secretResolver := secretstore.NewDefaultResolverWithLocalVault(secretVault)
 	configPath := resolveConfigFilePath(absRoot)
 	server := &webServer{
 		projectID:     project.ID,
@@ -230,12 +232,18 @@ func newWebServer(ctx context.Context, cfg serverConfig, logger *zap.Logger) (*w
 		watchMode:     cfg.watchMode,
 		watchPoll:     cfg.watchPoll,
 		workspaceSvc:  service.NewWorkspaceService(absRoot, configPath),
-		configSvc:     service.NewConfigService(absRoot, configPath, service.WithSecretResolver(secretResolver)),
-		pipelineSvc:   service.NewPipelineService(absRoot),
-		hub:           events.NewDebouncedHub(150 * time.Millisecond),
-		executor:      nil,
-		eventBus:      bus.New(),
-		logger:        logger,
+		configSvc: service.NewConfigService(
+			absRoot,
+			configPath,
+			service.WithSecretResolver(secretResolver),
+			service.WithSecretVault(secretVault),
+		),
+		secretVault: secretVault,
+		pipelineSvc: service.NewPipelineService(absRoot),
+		hub:         events.NewDebouncedHub(150 * time.Millisecond),
+		executor:    nil,
+		eventBus:    bus.New(),
+		logger:      logger,
 	}
 	server.connectionFactory = service.NewResolvedConnectionFactory(
 		absRoot,
@@ -940,6 +948,7 @@ func newWebServer(ctx context.Context, cfg serverConfig, logger *zap.Logger) (*w
 	}
 
 	cleanup := func() {
+		server.secretVault.LockAll()
 		server.schedulerSvc.Stop()
 		server.schedulerStore.Close()
 		if serverLease != nil {
@@ -1218,20 +1227,32 @@ func newSessionToken() string {
 	return hex.EncodeToString(raw)
 }
 
-// newHTTPServer returns the http.Server used by both modes.
+// newHTTPServer returns the http.Server used by both modes. Request contexts
+// inherit the process lifecycle so long-lived SSE handlers leave promptly
+// before Shutdown waits for active connections.
 // No ReadTimeout/WriteTimeout: both would sever long-lived SSE streams;
 // IdleTimeout only applies between requests.
-func newHTTPServer(address string, handler http.Handler) *http.Server {
+func newHTTPServer(ctx context.Context, address string, handler http.Handler) *http.Server {
 	return &http.Server{
 		Addr:              address,
 		Handler:           handler,
 		ReadHeaderTimeout: 10 * time.Second,
 		IdleTimeout:       2 * time.Minute,
+		BaseContext: func(net.Listener) context.Context {
+			return ctx
+		},
 	}
 }
 
+func serverLoggerConfig() zap.Config {
+	cfg := zap.NewDevelopmentConfig()
+	cfg.DisableCaller = true
+	cfg.DisableStacktrace = true
+	return cfg
+}
+
 func newServerLogger() (*zap.Logger, error) {
-	logger, err := zap.NewDevelopment(zap.WithCaller(false))
+	logger, err := serverLoggerConfig().Build()
 	if err != nil {
 		return nil, fmt.Errorf("failed to initialize logger: %w", err)
 	}

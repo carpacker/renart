@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"os"
 	"path/filepath"
 	"sync"
 	"testing"
@@ -10,6 +11,7 @@ import (
 	"github.com/bruin-data/bruin/pkg/config"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"gopkg.in/yaml.v3"
 	"renart/internal/web/secretstore"
 )
 
@@ -71,7 +73,11 @@ func TestResolvedConnectionFactoryOverlaysBoundSecretAndSeedsRedaction(t *testin
 	require.Len(t, resolved.Config.SelectedEnvironment.Connections.Postgres, 1)
 	assert.Equal(t, "provider-secret-canary", resolved.Config.SelectedEnvironment.Connections.Postgres[0].Password)
 	assert.Equal(t, "****", resolved.Redactor.Mask("provider-secret-canary"))
+	assert.Equal(t, map[string]string{
+		"WAREHOUSE_PASSWORD": "provider-secret-canary",
+	}, resolved.EnvironmentVariables())
 	require.NoError(t, resolved.Close(t.Context()))
+	assert.Empty(t, resolved.EnvironmentVariables())
 }
 
 func TestResolvedConnectionFactorySupportsUnboundEnvironmentPlaceholders(t *testing.T) {
@@ -88,6 +94,95 @@ func TestResolvedConnectionFactorySupportsUnboundEnvironmentPlaceholders(t *test
 	require.NoError(t, err)
 	assert.Equal(t, "environment-secret", resolved.Config.SelectedEnvironment.Connections.Postgres[0].Password)
 	require.NoError(t, resolved.Close(t.Context()))
+}
+
+func TestResolvedConnectionFactoryDoesNotResolveUnrelatedConnectionSecrets(t *testing.T) {
+	const missingEnvironmentVariable = "RENART_TEST_UNRELATED_POSTGRES_SECRET_DOES_NOT_EXIST"
+	previousValue, wasSet := os.LookupEnv(missingEnvironmentVariable)
+	require.NoError(t, os.Unsetenv(missingEnvironmentVariable))
+	t.Cleanup(func() {
+		if wasSet {
+			_ = os.Setenv(missingEnvironmentVariable, previousValue)
+		} else {
+			_ = os.Unsetenv(missingEnvironmentVariable)
+		}
+	})
+
+	root := t.TempDir()
+	configPath := filepath.Join(root, ".bruin.yml")
+	cfg := &config.Config{
+		DefaultEnvironmentName: "default",
+		Environments: map[string]config.Environment{
+			"default": {
+				Connections: &config.Connections{
+					DuckDB: []config.DuckDBConnection{{
+						ConnectionMetadata: config.ConnectionMetadata{Name: "duckdb-default"},
+						Path:               ":memory:",
+					}},
+					Postgres: []config.PostgresConnection{{
+						ConnectionMetadata: config.ConnectionMetadata{Name: "postgres-default"},
+						Host:               "localhost",
+						Port:               5432,
+						Database:           "postgres",
+						Username:           "postgres",
+						Password:           "${POSTGRES_PASSWORD}",
+					}},
+				},
+			},
+		},
+	}
+	contents, err := yaml.Marshal(cfg)
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(configPath, contents, 0o600))
+
+	manifest := secretstore.NewManifest()
+	require.NoError(t, manifest.SetBinding("default", "postgres-default", "password", secretstore.Binding{
+		Symbol: "POSTGRES_PASSWORD",
+		Reference: secretstore.Ref{
+			Provider: "env",
+			Key:      missingEnvironmentVariable,
+		},
+	}))
+	require.NoError(t, secretstore.SaveManifest(filepath.Join(root, ".renart", "secrets.yml"), manifest))
+
+	factory := NewResolvedConnectionFactory(
+		root,
+		configPath,
+		"project-id",
+		secretstore.NewDefaultResolver(),
+	)
+	manager, err := factory.NewConnectionManager(t.Context(), "default")
+	require.NoError(t, err)
+	resolver, ok := manager.(config.ConnectionResolver)
+	require.True(t, ok)
+
+	type resolutionResult struct {
+		connection any
+		err        error
+	}
+	duckDBResult := make(chan resolutionResult, 1)
+	postgresResult := make(chan resolutionResult, 1)
+	start := make(chan struct{})
+	go func() {
+		<-start
+		connection, resolveErr := resolver.ResolveConnection("duckdb-default")
+		duckDBResult <- resolutionResult{connection: connection, err: resolveErr}
+	}()
+	go func() {
+		<-start
+		connection, resolveErr := resolver.ResolveConnection("postgres-default")
+		postgresResult <- resolutionResult{connection: connection, err: resolveErr}
+	}()
+	close(start)
+
+	duckDB := <-duckDBResult
+	require.NoError(t, duckDB.err)
+	require.NotNil(t, duckDB.connection)
+
+	postgres := <-postgresResult
+	require.Nil(t, postgres.connection)
+	require.ErrorContains(t, postgres.err, `resolve secret "postgres-default.password"`)
+	require.ErrorContains(t, postgres.err, "environment variable "+missingEnvironmentVariable)
 }
 
 func TestResolvedConnectionFactoryRejectsManifestSymbolDrift(t *testing.T) {
@@ -111,6 +206,50 @@ func TestResolvedConnectionFactoryRejectsManifestSymbolDrift(t *testing.T) {
 		secretstore.PurposeQuery,
 	)
 	require.ErrorContains(t, err, "expects ${OTHER_PASSWORD}")
+}
+
+func TestResolvedConnectionFactoryRejectsConflictingSymbolValues(t *testing.T) {
+	t.Setenv("FIRST_PASSWORD", "first-secret")
+	t.Setenv("SECOND_PASSWORD", "second-secret")
+
+	root := t.TempDir()
+	manifest := secretstore.NewManifest()
+	for connectionName, reference := range map[string]string{
+		"first":  "FIRST_PASSWORD",
+		"second": "SECOND_PASSWORD",
+	} {
+		require.NoError(t, manifest.SetBinding("default", connectionName, "password", secretstore.Binding{
+			Symbol:    "SHARED_PASSWORD",
+			Reference: secretstore.Ref{Provider: "env", Key: reference},
+		}))
+	}
+	require.NoError(t, secretstore.SaveManifest(filepath.Join(root, ".renart", "secrets.yml"), manifest))
+
+	cfg := configWithPostgresPassword("${SHARED_PASSWORD}")
+	cfg.Environments["default"].Connections.Postgres = append(
+		cfg.Environments["default"].Connections.Postgres,
+		config.PostgresConnection{
+			ConnectionMetadata: config.ConnectionMetadata{Name: "second"},
+			Host:               "localhost",
+			Port:               5432,
+			Database:           "analytics",
+			Username:           "renart",
+			Password:           "${SHARED_PASSWORD}",
+		},
+	)
+	cfg.Environments["default"].Connections.Postgres[0].Name = "first"
+	require.NoError(t, cfg.SelectEnvironment("default"))
+
+	factory := NewResolvedConnectionFactory(
+		root,
+		filepath.Join(root, ".bruin.yml"),
+		"project-id",
+		secretstore.NewDefaultResolver(),
+	)
+	_, err := factory.ResolveConfig(t.Context(), cfg, "default", secretstore.PurposeCLIExec)
+	require.ErrorContains(t, err, "secret symbol SHARED_PASSWORD resolves to conflicting values")
+	assert.Equal(t, "${SHARED_PASSWORD}", cfg.SelectedEnvironment.Connections.Postgres[0].Password)
+	assert.Equal(t, "${SHARED_PASSWORD}", cfg.SelectedEnvironment.Connections.Postgres[1].Password)
 }
 
 type environmentSecretProvider struct {

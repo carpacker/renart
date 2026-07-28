@@ -53,7 +53,10 @@ func fillDirectColumnsFromDB(ctx context.Context, pp *directPipelineInfo, fs afe
 		if err != nil {
 			return fillStatusFailed, err
 		}
-		conn = manager.GetConnection(connName)
+		conn, err = resolveRuntimeConnection(manager, connName)
+		if err != nil {
+			return fillStatusFailed, err
+		}
 		if conn == nil {
 			return fillStatusFailed, fmt.Errorf("failed to get connection for asset '%s'", pp.Asset.Name)
 		}
@@ -70,7 +73,10 @@ func fillDirectColumnsFromDB(ctx context.Context, pp *directPipelineInfo, fs afe
 		if err != nil {
 			return fillStatusFailed, err
 		}
-		conn = connectionManager.GetConnection(connName)
+		conn, err = resolveRuntimeConnection(connectionManager, connName)
+		if err != nil {
+			return fillStatusFailed, err
+		}
 		if conn == nil {
 			return fillStatusFailed, fmt.Errorf("failed to get connection for asset '%s'", pp.Asset.Name)
 		}

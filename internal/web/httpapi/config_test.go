@@ -142,3 +142,63 @@ func TestWorkspaceConfigHTTPNeverReturnsConnectionSecrets(t *testing.T) {
 	require.Equal(t, http.StatusBadRequest, invalidResponse.Code)
 	assert.NotContains(t, invalidResponse.Body.String(), "error-http-secret-canary")
 }
+
+func TestLocalVaultHTTPManagementNeverReturnsPassphrases(t *testing.T) {
+	root := t.TempDir()
+	vault := secretstore.NewLocalVaultProvider(filepath.Join(t.TempDir(), "vaults"))
+	resolver := secretstore.NewDefaultResolverWithLocalVault(vault)
+	configService := service.NewConfigService(
+		root,
+		filepath.Join(root, ".bruin.yml"),
+		service.WithSecretResolver(resolver),
+		service.WithSecretVault(vault),
+	)
+	handlers := &ConfigHandlers{Service: configService}
+	passphrase := "vault test passphrase"
+
+	initialize := httptest.NewRecorder()
+	handlers.HandleInitializeLocalVault(
+		initialize,
+		httptest.NewRequest(
+			http.MethodPost,
+			"/api/config/secrets/vault/initialize",
+			bytes.NewBufferString(`{"passphrase":"`+passphrase+`"}`),
+		),
+	)
+	require.Equal(t, http.StatusOK, initialize.Code, initialize.Body.String())
+	assert.NotContains(t, initialize.Body.String(), passphrase)
+	assert.Contains(t, initialize.Body.String(), `"state":"unlocked"`)
+
+	lock := httptest.NewRecorder()
+	handlers.HandleLockLocalVault(
+		lock,
+		httptest.NewRequest(http.MethodPost, "/api/config/secrets/vault/lock", nil),
+	)
+	require.Equal(t, http.StatusOK, lock.Code, lock.Body.String())
+	assert.Contains(t, lock.Body.String(), `"state":"locked"`)
+
+	wrong := httptest.NewRecorder()
+	handlers.HandleUnlockLocalVault(
+		wrong,
+		httptest.NewRequest(
+			http.MethodPost,
+			"/api/config/secrets/vault/unlock",
+			bytes.NewBufferString(`{"passphrase":"wrong passphrase"}`),
+		),
+	)
+	require.Equal(t, http.StatusUnauthorized, wrong.Code, wrong.Body.String())
+	assert.NotContains(t, wrong.Body.String(), "wrong passphrase")
+
+	unlock := httptest.NewRecorder()
+	handlers.HandleUnlockLocalVault(
+		unlock,
+		httptest.NewRequest(
+			http.MethodPost,
+			"/api/config/secrets/vault/unlock",
+			bytes.NewBufferString(`{"passphrase":"`+passphrase+`"}`),
+		),
+	)
+	require.Equal(t, http.StatusOK, unlock.Code, unlock.Body.String())
+	assert.NotContains(t, unlock.Body.String(), passphrase)
+	assert.Contains(t, unlock.Body.String(), `"state":"unlocked"`)
+}

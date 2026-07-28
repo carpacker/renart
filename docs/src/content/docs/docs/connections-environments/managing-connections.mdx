@@ -19,6 +19,14 @@ example `duckdb-default` or `pg-prod`) and its credentials. Assets refer to
 connections by name — the workbench shows which connection an asset runs
 against, and the pipeline's defaults live in `pipeline.yml`.
 
+Sensitive values are write-only. By default Renart stores a replacement in the
+operating system's credential store and keeps only a symbolic placeholder in
+the project config. The connection editor also supports an encrypted local
+vault for interactive SSH or headless sessions and environment-variable
+bindings for CI and unattended runs. See
+[Manage connection credentials](/docs/connections-environments/managing-credentials/)
+for the complete setup, rotation, and recovery guidance.
+
 ## Environments
 
 In **Project settings → Environments**, define one entry per target. Each
@@ -35,8 +43,15 @@ including DuckDB, Postgres, Snowflake, BigQuery, Redshift, and more. The
 demo projects use DuckDB, which needs no credentials at all — a good way to
 try the workflow before pointing at shared infrastructure.
 
-:::caution[Credentials live in the project config]
-The project config file holds connection credentials. Keep secrets out of
-the repository — use environment-variable references where your platform
-supports them, and gitignore what must stay local.
+:::caution[Keep legacy inline credentials private]
+Newly replaced sensitive values use a write-only credential source. Existing
+inline values remain readable for compatibility until you replace them, so
+keep any project config containing them private and out of version control.
+Renart does not fall back to plaintext storage.
 :::
+
+## Related
+
+- [Manage connection credentials](/docs/connections-environments/managing-credentials/)
+- [Scheduling](/docs/scheduling/overview/)
+- [Security and privacy](/docs/reference/security-and-privacy/)

@@ -19,6 +19,8 @@ main.go → cmd.Root() → urfave/cli commands (cmd/)
   deploy      snapshot a pipeline for scheduled execution        (Pipeline)
   type-check  render + type-check a pipeline's assets            (Pipeline)
   init        scaffold a project from the welcome templates      (Project)
+  secrets     status/set/remove connection credentials; run one
+              child command with a scoped secret environment      (Project)
   debug       hidden group: fp (fingerprint DAG), sql-lsp
               (stdio LSP), warm-cache (wasm compile caches)
 
@@ -59,7 +61,10 @@ buffered per-client channels with non-blocking drop-on-slow sends,
 debounce-with-coalescing for watcher noise, and `PublishImmediate` for
 handler-triggered events. Self-write suppression (a short window in
 `WorkspaceCoordinator`) prevents the server's own file writes from echoing
-back as change events.
+back as change events. Every HTTP request inherits the process lifecycle
+context. Cancelling that context therefore releases long-lived SSE handlers
+before `http.Server.Shutdown` waits for active requests, while ordinary
+requests still receive the normal graceful-drain window.
 
 The browser server binds to loopback by default. Because the HTTP API can edit
 workspace files and execute user-authored pipeline code, `renart web` rejects
@@ -168,8 +173,9 @@ startup instead of allowing a destructive housekeeping guess.
 Connection configuration has a write-only boundary for fields tagged
 `sensitive:"true"` or `sensitive_file:"true"` by Bruin's connection structs.
 `GET /api/config` and every create/update response omit those fields from
-`values`; `secret_fields` reports only configured/missing/unavailable status,
-provider identity, a safe reference, and provider capabilities. Create,
+`values`; `secret_fields` reports only configured, missing, unavailable, or
+permission-required status, provider identity, a safe reference, and provider
+capabilities. Create,
 update, connection-test, and onboarding-discovery drafts accept sensitive input
 only through explicit `keep`, `replace`, or `clear` changes. The reflected field
 metadata and generated TypeScript types carry the authoritative sensitivity
@@ -178,31 +184,71 @@ frontend name heuristics.
 
 For ordinary sensitive values, a replacement defaults to the native OS
 credential store and the config receives only a `${RENART_…}` placeholder.
-Users can instead bind the field to an existing `env:NAME`, which keeps
-headless/CI operation first-class and sends no value through the request.
+Users can instead use the passphrase-protected encrypted local vault or bind
+the field to an existing `env:NAME`, which keeps headless/CI operation
+first-class and sends no value through the request.
 `.renart/secrets.yml` maps the selected environment, connection, and field to a
-typed `local:` or `env:` reference; it never contains the value. The local key
-is scoped by stable project ID and environment. macOS Keychain, Windows
-Credential Manager, and Linux Secret Service are accessed through the
-replaceable `secretstore.Provider` interface. A missing, locked, or unavailable
-credential store fails closed—there is no plaintext fallback. Existing inline
-credentials remain readable for compatibility and are migrated to the local
-store on replacement. Config writes use owner-only permissions because an
-untouched legacy credential may still be present. `sensitive_file` fields retain
-their write-only path behavior; provider-backed temporary file leases are not
-built yet.
+typed `local:`, `local-vault:`, or `env:` reference; it never contains the
+value. The local key is scoped by stable project ID and environment. macOS
+Keychain, Windows Credential Manager, and Linux Secret Service are accessed
+through the replaceable `secretstore.Provider` interface. A missing, locked, or
+unavailable credential store fails closed—there is no plaintext fallback.
+Existing inline credentials remain readable for compatibility and are migrated
+to the selected local store on replacement. Config writes use owner-only
+permissions because an untouched legacy credential may still be present.
+`sensitive_file` fields retain their write-only path behavior; provider-backed
+temporary file leases are not built yet.
+
+The `local-vault:` provider writes one age-encrypted document per stable project
+ID under the user's operating-system configuration directory, never under the
+workspace. The document separates values by environment and portable alias.
+Age's scrypt recipient uses its production work factor, the directory and file
+are owner-only where the platform exposes Unix permissions, and writes use a
+cross-process file lock plus replace-and-sync. A successful unlock keeps a
+decrypted session and passphrase only in the running process; lock and shutdown
+clear those byte buffers. Provider operations re-read changed ciphertext under
+the file lock so CLI and server writes do not silently overwrite each other.
+Restarted scheduled work remains blocked until an interactive user unlocks the
+vault.
+
+On Linux, status and operation preflight inspect the selected Secret Service
+collection over the existing user D-Bus session without invoking its unlock
+prompt. A locked collection reports `permission_required`; an absent bus,
+service, or collection reports `unavailable`. Resolve, replace, and remove fail
+before entering the prompting keyring adapter in either state, which keeps SSH,
+headless API requests, and scheduled work non-interactive. Unlocking remains an
+explicit user-session action.
 
 Config and binding updates are serialized and applied as one compensating
 transaction across the provider, binding manifest, and config files. Rename,
-clone, delete, clear, and connection rename move/copy/remove local values as
-needed; a failed provider or file operation restores prior provider values and
-files. Provider resolution is operation-scoped and purpose-tagged. One
-`ResolvedConnectionFactory` overlays only tagged placeholder fields in a
-freshly selected in-memory config, seeds redaction before constructing drivers,
-and never mutates the process environment. Production query, inspect,
-materialize, schema/discovery, onboarding, schedule, and notebook-import paths
-use the shared resolver. Resolved leases and values are never written to plans,
-run records, snapshots, SSE, or public API responses.
+clone, delete, clear, and connection rename move/copy/remove stored local values
+as needed; a failed provider or file operation restores prior provider values
+and files. Provider resolution is operation-scoped and purpose-tagged. One
+`ResolvedConnectionFactory` returns a lazy connection manager: the first lookup
+of a named connection scopes the selected in-memory config to that connection,
+overlays only its tagged placeholder fields, seeds redaction, and constructs
+only that driver. A missing secret or invalid driver configuration is therefore
+reported when its connection is selected without preventing unrelated
+connections in the same environment from loading. The factory never mutates
+the process environment. Production query, inspect, materialize,
+schema/discovery, onboarding, schedule, and notebook-import paths use the
+shared resolver. Resolved leases and values are never written to plans, run
+records, snapshots, SSE, or public API responses.
+
+`renart secrets` exposes the same boundary to terminal-first workflows.
+`status` returns provider/reference health only; `set` reads a replacement from
+a hidden prompt or stdin, stores it in the native store or encrypted vault, or
+records an `env:NAME` binding; and `remove`
+requires interactive confirmation or `--yes`. `exec` resolves the selected
+environment once, detects conflicting symbolic names, and overlays values only
+onto one child process. It does not mutate Renart's process environment or put
+values in argv. `status` and `exec` use a non-mutating config loader, so
+inspection cannot create config files or update `.gitignore`. Raw managed
+placeholders are restored after Bruin config loading so an ambient variable
+matching a generated symbol cannot take precedence over the tracked provider
+binding. Native credential storage, the encrypted local vault, and environment
+references are the implemented providers; hosted and third-party provider
+adapters remain design work.
 
 **CLI ↔ server (delegate-or-embed).** Pipeline commands resolve their
 workspace git-style (walk up to `.bruin.yml` → `.renart` → repo root;
@@ -732,6 +778,12 @@ threaded through scheduler execution and snapshot resolution; deployment
 lookup never has to rediscover that identity from a mutable pipeline path.
 Pre-upgrade jobs without a spec retain one strict upgrade decoder.
 
+River's SQLite job-row IDs can be reused after finalized jobs are pruned.
+Admission therefore releases a colliding `river_job_id` only from a terminal
+historical run before linking the new execution job. The partial unique index
+remains in place, so a collision with a queued or running run still fails
+closed instead of stealing active ownership.
+
 Synchronous full-pipeline execution uses the same v1 RunSpec with
 `dispatch=inline_streaming`. After policy/default/window normalization and
 before acquiring the physical executor, Renart atomically creates the run,
@@ -1125,9 +1177,13 @@ asset.
   `WorkspaceResolver.SafeJoin`.
 - **Deployment.** The CLI/server remains one self-contained binary: embedded
   frontend, embedded Python (uv), pure-Go SQLite. Release archives additionally
-  colocate the optional native-window helper. Port fallback, browser auto-open, graceful shutdown
-  (scheduler `Stop()` drains River, then escalates to context cancellation if
-  workers do not stop within the grace period). A tiny C compatibility archive
+  colocate the optional native-window helper. Port fallback, browser auto-open,
+  and graceful shutdown are shared by browser and standalone modes. The first
+  interrupt is logged and drains River before escalating to worker cancellation;
+  lifecycle-bound HTTP streams leave immediately so open browser sessions do
+  not consume the HTTP shutdown deadline;
+  default signal handling is restored immediately so a second interrupt can
+  force-exit without waiting for the grace period. A tiny C compatibility archive
   satisfies Bruin's unused Rust-parser linker flag through `CGO_LDFLAGS`;
   release and local builds require no Rust toolchain and never modify the Go
   module cache. Linux releases use checksum-pinned Zig with a glibc 2.31 target,

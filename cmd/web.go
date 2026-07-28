@@ -30,6 +30,7 @@ import (
 	"renart/internal/web/matlog"
 	"renart/internal/web/policy"
 	webscheduler "renart/internal/web/scheduler"
+	"renart/internal/web/secretstore"
 	"renart/internal/web/service"
 	"renart/internal/web/snapshot"
 	"renart/internal/web/staleness"
@@ -52,6 +53,7 @@ type webServer struct {
 	watchPoll         time.Duration
 	workspaceSvc      *service.WorkspaceService
 	configSvc         *service.ConfigService
+	secretVault       *secretstore.LocalVaultProvider
 	connectionFactory *service.ResolvedConnectionFactory
 	pipelineSvc       *service.PipelineService
 	executionSvc      *service.ExecutionService
@@ -178,20 +180,22 @@ func Web() *cli.Command {
 			}
 			defer listener.Close()
 
-			httpServer := newHTTPServer(address, router)
+			httpServer := newHTTPServer(ctx, address, router)
 			if tlsCert != "" {
 				if err := http2.ConfigureServer(httpServer, &http2.Server{}); err != nil {
 					return fmt.Errorf("failed to configure HTTP/2: %w", err)
 				}
-				fmt.Printf("Renart listening on https://%s (HTTP/2 enabled)\n", address)
-			} else {
-				fmt.Printf("Renart listening on http://%s\n", address)
 			}
 
 			scheme := "http"
 			if tlsCert != "" {
 				scheme = "https"
 			}
+			detail := ""
+			if tlsCert != "" {
+				detail = " (HTTP/2 enabled)"
+			}
+			printRenartWelcome(c.Writer, scheme+"://"+address, detail)
 			manager.EnableDiscovery(scheme+"://"+loopbackAddress(address), sessionToken)
 			defer manager.DisableDiscovery()
 
@@ -199,12 +203,14 @@ func Web() *cli.Command {
 				go openBrowserWhenReachable(ctx, scheme+"://"+address, address)
 			}
 
-			go func() {
-				<-ctx.Done()
+			stopShutdownObserver := startGracefulShutdown(ctx, stop, logger, func() {
 				shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 				defer cancel()
-				_ = httpServer.Shutdown(shutdownCtx)
-			}()
+				if err := httpServer.Shutdown(shutdownCtx); err != nil {
+					logger.Warn("HTTP server did not stop gracefully", zap.Error(err))
+				}
+			})
+			defer stopShutdownObserver()
 
 			if tlsCert != "" {
 				err = httpServer.ServeTLS(listener, tlsCert, tlsKey)

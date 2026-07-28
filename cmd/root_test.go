@@ -25,6 +25,7 @@ func TestRootSurface(t *testing.T) {
 		"type-check": categoryPipeline,
 		"deploy":     categoryPipeline,
 		"init":       categoryProject,
+		"secrets":    categoryProject,
 	}
 	wantHidden := map[string]bool{
 		"debug": true,

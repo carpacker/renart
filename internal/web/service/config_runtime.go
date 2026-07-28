@@ -54,6 +54,9 @@ func loadSelectedConfigReadOnlyFS(fs afero.Fs, configPath string, requestedEnvir
 	if cfg == nil {
 		cfg = &config.Config{}
 	}
+	if err := restoreManagedSecretPlaceholders(fs, configPath, cfg, true); err != nil {
+		return nil, err
+	}
 	return selectConfigEnvironment(cfg, requestedEnvironment)
 }
 
@@ -70,6 +73,9 @@ func loadConfig(fs afero.Fs, configPath string) (*config.Config, error) {
 	}
 	if cfg == nil {
 		cfg = &config.Config{}
+	}
+	if err := restoreManagedSecretPlaceholders(fs, configPath, cfg, true); err != nil {
+		return nil, err
 	}
 	return cfg, nil
 }
@@ -130,6 +136,46 @@ func newConnectionManagerFromConfig(ctx context.Context, cfg *config.Config) (co
 // scoped to the workspace without changing the process-wide working directory.
 func WrapConnectionManagerForWorkspace(manager config.ConnectionAndDetailsGetter, workspaceRoot string) config.ConnectionAndDetailsGetter {
 	return duckdbworkspace.WrapManager(manager, workspaceRoot)
+}
+
+// resolveRuntimeConnection preserves connection-specific initialization errors
+// when a manager supports lazy resolution. Plain Bruin managers retain their
+// existing GetConnection behavior.
+func resolveRuntimeConnection(manager config.ConnectionGetter, name string) (any, error) {
+	if manager == nil {
+		return nil, nil
+	}
+	if resolver, ok := manager.(config.ConnectionResolver); ok {
+		return resolver.ResolveConnection(name)
+	}
+	return manager.GetConnection(name), nil
+}
+
+func preflightRuntimeConnections(manager config.ConnectionGetter, names ...string) error {
+	resolver, ok := manager.(config.ConnectionResolver)
+	if !ok {
+		return nil
+	}
+	seen := make(map[string]struct{}, len(names))
+	for _, name := range names {
+		name = strings.TrimSpace(name)
+		if name == "" {
+			continue
+		}
+		if _, exists := seen[name]; exists {
+			continue
+		}
+		seen[name] = struct{}{}
+
+		connection, err := resolver.ResolveConnection(name)
+		if err != nil {
+			return fmt.Errorf("resolve connection %q: %w", name, err)
+		}
+		if connection == nil {
+			return fmt.Errorf("connection %q not found", name)
+		}
+	}
+	return nil
 }
 
 func requireEnvironmentName(cfg *config.Config, requestedEnvironment string) (string, error) {

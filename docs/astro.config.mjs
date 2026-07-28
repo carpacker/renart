@@ -152,6 +152,7 @@ export default defineConfig({
           label: 'Connections & environments',
           items: [
             { label: 'Managing connections', slug: 'docs/connections-environments/managing-connections' },
+            { label: 'Connection credentials', slug: 'docs/connections-environments/managing-credentials' },
           ],
         },
         {

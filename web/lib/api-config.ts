@@ -12,6 +12,34 @@ export async function getWorkspaceConfig(): Promise<WorkspaceConfigResponse> {
   });
 }
 
+export async function initializeLocalVault(passphrase: string): Promise<WorkspaceConfigResponse> {
+  return fetchJSONWithBody<WorkspaceConfigResponse>(
+    "/api/config/secrets/vault/initialize",
+    "POST",
+    { passphrase },
+  );
+}
+
+export async function unlockLocalVault(passphrase: string): Promise<WorkspaceConfigResponse> {
+  return fetchJSONWithBody<WorkspaceConfigResponse>("/api/config/secrets/vault/unlock", "POST", {
+    passphrase,
+  });
+}
+
+export async function lockLocalVault(): Promise<WorkspaceConfigResponse> {
+  return fetchJSONWithBody<WorkspaceConfigResponse>("/api/config/secrets/vault/lock", "POST", {});
+}
+
+export async function changeLocalVaultPassphrase(
+  passphrase: string,
+): Promise<WorkspaceConfigResponse> {
+  return fetchJSONWithBody<WorkspaceConfigResponse>(
+    "/api/config/secrets/vault/change-passphrase",
+    "POST",
+    { passphrase },
+  );
+}
+
 export async function updateWorkspaceProject(input: {
   name?: string;
   features?: Record<string, boolean>;

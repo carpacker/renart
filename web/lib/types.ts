@@ -105,7 +105,8 @@ export type WorkspaceConnectionSecretChange = {
   action: WorkspaceConnectionSecretAction;
   value?: string;
   binding?: {
-    ref: string;
+    ref?: string;
+    provider?: "local" | "local-vault" | "env";
   };
 };
 

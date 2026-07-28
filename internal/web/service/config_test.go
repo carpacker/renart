@@ -248,6 +248,38 @@ func TestConnectionFieldMetadataClassifiesAndOmitsEveryTaggedSecret(t *testing.T
 	}
 }
 
+func TestConnectionFieldsPutDetailsBeforeCredentialsAndTuningLast(t *testing.T) {
+	t.Parallel()
+
+	var postgres WorkspaceConfigConnectionType
+	for _, connectionType := range BuildWorkspaceConfigConnectionTypes() {
+		if connectionType.TypeName == "postgres" {
+			postgres = connectionType
+		}
+		hasConcurrencySetting := false
+		for _, field := range connectionType.Fields {
+			hasConcurrencySetting = hasConcurrencySetting || field.Name == "max_concurrent_assets"
+		}
+		if hasConcurrencySetting {
+			assert.Equal(
+				t,
+				"max_concurrent_assets",
+				connectionType.Fields[len(connectionType.Fields)-1].Name,
+				"%s should put its shared concurrency setting last",
+				connectionType.TypeName,
+			)
+		}
+	}
+	require.NotEmpty(t, postgres.Fields)
+	indexByName := make(map[string]int, len(postgres.Fields))
+	for index, field := range postgres.Fields {
+		indexByName[field.Name] = index
+	}
+	assert.Less(t, indexByName["host"], indexByName["username"])
+	assert.Less(t, indexByName["database"], indexByName["password"])
+	assert.Less(t, indexByName["password"], indexByName["pool_max_conns"])
+}
+
 func TestWorkspaceConnectionErrorsAreRedacted(t *testing.T) {
 	t.Parallel()
 	cfg := &config.Config{

@@ -268,6 +268,20 @@ select customer_id from analytics.customers
     await expect(type).toHaveValue("pg.sql", { timeout: 15000 });
   });
 
+  test("opens the effective connection from asset metadata", async ({ liveApp, page }) => {
+    await page.goto(`${liveApp.baseURL}/pipelines/${pipelineId}/assets/${customersAssetId}/code`);
+    const properties = await openAssetProperties(page);
+
+    await properties.getByRole("button", { name: "Go to connection duckdb-default" }).click();
+
+    await expect(page).toHaveURL(
+      /\/project\/connections\?environment=default&connection=duckdb-default$/,
+    );
+    await expect(page.getByRole("dialog", { name: "duckdb-default" })).toBeVisible({
+      timeout: 15000,
+    });
+  });
+
   test("keeps asset descriptions left of connections on both canvases", async ({
     liveApp,
     page,

@@ -815,7 +815,9 @@ func (s *AssetService) pythonPackageSearchRoots(relAssetPath string) []string {
 		for _, base := range []string{assetDir, workspaceRoot} {
 			roots = appendPythonSitePackageGlobs(roots,
 				filepath.Join(base, ".venv", "lib", "python*", "site-packages"),
+				filepath.Join(base, ".venv", "Lib", "site-packages"),
 				filepath.Join(base, "venv", "lib", "python*", "site-packages"),
+				filepath.Join(base, "venv", "Lib", "site-packages"),
 			)
 		}
 		// Notebook cells run in a per-notebook uv venv kept outside the
@@ -824,17 +826,28 @@ func (s *AssetService) pythonPackageSearchRoots(relAssetPath string) []string {
 		// notebook dependencies instead of flagging them as unresolved.
 		roots = appendPythonSitePackageGlobs(roots,
 			filepath.Join(notebookVenvDir(workspaceRoot, assetDir), "lib", "python*", "site-packages"),
+			filepath.Join(notebookVenvDir(workspaceRoot, assetDir), "Lib", "site-packages"),
 		)
 	}
 	if home, err := os.UserHomeDir(); err == nil {
 		roots = appendPythonSitePackageGlobs(roots,
 			filepath.Join(home, ".bruin", "virtualenvs", "*", "lib", "python*", "site-packages"),
+			filepath.Join(home, ".bruin", "virtualenvs", "*", "Lib", "site-packages"),
 			filepath.Join(home, ".cache", "uv", "archive-v0", "*", "lib", "python*", "site-packages"),
+			filepath.Join(home, ".cache", "uv", "archive-v0", "*", "Lib", "site-packages"),
 			filepath.Join(home, ".local", "share", "uv", "archive-v0", "*", "lib", "python*", "site-packages"),
+			filepath.Join(home, ".local", "share", "uv", "archive-v0", "*", "Lib", "site-packages"),
 		)
 		roots = appendPythonSitePackageGlobs(roots,
 			filepath.Join(home, ".cache", "uv", "archive-v0", "*"),
 			filepath.Join(home, ".local", "share", "uv", "archive-v0", "*"),
+		)
+	}
+	if cacheDir := defaultUVCacheDirectory(map[string]string{}, s.deps.WorkspaceRoot); cacheDir != "" {
+		roots = appendPythonSitePackageGlobs(roots,
+			filepath.Join(cacheDir, "archive-v0", "*", "lib", "python*", "site-packages"),
+			filepath.Join(cacheDir, "archive-v0", "*", "Lib", "site-packages"),
+			filepath.Join(cacheDir, "archive-v0", "*"),
 		)
 	}
 	return uniqueStrings(roots)

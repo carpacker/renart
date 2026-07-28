@@ -1,6 +1,7 @@
 package duckdbworkspace
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -21,6 +22,15 @@ func (m *connectionManager) GetConnectionDetails(string) any { return nil }
 func (m *connectionManager) GetConnectionType(string) string { return m.typeName }
 
 var _ config.ConnectionAndDetailsGetter = (*connectionManager)(nil)
+
+type resolvingConnectionManager struct {
+	connectionManager
+	err error
+}
+
+func (m *resolvingConnectionManager) ResolveConnection(string) (any, error) {
+	return m.connection, m.err
+}
 
 func TestClientResolvesRelativeFilesFromWorkspace(t *testing.T) {
 	workspaceRoot := filepath.Join(t.TempDir(), "Lukas's workspace")
@@ -51,4 +61,18 @@ func TestManagerOnlyWrapsDuckDBConnections(t *testing.T) {
 
 	other := &connectionManager{connection: "postgres-client", typeName: "postgres"}
 	require.Equal(t, "postgres-client", WrapManager(other, t.TempDir()).GetConnection("warehouse"))
+}
+
+func TestManagerPreservesConnectionResolutionErrors(t *testing.T) {
+	expected := errors.New("secret is not configured")
+	wrapped := WrapManager(&resolvingConnectionManager{
+		connectionManager: connectionManager{typeName: "postgres"},
+		err:               expected,
+	}, t.TempDir())
+
+	resolver, ok := wrapped.(config.ConnectionResolver)
+	require.True(t, ok)
+	connection, err := resolver.ResolveConnection("warehouse")
+	require.Nil(t, connection)
+	require.ErrorIs(t, err, expected)
 }

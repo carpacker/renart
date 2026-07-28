@@ -83,6 +83,21 @@ func WrapManager(base config.ConnectionAndDetailsGetter, workspaceRoot string) c
 
 func (m *manager) GetConnection(name string) any {
 	raw := m.ConnectionAndDetailsGetter.GetConnection(name)
+	return m.wrapConnection(name, raw)
+}
+
+func (m *manager) ResolveConnection(name string) (any, error) {
+	if resolver, ok := m.ConnectionAndDetailsGetter.(config.ConnectionResolver); ok {
+		raw, err := resolver.ResolveConnection(name)
+		if err != nil {
+			return nil, err
+		}
+		return m.wrapConnection(name, raw), nil
+	}
+	return m.GetConnection(name), nil
+}
+
+func (m *manager) wrapConnection(name string, raw any) any {
 	if !strings.EqualFold(m.ConnectionAndDetailsGetter.GetConnectionType(name), "duckdb") {
 		return raw
 	}
@@ -100,6 +115,8 @@ func (m *manager) GetConnection(name string) any {
 	m.clients[name] = wrapped
 	return wrapped
 }
+
+var _ config.ConnectionResolver = (*manager)(nil)
 
 func cleanWorkspaceRoot(workspaceRoot string) string {
 	trimmed := strings.TrimSpace(workspaceRoot)

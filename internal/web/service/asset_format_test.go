@@ -429,6 +429,23 @@ def materialize():
 	assert.NotEmpty(t, labels)
 }
 
+func TestAssetServicePythonPackageSearchRootsSupportsWindowsLayouts(t *testing.T) {
+	workspaceRoot := t.TempDir()
+	assetPath := filepath.Join("analytics", "assets", "task.py")
+	venvSitePackages := filepath.Join(workspaceRoot, ".venv", "Lib", "site-packages")
+	uvCache := filepath.Join(workspaceRoot, "uv-cache")
+	uvArchive := filepath.Join(uvCache, "archive-v0", "package-hash")
+	require.NoError(t, os.MkdirAll(venvSitePackages, 0o755))
+	require.NoError(t, os.MkdirAll(uvArchive, 0o755))
+	t.Setenv("UV_CACHE_DIR", uvCache)
+
+	service := NewAssetService(AssetDependencies{WorkspaceRoot: workspaceRoot})
+	roots := service.pythonPackageSearchRoots(assetPath)
+
+	assert.Contains(t, roots, venvSitePackages)
+	assert.Contains(t, roots, uvArchive)
+}
+
 func TestAssetServicePythonPackageMountCacheReusesUnchangedPackageFiles(t *testing.T) {
 	workspaceRoot := t.TempDir()
 	assetPath := filepath.Join("analytics", "assets", "task.py")

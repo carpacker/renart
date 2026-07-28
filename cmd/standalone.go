@@ -100,7 +100,7 @@ func runStandalone(ctx context.Context, c *cli.Command) error {
 	address := listener.Addr().String()
 	appURL := "http://" + address + "/"
 	sessionToken := newSessionToken()
-	httpServer := newHTTPServer(address, buildRootRouter(manager, defaultRuntime, sessionToken))
+	httpServer := newHTTPServer(ctx, address, buildRootRouter(manager, defaultRuntime, sessionToken))
 
 	manager.EnableDiscovery("http://"+address, sessionToken)
 	defer manager.DisableDiscovery()
@@ -120,6 +120,15 @@ func runStandalone(ctx context.Context, c *cli.Command) error {
 		_ = httpServer.Shutdown(shutdownCtx)
 	}()
 	logger.Info("standalone server listening", zap.String("url", appURL))
+	printRenartWelcome(c.Writer, appURL, "")
+	stopShutdownObserver := startGracefulShutdown(ctx, stop, logger, func() {
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := httpServer.Shutdown(shutdownCtx); err != nil {
+			logger.Warn("standalone HTTP server did not stop gracefully", zap.Error(err))
+		}
+	})
+	defer stopShutdownObserver()
 	if helperErr != nil {
 		return waitForStandaloneWebFallback(
 			ctx,

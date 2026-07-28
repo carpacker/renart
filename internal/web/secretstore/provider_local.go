@@ -15,6 +15,19 @@ type credentialStore interface {
 	Delete(service, user string) error
 }
 
+type credentialStoreProbeState uint8
+
+const (
+	credentialStoreProbeUnknown credentialStoreProbeState = iota
+	credentialStoreProbeConfigured
+	credentialStoreProbeMissing
+	credentialStoreProbePermissionRequired
+)
+
+type credentialStoreProbe interface {
+	Probe(context.Context, string, string) (credentialStoreProbeState, error)
+}
+
 type osCredentialStore struct{}
 
 func (osCredentialStore) Set(service, user, password string) error {
@@ -45,33 +58,35 @@ func (p *LocalProvider) Name() string {
 	return "local"
 }
 
-func (p *LocalProvider) Stat(_ context.Context, request ResolveRequest) (Status, error) {
+func (p *LocalProvider) Stat(ctx context.Context, request ResolveRequest) (Status, error) {
 	if err := validateLocalRequest(request); err != nil {
 		return Status{}, err
 	}
-	_, err := p.store.Get(localServiceName(request), request.Reference.Key)
-	status := Status{
-		Provider:  p.Name(),
-		Reference: request.Reference.String(),
-		Writable:  true,
-		Rotatable: true,
+	if state, probed, err := p.probe(ctx, request); probed {
+		return localStatus(request, state, err)
 	}
+	_, err := p.store.Get(localServiceName(request), request.Reference.Key)
 	switch {
 	case err == nil:
-		status.State = StatusConfigured
-		return status, nil
+		return localStatus(request, credentialStoreProbeConfigured, nil)
 	case errors.Is(err, keyring.ErrNotFound):
-		status.State = StatusMissing
-		return status, nil
+		return localStatus(request, credentialStoreProbeMissing, nil)
 	default:
-		status.State = StatusUnavailable
-		return status, fmt.Errorf("%w: %v", ErrUnavailable, err)
+		return localStatus(request, credentialStoreProbeUnknown, localCredentialStoreUnavailable())
 	}
 }
 
-func (p *LocalProvider) Resolve(_ context.Context, request ResolveRequest) (Lease, error) {
+func (p *LocalProvider) Resolve(ctx context.Context, request ResolveRequest) (Lease, error) {
 	if err := validateLocalRequest(request); err != nil {
 		return nil, err
+	}
+	if state, probed, err := p.probe(ctx, request); probed {
+		if err != nil {
+			return nil, err
+		}
+		if state == credentialStoreProbeMissing {
+			return nil, fmt.Errorf("%w: local credential %s", ErrNotFound, request.Reference.Key)
+		}
 	}
 	value, err := p.store.Get(localServiceName(request), request.Reference.Key)
 	switch {
@@ -80,11 +95,11 @@ func (p *LocalProvider) Resolve(_ context.Context, request ResolveRequest) (Leas
 	case errors.Is(err, keyring.ErrNotFound):
 		return nil, fmt.Errorf("%w: local credential %s", ErrNotFound, request.Reference.Key)
 	default:
-		return nil, fmt.Errorf("%w: %v", ErrUnavailable, err)
+		return nil, localCredentialStoreUnavailable()
 	}
 }
 
-func (p *LocalProvider) Put(_ context.Context, request PutRequest) (Status, error) {
+func (p *LocalProvider) Put(ctx context.Context, request PutRequest) (Status, error) {
 	resolveRequest := ResolveRequest{
 		ProjectID:   request.ProjectID,
 		Environment: request.Environment,
@@ -97,8 +112,11 @@ func (p *LocalProvider) Put(_ context.Context, request PutRequest) (Status, erro
 	if len(request.Value) == 0 {
 		return Status{}, fmt.Errorf("secret value is required")
 	}
+	if _, probed, err := p.probe(ctx, resolveRequest); probed && err != nil {
+		return Status{}, err
+	}
 	if err := p.store.Set(localServiceName(resolveRequest), request.Reference.Key, string(request.Value)); err != nil {
-		return Status{}, fmt.Errorf("%w: %v", ErrUnavailable, err)
+		return Status{}, localCredentialStoreUnavailable()
 	}
 	return Status{
 		State:     StatusConfigured,
@@ -109,7 +127,7 @@ func (p *LocalProvider) Put(_ context.Context, request PutRequest) (Status, erro
 	}, nil
 }
 
-func (p *LocalProvider) Delete(_ context.Context, request DeleteRequest) error {
+func (p *LocalProvider) Delete(ctx context.Context, request DeleteRequest) error {
 	resolveRequest := ResolveRequest{
 		ProjectID:   request.ProjectID,
 		Environment: request.Environment,
@@ -119,14 +137,83 @@ func (p *LocalProvider) Delete(_ context.Context, request DeleteRequest) error {
 	if err := validateLocalRequest(resolveRequest); err != nil {
 		return err
 	}
+	if state, probed, err := p.probe(ctx, resolveRequest); probed {
+		if err != nil {
+			return err
+		}
+		if state == credentialStoreProbeMissing {
+			return nil
+		}
+	}
 	err := p.store.Delete(localServiceName(resolveRequest), request.Reference.Key)
 	if errors.Is(err, keyring.ErrNotFound) {
 		return nil
 	}
 	if err != nil {
-		return fmt.Errorf("%w: %v", ErrUnavailable, err)
+		return localCredentialStoreUnavailable()
 	}
 	return nil
+}
+
+func (p *LocalProvider) probe(
+	ctx context.Context,
+	request ResolveRequest,
+) (credentialStoreProbeState, bool, error) {
+	probe, ok := p.store.(credentialStoreProbe)
+	if !ok {
+		return credentialStoreProbeUnknown, false, nil
+	}
+	state, err := probe.Probe(ctx, localServiceName(request), request.Reference.Key)
+	if err != nil {
+		return credentialStoreProbeUnknown, true, localCredentialStoreUnavailable()
+	}
+	if state == credentialStoreProbePermissionRequired {
+		return state, true, localCredentialStorePermissionRequired()
+	}
+	if state != credentialStoreProbeConfigured && state != credentialStoreProbeMissing {
+		return credentialStoreProbeUnknown, true, localCredentialStoreUnavailable()
+	}
+	return state, true, nil
+}
+
+func localStatus(
+	request ResolveRequest,
+	state credentialStoreProbeState,
+	err error,
+) (Status, error) {
+	status := Status{
+		Provider:  request.Reference.Provider,
+		Reference: request.Reference.String(),
+	}
+	switch state {
+	case credentialStoreProbeConfigured:
+		status.State = StatusConfigured
+		status.Writable = true
+		status.Rotatable = true
+	case credentialStoreProbeMissing:
+		status.State = StatusMissing
+		status.Writable = true
+		status.Rotatable = true
+	case credentialStoreProbePermissionRequired:
+		status.State = StatusPermissionRequired
+	default:
+		status.State = StatusUnavailable
+	}
+	return status, err
+}
+
+func localCredentialStorePermissionRequired() error {
+	return fmt.Errorf(
+		"%w: unlock the system credential store in this user session or use an environment reference",
+		ErrPermissionRequired,
+	)
+}
+
+func localCredentialStoreUnavailable() error {
+	return fmt.Errorf(
+		"%w: start a system credential service or use an environment reference on headless systems",
+		ErrUnavailable,
+	)
 }
 
 func validateLocalRequest(request ResolveRequest) error {

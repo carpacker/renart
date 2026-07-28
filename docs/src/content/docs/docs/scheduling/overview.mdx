@@ -39,6 +39,14 @@ secret value, store an `env:NAME` reference instead; Renart resolves it from the
 server process only while validating, planning, or running and does not write
 the resolved value to schedule or run state.
 
+:::caution[Use an unattended credential source]
+The encrypted local vault locks whenever Renart restarts, so it is not a
+durable source of trust for unattended schedules. Bind scheduled connection
+credentials to environment variables injected by your service manager,
+container runtime, or CI system. See
+[Manage connection credentials](/docs/connections-environments/managing-credentials/).
+:::
+
 ## Snapshots keep schedules stable
 
 Deploying records a snapshot of the pipeline as it is; the schedule runs

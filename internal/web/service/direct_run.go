@@ -1061,6 +1061,14 @@ func (e *HybridBruinExecutor) runDirectTask(
 		runErr = e.directTaskGate(taskCtx, instance)
 	}
 	if runErr == nil {
+		connectionNames, connectionErr := directTaskConnectionNames(pl, instance)
+		if connectionErr != nil {
+			runErr = connectionErr
+		} else {
+			runErr = preflightRuntimeConnections(manager, connectionNames...)
+		}
+	}
+	if runErr == nil {
 		switch {
 		case isAPIAsset(asset) && instance.GetType() == scheduler.TaskInstanceTypeMain:
 			_, runErr = e.runAPIAsset(taskCtx, pl, asset, renderer, manager, forward)
@@ -1090,6 +1098,49 @@ func (e *HybridBruinExecutor) runDirectTask(
 		runErr = flushErr
 	}
 	return runErr
+}
+
+func directTaskConnectionNames(pl *pipeline.Pipeline, instance scheduler.TaskInstance) ([]string, error) {
+	if instance == nil || instance.GetAsset() == nil {
+		return nil, nil
+	}
+	asset := instance.GetAsset()
+	switch instance.GetType() {
+	case scheduler.TaskInstanceTypeMetadataPush:
+		return nil, nil
+	case scheduler.TaskInstanceTypeColumnCheck, scheduler.TaskInstanceTypeCustomCheck:
+		name, err := targetConnectionNameForAsset(asset, pl)
+		if err != nil {
+			return nil, err
+		}
+		return []string{name}, nil
+	case scheduler.TaskInstanceTypeMain:
+		switch {
+		case isAPIAsset(asset):
+			name, err := apiConnectionNameForAsset(asset, pl)
+			if err != nil {
+				return nil, err
+			}
+			return []string{name}, nil
+		case isLoadAsset(asset):
+			params, err := resolvedLoadParams(asset, pl)
+			if err != nil {
+				return nil, err
+			}
+			names := make([]string, 0, 2)
+			if !isLocalLoadConnection(params.SourceConnection) {
+				names = append(names, params.SourceConnection)
+			}
+			if !isLocalLoadConnection(params.DestinationConnection) {
+				names = append(names, params.DestinationConnection)
+			}
+			return names, nil
+		default:
+			return pl.GetAllConnectionNamesForAsset(asset)
+		}
+	default:
+		return nil, nil
+	}
 }
 
 func directTaskDuckDBConnectionNames(pl *pipeline.Pipeline, instance scheduler.TaskInstance) []string {

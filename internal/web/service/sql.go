@@ -124,7 +124,10 @@ func (s *SQLService) Databases(ctx context.Context, connectionName, environment 
 		return SQLDatabaseDiscoveryResult{}, &APIError{Status: http.StatusInternalServerError, Code: "connection_manager_failed", Message: err.Error()}
 	}
 
-	conn := manager.GetConnection(connectionName)
+	conn, err := resolveRuntimeConnection(manager, connectionName)
+	if err != nil {
+		return SQLDatabaseDiscoveryResult{}, &APIError{Status: http.StatusBadRequest, Code: "connection_resolution_failed", Message: err.Error()}
+	}
 	if conn == nil {
 		return SQLDatabaseDiscoveryResult{}, &APIError{Status: http.StatusBadRequest, Code: "connection_not_found", Message: fmt.Sprintf("connection '%s' not found", connectionName)}
 	}
@@ -156,7 +159,10 @@ func (s *SQLService) Tables(ctx context.Context, connectionName, databaseName, e
 		return SQLTableDiscoveryResult{}, &APIError{Status: http.StatusInternalServerError, Code: "connection_manager_failed", Message: err.Error()}
 	}
 
-	conn := manager.GetConnection(connectionName)
+	conn, err := resolveRuntimeConnection(manager, connectionName)
+	if err != nil {
+		return SQLTableDiscoveryResult{}, &APIError{Status: http.StatusBadRequest, Code: "connection_resolution_failed", Message: err.Error()}
+	}
 	if conn == nil {
 		return SQLTableDiscoveryResult{}, &APIError{Status: http.StatusBadRequest, Code: "connection_not_found", Message: fmt.Sprintf("connection '%s' not found", connectionName)}
 	}

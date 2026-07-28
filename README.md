@@ -51,6 +51,7 @@ Intel/Apple silicon, and Windows x86-64. See the
 
 - [Quickstart](https://getrenart.com/docs/quickstart/)
 - [Full documentation](https://getrenart.com/docs/)
+- [Connection credentials](https://getrenart.com/docs/connections-environments/managing-credentials/)
 - [CLI reference](https://getrenart.com/docs/reference/cli/)
 
 ## License
